@@ -66,6 +66,80 @@ pub fn round_shift(team: i32, round: u32) -> usize {
 /// A playing bot's slot, team and the edges of its path ahead.
 pub type TeamPath = (usize, i32, Vec<(u32, u32)>);
 
+/// An S&D attacker's part in its team's push on the round's one site
+/// (bot-objectives.md 9.1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Squad {
+    /// Plans with the plain crowd cost and leaves within [`START_HOLD`].
+    #[default]
+    Main,
+    /// Plans round the main group's paths at [`crate::nav::FLANK_COST`].
+    Flank,
+    /// Leaves [`REAR_HOLD`] after the round starts.
+    Rear,
+}
+
+/// A bot's hold at the start of a one-life round, ticks: drawn from
+/// `0..START_HOLD`, from `FLANK_HOLD..START_HOLD` for a flanker (the main
+/// group has planned by then, so its paths are there to plan round), and
+/// `REAR_HOLD..2 * REAR_HOLD` for the rear guard.
+pub const START_HOLD: u32 = 40;
+pub const FLANK_HOLD: u32 = 10;
+pub const REAR_HOLD: u32 = 40;
+/// A teammate ahead within this, across, eases a bot out of a fight to a
+/// walk ([`mate_ahead`]): about a frag's blast apart.
+pub const SPACING: f32 = 200.0;
+/// ... and within this up or down.
+pub const SPACING_RISE: f32 = 96.0;
+/// A teammate slower than this, across, is not walking the same way: a
+/// standing one is the yields' and the give-way's.
+pub const SPACING_PACE: f32 = 60.0;
+
+/// The part of the attacker ranked `rank` of `n` this round
+/// ([`round_rank`] over the team's attacking bots): one flanker from three
+/// up and two from six, and a rear guard from four (the last rank).
+pub fn squad(rank: usize, n: usize) -> Squad {
+    let flank = match n {
+        0..=2 => 0,
+        3..=5 => 1,
+        _ => 2,
+    };
+    let rear = usize::from(n >= 4);
+    if rank < flank {
+        Squad::Flank
+    } else if rank + rear >= n {
+        Squad::Rear
+    } else {
+        Squad::Main
+    }
+}
+
+/// A bot's own route noise seed this round (`nav::Search::noisy`): never 0,
+/// which is no noise.
+pub fn route_seed(round: u32, team: i32, slot: usize) -> u64 {
+    mix(round, team, slot).rotate_left(17) | 1
+}
+
+/// Whether a teammate walks the same way within [`SPACING`] ahead of a
+/// bot at `at` heading for `toward`: `mates` holds each one's feet and
+/// velocity, the bot itself left out.
+pub fn mate_ahead(at: [f32; 3], toward: [f32; 3], mates: &[([f32; 3], [f32; 3])]) -> bool {
+    let flat = |v: [f32; 3]| glam::Vec2::new(v[0], v[1]);
+    let Some(dir) = (flat(toward) - flat(at)).try_normalize() else {
+        return false;
+    };
+    mates.iter().any(|&(p, v)| {
+        let to = flat(p) - flat(at);
+        let v = flat(v);
+        to.length() < SPACING
+            && (p[2] - at[2]).abs() < SPACING_RISE
+            // Inside 45 degrees of the bot's way, and walking along it.
+            && to.dot(dir) > std::f32::consts::FRAC_1_SQRT_2 * to.length()
+            && v.length() > SPACING_PACE
+            && v.dot(dir) > 0.5 * v.length()
+    })
+}
+
 /// An S&D bot's site rank (`SdView::rank`) this round. The attackers all
 /// go for one site, picked per round by [`round_shift`]; the defenders
 /// spread over both by [`round_rank`] (bot-objectives.md section 9).
@@ -78,11 +152,15 @@ pub fn site_rank(attack: bool, slot: usize, mates: &[usize], team: i32, round: u
     }
 }
 
-/// The edges every other teammate's path still runs along, `(low, high)`,
-/// sorted.
-pub fn crowd(paths: &[TeamPath], slot: usize, team: i32) -> Vec<(u32, u32)> {
+/// The edges every other teammate's path in `paths` still runs along,
+/// `(low, high)`, sorted.
+pub fn crowd<'a>(
+    paths: impl IntoIterator<Item = &'a TeamPath>,
+    slot: usize,
+    team: i32,
+) -> Vec<(u32, u32)> {
     let mut out: Vec<(u32, u32)> = paths
-        .iter()
+        .into_iter()
         .filter(|(s, t, _)| *s != slot && *t == team)
         .flat_map(|(_, _, p)| p.iter().map(|&(a, b)| (a.min(b), a.max(b))))
         .collect();
@@ -204,6 +282,47 @@ mod tests {
         assert_eq!(cover(1, [0.0; 3], &mates), Some([10.0, 0.0, 0.0]));
         assert_eq!(cover(4, [0.0; 3], &mates), Some([1000.0, 0.0, 0.0]));
         assert_eq!(cover(3, [5000.0, 0.0, 0.0], &mates[..2]), None);
+    }
+
+    #[test]
+    fn an_attack_keeps_a_main_group_with_a_flank_and_a_rear() {
+        let parts = |n: usize| -> [usize; 3] {
+            let mut c = [0; 3];
+            for r in 0..n {
+                c[squad(r, n) as usize] += 1;
+            }
+            c
+        };
+        // Main, flank, rear.
+        assert_eq!(parts(1), [1, 0, 0]);
+        assert_eq!(parts(2), [2, 0, 0]);
+        assert_eq!(parts(3), [2, 1, 0]);
+        assert_eq!(parts(4), [2, 1, 1]);
+        assert_eq!(parts(5), [3, 1, 1]);
+        assert_eq!(parts(6), [3, 2, 1]);
+        assert_eq!(parts(8), [5, 2, 1]);
+    }
+
+    #[test]
+    fn a_teammate_walking_the_same_way_just_ahead_spaces_a_bot() {
+        let at = [0.0, 0.0, 0.0];
+        let toward = [500.0, 0.0, 0.0];
+        let walking = [190.0, 0.0, 0.0];
+        assert!(mate_ahead(at, toward, &[([150.0, 30.0, 0.0], walking)]));
+        // Out of reach, behind, aside, a floor up.
+        assert!(!mate_ahead(at, toward, &[([250.0, 0.0, 0.0], walking)]));
+        assert!(!mate_ahead(at, toward, &[([-150.0, 0.0, 0.0], walking)]));
+        assert!(!mate_ahead(at, toward, &[([50.0, 120.0, 0.0], walking)]));
+        assert!(!mate_ahead(at, toward, &[([150.0, 0.0, 128.0], walking)]));
+        // Standing, or coming back the other way.
+        assert!(!mate_ahead(at, toward, &[([150.0, 0.0, 0.0], [0.0; 3])]));
+        assert!(!mate_ahead(
+            at,
+            toward,
+            &[([150.0, 0.0, 0.0], [-190.0, 0.0, 0.0])]
+        ));
+        // No way to go.
+        assert!(!mate_ahead(at, at, &[([150.0, 0.0, 0.0], walking)]));
     }
 
     #[test]

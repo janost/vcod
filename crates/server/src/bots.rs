@@ -118,6 +118,9 @@ const HIT_RADIUS: f32 = 10.0;
 /// The run speed at which a moving bot's error takes all of
 /// [`Skill::error_moving`]; slower, it takes that share of it.
 const RUN_SPEED: f32 = 190.0;
+/// The move keys' share a bot spacing out behind a teammate keeps
+/// (`Bot::spaced`): pmove scales the pace by the key, so about half.
+const EASE_KEY: f32 = 0.5;
 /// A semi-automatic with a `fireTime` at least this long works a bolt.
 const BOLT_MS: i32 = 500;
 /// How far off its line the trigger may go down, in fire cones: past one
@@ -386,6 +389,13 @@ pub struct BotView {
     pub crouch_jump: bool,
     /// [`Self::waypoint`] is a leap's foot: come to rest on it.
     pub stop: bool,
+    /// A teammate walks the same way just ahead ([`team::mate_ahead`]),
+    /// on a level with a team objective: out of a fight the bot eases to a
+    /// walk until he is a blast's width off ([`Bot::spaced`]).
+    pub mate_ahead: bool,
+    /// The bot's part in its team's S&D attack this round ([`team::squad`],
+    /// set by the driver after the game's deal); `Main` elsewhere.
+    pub squad: team::Squad,
     /// [`Self::waypoint`] lies more than [`BACK_DOWN_HEIGHT`] down a drop
     /// a run off arrives at (`nav::Follower::running_off`): run, don't back.
     pub run_off: bool,
@@ -991,6 +1001,15 @@ pub struct Bot {
     /// Shares out an objective round with its team ([`team`]); off, it
     /// plays as before team play did (a `bot_match` measuring arm).
     pub team_play: bool,
+    /// With [`Self::team_play`], keeps apart from its team on an objective
+    /// level: its own route noise, a walk behind a teammate just ahead,
+    /// a staggered round start and the S&D attack's flank and rear
+    /// ([`team::Squad`], bot-objectives.md 9.1); off, it moves as before
+    /// (a `bot_match` measuring arm).
+    pub squad: bool,
+    /// Ticks left on the hold a one-life round starts with
+    /// ([`team::START_HOLD`]).
+    start_hold: u32,
     /// Moves while it fights: strafes on the sights, backs off a close
     /// enemy with a bolt rifle, lies down at range ([`Bot::footwork`]);
     /// off, it stands still on the sights as before (a `bot_match` arm).
@@ -1472,6 +1491,8 @@ impl Bot {
             skill: Skill::default(),
             cover: cover::Cover::default(),
             team_play: true,
+            squad: true,
+            start_hold: 0,
             footwork: true,
             aware: true,
             wary: true,
@@ -1709,6 +1730,9 @@ impl Bot {
         }
         if let Some(c) = Self::blast_near(view) {
             return Goal::Away(c);
+        }
+        if self.start_held(view) {
+            return Goal::Hold;
         }
         // A carrier keeps for the goal and fights on the way.
         if self.carrying(view)
@@ -2856,14 +2880,56 @@ impl Bot {
         self.count_futile(view, &cmd);
         self.fired = cmd.buttons & msg::BUTTON_ATTACK != 0;
         let living = view.playing && !view.dead;
+        self.start_hold = if living && view.enemy.is_none() {
+            self.start_hold.saturating_sub(1)
+        } else {
+            0
+        };
         if living && (self.round_start || !self.alive) {
             self.round_start = false;
             if view.one_life {
                 self.want_yell(yell::Yell::Advance);
+                self.start_hold = self.start_draw(view);
             }
         }
         self.alive = living;
         cmd
+    }
+
+    /// The hold a one-life round starts with on an objective level
+    /// ([`team::START_HOLD`]), drawn off the bot's generator without
+    /// moving it, so the brain's own draws stay where they were.
+    fn start_draw(&self, view: &BotView) -> u32 {
+        if !(self.team_play && self.squad && driver::team_objective(view)) {
+            return 0;
+        }
+        let mut z = self.rng ^ 0x5851_f42d_4c95_7f2d;
+        let r = (vcod_common::rng::xorshift(&mut z) >> 33) as u32;
+        let (lo, hi) = match view.squad {
+            team::Squad::Main => (0, team::START_HOLD),
+            team::Squad::Flank => (team::FLANK_HOLD, team::START_HOLD),
+            team::Squad::Rear => (team::REAR_HOLD, 2 * team::REAR_HOLD),
+        };
+        lo + r % (hi - lo)
+    }
+
+    /// Out of a fight, the bot still holds at the start of its round; a
+    /// carrier handed CoD4's bomb after the draw goes at once.
+    fn start_held(&self, view: &BotView) -> bool {
+        self.start_hold > 0 && view.enemy.is_none() && !self.carrying(view)
+    }
+
+    /// The bot eases to a walk behind a teammate just ahead
+    /// ([`BotView::mate_ahead`]): out of a fight and a retreat, not
+    /// carrying, not with a bomb down (a defuse or its guard is a race).
+    fn spaced(&self, view: &BotView) -> bool {
+        view.mate_ahead
+            && self.team_play
+            && self.squad
+            && view.enemy.is_none()
+            && self.retreat.is_none()
+            && !self.carrying(view)
+            && view.sd.as_ref().is_none_or(|sd| sd.bomb.is_none())
     }
 
     /// An enemy in sight whom no round has gone at for [`FUTILE_TICKS`] is
@@ -3092,7 +3158,10 @@ impl Bot {
         self.lmg_rest = self.lmg_rest.saturating_sub(1);
         self.lmg_linger = self.lmg_linger.saturating_sub(1);
         // A bipod down holds the body; it means to stay put.
-        let standing = self.objective_standing(view) || view.deployed || self.holding_cover(view);
+        let standing = self.objective_standing(view)
+            || view.deployed
+            || self.holding_cover(view)
+            || self.start_held(view);
         self.stall_ticks += 1;
         self.stall_reach = self
             .stall_reach
@@ -3398,7 +3467,24 @@ impl Bot {
         // On UO a long straight leg is sprinted while there is breath for
         // it; the sprint leaves the weapon's scale out (coduo-movement.md
         // 2-4, bot-navigation.md "Other rules").
-        self.sprint_leg = view.fatigue.is_some()
+        // A plain run behind a teammate just ahead eases to a walk
+        // (`Bot::spaced`): a team in single file opens out to a blast's
+        // width apart instead of falling to one burst or frag.
+        let ease = self.spaced(view)
+            && steering
+            && view.on_ground
+            && !view.on_ladder
+            && cmd.up == 0
+            && foot.is_none()
+            && !view.stop
+            && !view.jump
+            && !view.run_off
+            && !view.mantle
+            && self.pushed_off.is_none()
+            && self.unpin.is_none()
+            && !self.creep.creeping();
+        self.sprint_leg = !ease
+            && view.fatigue.is_some()
             && steering
             && forward == 127
             && cmd.right == 0
@@ -3427,6 +3513,10 @@ impl Bot {
         } else if view.on_ground && !view.on_ladder && cmd.up == 0 {
             forward = crate::nav::paced_key(forward, view.move_scale);
             cmd.right = crate::nav::paced_key(cmd.right, view.move_scale);
+        }
+        if ease {
+            forward = (f32::from(forward) * EASE_KEY) as i8;
+            cmd.right = (f32::from(cmd.right) * EASE_KEY) as i8;
         }
         cmd.forward = forward;
         self.jump_held = cmd.up > 0;
@@ -4833,6 +4923,8 @@ mod tests {
             lip: false,
             crouch_jump: false,
             stop: false,
+            mate_ahead: false,
+            squad: Default::default(),
             run_off: false,
             mantle: false,
             move_scale: 1.0,
@@ -7640,6 +7732,97 @@ mod tests {
         v.dead = false;
         bot.think(&v);
         assert_eq!(bot.take_yell(), None, "a respawn");
+    }
+
+    /// An S&D bot away from its site holds still at the start of a round
+    /// for a draw of its own (`team::START_HOLD`), the rear guard for
+    /// longer; an enemy in sight ends it, and with `Bot::squad` off there
+    /// is none.
+    #[test]
+    fn a_one_life_round_starts_with_a_staggered_hold() {
+        let held = |seed: u64, squad: team::Squad, on: bool| {
+            let mut bot = Bot::new("allies", true, seed);
+            bot.squad = on;
+            let mut v = sd_view(ObjRole::Attack);
+            v.origin = [1000.0, 800.0, 64.0];
+            v.one_life = true;
+            v.squad = squad;
+            bot.think(&v);
+            let n = (0..200)
+                .take_while(|_| {
+                    let hold = bot.goal(&v) == Goal::Hold;
+                    bot.think(&v);
+                    hold
+                })
+                .count() as u32;
+            assert_eq!(bot.goal(&v), Goal::To([0.0, 0.0, 64.0]), "then to the site");
+            n
+        };
+        let main: Vec<u32> = (1..=16).map(|s| held(s, team::Squad::Main, true)).collect();
+        assert!(main.iter().all(|&n| n < team::START_HOLD), "{main:?}");
+        assert!(main.iter().any(|&n| n != main[0]), "each its own: {main:?}");
+        for s in 1..=16 {
+            let rear = held(s, team::Squad::Rear, true);
+            assert!((team::REAR_HOLD..2 * team::REAR_HOLD).contains(&rear));
+            let flank = held(s, team::Squad::Flank, true);
+            assert!((team::FLANK_HOLD..team::START_HOLD).contains(&flank));
+            assert_eq!(held(s, team::Squad::Rear, false), 0);
+        }
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = sd_view(ObjRole::Attack);
+        v.origin = [1000.0, 800.0, 64.0];
+        v.one_life = true;
+        v.squad = team::Squad::Rear;
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [1000.0, 1500.0, 64.0],
+            velocity: [0.0; 3],
+        });
+        bot.think(&v);
+        v.enemy = None;
+        assert_ne!(bot.goal(&v), Goal::Hold, "a fight ends the hold");
+    }
+
+    /// Behind a teammate just ahead (`BotView::mate_ahead`) a bot on its
+    /// way eases its keys to half; not with an enemy in sight, a bomb down
+    /// or `Bot::squad` off.
+    #[test]
+    fn a_bot_walks_behind_a_teammate_just_ahead() {
+        let forward = |ahead: bool, enemy: bool, bomb: bool, on: bool| {
+            let mut bot = Bot::new("allies", false, 1);
+            bot.squad = on;
+            let mut v = sd_view(ObjRole::Attack);
+            v.origin = [1000.0, 0.0, 64.0];
+            v.view = [0.0, 90.0, 0.0];
+            v.waypoint = Some([1000.0, 400.0, 64.0]);
+            v.on_ground = true;
+            v.move_scale = 1.0;
+            v.mate_ahead = ahead;
+            if bomb && let Some(sd) = v.sd.as_mut() {
+                sd.bomb = Some(BombView {
+                    origin: [0.0; 3],
+                    aim: [0.0; 3],
+                });
+            }
+            if enemy {
+                v.enemy = Some(EnemyView {
+                    slot: 3,
+                    origin: [3000.0, 3000.0, 64.0],
+                    velocity: [0.0; 3],
+                });
+            }
+            bot.think(&v).forward
+        };
+        assert_eq!(forward(false, false, false, true), 127);
+        assert_eq!(forward(true, false, false, true), 63);
+        assert_eq!(forward(true, false, false, false), 127);
+        assert_eq!(forward(true, false, true, true), 127);
+        assert_eq!(
+            forward(false, true, false, true),
+            forward(true, true, false, true)
+        );
     }
 
     /// The view on the lob with the gun kicked 17 degrees up off it (a

@@ -34,10 +34,11 @@
 //! `vc_bot_skill` levels, half each (dm: `SKILLS=a,b,...`, one bot per
 //! entry); without them `BOTS` join by balance at `vc_bot_skill`.
 //! One-sided feature arms: `COVER=`, `RETREAT=`, `TEAMPLAY=`, `AWARE=`,
-//! `FOOTWORK=` and `WARY=` (cover and lean, `bots/cover.rs`; the
+//! `FOOTWORK=`, `WARY=` and `SQUAD=` (cover and lean, `bots/cover.rs`; the
 //! retreat, `bots/retreat.rs`; team play, `bots/team.rs`;
 //! `Bot::aware`; moving while fighting, `Bot::footwork`; varied peeks
-//! and hunts, `Bot::wary`) each take `all` (the default), `none`, `axis`, `allies`
+//! and hunts, `Bot::wary`; spacing out, `Bot::squad`) each take `all`
+//! (the default), `none`, `axis`, `allies`
 //! or `alt` (axis on odd seeds, allies on even, so the map's own
 //! asymmetry cancels); `dm` has no sides, so only `all` and `none` there.
 //! With an arm one-sided the totals add a row per arm, named by the
@@ -170,12 +171,16 @@ struct Opts {
     /// Console lines run once the level is up (the per-side `addbot`s).
     console: Vec<String>,
     verbose: bool,
-    /// cover, retreat, team play, awareness, footwork, wariness.
-    arms: [Arm; 6],
+    /// cover, retreat, team play, awareness, footwork, wariness, squad.
+    arms: [Arm; 7],
 }
 
-const FEATURES: [&str; 6] = ["cover", "retreat", "teamplay", "aware", "footwork", "wary"];
-const ARMS: [&str; 6] = ["COVER", "RETREAT", "TEAMPLAY", "AWARE", "FOOTWORK", "WARY"];
+const FEATURES: [&str; 7] = [
+    "cover", "retreat", "teamplay", "aware", "footwork", "wary", "squad",
+];
+const ARMS: [&str; 7] = [
+    "COVER", "RETREAT", "TEAMPLAY", "AWARE", "FOOTWORK", "WARY", "SQUAD",
+];
 
 impl Opts {
     /// The one-sided features on for `team`, the arm its tallies land in.
@@ -889,7 +894,7 @@ fn main() {
         seeds = (1..=8).collect();
     }
     println!(
-        "maps {} gametype {} bots {} ticks {} uo {} set {:?} console {:?} cover/retreat/teamplay/aware/footwork/wary {:?}",
+        "maps {} gametype {} bots {} ticks {} uo {} set {:?} console {:?} cover/retreat/teamplay/aware/footwork/wary/squad {:?}",
         opts.maps.join(","),
         opts.gametype,
         opts.bots,
@@ -1106,7 +1111,7 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
         // stock game.
         for slot in sv.bot_slots() {
             let team = team_name(&mut sv, slot, m.dm);
-            let [cover, retreat, team_play, aware, footwork, wary] = o.arms;
+            let [cover, retreat, team_play, aware, footwork, wary, squad] = o.arms;
             if cover != Arm::All {
                 sv.test_bot_cover(slot, cover.on(team, seed));
             }
@@ -1124,6 +1129,9 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
             }
             if wary != Arm::All {
                 sv.test_bot_wary(slot, wary.on(team, seed));
+            }
+            if squad != Arm::All {
+                sv.test_bot_squad(slot, squad.on(team, seed));
             }
         }
         if let Some(ob) = observer.as_mut() {

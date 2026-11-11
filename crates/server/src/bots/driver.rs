@@ -339,6 +339,33 @@ pub(crate) fn team_objective(v: &BotView) -> bool {
     v.sd.is_some() || v.re.is_some() || v.uo.is_some()
 }
 
+/// [`BotView::squad`] over each side's S&D attackers with team play and
+/// `Bot::squad` on, dead ones counted, so a death keeps the rest in their
+/// parts: [`super::team::squad`] by their [`super::team::round_rank`].
+fn deal_squads<W: BotWorld>(w: &W, views: &mut [(usize, BotView)], teams: &[i32], round: u32) {
+    use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
+    let attacks = |slot: usize, v: &BotView| {
+        w.driver()
+            .bots
+            .get(&slot)
+            .is_some_and(|b| b.team_play && b.squad)
+            && v.sd
+                .as_ref()
+                .is_some_and(|sd| sd.role == super::ObjRole::Attack)
+    };
+    for team in [TEAM_AXIS, TEAM_ALLIES] {
+        let side: Vec<usize> = views
+            .iter()
+            .filter(|(s, v)| teams.get(*s) == Some(&team) && attacks(*s, v))
+            .map(|(s, _)| *s)
+            .collect();
+        for (s, v) in views.iter_mut().filter(|(s, _)| side.contains(s)) {
+            let rank = super::team::round_rank(*s, &side, team, round);
+            v.squad = super::team::squad(rank, side.len());
+        }
+    }
+}
+
 /// How near its probe's landing a body on a mantle edge has climbed
 /// ([`BotWorld::MANTLE_AIMS`]): a body in front of the wall stands at least
 /// its radius and the wall's depth short of it.
@@ -417,6 +444,7 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
         .collect();
     let p = crate::tick_profile::phase("bots/deal");
     w.deal(frame, &teams, &solo, round, &mut views);
+    deal_squads(w, &mut views, &teams, round);
     drop(p);
 
     // Pass 3: the tick's waypoint toward each brain's goal, then its
@@ -446,6 +474,12 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
             let f = w.driver().paths.get(slot)?;
             Some((*slot, teams.get(*slot).copied()?, f.ahead().collect()))
         })
+        .collect();
+    // Whose paths an S&D flanker plans round.
+    let main: Vec<usize> = views
+        .iter()
+        .filter(|(_, v)| v.squad == super::team::Squad::Main)
+        .map(|(s, _)| *s)
         .collect();
     drop(p);
     for (slot, mut view) in views {
@@ -491,6 +525,7 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
                 &teams,
                 &solo,
                 &paths,
+                &main,
                 &climbers,
                 &standing,
                 &mut budget,
@@ -999,17 +1034,31 @@ fn route<W: BotWorld>(
     teams: &[i32],
     solo: &[usize],
     paths: &[super::team::TeamPath],
+    main: &[usize],
     climbers: &[(usize, Vec3, Vec3)],
     standing: &[(usize, Vec3, Vec3)],
     budget: &mut u32,
 ) {
+    use super::team::{self, Squad};
     let g = g.clone();
     let mut follower = w.driver_mut().paths.remove(&slot).unwrap_or_default();
-    follower.crowd = match teams.get(slot) {
-        Some(&t) if W::YIELDS && team_objective(view) && !solo.contains(&slot) => {
-            super::team::crowd(paths, slot, t)
-        }
-        _ => Vec::new(),
+    let shared = team_objective(view) && !solo.contains(&slot);
+    let squad = shared && w.driver().bots.get(&slot).is_some_and(|b| b.squad);
+    let noise = |t: i32| team::route_seed(w.server_id() as u32, t, slot);
+    (follower.crowd, follower.crowd_cost, follower.noise) = match teams.get(slot) {
+        // A flanker pays far more on the main group's ways than on its
+        // other teammates'.
+        Some(&t) if W::YIELDS && squad && view.squad == Squad::Flank => (
+            team::crowd(paths.iter().filter(|p| main.contains(&p.0)), slot, t),
+            crate::nav::FLANK_COST,
+            noise(t),
+        ),
+        Some(&t) if W::YIELDS && shared => (
+            team::crowd(paths, slot, t),
+            crate::nav::CROWD_COST,
+            if squad { noise(t) } else { 0 },
+        ),
+        _ => (Vec::new(), crate::nav::CROWD_COST, 0),
     };
     if W::YIELDS {
         follower.blocked = w.blocked_nodes();
@@ -1163,6 +1212,17 @@ fn route<W: BotWorld>(
                 _ => None,
             };
         }
+    }
+    if squad
+        && view.enemy.is_none()
+        && let (Some(t), Some(to)) = (teams.get(slot), view.waypoint)
+    {
+        let mates: Vec<([f32; 3], [f32; 3])> = standing
+            .iter()
+            .filter(|(s, _, _)| *s != slot && teams.get(*s) == Some(t))
+            .map(|(_, o, v)| (o.to_array(), v.to_array()))
+            .collect();
+        view.mate_ahead = team::mate_ahead(at, to, &mates);
     }
     w.routed(slot, &follower, &g);
     if let Some(b) = w.driver_mut().bots.get_mut(&slot) {
