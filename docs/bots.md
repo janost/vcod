@@ -100,9 +100,21 @@ long it remembers a lost enemy, how far it hears and how wide it sees
 | 2 | hard | 150-300 ms | 440°/s | 600°/s | 32, 2.5 units | 1.25x | 140° |
 | 3 | expert | 100-150 ms | 600°/s | 720°/s | 24, 1.5 units | 1.5x | 160° |
 
-- The aim error is how far from the target's chest a shot would land. It
-  shrinks every tick the bot stays on the target and grows with range,
-  with the target's speed across the view, and while the bot runs.
+- The aim error is how far from the aimed point a shot would land on the
+  mean. It shrinks every tick the bot stays on the target and grows with
+  range and while the bot runs. It drifts slowly round the point rather
+  than jumping about.
+- The aimed point sits somewhere on the upper body, drawn once per
+  engagement. A target running across the view is trailed, and when he
+  turns back the aim runs on past the turn for a moment; both shrink with
+  skill.
+- The turn onto a target is a fast flick that lands a little short or
+  past, then a smaller correction. A higher level turns faster and lands
+  closer. The turn rate in the table is a flick's mean; it peaks near
+  twice that.
+- The bot pulls the gun's sway and recoil back part of the way, a few
+  ticks late: half of it 200 ms late at easy, 90% of it 100 ms late at
+  expert.
 - A higher level also moves on its sights more often (a slow strafe, a
   bolt rifle's back-off, a lie-down at range) and remembers a lost enemy
   and a heard shot longer.
@@ -216,7 +228,8 @@ bot does with the same keys. If one kills you, it earned it. The view holds:
   or onto a fresh attacker costs less.
 - It fires before its aim settles: automatics spray early, bolt rifles
   wait for a better line. On CoD1 and CoD2 it aims by where the gun
-  points, sway and recoil included.
+  points, and pulls sway and recoil back late and in part, as a hand does
+  ([research/bot-combat.md](research/bot-combat.md) section 18).
 - Around the shooting it strafes on its sights, backs off a close enemy
   with a bolt rifle, lies down at long range, takes cover and leans,
   retreats when hurt, and peeks for or hunts an enemy it lost.

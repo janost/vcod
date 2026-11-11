@@ -28,6 +28,9 @@ impl Skill {
                 error_range: 900.0,
                 error_moving: 1.9,
                 track_lag: 0.09,
+                flick_spread: 0.15,
+                recoil_share: 0.5,
+                recoil_ticks: 4,
                 footwork: 0.25,
                 memory_ticks: 70,
                 noise_ticks: 140,
@@ -48,6 +51,9 @@ impl Skill {
                 error_range: 1300.0,
                 error_moving: 1.5,
                 track_lag: 0.045,
+                flick_spread: 0.075,
+                recoil_share: 0.8,
+                recoil_ticks: 2,
                 footwork: 0.6,
                 memory_ticks: 140,
                 noise_ticks: 260,
@@ -67,6 +73,9 @@ impl Skill {
                 error_range: 1600.0,
                 error_moving: 1.3,
                 track_lag: 0.03,
+                flick_spread: 0.05,
+                recoil_share: 0.9,
+                recoil_ticks: 2,
                 footwork: 0.75,
                 memory_ticks: 180,
                 noise_ticks: 300,
@@ -103,6 +112,8 @@ mod tests {
             assert!(hi.error_start < lo.error_start && hi.error_floor < lo.error_floor);
             assert!(hi.error_decay < lo.error_decay && hi.error_range > lo.error_range);
             assert!(hi.error_moving < lo.error_moving && hi.track_lag < lo.track_lag);
+            assert!(hi.flick_spread < lo.flick_spread && hi.recoil_share > lo.recoil_share);
+            assert!(hi.recoil_ticks <= lo.recoil_ticks);
             assert!(hi.footwork > lo.footwork);
             assert!(hi.forget_ticks > lo.forget_ticks && hi.memory_ticks > lo.memory_ticks);
             assert!(hi.noise_ticks > lo.noise_ticks && hi.hearing > lo.hearing);
