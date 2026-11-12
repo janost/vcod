@@ -1311,6 +1311,25 @@ calls and constants:
   eases `leanf` to `(2 - |leanf|) * leanf` (0x3261e4 2) and moves the eye
   20 times that along the right of the yaw rolled 16 times it. VERIFIED.
   The eye's z is held at least 8 over the origin (0x3262f8). VERIFIED.
+- The eye's arm reads `cg.predictedPlayerState` whoever filled it, so a
+  demo and a followed player get the bob, the landing dip, the lean and
+  the floor too; the step only outside a demo, the `EV_STEP_VIEW` arm's
+  test above, so a followed player's steps ease. VERIFIED (the arm's
+  branches, cod2-demos.md 5). There `CG_InterpolatePlayerState(0)` (Mac
+  0x1dd8b2) fills it: `cg.nextSnap`'s playerstate, the origin (ps+0x14),
+  velocity (ps+0x20), `viewHeightCurrent` (ps+0xf8), `leanf` (ps+0x4c)
+  and ps+0xdc lerped from `cg.snap`'s by `cg.frameInterpolation`, the
+  view (ps+0xe8) through `LerpAngle` (Mac 0x2b9ce, 0x326204 180, 0x3261f0
+  360, 0x326208 -180), and `bobCycle` (ps+0x8) the older's plus the
+  truncated fraction of the step to the newer, 256 added to the newer
+  when it is the smaller; nothing lerps when `cg.snap`'s time is not
+  older. VERIFIED (the loads, stores and rodata). With its argument set
+  (`cg_nopredict`, `cg_synchronousClients`) the view comes off the newest
+  cmd through `PM_UpdateViewAngles` instead. VERIFIED. vcod:
+  `cod2_predict::interpolated`, drawn by `Cod2Session::snapshot_eye`.
+  Across a follow switch or a teleport vcod draws the newer playerstate as
+  is, as `Frame::eye` does. Retail's function tests neither (VERIFIED), so
+  a teleport's frames may lerp across the jump there. INFERRED.
 
 vcod (`crates/client/src/play/cod2_predict.rs`):
 
@@ -1321,7 +1340,8 @@ vcod (`crates/client/src/play/cod2_predict.rs`):
 - draws the eye above plus the landing dip and the step
   (`first_person_eye`'s `dips`, `play::cod2_view::Land::eye` and
   `Step::eye`, the step taken in `Cod2Session::recoil_frame` off the
-  frame's own events, none in a demo); the damage kick, the sight's sway and
+  frame's own events, none in a demo), predicted or, for a demo and a
+  followed player, over `interpolated`; the damage kick, the sight's sway and
   bob, the camera shake and the shellshock kick are the view's angles
   (`play::cod2_view`);
 - runs the Linux server's stored floats (`Arith::Stored`, section 2), not
