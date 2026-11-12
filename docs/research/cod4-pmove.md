@@ -834,8 +834,10 @@ clients, from the last spawn. VERIFIED (the gate):
   the target's round side included.
 - The flyer's playerstate matches but for `velocity[1]` in 4 rows of its
   turn, a few ulps (section 13.2's float model).
-- The walker's `delta_angles[1]` reads 180 off retail's for the 0.55 s
-  after its `setviewpos`, and its body's yaw with it (cod4-combat.md 15).
+- The walker's spawn `delta_angles[1]` (9.00879, the spot's 124 less the
+  last cmd's 114.99390) and its body's yaw match retail's. The 180 the
+  gate once read there, from the spawn to the `setviewpos`, was the
+  replayed probe's pre-spawn view, not the server (cod4-combat.md 15).
 - Before the capture ours had no `ClientImpacts` (no line printed), clipped
   bodies as boxes (the second stop 15 short of retail's) and rounded
   `SetClientViewAngle` in `f32` (the flyer off from its first stroke).
