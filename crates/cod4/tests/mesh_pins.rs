@@ -189,11 +189,14 @@ fn pin(clip: &ClipMap) -> Pin {
     p
 }
 
-/// Each map's digest, as the kernels traced before their rewrite.
+/// Each map's digest, as the kernels traced before their rewrite, under
+/// 1.7's `CM_Trace` set-up: the shifted end kept on the x87 stack
+/// (`cod4_lnxded` 0x811ce9f..0x811cfb8, cod4-collision.md 2), which the
+/// kill-cam entity gate's dead body slide matches bit for bit.
 const PINS: [(&str, u64); 3] = [
-    ("mp_crash", 0x85c4_ac60_18b7_6581),
-    ("mp_backlot", 0xa22a_a4ca_ad69_e1be),
-    ("mp_carentan", 0xa0c7_b47a_579d_a087),
+    ("mp_crash", 0x0a51_1444_af60_dca0),
+    ("mp_backlot", 0xa403_a62c_8249_152a),
+    ("mp_carentan", 0x5ac7_ad8b_6115_680d),
 ];
 
 #[test]

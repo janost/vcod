@@ -225,6 +225,7 @@ the subsystem's doc before touching it.
 | Fonts, menu keywords and scripts, `rect` alignment, hudelem placement, the front end | `cod2-fonts-menus.md` |
 | Sound: alias csvs, `volumemodgroups.def`, `.vfcurve` falloff, sound events, whizby, loops | `cod2-sound.md` |
 | Demos | `cod2-demos.md` |
+| Voice chat: the wire, the relay rules, the codec at 8192 Hz, push to talk, the talker list, the mute list, the retail capture | `cod2-voice.md` |
 | Client frame time, the soak | `cod2-client-perf.md` |
 
 ### CoD4 1.7

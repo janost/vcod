@@ -1,0 +1,3605 @@
+# map mp_toujane
+# made by: RAND_TRACE=1 GT=combat SECOND=still30 tools/run_probe_cod2.sh rocket mp_toujane -113 1229 1 0 <out> (retail cod2_lnxded 1.3, pure, defaults, +set probe_vx -71.6 +set probe_vy 1246.7 +set probe_vz 1 +set probe_vyaw 0 +set probe_aimz 40 +set probe_weapon panzerschreck_mp +set probe_stable 1)
+# move_probe --script rocket: com_maxfps 85, cl_maxpackets 30, cl_packetdup 1
+# weapons defaultweapon_mp mg42_bipod_stand_mp panzerschreck_mp frag_grenade_american_mp
+# cmd 8500 I "1"
+# cmd 8500 C 4
+# spawn (-113 1229 -0.7424) view (23.950195 23.148193)
+s 5 8500 commandTime=2134 origin[1]=4499a000 origin[0]=c2e20000 viewangles[1]=41b92f80 origin[2]=bf3e0ded viewangles[0]=41bf9a00 legsAnim=28a pm_flags=800000 viewHeightCurrent=42700000 eFlags=2 holdBreathScale=3f04eb57 viewHeightTarget=3c groundEntityNum=3fe weapon=3 weapons[0]=18 weaponslots[0]=300 delta_angles[0]=1108 delta_angles[1]=1076 cursorHintString=ffffffff offHandIndex=4 clientNum=1 viewlocked_entNum=3ff speed=be mins[1]=c1700000 mins[0]=c1700000 maxs[2]=428c0000 maxs[1]=41700000 maxs[0]=41700000 gravity=320 S[0]=64 S[2]=64 S[3]=3f S[5]=1 A[2]=4 C[3]=3
+e 0 pos.trTime=2133 pos.trBase[1]=449bc000 pos.trBase[0]=c28e0000 pos.trBase[2]=c0000000 legsAnim=28a eType=1 eFlags=2 groundEntityNum=3fe pos.trType=3 solid=66010f apos.trType=1 weapon=3 pos.trDuration=32
+e 84 eType=6 solid=ffffff index=1
+e 307 pos.trBase[1]=41c00000 pos.trBase[0]=44258000 apos.trBase[1]=42a5cb70 pos.trBase[2]=43450000 eType=9 angles2[0]=c2a20000 apos.trType=3 weapon=2 index=27
+e 308 pos.trBase[1]=41c00000 pos.trBase[0]=44258000 apos.trBase[1]=42a5cb70 pos.trBase[2]=43450000 eType=9 angles2[0]=c2a20000 apos.trType=3 weapon=2 index=27
+e 309 pos.trBase[1]=41c00000 pos.trBase[0]=44258000 apos.trBase[1]=42a5cb70 pos.trBase[2]=43450000 eType=9 angles2[0]=c2a20000 apos.trType=3 weapon=2 index=27
+e 310 pos.trBase[1]=44aa4000 pos.trBase[0]=c2a00000 apos.trBase[1]=c1ea6780 pos.trBase[2]=42040000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 311 pos.trBase[1]=44aa4000 pos.trBase[0]=c2a00000 apos.trBase[1]=c1ea6780 pos.trBase[2]=42040000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 312 pos.trBase[1]=44aa4000 pos.trBase[0]=c2a00000 apos.trBase[1]=c1ea6780 pos.trBase[2]=42040000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 368 pos.trBase[1]=44cc4000 pos.trBase[0]=4531b000 apos.trBase[1]=4333fd30 pos.trBase[2]=42340000 apos.trBase[0]=bdd5c000 eType=6 apos.trBase[2]=3f0e0800 index=33
+e 461 pos.trBase[1]=44cc4000 pos.trBase[0]=45312000 apos.trBase[1]=c3340000 pos.trBase[2]=42300000 eType=6 index=37
+e 463 eType=6 solid=ffffff index=8
+e 464 eType=6 solid=ffffff index=9
+e 465 eType=6 solid=ffffff index=a
+e 466 eType=6 solid=ffffff index=b
+e 467 eType=6 solid=ffffff index=c
+e 468 eType=6 solid=ffffff index=d
+e 469 eType=6 solid=ffffff index=e
+e 470 pos.trBase[1]=44cc4000 pos.trBase[0]=4531b000 apos.trBase[1]=4333fd30 pos.trBase[2]=42340000 apos.trBase[0]=bdd5c000 eType=6 apos.trBase[2]=3f0e0800 index=33
+e 471 pos.trBase[1]=44cc4000 pos.trBase[0]=4531b000 apos.trBase[1]=4333fd30 pos.trBase[2]=42340000 apos.trBase[0]=bdd5c000 eType=6 apos.trBase[2]=3f0e0800 index=33
+e 512 eType=6 solid=ffffff index=12
+e 513 eType=6 solid=ffffff index=13
+e 514 eType=6 solid=ffffff index=14
+e 619 pos.trBase[1]=45237000 pos.trBase[0]=4472c000 angles2[1]=43960000 pos.trBase[2]=42860000 eType=8 scale=2 origin2[2]=3f800000
+e 620 pos.trBase[1]=4504a000 pos.trBase[0]=44608000 angles2[1]=43960000 pos.trBase[2]=420c0000 eType=8 scale=2 origin2[2]=3f800000
+e 621 pos.trBase[1]=44c46000 pos.trBase[0]=44a30000 angles2[1]=43960000 pos.trBase[2]=41500000 eType=8 scale=2 origin2[2]=3f800000
+e 622 pos.trBase[1]=44bea000 pos.trBase[0]=44dc6000 angles2[1]=43960000 pos.trBase[2]=428c0000 eType=8 scale=2 origin2[2]=3f800000
+e 623 pos.trBase[1]=44f4e000 pos.trBase[0]=44c18000 angles2[1]=43960000 pos.trBase[2]=42100000 eType=8 scale=2 origin2[2]=3f800000
+e 624 pos.trBase[1]=44098000 pos.trBase[0]=42440000 angles2[1]=43960000 pos.trBase[2]=41b80000 eType=8 scale=2 origin2[2]=3f800000
+e 625 pos.trBase[1]=44824000 pos.trBase[0]=40e00000 angles2[1]=43960000 pos.trBase[2]=41b80000 eType=8 scale=2 origin2[2]=3f800000
+e 626 pos.trBase[1]=44c3c000 pos.trBase[0]=42c20000 angles2[1]=43960000 pos.trBase[2]=41b80000 eType=8 scale=2 origin2[2]=3f800000
+e 627 pos.trBase[1]=44020000 pos.trBase[0]=44770000 angles2[1]=43960000 pos.trBase[2]=c0000000 eType=8 scale=2 origin2[2]=3f800000
+e 628 pos.trBase[1]=4412c000 pos.trBase[0]=44b90000 angles2[1]=43960000 pos.trBase[2]=c0e00000 eType=8 scale=2 origin2[2]=3f800000
+e 629 pos.trBase[1]=4497a000 pos.trBase[0]=446f0000 angles2[1]=43960000 pos.trBase[2]=c1a00000 eType=8 scale=2 origin2[2]=3f800000
+e 630 pos.trBase[1]=445e8000 pos.trBase[0]=45182000 angles2[1]=43960000 pos.trBase[2]=428a0000 eType=8 scale=2 origin2[2]=3f800000
+e 631 pos.trBase[1]=44c3a000 pos.trBase[0]=451d7000 angles2[1]=43960000 pos.trBase[2]=428a0000 eType=8 scale=2 origin2[2]=3f800000
+e 632 pos.trBase[1]=4501e000 pos.trBase[0]=450ca000 angles2[1]=43960000 pos.trBase[2]=428a0000 eType=8 scale=2 origin2[2]=3f800000
+e 633 pos.trBase[1]=45266000 pos.trBase[0]=44e80000 angles2[1]=43960000 pos.trBase[2]=428a0000 eType=8 scale=2 origin2[2]=3f800000
+e 634 pos.trBase[1]=45459000 pos.trBase[0]=44aaa000 angles2[1]=43960000 pos.trBase[2]=428a0000 eType=8 scale=2 origin2[2]=3f800000
+e 635 pos.trBase[1]=442d0000 pos.trBase[0]=44fd6000 angles2[1]=43960000 pos.trBase[2]=41a80000 eType=8 scale=2 origin2[2]=3f800000
+e 636 pos.trBase[1]=46081000 pos.trBase[0]=c5c1f000 angles2[1]=447a0000 pos.trBase[2]=43560000 eType=8 scale=4 origin2[2]=3f800000
+e 637 pos.trBase[1]=445c4000 pos.trBase[0]=4606c000 angles2[1]=447a0000 pos.trBase[2]=42740000 eType=8 scale=4 origin2[2]=3f800000
+r 0 name[0]=67726174 name[4]=7465 modelindex=42 attachModelIndex[1]=44 attachModelIndex[0]=43
+r 1 name[0]=646f6376 name[4]=65766f6d modelindex=42 attachModelIndex[1]=44 attachModelIndex[0]=43 name[8]=73
+c 8502 0 3 4 0 0 0 0 0
+c 8515 0 3 4 0 0 0 0 0
+c 8527 0 3 4 0 0 0 0 0
+p 3
+c 8541 0 3 4 0 0 0 0 0
+s 6 8550 commandTime=214f viewangles[1]=41b92f81 viewangles[0]=41bf9a01 eventSequence=2 weaponTime=f87 events[0]=95 events[1]=96 weapAnim=20b torsoTimer=90c torsoAnim=315 holdBreathScale=3f17f433 weaponstate=5 weaponDelay=8e2
+e 0 pos.trTime=215d
+c 8554 0 3 4 0 0 0 0 0
+c 8566 0 3 4 0 0 0 0 0
+p 6
+c 8577 0 3 4 0 0 0 0 0
+c 8589 0 3 4 0 0 0 0 0
+s 7 8600 commandTime=2176 weaponTime=f60 torsoTimer=8e5 holdBreathScale=3f2e7458 weaponDelay=8bb
+e 0 pos.trTime=2180
+c 8603 0 3 4 0 0 0 0 0
+p 6
+c 8616 0 3 4 0 0 0 0 0
+c 8629 0 3 4 0 0 0 0 0
+c 8643 0 3 4 0 0 0 0 0
+p 6
+s 8 8650 commandTime=21c3 weaponTime=f13 torsoTimer=898 holdBreathScale=3f4d961e weaponDelay=86e
+e 0 pos.trTime=21a6
+c 8658 0 3 4 0 0 0 0 0
+c 8671 0 3 4 0 0 0 0 0
+c 8683 0 3 4 0 0 0 0 0
+p 6
+s 9 8700 commandTime=21eb weaponTime=eeb torsoTimer=870 holdBreathScale=3f58bf58 weaponDelay=846
+e 0 pos.trTime=21f2
+c 8695 0 3 4 0 0 0 0 0
+c 8708 0 3 4 0 0 0 0 0
+c 8721 0 3 4 0 0 0 0 0
+p 6
+c 8733 0 3 4 0 0 0 0 0
+s 10 8750 commandTime=2211 weaponTime=ec5 torsoTimer=84a holdBreathScale=3f6108d7 weaponDelay=820
+e 0 pos.trTime=2217
+c 8747 0 3 4 0 0 0 0 0
+c 8759 0 3 4 0 0 0 0 0
+p 6
+c 8772 0 3 4 0 0 0 0 0
+c 8784 0 3 4 0 0 0 0 0
+c 8795 0 3 4 0 0 0 0 0
+p 6
+s 11 8800 commandTime=225b weaponTime=e7b torsoTimer=800 holdBreathScale=3f6c7ab4 weaponDelay=7d6
+e 0 pos.trTime=223d
+c 8809 0 3 4 0 0 0 0 0
+c 8822 0 3 4 0 0 0 0 0
+c 8834 0 3 4 0 0 0 0 0
+p 6
+s 12 8850 commandTime=2282 weaponTime=e54 torsoTimer=7d9 holdBreathScale=3f70b366 weaponDelay=7af
+e 0 pos.trTime=2268
+c 8845 0 3 4 0 0 0 0 0
+c 8857 0 3 4 0 0 0 0 0
+c 8869 0 3 4 0 0 0 0 0
+p 6
+c 8880 0 3 4 0 0 0 0 0
+c 8892 0 3 4 0 0 0 0 0
+s 13 8900 commandTime=22a5 weaponTime=e31 torsoTimer=7b6 holdBreathScale=3f73b1b3 weaponDelay=78c
+e 0 pos.trTime=22ba
+c 8903 0 3 4 0 0 0 0 0
+p 6
+c 8915 0 3 4 0 0 0 0 0
+c 8927 0 3 4 0 0 0 0 0
+c 8939 0 3 4 0 0 0 0 0
+p 6
+s 14 8950 commandTime=22eb weaponTime=deb torsoTimer=770 holdBreathScale=3f7809d7 weaponDelay=746
+e 0 pos.trTime=22dd
+c 8951 0 3 4 0 0 0 0 0
+c 8963 0 3 4 0 0 0 0 0
+c 8975 0 3 4 0 0 0 0 0
+p 6
+c 8988 0 3 4 0 0 0 0 0
+s 15 9000 commandTime=230f weaponTime=dc7 torsoTimer=74c holdBreathScale=3f79a325 weaponDelay=722
+e 0 pos.trTime=2325
+c 9000 0 3 4 0 0 0 0 0
+c 9014 0 3 4 0 0 0 0 0
+p 6
+c 9025 0 3 4 0 0 0 0 0
+c 9039 0 3 4 0 0 0 0 0
+s 16 9050 commandTime=2336 weaponTime=da0 torsoTimer=725 holdBreathScale=3f7b0365 weaponDelay=6fb
+e 0 pos.trTime=2349
+c 9053 0 3 4 0 0 0 0 0
+p 6
+c 9066 0 3 4 0 0 0 0 0
+c 9078 0 3 4 0 0 0 0 0
+c 9091 0 3 4 0 0 0 0 0
+p 6
+s 17 9100 commandTime=2383 weaponTime=d53 torsoTimer=6d8 holdBreathScale=3f7ceac5 weaponDelay=6ae
+e 0 pos.trTime=236f
+c 9102 0 3 4 0 0 0 0 0
+c 9114 0 3 4 0 0 0 0 0
+c 9127 0 3 4 0 0 0 0 0
+p 6
+c 9140 0 3 4 0 0 0 0 0
+s 18 9150 commandTime=23a7 weaponTime=d2f torsoTimer=6b4 holdBreathScale=3f7d894a weaponDelay=68a
+e 0 pos.trTime=23b9
+c 9152 0 3 4 0 0 0 0 0
+c 9163 0 3 4 0 0 0 0 0
+p 6
+c 9178 0 3 4 0 0 0 0 0
+c 9191 0 3 4 0 0 0 0 0
+s 19 9200 commandTime=23cb weaponTime=d0b torsoTimer=690 holdBreathScale=3f7e07f8 weaponDelay=666
+e 0 pos.trTime=23e3
+c 9202 0 3 4 0 0 0 0 0
+p 6
+c 9216 0 3 4 0 0 0 0 0
+c 9229 0 3 4 0 0 0 0 0
+c 9241 0 3 4 0 0 0 0 0
+p 6
+s 20 9250 commandTime=2419 weaponTime=cbd torsoTimer=642 holdBreathScale=3f7eca70 weaponDelay=618
+e 0 pos.trTime=2407
+c 9254 0 3 4 0 0 0 0 0
+c 9266 0 3 4 0 0 0 0 0
+c 9279 0 3 4 0 0 0 0 0
+p 6
+c 9292 0 3 4 0 0 0 0 0
+s 21 9300 commandTime=243f weaponTime=c97 torsoTimer=61c holdBreathScale=3f7f0bcb weaponDelay=5f2
+e 0 pos.trTime=2450
+c 9304 0 3 4 0 0 0 0 0
+c 9317 0 3 4 0 0 0 0 0
+p 6
+c 9330 0 3 4 0 0 0 0 0
+c 9342 0 3 4 0 0 0 0 0
+s 22 9350 commandTime=2465 weaponTime=c71 torsoTimer=5f6 holdBreathScale=3f7f3f59 weaponDelay=5cc
+e 0 pos.trTime=247b
+c 9354 0 3 4 0 0 0 0 0
+p 6
+c 9366 0 3 4 0 0 0 0 0
+c 9379 0 3 4 0 0 0 0 0
+c 9391 0 3 4 0 0 0 0 0
+p 6
+s 23 9400 commandTime=24af weaponTime=c27 torsoTimer=5ac holdBreathScale=3f7f868b weaponDelay=582
+e 0 pos.trTime=24a1
+c 9404 0 3 4 0 0 0 0 0
+c 9416 0 3 4 0 0 0 0 0
+c 9431 0 3 4 0 0 0 0 0
+p 6
+c 9443 0 3 4 0 0 0 0 0
+s 24 9450 commandTime=24d7 weaponTime=bff torsoTimer=584 holdBreathScale=3f7fa16e weaponDelay=55a
+e 0 pos.trTime=24c7
+c 9457 0 3 4 0 0 0 0 0
+c 9470 0 3 4 0 0 0 0 0
+p 6
+c 9482 0 3 4 0 0 0 0 0
+s 25 9500 commandTime=24fe weaponTime=bd8 torsoTimer=55d holdBreathScale=3f7fb5e1 weaponDelay=533
+e 0 pos.trTime=2516
+c 9496 0 3 4 0 0 0 0 0
+c 9509 0 3 4 0 0 0 0 0
+p 6
+c 9521 0 3 4 0 0 0 0 0
+c 9535 0 3 4 0 0 0 0 0
+s 26 9550 commandTime=2525 weaponTime=bb1 torsoTimer=536 holdBreathScale=3f800000 weaponDelay=50c
+e 0 pos.trTime=253c
+c 9550 0 3 4 0 0 0 0 0
+p 6
+c 9562 0 3 4 0 0 0 0 0
+c 9575 0 3 4 0 0 0 0 0
+c 9588 0 3 4 0 0 0 0 0
+p 6
+s 27 9600 commandTime=2574 weaponTime=b62 torsoTimer=4e7 weaponDelay=4bd
+e 0 pos.trTime=2564
+c 9600 0 3 4 0 0 0 0 0
+c 9611 0 3 4 0 0 0 0 0
+c 9623 0 3 4 0 0 0 0 0
+p 6
+c 9638 0 3 4 0 0 0 0 0
+s 28 9650 commandTime=2597 weaponTime=b3f torsoTimer=4c4 weaponDelay=49a
+e 0 pos.trTime=2589
+c 9651 0 3 4 0 0 0 0 0
+c 9665 0 3 4 0 0 0 0 0
+p 6
+c 9677 0 3 4 0 0 0 0 0
+c 9692 0 3 4 0 0 0 0 0
+s 29 9700 commandTime=25c1 weaponTime=b15 torsoTimer=49a weaponDelay=470
+e 0 pos.trTime=25d6
+c 9703 0 3 4 0 0 0 0 0
+p 6
+c 9716 0 3 4 0 0 0 0 0
+c 9728 0 3 4 0 0 0 0 0
+c 9741 0 3 4 0 0 0 0 0
+p 6
+s 30 9750 commandTime=260d weaponTime=ac9 torsoTimer=44e weaponDelay=424
+e 0 pos.trTime=25fc
+c 9752 0 3 4 0 0 0 0 0
+c 9765 0 3 4 0 0 0 0 0
+c 9777 0 3 4 0 0 0 0 0
+p 6
+c 9789 0 3 4 0 0 0 0 0
+s 31 9800 commandTime=2631 weaponTime=aa5 torsoTimer=42a weaponDelay=400
+e 0 pos.trTime=2623
+c 9800 0 3 4 0 0 0 0 0
+c 9812 0 3 4 0 0 0 0 0
+p 6
+c 9825 0 3 4 0 0 0 0 0
+c 9838 0 3 4 0 0 0 0 0
+s 32 9850 commandTime=2654 weaponTime=a82 torsoTimer=407 weaponDelay=3dd
+e 0 pos.trTime=2672
+c 9850 0 3 4 0 0 0 0 0
+p 6
+c 9861 0 3 4 0 0 0 0 0
+c 9874 0 3 4 0 0 0 0 0
+c 9888 0 3 4 0 0 0 0 0
+p 6
+s 33 9900 commandTime=26a0 weaponTime=a36 torsoTimer=3bb weaponDelay=391
+e 0 pos.trTime=2696
+c 9900 0 3 4 0 0 0 0 0
+c 9912 0 3 4 0 0 0 0 0
+c 9925 0 3 4 0 0 0 0 0
+p 6
+c 9939 0 3 4 0 0 0 0 0
+s 34 9950 commandTime=26c5 weaponTime=a11 torsoTimer=396 weaponDelay=36c
+e 0 pos.trTime=26bc
+c 9952 0 3 4 0 0 0 0 0
+c 9966 0 3 4 0 0 0 0 0
+p 6
+c 9978 0 3 4 0 0 0 0 0
+c 9990 0 3 4 0 0 0 0 0
+s 35 10000 commandTime=26ee weaponTime=9e8 torsoTimer=36d weaponDelay=343
+e 0 pos.trTime=2709
+c 10001 0 3 4 0 0 0 0 0
+p 6
+c 10013 0 3 4 0 0 0 0 0
+c 10027 0 3 4 0 0 0 0 0
+c 10039 0 3 4 0 0 0 0 0
+p 6
+s 36 10050 commandTime=2737 weaponTime=99f torsoTimer=324 weaponDelay=2fa
+e 0 pos.trTime=272d
+c 10050 0 3 4 0 0 0 0 0
+c 10063 0 3 4 0 0 0 0 0
+c 10077 0 3 4 0 0 0 0 0
+p 6
+c 10091 0 3 4 0 0 0 0 0
+s 37 10100 commandTime=275d weaponTime=979 torsoTimer=2fe weaponDelay=2d4
+e 0 pos.trTime=274f
+c 10105 0 3 4 0 0 0 0 0
+c 10118 0 3 4 0 0 0 0 0
+p 6
+c 10132 0 3 4 0 0 0 0 0
+s 38 10150 commandTime=2786 weaponTime=950 torsoTimer=2d5 weaponDelay=2ab
+e 0 pos.trTime=279e
+c 10150 0 3 4 0 0 0 0 0
+c 10162 0 3 4 0 0 0 0 0
+p 6
+c 10175 0 3 4 0 0 0 0 0
+c 10187 0 3 4 0 0 0 0 0
+s 39 10200 commandTime=27b2 weaponTime=924 torsoTimer=2a9 weaponDelay=27f
+e 0 pos.trTime=27c6
+c 10198 0 3 4 0 0 0 0 0
+p 6
+c 10210 0 3 4 0 0 0 0 0
+c 10222 0 3 4 0 0 0 0 0
+c 10234 0 3 4 0 0 0 0 0
+p 6
+s 40 10250 commandTime=27fa weaponTime=8dc torsoTimer=261 weaponDelay=237
+e 0 pos.trTime=27ec
+c 10246 0 3 4 0 0 0 0 0
+c 10261 0 3 4 0 0 0 0 0
+c 10275 0 3 4 0 0 0 0 0
+p 6
+c 10287 0 3 4 0 0 0 0 0
+s 41 10300 commandTime=2823 weaponTime=8b3 torsoTimer=238 weaponDelay=20e
+e 0 pos.trTime=2836
+c 10300 0 3 4 0 0 0 0 0
+c 10314 0 3 4 0 0 0 0 0
+p 6
+c 10328 0 3 4 0 0 0 0 0
+c 10341 0 3 4 0 0 0 0 0
+s 42 10350 commandTime=284a weaponTime=88c torsoTimer=211 weaponDelay=1e7
+e 0 pos.trTime=2859
+c 10352 0 3 4 0 0 0 0 0
+p 6
+c 10365 0 3 4 0 0 0 0 0
+c 10378 0 3 4 0 0 0 0 0
+c 10392 0 3 4 0 0 0 0 0
+p 6
+s 43 10400 commandTime=2870 weaponTime=866 torsoTimer=1eb weaponDelay=1c1
+e 0 pos.trTime=287e
+c 10405 0 3 4 0 0 0 0 0
+c 10418 0 3 4 0 0 0 0 0
+c 10430 0 3 4 0 0 0 0 0
+p 6
+s 44 10450 commandTime=28be weaponTime=818 torsoTimer=19d weaponDelay=173
+e 0 pos.trTime=28ca
+c 10444 0 3 4 0 0 0 0 0
+c 10455 0 3 4 0 0 0 0 0
+c 10467 0 3 4 0 0 0 0 0
+p 6
+c 10480 0 3 4 0 0 0 0 0
+c 10492 0 3 4 0 0 0 0 0
+s 45 10500 commandTime=28e3 weaponTime=7f3 torsoTimer=178 weaponDelay=14e
+e 0 pos.trTime=28f1
+c 10507 0 3 4 0 0 0 0 0
+p 6
+c 10519 0 3 4 0 0 0 0 0
+c 10531 0 3 4 0 0 0 0 0
+c 10543 0 3 4 0 0 0 0 0
+p 6
+s 46 10550 commandTime=290b weaponTime=7cb torsoTimer=150 weaponDelay=126
+e 0 pos.trTime=2917
+c 10554 0 3 4 0 0 0 0 0
+c 10569 0 3 4 0 0 0 0 0
+c 10580 0 3 4 0 0 0 0 0
+p 6
+c 10592 0 3 4 0 0 0 0 0
+s 47 10600 commandTime=2954 weaponTime=782 torsoTimer=107 weaponDelay=dd
+e 0 pos.trTime=2963
+c 10605 0 3 4 0 0 0 0 0
+c 10616 0 3 4 0 0 0 0 0
+p 6
+c 10630 0 3 4 0 0 0 0 0
+c 10643 0 3 4 0 0 0 0 0
+s 48 10650 commandTime=2978 weaponTime=75e torsoTimer=e3 weaponDelay=b9
+e 0 pos.trTime=2987
+c 10656 0 3 4 0 0 0 0 0
+p 6
+c 10671 0 3 4 0 0 0 0 0
+c 10683 0 3 4 0 0 0 0 0
+s 49 10700 commandTime=29a0 weaponTime=736 torsoTimer=bb weaponDelay=91
+e 0 pos.trTime=29ae
+c 10697 0 3 4 0 0 0 0 0
+p 6
+c 10710 0 3 4 0 0 0 0 0
+c 10721 0 3 4 0 0 0 0 0
+c 10733 0 3 4 0 0 0 0 0
+p 6
+s 50 10750 commandTime=29ed weaponTime=6e9 torsoTimer=6e weaponDelay=44
+e 0 pos.trTime=29fa
+c 10748 0 3 4 0 0 0 0 0
+c 10759 0 3 4 0 0 0 0 0
+c 10771 0 3 4 0 0 0 0 0
+p 6
+c 10783 0 3 4 0 0 0 0 0
+s 51 10800 commandTime=2a13 weaponTime=6c3 torsoTimer=48 weaponDelay=1e
+e 0 pos.trTime=2a20
+c 10795 0 3 4 0 0 0 0 0
+c 10808 0 3 4 0 0 0 0 0
+p 6
+c 10819 0 3 4 0 0 0 0 0
+c 10832 0 3 4 0 0 0 0 0
+s 52 10850 commandTime=2a38 weaponTime=69e torsoTimer=23 torsoAnim=0 weaponDelay=0 A[2]=3 C[2]=1
+e 0 pos.trTime=2a46
+c 10846 0 3 4 0 0 0 0 0
+p 6
+c 10859 0 3 4 0 0 0 0 0
+c 10873 0 3 4 0 0 0 0 0
+c 10885 0 3 4 0 0 0 0 0
+p 6
+s 53 10900 commandTime=2a85 weaponTime=651 torsoTimer=0
+e 0 pos.trTime=2a6c
+c 10898 0 3 4 0 0 0 0 0
+c 10912 0 3 4 0 0 0 0 0
+c 10923 0 3 4 0 0 0 0 0
+p 6
+c 10935 0 3 4 0 0 0 0 0
+s 54 10950 commandTime=2aab weaponTime=62b
+e 0 pos.trTime=2ab8
+c 10949 0 3 4 0 0 0 0 0
+c 10962 0 3 4 0 0 0 0 0
+p 6
+c 10976 0 3 4 0 0 0 0 0
+c 10988 0 3 4 0 0 0 0 0
+s 55 11000 commandTime=2ad2 weaponTime=604
+e 0 pos.trTime=2add
+c 11001 0 3 4 0 0 0 0 0
+p 6
+c 11014 0 3 4 0 0 0 0 0
+c 11026 0 3 4 0 0 0 0 0
+c 11039 0 3 4 0 0 0 0 0
+p 6
+s 56 11050 commandTime=2b1f weaponTime=5b7
+e 0 pos.trTime=2b06
+c 11050 0 3 4 0 0 0 0 0
+c 11063 0 3 4 0 0 0 0 0
+c 11075 0 3 4 0 0 0 0 0
+p 6
+c 11088 0 3 4 0 0 0 0 0
+s 57 11100 commandTime=2b43 weaponTime=593
+e 0 pos.trTime=2b50
+c 11099 0 3 4 0 0 0 0 0
+c 11113 0 3 4 0 0 0 0 0
+p 6
+c 11128 0 3 4 0 0 0 0 0
+c 11141 0 3 4 0 0 0 0 0
+s 58 11150 commandTime=2b69 weaponTime=56d
+e 0 pos.trTime=2b73
+c 11154 0 3 4 0 0 0 0 0
+p 6
+c 11168 0 3 4 0 0 0 0 0
+c 11179 0 3 4 0 0 0 0 0
+c 11191 0 3 4 0 0 0 0 0
+p 6
+s 59 11200 commandTime=2bb7 weaponTime=51f
+e 0 pos.trTime=2bbb
+c 11206 0 3 4 0 0 0 0 0
+c 11220 0 3 4 0 0 0 0 0
+c 11233 0 3 4 0 0 0 0 0
+p 6
+s 60 11250 commandTime=2be1 weaponTime=4f5
+e 0 pos.trTime=2be2
+c 11249 0 3 4 0 0 0 0 0
+c 11261 0 3 4 0 0 0 0 0
+c 11276 0 3 4 0 0 0 0 0
+p 6
+c 11289 0 3 4 0 0 0 0 0
+s 61 11300 commandTime=2c0c weaponTime=4ca
+e 0 pos.trTime=2c07
+c 11304 0 3 4 0 0 0 0 0
+c 11315 0 3 4 0 0 0 0 0
+p 6
+c 11326 0 3 4 0 0 0 0 0
+c 11339 0 3 4 0 0 0 0 0
+s 62 11350 commandTime=2c33 weaponTime=4a3
+e 0 pos.trTime=2c4f
+c 11353 0 3 4 0 0 0 0 0
+p 6
+c 11367 0 3 4 0 0 0 0 0
+c 11378 0 3 4 0 0 0 0 0
+c 11392 0 3 4 0 0 0 0 0
+p 6
+s 63 11400 commandTime=2c59 weaponTime=47d
+e 0 pos.trTime=2c78
+c 11404 0 3 4 0 0 0 0 0
+c 11415 0 3 4 0 0 0 0 0
+c 11427 0 3 4 0 0 0 0 0
+p 6
+c 11442 0 3 4 0 0 0 0 0
+s 64 11450 commandTime=2ca3 weaponTime=433
+e 0 pos.trTime=2c9c
+c 11454 0 3 4 0 0 0 0 0
+c 11466 0 3 4 0 0 0 0 0
+p 6
+c 11478 0 3 4 0 0 0 0 0
+c 11490 0 3 4 0 0 0 0 0
+s 65 11500 commandTime=2cca weaponTime=40c
+e 0 pos.trTime=2cc5
+c 11503 0 3 4 0 0 0 0 0
+p 6
+c 11516 0 3 4 0 0 0 0 0
+c 11530 0 3 4 0 0 0 0 0
+c 11542 0 3 4 0 0 0 0 0
+p 6
+s 66 11550 commandTime=2d16 weaponTime=3c0
+e 0 pos.trTime=2d0d
+c 11553 0 3 4 0 0 0 0 0
+c 11565 0 3 4 0 0 0 0 0
+c 11577 0 3 4 0 0 0 0 0
+p 6
+c 11589 0 3 4 0 0 0 0 0
+s 67 11600 commandTime=2d39 weaponTime=39d
+e 0 pos.trTime=2d31
+c 11601 0 3 4 0 0 0 0 0
+c 11616 0 3 4 0 0 0 0 0
+p 6
+c 11630 0 3 4 0 0 0 0 0
+c 11641 0 3 4 0 0 0 0 0
+s 68 11650 commandTime=2d60 weaponTime=376
+e 0 pos.trTime=2d58
+c 11655 0 3 4 0 0 0 0 0
+p 6
+c 11667 0 3 4 0 0 0 0 0
+c 11679 0 3 4 0 0 0 0 0
+s 69 11700 commandTime=2d87 weaponTime=34f
+e 0 pos.trTime=2da7
+c 11696 0 3 4 0 0 0 0 0
+p 6
+c 11710 0 3 4 0 0 0 0 0
+c 11724 0 3 4 0 0 0 0 0
+c 11736 0 3 4 0 0 0 0 0
+p 6
+s 70 11750 commandTime=2dd8 weaponTime=2fe
+e 0 pos.trTime=2dca
+c 11747 0 3 4 0 0 0 0 0
+c 11761 0 3 4 0 0 0 0 0
+c 11775 0 3 4 0 0 0 0 0
+p 6
+c 11789 0 3 4 0 0 0 0 0
+s 71 11800 commandTime=2dff weaponTime=2d7
+e 0 pos.trTime=2e14
+c 11801 0 3 4 0 0 0 0 0
+c 11813 0 3 4 0 0 0 0 0
+p 6
+c 11825 0 3 4 0 0 0 0 0
+c 11838 0 3 4 0 0 0 0 0
+s 72 11850 commandTime=2e25 weaponTime=2b1
+e 0 pos.trTime=2e39
+c 11849 0 3 4 0 0 0 0 0
+p 6
+c 11860 0 3 4 0 0 0 0 0
+c 11874 0 3 4 0 0 0 0 0
+c 11887 0 3 4 0 0 0 0 0
+p 6
+s 73 11900 commandTime=2e6f weaponTime=267
+e 0 pos.trTime=2e5f
+c 11899 0 3 4 0 0 0 0 0
+c 11911 0 3 4 0 0 0 0 0
+c 11923 0 3 4 0 0 0 0 0
+p 6
+c 11935 0 3 4 0 0 0 0 0
+s 74 11950 commandTime=2e93 weaponTime=243
+e 0 pos.trTime=2eab
+c 11949 0 3 4 0 0 0 0 0
+c 11961 0 3 4 0 0 0 0 0
+p 6
+c 11976 0 3 4 0 0 0 0 0
+c 11987 0 3 4 0 0 0 0 0
+s 75 12000 commandTime=2eb9 weaponTime=21d
+e 0 pos.trTime=2ed1
+c 11998 0 3 4 0 0 0 0 0
+p 6
+c 12011 0 3 4 0 0 0 0 0
+c 12024 0 3 4 0 0 0 0 0
+c 12037 0 3 4 0 0 0 0 0
+p 6
+s 76 12050 commandTime=2f05 weaponTime=1d1
+e 0 pos.trTime=2ef5
+c 12048 0 3 4 0 0 0 0 0
+c 12061 0 3 4 0 0 0 0 0
+c 12073 0 3 4 0 0 0 0 0
+p 6
+c 12086 0 3 4 0 0 0 0 0
+s 77 12100 commandTime=2f29 weaponTime=1ad
+e 0 pos.trTime=2f1e
+c 12099 0 3 4 0 0 0 0 0
+c 12111 0 3 4 0 0 0 0 0
+p 6
+c 12125 0 3 4 0 0 0 0 0
+c 12136 0 3 4 0 0 0 0 0
+s 78 12150 commandTime=2f4f weaponTime=187
+e 0 pos.trTime=2f68
+c 12150 0 3 4 0 0 0 0 0
+p 6
+c 12162 0 3 4 0 0 0 0 0
+c 12174 0 3 4 0 0 0 0 0
+c 12186 0 3 4 0 0 0 0 0
+p 6
+s 79 12200 commandTime=2f9a weaponTime=13c
+e 0 pos.trTime=2f8d
+c 12198 0 3 4 0 0 0 0 0
+c 12210 0 3 4 0 0 0 0 0
+c 12222 0 3 4 0 0 0 0 0
+p 6
+c 12235 0 3 4 0 0 0 0 0
+s 80 12250 commandTime=2fbe weaponTime=118
+e 0 pos.trTime=2fb6
+c 12249 0 3 4 0 0 0 0 0
+c 12261 0 3 4 0 0 0 0 0
+p 6
+c 12273 0 3 4 0 0 0 0 0
+c 12289 0 3 4 0 0 0 0 0
+s 81 12300 commandTime=2fe5 weaponTime=f1
+e 0 pos.trTime=3004
+c 12301 0 3 4 0 0 0 0 0
+p 6
+c 12313 0 3 4 0 0 0 0 0
+c 12324 0 3 4 0 0 0 0 0
+c 12336 0 3 4 0 0 0 0 0
+p 6
+s 82 12350 commandTime=3030 weaponTime=a6
+e 0 pos.trTime=3028
+c 12348 0 3 4 0 0 0 0 0
+c 12361 0 3 4 0 0 0 0 0
+c 12373 0 3 4 0 0 0 0 0
+p 6
+c 12385 0 3 4 0 0 0 0 0
+s 83 12400 commandTime=3055 weaponTime=81
+e 0 pos.trTime=304c
+c 12396 0 3 4 0 0 0 0 0
+c 12407 0 3 4 0 0 0 0 0
+p 6
+c 12420 0 3 4 0 0 0 0 0
+c 12433 0 3 4 0 0 0 0 0
+s 84 12450 commandTime=3077 weaponTime=5f
+e 0 pos.trTime=309a
+c 12446 0 3 4 0 0 0 0 0
+p 6
+c 12460 0 3 4 0 0 0 0 0
+c 12474 0 3 4 0 0 0 0 0
+c 12485 0 3 4 0 0 0 0 0
+p 6
+s 85 12500 commandTime=30c5 weaponTime=11
+e 0 pos.trTime=30bf
+c 12500 0 3 4 0 0 0 0 0
+c 12514 0 3 4 0 0 0 0 0
+c 12525 0 3 4 0 0 0 0 0
+p 6
+c 12539 0 3 4 0 0 0 0 0
+s 86 12550 commandTime=30ed weaponTime=0 weapAnim=0 weaponstate=0
+e 0 pos.trTime=30e4
+c 12551 0 3 4 0 0 0 0 0
+c 12564 0 3 4 0 0 0 0 0
+p 6
+c 12575 0 3 4 0 0 0 0 0
+c 12588 0 3 4 0 0 0 0 0
+s 87 12600 commandTime=3114
+e 0 pos.trTime=3130
+c 12600 0 3 4 0 0 0 0 0
+p 6
+c 12612 0 3 4 0 0 0 0 0
+c 12626 0 3 4 0 0 0 0 0
+c 12637 0 3 4 0 0 0 0 0
+p 6
+s 88 12650 commandTime=315d
+e 0 pos.trTime=3154
+c 12649 0 3 4 0 0 0 0 0
+c 12661 0 3 4 0 0 0 0 0
+c 12675 0 3 4 0 0 0 0 0
+p 6
+c 12690 0 3 4 0 0 0 0 0
+s 89 12700 commandTime=3183
+e 0 pos.trTime=3179
+c 12701 0 3 4 0 0 0 0 0
+c 12715 0 3 4 0 0 0 0 0
+p 6
+c 12728 0 3 4 0 0 0 0 0
+c 12740 0 3 4 0 0 0 0 0
+s 90 12750 commandTime=31ab
+e 0 pos.trTime=31c3
+c 12753 0 3 4 0 0 0 0 0
+p 6
+c 12764 0 3 4 0 0 0 0 0
+c 12776 0 3 4 0 0 0 0 0
+c 12790 0 3 4 0 0 0 0 0
+p 6
+s 91 12800 commandTime=31f6
+e 0 pos.trTime=31e6
+c 12801 0 3 4 0 0 0 0 0
+c 12815 0 3 4 0 0 0 0 0
+c 12826 0 3 4 0 0 0 0 0
+p 6
+c 12840 0 3 4 0 0 0 0 0
+s 92 12850 commandTime=321a
+e 0 pos.trTime=322c
+c 12853 0 3 4 0 0 0 0 0
+c 12867 0 3 4 0 0 0 0 0
+p 6
+c 12880 0 3 4 0 0 0 0 0
+c 12893 0 3 4 0 0 0 0 0
+s 93 12900 commandTime=3243
+e 0 pos.trTime=324f
+c 12905 0 3 4 0 0 0 0 0
+p 6
+c 12917 0 3 4 0 0 0 0 0
+c 12930 0 3 4 0 0 0 0 0
+s 94 12950 commandTime=3269
+e 0 pos.trTime=3273
+c 12945 0 3 4 0 0 0 0 0
+p 6
+c 12956 0 3 4 0 0 0 0 0
+c 12968 0 3 4 0 0 0 0 0
+c 12979 0 3 4 0 0 0 0 0
+p 6
+c 12993 0 3 4 0 0 0 0 0
+s 95 13000 commandTime=32b3
+e 0 pos.trTime=32be
+c 13006 0 3 4 0 0 0 0 0
+c 13018 0 3 4 0 0 0 0 0
+p 6
+c 13030 0 3 4 0 0 0 0 0
+c 13041 0 3 4 0 0 0 0 0
+s 96 13050 commandTime=32da
+e 0 pos.trTime=32e1
+c 13053 0 3 4 0 0 0 0 0
+p 6
+c 13064 0 3 4 0 0 0 0 0
+c 13076 0 3 4 0 0 0 0 0
+c 13088 0 3 4 0 0 0 0 0
+p 6
+s 97 13100 commandTime=3320
+e 0 pos.trTime=3307
+c 13100 0 3 4 0 0 0 0 0
+c 13111 0 3 4 0 0 0 0 0
+c 13122 0 3 4 0 0 0 0 0
+p 6
+c 13137 0 3 4 0 0 0 0 0
+s 98 13150 commandTime=3342
+e 0 pos.trTime=3355
+c 13150 0 3 4 0 0 0 0 0
+c 13161 0 3 4 0 0 0 0 0
+p 6
+c 13174 0 3 4 0 0 0 0 0
+c 13188 0 3 4 0 0 0 0 0
+s 99 13200 commandTime=3369
+e 0 pos.trTime=337a
+c 13201 0 3 4 0 0 0 0 0
+p 6
+c 13212 0 3 4 0 0 0 0 0
+c 13224 0 3 4 0 0 0 0 0
+c 13236 0 3 4 0 0 0 0 0
+p 6
+s 100 13250 commandTime=33b4
+e 0 pos.trTime=33a0
+c 13248 0 3 4 0 0 0 0 0
+c 13260 0 3 4 0 0 0 0 0
+c 13274 0 3 4 0 0 0 0 0
+p 6
+c 13286 0 3 4 0 0 0 0 0
+s 101 13300 commandTime=33da
+e 0 pos.trTime=33e8
+c 13299 0 3 4 0 0 0 0 0
+c 13311 0 3 4 0 0 0 0 0
+p 6
+c 13323 0 3 4 0 0 0 0 0
+c 13334 0 3 4 0 0 0 0 0
+c 13346 0 3 4 0 0 0 0 0
+p 6
+s 102 13350 commandTime=3422
+e 0 pos.trTime=340f
+c 13357 0 3 4 0 0 0 0 0
+c 13373 0 3 4 0 0 0 0 0
+c 13386 0 3 4 0 0 0 0 0
+p 6
+s 103 13400 commandTime=344a
+e 0 pos.trTime=3439
+c 13399 0 3 4 0 0 0 0 0
+c 13413 0 3 4 0 0 0 0 0
+c 13426 0 3 4 0 0 0 0 0
+p 6
+c 13441 0 3 4 0 0 0 0 0
+s 104 13450 commandTime=3472
+e 0 pos.trTime=3484
+c 13453 0 3 4 0 0 0 0 0
+c 13465 0 3 4 0 0 0 0 0
+p 6
+c 13477 0 3 4 0 0 0 0 0
+c 13489 0 3 4 0 0 0 0 0
+s 105 13500 commandTime=3499
+e 0 pos.trTime=34ab
+c 13501 0 3 4 0 0 0 0 0
+p 6
+c 13515 0 3 4 0 0 0 0 0
+c 13527 0 3 4 0 0 0 0 0
+c 13540 0 3 4 0 0 0 0 0
+p 6
+s 106 13550 commandTime=34e4
+e 0 pos.trTime=34cd
+c 13552 0 3 4 0 0 0 0 0
+c 13565 0 3 4 0 0 0 0 0
+c 13577 0 3 4 0 0 0 0 0
+p 6
+c 13590 0 3 4 0 0 0 0 0
+s 107 13600 commandTime=3509
+e 0 pos.trTime=351a
+c 13604 0 3 4 0 0 0 0 0
+c 13618 0 3 4 0 0 0 0 0
+p 6
+c 13632 0 3 4 0 0 0 0 0
+c 13646 0 3 4 0 0 0 0 0
+s 108 13650 commandTime=3532
+e 0 pos.trTime=3541
+c 13658 0 3 4 0 0 0 0 0
+p 6
+c 13672 0 3 4 0 0 0 0 0
+c 13686 0 3 4 0 0 0 0 0
+s 109 13700 commandTime=355a
+e 0 pos.trTime=3566
+c 13699 0 3 4 0 0 0 0 0
+p 6
+c 13711 0 3 4 0 0 0 0 0
+c 13723 0 3 4 0 0 0 0 0
+c 13737 0 3 4 0 0 0 0 0
+p 6
+s 110 13750 commandTime=35a9
+e 0 pos.trTime=35b0
+c 13748 0 3 4 0 0 0 0 0
+c 13760 0 3 4 0 0 0 0 0
+c 13775 0 3 4 0 0 0 0 0
+p 6
+c 13786 0 3 4 0 0 0 0 0
+s 111 13800 commandTime=35cf
+e 0 pos.trTime=35d4
+c 13799 0 3 4 0 0 0 0 0
+c 13810 0 3 4 0 0 0 0 0
+p 6
+c 13822 0 3 4 0 0 0 0 0
+c 13833 0 3 4 0 0 0 0 0
+s 112 13850 commandTime=35f2
+e 0 pos.trTime=35fc
+c 13846 0 3 4 0 0 0 0 0
+p 6
+c 13858 0 3 4 0 0 0 0 0
+c 13869 0 3 4 0 0 0 0 0
+c 13883 0 3 4 0 0 0 0 0
+p 6
+c 13895 0 3 4 0 0 0 0 0
+s 113 13900 commandTime=363b
+e 0 pos.trTime=364b
+c 13907 0 3 4 0 0 0 0 0
+c 13921 0 3 4 0 0 0 0 0
+p 6
+c 13932 0 3 4 0 0 0 0 0
+c 13944 0 3 4 0 0 0 0 0
+s 114 13950 commandTime=3661
+e 0 pos.trTime=366e
+c 13957 0 3 4 0 0 0 0 0
+p 6
+c 13972 0 3 4 0 0 0 0 0
+c 13983 0 3 4 0 0 0 0 0
+s 115 14000 commandTime=3685
+e 0 pos.trTime=3693
+c 13994 0 3 4 0 0 0 0 0
+p 6
+c 14009 1000 3 4 58255 49152 0 0 0
+c 14021 1000 3 4 58255 49152 0 0 0
+c 14033 1000 3 4 58255 49152 0 0 0
+p 6
+s 116 14050 commandTime=36d1 viewangles[1]=c285b420 viewangles[0]=c1805d40 pm_flags=800140 fWeaponPosFrac=3d9fbe77
+e 0 pos.trTime=36db
+c 14045 1000 3 4 58255 49152 0 0 0
+c 14057 1000 3 4 58255 49152 0 0 0
+c 14069 1000 3 4 58255 49152 0 0 0
+p 6
+c 14081 1000 3 4 58255 49152 0 0 0
+c 14093 1000 3 4 58255 49152 0 0 0
+s 117 14100 commandTime=36f5 fWeaponPosFrac=3e19999a
+e 0 pos.trTime=3701
+c 14106 1000 3 4 58255 49152 0 0 0
+p 6
+c 14120 1000 3 4 58255 49152 0 0 0
+c 14131 1000 3 4 58255 49152 0 0 0
+c 14143 1000 3 4 58255 49152 0 0 0
+p 6
+s 118 14150 commandTime=373f fWeaponPosFrac=3e989376
+e 0 pos.trTime=3729
+c 14154 1000 3 4 58255 49152 0 0 0
+c 14167 1000 3 4 58255 49152 0 0 0
+c 14181 1000 3 4 58255 49152 0 0 0
+p 6
+c 14195 1000 3 4 58255 49152 0 0 0
+s 119 14200 commandTime=3765 fWeaponPosFrac=3ebf7cef
+e 0 pos.trTime=3773
+c 14206 1000 3 4 58255 49152 0 0 0
+c 14218 1000 3 4 58255 49152 0 0 0
+p 6
+c 14230 1000 3 4 58255 49152 0 0 0
+c 14242 1000 3 4 58255 49152 0 0 0
+s 120 14250 commandTime=378a fWeaponPosFrac=3ee56043
+e 0 pos.trTime=3799
+c 14254 1000 3 4 58255 49152 0 0 0
+p 6
+c 14270 1000 3 4 58255 49152 0 0 0
+c 14284 1000 3 4 58255 49152 0 0 0
+c 14298 1000 3 4 58255 49152 0 0 0
+p 6
+s 121 14300 commandTime=37da fWeaponPosFrac=3f1ba5e4
+e 0 pos.trTime=37c0
+c 14311 1000 3 4 58255 49152 0 0 0
+c 14323 1000 3 4 58255 49152 0 0 0
+c 14338 1000 3 4 58255 49152 0 0 0
+p 6
+s 122 14350 commandTime=3802 fWeaponPosFrac=3f3020c6
+e 0 pos.trTime=380c
+c 14350 1000 3 4 58255 49152 0 0 0
+c 14363 1000 3 4 58255 49152 0 0 0
+c 14375 1000 3 4 58255 49152 0 0 0
+p 6
+c 14388 1000 3 4 58255 49152 0 0 0
+s 123 14400 commandTime=3827 fWeaponPosFrac=3f431270
+e 0 pos.trTime=382f
+c 14400 1000 3 4 58255 49152 0 0 0
+c 14411 1000 3 4 58255 49152 0 0 0
+p 6
+c 14423 1000 3 4 58255 49152 0 0 0
+c 14435 1000 3 4 58255 49152 0 0 0
+s 124 14450 commandTime=384b fWeaponPosFrac=3f558108
+e 0 pos.trTime=3854
+c 14448 1000 3 4 58255 49152 0 0 0
+p 6
+c 14460 1000 3 4 58255 49152 0 0 0
+c 14474 1000 3 4 58255 49152 0 0 0
+c 14487 1000 3 4 58255 49152 0 0 0
+p 6
+s 125 14500 commandTime=3897 fWeaponPosFrac=3f7c6a81
+e 0 pos.trTime=389f
+c 14502 1000 3 4 58255 49152 0 0 0
+c 14516 1000 3 4 58255 49152 0 0 0
+c 14530 1000 3 4 58255 49152 0 0 0
+p 6
+c 14542 1000 3 4 58255 49152 0 0 0
+s 126 14550 commandTime=38c2 fWeaponPosFrac=3f800000
+e 0 pos.trTime=38c8
+c 14555 1000 3 4 58255 49152 0 0 0
+c 14566 1000 3 4 58255 49152 0 0 0
+p 6
+c 14578 1000 3 4 58255 49152 0 0 0
+c 14591 1000 3 4 58255 49152 0 0 0
+s 127 14600 commandTime=38e6
+e 0 pos.trTime=38f0
+c 14605 1000 3 4 58255 49152 0 0 0
+p 6
+c 14620 1000 3 4 58255 49152 0 0 0
+c 14633 1000 3 4 58255 49152 0 0 0
+c 14644 1000 3 4 58255 49152 0 0 0
+p 6
+s 128 14650 commandTime=390d
+e 0 pos.trTime=3918
+c 14657 1000 3 4 58255 49152 0 0 0
+c 14669 1000 3 4 58255 49152 0 0 0
+c 14681 1000 3 4 58255 49152 0 0 0
+p 6
+c 14692 1000 3 4 58255 49152 0 0 0
+s 129 14700 commandTime=3959
+e 0 pos.trTime=3966
+c 14706 1000 3 4 58255 49152 0 0 0
+c 14718 1000 3 4 58255 49152 0 0 0
+p 6
+c 14729 1000 3 4 58255 49152 0 0 0
+c 14740 1000 3 4 58255 49152 0 0 0
+s 130 14750 commandTime=397e
+e 0 pos.trTime=398b
+c 14752 1000 3 4 58255 49152 0 0 0
+p 6
+c 14766 1000 3 4 58255 49152 0 0 0
+c 14777 1000 3 4 58255 49152 0 0 0
+c 14788 1000 3 4 58255 49152 0 0 0
+p 6
+s 131 14800 commandTime=39c4
+e 0 pos.trTime=39b2
+c 14803 1001 3 4 58255 49152 0 0 0
+c 14816 1001 3 4 58255 49152 0 0 0
+c 14830 1001 3 4 58255 49152 0 0 0
+p 6
+c 14842 1001 3 4 58255 49152 0 0 0
+s 132 14850 commandTime=39ee origin[1]=4499c9da origin[0]=c2e31049 bobCycle=4 origin[2]=bf6400c5 velocity[1]=42340000 velocity[0]=c1900000 velocity[2]=40000000 eventSequence=3 legsAnim=59 weaponTime=7b events[2]=a0 weapAnim=206 torsoTimer=20b torsoAnim=32a weaponstate=3 C[2]=0
+e 0 pos.trTime=39fd
+e 72 pos.trTime=399e pos.trBase[1]=4499a000 pos.trBase[0]=c2e20000 pos.trDelta[0]=443b8000 pos.trDelta[1]=c4dcc000 apos.trBase[1]=c285f200 pos.trDelta[2]=440c8000 pos.trBase[2]=426d07c8 apos.trBase[0]=c182b180 eType=4 eFlags=400 groundEntityNum=3ff pos.trType=2 weapon=3 time=3a02
+c 14855 1001 3 4 58255 49152 0 0 0
+c 14867 1001 3 4 58255 49152 0 0 0
+p 6
+c 14879 1001 3 4 58255 49152 0 0 0
+c 14891 1001 3 4 58255 49152 0 0 0
+s 133 14900 commandTime=3a13 origin[1]=4499f031 origin[0]=c2e408d5 bobCycle=8 origin[2]=bf565003 velocity[1]=41d00000 velocity[0]=c1300000 velocity[2]=3f800000 weaponTime=56 torsoTimer=1e6
+e 0 pos.trTime=3a24
+c 14903 1000 3 4 58255 49152 0 0 0
+p 6
+c 14916 1000 3 4 58255 49152 0 0 0
+c 14928 1000 3 4 58255 49152 0 0 0
+c 14941 1000 3 4 58255 49152 0 0 0
+p 6
+s 134 14950 commandTime=3a5d origin[1]=449a00c3 origin[0]=c2e476e3 bobCycle=0 origin[2]=bf505571 velocity[1]=0 velocity[0]=0 velocity[2]=0 legsAnim=28a weaponTime=c torsoTimer=19c
+e 0 pos.trTime=3a4d
+c 14953 1000 3 4 58255 49152 0 0 0
+c 14965 1000 3 4 58255 49152 0 0 0
+c 14979 1000 3 4 58255 49152 0 0 0
+p 6
+c 14993 1000 3 4 58255 49152 0 0 0
+s 135 15000 commandTime=3a83 eventSequence=5 weaponTime=f92 pm_flags=800040 events[0]=96 events[3]=95 weapAnim=20b torsoTimer=917 torsoAnim=115 fWeaponPosFrac=3f78d4fe weaponstate=5 weaponDelay=8ed
+e 0 pos.trTime=3a75
+c 15004 1000 3 4 58255 49152 0 0 0
+c 15019 1000 3 4 58255 49152 0 0 0
+p 6
+c 15034 1000 3 4 58255 49152 0 0 0
+s 136 15050 commandTime=3aab weaponTime=f6a torsoTimer=8ef fWeaponPosFrac=3f645a1c weaponDelay=8c5
+e 0 pos.trTime=3ac0
+c 15048 1000 3 4 58255 49152 0 0 0
+c 15059 1000 3 4 58255 49152 0 0 0
+p 6
+c 15073 1000 3 4 58255 49152 0 0 0
+c 15084 1000 3 4 58255 49152 0 0 0
+s 137 15100 commandTime=3ad3 weaponTime=f42 torsoTimer=8c7 fWeaponPosFrac=3f4fdf3a weaponDelay=89d
+e 0 pos.trTime=3ae4
+c 15098 1000 3 4 58255 49152 0 0 0
+p 6
+c 15110 1000 3 4 58255 49152 0 0 0
+c 15125 1000 3 4 58255 49152 0 0 0
+c 15136 1000 3 4 58255 49152 0 0 0
+p 6
+s 138 15150 commandTime=3b20 weaponTime=ef5 torsoTimer=87a fWeaponPosFrac=3f2872ae weaponDelay=850
+e 0 pos.trTime=3b0a
+c 15149 1000 3 4 58255 49152 0 0 0
+c 15161 1000 3 4 58255 49152 0 0 0
+c 15174 1000 3 4 58255 49152 0 0 0
+p 6
+c 15188 1000 3 4 58255 49152 0 0 0
+s 139 15200 commandTime=3b46 weaponTime=ecf torsoTimer=854 fWeaponPosFrac=3f14fdf1 weaponDelay=82a
+e 0 pos.trTime=3b33
+c 15201 1000 3 4 58255 49152 0 0 0
+c 15213 1000 3 4 58255 49152 0 0 0
+p 6
+c 15226 1000 3 4 58255 49152 0 0 0
+c 15239 1000 3 4 58255 49152 0 0 0
+s 140 15250 commandTime=3b6d weaponTime=ea8 torsoTimer=82d fWeaponPosFrac=3f010622 weaponDelay=803
+e 0 pos.trTime=3b85
+c 15250 1000 3 4 58255 49152 0 0 0
+p 6
+c 15263 1000 3 4 58255 49152 0 0 0
+c 15276 1000 3 4 58255 49152 0 0 0
+c 15291 1000 3 4 58255 49152 0 0 0
+p 6
+s 141 15300 commandTime=3bbb weaponTime=e5a torsoTimer=7df fWeaponPosFrac=3eb22d09 weaponDelay=7b5
+e 0 pos.trTime=3bad
+c 15303 1000 3 4 58255 49152 0 0 0
+c 15315 1000 3 4 58255 49152 0 0 0
+c 15327 1000 3 4 58255 49152 0 0 0
+p 6
+c 15341 1000 3 4 58255 49152 0 0 0
+s 142 15350 commandTime=3bdf weaponTime=e36 torsoTimer=7bb fWeaponPosFrac=3e8d4fdb weaponDelay=791
+e 0 pos.trTime=3bd5
+c 15354 1000 3 4 58255 49152 0 0 0
+c 15365 1000 3 4 58255 49152 0 0 0
+p 6
+c 15378 1000 3 4 58255 49152 0 0 0
+c 15390 1000 3 4 58255 49152 0 0 0
+s 143 15400 commandTime=3c05 weaponTime=e10 torsoTimer=795 fWeaponPosFrac=3e4cccc4 weaponDelay=76b
+e 0 pos.trTime=3c1f
+c 15404 1000 3 4 58255 49152 0 0 0
+p 6
+c 15416 1000 3 4 58255 49152 0 0 0
+c 15428 1000 3 4 58255 49152 0 0 0
+c 15440 1000 3 4 58255 49152 0 0 0
+p 6
+s 144 15450 commandTime=3c50 weaponTime=dc5 torsoTimer=74a fWeaponPosFrac=3d4ccca3 weaponDelay=720
+e 0 pos.trTime=3c45
+c 15452 1000 3 4 58255 49152 0 0 0
+c 15464 1000 3 4 58255 49152 0 0 0
+c 15476 1000 3 4 58255 49152 0 0 0
+p 6
+c 15487 1000 3 4 58255 49152 0 0 0
+s 145 15500 commandTime=3c74 weaponTime=da1 torsoTimer=726 fWeaponPosFrac=0 weaponDelay=6fc
+e 0 pos.trTime=3c70
+c 15500 1000 3 4 58255 49152 0 0 0
+c 15514 1000 3 4 58255 49152 0 0 0
+p 6
+c 15526 1000 3 4 58255 49152 0 0 0
+c 15541 1000 3 4 58255 49152 0 0 0
+s 146 15550 commandTime=3c9a weaponTime=d7b torsoTimer=700 weaponDelay=6d6
+e 0 pos.trTime=3cbf
+c 15555 1000 3 4 58255 49152 0 0 0
+p 6
+c 15568 1000 3 4 58255 49152 0 0 0
+c 15582 1000 3 4 58255 49152 0 0 0
+c 15594 1000 3 4 58255 49152 0 0 0
+p 6
+s 147 15600 commandTime=3cc3 weaponTime=d52 torsoTimer=6d7 weaponDelay=6ad
+e 0 pos.trTime=3ce8
+c 15606 1000 3 4 58255 49152 0 0 0
+c 15618 1000 3 4 58255 49152 0 0 0
+c 15630 1000 3 4 58255 49152 0 0 0
+p 6
+c 15642 1000 3 4 58255 49152 0 0 0
+s 148 15650 commandTime=3d0e weaponTime=d07 torsoTimer=68c weaponDelay=662
+e 0 pos.trTime=3d0f
+c 15653 1000 3 4 58255 49152 0 0 0
+c 15666 1000 3 4 58255 49152 0 0 0
+p 6
+c 15678 1000 3 4 58255 49152 0 0 0
+c 15691 1000 3 4 58255 49152 0 0 0
+s 149 15700 commandTime=3d32 weaponTime=ce3 torsoTimer=668 weaponDelay=63e
+e 0 pos.trTime=3d32
+c 15703 1000 3 4 58255 49152 0 0 0
+p 6
+c 15717 1000 3 4 58255 49152 0 0 0
+c 15729 1000 3 4 58255 49152 0 0 0
+s 150 15750 commandTime=3d57 weaponTime=cbe torsoTimer=643 weaponDelay=619
+e 0 pos.trTime=3d7f
+c 15744 1000 3 4 58255 49152 0 0 0
+p 6
+c 15758 1000 3 4 58255 49152 0 0 0
+c 15770 1000 3 4 58255 49152 0 0 0
+c 15781 1000 3 4 58255 49152 0 0 0
+p 6
+s 151 15800 commandTime=3da5 weaponTime=c70 torsoTimer=5f5 weaponDelay=5cb
+e 0 pos.trTime=3da3
+c 15797 1000 3 4 58255 49152 0 0 0
+c 15809 1000 3 4 58255 49152 0 0 0
+c 15821 1000 3 4 58255 49152 0 0 0
+p 6
+c 15832 1000 3 4 58255 49152 0 0 0
+s 152 15850 commandTime=3dcd weaponTime=c48 torsoTimer=5cd weaponDelay=5a3
+e 0 pos.trTime=3dcb
+c 15846 1000 3 4 58255 49152 0 0 0
+c 15858 1000 3 4 58255 49152 0 0 0
+p 6
+c 15872 1000 3 4 58255 49152 0 0 0
+c 15887 1000 3 4 58255 49152 0 0 0
+s 153 15900 commandTime=3df2 weaponTime=c23 torsoTimer=5a8 weaponDelay=57e
+e 0 pos.trTime=3e16
+c 15901 1000 3 4 58255 49152 0 0 0
+p 6
+c 15914 1000 3 4 58255 49152 0 0 0
+c 15925 1000 3 4 58255 49152 0 0 0
+c 15938 1000 3 4 58255 49152 0 0 0
+p 6
+s 154 15950 commandTime=3e42 weaponTime=bd3 torsoTimer=558 weaponDelay=52e
+e 0 pos.trTime=3e3c
+c 15952 1000 3 4 58255 49152 0 0 0
+c 15965 1000 3 4 58255 49152 0 0 0
+c 15977 1000 3 4 58255 49152 0 0 0
+p 6
+c 15989 1000 3 4 58255 49152 0 0 0
+s 155 16000 commandTime=3e69 weaponTime=bac torsoTimer=531 weaponDelay=507
+e 0 pos.trTime=3e62
+c 16001 1000 3 4 58255 49152 0 0 0
+c 16012 1000 3 4 58255 49152 0 0 0
+p 6
+c 16025 1000 3 4 58255 49152 0 0 0
+c 16037 1000 3 4 58255 49152 0 0 0
+s 156 16050 commandTime=3e8c weaponTime=b89 torsoTimer=50e weaponDelay=4e4
+e 0 pos.trTime=3ead
+e- 72
+c 16049 1000 3 4 58255 49152 0 0 0
+p 6
+c 16062 1000 3 4 58255 49152 0 0 0
+c 16074 1000 3 4 58255 49152 0 0 0
+c 16088 1000 3 4 58255 49152 0 0 0
+p 6
+s 157 16100 commandTime=3ed8 weaponTime=b3d torsoTimer=4c2 weaponDelay=498
+e 0 pos.trTime=3ed3
+c 16100 1000 3 4 58255 49152 0 0 0
+c 16111 1000 3 4 58255 49152 0 0 0
+c 16126 1000 3 4 58255 49152 0 0 0
+p 6
+c 16138 1000 3 4 58255 49152 0 0 0
+s 158 16150 commandTime=3efe weaponTime=b17 torsoTimer=49c weaponDelay=472
+e 0 pos.trTime=3ef9
+c 16151 1000 3 4 58255 49152 0 0 0
+c 16164 1000 3 4 58255 49152 0 0 0
+p 6
+c 16176 1000 3 4 58255 49152 0 0 0
+c 16189 1000 3 4 58255 49152 0 0 0
+s 159 16200 commandTime=3f24 weaponTime=af1 torsoTimer=476 weaponDelay=44c
+e 0 pos.trTime=3f45
+c 16204 1000 3 4 58255 49152 0 0 0
+p 6
+c 16218 1000 3 4 58255 49152 0 0 0
+c 16232 1000 3 4 58255 49152 0 0 0
+c 16244 1000 3 4 58255 49152 0 0 0
+p 6
+s 160 16250 commandTime=3f74 weaponTime=aa1 torsoTimer=426 weaponDelay=3fc
+e 0 pos.trTime=3f6c
+c 16257 1000 3 4 58255 49152 0 0 0
+c 16269 1000 3 4 58255 49152 0 0 0
+c 16282 1000 3 4 58255 49152 0 0 0
+p 6
+s 161 16300 commandTime=3f9a weaponTime=a7b torsoTimer=400 weaponDelay=3d6
+e 0 pos.trTime=3f95
+c 16296 1000 3 4 58255 49152 0 0 0
+c 16308 1000 3 4 58255 49152 0 0 0
+c 16322 1000 3 4 58255 49152 0 0 0
+p 6
+c 16334 1000 3 4 58255 49152 0 0 0
+s 162 16350 commandTime=3fc2 weaponTime=a53 torsoTimer=3d8 weaponDelay=3ae
+e 0 pos.trTime=3fbb
+c 16347 1000 3 4 58255 49152 0 0 0
+c 16358 1000 3 4 58255 49152 0 0 0
+p 6
+c 16369 1000 3 4 58255 49152 0 0 0
+c 16380 1000 3 4 58255 49152 0 0 0
+c 16394 1000 3 4 58255 49152 0 0 0
+p 6
+s 163 16400 commandTime=3fe6 weaponTime=a2f torsoTimer=3b4 weaponDelay=38a
+e 0 pos.trTime=4003
+c 16405 1000 3 4 58255 49152 0 0 0
+c 16419 1000 3 4 58255 49152 0 0 0
+c 16432 1000 3 4 58255 49152 0 0 0
+p 6
+c 16444 1000 3 4 58255 49152 0 0 0
+s 164 16450 commandTime=4030 weaponTime=9e5 torsoTimer=36a weaponDelay=340
+e 0 pos.trTime=4029
+c 16455 1000 3 4 58255 49152 0 0 0
+c 16466 1000 3 4 58255 49152 0 0 0
+p 6
+c 16481 1000 3 4 58255 49152 0 0 0
+c 16493 1000 3 4 58255 49152 0 0 0
+s 165 16500 commandTime=4052 weaponTime=9c3 torsoTimer=348 weaponDelay=31e
+e 0 pos.trTime=404e
+c 16507 1000 3 4 58255 49152 0 0 0
+p 6
+c 16520 1000 3 4 58255 49152 0 0 0
+c 16532 1000 3 4 58255 49152 0 0 0
+s 166 16550 commandTime=407b weaponTime=99a torsoTimer=31f weaponDelay=2f5
+e 0 pos.trTime=409d
+c 16547 1000 3 4 58255 49152 0 0 0
+p 6
+c 16560 1000 3 4 58255 49152 0 0 0
+c 16573 1000 3 4 58255 49152 0 0 0
+c 16586 1000 3 4 58255 49152 0 0 0
+p 6
+s 167 16600 commandTime=40ca weaponTime=94b torsoTimer=2d0 weaponDelay=2a6
+e 0 pos.trTime=40c2
+c 16598 1000 3 4 58255 49152 0 0 0
+c 16609 1000 3 4 58255 49152 0 0 0
+c 16623 1000 3 4 58255 49152 0 0 0
+p 6
+c 16636 1000 3 4 58255 49152 0 0 0
+s 168 16650 commandTime=40ef weaponTime=926 torsoTimer=2ab weaponDelay=281
+e 0 pos.trTime=40ea
+c 16650 1000 3 4 58255 49152 0 0 0
+c 16663 1000 3 4 58255 49152 0 0 0
+p 6
+c 16674 1000 3 4 58255 49152 0 0 0
+c 16686 1000 3 4 58255 49152 0 0 0
+s 169 16700 commandTime=4117 weaponTime=8fe torsoTimer=283 weaponDelay=259
+e 0 pos.trTime=4136
+c 16697 1000 3 4 58255 49152 0 0 0
+p 6
+c 16709 1000 3 4 58255 49152 0 0 0
+c 16722 1000 3 4 58255 49152 0 0 0
+c 16735 1000 3 4 58255 49152 0 0 0
+p 6
+s 170 16750 commandTime=415f weaponTime=8b6 torsoTimer=23b weaponDelay=211
+e 0 pos.trTime=415c
+c 16749 1000 3 4 58255 49152 0 0 0
+c 16762 1000 3 4 58255 49152 0 0 0
+c 16776 1000 3 4 58255 49152 0 0 0
+p 6
+c 16788 1000 3 4 58255 49152 0 0 0
+s 171 16800 commandTime=4188 weaponTime=88d torsoTimer=212 weaponDelay=1e8
+e 0 pos.trTime=4183
+c 16803 1000 3 4 58255 49152 0 0 0
+c 16815 1000 3 4 58255 49152 0 0 0
+p 6
+c 16828 1000 3 4 58255 49152 0 0 0
+c 16841 1000 3 4 58255 49152 0 0 0
+s 172 16850 commandTime=41af weaponTime=866 torsoTimer=1eb weaponDelay=1c1
+e 0 pos.trTime=41d0
+c 16854 1000 3 4 58255 49152 0 0 0
+p 6
+c 16867 1000 3 4 58255 49152 0 0 0
+c 16880 1000 3 4 58255 49152 0 0 0
+c 16892 1000 3 4 58255 49152 0 0 0
+p 6
+s 173 16900 commandTime=41fc weaponTime=819 torsoTimer=19e weaponDelay=174
+e 0 pos.trTime=41f7
+c 16906 1000 3 4 58255 49152 0 0 0
+c 16918 1000 3 4 58255 49152 0 0 0
+c 16932 1000 3 4 58255 49152 0 0 0
+p 6
+s 174 16950 commandTime=4224 weaponTime=7f1 torsoTimer=176 weaponDelay=14c
+e 0 pos.trTime=421f
+c 16947 1000 3 4 58255 49152 0 0 0
+c 16960 1000 3 4 58255 49152 0 0 0
+c 16972 1000 3 4 58255 49152 0 0 0
+p 6
+c 16986 1000 3 4 58255 49152 0 0 0
+s 175 17000 commandTime=424c weaponTime=7c9 torsoTimer=14e weaponDelay=124
+e 0 pos.trTime=4242
+c 16998 1000 3 4 58255 49152 0 0 0
+c 17010 1000 3 4 58255 49152 0 0 0
+p 6
+c 17021 1000 3 4 58255 49152 0 0 0
+c 17033 1000 3 4 58255 49152 0 0 0
+s 176 17050 commandTime=4272 weaponTime=7a3 torsoTimer=128 weaponDelay=fe
+e 0 pos.trTime=428d
+c 17045 1000 3 4 58255 49152 0 0 0
+p 6
+c 17059 1000 3 4 58255 49152 0 0 0
+c 17071 1000 3 4 58255 49152 0 0 0
+c 17082 1000 3 4 58255 49152 0 0 0
+p 6
+s 177 17100 commandTime=42ba weaponTime=75b torsoTimer=e0 weaponDelay=b6
+e 0 pos.trTime=42b3
+c 17097 1000 3 4 58255 49152 0 0 0
+c 17111 1000 3 4 58255 49152 0 0 0
+c 17126 1000 3 4 58255 49152 0 0 0
+p 6
+c 17139 1000 3 4 58255 49152 0 0 0
+s 178 17150 commandTime=42e6 weaponTime=72f torsoTimer=b4 weaponDelay=8a
+e 0 pos.trTime=42d7
+c 17151 1000 3 4 58255 49152 0 0 0
+c 17163 1000 3 4 58255 49152 0 0 0
+p 6
+c 17177 1000 3 4 58255 49152 0 0 0
+c 17193 1000 3 4 58255 49152 0 0 0
+s 179 17200 commandTime=430b weaponTime=70a torsoTimer=8f weaponDelay=65
+e 0 pos.trTime=4325
+c 17205 1000 3 4 58255 49152 0 0 0
+p 6
+c 17219 1000 3 4 58255 49152 0 0 0
+c 17231 1000 3 4 58255 49152 0 0 0
+s 180 17250 commandTime=4335 weaponTime=6e0 torsoTimer=65 weaponDelay=3b
+e 0 pos.trTime=434c
+c 17245 1000 3 4 58255 49152 0 0 0
+p 6
+c 17257 1000 3 4 58255 49152 0 0 0
+c 17269 1000 3 4 58255 49152 0 0 0
+c 17283 1000 3 4 58255 49152 0 0 0
+p 6
+s 181 17300 commandTime=4383 weaponTime=692 torsoTimer=17 torsoAnim=200 weaponDelay=0 A[2]=2 C[2]=1
+e 0 pos.trTime=4371
+c 17297 1000 3 4 58255 49152 0 0 0
+c 17309 1000 3 4 58255 49152 0 0 0
+c 17320 1000 3 4 58255 49152 0 0 0
+p 6
+c 17332 1000 3 4 58255 49152 0 0 0
+c 17345 1000 3 4 58255 49152 0 0 0
+s 182 17350 commandTime=43a8 weaponTime=66d torsoTimer=0
+e 0 pos.trTime=43b9
+c 17358 1000 3 4 58255 49152 0 0 0
+p 6
+c 17369 1000 3 4 58255 49152 0 0 0
+c 17383 1000 3 4 58255 49152 0 0 0
+s 183 17400 commandTime=43ce weaponTime=647
+e 0 pos.trTime=43e2
+c 17398 1000 3 4 58255 49152 0 0 0
+p 6
+c 17412 0 3 4 0 0 0 0 0
+c 17424 0 3 4 0 0 0 0 0
+c 17436 0 3 4 0 0 0 0 0
+p 6
+s 184 17450 commandTime=441c viewangles[1]=41b92f80 viewangles[0]=41bf9a00 weaponTime=5f9 pm_flags=800000
+e 0 pos.trTime=4408
+c 17450 0 3 4 0 0 0 0 0
+c 17463 0 3 4 0 0 0 0 0
+c 17476 0 3 4 0 0 0 0 0
+p 6
+c 17489 0 3 4 0 0 0 0 0
+s 185 17500 commandTime=4444 weaponTime=5d1
+e 0 pos.trTime=4435
+c 17501 0 3 4 0 0 0 0 0
+c 17512 0 3 4 0 0 0 0 0
+p 6
+c 17525 0 3 4 0 0 0 0 0
+c 17537 0 3 4 0 0 0 0 0
+s 186 17550 commandTime=4468 weaponTime=5ad
+e 0 pos.trTime=4480
+c 17549 0 3 4 0 0 0 0 0
+p 6
+c 17561 0 3 4 0 0 0 0 0
+c 17573 0 3 4 0 0 0 0 0
+c 17585 0 3 4 0 0 0 0 0
+p 6
+s 187 17600 commandTime=44b1 weaponTime=564
+e 0 pos.trTime=44a7
+c 17596 0 3 4 0 0 0 0 0
+c 17608 0 3 4 0 0 0 0 0
+c 17621 0 3 4 0 0 0 0 0
+p 6
+c 17633 0 3 4 0 0 0 0 0
+s 188 17650 commandTime=44d5 weaponTime=540
+e 0 pos.trTime=44cc
+c 17646 0 3 4 0 0 0 0 0
+c 17657 0 3 4 0 0 0 0 0
+p 6
+c 17669 0 3 4 0 0 0 0 0
+c 17682 0 3 4 0 0 0 0 0
+s 189 17700 commandTime=44f9 weaponTime=51c
+e 0 pos.trTime=4516
+c 17698 0 3 4 0 0 0 0 0
+p 6
+c 17710 0 3 4 0 0 0 0 0
+c 17722 0 3 4 0 0 0 0 0
+c 17735 0 3 4 0 0 0 0 0
+p 6
+s 190 17750 commandTime=4547 weaponTime=4ce
+e 0 pos.trTime=453b
+c 17748 0 3 4 0 0 0 0 0
+c 17760 0 3 4 0 0 0 0 0
+c 17772 0 3 4 0 0 0 0 0
+p 6
+c 17786 0 3 4 0 0 0 0 0
+s 191 17800 commandTime=456c weaponTime=4a9
+e 0 pos.trTime=4563
+c 17799 0 3 4 0 0 0 0 0
+c 17814 0 3 4 0 0 0 0 0
+p 6
+c 17828 0 3 4 0 0 0 0 0
+c 17841 0 3 4 0 0 0 0 0
+s 192 17850 commandTime=4596 weaponTime=47f
+e 0 pos.trTime=45b2
+c 17855 0 3 4 0 0 0 0 0
+p 6
+c 17867 0 3 4 0 0 0 0 0
+c 17880 0 3 4 0 0 0 0 0
+c 17892 0 3 4 0 0 0 0 0
+p 6
+s 193 17900 commandTime=45bf weaponTime=456
+e 0 pos.trTime=45d6
+c 17906 0 3 4 0 0 0 0 0
+c 17920 0 3 4 0 0 0 0 0
+c 17931 0 3 4 0 0 0 0 0
+p 6
+s 194 17950 commandTime=460b weaponTime=40a
+e 0 pos.trTime=45fd
+c 17947 0 3 4 0 0 0 0 0
+c 17960 0 3 4 0 0 0 0 0
+c 17972 0 3 4 0 0 0 0 0
+p 6
+c 17985 0 3 4 0 0 0 0 0
+s 195 18000 commandTime=4634 weaponTime=3e1
+e 0 pos.trTime=4622
+c 17996 0 3 4 0 0 0 0 0
+c 18010 0 3 4 0 0 0 0 0
+p 6
+c 18023 0 3 4 0 0 0 0 0
+c 18035 0 3 4 0 0 0 0 0
+s 196 18050 commandTime=465a weaponTime=3bb
+e 0 pos.trTime=4671
+c 18049 0 3 4 0 0 0 0 0
+p 6
+c 18060 0 3 4 0 0 0 0 0
+c 18071 0 3 4 0 0 0 0 0
+c 18082 0 3 4 0 0 0 0 0
+p 6
+s 197 18100 commandTime=46a2 weaponTime=373
+e 0 pos.trTime=4694
+c 18096 0 3 4 0 0 0 0 0
+c 18109 0 3 4 0 0 0 0 0
+c 18120 0 3 4 0 0 0 0 0
+p 6
+c 18134 0 3 4 0 0 0 0 0
+s 198 18150 commandTime=46c8 weaponTime=34d
+e 0 pos.trTime=46de
+c 18150 0 3 4 0 0 0 0 0
+c 18163 0 3 4 0 0 0 0 0
+p 6
+c 18175 0 3 4 0 0 0 0 0
+c 18189 0 3 4 0 0 0 0 0
+s 199 18200 commandTime=46f3 weaponTime=322
+e 0 pos.trTime=4704
+c 18203 0 3 4 0 0 0 0 0
+p 6
+c 18214 0 3 4 0 0 0 0 0
+c 18227 0 3 4 0 0 0 0 0
+c 18240 0 3 4 0 0 0 0 0
+p 6
+s 200 18250 commandTime=4740 weaponTime=2d5
+e 0 pos.trTime=472a
+c 18253 0 3 4 0 0 0 0 0
+c 18264 0 3 4 0 0 0 0 0
+c 18275 0 3 4 0 0 0 0 0
+p 6
+c 18288 0 3 4 0 0 0 0 0
+s 201 18300 commandTime=4763 weaponTime=2b2
+e 0 pos.trTime=4779
+c 18303 0 3 4 0 0 0 0 0
+c 18316 0 3 4 0 0 0 0 0
+p 6
+c 18328 0 3 4 0 0 0 0 0
+c 18339 0 3 4 0 0 0 0 0
+s 202 18350 commandTime=478c weaponTime=289
+e 0 pos.trTime=479e
+c 18355 0 3 4 0 0 0 0 0
+p 6
+c 18369 0 3 4 0 0 0 0 0
+c 18383 0 3 4 0 0 0 0 0
+s 203 18400 commandTime=47b3 weaponTime=262
+e 0 pos.trTime=47c2
+c 18395 0 3 4 0 0 0 0 0
+p 6
+c 18406 0 3 4 0 0 0 0 0
+c 18418 0 3 4 0 0 0 0 0
+c 18431 0 3 4 0 0 0 0 0
+p 6
+c 18443 0 3 4 0 0 0 0 0
+s 204 18450 commandTime=47ff weaponTime=216
+e 0 pos.trTime=47ed
+c 18455 0 3 4 0 0 0 0 0
+c 18469 0 3 4 0 0 0 0 0
+p 6
+c 18481 0 3 4 0 0 0 0 0
+c 18493 0 3 4 0 0 0 0 0
+s 205 18500 commandTime=4825 weaponTime=1f0
+e 0 pos.trTime=4838
+c 18505 0 3 4 0 0 0 0 0
+p 6
+c 18520 0 3 4 0 0 0 0 0
+c 18533 0 3 4 0 0 0 0 0
+s 206 18550 commandTime=4849 weaponTime=1cc
+e 0 pos.trTime=485e
+c 18546 0 3 4 0 0 0 0 0
+p 6
+c 18559 0 3 4 0 0 0 0 0
+c 18571 0 3 4 0 0 0 0 0
+c 18586 0 3 4 0 0 0 0 0
+p 6
+s 207 18600 commandTime=489a weaponTime=17b
+e 0 pos.trTime=4883
+c 18598 0 3 4 0 0 0 0 0
+c 18611 0 3 4 0 0 0 0 0
+c 18622 0 3 4 0 0 0 0 0
+p 6
+c 18633 0 3 4 0 0 0 0 0
+c 18645 0 3 4 0 0 0 0 0
+s 208 18650 commandTime=48be weaponTime=157
+e 0 pos.trTime=48d1
+c 18657 0 3 4 0 0 0 0 0
+p 6
+c 18671 0 3 4 0 0 0 0 0
+c 18687 0 3 4 0 0 0 0 0
+s 209 18700 commandTime=48e1 weaponTime=134
+e 0 pos.trTime=48fb
+c 18699 0 3 4 0 0 0 0 0
+p 6
+c 18712 0 3 4 0 0 0 0 0
+c 18726 0 3 4 0 0 0 0 0
+c 18738 0 3 4 0 0 0 0 0
+p 6
+s 210 18750 commandTime=4932 weaponTime=e3
+e 0 pos.trTime=491f
+c 18751 0 3 4 0 0 0 0 0
+c 18763 0 3 4 0 0 0 0 0
+c 18774 0 3 4 0 0 0 0 0
+p 6
+c 18786 0 3 4 0 0 0 0 0
+s 211 18800 commandTime=4956 weaponTime=bf
+e 0 pos.trTime=4947
+c 18798 0 3 4 0 0 0 0 0
+c 18810 0 3 4 0 0 0 0 0
+p 6
+c 18824 0 3 4 0 0 0 0 0
+c 18838 0 3 4 0 0 0 0 0
+s 212 18850 commandTime=497a weaponTime=9b
+e 0 pos.trTime=4994
+c 18849 0 3 4 0 0 0 0 0
+p 6
+c 18861 0 3 4 0 0 0 0 0
+c 18876 0 3 4 0 0 0 0 0
+c 18888 0 3 4 0 0 0 0 0
+p 6
+s 213 18900 commandTime=49c8 weaponTime=4d
+e 0 pos.trTime=49ba
+c 18899 0 3 4 0 0 0 0 0
+c 18912 0 3 4 0 0 0 0 0
+c 18924 0 3 4 0 0 0 0 0
+p 6
+c 18936 0 3 4 0 0 0 0 0
+s 214 18950 commandTime=49ec weaponTime=29
+e 0 pos.trTime=4a05
+c 18948 0 3 4 0 0 0 0 0
+c 18961 0 3 4 0 0 0 0 0
+p 6
+c 18974 0 3 4 0 0 0 0 0
+c 18987 0 3 4 0 0 0 0 0
+s 215 19000 commandTime=4a11 weaponTime=4
+e 0 pos.trTime=4a28
+c 19000 0 3 4 0 0 0 0 0
+p 6
+c 19013 0 3 4 0 0 0 0 0
+c 19026 0 3 4 0 0 0 0 0
+c 19038 0 3 4 0 0 0 0 0
+p 6
+s 216 19050 commandTime=4a5e weaponTime=0 weapAnim=0 weaponstate=0
+e 0 pos.trTime=4a50
+c 19051 0 3 4 0 0 0 0 0
+c 19063 0 3 4 0 0 0 0 0
+c 19075 0 3 4 0 0 0 0 0
+p 6
+c 19087 0 3 4 0 0 0 0 0
+s 217 19100 commandTime=4a83
+e 0 pos.trTime=4a76
+c 19099 0 3 4 0 0 0 0 0
+c 19111 0 3 4 0 0 0 0 0
+p 6
+c 19124 0 3 4 0 0 0 0 0
+c 19137 0 3 4 0 0 0 0 0
+s 218 19150 commandTime=4aa7
+e 0 pos.trTime=4ac3
+c 19152 0 3 4 0 0 0 0 0
+p 6
+c 19163 0 3 4 0 0 0 0 0
+c 19177 0 3 4 0 0 0 0 0
+c 19190 0 3 4 0 0 0 0 0
+p 6
+s 219 19200 commandTime=4af6
+e 0 pos.trTime=4ae9
+c 19201 0 3 4 0 0 0 0 0
+c 19215 0 3 4 0 0 0 0 0
+c 19229 0 3 4 0 0 0 0 0
+p 6
+c 19240 0 3 4 0 0 0 0 0
+s 220 19250 commandTime=4b1d
+e 0 pos.trTime=4b0f
+c 19253 0 3 4 0 0 0 0 0
+c 19265 0 3 4 0 0 0 0 0
+p 6
+c 19277 0 3 4 0 0 0 0 0
+c 19290 0 3 4 0 0 0 0 0
+s 221 19300 commandTime=4b41
+e 0 pos.trTime=4b57
+c 19302 0 3 4 0 0 0 0 0
+p 6
+c 19314 0 3 4 0 0 0 0 0
+c 19328 0 3 4 0 0 0 0 0
+c 19341 0 3 4 0 0 0 0 0
+p 6
+s 222 19350 commandTime=4b8d
+e 0 pos.trTime=4b7c
+c 19356 0 3 4 0 0 0 0 0
+c 19367 0 3 4 0 0 0 0 0
+c 19379 0 3 4 0 0 0 0 0
+p 6
+s 223 19400 commandTime=4bb3
+e 0 pos.trTime=4ba0
+c 19396 0 3 4 0 0 0 0 0
+c 19408 0 3 4 0 0 0 0 0
+c 19422 0 3 4 0 0 0 0 0
+p 6
+c 19434 0 3 4 0 0 0 0 0
+s 224 19450 commandTime=4bde
+e 0 pos.trTime=4bf0
+c 19449 0 3 4 0 0 0 0 0
+c 19460 0 3 4 0 0 0 0 0
+p 6
+c 19474 0 3 4 0 0 0 0 0
+c 19488 0 3 4 0 0 0 0 0
+s 225 19500 commandTime=4c04
+e 0 pos.trTime=4c15
+c 19501 0 3 4 0 0 0 0 0
+p 6
+c 19515 0 3 4 0 0 0 0 0
+c 19528 0 3 4 0 0 0 0 0
+c 19540 0 3 4 0 0 0 0 0
+p 6
+s 226 19550 commandTime=4c54
+e 0 pos.trTime=4c3a
+c 19555 0 3 4 0 0 0 0 0
+c 19567 0 3 4 0 0 0 0 0
+c 19582 0 3 4 0 0 0 0 0
+p 6
+s 227 19600 commandTime=4c7e
+e 0 pos.trTime=4c89
+c 19598 0 3 4 0 0 0 0 0
+c 19609 0 3 4 0 0 0 0 0
+c 19621 0 3 4 0 0 0 0 0
+p 6
+c 19633 0 3 4 0 0 0 0 0
+c 19646 0 3 4 0 0 0 0 0
+s 228 19650 commandTime=4ca5
+e 0 pos.trTime=4cb0
+c 19658 0 3 4 0 0 0 0 0
+p 6
+c 19670 0 3 4 0 0 0 0 0
+c 19684 0 3 4 0 0 0 0 0
+s 229 19700 commandTime=4cca
+e 0 pos.trTime=4cd5
+c 19696 0 3 4 0 0 0 0 0
+p 6
+c 19708 0 3 4 0 0 0 0 0
+c 19721 0 3 4 0 0 0 0 0
+c 19734 0 3 4 0 0 0 0 0
+p 6
+s 230 19750 commandTime=4d16
+e 0 pos.trTime=4d20
+c 19747 0 3 4 0 0 0 0 0
+c 19761 0 3 4 0 0 0 0 0
+c 19773 0 3 4 0 0 0 0 0
+p 6
+c 19786 0 3 4 0 0 0 0 0
+s 231 19800 commandTime=4d3d
+e 0 pos.trTime=4d44
+c 19798 0 3 4 0 0 0 0 0
+c 19811 0 3 4 0 0 0 0 0
+p 6
+c 19825 0 3 4 0 0 0 0 0
+c 19839 0 3 4 0 0 0 0 0
+s 232 19850 commandTime=4d63
+e 0 pos.trTime=4d6a
+c 19852 0 3 4 0 0 0 0 0
+p 6
+c 19866 0 3 4 0 0 0 0 0
+c 19880 0 3 4 0 0 0 0 0
+s 233 19900 commandTime=4d8c
+e 0 pos.trTime=4d91
+c 19896 0 3 4 0 0 0 0 0
+p 6
+c 19908 0 3 4 0 0 0 0 0
+c 19921 0 3 4 0 0 0 0 0
+c 19935 0 3 4 0 0 0 0 0
+p 6
+s 234 19950 commandTime=4ddf
+e 0 pos.trTime=4de2
+c 19949 0 3 4 0 0 0 0 0
+c 19960 0 3 4 0 0 0 0 0
+c 19975 0 3 4 0 0 0 0 0
+p 6
+c 19988 0 3 4 0 0 0 0 0
+s 235 20000 commandTime=4e07
+e 0 pos.trTime=4e0b
+c 20002 0 3 4 0 0 0 0 0
+c 20014 0 3 4 0 0 0 0 0
+p 6
+c 20025 0 3 4 0 0 0 0 0
+c 20037 0 3 4 0 0 0 0 0
+s 236 20050 commandTime=4e2e
+e 0 pos.trTime=4e31
+c 20048 0 3 4 0 0 0 0 0
+p 6
+c 20059 0 3 4 0 0 0 0 0
+c 20072 0 3 4 0 0 0 0 0
+c 20087 0 3 4 0 0 0 0 0
+p 6
+s 237 20100 commandTime=4e77
+e 0 pos.trTime=4e7f
+c 20098 0 3 4 0 0 0 0 0
+c 20113 0 3 4 0 0 0 0 0
+c 20126 0 3 4 0 0 0 0 0
+p 6
+c 20139 0 3 4 0 0 0 0 0
+s 238 20150 commandTime=4e9e
+e 0 pos.trTime=4ea8
+c 20151 0 3 4 0 0 0 0 0
+c 20162 0 3 4 0 0 0 0 0
+p 6
+c 20175 0 3 4 0 0 0 0 0
+c 20188 0 3 4 0 0 0 0 0
+s 239 20200 commandTime=4ec2
+e 0 pos.trTime=4ecd
+c 20203 0 3 4 0 0 0 0 0
+p 6
+c 20218 0 3 4 0 0 0 0 0
+c 20232 0 3 4 0 0 0 0 0
+s 240 20250 commandTime=4eeb
+e 0 pos.trTime=4ef5
+c 20248 0 3 4 0 0 0 0 0
+p 6
+c 20260 0 3 4 0 0 0 0 0
+c 20272 0 3 4 0 0 0 0 0
+c 20287 0 3 4 0 0 0 0 0
+p 6
+s 241 20300 commandTime=4f3f
+e 0 pos.trTime=4f47
+c 20299 0 3 4 0 0 0 0 0
+c 20310 0 3 4 0 0 0 0 0
+c 20323 0 3 4 0 0 0 0 0
+p 6
+c 20336 0 3 4 0 0 0 0 0
+s 242 20350 commandTime=4f63
+e 0 pos.trTime=4f6c
+c 20347 0 3 4 0 0 0 0 0
+c 20358 0 3 4 0 0 0 0 0
+p 6
+c 20370 0 3 4 0 0 0 0 0
+c 20383 0 3 4 0 0 0 0 0
+c 20395 0 3 4 0 0 0 0 0
+p 6
+s 243 20400 commandTime=4fab
+e 0 pos.trTime=4f90
+c 20408 4 3 4 0 0 0 0 0
+c 20420 4 3 4 0 0 0 0 0
+c 20434 4 3 4 0 0 0 0 0
+p 6
+s 244 20450 commandTime=4fd2 eventSequence=6 aimSpreadScale=437f0000 weaponTime=306 pm_flags=802000 events[1]=a3 weapAnim=208 torsoTimer=1a8 torsoAnim=109 weaponstate=a weaponDelay=1da
+e 0 pos.trTime=4fb8
+c 20445 4 3 4 0 0 0 0 0
+c 20457 4 3 4 0 0 0 0 0
+c 20469 4 3 4 0 0 0 0 0
+p 6
+c 20483 4 3 4 0 0 0 0 0
+c 20495 4 3 4 0 0 0 0 0
+s 245 20500 commandTime=4ff5 weaponTime=2e3 torsoTimer=185 weaponDelay=1b7
+e 0 pos.trTime=500a
+c 20506 0 3 4 0 0 0 0 0
+p 6
+c 20520 0 3 4 0 0 0 0 0
+c 20532 0 3 4 0 0 0 0 0
+s 246 20550 commandTime=501a weaponTime=2be torsoTimer=160 weaponDelay=192
+e 0 pos.trTime=502f
+c 20545 0 3 4 0 0 0 0 0
+p 6
+c 20557 0 3 4 0 0 0 0 0
+c 20569 0 3 4 0 0 0 0 0
+c 20583 0 3 4 0 0 0 0 0
+p 6
+s 247 20600 commandTime=5067 weaponTime=271 torsoTimer=113 weaponDelay=145
+e 0 pos.trTime=5055
+c 20597 0 3 4 0 0 0 0 0
+c 20608 0 3 4 0 0 0 0 0
+c 20621 0 3 4 0 0 0 0 0
+p 6
+c 20634 0 3 4 0 0 0 0 0
+s 248 20650 commandTime=508d weaponTime=24b torsoTimer=ed weaponDelay=11f
+e 0 pos.trTime=509f
+c 20647 0 3 4 0 0 0 0 0
+c 20660 0 3 4 0 0 0 0 0
+p 6
+c 20672 0 3 4 0 0 0 0 0
+c 20686 0 3 4 0 0 0 0 0
+s 249 20700 commandTime=50b4 weaponTime=224 torsoTimer=c6 weaponDelay=f8
+e 0 pos.trTime=50c4
+c 20699 0 3 4 0 0 0 0 0
+p 6
+c 20713 0 3 4 0 0 0 0 0
+c 20727 0 3 4 0 0 0 0 0
+c 20739 0 3 4 0 0 0 0 0
+p 6
+s 250 20750 commandTime=5103 weaponTime=1d5 torsoTimer=77 weaponDelay=a9
+e 0 pos.trTime=50ee
+c 20751 0 3 4 0 0 0 0 0
+c 20763 0 3 4 0 0 0 0 0
+c 20777 0 3 4 0 0 0 0 0
+p 6
+c 20792 0 3 4 0 0 0 0 0
+s 251 20800 commandTime=5129 weaponTime=1af torsoTimer=51 weaponDelay=83
+e 0 pos.trTime=5138
+c 20804 0 3 4 0 0 0 0 0
+c 20815 0 3 4 0 0 0 0 0
+p 6
+c 20827 0 3 4 0 0 0 0 0
+c 20840 0 3 4 0 0 0 0 0
+s 252 20850 commandTime=514f weaponTime=189 torsoTimer=2b torsoAnim=200 weaponDelay=5d
+e 0 pos.trTime=5160
+c 20853 0 3 4 0 0 0 0 0
+p 6
+c 20866 0 3 4 0 0 0 0 0
+c 20879 0 3 4 0 0 0 0 0
+c 20893 0 3 4 0 0 0 0 0
+p 6
+s 253 20900 commandTime=519d weaponTime=13b torsoTimer=0 weaponDelay=f
+e 0 pos.trTime=5189
+c 20906 0 3 4 0 0 0 0 0
+c 20920 0 3 4 0 0 0 0 0
+c 20933 0 3 4 0 0 0 0 0
+p 6
+c 20946 0 3 4 0 0 0 0 0
+s 254 20950 commandTime=51c5 eventSequence=7 weaponTime=11f pm_flags=800000 events[2]=a4 weaponstate=b weaponDelay=0
+e 0 pos.trTime=51b2 pos.trDelta[0]=42c2f465 pos.trDelta[1]=4226b2bd pos.trDelta[2]=c23c5b78
+e 73 pos.trBase[1]=449b8000 pos.trBase[0]=c2aa0000 pos.trBase[2]=42340000 eType=b7 eventParm=77 weapon=3
+c 20962 0 3 4 0 0 0 0 0
+c 20976 0 3 4 0 0 0 0 0
+p 6
+c 20988 0 3 4 0 0 0 0 0
+s 255 21000 commandTime=51f0 weaponTime=f4
+e 0 pos.trTime=5200 pos.trBase[1]=449c4000 pos.trBase[0]=c27c0000 pos.trDelta[0]=42c40000 pos.trDelta[1]=421c0000 pos.trDelta[2]=c0800000 legsAnim=1d
+c 21000 0 3 4 0 0 0 0 0
+c 21012 0 3 4 0 0 0 0 0
+p 6
+c 21024 0 3 4 0 0 0 0 0
+c 21037 0 3 4 0 0 0 0 0
+s 256 21050 commandTime=5214 weaponTime=d0
+e 0 pos.trTime=5225 pos.trBase[1]=449c6000 pos.trBase[0]=c26c0000 pos.trDelta[0]=429e0000 pos.trDelta[1]=41f80000 pos.trDelta[2]=c0400000
+c 21049 0 3 4 0 0 0 0 0
+p 6
+c 21061 0 3 4 0 0 0 0 0
+c 21072 0 3 4 0 0 0 0 0
+c 21086 0 3 4 0 0 0 0 0
+p 6
+s 257 21100 commandTime=525e weaponTime=86
+e 0 pos.trTime=524e pos.trBase[1]=449c8000 pos.trBase[0]=c2640000 pos.trDelta[0]=42680000 pos.trDelta[1]=41b80000 pos.trDelta[2]=c0000000
+c 21099 0 3 4 0 0 0 0 0
+c 21113 0 3 4 0 0 0 0 0
+c 21126 0 3 4 0 0 0 0 0
+p 6
+c 21138 0 3 4 0 0 0 0 0
+s 258 21150 commandTime=5286 weaponTime=5e
+e 0 pos.trTime=529c pos.trBase[1]=449ca000 pos.trBase[0]=c2580000 pos.trDelta[0]=41900000 pos.trDelta[1]=40e00000 pos.trDelta[2]=bf800000 pos.trBase[2]=c0400000
+c 21152 0 3 4 0 0 0 0 0
+c 21163 0 3 4 0 0 0 0 0
+p 6
+c 21176 0 3 4 0 0 0 0 0
+c 21189 0 3 4 0 0 0 0 0
+s 259 21200 commandTime=52ab weaponTime=39
+e 0 pos.trTime=52c0 pos.trDelta[0]=0 pos.trDelta[1]=0 pos.trDelta[2]=0 torsoAnim=2f9
+c 21201 0 3 4 0 0 0 0 0
+p 6
+c 21216 0 3 4 0 0 0 0 0
+c 21230 0 3 4 0 0 0 0 0
+c 21244 0 3 4 0 0 0 0 0
+p 6
+s 260 21250 commandTime=52fc aimSpreadScale=43761333 weaponTime=0 weapAnim=0 weaponstate=0
+e 0 pos.trTime=52e9 pos.trDelta[2]=80000000
+e- 73
+c 21257 0 3 4 0 0 0 0 0
+c 21268 0 3 4 0 0 0 0 0
+c 21282 0 3 4 0 0 0 0 0
+p 6
+s 261 21300 commandTime=5322 aimSpreadScale=435dd999
+e 0 pos.trTime=530e
+c 21294 0 3 4 0 0 0 0 0
+c 21306 0 3 4 0 0 0 0 0
+c 21318 0 3 4 0 0 0 0 0
+p 6
+c 21330 0 3 4 0 0 0 0 0
+c 21344 0 3 4 0 0 0 0 0
+s 262 21350 commandTime=5346 aimSpreadScale=4346e667
+e 0 pos.trTime=535a
+c 21356 0 3 4 0 0 0 0 0
+p 6
+c 21367 0 3 4 0 0 0 0 0
+c 21379 0 3 4 0 0 0 0 0
+c 21390 0 3 4 0 0 0 0 0
+p 6
+s 263 21400 commandTime=538e aimSpreadScale=43190002
+e 0 pos.trTime=5380
+c 21406 0 3 4 0 0 0 0 0
+c 21419 0 3 4 0 0 0 0 0
+c 21431 0 3 4 0 0 0 0 0
+p 6
+c 21443 0 3 4 0 0 0 0 0
+s 264 21450 commandTime=53b7 aimSpreadScale=42fdb99d
+e 0 pos.trTime=53a7 legsAnim=28a torsoAnim=0
+c 21455 0 3 4 0 0 0 0 0
+c 21469 0 3 4 0 0 0 0 0
+p 6
+c 21484 0 3 4 0 0 0 0 0
+s 265 21500 commandTime=53dd aimSpreadScale=42cd4669
+e 0 pos.trTime=53f5
+c 21496 0 3 4 0 0 0 0 0
+c 21512 0 3 4 0 0 0 0 0
+p 6
+c 21524 0 3 4 0 0 0 0 0
+c 21535 0 3 4 0 0 0 0 0
+s 266 21550 commandTime=5408 aimSpreadScale=42967336
+e 0 pos.trTime=541b
+c 21547 0 3 4 0 0 0 0 0
+p 6
+c 21558 0 3 4 0 0 0 0 0
+c 21573 0 3 4 0 0 0 0 0
+c 21584 0 3 4 0 0 0 0 0
+p 6
+s 267 21600 commandTime=5450 aimSpreadScale=41ea99a2
+e 0 pos.trTime=5445
+c 21598 0 3 4 0 0 0 0 0
+c 21611 0 3 4 0 0 0 0 0
+c 21625 0 3 4 0 0 0 0 0
+p 6
+c 21638 0 3 4 0 0 0 0 0
+s 268 21650 commandTime=5479 aimSpreadScale=404c0049
+e 0 pos.trTime=546f
+c 21650 0 3 4 0 0 0 0 0
+c 21663 0 3 4 0 0 0 0 0
+p 6
+c 21674 0 3 4 0 0 0 0 0
+c 21687 0 3 4 0 0 0 0 0
+s 269 21700 commandTime=549f aimSpreadScale=0
+e 0 pos.trTime=54c0
+c 21700 0 3 4 0 0 0 0 0
+p 6
+c 21712 0 3 4 0 0 0 0 0
+c 21723 0 3 4 0 0 0 0 0
+c 21735 0 3 4 0 0 0 0 0
+p 6
+s 270 21750 commandTime=54e7
+e 0 pos.trTime=54e8
+c 21748 0 3 4 0 0 0 0 0
+c 21759 0 3 4 0 0 0 0 0
+c 21775 0 3 4 0 0 0 0 0
+p 6
+c 21789 0 3 4 0 0 0 0 0
+s 271 21800 commandTime=550f
+e 0 pos.trTime=550f
+c 21803 0 3 4 0 0 0 0 0
+c 21815 0 3 4 0 0 0 0 0
+p 6
+c 21828 0 3 4 0 0 0 0 0
+c 21844 0 3 4 0 0 0 0 0
+s 272 21850 commandTime=5537
+e 0 pos.trTime=5558
+c 21856 0 3 4 0 0 0 0 0
+p 6
+c 21869 0 3 4 0 0 0 0 0
+c 21882 0 3 4 0 0 0 0 0
+s 273 21900 commandTime=5560
+e 0 pos.trTime=557d
+c 21896 0 3 4 0 0 0 0 0
+p 6
+c 21907 4 3 4 0 0 0 0 0
+c 21921 4 3 4 0 0 0 0 0
+c 21933 4 3 4 0 0 0 0 0
+p 6
+c 21944 4 3 4 0 0 0 0 0
+s 274 21950 commandTime=55ad eventSequence=8 aimSpreadScale=437f0000 weaponTime=306 pm_flags=802000 events[3]=a3 weapAnim=208 torsoTimer=1a8 torsoAnim=109 weaponstate=a weaponDelay=1da
+e 0 pos.trTime=55a3
+c 21958 4 3 4 0 0 0 0 0
+c 21971 4 3 4 0 0 0 0 0
+p 6
+c 21985 4 3 4 0 0 0 0 0
+s 275 22000 commandTime=55d3 weaponTime=2e0 torsoTimer=182 weaponDelay=1b4
+e 0 pos.trTime=55cd
+c 21996 4 3 4 0 0 0 0 0
+c 22012 0 3 4 0 0 0 0 0
+p 6
+c 22023 0 3 4 0 0 0 0 0
+c 22035 0 3 4 0 0 0 0 0
+s 276 22050 commandTime=55fc weaponTime=2b7 torsoTimer=159 weaponDelay=18b
+e 0 pos.trTime=561b
+c 22047 0 3 4 0 0 0 0 0
+p 6
+c 22059 0 3 4 0 0 0 0 0
+c 22071 0 3 4 0 0 0 0 0
+c 22082 0 3 4 0 0 0 0 0
+p 6
+s 277 22100 commandTime=5642 weaponTime=271 torsoTimer=113 weaponDelay=145
+e 0 pos.trTime=5643
+c 22095 0 3 4 0 0 0 0 0
+c 22108 0 3 4 0 0 0 0 0
+c 22124 0 3 4 0 0 0 0 0
+p 6
+c 22138 0 3 4 0 0 0 0 0
+s 278 22150 commandTime=566c weaponTime=247 torsoTimer=e9 weaponDelay=11b
+e 0 pos.trTime=566c
+c 22152 0 3 4 0 0 0 0 0
+c 22164 0 3 4 0 0 0 0 0
+p 6
+c 22176 0 3 4 0 0 0 0 0
+c 22190 0 3 4 0 0 0 0 0
+s 279 22200 commandTime=5694 weaponTime=21f torsoTimer=c1 weaponDelay=f3
+e 0 pos.trTime=5692
+c 22201 0 3 4 0 0 0 0 0
+p 6
+c 22213 0 3 4 0 0 0 0 0
+c 22228 0 3 4 0 0 0 0 0
+c 22240 0 3 4 0 0 0 0 0
+p 6
+s 280 22250 commandTime=56e0 weaponTime=1d3 torsoTimer=75 weaponDelay=a7
+e 0 pos.trTime=56e0
+c 22254 0 3 4 0 0 0 0 0
+c 22267 0 3 4 0 0 0 0 0
+c 22278 0 3 4 0 0 0 0 0
+p 6
+c 22293 0 3 4 0 0 0 0 0
+s 281 22300 commandTime=5706 weaponTime=1ad torsoTimer=4f weaponDelay=81
+e 0 pos.trTime=5708
+c 22306 0 3 4 0 0 0 0 0
+c 22318 0 3 4 0 0 0 0 0
+p 6
+c 22330 0 3 4 0 0 0 0 0
+c 22341 0 3 4 0 0 0 0 0
+s 282 22350 commandTime=572e weaponTime=185 torsoTimer=27 torsoAnim=200 weaponDelay=59
+e 0 pos.trTime=572f
+c 22353 0 3 4 0 0 0 0 0
+p 6
+c 22367 0 3 4 0 0 0 0 0
+c 22381 0 3 4 0 0 0 0 0
+s 283 22400 commandTime=5751 weaponTime=162 torsoTimer=4 weaponDelay=36
+e 0 pos.trTime=5779
+c 22395 0 3 4 0 0 0 0 0
+p 6
+c 22410 0 3 4 0 0 0 0 0
+c 22423 0 3 4 0 0 0 0 0
+c 22436 0 3 4 0 0 0 0 0
+p 6
+s 284 22450 commandTime=57a4 eventSequence=9 weaponTime=112 pm_flags=800000 events[0]=a4 torsoTimer=0 weaponstate=b weaponDelay=0
+e 0 pos.trTime=579f pos.trDelta[0]=42c2f465 pos.trDelta[1]=4226b2bd pos.trDelta[2]=c23c5b78
+e 74 pos.trBase[1]=449c4000 pos.trBase[0]=c28c0000 pos.trBase[2]=42180000 eType=b7 eventParm=13 weapon=3
+c 22448 0 3 4 0 0 0 0 0
+c 22461 0 3 4 0 0 0 0 0
+c 22476 0 3 4 0 0 0 0 0
+p 6
+c 22488 0 3 4 0 0 0 0 0
+s 285 22500 commandTime=57cc weaponTime=ea
+e 0 pos.trTime=57c7 pos.trBase[1]=449ce000 pos.trBase[0]=c2440000 pos.trDelta[0]=42e40000 pos.trDelta[1]=42340000 pos.trDelta[2]=c0400000 legsAnim=1d
+c 22502 0 3 4 0 0 0 0 0
+c 22513 0 3 4 0 0 0 0 0
+p 6
+c 22525 0 3 4 0 0 0 0 0
+c 22539 0 3 4 0 0 0 0 0
+s 286 22550 commandTime=57f1 weaponTime=c5
+e 0 pos.trTime=5813 pos.trBase[1]=449d4000 pos.trBase[0]=c2280000 pos.trDelta[0]=42a00000 pos.trDelta[1]=42000000 pos.trDelta[2]=c0000000
+c 22551 0 3 4 0 0 0 0 0
+p 6
+c 22562 0 3 4 0 0 0 0 0
+c 22574 0 3 4 0 0 0 0 0
+c 22586 0 3 4 0 0 0 0 0
+p 6
+s 287 22600 commandTime=583a weaponTime=7c
+e 0 pos.trTime=583b pos.trBase[1]=449d6000 pos.trBase[0]=c21c0000 pos.trDelta[0]=426c0000 pos.trDelta[1]=41b80000
+c 22600 0 3 4 0 0 0 0 0
+c 22611 0 3 4 0 0 0 0 0
+c 22625 0 3 4 0 0 0 0 0
+p 6
+c 22636 0 3 4 0 0 0 0 0
+s 288 22650 commandTime=5861 weaponTime=55
+e 0 pos.trTime=5860 pos.trBase[0]=c2180000 pos.trDelta[0]=42200000 pos.trDelta[1]=41800000
+c 22649 0 3 4 0 0 0 0 0
+c 22662 0 3 4 0 0 0 0 0
+p 6
+c 22675 0 3 4 0 0 0 0 0
+c 22687 0 3 4 0 0 0 0 0
+s 289 22700 commandTime=5886 weaponTime=30
+e 0 pos.trTime=58a9 pos.trBase[1]=449d8000 pos.trBase[0]=c2100000 pos.trDelta[0]=40000000 pos.trDelta[1]=3f800000 pos.trDelta[2]=0 torsoAnim=2f9
+c 22699 0 3 4 0 0 0 0 0
+p 6
+c 22711 0 3 4 0 0 0 0 0
+c 22724 0 3 4 0 0 0 0 0
+c 22736 0 3 4 0 0 0 0 0
+p 6
+s 290 22750 commandTime=58d0 aimSpreadScale=436f1000 weaponTime=0 weapAnim=0 weaponstate=0
+e 0 pos.trTime=58ce pos.trDelta[0]=0 pos.trDelta[1]=0 pos.trDelta[2]=80000000
+e- 74
+c 22748 0 3 4 0 0 0 0 0
+c 22761 0 3 4 0 0 0 0 0
+c 22774 0 3 4 0 0 0 0 0
+p 6
+c 22787 0 3 4 0 0 0 0 0
+s 291 22800 commandTime=58f6 aimSpreadScale=4356d666
+e 0 pos.trTime=58f4
+c 22801 0 3 4 0 0 0 0 0
+c 22814 0 3 4 0 0 0 0 0
+p 6
+c 22825 0 3 4 0 0 0 0 0
+c 22841 0 3 4 0 0 0 0 0
+s 292 22850 commandTime=591e aimSpreadScale=433d5665
+e 0 pos.trTime=591a
+c 22855 0 3 4 0 0 0 0 0
+p 6
+c 22868 0 3 4 0 0 0 0 0
+c 22883 0 3 4 0 0 0 0 0
+c 22896 0 3 4 0 0 0 0 0
+p 6
+s 293 22900 commandTime=5947 aimSpreadScale=43233332
+e 0 pos.trTime=5964
+c 22909 0 3 4 0 0 0 0 0
+c 22923 0 3 4 0 0 0 0 0
+c 22934 0 3 4 0 0 0 0 0
+p 6
+s 294 22950 commandTime=5996 aimSpreadScale=42e1acc8
+e 0 pos.trTime=598c
+c 22949 0 3 4 0 0 0 0 0
+c 22961 0 3 4 0 0 0 0 0
+c 22974 0 3 4 0 0 0 0 0
+p 6
+c 22987 0 3 4 0 0 0 0 0
+s 295 23000 commandTime=59be aimSpreadScale=42aeacc8
+e 0 pos.trTime=59b3 legsAnim=28a torsoAnim=0
+c 22999 0 3 4 0 0 0 0 0
+c 23012 0 3 4 0 0 0 0 0
+p 6
+c 23025 0 3 4 0 0 0 0 0
+c 23038 0 3 4 0 0 0 0 0
+s 296 23050 commandTime=59e4 aimSpreadScale=427c732a
+e 0 pos.trTime=59fd
+c 23051 0 3 4 0 0 0 0 0
+p 6
+c 23062 0 3 4 0 0 0 0 0
+c 23075 0 3 4 0 0 0 0 0
+c 23087 0 3 4 0 0 0 0 0
+p 6
+s 297 23100 commandTime=5a2f aimSpreadScale=4174ccab
+e 0 pos.trTime=5a21
+c 23101 0 3 4 0 0 0 0 0
+c 23112 0 3 4 0 0 0 0 0
+c 23126 0 3 4 0 0 0 0 0
+p 6
+c 23138 0 3 4 0 0 0 0 0
+s 298 23150 commandTime=5a56 aimSpreadScale=0
+e 0 pos.trTime=5a6b
+c 23150 0 3 4 0 0 0 0 0
+c 23163 0 3 4 0 0 0 0 0
+p 6
+c 23177 0 3 4 0 0 0 0 0
+c 23191 0 3 4 0 0 0 0 0
+s 299 23200 commandTime=5a7b
+e 0 pos.trTime=5a92
+c 23204 0 3 4 0 0 0 0 0
+p 6
+c 23216 0 3 4 0 0 0 0 0
+c 23230 0 3 4 0 0 0 0 0
+s 300 23250 commandTime=5aa4
+e 0 pos.trTime=5abc
+c 23246 0 3 4 0 0 0 0 0
+p 6
+c 23260 0 3 4 0 0 0 0 0
+c 23273 0 3 4 0 0 0 0 0
+c 23286 0 3 4 0 0 0 0 0
+p 6
+s 301 23300 commandTime=5af6
+e 0 pos.trTime=5ae4
+c 23299 0 3 4 0 0 0 0 0
+c 23313 0 3 4 0 0 0 0 0
+c 23325 0 3 4 0 0 0 0 0
+p 6
+c 23337 0 3 4 0 0 0 0 0
+s 302 23350 commandTime=5b1d
+e 0 pos.trTime=5b0c
+c 23350 0 3 4 0 0 0 0 0
+c 23363 0 3 4 0 0 0 0 0
+p 6
+c 23378 0 3 4 0 0 0 0 0
+c 23394 0 3 4 0 0 0 0 0
+s 303 23400 commandTime=5b43
+e 0 pos.trTime=5b5a
+c 23408 0 3 4 0 0 0 127 0
+p 6
+c 23420 0 3 4 0 0 0 127 0
+c 23433 0 3 4 0 0 0 127 0
+c 23446 0 3 4 0 0 0 127 0
+p 6
+s 304 23450 commandTime=5b70 origin[1]=449a04fd origin[0]=c2e3d947 origin[2]=bf5325f4 velocity[1]=41100000 velocity[0]=41b00000 velocity[2]=bf800000 legsAnim=88
+e 0 pos.trTime=5b7c
+c 23460 0 3 4 0 0 0 127 0
+c 23472 0 3 4 0 0 0 127 0
+c 23485 0 3 4 0 0 0 127 0
+p 6
+s 305 23500 commandTime=5bbd origin[1]=449a4ef8 origin[0]=c2d9067a bobCycle=8 origin[2]=bf825836 velocity[1]=42340000 velocity[0]=42d20000 velocity[2]=c0800000
+e 0 pos.trTime=5bc8
+c 23497 0 3 4 0 0 0 127 0
+c 23509 0 3 4 0 0 0 127 0
+c 23521 0 3 4 0 0 0 127 0
+p 6
+c 23535 0 3 4 0 0 0 127 0
+c 23546 0 3 4 0 0 0 127 0
+s 306 23550 commandTime=5be1 origin[1]=449a8e14 origin[0]=c2cfd27c bobCycle=f origin[2]=bf9762bc velocity[1]=426c0000 velocity[0]=430a0000 velocity[2]=c0a00000
+e 0 pos.trTime=5bf0
+c 23558 0 3 4 0 0 0 127 0
+p 6
+c 23571 0 3 4 0 0 0 127 0
+c 23586 0 3 4 0 0 0 127 0
+s 307 23600 commandTime=5c06 origin[1]=449addf9 origin[0]=c2c4355e bobCycle=19 origin[2]=bfb1e96f velocity[1]=42900000 velocity[0]=43260000 velocity[2]=c0c00000
+e 0 pos.trTime=5c15
+c 23597 0 3 4 0 0 0 127 0
+p 6
+c 23609 0 3 4 0 0 0 127 0
+c 23621 0 3 4 0 0 0 127 0
+c 23634 0 3 4 0 0 0 127 0
+p 6
+c 23645 0 3 4 0 0 0 127 0
+s 308 23650 commandTime=5c52 origin[1]=449b94e2 origin[0]=c2a9b435 bobCycle=31 origin[2]=bfedfb13 velocity[1]=42960000 velocity[0]=432e0000
+e 0 pos.trTime=5c39
+c 23657 0 3 4 0 0 0 127 0
+c 23669 0 3 4 0 0 0 127 0
+p 6
+c 23682 0 3 4 0 0 0 127 0
+s 309 23700 commandTime=5c75 origin[1]=449be90e origin[0]=c29d7f07 bobCycle=3c origin[2]=c004c642
+e 0 pos.trTime=5c86
+c 23695 0 3 4 0 0 0 127 0
+c 23710 4 3 4 0 0 0 0 0
+p 6
+c 23722 4 3 4 0 0 0 0 0
+c 23735 4 3 4 0 0 0 0 0
+s 310 23750 commandTime=5c9e origin[1]=449c489c origin[0]=c28fa36e bobCycle=48 origin[2]=c0146bdc velocity[1]=428a0000 velocity[0]=43200000 eventSequence=b aimSpreadScale=437f0000 weaponTime=320 pm_flags=802000 events[1]=12 events[2]=a3 weapAnim=208 torsoTimer=15e torsoAnim=108 weaponstate=a weaponDelay=1f4
+e 0 pos.trTime=5cad
+c 23746 4 3 4 0 0 0 0 0
+p 6
+c 23761 4 3 4 0 0 0 0 0
+c 23782 4 3 4 0 0 0 0 0
+p 5
+c 23794 4 3 4 0 0 0 0 0
+s 311 23800 commandTime=5ce6 origin[1]=449ca1ee origin[0]=c283eea4 bobCycle=50 origin[2]=c0213211 velocity[1]=40c00000 velocity[0]=c0000000 velocity[2]=0 legsAnim=28a weaponTime=2d8 torsoTimer=116 weaponDelay=1ac
+e 0 pos.trTime=5cd5
+c 23805 0 3 4 0 0 0 0 0
+c 23819 0 3 4 0 0 0 0 0
+p 5
+c 23832 0 3 4 0 0 0 0 0
+s 312 23850 commandTime=5d0b bobCycle=0 velocity[1]=0 velocity[0]=0 weaponTime=2b3 torsoTimer=f1 weaponDelay=187
+e 0 pos.trTime=5d25
+c 23846 0 3 4 0 0 0 0 0
+c 23860 0 3 4 0 0 0 0 0
+p 6
+c 23872 0 3 4 0 0 0 0 0
+c 23885 0 3 4 0 0 0 0 0
+s 313 23900 commandTime=5d34 weaponTime=28a torsoTimer=c8 weaponDelay=15e
+e 0 pos.trTime=5d4e
+c 23899 0 3 4 0 0 0 0 0
+p 6
+c 23911 0 3 4 0 0 0 0 0
+c 23924 0 3 4 0 0 0 0 0
+c 23936 0 3 4 0 0 0 0 0
+p 6
+s 314 23950 commandTime=5d80 weaponTime=23e torsoTimer=7c weaponDelay=112
+e 0 pos.trTime=5d73
+c 23949 0 3 4 0 0 0 0 0
+c 23961 0 3 4 0 0 0 0 0
+c 23975 0 3 4 0 0 0 0 0
+p 6
+c 23989 0 3 4 0 0 0 0 0
+s 315 24000 commandTime=5da7 weaponTime=217 torsoTimer=55 weaponDelay=eb
+e 0 pos.trTime=5d9a
+c 24002 0 3 4 0 0 0 0 0
+c 24015 0 3 4 0 0 0 0 0
+p 6
+c 24027 0 3 4 0 0 0 0 0
+c 24039 0 3 4 0 0 0 0 0
+s 316 24050 commandTime=5dcf weaponTime=1ef torsoTimer=2d torsoAnim=200 weaponDelay=c3
+e 0 pos.trTime=5dec
+c 24053 0 3 4 0 0 0 0 0
+p 6
+c 24065 0 3 4 0 0 0 0 0
+c 24076 0 3 4 0 0 0 0 0
+c 24087 0 3 4 0 0 0 0 0
+p 6
+s 317 24100 commandTime=5e17 weaponTime=1a7 torsoTimer=0 weaponDelay=7b
+e 0 pos.trTime=5e11
+c 24100 0 3 4 0 0 0 0 0
+c 24114 0 3 4 0 0 0 0 0
+c 24128 0 3 4 0 0 0 0 0
+p 6
+c 24142 0 3 4 0 0 0 0 0
+s 318 24150 commandTime=5e40 weaponTime=17e weaponDelay=52
+e 0 pos.trTime=5e37
+c 24153 0 3 4 0 0 0 0 0
+c 24166 0 3 4 0 0 0 0 0
+p 6
+c 24181 0 3 4 0 0 0 0 0
+c 24193 0 3 4 0 0 0 0 0
+s 319 24200 commandTime=5e66 weaponTime=158 weaponDelay=2c
+e 0 pos.trTime=5e82
+c 24204 0 3 4 0 0 0 0 0
+p 6
+c 24216 0 3 4 0 0 0 0 0
+c 24229 0 3 4 0 0 0 0 0
+c 24241 0 3 4 0 0 0 0 0
+p 6
+s 320 24250 commandTime=5eb1 eventSequence=c weaponTime=113 pm_flags=800000 events[3]=a4 weaponstate=b weaponDelay=0
+e 0 pos.trTime=5ea8 pos.trDelta[0]=42c2f465 pos.trDelta[1]=4226b2bd pos.trDelta[2]=c23c5b78
+e 75 pos.trBase[1]=449da000 pos.trBase[0]=c23c0000 pos.trBase[2]=42400000 eType=b7 eventParm=15 weapon=3
+c 24253 0 3 4 0 0 0 0 0
+c 24266 0 3 4 0 0 0 0 0
+c 24279 0 3 4 0 0 0 0 0
+p 6
+c 24293 0 3 4 0 0 0 0 0
+s 321 24300 commandTime=5ed7 weaponTime=ed
+e 0 pos.trTime=5ed1 pos.trBase[1]=449dc000 pos.trBase[0]=c2000000 pos.trDelta[0]=42e40000 pos.trDelta[1]=42340000 pos.trDelta[2]=c0a00000 legsAnim=1d
+c 24304 0 3 4 0 0 0 0 0
+c 24318 0 3 4 0 0 0 0 0
+p 6
+c 24331 0 3 4 0 0 0 0 0
+c 24344 0 3 4 0 0 0 0 0
+s 322 24350 commandTime=5efe weaponTime=c6
+e 0 pos.trTime=5ef8 pos.trBase[1]=449de000 pos.trBase[0]=c1d80000 pos.trDelta[0]=42c60000 pos.trDelta[1]=421c0000 pos.trDelta[2]=c0800000
+c 24358 0 3 4 0 0 0 0 0
+p 6
+c 24372 0 3 4 0 0 0 0 0
+c 24386 0 3 4 0 0 0 0 0
+s 323 24400 commandTime=5f26 weaponTime=9e
+e 0 pos.trTime=5f49 pos.trBase[1]=449e4000 pos.trBase[0]=c1a80000 pos.trDelta[0]=42640000 pos.trDelta[1]=41b00000 pos.trDelta[2]=c0000000 pos.trBase[2]=c0800000
+c 24398 0 3 4 0 0 0 0 0
+p 6
+c 24411 0 3 4 0 0 0 0 0
+c 24424 0 3 4 0 0 0 0 0
+c 24436 0 3 4 0 0 0 0 0
+p 6
+s 324 24450 commandTime=5f74 weaponTime=50
+e 0 pos.trTime=5f72 pos.trBase[0]=c1a00000 pos.trDelta[0]=42100000 pos.trDelta[1]=41500000 pos.trDelta[2]=bf800000
+c 24449 0 3 4 0 0 0 0 0
+c 24460 0 3 4 0 0 0 0 0
+c 24473 0 3 4 0 0 0 0 0
+p 6
+c 24488 0 3 4 0 0 0 0 0
+s 325 24500 commandTime=5f99 weaponTime=2b
+e 0 pos.trTime=5f97 pos.trBase[1]=449e6000 pos.trBase[0]=c1980000 pos.trDelta[0]=41880000 pos.trDelta[1]=40c00000
+c 24500 0 3 4 0 0 0 0 0
+c 24513 0 3 4 0 0 0 0 0
+p 6
+c 24524 0 3 4 0 0 0 0 0
+c 24537 0 3 4 0 0 0 0 0
+s 326 24550 commandTime=5fc1 weaponTime=3
+e 0 pos.trTime=5fe0 pos.trDelta[0]=0 pos.trDelta[1]=0 pos.trDelta[2]=0 torsoAnim=2f9
+e- 75
+c 24552 0 3 4 0 0 0 0 0
+p 6
+c 24564 0 3 4 0 0 0 0 0
+c 24577 0 3 4 0 0 0 0 0
+c 24590 0 3 4 0 0 0 0 0
+p 6
+s 327 24600 commandTime=600e aimSpreadScale=4354eccc weaponTime=0 weapAnim=0 weaponstate=0
+e 0 pos.trTime=600c
+c 24605 0 3 4 0 0 0 0 0
+c 24620 0 3 4 0 0 0 0 0
+c 24632 0 3 4 0 0 0 0 0
+p 6
+s 328 24650 commandTime=6038 aimSpreadScale=433a2666
+e 0 pos.trTime=6031
+c 24647 0 3 4 0 0 0 0 0
+c 24661 0 3 4 0 0 0 0 0
+c 24674 0 3 4 0 0 0 0 0
+p 6
+c 24686 0 3 4 0 0 0 0 0
+s 329 24700 commandTime=6062 aimSpreadScale=431f5fff
+e 0 pos.trTime=6059
+c 24697 0 3 4 0 0 0 0 0
+c 24709 0 3 4 0 0 0 0 0
+p 6
+c 24721 0 3 4 0 0 0 0 0
+c 24733 0 3 4 0 0 0 0 0
+s 330 24750 commandTime=6085 aimSpreadScale=43091000
+e 0 pos.trTime=60a1 legsAnim=28a torsoAnim=0
+c 24748 0 3 4 0 0 0 0 0
+p 6
+c 24761 0 3 4 0 0 0 0 0
+c 24773 0 3 4 0 0 0 0 0
+c 24787 0 3 4 0 0 0 0 0
+p 6
+s 331 24800 commandTime=60d3 aimSpreadScale=42aeaccd
+e 0 pos.trTime=60c9
+c 24801 0 3 4 0 0 0 0 0
+c 24813 0 3 4 0 0 0 0 0
+c 24827 0 3 4 0 0 0 0 0
+p 6
+c 24842 0 3 4 0 0 0 0 0
+s 332 24850 commandTime=60fb aimSpreadScale=42775999
+e 0 pos.trTime=60f1
+c 24855 0 3 4 0 0 0 0 0
+c 24870 0 3 4 0 0 0 0 0
+p 6
+c 24881 0 3 4 0 0 0 0 0
+c 24893 0 3 4 0 0 0 0 0
+s 333 24900 commandTime=6126 aimSpreadScale=4209b333
+e 0 pos.trTime=6139
+c 24905 0 3 4 0 0 0 0 0
+p 6
+c 24918 0 3 4 0 0 0 0 0
+c 24929 0 3 4 0 0 0 0 0
+c 24943 0 3 4 0 0 0 0 0
+p 6
+s 334 24950 commandTime=616f aimSpreadScale=0
+e 0 pos.trTime=615f
+c 24955 0 3 4 0 0 0 0 0
+c 24968 0 3 4 0 0 0 0 0
+c 24981 0 3 4 0 0 0 0 0
+p 6
+c 24992 0 3 4 0 0 0 0 0
+s 335 25000 commandTime=6195
+e 0 pos.trTime=6188
+c 25005 0 3 4 0 0 0 0 0
+c 25016 0 3 4 0 0 0 0 0
+p 6
+c 25029 0 3 4 0 0 0 0 0
+c 25043 0 3 4 0 0 0 0 0
+s 336 25050 commandTime=61b8
+e 0 pos.trTime=61d2
+c 25056 0 3 4 0 0 0 0 0
+p 6
+c 25070 0 3 4 0 0 0 0 0
+c 25081 0 3 4 0 0 0 0 0
+s 337 25100 commandTime=61e0
+e 0 pos.trTime=61fa
+c 25096 0 3 4 0 0 0 0 0
+p 6
+c 25110 0 3 4 0 0 0 0 0
+c 25123 0 3 4 0 0 0 0 0
+c 25137 0 3 4 0 0 0 0 0
+p 6
+s 338 25150 commandTime=6231
+e 0 pos.trTime=6221
+c 25149 0 3 4 0 0 0 0 0
+c 25160 0 3 4 0 0 0 0 0
+c 25172 0 3 4 0 0 0 0 0
+p 6
+c 25188 0 3 4 0 0 0 0 0
+s 339 25200 commandTime=6254
+e 0 pos.trTime=624a
+c 25203 0 3 4 0 0 0 127 0
+c 25216 0 3 4 0 0 0 127 0
+p 6
+c 25230 0 3 4 0 0 0 127 0
+c 25241 0 3 4 0 0 0 127 0
+s 340 25250 commandTime=6280 origin[1]=449cad71 origin[0]=c2823df7 origin[2]=c0231c7b velocity[1]=41800000 velocity[0]=42180000 velocity[2]=bf800000 legsAnim=88
+e 0 pos.trTime=629b
+c 25253 0 3 4 0 0 0 127 0
+p 6
+c 25266 0 3 4 0 0 0 127 0
+c 25281 0 3 4 0 0 0 127 0
+s 341 25300 commandTime=62a5 origin[1]=449ccd8a origin[0]=c27af1e4 bobCycle=3 origin[2]=c0288992 velocity[1]=42040000 velocity[0]=429c0000 velocity[2]=c0400000
+e 0 pos.trTime=62c3
+c 25297 0 3 4 0 0 0 127 0
+p 6
+c 25310 0 3 4 0 0 0 127 0
+c 25323 0 3 4 0 0 0 127 0
+c 25335 0 3 4 0 0 0 127 0
+p 6
+s 342 25350 commandTime=62f7 origin[1]=449d5aa0 origin[0]=c2519ab5 bobCycle=14 origin[2]=c03e0d26 velocity[1]=42860000 velocity[0]=431c0000 velocity[2]=c0800000
+e 0 pos.trTime=62ea
+c 25349 0 3 4 0 0 0 127 0
+c 25363 0 3 4 0 0 0 127 0
+c 25374 0 3 4 0 0 0 127 0
+p 6
+c 25387 0 3 4 0 0 0 127 0
+s 343 25400 commandTime=631e origin[1]=449d9f6b origin[0]=c242368c bobCycle=18 origin[2]=c0432af0 velocity[1]=41e00000 velocity[0]=c0c00000 movementDir=4f velocity[2]=3f800000
+e 0 pos.trTime=6333
+c 25399 0 3 4 0 0 0 127 0
+c 25411 0 3 4 0 0 0 127 0
+p 6
+c 25424 0 3 4 0 0 0 127 0
+c 25436 0 3 4 0 0 0 127 0
+s 344 25450 commandTime=6343 origin[1]=449dba98 origin[0]=c242e418 origin[2]=c040d037 velocity[1]=41a80000 velocity[0]=c0800000 movementDir=4d
+e 0 pos.trTime=6357
+c 25450 0 3 4 0 0 0 127 0
+p 6
+c 25461 0 3 4 0 0 0 127 0
+c 25475 0 3 4 0 0 0 127 0
+c 25487 0 3 4 0 0 0 127 0
+p 6
+s 345 25500 commandTime=638f origin[1]=449dddf9 origin[0]=c2439f3e origin[2]=c03dd880 velocity[1]=41300000 velocity[0]=c0000000 movementDir=4b velocity[2]=0
+e 0 pos.trTime=6380
+c 25499 0 3 4 0 0 0 127 0
+c 25513 4 3 4 0 0 0 0 0
+c 25526 4 3 4 0 0 0 0 0
+p 6
+c 25538 4 3 4 0 0 0 0 0
+s 346 25550 commandTime=63b6 origin[1]=449de2bf origin[0]=c243b3c6 bobCycle=0 origin[2]=c03d750c velocity[1]=0 velocity[0]=0 movementDir=0 eventSequence=d legsAnim=28a aimSpreadScale=437f0000 weaponTime=313 pm_flags=802000 events[0]=a3 weapAnim=208 torsoTimer=1b5 torsoAnim=109 weaponstate=a weaponDelay=1e7
+e 0 pos.trTime=63aa
+c 25550 4 3 4 0 0 0 0 0
+c 25565 4 3 4 0 0 0 0 0
+p 6
+c 25578 4 3 4 0 0 0 0 0
+c 25590 4 3 4 0 0 0 0 0
+s 347 25600 commandTime=63dd velocity[0]=80000000 weaponTime=2ec torsoTimer=18e weaponDelay=1c0
+e 0 pos.trTime=63f5
+c 25604 0 3 4 0 0 0 0 0
+p 6
+c 25615 0 3 4 0 0 0 0 0
+c 25627 0 3 4 0 0 0 0 0
+c 25639 0 3 4 0 0 0 0 0
+p 6
+s 348 25650 commandTime=6427 weaponTime=2a2 torsoTimer=144 weaponDelay=176
+e 0 pos.trTime=641c
+c 25651 0 3 4 0 0 0 0 0
+c 25665 0 3 4 0 0 0 0 0
+c 25676 0 3 4 0 0 0 0 0
+p 6
+c 25691 0 3 4 0 0 0 0 0
+s 349 25700 commandTime=644c weaponTime=27d torsoTimer=11f weaponDelay=151
+e 0 pos.trTime=6448
+c 25705 0 3 4 0 0 0 0 0
+c 25717 0 3 4 0 0 0 0 0
+p 6
+c 25731 0 3 4 0 0 0 0 0
+s 350 25750 commandTime=6475 weaponTime=254 torsoTimer=f6 weaponDelay=128
+e 0 pos.trTime=6470
+c 25745 0 3 4 0 0 0 0 0
+c 25758 0 3 4 0 0 0 0 0
+p 6
+c 25771 0 3 4 0 0 0 0 0
+c 25784 0 3 4 0 0 0 0 0
+s 351 25800 commandTime=649e weaponTime=22b torsoTimer=cd weaponDelay=ff
+e 0 pos.trTime=64b7
+c 25797 0 3 4 0 0 0 0 0
+p 6
+c 25811 0 3 4 0 0 0 0 0
+c 25825 0 3 4 0 0 0 0 0
+c 25838 0 3 4 0 0 0 0 0
+p 6
+s 352 25850 commandTime=64ee weaponTime=1db torsoTimer=7d weaponDelay=af
+e 0 pos.trTime=64de
+c 25851 0 3 4 0 0 0 0 0
+c 25863 0 3 4 0 0 0 0 0
+c 25877 0 3 4 0 0 0 0 0
+p 6
+c 25890 0 3 4 0 0 0 0 0
+s 353 25900 commandTime=6515 weaponTime=1b4 torsoTimer=56 weaponDelay=88
+e 0 pos.trTime=650b
+c 25903 0 3 4 0 0 0 0 0
+c 25915 0 3 4 0 0 0 0 0
+p 6
+c 25928 0 3 4 0 0 0 0 0
+c 25941 0 3 4 0 0 0 0 0
+s 354 25950 commandTime=653b weaponTime=18e torsoTimer=30 torsoAnim=200 weaponDelay=62
+e 0 pos.trTime=6556
+c 25954 0 3 4 0 0 0 0 0
+p 6
+c 25970 0 3 4 0 0 0 0 0
+c 25982 0 3 4 0 0 0 0 0
+s 355 26000 commandTime=6562 weaponTime=167 torsoTimer=9 weaponDelay=3b
+e 0 pos.trTime=6578
+c 25997 0 3 4 0 0 0 0 0
+p 6
+c 26009 0 3 4 0 0 0 0 0
+c 26021 0 3 4 0 0 0 0 0
+c 26032 0 3 4 0 0 0 0 0
+p 6
+c 26045 0 3 4 0 0 0 0 0
+s 356 26050 commandTime=65b0 eventSequence=e weaponTime=121 pm_flags=800000 events[1]=a4 torsoTimer=0 weaponstate=b weaponDelay=0
+e 0 pos.trTime=659d pos.trDelta[0]=42c2f465 pos.trDelta[1]=4226b2bd pos.trDelta[2]=c23c5b78
+e 76 pos.trBase[1]=449f0000 pos.trBase[0]=c1d80000 pos.trBase[2]=42380000 eType=b7 eventParm=15 weapon=3
+c 26057 0 3 4 0 0 0 0 0
+c 26071 0 3 4 0 0 0 0 0
+p 6
+c 26083 0 3 4 0 0 0 0 0
+c 26097 0 3 4 0 0 0 0 0
+s 357 26100 commandTime=65d7 weaponTime=fa
+e 0 pos.trTime=65ea pos.trBase[1]=449ec000 pos.trBase[0]=c1200000 pos.trDelta[0]=42c60000 pos.trDelta[1]=421c0000 pos.trDelta[2]=c0400000 legsAnim=1d
+c 26109 0 3 4 0 0 0 0 0
+p 6
+c 26123 0 3 4 0 0 0 0 0
+c 26137 0 3 4 0 0 0 0 0
+s 358 26150 commandTime=65fd weaponTime=d4
+e 0 pos.trTime=660c pos.trBase[1]=449ee000 pos.trBase[0]=c0e00000 pos.trDelta[0]=42a00000 pos.trDelta[1]=42000000 pos.trDelta[2]=c0000000
+c 26148 0 3 4 0 0 0 0 0
+p 6
+c 26159 0 3 4 0 0 0 0 0
+c 26172 0 3 4 0 0 0 0 0
+c 26184 0 3 4 0 0 0 0 0
+p 6
+c 26195 0 3 4 0 0 0 0 0
+s 359 26200 commandTime=6648 weaponTime=89
+e 0 pos.trTime=6656 pos.trBase[1]=449f2000 pos.trBase[0]=c0400000 pos.trDelta[0]=42280000 pos.trDelta[1]=41880000 pos.trDelta[2]=bf800000
+c 26207 0 3 4 0 0 0 0 0
+c 26220 0 3 4 0 0 0 0 0
+p 6
+c 26233 0 3 4 0 0 0 0 0
+s 360 26250 commandTime=666c weaponTime=65
+e 0 pos.trTime=667a pos.trBase[0]=c0000000 pos.trDelta[0]=41b80000 pos.trDelta[1]=41100000
+c 26247 0 3 4 0 0 0 0 0
+c 26259 0 3 4 0 0 0 0 0
+p 6
+c 26273 0 3 4 0 0 0 0 0
+c 26288 0 3 4 0 0 0 0 0
+s 361 26300 commandTime=6693 weaponTime=3e
+e 0 pos.trTime=66a0 pos.trBase[1]=449f4000 pos.trDelta[0]=40400000 pos.trDelta[1]=3f800000 pos.trDelta[2]=0 torsoAnim=2f9
+c 26299 0 3 4 0 0 0 0 0
+p 6
+c 26312 0 3 4 0 0 0 0 0
+c 26324 0 3 4 0 0 0 0 0
+c 26336 0 3 4 0 0 0 0 0
+p 6
+s 362 26350 commandTime=66e0 aimSpreadScale=4377599a weaponTime=0 weapAnim=0 weaponstate=0
+e 0 pos.trTime=66c9 pos.trDelta[0]=0 pos.trDelta[1]=0 pos.trDelta[2]=80000000
+e- 76
+c 26348 0 3 4 0 0 0 0 0
+c 26359 0 3 4 0 0 0 0 0
+c 26373 0 3 4 0 0 0 0 0
+p 6
+c 26386 0 3 4 0 0 0 0 0
+s 363 26400 commandTime=6705 aimSpreadScale=435fc334
+e 0 pos.trTime=6716
+c 26400 0 3 4 0 0 0 0 0
+c 26412 0 3 4 0 0 0 0 0
+p 6
+c 26425 0 3 4 0 0 0 0 0
+c 26437 0 3 4 0 0 0 0 0
+s 364 26450 commandTime=672c aimSpreadScale=4346e667
+e 0 pos.trTime=673c
+c 26448 0 3 4 0 0 0 0 0
+p 6
+c 26462 0 3 4 0 0 0 0 0
+c 26475 0 3 4 0 0 0 0 0
+c 26488 0 3 4 0 0 0 0 0
+p 6
+s 365 26500 commandTime=6778 aimSpreadScale=43167333
+e 0 pos.trTime=6762
+c 26500 0 3 4 0 0 0 0 0
+c 26515 0 3 4 0 0 0 0 0
+c 26528 0 3 4 0 0 0 0 0
+p 6
+c 26540 0 3 4 0 0 0 0 0
+s 366 26550 commandTime=67a0 aimSpreadScale=42f9e667
+e 0 pos.trTime=67af legsAnim=28a torsoAnim=0
+c 26551 0 3 4 0 0 0 0 0
+c 26563 0 3 4 0 0 0 0 0
+p 6
+c 26577 0 3 4 0 0 0 0 0
+c 26590 0 3 4 0 0 0 0 0
+s 367 26600 commandTime=67c3 aimSpreadScale=42cd4667
+e 0 pos.trTime=67d5
+c 26601 0 3 4 0 0 0 0 0
+p 6
+c 26613 0 3 4 0 0 0 0 0
+c 26625 0 3 4 0 0 0 0 0
+c 26637 0 3 4 0 0 0 0 0
+p 6
+s 368 26650 commandTime=680d aimSpreadScale=425dd99a
+e 0 pos.trTime=67fc
+c 26651 0 3 4 0 0 0 0 0
+c 26663 0 3 4 0 0 0 0 0
+c 26676 0 3 4 0 0 0 0 0
+p 6
+c 26689 0 3 4 0 0 0 0 0
+s 369 26700 commandTime=6834 aimSpreadScale=41f4cccd
+e 0 pos.trTime=684b
+c 26700 0 3 4 0 0 0 0 0
+c 26713 0 3 4 0 0 0 0 0
+p 6
+c 26727 0 3 4 0 0 0 0 0
+c 26739 0 3 4 0 0 0 0 0
+s 370 26750 commandTime=6859 aimSpreadScale=40e06665
+e 0 pos.trTime=6872
+c 26754 0 3 4 0 0 0 0 0
+p 6
+c 26766 0 3 4 0 0 0 0 0
+c 26781 0 3 4 0 0 0 0 0
+c 26795 0 3 4 0 0 0 0 0
+p 6
+s 371 26800 commandTime=68ab aimSpreadScale=0
+e 0 pos.trTime=689d
+c 26808 0 3 4 0 0 0 0 0
+c 26822 0 3 4 0 0 0 0 0
+c 26834 0 3 4 0 0 0 0 0
+p 6
+s 372 26850 commandTime=68d2
+e 0 pos.trTime=68c7
+c 26845 0 3 4 0 0 0 0 0
+c 26856 0 3 4 0 0 0 0 0
+c 26869 0 3 4 0 0 0 0 0
+p 6
+c 26883 0 3 4 0 0 0 0 0
+s 373 26900 commandTime=68f5
+e 0 pos.trTime=68ef
+c 26896 0 3 4 0 0 0 0 0
+c 26909 0 3 4 0 0 0 0 0
+p 6
+c 26921 0 3 4 0 0 0 0 0
+c 26933 0 3 4 0 0 0 0 0
+c 26946 0 3 4 0 0 0 0 0
+p 6
+s 374 26950 commandTime=6942
+e 0 pos.trTime=6941
+c 26960 0 3 4 0 0 0 0 0
+c 26971 0 3 4 0 0 0 0 0
+c 26983 0 3 4 0 0 0 0 0
+p 6
+s 375 27000 commandTime=6967
+e 0 pos.trTime=6965
+c 26997 0 3 4 0 0 0 0 0
+c 27009 0 3 4 0 0 0 127 0
+c 27022 0 3 4 0 0 0 127 0
+p 6
+c 27037 0 3 4 0 0 0 127 0
+s 376 27050 commandTime=698e origin[1]=449debad origin[0]=c2411726 origin[2]=c03e84cf velocity[1]=41600000 velocity[0]=42040000 velocity[2]=bf800000 legsAnim=88
+e 0 pos.trTime=698f
+c 27048 0 3 4 0 0 0 127 0
+c 27063 0 3 4 0 0 0 127 0
+p 6
+c 27078 0 3 4 0 0 0 127 0
+c 27090 0 3 4 0 0 0 127 0
+s 377 27100 commandTime=69b7 origin[1]=449e0ea3 origin[0]=c236dc58 bobCycle=4 origin[2]=c042ad94 velocity[1]=42040000 velocity[0]=429a0000 velocity[2]=c0000000
+e 0 pos.trTime=69b7
+c 27102 0 3 4 0 0 0 127 0
+p 6
+c 27115 0 3 4 0 0 0 127 0
+c 27127 0 3 4 0 0 0 127 0
+c 27141 0 3 4 0 0 0 127 0
+p 6
+s 378 27150 commandTime=6a05 origin[1]=449e914f origin[0]=c210979b bobCycle=14 origin[2]=c054f9ac velocity[1]=42820000 velocity[0]=43170000 velocity[2]=c0c00000
+e 0 pos.trTime=6a02
+c 27153 0 3 4 0 0 0 127 0
+c 27165 0 3 4 0 0 0 127 0
+c 27178 0 3 4 0 0 0 127 0
+p 6
+c 27189 0 3 4 0 0 0 127 0
+s 379 27200 commandTime=6a2a origin[1]=449ede6b origin[0]=c20007c1 bobCycle=1b origin[2]=c05ddd70 velocity[1]=42500000 velocity[0]=c0e00000 movementDir=32 velocity[2]=40000000
+e 0 pos.trTime=6a28
+c 27201 0 3 4 0 0 0 127 0
+c 27213 0 3 4 0 0 0 127 0
+p 6
+c 27224 0 3 4 0 0 0 127 0
+c 27235 0 3 4 0 0 0 127 0
+s 380 27250 commandTime=6a4d origin[1]=449f18a2 origin[0]=c2009040 bobCycle=1e origin[2]=c0594cca velocity[0]=c0400000 movementDir=45
+e 0 pos.trTime=6a6f
+c 27249 0 3 4 0 0 0 127 0
+p 6
+c 27262 0 3 4 0 0 0 127 0
+c 27274 0 3 4 0 0 0 127 0
+c 27288 0 3 4 0 0 0 127 0
+p 6
+s 381 27300 commandTime=6a98 origin[1]=449fa28b origin[0]=c2001f07 bobCycle=24 origin[2]=c04ff5fd velocity[1]=427c0000 velocity[0]=40800000 movementDir=3e
+e 0 pos.trTime=6a95
+c 27301 4 3 4 0 0 0 0 0
+c 27312 4 3 4 0 0 0 0 0
+c 27325 4 3 4 0 0 0 0 0
+p 6
+c 27339 4 3 4 0 0 0 0 0
+s 382 27350 commandTime=6abd origin[1]=449fdd36 origin[0]=c1ff34b7 bobCycle=25 origin[2]=c04c45c5 velocity[1]=422c0000 velocity[0]=40400000 movementDir=0 velocity[2]=3f800000 eventSequence=f aimSpreadScale=437f0000 weaponTime=308 pm_flags=802000 weapAnim=208 torsoTimer=146 torsoAnim=108 weaponstate=a weaponDelay=1dc
+e 0 pos.trTime=6abe
+c 27353 4 3 4 0 0 0 0 0
+c 27365 4 3 4 0 0 0 0 0
+p 6
+c 27379 4 3 4 0 0 0 0 0
+c 27391 4 3 4 0 0 0 0 0
+s 383 27400 commandTime=6ae5 origin[1]=44a0011c origin[0]=c1fe9bb2 origin[2]=c04a000d velocity[1]=41a00000 velocity[0]=40000000 weaponTime=2e0 torsoTimer=11e weaponDelay=1b4
+e 0 pos.trTime=6ae3
+c 27405 0 3 4 0 0 0 0 0
+p 6
+c 27417 0 3 4 0 0 0 0 0
+c 27431 0 3 4 0 0 0 0 0
+s 384 27450 commandTime=6b0d origin[1]=44a008b9 origin[0]=c1fe6d5d bobCycle=0 origin[2]=c0498ab5 velocity[1]=0 velocity[0]=0 velocity[2]=0 legsAnim=28a weaponTime=2b8 torsoTimer=f6 weaponDelay=18c
+e 0 pos.trTime=6b2e
+c 27447 0 3 4 0 0 0 0 0
+p 6
+c 27461 0 3 4 0 0 0 0 0
+c 27475 0 3 4 0 0 0 0 0
+c 27491 0 3 4 0 0 0 0 0
+p 6
+s 385 27500 commandTime=6b63 weaponTime=262 torsoTimer=a0 weaponDelay=136
+e 0 pos.trTime=6b53
+c 27504 0 3 4 0 0 0 0 0
+c 27517 0 3 4 0 0 0 0 0
+c 27531 0 3 4 0 0 0 0 0
+p 6
+s 386 27550 commandTime=6b8b weaponTime=23a torsoTimer=78 weaponDelay=10e
+e 0 pos.trTime=6b7b
+c 27545 0 3 4 0 0 0 0 0
+c 27559 0 3 4 0 0 0 0 0
+c 27573 0 3 4 0 0 0 0 0
+p 6
+c 27585 0 3 4 0 0 0 0 0
+s 387 27600 commandTime=6bb5 weaponTime=210 torsoTimer=4e weaponDelay=e4
+e 0 pos.trTime=6bc4
+c 27596 0 3 4 0 0 0 0 0
+c 27610 0 3 4 0 0 0 0 0
+p 6
+c 27622 0 3 4 0 0 0 0 0
+c 27635 0 3 4 0 0 0 0 0
+s 388 27650 commandTime=6bda weaponTime=1eb torsoTimer=29 torsoAnim=200 weaponDelay=bf
+e 0 pos.trTime=6be8
+c 27651 0 3 4 0 0 0 0 0
+p 6
+c 27662 0 3 4 0 0 0 0 0
+c 27678 0 3 4 0 0 0 0 0
+c 27689 0 3 4 0 0 0 0 0
+p 6
+s 389 27700 commandTime=6c29 weaponTime=19c torsoTimer=0 weaponDelay=70
+e 0 pos.trTime=6c0f
+c 27701 0 3 4 0 0 0 0 0
+c 27713 0 3 4 0 0 0 0 0
+c 27726 0 3 4 0 0 0 0 0
+p 6
+c 27738 0 3 4 0 0 0 0 0
+s 390 27750 commandTime=6c4e weaponTime=177 weaponDelay=4b
+e 0 pos.trTime=6c5a
+c 27750 0 3 4 0 0 0 0 0
+c 27763 0 3 4 0 0 0 0 0
+p 6
+c 27777 0 3 4 0 0 0 0 0
+c 27788 0 3 4 0 0 0 0 0
+s 391 27800 commandTime=6c73 weaponTime=152 weaponDelay=26
+e 0 pos.trTime=6c80
+c 27803 0 3 4 0 0 0 0 0
+p 6
+c 27815 0 3 4 0 0 0 0 0
+c 27829 0 3 4 0 0 0 0 0
+c 27842 0 3 4 0 0 0 0 0
+p 6
+s 392 27850 commandTime=6cc2 eventSequence=10 weaponTime=105 pm_flags=800000 weaponstate=b weaponDelay=0
+e 0 pos.trTime=6ca3
+c 27853 0 3 4 0 0 0 0 0
+c 27864 0 3 4 0 0 0 0 0
+c 27879 0 3 4 0 0 0 0 0
+p 6
+c 27890 0 3 4 0 0 0 0 0
+s 393 27900 commandTime=6ce7 weaponTime=e0
+e 0 pos.trTime=6cf0
+c 27903 0 3 4 0 0 0 0 0
+c 27918 0 3 4 0 0 0 0 0
+p 6
+c 27931 0 3 4 0 0 0 0 0
+c 27942 0 3 4 0 0 0 0 0
+s 394 27950 commandTime=6d0e weaponTime=b9
+e 0 pos.trTime=6d15
+c 27954 0 3 4 0 0 0 0 0
+p 6
+c 27967 0 3 4 0 0 0 0 0
+c 27979 0 3 4 0 0 0 0 0
+c 27995 0 3 4 0 0 0 0 0
+p 6
+s 395 28000 commandTime=6d5b weaponTime=6c
+e 0 pos.trTime=6d3c
+c 28009 0 3 4 0 0 0 0 0
+c 28022 0 3 4 0 0 0 0 0
+c 28037 0 3 4 0 0 0 0 0
+p 6
+s 396 28050 commandTime=6d85 weaponTime=42
+e 0 pos.trTime=6d89
+c 28049 0 3 4 0 0 0 0 0
+c 28062 0 3 4 0 0 0 0 0
+c 28074 0 3 4 0 0 0 0 0
+p 6
+c 28086 0 3 4 0 0 0 0 0
+s 397 28100 commandTime=6daa weaponTime=1d
+e 0 pos.trTime=6db1
+c 28099 0 3 4 0 0 0 0 0
+c 28114 0 3 4 0 0 0 0 0
+p 6
+c 28127 0 3 4 0 0 0 0 0
+c 28141 0 3 4 0 0 0 0 0
+s 398 28150 commandTime=6dd2 weaponTime=0 weapAnim=0 weaponstate=0
+e 0 pos.trTime=6dd9
+c 28154 0 3 4 0 0 0 0 0
+p 6
+c 28166 0 3 4 0 0 0 0 0
+c 28178 0 3 4 0 0 0 0 0
+c 28192 0 3 4 0 0 0 0 0
+p 6
+s 399 28200 commandTime=6e20 aimSpreadScale=434d4666
+e 0 pos.trTime=6e27
+c 28208 0 3 4 0 0 0 0 0
+c 28219 0 3 4 0 0 0 0 0
+c 28232 0 3 4 0 0 0 0 0
+p 6
+s 400 28250 commandTime=6e48 aimSpreadScale=4333c666
+e 0 pos.trTime=6e4e
+c 28247 0 3 4 0 0 0 0 0
+c 28260 0 3 4 0 0 0 0 0
+c 28273 0 3 4 0 0 0 0 0
+p 6
+c 28284 0 3 4 0 0 0 0 0
+s 401 28300 commandTime=6e71 aimSpreadScale=4319a332
+e 0 pos.trTime=6e71
+c 28297 0 3 4 0 0 0 0 0
+c 28310 0 3 4 0 0 0 0 0
+p 6
+c 28325 0 3 4 0 0 0 0 0
+c 28336 0 3 4 0 0 0 0 0
+s 402 28350 commandTime=6e96 aimSpreadScale=43020ccb
+e 0 pos.trTime=6e97
+c 28349 0 3 4 0 0 0 0 0
+p 6
+c 28363 0 3 4 0 0 0 0 0
+c 28377 0 3 4 0 0 0 0 0
+c 28391 0 3 4 0 0 0 0 0
+p 6
+s 403 28400 commandTime=6ee7 aimSpreadScale=429cd32f
+e 0 pos.trTime=6ee6
+c 28404 0 3 4 0 0 0 0 0
+c 28416 0 3 4 0 0 0 0 0
+c 28429 0 3 4 0 0 0 0 0
+p 6
+c 28441 0 3 4 0 0 0 0 0
+s 404 28450 commandTime=6f0d aimSpreadScale=4258bff8
+e 0 pos.trTime=6f0f
+c 28453 0 3 4 0 0 0 0 0
+c 28467 0 3 4 0 0 0 0 0
+p 6
+c 28478 0 3 4 0 0 0 0 0
+c 28492 0 3 4 0 0 0 0 0
+s 405 28500 commandTime=6f33 aimSpreadScale=41efb322
+e 0 pos.trTime=6f36
+c 28504 0 3 4 0 0 0 0 0
+p 6
+c 28518 0 3 4 0 0 0 0 0
+c 28531 0 3 4 0 0 0 0 0
+c 28543 0 3 4 0 0 0 0 0
+p 6
+s 406 28550 commandTime=6f7f aimSpreadScale=0
+e 0 pos.trTime=6f84
+c 28556 0 3 4 0 0 0 0 0
+c 28568 0 3 4 0 0 0 0 0
+c 28581 0 3 4 0 0 0 0 0
+p 6
+s 407 28600 commandTime=6fa5
+e 0 pos.trTime=6fa9
+c 28595 0 3 4 0 0 0 0 0
+c 28607 0 3 4 0 0 0 0 0
+c 28618 0 3 4 0 0 0 0 0
+p 6
+c 28630 0 3 4 0 0 0 0 0
+c 28642 0 3 4 0 0 0 0 0
+s 408 28650 commandTime=6fca
+e 0 pos.trTime=6fd0
+c 28656 0 3 4 0 0 0 0 0
+p 6
+c 28669 0 3 4 0 0 0 0 0
+c 28682 0 3 4 0 0 0 0 0
+c 28693 0 3 4 0 0 0 0 0
+p 6
+s 409 28700 commandTime=7015
+e 0 pos.trTime=7019
+c 28706 0 3 4 0 0 0 0 0
+c 28719 0 3 4 0 0 0 0 0
+c 28732 0 3 4 0 0 0 0 0
+p 6
+s 410 28750 commandTime=703c
+e 0 pos.trTime=703f
+c 28747 0 3 4 0 0 0 0 0
+c 28761 0 3 4 0 0 0 0 0
+c 28774 0 3 4 0 0 0 0 0
+p 6
+c 28788 0 3 4 0 0 0 0 0
+s 411 28800 commandTime=7066
+e 0 pos.trTime=7064
+c 28803 4 3 4 0 2730 0 0 0
+c 28814 4 3 4 0 2730 0 0 0
+p 6
+c 28827 4 3 4 0 2730 0 0 0
+c 28839 4 3 4 0 2730 0 0 0
+s 412 28850 commandTime=708e viewangles[1]=42189400 eventSequence=11 aimSpreadScale=437f0000 weaponTime=315 pm_flags=802000 weapAnim=208 torsoTimer=153 torsoAnim=108 weaponstate=a weaponDelay=1e9
+e 0 pos.trTime=708d
+c 28853 4 3 4 0 2730 0 0 0
+p 6
+c 28867 4 3 4 0 2730 0 0 0
+c 28878 4 3 4 0 2730 0 0 0
+c 28889 4 3 4 0 2730 0 0 0
+p 6
+s 413 28900 commandTime=70d9 weaponTime=2ca torsoTimer=108 weaponDelay=19e
+e 0 pos.trTime=70db
+c 28904 0 3 4 0 2730 0 0 0
+c 28917 0 3 4 0 2730 0 0 0
+c 28929 0 3 4 0 2730 0 0 0
+p 6
+c 28941 0 3 4 0 2730 0 0 0
+s 414 28950 commandTime=7101 weaponTime=2a2 torsoTimer=e0 weaponDelay=176
+e 0 pos.trTime=7104
+c 28955 0 3 4 0 2730 0 0 0
+c 28967 0 3 4 0 2730 0 0 0
+p 6
+c 28978 0 3 4 0 2730 0 0 0
+c 28991 0 3 4 0 2730 0 0 0
+s 415 29000 commandTime=7127 weaponTime=27c torsoTimer=ba weaponDelay=150
+e 0 pos.trTime=712d
+c 29003 0 3 4 0 2730 0 0 0
+p 6
+c 29014 0 3 4 0 2730 0 0 0
+c 29026 0 3 4 0 2730 0 0 0
+c 29038 0 3 4 0 2730 0 0 0
+p 6
+s 416 29050 commandTime=716e weaponTime=235 torsoTimer=73 weaponDelay=109
+e 0 pos.trTime=7152
+c 29051 0 3 4 0 2730 0 0 0
+c 29065 0 3 4 0 2730 0 0 0
+c 29077 0 3 4 0 2730 0 0 0
+p 6
+c 29089 0 3 4 0 2730 0 0 0
+s 417 29100 commandTime=7195 weaponTime=20e torsoTimer=4c weaponDelay=e2
+e 0 pos.trTime=71a1
+c 29104 0 3 4 0 2730 0 0 0
+c 29115 0 3 4 0 2730 0 0 0
+p 6
+c 29128 0 3 4 0 2730 0 0 0
+c 29141 0 3 4 0 2730 0 0 0
+s 418 29150 commandTime=71bb weaponTime=1e8 torsoTimer=26 torsoAnim=200 weaponDelay=bc
+e 0 pos.trTime=71c4
+c 29153 0 3 4 0 2730 0 0 0
+p 6
+c 29165 0 3 4 0 2730 0 0 0
+c 29178 0 3 4 0 2730 0 0 0
+c 29191 0 3 4 0 2730 0 0 0
+p 6
+s 419 29200 commandTime=7207 weaponTime=19c torsoTimer=0 weaponDelay=70
+e 0 pos.trTime=71ec
+c 29205 0 3 4 0 2730 0 0 0
+c 29216 0 3 4 0 2730 0 0 0
+c 29230 0 3 4 0 2730 0 0 0
+p 6
+s 420 29250 commandTime=722e weaponTime=175 weaponDelay=49
+e 0 pos.trTime=723a
+c 29244 0 3 4 0 2730 0 0 0
+c 29256 0 3 4 0 2730 0 0 0
+c 29267 0 3 4 0 2730 0 0 0
+p 6
+c 29280 0 3 4 0 2730 0 0 0
+c 29292 0 3 4 0 2730 0 0 0
+s 421 29300 commandTime=7253 weaponTime=150 weaponDelay=24
+e 0 pos.trTime=7261
+c 29304 0 3 4 0 2730 0 0 0
+p 6
+c 29316 0 3 4 0 2730 0 0 0
+c 29328 0 3 4 0 2730 0 0 0
+c 29342 0 3 4 0 2730 0 0 0
+p 6
+s 422 29350 commandTime=729e eventSequence=12 weaponTime=106 pm_flags=800000 weaponstate=b weaponDelay=0
+e 0 pos.trTime=7286
+c 29354 0 3 4 0 2730 0 0 0
+c 29366 0 3 4 0 2730 0 0 0
+c 29377 0 3 4 0 2730 0 0 0
+p 6
+c 29390 0 3 4 0 2730 0 0 0
+s 423 29400 commandTime=72c1 weaponTime=e3
+e 0 pos.trTime=72d5
+c 29402 0 3 4 0 2730 0 0 0
+c 29414 0 3 4 0 2730 0 0 0
+p 6
+c 29429 0 3 4 0 2730 0 0 0
+c 29440 0 3 4 0 2730 0 0 0
+s 424 29450 commandTime=72e6 weaponTime=be
+e 0 pos.trTime=72f9
+c 29452 0 3 4 0 2730 0 0 0
+p 6
+c 29464 0 3 4 0 2730 0 0 0
+c 29476 0 3 4 0 2730 0 0 0
+c 29488 0 3 4 0 2730 0 0 0
+p 6
+s 425 29500 commandTime=7330 weaponTime=74
+e 0 pos.trTime=7320
+c 29503 0 3 4 0 2730 0 0 0
+c 29514 0 3 4 0 2730 0 0 0
+c 29527 0 3 4 0 2730 0 0 0
+p 6
+c 29540 0 3 4 0 2730 0 0 0
+s 426 29550 commandTime=7357 weaponTime=4d
+e 0 pos.trTime=736b
+c 29553 0 3 4 0 2730 0 0 0
+c 29565 0 3 4 0 2730 0 0 0
+p 6
+c 29579 0 3 4 0 2730 0 0 0
+c 29592 0 3 4 0 2730 0 0 0
+s 427 29600 commandTime=737d weaponTime=27
+e 0 pos.trTime=7392
+c 29605 0 3 4 0 2730 0 0 0
+p 6
+c 29617 0 3 4 0 2730 0 0 0
+c 29629 0 3 4 0 2730 0 0 0
+c 29641 0 3 4 0 2730 0 0 0
+p 6
+s 428 29650 commandTime=73c9 aimSpreadScale=43680cce weaponTime=0 weapAnim=0 weaponstate=0
+e 0 pos.trTime=73b9
+c 29654 0 3 4 0 2730 0 0 0
+c 29666 0 3 4 0 2730 0 0 0
+c 29679 0 3 4 0 2730 0 0 0
+p 6
+c 29693 0 3 4 0 2730 0 0 0
+s 429 29700 commandTime=73ef aimSpreadScale=434fd334
+e 0 pos.trTime=7405
+c 29705 0 3 4 0 2730 0 0 0
+c 29718 0 3 4 0 2730 0 0 0
+p 6
+c 29730 0 3 4 0 2730 0 0 0
+c 29742 0 3 4 0 2730 0 0 0
+s 430 29750 commandTime=7416 aimSpreadScale=4336f667
+e 0 pos.trTime=742a
+c 29754 0 3 4 0 2730 0 0 0
+p 6
+c 29768 0 3 4 0 2730 0 0 0
+c 29782 0 3 4 0 2730 0 0 0
+s 431 29800 commandTime=743a aimSpreadScale=43200335
+e 0 pos.trTime=744f
+c 29795 0 3 4 0 2730 0 0 0
+p 6
+c 29807 0 3 4 0 2730 0 0 0
+c 29818 0 3 4 0 2730 0 0 0
+c 29831 0 3 4 0 2730 0 0 0
+p 6
+c 29842 0 3 4 0 2730 0 0 0
+s 432 29850 commandTime=7487 aimSpreadScale=42ddd99c
+e 0 pos.trTime=7473
+c 29855 0 3 4 0 2730 0 0 0
+c 29867 0 3 4 0 2730 0 0 0
+p 6
+c 29880 0 3 4 0 2730 0 0 0
+c 29892 0 3 4 0 2730 0 0 0
+s 433 29900 commandTime=74ab aimSpreadScale=42aff336
+e 0 pos.trTime=74c2
+c 29904 0 3 4 0 2730 0 0 0
+p 6
+c 29917 0 3 4 0 2730 0 0 0
+c 29930 0 3 4 0 2730 0 0 0
+c 29942 0 3 4 0 2730 0 0 0
+p 6
+s 434 29950 commandTime=74f6 aimSpreadScale=4220a66c
+e 0 pos.trTime=74eb
+c 29955 0 3 4 0 2730 0 0 0
+c 29969 0 3 4 0 2730 0 0 0
+c 29983 0 3 4 0 2730 0 0 0
+p 6
+s 435 30000 commandTime=751f aimSpreadScale=4160667d
+e 0 pos.trTime=7513
+c 29996 0 3 4 0 2730 0 0 0
+c 30008 0 3 4 0 2730 0 0 0
+c 30019 0 3 4 0 2730 0 0 0
+p 6
+c 30033 0 3 4 0 2730 0 0 0
+c 30045 0 3 4 0 2730 0 0 0
+s 436 30050 commandTime=7543 aimSpreadScale=0
+e 0 pos.trTime=753a
+c 30056 0 3 4 0 2730 0 0 0
+p 6
+c 30070 0 3 4 0 2730 0 0 0
+c 30085 0 3 4 0 2730 0 0 0
+s 437 30100 commandTime=7568
+e 0 pos.trTime=7586
+c 30098 0 3 4 0 2730 0 0 0
+p 6
+c 30113 0 3 4 0 2730 0 0 0
+c 30126 0 3 4 0 2730 0 0 0
+c 30138 0 3 4 0 2730 0 0 0
+p 6
+s 438 30150 commandTime=75ba
+e 0 pos.trTime=75aa
+c 30151 0 3 4 0 2730 0 0 0
+c 30164 0 3 4 0 2730 0 0 0
+c 30176 0 3 4 0 2730 0 0 0
+p 6
+c 30190 0 3 4 0 2730 0 0 0
+s 439 30200 commandTime=75e0
+e 0 pos.trTime=75ce
+c 30202 0 3 4 0 2730 0 0 0
+c 30215 0 3 4 0 2730 0 0 0
+p 6
+c 30230 0 3 4 0 2730 0 0 0
+s 440 30250 commandTime=7607
+e 0 pos.trTime=7620
+c 30246 0 3 4 0 2730 0 0 0
+c 30258 0 3 4 0 2730 0 0 0
+p 6
+c 30270 0 3 4 0 2730 0 0 0
+c 30284 0 3 4 0 2730 0 0 0
+s 441 30300 commandTime=7632
+e 0 pos.trTime=7647
+c 30299 0 3 4 0 2730 0 0 0
+p 6
+c 30310 4 3 4 0 5461 0 0 0
+c 30325 4 3 4 0 5461 0 0 0
+c 30336 4 3 4 0 5461 0 0 0
+p 6
+s 442 30350 commandTime=7680 viewangles[1]=425495e0 eventSequence=13 aimSpreadScale=437f0000 weaponTime=306 pm_flags=802000 weapAnim=208 torsoTimer=144 torsoAnim=10a weaponstate=a weaponDelay=1da
+e 0 pos.trTime=766d
+c 30349 4 3 4 0 5461 0 0 0
+c 30360 4 3 4 0 5461 0 0 0
+c 30373 4 3 4 0 5461 0 0 0
+p 6
+c 30386 4 3 4 0 5461 0 0 0
+s 443 30400 commandTime=76a5 weaponTime=2e1 torsoTimer=11f weaponDelay=1b5
+e 0 pos.trTime=76ba
+c 30397 4 3 4 0 5461 0 0 0
+c 30409 0 3 4 0 5461 0 0 0
+p 6
+c 30421 0 3 4 0 5461 0 0 0
+c 30434 0 3 4 0 5461 0 0 0
+s 444 30450 commandTime=76c9 weaponTime=2bd torsoTimer=fb weaponDelay=191
+e 0 pos.trTime=76e4
+c 30451 0 3 4 0 5461 0 0 0
+p 6
+c 30462 0 3 4 0 5461 0 0 0
+c 30475 0 3 4 0 5461 0 0 0
+c 30489 0 3 4 0 5461 0 0 0
+p 6
+s 445 30500 commandTime=7719 weaponTime=26d torsoTimer=ab weaponDelay=141
+e 0 pos.trTime=770b
+c 30503 0 3 4 0 5461 0 0 0
+c 30517 0 3 4 0 5461 0 0 0
+c 30530 0 3 4 0 5461 0 0 0
+p 6
+c 30542 0 3 4 0 5461 0 0 0
+s 446 30550 commandTime=7742 weaponTime=244 torsoTimer=82 weaponDelay=118
+e 0 pos.trTime=7733
+c 30554 0 3 4 0 5461 0 0 0
+c 30566 0 3 4 0 5461 0 0 0
+p 6
+c 30578 0 3 4 0 5461 0 0 0
+c 30592 0 3 4 0 5461 0 0 0
+s 447 30600 commandTime=7766 weaponTime=220 torsoTimer=5e weaponDelay=f4
+e 0 pos.trTime=7781
+c 30605 0 3 4 0 5461 0 0 0
+p 6
+c 30616 0 3 4 0 5461 0 0 0
+c 30630 0 3 4 0 5461 0 0 0
+c 30641 0 3 4 0 5461 0 0 0
+p 6
+s 448 30650 commandTime=77b1 weaponTime=1d5 torsoTimer=13 torsoAnim=200 weaponDelay=a9
+e 0 pos.trTime=77a6
+c 30655 0 3 4 0 5461 0 0 0
+c 30667 0 3 4 0 5461 0 0 0
+c 30679 0 3 4 0 5461 0 0 0
+p 6
+c 30692 0 3 4 0 5461 0 0 0
+s 449 30700 commandTime=77d7 weaponTime=1af torsoTimer=0 weaponDelay=83
+e 0 pos.trTime=77cd
+c 30703 0 3 4 0 5461 0 0 0
+c 30714 0 3 4 0 5461 0 0 0
+p 6
+c 30727 0 3 4 0 5461 0 0 0
+c 30740 0 3 4 0 5461 0 0 0
+s 450 30750 commandTime=77fa weaponTime=18c weaponDelay=60
+e 0 pos.trTime=781b
+c 30754 0 3 4 0 5461 0 0 0
+p 6
+c 30768 0 3 4 0 5461 0 0 0
+c 30781 0 3 4 0 5461 0 0 0
+c 30793 0 3 4 0 5461 0 0 0
+p 6
+s 451 30800 commandTime=7849 weaponTime=13d weaponDelay=11
+e 0 pos.trTime=7846
+c 30806 0 3 4 0 5461 0 0 0
+c 30820 0 3 4 0 5461 0 0 0
+c 30833 0 3 4 0 5461 0 0 0
+p 6
+s 452 30850 commandTime=7871 eventSequence=14 weaponTime=11f pm_flags=800000 weaponstate=b weaponDelay=0
+e 0 pos.trTime=7868
+c 30848 0 3 4 0 5461 0 0 0
+c 30860 0 3 4 0 5461 0 0 0
+c 30872 0 3 4 0 5461 0 0 0
+p 6
+c 30883 0 3 4 0 5461 0 0 0
+c 30897 0 3 4 0 5461 0 0 0
+s 453 30900 commandTime=7898 weaponTime=f8
+e 0 pos.trTime=788e
+c 30909 0 3 4 0 5461 0 0 0
+p 6
+c 30922 0 3 4 0 5461 0 0 0
+c 30934 0 3 4 0 5461 0 0 0
+s 454 30950 commandTime=78bd weaponTime=d3
+e 0 pos.trTime=78db
+c 30948 0 3 4 0 5461 0 0 0
+p 6
+c 30963 0 3 4 0 5461 0 0 0
+c 30975 0 3 4 0 5461 0 0 0
+c 30987 0 3 4 0 5461 0 0 0
+p 6
+s 455 31000 commandTime=790b weaponTime=85
+e 0 pos.trTime=7901
+c 31000 0 3 4 0 5461 0 0 0
+c 31012 0 3 4 0 5461 0 0 0
+c 31024 0 3 4 0 5461 0 0 0
+p 6
+c 31036 0 3 4 0 5461 0 0 0
+s 456 31050 commandTime=7930 weaponTime=60
+e 0 pos.trTime=7929
+c 31048 0 3 4 0 5461 0 0 0
+c 31060 0 3 4 0 5461 0 0 0
+p 6
+c 31073 0 3 4 0 5461 0 0 0
+c 31085 0 3 4 0 5461 0 0 0
+s 457 31100 commandTime=7954 weaponTime=3c
+e 0 pos.trTime=7973
+c 31098 0 3 4 0 5461 0 0 0
+p 6
+c 31111 0 3 4 0 5461 0 0 0
+c 31123 0 3 4 0 5461 0 0 0
+c 31137 0 3 4 0 5461 0 0 0
+p 6
+s 458 31150 commandTime=79a1 aimSpreadScale=43761333 weaponTime=0 weapAnim=0 weaponstate=0
+e 0 pos.trTime=7998
+c 31149 0 3 4 0 5461 0 0 0
+c 31162 0 3 4 0 5461 0 0 0
+c 31175 0 3 4 0 5461 0 0 0
+p 6
+c 31188 0 3 4 0 5461 0 0 0
+s 459 31200 commandTime=79c7 aimSpreadScale=435dd999
+e 0 pos.trTime=79bc
+c 31199 0 3 4 0 5461 0 0 0
+c 31212 0 3 4 0 5461 0 0 0
+p 6
+c 31225 0 3 4 0 5461 0 0 0
+c 31236 0 3 4 0 5461 0 0 0
+s 460 31250 commandTime=79ec aimSpreadScale=43464332
+e 0 pos.trTime=7a04
+c 31248 0 3 4 0 5461 0 0 0
+p 6
+c 31261 0 3 4 0 5461 0 0 0
+c 31274 0 3 4 0 5461 0 0 0
+c 31288 0 3 4 0 5461 0 0 0
+p 6
+s 461 31300 commandTime=7a38 aimSpreadScale=4315cffe
+e 0 pos.trTime=7a2b
+c 31300 0 3 4 0 5461 0 0 0
+c 31314 0 3 4 0 5461 0 0 0
+c 31327 0 3 4 0 5461 0 0 0
+p 6
+c 31340 0 3 4 0 5461 0 0 0
+s 462 31350 commandTime=7a5f aimSpreadScale=42f9e663
+e 0 pos.trTime=7a51
+c 31352 0 3 4 0 5461 0 0 0
+c 31367 0 3 4 0 5461 0 0 0
+p 6
+c 31383 0 3 4 0 5461 0 0 0
+c 31396 0 3 4 0 5461 0 0 0
+s 463 31400 commandTime=7a87 aimSpreadScale=42c6e663
+e 0 pos.trTime=7aa1
+c 31408 0 3 4 0 5461 0 0 0
+p 6
+c 31423 0 3 4 0 5461 0 0 0
+c 31434 0 3 4 0 5461 0 0 0
+s 464 31450 commandTime=7ab0 aimSpreadScale=42929ffd
+e 0 pos.trTime=7ac6
+c 31445 0 3 4 0 5461 0 0 0
+p 6
+c 31457 0 3 4 0 5461 0 0 0
+c 31470 0 3 4 0 5461 0 0 0
+c 31482 0 3 4 0 5461 0 0 0
+p 6
+c 31494 0 3 4 0 5461 0 0 0
+s 465 31500 commandTime=7afa aimSpreadScale=41d1198d
+e 0 pos.trTime=7aed
+c 31506 0 3 4 0 5461 0 0 0
+c 31519 0 3 4 0 5461 0 0 0
+p 6
+c 31531 0 3 4 0 5461 0 0 0
+s 466 31550 commandTime=7b1f aimSpreadScale=402332cf
+e 0 pos.trTime=7b37
+c 31547 0 3 4 0 5461 0 0 0
+c 31558 0 3 4 0 5461 0 0 0
+p 6
+c 31570 0 3 4 0 5461 0 0 0
+c 31582 0 3 4 0 5461 0 0 0
+s 467 31600 commandTime=7b46 aimSpreadScale=0
+e 0 pos.trTime=7b5b
+c 31595 0 3 4 0 5461 0 0 0
+p 6
+c 31608 0 3 4 0 5461 0 0 0
+c 31621 0 3 4 0 5461 0 0 0
+c 31633 0 3 4 0 5461 0 0 0
+p 6
+s 468 31650 commandTime=7b91
+e 0 pos.trTime=7b80
+c 31646 0 3 4 0 5461 0 0 0
+c 31658 0 3 4 0 5461 0 0 0
+c 31672 0 3 4 0 5461 0 0 0
+p 6
+c 31684 0 3 4 0 5461 0 0 0
+s 469 31700 commandTime=7bb8
+e 0 pos.trTime=7ba7
+c 31697 0 3 4 0 5461 0 0 0
+c 31711 0 3 4 0 5461 0 0 0
+p 6
+c 31726 0 3 4 0 5461 0 0 0
+c 31737 0 3 4 0 5461 0 0 0
+s 470 31750 commandTime=7bdf
+e 0 pos.trTime=7bfc
+c 31750 0 3 4 0 5461 0 0 0
+p 6
+c 31764 0 3 4 0 5461 0 0 0
+c 31776 0 3 4 0 5461 0 0 0
+c 31790 0 3 4 0 5461 0 0 0
+p 6
+s 471 31800 commandTime=7c2e
+e 0 pos.trTime=7c22
+c 31802 0 3 4 0 0 0 0 0
+c 31815 0 3 4 0 0 0 0 0
+c 31827 0 3 4 0 0 0 0 0
+p 6
+c 31841 0 3 4 0 0 0 0 0
+s 472 31850 commandTime=7c53 viewangles[1]=41b92f80
+e 0 pos.trTime=7c49
+c 31852 0 3 4 0 0 0 0 0
+c 31865 0 3 4 0 0 0 0 0
+p 6
+c 31876 0 3 4 0 0 0 0 0
+c 31888 0 3 4 0 0 0 0 0
+s 473 31900 commandTime=7c79
+e 0 pos.trTime=7c97
+c 31900 0 3 4 0 0 0 0 0
+p 6
+c 31914 0 3 4 0 0 0 0 0
+c 31927 0 3 4 0 0 0 0 0
+c 31941 0 3 4 0 0 0 0 0
+p 6
+s 474 31950 commandTime=7cc5
+e 0 pos.trTime=7cbe
+c 31953 0 3 4 0 0 0 0 0
+c 31967 0 3 4 0 0 0 0 0
+c 31981 0 3 4 0 0 0 0 0
+p 6
+s 475 32000 commandTime=7ced
+e 0 pos.trTime=7ce3
+c 31996 0 3 4 0 0 0 0 0
+c 32011 0 3 4 0 0 0 0 0
+c 32026 0 3 4 0 0 0 0 0
+p 6
+c 32039 0 3 4 0 0 0 0 0
+s 476 32050 commandTime=7d1a
+e 0 pos.trTime=7d0b
+c 32052 0 3 4 0 0 0 0 0
+c 32064 0 3 4 0 0 0 0 0
+p 6
+c 32076 0 3 4 0 0 0 0 0
+c 32091 0 3 4 0 0 0 0 0
+s 477 32100 commandTime=7d40
+e 0 pos.trTime=7d5e
+c 32102 0 3 4 0 0 0 0 0
+p 6
+c 32115 0 3 4 0 0 0 0 0
+c 32128 0 3 4 0 0 0 0 0
+c 32140 0 3 4 0 0 0 0 0
+p 6
+s 478 32150 commandTime=7d8c
+e 0 pos.trTime=7d83
+c 32153 0 3 4 0 0 0 0 0
+c 32166 0 3 4 0 0 0 0 0
+c 32178 0 3 4 0 0 0 0 0
+p 6
+c 32189 0 3 4 0 0 0 0 0
+s 479 32200 commandTime=7db2
+e 0 pos.trTime=7da9
+c 32201 0 3 4 0 0 0 0 0
+c 32213 0 3 4 0 0 0 0 0
+p 6
+c 32225 0 3 4 0 0 0 0 0
+c 32238 0 3 4 0 0 0 0 0
+s 480 32250 commandTime=7dd5
+e 0 pos.trTime=7dd0
+c 32251 0 3 4 0 0 0 0 0
+p 6
+c 32264 0 3 4 0 0 0 0 0
+c 32278 0 3 4 0 0 0 0 0
+c 32292 0 3 4 0 0 0 0 0
+p 6
+s 481 32300 commandTime=7e24
+e 0 pos.trTime=7e24
+c 32303 0 3 4 0 0 0 0 0
+c 32317 0 3 4 0 0 0 0 0
+c 32331 0 3 4 0 0 0 0 0
+p 6
+c 32342 0 3 4 0 0 0 0 0
+s 482 32350 commandTime=7e4b
+e 0 pos.trTime=7e4b
+c 32353 0 3 4 0 0 0 0 0
+c 32364 0 3 4 0 0 0 0 0
+p 6
+c 32377 0 3 4 0 0 0 0 0
+c 32389 0 3 4 0 0 0 0 0
+s 483 32400 commandTime=7e6c
+e 0 pos.trTime=7e70
+c 32403 0 3 4 0 0 0 0 0
+p 6
+c 32414 0 3 4 0 0 0 0 0
+c 32428 0 3 4 0 0 0 0 0
+c 32442 0 3 4 0 0 0 0 0
+p 6
+s 484 32450 commandTime=7eba
+e 0 pos.trTime=7ebd
+c 32454 0 3 4 0 0 0 0 0
+c 32466 0 3 4 0 0 0 0 0
+c 32477 0 3 4 0 0 0 0 0
+p 6
+c 32489 0 3 4 0 0 0 0 0
+s 485 32500 commandTime=7edd
+e 0 pos.trTime=7ee6
+c 32502 0 3 4 0 0 0 0 0
+c 32513 0 3 4 0 0 0 0 0
+p 6
+c 32525 0 3 4 0 0 0 0 0
+c 32538 0 3 4 0 0 0 0 0
+s 486 32550 commandTime=7f01
+e 0 pos.trTime=7f10
+c 32550 0 3 4 0 0 0 0 0
+p 6
+c 32563 0 3 4 0 0 0 0 0
+c 32574 0 3 4 0 0 0 0 0
+c 32586 0 3 4 0 0 0 0 0
+p 6
+s 487 32600 commandTime=7f4a
+e 0 pos.trTime=7f38
+c 32599 0 3 4 0 0 0 0 0
+c 32612 0 3 4 0 0 0 0 0
+c 32626 0 3 4 0 0 0 0 0
+p 6
+c 32641 0 3 4 0 0 0 0 0
+s 488 32650 commandTime=7f72
+e 0 pos.trTime=7f84
+c 32653 0 3 4 0 0 0 0 0
+c 32665 0 3 4 0 0 0 0 0
+p 6
+c 32676 0 3 4 0 0 0 0 0
+c 32688 0 3 4 0 0 0 0 0
+s 489 32700 commandTime=7f99
+e 0 pos.trTime=7fa8
+c 32701 0 3 4 0 0 0 0 0
+p 6
+c 32713 0 3 4 0 0 0 0 0
+c 32724 0 3 4 0 0 0 0 0
+c 32738 0 3 4 0 0 0 0 0
+p 6
+s 490 32750 commandTime=7fe2
+e 0 pos.trTime=7fcd
+c 32752 0 3 4 0 0 0 0 0
+c 32763 0 3 4 0 0 0 0 0
+c 32776 0 3 4 0 0 0 0 0
+p 6
+c 32788 0 3 4 0 0 0 0 0
+s 491 32800 commandTime=8008
+e 0 pos.trTime=8018
+#   0:06 PROBE spawned 0 (-71.5729, 1246.68, -2.4223)
+#   0:08 PROBE spawned 1 (-113, 1229, -0.7424)
+#   0:20 PROBE damage 0 20900 123 0 MOD_MELEE panzerschreck_mp torso_lower 100 (-85.6934, 1244.22, 45.3997) (0.840322, 0.359263, -0.405942)
+#   0:22 PROBE damage 0 22400 121 0 MOD_MELEE panzerschreck_mp torso_lower 1 (-70.7551, 1250.61, 38.1833) (0.840322, 0.359263, -0.405942)
+#   0:24 PROBE damage 0 24200 122 0 MOD_MELEE panzerschreck_mp torso_lower 1 (-47.2248, 1261.07, 48.4278) (0.840322, 0.359263, -0.405942)
+#   0:26 PROBE damage 0 26000 120 0 MOD_MELEE panzerschreck_mp torso_lower 1 (-27.5936, 1272.21, 46.7347) (0.840322, 0.359263, -0.405942)
+# rand 0 80a0081 1804289383
+# srand 0 80936ac 3507042248
+# rand 0 80936b1 94708010
+# rand 0 80936bb 1498310271
+# srand 0 810911e 3507043898
+# rand 0 80a0081 1865625572
+# rand 6100 808d25f 586545851
+# rand 6100 808d269 853479660
+# rand 7850 808d25f 66983872
+# rand 7850 808d269 507299558
+# rand 8500 80d977a 736904797
+# rand 14800 80d977a 926153250
+# rand 14800 80a377a 1528134072
+# rand 14800 80a377a 739028494
+# rand 14800 80a377a 1376941881
+# rand 14800 80a377a 87180464
+# rand 14800 80a377a 672112245
+# rand 14800 80a377a 432769511
+# rand 14950 80d977a 584152868
+# rand 20400 80d977a 173331128
+# rand 20900 811f94e 1084786359
+# rand 21900 80d977a 1369683123
+# rand 22400 811f94e 1696044197
+# rand 23700 80d977a 1645778769
+# rand 24200 811f94e 7428573
+# rand 25500 80d977a 603790843
+# rand 26000 811f94e 2130765006
+# rand 27300 80d977a 359041314
+# rand 28800 80d977a 638920044
+# rand 30300 80d977a 657840877

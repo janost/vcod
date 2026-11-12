@@ -12,7 +12,9 @@
 //! on retail's level clock as `wire_ab`'s do, and each plane's and the
 //! helicopter's wire state is compared with retail's at the same time past
 //! its spawn (docs/research/cod4-gsc.md 3.2). What still differs is
-//! [`GAPS`]. Needs `COD4_DIR`.
+//! [`GAPS`]. `helicopter_collision_and_pose_match_retail` replays a second
+//! capture the same way: the posed tags, a trace through the turned gun
+//! and the move trace's notifies. Needs `COD4_DIR`.
 //!
 //! `HARDPOINT_AB_REPORT=1` prints both runs' rows.
 
@@ -24,9 +26,6 @@ use vcod_cod4::net::delta::EntityState;
 use super::wire_ab::{Probe, Side, retail, side};
 use super::*;
 use crate::game::cod4::vehicle::{ET_HELICOPTER, ET_PLANE};
-
-/// The capture's last snapshot (78300) and a frame.
-const RUN_MS: i32 = 78_350;
 
 /// The run's `srand` seed (`G_InitGame`), recovered off the probe's
 /// challenge by `wire_ab::recover_game_seed` (cod4-combat.md 10.9).
@@ -47,9 +46,14 @@ const GAPS: &[(&str, f32, &str)] = &[
     ("lerp.apos.trBase[0]", 2.5, FLIGHT),
     ("lerp.apos.trBase[1]", 2.5, FLIGHT),
     ("lerp.apos.trBase[2]", 2.5, FLIGHT),
-    ("lerp.u.vehicle.gunPitch", 2.0, FLIGHT),
-    ("lerp.u.vehicle.gunYaw", 2.0, FLIGHT),
+    ("lerp.u.vehicle.gunPitch", 0.5, AIM),
+    ("lerp.u.vehicle.gunYaw", 0.5, AIM),
 ];
+
+/// Why the gun is tolerated: it aims from the posed `tag_flash`, which
+/// matches retail's (`helicopter_collision_and_pose_match_retail`), but
+/// its tracking is vcod's reading of `VEH_UpdateAim` (cod4-gsc.md 3.2).
+const AIM: &str = "the turret's aim, INFERRED off VEH_UpdateAim (cod4-gsc.md 3.2)";
 
 /// Why the helicopter's flight is tolerated: the first 1.5 s match bit
 /// for bit, then the turn through the first node parts by a few hundredths
@@ -143,9 +147,15 @@ fn tracks(s: &Side) -> Tracks {
     out
 }
 
-/// The owner on ours: joins on retail's clock, axis and the rifle class
-/// at its twin's times, spawned on its twin's spot.
-fn ours(install: &vcod_cod4::install::Install, r: &Side) -> (Side, Vec<String>) {
+/// The owner on ours under the probe gsc in `gsc` and the game seed
+/// `seed`: joins on retail's clock, axis and the rifle class at its twin's
+/// times, spawned on its twin's spot.
+fn ours(
+    install: &vcod_cod4::install::Install,
+    r: &Side,
+    gsc: &str,
+    seed: u32,
+) -> (Side, Vec<String>) {
     let cs0 = String::from_utf8_lossy(r.gs.configstring(0)).into_owned();
     let mut sv = Cod4Server::new(
         Cod4Config {
@@ -162,8 +172,8 @@ fn ours(install: &vcod_cod4::install::Install, r: &Side) -> (Side, Vec<String>) 
         }
     }
     sv.set_cvar("sv_cheats", "1");
-    sv.pin_game_seed(SEED);
-    sv.set_script_overrides(GSC.into());
+    sv.pin_game_seed(seed);
+    sv.set_script_overrides(gsc.into());
     sv.load(Some(install)).unwrap();
     let spawn = r
         .snaps
@@ -188,7 +198,9 @@ fn ours(install: &vcod_cod4::install::Install, r: &Side) -> (Side, Vec<String>) 
         ],
     );
     let mut now = Instant::now();
-    while sv.core.sv_time_ms < RUN_MS {
+    // To the capture's last snapshot and a frame.
+    let run_ms = r.snaps.last().expect("snapshots").server_time + 50;
+    while sv.core.sv_time_ms < run_ms {
         let svs = sv.core.sv_time_ms;
         if !probe.joined && svs >= probe.connect_at {
             probe.join(&mut sv, now);
@@ -219,7 +231,7 @@ fn hardpoint_flights_match_retail() {
         return;
     };
     let r = side(&retail("hardpoint"));
-    let (o, aborts) = ours(&install, &r);
+    let (o, aborts) = ours(&install, &r, GSC, SEED);
     assert!(aborts.is_empty(), "{aborts:?}");
     let (rt, ot) = (tracks(&r), tracks(&o));
     let report = std::env::var_os("HARDPOINT_AB_REPORT").is_some();
@@ -284,4 +296,77 @@ fn hardpoint_flights_match_retail() {
     eprintln!("rows missing on ours: {}", missing.len());
     assert!(missing.is_empty(), "{missing:?}");
     assert!(unexplained.is_empty(), "{}", unexplained.join("\n"));
+}
+
+/// The collision probe gsc (`heli_collide`), read over the zones' scripts.
+const COLLIDE_GSC: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../cod4/tests/fixtures/gsc/heli_collide"
+);
+
+/// A capture's `PROBE` lines (the probe gsc's `iPrintLn`s): the words and
+/// the numbers of each, the time since the spawn first.
+fn probe_lines(s: &Side) -> Vec<(Vec<String>, Vec<f32>)> {
+    s.commands
+        .iter()
+        .filter_map(|(_, c)| Some(&c[c.find("PROBE ")? + 6..]))
+        .map(|line| {
+            let mut words = Vec::new();
+            let mut nums = Vec::new();
+            for tok in line.split(|c: char| c.is_whitespace() || "(),\"".contains(c)) {
+                match tok.parse::<f32>() {
+                    Ok(v) => nums.push(v),
+                    Err(_) if !tok.is_empty() => words.push(tok.to_string()),
+                    Err(_) => {}
+                }
+            }
+            (words, nums)
+        })
+        .collect()
+}
+
+/// `cod4_hardpoint_ab`'s collision capture (`play-1.7-heli-collide.txt`):
+/// retail 1.7 under `+set fs_game mods/vcodcoll +devmap mp_crash`, `war`,
+/// sv_pure 0, the gsc `crates/cod4/tests/fixtures/gsc/heli_collide/maps/mp/
+/// mp_crash_fx.gsc` packed in the mod's iwd, one `cod4_probe` (`--team axis
+/// --script idle --name owner --qport 4021 --secs 45`) under `unshare -rnm`.
+/// A cobra holds over the first loop node with its gun turned on a point
+/// off its left side, then flies straight down into the ground. Ours
+/// prints the same lines: the posed `tag_barrel` and `tag_flash` and a
+/// bullet trace down through their middle (its point and the struck
+/// triangle's normal, which 1.7 leaves in the bind pose's space), then the
+/// think's `script_vehicle_collision` notifies (the first three, their
+/// normals and places, and the count by 16 s) at the same times. No
+/// random draw reaches them (hover radius 0), so the seed is the flight
+/// capture's. The places part by the turret's aim (a gun pitch 0.56
+/// degrees off, cod4-gsc.md 3.2) and the descent's float model.
+#[test]
+fn helicopter_collision_and_pose_match_retail() {
+    let Some(install) = vcod_cod4::testing::cod4_install() else {
+        return;
+    };
+    let r = side(&retail("heli-collide"));
+    let (o, aborts) = ours(&install, &r, COLLIDE_GSC, SEED);
+    assert!(aborts.is_empty(), "{aborts:?}");
+    let (rl, ol) = (probe_lines(&r), probe_lines(&o));
+    assert_eq!(rl.len(), 8, "{rl:?}");
+    assert_eq!(
+        rl.iter().map(|l| &l.0).collect::<Vec<_>>(),
+        ol.iter().map(|l| &l.0).collect::<Vec<_>>(),
+        "the lines"
+    );
+    for ((words, a), (_, b)) in rl.iter().zip(&ol) {
+        assert_eq!(a.len(), b.len(), "{words:?} {a:?} {b:?}");
+        // The time and the count are exact; the posed places within the
+        // aim's residue, the descent's last place within its float model.
+        let tol = match words.first().map(String::as_str) {
+            Some("tags" | "trace") => 0.01,
+            Some("count") => 0.2,
+            _ => 0.0,
+        };
+        assert_eq!(a[0], b[0], "{words:?} time");
+        for (x, y) in a.iter().zip(b).skip(1) {
+            assert!((x - y).abs() <= tol, "{words:?}: retail {a:?} ours {b:?}");
+        }
+    }
 }

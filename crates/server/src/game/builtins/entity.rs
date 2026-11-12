@@ -333,6 +333,11 @@ fn client_spawn(
     // with it; the next frame's filter refills only the live records
     // (docs/research/cod11-gametypes-re-bel.md, 8.4).
     host.reset_client_objectives(slot);
+    // CoD2's `ClientSpawn` stores 0x1000 in `ent->flags` (0x80f9202), in the
+    // call: a `setStableMissile` after the spawn holds.
+    if host.profile.game == vcod_common::game::Game::Cod2 {
+        host.cod2_mut().clients[slot].flags = crate::game::cod2_cmds::FL_SPAWN;
+    }
     // `ClientSpawn`'s memset empties the ammo here, in the call, and the
     // script's gives that follow land on it. It goes in the weapon op queue
     // so it stays ordered with them: a pass that drains the queue before the

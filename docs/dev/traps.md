@@ -739,6 +739,19 @@ otherwise.
   table (`Cod2Wire::as_cod1_shim`, identity maps) until the engine takes
   `EntityState2`. `cod2_wire::to_cod2_entity` only copies, so a CoD2 builder
   that writes a 1.1 number sends it as is (cod2-protocol.md 15.9).
+- A player's muzzle flash is not `CG_FireWeapon`'s: it only sets a flag,
+  and `CG_AddPlayerWeapon` plays it on the gun's `tag_flash` at the next
+  draw (the view weapon's for the playerstate's events). The view
+  weapon's tags exist only once the gun is placed, after the view
+  effects, so `cod2_client` spawns the view's flash and brass in its
+  `view` step, not with the other effects (cod2-efx.md 6.8).
+- A weapon file key takes its first value: appending `\key\value` to a
+  stock file whose key is already there, empty, changes nothing
+  (`weapon::parse`).
+- Voice packets carry the qport, and retail's `SV_VoicePacket` reads it as
+  a signed short: a client on qport 0x8000 or more is never heard. A probe
+  or client that talks keeps its qport below that, and two clients of one
+  process need two qports (cod2-voice.md 3, 6).
 
 ## CoD4 1.7
 

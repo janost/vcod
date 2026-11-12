@@ -145,13 +145,16 @@ pub struct DeathGrenade4 {
 /// An item's `clientNum` once nobody owns it.
 pub const ITEM_NO_OWNER: u32 = 64;
 
-/// A weapon in the world (`LaunchItem`): its entity, the weapon number, the
-/// owner's slot and its gravity arc from `start_ms`, at rest once
+/// A weapon in the world (`LaunchItem`): its entity, the weapon number and
+/// camo, the owner's slot and its gravity arc from `start_ms`, at rest once
 /// `resting`.
 #[derive(Clone, Debug)]
 pub struct Item4 {
     pub id: EntId,
     pub weapon: u32,
+    /// The dropper's `weaponmodels[weapon]`, the `gunModel[]` slot a taker
+    /// gets and the `worldModel[]` slot drawn (cod4-client-view.md 4.7).
+    pub model: u8,
     pub owner: u32,
     /// When the drop's think hands it to anyone: `owner` becomes 64
     /// (`cod4_lnxded` 0x8090050), 1000 ms past the drop (cod4-combat.md 6).
@@ -1176,13 +1179,16 @@ impl Cod4Level {
     /// The playerstate half of each `finishPlayerDamage` the script ran
     /// ([`Damage4`], cod4-combat.md 4), in order: the push
     /// ([`knock_back`]), the blood and its direction for the end frame's
-    /// feedback, `damageTimer` (and `damageDuration`) 100 ms a point up to
-    /// 750, the script's health into the stats, and on a kill
-    /// `player_die`'s dead `pm_type`, death anim, empty hands and health 0.
-    /// Then the live grenades `player_die` dropped.
+    /// feedback, `damageTimer` (and `damageDuration`) by the
+    /// `player_dmgtimer_*` dvars ([`damage_timer`]), the script's health
+    /// into the stats, and on a kill `player_die`'s dead `pm_type` (8 for a
+    /// linked body), death anim, empty hands and health 0. Then the live
+    /// grenades `player_die` dropped.
     pub(super) fn apply_damage_ops(&mut self) {
         let ops = std::mem::take(&mut self.rt.host.cod4_mut().damage_ops);
         let g_knockback = g_knockback(&self.rt.host.cvars);
+        let per_point = cvar_float(&self.rt.host.cvars, "player_dmgtimer_timePerPoint", 100.0);
+        let max_time = cvar_float(&self.rt.host.cvars, "player_dmgtimer_maxTime", 750.0);
         for op in ops {
             let health = self.rt.client_vitals(op.slot).health;
             let Some(p) = self.players[op.slot].as_mut() else {
@@ -1195,12 +1201,17 @@ impl Cod4Level {
             }
             let blood = &mut self.combat.blood[op.slot];
             *blood = (blood.0 + op.damage, op.dir);
-            let timer = ps.damage_timer + (op.damage as f32 * DAMAGE_TIMER_PER_POINT) as i32;
             let flinch = flinch_yaw(op.dir, ps.view_angles[1]);
-            ps.damage_timer = timer.min(MAX_DAMAGE_TIMER);
+            ps.damage_timer = damage_timer(ps.damage_timer, op.damage, per_point, max_time);
             ps.damage_duration = ps.damage_timer;
             if op.fatal {
-                ps.pm_type = vcod_cod4::pmove::pm_type::DEAD;
+                use vcod_cod4::pmove::pm_type;
+                // `player_die` (0x80b1bf3): 7, or 8 off a linked body's 1.
+                ps.pm_type = if ps.pm_type == pm_type::NORMAL_LINKED {
+                    pm_type::DEAD_LINKED
+                } else {
+                    pm_type::DEAD
+                };
                 if let Some(anim) = op.death {
                     (ps.legs_anim, ps.legs_timer) = (anim.legs_anim, anim.legs_timer);
                     (ps.torso_anim, ps.torso_timer) = (anim.torso_anim, anim.torso_timer);
@@ -1359,10 +1370,11 @@ impl Cod4Level {
         }
     }
 
-    /// Each live item as 1.7 sends it: `ET_ITEM` (3), `index` its weapon,
+    /// Each live item as 1.7 sends it: `ET_ITEM` (3), `index` its weapon
+    /// plus 128 times its camo (`cod4_lnxded` 0x80916e3..0x80916ee),
     /// `clientNum` its dropper, `pos` its arc (`TR_GRAVITY`, 5) or rest
     /// (`TR_STATIONARY`, 0) truncated.
-    pub(super) fn item_entities(&self) -> Vec<EntityState> {
+    pub(crate) fn item_entities(&self) -> Vec<EntityState> {
         let host = &self.rt.host;
         host.cod4()
             .items
@@ -1378,7 +1390,7 @@ impl Cod4Level {
                         e.0[f.word()] = v;
                     }
                 };
-                set("index", i.weapon);
+                set("index", i.weapon + 128 * u32::from(i.model));
                 set("clientNum", i.owner);
                 set("lerp.pos.trType", if i.resting { 0 } else { 5 });
                 set("lerp.pos.trTime", i.start_ms as u32);
@@ -1547,8 +1559,27 @@ fn flinch_yaw(dir: Option<[f32; 3]>, view_yaw: f32) -> u32 {
     }
 }
 
-const DAMAGE_TIMER_PER_POINT: f32 = 100.0;
-const MAX_DAMAGE_TIMER: i32 = 750;
+/// `finishPlayerDamage`'s `damageTimer` (0x80ac787..0x80ac888): the
+/// damage times `player_dmgtimer_timePerPoint`, a float product stored and
+/// truncated, added on; a sum past `player_dmgtimer_maxTime` (compared as
+/// floats) becomes that maximum truncated (cod4-combat.md 4).
+pub(crate) fn damage_timer(timer: i32, damage: i32, per_point: f32, max_time: f32) -> i32 {
+    let timer = timer.wrapping_add((damage as f32 * per_point) as i32);
+    if f64::from(timer) > f64::from(max_time) {
+        max_time as i32
+    } else {
+        timer
+    }
+}
+
+/// A float dvar as the host's cvars hold it, `default` while unset.
+fn cvar_float(cvars: &crate::cvars::Cvars, name: &str, default: f32) -> f32 {
+    match cvars.get(name) {
+        "" => default,
+        v => crate::game::builtins::cvar::atof(v),
+    }
+}
+
 /// `P_DamageFeedback`'s count cap and how long a count stands.
 const MAX_DAMAGE_COUNT: i32 = 127;
 const DAMAGE_COUNT_MS: i32 = 500;

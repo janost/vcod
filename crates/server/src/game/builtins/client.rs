@@ -790,6 +790,25 @@ pub fn give_max_ammo(
     let slot = client_receiver(host, recv)?;
     let (_, index) = weapon_argument(host, cx, args)?;
     let weapons = host.weapons.clone();
+    if host.profile.game == vcod_common::game::Game::Cod2 {
+        // CoD2's `PlayerCmd_giveMaxAmmo` (Mac 0x1c2a02): a held weapon's
+        // reserve topped up to `maxAmmo` through `Add_Ammo`, the clip left.
+        if let Some(def) = weapons.get(index)
+            && host.client_weapons[slot].holds(index)
+        {
+            let held = host
+                .client_ammo
+                .get(slot)
+                .and_then(|a| a.ammo.get(def.ammo_index))
+                .copied()
+                .map_or(0, i32::from);
+            let add = def.max_ammo as i32 - held;
+            if add > 0 {
+                cod2_add_ammo(host, slot, def, add, false);
+            }
+        }
+        return Ok(Value::Undefined);
+    }
     if let Some(def) = weapons.get(index) {
         // A `clipOnly` weapon has no reserve: the frag's file reads
         // `clipOnly 1` with `maxAmmo 3`, and retail's spawn line carries
@@ -959,8 +978,15 @@ pub fn set_weapon_slot_weapon(
         return Ok(Value::Undefined);
     }
     let name = host.weapon_name(index).unwrap_or_default();
+    let held_before = host.client_weapons[client].holds(index);
     register_given(host, client, &name, index)?;
     host.client_weapons[client].give_chain(&weapons, index, slot);
+    if host.profile.game == vcod_common::game::Game::Cod2 {
+        if let Some(def) = weapons.get(index) {
+            cod2_start_ammo(host, client, def, !held_before);
+        }
+        return Ok(Value::Undefined);
+    }
     if let Some(def) = weapons.get(index) {
         host.weapon_op(
             client,
@@ -980,6 +1006,70 @@ pub fn set_weapon_slot_weapon(
         }
     }
     Ok(Value::Undefined)
+}
+
+/// CoD2's `PlayerCmd_SetWeaponSlotWeapon` (Mac 0x1c0a08) past the give:
+/// `startAmmo` less the reserve already held, through [`cod2_add_ammo`],
+/// the clip filled for a weapon not held before. A launcher with
+/// `startAmmo` 0 comes out empty and reloads (cod2-combat.md 9.7).
+fn cod2_start_ammo(
+    host: &mut GameHost,
+    client: usize,
+    def: &vcod_common::weapon::WeaponDef,
+    new: bool,
+) {
+    let held = host
+        .client_ammo
+        .get(client)
+        .and_then(|a| a.ammo.get(def.ammo_index))
+        .copied()
+        .map_or(0, i32::from);
+    let add = def.start_ammo as i32 - held;
+    if add > 0 {
+        cod2_add_ammo(host, client, def, add, new);
+    }
+}
+
+/// CoD2's `Add_Ammo` (Mac 0x1b0e30): `add` rounds into the reserve; with
+/// `fill`, or for a `clipOnly` weapon, what the clip lacks moves out of the
+/// reserve (a `clipOnly` reserve then empties and its clip is capped at
+/// `clipSize`); the reserve is capped at `maxAmmo`.
+fn cod2_add_ammo(
+    host: &mut GameHost,
+    client: usize,
+    def: &vcod_common::weapon::WeaponDef,
+    add: i32,
+    fill: bool,
+) {
+    let a = host.client_ammo.get(client).copied().unwrap_or_default();
+    let (ai, ci) = (def.ammo_index, def.clip_index);
+    let mut ammo = a.ammo.get(ai).copied().map_or(0, i32::from) + add;
+    let mut clip = a.clip.get(ci).copied().map_or(0, i32::from);
+    if fill || def.clip_only {
+        let take = (def.clip_size as i32 - clip).min(ammo);
+        ammo -= take;
+        clip += take;
+    }
+    if def.clip_only {
+        ammo = 0;
+        clip = clip.min(def.clip_size as i32);
+    }
+    ammo = ammo.min(def.max_ammo as i32);
+    let r = |n: i32| n.clamp(i16::MIN.into(), i16::MAX.into()) as i16;
+    host.weapon_op(
+        client,
+        WeaponOp::SetClip {
+            clip_index: ci,
+            rounds: r(clip),
+        },
+    );
+    host.weapon_op(
+        client,
+        WeaponOp::SetAmmo {
+            ammo_index: ai,
+            rounds: r(ammo),
+        },
+    );
 }
 
 /// `self setWeaponSlotAmmo(slot, rounds)` (player method 35, 0x44130): the

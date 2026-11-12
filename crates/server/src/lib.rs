@@ -29,6 +29,7 @@ pub mod server;
 pub mod spectate;
 pub mod tick_profile;
 pub mod tick_trace;
+pub mod voice;
 pub mod weapons;
 pub mod world;
 

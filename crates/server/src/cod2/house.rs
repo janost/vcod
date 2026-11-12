@@ -145,7 +145,7 @@ impl Download {
     /// `SV_WriteDownloadToClient` (0x808fdc2): opens the file on the first
     /// call, the www redirect first when the server and the client want it,
     /// then up to `budget` blocks inside the window. `open` reads a file
-    /// under the server's base path, `None` when there is none.
+    /// as [`open_download`] does, `None` when there is none.
     pub fn write(
         &mut self,
         w: &mut MsgWriter,
@@ -250,12 +250,31 @@ pub fn blocks_per_message(rate: i32, snapshot_msec: i32) -> u32 {
     ((rate * snapshot_msec / 1000 + 0x800) >> 11).max(1) as u32
 }
 
-/// A file a client may download: `<dir>/<file>.iwd`, any directory beside
-/// `main` (a mod's) and any name that stays inside it (the `~`-padded ones
-/// too). Retail's `FS_SV_FOpenFileRead` serves any file under the base
-/// path; vcod serves iwds alone.
-pub fn servable(name: &str) -> Option<std::path::PathBuf> {
-    vcod_cod2::net::download::safe_iwd_path(name)
+/// `FS_SV_FOpenFileRead` (0x8064558) for a download: `<fs_homepath>/<name>`,
+/// then `<fs_basepath>/<name>` when the two differ, every run of `/` and
+/// `\` folded to one `/` (`FS_BuildOSPath` 0x809eab0), so a leading `/`
+/// stays under the root. vcod's own rules beyond retail's (cod2-protocol.md
+/// 17.5): a name with a `..` component opens nothing, where retail serves
+/// `<root>/../<file>`; retail's third root, `fs_cdpath` (empty, so the
+/// filesystem root) when the two paths match, is never tried; an empty path
+/// is no root; a directory opens nothing.
+pub fn open_download(homepath: &str, basepath: &str, name: &str) -> Option<Vec<u8>> {
+    let parts: Vec<&str> = name
+        .split(['/', '\\'])
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect();
+    if parts.is_empty() || parts.contains(&"..") {
+        return None;
+    }
+    let rel: std::path::PathBuf = parts.iter().collect();
+    let base = (!basepath.eq_ignore_ascii_case(homepath)).then_some(basepath);
+    [Some(homepath), base]
+        .into_iter()
+        .flatten()
+        .filter(|root| !root.is_empty())
+        .map(|root| std::path::Path::new(root).join(&rel))
+        .find(|path| path.is_file())
+        .and_then(|path| std::fs::read(path).ok())
 }
 
 #[cfg(test)]
@@ -267,5 +286,48 @@ mod tests {
         assert_eq!(blocks_per_message(25000, 50), 1);
         assert_eq!(blocks_per_message(90000, 33), 2);
         assert_eq!(blocks_per_message(0, 50), 1);
+    }
+
+    /// `open_download` against retail's live answers (cod2-protocol.md
+    /// 17.5): any file under the home path, then the base path, separators
+    /// folded; and vcod's own refusals of `..`, directories and the
+    /// filesystem root.
+    #[test]
+    fn download_names_open_as_retail_bar_vcod_s_refusals() {
+        let dir = std::env::temp_dir().join(format!("vcod-cod2-open-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (home, base) = (dir.join("home"), dir.join("base"));
+        std::fs::create_dir_all(home.join("main")).unwrap();
+        std::fs::create_dir_all(base.join("main")).unwrap();
+        std::fs::write(home.join("main/zz_ok.txt"), b"inside main").unwrap();
+        std::fs::write(base.join("main/only_base.cfg"), b"base").unwrap();
+        std::fs::write(dir.join("secret.txt"), b"outside").unwrap();
+        let (h, b) = (home.to_string_lossy(), base.to_string_lossy());
+        let open = |name: &str| open_download(&h, &b, name);
+        let served = Some(b"inside main".to_vec());
+        // Retail serves these (live: `main/zz_ok.txt`, `main\zz_ok.txt`).
+        assert_eq!(open("main/zz_ok.txt"), served);
+        assert_eq!(open("main\\zz_ok.txt"), served);
+        assert_eq!(open("/main//zz_ok.txt"), served);
+        assert_eq!(open("main/./zz_ok.txt"), served);
+        assert_eq!(open("main/only_base.cfg"), Some(b"base".to_vec()));
+        assert_eq!(open("main/nothere.txt"), None);
+        // An empty home path is no root: the base serves.
+        assert_eq!(
+            open_download("", &b, "main/only_base.cfg"),
+            Some(b"base".to_vec())
+        );
+        // vcod's: retail serves `../secret.txt` and, with the two paths
+        // equal, any file from the filesystem root.
+        assert_eq!(open("../secret.txt"), None);
+        assert_eq!(open("main/../../secret.txt"), None);
+        assert_eq!(open("..\\secret.txt"), None);
+        let abs = dir.join("secret.txt").to_string_lossy().into_owned();
+        assert_eq!(open(&abs), None);
+        assert_eq!(open_download(&h, &h, &abs), None);
+        assert_eq!(open("main"), None);
+        assert_eq!(open(""), None);
+        assert_eq!(open("."), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -45,6 +45,9 @@ pub const FEEDER_ALLMAPS: i32 = 4;
 pub const FEEDER_PLAYER_LIST: i32 = 7;
 pub const FEEDER_MODS: i32 = 9;
 pub const FEEDER_SERVERSTATUS: i32 = 13;
+/// CoD2's `FEEDER_MUTELIST` (`ui/menudefinition.h`), the `muteplayer`
+/// script menu's list.
+pub const FEEDER_MUTELIST: i32 = 0x14;
 /// CoD2's `FEEDER_PLAYER_PROFILES` (`ui/menudefinition.h`).
 pub const FEEDER_PLAYER_PROFILES: i32 = 0x18;
 

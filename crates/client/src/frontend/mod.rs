@@ -30,12 +30,12 @@ use vcod_common::asset_source::{Asset, AssetSource};
 use vcod_common::localize::Localized;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::ui_menu::{
-    self, FEEDER_ALLMAPS, FEEDER_MODS, FEEDER_PLAYER_LIST, FEEDER_PLAYER_PROFILES, FEEDER_SERVERS,
-    FEEDER_SERVERSTATUS, ITEM_ALIGN_CENTER, ITEM_ALIGN_RIGHT, ITEM_TYPE_BIND, ITEM_TYPE_BUTTON,
-    ITEM_TYPE_DECIMALFIELD, ITEM_TYPE_DVARENUM, ITEM_TYPE_EDITFIELD, ITEM_TYPE_LISTBOX,
-    ITEM_TYPE_MULTI, ITEM_TYPE_NUMERICFIELD, ITEM_TYPE_OWNERDRAW, ITEM_TYPE_SLIDER, ITEM_TYPE_TEXT,
-    ITEM_TYPE_YESNO, MenuFile, UiItem, UiMenu, WINDOW_STYLE_CVAR_SHADER, WINDOW_STYLE_FILLED,
-    WINDOW_STYLE_SHADER,
+    self, FEEDER_ALLMAPS, FEEDER_MODS, FEEDER_MUTELIST, FEEDER_PLAYER_LIST, FEEDER_PLAYER_PROFILES,
+    FEEDER_SERVERS, FEEDER_SERVERSTATUS, ITEM_ALIGN_CENTER, ITEM_ALIGN_RIGHT, ITEM_TYPE_BIND,
+    ITEM_TYPE_BUTTON, ITEM_TYPE_DECIMALFIELD, ITEM_TYPE_DVARENUM, ITEM_TYPE_EDITFIELD,
+    ITEM_TYPE_LISTBOX, ITEM_TYPE_MULTI, ITEM_TYPE_NUMERICFIELD, ITEM_TYPE_OWNERDRAW,
+    ITEM_TYPE_SLIDER, ITEM_TYPE_TEXT, ITEM_TYPE_YESNO, MenuFile, UiItem, UiMenu,
+    WINDOW_STYLE_CVAR_SHADER, WINDOW_STYLE_FILLED, WINDOW_STYLE_SHADER,
 };
 use winit::keyboard::KeyCode;
 
@@ -222,6 +222,9 @@ pub enum UiEffect {
     RunMod(Option<String>),
     /// `StartServer`: launch a server and join it.
     StartServer(create::StartServer),
+    /// CoD2's `uiScript mutePlayer`: flip the client's mute
+    /// (`CL_MutePlayer`, cod2-voice.md 5).
+    MutePlayer(u32),
     /// CoD2's `loadPlayerProfile`: make this profile the active one
     /// (`Com_ChangePlayerProfile`, Mac 0x111936).
     LoadProfile(String),
@@ -311,10 +314,15 @@ pub struct Ui {
     /// The selected row of `FEEDER_ALLMAPS` and its first row drawn.
     map_row: usize,
     map_top: usize,
-    /// `FEEDER_PLAYER_LIST`'s cleaned names, its selected row (0 until a
-    /// pick, as retail's zeroed `uiInfo`), first row drawn and next
-    /// rebuild.
+    /// `FEEDER_PLAYER_LIST`'s and CoD2's `FEEDER_MUTELIST`'s cleaned names
+    /// (one list, `UI_FeederCount` Mac 0x156946), their client numbers
+    /// (CoD2's only), the selected row (0 until a pick, as retail's zeroed
+    /// `uiInfo`), first row drawn and next rebuild.
     players: Vec<String>,
+    player_clients: Vec<u32>,
+    /// `CL_IsPlayerMuted` for the mute list, bit `n` for client `n`, set
+    /// each frame ([`Self::set_muted`]).
+    muted: u64,
     player_row: usize,
     player_top: usize,
     players_due: Option<Instant>,
@@ -456,6 +464,8 @@ impl Ui {
             map_row: 0,
             map_top: 0,
             players: Vec::new(),
+            player_clients: Vec::new(),
+            muted: 0,
             player_row: 0,
             player_top: 0,
             players_due: None,
@@ -1109,6 +1119,13 @@ impl Ui {
                 self.list_top = 0;
             }
             "refreshfilter" => self.browser.requery(),
+            // CoD2's `mutePlayer` (`UI_RunMenuScript`, Mac 0x1548e8): the
+            // selected row's client to `CL_MutePlayer`.
+            "muteplayer" => {
+                if let Some(&c) = self.player_clients.get(self.player_row) {
+                    out.push(UiEffect::MutePlayer(c));
+                }
+            }
             "stoprefresh" | "closejoin" => self.browser.stop(),
             // `UpdateFilter` refreshes a Local list on its own (ui_mp_x86.dll
             // 0x4000ac92); the filter itself applies at every draw.
@@ -1662,7 +1679,9 @@ impl Ui {
             self.map_click(&item);
             return;
         }
-        if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_PLAYER_LIST) {
+        if item.kind == ITEM_TYPE_LISTBOX
+            && matches!(item.feeder, Some(FEEDER_PLAYER_LIST | FEEDER_MUTELIST))
+        {
             self.player_click(&item);
             return;
         }
@@ -1904,7 +1923,9 @@ impl Ui {
             Some(FEEDER_ALLMAPS) => Some((self.active_maps().len(), self.map_top)),
             Some(FEEDER_SERVERS) => Some((self.browser.rows().len(), self.list_top)),
             Some(FEEDER_MODS) => Some((self.mods.len(), self.mod_top)),
-            Some(FEEDER_PLAYER_LIST) => Some((self.players.len(), self.player_top)),
+            Some(FEEDER_PLAYER_LIST | FEEDER_MUTELIST) => {
+                Some((self.players.len(), self.player_top))
+            }
             Some(FEEDER_PLAYER_PROFILES) => Some((self.profiles.len(), self.profiles.top)),
             _ => None,
         }
@@ -1915,7 +1936,7 @@ impl Ui {
             Some(FEEDER_ALLMAPS) => self.map_top = top,
             Some(FEEDER_SERVERS) => self.list_top = top,
             Some(FEEDER_MODS) => self.mod_top = top,
-            Some(FEEDER_PLAYER_LIST) => self.player_top = top,
+            Some(FEEDER_PLAYER_LIST | FEEDER_MUTELIST) => self.player_top = top,
             Some(FEEDER_PLAYER_PROFILES) => self.profiles.top = top,
             _ => {}
         }
@@ -2123,7 +2144,7 @@ impl Ui {
             let item = &self.menus[m].items[i];
             if matches!(
                 item.feeder,
-                Some(FEEDER_ALLMAPS) | Some(FEEDER_MODS) | Some(FEEDER_PLAYER_LIST)
+                Some(FEEDER_ALLMAPS | FEEDER_MODS | FEEDER_PLAYER_LIST | FEEDER_MUTELIST)
             ) && let Some((len, cur)) = self.list_scroll(item)
             {
                 let max = listbox::max_scroll(item, len);
@@ -2209,6 +2230,10 @@ impl Ui {
                 }
                 if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_PLAYER_LIST) {
                     self.player_rows(&p, item, &mut out);
+                    continue;
+                }
+                if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_MUTELIST) {
+                    self.mute_rows(&p, item, loc, &mut out);
                     continue;
                 }
                 if matches!(item.ownerdraw, UI_NETMAPPREVIEW | UI_NETMAPCINEMATIC) {

@@ -641,6 +641,7 @@ impl Hud {
             hostname: info("sv_hostname"),
             address: f.server_address,
             status_icon: &status_icon,
+            voice: &|_| None,
         };
         self.scoreboard.build(&view, &self.fonts, v, out)
     }

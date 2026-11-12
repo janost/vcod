@@ -54,6 +54,12 @@ pub(super) const ENGINE_CVARS: &[(&str, &str)] = &[
     ("sv_wwwDlDisconnected", "0"),
     // `SV_Init`: 300 s, 0..3600 (`Dvar_RegisterFloat`, 17.7).
     ("sv_kickBanTime", "300"),
+    // `G_InitGame` (Mac 0x1addca) registers the relay's rules and `isTalking`'s
+    // window (cod2-voice.md 3).
+    ("voice_global", "0"),
+    ("voice_localEcho", "0"),
+    ("voice_deadChat", "0"),
+    ("g_voiceChatTalkingDuration", "500"),
     // Where `download` finds its files: the install, set by `main.rs`.
     ("fs_basepath", ""),
 ];
@@ -176,6 +182,11 @@ fn line(payload: &[u8]) -> String {
 
 impl Cod2Server {
     pub(super) fn connectionless(&mut self, from: SocketAddr, payload: &[u8], now: Instant) {
+        // `v` and the binary rest past its line (`SV_VoicePacket`, 1.7).
+        if let Some(body) = vcod_cod2::net::voice::oob_body(payload) {
+            self.voice_packet(from, body);
+            return;
+        }
         let text = line(payload);
         let args = crate::game::say::tokenize(&text);
         self.game.argv1 = args.get(1).cloned().unwrap_or_default();
@@ -209,8 +220,16 @@ impl Cod2Server {
         }
         let (svs, xor) = (self.core.sv_time_ms, self.svs_time_ms());
         let rng = &mut self.core.rng;
-        let challenge = self.core.challenges.issue(from, svs, || {
-            (crate::engine::core::rand_from(rng) << 16) ^ crate::engine::core::rand_from(rng) ^ xor
+        // Retail's process has one `rand()`: a level's challenge draws come
+        // off the game's stream (cod2-combat.md 9.6).
+        let game = self.game.level.as_ref().map(|l| l.combat.rand.clone());
+        let challenge = self.core.challenges.issue(from, svs, || match &game {
+            Some(r) => ((r.rand() << 16) ^ r.rand()) as i32 ^ xor,
+            None => {
+                (crate::engine::core::rand_from(rng) << 16)
+                    ^ crate::engine::core::rand_from(rng)
+                    ^ xor
+            }
         });
         self.send_oob(from, &format!("challengeResponse {challenge}"));
     }

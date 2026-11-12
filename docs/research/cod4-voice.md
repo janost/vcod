@@ -3,8 +3,10 @@
 How 1.7 carries, relays and shows voice: the two out-of-band packets, the
 server's relay rules, the client's codec, push to talk, the talker list,
 the scoreboard's icon, Eavesdrop and the mute list. vcod's server relay is
-`crates/server/src/cod4/voice.rs`, the wire `vcod_cod4::net::voice`, the
-client `crates/client/src/cod4_voice.rs`.
+`crates/server/src/cod4/voice.rs` over the rules CoD2 shares
+(`crates/server/src/voice.rs`), the wire `vcod_common::net::voice` (CoD4's
+rate in `vcod_cod4::net::voice`), the client `crates/client/src/voice.rs`.
+CoD2 1.3's voice, which 1.7 inherits, is cod2-voice.md.
 
 ## 1. Sources
 

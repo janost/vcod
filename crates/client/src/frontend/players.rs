@@ -1,10 +1,13 @@
 //! `FEEDER_PLAYER_LIST`, the call vote menu's kick list, and `uiScript
-//! voteKick` (cod11-votes.md section 5).
+//! voteKick` (cod11-votes.md section 5); CoD2's `FEEDER_MUTELIST`, the
+//! `muteplayer` script menu's list over the same rows, and `uiScript
+//! mutePlayer` (cod2-voice.md 5).
 
 use std::time::{Duration, Instant};
 
+use vcod_common::localize::Localized;
 use vcod_common::text::clean_str;
-use vcod_common::ui_menu::{FEEDER_PLAYER_LIST, UiItem};
+use vcod_common::ui_menu::{FEEDER_MUTELIST, FEEDER_PLAYER_LIST, UiItem};
 use winit::keyboard::KeyCode;
 
 use super::{
@@ -25,7 +28,28 @@ impl Ui {
         }
         self.players_due = Some(now + REFRESH);
         self.players = names().iter().map(|n| clean_str(n)).collect();
+        self.player_clients.clear();
         self.player_top = self.player_top.min(self.players.len().saturating_sub(1));
+    }
+
+    /// CoD2's `UI_BuildPlayerList` (Mac 0x14f5e2) on the same 3 s clock
+    /// (`UI_FeederCount`, Mac 0x156946): every client with a name, by
+    /// number, the names cleaned; the mute list's rows.
+    pub fn offer_clients(&mut self, now: Instant, rows: impl FnOnce() -> Vec<(u32, String)>) {
+        if self.players_due.is_some_and(|due| now <= due) {
+            return;
+        }
+        self.players_due = Some(now + REFRESH);
+        let rows = rows();
+        self.players = rows.iter().map(|(_, n)| clean_str(n)).collect();
+        self.player_clients = rows.iter().map(|&(c, _)| c).collect();
+        self.player_top = self.player_top.min(self.players.len().saturating_sub(1));
+    }
+
+    /// `CL_IsPlayerMuted` for the mute list's column, read live as the list
+    /// draws: bit `n` for client `n`.
+    pub fn set_muted(&mut self, muted: u64) {
+        self.muted = muted;
     }
 
     /// `uiScript voteKick` (0x4000afc7): `callvote kick "<name>"` off the
@@ -52,7 +76,7 @@ impl Ui {
             return false;
         };
         let item = &self.menus[m].items[i];
-        if item.feeder != Some(FEEDER_PLAYER_LIST) {
+        if !matches!(item.feeder, Some(FEEDER_PLAYER_LIST | FEEDER_MUTELIST)) {
             return false;
         }
         match listbox::key(
@@ -102,6 +126,62 @@ impl Ui {
             }
             y += eh;
         }
+    }
+
+    /// `Item_ListBox_Paint` for CoD2's `FEEDER_MUTELIST`: column 0
+    /// `MP_MUTED` for a muted client, column 1 the cleaned name
+    /// (`UI_FeederItemText`, Mac 0x152e8a).
+    pub(super) fn mute_rows(
+        &self,
+        p: &Painter,
+        item: &UiItem,
+        loc: &Localized,
+        out: &mut Vec<HudQuad>,
+    ) {
+        let [x, y0, w, _] = item.rect;
+        let (x, mut y) = (x + 1.0, y0 + 1.0);
+        let eh = item.element_height.max(1.0);
+        let muted = loc.message("MP_MUTED");
+        for (row, name) in self
+            .players
+            .iter()
+            .enumerate()
+            .skip(self.player_top)
+            .take(visible_rows(item))
+        {
+            let client = self.player_clients.get(row).copied().unwrap_or(u32::MAX);
+            let on = client < 64 && self.muted >> client & 1 != 0;
+            let cells = [if on { muted.as_str() } else { "" }, name.as_str()];
+            for (k, cell) in cells.iter().enumerate() {
+                let col = item.columns.get(k).copied();
+                let text = truncate_visible(cell, col.map_or(0, |c| c.max_chars));
+                if text.is_empty() {
+                    continue;
+                }
+                p.text(
+                    &text,
+                    x + 4.0 + col.map_or(0.0, |c| c.pos) + item.text_align_x,
+                    y + eh + item.text_align_y,
+                    item.text_scale,
+                    item.fore,
+                    out,
+                );
+            }
+            if row == self.player_row {
+                p.fill(
+                    [x, y, w - SCROLLBAR_SIZE - 4.0, eh - 1.0],
+                    item.outline_color,
+                    out,
+                );
+            }
+            y += eh;
+        }
+    }
+
+    /// The mute list's selected client, for a test.
+    #[cfg(test)]
+    pub(super) fn selected_client(&self) -> Option<u32> {
+        self.player_clients.get(self.player_row).copied()
     }
 }
 

@@ -281,7 +281,8 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   `(int)(-22391.47 + 0.5)`, -22390. The teammate's -134.99451 is -135 the
   same way. VERIFIED (the gate).
 - 1.7's `SetClientViewAngle` holds `delta_angles` as the float view less
-  the cmd's angles, wrapped to -180..180. INFERRED. Trap: CoD2's rule
+  the cmd's angles, wrapped to -180..180, on the x87 stack (0x80a77f6,
+  cod4-pmove.md 15). VERIFIED. Trap: CoD2's rule
   (`delta_angles` in shorts) puts the spawn view off the spot's yaw, so
   the view reads -134.99449 and goes out -134.
 - The client's controllers are `BG_Player_DoControllersInternal`

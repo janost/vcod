@@ -549,6 +549,74 @@ down dir: vel [0, -16.800001, -22.4] pm_time 50 pm_flags 0x100 timer 750 duratio
 fatal: vel [28.800001, 38.4, 0] pm_time 50 pm_flags 0x100 timer 750 duration 750 pm_type 7 weapon 0 health 0 | count 0 pitch 37 yaw 192 event 14 spread 0
 ";
 
+/// `damageTimer` follows `player_dmgtimer_timePerPoint` and `_maxTime`,
+/// each hit's product truncated and the sum capped at the maximum's whole
+/// part, and a kill on a linked body (`pm_type` 1) leaves 8
+/// (cod4-combat.md 4).
+#[test]
+fn damage_reads_the_dmgtimer_dvars_and_links_the_dead() {
+    let Some(mut t) = Trio::new(&[]) else {
+        return;
+    };
+    t.place([(A_SPOT, -90.0), (B_SPOT, -90.0), (IN_ROOM, 90.0)]);
+    let mut log = Vec::new();
+    for (per_point, max_time, damage, before, pm_type, fatal) in [
+        ("", "", 3, 0, 0, false),
+        ("7.5", "400.9", 3, 0, 0, false),
+        ("7.5", "400.9", 3, 390, 0, false),
+        ("7.5", "400.9", 40, 100, 0, false),
+        ("", "", 40, 0, 1, true),
+        ("", "", 40, 0, 0, true),
+    ] {
+        let l = t.level();
+        l.heal_for_test(A);
+        l.rt.host
+            .cvars
+            .set("player_dmgtimer_timePerPoint", per_point);
+        l.rt.host.cvars.set("player_dmgtimer_maxTime", max_time);
+        {
+            let p = l.players[A].as_mut().unwrap();
+            set(&mut p.ps, "damageTimer", before);
+            set(&mut p.ps, "pm_type", pm_type);
+        }
+        l.rt.host.cod4_mut().damage_ops.push(Damage4 {
+            slot: A,
+            damage,
+            dflags: 4,
+            dir: None,
+            fatal,
+            attacker: Some(SHOOTER),
+            death: None,
+            dead_yaw: None,
+        });
+        l.apply_damage_ops_for_test();
+        let ps = &l.players[A].as_ref().unwrap().ps;
+        log.push((
+            word(ps, "damageTimer"),
+            word(ps, "damageDuration"),
+            word(ps, "pm_type"),
+        ));
+        let p = l.players[A].as_mut().unwrap();
+        set(&mut p.ps, "pm_type", 0);
+        let t2 = t.sv.core.sv_time_ms + 600;
+        t.run_to(t2);
+    }
+    let l = t.level();
+    l.rt.host.cvars.set("player_dmgtimer_timePerPoint", "");
+    l.rt.host.cvars.set("player_dmgtimer_maxTime", "");
+    assert_eq!(
+        log,
+        [
+            (300, 300, 0),
+            (22, 22, 0),
+            (400, 400, 0),
+            (400, 400, 0),
+            (750, 750, 8),
+            (750, 750, 7),
+        ]
+    );
+}
+
 /// A blow along yaw -1.2 from 0.7 degrees below packs as 255 both, the
 /// bytes' none, and the level still has its direction for the bots.
 #[test]

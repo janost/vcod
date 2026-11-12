@@ -531,8 +531,8 @@ pub struct Cod4Session {
     /// A menu or the console holds the keys: cmds carry only that bit.
     pub talking: bool,
     /// Voice chat's heard frames, talkers and outgoing batch
-    /// (`cod4_voice`).
-    pub voice: crate::cod4_voice::VoiceLink,
+    /// (`crate::voice`).
+    pub voice: crate::voice::VoiceLink,
     /// Cmds built since the last packet.
     pending: Vec<UserCmd>,
     /// A capture's newest cmd angles: its client's own view, which a
@@ -1038,11 +1038,7 @@ impl Cod4Session {
     pub fn is_talking(&self, client: u32) -> bool {
         if Some(client) == self.own_client() {
             let held = self.input.held(crate::play::input::Action::Talk);
-            return crate::cod4_voice::own_talking(
-                held,
-                self.voice_settings().0,
-                self.voice.enabled,
-            );
+            return crate::voice::own_talking(held, self.voice_settings().0, self.voice.enabled);
         }
         self.voice.talking(client, self.now_ms)
     }
@@ -1050,8 +1046,7 @@ impl Cod4Session {
     /// The talker list's clients (`UI_GetTalkerClientNum`): the talking
     /// ones but us, by number.
     pub fn talkers(&self) -> Vec<u32> {
-        self.voice
-            .talkers(self.own_client().unwrap_or(u32::MAX), self.now_ms)
+        self.voice.talkers(self.own_client(), self.now_ms)
     }
 
     /// Our client number off the newest snapshot.
@@ -2825,9 +2820,17 @@ fn visual(gs: &Gamestate, snap: &Snapshot, weapons: &[String], e: &EntityState) 
             };
             Visual::Model(model_cs(gs, model)?)
         }
-        // An item's `index` is its weapon (the kill capture's dropped M16,
-        // cod4-netfields.md 10); the client draws the weapon's world model.
-        ET_ITEM => Visual::Model(format!("weapon:{}", weapon(index)?)),
+        // An item's `index` is its weapon plus 128 times its camo (the kill
+        // capture's dropped M16, cod4-netfields.md 10); the client draws
+        // `worldModel[index >> 7]` (`iw3mp.exe` 0x4328bf..0x4328e7,
+        // cod4-client-view.md 4.7), keyed `weapon:<name>#<slot>` past slot 0.
+        ET_ITEM => {
+            let name = weapon(index & 0x7f)?;
+            Visual::Model(match index >> 7 {
+                0 => format!("weapon:{name}"),
+                slot => format!("weapon:{name}#{slot}"),
+            })
+        }
         ET_MISSILE => Visual::Model(format!("projectile:{}", weapon(ent_u32(e, "weapon"))?)),
         _ => return None,
     })
@@ -9375,6 +9378,62 @@ pub(crate) mod tests {
         assert!(!mats.iter().any(|m| m == "mc/mtl_weapon_ak47"), "{mats:?}");
     }
 
+    /// A dropped gun draws its camo, live on vcod-server: the enemy takes
+    /// `ak47_mp` on slot 3 (`camo`), stands beside us and drops it. The
+    /// item's `index` is the weapon plus 384, it draws as
+    /// `worldModel[3]`, and that model's materials are the Blue Tiger's
+    /// (cod4-client-view.md 4.7).
+    #[test]
+    fn cod4_live_a_dropped_camo_gun_draws_its_camo() {
+        const GSC: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../cod4/tests/fixtures/gsc/killcam"
+        );
+        let root = vcod_cod4::testing::cod4_install().map(|i| i.root().to_path_buf());
+        let mut bodies = None;
+        let mut asked = 0;
+        let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(GSC), move |f| {
+            if !f.both || f.level < 3000 {
+                return None;
+            }
+            if bodies.is_none() {
+                let ents = f.s.entity_assets();
+                bodies =
+                    Some(crate::cod4_fly::load_bodies(root.as_ref()?, "mp_crash", &ents).unwrap());
+                return None;
+            }
+            let script = [("camo", "ak47_mp"), ("near", "joiner"), ("drop", "ak47_mp")];
+            if let Some((name, arg)) = script.get(asked) {
+                f.tx.send((1, "maps/mp/mp_crash_fx", *name, *arg)).ok();
+                asked += 1;
+                return None;
+            }
+            let snap = f.s.client().snapshots.last()?;
+            let e = snap.entities.iter().find(|e| e.etype() == ET_ITEM)?;
+            let (index, number) = (ent_u32(e, "index"), e.number());
+            let scene = f.s.scene()?;
+            let d = scene.entities.iter().find(|d| d.number == number)?;
+            Some((bodies.take().unwrap(), index, d.visual.clone()))
+        });
+        let Some(out) = out else {
+            return;
+        };
+        let ((models, weapons, _), index, visual) = out.expect("never saw the dropped AK-47");
+        assert_eq!(index >> 7, 3, "index {index}");
+        let Visual::Model(key) = visual else {
+            panic!("the item draws {visual:?}");
+        };
+        assert_eq!(key, "weapon:ak47_mp#3");
+        let model = crate::cod4_fly::visual_model(&weapons, &key);
+        assert_eq!(model.as_deref(), Some("weapon_ak47_mp_bwmrpt"));
+        let mats = &models[model.as_deref().unwrap()].lods[0].materials;
+        assert!(
+            mats.iter().any(|m| m == "mc/mtl_weapon_ak47_bwmrpt"),
+            "{mats:?}"
+        );
+        assert!(!mats.iter().any(|m| m == "mc/mtl_weapon_ak47"), "{mats:?}");
+    }
+
     /// [`live_war_pair_as`] with the enemy a demolitions class: the stock
     /// `_weapons` stows his RPG on `tag_stowed_back`, a tag first indexed
     /// by his client info at his spawn. Every snapshot that names an
@@ -12847,7 +12906,8 @@ pub(crate) mod tests {
     /// frames (cod4-voice.md 5).
     #[test]
     fn cod4_live_voice_reaches_the_team_and_voice_global_the_enemy() {
-        use crate::cod4_voice::{Speex, Tone, VoiceChat, VoiceFrame, VoiceInput, may_send};
+        use crate::voice::{Speex, Tone, VoiceChat, VoiceFrame, VoiceInput, may_send};
+        const RATE: u32 = vcod_cod4::net::voice::SAMPLE_RATE;
         use crate::play::input::Action;
         use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
         use vcod_server::cod4::{Cod4Config, Cod4Server};
@@ -12897,9 +12957,9 @@ pub(crate) mod tests {
             let mut t = Cod4Session::connect(addr, "talker", Cp::Bare, join("allies")).unwrap();
             let mut m = Cod4Session::connect(addr, "mate", Cp::Bare, join("allies")).unwrap();
             let mut e = Cod4Session::connect(addr, "enemy", Cp::Bare, join("axis")).unwrap();
-            let speex = Speex::open();
+            let speex = Speex::open(RATE);
             let real = speex.is_some();
-            let mut chat = VoiceChat::with(speex, Some(Box::new(Steady(Tone::new()))));
+            let mut chat = VoiceChat::with(RATE, speex, Some(Box::new(Steady(Tone::new(RATE)))));
             let mut seen = Seen::default();
             let t0 = clk_now();
             let mut talk_from = None;
@@ -12987,7 +13047,7 @@ pub(crate) mod tests {
         if real {
             assert!(seen.sent as usize >= seen.mate.len());
             assert!(seen.mate.iter().all(|(_, f)| f.len() == 20));
-            let mut dec = Speex::open().unwrap();
+            let mut dec = Speex::open(RATE).unwrap();
             let pcm: Vec<i16> = seen.mate[20..40]
                 .iter()
                 .flat_map(|(_, f)| dec.decode(f))

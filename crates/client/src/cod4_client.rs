@@ -132,8 +132,8 @@ pub(crate) struct Cod4Client {
     dof: crate::cod4_dof::ViewDof,
     ads_dof: Option<[f32; 2]>,
     /// Voice chat's codec, microphone and talker streams, made on the
-    /// first live frame (`cod4_voice`).
-    voice: Option<crate::cod4_voice::VoiceChat>,
+    /// first live frame (`crate::voice`).
+    voice: Option<crate::voice::VoiceChat>,
     /// Each fire event's client-side rounds as the effects took them, for
     /// the tests.
     #[cfg(test)]
@@ -788,10 +788,10 @@ impl Cod4Client {
     }
 
     /// Voice chat's frame: `+talk`'s frames encoded onto the session's
-    /// batch while [`crate::cod4_voice::may_send`] holds, the heard ones
+    /// batch while [`crate::voice::may_send`] holds, the heard ones
     /// played. `cl_voice` defaults to 1 and `rate` to the userinfo's 25000.
     fn voice_frame(&mut self, cx: &mut Cod2Frame) {
-        use crate::cod4_voice::{VoiceChat, VoiceFrame, may_send};
+        use crate::voice::{VoiceChat, VoiceFrame, may_send};
         let atoi = vcod_cod4::menuexp::atoi;
         let (sv_voice, quality) = self.session.voice_settings();
         let cl_voice = cx.shell.cvar("cl_voice").is_none_or(|v| atoi(v) != 0);
@@ -803,11 +803,9 @@ impl Cod4Client {
             sending: may_send(held, active, sv_voice, cl_voice, rate),
             quality,
         };
-        self.voice.get_or_insert_with(VoiceChat::new).frame(
-            &mut self.session.voice,
-            &f,
-            Some(&mut *cx.audio),
-        );
+        self.voice
+            .get_or_insert_with(|| VoiceChat::new(vcod_cod4::net::voice::SAMPLE_RATE))
+            .frame(&mut self.session.voice, &f, Some(&mut *cx.audio));
     }
 
     /// The drawn snapshot's shellshock at the render time `now`
@@ -1630,11 +1628,7 @@ impl Cod4Client {
         let Visual::Model(name) = &d.visual else {
             return None;
         };
-        Some(match name.split_once(':') {
-            Some(("weapon", w)) => self.weapons.get(w)?.world.clone()?,
-            Some(("projectile", w)) => self.weapons.get(w)?.projectile.clone()?,
-            _ => name.clone(),
-        })
+        crate::cod4_fly::visual_model(&self.weapons, name)
     }
 
     /// The xmodel `d` draws. A set of hidden parts draws the whole model's

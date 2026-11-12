@@ -768,8 +768,10 @@ fn drop_item(
 }
 
 /// `Drop_Item`'s launch of `weapon` out of the client in `slot` (see
-/// [`drop_item`]): the item, its counts 0 until `itemWeaponSetAmmo`; the
-/// client's weapons are left alone. `None` before the client's first end
+/// [`drop_item`]): the item, its counts 0 until `itemWeaponSetAmmo`, its
+/// camo the client's `weaponmodels[weapon]` (both callers read it,
+/// `cod4_lnxded` 0x8092752, 0x80aafac); the client's weapons are left
+/// alone. `None` before the client's first end
 /// frame.
 pub(crate) fn launch_weapon(
     host: &mut GameHost,
@@ -812,9 +814,11 @@ pub(crate) fn launch_weapon(
     delta.x = (crandom() * f64::from(horz) + f64::from(delta.x)) as f32;
     delta.y = (crandom() * f64::from(horz) + f64::from(delta.y)) as f32;
     let now = host.level_time_ms;
+    let model = host.cod4().clients[slot].loadout.weapon_models[weapon];
     host.cod4_mut().items.push(Item4 {
         id,
         weapon: weapon as u32,
+        model,
         owner: slot as u32,
         clear_owner_at: now + 1000,
         base,

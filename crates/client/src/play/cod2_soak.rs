@@ -546,8 +546,9 @@ fn serve_bare(
     (handle, addr, done)
 }
 
-/// [`serve_bare`] with `sv_mapRotation` set to `rotation`; the second flag,
-/// once set, runs `map_rotate` on the server's console.
+/// [`serve_bare`] with `sv_mapRotation` set to `rotation`; each line sent
+/// down the channel runs on the server's console (`map_rotate`,
+/// `addbot`).
 fn serve_rotating(
     map: &str,
     rotation: &str,
@@ -555,12 +556,12 @@ fn serve_rotating(
     std::thread::JoinHandle<()>,
     SocketAddr,
     Arc<std::sync::atomic::AtomicBool>,
-    Arc<std::sync::atomic::AtomicBool>,
+    std::sync::mpsc::Sender<String>,
 ) {
     let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let rotate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (console, lines) = std::sync::mpsc::channel::<String>();
     let (tx, rx) = std::sync::mpsc::channel();
-    let (map, stop, rotate_flag) = (map.to_string(), done.clone(), rotate.clone());
+    let (map, stop) = (map.to_string(), done.clone());
     let rotation = rotation.to_string();
     let handle = std::thread::spawn(move || {
         use vcod_server::cod2::{Cod2Config, Cod2Server, FRAME_MS};
@@ -586,8 +587,8 @@ fn serve_rotating(
         let mut buf = [0u8; 4096];
         let mut next = Instant::now();
         while !stop.load(Ordering::Relaxed) {
-            if rotate_flag.swap(false, Ordering::Relaxed) {
-                sv.push_console("map_rotate");
+            while let Ok(line) = lines.try_recv() {
+                sv.push_console(&line);
             }
             while let Ok((n, from)) = sock.recv_from(&mut buf) {
                 sv.handle_packet(from, &buf[..n], Instant::now());
@@ -604,7 +605,7 @@ fn serve_rotating(
         }
     });
     let addr = rx.recv_timeout(Duration::from_secs(300)).unwrap();
-    (handle, addr, done, rotate)
+    (handle, addr, done, console)
 }
 
 /// The soak's first-use builds: a surface's first bullet mark built its
@@ -695,7 +696,7 @@ fn cod2_live_same_map_gamestate_builds_no_model_pipeline() {
     if vcod_common::testing::cod2_fs().is_none() {
         return;
     }
-    let (server, addr, done, rotate) = serve_rotating("mp_toujane", "gametype sd map mp_toujane");
+    let (server, addr, done, console) = serve_rotating("mp_toujane", "gametype sd map mp_toujane");
     let mut rig = match rig("mp_toujane", addr) {
         Ok(r) => r,
         Err(e) => {
@@ -721,7 +722,7 @@ fn cod2_live_same_map_gamestate_builds_no_model_pipeline() {
         let time = start.elapsed().as_secs_f32();
         if warm.is_none() && rig.pilot(start).spawned() {
             warm = Some(rig.r.entity_pipelines());
-            rotate.store(true, Ordering::Relaxed);
+            console.send("map_rotate".into()).unwrap();
         }
         let gamestates = rig
             .sess
@@ -832,4 +833,116 @@ fn cod2_live_view_weapons_build_nothing_in_play() {
     kinds.dedup();
     assert!(kinds.len() >= 3, "three view weapons not drawn: {drawn:?}");
     assert_eq!(first_uses, 0, "a view model uploaded in the draw");
+}
+
+/// Muzzle flashes and brass on the guns, live: a client on vcod-server's
+/// mp_toujane fires in bursts, three bots joining once it spawns. Its own shots
+/// play the view weapon's flash on the drawn gun's `tag_flash`, ahead of
+/// the eye, and its brass on `tag_brass` beside the eye; the bots' shots
+/// play their world flash on their bodies' `tag_flash`, at a gun's height
+/// over their origins. Then `cg_drawGun 0` hides the gun and its flash
+/// while its brass still flies (cod2-efx.md 6.8). Needs `COD2_DIR` and an
+/// adapter (lavapipe will do).
+#[test]
+fn cod2_live_shots_flash_and_eject_on_their_guns() {
+    use crate::play::cod2_fx::ViewTag;
+    if vcod_common::testing::cod2_fs().is_none() {
+        return;
+    }
+    let (server, addr, done, console) = serve_rotating("mp_toujane", "");
+    let mut rig = match rig("mp_toujane", addr) {
+        Ok(r) => r,
+        Err(e) => {
+            done.store(true, Ordering::Relaxed);
+            server.join().unwrap();
+            assert!(format!("{e:#}").contains("no adapter"), "{e:#}");
+            return;
+        }
+    };
+    let start = Instant::now();
+    let mut last = start;
+    let mut fx_ms = 0.0;
+    let (mut own_flash, mut own_brass, mut bot_flash) = (0, 0, 0);
+    // under `cg_drawGun 0`: the view flashes, the brass, frames the gun drew
+    let mut hidden: Option<(u32, u32, u32)> = None;
+    let mut bots = false;
+    while start.elapsed() < Duration::from_secs(180) && hidden.is_none_or(|(_, brass, _)| brass < 3)
+    {
+        if hidden.is_none() && own_flash > 0 && own_brass > 0 && bot_flash > 0 {
+            rig.shell.force("cg_drawGun", "0");
+            hidden = Some((0, 0, 0));
+        }
+        let now = Instant::now();
+        let dt = now.duration_since(last).as_secs_f32();
+        last = now;
+        let time = start.elapsed().as_secs_f32();
+        if rig.pilot(start).spawned() {
+            if !bots {
+                console.send("addbot 3".into()).unwrap();
+                bots = true;
+            }
+            let want = (time * 1000.0) as u32 % 1200 < 300;
+            rig.pilot(start).key(Action::Attack, want);
+        }
+        step(&mut rig, time, dt, false, &mut fx_ms).unwrap();
+        let eye = rig.cam.pos;
+        let forward = crate::camera::basis(rig.cam.yaw, rig.cam.pitch).0;
+        let c = rig.sess.cod2_mut().unwrap();
+        if let Some((flash, brass, drawn)) = hidden.as_mut() {
+            *drawn += u32::from(c.gun_drawn(None));
+            for (_, tag, _) in c.view_spawned.drain(..) {
+                match tag {
+                    ViewTag::Flash => *flash += 1,
+                    ViewTag::Brass => *brass += 1,
+                }
+            }
+        }
+        for (path, tag, pose) in c.view_spawned.drain(..) {
+            let d = pose.origin - eye;
+            match tag {
+                ViewTag::Flash => {
+                    assert!(
+                        d.length() < 60.0 && d.dot(forward) > 5.0,
+                        "{path}: the view flash {d} off the eye"
+                    );
+                    own_flash += 1;
+                }
+                ViewTag::Brass => {
+                    assert!(d.length() < 40.0, "{path}: the view brass {d} off the eye");
+                    own_brass += 1;
+                }
+            }
+        }
+        let f = c.session.as_deref().and_then(|s| s.frame());
+        for (path, bolt, pose) in c.tag_spawned.drain(..) {
+            if bolt.slot != ViewTag::Flash.slot() {
+                continue;
+            }
+            let Some(e) = f
+                .as_ref()
+                .and_then(|f| f.snap.entities.iter().find(|e| e.number == bolt.entity))
+            else {
+                continue;
+            };
+            let off = pose.origin - f.as_ref().unwrap().entity_origin(e);
+            assert!(
+                off.truncate().length() < 80.0 && (5.0..75.0).contains(&off.z),
+                "{path}: entity {}'s flash {off} off his origin",
+                bolt.entity
+            );
+            bot_flash += 1;
+        }
+        std::thread::sleep(Duration::from_millis(16).saturating_sub(now.elapsed()));
+    }
+    rig.sess.shutdown();
+    done.store(true, Ordering::Relaxed);
+    server.join().unwrap();
+    eprintln!(
+        "own flashes {own_flash}, own brass {own_brass}, bot flashes {bot_flash}; \
+         under cg_drawGun 0 (flashes, brass, frames drawn) {hidden:?}"
+    );
+    assert!(own_flash > 0, "no view flash");
+    assert!(own_brass > 0, "no view brass");
+    assert!(bot_flash > 0, "no bot's world flash");
+    assert_eq!(hidden.map(|(f, b, d)| (f, b >= 3, d)), Some((0, true, 0)));
 }

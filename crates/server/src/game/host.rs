@@ -188,9 +188,10 @@ pub struct Cod2HostState {
     /// CoD2's weapons in registration order, index 1 first
     /// (`builtins::cod2::register_weapon`).
     pub weapons: Vec<String>,
-    /// Whether each of `weapons` names an `offhandClass` (a grenade),
-    /// which `giveWeapon` makes the offhand rather than a slot's.
-    pub offhands: Vec<bool>,
+    /// Each of `weapons`' `offhandClass` (weaponDef+0x84): 0 none, 1 frag,
+    /// 2 smoke (`vcod_cod2::weapon::OFFHAND_CLASSES`). A grenade's give
+    /// makes it the offhand rather than a slot's.
+    pub offhands: Vec<i32>,
     /// CoD2's `script_struct` blocks in lump order, for the load to turn
     /// into `level.struct` entries once the spawn pass is done, each block's
     /// keys in lump order.
@@ -203,6 +204,9 @@ pub struct Cod2HostState {
     pub clients: Vec<crate::game::cod2::Cod2ClientState>,
     /// The CoD2 game's `rand()`, the same stream as `Combat::rand`.
     pub rand: std::rc::Rc<crate::game::cod2_combat::GameRand>,
+    /// The seed `G_InitGame` gave `srand`, which `Rand_Init` gives
+    /// `holdrand` too (cod2-combat.md 2.6.1); `None` before a seeded level.
+    pub game_seed: Option<u32>,
     /// Test-facing: per client slot, the death anims (`legsAnim` without
     /// the toggle) its kills take in turn over the drawn one, the draw
     /// still made: a gate replays retail's clock-seeded picks with it.
@@ -226,6 +230,7 @@ impl Default for Cod2HostState {
             callback: Cod2CallbackArgs::default(),
             clients: vec![Default::default(); MAX_CLIENTS],
             rand: Default::default(),
+            game_seed: None,
             death_pins: Vec::new(),
             drop_pins: Default::default(),
             tag_drops: Vec::new(),

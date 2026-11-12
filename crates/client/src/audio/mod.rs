@@ -1039,7 +1039,7 @@ impl AudioSystem {
     }
 
     /// Starts a sound vcod builds itself on the main track (CoD4 voice
-    /// chat's talker streams, `cod4_voice`); nothing without a device.
+    /// chat's talker streams, `crate::voice`); nothing without a device.
     pub fn play_custom<D: kira::sound::SoundData>(&mut self, d: D) -> Option<D::Handle> {
         self.manager.as_mut()?.play(d).ok()
     }

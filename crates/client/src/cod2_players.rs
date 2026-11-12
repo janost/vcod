@@ -4,8 +4,10 @@
 //! [`Cod2PlayerView`] per player entity from the snapshot (lerped) and the
 //! client states; docs/research/cod2-player-anims.md.
 
+use crate::fx::sim::TagPose;
+use crate::play::cod2_fx::BodyTags;
 use crate::renderer::{CookieEntity, DynamicModelInstance, ModelHandle, Renderer};
-use glam::Vec3;
+use glam::{Mat4, Quat, Vec3};
 use std::collections::HashMap;
 use std::rc::Rc;
 use vcod_cod2::player::{
@@ -57,7 +59,7 @@ struct Body {
 type HeldRig = (
     Character,
     Option<String>,
-    Option<(Rc<PlayerRig>, [Option<usize>; 2])>,
+    Option<(Rc<PlayerRig>, [Option<usize>; 3])>,
 );
 
 /// Per-connection CoD2 player state: the animtree, the rigs and GPU models
@@ -82,7 +84,7 @@ pub struct Cod2Players {
     rotate_incs: HashMap<String, f32>,
     /// Each entity's rig as last drawn: the character and CS 7 weapon it
     /// was armed for, the rig (`None` when it did not build) and its
-    /// `tag_flash` and `j_head` bones.
+    /// `tag_flash`, `j_head` and `tag_brass` bones.
     held: HashMap<u32, HeldRig>,
     /// `bg_swingSpeed`; the caller keeps it in step with the console.
     pub swing_speed: f32,
@@ -92,6 +94,9 @@ pub struct Cod2Players {
     /// The last [`Self::posed`]'s world `j_head` per entity, where its head
     /// icon floats (`CG_PlayerFloatSprite`, Mac 0x1e64c6).
     pub heads: HashMap<u32, Vec3>,
+    /// The last [`Self::posed`]'s `tag_flash` and `tag_brass` poses per
+    /// entity, where its world flash and brass play.
+    pub tags: HashMap<u32, BodyTags>,
 }
 
 impl Cod2Players {
@@ -109,6 +114,7 @@ impl Cod2Players {
         self.bodies.clear();
         self.held.clear();
         self.muzzles.clear();
+        self.tags.clear();
     }
 
     /// Steps and poses `players` at `render_time`, `frametime_ms` after the
@@ -161,6 +167,7 @@ impl Cod2Players {
         let mut out = Vec::new();
         self.muzzles.clear();
         self.heads.clear();
+        self.tags.clear();
         for (i, p) in players.iter().enumerate() {
             let character = match &p.character {
                 Some(c) => c,
@@ -217,7 +224,7 @@ impl Cod2Players {
                                     .iter()
                                     .position(|b| b.name.eq_ignore_ascii_case(name))
                             };
-                            let tags = [bone("tag_flash"), bone("j_head")];
+                            let tags = [bone("tag_flash"), bone("j_head"), bone("tag_brass")];
                             (rig, tags)
                         });
                     self.held
@@ -225,7 +232,7 @@ impl Cod2Players {
                     rig
                 }
             };
-            let Some((rig, [flash, head])) = rig else {
+            let Some((rig, [flash, head, brass])) = rig else {
                 continue;
             };
             let body = self.bodies.entry(p.number).or_insert_with(|| Body {
@@ -293,9 +300,37 @@ impl Cod2Players {
                 self.heads
                     .insert(p.number, drawn.transform.transform_point3(at));
             }
+            let tag = |b: Option<usize>| {
+                Some(tag_pose(
+                    drawn.transform,
+                    pose.bone_world(&rig.skeleton, b?),
+                ))
+            };
+            self.tags.insert(
+                p.number,
+                BodyTags {
+                    flash: tag(flash),
+                    brass: tag(brass),
+                },
+            );
             out.push((i, rig, drawn));
         }
         out
+    }
+
+    /// The posed turrets' `tag_flash` poses by entity, beside the bodies'
+    /// muzzles and tags: where a turret's flash and tracers start.
+    pub fn add_guns(&mut self, guns: &[(u32, TagPose)]) {
+        for &(n, flash) in guns {
+            self.muzzles.insert(n, flash.origin);
+            self.tags.insert(
+                n,
+                BodyTags {
+                    flash: Some(flash),
+                    brass: None,
+                },
+            );
+        }
     }
 
     /// [`Self::posed`] as the renderer's dynamic model instances, each part
@@ -339,6 +374,17 @@ impl Cod2Players {
             });
         }
         (out, casters)
+    }
+}
+
+/// A bone's model-space pose under `model` as a world [`TagPose`]: its
+/// origin and its axes `[forward, left, up]`.
+pub fn tag_pose(model: Mat4, (at, rot): (Vec3, Quat)) -> TagPose {
+    let (_, turn, _) = model.to_scale_rotation_translation();
+    let q = turn * rot;
+    TagPose {
+        origin: model.transform_point3(at),
+        axis: [q * Vec3::X, q * Vec3::Y, q * Vec3::Z],
     }
 }
 
@@ -454,6 +500,61 @@ mod tests {
         }
         scene.posed(&fs, &[], 1200, 50, 1200);
         assert!(scene.muzzles.is_empty());
+        assert!(scene.tags.is_empty());
+    }
+
+    /// An armed body's `tag_flash` pose is its muzzle, pointing the way he
+    /// faces, and its `tag_brass` sits back along the gun; the stock world
+    /// flash played on that pose draws at the muzzle.
+    #[test]
+    fn an_armed_body_poses_its_flash_and_brass_tags() {
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let mut scene = Cod2Players::new();
+        for (weapon, yaw) in [("kar98k_mp", 0.0f32), ("mp40_mp", 90.0), ("bar_mp", 200.0)] {
+            let view = Cod2PlayerView {
+                number: 4,
+                frame: BodyFrame {
+                    legs_anim: 127,
+                    origin: Vec3::new(100.0, 200.0, 0.0),
+                    angles: [0.0, yaw, 0.0],
+                    ..Default::default()
+                },
+                character: None,
+                team: 1,
+                weapon: Some(weapon.into()),
+                gun: None,
+            };
+            scene.posed(&fs, &[view], 1000, 50, 1000);
+            let t = scene.tags[&4];
+            let (flash, brass) = (t.flash.unwrap(), t.brass.expect(weapon));
+            assert_eq!(flash.origin, scene.muzzles[&4]);
+            let ahead = Vec3::new(yaw.to_radians().cos(), yaw.to_radians().sin(), 0.0);
+            assert!(flash.axis[0].dot(ahead) > 0.7, "{weapon}: {:?}", flash.axis);
+            let back = (flash.origin - brass.origin).dot(ahead);
+            assert!((5.0..40.0).contains(&back), "{weapon}: brass {back} behind");
+            let mut fx = crate::fx::sim::FxSystem::new();
+            let path = vcod_cod2::weapon::load(&fs, weapon)
+                .unwrap()
+                .def
+                .str("worldFlashEffect")
+                .to_string();
+            let bolt = crate::fx::sim::TagBolt {
+                entity: 4,
+                slot: -1,
+            };
+            fx.spawn_on_tag(&fs, &path, bolt, flash, 0.0);
+            fx.step(0.01, 0.01, None);
+            let quads = fx.build_quads(Vec3::new(0.0, 0.0, 60.0), Vec3::X, Vec3::Z, 0.01);
+            assert!(!quads.is_empty(), "{weapon}: {path} drew nothing");
+            for q in &quads {
+                for v in q.verts {
+                    let d = Vec3::from(v).distance(flash.origin);
+                    assert!(d < 40.0, "{weapon}: {path} vertex {d} from the muzzle");
+                }
+            }
+        }
     }
 
     /// A client whose state names no model draws its team's default; both

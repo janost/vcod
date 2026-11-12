@@ -142,18 +142,45 @@ that full frame's. vcod: `Recording::waiting`, read by
   `oldServerTime`. No `cl_timeNudge` term (CoD1 has one).
   `CL_AdjustTimeDelta` (Mac 0x17b544) returns at once while a demo plays
   (its compare on +0x40188).
-- with `timedemo`: on its first frame it opens
-  `demos/timedemo_<map>_mode_<r_mode>.csv` and writes `<frame>,<ms>`
-  lines to it; `timeDemoStart` (+0x401a4) takes `Sys_Milliseconds` on the
-  first frame; the frame count (+0x401a0) goes up and `serverTime` is
-  `base + frames * 50`.
+- with `timedemo`: while the csv handle (`clc` +0x4019c) is 0 it opens
+  `demos/timedemo_%s_mode_%i.csv` through `FS_FOpenFileWrite`, with
+  `cl.mapname` (cl +0x24710) cut past its last `/` or `\` and short of
+  its last `.`, and `Dvar_GetInt("r_mode")`; `timeDemoStart` (+0x401a4)
+  takes `Sys_Milliseconds` while it is 0, else with a handle the frame
+  writes `%i,%i\n`, the frame count (+0x401a0) before this frame's and
+  the ms since the last frame (+0x401a8, stamped every frame); the count
+  goes up and `serverTime` is `base + frames * 50` (VERIFIED, the
+  stores, the format strings and the call). `CL_InitCGame` (Mac
+  0x17b412) formats `cl.mapname` as `maps/mp/%s.%s` from the serverinfo's
+  `mapname` and `GetBspExtension` (VERIFIED), so the name is the map's.
+  `Dvar_GetInt` (Mac 0x51dca) returns an int or enum dvar's integer, the
+  enum's index, and `atoi` of any other's string (VERIFIED, the type
+  test), so `r_mode` reads as its index in the mode list.
 - then messages while `cl.snap.serverTime <= serverTime`, stopping when
   the state leaves 8 (a gamestate in the demo).
 
 `CL_DemoCompleted` (Mac 0x14c096): with `timedemo`, when the ms since
 `timeDemoStart` are above 0, `%i frames, %3.1f seconds: %3.1f fps`; the
-csv closes; `CL_Disconnect`; `CL_NextDemo` (Mac 0x1472ea), which runs
-`nextdemo` once and clears it (VERIFIED).
+csv closes and its handle clears; `CL_Disconnect`; `CL_NextDemo` (Mac
+0x1472ea), which runs `nextdemo` once and clears it (VERIFIED).
+
+vcod's csv: `Cod2Session::write_timedemo_csv` hands the session the
+directory `record` writes to and `r_mode`'s index (`Shell::int`, vcod's
+own `r_mode` -1 reading as -1); `TimedemoCsv` opens and writes as above
+and closes as the demo ends (`timedemo_writes_a_row_a_frame_after_the_first`,
+on the committed retail demo).
+
+`CG_EntityEvent`'s `EV_STEP_VIEW` arm (Mac 0x1e4650) runs only while `cg`
++8, `CG_DrawActiveFrame`'s demo argument (Mac 0x1d4a50, stored from its
+second parameter; `SCR_UpdateFrame` passes `clc.demoplaying != 0`), is
+0, along with `cg_nopredict` and `cg_synchronousClients` (VERIFIED, the
+tests and the store). A demo therefore draws no step smoothing. The
+landing arm beside it has no such test, so a demo's eye dips on a
+landing (INFERRED, the arm's only test is the client number).
+`CG_CalcViewValues` (Mac 0x1d3b28) adds both, with the bob, on its first
+person arm, demo or not (INFERRED, its branches; cod2-movement.md 18). vcod's demo eye is the snapshots'
+lerped eye: no bob and no landing dip. Its played view has both and the
+step (`Cod2Session::recoil_frame`, which takes no step in a demo).
 
 `CL_SystemInfoChanged` (Mac 0x1d535a) reads `sv_serverid` and returns
 while a demo plays: no cheat state, no `sv_iwds`, no `fs_game` (VERIFIED,
@@ -207,7 +234,7 @@ All in one `unshare -rn` namespace (loopback only):
 
 ## 7. Not done
 
-- `timedemo`'s csv.
+- A demo's eye has no bob or landing dip (5).
 - CoD2's stock `ui_mp/main.menu` has no demo list (its only demo item
   is `demo_only`, the retail demo build's notice), so the front end has
   none (VERIFIED, the stock menus in `iw_06.iwd`).

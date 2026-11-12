@@ -17,6 +17,8 @@
 // 99 and the health set back to 100 first, so nobody dies, unless
 // probe_mortal is 1, when the stock damage runs and a death logs and
 // raises the obituary.
+// With probe_noknock 1 the damage carries DFLAGS_NO_KNOCKBACK (4): the
+// target stands where it spawned.
 //
 // With probe_fan 1 each damage callback first logs a fan of bulletTraces
 // across the struck body: from 40 units in front (+y) to 40 behind, on a
@@ -25,6 +27,11 @@
 // body's capsule, not its bones (cod2-combat.md 9.3).
 //
 // With probe_tags 1 the target's bones are logged every frame (tags()).
+//
+// With probe_stable 1 the shooter's rockets fly without wobbling
+// (setStableMissile). With probe_rand n the shooter's spawn logs n rounds
+// of the script's four random builtins (PROBE rand). With probe_model set,
+// a script_model of that xmodel stands at probe_mx/my/mz.
 main()
 {
 	level.callbackStartGameType = ::startGameType;
@@ -44,6 +51,13 @@ startGameType()
 	precacheModel("xmodel/playerbody_german_africa01");
 	precacheModel("xmodel/head_german_afrca_christoph");
 	precacheModel("xmodel/helmet_german_africa");
+	if(getCvar("probe_model") != "")
+	{
+		precacheModel(getCvar("probe_model"));
+		model = spawn("script_model", (getCvarFloat("probe_mx"), getCvarFloat("probe_my"), getCvarFloat("probe_mz")));
+		model setModel(getCvar("probe_model"));
+		logPrint("PROBE model " + model getEntityNumber() + " " + model.origin + "\n");
+	}
 	game["state"] = "playing";
 }
 
@@ -101,6 +115,10 @@ playerConnect()
 		self setWeaponClipAmmo("frag_grenade_american_mp", 3);
 		self switchToOffhand("frag_grenade_american_mp");
 		self setSpawnWeapon(w);
+		if(getCvarInt("probe_stable"))
+			self setStableMissile(1);
+		for(i = 0; i < getCvarInt("probe_rand"); i++)
+			logPrint("PROBE rand " + randomInt(32768) + " " + randomIntRange(-500, 500) + " " + randomFloat(1000) + " " + randomFloatRange(-1, 1) + "\n");
 	}
 	// mp_german_africa's body with its first head: the hit boxes a
 	// random head would move.
@@ -187,6 +205,8 @@ playerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vP
 		if(iDamage > 99)
 			iDamage = 99;
 	}
+	if(getCvarInt("probe_noknock") && !(iDFlags & 4))
+		iDFlags += 4;
 	self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc, timeOffset);
 }
 

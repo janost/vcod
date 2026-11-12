@@ -22,10 +22,6 @@ Ranked by how much a player notices.
   meet the world as points, brush geoms are left out, `msecStep` stays
   17 ms, and a blast does not push a part (cod4-gsc.md 3.6). The ragdoll
   is a position-based solver (cod4-player-anims.md 10). M.
-- A dropped weapon's camo: retail's item `index` is `weapon + 128 *
-  model` and a pickup gives the camo; vcod's item carries the weapon
-  alone, draws slot 0's world model and a pickup gives slot 0
-  (cod4-client-view.md 4.7). S.
 - Multichannel output: kira mixes stereo, so a 5.1 or 7.1 device gets
   the stereo mix on its front pair (cod4-sound.md 4.2, 5). The 139 alias
   rows whose curve no walked zone holds fall off straight. L.
@@ -43,6 +39,10 @@ Ranked by how much a player notices.
 
 ## Fixed
 
+- A dropped weapon's camo: vcod-server's item sends `weapon + 128 *
+  model` off the dropper's `weaponmodels[]`, a pickup gives `index >> 7`,
+  and the client draws `worldModel[index >> 7]` (cod4-client-view.md
+  4.7).
 - Other players' camo: vcod-server sets the entity's `weaponModel` off
   `weaponmodels[weapon]` and the client arms the body with
   `worldModel[weaponModel]` (cod4-client-view.md 4.7).

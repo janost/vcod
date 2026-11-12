@@ -23,6 +23,10 @@
 #                 the player behind the turret nearest x y z)
 #   PROBE_ARGS    extra move_probe arguments for the first script's client
 #                 (`--lag 100` holds its cmd clock 100 ms back)
+#   RAND_TRACE    1 loads tools/re/cod2_rand_trace.c (built into the
+#                 homepath, gcc -m32) into the server, which appends every
+#                 srand() and rand() it made to <out> as `# srand` and
+#                 `# rand` lines (cod2-combat.md 9.6)
 #
 #   tools/run_probe_cod2.sh <script> <map> <x> <y> <z> <yaw> <out.txt>
 #
@@ -50,9 +54,16 @@ export COD2_DIR COD2_LNXDED LIB HOMEP PROBE MAP X Y Z YAW OUT LOG SCRIPT GTNAME
 export SECOND="${SECOND:-}"
 export SRV="${SRV:-}"
 export PROBE_ARGS="${PROBE_ARGS:-}"
+PRELOAD=""
+if [ "${RAND_TRACE:-}" = 1 ]; then
+  PRELOAD="$HOMEP/cod2_rand_trace.so"
+  gcc -m32 -shared -fPIC -O2 -o "$PRELOAD" tools/re/cod2_rand_trace.c -ldl
+  rm -f "$HOMEP/rand.log"
+fi
+export PRELOAD
 unshare -rn bash -c '
 ip link set lo up
-LD_LIBRARY_PATH="$LIB" "$COD2_LNXDED" +set fs_basepath "$COD2_DIR" +set fs_homepath "$HOMEP" \
+LD_LIBRARY_PATH="$LIB" LD_PRELOAD="$PRELOAD" RAND_TRACE_OUT="$HOMEP/rand.log" "$COD2_LNXDED" +set fs_basepath "$COD2_DIR" +set fs_homepath "$HOMEP" \
   +set net_ip 127.0.0.1 +set net_port 28970 +set dedicated 1 +set sv_punkbuster 0 \
   +set developer 1 +set logfile 1 +set g_log games_mp.log +set g_logSync 1 +set sv_maxclients 4 \
   +set probe_x "$X" +set probe_y "$Y" +set probe_z "$Z" +set probe_yaw "$YAW" \
@@ -75,10 +86,11 @@ sleep 0.5
 kill $SERVER 2>/dev/null; sleep 1; kill -9 $SERVER 2>/dev/null || true
 # The gametype'"'"'s PROBE log lines ride the end of the capture as comments.
 grep -a PROBE "$HOMEP/main/games_mp.log" 2>/dev/null | sed "s/^/# /" | tee -a "$OUT" || true
+[ -n "$PRELOAD" ] && sed "s/^/# /" "$HOMEP/rand.log" >> "$OUT"
 exit $status
 '
 # The fixture's header: what the gate needs (the map) and how to remake it.
-HOW="${GT:+GT=$GT }${SECOND:+SECOND=$SECOND }${PROBE_GSC:+PROBE_GSC=$PROBE_GSC }${PROBE_ARGS:+PROBE_ARGS='$PROBE_ARGS' }tools/run_probe_cod2.sh $SCRIPT $MAP $X $Y $Z $YAW <out>"
+HOW="${RAND_TRACE:+RAND_TRACE=$RAND_TRACE }${GT:+GT=$GT }${SECOND:+SECOND=$SECOND }${PROBE_GSC:+PROBE_GSC=$PROBE_GSC }${PROBE_ARGS:+PROBE_ARGS='$PROBE_ARGS' }tools/run_probe_cod2.sh $SCRIPT $MAP $X $Y $Z $YAW <out>"
 sed -i "1i # map $MAP\\n# made by: $HOW (retail cod2_lnxded 1.3, pure, defaults${SRV:+, $SRV})" "$OUT"
 if [ -n "${SECOND:-}" ] && [ -f "${OUT%.txt}-b.txt" ]; then
   sed -i "1i # map $MAP\\n# made by: $HOW, the second client (retail cod2_lnxded 1.3, pure, defaults${SRV:+, $SRV})" "${OUT%.txt}-b.txt"
