@@ -2385,11 +2385,12 @@ fn prone_pitches(ps: &PlayerState) -> (f32, f32) {
 /// `BG_PlayerStateToEntityState` (1.7's 0x8052940, inlined): the snapped
 /// origin and view angles (the capture's teammate at z 236 off its
 /// playerstate's 236.125), the lean, a prone body's torso and waist
-/// pitches, the weapon, the stance flags, the ground, and the box packed
-/// as `SV_LinkEntity` does (`x | (1 - mins.z) << 8 | (maxs.z + 32) << 16`:
-/// 0x66010f for the 30 x 70 body, VERIFIED live); `pos` reads `trType` 3
-/// and `apos` 1 on the capture's still teammate (VERIFIED live). The
-/// angles' and pitches' sources are cod4-player-anims.md 8.
+/// pitches, the weapon and its camo, the stance flags, the ground, and
+/// the box packed as `SV_LinkEntity` does (`x | (1 - mins.z) << 8 |
+/// (maxs.z + 32) << 16`: 0x66010f for the 30 x 70 body, VERIFIED live);
+/// `pos` reads `trType` 3 and `apos` 1 on the capture's still teammate
+/// (VERIFIED live). The angles' and pitches' sources are
+/// cod4-player-anims.md 8.
 pub fn player_entity(slot: usize, ps: &PlayerState) -> EntityState {
     let mut e = EntityState::default();
     e.0[0] = slot as u32;
@@ -2426,6 +2427,12 @@ pub fn player_entity(slot: usize, ps: &PlayerState) -> EntityState {
     }
     set("lerp.eFlags", e_flags);
     set("weapon", ps.word("weapon"));
+    // The held weapon's camo, `weaponmodels[weapon]` (0x8052af5..0x8052b03).
+    let held = ps.word("weapon") as usize;
+    set(
+        "weaponModel",
+        ps.weapon_models.get(held).map_or(0, |&m| u32::from(m)),
+    );
     set("legsAnim", ps.word("legsAnim"));
     set("torsoAnim", ps.word("torsoAnim"));
     set("groundEntityNum", ps.word("groundEntityNum"));
@@ -2746,5 +2753,24 @@ mod tests {
         ps.set("viewHeightLerpDown", 1);
         let e = player_entity(3, &ps);
         assert_eq!(word(&e, "fTorsoPitch"), 5.0);
+    }
+
+    /// Others see the held weapon's camo: `weaponModel` is
+    /// `weaponmodels[weapon]` (cod4-client-view.md 4.7), and it rides the
+    /// wire's 4 bits.
+    #[test]
+    fn a_body_carries_its_weapons_camo() {
+        let mut ps = PlayerState::default();
+        ps.set("weapon", 2);
+        ps.weapon_models[1] = 6;
+        ps.weapon_models[2] = 3;
+        let model = |e: &EntityState| e.0[ent_word(1, "weaponModel").unwrap()];
+        let e = player_entity(3, &ps);
+        assert_eq!(model(&e), 3);
+        assert_eq!(model(&e.sent()), 3);
+        ps.set("weapon", 1);
+        assert_eq!(model(&player_entity(3, &ps)), 6);
+        ps.set("weapon", 0);
+        assert_eq!(model(&player_entity(3, &ps)), 0);
     }
 }

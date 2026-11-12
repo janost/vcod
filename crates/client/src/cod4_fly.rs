@@ -70,10 +70,16 @@ pub struct Cod4Map {
     pub hud: Option<vcod_cod4::hud::HudAssets>,
 }
 
-/// What a weapon's item and missile draw, and its view weapon.
+/// What a weapon's item and missile draw, its held third-person gun and
+/// its view weapon.
 #[derive(Clone, Default)]
 pub struct WeaponModels {
+    /// `worldModel[0]`, what its item and a turret draw.
     pub world: Option<String>,
+    /// `worldModel[16]`: the gun a player holds is the slot his entity's
+    /// `weaponModel` (the camo) names, nothing on an empty one
+    /// (cod4-client-view.md 4.7).
+    pub worlds: Vec<Option<String>>,
     pub projectile: Option<String>,
     pub view: Option<Arc<crate::cod4_viewmodel::ViewDef>>,
     /// A turret weapon's `animHorRotateInc` (`WeaponDef` +2004), the
@@ -825,11 +831,12 @@ fn entity_models(
         else {
             continue;
         };
-        let world = def
+        let worlds: Vec<Option<String>> = def
             .model_lists
             .get("worldModel")
-            .and_then(|l| l.first().copied().flatten())
-            .map(|id| model_name(a, id));
+            .map(|l| l.iter().map(|id| id.map(|id| model_name(a, id))).collect())
+            .unwrap_or_default();
+        let world = worlds.first().cloned().flatten();
         let projectile = def
             .models
             .get("projectileModel")
@@ -848,6 +855,7 @@ fn entity_models(
             w.clone(),
             WeaponModels {
                 world: world.clone(),
+                worlds,
                 projectile: projectile.clone(),
                 view,
                 rotate_inc: float(&def.raw, 2004),
@@ -865,12 +873,13 @@ fn entity_models(
                     v.and_then(|v| f(v).clone())
                 };
                 [
-                    w.world.clone(),
                     w.projectile.clone(),
                     part(|v| &v.hands),
                     part(|v| &v.knife),
                     part(|v| &v.rocket),
                 ]
+                .into_iter()
+                .chain(w.worlds.iter().cloned())
             })
             .flatten(),
     );

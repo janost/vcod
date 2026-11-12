@@ -348,10 +348,12 @@ impl Cod4Players {
                 body.body = PlayerBody::default();
                 body.rig = None;
             }
+            // `worldModel[weaponModel]`, no gun on an empty slot
+            // (`iw3mp.exe` 0x43f8c4..0x43f8dc).
             let held = v
                 .weapon
                 .as_ref()
-                .and_then(|w| weapons.get(w)?.world.as_ref());
+                .and_then(|w| weapons.get(w)?.worlds.get(v.weapon_model)?.as_ref());
             // The rig of the models and the weapon held last frame, else
             // the one the models armed with this weapon key.
             let rig = match &body.rig {

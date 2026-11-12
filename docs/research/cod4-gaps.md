@@ -28,8 +28,10 @@ Ranked by how much a player notices.
   client treats `TR_PHYSICS` as stationary (`play::cod4::trajectory`;
   cod4-gsc.md 3.2). The ragdoll is a position-based solver, not ODE
   (cod4-player-anims.md 10). L.
-- Other players' camo: a third-person gun draws `worldModel[0]`; the
-  entity's `weaponModel` is not read, nor set by vcod-server. S.
+- A dropped weapon's camo: retail's item `index` is `weapon + 128 *
+  model` and a pickup gives the camo; vcod's item carries the weapon
+  alone, draws slot 0's world model and a pickup gives slot 0
+  (cod4-client-view.md 4.7). S.
 - Multichannel output: kira mixes stereo, so a 5.1 or 7.1 device gets
   the stereo mix on its front pair (cod4-sound.md 4.2, 5). The 139 alias
   rows whose curve no walked zone holds fall off straight. L.
@@ -45,6 +47,9 @@ Ranked by how much a player notices.
 
 ## Fixed
 
+- Other players' camo: vcod-server sets the entity's `weaponModel` off
+  `weaponmodels[weapon]` and the client arms the body with
+  `worldModel[weaponModel]` (cod4-client-view.md 4.7).
 - The view model: the camo's `gunModel[]` slot off `weaponmodels[]`
   (vcod-server's `giveWeapon` sets it), the RPG's rocket at `tag_clip`
   while loaded, Sleight of Hand and Double Tap dividing the clips' rates;

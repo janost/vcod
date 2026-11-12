@@ -256,6 +256,9 @@ pub struct BodyView {
     pub character: Character,
     /// The weapon list's name (`m16_gl_mp`), `None` empty handed.
     pub weapon: Option<String>,
+    /// Its `weaponModel`, the camo: the `worldModel[]` slot the held gun
+    /// draws (`iw3mp.exe` 0x407401..0x40746a, cod4-client-view.md 4.7).
+    pub weapon_model: usize,
     /// An `ET_PLAYER_CORPSE`: its models are the ones copied when it
     /// arrived, not its client's live ones (`play::cod4_players`).
     pub corpse: bool,
@@ -2912,6 +2915,7 @@ fn body_view(
         weapon: weapon_name(weapons, ent_u32(e, "weapon"))
             .filter(|_| ent_u32(e, "lerp.eFlags") & 0x300 == 0)
             .map(str::to_string),
+        weapon_model: ent_u32(e, "weaponModel") as usize,
         corpse: e.etype() == ET_PLAYER_CORPSE,
         ragdoll: (9..=11).contains(&ent_u32(e, "lerp.pos.trType")),
         gun: Some(ent_u32(e, "otherEntityNum"))
@@ -9007,6 +9011,74 @@ pub(crate) mod tests {
             "{mats:?}"
         );
         assert_eq!(rpg_parts, 3, "hands, launcher and rocket");
+    }
+
+    /// Another player's gun draws his camo, live on vcod-server: the probe
+    /// script's `camo` gives the enemy `ak47_mp` on slot 3 and `near`
+    /// stands him beside us. His entity in our snapshot carries
+    /// `weaponModel` 3, and his posed rig holds `worldModel[3]`, whose
+    /// materials are the Blue Tiger's (cod4-client-view.md 4.7).
+    #[test]
+    fn cod4_live_another_players_gun_draws_his_camo() {
+        use crate::play::cod4_players::Cod4Players;
+        const GSC: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../cod4/tests/fixtures/gsc/killcam"
+        );
+        let root = vcod_cod4::testing::cod4_install().map(|i| i.root().to_path_buf());
+        let mut bodies = None;
+        let mut asked = 0;
+        let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(GSC), move |f| {
+            if !f.both || f.level < 3000 {
+                return None;
+            }
+            if bodies.is_none() {
+                let ents = f.s.entity_assets();
+                bodies =
+                    Some(crate::cod4_fly::load_bodies(root.as_ref()?, "mp_crash", &ents).unwrap());
+                return None;
+            }
+            let script = [("camo", "ak47_mp"), ("near", "joiner")];
+            if let Some((name, arg)) = script.get(asked) {
+                f.tx.send((1, "maps/mp/mp_crash_fx", *name, *arg)).ok();
+                asked += 1;
+                return None;
+            }
+            let enemy = f.e.gamestate()?.client_num;
+            let scene = f.s.scene()?;
+            let d = scene
+                .entities
+                .iter()
+                .find(|d| d.body.as_ref().is_some_and(|b| b.frame.client_num == enemy))?;
+            let v = d.body.clone()?;
+            (v.weapon.as_deref() == Some("ak47_mp")).then(|| {
+                let at = (d.number, scene.render_time, scene.server_time);
+                (bodies.take().unwrap(), v, at)
+            })
+        });
+        let Some(out) = out else {
+            return;
+        };
+        let ((_, weapons, src), v, (n, render, server)) =
+            out.expect("never saw the enemy hold the AK-47");
+        assert_eq!(v.weapon_model, 3);
+        // His body posed as the session draws it.
+        let mut players = Cod4Players::default();
+        let posed = players.posed(&src, &weapons, &[(n, &v)], &[], render, server);
+        let (_, rig, _) = posed.first().expect("his rig builds");
+        let camo = weapons["ak47_mp"].worlds[3].clone();
+        assert_eq!(camo.as_deref(), Some("weapon_ak47_mp_bwmrpt"));
+        let (_, gun) = rig
+            .models
+            .iter()
+            .find(|(m, _)| Some(m) == camo.as_ref())
+            .expect("the rig holds the camo's world model");
+        let mats = &gun.lods[0].materials;
+        assert!(
+            mats.iter().any(|m| m == "mc/mtl_weapon_ak47_bwmrpt"),
+            "{mats:?}"
+        );
+        assert!(!mats.iter().any(|m| m == "mc/mtl_weapon_ak47"), "{mats:?}");
     }
 
     /// [`live_war_pair_as`] with the enemy a demolitions class: the stock
