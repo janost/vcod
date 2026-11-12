@@ -39,7 +39,7 @@ number. VERIFIED.
 | `Low Health` | 109 |
 | `Compass` | 85 back and highlight, 84 face, 86 objectives, 89 friendlies |
 | `offhandinfo` | 100..105 |
-| talk icons | |
+| `amitalking`, `talkers` | 266, 267..270 (UI owner draws, cod2-voice.md 5) |
 
 ## 2. Fades
 
@@ -354,10 +354,8 @@ INFERRED.
 ## 12. What vcod leaves out
 
 - The health bar (off by default).
-- On the board (13): the mute list (`CL_MutePlayer`, the `muteplayer`
-  script menu's `FEEDER_MUTELIST`), so the voice column stays empty, as
-  retail's does while nobody talks or is muted; and style 3's exact shadow
-  (13).
+- On the board (13): style 3's exact shadow. The voice column and the
+  mute list it reads are cod2-voice.md 5.
 - Pending: pixel checks against retail. The headless frames come from
   `VCOD_UI_SHOT` (`renderer/hud_shot.rs`).
 
@@ -433,8 +431,9 @@ cited function and the `__const` floats:
   keys and both commands scroll it this way.
 - The voice column (`CG_DrawClientScore`): a 13 x 13 `voice_off` for a
   client `CL_IsPlayerMuted` names, `voice_on` for one `CL_IsPlayerTalking`
-  (`Voice_IsClientTalking`) names, else nothing. VERIFIED. vcod has
-  neither voice nor a mute list and draws nothing there.
+  (`Voice_IsClientTalking`) names, else nothing, at the column's left and
+  the row's top. VERIFIED. vcod draws it off its voice chat and the
+  `muteplayer` menu's mute list (cod2-voice.md 5).
 - Text style: `UI_DrawText`'s styles 3 and 6 (`RB_DrawTextWithCursor`,
   0xd9b64) draw each glyph's shadow first, 1 (style 3) or 2 (style 6)
   pixels right and down, twice a quarter pixel apart, then the glyph twice
@@ -967,8 +966,8 @@ in through `GunInput::recoil`).
   shows; `headiconvoicechat` is registered at cgs +0x27bac and read by
   nothing. INFERRED (a search of every store at those offsets).
 - vcod draws the head icon, the killcam icon, the disconnected icon and
-  the talk balloon. It has no voice, and retail's voice icon is dead code,
-  so that one is not drawn.
+  the talk balloon. Retail's voice icon is dead code, so vcod's voice chat
+  (cod2-voice.md) draws none over a talker.
 
 ### 19.3 The spectator's lines
 

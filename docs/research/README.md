@@ -74,6 +74,7 @@ Every claim names the module, address and string or table it rests on and carrie
 | [cod2-xmodel-v20-format.md](cod2-xmodel-v20-format.md) | xmodel v20 against v14: hit boxes, weights, materials |
 | [cod2-iwi-iwd.md](cod2-iwi-iwd.md) | `.iwd` search path, `.iwi` images and the wavelet decoder |
 | [cod2-demos.md](cod2-demos.md) | Demos: what CoD2 keeps and changes from CoD1 |
+| [cod2-voice.md](cod2-voice.md) | Voice chat: packets, relay rules, codec at 8192 Hz, talker list, mute list |
 
 ## CoD4 1.7
 

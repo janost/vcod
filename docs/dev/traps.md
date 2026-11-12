@@ -739,6 +739,10 @@ otherwise.
   table (`Cod2Wire::as_cod1_shim`, identity maps) until the engine takes
   `EntityState2`. `cod2_wire::to_cod2_entity` only copies, so a CoD2 builder
   that writes a 1.1 number sends it as is (cod2-protocol.md 15.9).
+- Voice packets carry the qport, and retail's `SV_VoicePacket` reads it as
+  a signed short: a client on qport 0x8000 or more is never heard. A probe
+  or client that talks keeps its qport below that, and two clients of one
+  process need two qports (cod2-voice.md 3, 6).
 
 ## CoD4 1.7
 
