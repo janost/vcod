@@ -691,6 +691,64 @@ mod tests {
         assert!(join.waiting().is_none());
     }
 
+    /// The `muteplayer` script menu's list (`FEEDER_MUTELIST`): the rows
+    /// the session offers, a key moves the selection, and the toggle
+    /// button's `uiScript mutePlayer` names the selected row's client
+    /// (cod2-voice.md 5).
+    #[test]
+    fn the_mute_list_toggles_the_selected_client() {
+        use crate::play::join::Join;
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let mut cs = vec![String::new(); 1278];
+        cs[1246] = "ingame".into();
+        cs[1252] = "muteplayer".into();
+        let names = script_menu_names(&cs);
+        let mut ui = Ui::new(&fs, "");
+        assert_eq!(ui.load_script_menus(&fs, &names, ""), Vec::<String>::new());
+        let mut shell = Shell::new();
+        let mut join = Join::new(None, None);
+        join.set_layout(CS_LAYOUT_118);
+        let mut out = Vec::new();
+        escape(&mut ui, Some("ingame"), &shell, &mut out);
+        apply(&mut shell, out);
+        for line in ["u", "K", "t 6"] {
+            let tokens: Vec<String> = line.split(' ').map(str::to_string).collect();
+            let mut out = Vec::new();
+            assert_eq!(
+                menu_command(&mut ui, &mut join, &tokens, &cs, 16, &shell, &mut out),
+                None
+            );
+            offer_waiting(&mut ui, &mut join, &cs, &shell, &mut out);
+            apply(&mut shell, out);
+        }
+        let open: Vec<String> = ui.open.iter().map(|&m| ui.menus[m].name.clone()).collect();
+        assert_eq!(open, ["muteplayer"]);
+        ui.offer_clients(std::time::Instant::now(), || {
+            vec![(2, "^1Able".into()), (5, "Baker".into())]
+        });
+        ui.set_muted(1 << 5);
+        let out = click_shown(&mut ui, &mut shell, "playermutelist", (640.0, 480.0));
+        apply(&mut shell, out);
+        assert_eq!(ui.selected_client(), Some(2));
+        let (_, out) = ui.key(winit::keyboard::KeyCode::ArrowDown, &shell);
+        apply(&mut shell, out);
+        assert_eq!(ui.selected_client(), Some(5));
+        let out = click_shown(&mut ui, &mut shell, "playermutetoggle", (640.0, 480.0));
+        assert!(
+            out.iter().any(|e| matches!(e, UiEffect::MutePlayer(5))),
+            "{out:?}"
+        );
+        let quads = ui.build(
+            640.0,
+            480.0,
+            &vcod_common::localize::Localized::load(&fs),
+            &shell,
+        );
+        assert!(!quads.is_empty());
+    }
+
     fn responses(out: &[UiEffect], cs: &[String]) -> Vec<String> {
         out.iter()
             .filter_map(|e| match e {

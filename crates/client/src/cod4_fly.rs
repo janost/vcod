@@ -95,6 +95,24 @@ pub struct WeaponModels {
     pub gun_anims: Option<[Arc<vcod_common::xanim::XAnim>; 2]>,
 }
 
+/// The xmodel a visual's model key names: `weapon:<name>` its
+/// `worldModel[0]`, `weapon:<name>#<slot>` an item's camo slot (none on an
+/// empty one, where 1.7 drops the connection: "No XModel loaded for item
+/// index"), `projectile:<name>` its `projectileModel`, any other key itself.
+pub fn visual_model(weapons: &HashMap<String, WeaponModels>, key: &str) -> Option<String> {
+    Some(match key.split_once(':') {
+        Some(("weapon", w)) => match w.split_once('#') {
+            Some((w, slot)) => {
+                let slot: usize = slot.parse().ok()?;
+                weapons.get(w)?.worlds.get(slot)?.clone()?
+            }
+            None => weapons.get(w)?.world.clone()?,
+        },
+        Some(("projectile", w)) => weapons.get(w)?.projectile.clone()?,
+        _ => key.to_string(),
+    })
+}
+
 /// `WeaponDef.weapClass` (+304) and its turret value (`weapClass_t` 7).
 const WEAP_CLASS: usize = 304;
 const WEAPCLASS_TURRET: i32 = 7;

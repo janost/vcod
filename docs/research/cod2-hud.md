@@ -39,7 +39,7 @@ number. VERIFIED.
 | `Low Health` | 109 |
 | `Compass` | 85 back and highlight, 84 face, 86 objectives, 89 friendlies |
 | `offhandinfo` | 100..105 |
-| talk icons | |
+| `amitalking`, `talkers` | 266, 267..270 (UI owner draws, cod2-voice.md 5) |
 
 ## 2. Fades
 
@@ -310,9 +310,21 @@ draws.
   offhand states), or with `cg_drawCrosshair` 0. The weapon is
   `BG_GetViewmodelWeaponIndex`'s.
 - The colour is white, or (0.25, 1, 0.25) with `pm_flags & 0x100000`. The
-  alpha multiplies `cg_crosshairAlpha` (1) by the sight fraction read at
-  playerstate +0xdc (`fWeaponPosFrac`). The hip crosshair shows unsighted,
-  so vcod takes `1 - fWeaponPosFrac`. INFERRED.
+  alpha multiplies `cg_crosshairAlpha` (1) by what `CG_DrawWeapReticle`
+  (0x1d0320) leaves in `xmm0`: 1 with no overlay drawn (0x1d0365), else
+  `1 - ` the overlay's alpha (0x1d0545). VERIFIED, the disassembly; that
+  the caller reads it as the function's return is INFERRED (Ghidra types
+  it `void`). Under 0.01 nothing draws.
+- None once `fWeaponPosFrac` (`cg + 0x25ca0`, the predicted
+  playerstate's +0xdc) is exactly 1, unless `cg_drawGun` is 0
+  (0x1d0860..0x1d0877). VERIFIED. With `cg_drawGun` 0 and a size scale
+  under 1 (below), `reticleCenter` draws a second time at
+  `reticleCenterSize * (1.5 - scale)` square, centred on
+  `CG_CalcCrosshairPosition` without the drop; the crosshair itself draws
+  unless the fraction is 1. VERIFIED, the decompile's tests and the
+  rodata (0x3261b8 1.5, 0x3261f4 -0.5). So with the gun hidden a second
+  dot grows as the crosshair shrinks and stays alone at the top of the
+  sight. INFERRED.
 - Past the sight's crosshair fraction (`adsCrosshairInFrac` / `-OutFrac`),
   `f = (pos - (1 - frac)) / frac`: the size scale is `1 - f / 2` and the
   centre drops by `480 / fov_y * f * adsAimPitch`.
@@ -324,6 +336,8 @@ draws.
   255) * scale` off `BG_GetSpreadForWeapon`, alpha times
   `1 - aimSpreadScale / 255`, at least `cg_crosshairAlphaMin` 0.
 - vcod takes `fov_y` from an 80 degree `cg_fov` at 4:3. INFERRED.
+- vcod: `cod2_player_hud::CrosshairParts`, the second centre at the
+  screen's centre.
 
 ## 11. Damage direction
 
@@ -354,10 +368,8 @@ INFERRED.
 ## 12. What vcod leaves out
 
 - The health bar (off by default).
-- On the board (13): the mute list (`CL_MutePlayer`, the `muteplayer`
-  script menu's `FEEDER_MUTELIST`), so the voice column stays empty, as
-  retail's does while nobody talks or is muted; and style 3's exact shadow
-  (13).
+- On the board (13): style 3's exact shadow. The voice column and the
+  mute list it reads are cod2-voice.md 5.
 - Pending: pixel checks against retail. The headless frames come from
   `VCOD_UI_SHOT` (`renderer/hud_shot.rs`).
 
@@ -433,8 +445,9 @@ cited function and the `__const` floats:
   keys and both commands scroll it this way.
 - The voice column (`CG_DrawClientScore`): a 13 x 13 `voice_off` for a
   client `CL_IsPlayerMuted` names, `voice_on` for one `CL_IsPlayerTalking`
-  (`Voice_IsClientTalking`) names, else nothing. VERIFIED. vcod has
-  neither voice nor a mute list and draws nothing there.
+  (`Voice_IsClientTalking`) names, else nothing, at the column's left and
+  the row's top. VERIFIED. vcod draws it off its voice chat and the
+  `muteplayer` menu's mute list (cod2-voice.md 5).
 - Text style: `UI_DrawText`'s styles 3 and 6 (`RB_DrawTextWithCursor`,
   0xd9b64) draw each glyph's shadow first, 1 (style 3) or 2 (style 6)
   pixels right and down, twice a quarter pixel apart, then the glyph twice
@@ -967,8 +980,8 @@ in through `GunInput::recoil`).
   shows; `headiconvoicechat` is registered at cgs +0x27bac and read by
   nothing. INFERRED (a search of every store at those offsets).
 - vcod draws the head icon, the killcam icon, the disconnected icon and
-  the talk balloon. It has no voice, and retail's voice icon is dead code,
-  so that one is not drawn.
+  the talk balloon. Retail's voice icon is dead code, so vcod's voice chat
+  (cod2-voice.md) draws none over a talker.
 
 ### 19.3 The spectator's lines
 

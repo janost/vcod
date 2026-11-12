@@ -202,6 +202,9 @@ pub struct Cod4Zones {
     /// Each xmodel's bones at its bind pose (`baseMat`), model space, by
     /// lowercased model name (`getTagOrigin`).
     pub model_tags: HashMap<String, Rc<ModelTags>>,
+    /// Each xmodel's bone parents and radius by lowercased name
+    /// ([`ModelRig`]).
+    pub model_rigs: HashMap<String, Rc<ModelRig>>,
     /// Each xmodel's collision surfaces (`collSurfs`, model space at the
     /// bind pose) by lowercased name, for models whose `collLod` is not
     /// negative: what `DObjGeomTraceline` traces on a vehicle.
@@ -267,6 +270,7 @@ impl Cod4Zones {
         let mut skeletons = HashMap::new();
         let mut anim_clips = HashMap::new();
         let mut model_coll = HashMap::new();
+        let mut model_rigs = HashMap::new();
         for assets in mod_zone.iter().chain(&zones) {
             for x in &assets.xanims {
                 let name = x.name.to_ascii_lowercase();
@@ -300,7 +304,14 @@ impl Cod4Zones {
                     continue;
                 }
                 if let Ok(m) = vcod_cod4::anim::skeleton_model(assets, x) {
-                    skeletons.entry(x.name.to_ascii_lowercase()).or_insert(m);
+                    let key = x.name.to_ascii_lowercase();
+                    model_rigs.entry(key.clone()).or_insert_with(|| {
+                        Rc::new(ModelRig {
+                            parents: m.bones.iter().map(|b| b.parent).collect(),
+                            radius: x.radius,
+                        })
+                    });
+                    skeletons.entry(key).or_insert(m);
                 }
                 if x.coll_lod >= 0 && !x.coll.is_empty() {
                     model_coll
@@ -395,6 +406,7 @@ impl Cod4Zones {
             weapon_files,
             model_bones,
             model_tags,
+            model_rigs,
             model_coll,
             anim_clips,
             map,
@@ -407,6 +419,16 @@ impl Cod4Zones {
 
 /// One model's bones at its bind pose: name, model-space origin and turn.
 pub type ModelTags = Vec<(String, glam::Vec3, glam::Quat)>;
+
+/// What a DObj of one xmodel reads beside [`ModelTags`]: each bone's
+/// parent in the same order (-1 for a root), and the model's radius, which
+/// `DObjGetBounds` (`cod4_lnxded` 0x81ac44c) makes the entity's box on
+/// every axis (the DObj's radius is its models' summed, 0x81ac954).
+#[derive(Debug)]
+pub struct ModelRig {
+    pub parents: Vec<i32>,
+    pub radius: f32,
+}
 
 /// What registering one weapon file touches.
 pub struct WeaponFile {
@@ -627,6 +649,8 @@ pub struct Cod4HostState {
     pub corpse_anims: HashMap<u32, u32>,
     /// [`Cod4Zones::model_tags`].
     pub model_tags: HashMap<String, Rc<ModelTags>>,
+    /// [`Cod4Zones::model_rigs`].
+    pub model_rigs: HashMap<String, Rc<ModelRig>>,
     /// [`Cod4Zones::model_coll`].
     pub model_coll: HashMap<String, Rc<Vec<vcod_cod4::assets::model::XModelCollSurf>>>,
     /// Each slot's `ps.velocity` after its last cmd (`getVelocity`).
@@ -909,6 +933,7 @@ impl Default for Cod4HostState {
             anim_names: Rc::new(Vec::new()),
             corpse_anims: HashMap::new(),
             model_tags: HashMap::new(),
+            model_rigs: HashMap::new(),
             model_coll: HashMap::new(),
             velocity: vec![[0.0; 3]; MAX_CLIENTS],
             buttons: vec![0; MAX_CLIENTS],
@@ -1039,6 +1064,7 @@ pub fn load_with(
     let weapon_files = zones.weapon_files.clone();
     let model_bones = zones.model_bones.clone();
     let model_tags = zones.model_tags.clone();
+    let model_rigs = zones.model_rigs.clone();
     let model_coll = zones.model_coll.clone();
     let anim_clips = zones.anim_clips.clone();
     let clip = zones.clip.clone();
@@ -1065,6 +1091,7 @@ pub fn load_with(
             c4.weapon_files = weapon_files;
             c4.model_bones = model_bones;
             c4.model_tags = model_tags;
+            c4.model_rigs = model_rigs;
             c4.model_coll = model_coll;
             c4.anim_clips = anim_clips;
             c4.clip = clip;

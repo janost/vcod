@@ -1295,6 +1295,18 @@ calls and constants:
     (`BG_GetSpeed` Mac 0x6b746), and the amplitude prone at
     `viewHeightTarget` 11, ducked at 40 (`BG_GetVerticalBobFactor` Mac
     0x7a0c8, `BG_GetHorizontalBobFactor` Mac 0x7a1b2).
+- After the bob, the landing dip, then the step: `CG_EntityEvent` (Mac
+  0x1e4650) takes an `EV_STEP_VIEW` whose `clientNum` is the predicted
+  playerstate's, outside a demo (`cg` +8) and with `cg_nopredict` and
+  `cg_synchronousClients` off, as `cg + 0x284d0 = (100 - dt) * change /
+  100 * 0.9 + (parm - 128)` while `dt = cg.time - cg + 0x284d4` is under
+  100, else `parm - 128`, clamped to -16..24 (0x326470 24, 0x326630 -16),
+  and stamps `cg + 0x284d4` with `cg.time` (0x326350 100, 0x326370 0.9).
+  VERIFIED, the stores and the rodata. `CG_CalcViewValues` restamps a
+  time ahead of the clock, then while `dt` is under 100 adds `(100 - dt)
+  * change / -100` to the eye's z (0x326620 -100). VERIFIED. A step up
+  sinks the eye by its size and lifts it back over 100 ms. INFERRED, the
+  sign.
 - Then the lean: `AddLeanToPosition` (Mac 0x2923c, called with 16 and 20)
   eases `leanf` to `(2 - |leanf|) * leanf` (0x3261e4 2) and moves the eye
   20 times that along the right of the yaw rolled 16 times it. VERIFIED.
@@ -1306,8 +1318,10 @@ vcod (`crates/client/src/play/cod2_predict.rs`):
   with every kept cmd past its `commandTime` through `player_step`, or
   `weapon::armed_step` with the level's weapon table, over the map's
   collision world, and eases corrections as above;
-- draws the eye above plus the landing dip (`first_person_eye`'s `land`,
-  `play::cod2_view::Land::eye`); the damage kick, the sight's sway and
+- draws the eye above plus the landing dip and the step
+  (`first_person_eye`'s `dips`, `play::cod2_view::Land::eye` and
+  `Step::eye`, the step taken in `Cod2Session::recoil_frame` off the
+  frame's own events, none in a demo); the damage kick, the sight's sway and
   bob, the camera shake and the shellshock kick are the view's angles
   (`play::cod2_view`);
 - runs the Linux server's stored floats (`Arith::Stored`, section 2), not

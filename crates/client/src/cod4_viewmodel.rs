@@ -545,7 +545,7 @@ impl ViewAnim {
 /// The notetracks of `clip` whose time falls in `[from, to)` seconds, in
 /// order, a looping clip's in every cycle; `end` is the clip's own
 /// (the notetrack step, `iw3mp.exe` 0x454ae0, skips it).
-fn notes_crossed(clip: &XAnim, from: f32, to: f32) -> Vec<&str> {
+pub(crate) fn notes_crossed(clip: &XAnim, from: f32, to: f32) -> Vec<&str> {
     let period = clip.duration();
     if to <= from || clip.framerate <= 0.0 {
         return Vec::new();

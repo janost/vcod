@@ -33,7 +33,9 @@
 //! for the scoreboard (the reply prints as a `cmd` line); `--kill-at S` sends `kill` at S s (a death
 //! and what it sends, cod2-protocol.md 15.7); `--download-dir D` fetches the referenced
 //! iwds the install lacks into `D/main/` (`net::download`), or
-//! `--download NAME` asks for that one file whatever the lists say.
+//! `--download NAME` asks for that one file whatever the lists say;
+//! `--ask NAME` sends `download NAME` as typed beside the `cp` and prints
+//! the server's answer without writing anything (the name rules).
 //! `--save` writes the session's raw datagrams (`net::capture`) up to the
 //! K-th sequenced server message (default all). Run a retail server only in
 //! a loopback-only namespace (`unshare -rn`): it heartbeats regardless of
@@ -92,6 +94,7 @@ fn main() -> anyhow::Result<()> {
     let mut scored = false;
     let download_dir = opt("--download-dir").map(std::path::PathBuf::from);
     let download_one = opt("--download").cloned();
+    let mut ask = opt("--ask").cloned();
     let fs = common::game_fs(opt("--game-dir").cloned())?;
 
     let mut s = Session::open(addr, save.is_some(), save_messages)?;
@@ -267,6 +270,9 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 downloads = Some(dls);
+                if let Some(name) = ask.take() {
+                    cl.add_reliable(&format!("download {name}"));
+                }
             }
             if let Some(n) = p.snapshot {
                 snap_at = Instant::now();

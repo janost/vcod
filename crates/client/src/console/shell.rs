@@ -339,6 +339,7 @@ pub const COD2_BINDS: &[(&str, &str)] = &[
     ("4", "+smoke"),
     ("B", "+binoculars"),
     ("X", "openscriptmenu ingame changeweapon"),
+    ("Z", "+talk"),
 ];
 
 /// CoD4 1.7's `default_mp_controls.cfg` binds (a rawfile of
@@ -356,7 +357,6 @@ pub const COD4_BINDS: &[(&str, &str)] = &[
     ("7", "+actionslot 2"),
     ("T", "chatmodepublic"),
     ("Y", "chatmodeteam"),
-    ("Z", "+talk"),
 ];
 
 /// The archived cvars the stock options screens set beyond the ones above,
@@ -555,6 +555,9 @@ impl Shell {
         // CL_Init (CoDMP.exe 1.5 0x413380): default "1", flags 3. Only a 1.5
         // or UO connect sends it (cod15-protocol-diff.md 14).
         s.register("cl_wwwDownload", "1", ARCHIVE | USERINFO);
+        // CoD2's and CoD4's voice chat: CoD2 `CL_InitOnceForAllClients`
+        // (Mac 0x1485e2) registers it "1", flags 0x1003 (cod2-voice.md 4).
+        s.register("cl_voice", "1", ARCHIVE | USERINFO);
         s.register("cg_fov", "80", ARCHIVE | CHEAT);
         // cgame's cvar table row at 0x30075420: default "0.2", CVAR_CHEAT,
         // read by the body's yaw swings (docs/research/cod11-combat.md 16.4).
@@ -922,12 +925,15 @@ impl Shell {
     /// `cg_drawMantleHint` (`CG_Init`, Mac 0x145214: 1, flags 0x1001),
     /// `cg_drawCrosshairNames` (1, 0x1001), its unarchived position
     /// `cg_drawCrosshairNamesPosX` 300 and `PosY` 180 (`CG_RegisterDvars`),
-    /// and the HUD's below.
+    /// and the HUD's below. `cg_drawGun` drops its CoD1 archive flag.
     /// Registered after the config ran, keeping a value it set. CoD1's
     /// `timedemo` cvar goes: CoD2's `timedemo` is a command.
     pub fn use_cod2_cvars(&mut self) {
         // `timedemo` is a command there (`CL_Init`, Mac 0x14b032).
         self.cvars.remove("timedemo");
+        // `CG_Init` (Mac 0x145214): a bool, 1, flags 0x1080, cheat and not
+        // archived (cod2-efx.md 6.8).
+        self.register("cg_drawGun", "1", CHEAT);
         // `CG_Init` (Mac 0x145214), all archived (flags 0x1001): the chat's
         // and say field's places, the stance hint prints and the hints'
         // fade (cod2-hud.md 9, 14).
@@ -1004,6 +1010,19 @@ impl Shell {
         self.enums
             .get(&name.to_ascii_lowercase())
             .map(Vec::as_slice)
+    }
+
+    /// `Dvar_GetInt` (Mac 0x51dca): an enum dvar's index, any other's
+    /// integer (`atoi`); a value no entry names (vcod's `r_mode` -1) reads
+    /// as its integer.
+    pub fn int(&self, name: &str) -> i32 {
+        let v = self.cvar(name).unwrap_or("");
+        self.enum_domain(name)
+            .and_then(|es| {
+                let e = enum_entry(es, v)?;
+                es.iter().position(|x| x == e)
+            })
+            .map_or_else(|| atoi_msvc(v), |i| i as i32)
     }
 
     /// `r_aaSamples`, the scene's MSAA (`Renderer::new`: 1 or 4), latched
@@ -2086,6 +2105,7 @@ mod tests {
                 "cl_run",
                 "cl_stanceTemp",
                 "cl_timeNudge",
+                "cl_voice",
                 "cl_wwwDownload"
             ]
         );
@@ -2289,6 +2309,18 @@ mod tests {
         assert_eq!(s.use_cod4_defaults(true), 0);
         assert_eq!(s.bind("V"), None);
         assert_eq!(s.bind("B"), Some("+melee"));
+    }
+
+    /// `Dvar_GetInt` reads an enum dvar as its entry's index; vcod's own
+    /// `r_mode` -1, which no entry names, as -1.
+    #[test]
+    fn an_enum_dvar_reads_as_its_index() {
+        let mut s = Shell::new();
+        s.set_enum_domain("r_mode", vec!["640x480".into(), "1920x1080".into()]);
+        assert_eq!(s.int("r_mode"), -1);
+        s.execute("set r_mode 1920x1080");
+        assert_eq!(s.int("r_mode"), 1);
+        assert_eq!(s.int("com_maxfps"), 0);
     }
 
     #[test]

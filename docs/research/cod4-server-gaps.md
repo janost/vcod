@@ -13,6 +13,12 @@ more.
 
 ## Fixed
 
+- The helicopter's think runs 1.7's move trace (`script_vehicle_collision`
+  with the normal on a world contact, the DObj radius' box) and its touch
+  (a sticky missile resting on it rides along); its collision and tags
+  are posed by the controller (`tag_turret`, `tag_barrel`), and a posed
+  surface's contact keeps its bind pose normal. The collision capture
+  matches retail line for line (cod4-gsc.md 3.2, "The collision capture").
 - `setStat` sends a changed stat as 1.7's reliable `N <index> <value>`
   (`SV_SetClientStat`), with `GScr_SetStat`'s index and byte checks;
   `getStat` and `setStat` refuse as 1.7's do, receiver and
@@ -66,6 +72,16 @@ more.
   a second between messages as on 1.7 (the gamestate's second fragment
   went 336 ms after the first, against retail's 957). `requeststats`
   after a map change matched retail packet for packet.
+- Traces take 1.7's set-up, the shifted end kept on the x87 stack
+  (cod4-collision.md 2): a dead body's slide off a push matches retail's
+  bit for bit, and the walk replay's exact rows went from 73 to 410
+  (cod4-combat.md 15, cod4-pmove.md 15.1).
+- `ClientImpacts` notifies `touch` both ways after each cmd, another
+  client clips as a capsule, and `SetClientViewAngle` keeps its turns on
+  the x87 stack: a retail capture of a body pushed into another and a free
+  spectator's flight gates them (cod4-pmove.md 15, 15.3).
+- `player_die` writes `pm_type` 8 for a linked body, and the damage timer
+  reads `player_dmgtimer_timePerPoint` and `_maxTime` (cod4-combat.md 4).
 - A mantle plays its clips' movetypes and, over a wall, the jump event at
   its end, so others see the mantle; the mantle capture's `legsAnim`,
   `torsoAnim` and both timers replay exactly (cod4-pmove.md 17.5).
@@ -79,20 +95,19 @@ Open, by how much a player notices.
    minutes, then each after 7 s; vcod-server answers at once and an
    off-LAN client's address stands in for its ban guid
    (cod4-handshake.md 15).
-2. The helicopter's flight runs no move trace and no touch, and its model
-   collision traces at the bind pose (cod4-gsc.md 3.2, `game::cod4::vehicle`).
-   M.
+2. A helicopter with no goal runs 0x808ba22 on 1.7, which ours leaves
+   out: ours holds still. A stock helicopter spends its first 2 s so
+   (cod4-gsc.md 3.2). M. Its turret's tracking is vcod's reading of
+   `VEH_UpdateAim`, 0.45 degrees off retail at worst (`hardpoint_ab`). S.
 3. What the four capture gates (`cod4::capture_ab`, cod4-combat.md 15)
    still tolerate: the dropped weapon's start and fall, a grenade's
    strike on a standing body, the second rocket's entity number, a
-   `setviewpos`'s `delta_angles`, a killcam's trim and its archived view,
-   a dead body's slide (43 ulps of x). S to M each.
-4. The touch pass after the move and a free spectator's flight have no
-   A/B against retail yet (cod4-pmove.md 15.2). S.
-5. The off-LAN snapshot rate above 20 (cod4-server-frame.md), and why
+   `setviewpos`'s `delta_angles`, a killcam's trim and its archived view.
+   S to M each.
+4. The off-LAN snapshot rate above 20 (cod4-server-frame.md), and why
    retail counted its own public address as off the LAN
    (cod4-handshake.md 15). S to measure.
-6. Closed: an empty `sv_master1` heartbeats `master.cod.pm:20810` at
+5. Closed: an empty `sv_master1` heartbeats `master.cod.pm:20810` at
    `dedicated 2`, as CoD1's and CoD2's servers do (`Cod4Server::heartbeat`).
 
 ## The retail run

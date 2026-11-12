@@ -371,8 +371,22 @@ offsets match vcod's netfield table: `weapon` +232 at 0x79455c,
   item's `index` carries the camo above its low 7 bits. A pickup gives
   `index >> 7` as the model (0x8092286..0x8092291, then 0x80923fd..
   0x8092415), and the client draws `worldModel[index >> 7]`
-  (0x4328bf..0x4328e7). VERIFIED. vcod's item sends the weapon alone
-  and a pickup gives slot 0 (cod4-gaps.md).
+  (0x4328bf..0x4328e7). VERIFIED. An empty slot is a `Com_Error`
+  ("No XModel loaded for item index %i, weap index %i, model %i (%s)",
+  0x6c82b8, raised at 0x432905). VERIFIED (the string and the call). An
+  index of 0x800 or more is "Bad item index %i on entity" (0x6c8294,
+  0x4328aa). VERIFIED. vcod-server's item takes the dropper's
+  `weaponmodels[weapon]` (`launch_weapon`) and sends `weapon + 128 *
+  model` (`item_entities`); the use key's swap gives the item's camo
+  (`swap_weapon`). The client keys the item `weapon:<name>#<slot>` and
+  draws that `worldModel[]` slot, nothing on an empty one
+  (`cod4_fly::visual_model`). `cod4::bots`'s
+  `cod4_use_key_swaps_a_held_gun_for_a_dropped_one` (the dropped gun on
+  slot 3 sends `weapon + 384`, the taker holds it on slot 3, and the gun
+  he hands over keeps his slot 2) and `play::cod4`'s
+  `cod4_live_a_dropped_camo_gun_draws_its_camo` (`ak47_mp` on slot 3
+  dropped on vcod-server draws `weapon_ak47_mp_bwmrpt` with
+  `mc/mtl_weapon_ak47_bwmrpt`). VERIFIED (the tests, ours).
 - `common_mp`'s primaries carry slot 0 and five camos (1 `_brock`, 2
   `_bshdwl`, 3 `_bwmrpt`, 4 `_cmdtgr`, 5 `_stagger`), the AK-47, Mini-Uzi,
   M1014, M60E4 and Dragunov a gold slot 6. Every camo has slot 0's bones,

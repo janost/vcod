@@ -297,6 +297,43 @@ impl Land {
     }
 }
 
+/// The own view's last step: `cg + 0x284d4` (its cg.time) and `0x284d0`
+/// (the change, units up), set by `EV_STEP_VIEW` (cod2-movement.md 18).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Step {
+    pub time_ms: i32,
+    pub change: f32,
+}
+
+impl Step {
+    /// `CG_EntityEvent`'s `EV_STEP_VIEW` arm (Mac 0x1e4650): `parm - 128`
+    /// on top of 0.9 of what is left of the last step inside 100 ms,
+    /// clamped to -16..24, stamped `now`.
+    pub fn step(&mut self, parm: i32, now: i32) {
+        let dt = now.wrapping_sub(self.time_ms);
+        let left = if dt < 100 {
+            (100 - dt) as f32 * self.change / 100.0 * 0.9
+        } else {
+            0.0
+        };
+        self.change = (left + (parm - 128) as f32).clamp(-16.0, 24.0);
+        self.time_ms = now;
+    }
+
+    /// `CG_CalcViewValues`' offset of the eye's z (Mac 0x1d3b28): the
+    /// change back down to nothing over 100 ms. A step ahead of the clock
+    /// is restamped `now`, that frame still offset by its negative time.
+    pub fn eye(&mut self, now: i32) -> f32 {
+        let dt = now.wrapping_sub(self.time_ms);
+        if dt < 0 {
+            self.time_ms = now;
+        } else if dt >= 100 {
+            return 0.0;
+        }
+        (100 - dt) as f32 * self.change / -100.0
+    }
+}
+
 /// `GetLeanFraction` (Mac 0x28ec4).
 fn lean_fraction(f: f32) -> f32 {
     (2.0 - f.abs()) * f
@@ -707,6 +744,28 @@ impl ViewFx {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A step sinks the eye by its size and lifts it back over 100 ms; a
+    /// second inside that window adds 0.9 of what is left, clamped to
+    /// -16..24.
+    #[test]
+    fn a_step_lowers_the_eye_and_eases_back() {
+        let mut s = Step::default();
+        assert_eq!(s.eye(1000), 0.0);
+        s.step(128 + 8, 1000);
+        assert_eq!(s.change, 8.0);
+        assert_eq!(s.eye(1000), -8.0);
+        assert_eq!(s.eye(1050), -4.0);
+        assert_eq!(s.eye(1100), 0.0);
+        s.step(128 + 8, 2000);
+        s.step(128 + 18, 2050);
+        assert!((s.change - 21.6).abs() < 1e-5, "{}", s.change);
+        s.step(128 + 18, 2050);
+        assert_eq!(s.change, 24.0);
+        s.step(128 - 20, 3000);
+        assert_eq!(s.change, -16.0);
+        assert!((s.eye(3020) - 12.8).abs() < 1e-5);
+    }
 
     /// A landing's change: the plain landing's parm, the pain landing's
     /// height between 256 and 480 as `(h - 12) / 26 * 4 + 4`, capped at 24.

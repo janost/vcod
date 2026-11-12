@@ -70,6 +70,29 @@ section 6 says.
   walk with its partition stamps and `CM_TraceCapsuleThroughBorder` read
   as CoD2 1.3's do, so CoD4 runs CoD2's kernels unchanged, the border
   excepted (below). INFERRED.
+- `CM_Trace`'s set-up keeps more on the x87 stack than CoD2's, which
+  stores each value. `cod4_lnxded` 0x811ce5c (the function that compares
+  its model with 0xfff at 0x811d21d and ends with the 0.7 walkable test
+  at 0x811d259), per axis at 0x811ce9f..0x811cfb8: the box's centre
+  offset `(mins + maxs) * 0.5` stays on the stack; the half box (trace
+  work +0x5c), the shifted start (+0) and the shifted end (+0xc) are each
+  stored once; the sweep (+0x24) is the unrounded shifted end less the
+  stored start, rounded once, and the middle (+0x48) is the stored start
+  plus the unrounded end, halved. VERIFIED (the instructions). So where
+  the shifted end needs more bits than a float holds (a player's z plus
+  35), 1.7's sweep is the move's own length, and CoD2's set-up rounds it
+  first. `clipmap::trace::Sweep::new` takes 1.7's arithmetic for a map
+  with indexed triangles. Before it, a dead body sliding off a curb 0.1
+  above mp_crash's terrain met the floor 414 ulps of the fraction early,
+  the plain slide stopped one ulp of x short of the step's, so ours took
+  the step and kept the falling velocity where retail snapped to the
+  ground (cod4-combat.md 15). VERIFIED (the gate, the traced fractions).
+  The walk replay's exact rows went from 73 to 410 with it (cod4-pmove.md
+  15.1). `mesh_pins`' synthetic sweeps on mp_crash, mp_backlot and
+  mp_carentan moved with it, 5 to 34 more hits and 14 to 118 more
+  `startsolid` per map in 79k to 440k traces; their digests are retaken
+  under 1.7's set-up, which no capture contradicts. VERIFIED (the pins
+  under both set-ups).
 - Two other differences, INFERRED: `CM_TestBoxInBrush` culls on strict
   bounds where CoD2's accepts a touch (unported; matters only for a box
   exactly touching a brush), and the AABB position walk stops at the

@@ -6,7 +6,7 @@
 //! and the move messages are `vcod_cod4::net::conn`'s, the client's own.
 //!
 //!     cargo run -p vcod-cod4 --example cod4_probe -- HOST:PORT OUT.txt [--secs 15] [--auth 127.0.0.2]
-//!         [--team allies|axis|spectator] [--class assault_mp,0] [--script walk|idle|follow|shoot|fly|mantle|frag|flash|melee|lunge|auto|saw|throwback|sway|poses|prone|rocket]
+//!         [--team allies|axis|spectator] [--class assault_mp,0] [--script walk|idle|follow|shoot|fly|mantle|frag|flash|melee|lunge|auto|saw|throwback|sway|poses|prone|rocket|push]
 //!         [--name NAME] [--qport N] [--iwds MAIN_DIR] [--no-cp] [--goto "X Y Z"] [--scores] [--weapon N] [--pitch P]
 //!         [--download auto|FILE,FILE...] [--dl-dir DIR] [--cmd "SECS TEXT"]...
 //!
@@ -49,6 +49,9 @@
 //! `--weapon N` from 1.5 s, taps attack at 4.5 s along `--face` and
 //! `--pitch` (-15 without it), then views the nearest other player from
 //! 9 s and taps again at 10 s (the rocket captures, cod4-combat.md 12).
+//! `push` faces `--face` level, walks forward 3 to 6 s, strafes right 6
+//! to 7 s, backs off 7 to 8.5 s and walks forward again 8.5 to 10 s: into
+//! a player standing ahead (the touch capture, cod4-pmove.md 15.2).
 //! `--respawn` restarts the script's clock and `--goto` on every spawn;
 //! `--fire-after SECS` holds attack back until another player has been
 //! within 400 units for SECS; `--aim-z Z` aims Z over the nearest
@@ -128,6 +131,9 @@ enum Script {
     /// `--weapon` up, one round along `--face` and `--pitch`, one at the
     /// nearest player.
     Rocket,
+    /// Walks along `--face` into what is ahead, strafes, backs off and
+    /// walks in again.
+    Push,
 }
 
 /// The fixed aims `saw` and `rocket` read: `--face`, and `rocket`'s
@@ -358,6 +364,19 @@ fn script_cmd(
             }
             if within(14.0, 14.5) {
                 c.buttons |= buttons::JUMP;
+            }
+        }
+        Script::Push => {
+            pitch = 0.0;
+            yaw = face;
+            if within(3.0, 6.0) || within(8.5, 10.0) {
+                c.forwardmove = 127;
+            }
+            if within(6.0, 7.0) {
+                c.rightmove = 127;
+            }
+            if within(7.0, 8.5) {
+                c.forwardmove = -127;
             }
         }
         Script::Mantle => {
@@ -640,6 +659,7 @@ fn main() -> Result<()> {
         Some("poses") => Script::Poses,
         Some("prone") => Script::Prone,
         Some("rocket") => Script::Rocket,
+        Some("push") => Script::Push,
         Some(s) => bail!("unknown script {s}"),
     };
     let name = opt("--name").map_or("vcodprobe", String::as_str);

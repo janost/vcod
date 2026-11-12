@@ -73,13 +73,19 @@ impl Session {
     }
 
     /// `getchallenge`, then a plain-text `connect` with `userinfo`: the
-    /// netchan's client side.
+    /// netchan's client side. `voice_probe` picks its own qports.
+    #[allow(dead_code)]
     pub fn connect(&mut self, userinfo: &str) -> anyhow::Result<Client> {
+        self.connect_qport(userinfo, std::process::id() as u16)
+    }
+
+    /// [`Self::connect`] on `qport`: two clients of one process from one
+    /// address need their own, as the server keys a slot by both.
+    pub fn connect_qport(&mut self, userinfo: &str, qport: u16) -> anyhow::Result<Client> {
         let challenge = self.ask(&oob::getchallenge(None), |r| match r {
             Reply::Challenge(c) => Some(*c),
             _ => None,
         })?;
-        let qport = std::process::id() as u16;
         self.ask(&oob::connect(userinfo, challenge, qport), |r| {
             matches!(r, Reply::Connect).then_some(())
         })?;

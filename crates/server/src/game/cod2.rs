@@ -60,6 +60,9 @@ pub struct Cod2ClientState {
     /// `ps.stats[3]` and `stats[4]`: the client under the crosshair the
     /// last frame's scan found and his health (`game::cod2_identify`).
     pub identify: Option<(u8, i32)>,
+    /// `gclient+0x2808`, `lastVoiceTime`: the level time `G_BroadcastVoice`
+    /// last relayed a frame of the client's (cod2-voice.md 3).
+    pub last_voice_time: Option<i32>,
 }
 
 /// 0x80f5614, the cmd half of `SV_ClientThink`: a cmd more than 1000 ms
@@ -806,12 +809,19 @@ impl Cod2Level {
             ..vcod_common::movetrace::MoveWorld::bare(&self.world.collision)
         }
         .with_clip_boxes(&blocks);
+        // The events' clause picks draw off the game's `rand()`, inside
+        // `Pmove` (cod2-combat.md 9.6).
+        let rand = &self.combat.rand;
+        let pick = |n: usize| rand.rand() as usize % n;
         // `BG_AnimUpdatePlayerStateConditions` reads the viewmodel weapon
         // (Mac 0x7b226) before each step.
         let anim = self
             .anims
             .as_deref()
-            .map(|table| vcod_cod2::pmove::weapon::anim_input(table, &p.ps, &p.ws, defs));
+            .map(|table| vcod_cod2::pmove::AnimInput {
+                pick: Some(&pick),
+                ..vcod_cod2::pmove::weapon::anim_input(table, &p.ps, &p.ws, defs)
+            });
         let prone = p.ps.view_height_target == vcod_cod2::pmove::VIEW_PRONE;
         let move_scale = vcod_cod2::pmove::weapon::move_scale(defs, p.ws.weapon);
         let mantling = p.ps.pm_flags & vcod_cod2::pmove::pmf::MANTLE != 0;
@@ -834,8 +844,6 @@ impl Cod2Level {
             // where a clause lists more than one (the melee swings).
             // `BG_AnimScriptEvent` draws `rand() % n` for every clause with a
             // command, one command or more (lnxded 0x80d96ee).
-            let rand = &self.combat.rand;
-            let pick = |n: usize| rand.rand() as usize % n;
             let weapon_cmd = vcod_cod2::pmove::weapon::WeaponCmd {
                 prone_change: prone != (p.ps.view_height_target == vcod_cod2::pmove::VIEW_PRONE),
                 anim: self
@@ -913,6 +921,7 @@ impl Cod2Level {
                 table,
                 player_anim_type: held.map_or(0, |w| w.player_anim_type),
                 weapon_class: held.map_or(0, |w| w.weap_class),
+                pick: None,
             };
             let mut n = 1;
             let mut k = 0;
@@ -1019,6 +1028,8 @@ impl Cod2Level {
                     level_time: now_ms,
                     msec: 100,
                 });
+                let rand = &self.combat.rand;
+                let pick = |n: usize| rand.rand() as usize % n;
                 let anim = self
                     .anims
                     .as_deref()
@@ -1026,6 +1037,7 @@ impl Cod2Level {
                         table,
                         player_anim_type: 0,
                         weapon_class: 0,
+                        pick: Some(&pick),
                     });
                 let world = vcod_common::movetrace::MoveWorld::bare(&self.world.collision);
                 let move_scale =
@@ -1438,6 +1450,8 @@ impl Cod2Level {
         };
         let mut old = p.oldcmd;
         p.ps.command_time = now - 100;
+        let rand = &self.combat.rand;
+        let pick = |n: usize| rand.rand() as usize % n;
         let anim = self
             .anims
             .as_deref()
@@ -1445,6 +1459,7 @@ impl Cod2Level {
                 table,
                 player_anim_type: 0,
                 weapon_class: 0,
+                pick: Some(&pick),
             });
         let world = vcod_common::movetrace::MoveWorld::bare(&self.world.collision);
         vcod_cod2::pmove::player_step_anim(&mut p.ps, &cmd, &mut old, world, self.rules, 1.0, anim);

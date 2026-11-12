@@ -115,9 +115,11 @@ rects placed by their screen alignment
   item, gun or use trigger in front, from retail's one use list
   ([cod2-gsc-diff.md](../research/cod2-gsc-diff.md) 5.4).
 - Low-health overlay, red damage flash, damage direction icons.
-- Crosshair spread with the weapon. A scope's overlay with its zoom
-  (`adsZoomFov`, the gun hidden under it); an iron sight zooms the gun
-  with the world.
+- Crosshair spread with the weapon, gone once the sight is all the way
+  up. A scope's overlay with its zoom (`adsZoomFov`, the gun hidden under
+  it); an iron sight zooms the gun with the world. `cg_drawGun 0` (a
+  cheat) hides the gun and its flash and keeps the crosshair up through
+  the sight.
 - Gametype hudelems: timers, clocks (sd's bomb stopwatch), plant and
   defuse bars, world waypoints (ctf flags, sd bomb sites, hq radios,
   death icons).
@@ -149,18 +151,31 @@ and falloff curves: footsteps, fire, reloads, impacts, passing rounds,
 explosions, `playSound`, entity and missile loops, `playLocalSound` (the
 announcer), `musicPlay`, `soundFade`, the level's ambient crossfaded
 between tracks, sound blend entities, slave ducking under a master,
-`setReverb`'s wet level, alias subtitles. Fire sounds and whizbys come
-from the shooter's `tag_flash`.
+`setReverb`'s wet level, alias subtitles, the view weapon's notetrack
+sounds (`noteTrackSoundA`..`D`, which no stock weapon sets). Fire sounds
+and whizbys come from the shooter's `tag_flash`.
 
 **Effects** ([cod2-efx.md](../research/cod2-efx.md) 6). Bullet impacts
 from the impact table, explosions, `playFx`, `playLoopedFx`, the map's
-ambient effects, other players' muzzle flashes and their tracers from
-their gun's `tag_flash`.
+ambient effects, tracers from the shooter's `tag_flash`. Muzzle flashes
+and brass play on the guns' tags: the view weapon's flash and shell
+eject on its `tag_flash` and `tag_brass` (no flash under a scope's
+overlay), other players' and turrets' on theirs, a bolt action's brass
+at the rechamber. A shot's flash waits for its body's next draw, as
+retail's flag does (6.8).
+
+**Voice chat** ([cod2-voice.md](../research/cod2-voice.md)). `+talk` (Z)
+sends the microphone through the system's libspeex (narrowband at
+CoD2's 8192 Hz, the server's `sv_voiceQuality`); each talker plays on a
+stream of his own. The talk icon, the talker list, the scoreboard's voice
+column and the `muteplayer` menu's mute list work as retail's. Without
+libspeex nothing is sent or played.
 
 **Demos** ([cod2-demos.md](../research/cod2-demos.md)). `record` and
 `stoprecord` write CoD2's `.dm_1` in a game. `demo <name>` and `timedemo
-<name>` play one through the session's frame, unpredicted. Retail's
-demos play in vcod and vcod's in retail.
+<name>` play one through the session's frame, unpredicted. `timedemo`
+writes retail's `demos/timedemo_<map>_mode_<r_mode>.csv`. Retail's demos
+play in vcod and vcod's in retail.
 
 ### Server
 
@@ -177,8 +192,9 @@ demos play in vcod and vcod's in retail.
 - `rate` and `snaps` pace off-LAN clients; a fragmented message goes a
   fragment a turn; a dropped client is a zombie for `sv_zombietime`; a
   silent one times out on `sv_timeout`; `sv_floodProtect`.
-- Serves a non-stock iwd over UDP (`sv_allowDownload`) or redirects to
-  `sv_wwwBaseURL` (`sv_wwwDownload`).
+- Serves any file a client asks for from `fs_homepath`, then the game
+  dir, over UDP (`sv_allowDownload`; stock paks refused as retail does),
+  or redirects to `sv_wwwBaseURL` (`sv_wwwDownload`).
 - `--set dedicated=2` heartbeats `master.cod.pm:20710` every three
   minutes.
 - `g_log` writes 1.3's `games_mp.log`
@@ -216,10 +232,19 @@ retail captures in section 9):
 
 - Rounds strike the hit boxes of each body posed as retail's server
   poses it for the trace, through the antilag (9.5).
+- The spread, the gun spring's kick and the anim picks draw from glibc's
+  `rand()`, seeded each level as retail's `G_InitGame` seeds it, every
+  draw where retail makes it (9.6). The script's `randomInt`,
+  `randomIntRange`, `randomFloat` and `randomFloatRange` draw from the
+  second generator the rockets' wobble draws from, seeded alike (2.6.1).
 - Damage through the stock callbacks; death anims; corpses that fall,
   rest and slide on their death anim's root motion; the respawn.
-- Offhand frags and smoke, rockets and their blasts, the script's
-  `radiusDamage`, damage triggers, binoculars, the sniper's breath hold.
+- Offhand frags and smoke, rockets that wobble off their line as
+  retail's do (not under `setStableMissile`) and their blasts, which pass
+  the body or entity the rocket struck and stop at static models and
+  entities as retail's do, the melee's swing with retail's reach and
+  width, its corner traces, the script's `radiusDamage`, damage triggers,
+  binoculars, the sniper's breath hold.
 - The weapon a death drops, picked up by touch or swapped on the use key.
 - The killcam replays the killer's view out of the engine's frame
   archive and ends on a use press
@@ -238,6 +263,10 @@ Joined clients follow.
 
 **Client commands and rcon** (cod2-protocol.md 3.4.2, 17.7):
 
+- Voice chat's relay under `sv_voice 1`: a talker's frames reach his
+  team (everyone in dm, the dead only the dead), `voice_global`,
+  `voice_deadChat` and `voice_localEcho` as retail's, `muteplayer` and
+  `unmuteplayer`, `isTalking` (cod2-voice.md 3).
 - Chat, `score`, `kill`, `where`, the spectator's follow (`follownext`,
   `followprev`, attack and sight; the follower gets the followed
   player's playerstate).
@@ -283,45 +312,33 @@ stock content. Most need `COD2_DIR` and pass vacuously without it.
 | `tools/cod2_soak.sh` | per map, six bots through dm, tdm, sd, ctf, hq with the client playing ([cod2-client-perf.md](../research/cod2-client-perf.md), "The soak") |
 | `GAME=cod2 tools/cod4_perf.sh` | client frame time ([cod2-client-perf.md](../research/cod2-client-perf.md)) |
 | `GAME=cod2 bot_match` | seeded bot matches ([bots.md](../bots.md#cod2)) |
-| `tools/run_probe_cod2.sh` | retail `cod2_lnxded` with a movement probe gametype |
+| `tools/run_probe_cod2.sh` | retail `cod2_lnxded` with a movement probe gametype; `RAND_TRACE=1` logs its every `rand()` |
 
 ## Missing compared to retail
 
 Ranked by how much a player notices, worst first.
 
-1. **Voice chat.** Neither the client nor the server carries voice. The
-   scoreboard's voice column stays empty and there is no mute list
-   ([cod2-hud.md](../research/cod2-hud.md) 12). Shout across the room,
-   as LAN parties always did.
-2. **Muzzle flashes and brass.** The view weapon draws no flash or shell
-   eject of its own: its `tag_flash` and `tag_brass` are not posed.
-   Another player's flash plays 24 units ahead of his eye, not on his
-   gun. The view weapon's notetrack sounds (`noteTrackSoundA`..`D`) do
-   not play.
-3. **Spread and sway draws.** A shot's spread and the gun's sway in its
-   angles use vcod's own random draws, so rounds do not land where
-   retail's would for the same cmds
-   ([cod2-combat.md](../research/cod2-combat.md) 9.3).
-4. **Rockets fly true.** `fire_rocket`'s destabilization is not modelled,
-   so vcod's bazookas are more accurate than they have any right to be.
-   `Weapon_Melee`'s hit triggers are not either; the melee's 64-unit
-   reach is inferred (cod2-combat.md 8).
-5. **PunkBuster and CD key checks.** vcod runs no PunkBuster. vcod-server
+1. **PunkBuster and CD key checks.** vcod runs no PunkBuster. vcod-server
    never asks the authorize server: an off-LAN client gets its challenge
    at once and its IP stands in for its ban guid. It does not send the
    master the status retail sends every 10 minutes. The client reads no
    CD key from the registry; set `VCOD_CDKEY`
    ([usage.md](../usage.md), "CD keys").
-6. **Demo details.** `timedemo` writes no `demos/timedemo_*.csv`; a demo
-   draws no `EV_STEP_VIEW` smoothing
+2. **Demo and follow eyes.** A demo or a followed player's eye is the
+   snapshot's, lerped, without retail's bob and landing dip; a followed
+   one also lacks the step smoothing, which retail's demo skips too
    ([cod2-demos.md](../research/cod2-demos.md) 7). Retail's front end has
-   no demo list either.
-7. **Server odds and ends.** `give all` hands over every weapon the level
-   registered, not retail's slot rule. Downloads serve only `.iwd` files
-   under the game dir, where retail serves any file.
+   no demo list, and vcod none either.
+3. **Download names.** vcod-server refuses a `download` name with a `..`
+   part and never reads from the filesystem root; retail serves both
+   (cod2-protocol.md 17.5). A stock client never asks for either.
+4. **Voice options.** The Windows mixer dvars (`winvoice_mic_reclevel`,
+   `winvoice_mic_mute`, `winvoice_mic_scaler`), `winvoice_save_voice` and
+   the options page's record level meter do nothing
+   ([cod2-voice.md](../research/cod2-voice.md) 7).
 
 Pending human checks: the in-game script menus have not been checked on
-a GPU, and sound has not been compared by ear.
+a GPU, and sound and voice chat have not been compared by ear.
 
 ## Beyond retail
 

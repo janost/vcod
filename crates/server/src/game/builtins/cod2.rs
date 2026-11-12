@@ -14,6 +14,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("assertex", developer_statement),
     ("assertmsg", developer_statement),
     ("issplitscreen", is_split_screen),
+    ("istalking", is_talking),
     ("precacheitem", precache_item),
     ("precacheturret", precache_turret),
     ("spawnturret", spawn_turret),
@@ -43,7 +44,12 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("getplayerangles", get_player_angles),
     ("int", cast_int),
     ("radiusdamage", radius_damage),
+    ("randomint", random_int),
+    ("randomfloat", random_float),
+    ("randomintrange", random_int_range),
+    ("randomfloatrange", random_float_range),
     ("setnormalhealth", set_normal_health),
+    ("setstablemissile", set_stable_missile),
     ("setteamscore", set_team_score),
     ("setwaypoint", set_waypoint),
     ("setweaponclipammo", set_weapon_clip_ammo),
@@ -92,6 +98,24 @@ fn is_split_screen(
     Ok(Value::Int(0))
 }
 
+/// `self isTalking()` (`PlayerCmd_IsTalking` 0x80fd15a): a voice frame
+/// relayed within `g_voiceChatTalkingDuration` (500 ms) of `level.time`, a
+/// negative age not (cod2-voice.md 3).
+fn is_talking(
+    host: &mut GameHost,
+    _: &mut Cx,
+    recv: Option<Target>,
+    _: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let window = crate::game::builtins::cvar::atoi(host.cvars.get("g_voiceChatTalkingDuration"));
+    let now = host.level_time_ms;
+    let on = host.cod2().clients[slot]
+        .last_voice_time
+        .is_some_and(|t| (0..window).contains(&(now - t)));
+    Ok(Value::Int(i32::from(on)))
+}
+
 /// CoD2's weapon index for `name`, registering it on first use: CoD2 has no
 /// fixed weapon list, `BG_FindWeaponIndexForName` misses and 0x80ebc24
 /// loads `weapons/mp/<name>` and appends it (0x80eb8bc), so the index is
@@ -126,10 +150,13 @@ pub fn register_weapon(host: &mut GameHost, name: &str) -> Option<usize> {
     if keys.get("clipSize").is_some_and(|v| v.trim() == "0") {
         def.clip_size = 0;
     }
-    host.cod2_mut().offhands.push(
-        keys.get("offhandClass")
-            .is_some_and(|c| !c.is_empty() && !c.eq_ignore_ascii_case("none")),
-    );
+    let offhand = keys.get("offhandClass").map_or(0, |c| {
+        vcod_cod2::weapon::OFFHAND_CLASSES
+            .iter()
+            .position(|n| n.eq_ignore_ascii_case(c.trim()))
+            .unwrap_or(0) as i32
+    });
+    host.cod2_mut().offhands.push(offhand);
     host.cod2_mut().weapons.push(name.to_string());
     // The table keeps every def in index order; a level names a few dozen.
     let mut defs: Vec<_> = host.weapons.defs().iter().skip(1).cloned().collect();
@@ -421,6 +448,93 @@ fn radius_damage(
     Ok(Value::Undefined)
 }
 
+/// `randomInt(n)` (0x8113ca4): `irand(0, n)` off `holdrand`, the
+/// generator the rocket's wobble draws from (cod2-combat.md 2.6.1); `n`
+/// under 1 is an error. VERIFIED.
+fn random_int(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let n = int_arg(args, 0, "randomInt takes a number")?;
+    if n <= 0 {
+        return Err(ErrorKind::Custom(
+            "RandomInt parm must be positive integer.".into(),
+        ));
+    }
+    Ok(Value::Int(host.cod2().rand.irand(0, n)))
+}
+
+/// `randomFloat(f)` (0x8113cfe): `flrand(0, f)` off `holdrand`. VERIFIED.
+fn random_float(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let f = float_arg(args, 0, "randomFloat takes a number")?;
+    Ok(Value::Float(host.cod2().rand.flrand(0.0, f)))
+}
+
+/// `randomIntRange(lo, hi)` (0x8113d32): `irand(lo, hi)` off `holdrand`;
+/// `hi` not above `lo` is an error. VERIFIED.
+fn random_int_range(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    const USAGE: &str = "randomIntRange takes two numbers";
+    let (lo, hi) = (int_arg(args, 0, USAGE)?, int_arg(args, 1, USAGE)?);
+    if hi <= lo {
+        return Err(ErrorKind::Custom(
+            "RandomIntRange range must be positive integer.".into(),
+        ));
+    }
+    Ok(Value::Int(host.cod2().rand.irand(lo, hi)))
+}
+
+/// `randomFloatRange(lo, hi)` (0x8113da0): `flrand(lo, hi)` off
+/// `holdrand`; `lo` at or above `hi` is an error. VERIFIED.
+fn random_float_range(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    const USAGE: &str = "randomFloatRange takes two numbers";
+    let (lo, hi) = (float_arg(args, 0, USAGE)?, float_arg(args, 1, USAGE)?);
+    if lo >= hi {
+        return Err(ErrorKind::Custom(
+            "Scr_RandomFloatRange range must be positive float.".into(),
+        ));
+    }
+    Ok(Value::Float(host.cod2().rand.flrand(lo, hi)))
+}
+
+/// `self setStableMissile(on)` (`Scr_SetStableMissile` 0x811225a): a
+/// player's `ent->flags` 0x20000 set or cleared, which `fire_rocket`
+/// copies onto the rocket and which keeps it from wobbling
+/// (cod2-combat.md 2.6). Anything but a player is an error. VERIFIED.
+fn set_stable_missile(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)
+        .map_err(|_| ErrorKind::Custom("Type should be a player".into()))?;
+    let on = int_arg(args, 0, "setStableMissile takes a number")?;
+    let flags = &mut host.cod2_mut().clients[slot].flags;
+    if on != 0 {
+        *flags |= crate::game::cod2_cmds::FL_STABLE_MISSILE;
+    } else {
+        *flags &= !crate::game::cod2_cmds::FL_STABLE_MISSILE;
+    }
+    Ok(Value::Undefined)
+}
+
 /// `int(x)` (`GScr_CastInt` 0x811400a): a float truncated (its `fistp`
 /// runs under `| 0xc00`), a string through `atoi`, an int as it is;
 /// anything else is `cannot cast %s to int`. VERIFIED.
@@ -631,11 +745,9 @@ fn type_name(v: &Value) -> &'static str {
 /// that needs a slot takes the first empty one of CoD2's two
 /// (`BG_GetEmptySlotForWeapon`, ps+0x555 then +0x556), and the rounds are
 /// `Add_Ammo` of `startAmmo` less the reserve held, filling the clip first
-/// for a weapon not held before. For an offhand weapon (`offhandClass`
-/// set) the playerstate's offhand when it has none, sent as `C <index>`
-/// (0x8120e44). VERIFIED. Not done: an empty offhand passing to the next
-/// (`BG_GetFirstAvailableOffhand`), and the script error with both slots
-/// full (the weapon is given with no slot).
+/// for a weapon not held before. A new offhand weapon (`offhandClass`
+/// set) takes [`give_offhand`]'s arm. VERIFIED. Not done: the script
+/// error with both slots full (the weapon is given with no slot).
 fn give_weapon(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -653,12 +765,7 @@ fn give_weapon(
     let Some(index) = host.weapon_index(&name) else {
         return Ok(Value::Undefined);
     };
-    let offhand = host
-        .cod2()
-        .offhands
-        .get(index - 1)
-        .copied()
-        .unwrap_or(false);
+    let offhand = host.cod2().offhands.get(index - 1).copied().unwrap_or(0) != 0;
     let weapons = host.weapons.clone();
     let w = &mut host.client_weapons[slot];
     w.slots = before.slots;
@@ -668,6 +775,9 @@ fn give_weapon(
         && let Some(s) = crate::game::pickup::empty_slot_for(&before, 1)
     {
         w.slots[s] = index as u8;
+    }
+    if !had && offhand {
+        give_offhand(host, slot, index);
     }
     if let Some(def) = weapons.get(index) {
         let (a, c) = (def.ammo_index, def.clip_index);
@@ -705,16 +815,50 @@ fn give_weapon(
             );
         }
     }
-    if offhand && host.cod2().clients[slot].offhand == 0 {
-        host.cod2_mut().clients[slot].offhand = index as u8;
-        host.client_commands.push((slot, format!("C {index}")));
-    }
     // A weapon the player lacked: `I "1"` after the give (0x80f9b8c,
     // cod2-protocol.md 15.5).
     if !had && host.client_weapons[slot].holds(index) {
         host.client_commands.push((slot, "I \"1\"".to_string()));
     }
     Ok(Value::Undefined)
+}
+
+/// `G_GivePlayerWeapon`'s offhand arm (Mac 0x1c930a, lnxded 0x8120e44)
+/// for a new offhand weapon `index`: with no offhand it becomes the
+/// offhand; an offhand still holding rounds stays; an empty one gives way
+/// to [`first_available_offhand`] of its class, else to `index`. A change
+/// is sent as `C <index>`. VERIFIED.
+pub(crate) fn give_offhand(host: &mut GameHost, slot: usize, index: usize) {
+    let current = usize::from(host.cod2().clients[slot].offhand);
+    let next = if current == 0 {
+        index
+    } else if weapon_ammo(host, slot, current) > 0 {
+        return;
+    } else {
+        let class = host.cod2().offhands.get(current - 1).copied().unwrap_or(0);
+        first_available_offhand(host, slot, class).unwrap_or(index)
+    };
+    host.cod2_mut().clients[slot].offhand = next as u8;
+    host.client_commands.push((slot, format!("C {next}")));
+}
+
+/// `BG_WeaponAmmo` (Mac 0x7a8f4): the weapon's reserve and clip together.
+fn weapon_ammo(host: &GameHost, slot: usize, weapon: usize) -> i32 {
+    let (Some(def), Some(a)) = (host.weapons.get(weapon), host.client_ammo.get(slot)) else {
+        return 0;
+    };
+    i32::from(a.ammo[def.ammo_index]) + i32::from(a.clip[def.clip_index])
+}
+
+/// `BG_GetFirstAvailableOffhand` (Mac 0x7b9f4): the lowest held weapon of
+/// `offhandClass` `class` with rounds. VERIFIED.
+fn first_available_offhand(host: &GameHost, slot: usize, class: i32) -> Option<usize> {
+    let offhands = &host.cod2().offhands;
+    (1..=offhands.len()).find(|&i| {
+        offhands[i - 1] == class
+            && host.client_weapons[slot].holds(i)
+            && weapon_ammo(host, slot, i) != 0
+    })
 }
 
 fn number(v: &Value) -> Result<i32, ErrorKind> {

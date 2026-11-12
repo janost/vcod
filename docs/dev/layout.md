@@ -23,6 +23,7 @@ Grep the module header comments for more; each one names its research doc.
     version alone: CoD4 1.7 and CoD1 1.5 both speak protocol 6), its
     connectionless framing, gamestate and snapshot writers.
   - `net/codec.rs`: the game-neutral bit reader and table-driven field codec.
+  - `net/voice.rs`: voice chat's out-of-band packets, CoD2's and CoD4's.
   - `net/cod1/`: CoD1's tables, configstring layouts and 1.1 numbering.
 - `testing`: the install fixtures tests take (`docs/dev/testing.md`).
 
@@ -112,7 +113,9 @@ scripts: `vm/interp.rs`, `vm/sched.rs`, `vm/profile.rs` (a game's
   `server/cod1_frame.rs`, `spectate.rs` (usercmds in, playerstate out).
 - `cod2/`: the CoD2 engine, `Cod2Game` in `cod2/mod.rs`: handshake,
   gamestate, snapshots, spectators. `house.rs`: zombies, downloads,
-  heartbeat.
+  heartbeat. `voice.rs`: the voice relay.
+- `voice.rs`: the voice queue, mute list and relay rules CoD2 and CoD4
+  share.
 - `cod4/`: the CoD4 1.7 engine, `Cod4Game`: handshake with stats and pure,
   gamestate, snapshots, downloads (`download.rs`), the console and OOB
   (`oob.rs`), voice relay (`voice.rs`), map cycle (`cycle.rs`), bots
@@ -165,4 +168,6 @@ scripts: `vm/interp.rs`, `vm/sched.rs`, `vm/profile.rs` (a game's
     launched parts.
   - `Session::Cod4Menu`: 1.7's front end (`cod4_front.rs`), which a join
     hands over to `Session::Cod4` and leaving the game takes back.
+- `voice.rs`: CoD2's and CoD4's voice chat: the session's link, Speex,
+  the microphone and the talkers' streams.
 - `probe.rs`: the headless probe client (`docs/dev/retail.md`).

@@ -710,8 +710,8 @@ impl Cod4Level {
         let old = self.rt.host.cod4().buttons[slot];
         let mut cmd = Cmd::from(cmd);
         cmd.buttons = self.latch_buttons(slot, cmd.buttons, selected);
-        if let Some((seq, time)) = self.think(slot, cmd) {
-            self.after_think(slot, seq, time);
+        if let Some((seq, time, touched)) = self.think(slot, cmd) {
+            self.after_think(slot, seq, time, &touched);
             self.update_activate(slot, pressed, old);
         }
     }
@@ -881,7 +881,10 @@ impl Cod4Level {
     /// else 0, no `oldcmd`); a player walks at `g_speed`. Then the body is
     /// relinked where the move left it (`SV_LinkEntity`), a spectator
     /// unlinked. Without a clip map only the clock and the view move.
-    fn think(&mut self, slot: usize, mut cmd: Cmd) -> Option<(i32, i32)> {
+    /// One cmd's `ClientThink_real` up to the link. A playing or dead
+    /// client's returns the event sequence before the move, the cmd's time
+    /// and the move's touch list, for [`Self::after_think`].
+    fn think(&mut self, slot: usize, mut cmd: Cmd) -> Option<(i32, i32, Vec<u32>)> {
         let state = self
             .rt
             .client_session(slot)
@@ -948,6 +951,7 @@ impl Cod4Level {
         // `r.maxs` as the last cmd left them, what a blockage copies.
         let box_before = Vec3::new(15.0, 15.0, body_height(p.ps.word("pm_flags")));
         let mut mantle = None;
+        let touched;
         if armed {
             // `ClientThink_real`'s aim block (0x80a5e95..0x80a6162) on the
             // playerstate the last cmd left: the angles this cmd's rounds
@@ -978,7 +982,7 @@ impl Cod4Level {
             });
             let c4 = self.rt.host.cod4_mut();
             let mut rand = || c4.rand();
-            mantle = pmove::player_step_animated(
+            (touched, mantle) = pmove::player_step_animated(
                 &mut ps,
                 &cmd,
                 &mut oldcmd,
@@ -988,10 +992,9 @@ impl Cod4Level {
                 &self.combat.defs,
                 anim,
                 Some(&mut rand),
-            )
-            .1;
+            );
         } else {
-            pmove::player_step(&mut ps, &cmd, &mut oldcmd, &world, self.rules, weapon);
+            touched = pmove::player_step(&mut ps, &cmd, &mut oldcmd, &world, self.rules, weapon);
         }
         p.ps = ps.to_wire(&p.ps);
         p.old_velocity = ps.old_velocity;
@@ -1014,7 +1017,7 @@ impl Cod4Level {
         if state == SessionState::Playing {
             self.death_choices(slot);
         }
-        armed.then_some((old_seq, cmd_time))
+        armed.then_some((old_seq, cmd_time, touched))
     }
 
     /// `G_AddPlayerMantleBlockage`, inlined in `ClientThink_real` after a
@@ -1064,8 +1067,11 @@ impl Cod4Level {
     }
 
     /// After a player's cmd: the loadout follows what its weapon half did,
-    /// then `ClientEvents` runs its events.
-    fn after_think(&mut self, slot: usize, old_seq: i32, cmd_time: i32) {
+    /// then `ClientEvents` runs its events and `ClientImpacts` (`cod4_lnxded`
+    /// 0x80a501a, after the link) raises the move's touches: per entity
+    /// met, once, `"touch"` on the client with it, then on it with the
+    /// client (cod4-pmove.md 15).
+    fn after_think(&mut self, slot: usize, old_seq: i32, cmd_time: i32, touched: &[u32]) {
         let Some(ps) = self.pm_state(slot) else {
             return;
         };
@@ -1090,6 +1096,7 @@ impl Cod4Level {
                 (w, ps.grenade_time_left)
             });
         self.client_events(slot, old_seq, cmd_time);
+        self.rt.client_impacts(slot, touched);
     }
 
     /// What the script and the area tree read of a move: the origin, the
@@ -1345,8 +1352,10 @@ impl Cod4Level {
         self.combat.aim[slot] = Default::default();
         self.combat.gun_angles[slot] = [0.0; 2];
         self.combat.clear_blood(slot);
-        if mode != SpawnMode::Intermission {
-            self.think(slot, think);
+        if mode != SpawnMode::Intermission
+            && let Some((_, _, touched)) = self.think(slot, think)
+        {
+            self.rt.client_impacts(slot, &touched);
         }
         if let Some(p) = self.players[slot].as_mut() {
             p.ps.set("commandTime", now as u32);
@@ -2293,12 +2302,18 @@ fn spawn_playerstate(
 /// wire's half-short rounding (`angle16_sent`) is what makes the
 /// spectator's 65 read 65.00061 (VERIFIED live).
 fn place(ps: &mut PlayerState, origin: [f32; 3], angles: [f32; 3], cmd: Option<&UserCmd>) {
+    // 1.7's `SetClientViewAngle` (`cod4_lnxded` 0x80a77f6) keeps the turns
+    // on the x87 stack: the cmd's int times -360/65536 (0x820deb4) plus
+    // the angle, times the float 1/360 (0x8209630), less its floor of a
+    // half more stored as a float, times 360, one store.
+    const SHORT_TO_ANGLE: f64 = -0.005_493_164_062_5;
+    let per_turn = f64::from(f32::from_bits(0x3b36_0b61));
     for i in 0..3 {
         ps.setf(&format!("origin[{i}]"), origin[i]);
         let cmd_angle = cmd.map_or(0, |c| i32::from(c.angles[i]));
-        let d = angles[i] - (cmd_angle as f32 * 0.005_493_164_f32);
-        let turns = d * 0.002_777_777_8_f32;
-        let delta = (turns - (turns + 0.5).floor()) * 360.0;
+        let turns = (f64::from(cmd_angle) * SHORT_TO_ANGLE + f64::from(angles[i])) * per_turn;
+        let whole = f64::from((turns + 0.5).floor() as f32);
+        let delta = ((turns - whole) * 360.0) as f32;
         ps.setf(&format!("delta_angles[{i}]"), delta);
         ps.setf(&format!("viewangles[{i}]"), angles[i]);
     }

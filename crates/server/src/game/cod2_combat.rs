@@ -47,6 +47,7 @@ mod ev {
     pub const GRENADE_BOUNCE: i32 = 187;
     pub const GRENADE_EXPLODE: i32 = 188;
     pub const ROCKET_EXPLODE: i32 = 189;
+    pub const ROCKET_EXPLODE_NOMARKS: i32 = 190;
     pub const CUSTOM_EXPLODE: i32 = 191;
 }
 
@@ -68,8 +69,9 @@ const DFLAG_PENETRATION: i32 = 0x20;
 const EVENT_VALID_MS: i32 = 300;
 /// `g_clonePlayerMaxVelocity`'s default is not read; vcod settles a corpse
 /// where it fell.
-/// A grenade's clip mask (`fire_grenade`'s `clipmask`, its word not read
-/// off the Mac decompile): the blast probes' mask with bodies. INFERRED.
+/// A grenade's and a rocket's clip mask, 0x2802891 (`fire_grenade`
+/// lnxded 0x810e68e, `fire_rocket` 0x810e938): the blast probes' mask with
+/// bodies.
 const MASK_MISSILE: u32 = MASK_BLAST | CONTENTS_BODY;
 
 /// One trace's contact as `G_LocationalTrace` reports it.
@@ -86,6 +88,14 @@ struct Contact {
     hit_location: u8,
 }
 
+/// The entity a blast passes over (`G_RadiusDamage`'s `ignore`): a
+/// client, or an entity with none.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Struck {
+    pub client: Option<usize>,
+    pub entity: Option<EntId>,
+}
+
 /// A grenade or rocket in the air, or its explode event waiting out its
 /// 300 ms on the wire.
 #[derive(Clone, Debug)]
@@ -98,9 +108,12 @@ pub struct Missile {
     pub tr_time: i32,
     pub base: Vec3,
     pub delta: Vec3,
+    pub apos_type: i32,
     pub apos_base: Vec3,
     pub apos_delta: Vec3,
     pub apos_time: i32,
+    /// `s.time`: the fire's `level.time` plus 50.
+    pub time: i32,
     pub origin: Vec3,
     /// `nextthink`: the fuse.
     pub explode_at: i32,
@@ -111,18 +124,34 @@ pub struct Missile {
     pub surf_type: i32,
     /// When the explode went out; the entity goes 300 ms later.
     pub exploded_at: Option<i32>,
+    /// A rocket's ms from `trTime` to its next wobble (`ent+0x1a8`).
+    pub destab: f32,
+    /// Whether it wobbled yet (`flags` 0x10000).
+    pub wobbled: bool,
+    /// `flags` 0x20000, the owner's `setStableMissile` at the fire: no
+    /// wobble.
+    pub stable: bool,
 }
 
 impl Missile {
+    /// `BG_EvaluateTrajectory` (lnxded 0x80df5d4): the seconds stored as a
+    /// float, then `VectorMA` on the stack with one store per component.
     fn evaluate(&self, at: i32) -> Vec3 {
         let t = (at - self.tr_time) as f32 * 0.001;
+        let ma = |b: f32, d: f32| (f64::from(d) * f64::from(t) + f64::from(b)) as f32;
+        let linear = Vec3::new(
+            ma(self.base.x, self.delta.x),
+            ma(self.base.y, self.delta.y),
+            ma(self.base.z, self.delta.z),
+        );
         match self.tr_type {
             vcod_cod2::trajectory::TR_GRAVITY => {
-                let mut p = self.base + self.delta * t;
-                p.z -= 400.0 * t * t;
+                let mut p = linear;
+                let fall = f64::from(t) * 400.0 * f64::from(t);
+                p.z = (f64::from(p.z) - fall) as f32;
                 p
             }
-            vcod_cod2::trajectory::TR_LINEAR => self.base + self.delta * t,
+            vcod_cod2::trajectory::TR_LINEAR => linear,
             _ => self.base,
         }
     }
@@ -165,9 +194,11 @@ pub struct Combat {
     /// The last few hits `G_Damage` handed the damage callback, newest
     /// last: what a test or a log reads back.
     pub hits: VecDeque<Hit>,
-    /// The game's `rand()`: the spread, the grenade's tumble, the gun
-    /// spring's kick, the torso events' picks; shared with the host's
-    /// `Cod2HostState::rand`, which `player_die`'s death anim draws from.
+    /// The game's two generators: `rand()` (the spread, the gun spring's
+    /// kick, the torso events' picks, the melee's extra damage) and
+    /// `holdrand` (the rocket's wobble, the grenade's tumble, the script's
+    /// `random*`); shared with the host's `Cod2HostState::rand`, which
+    /// `player_die`'s death anim and the script's builtins draw from.
     pub rand: std::rc::Rc<GameRand>,
     /// Each client's body as the server animates it.
     bodies: Vec<ServerBody>,
@@ -310,15 +341,15 @@ impl Combat {
     }
 
     /// Pins the game's `rand()` to glibc's seeded `srand(seed)`, `skip`
-    /// draws in: retail's `G_InitGame` seeds it off the wall clock
-    /// (cod2-combat.md 9.6), so a test replaying a capture pins the seed
-    /// that fits it.
+    /// draws in, leaving `holdrand` as the level's draws left it: a test
+    /// replaying a capture seeds both at the load ([`GameRand::reseed`],
+    /// retail's `G_InitGame` seeds both off one wall-clock read,
+    /// cod2-combat.md 9.6, 9.7), then pins glibc's where its replay starts.
     pub fn pin_rand(&mut self, seed: u32, skip: usize) {
-        let mut g = vcod_common::rng::GlibcRand::new(seed);
+        *self.rand.g.borrow_mut() = vcod_common::rng::GlibcRand::new(seed);
         for _ in 0..skip {
-            g.next_u31();
+            self.rand.rand();
         }
-        *self.rand.0.borrow_mut() = RandState::Glibc(g);
     }
 
     /// Each weapon the level registered since the last call, read from its
@@ -377,33 +408,68 @@ impl Combat {
     }
 }
 
-/// The game module's one `rand()` stream: a seeded xorshift, or glibc's
-/// own sequence once a test pins it ([`Combat::pin_rand`]). Behind a cell
-/// so a draw can sit beside a borrow of the weapon table.
+/// The game module's two generators: glibc's `rand()`, as `cod2_lnxded`
+/// links it, and q_shared's `holdrand`, which `G_InitGame` seeds each level
+/// with one seed ([`GameRand::reseed`], cod2-combat.md 2.6.1, 9.6).
+/// Unseeded they are glibc's `srand(1)` and `holdrand`'s static 0x89abcdef
+/// (lnxded .data 0x817e338). Behind cells so a draw can sit beside a borrow
+/// of the weapon table.
 #[derive(Debug)]
-pub struct GameRand(std::cell::RefCell<RandState>);
-
-#[derive(Debug)]
-enum RandState {
-    Xorshift(u64),
-    Glibc(vcod_common::rng::GlibcRand),
+pub struct GameRand {
+    g: std::cell::RefCell<vcod_common::rng::GlibcRand>,
+    drawn: std::cell::Cell<u64>,
+    hold: std::cell::Cell<vcod_common::rng::HoldRand>,
 }
 
 impl Default for GameRand {
     fn default() -> Self {
-        GameRand(std::cell::RefCell::new(RandState::Xorshift(
-            0x2545_f491_4f6c_dd1d,
-        )))
+        GameRand {
+            g: std::cell::RefCell::new(vcod_common::rng::GlibcRand::new(1)),
+            drawn: std::cell::Cell::new(0),
+            hold: std::cell::Cell::new(vcod_common::rng::HoldRand(0x89ab_cdef)),
+        }
     }
 }
 
 impl GameRand {
+    /// `G_InitGame`'s `srand(seed)` then `Rand_Init(seed)` (lnxded
+    /// 0x810911e, 0x8109129).
+    pub fn reseed(&self, seed: u32) {
+        *self.g.borrow_mut() = vcod_common::rng::GlibcRand::new(seed);
+        self.hold.set(vcod_common::rng::HoldRand(seed));
+    }
+
+    /// `Rand_Init(seed)` alone: `holdrand`, glibc's stream left as it is.
+    pub fn rand_init(&self, seed: u32) {
+        self.hold.set(vcod_common::rng::HoldRand(seed));
+    }
+
+    /// `flrand(min, max)` off `holdrand`.
+    pub fn flrand(&self, min: f32, max: f32) -> f32 {
+        let mut h = self.hold.get();
+        let v = h.flrand(min, max);
+        self.hold.set(h);
+        v
+    }
+
+    /// `irand(min, max)` off `holdrand`.
+    pub fn irand(&self, min: i32, max: i32) -> i32 {
+        let mut h = self.hold.get();
+        let v = h.irand(min, max);
+        self.hold.set(h);
+        v
+    }
+
+    /// How many draws the stream has made, reseeds included: what a gate
+    /// counts against a retail trace.
+    pub fn drawn(&self) -> u64 {
+        self.drawn.get()
+    }
+
     /// `rand()`: 31 bits.
     pub fn rand(&self) -> u32 {
-        match &mut *self.0.borrow_mut() {
-            RandState::Xorshift(s) => (vcod_common::rng::xorshift(s) >> 33) as u32,
-            RandState::Glibc(g) => g.next_u31(),
-        }
+        self.drawn.set(self.drawn.get() + 1);
+        self.g.borrow_mut().next_u31()
     }
 
     /// `G_random`: `rand() / 2^31` on the stack.
@@ -425,6 +491,32 @@ fn idle_anim(stance: Stance) -> &'static str {
 /// `ByteToDir`'s inverse over a direction.
 fn dir_byte(v: Vec3) -> i32 {
     dir_to_byte(v.to_array())
+}
+
+/// `Melee_Trace`'s `traceOffsets` (lnxded 0x815ed20): the centre, then the
+/// four corners, as (right, up) shares of the width and height.
+const MELEE_OFFSETS: [(f32, f32); 5] = [
+    (0.0, 0.0),
+    (1.0, 1.0),
+    (1.0, -1.0),
+    (-1.0, 1.0),
+    (-1.0, -1.0),
+];
+
+/// `VectorMA`: `a + b * s` on the stack, one store per component.
+fn vector_ma(a: Vec3, s: f32, b: Vec3) -> Vec3 {
+    let d = f64::from;
+    Vec3::new(
+        (d(s) * d(b.x) + d(a.x)) as f32,
+        (d(s) * d(b.y) + d(a.y)) as f32,
+        (d(s) * d(b.z) + d(a.z)) as f32,
+    )
+}
+
+/// `Vec3Lerp`: `(b - a) * f + a` on the stack, one store per component.
+fn vec3_lerp(a: Vec3, b: Vec3, f: f32) -> Vec3 {
+    let l = |a: f32, b: f32| ((f64::from(b) - f64::from(a)) * f64::from(f) + f64::from(a)) as f32;
+    Vec3::new(l(a.x, b.x), l(a.y, b.y), l(a.z, b.z))
 }
 
 impl Cod2Level {
@@ -1259,16 +1351,17 @@ impl Cod2Level {
             );
             return;
         }
+        // The range's damage times the leg's scale on the stack, truncated
+        // (lnxded 0x81202ba).
+        let damage = (f64::from(w.damage_at(super::cod2_blast::stored_length(start - hit)))
+            * f64::from(scale)) as i32;
         if let Some(id) = tr.entity {
-            let damage = (w.damage_at(start.distance(hit)) as f32 * scale).round_ties_even() as i32;
             self.entity_damage(id, attacker, None, damage, dflags, mod_, hit, forward);
             return;
         }
         let Some(victim) = tr.client.filter(|&v| v != attacker) else {
             return;
         };
-        let dist = start.distance(hit);
-        let damage = (w.damage_at(dist) as f32 * scale).round_ties_even() as i32;
         self.g_damage(
             victim,
             attacker,
@@ -1436,37 +1529,96 @@ impl Cod2Level {
         self.apply_damage_ops();
     }
 
-    /// `FireWeaponMelee` (`Weapon_Melee`, lnxded 0x811f844): a 64-unit
-    /// trace along the aim that strikes a body for `meleeDamage`. The
-    /// swing's hit and miss events are not raised. INFERRED reach.
+    /// `FireWeaponMelee` (lnxded 0x8120a70): `Weapon_Melee` (0x811f844)
+    /// from `G_GetPlayerViewOrigin` along the view's own axes
+    /// (`G_GetPlayerViewDirection`, `ps.viewangles`), unless the client is
+    /// on a turret. `Melee_Trace` (0x811f6b0) tries up to five traces of
+    /// `player_meleeRange` under the shot mask, the centre then the
+    /// corners `player_meleeWidth` right and `player_meleeHeight` up off
+    /// it, and keeps the first that meets something without
+    /// `SURF_NOIMPACT`; the hit triggers take the first trace's sweep. A
+    /// contact raises `EV_MELEE_HIT` on a client, `EV_MELEE_MISS` on
+    /// anything else, and a struck target that takes damage takes
+    /// `meleeDamage` plus `rand() % 5` (cod2-combat.md 2.7).
     fn fire_melee(&mut self, slot: usize) {
         let Some(p) = self.players.get(slot).and_then(Option::as_ref) else {
             return;
         };
-        let weapon = p.ws.weapon;
-        let Some(w) = self
+        // Retail tests `ent+0x162` beside the turret bits; vcod's gunner
+        // never has it clear. INFERRED.
+        if p.ps.e_flags & 0x300 != 0 {
+            return;
+        }
+        let (weapon, ps) = (p.ws.weapon, p.ps.clone());
+        let damage = self
             .combat
             .weapons
             .get(usize::from(weapon))
-            .cloned()
-            .flatten()
-        else {
+            .and_then(Option::as_ref)
+            .map_or(0, |w| w.melee_damage);
+        let eye = Self::player_view_origin(&ps, self.level_time());
+        let axes = angle_vectors(Vec3::from_array(ps.view_angles));
+        let dvar = |name: &str, default: f32| match self.rt.host.cvars.get(name) {
+            "" => default,
+            v => crate::game::builtins::cvar::atof(v),
+        };
+        let range = dvar("player_meleeRange", 64.0);
+        let width = dvar("player_meleeWidth", 10.0);
+        let height = dvar("player_meleeHeight", 10.0);
+        let traces = if width > 0.0 || height > 0.0 { 5 } else { 1 };
+        let mut contact = None;
+        for (k, &(right, up)) in MELEE_OFFSETS.iter().take(traces).enumerate() {
+            let end = vector_ma(eye, range, axes[0]);
+            let end = vector_ma(end, width * right, axes[1]);
+            let end = vector_ma(end, height * up, axes[2]);
+            let tr = self.locational_trace(
+                eye,
+                end,
+                Some(slot),
+                MASK_SHOT,
+                &BULLET_PRIORITY,
+                &HashMap::new(),
+            );
+            let hit = vec3_lerp(eye, end, tr.fraction);
+            if k == 0 {
+                self.rt.trigger_sweep(&super::combat::TriggerSweep {
+                    attacker: slot,
+                    start: eye,
+                    end: hit,
+                    damage,
+                    mod_: "MOD_MELEE",
+                });
+            }
+            if tr.surface_flags & SURF_NOIMPACT == 0 && tr.fraction != 1.0 {
+                contact = Some((tr, hit));
+                break;
+            }
+        }
+        let Some((tr, hit)) = contact else {
             return;
         };
-        let Some((axes, eye)) = self.weapon_parms(slot) else {
-            return;
+        use vcod_common::net::event_ids::{EV_MELEE_HIT, EV_MELEE_MISS};
+        let (event, other) = match (tr.client, tr.entity) {
+            (Some(c), _) => (EV_MELEE_HIT, c as u32),
+            (None, Some(id)) => (EV_MELEE_MISS, id.0),
+            (None, None) => (EV_MELEE_MISS, vcod_common::net::protocol::ENTITYNUM_WORLD),
         };
-        let end = eye + axes[0] * 64.0;
-        let tr = self.locational_trace(
-            eye,
-            end,
-            Some(slot),
-            MASK_SHOT,
-            &BULLET_PRIORITY,
-            &HashMap::new(),
-        );
+        self.temp_entity(TempEntity {
+            event,
+            parm: dir_byte(tr.normal),
+            surf_type: 0,
+            other,
+            attacker: 0,
+            weapon: i32::from(weapon),
+            client_num: 0,
+            scale: 0,
+            origin: hit.to_array(),
+            scope: Scope::Pvs,
+            quake: None,
+            origin2: None,
+        });
         if let Some(victim) = tr.client {
-            let hit = eye + (end - eye) * tr.fraction;
+            let damage = (self.combat.rand.rand() % 5) as i32 + damage;
             self.g_damage(
                 victim,
                 slot,
@@ -1474,12 +1626,17 @@ impl Cod2Level {
                 weapon,
                 hit,
                 Some(axes[0]),
-                w.melee_damage,
+                damage,
                 0,
                 "MOD_MELEE",
                 tr.hit_location,
                 0,
             );
+        } else if let Some(id) = tr.entity
+            && self.rt.host.entity_takes_damage(id)
+        {
+            let damage = (self.combat.rand.rand() % 5) as i32 + damage;
+            self.entity_damage(id, slot, None, damage, 0, "MOD_MELEE", hit, axes[0]);
         }
     }
 
@@ -1526,10 +1683,11 @@ impl Cod2Level {
         m.delta += n * vel.dot(n);
     }
 
-    /// `fire_grenade` (Mac 0x1c9796): a `TR_GRAVITY` missile from `origin`
-    /// at the truncated `velocity`, tumbling (`apos` `TR_LINEAR` at
-    /// 720 +- 45 and 360 +- 45 degrees a second), its fuse `fuse_ms` out.
-    /// Returns its index in the level's list.
+    /// `fire_grenade` (lnxded 0x810e68e): a `TR_GRAVITY` missile from
+    /// `origin` at the truncated `velocity`, tumbling (`apos` `TR_LINEAR` at
+    /// 720 and 360 degrees a second, each plus `flrand(-45, 45)` off
+    /// `holdrand`), its fuse `fuse_ms` out. Returns its index in the
+    /// level's list.
     pub fn fire_grenade(
         &mut self,
         owner: Option<usize>,
@@ -1543,11 +1701,10 @@ impl Cod2Level {
         let delta = Vec3::new(velocity.x.trunc(), velocity.y.trunc(), velocity.z.trunc());
         let angles = super::builtins::math::vectoangles(velocity.to_array());
         let pitch = (angles[0] - 120.0).rem_euclid(360.0);
-        let spin = Vec3::new(
-            self.combat.randomf() * 90.0 - 45.0 + 720.0,
-            0.0,
-            self.combat.randomf() * 90.0 - 45.0 + 360.0,
-        );
+        let tumble = |about: f32| {
+            (f64::from(about) + f64::from(self.combat.rand.flrand(-45.0, 45.0))) as f32
+        };
+        let spin = Vec3::new(tumble(720.0), 0.0, tumble(360.0));
         self.combat.missiles.push(Missile {
             id,
             owner,
@@ -1557,9 +1714,11 @@ impl Cod2Level {
             tr_time: now,
             base: origin,
             delta,
+            apos_type: vcod_cod2::trajectory::TR_LINEAR,
             apos_base: Vec3::new(pitch, angles[1], angles[2]),
             apos_delta: spin,
             apos_time: now,
+            time: now + 50,
             origin,
             explode_at: now + fuse_ms,
             ground: 1023,
@@ -1568,13 +1727,16 @@ impl Cod2Level {
             event_parms: [0; 4],
             surf_type: 0,
             exploded_at: None,
+            destab: 0.0,
+            wobbled: false,
+            stable: false,
         });
         Some(self.combat.missiles.len() - 1)
     }
 
     /// `Weapon_RocketLauncher_Fire` (lnxded 0x812061a): the aim pushed off
-    /// by the spread at 16 units, `fire_rocket` along it at
-    /// `projectileSpeed` (`TR_LINEAR`), and the shooter knocked back 64.
+    /// by the spread at 16 units, `fire_rocket` along it, and the shooter
+    /// knocked back 64.
     fn rocket_fire(
         &mut self,
         slot: usize,
@@ -1591,24 +1753,46 @@ impl Cod2Level {
             + axes[1] * (angle.cos() * frac * r)
             + axes[2] * (angle.sin() * frac * r))
             .normalize_or_zero();
+        self.fire_rocket(slot, w, weapon, muzzle, dir);
+        if let Some(p) = self.players[slot].as_mut() {
+            p.ps.velocity -= axes[0] * 64.0;
+        }
+    }
+
+    /// `fire_rocket` (lnxded 0x810e938): a `TR_LINEAR` missile from `start`
+    /// along `dir` normalized, at `projectileSpeed` truncated to whole
+    /// units, its clock 50 ms back (`trTime` `level.time - 50`), `eFlags`
+    /// 0x400, `apos` stationary at the flight's angles (`G_SetAngle`), the
+    /// first wobble `destabilizeDistance / projectileSpeed` seconds out and
+    /// the explode 30 s out.
+    fn fire_rocket(&mut self, slot: usize, w: &WeaponParams, weapon: u8, start: Vec3, dir: Vec3) {
+        let dir = vcod_common::x87::normalize_stored(dir);
         let now = self.level_time();
         let Some(id) = self.spawn_missile_entity() else {
             return;
         };
+        let speed = w.projectile_speed as f32;
+        let delta = (dir * speed).trunc();
+        let destab = (1000.0 * (f64::from(w.destabilize_distance) / f64::from(speed))) as f32;
         let angles = super::builtins::math::vectoangles(dir.to_array());
+        let stable = self.rt.host.cod2().clients[slot].flags
+            & crate::game::cod2_cmds::FL_STABLE_MISSILE
+            != 0;
         self.combat.missiles.push(Missile {
             id,
             owner: Some(slot),
             weapon,
             rocket: true,
             tr_type: vcod_cod2::trajectory::TR_LINEAR,
-            tr_time: now,
-            base: muzzle,
-            delta: dir * w.projectile_speed as f32,
+            tr_time: now - 50,
+            base: start,
+            delta,
+            apos_type: vcod_cod2::trajectory::TR_STATIONARY,
             apos_base: Vec3::from(angles),
             apos_delta: Vec3::ZERO,
-            apos_time: now,
-            origin: muzzle,
+            apos_time: 0,
+            time: now + 50,
+            origin: start,
             explode_at: now + 30_000,
             ground: 1023,
             event_sequence: 0,
@@ -1616,10 +1800,64 @@ impl Cod2Level {
             event_parms: [0; 4],
             surf_type: 0,
             exploded_at: None,
+            destab,
+            wobbled: false,
+            stable,
         });
-        if let Some(p) = self.players[slot].as_mut() {
-            p.ps.velocity -= axes[0] * 64.0;
+    }
+
+    /// `G_RunMissile`'s wobble (lnxded 0x810de4e) for a rocket in clear
+    /// air once `destab` ms have passed since `trTime`: its direction
+    /// pushed by `tan(destabilizationAngleMax)` times three
+    /// `flrand(-1, 1)` off `holdrand`, renormalized, flown on at
+    /// `projectileSpeed` from where it is now. The next wobble is
+    /// `destabilizationBaseTime` seconds out, each after that
+    /// `destabilizationTimeReductionRatio` of the last.
+    fn wobble_rocket(&mut self, i: usize) {
+        use vcod_common::x87::normalize_stored;
+        let now = self.level_time();
+        let m = &self.combat.missiles[i];
+        if m.destab as i32 + m.tr_time >= now {
+            return;
         }
+        let Some(w) = self
+            .combat
+            .weapons
+            .get(usize::from(m.weapon))
+            .and_then(Option::as_ref)
+        else {
+            return;
+        };
+        let (angle, base, ratio, speed) = (
+            w.destabilization_angle_max,
+            w.destabilization_base_time,
+            w.destabilization_time_reduction_ratio,
+            w.projectile_speed as f32,
+        );
+        // The angle through the double `M_PI / 180`, stored, then `tan`.
+        let rad = (f64::from(angle) * (std::f64::consts::PI / 180.0)) as f32;
+        let t = f64::from(rad).tan() as f32;
+        let mut dir = normalize_stored(m.delta);
+        for k in 0..3 {
+            let push = self.combat.rand.flrand(-1.0, 1.0) * t;
+            dir[k] += push;
+        }
+        let dir = normalize_stored(dir);
+        let angles = super::builtins::math::vectoangles(dir.to_array());
+        let m = &mut self.combat.missiles[i];
+        m.delta = dir * speed;
+        m.base = m.origin;
+        m.apos_type = vcod_cod2::trajectory::TR_STATIONARY;
+        m.apos_base = Vec3::from(angles);
+        m.apos_delta = Vec3::ZERO;
+        m.apos_time = 0;
+        m.tr_time = now;
+        m.destab = if m.wobbled {
+            m.destab * ratio
+        } else {
+            1000.0 * base
+        };
+        m.wobbled = true;
     }
 
     /// A cooked grenade gone off in hand (`ClientEvents`' event 197):
@@ -1712,13 +1950,7 @@ impl Cod2Level {
             &BULLET_PRIORITY,
             &origins,
         );
-        // `(end - start) * fraction + start` on the x87, stored once.
-        let lerp = |a: Vec3, b: Vec3, f: f32| {
-            let l = |a: f32, b: f32| {
-                ((f64::from(b) - f64::from(a)) * f64::from(f) + f64::from(a)) as f32
-            };
-            Vec3::new(l(a.x, b.x), l(a.y, b.y), l(a.z, b.z))
-        };
+        let lerp = vec3_lerp;
         let mut hit = lerp(m.origin, to, tr.fraction);
         // A bouncing missile that flew clear or met a floor (normal z over
         // 0.7) probes 1.5 down; on the world it rides 1.5 above the ground
@@ -1743,9 +1975,20 @@ impl Cod2Level {
         }
         self.combat.missiles[i].origin = hit;
         if tr.fraction >= 1.0 {
-            // In the air: no ground (Mac 0x1ca0e4's clear arm).
+            // In the air: no ground, and a projectile weapon's missile
+            // wobbles unless `setStableMissile` marked it (lnxded
+            // 0x810e0ce's clear arm, 0x810e66c).
             if self.combat.missiles[i].delta != Vec3::ZERO {
                 self.combat.missiles[i].ground = 1023;
+                let projectile = self
+                    .combat
+                    .weapons
+                    .get(usize::from(m.weapon))
+                    .and_then(Option::as_ref)
+                    .is_some_and(|w| w.weap_type == 2);
+                if projectile && !m.stable {
+                    self.wobble_rocket(i);
+                }
             }
             return true;
         }
@@ -1755,13 +1998,7 @@ impl Cod2Level {
         let surf = ((tr.surface_flags & 0x1f0_0000) >> 20) as i32;
         self.combat.missiles[i].surf_type = surf;
         if m.rocket {
-            if let Some(v) = tr.client {
-                self.impact_damage(i, v, hit);
-            } else if let Some(id) = tr.entity {
-                self.impact_entity(i, id, hit);
-            }
-            self.combat.missiles[i].origin = hit;
-            self.explode_missile_at(i, hit, tr.normal);
+            self.rocket_impact(i, &tr, hit);
             return true;
         }
         let prev = now - 50;
@@ -1772,8 +2009,60 @@ impl Cod2Level {
         true
     }
 
+    /// A rocket's contact (lnxded 0x810d512): the struck body or entity
+    /// takes the weapon's `damage`, the hit triggers at the point take it
+    /// too, and the rocket goes off at the point snapped to whole units
+    /// toward its `trBase` (`SnapVectorTowards`), `trTime` 0, with
+    /// `EV_ROCKET_EXPLODE`, or its no-marks twin on a body. The blast
+    /// passes the struck one (`G_RadiusDamage`'s `ignore`).
+    fn rocket_impact(&mut self, i: usize, tr: &Contact, hit: Vec3) {
+        let m = self.combat.missiles[i].clone();
+        if let Some(v) = tr.client {
+            self.impact_damage(i, v, hit);
+        } else if let Some(id) = tr.entity {
+            self.impact_entity(i, id, hit);
+        }
+        let damage = self
+            .combat
+            .weapons
+            .get(usize::from(m.weapon))
+            .and_then(Option::as_ref)
+            .map_or(0, |w| w.damage);
+        if let (Some(attacker), true) = (m.owner, damage != 0) {
+            self.rt.trigger_sweep(&super::combat::TriggerSweep {
+                attacker,
+                start: hit,
+                end: hit,
+                damage,
+                mod_: "MOD_PROJECTILE",
+            });
+        }
+        let toward = |v: f32, to: f32| if to <= v { v.floor() } else { v.ceil() };
+        let at = Vec3::new(
+            toward(hit.x, m.base.x),
+            toward(hit.y, m.base.y),
+            toward(hit.z, m.base.z),
+        );
+        let struck = Struck {
+            client: tr.client,
+            entity: tr.entity,
+        };
+        self.explode_missile_at(i, at, tr.normal, struck);
+        let m = &mut self.combat.missiles[i];
+        m.tr_time = 0;
+        // The contact raises the rocket's pair whatever `projExplosionType`
+        // says, unlike `G_ExplodeMissile`.
+        let k = ((m.event_sequence - 1) & 3) as usize;
+        m.events[k] = if tr.client.is_some() {
+            ev::ROCKET_EXPLODE_NOMARKS
+        } else {
+            ev::ROCKET_EXPLODE
+        };
+    }
+
     /// A rocket's direct hit: its `damage` on the body it struck, as
-    /// `MOD_PROJECTILE`.
+    /// `MOD_PROJECTILE`, along its velocity as it is (`(0, 0, 1)` when
+    /// still), not normalized (lnxded 0x810d512).
     fn impact_damage(&mut self, i: usize, victim: usize, at: Vec3) {
         let m = self.combat.missiles[i].clone();
         let Some(w) = self
@@ -1788,7 +2077,10 @@ impl Cod2Level {
         if w.damage == 0 {
             return;
         }
-        let dir = m.velocity(self.level_time()).normalize_or(Vec3::Z);
+        let mut dir = m.velocity(self.level_time());
+        if dir == Vec3::ZERO {
+            dir.z = 1.0;
+        }
         self.g_damage(
             victim,
             m.owner.unwrap_or(1023),
@@ -1873,14 +2165,23 @@ impl Cod2Level {
             }
             None => Vec3::Z,
         };
-        self.explode_missile_at(i, at, normal);
+        let id = self.combat.missiles[i].id;
+        self.explode_missile_at(
+            i,
+            at,
+            normal,
+            Struck {
+                client: None,
+                entity: Some(id),
+            },
+        );
     }
 
     /// The explode's tail: the entity turns `ET_GENERAL`, hidden, with
     /// `EV_GRENADE_EXPLODE` (`EV_ROCKET_EXPLODE` for a rocket,
     /// `EV_CUSTOM_EXPLODE` for `projExplosionType` none) on its ring, and
-    /// `G_RadiusDamage` with the weapon's explosion keys.
-    fn explode_missile_at(&mut self, i: usize, at: Vec3, normal: Vec3) {
+    /// `G_RadiusDamage` with the weapon's explosion keys, passing `ignore`.
+    fn explode_missile_at(&mut self, i: usize, at: Vec3, normal: Vec3, ignore: Struck) {
         let now = self.level_time();
         let weapon = self.combat.missiles[i].weapon;
         let w = self
@@ -1920,6 +2221,7 @@ impl Cod2Level {
                 w.explosion_outer_damage as f32,
                 w.explosion_radius as f32,
                 mod_,
+                ignore,
             );
         }
     }
@@ -1930,7 +2232,8 @@ impl Cod2Level {
     /// when a capsule trace to its box's centre meets something within a
     /// fifth of the radius. The direction is the victim's origin less the
     /// point, raised 24. Under `setPlayerIgnoreRadiusDamage` no client is
-    /// touched. A thrower who left takes no walk at all.
+    /// touched. A thrower who left takes no walk at all. `ignore` is
+    /// passed over.
     #[allow(clippy::too_many_arguments)]
     pub fn radius_damage(
         &mut self,
@@ -1942,6 +2245,7 @@ impl Cod2Level {
         outer: f32,
         radius: f32,
         mod_: &'static str,
+        ignore: Struck,
     ) {
         let Some(attacker) = owner else {
             return;
@@ -1950,16 +2254,16 @@ impl Cod2Level {
             return;
         }
         let radius = radius.max(1.0);
-        for v in self.targets(None) {
+        for v in self.targets(ignore.client) {
             let origin = self.players[v].as_ref().expect("a target").ps.origin;
-            let dist = origin.distance(at);
+            let dist = super::cod2_blast::stored_length(origin - at);
             if dist >= radius {
                 continue;
             }
-            let damage = outer + (1.0 - dist / radius) * (inner - outer);
+            let damage = |mult| super::cod2_blast::blast_damage(inner, outer, radius, dist, mult);
             let share = self.can_damage(v, at);
             let dealt = if share > 0.0 {
-                (damage * share).round_ties_even() as i32
+                damage(share)
             } else {
                 let ps = &self.players[v].as_ref().expect("a target").ps;
                 let centre = origin + (ps.mins + ps.maxs) * 0.5;
@@ -1969,7 +2273,7 @@ impl Cod2Level {
                 if !reached || centre.distance(at) >= 0.2 * radius {
                     continue;
                 }
-                (0.1 * damage).round_ties_even() as i32
+                damage(0.1)
             };
             let mut dir = origin - at;
             dir.z += 24.0;
@@ -1999,6 +2303,7 @@ impl Cod2Level {
                 radius,
                 attacker_ent,
                 Some(inflictor),
+                ignore.entity,
                 mod_,
                 true,
             )
@@ -2008,11 +2313,13 @@ impl Cod2Level {
     /// `CanDamage` (Mac 0x1c3f18) for a client: five probes from the blast
     /// to the body's middle and its four corners, 15 either side across
     /// the line to the blast and half the eye's height up and down; 0 when
-    /// none passes, `n / 3` for one to three, 1 for four or five.
-    fn can_damage(&self, victim: usize, at: Vec3) -> f32 {
-        let Some(clip) = &self.combat.clip else {
+    /// none passes, `n / 3` for one to three, 1 for four or five. Each is
+    /// `G_LocationalTracePassed` (lnxded 0x810a622) under 0x802891 passing
+    /// the victim: the world, the static models and the entities block it.
+    fn can_damage(&mut self, victim: usize, at: Vec3) -> f32 {
+        if self.combat.clip.is_none() {
             return 1.0;
-        };
+        }
         let ps = &self.players[victim].as_ref().expect("a target").ps;
         let eye = Self::view_origin(ps);
         let centre = (eye + ps.origin) * 0.5;
@@ -2028,10 +2335,11 @@ impl Cod2Level {
             centre - side * 15.0 + Vec3::Z * half,
             centre - side * 15.0 - Vec3::Z * half,
         ];
+        let none = HashMap::new();
         let passed = probes
             .iter()
             .filter(|&&p| {
-                clip.trace(at, p, Vec3::ZERO, Vec3::ZERO, MASK_BLAST)
+                self.locational_trace(at, p, Some(victim), MASK_BLAST, &BULLET_PRIORITY, &none)
                     .fraction
                     >= 1.0
             })
@@ -2065,12 +2373,21 @@ impl Cod2Level {
                 seti("eType", if exploded { ET_GENERAL } else { ET_MISSILE });
                 // `EF_NODRAW` once exploded; the 0x1000000 bounce flag,
                 // above the field's 24 bits, which the delta's change and
-                // zero bits still carry (cod2-protocol.md 5.2).
-                seti("eFlags", if exploded { 0x20 } else { 0x0100_0000 });
+                // zero bits still carry (cod2-protocol.md 5.2). A rocket
+                // flies with 0x400 and keeps it past the impact, which
+                // toggles `EF_TELEPORT_BIT` (lnxded 0x810d512).
+                let flags = match (m.rocket, exploded) {
+                    (false, false) => 0x0100_0000,
+                    (false, true) => 0x20,
+                    (true, false) => 0x400,
+                    (true, true) => 0x422,
+                };
+                seti("eFlags", flags);
+                seti("time", m.time);
                 seti("weapon", i32::from(m.weapon));
                 seti("pos.trType", m.tr_type);
                 seti("pos.trTime", m.tr_time);
-                seti("apos.trType", if exploded { 0 } else { 2 });
+                seti("apos.trType", if exploded { 0 } else { m.apos_type });
                 seti("apos.trTime", m.apos_time);
                 for k in 0..3 {
                     seti(&format!("pos.trBase[{k}]"), m.base[k].to_bits() as i32);
@@ -2241,6 +2558,7 @@ impl Cod2Level {
                 table,
                 player_anim_type: held.map_or(0, |w| w.player_anim_type),
                 weapon_class: held.map_or(0, |w| w.weap_class),
+                pick: None,
             };
             super::cod2::death_event(&mut p.ps, &input, |_| k);
         }

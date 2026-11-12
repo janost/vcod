@@ -362,13 +362,14 @@ pub fn gunner_eye(aim: Vec3, player: Vec3, origin: Vec3, angles: Vec3, view: [f3
 /// (`BG_GetVerticalBobFactor` Mac 0x7a0c8), the horizontal bob along the
 /// view's right (`BG_GetHorizontalBobFactor` Mac 0x7a1b2), the lean
 /// (`AddLeanToPosition` Mac 0x2923c with 16 and 20), and the floor at 8
-/// over the origin. `land` is the landing's dip on the height, which goes
-/// in after the bob (`play::cod2_view::Land::eye`). VERIFIED, the functions and their constants (Mac
+/// over the origin. `dips` are the landing's dip and the step's offset on
+/// the height, which go in after the bob (`play::cod2_view::Land::eye`,
+/// `Step::eye`). VERIFIED, the functions and their constants (Mac
 /// rodata 0x32618c 255, 0x340c08 pi, 0x340c78 2 pi, 0x3261c0 4, 0x340c80
 /// pi / 2, 0x3262dc 0.2, 0x326234 0.75, 0x3261e4 2, 0x3262f8 8).
 /// The damage kick, `BG_CalculateViewAngles`' sway and the camera shake
 /// are the view's angles (`play::cod2_view`).
-pub fn first_person_eye(ps: &PlayerState, origin: Vec3, land: f32) -> Vec3 {
+pub fn first_person_eye(ps: &PlayerState, origin: Vec3, (land, step): (f32, f32)) -> Vec3 {
     let mut eye = origin + Vec3::Z * ps.view_height_current;
     // `BG_GetBobCycle`: the low byte as a phase past a whole turn.
     let cycle = (f64::from(f32::from(ps.bob_cycle as u8) / 255.0) * std::f64::consts::PI * 2.0
@@ -389,6 +390,7 @@ pub fn first_person_eye(ps: &PlayerState, origin: Vec3, land: f32) -> Vec3 {
     let [_, right, _] = vcod_common::x87::angle_vectors(Vec3::from_array(ps.view_angles));
     eye += right * (bob * cycle.sin());
     eye.z += land;
+    eye.z += step;
     // `AddLeanToPosition`: eased by `(2 - |leanf|) * leanf`, 20 units along
     // the right of the yaw rolled 16 times the ease.
     let lean = ps.leanf;
@@ -451,19 +453,19 @@ mod tests {
     fn the_eye_bobs_with_speed_and_leans_aside() {
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0, 0);
         assert_eq!(
-            first_person_eye(&ps, Vec3::ZERO, 0.0),
+            first_person_eye(&ps, Vec3::ZERO, (0.0, 0.0)),
             Vec3::new(0.0, 0.0, 60.0)
         );
         // A full run bobs, at most `bg_bobMax`.
         ps.velocity = Vec3::new(190.0, 0.0, 0.0);
         ps.bob_cycle = 64;
-        let e = first_person_eye(&ps, Vec3::ZERO, 0.0);
+        let e = first_person_eye(&ps, Vec3::ZERO, (0.0, 0.0));
         assert!(e.distance(Vec3::new(0.0, 0.0, 60.0)) > 0.5, "{e}");
         assert!(e.distance(Vec3::new(0.0, 0.0, 60.0)) < 8.0 * 1.2 + 8.0);
         // A full lean right puts the eye 20 units to the right, at yaw 0 -y.
         ps.velocity = Vec3::ZERO;
         ps.leanf = 1.0;
-        let e = first_person_eye(&ps, Vec3::ZERO, 0.0);
+        let e = first_person_eye(&ps, Vec3::ZERO, (0.0, 0.0));
         assert!(e.y < -15.0, "{e}");
     }
 

@@ -47,6 +47,37 @@ mod od {
     pub const OFFHAND_NAME_FRAG: i32 = 104;
     pub const OFFHAND_NAME_SMOKE: i32 = 105;
     pub const LOW_HEALTH_OVERLAY: i32 = 109;
+    /// `UI_AMITALKING` and `UI_TALKER1`..`UI_TALKER4`, the `amitalking`
+    /// and `talkers` menus' (UI owner draws, `UI_OwnerDraw` Mac 0x1536b2).
+    pub const AM_TALKING: i32 = 266;
+    pub const TALKER1: i32 = 267;
+    pub const TALKER4: i32 = 270;
+}
+
+/// What voice chat shows this frame (`crate::voice`, cod2-voice.md 5): the
+/// local talk icon, the talking clients by number, the muted ones as bits.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VoiceShown {
+    /// `UI_AMITALKING`'s test ([`crate::voice::cod2_own_talking`]).
+    pub own: bool,
+    /// `CL_IsPlayerTalking`'s clients, ascending.
+    pub talkers: Vec<u32>,
+    /// `CL_IsPlayerMuted`: bit `n` for client `n`.
+    pub muted: u64,
+}
+
+impl VoiceShown {
+    /// The scoreboard's voice icon for `client` (`CG_DrawClientScore`, Mac
+    /// 0x1c51b2): `voice_off` muted, else `voice_on` talking, else none.
+    pub fn board_icon(&self, client: u32) -> Option<&'static str> {
+        if client < 64 && self.muted >> client & 1 != 0 {
+            Some("voice_off")
+        } else if self.talkers.contains(&client) {
+            Some("voice_on")
+        } else {
+            None
+        }
+    }
 }
 
 /// `pm_type`: 4 spectator, 5 intermission, 6 dead.
@@ -496,11 +527,41 @@ pub struct HudInput<'a> {
     pub use_key: &'a str,
     /// `cg_drawMantleHint`.
     pub mantle_hint: bool,
+    /// `cg_drawGun`: off, the crosshair stays up through the sight
+    /// (`CG_DrawCrosshair`).
+    pub draw_gun: bool,
     /// `cg_hudStanceHintPrints` on: a command's bound keys as the hints
     /// print them, `None` when it has none. `None` while the dvar is 0.
     pub stance_keys: Option<&'a KeyLookup>,
     /// `cg_hintFadeTime`, ms: a cursor hint's life past its last frame.
     pub hint_fade_ms: i32,
+    /// Voice chat's icons and talkers.
+    pub voice: &'a VoiceShown,
+}
+
+/// One row of the talker list (`UI_OwnerDraw` 267..270, Mac 0x1536b2):
+/// `voice_on` in the item's rect, then the talker's cleaned name
+/// (`UI_BuildPlayerList`) 2 past its right edge at the item's text scale,
+/// centred on its height. A talker the player list lacks gets the icon
+/// alone (retail reads the row before the list's first, INFERRED).
+fn talker(item: &Item, frame: &Frame, client: u32, cx: &Ctx, out: &mut Vec<HudQuad>) {
+    let [x, y, w, h] = item.rect;
+    cx.pic(item.rect, item.align, item.fore, "voice_on", out);
+    let Some(c) = frame.snap.clients.iter().find(|c| c.number == client) else {
+        return;
+    };
+    let name = vcod_common::text::clean_str(&c.name());
+    let th = cx.height(item.text_scale).floor();
+    let base = th + y + (h - th) * 0.5;
+    cx.text(
+        &name,
+        x + w + 2.0,
+        base,
+        item.align,
+        item.text_scale,
+        item.fore,
+        out,
+    );
 }
 
 /// `CG_DrawPlayerStance`'s hint commands (Mac 0x36de80, 0x36de20,
@@ -719,6 +780,35 @@ impl Ctx<'_> {
     }
 }
 
+/// What `CG_DrawCrosshair` (Mac 0x1d0784) draws: `alpha` is
+/// `cg_crosshairAlpha` (1) times what `CG_DrawWeapReticle` (0x1d0320)
+/// hands back, `1 -` its overlay's alpha (cod2-hud.md 10).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CrosshairParts {
+    alpha: f32,
+    /// The crosshair itself, the centre and the sides.
+    crosshair: bool,
+    /// `cg_drawGun 0`'s second centre, its size over `reticleCenterSize`.
+    extra: Option<f32>,
+}
+
+impl CrosshairParts {
+    /// At sight fraction `pos` under a scope's overlay alpha `overlay`,
+    /// `scale` the crosshair's shrink past the sight's crosshair fraction
+    /// (1 short of it). `None` draws nothing.
+    fn of(pos: f32, overlay: Option<f32>, draw_gun: bool, scale: f32) -> Option<Self> {
+        let alpha = 1.0 - overlay.unwrap_or(0.0);
+        if alpha < 0.01 || (pos == 1.0 && draw_gun) {
+            return None;
+        }
+        Some(CrosshairParts {
+            alpha,
+            crosshair: pos != 1.0,
+            extra: (!draw_gun && scale < 1.0).then_some(1.5 - scale),
+        })
+    }
+}
+
 fn rgba(rgb: [f32; 4], a: f32) -> [f32; 4] {
     [rgb[0], rgb[1], rgb[2], a]
 }
@@ -754,7 +844,7 @@ impl PlayerHud {
             now,
         };
         if ps.pm_type < PM_DEAD {
-            self.crosshair(frame, &cx, out);
+            self.crosshair(frame, &cx, input.draw_gun, out);
         }
         let items = self.items.take().unwrap_or_else(|| load_items(fs));
         for item in &items {
@@ -1176,8 +1266,10 @@ impl PlayerHud {
             selected,
             use_key: "",
             mantle_hint: true,
+            draw_gun: true,
             stance_keys: None,
             hint_fade_ms: 100,
+            voice: &VoiceShown::default(),
         };
         let weap = self.weapons.get(self.shown_weapon(ps, &input))?;
         let clip = if weap.def.flag("clipOnly") {
@@ -1366,6 +1458,14 @@ impl PlayerHud {
             od::OFFHAND_AMMO_SMOKE => self.offhand(item, ps, cx, 2, Offhand::Count, out),
             od::OFFHAND_NAME_FRAG => self.offhand(item, ps, cx, 1, Offhand::Name, out),
             od::OFFHAND_NAME_SMOKE => self.offhand(item, ps, cx, 2, Offhand::Name, out),
+            // `voice_on` while the talk key is held with voice on.
+            od::AM_TALKING if input.voice.own => cx.pic(item.rect, al, item.fore, "voice_on", out),
+            od::TALKER1..=od::TALKER4 => {
+                let n = (item.ownerdraw - od::TALKER1) as usize;
+                if let Some(&client) = input.voice.talkers.get(n) {
+                    talker(item, frame, client, cx, out);
+                }
+            }
             _ => {}
         }
     }
@@ -1780,10 +1880,13 @@ impl PlayerHud {
     }
 
     /// `CG_DrawCrosshair` (Mac 0x1d0784): `reticleCenter` at the centre and
-    /// four `reticleSide` pieces out at the weapon's spread, shrinking and
-    /// fading as the sight comes up; none while raising, dropping or
-    /// reloading.
-    fn crosshair(&self, frame: &Frame, cx: &Ctx, out: &mut Vec<HudQuad>) {
+    /// four `reticleSide` pieces out at the weapon's spread, shrinking as
+    /// the sight comes up and fading as a scope's overlay does; none while
+    /// raising, dropping or reloading, nor with the sight all the way up
+    /// unless `cg_drawGun` is off. Off, past the sight's crosshair fraction
+    /// a second `reticleCenter` grows at the centre as the first shrinks,
+    /// alone at the top of the sight (cod2-hud.md 10).
+    fn crosshair(&self, frame: &Frame, cx: &Ctx, draw_gun: bool, out: &mut Vec<HudQuad>) {
         let ps = &frame.snap.ps;
         if ps.eflags & EF_TURRET != 0 {
             self.turret_crosshair(frame, cx, out);
@@ -1805,12 +1908,9 @@ impl PlayerHud {
             return;
         }
         let pos = ps.raw.f32("fWeaponPosFrac");
-        // INFERRED: the decompile reads the sight fraction itself here; the
-        // hip crosshair shows unsighted, so it is `1 - frac`.
-        let base = 1.0 - pos;
-        if base < 0.01 {
-            return;
-        }
+        // `CG_DrawWeapReticle` hands back `1 - ` its overlay's alpha, which
+        // `cg_crosshairAlpha` (1) scales.
+        let overlay = SightDef::of(&weap.def).overlay_alpha(pos, self.latch.zooming_in);
         let green = ps.pm_flags & PMF_FRIENDLY_CROSSHAIR != 0;
         let rb = if green { 0.25 } else { 1.0 };
         let fov_y = crate::camera::fov_y(crate::camera::DEFAULT_FOV_DEG, 4.0 / 3.0);
@@ -1831,10 +1931,24 @@ impl PlayerHud {
                 y_off = 480.0 / fov_y * f * weap.def.float("adsAimPitch");
             }
         }
+        let Some(parts) = CrosshairParts::of(pos, overlay, draw_gun, scale) else {
+            return;
+        };
+        let base = parts.alpha;
         let center = weap.s("reticleCenter");
+        let size = weap.def.int("reticleCenterSize") as f32;
+        let c = [rb, 1.0, rb, base];
+        if let Some(k) = parts.extra
+            && !center.is_empty()
+        {
+            let s = size * k;
+            cx.pic([-0.5 * s, -0.5 * s, s, s], [2, 2], c, center, out);
+        }
+        if !parts.crosshair {
+            return;
+        }
         if !center.is_empty() {
-            let s = weap.def.int("reticleCenterSize") as f32 * scale;
-            let c = [rb, 1.0, rb, base];
+            let s = size * scale;
             cx.pic([-0.5 * s, y_off - 0.5 * s, s, s], [2, 2], c, center, out);
         }
         let side = weap.s("reticleSide");
@@ -2024,6 +2138,47 @@ mod tests {
         assert!(hud.damage.iter().all(|d| d.start == 0));
         hud.pulse.step(1.0, 1510);
         assert_eq!(hud.pulse.alpha(1600), 0.0, "full health stays clear");
+    }
+
+    /// The crosshair shows through the sight and hides once it is all the
+    /// way up; a scope's overlay fades it. With `cg_drawGun 0` it stays
+    /// up, a second centre growing past the crosshair fraction, alone at
+    /// the top.
+    #[test]
+    fn the_crosshair_hides_at_the_sight_unless_the_gun_does() {
+        let parts = |alpha, crosshair, extra| {
+            Some(CrosshairParts {
+                alpha,
+                crosshair,
+                extra,
+            })
+        };
+        assert_eq!(
+            CrosshairParts::of(0.0, None, true, 1.0),
+            parts(1.0, true, None)
+        );
+        assert_eq!(
+            CrosshairParts::of(0.6, None, true, 0.75),
+            parts(1.0, true, None)
+        );
+        assert_eq!(CrosshairParts::of(1.0, None, true, 0.5), None);
+        assert_eq!(
+            CrosshairParts::of(0.6, Some(0.25), true, 1.0),
+            parts(0.75, true, None)
+        );
+        assert_eq!(CrosshairParts::of(0.9, Some(1.0), false, 0.5), None);
+        assert_eq!(
+            CrosshairParts::of(0.0, None, false, 1.0),
+            parts(1.0, true, None)
+        );
+        assert_eq!(
+            CrosshairParts::of(0.6, None, false, 0.75),
+            parts(1.0, true, Some(0.75))
+        );
+        assert_eq!(
+            CrosshairParts::of(1.0, None, false, 0.5),
+            parts(1.0, false, Some(1.0))
+        );
     }
 
     #[test]

@@ -507,8 +507,15 @@ constants; the algebra between them is INFERRED.
   (`Cod4Level::run_frame`). The push lands in the call itself on what the
   scripts read (`getVelocity`, `clonePlayer`'s source), each component
   summed as the x87 stack does. INFERRED. The knockback is `g_knockback`
-  1000 over 250, `damageTimer` 100 ms a point to 750 (the dvars'
-  defaults). The kill capture's target, hit after its cmds of that frame,
+  1000 over 250. `damageTimer` reads the two float dvars (`Dvar_RegisterFloat`
+  defaults 100 and 750, 0x8054811 and 0x8054846): the damage times
+  `player_dmgtimer_timePerPoint` stored as a float and truncated, added
+  on; a sum over `player_dmgtimer_maxTime`, compared as floats, becomes
+  the maximum truncated (0x80ac787..0x80ac888). VERIFIED (the
+  instructions). `player_die` sets `pm_type` 7, or 8 off a linked body's
+  1 (0x80b1bf3: `sete` plus 7). VERIFIED (the instructions). Ours does
+  both (`pen_pin_tests::damage_reads_the_dmgtimer_dvars_and_links_the_dead`).
+  The kill capture's target, hit after its cmds of that frame,
   reads `pm_flags` 0x100, `pm_time` 0x32, `damageTimer` 750; the prone
   capture's, whose cmds arrived after the shooter's, reads them run down
   by the next cmds. VERIFIED live (the gates, 15).
@@ -1280,10 +1287,7 @@ those anims.
   and a `killcamentity` killcam are gated against retail captures (15);
   what those gates still tolerate is 15's open list: the dropped weapon's
   fall, a grenade's strike on a body, the second rocket's number, a
-  `setviewpos`'s `delta_angles`, a killcam's trim and its archived view,
-  a dead body's slide.
-- `player_die`'s `pm_type` 8 for a linked body (1) and the two
-  `player_dmgtimer_*` dvars are not read: ours writes 7 and the defaults.
+  `setviewpos`'s `delta_angles`, a killcam's trim and its archived view.
 - The use key's weapon swap is gated live on ours (cod4-gsc.md 9.1); its
   retail capture is uncommitted, so no A/B gate.
 - The terrain triangle normal's last bit.
@@ -1574,13 +1578,24 @@ What the captures fixed on ours:
   cap of the 20mm's 240), on ours too since the push lands inside the
   call. VERIFIED (the gate).
 
+- The dead body's slide. The killcam run's target, pushed to 240 along x
+  at its death, read the same velocity as retail's every snapshot, but
+  its x ran 43 ulps ahead from 46600 on (217.04066 against 217.04001).
+  VERIFIED (the gate). The body stood 0.11 over mp_crash's terrain; its
+  first dead cmd (18 ms, `pm_time` running, so `PM_WalkMove` adds the
+  slick gravity) slid down onto the floor. CoD2's trace set-up met it at
+  fraction 0.4190510, 1.7's at 0.4190263: 1.7 keeps the shifted end on
+  the x87 stack, so its sweep is not rounded through `z + 35`
+  (cod4-collision.md 2). At the first the plain slide stopped one ulp of
+  x short of the step's, the step won and kept vz -14.4, and the next
+  cmd's `PM_DeadMove` cut 20 off a length that held it (x 200.04); at the
+  second the slide ties, the fallback snaps the body to the ground and
+  clips vz to 0. INFERRED (the bumps traced on ours under both set-ups).
+  Under 1.7's set-up the body's path matches retail's bit for bit.
+  VERIFIED (the gate).
+
 Open, with each gate's `GAPS`:
 
-- The dead body's slide: the killcam run's target, pushed to 240 along x
-  at its death, reads the same velocity as retail's every snapshot, but
-  its x runs ahead by 0.00065 (43 ulps) from its first 50 ms on, z by an
-  ulp: 217.04066 where retail's reads 217.04001 at 46600. VERIFIED (the
-  gate). The cause, in the dead pmove's slide, is open.
 - The dropped weapon (6): retail's leaves `trType` 5, then 3 for 50 ms, and
   rests on its side (`apos` roll 90, ground 1022). VERIFIED live.
 - A grenade's strike on a standing body: the thrown back frag meets the
@@ -1590,7 +1605,9 @@ Open, with each gate's `GAPS`:
 - The second rocket takes entity 317 on retail, 316 on ours; nothing
   either client saw held 316. VERIFIED live.
 - `setviewpos 697 -2038 200`: retail's `delta_angles` read 0.406, -118.3
-  for 0.55 s where ours read 0, -24.99. VERIFIED live.
+  for 0.55 s where ours read 0, -24.99. VERIFIED live. The touch run's
+  walker (`setviewpos 207 2211 296`) read yaw 9.0088 for 0.55 s where ours
+  read -170.9912, 180 off (cod4-pmove.md 15.3). VERIFIED live.
 - The prone killcam's trim: 4200 on retail, 4250 on ours, and its end a
   frame apart. VERIFIED live. The followed shooter's words a frame off
   (its `torsoTimer` and `pm_flags` among them, which the gate once filed

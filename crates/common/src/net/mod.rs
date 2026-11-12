@@ -24,6 +24,7 @@ pub mod server_cache;
 pub use protocol::{CS_FOG_V1, FogParams};
 pub mod snapshot;
 pub mod trajectory;
+pub mod voice;
 pub mod wire;
 
 use gamestate::Gamestate;

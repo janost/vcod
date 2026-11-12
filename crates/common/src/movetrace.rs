@@ -292,6 +292,14 @@ pub fn body_trace(start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, body: &Body) -
     t
 }
 
+/// A capsule sweep from `start` to `end` with the box `mins..maxs` against
+/// `body`'s temp capsule model, clipped into `t` as `SV_ClipMoveToEntities`
+/// does, in [`MoveWorld::box_trace`]'s kept arm's float model. CoD4 1.7's
+/// server traces another client this way (docs/research/cod4-pmove.md 15).
+pub fn clip_body_kept(t: &mut Trace, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, body: &Body) {
+    kept::clip_capsule(t, start, end, mins, maxs, body);
+}
+
 /// The mover's centre swept through the Minkowski sum of the two capsules (docs/research/cod11-player-clip.md 2.2).
 fn clip_capsule(t: &mut Trace, start: Vec3, end: Vec3, mover: Capsule, hh_m: f32, b: &Body) {
     let c = start + mover.center;

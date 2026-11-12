@@ -135,8 +135,8 @@ Common ones:
 | `dedicated` | 1 by default (retail's is 2), so dev runs stay off the master list. 2 sends heartbeats (below). |
 | `protocol` | CoD1: `1`, `6` or `22` overrides the install's protocol. |
 | `g_log`, `g_logSync` | `games_mp.log` (below): empty `g_log` turns it off, `g_logSync 1` flushes every line. |
-| `fs_homepath` | Where the log goes. Default the `--game-dir`. |
-| `sv_allowDownload` | On by default: serve the server's non-stock paks to a client that lacks them. `sv_wwwDownload 1` with `sv_wwwBaseURL` redirects instead. |
+| `fs_homepath` | Where the log goes. Default the `--game-dir`. CoD2 serves downloads from here first, then the game dir. |
+| `sv_allowDownload` | On by default: serve the server's non-stock paks to a client that lacks them. CoD2 serves any file a client names under `fs_homepath` or the game dir, none outside them. `sv_wwwDownload 1` with `sv_wwwBaseURL` redirects instead. |
 | `sv_pure` | 1 by default, as on retail: clients must pass the pure `cp` check. 0 turns it off. |
 
 ### Log
@@ -276,7 +276,7 @@ commands.
 | `ui_load` | Reload the menus off the list `ui_menuFiles` names |
 | `record [name]`, `stoprecord` | Record a demo to `demos/` in the game directory (the mod's first) |
 | `demo <name>` | Play one back (`.dm_1`, `.dm_2` or `.dm_3`, found without the extension). `cl_freezeDemo 1` pauses it; `nextdemo` holds a command to run at its end |
-| `timedemo` | CoD1, UO: `set timedemo 1` before `demo` times it. CoD2, CoD4: `timedemo <name>` is a command, as retail's: it plays `<name>.dm_1` 50 ms a frame and prints the frame count and fps |
+| `timedemo` | CoD1, UO: `set timedemo 1` before `demo` times it. CoD2, CoD4: `timedemo <name>` is a command, as retail's: it plays `<name>.dm_1` 50 ms a frame and prints the frame count and fps. CoD2 also writes `demos/timedemo_<map>_mode_<r_mode>.csv`, a `<frame>,<ms>` line a frame |
 
 Anything else goes to the server while connected (`callvote`, `kill`,
 `follownext`). Bindable commands and key names are retail's (`+attack`,
@@ -391,6 +391,12 @@ Client:
   its team and weapon menus, or spectates. `--team` and `--weapon`
   (e.g. `thompson_mp`) answer them. X or Esc's menu picks another weapon
   for the next spawn. A map change loads the new map.
+- Voice chat on a server with `sv_voice 1`: hold Z (`+talk`) to talk
+  (needs the system's libspeex and a `rate` of 5000 or more); `cl_voice 0`
+  turns it off both ways. The scoreboard marks talkers and muted players,
+  the talker list shows at the top left, and Esc's Mute Players
+  menu mutes a player for the session. `VCOD_VOICE_INPUT=tone` sends a
+  440 Hz tone instead of the microphone.
 - `vcod <map>` flies a map.
 - Other modes (`--walk`, `--list`) exit with an error.
 
@@ -405,6 +411,10 @@ Server (`vcod-server <map> --game cod2`, or a CoD2 install):
   retail does.
 - Serves a non-stock iwd in its `main/` to a client that lacks it.
 - Runs the cheat commands under `sv_cheats 1`.
+- Relays voice chat under `sv_voice 1` (default 0) at `sv_voiceQuality`
+  (0-9, default 1) to the talker's team; `voice_global 1` to everyone,
+  `voice_deadChat 1` across the living and the dead, `voice_localEcho 1`
+  back to the talker.
 - Bots play every stock gametype ([bots.md](bots.md#cod2)).
 
 ### CoD4

@@ -140,6 +140,9 @@ pub(super) struct Probe {
     pub(super) replay: VecDeque<(i32, Vec<UserCmd>)>,
     /// The spawn the replay starts after.
     pub(super) replay_from: i32,
+    /// The `pm_type` of its own snapshot that starts the replay: 0, or a
+    /// spectator's 4.
+    pub(super) replay_pm_type: u32,
     /// A `requeststats` came: the seven stats packets go again
     /// ([`Self::answer_stats`]).
     stats_due: bool,
@@ -178,6 +181,7 @@ impl Probe {
             view: None,
             replay: VecDeque::new(),
             replay_from: WALKER_SPAWN_MS,
+            replay_pm_type: 0,
             stats_due: false,
             cp_feed: None,
         }
@@ -303,9 +307,11 @@ impl Probe {
                 text: self.commands[i].clone(),
             })
             .collect();
-        // The walker replays from its first own spawned snapshot on.
+        // The walker replays from its first own spawned snapshot on, a
+        // spectator from its first free one.
         let spawned = self.parser.snapshots.last().is_some_and(|s| {
-            s.ps.get("pm_type") == Some(0) && s.ps.get("clientNum") == Some(self.slot)
+            s.ps.get("pm_type") == Some(self.replay_pm_type)
+                && s.ps.get("clientNum") == Some(self.slot)
         });
         let replaying = !self.replay.is_empty() && (spawned || self.view.is_some());
         if replaying && self.view.is_none() {
@@ -894,35 +900,26 @@ const EFLAGS_PMOVE: u32 = 0x20_000c;
 /// the entry shrinks.
 const WALK_GAPS: &[(&str, usize, &str)] = &[
     // The spawn's drop lands a bit under retail (`placeSpawnPoint`), and
-    // from 48000 on the free run's z drifts a bit or two on the terrain as
+    // the free run's z drifts a bit or two on the terrain as
     // `cod4_moves_ab`'s free run does: the trace kernels' float model.
-    ("origin[2]", 715, "cod4-pmove.md 13.2, the float model"),
+    ("origin[2]", 374, "cod4-pmove.md 13.2, the float model"),
     (
         "velocity[2]",
         20,
         "cod4-pmove.md 13.2, the sign of a zero vz",
     ),
-    // From 70300 the step onto a 0.78 brush slope lands 0.01 off and the
-    // run never resyncs: every later row's x and y keep it.
+    // From 70300 the step onto a 0.78 brush slope lands a few ulps off and
+    // the run never resyncs: every later row's x keeps it.
     ("origin[0]", 341, "cod4-pmove.md 13.2, the steep step"),
-    ("origin[1]", 334, "cod4-pmove.md 13.2, the steep step"),
 ];
 
 /// What the walker's body, as the spectator is sent it, still gets wrong:
 /// (word, rows, why).
-const BODY_GAPS: &[(&str, usize, &str)] = &[
-    // The truncated origin crosses a unit where the free run's x is 0.04
-    // off after the steep step.
-    (
-        "lerp.pos.trBase[0]",
-        2,
-        "cod4-pmove.md 13.2, the steep step",
-    ),
-];
+const BODY_GAPS: &[(&str, usize, &str)] = &[];
 
 /// How far the walker's origin may stray from retail's: the steep step's
-/// 0.04 (`cod4_moves_ab`'s free run, cod4-pmove.md 13.1).
-const WALK_MAX_ERROR: f32 = 0.05;
+/// 0.0083 (cod4-pmove.md 15.1).
+const WALK_MAX_ERROR: f32 = 0.01;
 
 /// One walk replay row's differences: the walker's own words, and its
 /// teammate's body (entity 0) where both snapshots carry it.
