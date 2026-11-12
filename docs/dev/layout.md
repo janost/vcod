@@ -141,7 +141,8 @@ scripts: `vm/interp.rs`, `vm/sched.rs`, `vm/profile.rs` (a game's
   in `cod4/bots.rs` over `bots/cod4.rs`. `server/bot_admin.rs` is the bot
   admin every server calls (the pass, `addbot`, `removebot`, `listbots`)
   over `AdminHost`.
-- `rcon.rs`, `console.rs`, `cvars/`, `master.rs` (heartbeat), `area.rs`
+- `rcon.rs`, `console.rs`, `stdin_console.rs` (stdin lines into the
+  console queue), `cvars/`, `master.rs` (heartbeat), `area.rs`
   (the entity area tree), `tick_trace.rs`, `tick_profile.rs`.
 
 ## vcod (`crates/client`)

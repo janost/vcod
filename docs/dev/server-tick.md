@@ -49,9 +49,10 @@ CoD4 1.7 sets two more consts (`cod4-server-frame.md`):
 A tick is one `SV_Frame`: every frame the wall clock owes runs back to back
 with only the archive between them, then one round of timeouts and messages.
 
-`main.rs`'s `serve<G: GameModule>` is the loop for all three games. It runs
-`drain_console` before it counts what is owed, so a slow `map_restart` is
-caught up with a single snapshot (`cod11-map-cycle.md` 4.7). It hands each
+`main.rs`'s `serve<G: GameModule>` is the loop for all three games. It
+queues the stdin console's lines (`stdin_console`, read on their own thread)
+and runs `drain_console` before it counts what is owed, so a slow
+`map_restart` is caught up with a single snapshot (`cod11-map-cycle.md` 4.7). It hands each
 socket packet to `Engine::packet_read` with its `engine::Arrival` (CoD1
 stamps the move acks there, `Server::ack_stamp`). `engine::packet` checks
 `accepts_packets`, then splits `SV_PacketEvent` on `is_connectionless` into

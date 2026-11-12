@@ -13226,6 +13226,24 @@ mod tests {
         assert!(sv.take_outgoing().is_empty());
     }
 
+    /// A stdin line reaches the game's cvars and `quit` ends the server,
+    /// run by the console as an rcon line is (cod11-server-handshake.md,
+    /// "The stdin console").
+    #[test]
+    fn a_stdin_line_runs_on_the_console() {
+        let t = Instant::now();
+        let mut sv = Server::new(cfg(), t);
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test("main() {}"),
+        );
+        crate::stdin_console::StdinConsole::read_now(b"set scr_dm_timelimit 5\nquit\n")
+            .queue(&mut sv);
+        sv.drain_console(t);
+        assert_eq!(sv.script_cvar("scr_dm_timelimit").as_deref(), Some("5"));
+        assert!(sv.quit_requested());
+    }
+
     /// `banUser` and `banClient` against the replies a retail server gave
     /// (handshake doc, "Bans"). The client stays connected, as on retail; a
     /// banned address off the LAN is refused its next challenge, and a LAN

@@ -1281,6 +1281,19 @@ VERIFIED live, retail on mp_toujane, an off-LAN client at 198.51.100.2 with the 
 
 vcod (`engine::bans`, shared with 1.5 and UO, whose `ban.txt` is this one; `oob.rs`): every command, reply and file line above. vcod asks no authorize server, so an off-LAN client's guid is its IPv4 address read as a big-endian `i32` (`engine::bans::guid_of`) and a LAN client's is 0, as on retail; `status`, the prints and `ban.txt` carry that number. The two checks run at `getchallenge`, which vcod answers at once, with retail's prints and refusals. `ban.txt` is the `--ban-file` path, read and written at every use as retail does; without the flag the file lives for the run (retail's is `<fs_homepath>/main/ban.txt`). The script's `getGuid` stays 0. Gates: `house_tests::ban_txt_refuses_a_banned_guid_until_unbanned`, `kick_bans_a_guid_for_sv_kick_ban_time`, and `engine/bans.rs`'s unit tests.
 
+### 17.8 The stdin console
+
+Read off `cod2_lnxded` with `objdump`, 2026-11-12. The shape is 1.1's (cod11-server-handshake.md, "The stdin console").
+
+- `Sys_ConsoleInputInit` (0x80d3c94) ignores `SIGTTIN` and `SIGTTOU` and registers `ttycon` as a bool dvar, default 1, flags 0x1010 (0x80d3cf6). VERIFIED.
+- A call at 0x80d3d10 sets `ttycon` to false through the setter the not-a-tty branch calls at 0x80d3d56. VERIFIED.
+- That call is unconditional and precedes the read of `ttycon` at 0x80d3d1c, so the tty mode never starts and neither `Started tty console` nor `stdin is not a tty` prints. INFERRED.
+- `Sys_ConsoleInput` (0x80d3e06) runs a zero-timeout `select` on fd 0 (0x80d428f) and a `read` of up to 256 bytes (0x80d42cf), the last byte read overwritten with a NUL. VERIFIED.
+- With `ttycon` false it takes that path while `stdin_active` (0x8184420, 1 in the file) is set. This path has no `dedicated` test. EOF clears `stdin_active` (0x80d42dd). INFERRED.
+- `Sys_GetEvent` (0x80d484e) calls it at 0x80d48cc and queues the line as 1.1 does. INFERRED.
+
+vcod-server under `--game cod2` reads stdin as for 1.1. Each line runs through `Cod2Server::exec`, the dispatch rcon uses, and its output goes to the log. Gate: `stdin_console::tests::cod2_runs_a_stdin_line`.
+
 ## 18. The client on a bad link
 
 The client's own rules for its clock, its packets, a silent server and a userinfo change, from the Mac binary's `CL_*` and `CG_*`. The `cl` offsets are the Mac layout: `cl.snap` at +0x18 (`valid`, then `snapFlags` +0x1c, `serverTime` +0x20, `messageNum` +0x24, `ping` +0x2c, the playerstate from +0x34), `serverTime` +0x26f0, `oldServerTime` +0x26f4, `oldFrameServerTime` +0x26f8, `serverTimeDelta` +0x26fc, +0x2700 the snapshot time before the newest, `extrapolatedSnapshot` +0x2704, `newSnapshots` +0x2708. VERIFIED (the loads and stores in the functions below; the names follow Q3's order, INFERRED).

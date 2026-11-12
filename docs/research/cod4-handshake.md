@@ -494,6 +494,18 @@ A retail run (`cod4_lnxded` under `unshare -rnm`, mp_crash `war`, two `cod4_prob
 - `banClient 0` on the player printed `0:alpha EXE_PLAYERKICKED`: `SV_DropClient`'s line reaches the redirect on a ban too. VERIFIED live. vcod prints it too.
 - `kick all` with the player in the world printed `Player all is not on the server`, `0:alpha EXE_PLAYERKICKED`, `1:bot0 EXE_PLAYERKICKED` and `2:bot1 EXE_PLAYERKICKED`, and all three slots went to `ZMBI`. In a second run, after `banClient 0` had dropped the player, his zombie slot printed nothing. VERIFIED live. The loop (0x816cadf..0x816cb2d) walks `sv_maxclients` slots and calls the drop helper on each not free. The helper refuses only an address of type 2 (`NA_LOOPBACK`, the listen server's own client, 0x816c97b), so a dedicated server's `kick all` drops every player and every bot. VERIFIED (the code).
 
+### 14.4 The stdin console
+
+Read off the `cod4_lnxded` 1.7 disassembly, 2026-11-12. The shape is CoD1's and CoD2's (cod11-server-handshake.md, "The stdin console"; cod2-protocol.md 17.8).
+
+- `Sys_ConsoleInputInit` (0x81d4616) ignores `SIGTTIN` and `SIGTTOU` (0x81d4643, 0x81d4657). It registers `ttycon` as a bool dvar, default 1, flags 0x10, described `use tty console` (0x81d467b). VERIFIED.
+- A call at 0x81d4690 sets `ttycon` to false through the setter the not-a-tty branch calls at 0x81d46ec. VERIFIED.
+- That call is unconditional and precedes the read of `ttycon` at 0x81d469c, so the tty mode never starts. `Started tty console` (0x823e194) and `stdin is not a tty` (0x823e164) never print. INFERRED.
+- `Sys_ConsoleInput` (0x81d44f2) and its copy inlined in `Sys_GetEvent` (0x81d49d2, called from 0x8123654) run a zero-timeout `select` on fd 0 (0x81d4aac) and a `read` of up to 256 bytes into 0x14119140 (0x81d4af2), the last byte read overwritten with a NUL. VERIFIED.
+- They read while `stdin_active` (0x8273740, 1 in the file) is set, and EOF clears it (0x81d4afb). The line is copied and queued as an event (0x81d4b31..0x81d4b63), as 1.1 does. INFERRED.
+
+vcod-server under `--game cod4` reads stdin as for 1.1. Each line runs through `Cod4Server::exec`, the dispatch rcon uses, and its output goes to the log. Gate: `stdin_console::tests::cod4_runs_a_stdin_line`.
+
 ## 15. Off the LAN: the authorize round trip, `requeststats`, pacing
 
 The run: `cod4_lnxded` at 203.0.113.1:28960 in a rootless user, net and mount namespace, the clients at 198.51.100.2 in a child net namespace joined by a veth pair (`tools/offlan_capture.sh`'s layout), so neither address is private or shares three octets with the other. The hosts file mapped `cod4master.activision.com` to 127.0.0.2, where a listener logged every datagram and answered none. `sv_pure 0`, `scr_war_timelimit 0`, `+set dedicated 1` (refused; the server ran at 2, see "The server's own address"). A script sent `getchallenge 0 "<hex>"` every 3 s for 1290 s. Then `cod4_probe` joined as a spectator, `rcon map mp_crash` went in 25 s into its join, a second script challenged off the LAN 15 s after that spawn, and a third from the server's own address. vcod-server ran the same timeline with a 30 s first script.

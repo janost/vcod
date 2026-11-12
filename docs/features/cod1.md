@@ -364,7 +364,8 @@ Client:
 Server:
 
 - `sv_pure` defaults to 0 (retail: 1).
-- No stdin console. Admin goes through rcon, refused until
+- Stdin runs server commands without retail's tty line editor (no
+  history, no tab completion). rcon is refused until
   `--set rconPassword=...`. After `killserver` the process sits there
   deaf.
 - rcon runs `map`, `devmap`, `map_restart`, `map_rotate`, `status`,

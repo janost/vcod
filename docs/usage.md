@@ -111,10 +111,11 @@ vcod-server <map> [--port 28960] [--hostname vcod] [--max-clients 8] [--gametype
 | `--gametype-script <file>` | CoD1, UO, CoD2: run a gametype from disk instead of the paks. |
 | `--script-dir <dir>` | CoD4: loose `.gsc` files read over the zones' scripts each level, as retail reads a mod's. |
 | `--vanilla` | See [Install and game](#install-and-game). |
+| `--no-console` | Don't read stdin ([below](#stdin-console)). |
 
 The server answers `getstatus` from anyone, as retail does. Keep it on a
-LAN or behind a firewall you control. There is no stdin console: admin
-goes through rcon, so set `rconPassword` before you need it.
+LAN or behind a firewall you control. Admin goes through the stdin
+console or rcon, so set `rconPassword` before you need rcon.
 
 ### `--set`
 
@@ -167,6 +168,17 @@ signed integer (CoD4: the client's GUID). A file in vcod's older
 `<ip> <name>` shape is rewritten into guid lines the first time the
 server opens it, after a copy is kept as `<path>.old`. Without
 `--ban-file` a ban lasts until the process exits.
+
+### Stdin console
+
+As on the retail Linux servers, each line on stdin runs as a server
+command: every command in the rcon table below, with no password. The
+output goes to the log on stderr; the line is not echoed back. At EOF the
+server stops reading for good and keeps running, so `nohup`, `</dev/null` and a
+service manager are fine. Started in the background from a shell, it does
+not stop on its read. Retail's raw-mode line editor (`ttycon`, history, tab
+completion) isn't there: the terminal edits the line. `--no-console` leaves
+stdin alone.
 
 ### rcon
 

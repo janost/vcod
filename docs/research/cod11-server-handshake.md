@@ -12,7 +12,7 @@ unless a line says otherwise.
 Contents: setup; connectionless replies; the gamestate message; configstrings
 at gamestate; what a minimal server has to set; retail client check;
 housekeeping (heartbeat, rcon, zombies, frame message order, drops,
-reconnects, console commands, pings, rate, bans, shutdown, OOB `disconnect`,
+reconnects, console commands, the stdin console, pings, rate, bans, shutdown, OOB `disconnect`,
 challenge key, `fs_restrict`, private slots, ping limits, challenge table,
 pacing, bare messages, fragmented gamestate, `snaps`, `g_password`); pak
 checksums and pure servers; CD key authorization; raw captures.
@@ -1041,6 +1041,65 @@ probe in the game, a socket on 127.0.0.1:20510 as the master.
   buckets list one block per set bit. vcod's own model; 4171 buckets, 1010
   strings on mp_carentan.
 - The four-byte header. INFERRED (Q3's `RefString`).
+
+### The stdin console (`Sys_ConsoleInput`, 0x80c5898)
+
+Read off `cod_lnxded` 1.1d with `objdump`, 2026-11-12. CoD2 1.3's and CoD4
+1.7's are in `cod2-protocol.md` 17.8 and `cod4-handshake.md` 14.4.
+
+- `Sys_ConsoleInputInit` (0x80c576c) ignores `SIGTTIN` and `SIGTTOU`
+  (`signal(0x15, 1)`, `signal(0x16, 1)` at 0x80c578d, 0x80c5799). VERIFIED.
+- It registers `ttycon` with default `"1"` and flags 0 (`Cvar_Get` at
+  0x80c57b0; the strings at 0x80dbbb7 and 0x80dbbb5). VERIFIED.
+- Its raw mode clears `ICANON` and `ECHO` in `c_lflag` and `INPCK` and
+  `ISTRIP` in `c_iflag`, and sets `VMIN` 1 and `VTIME` 0 (0x80c5839..
+  0x80c5851). VERIFIED.
+- That mode, with `Started tty console (use +set ttycon 0 to disable)`
+  printed first, is taken when `ttycon` is non-zero and `isatty(0)` returns
+  1 (0x80c57df). Otherwise `stdin is not a tty, tty console mode failed` is
+  printed and `ttycon` set to `"0"` (0x80c5865, 0x80c587c). INFERRED.
+- The tty mode is Q3 1.32's line editor: backspace, a 32-line history on
+  the arrow keys, tab completion. Enter writes a bare `\n` to fd 1
+  (0x80c5a2f) and returns the line. No `]` prompt is printed. INFERRED
+  (the branch's compares and writes).
+- The line path's `select` on fd 0 has a zero timeout (0x80c5f79). Its
+  `read` takes up to 256 bytes into 0x8318240 (0x80c5fa8), and the last byte
+  read is overwritten with a NUL (0x80c5fc9). VERIFIED.
+- That path runs without the tty mode, while the cvar at 0x833dee0
+  (`dedicated`, as in Q3's `Sys_ConsoleInput`) is non-zero and while
+  `stdin_active` (0x80e6460, 1 in the file) is set. The cut byte is the
+  newline. INFERRED.
+- A read of 0 bytes, EOF, clears `stdin_active` (0x80c5fb1). Stdin is not
+  read again and the server keeps running. Under `nohup` or a service
+  manager stdin is `/dev/null`, so the first poll ends the reading.
+  INFERRED.
+- `Sys_GetEvent` (0x80c61e4) calls `Sys_ConsoleInput` at 0x80c6225. Case 5
+  of `Com_EventLoop`'s jump table (0x80cf5c0), `SE_CONSOLE`, calls
+  `Cbuf_AddText` with the text and with `"\n"` (0x806c0e7, 0x806c103).
+  VERIFIED.
+- So the line runs at the next `Cbuf_Execute`, through the dispatch an
+  rcon line takes, with the console's privilege. INFERRED.
+- Nothing echoes the line. `Sys_Print` passes the text to `fputs` on
+  `stderr` (0x80c6507, `stderr` at 0x80f8488), with no colour stripping in
+  between. INFERRED.
+
+vcod (`crates/server/src/stdin_console.rs`): a thread reads stdin a line at
+a time and the frame loop pushes each non-blank line into the console queue
+(`EngineCore::console`) ahead of `drain_console`. So a line runs on the
+server thread like an rcon or Ctrl-C `quit`, in all three games. vcod ignores
+`SIGTTIN` and `SIGTTOU` as retail does. EOF ends the thread. A read error
+(`EIO` for a background process on its terminal) is retried once a second.
+vcod differences:
+
+- No raw tty mode and no `ttycon`. The terminal's own line mode edits the
+  line.
+- Output is the log's: `log::info!` lines on stderr with env_logger's prefix.
+- `--no-console` leaves stdin unread. Retail has no switch for that:
+  `ttycon 0` only turns the line editor off.
+
+Gates: `stdin_console::tests` (a pipe's line arrives, its EOF stops only
+the reading, a line reaches CoD2's and CoD4's servers) and
+`server::tests::a_stdin_line_runs_on_the_console` (CoD1).
 
 ### Pings (`SV_CalcPings`, 0x808cab8)
 

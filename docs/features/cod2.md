@@ -277,7 +277,7 @@ Joined clients follow.
 - rcon: `status`, `serverinfo`, `systeminfo`, `dumpuser`, `say`, `tell`,
   `kick`, `clientkick`, `tempBan*` (for `sv_kickBanTime`), `banUser`,
   `banClient`, `unbanUser` into `ban.txt` (`--ban-file` keeps it), and
-  the map commands.
+  the map commands. Each runs from stdin too (cod2-protocol.md 17.8).
 
 ### Bots
 
