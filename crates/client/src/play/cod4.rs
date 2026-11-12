@@ -2396,6 +2396,7 @@ impl Cod4Session {
             viewmodel_index: u("viewmodelIndex"),
             angles,
             ammoclip: armed.map_or(new.ps.ammoclip, |p| p.ps.ammoclip),
+            weapon_models: new.ps.weapon_models,
             aim_spread_scale: armed.map_or(f(&new.ps, "aimSpreadScale"), |p| p.ps.aim_spread_scale),
             perks: u("perks"),
             grenade_time_left: pick_armed(|p| p.grenade_time_left as u32, "grenadeTimeLeft") as i32,
@@ -8938,6 +8939,74 @@ pub(crate) mod tests {
             "{b:?} for {dir:?}, still {a:?}"
         );
         assert!(want[0].abs() > 1.0, "the gun turned {dir:?}");
+    }
+
+    /// The camo and the rocket through vcod-server, live: the probe
+    /// script's `camo` gives `ak47_mp` on `gunModel[3]` and then `rpg_mp`
+    /// (whose slot 3 is empty: slot 0), switching to each. The snapshot's
+    /// `weaponmodels[]` reaches the view weapon, which draws the AK-47's
+    /// Blue Tiger materials and the RPG's rocket (cod4-client-view.md 4.7).
+    #[test]
+    fn cod4_live_a_given_camo_and_the_rocket_reach_the_view_weapon() {
+        const GSC: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../cod4/tests/fixtures/gsc/killcam"
+        );
+        let root = vcod_cod4::testing::cod4_install().map(|i| i.root().to_path_buf());
+        let mut view = crate::cod4_viewmodel::Cod4View::default();
+        let mut bodies = None;
+        let mut asked = 0;
+        // The AK-47's `weaponmodels` slot and gun materials once drawn.
+        let mut ak: Option<(u8, Vec<String>)> = None;
+        let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(GSC), move |f| {
+            let v = *f.view;
+            if !f.both || f.level < 3000 || v.weapon == 0 {
+                return None;
+            }
+            let Some(bodies) = &bodies else {
+                let ents = f.s.entity_assets();
+                bodies =
+                    Some(crate::cod4_fly::load_bodies(root.as_ref()?, "mp_crash", &ents).unwrap());
+                return None;
+            };
+            let give = ["ak47_mp", "rpg_mp"];
+            if asked < give.len() && (asked == 0 || ak.is_some()) {
+                f.tx.send((0, "maps/mp/mp_crash_fx", "camo", give[asked]))
+                    .ok();
+                asked += 1;
+            }
+            let scene = f.s.scene()?;
+            let list = weapon_list(f.s.gamestate()?);
+            let name = list.get(v.weapon as usize - 1)?.clone();
+            let out = view.frame(
+                &v,
+                &list,
+                scene.hands.as_deref(),
+                &bodies.1,
+                &bodies.0,
+                scene.render_time,
+            );
+            let models = out.frame?.models?;
+            match name.as_str() {
+                "ak47_mp" if ak.is_none() => {
+                    let slot = v.weapon_models[v.weapon as usize];
+                    ak = Some((slot, models[1].lods[0].materials.clone()));
+                    None
+                }
+                "rpg_mp" => Some((ak.clone()?, models.len())),
+                _ => None,
+            }
+        });
+        let Some(out) = out else {
+            return;
+        };
+        let ((slot, mats), rpg_parts) = out.expect("never drew the AK-47 and then the RPG");
+        assert_eq!(slot, 3);
+        assert!(
+            mats.iter().any(|m| m == "mc/mtl_weapon_ak47_bwmrpt"),
+            "{mats:?}"
+        );
+        assert_eq!(rpg_parts, 3, "hands, launcher and rocket");
     }
 
     /// [`live_war_pair_as`] with the enemy a demolitions class: the stock

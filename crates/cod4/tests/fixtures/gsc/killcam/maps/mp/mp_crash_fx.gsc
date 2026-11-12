@@ -4,6 +4,8 @@
 // the kill goes through `Callback_PlayerKilled` and its killcam.
 // `progressBar` puts the stock primary progress bar on the player and
 // fills it in two seconds, as `_gameobjects::useHoldThinkLoop` does.
+// `camo` gives the named weapon on its `gunModel[3]`, as a custom class's
+// camo does, and switches to it.
 main()
 {
 	setDvar( "scr_game_allowkillcam", 1 );
@@ -25,4 +27,10 @@ progressBar( unused )
 {
 	bar = self maps\mp\gametypes\_hud_util::createPrimaryProgressBar();
 	bar maps\mp\gametypes\_hud_util::updateBar( 0, 0.5 );
+}
+
+camo( name )
+{
+	self giveWeapon( name, 3 );
+	self setSpawnWeapon( name );
 }

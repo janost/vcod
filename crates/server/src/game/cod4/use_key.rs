@@ -710,7 +710,7 @@ impl Cod4Level {
         let c4 = self.rt.host.cod4_mut();
         let table = std::mem::take(&mut c4.table);
         let l = &mut c4.clients[slot].loadout;
-        if l.give(&table, w).is_some()
+        if l.give(&table, w, 0).is_some()
             && let Some(d) = table.get(w)
         {
             l.ammoclip[d.clip_slot] = it.clip.clamp(0, d.clip_size);

@@ -8,9 +8,11 @@
 //! [`ViewDef`] is what a zone gives a weapon (built at load, the zones
 //! dropped after); [`Cod4View`] holds the rigs and the state the frames
 //! step. The damage kick, the gun recoil and the landing dip come in on
-//! [`ViewPs`] (`play::cod4_kick`). Left out: the perks' anim rates, camo
-//! variants (every gun draws `gunModel[0]`, its `hideTags` surfaces left
-//! out) and the rocket and goggles models.
+//! [`ViewPs`] (`play::cod4_kick`). The gun is the `gunModel[]` slot
+//! `weaponmodels[]` names (the camo), its `hideTags` surfaces left out;
+//! the launcher's rocket and the melee's knife graft on, and Sleight of
+//! Hand and Double Tap speed the clips they start (cod4-client-view.md
+//! 4.7).
 
 use glam::{Quat, Vec3};
 use std::collections::HashMap;
@@ -91,6 +93,9 @@ pub struct ViewPs {
     /// Pitch, yaw, roll.
     pub angles: Vec3,
     pub ammoclip: [i32; 128],
+    /// `weaponmodels[]`: each weapon's `gunModel[]` slot, the camo
+    /// `giveWeapon` gave it.
+    pub weapon_models: [u8; 128],
     /// What the crosshair reads (`cod4_crosshair`): `aimSpreadScale`
     /// (0..255), `perks`, `grenadeTimeLeft`, `spreadOverride` and its
     /// state.
@@ -143,6 +148,7 @@ impl Default for ViewPs {
             viewmodel_index: 0,
             angles: Vec3::ZERO,
             ammoclip: [0; 128],
+            weapon_models: [0; 128],
             aim_spread_scale: 0.0,
             perks: 0,
             grenade_time_left: 0,
@@ -169,6 +175,21 @@ impl ViewPs {
         } else {
             self.weapon
         }
+    }
+
+    /// The view weapon's `gunModel[]` slot (`iw3mp.exe` 0x456fa6).
+    pub fn camo(&self) -> usize {
+        let w = self.view_weapon() as usize;
+        self.weapon_models.get(w).map_or(0, |&m| usize::from(m))
+    }
+
+    /// The rocket test (`iw3mp.exe` 0x4548b0) for a launcher with a
+    /// `rocketModel`: a round in the clip (`clip`, `ps.weapon`'s), or a
+    /// reload past `reloadShowRocketTime` (cod4-client-view.md 4.7).
+    fn shows_rocket(&self, n: &ViewNumbers, clip: Option<i32>) -> bool {
+        let reloading = (WEAPON_RELOADING..=11).contains(&self.weaponstate);
+        clip.is_some_and(|c| c != 0)
+            || reloading && n.reload_time - self.weapon_time > n.reload_show_rocket_time
     }
 
     /// `CG_AddViewWeapon`'s test: a body's own view, not a spectator's,
@@ -213,6 +234,9 @@ pub struct ViewNumbers {
     pub sway: [[f32; 6]; 2],
     /// `nightVisionWearTime`.
     pub nv_wear_time: i32,
+    /// `reloadTime` (+904) and `reloadShowRocketTime` (+908).
+    pub reload_time: i32,
+    pub reload_show_rocket_time: i32,
     /// `adsDofStart`, `adsDofEnd`: the view model's own depth of field
     /// up the sight (`crate::cod4_dof`).
     pub ads_dof: [f32; 2],
@@ -262,6 +286,8 @@ impl ViewNumbers {
                 [f(1224), f(1228), f(1232), f(1236), f(1240), f(1244)],
             ],
             nv_wear_time: i(980),
+            reload_time: i(904),
+            reload_show_rocket_time: i(908),
             ads_dof: [f(2160), f(2164)],
             anim_ms: ANIM_RATE_OFFSETS
                 .iter()
@@ -271,18 +297,32 @@ impl ViewNumbers {
     }
 }
 
+/// One `gunModel[]` slot of a weapon's view (cod4-client-view.md 4.7).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ViewGun {
+    /// The key in the session's models: the xmodel's name, with `#` and
+    /// the `hideTags` appended when it hides parts. A camo whose geometry
+    /// is slot 0's draws slot 0's model, `swap` naming its materials.
+    pub key: String,
+    /// The slot's own xmodel name.
+    pub model: String,
+    /// (slot 0's material, this slot's) wherever they differ.
+    pub swap: Vec<(String, String)>,
+}
+
 /// What a zone gives one weapon's view: the gun and hands models (in the
 /// session's models by name), the 33 clips by node and the numbers.
 pub struct ViewDef {
-    /// The gun's key in the session's models: `gunModel[0]`'s name, with
-    /// `#` and the `hideTags` appended when it hides parts.
-    pub gun: String,
-    /// `gunModel[0]`'s name, and the tags whose surfaces it hides.
-    pub gun_model: String,
+    /// `gunModel[0..16]`, `None` where a slot is empty; slot 0 is set.
+    pub guns: Vec<Option<ViewGun>>,
+    /// The tags whose surfaces every slot's gun hides.
     pub hide_tags: Vec<String>,
     pub hands: Option<String>,
     /// `knifeModel`, grafted at `tag_knife_attach` while a melee plays.
     pub knife: Option<String>,
+    /// `rocketModel`, grafted at `tag_clip` while the launcher holds a
+    /// round ([`ViewPs::shows_rocket`]).
+    pub rocket: Option<String>,
     /// Node `n`'s clip; an empty view anim plays idle's
     /// (`CG_CreateWeaponViewModelXAnim`). `None` where no zone holds it.
     pub anims: Vec<Option<Arc<XAnim>>>,
@@ -294,9 +334,22 @@ pub struct ViewDef {
     pub note_sounds: Vec<(String, String)>,
 }
 
-/// One weapon's hands and gun grafted at `tag_weapon` (and the knife at
-/// `tag_knife_attach` during a melee), each node's clip bound to the
-/// skeleton and its rate.
+impl ViewDef {
+    /// The gun `gunModel[slot]` draws, slot 0's where that one is empty.
+    pub fn gun(&self, slot: usize) -> (usize, &ViewGun) {
+        match self.guns.get(slot) {
+            Some(Some(g)) => (slot, g),
+            _ => (
+                0,
+                self.guns[0].as_ref().expect("a view def has gunModel[0]"),
+            ),
+        }
+    }
+}
+
+/// One weapon's hands and gun grafted at `tag_weapon` (the rocket at
+/// `tag_clip` while loaded, the knife at `tag_knife_attach` during a
+/// melee), each node's clip bound to the skeleton and its rate.
 struct Rig {
     models: ViewModels,
     skeleton: skeleton::Skeleton,
@@ -306,8 +359,17 @@ struct Rig {
 }
 
 impl Rig {
-    fn build(def: Arc<ViewDef>, hands: &Model, gun: &Model, knife: Option<&Model>) -> Rig {
+    /// The parts in the view DObj's order (`iw3mp.exe` 0x454740): hands,
+    /// gun, rocket, knife.
+    fn build(
+        def: Arc<ViewDef>,
+        hands: &Model,
+        gun: &Model,
+        rocket: Option<&Model>,
+        knife: Option<&Model>,
+    ) -> Rig {
         let mut parts = vec![(hands, None), (gun, Some("tag_weapon"))];
+        parts.extend(rocket.map(|r| (r, Some("tag_clip"))));
         parts.extend(knife.map(|k| (k, Some("tag_knife_attach"))));
         let skeleton = skeleton::Skeleton::build_grafted(&parts);
         let clips: Vec<_> = def
@@ -316,7 +378,8 @@ impl Rig {
             .map(|c| c.clone().map(|c| (c.clone(), skeleton.bind(&c))))
             .collect();
         // The anim rate: the clip's length over its time, 0 for a
-        // time of 0, 1 for a node with no time.
+        // time of 0, 1 for a node with no time (before the perks,
+        // [`perk_divisor`]).
         let rates = (0..NODES)
             .map(|n| {
                 match (
@@ -402,6 +465,9 @@ pub struct ViewAnim {
     prev: Option<u32>,
     /// How many times a node started, for the replay gate.
     pub starts: usize,
+    /// What the node's rate is divided by, fixed when it started
+    /// ([`perk_divisor`]).
+    pub divisor: f32,
 }
 
 impl Default for ViewAnim {
@@ -411,41 +477,67 @@ impl Default for ViewAnim {
             t: 0.0,
             prev: None,
             starts: 0,
+            divisor: 1.0,
         }
     }
 }
 
+/// `perks` bits: Sleight of Hand (`specialty_fastreload`), Double Tap
+/// (`specialty_rof`).
+const PERK_FAST_RELOAD: u32 = 0x4;
+const PERK_ROF: u32 = 0x8;
+/// `perk_weapReloadMultiplier` and `perk_weapRateMultiplier`'s defaults
+/// (iw3mp.exe 0x40dd4d, 0x40dda9).
+const PERK_RELOAD_MULTIPLIER: f32 = 0.5;
+const PERK_RATE_MULTIPLIER: f32 = 0.75;
+const WEAPON_RECHAMBERING: u32 = 6;
+
+/// What the rate of a node starting now is divided by (`iw3mp.exe`
+/// 0x453a40): `perk_weapReloadMultiplier` in a reload state (7..=11) under
+/// Sleight of Hand, `perk_weapRateMultiplier` while rechambering under
+/// Double Tap, else 1 (cod4-client-view.md 4.7).
+fn perk_divisor(ps: &ViewPs) -> f32 {
+    match ps.weaponstate {
+        7..=11 if ps.perks & PERK_FAST_RELOAD != 0 => PERK_RELOAD_MULTIPLIER,
+        WEAPON_RECHAMBERING if ps.perks & PERK_ROF != 0 => PERK_RATE_MULTIPLIER,
+        _ => 1.0,
+    }
+}
+
 impl ViewAnim {
-    fn start(&mut self, node: usize, weap_anim: u32) {
+    fn start(&mut self, node: usize, ps: &ViewPs) {
         *self = ViewAnim {
             node,
             t: 0.0,
-            prev: Some(weap_anim),
+            prev: Some(ps.weap_anim),
             starts: self.starts + 1,
+            divisor: perk_divisor(ps),
         };
     }
 
-    /// Steps `dt` seconds under `weap_anim`; a changed value starts its
+    /// Steps `dt` seconds under `ps.weapAnim`; a changed value starts its
     /// node, a 0 or 1 waits for the running clip (a 1 cuts it) and then
     /// plays idle, or empty idle with the clip empty. Returns the node's
     /// time before the step (0 for a node it started).
-    fn step(&mut self, rig: &Rig, weap_anim: u32, clip_empty: bool, dt: f32) -> f32 {
+    fn step(&mut self, rig: &Rig, ps: &ViewPs, clip_empty: bool, dt: f32) -> f32 {
+        let weap_anim = ps.weap_anim;
         if self.prev != Some(weap_anim) {
             match anim_node(weap_anim) {
-                Some(n) => self.start(n, weap_anim),
+                Some(n) => self.start(n, ps),
                 None => {
                     let running =
                         (1..ADS_UP).contains(&self.node) && !rig.finished(self.node, self.t);
                     if running && weap_anim & 1 == 0 {
                         self.prev = None;
                     } else {
-                        self.start(if clip_empty { EMPTY_IDLE } else { IDLE }, weap_anim);
+                        self.start(if clip_empty { EMPTY_IDLE } else { IDLE }, ps);
                     }
                 }
             }
         }
         let from = self.t;
-        self.t += dt * rig.rates.get(self.node).copied().unwrap_or(1.0);
+        let rate = rig.rates.get(self.node).copied().unwrap_or(1.0);
+        self.t += dt * (rate / self.divisor);
         from
     }
 }
@@ -861,8 +953,16 @@ pub fn view_fov(ps: &ViewPs, n: Option<&ViewNumbers>, to_ads: bool) -> f32 {
     (fov * CG_FOV_SCALE).max(CG_FOV_MIN)
 }
 
-/// A rig's key: the weapon, the hands and whether the knife is out.
-type RigKey = (String, String, bool);
+/// A rig's key: the weapon, the hands, the `gunModel[]` slot drawn, and
+/// whether the rocket and the knife are on.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct RigKey {
+    weapon: String,
+    hands: String,
+    camo: usize,
+    rocket: bool,
+    knife: bool,
+}
 
 /// One frame's view weapon: the frame for the renderer, the fov, and the
 /// gun's `tag_flash` and `tag_brass` in view space (X right, Y up, -Z
@@ -896,7 +996,9 @@ impl Cod4View {
     /// The drawn main node and its clock, for the replay gate.
     #[cfg(test)]
     pub fn anim(&self) -> Option<(&str, ViewAnim)> {
-        self.current.as_ref().map(|(k, _, a, _)| (k.0.as_str(), *a))
+        self.current
+            .as_ref()
+            .map(|(k, _, a, _)| (k.weapon.as_str(), *a))
     }
 
     /// Drops the drawn rig (a free spectator, a new map).
@@ -913,30 +1015,34 @@ impl Cod4View {
         self.rigs
             .entry(key.clone())
             .or_insert_with(|| {
-                let knife = match def.knife.as_ref().filter(|_| key.2) {
-                    Some(k) => match models.get(k) {
-                        Some(m) => Some(m),
+                let w = &key.weapon;
+                let part = |on: bool, name: Option<&String>| match name.filter(|_| on) {
+                    Some(n) => match models.get(n) {
+                        Some(m) => Ok(Some(m)),
                         None => {
-                            log::warn!("cod4 viewmodel {}: knife {k} not loaded", key.0);
-                            return None;
+                            log::warn!("cod4 viewmodel {w}: {n} not loaded");
+                            Err(())
                         }
                     },
-                    None => None,
+                    None => Ok(None),
                 };
-                let (Some(h), Some(g)) = (models.get(&key.1), models.get(&def.gun)) else {
+                let rocket = part(key.rocket, def.rocket.as_ref()).ok()?;
+                let knife = part(key.knife, def.knife.as_ref()).ok()?;
+                let (_, gun) = def.gun(key.camo);
+                let (Some(h), Some(g)) = (models.get(&key.hands), models.get(&gun.key)) else {
                     log::warn!(
-                        "cod4 viewmodel {}: {} or {} not loaded",
-                        key.0,
-                        key.1,
-                        def.gun
+                        "cod4 viewmodel {w}: {} or {} not loaded",
+                        key.hands,
+                        gun.key
                     );
                     return None;
                 };
                 if def.anims.get(IDLE).is_none_or(Option::is_none) {
-                    log::warn!("cod4 viewmodel {}: no idle anim", key.0);
+                    log::warn!("cod4 viewmodel {w}: no idle anim");
                     return None;
                 }
-                Some(Arc::new(Rig::build(def.clone(), h, g, knife)))
+                let g = swapped(g, &gun.swap);
+                Some(Arc::new(Rig::build(def.clone(), h, &g, rocket, knife)))
             })
             .clone()
     }
@@ -983,26 +1089,6 @@ impl Cod4View {
                 None => return out,
             },
         };
-        // The knife test: the melee's two anims.
-        let knife = def.knife.is_some() && matches!(ps.weap_anim & !ANIM_TOGGLEBIT, 8 | 9);
-        let key = (name.to_string(), hands, knife);
-        let Some(rig) = self.rig(&key, &def, models) else {
-            self.current = None;
-            return out;
-        };
-        let mut new_models = None;
-        if self.current.as_ref().is_none_or(|(k, ..)| *k != key) {
-            let mut p = skeleton::PoseBuffer::new(&rig.skeleton);
-            let (c, b) = rig.clip(IDLE).expect("a rig holds idle");
-            p.apply(c, b, 0.0);
-            // The knife coming or going keeps the running clip and sight.
-            let (anim, ads) = match self.current.take() {
-                Some((k, _, anim, ads)) if (&k.0, &k.1) == (&key.0, &key.1) => (anim, ads),
-                _ => (ViewAnim::default(), AdsBlend::default()),
-            };
-            self.current = Some((key, p, anim, ads));
-            new_models = Some(rig.models.clone());
-        }
         if self.clip_slots.0 != list {
             let defs = list
                 .iter()
@@ -1021,14 +1107,43 @@ impl Cod4View {
             let slots = vcod_cod4::hud::ammo_slots(list, &defs);
             self.clip_slots = (list.to_vec(), slots.iter().map(|s| s.1).collect());
         }
-        let clip_empty = (ps.view_weapon() as usize)
-            .checked_sub(1)
-            .and_then(|i| self.clip_slots.1.get(i))
-            .is_some_and(|&s| ps.ammoclip.get(s) == Some(&0));
+        let clip = |w: u32| {
+            let s = self.clip_slots.1.get((w as usize).checked_sub(1)?)?;
+            ps.ammoclip.get(*s).copied()
+        };
+        let clip_empty = clip(ps.view_weapon()) == Some(0);
+        let key = RigKey {
+            weapon: name.to_string(),
+            hands,
+            camo: def.gun(ps.camo()).0,
+            rocket: def.rocket.is_some() && ps.shows_rocket(&def.numbers, clip(ps.weapon)),
+            // The knife test: the melee's two anims.
+            knife: def.knife.is_some() && matches!(ps.weap_anim & !ANIM_TOGGLEBIT, 8 | 9),
+        };
+        let Some(rig) = self.rig(&key, &def, models) else {
+            self.current = None;
+            return out;
+        };
+        let mut new_models = None;
+        if self.current.as_ref().is_none_or(|(k, ..)| *k != key) {
+            let mut p = skeleton::PoseBuffer::new(&rig.skeleton);
+            let (c, b) = rig.clip(IDLE).expect("a rig holds idle");
+            p.apply(c, b, 0.0);
+            // A camo, the rocket or the knife coming or going keeps the
+            // running clip and sight (the DObj keeps its tree, 0x4547ae).
+            let (anim, ads) = match self.current.take() {
+                Some((k, _, anim, ads)) if (&k.weapon, &k.hands) == (&key.weapon, &key.hands) => {
+                    (anim, ads)
+                }
+                _ => (ViewAnim::default(), AdsBlend::default()),
+            };
+            self.current = Some((key, p, anim, ads));
+            new_models = Some(rig.models.clone());
+        }
         let n = &rig.def.numbers;
         let dt = frame_ms as f32 / 1000.0;
         let (_, pose, anim, ads) = self.current.as_mut().expect("set above");
-        let from = anim.step(&rig, ps.weap_anim, clip_empty, dt);
+        let from = anim.step(&rig, ps, clip_empty, dt);
         if let Some((c, _)) = rig.clip(anim.node) {
             for note in notes_crossed(c, from, anim.t) {
                 out.sounds.extend(
@@ -1123,6 +1238,19 @@ impl Cod4View {
         });
         out
     }
+}
+
+/// `gun` with each of `swap`'s materials (slot 0's, the camo's) renamed.
+fn swapped(gun: &Model, swap: &[(String, String)]) -> Model {
+    let mut g = gun.clone();
+    for lod in &mut g.lods {
+        for m in &mut lod.materials {
+            if let Some((_, to)) = swap.iter().find(|(from, _)| from == m) {
+                *m = to.clone();
+            }
+        }
+    }
+    g
 }
 
 /// `CG_GetWeapReticleZoom` (`iw3mp.exe` 0x430120): how far a weapon with
@@ -1232,6 +1360,10 @@ mod tests {
         );
     }
 
+    /// The M16's reload (node 9, 2 s of `reloadTime`) sounds its clip out
+    /// and in off its notetracks, frames 12 and 37 of its 60; under Sleight
+    /// of Hand (`perks` 4) a reload started in a reload state runs twice as
+    /// fast (`perk_weapReloadMultiplier` 0.5). Vacuous without `COD4_DIR`.
     #[test]
     fn an_m16_reload_sounds_its_clip_out_and_in_off_its_notetracks() {
         let Some(install) = vcod_cod4::testing::cod4_install() else {
@@ -1244,6 +1376,88 @@ mod tests {
         };
         let (models, weapons, _) =
             crate::cod4_fly::load_bodies(install.root(), "mp_crash", &ents).unwrap();
+        for (perks, k) in [(0, 1), (PERK_FAST_RELOAD, 2)] {
+            let mut view = Cod4View::default();
+            let mut ps = ViewPs {
+                pm_type: 0,
+                weapon: 1,
+                ammoclip: [30; 128],
+                perks,
+                ..Default::default()
+            };
+            view.frame(&ps, &list, None, &weapons, &models, 0);
+            // `weapAnim` 13, the reload, in `WEAPON_RELOADING`.
+            ps.weap_anim = 13 | ANIM_TOGGLEBIT;
+            ps.weaponstate = WEAPON_RELOADING;
+            let mut heard = Vec::new();
+            for ms in (16..2200).step_by(16) {
+                for a in view.frame(&ps, &list, None, &weapons, &models, ms).sounds {
+                    heard.push((a, ms - 16));
+                }
+            }
+            let at = |a: &str| heard.iter().find(|h| h.0 == a).map(|h| h.1);
+            let near = |t: Option<i32>, want: i32| t.is_some_and(|t| (t - want).abs() <= 20);
+            assert!(
+                near(at("weap_m16_clipout_plr"), 400 / k),
+                "{perks}: {heard:?}"
+            );
+            assert!(
+                near(at("weap_m16_clipin_plr"), 1250 / k),
+                "{perks}: {heard:?}"
+            );
+            assert_eq!(heard.len(), 2, "{heard:?}");
+        }
+    }
+
+    /// The perks' divisors: Sleight of Hand in each reload state, Double
+    /// Tap while rechambering, neither elsewhere nor without the perk.
+    #[test]
+    fn the_perks_divide_the_rates_of_the_states_they_speed() {
+        let ps = |weaponstate, perks| ViewPs {
+            weaponstate,
+            perks,
+            ..Default::default()
+        };
+        for state in 7..=11 {
+            assert_eq!(perk_divisor(&ps(state, PERK_FAST_RELOAD)), 0.5);
+            assert_eq!(perk_divisor(&ps(state, PERK_ROF)), 1.0);
+        }
+        assert_eq!(perk_divisor(&ps(6, PERK_ROF)), 0.75);
+        assert_eq!(perk_divisor(&ps(6, PERK_FAST_RELOAD)), 1.0);
+        assert_eq!(perk_divisor(&ps(5, PERK_ROF | PERK_FAST_RELOAD)), 1.0);
+        assert_eq!(perk_divisor(&ps(7, 0)), 1.0);
+    }
+
+    /// The gun materials of the frame's handed models, `None` on a frame
+    /// that hands none.
+    fn gun_materials(f: &Cod4ViewFrame) -> Option<Vec<String>> {
+        let m = f.frame.as_ref()?.models.as_ref()?;
+        Some(m[1].lods[0].materials.clone())
+    }
+
+    /// `weaponmodels[]` picks the `gunModel[]` slot: the AK-47's gold
+    /// (6) and Blue Tiger (3) draw slot 0's mesh with their own
+    /// materials, the reload running on through the change; the MP5's
+    /// camo keeps its `hideTags` (no ACOG); an empty slot draws slot 0.
+    /// Vacuous without `COD4_DIR`.
+    #[test]
+    fn a_camo_draws_its_slots_materials() {
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let list: Vec<String> = ["ak47_mp", "mp5_mp"].map(String::from).to_vec();
+        let ents = crate::cod4_fly::EntityAssets {
+            models: Vec::new(),
+            weapons: list.clone(),
+        };
+        let (models, weapons, _) =
+            crate::cod4_fly::load_bodies(install.root(), "mp_crash", &ents).unwrap();
+        let ak = weapons["ak47_mp"].view.clone().unwrap();
+        assert_eq!(ak.guns.iter().flatten().count(), 7);
+        for g in ak.guns.iter().flatten().skip(1) {
+            assert_eq!(g.key, ak.guns[0].as_ref().unwrap().key, "{g:?}");
+            assert!(!g.swap.is_empty(), "{g:?}");
+        }
         let mut view = Cod4View::default();
         let mut ps = ViewPs {
             pm_type: 0,
@@ -1251,26 +1465,83 @@ mod tests {
             ammoclip: [30; 128],
             ..Default::default()
         };
-        view.frame(&ps, &list, None, &weapons, &models, 0);
-        // `weapAnim` 13, the reload (node 9, 2 s of `reloadTime`).
+        ps.weapon_models[1] = 6;
+        let gold = gun_materials(&view.frame(&ps, &list, None, &weapons, &models, 0)).unwrap();
+        assert!(
+            gold.iter().any(|m| m == "mc/mtl_weapon_ak47_gold"),
+            "{gold:?}"
+        );
+        assert!(!gold.iter().any(|m| m == "mc/mtl_weapon_ak47"), "{gold:?}");
+        assert!(gold.iter().any(|m| m == "mc/mtl_weapon_ak47_misc_nocamo"));
         ps.weap_anim = 13 | ANIM_TOGGLEBIT;
-        let mut heard = Vec::new();
-        for ms in (16..2200).step_by(16) {
-            for a in view.frame(&ps, &list, None, &weapons, &models, ms).sounds {
-                heard.push((a, ms - 16));
-            }
-        }
-        let at = |a: &str| heard.iter().find(|h| h.0 == a).map(|h| h.1);
-        // Frames 12 and 37 of the 60-frame clip at its 2 s rate.
+        view.frame(&ps, &list, None, &weapons, &models, 16);
+        ps.weapon_models[1] = 3;
+        let f = view.frame(&ps, &list, None, &weapons, &models, 32);
+        let tiger = gun_materials(&f).expect("the camo's models handed over");
         assert!(
-            at("weap_m16_clipout_plr").is_some_and(|t| (380..=420).contains(&t)),
-            "{heard:?}"
+            tiger.iter().any(|m| m == "mc/mtl_weapon_ak47_bwmrpt"),
+            "{tiger:?}"
         );
+        let (_, anim) = view.anim().unwrap();
+        assert_eq!((anim.node, anim.starts), (9, 1), "the reload runs on");
+        ps.weapon_models[1] = 9;
+        let f = view.frame(&ps, &list, None, &weapons, &models, 48);
+        let plain = gun_materials(&f).expect("slot 0's");
+        assert!(plain.iter().any(|m| m == "mc/mtl_weapon_ak47"), "{plain:?}");
+
+        let mut view = Cod4View::default();
+        ps.weapon = 2;
+        ps.weapon_models[2] = 2;
+        let f = view.frame(&ps, &list, None, &weapons, &models, 0);
+        let mp5 = gun_materials(&f).unwrap();
         assert!(
-            at("weap_m16_clipin_plr").is_some_and(|t| (1230..=1270).contains(&t)),
-            "{heard:?}"
+            mp5.iter().any(|m| m == "mc/mtl_weapon_mp5_bshdwl"),
+            "{mp5:?}"
         );
-        assert_eq!(heard.len(), 2, "{heard:?}");
+        assert!(!mp5.iter().any(|m| m.contains("acog")), "{mp5:?}");
+    }
+
+    /// The RPG draws `viewmodel_rpg7_rocket` at the gun's `tag_clip` with
+    /// a round in its clip, none once fired, and again a reload's
+    /// `reloadShowRocketTime` (100 ms) in. Vacuous without `COD4_DIR`.
+    #[test]
+    fn the_launcher_draws_its_rocket_while_loaded() {
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let list: Vec<String> = vec!["rpg_mp".into()];
+        let ents = crate::cod4_fly::EntityAssets {
+            models: Vec::new(),
+            weapons: list.clone(),
+        };
+        let (models, weapons, _) =
+            crate::cod4_fly::load_bodies(install.root(), "mp_crash", &ents).unwrap();
+        let def = weapons["rpg_mp"].view.clone().unwrap();
+        assert_eq!(def.rocket.as_deref(), Some("viewmodel_rpg7_rocket"));
+        let n = &def.numbers;
+        assert_eq!((n.reload_time, n.reload_show_rocket_time), (3292, 100));
+        let mut view = Cod4View::default();
+        let mut ps = ViewPs {
+            pm_type: 0,
+            weapon: 1,
+            ammoclip: [1; 128],
+            ..Default::default()
+        };
+        let mut drawn = |ps: &ViewPs, ms: i32| {
+            let f = view.frame(ps, &list, None, &weapons, &models, ms);
+            f.frame.unwrap().models.map(|m| m.len())
+        };
+        assert_eq!(drawn(&ps, 0), Some(3), "loaded");
+        ps.ammoclip = [0; 128];
+        assert_eq!(drawn(&ps, 16), Some(2), "fired");
+        ps.weaponstate = WEAPON_RELOADING;
+        ps.weapon_time = 3292 - 50;
+        assert_eq!(drawn(&ps, 32), None, "not yet");
+        ps.weapon_time = 3292 - 101;
+        assert_eq!(drawn(&ps, 48), Some(3), "the reload's round");
+        // The graft point is the gun's own bone, not a new root.
+        let gun = &models[&def.gun(0).1.key];
+        assert!(gun.bones.iter().any(|b| b.name == "tag_clip"));
     }
 
     /// The sniper rifles' guns hide once their overlay zooms in past
@@ -1365,8 +1636,8 @@ mod tests {
         let (models, weapons, _) =
             crate::cod4_fly::load_bodies(install.root(), "mp_crash", &ents).unwrap();
         let def = |w: &str| weapons[w].view.clone().unwrap();
-        let mats = |w: &str| models[&def(w).gun].lods[0].materials.join(" ");
-        assert!(def("mp5_mp").gun.starts_with("viewmodel_mp5_mp#"));
+        let mats = |w: &str| models[&def(w).gun(0).1.key].lods[0].materials.join(" ");
+        assert!(def("mp5_mp").gun(0).1.key.starts_with("viewmodel_mp5_mp#"));
         assert!(!mats("mp5_mp").contains("acog") && !mats("mp5_mp").contains("red_dot"));
         assert!(mats("mp5_acog_mp").contains("acog_lens"));
         let mut view = Cod4View::default();

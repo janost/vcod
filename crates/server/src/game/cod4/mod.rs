@@ -500,7 +500,11 @@ fn weapon_files_on_disk(
             .cloned()
             .unwrap_or_else(|| vec![None; 16]);
         let projectile = t.models.get("projectileModel").cloned();
-        Rc::new(WeaponFile::of(&w, world, projectile))
+        let mut f = WeaponFile::of(&w, world, projectile);
+        if let Some(guns) = t.model_lists.get("gunModel") {
+            f.def.gun_models = weapons::gun_bits(guns.iter().map(Option::is_some));
+        }
+        Rc::new(f)
     };
     let mut out = HashMap::new();
     for name in names {

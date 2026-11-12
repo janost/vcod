@@ -2352,6 +2352,7 @@ fn loadout_into(ps: &mut PlayerState, l: &super::weapons::Loadout) {
     ps.ammo.copy_from_slice(&l.ammo[..n]);
     let m = ps.ammoclip.len();
     ps.ammoclip.copy_from_slice(&l.ammoclip[..m]);
+    ps.weapon_models = l.weapon_models;
 }
 
 /// The entity's `fTorsoPitch` and `fWaistPitch`: 0 unless the eye's target

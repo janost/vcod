@@ -1001,8 +1001,8 @@ loaded beside it. INFERRED. The script sites are `hasPerk` in the stock
 |---|---|---|---|---|
 | UAV Jammer (`gpsjammer`) | 0x1 | client compass; the script's radar | works (radar) | none here |
 | Steady Aim (`bulletaccuracy`) | 0x2 | hip spread times `perk_weapSpreadMultiplier` 0.65 (0x805f64e) | works | `steady_aim_narrows_the_hip_spread` |
-| Sleight of Hand (`fastreload`) | 0x4 | reload time over `perk_weapReloadMultiplier` 0.5 (0x80636cb) | works (pmove) | `sleight_of_hand_halves_the_reload` |
-| Double Tap (`rof`) | 0x8 | fire and rechamber time over `perk_weapRateMultiplier` 0.75 (0x8063926) | works (pmove; retail's rate, cod4-combat.md 2.1) | `double_tap_fires_faster`, `cod4_fire_rate_ab` |
+| Sleight of Hand (`fastreload`) | 0x4 | reload time over `perk_weapReloadMultiplier` 0.5 (0x80636cb) | works (pmove; the view clips, cod4-client-view.md 4.7) | `sleight_of_hand_halves_the_reload` |
+| Double Tap (`rof`) | 0x8 | fire and rechamber time over `perk_weapRateMultiplier` 0.75 (0x8063926) | works (pmove, retail's rate, cod4-combat.md 2.1; the rechamber clip, cod4-client-view.md 4.7) | `double_tap_fires_faster`, `cod4_fire_rate_ab` |
 | Iron Lungs (`holdbreath`) | 0x10 | `perk_extraBreath` 5 s more breath (0x8062e7a) | works (pmove) | `iron_lungs_holds_the_breath_longer` |
 | Deep Impact (`bulletpenetration`) | 0x20 | depth times `perk_bulletPenetrationMultiplier` 2 (0x808aa10, 0x808abe9) | works | `a_round_goes_through_a_wall_and_deep_impact_goes_further` |
 | Martyrdom (`grenadepulldeath`) | 0x40 | `player_die` drops `perk_grenadeDeath` (0x80b1bb2) | works | `martyrdom_drops_a_live_grenade` |

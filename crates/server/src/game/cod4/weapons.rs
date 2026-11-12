@@ -68,6 +68,8 @@ pub struct WeaponDef4 {
     pub clip_slot: usize,
     /// The weapon number of `alt_name`, once it registered.
     pub alt: usize,
+    /// Bit `k`: `gunModel[k]` is set, a camo `giveWeapon` may name.
+    pub gun_models: u16,
 }
 
 impl WeaponDef4 {
@@ -99,8 +101,29 @@ impl WeaponDef4 {
             ammo_slot: 0,
             clip_slot: 0,
             alt: 0,
+            gun_models: w
+                .model_lists
+                .get("gunModel")
+                .map_or(0, |l| gun_bits(l.iter().map(Option::is_some))),
         }
     }
+
+    /// The `gunModel[]` slot `giveWeapon(name, model)` gives (`cod4_lnxded`
+    /// 0x80abd8e..0x80abdad): `model` where it is 0..=255 and that slot is
+    /// set, else 0.
+    pub fn camo(&self, model: i64) -> u8 {
+        match u8::try_from(model) {
+            Ok(m) if m < 16 && self.gun_models >> m & 1 != 0 => m,
+            _ => 0,
+        }
+    }
+}
+
+/// [`WeaponDef4::gun_models`] off which of the 16 slots are set.
+pub fn gun_bits(set: impl Iterator<Item = bool>) -> u16 {
+    set.take(16)
+        .enumerate()
+        .fold(0, |bits, (k, on)| bits | u16::from(on) << k)
 }
 
 /// The level's weapons by number, 0 the empty hand's, and the ammo and clip
@@ -187,6 +210,8 @@ pub struct Loadout {
     pub action_slot_param: [u32; 4],
     /// `setMoveSpeedScale`: `ps.moveSpeedScaleMultiplier`.
     pub move_speed_scale: f32,
+    /// `ps.weaponmodels`: each held weapon's `gunModel[]` slot.
+    pub weapon_models: [u8; 128],
 }
 
 impl Default for Loadout {
@@ -202,6 +227,7 @@ impl Default for Loadout {
             action_slot_type: [0; 4],
             action_slot_param: [0; 4],
             move_speed_scale: 1.0,
+            weapon_models: [0; 128],
         }
     }
 }
@@ -274,11 +300,12 @@ impl Loadout {
 
     /// `G_GivePlayerWeapon`. `None` when refused: no such weapon, one
     /// already held, a turret's or a non-player one. Otherwise the weapon
-    /// is held and not "old"; an item stops there, an offhand becomes the
-    /// equipped one when none is (then `Some(Some(w))`: the `C <index>` the
-    /// client is told), and anything else brings the alts it chains to
-    /// that are not held yet.
-    pub fn give(&mut self, t: &Cod4Weapons, w: usize) -> Option<Option<usize>> {
+    /// is held and not "old", its `weaponmodels` slot `model` (`cod4_lnxded`
+    /// 0x80a3317); an item stops there, an offhand becomes the equipped one
+    /// when none is (then `Some(Some(w))`: the `C <index>` the client is
+    /// told), and anything else brings the alts it chains to that are not
+    /// held yet, each on `model` too (0x80a33b3).
+    pub fn give(&mut self, t: &Cod4Weapons, w: usize, model: u8) -> Option<Option<usize>> {
         let d = t.get(w)?;
         let refused = matches!(d.weap_class, WEAPCLASS_TURRET | WEAPCLASS_NON_PLAYER);
         if refused || self.has(w) {
@@ -286,6 +313,7 @@ impl Loadout {
         }
         set_bit(&mut self.weapons, w, true);
         set_bit(&mut self.weaponold, w, false);
+        self.weapon_models[w] = model;
         if d.weap_class == WEAPCLASS_ITEM {
             return Some(None);
         }
@@ -299,6 +327,7 @@ impl Loadout {
         let new: Vec<usize> = alts(t, w).take_while(|&a| !self.has(a)).collect();
         for a in new {
             set_bit(&mut self.weapons, a, true);
+            self.weapon_models[a] = model;
         }
         Some(None)
     }
@@ -481,18 +510,34 @@ mod tests {
         let t = table();
         let mut l = Loadout::default();
         l.set_old(1);
-        assert_eq!(l.give(&t, 1), Some(None));
+        assert_eq!(l.give(&t, 1, 0), Some(None));
         assert_eq!(l.held().collect::<Vec<_>>(), [1, 2]);
         assert_eq!(l.weaponold, [0; 4]);
-        assert_eq!(l.give(&t, 1), None);
-        assert_eq!(l.give(&t, 7), None);
-        assert_eq!(l.give(&t, 8), None);
-        assert_eq!(l.give(&t, 0), None);
-        assert_eq!(l.give(&t, 9), Some(None));
-        assert_eq!(l.give(&t, 4), Some(Some(4)));
-        assert_eq!(l.give(&t, 5), Some(None));
+        assert_eq!(l.give(&t, 1, 0), None);
+        assert_eq!(l.give(&t, 7, 0), None);
+        assert_eq!(l.give(&t, 8, 0), None);
+        assert_eq!(l.give(&t, 0, 0), None);
+        assert_eq!(l.give(&t, 9, 0), Some(None));
+        assert_eq!(l.give(&t, 4, 0), Some(Some(4)));
+        assert_eq!(l.give(&t, 5, 0), Some(None));
         assert_eq!(l.offhand, 4);
         assert_eq!(l.held().collect::<Vec<_>>(), [1, 2, 4, 5, 9]);
+    }
+
+    /// `giveWeapon(name, model)`'s slot lands in `weaponmodels` for the
+    /// weapon and the alts it brings, 0 where `gunModel[model]` is empty.
+    #[test]
+    fn give_puts_the_camo_on_the_weapon_and_its_alts() {
+        let t = table();
+        let mut l = Loadout::default();
+        assert_eq!(l.give(&t, 1, 3), Some(None));
+        assert_eq!(l.weapon_models[..3], [0, 3, 3]);
+        let d = WeaponDef4 {
+            gun_models: gun_bits([true, false, false, true].into_iter()),
+            ..Default::default()
+        };
+        assert_eq!(d.gun_models, 0b1001);
+        assert_eq!([3, 1, 0, -1, 300].map(|m| d.camo(m)), [3, 0, 0, 0, 0]);
     }
 
     #[test]
@@ -503,9 +548,9 @@ mod tests {
         assert_eq!(l.ammo_max(&t, 4), 1);
         assert_eq!(l.ammo_max(&t, 6), 45);
         assert_eq!(l.ammo_max(&t, 0), 0);
-        l.give(&t, 1);
+        l.give(&t, 1, 0);
         assert_eq!(l.ammo_max(&t, 1), 120);
-        l.give(&t, 3);
+        l.give(&t, 3, 0);
         assert_eq!(l.ammo_max(&t, 1), 210);
         assert_eq!(l.ammo_max(&t, 3), 210);
     }
@@ -514,19 +559,19 @@ mod tests {
     fn initialize_ammo_fills_the_chain_less_what_the_slot_holds() {
         let t = table();
         let mut l = Loadout::default();
-        l.give(&t, 1);
+        l.give(&t, 1, 0);
         l.initialize_ammo(&t, 1, false);
         let one = state(&l, &t);
-        l.give(&t, 3);
+        l.give(&t, 3, 0);
         l.initialize_ammo(&t, 3, false);
         let two = state(&l, &t);
         l.ammo[t.defs[1].ammo_slot] = 5;
         l.ammoclip[t.defs[3].clip_slot] = 2;
         l.initialize_ammo(&t, 3, true);
         let again = state(&l, &t);
-        l.give(&t, 4);
+        l.give(&t, 4, 0);
         l.initialize_ammo(&t, 4, false);
-        l.give(&t, 6);
+        l.give(&t, 6, 0);
         l.initialize_ammo(&t, 6, false);
         let rest = state(&l, &t);
         assert_eq!(one, [(1, 60, 30), (2, 0, 1)]);
@@ -542,7 +587,7 @@ mod tests {
     fn add_ammo_caps_and_fills_on_request() {
         let t = table();
         let mut l = Loadout::default();
-        l.give(&t, 1);
+        l.give(&t, 1, 0);
         l.add_ammo(&t, 1, 500, false);
         let capped = state(&l, &t);
         l.add_ammo(&t, 1, 10, true);
@@ -550,7 +595,7 @@ mod tests {
         l.ammoclip[t.defs[1].clip_slot] = 99;
         l.add_ammo(&t, 1, 0, false);
         let clip = state(&l, &t);
-        l.give(&t, 4);
+        l.give(&t, 4, 0);
         l.add_ammo(&t, 4, 3, false);
         let frag = state(&l, &t);
         l.add_ammo(&t, 0, 3, true);
