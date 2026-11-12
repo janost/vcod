@@ -43,6 +43,13 @@ more.
   stock destructible cars and barrels break under rounds and blasts
   (13, `game::cod4::entity_damage`).
 - `setPlayerAngles` sets the view and `delta_angles`.
+- Retail captures gate a rocket's flight, the live grenade's throw back,
+  a prone death's torso and a `killcamentity` killcam (cod4-combat.md
+  15). They brought `flinchYawAnim`, the dead yaw (`stats[1]`), a spawn
+  that drops the last blow, `takeWeapon` and `dropItem` taking the alt
+  chain and its ammo, the body's dead and sighted `eFlags`, a level
+  vector's +0 pitch, and a killcam's entities shifted by the look back
+  without the victim's own flesh event.
 - Entity numbers follow retail's: `delete()` frees inside the call, so
   the free list keeps the scripts' delete order (cod4-combat.md 14).
 - `sv_fps` is read every frame (cod4-server-frame.md 8).
@@ -68,9 +75,13 @@ Open, by how much a player notices.
 3. The helicopter's flight runs no move trace and no touch, and its model
    collision traces at the bind pose (cod4-gsc.md 3.2, `game::cod4::vehicle`).
    M.
-4. No retail capture gates a rocket's flight, the live grenade's throw
-   back, a prone death's torso or a `killcamentity` killcam
-   (cod4-combat.md 12). S each to capture.
+4. What the four capture gates (`cod4::capture_ab`, cod4-combat.md 15)
+   still tolerate: damage applied at the victim's end frame rather than
+   inside `finishPlayerDamage` (the push, `pm_time`, the timers, the
+   corpse's launch), the dropped weapon's start and fall, a grenade's
+   strike on a standing body, the second rocket's entity number, a
+   `setviewpos`'s `delta_angles`, a killcam's trim and its archived view.
+   The first is L, the rest S to M.
 5. The touch pass after the move and a free spectator's flight have no
    A/B against retail yet (cod4-pmove.md 15.2). S.
 6. The off-LAN snapshot rate above 20 (cod4-server-frame.md), and why

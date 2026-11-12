@@ -572,7 +572,9 @@ disassembly) offsets:
   degrees wide of the helicopter from 950 off, with the stock strength and
   with 0: the same flight to the first wobble (same draws off the level's
   `rand()`), then the attracted one passes over 20 nearer. VERIFIED (the
-  test, ours). No retail capture of a rocket's flight backs this yet.
+  test, ours). A retail capture of an RPG's two flights gates the rest:
+  every point of the path matches, each wobble's `trDelta` a unit in the
+  last place off (cod4-combat.md 15). VERIFIED (the gate).
 
 ### 3.3 The script traces
 
@@ -1367,8 +1369,12 @@ label says otherwise.
 
 Captured on retail with two probes on `devmap mp_crash` war: a `--script
 frag` thrower at 123 2110 300 and a `--script throwback` target at 207
-2291 296 (uncommitted). Live gate: the client's
-`cod4_live_frag_at_the_feet_is_thrown_back`.
+2291 296. Live gate: the client's
+`cod4_live_frag_at_the_feet_is_thrown_back`. A second run, the thrower
+aiming 60 under the target's feet (`play-1.7-throwback-*.txt`), is
+`cod4::capture_ab::cod4_throwback_ab`: hint, pickup, hold and throw match
+retail word for word up to the thrown grenade's strike on the thrower
+(cod4-combat.md 15). VERIFIED (the gate).
 
 - With a live frag at rest near it the target's hint reads 44 (the frag's
   weapon 40 plus 4), string -1, the grenade's entity, and

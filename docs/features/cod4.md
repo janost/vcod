@@ -319,7 +319,10 @@ against a retail kill capture, entity numbers included:
 - Rockets wobble, curve and accelerate as 1.7's do; an RPG bends toward
   the helicopter's attractor; the helicopter's guided rockets steer.
 - Melee swings and hurts; `kill` works under `sv_cheats` (10.4, 10.5).
-- A rocket's flight has no retail capture to gate on yet (12).
+- Retail captures gate a rocket's flight, a grenade's throw back, a
+  prone death and a killcam on a helicopter-style kill (15). A hit's push
+  and timers land a frame late, and a dropped weapon falls straight, not
+  from the hand (12, 15).
 
 **Voice** ([cod4-voice.md](../research/cod4-voice.md) 3). Relayed under
 `sv_voice 1` (off by default, as retail): team, dead to dead,
