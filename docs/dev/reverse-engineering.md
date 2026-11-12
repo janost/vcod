@@ -54,6 +54,9 @@ CoD2 1.3:
   applies the result to a Ghidra program before `ExportDecomp.java`.
 - `dump_cod2_gsc.py` (builtin, method, field and spawn tables),
   `dump_cod2_weapon_fields.py` (weapon file fields and enum tables).
+- `cod2_rand_trace.c`: an `LD_PRELOAD` shim logging each `srand()` and
+  `rand()` with its call site and `level.time` (`RAND_TRACE=1` in
+  `tools/run_probe_cod2.sh`).
 - `d3dbsp_census.py` (the evidence behind `cod2-d3dbsp-format.md`),
   `cod2_matparse.py`, `cod2_techparse.py`, `cod2_mapcensus.py` (materials,
   techsets, their use on stock maps), `cod2_macarb.py` (the Mac build's ARB

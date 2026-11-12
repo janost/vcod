@@ -16,6 +16,12 @@ use super::vote::Sends;
 pub const FL_GODMODE: u32 = 1;
 pub const FL_DEMI_GODMODE: u32 = 2;
 pub const FL_NOTARGET: u32 = 4;
+/// `setStableMissile`'s bit, which `fire_rocket` copies onto the rocket
+/// (cod2-combat.md 2.6).
+pub const FL_STABLE_MISSILE: u32 = 0x2_0000;
+/// What `ClientSpawn` (0x80f910e, the store at 0x80f9202) leaves in
+/// `ent->flags`: the bits above go.
+pub const FL_SPAWN: u32 = 0x1000;
 
 /// `pm_flags` `SpectatorClientEndFrame` writes on a follow copy (Mac
 /// 0x1a2bc6): 0x400000 the follow, 0x1000000 one the client may leave,

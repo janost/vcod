@@ -168,8 +168,8 @@ fn drop_pins(spec: &Side) -> Vec<f64> {
 /// The two clients against `Cod2Server` on `map`, each reading its first
 /// snapshot when its twin in `retail` (spectator, joiner) did, the
 /// joiner's spawn spots, death anims and kill replayed off its twin's.
-/// `seed` is the script's RNG, picked so `menuAutoAssign`'s `randomInt(2)`
-/// draws retail's team.
+/// `seed` is `holdrand` once the level is up (`Rand_Init`), picked so
+/// `menuAutoAssign`'s `randomInt(2)` draws retail's team.
 fn ours(
     fs: &Rc<Pk3Fs>,
     map: &str,
@@ -194,7 +194,7 @@ fn ours(
     sv.set_cvar("developer", "1");
     sv.load(Some(fs.clone())).unwrap();
     let host = &mut sv.game.level.as_mut().unwrap().rt.host;
-    host.rng = seed | 1;
+    host.cod2().rand.rand_init(seed as u32);
     host.spawn_pins = Some(Rc::new(std::cell::RefCell::new(vec![
         Default::default(),
         pins.into(),
@@ -583,7 +583,7 @@ fn mp_toujane_wire_matches_retail() {
         "mp_toujane",
         include_bytes!("../../tests/fixtures/cod2-wire/mp_toujane-spec.bin"),
         include_bytes!("../../tests/fixtures/cod2-wire/mp_toujane-join.bin"),
-        2,
+        1,
         PLAIN,
     );
 }
@@ -596,7 +596,7 @@ fn mp_carentan_wire_matches_retail() {
         "mp_carentan",
         include_bytes!("../../tests/fixtures/cod2-wire/mp_carentan-spec.bin"),
         include_bytes!("../../tests/fixtures/cod2-wire/mp_carentan-join.bin"),
-        1,
+        3,
         PLAIN,
     );
 }
@@ -609,18 +609,18 @@ const KILL: Run = Run {
     kill_ms: Some(5000),
 };
 const GAMETYPES: &[(&str, &str, &str, u64, Run)] = &[
-    ("mp_toujane", "tdm", "tdm", 1, PLAIN),
-    ("mp_toujane", "sd", "sd", 2, PLAIN),
-    ("mp_toujane", "ctf", "ctf", 2, PLAIN),
-    ("mp_toujane", "hq", "hq", 1, PLAIN),
-    ("mp_toujane", "tdm-kill", "tdm", 1, KILL),
-    ("mp_toujane", "sd-kill", "sd", 2, KILL),
-    ("mp_carentan", "tdm", "tdm", 2, PLAIN),
-    ("mp_carentan", "sd", "sd", 1, PLAIN),
-    ("mp_carentan", "ctf", "ctf", 1, PLAIN),
-    ("mp_carentan", "hq", "hq", 1, PLAIN),
-    ("mp_burgundy", "dm", "dm", 2, PLAIN),
-    ("mp_burgundy", "sd", "sd", 2, PLAIN),
+    ("mp_toujane", "tdm", "tdm", 3, PLAIN),
+    ("mp_toujane", "sd", "sd", 1, PLAIN),
+    ("mp_toujane", "ctf", "ctf", 1, PLAIN),
+    ("mp_toujane", "hq", "hq", 3, PLAIN),
+    ("mp_toujane", "tdm-kill", "tdm", 3, KILL),
+    ("mp_toujane", "sd-kill", "sd", 1, KILL),
+    ("mp_carentan", "tdm", "tdm", 1, PLAIN),
+    ("mp_carentan", "sd", "sd", 3, PLAIN),
+    ("mp_carentan", "ctf", "ctf", 3, PLAIN),
+    ("mp_carentan", "hq", "hq", 3, PLAIN),
+    ("mp_burgundy", "dm", "dm", 1, PLAIN),
+    ("mp_burgundy", "sd", "sd", 1, PLAIN),
 ];
 
 #[test]
@@ -650,7 +650,7 @@ fn wire_capture_from_env() {
         return;
     }
     let map = std::env::var("WIRE_MAP").unwrap_or("mp_toujane".into());
-    let seed = std::env::var("WIRE_SEED").map_or(2, |s| s.parse().unwrap());
+    let seed = std::env::var("WIRE_SEED").map_or(1, |s| s.parse().unwrap());
     let run = if std::env::var_os("WIRE_KILL").is_some() {
         KILL
     } else {

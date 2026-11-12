@@ -203,6 +203,9 @@ pub struct Cod2HostState {
     pub clients: Vec<crate::game::cod2::Cod2ClientState>,
     /// The CoD2 game's `rand()`, the same stream as `Combat::rand`.
     pub rand: std::rc::Rc<crate::game::cod2_combat::GameRand>,
+    /// The seed `G_InitGame` gave `srand`, which `Rand_Init` gives
+    /// `holdrand` too (cod2-combat.md 2.6.1); `None` before a seeded level.
+    pub game_seed: Option<u32>,
     /// Test-facing: per client slot, the death anims (`legsAnim` without
     /// the toggle) its kills take in turn over the drawn one, the draw
     /// still made: a gate replays retail's clock-seeded picks with it.
@@ -226,6 +229,7 @@ impl Default for Cod2HostState {
             callback: Cod2CallbackArgs::default(),
             clients: vec![Default::default(); MAX_CLIENTS],
             rand: Default::default(),
+            game_seed: None,
             death_pins: Vec::new(),
             drop_pins: Default::default(),
             tag_drops: Vec::new(),

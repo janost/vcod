@@ -333,6 +333,10 @@ impl Cod2Server {
         self.game
             .game_log
             .init(&self.game.cvars, &game, &info, self.core.sv_time_ms);
+        // `G_InitGame`'s `srand` and the script's generator share one seed:
+        // retail's wall clock in ms, here a draw (cod2-combat.md 9.6).
+        let mut init = init;
+        init.carry.seed = Some(u64::from(self.game_seed()));
         let mut level = Cod2Level::load_map_with(
             fs,
             &file,

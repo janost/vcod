@@ -22,6 +22,9 @@ them on vcod.
   probe gametype inside `unshare -rn` beside
   `crates/cod2/examples/move_probe.rs`, which writes a
   `crates/cod2/tests/fixtures/moves/` capture (`cod2-movement.md` 17).
+  `RAND_TRACE=1` preloads `tools/re/cod2_rand_trace.c` (built with `gcc
+  -m32`) and appends every `srand()` and `rand()` the server made to the
+  capture: the seed and the draws a replay pins (`cod2-combat.md` 9.6).
 - Run the retail CoD2 and CoD4 Linux servers only inside `unshare -rn`.
 - `tools/run_probe.sh <probe> [map] [+set ...]` boots retail with a
   `crates/gsc/tests/fixtures/semantics/probe_*.gsc` (or

@@ -209,8 +209,16 @@ impl Cod2Server {
         }
         let (svs, xor) = (self.core.sv_time_ms, self.svs_time_ms());
         let rng = &mut self.core.rng;
-        let challenge = self.core.challenges.issue(from, svs, || {
-            (crate::engine::core::rand_from(rng) << 16) ^ crate::engine::core::rand_from(rng) ^ xor
+        // Retail's process has one `rand()`: a level's challenge draws come
+        // off the game's stream (cod2-combat.md 9.6).
+        let game = self.game.level.as_ref().map(|l| l.combat.rand.clone());
+        let challenge = self.core.challenges.issue(from, svs, || match &game {
+            Some(r) => ((r.rand() << 16) ^ r.rand()) as i32 ^ xor,
+            None => {
+                (crate::engine::core::rand_from(rng) << 16)
+                    ^ crate::engine::core::rand_from(rng)
+                    ^ xor
+            }
         });
         self.send_oob(from, &format!("challengeResponse {challenge}"));
     }
