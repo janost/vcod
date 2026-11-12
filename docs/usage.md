@@ -424,8 +424,9 @@ Client:
   - Select Profile creates, deletes and loads a profile in
     `players/profiles/`. The active profile's `vcod_mp.cfg` is the
     config, its `vcod_mpdata` the stats a join sends and the main menu
-    reads (rank, unlocks), stored plain and written back as they change.
-    Retail's `mpdata` is left alone.
+    reads (rank, unlocks, the Create a Class picks), stored plain and
+    written back as they change. Retail's `mpdata` is left alone. The
+    custom classes' names are the archived cvars `customclass1`..`5`.
   - `connect ip:port` on the console joins a server. Esc or `disconnect`
     on the connect screen calls the join off.
 - `vcod --connect ip:port` joins a 1.7 server through its team and class
