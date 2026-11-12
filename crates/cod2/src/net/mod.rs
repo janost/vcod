@@ -18,6 +18,7 @@ pub mod protocol;
 pub mod pure;
 pub mod usercmd;
 pub mod view;
+pub mod voice;
 pub mod write;
 
 pub use client::Client;

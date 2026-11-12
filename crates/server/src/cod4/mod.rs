@@ -1662,7 +1662,7 @@ impl Cod4Server {
             last_connect_ms: svs,
             reliable_kept: [true; MAX_RELIABLE_COMMANDS],
             download: download::Download::default(),
-            voice: voice::ClientVoice::of(userinfo),
+            voice: voice::client_voice(userinfo),
         });
     }
 

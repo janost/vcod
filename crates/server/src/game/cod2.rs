@@ -60,6 +60,9 @@ pub struct Cod2ClientState {
     /// `ps.stats[3]` and `stats[4]`: the client under the crosshair the
     /// last frame's scan found and his health (`game::cod2_identify`).
     pub identify: Option<(u8, i32)>,
+    /// `gclient+0x2808`, `lastVoiceTime`: the level time `G_BroadcastVoice`
+    /// last relayed a frame of the client's (cod2-voice.md 3).
+    pub last_voice_time: Option<i32>,
 }
 
 /// 0x80f5614, the cmd half of `SV_ClientThink`: a cmd more than 1000 ms

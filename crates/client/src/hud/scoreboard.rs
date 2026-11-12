@@ -38,7 +38,7 @@ const SECTION_GAP: f32 = 4.0;
 /// table's width, its header and whether it is right-aligned.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Column {
-    /// CoD2's talk icon: vcod has no voice chat, so it stays empty.
+    /// CoD2's talk icon ([`BoardView::voice`]).
     Voice,
     Icon,
     Name,
@@ -221,6 +221,8 @@ pub struct BoardView<'a> {
     pub address: Option<&'a str>,
     /// A `b` row's status icon index to its material.
     pub status_icon: &'a dyn Fn(i32) -> Option<String>,
+    /// CoD2's voice column: a client's `voice_off` or `voice_on`, or none.
+    pub voice: &'a dyn Fn(u32) -> Option<&'static str>,
 }
 
 /// The last parsed `b` reply and the board's own state. A malformed reply
@@ -767,6 +769,14 @@ impl Cursor {
                     }
                     String::new()
                 }
+                // 13 x 13 at the column's left (`CG_DrawClientScore`,
+                // Mac 0x1c51b2).
+                Column::Voice => {
+                    if let Some(icon) = (b.voice)(e.client) {
+                        d.fill([x, y, 13.0, 13.0], WHITE, d.alpha, icon, out);
+                    }
+                    String::new()
+                }
                 Column::Name => name.to_string(),
                 Column::Score if !spectator => e.score.to_string(),
                 Column::Deaths if !spectator => e.deaths.to_string(),
@@ -1184,6 +1194,7 @@ mod tests {
             hostname: "vcod",
             address: Some("127.0.0.1:28960"),
             status_icon: &|_| None,
+            voice: &|_| None,
         };
         let mut out = Vec::new();
         assert!(board.build(&view, &fx.fonts, &v, &mut out));

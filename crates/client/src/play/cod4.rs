@@ -531,8 +531,8 @@ pub struct Cod4Session {
     /// A menu or the console holds the keys: cmds carry only that bit.
     pub talking: bool,
     /// Voice chat's heard frames, talkers and outgoing batch
-    /// (`cod4_voice`).
-    pub voice: crate::cod4_voice::VoiceLink,
+    /// (`crate::voice`).
+    pub voice: crate::voice::VoiceLink,
     /// Cmds built since the last packet.
     pending: Vec<UserCmd>,
     /// A capture's newest cmd angles: its client's own view, which a
@@ -1038,11 +1038,7 @@ impl Cod4Session {
     pub fn is_talking(&self, client: u32) -> bool {
         if Some(client) == self.own_client() {
             let held = self.input.held(crate::play::input::Action::Talk);
-            return crate::cod4_voice::own_talking(
-                held,
-                self.voice_settings().0,
-                self.voice.enabled,
-            );
+            return crate::voice::own_talking(held, self.voice_settings().0, self.voice.enabled);
         }
         self.voice.talking(client, self.now_ms)
     }
@@ -1050,8 +1046,7 @@ impl Cod4Session {
     /// The talker list's clients (`UI_GetTalkerClientNum`): the talking
     /// ones but us, by number.
     pub fn talkers(&self) -> Vec<u32> {
-        self.voice
-            .talkers(self.own_client().unwrap_or(u32::MAX), self.now_ms)
+        self.voice.talkers(self.own_client(), self.now_ms)
     }
 
     /// Our client number off the newest snapshot.
@@ -12846,7 +12841,8 @@ pub(crate) mod tests {
     /// frames (cod4-voice.md 5).
     #[test]
     fn cod4_live_voice_reaches_the_team_and_voice_global_the_enemy() {
-        use crate::cod4_voice::{Speex, Tone, VoiceChat, VoiceFrame, VoiceInput, may_send};
+        use crate::voice::{Speex, Tone, VoiceChat, VoiceFrame, VoiceInput, may_send};
+        const RATE: u32 = vcod_cod4::net::voice::SAMPLE_RATE;
         use crate::play::input::Action;
         use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
         use vcod_server::cod4::{Cod4Config, Cod4Server};
@@ -12896,9 +12892,9 @@ pub(crate) mod tests {
             let mut t = Cod4Session::connect(addr, "talker", Cp::Bare, join("allies")).unwrap();
             let mut m = Cod4Session::connect(addr, "mate", Cp::Bare, join("allies")).unwrap();
             let mut e = Cod4Session::connect(addr, "enemy", Cp::Bare, join("axis")).unwrap();
-            let speex = Speex::open();
+            let speex = Speex::open(RATE);
             let real = speex.is_some();
-            let mut chat = VoiceChat::with(speex, Some(Box::new(Steady(Tone::new()))));
+            let mut chat = VoiceChat::with(RATE, speex, Some(Box::new(Steady(Tone::new(RATE)))));
             let mut seen = Seen::default();
             let t0 = clk_now();
             let mut talk_from = None;
@@ -12986,7 +12982,7 @@ pub(crate) mod tests {
         if real {
             assert!(seen.sent as usize >= seen.mate.len());
             assert!(seen.mate.iter().all(|(_, f)| f.len() == 20));
-            let mut dec = Speex::open().unwrap();
+            let mut dec = Speex::open(RATE).unwrap();
             let pcm: Vec<i16> = seen.mate[20..40]
                 .iter()
                 .flat_map(|(_, f)| dec.decode(f))

@@ -187,6 +187,10 @@ pub struct ConnectOpts {
     pub rate: String,
     pub snaps: String,
     pub password: String,
+    /// `cl_voice` (default 1, flags 0x1003: archived, userinfo;
+    /// `CL_InitOnceForAllClients`, Mac 0x1485e2): the server relays voice
+    /// only to a client sending it on (cod2-voice.md 3).
+    pub voice: bool,
 }
 
 impl ConnectOpts {
@@ -209,10 +213,11 @@ impl ConnectOpts {
                 .collect()
         };
         let mut ui = format!(
-            "\\name\\{}\\rate\\{}\\snaps\\{}\\cl_punkbuster\\0\\cl_wwwDownload\\{}",
+            "\\name\\{}\\rate\\{}\\snaps\\{}\\cl_punkbuster\\0\\cl_voice\\{}\\cl_wwwDownload\\{}",
             clean(&self.name),
             clean(&self.rate),
             clean(&self.snaps),
+            u8::from(self.voice),
             u8::from(self.www_download)
         );
         if !self.password.is_empty() {
@@ -253,6 +258,7 @@ impl Default for ConnectOpts {
             rate: "25000".into(),
             snaps: "20".into(),
             password: String::new(),
+            voice: true,
         }
     }
 }
@@ -411,6 +417,13 @@ pub struct Cod2Session {
     pub input: Cod2Input,
     /// The console or a chat line is up: the cmd's talk bit.
     pub talking: bool,
+    /// Voice chat's heard frames, talkers and outgoing batch
+    /// (`crate::voice`, cod2-voice.md 4).
+    pub voice: crate::voice::VoiceLink,
+    /// `s_playerMute`: the clients muted from the mute list, whose frames
+    /// `CL_VoicePacket` drops. `CL_Disconnect` clears it (Mac 0x14b8ea), as
+    /// a new session starts empty.
+    pub muted: [bool; 64],
     /// The client clock and the cmd clock over it; local ms run from `epoch`.
     epoch: Instant,
     clock: ServerClock,
@@ -519,7 +532,9 @@ impl Cod2Session {
                 _ => None,
             },
         )?;
-        let qport = std::process::id() as u16;
+        // Below 0x8000: retail's `SV_VoicePacket` reads the qport signed and
+        // never matches a higher one (cod2-voice.md 3).
+        let qport = std::process::id() as u16 & 0x7fff;
         // `cl_wwwDownload` is a userinfo dvar (flags 0x1003,
         // `CL_InitOnceForAllClients`, Mac 0x1485e2).
         let ui = opts.userinfo();
@@ -606,6 +621,8 @@ impl Cod2Session {
             fx_for: 0,
             input: Cod2Input::default(),
             talking: false,
+            voice: crate::voice::VoiceLink::cod2(),
+            muted: [false; 64],
             epoch: now,
             clock: ServerClock::cod2(),
             cmd_clock: CmdClock::default(),
@@ -673,6 +690,53 @@ impl Cod2Session {
         }
     }
 
+    /// The systeminfo's `sv_voice` and `sv_voiceQuality`, both systeminfo
+    /// dvars the client copies (`SV_Init`, Mac 0x141d62, flags 0x100d and
+    /// 0x1008); off and 1 before a gamestate.
+    pub fn voice_settings(&self) -> (bool, i32) {
+        use vcod_cod2::net::voice::SV_VOICE_QUALITY;
+        let si = self.view.configstrings.get(1);
+        let int =
+            |k: &str| vcod_common::net::info_value_for_key(si, k).map(vcod_common::text::atoi);
+        (
+            int("sv_voice").unwrap_or(0) != 0,
+            int("sv_voiceQuality").unwrap_or(SV_VOICE_QUALITY),
+        )
+    }
+
+    /// The talker list's clients (`UI_OwnerDraw` 267..270): every client
+    /// `CL_IsPlayerTalking` (Mac 0x1479dc) names, by number, a frame of
+    /// his heard in the last 300 ms; our own only under the server's
+    /// `voice_localEcho`.
+    pub fn talkers(&self) -> Vec<u32> {
+        self.voice.talkers(None, self.real_ms())
+    }
+
+    /// `CL_MutePlayer` (Mac 0x161d2e): flips `client`'s mute and tells the
+    /// server, `muteplayer <n>` or `unmuteplayer <n>`.
+    pub fn toggle_mute(&mut self, client: u32) {
+        let Some(m) = self.muted.get_mut(client as usize) else {
+            return;
+        };
+        *m = !*m;
+        let cmd = if *m { "muteplayer" } else { "unmuteplayer" };
+        self.client.add_reliable(&format!("{cmd} {client}"));
+    }
+
+    /// `CL_VoiceTransmit` (Mac 0x147a9e) on the batch, sent out of band
+    /// on our qport (`CL_WriteVoicePacket`, 0x187fac). A demo sends
+    /// nothing.
+    pub fn transmit_voice(&mut self) {
+        let now = self.real_ms();
+        let Some(batch) = self.voice.due(now) else {
+            return;
+        };
+        if let Some(sock) = self.sock.as_mut() {
+            let qport = self.client.netchan.qport;
+            sock.send(&vcod_cod2::net::voice::client_packet(qport, &batch));
+        }
+    }
+
     /// A client command on the reliable stream (`score`, `say`, a
     /// console line the client does not run itself).
     pub fn send_command(&mut self, line: &str) {
@@ -698,6 +762,15 @@ impl Cod2Session {
         while let Some(n) = self.sock.as_mut().and_then(|s| s.try_recv(&mut buf)) {
             let d = &buf[..n];
             if let Some(pl) = oob::payload(d) {
+                // `CL_ConnectionlessPacket`'s `v` (Mac 0x14c4c4) into
+                // `CL_VoicePacket` (0x1478f2).
+                if let Some(body) = vcod_cod2::net::voice::oob_body(pl) {
+                    let heard = vcod_cod2::net::voice::parse_server(body);
+                    let muted = self.muted;
+                    let now = self.real_ms();
+                    self.voice.hear(heard, now, |c| muted[c as usize]);
+                    continue;
+                }
                 match oob::parse_reply(pl) {
                     Reply::Error(e) => self.dropped = Some(e),
                     Reply::Disconnect if self.last_msg.elapsed() >= OOB_DISCONNECT_QUIET => {
@@ -1924,6 +1997,21 @@ impl Cod2Session {
         }
         self.opts = opts;
         if self.sock.is_some() {
+            self.client.add_reliable(&format!("userinfo \"{ui}\""));
+        }
+    }
+
+    /// `cl_voice` changed: the userinfo goes again, as [`Self::set_userinfo`]
+    /// sends it, and frames heard from now on are dropped while it is off
+    /// (`CL_VoicePacket`).
+    pub fn set_cl_voice(&mut self, on: bool) {
+        self.voice.enabled = on;
+        if self.opts.voice == on {
+            return;
+        }
+        self.opts.voice = on;
+        if self.sock.is_some() {
+            let ui = self.opts.userinfo();
             self.client.add_reliable(&format!("userinfo \"{ui}\""));
         }
     }
@@ -3187,6 +3275,56 @@ mod tests {
         );
     }
 
+    /// Voice on the session's socket: the systeminfo's `sv_voice` and
+    /// `sv_voiceQuality`, a server `v` stamping its talkers but a muted
+    /// one, the mute flip's `muteplayer` / `unmuteplayer`, and the batch out
+    /// on our qport the moment the first frame waits (cod2-voice.md 4, 5).
+    #[test]
+    fn cod2_voice_reaches_the_session_and_leaves_on_its_qport() {
+        use vcod_cod2::net::voice;
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.connect(server.local_addr().unwrap()).unwrap();
+        let me = sock.local_addr().unwrap();
+        let mut s = Cod2Session::new(Some(sock), Client::new(0x1234, 2));
+        assert_eq!(s.voice_settings(), (false, 1), "no gamestate: off, 1");
+        let gs = vcod_cod2::net::Gamestate2 {
+            server_command_sequence: 0,
+            configstrings: [(1u16, "\\sv_voice\\1\\sv_voiceQuality\\4".to_string())]
+                .into_iter()
+                .collect(),
+            baselines: Default::default(),
+            client_num: 0,
+            checksum_feed: 0,
+        };
+        s.view.configstrings = vcod_cod2::net::ConfigStrings::from_gamestate(&gs);
+        assert_eq!(s.voice_settings(), (true, 4));
+
+        let seq = s.client.reliable_sequence;
+        s.toggle_mute(5);
+        assert_eq!(s.client.reliable_command(seq + 1), b"muteplayer 5");
+        let heard = voice::server_packet(&[(3, vec![1, 2]), (5, vec![3])]);
+        server.send_to(&heard, me).unwrap();
+        let until = Instant::now() + Duration::from_secs(2);
+        while s.talkers().is_empty() && Instant::now() < until {
+            s.poll(None);
+        }
+        assert_eq!(s.talkers(), vec![3], "a muted talker's frame is dropped");
+        assert_eq!(s.voice.take_heard(), vec![(3, vec![1, 2])]);
+        s.toggle_mute(5);
+        assert_eq!(s.client.reliable_command(seq + 2), b"unmuteplayer 5");
+        assert!(!s.muted[5]);
+
+        s.voice.queue(vec![9; 10]);
+        s.transmit_voice();
+        let mut buf = [0u8; 512];
+        let n = server.recv(&mut buf).unwrap();
+        assert_eq!(&buf[..n], voice::client_packet(0x1234, &[vec![9; 10]]));
+    }
+
     /// A session on a gamestate whose systeminfo is `si`, downloading
     /// into `home`.
     fn session_on(si: &str, home: &Path, allow: bool) -> Cod2Session {
@@ -3589,7 +3727,7 @@ mod tests {
         assert_eq!(s.client.reliable_sequence, seq + 1);
         assert_eq!(
             s.client.reliable_command(seq + 1),
-            b"userinfo \"\\name\\bc\\rate\\5000\\snaps\\20\\cl_punkbuster\\0\\cl_wwwDownload\\0\""
+            b"userinfo \"\\name\\bc\\rate\\5000\\snaps\\20\\cl_punkbuster\\0\\cl_voice\\1\\cl_wwwDownload\\0\""
         );
     }
 }

@@ -339,6 +339,7 @@ pub const COD2_BINDS: &[(&str, &str)] = &[
     ("4", "+smoke"),
     ("B", "+binoculars"),
     ("X", "openscriptmenu ingame changeweapon"),
+    ("Z", "+talk"),
 ];
 
 /// CoD4 1.7's `default_mp_controls.cfg` binds (a rawfile of
@@ -356,7 +357,6 @@ pub const COD4_BINDS: &[(&str, &str)] = &[
     ("7", "+actionslot 2"),
     ("T", "chatmodepublic"),
     ("Y", "chatmodeteam"),
-    ("Z", "+talk"),
 ];
 
 /// The archived cvars the stock options screens set beyond the ones above,
@@ -555,6 +555,9 @@ impl Shell {
         // CL_Init (CoDMP.exe 1.5 0x413380): default "1", flags 3. Only a 1.5
         // or UO connect sends it (cod15-protocol-diff.md 14).
         s.register("cl_wwwDownload", "1", ARCHIVE | USERINFO);
+        // CoD2's and CoD4's voice chat: CoD2 `CL_InitOnceForAllClients`
+        // (Mac 0x1485e2) registers it "1", flags 0x1003 (cod2-voice.md 4).
+        s.register("cl_voice", "1", ARCHIVE | USERINFO);
         s.register("cg_fov", "80", ARCHIVE | CHEAT);
         // cgame's cvar table row at 0x30075420: default "0.2", CVAR_CHEAT,
         // read by the body's yaw swings (docs/research/cod11-combat.md 16.4).
@@ -2086,6 +2089,7 @@ mod tests {
                 "cl_run",
                 "cl_stanceTemp",
                 "cl_timeNudge",
+                "cl_voice",
                 "cl_wwwDownload"
             ]
         );

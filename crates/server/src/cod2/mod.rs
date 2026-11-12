@@ -23,7 +23,9 @@
 //! the rate, pacing, ping and LAN test are `crate::engine::link`, shared
 //! with CoD1's server.
 //!
-//! Not here: voice, PunkBuster, the authorize server, the status the
+//! Voice chat's relay is `voice.rs` (docs/research/cod2-voice.md).
+//!
+//! Not here: PunkBuster, the authorize server, the status the
 //! master gets every 10 minutes. The heartbeat goes to cod.pm's CoD2
 //! list, only at `dedicated 2`.
 //! Shots, damage, deaths and missiles are the level's
@@ -34,6 +36,7 @@ mod bots;
 mod cycle;
 mod house;
 mod oob;
+mod voice;
 
 pub use cycle::{Rotation, rotate};
 
@@ -135,6 +138,9 @@ pub struct Client {
     /// An `addTestClient` client: the bots' pass thinks for it on a
     /// random cmd, where a vcod bot (`bot` alone) has its brain.
     test: bool,
+    /// Voice chat (`voice.rs`): the frames queued for the client this
+    /// frame, its mute list and `sendVoice`.
+    voice: crate::voice::ClientVoice,
 }
 
 /// The pure lists of `SV_SpawnServer` (cod2-protocol.md 11.3).
@@ -818,8 +824,14 @@ impl Cod2Server {
                     .collect();
                 self.userinfo_changed(slot);
             }
-            "vdr" | "download" | "nextdl" | "stopdl" | "donedl" | "retransdl" | "wwwdl"
-            | "muteplayer" | "unmuteplayer" => self.download_command(slot, &args),
+            "vdr" | "download" | "nextdl" | "stopdl" | "donedl" | "retransdl" | "wwwdl" => {
+                self.download_command(slot, &args)
+            }
+            // `SV_MutePlayer_f` (0x8090a5a), `SV_UnmutePlayer_f` (0x8090aaa).
+            m @ ("muteplayer" | "unmuteplayer") => {
+                let arg = args.get(1).map_or("", String::as_str);
+                c.voice.mute_command(arg, m == "muteplayer");
+            }
             _ if game_ok => self.game_command(slot, &args, &text),
             _ => log::debug!("cod2: client {slot}: text ignored: {cmd}"),
         }
@@ -828,7 +840,7 @@ impl Cod2Server {
             .is_some_and(|c| c.state != State::Zombie)
     }
 
-    /// The engine's `vdr`, download and voice commands (`.data` 0x817d9e0,
+    /// The engine's `vdr` and download commands (`.data` 0x817d9e0,
     /// cod2-protocol.md 17.5).
     fn download_command(&mut self, slot: usize, args: &[String]) {
         let arg = |i: usize| args.get(i).map_or("", String::as_str);
@@ -862,17 +874,17 @@ impl Cod2Server {
                 house::Www::Gamestate => self.send_gamestate(slot),
                 house::Www::Drop(why) => self.drop_client(slot, why),
             },
-            // Voice: nothing to mute.
             _ => {}
         }
     }
 
-    /// `SV_UserinfoChanged` (0x80907cc): the rate, the snapshot interval
-    /// and the www flag.
+    /// `SV_UserinfoChanged` (0x80907cc): the rate, the snapshot interval,
+    /// `sendVoice` off the rate and `cl_voice`, and the www flag.
     fn userinfo_changed(&mut self, slot: usize) {
         let dedicated = self.int("dedicated");
         if let Some(c) = self.core.clients[slot].as_mut() {
             c.rates = link::Rates::of(&c.link.userinfo, c.lan, dedicated);
+            c.voice.send = crate::voice::wants(&c.link.userinfo, c.rates.rate);
         }
     }
 
@@ -1380,6 +1392,7 @@ impl Cod2Server {
             shared.get_or_insert_with(|| (self.client_states(), self.world_entities()));
         let ops = self.client_message(slot, clients, world);
         self.transmit(slot, ops);
+        self.send_voice(slot);
     }
 
     /// One client's message now, outside the pacing: a drop for a bad `cp`
@@ -1582,6 +1595,7 @@ impl Cod2Server {
             last_connect_ms: svs,
             download: house::Download::default(),
             test: false,
+            voice: voice::client_voice(userinfo, rates.rate),
         }
     }
 

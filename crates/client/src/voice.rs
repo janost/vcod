@@ -1,6 +1,7 @@
-//! CoD4 1.7's voice chat on the client (docs/research/cod4-voice.md):
-//! push to talk on `+talk`, the microphone at 8000 Hz through Speex
-//! narrowband, the frames batched out of band to the server, and the
+//! Voice chat on the client, CoD2 1.3's and CoD4 1.7's
+//! (docs/research/cod2-voice.md, cod4-voice.md): push to talk on `+talk`,
+//! the microphone at the game's rate (CoD2 8192 Hz, CoD4 8000) through
+//! Speex narrowband, the frames batched out of band to the server, and the
 //! server's relayed frames decoded and played, one stream a talker.
 //!
 //! [`VoiceLink`] is the session's half (no audio): what was heard and
@@ -13,7 +14,7 @@ use std::collections::VecDeque;
 use std::ffi::{c_char, c_int, c_void};
 use std::sync::{Arc, Mutex};
 
-use vcod_cod4::net::voice::{self as wire, FRAME_SAMPLES, SAMPLE_RATE, Talked};
+use vcod_common::net::voice::{self as wire, FRAME_SAMPLES, Talked};
 
 /// The session's voice state.
 pub struct VoiceLink {
@@ -27,9 +28,13 @@ pub struct VoiceLink {
     talk_at: [Option<f64>; 64],
     /// Frames heard and not yet played.
     heard: Talked,
+    /// CoD4's `CL_VoiceTransmit` restarts its clock with nothing to send;
+    /// CoD2's (Mac 0x147a9e) only when it sends ([`Self::due`]).
+    idle_restarts_clock: bool,
 }
 
 impl Default for VoiceLink {
+    /// CoD4's.
     fn default() -> Self {
         VoiceLink {
             enabled: true,
@@ -37,6 +42,7 @@ impl Default for VoiceLink {
             last_transmit: f64::NEG_INFINITY,
             talk_at: [None; 64],
             heard: Vec::new(),
+            idle_restarts_clock: true,
         }
     }
 }
@@ -62,13 +68,27 @@ impl VoiceLink {
         }
     }
 
-    /// `CL_VoiceTransmit` (`iw3mp.exe` 0x46c780): 200 ms past the last
-    /// transmit, or ten frames waiting, sends what waits (if anything)
-    /// and restarts the clock.
+    /// CoD2's link: [`Self::due`] keeps its clock while nothing waits.
+    pub fn cod2() -> Self {
+        VoiceLink {
+            idle_restarts_clock: false,
+            ..Self::default()
+        }
+    }
+
+    /// `CL_VoiceTransmit`: 200 ms past the last transmit, or ten frames
+    /// waiting, sends what waits (if anything) and restarts the clock. On
+    /// CoD4 (`iw3mp.exe` 0x46c780) an empty batch restarts it too, so a
+    /// first frame waits out the rest of 200 ms; on CoD2 (Mac 0x147a9e,
+    /// `Client_SendVoiceData` 0x14a868) it does not, and a first frame
+    /// after a silence goes at once.
     pub fn due(&mut self, now_ms: f64) -> Option<Vec<Vec<u8>>> {
         if now_ms - self.last_transmit < f64::from(wire::TRANSMIT_MS)
             && self.outgoing.len() < wire::TRANSMIT_PACKETS
         {
+            return None;
+        }
+        if self.outgoing.is_empty() && !self.idle_restarts_clock {
             return None;
         }
         self.last_transmit = now_ms;
@@ -88,11 +108,12 @@ impl VoiceLink {
             .is_some_and(|t| now_ms - t < f64::from(wire::TALKING_MS))
     }
 
-    /// `UI_GetTalkerClientNum`'s order: the talking clients but `own`, by
-    /// number.
-    pub fn talkers(&self, own: u32, now_ms: f64) -> Vec<u32> {
+    /// The talking clients by number but `own` (CoD4's
+    /// `UI_GetTalkerClientNum`); CoD2's talker list skips nobody
+    /// (`UI_OwnerDraw` 267..270, Mac 0x1536b2), so it passes none.
+    pub fn talkers(&self, own: Option<u32>, now_ms: f64) -> Vec<u32> {
         (0..64)
-            .filter(|&c| c != own && self.talking(c, now_ms))
+            .filter(|&c| Some(c) != own && self.talking(c, now_ms))
             .collect()
     }
 }
@@ -103,10 +124,17 @@ pub fn own_talking(talk_held: bool, sv_voice: bool, cl_voice: bool) -> bool {
     talk_held && (sv_voice || cl_voice)
 }
 
-/// `Voice_SendVoiceData` (0x46c850) with the talk key's test from
-/// `Record_QueueAudioDataForEncoding`: frames are encoded only while the
-/// key is held, in the world, with `sv_voice`, `cl_voice` and a `rate` of
-/// 5000 or more.
+/// CoD2's `UI_AMITALKING` (owner draw 266, `UI_OwnerDraw` Mac 0x1536b2):
+/// the talk key held with the server's `sv_voice` and our `cl_voice` both
+/// on.
+pub fn cod2_own_talking(talk_held: bool, sv_voice: bool, cl_voice: bool) -> bool {
+    talk_held && sv_voice && cl_voice
+}
+
+/// `Voice_SendVoiceData` (CoD4 0x46c850, CoD2 Mac 0x147ae8) with the talk
+/// key's test from `Record_QueueAudioDataForEncoding`: frames are encoded
+/// only while the key is held, in the world, with `sv_voice`, `cl_voice`
+/// and a `rate` of 5000 or more.
 pub fn may_send(talk_held: bool, active: bool, sv_voice: bool, cl_voice: bool, rate: i32) -> bool {
     talk_held && active && sv_voice && cl_voice && rate >= 5000
 }
@@ -147,9 +175,10 @@ type ReadFn = unsafe extern "C" fn(*mut SpeexBits, *const c_char, c_int);
 type DecodeFn = unsafe extern "C" fn(*mut c_void, *mut SpeexBits, *mut i16) -> c_int;
 
 /// One encoder and one decoder, as retail keeps one of each
-/// (`g_encoder`, `g_decoder`): narrowband at 8000 Hz, the encoder with
-/// VAD and DTX, the decoder with the perceptual enhancer
-/// (`Encode_SetOptions` 0x4ec9c0, `Decode_Init` 0x4ec880).
+/// (`g_encoder`, `g_decoder`): narrowband at the game's rate, the encoder
+/// with VAD and DTX, the decoder with the perceptual enhancer
+/// (`Encode_SetOptions` CoD4 0x4ec9c0, CoD2 Mac 0x1eab70; `Decode_Init`
+/// CoD4 0x4ec880, CoD2 Mac 0x1ea9e0).
 pub struct Speex {
     enc: *mut c_void,
     dec: *mut c_void,
@@ -180,8 +209,9 @@ const SPEEX_LIBS: &[&str] = &[
 ];
 
 impl Speex {
-    /// The system's `libspeex`, else `None`.
-    pub fn open() -> Option<Speex> {
+    /// The system's `libspeex` at `rate` (`SPEEX_SET_SAMPLING_RATE`, which
+    /// sets the bit rate it reports, not the frame), else `None`.
+    pub fn open(rate: u32) -> Option<Speex> {
         // SAFETY: loading libspeex runs no initialisers beyond libc's.
         let lib = SPEEX_LIBS
             .iter()
@@ -213,7 +243,7 @@ impl Speex {
             bits_init(&mut *enc_bits);
             bits_init(&mut *dec_bits);
             let set = |ctl: CtlFn, st, req, mut v: c_int| ctl(st, req, (&raw mut v).cast());
-            let rate = SAMPLE_RATE as c_int;
+            let rate = rate as c_int;
             set(ctl_enc, enc, SPEEX_SET_SAMPLING_RATE, rate);
             set(ctl_enc, enc, SPEEX_SET_QUALITY, wire::DEFAULT_QUALITY);
             set(ctl_enc, enc, SPEEX_SET_VAD, 1);
@@ -318,23 +348,24 @@ impl Drop for Speex {
 
 // ---- the microphone ------------------------------------------------------
 
-/// 8000 Hz mono samples from wherever they come.
+/// Mono samples at the codec's rate from wherever they come.
 pub trait VoiceInput {
     /// Everything captured since the last call.
     fn take(&mut self) -> Vec<i16>;
 }
 
-/// A 440 Hz tone at the codec's rate, `ms` of it per call's worth of
-/// wall time: the synthetic microphone (`VCOD_VOICE_INPUT=tone`) and the
-/// live test's.
+/// A 440 Hz tone at `rate`, `ms` of it per call's worth of wall time: the
+/// synthetic microphone (`VCOD_VOICE_INPUT=tone`) and the live tests'.
 pub struct Tone {
+    rate: u32,
     phase: f64,
     last: Option<std::time::Instant>,
 }
 
 impl Tone {
-    pub fn new() -> Tone {
+    pub fn new(rate: u32) -> Tone {
         Tone {
+            rate,
             phase: 0.0,
             last: None,
         }
@@ -344,16 +375,10 @@ impl Tone {
     pub fn samples(&mut self, n: usize) -> Vec<i16> {
         (0..n)
             .map(|_| {
-                self.phase += 440.0 / f64::from(SAMPLE_RATE);
+                self.phase += 440.0 / f64::from(self.rate);
                 ((self.phase * std::f64::consts::TAU).sin() * 8000.0) as i16
             })
             .collect()
-    }
-}
-
-impl Default for Tone {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -364,29 +389,29 @@ impl VoiceInput for Tone {
             .last
             .map_or(0.0, |t| now.duration_since(t).as_secs_f64() * 1000.0);
         self.last = Some(now);
-        self.samples((ms * f64::from(SAMPLE_RATE) / 1000.0) as usize)
+        self.samples((ms * f64::from(self.rate) / 1000.0) as usize)
     }
 }
 
 /// The default input device through cpal, mixed to mono and taken down
-/// to 8000 Hz by averaging (retail records at 8000 Hz itself,
-/// `DSOUNDRecord_Init`).
+/// to the codec's rate by averaging (retail records at it itself,
+/// `DSOUNDRecord_Init`: CoD4 8000 Hz, CoD2 8192).
 pub struct Mic {
     _stream: cpal::Stream,
     buf: Arc<Mutex<VecDeque<i16>>>,
 }
 
 impl Mic {
-    pub fn open() -> Option<Mic> {
+    pub fn open(rate: u32) -> Option<Mic> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
         let dev = cpal::default_host().default_input_device()?;
         let cfg = dev.default_input_config().ok()?;
         let channels = usize::from(cfg.channels()).max(1);
-        let step = f64::from(cfg.sample_rate()) / f64::from(SAMPLE_RATE);
+        let step = f64::from(cfg.sample_rate()) / f64::from(rate);
         let buf = Arc::new(Mutex::new(VecDeque::new()));
-        let mut down = Downsample::new(channels, step);
+        let mut down = Downsample::new(channels, step, rate);
         let sink = buf.clone();
-        let err = |e| log::warn!("cod4 voice: microphone: {e}");
+        let err = |e| log::warn!("voice: microphone: {e}");
         let stream = match cfg.sample_format() {
             cpal::SampleFormat::F32 => dev.build_input_stream(
                 cfg.config(),
@@ -401,7 +426,7 @@ impl Mic {
                 None,
             ),
             f => {
-                log::warn!("cod4 voice: microphone format {f:?} not read");
+                log::warn!("voice: microphone format {f:?} not read");
                 return None;
             }
         }
@@ -423,10 +448,11 @@ impl VoiceInput for Mic {
     }
 }
 
-/// Interleaved device samples to 8000 Hz mono.
+/// Interleaved device samples to mono at `rate`.
 struct Downsample {
     channels: usize,
     step: f64,
+    rate: u32,
     acc: f64,
     sum: f32,
     n: u32,
@@ -434,10 +460,11 @@ struct Downsample {
 }
 
 impl Downsample {
-    fn new(channels: usize, step: f64) -> Self {
+    fn new(channels: usize, step: f64, rate: u32) -> Self {
         Downsample {
             channels,
             step,
+            rate,
             acc: 0.0,
             sum: 0.0,
             n: 0,
@@ -469,7 +496,7 @@ impl Downsample {
         if let Ok(mut b) = sink.lock() {
             b.extend(out);
             // A second at most: the rest is stale.
-            let over = b.len().saturating_sub(SAMPLE_RATE as usize);
+            let over = b.len().saturating_sub(self.rate as usize);
             b.drain(..over);
         }
     }
@@ -480,10 +507,13 @@ impl Downsample {
 /// A talker's decoded samples, which a [`VoiceStream`] plays.
 type Ring = Arc<Mutex<VecDeque<f32>>>;
 
-/// A kira sound that plays a talker's ring at 8000 Hz, silent while it is
-/// empty, never finishing.
+/// A kira sound that plays a talker's ring at the codec's rate, silent
+/// while it is empty, never finishing. Retail plays each talker on a
+/// sample of its own at full volume (`DSound_NewSample`, CoD2 Mac
+/// 0x1f888e: volume 255 of 255, pan 128).
 struct VoiceStream {
     ring: Ring,
+    rate: u32,
     pos: f64,
     last: f32,
     next: f32,
@@ -496,7 +526,7 @@ impl kira::sound::Sound for VoiceStream {
             Err(_) => return,
         };
         for f in out {
-            self.pos += dt * f64::from(SAMPLE_RATE);
+            self.pos += dt * f64::from(self.rate);
             while self.pos >= 1.0 {
                 self.pos -= 1.0;
                 self.last = self.next;
@@ -512,7 +542,7 @@ impl kira::sound::Sound for VoiceStream {
     }
 }
 
-struct VoiceStreamData(Ring);
+struct VoiceStreamData(Ring, u32);
 
 impl kira::sound::SoundData for VoiceStreamData {
     type Error = ();
@@ -522,6 +552,7 @@ impl kira::sound::SoundData for VoiceStreamData {
         Ok((
             Box::new(VoiceStream {
                 ring: self.0,
+                rate: self.1,
                 pos: 0.0,
                 last: 0.0,
                 next: 0.0,
@@ -541,6 +572,9 @@ pub struct VoiceFrame {
 
 /// The app's voice: the codec, the input and a stream a talker.
 pub struct VoiceChat {
+    /// The game's codec rate (`vcod_cod2::net::voice::SAMPLE_RATE`,
+    /// `vcod_cod4::net::voice::SAMPLE_RATE`).
+    rate: u32,
     speex: Option<Speex>,
     input: Option<Box<dyn VoiceInput>>,
     /// Captured samples not yet a whole frame.
@@ -552,17 +586,19 @@ pub struct VoiceChat {
 }
 
 impl VoiceChat {
-    /// Speex if the system has it; the input opens on the first talk.
-    pub fn new() -> VoiceChat {
-        let speex = Speex::open();
+    /// Speex at `rate` if the system has it; the input opens on the first
+    /// talk.
+    pub fn new(rate: u32) -> VoiceChat {
+        let speex = Speex::open(rate);
         if speex.is_none() {
-            log::info!("cod4 voice: no libspeex; voice chat neither sends nor plays");
+            log::info!("voice: no libspeex; voice chat neither sends nor plays");
         }
-        VoiceChat::with(speex, None)
+        VoiceChat::with(rate, speex, None)
     }
 
-    pub fn with(speex: Option<Speex>, input: Option<Box<dyn VoiceInput>>) -> VoiceChat {
+    pub fn with(rate: u32, speex: Option<Speex>, input: Option<Box<dyn VoiceInput>>) -> VoiceChat {
         VoiceChat {
+            rate,
             speex,
             input,
             pending: Vec::new(),
@@ -584,14 +620,15 @@ impl VoiceChat {
         if f.sending
             && let Some(speex) = self.speex.as_mut()
         {
+            let rate = self.rate;
             let input = self
                 .input
                 .get_or_insert_with(|| match std::env::var("VCOD_VOICE_INPUT") {
-                    Ok(v) if v == "tone" => Box::new(Tone::new()),
-                    _ => match Mic::open() {
+                    Ok(v) if v == "tone" => Box::new(Tone::new(rate)),
+                    _ => match Mic::open(rate) {
                         Some(m) => Box::new(m),
                         None => {
-                            log::warn!("cod4 voice: no microphone");
+                            log::warn!("voice: no microphone");
                             Box::new(Silence)
                         }
                     },
@@ -624,7 +661,7 @@ impl VoiceChat {
                 None => {
                     let r: Ring = Arc::new(Mutex::new(VecDeque::new()));
                     if let Some(a) = audio.as_deref_mut() {
-                        a.play_custom(VoiceStreamData(r.clone()));
+                        a.play_custom(VoiceStreamData(r.clone(), self.rate));
                     }
                     self.streams[talker as usize] = Some(r.clone());
                     r
@@ -632,16 +669,10 @@ impl VoiceChat {
             };
             if let Ok(mut q) = ring.lock() {
                 q.extend(pcm.iter().map(|&s| f32::from(s) / 32768.0));
-                let over = q.len().saturating_sub(SAMPLE_RATE as usize / 2);
+                let over = q.len().saturating_sub(self.rate as usize / 2);
                 q.drain(..over);
             }
         }
-    }
-}
-
-impl Default for VoiceChat {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -657,6 +688,9 @@ impl VoiceInput for Silence {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const COD4_RATE: u32 = vcod_cod4::net::voice::SAMPLE_RATE;
+    const COD2_RATE: u32 = vcod_cod2::net::voice::SAMPLE_RATE;
 
     #[test]
     fn cod4_voice_transmit_batches_on_200_ms_or_ten_frames() {
@@ -676,20 +710,50 @@ mod tests {
         assert_eq!(l.due(1000.0), None);
     }
 
+    /// CoD2's clock moves only on a send: the first frame after a silence
+    /// goes at once, the next waits out 200 ms or ten frames.
     #[test]
-    fn cod4_voice_talkers_are_the_last_300_ms_unmuted_but_us() {
+    fn cod2_voice_transmit_keeps_its_clock_while_idle() {
+        let mut l = VoiceLink::cod2();
+        assert_eq!(l.due(0.0), None);
+        assert_eq!(l.due(5000.0), None);
+        l.queue(vec![1]);
+        assert_eq!(l.due(5001.0), Some(vec![vec![1]]));
+        l.queue(vec![2]);
+        assert_eq!(l.due(5100.0), None);
+        assert_eq!(l.due(5201.0), Some(vec![vec![2]]));
+        for _ in 0..10 {
+            l.queue(vec![3]);
+        }
+        assert_eq!(l.due(5202.0).map(|b| b.len()), Some(10));
+    }
+
+    #[test]
+    fn talkers_are_the_last_300_ms_unmuted() {
         let mut l = VoiceLink::default();
         l.hear(
             vec![(5, vec![1]), (2, vec![1]), (7, vec![1])],
             1000.0,
             |c| c == 7,
         );
-        assert_eq!(l.talkers(2, 1299.0), vec![5]);
-        assert!(l.talkers(2, 1300.0).is_empty());
+        assert_eq!(l.talkers(Some(2), 1299.0), vec![5]);
+        // CoD2's list keeps our own number (heard under `voice_localEcho`).
+        assert_eq!(l.talkers(None, 1299.0), vec![2, 5]);
+        assert!(l.talkers(Some(2), 1300.0).is_empty());
         assert_eq!(l.take_heard().len(), 2);
         l.enabled = false;
         l.hear(vec![(5, vec![1])], 2000.0, |_| false);
         assert!(!l.talking(5, 2000.0));
+    }
+
+    #[test]
+    fn cod2_own_talk_icon_needs_both_dvars() {
+        assert!(cod2_own_talking(true, true, true));
+        assert!(!cod2_own_talking(true, false, true));
+        assert!(!cod2_own_talking(true, true, false));
+        assert!(!cod2_own_talking(false, true, true));
+        // CoD4's takes either.
+        assert!(own_talking(true, false, true));
     }
 
     /// With the system's libspeex, a second of the tone at quality 3
@@ -697,11 +761,11 @@ mod tests {
     /// decodes back to 160 samples a frame.
     #[test]
     fn cod4_voice_speex_frames_the_tone() {
-        let Some(mut s) = Speex::open() else {
+        let Some(mut s) = Speex::open(COD4_RATE) else {
             return;
         };
-        let mut t = Tone::new();
-        let pcm = t.samples(SAMPLE_RATE as usize);
+        let mut t = Tone::new(COD4_RATE);
+        let pcm = t.samples(COD4_RATE as usize);
         let frames: Vec<Vec<u8>> = pcm
             .chunks(FRAME_SAMPLES)
             .map(|c| s.encode(c.try_into().unwrap(), 3))
@@ -714,5 +778,47 @@ mod tests {
         );
         assert_eq!(s.bitrate(), 8000);
         assert_eq!(s.decode(&frames[10]).len(), FRAME_SAMPLES);
+    }
+
+    /// CoD2's codec: narrowband at 8192 Hz and quality 1 (1.3's
+    /// `sv_voiceQuality`), 51.2 frames a second of 10 bytes (79 bits,
+    /// Speex's 3950 bit/s mode reported at 8192 Hz), each decoding back to
+    /// 160 samples that still carry the tone.
+    #[test]
+    fn cod2_voice_speex_frames_the_tone_at_8192_hz() {
+        let Some(mut s) = Speex::open(COD2_RATE) else {
+            return;
+        };
+        let q = vcod_cod2::net::voice::SV_VOICE_QUALITY;
+        let mut t = Tone::new(COD2_RATE);
+        let pcm = t.samples(COD2_RATE as usize);
+        let frames: Vec<Vec<u8>> = pcm
+            .as_chunks::<FRAME_SAMPLES>()
+            .0
+            .iter()
+            .map(|c| s.encode(c, q))
+            .collect();
+        assert_eq!(frames.len(), 51);
+        assert!(
+            frames.iter().all(|f| f.len() == 10),
+            "{:?}",
+            frames.iter().map(Vec::len).collect::<Vec<_>>()
+        );
+        let out: Vec<i16> = frames.iter().flat_map(|f| s.decode(f)).collect();
+        assert_eq!(out.len(), 51 * FRAME_SAMPLES);
+        // The tone survives: the decoded half second past the codec's
+        // start-up correlates with a 440 Hz sine at 8192 Hz.
+        let tail = &out[out.len() / 2..];
+        let (mut re, mut im, mut energy) = (0.0f64, 0.0f64, 0.0f64);
+        for (i, &v) in tail.iter().enumerate() {
+            let w = std::f64::consts::TAU * 440.0 * i as f64 / f64::from(COD2_RATE);
+            re += f64::from(v) * w.cos();
+            im += f64::from(v) * w.sin();
+            energy += f64::from(v) * f64::from(v);
+        }
+        let n = tail.len() as f64;
+        let tone = (re * re + im * im).sqrt() * 2.0 / n;
+        let rms = (energy / n).sqrt();
+        assert!(tone > 0.5 * rms * std::f64::consts::SQRT_2, "{tone} {rms}");
     }
 }

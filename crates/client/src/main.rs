@@ -32,7 +32,6 @@ mod cod4_spotshadow;
 mod cod4_sunshadow;
 mod cod4_vehicles;
 mod cod4_viewmodel;
-mod cod4_voice;
 mod cod4_waypoints;
 mod console;
 mod corona;
@@ -75,6 +74,7 @@ mod turret;
 mod vehicle_probe;
 mod video;
 mod viewmodel;
+mod voice;
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
@@ -3518,6 +3518,11 @@ impl App {
                 UiEffect::RunMod(game) => self.run_mod(game),
                 UiEffect::StartServer(req) => self.start_server(&req),
                 UiEffect::LoadProfile(name) => self.load_profile(&name),
+                UiEffect::MutePlayer(client) => {
+                    if let Some(c) = self.session.cod2_mut() {
+                        c.toggle_mute(client);
+                    }
+                }
                 UiEffect::ExecOnCvar {
                     cvar,
                     value,
@@ -8400,6 +8405,19 @@ impl ApplicationHandler for App {
                     hud_quads.extend(self.console.screen_text(line, 24.0, y, w, h));
                 }
                 if self.ui.active() {
+                    // CoD2's mute list (`muteplayer`): the rows on the
+                    // player list's clock, the mute bits live.
+                    if let Some(c) = self.session.cod2() {
+                        let rows = c.mute_rows();
+                        let muted = rows
+                            .iter()
+                            .filter(|r| r.2 && r.0 < 64)
+                            .fold(0u64, |m, r| m | 1 << r.0);
+                        self.ui.set_muted(muted);
+                        self.ui.offer_clients(now, || {
+                            rows.into_iter().map(|(n, name, _)| (n, name)).collect()
+                        });
+                    }
                     if let Mode::Online { net, .. } = &self.mode {
                         self.ui.offer_players(now, || {
                             let protocol = net.protocol();

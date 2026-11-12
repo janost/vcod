@@ -47,6 +47,9 @@ pub(crate) struct Cod2Client {
     pub(crate) menus_for: u32,
     /// The gamestate count the level's models were loaded under.
     pub(crate) models_for: u32,
+    /// Voice chat's codec, microphone and talker streams, made on the
+    /// first live frame (`crate::voice`).
+    voice: Option<crate::voice::VoiceChat>,
 }
 
 impl Cod2Client {
@@ -64,6 +67,7 @@ impl Cod2Client {
             menus: play::join::Join::new(None, None),
             menus_for: 0,
             models_for: 0,
+            voice: None,
         }
     }
 }
@@ -114,6 +118,10 @@ impl Cod2Client {
         s.talking = cx.console_open || cx.ui.active() || self.hud.chat_field.is_some();
         s.set_freeze_demo(cx.shell.cvar_f32("cl_freezeDemo") != 0.0);
         s.fly(cam, cx.fs);
+        self.voice_frame(cx);
+        let Some(s) = self.session.as_deref_mut() else {
+            return false;
+        };
         if s.take_restart() {
             cx.fx.clear();
         }
@@ -134,6 +142,75 @@ impl Cod2Client {
         // `CL_GetMenuBlurRadius`: none on a demo
         cx.r.set_world_blur(if s.is_demo() { 0.0 } else { cx.ui.blur_world() });
         true
+    }
+
+    /// Voice chat's frame (cod2-voice.md 4): `+talk`'s frames encoded onto
+    /// the session's batch while [`crate::voice::may_send`] holds, the
+    /// batch sent on `CL_VoiceTransmit`'s clock, the heard ones played.
+    /// `cl_voice` goes to the server in the userinfo when it changes.
+    fn voice_frame(&mut self, cx: &mut Cod2Frame) {
+        use crate::voice::{VoiceChat, VoiceFrame, may_send};
+        let Some(s) = self.session.as_deref_mut() else {
+            return;
+        };
+        if s.is_demo() {
+            return;
+        }
+        let (sv_voice, quality) = s.voice_settings();
+        let cl_voice = cx.shell.cvar_f32("cl_voice") != 0.0;
+        // `Voice_SendVoiceData` reads `rate` with `Dvar_GetInt`.
+        let rate = vcod_common::text::atoi(cx.shell.cvar("rate").unwrap_or("0"));
+        let active = s.frame().is_some();
+        let held = s.input.held(play::input::Action::Talk);
+        s.set_cl_voice(cl_voice);
+        let f = VoiceFrame {
+            sending: may_send(held, active, sv_voice, cl_voice, rate),
+            quality,
+        };
+        self.voice
+            .get_or_insert_with(|| VoiceChat::new(vcod_cod2::net::voice::SAMPLE_RATE))
+            .frame(&mut s.voice, &f, Some(&mut *cx.audio));
+        s.transmit_voice();
+        self.hud.voice = cod2_hud::VoiceShown {
+            own: crate::voice::cod2_own_talking(held, sv_voice, cl_voice),
+            talkers: s.talkers(),
+            muted: s
+                .muted
+                .iter()
+                .enumerate()
+                .fold(0, |m, (n, &on)| m | u64::from(on) << n),
+        };
+    }
+
+    /// The mute list's `uiScript mutePlayer` (`CL_MutePlayer`): flips
+    /// `client`'s mute.
+    pub(crate) fn toggle_mute(&mut self, client: u32) {
+        if let Some(s) = self.session.as_deref_mut() {
+            s.toggle_mute(client);
+        }
+    }
+
+    /// The mute list's rows (`UI_BuildPlayerList`, Mac 0x14f5e2): every
+    /// client the newest snapshot names, by number, and whether each is
+    /// muted.
+    pub(crate) fn mute_rows(&self) -> Vec<(u32, String, bool)> {
+        let Some(s) = self.session.as_deref() else {
+            return Vec::new();
+        };
+        let Some(f) = s.frame() else {
+            return Vec::new();
+        };
+        let mut rows: Vec<(u32, String, bool)> = f
+            .snap
+            .clients
+            .iter()
+            .map(|c| {
+                let muted = s.muted.get(c.number as usize).copied().unwrap_or(false);
+                (c.number, c.name(), muted)
+            })
+            .collect();
+        rows.sort_by_key(|r| r.0);
+        rows
     }
 
     /// The session's frame drawn: its entities and bodies into the

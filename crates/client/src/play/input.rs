@@ -209,8 +209,8 @@ pub enum Action {
     /// the throw key); `play::cod4_input`.
     BreathSprint,
     ToggleAdsThrow,
-    /// CoD4's `+talk`: push to talk, which only voice reads; vcod has
-    /// none, so it holds nothing.
+    /// CoD2's and CoD4's `+talk`: push to talk, which only voice chat
+    /// reads (`crate::voice`); no cmd button.
     Talk,
 }
 
