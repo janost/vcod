@@ -227,6 +227,11 @@ pub struct WeaponParams {
     pub explosion_outer_damage: i32,
     pub projectile_speed: i32,
     pub projectile_speed_up: i32,
+    /// +0x5a0..+0x5ac: a rocket's wobble (cod2-combat.md 2.6).
+    pub destabilization_base_time: f32,
+    pub destabilization_time_reduction_ratio: f32,
+    pub destabilization_angle_max: f32,
+    pub destabilize_distance: i32,
     /// +0x390: 0 grenade, 1 rocket, 2 none.
     pub proj_explosion_type: i32,
     pub proj_explosion_effect: String,
@@ -382,6 +387,10 @@ impl WeaponParams {
             explosion_outer_damage: def.int("explosionOuterDamage"),
             projectile_speed: def.int("projectileSpeed"),
             projectile_speed_up: def.int("projectileSpeedUp"),
+            destabilization_base_time: def.float("destabilizationBaseTime"),
+            destabilization_time_reduction_ratio: def.float("destabilizationTimeReductionRatio"),
+            destabilization_angle_max: def.float("destabilizationAngleMax"),
+            destabilize_distance: def.int("destabilizeDistance"),
             proj_explosion_type: def.int("projExplosionType"),
             proj_explosion_effect: def.str("projExplosionEffect").to_string(),
             proj_impact_explode: def.flag("projImpactExplode"),

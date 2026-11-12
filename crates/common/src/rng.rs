@@ -3,7 +3,8 @@
 //! connect challenge. Retail's own generator is glibc's `rand()`, which
 //! nothing here has to reproduce -- only the shape of the draw and its
 //! reproducibility from a seed. [`GlibcRand`] is that generator, for a test
-//! that replays a capture's draws from the seed recovered off it.
+//! that replays a capture's draws from the seed recovered off it;
+//! [`HoldRand`] is the second stream CoD2's game keeps.
 
 /// One xorshift64* step: advances `state` and returns the scrambled output.
 /// A zero state is the degenerate one xorshift never leaves, so a caller
@@ -61,9 +62,46 @@ impl GlibcRand {
     }
 }
 
+/// q_shared's `holdrand` stream (`Rand_Init`, `flrand`, `irand`): the
+/// MSVC-style LCG CoD2 1.3's game draws its rocket wobble, grenade tumble
+/// and script `randomInt`/`randomFloat` from, beside glibc's `rand()`.
+/// `G_InitGame` seeds both with one wall-clock seed (cod2-combat.md 2.6).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HoldRand(pub u32);
+
+impl HoldRand {
+    fn step(&mut self) -> u32 {
+        self.0 = self.0.wrapping_mul(0x343fd).wrapping_add(0x269ec3);
+        self.0 >> 17
+    }
+
+    /// `flrand(min, max)` (lnxded 0x80aaa84): `(max - min) * (holdrand >>
+    /// 17) / 32768 + min` on the stack, stored by the caller.
+    pub fn flrand(&mut self, min: f32, max: f32) -> f32 {
+        let v = f64::from(self.step());
+        ((f64::from(max) - f64::from(min)) * v / 32768.0 + f64::from(min)) as f32
+    }
+
+    /// `irand(min, max)` (lnxded 0x80aaada): `(max - min) * (holdrand >>
+    /// 17) >> 15`, plus `min`.
+    pub fn irand(&mut self, min: i32, max: i32) -> i32 {
+        let v = self.step() as i32;
+        (max.wrapping_sub(min).wrapping_mul(v) >> 15) + min
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Rand_Init(seed)` then `flrand(-1, 1)` three times: the draws one
+    /// retail rocket's first wobble took (cod2-combat.md 9.7).
+    #[test]
+    fn holdrand_draws_retail_rocket_wobble() {
+        let mut h = HoldRand(3_500_530_290);
+        let v: Vec<f32> = (0..3).map(|_| h.flrand(-1.0, 1.0)).collect();
+        assert_eq!(v, [5576, 3961, 23305].map(|n| n as f32 / 16384.0 - 1.0));
+    }
 
     /// A generator, not a constant: the sequence advances, repeats from a
     /// seed, and spreads over the whole word.

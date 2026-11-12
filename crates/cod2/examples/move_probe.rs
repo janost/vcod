@@ -349,8 +349,39 @@ fn script(name: &str) -> Option<Vec<Phase>> {
         ],
         // A frag thrown along the spawn's view.
         "throw" => vec![idle(1500), ph(1200, FRAG, 0, 0), idle(5000)],
+        // A launcher (`probe_weapon panzerschreck_mp`) with the target at
+        // its left: the spawn's reload, a sighted rocket turned 90 off the
+        // target and raised 40 (`rocket30`: 30), the reload, then melee
+        // swings at the target, the body stepped in between some and the
+        // view turned off it for the last two.
+        "rocket" | "rocket30" => {
+            let raise = if name == "rocket" { -40.0 } else { -30.0 };
+            let away = |p| turn(look(p, raise), -90.0);
+            let swing = || [ph(100, MELEE, 0, 0), idle(1400)];
+            let mut v = vec![
+                idle(5500),
+                away(ph(800, ADS, 0, 0)),
+                away(ph(100, ADS | ATTACK, 0, 0)),
+                away(ph(2500, ADS, 0, 0)),
+                idle(3000),
+            ];
+            v.extend(swing());
+            v.extend(swing());
+            for step in [300, 300, 300] {
+                v.push(ph(step, 0, F, 0));
+                v.extend(swing());
+            }
+            for yaw in [15.0, 30.0] {
+                v.push(turn(ph(100, MELEE, 0, 0), yaw));
+                v.push(turn(idle(1400), yaw));
+            }
+            v.push(idle(500));
+            v
+        }
         // The target of a shooting script: twelve still seconds.
         "still" => vec![idle(12000)],
+        // `rocket`'s target: thirty still seconds.
+        "still30" => vec![idle(30000)],
         // The hit pose capture's target (hitpose/probe_hitpose.gsc):
         // standing, crouched, prone, standing again, a strafe and a stop.
         "poses" => vec![

@@ -18,7 +18,8 @@
 //! trajectory. A difference must be named in [`GAPS`] with its section
 //! of docs/research/cod2-combat.md. Needs `COD2_DIR`.
 //! `COMBAT_REPORT=1` prints every mismatching row; `COMBAT_MISSILES=<name>`
-//! prints that capture's missiles frame by frame, ours over retail's.
+//! prints that capture's missiles frame by frame, ours over retail's;
+//! `COMBAT_ONLY=<name>` replays that capture alone.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -36,7 +37,9 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../cod2/tests/fixtu
 /// The captures, each a shooter's `<name>.txt` and its target's
 /// `<name>-b.txt`: kar98k rounds at the head, torso and legs at 220 units,
 /// a sighted thompson burst there and at 1340, kar98k rounds at 1340 that
-/// meet a static model, a killing head shot, and a frag at the target's feet.
+/// meet a static model, a killing head shot, a frag at the target's feet,
+/// and two panzerschreck rockets, one into the sky past ten wobbles and its
+/// melee swings after, one into a wall (cod2-combat.md 9.7).
 const CAPTURES: &[&str] = &[
     "hit-head",
     "hit-torso",
@@ -47,6 +50,8 @@ const CAPTURES: &[&str] = &[
     "hit-kill",
     "hit-throw",
     "hit-turret",
+    "hit-rocket",
+    "hit-rocket-wall",
 ];
 
 /// What the replay still gets wrong: (capture, check, count, why). The
@@ -152,8 +157,8 @@ const GAPS: &[(&str, &str, usize, &str)] = &[
     (
         "hit-throw",
         "missile pos.trBase[1]",
-        67,
-        "9.4 a last bit at the first bounce",
+        58,
+        "9.4 the bounce off the target's body: last bits",
     ),
     (
         "hit-throw",
@@ -285,10 +290,15 @@ const GAPS: &[(&str, &str, usize, &str)] = &[
 ];
 
 /// The glibc seed each capture's server drew from (`G_InitGame`'s
-/// `srand(Sys_MillisecondsRaw())`) and the draws it made before the
-/// replay's first: (capture, seed, skip). `recover_spread_seed` found them
-/// (cod2-combat.md 9.6).
-const SEEDS: &[(&str, u32, usize)] = &[("hit-smg", 1_679_727_541, 5)];
+/// `srand(Sys_MillisecondsRaw())`, which `Rand_Init` seeds `holdrand`
+/// with too) and the glibc draws it made before the replay's first:
+/// (capture, seed, skip). `recover_spread_seed` found the first,
+/// `recover_rocket_seed` the rockets' (cod2-combat.md 9.6, 9.7).
+const SEEDS: &[(&str, u32, usize)] = &[
+    ("hit-smg", 1_679_727_541, 5),
+    ("hit-rocket", 3_500_530_290, 5),
+    ("hit-rocket-wall", 3_500_459_442, 5),
+];
 
 /// How far a logged point or direction may sit from retail's, in units:
 /// the log prints six significant digits, two decimals on a map
@@ -354,11 +364,36 @@ const MISSILE_WORDS: &[&str] = &[
     "pos.trDelta[2]",
     "groundEntityNum",
     "weapon",
+    "time",
     "eventSequence",
     "events[0]",
     "events[1]",
     "events[2]",
     "events[3]",
+];
+
+/// The words a rocket (`eFlags` 0x400) is compared on beside those:
+/// `G_SetAngle`'s stationary `apos` at each wobble.
+const ROCKET_WORDS: &[&str] = &[
+    "apos.trType",
+    "apos.trTime",
+    "apos.trBase[0]",
+    "apos.trBase[1]",
+    "apos.trBase[2]",
+];
+
+/// The words a rocket is compared on once it went off: the contact's
+/// snapped point, its surface and the explode on its ring.
+const SPENT_ROCKET_WORDS: &[&str] = &[
+    "pos.trType",
+    "pos.trTime",
+    "pos.trBase[0]",
+    "pos.trBase[1]",
+    "pos.trBase[2]",
+    "surfType",
+    "eventSequence",
+    "events[0]",
+    "eventParms[0]",
 ];
 
 pub(super) type Ents = BTreeMap<u32, [u32; ENTITY_FIELDS]>;
@@ -883,7 +918,9 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str, report: bool) -> Found {
             }
         }
         for (a, r) in our_missiles.iter().zip(&retail_missiles) {
-            for &n in MISSILE_WORDS {
+            let rocket = eword(r, "eFlags") & 0x400 != 0;
+            let extra = if rocket { ROCKET_WORDS } else { &[] };
+            for &n in MISSILE_WORDS.iter().chain(extra) {
                 let b = es_bits(n);
                 let (x, y) = (on_wire(b, eword(a, n)), on_wire(b, eword(r, n)));
                 if x != y {
@@ -912,6 +949,23 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str, report: bool) -> Found {
                     retail_spent.len()
                 ),
             );
+        }
+        for (a, r) in our_spent.iter().zip(&retail_spent) {
+            if eword(r, "eFlags") & 0x400 == 0 {
+                continue;
+            }
+            for &n in SPENT_ROCKET_WORDS {
+                let b = es_bits(n);
+                let (x, y) = (on_wire(b, eword(a, n)), on_wire(b, eword(r, n)));
+                if x != y {
+                    note(
+                        &mut found,
+                        report,
+                        &format!("spent rocket {n}"),
+                        format!("{row}: ours {} retail {}", show(b, x), show(b, y)),
+                    );
+                }
+            }
         }
         let pairs = our_missiles.iter().zip(&retail_missiles);
         for (a, r) in pairs.chain(our_spent.iter().zip(&retail_spent)) {
@@ -1057,7 +1111,11 @@ fn retail_combat_replays_on_cod2_level() {
     let fs = Rc::new(fs);
     let report = std::env::var_os("COMBAT_REPORT").is_some();
     let mut unexplained = Vec::new();
-    for name in CAPTURES {
+    let only = std::env::var("COMBAT_ONLY").ok();
+    for name in CAPTURES
+        .iter()
+        .filter(|n| only.as_deref().is_none_or(|o| o == **n))
+    {
         if report {
             eprintln!("{name}:");
         }
@@ -1187,4 +1245,98 @@ fn recover_spread_seed() {
             });
         }
     });
+}
+
+/// The seed a rocket capture's server drew from, off the rocket's first
+/// wobble (cod2-combat.md 9.7): its `trDelta` before and after are three
+/// `flrand(-1, 1)` apart, so the three 15-bit draws come off a solve and
+/// the exact replay, the 32-bit `holdrand` behind them off a 2^17 search,
+/// and the seed off walking that back to a value inside the run's wall
+/// clock, `COMBAT_SEED_FROM..COMBAT_SEED_TO` (Unix seconds). glibc's
+/// `srand` took the same seed. Run by hand (`cargo test -p vcod-server
+/// --lib -- --ignored recover_rocket_seed --nocapture`, `COD2_DIR` set,
+/// `COMBAT_SEED_CAPTURE` naming the capture).
+#[test]
+#[ignore]
+fn recover_rocket_seed() {
+    use vcod_common::x87::normalize_stored;
+    let Some(fs) = vcod_common::testing::cod2_fs() else {
+        return;
+    };
+    let name = std::env::var("COMBAT_SEED_CAPTURE").unwrap_or("hit-rocket".into());
+    let cap = parse(&std::fs::read_to_string(format!("{FIXTURES}/{name}.txt")).unwrap());
+    let mut deltas: Vec<Vec3> = Vec::new();
+    for s in &cap.side.snaps {
+        for e in s.ents.values() {
+            if eword(e, "eType") == 4 && eword(e, "eFlags") & 0x400 != 0 {
+                let d = Vec3::from_array(
+                    [0, 1, 2].map(|k| f32::from_bits(eword(e, &format!("pos.trDelta[{k}]")))),
+                );
+                if deltas.last() != Some(&d) {
+                    deltas.push(d);
+                }
+            }
+        }
+    }
+    assert!(deltas.len() >= 2, "{name}: no wobble");
+    let def = vcod_cod2::weapon::load(&fs, "panzerschreck_mp").unwrap();
+    let w = vcod_cod2::pmove::weapon::WeaponParams::from_def(&def.def, 0, 0, 0);
+    let speed = w.projectile_speed as f32;
+    let rad = (f64::from(w.destabilization_angle_max) * (std::f64::consts::PI / 180.0)) as f32;
+    let t = f64::from(rad).tan() as f32;
+    let draw = |v: i64| (v as f32 / 16384.0 - 1.0) * t;
+    let wobble = |v: [i64; 3]| {
+        let mut d = normalize_stored(deltas[0]);
+        for k in 0..3 {
+            d[k] += draw(v[k]);
+        }
+        normalize_stored(d) * speed
+    };
+    let (d0, d1) = (normalize_stored(deltas[0]), deltas[1] / speed);
+    let mut draws = Vec::new();
+    for v0 in 0..32768i64 {
+        let k = (d0.x + draw(v0)) / d1.x;
+        let near = |i: usize| ((((k * d1[i] - d0[i]) / t + 1.0) * 16384.0).round()) as i64;
+        let (c1, c2) = (near(1), near(2));
+        for v1 in c1 - 1..=c1 + 1 {
+            for v2 in c2 - 1..=c2 + 1 {
+                if wobble([v0, v1, v2]) == deltas[1] {
+                    draws.push([v0, v1, v2]);
+                }
+            }
+        }
+    }
+    eprintln!("{name}: first wobble's draws {draws:?}");
+    const A: u32 = 0x343fd;
+    const C: u32 = 0x269ec3;
+    let inverse = (0..32).fold(1u32, |x, _| {
+        x.wrapping_mul(2u32.wrapping_sub(A.wrapping_mul(x)))
+    });
+    let window = std::env::var("COMBAT_SEED_FROM").ok().map(|from| {
+        let to = std::env::var("COMBAT_SEED_TO").expect("COMBAT_SEED_TO");
+        let ms = |s: String| s.parse::<u64>().unwrap() * 1000;
+        (ms(from), ms(to))
+    });
+    for v in &draws {
+        for low in 0..1u32 << 17 {
+            let s1 = ((v[0] as u32) << 17) | low;
+            let s2 = s1.wrapping_mul(A).wrapping_add(C);
+            let s3 = s2.wrapping_mul(A).wrapping_add(C);
+            if i64::from(s2 >> 17) != v[1] || i64::from(s3 >> 17) != v[2] {
+                continue;
+            }
+            eprintln!("{name}: holdrand {s1:#x} after the first draw");
+            let mut s = s1;
+            for n in 0..200_000u32 {
+                s = s.wrapping_sub(C).wrapping_mul(inverse);
+                if let Some((from, to)) = window {
+                    let base = from - from % (1 << 32);
+                    let ms = base + u64::from(s);
+                    if (from..=to).contains(&ms) {
+                        eprintln!("{name}: seed {s} (ms {ms}), {n} draws before the wobble");
+                    }
+                }
+            }
+        }
+    }
 }
