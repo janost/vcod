@@ -505,14 +505,13 @@ From `CG_EntityEvent` (0x1e4650). VERIFIED.
 | 195 `EV_PLAY_FX_ON_TAG` | configstring 910 + parm names the effect and tag, played on the entity's bone |
 | 196 `EV_EARTHQUAKE` | a camera shake (cod2-hud.md 17.2), no effect |
 | 197 `EV_GRENADE_SUICIDE` | row 9 of surface 0, straight up |
-| 158..160, 175..177 (fire) | `CG_FireWeapon`: the weapon's world flash on the shooter's `tag_flash` |
+| 158..160, 175..177 (fire) | `CG_FireWeapon`: a turret's flash on its barrel tag, a player's flash flagged for his gun's next draw, the brass (6.8) |
+| 162 `EV_EJECT_BRASS` | `CG_EjectWeaponBrass` (6.8) |
 
-vcod reads the weapon's explosion as the weapon file's
-`projExplosionEffect` and the flash as `worldFlashEffect`. INFERRED (the
-`cg_weapons` slots are filled at registration, not read here). It plays the
-flash 24 units ahead of the eye (60, 40, 11 by stance) along the entity's
-angles, with no weapon tag pose on that path. 191 plays without its time
-warp; 195 is not played.
+The weapon's explosion is the weapon file's `projExplosionEffect`:
+`CG_RegisterWeapon` (0x1d85cc) registers def +0x394 into `cg_weapons
++0x164`. VERIFIED (the store; the key's offset is `weapon::FIELDS`'s).
+191 plays without its time warp; 195 is not played.
 
 ### 6.5 Looping effects (`ET_FX`, eType 8)
 
@@ -687,6 +686,108 @@ in the snapshot. `fx::cod2_tracer` flies and draws it. The rate, the skip
 and the geometry are gated in `bullet_hits_spawn_tracers_at_retails_rate`
 and the `fx::cod2_tracer` tests. Pending: a by-eye check of the tracer on
 screen.
+
+### 6.8 Muzzle flashes and brass
+
+`CG_RegisterWeapon` (0x1d85cc) registers four of the weapon file's
+effects: `viewFlashEffect` (def +0x90) into `cg_weapons +0xc0`,
+`worldFlashEffect` (+0x94) into `+0xc4`, `shellEjectEffect` (+0x110)
+into `+0x15c`, and `lastShotEjectEffect` (+0x114) into `+0x160`.
+VERIFIED (the stores). An empty `lastShotEjectEffect` leaves `+0x160`
+the shell eject's handle. INFERRED (the branch). The stock files: every
+gun names both flashes; every gun but the panzerfaust, the panzerschreck,
+the webley and the mounted guns names a shell eject; none names a
+last-shot eject; `boltAction` is 1 on the kar98k, the enfield, the mosin
+nagant (their scoped ones too), the springfield and the shotgun.
+VERIFIED (the `weapons/mp` files).
+
+`CG_FireWeapon` (0x1d823c):
+
+- It returns at once for `es.weapon` 0, else sets the entity's flash
+  flag (`cent + 0x1e2`). INFERRED (the test, then the store).
+- On a turret (`eType` 9) it plays the flash itself through
+  `FX_PlayEntityEffect`, bolted to the turret's bone
+  `_s_barrelTags[n]`. VERIFIED (the call). The effect is the view flash
+  (`+0xc0`) when `cg + 0x25bc0` is 0, the snapshot's playerstate has
+  `eFlags & 0x300` and its `viewlocked_entNum` (ps 0x594) is the
+  turret, else the world flash (`+0xc4`). INFERRED (the tests).
+- `CG_EntityEvent` (0x1e4650) passes barrel 0 for 158..160 and 175,
+  calls it twice with barrels 0 and 1 for 176, 2 and 3 for 177.
+  VERIFIED (the calls' immediates).
+- After the fire sound it calls `CG_EjectWeaponBrass(es, event)` unless
+  the weapon's `boltAction` (def +0x328) is set. INFERRED (the order and
+  the test).
+
+`CG_AddPlayerWeapon` (0x1d9c8e) plays a player's flag:
+
+- `CG_AddViewWeapon` (0x1da2f8) calls it with the predicted playerstate,
+  the predicted player entity (`cg + 0x2826c`) and its draw flag;
+  `CG_Player` (0x1e6834) with no playerstate and 1. VERIFIED (the
+  calls). `CG_Player` skips it under `eFlags & 0x20000` (dead).
+  INFERRED (the test).
+- For a weapon above 0 and the entity's `eFlags & 0x300` clear, a set
+  flag is cleared and, when the call draws, played: with a playerstate
+  the view flash on bone `_s_barrelTags[0]` (`tag_flash`) of the view
+  weapon's DObj, `0x400 + BG_GetViewmodelWeaponIndex(ps)`; else the
+  world flash on the entity's own `tag_flash`. INFERRED (the tests and
+  the two arms). The world call leaves the first-person body's own
+  entity (`pm_flags & 0xc00000`, number `clientNum`) set, so its flag
+  never plays. INFERRED (the test).
+- `CG_AddViewWeapon`'s draw flag is 1 when `cg + 0xc` is 0, `cg_drawGun`
+  is on and `CG_GetWeapReticleZoom` (0x1cdb06) returns 0. INFERRED (the
+  tests). The flag is cleared before the draw test, so a shot fired under
+  a scope's overlay plays no view flash, then or later. INFERRED (the
+  order).
+- Events run before the frame adds its entities and the view weapon, so
+  a flash plays in its event's frame. INFERRED (the frame's order).
+
+`CG_EjectWeaponBrass` (0x1d80ba):
+
+- Nothing unless `cg_brass` is on, `es.eType` is under 10 (no temp
+  event) and `es.weapon` is not 0. INFERRED (the tests). `cg_brass`
+  defaults to 1. VERIFIED (`CG_Init`'s `Dvar_RegisterBool`).
+- Event 160 takes `+0x160` when it is set, any other `+0x15c`. INFERRED
+  (the test).
+- The bolt is the view weapon's DObj `0x400 + es.weapon` when the
+  playerstate's `pm_flags & 0xc00000` is set and `es.number` is its
+  `clientNum`, else `es.number`. INFERRED (the tests). The bone is
+  `scr_const + 0x94`, `tag_brass` (0x1ac8f14, `GScr_LoadConsts`
+  0x1cb694). VERIFIED (the operand and the string). A missing bone plays
+  nothing. INFERRED (the test).
+- `CG_EntityEvent`'s 162 (`EV_EJECT_BRASS`) calls it with 162. VERIFIED
+  (the call). A bolt action's brass therefore leaves at
+  `rechamberBoltTime` (cod2-combat.md 1.2). INFERRED.
+
+`FX_PlayEntityEffect` (0x60d14) is `FxScheduler::PlayEffect` (0x61322)
+with a bolt (entity, bone). VERIFIED (the call). With one, the spawn's
+origin and axis are `FX_GetBoneOrientation`'s (0x59230), the origin
+passed in feeds only the `spawnRange` and `frustumCull` tests, and a
+negative bone or a failed orientation plays nothing. INFERRED (the
+arms). Every spawn record keeps the bolt. VERIFIED (the stores at +0xc
+and +0x10). `CG_AddPlayerWeapon` stores the placed view weapon's origin
+and axis at `cg + 0x2c0bc` and `+0x2c0c8`. VERIFIED (the stores). That
+`CG_GetDObjOrientation` reads them for the `0x400` DObjs is INFERRED.
+
+vcod: `play::cod2_fx::Cod2Fx::weapon_fx` and `brass` raise both per
+event, played on this frame's poses: a body's `tag_flash` and
+`tag_brass` (`cod2_players`, `BodyTags`) and a turret's `tag_flash`
+(`cod2_scene`) as `Play::OnTag`; the view weapon's as `Play::View`,
+which `cod2_client::Cod2Client::view` spawns once the gun is placed
+(the gun's offset and angles, the view's angles with roll) on
+`cod2_viewmodel::ViewTags`. Each frame hands the effects every pose as a
+tag bolt (`FxSystem::set_tag_bolts`), so a `relative` element rides the
+gun. vcod's own: a flag is not held, so a body vcod did not pose this
+frame flashes nothing; the view brass plays only off the drawn view
+weapon; the view's tags are this frame's pose; barrels 1..3
+(`tag_flash_11` .. `tag_flash_22`, no stock weapon) are not used;
+`cg_drawGun` is not read. Gates:
+`play::cod2_fx::tests::shots_flash_and_eject_brass_on_their_tags`,
+`cod2_players::tests::an_armed_body_poses_its_flash_and_brass_tags`,
+`cod2_scene`'s gun test,
+`cod2_viewmodel::tests::the_view_weapon_poses_its_tags_and_sounds_its_notetracks`
+and, live on vcod-server with bots,
+`play::cod2_soak::cod2_live_shots_flash_and_eject_on_their_guns`.
+Pending: a by-eye check of the flashes and the brass on screen.
 
 ## 7. What vcod draws
 

@@ -1892,21 +1892,20 @@ impl Cod2Session {
     }
 
     /// The effects `events` play this frame, and the looping fx entities
-    /// due at the render time, seen from `view` (`play::cod2_fx`);
-    /// `muzzles` the drawn bodies' `tag_flash`es
-    /// (`cod2_scene::Cod2Draw::muzzles`).
+    /// due at the render time, seen from `view` (`play::cod2_fx`); `scene`
+    /// is the drawn bodies' tags (`cod2_scene::Cod2Draw::fx_scene`).
     pub fn effects(
         &mut self,
         events: &[Event2],
         fs: &dyn AssetSource,
         view: Vec3,
-        muzzles: &HashMap<u32, Vec3>,
+        scene: crate::play::cod2_fx::FxScene,
     ) -> Vec<FxPlay> {
         let Some(t) = self.render_time() else {
             return Vec::new();
         };
         match self.view.frame(t) {
-            Some(f) => self.fx.frame(&f, events, view, Some(fs), muzzles),
+            Some(f) => self.fx.frame(&f, events, view, Some(fs), scene),
             None => Vec::new(),
         }
     }
@@ -2587,7 +2586,7 @@ pub fn demo_probe(path: &Path, fs: &Pk3Fs, timedemo: bool) -> anyhow::Result<()>
         }
         let events = s.take_events();
         let (cues, _) = s.sound_cues(&events, fs, cam.pos, draw.muzzles());
-        let plays = s.effects(&events, fs, cam.pos, draw.muzzles());
+        let plays = s.effects(&events, fs, cam.pos, draw.fx_scene(true));
         events_all += events.len();
         cues_all += cues.len();
         fx_all += plays.len();
@@ -2873,7 +2872,7 @@ pub fn probe(addr: &str, secs: u64, fs: &Pk3Fs, join: Option<Join>) -> anyhow::R
             );
         }
         let (cues, _) = s.sound_cues(&events, fs, cam.pos, draw.muzzles());
-        let plays = s.effects(&events, fs, cam.pos, draw.muzzles());
+        let plays = s.effects(&events, fs, cam.pos, draw.fx_scene(true));
         let now = start.elapsed().as_secs_f32();
         fx.set_view(cam.pos);
         for p in &plays {

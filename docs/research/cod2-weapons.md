@@ -337,6 +337,28 @@ drawn view takes all three kick angles off the predicted playerstate:
 cmd's roll over `delta_angles[2]` as it does pitch and yaw. VERIFIED (the
 loop over three angles; `pmove::tests::the_cmd_roll_rides_into_the_view`).
 
+### Flash, brass and notetracks
+
+- The view weapon's DObj is client DObj `0x400 + weapon`
+  (`Com_ClientDObjCreate` in `CG_RegisterWeapon`, Mac 0x1d85cc). VERIFIED
+  (the call's operand). Its `tag_flash` takes the view flash and its
+  `tag_brass` the own brass (cod2-efx.md 6.8). `viewmodel_kar98k` holds
+  `j_gun j_bolt j_clip j_round j_stripper tag_brass tag_flash`
+  (cod2-xmodel-v20-format.md). VERIFIED (asset).
+- `CG_UpdateViewWeaponAnim` (Mac 0x1dd3fe) steps the tree, builds the
+  skeleton, then walks the DObj's notify list for this frame and plays
+  the weapon's `noteTrackSoundA`..`D` on a note of that name
+  (cod2-sound.md 7.8). INFERRED (the order of the calls). It runs at
+  `pm_type` under 6 for a view weapon above 0, whether or not the gun
+  draws. INFERRED (the tests).
+
+vcod: `cod2_viewmodel::Cod2View` keeps the drawn rig's `tag_flash` and
+`tag_brass` as posed each frame (`ViewTags`) and the main clip's
+notetracks crossed in the frame's step (`note_sounds`), which the client
+plays local; the sight layer's clips are set to their times, so vcod
+walks no notes off them. INFERRED that retail's notify list carries none
+of theirs either.
+
 ## 7. What vcod carries over
 
 - The weapon switch: `weapnext` / `weapprev` on 1, 2 and the wheel cycle
@@ -365,5 +387,6 @@ loop over three angles; `pmove::tests::the_cmd_roll_rides_into_the_view`).
 - The recoil, as "The recoil" above.
 - A main node change cuts, as retail's does; the sight switch
   crossfades (section 6).
-- Not modelled: notetrack sounds (`noteTrackSoundA`..`D`), the view
-  weapon's flash and brass tags, `cg_drawGun` on the CoD2 path.
+- The view weapon's flash and brass on its tags and its notetrack sounds
+  (section 6, "Flash, brass and notetracks").
+- Not modelled: `cg_drawGun` on the CoD2 path.

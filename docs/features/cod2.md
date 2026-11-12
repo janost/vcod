@@ -149,13 +149,17 @@ and falloff curves: footsteps, fire, reloads, impacts, passing rounds,
 explosions, `playSound`, entity and missile loops, `playLocalSound` (the
 announcer), `musicPlay`, `soundFade`, the level's ambient crossfaded
 between tracks, sound blend entities, slave ducking under a master,
-`setReverb`'s wet level, alias subtitles. Fire sounds and whizbys come
-from the shooter's `tag_flash`.
+`setReverb`'s wet level, alias subtitles, the view weapon's notetrack
+sounds (`noteTrackSoundA`..`D`, which no stock weapon sets). Fire sounds
+and whizbys come from the shooter's `tag_flash`.
 
 **Effects** ([cod2-efx.md](../research/cod2-efx.md) 6). Bullet impacts
 from the impact table, explosions, `playFx`, `playLoopedFx`, the map's
-ambient effects, other players' muzzle flashes and their tracers from
-their gun's `tag_flash`.
+ambient effects, tracers from the shooter's `tag_flash`. Muzzle flashes
+and brass play on the guns' tags: the view weapon's flash and shell
+eject on its `tag_flash` and `tag_brass` (no flash under a scope's
+overlay), other players' and turrets' on theirs, a bolt action's brass
+at the rechamber (6.8).
 
 **Demos** ([cod2-demos.md](../research/cod2-demos.md)). `record` and
 `stoprecord` write CoD2's `.dm_1` in a game. `demo <name>` and `timedemo
@@ -293,30 +297,25 @@ Ranked by how much a player notices, worst first.
    scoreboard's voice column stays empty and there is no mute list
    ([cod2-hud.md](../research/cod2-hud.md) 12). Shout across the room,
    as LAN parties always did.
-2. **Muzzle flashes and brass.** The view weapon draws no flash or shell
-   eject of its own: its `tag_flash` and `tag_brass` are not posed.
-   Another player's flash plays 24 units ahead of his eye, not on his
-   gun. The view weapon's notetrack sounds (`noteTrackSoundA`..`D`) do
-   not play.
-3. **Spread and sway draws.** A shot's spread and the gun's sway in its
+2. **Spread and sway draws.** A shot's spread and the gun's sway in its
    angles use vcod's own random draws, so rounds do not land where
    retail's would for the same cmds
    ([cod2-combat.md](../research/cod2-combat.md) 9.3).
-4. **Rockets fly true.** `fire_rocket`'s destabilization is not modelled,
+3. **Rockets fly true.** `fire_rocket`'s destabilization is not modelled,
    so vcod's bazookas are more accurate than they have any right to be.
    `Weapon_Melee`'s hit triggers are not either; the melee's 64-unit
    reach is inferred (cod2-combat.md 8).
-5. **PunkBuster and CD key checks.** vcod runs no PunkBuster. vcod-server
+4. **PunkBuster and CD key checks.** vcod runs no PunkBuster. vcod-server
    never asks the authorize server: an off-LAN client gets its challenge
    at once and its IP stands in for its ban guid. It does not send the
    master the status retail sends every 10 minutes. The client reads no
    CD key from the registry; set `VCOD_CDKEY`
    ([usage.md](../usage.md), "CD keys").
-6. **Demo details.** `timedemo` writes no `demos/timedemo_*.csv`; a demo
+5. **Demo details.** `timedemo` writes no `demos/timedemo_*.csv`; a demo
    draws no `EV_STEP_VIEW` smoothing
    ([cod2-demos.md](../research/cod2-demos.md) 7). Retail's front end has
    no demo list either.
-7. **Server odds and ends.** `give all` hands over every weapon the level
+6. **Server odds and ends.** `give all` hands over every weapon the level
    registered, not retail's slot rule. Downloads serve only `.iwd` files
    under the game dir, where retail serves any file.
 

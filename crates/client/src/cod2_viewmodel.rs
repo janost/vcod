@@ -8,14 +8,16 @@
 //! is `play::cod2_gun`'s, and the scope overlay's hiding of the gun the
 //! caller's (`play::cod2_view::ViewOut::overlay`); this module hands back
 //! the gun at rest. The two sight clips crossfade over 0.5 s
-//! ([`AdsBlend`]). Not modelled: the crossfade between main clips,
-//! notetrack sounds, the flash and brass tags.
+//! ([`AdsBlend`]). The posed `tag_flash` and `tag_brass` ([`ViewTags`]) are
+//! where the session's view flash and brass play, and the main clip's
+//! notetracks pick the weapon's notetrack sounds ([`note_sounds`]). Not
+//! modelled: the crossfade between main clips.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use vcod_common::asset_source::AssetSource;
 
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Mat4, Quat, Vec3, Vec4};
 use vcod_cod2::net::protocol::CS_WEAPONS;
 use vcod_cod2::net::{ConfigStrings, Frame, PlayerView};
 use vcod_cod2::weapon::{self, WeaponDef, node};
@@ -137,8 +139,9 @@ impl Default for ViewAnim {
 impl ViewAnim {
     /// Advances `dt` seconds under `weap_anim`. A changed number restarts
     /// its node; 0 waits for the running clip and then plays idle, or empty
-    /// idle with the clip empty.
-    pub fn step(&mut self, rig: &Rig, weap_anim: i32, clip_empty: bool, dt: f32) {
+    /// idle with the clip empty. Returns where the node's clock stood
+    /// before the advance, the start of the stretch its notetracks fire in.
+    pub fn step(&mut self, rig: &Rig, weap_anim: i32, clip_empty: bool, dt: f32) -> f32 {
         if self.last != Some(weap_anim) {
             match weapon::view_node(weap_anim) {
                 Some(n) => {
@@ -168,8 +171,38 @@ impl ViewAnim {
                 }
             }
         }
+        let from = self.t;
         self.t += dt * rig.rates.get(self.node).copied().unwrap_or(1.0);
+        from
     }
+}
+
+/// The weapon file's four notetrack sound keys, in the order
+/// `CG_UpdateViewWeaponAnim` (Mac 0x1dd3fe) tests them.
+const NOTE_SOUND_KEYS: [&str; 4] = [
+    "noteTrackSoundA",
+    "noteTrackSoundB",
+    "noteTrackSoundC",
+    "noteTrackSoundD",
+];
+
+/// `CG_UpdateViewWeaponAnim` over one frame's notetracks, in order: a note
+/// named after a [`NOTE_SOUND_KEYS`] key (any case) picks that key's alias,
+/// an empty key none, and every note from there on plays the pick again,
+/// as the cgame keeps it across the frame's notes (cod2-sound.md 7.8).
+pub fn note_sounds(def: &WeaponDef, notes: &[&str]) -> Vec<String> {
+    let mut alias: Option<&str> = None;
+    let mut out = Vec::new();
+    for note in notes {
+        if let Some(k) = NOTE_SOUND_KEYS
+            .iter()
+            .find(|k| k.eq_ignore_ascii_case(note))
+        {
+            alias = Some(def.str(k)).filter(|a| !a.is_empty());
+        }
+        out.extend(alias.map(str::to_string));
+    }
+    out
 }
 
 /// One node's goal weight as `XAnimSetGoalWeightInternal` (Mac 0x3b59e)
@@ -337,7 +370,7 @@ pub fn idle_draw(rig: &Rig, light_origin: Vec3) -> VmDraw {
 
 /// The model's axes in view space (X right, Y up, -Z forward): its forward
 /// down the view, its left to the view's left.
-fn view_axes() -> Mat4 {
+pub fn view_axes() -> Mat4 {
     Mat4::from_cols(
         Vec4::new(0.0, 0.0, -1.0, 0.0),
         Vec4::new(-1.0, 0.0, 0.0, 0.0),
@@ -395,6 +428,22 @@ pub struct Cod2View {
     current: Option<(RigKey, skeleton::PoseBuffer, ViewAnim, AdsBlend)>,
     last_ms: Option<i32>,
     table: WeaponTable,
+    /// The drawn rig's tags as the last frame posed them.
+    tags: Option<ViewTags>,
+    /// The notetrack sounds the last frame's clip crossed.
+    sounds: Vec<String>,
+}
+
+/// The posed view weapon's `tag_flash` and `tag_brass` in its model space
+/// (position, rotation) and the CS 7 weapon drawn: the view DObj
+/// (`0x400 + weapon`) `CG_AddPlayerWeapon` (Mac 0x1d9c8e) plays the view
+/// flash on and `CG_EjectWeaponBrass` (Mac 0x1d80ba) the own brass
+/// (cod2-weapons.md 6, "Flash, brass and notetracks").
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewTags {
+    pub weapon: i32,
+    pub flash: Option<(Vec3, Quat)>,
+    pub brass: Option<(Vec3, Quat)>,
 }
 
 /// One frame's view weapon: the models when they changed since the last
@@ -416,6 +465,17 @@ impl Cod2View {
     #[cfg(test)]
     pub(crate) fn rigs_loaded(&self) -> usize {
         self.rigs.len()
+    }
+
+    /// The drawn rig's tags as the last [`Self::frame`] posed them; `None`
+    /// while no view weapon draws.
+    pub fn tags(&self) -> Option<ViewTags> {
+        self.tags
+    }
+
+    /// The notetrack sounds the last [`Self::frame`]'s clip crossed, once.
+    pub fn take_sounds(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.sounds)
     }
 
     fn rig(&mut self, fs: &dyn AssetSource, key: &(String, Option<String>)) -> Option<Arc<Rig>> {
@@ -457,6 +517,8 @@ impl Cod2View {
             .last_ms
             .map_or(0, |l| (frame.time_ms - l).clamp(0, 1000));
         self.last_ms = Some(frame.time_ms);
+        self.tags = None;
+        self.sounds.clear();
         let ps = &frame.snap.ps;
         self.table.sync(frame.configstrings, fs);
         let Some(key) = Self::key(ps, frame.configstrings, self.table.binoculars) else {
@@ -479,10 +541,25 @@ impl Cod2View {
             .ok()
             .and_then(|w| self.table.clips.get(w));
         let clip_empty = clip.is_some_and(|&c| ps.raw.ammoclip.get(c) == Some(&0));
-        anim.step(&rig, ps.raw.i32("weapAnim"), clip_empty, dt as f32 / 1000.0);
+        let from = anim.step(&rig, ps.raw.i32("weapAnim"), clip_empty, dt as f32 / 1000.0);
+        // The main clip's notes only: the sight layer's clips are set to
+        // their times, not run through them.
+        if let Some((c, _)) = rig.clip(anim.node) {
+            let notes = crate::cod4_viewmodel::notes_crossed(c, from, anim.t);
+            self.sounds = note_sounds(&rig.def, &notes);
+        }
         let frac = pos_frac(frame, predicted);
         ads.step(sight_up(ps, &rig.def), dt as f32 / 1000.0);
         pose(&rig, pose_buf, anim, ads.weights(), frac);
+        let tag = |name: &str| {
+            let b = rig.skeleton.bone_index(name)?;
+            Some(pose_buf.bone_world(&rig.skeleton, b))
+        };
+        self.tags = Some(ViewTags {
+            weapon,
+            flash: tag("tag_flash"),
+            brass: tag("tag_brass"),
+        });
         let bone_sets = (0..rig.models.len())
             .map(|m| pose_buf.skin_matrices(&rig.skeleton, m))
             .collect();
@@ -691,6 +768,122 @@ mod tests {
             built += 1;
         }
         assert!(built >= 35, "only {built} stock weapons built a rig");
+    }
+
+    /// A frame's notes pick a key's alias (any case) and hold it for the
+    /// notes after, an empty key dropping it; no pick, no sound.
+    #[test]
+    fn notetracks_pick_and_hold_the_weapon_sounds() {
+        let text = b"WEAPONFILE\\noteTrackSoundA\\weap_a\\noteTrackSoundC\\weap_c";
+        let def = weapon::parse("t", text, &[]).unwrap().def;
+        assert!(note_sounds(&def, &["fire", "bolt"]).is_empty());
+        assert_eq!(note_sounds(&def, &["NOTETRACKSOUNDA"]), ["weap_a"]);
+        assert_eq!(
+            note_sounds(&def, &["notetracksoundc", "bolt", "notetracksoundb", "x"]),
+            ["weap_c", "weap_c"]
+        );
+    }
+
+    /// One snapshot's frame of `weapon` (CS 7 index) under `weap_anim`.
+    fn ps_frame(
+        cs: &ConfigStrings,
+        weapon: i32,
+        weap_anim: i32,
+        time_ms: i32,
+        f: impl FnOnce(&Frame),
+    ) {
+        use vcod_cod2::net::delta::field_index;
+        use vcod_cod2::net::fields::PLAYER_STATE_FIELDS;
+        use vcod_cod2::net::{PlayerState2, SnapshotView};
+        let mut raw = PlayerState2::default();
+        raw.f[field_index(&PLAYER_STATE_FIELDS, "weapon")] = weapon as u32;
+        raw.f[field_index(&PLAYER_STATE_FIELDS, "weapAnim")] = weap_anim as u32;
+        raw.ammoclip = [5; 64];
+        let snap = SnapshotView {
+            message_num: 0,
+            server_time: time_ms,
+            snap_flags: 0,
+            ps: PlayerView::new(&raw, 0),
+            entities: Vec::new(),
+            clients: Vec::new(),
+        };
+        f(&Frame {
+            snap: &snap,
+            prev: None,
+            time_ms,
+            frac: 0.0,
+            configstrings: cs,
+        });
+    }
+
+    /// The drawn kar98k poses its `tag_flash` and `tag_brass`, the flash
+    /// out at the muzzle well ahead of the ejection port; a fire clip
+    /// carrying a `noteTrackSoundA` note plays the file's alias once, in
+    /// the frame its clock crosses the note.
+    #[test]
+    fn the_view_weapon_poses_its_tags_and_sounds_its_notetracks() {
+        let Some(fs) = fs() else {
+            return;
+        };
+        let gs = vcod_cod2::net::Gamestate2 {
+            server_command_sequence: 0,
+            configstrings: [(CS_WEAPONS as u16, "defaultweapon_mp kar98k_mp".to_string())].into(),
+            baselines: Default::default(),
+            client_num: 0,
+            checksum_feed: 0,
+        };
+        let cs = ConfigStrings::from_gamestate(&gs);
+        // kar98k's own file with a notetrack sound, and a note on its fire
+        // clip's fourth frame.
+        let text = String::from_utf8_lossy(&fs.read("weapons/mp/kar98k_mp").unwrap())
+            .replace("\\noteTrackSoundA\\", "\\noteTrackSoundA\\weap_test_note");
+        let types = weapon::player_anim_types(&String::from_utf8_lossy(
+            &fs.read("mp/playeranimtypes.txt").unwrap(),
+        ));
+        let def = weapon::parse("kar98k_mp", text.as_bytes(), &types)
+            .unwrap()
+            .def;
+        assert_eq!(def.str("noteTrackSoundA"), "weap_test_note");
+        let mut rig = load_rig(&fs, "kar98k_mp", None).unwrap();
+        rig.def = Arc::new(def);
+        let (clip, _) = rig.clips[node::FIRE].take().unwrap();
+        let mut clip = (*clip).clone();
+        clip.notes.push(("noteTrackSoundA".into(), 3));
+        let note_at = 3.0 / clip.framerate;
+        assert!(clip.duration() > note_at, "{}", clip.duration());
+        let binding = rig.skeleton.bind(&clip);
+        rig.clips[node::FIRE] = Some((Arc::new(clip), binding));
+        let mut view = Cod2View::default();
+        view.rigs
+            .insert(("kar98k_mp".into(), None), Some(Arc::new(rig)));
+
+        ps_frame(&cs, 2, 0, 1000, |f| {
+            view.frame(f, &fs, true).unwrap();
+        });
+        let tags = view.tags().expect("tags");
+        assert_eq!(tags.weapon, 2);
+        let (flash, brass) = (tags.flash.unwrap().0, tags.brass.unwrap().0);
+        // The gun's model space: +X down the barrel.
+        assert!(flash.x - brass.x > 10.0, "flash {flash} brass {brass}");
+        assert!(view.take_sounds().is_empty());
+        // The shot, then 10 ms frames past the note.
+        let mut heard = Vec::new();
+        for i in 0..20 {
+            ps_frame(&cs, 2, 2, 1010 + i * 10, |f| {
+                view.frame(f, &fs, true).unwrap();
+            });
+            for a in view.take_sounds() {
+                heard.push((i, a));
+            }
+        }
+        // The fire node starts at the shot's frame, 10 ms in.
+        let due = ((note_at - 0.01) / 0.01).ceil() as i32;
+        assert_eq!(heard, [(due, "weap_test_note".to_string())]);
+        // No weapon, no tags.
+        ps_frame(&cs, 0, 0, 1300, |f| {
+            assert!(view.frame(f, &fs, true).is_none());
+        });
+        assert_eq!(view.tags(), None);
     }
 
     /// A shot plays fire, a 0 lets it run out before idle comes back, and a
