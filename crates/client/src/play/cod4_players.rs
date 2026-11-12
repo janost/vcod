@@ -184,6 +184,23 @@ impl Cod4Players {
         )
     }
 
+    /// The wire value of each legs anim a `fireweapon` clause's `both` or
+    /// `legs` line puts on (the grenade throws'); `None` without the anim
+    /// set.
+    #[cfg(test)]
+    pub fn fire_event_legs(&mut self, src: &BodySource) -> Option<Vec<u32>> {
+        let a = &self.set(src)?.anims;
+        let block = a.script.event("fireweapon")?;
+        Some(
+            block
+                .clauses
+                .iter()
+                .flat_map(|c| &c.legs)
+                .filter_map(|r| Some(a.wire_of(&r.name)? as u32))
+                .collect(),
+        )
+    }
+
     /// `Ragdoll_ExplosionEvent` (cod4-player-anims.md 10.1): `e` pushes
     /// every corpse whose ragdoll runs or sleeps; how many it reached.
     pub fn explode(&mut self, e: &Explosion) -> usize {

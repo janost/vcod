@@ -11012,9 +11012,10 @@ pub(crate) mod tests {
     /// of the stance and sight his entity's legs anim reads, as 1.7's
     /// `CG_GuessSpreadForWeapon` and 0x456200 read it, through the anim
     /// set's movetype bits; every legs anim he shoots in names a movetype
-    /// but an event's on a standing body (a throw's), a standing body's
-    /// never a crouched or prone one, a crouched one only on a crouched
-    /// body (a crouched run reads standing).
+    /// but a `fireweapon` clause's (a throw's, which names none and reads
+    /// standing) on a standing or crouched body, a standing body's never a
+    /// crouched or prone one, a crouched one only on a crouched body (a
+    /// crouched run reads standing).
     #[test]
     fn cod4_live_a_bots_rounds_spread_by_his_legs_anim() {
         use crate::play::cod4_players::Cod4Players;
@@ -11029,7 +11030,9 @@ pub(crate) mod tests {
             let (_, _, src) =
                 crate::cod4_fly::load_bodies(install.root(), "mp_crash", &s.entity_assets())
                     .ok()?;
-            let table = Cod4Players::default().legs_movetypes(&src)?;
+            let mut players = Cod4Players::default();
+            let table = players.legs_movetypes(&src)?;
+            let throws = players.fire_event_legs(&src)?;
             s.legs_movetypes = Some(table.clone());
             let world = s.world()?.clone();
             // Past the prematch's freeze.
@@ -11088,30 +11091,42 @@ pub(crate) mod tests {
                 }
                 clk_sleep(Duration::from_millis(16));
             }
-            Some((shots, table))
+            let names: Vec<_> = shots
+                .iter()
+                .map(|x| players.anim_name(&src, x.0 as i32).unwrap_or_default())
+                .collect();
+            Some((shots, table, throws, names))
         }) else {
             return;
         };
-        let Some((shots, table)) = out else {
+        let Some((shots, table, throws, names)) = out else {
             return;
         };
         println!(
             "{:?}",
             shots
                 .iter()
-                .map(|(w, f, a, _)| (w, f, table[*w as usize], a.spread))
+                .zip(&names)
+                .map(|((w, f, a, _), n)| (w, n, f, table[*w as usize], a.spread))
                 .collect::<Vec<_>>()
         );
         assert!(shots.len() >= 3, "the bot fired {} rounds", shots.len());
-        for (wire, flags, aim, def) in &shots {
+        for ((wire, flags, aim, def), name) in shots.iter().zip(&names) {
             let mask = table[*wire as usize];
-            // An event's legs anim (the grenade throw's
-            // `pb_stand_grenade_throw`, which the next rounds still fire
-            // in) is in no state's block: movetype 0, read as standing.
-            assert!(
-                mask != 0 || flags & 0xc == 0,
-                "legs anim {wire} names no movetype on a crouched or prone body"
-            );
+            // A `fireweapon` clause's legs anim (`pb_stand_grenade_throw`
+            // on `movetype idle`, `pb_crouch_grenade_throw` on `idlecr`,
+            // which the next rounds still fire in) is in no state's block:
+            // movetype 0, read as standing (cod4-effects.md 12.2). Its
+            // timer holds it through a crouch or a stand: the script has no
+            // event between the two (cod4-player-anims.md 7). Lying down
+            // has one (`crouch_to_prone`'s `both pb_crouch2prone`).
+            if mask == 0 {
+                assert!(
+                    throws.contains(wire),
+                    "legs anim {wire} {name} names no movetype and no fire event's"
+                );
+                assert!(flags & 8 == 0, "{wire} {name} on a prone body");
+            }
             let legs = LegsPose::of(mask);
             if flags & 0xc == 0 {
                 assert!(!legs.crouched && !legs.prone, "{wire} standing: {legs:?}");
