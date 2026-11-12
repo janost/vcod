@@ -155,7 +155,10 @@ stored float: the frametime (0x805e0f7), then after each bump `time_left -
 fraction * time_left` with one store (0x805e6d5..0x805e6e9); each bump's
 end is `time_left * velocity + origin` with one store per axis
 (0x805e166..0x805e1a5), and a timer (`pm_time`) restores the whole entry
-velocity (0x805e72c). VERIFIED (the instructions). `PM_StepSlideMove` differs: a step is tried when
+velocity (0x805e72c). VERIFIED (the instructions). No capture tells the
+stored time left from one kept on the stack: the moves A/B and every
+server gate read the same rows either way; only `pmove::slide::pins`'
+digests move. VERIFIED (both run). `PM_StepSlideMove` differs: a step is tried when
 the slide bumped or when the ground plane's z is under 0.9; the step's down
 trace keeps the plain slide when it lands on a contact that is
 neither walkable nor steeper than 0.3; the velocity on landing goes through

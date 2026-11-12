@@ -3,7 +3,9 @@
 //! onto a ledge near its height, the landing's stun tiers and the jump
 //! slowdown's two penalties. Each runs cmds in a world of convex brushes
 //! and folds every cmd's moved fields into one digest; `cod4_moves_ab`
-//! holds the covered arms to retail.
+//! holds the covered arms to retail. The digests follow `PM_SlideMove`'s
+//! stored time left (`cod4_lnxded` 0x805e6e9, cod4-pmove.md 5), which no
+//! capture tells from a kept one.
 
 use glam::Vec3;
 
@@ -293,7 +295,7 @@ fn steps_up_and_down_at_the_step_height_pin() {
         Rules::default(),
         &mut d,
     );
-    assert_eq!(d.0, 0x919d_3e51_f661_af88);
+    assert_eq!(d.0, 0x5d84_51ad_97c5_9b31);
 }
 
 #[test]
@@ -336,7 +338,7 @@ fn a_jump_onto_a_ledge_near_the_jump_height_pins() {
         ];
         play(&mut ps, &keys, &world, Rules::default(), &mut d);
     }
-    assert_eq!(d.0, 0x3de1_0735_87ce_0506);
+    assert_eq!(d.0, 0x79d7_0c81_f997_1f04);
 }
 
 #[test]
@@ -398,7 +400,7 @@ fn landings_stun_by_fall_height() {
     // A fatal fall damps the speed but stuns nothing.
     assert!(stuns[5..9].windows(2).all(|w| w[0] < w[1]), "{stuns:?}");
     assert_eq!(stuns[8..], [2000, 2000, 2000, 0], "{stuns:?}");
-    assert_eq!(d.0, 0xd87c_ee58_5c2f_5a6d);
+    assert_eq!(d.0, 0x200a_4adf_1942_f295);
 }
 
 #[test]
