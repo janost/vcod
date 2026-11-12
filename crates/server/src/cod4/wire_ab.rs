@@ -143,6 +143,11 @@ pub(super) struct Probe {
     /// The `pm_type` of its own snapshot that starts the replay: 0, or a
     /// spectator's 4.
     pub(super) replay_pm_type: u32,
+    /// Its retail twin's cmd angles by cmd time ([`cmd_angles`]): before
+    /// the replay each cmd takes the newest at or before its own time, so
+    /// the spawn's `delta_angles` (the spawn's view less the last cmd's)
+    /// come out as retail's. Empty: `cod4_probe`'s idle view.
+    pub(super) pre_angles: Vec<(i32, [u16; 3])>,
     /// A `requeststats` came: the seven stats packets go again
     /// ([`Self::answer_stats`]).
     stats_due: bool,
@@ -182,6 +187,7 @@ impl Probe {
             replay: VecDeque::new(),
             replay_from: WALKER_SPAWN_MS,
             replay_pm_type: 0,
+            pre_angles: Vec::new(),
             stats_due: false,
             cp_feed: None,
         }
@@ -363,13 +369,25 @@ impl Probe {
                     ps.get_f32(&format!("delta_angles[{i}]")).unwrap_or(0.0),
                 )
             };
+            let server_time = (snap + 10).max(self.last_cmd.server_time + 1);
+            let angles = self
+                .pre_angles
+                .iter()
+                .rev()
+                .find(|(t, _)| *t <= server_time)
+                .map_or_else(
+                    || {
+                        [
+                            vcod_cod4::net::conn::angle2short(view[0]).wrapping_sub(delta(0)),
+                            vcod_cod4::net::conn::angle2short(view[1]).wrapping_sub(delta(1)),
+                            0u16.wrapping_sub(delta(2)),
+                        ]
+                    },
+                    |(_, a)| *a,
+                );
             let cmd = UserCmd {
-                server_time: (snap + 10).max(self.last_cmd.server_time + 1),
-                angles: [
-                    vcod_cod4::net::conn::angle2short(view[0]).wrapping_sub(delta(0)),
-                    vcod_cod4::net::conn::angle2short(view[1]).wrapping_sub(delta(1)),
-                    0u16.wrapping_sub(delta(2)),
-                ],
+                server_time,
+                angles,
                 ..self.last_cmd
             };
             let wire = CmdWire::full(&UserCmd::default(), &cmd);
@@ -606,6 +624,22 @@ pub(super) fn replay_schedule_timed(lines: &[Line], from: i32) -> Vec<(i32, u64,
             Some((t - FRAME_MS, ms, p))
         })
         .collect()
+}
+
+/// Every `clc_move` cmd's angles in the capture, by the cmd's server time.
+pub(super) fn cmd_angles(lines: &[Line]) -> Vec<(i32, [u16; 3])> {
+    let mut s = Session::new();
+    let mut out = Vec::new();
+    for l in lines.iter().filter(|l| l.dir != "auth") {
+        if let Ok(Some(Item::Client { msg, .. })) = s.feed(l) {
+            for op in &msg.ops {
+                if let ClOp::Move { cmds, .. } = op {
+                    out.extend(cmds.iter().map(|(c, _)| (c.server_time, c.angles)));
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The first snapshot `slot` reads as its own playing self.

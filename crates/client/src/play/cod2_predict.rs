@@ -404,6 +404,47 @@ pub fn first_person_eye(ps: &PlayerState, origin: Vec3, (land, step): (f32, f32)
     eye
 }
 
+/// `CG_InterpolatePlayerState(0)` (Mac 0x1dd8b2), the playerstate a demo or
+/// a followed player draws: the newer snapshot's (`cg.nextSnap`), its
+/// origin, velocity, `viewHeightCurrent` and `leanf` lerped from the older
+/// by the frame's fraction, the view through `LerpAngle` (Mac 0x2b9ce: the
+/// short way round, rodata 0x326204 180, 0x3261f0 360) and `bobCycle` as
+/// the older's plus the int of the fraction of the step to the newer, 256
+/// added to the newer when it wrapped (cod2-movement.md 18). Across a
+/// follow switch or a teleport the newer stands as is, as [`Frame::eye`]
+/// draws it; retail's function tests neither.
+pub fn interpolated(f: &Frame) -> PlayerState {
+    let mut ps = PlayerState::from_wire(&f.snap.ps.raw);
+    let Some(prev) = f.prev.filter(|p| {
+        p.ps.client_num == f.snap.ps.client_num
+            && !vcod_cod2::net::view::teleported(p.ps.eflags, f.snap.ps.eflags)
+    }) else {
+        return ps;
+    };
+    let a = PlayerState::from_wire(&prev.ps.raw);
+    let t = f.frac;
+    let lerp = |x: f32, y: f32| x + (y - x) * t;
+    for i in 0..3 {
+        ps.origin[i] = lerp(a.origin[i], ps.origin[i]);
+        ps.velocity[i] = lerp(a.velocity[i], ps.velocity[i]);
+        let (from, mut to) = (a.view_angles[i], ps.view_angles[i]);
+        let mut d = to - from;
+        if d > 180.0 {
+            to -= 360.0;
+            d = to - from;
+        }
+        if d < -180.0 {
+            d = to + 360.0 - from;
+        }
+        ps.view_angles[i] = from + t * d;
+    }
+    ps.view_height_current = lerp(a.view_height_current, ps.view_height_current);
+    ps.leanf = lerp(a.leanf, ps.leanf);
+    let next = ps.bob_cycle + if ps.bob_cycle < a.bob_cycle { 256 } else { 0 };
+    ps.bob_cycle = a.bob_cycle + ((next - a.bob_cycle) as f32 * t) as i32;
+    ps
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,6 +508,52 @@ mod tests {
         ps.leanf = 1.0;
         let e = first_person_eye(&ps, Vec3::ZERO, (0.0, 0.0));
         assert!(e.y < -15.0, "{e}");
+    }
+
+    /// A demo's or a followed body's playerstate lerps as
+    /// `CG_InterpolatePlayerState` does: the yaw the short way past 180,
+    /// the bob cycle over its wrap as an int, the rest straight; so a
+    /// running body's eye bobs.
+    #[test]
+    fn the_interpolated_playerstate_lerps_the_eye_and_the_bob() {
+        use vcod_cod2::net::view::{ConfigStrings, PlayerView};
+        use vcod_cod2::net::{PlayerState2, SnapshotView};
+        let snap = |x: f32, vx: f32, yaw: f32, bob: i32| {
+            let mut raw = PlayerState2::default();
+            let mut set = |n: &str, v: u32| raw.f[field_index(&PLAYER_STATE_FIELDS, n)] = v;
+            set("origin[0]", x.to_bits());
+            set("velocity[0]", vx.to_bits());
+            set("viewangles[1]", yaw.to_bits());
+            set("bobCycle", bob as u32);
+            set("viewHeightCurrent", 60f32.to_bits());
+            set("viewHeightTarget", 60);
+            SnapshotView {
+                message_num: 0,
+                server_time: 0,
+                snap_flags: 0,
+                ps: PlayerView::new(&raw, 0),
+                entities: Vec::new(),
+                clients: Vec::new(),
+            }
+        };
+        let (prev, next) = (snap(0.0, 180.0, 170.0, 200), snap(10.0, 190.0, -170.0, 4));
+        let cs = ConfigStrings::default();
+        let f = Frame {
+            snap: &next,
+            prev: Some(&prev),
+            time_ms: 0,
+            frac: 0.5,
+            configstrings: &cs,
+        };
+        let ps = interpolated(&f);
+        assert_eq!(ps.origin.x, 5.0);
+        assert_eq!(ps.velocity.x, 185.0);
+        assert_eq!(ps.view_angles[1], 180.0);
+        assert_eq!(ps.bob_cycle, 230);
+        let eye = first_person_eye(&ps, ps.origin, (0.0, 0.0));
+        assert!(eye.distance(Vec3::new(5.0, 0.0, 60.0)) > 0.5, "{eye}");
+        let first = interpolated(&Frame { prev: None, ..f });
+        assert_eq!((first.origin.x, first.bob_cycle), (10.0, 4));
     }
 
     #[test]

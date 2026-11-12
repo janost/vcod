@@ -1287,7 +1287,7 @@ those anims.
   and a `killcamentity` killcam are gated against retail captures (15);
   what those gates still tolerate is 15's open list: the dropped weapon's
   fall, a grenade's strike on a body, the second rocket's number, a
-  `setviewpos`'s `delta_angles`, a killcam's trim and its archived view.
+  killcam's trim and its archived view.
 - The use key's weapon swap is gated live on ours (cod4-gsc.md 9.1); its
   retail capture is uncommitted, so no A/B gate.
 - The terrain triangle normal's last bit.
@@ -1594,6 +1594,21 @@ What the captures fixed on ours:
   Under 1.7's set-up the body's path matches retail's bit for bit.
   VERIFIED (the gate).
 
+- The spawn's `delta_angles`. The rocket shooter's spawn reads 0.40649,
+  -118.30078 and the touch run's walker's 0, 9.00879, each the spawn
+  spot's view less the angles of the last cmd before the spawn: (0, -90)
+  less (-0.40649, 28.30627), (0, 124) less (0, 114.99390). VERIFIED live
+  (the captures' cmds and snapshots). The gap the gates once filed under
+  `setviewpos` ran from the spawn to the `setviewpos` half a second later,
+  and was the gates' own: before the spawn the replayed probe sent view 0
+  over its own `delta_angles` where `cod4_probe` aims its script's view,
+  and the spot's yaw came off the spawn snapshot's view, which the wire's
+  half short reads -89.99451 for -90. Each probe now sends its twin's cmd
+  angles before its spawn and takes the spot's yaw as a whole degree; the
+  views, `delta_angles` and bodies then match retail's, and ours's
+  `SetClientViewAngle` (cod4-pmove.md 15) stands as it was. VERIFIED (the
+  gates).
+
 Open, with each gate's `GAPS`:
 
 - The dropped weapon (6): retail's leaves `trType` 5, then 3 for 50 ms, and
@@ -1604,10 +1619,6 @@ Open, with each gate's `GAPS`:
   So `cod4_throwback_ab` stops at 50050.
 - The second rocket takes entity 317 on retail, 316 on ours; nothing
   either client saw held 316. VERIFIED live.
-- `setviewpos 697 -2038 200`: retail's `delta_angles` read 0.406, -118.3
-  for 0.55 s where ours read 0, -24.99. VERIFIED live. The touch run's
-  walker (`setviewpos 207 2211 296`) read yaw 9.0088 for 0.55 s where ours
-  read -170.9912, 180 off (cod4-pmove.md 15.3). VERIFIED live.
 - The prone killcam's trim: 4200 on retail, 4250 on ours, and its end a
   frame apart. VERIFIED live. The followed shooter's words a frame off
   (its `torsoTimer` and `pm_flags` among them, which the gate once filed

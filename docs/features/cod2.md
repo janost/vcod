@@ -135,7 +135,10 @@ rects placed by their screen alignment
 - No health bar, as retail's default.
 
 **View effects.** Damage kick, the scope's idle sway and bob, the shot's
-kick roll, a landing dip, earthquakes and MG42 shake. Shellshock from
+kick roll, a landing dip, earthquakes and MG42 shake. A demo's or a
+followed player's eye bobs, dips on a landing and leans as a played one
+does; a followed one eases its steps too, which a demo skips as
+retail's does ([cod2-demos.md](../research/cod2-demos.md) 5). Shellshock from
 `shock/*.shock`: screen blend, view kick, mouse scale and turn caps,
 sound mix and the cmd's 0x800 (`cg_shellshock <secs> [file]` on the
 console too). A held breath down a scope plays its breaths, heartbeat
@@ -175,7 +178,8 @@ libspeex nothing is sent or played.
 `stoprecord` write CoD2's `.dm_1` in a game. `demo <name>` and `timedemo
 <name>` play one through the session's frame, unpredicted. `timedemo`
 writes retail's `demos/timedemo_<map>_mode_<r_mode>.csv`. Retail's demos
-play in vcod and vcod's in retail. `cl_avidemo <fps>` steps the clock a
+play in vcod and vcod's in retail. Retail's front end has no demo list,
+and vcod none either. `cl_avidemo <fps>` steps the clock a
 fixed `1000 / fps` ms a frame and writes each as a TGA.
 
 **Screenshots** ([cod2-demos.md](../research/cod2-demos.md) 8).
@@ -331,12 +335,8 @@ Ranked by how much a player notices, worst first.
    master the status retail sends every 10 minutes. The client reads no
    CD key from the registry; set `VCOD_CDKEY`
    ([usage.md](../usage.md), "CD keys").
-2. **Demo and follow eyes.** A demo or a followed player's eye is the
-   snapshot's, lerped, without retail's bob and landing dip; a followed
-   one also lacks the step smoothing, which retail's demo skips too
-   ([cod2-demos.md](../research/cod2-demos.md) 7). Retail's front end has
-   no demo list, and vcod none either. `screenshot levelshot` and
-   `savegame` write nothing.
+2. **Screenshot odds.** `screenshot levelshot` and `savegame` write
+   nothing ([cod2-demos.md](../research/cod2-demos.md) 8).
 3. **Download names.** vcod-server refuses a `download` name with a `..`
    part and never reads from the filesystem root; retail serves both
    (cod2-protocol.md 17.5). A stock client never asks for either.

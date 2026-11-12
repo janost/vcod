@@ -1313,12 +1313,34 @@ impl Cod2Session {
     /// drawn eye and view (`CG_DrawCrosshairNames`' scan, crate::cod2_names).
     pub fn crosshair_entity(&self) -> Option<u32> {
         let f = self.frame()?;
-        let (eye, angles) = self
-            .view()
-            .unwrap_or_else(|| (Vec3::from(f.eye()), crate::cod2_viewmodel::view_angles(&f)));
+        let (eye, angles) = self.view().unwrap_or_else(|| {
+            (
+                self.snapshot_eye(&f),
+                crate::cod2_viewmodel::view_angles(&f),
+            )
+        });
         let forward = vcod_common::x87::angle_vectors(Vec3::from_array(angles))[0];
         let world = self.world.as_ref().map(|(_, w)| w);
         crate::cod2_names::scan(&f, eye, forward, world)
+    }
+
+    /// A demo's or a followed player's eye: `CG_CalcViewValues`' first
+    /// person arm (Mac 0x1d3b28), which tests neither, over the snapshots'
+    /// lerped playerstate ([`cod2_predict::interpolated`]): the bob, the
+    /// landing dip and the step [`Self::recoil_frame`] keeps (none in a
+    /// demo), the lean. A gunner's is his gun's; an intermission's
+    /// (`pm_type` 5, which the arm skips) the lerped eye.
+    fn snapshot_eye(&self, f: &Frame) -> Vec3 {
+        let view = crate::cod2_viewmodel::view_angles(f);
+        if let Some(at) = self.gunner_eye(view) {
+            return at;
+        }
+        if f.snap.ps.pm_type == 5 {
+            return Vec3::from(f.eye());
+        }
+        let ps = crate::play::cod2_predict::interpolated(f);
+        let dips = (self.land_dips.0, self.step_dip);
+        crate::play::cod2_predict::first_person_eye(&ps, ps.origin, dips)
     }
 
     /// A gunner sees from the gun's `tag_player` (`CG_CalcViewValues`,
@@ -1717,9 +1739,7 @@ impl Cod2Session {
         if let Some((eye, _)) = self.view() {
             cam.pos = eye;
         } else if let Some(f) = self.frame() {
-            // A followed gunner's eye is his gun's too.
-            let view = crate::cod2_viewmodel::view_angles(&f);
-            cam.pos = self.gunner_eye(view).unwrap_or(Vec3::from(f.eye()));
+            cam.pos = self.snapshot_eye(&f);
         }
         if log_due && let Some(f) = self.frame() {
             let st = self.stats;
@@ -2317,7 +2337,7 @@ impl Cod2Session {
     fn demo_fly(&mut self, cam: &mut FlyCamera) {
         self.demo_frame();
         if let Some(f) = self.frame() {
-            cam.pos = Vec3::from(f.eye());
+            cam.pos = self.snapshot_eye(&f);
             let [pitch, yaw, _] = f.snap.ps.viewangles;
             cam.pitch = -pitch.to_radians();
             cam.yaw = yaw.to_radians();
@@ -3368,6 +3388,30 @@ mod tests {
             assert_eq!(w[1].0, w[0].0 + 1);
         }
         assert!(rows.iter().all(|r| r.1 >= 0));
+    }
+
+    /// A demo's eye is `CG_CalcViewValues`' first-person arm over the lerped
+    /// playerstate (Mac 0x1d3b28 has no demo test): retail's recorder, a
+    /// free spectator standing with `viewHeightCurrent` 0, sees from the
+    /// arm's floor 8 over its origin, where the snapshots' plain eye is the
+    /// origin itself.
+    #[test]
+    fn a_demo_eye_is_the_first_person_arms() {
+        let data = include_bytes!("../../../cod2/tests/fixtures/demos/mp_toujane-retail.dm_1");
+        let fs = Pk3Fs::empty();
+        let mut cam = FlyCamera::new(Vec3::ZERO, 0.0);
+        let mut s = Cod2Session::play_demo(data.to_vec(), true).unwrap();
+        let mut frames = 0;
+        while !s.demo_over() && frames < 5000 {
+            s.fly(&mut cam, &fs);
+            let Some(f) = s.frame() else { continue };
+            frames += 1;
+            let ps = crate::play::cod2_predict::interpolated(&f);
+            assert_eq!(ps.view_height_current, 0.0);
+            assert_eq!(cam.pos, ps.origin + Vec3::Z * 8.0, "at {}", f.time_ms);
+            assert_eq!(Vec3::from(f.eye()), ps.origin);
+        }
+        assert!(frames > 800, "{frames} frames");
     }
 
     /// A loopback server answering each `getchallenge` with `reply`: what

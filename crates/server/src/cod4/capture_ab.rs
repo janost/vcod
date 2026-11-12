@@ -22,7 +22,7 @@ use vcod_cod4::net::clmsg::ClOp;
 use vcod_cod4::net::delta::EntityState;
 use vcod_cod4::net::parse::{Op, Snapshot};
 
-use super::wire_ab::{Probe, Side, replay_schedule_timed, retail, side};
+use super::wire_ab::{Probe, Side, cmd_angles, replay_schedule_timed, retail, side};
 use super::*;
 
 /// One retail run of the two probes.
@@ -114,13 +114,17 @@ fn twin(lines: &[Line]) -> Twin {
         .or_else(|| own(4).map(|f| (f, 4)))
         .expect("a spawn");
     let v = |n: &str| [0, 1, 2].map(|k| spawn.ps.get_f32(&format!("{n}[{k}]")).unwrap_or(0.0));
+    // The spot's yaw is a whole degree; the wire's half-short rounding
+    // (`angle16_sent`) reads the rocket run's -90 as -89.99451, and
+    // `delta_angles` off that goes out a short off retail's.
+    let yaw = v("viewangles")[1].round();
     Twin {
         slot,
         first: snaps[0].server_time,
         spawn: spawn.server_time,
         pm_type,
         last: snaps.last().unwrap().server_time,
-        pin: (pm_type == 0).then(|| (v("origin"), [0.0, v("viewangles")[1], 0.0])),
+        pin: (pm_type == 0).then(|| (v("origin"), [0.0, yaw, 0.0])),
         commands: commands.into_values().collect(),
     }
 }
@@ -227,6 +231,7 @@ fn run(install: &vcod_cod4::install::Install, pair: &Pair, hook: &mut Hook) -> R
         .map(|(((t, name), l), offset)| {
             let mut p = Probe::new(name, t.slot, 28961 + t.slot as u16, t.first, &t.commands);
             p.replay_pm_type = t.pm_type;
+            p.pre_angles = cmd_angles(l);
             let timed = replay_schedule_timed(l, t.spawn);
             sends.push(
                 timed
@@ -566,15 +571,6 @@ const ROCKET_GAPS: &[(&str, &str)] = &[
          saw took 316 (cod4-gsc.md 3.2)",
     ),
     ("* entity 317", "the second rocket's number, as above"),
-    (
-        "shooter ps viewangles[1]",
-        "`setviewpos` 697 -2038 200's `delta_angles` for its first 0.55 s (cod4-gsc.md 3.2)",
-    ),
-    ("shooter ps delta_angles", "as above"),
-    (
-        "target entity 1:1 lerp.apos.trBase",
-        "the same view on the shooter's body",
-    ),
 ];
 
 /// The RPG's two rockets fly, wobble and burst as retail's (cod4-gsc.md
@@ -660,21 +656,11 @@ const TOUCH: Pair = Pair {
     cvars: &[("scr_game_spectatetype", "2")],
 };
 
-const TOUCH_GAPS: &[(&str, &str)] = &[
-    (
-        "walker ps delta_angles[1]",
-        "`setviewpos`'s `delta_angles` for its first 0.55 s, 180 off here (cod4-combat.md 15)",
-    ),
-    (
-        "* entity 1:1 lerp.apos.trBase[1]",
-        "the same view on the walker's body",
-    ),
-    (
-        "flyer ps velocity[1]",
-        "the free spectator's velocity a bit off in its turn: pmove's float model \
+const TOUCH_GAPS: &[(&str, &str)] = &[(
+    "flyer ps velocity[1]",
+    "the free spectator's velocity a bit off in its turn: pmove's float model \
          (cod4-pmove.md 13.2)",
-    ),
-];
+)];
 
 /// `ClientImpacts` after each cmd's move: the walker's body meets the
 /// target's, and the gsc's count of the `touch` notifies each is sent,

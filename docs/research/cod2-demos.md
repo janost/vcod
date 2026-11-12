@@ -177,10 +177,18 @@ second parameter; `SCR_UpdateFrame` passes `clc.demoplaying != 0`), is
 tests and the store). A demo therefore draws no step smoothing. The
 landing arm beside it has no such test, so a demo's eye dips on a
 landing (INFERRED, the arm's only test is the client number).
-`CG_CalcViewValues` (Mac 0x1d3b28) adds both, with the bob, on its first
-person arm, demo or not (INFERRED, its branches; cod2-movement.md 18). vcod's demo eye is the snapshots'
-lerped eye: no bob and no landing dip. Its played view has both and the
-step (`Cod2Session::recoil_frame`, which takes no step in a demo).
+`CG_CalcViewValues` (Mac 0x1d3b28) adds both, with the bob and the lean,
+on its first person arm. The arm's tests are `cg` +0x25bc0, `pm_type` 5
+and `eFlags & 0x300`, and it never reads `cg` +8 (VERIFIED, the
+branches); that +0x25bc0 is the third person flag is INFERRED. Under a
+demo it reads the playerstate `CG_InterpolatePlayerState(0)` (Mac
+0x1dd8b2) lerped (cod2-movement.md 18). vcod's demo eye is that arm's over the same lerp
+(`Cod2Session::snapshot_eye`, `cod2_predict::interpolated`): the bob,
+the landing dip, the lean and the floor 8 over the origin, which lifts
+retail's committed demo's spectator, standing with `viewHeightCurrent`
+0, 8 over the plain lerped eye (`a_demo_eye_is_the_first_person_arms`).
+VERIFIED (the test). `Cod2Session::recoil_frame` takes no step in a
+demo.
 
 `CL_SystemInfoChanged` (Mac 0x1d535a) reads `sv_serverid` and returns
 while a demo plays: no cheat state, no `sv_iwds`, no `fs_game` (VERIFIED,
@@ -234,7 +242,6 @@ All in one `unshare -rn` namespace (loopback only):
 
 ## 7. Not done
 
-- A demo's eye has no bob or landing dip (5).
 - CoD2's stock `ui_mp/main.menu` has no demo list (its only demo item
   is `demo_only`, the retail demo build's notice), so the front end has
   none (VERIFIED, the stock menus in `iw_06.iwd`).

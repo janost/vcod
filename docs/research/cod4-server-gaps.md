@@ -99,11 +99,12 @@ Open, by how much a player notices.
    out: ours holds still. A stock helicopter spends its first 2 s so
    (cod4-gsc.md 3.2). M. Its turret's tracking is vcod's reading of
    `VEH_UpdateAim`, 0.45 degrees off retail at worst (`hardpoint_ab`). S.
-3. What the four capture gates (`cod4::capture_ab`, cod4-combat.md 15)
+3. What the five capture gates (`cod4::capture_ab`, cod4-combat.md 15)
    still tolerate: the dropped weapon's start and fall, a grenade's
    strike on a standing body, the second rocket's entity number, a
-   `setviewpos`'s `delta_angles`, a killcam's trim and its archived view.
-   S to M each.
+   killcam's trim and its archived view. S to M each. Closed: the spawn's
+   `delta_angles` the rocket and touch gates listed after a `setviewpos`
+   were the gates' replay, not the server (cod4-combat.md 15).
 4. The off-LAN snapshot rate above 20 (cod4-server-frame.md), and why
    retail counted its own public address as off the LAN
    (cod4-handshake.md 15). S to measure.
