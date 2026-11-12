@@ -600,6 +600,16 @@ does the same, so the explode plays.
   (the code). So a crouched run reads standing and any walk sighted.
   The movetype bits are the state blocks whose legs or both lines name
   the anim (`BG_ParseCommands`), INFERRED.
+- The only legs anims the `fireweapon` event puts on are the throws'
+  `both pb_stand_grenade_throw` (`movetype idle`) and `both
+  pb_crouch_grenade_throw` (`movetype idlecr`), and no state block names
+  either. VERIFIED (`mp/playeranim.script`, `common_mp`). So rounds fired
+  while a throw's legs play read standing, whatever the stance. INFERRED.
+  The script's events hold nothing between standing and crouched (only
+  `prone_to_crouch` and `crouch_to_prone`), VERIFIED (the rawfile), so a
+  body that crouches inside the throw's legs timer keeps
+  `pb_stand_grenade_throw` under `eFlags` 4 (the timer rule,
+  cod4-player-anims.md 7). INFERRED.
 - A turret's (`eType` 11, 0x456a12) rounds take its def's +0x7b0 at
   both ends with scale 1 (0x456a22..0x456a4e); a vehicle's or
   helicopter's (12, 14) `adsSpread` (0x456ad9..0x456b63). VERIFIED (the
