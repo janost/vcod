@@ -18,10 +18,10 @@ Ranked by how much a player notices.
   challenge and hides them in the browser (cod4-handshake.md 13). L.
 - Retail's `mpdata` is never read: a retail rank does not carry over.
   By choice.
-- Rigid-body physics. A `physicsLaunch`ed part keeps its spot: the
-  client treats `TR_PHYSICS` as stationary (`play::cod4::trajectory`;
-  cod4-gsc.md 3.2). The ragdoll is a position-based solver, not ODE
-  (cod4-player-anims.md 10). L.
+- Rigid-body physics is vcod's solver, not ODE: a launched part's corners
+  meet the world as points, brush geoms are left out, `msecStep` stays
+  17 ms, and a blast does not push a part (cod4-gsc.md 3.6). The ragdoll
+  is a position-based solver (cod4-player-anims.md 10). M.
 - A dropped weapon's camo: retail's item `index` is `weapon + 128 *
   model` and a pickup gives the camo; vcod's item carries the weapon
   alone, draws slot 0's world model and a pickup gives slot 0

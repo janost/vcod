@@ -23,6 +23,7 @@ pub mod cod4;
 pub mod cod4_input;
 pub mod cod4_kick;
 pub mod cod4_menus;
+pub mod cod4_physics;
 pub mod cod4_players;
 pub mod cod4_predict;
 pub mod cod4_profile;

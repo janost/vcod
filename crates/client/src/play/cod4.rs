@@ -34,6 +34,7 @@ use crate::play::clock::ServerClock;
 use crate::play::cod4_input::Cod4Input;
 use crate::play::cod4_kick;
 use crate::play::cod4_menus::{Join as MenuJoin, ScriptMenus};
+use crate::play::cod4_physics;
 use crate::play::cod4_predict::{self, Cod4Predictor, Cod4World, Ring, Solid};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -589,6 +590,8 @@ pub struct Cod4Session {
     /// The snapshots a live session keeps when it sheds
     /// ([`KEEP_SNAPSHOTS`]; a test sheds sooner).
     keep_snapshots: usize,
+    /// The `physicsLaunch`ed parts this client flies (`play::cod4_physics`).
+    pub physics: super::cod4_physics::Cod4Physics,
 }
 
 /// `cg.selectedLocation` and `locSelInputState`: where the location
@@ -856,6 +859,7 @@ impl Cod4Session {
             kick: Default::default(),
             kick_seen: 0,
             keep_snapshots: KEEP_SNAPSHOTS,
+            physics: Default::default(),
         }
     }
 
@@ -2073,22 +2077,35 @@ impl Cod4Session {
                 .filter(|p| {
                     (ent_u32(p, "lerp.eFlags") ^ ent_u32(e, "lerp.eFlags")) & EF_TELEPORT == 0
                 });
-            let (origin, angles) = match prev {
-                Some(p) if interpolates(p, e) => {
-                    let (o0, a0) = place(p);
-                    (o0.lerp(o1, frac), lerp_angles(a0, a1, frac))
+            // A `physicsLaunch`ed part flies on this client alone, from
+            // the first frame its current state reads `TR_PHYSICS`
+            // (`CG_CalcEntityPhysicsPositions`, cod4-gsc.md 3.6).
+            let flown = match (&visual, &self.world) {
+                (Visual::Model(m), Some(w)) if cod4_physics::launched(prev.unwrap_or(e)) => {
+                    self.physics.place(prev.unwrap_or(e), m, w, render_time)
                 }
-                // `BG_EvaluateTrajectory` on the older state at the drawn
-                // time (`CG_CalcEntityLerpPositions`).
-                Some(p) => (
-                    trajectory(p, "pos").evaluate(render_time),
-                    trajectory(p, "apos").evaluate(render_time),
-                ),
-                None if interpolates(e, e) => (o1, a1),
-                None => (
-                    trajectory(e, "pos").evaluate(render_time),
-                    trajectory(e, "apos").evaluate(render_time),
-                ),
+                _ => None,
+            };
+            let (origin, angles) = if let Some(f) = flown {
+                f
+            } else {
+                match prev {
+                    Some(p) if interpolates(p, e) => {
+                        let (o0, a0) = place(p);
+                        (o0.lerp(o1, frac), lerp_angles(a0, a1, frac))
+                    }
+                    // `BG_EvaluateTrajectory` on the older state at the drawn
+                    // time (`CG_CalcEntityLerpPositions`).
+                    Some(p) => (
+                        trajectory(p, "pos").evaluate(render_time),
+                        trajectory(p, "apos").evaluate(render_time),
+                    ),
+                    None if interpolates(e, e) => (o1, a1),
+                    None => (
+                        trajectory(e, "pos").evaluate(render_time),
+                        trajectory(e, "apos").evaluate(render_time),
+                    ),
+                }
             };
             let mut body = body_view(gs, new, &weapons, e, origin, angles);
             // `CG_InterpolateEntityPosition`: a player's lean and move
@@ -2149,6 +2166,9 @@ impl Cod4Session {
                 self.level_defs = Some((list, w.level_defs(&weapons)));
             }
         }
+        // A part whose entity left the snapshot is gone with it.
+        self.physics
+            .retain(|n| new.entities.iter().any(|e| e.number() == n));
         // `cg.demoPlayback` predicts nothing (cod4-demos.md 5).
         let demo = matches!(self.source, Source::Demo(_));
         let predicts = predicts(self.world.is_some() && !demo, gs, &new.ps);
@@ -12301,6 +12321,135 @@ pub(crate) mod tests {
             }
         }
         println!("{started_through} bones started through the world");
+        assert!(problems.is_empty(), "{problems:#?}");
+    }
+
+    /// vcod-server's `war` on mp_backlot, a held bot's frags bursting on a
+    /// destructible car until `_destructible.gsc` blows it up and
+    /// `physicsLaunch`es its parts, watched by a spectator: each part this
+    /// client sees launched flies off its spot (`play::cod4_physics`), and
+    /// goes to sleep clear of the world, resting on what is under it
+    /// (cod4-gsc.md 3.6). Returns at once without an install.
+    #[test]
+    fn cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest() {
+        use vcod_cod4::ragdoll::CLIP_MASK;
+        use vcod_server::cod4::{Cod4Config, Cod4Server};
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let world = Arc::new(crate::cod4_fly::load_world(install.root(), "mp_backlot").unwrap());
+        let mut sv = Cod4Server::new(
+            Cod4Config {
+                map: "mp_backlot".into(),
+                gametype: "war".into(),
+                hostname: "vcod".into(),
+                max_clients: 12,
+            },
+            11,
+        );
+        sv.set_cvar("scr_game_playerwaittime", "1");
+        sv.set_cvar("scr_game_matchstarttime", "1");
+        sv.load(Some(&install)).unwrap();
+        let bot = sv.add_held_bot_for_test(false).unwrap();
+        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let addr = sock.local_addr().unwrap();
+        let clip = world.clip.clone();
+        let clock = sim::Clock::new();
+        // Per part: its model, launch spot, farthest drawn distance off
+        // it, and its body's last state (asleep, ms simulated, points).
+        type Seen = (String, Vec3, f32, Option<(bool, u32, Vec<Vec3>)>);
+        let client = sim::spawn(&clock, move || {
+            let join = MenuJoin {
+                team: Some("spectator".into()),
+                class: Some("assault_mp,0".into()),
+            };
+            let mut s = Cod4Session::connect(addr, "watcher", Cp::Bare, join).unwrap();
+            s.set_world(world.clone());
+            let mut parts: BTreeMap<u32, Seen> = BTreeMap::new();
+            let t0 = clk_now();
+            while since(t0) < Duration::from_secs(30) {
+                let now = since(t0).as_secs_f64() * 1000.0;
+                s.step(now).unwrap();
+                s.take_commands();
+                clk_sleep(Duration::from_millis(16));
+                let Some(scene) = s.scene() else { continue };
+                for d in &scene.entities {
+                    let Some(b) = s.physics.body(d.number) else {
+                        continue;
+                    };
+                    let Visual::Model(m) = &d.visual else {
+                        continue;
+                    };
+                    let e = parts
+                        .entry(d.number)
+                        .or_insert_with(|| (m.clone(), d.origin, 0.0, None));
+                    e.2 = e.2.max(d.origin.distance(e.1));
+                    e.3 = Some((b.asleep, b.steps, b.world_points().collect()));
+                }
+            }
+            s.disconnect();
+            parts
+        });
+        // From 4 s, a frag bursts on the car every 600 ms, 12 in all.
+        let mut car = None;
+        let mut bursts = 0;
+        let mut last = 0;
+        serve(&mut sv, &sock, &clock, &client, |sv, _, _| {
+            let Some(l) = sv.game.level.as_mut() else {
+                return true;
+            };
+            let now = l.level_time();
+            if now < 4000 || bursts >= 12 || now - last < 600 {
+                return true;
+            }
+            if car.is_none() {
+                car = l
+                    .shot_models_for_test()
+                    .into_iter()
+                    .find(|m| m.2)
+                    .map(|m| m.1);
+            }
+            if let Some(at) = car {
+                assert!(l.burst_for_test(bot, "frag_grenade_mp", at + Vec3::Z * 8.0));
+                bursts += 1;
+                last = now;
+            }
+            true
+        });
+        assert!(car.is_some(), "no destructible on mp_backlot");
+        let parts = client.join().unwrap();
+        for (n, (m, at, far, b)) in &parts {
+            let b = b.as_ref().unwrap();
+            println!(
+                "{n} {m}: from {at}, {far:.0} away at most, asleep {}, {} steps",
+                b.0, b.1
+            );
+        }
+        assert!(parts.len() >= 3, "{parts:#?}");
+        let mut problems = Vec::new();
+        let z = Vec3::ZERO;
+        for (n, (m, _, far, b)) in &parts {
+            let (asleep, _, points) = b.as_ref().unwrap();
+            if *far < 8.0 {
+                problems.push(format!("{n} {m}: never left its spot ({far})"));
+            }
+            if !asleep {
+                problems.push(format!("{n} {m}: still moving"));
+                continue;
+            }
+            for &p in points {
+                if clip.trace(p, p, z, z, CLIP_MASK).startsolid {
+                    problems.push(format!("{n} {m}: point {p} in the world"));
+                }
+            }
+            let rests = points
+                .iter()
+                .any(|&p| clip.trace(p, p - Vec3::Z * 2.0, z, z, CLIP_MASK).fraction < 1.0);
+            if !rests {
+                problems.push(format!("{n} {m}: rests on nothing"));
+            }
+        }
         assert!(problems.is_empty(), "{problems:#?}");
     }
 

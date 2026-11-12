@@ -125,6 +125,11 @@ The weapon byte is the client's own pick
 - Dropped weapons, grenades and movers on their trajectories. Script
   models without their `hidePart` parts, so a damaged car draws intact or
   cracked glass, never both (cod4-client-view.md 15).
+- A `physicsLaunch`ed part (a blown-up car's doors, hood, bumpers,
+  mirrors and wheels) flies off its launch on this client, as 1.7's does,
+  bounces by its physics preset and comes to rest on the world; one first
+  seen more than a second after its launch stays where it stood, as on
+  1.7 ([cod4-gsc.md](../research/cod4-gsc.md) 3.6).
 - The airstrike's jets and the helicopter with turning rotors, rotor
   wash, damage-stage smoke and fire, and `playFxOnTag` effects on any
   model's tags (11).
@@ -414,11 +419,12 @@ Ranked by how much a player notices. The research-side lists are
    and custom classes are safe, and no use here. Create a Class opens at
    rank 3 and edits classes as 1.7 does
    ([cod4-front-end.md](../research/cod4-front-end.md) 4).
-3. **Physics debris stays put.** A `physicsLaunch`ed part (a car's door
-   or hood) keeps the spot it stood on: the client runs no rigid-body
-   physics for `TR_PHYSICS`. Ragdolls use vcod's position-based solver,
-   not ODE, so corpses fall differently
-   ([cod4-gsc.md](../research/cod4-gsc.md) 3.2,
+3. **Physics debris on vcod's solver.** A `physicsLaunch`ed part (a
+   car's door or hood) flies, lands and settles under vcod's own contact
+   solver, not ODE, so its path and spin differ in detail, and a blast
+   does not push it. Ragdolls use vcod's position-based solver,
+   so corpses fall differently too
+   ([cod4-gsc.md](../research/cod4-gsc.md) 3.6,
    [cod4-player-anims.md](../research/cod4-player-anims.md) 10).
 4. **A dropped gun loses its camo.** Another player's gun wears his
    camo, but the weapon he drops shows the plain model and picks up

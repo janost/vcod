@@ -400,7 +400,7 @@ Around it:
   VERIFIED (the disassembly). vcod sends the same words, keeps the part in
   place, `notSolid`, undamageable
   (`hardpoint_tests::physics_launch_and_the_explosion_sphere_go_out`).
-  VERIFIED (the test, ours).
+  VERIFIED (the test, ours). Each client flies the part itself (3.6).
 - `physicsExplosionSphere(origin, outer, inner, magnitude)` (0x80bd00e):
   four arguments; a temp entity `EV_PHYS_EXPLOSION_SPHERE` (57) at the
   origin (0x80cbd96), outer radius the parm, inner in `lerp.u` word 0
@@ -650,6 +650,146 @@ the world to the callbacks, and `Callback_PlayerKilled:4787` compares
 errors on every such kill (the sweep's `sd`, `sab` rows). vcod's world
 (`ObjectTable::world`) carries `worldspawn` in every game. VERIFIED
 (`cod4::gametype_tests::a_blast_with_no_attacker_names_the_world`).
+
+### 3.6 Launched parts on the client
+
+Addresses in this section are the 1.7 client's, `iw3mp.exe` (md5
+`8c40cde102a9d8297a8674cb149f96ed`), read with `objdump`. The physics
+world is ODE's; the names below are the strings' and ODE's.
+
+Who flies a part:
+
+- The server sends the launch once (3.2) and nothing after it. On the
+  client, `CG_CalcEntityLerpPositions` (0x434fe0) hands an entity whose
+  current `pos.trType` is 8 (`centity_t` +0x68) to 0x434e50, which returns
+  for `eFlags` 0x20 (0x434e60), a brush model (`solid` 0xffffff,
+  0x434e6d) or an entity with no DObj (0x434e9a). VERIFIED (disassembly).
+- With no body yet it makes one (`CG_CreatePhysicsObject`, 0x434c70) when
+  the time at 0x794460 is at most the launch's `pos.trTime` plus 1000
+  (0x434ead..0x434ecf); later it marks the entity refused (-1 at
+  `centity_t` +0x18). A refused entity, or one whose body failed, is drawn
+  at its `trBase`s (0x434ede..0x434f08); a flying one at its body's
+  interpolated state (0x434e00, world 1 through 0x5a6ec0). VERIFIED
+  (disassembly). That 0x794460 is `cg.time` is INFERRED. So every client
+  flies its own copy, and one that first sees a part more than a second
+  after the launch draws it at the launch spot for good. INFERRED (the
+  code above).
+- A new model on the entity destroys the body (0x4351c7, 0x5a58c0).
+  VERIFIED (disassembly).
+
+The body:
+
+- `CG_CreatePhysicsObject` takes the physics preset of the DObj's first
+  model (`XModel` +0xd4); with none it prints "Failed to create physics
+  object for '%s'.  No physics preset." (0x6c8344) and refuses. Else
+  `Phys_ObjCreate` (0x5a4fb0) makes a body in world 1 at the current state's
+  `pos.trBase` (`centity_t` +0x74), turned by `apos.trBase` (+0x98), at
+  rest, with the preset's type (+4), mass (+8), bounce (+12) and friction
+  (+16) (0x5a4fb0..0x5a5079); 0x5a5710 adds the model's collision; then
+  0x5a5a20 pushes it with the contact `pos.trDelta` (+0x80), the force
+  `apos.trDelta` (+0xa4) normalized (0x4076d0) as the direction, its length
+  as the speed, and the preset's +20 as the scale. VERIFIED (disassembly).
+- The collision (0x5a5710): with `physGeoms` (`XModel` +0xd8), each geom
+  that has a brush (+0) a convex brush (0x5a5420), type 1 a box (0x5a52e0)
+  of `halfLengths` (+0x38) at `offset` (+0x2c) along `orientation` (+8),
+  any other type a cylinder off `halfLengths` x and y (0x5a55f0); the
+  inertia is the list's `PhysMass` moments and products (list +0x14,
+  +0x20) times the mass (0x5a49d0). With none, a box on the model's
+  bounds (+0xac, +0xb8) at their midpoint (0x5a5240), a box flat on any
+  axis taking -50..50 (0x5a587a, the floats at 0x70ba44 and 0x6be7e8).
+  VERIFIED (disassembly). The body sits at the mass centre: 0x5a47c0
+  moves it by the turned offset and the geoms back by it. INFERRED (the
+  code). Stock car parts (`vehicle_80s_sedan1_*_door_lf` and kin) carry no
+  `physGeoms`: their bounds box. VERIFIED (`phys_dump` on mp_backlot).
+- The presets the stock cars launch: `car_door` mass 25, bounce 0.1,
+  friction 0.5, scale 0.6; `car_hood` 15, 0.1, 0.5, 0.6; `tire` 18, 0.8,
+  0.8, 0.6. VERIFIED (`phys_dump`, mp_backlot.ff).
+- The push (0x5a5a20, its helper 0x5a5990), with `c` the body's position:
+  the direction gets `phys_bulletUpBias` on z and is normalized; the
+  contact moves out to `p + (p - c) * phys_bulletSpinScale`; with `r` that
+  point less `c`, `L = |r x dir|` and `n` that cross normalized, the
+  closing speed is `speed - (v . dir + w . n L)`, and nothing happens at or
+  below 0. Else `J = closing * m * scale / (m + 0.5 + 0.5 m L^2 / (u . I u))`,
+  `u` the body's rotation times `n` (0x5a5bc3..0x5a5c35: the rotation, not
+  its transpose), `I` the body's inertia (its `dMass`, copied at
+  0x5a5aab); `J dir` goes on at the moved point as a force times `1000 /
+  msecStep` for one step (0x5a5900, `dBodyAddForceAtPos` 0x5b7000), which
+  wakes the body. VERIFIED (disassembly).
+
+The world (registrations 0x5a2d00..0x5a4420; a dvar's default the
+immediate or float it is registered with):
+
+| Dvar | Default | Read at |
+|---|---|---|
+| `phys_gravity` | -800 | 0x5a6565, as (0, 0, -800) |
+| `phys_bulletUpBias` | 0.5 (0..2) | 0x5a599b |
+| `phys_bulletSpinScale` | 3 (-1..100) | 0x5a59b0 |
+| `phys_frictionScale` | 1 | 0x5a607f |
+| `phys_dragLinear`, `phys_dragAngular` | 0.03, 0.5 | `cod4-player-anims.md` 10.2 |
+| `phys_autoDisableLinear`, `Angular`, `Time` | 20, 1, 0.9 | 0x5a6505..0x5a6533 |
+| `phys_contact_cfm`, `phys_contact_erp` | 1e-5, 0.8 | 0x5a6062 |
+| `phys_mcv`, `phys_mcv_ragdoll` | 20, 1000 | 0x5a64c3..0x5a64d3 |
+| `phys_csl` | 1 | 0x5a64d6 |
+| `phys_collUseEntities`, `phys_interBodyCollision` | 0, 0 | |
+
+VERIFIED (the registrations). Then:
+
+- `Phys_RunFrame`'s clock (0x5a6e02..0x5a6e87): at most two steps a frame,
+  each the larger of `msecStep` and half what is left, so the world runs
+  up to a step ahead; the drawn state lerps from the frame's start to the
+  last step. World 1's `msecStep` lies between 17 and 67 ms (the tables
+  at 0x71e7a4 and 0x71e7b0), set each step off how many of its bodies are
+  awake (0x5a6738..0x5a67bb). VERIFIED (disassembly). Its curve, the
+  count less 32 over 18, is INFERRED: a handful of parts steps at 17.
+- A contact (0x5a5f20): friction the two bodies' sum (the world adds 0)
+  times `phys_frictionScale`, bounce the smaller of 1 and each body's
+  (0x409400), `bounce_vel` 0.1 (0x6b72dc), the contact `erp` and `cfm`,
+  mode 0x301c. VERIFIED (disassembly). That 0x301c is ODE's bounce, soft
+  ERP and CFM and the friction pyramid is INFERRED (ODE's flags).
+- The bodies meet the world under 0x2806c91, the ragdoll's mask: each
+  step traces a body's last position to its new one (0x5a6acf). VERIFIED
+  (the immediate). With `phys_collUseEntities` and
+  `phys_interBodyCollision` 0, parts meet the world alone. INFERRED (the
+  names).
+- `physicsExplosionSphere`'s event calls `Ragdoll_ExplosionEvent` and
+  0x48e670, among the dynamic entities' code (0x437241, 0x437284).
+  Whether a blast pushes a launched part is not read. INFERRED.
+
+vcod (`vcod_cod4::physics`, `play::cod4_physics`):
+
+- Ported: the 1000 ms rule, the refusal without a preset, a brush model
+  and `eFlags` 0x20 left out, the shape (boxes and cylinders, else the
+  bounds box), the mass centre, the push with its up bias, spin scale and
+  formula, gravity, the clock (two steps at most, the lerp), the drag,
+  the per-body sleep on the squared speeds, the contact friction and
+  bounce, the world-only collision under 0x2806c91. VERIFIED (the code
+  against the above).
+- In place of ODE: one impulse solver per body. Each box corner and 16
+  points round each cylinder sweep the clip map as points along their
+  velocity over the step; the kernels' 0.125 skin is the contact layer; a
+  corner already in the world is traced out from the centre and pushed
+  out at `phys_contact_erp` up to `phys_mcv`; an approach faster than 0.1
+  bounces by the preset, from the corner where the step found it; ten
+  passes of sequential impulses with Coulomb friction (the preset's times
+  `phys_frictionScale`); the centre itself is never moved through a
+  surface. A brush geom is left out (a model with only brushes takes its
+  bounds box), `msecStep` stays 17 ms, a world edge between two corners
+  can poke into a box, and a blast does not push a part. vcod's.
+- Tests: `physics::tests` (free fall at `phys_gravity`, the push formula,
+  a 0.8 bounce, a launched door that lands and sleeps, a fast part thrown
+  into a corner staying out of all three planes, a tilted box settling
+  flat, the clock, a model's geoms) and the live
+  `cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest`: vcod-server's
+  `war` on mp_backlot, a held bot's frags bursting on the first
+  destructible until `_destructible.gsc` blows the sedan up; its 9
+  launched parts (both mirrors, both bumpers, both right doors, two wheels
+  and the hood) flew 14 to 199 units off their spots and went to sleep
+  within 1.6 to 2.7 s, every point clear of the world and resting on it.
+  VERIFIED (the tests, ours). How a part looks in flight and at rest is
+  pending a human's look.
+- The ragdoll (`cod4-player-anims.md` 10) keeps its point solver. This
+  body could carry it once the bones are rigid capsules held by joint
+  constraints, which it lacks. INFERRED (vcod's design).
 
 ## 4. The load
 

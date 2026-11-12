@@ -191,6 +191,5 @@ and `bravo` (a spectator); the console commands went over rcon, then
   too, VERIFIED there.
 - A `physicsLaunch`ed part stays where it stood on the server: 1.7's
   `BG_EvaluateTrajectory` (0x80536ba) reads `TR_PHYSICS` at `trBase`
-  too. VERIFIED (cod4-gsc.md 3.2). The retail client flies it off the
-  launch's contact and force. INFERRED. The client's side is
-  `cod4-gaps.md`'s.
+  too. VERIFIED (cod4-gsc.md 3.2). Each client flies it off the
+  launch's contact and force (cod4-gsc.md 3.6).

@@ -28,7 +28,7 @@ live captures, the research docs and the A/B gates.
 |---|---|---|
 | `crates/common` | `vcod-common` | what the games share: `mapworld` (the loaded map; `mapworld::load` picks the loader), CoD1 formats (bsp, xmodel, xanim, shader, pk3, menus), the neutral `Material`, collision, `clipmap/` (the CoD2-family clip map and trace kernels), vis, pmove, weapons, animscript, `asset_source`, `net/` (CoD1 1.1/1.5/UO as `net::protocol::Cod1Wire` descriptors, the master query, `wire.rs`'s `Transport` and `WireGame` trait, `codec.rs`'s game-neutral field codec, `cod1/` tables) |
 | `crates/cod2` | `vcod-cod2` | CoD2 1.3 formats, wire, pmove and `collision/` (a `ClipMap` from a `.d3dbsp`); `map.rs` parses a map once into `MapWorld` and `ClipMap` |
-| `crates/cod4` | `vcod-cod4` | CoD4 1.7: fastfiles (`zone.rs`, `walk.rs`, `assets/`), `install.rs`, map worlds, images, `source.rs` (its `AssetSource`), anims, HUD assets, sound, fx, ragdoll, `collision/` (a `ClipMap` from a clipMap_t), `net/` (the 1.7 wire), `pmove/` |
+| `crates/cod4` | `vcod-cod4` | CoD4 1.7: fastfiles (`zone.rs`, `walk.rs`, `assets/`), `install.rs`, map worlds, images, `source.rs` (its `AssetSource`), anims, HUD assets, sound, fx, ragdoll, launched parts' physics, `collision/` (a `ClipMap` from a clipMap_t), `net/` (the 1.7 wire), `pmove/` |
 | `crates/gsc` | `vcod-gsc` | the `.gsc` compiler and VM (`vm/interp.rs`, `vm/sched.rs`, `vm/profile.rs`'s per-game `VmProfile`) that runs the stock gametype and map scripts |
 | `crates/server` | `vcod-server` | the dedicated server: `engine/` (`Engine<G: GameModule>`, shared by all three games), CoD1's `server.rs` and `server/`, `cod2/`, `cod4/` (each game's engine module), `game/` (the script host and each game's level; `game/profile.rs` `HostProfile`), `bots/` and `nav.rs` (one driver over `BotWorld`) |
 | `crates/client` | `vcod` | window, renderer, HUD, fx, audio, `console/`, `frontend/`, `play/` (join, input, prediction, events), `session.rs` (`Session::Cod1`, `Cod2`, `Cod4`, `Cod4Menu`; `cod2_client.rs`, `cod4_client.rs`), `probe.rs` (the headless probe client) |
@@ -244,7 +244,7 @@ the subsystem's doc before touching it.
 | Sound: alias lists, streamed files, `channels.def`, falloff, event and loop sounds, createfx sounds | `cod4-sound.md` |
 | Effects: `FxEffectDef`, impact table, event effects, looping and tag-riding effects, createfx, client bullets and `whizby` | `cod4-effects.md` |
 | The watched and played view: clock (`CL_AdjustTimeDelta`), lerp, teleport cuts, view weapon, prediction (`play::cod4_predict`), hardpoint jets and helicopter | `cod4-client-view.md` |
-| gsc: dialect over CoD2's, builtin tables, configstring slots, callbacks, connect, menus, loadout and spawn, server commands and squash, follow, hardpoints, script traces | `cod4-gsc.md` |
+| gsc: dialect over CoD2's, builtin tables, configstring slots, callbacks, connect, menus, loadout and spawn, server commands and squash, follow, hardpoints, script traces, launched parts on the client | `cod4-gsc.md` |
 | Map cycle (`map`, `fast_restart`, `map_rotate`), the client's map change, votes, the menu answers' one-packet rule | `cod4-map-cycle.md` |
 | Front end: `ui_mp` main menu, menu stack, profiles, Create a Class and its stat commands, Start New Server, Mods, menu sounds and music | `cod4-front-end.md` |
 | Voice chat | `cod4-voice.md` |

@@ -1911,6 +1911,10 @@ impl Cod4Client {
                 self.vehicles.wash
             ));
         }
+        let (parts, flying) = self.session.physics.counts();
+        if parts > 0 {
+            lines.push(format!("cod4 physics: launched {parts}  flying {flying}"));
+        }
         lines
     }
 }
