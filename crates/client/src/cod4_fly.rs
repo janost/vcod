@@ -834,7 +834,7 @@ fn entity_models(
             .models
             .get("projectileModel")
             .map(|&id| model_name(a, id));
-        let view = view_def(a, def, zones, &mut clips);
+        let view = view_def(m, a, def, zones, &mut clips);
         let gun_anims = (i32_at(&def.raw, WEAP_CLASS) == WEAPCLASS_TURRET)
             .then(|| {
                 let mut anim = |n: usize| {
@@ -860,38 +860,43 @@ fn entity_models(
         weapons
             .values()
             .flat_map(|w| {
-                let (hands, knife) = w
-                    .view
-                    .as_ref()
-                    .map_or((None, None), |v| (v.hands.clone(), v.knife.clone()));
-                [w.world.clone(), w.projectile.clone(), hands, knife]
+                let v = w.view.as_ref();
+                let part = |f: fn(&crate::cod4_viewmodel::ViewDef) -> &Option<String>| {
+                    v.and_then(|v| f(v).clone())
+                };
+                [
+                    w.world.clone(),
+                    w.projectile.clone(),
+                    part(|v| &v.hands),
+                    part(|v| &v.knife),
+                    part(|v| &v.rocket),
+                ]
             })
             .flatten(),
     );
-    // Each view gun under its `hideTags`, keyed by `ViewDef::gun`.
+    // Each view gun under its `hideTags`, keyed by `ViewGun::key`; a camo
+    // that swaps slot 0's materials draws slot 0's.
     for v in weapons.values().filter_map(|w| w.view.as_ref()) {
-        if models.contains_key(&v.gun) {
-            continue;
-        }
-        let found = zones.iter().find_map(|a| {
-            let x = a.xmodels.iter().find(|x| x.name == v.gun_model)?;
-            Some((*a, x))
-        });
-        let Some((a, x)) = found else {
-            log::debug!("cod4: no zone holds xmodel {}", v.gun_model);
-            continue;
-        };
-        let hide = vcod_cod4::anim::hide_part_bits(a, x, &v.hide_tags);
-        let skinned = vcod_cod4::anim::model_hiding(a, x, hide, |id| {
-            let i = add_whole_material(m, zones, a, id) as usize;
-            m.materials[i].name.clone()
-        });
-        match skinned {
-            Ok(Some(model)) => {
-                models.insert(v.gun.clone(), model);
+        for g in v.guns.iter().flatten().filter(|g| g.swap.is_empty()) {
+            if models.contains_key(&g.key) {
+                continue;
             }
-            Ok(None) => {}
-            Err(e) => log::warn!("cod4: xmodel {}: {e:#}", v.gun_model),
+            let Some((a, x)) = whole_xmodel(zones, &g.model) else {
+                log::debug!("cod4: no zone holds xmodel {}", g.model);
+                continue;
+            };
+            let hide = vcod_cod4::anim::hide_part_bits(a, x, &v.hide_tags);
+            let skinned = vcod_cod4::anim::model_hiding(a, x, hide, |id| {
+                let i = add_whole_material(m, zones, a, id) as usize;
+                m.materials[i].name.clone()
+            });
+            match skinned {
+                Ok(Some(model)) => {
+                    models.insert(g.key.clone(), model);
+                }
+                Ok(None) => {}
+                Err(e) => log::warn!("cod4: xmodel {}: {e:#}", g.model),
+            }
         }
     }
     for name in wanted {
@@ -975,35 +980,124 @@ fn decode_clip(
         .clone()
 }
 
+/// The first of `zones` holding xmodel `name` whole, not as a stub.
+fn whole_xmodel<'a>(
+    zones: &[&'a Assets],
+    name: &str,
+) -> Option<(&'a Assets, &'a vcod_cod4::assets::model::XModel)> {
+    zones.iter().find_map(|a| {
+        let x = a.xmodels.iter().find(|x| x.name == name)?;
+        Some((*a, x))
+    })
+}
+
+/// The material swap that makes `base` draw as `camo` (each differing
+/// material's map name, slot 0's then the camo's), the camo's materials
+/// joining the map's; `None` unless both are whole with the same bones
+/// and the same vertices, weights and triangles surface by surface, or when one of
+/// `base`'s materials would take two names.
+fn camo_swap(
+    m: &mut Map,
+    zones: &[&Assets],
+    base: &str,
+    camo: &str,
+) -> Option<Vec<(String, String)>> {
+    let (ab, xb) = whole_xmodel(zones, base)?;
+    let (ac, xc) = whole_xmodel(zones, camo)?;
+    let bones = |a: &Assets, x: &vcod_cod4::assets::model::XModel| -> Vec<String> {
+        let s = |n: &u16| vcod_cod4::anim::script_string(a, *n).to_string();
+        x.bone_names.iter().map(s).collect()
+    };
+    let same_mesh = |p: &vcod_cod4::assets::model::XSurface,
+                     q: &vcod_cod4::assets::model::XSurface| {
+        p.verts.is_some()
+            && (&p.verts, &p.verts_blend, &p.tris) == (&q.verts, &q.verts_blend, &q.tris)
+    };
+    let surfaces = xb.surfaces.len() == xc.surfaces.len()
+        && xb
+            .surfaces
+            .iter()
+            .zip(&xc.surfaces)
+            .all(|(p, q)| same_mesh(p, q));
+    if !surfaces || xb.materials.len() != xc.materials.len() || bones(ab, xb) != bones(ac, xc) {
+        return None;
+    }
+    let mut swap: Vec<(String, String)> = Vec::new();
+    for (b, c) in xb.materials.iter().zip(&xc.materials) {
+        let (Some(b), Some(c)) = (b, c) else {
+            continue;
+        };
+        let mut map_name = |a: &Assets, id| {
+            let i = add_whole_material(m, zones, a, id) as usize;
+            m.materials[i].name.clone()
+        };
+        let from = map_name(ab, *b);
+        let to = map_name(ac, *c);
+        match swap.iter().find(|(f, _)| *f == from) {
+            Some((_, t)) if *t != to => return None,
+            Some(_) => {}
+            None if from != to => swap.push((from, to)),
+            None => {}
+        }
+    }
+    Some(swap)
+}
+
 /// `def`'s view weapon out of `a` (the zone holding the weapon): its
-/// `gunModel[0]` and `handModel` names and its 33 view clips out of
-/// `zones` (`CG_RegisterWeapon`, `CG_CreateWeaponViewModelXAnim`); `None`
-/// without a gun, hands or idle.
+/// `gunModel[]`, `handModel`, `knifeModel` and `rocketModel` names and its
+/// 33 view clips out of `zones` (`CG_RegisterWeapon`,
+/// `CG_CreateWeaponViewModelXAnim`); `None` without a gun, hands or idle.
+/// A camo slot sharing slot 0's mesh swaps its materials in
+/// ([`camo_swap`]); any other is its own model.
 fn view_def(
+    m: &mut Map,
     a: &Assets,
     def: &vcod_cod4::assets::weapon::Weapon,
     zones: &[&Assets],
     clips: &mut Clips,
 ) -> Option<Arc<crate::cod4_viewmodel::ViewDef>> {
+    use crate::cod4_viewmodel::ViewGun;
     let name = |id: vcod_cod4::assets::Id<vcod_cod4::assets::model::XModel>| {
         stub_name(&a.xmodels[id.index()].name).to_string()
     };
-    let gun = name(
-        def.model_lists
-            .get("gunModel")?
-            .first()
-            .copied()
-            .flatten()?,
-    );
+    let slots: Vec<Option<String>> = def
+        .model_lists
+        .get("gunModel")?
+        .iter()
+        .map(|id| id.map(name))
+        .collect();
+    let base = slots.first().cloned().flatten()?;
     let hands = def.models.get("handModel").map(|&id| name(id));
     let knife = def.models.get("knifeModel").map(|&id| name(id));
+    let rocket = def.models.get("rocketModel").map(|&id| name(id));
     let hide_tags = def.hide_tags(a);
-    let gun_model = gun.clone();
     // A gun that hides parts is its own model in the session's map.
-    let gun = match hide_tags.as_slice() {
-        [] => gun,
-        t => format!("{gun}#{}", t.join(",")),
+    let key_of = |model: &str| match hide_tags.as_slice() {
+        [] => model.to_string(),
+        t => format!("{model}#{}", t.join(",")),
     };
+    let base_key = key_of(&base);
+    let guns = slots
+        .iter()
+        .map(|slot| {
+            let model = slot.clone()?;
+            let swap = (model != base)
+                .then(|| camo_swap(m, zones, &base, &model))
+                .flatten();
+            Some(match swap {
+                Some(swap) => ViewGun {
+                    key: base_key.clone(),
+                    model,
+                    swap,
+                },
+                None => ViewGun {
+                    key: key_of(&model),
+                    model,
+                    swap: Vec::new(),
+                },
+            })
+        })
+        .collect();
     let anim_name = |n: usize| {
         def.xanims
             .get(n)
@@ -1020,11 +1114,11 @@ fn view_def(
         })
         .collect();
     Some(Arc::new(crate::cod4_viewmodel::ViewDef {
-        gun,
-        gun_model,
+        guns,
         hide_tags,
         hands,
         knife,
+        rocket,
         anims,
         clip_name: def.strings.get("clipName").cloned().unwrap_or_default(),
         numbers: crate::cod4_viewmodel::ViewNumbers::from_raw(&def.raw),
