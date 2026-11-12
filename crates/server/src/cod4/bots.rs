@@ -1080,7 +1080,9 @@ mod tests {
     /// on mp_crash `war` a bot drops its gun through the stock
     /// `dropWeaponForDeath`, another player stands over it looking down
     /// and holds use; he takes it, hands over the weapon in hand as a new
-    /// item, and the dropped one is gone.
+    /// item, and the dropped one is gone. Each gun keeps its camo: the item
+    /// sends `weapon + 128 * model` and the taker holds it on the dropper's
+    /// slot (cod4-client-view.md 4.7).
     #[test]
     fn cod4_use_key_swaps_a_held_gun_for_a_dropped_one() {
         let Some(install) = vcod_cod4::testing::cod4_install() else {
@@ -1123,6 +1125,11 @@ mod tests {
             tick(&mut sv);
         }
         let level = sv.game.level.as_mut().unwrap();
+        let clients = &mut level.rt.host.cod4_mut().clients;
+        for (s, camo) in [(dropper, 3), (taker, 2)] {
+            let l = &mut clients[s].loadout;
+            l.weapon_models[l.weapon] = camo;
+        }
         level
             .start_player_script(
                 dropper,
@@ -1144,6 +1151,19 @@ mod tests {
             .find(|i| i.resting)
             .cloned();
         let item = item.expect("a dropped weapon at rest");
+        assert_eq!(item.model, 3);
+        let index = level
+            .item_entities()
+            .iter()
+            .find(|e| e.0[0] == item.id.0)
+            .map(|e| {
+                let f = vcod_cod4::net::delta::EntityState::table(3)
+                    .iter()
+                    .find(|f| f.name == "index")
+                    .unwrap();
+                e.0[f.word()]
+            });
+        assert_eq!(index, Some(item.weapon + 3 * 128));
         let ps = level.pm_state(taker).unwrap();
         assert!(!ps.has_weapon(item.weapon));
         let held = ps.weapon;
@@ -1176,13 +1196,18 @@ mod tests {
         let level = sv.game.level.as_mut().unwrap();
         let ps = level.pm_state(taker).unwrap();
         assert!(ps.has_weapon(item.weapon), "took {}", item.weapon);
-        let items = &level.rt.host.cod4().items;
+        let c4 = level.rt.host.cod4();
+        assert_eq!(
+            c4.clients[taker].loadout.weapon_models[item.weapon as usize],
+            3
+        );
+        let items = &c4.items;
         assert!(items.iter().all(|i| i.id != item.id), "the item is gone");
         assert!(
             items
                 .iter()
-                .any(|i| i.weapon == held && i.owner == taker as u32),
-            "handed {held} over: {items:?}"
+                .any(|i| i.weapon == held && i.model == 2 && i.owner == taker as u32),
+            "handed {held} over on its camo: {items:?}"
         );
         assert!(!ps.has_weapon(held));
     }

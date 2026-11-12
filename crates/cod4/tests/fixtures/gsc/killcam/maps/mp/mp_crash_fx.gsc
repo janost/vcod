@@ -6,7 +6,8 @@
 // fills it in two seconds, as `_gameobjects::useHoldThinkLoop` does.
 // `camo` gives the named weapon on its `gunModel[3]`, as a custom class's
 // camo does, and switches to it. `near` stands the player 64 units off
-// the named player, where the other's snapshots carry his body.
+// the named player, where the other's snapshots carry his body. `drop`
+// throws the named weapon down as an item.
 main()
 {
 	setDvar( "scr_game_allowkillcam", 1 );
@@ -44,4 +45,9 @@ near( name )
 		if ( isPlayer( player ) && player.name == name )
 			self setOrigin( player.origin + ( 64, 0, 0 ) );
 	}
+}
+
+drop( name )
+{
+	self dropItem( name );
 }

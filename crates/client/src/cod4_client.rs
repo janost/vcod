@@ -1630,11 +1630,7 @@ impl Cod4Client {
         let Visual::Model(name) = &d.visual else {
             return None;
         };
-        Some(match name.split_once(':') {
-            Some(("weapon", w)) => self.weapons.get(w)?.world.clone()?,
-            Some(("projectile", w)) => self.weapons.get(w)?.projectile.clone()?,
-            _ => name.clone(),
-        })
+        crate::cod4_fly::visual_model(&self.weapons, name)
     }
 
     /// The xmodel `d` draws. A set of hidden parts draws the whole model's

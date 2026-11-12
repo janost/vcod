@@ -2825,9 +2825,17 @@ fn visual(gs: &Gamestate, snap: &Snapshot, weapons: &[String], e: &EntityState) 
             };
             Visual::Model(model_cs(gs, model)?)
         }
-        // An item's `index` is its weapon (the kill capture's dropped M16,
-        // cod4-netfields.md 10); the client draws the weapon's world model.
-        ET_ITEM => Visual::Model(format!("weapon:{}", weapon(index)?)),
+        // An item's `index` is its weapon plus 128 times its camo (the kill
+        // capture's dropped M16, cod4-netfields.md 10); the client draws
+        // `worldModel[index >> 7]` (`iw3mp.exe` 0x4328bf..0x4328e7,
+        // cod4-client-view.md 4.7), keyed `weapon:<name>#<slot>` past slot 0.
+        ET_ITEM => {
+            let name = weapon(index & 0x7f)?;
+            Visual::Model(match index >> 7 {
+                0 => format!("weapon:{name}"),
+                slot => format!("weapon:{name}#{slot}"),
+            })
+        }
         ET_MISSILE => Visual::Model(format!("projectile:{}", weapon(ent_u32(e, "weapon"))?)),
         _ => return None,
     })
@@ -9367,6 +9375,62 @@ pub(crate) mod tests {
             .find(|(m, _)| Some(m) == camo.as_ref())
             .expect("the rig holds the camo's world model");
         let mats = &gun.lods[0].materials;
+        assert!(
+            mats.iter().any(|m| m == "mc/mtl_weapon_ak47_bwmrpt"),
+            "{mats:?}"
+        );
+        assert!(!mats.iter().any(|m| m == "mc/mtl_weapon_ak47"), "{mats:?}");
+    }
+
+    /// A dropped gun draws its camo, live on vcod-server: the enemy takes
+    /// `ak47_mp` on slot 3 (`camo`), stands beside us and drops it. The
+    /// item's `index` is the weapon plus 384, it draws as
+    /// `worldModel[3]`, and that model's materials are the Blue Tiger's
+    /// (cod4-client-view.md 4.7).
+    #[test]
+    fn cod4_live_a_dropped_camo_gun_draws_its_camo() {
+        const GSC: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../cod4/tests/fixtures/gsc/killcam"
+        );
+        let root = vcod_cod4::testing::cod4_install().map(|i| i.root().to_path_buf());
+        let mut bodies = None;
+        let mut asked = 0;
+        let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(GSC), move |f| {
+            if !f.both || f.level < 3000 {
+                return None;
+            }
+            if bodies.is_none() {
+                let ents = f.s.entity_assets();
+                bodies =
+                    Some(crate::cod4_fly::load_bodies(root.as_ref()?, "mp_crash", &ents).unwrap());
+                return None;
+            }
+            let script = [("camo", "ak47_mp"), ("near", "joiner"), ("drop", "ak47_mp")];
+            if let Some((name, arg)) = script.get(asked) {
+                f.tx.send((1, "maps/mp/mp_crash_fx", *name, *arg)).ok();
+                asked += 1;
+                return None;
+            }
+            let snap = f.s.client().snapshots.last()?;
+            let e = snap.entities.iter().find(|e| e.etype() == ET_ITEM)?;
+            let (index, number) = (ent_u32(e, "index"), e.number());
+            let scene = f.s.scene()?;
+            let d = scene.entities.iter().find(|d| d.number == number)?;
+            Some((bodies.take().unwrap(), index, d.visual.clone()))
+        });
+        let Some(out) = out else {
+            return;
+        };
+        let ((models, weapons, _), index, visual) = out.expect("never saw the dropped AK-47");
+        assert_eq!(index >> 7, 3, "index {index}");
+        let Visual::Model(key) = visual else {
+            panic!("the item draws {visual:?}");
+        };
+        assert_eq!(key, "weapon:ak47_mp#3");
+        let model = crate::cod4_fly::visual_model(&weapons, &key);
+        assert_eq!(model.as_deref(), Some("weapon_ak47_mp_bwmrpt"));
+        let mats = &models[model.as_deref().unwrap()].lods[0].materials;
         assert!(
             mats.iter().any(|m| m == "mc/mtl_weapon_ak47_bwmrpt"),
             "{mats:?}"
