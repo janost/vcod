@@ -395,8 +395,14 @@ mod tests {
             Some("Press USE [&&1] to climb the rope.")
         );
         let dir = std::path::PathBuf::from(std::env::var_os("COD2_DIR").unwrap()).join("main");
+        // The game's search opens every iwd; `cod2_fs` only the stock ones,
+        // so compare the stock subset (an install may hold map packs).
         let opened = open_game_fs(Game::Cod2, &dir, None).unwrap();
-        assert_eq!(opened.paks().count(), fs.paks().count());
+        let stock = opened
+            .paks()
+            .filter(|p| crate::pk3::is_stock_iwd(&p.qualified_name()))
+            .count();
+        assert_eq!(stock, fs.paks().count());
     }
 
     #[test]
