@@ -336,11 +336,10 @@ impl Combat {
     /// seeds both off one wall-clock read (cod2-combat.md 9.6, 9.7), so a
     /// test replaying a capture pins the seed that fits it.
     pub fn pin_rand(&mut self, seed: u32, skip: usize) {
-        let mut g = vcod_common::rng::GlibcRand::new(seed);
+        self.rand.reseed(seed);
         for _ in 0..skip {
-            g.next_u31();
+            self.rand.rand();
         }
-        *self.rand.0.borrow_mut() = RandState::Glibc(g);
         self.holdrand = vcod_common::rng::HoldRand(seed);
     }
 
@@ -400,33 +399,41 @@ impl Combat {
     }
 }
 
-/// The game module's one `rand()` stream: a seeded xorshift, or glibc's
-/// own sequence once a test pins it ([`Combat::pin_rand`]). Behind a cell
-/// so a draw can sit beside a borrow of the weapon table.
+/// The game module's one `rand()` stream: glibc's, as `cod2_lnxded` links
+/// it, which `G_InitGame` seeds each level ([`GameRand::reseed`],
+/// cod2-combat.md 9.6). Unseeded it is glibc's `srand(1)`. Behind a cell so
+/// a draw can sit beside a borrow of the weapon table.
 #[derive(Debug)]
-pub struct GameRand(std::cell::RefCell<RandState>);
-
-#[derive(Debug)]
-enum RandState {
-    Xorshift(u64),
-    Glibc(vcod_common::rng::GlibcRand),
+pub struct GameRand {
+    g: std::cell::RefCell<vcod_common::rng::GlibcRand>,
+    drawn: std::cell::Cell<u64>,
 }
 
 impl Default for GameRand {
     fn default() -> Self {
-        GameRand(std::cell::RefCell::new(RandState::Xorshift(
-            0x2545_f491_4f6c_dd1d,
-        )))
+        GameRand {
+            g: std::cell::RefCell::new(vcod_common::rng::GlibcRand::new(1)),
+            drawn: std::cell::Cell::new(0),
+        }
     }
 }
 
 impl GameRand {
+    /// `srand(seed)`.
+    pub fn reseed(&self, seed: u32) {
+        *self.g.borrow_mut() = vcod_common::rng::GlibcRand::new(seed);
+    }
+
+    /// How many draws the stream has made, reseeds included: what a gate
+    /// counts against a retail trace.
+    pub fn drawn(&self) -> u64 {
+        self.drawn.get()
+    }
+
     /// `rand()`: 31 bits.
     pub fn rand(&self) -> u32 {
-        match &mut *self.0.borrow_mut() {
-            RandState::Xorshift(s) => (vcod_common::rng::xorshift(s) >> 33) as u32,
-            RandState::Glibc(g) => g.next_u31(),
-        }
+        self.drawn.set(self.drawn.get() + 1);
+        self.g.borrow_mut().next_u31()
     }
 
     /// `G_random`: `rand() / 2^31` on the stack.
@@ -2484,6 +2491,7 @@ impl Cod2Level {
                 table,
                 player_anim_type: held.map_or(0, |w| w.player_anim_type),
                 weapon_class: held.map_or(0, |w| w.weap_class),
+                pick: None,
             };
             super::cod2::death_event(&mut p.ps, &input, |_| k);
         }

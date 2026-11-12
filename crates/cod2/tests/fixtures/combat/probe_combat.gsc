@@ -17,6 +17,8 @@
 // 99 and the health set back to 100 first, so nobody dies, unless
 // probe_mortal is 1, when the stock damage runs and a death logs and
 // raises the obituary.
+// With probe_noknock 1 the damage carries DFLAGS_NO_KNOCKBACK (4): the
+// target stands where it spawned.
 //
 // With probe_fan 1 each damage callback first logs a fan of bulletTraces
 // across the struck body: from 40 units in front (+y) to 40 behind, on a
@@ -187,6 +189,8 @@ playerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vP
 		if(iDamage > 99)
 			iDamage = 99;
 	}
+	if(getCvarInt("probe_noknock") && !(iDFlags & 4))
+		iDFlags += 4;
 	self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc, timeOffset);
 }
 

@@ -331,6 +331,21 @@ fn script(name: &str) -> Option<Vec<Phase>> {
             ph(1000, ADS, 0, 0),
             idle(500),
         ],
+        // Bursts at the hip (cod2-combat.md 9.6): standing, after a jump
+        // (the anim script's jump and land draws), backing off, crouched.
+        "spray" => vec![
+            idle(1500),
+            ph(500, ATTACK, 0, 0),
+            idle(1000),
+            ph(100, JUMP, 0, 0),
+            idle(1200),
+            ph(300, ATTACK, B, 0),
+            idle(1000),
+            ph(600, CROUCH, 0, 0),
+            ph(400, CROUCH | ATTACK, 0, 0),
+            ph(1000, CROUCH, 0, 0),
+            idle(1000),
+        ],
         // A scoped rifle (`probe_weapon kar98k_sniper_mp`) holding its
         // breath: a hold let go early, the timer back to 0, a hold broken
         // by a shot and taken up again, and a hold past the gasp.

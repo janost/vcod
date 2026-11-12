@@ -582,6 +582,7 @@ pub fn anim_input<'t>(
         table,
         player_anim_type: w.map_or(0, |w| w.player_anim_type),
         weapon_class: w.map_or(0, |w| w.weap_class),
+        pick: None,
     }
 }
 

@@ -1,10 +1,10 @@
 //! The one pseudo-random step the server draws everything from: the anim
 //! clause a death or a pain picks, `randomFloat`, the bullet spread and the
-//! connect challenge. Retail's own generator is glibc's `rand()`, which
-//! nothing here has to reproduce -- only the shape of the draw and its
-//! reproducibility from a seed. [`GlibcRand`] is that generator, for a test
-//! that replays a capture's draws from the seed recovered off it;
-//! [`HoldRand`] is the second stream CoD2's game keeps.
+//! connect challenge. Retail's own generator is glibc's `rand()`:
+//! [`GlibcRand`] is that generator, which the CoD2 and CoD4 game modules
+//! draw from as retail's do, and a CoD1 test replays a capture's draws on
+//! from the seed recovered off it. [`HoldRand`] is the second stream
+//! CoD2's game keeps.
 
 /// One xorshift64* step: advances `state` and returns the scrambled output.
 /// A zero state is the degenerate one xorshift never leaves, so a caller
