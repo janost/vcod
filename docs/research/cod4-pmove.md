@@ -670,7 +670,10 @@ cod4-server-frame.md 2). What the server adds around the step:
   the side, stopped 15.4 short of its centre in y, on its round side,
   where a box would have stopped it 30.1 short. VERIFIED live. vcod clips a client with
   `movetrace::clip_body_kept`, 1.1d's capsule arithmetic; its plain-float
-  twin gives the same rows. VERIFIED (the gate, 15.3). mp_crash's script
+  twin gives the same rows. VERIFIED (the gate, 15.3). The script's plain
+  traces and the missiles go through the same `Cod4Clip`, so they meet the
+  capsule too, as `SV_Trace` would reach the same arm. INFERRED; no
+  capture holds such a trace. mp_crash's script
   movers carry `solid` 0 (VERIFIED, the walk capture's entities); no
   capture walks into a brush entity yet.
 - `ClientImpacts` (`cod4_lnxded` 0x80a501a) runs after the link, per cmd:
