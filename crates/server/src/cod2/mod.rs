@@ -1416,7 +1416,8 @@ impl Cod2Server {
             www_base_url: self.game.cvars.get("sv_wwwBaseURL").to_string(),
             www_disconnected: self.game.cvars.get("sv_wwwDlDisconnected") != "0",
         };
-        let base = std::path::PathBuf::from(self.game.cvars.get("fs_basepath"));
+        let home = self.game.cvars.get("fs_homepath").to_string();
+        let base = self.game.cvars.get("fs_basepath").to_string();
         let max_rate = self.int("sv_maxRate");
         let Some(c) = self.core.clients[slot].as_ref() else {
             return Vec::new();
@@ -1476,10 +1477,7 @@ impl Cod2Server {
         if c.state != State::Zombie {
             let budget =
                 house::blocks_per_message(c.rates.send_rate(max_rate), c.rates.snapshot_msec);
-            let open = |name: &str| {
-                let rel = house::servable(name)?;
-                std::fs::read(base.join(rel)).ok()
-            };
+            let open = |name: &str| house::open_download(&home, &base, name);
             c.download
                 .write(&mut w, svs, budget, &dl_cvars, c.rates.wants_www, &open);
         }
