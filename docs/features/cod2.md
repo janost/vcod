@@ -218,13 +218,17 @@ retail captures in section 9):
   poses it for the trace, through the antilag (9.5).
 - The spread, the gun spring's kick and the anim picks draw from glibc's
   `rand()`, seeded each level as retail's `G_InitGame` seeds it, every
-  draw where retail makes it (9.6).
+  draw where retail makes it (9.6). The script's `randomInt`,
+  `randomIntRange`, `randomFloat` and `randomFloatRange` draw from the
+  second generator the rockets' wobble draws from, seeded alike (2.6.1).
 - Damage through the stock callbacks; death anims; corpses that fall,
   rest and slide on their death anim's root motion; the respawn.
 - Offhand frags and smoke, rockets that wobble off their line as
-  retail's do and their blasts, the melee's swing with retail's reach and
-  width, the script's `radiusDamage`, damage triggers, binoculars, the
-  sniper's breath hold.
+  retail's do (not under `setStableMissile`) and their blasts, which pass
+  the body or entity the rocket struck and stop at static models and
+  entities as retail's do, the melee's swing with retail's reach and
+  width, its corner traces, the script's `radiusDamage`, damage triggers,
+  binoculars, the sniper's breath hold.
 - The weapon a death drops, picked up by touch or swapped on the use key.
 - The killcam replays the killer's view out of the engine's frame
   archive and ends on a use press
@@ -314,8 +318,7 @@ Ranked by how much a player notices, worst first.
    ([cod2-demos.md](../research/cod2-demos.md) 7). Retail's front end has
    no demo list either.
 5. **Server odds and ends.** `give all` hands over every weapon the level
-   registered, not retail's slot rule. `setStableMissile` keeps no
-   rocket from wobbling. Downloads serve only `.iwd` files
+   registered, not retail's slot rule. Downloads serve only `.iwd` files
    under the game dir, where retail serves any file.
 
 Pending human checks: the in-game script menus have not been checked on

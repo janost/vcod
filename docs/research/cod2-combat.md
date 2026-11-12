@@ -569,9 +569,14 @@ lnxded 0x811fe90 (unnamed there; Mac 0x1c867e). VERIFIED:
   contact (`0.25 / -dot`, 0 when the dot is under 0.125).
 - A contact with `takedamage`, not the shooter: `G_Damage` with
   `Bullet_CalcDamageRange` (0x811fb7c: `damage` inside `maxDamageRange`,
-  `minDamage` past `minDamageRange`, a rounded lerp between) times the
-  leg's scale, the forward as direction, the contact as point,
-  `timeOffset` `level.time` less the lag time.
+  `minDamage` past `minDamageRange`, between them the fraction `t` stored
+  as a float into `(1 - t) * damage + t * minDamage` (0x8120e7e) on the
+  stack, truncated under the 0xc00 control word) times the leg's scale,
+  truncated again (0x81202ba), the forward as direction, the contact as
+  point, `timeOffset` `level.time` less the lag time. The range is the
+  contact's distance from the leg's start, its square stored as a float
+  before `sqrt` (0x8120ff6). VERIFIED, the disassembly; `hit-smg-far`'s
+  round at 10400 takes 15 where rounding gives 16 (9.6).
 - A client struck by a `dflags` 0x20 round, under `scr_friendlyfire` or
   not on the shooter's team, passes the round on through at half the
   scale (double 0.5 at 0x815edb8).
@@ -649,7 +654,15 @@ attachments assemble.
     `TR_STATIONARY`, `trTime` 0, `trDelta` 0;
   - the first wobble's time (`ent+0x1a8`, a float of ms):
     `destabilizeDistance / projectileSpeed` times 1000 (rodata 0x815ae70);
-  - the owner's `flags` 0x20000 (`setStableMissile`, 0x811225a) copied.
+  - the owner's `flags` 0x20000 copied (0x810eb54).
+- `Scr_SetStableMissile` (lnxded 0x811225a) sets the receiver's `flags`
+  (+0x174) bit 0x20000 when `Scr_GetInt(0)` is non-zero and clears it
+  otherwise; a receiver whose `s.eType` is not 1 (a player) is the error
+  `Type should be a player` (rodata 0x815b893). `ClientSpawn` (0x80f910e)
+  stores 0x1000 in `flags` (0x80f9202), so each spawn clears the bit.
+  VERIFIED, the disassembly. `fire_rocket` reads it once, so a rocket in
+  flight keeps the bit its shooter had at the fire. INFERRED, the one
+  read.
 - `G_RunMissile` (lnxded 0x810e0ce): a trace that runs clear with a
   non-zero `trDelta` sets `groundEntityNum` 1023, then a missile whose
   weapon is `weapType` 2 (projectile) and whose `flags` lack 0x20000
@@ -685,8 +698,13 @@ attachments assemble.
   - `eType` 0, `eFlags` toggled 2 then or-ed 0x20 (0x422 from 0x400);
   - the contact snapped toward `trBase` (`SnapVectorTowards` 0x811f9ca:
     floor where `trBase` is at or below, else ceil), `G_SetOrigin`
-    there (`trTime` 0), and `G_RadiusDamage` from it passing the struck
-    entity.
+    there (`trTime` 0), and `G_RadiusDamage` from it with the struck
+    entity as its seventh argument, `&g_entities[trace.entityNum]`, the
+    pointer the impact damage went to.
+- `G_RadiusDamage` (0x81022a0) skips the entity its seventh argument
+  names before any other test, so a body or entity a rocket strikes takes
+  the impact's damage and none of the blast. `G_ExplodeMissile` passes
+  the missile itself. VERIFIED, the decompile; `hit-rocket-body` (9.7).
 
 #### 2.6.1 `holdrand`
 
@@ -700,12 +718,22 @@ attachments assemble.
   the one seed, `Sys_MillisecondsRaw` (9.6). VERIFIED, the Mac decompile
   (0x1addca) and lnxded's call at 0x8109129.
 - `flrand` and `irand` draws in the game: the rocket's wobble, the
-  grenade's tumble, `randomFloat`, `randomFloatRange`, `randomInt`,
-  `randomIntRange` (0x8113ca4..0x8113da0), and the server's effects
+  grenade's tumble, the script's four builtins, and the server's effects
   code (0x8123854..0x8136d84), which also calls `Rand_Init` at 0x812af2d
   and 0x8136f6a. VERIFIED, the call sites. What runs that effects code
   on a dedicated server was not traced. In `hit-rocket` the rocket's
   thirty draws are the first since `G_InitGame`. VERIFIED (9.7).
+- The script's builtins (0x8113ca4..0x8113e14), VERIFIED, the
+  disassembly:
+  - `randomInt(n)`: `irand(0, n)`; `n` under 1 prints `RandomInt parm:
+    %d` and is the error `RandomInt parm must be positive integer.`;
+  - `randomFloat(f)`: `flrand(0, f)`, no test;
+  - `randomIntRange(lo, hi)`: `irand(lo, hi)`; `hi` not above `lo` is
+    the error `RandomIntRange range must be positive integer.`;
+  - `randomFloatRange(lo, hi)`: `flrand(lo, hi)`; `lo` at or above `hi`
+    is the error `Scr_RandomFloatRange range must be positive float.`
+  So a script's draws and a rocket's wobble take turns on the one
+  `holdrand`: 9.6's "scripts' own generator" at 0x817e338 is this one.
 - So the bullet spread, the gun spring and the melee's damage roll draw
   from `rand()`; a rocket's wobble does not. VERIFIED, the call sites.
 
@@ -1100,14 +1128,20 @@ vcod:
   - every entity in the box of `radius * sqrt 2` except the one to skip,
     with `takedamage`, within `radius` (a brush model by its bounds, else
     its origin), clients not under `setPlayerIgnoreRadiusDamage`, takes
-    `outer + (1 - d / r) * (inner - outer)` times `CanDamage`'s share,
-    rounded;
+    `(inner - outer) * (1 - d / r) + outer`, stored as a float, times
+    `CanDamage`'s share, truncated under the 0xc00 control word (0x810262d;
+    the tenth below at 0x810280d), `d` the squared length stored as a
+    float before `sqrt` (0x8102a12). VERIFIED, the disassembly;
+    `hit-rocket-body`'s shooter takes 105 where rounding gives 106 (9.7);
   - one `CanDamage` misses takes a tenth when a capsule trace (mask 0x811)
     to its box's centre is short and that centre is within a fifth of the
     radius;
   - `dflags` 1, hit location 0, the direction the victim's origin less the
     point, raised 24.
-- `CanDamage` (Mac 0x1c3f18, lnxded 0x8101ee6). VERIFIED: a client gets
+- `CanDamage` (Mac 0x1c3f18, lnxded 0x8101ee6). VERIFIED: each probe is
+  `G_LocationalTracePassed` (0x810a622, into `SV_TracePassed` 0x809dbbe
+  with the locational and static model flags set), so the world, the
+  static models and the entities under the mask stop it; a client gets
   five probes from the blast (mask 0x802891, passing the victim) to the
   middle of eye and feet and four points 15 either side across the line
   to the blast, half the eye height up and down. None clear is 0, one to
@@ -1126,7 +1160,10 @@ vcod:
   clear one. VERIFIED (Mac 0x1c45b8, 0x1c3f18; rodata 0x326570 sqrt 2,
   0x3262dc 0.2, 0x326388 0.1, 0x326470 24, 0x3264c4 15).
 
-vcod: `game::cod2_blast` holds the measure both walks share. The builtin
+vcod: `game::cod2_blast` holds the measure both walks share
+(`stored_length`, `blast_damage`). A missile's blast probes `CanDamage`
+through `Cod2Level::locational_trace` (the world, the static models, the
+entities); the builtin's probes still clip the world's collision alone. The builtin
 (`builtins::cod2::radius_damage`) walks the playing clients (their body as
 the last think or end frame left it) in slot order, then the entities
 with `takedamage` in the area tree's order. It starts each client's
@@ -1148,8 +1185,11 @@ cooked grenade's suicide (as a blast where its holder stands) and the
 falls. The melee is `Melee_Trace`'s five traces and `Weapon_Melee`'s
 event and roll (2.7, `fire_melee`). Rockets fly, wobble and strike as
 `fire_rocket` and `G_RunMissile` have them (2.6, `fire_rocket`,
-`wobble_rocket`, `rocket_impact`), the wobble off `Combat::holdrand`
-(2.6.1). Damage goes through the stock callbacks. A kill, the corpse,
+`wobble_rocket`, `rocket_impact`): the wobble off `holdrand`
+(`GameRand::flrand`, 2.6.1), none under `setStableMissile`
+(`FL_STABLE_MISSILE`, cleared at each spawn), and the blast passing the
+struck body or entity (`Struck`). The script's `random*` builtins draw
+from the same `holdrand` (`builtins::cod2`). Damage goes through the stock callbacks. A kill, the corpse,
 the obituary and the respawn are the script's.
 
 The temp entities (impacts, the obituary, every script one) are raised in
@@ -1173,13 +1213,10 @@ Open:
 - the binoculars' hold mode and `ps+0x128` test (1.8);
 - the weapon slots' alt-weapon bookkeeping (`ps+0x555`, header of
   `pmove/weapon.rs`);
-- `setStableMissile`'s flag, which keeps a rocket from wobbling (2.6);
-- the rocket blast passing the entity it struck (2.6);
-- the script's `randomInt` and `randomFloat` drawing from `holdrand`
-  (2.6.1);
 - the corpse's startsolid re-trace (6.2);
 - `g_maxDroppedWeapons`, the no-slot touch, the contents clear (6.3);
-- `radiusDamage`'s callback order (7);
+- `radiusDamage`'s callback order, and its `CanDamage` probes past the
+  static models and script models (7);
 - the look-at trace's smoke test (9.2);
 - the aim block's leftovers (9.6).
 
@@ -1624,11 +1661,11 @@ the x87 stack. VERIFIED, the disassembly of every function below.
   0x80938ad) and from 0x809267e (`G_ShutdownGame` then the init with
   restart 1, from `SV_MapRestart` 0x808be3e at 0x808bf7e), so a
   `fast_restart` reseeds too. VERIFIED, the calls.
-- `G_InitGame` hands the same seed to 0x80aaa76 right after `srand`: the
-  seed of the scripts' own generator at 0x817e338 (`* 0x343fd + 0x269ec3`,
-  `>> 17`), which `randomInt` (0x8113ca4 to 0x80aaada) and `randomFloat`
-  (0x8113cfe to 0x80aaa84) draw from. VERIFIED, the disassembly. So a
-  script's draws never move the game's stream.
+- `G_InitGame` hands the same seed to `Rand_Init` (0x80aaa76) right after
+  `srand`: `holdrand` at 0x817e338 (2.6.1), which `randomInt` (0x8113ca4
+  to 0x80aaada) and `randomFloat` (0x8113cfe to 0x80aaa84) draw from
+  beside the rocket's wobble. VERIFIED, the disassembly. So a script's
+  draws never move glibc's stream, but they do move a rocket's wobble.
 - `SV_SpawnServer` seeds `srand(Sys_MillisecondsRaw())` itself (0x80936ac)
   and draws `checksumFeed` off it (`rand() << 16 ^ rand()` xor
   `Sys_Milliseconds()`, 0x80936b1, 0x80936bb) before the game's init
@@ -1705,11 +1742,20 @@ client's packets put them right. INFERRED. Open:
   the client's);
 - the shellshock scale on the sway;
 - the loose file's draw and the test clients' (0x809676c), which vcod does
-  not make, and the sites above no capture has met;
-- `hit-smg-far`'s and `hit-turret`'s seeds: their rounds mostly strike
-  the world, whose impact events carry whole units, too coarse at 1340
-  units for the search (`GAPS`, "9.6 a seed not recovered"). Their
-  counts move with the replay's unseeded stream (glibc's `srand(1)`).
+  not make, and the sites above no capture has met.
+
+`hit-smg-far` and `hit-turret`, first captured untraced, had rounds that
+mostly strike the world, whose impact events carry whole units, too
+coarse at 1340 units for the seed search: 45 and 326 rows off retail
+under the unseeded stream. Both are retaken with the trace (recipes in
+their headers): `G_InitGame`'s seed is 3506044450 and 3506025739, and the
+gate pins it and the draws before its start off the trace. Both replay
+with no row off retail, every draw in retail's frame. VERIFIED, the gate.
+The last `hit-smg-far` row was the range's damage, 16 where retail's
+truncation gives 15 (2.4). The old `hit-turret`'s rounds struck the
+corpse from a second after the death and knocked it along
+(cod2-turrets.md 11); the retake's pass it as vcod's do, and its one
+later round on the corpse (12650) strikes where retail's does.
 
 ### 9.7 The rocket and the melee
 
@@ -1757,3 +1803,56 @@ target left before the swings.
   rolls come out right only from the pinned glibc stream. No capture has
   a swing meet the world or an entity (`EV_MELEE_MISS`), or a corner
   trace make the contact.
+
+The captures below are traced (`RAND_TRACE=1`) and the recipes head each
+file.
+
+- `hit-rocket-rand`: `hit-rocket`'s script with `probe_rand 3` and
+  `probe_noknock 1`. The shooter's spawn logs three rounds of
+  `randomInt(32768)`, `randomIntRange(-500, 500)`, `randomFloat(1000)`
+  and `randomFloatRange(-1, 1)`; all twelve values are `irand` and
+  `flrand` off `holdrand` seeded with `G_InitGame`'s `srand` seed, and
+  the rocket's first wobble draws the thirteenth. VERIFIED, the gate: the
+  values print alike and every wobble's `trDelta` matches to the bit. So
+  the script's builtins and the rocket share `holdrand` (2.6.1).
+- `hit-rocket-stable`: the same with `probe_stable 1`, the spawn calling
+  `setStableMissile(1)`. The rocket flies its whole flight on its launch
+  `trDelta` and `trTime`; no wobble. VERIFIED, the capture and the gate.
+- `hit-rocket-cover`: a rocket aimed at a target 400 units off strikes
+  mp_toujane's `vehicle_panzer_ii_static` (a `misc_model` at 77 1060 -6)
+  about 155 units from the target, `surfType` 13, `EV_ROCKET_EXPLODE`. The
+  target takes nothing: every `CanDamage` probe meets the static model.
+  VERIFIED, the capture; vcod's probes clipped only the world and dealt
+  316 before they went through `locational_trace` (7).
+- `hit-rocket-body`: a rocket at the target 223 units off (`hit-smg`'s
+  spots, `probe_noknock 1`). The target takes `MOD_PROJECTILE` 1000 with
+  hit location `none`, the direction the rocket's `trDelta` as it is
+  (-186, -1984, -159), and no splash; the shooter, 225 units from the
+  blast, takes `MOD_PROJECTILE_SPLASH` 105 with `dflags` 1. VERIFIED, the
+  capture. So the blast passes the struck body (2.6) and truncates (7).
+- `hit-melee`: a kar98k shooter 50 units from the target (`probe_noknock
+  1`) swings with the view turned 10, 14, 18, 22, -14, -18 and -22
+  degrees off it, then at the floor (turned 90, pitched 60 down), then at
+  a `script_model` of `xmodel/crate01` (`probe_model`) 36 units behind.
+  Six of the seven body swings land, and five of those through a corner
+  trace: the contact sits off the view's line (the swing at 14 meets
+  `torso_upper` 0.97 along x where the forward's x is 0.90). The 22 swing
+  meets nothing. The floor raises `EV_MELEE_MISS` with `otherEntityNum`
+  1022, the crate `EV_MELEE_MISS` with its number (619); neither takes
+  damage or draws `rand()`. VERIFIED, the capture and the gate: each
+  swing's event, hit location, damage and roll as retail's.
+
+Left in the gate's `GAPS`:
+
+- "9.7 the melee's contact depth on a still body": six of the twelve
+  body contacts (`hit-melee` four, `hit-rocket-rand` two) sit 0.03 to
+  0.16 units deeper or shallower than retail's along the swing's own
+  line, and one such contact's normal gives another `eventParm`. The
+  legs and torso anims, the eye and the forward match retail's to the
+  printed digit, and the other six contacts match. VERIFIED, the gate.
+  The struck body's bones are posed a little off; why is not known.
+- "9.7 the look-at flag on a turned body": in `hit-melee` the target's
+  `pm_flags` 0x200000 (its look-at trace meeting the shooter, 9.2) is
+  set one snapshot where retail's is clear and clear one where retail's
+  is set, both while the shooter's view is turned off its body. INFERRED:
+  the same pose difference, on the shooter.
