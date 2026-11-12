@@ -218,8 +218,10 @@ retail captures in section 9):
   poses it for the trace, through the antilag (9.5).
 - Damage through the stock callbacks; death anims; corpses that fall,
   rest and slide on their death anim's root motion; the respawn.
-- Offhand frags and smoke, rockets and their blasts, the script's
-  `radiusDamage`, damage triggers, binoculars, the sniper's breath hold.
+- Offhand frags and smoke, rockets that wobble off their line as
+  retail's do and their blasts, the melee's swing with retail's reach and
+  width, the script's `radiusDamage`, damage triggers, binoculars, the
+  sniper's breath hold.
 - The weapon a death drops, picked up by touch or swapped on the use key.
 - The killcam replays the killer's view out of the engine's frame
   archive and ends on a use press
@@ -302,22 +304,19 @@ Ranked by how much a player notices, worst first.
    angles use vcod's own random draws, so rounds do not land where
    retail's would for the same cmds
    ([cod2-combat.md](../research/cod2-combat.md) 9.3).
-4. **Rockets fly true.** `fire_rocket`'s destabilization is not modelled,
-   so vcod's bazookas are more accurate than they have any right to be.
-   `Weapon_Melee`'s hit triggers are not either; the melee's 64-unit
-   reach is inferred (cod2-combat.md 8).
-5. **PunkBuster and CD key checks.** vcod runs no PunkBuster. vcod-server
+4. **PunkBuster and CD key checks.** vcod runs no PunkBuster. vcod-server
    never asks the authorize server: an off-LAN client gets its challenge
    at once and its IP stands in for its ban guid. It does not send the
    master the status retail sends every 10 minutes. The client reads no
    CD key from the registry; set `VCOD_CDKEY`
    ([usage.md](../usage.md), "CD keys").
-6. **Demo details.** `timedemo` writes no `demos/timedemo_*.csv`; a demo
+5. **Demo details.** `timedemo` writes no `demos/timedemo_*.csv`; a demo
    draws no `EV_STEP_VIEW` smoothing
    ([cod2-demos.md](../research/cod2-demos.md) 7). Retail's front end has
    no demo list either.
-7. **Server odds and ends.** `give all` hands over every weapon the level
-   registered, not retail's slot rule. Downloads serve only `.iwd` files
+6. **Server odds and ends.** `give all` hands over every weapon the level
+   registered, not retail's slot rule. `setStableMissile` keeps no
+   rocket from wobbling. Downloads serve only `.iwd` files
    under the game dir, where retail serves any file.
 
 Pending human checks: the in-game script menus have not been checked on
