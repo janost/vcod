@@ -2,7 +2,7 @@
 //! (`GScr_GetStat` 0x80c55f6, `GScr_SetStat` 0x80c5490; cod4-gsc.md, "The
 //! stats, the loadout, the perks"). Needs `COD4_DIR`.
 
-use super::vote_tests::two_playing;
+use super::vote_tests::{run_ms, two_playing, two_playing_with};
 use super::*;
 use vcod_gsc::{EntId, ErrorKind, Target, Value};
 
@@ -97,4 +97,53 @@ fn cod4_set_stat_refuses_under_developer_script() {
         call(&mut sv, "getstat", p0, &[Value::Int(2317)]),
         Ok(Value::Int(5))
     );
+}
+
+/// A ranked match (`sv_pure 1`): 300 XP off a fresh profile's 0 carries
+/// the player past rank 3's 270 (`mp/ranktable.csv`), whose `feature_cac`
+/// `_rank.gsc`'s `unlockFeature` stores as stat 260 = 2, the stat the main
+/// menu's Create a Class row reads. Each write reaches the client as `N`.
+#[test]
+fn cod4_ranked_xp_unlocks_create_a_class() {
+    let Some((mut sv, mut probes, mut now)) = two_playing_with(&[("sv_pure", "1")]) else {
+        return;
+    };
+    let p0 = sv.game.level.as_ref().unwrap().rt.client_entity(0).unwrap();
+    let rt = &mut sv.game.level.as_mut().unwrap().rt;
+    rt.start_script_thread_for_test("maps/mp/gametypes/_rank", "giveRankXP", Some(p0), |cx| {
+        vec![Value::String(cx.intern_exact("kill")), Value::Int(300)]
+    });
+    run_ms(&mut sv, &mut probes, &mut now, 500);
+    let stats = &sv.game.level.as_ref().unwrap().rt.host.cod4().stats[0];
+    let at = |i: u16| stats.get(i).unwrap_or(0);
+    // rankxp, rank, minxp, maxxp; 252 the new rank's index; 260 the feature.
+    assert_eq!(
+        [at(2301), at(2350), at(2351), at(2352), at(252), at(260)],
+        [300, 3, 270, 480, 3, 2]
+    );
+    let seen = probes[0].server_commands();
+    for line in ["N 2301 300", "N 260 2"] {
+        assert!(seen.iter().any(|c| c == line), "{line}: {seen:?}");
+    }
+}
+
+/// A `fast_restart` keeps what the scripts' `setStat`s wrote (retail's
+/// block lives in the client, `SV_SetClientStat`): the restarted level's
+/// `_rank.gsc` reads the earned XP back, not the join's block.
+#[test]
+fn cod4_fast_restart_keeps_the_scripts_stats() {
+    let Some((mut sv, mut probes, mut now)) = two_playing_with(&[("sv_pure", "1")]) else {
+        return;
+    };
+    let p0 = sv.game.level.as_ref().unwrap().rt.client_entity(0).unwrap();
+    let rt = &mut sv.game.level.as_mut().unwrap().rt;
+    rt.start_script_thread_for_test("maps/mp/gametypes/_rank", "giveRankXP", Some(p0), |cx| {
+        vec![Value::String(cx.intern_exact("kill")), Value::Int(300)]
+    });
+    run_ms(&mut sv, &mut probes, &mut now, 500);
+    sv.map_restart(true).unwrap();
+    run_ms(&mut sv, &mut probes, &mut now, 500);
+    let stats = &sv.game.level.as_ref().unwrap().rt.host.cod4().stats[0];
+    let at = |i: u16| stats.get(i).unwrap_or(0);
+    assert_eq!([at(2301), at(2350), at(260)], [300, 3, 2]);
 }
