@@ -5500,6 +5500,234 @@ pub(crate) mod tests {
         assert_eq!(a, b);
     }
 
+    /// A demo file as `iw3mp.exe` writes one (cod4-demos.md 2, 3, 8),
+    /// byte by byte off the binary's writes and apart from
+    /// [`vcod_cod4::net::demo::Recording`].
+    #[derive(Default)]
+    struct RetailDemo(Vec<u8>);
+
+    impl RetailDemo {
+        /// `CL_WriteDemoMessage` (0x468850): byte 0, the sequence, the
+        /// length, the bytes.
+        fn message(&mut self, sequence: i32, msg: &[u8]) {
+            self.0.push(0);
+            self.0.extend(sequence.to_le_bytes());
+            self.0.extend((msg.len() as i32).to_le_bytes());
+            self.0.extend(msg);
+        }
+
+        /// 0x468750: byte 1, the index, then the row's +0x04, +0x10,
+        /// +0x20, +0x1c, +0x00 and +0x24.
+        fn row(&mut self, index: usize, a: &vcod_cod4::net::demo::Archive) {
+            self.0.push(1);
+            self.0.extend((index as i32).to_le_bytes());
+            for v in a.origin.iter().chain(&a.velocity) {
+                self.0.extend(v.to_le_bytes());
+            }
+            self.0.extend(a.movement_dir.to_le_bytes());
+            self.0.extend(a.bob_cycle.to_le_bytes());
+            self.0.extend(a.server_time.to_le_bytes());
+            for v in &a.view_angles {
+                self.0.extend(v.to_le_bytes());
+            }
+        }
+
+        /// `CL_StopRecord_f` (0x4688c0): byte 0 and two -1 longs.
+        fn stop(&mut self) {
+            self.0.push(0);
+            self.0.extend((-1i32).to_le_bytes());
+            self.0.extend((-1i32).to_le_bytes());
+        }
+    }
+
+    /// A [`std::io::Write`] whose bytes the test reads back.
+    #[derive(Clone, Default)]
+    struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A retail capture's server messages written as a demo twice, by
+    /// [`RetailDemo`] and by vcod's `Recording`. The record starts as the
+    /// gamestate lands: retail's `record` waits for its first snapshot,
+    /// but the capture's client never asked for the full frame a later
+    /// start waits for. A row from each snapshot's playerstate goes in
+    /// after each message, as `CL_WritePacket` adds one between them.
+    /// Returns both files and the table the capture's client ends on, its
+    /// `d` commands applied as a live client applies them.
+    fn capture_demo(name: &str) -> (Vec<u8>, Vec<u8>, Vec<Vec<u8>>) {
+        use vcod_cod4::net::capture::{self, Item, Session};
+        use vcod_cod4::net::demo::{ARCHIVE_ROWS, Archive, ArchiveRing, Recording};
+        let text = std::fs::read_to_string(format!("{FIXTURES}/{name}")).unwrap();
+        let mut session = Session::new();
+        let mut retail = RetailDemo::default();
+        let sink = Sink::default();
+        let mut rec: Option<Recording> = None;
+        let mut ring = ArchiveRing::default();
+        // `clc.demowaiting` and the last row written (+0x4014c).
+        let mut waiting = true;
+        let mut written = 0;
+        let mut applied = 0;
+        for l in capture::parse(&text).unwrap() {
+            let Some(Item::Server { msg, parsed }) = session.feed(&l).unwrap() else {
+                continue;
+            };
+            vcod_cod4::net::conn::apply_configstrings(&mut session.client, &mut applied, &parsed);
+            let c = &session.client;
+            let Some(r) = rec.as_mut() else {
+                let Some(gs) = &c.gamestate else { continue };
+                let reliable = session.client_commands.keys().max().copied();
+                let opening = vcod_cod4::net::demo::gamestate_message(
+                    &c.huff,
+                    reliable.unwrap_or(0),
+                    gs.server_command_sequence,
+                    gs,
+                );
+                retail.message(msg.sequence as i32, &opening);
+                for (i, a) in ring.rows.iter().enumerate() {
+                    retail.row(i, a);
+                }
+                written = ring.index;
+                rec = Some(
+                    Recording::start(
+                        Box::new(sink.clone()),
+                        "capture",
+                        msg.sequence as i32,
+                        &opening,
+                        &ring,
+                    )
+                    .unwrap(),
+                );
+                continue;
+            };
+            // Cleared inside the snapshot parse, ahead of the write
+            // (0x4737d5).
+            let full = parsed
+                .ops
+                .iter()
+                .any(|o| matches!(o, Op::Snapshot(i) if c.snapshots[*i].delta_num == 0));
+            if full {
+                waiting = false;
+                r.waiting = false;
+            }
+            let mut bytes = msg.reliable_ack.to_le_bytes().to_vec();
+            bytes.extend(&msg.block);
+            if !waiting {
+                while written != ring.index {
+                    retail.row(written, &ring.rows[written]);
+                    written = (written + 1) % ARCHIVE_ROWS;
+                }
+                retail.message(msg.sequence as i32, &bytes);
+            }
+            r.write(msg.sequence as i32, &bytes, &ring).unwrap();
+            if let Some(s) = c.snapshots.last() {
+                let ps = pm::PlayerState::from_wire(&s.ps);
+                ring.add(Archive {
+                    server_time: s.server_time,
+                    origin: ps.origin.to_array(),
+                    velocity: ps.velocity.to_array(),
+                    bob_cycle: ps.bob_cycle,
+                    movement_dir: ps.movement_dir,
+                    view_angles: ps.view_angles,
+                });
+            }
+        }
+        retail.stop();
+        rec.unwrap().finish().unwrap();
+        let vcod = sink.0.lock().unwrap().clone();
+        let table = session
+            .client
+            .gamestate
+            .as_ref()
+            .unwrap()
+            .all_configstrings();
+        let table = table.into_iter().map(<[u8]>::to_vec).collect();
+        (retail.0, vcod, table)
+    }
+
+    /// Retail to vcod and back (cod4-demos.md 8): a retail spectator
+    /// capture written in retail's framing plays in vcod's `demo`, every
+    /// record read, every message parsed, the capture's snapshots state for
+    /// state from the first on, its events and its closing table, `d`s
+    /// applied; and
+    /// vcod's recorder, fed the same messages and rows, writes the same
+    /// file byte for byte.
+    #[test]
+    fn cod4_retail_framed_demo_plays_and_vcod_writes_it_alike() {
+        let name = "play-1.7-spec.txt";
+        let (retail, vcod, capture_table) = capture_demo(name);
+        assert_eq!(retail.len(), vcod.len(), "file length");
+        if let Some(at) = (0..retail.len()).find(|&i| retail[i] != vcod[i]) {
+            panic!("vcod's file differs from retail's framing at byte {at}");
+        }
+
+        let text = std::fs::read_to_string(format!("{FIXTURES}/{name}")).unwrap();
+        let mut live = Cod4Session::open_capture(&text).unwrap();
+        let mut live_fired = Vec::new();
+        let mut ms = 0.0;
+        while !live.finished() {
+            ms += 1000.0 / 60.0;
+            live.step(ms).unwrap();
+            live_fired.extend(live.take_fired());
+        }
+
+        let mut d = Cod4Session::play_demo(retail, false).unwrap();
+        assert_eq!(d.map_name(), live.map_name());
+        let mut fired = Vec::new();
+        let mut now = 0.0;
+        while !d.demo_over() && now < 600_000.0 {
+            d.step(now).unwrap();
+            d.take_commands();
+            fired.extend(d.take_fired());
+            now += 16.0;
+        }
+        assert!(d.demo_over(), "the demo never ended");
+        let (messages, errors) = d.demo_counts().unwrap();
+        assert_eq!(errors, 0);
+        let (demo, cap) = (&d.client().snapshots, &live.client().snapshots);
+        assert_eq!(demo.len(), cap.len(), "a snapshot a message");
+        assert_eq!(messages, demo.len() + 1, "the gamestate, then the rest");
+        assert_eq!(demo[0].delta_num, 0);
+        for (l, m) in cap.iter().zip(demo) {
+            assert_eq!(l.server_time, m.server_time);
+            assert_eq!(l.ps, m.ps, "{}", l.server_time);
+            assert_eq!(l.entities, m.entities, "{}", l.server_time);
+            assert_eq!(l.clients, m.clients, "{}", l.server_time);
+        }
+        let table = d.gamestate().unwrap().all_configstrings();
+        assert_eq!(table.len(), capture_table.len());
+        for (i, (m, l)) in table.iter().zip(&capture_table).enumerate() {
+            assert_eq!(
+                String::from_utf8_lossy(m),
+                String::from_utf8_lossy(l),
+                "slot {i}"
+            );
+        }
+        let key = |f: &Fired| (f.name, f.entity, f.server_time, f.parm);
+        let after = |v: &[Fired]| -> Vec<_> {
+            v.iter()
+                .filter(|f| f.server_time > demo[0].server_time)
+                .map(key)
+                .collect()
+        };
+        let (a, b) = (after(&live_fired), after(&fired));
+        eprintln!(
+            "{name}: {} bytes, {messages} messages, {} snapshots, {} events",
+            vcod.len(),
+            demo.len(),
+            a.len()
+        );
+        assert!(!a.is_empty(), "no event in the capture");
+        assert_eq!(a, b);
+    }
+
     /// `rcon` from a client joined to vcod-server (cod4-handshake.md 14.2):
     /// the console line through the shell and `CL_Rcon_f`'s rules, out of
     /// band on the connection's socket, the server's `print`s back as

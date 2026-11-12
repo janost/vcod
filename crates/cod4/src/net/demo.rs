@@ -121,7 +121,7 @@ pub fn gamestate_message(
     for (i, s) in &held {
         w.write_bits(0, 1);
         w.write_bits(*i as i32, 12);
-        w.write_string_bytes(s);
+        w.write_string_bytes(&big_string(s));
     }
     let ctx = Ctx {
         time: BASELINE_TIME,
@@ -142,6 +142,17 @@ pub fn gamestate_message(
     let mut out = reliable_sequence.to_le_bytes().to_vec();
     out.extend(huff.compress(&w.into_ops()));
     out
+}
+
+/// `MSG_WriteBigString` (`iw3mp.exe` 0x505580) as `CL_Record_f` writes a
+/// slot: 0x2000 bytes or more go out empty, and each 0x92 becomes `'`.
+fn big_string(s: &[u8]) -> Vec<u8> {
+    if s.len() >= 0x2000 {
+        return Vec::new();
+    }
+    s.iter()
+        .map(|&b| if b == 0x92 { b'\'' } else { b })
+        .collect()
 }
 
 /// One record read back.
@@ -359,6 +370,13 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn a_slot_goes_out_as_msg_write_big_string_writes_it() {
+        assert_eq!(big_string(b"it\x92s"), b"it's");
+        assert_eq!(big_string(&[b'a'; 0x1fff]).len(), 0x1fff);
+        assert!(big_string(&[b'a'; 0x2000]).is_empty());
     }
 
     #[test]
