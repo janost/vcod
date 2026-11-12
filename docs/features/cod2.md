@@ -115,9 +115,11 @@ rects placed by their screen alignment
   item, gun or use trigger in front, from retail's one use list
   ([cod2-gsc-diff.md](../research/cod2-gsc-diff.md) 5.4).
 - Low-health overlay, red damage flash, damage direction icons.
-- Crosshair spread with the weapon. A scope's overlay with its zoom
-  (`adsZoomFov`, the gun hidden under it); an iron sight zooms the gun
-  with the world.
+- Crosshair spread with the weapon, gone once the sight is all the way
+  up. A scope's overlay with its zoom (`adsZoomFov`, the gun hidden under
+  it); an iron sight zooms the gun with the world. `cg_drawGun 0` (a
+  cheat) hides the gun and its flash and keeps the crosshair up through
+  the sight.
 - Gametype hudelems: timers, clocks (sd's bomb stopwatch), plant and
   defuse bars, world waypoints (ctf flags, sd bomb sites, hq radios,
   death icons).
@@ -159,12 +161,14 @@ ambient effects, tracers from the shooter's `tag_flash`. Muzzle flashes
 and brass play on the guns' tags: the view weapon's flash and shell
 eject on its `tag_flash` and `tag_brass` (no flash under a scope's
 overlay), other players' and turrets' on theirs, a bolt action's brass
-at the rechamber (6.8).
+at the rechamber. A shot's flash waits for its body's next draw, as
+retail's flag does (6.8).
 
 **Demos** ([cod2-demos.md](../research/cod2-demos.md)). `record` and
 `stoprecord` write CoD2's `.dm_1` in a game. `demo <name>` and `timedemo
-<name>` play one through the session's frame, unpredicted. Retail's
-demos play in vcod and vcod's in retail.
+<name>` play one through the session's frame, unpredicted. `timedemo`
+writes retail's `demos/timedemo_<map>_mode_<r_mode>.csv`. Retail's demos
+play in vcod and vcod's in retail.
 
 ### Server
 
@@ -311,10 +315,11 @@ Ranked by how much a player notices, worst first.
    master the status retail sends every 10 minutes. The client reads no
    CD key from the registry; set `VCOD_CDKEY`
    ([usage.md](../usage.md), "CD keys").
-5. **Demo details.** `timedemo` writes no `demos/timedemo_*.csv`; a demo
-   draws no `EV_STEP_VIEW` smoothing
+5. **Demo and follow eyes.** A demo or a followed player's eye is the
+   snapshot's, lerped, without retail's bob and landing dip; a followed
+   one also lacks the step smoothing, which retail's demo skips too
    ([cod2-demos.md](../research/cod2-demos.md) 7). Retail's front end has
-   no demo list either.
+   no demo list, and vcod none either.
 6. **Server odds and ends.** `give all` hands over every weapon the level
    registered, not retail's slot rule. Downloads serve only `.iwd` files
    under the game dir, where retail serves any file.

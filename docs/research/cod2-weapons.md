@@ -389,4 +389,5 @@ of theirs either.
   crossfades (section 6).
 - The view weapon's flash and brass on its tags and its notetrack sounds
   (section 6, "Flash, brass and notetracks").
-- Not modelled: `cg_drawGun` on the CoD2 path.
+- `cg_drawGun 0` hides the gun and its flash, the pose and the brass
+  running on (cod2-efx.md 6.8).

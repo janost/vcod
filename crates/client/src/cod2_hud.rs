@@ -133,6 +133,8 @@ pub struct Cod2Hud {
     pub use_key: String,
     /// `cg_drawMantleHint`, set by the session each frame.
     pub mantle_hint: bool,
+    /// `cg_drawGun`, set by the session each frame.
+    pub draw_gun: bool,
     /// The session's [`crate::play::cod2::Cod2Session::interrupted`], set
     /// each frame.
     pub interrupted: bool,
@@ -248,6 +250,7 @@ impl Default for Cod2Hud {
             selected: 0,
             use_key: String::new(),
             mantle_hint: true,
+            draw_gun: true,
             interrupted: false,
             lagometer: None,
             scoreboard,
@@ -568,6 +571,7 @@ impl Cod2Hud {
             selected: self.selected,
             use_key: &self.use_key,
             mantle_hint: self.mantle_hint,
+            draw_gun: self.draw_gun,
             stance_keys: self.dvars.stance_keys.as_ref().map(|_| &lookup as _),
             hint_fade_ms: self.dvars.hint_fade_ms,
         };

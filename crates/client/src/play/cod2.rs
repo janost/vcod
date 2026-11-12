@@ -453,6 +453,10 @@ pub struct Cod2Session {
     /// the gun (`play::cod2_view::Land`).
     land: crate::play::cod2_view::Land,
     land_dips: (f32, f32),
+    /// The own view's last step and this frame's offset of the eye
+    /// (`play::cod2_view::Step`).
+    step: crate::play::cod2_view::Step,
+    step_dip: f32,
 }
 
 /// What `--net-probe` prints of the prediction each second.
@@ -627,6 +631,8 @@ impl Cod2Session {
             kick_defs: HashMap::new(),
             land: Default::default(),
             land_dips: (0.0, 0.0),
+            step: Default::default(),
+            step_dip: 0.0,
         }
     }
 
@@ -1213,8 +1219,8 @@ impl Cod2Session {
     /// what the camera draws from; `None` while the body is not predicted.
     pub fn view(&self) -> Option<(Vec3, [f32; 3])> {
         let (p, _) = self.predicted.as_ref()?;
-        let mut eye =
-            crate::play::cod2_predict::first_person_eye(&p.drawn, p.origin, self.land_dips.0);
+        let dips = (self.land_dips.0, self.step_dip);
+        let mut eye = crate::play::cod2_predict::first_person_eye(&p.drawn, p.origin, dips);
         if p.drawn.e_flags & 0x300 != 0
             && let Some(at) = self.gunner_eye(p.drawn.view_angles)
         {
@@ -1771,10 +1777,12 @@ impl Cod2Session {
         out
     }
 
-    /// The own body's recoil and landing for this frame: each of `events`
-    /// (this frame's [`Self::take_events`]) that is its own shot kicks, then
-    /// the kicks step to the frame's time; its own landing dips the eye
-    /// ([`Self::view`]) and the gun ([`Self::land_gun`]). The next cmds
+    /// The own body's recoil, landing and steps for this frame: each of
+    /// `events` (this frame's [`Self::take_events`]) that is its own shot
+    /// kicks, then the kicks step to the frame's time; its own landing dips
+    /// the eye ([`Self::view`]) and the gun ([`Self::land_gun`]), its
+    /// `EV_STEP_VIEW` the eye, though not in a demo (`CG_EntityEvent`, Mac
+    /// 0x1e4650, tests `cg + 8`, the demo flag). The next cmds
     /// carry the view kick ([`Self::play_cmd`]); [`Self::gun_kick`] turns
     /// the view weapon.
     pub fn recoil_frame(&mut self, events: &[Event2], fs: &Pk3Fs) {
@@ -1793,6 +1801,7 @@ impl Cod2Session {
             self.recoil_for = owner;
             self.recoil.reset();
             self.land = Default::default();
+            self.step = Default::default();
         }
         let rules = &self.predictor.rules;
         let fall = (rules.fall_damage_min_height, rules.fall_damage_max_height);
@@ -1800,9 +1809,13 @@ impl Cod2Session {
             if let Some(c) = crate::play::cod2_view::land_change(e.event, e.parm, fall) {
                 self.land.land(c, f.time_ms);
             }
+            if e.event == vcod_cod2::net::events::EV_STEP_VIEW && self.demo.is_none() {
+                self.step.step(e.parm, f.time_ms);
+            }
         }
         let eye = self.land.eye(f.time_ms);
         self.land_dips = (eye, self.land.gun(f.time_ms));
+        self.step_dip = self.step.eye(f.time_ms);
         let weapon = crate::play::cod2_recoil::kick_weapon(ps);
         let def = f.configstrings.weapon_name(weapon).and_then(|name| {
             self.kick_defs
@@ -1910,6 +1923,12 @@ impl Cod2Session {
         }
     }
 
+    /// The `viewFlashEffect` of CS 7 weapon `weapon`, what a held view
+    /// flash plays on the gun placed (`play::cod2_fx::Play::ViewFlash`).
+    pub fn view_flash_effect(&mut self, weapon: i32, fs: &dyn AssetSource) -> Option<String> {
+        self.fx.view_flash(&self.view.configstrings, fs, weapon)
+    }
+
     /// A userinfo dvar changed (`name`, `rate`, `snaps`, `password`,
     /// `cl_wwwDownload`): `CL_Frame` (Mac 0x14b182) sends the whole
     /// userinfo as `userinfo "<info>"` on the reliable stream the frame
@@ -1956,6 +1975,9 @@ struct DemoPlay {
     skipped: bool,
     /// `timedemo` (+0x4018c) and its count, kept for the whole demo.
     timedemo: Option<crate::play::demos::TimeDemo>,
+    /// `timedemo`'s csv, when the caller asked for one
+    /// ([`Cod2Session::write_timedemo_csv`]).
+    csv: Option<TimedemoCsv>,
     /// `cl_freezeDemo`: the clock holds.
     freeze: bool,
     /// `CA_ACTIVE`: a snapshot since the last gamestate seeded the clock.
@@ -1970,6 +1992,49 @@ struct DemoPlay {
     ended: bool,
 }
 
+/// `timedemo`'s csv (`CL_SetCGameTime`, Mac 0x17ba76): `clc` +0x4019c, the
+/// file, and +0x401a8, the last timed frame's `Sys_Milliseconds`.
+struct TimedemoCsv {
+    dir: PathBuf,
+    r_mode: i32,
+    out: Option<std::io::BufWriter<std::fs::File>>,
+    last_ms: i32,
+}
+
+impl TimedemoCsv {
+    /// One timed frame, before it counts: the file is opened while it is
+    /// not (`FS_FOpenFileWrite`, so every frame until one opens), then each
+    /// frame after the first writes `<frames counted>,<ms since the last>`.
+    fn frame(&mut self, map: &str, td: &crate::play::demos::TimeDemo, now_ms: i32) {
+        use std::io::Write;
+        if self.out.is_none() {
+            let path = self.dir.join(timedemo_csv_name(map, self.r_mode));
+            let file =
+                std::fs::create_dir_all(&self.dir).and_then(|_| std::fs::File::create(&path));
+            match file {
+                Ok(f) => self.out = Some(std::io::BufWriter::new(f)),
+                Err(e) => log::warn!("timedemo: {}: {e}", path.display()),
+            }
+        }
+        if td.started()
+            && let Some(out) = self.out.as_mut()
+        {
+            let _ = writeln!(out, "{},{}", td.frames(), now_ms - self.last_ms);
+        }
+        self.last_ms = now_ms;
+    }
+}
+
+/// `timedemo_<map>_mode_<r_mode>.csv`: the map is `cl.mapname`
+/// (`maps/mp/<mapname>.d3dbsp`, `CL_InitCGame`, Mac 0x17b412) past its last
+/// slash and short of its last dot (`CL_SetCGameTime`, 0x17ba76).
+fn timedemo_csv_name(map: &str, r_mode: i32) -> String {
+    let full = format!("maps/mp/{map}.d3dbsp");
+    let base = full.rsplit(['/', '\\']).next().unwrap_or("");
+    let base = base.rsplit_once('.').map_or(base, |(b, _)| b);
+    format!("timedemo_{base}_mode_{r_mode}.csv")
+}
+
 impl Cod2Session {
     /// `demo <name>` / `timedemo <name>` (`CL_PlayDemo_f`, Mac 0x14c288):
     /// a session over the file's bytes, read up to its gamestate. The
@@ -1980,6 +2045,7 @@ impl Cod2Session {
             reader: vcod_cod2::net::demo::reader(data),
             skipped: false,
             timedemo: timedemo.then(Default::default),
+            csv: None,
             freeze: false,
             active: false,
             delta: 0,
@@ -1999,6 +2065,19 @@ impl Cod2Session {
         s.level_gamestates = s.view.gamestates;
         s.loaded_map = s.map_name().unwrap_or_default().to_string();
         Ok(s)
+    }
+
+    /// Under `timedemo`, write its csv into `dir` (the game's `demos/`)
+    /// with `r_mode`'s index in its name.
+    pub fn write_timedemo_csv(&mut self, dir: PathBuf, r_mode: i32) {
+        if let Some(d) = self.demo.as_mut().filter(|d| d.timedemo.is_some()) {
+            d.csv = Some(TimedemoCsv {
+                dir,
+                r_mode,
+                out: None,
+                last_ms: 0,
+            });
+        }
     }
 
     /// Whether this session plays a demo.
@@ -2051,6 +2130,8 @@ impl Cod2Session {
             }
             Err(end) => {
                 d.ended = true;
+                // `CL_DemoCompleted` closes the csv (the drop flushes it).
+                d.csv = None;
                 match end {
                     DemoEnd::Completed => {}
                     DemoEnd::Truncated => crate::console::log::print("Demo file was truncated."),
@@ -2113,6 +2194,10 @@ impl Cod2Session {
             d.old_server_time = d.server_time;
         }
         if let Some(td) = d.timedemo.as_mut() {
+            if let Some(csv) = d.csv.as_mut() {
+                let map = self.view.configstrings.map_name().unwrap_or_default();
+                csv.frame(map, td, real);
+            }
             d.server_time = d.base + td.step(real) * 50;
         }
         let until = d.server_time;
@@ -3136,6 +3221,62 @@ pub fn chat_command(team: bool, line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `timedemo_<map>_mode_<r_mode>.csv`, the map short of its directory
+    /// and last extension.
+    #[test]
+    fn the_timedemo_csv_is_named_for_the_map_and_mode() {
+        assert_eq!(
+            timedemo_csv_name("mp_toujane", 3),
+            "timedemo_mp_toujane_mode_3.csv"
+        );
+        assert_eq!(timedemo_csv_name("a.b", -1), "timedemo_a.b_mode_-1.csv");
+        assert_eq!(timedemo_csv_name("x/y", 0), "timedemo_y_mode_0.csv");
+        assert_eq!(timedemo_csv_name("", 0), "timedemo__mode_0.csv");
+    }
+
+    /// Retail's own demo under `timedemo`: the csv opens on the first timed
+    /// frame and takes `<frame>,<ms>` from the second, the frames counted
+    /// before it, one up a row, and is whole once the demo ends; a plain
+    /// `demo` writes none.
+    #[test]
+    fn timedemo_writes_a_row_a_frame_after_the_first() {
+        let data = include_bytes!("../../../cod2/tests/fixtures/demos/mp_toujane-retail.dm_1");
+        let dir = std::env::temp_dir().join(format!("vcod-timedemo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let fs = Pk3Fs::empty();
+        let mut cam = FlyCamera::new(Vec3::ZERO, 0.0);
+        let mut plain = Cod2Session::play_demo(data.to_vec(), false).unwrap();
+        plain.write_timedemo_csv(dir.clone(), 3);
+        assert!(plain.demo.as_ref().unwrap().csv.is_none());
+        let mut s = Cod2Session::play_demo(data.to_vec(), true).unwrap();
+        s.write_timedemo_csv(dir.clone(), 3);
+        let mut frames = 0;
+        while !s.demo_over() && frames < 5000 {
+            s.fly(&mut cam, &fs);
+            frames += 1;
+        }
+        assert!(s.demo_over(), "the demo never ended");
+        let counted = s.demo.as_ref().unwrap().timedemo.as_ref().unwrap().frames();
+        let text = std::fs::read_to_string(dir.join("timedemo_mp_toujane_mode_3.csv")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let rows: Vec<(i32, i32)> = text
+            .lines()
+            .map(|l| {
+                let (f, ms) = l.split_once(',').unwrap();
+                (f.parse().unwrap(), ms.parse().unwrap())
+            })
+            .collect();
+        // A start stamped at 0 ms reads as none, so a frame in the
+        // session's first millisecond writes no row.
+        assert!(counted > 800, "{counted} frames");
+        assert!(rows.len() as i32 >= counted - 3, "{} rows", rows.len());
+        assert_eq!(rows.last().map(|r| r.0), Some(counted - 1));
+        for w in rows.windows(2) {
+            assert_eq!(w[1].0, w[0].0 + 1);
+        }
+        assert!(rows.iter().all(|r| r.1 >= 0));
+    }
 
     /// A loopback server answering each `getchallenge` with `reply`: what
     /// the challenge ask comes back with, with and without a key.

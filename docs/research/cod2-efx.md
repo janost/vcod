@@ -723,8 +723,10 @@ VERIFIED (the `weapons/mp` files).
 - `CG_AddViewWeapon` (0x1da2f8) calls it with the predicted playerstate,
   the predicted player entity (`cg + 0x2826c`) and its draw flag;
   `CG_Player` (0x1e6834) with no playerstate and 1. VERIFIED (the
-  calls). `CG_Player` skips it under `eFlags & 0x20000` (dead).
-  INFERRED (the test).
+  calls). `CG_Player` skips it, and so holds the flag, under `eFlags &
+  0x20` (no draw) or `0x20000` (dead), for the first-person body's own
+  entity and for a body with no DObj; it culls nothing before the call.
+  INFERRED (the tests).
 - For a weapon above 0 and the entity's `eFlags & 0x300` clear, a set
   flag is cleared and, when the call draws, played: with a playerstate
   the view flash on bone `_s_barrelTags[0]` (`tag_flash`) of the view
@@ -738,6 +740,20 @@ VERIFIED (the `weapons/mp` files).
   tests). The flag is cleared before the draw test, so a shot fired under
   a scope's overlay plays no view flash, then or later. INFERRED (the
   order).
+- `cg_drawGun` is `Dvar_RegisterBool("cg_drawGun", 1, 0x1080)` in
+  `CG_Init` (0x145214). VERIFIED. Bit 0x80 is the cheat bit: the dvar
+  set path (0x5313e) prints `%s is cheat protected.` for a console set of
+  a dvar whose flags' low byte is negative while `sv_cheats` is 0.
+  VERIFIED (the test and the string). The archive bit 0x1 is clear, so
+  unlike CoD1's (flags 0x201) it is not saved. INFERRED.
+- A draw flag of 0 skips only `CG_AddPlayerWeapon`'s
+  `R_AddRefEntityToScene` of the gun and the flash's play: the placed
+  gun's origin and axis, the `tag_brass` read into
+  `_ejectBrassCasingOrigin` and the breath sounds run either way.
+  INFERRED (the tests round the two blocks). The brass still plays on
+  the hidden gun: `FX_GetBoneOrientation` runs `CG_DObjCalcBoneGeneric`
+  (VERIFIED, the call) on the bolt's DObj itself, drawn or not. INFERRED.
+- `CG_DrawCrosshair` reads it too (cod2-hud.md 10).
 - Events run before the frame adds its entities and the view weapon, so
   a flash plays in its event's frame. INFERRED (the frame's order).
 
@@ -776,18 +792,24 @@ which `cod2_client::Cod2Client::view` spawns once the gun is placed
 (the gun's offset and angles, the view's angles with roll) on
 `cod2_viewmodel::ViewTags`. Each frame hands the effects every pose as a
 tag bolt (`FxSystem::set_tag_bolts`), so a `relative` element rides the
-gun. vcod's own: a flag is not held, so a body vcod did not pose this
-frame flashes nothing; the view brass plays only off the drawn view
-weapon; the view's tags are this frame's pose; barrels 1..3
-(`tag_flash_11` .. `tag_flash_22`, no stock weapon) are not used;
-`cg_drawGun` is not read. Gates:
+gun. The flags are held as retail holds them: a body's in
+`Cod2Fx::held_flashes`, played at the next frame `cod2_scene` poses the
+body armed and off a gun, the playerstate's (`Play::ViewFlash`) in
+`Cod2Client`, cleared at the next placed gun and played there under
+`cg_drawGun` with no overlay; each plays the weapon held at that draw.
+`cg_drawGun 0` hides the gun (`Cod2Client::gun_drawn`) and its flash;
+its brass plays. vcod's own: the view brass plays only off the weapon
+placed; the view's tags are this frame's pose; barrels 1..3
+(`tag_flash_11` .. `tag_flash_22`, no stock weapon) are not used. Gates:
 `play::cod2_fx::tests::shots_flash_and_eject_brass_on_their_tags`,
+`play::cod2_fx::tests::a_shots_flash_waits_for_the_bodys_next_draw`,
 `cod2_players::tests::an_armed_body_poses_its_flash_and_brass_tags`,
 `cod2_scene`'s gun test,
 `cod2_viewmodel::tests::the_view_weapon_poses_its_tags_and_sounds_its_notetracks`
 and, live on vcod-server with bots,
-`play::cod2_soak::cod2_live_shots_flash_and_eject_on_their_guns`.
-Pending: a by-eye check of the flashes and the brass on screen.
+`play::cod2_soak::cod2_live_shots_flash_and_eject_on_their_guns` (its
+last phase under `cg_drawGun 0`). Pending: a by-eye check of the flashes
+and the brass on screen.
 
 ## 7. What vcod draws
 

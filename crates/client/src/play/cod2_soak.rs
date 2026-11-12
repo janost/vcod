@@ -840,8 +840,9 @@ fn cod2_live_view_weapons_build_nothing_in_play() {
 /// play the view weapon's flash on the drawn gun's `tag_flash`, ahead of
 /// the eye, and its brass on `tag_brass` beside the eye; the bots' shots
 /// play their world flash on their bodies' `tag_flash`, at a gun's height
-/// over their origins (cod2-efx.md 6.8). Needs `COD2_DIR` and an adapter
-/// (lavapipe will do).
+/// over their origins. Then `cg_drawGun 0` hides the gun and its flash
+/// while its brass still flies (cod2-efx.md 6.8). Needs `COD2_DIR` and an
+/// adapter (lavapipe will do).
 #[test]
 fn cod2_live_shots_flash_and_eject_on_their_guns() {
     use crate::play::cod2_fx::ViewTag;
@@ -862,10 +863,15 @@ fn cod2_live_shots_flash_and_eject_on_their_guns() {
     let mut last = start;
     let mut fx_ms = 0.0;
     let (mut own_flash, mut own_brass, mut bot_flash) = (0, 0, 0);
+    // under `cg_drawGun 0`: the view flashes, the brass, frames the gun drew
+    let mut hidden: Option<(u32, u32, u32)> = None;
     let mut bots = false;
-    while start.elapsed() < Duration::from_secs(150)
-        && (own_flash == 0 || own_brass == 0 || bot_flash == 0)
+    while start.elapsed() < Duration::from_secs(180) && hidden.is_none_or(|(_, brass, _)| brass < 3)
     {
+        if hidden.is_none() && own_flash > 0 && own_brass > 0 && bot_flash > 0 {
+            rig.shell.force("cg_drawGun", "0");
+            hidden = Some((0, 0, 0));
+        }
         let now = Instant::now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
@@ -882,6 +888,15 @@ fn cod2_live_shots_flash_and_eject_on_their_guns() {
         let eye = rig.cam.pos;
         let forward = crate::camera::basis(rig.cam.yaw, rig.cam.pitch).0;
         let c = rig.sess.cod2_mut().unwrap();
+        if let Some((flash, brass, drawn)) = hidden.as_mut() {
+            *drawn += u32::from(c.gun_drawn(None));
+            for (_, tag, _) in c.view_spawned.drain(..) {
+                match tag {
+                    ViewTag::Flash => *flash += 1,
+                    ViewTag::Brass => *brass += 1,
+                }
+            }
+        }
         for (path, tag, pose) in c.view_spawned.drain(..) {
             let d = pose.origin - eye;
             match tag {
@@ -922,8 +937,12 @@ fn cod2_live_shots_flash_and_eject_on_their_guns() {
     rig.sess.shutdown();
     done.store(true, Ordering::Relaxed);
     server.join().unwrap();
-    eprintln!("own flashes {own_flash}, own brass {own_brass}, bot flashes {bot_flash}");
+    eprintln!(
+        "own flashes {own_flash}, own brass {own_brass}, bot flashes {bot_flash}; \
+         under cg_drawGun 0 (flashes, brass, frames drawn) {hidden:?}"
+    );
     assert!(own_flash > 0, "no view flash");
     assert!(own_brass > 0, "no view brass");
     assert!(bot_flash > 0, "no bot's world flash");
+    assert_eq!(hidden.map(|(f, b, d)| (f, b >= 3, d)), Some((0, true, 0)));
 }
