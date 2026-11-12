@@ -37,15 +37,25 @@ struct Pair {
     gsc: Option<&'static str>,
     /// Where the comparison stops short of the captures' end.
     until: Option<i32>,
+    /// The probes, in the order they joined: `play-1.7-<name>-<probe>.txt`.
+    probes: &'static [&'static str],
+    /// Dvars retail's command line set that its serverinfo leaves out.
+    cvars: &'static [(&'static str, &'static str)],
 }
+
+/// Most runs' two probes.
+const TWO: &[&str] = &["target", "shooter"];
 
 /// What a probe's capture fixes for its twin on ours.
 struct Twin {
     slot: u32,
-    /// The server times of its first snapshot, its spawn and its last.
+    /// The server times of its first snapshot, its spawn (a spectator's
+    /// first free snapshot) and its last.
     first: i32,
     spawn: i32,
     last: i32,
+    /// The spawn's `pm_type`: 0, or 4 for a spectator.
+    pm_type: u32,
     /// The spawn's spot and yaw (the script's pick is a `randomInt` off a
     /// clock-seeded stream).
     pin: crate::game::host::SpawnPin,
@@ -92,17 +102,25 @@ fn twin(lines: &[Line]) -> Twin {
     }
     let snaps = &s.client.snapshots;
     let slot = snaps[0].ps.get("clientNum").unwrap();
-    let spawn = snaps
-        .iter()
-        .find(|f| f.ps.get("pm_type") == Some(0) && f.ps.get("clientNum") == Some(slot))
+    let own = |t: u32| {
+        snaps
+            .iter()
+            .find(|f| f.ps.get("pm_type") == Some(t) && f.ps.get("clientNum") == Some(slot))
+    };
+    // A spectator never spawns: it flies its own cmds from its first free
+    // snapshot.
+    let (spawn, pm_type) = own(0)
+        .map(|f| (f, 0))
+        .or_else(|| own(4).map(|f| (f, 4)))
         .expect("a spawn");
     let v = |n: &str| [0, 1, 2].map(|k| spawn.ps.get_f32(&format!("{n}[{k}]")).unwrap_or(0.0));
     Twin {
         slot,
         first: snaps[0].server_time,
         spawn: spawn.server_time,
+        pm_type,
         last: snaps.last().unwrap().server_time,
-        pin: Some((v("origin"), [0.0, v("viewangles")[1], 0.0])),
+        pin: (pm_type == 0).then(|| (v("origin"), [0.0, v("viewangles")[1], 0.0])),
         commands: commands.into_values().collect(),
     }
 }
@@ -142,17 +160,20 @@ type Hook<'a> = dyn FnMut(&mut Cod4Server, i32) + 'a;
 /// What one run of a [`Pair`] gives: retail's two sides, ours, and the
 /// script errors of ours.
 struct Run {
-    retail: [Side; 2],
-    ours: [Side; 2],
+    retail: Vec<Side>,
+    ours: Vec<Side>,
     aborts: Vec<String>,
 }
 
-/// The pair's two probes against `Cod4Server` to the captures' last
-/// snapshot.
+/// The pair's probes against `Cod4Server` to the captures' last snapshot.
 fn run(install: &vcod_cod4::install::Install, pair: &Pair, hook: &mut Hook) -> Run {
-    let lines = ["target", "shooter"].map(|w| retail(&format!("{}-{w}", pair.name)));
-    let twins = [0, 1].map(|k| twin(&lines[k]));
-    let retail_sides = [0, 1].map(|k| side(&lines[k]));
+    let lines: Vec<Vec<Line>> = pair
+        .probes
+        .iter()
+        .map(|w| retail(&format!("{}-{w}", pair.name)))
+        .collect();
+    let twins: Vec<Twin> = lines.iter().map(|l| twin(l)).collect();
+    let retail_sides: Vec<Side> = lines.iter().map(|l| side(l)).collect();
     let cs0 = String::from_utf8_lossy(retail_sides[0].gs.configstring(0)).into_owned();
     let mut sv = Cod4Server::new(
         Cod4Config {
@@ -170,6 +191,9 @@ fn run(install: &vcod_cod4::install::Install, pair: &Pair, hook: &mut Hook) -> R
     }
     // `+devmap`: cheats on, so `setviewpos` runs.
     sv.set_cvar("sv_cheats", "1");
+    for (k, v) in pair.cvars {
+        sv.set_cvar(k, v);
+    }
     sv.pin_game_seed(pair.seed);
     if let Some(gsc) = pair.gsc {
         sv.set_script_overrides(
@@ -180,13 +204,16 @@ fn run(install: &vcod_cod4::install::Install, pair: &Pair, hook: &mut Hook) -> R
     }
     sv.load(Some(install)).unwrap();
     let mut pins = vec![VecDeque::new(); crate::server::MAX_CLIENTS];
-    for t in &twins {
+    for t in twins.iter().filter(|t| t.pin.is_some()) {
         pins[t.slot as usize].push_back(t.pin);
     }
     sv.game.level.as_mut().unwrap().rt.host.spawn_pins =
         Some(std::rc::Rc::new(std::cell::RefCell::new(pins)));
-    let arrivals = [0, 1].map(|k| snapshot_arrivals(&lines[k]));
-    let offsets = [0, clock_offset(&arrivals[0], &arrivals[1])];
+    let arrivals: Vec<_> = lines.iter().map(|l| snapshot_arrivals(l)).collect();
+    let offsets: Vec<i64> = arrivals
+        .iter()
+        .map(|a| clock_offset(&arrivals[0], a))
+        .collect();
     // Each probe's replayed packets' send times on the target's clock, by
     // the tick they go at: within a tick the probes send in retail's
     // arrival order, as each cmd is thought on arrival (cod4-server-frame.md
@@ -194,11 +221,12 @@ fn run(install: &vcod_cod4::install::Install, pair: &Pair, hook: &mut Hook) -> R
     let mut sends: Vec<VecDeque<(i32, i64)>> = Vec::new();
     let mut probes: Vec<Probe> = twins
         .iter()
-        .zip(["target", "shooter"])
+        .zip(pair.probes)
         .zip(&lines)
         .zip(offsets)
         .map(|(((t, name), l), offset)| {
             let mut p = Probe::new(name, t.slot, 28961 + t.slot as u16, t.first, &t.commands);
+            p.replay_pm_type = t.pm_type;
             let timed = replay_schedule_timed(l, t.spawn);
             sends.push(
                 timed
@@ -255,10 +283,9 @@ fn run(install: &vcod_cod4::install::Install, pair: &Pair, hook: &mut Hook) -> R
         }
     }
     let aborts = sv.game.level.as_ref().unwrap().rt.aborts();
-    let [a, b] = [&probes[0], &probes[1]].map(|p| side(&p.lines));
     Run {
         retail: retail_sides,
-        ours: [a, b],
+        ours: probes.iter().map(|p| side(&p.lines)).collect(),
         aborts,
     }
 }
@@ -393,17 +420,23 @@ fn all_fields() -> Vec<&'static str> {
         .collect()
 }
 
-/// Both clients from the later spawn to the end of the shorter capture (or
-/// `until`), every playerstate word, health and ammo, and every entity.
-fn pair_diffs(run: &Run, until: Option<i32>) -> Vec<String> {
+/// Every client from the last spawn to the end of the shortest capture (or
+/// `until`), every playerstate word, health and ammo, every entity, and the
+/// `PROBE` lines a probe gsc printed, with the snapshot each came after.
+fn pair_diffs(run: &Run, pair: &Pair) -> Vec<String> {
+    let until = pair.until;
     let fields = all_fields();
     let mut out = Vec::new();
-    let spawns = run.retail.each_ref().map(|s| {
-        s.snaps
-            .iter()
-            .find(|f| f.ps.get("pm_type") == Some(0))
-            .map_or(0, |f| f.server_time)
-    });
+    let spawns: Vec<i32> = run
+        .retail
+        .iter()
+        .map(|s| {
+            s.snaps
+                .iter()
+                .find(|f| f.ps.get("pm_type") == Some(0))
+                .map_or(0, |f| f.server_time)
+        })
+        .collect();
     let end = run
         .retail
         .iter()
@@ -411,10 +444,27 @@ fn pair_diffs(run: &Run, until: Option<i32>) -> Vec<String> {
         .min()
         .unwrap()
         .min(until.unwrap_or(i32::MAX));
-    let window = spawns[0].max(spawns[1])..=end;
-    for (k, tag) in ["target", "shooter"].into_iter().enumerate() {
+    let window = *spawns.iter().max().unwrap()..=end;
+    for (k, tag) in pair.probes.iter().enumerate() {
         let (r, o) = (&run.retail[k], &run.ours[k]);
         out.extend(diffs(tag, r, o, window.clone(), &fields));
+        let printed = |s: &Side| -> Vec<(i32, String)> {
+            s.commands
+                .iter()
+                .filter(|(t, c)| c.contains("PROBE") && *t <= end)
+                .cloned()
+                .collect()
+        };
+        let (pr, po) = (printed(r), printed(o));
+        for i in 0..pr.len().max(po.len()) {
+            if pr.get(i) != po.get(i) {
+                out.push(format!(
+                    "{tag} command {i}: ours {:?} retail {:?}",
+                    po.get(i),
+                    pr.get(i)
+                ));
+            }
+        }
         for a in r.snaps.iter().filter(|f| window.contains(&f.server_time)) {
             let Some(b) = o.snaps.iter().find(|f| f.server_time == a.server_time) else {
                 continue;
@@ -447,6 +497,8 @@ const ROCKET: Pair = Pair {
     seed: 3_486_109_213,
     gsc: None,
     until: None,
+    probes: TWO,
+    cvars: &[],
 };
 
 const THROWBACK: Pair = Pair {
@@ -458,6 +510,8 @@ const THROWBACK: Pair = Pair {
     seed: 3_487_136_041,
     gsc: None,
     until: Some(50_050),
+    probes: TWO,
+    cvars: &[],
 };
 
 const PRONE: Pair = Pair {
@@ -467,6 +521,8 @@ const PRONE: Pair = Pair {
     seed: 3_485_363_811,
     gsc: None,
     until: None,
+    probes: TWO,
+    cvars: &[],
 };
 
 const KCENT: Pair = Pair {
@@ -476,6 +532,8 @@ const KCENT: Pair = Pair {
     seed: 3_485_193_718,
     gsc: Some("killcam_entity"),
     until: None,
+    probes: TWO,
+    cvars: &[],
 };
 
 fn pair_ab(gate: &str, pair: &Pair, gaps: &[(&str, &str)]) {
@@ -486,7 +544,7 @@ fn pair_ab(gate: &str, pair: &Pair, gaps: &[(&str, &str)]) {
     for p in &run.ours {
         assert!(!p.snaps.is_empty());
     }
-    check(gate, &pair_diffs(&run, pair.until), &run.aborts, gaps);
+    check(gate, &pair_diffs(&run, pair), &run.aborts, gaps);
 }
 
 /// Why a dropped weapon differs: it leaves from the body's middle, not
@@ -501,10 +559,6 @@ const ROCKET_GAPS: &[(&str, &str)] = &[
         "* entity *:4 lerp.pos.trDelta",
         "the wobble's velocity, the facing times the speed, a unit in the last \
          place off; the path's points match (cod4-gsc.md 3.2)",
-    ),
-    (
-        "shooter ps velocity",
-        "the RPG's fire frame's velocity, a unit in the last place off (cod4-gsc.md 3.2)",
     ),
     (
         "* entity 316",
@@ -573,11 +627,6 @@ fn cod4_prone_death_ab() {
 const KCENT_GAPS: &[(&str, &str)] = &[
     ("* entity *:3", ITEM),
     (
-        "target ps origin",
-        "the dead body's slide off the push: velocity matches every snapshot, but \
-         x runs 0.0007 ahead from its first 50 ms (cod4-combat.md 15)",
-    ),
-    (
         "target ps viewangles[1]",
         "the killcam's archived view: ours keeps the shooter's spawn yaw 90 where \
          its live view after `setviewpos` reads 0 (cod4-combat.md 7)",
@@ -594,4 +643,44 @@ const KCENT_GAPS: &[(&str, &str)] = &[
 #[test]
 fn cod4_killcam_entity_ab() {
     pair_ab("cod4_killcam_entity_ab", &KCENT, KCENT_GAPS);
+}
+
+const TOUCH: Pair = Pair {
+    // `+set scr_game_spectatetype 2 +set fs_game mods/vcodtouch`, the
+    // `touch_pass` gsc in the mod's iwd. Target `--script idle`; `walker`
+    // (axis) `--goto "207 2211 296" --script push --face 90` a second
+    // later: it walks into the target, strafes along it, backs off and
+    // walks in again. A second after it `flyer` (`--team spectator
+    // --script fly --qport 4031`) flies free (cod4-pmove.md 15.2).
+    name: "touch",
+    seed: 3_507_969_338,
+    gsc: Some("touch_pass"),
+    until: None,
+    probes: &["target", "walker", "flyer"],
+    cvars: &[("scr_game_spectatetype", "2")],
+};
+
+const TOUCH_GAPS: &[(&str, &str)] = &[
+    (
+        "walker ps delta_angles[1]",
+        "`setviewpos`'s `delta_angles` for its first 0.55 s, 180 off here (cod4-combat.md 15)",
+    ),
+    (
+        "* entity 1:1 lerp.apos.trBase[1]",
+        "the same view on the walker's body",
+    ),
+    (
+        "flyer ps velocity[1]",
+        "the free spectator's velocity a bit off in its turn: pmove's float model \
+         (cod4-pmove.md 13.2)",
+    ),
+];
+
+/// `ClientImpacts` after each cmd's move: the walker's body meets the
+/// target's, and the gsc's count of the `touch` notifies each is sent,
+/// printed a frame at a time, matches retail's; a free spectator flies
+/// its own cmds beside them (cod4-pmove.md 15.2).
+#[test]
+fn cod4_touch_and_flight_ab() {
+    pair_ab("cod4_touch_and_flight_ab", &TOUCH, TOUCH_GAPS);
 }

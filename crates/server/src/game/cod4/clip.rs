@@ -54,17 +54,32 @@ impl PmWorld for Cod4Clip<'_> {
             for b in self.bodies.iter().filter(clips) {
                 let mut c = vcod_common::collision::Trace::clear(end);
                 c.fraction = t.fraction;
-                vcod_common::collision::clip_entity_box(
-                    &mut c,
-                    start,
-                    end,
-                    mins,
-                    maxs,
-                    b.origin + b.mins,
-                    b.origin + b.maxs,
-                    b.contents,
-                    b.entity,
-                );
+                // A client is `CM_TempBoxModel`'s capsule (`CM_Trace`'s
+                // 0xfff arm, `cod4_lnxded` 0x811d29c): a body met at an
+                // angle stops on its round side (cod4-pmove.md 15). The
+                // mantle blocks stay boxes.
+                if b.entity < pmove::MAX_CLIENTS as u32 {
+                    let body = vcod_common::movetrace::Body {
+                        entity: b.entity,
+                        origin: b.origin,
+                        mins: b.mins,
+                        maxs: b.maxs,
+                        contents: b.contents,
+                    };
+                    vcod_common::movetrace::clip_body_kept(&mut c, start, end, mins, maxs, &body);
+                } else {
+                    vcod_common::collision::clip_entity_box(
+                        &mut c,
+                        start,
+                        end,
+                        mins,
+                        maxs,
+                        b.origin + b.mins,
+                        b.origin + b.maxs,
+                        b.contents,
+                        b.entity,
+                    );
+                }
                 if c.fraction < t.fraction || (c.startsolid && !t.startsolid) {
                     t = Tr {
                         fraction: c.fraction,

@@ -106,10 +106,10 @@ const GAPS: &[(&str, &str, usize, &str)] = &[
     // A last bit of z on mp_crash's terrain and the sign of a velocity's
     // zero after it, pressed into a wall on a slope: the float model of
     // the trace kernels (NEEDS-M6).
-    ("walk", "origin[2]", 26, "13.2 the float model"),
+    ("walk", "origin[2]", 24, "13.2 the float model"),
     ("walk", "velocity[2]", 11, "13.2 the float model"),
     // Rows 499 and 505..508: the step up and back down a 0.78 brush slope
-    // lands 0.01 off retail's, once.
+    // lands a few ulps off retail's, once.
     ("walk", "origin[0]", 3, "13.2 the steep step"),
     ("walk", "origin[1]", 1, "13.2 the steep step"),
     // The armed walk's tail shares the walk's steep step and terrain bits.

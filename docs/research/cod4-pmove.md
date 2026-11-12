@@ -150,7 +150,12 @@ VERIFIED:
 
 ## 5. The slide and the step
 
-`PM_SlideMove` is CoD2's. `PM_StepSlideMove` differs: a step is tried when
+`PM_SlideMove` is CoD2's. In `cod4_lnxded` (0x805e030) its time left is a
+stored float: the frametime (0x805e0f7), then after each bump `time_left -
+fraction * time_left` with one store (0x805e6d5..0x805e6e9); each bump's
+end is `time_left * velocity + origin` with one store per axis
+(0x805e166..0x805e1a5), and a timer (`pm_time`) restores the whole entry
+velocity (0x805e72c). VERIFIED (the instructions). `PM_StepSlideMove` differs: a step is tried when
 the slide bumped or when the ground plane's z is under 0.9; the step's down
 trace keeps the plain slide when it lands on a contact that is
 neither walkable nor steeper than 0.3; the velocity on landing goes through
@@ -560,12 +565,12 @@ row's cmds.
 
 | capture | rows | cmds | free run exact | resynced exact | free run's largest origin error |
 |---|---|---|---|---|---|
-| walk | 787 | 1223 | 0 (first: row 53, z one bit) | 760 | 0.038 units |
+| walk | 787 | 1223 | 0 (first: row 53, z one bit) | 762 | 0.008 units |
 | fly | 438 | 1303 | 131 | 436 | 0.000 units |
 | mantle | 297 | 882 | 137 | 290 | 0.000 units |
 | lunge | 147 | 441 | 23 (first: row 155, the server's events) | 146 | 0.000 units |
 
-VERIFIED (the gate's output). The walk's free run stays within 0.04 units of
+VERIFIED (the gate's output). The walk's free run stays within 0.008 units of
 retail over 42 s of running, strafing into walls, jumping, crouching and the
 refused prone; every wrong row is one of the gaps below.
 
@@ -581,15 +586,15 @@ server holds the float itself.
 
 ### 13.2 GAPS
 
-- The float model: the walk's z one bit off on the terrain (26 rows) and
+- The float model: the walk's z one bit off on the terrain (24 rows) and
   the sign of a zero vz after it (11 rows), pressed into a wall on a slope;
   the spectator's velocity a bit off twice (4 cells: the friction's
   leftover at a stop, row 132, and a turn, row 244). The functions section 1 lists replay exactly
   under the kept model; the trace kernels (`vcod_common::clipmap`) and the
   rest of pmove still compute in the stored or plain float model, and the
   last bits that move are there. INFERRED.
-- The steep step: rows 499 and 505..508 of the walk land 0.01 off retail
-  stepping onto and back off a 0.78 brush slope: ours reverts to the plain
+- The steep step: rows 499 and 505..508 of the walk land a few ulps off
+  retail stepping onto and back off a 0.78 brush slope: ours reverts to the plain
   slide, whose move equals the step's, where retail's step went further.
   The revert test is retail's (section 1); the difference is upstream of
   it. Not found.
@@ -654,10 +659,46 @@ cod4-server-frame.md 2). What the server adds around the step:
   own `clientNum`, never moving nor following. VERIFIED live
   (a local spectator script).
 - The trace is `SV_Trace`'s: the clip map, then each other client's body
-  as a temp box of `CONTENTS_BODY` (`r.mins`, `r.maxs` as its last move
-  left them: 70, 50 or 30 high), then each solid brush entity's inline
-  model in its own frame (`game::cod4::clip::Cod4Clip`). INFERRED. No capture walks into a body or a brush entity yet; mp_crash's
-  script movers carry `solid` 0 (VERIFIED, the walk capture's entities).
+  as a temp box model of `CONTENTS_BODY` (`r.mins`, `r.maxs` as its last
+  move left them: 70, 50 or 30 high), then each solid brush entity's
+  inline model in its own frame (`game::cod4::clip::Cod4Clip`). INFERRED.
+  `CM_Trace` (0x811ce5c) sends the temp box model (0xfff, compared at
+  0x811d21d) to its own arm at 0x811d29c, which culls on the box grown by
+  a unit and builds the end spheres' centres at the sphere offset over and
+  under the start and end. VERIFIED (the instructions). So a body is a
+  capsule, as CoD2's (cod2-movement.md 20): the touch capture's walker, coming at the target about 26 to
+  the side, stopped 15.4 short of its centre in y, on its round side,
+  where a box would have stopped it 30.1 short. VERIFIED live. vcod clips a client with
+  `movetrace::clip_body_kept`, 1.1d's capsule arithmetic; its plain-float
+  twin gives the same rows. VERIFIED (the gate, 15.3). The script's plain
+  traces and the missiles go through the same `Cod4Clip`, so they meet the
+  capsule too, as `SV_Trace` would reach the same arm. INFERRED; no
+  capture holds such a trace. mp_crash's script
+  movers carry `solid` 0 (VERIFIED, the walk capture's entities); no
+  capture walks into a brush entity yet.
+- `ClientImpacts` (`cod4_lnxded` 0x80a501a) runs after the link, per cmd:
+  for each entity in the touch list (pm+0x48 count, numbers from pm+0x4c)
+  not listed earlier, with the script system up (0x815cfe0), `touch` on
+  the client with the entity, then on the entity with the client (the
+  `touch` const at 0x836f15a), then the entity's handler touch (handler
+  row +0xc, table 0x826cee0) and the client's own. VERIFIED (the
+  instructions). The rows with a touch are 1 and 3 (triggers, met through
+  `G_TouchTriggers`), 7, 16, 17 and 18 (items, `0x8092a44`) and 22 (a
+  vehicle's). VERIFIED (the table's bytes). A waiter wakes once a frame:
+  the touch capture's gsc counted one `touch` a frame each way while the
+  bodies pressed, through three cmds a frame. VERIFIED live. That each of
+  the three met the body is INFERRED.
+  vcod: `Cod4Level::after_think` hands the touch list to
+  `ScriptRuntime::client_impacts` after `ClientEvents`, and the spawn's
+  think does the same.
+- `SetClientViewAngle` (0x80a77f6) keeps each axis's turns on the x87
+  stack: the cmd's int angle times -360/65536 (0x820deb4) plus the view,
+  times the float 1/360 (0x8209630); less the floor of that plus a half
+  (`frndint` under a round-down control word), stored as a float; times
+  360 (0x8209634), one store into `delta_angles` (ps+0x64). VERIFIED (the
+  instructions). With `f32` steps vcod's spectator's delta came out a few
+  ulps off, and the free flight's velocity drifted from its first stroke.
+  VERIFIED (the gate, 15.3).
 - `ClientSpawn` puts `commandTime` 100 ms back (0x80a7e5b) and runs
   `ClientEndFrame` (0x80a68b8) and `ClientThink_real` (0x80a5c1a) on the
   last cmd at `level.time` (0x80a7e50) before it returns. VERIFIED (the
@@ -730,16 +771,19 @@ same server time, word for word, and ours is never resynced:
 
 | what | rows | exact | off only in the float model |
 |---|---|---|---|
-| the walker's playerstate (section 13's words, `holdBreathScale`, `eFlags`' pmove bits) and its teammate's origin and yaw | 789 | 73 | 716, the largest origin error 0.0385 at 70750 |
+| the walker's playerstate (section 13's words, `holdBreathScale`, `eFlags`' pmove bits) and its teammate's origin and yaw | 789 | 410 | 379, the largest origin error 0.0083 at 70600 |
 | the spectator's own playerstate (`commandTime` aside: its cmds are the probe's) | 789 | 789 | |
-| the walker's body as the spectator is sent it | 789 | 787 | 2, its `trBase[0]` crossing a unit after the steep step |
+| the walker's body as the spectator is sent it | 789 | 789 | |
 
 VERIFIED (the gate's output). The walker's run is `cod4_moves_ab`'s free
-run: the same words go wrong at the same rows (z a bit off on the terrain
-from 48000, the sign of a zero vz, x and y from the steep step at 70300
-on), and every other word, the jumps, the crouch, the refused prone, the
-eye, the ground and the breath, is exact on all 789. The gate's
-`WALK_GAPS` and `BODY_GAPS` count the rows each wrong word takes.
+run: the same words go wrong at the same rows (z a bit off on the terrain,
+the sign of a zero vz, x from the steep step at 70300 on), and every other
+word, the jumps, the crouch, the refused prone, the eye, the ground and the
+breath, is exact on all 789. The gate's `WALK_GAPS` counts the rows each
+wrong word takes. Taking 1.7's trace set-up (cod4-collision.md 2) moved the
+walker from 73 exact rows to 410, y and the body's origin to exact on all
+789, and the steep step's error from 0.0385 to 0.0083. VERIFIED (the
+gate).
 
 ### 15.2 Open
 
@@ -757,15 +801,41 @@ eye, the ground and the breath, is exact on all 789. The gate's
   all 789 rows. VERIFIED (the gate). Its angles go out `(int)`, then through the
   writer's half-short rounding (section 8): the walk's body yaw and the
   idle teammate's match retail on all 789 rows (cod4-player-anims.md 8).
-- `ClientImpacts` after the move (the pmove touch list's callbacks). The
-  triggers' touch pass runs, at the head of `G_RunFrame`
-  (`Cod4Level::touch_triggers`). The weapon half and the shots are
-  cod4-combat.md's.
-- A free spectator (`scr_game_spectatetype` 2) flies on ours (`cod4_probe
-  --script fly` against `vcod-server --set scr_game_spectatetype=2`
-  crossed 700 units of mp_crash). No server gate compares it with the
-  fly capture; the moves A/B (section 13) replays that capture through
-  pmove alone.
+- The triggers' touch pass runs at the head of `G_RunFrame`
+  (`Cod4Level::touch_triggers`); 1.7's `ClientThink_real` calls
+  0x80d3762 after `ClientImpacts`, which has not been read. The weapon
+  half and the shots are cod4-combat.md's.
+- No capture walks into a brush entity or a script model.
+- The client's prediction (`play::cod4_predict`) still clips another
+  player as a box, where the server now clips the capsule (15).
+
+### 15.3 The touch and free flight capture
+
+`cod4::capture_ab::cod4_touch_and_flight_ab` (fixtures
+`play-1.7-touch-{target,walker,flyer}.txt`, the gsc
+`crates/cod4/tests/fixtures/gsc/touch_pass`): `cod4_lnxded` 1.7 in
+cod4-handshake.md 7's namespace, `+set g_gametype war +set sv_pure 0 +set
+scr_game_spectatetype 2 +set fs_game mods/vcodtouch +devmap mp_crash`, the
+gsc in the mod's iwd. 35 s on, `target` (allies, `--goto "207 2291 296"
+--script idle`), a second later `walker` (axis, `--goto "207 2211 296"
+--script push --face 90`) and a second after that `flyer` (`--team
+spectator --script fly`). The walker walks into the target, strafes along
+it, backs off and walks in again 26 to the side; the gsc prints, each
+frame, how many `touch` notifies each player got and from whom. Ours
+replays the three on retail's clock, seed and packet order and compares
+every playerstate word, every entity and the printed lines, all three
+clients, from the last spawn. VERIFIED (the gate):
+
+- Every printed line matches retail's, time and count (one a frame each
+  way while the bodies press), and the walker's path, the second stop on
+  the target's round side included.
+- The flyer's playerstate matches but for `velocity[1]` in 4 rows of its
+  turn, a few ulps (section 13.2's float model).
+- The walker's `delta_angles[1]` reads 180 off retail's for the 0.55 s
+  after its `setviewpos`, and its body's yaw with it (cod4-combat.md 15).
+- Before the capture ours had no `ClientImpacts` (no line printed), clipped
+  bodies as boxes (the second stop 15 short of retail's) and rounded
+  `SetClientViewAngle` in `f32` (the flyer off from its first stroke).
 
 ## 16. The weapon half
 
