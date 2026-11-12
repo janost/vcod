@@ -168,9 +168,9 @@ and `walker_draws_its_view_weapon`; the zones' census is
   goal 1 over 0.1 s; it is up while `pm_flags` 0x10 and not `weapFlags`
   2, unless a reload's `weaponTime` is still past
   `adsReloadTransTime`. INFERRED (`WeaponRunXModelAnims`,
-  `PlayADSAnim`, the anim rate). Left out: the perks'
-  rate changes, the crossfade a 1 asks for, notetracks, camo variants
-  and the rocket and goggles models.
+  `PlayADSAnim`, the anim rate). Left out: the crossfade a 1 asks
+  for. The camo, the rocket, the goggles and the perks' rates are
+  section 4.7.
 - `hideTags[8]` sits at `WeaponDef`+216 as zone script string indices:
   read there, `mp5_mp` names `tag_acog`, `tag_ak47_mount` and
   `tag_reflex_sight`, `mp5_acog_mp` `tag_reflex_sight` alone,
@@ -305,6 +305,95 @@ pending a human's look.
   lavapipe, the stock Sniper class's M40A3 on vcod-server).
 - The ADS depth of field stays on under the scope (section 12):
   `CG_UpdateAdsDof` has no overlay test. INFERRED.
+
+### 4.7 Camo, rocket, goggles and the perks' rates
+
+The view DObj's rebuild is `iw3mp.exe` 0x454740; its per-frame caller
+0x454910 runs from the view weapon's anim update (0x456f60, the call at
+0x456fc4). The weapon info array is 0x748658, 0x44 bytes a weapon. The
+predicted playerstate is 0x794474, so `weaponstate` is 0x794560 (+236),
+`weapAnim` 0x794a98 (+1572), `perks` 0x794a70 (+1532), `ammoclip[]`
+0x7947d0 (+860) and `weaponmodels[]` 0x794c90 (+2076). VERIFIED (the
+offsets match vcod's netfield table: `weapon` +232 at 0x79455c,
+`weapFlags` +16 at 0x794484, `offHandIndex` +224 at 0x794554).
+
+- **Camo.** The rebuild takes a `gunModel[]` slot in `cl` and reads
+  `WeaponDef` +12 + 4 * slot (0x454769). It keeps the old DObj when that
+  slot is empty (the branch at 0x454771). VERIFIED. The slot is
+  `weaponmodels[viewmodel weapon]` (the `movzx` at 0x456fa6). VERIFIED.
+  A new snapshot whose `weaponmodels[w]` differs from the slot weapon
+  `w`'s info holds (+0x14) rebuilds that weapon's DObj (0x4549a0, reading
+  `cg.nextSnap` +0x828). VERIFIED. The rebuild passes the old DObj's
+  first word to the new DObj's create (0x4547a6..0x4547ae, then
+  0x454869) and copies info +0x18..+0x24 into the new DObj +0x50
+  (0x45486e..0x45488e). VERIFIED (the loads and stores). Those are the
+  anim tree and the saved `hidePartBits`, so a camo change keeps the
+  running clip, and the camo's gun hides the same `hideTags`.
+  INFERRED.
+- The server side: `giveWeapon(name, model)` (`cod4_lnxded` 0x80abc48)
+  takes `model` only when it is 0..=255 and that `gunModel[]` slot is set,
+  else 0 (0x80abd8e..0x80abdad). `G_GivePlayerWeapon` (0x80a327c) stores
+  it in `ps.weaponmodels[weapon]` (+0x81c, 0x80a3317) and in each alt it
+  brings (0x80a33b3). VERIFIED. vcod-server does the same
+  (`Loadout::give`, `WeaponDef4::camo`); a pickup gives slot 0.
+- `common_mp`'s primaries carry slot 0 and five camos (1 `_brock`, 2
+  `_bshdwl`, 3 `_bwmrpt`, 4 `_cmdtgr`, 5 `_stagger`), the AK-47, Mini-Uzi,
+  M1014, M60E4 and Dragunov a gold slot 6. Every camo has slot 0's bones,
+  surfaces, vertices and triangles; only the materials differ
+  (`mc/mtl_weapon_ak47` against `mc/mtl_weapon_ak47_bwmrpt`;
+  `mtl_weapon_ak47_misc_nocamo` and the sights' stay). VERIFIED
+  (`common_mp.ff`; 203 camo models over 58 slot-0 guns, 17 images of
+  their own). vcod draws such a camo as slot 0's model with the camo's
+  materials swapped in (`cod4_fly::camo_swap`), so a camo costs no mesh
+  of its own; a camo that differs in mesh loads as its own model. An
+  empty slot draws slot 0 (retail keeps what it drew; slot 0 at the
+  first build). `cod4_viewmodel`'s `a_camo_draws_its_slots_materials`
+  and `play::cod4`'s
+  `cod4_live_a_given_camo_and_the_rocket_reach_the_view_weapon`
+  (`giveWeapon("ak47_mp", 3)` on vcod-server: the AK-47 draws
+  `mtl_weapon_ak47_bwmrpt`). VERIFIED.
+- **Rocket.** The rebuild grafts the parts in the order hands, gun at
+  `tag_weapon`, goggles, `rocketModel` (+768) at `tag_clip`, `knifeModel`
+  at `tag_knife_attach` (0x4547ca..0x45485e). The tags are the `scr_const`
+  shorts 0x1406f36, 0x1406f1e and 0x1406f2e, stored from
+  `SL_GetString("tag_weapon")`, `("tag_clip")` and
+  `("tag_knife_attach")` (0x4ebef4..0x4ebf10, 0x4ebde0..0x4ebdfc,
+  0x4ebe98..0x4ebeb4: each store takes the previous call's result).
+  VERIFIED. The rocket test (0x4548b0) is true when the view weapon's
+  `rocketModel` is set and `ammoclip[]` at `ps.weapon`'s clip index
+  (`WeaponDef` +816, filled at registration) is non-zero, or when
+  `weaponstate` is 7..=11 and `reloadTime` (+904) less `weaponTime` is
+  over `reloadShowRocketTime` (+908). VERIFIED (the compares); +816 being
+  the clip index is INFERRED (no weapon file key names it). The per-frame
+  caller rebuilds only when the rocket or the knife (`weapAnim` 8 or 9,
+  toggle off) changes. VERIFIED (0x45495c..0x45496a). `rpg_mp` alone
+  carries a `rocketModel` (`viewmodel_rpg7_rocket`), `reloadTime` 3292,
+  `reloadShowRocketTime` 100. VERIFIED (`common_mp.ff`;
+  `the_launcher_draws_its_rocket_while_loaded`, the live test above).
+- **Goggles.** The goggles part (info +8) grafts at `tag_gasmask`, or
+  `tag_gasmask2` under `overrideNVGModelWithKnife` (dvar 0x74a874,
+  registered at 0x43dbe5, "nightvision animations will attach the
+  weapDef's knife model instead of the night vision goggles"). VERIFIED.
+  No 1.7 MP path sets it: info +8 is written only by the rebuild, every
+  caller passes 0 (0x45497e) or the value already there (0x4549dd,
+  0x454a49), and the registration zeroes the info (0x454372). VERIFIED
+  (the stores). So the MP view weapon draws no goggles; the night vision
+  wear and remove play on the gun alone. INFERRED. vcod draws none.
+- **Perk rates.** A view node starts at 0x453a40. Its rate is the clip's
+  length over the node's `g_animRateOffsets` time (0x4539d0), divided by
+  `perk_weapReloadMultiplier` (dvar 0x736ba0) when `weaponstate` is
+  7..=11 and `perks` bit 0x4 (Sleight of Hand) is set, or by
+  `perk_weapRateMultiplier` (0x736ba4) when `weaponstate` is 6 and bit
+  0x8 (Double Tap) is set. A multiplier of 0 sets the rate to 1000
+  (0x70bae8). VERIFIED (0x453a78..0x453ad7). The defaults are 0.5 and
+  0.75 (the floats 0x6be648 at 0x40dd4d and 0x6bdf74 at 0x40dda9 before
+  the registrations at 0x40dda4 and 0x40de00), range 0..1. VERIFIED. The
+  rate is fixed when the node starts; a perk or state change mid-clip
+  does not move it. INFERRED (nothing else writes the node's rate).
+  `cod4_viewmodel::perk_divisor`; under Sleight of Hand the M16's
+  reload sounds its clip out and in at half the times
+  (`an_m16_reload_sounds_its_clip_out_and_in_off_its_notetracks`).
+  VERIFIED.
 
 ## 5. Prediction
 

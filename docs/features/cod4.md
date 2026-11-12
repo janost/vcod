@@ -130,7 +130,10 @@ The weapon byte is the client's own pick
 - The held weapon's view model at `cg_fov` 65 with the sight's zoom. Its
   clips follow `weapAnim` (idle, fire, reload, raise, drop, sprint, melee
   with the knife) under the sight layer. `hideTags` hides missing
-  attachments. A reflex sight's dot projects off the view angle.
+  attachments. A reflex sight's dot projects off the view angle. The gun
+  wears the camo `giveWeapon` gave it, the RPG shows its rocket while
+  loaded, and Sleight of Hand and Double Tap speed the reload and
+  rechamber clips.
 - Move offsets, idle drift, bob and sway; own flash and shell eject on
   `tag_flash` and `tag_brass`; recoil spring, damage kick, landing dip.
 - Shot recoil kicks the view through the cmd's angles; a hit kicks it
@@ -406,9 +409,8 @@ Ranked by how much a player notices. The research-side lists are
    not ODE, so corpses fall differently
    ([cod4-gsc.md](../research/cod4-gsc.md) 3.2,
    [cod4-player-anims.md](../research/cod4-player-anims.md) 10).
-4. **View weapon details.** No camo; every gun draws its first model.
-   The rocket on a launcher and the goggles model are not drawn, and
-   Sleight of Hand does not speed the view clips.
+4. **Other players' guns wear no camo.** Their world model is always
+   the weapon's first; the entity's `weaponModel` is not read.
 5. **Mantle anims on others.** The server's anim script skips the mantle
    movetypes, so another player climbing a wall plays no mantle anim
    ([cod4-pmove.md](../research/cod4-pmove.md) 17.5).

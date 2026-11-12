@@ -25,8 +25,8 @@ Ranked by how much a player notices.
   client treats `TR_PHYSICS` as stationary (`play::cod4::trajectory`;
   cod4-gsc.md 3.2). The ragdoll is a position-based solver, not ODE
   (cod4-player-anims.md 10). L.
-- The view model: no camo variants (every gun draws `gunModel[0]`), no
-  rocket or goggles models, no perk anim rates (`cod4_viewmodel`). M.
+- Other players' camo: a third-person gun draws `worldModel[0]`; the
+  entity's `weaponModel` is not read, nor set by vcod-server. S.
 - Multichannel output: kira mixes stereo, so a 5.1 or 7.1 device gets
   the stereo mix on its front pair (cod4-sound.md 4.2, 5). The 139 alias
   rows whose curve no walked zone holds fall off straight. L.
@@ -42,6 +42,11 @@ Ranked by how much a player notices.
 
 ## Fixed
 
+- The view model: the camo's `gunModel[]` slot off `weaponmodels[]`
+  (vcod-server's `giveWeapon` sets it), the RPG's rocket at `tag_clip`
+  while loaded, Sleight of Hand and Double Tap dividing the clips' rates;
+  1.7 MP draws no goggles model (`cod4_viewmodel`, cod4-client-view.md
+  4.7).
 - Distortion (heat haze, muzzle flash rings) bends a copy of the frame:
   `fs_distort`, `scene_copy` (cod4-effects.md 17).
 - Spot light shadow maps, up to `sm_maxLights` with retail's fade
