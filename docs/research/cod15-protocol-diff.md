@@ -135,9 +135,9 @@ The low sixteen bits keep their 1.1 meaning except 0x2000. The bits above were r
 | `B` | `CG_MapRestart(0)` (0x3002df90). 1.5b's `map_restart` sends it in place of 1.1's `n`: `d 13`, `d 12`, `d 3`, `B`, then `d 1` with the new `sv_serverid`. `n` now calls `CG_MapRestart(1)`; the argument only decides whether the script menus reset | live, VERIFIED; the argument's meaning INFERRED | treats `B` as `n` |
 | `C` | `record %s-%s` under `cg_autodemo` 1 | strings VERIFIED; the gate INFERRED from the branches | runs it (`play::demos`, `cod11-demos.md` 6) |
 | `D` | `stoprecord` under `cg_autodemo` 1 | same | runs it |
-| `E` | `screenshotJPEG %s-%s` under `cg_autoscreenshot` 1 | same | ignored; vcod has no screenshot command |
+| `E` | `screenshotJPEG %s-%s` under `cg_autoscreenshot` 1 | same | runs it (`screenshot::auto_command`, `cod11-demos.md` 9.5) |
 
-- The arguments are the player's `name` stripped to letters and digits (0x3002f470) and the string from cgame trap 0xf4 (decompile, INFERRED). vcod's second argument is the local `yyyyMMdd-HHmmss`, trap 0xf4 at CoDMP15.exe 0x46af40 (VERIFIED).
+- The arguments are the player's `name` stripped to letters and digits (0x3002f470) and the string from cgame trap 0xf4 (decompile, INFERRED). `C` puts the name first; `E` puts the stamp first, `screenshotJPEG <stamp>-<name>` (VERIFIED, the pushes at 0x3002faa5..0x3002fab9; `cod11-demos.md` 9.5). vcod's second argument is the local `yyyyMMdd-HHmmss`, trap 0xf4 at CoDMP15.exe 0x46af40 (VERIFIED).
 - The 1.5b game module sends `C`, `D`, `E` reliably to one client from the player methods `autoDemoStart`, `autoDemoStop` and `autoScreenshot` (0x411bb, 0x41295, 0x4136f; their usage errors name them, VERIFIED).
 
 ## 9. Pmove
@@ -494,4 +494,4 @@ Client:
 Server:
 - `vcod-server` hosts protocol 6 when its install is 1.5 (section 13), with the match timeout (section 12), 1.5's chat and `g_deadChat`, votes and www redirects (sections 13, 14).
 
-Not done: the 1.5 pmove changes `cod15-movement.md` leaves out, PunkBuster, and `E` on the client (vcod has no screenshot command).
+Not done: the 1.5 pmove changes `cod15-movement.md` leaves out and PunkBuster.

@@ -71,6 +71,12 @@ pub enum Effect {
     ApplyPicmip,
     /// `ui_load`: reload the menus off `ui_menuFiles`.
     UiLoad,
+    /// `screenshot` (`jpeg` false) or `screenshotJPEG` and the arguments
+    /// after the word (crate::screenshot).
+    Screenshot {
+        jpeg: bool,
+        args: Vec<String>,
+    },
     /// `mp_QuickMessage`, a cgame command (cgame_mp_x86.dll 0x300140e0):
     /// open the quick message menu.
     QuickMessage,
@@ -205,6 +211,8 @@ const COMMANDS: &[&str] = &[
     "record",
     "say",
     "say_team",
+    "screenshot",
+    "screenshotJPEG",
     "set",
     "seta",
     "setfromcvar",
@@ -596,10 +604,18 @@ impl Shell {
         // `RECORDING` line (cod11-demos.md 6 and 8).
         s.register("cg_autodemo", "0", ARCHIVE);
         s.register("cg_showdemoname", "1", ARCHIVE);
+        // 1.5's and UO's cgame shoots a JPEG on the server's `E` while this
+        // is 1 (rows at 0x30077024 and 0x300858c4: "0", archived;
+        // cod11-demos.md 9.5).
+        s.register("cg_autoscreenshot", "0", ARCHIVE);
         // CL_Init (CoDMP.exe 0x411fd8, 0x411f8e): `timedemo` "0" with no
         // flags, `cl_freezeDemo` "0" CVAR_TEMP (cod11-demos.md, "Playback").
         s.register("timedemo", "0", 0);
         s.register("cl_freezeDemo", "0", 0);
+        // CL_Init (CoDMP.exe 0x411fe3, 0x411ff8): "0", no flags; CoD2 and
+        // CoD4 register them int and bool, 0 (cod11-demos.md 9.6).
+        s.register("cl_avidemo", "0", 0);
+        s.register("cl_forceavidemo", "0", 0);
         // Com_Init (CoDMP.exe 0x437807) registers "85", archived; vcod
         // defaults to 0 (1 ms floor) so high-refresh vsync isn't held near
         // 90 fps. `Com_Frame` paces every frame by it (cod11-demos.md 5).
@@ -1376,6 +1392,10 @@ impl Shell {
             "ui_load" => out.push(Effect::UiLoad),
             "mp_quickmessage" => out.push(Effect::QuickMessage),
             "cg_shellshock" => out.push(Effect::ShellShock(tokens[1..].to_vec())),
+            "screenshot" | "screenshotjpeg" => out.push(Effect::Screenshot {
+                jpeg: word == "screenshotjpeg",
+                args: tokens[1..].to_vec(),
+            }),
             "cvarlist" => {
                 let prefix = arg(1).map(str::to_ascii_lowercase);
                 let mut n = 0;

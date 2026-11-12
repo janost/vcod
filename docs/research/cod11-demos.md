@@ -21,9 +21,8 @@ the `Cvar_Get` at `0x411fd8`, handle `0x15f706c`) and `cl_freezeDemo`
 (`0x439280`) and reads `""` when it is missing (VERIFIED, `0x40ed80`).
 1.5 and UO register the two the same (VERIFIED, `CoDMP15.exe` and
 `CoDUOMP.exe` `CL_Init`, the `"cl_freezeDemo"` and `"timedemo"` calls).
-vcod has the three commands, `timedemo`, `cl_freezeDemo` and `nextdemo`;
-`cl_avidemo` and `cl_forceavidemo` take screenshots, which vcod has
-none of.
+vcod has the three commands, `timedemo`, `cl_freezeDemo` and `nextdemo`,
+and `cl_avidemo` and `cl_forceavidemo` (section 9).
 
 - `record [name]` prints `record <demoname>` with more than one argument,
   `Already recording.` while recording, and `You must be in a level to
@@ -297,7 +296,6 @@ the two commands on a 1.5 or UO server.
 
 ## 7. Not done
 
-- `cl_avidemo` and `cl_forceavidemo`: vcod takes no screenshots.
 - Untested across clients: no retail client demo has been played in vcod,
   nor a vcod demo in a retail client. The format checks are vcod against
   itself (`crates/server/tests/demos.rs`)
@@ -346,3 +344,131 @@ vcod draws it in the online frame's live phase over the HUD and under
 the menus, none of them fullscreen (`Console::recording_line`,
 `Ui::fullscreen`), its size the bytes the
 `DemoWriter` has written.
+
+## 9. Screenshots and `cl_avidemo`
+
+The renderer's `screenshot` and `screenshotJPEG`, the 1.5 and UO cgame's
+`cg_autoscreenshot`, and `cl_avidemo`'s shot a frame. 1.1 addresses
+first, 1.5 (`CoDMP15.exe`) and UO (`CoDUOMP.exe`) after them; the code is
+the same in all three unless a bullet says otherwise. vcod:
+`crates/client/src/screenshot.rs`, the read-back in
+`crates/client/src/renderer/capture.rs`, the clock in
+`crates/client/src/frame_clock.rs`.
+
+### 9.1 Commands
+
+- The renderer registers `screenshot` (`0x4b25a0`; 1.5 `0x4bd480`, UO
+  `0x4c2d60`) and `screenshotJPEG` (`0x4b2770`; 1.5 `0x4bd650`, UO
+  `0x4c2f60`) through `ri.Cmd_AddCommand` (pushes at `0x4b44d1` and
+  `0x4b44e1`; 1.5 `0x4bf3c0`, `0x4bf3d0`; UO `0x4c4d22`, `0x4c4d32`).
+  VERIFIED.
+- Both read their first argument the same way, exact compares (VERIFIED):
+  `levelshot` (`0x558870`) writes `levelshots/<map>.tga` (`0x558890`), a
+  128 x 128 box-filtered TGA, and always prints `Wrote`; `savegame`
+  (`0x558864`) with three arguments and a non-empty second writes
+  `<arg2>.jpg` (`0x55887c`) at 512 x 512, quality 90, with no line;
+  `silent` (`0x55885c`) only silences; any other lone argument names the
+  file; everything else numbers it.
+- vcod reads the same arguments and writes neither `levelshot` nor
+  `savegame`.
+
+### 9.2 Names
+
+- A named shot is `screenshots/%s.tga` (`0x558848`) or
+  `screenshots/%s.jpg` (`0x558810`), the argument as typed, with no
+  existence check, so it overwrites (VERIFIED).
+- A numbered one is `screenshots/shot%04i.tga` (`0x5588dc`) or `.jpg`
+  (`0x5588a4`). Each format keeps its own static counter (`0x571794` TGA,
+  `0x571798` JPEG; 1.5 `0x5b2294`, UO `0x5ce90c`), -1 in `.data` and so 0
+  on the first shot. The counter steps past every name `FS_ReadFile`
+  finds and stores the found number plus one, so a later shot never looks
+  below it (VERIFIED). INFERRED: the read searches the whole path, so a
+  copy in a pak counts as taken; vcod looks in the folder it writes to.
+- The TGA gives up at 9999 and never writes `shot9999.tga`; the JPEG
+  gives up at 10000. Either prints `ScreenShot: Couldn't create a file`
+  (`0x558824`) whatever `silent` says (VERIFIED).
+- INFERRED (Q3's `FS_WriteFile`): the path is under `fs_homepath` and the
+  game folder, the mod's under `fs_game`. vcod writes
+  `<install>/<fs_game or main or uo>/screenshots/`.
+
+### 9.3 Format
+
+- TGA (`0x4b0f90`; 1.5 `0x4bbe30`, UO `0x4c1800`): an 18-byte header, zero
+  but byte 2 = 2 (uncompressed truecolour), bytes 12-15 the width and
+  height little-endian, byte 16 = 24 and byte 17 = 0, so the rows run
+  bottom-up; then `glReadPixels(0, 0, vidWidth, vidHeight, GL_RGB)` with R
+  and B swapped, the whole window (VERIFIED).
+- JPEG (`0x4b10a0`; 1.5 `0x4bbf50`, UO `0x4c1920`): read as `GL_RGBA`,
+  then `SaveJPG(name, 95, w, h, 1, buf)` (`0x4ed610`; quality pushed at
+  `0x4b1126`, 1.5 `0x4bbfec`, UO `0x4c19bc`). The 1 feeds the rows from
+  the last, so the file is top-down (VERIFIED, `0x4ed820`). No cvar sets
+  the quality. INFERRED: libjpeg's default sampling.
+- vcod writes the same TGA header and rows and a baseline JPEG at 95 off
+  the `image` crate's encoder, not byte for byte libjpeg's.
+
+### 9.4 Gamma and the frame
+
+- The read-back pixels go through the gamma table (`0x11de160`, TGA at
+  `0x4b1040`, JPEG through `0x4ea4b0`) only when `overbrightBits`
+  (`0x16c55b8`) is above 0 and the device takes gamma (`0x16c3a8c`)
+  (VERIFIED; 1.5 `0x199d798` / `0x199bc6c`, UO `0x4885898` /
+  `0x489a04c`). The table carries the overbright shift (section 2 of
+  `cod11-gamma.md`). INFERRED: a full screen shot shows what the screen
+  did, and a windowed one, with no overbright bits, the framebuffer before
+  `r_gamma`. vcod reads the swapchain in the first case and the gamma
+  pass's scene before the ramp in the second (`screenshot::pre_gamma`).
+- The command reads the framebuffer in its own handler, no render command
+  (VERIFIED). 1.1 never calls `glReadBuffer` (VERIFIED, no call through
+  `0x16c438c`), so it reads `GL_BACK`; 1.5 and UO switch to `GL_FRONT`
+  around the read and back (VERIFIED, 1.5's qgl pointer at `0x199c56c`,
+  UO's `0x4899504`), the frame last shown. INFERRED: a console
+  `screenshot` runs from `Cbuf_Execute` (`0x428300` at `0x438212`) before
+  that frame draws. vcod reads the next frame it draws, console and menus
+  included.
+- The line is `Wrote %s` (`0x558884`) with the path from `screenshots/`,
+  unless `silent` (VERIFIED; 1.5 `0x596e7c`, UO `0x5a4704`). INFERRED (Q3):
+  it prints whether the write took or not; vcod prints `Failed to open`
+  before it when the write fails.
+
+### 9.5 `cg_autoscreenshot`
+
+- 1.1's cgame has no such string (VERIFIED). 1.5's and UO's carry it in
+  their cvar tables, `"0"`, flags 1 (`CVAR_ARCHIVE`) (VERIFIED, the rows
+  at `0x30077024` and UO `0x300858c4`).
+- `CG_ServerCommand`'s `E` (1.5 `0x3002fa61`, UO `0x3003b221`) reads it
+  with `trap_Cvar_VariableStringBuffer` into two bytes and goes on only
+  when `atoi` is 1 (VERIFIED). It reads `name`, keeps `a-z`, `A-Z` and
+  `0-9` (`0x3002f470`, the `^` of a colour code dropped and its digit
+  kept), and runs `va("screenshotJPEG %s-%s", stamp, name)` (`0x30064988`)
+  through trap 0xf5 (VERIFIED, the pushes: the stamp from trap 0xf4 at
+  `0x30031c40`, then the name). The stamp is `yyyyMMdd-HHmmss` (section
+  6). So the file is `screenshots/<yyyyMMdd-HHmmss>-<name>.jpg`. UO's
+  traps are 0xf9 and 0xfa (VERIFIED).
+- Nothing in the cgame shoots at intermission (VERIFIED, the only
+  reader is `E`). The game module sends `E` from `autoScreenshot` under
+  `g_autoscreenshot` (`cod15-protocol-diff.md` 8). vcod runs it the same
+  (`screenshot::auto_command`).
+
+### 9.6 `cl_avidemo`
+
+- `CL_Init` registers `cl_avidemo` and `cl_forceavidemo` `"0"` with no
+  flags (VERIFIED, `0x411fe3`, `0x411ff8`; 1.5 `0x4134f9`, UO
+  `0x41468a`).
+- `CL_Frame(msec)` (`0x4112f1`; 1.5 `0x4127c2`) when `cl_avidemo` and
+  `msec` are both non-zero: in `CA_ACTIVE` (6) or under
+  `cl_forceavidemo` it runs `screenshot silent` (`0x566d40`) at once
+  (`Cmd_ExecuteString` `0x428a80`), then sets `msec =
+  ftol(1000.0f / cl_avidemo * timescale)` (`0x569090`, `timescale` at
+  `0x163a234`, the truncating `0x538be0`), 1 when that is 0 (VERIFIED).
+  Float math, not Q3's integer `1000 / n`. No demo check: a demo plays in
+  state 6 (INFERRED).
+- UO (`0x41391f`) takes `fabs(cl_avidemo)` in the step and runs
+  `screenshot silent` for a positive count and `screenshotjpeg silent`
+  (`0x593ddc`) for a negative one (VERIFIED).
+- vcod: the frame clock moves the step a frame, the demo and the
+  session reading it, and the next frame is written. A negative count on
+  1.1 and 1.5 steps the clock back on retail; vcod holds it at 1 ms.
+- INFERRED (Q3's `ui_shared`): the 1.1 cgame's menu key handler queues
+  `screenshot` (`0x300613c0`) on F12 while `developer` is set
+  (`0x300451a8`). vcod has no such key.
+

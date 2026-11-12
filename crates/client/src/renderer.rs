@@ -39,6 +39,7 @@ use vcod_common::shader::{Shader, ShaderLib};
 use vcod_common::static_light::{SceneLight, StaticLighting};
 use vcod_common::vis::{Frustum, Visible, WorldVis};
 
+mod capture;
 mod cod2;
 mod cod2_cookie;
 mod cod2_water;
@@ -63,6 +64,7 @@ mod cod4_spot_live;
 mod cod4_worldfx;
 #[cfg(test)]
 mod cod4_worldfx_live;
+pub use capture::Capture;
 pub(crate) use cod2::specularity_map;
 pub use cod2_cookie::{CookieEntity, CookieSettings};
 mod fx_cloud;
@@ -80,6 +82,8 @@ mod material_keys;
 pub(crate) mod pipeline_check;
 #[cfg(test)]
 mod prop_blends;
+#[cfg(test)]
+mod screenshot_live;
 
 // The vertex layout below hardcodes the BSP drawvert stride.
 const _: () = assert!(std::mem::size_of::<DrawVert>() == 44);
@@ -3603,6 +3607,12 @@ pub struct Renderer {
     /// The last frame drew its post pass, or its scene, and 2D into the
     /// swapchain and ran no gamma pass (`GammaPass::identity`).
     gamma_skipped: bool,
+    /// [`Renderer::request_capture`]: the next drawn frame is read back,
+    /// before the gamma ramp when the flag is set.
+    capture_wanted: Option<bool>,
+    /// The frame read back (`None` inside when it could not be), until
+    /// [`Renderer::take_capture`].
+    captured: Option<Option<Capture>>,
     /// Off keeps the gamma pass on an identity ramp, for an A/B.
     #[cfg(test)]
     swap_direct: bool,
@@ -3866,7 +3876,9 @@ impl Renderer {
                 .unwrap_or(caps.formats[0])
         };
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            // read back for `screenshot` where the surface allows it
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | (caps.usages & wgpu::TextureUsages::COPY_SRC),
             format,
             color_space: wgpu::SurfaceColorSpace::Auto,
             width,
@@ -4307,6 +4319,8 @@ impl Renderer {
             hud_pass,
             gamma,
             gamma_skipped: false,
+            capture_wanted: None,
+            captured: None,
             #[cfg(test)]
             swap_direct: true,
             world_format,
@@ -6916,6 +6930,19 @@ impl Renderer {
             self.hud_pass.textures.clear();
             self.hud_pass.mip_names = names;
         }
+    }
+
+    /// Reads the next frame `render` draws back for [`Self::take_capture`]
+    /// (`screenshot`, `cl_avidemo`): as the screen shows it, or with
+    /// `pre_gamma` the framebuffer's bytes before the gamma ramp.
+    pub fn request_capture(&mut self, pre_gamma: bool) {
+        self.capture_wanted = Some(pre_gamma);
+    }
+
+    /// The frame [`Self::request_capture`] asked for, once drawn: `None`
+    /// before that, `Some(None)` when it could not be read back.
+    pub fn take_capture(&mut self) -> Option<Option<Capture>> {
+        self.captured.take()
     }
 
     /// For a lost or outdated swapchain.
@@ -10288,6 +10315,17 @@ impl Renderer {
         if let Some(f) = &mut self.frag_stats {
             f.resolve(&mut encoder);
         }
+        // Before the ramp is the gamma scene, unless the frame drew
+        // straight into the swapchain past an identity ramp.
+        let readback = self.capture_wanted.take().map(|pre_gamma| {
+            let tex = match (&surface_tex, &self.target) {
+                _ if pre_gamma && !self.gamma_skipped => self.gamma.scene_view().texture(),
+                (Some(t), _) => &t.texture,
+                (None, Target::Offscreen(t)) => t,
+                (None, Target::Surface(_)) => unreachable!("a surface frame holds its texture"),
+            };
+            capture::encode(&self.device, &mut encoder, tex)
+        });
         prof.next(crate::frame_prof::Stage::Finish);
         let commands = encoder.finish();
         prof.next(crate::frame_prof::Stage::Submit);
@@ -10298,6 +10336,9 @@ impl Renderer {
         self.sun_shadow.after_submit();
         if let Some(f) = self.sky.as_mut().and_then(|s| s.flare.as_mut()) {
             f.after_submit();
+        }
+        if let Some(rb) = readback {
+            self.captured = Some(rb.and_then(|rb| capture::finish(&self.device, rb)));
         }
         if let Some(t) = surface_tex {
             self.queue.present(t);

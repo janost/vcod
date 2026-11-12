@@ -606,7 +606,7 @@ impl Cod2Session {
             fx_for: 0,
             input: Cod2Input::default(),
             talking: false,
-            epoch: now,
+            epoch: crate::frame_clock::now(),
             clock: ServerClock::cod2(),
             cmd_clock: CmdClock::default(),
             sent: VecDeque::new(),
@@ -1145,9 +1145,13 @@ impl Cod2Session {
         snap + self.snap_at.elapsed().as_millis() as i32
     }
 
-    /// Local ms since the session started.
+    /// Local ms since the session started, on the client's frame clock
+    /// (`cls.realtime`, which `cl_avidemo` steps).
     fn real_ms(&self) -> f64 {
-        self.epoch.elapsed().as_secs_f64() * 1000.0
+        crate::frame_clock::now()
+            .saturating_duration_since(self.epoch)
+            .as_secs_f64()
+            * 1000.0
     }
 
     /// `CL_SetCGameTime`'s clock for this frame, off the newest snapshot.

@@ -21,6 +21,8 @@ cpal.workspace = true
 ctrlc.workspace = true
 env_logger.workspace = true
 glam.workspace = true
+# screenshotJPEG's encoder (screenshot.rs)
+image.workspace = true
 jiff.workspace = true
 kira.workspace = true
 libloading.workspace = true
@@ -31,7 +33,6 @@ winit.workspace = true
 wgpu.workspace = true
 
 [dev-dependencies]
-image.workspace = true
 vcod-server = { path = "../server" }
 tempfile.workspace = true
 zip.workspace = true

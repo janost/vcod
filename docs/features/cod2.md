@@ -160,7 +160,14 @@ their gun's `tag_flash`.
 **Demos** ([cod2-demos.md](../research/cod2-demos.md)). `record` and
 `stoprecord` write CoD2's `.dm_1` in a game. `demo <name>` and `timedemo
 <name>` play one through the session's frame, unpredicted. Retail's
-demos play in vcod and vcod's in retail.
+demos play in vcod and vcod's in retail. `cl_avidemo <fps>` steps the
+clock a fixed `1000 / fps` ms a frame and writes each as a TGA.
+
+**Screenshots** ([cod2-demos.md](../research/cod2-demos.md) 8).
+`screenshot` and `screenshotJPEG` write `screenshots/shotNNNN.tga` (top-down)
+or `.jpg` (quality 90) under the game folder, one count for both; a lone
+argument names the file, `silent` drops the `Wrote` line. The shot holds
+the frame before `r_gamma`, as D3D's front buffer does.
 
 ### Server
 
@@ -315,7 +322,8 @@ Ranked by how much a player notices, worst first.
 6. **Demo details.** `timedemo` writes no `demos/timedemo_*.csv`; a demo
    draws no `EV_STEP_VIEW` smoothing
    ([cod2-demos.md](../research/cod2-demos.md) 7). Retail's front end has
-   no demo list either.
+   no demo list either. `screenshot levelshot` and `savegame` write
+   nothing.
 7. **Server odds and ends.** `give all` hands over every weapon the level
    registered, not retail's slot rule. Downloads serve only `.iwd` files
    under the game dir, where retail serves any file.

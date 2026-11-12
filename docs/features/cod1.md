@@ -205,6 +205,18 @@ Demos:
   `Couldn't load maps/mp/<map>.bsp`. `cg_autodemo 1` records on a 1.5
   server's `autoDemoStart` ([cod11-demos.md](../research/cod11-demos.md)).
 
+Screenshots ([cod11-demos.md](../research/cod11-demos.md) 9):
+
+- `screenshot` writes `screenshots/shotNNNN.tga` in the game folder,
+  bottom-up as retail's; `screenshotJPEG` a JPEG at quality 95. A lone
+  name argument names the file, `silent` drops the `Wrote` line. Windowed,
+  the shot is the framebuffer before `r_gamma`, as retail's.
+- `cg_autoscreenshot 1` shoots `<date-time>-<name>.jpg` on a 1.5 or UO
+  server's `autoScreenshot`.
+- `cl_avidemo <fps>` steps the clock `1000 / fps` ms a frame and writes
+  each frame in a game or a demo (`cl_forceavidemo 1`: in the menus too);
+  a negative count on UO writes JPEGs.
+
 ### Server
 
 Wire and housekeeping:
@@ -350,7 +362,7 @@ Front end:
 Client:
 
 - No PunkBuster; PunkBuster servers refuse vcod.
-- No screenshots, so `cg_autoscreenshot` and `cl_avidemo` do nothing.
+- `screenshot levelshot` and `screenshot savegame` write nothing.
 - No CoD1 demo has crossed between vcod and a retail client yet, either
   way ([cod11-demos.md](../research/cod11-demos.md) 7).
 - `deformVertexes text` and `syncNormal` (no stock user) parse and do

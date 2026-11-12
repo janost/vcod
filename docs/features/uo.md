@@ -38,7 +38,8 @@ Joining and watching:
   (coduo-diff.md 19).
 - Every body's spine and lean ease toward the view as UO's do.
 - `record` writes `.dm_3`; `cg_autodemo 1` records on the server's
-  `autoDemoStart`.
+  `autoDemoStart`, `cg_autoscreenshot 1` shoots on its `autoScreenshot`.
+  A negative `cl_avidemo` writes JPEG frames.
 
 On foot:
 
@@ -161,7 +162,7 @@ Everything from [cod1.md](cod1.md#bots), plus ([bots.md](../bots.md)):
 ## Missing compared to retail
 
 Everything under [cod1.md](cod1.md#missing-compared-to-retail) applies:
-no listen server, no PunkBuster, no screenshots, the UI DLL ignored, no
+no listen server, no PunkBuster, no levelshots, the UI DLL ignored, no
 authorize server, rcon's subset.
 
 - Audio has had little checking by ear, tank engines included.
