@@ -68,8 +68,10 @@ still missing against retail, and what vcod adds that retail never had.
   (`--ban-file`), `g_log`, pings, rate and `snaps` pacing, zombies,
   downloads and `getinfo` / `getstatus` as each retail server does them.
 - `dedicated` defaults to 1 (no heartbeat); `--set dedicated=2` opts in.
-- No stdin console, no authorize server, no anti-cheat. Host for people
-  you'd lend your car to.
+- A stdin console as on the retail Linux servers: each line runs as a
+  server command (`--no-console` turns it off).
+- No authorize server, no anti-cheat. Host for people you'd lend your car
+  to.
 
 ### Bots
 

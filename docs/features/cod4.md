@@ -365,7 +365,8 @@ stale player in the scripts.
   dvar commands (`set`, `seta`, `setu`, `toggle`, `togglep`, `reset`,
   `setfromdvar`, `dvar_bool`/`int`/`float`, `setdvartotime`),
   `writeconfig`, `vstr`, `exec` (a zone's rawfile, then iwds and files
-  in 1.7's order), `cmdlist`, and the map commands.
+  in 1.7's order), `cmdlist`, and the map commands. Each runs from
+  stdin too (cod4-handshake.md 14.4).
 - `g_log` writes 1.7's `games_mp.log`: `InitGame`, `ShutdownGame`,
   `ExitLevel`, chat and weapon lines and the scripts' `J;`, `Q;`, `D;`,
   `K;`. `g_inactivity` warns and drops idle players.

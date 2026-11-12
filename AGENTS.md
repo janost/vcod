@@ -167,7 +167,7 @@ the subsystem's doc before touching it.
 |---|---|
 | The wire; its last section lists every divergence from RTCW/Q3 | `docs/protocol-1.1.md` (check it before assuming Q3 semantics) |
 | `clientState_t`, the third snapshot stream | `clientstate-wire-format.md` |
-| Handshake, configstrings, rcon, heartbeat, zombies, pings, rate, bans, passwords, private slots, pacing, downloads, CD key | `cod11-server-handshake.md` (Housekeeping section) |
+| Handshake, configstrings, rcon, the stdin console, heartbeat, zombies, pings, rate, bans, passwords, private slots, pacing, downloads, CD key | `cod11-server-handshake.md` (Housekeeping section) |
 | Map change, `map_restart`, `sv_serverid`, rotation | `cod11-map-cycle.md` |
 | Shots, damage, death, grenades, blasts, hit locations, shot timing | `cod11-combat.md` |
 | Movement, stances, constants; the BSP, patch collision, the leaf walk | `cod11-mantle.md`, `bsp-ibsp59-format.md` |
