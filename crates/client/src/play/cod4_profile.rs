@@ -34,6 +34,8 @@ pub struct ProfileStats {
     path: PathBuf,
     saved: Stats,
     changed_at: Option<Instant>,
+    /// The file was there: no `LiveStorage_StatsInit` for this profile.
+    found: bool,
 }
 
 impl ProfileStats {
@@ -60,6 +62,7 @@ impl ProfileStats {
             .and_then(|b| <[u8; STATS_BYTES]>::try_from(b).ok())
             .map(|b| Stats(Box::new(b)))
             .filter(|s| s.get(299) == Some(10));
+        let found = read.is_some();
         let stats = read.unwrap_or_else(Stats::fresh);
         log::info!("cod4: profile {name}'s stats from {}", path.display());
         let p = ProfileStats {
@@ -67,8 +70,19 @@ impl ProfileStats {
             path,
             saved: stats.clone(),
             changed_at: None,
+            found,
         };
         Some((p, stats))
+    }
+
+    /// The profile's directory.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// Whether the stats came from the file, not a fresh profile's.
+    pub(crate) fn found(&self) -> bool {
+        self.found
     }
 
     /// `stats` as the session holds them now: written once they have

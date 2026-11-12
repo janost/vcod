@@ -53,6 +53,8 @@ pub(crate) struct Cod4Front {
     /// The active profile's stats file, which the menus' `stat()` read
     /// and their `statset`s write; `None` with no profile.
     profile: Option<ProfileStats>,
+    /// The profile whose custom classes a fresh block named last.
+    named: Option<PathBuf>,
 }
 
 impl Cod4Front {
@@ -72,6 +74,7 @@ impl Cod4Front {
             sounds: None,
             sounds_installed: false,
             profile: None,
+            named: None,
         }
     }
 
@@ -92,6 +95,18 @@ impl Cod4Front {
             Some((p, s)) => (Some(p), s),
             None => (None, Stats::fresh()),
         };
+        // `LiveStorage_StatsInit` names the five custom classes for a
+        // profile with no stats yet, once as it loads (0x4fc5b3 on).
+        let fresh = profile.as_ref().filter(|p| !p.found()).map(|p| p.dir());
+        if let Some(dir) = fresh
+            && self.named.as_deref() != Some(dir)
+        {
+            self.named = Some(dir.to_path_buf());
+            for n in 1..=5 {
+                let name = self.translate(&format!("CLASS_SLOT{n}"));
+                self.menus.set_class_name(n, &name);
+            }
+        }
         self.profile = profile;
         self.menus.set_stats(stats);
     }
@@ -346,7 +361,8 @@ impl Cod4Front {
     /// The browser's frame (replies read, pings sent), and the join its
     /// Join Server asked for.
     pub(crate) fn frame(&mut self, now: Instant) -> Option<JoinRequest> {
-        self.save_stats(false);
+        let upload = self.menus.take_upload_stats();
+        self.save_stats(upload);
         self.menus.pump_browser(now);
         self.menus.take_join()
     }
@@ -764,6 +780,7 @@ fn log_unsent(out: Vec<String>) {
 mod tests {
     use super::*;
     use glam::Vec3;
+    use vcod_cod4::scriptmenu::Cmd;
 
     /// The front end over the `COD4_DIR` install, its main menu up with
     /// vcod's stock CoD4 console.
@@ -784,6 +801,11 @@ mod tests {
         let mut shell = Shell::new();
         shell.use_cod4_defaults(false);
         f.open_main(&shell, None);
+        // The console runs what the menus set: the fresh profile's class
+        // names.
+        for line in f.take_console() {
+            shell.execute(&line);
+        }
         Some((f, shell))
     }
 
@@ -880,6 +902,213 @@ mod tests {
         let saved = std::fs::read(&file).unwrap();
         assert_eq!(saved[4 + 260], 1);
     }
+
+    /// Clicks the open menu's first visible item whose action holds a
+    /// command `pick` takes.
+    fn pick(f: &mut Cod4Front, pick: impl Fn(&Cmd) -> bool) {
+        let open = f.menus.open().unwrap();
+        let layout = open.layout.as_ref().unwrap();
+        let at = layout
+            .items
+            .iter()
+            .position(|it| f.menus.item_visible(it) && it.action.iter().any(&pick));
+        let Some(at) = at else {
+            panic!("no such visible item in {}", open.name);
+        };
+        let sp = crate::hud::cod2elem::ScreenPlacement::new(SIZE.0, SIZE.1);
+        let r = f.menus.rect(&layout.items[at], layout);
+        let [x, y, w, h] = crate::play::cod4_menus::placed(&sp, r);
+        f.mouse(None, Some([x + 0.5 * w, y + 0.5 * h]), SIZE);
+        f.button("MOUSE1", SIZE);
+    }
+
+    fn opens(menu: &'static str) -> impl Fn(&Cmd) -> bool {
+        move |c| matches!(c, Cmd::Open(m) if m.eq_ignore_ascii_case(menu))
+    }
+
+    /// A `statsetusingtable` of stat `stat` off the row named `name`.
+    fn sets(stat: &'static str, name: &str) -> impl Fn(&Cmd) -> bool {
+        let name = name.to_string();
+        move |c| {
+            matches!(c, Cmd::StatSetUsingTable { index, value, .. }
+                if index == stat && value.eq_ignore_ascii_case(&name))
+        }
+    }
+
+    /// A `mp/statstable.csv` row's column `ret`, by its name (column 4)
+    /// or, for a perk, its stat (column 1).
+    fn stats_row(f: &Cod4Front, column: i32, key: &str, ret: i32) -> String {
+        use vcod_cod4::menuexp::Env;
+        f.menus
+            .env()
+            .table_lookup("mp/statstable.csv", column, key, ret)
+    }
+
+    /// What [`edit_custom_class`] picked: the primary's and the special
+    /// grenade's numbers, the perk 2's stat and name.
+    struct Picks {
+        primary: i32,
+        perk: i32,
+        perk_name: String,
+        grenade: i32,
+    }
+
+    /// Opens Create a Class on a rank 3 profile whose AK-47 the rank
+    /// scripts unlocked, and in the first custom class picks the AK-47
+    /// with no attachment and no camo, a perk 2 of a fresh profile other
+    /// than the class's, and the flash grenade; Esc leaves the class.
+    fn edit_custom_class(f: &mut Cod4Front, shell: &Shell, file: &std::path::Path) -> Picks {
+        let atoi = vcod_cod4::menuexp::atoi;
+        let primary = atoi(&stats_row(f, 4, "ak47", 0));
+        let mut earned = Stats::fresh();
+        earned.set(260, 2);
+        earned.set(2301, 300);
+        earned.set(3000 + primary as u16, 0x10001);
+        earned.seal();
+        std::fs::write(file, &earned.0[..]).unwrap();
+        f.open_main(shell, None);
+        click(f, "Create a Class");
+        pick(f, opens("menu_cac_assault"));
+        pick(f, opens("assault_popup_cac_primary"));
+        pick(f, opens("assault_popup_cac_assault"));
+        pick(f, sets("201", "ak47"));
+        assert_eq!(stack(f).last().unwrap(), "assault_attachment_popup_assault");
+        pick(f, sets("202", "none"));
+        if stack(f).last().unwrap() == "assault_popup_cac_camo" {
+            pick(f, sets("209", "camo_none"));
+        }
+        assert_eq!(stack(f).last().unwrap(), "menu_cac_assault");
+        // Fresh profiles hold perk 2's 156, 160 and 167; the class has 160.
+        let perk = [156, 167]
+            .into_iter()
+            .find(|&p| p != f.menus.stat(206))
+            .unwrap();
+        let perk_name = stats_row(f, 1, &perk.to_string(), 4);
+        pick(f, opens("assault_popup_cac_perk2"));
+        pick(f, sets("206", &perk_name));
+        pick(f, opens("assault_popup_cac_extra"));
+        pick(f, sets("208", "flash_grenade"));
+        let grenade = atoi(&stats_row(f, 4, "flash_grenade", 0));
+        assert!(f.key(KeyCode::Escape, None));
+        Picks {
+            primary,
+            perk,
+            perk_name,
+            grenade,
+        }
+    }
+
+    /// Create a Class's picks write the class's stats (cod4-front-end.md
+    /// 4.1): the AK-47's `new` bit clears as it is picked, the Esc's
+    /// `uploadstats` writes the file at the next frame, and the class
+    /// page shows the picks when it opens again.
+    #[test]
+    fn cod4_front_create_a_class_picks_reach_the_profile() {
+        let Some((mut f, shell)) = front() else {
+            return;
+        };
+        let players = f.menus.front.players_root.clone().unwrap();
+        let file = players.join("players/profiles/tester/vcod_mpdata");
+        let p = edit_custom_class(&mut f, &shell, &file);
+        let read = |f: &Cod4Front| [201, 202, 206, 208, 209].map(|i| f.menus.stat(i));
+        let want = [p.primary, 0, p.perk, p.grenade, 0];
+        assert_eq!(read(&f), want);
+        assert_eq!(
+            f.menus.stat(3000 + p.primary),
+            1,
+            "the AK-47 is no longer new"
+        );
+        assert_eq!(f.menus.stat(p.perk), 1, "an earned perk stays earned");
+        assert_eq!(stack(&f), ["main_text"]);
+        f.frame(Instant::now());
+        let saved = Stats(Box::new(std::fs::read(&file).unwrap().try_into().unwrap()));
+        assert_eq!(
+            [201, 202, 206, 208, 209].map(|i| saved.get(i).unwrap() as i32),
+            want
+        );
+        click(&mut f, "Create a Class");
+        // A fresh profile's classes took `CLASS_SLOT<n>`'s names.
+        let slot = f.translate("CLASS_SLOT1");
+        assert!(names(&f).contains(&slot), "{slot} in {:?}", names(&f));
+        pick(&mut f, opens("menu_cac_assault"));
+        // The perk's row names its string in one of its columns.
+        let perk_key = (0..10)
+            .map(|c| stats_row(&f, 1, &p.perk.to_string(), c))
+            .find_map(|v| {
+                v.trim_start_matches('@')
+                    .strip_prefix("PERKS_")
+                    .map(str::to_string)
+            })
+            .expect("the perk's string");
+        let n = names(&f);
+        for key in ["WEAPON_AK47".to_string(), format!("PERKS_{perk_key}")] {
+            let shown = f.translate(&key);
+            assert!(n.contains(&shown), "{shown} in {n:?}");
+        }
+    }
+
+    /// The editor's class, joined: vcod-server's `custom1` spawns with the
+    /// AK-47, the perk and the flash grenade the editor picked, read off
+    /// the stats the join sent from the profile's file.
+    #[test]
+    fn cod4_front_create_a_class_spawns_with_its_picks() {
+        let Some((mut f, shell)) = front() else {
+            return;
+        };
+        let players = f.menus.front.players_root.clone().unwrap();
+        let file = players.join("players/profiles/tester/vcod_mpdata");
+        let p = edit_custom_class(&mut f, &shell, &file);
+        f.close();
+        let (spawned, perks, weapons) =
+            crate::play::cod4::tests::live_join_profile(players, "custom1,0", |s, spawned| {
+                let gs = s.gamestate().unwrap();
+                let names = crate::play::cod4::weapon_list(gs).to_vec();
+                let ps = &s.client().snapshots.last().unwrap().ps;
+                let held: Vec<String> = (0..names.len())
+                    .filter(|&w| {
+                        ps.get(&format!("weapons[{}]", w / 32)).unwrap_or(0) & (1 << (w % 32)) != 0
+                    })
+                    .map(|w| names[w].clone())
+                    .collect();
+                (spawned, ps.get("perks").unwrap_or(0), held)
+            })
+            .expect("the install front() found");
+        let spawned = spawned.expect("spawned");
+        assert!(spawned.ends_with("ak47_mp"), "{spawned}");
+        assert!(
+            weapons.iter().any(|w| w == "flash_grenade_mp"),
+            "{weapons:?}"
+        );
+        let bit = PERK_NAMES
+            .iter()
+            .position(|n| *n == p.perk_name)
+            .unwrap_or_else(|| panic!("{} is a perk", p.perk_name));
+        assert_ne!(perks & (1 << bit), 0, "{} in {perks:#x}", p.perk_name);
+    }
+
+    /// `bg_perkNames`, the `perks` bit order (cod4-gsc.md, "The perks").
+    const PERK_NAMES: [&str; 20] = [
+        "specialty_gpsjammer",
+        "specialty_bulletaccuracy",
+        "specialty_fastreload",
+        "specialty_rof",
+        "specialty_holdbreath",
+        "specialty_bulletpenetration",
+        "specialty_grenadepulldeath",
+        "specialty_pistoldeath",
+        "specialty_quieter",
+        "specialty_parabolic",
+        "specialty_longersprint",
+        "specialty_detectexplosive",
+        "specialty_explosivedamage",
+        "specialty_exposeenemy",
+        "specialty_bulletdamage",
+        "specialty_extraammo",
+        "specialty_twoprimaries",
+        "specialty_armorvest",
+        "specialty_fraggrenade",
+        "specialty_specialgrenade",
+    ];
 
     /// Quit opens `quit_popmenu` over `main_text`, both drawn; No closes
     /// it back to the main menu, Yes runs `uiScript quit`, the client's

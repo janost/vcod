@@ -37,7 +37,14 @@ use crate::hud::cod2elem::ScreenPlacement;
 /// `ui_zfeather` copy sets as the page closes; the aspect ratio
 /// (`vid_restart`), the texture page's picmip dvars (`r_applyPicmip`) and
 /// its anisotropy (`r_texFilterAnisoMin`, live), and `ragdoll_enable`.
-const VCOD_CVARS: [(&str, &str); 33] = [
+/// Create a Class's class names, `customclass1`..`5`, which its rename
+/// field sets.
+const VCOD_CVARS: [(&str, &str); 38] = [
+    ("customclass1", "customclass1"),
+    ("customclass2", "customclass2"),
+    ("customclass3", "customclass3"),
+    ("customclass4", "customclass4"),
+    ("customclass5", "customclass5"),
     ("sensitivity", "sensitivity"),
     ("cl_freelook", "cl_freelook"),
     ("m_filter", "m_filter"),
