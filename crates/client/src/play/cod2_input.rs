@@ -12,24 +12,24 @@
 //! `+activate` 0x8, `+reload` 0x10, `+usereload` 0x20, `+leanleft` 0x40,
 //! `+leanright` 0x80, `+binoculars` 0x4000, `+holdbreath` 0x8000, `+frag`
 //! 0x10000, `+smoke` 0x20000, `+melee_breath` both 0x4 and 0x8000. The
-//! jump 0x400 is `kb` 200, which `+gostand` presses only standing
-//! (`IN_GoStandDown`); held, `+gostand` also sets 0x400 for a noclip, UFO
-//! or spectator `pm_type`. `cl_stance` (legacyHacks +8) 1 sends 0x200, 2
-//! 0x100; `gocrouch` and `goprone` set it, `+gostand` clears it. 0x1000
+//! jump 0x400 is `kb` 200, which `+gostand` and `+moveup` press only
+//! standing (`IN_GoStandDown`, `IN_UpDown`); held, either also sets 0x400
+//! for a noclip, UFO or spectator `pm_type`. A held `+prone` sends 0x100
+//! and a held `+movedown` 0x200, each with 0x2000; otherwise `cl_stance`
+//! (legacyHacks +8) 1 sends 0x200, 2 0x100. The stance binds move
+//! `cl_stance` as 1.1's do ([`super::input::stance_press`]). 0x1000
 //! (the sight) is `toggleads` XOR a held `+speed`; selecting another
 //! weapon clears the toggle (`CL_SetADS(0)` in `CG_SelectWeaponIndex`).
 //! The console or chat line adds 0x40000.
 //!
-//! Not modelled: `+prone` / `+movedown` held stances (0x2000 and the
-//! stance hold), `+stance`'s hold timer, `toggleprone`, `raisestance`,
-//! the binoculars' sight, `CG_CycleWeap`'s ammo and alt-mode tests (the
+//! Not modelled: `+stance`'s hold timer, the binoculars' sight, `CG_CycleWeap`'s ammo and alt-mode tests (the
 //! cycle here walks the two `weaponslots`) and the offhand switch command.
 
 use std::collections::HashSet;
 
 use vcod_cod2::net::PlayerState2;
 
-use super::input::Action;
+use super::input::{Action, StancePress, held_stance, stance_press};
 use crate::console::shell::Effect;
 
 pub mod bit {
@@ -43,6 +43,8 @@ pub mod bit {
     pub const PRONE: i32 = 0x100;
     pub const CROUCH: i32 = 0x200;
     pub const JUMP: i32 = 0x400;
+    /// The stance comes from a held `+prone` / `+movedown`.
+    pub const STANCE_HELD: i32 = 0x2000;
     pub const SHELLSHOCK: i32 = 0x800;
     pub const ADS: i32 = 0x1000;
     pub const BINOCULARS: i32 = 0x4000;
@@ -69,13 +71,7 @@ const HELD: [(Action, i32); 12] = [
 ];
 
 /// `cl_stance`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Stance {
-    #[default]
-    Stand,
-    Crouch,
-    Prone,
-}
+pub use super::input::Stance;
 
 #[derive(Default)]
 pub struct Cod2Input {
@@ -83,8 +79,9 @@ pub struct Cod2Input {
     pub stance: Stance,
     /// `cl.toggleADS` (cl +0xb).
     ads_toggle: bool,
-    /// `+gostand` pressed the jump (`kb` 200) rather than standing up.
-    jump: bool,
+    /// The held `+gostand` / `+moveup` keys that pressed the jump (`kb`
+    /// 200) rather than moving the stance.
+    jump_by: HashSet<Action>,
     /// `cg_weaponSelect`, the weapon every cmd asks for.
     selected: u8,
     /// The equipped offhand, `offHandIndex`'s byte.
@@ -116,29 +113,38 @@ impl Cod2Input {
             self.down.insert(action);
         } else {
             self.down.remove(&action);
+            self.jump_by.remove(&action);
         }
-        if action == Action::Jump {
-            if pressed && !was {
-                // `IN_GoStandDown`: a stance stands up, standing jumps.
-                if self.stance != Stance::Stand {
-                    self.stance = Stance::Stand;
-                } else {
-                    self.jump = true;
-                }
-            } else if !pressed {
-                self.jump = false;
-            }
+        if pressed && !was && matches!(action, Action::Jump | Action::MoveUp) {
+            self.stance_press(action);
         }
     }
 
-    /// A one-shot bind: `gocrouch`, `goprone`, `toggleads`, `leaveads`,
+    /// `IN_GoStandDown`, `IN_UpDown` and the stance one-shots (Mac
+    /// 0x187e98, 0x187732, 0x187d64..0x187e6e), each gated on the held
+    /// `+prone` (kb 0x1f4) and `+movedown` (kb 0xdc).
+    fn stance_press(&mut self, action: Action) {
+        match stance_press(action, self.stance, held_stance(&self.down).is_some()) {
+            StancePress::Set(s) => self.stance = s,
+            StancePress::Jump => {
+                self.jump_by.insert(action);
+            }
+            StancePress::Nothing => {}
+        }
+    }
+
+    /// A one-shot bind: the stance ones, `toggleads`, `leaveads`,
     /// `weapnext`, `weapprev`, `weaponslot`. `ps` is the newest
     /// playerstate, what a weapon pick reads. False for one CoD2 has no
     /// use for.
     pub fn impulse(&mut self, action: Action, ps: Option<&PlayerState2>) -> bool {
         match action {
-            Action::Crouch => self.stance = Stance::Crouch,
-            Action::Prone => self.stance = Stance::Prone,
+            Action::Crouch
+            | Action::Prone
+            | Action::ToggleCrouch
+            | Action::ToggleProne
+            | Action::LowerStance
+            | Action::RaiseStance => self.stance_press(action),
             Action::ToggleAds => self.ads_toggle = !self.ads_toggle,
             Action::LeaveAds => self.ads_toggle = false,
             Action::NextWeapon | Action::PrevWeapon => {
@@ -177,7 +183,7 @@ impl Cod2Input {
     /// Lets go of every held key; the stance and the selection stay.
     pub fn release_all(&mut self) {
         self.down.clear();
-        self.jump = false;
+        self.jump_by.clear();
     }
 
     /// `CG_SelectWeaponIndex` (Mac 0x1d7ef6): another weapon drops the
@@ -247,12 +253,18 @@ impl Cod2Input {
                 b |= bits;
             }
         }
-        b |= match self.stance {
+        let key_stance = held_stance(&self.down);
+        if key_stance.is_some() {
+            b |= bit::STANCE_HELD;
+        }
+        b |= match key_stance.unwrap_or(self.stance) {
             Stance::Crouch => bit::CROUCH,
             Stance::Prone => bit::PRONE,
             Stance::Stand => 0,
         };
-        if self.jump || (self.down.contains(&Action::Jump) && (2..=4).contains(&pm_type)) {
+        // kb 0xf0, which `+gostand` and `+moveup` hold.
+        let up = self.down.contains(&Action::Jump) || self.down.contains(&Action::MoveUp);
+        if !self.jump_by.is_empty() || (up && (2..=4).contains(&pm_type)) {
             b |= bit::JUMP;
         }
         if self.ads_toggle != self.down.contains(&Action::Ads) {
@@ -296,6 +308,21 @@ mod tests {
             u32::from(slots[0]) << 8 | u32::from(slots[1]) << 16,
         );
         p
+    }
+
+    /// `CL_KeyMove` (Mac 0x18996e) under a held `+prone`, and
+    /// `IN_ToggleProne` / `IN_UpDown` on `cl_stance`.
+    #[test]
+    fn held_and_toggled_stances() {
+        let mut i = Cod2Input::default();
+        i.key(Action::HoldProne, true);
+        assert_eq!(i.buttons(0, false), bit::PRONE | bit::STANCE_HELD);
+        i.key(Action::HoldProne, false);
+        assert_eq!(i.buttons(0, false), 0);
+        i.impulse(Action::ToggleProne, None);
+        assert_eq!(i.buttons(0, false), bit::PRONE);
+        i.key(Action::MoveUp, true);
+        assert_eq!(i.buttons(0, false), bit::CROUCH);
     }
 
     #[test]

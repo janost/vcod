@@ -153,9 +153,22 @@ pub enum Action {
     Back,
     Left,
     Right,
+    /// `+gostand`.
     Jump,
+    /// `gocrouch` and `goprone`.
     Crouch,
     Prone,
+    /// `+moveup`: a stance up, or the jump standing.
+    MoveUp,
+    /// `+movedown` and `+prone`: crouched or prone while held, over the
+    /// stance the other binds keep.
+    MoveDown,
+    HoldProne,
+    /// `togglecrouch`, `toggleprone`, `lowerstance`, `raisestance`.
+    ToggleCrouch,
+    ToggleProne,
+    LowerStance,
+    RaiseStance,
     LeanLeft,
     LeanRight,
     Attack,
@@ -209,6 +222,57 @@ pub enum Stance {
     Stand,
     Crouch,
     Prone,
+}
+
+/// What a stance bind's press does to the kept stance (`cl_stance`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StancePress {
+    Set(Stance),
+    /// Presses the jump: `+gostand` or `+moveup` standing.
+    Jump,
+    Nothing,
+}
+
+/// The stance binds' presses, alike in CoD1 1.1, 1.5, UO, CoD2 and CoD4
+/// (docs/research/cod11-console.md 9). `held` is `+prone` or `+movedown`
+/// down, which stops every change to the kept stance; `+gostand` still
+/// jumps standing.
+pub fn stance_press(action: Action, stance: Stance, held: bool) -> StancePress {
+    use Stance::{Crouch, Prone, Stand};
+    let set = match (action, stance) {
+        (Action::Jump, Stand) => return StancePress::Jump,
+        (Action::Jump, _) => Stand,
+        (Action::MoveUp, _) if held => return StancePress::Nothing,
+        (Action::MoveUp, Stand) => return StancePress::Jump,
+        (Action::MoveUp | Action::RaiseStance, Prone) => Crouch,
+        (Action::MoveUp | Action::RaiseStance, Crouch) => Stand,
+        (Action::Crouch, _) => Crouch,
+        (Action::Prone, _) => Prone,
+        (Action::ToggleCrouch, Crouch) => Stand,
+        (Action::ToggleCrouch, _) => Crouch,
+        (Action::ToggleProne, Prone) => Stand,
+        (Action::ToggleProne, _) => Prone,
+        (Action::LowerStance, Stand) => Crouch,
+        (Action::LowerStance, Crouch) => Prone,
+        _ => return StancePress::Nothing,
+    };
+    if held {
+        StancePress::Nothing
+    } else {
+        StancePress::Set(set)
+    }
+}
+
+/// The stance a held `+prone` (first) or `+movedown` puts the cmd in, if
+/// either is down.
+pub fn held_stance(down: &HashSet<Action>) -> Option<Stance> {
+    if down.contains(&Action::HoldProne) {
+        Some(Stance::Prone)
+    } else if down.contains(&Action::MoveDown) {
+        Some(Stance::Crouch)
+    } else {
+        None
+    }
 }
 
 impl Stance {
@@ -437,9 +501,10 @@ impl Default for ClRun {
 #[derive(Default)]
 pub struct PlayInput {
     down: HashSet<Action>,
-    /// The stance the client wants; level, and resynced to `Held::stance`
-    /// whenever the server changes it without a matching key press (a
-    /// forced stand at spawn, say) so the client does not fight it.
+    /// `cl_stance`, the stance the client keeps; level, and resynced to
+    /// `Held::stance` whenever the server changes it without a matching key
+    /// press (a forced stand at spawn, say) so the client does not fight
+    /// it. A held `+prone` or `+movedown` overrides it in the cmd.
     wanted_stance: Stance,
     last_seen_stance: Stance,
     /// Retail's `cg_weaponSelect` (`0x301cbb0c`), the weapon every cmd
@@ -456,9 +521,9 @@ pub struct PlayInput {
     /// A select or a respawn reset `cl_run` to 1 since the last
     /// [`PlayInput::take_run_reset`].
     run_reset: bool,
-    /// True for the one Jump press that stood the client up from crouch or
-    /// prone, so that same press does not also raise `up` as a jump.
-    jump_consumed_by_stand: bool,
+    /// The held `+gostand` / `+moveup` keys that pressed the jump, which
+    /// they do only standing (CoDMP.exe 0x40ad40, 0x40a670).
+    jump_by: HashSet<Action>,
     /// Raw view angles, ANGLE2SHORT units, accumulated from mouse counts;
     /// pitch (index 0) down-positive, yaw (index 1) as `FlyCamera`'s own
     /// sign. Index 2 (roll) is unused. Unclamped: retail's server clamps
@@ -499,27 +564,29 @@ impl PlayInput {
             self.down.insert(action);
         } else {
             self.down.remove(&action);
-            if action == Action::Jump {
-                self.jump_consumed_by_stand = false;
-            }
+            self.jump_by.remove(&action);
         }
         if pressed && !was_down {
             self.on_press(action);
         }
     }
 
+    /// `+prone` or `+movedown` is down: the stance binds and the
+    /// forced-stance events leave `cl_stance` alone (`cl_stanceTemp` 1,
+    /// docs/research/cod11-console.md 9).
+    pub fn stance_held(&self) -> bool {
+        held_stance(&self.down).is_some()
+    }
+
     fn on_press(&mut self, action: Action) {
-        match action {
-            // Retail's `gocrouch` and `goprone` set the stance outright, never
-            // toggle; only `+gostand` (Space) stands up.
-            Action::Crouch => self.wanted_stance = Stance::Crouch,
-            Action::Prone => self.wanted_stance = Stance::Prone,
-            Action::Jump => {
-                if self.wanted_stance != Stance::Stand {
-                    self.wanted_stance = Stance::Stand;
-                    self.jump_consumed_by_stand = true;
-                }
+        match stance_press(action, self.wanted_stance, self.stance_held()) {
+            StancePress::Set(s) => self.wanted_stance = s,
+            StancePress::Jump => {
+                self.jump_by.insert(action);
             }
+            StancePress::Nothing => {}
+        }
+        match action {
             Action::Slot(n) => self.weapon_slot(n),
             Action::NextWeapon => self.cycle(true, false),
             Action::PrevWeapon => self.cycle(false, false),
@@ -537,7 +604,7 @@ impl PlayInput {
     /// stance and the weapon selection stay: neither is a held key.
     pub fn release_all(&mut self) {
         self.down.clear();
-        self.jump_consumed_by_stand = false;
+        self.jump_by.clear();
     }
 
     /// A new frame's turn caps, degrees a second per axis [pitch, yaw], 0
@@ -787,7 +854,9 @@ impl PlayInput {
     }
 
     pub fn build(&mut self, server_time: i32, held: &Held) -> UserCmd {
-        if held.stance != self.last_seen_stance {
+        // A stance the held key put the body in is not one to keep.
+        let key_stance = held_stance(&self.down);
+        if held.stance != self.last_seen_stance && key_stance.is_none() {
             self.wanted_stance = held.stance;
         }
         self.last_seen_stance = held.stance;
@@ -797,22 +866,24 @@ impl PlayInput {
 
         let axis = |pos: bool, neg: bool| (pos as i32 - neg as i32) as i8 * 127;
 
+        // `CL_KeyMove` (CoDMP.exe 0x40ae90): the held key's stance with
+        // `wbuttons` 0x2, else `cl_stance`; the jump's 127 and a stance's
+        // -127 add (0x40afc2..0x40b010).
         let mut wbuttons = 0u8;
-        let mut up = 0i8;
-        match self.wanted_stance {
+        let mut up = if self.jump_by.is_empty() { 0 } else { 127 };
+        if key_stance.is_some() {
+            wbuttons |= msg::WBUTTON_STANCE_HELD;
+        }
+        match key_stance.unwrap_or(self.wanted_stance) {
             Stance::Crouch => {
                 wbuttons |= msg::WBUTTON_CROUCH;
-                up = -127;
+                up -= 127;
             }
             Stance::Prone => {
                 wbuttons |= msg::WBUTTON_PRONE;
-                up = -127;
+                up -= 127;
             }
-            Stance::Stand => {
-                if self.down.contains(&Action::Jump) && !self.jump_consumed_by_stand {
-                    up = 127;
-                }
-            }
+            Stance::Stand => {}
         }
         if self.down.contains(&Action::LeanLeft) {
             wbuttons |= msg::WBUTTON_LEAN_LEFT;
@@ -1552,6 +1623,119 @@ mod tests {
         i.key(Action::Jump, false);
         i.key(Action::Jump, true);
         assert_eq!(i.build(108, &held(10)).up, 127);
+    }
+
+    const STANCE_BITS: u8 = msg::WBUTTON_CROUCH | msg::WBUTTON_PRONE | msg::WBUTTON_STANCE_HELD;
+
+    /// A held `+movedown` crouches with 0x2 and -127 for as long as it is
+    /// down, and its release goes back to the kept stance.
+    #[test]
+    fn held_movedown_crouches_until_released() {
+        let mut i = synced(10);
+        i.key(Action::MoveDown, true);
+        let c = i.build(100, &held(10));
+        assert_eq!(
+            c.wbuttons & STANCE_BITS,
+            msg::WBUTTON_CROUCH | msg::WBUTTON_STANCE_HELD
+        );
+        assert_eq!(c.up, -127);
+        // The server's crouch while held is not taken as the kept stance.
+        let crouched = Held {
+            stance: Stance::Crouch,
+            ..held(10)
+        };
+        assert_eq!(i.build(108, &crouched).up, -127);
+        i.key(Action::MoveDown, false);
+        let c = i.build(116, &crouched);
+        assert_eq!(c.wbuttons & STANCE_BITS, 0);
+        assert_eq!(c.up, 0);
+    }
+
+    /// `+prone` wins over `+movedown`, and neither moves `cl_stance`: the
+    /// stance binds do nothing while one is held.
+    #[test]
+    fn held_prone_overrides_and_freezes_the_kept_stance() {
+        let mut i = synced(10);
+        i.key(Action::Crouch, true);
+        i.key(Action::Crouch, false);
+        i.key(Action::MoveDown, true);
+        i.key(Action::HoldProne, true);
+        assert!(i.stance_held());
+        for a in [Action::Jump, Action::ToggleCrouch, Action::Prone] {
+            i.key(a, true);
+            i.key(a, false);
+        }
+        let c = i.build(100, &held(10));
+        assert_eq!(
+            c.wbuttons & STANCE_BITS,
+            msg::WBUTTON_PRONE | msg::WBUTTON_STANCE_HELD
+        );
+        assert_eq!(c.up, -127);
+        i.key(Action::HoldProne, false);
+        i.key(Action::MoveDown, false);
+        assert!(!i.stance_held());
+        let c = i.build(108, &held(10));
+        assert_eq!(c.wbuttons & STANCE_BITS, msg::WBUTTON_CROUCH);
+    }
+
+    /// `togglecrouch` crouches with no 0x2, as `gocrouch` does, and a
+    /// second press stands.
+    #[test]
+    fn togglecrouch_crouches_then_stands() {
+        let mut i = synced(10);
+        i.key(Action::ToggleCrouch, true);
+        i.key(Action::ToggleCrouch, false);
+        let c = i.build(100, &held(10));
+        assert_eq!(c.wbuttons & STANCE_BITS, msg::WBUTTON_CROUCH);
+        assert_eq!(c.up, -127);
+        i.key(Action::ToggleCrouch, true);
+        i.key(Action::ToggleCrouch, false);
+        let c = i.build(108, &held(10));
+        assert_eq!(c.wbuttons & STANCE_BITS, 0);
+        assert_eq!(c.up, 0);
+    }
+
+    /// CoDMP.exe 0x40a670..0x40ad40.
+    #[test]
+    fn the_stance_binds_step_as_retail() {
+        use Stance::{Crouch, Prone, Stand};
+        use StancePress::{Jump, Nothing, Set};
+        let cases = [
+            (Action::ToggleCrouch, Prone, Set(Crouch)),
+            (Action::ToggleProne, Stand, Set(Prone)),
+            (Action::ToggleProne, Crouch, Set(Prone)),
+            (Action::ToggleProne, Prone, Set(Stand)),
+            (Action::LowerStance, Stand, Set(Crouch)),
+            (Action::LowerStance, Crouch, Set(Prone)),
+            (Action::LowerStance, Prone, Nothing),
+            (Action::RaiseStance, Prone, Set(Crouch)),
+            (Action::RaiseStance, Crouch, Set(Stand)),
+            (Action::RaiseStance, Stand, Nothing),
+            (Action::MoveUp, Prone, Set(Crouch)),
+            (Action::MoveUp, Crouch, Set(Stand)),
+            (Action::MoveUp, Stand, Jump),
+            (Action::Jump, Prone, Set(Stand)),
+            (Action::Jump, Stand, Jump),
+        ];
+        for (a, from, to) in cases {
+            assert_eq!(stance_press(a, from, false), to, "{a:?} from {from:?}");
+        }
+        // Held keys stop every change; `+gostand` still jumps, `+moveup`
+        // does not.
+        assert_eq!(stance_press(Action::LowerStance, Stand, true), Nothing);
+        assert_eq!(stance_press(Action::Jump, Crouch, true), Nothing);
+        assert_eq!(stance_press(Action::Jump, Stand, true), Jump);
+        assert_eq!(stance_press(Action::MoveUp, Stand, true), Nothing);
+    }
+
+    /// `+moveup` standing jumps until its own release.
+    #[test]
+    fn moveup_jumps_standing() {
+        let mut i = synced(10);
+        i.key(Action::MoveUp, true);
+        assert_eq!(i.build(100, &held(10)).up, 127);
+        i.key(Action::MoveUp, false);
+        assert_eq!(i.build(108, &held(10)).up, 0);
     }
 
     /// Under a shellshock's caps a frame's turn is its summed motion held

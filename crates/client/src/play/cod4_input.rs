@@ -24,7 +24,7 @@ use std::collections::HashSet;
 
 use vcod_cod4::pmove::button;
 
-use super::input::Action;
+use super::input::{Action, StancePress, held_stance, stance_press};
 use crate::console::shell::Effect;
 
 /// `+speed_throw`'s throw bit (`KEY_THROW`, kb 26).
@@ -53,13 +53,7 @@ const HELD: [(Action, u32); 14] = [
 ];
 
 /// `cl->stance`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Stance {
-    #[default]
-    Stand,
-    Crouch,
-    Prone,
-}
+pub use super::input::Stance;
 
 #[derive(Default)]
 pub struct Cod4Input {
@@ -67,8 +61,9 @@ pub struct Cod4Input {
     pub stance: Stance,
     /// `cl->usingAds`.
     ads_toggle: bool,
-    /// `+gostand` pressed the jump (kb 10) rather than standing up.
-    jump: bool,
+    /// The held `+gostand` / `+moveup` keys that pressed the jump (kb 10)
+    /// rather than moving the stance.
+    jump_by: HashSet<Action>,
     /// `cg_weaponSelect`.
     selected: u8,
     /// The equipped offhand.
@@ -143,31 +138,48 @@ impl Cod4Input {
         if action == Action::ToggleAdsThrow && pressed && !was {
             self.ads_toggle = !self.ads_toggle;
         }
-        if action == Action::Jump {
-            if pressed && !was {
-                // `IN_GoStandDown`: a stance stands up, standing jumps.
-                if self.stance != Stance::Stand {
-                    self.stance = Stance::Stand;
-                } else {
-                    self.jump = true;
-                }
-            } else if !pressed {
-                self.jump = false;
+        if !pressed {
+            self.jump_by.remove(&action);
+        } else if !was && matches!(action, Action::Jump | Action::MoveUp) {
+            self.stance_press(action);
+        }
+    }
+
+    /// `IN_GoStandDown`, `IN_UpDown` and the stance one-shots (`iw3mp.exe`
+    /// 0x462f40, 0x4628a0, 0x462e20..0x462f20), each gated on the held
+    /// `+prone` (kb byte 0x8f1708) and `+movedown` (0x8f1604).
+    fn stance_press(&mut self, action: Action) {
+        match stance_press(action, self.stance, held_stance(&self.down).is_some()) {
+            StancePress::Set(s) => self.stance = s,
+            StancePress::Jump => {
+                self.jump_by.insert(action);
             }
+            StancePress::Nothing => {}
+        }
+    }
+
+    /// `CL_SetStance` (0x462870), what a forced-stance event calls: the
+    /// stance, unless `+prone` or `+movedown` is held.
+    pub fn set_stance(&mut self, stance: Stance) {
+        if held_stance(&self.down).is_none() {
+            self.stance = stance;
         }
     }
 
     /// A console effect a bind raised: a `+button` edge or a one-shot
-    /// (`gocrouch`, `goprone`, `toggleads`, `leaveads`, `weapnext`,
-    /// `weapprev`, `weaponslot`). `primaries` are the held weapons
+    /// (the stance ones, `toggleads`, `leaveads`, `weapnext`, `weapprev`,
+    /// `weaponslot`). `primaries` are the held weapons
     /// `weapnext` walks, in index order. True when it was the input's.
     pub fn effect(&mut self, effect: &Effect, primaries: &[u8]) -> bool {
         match effect {
             Effect::Button(action, down) => self.key(*action, *down),
             Effect::Impulse(action) => match action {
-                // `IN_GoCrouch`, `IN_GoProne`: `CL_SetStance`.
-                Action::Crouch => self.stance = Stance::Crouch,
-                Action::Prone => self.stance = Stance::Prone,
+                Action::Crouch
+                | Action::Prone
+                | Action::ToggleCrouch
+                | Action::ToggleProne
+                | Action::LowerStance
+                | Action::RaiseStance => self.stance_press(*action),
                 Action::ToggleAds => self.ads_toggle = !self.ads_toggle,
                 Action::LeaveAds => self.ads_toggle = false,
                 Action::NextWeapon | Action::PrevWeapon => {
@@ -188,7 +200,7 @@ impl Cod4Input {
     /// Lets go of every held key; the stance and the selection stay.
     pub fn release_all(&mut self) {
         self.down.clear();
-        self.jump = false;
+        self.jump_by.clear();
     }
 
     /// `CG_SelectWeaponIndex`: another weapon drops the sight toggle.
@@ -368,13 +380,21 @@ impl Cod4Input {
                 b |= bits;
             }
         }
-        b |= match self.stance {
+        // `CL_KeyMove` (0x4631b0): a held `+prone`, then `+movedown`, with
+        // 0x1000, else `cl->stance`.
+        let key_stance = held_stance(&self.down);
+        if key_stance.is_some() {
+            b |= button::STANCE_HELD;
+        }
+        b |= match key_stance.unwrap_or(self.stance) {
             Stance::Crouch => button::CROUCH,
             Stance::Prone => button::PRONE,
             Stance::Stand => 0,
         };
-        // `CL_CmdButtons`: kb 12 held by a noclip, UFO or spectator body.
-        if self.jump || (self.down.contains(&Action::Jump) && (2..=4).contains(&pm_type)) {
+        // `CL_CmdButtons`: kb 12, which `+gostand` and `+moveup` hold, held
+        // by a noclip, UFO or spectator body.
+        let up = self.down.contains(&Action::Jump) || self.down.contains(&Action::MoveUp);
+        if !self.jump_by.is_empty() || (up && (2..=4).contains(&pm_type)) {
             b |= button::JUMP;
         }
         if self.ads_toggle != self.down.contains(&Action::Ads) {
@@ -647,6 +667,23 @@ mod tests {
         i.effect(&Effect::Impulse(Action::ToggleAds), &[]);
         assert_eq!(i.buttons(0, false), button::ADS_MODE);
         assert_eq!(i.buttons(0, true), button::TALK);
+    }
+
+    /// `CL_KeyMove` (0x4631b0) and `CL_SetStance` (0x462870) under a held
+    /// `+movedown`; `togglecrouch` keeps the stance alone.
+    #[test]
+    fn cod4_held_and_toggled_stances() {
+        let mut i = Cod4Input::default();
+        i.key(Action::MoveDown, true);
+        assert_eq!(i.buttons(0, false), button::CROUCH | button::STANCE_HELD);
+        i.set_stance(Stance::Prone);
+        i.effect(&Effect::Impulse(Action::ToggleCrouch), &[]);
+        i.key(Action::MoveDown, false);
+        assert_eq!(i.buttons(0, false), 0);
+        i.effect(&Effect::Impulse(Action::ToggleCrouch), &[]);
+        assert_eq!(i.buttons(0, false), button::CROUCH);
+        i.key(Action::HoldProne, true);
+        assert_eq!(i.buttons(0, false), button::PRONE | button::STANCE_HELD);
     }
 
     #[test]

@@ -7586,7 +7586,10 @@ impl ApplicationHandler for App {
                                             if let Some(s) = play::events::forced_stance(
                                                 &ev,
                                                 client_num,
-                                                self.shell.cvar_f32("cl_stanceTemp") as i32 != 0,
+                                                // Retail's `+prone` / `+movedown`
+                                                // set it 1 while held (0x40aa60).
+                                                self.shell.cvar_f32("cl_stanceTemp") as i32 != 0
+                                                    || input.stance_held(),
                                             ) {
                                                 input.force_stance(s);
                                             }
