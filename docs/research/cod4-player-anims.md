@@ -236,8 +236,10 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   `rand() % n` of its clause, one draw whenever a clause with commands
   matched (`BG_AnimScriptEvent`, 0x8050280; cod4-combat.md 5, 10.9).
   VERIFIED (the disassembly, a traced run). Not run: the stance changes'
-  events, the mantle's movetypes, the turn anims (`player_turnAnims` 0,
-  VERIFIED).
+  events and the turn anims (`player_turnAnims` 0, VERIFIED).
+- A mantle plays its clip's movetype each frame, forced, and the jump
+  event at the end of one over a wall (cod4-pmove.md 17.5). VERIFIED
+  (the disassembly, the mantle capture).
 - A `both` line puts its anim on the legs and 0 on the torso, flipping
   each channel's toggle (0x200); a channel's timer at 50 or more keeps
   its anim unless forced, and a continuing call leaves the same anim

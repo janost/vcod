@@ -51,6 +51,9 @@ more.
   a second between messages as on 1.7 (the gamestate's second fragment
   went 336 ms after the first, against retail's 957). `requeststats`
   after a map change matched retail packet for packet.
+- A mantle plays its clips' movetypes and, over a wall, the jump event at
+  its end, so others see the mantle; the mantle capture's `legsAnim`,
+  `torsoAnim` and both timers replay exactly (cod4-pmove.md 17.5).
 
 ## Ranked
 
@@ -61,22 +64,18 @@ Open, by how much a player notices.
    minutes, then each after 7 s; vcod-server answers at once and an
    off-LAN client's address stands in for its ban guid
    (cod4-handshake.md 15).
-2. The mantle movetypes of the anim script (`BG_AnimScriptAnimation`
-   with the clip's slot plus 21, 0x80515ef) and the over clip's jump
-   event: other clients see no mantle anim (cod4-pmove.md 17.5,
-   `pmove::anim`). M.
-3. The helicopter's flight runs no move trace and no touch, and its model
+2. The helicopter's flight runs no move trace and no touch, and its model
    collision traces at the bind pose (cod4-gsc.md 3.2, `game::cod4::vehicle`).
    M.
-4. No retail capture gates a rocket's flight, the live grenade's throw
+3. No retail capture gates a rocket's flight, the live grenade's throw
    back, a prone death's torso or a `killcamentity` killcam
    (cod4-combat.md 12). S each to capture.
-5. The touch pass after the move and a free spectator's flight have no
+4. The touch pass after the move and a free spectator's flight have no
    A/B against retail yet (cod4-pmove.md 15.2). S.
-6. The off-LAN snapshot rate above 20 (cod4-server-frame.md), and why
+5. The off-LAN snapshot rate above 20 (cod4-server-frame.md), and why
    retail counted its own public address as off the LAN
    (cod4-handshake.md 15). S to measure.
-7. Closed: an empty `sv_master1` heartbeats `master.cod.pm:20810` at
+6. Closed: an empty `sv_master1` heartbeats `master.cod.pm:20810` at
    `dedicated 2`, as CoD1's and CoD2's servers do (`Cod4Server::heartbeat`).
 
 ## The retail run
