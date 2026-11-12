@@ -188,9 +188,10 @@ pub struct Cod2HostState {
     /// CoD2's weapons in registration order, index 1 first
     /// (`builtins::cod2::register_weapon`).
     pub weapons: Vec<String>,
-    /// Whether each of `weapons` names an `offhandClass` (a grenade),
-    /// which `giveWeapon` makes the offhand rather than a slot's.
-    pub offhands: Vec<bool>,
+    /// Each of `weapons`' `offhandClass` (weaponDef+0x84): 0 none, 1 frag,
+    /// 2 smoke (`vcod_cod2::weapon::OFFHAND_CLASSES`). A grenade's give
+    /// makes it the offhand rather than a slot's.
+    pub offhands: Vec<i32>,
     /// CoD2's `script_struct` blocks in lump order, for the load to turn
     /// into `level.struct` entries once the spawn pass is done, each block's
     /// keys in lump order.
