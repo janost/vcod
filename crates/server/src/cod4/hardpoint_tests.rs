@@ -425,8 +425,8 @@ fn a_helicopter_shot_down_crashes() {
 /// `bulletTrace` scores the posed hit boxes: a segment through the middle
 /// of the target's head box names the target (not when it passes him),
 /// and his posed `j_head` sits by that box; a segment
-/// across the target's link box low and wide of the body (a box trace
-/// would meet it) passes; a segment through the helicopter's middle
+/// across the target's capsule wide of the body (a plain trace would meet
+/// it) passes; a segment through the helicopter's middle
 /// names the helicopter.
 #[test]
 fn bullet_traces_meet_posed_bodies_and_the_helicopter() {
@@ -463,11 +463,12 @@ fn bullet_traces_meet_posed_bodies_and_the_helicopter() {
                 // Passing the target, the same segment misses it.
                 let t = locational4(host, a, b, target, 0x280_6831).unwrap();
                 assert_ne!(t.entity_num, target, "{t:?}");
-                // Low and wide: 14 out at knee height, across the box.
+                // Wide: 14 out at the capsule's straight part, across the
+                // temp box model's capsule (cod4-pmove.md 15).
                 let o = level.pm_state(0).unwrap().origin;
                 let (a, b) = (
-                    o + Vec3::new(14.0, -40.0, 4.0),
-                    o + Vec3::new(14.0, 40.0, 4.0),
+                    o + Vec3::new(14.0, -40.0, 20.0),
+                    o + Vec3::new(14.0, 40.0, 20.0),
                 );
                 let boxed = trace4(host, a, b, Vec3::ZERO, Vec3::ZERO, 1023, 0x280_6831).unwrap();
                 assert_eq!(boxed.entity_num, target, "{boxed:?}");
