@@ -39,10 +39,12 @@ use vcod_cod4::pmove::{self, Cmd, PlayerState, Rules, WeaponMove};
 use vcod_cod4::testing::cod4_install;
 use vcod_cod4::walk::{WalkOptions, walk};
 use vcod_cod4::zone::Zone;
+use vcod_common::animtree::PlayerAnims;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/net");
 
 /// The captures: (name, file, map, from this server time, armed).
+/// [`ANIMATED`] names the ones replayed with the anim script.
 const CAPTURES: &[(&str, &str, &str, Option<i32>, bool)] = &[
     ("walk", "play-1.7-walk.txt", "mp_crash", None, false),
     ("fly", "play-1.7-fly.txt", "mp_crash", None, false),
@@ -83,6 +85,10 @@ const CAPTURES: &[(&str, &str, &str, Option<i32>, bool)] = &[
     // lunge (cod4-pmove.md 19).
     ("lunge", "play-1.7-lunge.txt", "mp_crash", Some(51250), true),
 ];
+
+/// The captures replayed with the anim script (`pmove::anim`), whose
+/// [`COMPARED_ANIM`] words are compared too.
+const ANIMATED: &[&str] = &["mantle"];
 
 /// The fire rate captures' first rows: the snapshot after the probe gsc's
 /// `armed` line (25100 and 30250 in its log) settled.
@@ -209,6 +215,9 @@ const COMPARED_WEAPON: &[&str] = &[
     "eventParms[3]",
 ];
 
+/// The body's anim words, compared on an [`ANIMATED`] capture.
+const COMPARED_ANIM: &[&str] = &["legsAnim", "torsoAnim", "legsTimer", "torsoTimer"];
+
 /// `eFlags` bits pmove owns (crouch, prone, talk); the firing bit rides
 /// the weapon half's ammo test and the rest are the server's.
 const EFLAGS_PMOVE: u32 = 0x20_000c;
@@ -304,11 +313,14 @@ fn diff(
     ours: &delta::PlayerState,
     retail: &delta::PlayerState,
     armed: bool,
+    animated: bool,
 ) -> Vec<(&'static str, u32, u32)> {
     let weapon: &[&'static str] = if armed { COMPARED_WEAPON } else { &[] };
+    let anim: &[&'static str] = if animated { COMPARED_ANIM } else { &[] };
     let mut d: Vec<_> = COMPARED
         .iter()
         .chain(weapon)
+        .chain(anim)
         .chain(&["eFlags"])
         .filter_map(|&n| {
             let a = match field(n).bits {
@@ -369,6 +381,8 @@ struct Replay<'a> {
     defs: Option<&'a Vec<WeaponDef>>,
     /// The first row's server time, where the capture names one.
     from: Option<i32>,
+    /// The player tree and its script, for an [`ANIMATED`] capture.
+    anims: Option<&'a PlayerAnims>,
 }
 
 impl Replay<'_> {
@@ -420,7 +434,14 @@ impl Replay<'_> {
             {
                 self.step(&mut ps, c, &mut old);
             }
-            if !diff(&ps.to_wire(retail), retail, self.defs.is_some()).is_empty() {
+            if !diff(
+                &ps.to_wire(retail),
+                retail,
+                self.defs.is_some(),
+                self.anims.is_some(),
+            )
+            .is_empty()
+            {
                 return n;
             }
         }
@@ -457,14 +478,41 @@ impl Replay<'_> {
         best.1
     }
 
-    /// One cmd, armed when the capture is.
+    /// One cmd, armed when the capture is, and with the anim script when it
+    /// is [`ANIMATED`]: the viewmodel weapon's anim type and class as
+    /// `BG_AnimUpdatePlayerStateConditions` sets them (the offhand while it
+    /// is in hand).
     fn step(&self, ps: &mut PlayerState, c: &Cmd, old: &mut Cmd) {
         let w = self.weapon(ps);
-        match self.defs {
-            Some(defs) => {
+        match (self.defs, self.anims) {
+            (Some(defs), Some(anims)) => {
+                let vm = if ps.weap_flags & pmove::weapon::wf::USING_OFFHAND != 0 {
+                    ps.off_hand_index
+                } else {
+                    ps.weapon
+                };
+                let def = defs.get(vm as usize);
+                let anim = pmove::anim::AnimInput {
+                    anims,
+                    player_anim_type: def.map_or(0, |d| d.player_anim_type),
+                    weapon_class: def.map_or(0, |d| d.weap_class),
+                };
+                pmove::player_step_animated(
+                    ps,
+                    c,
+                    old,
+                    self.world,
+                    self.rules,
+                    w,
+                    defs,
+                    Some(anim),
+                    None,
+                );
+            }
+            (Some(defs), None) => {
                 pmove::player_step_armed(ps, c, old, self.world, self.rules, w, defs);
             }
-            None => {
+            (None, _) => {
                 pmove::player_step(ps, c, old, self.world, self.rules, w);
             }
         }
@@ -515,7 +563,7 @@ impl Replay<'_> {
                 eprintln!("  ours origin {:?} velocity {:?}", ps.origin, ps.velocity);
             }
             let ours = ps.to_wire(retail);
-            let d = diff(&ours, retail, self.defs.is_some());
+            let d = diff(&ours, retail, self.defs.is_some(), self.anims.is_some());
             let row = format!("row {k} (serverTime {server_time}, commandTime {ct})");
             if !resync {
                 out.rows += 1;
@@ -562,8 +610,11 @@ impl Replay<'_> {
                 e.0 += 1;
             }
             let keep = (ps.old_velocity, ps.delta_angles);
+            let conditions = (ps.anim_movetype, ps.anim_strafing);
             ps = PlayerState::from_wire(retail);
             ps.old_velocity = keep.0;
+            // `MOVETYPE` and `STRAFING` are not on the wire either.
+            (ps.anim_movetype, ps.anim_strafing) = conditions;
             for i in 0..3 {
                 // The float behind the wire's short, while it still is.
                 if sent_short(keep.1[i].to_bits()) == angle_short(ps.delta_angles[i].to_bits()) {
@@ -619,6 +670,19 @@ fn weapon_defs(
     defs
 }
 
+/// The player tree and `mp/playeranim.script` off mp_crash and `common_mp`,
+/// as the server loads them.
+fn player_anims(install: &vcod_cod4::install::Install) -> PlayerAnims {
+    let zone = |name: &str| {
+        let z = Zone::open_path(&install.zone("english", name)).unwrap();
+        walk(z, WalkOptions { keep_bulk: true }).unwrap().assets
+    };
+    let (map, common) = (zone("mp_crash"), zone("common_mp"));
+    let src = vcod_cod4::anim::BodySource::from_zones(&[&map, &common], Default::default())
+        .expect("the player clips");
+    PlayerAnims::load(&src).expect("the player anims")
+}
+
 /// Each weapon's move scales by the level's weapon list, off the zones
 /// the map and `common_mp` hold.
 fn weapon_moves(
@@ -664,6 +728,7 @@ fn cod4_moves_ab() {
     .unwrap()
     .assets;
     pmove::mantle::install(&[&common]).expect("the mantle clips");
+    let anims = player_anims(&install);
     let mut unexplained = Vec::new();
     eprintln!("capture  rows  cmds  free-run  resynced  max free error  first free-run divergence");
     for &(name, file, map, from, armed) in CAPTURES {
@@ -679,6 +744,7 @@ fn cod4_moves_ab() {
             rules: Rules::default(),
             defs: defs.as_ref(),
             from,
+            anims: ANIMATED.contains(&name).then_some(&anims),
         };
         let mut out = Outcome::default();
         let start = r.start();
@@ -759,6 +825,7 @@ fn the_trigger_fires_nothing_through_a_mantle() {
         rules: Rules::default(),
         defs: Some(&defs),
         from: Some(47100),
+        anims: None,
     };
     let start = r.start();
     let mut ps = PlayerState::from_wire(&cap.snaps[start].1);
@@ -838,6 +905,7 @@ fn cod4_fire_rate_ab() {
             rules: Rules::default(),
             defs: Some(&defs),
             from: Some(from),
+            anims: None,
         };
         let start = r.start();
         let mut retail = Vec::new();

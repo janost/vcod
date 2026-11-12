@@ -929,11 +929,35 @@ owns), freed in the frame's entity pass once its time comes. It takes an
 entity number as retail's does. No gate replays a second player against a
 mantle yet.
 
-### 17.5 Not modelled
+### 17.5 The anims
 
-- The anim script's mantle movetypes (`BG_AnimScriptAnimation` with
-  the clip's slot plus 21, 0x80515ef) and the over clip's jump event;
-  the rest of the anim script runs (cod4-player-anims.md 7).
+- `Mantle_Move` calls `BG_AnimScriptAnimation` (0x80502ea) every frame
+  after the two `Mantle_GetAnimDelta` calls (0x80515ef) with state 0, the
+  movetype `s_mantleTrans`' up clip slot plus 0x15, or its over clip's
+  (0x820aa24) when the up clip's length is under the timer, and force 1.
+  `PM_Footsteps`' calls pass force 0 (0x805a570 and the rest). VERIFIED
+  (the instructions). Slot plus 21 lands on `MANTLE_UP_57` ..
+  `MANTLE_OVER_LOW`: `animMoveTypesStr` (0x826a8e0, 8-byte entries) has
+  `MANTLE_ROOT` at 21. VERIFIED (the table). The stock script's blocks
+  play `both mp_mantle_up_57` .. `33` and `over_high`/`over_mid`, `legs`
+  for `up_27`, `up_21` and `over_low`, one command each. VERIFIED (the
+  `common_mp` rawfile).
+- At the end, after `pm_flags` 4 and `mantleStarted` clear and before
+  the stand test, a mantle with `mantleState.flags` 1 runs
+  `BG_AnimScriptEvent` (0x8050194) with event 3, not continuing, forced
+  (0x8051716). Event 3 is `JUMP` (`animEventTypesStr`, 0x826aa40).
+  VERIFIED (the instructions, the table).
+- vcod: `pmove::anim::mantle` and the jump event in `mantle::mantle_move`.
+  `cod4_moves_ab` replays the mantle capture with the anim script and
+  compares `legsAnim`, `torsoAnim`, `legsTimer` and `torsoTimer` on every
+  row: all exact, resynced and free. Before the change 8 `legsAnim` rows
+  and 2 rows of each other word were wrong. The capture's up clip shows
+  as `legsAnim` 0x23d (61 with the toggle), the over clip 57, then the
+  jump's 0x29b (155, `pb_standjump_takeoff`) with `torsoAnim` 0x200 and
+  both timers 39, then the land's 154. VERIFIED (the gate). The capture
+  is the mantler's own playerstate; the body others are sent copies these
+  words, which `cod4::wire_ab`'s walk gates (cod4-combat.md 11). No
+  capture of a second client watching a mantle yet. INFERRED.
 
 ## 18. The lean
 

@@ -291,7 +291,8 @@ walker replaying a retail capture moves as on retail within the trace
 kernels' float model (0.04 units over 40 s) (15). Mantles over
 `MANTLE_ON` and `MANTLE_OVER` walls on 1.7's clips and timing, leaving
 1.7's blockage for other players (17). Bodies carry the legs and torso
-anims 1.7's anim script picks, with view angles, lean and prone pitches.
+anims 1.7's anim script picks, the mantle's included, with view angles,
+lean and prone pitches.
 Spectators follow as `scr_game_spectatetype` allows: attack to the next
 player, the sight to the one before, melee to fly free (15).
 
@@ -412,26 +413,23 @@ Ranked by how much a player notices. The research-side lists are
 4. **View weapon details.** No camo; every gun draws its first model.
    The rocket on a launcher and the goggles model are not drawn, and
    Sleight of Hand does not speed the view clips.
-5. **Mantle anims on others.** The server's anim script skips the mantle
-   movetypes, so another player climbing a wall plays no mantle anim
-   ([cod4-pmove.md](../research/cod4-pmove.md) 17.5).
-6. **Stereo only.** A 5.1 or 7.1 device gets the stereo mix on its front
+5. **Stereo only.** A 5.1 or 7.1 device gets the stereo mix on its front
    pair ([cod4-sound.md](../research/cod4-sound.md) 5). 139 alias rows
    whose curve no zone holds fall off straight.
-7. **No third-person view**, so our own third-person tracer start is not
+6. **No third-person view**, so our own third-person tracer start is not
    modelled ([cod4-effects.md](../research/cod4-effects.md) 12.3).
-8. **Demos untested against retail.** No retail demo has played in vcod,
+7. **Demos untested against retail.** No retail demo has played in vcod,
    nor vcod's in `iw3mp.exe`. The `RECORDING` line draws at CoD2's place
    ([cod4-demos.md](../research/cod4-demos.md) 7).
-9. **Small menus.** The CD key menus are missing; Single Player's Yes
+8. **Small menus.** The CD key menus are missing; Single Player's Yes
    does nothing (this is a multiplayer client); the `winvoice_*` voice
    settings are not read.
-10. **Server-side differences.** vcod-server never asks the authorize
-    server, so it answers an off-LAN challenge at once where 1.7 waits on
-    the authorize server (cod4-handshake.md 15). The helicopter's flight
-    has no move trace or touch and its collision traces at the bind pose
-    (cod4-gsc.md 3.2). No PunkBuster (a stock dedicated server runs none
-    either).
+9. **Server-side differences.** vcod-server never asks the authorize
+   server, so it answers an off-LAN challenge at once where 1.7 waits on
+   the authorize server (cod4-handshake.md 15). The helicopter's flight
+   has no move trace or touch and its collision traces at the bind pose
+   (cod4-gsc.md 3.2). No PunkBuster (a stock dedicated server runs none
+   either).
 
 Pending human checks: pixel and by-ear comparisons with retail.
 
