@@ -135,8 +135,8 @@ Common ones:
 | `dedicated` | 1 by default (retail's is 2), so dev runs stay off the master list. 2 sends heartbeats (below). |
 | `protocol` | CoD1: `1`, `6` or `22` overrides the install's protocol. |
 | `g_log`, `g_logSync` | `games_mp.log` (below): empty `g_log` turns it off, `g_logSync 1` flushes every line. |
-| `fs_homepath` | Where the log goes. Default the `--game-dir`. |
-| `sv_allowDownload` | On by default: serve the server's non-stock paks to a client that lacks them. `sv_wwwDownload 1` with `sv_wwwBaseURL` redirects instead. |
+| `fs_homepath` | Where the log goes. Default the `--game-dir`. CoD2 serves downloads from here first, then the game dir. |
+| `sv_allowDownload` | On by default: serve the server's non-stock paks to a client that lacks them. CoD2 serves any file a client names under `fs_homepath` or the game dir, none outside them. `sv_wwwDownload 1` with `sv_wwwBaseURL` redirects instead. |
 | `sv_pure` | CoD2, CoD4: 0 turns the pure `cp` check off. |
 
 ### Log
