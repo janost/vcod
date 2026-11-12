@@ -34,7 +34,8 @@ if [ "$KIND" = retail ]; then
     PORT=$PORT tools/run_server.sh mp_carentan > "$OUT/server.log" 2>&1 & SPID=$!
 else
     PORT=${OFFLAN_PORT:-30184}
-    target/release/vcod-server mp_carentan --port $PORT > "$OUT/server.log" 2>&1 & SPID=$!
+    # sv_pure 0, as tools/run_server.sh runs retail's.
+    target/release/vcod-server mp_carentan --port $PORT --set sv_pure=0 > "$OUT/server.log" 2>&1 & SPID=$!
 fi
 sleep 10
 for pair in "${PAIRS[@]}"; do

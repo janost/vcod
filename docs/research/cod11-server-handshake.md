@@ -2054,9 +2054,15 @@ Defaults and order:
   `sv_paks`, and downloads by checksum with retail's `name.%08x.pk3` rule
   (`net::download::candidates_for_map`).
 - The server publishes all four cvars from its mounted paks and verifies `cp`
-  alike; `sv_pure` defaults to 0 (`--set sv_pure=1`), retail's to 1. Its
-  `sv_pure 1` systeminfo on the 1.1 install matched the capture above byte for
-  byte. VERIFIED.
+  alike. Its `sv_pure 1` systeminfo on the 1.1 install matched the capture
+  above byte for byte. VERIFIED.
+- `sv_pure` defaults to 1, retail's default, and a set holds across levels
+  (VERIFIED, `sv_pure_defaults_to_retails_and_a_set_outlives_the_level`). Until
+  2026-11 every level load forced 0, which also undid a `--set sv_pure=1`
+  at the first map change. No commit or doc gave a reason, and the client
+  already sent `cp` on every load. `Server::new`, the tests' constructor,
+  runs 0: `tools/run_server.sh` runs retail at 0 for the captures the
+  gates replay, and the tests' clients send no `cp`.
 - A 1.1 systeminfo past `MAX_INFO_STRING` loses paks off the list ends, the
   referenced pair first, never `sv_serverid`; 1.5 and UO keep
   `BIG_INFO_STRING` ("Configstring 1, systeminfo").

@@ -57,6 +57,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, seed: u64) -> (Vec<String>, Option<EntitySt
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::with_seed(common::cfg(map, "probe_dyingpose"), now, seed);
+    sv.set_cvar("sv_pure", "0");
     sv.set_protocol(proto);
     sv.overlay_script("maps/mp/gametypes/probe_dyingpose", SCRIPT);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));

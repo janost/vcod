@@ -1791,8 +1791,13 @@ fn resend_last_frame(
 impl Server {
     /// A server whose generator starts from a fixed seed, so a test run
     /// replays the same bot picks, script `randomInt`s and spawn choices.
+    /// It runs `sv_pure 0`, as `tools/run_server.sh` runs the retail
+    /// servers the gates replay; its test clients send no `cp`. A
+    /// `set_cvar("sv_pure", "1")` turns the check back on.
     pub fn new(cfg: ServerConfig, now: Instant) -> Self {
-        Self::with_seed(cfg, now, crate::game::host::RNG_SEED)
+        let mut sv = Self::with_seed(cfg, now, crate::game::host::RNG_SEED);
+        sv.set_cvar("sv_pure", "0");
+        sv
     }
 
     /// Test-facing: each client slot's playing spawns, in order, go to these
@@ -4466,7 +4471,6 @@ impl Server {
             &self.pending_cvar("sv_maxclients", &self.game.cfg.max_clients.to_string()),
         );
         cvars.set("dedicated", &self.game.dedicated.to_string());
-        cvars.set("sv_pure", "0");
         cvars.set("sv_running", "1");
         cvars.set("sv_serverid", &self.game.server_id.to_string());
         cvars.set("sv_cheats", if self.game.cheats { "1" } else { "0" });
@@ -4666,8 +4670,7 @@ impl Server {
             cvars.get("sv_maxclients").to_string(),
         ));
         self.game.fs = Some(fs.clone());
-        // `sv_pure` reads the `--set` override; vcod defaults it to 0 where
-        // retail's default is 1.
+        // `sv_pure`: retail's default 1, a `--set` over it, kept across levels.
         let pure = cvars.get("sv_pure").trim().parse::<i32>().unwrap_or(0) != 0;
         if let Some(cs0) = self.core.configstrings.get_mut(0) {
             *cs0 = configstrings::with_sv_pure(cs0, pure);
@@ -9494,6 +9497,27 @@ mod tests {
         // `vdr` forgets a good one.
         let reset = |feed| vec![pure_command(Some(11), Some(22), &[6], feed), "vdr".into()];
         assert_eq!(pure_server_after(reset).client_count(), 0);
+    }
+
+    /// `sv_pure` is retail's 1 on the binary's server
+    /// (cod11-server-handshake.md, "Defaults and order"), 0 on the test
+    /// constructor, and a set holds past the first level, as the carried
+    /// table keeps it.
+    #[test]
+    fn sv_pure_defaults_to_retails_and_a_set_outlives_the_level() {
+        let fs = vcod_common::pk3::Pk3Fs::empty();
+        let now = Instant::now();
+        assert_eq!(
+            Server::with_seed(cfg(), now, 7).cvars(&fs).get("sv_pure"),
+            "1"
+        );
+        let mut sv = Server::new(cfg(), now);
+        assert_eq!(sv.cvars(&fs).get("sv_pure"), "0");
+        sv.set_cvar("sv_pure", "1");
+        let first = sv.cvars(&fs);
+        assert_eq!(first.get("sv_pure"), "1");
+        sv.game.carried_cvars = Some(first);
+        assert_eq!(sv.cvars(&fs).get("sv_pure"), "1");
     }
 
     /// One client command per sequence, all in one message.

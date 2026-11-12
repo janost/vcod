@@ -248,6 +248,7 @@ fn board_with(
         Some(seed) => vcod_server::Server::with_seed(cfg, now, seed),
         None => vcod_server::Server::new(cfg, now),
     };
+    sv.set_cvar("sv_pure", "0");
     let pins = match (
         setup.pins.is_empty(),
         FLAT_SPAWNS.iter().find(|(m, _)| *m == map),
