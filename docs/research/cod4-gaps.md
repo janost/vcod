@@ -35,8 +35,10 @@ Ranked by how much a player notices.
   rows whose curve no walked zone holds fall off straight. L.
 - The own third-person tracer start, which waits on a third-person view
   (cod4-effects.md 12.3). S once a third-person view exists.
-- Demo interchange with retail is untested both ways, and the
-  `RECORDING` line draws at CoD2's place (cod4-demos.md 7). S to test.
+- `iw3mp.exe` has neither played a vcod demo nor recorded one for vcod:
+  no retail client runs here. The framing is gated both ways against
+  the binary and a retail capture (cod4-demos.md 8). S once a 1.7 client
+  runs under Wine.
 - The CD key menus (`cdkey_menu`, `verifyCDKey`, `getCDKey`) and the
   `winvoice_*` dvars (cod4-front-end.md 7, cod4-voice.md). S each.
 - Small HUD fades: `cg_enemyNameFadeIn`'s wait on the crosshair colour,
@@ -45,6 +47,11 @@ Ranked by how much a player notices.
 
 ## Fixed
 
+- Demo framing: a retail capture written as `iw3mp.exe` writes a demo
+  plays in vcod, vcod's recorder writes the same bytes from the same
+  messages, and a slot goes out as `MSG_WriteBigString` writes it; the
+  `RECORDING` line draws at 1.7's place in `consoleFont`
+  (cod4-demos.md 8, 9).
 - The view model: the camo's `gunModel[]` slot off `weaponmodels[]`
   (vcod-server's `giveWeapon` sets it), the RPG's rocket at `tag_clip`
   while loaded, Sleight of Hand and Double Tap dividing the clips' rates;
