@@ -3363,11 +3363,16 @@ mod tests {
         assert!(plain.demo.as_ref().unwrap().csv.is_none());
         let mut s = Cod2Session::play_demo(data.to_vec(), true).unwrap();
         s.write_timedemo_csv(dir.clone(), 3);
+        // A fixed 16 ms frame on the frame clock (`cl_avidemo`'s step), so
+        // no run packs several frames into the first millisecond.
+        let step = Some(std::time::Duration::from_millis(16));
         let mut frames = 0;
         while !s.demo_over() && frames < 5000 {
+            crate::frame_clock::tick(std::time::Instant::now(), step);
             s.fly(&mut cam, &fs);
             frames += 1;
         }
+        crate::frame_clock::tick(std::time::Instant::now(), None);
         assert!(s.demo_over(), "the demo never ended");
         let counted = s.demo.as_ref().unwrap().timedemo.as_ref().unwrap().frames();
         let text = std::fs::read_to_string(dir.join("timedemo_mp_toujane_mode_3.csv")).unwrap();
