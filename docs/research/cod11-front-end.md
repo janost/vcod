@@ -1507,7 +1507,7 @@ file).
   (`cg_drawCompass`) and Team Overlay (`cg_drawTeamOverlay`), which no
   retail binary reads either (`cod11-hud-protocol.md`, "Which views draw
   it"). `setRecommended` is an unknown command. Binds to commands vcod
-  lacks (`+lookup`, `screenshotJPEG`, the stance toggles) are stored and
+  lacks (`+lookup`, the stance toggles) are stored and
   print `Unknown command` when pressed.
 - Not shown: the language picker (`cl_languagesavailable` reads 1, so its
   `hideCvar` hides it), NVIDIA fog (no `r_nv_fog_available`), Driver Info

@@ -175,7 +175,14 @@ libspeex nothing is sent or played.
 `stoprecord` write CoD2's `.dm_1` in a game. `demo <name>` and `timedemo
 <name>` play one through the session's frame, unpredicted. `timedemo`
 writes retail's `demos/timedemo_<map>_mode_<r_mode>.csv`. Retail's demos
-play in vcod and vcod's in retail.
+play in vcod and vcod's in retail. `cl_avidemo <fps>` steps the clock a
+fixed `1000 / fps` ms a frame and writes each as a TGA.
+
+**Screenshots** ([cod2-demos.md](../research/cod2-demos.md) 8).
+`screenshot` and `screenshotJPEG` write `screenshots/shotNNNN.tga` (top-down)
+or `.jpg` (quality 90) under the game folder, one count for both; a lone
+argument names the file, `silent` drops the `Wrote` line. The shot holds
+the frame before `r_gamma`, as D3D's front buffer does.
 
 ### Server
 
@@ -328,7 +335,8 @@ Ranked by how much a player notices, worst first.
    snapshot's, lerped, without retail's bob and landing dip; a followed
    one also lacks the step smoothing, which retail's demo skips too
    ([cod2-demos.md](../research/cod2-demos.md) 7). Retail's front end has
-   no demo list, and vcod none either.
+   no demo list, and vcod none either. `screenshot levelshot` and
+   `savegame` write nothing.
 3. **Download names.** vcod-server refuses a `download` name with a `..`
    part and never reads from the filesystem root; retail serves both
    (cod2-protocol.md 17.5). A stock client never asks for either.

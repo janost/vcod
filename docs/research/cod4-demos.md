@@ -298,7 +298,7 @@ count within two. VERIFIED live.
   for vcod to read nor played one of vcod's. Section 8 gates both ways
   against the binary's layout; the run itself (a CD-keyless 1.7 client
   under Wine, as `cod2-demos.md` 6 ran for CoD2) is still to do.
-- `cl_avidemo` and `timedemo`'s csv.
+- `timedemo`'s csv.
 - 1.7's front end demo list.
 
 ## 8. Interchange with retail
@@ -367,3 +367,71 @@ one from a retail capture instead:
 vcod: `Console::recording_line_cod4` on `ScreenPlacement::cod4`, one
 scale for both axes (the grid's down one), the console's `consoleFont`,
 no shadow. The look on screen is not yet checked by eye.
+
+## 10. Screenshots and `cl_avidemo`
+
+Read out of `iw3mp.exe` 1.7 (file offset plus `0x400000`). It keeps
+CoD2's renderer code; `cod2-demos.md` 8 and `cod11-demos.md` 10 have the
+older games. vcod: `screenshot.rs`, `renderer/capture.rs`,
+`frame_clock.rs`.
+
+### 10.1 Commands and names
+
+- `0x62fe50` registers `screenshot` (`0x70776c`, handler `0x62fe30`) and
+  `screenshotJpeg` (`0x707778`, `0x62fe40`), both into `R_ScreenShot_f`
+  (`0x60ebf0`) with TGA (`"tga"` `0x7007f8`) or JPEG (`"jpg"` `0x6fc990`)
+  (VERIFIED).
+- The first argument, case-sensitive (VERIFIED, `0x60ec15`..`0x60ecd9`):
+  `levelshot` (`0x6c7b08`) writes `levelshots/%s.tga` (`0x7007d0`), a TGA
+  even from `screenshotJpeg`; `savegame` (`0x7007fc`) with a non-empty
+  second writes `%s.jpg` (`0x7007f0`) at 512 x 512; `silent` (`0x700808`)
+  silences; a lone other argument names `screenshots/%s.%s` (`0x700810`),
+  unchecked; everything else numbers.
+- Numbers (`0x60ed00`): one static counter (`0xd8b3020`, 0 at start) for
+  both formats; `screenshots/shot%04i.%s` (`0x7005c0`), stepping while the
+  file exists (`0x55b190`, `fs_homepath/<fs_gamedir>/<name>`); a scan
+  that ends at 9999 or more prints `ScreenShot: Couldn't create a file`
+  (`0x700824`), so `shot9998` is the last; else the counter keeps the
+  next number (VERIFIED). INFERRED: `fs_gamedir` is the mod's folder under
+  `fs_game`, else `main`.
+- `Wrote %s` (`0x7007e4`, `0x60edea`) unless `silent` (VERIFIED);
+  INFERRED: printed whether the write took or not, as on CoD2. A failed
+  open prints `Failed to open %s` (`0x6f17f4`) (VERIFIED).
+- A developer F12 (key 178) queues `screenshot` (`0x6ebe80`) from the key
+  handler at `0x5511e8` (VERIFIED). vcod has no such key.
+
+### 10.2 Format and frame
+
+- No D3DX (VERIFIED). TGA (`0x60ea10`): CoD2's header, byte 17 = `0x20`,
+  rows top-down, B, G, R, the backbuffer's size (VERIFIED). JPEG: the
+  built-in libjpeg (`0x6459e0`) at a fixed quality 90 (`0x645a8f`), three
+  components, rows top-down, byte 0 read as blue (`rgb_ycc_convert`
+  `0x65e3b0`) (VERIFIED).
+- The capture (`0x60e540`) runs in the command: an `A8R8G8B8` scratch
+  surface, `GetFrontBufferData`, a read-only `LockRect`; windowed, a
+  monitor-sized surface cropped to the client rectangle (VERIFIED). Its
+  failures print through `Com_PrintError` (`0x7005d8`, `0x700618`,
+  `0x700660`, `0x7006b4`) silent or not (VERIFIED). INFERRED: the frame
+  last presented, UI and console included.
+- Gamma: nothing in the capture or the writers maps the pixels; `r_gamma`
+  is a device ramp (`0x5f3ac0`, `SetGammaRamp` at `0x612410`) (VERIFIED).
+  INFERRED (D3D9): the front buffer holds the bytes before it. vcod reads
+  the gamma pass's scene before the ramp.
+- There is no `cg_autoscreenshot` (VERIFIED, no `autoscreenshot` string).
+
+### 10.3 `cl_avidemo`
+
+- `CL_Init` registers `cl_avidemo` (`0x46dc22`, "AVI demo frames per
+  second") an int, 0, 0 to `0x7fffffff`, no flags, and `cl_forceavidemo`
+  (`0x46dc9c`) a bool, 0 (VERIFIED).
+- The client's frame time (`0x46c8d0`, called at `0x5000f5`), when both
+  `cl_avidemo` and `msec` are non-zero: in `cls.state` 9 (`0xc5f900`) or
+  under `cl_forceavidemo` it runs `screenshot silent` (`0x6d0e40`) at
+  once; then `msec = ftol(1000.0 / cl_avidemo * scale)` in doubles
+  (`0x70af28`, `_ftol2` `0x68b360`), 1 when 0; `cls.realtime`
+  (`0x956e98`) moves by it (VERIFIED). `scale` (`0x1435d68`, from
+  `Com_ModifyMsec` `0x4ffce0`) is 1 unless `fixedtime` or a timescale
+  changes the frame (VERIFIED). No demo check (VERIFIED).
+- vcod steps its frame clock by it: a demo's clock reads the frame's
+  step and a live session's cmd clock the clock (`play::cod4::clock_now`).
+

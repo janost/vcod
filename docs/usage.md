@@ -288,6 +288,7 @@ commands.
 | `ui_load` | Reload the menus off the list `ui_menuFiles` names |
 | `record [name]`, `stoprecord` | Record a demo to `demos/` in the game directory (the mod's first) |
 | `demo <name>` | Play one back (`.dm_1`, `.dm_2` or `.dm_3`, found without the extension). `cl_freezeDemo 1` pauses it; `nextdemo` holds a command to run at its end |
+| `screenshot [silent\|name]`, `screenshotJPEG [silent\|name]` | Write the next frame to `screenshots/` in the game folder: `shotNNNN.tga` or `.jpg`, or `<name>.tga`/`.jpg`. `silent` prints no `Wrote` line |
 | `timedemo` | CoD1, UO: `set timedemo 1` before `demo` times it. CoD2, CoD4: `timedemo <name>` is a command, as retail's: it plays `<name>.dm_1` 50 ms a frame and prints the frame count and fps. CoD2 also writes `demos/timedemo_<map>_mode_<r_mode>.csv`, a `<frame>,<ms>` line a frame |
 
 Anything else goes to the server while connected (`callvote`, `kill`,
@@ -304,6 +305,8 @@ Client cvars:
 | `cg_fov` | Cheat-protected: 80 unless the server runs `sv_cheats 1` |
 | `rate`, `snaps` | `rate` defaults to 25000; retail's first-run 5000 starves snapshots |
 | `com_maxfps` | Retail's frame cap, `timedemo` included (`1000 / com_maxfps` whole ms a frame). vcod's default is 0, no cap past vsync; retail's is 85 |
+| `cl_avidemo`, `cl_forceavidemo` | `cl_avidemo <fps>` moves the clock `1000 / fps` ms a frame, whatever the frame takes, and writes each frame in a game or demo as `screenshot silent` (UO: a negative count writes JPEGs). `cl_forceavidemo 1` writes outside a game too |
+| `cg_autoscreenshot` | 1.5, UO: 1 writes `<date-time>-<name>.jpg` when the server's script calls `autoScreenshot` |
 | `scr_conspeed`, `mss_volume` | Console slide speed, master volume |
 | `r_mode`, `r_fullscreen`, `r_aaSamples`, `vc_widescreen` | [Window and fullscreen](#window-and-fullscreen) |
 | `password`, `rconPassword`, `rconAddress` | The last two are not saved |

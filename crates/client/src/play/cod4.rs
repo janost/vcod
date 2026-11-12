@@ -3350,15 +3350,16 @@ fn melee_charge(
     (angle2short(yaw), dist)
 }
 
-/// Now for a live session's cmd clock, send pacing and timeouts: the wall
-/// clock, or the clock a live test drives faster than real time on this
-/// thread (`tests::sim`).
+/// Now for a live session's cmd clock, send pacing and timeouts: the
+/// client's frame clock (`cls.realtime`, which `cl_avidemo` steps), or the
+/// clock a live test drives faster than real time on this thread
+/// (`tests::sim`).
 pub(crate) fn clock_now() -> Instant {
     #[cfg(test)]
     if let Some(t) = tests::sim::now() {
         return t;
     }
-    Instant::now()
+    crate::frame_clock::now()
 }
 
 fn own_cmd(

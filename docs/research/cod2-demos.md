@@ -22,8 +22,8 @@ checked live against `CoD2MP_s.exe` 1.3 under Wine. CoD1's account is
   timed.
 - `cl_freezeDemo` (bool, 0, flags 0x1000), `cl_avidemo` (int),
   `cl_forceavidemo` and `nextdemo` (string, `""`, 0x1000) are registered
-  there (VERIFIED, the `Dvar_Register*` calls). vcod reads
-  `cl_freezeDemo` and `nextdemo`; it has no `cl_avidemo`.
+  there (VERIFIED, the `Dvar_Register*` calls). vcod reads all four
+  (`cl_avidemo` in section 8).
 - `record [name]` (Mac 0x149856): more than one argument prints `record
   <demoname>`; recording (`clc` +0x40184) prints `Already recording.`;
   `cls.state` other than 8 (`CA_ACTIVE` in CoD2's numbering) prints `You
@@ -234,10 +234,92 @@ All in one `unshare -rn` namespace (loopback only):
 
 ## 7. Not done
 
-- `cl_avidemo` / `cl_forceavidemo`.
 - A demo's eye has no bob or landing dip (5).
 - CoD2's stock `ui_mp/main.menu` has no demo list (its only demo item
   is `demo_only`, the retail demo build's notice), so the front end has
   none (VERIFIED, the stock menus in `iw_06.iwd`).
 - A recorded demo started before the first snapshot: vcod refuses
   `record` until a snapshot is in, retail until `cls.state` 8.
+
+## 8. Screenshots and `cl_avidemo`
+
+Read out of `gfx_d3d_mp_x86_s.dll` (image base `0x10000000`) and
+`CoD2MP_s.exe` 1.3, the names off the Mac build. CoD1's account is
+`cod11-demos.md` 10; vcod's code is the same (`screenshot.rs`,
+`renderer/capture.rs`, `frame_clock.rs`).
+
+### 8.1 Commands and names
+
+- `R_RegisterCommands` (`0x100052c0`) adds `screenshot` (`0x101924b8`,
+  handler `0x100052a0`) and `screenshotJpeg` (`0x101924a8`, `0x100052b0`),
+  both into `R_ScreenshotCommand` (`0x10026790`) with TGA or JPEG
+  (VERIFIED). The exe's bindable list spells it `screenshotJPEG`
+  (VERIFIED, `.data` `0x5dd184`, `0x5dd198`); commands match case
+  folded.
+- The first argument as on CoD1 (VERIFIED, case-sensitive compares):
+  `levelshot` (`0x10196f68`) writes a 128 x 128 `levelshots/<map>.tga`
+  (`0x10196f90`), `savegame` (`0x10196f5c`) a 512 x 512 `<arg2>.jpg`,
+  `silent` (`0x10196f54`) silences, a lone other argument names
+  `screenshots/<arg>.<ext>` (`0x10196f40`) with no existence check, and
+  everything else numbers.
+- Numbers: one static `lastNumber` (`0x109be634`, 0 at start) for both
+  formats. Above 9999 it fails at once; else it formats
+  `screenshots/shot%04i.%s` (`0x101970c4`, extensions `0x10196f74` and
+  `0x10196f78`) and steps while `FS_FileExists` (exe `0x421ea0`,
+  `fs_homepath/<fs_gamedir>/<name>`) finds the file. A free number of 9999
+  or more prints `ScreenShot: Couldn't create a file` (`0x10196f1c`, silent
+  or not), so `shot9998` is the last; else it takes the number and keeps
+  the next (VERIFIED, `0x10026890`..`0x1002691f`).
+- The file goes through `FS_WriteFile` (exe `0x423340`) under
+  `fs_homepath/<fs_gamedir>/`, its result ignored; a failed open prints
+  `Failed to open %s` (VERIFIED). `Wrote %s` (`0x10196f84`) follows
+  unless `silent`, written or not (VERIFIED, `0x100269a3`).
+- A developer F12 (key 178, keynames `0x5cddf0`) runs `screenshot` from
+  the UI's key handler (exe `0x53ec91`, string `0x5c3010`) while
+  `developer` is set (VERIFIED). vcod has no such key.
+
+### 8.2 Format and frame
+
+- TGA (`0x100265a0`): the 18-byte header is zero but byte 2 = 2, bytes
+  12-15 the size, byte 16 = 24 and byte 17 = `0x20`, top-left origin;
+  rows top-down, B, G, R (VERIFIED). CoD1's are bottom-up.
+- JPEG: the DLL's own libjpeg, no D3DX; `R_SaveJpg` (`0x10014860`) at a
+  fixed quality 90 (`push 0x5a`, `0x10026666`, `0x1002698e`), baseline,
+  three components, rows top-down; the build reads byte 0 as blue
+  (`rgb_ycc_convert` `0x10042c50`), so the BGR buffer keeps its colours
+  (VERIFIED).
+- The capture runs in the command (`R_GetFrontBufferData` `0x10026270`):
+  an `A8R8G8B8` scratch surface, `GetFrontBufferData`, a read-only
+  `LockRect`, bytes 0-2 a pixel (VERIFIED). Full screen it reads the
+  window's size; windowed a monitor-sized surface, cropped to the
+  client rectangle, so whatever covers the window comes along (VERIFIED,
+  `MonitorFromWindow`, `GetMonitorInfoA`, `ClientToScreen`). INFERRED: the
+  frame last presented. Its failures print `^1ERROR: cannot take
+  screenshot: ...` (`0x10197084`, `0x10197040`, `0x10196fe8`,
+  `0x10196fa4`) silent or not (VERIFIED).
+- Gamma: `r_gamma` reaches the screen only through `SetGammaRamp`
+  (`0x10030c8f`); nothing in the capture maps the pixels (VERIFIED).
+  INFERRED (D3D9): the front buffer holds the bytes before the ramp, so a
+  shot is darker than the screen at `r_gamma` above 1. vcod reads the
+  gamma pass's scene before the ramp, the next frame it draws.
+- There is no `cg_autoscreenshot` (VERIFIED, no such string in the exe or
+  the DLL); nothing shoots at intermission or on a server command.
+
+### 8.3 `cl_avidemo`
+
+- `cl_avidemo` (`0x5a3220`) is an int, 0, 0 to `0x7fffffff`, flags
+  0x1000; `cl_forceavidemo` (`0x5a3210`) a bool, 0, 0x1000 (VERIFIED).
+- `CL_RunOncePerClientFrame(msec)` (exe `0x40f770`, called from
+  `Com_Frame` at `0x435051`), when both are non-zero: in `CA_ACTIVE` (8,
+  `0x609fe0`) or under `cl_forceavidemo` it runs `screenshot silent`
+  (`0x5a3590`) at once through `Cmd_ExecuteString` (`0x4214c0`); then
+  `msec = ftol(1000.0f / cl_avidemo * com_timescaleValue)` (`0x5c3ed8`,
+  `0xc2610c`), 1 when 0; `cls.realtime` (`0x68a520`) moves by it
+  (VERIFIED, `0x410b8c`..`0x410c00`). The step holds in any state; the
+  shot waits for a game or a demo past its first snapshot.
+- INFERRED (the Mac `Com_Frame`): `com_timescaleValue` is 1 unless
+  `timescale` or `fixedtime` scales the frame, and the call runs before
+  the frame draws, so each shot is the frame before. vcod reads
+  `timescale`, steps its frame clock (`cls.realtime`; the demo clock and
+  the session read it) and writes the frame it then draws.
+

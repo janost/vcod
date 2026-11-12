@@ -41,6 +41,7 @@ mod entities;
 mod entity_light;
 mod entity_material;
 mod flame_probe;
+mod frame_clock;
 mod frame_digest;
 mod frame_prof;
 mod frontend;
@@ -61,6 +62,7 @@ mod quit;
 mod renderer;
 mod scene_copy;
 mod screen_blend;
+mod screenshot;
 mod session;
 mod shadows;
 mod shock_probe;
@@ -197,7 +199,7 @@ struct Args {
     /// write every server message past the gamestate (not only the snapshot
     /// ones) as the `--capture-tag` pair in crates/common/tests/fixtures/net/,
     /// what `net::tests::a_retail_framed_demo_plays_and_vcod_writes_it_alike`
-    /// frames as retail does (cod11-demos.md 9). Needs `--capture-tag`.
+    /// frames as retail does (cod11-demos.md 10). Needs `--capture-tag`.
     #[arg(long)]
     save_demo: bool,
     /// Write the retail server's non-empty configstring table to
@@ -2059,6 +2061,8 @@ fn main() -> Result<()> {
         start: Instant::now(),
         last_frame: Instant::now(),
         frame_ms: 0,
+        shot: None,
+        shooter: Default::default(),
         debug_overlay: args.debug_overlay,
         cull_mode: renderer::CullMode::On,
         hud_stats: hud_text::HudStats::new(),
@@ -3118,6 +3122,9 @@ struct App {
     last_frame: Instant,
     /// `com_frameTime`'s last frame, ms since `start` (`Com_Frame`'s pace).
     frame_ms: u64,
+    /// A screenshot command waiting for the next frame, and the writer.
+    shot: Option<screenshot::Request>,
+    shooter: screenshot::Shooter,
     debug_overlay: bool,
     cull_mode: renderer::CullMode,
     hud_stats: hud_text::HudStats,
@@ -3754,6 +3761,11 @@ impl App {
                         }
                     }
                 },
+                Effect::Screenshot { jpeg, args } => {
+                    if let Some(req) = screenshot::parse(jpeg, &args) {
+                        self.shot = Some(req);
+                    }
+                }
                 Effect::Rcon(args) => self.rcon(&args),
                 Effect::Forward(line) => match &mut self.mode {
                     Mode::Online { net, .. } if net.state() != net::NetState::Disconnected => {
@@ -4484,6 +4496,47 @@ impl App {
     /// Mods menu names another (docs/research/cod11-front-end.md, section 16).
     fn leave_fs_game(&mut self) {
         self.switch_fs_game(self.fs_game_cvar());
+    }
+
+    /// `cl_avidemo`'s fixed frame step, queueing its silent shot
+    /// (`screenshot::avidemo`).
+    fn avidemo(&mut self) -> Option<std::time::Duration> {
+        let frames = self.shell.cvar_f32("cl_avidemo") as i32;
+        if frames == 0 {
+            return None;
+        }
+        let timescale = match self.shell.cvar("timescale") {
+            Some(_) => self.shell.cvar_f32("timescale"),
+            None => 1.0,
+        };
+        let f = screenshot::avidemo(
+            self.game,
+            net::protocol::install_protocol(&self.fs).is_uo(),
+            frames,
+            timescale,
+            self.client_active(),
+            self.shell.cvar_f32("cl_forceavidemo") != 0.0,
+        )?;
+        if let Some(shot) = f.shot {
+            self.shot = Some(shot);
+        }
+        Some(f.step)
+    }
+
+    /// `cls.state` at `CA_ACTIVE`: a game or a demo past its first
+    /// snapshot.
+    fn client_active(&self) -> bool {
+        match &self.mode {
+            Mode::Online { net, .. } => net.state() == net::NetState::Active,
+            _ => self.session.cod4_in_game() || self.session.frame_time().is_some(),
+        }
+    }
+
+    /// `fs_homepath/<fs_gamedir>/screenshots`: the mod's folder under
+    /// `fs_game`, else the base game's.
+    fn screenshot_dir(&self) -> std::path::PathBuf {
+        let game = self.fs_game.as_deref().unwrap_or(&self.mod_dir);
+        self.game_dir.join(game).join("screenshots")
     }
 
     /// The `fs_game` cvar as the directory to layer over `mod_dir`: the
@@ -5540,10 +5593,13 @@ impl ApplicationHandler for App {
                 let frame_start = Instant::now();
                 self.mouse_frame();
                 self.cod2_script_menus();
-                let now = Instant::now();
-                let dt = (now - self.last_frame).as_secs_f32().min(0.1);
+                let now = frame_clock::tick(Instant::now(), self.avidemo());
+                let dt = now
+                    .saturating_duration_since(self.last_frame)
+                    .as_secs_f32()
+                    .min(0.1);
                 self.last_frame = now;
-                let elapsed = now - self.start;
+                let elapsed = now.saturating_duration_since(self.start);
                 let time = elapsed.as_secs_f32();
                 let local_ms = elapsed.as_secs_f64() * 1000.0;
                 let cull = self.cull_mode;
@@ -5974,6 +6030,18 @@ impl ApplicationHandler for App {
                                     // `g`, the bold game message, beeps.
                                     if tokens.first().is_some_and(|t| t == "g") {
                                         self.audio.play_local(&self.fs, "game_message");
+                                    }
+                                    if let Some(cmd) = screenshot::auto_command(
+                                        tokens,
+                                        net.protocol().is_v1(),
+                                        self.shell.cvar("cg_autoscreenshot").unwrap_or("0"),
+                                        self.shell.cvar("name").unwrap_or(""),
+                                        &play::demos::stamp_now(),
+                                    ) {
+                                        // `screenshotJPEG <name>`, one word
+                                        let args: Vec<String> =
+                                            cmd.split(' ').skip(1).map(str::to_string).collect();
+                                        self.shot = screenshot::parse(true, &args);
                                     }
                                     if let Some(cmd) = play::demos::auto_command(
                                         tokens,
@@ -8501,9 +8569,26 @@ impl ApplicationHandler for App {
                 if frame_digest::on() {
                     frame_digest::view(&frame, vm.as_ref(), !self.session.live());
                 }
+                if self.shot.is_some() {
+                    r.request_capture(screenshot::pre_gamma(self.game, overbright));
+                }
                 let t0 = Instant::now();
                 r.render(frame, vm);
                 self.render_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                if let Some(cap) = r.take_capture()
+                    && let Some(req) = self.shot.take()
+                {
+                    let lines = match cap {
+                        Some(cap) => {
+                            let dir = self.screenshot_dir();
+                            self.shooter.save(self.game, &dir, &req, &cap)
+                        }
+                        None => vec!["^1ERROR: cannot take screenshot".into()],
+                    };
+                    for line in lines {
+                        console::log::print(&line);
+                    }
+                }
                 if vcod_common::laps::loading()
                     && (self.digest_time().is_some() || self.session.cod4_in_game())
                 {

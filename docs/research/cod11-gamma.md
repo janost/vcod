@@ -84,7 +84,8 @@ Shutdown restores the saved ramp.
   byte-wise pass through the gamma table) and the downsampling captures
   `0x4b11c0`, `0x4b1520`, `0x4b17f0` run the read-back pixels through the
   gamma table when `overbrightBits > 0` and device gamma is on. INFERRED:
-  that makes a capture match the screen.
+  that makes a capture match the screen. vcod's `screenshot` follows it
+  (`cod11-demos.md` 10.4).
 - Lighting. VERIFIED (the multiplies): vertex and grid light terms
   multiply by `1 << overbrightBits` (`0x4b5e30`, `0x4b69f0`), and
   `identityLight` scales the light contributions near `0x4b5ed0`. Their
