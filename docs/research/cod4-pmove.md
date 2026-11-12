@@ -803,6 +803,8 @@ gate).
   0x80d3762 after `ClientImpacts`, which has not been read. The weapon
   half and the shots are cod4-combat.md's.
 - No capture walks into a brush entity or a script model.
+- The client's prediction (`play::cod4_predict`) still clips another
+  player as a box, where the server now clips the capsule (15).
 
 ### 15.3 The touch and free flight capture
 
