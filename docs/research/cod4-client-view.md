@@ -336,6 +336,43 @@ offsets match vcod's netfield table: `weapon` +232 at 0x79455c,
   it in `ps.weaponmodels[weapon]` (+0x81c, 0x80a3317) and in each alt it
   brings (0x80a33b3). VERIFIED. vcod-server does the same
   (`Loadout::give`, `WeaponDef4::camo`); a pickup gives slot 0.
+- **Others' camo.** `BG_PlayerStateToEntityState` (`cod4_lnxded`
+  0x8052940) copies `ps.weapon` (+0xe8) into the entity's `weapon`
+  (+0xc4) and `weaponmodels[weapon]` into its `weaponModel` (+0xc8),
+  0x8052ae8..0x8052b03. VERIFIED. The field rides 4 bits in every
+  entity table (`vcod_cod4::net::fields`, generated from the binary).
+  VERIFIED. The client keeps each client's weapon and camo in its client
+  info (`iw3mp.exe`, +0x4ac and the byte +0x4b0) and rebuilds the body
+  when the entity's `weapon` or `weaponModel` differs from them
+  (0x4073f9..0x40746a); a gunner's (`eFlags & 0x300`) weapon reads 0
+  (0x4073c3..0x4073d3). VERIFIED. The weapon part is
+  `worldModel[weaponModel]` (`WeaponDef` +0x2bc + 4 * slot,
+  0x43f8c4..0x43f8d2), none on an empty slot (the branch at 0x43f8dc).
+  VERIFIED. That 0x43f8b0 is the rebuild's weapon part, called through
+  the table at 0x407470 with the client info, is INFERRED (the argument
+  order). vcod-server sets the field (`game::cod4::level::player_entity`);
+  the client reads it into `BodyView::weapon_model`, and
+  `play::cod4_players` arms the body with that slot's world model.
+  `cod4_fly` loads every `worldModel[]` slot of the list's weapons, each
+  as its own model. In `common_mp`, 428 of the 449 world camo slots over
+  110 guns have slot 0's mesh with other materials; the G36C's and the
+  M1014 grip's 21 do not. VERIFIED (a one-off census over `common_mp`).
+  A material swap as the view gun's would save only the decode: each
+  name uploads its own mesh, and only once a body holds it. The unique
+  world camos' vertices and indices come to 22 MB against slot 0's 5 MB
+  over all of `common_mp`. VERIFIED (the same census). `play::cod4`'s
+  `cod4_live_another_players_gun_draws_his_camo` (`giveWeapon("ak47_mp",
+  3)` on vcod-server's enemy: his entity reads `weaponModel` 3 and his
+  rig holds `weapon_ak47_mp_bwmrpt` with `mc/mtl_weapon_ak47_bwmrpt`).
+  VERIFIED.
+- **A dropped camo.** `Drop_Weapon` (0x8091642) takes the camo off
+  `weaponmodels[]` at its callers (0x8092752, 0x80aafac) and spawns
+  `bg_itemlist[weapon + 128 * model]` (0x80916e3..0x80916ee), so the
+  item's `index` carries the camo above its low 7 bits. A pickup gives
+  `index >> 7` as the model (0x8092286..0x8092291, then 0x80923fd..
+  0x8092415), and the client draws `worldModel[index >> 7]`
+  (0x4328bf..0x4328e7). VERIFIED. vcod's item sends the weapon alone
+  and a pickup gives slot 0 (cod4-gaps.md).
 - `common_mp`'s primaries carry slot 0 and five camos (1 `_brock`, 2
   `_bshdwl`, 3 `_bwmrpt`, 4 `_cmdtgr`, 5 `_stagger`), the AK-47, Mini-Uzi,
   M1014, M60E4 and Dragunov a gold slot 6. Every camo has slot 0's bones,

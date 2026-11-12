@@ -5,7 +5,8 @@
 // `progressBar` puts the stock primary progress bar on the player and
 // fills it in two seconds, as `_gameobjects::useHoldThinkLoop` does.
 // `camo` gives the named weapon on its `gunModel[3]`, as a custom class's
-// camo does, and switches to it.
+// camo does, and switches to it. `near` stands the player 64 units off
+// the named player, where the other's snapshots carry his body.
 main()
 {
 	setDvar( "scr_game_allowkillcam", 1 );
@@ -33,4 +34,14 @@ camo( name )
 {
 	self giveWeapon( name, 3 );
 	self setSpawnWeapon( name );
+}
+
+near( name )
+{
+	for ( i = 0; i < level.players.size; i++ )
+	{
+		player = level.players[i];
+		if ( isPlayer( player ) && player.name == name )
+			self setOrigin( player.origin + ( 64, 0, 0 ) );
+	}
 }
