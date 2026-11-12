@@ -313,6 +313,14 @@ impl Cod2Player {
         self.damage_count = 0;
         self.last_attacker = None;
     }
+
+    /// The unit direction the last blow came along, from the attacker
+    /// toward the body, or `None` for one with none. Read from what
+    /// `P_DamageFeedback` packs, not from `damageYaw`/`damagePitch`: a real
+    /// direction can pack as their 255 none (cod2-combat.md 9.2).
+    pub fn damage_dir(&self) -> Option<Vec3> {
+        (!self.damage_from_world && self.damage_from != Vec3::ZERO).then_some(self.damage_from)
+    }
 }
 
 /// What a CoD2 level starts with past its map: a gametype script off disk
@@ -1819,6 +1827,21 @@ mod tests {
             (p.damage_event, p.damage_yaw, p.damage_pitch, p.damage_count),
             (0, 0, 0, 0)
         );
+    }
+
+    /// A blow along yaw -1.2 from 0.7 degrees below packs as 255 both,
+    /// the bytes' none, and still has its direction.
+    #[test]
+    fn a_direction_that_packs_as_none_keeps_its_direction() {
+        let mut p = Cod2Player::new(PlayerState::default(), UserCmd2::default());
+        let dir = Vec3::new(0.9997134, -0.02088902, 0.01170162);
+        p.damage_blood = 40;
+        p.damage_from = dir;
+        damage_feedback(&mut p, 100, 0);
+        assert_eq!((p.damage_pitch, p.damage_yaw), (255, 255));
+        assert_eq!(p.damage_dir(), Some(dir));
+        p.damage_from_world = true;
+        assert_eq!(p.damage_dir(), None);
     }
 
     #[test]
