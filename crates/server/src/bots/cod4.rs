@@ -586,8 +586,9 @@ impl Cod4Bots {
 
     /// [`BotView::hurt`] for the bot in `slot`: a `damageEvent` new since
     /// the last tick is a hit, by the client the level last scored a hit on
-    /// it for, along the direction `damageYaw` and `damagePitch` carry;
-    /// reported for [`super::HURT_MS`] while the attacker still plays.
+    /// it for, along the direction it came (`Cod4Level::hit_dir`; zero for
+    /// none); reported for [`super::HURT_MS`] while the attacker still
+    /// plays.
     fn hurt(&mut self, level: &Cod4Level, slot: usize) -> Option<super::Hurt> {
         let now = self.pass.now;
         let w = level.wire_state(slot)?;
@@ -604,10 +605,7 @@ impl Cod4Bots {
             seen.0 = event;
             seen.1 = attacker
                 .filter(|&(_, t)| (0..1000).contains(&now.wrapping_sub(t)))
-                .map(|(a, _)| {
-                    let dir = damage_dir(word("damagePitch") as i32, word("damageYaw") as i32);
-                    (a, now, dir)
-                });
+                .map(|(a, _)| (a, now, level.hit_dir(slot).unwrap_or(Vec3::ZERO).to_array()));
         }
         let (a, at, dir) = seen.1?;
         let ago_ms = now.wrapping_sub(at);
@@ -1894,18 +1892,6 @@ pub fn mantle_walk(
         }
     }
     None
-}
-
-/// The direction `damageYaw` and `damagePitch` point along (256 to the
-/// turn, pitch positive down), from the attacker toward the body; zero
-/// for 255 both, a hit with none.
-fn damage_dir(pitch: i32, yaw: i32) -> [f32; 3] {
-    if pitch == 255 && yaw == 255 {
-        return [0.0; 3];
-    }
-    let p = (pitch as f32 * 360.0 / 256.0).to_radians();
-    let y = (yaw as f32 * 360.0 / 256.0).to_radians();
-    [p.cos() * y.cos(), p.cos() * y.sin(), -p.sin()]
 }
 
 /// A weapon's time between rounds as the brain paces its trigger: a bolt

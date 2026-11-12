@@ -321,6 +321,12 @@ constants; the algebra between them is INFERRED.
     over 500 ms back clears `damageCount` first (0x80a517c).
   - `ClientThink_real` hands `damageTime`, `level.time`, +0x3114, +0x3110
     to both blocks (0x80a5e6a..0x80a5e85, 0x80a5fef..0x80a6007).
+  - Trap: the bytes are `vectoangles` in 256ths of a turn, truncated, so a
+    real direction whose yaw and pitch both lie in 358.6..360 (a blow along
+    yaw -1.4..0 from up to 1.4 degrees below) packs as 255 both, the
+    no-direction value. INFERRED, the truncation above. vcod's CoD4 bots
+    read the gathered direction (`Cod4Level::hit_dir`) instead of the
+    bytes, as its CoD2 bots do (cod2-combat.md 9.2).
 - Easing the kick, INFERRED, unconfirmed instruction by instruction; the
   constants VERIFIED (rodata at the addresses given).
   `BG_CalculateViewAngles` opens with the view kick: with a `damageTime`,
