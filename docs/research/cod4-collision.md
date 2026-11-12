@@ -87,6 +87,12 @@ section 6 says.
   the plain slide stopped one ulp of x short of the step's, so ours took
   the step and kept the falling velocity where retail snapped to the
   ground (cod4-combat.md 15). VERIFIED (the gate, the traced fractions).
+  The walk replay's exact rows went from 73 to 410 with it (cod4-pmove.md
+  15.1). `mesh_pins`' synthetic sweeps on mp_crash, mp_backlot and
+  mp_carentan moved with it, 5 to 34 more hits and 14 to 118 more
+  `startsolid` per map in 79k to 440k traces; their digests are retaken
+  under 1.7's set-up, which no capture contradicts. VERIFIED (the pins
+  under both set-ups).
 - Two other differences, INFERRED: `CM_TestBoxInBrush` culls on strict
   bounds where CoD2's accepts a touch (unported; matters only for a box
   exactly touching a brush), and the AABB position walk stops at the
