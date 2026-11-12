@@ -1,15 +1,15 @@
 //! The legs and torso anims 1.7's pmove writes into the playerstate:
-//! `PM_Footsteps`' `BG_AnimScriptAnimation` calls, the jump, land, fire,
-//! reload, raise, drop and melee `BG_AnimScriptEvent`s, and `BG_PlayAnim`'s
-//! channel rule (docs/research/cod4-player-anims.md 7). The script is 1.7's
-//! `mp/playeranim.script` (a `common_mp` rawfile) through vcod-common's
-//! parser; the movetypes, the condition tables and the calls are
-//! INFERRED.
+//! `PM_Footsteps`' and `Mantle_Move`'s `BG_AnimScriptAnimation` calls, the
+//! jump, land, fire, reload, raise, drop and melee `BG_AnimScriptEvent`s,
+//! and `BG_PlayAnim`'s channel rule (docs/research/cod4-player-anims.md 7).
+//! The script is 1.7's `mp/playeranim.script` (a `common_mp` rawfile)
+//! through vcod-common's parser; the movetypes, the condition tables and
+//! the calls are INFERRED.
 //!
 //! Only a [`super::Pmove`] handed an [`AnimInput`] selects anims (the
 //! server's); without one the timers still run down and the anims hold
-//! what the snapshot said. Not here: the turn anims (`player_turnAnims` 0),
-//! the stance changes' events and the mantle's.
+//! what the snapshot said. Not here: the turn anims (`player_turnAnims` 0)
+//! and the stance changes' events.
 
 use vcod_common::animscript::{AnimRef, AnimScript, Clause, CondKind, Condition};
 use vcod_common::animtree::PlayerAnims;
@@ -86,6 +86,9 @@ pub mod movetype {
     pub const CLIMBUP: u8 = 18;
     pub const CLIMBDOWN: u8 = 19;
     pub const SPRINT: u8 = 20;
+    /// `MANTLE_ROOT`: a mantle clip's movetype is this plus its
+    /// `s_mantleAnimNames` slot (`Mantle_Move`, 0x80515da).
+    pub const MANTLE_ROOT: u8 = 21;
     pub const FLINCH_FORWARD: u8 = 32;
     pub const STUMBLE_FORWARD: u8 = 36;
     pub const STUMBLE_BACKWARD: u8 = 37;
@@ -331,11 +334,11 @@ fn execute(
     if played { duration } else { -1 }
 }
 
-/// `BG_AnimScriptAnimation(ps, COMBAT, movetype, 0)`: the movetype's first
-/// matching clause, its command picked by `clientNum`, continuing, no
-/// timer; `MOVETYPE` takes the movetype once a clause with a command
-/// matched. True when one did.
-fn animation(pm: &mut Pmove, input: &AnimInput, movetype: u8) -> bool {
+/// `BG_AnimScriptAnimation(ps, COMBAT, movetype, force)` (0x80502ea): the
+/// movetype's first matching clause, its command picked by `clientNum`,
+/// continuing, no timer; `MOVETYPE` takes the movetype once a clause with
+/// a command matched. True when one did.
+fn animation(pm: &mut Pmove, input: &AnimInput, movetype: u8, force: bool) -> bool {
     if pm.ps.pm_type >= pm_type::DEAD {
         return false;
     }
@@ -356,8 +359,16 @@ fn animation(pm: &mut Pmove, input: &AnimInput, movetype: u8) -> bool {
     }
     pm.ps.anim_movetype = movetype;
     let pick = pm.ps.client_num as usize % n;
-    execute(pm.ps, input.anims, clause, pick, (false, true, false));
+    execute(pm.ps, input.anims, clause, pick, (false, true, force));
     true
+}
+
+/// `Mantle_Move`'s call (0x80515ef): the clip's movetype, forced past a
+/// channel's timer.
+pub(crate) fn mantle(pm: &mut Pmove, movetype: u8) {
+    if let Some(input) = pm.anim {
+        animation(pm, &input, movetype, true);
+    }
 }
 
 /// A pmove event: [`script_event`] on the cmd's buttons, its command
@@ -618,7 +629,7 @@ pub(crate) fn legs(pm: &mut Pmove, gait: Gait) {
         }
     };
     for m in prefs.into_iter().flatten() {
-        if animation(pm, &input, m) {
+        if animation(pm, &input, m, false) {
             break;
         }
     }

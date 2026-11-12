@@ -527,9 +527,11 @@ fn start_mantle(pm: &mut Pmove, anims: &MantleAnims, res: &Results) {
 
 /// `Mantle_Move` (0x80514f2): the timer steps by the frame, the body by the
 /// clips' offset over it (stored, the sum taking the kept difference), the
-/// velocity is the stored offset over the frame; at the end `pm_flags` 4
-/// goes, and where the body can stand `EV_STANCE_FORCE_STAND` and `eFlags`
-/// 0x8000 with it, and [`flag::ENDED`] is set.
+/// velocity is the stored offset over the frame; the legs play the clip's
+/// movetype, the over clip's once the timer is past the up clip. At the end
+/// `pm_flags` 4 goes, over a wall the jump event plays, and where the body
+/// can stand `EV_STANCE_FORCE_STAND` and `eFlags` 0x8000 with it, and
+/// [`flag::ENDED`] is set (docs/research/cod4-pmove.md 17.5).
 pub(crate) fn mantle_move(pm: &mut Pmove, pml: &Pml) {
     let Some(anims) = enabled(pm) else {
         return;
@@ -546,6 +548,10 @@ pub(crate) fn mantle_move(pm: &mut Pmove, pml: &Pml) {
     let now = ps.mantle.timer;
     let d0 = anims.delta(&ps.mantle, old);
     let d1 = anims.delta(&ps.mantle, now);
+    let (up_clip, over_clip, _) = row(&ps.mantle);
+    let clip = if up < now { over_clip } else { up_clip };
+    super::anim::mantle(pm, super::anim::movetype::MANTLE_ROOT + clip as u8);
+    let ps = &mut *pm.ps;
     let kept: [f64; 3] = std::array::from_fn(|i| d(d1[i]) - d(d0[i]));
     let step = Vec3::from_array(kept.map(|k| k as f32));
     ps.origin = Vec3::from_array(std::array::from_fn(|i| (kept[i] + d(ps.origin[i])) as f32));
@@ -554,6 +560,10 @@ pub(crate) fn mantle_move(pm: &mut Pmove, pml: &Pml) {
     if now == total {
         ps.pm_flags &= !pmf::MANTLE;
         pm.mantle_started = None;
+        if ps.mantle.flags & flag::OVER != 0 {
+            super::anim::event(pm, super::anim::Event::Jump, false, true);
+        }
+        let ps = &mut *pm.ps;
         if ps.mantle.flags & flag::STAND != 0 {
             ps.add_event(ev::STANCE_FORCE_STAND, 0);
             ps.e_flags &= !EF_MANTLE;
