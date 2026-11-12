@@ -406,6 +406,9 @@ pub struct SnapshotCapture {
     pub triples: Vec<u8>,
     pub count: usize,
     pub times: Vec<i32>,
+    /// Every message past the first gamestate, a snapshot in it or not:
+    /// what a demo's records are cut from ([`NetClient::enable_capture_all`]).
+    pub every_message: bool,
 }
 
 /// A download the server redirected to `url`. `disconnected` is
@@ -756,6 +759,14 @@ impl<T: Transport> NetClient<T> {
 
     pub fn enable_capture(&mut self) {
         self.capture = Some(SnapshotCapture::default());
+    }
+
+    /// [`Self::enable_capture`] keeping every message past the gamestate.
+    pub fn enable_capture_all(&mut self) {
+        self.capture = Some(SnapshotCapture {
+            every_message: true,
+            ..SnapshotCapture::default()
+        });
     }
 
     /// Keep decoding after a drop notice or a timeout; the drop is still
@@ -1269,6 +1280,7 @@ impl<T: Transport> NetClient<T> {
         let mut r = MsgReader::new(&msg[4..], &self.huff);
         let mut has_snapshot = false;
         let mut got_download = false;
+        let mut is_gamestate = false;
         let redirected = self.www.is_none();
         loop {
             if r.is_overflowed() {
@@ -1282,6 +1294,7 @@ impl<T: Transport> NetClient<T> {
                     self.handle_server_command(seq, s);
                 }
                 SVC_GAMESTATE => {
+                    is_gamestate = true;
                     match gamestate::parse_body(&mut r, self.proto) {
                         Ok(gs) => {
                             // A map change re-sends the gamestate with the netchan up
@@ -1360,7 +1373,10 @@ impl<T: Transport> NetClient<T> {
             self.recording = None;
         }
 
-        if has_snapshot && let Some(cap) = self.capture.as_mut() {
+        let past_gamestate = !is_gamestate && self.captured_gamestate.is_some();
+        if let Some(cap) = self.capture.as_mut()
+            && (has_snapshot || (cap.every_message && past_gamestate))
+        {
             cap.triples.extend_from_slice(&message_num.to_le_bytes());
             cap.triples
                 .extend_from_slice(&(msg.len() as u32).to_le_bytes());
@@ -3638,5 +3654,279 @@ mod tests {
             assert_eq!(c.state(), NetState::Disconnected);
             assert!(c.transport.sent.is_empty(), "{tag}: a demo sent a packet");
         }
+    }
+
+    /// A demo file as the retail client writes one (cod11-demos.md 2, 4, 9),
+    /// off `CL_WriteDemoMessage`'s and `CL_StopRecord_f`'s writes and apart
+    /// from [`demo::DemoWriter`].
+    #[derive(Default)]
+    struct RetailDemo(Vec<u8>);
+
+    impl RetailDemo {
+        /// `CL_WriteDemoMessage` (CoDMP.exe 0x40e3d0): the sequence, the
+        /// length, the bytes.
+        fn message(&mut self, sequence: i32, msg: &[u8]) {
+            self.0.extend(sequence.to_le_bytes());
+            self.0.extend((msg.len() as i32).to_le_bytes());
+            self.0.extend(msg);
+        }
+
+        /// `CL_StopRecord_f` (0x40e430): two -1 longs.
+        fn stop(&mut self) {
+            self.0.extend((-1i32).to_le_bytes());
+            self.0.extend((-1i32).to_le_bytes());
+        }
+    }
+
+    /// A [`std::io::Write`] whose bytes the test reads back.
+    #[derive(Clone, Default)]
+    struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A server message's plain op block read without vcod's parser: the
+    /// block, its leading server commands, and the offset of the op after
+    /// them (`svc_serverCommand` is the byte 5, a long, a string).
+    fn message_head(h: &Huffman, msg: &[u8]) -> (Vec<u8>, Vec<(i32, String)>, usize) {
+        let plain = h.decompress_block(&msg[4..]);
+        let mut at = 0;
+        let mut cmds = Vec::new();
+        loop {
+            match plain.get(at) {
+                Some(&SVC_NOP) => at += 1,
+                Some(&SVC_SERVER_COMMAND) => {
+                    let seq = i32::from_le_bytes(plain[at + 1..at + 5].try_into().unwrap());
+                    let end = at + 5 + plain[at + 5..].iter().position(|&b| b == 0).unwrap();
+                    cmds.push((seq, String::from_utf8_lossy(&plain[at + 5..end]).into()));
+                    at = end + 1;
+                }
+                _ => return (plain, cmds, at),
+            }
+        }
+    }
+
+    /// The delta byte of the snapshot a message holds after its commands:
+    /// `svc_snapshot`, the long `serverTime`, the byte (protocol-1.1.md).
+    fn snapshot_delta(h: &Huffman, msg: &[u8]) -> Option<u8> {
+        let (plain, _, at) = message_head(h, msg);
+        (plain.get(at) == Some(&SVC_SNAPSHOT)).then(|| plain[at + 5])
+    }
+
+    /// Retail to vcod and back (cod11-demos.md 9.2), on a live capture of
+    /// each retail server (`--save-demo`, retail.md): every message past
+    /// the gamestate, and the demo the probe recorded from the first
+    /// snapshot on. [`RetailDemo`] frames the capture's messages as retail
+    /// does: the opening gamestate at the record point, nothing until a
+    /// snapshot with delta byte 0, then each message under its sequence.
+    /// vcod's recorder fed the same messages writes the same file, and so
+    /// did the probe live; vcod's `demo` plays it frame for frame as the
+    /// capture parsed, to the trailer, sending nothing.
+    #[test]
+    fn a_retail_framed_demo_plays_and_vcod_writes_it_alike() {
+        use protocol::{PROTOCOL_V6, PROTOCOL_V22};
+        let h = Huffman::new();
+        for (tag, p) in [
+            ("demo", &PROTOCOL_V1),
+            ("demo-1.5", &PROTOCOL_V6),
+            ("demo-uo", &PROTOCOL_V22),
+        ] {
+            let gs = crate::testing::fixture(&format!("net/gamestate-{tag}.bin"));
+            let capture = crate::testing::fixture(&format!("net/snapshots-{tag}.bin"));
+            let live =
+                crate::testing::fixture(&format!("net/{tag}.dm_{}", demo::extension_number(p)));
+            let mut messages = Vec::new();
+            let mut r = demo::DemoReader::with_max(capture, usize::MAX);
+            while let Ok(m) = r.next_message() {
+                messages.push(m);
+            }
+            // The record point and the recorder's `reliableSequence`: client
+            // state no server message carries, off the live file's opening.
+            let (record_at, opening) = demo::DemoReader::new(live.clone(), p)
+                .next_message()
+                .unwrap();
+            let reliable = i32::from_le_bytes(opening[..4].try_into().unwrap());
+
+            // The capture's client, replayed, recording where the probe did.
+            let now = Instant::now();
+            let mut c = NetClient::idle(FakeTransport::default(), now, 0, p);
+            c.state = NetState::LoadingGamestate;
+            c.netchan.incoming_sequence = messages[0].0 - 1;
+            c.handle_message(&gs);
+            let sink = Sink::default();
+            let mut frames = Vec::new();
+            let mut retail = RetailDemo::default();
+            // `clc.serverCommandSequence` and `clc.demowaiting`.
+            let (server, gs_cmds, gs_at) = message_head(&h, &gs);
+            assert_eq!(server[gs_at], SVC_GAMESTATE);
+            let body = &server[gs_at..];
+            let mut command_sequence = i32::from_le_bytes(body[1..5].try_into().unwrap());
+            assert!(gs_cmds.iter().all(|(s, _)| *s <= command_sequence));
+            let mut waiting = None;
+            for (seq, msg) in &messages {
+                let (_, cmds, _) = message_head(&h, msg);
+                let delta = snapshot_delta(&h, msg);
+                c.netchan.incoming_sequence = *seq;
+                c.handle_message(msg);
+                if waiting.is_none() {
+                    assert!(!cmds.iter().any(|(_, t)| t.starts_with("d ")), "{tag}: a d");
+                }
+                if let Some(s) = cmds.iter().map(|(s, _)| *s).max() {
+                    command_sequence = command_sequence.max(s);
+                }
+                match waiting {
+                    None if *seq == record_at => {
+                        c.netchan.reliable_sequence = reliable as u32;
+                        c.start_recording(Box::new(sink.clone()), "probe").unwrap();
+                        let ours = demo::gamestate_message(p, &h, reliable, &{
+                            let g = c.gamestate().unwrap();
+                            Gamestate {
+                                configstrings: c.configstrings.clone(),
+                                baselines: g.baselines.clone(),
+                                client_num: c.client_num,
+                                checksum_feed: c.checksum_feed,
+                                server_command_sequence: command_sequence,
+                            }
+                        });
+                        // `CL_Record_f`'s ops are the server's gamestate's past
+                        // its leading commands, the sequence the client's now.
+                        // The block's last symbol may be the padding's.
+                        let ops = h.decompress_block(&ours[4..]);
+                        let n = ops.len() - 1;
+                        assert_eq!(ops[0], SVC_GAMESTATE);
+                        assert_eq!(&ops[1..5], &command_sequence.to_le_bytes()[..]);
+                        assert!(ops[5..n] == body[5..n], "{tag}: opening ops");
+                        retail.message(*seq as i32, &ours);
+                        waiting = Some(true);
+                    }
+                    Some(w) => {
+                        // Cleared inside the snapshot parse, ahead of the write
+                        // (CoDMP.exe 0x415c5f, 0x41110e).
+                        let w = w && delta != Some(0);
+                        waiting = Some(w);
+                        if !w {
+                            retail.message(*seq as i32, msg);
+                            if let Some(s) =
+                                c.snapshots().newest().filter(|s| s.message_num == *seq)
+                            {
+                                frames.push(format!("{s:?}"));
+                            }
+                        }
+                    }
+                    None => {}
+                }
+            }
+            assert_eq!(waiting, Some(false), "{tag}: never a full frame");
+            retail.stop();
+            c.stop_recording().unwrap();
+            let vcod = sink.0.lock().unwrap().clone();
+            assert_eq!(retail.0.len(), vcod.len(), "{tag}: file length");
+            assert!(
+                retail.0 == vcod,
+                "{tag}: vcod's recorder differs from retail's framing"
+            );
+            assert!(retail.0 == live, "{tag}: the live recording differs");
+
+            let mut d = NetClient::play_demo(FakeTransport::default(), now, p, retail.0);
+            assert!(d.pump_demo(now, None).contains(&NetEvent::GamestateReady));
+            let mut got = Vec::new();
+            loop {
+                let until = d.snapshots().newest().map_or(i32::MIN, |s| s.server_time);
+                let evs = d.pump_demo(now, Some(until));
+                if let Some(s) = d.snapshots().newest()
+                    && s.server_time > until
+                {
+                    got.push(format!("{s:?}"));
+                }
+                if evs.contains(&NetEvent::DemoEnded(demo::DemoEnd::Completed)) {
+                    break;
+                }
+            }
+            eprintln!(
+                "{tag}: {} bytes from {} messages, {} frames played",
+                live.len(),
+                messages.len(),
+                got.len()
+            );
+            assert_eq!(got.len(), frames.len(), "{tag}: frames");
+            for (i, (g, f)) in got.iter().zip(&frames).enumerate() {
+                assert_eq!(g, f, "{tag}: frame {i}");
+            }
+            assert_eq!(d.configstrings, c.configstrings, "{tag}: the closing table");
+            assert!(d.transport.sent.is_empty(), "{tag}: a demo sent a packet");
+        }
+    }
+
+    /// The one retail-recorded demo in an install (cod11-demos.md 9.1),
+    /// `main/demos/Timedemo1.dm_2`, recorded by a retail 1.2 client: vcod
+    /// plays every record to a snapshot and to the trailer, its framing
+    /// writes the file back byte for byte, and its opening gamestate built
+    /// from the first record's state is that record. Skips without the file.
+    #[test]
+    fn a_retail_recorded_demo_plays_and_vcod_writes_its_records_alike() {
+        use protocol::PROTOCOL_V6;
+        let path = crate::testing::game_dir().join("main/demos/Timedemo1.dm_2");
+        let Ok(data) = std::fs::read(&path) else {
+            return;
+        };
+        let p = &PROTOCOL_V6;
+        let mut r = demo::DemoReader::new(data.clone(), p);
+        let mut records = Vec::new();
+        let end = loop {
+            match r.next_message() {
+                Ok(m) => records.push(m),
+                Err(e) => break e,
+            }
+        };
+        assert_eq!(end, demo::DemoEnd::Completed);
+        let mut w = demo::DemoWriter::new(Vec::new());
+        for (seq, msg) in &records {
+            w.write_message(*seq, msg).unwrap();
+        }
+        assert!(w.finish().unwrap() == data, "vcod's framing differs");
+
+        let h = Huffman::new();
+        let (_, first) = &records[0];
+        let mut m = MsgReader::new(&first[4..], &h);
+        let gs = gamestate::parse(&mut m, p).unwrap();
+        let ack = i32::from_le_bytes(first[..4].try_into().unwrap());
+        assert!(
+            demo::gamestate_message(p, &h, ack, &gs) == *first,
+            "vcod's opening gamestate differs from retail's"
+        );
+
+        let now = Instant::now();
+        let mut c = NetClient::play_demo(FakeTransport::default(), now, p, data);
+        assert!(c.pump_demo(now, None).contains(&NetEvent::GamestateReady));
+        let mut times = Vec::new();
+        loop {
+            let until = c.snapshots().newest().map_or(i32::MIN, |s| s.server_time);
+            let evs = c.pump_demo(now, Some(until));
+            if let Some(s) = c.snapshots().newest()
+                && s.server_time > until
+            {
+                times.push(s.server_time);
+            }
+            if evs.contains(&NetEvent::DemoEnded(demo::DemoEnd::Completed)) {
+                break;
+            }
+        }
+        eprintln!(
+            "{} records, {} frames, serverTime {:?}..{:?}",
+            records.len(),
+            times.len(),
+            times.first(),
+            times.last()
+        );
+        assert_eq!(times.len(), records.len() - 1, "a snapshot a record");
+        assert!(times.windows(2).all(|t| t[0] < t[1]));
+        assert!(c.transport.sent.is_empty());
     }
 }

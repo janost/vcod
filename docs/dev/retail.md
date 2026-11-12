@@ -141,6 +141,7 @@ captures in `crates/common/tests/fixtures/net/`.
 | `*-15-turret.bin` | a spectator following a `--save-turret` gunner on 1.5b under `client-probes/probe_turret` (`cod11-turrets.md` 14.3) |
 | `*-turret-hit.bin` | a 1.1d `--save-turret` gunner's own snapshots while a `--save-hit` probe shoots him off the gun (same section) |
 | `*-follow-1.1.bin` | a 1.1d spectator following a `--save-hit` shooter under `client-probes/probe_passthru` (`cod11-spectator-follow.md` 11.1) |
+| `*-demo.bin`, `*-demo-1.5.bin`, `*-demo-uo.bin`, `demo*.dm_<n>` | `--save-demo --probe-slope --probe-team allies` beside a `--probe-slope --probe-team axis` probe, on 1.1d and 1.5b mp_carentan and UO mp_cassino. The snapshot file holds every message, and the `.dm_<n>` is the probe's own `tmp/probe-<tag>.dm_<n>` (`cod11-demos.md` 9.2) |
 
 `cargo run -p vcod-common --example event_dump` prints a capture's events in
 the wire's numbering.

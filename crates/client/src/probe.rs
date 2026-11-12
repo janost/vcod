@@ -158,6 +158,9 @@ pub struct Save {
     pub uo_weapon: Option<crate::vehicle_probe::WeaponScript>,
     pub fixture: bool,
     pub snapshots: bool,
+    /// `--save-demo`: `record` from the first snapshot, and every message
+    /// past the gamestate as the tagged pair.
+    pub demo: bool,
     pub configstrings: bool,
     pub playerstate: bool,
     pub motion: bool,
@@ -369,6 +372,7 @@ pub fn probe(
         uo_weapon,
         fixture: save_fixture,
         snapshots: save_snapshots,
+        demo: save_demo,
         configstrings: save_configstrings,
         playerstate: save_playerstate,
         motion: save_motion,
@@ -530,6 +534,7 @@ pub fn probe(
     // The modes that write a capture into a committed fixture directory.
     let writes_fixture = save_fixture
         || save_snapshots
+        || save_demo
         || save_configstrings
         || save_playerstate
         || save_motion
@@ -557,7 +562,13 @@ pub fn probe(
             ..def
         });
     }
-    if save_fixture || save_snapshots {
+    // The demo's pair holds every message, so it never replaces the
+    // snapshot-only `gamestate.bin` and `snapshots.bin`.
+    let save_snapshots = save_snapshots || save_demo;
+    if save_demo {
+        anyhow::ensure!(tag.is_some(), "--save-demo needs a --capture-tag");
+        client.enable_capture_all();
+    } else if save_fixture || save_snapshots {
         client.enable_capture();
     }
     let mut quick_chat = crate::quick_chat::QuickChat::new(0x51ee);
@@ -566,6 +577,7 @@ pub fn probe(
     let mut say_sent = 0;
     // The playerstate's vote bit (`eFlags` 0x20000) as last printed.
     let mut voted_bit = 0;
+    let mut demo_started = false;
 
     let start = Instant::now();
     let mut last_summary = start;
@@ -1769,6 +1781,24 @@ pub fn probe(
             // `--probe-team` on its own writes nothing: it stays on
             // and reports the roster, which is what a second probe on
             // the other team needs to be seen by.
+        }
+        // `record` is refused until `CA_ACTIVE`, the first snapshot in
+        // (CoDMP.exe 0x40e540); the earliest it can start is right after.
+        if save_demo
+            && !demo_started
+            && client.state() == NetState::Active
+            && client.snapshots().newest().is_some()
+        {
+            demo_started = true;
+            let path = format!(
+                "tmp/probe-{}.dm_{}",
+                tag.as_deref().unwrap_or("demo"),
+                net::demo::extension_number(client.protocol())
+            );
+            std::fs::create_dir_all("tmp")?;
+            let file = std::io::BufWriter::new(std::fs::File::create(&path)?);
+            client.start_recording(Box::new(file), "probe")?;
+            println!("RECORD: {path} from message {}", client.incoming_sequence());
         }
         // A tagged capture runs for `--probe-secs`: the 1.5 pair
         // (`--capture-tag 1.5`) wants a spawned player's deltas.
