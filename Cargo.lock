@@ -2573,6 +2573,7 @@ dependencies = [
  "ctrlc",
  "env_logger",
  "glam",
+ "libc",
  "log",
  "vcod-cod2",
  "vcod-cod4",

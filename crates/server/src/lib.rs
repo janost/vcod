@@ -27,6 +27,7 @@ pub mod push;
 pub mod rcon;
 pub mod server;
 pub mod spectate;
+pub mod stdin_console;
 pub mod tick_profile;
 pub mod tick_trace;
 pub mod weapons;

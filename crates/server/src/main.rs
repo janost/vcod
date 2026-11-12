@@ -79,6 +79,10 @@ struct Args {
     /// third-party maps, `zzz_*` mods, downloads. Refuses `fs_game`.
     #[arg(long)]
     vanilla: bool,
+    /// Leave stdin alone. By default each line on stdin runs as a server
+    /// command, as on retail's dedicated servers.
+    #[arg(long)]
+    no_console: bool,
 
     /// Log one line per snapshot per client: send interval, the serverTime and
     /// commandTime a client predicts from, the usercmds consumed, and whether
@@ -127,18 +131,21 @@ fn main() -> Result<()> {
         default_panic(info);
     }));
     let trace = args.trace;
+    let console = (!args.no_console).then(|| {
+        vcod_server::stdin_console::StdinConsole::spawn(std::io::BufReader::new(std::io::stdin()))
+    });
     let game = vcod_common::game::Game::resolve(args.game, &args.game_dir);
     if game == vcod_common::game::Game::Cod2 {
         let (mut server, net) = cod2_server(args)?;
-        return serve(&mut server, net, trace);
+        return serve(&mut server, net, console, trace);
     }
     if game == vcod_common::game::Game::Cod4 {
         let (mut server, net) = cod4_server(args)?;
-        return serve(&mut server, net, trace);
+        return serve(&mut server, net, console, trace);
     }
     game.ensure_supported()?;
     let (mut server, net) = cod1_server(args, &sets_after_map)?;
-    serve(&mut server, net, trace)
+    serve(&mut server, net, console, trace)
 }
 
 /// CoD1 (1.1, 1.5, UO): the install's paks, the map and its scripts
@@ -439,8 +446,14 @@ fn listen(port: u16) -> Result<Net> {
     Ok((sock, packets))
 }
 
-/// The frame loop, until `quit`.
-fn serve<G: GameModule>(server: &mut Engine<G>, (sock, packets): Net, trace: bool) -> Result<()> {
+/// The frame loop, until `quit`. `console` is the stdin console's lines,
+/// `None` under `--no-console`.
+fn serve<G: GameModule>(
+    server: &mut Engine<G>,
+    (sock, packets): Net,
+    console: Option<vcod_server::stdin_console::StdinConsole>,
+    trace: bool,
+) -> Result<()> {
     // Ctrl-C runs `quit`, so the masters get their flatline; a second one
     // exits at once.
     let interrupted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -498,6 +511,9 @@ fn serve<G: GameModule>(server: &mut Engine<G>, (sock, packets): Net, trace: boo
             handle_queued(server, queued, now, &mut free_at, &mut send);
         }
         drop(packets_phase);
+        if let Some(console) = &console {
+            console.queue(server);
+        }
         if interrupted.load(std::sync::atomic::Ordering::Relaxed) && !quit_queued {
             quit_queued = true;
             server.push_console("quit");
