@@ -587,7 +587,8 @@ found. VERIFIED live. Words at the call and after:
 The corpses on the wire carried the same words, kill for kill. VERIFIED
 (the shooter's capture). The prone life never lay down before the shot
 (`legsAnim` the standing idle, 0x2b9), so no prone death is in the run.
-VERIFIED live. The kill capture's target took its first round in one frame
+VERIFIED live. The prone capture of 15 has one: torso 0 at the death,
+0x200 on the corpse, the table's flip. VERIFIED live. The kill capture's target took its first round in one frame
 and died the next: the cmd between ran the flinch (the `flinch_*`
 movetypes' torso line, 0x308) after the 47950 snapshot went out, so the
 wire never showed it, and the death flipped it to 0. INFERRED from the
@@ -1249,15 +1250,18 @@ those anims.
 
 ## 12. Open
 
-- Rockets fly and explode; no retail capture of their flight to gate on.
-- The live grenade's pickup and throw back and the use key's weapon swap
-  are gated live on ours (cod4-gsc.md 9.1, 9.3); their retail captures are
-  uncommitted, so no A/B gate.
+- A rocket's flight, the live grenade's throw back, a prone death's torso
+  and a `killcamentity` killcam are gated against retail captures (15);
+  what those gates still tolerate is 15's open list: damage applied at the
+  end frame, the dropped weapon's fall, a grenade's strike on a body, the
+  second rocket's number, a `setviewpos`'s `delta_angles`, a killcam's
+  trim and its archived view.
+- The use key's weapon swap is gated live on ours (cod4-gsc.md 9.1); its
+  retail capture is uncommitted, so no A/B gate.
 - The terrain triangle normal's last bit.
-- A prone death's torso (5): the corpse run's prone life stood when shot.
 - The corpse's drag uses CoD2's yaw turn shape; no 1.7 capture of a death
-  anim whose root turns. No retail capture holds a shellshock's torso anim
-  or a killcam with a `killcamentity` (a helicopter kill).
+  anim whose root turns. No retail capture holds a shellshock's torso
+  anim.
 
 ## 13. Rounds and blasts on script entities
 
@@ -1438,3 +1442,110 @@ From the `cod4_lnxded` 1.7 disassembly, checked against the kill capture.
   its threads for later. INFERRED. vcod keeps CoD1's 100 ms.
 - The two refusals are not ported: no stock script deletes a client or an
   entity from its own think.
+
+## 15. The capture gates
+
+Four retail runs gate a rocket, a throw back, a prone death and a
+`killcamentity` killcam (`cod4::capture_ab`, fixtures
+`play-1.7-{rocket,throwback,prone,kcent}-{target,shooter}.txt`). Each is
+`cod4_lnxded` 1.7 in `cod4-handshake.md` 7's namespace, `+set g_gametype
+war +set sv_pure 0 +devmap mp_crash`, and two `cod4_probe`s 35 and 36 s
+after the start: `target` (allies, `--goto "207 2291 296"`) and `shooter`
+(axis, `--goto "123 2110 300"`), the scripts and extra `+set`s on each
+`Pair`. The seeds came off the two challenges
+(`wire_ab::recover_game_seed`, 10.9). Ours replays both probes in process
+on retail's clock, seed and spawn spots, and compares every playerstate
+word, health, ammo and every entity by number, both clients, snapshot by
+snapshot from the later spawn. What still differs is each gate's `GAPS`.
+
+- Rocket: `demolitions_mp,0`'s RPG (weapon 29) from 697 -2038 200, one
+  round at yaw 105 pitch -10 that flies 3.5 s, one at the target that
+  flies 1.15 s. VERIFIED live. The path's points match on every row;
+  each wobble's `trDelta` is a unit in the last place off. VERIFIED (the
+  gate).
+- Throw back: the frag aimed 60 under the target's feet (`--aim-z -60`)
+  lands short. VERIFIED live. The hint, the pickup, the hold and the throw
+  match word for word up to 50050. VERIFIED (the gate).
+- Prone death: under `scr_player_maxhealth 30` the target lies down (`--script
+  prone`) and the shooter's second round kills it at 46150: the corpse
+  reads `legsAnim` 0x34, `torsoAnim` 0x200 (the death flips the prone
+  torso's 0, 5) and `eFlags` 0xa000a. VERIFIED live. Ours matches the
+  corpse word for word. VERIFIED (the gate).
+- `killcamentity`: the `killcam_entity` gsc (in a mod's iwd under `+set
+  fs_game`) spawns a script model at 123 2110 500 moving 600 along x over
+  12 s, then kills the target through the damage callback with it as the
+  inflictor and `cobra_20mm_mp` as the weapon. The killcam frames read
+  `killCamEntity` 315, the model's number, and carry it. VERIFIED live.
+
+What the captures fixed on ours:
+
+- `finishPlayerDamage` (0x80ac58e) sets `flinchYawAnim` (ps+0xa8) from the
+  blow's `vectoyaw` less the view yaw's whole degrees, both in 0..360: 0
+  from 315 or under 45, 2 to 135, 1 to 225, 3 to 315, 0 with no direction
+  (0x80ac7b5..0x80ac85a, 0x80acdbd..0x80ace25, rodata 0x8218dc0..0x8218dc8
+  and 0x820dec0). VERIFIED (the instructions). The killcam run's kill
+  reads 3, the prone hit 1. VERIFIED live.
+- `player_die` writes `stats[1]` (ps+0x14c, the dead yaw): `(int)vectoyaw`
+  toward the attacker, for a death by one's own hand toward an inflictor
+  of another, else the body's own yaw (0x80b1cf5..0x80b1d52,
+  0x80b1ddc..0x80b1e12, 0x80b1f44). VERIFIED (the instructions). The
+  prone and killcam runs' targets read 245, toward the shooter at 123 2110.
+  VERIFIED live.
+- `ClientSpawn`'s memset of the whole client (0x80a7cc9, 0x3184 bytes)
+  drops `damage_blood` (client+0x30ac), so a killing blow steps no
+  `damageEvent` on the next life. VERIFIED (the instructions). Ours
+  stepped it at every respawn. VERIFIED (the gates).
+- `BG_TakePlayerWeapon` (0x806206c), called with its third argument 1 by
+  `takeWeapon` (0x80abbfe), `takeAllWeapons` (0x80abb5c) and
+  `Drop_Weapon` (0x809182d, 0x8091885): the bit; the clip; the reserve
+  down to what the weapons left keep (its shared cap, a clip-only
+  weapon's clip, else the other held users' `maxAmmo` summed, 0 for none);
+  then each held alt down the chain with its ammo and clip; the current
+  weapon 0 when it was the one. VERIFIED (the instructions). The dead
+  target's `weapons[0]` reads 0x800 after `dropWeaponForDeath`, the M16's
+  `gl_m16_mp` gone with it. VERIFIED live.
+- `BG_PlayerStateToEntityState` (0x8052940) sets the body's `eFlags`
+  0x20000 past `pm_type` 6 and 0x40000 under `PMF_SIGHT` (0x10), clearing
+  each otherwise (0x8052a54..0x8052a82, 0x8052ca2, 0x8052cb1). VERIFIED
+  (the instructions). The sighted shooter's body reads 0x40000. VERIFIED
+  live.
+- `vectopitch` (0x8192510) and `vectoyaw` (0x8191c22) add 360 or 0 to the
+  stored angle (`cmovb` off a stored 0), so a level vector's -0 comes back
+  +0. VERIFIED (the instructions). The prone body on level ground reads
+  `fWaistPitch` 0 where ours sent -0. VERIFIED live.
+- The killcam's archived entities: each `pos.trTime` moves up by
+  `deltaTime`: the mover started at 41550 reads 45800 in a killcam 4250
+  back, the corpse cloned at 46550 reads 50800. VERIFIED live. The shift
+  only where set and on `apos.trTime` too, as `SV_GetArchivedClientInfo`
+  shifts the playerstate's clocks (7), is INFERRED; the address is not
+  found.
+- The killcam's frames leave out the temp entities the followed client
+  was not sent: the victim's own `EV_BULLET_HIT_CLIENT_*` (17 + 42, 43)
+  never appears in its killcam. VERIFIED live.
+- `EV_BULLET_HIT`'s kill bit (5, `scale` 2) rides `un1`. VERIFIED live.
+
+Open, with each gate's `GAPS`:
+
+- Damage at the end frame. Ours applies a `finishPlayerDamage` at the
+  victim's end frame; retail writes the push, `pm_time`, the damage timer
+  and the dead state inside the call, so the victim's next cmds run on them
+  before the snapshot. The prone target hit at 46050 reads velocity 0,
+  `pm_flags` 0x1, `damageTimer` 700 where ours reads the fresh push, 0x101
+  and 750; the dead body's anim timers read 50 lower; the killcam run's
+  corpse leaves at 80 along x where ours leaves still. VERIFIED live. The
+  cause is INFERRED.
+- The dropped weapon (6): retail's leaves `trType` 5, then 3 for 50 ms, and
+  rests on its side (`apos` roll 90, ground 1022). VERIFIED live.
+- A grenade's strike on a standing body: the thrown back frag meets the
+  shooter at 50100 (`EV_GRENADE_BOUNCE` parm 7, flesh, and the hurt) where
+  ours flies on and comes to rest on the body (ground 1). VERIFIED live.
+  So `cod4_throwback_ab` stops at 50050.
+- The second rocket takes entity 317 on retail, 316 on ours; nothing
+  either client saw held 316. VERIFIED live.
+- `setviewpos 697 -2038 200`: retail's `delta_angles` read 0.406, -118.3
+  for 0.55 s where ours read 0, -24.99. VERIFIED live.
+- The prone killcam's trim: 4200 on retail, 4250 on ours, and its end a
+  frame apart. VERIFIED live.
+- The killcam run's archived view: the killcam frames read the shooter's
+  yaw 0 (after its `setviewpos`) where ours sends 90.00001, the spawn
+  yaw, though ours's live snapshots read 0. VERIFIED (the gate).

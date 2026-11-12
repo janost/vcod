@@ -280,9 +280,15 @@ pub struct Cod4Level {
     pub rules: Rules,
     /// The brush entities pmove clips, as the last frame left them.
     pub(super) brushes: Vec<Brush4>,
-    /// Each snapshot round's entities by level time, newest first: the
+    /// Each snapshot round's entities by level time, newest first, with
+    /// the numbers of its temp entities each client may not see: the
     /// killcam's look back (`SV_ArchiveSnapshot`'s cached entities).
-    entity_history: std::collections::VecDeque<(i32, Arc<BTreeMap<u32, EntityState>>)>,
+    #[allow(clippy::type_complexity)]
+    entity_history: std::collections::VecDeque<(
+        i32,
+        Arc<BTreeMap<u32, EntityState>>,
+        Arc<Vec<(u32, crate::game::temp_entity::Scope)>>,
+    )>,
     /// The mantles' blockages ([`Self::spawn_mantle_block`]): the entity,
     /// its think's time and its box.
     mantle_blocks: Vec<(vcod_gsc::EntId, i32, Body4)>,
@@ -1335,6 +1341,7 @@ impl Cod4Level {
         think.server_time = now;
         self.combat.aim[slot] = Default::default();
         self.combat.gun_angles[slot] = [0.0; 2];
+        self.combat.clear_blood(slot);
         if mode != SpawnMode::Intermission {
             self.think(slot, think);
         }
@@ -1849,6 +1856,7 @@ impl Cod4Level {
                 fatal: false,
                 attacker: None,
                 death: None,
+                dead_yaw: None,
             });
     }
 
@@ -1896,6 +1904,7 @@ impl Cod4Level {
             fatal: true,
             attacker: Some(slot),
             death,
+            dead_yaw: None,
         });
         self.apply_damage_ops();
         let args = self.rt.with_host(|_, cx| {
@@ -2152,24 +2161,54 @@ impl Cod4Level {
     /// Keeps a snapshot round's entities for the killcam's look back.
     pub fn archive_entities(&mut self, world: &BTreeMap<u32, EntityState>) {
         let now = self.level_time;
-        if self.entity_history.front().is_some_and(|(t, _)| *t == now) {
+        if self
+            .entity_history
+            .front()
+            .is_some_and(|(t, _, _)| *t == now)
+        {
             return;
         }
+        let scopes: Vec<_> = self
+            .rt
+            .temp_entities()
+            .map(|(n, te)| (n, te.scope))
+            .collect();
         self.entity_history
-            .push_front((now, Arc::new(world.clone())));
+            .push_front((now, Arc::new(world.clone()), Arc::new(scopes)));
         let keep = self.history_frames();
         self.entity_history.truncate(keep);
     }
 
     /// The entities a killcam follower is sent: the archived round at or
-    /// before the frame its playerstate came from (cod4-combat.md 7). A
-    /// temp entity past its look back is not in it.
+    /// before the frame its playerstate came from (cod4-combat.md 7),
+    /// without the temp entities the followed client was not sent (the
+    /// victim's own flesh event, 17 + 42 or 43). A temp entity past its
+    /// look back is not in it. Each trajectory's time, where set, moves
+    /// up by the playerstate's `deltaTime`, as the archived playerstate's
+    /// clocks do: the killcam entity capture's mover started at 41550
+    /// reads 45800 in a killcam 4250 back.
     pub fn killcam_entities(&self, slot: usize) -> Option<BTreeMap<u32, EntityState>> {
-        let t = self.players.get(slot)?.as_ref()?.killcam_at?;
-        self.entity_history
-            .iter()
-            .find(|(at, _)| *at <= t)
-            .map(|(_, w)| (**w).clone())
+        let p = self.players.get(slot)?.as_ref()?;
+        let t = p.killcam_at?;
+        let back = p.ps.word("deltaTime");
+        let followed = p.ps.word("clientNum") as usize;
+        let (_, w, scopes) = self.entity_history.iter().find(|(at, _, _)| *at <= t)?;
+        let mut world = (**w).clone();
+        for (n, scope) in scopes.iter() {
+            if !scope.admits(followed) {
+                world.remove(n);
+            }
+        }
+        for e in world.values_mut() {
+            for name in ["lerp.pos.trTime", "lerp.apos.trTime"] {
+                if let Some(w) = ent_word(e.etype(), name)
+                    && e.0[w] != 0
+                {
+                    e.0[w] = e.0[w].wrapping_add(back);
+                }
+            }
+        }
+        Some(world)
     }
 
     /// `SV_CreateBaseline`: every entity as the load left it.
@@ -2374,7 +2413,17 @@ pub fn player_entity(slot: usize, ps: &PlayerState) -> EntityState {
     set("lerp.u.player.movementDir", ps.word("movementDir"));
     set("lerp.pos.trType", 3);
     set("lerp.apos.trType", 1);
-    set("lerp.eFlags", ps.word("eFlags"));
+    // 0x20000 for a dead body (`pm_type` past 6), 0x40000 for one down
+    // its sights (`PMF_SIGHT` 0x10), each cleared otherwise
+    // (0x8052a54..0x8052a82, 0x8052ca2, 0x8052cb1).
+    let mut e_flags = ps.word("eFlags") & !0x6_0000;
+    if ps.word("pm_type") > 6 {
+        e_flags |= 0x2_0000;
+    }
+    if ps.word("pm_flags") & 0x10 != 0 {
+        e_flags |= 0x4_0000;
+    }
+    set("lerp.eFlags", e_flags);
     set("weapon", ps.word("weapon"));
     set("legsAnim", ps.word("legsAnim"));
     set("torsoAnim", ps.word("torsoAnim"));

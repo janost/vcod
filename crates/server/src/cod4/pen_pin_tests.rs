@@ -483,6 +483,7 @@ fn damage_playerstate_by_stance_and_flags() {
             fatal,
             attacker: Some(SHOOTER),
             death: None,
+            dead_yaw: None,
         });
         l.apply_damage_ops_for_test();
         let ps = &l.players[A].as_ref().unwrap().ps;
@@ -567,6 +568,7 @@ fn a_direction_that_packs_as_none_keeps_its_direction() {
             fatal: false,
             attacker: Some(SHOOTER),
             death: None,
+            dead_yaw: None,
         });
         l.apply_damage_ops_for_test();
         l.damage_feedback_for_test(A);

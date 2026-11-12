@@ -223,6 +223,7 @@ impl Hit {
             fatal,
             attacker: self.attacker_slot,
             death,
+            dead_yaw: None,
         }
     }
 
@@ -364,7 +365,11 @@ fn go_down(host: &mut GameHost, cx: &mut Cx, slot: usize, recv: Option<Target>, 
 fn kill(host: &mut GameHost, cx: &mut Cx, slot: usize, recv: Option<Target>, hit: &Hit) {
     death_grenades(host, cx, slot, recv, &hit.means_name);
     let death = draw_death_anim(host, slot);
-    host.cod4_mut().damage_ops.push(hit.op(slot, true, death));
+    let mut op = hit.op(slot, true, death);
+    if let Some(me) = host.ents.handle(slot as u32) {
+        op.dead_yaw = dead_yaw(host, cx, me, hit.inflictor, hit.attacker);
+    }
+    host.cod4_mut().damage_ops.push(op);
     host.die(slot);
     host.client_vitals[slot].health = 0;
     host.cod4_mut().callback = crate::game::host::Cod2CallbackArgs {
@@ -382,6 +387,32 @@ fn kill(host: &mut GameHost, cx: &mut Cx, slot: usize, recv: Option<Target>, hit
     let args = host.callback_args("CodeCallback_PlayerKilled", hit.callback_args());
     cx.spawn_then(killed, recv, args, slot as u32);
     host.cod4_mut().callback = Default::default();
+}
+
+/// `player_die`'s `STAT_DEAD_YAW` (`cod4_lnxded` 0x80b1cf5..0x80b1d52,
+/// 0x80b1ddc..0x80b1e12): `(int)vectoyaw` toward the attacker, or for a
+/// death by one's own hand toward an inflictor of another; `None` for
+/// neither, where the body's own yaw stands (0x80b1f44).
+fn dead_yaw(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    me: EntId,
+    inflictor: EntId,
+    attacker: EntId,
+) -> Option<i32> {
+    let (from, to) = if attacker != me {
+        (me, attacker)
+    } else if inflictor != attacker {
+        (attacker, inflictor)
+    } else {
+        return None;
+    };
+    let (a, b) = (
+        crate::game::item::origin_of(host, cx, from),
+        crate::game::item::origin_of(host, cx, to),
+    );
+    let dir = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    Some(crate::game::builtins::math::vectoyaw(dir) as f32 as i32)
 }
 
 /// `player_die`'s death anim: one of the clause's commands by `rand() % n`
@@ -427,6 +458,7 @@ fn suicide(
         fatal: true,
         attacker: Some(slot),
         death,
+        dead_yaw: None,
     });
     host.die(slot);
     host.client_vitals[slot].health = 0;
@@ -694,13 +726,13 @@ fn drop_item(
         l.has(weapon) && d.is_some_and(|d| l.ammoclip[d.clip_slot] > 0 || l.ammo[d.ammo_slot] > 0)
     });
     if !has {
-        with_loadout(host, slot, |l, _| l.take(weapon));
+        with_loadout(host, slot, |l, t| l.take(t, weapon));
         return Ok(Value::Undefined);
     }
     let Some(id) = launch_weapon(host, cx, slot, weapon)? else {
         return Ok(Value::Undefined);
     };
-    with_loadout(host, slot, |l, _| l.take(weapon));
+    with_loadout(host, slot, |l, t| l.take(t, weapon));
     Ok(Value::Entity(id))
 }
 

@@ -288,7 +288,7 @@ fn take_weapon(
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
     if let Some(weapon) = weapon_arg(host, cx, a.first())? {
-        with_loadout(host, slot, |l, _| l.take(weapon));
+        with_loadout(host, slot, |l, t| l.take(t, weapon));
     }
     Ok(Value::Undefined)
 }
@@ -301,10 +301,10 @@ fn take_all_weapons(
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
-    with_loadout(host, slot, |l, _| {
+    with_loadout(host, slot, |l, t| {
         let held: Vec<usize> = l.held().collect();
         for w in held {
-            l.take(w);
+            l.take(t, w);
         }
     });
     Ok(Value::Undefined)

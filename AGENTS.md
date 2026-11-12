@@ -238,7 +238,7 @@ the subsystem's doc before touching it.
 | The server frame (`SV_Frame`) order | `cod4-server-frame.md` |
 | Collision: the clip map, leaf brush trees, triangles, submodels, static model clip, the clip census | `cod4-collision.md` |
 | Player movement: flags, ground, step, stance, jump, sprint, dvars, the moves A/B (`cod4_moves_ab`), the server's think and spawn, `placeSpawnPoint`, the walk replay (`cod4::wire_ab`) | `cod4-pmove.md` |
-| Combat on vcod-server: `WeaponDef`, `PM_Weapon`, the shot, hit boxes, antilag, damage, corpse, dropped weapons, killcam, the A/B (`cod4_combat_ab`), grenades, launcher, melee, `kill` | `cod4-combat.md` |
+| Combat on vcod-server: `WeaponDef`, `PM_Weapon`, the shot, hit boxes, antilag, damage, corpse, dropped weapons, killcam, the A/B (`cod4_combat_ab`), the capture gates (`capture_ab`), grenades, launcher, melee, `kill` | `cod4-combat.md` |
 | Player bodies: xanim parts, skinning, anim index, heads and tags, the anim script (`pmove::anim`), ragdoll | `cod4-player-anims.md` |
 | HUD: fonts, server commands, scoreboard, kill feed, chat, hudelems, weapon HUD, compass, killcam, the script menus a join answers, damage overlays | `cod4-hud.md` |
 | Sound: alias lists, streamed files, `channels.def`, falloff, event and loop sounds, createfx sounds | `cod4-sound.md` |

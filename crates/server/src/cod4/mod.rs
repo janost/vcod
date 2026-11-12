@@ -2030,6 +2030,8 @@ fn info_sorted(pairs: impl Iterator<Item = (String, String)>) -> String {
 #[cfg(test)]
 mod blast_tests;
 #[cfg(test)]
+mod capture_ab;
+#[cfg(test)]
 mod combat_ab;
 #[cfg(test)]
 mod console_tests;
