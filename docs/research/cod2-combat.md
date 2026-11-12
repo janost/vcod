@@ -1505,6 +1505,52 @@ the x87 stack. VERIFIED, the disassembly of every function below.
   `Sys_MillisecondsRaw` (0x80d5e20): `tv_sec * 1000 + tv_usec / 1000` of
   `gettimeofday`, the wall clock in ms, cut to 32 bits. VERIFIED, the
   decompile.
+- Nothing seeds per shot or per frame: the one glibc `rand()` runs on from
+  `G_InitGame`'s `srand` (0x810911e) for the whole level. VERIFIED, the
+  15 `call rand@plt` sites and the two `srand@plt` ones. 0x80925e6 is
+  reached from 0x80926b0 (a spawn, from `SV_SpawnServer` 0x8093520 at
+  0x80938ad) and from 0x809267e (`G_ShutdownGame` then the init with
+  restart 1, from `SV_MapRestart` 0x808be3e at 0x808bf7e), so a
+  `fast_restart` reseeds too. VERIFIED, the calls.
+- `G_InitGame` hands the same seed to 0x80aaa76 right after `srand`: the
+  seed of the scripts' own generator at 0x817e338 (`* 0x343fd + 0x269ec3`,
+  `>> 17`), which `randomInt` (0x8113ca4 to 0x80aaada) and `randomFloat`
+  (0x8113cfe to 0x80aaa84) draw from. VERIFIED, the disassembly. So a
+  script's draws never move the game's stream.
+- `SV_SpawnServer` seeds `srand(Sys_MillisecondsRaw())` itself (0x80936ac)
+  and draws `checksumFeed` off it (`rand() << 16 ^ rand()` xor
+  `Sys_Milliseconds()`, 0x80936b1, 0x80936bb) before the game's init
+  reseeds. VERIFIED, the disassembly.
+- The engine draws from the same stream. `SV_GetChallenge` (0x808d18e)
+  takes `rand() << 16 ^ rand()` xor `svs.time` (0x808d25f first, shifted,
+  then 0x808d269), so each `getchallenge` during a level moves the game's
+  draws by two. VERIFIED, the disassembly and the trace below. A loose
+  (not iwd) file's open draws one at 0x80a0081 (`rand() + 1` into
+  0x849fd70, under 0x809f958): the probe's gametype, once at the process's
+  start and once inside `G_InitGame`. VERIFIED, the trace. What 0x849fd70
+  is for is not known.
+- `tools/re/cod2_rand_trace.c` (an `LD_PRELOAD` shim; `RAND_TRACE=1` in
+  `tools/run_probe_cod2.sh`) logs every `srand()` and `rand()` with its
+  call site and `level.time` (0x864c56c, stored by `G_RunFrame`). The
+  `combat/hit-spray` trace (a thompson at the hip from 110 units, the
+  target under `probe_noknock`): `SV_SpawnServer`'s seed and two draws,
+  `G_InitGame`'s seed and the loose file's draw, two at each client's
+  challenge, then per round at the hip, standing or crouched, seven: the
+  torso fire event's pick (0x80d977a, `BG_AnimScriptEvent`), the
+  spring's four (`G_random` 0x80a377a, drawn at `fWeaponPosFrac` 0 too),
+  `Bullet_Endpos`' two. The jump's and the land's anim events draw one
+  each (0x80d977a, at 11750 and 12350). The burst fired walking backward
+  draws six a round, no torso pick. VERIFIED, the trace. Its fire event
+  meets no clause with a command. INFERRED.
+- The other sites, not met in a capture so far: `rand()` at 0x80d9698
+  (under 0x80d9600), 0x80d99a9 (0x80d9920), 0x8105194 (0x8105072),
+  0x8106756 and 0x81067c5 (0x81064de), 0x810d17f (0x810cf4c), 0x811e82c
+  (0x811e78a), 0x811f94e (0x811f844); `G_random` from 0x80a3792
+  (`G_crandom`), 0x80f095a (`BG_WeaponFireRecoil`, eight call sites,
+  four draws a kick in the trace), 0x810175a, 0x8105072, 0x81064de, 0x810cf4c, 0x811fa70
+  (`Bullet_Endpos`' pair) and 0x809676c, nine a call, which steps a
+  test client's cmd. VERIFIED, the call sites; their callers' names are
+  not.
 - `BG_AnimScriptEvent` (0x80d96ee) draws `rand() % n` for every matching
   clause with a command, one command or more. VERIFIED. So a fire event's
   torso anim draws once inside `Pmove`, before the spring's four.
@@ -1521,15 +1567,34 @@ the x87 stack. VERIFIED, the disassembly of every function below.
 vcod: `vcod_cod2::pmove::aim` (`AimState::fire_angles` in
 `Cod2Level::client_think` and the spawn's think, `AimState::fire_recoil`
 from `Combat::fire_recoil` after the step), the damage kick in
-`damage_feedback`, and `Combat::rand` the one `rand()` (the torso events'
-picks, the spring, the spread, the grenade's tumble). Open:
+`damage_feedback`, and `Combat::rand` the one `rand()`, glibc's
+(`GameRand`): the torso events' picks, pmove's own events' picks
+(`AnimInput::pick`), the spring, the spread, the grenade's tumble, the
+death anim, and a level's challenges (`Cod2Server::get_challenge`). Each
+level's load seeds it and the script's draws with `Carry::seed`, which
+`Cod2Server` takes off its engine's generator, not the wall clock
+(`pin_game_seed` fixes it).
+
+`cod2_combat_ab` pins a traced capture's seed and the draws before its
+start off the trace, and compares the level time of every later draw with
+retail's (`rand draws`). `hit-spray` replays clean: its 15 rounds strike
+retail's points, its world impacts retail's, and its 103 draws each fall
+in retail's frame. VERIFIED, the gate. Without pmove's jump and land
+draws the stream runs one draw behind from 11750 and the rounds after it
+leave along other lines. VERIFIED, the gate. Without `probe_noknock` the
+knocked target's later rounds struck up to 3.6 units off retail's points,
+each along the round's own line. VERIFIED, a capture and its replay. The
+cause is where the shots' packets fell among the target's cmds, which the
+log does not keep (9.3, "The knocked body"); no single shift of one
+client's packets put them right. INFERRED. Open:
 
 - the overlay's idle drift and walk bob on the view (no stock shot reads
   them: an overlay's sight skips the multiply, and its view's offsets are
   the client's);
 - the shellshock scale on the sway;
-- the draws pmove's own anim events (jump, land) make, and the
-  challenges' and the other `rand()` users';
+- the loose file's draw and the test clients' (0x809676c), which vcod does
+  not make, and the sites above no capture has met;
 - `hit-smg-far`'s and `hit-turret`'s seeds: their rounds mostly strike
   the world, whose impact events carry whole units, too coarse at 1340
-  units for the search (`GAPS`, "9.6 a seed not recovered").
+  units for the search (`GAPS`, "9.6 a seed not recovered"). Their
+  counts move with the replay's unseeded stream (glibc's `srand(1)`).
