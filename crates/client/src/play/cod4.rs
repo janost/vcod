@@ -1780,10 +1780,17 @@ impl Cod4Session {
             .map(|r| (r.name.as_str(), r.written()))
     }
 
-    /// The profile's stats to its file once settled, or at once.
+    /// The profile's stats to its file once settled, or at once, and to
+    /// the connection, whose next `requeststats` (a map change) sends them.
     fn save_profile(&mut self, now: bool) {
-        if let (Some(p), Some(stats)) = (self.profile.as_mut(), self.menus.stats()) {
+        let Some(stats) = self.menus.stats() else {
+            return;
+        };
+        if let Some(p) = self.profile.as_mut() {
             p.save(stats, now);
+        }
+        if let Source::Live { conn, .. } = &mut self.source {
+            conn.set_stats(stats);
         }
     }
 
@@ -6568,6 +6575,50 @@ pub(crate) mod tests {
             differ.is_empty(),
             "client, server: {differ:?} (moved {moved:?})"
         );
+    }
+
+    /// A map change's `requeststats` sends the block as the `N`s left it,
+    /// not the join's: 300 XP the client took before `map mp_crash` reach
+    /// the new level's `_rank.gsc`, which ranks the player 3 off them.
+    #[test]
+    fn cod4_live_map_change_sends_the_stats_the_server_set() {
+        let Some(server) = live_join_ctl(|s, spawned, t0, ctl| {
+            spawned.as_ref()?;
+            let step = |s: &mut Cod4Session, ms: u64| {
+                let end = since(t0) + Duration::from_millis(ms);
+                while since(t0) < end {
+                    s.step(since(t0).as_secs_f64() * 1000.0).unwrap();
+                    s.take_commands();
+                    s.take_map_change();
+                    clk_sleep(Duration::from_millis(16));
+                }
+            };
+            ctl.send(Ctl::Command("N 2301 300".into())).unwrap();
+            step(s, 500);
+            ctl.send(Ctl::Console("map mp_crash".into())).unwrap();
+            let mut last = None;
+            for _ in 0..40 {
+                step(s, 500);
+                let (tx, rx) = std::sync::mpsc::channel();
+                ctl.send(Ctl::Stats(tx)).unwrap();
+                let got = loop {
+                    step(s, 16);
+                    if let Ok(b) = rx.try_recv() {
+                        break b;
+                    }
+                };
+                let rank = (got.get(2301), got.get(2350));
+                last = Some(got);
+                if rank == (Some(300), Some(3)) {
+                    break;
+                }
+            }
+            last
+        })
+        .flatten() else {
+            return;
+        };
+        assert_eq!((server.get(2301), server.get(2350)), (Some(300), Some(3)));
     }
 
     /// A joined client crouched with `gocrouch`, then sprinting: the

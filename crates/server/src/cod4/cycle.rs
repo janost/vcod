@@ -6,6 +6,7 @@
 
 use super::{Cod4Server, SNAPFLAG_SERVERCOUNT, SPAWN_FRAME_MS, SPAWN_FRAMES, State, client_name};
 use crate::rcon::Redirect;
+use vcod_cod4::net::stats::Stats;
 
 /// `SV_SpawnServer`'s `NET_Sleep(0xfa)` after `loadingnewmap`
 /// (0x8175253). VERIFIED.
@@ -143,6 +144,11 @@ impl Cod4Server {
         };
         let configstrings = old.rt.configstrings().to_vec();
         let cvars = std::mem::take(&mut old.rt.host.cvars);
+        // Each slot's block as the scripts' `setStat`s left it: retail's
+        // live in the client (`SV_SetClientStat`), which the restart keeps.
+        let kept: Vec<Option<Stats>> = (0..self.core.clients.len())
+            .map(|s| old.stats(s).cloned())
+            .collect();
         drop(old);
         self.game.snap_flags ^= SNAPFLAG_SERVERCOUNT;
         self.game.server_id = restart_server_id(self.game.server_id);
@@ -187,7 +193,7 @@ impl Cod4Server {
         self.flush_game_commands();
         let cmd = if persist { "n" } else { "B" };
         let spot = self.game.spot;
-        for slot in 0..self.core.clients.len() {
+        for (slot, kept) in kept.into_iter().enumerate() {
             let Some(c) = self.core.clients[slot]
                 .as_ref()
                 .filter(|c| c.state > State::Zombie)
@@ -197,7 +203,7 @@ impl Cod4Server {
             let (active, name, stats, guid) = (
                 c.state == State::Active,
                 client_name(&c.link.userinfo),
-                (c.stat_packets == 0x7f).then(|| c.stats.clone()),
+                (c.stat_packets == 0x7f).then(|| kept.unwrap_or_else(|| c.stats.clone())),
                 c.guid.clone(),
             );
             self.send_server_command(slot, cmd);

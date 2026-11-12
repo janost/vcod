@@ -17,8 +17,9 @@ more.
   (`SV_SetClientStat`), with `GScr_SetStat`'s index and byte checks;
   `getStat` and `setStat` refuse as 1.7's do, receiver and
   `developer_script` included (cod4-gsc.md, "The stats, the loadout, the
-  perks"). The client keeps the profile's stats in a plain file of its
-  own (cod4-netfields.md, "The stats file").
+  perks"). A `fast_restart` keeps what the scripts wrote; a map change
+  takes the client's block again. The client keeps the profile's stats in
+  a plain file of its own (cod4-netfields.md, "The stats file").
 - `status` and `getstatus` read the script's `score`; `status` has the
   separator line, the `^7` after the name, a right-aligned GUID, pings
   past 999, and `lastmsg` as `svs.time` less `lastPacketTime`

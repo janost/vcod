@@ -3,7 +3,9 @@
 //! stored plain, read at the join, sent in the `stats` packets, and
 //! written back once the server's `N` commands have changed it and at
 //! the disconnect, as `CL_Disconnect` uploads them (`iw3mp.exe` 0x4698bc).
-//! Retail's own `mpdata` beside it is never read or written.
+//! The front end reads the same file for its menus' `stat()` and writes
+//! their `statset`s back. Retail's own `mpdata` beside it is never read or
+//! written.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -27,6 +29,8 @@ const SETTLE_SECS: u64 = 2;
 const FILE: &str = "vcod_mpdata";
 
 pub struct ProfileStats {
+    /// The profile's directory: once deleted, nothing is written.
+    dir: PathBuf,
     path: PathBuf,
     saved: Stats,
     changed_at: Option<Instant>,
@@ -43,7 +47,7 @@ impl ProfileStats {
     }
 
     /// [`Self::load`] under `root` and `fs_game`.
-    fn load_from(root: &Path, fs_game: &str) -> Option<(ProfileStats, Stats)> {
+    pub(crate) fn load_from(root: &Path, fs_game: &str) -> Option<(ProfileStats, Stats)> {
         let name = super::cod4_menus::front::active_profile(root)?;
         let dir = super::cod4_menus::front::profile_dir(root, &name)?;
         let path = if fs_game.is_empty() {
@@ -59,6 +63,7 @@ impl ProfileStats {
         let stats = read.unwrap_or_else(Stats::fresh);
         log::info!("cod4: profile {name}'s stats from {}", path.display());
         let p = ProfileStats {
+            dir,
             path,
             saved: stats.clone(),
             changed_at: None,
@@ -69,7 +74,7 @@ impl ProfileStats {
     /// `stats` as the session holds them now: written once they have
     /// settled past a change, or at once with `now` (the disconnect).
     pub fn save(&mut self, stats: &Stats, now: bool) {
-        if stats.0[4..] == self.saved.0[4..] {
+        if stats.0[4..] == self.saved.0[4..] || !self.dir.is_dir() {
             self.changed_at = None;
             return;
         }

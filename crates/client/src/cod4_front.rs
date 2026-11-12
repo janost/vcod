@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use vcod_cod4::net::parse::Gamestate;
+use vcod_cod4::net::stats::Stats;
 use winit::keyboard::KeyCode;
 
 use anyhow::Context;
@@ -25,6 +26,7 @@ use crate::hud::HudQuad;
 use crate::play::cod4_menus::browser::{Browser, JoinRequest};
 use crate::play::cod4_menus::front::{Request, active_profile};
 use crate::play::cod4_menus::{Host, MenuKey, ScriptMenus};
+use crate::play::cod4_profile::ProfileStats;
 use crate::session::Session;
 use crate::{App, Mode, cod4_fly, console, version_tag};
 
@@ -48,6 +50,9 @@ pub(crate) struct Cod4Front {
     /// system and the search path hold them (a game replaces both).
     sounds: Option<Arc<vcod_cod4::sound::SoundSet>>,
     sounds_installed: bool,
+    /// The active profile's stats file, which the menus' `stat()` read
+    /// and their `statset`s write; `None` with no profile.
+    profile: Option<ProfileStats>,
 }
 
 impl Cod4Front {
@@ -66,6 +71,36 @@ impl Cod4Front {
             loaded: None,
             sounds: None,
             sounds_installed: false,
+            profile: None,
+        }
+    }
+
+    /// The active profile's stats into the menus, a fresh profile's without
+    /// a file or a profile: what Create a Class and Rank & Challenges read.
+    /// A game's `N`s reach the file before the menu comes back
+    /// (cod4-front-end.md 4).
+    pub(crate) fn reload_stats(&mut self) {
+        self.save_stats(true);
+        let fs_game = self.loaded.clone().flatten().unwrap_or_default();
+        let loaded = self
+            .menus
+            .front
+            .players_root
+            .as_deref()
+            .and_then(|root| ProfileStats::load_from(root, &fs_game));
+        let (profile, stats) = match loaded {
+            Some((p, s)) => (Some(p), s),
+            None => (None, Stats::fresh()),
+        };
+        self.profile = profile;
+        self.menus.set_stats(stats);
+    }
+
+    /// The menus' `statset`s to the profile's file once settled, or at
+    /// once with `now`.
+    fn save_stats(&mut self, now: bool) {
+        if let (Some(p), Some(stats)) = (self.profile.as_mut(), self.menus.stats()) {
+            p.save(stats, now);
         }
     }
 
@@ -108,6 +143,7 @@ impl Cod4Front {
         self.sync(shell);
         let mut out = self.menus.close_all(&self.gs);
         self.set_profile();
+        self.reload_stats();
         if let Some((message, notice)) = error {
             let key = if notice { "MENU_NOTICE" } else { "MENU_ERROR" };
             let title = self.translate(key);
@@ -149,6 +185,8 @@ impl Cod4Front {
     pub(crate) fn close(&mut self) {
         let out = self.menus.close_all(&self.gs);
         log_unsent(out);
+        // The join reads the file next.
+        self.save_stats(true);
     }
 
     /// A menu is up.
@@ -308,6 +346,7 @@ impl Cod4Front {
     /// The browser's frame (replies read, pings sent), and the join its
     /// Join Server asked for.
     pub(crate) fn frame(&mut self, now: Instant) -> Option<JoinRequest> {
+        self.save_stats(false);
         self.menus.pump_browser(now);
         self.menus.take_join()
     }
@@ -636,6 +675,7 @@ impl App {
         self.config_path = config;
         if let Some(f) = self.session.cod4_front_mut() {
             f.sync(&self.shell);
+            f.reload_stats();
         }
         log::info!("player profile {name}: {}", self.config_path.display());
     }
@@ -643,6 +683,9 @@ impl App {
     /// A deleted profile that held the config: the config goes back to
     /// `main/`'s until another profile is loaded.
     fn cod4_profile_deleted(&mut self, name: &str) {
+        if let Some(f) = self.session.cod4_front_mut() {
+            f.reload_stats();
+        }
         let gone = self
             .config_path
             .parent()
@@ -810,6 +853,32 @@ mod tests {
             let tex = f.texture_of(m).unwrap_or_else(|| panic!("{m}"));
             assert!(quads.iter().any(|q| q.texture == tex), "{m} drawn");
         }
+    }
+
+    /// The main menu reads the active profile's `vcod_mpdata`: Create a
+    /// Class is locked off a fresh profile and opens `pc_cac_popup` once
+    /// the file holds stat 260 (`feature_cac`, 2 when the rank scripts
+    /// unlock it); its `statset 260 1` reaches the file.
+    #[test]
+    fn cod4_front_create_a_class_unlocks_off_the_profiles_stats() {
+        let Some((mut f, shell)) = front() else {
+            return;
+        };
+        click(&mut f, "Create a Class");
+        assert_eq!(stack(&f), ["main_text"], "locked on a fresh profile");
+        let file = f.menus.front.players_root.clone().unwrap();
+        let file = file.join("players/profiles/tester/vcod_mpdata");
+        let mut earned = Stats::fresh();
+        earned.set(260, 2);
+        earned.seal();
+        std::fs::write(&file, &earned.0[..]).unwrap();
+        f.open_main(&shell, None);
+        assert_eq!(f.menus.stat(260), 2);
+        click(&mut f, "Create a Class");
+        assert_eq!(stack(&f), ["main_text", "pc_cac_popup"]);
+        f.close();
+        let saved = std::fs::read(&file).unwrap();
+        assert_eq!(saved[4 + 260], 1);
     }
 
     /// Quit opens `quit_popmenu` over `main_text`, both drawn; No closes

@@ -32,7 +32,10 @@ with its `mouse_over`, `mouse_click` and `music_mainmenu_mp` sounds.
 - Mods runs a `mods/<name>` mod.
 - Select Profile lists, creates, deletes and loads the profiles in
   `players/profiles/`. A fresh install asks for one first; the active
-  profile holds the config.
+  profile holds the config and the stats.
+- Ranks: a ranked match (`sv_pure 1`) earns XP and rank into the
+  profile's stats, the XP bar fills, and Create a Class unlocks at rank 3
+  as on 1.7. Rank & Challenges reads the same stats (4).
 - Options and Controls set what vcod has a cvar or bind for; the rest
   draw greyed.
 - Esc on the connect screen, or `disconnect`, calls the join off. Leaving
@@ -398,12 +401,11 @@ Ranked by how much a player notices. The research-side lists are
    `ui_browserShowCoD4x` is 1 ([cod4-handshake.md](../research/cod4-handshake.md)
    13). vcod joins stock 1.7 servers only, which are rarer than they
    should be.
-2. **Ranks and unlocks start fresh.** vcod keeps its own stats file per
-   profile (`vcod_mpdata`) and never reads retail's `mpdata`. The main
-   menu reads a fresh profile's stats, so Create a Class is greyed and
-   Rank & Challenges shows nothing earned
-   ([cod4-front-end.md](../research/cod4-front-end.md) 4). Your retail
-   rank is safe, and no use here.
+2. **Ranks start fresh, and classes cannot be edited.** vcod keeps its
+   own stats file per profile (`vcod_mpdata`) and never reads retail's
+   `mpdata`: your retail rank is safe, and no use here. Create a Class
+   opens once unlocked, but its pages do not save a weapon or perk pick
+   ([cod4-front-end.md](../research/cod4-front-end.md) 4).
 3. **Physics debris stays put.** A `physicsLaunch`ed part (a car's door
    or hood) keeps the spot it stood on: the client runs no rigid-body
    physics for `TR_PHYSICS`. Ragdolls use vcod's position-based solver,

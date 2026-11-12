@@ -985,6 +985,10 @@ impl ScriptMenus {
                 {
                     self.set_dvar(name, &rest.join(" "));
                 }
+                [cmd, index, value, ..] if cmd.eq_ignore_ascii_case("statset") => {
+                    use vcod_common::text::atoi_msvc;
+                    self.stat_set(atoi_msvc(index), atoi_msvc(value));
+                }
                 [cmd, stat, name] if cmd.eq_ignore_ascii_case("statGetInDvar") => {
                     let v = self.stat(stat.parse().unwrap_or(-1));
                     self.ui
@@ -1068,6 +1072,27 @@ impl ScriptMenus {
     /// The console lines the menus ran since the last call.
     pub fn take_console(&mut self) -> Vec<String> {
         std::mem::take(&mut self.console)
+    }
+
+    /// The `statset <index> <value>` command (`iw3mp.exe` 0x579d50): the
+    /// client's own stats, the create-a-class slots 200..249 and 256..279,
+    /// into the profile's block. Any other index takes only 0; a non-zero
+    /// value there, or 250, is retail's `Com_Error` ("Trying to set a
+    /// server-only stat", 0x6e1004; "trying to set invalid create-a-class
+    /// stat", 0x6e0fc0), refused here with the message and no drop.
+    fn stat_set(&mut self, index: i32, value: i32) {
+        let client = (200..250).contains(&index) || (256..280).contains(&index);
+        if index == 250 {
+            log::error!("trying to set invalid create-a-class stat.  You can't set stat {index}.");
+            return;
+        }
+        if !client && value != 0 {
+            log::error!("Trying to set a server-only stat {index}.");
+            return;
+        }
+        if let (Ok(i), Some(stats)) = (u16::try_from(index), self.stats.as_mut()) {
+            stats.set(i, value as u32);
+        }
     }
 
     /// `stat(index)`, 0 past the block.
@@ -1341,5 +1366,19 @@ mod tests {
         assert!(m.open().is_none());
         assert_eq!(label("heavygunner_mp,0"), "Heavygunner");
         assert_eq!(label("custom2,0"), "Custom class 2");
+    }
+
+    /// `statset` writes the client's own stats (the class slots, 256..279)
+    /// and takes only 0 elsewhere: a server-only stat keeps its value.
+    #[test]
+    fn cod4_statset_writes_only_the_clients_stats() {
+        let mut m = ScriptMenus::front_end();
+        m.exec("statset 205 190; statset 260 1; statset 2301 300; statset 250 1; statset 3000 0");
+        let read: Vec<i32> = [205, 260, 2301, 250, 3000]
+            .iter()
+            .map(|&i| m.stat(i))
+            .collect();
+        assert_eq!(read, [190, 1, 0, 0, 0]);
+        assert_eq!(Stats::fresh().get(3000), Some(9));
     }
 }
