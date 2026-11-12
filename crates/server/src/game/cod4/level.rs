@@ -660,11 +660,12 @@ impl Cod4Level {
             self.spectator_buttons(slot, cmd);
         }
         // The script's weapon builtins write the loadout, retail's straight
-        // into `ps` (`G_GivePlayerWeapon`): a kill inside an
-        // earlier cmd of this frame (the stock streak's `giveWeapon`,
-        // `setActionSlot`) goes in ahead of this one's move, or the move
-        // carries the old weapons back over it.
-        let loadout = (state == Some(SessionState::Playing))
+        // into `ps` (`G_GivePlayerWeapon`, `BG_TakePlayerWeapon`): a kill
+        // inside an earlier cmd of this frame (the stock streak's
+        // `giveWeapon`, `setActionSlot`; the victim's `dropWeaponForDeath`)
+        // goes in ahead of this one's move, or the move carries the old
+        // weapons back over it.
+        let loadout = matches!(state, Some(SessionState::Playing | SessionState::Dead))
             .then(|| self.rt.host.cod4().clients[slot].loadout.clone());
         let Some(p) = self.players[slot].as_mut() else {
             return;
@@ -1164,10 +1165,12 @@ impl Cod4Level {
         for id in std::mem::take(&mut self.rt.host.cod4_mut().free_next) {
             self.rt.host.ents.free(id);
         }
+        // The script's `finishPlayerDamage`s and `suicide`s wrote their
+        // victims' playerstates inside the call, ahead of any `spawn` after.
+        self.apply_damage_ops();
         for s in self.rt.take_client_spawns() {
             self.client_spawn(s.slot, s.origin, [0.0, s.yaw_deg, 0.0], s.mode);
         }
-        self.apply_damage_ops();
         self.sync_defs();
         _p = crate::tick_profile::phase("frame/entities");
         // The corpses' moves (`G_RunCorpse`, cod4-combat.md 5.2), then the

@@ -482,10 +482,36 @@ constants; the algebra between them is INFERRED.
   crouched (0x820deac), 0.02 prone (0x8212488), over 250 (0x8218dbc), at
   most 60 (0x80aca47); `pm_time` twice it clamped to 50..200 (0x80acaaf,
   0x80ace2a). VERIFIED (the instructions).
-- Ours (`Damage4`): that knockback (times `g_knockback` 1000 over 250,
-  `PMF_TIME_KNOCKBACK`), `damageTimer` 100 ms a point to 750, the blood for
-  the end frame. INFERRED. The target's first hit reads `pm_flags` 0x100,
-  `pm_time` 0x32, `damageTimer` 750. VERIFIED live (the gate).
+- The order inside `finishPlayerDamage`, every write to the client's
+  playerstate (gclient+0) made in the call: the knockback onto
+  `ps.velocity` (+0x28) and, with no `pm_time` (+0x18) running, `pm_time`
+  and `PMF_TIME_KNOCKBACK` (0x80aca21..0x80acacf); the flesh events; the
+  blood (`damage_blood` +0x30ac, `damage_from` +0x30b0); `damageTimer`
+  (+0xa0) up by the damage times `player_dmgtimer_timePerPoint`, capped
+  at `player_dmgtimer_maxTime` (dvar pointers 0x827b030, 0x827b034,
+  registered at 0x8054825 and 0x805485a), into `damageDuration` (+0xa4)
+  (0x80ac787..0x80ac888); `flinchYawAnim`; the health; the `damage`
+  notify; then the die or pain handler, and `stats[0]` (+0x148) the
+  health after (0x80ac93a). VERIFIED (the instructions and the dvar
+  names). `player_die` (0x80b1aa0) fires the death grenades, notifies
+  `death` (0x80b1be3), sets `pm_type` 7 (8 from 1, 0x80b1bfd), draws the
+  death anim (0x80b1c21), zeroes `stats[0]` (0x80b1c2f) and only then runs
+  `CodeCallback_PlayerKilled` through 0x80c2a64 (0x80b1c75); after it the
+  followers, contents 0x4000000, the dead yaw, `maxs[2]` 30 and health 0.
+  VERIFIED (the instructions). So the killed callback's `clonePlayer` reads
+  a velocity the push already holds. INFERRED. `P_DamageFeedback` stays at
+  the end frame.
+- Ours: `finishPlayerDamage` queues the playerstate half (`Damage4`) and
+  the level applies it when the gsc call returns: a round's inside the
+  attacker's cmd, a script thread's before the frame's spawns
+  (`Cod4Level::run_frame`). The push lands in the call itself on what the
+  scripts read (`getVelocity`, `clonePlayer`'s source), each component
+  summed as the x87 stack does. INFERRED. The knockback is `g_knockback`
+  1000 over 250, `damageTimer` 100 ms a point to 750 (the dvars'
+  defaults). The kill capture's target, hit after its cmds of that frame,
+  reads `pm_flags` 0x100, `pm_time` 0x32, `damageTimer` 750; the prone
+  capture's, whose cmds arrived after the shooter's, reads them run down
+  by the next cmds. VERIFIED live (the gates, 15).
 - `P_DamageFeedback` at the end frame: `damageCount` the blood as a share
   of max health (at most 127), `damageEvent` stepped, direction pitch and
   yaw in 256ths, the count cleared 500 ms on. INFERRED. The capture's 56
@@ -1252,10 +1278,12 @@ those anims.
 
 - A rocket's flight, the live grenade's throw back, a prone death's torso
   and a `killcamentity` killcam are gated against retail captures (15);
-  what those gates still tolerate is 15's open list: damage applied at the
-  end frame, the dropped weapon's fall, a grenade's strike on a body, the
-  second rocket's number, a `setviewpos`'s `delta_angles`, a killcam's
-  trim and its archived view.
+  what those gates still tolerate is 15's open list: the dropped weapon's
+  fall, a grenade's strike on a body, the second rocket's number, a
+  `setviewpos`'s `delta_angles`, a killcam's trim and its archived view,
+  a dead body's slide.
+- `player_die`'s `pm_type` 8 for a linked body (1) and the two
+  `player_dmgtimer_*` dvars are not read: ours writes 7 and the defaults.
 - The use key's weapon swap is gated live on ours (cod4-gsc.md 9.1); its
   retail capture is uncommitted, so no A/B gate.
 - The terrain triangle normal's last bit.
@@ -1454,7 +1482,8 @@ after the start: `target` (allies, `--goto "207 2291 296"`) and `shooter`
 (axis, `--goto "123 2110 300"`), the scripts and extra `+set`s on each
 `Pair`. The seeds came off the two challenges
 (`wire_ab::recover_game_seed`, 10.9). Ours replays both probes in process
-on retail's clock, seed and spawn spots, and compares every playerstate
+on retail's clock, seed and spawn spots, a frame's two packets in the
+order retail received them, and compares every playerstate
 word, health, ammo and every entity by number, both clients, snapshot by
 snapshot from the later spawn. What still differs is each gate's `GAPS`.
 
@@ -1524,16 +1553,34 @@ What the captures fixed on ours:
   never appears in its killcam. VERIFIED live.
 - `EV_BULLET_HIT`'s kill bit (5, `scale` 2) rides `un1`. VERIFIED live.
 
+- The order of a frame's packets. Each cmd is thought on arrival
+  (cod4-server-frame.md 2), so a hit lands between the victim's cmds as the
+  two clients' packets arrived. In the prone run the shooter's packet came
+  first in the frames of both hits: the target hit at 46050 reads velocity
+  0, `pm_flags` 0x1, `damageTimer` 700, its next cmds run on the push.
+  VERIFIED live. The gates take each packet's capture time, put the
+  shooter's clock on the target's by the median gap between the two
+  probes' arrivals of the same snapshot (one frame's messages leave
+  together, cod4-server-frame.md 4), and send each frame's packets in that
+  order. With a fixed target-first order ours read the fresh push, 0x101
+  and 750, and the dead body's anim timers 50 high. VERIFIED (the gate).
+  The prone kill then lands before the target's last cmds of its frame:
+  those cmds kept the rifle `dropWeaponForDeath` took, as a dead client's
+  cmd took its weapons from the playerstate, not the script's loadout.
+  Fixed: a dead client's cmd takes the loadout as a living one's does.
+  VERIFIED (the gate).
+- The killed callback's `clonePlayer` reads the pushed velocity (4): the
+  killcam run's corpse leaves at 80 along x (`g_clonePlayerMaxVelocity`'s
+  cap of the 20mm's 240), on ours too since the push lands inside the
+  call. VERIFIED (the gate).
+
 Open, with each gate's `GAPS`:
 
-- Damage at the end frame. Ours applies a `finishPlayerDamage` at the
-  victim's end frame; retail writes the push, `pm_time`, the damage timer
-  and the dead state inside the call, so the victim's next cmds run on them
-  before the snapshot. The prone target hit at 46050 reads velocity 0,
-  `pm_flags` 0x1, `damageTimer` 700 where ours reads the fresh push, 0x101
-  and 750; the dead body's anim timers read 50 lower; the killcam run's
-  corpse leaves at 80 along x where ours leaves still. VERIFIED live. The
-  cause is INFERRED.
+- The dead body's slide: the killcam run's target, pushed to 240 along x
+  at its death, reads the same velocity as retail's every snapshot, but
+  its x runs ahead by 0.00065 (43 ulps) from its first 50 ms on, z by an
+  ulp: 217.04066 where retail's reads 217.04001 at 46600. VERIFIED (the
+  gate). The cause, in the dead pmove's slide, is open.
 - The dropped weapon (6): retail's leaves `trType` 5, then 3 for 50 ms, and
   rests on its side (`apos` roll 90, ground 1022). VERIFIED live.
 - A grenade's strike on a standing body: the thrown back frag meets the
@@ -1545,7 +1592,10 @@ Open, with each gate's `GAPS`:
 - `setviewpos 697 -2038 200`: retail's `delta_angles` read 0.406, -118.3
   for 0.55 s where ours read 0, -24.99. VERIFIED live.
 - The prone killcam's trim: 4200 on retail, 4250 on ours, and its end a
-  frame apart. VERIFIED live.
+  frame apart. VERIFIED live. The followed shooter's words a frame off
+  (its `torsoTimer` and `pm_flags` among them, which the gate once filed
+  under damage) all fall in the killcam's frames, 50250 to 51050; the
+  gate holds those rows to times from 50000 on. VERIFIED (the gate).
 - The killcam run's archived view: the killcam frames read the shooter's
   yaw 0 (after its `setviewpos`) where ours sends 90.00001, the spawn
   yaw, though ours's live snapshots read 0. VERIFIED (the gate).

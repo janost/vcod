@@ -1,4 +1,4 @@
-//! The capture pairs of cod4-combat.md 12 on ours. Each is a retail
+//! The capture pairs of cod4-combat.md 15 on ours. Each is a retail
 //! `cod4_lnxded` 1.7 run (`+devmap mp_crash`, `war`, `sv_pure 0`) of two
 //! `cod4_probe`s: `target` (allies, `--goto "207 2291 296"`) and, a second
 //! later, `shooter` (axis, `--goto "123 2110 300"`), each logged into
@@ -6,7 +6,8 @@
 //! [`Pair`]). Both join [`Cod4Server`] in process on retail's level clock
 //! and seed, each reading its first snapshot when its twin did, sending
 //! its twin's client commands as far past it as its twin did, spawning on
-//! its twin's spot and from there sending its twin's own cmds. Each gate
+//! its twin's spot and from there sending its twin's own cmds, a frame's
+//! two packets in the order retail received them. Each gate
 //! then compares a window of both clients' snapshots with retail's: the
 //! listed playerstate words and every entity, by number, word for word.
 //! What still differs is the gate's `GAPS`. Needs `COD4_DIR`.
@@ -21,7 +22,7 @@ use vcod_cod4::net::clmsg::ClOp;
 use vcod_cod4::net::delta::EntityState;
 use vcod_cod4::net::parse::{Op, Snapshot};
 
-use super::wire_ab::{Probe, Side, replay_schedule, retail, side};
+use super::wire_ab::{Probe, Side, replay_schedule_timed, retail, side};
 use super::*;
 
 /// One retail run of the two probes.
@@ -106,6 +107,35 @@ fn twin(lines: &[Line]) -> Twin {
     }
 }
 
+/// The probe clock's time each snapshot first arrived at, by server time.
+fn snapshot_arrivals(lines: &[Line]) -> BTreeMap<i32, u64> {
+    let mut s = Session::new();
+    let mut out = BTreeMap::new();
+    for l in lines.iter().filter(|l| l.dir != "auth") {
+        if let Ok(Some(Item::Server { parsed, .. })) = s.feed(l) {
+            for op in &parsed.ops {
+                if let Op::Snapshot(i) = op {
+                    out.entry(s.client.snapshots[*i].server_time)
+                        .or_insert(l.ms);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// What to add to `b`'s clock to read it on `a`'s: the median gap between
+/// the two probes' arrivals of the same snapshot (one frame's messages
+/// leave together, cod4-server-frame.md 4).
+fn clock_offset(a: &BTreeMap<i32, u64>, b: &BTreeMap<i32, u64>) -> i64 {
+    let mut gaps: Vec<i64> = a
+        .iter()
+        .filter_map(|(t, ma)| Some(*ma as i64 - *b.get(t)? as i64))
+        .collect();
+    gaps.sort_unstable();
+    gaps[gaps.len() / 2]
+}
+
 /// A hook run before each tick's packets: the server and the time.
 type Hook<'a> = dyn FnMut(&mut Cod4Server, i32) + 'a;
 
@@ -155,13 +185,28 @@ fn run(install: &vcod_cod4::install::Install, pair: &Pair, hook: &mut Hook) -> R
     }
     sv.game.level.as_mut().unwrap().rt.host.spawn_pins =
         Some(std::rc::Rc::new(std::cell::RefCell::new(pins)));
+    let arrivals = [0, 1].map(|k| snapshot_arrivals(&lines[k]));
+    let offsets = [0, clock_offset(&arrivals[0], &arrivals[1])];
+    // Each probe's replayed packets' send times on the target's clock, by
+    // the tick they go at: within a tick the probes send in retail's
+    // arrival order, as each cmd is thought on arrival (cod4-server-frame.md
+    // 2) and a hit reads whatever cmds the victim has run.
+    let mut sends: Vec<VecDeque<(i32, i64)>> = Vec::new();
     let mut probes: Vec<Probe> = twins
         .iter()
         .zip(["target", "shooter"])
         .zip(&lines)
-        .map(|((t, name), l)| {
+        .zip(offsets)
+        .map(|(((t, name), l), offset)| {
             let mut p = Probe::new(name, t.slot, 28961 + t.slot as u16, t.first, &t.commands);
-            p.replay = replay_schedule(l, t.spawn);
+            let timed = replay_schedule_timed(l, t.spawn);
+            sends.push(
+                timed
+                    .iter()
+                    .map(|(at, ms, _)| (*at, *ms as i64 + offset))
+                    .collect(),
+            );
+            p.replay = timed.into_iter().map(|(at, _, c)| (at, c)).collect();
             p.replay_from = t.spawn;
             p
         })
@@ -176,7 +221,26 @@ fn run(install: &vcod_cod4::install::Install, pair: &Pair, hook: &mut Hook) -> R
             }
         }
         hook(&mut sv, svs);
-        for p in probes.iter_mut().filter(|p| p.joined) {
+        let mut order: Vec<(i64, usize)> = sends
+            .iter_mut()
+            .enumerate()
+            .map(|(k, q)| {
+                let mut first = i64::MAX;
+                while let Some(&(at, ms)) = q.front()
+                    && at <= svs
+                {
+                    first = first.min(ms);
+                    q.pop_front();
+                }
+                (first, k)
+            })
+            .collect();
+        order.sort();
+        for k in order.into_iter().map(|(_, k)| k) {
+            let p = &mut probes[k];
+            if !p.joined {
+                continue;
+            }
             let pkt = p.packet(svs);
             p.log("c2s", svs, &pkt);
             sv.handle_packet(p.addr, &pkt, now);
@@ -431,12 +495,6 @@ fn pair_ab(gate: &str, pair: &Pair, gaps: &[(&str, &str)]) {
 /// (cod4-combat.md 6).
 const ITEM: &str = "the dropped weapon's start and fall (cod4-combat.md 6)";
 
-/// Why a hit's playerstate differs: ours applies a damage at the end frame;
-/// retail's `finishPlayerDamage` writes the push, `pm_time`, the damage
-/// timer and the dead state inside the frame, so the victim's next cmds
-/// run on them before the snapshot (cod4-combat.md 12).
-const DAMAGE_AT_END_FRAME: &str = "damage lands at the end frame (cod4-combat.md 12)";
-
 /// What the rocket run still differs in.
 const ROCKET_GAPS: &[(&str, &str)] = &[
     (
@@ -484,33 +542,26 @@ fn cod4_throwback_ab() {
 
 /// Why the prone run's killcam differs: retail trims its look back to
 /// 4200, ours to 4250 (a frame older), and ends it a frame apart
-/// (cod4-combat.md 7).
+/// (cod4-combat.md 7). Its rows but the clocks are held to the killcam's
+/// frames from 50000 on.
 const TRIM: &str = "the killcam's trim, 4200 against ours 4250 (cod4-combat.md 7)";
 
 const PRONE_GAPS: &[(&str, &str)] = &[
     ("* entity *:3", ITEM),
-    ("target ps origin", DAMAGE_AT_END_FRAME),
-    ("target ps velocity", DAMAGE_AT_END_FRAME),
-    ("target ps pm_flags", DAMAGE_AT_END_FRAME),
-    ("target ps pm_time", DAMAGE_AT_END_FRAME),
-    ("target ps damageTimer", DAMAGE_AT_END_FRAME),
-    ("target ps fTorsoPitch", DAMAGE_AT_END_FRAME),
-    ("target ps torsoTimer", DAMAGE_AT_END_FRAME),
-    ("target ps legsTimer", DAMAGE_AT_END_FRAME),
-    ("target ps viewHeight", DAMAGE_AT_END_FRAME),
-    ("* entity 0:1 fTorsoPitch", DAMAGE_AT_END_FRAME),
     ("target ps commandTime", TRIM),
     ("target ps deltaTime", TRIM),
-    ("target ps eventSequence", TRIM),
-    ("target ps events", TRIM),
-    ("target ps weap", TRIM),
-    ("target ps torsoAnim", TRIM),
-    ("target ps legsAnim", TRIM),
-    ("target ps eFlags", TRIM),
-    ("target ps viewangles", TRIM),
-    ("target ps aimSpreadScale", TRIM),
-    ("target ps fWeaponPosFrac", TRIM),
-    ("target ps ammo", TRIM),
+    ("target ps eventSequence 5", TRIM),
+    ("target ps events 5", TRIM),
+    ("target ps weap 5", TRIM),
+    ("target ps torsoAnim 5", TRIM),
+    ("target ps torsoTimer 5", TRIM),
+    ("target ps pm_flags 5", TRIM),
+    ("target ps legsAnim 5", TRIM),
+    ("target ps eFlags 5", TRIM),
+    ("target ps viewangles 5", TRIM),
+    ("target ps aimSpreadScale 5", TRIM),
+    ("target ps fWeaponPosFrac 5", TRIM),
+    ("target ps ammo 5", TRIM),
 ];
 
 /// A prone body's death and its corpse's torso (cod4-combat.md 5).
@@ -521,9 +572,11 @@ fn cod4_prone_death_ab() {
 
 const KCENT_GAPS: &[(&str, &str)] = &[
     ("* entity *:3", ITEM),
-    ("* entity 64:2 lerp.pos.trDelta[0]", DAMAGE_AT_END_FRAME),
-    ("* entity 64:2 lerp.pos.trBase[0]", DAMAGE_AT_END_FRAME),
-    ("target ps origin", DAMAGE_AT_END_FRAME),
+    (
+        "target ps origin",
+        "the dead body's slide off the push: velocity matches every snapshot, but \
+         x runs 0.0007 ahead from its first 50 ms (cod4-combat.md 15)",
+    ),
     (
         "target ps viewangles[1]",
         "the killcam's archived view: ours keeps the shooter's spawn yaw 90 where \

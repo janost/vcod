@@ -2,8 +2,9 @@
 //! 4..6): `finishPlayerDamage`, `obituary`, `clonePlayer`, `dropItem` and
 //! the item and ammo queries the death path reaches. The playerstate half
 //! of a hit and a kill goes to the level as a `Damage4`
-//! (`game::cod4::combat`); `cod4_combat_ab` checks it against the kill
-//! capture.
+//! (`game::cod4::combat`), applied when the gsc call returns; the push
+//! lands on what the scripts read at once. `cod4_combat_ab` and
+//! `cod4::capture_ab` check it against retail captures.
 
 use vcod_cod4::pmove::anim::EventAnim;
 use vcod_gsc::{Cx, EntId, ErrorKind, Target, Value};
@@ -213,7 +214,7 @@ impl Hit {
         ]
     }
 
-    /// The playerstate half the level applies at its end frame.
+    /// The playerstate half the level applies when the call returns.
     fn op(&self, slot: usize, fatal: bool, death: Option<EventAnim>) -> Damage4 {
         Damage4 {
             slot,
@@ -273,6 +274,7 @@ fn finish_player_damage(
             "Trying to do damage to a client that is already dead".into(),
         ));
     }
+    push_mirrors(host, slot, &hit);
     let outcome = {
         let client = &host.cod4().clients[slot];
         if host.client_vitals[slot].health > damage {
@@ -299,6 +301,35 @@ fn finish_player_damage(
         Outcome::Killed => kill(host, cx, slot, recv, &hit),
     }
     Ok(Value::Undefined)
+}
+
+/// The knockback `finishPlayerDamage` adds to `ps.velocity` first thing
+/// (0x80aca21..0x80aca9b, ahead of the health and the `damage` notify),
+/// onto what the scripts read of it before the level applies the
+/// [`Damage4`]: `getVelocity` and the killed callback's `clonePlayer`,
+/// whose corpse leaves at the pushed velocity (cod4-combat.md 4).
+fn push_mirrors(host: &mut GameHost, slot: usize, hit: &Hit) {
+    use crate::game::cod4::combat::{DFLAG_NO_KNOCKBACK, g_knockback, knockback};
+    if hit.dflags & DFLAG_NO_KNOCKBACK != 0 {
+        return;
+    }
+    let g = g_knockback(&host.cvars);
+    let c4 = host.cod4_mut();
+    let pm_flags = c4.pm_flags[slot];
+    let Some(body) = c4.corpse_source[slot].as_mut() else {
+        return;
+    };
+    let dir = hit.dir.unwrap_or_default();
+    let e_flags = body.e_flags;
+    knockback(&mut body.velocity, pm_flags, e_flags, hit.damage, dir, g);
+    knockback(
+        &mut c4.velocity[slot],
+        pm_flags,
+        e_flags,
+        hit.damage,
+        dir,
+        g,
+    );
 }
 
 /// A bullet's two flesh events at the impact (0x80acb07..0x80acc04,
