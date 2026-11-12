@@ -137,7 +137,7 @@ Common ones:
 | `g_log`, `g_logSync` | `games_mp.log` (below): empty `g_log` turns it off, `g_logSync 1` flushes every line. |
 | `fs_homepath` | Where the log goes. Default the `--game-dir`. |
 | `sv_allowDownload` | On by default: serve the server's non-stock paks to a client that lacks them. `sv_wwwDownload 1` with `sv_wwwBaseURL` redirects instead. |
-| `sv_pure` | CoD2, CoD4: 0 turns the pure `cp` check off. |
+| `sv_pure` | 1 by default, as on retail: clients must pass the pure `cp` check. 0 turns it off. |
 
 ### Log
 
@@ -475,6 +475,9 @@ Server (`vcod-server <map> --game cod4`, or a CoD4 install):
   `<name>.dm_1`. On CoD4 `--team` and `--class` make it join.
 - `vcod --game cod2 --probe-demo <file.dm_1> [--probe-timedemo]` plays a
   CoD2 demo headless and prints what it parsed and drew.
+- `cargo run -p vcod-common --example demo_dump -- <file.dm_N>` prints a
+  CoD1 or UO demo record by record. `--net-probe --save-demo` records one
+  from a server alongside every message it sent.
 - `vcod --game cod4 --capture <file>` replays a `cod4_probe` capture
   (`crates/cod4/tests/fixtures/net/play-1.7-*.txt`) on its own clock.
 - F3 (`--debug-overlay`) shows frame, draw, vis, net and audio counters;
