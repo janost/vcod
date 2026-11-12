@@ -752,3 +752,8 @@ otherwise.
   test's `bot_world(.., Vec::new())` and `nav_build` clip the clip map alone.
 - `CountPlayers`' shared `level.players` array is under
   [Script host and VM](#script-host-and-vm).
+- Cmds are thought on arrival, so a hit lands between the victim's cmds of a
+  frame as the two clients' packets arrived. A gate replaying two retail
+  captures sends each frame's packets in the order retail got them
+  (`cod4::capture_ab`); a fixed order read as damage applied a frame late
+  (cod4-combat.md 15).

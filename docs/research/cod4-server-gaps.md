@@ -44,6 +44,13 @@ more.
   stock destructible cars and barrels break under rounds and blasts
   (13, `game::cod4::entity_damage`).
 - `setPlayerAngles` sets the view and `delta_angles`.
+- A hit's playerstate half lands when the `finishPlayerDamage` call
+  returns, the push on what the killed callback's `clonePlayer` reads, so
+  a pushed corpse leaves at retail's velocity; a dead client's cmds keep
+  the weapons `dropWeaponForDeath` took. The capture gates replay a
+  frame's packets in retail's arrival order, which closed the prone run's
+  damage rows: what read as damage at the end frame was the shooter's
+  packet arriving first (cod4-combat.md 4, 15).
 - Retail captures gate a rocket's flight, the live grenade's throw back,
   a prone death's torso and a `killcamentity` killcam (cod4-combat.md
   15). They brought `flinchYawAnim`, the dead yaw (`stats[1]`), a spawn
@@ -76,12 +83,10 @@ Open, by how much a player notices.
    collision traces at the bind pose (cod4-gsc.md 3.2, `game::cod4::vehicle`).
    M.
 3. What the four capture gates (`cod4::capture_ab`, cod4-combat.md 15)
-   still tolerate: damage applied at the victim's end frame rather than
-   inside `finishPlayerDamage` (the push, `pm_time`, the timers, the
-   corpse's launch), the dropped weapon's start and fall, a grenade's
+   still tolerate: the dropped weapon's start and fall, a grenade's
    strike on a standing body, the second rocket's entity number, a
-   `setviewpos`'s `delta_angles`, a killcam's trim and its archived view.
-   The first is L, the rest S to M.
+   `setviewpos`'s `delta_angles`, a killcam's trim and its archived view,
+   a dead body's slide (43 ulps of x). S to M each.
 4. The touch pass after the move and a free spectator's flight have no
    A/B against retail yet (cod4-pmove.md 15.2). S.
 5. The off-LAN snapshot rate above 20 (cod4-server-frame.md), and why
