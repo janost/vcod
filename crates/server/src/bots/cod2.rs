@@ -1195,10 +1195,10 @@ impl Cod2Bots {
 
     /// [`BotView::hurt`] for the bot in `slot`: a `damageEvent` new since
     /// the last tick is a hit, by the client `finishPlayerDamage` last
-    /// named (`Cod2Player::last_attacker`), along the direction
-    /// `damageYaw` and `damagePitch` carry (255 both: none, a zero
-    /// direction); reported for [`super::HURT_MS`] while the attacker
-    /// still plays, as the CoD1 driver's `bot_hurt`.
+    /// named (`Cod2Player::last_attacker`), along the direction it came
+    /// (`Cod2Player::damage_dir`; zero for none); reported for
+    /// [`super::HURT_MS`] while the attacker still plays, as the CoD1
+    /// driver's `bot_hurt`.
     fn hurt(&mut self, level: &Cod2Level, slot: usize, now: i32) -> Option<super::Hurt> {
         let p = level.players.get(slot)?.as_ref()?;
         let seen = self.hits.entry(slot).or_insert((p.damage_event, None));
@@ -1207,7 +1207,7 @@ impl Cod2Bots {
             seen.1 = p
                 .last_attacker
                 .filter(|&(_, t)| p.damage_event != 0 && (0..1000).contains(&now.wrapping_sub(t)))
-                .map(|(a, _)| (a, now, damage_dir(p.damage_pitch, p.damage_yaw)));
+                .map(|(a, _)| (a, now, p.damage_dir().unwrap_or(Vec3::ZERO).to_array()));
         }
         let (a, at, dir) = seen.1?;
         let ago_ms = now.wrapping_sub(at);
@@ -1614,18 +1614,6 @@ pub fn mantle_walk(
         }
     }
     None
-}
-
-/// The direction `damageYaw` and `damagePitch` (`P_DamageFeedback`'s
-/// bytes, 256 to the turn, pitch positive down) point along, from the
-/// attacker toward the body; zero for 255 both, a hit with none.
-fn damage_dir(pitch: i32, yaw: i32) -> [f32; 3] {
-    if pitch == 255 && yaw == 255 {
-        return [0.0; 3];
-    }
-    let p = (pitch as f32 * 360.0 / 256.0).to_radians();
-    let y = (yaw as f32 * 360.0 / 256.0).to_radians();
-    [p.cos() * y.cos(), p.cos() * y.sin(), -p.sin()]
 }
 
 /// The nearest `p` comes to the segment `a` to `b`.
@@ -2296,18 +2284,6 @@ mod tests {
         };
         let (c, t) = offhand_cmd(&rifle, Some(9), 3, t);
         assert_eq!((c.weapon, c.buttons, t), (3, button::ATTACK, None));
-    }
-
-    /// `damageYaw` and `damagePitch` back into the direction
-    /// `P_DamageFeedback` packed (`vectoangles`, 256 to the turn).
-    #[test]
-    fn the_damage_bytes_point_from_the_attacker() {
-        let dir = Vec3::new(-0.6, 0.7, -0.4).normalize();
-        let a = crate::game::builtins::math::vectoangles(dir.to_array());
-        let byte = |deg: f32| (f64::from(deg) / 360.0 * 256.0) as i32;
-        let back = Vec3::from(damage_dir(byte(a[0]), byte(a[1])));
-        assert!(back.dot(dir) > 0.999, "{back} against {dir}");
-        assert_eq!(damage_dir(255, 255), [0.0; 3]);
     }
 
     /// The cloud lands on the line to the enemy, and a line through it

@@ -1171,6 +1171,12 @@ All match where `GAPS` does not name a row. VERIFIED, the gate.
     0x326468 256), both 255 when the damage came with no direction
     (`gclient+0x27f0`);
   - `damageEvent` counts up and the gathered damage clears.
+
+  Trap: a real direction whose yaw and pitch both lie in 358.6..360 (a
+  blow along yaw -1.4..0 from up to 1.4 degrees below) packs as 255 both,
+  the no-direction value, so a reader of the two bytes takes it for none.
+  INFERRED, the truncation above. vcod's CoD2 bots read the gathered
+  direction and flag (`Cod2Player::damage_dir`) instead of the bytes.
 - `ClientSpawn` (Mac 0x1930a6) memsets the gclient's first 0x28a4 bytes,
   keeping only +0x26a8..+0x27a8 (the session and `pers`) and playerstate
   word +0x140 (`stats[5]`, stored plus one). So the four damage fields
