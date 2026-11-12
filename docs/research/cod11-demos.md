@@ -298,11 +298,9 @@ the two commands on a 1.5 or UO server.
 ## 7. Not done
 
 - `cl_avidemo` and `cl_forceavidemo`: vcod takes no screenshots.
-- Untested across clients: no retail client demo has been played in vcod,
-  nor a vcod demo in a retail client. The format checks are vcod against
-  itself (`crates/server/tests/demos.rs`)
-  and the retail server's own messages played as a demo
-  (`a_demo_of_retail_messages_plays_every_frame`).
+- No retail client has played a vcod demo: no retail client runs here.
+  Section 9 gates the other direction and vcod's writer against retail's
+  layout.
 
 ## 8. The `RECORDING` line
 
@@ -346,3 +344,123 @@ vcod draws it in the online frame's live phase over the HUD and under
 the menus, none of them fullscreen (`Console::recording_line`,
 `Ui::fullscreen`), its size the bytes the
 `DemoWriter` has written.
+
+## 9. Interchange with retail
+
+`cargo run -p vcod-common --example demo_dump -- <file.dm_N>` prints a
+file record by record: sequence, length, acknowledge, the leading server
+commands, the gamestate's counts and serverinfo keys, a snapshot's time
+and delta byte. The facts below rest on its output and on two gates in
+`crates/common/src/net/mod.rs`.
+
+### 9.1 A retail-recorded demo
+
+The 1.5 install holds one demo, `main/demos/Timedemo1.dm_2` (333920
+bytes). Its first record's serverinfo reads `protocol 2`, `shortversion
+1.2`, `sv_hostname Ned's World`, `mapname mp_dawnville`, `g_gametype tdm`
+(VERIFIED, `demo_dump`). vcod speaks protocols 1, 6 and 22 only
+(`demo::protocol_of_extension`; VERIFIED), so vcod did not write it. A
+retail 1.2 client recorded it on a 1.2 server (INFERRED: a client joins
+only a server of its own protocol). No 1.2 binary is here, so that 1.2's
+`record` also formats a literal 2 is INFERRED from the file's name.
+
+Its records, VERIFIED (`demo_dump`):
+
+- 1534 records, then the two -1 longs.
+- Record 1, sequence 26080, acknowledge 37: `svc_gamestate` first, with no
+  server command ahead of it. Then `serverCommandSequence` 520, 259
+  configstrings, 19 baselines, `clientNum` 14 and `svc_EOF`. That is
+  section 3's message.
+- Record 2, sequence 26081: a snapshot with delta byte 0. Every later
+  record holds one snapshot, at consecutive sequences, with delta byte 1
+  (2 once, record 658). The full frame section 4 waits for came in the
+  next message.
+
+`a_retail_recorded_demo_plays_and_vcod_writes_its_records_alike` reads
+the file from `COD_DIR` and passes vacuously without it. VERIFIED (the
+gate, at the 1.5 install):
+
+- `DemoReader` reads every record and stops on the trailer, and
+  `DemoWriter` writes the records back byte for byte.
+- `demo::gamestate_message`, built from record 1's parsed gamestate and its
+  acknowledge, comes out identical to record 1, compressed bytes included.
+- `demo` under protocol 6 turns each of the 1533 later records into a new
+  frame with a later `serverTime`, then ends on the trailer.
+
+That 1.2's netfield tables match 1.5's for every field those frames use
+is INFERRED (no frame lost its delta base).
+
+### 9.2 A retail capture framed as retail frames it
+
+Each retail server was captured live with `vcod --net-probe --save-demo
+--capture-tag <tag>` (`docs/dev/retail.md`): 1.1d and 1.5b on mp_carentan
+`dm`, UO 1.51b on mp_cassino `dm`, whose two tanks give the gamestate two
+`eType` 12 baselines. The recorder joined allies and walked the
+`--probe-slope` route beside a second probe on axis. The probe:
+
+- writes every server message past the gamestate as
+  `crates/common/tests/fixtures/net/snapshots-<tag>.bin`, beside
+  `gamestate-<tag>.bin`;
+- runs vcod's `record` from the first snapshot, `record`'s earliest point,
+  into `<tag>.dm_<n>`.
+
+In all three captures the record started on the first snapshot's message
+(2 on 1.1, 3 on 1.5 and UO). The next message was a full frame, answering
+the recorder's `clc_moveNoDelta` (VERIFIED, `demo_dump`).
+
+`a_retail_framed_demo_plays_and_vcod_writes_it_alike` writes each capture
+again with `RetailDemo`. That writer is separate from vcod's and follows
+sections 2 to 4:
+
+- the opening gamestate at the record point;
+- nothing until a message whose snapshot has delta byte 0, read off the
+  message's plain head;
+- then each message under its own sequence, and the trailer.
+
+The record point and the recorder's `reliableSequence` come off the live
+file's first record, because no server message carries them. VERIFIED (the
+gate) for each patch:
+
+- The opening's plain ops match the server's gamestate past its leading
+  commands, with `serverCommandSequence` the client's. UO's included,
+  whose tank baselines go through the vehicle field table.
+- vcod's recorder, replayed on the same messages, writes `RetailDemo`'s
+  file byte for byte, and so did the live probe.
+- vcod's `demo` plays the file frame for frame as the capture parsed. Its
+  closing configstring table matches, it ends on the trailer and it sends
+  nothing.
+
+| Patch | File | Messages captured | Frames played |
+|---|---|---|---|
+| 1.1 | 33285 bytes | 591 | 590 |
+| 1.5 | 33927 bytes | 592 | 591 |
+| UO | 41411 bytes | 584 | 583 |
+
+### 9.3 1.5 and UO write as 1.1 does
+
+VERIFIED (`objdump` of `CoDMP15.exe` and `CoDUOMP.exe`):
+
+- `CL_WriteDemoMessage` (1.5 `0x40f0a0`, UO `0x40fa10`) writes
+  `clc.serverMessageSequence` (`0x18a9a5c`, `0x4dd899c`), then
+  `cursize - headerBytes`, then the bytes from `headerBytes`, through the
+  same `FS_Write` (`0x42c6e0`, `0x42e290`) as 1.1.
+- `stoprecord` (`0x40f100`, `0x40fa70`) writes the two -1 longs.
+- `CL_PacketEvent` keeps the `readcount` past the netchan in `edi`
+  (`0x4121e5`, `0x413323`). It reads the acknowledge, decodes and parses,
+  then calls the write only while `clc.demorecording` (`0x18ba6c8`,
+  `0x4de9608`) is set and `clc.demowaiting` (`0x18ba6d0`, `0x4de9610`)
+  is clear (`0x412231`..`0x412246`, `0x41336d`..`0x413382`).
+- `record` sets `demowaiting` (`0x40f3b4`, `0x40fd18`), the snapshot parse
+  clears it on a delta of 0 or less (`0x41748f`, `0x41891c`), and
+  `CL_WritePacket` reads it on the no-delta test (`0x40c78d`, `0x40ce82`).
+
+The differences stay those of sections 1 and 3: the `.dm_<n>` number, UO's
+32768-byte buffer and UO's vehicle baselines.
+
+### 9.4 vcod to retail
+
+No retail client runs here: the 1.1, 1.5 and UO clients are Windows
+binaries, and none has been run under Wine. So a retail client has not
+played a vcod demo. That one would is INFERRED from 9.1 and 9.2: vcod
+writes a retail 1.2 recording's opening byte for byte and frames retail's
+messages exactly as retail's writes do.

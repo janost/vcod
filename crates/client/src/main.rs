@@ -193,6 +193,13 @@ struct Args {
     /// Overwrite the committed snapshots.bin fixture only; gamestate.bin stays pinned.
     #[arg(long)]
     save_snapshots: bool,
+    /// Run `record` from the first snapshot into tmp/probe-<tag>.dm_<n> and
+    /// write every server message past the gamestate (not only the snapshot
+    /// ones) as the `--capture-tag` pair in crates/common/tests/fixtures/net/,
+    /// what `net::tests::a_retail_framed_demo_plays_and_vcod_writes_it_alike`
+    /// frames as retail does (cod11-demos.md 9). Needs `--capture-tag`.
+    #[arg(long)]
+    save_demo: bool,
     /// Write the retail server's non-empty configstring table to
     /// crates/server/tests/fixtures/configstrings/<map>-<gametype>.txt, the
     /// fixture crates/server/tests/configstrings_ab.rs diffs against. Separate
@@ -1535,6 +1542,7 @@ fn main() -> Result<()> {
             probe::Save {
                 fixture: args.save_fixture,
                 snapshots: args.save_snapshots,
+                demo: args.save_demo,
                 configstrings: args.save_configstrings,
                 playerstate: args.save_playerstate,
                 motion: args.save_motion,

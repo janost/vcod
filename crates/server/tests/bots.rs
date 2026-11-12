@@ -37,6 +37,7 @@ fn server_on(bots: usize, shoot: bool, gametype: &str) -> Option<(vcod_server::S
         Ok(seed) => vcod_server::Server::with_seed(cfg, now, seed.parse().expect("BOTS_SEED")),
         Err(_) => vcod_server::Server::new(cfg, now),
     };
+    sv.set_cvar("sv_pure", "0");
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     Some((sv, now))

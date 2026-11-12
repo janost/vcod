@@ -198,7 +198,10 @@ Demos:
 - `record [name]` writes retail's demo format (`demos/<name>.dm_1` on 1.1,
   `.dm_2` on 1.5; no name counts up from `demo0000`) with retail's
   `RECORDING` line; `stoprecord` closes it. `demo <name>` plays either back
-  through the online frame, the recorder drawn as a followed player.
+  through the online frame, the recorder drawn as a followed player. It
+  plays the 1.5 install's retail-recorded `Timedemo1.dm_2`. Fed the same
+  messages, vcod's recorder writes the same bytes as retail's layout, gated
+  on a live capture from each retail server.
 - `timedemo 1` steps 50 ms a frame (paced by `com_maxfps`) and prints the
   frame rate. `cl_freezeDemo 1` holds the clock, `nextdemo` runs at the
   end, any key opens the main menu. A missing map is retail's
@@ -227,8 +230,9 @@ Wire and housekeeping:
 - Publishes retail's pak lists and checksums in the systeminfo and serves
   the listed paks at retail's pace. On 1.5 `sv_wwwDownload` redirects to
   `sv_wwwBaseURL`, connected or disconnected, and streams the pak after a
-  failed www transfer. `--set sv_pure=1` checks each client's pak
-  checksums as a pure retail server does.
+  failed www transfer. It checks each client's pak checksums as a pure
+  retail server does: `sv_pure` defaults to 1, as retail's does, and
+  `--set sv_pure=0` turns the check off.
 - `sv_minPing` / `sv_maxPing` refuse off-LAN clients by challenge ping. An
   off-LAN client's messages wait out its rate and `snaps`. Big messages go
   one fragment a frame; a client not in the world gets retail's bare
@@ -351,8 +355,9 @@ Client:
 
 - No PunkBuster; PunkBuster servers refuse vcod.
 - No screenshots, so `cg_autoscreenshot` and `cl_avidemo` do nothing.
-- No CoD1 demo has crossed between vcod and a retail client yet, either
-  way ([cod11-demos.md](../research/cod11-demos.md) 7).
+- No retail client has played a vcod demo; no retail client runs here.
+  vcod plays a retail-recorded demo and writes retail's layout byte for
+  byte ([cod11-demos.md](../research/cod11-demos.md) 9).
 - `deformVertexes text` and `syncNormal` (no stock user) parse and do
   nothing. `portal` draws no portal view. NV/ATI hardware-path stages are
   dropped and three-unit stages give way to the scripts' two-unit ones,
@@ -363,7 +368,6 @@ Client:
 
 Server:
 
-- `sv_pure` defaults to 0 (retail: 1).
 - Stdin runs server commands without retail's tty line editor (no
   history, no tab completion). rcon is refused until
   `--set rconPassword=...`. After `killserver` the process sits there

@@ -289,6 +289,7 @@ fn run_ours(
     // draws are (map-cycle doc 4.8); the spawn picks they feed are retail's
     // own, replayed.
     let mut sv = Server::with_seed(common::cfg(map, probe), now, SEED);
+    sv.set_cvar("sv_pure", "0");
     let gametype = probe.strip_prefix("probe_").unwrap_or(probe);
     sv.pin_spawns(
         roles
