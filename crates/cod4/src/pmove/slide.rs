@@ -94,7 +94,8 @@ pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
             pm.ps.velocity = clip_velocity(pm.ps.velocity, pml.ground_trace.normal);
         }
     }
-    let mut time_left = d(pml.frametime);
+    // Stored as a float each bump (0x805e0f7, 0x805e6e9).
+    let mut time_left = pml.frametime;
     let mut planes: Vec<Vec3> = Vec::with_capacity(MAX_CLIP_PLANES + 1);
     if pml.ground_plane {
         planes.push(pml.ground_trace.normal);
@@ -103,7 +104,7 @@ pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
 
     let mut bumps = 0;
     while bumps < 4 {
-        let end = fpu::ma_kept(pm.ps.origin, time_left, pm.ps.velocity);
+        let end = fpu::ma_kept(pm.ps.origin, d(time_left), pm.ps.velocity);
         let t = pm.trace(pm.ps.origin, end);
         if t.allsolid {
             pm.ps.velocity.z = 0.0;
@@ -116,7 +117,7 @@ pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
             break;
         }
         pm.add_touch(t.entity_num);
-        time_left -= time_left * d(t.fraction);
+        time_left = (d(time_left) - d(t.fraction) * d(time_left)) as f32;
         if planes.len() >= MAX_CLIP_PLANES {
             pm.ps.velocity = Vec3::ZERO;
             return true;

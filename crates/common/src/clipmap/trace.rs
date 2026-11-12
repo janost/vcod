@@ -95,18 +95,33 @@ pub(super) struct Sweep {
 const REACH_SLACK: f32 = 1.0;
 
 impl Sweep {
-    fn new(start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> Sweep {
+    /// `kept` is CoD4 1.7's set-up (`CM_Trace`, `cod4_lnxded`
+    /// 0x811ce9f..0x811cfb8): the box's centre offset and the shifted end
+    /// stay on the x87 stack, so the sweep is the unrounded end less the
+    /// stored start, rounded once (cod4-collision.md 2). CoD2 1.3 stores
+    /// each (0x0805b414).
+    fn new(start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32, kept: bool) -> Sweep {
         let mut sw = Sweep {
             mask,
             ..Sweep::default()
         };
         for k in 0..3 {
-            let off = (0.5 * (f64::from(mins[k]) + f64::from(maxs[k]))) as f32;
-            sw.half_box[k] = maxs[k] - off;
-            sw.start[k] = start[k] + off;
-            sw.end[k] = end[k] + off;
-            sw.mid[k] = (0.5 * (f64::from(sw.start[k]) + f64::from(sw.end[k]))) as f32;
-            sw.sweep[k] = sw.end[k] - sw.start[k];
+            let off = 0.5 * (f64::from(mins[k]) + f64::from(maxs[k]));
+            if kept {
+                sw.half_box[k] = (f64::from(maxs[k]) - off) as f32;
+                sw.start[k] = (f64::from(start[k]) + off) as f32;
+                let end_kept = f64::from(end[k]) + off;
+                sw.end[k] = end_kept as f32;
+                sw.mid[k] = ((f64::from(sw.start[k]) + end_kept) * 0.5) as f32;
+                sw.sweep[k] = (end_kept - f64::from(sw.start[k])) as f32;
+            } else {
+                let off = off as f32;
+                sw.half_box[k] = maxs[k] - off;
+                sw.start[k] = start[k] + off;
+                sw.end[k] = end[k] + off;
+                sw.mid[k] = (0.5 * (f64::from(sw.start[k]) + f64::from(sw.end[k]))) as f32;
+                sw.sweep[k] = sw.end[k] - sw.start[k];
+            }
             sw.half_sweep[k] = 0.5 * sw.sweep[k];
             sw.half_sweep_abs[k] = sw.half_sweep[k].abs();
         }
@@ -199,7 +214,7 @@ impl<'a> Cx<'a> {
         Cx {
             map,
             stamps,
-            sw: Sweep::new(start, end, mins, maxs, mask),
+            sw: Sweep::new(start, end, mins, maxs, mask, map.indexed.is_some()),
         }
     }
 

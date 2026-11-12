@@ -573,11 +573,6 @@ fn cod4_prone_death_ab() {
 const KCENT_GAPS: &[(&str, &str)] = &[
     ("* entity *:3", ITEM),
     (
-        "target ps origin",
-        "the dead body's slide off the push: velocity matches every snapshot, but \
-         x runs 0.0007 ahead from its first 50 ms (cod4-combat.md 15)",
-    ),
-    (
         "target ps viewangles[1]",
         "the killcam's archived view: ours keeps the shooter's spawn yaw 90 where \
          its live view after `setviewpos` reads 0 (cod4-combat.md 7)",

@@ -894,35 +894,26 @@ const EFLAGS_PMOVE: u32 = 0x20_000c;
 /// the entry shrinks.
 const WALK_GAPS: &[(&str, usize, &str)] = &[
     // The spawn's drop lands a bit under retail (`placeSpawnPoint`), and
-    // from 48000 on the free run's z drifts a bit or two on the terrain as
+    // the free run's z drifts a bit or two on the terrain as
     // `cod4_moves_ab`'s free run does: the trace kernels' float model.
-    ("origin[2]", 715, "cod4-pmove.md 13.2, the float model"),
+    ("origin[2]", 374, "cod4-pmove.md 13.2, the float model"),
     (
         "velocity[2]",
         20,
         "cod4-pmove.md 13.2, the sign of a zero vz",
     ),
-    // From 70300 the step onto a 0.78 brush slope lands 0.01 off and the
-    // run never resyncs: every later row's x and y keep it.
+    // From 70300 the step onto a 0.78 brush slope lands a few ulps off and
+    // the run never resyncs: every later row's x keeps it.
     ("origin[0]", 341, "cod4-pmove.md 13.2, the steep step"),
-    ("origin[1]", 334, "cod4-pmove.md 13.2, the steep step"),
 ];
 
 /// What the walker's body, as the spectator is sent it, still gets wrong:
 /// (word, rows, why).
-const BODY_GAPS: &[(&str, usize, &str)] = &[
-    // The truncated origin crosses a unit where the free run's x is 0.04
-    // off after the steep step.
-    (
-        "lerp.pos.trBase[0]",
-        2,
-        "cod4-pmove.md 13.2, the steep step",
-    ),
-];
+const BODY_GAPS: &[(&str, usize, &str)] = &[];
 
 /// How far the walker's origin may stray from retail's: the steep step's
-/// 0.04 (`cod4_moves_ab`'s free run, cod4-pmove.md 13.1).
-const WALK_MAX_ERROR: f32 = 0.05;
+/// 0.0083 (cod4-pmove.md 15.1).
+const WALK_MAX_ERROR: f32 = 0.01;
 
 /// One walk replay row's differences: the walker's own words, and its
 /// teammate's body (entity 0) where both snapshots carry it.
