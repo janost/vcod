@@ -14,6 +14,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("assertex", developer_statement),
     ("assertmsg", developer_statement),
     ("issplitscreen", is_split_screen),
+    ("istalking", is_talking),
     ("precacheitem", precache_item),
     ("precacheturret", precache_turret),
     ("spawnturret", spawn_turret),
@@ -95,6 +96,24 @@ fn is_split_screen(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     Ok(Value::Int(0))
+}
+
+/// `self isTalking()` (`PlayerCmd_IsTalking` 0x80fd15a): a voice frame
+/// relayed within `g_voiceChatTalkingDuration` (500 ms) of `level.time`, a
+/// negative age not (cod2-voice.md 3).
+fn is_talking(
+    host: &mut GameHost,
+    _: &mut Cx,
+    recv: Option<Target>,
+    _: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let window = crate::game::builtins::cvar::atoi(host.cvars.get("g_voiceChatTalkingDuration"));
+    let now = host.level_time_ms;
+    let on = host.cod2().clients[slot]
+        .last_voice_time
+        .is_some_and(|t| (0..window).contains(&(now - t)));
+    Ok(Value::Int(i32::from(on)))
 }
 
 /// CoD2's weapon index for `name`, registering it on first use: CoD2 has no

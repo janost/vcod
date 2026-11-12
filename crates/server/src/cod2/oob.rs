@@ -54,6 +54,12 @@ pub(super) const ENGINE_CVARS: &[(&str, &str)] = &[
     ("sv_wwwDlDisconnected", "0"),
     // `SV_Init`: 300 s, 0..3600 (`Dvar_RegisterFloat`, 17.7).
     ("sv_kickBanTime", "300"),
+    // `G_InitGame` (Mac 0x1addca) registers the relay's rules and `isTalking`'s
+    // window (cod2-voice.md 3).
+    ("voice_global", "0"),
+    ("voice_localEcho", "0"),
+    ("voice_deadChat", "0"),
+    ("g_voiceChatTalkingDuration", "500"),
     // Where `download` finds its files: the install, set by `main.rs`.
     ("fs_basepath", ""),
 ];
@@ -176,6 +182,11 @@ fn line(payload: &[u8]) -> String {
 
 impl Cod2Server {
     pub(super) fn connectionless(&mut self, from: SocketAddr, payload: &[u8], now: Instant) {
+        // `v` and the binary rest past its line (`SV_VoicePacket`, 1.7).
+        if let Some(body) = vcod_cod2::net::voice::oob_body(payload) {
+            self.voice_packet(from, body);
+            return;
+        }
         let text = line(payload);
         let args = crate::game::say::tokenize(&text);
         self.game.argv1 = args.get(1).cloned().unwrap_or_default();

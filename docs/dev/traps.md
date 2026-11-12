@@ -748,6 +748,10 @@ otherwise.
 - A weapon file key takes its first value: appending `\key\value` to a
   stock file whose key is already there, empty, changes nothing
   (`weapon::parse`).
+- Voice packets carry the qport, and retail's `SV_VoicePacket` reads it as
+  a signed short: a client on qport 0x8000 or more is never heard. A probe
+  or client that talks keeps its qport below that, and two clients of one
+  process need two qports (cod2-voice.md 3, 6).
 
 ## CoD4 1.7
 

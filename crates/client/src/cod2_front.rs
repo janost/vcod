@@ -312,14 +312,15 @@ pub(crate) fn connect_lines(
     }
 }
 
-/// The connect's options off the console: the userinfo dvars,
-/// `cl_allowDownload`, and `fs`'s install as the homepath.
+/// The connect's options off the console: the userinfo dvars (`cl_voice`
+/// among them), `cl_allowDownload`, and `fs`'s install as the homepath.
 pub(crate) fn connect_opts(
     shell: &crate::console::shell::Shell,
     fs: &vcod_common::pk3::Pk3Fs,
 ) -> ConnectOpts {
     ConnectOpts {
         allow_download: shell.cvar_f32("cl_allowDownload") != 0.0,
+        voice: shell.cvar_f32("cl_voice") != 0.0,
         ..ConnectOpts::new("", fs)
     }
     .with_userinfo(&shell.userinfo())

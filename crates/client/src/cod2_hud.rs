@@ -23,6 +23,7 @@ use vcod_common::localize::Localized;
 use vcod_common::net::protocol::CsRange;
 use vcod_common::pk3::Pk3Fs;
 
+pub use crate::cod2_player_hud::VoiceShown;
 use crate::cod2_player_hud::{HudInput, PlayerHud};
 use crate::hud::centerprint::{CenterPrint, OBITUARY_Y};
 use crate::hud::chat::{self, Chat};
@@ -172,6 +173,8 @@ pub struct Cod2Hud {
     arenas: Option<Vec<crate::frontend::create::Arena>>,
     /// The cgame dvars the app reads each frame ([`HudDvars::read`]).
     pub dvars: HudDvars,
+    /// Voice chat's icons and talkers, set by the session each frame.
+    pub voice: VoiceShown,
 }
 
 /// The CoD2 cgame's archived HUD dvars vcod honours, read each frame as
@@ -269,6 +272,7 @@ impl Default for Cod2Hud {
             game_types: None,
             arenas: None,
             dvars: HudDvars::default(),
+            voice: VoiceShown::default(),
         }
     }
 }
@@ -574,6 +578,7 @@ impl Cod2Hud {
             draw_gun: self.draw_gun,
             stance_keys: self.dvars.stance_keys.as_ref().map(|_| &lookup as _),
             hint_fade_ms: self.dvars.hint_fade_ms,
+            voice: &self.voice,
         };
         self.chat.set_rules(self.dvars.chat);
         self.player
@@ -670,6 +675,7 @@ impl Cod2Hud {
             hostname: info("sv_hostname"),
             address: None,
             status_icon: &status_icon,
+            voice: &|n| self.voice.board_icon(n),
         };
         let v = Virtual::new((w, h));
         self.chat
@@ -911,9 +917,106 @@ mod tests {
             hostname: "retail",
             address: None,
             status_icon: &|_| None,
+            voice: &|_| None,
         };
         let mut out = Vec::new();
         assert!(board.build(&view, &fonts, &Virtual::new((640.0, 480.0)), &mut out));
         assert_eq!(board.rows_drawn(), 2);
+        assert!(
+            !out.iter().any(|q| q.texture.starts_with("voice_")),
+            "no talker, no mute: an empty voice column"
+        );
+        // On CoD2's board client 1 talking draws `voice_on` 13 x 13 at the
+        // voice column's left of his row; muting him draws `voice_off` in
+        // its place.
+        board.style = &scoreboard::COD2;
+        let mut shown = VoiceShown {
+            own: false,
+            talkers: vec![1],
+            muted: 0,
+        };
+        for (muted, icon) in [(0, "voice_on"), (1 << 1, "voice_off")] {
+            shown.muted = muted;
+            let voice = |n: u32| shown.board_icon(n);
+            let view = BoardView {
+                voice: &voice,
+                ..view
+            };
+            let mut out = Vec::new();
+            assert!(board.build(&view, &fonts, &Virtual::new((640.0, 480.0)), &mut out));
+            let icons: Vec<&HudQuad> = out
+                .iter()
+                .filter(|q| q.texture.starts_with("voice_"))
+                .collect();
+            assert_eq!(icons.len(), 1, "{icon}");
+            assert_eq!(icons[0].texture, icon);
+            let xs = icons[0].verts.map(|v| v[0]);
+            let ys = icons[0].verts.map(|v| v[1]);
+            let span = |a: [f32; 4]| {
+                a.iter().fold(f32::MIN, |m, &v| m.max(v))
+                    - a.iter().fold(f32::MAX, |m, &v| m.min(v))
+            };
+            assert!(
+                (span(xs) - 13.0).abs() < 0.01 && (span(ys) - 13.0).abs() < 0.01,
+                "{:?}",
+                icons[0].verts
+            );
+        }
+    }
+
+    /// The `amitalking` and `talkers` menus of the stock `hud.menu`: the
+    /// talk icon while we talk, then a `voice_on` and the name of each
+    /// talker in turn, none for a free spectator (`CG_Draw2D` paints the
+    /// HUD menus only past `pm_type` 4).
+    #[test]
+    fn the_talker_list_names_each_talker() {
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let loc = Localized::load(&fs);
+        let clients = vec![client(0, "vcodplay", 0), client(3, "^1talker", 0)];
+        let draw = |pm_type: u32, voice: VoiceShown| {
+            use vcod_cod2::net::fields::PLAYER_STATE_FIELDS;
+            let mut ps = vcod_cod2::net::PlayerState2::default();
+            ps.f[field_index(&PLAYER_STATE_FIELDS, "pm_type")] = pm_type;
+            let snap = vcod_cod2::net::SnapshotView::new(
+                &vcod_cod2::net::Snapshot2 {
+                    message_num: 1,
+                    server_time: 1000,
+                    delta_num: -1,
+                    snap_flags: 0,
+                    valid: true,
+                    ps_lc: 0,
+                    ps,
+                    entities: Vec::new(),
+                    clients: clients.clone(),
+                },
+                0,
+            );
+            let cs = vcod_cod2::net::ConfigStrings::default();
+            let f = Frame {
+                snap: &snap,
+                prev: None,
+                time_ms: 1000,
+                frac: 1.0,
+                configstrings: &cs,
+            };
+            let mut hud = Cod2Hud {
+                voice,
+                ..Cod2Hud::default()
+            };
+            hud.build(&f, &fs, &loc, (640.0, 480.0), 1000, 0.0)
+        };
+        let voice = VoiceShown {
+            own: true,
+            talkers: vec![3],
+            muted: 0,
+        };
+        let out = draw(0, voice.clone());
+        let icons = out.iter().filter(|q| q.texture == "voice_on").count();
+        assert_eq!(icons, 2, "our own icon and the talker's");
+        // The free spectator's HUD draws no menus.
+        let out = draw(4, voice);
+        assert!(!out.iter().any(|q| q.texture == "voice_on"));
     }
 }

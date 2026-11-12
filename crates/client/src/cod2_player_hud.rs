@@ -47,6 +47,37 @@ mod od {
     pub const OFFHAND_NAME_FRAG: i32 = 104;
     pub const OFFHAND_NAME_SMOKE: i32 = 105;
     pub const LOW_HEALTH_OVERLAY: i32 = 109;
+    /// `UI_AMITALKING` and `UI_TALKER1`..`UI_TALKER4`, the `amitalking`
+    /// and `talkers` menus' (UI owner draws, `UI_OwnerDraw` Mac 0x1536b2).
+    pub const AM_TALKING: i32 = 266;
+    pub const TALKER1: i32 = 267;
+    pub const TALKER4: i32 = 270;
+}
+
+/// What voice chat shows this frame (`crate::voice`, cod2-voice.md 5): the
+/// local talk icon, the talking clients by number, the muted ones as bits.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VoiceShown {
+    /// `UI_AMITALKING`'s test ([`crate::voice::cod2_own_talking`]).
+    pub own: bool,
+    /// `CL_IsPlayerTalking`'s clients, ascending.
+    pub talkers: Vec<u32>,
+    /// `CL_IsPlayerMuted`: bit `n` for client `n`.
+    pub muted: u64,
+}
+
+impl VoiceShown {
+    /// The scoreboard's voice icon for `client` (`CG_DrawClientScore`, Mac
+    /// 0x1c51b2): `voice_off` muted, else `voice_on` talking, else none.
+    pub fn board_icon(&self, client: u32) -> Option<&'static str> {
+        if client < 64 && self.muted >> client & 1 != 0 {
+            Some("voice_off")
+        } else if self.talkers.contains(&client) {
+            Some("voice_on")
+        } else {
+            None
+        }
+    }
 }
 
 /// `pm_type`: 4 spectator, 5 intermission, 6 dead.
@@ -504,6 +535,33 @@ pub struct HudInput<'a> {
     pub stance_keys: Option<&'a KeyLookup>,
     /// `cg_hintFadeTime`, ms: a cursor hint's life past its last frame.
     pub hint_fade_ms: i32,
+    /// Voice chat's icons and talkers.
+    pub voice: &'a VoiceShown,
+}
+
+/// One row of the talker list (`UI_OwnerDraw` 267..270, Mac 0x1536b2):
+/// `voice_on` in the item's rect, then the talker's cleaned name
+/// (`UI_BuildPlayerList`) 2 past its right edge at the item's text scale,
+/// centred on its height. A talker the player list lacks gets the icon
+/// alone (retail reads the row before the list's first, INFERRED).
+fn talker(item: &Item, frame: &Frame, client: u32, cx: &Ctx, out: &mut Vec<HudQuad>) {
+    let [x, y, w, h] = item.rect;
+    cx.pic(item.rect, item.align, item.fore, "voice_on", out);
+    let Some(c) = frame.snap.clients.iter().find(|c| c.number == client) else {
+        return;
+    };
+    let name = vcod_common::text::clean_str(&c.name());
+    let th = cx.height(item.text_scale).floor();
+    let base = th + y + (h - th) * 0.5;
+    cx.text(
+        &name,
+        x + w + 2.0,
+        base,
+        item.align,
+        item.text_scale,
+        item.fore,
+        out,
+    );
 }
 
 /// `CG_DrawPlayerStance`'s hint commands (Mac 0x36de80, 0x36de20,
@@ -1211,6 +1269,7 @@ impl PlayerHud {
             draw_gun: true,
             stance_keys: None,
             hint_fade_ms: 100,
+            voice: &VoiceShown::default(),
         };
         let weap = self.weapons.get(self.shown_weapon(ps, &input))?;
         let clip = if weap.def.flag("clipOnly") {
@@ -1399,6 +1458,14 @@ impl PlayerHud {
             od::OFFHAND_AMMO_SMOKE => self.offhand(item, ps, cx, 2, Offhand::Count, out),
             od::OFFHAND_NAME_FRAG => self.offhand(item, ps, cx, 1, Offhand::Name, out),
             od::OFFHAND_NAME_SMOKE => self.offhand(item, ps, cx, 2, Offhand::Name, out),
+            // `voice_on` while the talk key is held with voice on.
+            od::AM_TALKING if input.voice.own => cx.pic(item.rect, al, item.fore, "voice_on", out),
+            od::TALKER1..=od::TALKER4 => {
+                let n = (item.ownerdraw - od::TALKER1) as usize;
+                if let Some(&client) = input.voice.talkers.get(n) {
+                    talker(item, frame, client, cx, out);
+                }
+            }
             _ => {}
         }
     }

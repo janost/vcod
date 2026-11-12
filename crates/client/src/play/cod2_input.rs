@@ -106,6 +106,11 @@ fn slot_weapon(ps: &PlayerState2, slot: usize) -> u8 {
 }
 
 impl Cod2Input {
+    /// Whether `action`'s key is held (`+talk` for voice chat).
+    pub fn held(&self, action: Action) -> bool {
+        self.down.contains(&action)
+    }
+
     /// A `+button` bind's edge.
     pub fn key(&mut self, action: Action, pressed: bool) {
         let was = self.down.contains(&action);

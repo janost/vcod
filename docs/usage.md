@@ -391,6 +391,12 @@ Client:
   its team and weapon menus, or spectates. `--team` and `--weapon`
   (e.g. `thompson_mp`) answer them. X or Esc's menu picks another weapon
   for the next spawn. A map change loads the new map.
+- Voice chat on a server with `sv_voice 1`: hold Z (`+talk`) to talk
+  (needs the system's libspeex and a `rate` of 5000 or more); `cl_voice 0`
+  turns it off both ways. The scoreboard marks talkers and muted players,
+  the talker list shows at the top left, and Esc's Mute Players
+  menu mutes a player for the session. `VCOD_VOICE_INPUT=tone` sends a
+  440 Hz tone instead of the microphone.
 - `vcod <map>` flies a map.
 - Other modes (`--walk`, `--list`) exit with an error.
 
@@ -405,6 +411,10 @@ Server (`vcod-server <map> --game cod2`, or a CoD2 install):
   retail does.
 - Serves a non-stock iwd in its `main/` to a client that lacks it.
 - Runs the cheat commands under `sv_cheats 1`.
+- Relays voice chat under `sv_voice 1` (default 0) at `sv_voiceQuality`
+  (0-9, default 1) to the talker's team; `voice_global 1` to everyone,
+  `voice_deadChat 1` across the living and the dead, `voice_localEcho 1`
+  back to the talker.
 - Bots play every stock gametype ([bots.md](bots.md#cod2)).
 
 ### CoD4

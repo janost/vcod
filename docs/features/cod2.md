@@ -164,6 +164,13 @@ overlay), other players' and turrets' on theirs, a bolt action's brass
 at the rechamber. A shot's flash waits for its body's next draw, as
 retail's flag does (6.8).
 
+**Voice chat** ([cod2-voice.md](../research/cod2-voice.md)). `+talk` (Z)
+sends the microphone through the system's libspeex (narrowband at
+CoD2's 8192 Hz, the server's `sv_voiceQuality`); each talker plays on a
+stream of his own. The talk icon, the talker list, the scoreboard's voice
+column and the `muteplayer` menu's mute list work as retail's. Without
+libspeex nothing is sent or played.
+
 **Demos** ([cod2-demos.md](../research/cod2-demos.md)). `record` and
 `stoprecord` write CoD2's `.dm_1` in a game. `demo <name>` and `timedemo
 <name>` play one through the session's frame, unpredicted. `timedemo`
@@ -255,6 +262,10 @@ Joined clients follow.
 
 **Client commands and rcon** (cod2-protocol.md 3.4.2, 17.7):
 
+- Voice chat's relay under `sv_voice 1`: a talker's frames reach his
+  team (everyone in dm, the dead only the dead), `voice_global`,
+  `voice_deadChat` and `voice_localEcho` as retail's, `muteplayer` and
+  `unmuteplayer`, `isTalking` (cod2-voice.md 3).
 - Chat, `score`, `kill`, `where`, the spectator's follow (`follownext`,
   `followprev`, attack and sight; the follower gets the followed
   player's playerstate).
@@ -306,27 +317,27 @@ stock content. Most need `COD2_DIR` and pass vacuously without it.
 
 Ranked by how much a player notices, worst first.
 
-1. **Voice chat.** Neither the client nor the server carries voice. The
-   scoreboard's voice column stays empty and there is no mute list
-   ([cod2-hud.md](../research/cod2-hud.md) 12). Shout across the room,
-   as LAN parties always did.
-2. **PunkBuster and CD key checks.** vcod runs no PunkBuster. vcod-server
+1. **PunkBuster and CD key checks.** vcod runs no PunkBuster. vcod-server
    never asks the authorize server: an off-LAN client gets its challenge
    at once and its IP stands in for its ban guid. It does not send the
    master the status retail sends every 10 minutes. The client reads no
    CD key from the registry; set `VCOD_CDKEY`
    ([usage.md](../usage.md), "CD keys").
-3. **Demo and follow eyes.** A demo or a followed player's eye is the
+2. **Demo and follow eyes.** A demo or a followed player's eye is the
    snapshot's, lerped, without retail's bob and landing dip; a followed
    one also lacks the step smoothing, which retail's demo skips too
    ([cod2-demos.md](../research/cod2-demos.md) 7). Retail's front end has
    no demo list, and vcod none either.
-4. **Server odds and ends.** `give all` hands over every weapon the level
+3. **Server odds and ends.** `give all` hands over every weapon the level
    registered, not retail's slot rule. Downloads serve only `.iwd` files
    under the game dir, where retail serves any file.
+4. **Voice options.** The Windows mixer dvars (`winvoice_mic_reclevel`,
+   `winvoice_mic_mute`, `winvoice_mic_scaler`), `winvoice_save_voice` and
+   the options page's record level meter do nothing
+   ([cod2-voice.md](../research/cod2-voice.md) 7).
 
 Pending human checks: the in-game script menus have not been checked on
-a GPU, and sound has not been compared by ear.
+a GPU, and sound and voice chat have not been compared by ear.
 
 ## Beyond retail
 
