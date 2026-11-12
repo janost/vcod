@@ -360,3 +360,88 @@ has no row: `com_maxfps` 85 (vcod's for a day, then 0), `rate` 5000
 against each default it was ever registered with; nothing else in the
 client registers an archived cvar. A default change to an archived cvar
 adds a row and bumps `CONFIG_VERSION`.
+
+## 9. Stance commands
+
+`CL_InitInput` (`0x40bf90`) registers the stance commands through the
+registrar `0x428840`. VERIFIED, the pairs of string and handler:
+
+| Command | Handler |
+|---|---|
+| `+moveup`, `-moveup` | `0x40a670`, `0x40a6e0` |
+| `+movedown`, `-movedown` | `0x40a700`, `0x40a750` |
+| `+prone`, `-prone` | `0x40aa60`, `0x40aab0` |
+| `lowerstance`, `raisestance` | `0x40ab80`, `0x40abe0` |
+| `togglecrouch`, `toggleprone` | `0x40ac40`, `0x40ac90` |
+| `goprone`, `gocrouch` | `0x40ace0`, `0x40ad10` |
+| `+gostand`, `-gostand` | `0x40ad40`, `0x40adc0` |
+
+The button records are 0x18 bytes with the `active` word at +0x10. VERIFIED
+off the handlers' loads: `+prone` holds `0x87a2b0` (`active` `0x87a2c0`),
+`+movedown` `0x87a130` (`0x87a140`), `+moveup` and `+gostand` both
+`0x87a148`, and the jump record is `0x87a118`. `cl_stance` is the cvar
+pointer `0x142f5e8`, set by name through `Cvar_Set` (`0x439650`, the string
+at `0x5685c8`) with `"0"`, `"1"` or `"2"` (`0x56871c`, `0x5685e4`,
+`0x5685c4`).
+
+VERIFIED, what each handler does:
+
+- `+prone`, `-prone`, `+movedown`, `-movedown`: press or release their
+  record (`0x40a490`, `0x40a510`), then set `cl_stanceTemp` to `"1"` when
+  either `active` word is set and to `"0"` otherwise. They never touch
+  `cl_stance`.
+- Every handler below tests the two `active` words first and leaves
+  `cl_stance` alone when either is set.
+- `gocrouch` sets 1, `goprone` 2.
+- `togglecrouch`: 0 from 1, else 1, so prone goes to crouched.
+  `toggleprone`: 0 from 2, else 2.
+- `lowerstance`: 1 from below 1, 2 from 1, nothing from 2. `raisestance`: 1
+  from above 1, 0 from 1, nothing from 0.
+- `+moveup` presses `0x87a148` whatever is held; with neither key held it
+  sets 1 from above 1, 0 from 1, and from 0 presses the jump record.
+- `+gostand` presses `0x87a148`. With `cl_goStandJumpTime` (the pointer
+  `0x142f5ec`, registered with `"0"` and flag 1) at 0 or below, it presses
+  the jump record when `cl_stance` is 0, whatever is held, and otherwise
+  sets 0 unless a key is held. Above 0, a press within that many
+  milliseconds of the last stand (`0x163b3f0` less the stamp at
+  `0x140744c`) jumps, and any other press stamps the time and sets 0.
+- `-moveup` and `-gostand` both release `0x87a148` and the jump record.
+
+VERIFIED, the cmd (`CL_KeyMove`'s stance part, `0x40ae90`): a set
+`+prone` `active` writes `wbuttons` 0x40 with 0x2; else a set `+movedown`
+`active` writes 0x80 with 0x2; else `cl_stance` 1 writes 0x80, 2 writes
+0x40 and 0 neither, each with 0x2 clear. `upmove` starts at
+`CL_KeyState(0x87a148) * 127` only while the word at `0x1432984` is 2, 3
+or 4, adds `CL_KeyState(jump) * 127` (the float at `0x56906c`), then with
+the crouch bit from the held key adds `CL_KeyState(movedown) * -127`
+(`0x569070`), and with the crouch bit from `cl_stance` or the prone bit
+subtracts 127. The sum is clamped to a signed byte (`0x40b07a`) and
+skipped on a mounted gun (`eFlags` 0xc000).
+
+INFERRED from the above: a held key's stance lasts only while it is held,
+and the release goes back to `cl_stance` as it was, since nothing on the
+press or release writes it and the forced-stance events skip it while
+`cl_stanceTemp` is 1 (cod11-mantle.md, "The forced-stance events"). A
+standing `+movedown` with `+gostand` held sends `upmove` 0: the jump's
+127 and the crouch's -127 add.
+
+VERIFIED, 1.5 `CoDMP.exe` and UO `CoDUOMP.exe` register the same commands
+with handlers of the same shape: 1.5 `+moveup` `0x40b180`, `+movedown`
+`0x40b210`, `+prone` `0x40b570`, `lowerstance` `0x40b690` through
+`+gostand` `0x40b850`; UO `0x40b740`, `0x40b7d0`, `0x40bb30`, `0x40bc50`
+through `0x40bdf0`. The held-key tests read 1.5's `0x8bbcf0` and
+`0x8bbb70`, UO's `0x8ce090` and `0x8cdf10`. The stance part of the cmd is
+1.1's, mask for mask (1.5 `0x40b9a0`, UO `0x40bf40`). UO's
+`CL_CmdButtons` also ORs `wbuttons` 0x40 while the prone record is active
+or was pressed this frame (`0x40c851`..`0x40c867`). INFERRED: the
+`upmove` part and the order of the two in UO's cmd builder were not read;
+the held case reads the same either way.
+
+CoD2 1.3 and CoD4 1.7 keep the same handlers (`cod2-protocol.md` 4,
+`cod4-pmove.md` 8).
+
+vcod: `play::input::stance_press` is the table above for every game,
+`PlayInput::build` the cmd. Not modelled: `cl_goStandJumpTime` above 0,
+the share of the frame a key was held (a held key sends the full 127),
+the `0x87a148` term for a noclip, UFO or spectator body, and the writes to
+`cl_stanceTemp`: vcod's forced-stance gate reads the cvar or a held key.

@@ -303,8 +303,22 @@ surface, as on CoD2 (bot-objectives.md 12.15). INFERRED.
   and prone bits come off `cl.stance`, and a sprint ends on either
   (0xc735 above), so a client that kept its crouch through the forced
   stand crouched again a cmd later; vcod's had (`Cod4Session::force_stance`,
-  `cod4_live_sprint_out_of_a_crouch_stays_standing`). vcod binds no
-  `+prone` or `+movedown`, so the held-key test has nothing to read.
+  `cod4_live_sprint_out_of_a_crouch_stays_standing`). vcod's
+  `Cod4Input::set_stance` makes the same held-key test.
+- The stance binds (`CL_InitInput`'s registrations from 0x4644e5):
+  `+prone` / `-prone` (0x462c60, 0x462c70) and `+movedown` / `-movedown`
+  (0x462920, 0x462930) only press and release their kbutton (0x8f16f8,
+  0x8f15f4). `lowerstance` (0x462e20), `raisestance` (0x462e60),
+  `togglecrouch` (0x462ea0), `toggleprone` (0x462ed0), `goprone`
+  (0x462f00), `gocrouch` (0x462f20), `+moveup` (0x4628a0) and `+gostand`
+  (0x462f40) move `cl.stance` as 1.1's do (cod11-console.md 9), each
+  leaving it alone while either held key's byte is set; `lowerstance`,
+  `raisestance`, `+moveup` and `+gostand` also do nothing below connection
+  state 5 (0xc5f900). `CL_KeyMove` (0x4631b0) sends a held `+prone` as
+  0x100 with 0x1000, else a held `+movedown` as 0x200 with 0x1000, else
+  `cl.stance` with 0x1000 clear (0x463160), after the `+stance` hold timer
+  (0x463205..0x46323a). VERIFIED (the disassembly). vcod sends all of
+  these but the `+stance` timer (`play::cod4_input`).
 - `PM_CheckDuck`'s stance keys (0x8058952..0x80592e3): a gunner takes
   the turret's stance off `eFlags` 0x300; `pm_flags` 0xc00 keeps the
   stance; `pm_type` 6 crouches; on a ladder the stance keys are dropped

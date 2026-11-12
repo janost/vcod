@@ -74,7 +74,10 @@ Joining:
 Playing:
 
 - Move, jump, crouch, prone, lean, fire, sight, reload, melee, use and
-  switch weapons on retail's default binds. A usercmd is built every
+  switch weapons on retail's default binds. Every stance bind the Options
+  menu offers works as retail's: held crouch and prone (`+movedown`,
+  `+prone`), `+moveup`, `togglecrouch`, `toggleprone`, `lowerstance` and
+  `raisestance`. A usercmd is built every
   8 ms, like a 125 fps retail client, sent at `cl_maxpackets` 30 with
   `cl_packetdup` 1 off the LAN.
 - Keeps its own weapon selection as `cg_weaponSelect` does: answers the
