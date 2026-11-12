@@ -6,8 +6,9 @@
 //! animtree through `vcod_cod2::player`'s body), `G_DamageClient`'s weapon
 //! location multipliers into `CodeCallback_PlayerDamage`, and the
 //! playerstate half of `finishPlayerDamage` and `player_die`
-//! ([`Damage4`], queued by `builtins::cod4_combat`), `P_DamageFeedback`
-//! at the end frame, and the weapons `dropItem` puts in the world
+//! ([`Damage4`], queued by `builtins::cod4_combat` and applied when the
+//! callback returns), `P_DamageFeedback` at the end frame, and the weapons
+//! `dropItem` puts in the world
 //! ([`Item4`]).
 //!
 //! `cod4_combat_ab` compares the result with the kill capture.
@@ -108,7 +109,8 @@ pub mod ev {
 }
 
 /// One `finishPlayerDamage`'s playerstate half, applied by the level on its
-/// victim ([`Cod4Level::apply_damage_ops`]).
+/// victim ([`Cod4Level::apply_damage_ops`]) as soon as the gsc call that
+/// queued it returns: retail writes it inside the call (cod4-combat.md 4).
 #[derive(Clone, Debug)]
 pub struct Damage4 {
     pub slot: usize,
@@ -1180,10 +1182,7 @@ impl Cod4Level {
     /// Then the live grenades `player_die` dropped.
     pub(super) fn apply_damage_ops(&mut self) {
         let ops = std::mem::take(&mut self.rt.host.cod4_mut().damage_ops);
-        let g_knockback = match self.rt.host.cvars.get("g_knockback") {
-            "" => DEFAULT_KNOCKBACK,
-            v => crate::game::builtins::cvar::atof(v),
-        };
+        let g_knockback = g_knockback(&self.rt.host.cvars);
         for op in ops {
             let health = self.rt.client_vitals(op.slot).health;
             let Some(p) = self.players[op.slot].as_mut() else {
@@ -1554,27 +1553,65 @@ const MAX_DAMAGE_TIMER: i32 = 750;
 const MAX_DAMAGE_COUNT: i32 = 127;
 const DAMAGE_COUNT_MS: i32 = 500;
 
-/// The push a hit of `damage` from along `dir` gives `ps`: a share of the
-/// damage by stance (0.3 standing, 0.15 crouched, 0.02 prone), truncated
-/// and capped, as speed scaled by `g_knockback` over the body's mass. Not
-/// on a turret. A push starts the knockback timer, twice the push in ms
-/// within its bounds, unless a `pm_time` already runs (cod4-combat.md 4).
-fn knock_back(ps: &mut vcod_cod4::pmove::PlayerState, damage: i32, dir: Vec3, g_knockback: f32) {
+/// The push a hit of `damage` from along `dir` gives a body with these
+/// `pm_flags` and `eFlags`, added to `velocity`: a share of the damage by
+/// stance (0.3 standing, 0.15 crouched, 0.02 prone), truncated and capped,
+/// as speed scaled by `g_knockback` over the body's mass, each component
+/// summed on the x87 stack and stored once; none on a turret
+/// (`cod4_lnxded` 0x80aca21..0x80aca9b). The push, or `None` for none.
+pub(crate) fn knockback(
+    velocity: &mut [f32; 3],
+    pm_flags: u32,
+    e_flags: u32,
+    damage: i32,
+    dir: [f32; 3],
+    g_knockback: f32,
+) -> Option<i32> {
     use vcod_cod4::pmove::pmf;
-    let share = match ps.pm_flags {
+    let share = match pm_flags {
         f if f & pmf::PRONE != 0 => 0.02f32,
         f if f & pmf::DUCKED != 0 => 0.15,
         _ => 0.3,
     };
     let push = ((damage as f32 * share) as i32).min(MAX_KNOCKBACK);
-    if push == 0 || ps.e_flags & vcod_cod4::pmove::ef::TURRET != 0 {
-        return;
+    if push == 0 || e_flags & vcod_cod4::pmove::ef::TURRET != 0 {
+        return None;
     }
-    ps.velocity += dir * (push as f32 * g_knockback / PLAYER_MASS);
+    let speed = f64::from(push) * f64::from(g_knockback) / f64::from(PLAYER_MASS);
+    for k in 0..3 {
+        velocity[k] = (f64::from(velocity[k]) + f64::from(dir[k]) * speed) as f32;
+    }
+    Some(push)
+}
+
+/// `g_knockback` as the host's cvars hold it.
+pub(crate) fn g_knockback(cvars: &crate::cvars::Cvars) -> f32 {
+    match cvars.get("g_knockback") {
+        "" => DEFAULT_KNOCKBACK,
+        v => crate::game::builtins::cvar::atof(v),
+    }
+}
+
+/// [`knockback`] on `ps`. A push starts the knockback timer, twice the
+/// push in ms within its bounds, unless a `pm_time` already runs
+/// (cod4-combat.md 4).
+fn knock_back(ps: &mut vcod_cod4::pmove::PlayerState, damage: i32, dir: Vec3, g_knockback: f32) {
+    let mut v = ps.velocity.to_array();
+    let Some(push) = knockback(
+        &mut v,
+        ps.pm_flags,
+        ps.e_flags,
+        damage,
+        dir.to_array(),
+        g_knockback,
+    ) else {
+        return;
+    };
+    ps.velocity = Vec3::from(v);
     if ps.pm_time == 0 {
         let (lo, hi) = KNOCKBACK_TIME_MS;
         ps.pm_time = (2 * push).clamp(lo, hi);
-        ps.pm_flags |= pmf::TIME_KNOCKBACK;
+        ps.pm_flags |= vcod_cod4::pmove::pmf::TIME_KNOCKBACK;
     }
 }
 

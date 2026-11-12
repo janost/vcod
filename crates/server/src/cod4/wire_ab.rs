@@ -558,6 +558,15 @@ pub(super) fn ours(
 /// packet in the order its client sent it, which is not always before the
 /// next frame).
 pub(super) fn replay_schedule(lines: &[Line], from: i32) -> VecDeque<(i32, Vec<UserCmd>)> {
+    replay_schedule_timed(lines, from)
+        .into_iter()
+        .map(|(t, _, p)| (t, p))
+        .collect()
+}
+
+/// [`replay_schedule`] with each packet's capture time (`Line::ms`, the
+/// probe's own clock).
+pub(super) fn replay_schedule_timed(lines: &[Line], from: i32) -> Vec<(i32, u64, Vec<UserCmd>)> {
     let mut s = Session::new();
     let mut packets = Vec::new();
     let mut snaps = Vec::new();
@@ -566,7 +575,7 @@ pub(super) fn replay_schedule(lines: &[Line], from: i32) -> VecDeque<(i32, Vec<U
             Ok(Some(Item::Client { msg, .. })) => {
                 for op in &msg.ops {
                     if let ClOp::Move { cmds, .. } = op {
-                        packets.push(cmds.iter().map(|(c, _)| *c).collect::<Vec<_>>());
+                        packets.push((l.ms, cmds.iter().map(|(c, _)| *c).collect::<Vec<_>>()));
                     }
                 }
             }
@@ -584,11 +593,11 @@ pub(super) fn replay_schedule(lines: &[Line], from: i32) -> VecDeque<(i32, Vec<U
     }
     packets
         .into_iter()
-        .filter(|p| p.last().is_some_and(|c| c.server_time > from))
-        .filter_map(|p| {
+        .filter(|(_, p)| p.last().is_some_and(|c| c.server_time > from))
+        .filter_map(|(ms, p)| {
             let last = p.last()?.server_time;
             let (t, _) = snaps.iter().find(|&&(t, ct)| t > from && ct >= last)?;
-            Some((t - FRAME_MS, p))
+            Some((t - FRAME_MS, ms, p))
         })
         .collect()
 }
