@@ -249,10 +249,11 @@ pub(super) fn with_loadout<R>(
     r
 }
 
-/// `self giveWeapon(name[, model])`: the weapon, its alt chain, the
-/// equipped offhand when it is the first (`C <index>`, the capture's `C
-/// 40`), a `J "1"` and its start ammo (the capture's 60 + 30 for
-/// `m16_gl_mp`, 30 + 15 for `beretta_mp`).
+/// `self giveWeapon(name[, model])`: the weapon and its alt chain on
+/// `gunModel[model]` (the camo, [`w4::WeaponDef4::camo`]), the equipped
+/// offhand when it is the first (`C <index>`, the capture's `C 40`), a `J
+/// "1"` and its start ammo (the capture's 60 + 30 for `m16_gl_mp`, 30 + 15
+/// for `beretta_mp`).
 fn give_weapon(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -263,9 +264,14 @@ fn give_weapon(
     let Some(weapon) = weapon_arg(host, cx, a.first())? else {
         return Ok(Value::Undefined);
     };
+    let model = match a.get(1) {
+        Some(&Value::Int(m)) => m.into(),
+        _ => 0,
+    };
     let given = with_loadout(host, slot, |l, t| {
         let had = l.has(weapon);
-        let given = l.give(t, weapon);
+        let camo = t.get(weapon).map_or(0, |d| d.camo(model));
+        let given = l.give(t, weapon, camo);
         if given.is_some() {
             l.initialize_ammo(t, weapon, had);
         }
