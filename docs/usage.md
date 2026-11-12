@@ -423,8 +423,9 @@ Client:
     and binds vcod has.
   - Select Profile creates, deletes and loads a profile in
     `players/profiles/`. The active profile's `vcod_mp.cfg` is the
-    config, its `vcod_mpdata` the stats a join sends, stored plain and
-    written back as they change. Retail's `mpdata` is left alone.
+    config, its `vcod_mpdata` the stats a join sends and the main menu
+    reads (rank, unlocks), stored plain and written back as they change.
+    Retail's `mpdata` is left alone.
   - `connect ip:port` on the console joins a server. Esc or `disconnect`
     on the connect screen calls the join off.
 - `vcod --connect ip:port` joins a 1.7 server through its team and class

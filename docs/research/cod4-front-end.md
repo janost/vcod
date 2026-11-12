@@ -161,13 +161,43 @@ confirmed on 1.7.
 | Join Game | `pc_join_unranked` over `main_text` | `UpdateFilter`, `RefreshServers`, `RefreshFilter`, `ServerSort`, `JoinServer`, `ServerStatus`, `addFavorite`, `closeJoin`; feeder 2 | the server browser (cod4-handshake.md 12); Join Server joins behind the connect screen (section 7) |
 | Start New Server | `close self`, `createserver` | `loadArenas`; `ui_netGameType` (owner draw 245), the map list (feeder 4, sets `ui_currentNetMap`), `ui_dedicated` (multi No / LAN / Internet), `sv_hostname`, `sv_maxclients`, `sv_minping`, `sv_maxping`, `g_password` (edit fields), `sv_voice`, `scr_teambalance`, `g_allowvote`, `sv_punkbuster` (yes/no); the game type pages `settings_quick_<gametype>`; Start and the list's double click run `StartServer` | game type, map and Dedicated work; the edit fields and yes/no rows set their dvars in the UI's table (`front::ui_table_dvar`); Start starts `vcod-server --game cod4` with them (section 5) |
 | Select Profile | `player_profile` | `addPlayerProfiles`, `selectActivePlayerProfile`, `loadPlayerProfile`, `sortPlayerProfiles`, `createPlayerProfile`, `deletePlayerProfile`; feeder 24; `ui_playerProfileAlreadyChosen`, `com_playerProfile` | lists, picks, creates, deletes and loads (section 3) |
-| Create a Class | `pc_cac_popup` (`execnow statset 260 1` first) | unlocked when `stat(260) >= 1`, else the greyed row | greyed: vcod's profile stats are a fresh one's (`Stats::fresh`) |
-| Rank & Challenges | `menu_challenges` | `statGetInDvar` rows, `ui_tier_num`, `ui_table_slot` | opens and draws off fresh stats |
+| Create a Class | `pc_cac_popup` (`execnow statset 260 1` first) | unlocked when `stat(260) >= 1`, else the greyed row | reads the profile's `vcod_mpdata`: greyed on a fresh profile, open from rank 3 (below); the editor's `statsetusingtable`, `statClearBitMask` and `statClearPerkNew` are not run |
+| Rank & Challenges | `menu_challenges` | `statGetInDvar` rows, `ui_tier_num`, `ui_table_slot` | opens and draws off the profile's stats |
 | Controls | `main_controls`, its pages `options_look`, `options_move`, `options_shoot`, `options_misc`, `controls_multi` | the bind rows and their dvars | the bind rows and the mouse options work on vcod's console as in a game (cod4-hud.md 12.6); the rest greyed |
 | Options | `main_options`, its pages `options_graphics`, `options_graphics_texture`, `options_sound`, `options_voice`, `options_game`, `options_multi` | the option dvars, `vid_restart_popmenu`, `snd_restart_popmenu` | the controls with a vcod cvar (`r_gamma`, `sm_enable`, `snd_volume`, `fx_marks`, `cl_allowDownload`, the player name, the mouse) work; the rest greyed (section 9) |
 | Mods | `close self`, `mods_menu` | `loadMods`, feeder 9, `RunMod`, `ClearMods` | lists `mods/` and runs one (section 6) |
 | Single Player | `single_popmenu` | `startsingleplayer` | the popup works; Yes does nothing (no single player) |
 | Quit | `quit_popmenu` | Yes runs `uiScript quit`, No and Esc `close self` | quits |
+
+- Create a Class's rows: the button (`MPUI_CREATE_A_CLASS`) shows when
+  `stat(260) >= 1`, the greyed copy and its `MPUI_DESC_CREATE_A_CLASS_LOCKED`
+  hint when it is below 1, and the `specialty_new` mark when it is 1 among
+  other tests. VERIFIED (the walk). Stat 260 is `feature_cac` in
+  `mp/statstable.csv` (row `197,260,feature,PERKS_CREATE_A_CLASS,
+  feature_cac`), and `mp/ranktable.csv`'s rank 3 (`lcpl1`, 270 XP to
+  480) unlocks it. VERIFIED (the `code_post_gfx_mp` tables). `_rank.gsc`'s
+  `unlockFeature` sets the stat to 2 ("newly unlocked") through
+  `setStat`. VERIFIED (the rawfile). The row's `statset 260 1` clears the
+  mark.
+- `statset <index> <value>` (`iw3mp.exe` 0x579d50, registered at
+  0x579f9e) takes two arguments read with `atoi`, else prints `statset
+  usage: statset <index> <value>` (0x6f5d34). Indices 256..279 store at
+  once; 200..250 pass 0x4fc440 first, which `Com_Error`s `trying to set
+  invalid create-a-class stat.  You can't set stat %d.` (0x6e0fc0)
+  outside 200..249; any other index stores 0 and `Com_Error`s anything
+  else with `Trying to set a server-only stat %d.` (0x6e1004). The store
+  (0x579ce0) reads the stat first and writes a changed one into the
+  `LiveStorage` buffer (0x579c70), raising the dirty flag 0xcc1ac91.
+  VERIFIED (the disassembly); the two error calls' severity is INFERRED.
+  The menus' 1610 `statset`s use 202..249, 260 and 270..279 only.
+  VERIFIED (`menu_dump`). vcod (`ScriptMenus::stat_set`) stores the same
+  ranges and refuses the rest with the message and no drop.
+- vcod's front end reads the active profile's `vcod_mpdata` each time the
+  main menu comes up and when a profile loads or is deleted
+  (`Cod4Front::reload_stats`), a fresh profile's block without one, and
+  writes a `statset` back to it two seconds on or as a join starts. A
+  game's `N`s reach the same file (cod4-netfields.md, "The stats file").
+  Gate: `cod4_front_create_a_class_unlocks_off_the_profiles_stats`.
 
 `main_text`'s `onOpen` runs `selectStringTableEntryInDvar
 mp/didyouknow.csv 0 didyouknow`. VERIFIED (the walk). vcod picks the row
@@ -268,8 +298,8 @@ off the clock; retail picks one at random. INFERRED.
   The mark is not a `serverInfo_t` field, so `servercache.dat` does not
   keep it: a cached favourite shows until its ping answers. vcod joins
   stock 1.7 servers only; playing on CoD4x servers is not supported.
-- Left: create a class off real stats, and the CD key menus
-  (`cdkey_menu`, `verifyCDKey`, `getCDKey`).
+- Left: the Create a Class editor's stat commands (section 4), and the
+  CD key menus (`cdkey_menu`, `verifyCDKey`, `getCDKey`).
 
 ## 8. Sounds and music
 

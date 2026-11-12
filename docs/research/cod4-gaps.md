@@ -16,11 +16,14 @@ Ranked by how much a player notices.
 - CoD4x servers. Most public servers run CoD4x, which parks a 1.7
   client and hands it to its own update backend; vcod refuses them at the
   challenge and hides them in the browser (cod4-handshake.md 13). L.
-- Ranks and unlocks. vcod keeps its own plain stats file
-  (`vcod_mpdata`, cod4-netfields.md, "The stats file") and never reads
-  retail's `mpdata`. The main menu's `stat()` reads a fresh profile's
-  block, so Create a Class stays greyed and Rank & Challenges shows
-  nothing earned (cod4-front-end.md 4, 7). M.
+- The Create a Class editor. Ranks, XP and unlocks reach the profile's
+  `vcod_mpdata` and the main menu reads it, so Create a Class opens at
+  rank 3 (cod4-netfields.md, "The stats file"). Its pages' own stat
+  commands, `statsetusingtable`, `statClearBitMask` and
+  `statClearPerkNew`, are not run, so a weapon or perk picked there does
+  not reach the class (cod4-front-end.md 4). M.
+- Retail's `mpdata` is never read: a retail rank does not carry over.
+  By choice.
 - Rigid-body physics. A `physicsLaunch`ed part keeps its spot: the
   client treats `TR_PHYSICS` as stationary (`play::cod4::trajectory`;
   cod4-gsc.md 3.2). The ragdoll is a position-based solver, not ODE

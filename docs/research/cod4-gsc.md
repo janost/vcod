@@ -931,11 +931,31 @@ gate's `GAPS`.
   reads a byte under 2000, a word to 3497, 0 for 3498 and 3499. VERIFIED
   (the disassembly). vcod treats a slot whose roster entry
   `ClientDisconnect` cleared as disconnected. The client stores `N` into
-  its profile (`LiveStorage_SetStat`). INFERRED.
+  its stats buffer (`iw3mp.exe` 0x44c42d calling 0x579c70;
+  cod4-netfields.md, "The stats file"). VERIFIED (the disassembly).
   `cod4_live_set_stat_reaches_the_clients_profile` joins a ranked (`sv_pure
   1`) mp_crash: the rank scripts move stats 2317 and 2352 (`maxxp`, 30)
   off a fresh profile's, and the client's block ends equal to the
   server's.
+- Ranks. `_globallogic.gsc` sets `level.rankedMatch` to `level.onlineGame
+  && getDvarInt("sv_pure")` (`onlineGame` is `true`), or 1 under
+  `scr_forcerankedmatch 1`; `_persistence.gsc`'s `statSet` and `_rank.gsc`'s
+  `incRankXP` do nothing outside a ranked match. `giveRankXP` also wants a
+  player on each team (two players in a free-for-all). `updateRank` walks
+  each rank passed: `statSet`s `rank` (2350), `minxp` (2351), `maxxp`
+  (2352), `setStat(252, rank)`, then the rank's unlocks off
+  `mp/ranktable.csv`. VERIFIED (the rawfiles, `mp/playerstatstable.csv`).
+  `stat_tests::cod4_ranked_xp_unlocks_create_a_class`: 300 XP off a fresh
+  profile reach rank 3, whose `feature_cac` sets stat 260 to 2, each
+  write sent as `N`.
+- `SV_SetClientStat` writes the client's own block, which a
+  `fast_restart` keeps, so the restarted level's `_rank.gsc` reads the
+  earned XP back. INFERRED (one block per client, `SV_GetClientStat` and
+  `SV_SetClientStat` both off the client). vcod's level holds the scripts'
+  copy, carried across the restart (`Cod4Server::map_restart`;
+  `stat_tests::cod4_fast_restart_keeps_the_scripts_stats`). A map change
+  asks the client for its block again (`requeststats`), which holds every
+  `N` (cod4-netfields.md, "The stats file").
 - Loadout `WeaponDef` fields come from the zone at the offsets of 1.7's
   `weaponDefFields` (`cod4_lnxded` 0x826a160, 502 rows;
   `tools/re/cod4_weapon_fields.py`): `weaponClass` +304, `inventoryType`

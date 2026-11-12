@@ -487,6 +487,28 @@ the `stats` packets, written back two seconds after the server's `N`
 commands change it and at the disconnect. Retail's `mpdata` is neither
 read nor written.
 
+- Retail's `N <index> <value>` (`CG_ServerCommand`'s arm at `iw3mp.exe`
+  0x44c42d) reads both words with `atoi` and stores through 0x579c70 into
+  the `LiveStorage` buffer at 0xcc18c90; before the stats are fetched
+  (0xcc1ac90 clear) it prints `Tried to set stat index %i before we have
+  obtained player stats` (0x6f5ca8) and drops it. VERIFIED (the
+  disassembly).
+- The `stats` packets read that same buffer, 0x4d8 bytes per packet from
+  0xcc18c90 (0x46af8d), and a zeroed one while the stats are not
+  fetched (0x46af9d). VERIFIED (the disassembly). So a map change's
+  `requeststats` sends the block as the game's `N`s left it. vcod's
+  session hands its block to the connection each frame
+  (`Conn::set_stats`). Gate:
+  `cod4_live_map_change_sends_the_stats_the_server_set` (vcod-server's
+  `map mp_crash` after a `N 2301 300`: the new level ranks the player 3
+  off the 300 XP).
+- The main menu reads the file too (cod4-front-end.md 4).
+- The chain on vcod-server: a ranked match (`sv_pure 1`) runs
+  `_rank.gsc`'s `giveRankXP`, whose `setStat`s go out as `N`
+  (cod4-gsc.md, "The stats, the loadout, the perks"). Gate:
+  `stat_tests::cod4_ranked_xp_unlocks_create_a_class` (300 XP: stat 2301
+  300, rank 3, 260 at 2).
+
 ## 11. Still open
 
 - A playerstate without origin and velocity (bit 0) needs the client's
