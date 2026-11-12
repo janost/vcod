@@ -27,6 +27,10 @@ Pick the fixture helper by what the test asserts:
 - Asserts what the stock paks hold (menus, game types, a census):
   `testing::stock_fs()` / `stock_fs_11()`, the `--vanilla` search path, so a
   third-party pak in `main/` cannot fail it.
+- A CoD2 test: `testing::cod2_fs()`, `$COD2_DIR/main/`'s stock iwds alone
+  (`iw_00`..`iw_24`, `localized_*_iwNN`). A map pack there (a `mp_*.iwd`,
+  a `~~~.iwd` sorted last) overrides stock gametype and map scripts and
+  joins `sv_iwdNames`, which the wire A/Bs compare with retail's.
 
 The all-maps census tests scope to stock `pak[0-9].pk3`. Map downloads drop
 third-party `zzz_*.pk3` into `main/`; a census failure on one of those is not

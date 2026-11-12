@@ -307,6 +307,22 @@ pub fn is_vanilla_pak(pak: &PakInfo, t: &crate::net::wire::Transport) -> bool {
         || (uo && name.eq_ignore_ascii_case("uo/uomappack00"))
 }
 
+/// A stock iwd by its qualified name (`main/iw_07`): `FS_iwIwd(name,
+/// "main")`, the same test in CoD2 1.3 (lnxded 0x8065324) and CoD4 1.7
+/// (0x81286c2), `iw_00` .. `iw_24` or `localized_*` holding `_iw00` ..
+/// `_iw24` (`vcod_cod2::net::download::fs_iw_iwd`).
+pub fn is_stock_iwd(qualified: &str) -> bool {
+    let name = qualified.to_ascii_lowercase().replace('\\', "/");
+    let Some(base) = name.strip_prefix("main/") else {
+        return false;
+    };
+    if (0..25).any(|n| base == format!("iw_{n:02}")) {
+        return true;
+    }
+    base.strip_prefix("localized_")
+        .is_some_and(|rest| (0..25).any(|n| rest.contains(&format!("_iw{n:02}"))))
+}
+
 /// `base` and what sits under it, lowest priority first: a base other than
 /// `main` sits over its sibling `main/`, the way United Offensive searches
 /// `uo/` then `main/` (docs/research/coduo-diff.md, section 1).
@@ -406,6 +422,17 @@ impl Pk3Fs {
     /// A CoD2 search path: `base`'s `.iwd`s, then `game`'s on top of them.
     /// No pure list and no `--vanilla` yet; those are CoD1's.
     pub fn open_iwd(base: &Path, game: Option<&Path>) -> Result<Self> {
+        Self::open_iwd_dirs(base, game, false)
+    }
+
+    /// [`Self::open_iwd`] over `base` alone with its [`is_stock_iwd`]s
+    /// only: tests that assert the stock assets read it, so a third-party
+    /// iwd in `main/` cannot move them.
+    pub fn open_iwd_stock(base: &Path) -> Result<Self> {
+        Self::open_iwd_dirs(base, None, true)
+    }
+
+    fn open_iwd_dirs(base: &Path, game: Option<&Path>, stock: bool) -> Result<Self> {
         if !base.is_dir() {
             bail!("cannot read game dir {}", base.display());
         }
@@ -415,7 +442,7 @@ impl Pk3Fs {
         }
         let mut dirs = vec![base.to_path_buf()];
         dirs.extend(game.filter(|g| g.is_dir()).map(Path::to_path_buf));
-        Self::open_archives(dirs, None, false, ArchiveKind::Iwd)
+        Self::open_archives(dirs, None, stock, ArchiveKind::Iwd)
     }
 
     /// [`Self::open_iwd`] with any number of directories over `base`, each
@@ -444,7 +471,10 @@ impl Pk3Fs {
         if vanilla {
             let proto = crate::net::protocol::install_protocol_of(&paks);
             paks.retain(|p| {
-                let keep = is_vanilla_pak(p, &proto.transport);
+                let keep = match kind {
+                    ArchiveKind::Pk3 => is_vanilla_pak(p, &proto.transport),
+                    ArchiveKind::Iwd => is_stock_iwd(&p.qualified_name()),
+                };
                 if !keep {
                     log::info!("vanilla: skipping {}", p.path.display());
                 }
@@ -982,6 +1012,40 @@ mod tests {
                 "localized_english_iw00"
             ]
         );
+    }
+
+    /// A map pack's iwd, sorted after every stock one, overrides them on
+    /// the full search path and is left off the stock one.
+    #[test]
+    fn the_stock_iwd_search_leaves_a_map_pack_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        make_pk3(&main, "iw_00.iwd", &[("maps/mp/gametypes/dm.gsc", "stock")]);
+        make_pk3(&main, "localized_english_iw11.iwd", &[("l.txt", "en")]);
+        make_pk3(
+            &main,
+            "mp_pack.iwd",
+            &[("maps/mp/gametypes/dm.gsc", "pack")],
+        );
+        make_pk3(&main, "~~~.iwd", &[("maps/mp/toujane_fx.gsc", "pack")]);
+        let read = |fs: &Pk3Fs, p: &str| fs.read(p).map(|b| String::from_utf8(b).unwrap());
+        let all = Pk3Fs::open_iwd(&main, None).unwrap();
+        assert_eq!(
+            read(&all, "maps/mp/gametypes/dm.gsc").as_deref(),
+            Some("pack")
+        );
+        let stock = Pk3Fs::open_iwd_stock(&main).unwrap();
+        assert_eq!(
+            read(&stock, "maps/mp/gametypes/dm.gsc").as_deref(),
+            Some("stock")
+        );
+        assert_eq!(read(&stock, "maps/mp/toujane_fx.gsc"), None);
+        let names: Vec<&str> = stock.paks().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["iw_00", "localized_english_iw11"]);
+        assert!(is_stock_iwd("MAIN\\IW_24"));
+        assert!(!is_stock_iwd("main/iw_25"));
+        assert!(!is_stock_iwd("mod/iw_00"));
     }
 
     #[test]

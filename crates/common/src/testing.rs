@@ -20,14 +20,16 @@ pub fn game_fs() -> Option<Pk3Fs> {
     Pk3Fs::open(&dir).ok()
 }
 
-/// A CoD2 install's `main/` iwds, from `$COD2_DIR`; `None` without it, so
-/// CI (no game data) passes vacuously.
+/// A CoD2 install's stock `main/` iwds ([`Pk3Fs::open_iwd_stock`]), from
+/// `$COD2_DIR`; `None` without it, so CI (no game data) passes vacuously.
+/// The CoD2 tests assert stock 1.3 (its gametype and map scripts, retail's
+/// `sv_iwdNames`), which a map pack's iwd in `main/` would override.
 pub fn cod2_fs() -> Option<Pk3Fs> {
     let dir = PathBuf::from(std::env::var_os("COD2_DIR")?).join("main");
     if !dir.is_dir() {
         return None;
     }
-    Pk3Fs::open_iwd(&dir, None).ok()
+    Pk3Fs::open_iwd_stock(&dir).ok()
 }
 
 /// [`game_fs`] when the install is 1.1's, `None` at a 1.5 or UO install
