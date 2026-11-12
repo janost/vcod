@@ -868,12 +868,16 @@ impl Cod4Level {
     }
 
     /// Whether a resting grenade's ground has gone: nothing within
-    /// [`GROUND_PROBE`] behind its surface normal.
+    /// [`GROUND_PROBE`] behind its surface normal, a helicopter's
+    /// collision included (a grenade riding one, `vehicle::carry_riders`).
     fn lost_ground(&mut self, m: &Missile4) -> bool {
         let below = m.origin - m.surface_normal * GROUND_PROBE;
         self.missile_trace(m.origin, below, m.owner, MASK_GRENADE)
             .fraction
             == 1.0
+            && self
+                .heli_trace(m.origin, below, 1.0, None, MASK_GRENADE)
+                .is_none()
     }
 
     /// The frame's step from `r.currentOrigin` to `goal`: the contact (a

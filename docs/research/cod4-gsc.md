@@ -333,8 +333,89 @@ Around it:
 
 - Wander: `G_flrand` off the level's `rand()` (cod4-combat.md 10.9);
   `hardpoint_ab`'s hover on the recovered seed stays within tolerance.
-  VERIFIED (the gate). `Heli4::think` is this minus the move trace and
-  touch. INFERRED (the code against the disassembly).
+  VERIFIED (the gate). A hover radius of 0 draws nothing (the test at
+  0x80a073c). VERIFIED (the disassembly). `Heli4::think` is this.
+  INFERRED (the code against the disassembly).
+
+The vehicle think around it (0x809fbd6, called by handler 23's think
+0x80ba1f8, which sets `nextthink` again at 0x80ba212). VERIFIED (the
+disassembly).
+
+- It copies `r.currentOrigin` and `r.currentAngles` into the physics'
+  last place and turn (0x809fc2e..0x809fc7b). VERIFIED (the disassembly).
+  Under flag 2 (a goal) it runs `VEH_UpdateMoveToGoal` toward the goal
+  (vehicle +0x2a0) for `moveState` 1, toward goal plus wander (+0x230)
+  for 2 (0x809fce2..0x809fcf4, 0x80a06b0, 0x80a0841). VERIFIED (the
+  disassembly). With no goal a helicopter (type 5) runs 0x808ba22 instead
+  (0x80a048f..0x80a04a0). VERIFIED (the disassembly). That 0x808ba22 is a
+  piloted flight model whose stick inputs start at 0 and which reads
+  dvars (0x8582ba0..0x8582bac) is INFERRED. Then 0x809c1dc places the
+  entity (`G_SetOrigin` at 0x809c2d2, 0x80ca276 at 0x809c2de). VERIFIED
+  (the calls); 0x80ca276 being `G_SetAngle` is INFERRED.
+- The move trace (0x80a04aa..0x80a05e3): under flag 2, when 0x815cfe0
+  answers non-zero and the body moved (a zero squared move skips at
+  0x80a04fb), `G_TraceCapsule` (0x80b408a) from the last place to the new
+  under 0x2081, passing itself, with `r.mins` and `r.maxs`; a box wider
+  than tall gets its top raised to its width first (0x80a0549..0x80a055c).
+  A contact (fraction under 1) with the world (hit id 0x3fe, 0x80a05ad)
+  pushes the trace's normal (+4, 0x80a05b7) and notifies
+  `script_vehicle_collision` (the `scr_const` stored at 0x80a4244 from the
+  string at 0x80a4238). The move is not undone. VERIFIED (the
+  disassembly). 0x815cfe0 reads two globals; that it asks whether the
+  script system runs is INFERRED.
+- The box: `VEH_InitEntity` sets `r.mins` and `r.maxs` through
+  `DObjGetBounds` (0x809c725 to 0x81ac44c): minus and plus the DObj's
+  radius on every axis, that radius summed over its models
+  (0x81ac954..0x81ac978). VERIFIED (the disassembly). The cobra's model
+  radius is 418.7. VERIFIED (the zone). The ±50 of `spawnHelicopter` is
+  the vehicle's own box (vehicle +0x120 and +0x12c, 0x80ba97f..
+  0x80ba99f). VERIFIED (the disassembly).
+- The touch (0x809fd20..0x809ff85): the entities in the box at the last
+  place grown by the bounds' radius and the move (0x81947ac, 0x81906bc,
+  then 0x811f386 with 1024 and contents 0x2806081). Only missiles
+  (`eType` 4) are read. One whose `groundEntityNum` (+0x7c) is the
+  vehicle, with +0x218 clear, on a weapon with `stickiness` 1
+  (`WeaponDef` +0x5a4) rides along once the vehicle moved or turned by
+  0.001 squared (0x80a0400..0x80a0485): 0x809c462 keeps its place and turn
+  in the vehicle's frame (the offset through the old axis transposed
+  times the new; the turn into `r.currentAngles` and `apos.trBase`).
+  Any other missile is touched (both touch handlers, `touch` notified
+  both ways) only when the vehicle has `r.bmodel` (+0xf5, 0x809fea4),
+  which `SV_SetBrushModel` alone sets (0x817c834). Handler 23's touch slot
+  is empty (`entityHandlers` 0x826cee0, row 23). VERIFIED (the
+  disassembly). A helicopter is an xmodel, so no missile touches it here.
+  INFERRED. That +0x218 is the entity's link is INFERRED.
+- Then the turret (`VEH_UpdateAim`, `tag_barrel`'s place at 0x80a0063,
+  `tag_flash`'s matrix at 0x80a008b), `time2` and `nextthink`. VERIFIED
+  (the disassembly).
+- The controller (handler 23's slot +0x1c, 0x80bab1e) poses the DObj:
+  `tag_body` to (bodyPitch, 0, bodyRoll), the `lerp.u` words at +0x54 and
+  +0x58; `tag_turret` to (0, gunYaw, 0); `tag_barrel` to (gunPitch, 0, 0)
+  (`gunPitch` +0x64, `gunYaw` +0x68; the bone numbers at vehicle +0x318,
+  +0x31c and +0x324 from 0x80cdeb5..0x80cdf1e, off the names whose
+  strings load at 0x80a45f2..0x80a4628). Each goes through 0x81abb2a to
+  0x81b00de, which stores the angles' quat and a zero shift in the
+  bone's slot (0x81b010a..0x81b0127). VERIFIED (the disassembly).
+
+On ours (`game::cod4::vehicle`):
+
+- `heli_collision` sweeps the radius box through the clip map and the
+  brush entities and notifies `script_vehicle_collision` with the normal,
+  as retail does on the collision capture below. VERIFIED (the gate).
+  Script models' and other helicopters' boxes are left out of the sweep.
+  INFERRED.
+- `carry_riders` moves a sticky missile resting on the helicopter;
+  `lost_ground` counts a helicopter's collision as ground. INFERRED (no
+  capture holds a grenade on a helicopter).
+- `heli_pose` sets the three tags' turns in place of their bind turns,
+  places kept; everything under them follows. That the slot's turn stands
+  in for the bone's own is INFERRED off the capture below: the cobra's
+  `tag_barrel` sits 7.3 degrees nose up at the bind pose, and retail's
+  `tag_flash` points along the gun's pitch. The stock MP scripts never
+  wait on `script_vehicle_collision`. VERIFIED (`common_mp`'s rawfiles).
+- Not ported: 0x808ba22. A stock helicopter runs it for its first 2 s:
+  `heli_fly` waits 2 s before its first goal. VERIFIED (`common_mp`'s
+  `_helicopter.gsc`). Ours holds still there. INFERRED (the code).
 - Turret: tracks from `tag_flash` at `turretRotRate`/s inside the spans;
   `turret_on_target` once both angles are within a degree, else
   `turret_not_on_target`. INFERRED (`VEH_UpdateAim`).
@@ -348,16 +429,24 @@ Around it:
   along the tag's axes (`G_DObjGetWorldTagMatrix`, 0x80cbe9a) at
   `adsSpread` (+0x71c), the helicopter's velocity (+0x138) as the gun's,
   second argument the target, third its offset (0x809dde2, 0x809ddfc).
-  VERIFIED (the disassembly). vcod turns the bind-pose tag by the body and
-  uses `Heli4::vel`. INFERRED (the code).
-- Collision: `r.contents` 0x2080 and `svFlags` 4, so a locational trace
-  meets the model's collision (`DObjGeomTraceline` over `collSurfs`, model
-  space at the bind pose; a moved bone's surface in that bone's frame).
-  INFERRED (`SV_ClipMoveToEntity`, `XModelTraceLineAnimated`). On ours
-  rounds, rocket moves and blasts meet every surface at the bind pose
-  (turret and rotor bones unposed); a blast measures to the surfaces' box
-  at its origin, unturned, reached by one clear trace to its middle.
+  VERIFIED (the disassembly). vcod reads the posed tag (`heli_tag`) and
+  uses `Heli4::vel`; `getTagOrigin` on a helicopter reads it too.
   INFERRED (the code).
+- Collision: `r.contents` 0x2080 and `svFlags` 4, so a locational trace
+  meets the model's collision (`DObjGeomTraceline` over `collSurfs`).
+  INFERRED (`SV_ClipMoveToEntity`). `XModelTraceLineAnimated` (0x81c61bc,
+  called at 0x81abe6a) skips a surface off the mask or on a hidden bone,
+  compares the bone's posed matrix with its base pose's word by word
+  (0x81c6298..0x81c6378), and traces an unmoved bone's surface with the
+  segment as it is; a moved one's takes the segment through the base
+  matrix times the posed one's inverse (0x81c63e8..0x81c671b) into the
+  base pose's space. A hit stores the triangle's plane normal as it is
+  (0x81c6940..0x81c6954), so a moved surface's normal stays in the base
+  pose's frame. VERIFIED (the disassembly). Ours traces each surface of
+  the posed model so (`trace_posed`); the server runs no rotor anim.
+  VERIFIED (the collision capture below). A blast measures to the
+  surfaces' box at the origin, unturned, reached by one clear trace to its
+  middle. INFERRED (the code).
 - `G_Damage`, INFERRED: `G_VehImmuneToDamage` lets a hit through only if
   the file allows its means of death (bullets: `bulletDamage`, or
   `armorPiercingDamage` with flag 2; grenades: `grenadeDamage`, or
@@ -435,10 +524,36 @@ helicopter word at the same time past spawn.
 - Planes: bit for bit. VERIFIED (the gate).
 - Helicopter: bit for bit for 1.5 s; the turn through the first node
   parts by 0.005 degrees pitch, 0.08 yaw; the rest stays within 8 units,
-  1.9 degrees of body, 1.6 of gun. VERIFIED (the gate). The parting is
+  1.9 degrees of body, 0.45 of gun. VERIFIED (the gate). The parting is
   the float model (retail's x87 intermediates against our `f32`, steered
   by a goal vector shrinking to nothing at the node). INFERRED: the
   think's rules match the disassembly. `hardpoint_ab::GAPS` tolerates it.
+  The gun aims from the posed `tag_flash`; off the bind pose's it parted
+  by 1.6 degrees. VERIFIED (the gate, both ways).
+
+#### The collision capture
+
+`cod4::hardpoint_ab::helicopter_collision_and_pose_match_retail` replays
+`crates/cod4/tests/fixtures/net/play-1.7-heli-collide.txt`. Recipe: the
+flight's, under `+set fs_game mods/vcodcoll` with
+`crates/cod4/tests/fixtures/gsc/heli_collide/maps/mp/mp_crash_fx.gsc` in
+the mod's iwd and `--secs 45`. A cobra holds over the first loop node
+(hover radius 0), turns its gun on a point off its left side, prints its
+posed `tag_barrel` and `tag_flash` and a `bulletTrace` down through their
+middle, then flies straight down into the ground and prints its
+`script_vehicle_collision` notifies. Each line is an `iPrintLn`, its time
+counted from the spawn. VERIFIED (the capture).
+
+- Retail's `tag_flash` sits along the gun's pitch from `tag_barrel`
+  (16.58 degrees down at `gunPitch` 16.66). VERIFIED (the capture).
+- The trace meets the barrel at retail's point, within 0.01, with
+  retail's normal word for word (-0.112754, 0, 0.993623): the base pose's
+  normal of a gun yawed 99.8 degrees. VERIFIED (the gate).
+- The first notify comes 5600 ms past the spawn with the body at z 750.08
+  over ground near 332, normal (0, 0, 1); the next at 5650; the third,
+  started in solid, reads (0, 0, 0); 209 by 16 s. Ours: the same times,
+  normals, places and count, the last place 0.1 off. VERIFIED (the
+  gate).
 
 #### Missiles under 1.7: attractors, the wobble, guidance
 
