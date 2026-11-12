@@ -6,8 +6,8 @@
 //! and the move messages are `vcod_cod4::net::conn`'s, the client's own.
 //!
 //!     cargo run -p vcod-cod4 --example cod4_probe -- HOST:PORT OUT.txt [--secs 15] [--auth 127.0.0.2]
-//!         [--team allies|axis|spectator] [--class assault_mp,0] [--script walk|idle|follow|shoot|fly|mantle|frag|flash|melee|lunge|auto|saw|throwback|sway]
-//!         [--name NAME] [--qport N] [--iwds MAIN_DIR] [--no-cp] [--goto "X Y Z"] [--scores]
+//!         [--team allies|axis|spectator] [--class assault_mp,0] [--script walk|idle|follow|shoot|fly|mantle|frag|flash|melee|lunge|auto|saw|throwback|sway|poses|prone|rocket]
+//!         [--name NAME] [--qport N] [--iwds MAIN_DIR] [--no-cp] [--goto "X Y Z"] [--scores] [--weapon N] [--pitch P]
 //!         [--download auto|FILE,FILE...] [--dl-dir DIR] [--cmd "SECS TEXT"]...
 //!
 //! Without `--team` it stays a spectator in the team menu
@@ -44,6 +44,11 @@
 //! number modulo 7: standing, crouched, prone, firing taps 300 ms apart
 //! from 1 s, a tap at 1 s and the reload key at 2 s, a jump at 2.4 s, a
 //! switch to the Beretta at 2.2 s (the corpse captures, cod4-combat.md 5).
+//! `prone` holds the prone key from 1 s past the spawn (`poses`' prone
+//! life, holding it from the spawn, never lay down). `rocket` selects weapon
+//! `--weapon N` from 1.5 s, taps attack at 4.5 s along `--face` and
+//! `--pitch` (-15 without it), then views the nearest other player from
+//! 9 s and taps again at 10 s (the rocket captures, cod4-combat.md 12).
 //! `--respawn` restarts the script's clock and `--goto` on every spawn;
 //! `--fire-after SECS` holds attack back until another player has been
 //! within 400 units for SECS; `--aim-z Z` aims Z over the nearest
@@ -118,6 +123,20 @@ enum Script {
     Sway,
     /// One state a life (`--respawn`), the shot due 2.5 s past the spawn.
     Poses,
+    /// The prone key held from 1 s.
+    Prone,
+    /// `--weapon` up, one round along `--face` and `--pitch`, one at the
+    /// nearest player.
+    Rocket,
+}
+
+/// The fixed aims `saw` and `rocket` read: `--face`, and `rocket`'s
+/// `--weapon` byte and first round's `--pitch`.
+#[derive(Clone, Copy, Default)]
+struct Aim {
+    face: f32,
+    weapon: u8,
+    pitch: f32,
 }
 
 /// `+activate`: the use key's button.
@@ -145,9 +164,10 @@ fn script_cmd(
     view: [f32; 2],
     ps: &PlayerState,
     target: Option<[f32; 2]>,
-    face: f32,
+    aim: Aim,
     life: u32,
 ) -> UserCmd {
+    let face = aim.face;
     let mut c = UserCmd {
         weapon: ps_u32(ps, "weapon") as u8,
         offhand: ps_u32(ps, "offHandIndex") as u8,
@@ -173,6 +193,24 @@ fn script_cmd(
             6 if within(2.2, 99.0) && c.weapon as u32 == M16 => c.weapon = BERETTA as u8,
             _ => {}
         },
+        Script::Prone => {
+            if within(1.0, 999.0) {
+                c.buttons |= buttons::PRONE;
+            }
+        }
+        Script::Rocket => {
+            if within(1.5, 999.0) {
+                c.weapon = aim.weapon;
+            }
+            if s.is_some_and(|s| s < 9.0) {
+                [pitch, yaw] = [aim.pitch, face];
+            } else if let Some(t) = target {
+                [pitch, yaw] = t;
+            }
+            if within(4.5, 4.55) || within(10.0, 10.05) {
+                c.buttons |= buttons::ATTACK;
+            }
+        }
         Script::Follow => {
             if s.is_some_and(|s| s % 3.0 < 0.06) {
                 c.buttons |= buttons::ATTACK;
@@ -600,6 +638,8 @@ fn main() -> Result<()> {
         Some("throwback") => Script::Throwback,
         Some("sway") => Script::Sway,
         Some("poses") => Script::Poses,
+        Some("prone") => Script::Prone,
+        Some("rocket") => Script::Rocket,
         Some(s) => bail!("unknown script {s}"),
     };
     let name = opt("--name").map_or("vcodprobe", String::as_str);
@@ -613,7 +653,11 @@ fn main() -> Result<()> {
     let respawn = args.iter().any(|a| a == "--respawn");
     let aim_z: Option<f32> = opt("--aim-z").map(|s| s.parse()).transpose()?;
     let fire_after: Option<f32> = opt("--fire-after").map(|s| s.parse()).transpose()?;
-    let face: f32 = opt("--face").map_or(Ok(0.0), |s| s.parse())?;
+    let aim = Aim {
+        face: opt("--face").map_or(Ok(0.0), |s| s.parse())?,
+        weapon: opt("--weapon").map_or(Ok(0), |s| s.parse())?,
+        pitch: opt("--pitch").map_or(Ok(-15.0), |s| s.parse())?,
+    };
     let scores = args.iter().any(|a| a == "--scores");
     let answers = opt("--answers").cloned();
     // `--cmd "SECS TEXT"`, any number: TEXT as a client command SECS past
@@ -757,7 +801,7 @@ fn main() -> Result<()> {
                     view,
                     &ps,
                     target,
-                    face,
+                    aim,
                     life,
                 );
                 if fire_after
