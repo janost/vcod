@@ -93,6 +93,11 @@ section 6 says.
   `startsolid` per map in 79k to 440k traces; their digests are retaken
   under 1.7's set-up, which no capture contradicts. VERIFIED (the pins
   under both set-ups).
+- `iw3mp.exe` 1.7's `CM_Trace` (0x4f4d30) stores each of these as CoD2
+  does: the centre offset, the shifted end and the sweep each go through
+  a float (0x4f4e1f, 0x4f4e4c, 0x4f4e65). VERIFIED (the instructions).
+  The client's prediction keeps the server's set-up all the same
+  (cod4-client-view.md 5.1).
 - Two other differences, INFERRED: `CM_TestBoxInBrush` culls on strict
   bounds where CoD2's accepts a touch (unported; matters only for a box
   exactly touching a brush), and the AABB position walk stops at the

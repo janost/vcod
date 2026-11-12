@@ -418,7 +418,8 @@ pub struct Solid {
 
 #[derive(Clone, Debug)]
 pub enum SolidKind {
-    /// `CM_TempBoxModel` of a packed `solid`, its contents.
+    /// `CM_TempBoxModel` of a packed `solid`, its contents: a capsule to
+    /// a trace, as the server's bodies.
     Box {
         mins: Vec3,
         maxs: Vec3,
@@ -436,11 +437,12 @@ pub enum SolidKind {
 }
 
 impl Solid {
-    /// `CG_ClipMoveToEntity`'s box of entity `number`'s `solid`
-    /// (`CG_GetEntityBModelBounds`: a unit inside the packed box on every
-    /// side; `CG_GetEntityBModelContents`: a player is `CONTENTS_BODY`, the
-    /// rest solid), or its brush model. `None` for one that clips nothing
-    /// (no `solid`, or a brush model flagged non-solid, `eFlags` 1).
+    /// `CG_ClipMoveToEntity`'s (iw3mp.exe 0x4593d0) box of entity
+    /// `number`'s `solid` (0x4590e0: a unit inside the packed box on every
+    /// side, so a unit inside the server's body; 0x459080: a player is
+    /// `CONTENTS_BODY`, the rest solid), or its brush model. `None` for one
+    /// that clips nothing (no `solid`, or a brush model flagged non-solid,
+    /// `eFlags` 1). cod4-client-view.md 5.1.
     pub fn of(
         number: u32,
         player: bool,
@@ -475,7 +477,8 @@ impl Solid {
 }
 
 /// `CG_TraceCapsule`: the world, then each solid entity but `pass` that
-/// cuts the trace shorter (`CG_ClipMoveToEntities`).
+/// cuts the trace shorter (`CG_ClipMoveToEntities`), a packed `solid` as
+/// its temp capsule.
 pub struct Solids<'a> {
     pub clip: &'a ClipMap,
     pub solids: &'a [Solid],
@@ -501,17 +504,17 @@ impl PmWorld for Solids<'_> {
                     }
                     let mut c = vcod_common::collision::Trace::clear(end);
                     c.fraction = t.fraction;
-                    vcod_common::collision::clip_entity_box(
-                        &mut c,
-                        start,
-                        end,
-                        mins,
-                        maxs,
-                        s.origin + bmin,
-                        s.origin + bmax,
+                    // `CM_TempBoxModel`'s model 0xfff takes `CM_Trace`'s
+                    // capsule arm (iw3mp.exe 0x4f5080), as on the server
+                    // (cod4-client-view.md 5.1).
+                    let body = vcod_common::movetrace::Body {
+                        entity: s.number,
+                        origin: s.origin,
+                        mins: bmin,
+                        maxs: bmax,
                         contents,
-                        s.number,
-                    );
+                    };
+                    vcod_common::movetrace::clip_body_kept(&mut c, start, end, mins, maxs, &body);
                     if c.fraction < t.fraction || (c.startsolid && !t.startsolid) {
                         t = Tr {
                             fraction: c.fraction,
@@ -1079,7 +1082,8 @@ mod tests {
         assert_eq!(p.drawn_error(48.0), 0.0);
     }
 
-    /// A packed player `solid` clips as the box a unit inside it.
+    /// A packed player `solid` reads as the box a unit inside it, the
+    /// bounds of its capsule.
     #[test]
     fn a_body_blocks_the_replay() {
         // `SV_LinkEntity`'s packing of (-15,-15,0)..(15,15,70).

@@ -39,6 +39,10 @@ Ranked by how much a player notices.
 
 ## Fixed
 
+- The prediction clipped other players as boxes where vcod-server clips
+  capsules, so walking into a player at an angle corrected by up to 20
+  units. It now clips 1.7's client capsule, a unit inside the server's
+  (cod4-client-view.md 5.1, 5.3).
 - A dropped weapon's camo: vcod-server's item sends `weapon + 128 *
   model` off the dropper's `weaponmodels[]`, a pickup gives `index >> 7`,
   and the client draws `worldModel[index >> 7]` (cod4-client-view.md

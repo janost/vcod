@@ -458,13 +458,52 @@ weapon scales (`cod4_fly::load` builds them for a watched session).
   (`otherFlags` 2) or a demo plays: it copies `cg.nextSnap`'s playerstate,
   keeps its own `oldVelocity`, and runs `Pmove` for every kept cmd past
   `commandTime` up to the newest, `oldcmd` the cmd before each; a linked
-  body (`pm_type` 1 or 8) interpolates instead. The trace is
-  `CG_TraceCapsule`: the world, then `CG_ClipMoveToEntities` over the
-  snapshot's solid entities but our own, a packed `solid` as the box a
-  unit inside it on every side (`CONTENTS_BODY` for a player, solid for
-  the rest), a brush model through its cmodel at the entity's drawn
-  angles. INFERRED, not yet confirmed on 1.7
-  (`CG_ClipMoveToEntity`, `CG_GetEntityBModelBounds`).
+  body (`pm_type` 1 or 8) interpolates instead. INFERRED, not yet
+  confirmed on 1.7.
+- The trace is `CG_TraceCapsule`: the world, then
+  `CG_ClipMoveToEntities` over the snapshot's solid entities but our
+  own. `iw3mp.exe` 0x459ef0 clears the trace, runs the world through
+  `CM_Trace` (0x4f4d30) with model 0, and with a fraction left walks the
+  entities (0x4598f0, the sector walk 0x459560), each through
+  `CG_ClipMoveToEntity` (0x4593d0). VERIFIED (the instructions). That the
+  prediction's pmove traces through 0x459ef0 is INFERRED: the trace
+  pointer was not followed.
+- `CG_ClipMoveToEntity` (0x4593d0) skips an entity with no `solid`
+  (centity +0x164) and a brush model (`solid` 0xffffff) with `eFlags` 1
+  (+0xd4); takes its contents from 0x459080 (a brush model's cmodel
+  contents, else `CONTENTS_BODY` 0x2000000 for `eType` 1 and 1 for the
+  rest) against the mask; and its bounds from 0x4590e0. A packed `solid`
+  reads there as `x = s & 0xff`, mins `(1 - x, 1 - x, 2 - ((s >> 8) &
+  0xff))`, maxs `(x - 1, x - 1, ((s >> 16) & 0xff) - 33)`
+  (0x45910a..0x459178): a unit inside the packed box on every side.
+  VERIFIED (the instructions). A brush model goes in as its cmodel
+  (+0x154) at the entity's angles (+0x28); any other as
+  `CM_TempBoxModel(mins, maxs, contents)` (0x4f3060, which returns 0xfff)
+  at zero angles, both through `CM_TransformedBoxTrace` (0x4f54a0), at
+  the entity's origin (+0x1c). VERIFIED (the instructions).
+- With zero angles `CM_TransformedBoxTrace` shifts the start and end by
+  the box's centre and less the origin, each stored, and calls `CM_Trace`
+  (0x4f4d30) with the model. `CM_Trace` sends 0xfff to its temp model
+  arm, the position test at 0x4f509e and the sweep at 0x4f5196, after the
+  same compare as the server's (0x4f5080 and 0x4f5178 against
+  `cod4_lnxded` 0x811d21d). VERIFIED (the instructions). So another
+  player is the server's capsule (cod4-pmove.md 15), built from bounds a
+  unit inside the server's: vcod-server packs a standing body
+  `15 | 1 << 8 | 102 << 16`, which matches retail's word on every entity
+  of the touch capture (cod4-pmove.md 15.3), and the client reads it back
+  as (-14, -14, 1)..(14, 14, 69) where the server traces
+  (-15, -15, 0)..(15, 15, 70). VERIFIED (the gate, the instructions). So
+  retail's own prediction lets a walker about a unit nearer a body than
+  its server does. INFERRED (no retail client's view is captured).
+- iw3mp.exe's `CM_Trace` set-up stores each value as CoD2's does: the
+  box's centre offset at 0x4f4e1f, the shifted end at 0x4f4e4c and the
+  sweep at 0x4f4e65 each go through a float (`fstp`, `fld`), where
+  `cod4_lnxded` keeps the offset and the shifted end on the x87 stack
+  (cod4-collision.md 2). VERIFIED (the instructions). vcod's prediction
+  keeps the server's arithmetic for the world and the bodies alike: it
+  replays the server's own move so its result lands on the snapshot's;
+  the difference is ulps, far under the 0.1 miss threshold. INFERRED
+  (vcod's design).
 - Before it runs the cmd last frame's prediction ended at, the replay's
   origin is compared with last frame's: past 0.1 the difference is
   added to `cg.predictedError` (what is left of the last one first
@@ -518,6 +557,17 @@ weapon scales (`cod4_fly::load` builds them for a watched session).
   spectator, as vcod-server's think leaves it out; the view weapon reads
   the predicted `weapon`, `weaponstate`, `weapAnim`, `weaponTime`,
   `weapFlags`, `fWeaponPosFrac` and clip (section 5.4 for its events).
+- The trace (`cod4_predict::Solids`) is the clip map's, then each
+  snapshot entity: a packed `solid` read back as section 5.1 reads it and
+  clipped as its capsule through `movetrace::clip_body_kept`, the call
+  vcod-server makes for a client's body (`game::cod4::clip`); a brush
+  model through `ClipMap::trace_model` at its angles. Stepped cmd by cmd
+  on mp_crash into a body 26 to the side of the walker's line, a body
+  packed to read as the server's box gives vcod-server's origin on every
+  cmd; the real packing keeps the walker within 1.1 of the server's
+  path, all of it after the bodies meet. VERIFIED (the test
+  `play::cod4::tests::predicted_walk_into_a_body_follows_the_server`).
+  Before, bodies clipped as boxes.
 - Left out: item pickup prediction, movers carrying the body
   (`CG_AdjustPositionForMover`) and the ADS view error.
 
@@ -544,11 +594,22 @@ the two spawns.
 | `kill-shooter` | 0 | 0 | 0 |
 | `kill-target` | 2 | 3.169 | 2 |
 | `fly` | 113 | 0.0004 | 0 |
+| `touch-walker`, 60 Hz | 23 | 2.056 | 6 |
+| `touch-walker`, 144 Hz | 77 | 2.058 | 7 |
 
 VERIFIED (the gates' counts). The target's two misses are its first
 hit's snapshots (`damageEvent` 1): the server's knockback, which the
 client cannot predict. VERIFIED (the misses' `damageEvent`). The rest
 are the last bits of `cod4-pmove.md` 13.2's float model.
+
+`touch_capture_predicts_the_walker_against_the_target` plays the touch
+capture's walker (cod4-pmove.md 15.3), which walks into the target,
+strafes along it and walks in again 26 to the side. With bodies clipped
+as boxes it missed 26 snapshots at either rate, by up to 20.0. With the
+capsule it misses 6 or 7, by up to 2.06. A capsule read at the server's
+bounds instead missed none (largest 0.0002), so what is left is the unit
+the client's capsule sits inside the server's (5.1). VERIFIED (the
+gate's counts, the bounds swapped in a trial run).
 
 That the predicted view looks right on screen is pending a human's look.
 
