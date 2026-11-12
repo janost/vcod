@@ -241,6 +241,7 @@ show who talks. Without libspeex nothing is sent or played.
 1.7's typed records into `main/demos/` (the mod's under `fs_game`).
 `demo <name>` and `timedemo <name>` load the map behind the connect
 screen and play it unpredicted, the recorder's view off its archive rows.
+The `RECORDING` line draws where 1.7 draws it.
 
 ### Server
 
@@ -427,9 +428,10 @@ Ranked by how much a player notices. The research-side lists are
    whose curve no zone holds fall off straight.
 6. **No third-person view**, so our own third-person tracer start is not
    modelled ([cod4-effects.md](../research/cod4-effects.md) 12.3).
-7. **Demos untested against retail.** No retail demo has played in vcod,
-   nor vcod's in `iw3mp.exe`. The `RECORDING` line draws at CoD2's place
-   ([cod4-demos.md](../research/cod4-demos.md) 7).
+7. **Demos not yet swapped with a retail client.** The file layout is
+   gated both ways against `iw3mp.exe`'s and a retail capture, but no
+   retail client has played a vcod demo or recorded one for vcod
+   ([cod4-demos.md](../research/cod4-demos.md) 8).
 8. **Small menus.** The CD key menus are missing; Single Player's Yes
    does nothing (this is a multiplayer client); the `winvoice_*` voice
    settings are not read.

@@ -5,8 +5,9 @@ it plays one back, read off its disassembly. CoD2's account is
 `cod2-demos.md`; this doc lists what 1.7 keeps and what it changes.
 Function names are INFERRED; the addresses and the facts are the 1.7
 binary's. No retail-recorded 1.7 demo has been read and retail has not
-played vcod's, so the byte layout below rests on the binary alone
-(section 7). vcod's code: `crates/cod4/src/net/demo.rs`
+played vcod's, so the byte layout below rests on the binary, gated
+against a retail capture written in that layout (section 8).
+vcod's code: `crates/cod4/src/net/demo.rs`
 (the format, `Recording`, `DemoReader`, `gamestate_message`),
 `vcod_cod4::net::conn::{Received::msg, Conn::no_delta}` (the bytes a
 record holds, `demowaiting`'s move), and `crates/client/src/play/cod4.rs`
@@ -73,6 +74,12 @@ addresses 0x914e1c..0x934e98 the functions below read and write).
   and `demorecording` (VERIFIED, 0x4696e7..0x46974f).
 
 ## 2. The records
+
+A file is records from its first byte to its last, with no header:
+`CL_Record_f`'s first `FS_Write` (0x55c200) after the open is the
+gamestate record's type byte at 0x468d69, and nothing between the open
+at 0x468ab0 and there writes to the file (VERIFIED, the calls in that
+range; the writes before 0x468d39 go to the message buffer).
 
 Each record opens with a type byte (VERIFIED, `CL_ReadDemoMessage`
 0x4690c0 reads one byte and switches on 0 and 1 at 0x4690f0). Any other
@@ -155,7 +162,17 @@ byte  svc_EOF (7)
 0xc628ec..0xc64f14 at 0x468b90, the inline bit write of 0 and the
 `MSG_WriteBits(i, 12)` at 0x468bf8..0x468c2c, the `push 0xfffea070`
 before 0x50a280 at 0x468cce.) Every slot goes with an explicit index,
-never the "next slot" bit a server's gamestate uses. The first long
+never the "next slot" bit a server's gamestate uses. `MSG_WriteBigString`
+writes a string of 0x2000 bytes or more as the empty string, after a
+warning (0x6e2a64) on channel 0x10, and any other with each 0x92 byte
+turned into `'` (0x27) and its terminator, byte-aligned at `cursize`
+(VERIFIED, 0x50559d..0x50562f); vcod's record does the same
+(`demo::big_string`). `MSG_Init` (0x505130) starts `cursize` (+0x14)
+and the bit count (+0x20) at 0 (VERIFIED). So the plain op block opens on the bytes 1,
+`serverCommandSequence`, 2 and the count, and ends on 7, `clientNum`,
+`checksumFeed`, 7, the bit stream between (VERIFIED, the stores at
+0x468b2a..0x468bd0 and 0x468d03..0x468d32); vcod's record holds those
+bytes there (`net_decode::a_demo_gamestate_parses_back_to_the_live_one`). The first long
 stays plain and the rest is compressed (0x505370) behind it, written as
 one type 0 record under `serverMessageSequence`; then all 256 archive
 rows, and the last row written becomes the current index (VERIFIED,
@@ -187,9 +204,13 @@ byte (VERIFIED, `net_decode::a_demo_gamestate_parses_back_to_the_live_one`).
 While `demowaiting` is set, `CL_WritePacket` writes the move as
 `clc_moveNoDelta` (VERIFIED, the compare at 0x4640e1 picks the
 `WriteBits(1, 3)` arm at 0x464113). It is cleared at 0x4737d5, inside
-the snapshot parse; that the clear is the `deltaNum == 0` arm is INFERRED
-from CoD2's `CL_ParseSnapshot` (`cod2-demos.md` 4). vcod:
-`Conn::no_delta`, cleared on a snapshot with delta 0 before the write.
+the snapshot parse, on the arm a delta byte of 0 takes: that byte reads
+as `deltaNum` -1 (0x47377c), and a `deltaNum` of 0 or less clears it
+and marks the snapshot valid with no base (VERIFIED, 0x473773..0x4737e5).
+The parse runs before `CL_PacketEvent`'s write, so the full frame is
+the first message written (VERIFIED, the call at 0x46c534 ahead of the
+compare at 0x46c56e). vcod: `Conn::no_delta`, cleared on a snapshot
+with delta 0 before the write.
 
 A server command that arrives only in the messages read while
 `demowaiting` is set never reaches the file: the gamestate record took
@@ -273,9 +294,76 @@ count within two. VERIFIED live.
 
 ## 7. Not done
 
-- Retail has neither played a vcod demo nor recorded one for vcod to
-  read: whether `iw3mp.exe` reads vcod's files is untested (next check: a
-  CD-keyless 1.7 client under Wine, as `cod2-demos.md` 6 ran for CoD2).
-- `cl_avidemo`, `timedemo`'s csv and the `RECORDING` line's 1.7 place
-  (`SCR_DrawDemoRecording` 0x474c80, drawn at CoD2's spot in vcod).
+- No retail client runs here, so `iw3mp.exe` has neither recorded a demo
+  for vcod to read nor played one of vcod's. Section 8 gates both ways
+  against the binary's layout; the run itself (a CD-keyless 1.7 client
+  under Wine, as `cod2-demos.md` 6 ran for CoD2) is still to do.
+- `cl_avidemo` and `timedemo`'s csv.
 - 1.7's front end demo list.
+
+## 8. Interchange with retail
+
+The one `.dm_1` in the 1.7 install was recorded by vcod: its gamestate's
+`sv_hostname` is `vcod`, and its records skip the message after the
+gamestate, as vcod's `demowaiting` does (VERIFIED, `cargo run -p
+vcod-cod4 --example demo_dump -- <file>`, which prints a file record by
+record). So no retail-recorded demo exists to read, and the gate builds
+one from a retail capture instead:
+`play::cod4::tests::cod4_retail_framed_demo_plays_and_vcod_writes_it_alike`.
+
+- Retail to vcod: `play-1.7-spec.txt` (a spectator on retail
+  `cod4_lnxded`) walked message by message and written by a writer of its
+  own off sections 2 to 4 (`RetailDemo`: the type bytes, sequences,
+  lengths and row fields in `CL_WriteDemoMessage`'s, 0x468750's and
+  `CL_StopRecord_f`'s order), each record the acknowledge and the
+  unscrambled block retail's server sent. Its opening record is section
+  3's message as vcod builds it, the one part the capture cannot supply.
+  The record starts as the gamestate lands, because the capture's client
+  never asked for the full frame a later start waits for; retail's
+  `record` waits for the first snapshot. vcod's `demo` reads every record,
+  parses every message, and holds the capture's snapshots state for state
+  from the first, its closing table (the capture's `d` commands applied
+  as a live client applies them) and the events walked past the first
+  frame. VERIFIED (the gate).
+- vcod to retail: vcod's `Recording`, fed the same messages, rows and
+  `demowaiting`, writes the same file byte for byte, so its framing is
+  section 2's throughout (VERIFIED, the gate). The opening record's plain
+  bytes are section 3's (VERIFIED, `net_decode`). That `iw3mp.exe` plays
+  vcod's files is INFERRED from the two together; no retail client ran.
+
+## 9. The `RECORDING` line
+
+`SCR_DrawDemoRecording` (0x474c80):
+
+- It draws only while `demorecording` (+0x40190) is set (VERIFIED, the
+  compare at 0x474c86). Its one caller is a case of the switch at
+  0x474f36, which INFERRED is the screen's `cls.state` switch.
+- The text is `RECORDING %s: %ik` (0x6d2b14) with `demoName` and a byte
+  count over 1024, truncated toward zero (VERIFIED, 0x474ccd..0x474ce9).
+  That the count is the file's position, read off the open file
+  (0x474c93..0x474cc5), is INFERRED.
+- The colour is row 7 of the table at 0x6bdf78, (1, 1, 1, 1) (VERIFIED,
+  0x45c6a0 called with `'7'`, and the table's bytes).
+- The font is the handle at 0xc5ae94, registered from
+  `fonts/consoleFont` (0x6d0e5c) at 0x46cc1c (VERIFIED). Its scale is
+  16.0000005 (the double at 0x70b970) over the font's +4 word, times the
+  placement's grid scale, +0 across and +4 down (VERIFIED,
+  0x474cfc..0x474d59). That +4 is the font's pixel height, so the line
+  is 16 grid units tall, is INFERRED.
+- The baseline sits at grid (5, 479): `x = 5 * scale + (+0x30)`, `y = 479
+  * scale + (+0x34)` off the placement at 0xe343d8 (VERIFIED, 5.0 at
+  0x70b730, 479.0 at 0x70b968). Those are `ScrPlace_ApplyX`'s `LEFT` and
+  `ApplyY`'s `TOP` (`cod4-front-end.md` 10.1), and 0xe343d8 is laid out
+  by `ScrPlace_SetupFloatViewport` over the whole window (VERIFIED, the
+  call at 0x46cbaf). So at a wide window the line starts 5 grid units
+  from the window's left edge, outside the centred 4:3 column. INFERRED
+  (the two together).
+- The draw call to 0x5f6b00 gets style 0, rotation 0 and a character
+  limit of 0x7fffffff (VERIFIED, 0x474d04..0x474d8d). That 0x5f6b00 is
+  `R_AddCmdDrawText` is INFERRED. It turns style 3 into flag 4, 6 into 0xc, 0x80
+  into 1 and leaves every other style 0 (VERIFIED, 0x5f6bab..0x5f6bd8).
+  That flag 0 draws no shadow, so the line has none, is INFERRED.
+
+vcod: `Console::recording_line_cod4` on `ScreenPlacement::cod4`, one
+scale for both axes (the grid's down one), the console's `consoleFont`,
+no shadow. The look on screen is not yet checked by eye.

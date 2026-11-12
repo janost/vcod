@@ -532,6 +532,22 @@ fn a_demo_gamestate_parses_back_to_the_live_one() {
         "svc_EOF at byte {} is not the block's end",
         p.eof_at
     );
+    // The plain bytes `CL_Record_f` stores ahead of the bit stream
+    // (0x468b2a..0x468bd0) and after the baselines (0x468d03..0x468d32):
+    // svc_gamestate, serverCommandSequence, svc_configstring, the count;
+    // svc_EOF, clientNum, checksumFeed, svc_EOF.
+    let plain = client.huff.decompress(&msg[4..]);
+    let held = back.gamestate.as_ref().unwrap().configstrings.len() as i16;
+    let mut head = vec![1u8];
+    head.extend(gs.server_command_sequence.to_le_bytes());
+    head.push(2);
+    head.extend(held.to_le_bytes());
+    assert_eq!(&plain[..8], head.as_slice());
+    let mut tail = vec![7u8];
+    tail.extend(gs.client_num.to_le_bytes());
+    tail.extend(gs.checksum_feed.to_le_bytes());
+    tail.push(7);
+    assert_eq!(&plain[p.eof_at - 10..p.eof_at], tail.as_slice());
     assert!(matches!(p.ops.as_slice(), [Op::Gamestate]));
     let b = back.gamestate.as_ref().unwrap();
     assert_eq!(b.all_configstrings(), gs.all_configstrings());

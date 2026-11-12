@@ -8376,13 +8376,17 @@ impl ApplicationHandler for App {
                     hud_quads.extend(self.console.recording_line(&text, v1, w, h));
                 }
                 // CoD2's `SCR_UpdateFrame` (Mac 0x172d88): the name always,
-                // white at (5, 479) on the 640x480 grid as 1.5's.
+                // white at (5, 479) on the 640x480 grid as 1.5's. 1.7
+                // draws it in `consoleFont`, placed `LEFT` (cod4-demos.md 9).
                 if !self.ui.fullscreen()
                     && let Some((name, bytes)) = self.session.recording_status()
                 {
                     let text = console::recording_text(name, bytes, true);
                     let (w, h) = r.screen_size();
-                    hud_quads.extend(self.console.recording_line(&text, false, w, h));
+                    hud_quads.extend(match self.session {
+                        session::Session::Cod4(_) => self.console.recording_line_cod4(&text, w, h),
+                        _ => self.console.recording_line(&text, false, w, h),
+                    });
                 }
                 // The CoD2 connect screen: the address and the download.
                 for (i, line) in self

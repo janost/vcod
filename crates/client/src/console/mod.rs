@@ -12,6 +12,7 @@ use std::collections::VecDeque;
 use winit::keyboard::KeyCode;
 
 use crate::hud::HudQuad;
+use crate::hud::cod2elem::ScreenPlacement;
 use crate::hud::font::{self, Font};
 use vcod_common::pk3::Pk3Fs;
 
@@ -322,6 +323,28 @@ impl Console {
         out
     }
 
+    /// 1.7's `SCR_DrawDemoRecording` (iw3mp.exe 0x474c80, cod4-demos.md 9):
+    /// white, unshadowed, in this console's `fonts/consoleFont` at 16 grid
+    /// units over its pixel height, the baseline at grid (5, 479) placed
+    /// `LEFT` and `TOP` on the 2D layer ([`ScreenPlacement::cod4`]).
+    pub fn recording_line_cod4(&self, text: &str, w: f32, h: f32) -> Vec<HudQuad> {
+        let Some(font) = &self.font else {
+            return Vec::new();
+        };
+        let sp = ScreenPlacement::cod4(w, h);
+        let (x, _) = sp.axis(0, 5.0, 0.0, 1);
+        let (baseline, _) = sp.axis(1, 479.0, 0.0, 1);
+        // Window px per glyph px; retail scales across by the grid's x.
+        let s = 16.0 / font.size as f32 * sp.virtual_to_real[1];
+        let mut out = Vec::new();
+        let top = baseline - font.max_height as f32 * s;
+        let k = s / (font.glyph_scale * font.unit_scale());
+        font::layout(font, text, x, top, k, WHITE, &mut out);
+        // Style 0 sets no shadow flag (R_AddCmdDrawText 0x5f6bab): drop
+        // the shadow `layout` puts ahead of each glyph.
+        out.into_iter().skip(1).step_by(2).collect()
+    }
+
     /// `text` with its baseline at (`x`, `y`) on the 640x480 virtual
     /// screen, the console font's cell scaled with it.
     pub fn screen_text(&self, text: &str, x: f32, y: f32, w: f32, h: f32) -> Vec<HudQuad> {
@@ -544,6 +567,61 @@ mod tests {
         );
         assert_eq!(recording_text("x", 5000, true), "RECORDING x: 4k");
         assert_eq!(recording_text("x", 5000, false), "RECORDING: 4k");
+    }
+
+    /// 1.7's line on a 1920x1080 window: the 4:3 grid is 1440 wide, 2.25
+    /// px a unit, so the baseline sits at 479 * 2.25 and the text starts
+    /// 5 * 2.25 in from the window's left edge, not the column's; a 16 px
+    /// font draws a glyph px as 2.25, one quad a glyph, white.
+    #[test]
+    fn the_cod4_recording_line_sits_where_1_7_draws_it() {
+        let g = font::Glyph {
+            height: 10,
+            width: 6,
+            top: 10.0,
+            bearing: 1.0,
+            advance: 7.0,
+            image_width: 6,
+            image_height: 12,
+            s: 0.0,
+            t: 0.0,
+            s2: 1.0,
+            t2: 1.0,
+            page: 0,
+        };
+        // As `cod4_hud::to_font` builds `consoleFont`, 16 px high.
+        let f = Font {
+            size: 16,
+            glyphs: vec![g; 256],
+            glyph_scale: 3.0,
+            line_advance: 48.0,
+            max_height: 10,
+            page: "images/p.iwi".into(),
+            pages: vec!["images/p.iwi".into()],
+        };
+        let c = Console::with_font(Some(f));
+        let q = c.recording_line_cod4("RE", 1920.0, 1080.0);
+        assert_eq!(q.len(), 2);
+        let s = 2.25;
+        let (x, base) = (5.0 * s, 479.0 * s);
+        let near =
+            |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3;
+        assert!(
+            near(q[0].verts[0], [x + 1.0 * s, base - 10.0 * s]),
+            "{:?}",
+            q[0].verts
+        );
+        assert!(
+            near(q[0].verts[2], [x + 7.0 * s, base + 2.0 * s]),
+            "{:?}",
+            q[0].verts
+        );
+        assert!(
+            near(q[1].verts[0], [x + 8.0 * s, base - 10.0 * s]),
+            "{:?}",
+            q[1].verts
+        );
+        assert!(q.iter().all(|q| q.rgba == WHITE));
     }
 }
 
