@@ -192,8 +192,9 @@ play in vcod and vcod's in retail.
 - `rate` and `snaps` pace off-LAN clients; a fragmented message goes a
   fragment a turn; a dropped client is a zombie for `sv_zombietime`; a
   silent one times out on `sv_timeout`; `sv_floodProtect`.
-- Serves a non-stock iwd over UDP (`sv_allowDownload`) or redirects to
-  `sv_wwwBaseURL` (`sv_wwwDownload`).
+- Serves any file a client asks for from `fs_homepath`, then the game
+  dir, over UDP (`sv_allowDownload`; stock paks refused as retail does),
+  or redirects to `sv_wwwBaseURL` (`sv_wwwDownload`).
 - `--set dedicated=2` heartbeats `master.cod.pm:20710` every three
   minutes.
 - `g_log` writes 1.3's `games_mp.log`
@@ -328,9 +329,9 @@ Ranked by how much a player notices, worst first.
    one also lacks the step smoothing, which retail's demo skips too
    ([cod2-demos.md](../research/cod2-demos.md) 7). Retail's front end has
    no demo list, and vcod none either.
-3. **Server odds and ends.** `give all` hands over every weapon the level
-   registered, not retail's slot rule. Downloads serve only `.iwd` files
-   under the game dir, where retail serves any file.
+3. **Download names.** vcod-server refuses a `download` name with a `..`
+   part and never reads from the filesystem root; retail serves both
+   (cod2-protocol.md 17.5). A stock client never asks for either.
 4. **Voice options.** The Windows mixer dvars (`winvoice_mic_reclevel`,
    `winvoice_mic_mute`, `winvoice_mic_scaler`), `winvoice_save_voice` and
    the options page's record level meter do nothing

@@ -301,7 +301,7 @@ fn cod2_server(args: Args) -> Result<(vcod_server::cod2::Cod2Server, Net)> {
         server.set_cvar(vcod_server::rcon::login_cvar_name(name), value);
     }
     server.set_cvar("net_port", &args.port.to_string());
-    // `download` serves `<fs_basepath>/<name>` (cod2-protocol.md 17.5).
+    // `download` serves from `fs_homepath`, then `fs_basepath` (cod2-protocol.md 17.5).
     server.set_cvar("fs_basepath", &args.game_dir.to_string_lossy());
     server.load(Some(fs)).context("loading the level")?;
     if args.bots > 0 {

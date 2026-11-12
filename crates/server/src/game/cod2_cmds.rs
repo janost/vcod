@@ -336,73 +336,59 @@ impl Cod2Level {
         }
     }
 
-    /// `G_GivePlayerWeapon` (0x8120b26): nothing for a weapon held or one
-    /// of `weaponClass` turret or non-player (7, 8); else the weapon and
-    /// its `altWeapon` modes held, a slot weapon in the first empty of the
-    /// two slots. VERIFIED, the branches; that `weaponClass` 7 and 8 are
-    /// turret and non-player is INFERRED. Its offhand arm (the playerstate's offhand
-    /// when it has none) is not done here.
+    /// `G_GivePlayerWeapon` (Mac 0x1c930a, lnxded 0x8120b26): nothing for
+    /// a weapon held or one of `weaponClass` turret or non-player (7, 8);
+    /// an `item` (9, the binoculars) only held; an offhand weapon held and
+    /// through the offhand arm ([`super::builtins::cod2::give_offhand`]);
+    /// any other held with its `altWeapon` modes, a slot weapon in the
+    /// first empty of the two slots. VERIFIED, the branches and the class
+    /// table (0x8186a20).
     fn give_player_weapon(&mut self, slot: usize, i: usize) {
         let weapons = self.rt.host.weapons.clone();
         let Some(def) = weapons.get(i) else {
             return;
         };
-        if matches!(def.weapon_class.as_str(), "turret" | "non-player") {
+        let class = def.weapon_class.as_str();
+        if matches!(class, "turret" | "non-player") {
             return;
         }
-        let offhand = self
-            .rt
-            .host
-            .cod2()
-            .offhands
-            .get(i - 1)
-            .copied()
-            .unwrap_or(false);
-        let w = &mut self.rt.host.client_weapons[slot];
+        let host = &mut self.rt.host;
+        let offhand = host.cod2().offhands.get(i - 1).copied().unwrap_or(0) != 0;
+        let w = &mut host.client_weapons[slot];
         if w.holds(i) {
+            return;
+        }
+        if class == "item" || offhand {
+            w.give(i, 0);
+            if class != "item" {
+                super::builtins::cod2::give_offhand(host, slot, i);
+            }
             return;
         }
         let before = w.slots;
         w.give_chain(&weapons, i, 0);
         w.slots = before;
-        if !offhand
-            && matches!(weapons.slot(i), 1 | 2)
+        if matches!(weapons.slot(i), 1 | 2)
             && let Some(s) = crate::game::pickup::empty_slot_for(w, 1)
         {
             w.slots[s] = i as u8;
         }
     }
 
-    /// `Add_Ammo`: `count` more rounds in reserve up to the weapon's
-    /// `maxAmmo`, and with `fill_clip` a full clip. INFERRED, 1.1's.
+    /// `Add_Ammo` (Mac 0x1b0e30): `count` into the reserve, a clip-only
+    /// weapon given first (`G_GivePlayerWeapon`), the clip filled from the
+    /// reserve when `fill_clip` or clip-only, both capped, then the shared
+    /// cap. VERIFIED, and the arithmetic is 1.1's (`pickup::add_ammo`).
     fn add_ammo(&mut self, slot: usize, weapon: usize, count: i32, fill_clip: bool) {
-        let Some(def) = self.rt.host.weapons.get(weapon).cloned() else {
-            return;
-        };
+        let weapons = self.rt.host.weapons.clone();
+        if weapons.get(weapon).is_some_and(|d| d.clip_only) {
+            self.give_player_weapon(slot, weapon);
+        }
         let host = &mut self.rt.host;
-        let have = host
-            .client_ammo
-            .get(slot)
-            .map_or(0, |a| i32::from(a.ammo[def.ammo_index]));
-        if !def.clip_only {
-            let rounds = (have + count).min(def.max_ammo as i32) as i16;
-            host.weapon_op(
-                slot,
-                WeaponOp::SetAmmo {
-                    ammo_index: def.ammo_index,
-                    rounds,
-                },
-            );
-        }
-        if fill_clip {
-            host.weapon_op(
-                slot,
-                WeaponOp::SetClip {
-                    clip_index: def.clip_index,
-                    rounds: def.clip_size as i16,
-                },
-            );
-        }
+        let before = super::item::inventory(host, slot);
+        let mut after = before;
+        crate::game::pickup::add_ammo(&mut after, &weapons, weapon, count, fill_clip);
+        super::item::write_back(host, slot, &before, &after);
     }
 
     /// `Cmd_Take_f` (Mac 0x1a701a, lnxded 0x80fe9ca): `all`, `health`
@@ -830,18 +816,10 @@ mod tests {
         Some((level, now))
     }
 
-    /// `give weapons` (0x80fe588): every weapon but the turrets, and of
-    /// the slot weapons the first two past the old second slot's index
-    /// (the class's rifle in slot 1, its pistol in slot 2), one a slot.
-    #[test]
-    fn give_weapons_fills_the_two_slots_past_the_old_second() {
-        let Some((mut level, _)) = level() else {
-            return;
-        };
-        level.rt.host.cvars.set("sv_cheats", "1");
-        let second = usize::from(level.rt.host.client_weapons[0].slots[2]);
-        assert_ne!(second, 0);
-        level.client_command(0, &argv("give weapons"));
+    /// `give weapons`' set (0x80fe588): every weapon but the turrets, and
+    /// of the slot weapons the first two past the old second slot's index
+    /// (`second`), one a slot; less those `taken` says went again.
+    fn assert_given_weapons(level: &Cod2Level, second: usize, taken: &dyn Fn(usize) -> bool) {
         let host = &level.rt.host;
         let weapons = host.weapons.clone();
         let w = host.client_weapons[0];
@@ -861,7 +839,7 @@ mod tests {
             } else if matches!(weapons.slot(i), 1 | 2) {
                 given.contains(&i)
             } else {
-                true
+                !taken(i)
             };
             assert_eq!(
                 w.holds(i),
@@ -869,6 +847,61 @@ mod tests {
                 "{} ({class})",
                 host.cod2().weapons[i - 1]
             );
+        }
+    }
+
+    /// `give weapons` fills the class's rifle in slot 1 and its pistol in
+    /// slot 2 with the next two slot weapons.
+    #[test]
+    fn give_weapons_fills_the_two_slots_past_the_old_second() {
+        let Some((mut level, _)) = level() else {
+            return;
+        };
+        level.rt.host.cvars.set("sv_cheats", "1");
+        let second = usize::from(level.rt.host.client_weapons[0].slots[2]);
+        assert_ne!(second, 0);
+        level.client_command(0, &argv("give weapons"));
+        assert_given_weapons(&level, second, &|_| false);
+    }
+
+    /// `give all` (0x80fe588): the maximum health, `give weapons`' set, then
+    /// `Add_Ammo(998, fill)` on every weapon in index order: each held
+    /// one's clip full from its reserve and the reserve at `maxAmmo`. A
+    /// grenade past the first of its `sharedAmmoCap` overflows the cap
+    /// with its full clip and is taken again (`Add_Ammo` Mac 0x1b0e30), so
+    /// one frag and one smoke stay. The spawn's grenade stays the offhand,
+    /// as it holds rounds.
+    #[test]
+    fn give_all_fills_health_weapons_and_ammo() {
+        let Some((mut level, _)) = level() else {
+            return;
+        };
+        level.rt.host.cvars.set("sv_cheats", "1");
+        let second = usize::from(level.rt.host.client_weapons[0].slots[2]);
+        let offhand = level.rt.host.cod2().clients[0].offhand;
+        level.rt.host.client_vitals[0].health = 7;
+        level.client_command(0, &argv("give all"));
+        let weapons = level.rt.host.weapons.clone();
+        let cap = |i: usize| weapons.get(i).and_then(|d| d.shared_cap_index);
+        let first_of_cap = |i: usize| (1..i).all(|j| cap(j) != cap(i));
+        assert_given_weapons(&level, second, &|i| cap(i).is_some() && !first_of_cap(i));
+        let host = &level.rt.host;
+        let v = host.client_vitals[0];
+        assert_eq!(v.health, v.max_health);
+        assert_eq!(host.cod2().clients[0].offhand, offhand);
+        let rounds = host.client_ammo[0];
+        for i in 1..=host.cod2().weapons.len() {
+            let Some(d) = host.weapons.get(i) else {
+                continue;
+            };
+            if !host.client_weapons[0].holds(i) || d.shared_cap_index.is_some() {
+                continue;
+            }
+            let name = &host.cod2().weapons[i - 1];
+            assert_eq!(rounds.clip[d.clip_index], d.clip_size as i16, "{name} clip");
+            if !d.clip_only {
+                assert_eq!(rounds.ammo[d.ammo_index], d.max_ammo as i16, "{name} ammo");
+            }
         }
     }
 
