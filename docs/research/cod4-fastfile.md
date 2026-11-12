@@ -321,7 +321,11 @@ every stock zone on its last byte, every block at its `blockSize`, is
 VERIFIED (section 11).
 
 - **physpreset** 0x2C (`Load_PhysPresetPtr` 0x081ED2E6): name, then
-  `sndAliasPrefix` (slot 0x1C).
+  `sndAliasPrefix` (slot 0x1C). The type is at +4, mass +8, bounce +12,
+  friction +16 and the push's scale +20, as iw3mp.exe's `Phys_ObjCreate`
+  and `CG_CreatePhysicsObject` read them (cod4-gsc.md 3.6). VERIFIED
+  (disassembly). A zone that only refers to a preset lists it as
+  `,name`, all zeros.
 - **localize** 8 (`Load_LocalizeEntryPtr` 0x081ED0C0): the value string
   (slot 0) loads before the name (slot 4).
 - **rawfile** 0xC (`Load_RawFile` 0x081F417A): name; buffer a1 of
@@ -397,6 +401,10 @@ VERIFIED (section 11).
   a4); bone info a4 (0x28 per bone); the physpreset handle; the
   `PhysGeomList` a4 (0x2C, `count` 0x44-byte geoms a4, each with a
   `BrushWrapper` a4 of 0x50: sides a4, adjacency bytes a1, planes a4).
+  The list's `PhysMass` is at +8 (centre, moments +0x14, products
+  +0x20); a geom holds its brush at +0, type +4, `orientation` +8,
+  `offset` +0x2C and `halfLengths` +0x38 (cod4-gsc.md 3.6). VERIFIED
+  (iw3mp.exe 0x5a5741..0x5a57e4).
   A surface (`Load_XSurface` 0x081EBCD6): blend data a2 (`c0 + 3 c1 + 5
   c2 + 7 c3` u16s); the vertices a16 in block 7 (0x20 each); the rigid
   vertex lists a4 (0xC, each with a collision tree a4 of 0x28: nodes

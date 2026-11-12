@@ -45,7 +45,30 @@ pub struct XModel {
     pub maxs: [f32; 3],
     pub flags: u8,
     pub phys_preset: Option<Id<PhysPreset>>,
-    pub phys_geoms: usize,
+    /// `physGeoms`, when the model has its own physics shapes.
+    pub phys_geoms: Option<PhysGeomList>,
+}
+
+/// `PhysGeomList`, 0x2C: `count`, the geoms, then `PhysMass`.
+#[derive(Clone, Debug, Default)]
+pub struct PhysGeomList {
+    pub geoms: Vec<PhysGeom>,
+    /// `centerOfMass`, in the model's frame.
+    pub center_of_mass: [f32; 3],
+    /// `momentsOfInertia` and `productsOfInertia`, per unit of mass.
+    pub moments: [f32; 3],
+    pub products: [f32; 3],
+}
+
+/// `PhysGeomInfo`, 0x44: a brush (`BrushWrapper`) or a shape of `type`
+/// (1 a box) at `offset` along `orientation`'s rows, `halfLengths` in size.
+#[derive(Clone, Debug)]
+pub struct PhysGeom {
+    pub brush: bool,
+    pub kind: i32,
+    pub orientation: [[f32; 3]; 3],
+    pub offset: [f32; 3],
+    pub half_lengths: [f32; 3],
 }
 
 /// `XModelCollSurf_s`, 0x2C: its triangles (0x30 each: plane, `svec`,
@@ -152,8 +175,8 @@ pub fn xmodel<R: BufRead>(w: &mut W<R>, p: Pointer, slot: u32) -> Result<Option<
         let bone_info = w.shared(s.ptr(164), 4, 0x28 * nb, "bone info", false)?;
         let phys = phys_preset(w, s.ptr(212), s.slot(212))?;
         let phys_geoms = match w.follow(s.ptr(216), 4)? {
-            Follow::Inline => phys_geom_list(w)?,
-            _ => 0,
+            Follow::Inline => Some(phys_geom_list(w)?),
+            _ => None,
         };
         w.pop()?;
         let lods = (0..4)
@@ -265,23 +288,38 @@ fn rigid_lists<R: BufRead>(w: &mut W<R>, n: usize) -> Result<Vec<[u16; 4]>> {
 }
 
 /// `PhysGeomList`, 0x2C: `count` 0x44-byte `PhysGeomInfo`, each maybe
-/// with a `BrushWrapper`. Returns the count.
-fn phys_geom_list<R: BufRead>(w: &mut W<R>) -> Result<usize> {
+/// with a `BrushWrapper`, then the `PhysMass`.
+fn phys_geom_list<R: BufRead>(w: &mut W<R>) -> Result<PhysGeomList> {
     let s = w.load(0x2C)?;
     let n = s.u32(0) as usize;
+    let mut geoms = Vec::new();
     match w.follow(s.ptr(4), 4)? {
         Follow::Inline => {
             let a = w.load(0x44 * n)?;
             for i in 0..n {
-                if w.inline_only(a.elem(i, 0x44).ptr(0), 4)? {
+                let g = a.elem(i, 0x44);
+                let brush = w.inline_only(g.ptr(0), 4)?;
+                if brush {
                     brush_wrapper(w)?;
                 }
+                geoms.push(PhysGeom {
+                    brush: g.ptr(0) != Pointer::Null,
+                    kind: g.i32(4),
+                    orientation: [g.vec3(8), g.vec3(20), g.vec3(32)],
+                    offset: g.vec3(44),
+                    half_lengths: g.vec3(56),
+                });
             }
         }
         Follow::At(_) => w.unresolved("phys geoms"),
         Follow::Null => {}
     }
-    Ok(n)
+    Ok(PhysGeomList {
+        geoms,
+        center_of_mass: s.vec3(8),
+        moments: s.vec3(20),
+        products: s.vec3(32),
+    })
 }
 
 /// `BrushWrapper`, 0x50: sides, adjacency bytes, planes.
