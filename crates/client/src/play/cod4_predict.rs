@@ -73,6 +73,9 @@ pub struct Cod4World {
     /// Each xmodel's collision surfaces by lower-case name, the zones'
     /// first: what a script model's rounds meet (`CG_LocationalTraceDObj`).
     pub model_coll: HashMap<String, Arc<Vec<XModelCollSurf>>>,
+    /// Each xmodel with a physics preset by lower-case name: what a
+    /// `physicsLaunch`ed part flies as (`play::cod4_physics`).
+    pub parts: HashMap<String, Arc<vcod_cod4::physics::PartModel>>,
 }
 
 impl Cod4World {
@@ -128,6 +131,7 @@ impl Cod4World {
                     .or_insert_with(|| Arc::new(x.coll.clone()));
             }
         }
+        let all: Vec<&Assets> = std::iter::once(map).chain(zones.iter().copied()).collect();
         Ok(Cod4World {
             clip,
             weapons,
@@ -137,6 +141,7 @@ impl Cod4World {
             kicks,
             ragdoll: None,
             model_coll,
+            parts: vcod_cod4::physics::part_models(&all),
         })
     }
 
