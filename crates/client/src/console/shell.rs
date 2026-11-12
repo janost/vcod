@@ -130,8 +130,11 @@ const COMMANDS: &[&str] = &[
     "+melee",
     "+melee_breath",
     "+mlook",
+    "+movedown",
     "+moveleft",
     "+moveright",
+    "+moveup",
+    "+prone",
     "+reload",
     "+scores",
     "+smoke",
@@ -157,8 +160,11 @@ const COMMANDS: &[&str] = &[
     "-melee",
     "-melee_breath",
     "-mlook",
+    "-movedown",
     "-moveleft",
     "-moveright",
+    "-moveup",
+    "-prone",
     "-reload",
     "-scores",
     "-smoke",
@@ -186,12 +192,14 @@ const COMMANDS: &[&str] = &[
     "gocrouch",
     "goprone",
     "leaveads",
+    "lowerstance",
     "messagemode",
     "messagemode2",
     "mp_QuickMessage",
     "openscriptmenu",
     "quit",
     "r_applypicmip",
+    "raisestance",
     "rcon",
     "reconnect",
     "record",
@@ -206,6 +214,8 @@ const COMMANDS: &[&str] = &[
     "toggle",
     "toggleads",
     "toggleconsole",
+    "togglecrouch",
+    "toggleprone",
     "ui_load",
     "unbind",
     "unbindall",
@@ -226,6 +236,10 @@ fn button(word: &str) -> Option<Action> {
         "moveleft" => Action::Left,
         "moveright" => Action::Right,
         "gostand" => Action::Jump,
+        // CoDMP.exe 0x40a670, 0x40a700, 0x40aa60 (cod11-console.md 9).
+        "moveup" => Action::MoveUp,
+        "movedown" => Action::MoveDown,
+        "prone" => Action::HoldProne,
         "speed" => Action::Ads,
         "attack" => Action::Attack,
         "melee" => Action::Melee,
@@ -1194,8 +1208,9 @@ impl Shell {
             Some(w) if w.eq_ignore_ascii_case("+actionslot") => true,
             Some(w) if w.starts_with('+') => button(&w[1..]).is_some(),
             Some(
-                "gocrouch" | "goprone" | "weaponslot" | "weapnext" | "weapprev" | "weapalt"
-                | "weapon" | "toggleads" | "leaveads",
+                "gocrouch" | "goprone" | "togglecrouch" | "toggleprone" | "lowerstance"
+                | "raisestance" | "weaponslot" | "weapnext" | "weapprev" | "weapalt" | "weapon"
+                | "toggleads" | "leaveads",
             ) => true,
             _ => false,
         }
@@ -1239,6 +1254,10 @@ impl Shell {
             "-scores" => out.push(Effect::Scores(false)),
             "gocrouch" => out.push(Effect::Impulse(Action::Crouch)),
             "goprone" => out.push(Effect::Impulse(Action::Prone)),
+            "togglecrouch" => out.push(Effect::Impulse(Action::ToggleCrouch)),
+            "toggleprone" => out.push(Effect::Impulse(Action::ToggleProne)),
+            "lowerstance" => out.push(Effect::Impulse(Action::LowerStance)),
+            "raisestance" => out.push(Effect::Impulse(Action::RaiseStance)),
             "weapnext" => out.push(Effect::Impulse(Action::NextWeapon)),
             "weapprev" => out.push(Effect::Impulse(Action::PrevWeapon)),
             "weapalt" => out.push(Effect::Impulse(Action::AltWeapon)),
@@ -1901,6 +1920,34 @@ mod tests {
         assert!(s.key_event("G", false).is_empty());
         assert!(s.bind_is_gameplay("G"));
         assert!(!s.bind_is_gameplay("T"));
+    }
+
+    /// The Options menu's stance binds (issue #8): the held ones press and
+    /// release, the rest are one-shots, and none is unknown.
+    #[test]
+    fn stance_binds_dispatch() {
+        let mut s = Shell::new();
+        for (cmd, action) in [
+            ("+movedown", Action::MoveDown),
+            ("+moveup", Action::MoveUp),
+            ("+prone", Action::HoldProne),
+        ] {
+            s.execute(&format!("bind CTRL {cmd}"));
+            assert_eq!(s.key_event("CTRL", true), [Effect::Button(action, true)]);
+            assert_eq!(s.key_event("CTRL", false), [Effect::Button(action, false)]);
+            assert!(s.bind_is_gameplay("CTRL"));
+        }
+        for (cmd, action) in [
+            ("togglecrouch", Action::ToggleCrouch),
+            ("toggleprone", Action::ToggleProne),
+            ("lowerstance", Action::LowerStance),
+            ("raisestance", Action::RaiseStance),
+        ] {
+            s.execute(&format!("bind CTRL {cmd}"));
+            assert_eq!(s.key_event("CTRL", true), [Effect::Impulse(action)]);
+            assert!(s.key_event("CTRL", false).is_empty());
+            assert!(s.bind_is_gameplay("CTRL"));
+        }
     }
 
     /// `weaponslot` takes UO's eight names, case folded, or a number as

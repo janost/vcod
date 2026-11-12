@@ -183,17 +183,18 @@ pub struct Fired {
 
 /// `CG_EntityEvent`'s `EV_STANCE_FORCE_*` off our playerstate's ring
 /// (`iw3mp.exe` 0x436155, 0x436195, 0x4361d5): `CL_SetStance` (0x462870)
-/// makes the stance keys' state the forced one, so a sprint out of a
-/// crouch stays standing (cod4-pmove.md 8).
+/// makes the stance keys' state the forced one unless `+prone` or
+/// `+movedown` is held, so a sprint out of a crouch stays standing
+/// (cod4-pmove.md 8).
 fn force_stance(input: &mut Cod4Input, fired: &[Fired]) {
     use crate::play::cod4_input::Stance;
     for f in fired.iter().filter(|f| f.entity.is_none()) {
-        input.stance = match f.name {
+        input.set_stance(match f.name {
             "EV_STANCE_FORCE_STAND" => Stance::Stand,
             "EV_STANCE_FORCE_CROUCH" => Stance::Crouch,
             "EV_STANCE_FORCE_PRONE" => Stance::Prone,
             _ => continue,
-        };
+        });
     }
 }
 

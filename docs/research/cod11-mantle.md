@@ -826,10 +826,15 @@ cgame's cvar table at file offset 0x74f60, both with default "0" and flags
 in ui_mp_x86.dll; CoDMP.exe has no read of its cvar pointer (0x142f5f0)
 past the store; the only cgame reads of its value (0x301d8f0c) are the
 three event arms above (0x3001dee5, 0x3001df20, 0x3001df5b). The stock
-configs set it to "0" (`configure_mp.cfg`, `safemode_mp.cfg`). INFERRED: it
-is a user switch that, set non-zero, stops the forced-stance events from
-moving `cl_stance`, and no stock code sets it. vcod registers it with that
-default and `forced_stance` honours it.
+configs set it to "0" (`configure_mp.cfg`, `safemode_mp.cfg`). VERIFIED:
+CoDMP.exe sets it by name (`Cvar_Set` 0x439650 on that string, 0x5685d4)
+in `+prone`, `-prone`, `+movedown` and `-movedown` (0x40aa60, 0x40aab0,
+0x40a700, 0x40a750): "1" while either key's `active` word is set, "0"
+otherwise (cod11-console.md 9). INFERRED: the forced-stance events leave
+`cl_stance` alone while a held key sets the stance, so the release goes
+back to the stance the binds keep. vcod registers the cvar with that
+default and `forced_stance` honours it or a held `+prone` / `+movedown`
+(`PlayInput::stance_held`).
 
 ### Prone under a setOrigin hold
 

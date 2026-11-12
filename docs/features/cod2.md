@@ -45,7 +45,9 @@ rects placed by their screen alignment
   plays. A player sends CoD2's buttons through the console binds
   (`default_mp.cfg`'s): fire, sight toggle, melee, hold breath, frag,
   smoke, binoculars, use, reload, lean, `gocrouch`, `goprone`,
-  `+gostand`, `weapnext`. The weapon byte is the client's own pick. X
+  `+gostand`, `weapnext`, and the Options menu's other stance binds
+  (`+movedown`, `+prone`, `+moveup`, the toggles, `lowerstance`,
+  `raisestance`); not `+stance`. The weapon byte is the client's own pick. X
   opens `changeweapon` for the next spawn.
 - Follows a map change, keeps the map through `map_restart`,
   `fast_restart` and `sd` rounds, and returns to the main menu with the

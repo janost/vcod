@@ -82,8 +82,9 @@ with its `mouse_over`, `mouse_click` and `music_mainmenu_mp` sounds.
 - `--team` and `--class` (e.g. `assault_mp,0`) answer the menus on their
   own.
 
-**Input.** A cmd a frame off the binds: move, sprint, jump, stances,
-attack, the sight (`+speed`, `toggleads`, `+toggleads_throw`), melee (V),
+**Input.** A cmd a frame off the binds: move, sprint, jump, the stance
+binds (all but `+stance`), attack, the sight (`+speed`, `toggleads`,
+`+toggleads_throw`), melee (V),
 use, reload, lean, hold breath (`+breath_sprint`), frag and smoke,
 `weapnext` / `weapprev`. `+actionslot` switches to the grenade launcher,
 the slot's weapon or the night vision goggles. T and Y open the say field.
