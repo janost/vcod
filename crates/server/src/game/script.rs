@@ -99,6 +99,7 @@ pub struct Carry {
     /// `G_InitGame`'s `Rand_Init` seed for the script's draws, a new one
     /// every level, restarts included (map-cycle doc 4.8); `None` (a test
     /// building a runtime by hand) takes [`crate::game::host::RNG_SEED`].
+    /// CoD2's `srand` takes it as well.
     pub seed: Option<u64>,
     /// A test's replay of another server's spawn picks
     /// ([`crate::game::host::SpawnPins`]), handed to every level.
@@ -686,6 +687,11 @@ impl ScriptRuntime {
         host.pers_carry = carry.pers;
         if let Some(seed) = carry.seed {
             host.rng = seed | 1;
+            // CoD2's `G_InitGame` hands the one seed to `srand` too
+            // (cod2-combat.md 9.6).
+            if let crate::game::host::HostExt::Cod2(c) = &host.ext {
+                c.rand.reseed(seed as u32);
+            }
         }
         host.spawn_pins = carry.spawn_pins;
         if let Some(items) = carry.items {

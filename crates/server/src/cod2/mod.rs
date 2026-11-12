@@ -186,6 +186,9 @@ pub struct Cod2Game {
     /// list): the `challenge` the master's status carries
     /// (cod2-protocol.md 17.6).
     argv1: String,
+    /// The seed each level's `G_InitGame` takes when a test pinned one
+    /// ([`Cod2Server::pin_game_seed`]); otherwise a draw off the engine's.
+    game_seed: Option<u32>,
 }
 
 /// The CoD2 server: the engine over [`Cod2Game`].
@@ -358,6 +361,7 @@ impl Cod2Server {
                 net_now: None,
                 argv1: String::new(),
                 game_log: Default::default(),
+                game_seed: None,
             },
         };
         // The command line's `map <name>` is the first line tokenized.
@@ -604,6 +608,21 @@ impl Cod2Server {
     /// An engine cvar as `atoi` reads it.
     fn int(&self, name: &str) -> i32 {
         crate::game::builtins::cvar::atoi(self.game.cvars.get(name))
+    }
+
+    /// Test-facing: every level's `G_InitGame` seeds `srand` and the
+    /// script's draws with `seed`, as retail's took its wall clock's
+    /// milliseconds (cod2-combat.md 9.6).
+    pub fn pin_game_seed(&mut self, seed: u32) {
+        self.game.game_seed = Some(seed);
+    }
+
+    /// The seed of the next level's `G_InitGame`.
+    pub(crate) fn game_seed(&mut self) -> u32 {
+        match self.game.game_seed {
+            Some(s) => s,
+            None => self.rand() as u32,
+        }
     }
 
     /// The loop's socket and wait for `SV_SpawnServer`'s send and sleep.

@@ -17,6 +17,11 @@
 //! saw (type, parm, the entities named, the origin), and every missile's
 //! trajectory. A difference must be named in [`GAPS`] with its section
 //! of docs/research/cod2-combat.md. Needs `COD2_DIR`.
+//!
+//! A capture made with `RAND_TRACE=1` carries retail's every `srand()` and
+//! `rand()` (`tools/re/cod2_rand_trace.c`): the replay takes `G_InitGame`'s
+//! seed and the draws before its start off it, and compares the level time
+//! of each later draw with vcod's (the `rand draws` check).
 //! `COMBAT_REPORT=1` prints every mismatching row; `COMBAT_MISSILES=<name>`
 //! prints that capture's missiles frame by frame, ours over retail's.
 
@@ -36,7 +41,9 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../cod2/tests/fixtu
 /// The captures, each a shooter's `<name>.txt` and its target's
 /// `<name>-b.txt`: kar98k rounds at the head, torso and legs at 220 units,
 /// a sighted thompson burst there and at 1340, kar98k rounds at 1340 that
-/// meet a static model, a killing head shot, and a frag at the target's feet.
+/// meet a static model, a killing head shot, a frag at the target's feet, a
+/// turret's burst, and thompson bursts at the hip from 110 at a target no
+/// round knocks (standing, after a jump, backing off, crouched; traced).
 const CAPTURES: &[&str] = &[
     "hit-head",
     "hit-torso",
@@ -47,6 +54,7 @@ const CAPTURES: &[&str] = &[
     "hit-kill",
     "hit-throw",
     "hit-turret",
+    "hit-spray",
 ];
 
 /// What the replay still gets wrong: (capture, check, count, why). The
@@ -61,92 +69,94 @@ const GAPS: &[(&str, &str, usize, &str)] = &[
     (
         "hit-smg-far",
         "event pos.trBase[0]",
-        3,
+        4,
         "9.6 a seed not recovered",
     ),
     (
         "hit-smg-far",
         "event pos.trBase[1]",
-        6,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-smg-far",
-        "event pos.trBase[2]",
         5,
         "9.6 a seed not recovered",
     ),
     (
         "hit-smg-far",
-        "event surfType",
-        1,
+        "event pos.trBase[2]",
+        3,
         "9.6 a seed not recovered",
     ),
-    ("hit-smg-far", "probe lines", 1, "9.6 a seed not recovered"),
+    (
+        "hit-smg-far",
+        "event surfType",
+        2,
+        "9.6 a seed not recovered",
+    ),
+    ("hit-smg-far", "probe hitloc", 1, "9.6 a seed not recovered"),
+    ("hit-smg-far", "probe point", 1, "9.6 a seed not recovered"),
+    ("hit-smg-far", "probe time", 1, "9.6 a seed not recovered"),
     (
         "hit-smg-far",
         "target damageCount",
-        1,
+        2,
         "9.6 a seed not recovered",
     ),
     (
         "hit-smg-far",
         "target damageDuration",
-        41,
+        2,
         "9.6 a seed not recovered",
     ),
     (
         "hit-smg-far",
         "target damageEvent",
-        41,
+        2,
         "9.6 a seed not recovered",
     ),
     (
         "hit-smg-far",
         "target damageYaw",
-        41,
+        2,
         "9.6 a seed not recovered",
     ),
     (
         "hit-smg-far",
         "target flinchYaw",
-        41,
+        2,
         "9.6 a seed not recovered",
     ),
     (
         "hit-smg-far",
         "target health",
-        41,
+        2,
         "9.6 a seed not recovered",
     ),
     (
         "hit-smg-far",
         "target pm_flags",
-        1,
+        2,
         "9.6 a seed not recovered",
     ),
     (
         "hit-smg-far",
         "target pm_time",
-        1,
+        2,
         "9.6 a seed not recovered",
     ),
     (
         "hit-smg-far",
         "target velocity[0]",
-        1,
+        3,
         "9.6 a seed not recovered",
     ),
     (
         "hit-smg-far",
         "target velocity[1]",
-        1,
+        3,
         "9.6 a seed not recovered",
     ),
     (
         "hit-smg-far",
         "target velocity[2]",
-        1,
+        3,
         "9.6 a seed not recovered",
     ),
     (
@@ -182,43 +192,43 @@ const GAPS: &[(&str, &str, usize, &str)] = &[
     (
         "hit-turret",
         "event eventParm",
-        5,
+        7,
         "cod2-turrets.md 11, a dead body left playing",
     ),
     (
         "hit-turret",
         "event otherEntityNum",
-        5,
+        7,
         "cod2-turrets.md 11, a dead body left playing",
     ),
     (
         "hit-turret",
         "event pos.trBase[0]",
-        29,
+        32,
         "9.6 a seed not recovered",
     ),
     (
         "hit-turret",
         "event pos.trBase[1]",
-        30,
+        31,
         "9.6 a seed not recovered",
     ),
     (
         "hit-turret",
         "event pos.trBase[2]",
-        5,
+        8,
         "9.6 a seed not recovered",
     ),
     (
         "hit-turret",
         "event surfType",
-        5,
+        7,
         "cod2-turrets.md 11, a dead body left playing",
     ),
     (
         "hit-turret",
         "event time",
-        9,
+        10,
         "cod2-turrets.md 11, a dead body left playing",
     ),
     (
@@ -233,7 +243,8 @@ const GAPS: &[(&str, &str, usize, &str)] = &[
         1,
         "cod2-turrets.md 11, a dead body left playing",
     ),
-    ("hit-turret", "probe point", 2, "9.6 a seed not recovered"),
+    ("hit-turret", "probe point", 3, "9.6 a seed not recovered"),
+    ("hit-turret", "probe time", 1, "9.6 a seed not recovered"),
     (
         "hit-turret",
         "target damageCount",
@@ -255,31 +266,31 @@ const GAPS: &[(&str, &str, usize, &str)] = &[
     (
         "hit-turret",
         "target pm_flags",
-        11,
+        9,
         "cod2-turrets.md 11, a dead body left playing",
     ),
     (
         "hit-turret",
         "target pm_time",
-        11,
+        9,
         "cod2-turrets.md 11, a dead body left playing",
     ),
     (
         "hit-turret",
         "target velocity[0]",
-        19,
+        20,
         "cod2-turrets.md 11, a dead body left playing",
     ),
     (
         "hit-turret",
         "target velocity[1]",
-        19,
+        20,
         "cod2-turrets.md 11, a dead body left playing",
     ),
     (
         "hit-turret",
         "target velocity[2]",
-        10,
+        11,
         "cod2-turrets.md 11, a dead body left playing",
     ),
 ];
@@ -393,6 +404,31 @@ pub(super) struct Capture {
     pub(super) cvars: Vec<(String, String)>,
     pub(super) probes: Vec<String>,
     pub(super) side: Side,
+    /// The server's `srand()` and `rand()` calls in order, when traced:
+    /// (`srand`, `level.time`, the call site, the seed or the value).
+    pub(super) rand: Vec<(bool, i32, u32, u32)>,
+}
+
+/// `G_InitGame`'s `srand` (lnxded 0x810911e).
+const SRAND_INIT_GAME: u32 = 0x0810_911e;
+
+impl Capture {
+    /// Off a traced capture: `G_InitGame`'s last seed, how many draws it
+    /// made before `start`, and the level time of each after, up to `end`.
+    fn traced_rand(&self, start: i32, end: i32) -> Option<(u32, usize, Vec<i32>)> {
+        let at = self
+            .rand
+            .iter()
+            .rposition(|r| r.0 && r.2 == SRAND_INIT_GAME)?;
+        let draws: Vec<i32> = self.rand[at + 1..]
+            .iter()
+            .filter(|r| !r.0)
+            .map(|r| r.1)
+            .collect();
+        let skip = draws.iter().take_while(|&&t| t < start).count();
+        let after = draws[skip..].iter().copied().filter(|&t| t < end).collect();
+        Some((self.rand[at].3, skip, after))
+    }
 }
 
 pub(super) fn parse(text: &str) -> Capture {
@@ -401,6 +437,7 @@ pub(super) fn parse(text: &str) -> Capture {
         cvars: Vec::new(),
         probes: Vec::new(),
         side: Side::default(),
+        rand: Vec::new(),
     };
     let mut ps = PlayerState2::default();
     let mut ents = Ents::new();
@@ -432,6 +469,13 @@ pub(super) fn parse(text: &str) -> Capture {
                                 .push((words[k + 1].to_string(), words[k + 2].to_string()));
                         }
                     }
+                }
+                Some(k @ ("srand" | "rand")) => {
+                    let mut n = || w.next().unwrap();
+                    let time = n().parse().unwrap();
+                    let site = u32::from_str_radix(n(), 16).unwrap();
+                    cap.rand
+                        .push((k == "srand", time, site, n().parse().unwrap()));
                 }
                 _ => {}
             },
@@ -773,17 +817,34 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str, report: bool) -> Found {
     }
     // Both bodies as retail's snapshot has them.
     let mut done = [0, 1].map(|slot| take_snapshot(&mut level, slot, sides[slot], start));
-    // The capture's `rand()`, from where the replay starts (`SEEDS`;
-    // `COMBAT_SEED=<seed>,<skip>` tries another).
+    let end = shooter
+        .side
+        .snaps
+        .last()
+        .unwrap()
+        .time
+        .min(target.side.snaps.last().unwrap().time);
+    // The capture's `rand()`, from where the replay starts: its trace, else
+    // `SEEDS` (`COMBAT_SEED=<seed>,<skip>` tries another).
+    let traced = shooter.traced_rand(start, end);
     let seed = std::env::var("COMBAT_SEED").ok().map(|v| {
         let (a, b) = v.split_once(',').unwrap();
         (a.parse().unwrap(), b.parse().unwrap())
     });
-    if let Some((seed, skip)) =
-        seed.or_else(|| SEEDS.iter().find(|s| s.0 == name).map(|s| (s.1, s.2)))
+    if let Some((seed, skip)) = seed
+        .or_else(|| traced.as_ref().map(|t| (t.0, t.1)))
+        .or_else(|| SEEDS.iter().find(|s| s.0 == name).map(|s| (s.1, s.2)))
     {
         level.combat.pin_rand(seed, skip);
     }
+    // Each of our draws from here by the level time retail's would log: a
+    // cmd's at the frame before, the frame's at its own.
+    let mut our_draws: Vec<i32> = Vec::new();
+    let drawn0 = level.combat.rand.drawn();
+    let tag = |draws: &mut Vec<i32>, level: &Cod2Level, time: i32| {
+        let n = (level.combat.rand.drawn() - drawn0) as usize;
+        draws.resize(n.max(draws.len()), time);
+    };
     let mut found = Found::new();
     let trace_missiles = std::env::var("COMBAT_MISSILES").is_ok_and(|v| v == name);
     // Event entities each side saw, in order of first appearance: (time,
@@ -794,13 +855,6 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str, report: bool) -> Found {
     // before, or held another type: numbers are reused.
     let mut seen_retail: BTreeMap<u32, u32> = BTreeMap::new();
     let mut seen_ours: BTreeMap<u32, u32> = BTreeMap::new();
-    let end = shooter
-        .side
-        .snaps
-        .last()
-        .unwrap()
-        .time
-        .min(target.side.snaps.last().unwrap().time);
     let mut t = start;
     while t < end {
         t += 50;
@@ -808,7 +862,11 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str, report: bool) -> Found {
             continue;
         };
         run_cmds(&mut level, sides, [Some(rt), Some(rs)], &mut done);
+        tag(&mut our_draws, &level, t - 50);
         level.run_frame(t);
+        if t < end {
+            tag(&mut our_draws, &level, t);
+        }
         let row = format!("serverTime {t}");
         let team = 0;
         let ours_t = level.wire_playerstate(0, team).unwrap();
@@ -990,6 +1048,27 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str, report: bool) -> Found {
                     ),
                 );
             }
+        }
+    }
+    // The draws, one by one: a missing or extra one shifts the rest.
+    if let Some((_, _, retail)) = &traced {
+        let wrong: Vec<usize> = (0..our_draws.len().max(retail.len()))
+            .filter(|&k| our_draws.get(k) != retail.get(k))
+            .collect();
+        if let Some(&k) = wrong.first() {
+            let at = |v: &[i32]| v.get(k).map_or("none".to_string(), |t| t.to_string());
+            let what = format!(
+                "ours {} retail {}, draw {k}: ours at {} retail at {}",
+                our_draws.len(),
+                retail.len(),
+                at(&our_draws),
+                at(retail)
+            );
+            if report {
+                eprintln!("    rand draws: {what}");
+            }
+            // Counted by draw, as the other checks by row.
+            found.insert("rand draws".to_string(), (wrong.len(), what));
         }
     }
     // The callbacks' lines.

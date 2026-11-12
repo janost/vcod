@@ -195,12 +195,15 @@ impl AnimTable {
 /// What one cmd's anim calls read beside the playerstate: the table and the
 /// held weapon's `playerAnimType` and `weaponClass` (`WeaponDef` +0x74 and
 /// +0x7c, which `BG_AnimUpdatePlayerStateConditions` (Mac 0x182666) writes
-/// into conditions 0 and 1 before each step).
+/// into conditions 0 and 1 before each step), and the game's `rand() % n`
+/// the events' clause picks draw, `None` drawing nothing and picking the
+/// first (a client's prediction).
 #[derive(Clone, Copy)]
 pub struct AnimInput<'a> {
     pub table: &'a AnimTable,
     pub player_anim_type: i32,
     pub weapon_class: i32,
+    pub pick: Option<&'a dyn Fn(usize) -> usize>,
 }
 
 /// Whether `c` holds. `PLAYERANIMTYPE`, `WEAPONCLASS` and `MOVETYPE` are bit
@@ -355,8 +358,9 @@ pub(crate) fn mantle(pm: &mut Pmove, slot: usize) {
     }
 }
 
-/// A pmove event: [`script_event`] off the cmd's buttons, the first
-/// command (the events pmove raises list one).
+/// A pmove event: [`script_event`] off the cmd's buttons, its pick off
+/// the input's draw (the events pmove raises list one command, but the
+/// draw is made: cod2-combat.md 9.6).
 pub(crate) fn event(pm: &mut Pmove, event: Event, is_continue: bool, force: bool) {
     if let Some(input) = pm.anim {
         script_event(
@@ -364,7 +368,7 @@ pub(crate) fn event(pm: &mut Pmove, event: Event, is_continue: bool, force: bool
             pm.cmd.buttons,
             &input,
             event.name(),
-            |_| 0,
+            |n| input.pick.map_or(0, |p| p(n)),
             (is_continue, force),
         );
     }
