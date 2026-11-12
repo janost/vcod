@@ -502,7 +502,8 @@ read nor written.
   `cod4_live_map_change_sends_the_stats_the_server_set` (vcod-server's
   `map mp_crash` after a `N 2301 300`: the new level ranks the player 3
   off the 300 XP).
-- The main menu reads the file too (cod4-front-end.md 4).
+- The main menu reads the file too, and Create a Class writes its picks
+  there (cod4-front-end.md 4, 4.1).
 - The chain on vcod-server: a ranked match (`sv_pure 1`) runs
   `_rank.gsc`'s `giveRankXP`, whose `setStat`s go out as `N`
   (cod4-gsc.md, "The stats, the loadout, the perks"). Gate:

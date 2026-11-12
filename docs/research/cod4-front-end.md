@@ -161,7 +161,7 @@ confirmed on 1.7.
 | Join Game | `pc_join_unranked` over `main_text` | `UpdateFilter`, `RefreshServers`, `RefreshFilter`, `ServerSort`, `JoinServer`, `ServerStatus`, `addFavorite`, `closeJoin`; feeder 2 | the server browser (cod4-handshake.md 12); Join Server joins behind the connect screen (section 7) |
 | Start New Server | `close self`, `createserver` | `loadArenas`; `ui_netGameType` (owner draw 245), the map list (feeder 4, sets `ui_currentNetMap`), `ui_dedicated` (multi No / LAN / Internet), `sv_hostname`, `sv_maxclients`, `sv_minping`, `sv_maxping`, `g_password` (edit fields), `sv_voice`, `scr_teambalance`, `g_allowvote`, `sv_punkbuster` (yes/no); the game type pages `settings_quick_<gametype>`; Start and the list's double click run `StartServer` | game type, map and Dedicated work; the edit fields and yes/no rows set their dvars in the UI's table (`front::ui_table_dvar`); Start starts `vcod-server --game cod4` with them (section 5) |
 | Select Profile | `player_profile` | `addPlayerProfiles`, `selectActivePlayerProfile`, `loadPlayerProfile`, `sortPlayerProfiles`, `createPlayerProfile`, `deletePlayerProfile`; feeder 24; `ui_playerProfileAlreadyChosen`, `com_playerProfile` | lists, picks, creates, deletes and loads (section 3) |
-| Create a Class | `pc_cac_popup` (`execnow statset 260 1` first) | unlocked when `stat(260) >= 1`, else the greyed row | reads the profile's `vcod_mpdata`: greyed on a fresh profile, open from rank 3 (below); the editor's `statsetusingtable`, `statClearBitMask` and `statClearPerkNew` are not run |
+| Create a Class | `pc_cac_popup` (`execnow statset 260 1` first) | unlocked when `stat(260) >= 1`, else the greyed row | reads the profile's `vcod_mpdata`: greyed on a fresh profile, open from rank 3 (below); the editor's stat commands run (4.1) |
 | Rank & Challenges | `menu_challenges` | `statGetInDvar` rows, `ui_tier_num`, `ui_table_slot` | opens and draws off the profile's stats |
 | Controls | `main_controls`, its pages `options_look`, `options_move`, `options_shoot`, `options_misc`, `controls_multi` | the bind rows and their dvars | the bind rows and the mouse options work on vcod's console as in a game (cod4-hud.md 12.6); the rest greyed |
 | Options | `main_options`, its pages `options_graphics`, `options_graphics_texture`, `options_sound`, `options_voice`, `options_game`, `options_multi` | the option dvars, `vid_restart_popmenu`, `snd_restart_popmenu` | the controls with a vcod cvar (`r_gamma`, `sm_enable`, `snd_volume`, `fx_marks`, `cl_allowDownload`, the player name, the mouse) work; the rest greyed (section 9) |
@@ -191,7 +191,8 @@ confirmed on 1.7.
   VERIFIED (the disassembly); the two error calls' severity is INFERRED.
   The menus' 1610 `statset`s use 202..249, 260 and 270..279 only.
   VERIFIED (`menu_dump`). vcod (`ScriptMenus::stat_set`) stores the same
-  ranges and refuses the rest with the message and no drop.
+  ranges, checks 200..249 as 4.1 says, and refuses the rest with the
+  message and no drop.
 - vcod's front end reads the active profile's `vcod_mpdata` each time the
   main menu comes up and when a profile loads or is deleted
   (`Cod4Front::reload_stats`), a fresh profile's block without one, and
@@ -202,6 +203,125 @@ confirmed on 1.7.
 `main_text`'s `onOpen` runs `selectStringTableEntryInDvar
 mp/didyouknow.csv 0 didyouknow`. VERIFIED (the walk). vcod picks the row
 off the clock; retail picks one at random. INFERRED.
+
+### 4.1 Create a Class
+
+`pc_cac_popup` opens one `menu_cac_<class>` per custom class
+(`assault`, `specops`, `heavygunner`, `demolitions`, `sniper`: stats 200,
+210, .. 240, cod4-netfields.md 10), whose popups pick the class's
+weapons, attachments, camo, perks and special grenade, rename it
+(`<class>_pc_rename`, an edit field on `customclass<n>`) and reset it to
+a stock class's template. VERIFIED (`menu_dump ui_mp`, 290 menus).
+`ui_mp`'s scripts run 2285 `statsetusingtable`s, 1900 `statClearBitMask`s and 230
+`statClearPerkNew`s, and their console lines `statset`,
+`statGetInDvar`, `set`, `setFromLocString`, `updategamerprofile`,
+`uploadstats`, `wait` and `closemenu`. VERIFIED (counts off the dump).
+
+- The three stat commands are `commandList` rows (0x6b4940): handlers
+  0x54c940, 0x54d060 and 0x54cee0. VERIFIED
+  (`tools/re/cod4_menu_commands.py`). Each reads its words through
+  0x54b510: an opening `(` is skipped and each argument past the `,`s
+  before it, then the `)`s are read and the word after them handed back
+  (`Com_UngetToken`, 0x570c70, whose `UngetToken called twice` is
+  0x6f434c). VERIFIED (the disassembly). The word compares (0x571a90,
+  length 0x7fffffff) ignore case. INFERRED (the menus write both
+  `tablelookup` and `tableLookup`). The stat writes go through
+  `LiveStorage_SetStat` (0x579c70): a byte stat under 2000 outside 0..255
+  is a `Com_Error` (`Trying to set index %i (which is a byte value) to
+  invalid value %i`, 0x6f5cf0), a word to 3497, nothing past; a changed
+  stat raises the dirty flag 0xcc1ac91. VERIFIED. Before the stats are
+  fetched (0xcc1ac90 clear) each prints `Tried to set stat index %i
+  before we have obtained player stats` (0x6f5ca8) and writes nothing.
+  VERIFIED.
+- `statSetUsingTable ( <index> , tableLookup ( <table> , <column> ,
+  <value> , <ret> ) )`: `atoi` of the index; the words `tablelookup`,
+  `,` and `(` skipped to the table's name, found with
+  `DB_FindXAssetHeader(0x20, ..)` (0x489570); `atoi`s of the column and
+  the return column; `StringTable_Lookup` (0x569b30) and `atoi` of its
+  string. VERIFIED. The lookup walks the rows from the last
+  (`StringTable_LookupRowNumForValue`, 0x569aa0) and returns column
+  `ret` of the first match, `""` with no match, no table (`Unable to find
+  the lookup table in the fastfile, aborting lookup`, 0x6f3ac0) or a
+  column out of range. VERIFIED. Index 2400..2402 stores at once (the
+  menus' scratch: the picked weapon's stat number, read back with
+  `statGetInDvar` for `statClearBitMask`); any other outside 200..249 is
+  a `Com_Error` (`statsetusingtable should only be used for
+  create-a-class.  You can't set stat %d`, 0x6ebc48); 200..249 pass
+  0x4fc440 below. VERIFIED. A camo row passes its return column as
+  `"11"`, a quoted word, which `atoi` reads the same. VERIFIED (the
+  dump).
+- `statClearBitMask <index dvar> <mask dvar>` (helper 0x54cc90): each
+  word names a dvar (0x56b5d0), read as its word +0xc for types 5 and 6,
+  else `atoi` of the string there, 0 when there is no such dvar; the
+  stat at the first loses the second's bits. No range check past
+  `LiveStorage_SetStat`'s. VERIFIED. Types 5 and 6 are the int and enum
+  dvars. INFERRED. The menus clear 65536 off a weapon's stat as it is
+  picked or left, and a camo's bit (16777216 for Desert, 0 for None) as
+  it is picked. VERIFIED (the dump).
+- `statClearPerkNew ( <perk> )` (helper 0x54ce00): the perk's row in
+  `mp/statstable.csv` (0x6ebcd4) by column 4, its column 1 the stat;
+  outside 150..298 a `Com_Error` (`statClearPerkNew: Invalid perk index
+  %d for %s`, 0x6ebce8); a stat with neither of the bits 1 and 2 a
+  `Com_Error` (`statClearPerkNew: perk %s[%d] isn't unlocked.`,
+  0x6ebd18); else the stat becomes `(stat & ~2) | 1`. VERIFIED. So 1
+  is the perk unlocked and 2 new. INFERRED (the command's name and
+  message).
+- The create-a-class check, 0x4fc440 (`statset` and `statsetusingtable`
+  on 200..249): outside 200..249 a `Com_Error` (`trying to set invalid
+  create-a-class stat`, 0x6e0fc0). Then by the index's last digit (jump
+  table 0x4fc52c): 1 wants a primary, 3 a secondary (a primary too when
+  the class's perk 2, its stat `+ 6`, is 166, Overkill; 0x4fc3d0), 5, 6,
+  7 a perk of that slot, 8 a special grenade; 0, 2, 4 and 9 (the class's
+  first stat, the attachments, the camo) are not checked. The value must
+  be a row of the item table at 0x724bb8 (61 rows of number, rank,
+  slot bits 1 primary, 2 secondary, 4 perk 1, 8 perk 2, 0x10 perk 3,
+  0x20 grenade; `tools/re/cod4_cac_items.py`), else `No create-a-class
+  item found at index %d` (0x6e0f08); its rank at most the profile's,
+  else `Create-a-class item %d is too high level %d < %d.` (0x6e0f34);
+  its slot bits the slot's, else `Create-a-class item %d is not the
+  expected type for this slot (0x%x & 0x%x) == 0.` (0x6e0f68). Each a
+  `Com_Error` with code 1. VERIFIED (the disassembly). The "too high"
+  call pushes the item and the compare's result, not the two ranks.
+  VERIFIED; what it prints past them is not checked.
+- The profile's rank (0x4749d0) is a binary search of
+  `mp/rankTable.csv` (0x6d2ad0) for the row whose columns 2 and 7 hold
+  stat 2301 (XP), 0 XP before the stats are fetched; its column 0.
+  VERIFIED (the disassembly).
+- `setfromlocString <dvar> <text..>` (0x501d90, registered at 0x5028a7):
+  fewer than two arguments print `USAGE: setFromLocalizedString
+  <variable> <string>` (0x6e241c), a name 0x569df0 refuses `invalid
+  variable name: %s` (0x6e2250); the words from the second joined, a
+  leading `@`
+  localized (`SEH_LocalizeTextMessage`, 0x538d30) when the key has a
+  non-empty string; then `Dvar_SetFromStringByName` (0x56d110).
+  VERIFIED. The templates name the class `@CLASS_CUSTOM<n>`.
+- `uploadStats` (0x579f60 calling 0x579b40): with the stats fetched and
+  dirty, writes the profile's `mpdata` and prints `Successfully wrote
+  stats data` (0x6f5c88), else `Unable to write stats: %s.` (0x6f5c6c).
+  VERIFIED. The class pages' Esc runs it. `updategamerprofile` names no
+  command in 1.7's PC build (no such string in `iw3mp.exe`). VERIFIED.
+- `LiveStorage_StatsInit` names the five classes for a profile with no
+  stats: `customclass<n>` set to the localized `CLASS_SLOT<n>`
+  (0x6e0ecc, 0x6e0ed8, ..; 0x4fc5b3 on), else 0x56d0a0 with the key and
+  flags 1. VERIFIED. 0x56d0a0 registers the string dvar archived.
+  INFERRED (`Dvar_RegisterString`'s arguments).
+
+vcod (`play::cod4_menus::cac`, `vcod_cod4::scriptmenu::Cmd`): the three
+commands, `statset`'s check, `setFromLocString` and `uploadstats` as
+above, each `Com_Error` logged with its message and the stat left
+alone, no drop. `updategamerprofile` is not run; `closemenu` is not run
+(only `saving_popup`, which no menu opens, runs it). `uploadstats`
+writes `vcod_mpdata` at the next frame, in the front end and in a game.
+`customclass1`..`5` are vcod's archived cvars (the config keeps the
+names); a profile loaded with no stats file takes the `CLASS_SLOT<n>`
+names once. The server reads the class off the stats the join sent
+(cod4-gsc.md, "The stats, the loadout, the perks"). Gates:
+`cac::tests` (each command and refusal),
+`cod4_front_create_a_class_picks_reach_the_profile` (the editor's
+picks, the new marks, the file, the page drawn again) and
+`cod4_front_create_a_class_spawns_with_its_picks` (vcod-server's
+`custom1` spawns with the AK-47, the perk and the flash grenade the
+editor picked).
 
 ## 5. Start New Server
 

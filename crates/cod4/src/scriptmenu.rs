@@ -188,6 +188,24 @@ pub enum Cmd {
         line: String,
         kind: DvarCompare,
     },
+    /// `statSetUsingTable` (`iw3mp.exe` 0x54c940): stat `index` set to
+    /// `table`'s column `ret` of the row whose column `column` reads
+    /// `value`, each word as the script wrote it (cod4-front-end.md 4.1).
+    StatSetUsingTable {
+        index: String,
+        table: String,
+        column: String,
+        value: String,
+        ret: String,
+    },
+    /// `statClearBitMask` (0x54d060): the stat the dvar `index` holds loses
+    /// the bits the dvar `mask` holds.
+    StatClearBitMask {
+        index: String,
+        mask: String,
+    },
+    /// `statClearPerkNew` (0x54cee0): the named perk's "new" bit clears.
+    StatClearPerkNew(String),
     /// A command vcod does not run, by its word.
     Other(String),
 }
@@ -275,8 +293,10 @@ impl Cmd {
                     }
                 }
                 w if let Some(&(_, args)) = COMMANDS.iter().find(|(c, _)| *c == w) => {
-                    i = args.end(&t, i);
-                    Cmd::Other(word)
+                    let end = args.end(&t, i).min(t.len());
+                    let cmd = stat_command(w, &t[i..end]).unwrap_or(Cmd::Other(word));
+                    i = end;
+                    cmd
                 }
                 _ => {
                     let name = arg(&mut i);
@@ -319,7 +339,7 @@ const UI_SCRIPT_ARGS: [(&str, usize); 5] = [
     ("setPbClStatus", 1),
 ];
 
-/// What a command vcod skips reads after its word.
+/// What a [`COMMANDS`] row reads after its word.
 #[derive(Clone, Copy)]
 enum Args {
     Words(usize),
@@ -349,10 +369,43 @@ impl Args {
     }
 }
 
+/// A stat command's arguments out of its words `a`, read as its handler
+/// reads them (cod4-front-end.md 4.1): an opening `(` skipped, then each
+/// argument past the `,`s before it (and, for the table, past
+/// `tablelookup` and its `(`), any case; `None` for another command.
+fn stat_command(word: &str, a: &[String]) -> Option<Cmd> {
+    let mut words = a.iter().map(String::as_str);
+    let mut next = || words.next().unwrap_or_default().to_string();
+    // The next word past any of `skip`.
+    let mut arg = |skip: &[&str]| {
+        let mut w = next();
+        while skip.iter().any(|s| w.eq_ignore_ascii_case(s)) {
+            w = next();
+        }
+        w
+    };
+    Some(match word {
+        "statsetusingtable" => Cmd::StatSetUsingTable {
+            index: arg(&["("]),
+            table: arg(&["tablelookup", ",", "("]),
+            column: arg(&[","]),
+            value: arg(&[","]),
+            ret: arg(&[","]),
+        },
+        "statclearbitmask" => Cmd::StatClearBitMask {
+            index: arg(&["("]),
+            mask: arg(&[","]),
+        },
+        "statclearperknew" => Cmd::StatClearPerkNew(arg(&["("])),
+        _ => return None,
+    })
+}
+
 /// The rest of `commandList` (iw3mp.exe 0x6b4940, 42 rows), lowercased,
 /// with what each handler reads (`tools/re/cod4_menu_commands.py`,
-/// cod4-front-end.md 2): commands vcod skips. `setcolor` and
-/// `setitemcolor` read up to four colour words after one and two.
+/// cod4-front-end.md 2): commands vcod skips, but for the three stat
+/// commands, read by [`stat_command`]. `setcolor` and `setitemcolor` read
+/// up to four colour words after one and two.
 const COMMANDS: [(&str, Args); 22] = [
     ("fadein", Args::Words(1)),
     ("fadeout", Args::Words(1)),
@@ -735,9 +788,10 @@ mod tests {
     }
 
     /// The stat commands as `ui_mp`'s create-a-class menus write them: a
-    /// list in parentheses or two bare words, the next command after.
+    /// list in parentheses or two bare words, read into their arguments,
+    /// the next command after.
     #[test]
-    fn stat_commands_skip_their_lists() {
+    fn stat_commands_read_their_lists() {
         let cmds = Cmd::parse(concat!(
             "\"statsetusingtable\" ( \"2402\" , \"tableLookup\" ( \"mp/statstable.csv\" , 4 , \"m16\" , 1 ) ) ; ",
             "\"statClearBitMask\" \"ui_tempStorage\" \"ui_tempMask\" ; ; ",
@@ -748,10 +802,19 @@ mod tests {
         assert_eq!(
             cmds,
             [
-                Cmd::Other("statsetusingtable".into()),
-                Cmd::Other("statClearBitMask".into()),
+                Cmd::StatSetUsingTable {
+                    index: "2402".into(),
+                    table: "mp/statstable.csv".into(),
+                    column: "4".into(),
+                    value: "m16".into(),
+                    ret: "1".into(),
+                },
+                Cmd::StatClearBitMask {
+                    index: "ui_tempStorage".into(),
+                    mask: "ui_tempMask".into(),
+                },
                 Cmd::SetDvar("ui_tempStorage".into(), String::new()),
-                Cmd::Other("statClearPerkNew".into()),
+                Cmd::StatClearPerkNew("c4_mp".into()),
                 Cmd::Other("setbackground".into()),
                 Cmd::Play("y".into()),
                 Cmd::UiScript("sortPlayerProfiles".into(), Vec::new()),

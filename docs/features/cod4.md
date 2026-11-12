@@ -36,6 +36,10 @@ with its `mouse_over`, `mouse_click` and `music_mainmenu_mp` sounds.
 - Ranks: a ranked match (`sv_pure 1`) earns XP and rank into the
   profile's stats, the XP bar fills, and Create a Class unlocks at rank 3
   as on 1.7. Rank & Challenges reads the same stats (4).
+- Create a Class edits the five custom classes: weapon, attachment, camo,
+  perks, special grenade, name and the default templates. The picks go
+  into the profile's stats, which a join sends, so `custom1`..`custom5`
+  spawn with them on vcod-server or a 1.7 server (4.1).
 - Options and Controls set what vcod has a cvar or bind for; the rest
   draw greyed.
 - Esc on the connect screen, or `disconnect`, calls the join off. Leaving
@@ -404,10 +408,10 @@ Ranked by how much a player notices. The research-side lists are
    `ui_browserShowCoD4x` is 1 ([cod4-handshake.md](../research/cod4-handshake.md)
    13). vcod joins stock 1.7 servers only, which are rarer than they
    should be.
-2. **Ranks start fresh, and classes cannot be edited.** vcod keeps its
-   own stats file per profile (`vcod_mpdata`) and never reads retail's
-   `mpdata`: your retail rank is safe, and no use here. Create a Class
-   opens once unlocked, but its pages do not save a weapon or perk pick
+2. **Ranks start fresh.** vcod keeps its own stats file per profile
+   (`vcod_mpdata`) and never reads retail's `mpdata`: your retail rank
+   and custom classes are safe, and no use here. Create a Class opens at
+   rank 3 and edits classes as 1.7 does
    ([cod4-front-end.md](../research/cod4-front-end.md) 4).
 3. **Physics debris stays put.** A `physicsLaunch`ed part (a car's door
    or hood) keeps the spot it stood on: the client runs no rigid-body

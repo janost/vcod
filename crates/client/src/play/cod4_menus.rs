@@ -24,6 +24,7 @@
 //! player's chat (cod4-hud.md 12.6).
 
 pub mod browser;
+mod cac;
 pub mod controls;
 pub mod front;
 
@@ -207,6 +208,8 @@ pub struct ScriptMenus {
     joinpb_answered: bool,
     /// The open menu's edit field taking typed text (`g_editingField`).
     editing: Option<usize>,
+    /// A menu ran `uploadstats`: the stats file is written now.
+    upload_stats: bool,
 }
 
 impl ScriptMenus {
@@ -362,6 +365,11 @@ impl ScriptMenus {
     /// The profile's own stats in place of a fresh profile's.
     pub fn set_stats(&mut self, stats: Stats) {
         self.stats = Some(stats);
+    }
+
+    /// Whether a menu ran `uploadstats` since the last call.
+    pub fn take_upload_stats(&mut self) -> bool {
+        std::mem::take(&mut self.upload_stats)
     }
 
     /// Esc with no menu up: `g_scriptMainMenu` opens, when the server
@@ -967,13 +975,24 @@ impl ScriptMenus {
                 // `Script_playLocalSound`: the front end's and a game's
                 // menus alike (cod4-hud.md 23).
                 Cmd::Play(alias) => self.front.sounds.push(alias.clone()),
+                Cmd::StatSetUsingTable {
+                    index,
+                    table,
+                    column,
+                    value,
+                    ret,
+                } => self.stat_set_using_table(index, table, column, value, ret),
+                Cmd::StatClearBitMask { index, mask } => self.stat_clear_bit_mask(index, mask),
+                Cmd::StatClearPerkNew(perk) => self.stat_clear_perk_new(perk),
                 Cmd::Other(_) => {}
             }
         }
     }
 
-    /// A menu's console line: the `set`s and `statGetInDvar`s the stock
-    /// menus run; anything else is not run.
+    /// A menu's console line: the `set`s, the stat commands and the other
+    /// console commands the stock menus run; anything else (the
+    /// console's `updategamerprofile`, which 1.7's PC build does not
+    /// register) is not run.
     fn exec(&mut self, line: &str) {
         for part in line.split(';') {
             let w: Vec<&str> = part.split_whitespace().collect();
@@ -1018,6 +1037,22 @@ impl ScriptMenus {
                     let v = self.dvar(from).unwrap_or_default();
                     self.set_dvar(to, &v);
                 }
+                // The default class template's name (0x501d90): the words
+                // after the dvar, a `@` key localized when it has a string.
+                [cmd, rest @ ..] if cmd.eq_ignore_ascii_case("setfromlocstring") => match rest {
+                    [name, text @ ..] if !text.is_empty() => {
+                        let text = text.join(" ");
+                        let shown = text
+                            .strip_prefix('@')
+                            .and_then(|k| self.strings.as_ref()?.get(k))
+                            .filter(|s| !s.is_empty())
+                            .map_or_else(|| text.clone(), str::to_string);
+                        self.set_dvar(name, &shown);
+                    }
+                    _ => log::info!("USAGE: setFromLocalizedString <variable> <string>"),
+                },
+                // `LiveStorage_UploadStats` (0x579b40): the stats file now.
+                [cmd] if cmd.eq_ignore_ascii_case("uploadstats") => self.upload_stats = true,
                 [cmd] if cmd.eq_ignore_ascii_case("wait") => {}
                 // The Options pages' configs, line by line.
                 [cmd, file]
@@ -1072,27 +1107,6 @@ impl ScriptMenus {
     /// The console lines the menus ran since the last call.
     pub fn take_console(&mut self) -> Vec<String> {
         std::mem::take(&mut self.console)
-    }
-
-    /// The `statset <index> <value>` command (`iw3mp.exe` 0x579d50): the
-    /// client's own stats, the create-a-class slots 200..249 and 256..279,
-    /// into the profile's block. Any other index takes only 0; a non-zero
-    /// value there, or 250, is retail's `Com_Error` ("Trying to set a
-    /// server-only stat", 0x6e1004; "trying to set invalid create-a-class
-    /// stat", 0x6e0fc0), refused here with the message and no drop.
-    fn stat_set(&mut self, index: i32, value: i32) {
-        let client = (200..250).contains(&index) || (256..280).contains(&index);
-        if index == 250 {
-            log::error!("trying to set invalid create-a-class stat.  You can't set stat {index}.");
-            return;
-        }
-        if !client && value != 0 {
-            log::error!("Trying to set a server-only stat {index}.");
-            return;
-        }
-        if let (Ok(i), Some(stats)) = (u16::try_from(index), self.stats.as_mut()) {
-            stats.set(i, value as u32);
-        }
     }
 
     /// `stat(index)`, 0 past the block.

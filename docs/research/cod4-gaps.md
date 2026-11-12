@@ -16,12 +16,6 @@ Ranked by how much a player notices.
 - CoD4x servers. Most public servers run CoD4x, which parks a 1.7
   client and hands it to its own update backend; vcod refuses them at the
   challenge and hides them in the browser (cod4-handshake.md 13). L.
-- The Create a Class editor. Ranks, XP and unlocks reach the profile's
-  `vcod_mpdata` and the main menu reads it, so Create a Class opens at
-  rank 3 (cod4-netfields.md, "The stats file"). Its pages' own stat
-  commands, `statsetusingtable`, `statClearBitMask` and
-  `statClearPerkNew`, are not run, so a weapon or perk picked there does
-  not reach the class (cod4-front-end.md 4). M.
 - Retail's `mpdata` is never read: a retail rank does not carry over.
   By choice.
 - Rigid-body physics. A `physicsLaunch`ed part keeps its spot: the
@@ -50,6 +44,11 @@ Ranked by how much a player notices.
 - Other players' camo: vcod-server sets the entity's `weaponModel` off
   `weaponmodels[weapon]` and the client arms the body with
   `worldModel[weaponModel]` (cod4-client-view.md 4.7).
+- The Create a Class editor: `statsetusingtable`, `statClearBitMask`,
+  `statClearPerkNew`, `statset`'s item check, `setFromLocString` and
+  `uploadstats` run as 1.7's do, the picks reach `vcod_mpdata` and a
+  join's `custom1`..`5` spawn with them (`play::cod4_menus::cac`,
+  cod4-front-end.md 4.1).
 - The view model: the camo's `gunModel[]` slot off `weaponmodels[]`
   (vcod-server's `giveWeapon` sets it), the RPG's rocket at `tag_clip`
   while loaded, Sleight of Hand and Double Tap dividing the clips' rates;

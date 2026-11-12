@@ -717,22 +717,43 @@ impl Cod4Session {
         password: &str,
         cp: Cp,
         join: MenuJoin,
+        downloads: Option<Fetch<'_>>,
+    ) -> Result<Cod4Session> {
+        let profile = super::cod4_profile::ProfileStats::load();
+        Self::connect_profile(addr, name, password, cp, join, downloads, profile)
+    }
+
+    /// [`Self::connect_password`] with `profile`'s stats: the stats
+    /// packets carry them and the server's `N`s go back to its file.
+    pub(crate) fn connect_profile(
+        addr: SocketAddr,
+        name: &str,
+        password: &str,
+        cp: Cp,
+        join: MenuJoin,
         mut downloads: Option<Fetch<'_>>,
+        mut profile: Option<(
+            super::cod4_profile::ProfileStats,
+            vcod_cod4::net::stats::Stats,
+        )>,
     ) -> Result<Cod4Session> {
         let mut fetched = std::collections::HashSet::new();
-        let mut profile = super::cod4_profile::ProfileStats::load();
         let cancel = downloads.as_ref().and_then(|d| d.cancel.clone());
         let notes = downloads.as_ref().and_then(|d| d.notes.clone());
         // A reconnect a disconnected fetch, each one landing a file.
         for _ in 0..16 {
             let conn = Self::join_conn(
                 addr,
-                name,
-                password,
-                cp.clone(),
-                downloads.as_ref().is_some_and(|d| d.www),
-                cancel.clone(),
-                notes.clone(),
+                Join {
+                    name: name.into(),
+                    password: password.into(),
+                    cp: cp.clone(),
+                    www: downloads.as_ref().is_some_and(|d| d.www),
+                    cancel: cancel.clone(),
+                    notes: notes.clone(),
+                    stats: profile.as_ref().map(|(_, s)| s.clone()),
+                    ..Join::default()
+                },
             )?;
             let Some(conn) = (match downloads.as_mut() {
                 Some(d) => fetch_missing(conn, d, &mut fetched)?,
@@ -758,18 +779,9 @@ impl Cod4Session {
         bail!("{addr}: still missing files after 16 reconnects")
     }
 
-    /// `connect` to `addr` and its first gamestate (`cp` answered).
-    fn join_conn(
-        addr: SocketAddr,
-        name: &str,
-        password: &str,
-        cp: Cp,
-        www: bool,
-        cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-        notes: Option<vcod_cod4::net::conn::Notes>,
-    ) -> Result<Conn> {
-        // The stats packets carry the active profile's stats file.
-        let stats = super::cod4_profile::ProfileStats::load().map(|(_, s)| s);
+    /// `connect` to `addr` as `join` says and its first gamestate (`cp`
+    /// answered), on a qport of its own, with voice.
+    fn join_conn(addr: SocketAddr, join: Join) -> Result<Conn> {
         // A qport of its own, as `Netchan_Init`'s random one, so two clients
         // on one host are two clients; under 0x8000, as retail's stats
         // lookup misses a larger one (it read none on a live server).
@@ -779,16 +791,9 @@ impl Cod4Session {
         let mut conn = Conn::join(
             addr,
             Join {
-                name: name.into(),
-                password: password.into(),
-                cp,
                 qport: (nanos ^ std::process::id()) as u16 & 0x7fff,
-                www,
-                cancel,
-                notes,
                 voice: true,
-                stats,
-                ..Join::default()
+                ..join
             },
         )?;
         let deadline = clock_now() + Duration::from_secs(30);
@@ -1113,7 +1118,8 @@ impl Cod4Session {
     /// it; a live server's queue, answered with cmds) and walks the new
     /// snapshots.
     pub fn step(&mut self, now_ms: f64) -> Result<()> {
-        self.save_profile(false);
+        let upload = self.menus.take_upload_stats();
+        self.save_profile(upload);
         let now = clock_now();
         match &mut self.source {
             Source::Capture {
@@ -6321,6 +6327,38 @@ pub(crate) mod tests {
         + Send
         + 'static,
     ) -> Option<T> {
+        live_join_with(map, world, sets, class, None, play)
+    }
+
+    /// [`live_join`] on mp_crash as `class`, the stats packets carrying
+    /// the active profile's under `players` (the directory holding
+    /// `players/profiles/`), whose file the server's `N`s go back to.
+    pub(crate) fn live_join_profile<T: Send + 'static>(
+        players: std::path::PathBuf,
+        class: &'static str,
+        play: impl FnOnce(&mut Cod4Session, Option<String>) -> T + Send + 'static,
+    ) -> Option<T> {
+        live_join_with(
+            "mp_crash",
+            crash_world(),
+            &[],
+            class,
+            Some(players),
+            |s, sp, _, _| play(s, sp),
+        )
+    }
+
+    /// [`live_join_as`] with the profile under `players`, else none.
+    fn live_join_with<T: Send + 'static>(
+        map: &str,
+        world: Option<Arc<Cod4World>>,
+        sets: &[(&str, &str)],
+        class: &'static str,
+        players: Option<std::path::PathBuf>,
+        play: impl FnOnce(&mut Cod4Session, Option<String>, Instant, std::sync::mpsc::Sender<Ctl>) -> T
+        + Send
+        + 'static,
+    ) -> Option<T> {
         use vcod_server::cod4::{Cod4Config, Cod4Server};
         let install = vcod_cod4::testing::cod4_install()?;
         let mut sv = Cod4Server::new(
@@ -6346,7 +6384,14 @@ pub(crate) mod tests {
                 team: Some("allies".into()),
                 class: Some(class.into()),
             };
-            let mut s = Cod4Session::connect(addr, "joiner", Cp::Bare, join).unwrap();
+            let mut s = match players {
+                Some(root) => {
+                    let profile = crate::play::cod4_profile::ProfileStats::load_from(&root, "");
+                    Cod4Session::connect_profile(addr, "joiner", "", Cp::Bare, join, None, profile)
+                }
+                None => Cod4Session::connect(addr, "joiner", Cp::Bare, join),
+            }
+            .unwrap();
             if let Some(w) = world {
                 s.set_world(w);
             }

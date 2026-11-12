@@ -406,7 +406,14 @@ const MENU_CVARS: &[(&str, &str)] = &[
 
 /// [`Shell::register_cod4_options`]'s dvars: name, default, flags
 /// (`Dvar_RegisterNew` 0x56c350 calls, cod4-front-end.md 9).
-const COD4_OPTION_DVARS: [(&str, &str, u32); 28] = [
+const COD4_OPTION_DVARS: [(&str, &str, u32); 33] = [
+    // the custom classes' names, archived (`LiveStorage_StatsInit`,
+    // 0x4fc5d7: flags 1; cod4-front-end.md 4.1)
+    ("customclass1", "", ARCHIVE),
+    ("customclass2", "", ARCHIVE),
+    ("customclass3", "", ARCHIVE),
+    ("customclass4", "", ARCHIVE),
+    ("customclass5", "", ARCHIVE),
     // the texture page's (cod4-front-end.md 9.3): 1.7's picmip dvars are
     // archived, not latched; `r_applyPicmip` reloads the images at them
     ("r_picmip_manual", "0", ARCHIVE),
@@ -1039,8 +1046,8 @@ impl Shell {
     /// `r_specular`, `r_fog`, `r_dlightLimit`,
     /// `r_lodScaleRigid`, `r_lodBiasRigid`, `r_drawWater`,
     /// `r_texFilterMipMode`, `monkeytoy`, the picmip and anisotropy dvars,
-    /// `r_aspectRatio` and the scoreboard's ping graph dvars at iw3mp.exe's
-    /// defaults; then
+    /// `r_aspectRatio`, the scoreboard's ping graph dvars and the custom
+    /// class names at iw3mp.exe's defaults; then
     /// [`Shell::cod4_set_picmip`].
     pub fn register_cod4_options(&mut self) {
         // `timedemo` is a command beside `demo` on 1.7 too (`CL_Init`,

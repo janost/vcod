@@ -246,7 +246,7 @@ the subsystem's doc before touching it.
 | The watched and played view: clock (`CL_AdjustTimeDelta`), lerp, teleport cuts, view weapon, prediction (`play::cod4_predict`), hardpoint jets and helicopter | `cod4-client-view.md` |
 | gsc: dialect over CoD2's, builtin tables, configstring slots, callbacks, connect, menus, loadout and spawn, server commands and squash, follow, hardpoints, script traces | `cod4-gsc.md` |
 | Map cycle (`map`, `fast_restart`, `map_rotate`), the client's map change, votes, the menu answers' one-packet rule | `cod4-map-cycle.md` |
-| Front end: `ui_mp` main menu, menu stack, profiles, Start New Server, Mods, menu sounds and music | `cod4-front-end.md` |
+| Front end: `ui_mp` main menu, menu stack, profiles, Create a Class and its stat commands, Start New Server, Mods, menu sounds and music | `cod4-front-end.md` |
 | Voice chat | `cod4-voice.md` |
 | Demos | `cod4-demos.md` |
 | Map x gametype sweep, the soak | `cod4-map-sweep.md` |
