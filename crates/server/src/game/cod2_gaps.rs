@@ -25,8 +25,8 @@ fn radius_damage_reaches_a_cod2_body() {
     let ent = f.level.rt.client_entity(1).unwrap();
     f.level.rt.start_thread_for_test(ent, "probe_blast");
     f.frame();
-    // 20 + (1 - 10 / 300) * 40, every probe clear, `none`'s 1.
-    assert_eq!(f.health(1), 100 - 59);
+    // 20 + (1 - 10 / 300) * 40 truncated, every probe clear, `none`'s 1.
+    assert_eq!(f.health(1), 100 - 58);
     assert_eq!(f.health(0), 100, "the shooter stands outside the radius");
     assert_no_script_errors(&mut f);
 }

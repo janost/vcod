@@ -66,11 +66,29 @@ pub fn search_box(at: Vec3, radius: f32) -> (Vec3, Vec3) {
     (at - Vec3::splat(half), at + Vec3::splat(half))
 }
 
-/// What one victim takes: the damage `G_Damage` is handed, rounded (the
-/// lnxded's `ROUND` of the product), and the direction, the victim's
-/// origin less the blast raised 24 (rodata 0x326470). `None` past the
-/// radius, or shielded with no tenth. `clear(a, b, mask)` is a trace that
-/// meets nothing.
+/// `VectorLength` as `G_RadiusDamage` (lnxded 0x8102a12) and
+/// `Bullet_Fire_Extended` (0x8120ff6) run it: the squared length summed on
+/// the stack and stored as a float, then `sqrt` of that, stored.
+pub fn stored_length(v: Vec3) -> f32 {
+    let d = v.as_dvec3();
+    let sq = (d.x * d.x + d.y * d.y + d.z * d.z) as f32;
+    f64::from(sq).sqrt() as f32
+}
+
+/// `G_RadiusDamage`'s damage at `dist` (lnxded 0x8102553): `(inner -
+/// outer) * (1 - dist / radius) + outer` on the stack, stored as a float,
+/// times `mult` (`CanDamage`'s share, or the tenth), truncated (`fistp`
+/// under `| 0xc00`, 0x810262d and 0x810280d).
+pub fn blast_damage(inner: f32, outer: f32, radius: f32, dist: f32, mult: f32) -> i32 {
+    let f = 1.0 - f64::from(dist) / f64::from(radius);
+    let damage = ((f64::from(inner) - f64::from(outer)) * f + f64::from(outer)) as f32;
+    (f64::from(damage) * f64::from(mult)) as i32
+}
+
+/// What one victim takes: the damage `G_Damage` is handed
+/// ([`blast_damage`]), and the direction, the victim's origin less the
+/// blast raised 24 (rodata 0x326470). `None` past the radius, or shielded
+/// with no tenth. `clear(a, b, mask)` is a trace that meets nothing.
 pub fn victim_damage(
     clear: &dyn Fn(Vec3, Vec3, u32) -> bool,
     v: &Victim,
@@ -93,11 +111,10 @@ pub fn victim_damage(
     } else {
         v.origin - at
     };
-    let dist = d.length();
+    let dist = stored_length(d);
     if dist >= radius {
         return None;
     }
-    let f = 1.0 - dist / radius;
     let share = match &v.client {
         Some(b) => client_share(clear, b, at),
         None => entity_share(clear, v, at),
@@ -114,7 +131,7 @@ pub fn victim_damage(
         }
         0.1
     };
-    let damage = ((outer + f * (inner - outer)) * mult).round_ties_even() as i32;
+    let damage = blast_damage(inner, outer, radius, dist, mult);
     let mut dir = v.origin - at;
     dir.z += 24.0;
     Some((damage, dir))
@@ -220,10 +237,11 @@ pub fn entity_victims(
 }
 
 /// `G_Damage`'s arm for an entity with no client on every entity a blast
-/// at `at` reaches: `health`, `damage` and `death` notifies. The
-/// attacker is `attacker`, the world when `None`. `engine` (a missile's
-/// blast, outside any builtin) queues the notifies on
-/// `GameHost::engine_notifies` instead of raising them on `cx`.
+/// at `at` reaches but `ignore` (`G_RadiusDamage`'s seventh argument):
+/// `health`, `damage` and `death` notifies. The attacker is `attacker`,
+/// the world when `None`. `engine` (a missile's blast, outside any
+/// builtin) queues the notifies on `GameHost::engine_notifies` instead of
+/// raising them on `cx`.
 #[allow(clippy::too_many_arguments)]
 pub fn damage_entities(
     host: &mut GameHost,
@@ -234,12 +252,13 @@ pub fn damage_entities(
     radius: f32,
     attacker: Option<EntId>,
     inflictor: Option<EntId>,
+    ignore: Option<EntId>,
     mod_: &str,
     engine: bool,
 ) {
     let victims = entity_victims(host, cx, at, radius);
     for (id, v) in victims {
-        if Some(id) == inflictor {
+        if Some(id) == ignore {
             continue;
         }
         let Some((damage, dir)) = victim_damage(&host_clear(host), &v, at, inner, outer, radius)
@@ -352,6 +371,7 @@ pub fn radius_damage(
         max_damage,
         min_damage,
         radius,
+        None,
         None,
         None,
         "MOD_EXPLOSIVE",

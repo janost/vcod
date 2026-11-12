@@ -505,9 +505,6 @@ impl Cod2Level {
             rt.host.fs.as_deref(),
         );
         combat.rand = rt.host.cod2().rand.clone();
-        if let Some(seed) = rt.host.cod2().game_seed {
-            combat.holdrand = vcod_common::rng::HoldRand(seed);
-        }
         let anims = rt.host.fs.as_deref().and_then(|fs| {
             vcod_cod2::pmove::AnimTable::load(fs)
                 .map_err(|e| log::warn!("cod2: no player anim script: {e:#}"))

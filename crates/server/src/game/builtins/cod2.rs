@@ -43,7 +43,12 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("getplayerangles", get_player_angles),
     ("int", cast_int),
     ("radiusdamage", radius_damage),
+    ("randomint", random_int),
+    ("randomfloat", random_float),
+    ("randomintrange", random_int_range),
+    ("randomfloatrange", random_float_range),
     ("setnormalhealth", set_normal_health),
+    ("setstablemissile", set_stable_missile),
     ("setteamscore", set_team_score),
     ("setwaypoint", set_waypoint),
     ("setweaponclipammo", set_weapon_clip_ammo),
@@ -418,6 +423,93 @@ fn radius_damage(
     let max = float_arg(args, 2, USAGE)?;
     let min = float_arg(args, 3, USAGE)?;
     crate::game::cod2_blast::radius_damage(host, cx, glam::Vec3::from(origin), range, max, min);
+    Ok(Value::Undefined)
+}
+
+/// `randomInt(n)` (0x8113ca4): `irand(0, n)` off `holdrand`, the
+/// generator the rocket's wobble draws from (cod2-combat.md 2.6.1); `n`
+/// under 1 is an error. VERIFIED.
+fn random_int(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let n = int_arg(args, 0, "randomInt takes a number")?;
+    if n <= 0 {
+        return Err(ErrorKind::Custom(
+            "RandomInt parm must be positive integer.".into(),
+        ));
+    }
+    Ok(Value::Int(host.cod2().rand.irand(0, n)))
+}
+
+/// `randomFloat(f)` (0x8113cfe): `flrand(0, f)` off `holdrand`. VERIFIED.
+fn random_float(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let f = float_arg(args, 0, "randomFloat takes a number")?;
+    Ok(Value::Float(host.cod2().rand.flrand(0.0, f)))
+}
+
+/// `randomIntRange(lo, hi)` (0x8113d32): `irand(lo, hi)` off `holdrand`;
+/// `hi` not above `lo` is an error. VERIFIED.
+fn random_int_range(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    const USAGE: &str = "randomIntRange takes two numbers";
+    let (lo, hi) = (int_arg(args, 0, USAGE)?, int_arg(args, 1, USAGE)?);
+    if hi <= lo {
+        return Err(ErrorKind::Custom(
+            "RandomIntRange range must be positive integer.".into(),
+        ));
+    }
+    Ok(Value::Int(host.cod2().rand.irand(lo, hi)))
+}
+
+/// `randomFloatRange(lo, hi)` (0x8113da0): `flrand(lo, hi)` off
+/// `holdrand`; `lo` at or above `hi` is an error. VERIFIED.
+fn random_float_range(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    const USAGE: &str = "randomFloatRange takes two numbers";
+    let (lo, hi) = (float_arg(args, 0, USAGE)?, float_arg(args, 1, USAGE)?);
+    if lo >= hi {
+        return Err(ErrorKind::Custom(
+            "Scr_RandomFloatRange range must be positive float.".into(),
+        ));
+    }
+    Ok(Value::Float(host.cod2().rand.flrand(lo, hi)))
+}
+
+/// `self setStableMissile(on)` (`Scr_SetStableMissile` 0x811225a): a
+/// player's `ent->flags` 0x20000 set or cleared, which `fire_rocket`
+/// copies onto the rocket and which keeps it from wobbling
+/// (cod2-combat.md 2.6). Anything but a player is an error. VERIFIED.
+fn set_stable_missile(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)
+        .map_err(|_| ErrorKind::Custom("Type should be a player".into()))?;
+    let on = int_arg(args, 0, "setStableMissile takes a number")?;
+    let flags = &mut host.cod2_mut().clients[slot].flags;
+    if on != 0 {
+        *flags |= crate::game::cod2_cmds::FL_STABLE_MISSILE;
+    } else {
+        *flags &= !crate::game::cod2_cmds::FL_STABLE_MISSILE;
+    }
     Ok(Value::Undefined)
 }
 

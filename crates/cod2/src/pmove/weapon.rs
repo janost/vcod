@@ -414,8 +414,9 @@ impl WeaponParams {
     }
 
     /// `Bullet_CalcDamageRange` (0x811fb7c): full damage inside
-    /// `maxDamageRange`, `minDamage` past `minDamageRange`, a lerp between
-    /// rounded to the nearest (`ROUND` under the default control word).
+    /// `maxDamageRange`, `minDamage` past `minDamageRange`, between them
+    /// the stored fraction `t` into `(1 - t) * damage + t * minDamage`
+    /// (0x8120e7e) on the stack, truncated (`fistp` under `| 0xc00`).
     pub fn damage_at(&self, dist: f32) -> i32 {
         if dist < self.max_damage_range {
             return self.damage;
@@ -427,9 +428,13 @@ impl WeaponParams {
         if span == 0.0 {
             return self.damage;
         }
-        let t = (dist - self.max_damage_range) / span;
-        let v = self.damage as f32 + (self.min_damage as f32 - self.damage as f32) * t;
-        v.round_ties_even() as i32
+        let t = ((f64::from(dist) - f64::from(self.max_damage_range)) / f64::from(span)) as f32;
+        let t = f64::from(t);
+        let (full, min) = (
+            f64::from(self.damage as f32),
+            f64::from(self.min_damage as f32),
+        );
+        ((1.0 - t) * full + min * t) as i32
     }
 }
 
@@ -2232,6 +2237,8 @@ mod tests {
         };
         assert_eq!(w.damage_at(500.0), 100);
         assert_eq!(w.damage_at(1500.0), 75);
+        // 74.95 truncates.
+        assert_eq!(w.damage_at(1501.0), 74);
         assert_eq!(w.damage_at(3000.0), 50);
     }
 
