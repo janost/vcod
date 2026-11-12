@@ -548,6 +548,38 @@ down dir: vel [0, -16.800001, -22.4] pm_time 50 pm_flags 0x100 timer 750 duratio
 fatal: vel [28.800001, 38.4, 0] pm_time 50 pm_flags 0x100 timer 750 duration 750 pm_type 7 weapon 0 health 0 | count 0 pitch 37 yaw 192 event 14 spread 0
 ";
 
+/// A blow along yaw -1.2 from 0.7 degrees below packs as 255 both, the
+/// bytes' none, and the level still has its direction for the bots.
+#[test]
+fn a_direction_that_packs_as_none_keeps_its_direction() {
+    let Some(mut t) = Trio::new(&[]) else {
+        return;
+    };
+    let l = t.level();
+    let dir = [0.9997134f32, -0.02088902, 0.01170162];
+    for (from, want) in [(Some(dir), Some(Vec3::from(dir))), (None, None)] {
+        l.heal_for_test(A);
+        l.rt.host.cod4_mut().damage_ops.push(Damage4 {
+            slot: A,
+            damage: 40,
+            dflags: 0,
+            dir: from,
+            fatal: false,
+            attacker: Some(SHOOTER),
+            death: None,
+        });
+        l.apply_damage_ops_for_test();
+        l.damage_feedback_for_test(A);
+        let ps = &l.players[A].as_ref().unwrap().ps;
+        assert_eq!((word(ps, "damagePitch"), word(ps, "damageYaw")), (255, 255));
+        let got = l.hit_dir(A);
+        assert_eq!(got.is_some(), want.is_some());
+        if let (Some(got), Some(want)) = (got, want) {
+            assert!(got.dot(want) > 0.9999, "{got} against {want}");
+        }
+    }
+}
+
 /// A playerstate word by its field name, and its write.
 fn word(ps: &vcod_cod4::net::delta::PlayerState, name: &str) -> u32 {
     ps.get(name).unwrap_or_else(|| panic!("no field {name}"))

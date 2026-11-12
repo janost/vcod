@@ -212,6 +212,10 @@ pub struct Combat4 {
     /// `client->damage_blood` and `damage_from`, by slot, until the end
     /// frame's feedback takes them.
     blood: Vec<(i32, Option<[f32; 3]>)>,
+    /// The direction of the blow behind each slot's last `damageEvent`
+    /// step, for the bots: a real one can pack as the bytes' 255 none
+    /// (cod4-combat.md 4).
+    hit_dir: Vec<Option<[f32; 3]>>,
     /// `client->currentAimSpreadScale`: the end frame's spread over 255.
     aim_spread: Vec<f32>,
     /// The aim block's state by slot (`vcod_cod4::pmove::aim`), zeroed at
@@ -241,6 +245,7 @@ impl Combat4 {
             src,
             bodies: vec![PlayerBody::default(); slots],
             blood: vec![(0, None); slots],
+            hit_dir: vec![None; slots],
             aim_spread: vec![0.0; slots],
             aim: vec![Default::default(); slots],
             gun_angles: vec![[0.0; 2]; slots],
@@ -1239,6 +1244,7 @@ impl Cod4Level {
                 let view =
                     std::array::from_fn(|k| f32::from_bits(ps.word(&format!("viewangles[{k}]"))));
                 self.combat.blood[slot] = (0, None);
+                self.combat.hit_dir[slot] = from;
                 self.combat.aim[slot].kick = vcod_cod4::pmove::aim::DamageKick::feedback(
                     count,
                     from.map(Vec3::from),
@@ -1482,6 +1488,14 @@ impl Cod4Level {
     /// The wire playerstate.
     pub fn wire_state(&self, slot: usize) -> Option<&PlayerState> {
         self.players.get(slot)?.as_ref().map(|p| &p.ps)
+    }
+
+    /// The unit direction of the blow behind `slot`'s last `damageEvent`
+    /// step, from the attacker toward the body, or `None` for one with
+    /// none. Not from `damagePitch`/`damageYaw`: a real direction can
+    /// truncate to their 255 none (cod4-combat.md 4).
+    pub fn hit_dir(&self, slot: usize) -> Option<Vec3> {
+        Vec3::from(self.combat.hit_dir.get(slot).copied()??).try_normalize()
     }
 }
 
