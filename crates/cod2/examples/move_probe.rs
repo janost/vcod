@@ -393,6 +393,32 @@ fn script(name: &str) -> Option<Vec<Phase>> {
             v.push(idle(500));
             v
         }
+        // A launcher at a target in front (`probe_weapon
+        // panzerschreck_mp`): the spawn's reload, then one sighted rocket
+        // at the body (cod2-combat.md 9.7).
+        "rocketbody" => vec![
+            idle(5500),
+            ph(800, ADS, 0, 0),
+            ph(100, ADS | ATTACK, 0, 0),
+            ph(2500, ADS, 0, 0),
+            idle(1000),
+        ],
+        // Melee swings (cod2-combat.md 9.7): at the target in front with
+        // the view turned off it by steps each way, where only a corner
+        // trace may meet the body; at the floor; then turned about at the
+        // script model `probe_model` puts behind.
+        "melee" => {
+            let swing = |p: fn(Phase) -> Phase| [p(ph(100, MELEE, 0, 0)), p(idle(1400))];
+            let mut v = vec![idle(1500)];
+            for yaw in [10.0, 14.0, 18.0, 22.0, -14.0, -18.0, -22.0] {
+                v.push(turn(ph(100, MELEE, 0, 0), yaw));
+                v.push(turn(idle(1400), yaw));
+            }
+            v.extend(swing(|p| look(turn(p, 90.0), 60.0)));
+            v.extend(swing(|p| look(turn(p, 180.0), 20.0)));
+            v.push(idle(500));
+            v
+        }
         // The target of a shooting script: twelve still seconds.
         "still" => vec![idle(12000)],
         // `rocket`'s target: thirty still seconds.

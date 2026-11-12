@@ -45,8 +45,13 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../cod2/tests/fixtu
 /// meet a static model, a killing head shot, a frag at the target's feet, a
 /// turret's burst, thompson bursts at the hip from 110 at a target no
 /// round knocks (standing, after a jump, backing off, crouched; traced),
-/// and two panzerschreck rockets, one into the sky past ten wobbles and its
-/// melee swings after, one into a wall (cod2-combat.md 9.7).
+/// and panzerschreck rockets: into the sky past ten wobbles and its melee
+/// swings after, into a wall, into the sky after the script's draws, one
+/// under `setStableMissile`, one into a static model with the target
+/// behind it, one into the target's body; and kar98k swings that meet the
+/// target through a corner trace, the floor and a script model
+/// (cod2-combat.md 9.7). The last six and the turret's and the far
+/// thompson's are traced.
 const CAPTURES: &[&str] = &[
     "hit-head",
     "hit-torso",
@@ -60,110 +65,16 @@ const CAPTURES: &[&str] = &[
     "hit-spray",
     "hit-rocket",
     "hit-rocket-wall",
+    "hit-rocket-rand",
+    "hit-rocket-stable",
+    "hit-rocket-cover",
+    "hit-rocket-body",
+    "hit-melee",
 ];
 
 /// What the replay still gets wrong: (capture, check, count, why). The
 /// counts are exact. Each reason names its section of cod2-combat.md.
 const GAPS: &[(&str, &str, usize, &str)] = &[
-    (
-        "hit-smg-far",
-        "event eventParm",
-        3,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-smg-far",
-        "event pos.trBase[0]",
-        4,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-smg-far",
-        "event pos.trBase[1]",
-        5,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-smg-far",
-        "event pos.trBase[2]",
-        3,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-smg-far",
-        "event surfType",
-        2,
-        "9.6 a seed not recovered",
-    ),
-    ("hit-smg-far", "probe hitloc", 1, "9.6 a seed not recovered"),
-    ("hit-smg-far", "probe point", 1, "9.6 a seed not recovered"),
-    ("hit-smg-far", "probe time", 1, "9.6 a seed not recovered"),
-    (
-        "hit-smg-far",
-        "target damageCount",
-        2,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-smg-far",
-        "target damageDuration",
-        2,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-smg-far",
-        "target damageEvent",
-        2,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-smg-far",
-        "target damageYaw",
-        2,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-smg-far",
-        "target flinchYaw",
-        2,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-smg-far",
-        "target health",
-        2,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-smg-far",
-        "target pm_flags",
-        2,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-smg-far",
-        "target pm_time",
-        2,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-smg-far",
-        "target velocity[0]",
-        3,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-smg-far",
-        "target velocity[1]",
-        3,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-smg-far",
-        "target velocity[2]",
-        3,
-        "9.6 a seed not recovered",
-    ),
     (
         "hit-throw",
         "missile pos.trBase[1]",
@@ -195,108 +106,28 @@ const GAPS: &[(&str, &str, usize, &str)] = &[
         "9.4 the bounce off the target's body: last bits",
     ),
     (
-        "hit-turret",
+        "hit-rocket-rand",
+        "probe point",
+        2,
+        "9.7 the melee's contact depth on a still body",
+    ),
+    (
+        "hit-melee",
+        "probe point",
+        4,
+        "9.7 the melee's contact depth on a still body",
+    ),
+    (
+        "hit-melee",
         "event eventParm",
-        7,
-        "cod2-turrets.md 11, a dead body left playing",
-    ),
-    (
-        "hit-turret",
-        "event otherEntityNum",
-        7,
-        "cod2-turrets.md 11, a dead body left playing",
-    ),
-    (
-        "hit-turret",
-        "event pos.trBase[0]",
-        32,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-turret",
-        "event pos.trBase[1]",
-        31,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-turret",
-        "event pos.trBase[2]",
-        8,
-        "9.6 a seed not recovered",
-    ),
-    (
-        "hit-turret",
-        "event surfType",
-        7,
-        "cod2-turrets.md 11, a dead body left playing",
-    ),
-    (
-        "hit-turret",
-        "event time",
-        10,
-        "cod2-turrets.md 11, a dead body left playing",
-    ),
-    (
-        "hit-turret",
-        "events",
         1,
-        "cod2-turrets.md 11, a dead body left playing",
+        "9.7 the melee's contact depth on a still body",
     ),
     (
-        "hit-turret",
-        "probe lines",
-        1,
-        "cod2-turrets.md 11, a dead body left playing",
-    ),
-    ("hit-turret", "probe point", 3, "9.6 a seed not recovered"),
-    ("hit-turret", "probe time", 1, "9.6 a seed not recovered"),
-    (
-        "hit-turret",
-        "target damageCount",
-        10,
-        "cod2-turrets.md 11, a dead body left playing",
-    ),
-    (
-        "hit-turret",
-        "target damageEvent",
-        69,
-        "cod2-turrets.md 11, a dead body left playing",
-    ),
-    (
-        "hit-turret",
-        "target health",
-        70,
-        "cod2-turrets.md 11, a dead body left playing",
-    ),
-    (
-        "hit-turret",
+        "hit-melee",
         "target pm_flags",
-        9,
-        "cod2-turrets.md 11, a dead body left playing",
-    ),
-    (
-        "hit-turret",
-        "target pm_time",
-        9,
-        "cod2-turrets.md 11, a dead body left playing",
-    ),
-    (
-        "hit-turret",
-        "target velocity[0]",
-        20,
-        "cod2-turrets.md 11, a dead body left playing",
-    ),
-    (
-        "hit-turret",
-        "target velocity[1]",
-        20,
-        "cod2-turrets.md 11, a dead body left playing",
-    ),
-    (
-        "hit-turret",
-        "target velocity[2]",
-        11,
-        "cod2-turrets.md 11, a dead body left playing",
+        2,
+        "9.7 the look-at flag on a turned body",
     ),
 ];
 
@@ -812,6 +643,24 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str, report: bool) -> Found {
     };
     let firsts = [first(sides[0]), first(sides[1])];
     let t0 = (start - 2000).min(firsts[0] - 100).min(firsts[1] - 100);
+    let end = shooter
+        .side
+        .snaps
+        .last()
+        .unwrap()
+        .time
+        .min(target.side.snaps.last().unwrap().time);
+    // The capture's seed: its trace's, else `SEEDS`'
+    // (`COMBAT_SEED=<seed>,<skip>` tries another), and glibc's draws
+    // before the replay's start.
+    let traced = shooter.traced_rand(start, end);
+    let seed = std::env::var("COMBAT_SEED").ok().map(|v| {
+        let (a, b) = v.split_once(',').unwrap();
+        (a.parse().unwrap(), b.parse().unwrap())
+    });
+    let seed = seed
+        .or_else(|| traced.as_ref().map(|t| (t.0, t.1)))
+        .or_else(|| SEEDS.iter().find(|s| s.0 == name).map(|s| (s.1, s.2)));
     let mut level = Cod2Level::load_with_script(
         fs.clone(),
         &shooter.map,
@@ -824,6 +673,10 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str, report: bool) -> Found {
         t0,
     )
     .expect("load probe_combat");
+    // `G_InitGame`'s seed: the spawns' script draws take `holdrand` from it.
+    if let Some((seed, _)) = seed {
+        level.combat.rand.reseed(seed);
+    }
     level.connect(0, "target");
     level.connect(1, "vcodmoves");
     let mut done = [None::<i32>; 2];
@@ -852,24 +705,8 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str, report: bool) -> Found {
     }
     // Both bodies as retail's snapshot has them.
     let mut done = [0, 1].map(|slot| take_snapshot(&mut level, slot, sides[slot], start));
-    let end = shooter
-        .side
-        .snaps
-        .last()
-        .unwrap()
-        .time
-        .min(target.side.snaps.last().unwrap().time);
-    // The capture's `rand()`, from where the replay starts: its trace, else
-    // `SEEDS` (`COMBAT_SEED=<seed>,<skip>` tries another).
-    let traced = shooter.traced_rand(start, end);
-    let seed = std::env::var("COMBAT_SEED").ok().map(|v| {
-        let (a, b) = v.split_once(',').unwrap();
-        (a.parse().unwrap(), b.parse().unwrap())
-    });
-    if let Some((seed, skip)) = seed
-        .or_else(|| traced.as_ref().map(|t| (t.0, t.1)))
-        .or_else(|| SEEDS.iter().find(|s| s.0 == name).map(|s| (s.1, s.2)))
-    {
+    // glibc's `rand()` from where the replay starts.
+    if let Some((seed, skip)) = seed {
         level.combat.pin_rand(seed, skip);
     }
     // Each of our draws from here by the level time retail's would log: a
