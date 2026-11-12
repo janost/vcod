@@ -5098,6 +5098,109 @@ pub(crate) mod tests {
         assert!(st.max_correction < 0.05, "{}", st.max_correction);
     }
 
+    /// The touch capture's walker predicted against retail's snapshots: it
+    /// walks into the target, strafes along it and walks in again 26 to
+    /// the side (cod4-pmove.md 15.3). Clipped as boxes the prediction
+    /// missed 26 snapshots by up to 20 units; as capsules what is left is
+    /// the unit the client's capsule sits inside the server's
+    /// (cod4-client-view.md 5.1).
+    #[test]
+    fn touch_capture_predicts_the_walker_against_the_target() {
+        let Some(world) = crash_world() else { return };
+        for hz in [60.0, 144.0] {
+            let (_, st) = view_steps_in("play-1.7-touch-walker.txt", hz, Some(world.clone()));
+            println!("{hz} Hz: {st:?}");
+            assert!(st.cmds_run > 5000, "{hz} Hz: {st:?}");
+            assert!(st.missed <= 8, "{hz} Hz: {st:?}");
+            assert!(st.max_correction < 2.1, "{hz} Hz: {st:?}");
+        }
+    }
+
+    /// A walk into another player on mp_crash, the touch capture's second
+    /// approach (26 to the side of the target), stepped cmd by cmd through
+    /// the prediction's world and vcod-server's (`Cod4Clip`). A body packed
+    /// to read as the server's box gives the server's origin every cmd: the
+    /// same capsule in the same arithmetic. The real packing, a unit
+    /// inside, leaves the walker within 1.1 of the server's path
+    /// (cod4-client-view.md 5.1).
+    #[test]
+    fn predicted_walk_into_a_body_follows_the_server() {
+        use vcod_cod4::pmove::{self, Cmd, PlayerState, PmWorld, Rules};
+        use vcod_server::game::cod4::clip::{Body4, Cod4Clip};
+        let Some(w) = crash_world() else { return };
+        let (mins, maxs) = (pmove::PLAYER_MINS, pmove::PLAYER_MAXS);
+        let floor = |x: f32, y: f32| {
+            let p = Vec3::new(x, y, 296.0);
+            let t = w
+                .clip
+                .trace(p, p - Vec3::Z * 256.0, mins, maxs, pmove::MASK_PLAYERSOLID);
+            p.z - 256.0 * t.fraction
+        };
+        let target = Vec3::new(207.0, 2291.0, floor(207.0, 2291.0));
+        let start = Vec3::new(181.0, 2211.0, target.z);
+        let weapon = w.weapons["m16_mp"];
+        let walk = |world: &dyn PmWorld| -> Vec<Vec3> {
+            let mut ps = PlayerState::spawn(start, 90.0, 1000);
+            ps.ground_entity_num = pmove::ENTITYNUM_WORLD;
+            ps.weapon = 1;
+            let mut old = Cmd::default();
+            (1..=60)
+                .map(|k| {
+                    let cmd = Cmd {
+                        server_time: 1000 + 25 * k,
+                        angles: [0, 0x4000, 0],
+                        forward_move: 127,
+                        ..Cmd::default()
+                    };
+                    pmove::player_step(&mut ps, &cmd, &mut old, world, Rules::default(), weapon);
+                    ps.origin
+                })
+                .collect()
+        };
+        let server = [Body4 {
+            entity: 1,
+            origin: target,
+            mins,
+            maxs,
+            contents: pmove::CONTENTS_BODY,
+            owner: None,
+        }];
+        let ours = walk(&Cod4Clip {
+            clip: &w.clip,
+            bodies: &server,
+            brushes: &[],
+        });
+        let predicted = |solid: u32| {
+            let solids = [Solid::of(1, true, solid, 0, 0, target, Vec3::ZERO).unwrap()];
+            walk(&cod4_predict::Solids {
+                clip: &w.clip,
+                solids: &solids,
+            })
+        };
+        // The server's box, (-15,-15,0)..(15,15,70), packed a unit out.
+        assert_eq!(predicted(16 | (2 << 8) | ((70 + 33) << 16)), ours);
+        // `SV_LinkEntity`'s packing (`game::cod4::level`).
+        let real = predicted(15 | (1 << 8) | ((70 + 32) << 16));
+        let last = *ours.last().unwrap();
+        let met = ours
+            .iter()
+            .position(|p| p.x != start.x)
+            .expect("met the body");
+        println!(
+            "server from {start} to {last}, met at cmd {met}; predicted to {}",
+            real.last().unwrap()
+        );
+        assert!(last.y - start.y > 40.0, "walked {}", last.y - start.y);
+        assert_eq!(real[..met - 1], ours[..met - 1]);
+        let apart = real
+            .iter()
+            .zip(&ours)
+            .map(|(a, b)| a.distance(*b))
+            .fold(0.0, f32::max);
+        println!("predicted at most {apart} from the server");
+        assert!(apart < 1.5, "{apart}");
+    }
+
     /// The own events the prediction fires on top of the snapshots', by
     /// capture. Empty since the weapon half models `Mantle_IsWeaponInactive`
     /// (cod4-pmove.md 17.4): the mantle's putaway is predicted as retail

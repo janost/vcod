@@ -106,11 +106,11 @@ The weapon byte is the client's own pick
   lerp, with its teleport cuts.
 - Our own body and a free spectator are predicted: cmds replayed through
   `vcod_cod4::pmove` over the map's clip map and the other players'
-  boxes. Corrections ease over `cg_errordecay`'s 100 ms, stair steps over
-  `cg_viewZSmoothingTime`. Mantles and the weapon half predict too, so
-  our own shots, reloads, switches and footsteps play the frame the
-  predicted move raises them, and not again from the snapshot. Item
-  pickups stay the snapshot's (5).
+  capsules, a unit inside the server's as on 1.7. Corrections ease over
+  `cg_errordecay`'s 100 ms, stair steps over `cg_viewZSmoothingTime`.
+  Mantles and the weapon half predict too, so our own shots, reloads,
+  switches and footsteps play the frame the predicted move raises them,
+  and not again from the snapshot. Item pickups stay the snapshot's (5).
 - A lean moves the eye sideways as 1.7's does (7).
 
 **Bodies and entities**
