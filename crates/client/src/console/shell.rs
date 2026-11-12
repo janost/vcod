@@ -2117,6 +2117,8 @@ mod tests {
             s.complete("CL_"),
             [
                 "cl_allowDownload",
+                "cl_avidemo",
+                "cl_forceavidemo",
                 "cl_freelook",
                 "cl_freezeDemo",
                 "cl_language",
