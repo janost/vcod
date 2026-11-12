@@ -290,6 +290,12 @@ gunner's `legsAnim` (toggle aside), the gun's `weapon` and `loopSound`,
 and the release's stance event. Left out: `delta_angles`, which
 `SetClientViewAngle` leaves unmasked on retail.
 
+The gate's level is unseeded, so the script's `random*` draw from
+`holdrand`'s static 0x89abcdef (cod2-combat.md 2.6.1). The mg42 capture's
+gunner keeps the firing bit in retail's frames under that start and
+under `Rand_Init(2)` or `(3)`, not under `Rand_Init(1)`. VERIFIED, the
+gate. Which script's draws reach the gun was not traced.
+
 Sections 13, 14 and 16 add six captures under the same gate: a prone
 and a duck mg42 and a prone 30cal, a gunner killed on the gun, one shot
 off it while he fires, and two players at one gun. A two-client capture

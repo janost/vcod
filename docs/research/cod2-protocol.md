@@ -1001,7 +1001,7 @@ vcod's shared builtins raise every event in 1.1's numbering (`playFxOnTag`, `pla
 
 ### 15.7 The gate and what still differs
 
-`cod2::wire_ab` (`COD2_DIR`) replays the fixtures and runs the same two clients against `Cod2Server` (hostname `CoD2Host`, `developer 1`, the script's RNG seeded so `menuAutoAssign`'s `randomInt(2)` draws retail's team). It diffs every configstring (0 and 1 key by key but `sv_serverid`), every baseline field, both clients' server commands up to retail's last, the spectator's last snapshot (every entity, a live body's clock and anim aside, and its playerstate) and the joined player's last playerstate with its stats, ammo and clips (place, clock and pmove fields aside). `WIRE_REPORT=1` prints each difference's two values; `WIRE_GT_DIR`, `WIRE_MAP`, `WIRE_GT`, `WIRE_SEED` and `WIRE_KILL` gate a capture outside the fixtures.
+`cod2::wire_ab` (`COD2_DIR`) replays the fixtures and runs the same two clients against `Cod2Server` (hostname `CoD2Host`, `developer 1`, `holdrand`, the script's generator (cod2-combat.md 2.6.1), seeded once the level is up so `menuAutoAssign`'s `randomInt(2)` draws retail's team). It diffs every configstring (0 and 1 key by key but `sv_serverid`), every baseline field, both clients' server commands up to retail's last, the spectator's last snapshot (every entity, a live body's clock and anim aside, and its playerstate) and the joined player's last playerstate with its stats, ammo and clips (place, clock and pmove fields aside). `WIRE_REPORT=1` prints each difference's two values; `WIRE_GT_DIR`, `WIRE_MAP`, `WIRE_GT`, `WIRE_SEED` and `WIRE_KILL` gate a capture outside the fixtures.
 
 The gate replays four things off the retail capture rather than drawing them (the fourth, the drops' draws, below):
 

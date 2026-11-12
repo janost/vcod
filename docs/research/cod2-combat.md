@@ -709,8 +709,8 @@ attachments assemble.
 #### 2.6.1 `holdrand`
 
 - CoD2 1.3's game draws from two generators. glibc's `rand()` (9.6), and
-  q_shared's `holdrand` (`DAT_0817e338`): `Rand_Init` (0x80aaa76) stores
-  the seed; `flrand(min, max)` (0x80aaa84) steps `holdrand * 0x343fd +
+  q_shared's `holdrand` (`DAT_0817e338`, 0x89abcdef in `.data` before any
+  seed): `Rand_Init` (0x80aaa76) stores the seed; `flrand(min, max)` (0x80aaa84) steps `holdrand * 0x343fd +
   0x269ec3` and returns `(max - min) * (holdrand >> 17) / 32768 + min`
   (rodata 0x814d268 32768); `irand` (0x80aaada) steps alike. VERIFIED,
   the disassembly.
@@ -1724,8 +1724,9 @@ level's load seeds it and the script's draws with `Carry::seed`, which
 `Cod2Server` takes off its engine's generator, not the wall clock
 (`pin_game_seed` fixes it).
 
-`cod2_combat_ab` pins a traced capture's seed and the draws before its
-start off the trace, and compares the level time of every later draw with
+`cod2_combat_ab` seeds both generators with a traced capture's seed at
+the load, so the spawns' script draws take `holdrand` from it, pins
+glibc's draws before its start off the trace, and compares the level time of every later draw with
 retail's (`rand draws`). `hit-spray` replays clean: its 15 rounds strike
 retail's points, its world impacts retail's, and its 103 draws each fall
 in retail's frame. VERIFIED, the gate. Without pmove's jump and land

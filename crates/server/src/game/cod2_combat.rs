@@ -411,8 +411,9 @@ impl Combat {
 /// The game module's two generators: glibc's `rand()`, as `cod2_lnxded`
 /// links it, and q_shared's `holdrand`, which `G_InitGame` seeds each level
 /// with one seed ([`GameRand::reseed`], cod2-combat.md 2.6.1, 9.6).
-/// Unseeded they are glibc's `srand(1)` and an arbitrary `holdrand`. Behind
-/// cells so a draw can sit beside a borrow of the weapon table.
+/// Unseeded they are glibc's `srand(1)` and `holdrand`'s static 0x89abcdef
+/// (lnxded .data 0x817e338). Behind cells so a draw can sit beside a borrow
+/// of the weapon table.
 #[derive(Debug)]
 pub struct GameRand {
     g: std::cell::RefCell<vcod_common::rng::GlibcRand>,
@@ -425,7 +426,7 @@ impl Default for GameRand {
         GameRand {
             g: std::cell::RefCell::new(vcod_common::rng::GlibcRand::new(1)),
             drawn: std::cell::Cell::new(0),
-            hold: std::cell::Cell::new(vcod_common::rng::HoldRand(0x4f6c_dd1d)),
+            hold: std::cell::Cell::new(vcod_common::rng::HoldRand(0x89ab_cdef)),
         }
     }
 }
@@ -435,6 +436,11 @@ impl GameRand {
     /// 0x810911e, 0x8109129).
     pub fn reseed(&self, seed: u32) {
         *self.g.borrow_mut() = vcod_common::rng::GlibcRand::new(seed);
+        self.hold.set(vcod_common::rng::HoldRand(seed));
+    }
+
+    /// `Rand_Init(seed)` alone: `holdrand`, glibc's stream left as it is.
+    pub fn rand_init(&self, seed: u32) {
         self.hold.set(vcod_common::rng::HoldRand(seed));
     }
 
