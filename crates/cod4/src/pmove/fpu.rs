@@ -146,23 +146,26 @@ pub(crate) fn normalize2v(v: Vec3) -> Vec3 {
 }
 
 /// `vectopitch` (`cod4_lnxded` 0x8192510): `-180 / pi * atan2(z, |xy|)`
-/// in 0..360, the flat length kept and passed to `atan2` as a double.
+/// in 0..360, the flat length kept and passed to `atan2` as a double. The
+/// stored angle always takes an add, 360 or 0 (`cmovb`, 0x8192571), so a
+/// level vector's -0 comes back +0.
 pub(crate) fn vectopitch(v: Vec3) -> f32 {
     if v.x == 0.0 && v.y == 0.0 {
         return if v.z > 0.0 { 270.0 } else { 90.0 };
     }
     let flat = (d(v.x) * d(v.x) + d(v.y) * d(v.y)).sqrt();
     let p = (-180.0 * d(v.z).atan2(flat) / std::f64::consts::PI) as f32;
-    if p < 0.0 { p + 360.0 } else { p }
+    p + if p < 0.0 { 360.0 } else { 0.0 }
 }
 
-/// `vectoyaw`: `180 / pi * atan2(y, x)` in 0..360.
+/// `vectoyaw` (0x8191c22): `180 / pi * atan2(y, x)` in 0..360, the add
+/// as [`vectopitch`]'s.
 pub(crate) fn vectoyaw(v: Vec3) -> f32 {
     if v.x == 0.0 && v.y == 0.0 {
         return 0.0;
     }
     let y = (180.0 * d(v.y).atan2(d(v.x)) / std::f64::consts::PI) as f32;
-    if y < 0.0 { y + 360.0 } else { y }
+    y + if y < 0.0 { 360.0 } else { 0.0 }
 }
 
 #[cfg(test)]

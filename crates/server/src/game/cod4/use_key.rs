@@ -702,7 +702,10 @@ impl Cod4Level {
                 i.stock = stock;
             }
             dropped = launched;
-            self.rt.host.cod4_mut().clients[slot].loadout.take(held);
+            let c4 = self.rt.host.cod4_mut();
+            let table = std::mem::take(&mut c4.table);
+            c4.clients[slot].loadout.take(&table, held);
+            c4.table = table;
         }
         let c4 = self.rt.host.cod4_mut();
         let table = std::mem::take(&mut c4.table);

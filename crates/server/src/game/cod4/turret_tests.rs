@@ -321,8 +321,12 @@ fn the_hint_picks_by_the_use_list_and_a_gunner_keeps_the_drop_hint() {
         .find(|i| i.id.0 == behind)
         .unwrap()
         .weapon;
-    let l = &mut level.rt.host.cod4_mut().clients[slot].loadout;
-    l.take(w as usize);
+    let c4 = level.rt.host.cod4_mut();
+    let table = std::mem::take(&mut c4.table);
+    let l = &mut c4.clients[slot].loadout;
+    l.take(&table, w as usize);
+    c4.table = table;
+    let l = &mut c4.clients[slot].loadout;
     let held = l.held().find(|&h| h != w as usize).unwrap_or(0);
     l.weapon = held;
     run.level().set_view_pos(slot, BEHIND, [0.0; 3]);
@@ -405,8 +409,12 @@ fn a_bomb_zone_and_a_drop_under_one_player() {
     for slot in [a, b] {
         let level = run.level();
         let team = level.rt.client_team(slot);
-        let l = &mut level.rt.host.cod4_mut().clients[slot].loadout;
-        l.take(w as usize);
+        let c4 = level.rt.host.cod4_mut();
+        let table = std::mem::take(&mut c4.table);
+        let l = &mut c4.clients[slot].loadout;
+        l.take(&table, w as usize);
+        c4.table = table;
+        let l = &mut c4.clients[slot].loadout;
         let held = l.held().find(|&h| h != w as usize).unwrap_or(0);
         l.weapon = held;
         run.level().set_view_pos(slot, eye, [60.0, 0.0, 0.0]);

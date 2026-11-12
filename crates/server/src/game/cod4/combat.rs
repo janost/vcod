@@ -121,6 +121,9 @@ pub struct Damage4 {
     pub attacker: Option<usize>,
     /// A kill's death anim (`BG_AnimScriptEvent(ps, ANIM_ET_DEATH, 0, 1)`).
     pub death: Option<vcod_cod4::pmove::anim::EventAnim>,
+    /// A kill's `STAT_DEAD_YAW` toward its killer (`dead_yaw` in
+    /// `builtins::cod4_combat`); `None` keeps the body's own view yaw.
+    pub dead_yaw: Option<i32>,
 }
 
 /// A live grenade `player_die` drops (the death grenade drop, `cod4_lnxded`
@@ -240,6 +243,14 @@ pub struct Combat4 {
 }
 
 impl Combat4 {
+    /// `ClientSpawn`'s memset of the whole client (`cod4_lnxded` 0x80a7cc9,
+    /// 0x3184 bytes) drops the blood and the blow not yet fed back, so a
+    /// killing blow steps no `damageEvent` on the next life.
+    pub(super) fn clear_blood(&mut self, slot: usize) {
+        self.blood[slot] = (0, None);
+        self.hit_dir[slot] = None;
+    }
+
     pub fn new(src: Option<Rc<BodySource>>, slots: usize) -> Combat4 {
         Combat4 {
             src,
@@ -1186,6 +1197,7 @@ impl Cod4Level {
             let blood = &mut self.combat.blood[op.slot];
             *blood = (blood.0 + op.damage, op.dir);
             let timer = ps.damage_timer + (op.damage as f32 * DAMAGE_TIMER_PER_POINT) as i32;
+            let flinch = flinch_yaw(op.dir, ps.view_angles[1]);
             ps.damage_timer = timer.min(MAX_DAMAGE_TIMER);
             ps.damage_duration = ps.damage_timer;
             if op.fatal {
@@ -1197,9 +1209,11 @@ impl Cod4Level {
             }
             p.ps = ps.to_wire(&p.ps);
             p.ps.set("damageDuration", ps.damage_duration as u32);
+            p.ps.set("flinchYawAnim", flinch);
             p.ps.stats[0] = if op.fatal { 0 } else { health.max(0) };
             if op.fatal {
                 p.ps.set("weapon", 0);
+                p.ps.stats[1] = op.dead_yaw.unwrap_or(ps.view_angles[1] as i32);
             }
         }
         for g in std::mem::take(&mut self.rt.host.cod4_mut().death_grenades) {
@@ -1411,7 +1425,8 @@ impl Cod4Level {
                 set("attackerEntityNum", te.attacker as u32);
                 set("weapon", te.weapon as u32);
                 set("clientNum", te.client_num as u32);
-                set("un1.scale", te.scale as u32);
+                // `un1`, the event tables' name for the byte at +212.
+                set("un1", te.scale as u32);
                 if let Some(q) = te.quake {
                     set("lerp.u.anonymous.data[0]", q.scale.to_bits());
                     set("lerp.u.anonymous.data[1]", q.radius.to_bits());
@@ -1506,6 +1521,33 @@ const DEFAULT_KNOCKBACK: f32 = 1000.0;
 const PLAYER_MASS: f32 = 250.0;
 const MAX_KNOCKBACK: i32 = 60;
 const KNOCKBACK_TIME_MS: (i32, i32) = (50, 200);
+/// `finishPlayerDamage`'s `flinchYawAnim` (`cod4_lnxded` 0x80ac7b5..0x80ac85a,
+/// 0x80acdbd..0x80ace25): the blow's `vectoyaw` less the view yaw's whole
+/// degrees (the view put in 0..360 first), put in 0..360: 0 from 315 or
+/// under 45, 2 to 135, 1 to 225, 3 to 315 (rodata 0x8218dc0..0x8218dc8,
+/// 0x820dec0); 0 for a blow with no direction (0x80acad4).
+fn flinch_yaw(dir: Option<[f32; 3]>, view_yaw: f32) -> u32 {
+    let Some(dir) = dir else {
+        return 0;
+    };
+    let yaw = crate::game::builtins::math::vectoyaw(dir) as f32;
+    let view = if view_yaw < 0.0 {
+        (f64::from(view_yaw) + 360.0) as f32
+    } else {
+        view_yaw
+    };
+    let mut d = f64::from(yaw) - f64::from(view as i32);
+    if d < 0.0 {
+        d += 360.0;
+    }
+    match d {
+        d if !(45.0..315.0).contains(&d) => 0,
+        d if d < 135.0 => 2,
+        d if d < 225.0 => 1,
+        _ => 3,
+    }
+}
+
 const DAMAGE_TIMER_PER_POINT: f32 = 100.0;
 const MAX_DAMAGE_TIMER: i32 = 750;
 /// `P_DamageFeedback`'s count cap and how long a count stands.
