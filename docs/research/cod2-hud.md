@@ -310,9 +310,21 @@ draws.
   offhand states), or with `cg_drawCrosshair` 0. The weapon is
   `BG_GetViewmodelWeaponIndex`'s.
 - The colour is white, or (0.25, 1, 0.25) with `pm_flags & 0x100000`. The
-  alpha multiplies `cg_crosshairAlpha` (1) by the sight fraction read at
-  playerstate +0xdc (`fWeaponPosFrac`). The hip crosshair shows unsighted,
-  so vcod takes `1 - fWeaponPosFrac`. INFERRED.
+  alpha multiplies `cg_crosshairAlpha` (1) by what `CG_DrawWeapReticle`
+  (0x1d0320) leaves in `xmm0`: 1 with no overlay drawn (0x1d0365), else
+  `1 - ` the overlay's alpha (0x1d0545). VERIFIED, the disassembly; that
+  the caller reads it as the function's return is INFERRED (Ghidra types
+  it `void`). Under 0.01 nothing draws.
+- None once `fWeaponPosFrac` (`cg + 0x25ca0`, the predicted
+  playerstate's +0xdc) is exactly 1, unless `cg_drawGun` is 0
+  (0x1d0860..0x1d0877). VERIFIED. With `cg_drawGun` 0 and a size scale
+  under 1 (below), `reticleCenter` draws a second time at
+  `reticleCenterSize * (1.5 - scale)` square, centred on
+  `CG_CalcCrosshairPosition` without the drop; the crosshair itself draws
+  unless the fraction is 1. VERIFIED, the decompile's tests and the
+  rodata (0x3261b8 1.5, 0x3261f4 -0.5). So with the gun hidden a second
+  dot grows as the crosshair shrinks and stays alone at the top of the
+  sight. INFERRED.
 - Past the sight's crosshair fraction (`adsCrosshairInFrac` / `-OutFrac`),
   `f = (pos - (1 - frac)) / frac`: the size scale is `1 - f / 2` and the
   centre drops by `480 / fov_y * f * adsAimPitch`.
@@ -324,6 +336,8 @@ draws.
   255) * scale` off `BG_GetSpreadForWeapon`, alpha times
   `1 - aimSpreadScale / 255`, at least `cg_crosshairAlphaMin` 0.
 - vcod takes `fov_y` from an 80 degree `cg_fov` at 4:3. INFERRED.
+- vcod: `cod2_player_hud::CrosshairParts`, the second centre at the
+  screen's centre.
 
 ## 11. Damage direction
 

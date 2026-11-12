@@ -4260,10 +4260,16 @@ impl App {
             return self.disconnect(Some(format!("EXE_ERR_NOT_FOUND\u{15}demos/{file}")));
         };
         log::info!("playing {}", path.display());
+        // `timedemo`'s csv goes where `record` writes.
+        let csv_dir = self.demo_dirs()[0].clone();
+        let r_mode = self.shell.int("r_mode");
         let played = std::fs::read(&path)
             .map_err(anyhow::Error::from)
             .and_then(|data| play::cod2::Cod2Session::play_demo(data, timedemo))
-            .and_then(|s| self.enter_cod2(s));
+            .and_then(|mut s| {
+                s.write_timedemo_csv(csv_dir, r_mode);
+                self.enter_cod2(s)
+            });
         if let Err(e) = played {
             return self.disconnect(Some(format!("{e:#}")));
         }

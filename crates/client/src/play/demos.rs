@@ -43,6 +43,16 @@ impl TimeDemo {
         self.frames
     }
 
+    /// The frames counted so far.
+    pub fn frames(&self) -> i32 {
+        self.frames
+    }
+
+    /// Whether a frame has stamped the start (a start of 0 reads as none).
+    pub fn started(&self) -> bool {
+        self.start_ms != 0
+    }
+
     /// `CL_DemoCompleted`'s line (CoDMP.exe 0x40e920) with `timedemo`
     /// set as the demo ends; nothing when no time has passed.
     pub fn report(&self, now_ms: i32) -> Option<String> {

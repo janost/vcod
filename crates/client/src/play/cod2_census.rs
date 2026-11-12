@@ -423,7 +423,7 @@ fn session(
         let _ = s.take_map_change();
         let events = s.take_events();
         let _ = s.sound_cues(&events, fs, eye, draw.muzzles());
-        let plays = s.effects(&events, fs, eye, draw.muzzles());
+        let plays = s.effects(&events, fs, eye, draw.fx_scene(true));
         let now = start.elapsed().as_secs_f32();
         fx.set_view(eye);
         for p in &plays {

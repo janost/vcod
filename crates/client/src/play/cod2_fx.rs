@@ -1,17 +1,17 @@
 //! The effects a CoD2 connection plays: the visual, table-driven events
 //! `play::cod2_events::EventTracker` found, played as `CG_EntityEvent`
-//! plays them, and `ET_FX` entities replayed on their timers
-//! (docs/research/cod2-efx.md 6). The sounds of the same events are
-//! `play::cod2_sound`'s.
+//! plays them, `ET_FX` entities replayed on their timers, and the weapons'
+//! muzzle flashes and brass on their tags (docs/research/cod2-efx.md 6).
+//! The sounds of the same events are `play::cod2_sound`'s.
 
 use crate::fx::cod2_tracer;
-use crate::fx::sim::{FxSystem, Rng, SpawnAt};
+use crate::fx::sim::{FxSystem, Rng, SpawnAt, TagBolt, TagPose};
 use crate::play::cod2_events::{Event2, SURFACES};
 use crate::play::cod2_sound::{PMF_FIRST_PERSON, muzzle_point};
 use glam::Vec3;
 use std::collections::{HashMap, HashSet};
-use vcod_cod2::net::events::{self as ev, ET_FX, ET_PLAYER};
-use vcod_cod2::net::flags::{EF_CROUCHING, EF_PRONE};
+use vcod_cod2::net::events::{self as ev, ET_EVENTS, ET_FX, ET_PLAYER, ET_TURRET};
+use vcod_cod2::net::flags::EF_TURRET_STANCE;
 use vcod_cod2::net::{ConfigStrings, EntityView, Frame, SnapshotView};
 use vcod_common::asset_source::{Asset, AssetKind, AssetSource};
 
@@ -35,6 +35,72 @@ pub enum Play {
         hit: Vec3,
         back_ms: i32,
     },
+    /// An effect on a drawn body's tag (`FX_PlayEntityEffect`, Mac
+    /// 0x60d14): spawned on the tag's pose, its `relative` elements riding
+    /// the tag after.
+    OnTag {
+        path: String,
+        bolt: TagBolt,
+        pose: TagPose,
+    },
+    /// An effect on the view weapon's tag (`weapon` its CS 7 index), which
+    /// the client spawns once the frame has placed the gun
+    /// (`cod2_client::Cod2Client::view`).
+    View {
+        path: String,
+        tag: ViewTag,
+        weapon: i32,
+    },
+    /// The playerstate's shot flags the predicted player entity's flash
+    /// (`cent + 0x1e2` of `cg + 0x2826c`); the client holds it until it
+    /// next places the view weapon (`cod2_client::Cod2Client::view`).
+    ViewFlash,
+}
+
+/// The weapon tag an effect plays on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewTag {
+    /// `tag_flash` (`_s_barrelTags[0]`).
+    Flash,
+    /// `tag_brass`.
+    Brass,
+}
+
+impl ViewTag {
+    /// The [`TagBolt`] slot a body's or the view weapon's tag rides as:
+    /// below the configstring slots `playFxOnTag` names.
+    pub fn slot(self) -> i32 {
+        match self {
+            ViewTag::Flash => -1,
+            ViewTag::Brass => -2,
+        }
+    }
+}
+
+/// The bolt entity of the view weapon's DObj, `0x400 + weapon`
+/// (`CG_RegisterWeapon`, Mac 0x1d85cc): past every entity number.
+pub fn view_bolt(weapon: i32) -> u32 {
+    0x400 + weapon.max(0) as u32
+}
+
+/// A drawn body's `tag_flash` and `tag_brass` in the world, the poses its
+/// world flash and brass spawn on (`FX_GetBoneOrientation`, Mac 0x59230).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BodyTags {
+    pub flash: Option<TagPose>,
+    pub brass: Option<TagPose>,
+}
+
+/// What the frame's draw and dvars hand the effects.
+#[derive(Clone, Copy)]
+pub struct FxScene<'a> {
+    /// Each drawn body's and gun's world `tag_flash`, where its tracers
+    /// start.
+    pub muzzles: &'a HashMap<u32, Vec3>,
+    /// Each drawn body's tags ([`BodyTags`]).
+    pub tags: &'a HashMap<u32, BodyTags>,
+    /// `cg_brass`: off, `CG_EjectWeaponBrass` (Mac 0x1d80ba) returns at once.
+    pub brass: bool,
 }
 
 impl FxPlay {
@@ -52,8 +118,10 @@ impl FxPlay {
     #[cfg(test)]
     pub fn path(&self) -> Option<&str> {
         match &self.play {
-            Play::Effect { path, .. } => Some(path),
-            Play::Tracer { .. } => None,
+            Play::Effect { path, .. } | Play::OnTag { path, .. } | Play::View { path, .. } => {
+                Some(path)
+            }
+            Play::Tracer { .. } | Play::ViewFlash => None,
         }
     }
 
@@ -68,6 +136,12 @@ impl FxPlay {
                 hit,
                 back_ms,
             } => fx.spawn_cod2_tracer(muzzle, hit, now, back_ms),
+            Play::OnTag { path, bolt, pose } => {
+                log::debug!("cod2 fx {path} on {bolt:?} ({})", self.why);
+                fx.spawn_on_tag(fs, path, *bolt, *pose, now);
+            }
+            // The client's to place (`Cod2Client::view`).
+            Play::View { .. } | Play::ViewFlash => {}
         }
     }
 }
@@ -173,11 +247,34 @@ fn byte_to_dir(b: i32) -> Vec3 {
     Vec3::from_array(vcod_common::net::events::byte_to_dir(b))
 }
 
-/// What a weapon file gives the effects: its flashes and explosion.
+/// What a weapon file gives the effects: its flashes, shell ejects and
+/// explosion, `CG_RegisterWeapon`'s (Mac 0x1d85cc) `cg_weapons` slots
+/// +0xc0, +0xc4, +0x15c, +0x160 and +0x164.
 #[derive(Clone, Debug, Default)]
 struct WeaponFx {
+    view_flash: Option<String>,
     world_flash: Option<String>,
+    shell_eject: Option<String>,
+    /// `lastShotEjectEffect`, else the shell eject.
+    last_shot_eject: Option<String>,
     explosion: Option<String>,
+    /// `boltAction`: the brass leaves at `EV_EJECT_BRASS`, not the shot.
+    bolt_action: bool,
+}
+
+impl WeaponFx {
+    fn of(d: &vcod_cod2::weapon::WeaponDef) -> WeaponFx {
+        let s = |k: &str| Some(d.str(k).to_string()).filter(|s| !s.is_empty());
+        let shell_eject = s("shellEjectEffect");
+        WeaponFx {
+            view_flash: s("viewFlashEffect"),
+            world_flash: s("worldFlashEffect"),
+            last_shot_eject: s("lastShotEjectEffect").or_else(|| shell_eject.clone()),
+            shell_eject,
+            explosion: s("projExplosionEffect"),
+            bolt_action: d.flag("boltAction"),
+        }
+    }
 }
 
 /// A CoD2 connection's effect state: the `ET_FX` timers, the impact table
@@ -194,21 +291,23 @@ pub struct Cod2Fx {
     rng: Option<Rng>,
     /// The last frame's render time, for `cg.frametime`.
     last_ms: Option<i32>,
+    /// The entities whose shot flagged a flash no draw has played yet
+    /// (`cent + 0x1e2`, set by `CG_FireWeapon`, Mac 0x1d823c).
+    flashes: HashSet<u32>,
 }
 
 impl Cod2Fx {
     /// This frame's plays: `events` (the snapshot that became current,
     /// `Cod2Session::take_events`) and the `ET_FX` entities due at the
     /// render time, culled from `view`. Without `fs` the table-driven
-    /// events play nothing. `muzzles` holds each drawn body's world
-    /// `tag_flash`, where its tracers start.
+    /// events play nothing.
     pub fn frame(
         &mut self,
         frame: &Frame,
         events: &[Event2],
         view: Vec3,
         fs: Option<&dyn AssetSource>,
-        muzzles: &HashMap<u32, Vec3>,
+        scene: FxScene,
     ) -> Vec<FxPlay> {
         let cs = frame.configstrings;
         if let Some(fs) = fs
@@ -223,8 +322,12 @@ impl Cod2Fx {
         let mut out = Vec::new();
         for e in events {
             self.event(e, cs, fs, &mut out);
-            self.tracer(e, frame.snap, muzzles, frametime, &mut out);
+            self.weapon_fx(e, frame.snap, cs, fs, scene, &mut out);
+            self.tracer(e, frame.snap, scene.muzzles, frametime, &mut out);
         }
+        // The events run before the frame adds its bodies, so a drawn
+        // shooter flashes in his event's frame.
+        self.held_flashes(frame.snap, cs, fs, scene, &mut out);
         for e in &frame.snap.entities {
             if e.etype == ET_FX {
                 self.looped(e, frame, view, &mut out);
@@ -255,26 +358,25 @@ impl Cod2Fx {
             let Some(name) = cs.weapon_name(index) else {
                 break;
             };
-            let Ok(d) = vcod_common::weapon::load(fs, name) else {
+            let Ok(p) = vcod_cod2::weapon::load(fs, name) else {
                 continue;
             };
+            let w = self
+                .weapons
+                .entry(index)
+                .or_insert_with(|| WeaponFx::of(&p.def));
             out.extend(
                 [
-                    &d.view_flash_effect,
-                    &d.world_flash_effect,
-                    &d.shell_eject_effect,
-                    &d.last_shot_eject_effect,
-                    &d.proj_explosion_effect,
+                    &w.view_flash,
+                    &w.world_flash,
+                    &w.shell_eject,
+                    &w.last_shot_eject,
+                    &w.explosion,
                 ]
                 .into_iter()
                 .flatten()
-                .filter(|s| !s.is_empty())
                 .cloned(),
             );
-            self.weapons.entry(index).or_insert_with(|| WeaponFx {
-                world_flash: d.world_flash_effect.clone().filter(|s| !s.is_empty()),
-                explosion: d.proj_explosion_effect.clone().filter(|s| !s.is_empty()),
-            });
         }
         out.sort();
         out.dedup();
@@ -290,13 +392,185 @@ impl Cod2Fx {
         };
         let w = cs
             .weapon_name(index)
-            .and_then(|n| vcod_common::weapon::load(fs, n).ok())
-            .map_or_else(WeaponFx::default, |d| WeaponFx {
-                world_flash: d.world_flash_effect.filter(|s| !s.is_empty()),
-                explosion: d.proj_explosion_effect.filter(|s| !s.is_empty()),
-            });
+            .and_then(|n| vcod_cod2::weapon::load(fs, n).ok())
+            .map_or_else(WeaponFx::default, |p| WeaponFx::of(&p.def));
         self.weapons.insert(index, w.clone());
         w
+    }
+
+    /// A shot's muzzle flash and brass, and `EV_EJECT_BRASS`'s brass
+    /// (cod2-efx.md 6.8). `CG_FireWeapon` (Mac 0x1d823c), on any weapon
+    /// but 0, flags the shooter's flash for `CG_AddPlayerWeapon` (Mac
+    /// 0x1d9c8e) to play when it next adds the gun: the playerstate's
+    /// events [`Play::ViewFlash`], another player's held for
+    /// [`Self::held_flashes`], a gunner's (`eFlags` 0x300) too. A turret's
+    /// own shot plays its flash at once on its `tag_flash`: the view flash
+    /// on the gun the playerstate is locked on, else the world flash. It
+    /// then ejects brass once per call (the quad barrel events call it
+    /// twice) unless the weapon is `boltAction`.
+    fn weapon_fx(
+        &mut self,
+        e: &Event2,
+        snap: &SnapshotView,
+        cs: &ConfigStrings,
+        fs: Option<&dyn AssetSource>,
+        scene: FxScene,
+        out: &mut Vec<FxPlay>,
+    ) {
+        let calls = match e.event {
+            ev::EV_FIRE_WEAPON
+            | ev::EV_FIRE_WEAPONB
+            | ev::EV_FIRE_WEAPON_LASTSHOT
+            | ev::EV_FIRE_WEAPON_MG42 => 1,
+            ev::EV_FIRE_QUADBARREL_1 | ev::EV_FIRE_QUADBARREL_2 => 2,
+            ev::EV_EJECT_BRASS => {
+                self.brass(e, snap, cs, fs, scene, out);
+                return;
+            }
+            _ => return,
+        };
+        if e.weapon == 0 {
+            return;
+        }
+        let why = ev::event_name(e.event).unwrap_or("?");
+        if e.etype == ET_TURRET {
+            let w = self.weapon(cs, fs, e.weapon);
+            let manned = snap.ps.eflags & EF_TURRET_STANCE != 0
+                && snap.ps.raw.i32("viewlocked_entNum") == e.entity as i32;
+            let path = if manned { w.view_flash } else { w.world_flash };
+            if let Some(path) = path
+                && let Some(pose) = scene.tags.get(&e.entity).and_then(|t| t.flash)
+            {
+                out.push(FxPlay {
+                    play: Play::OnTag {
+                        path,
+                        bolt: TagBolt {
+                            entity: e.entity,
+                            slot: ViewTag::Flash.slot(),
+                        },
+                        pose,
+                    },
+                    why: why.into(),
+                });
+            }
+        } else if e.etype == ET_PLAYER {
+            if e.from_ps {
+                out.push(FxPlay {
+                    play: Play::ViewFlash,
+                    why: why.into(),
+                });
+            } else {
+                self.flashes.insert(e.entity);
+            }
+        }
+        if !self.weapon(cs, fs, e.weapon).bolt_action {
+            for _ in 0..calls {
+                self.brass(e, snap, cs, fs, scene, out);
+            }
+        }
+    }
+
+    /// `CG_AddPlayerWeapon`'s world arm (Mac 0x1d9c8e) over the held flags:
+    /// a body `CG_Player` (0x1e6834) drew this frame armed (a weapon,
+    /// `eFlags & 0x300` clear) clears its flag and plays its weapon's
+    /// `worldFlashEffect` on its `tag_flash`. A body not drawn (dead, no
+    /// draw, out of the snapshot, or the first-person body's own entity)
+    /// holds it to its next draw, and a gunner's to his dismount.
+    fn held_flashes(
+        &mut self,
+        snap: &SnapshotView,
+        cs: &ConfigStrings,
+        fs: Option<&dyn AssetSource>,
+        scene: FxScene,
+        out: &mut Vec<FxPlay>,
+    ) {
+        let mut due: Vec<(u32, i32)> = self
+            .flashes
+            .iter()
+            .filter_map(|&n| {
+                let e = snap.entity(n)?;
+                let drawn =
+                    e.etype == ET_PLAYER && scene.tags.contains_key(&n) && !first_person(snap, n);
+                (drawn && e.weapon > 0 && e.eflags & EF_TURRET_STANCE == 0).then_some((n, e.weapon))
+            })
+            .collect();
+        due.sort_unstable();
+        for (n, weapon) in due {
+            self.flashes.remove(&n);
+            let pose = scene.tags.get(&n).and_then(|t| t.flash);
+            if let (Some(path), Some(pose)) = (self.weapon(cs, fs, weapon).world_flash, pose) {
+                out.push(FxPlay {
+                    play: Play::OnTag {
+                        path,
+                        bolt: TagBolt {
+                            entity: n,
+                            slot: ViewTag::Flash.slot(),
+                        },
+                        pose,
+                    },
+                    why: format!("entity {n}'s flash flag"),
+                });
+            }
+        }
+    }
+
+    /// The `viewFlashEffect` of CS 7 weapon `weapon` (`cg_weapons + 0xc0`),
+    /// what a held view flash plays on the gun drawn when it plays.
+    pub fn view_flash(
+        &mut self,
+        cs: &ConfigStrings,
+        fs: &dyn AssetSource,
+        weapon: i32,
+    ) -> Option<String> {
+        self.weapon(cs, Some(fs), weapon).view_flash
+    }
+
+    /// `CG_EjectWeaponBrass` (Mac 0x1d80ba): under `cg_brass`, for an
+    /// entity that is no temp event and holds a weapon, the weapon's
+    /// last-shot eject on `EV_FIRE_WEAPON_LASTSHOT`, else its shell eject,
+    /// on the view weapon's `tag_brass` for the first-person body, else on
+    /// the shooter's.
+    fn brass(
+        &mut self,
+        e: &Event2,
+        snap: &SnapshotView,
+        cs: &ConfigStrings,
+        fs: Option<&dyn AssetSource>,
+        scene: FxScene,
+        out: &mut Vec<FxPlay>,
+    ) {
+        if !scene.brass || e.etype >= ET_EVENTS || e.weapon == 0 {
+            return;
+        }
+        let w = self.weapon(cs, fs, e.weapon);
+        let path = match e.event {
+            ev::EV_FIRE_WEAPON_LASTSHOT => w.last_shot_eject,
+            _ => w.shell_eject,
+        };
+        let Some(path) = path else {
+            return;
+        };
+        let why = ev::event_name(e.event).unwrap_or("?").to_string();
+        let play = if first_person(snap, e.entity) {
+            Play::View {
+                path,
+                tag: ViewTag::Brass,
+                weapon: e.weapon,
+            }
+        } else {
+            let Some(pose) = scene.tags.get(&e.entity).and_then(|t| t.brass) else {
+                return;
+            };
+            Play::OnTag {
+                path,
+                bolt: TagBolt {
+                    entity: e.entity,
+                    slot: ViewTag::Brass.slot(),
+                },
+                pose,
+            }
+        };
+        out.push(FxPlay { play, why });
     }
 
     /// `CG_EntityEvent`'s effect arms (Mac 0x1e4650).
@@ -379,36 +653,6 @@ impl Cod2Fx {
                 }
                 _ => self.bad_id(e.parm),
             },
-            // Third-person flash: the weapon file's `worldFlashEffect`,
-            // retail on the weapon's `tag_flash`; vcod has no tag pose
-            // here and plays it ahead of the eye. The playerstate's own
-            // ring is the first-person view's, whose flash is the view
-            // weapon's, not drawn here.
-            ev::EV_FIRE_WEAPON
-            | ev::EV_FIRE_WEAPONB
-            | ev::EV_FIRE_WEAPON_LASTSHOT
-            | ev::EV_FIRE_WEAPON_MG42
-            | ev::EV_FIRE_QUADBARREL_1
-            | ev::EV_FIRE_QUADBARREL_2 => {
-                if e.etype != ET_PLAYER || e.from_ps {
-                    return;
-                }
-                let w = self.weapon(cs, fs, e.weapon);
-                if let Some(p) = w.world_flash {
-                    let (dir, _, _) = angle_vectors(e.angles);
-                    let eye = match e.eflags {
-                        f if f & EF_PRONE != 0 => 11.0,
-                        f if f & EF_CROUCHING != 0 => 40.0,
-                        _ => 60.0,
-                    };
-                    let muzzle = pos + Vec3::Z * eye + dir * 24.0;
-                    out.push(FxPlay::effect(
-                        p,
-                        SpawnAt::Directed { pos: muzzle, dir },
-                        ev::event_name(e.event).unwrap_or("?"),
-                    ));
-                }
-            }
             _ => {}
         }
     }
@@ -532,6 +776,12 @@ impl Cod2Fx {
     }
 }
 
+/// `entity` is the playerstate's first-person body (`pm_flags` 0xc00000),
+/// whose gun is the view weapon.
+fn first_person(snap: &SnapshotView, entity: u32) -> bool {
+    snap.ps.pm_flags & PMF_FIRST_PERSON != 0 && entity == snap.ps.client_num as u32
+}
+
 fn cs_effect(cs: &ConfigStrings, id: i32) -> Option<&str> {
     (1..64).contains(&id).then(|| cs.effect(id)).flatten()
 }
@@ -604,7 +854,13 @@ mod tests {
             let new = tracker.transition(cur);
             let f = view.frame(snap.server_time).unwrap();
             let eye = Vec3::from(f.eye());
-            plays.extend(fx.frame(&f, &new, eye, None, &HashMap::new()));
+            let none = HashMap::new();
+            let scene = FxScene {
+                muzzles: &none,
+                tags: &HashMap::new(),
+                brass: true,
+            };
+            plays.extend(fx.frame(&f, &new, eye, None, scene));
             events.extend(new);
         }
         (plays, events)
@@ -795,6 +1051,258 @@ mod tests {
             (xs[2] - 450.0).abs() < 0.5 && (xs[0] - 610.0).abs() < 0.5,
             "{xs:?}"
         );
+    }
+
+    /// A drawn player's shot flashes his `worldFlashEffect` on his
+    /// `tag_flash` and ejects his shell eject (the last shot's on the last
+    /// round) on his `tag_brass`; a bolt action ejects at
+    /// `EV_EJECT_BRASS` instead; the playerstate's shot flags the view's
+    /// flash and ejects on the view weapon's `tag_brass`, and the
+    /// first-person body's own entity flashes nothing; no brass under
+    /// `cg_brass 0` or off a temp entity, nothing for weapon 0.
+    #[test]
+    fn shots_flash_and_eject_brass_on_their_tags() {
+        use vcod_cod2::net::{EntityState2, EntityView, PlayerView};
+        let mut ps = PlayerView::new(&Default::default(), 0);
+        ps.pm_flags = PMF_FIRST_PERSON;
+        ps.client_num = 0;
+        ps.weapon = 1;
+        let body = |n: u32, weapon: i32| EntityView {
+            etype: ET_PLAYER,
+            weapon,
+            ..EntityView::new(&EntityState2::null(n))
+        };
+        let snap = SnapshotView {
+            message_num: 1,
+            server_time: 1000,
+            snap_flags: 0,
+            ps,
+            entities: vec![body(0, 1), body(3, 1)],
+            clients: Vec::new(),
+        };
+        let pose = |x: f32| TagPose {
+            origin: Vec3::new(x, 0.0, 50.0),
+            axis: [Vec3::X, Vec3::Y, Vec3::Z],
+        };
+        let tags = HashMap::from([(
+            3u32,
+            BodyTags {
+                flash: Some(pose(30.0)),
+                brass: Some(pose(10.0)),
+            },
+        )]);
+        let muzzles = HashMap::new();
+        let scene = FxScene {
+            muzzles: &muzzles,
+            tags: &tags,
+            brass: true,
+        };
+        let mut fx = Cod2Fx::default();
+        let file = |bolt_action| WeaponFx {
+            view_flash: Some("fx/view.efx".into()),
+            world_flash: Some("fx/world.efx".into()),
+            shell_eject: Some("fx/shell.efx".into()),
+            last_shot_eject: Some("fx/last.efx".into()),
+            bolt_action,
+            ..Default::default()
+        };
+        fx.weapons.insert(1, file(false));
+        fx.weapons.insert(2, file(true));
+        let cs = ConfigStrings::default();
+        let ev = |entity: u32, event: i32, weapon: i32| Event2 {
+            entity,
+            event,
+            parm: 0,
+            etype: ET_PLAYER,
+            eflags: 0,
+            weapon,
+            surf: 0,
+            other_entity: 0,
+            time: 0,
+            scale: 0,
+            angles2: [0.0; 2],
+            pos: Vec3::ZERO,
+            angles: Vec3::ZERO,
+            from_ps: false,
+        };
+        let mut run = |e: Event2, scene: FxScene| {
+            let mut out = Vec::new();
+            fx.weapon_fx(&e, &snap, &cs, None, scene, &mut out);
+            fx.held_flashes(&snap, &cs, None, scene, &mut out);
+            out.into_iter()
+                .map(|p| match p.play {
+                    Play::OnTag { path, bolt, pose } => {
+                        format!(
+                            "{path} on {} {} at {}",
+                            bolt.entity, bolt.slot, pose.origin.x
+                        )
+                    }
+                    Play::View { path, tag, weapon } => format!("{path} on view {tag:?} {weapon}"),
+                    Play::ViewFlash => "view flash".to_string(),
+                    other => panic!("{other:?}"),
+                })
+                .collect::<Vec<_>>()
+        };
+        let (world, shell) = ("fx/world.efx on 3 -1 at 30", "fx/shell.efx on 3 -2 at 10");
+        assert_eq!(run(ev(3, ev::EV_FIRE_WEAPON, 1), scene), [shell, world]);
+        assert_eq!(
+            run(ev(3, ev::EV_FIRE_WEAPON_LASTSHOT, 1), scene),
+            ["fx/last.efx on 3 -2 at 10", world]
+        );
+        assert_eq!(
+            run(ev(3, ev::EV_FIRE_QUADBARREL_1, 1), scene),
+            [shell, shell, world]
+        );
+        assert_eq!(run(ev(3, ev::EV_FIRE_WEAPON, 2), scene), [world]);
+        assert_eq!(run(ev(3, ev::EV_EJECT_BRASS, 2), scene), [shell]);
+        let own = Event2 {
+            from_ps: true,
+            ..ev(0, ev::EV_FIRE_WEAPON, 1)
+        };
+        assert_eq!(
+            run(own, scene),
+            ["view flash", "fx/shell.efx on view Brass 1"]
+        );
+        assert_eq!(
+            run(ev(0, ev::EV_FIRE_WEAPON, 1), scene),
+            ["fx/shell.efx on view Brass 1"]
+        );
+        let no_brass = FxScene {
+            brass: false,
+            ..scene
+        };
+        assert_eq!(run(ev(3, ev::EV_FIRE_WEAPON, 1), no_brass), [world]);
+        let temp = Event2 {
+            etype: ET_EVENTS + ev::EV_EJECT_BRASS,
+            ..ev(3, ev::EV_EJECT_BRASS, 1)
+        };
+        assert!(run(temp, scene).is_empty());
+        assert!(run(ev(3, ev::EV_FIRE_WEAPON, 0), scene).is_empty());
+        // A turret's shot flashes its own tag, the view's flash for the
+        // gun the view is locked on.
+        let turret = Event2 {
+            etype: ev::ET_TURRET,
+            ..ev(3, ev::EV_FIRE_WEAPON_MG42, 1)
+        };
+        assert_eq!(run(turret, scene), [world, shell]);
+        let mut raw = vcod_cod2::net::PlayerState2::default();
+        let field =
+            |n| vcod_cod2::net::delta::field_index(&vcod_cod2::net::fields::PLAYER_STATE_FIELDS, n);
+        raw.f[field("viewlocked_entNum")] = 3;
+        raw.f[field("eFlags")] = EF_TURRET_STANCE as u32;
+        let gunner = SnapshotView {
+            ps: PlayerView::new(&raw, 0),
+            ..snap.clone()
+        };
+        let mut out = Vec::new();
+        fx.weapon_fx(&turret, &gunner, &cs, None, scene, &mut out);
+        assert_eq!(out[0].path(), Some("fx/view.efx"));
+    }
+
+    /// `CG_FireWeapon` only flags a flash: a body not drawn in its shot's
+    /// frame keeps the flag and flashes at its next draw, with the weapon
+    /// it then holds; a gunner keeps his to his dismount, and the
+    /// first-person body's own entity never plays its (cod2-efx.md 6.8).
+    #[test]
+    fn a_shots_flash_waits_for_the_bodys_next_draw() {
+        use vcod_cod2::net::{EntityState2, EntityView, PlayerView};
+        let mut ps = PlayerView::new(&Default::default(), 0);
+        ps.pm_flags = PMF_FIRST_PERSON;
+        ps.client_num = 0;
+        let body = |n: u32, weapon: i32, eflags: i32| EntityView {
+            etype: ET_PLAYER,
+            weapon,
+            eflags,
+            ..EntityView::new(&EntityState2::null(n))
+        };
+        let snap = |entities| SnapshotView {
+            message_num: 1,
+            server_time: 1000,
+            snap_flags: 0,
+            ps: ps.clone(),
+            entities,
+            clients: Vec::new(),
+        };
+        let pose = TagPose {
+            origin: Vec3::new(30.0, 0.0, 50.0),
+            axis: [Vec3::X, Vec3::Y, Vec3::Z],
+        };
+        let drawn: HashMap<u32, BodyTags> = [0u32, 3, 4]
+            .into_iter()
+            .map(|n| {
+                let t = BodyTags {
+                    flash: Some(pose),
+                    brass: None,
+                };
+                (n, t)
+            })
+            .collect();
+        let none = HashMap::new();
+        let muzzles = HashMap::new();
+        let scene = |tags| FxScene {
+            muzzles: &muzzles,
+            tags,
+            brass: false,
+        };
+        let mut fx = Cod2Fx::default();
+        for (w, path) in [(1, "fx/one.efx"), (2, "fx/two.efx")] {
+            let f = WeaponFx {
+                world_flash: Some(path.into()),
+                ..Default::default()
+            };
+            fx.weapons.insert(w, f);
+        }
+        let cs = ConfigStrings::default();
+        let fire = |entity: u32| Event2 {
+            entity,
+            event: ev::EV_FIRE_WEAPON,
+            parm: 0,
+            etype: ET_PLAYER,
+            eflags: 0,
+            weapon: 1,
+            surf: 0,
+            other_entity: 0,
+            time: 0,
+            scale: 0,
+            angles2: [0.0; 2],
+            pos: Vec3::ZERO,
+            angles: Vec3::ZERO,
+            from_ps: false,
+        };
+        let mut frame = |events: &[Event2], snap: &SnapshotView, tags| {
+            let mut out = Vec::new();
+            for e in events {
+                fx.weapon_fx(e, snap, &cs, None, scene(tags), &mut out);
+            }
+            fx.held_flashes(snap, &cs, None, scene(tags), &mut out);
+            out.iter()
+                .filter_map(|p| match &p.play {
+                    Play::OnTag { path, bolt, .. } => Some(format!("{path} on {}", bolt.entity)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // Fired out of sight, drawn two frames on with another gun.
+        let armed = snap(vec![body(3, 1, 0)]);
+        assert!(frame(&[fire(3)], &armed, &none).is_empty());
+        assert!(frame(&[], &armed, &none).is_empty());
+        let switched = snap(vec![body(3, 2, 0)]);
+        assert_eq!(frame(&[], &switched, &drawn), ["fx/two.efx on 3"]);
+        assert!(frame(&[], &switched, &drawn).is_empty());
+        // A gunner's flag waits out the mount, then plays once.
+        let mounted = snap(vec![body(4, 1, EF_TURRET_STANCE)]);
+        assert!(frame(&[fire(4)], &mounted, &drawn).is_empty());
+        assert!(frame(&[], &mounted, &drawn).is_empty());
+        let off = snap(vec![body(4, 1, 0)]);
+        assert_eq!(frame(&[], &off, &drawn), ["fx/one.efx on 4"]);
+        // An empty hand holds it too.
+        let unarmed = snap(vec![body(3, 0, 0)]);
+        assert!(frame(&[fire(3)], &unarmed, &drawn).is_empty());
+        assert_eq!(frame(&[], &armed, &drawn), ["fx/one.efx on 3"]);
+        // The first-person body's own entity.
+        let own = snap(vec![body(0, 1, 0)]);
+        assert!(frame(&[fire(0)], &own, &drawn).is_empty());
+        assert!(frame(&[], &own, &drawn).is_empty());
     }
 
     /// The stock table names an effect the fx system loads in every cell

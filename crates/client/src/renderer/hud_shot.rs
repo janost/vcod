@@ -285,6 +285,7 @@ fn cod2_player_hud_shot() {
         selected: 1,
         use_key: "F",
         mantle_hint: true,
+        draw_gun: true,
         stance_keys: None,
         hint_fade_ms: 100,
     };

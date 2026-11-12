@@ -27,8 +27,9 @@ use vcod_common::turretpose::angles_quat;
 use vcod_common::weapon::WeaponDef;
 use vcod_common::xanim::XAnim;
 
-use crate::cod2_players::{Cod2PlayerView, Cod2Players};
+use crate::cod2_players::{Cod2PlayerView, Cod2Players, tag_pose};
 use crate::entities::resolve_model;
+use crate::fx::sim::TagPose;
 use crate::renderer::{CookieEntity, DynamicModelInstance, ModelHandle, Renderer};
 use crate::turret::{ANIM_BLEND_MS, GunAnim, apply_controller};
 use vcod_cod2::player::GunFrame;
@@ -259,7 +260,7 @@ pub struct Built2 {
     pub instances: Vec<DynamicModelInstance>,
     pub submodels: Vec<(usize, Mat4)>,
     /// Each posed gun's world `tag_flash`, by entity.
-    pub muzzles: Vec<(u32, Vec3)>,
+    pub muzzles: Vec<(u32, TagPose)>,
 }
 
 /// A mounted gun's skeleton and its clips' bindings.
@@ -447,7 +448,7 @@ impl Cod2Scene {
             };
             let bones = self.gun_pose(fs, p, now_ms).map(|(pose, skel)| {
                 if let Some(at) = gun_muzzle(&pose, skel) {
-                    out.muzzles.push((p.number, transform.transform_point3(at)));
+                    out.muzzles.push((p.number, tag_pose(transform, at)));
                 }
                 pose.skin_matrices(skel, 0)
             });
@@ -467,8 +468,8 @@ impl Cod2Scene {
 /// draws its tracer from (`CG_CalcMuzzlePoint`, Mac 0x1d7f72, reads the
 /// impact's entity's own tag: the gun's for a turret round;
 /// cod2-turrets.md 12).
-fn gun_muzzle(pose: &PoseBuffer, skel: &Skeleton) -> Option<Vec3> {
-    Some(pose.bone_world(skel, skel.bone_index("tag_flash")?).0)
+fn gun_muzzle(pose: &PoseBuffer, skel: &Skeleton) -> Option<(Vec3, glam::Quat)> {
+    Some(pose.bone_world(skel, skel.bone_index("tag_flash")?))
 }
 
 /// What a CoD2 session draws across frames: the entity models and the
@@ -536,6 +537,22 @@ impl Cod2Draw {
         &self.players.heads
     }
 
+    /// The last frame's drawn bodies' `tag_flash` and `tag_brass` poses by
+    /// entity.
+    pub fn tags(&self) -> &HashMap<u32, crate::play::cod2_fx::BodyTags> {
+        &self.players.tags
+    }
+
+    /// What the last frame's draw hands the effects, `brass` being
+    /// `cg_brass`.
+    pub fn fx_scene(&self, brass: bool) -> crate::play::cod2_fx::FxScene<'_> {
+        crate::play::cod2_fx::FxScene {
+            muzzles: &self.players.muzzles,
+            tags: &self.players.tags,
+            brass,
+        }
+    }
+
     /// The bodies' clock: (render time, frame time, newest snapshot time).
     fn clock(&mut self, frame: &Frame) -> (i32, i32, i32) {
         let now = frame.time_ms;
@@ -563,7 +580,7 @@ impl Cod2Draw {
                 if let Some(at) = gun_muzzle(&pose, skel) {
                     let transform =
                         Mat4::from_rotation_translation(angles_quat(p.angles.to_array()), p.origin);
-                    guns.push((p.number, transform.transform_point3(at)));
+                    guns.push((p.number, tag_pose(transform, at)));
                 }
             }
         }
@@ -572,7 +589,7 @@ impl Cod2Draw {
         let posed = self.players.posed(fs, &views, now, dt, snap_ms);
         c.players = posed.len();
         c.player_parts = posed.iter().map(|(_, rig, _)| rig.models.len()).sum();
-        self.players.muzzles.extend(guns);
+        self.players.add_guns(&guns);
         c
     }
 
@@ -638,7 +655,7 @@ impl Cod2Draw {
         prof.next(Stage::Bodies);
         let (bodies, body_casters) = self.players.build_instances(r, fs, &views, clock);
         prof.next(Stage::Pose);
-        self.players.muzzles.extend(built.muzzles.iter().copied());
+        self.players.add_guns(&built.muzzles);
         let counts = DrawCounts {
             models: built.instances.len(),
             submodels: built.submodels.len(),
@@ -878,6 +895,10 @@ pub(crate) mod tests {
             let m = draw.muzzles()[&g.number];
             let d = m.distance(g.origin);
             assert!(d > 10.0 && d < 80.0, "gun {} muzzle {d} out", g.number);
+            // And its flash's tag, pointing out of the barrel.
+            let flash = draw.tags()[&g.number].flash.expect("the gun's flash tag");
+            assert_eq!(flash.origin, m);
+            assert!(flash.axis[0].dot((m - g.origin).normalize()) > 0.5);
         }
     }
 

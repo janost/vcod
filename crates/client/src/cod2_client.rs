@@ -4,7 +4,8 @@
 //! order and matches the fields' old order in `App`.
 
 use anyhow::{Result, bail};
-use glam::Vec3;
+use glam::{Mat4, Vec3};
+use std::collections::HashMap;
 use vcod_common::localize::Localized;
 use vcod_common::pk3::Pk3Fs;
 
@@ -15,8 +16,9 @@ use crate::console::{
     shell::{Effect, Shell},
 };
 use crate::frontend::Ui;
-use crate::fx::sim::FxSystem;
+use crate::fx::sim::{FxSystem, TagBolt, TagPose};
 use crate::play::cod2_events::Event2;
+use crate::play::cod2_fx::{FxPlay, Play, ViewTag};
 use crate::renderer::{self, Renderer};
 use crate::{cod2_hud, cod2_scene, cod2_viewmodel, cod2_world_hud, hud, play};
 
@@ -47,6 +49,22 @@ pub(crate) struct Cod2Client {
     pub(crate) menus_for: u32,
     /// The gamestate count the level's models were loaded under.
     pub(crate) models_for: u32,
+    /// The frame's effects on the view weapon's tags, held from
+    /// [`Self::effects`] until [`Self::view`] has placed the gun.
+    view_plays: Vec<FxPlay>,
+    /// The predicted player entity's flash flag (`cent + 0x1e2`): set by
+    /// the playerstate's shot, cleared the next time the gun is placed.
+    view_flash: bool,
+    /// `cg_drawGun`, read each [`Self::view`]: off, the view weapon and
+    /// its flash are not drawn.
+    draw_gun: bool,
+    /// The view weapon's effects [`Self::view`] spawned: the path, the tag
+    /// and its world pose.
+    #[cfg(test)]
+    pub(crate) view_spawned: Vec<(String, ViewTag, TagPose)>,
+    /// The bodies' tag effects [`Self::effects`] spawned.
+    #[cfg(test)]
+    pub(crate) tag_spawned: Vec<(String, TagBolt, TagPose)>,
 }
 
 impl Cod2Client {
@@ -64,6 +82,13 @@ impl Cod2Client {
             menus: play::join::Join::new(None, None),
             menus_for: 0,
             models_for: 0,
+            view_plays: Vec::new(),
+            view_flash: false,
+            draw_gun: true,
+            #[cfg(test)]
+            view_spawned: Vec::new(),
+            #[cfg(test)]
+            tag_spawned: Vec::new(),
         }
     }
 }
@@ -167,6 +192,10 @@ impl Cod2Client {
         let vm_prof = crate::frame_prof::span(crate::frame_prof::Stage::Vm);
         let vm = self.view.frame(&f, cx.fs, s.predicting());
         drop(vm_prof);
+        // `CG_UpdateViewWeaponAnim`'s `CG_PlayClientSoundAlias`.
+        for alias in self.view.take_sounds() {
+            cx.audio.play_local(cx.fs, &alias);
+        }
         let shell = cx.shell;
         self.hud.selected = s.input.weapons().0;
         self.hud.interrupted = s.interrupted();
@@ -177,6 +206,7 @@ impl Cod2Client {
         self.hud.mantle_hint = shell
             .cvar("cg_drawMantleHint")
             .is_none_or(|v| v.trim().parse::<f32>() != Ok(0.0));
+        self.hud.draw_gun = shell.cvar_f32("cg_drawGun") != 0.0;
         self.hud.use_key = shell
             .key_text("+activate", cx.localized)
             .unwrap_or_default();
@@ -308,8 +338,21 @@ impl Cod2Client {
             cx.r.prewarm_fx(cx.fs, sprites.iter().map(|m| &**m).chain([tracer]));
             vcod_common::laps::span(t0, || "cod2 level effects".into());
         }
-        for play in s.effects(events, cx.fs, cam_pos, self.draw.muzzles()) {
-            play.spawn(cx.fx, cx.fs, cx.time);
+        let brass = cx
+            .shell
+            .cvar("cg_brass")
+            .is_none_or(|v| v.trim().parse::<f32>() != Ok(0.0));
+        self.view_plays.clear();
+        for play in s.effects(events, cx.fs, cam_pos, self.draw.fx_scene(brass)) {
+            #[cfg(test)]
+            if let Play::OnTag { path, bolt, pose } = &play.play {
+                self.tag_spawned.push((path.clone(), *bolt, *pose));
+            }
+            match play.play {
+                Play::View { .. } => self.view_plays.push(play),
+                Play::ViewFlash => self.view_flash = true,
+                _ => play.spawn(cx.fx, cx.fs, cx.time),
+            }
         }
     }
 
@@ -376,7 +419,104 @@ impl Cod2Client {
             audio.release(crate::audio::BREATH_ENTITY);
         }
         cx.r.set_screen_blend(out.shock.blend_ms);
+        self.draw_gun = cx.shell.cvar_f32("cg_drawGun") != 0.0;
+        // The weapon the gun is placed with this frame, the flash a held
+        // flag plays on it.
+        let flash = match self.view.tags() {
+            Some(t) if self.view_flash => s.view_flash_effect(t.weapon, cx.fs),
+            _ => None,
+        };
+        self.view_weapon_fx(cx, &out, cam, flash);
         Some(out)
+    }
+
+    /// `CG_AddPlayerWeapon`'s (Mac 0x1d9c8e) half of the effects: the view
+    /// weapon's tags placed as the gun draws this frame, the bodies' and
+    /// its tags handed to the effects as their bolts, and the frame's view
+    /// effects spawned on them. A placed gun clears the held flash flag
+    /// and plays `flash`, its weapon's view flash, only when it draws: not
+    /// under `cg_drawGun 0` or a scope's overlay. The own brass plays
+    /// either way, only on the weapon placed (cod2-efx.md 6.8).
+    fn view_weapon_fx(
+        &mut self,
+        cx: &mut Cod2Frame,
+        out: &play::cod2_view::ViewOut,
+        cam: &FlyCamera,
+        flash: Option<String>,
+    ) {
+        let mut bolts: HashMap<TagBolt, TagPose> = HashMap::new();
+        let mut put = |entity: u32, flash: Option<TagPose>, brass: Option<TagPose>| {
+            for (tag, pose) in [(ViewTag::Flash, flash), (ViewTag::Brass, brass)] {
+                if let Some(pose) = pose {
+                    let slot = tag.slot();
+                    bolts.insert(TagBolt { entity, slot }, pose);
+                }
+            }
+        };
+        for (&entity, t) in self.draw.tags() {
+            put(entity, t.flash, t.brass);
+        }
+        let view = self.view.tags().map(|t| {
+            let model = gun_transform(Some(out), cod2_viewmodel::view_axes());
+            let (yaw, pitch, roll) = (
+                out.angles[1].to_radians(),
+                -out.angles[0].to_radians(),
+                out.angles[2].to_radians(),
+            );
+            let forward = camera::basis(yaw, pitch).0;
+            let right = forward.cross(camera::up_hint(yaw, pitch, roll)).normalize();
+            let basis = (forward, right, right.cross(forward));
+            let world = |tag: Option<(Vec3, glam::Quat)>| {
+                let (p, q) = tag?;
+                let (_, turn, _) = model.to_scale_rotation_translation();
+                let at = crate::cod4_viewmodel::tag_to_world(
+                    (model.transform_point3(p), turn * q),
+                    cam.pos,
+                    basis,
+                );
+                Some(crate::cod2_players::tag_pose(Mat4::IDENTITY, at))
+            };
+            (t.weapon, world(t.flash), world(t.brass))
+        });
+        if let Some((weapon, flash, brass)) = view {
+            put(play::cod2_fx::view_bolt(weapon), flash, brass);
+        }
+        cx.fx.set_tag_bolts(&bolts);
+        let mut plays: Vec<(String, ViewTag, i32, &str)> = Vec::new();
+        let held = std::mem::take(&mut self.view_plays);
+        for p in &held {
+            if let Play::View { path, tag, weapon } = &p.play {
+                plays.push((path.clone(), *tag, *weapon, &p.why));
+            }
+        }
+        if let Some((weapon, _, _)) = view
+            && std::mem::take(&mut self.view_flash)
+            && self.draw_gun
+            && out.overlay.is_none()
+            && let Some(path) = flash
+        {
+            plays.push((path, ViewTag::Flash, weapon, "the flash flag"));
+        }
+        for (path, tag, weapon, why) in plays {
+            let Some((drawn, flash, brass)) = view else {
+                continue;
+            };
+            let pose = match tag {
+                ViewTag::Flash => flash,
+                ViewTag::Brass => brass,
+            };
+            let Some(pose) = pose.filter(|_| drawn == weapon) else {
+                continue;
+            };
+            let bolt = TagBolt {
+                entity: play::cod2_fx::view_bolt(weapon),
+                slot: tag.slot(),
+            };
+            log::debug!("cod2 fx {path} on the view weapon's {tag:?} ({why})");
+            cx.fx.spawn_on_tag(cx.fs, &path, bolt, pose, cx.time);
+            #[cfg(test)]
+            self.view_spawned.push((path, tag, pose));
+        }
     }
 
     /// The mouse's turn in degrees under the shellshock's caps.
@@ -387,6 +527,7 @@ impl Cod2Client {
     /// A level change drops the view effects.
     pub(crate) fn reset_view_fx(&mut self) {
         self.view_fx.reset();
+        self.view_flash = false;
     }
 
     /// No session: the shellshock's turn caps go.
@@ -399,7 +540,8 @@ impl Cod2Client {
     /// input's), else the camera's at `fly_fov`. The view weapon draws at
     /// the zoomed fov, as the scene's one view parms carry it
     /// (`R_SetViewParmsForScene`, Mac 0xc5a9a, cod2-hud.md 18.1), and hides
-    /// under a scope overlay (`CG_AddViewWeapon`, Mac 0x1da2f8).
+    /// under a scope overlay or `cg_drawGun 0` (`CG_AddViewWeapon`, Mac
+    /// 0x1da2f8).
     pub(crate) fn draw_view(
         &self,
         fs: &Pk3Fs,
@@ -425,22 +567,14 @@ impl Cod2Client {
             ),
             None => (draw_yaw, draw_pitch, 0.0, fly_fov),
         };
-        if fx.is_some_and(|o| o.overlay.is_some()) {
+        if !self.gun_drawn(fx) {
             vm = None;
         }
         let vm = vm.map(|v| {
             if let Some(m) = &v.models {
                 r.set_viewmodel(fs, m);
             }
-            // The gun's sway, bob and lag off the view
-            // (`play::cod2_gun`).
-            let transform = match fx.and_then(|o| o.gun) {
-                Some(g) => play::view::gun_transform(
-                    play::view::view_from_ful(Vec3::from(g.offset)),
-                    g.angles,
-                ),
-                None => v.draw.transform,
-            };
+            let transform = gun_transform(fx, v.draw.transform);
             renderer::VmDraw {
                 fov_x: fov,
                 transform,
@@ -454,6 +588,12 @@ impl Cod2Client {
             fov,
             vm,
         }
+    }
+
+    /// `CG_AddViewWeapon`'s draw flag (Mac 0x1da2f8): `cg_drawGun` on and
+    /// no scope overlay up. The gun is still placed and posed without it.
+    pub(crate) fn gun_drawn(&self, fx: Option<&play::cod2_view::ViewOut>) -> bool {
+        self.draw_gun && fx.is_none_or(|o| o.overlay.is_none())
     }
 
     /// The session's waypoints and head icons, put under `quads` (the 2D
@@ -485,6 +625,17 @@ impl Cod2Client {
     /// The session's map, which CoD2's snow tests the roofs of.
     pub(crate) fn map_name(&self) -> Option<&str> {
         self.session.as_deref().and_then(|s| s.map_name())
+    }
+}
+
+/// The view weapon's model to view space: the gun's sway, bob and lag off
+/// the view (`play::cod2_gun`) when the view effects ran, else `rest`.
+fn gun_transform(fx: Option<&play::cod2_view::ViewOut>, rest: Mat4) -> Mat4 {
+    match fx.and_then(|o| o.gun) {
+        Some(g) => {
+            play::view::gun_transform(play::view::view_from_ful(Vec3::from(g.offset)), g.angles)
+        }
+        None => rest,
     }
 }
 
