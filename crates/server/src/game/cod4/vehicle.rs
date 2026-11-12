@@ -4,7 +4,9 @@
 //! turret and guns (docs/research/cod4-gsc.md 3.2). The flight is 1.7's
 //! think at 0x809e38a (`VEH_UpdateMoveToGoal`, the turn and tilt inlined):
 //! the move, the yaw, the body's pitch and roll off the acceleration and
-//! the hover's wander. The move trace and the touch are left out.
+//! the hover's wander; then the vehicle think's move trace and touch
+//! (0x809fbd6). Its collision and tags pose the turret and barrel as its
+//! controller does (0x80bab1e).
 
 use std::collections::BTreeMap;
 
@@ -14,8 +16,10 @@ use vcod_cod4::net::delta::EntityState;
 use vcod_common::turretpose::angles_quat;
 use vcod_gsc::{EntId, Value};
 
+use super::clip::Cod4Clip;
 use super::combat::{BULLET_PRIORITY, BULLET_RANGE};
 use super::level::Cod4Level;
+use super::{Cod4HostState, ModelTags};
 
 /// 1.7's `ET_HELICOPTER` and `ET_PLANE`.
 pub const ET_HELICOPTER: u32 = 12;
@@ -244,12 +248,103 @@ pub struct HeliHit {
 /// `PROJEXP_HEAVY`: a heavy explosion reads `heavyExplosiveDamage`.
 const PROJEXP_HEAVY: i32 = 6;
 
+/// The move trace's mask (`cod4_lnxded` 0x80a055f).
+const MASK_VEHICLE_MOVE: u32 = 0x2081;
+/// `ENTITYNUM_WORLD` and `ENTITYNUM_NONE`.
+const WORLD: u32 = 1022;
+const NONE: u32 = 1023;
+/// `stickiness` "stick to all" (`WeaponDef` +0x5a4), what the touch pass
+/// carries (0x80a046a).
+const STICK_TO_ALL: i32 = 1;
+
+/// A bone's move off its bind place: the turn and the shift that take a
+/// point of the model's space at the bind pose to its posed place.
+pub(crate) type BoneMove = (Quat, Vec3);
+
+/// The helicopter's DObj as its controller poses it (handler 23's,
+/// `cod4_lnxded` 0x80bab1e) on every pose: `tag_body` set to (bodyPitch, 0,
+/// bodyRoll), `tag_turret` to (0, gunYaw, 0) and `tag_barrel` to
+/// (gunPitch, 0, 0), each a local tag (0x81abb2a) whose slot takes the
+/// angles' quat and a zero shift (0x81b010a..0x81b0127). The set angles
+/// stand in for the bone's own bind turn, its place kept: on the cobra
+/// `tag_barrel` sits 7.3 degrees nose up at the bind pose, and retail's
+/// `tag_flash` points along the gun's pitch (`play-1.7-heli-collide.txt`).
+/// A helicopter leaves its body angles 0 (`VEH_InitEntity` 0x809c6d6, and
+/// the captures). For each bone in `tags`' order its move, `None` where
+/// nothing on its chain changed.
+pub(crate) fn heli_pose(
+    tags: &ModelTags,
+    parents: &[i32],
+    gun_pitch: f32,
+    gun_yaw: f32,
+) -> Vec<Option<BoneMove>> {
+    let mut posed: Vec<(Vec3, Quat)> = Vec::with_capacity(tags.len());
+    let mut moves: Vec<Option<BoneMove>> = Vec::with_capacity(tags.len());
+    for (b, (name, p, q)) in tags.iter().enumerate() {
+        let set = match name.as_str() {
+            "tag_body" => Some(angles_quat([0.0; 3])),
+            "tag_turret" => Some(angles_quat([0.0, gun_yaw, 0.0])),
+            "tag_barrel" => Some(angles_quat([gun_pitch, 0.0, 0.0])),
+            _ => None,
+        };
+        let parent = parents
+            .get(b)
+            .copied()
+            .filter(|&i| i >= 0 && (i as usize) < b)
+            .map(|i| i as usize);
+        let ((bp, bq), (pp, pq)) = match parent {
+            Some(i) => ((tags[i].1, tags[i].2), posed[i]),
+            None => ((Vec3::ZERO, Quat::IDENTITY), (Vec3::ZERO, Quat::IDENTITY)),
+        };
+        let local = (bq.inverse() * (*p - bp), bq.inverse() * *q);
+        let parent_moved = parent.is_some_and(|i| moves[i].is_some());
+        let changed = set.is_some_and(|s| s != local.1);
+        if !changed && !parent_moved {
+            posed.push((*p, *q));
+            moves.push(None);
+            continue;
+        }
+        let local_q = set.unwrap_or(local.1);
+        let (wp, wq) = (pp + pq * local.0, pq * local_q);
+        posed.push((wp, wq));
+        let rot = wq * q.inverse();
+        moves.push(Some((rot, wp - rot * *p)));
+    }
+    moves
+}
+
+/// [`heli_pose`] for one helicopter; empty when its model has no tags.
+fn heli_pose_of(c4: &Cod4HostState, h: &Heli4) -> Vec<Option<BoneMove>> {
+    let key = h.model.to_ascii_lowercase();
+    match (c4.model_tags.get(&key), c4.model_rigs.get(&key)) {
+        (Some(tags), Some(rig)) => heli_pose(tags, &rig.parents, h.gun_pitch, h.gun_yaw),
+        _ => Vec::new(),
+    }
+}
+
+/// A helicopter's tag posed ([`heli_pose`]) in the world: its origin and
+/// turn; `None` when the model has no such tag.
+pub(crate) fn heli_tag(c4: &Cod4HostState, h: &Heli4, tag: &str) -> Option<(Vec3, Quat)> {
+    let tags = c4.model_tags.get(&h.model.to_ascii_lowercase())?;
+    let i = tags
+        .iter()
+        .position(|(n, _, _)| n.eq_ignore_ascii_case(tag))?;
+    let (_, p, q) = tags[i];
+    let (p, q) = match heli_pose_of(c4, h).get(i).copied().flatten() {
+        Some((rot, shift)) => (rot * p + shift, rot * q),
+        None => (p, q),
+    };
+    Some((h.origin + h.quat() * p, h.quat() * q))
+}
+
 /// The first helicopter but `skip` whose model collision the segment
 /// meets before `limit`: `SV_ClipMoveToEntity`'s `svFlags & 4` arm,
 /// `DObjGeomTraceline` over the model's `collSurfs` under `mask`
-/// (`r.contents` 0x2080, `VEH_InitEntity`, INFERRED). The
-/// surfaces trace at the bind pose: the body's, turret's and barrel's
-/// controllers and the rotors' anims are not applied.
+/// (`r.contents` 0x2080, `VEH_InitEntity`, INFERRED). A surface whose bone
+/// the controller moved ([`heli_pose`]) takes the segment back into the
+/// bind pose's space (`XModelTraceLineAnimated`, 0x81c63e8..0x81c671b);
+/// the rest trace it as it is (the bind pose compare, 0x81c6298). The
+/// server runs no rotor anim.
 pub(crate) fn heli_trace(
     host: &crate::game::host::GameHost,
     start: Vec3,
@@ -288,7 +383,8 @@ pub(crate) fn heli_trace(
             let d = p - h.origin;
             Vec3::new(d.dot(axis[0]), d.dot(axis[1]), d.dot(axis[2]))
         };
-        if vcod_cod4::collision::trace_line(surfs, local(start), local(end), mask, &mut tr) {
+        let pose = heli_pose_of(c4, h);
+        if trace_posed(surfs, &pose, local(start), local(end), mask, &mut tr) {
             let n = tr.normal;
             best = Some(HeliHit {
                 id: h.id,
@@ -299,6 +395,54 @@ pub(crate) fn heli_trace(
         }
     }
     best
+}
+
+/// `XModelTraceLine` over `surfs` posed by `pose` ([`heli_pose`]), the
+/// segment in the model's space: a surface whose bone moved takes the
+/// segment back into the bind pose's space (`XModelTraceLineAnimated`,
+/// 0x81c63e8..0x81c671b), the rest trace it as it is (the bind pose
+/// compare, 0x81c6298). Whether any surface was met, `tr` holding the
+/// nearest. Its normal is the triangle's own, in the bind pose's space
+/// even on a moved bone: the hit stores the plane's normal as it is
+/// (0x81c6940..0x81c6954).
+fn trace_posed(
+    surfs: &[vcod_cod4::assets::model::XModelCollSurf],
+    pose: &[Option<BoneMove>],
+    start: Vec3,
+    end: Vec3,
+    mask: u32,
+    tr: &mut vcod_common::clipmap::ClipTrace,
+) -> bool {
+    let mut met = false;
+    for s in surfs {
+        let moved = pose.get(s.bone as usize).copied().flatten();
+        let (a, b) = match moved {
+            Some((rot, shift)) => (
+                rot.inverse() * (start - shift),
+                rot.inverse() * (end - shift),
+            ),
+            None => (start, end),
+        };
+        met |= vcod_cod4::collision::trace_line(std::slice::from_ref(s), a, b, mask, tr);
+    }
+    met
+}
+
+/// Where a point riding a body goes when the body moves from (`from`,
+/// `from_angles`) to (`to`, `to_angles`): kept in the body's frame
+/// (`cod4_lnxded` 0x809c462: the offset through the old axis transposed
+/// times the new, added to the new origin), its turn with it.
+fn carried(
+    (from, from_angles): (Vec3, Vec3),
+    (to, to_angles): (Vec3, Vec3),
+    (at, angles): (Vec3, Vec3),
+) -> (Vec3, Vec3) {
+    let turn = angles_quat(to_angles.to_array()) * angles_quat(from_angles.to_array()).inverse();
+    let q = turn * angles_quat(angles.to_array());
+    (
+        to + turn * (at - from),
+        Vec3::from(vcod_common::turretpose::quat_angles(q)),
+    )
 }
 
 /// `AngleNormalize180` the vehicle code's way: `(x - floor(x + 0.5)) * 360`.
@@ -972,7 +1116,17 @@ impl Cod4Level {
             }
             h.next_think = now + THINK_MS;
             h.thought = true;
-            let mut notes = h.think(&mut self.rt.host.cod4_mut().rand);
+            let (from, from_angles) = (h.origin, h.angles);
+            let mut notes: Vec<(&'static str, Vec<Value>)> = h
+                .think(&mut self.rt.host.cod4_mut().rand)
+                .into_iter()
+                .map(|n| (n, Vec::new()))
+                .collect();
+            if let Some(n) = self.heli_collision(&h, from) {
+                let arg = Value::Vector(n.to_array());
+                notes.push(("script_vehicle_collision", vec![arg]));
+            }
+            self.carry_riders(&h, (from, from_angles));
             let target = match h.target {
                 Some(TurretTarget::Pos(p)) => Some(p),
                 Some(TurretTarget::Ent(e, off)) => self.entity_origin(e).map(|o| o + off),
@@ -980,7 +1134,7 @@ impl Cod4Level {
             };
             if let Some(t) = target {
                 let barrel = self.tag_world(&h, "tag_flash").unwrap_or(h.origin);
-                notes.push(h.aim(barrel, t));
+                notes.push((h.aim(barrel, t), Vec::new()));
             }
             let (origin, angles) = (h.origin, h.angles);
             if let Some(slot) = self
@@ -1000,9 +1154,96 @@ impl Cod4Level {
                 let _ = host.set_field(cx, id, o, Value::Vector(origin.to_array()));
                 let _ = host.set_field(cx, id, a, Value::Vector(angles.to_array()));
             });
-            for n in notes {
-                self.rt.host.engine_notifies.push((id, n, Vec::new()));
+            for (n, args) in notes {
+                self.rt.host.engine_notifies.push((id, n, args));
             }
+        }
+    }
+
+    /// The vehicle think's move trace (`cod4_lnxded` 0x80a04aa..0x80a05e3):
+    /// with a goal set (flag 2, 0x809fd13), a helicopter that moved sweeps
+    /// its box from the last think's place to the new one under 0x2081,
+    /// passing itself (`G_TraceCapsule`, 0x80b408a). The box is the DObj's
+    /// radius on every axis (`DObjGetBounds`, set by `VEH_InitEntity`
+    /// 0x809c725); one wider than tall would get its top raised to its
+    /// width (0x80a0549..0x80a055c), which a cube never does. A contact with
+    /// the world (hit id 1022, 0x80a05ad) returns the trace's normal, which
+    /// the think notifies as `script_vehicle_collision` (0x80a05c0..0x80a05de).
+    /// The flight goes on through it.
+    fn heli_collision(&self, h: &Heli4, from: Vec3) -> Option<Vec3> {
+        if !h.moving || h.origin == from {
+            return None;
+        }
+        let clip = self.clip.as_deref()?;
+        let rig = self
+            .rt
+            .host
+            .cod4()
+            .model_rigs
+            .get(&h.model.to_ascii_lowercase())?
+            .clone();
+        let world = Cod4Clip {
+            clip,
+            bodies: &[],
+            brushes: &self.brushes,
+        };
+        let r = Vec3::splat(rig.radius);
+        let t = vcod_cod4::pmove::PmWorld::trace(
+            &world,
+            from,
+            h.origin,
+            -r,
+            r,
+            NONE,
+            MASK_VEHICLE_MOVE,
+        );
+        (t.fraction < 1.0 && t.entity_num == WORLD).then_some(t.normal)
+    }
+
+    /// The vehicle think's touch pass (`cod4_lnxded` 0x809fd20..0x809ff85)
+    /// as a helicopter meets it: of the missiles in its swept box only one
+    /// resting on it (`groundEntityNum`, 0x809fe98) whose weapon sticks to
+    /// all (`stickiness` 1, 0x80a046a) and that is linked to nothing (+0x218,
+    /// 0x80a0400) rides along, once the body moved or turned by 0.001
+    /// squared (0x80a0427..0x80a0456; [`carried`]). The other missiles'
+    /// touch needs `r.bmodel` (0x809fea4), which a helicopter's xmodel
+    /// never sets, and its own touch slot is empty (handler 23, 0x826cd40).
+    fn carry_riders(&mut self, h: &Heli4, before: (Vec3, Vec3)) {
+        let (from, from_angles) = before;
+        let turned = Vec3::from_array(std::array::from_fn(|k| {
+            norm180(h.angles[k] - from_angles[k])
+        }));
+        if (h.origin - from).length_squared() < 0.001 && turned.length_squared() < 0.001 {
+            return;
+        }
+        let sticky: Vec<bool> = self
+            .rt
+            .host
+            .cod4()
+            .missiles
+            .iter()
+            .map(|m| {
+                self.combat
+                    .defs
+                    .get(m.weapon as usize)
+                    .is_some_and(|d| d.stickiness == STICK_TO_ALL)
+            })
+            .collect();
+        let missiles = &mut self.rt.host.cod4_mut().missiles;
+        for (m, _) in missiles
+            .iter_mut()
+            .zip(sticky)
+            .filter(|(m, sticky)| *sticky && m.ground == h.id.0)
+        {
+            let (at, angles) = carried(
+                (from, from_angles),
+                (h.origin, h.angles),
+                (m.origin, m.angles),
+            );
+            m.origin = at;
+            m.pos.base = at;
+            m.angles = angles;
+            m.apos.base = angles;
         }
     }
 
@@ -1094,32 +1335,16 @@ impl Cod4Level {
         })
     }
 
-    /// A tag of the helicopter's model where its bind pose puts it on the
-    /// body; `None` when the model has no such tag.
+    /// A tag of the helicopter's model, posed ([`heli_tag`]), in the
+    /// world; `None` when the model has no such tag.
     fn tag_world(&self, h: &Heli4, tag: &str) -> Option<Vec3> {
-        let tags = self
-            .rt
-            .host
-            .cod4()
-            .model_tags
-            .get(&h.model.to_ascii_lowercase())?
-            .clone();
-        let (_, pos, _) = tags.iter().find(|(n, _, _)| n.eq_ignore_ascii_case(tag))?;
-        Some(h.origin + h.quat() * *pos)
+        heli_tag(self.rt.host.cod4(), h, tag).map(|(p, _)| p)
     }
 
-    /// A tag's orientation in the world at the bind pose turned by the
-    /// body; `None` when the model has no such tag.
+    /// A tag's orientation in the world, posed ([`heli_tag`]); `None` when
+    /// the model has no such tag.
     fn tag_axis(&self, h: &Heli4, tag: &str) -> Option<glam::Quat> {
-        let tags = self
-            .rt
-            .host
-            .cod4()
-            .model_tags
-            .get(&h.model.to_ascii_lowercase())?
-            .clone();
-        let (_, _, q) = tags.iter().find(|(n, _, _)| n.eq_ignore_ascii_case(tag))?;
-        Some(h.quat() * *q)
+        heli_tag(self.rt.host.cod4(), h, tag).map(|(_, q)| q)
     }
 
     /// `CMD_VEH_FireWeapon`'s round: a bullet weapon traced from the tag
@@ -1502,6 +1727,105 @@ mod tests {
         assert!((10..20).contains(&i), "{i}");
         let f = h.gun_forward();
         assert!(f.dot(target.normalize()) > 0.999, "{f:?}");
+    }
+
+    /// A gun's chain: the root, `tag_turret` at x 100, the turret joint at
+    /// 110, `tag_barrel` at 120, the flash at 150, and a body bone off the
+    /// root.
+    fn gun_tags() -> (ModelTags, Vec<i32>) {
+        let at = |name: &str, x: f32| (name.to_string(), Vec3::new(x, 0.0, 0.0), Quat::IDENTITY);
+        let tags = vec![
+            at("tag_origin", 0.0),
+            at("tag_turret", 100.0),
+            at("turret_animate_joint", 110.0),
+            at("tag_barrel", 120.0),
+            at("tag_flash", 150.0),
+            at("body_animate_jnt", 0.0),
+        ];
+        (tags, vec![-1, 0, 1, 2, 3, 0])
+    }
+
+    /// The controller turns the turret's chain about `tag_turret` and the
+    /// barrel's about `tag_barrel`; the body's bones stay put. A barrel
+    /// tilted at the bind pose levels at gun pitch 0.
+    #[test]
+    fn the_controller_turns_the_turret_and_barrel_chains() {
+        let (tags, parents) = gun_tags();
+        let place = |pose: &[Option<BoneMove>], b: usize| {
+            let p = tags[b].1;
+            pose[b].map_or(p, |(rot, shift)| rot * p + shift)
+        };
+        let still = heli_pose(&tags, &parents, 0.0, 0.0);
+        assert!(still.iter().all(Option::is_none));
+        let yawed = heli_pose(&tags, &parents, 0.0, 90.0);
+        assert!(yawed[0].is_none() && yawed[5].is_none());
+        assert!(place(&yawed, 2).distance(Vec3::new(100.0, 10.0, 0.0)) < 1e-4);
+        assert!(place(&yawed, 4).distance(Vec3::new(100.0, 50.0, 0.0)) < 1e-4);
+        // Pitch down 90 about the barrel, which the yaw put at (100, 20).
+        let both = heli_pose(&tags, &parents, 90.0, 90.0);
+        assert!(place(&both, 3).distance(Vec3::new(100.0, 20.0, 0.0)) < 1e-4);
+        assert!(place(&both, 4).distance(Vec3::new(100.0, 20.0, -30.0)) < 1e-3);
+        let mut tilted = tags.clone();
+        let up = angles_quat([-10.0, 0.0, 0.0]);
+        tilted[3].2 = up;
+        tilted[4] = (
+            "tag_flash".into(),
+            Vec3::new(120.0, 0.0, 0.0) + up * Vec3::X * 30.0,
+            up,
+        );
+        let level = heli_pose(&tilted, &parents, 0.0, 0.0);
+        let flash = level[4]
+            .map(|(rot, shift)| rot * tilted[4].1 + shift)
+            .unwrap();
+        assert!(flash.distance(Vec3::new(150.0, 0.0, 0.0)) < 1e-3, "{flash}");
+    }
+
+    /// A wall on the turret joint at x 110 facing back, 20 square: at rest
+    /// a ray along x meets it; with the turret yawed 90 it stands at y 10,
+    /// where a ray along y meets it and the first misses. The contact's
+    /// normal stays the bind pose's, as 1.7's does.
+    #[test]
+    fn a_turned_turrets_surface_traces_where_it_was_turned() {
+        let (tags, parents) = gun_tags();
+        let wall = vcod_cod4::assets::model::XModelCollSurf {
+            tris: vec![[
+                -1.0, 0.0, 0.0, -110.0, 0.0, 0.05, 0.0, -0.5, 0.0, 0.0, 0.05, -0.5,
+            ]],
+            mins: [109.0, -11.0, -11.0],
+            maxs: [111.0, 11.0, 11.0],
+            bone: 2,
+            contents: 1,
+            surface_flags: 0,
+        };
+        let surfs = [wall];
+        let run = |pose: &[Option<BoneMove>], a: Vec3, b: Vec3| {
+            let mut tr = vcod_common::clipmap::ClipTrace::clear();
+            trace_posed(&surfs, pose, a, b, 1, &mut tr).then(|| (a.lerp(b, tr.fraction), tr.normal))
+        };
+        let along_x = (Vec3::new(0.0, 0.0, 0.0), Vec3::new(200.0, 0.0, 0.0));
+        let along_y = (Vec3::new(100.0, -50.0, 0.0), Vec3::new(100.0, 50.0, 0.0));
+        let still = heli_pose(&tags, &parents, 0.0, 0.0);
+        let (at, n) = run(&still, along_x.0, along_x.1).expect("the wall at rest");
+        assert!((at.x - 110.0).abs() < 0.2 && n.distance(Vec3::NEG_X) < 1e-5);
+        let yawed = heli_pose(&tags, &parents, 0.0, 90.0);
+        assert!(run(&yawed, along_x.0, along_x.1).is_none());
+        let (at, n) = run(&yawed, along_y.0, along_y.1).expect("the turned wall");
+        assert!((at.y - 10.0).abs() < 0.2, "{at}");
+        assert!(n.distance(Vec3::NEG_X) < 1e-5, "{n}");
+    }
+
+    /// A rider keeps its place and turn in the body's frame: 64 ahead of a
+    /// body that moves 100 along x and turns 90 left ends 64 to its left
+    /// of the new origin, turned with it.
+    #[test]
+    fn a_rider_turns_and_moves_with_the_body() {
+        let (at, angles) = carried(
+            (Vec3::ZERO, Vec3::ZERO),
+            (Vec3::new(100.0, 0.0, 0.0), Vec3::new(0.0, 90.0, 0.0)),
+            (Vec3::new(64.0, 0.0, 8.0), Vec3::new(0.0, 10.0, 0.0)),
+        );
+        assert!(at.distance(Vec3::new(100.0, 64.0, 8.0)) < 1e-3, "{at}");
+        assert!((angles.y - 100.0).abs() < 1e-3, "{angles}");
     }
 
     #[test]

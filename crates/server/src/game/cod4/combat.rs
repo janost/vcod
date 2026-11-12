@@ -145,13 +145,16 @@ pub struct DeathGrenade4 {
 /// An item's `clientNum` once nobody owns it.
 pub const ITEM_NO_OWNER: u32 = 64;
 
-/// A weapon in the world (`LaunchItem`): its entity, the weapon number, the
-/// owner's slot and its gravity arc from `start_ms`, at rest once
+/// A weapon in the world (`LaunchItem`): its entity, the weapon number and
+/// camo, the owner's slot and its gravity arc from `start_ms`, at rest once
 /// `resting`.
 #[derive(Clone, Debug)]
 pub struct Item4 {
     pub id: EntId,
     pub weapon: u32,
+    /// The dropper's `weaponmodels[weapon]`, the `gunModel[]` slot a taker
+    /// gets and the `worldModel[]` slot drawn (cod4-client-view.md 4.7).
+    pub model: u8,
     pub owner: u32,
     /// When the drop's think hands it to anyone: `owner` becomes 64
     /// (`cod4_lnxded` 0x8090050), 1000 ms past the drop (cod4-combat.md 6).
@@ -1359,10 +1362,11 @@ impl Cod4Level {
         }
     }
 
-    /// Each live item as 1.7 sends it: `ET_ITEM` (3), `index` its weapon,
+    /// Each live item as 1.7 sends it: `ET_ITEM` (3), `index` its weapon
+    /// plus 128 times its camo (`cod4_lnxded` 0x80916e3..0x80916ee),
     /// `clientNum` its dropper, `pos` its arc (`TR_GRAVITY`, 5) or rest
     /// (`TR_STATIONARY`, 0) truncated.
-    pub(super) fn item_entities(&self) -> Vec<EntityState> {
+    pub(crate) fn item_entities(&self) -> Vec<EntityState> {
         let host = &self.rt.host;
         host.cod4()
             .items
@@ -1378,7 +1382,7 @@ impl Cod4Level {
                         e.0[f.word()] = v;
                     }
                 };
-                set("index", i.weapon);
+                set("index", i.weapon + 128 * u32::from(i.model));
                 set("clientNum", i.owner);
                 set("lerp.pos.trType", if i.resting { 0 } else { 5 });
                 set("lerp.pos.trTime", i.start_ms as u32);

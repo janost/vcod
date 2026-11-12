@@ -917,9 +917,15 @@ fn play_looped_fx(
 
 /// A playing body's tag `name` as the last frame posed it
 /// (`G_DObjGetWorldTagPos` over the client's DObj), its
-/// attachments' bones included: (origin, axis rows). `None` for an entity
-/// no frame posed or a bone it lacks.
+/// attachments' bones included, or a helicopter's as its controller poses
+/// it (`vehicle::heli_tag`): (origin, axis rows). `None` for an entity no
+/// frame posed or a bone it lacks.
 pub(crate) fn posed_tag(host: &GameHost, id: EntId, name: &str) -> Option<(Vec3, [Vec3; 3])> {
+    if let Some(h) = host.cod4().helis.iter().find(|h| h.id == id) {
+        let (at, turn) = crate::game::cod4::vehicle::heli_tag(host.cod4(), h, name)?;
+        let m = Mat3::from_quat(turn);
+        return Some((at, [m.x_axis, m.y_axis, m.z_axis]));
+    }
     let p = host.cod4().posed_bodies.iter().find(|p| p.entity == id.0)?;
     let skel = &p.rig.skeleton;
     let i = skel
@@ -935,9 +941,9 @@ pub(crate) fn posed_tag(host: &GameHost, id: EntId, name: &str) -> Option<(Vec3,
     ))
 }
 
-/// The receiver's tag `name`: a playing body's posed ([`posed_tag`]),
-/// anything else's in its model's bind pose placed by the entity's origin
-/// and angles: (origin, axis rows).
+/// The receiver's tag `name`: a playing body's or a helicopter's posed
+/// ([`posed_tag`]), anything else's in its model's bind pose placed by the
+/// entity's origin and angles: (origin, axis rows).
 fn tag(
     host: &mut GameHost,
     cx: &mut Cx,

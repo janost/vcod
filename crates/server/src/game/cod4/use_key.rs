@@ -639,8 +639,10 @@ impl Cod4Level {
     /// `Touch_Item` with `touched` 0 on a dropped weapon: with two
     /// primaries held and the item a primary, the weapon in hand (a
     /// primary) goes into the world with its clip and reserve as
-    /// `dropItem` launches one; the item's weapon is given with the item's
-    /// clip and reserve on top of what its ammo slot holds, switched to
+    /// `dropItem` launches one; the item's weapon is given on the item's
+    /// camo (`index >> 7`, `cod4_lnxded` 0x8092286..0x8092291, given at
+    /// 0x8092415) with the item's clip and reserve on top of what its ammo
+    /// slot holds, switched to
     /// (`a <weapon>`), and the item freed. INFERRED: vcod's CoD2 swap's
     /// rule (`game::item::touch`); 1.7's `Touch_Item` is not read
     /// (cod4-gsc.md 9.1). `None` for nothing taken, else the item dropped
@@ -710,7 +712,7 @@ impl Cod4Level {
         let c4 = self.rt.host.cod4_mut();
         let table = std::mem::take(&mut c4.table);
         let l = &mut c4.clients[slot].loadout;
-        if l.give(&table, w, 0).is_some()
+        if l.give(&table, w, it.model).is_some()
             && let Some(d) = table.get(w)
         {
             l.ammoclip[d.clip_slot] = it.clip.clamp(0, d.clip_size);

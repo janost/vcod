@@ -13,6 +13,12 @@ more.
 
 ## Fixed
 
+- The helicopter's think runs 1.7's move trace (`script_vehicle_collision`
+  with the normal on a world contact, the DObj radius' box) and its touch
+  (a sticky missile resting on it rides along); its collision and tags
+  are posed by the controller (`tag_turret`, `tag_barrel`), and a posed
+  surface's contact keeps its bind pose normal. The collision capture
+  matches retail line for line (cod4-gsc.md 3.2, "The collision capture").
 - `setStat` sends a changed stat as 1.7's reliable `N <index> <value>`
   (`SV_SetClientStat`), with `GScr_SetStat`'s index and byte checks;
   `getStat` and `setStat` refuse as 1.7's do, receiver and
@@ -79,9 +85,10 @@ Open, by how much a player notices.
    minutes, then each after 7 s; vcod-server answers at once and an
    off-LAN client's address stands in for its ban guid
    (cod4-handshake.md 15).
-2. The helicopter's flight runs no move trace and no touch, and its model
-   collision traces at the bind pose (cod4-gsc.md 3.2, `game::cod4::vehicle`).
-   M.
+2. A helicopter with no goal runs 0x808ba22 on 1.7, which ours leaves
+   out: ours holds still. A stock helicopter spends its first 2 s so
+   (cod4-gsc.md 3.2). M. Its turret's tracking is vcod's reading of
+   `VEH_UpdateAim`, 0.45 degrees off retail at worst (`hardpoint_ab`). S.
 3. What the four capture gates (`cod4::capture_ab`, cod4-combat.md 15)
    still tolerate: the dropped weapon's start and fall, a grenade's
    strike on a standing body, the second rocket's entity number, a
