@@ -175,7 +175,7 @@ impl Editor {
         let Some(first) = matches.first() else {
             return Vec::new();
         };
-        let shared = matches[1..].iter().fold(first.len(), |len, m| {
+        let mut shared = matches[1..].iter().fold(first.len(), |len, m| {
             first
                 .bytes()
                 .zip(m.bytes())
@@ -183,6 +183,10 @@ impl Editor {
                 .take_while(|(a, b)| a.eq_ignore_ascii_case(b))
                 .count()
         });
+        // A `set` can name a cvar in UTF-8; never cut inside a character.
+        while !first.is_char_boundary(shared) {
+            shared -= 1;
+        }
         let mut line = format!("\\{}", &first[..shared]);
         let mut printed = Vec::new();
         if matches.len() == 1 {
@@ -593,6 +597,9 @@ mod tests {
         // The first match's case is the one kept.
         let (line, _) = tab("SCR", &["scr_dm_timelimit", "scr_dm_scorelimit"]);
         assert_eq!(line, "scr_dm_");
+        // Two names that part inside a UTF-8 character.
+        let (line, _) = tab("x", &["x\u{e9}", "x\u{e8}"]);
+        assert_eq!(line, "x");
     }
 
     #[test]
