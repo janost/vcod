@@ -2273,7 +2273,7 @@ fn spawn_gate(
     };
     let cap = Capture {
         target_cmds: target_cmds(&read(&path("-target"))),
-        target_spawn: spawn_at(&read(&path("-script"))),
+        target_spawn: spawn_at(&read(&path("-script"))).or(Some(PRE_SPAWNAT)),
         ..parse(&read(&path("")))
     };
     let place = place_ms(read(&path("-script")).lines(), 0).expect("retail's PROBE place");
@@ -2361,7 +2361,7 @@ fn hit_gate(
     let cap = Capture {
         target_cmds: target_cmds(&read(&path("-target"))),
         cvars,
-        target_spawn: spawn_at(&script),
+        target_spawn: spawn_at(&script).or(Some(PRE_SPAWNAT)),
         ..parse(&read(&path("")))
     };
     let place = place_ms(script.lines(), 0).expect("retail's PROBE place");
@@ -2377,6 +2377,13 @@ fn hit_gate(
 }
 
 /// Client 0's first `PROBE spawnat <num> <origin> <angles>` line.
+/// The target's spawn for a capture that predates `PROBE spawnat`: the
+/// spawn think's drift off this sloped point puts ours on retail's origin
+/// to 0.001 on every such capture, where the script's own pick (off a
+/// clock-seeded `holdrand`, map-cycle doc 4.8) can leave him a third of a
+/// unit off. INFERRED: retail's target spawned here.
+const PRE_SPAWNAT: common::SpawnAt = common::CARENTAN_NORTH;
+
 fn spawn_at(script: &str) -> Option<([f32; 3], [f32; 3])> {
     let rest = script
         .lines()

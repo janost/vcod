@@ -2225,6 +2225,32 @@ impl ProbeHold {
     }
 }
 
+/// A spawn as `(origin, angles)`, as `Server::pin_spawns` takes it.
+pub type SpawnAt = ([f32; 3], [f32; 3]);
+
+/// mp_carentan dm spawn points the two-client tests stand on. The stock script draws its pick off `holdrand`,
+/// which retail seeds from the clock (map-cycle doc 4.8), so a test that
+/// needs a given spot pins it ([`pin_spawns_at`]).
+pub const CARENTAN_NORTH: SpawnAt = ([426.0, 2158.0, 160.125], [0.0, 270.0, 0.0]);
+pub const CARENTAN_SOUTH: SpawnAt = ([296.0, -1280.0, 2.6540375], [0.0, 90.0, 0.0]);
+pub const CARENTAN_EAST: SpawnAt = ([1872.0, 928.0, -23.54245], [0.0, 180.0, 0.0]);
+
+/// Each slot's playing spawns in order (`Server::pin_spawns`); past them
+/// the script picks.
+pub fn pin_spawns_at(sv: &mut Server, slots: &[&[SpawnAt]]) {
+    sv.pin_spawns(
+        slots
+            .iter()
+            .map(|s| s.iter().copied().map(Some).collect())
+            .collect(),
+    );
+}
+
+/// Slot 0 north, slot 1 south, then east on his respawn.
+pub fn pin_carentan_pair(sv: &mut Server) {
+    pin_spawns_at(sv, &[&[CARENTAN_NORTH], &[CARENTAN_SOUTH, CARENTAN_EAST]]);
+}
+
 /// A map's `mp_*spawn*` entities as `(origin, angles)`.
 pub fn spawn_points(fs: &vcod_common::pk3::Pk3Fs, map: &str) -> Vec<([f32; 3], [f32; 3])> {
     let path = fs.resolve_map(map).expect("map in the mounted paks");

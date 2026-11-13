@@ -89,28 +89,31 @@ impl Barrage {
         }
     }
 
-    /// One `G_BarrageThink` at `now_ms`, `rand_unit` the host's draw in
+    /// One `G_BarrageThink` at `now_ms`: its `irand`s off the level's
+    /// `holdrand`, its `crandom`s off `rand_unit`, the host's draw in
     /// [0, 1). `None` when its think is not due.
-    pub fn think(&mut self, now_ms: i32, mut rand_unit: impl FnMut() -> f32) -> Option<Vec<Out>> {
+    pub fn think(
+        &mut self,
+        now_ms: i32,
+        hold: &mut vcod_common::rng::HoldRand,
+        mut rand_unit: impl FnMut() -> f32,
+    ) -> Option<Vec<Out>> {
         if now_ms < self.next_think_ms {
             return None;
         }
         self.next_think_ms += THINK_MS;
         let mut out = Vec::new();
-        // `irand(min, max)`: `min + (max - min) * u`, u off 15 bits.
-        let irand =
-            |lo: i32, hi: i32, r: &mut dyn FnMut() -> f32| lo + ((hi - lo) as f32 * r()) as i32;
         if self.launched < self.count && self.launch_next_ms < now_ms {
             self.launched += 1;
-            let gap = irand(self.spacing.0, self.spacing.1, &mut rand_unit);
+            let gap = hold.irand(self.spacing.0, self.spacing.1);
             // `(int)(0.5 * irand + next)`, truncated.
             self.launch_next_ms = (0.5 * gap as f32 + self.launch_next_ms as f32) as i32;
             out.push(Out::Launch(self.at));
         }
         if self.dropped < self.count && self.incoming_next_ms < now_ms {
             self.dropped += 1;
-            self.incoming_next_ms += irand(self.spacing.0, self.spacing.1, &mut rand_unit);
-            let yaw = (irand(0, 360, &mut rand_unit) as f32).to_radians();
+            self.incoming_next_ms += hold.irand(self.spacing.0, self.spacing.1);
+            let yaw = (hold.irand(0, 360) as f32).to_radians();
             // One `crandom` per axis along a random yaw's forward; its z is
             // 0, so the point keeps the strike's height.
             let mut crandom = || 2.0 * rand_unit() - 1.0;
@@ -182,13 +185,14 @@ mod tests {
         let at = Vec3::new(3071.0, -2176.0, 0.0);
         let mut b = Barrage::new(EntId(160, 0), 0, 6, at, &arty(), 13_600);
         let mut seed = 1u64;
+        let mut hold = vcod_common::rng::HoldRand(1);
         let mut launches = Vec::new();
         let mut incomings = Vec::new();
         let mut t = 13_600;
         while !b.done {
             t += 50;
             for o in b
-                .think(t, || crate::game::host::rand_unit(&mut seed))
+                .think(t, &mut hold, || crate::game::host::rand_unit(&mut seed))
                 .unwrap()
             {
                 match o {

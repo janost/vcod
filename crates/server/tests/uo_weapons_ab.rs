@@ -340,7 +340,19 @@ fn the_artillery_strike_lands_as_on_uo() {
         return;
     }
     let (retail, origin, yaw) = retail("arty");
-    let ours = ours("binoculars_artillery_mp", ARTY, origin, yaw, 45);
+    // The shells land where retail's did, each explode under its incoming
+    // and in its order: the yaw and the spread draw off clock-seeded
+    // streams (map-cycle doc 4.8), and an incoming out of the client's view
+    // is not sent.
+    let strike_z = retail.of(EV_LAUNCH)[0].ev.pos[2];
+    let points: Vec<[f32; 3]> = retail
+        .of(EV_EXPLODE)
+        .iter()
+        .map(|e| [e.ev.pos[0], e.ev.pos[1], strike_z])
+        .collect();
+    let ours = ours_with("binoculars_artillery_mp", ARTY, origin, yaw, 45, |sv| {
+        sv.pin_barrage_points(points)
+    });
     report("retail", &retail);
     report("ours", &ours);
     let binoculars = vcod_server::defs::UO

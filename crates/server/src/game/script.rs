@@ -687,6 +687,7 @@ impl ScriptRuntime {
         host.pers_carry = carry.pers;
         if let Some(seed) = carry.seed {
             host.rng = seed | 1;
+            host.holdrand = vcod_common::rng::HoldRand(seed as u32);
             // CoD2's `G_InitGame` hands the one seed to `srand` too
             // (cod2-combat.md 9.6).
             if let crate::game::host::HostExt::Cod2(c) = &mut host.ext {
@@ -3370,6 +3371,7 @@ impl ScriptRuntime {
         let spawned = self.vm.with_cx(|cx| {
             host.missiles.fire_grenade(
                 &mut host.ents,
+                &mut host.holdrand,
                 cx,
                 model,
                 owner,

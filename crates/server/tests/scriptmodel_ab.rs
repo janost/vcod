@@ -365,6 +365,12 @@ fn ours_pair_run(
     }
     sv.load_world(world);
     sv.load_scripts(fs).expect("load the scripts");
+    // The script draws the target's variant (`randomInt(3)`) and head
+    // (`randomInt(20)`) off `holdrand`, which retail seeds from its clock
+    // (map-cycle doc 4.8). This seed draws variant 0, the `load1` gear the
+    // 1.1d prone captures' rests sit on (INFERRED, off ours matching them
+    // in it and not in variant 1), and head `a_01`.
+    sv.pin_script_rand(1);
     let (join_ms, late_ms) = match (target_play, target_log) {
         (Some((t, _)), Some(log)) => {
             let thrower = thrower_spawn(log);

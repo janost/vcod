@@ -258,6 +258,7 @@ fn drop_cooking_grenade(host: &mut GameHost, cx: &mut Cx, slot: usize) {
     let now = host.level_time_ms;
     let spawned = host.missiles.fire_grenade(
         &mut host.ents,
+        &mut host.holdrand,
         cx,
         model,
         slot,

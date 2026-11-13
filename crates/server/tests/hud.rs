@@ -108,6 +108,7 @@ fn only_the_killed_client_is_sent_the_respawn_text() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
+    common::pin_carentan_pair(&mut sv);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let (mut ca, mut cb) = common::join_pair(

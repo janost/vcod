@@ -1,6 +1,6 @@
 //! The one pseudo-random step the server draws everything from: the anim
-//! clause a death or a pain picks, `randomFloat`, the bullet spread and the
-//! connect challenge. Retail's own generator is glibc's `rand()`:
+//! clause a death or a pain picks, the bullet spread and the connect
+//! challenge. Retail's own generator is glibc's `rand()`:
 //! [`GlibcRand`] is that generator, which the CoD2 and CoD4 game modules
 //! draw from as retail's do, and a CoD1 test replays a capture's draws on
 //! from the seed recovered off it. [`HoldRand`] is the second stream
@@ -66,6 +66,8 @@ impl GlibcRand {
 /// MSVC-style LCG CoD2 1.3's game draws its rocket wobble, grenade tumble
 /// and script `randomInt`/`randomFloat` from, beside glibc's `rand()`.
 /// `G_InitGame` seeds both with one wall-clock seed (cod2-combat.md 2.6).
+/// CoD1's modules (1.1d, 1.5b, UO) keep the same stream for the script
+/// draws and the grenade's tumble, seeded apart (map-cycle doc 4.8).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HoldRand(pub u32);
 

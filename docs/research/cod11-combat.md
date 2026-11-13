@@ -5034,9 +5034,10 @@ captures is committed.
   throw's life), launch pitch rates 687.7, 692.7, 704.1, 726.9, 762.1 and
   763.5 (inside `720 +/- 45`; older takes' rolls 323.0, 335.9, 368.4, 316.3,
   318.0, 344.8 and pitch rates 684.9, 703.5, 729.5), redrawn at each bounce
-  (12.7's `G_MissileLandAngles`). A zeroed `flrand` state is `xorshift`'s
-  fixed point and reads `675.0, 0.0, 315.0` on every throw: the pool seeds
-  off the host's `RNG_SEED` (`crates/server/src/game/missile.rs`).
+  (12.7's `G_MissileLandAngles`). A zeroed `flrand` state was `xorshift`'s
+  fixed point and read `675.0, 0.0, 315.0` on every throw. The tumble now
+  draws the level's `holdrand`, the script's own stream (map-cycle doc
+  4.8).
 - An absent `semiAuto` is off. `mp_carentan-tdm-grenade-death-shooter.txt`
   raises the frag under `buttons=1` for five frames (ms 10734 to 10930,
   `raiseTime` 0.25), then `weaponstate` 3 with `EV_PULLBACK_WEAPON` and

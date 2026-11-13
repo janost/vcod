@@ -308,6 +308,7 @@ fn a_moving_player() -> Option<Vec<EntityState>> {
 
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
+    common::pin_carentan_pair(&mut sv);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
@@ -864,6 +865,7 @@ fn a_client_out_of_grenades_gets_its_rifle_back() {
         vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse the bsp");
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
+    common::pin_spawns_at(&mut sv, &[&[common::CARENTAN_EAST]]);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let q = Rc::new(RefCell::new(Queues::default()));
@@ -1548,6 +1550,10 @@ fn the_score_limit_sends_both_clients_to_intermission_and_then_rotates() {
 
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
+    common::pin_spawns_at(
+        &mut sv,
+        &[&[common::CARENTAN_NORTH], &[common::CARENTAN_SOUTH]],
+    );
     // One kill ends it, and the rotation has to name a map that is not the
     // one serving: `map <the map already serving>` is a restart (doc 4.2),
     // which pushes no gamestate.

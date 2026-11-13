@@ -2341,7 +2341,8 @@ carriers against the section 19 captures.
   with the point, which `_rank_gmi` waits on (VERIFIED decompile,
   `_rank_gmi.gsc` line 627).
 - `G_BarrageThink` (0x5e7b5), every 50 ms (VERIFIED decompile; `irand`
-  0x3f3a3 is `min + (max - min) * u`):
+  0x3f3a3 steps `holdrand`, the script's `randomInt` stream, map-cycle
+  doc 4.8):
   - while launches are left and the next is due (strictly past),
     `EV_PROJECTILE_LAUNCH` (183) at the strike point, parm the explosion
     type, next = `(int)(0.5 * irand(spacingMin, spacingMax) + next)`;

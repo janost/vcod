@@ -187,6 +187,16 @@ fn ours_trims_and_ends_the_killcam_as_retail_does() {
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(common::cfg(MAP, "tdm"), now);
+    // Two allied tdm points with 40 clear units along +x from the
+    // shooter's: the script's own pick draws off a clock-seeded `holdrand`
+    // (map-cycle doc 4.8).
+    common::pin_spawns_at(
+        &mut sv,
+        &[
+            &[([1176.0, 1296.0, -7.875], [0.0, 90.0, 0.0])],
+            &[([1000.0, 1216.0, -21.422516], [0.0, 0.0, 0.0])],
+        ],
+    );
     sv.set_cvar("scr_friendlyfire", "1");
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");

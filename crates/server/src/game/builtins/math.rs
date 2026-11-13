@@ -1,6 +1,6 @@
 //! Vector and scalar math builtins. None of these touch the entity table or
-//! the configstrings, so every one takes its arguments and returns a value
-//! with no `GameHost` state to consult.
+//! the configstrings; the random draws step `GameHost::holdrand`, the rest
+//! read only their arguments.
 
 use crate::game::host::GameHost;
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
@@ -15,7 +15,10 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("anglestoforward", angles_to_forward),
     ("anglestoright", angles_to_right),
     ("anglestoup", angles_to_up),
+    ("randomint", random_int),
     ("randomfloat", random_float),
+    ("randomintrange", random_int_range),
+    ("randomfloatrange", random_float_range),
     ("sin", sin),
     ("cos", cos),
     ("tan", tan),
@@ -186,31 +189,94 @@ pub fn angles_to_up(
     Ok(Value::Vector(angle_vectors(args)?[2]))
 }
 
-/// `randomFloat(range)`: a real uniform draw in `[0, range)` from
-/// `GameHost::rng`. Retail seeds `randomFloat` from the level clock;
-/// nothing here needs to match its sequence, only to actually cover the
-/// range, which the fixed-seed xorshift64* draw does.
+/// `Scr_GetInt(i)`: a float reads truncated.
+fn int_at(args: &[Value], i: usize, usage: &'static str) -> Result<i32, ErrorKind> {
+    match args.get(i) {
+        Some(Value::Int(n)) => Ok(*n),
+        Some(Value::Float(f)) => Ok(*f as i32),
+        _ => Err(ErrorKind::BadType(usage)),
+    }
+}
+
+/// `Scr_GetFloat(i)`: an int reads as its value.
+fn float_at(args: &[Value], i: usize, usage: &'static str) -> Result<f32, ErrorKind> {
+    match args.get(i) {
+        Some(Value::Int(n)) => Ok(*n as f32),
+        Some(Value::Float(f)) => Ok(*f),
+        _ => Err(ErrorKind::BadType(usage)),
+    }
+}
+
+/// `randomInt(n)` (1.1d 0x5e470, 1.5b 0x5f6a8, UO 0x6b397): `irand(0, n)`
+/// off `holdrand`; `n` under 1 is an error and draws nothing (map-cycle
+/// doc 4.8).
+pub fn random_int(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let n = int_at(args, 0, "randomInt takes a number")?;
+    if n <= 0 {
+        return Err(ErrorKind::Custom(
+            "RandomInt parm must be positive integer.".into(),
+        ));
+    }
+    Ok(Value::Int(host.holdrand.irand(0, n)))
+}
+
+/// `randomFloat(f)` (1.1d 0x5e4bc, 1.5b 0x5f715, UO 0x6b404): `flrand(0,
+/// f)` off `holdrand`, any `f`.
 pub fn random_float(
     host: &mut GameHost,
     _cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let range = match args.first() {
-        Some(Value::Int(i)) => *i as f32,
-        Some(Value::Float(f)) => *f,
-        _ => return Err(ErrorKind::BadType("randomFloat takes a number")),
-    };
-    Ok(Value::Float(host.rand_unit() * range))
+    let f = float_at(args, 0, "randomFloat takes a number")?;
+    Ok(Value::Float(host.holdrand.flrand(0.0, f)))
 }
 
-/// `Scr_GetFloat(0)`: an int reads as its value.
-fn float_arg(args: &[Value], usage: &'static str) -> Result<f32, ErrorKind> {
-    match args.first() {
-        Some(Value::Int(i)) => Ok(*i as f32),
-        Some(Value::Float(f)) => Ok(*f),
-        _ => Err(ErrorKind::BadType(usage)),
+/// `randomIntRange(lo, hi)` (1.1d 0x5e4f0, 1.5b 0x5f757, UO 0x6b446):
+/// `irand(lo, hi)` off `holdrand`; `hi` not above `lo` is an error.
+pub fn random_int_range(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    const USAGE: &str = "randomIntRange takes two numbers";
+    let (lo, hi) = (int_at(args, 0, USAGE)?, int_at(args, 1, USAGE)?);
+    if hi <= lo {
+        return Err(ErrorKind::Custom(
+            "RandomIntRange range must be positive integer.".into(),
+        ));
     }
+    Ok(Value::Int(host.holdrand.irand(lo, hi)))
+}
+
+/// `randomFloatRange(lo, hi)` (1.1d 0x5e554, 1.5b 0x5f7d9, UO 0x6b4c8):
+/// `flrand(lo, hi)` off `holdrand`; `hi` not above `lo` is an error, a NaN
+/// bound is not.
+pub fn random_float_range(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    const USAGE: &str = "randomFloatRange takes two numbers";
+    let (lo, hi) = (float_at(args, 0, USAGE)?, float_at(args, 1, USAGE)?);
+    if lo >= hi {
+        return Err(ErrorKind::Custom(
+            "Scr_RandomFloatRange range must be positive float.".into(),
+        ));
+    }
+    Ok(Value::Float(host.holdrand.flrand(lo, hi)))
+}
+
+/// `Scr_GetFloat(0)`.
+fn float_arg(args: &[Value], usage: &'static str) -> Result<f32, ErrorKind> {
+    float_at(args, 0, usage)
 }
 
 /// Degrees to radians the way the builtins do it, `x * M_PI / 180` in
@@ -365,27 +431,42 @@ mod tests {
         });
     }
 
-    /// A real uniform draw, not a truncated one: several hundred calls to
-    /// `randomFloat(1)` must all land in `[0, 1)` and at least one must
-    /// exceed 0.5. A generator that saturates well below 1 (as dividing a
-    /// `subsec_nanos` draw by `u32::MAX` once did, capping every draw near
-    /// 0.23) would fail the second assertion.
+    /// The four script draws step one `holdrand` LCG (map-cycle doc 4.8):
+    /// from a seed each is the retail formula on the next state's bits
+    /// 17..31, and a refused call draws nothing.
     #[test]
-    fn randomfloat_draws_a_real_uniform_value_in_range() {
+    fn the_random_builtins_draw_holdrand() {
         let (mut vm, mut host) = fixture();
+        host.holdrand = vcod_common::rng::HoldRand(12345);
+        let mut s = 12345u32;
+        let mut next = || {
+            s = s.wrapping_mul(0x343fd).wrapping_add(0x269ec3);
+            (s >> 17) as i32
+        };
         vm.with_cx(|cx| {
-            let mut saw_above_half = false;
-            for _ in 0..500 {
-                let Value::Float(f) = random_float(&mut host, cx, None, &[Value::Int(1)]).unwrap()
-                else {
-                    panic!()
-                };
-                assert!((0.0..1.0).contains(&f), "{f} out of [0, 1)");
-                saw_above_half |= f > 0.5;
-            }
-            assert!(
-                saw_above_half,
-                "500 draws of randomFloat(1) never exceeded 0.5"
+            let n = |v: i32| Value::Int(v);
+            let f = |v: f32| Value::Float(v);
+            assert!(random_int(&mut host, cx, None, &[n(0)]).is_err());
+            assert!(random_int_range(&mut host, cx, None, &[n(5), n(5)]).is_err());
+            assert!(random_float_range(&mut host, cx, None, &[f(2.0), n(1)]).is_err());
+            let r = next();
+            assert_eq!(
+                random_int(&mut host, cx, None, &[n(100)]),
+                Ok(n((100 * r) >> 15))
+            );
+            let r = next();
+            let want = (2.5 * f64::from(r) / 32768.0) as f32;
+            assert_eq!(random_float(&mut host, cx, None, &[f(2.5)]), Ok(f(want)));
+            let r = next();
+            assert_eq!(
+                random_int_range(&mut host, cx, None, &[n(-3), n(7)]),
+                Ok(n(((10 * r) >> 15) - 3))
+            );
+            let r = next();
+            let want = (2.0 * f64::from(r) / 32768.0 - 1.0) as f32;
+            assert_eq!(
+                random_float_range(&mut host, cx, None, &[n(-1), n(1)]),
+                Ok(f(want))
             );
         });
     }

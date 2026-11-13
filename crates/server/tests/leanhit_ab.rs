@@ -56,7 +56,16 @@ struct Case {
     round_gaps: &'static [&'static str],
     /// Phases whose round's direction alone may part from retail's.
     dir_gaps: &'static [&'static str],
+    /// The level's `holdrand` seed: the script's draws dress the target
+    /// (`randomInt(3)` his variant, then `randomInt(20)` his head) as the
+    /// capture's `PROBE models` line logs him. Retail's own seed is its
+    /// clock (map-cycle doc 4.8); this is the smallest that draws the same.
+    script_seed: u32,
 }
+
+/// Draws variant 0 (`load1`) and head `a_01`, the set a `probe_pin`
+/// capture puts on the target anyway.
+const SEED_LOAD1_A01: u32 = 1;
 
 /// The join times of the `probe_bones` captures.
 const JOIN_11: i64 = 8550;
@@ -111,6 +120,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, c: &Case) -> Vec<String> {
     }
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    sv.pin_script_rand(c.script_seed);
     // The target connects first, into slot 0.
     let pin = |who: &str| spawn_at(c.fixture, who).map(Some).into_iter().collect();
     sv.pin_spawns(vec![pin("target"), pin("shooter")]);
@@ -413,6 +423,10 @@ fn check(fs: vcod_common::pk3::Pk3Fs, c: &Case) {
     let site = |l: &[String]| l.iter().find(|l| l.starts_with("PROBE site")).cloned();
     let strip = |s: Option<String>| s.map(|s| s.splitn(4, ' ').nth(3).unwrap().to_string());
     assert_eq!(strip(site(&retail)), strip(site(&ours)), "the pair site");
+    let models = |l: &[String]| l.iter().find(|l| l.starts_with("PROBE models")).cloned();
+    if let Some(r) = models(&retail) {
+        assert_eq!(Some(r), models(&ours), "the target's head and gear");
+    }
     let mut bad = Vec::new();
 
     let (rb, mut ob) = (bone_rows(&retail), bone_rows(&ours));
@@ -503,6 +517,8 @@ fn a_leaning_body_and_a_leaning_shooters_rounds_land_as_on_retail() {
             late_ms: 3450,
             round_gaps: &[],
             dir_gaps: &[],
+            // Logs no models; the 1.1d captures that do wear `load1`.
+            script_seed: SEED_LOAD1_A01,
         },
     );
 }
@@ -520,6 +536,7 @@ fn a_leaning_bodys_bones_sit_as_on_retail() {
             late_ms: LATE_11,
             round_gaps: &[],
             dir_gaps: &[],
+            script_seed: SEED_LOAD1_A01,
         },
     );
 }
@@ -548,6 +565,8 @@ fn a_leaning_body_on_15_poses_as_on_retail() {
             late_ms: 2750,
             round_gaps: &[],
             dir_gaps: &[],
+            // `load1`, head `b_07`.
+            script_seed: 19,
         },
     );
 }
@@ -565,6 +584,8 @@ fn a_leaning_body_on_uo_poses_as_on_retail() {
             late_ms: LATE_UO,
             round_gaps: &[],
             dir_gaps: &[],
+            // `load3`, head `a_01`.
+            script_seed: 12,
         },
     );
 }
@@ -582,6 +603,7 @@ fn cmds_case(fixture: &'static str, join_ms: i64, late_ms: i64) -> Case {
         late_ms,
         round_gaps: &[],
         dir_gaps: &[],
+        script_seed: SEED_LOAD1_A01,
     }
 }
 

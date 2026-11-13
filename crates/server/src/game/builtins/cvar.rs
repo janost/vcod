@@ -15,7 +15,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("setcvar", set_cvar),
     ("makecvarserverinfo", make_cvar_server_info),
     ("gettime", get_time),
-    ("randomint", random_int),
     ("resettimeout", reset_timeout),
     ("setarchive", set_archive),
     ("exitlevel", exit_level),
@@ -209,25 +208,6 @@ pub fn get_time(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     Ok(Value::Int(host.level_time_ms))
-}
-
-/// `randomInt(n)`: a uniform draw in `[0, n)`, so `randomInt(1)` is always
-/// 0 (measured). `n <= 0` returns 0 rather than dividing by zero.
-pub fn random_int(
-    host: &mut GameHost,
-    _cx: &mut Cx,
-    _recv: Option<Target>,
-    args: &[Value],
-) -> Result<Value, ErrorKind> {
-    let n = match args.first() {
-        Some(Value::Int(i)) => *i,
-        Some(Value::Float(f)) => *f as i32,
-        _ => return Err(ErrorKind::BadType("randomInt takes a number")),
-    };
-    if n <= 0 {
-        return Ok(Value::Int(0));
-    }
-    Ok(Value::Int((host.rand_unit() * n as f32) as i32))
 }
 
 /// `resetTimeout()`: unmeasured no-op. No probe exercises it and nothing in
@@ -557,28 +537,5 @@ mod tests {
         host.cvars.write_mirror(&mut cs).unwrap();
         assert_eq!(host.cvars.get("scr_allow_fg42"), "0");
         assert!(cs[140..=203].contains(&"scr_allow_fg42".to_string()));
-    }
-
-    /// `randomInt(n)` is `[0, n)`, so `randomInt(1)` is always 0 and
-    /// `randomInt(0)` cannot divide by zero.
-    #[test]
-    fn randomint_is_half_open() {
-        let (mut vm, mut host) = fixture();
-        vm.with_cx(|cx| {
-            for _ in 0..64 {
-                assert_eq!(
-                    random_int(&mut host, cx, None, &[Value::Int(1)]).unwrap(),
-                    Value::Int(0)
-                );
-                match random_int(&mut host, cx, None, &[Value::Int(2)]).unwrap() {
-                    Value::Int(n) => assert!((0..2).contains(&n), "{n} out of range"),
-                    v => panic!("{v:?}"),
-                }
-            }
-            assert_eq!(
-                random_int(&mut host, cx, None, &[Value::Int(0)]).unwrap(),
-                Value::Int(0)
-            );
-        });
     }
 }
