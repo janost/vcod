@@ -568,6 +568,60 @@ pub struct VoiceFrame {
     pub sending: bool,
     /// `sv_voiceQuality` off the systeminfo.
     pub quality: i32,
+    /// The microphone's level and scaler ([`mic_gain`]).
+    pub mic: MicGain,
+}
+
+/// What the capture does to each sample: the recording volume, then the
+/// scaler.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MicGain {
+    pub level: f32,
+    pub scaler: f32,
+}
+
+impl Default for MicGain {
+    fn default() -> Self {
+        MicGain {
+            level: 1.0,
+            scaler: 1.0,
+        }
+    }
+}
+
+impl MicGain {
+    /// One captured sample. The level stands in for the Windows mixer's
+    /// recording volume, which vcod does not touch; the scaler is
+    /// `Record_QueueAudioDataForEncoding`'s (`iw3mp.exe` 0x4ed14a):
+    /// `(short)ftol(sample * scaler)`, wrapping past 16 bits.
+    pub fn apply(self, sample: i16) -> i16 {
+        let s = (f32::from(sample) * self.level) as i16;
+        (f32::from(s) * self.scaler) as i32 as i16
+    }
+}
+
+/// [`mic_gain`] off the shell's dvars, their defaults while unregistered.
+pub fn shell_mic_gain(shell: &crate::console::shell::Shell) -> MicGain {
+    let read = |name, default| {
+        shell
+            .cvar(name)
+            .map_or(default, |v| v.trim().parse().unwrap_or(0.0))
+    };
+    mic_gain(
+        read("winvoice_mic_reclevel", 65535.0),
+        read("winvoice_mic_scaler", 1.0),
+    )
+}
+
+/// `winvoice_mic_reclevel` and `winvoice_mic_scaler` as the capture reads
+/// them. 1.3 and 1.7 hand the level, truncated to 16 bits, to the mixer's
+/// `Mic` recording line (`CoD2MP_s.exe` 0x4b96a0, `iw3mp.exe` 0x57b1d0);
+/// vcod scales by it over 65535 instead. The scaler holds 0.5 below 0.5
+/// and at most 1.5 (`Voice_GetLocalVoiceData`, `iw3mp.exe` 0x57aedb).
+pub fn mic_gain(reclevel: f32, scaler: f32) -> MicGain {
+    let level = f32::from(reclevel as i32 as u16) / 65535.0;
+    let scaler = if scaler < 0.5 { 0.5 } else { scaler.min(1.5) };
+    MicGain { level, scaler }
 }
 
 /// The app's voice: the codec, the input and a stream a talker.
@@ -633,7 +687,8 @@ impl VoiceChat {
                         }
                     },
                 });
-            self.pending.extend(input.take());
+            self.pending
+                .extend(input.take().into_iter().map(|x| f.mic.apply(x)));
             while self.pending.len() >= FRAME_SAMPLES {
                 let pcm: [i16; FRAME_SAMPLES] = self.pending[..FRAME_SAMPLES].try_into().unwrap();
                 self.pending.drain(..FRAME_SAMPLES);
@@ -726,6 +781,27 @@ mod tests {
             l.queue(vec![3]);
         }
         assert_eq!(l.due(5202.0).map(|b| b.len()), Some(10));
+    }
+
+    /// The voice options' level and scaler (cod2-voice.md 4): the scaler
+    /// held to 0.5..1.5 and wrapping past 16 bits, the level a fraction of
+    /// 65535 truncated to 16 bits.
+    #[test]
+    fn the_mic_level_and_scaler_scale_each_sample() {
+        assert_eq!(mic_gain(65535.0, 1.0), MicGain::default());
+        assert_eq!(mic_gain(65535.0, 0.25).scaler, 0.5);
+        assert_eq!(mic_gain(65535.0, 2.0).scaler, 1.5);
+        assert_eq!(mic_gain(65535.0, 1.2).scaler, 1.2);
+        let g = mic_gain(65535.0, 1.5);
+        assert_eq!(g.apply(1000), 1500);
+        assert_eq!(g.apply(-1001), -1501);
+        // 30000 * 1.5 = 45000 wraps as retail's word store does
+        assert_eq!(g.apply(30000), (45000i32 - 65536) as i16);
+        let half = mic_gain(32767.9, 1.0);
+        assert_eq!(half.apply(10000), 4999);
+        assert_eq!(mic_gain(0.0, 1.0).apply(12345), 0);
+        let shell = crate::console::shell::Shell::new();
+        assert_eq!(shell_mic_gain(&shell), MicGain::default());
     }
 
     #[test]

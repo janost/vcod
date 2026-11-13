@@ -47,8 +47,10 @@ Front end:
   nothing.
 - CD key authorization as the retail client does it: `getKeyAuthorize` to
   the authorize server before the challenge, off the LAN only, with the
-  key from `VCOD_CDKEY` or 1.1's `main/codkey`, and the stock `needcdkey`
-  and refusal messages ([usage](../usage.md#cd-keys)).
+  key from the CD key menu, `VCOD_CDKEY` or 1.1's `main/codkey`, and the
+  stock `needcdkey` and refusal messages ([usage](../usage.md#cd-keys)).
+  The CD key menu shows the key, checks a typed one as retail does and
+  keeps a valid one; on 1.1 it writes `main/codkey`.
 
 Joining:
 
@@ -214,6 +216,9 @@ Screenshots ([cod11-demos.md](../research/cod11-demos.md) 10):
   bottom-up as retail's; `screenshotJPEG` a JPEG at quality 95. A lone
   name argument names the file, `silent` drops the `Wrote` line. Windowed,
   the shot is the framebuffer before `r_gamma`, as retail's.
+- `screenshot levelshot` writes the map's 128 x 128
+  `levelshots/<map>.tga`, `screenshot savegame <name>` a 512 x 512
+  `<name>.jpg`, both box-filtered as retail's.
 - `cg_autoscreenshot 1` shoots `<date-time>-<name>.jpg` on a 1.5 or UO
   server's `autoScreenshot`.
 - `cl_avidemo <fps>` steps the clock `1000 / fps` ms a frame and writes
@@ -358,15 +363,12 @@ Front end:
   server console.
 - A mod's UI DLL is ignored; only its menu files count
   ([cod11-front-end.md](../research/cod11-front-end.md) 16-17).
-- The CD key menu doesn't open (the console says so). Set the key through
-  `VCOD_CDKEY` or `main/codkey`.
 - Options: the sound provider and NVIDIA fog are stored but ignored, and
   the language picker stays hidden.
 
 Client:
 
 - No PunkBuster; PunkBuster servers refuse vcod.
-- `screenshot levelshot` and `screenshot savegame` write nothing.
 - No retail client has played a vcod demo; no retail client runs here.
   vcod plays a retail-recorded demo and writes retail's layout byte for
   byte ([cod11-demos.md](../research/cod11-demos.md) 9).

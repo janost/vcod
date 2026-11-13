@@ -418,6 +418,14 @@ older games. vcod: `screenshot.rs`, `renderer/capture.rs`,
   INFERRED (D3D9): the front buffer holds the bytes before it. vcod reads
   the gamma pass's scene before the ramp.
 - There is no `cg_autoscreenshot` (VERIFIED, no `autoscreenshot` string).
+- `levelshot` (`0x60eb00`) is CoD2's: the name off `rgp.world`
+  (`0xcc9a320`) `+4`, a 128 x 128 resample (`0x60e990`, capture
+  `0x60e540`, resample `0x60e410`), a header with byte 17 left 0 over
+  top-down rows, `Wrote %s` (VERIFIED, `0x60eb39`..`0x60eb7b`).
+  `savegame` needs three arguments (`0x60ec80`) and writes `%s.jpg`
+  through the JPEG writer (`0x6459e0`) at 512 x 512 with no line
+  (VERIFIED, `0x60eb90`..`0x60ebd1`). INFERRED: the resample passes are
+  CoD2's (`cod2-demos.md` 8.2); vcod runs those.
 
 ### 10.3 `cl_avidemo`
 

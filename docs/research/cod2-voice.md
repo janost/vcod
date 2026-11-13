@@ -171,6 +171,20 @@ shows it as its voice column (`joinserver.menu`'s `voiceColumn`).
   to the next callback, and hands each `Encode_Sample` result to
   `Client_SendVoiceData` (Mac 0x14a868). VERIFIED. So `cl_talking` keeps
   the batch flowing but encodes nothing by itself. INFERRED.
+- The Windows build registers the four `winvoice_*` dvars in `Voice_Init`
+  (`CoD2MP_s.exe` 0x4b8dd0) as the table above has them: `mute` bool 1,
+  `reclevel` float 65535 in 0..65535, `save_voice` bool 0, `scaler` float
+  1 in 0.25..2, flags 0x1001 each. VERIFIED (asm). Then it opens the
+  mixer: `reclevel`, `ftol`'d to 16 bits, goes to 0x4b96a0, which finds
+  the source line named `Mic` (0x5b3408) under the `DST_WAVEIN` (7)
+  destination and sets its `VOLUME` control (0x50030001) through
+  `mixerSetControlDetails` (0x4b97f5); `mute` goes to 0x4b9d30, the `Mic`
+  source under `DST_SPEAKERS` (4) and its `MUTE` control (0x20010002,
+  set at 0x4b9e80). VERIFIED (asm). `reclevel` is read again each frame
+  and set when its 16-bit value changes (0x4b91fa..0x4b922c); `mute` only
+  at `Voice_Init` (its one other reader, 0x4b8e89). VERIFIED (asm). So
+  the level is the recording volume and the mute the microphone's
+  monitor on the speakers, not the capture. INFERRED.
 - `Voice_GetLocalVoiceData` (Mac 0x1ea65c) moves the scaler to
   `winvoice_mic_scaler` when it changes: 0.5 below 0.5 (0x326190), else at
   most 1.5 (0x3261b8). VERIFIED.
@@ -331,7 +345,16 @@ vcod-server.
   codec; `the_talker_list_names_each_talker`,
   `a_two_player_dm_reply_draws_two_rows` (the voice column) and
   `the_mute_list_toggles_the_selected_client` the HUD and the menu.
-- Not done: `winvoice_mic_scaler`, `winvoice_mic_reclevel` and
-  `winvoice_mic_mute` (the Windows mixer), `winvoice_save_voice`,
-  `options_voice.menu`'s level meter (`UI_RECORDLEVEL`, 265), the
-  shadowed text style of the talker names, and `cl_talking`.
+- The four `winvoice_*` dvars register archived at retail's defaults
+  (`Shell::use_cod2_cvars`). The capture scales each sample by
+  `winvoice_mic_reclevel / 65535` (vcod's stand-in for the mixer's
+  recording volume, which it leaves alone), then by the scaler held to
+  0.5..1.5 and stored as 1.3 does, wrapping past 16 bits
+  (`voice::mic_gain`, the test
+  `the_mic_level_and_scaler_scale_each_sample`). `winvoice_mic_mute`
+  stays a registered no-op: it mutes the microphone's playback line,
+  and vcod never plays the microphone back.
+- Not done: `winvoice_save_voice` (each heard packet's last decoded
+  frame appended to a headerless `voice.wav` in the working directory,
+  section 4), `options_voice.menu`'s level meter (`UI_RECORDLEVEL`, 265),
+  the shadowed text style of the talker names, and `cl_talking`.

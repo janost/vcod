@@ -276,6 +276,9 @@ pub struct BodyView {
 /// The frame to draw: the eye, its angles and the entities.
 #[derive(Clone, Debug, Default)]
 pub struct Scene {
+    /// The player `CG_ScanForCrosshairEntity`'s trace met this frame
+    /// ([`crosshair_scan`]).
+    pub crosshair_hit: Option<CrosshairHit>,
     pub eye: Vec3,
     /// The view weapon's lighting origin: the eye before its floor, the
     /// origin raised by `viewHeightCurrent` and leaned 16 and 20
@@ -2447,6 +2450,7 @@ impl Cod4Session {
             viewlocked: u("viewlocked"),
             viewlocked_ent: u("viewlocked_entNum"),
             gun_dir: None,
+            name_seen: 0,
         };
         let hands = model_cs(gs, view.viewmodel_index);
         let third_person = third.then(|| {
@@ -2486,7 +2490,26 @@ impl Cod4Session {
                 });
             }
         }
+        let crosshair_hit = self.world.as_ref().and_then(|w| {
+            let team = |n: u32| {
+                new.clients
+                    .iter()
+                    .find(|c| c.0[0] == n)
+                    .map_or(0, client_team)
+            };
+            let world = cod4_predict::Solids {
+                clip: &w.clip,
+                solids: &self.shot_solids,
+            };
+            crosshair_scan(&world, eye, angles, view.client_num, team, |n| {
+                self.shot_solids
+                    .iter()
+                    .find(|s| s.number == n)
+                    .map(|s| s.origin)
+            })
+        });
         Some(Scene {
+            crosshair_hit,
             eye,
             light_eye,
             angles,
@@ -2538,6 +2561,54 @@ impl Cod4Session {
         };
         cod4_third_person::camera(vieworg, angles, dead_yaw, self.third_person, &trace)
     }
+}
+
+/// A player under the crosshair: his client number, whether he is a
+/// teammate (`None` while we spectate, team 3), and how far he stands
+/// from the eye, squared.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CrosshairHit {
+    pub client: u32,
+    pub friendly: Option<bool>,
+    pub dist_sq: f32,
+}
+
+/// `CG_ScanForCrosshairEntity`'s trace (`iw3mp.exe` 0x42dbf0,
+/// cod4-hud.md 17): a point from the eye 8192 (0x70baf8) along the view
+/// under 0x2803001, passing our own body, that must end on a client
+/// (an entity under 64). A teammate shares our team, team 0 sharing
+/// none.
+pub fn crosshair_scan(
+    world: &impl vcod_cod4::pmove::PmWorld,
+    eye: Vec3,
+    angles: Vec3,
+    own: u32,
+    team: impl Fn(u32) -> i32,
+    origin: impl Fn(u32) -> Option<Vec3>,
+) -> Option<CrosshairHit> {
+    let (p, y) = (angles.x.to_radians(), angles.y.to_radians());
+    let forward = Vec3::new(p.cos() * y.cos(), p.cos() * y.sin(), -p.sin());
+    let t = world.trace(
+        eye,
+        eye + forward * 8192.0,
+        Vec3::ZERO,
+        Vec3::ZERO,
+        own,
+        0x280_3001,
+    );
+    if t.entity_num >= 64 {
+        return None;
+    }
+    let mine = team(own);
+    let friendly = match mine {
+        3 => None,
+        _ => Some(mine != 0 && team(t.entity_num) == mine),
+    };
+    Some(CrosshairHit {
+        client: t.entity_num,
+        friendly,
+        dist_sq: origin(t.entity_num).map_or(f32::MAX, |o| (o - eye).length_squared()),
+    })
 }
 
 /// `CG_PredictPlayerState` predicts `ps` (cod4-client-view.md 5): our own
@@ -3579,6 +3650,49 @@ pub(crate) mod tests {
     use std::collections::BTreeMap;
 
     mod hud_menus;
+
+    /// `CG_ScanForCrosshairEntity`'s trace: a client under 64 the point
+    /// met, a teammate by team, none while we spectate, nothing on the
+    /// world.
+    #[test]
+    fn the_crosshair_scan_names_the_client_it_meets() {
+        struct Hits(u32);
+        impl vcod_cod4::pmove::PmWorld for Hits {
+            fn trace(
+                &self,
+                start: Vec3,
+                end: Vec3,
+                _: Vec3,
+                _: Vec3,
+                pass: u32,
+                mask: u32,
+            ) -> pm::Tr {
+                assert_eq!((pass, mask), (2, 0x280_3001));
+                // straight ahead along +x, 8192 out
+                assert!((end - start - Vec3::X * 8192.0).length() < 0.01);
+                pm::Tr {
+                    entity_num: self.0,
+                    ..Default::default()
+                }
+            }
+        }
+        let team = |n: u32| match n {
+            2 | 7 => 1,
+            _ => 2,
+        };
+        let at = |_| Some(Vec3::new(300.0, 0.0, 60.0));
+        let eye = Vec3::new(0.0, 0.0, 60.0);
+        let scan = |hit, own| crosshair_scan(&Hits(hit), eye, Vec3::ZERO, own, team, at);
+        let enemy = scan(9, 2).unwrap();
+        assert_eq!((enemy.client, enemy.friendly), (9, Some(false)));
+        assert_eq!(enemy.dist_sq, 90_000.0);
+        assert_eq!(scan(7, 2).unwrap().friendly, Some(true));
+        assert_eq!(scan(1022, 2), None);
+        assert_eq!(scan(64, 2), None);
+        let spectating = |n: u32| if n == 2 { 3 } else { 1 };
+        let s = crosshair_scan(&Hits(9), eye, Vec3::ZERO, 2, spectating, at).unwrap();
+        assert_eq!(s.friendly, None);
+    }
 
     /// The clock a live test's client thread and its in-process server
     /// share, so the test runs as fast as both compute instead of in real
@@ -13286,6 +13400,7 @@ pub(crate) mod tests {
                         25000,
                     ),
                     quality,
+                    mic: Default::default(),
                 };
                 if real {
                     chat.frame(&mut t.voice, &f, None);

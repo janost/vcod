@@ -123,6 +123,9 @@ pub struct ViewPs {
     /// (`CalculateWeaponPosition_SaveOffsetAngles`); `None`
     /// when `cg.gunPitch` and `gunYaw` are the view's.
     pub gun_dir: Option<[f32; 3]>,
+    /// How long the crosshair has been on the player it names, as of its
+    /// last sighting (`cod4_crosshair::CrosshairTarget::seen`), ms.
+    pub name_seen: i32,
 }
 
 impl Default for ViewPs {
@@ -162,6 +165,7 @@ impl Default for ViewPs {
             viewlocked: 0,
             viewlocked_ent: 1023,
             gun_dir: None,
+            name_seen: 0,
         }
     }
 }

@@ -78,6 +78,10 @@ Give vcod the key one of two ways:
 - CoD 1.1 and 1.5 only: the retail file `main/codkey`, which the 1.1
   installer writes. 1.5, UO, CoD2 and CoD4 keep the key in the Windows
   registry, which vcod does not read; use the variable there.
+- The game's own CD key menu: Verify checks the key against the check characters as retail
+  does, and a valid key serves until vcod quits, ahead of the other two.
+  On CoD 1.1 Verify also writes `main/codkey`, as retail does; the other
+  games' menus write the registry, which vcod leaves alone.
 
 With a key set, before each challenge to a server off the LAN, vcod sends
 what the retail client sends to the game's authorize host:
@@ -89,7 +93,8 @@ what the retail client sends to the game's authorize host:
 | CoD2 | `cod2master.activision.com:20700` | the key and its MD5 |
 | CoD4 | `cod4master.activision.com:20800` | the key and its MD5 |
 
-Without a key nothing is sent. vcod never logs, prints or stores the key.
+Without a key nothing is sent. vcod never logs or prints the key, and
+stores it only where 1.1's own menu does.
 A server that checks no keys (LAN, vcod-server, most local retail
 servers) joins without one. vcod-server checks no keys.
 
@@ -296,7 +301,7 @@ commands.
 | `ui_load` | Reload the menus off the list `ui_menuFiles` names |
 | `record [name]`, `stoprecord` | Record a demo to `demos/` in the game directory (the mod's first) |
 | `demo <name>` | Play one back (`.dm_1`, `.dm_2` or `.dm_3`, found without the extension). `cl_freezeDemo 1` pauses it; `nextdemo` holds a command to run at its end |
-| `screenshot [silent\|name]`, `screenshotJPEG [silent\|name]` | Write the next frame to `screenshots/` in the game folder: `shotNNNN.tga` or `.jpg`, or `<name>.tga`/`.jpg`. `silent` prints no `Wrote` line |
+| `screenshot [silent\|name]`, `screenshotJPEG [silent\|name]` | Write the next frame to `screenshots/` in the game folder: `shotNNNN.tga` or `.jpg`, or `<name>.tga`/`.jpg`. `silent` prints no `Wrote` line. `levelshot` writes `levelshots/<map>.tga` (128 x 128), `savegame <name>` writes `<name>.jpg` (512 x 512) |
 | `timedemo` | CoD1, UO: `set timedemo 1` before `demo` times it. CoD2, CoD4: `timedemo <name>` is a command, as retail's: it plays `<name>.dm_1` 50 ms a frame and prints the frame count and fps. CoD2 also writes `demos/timedemo_<map>_mode_<r_mode>.csv`, a `<frame>,<ms>` line a frame |
 
 Anything else goes to the server while connected (`callvote`, `kill`,

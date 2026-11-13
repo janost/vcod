@@ -879,6 +879,8 @@ struct Args {
 /// submodels in it. `None` while `--connect` is between maps.
 struct World {
     bsp: MapWorld,
+    /// The map's base name (`mp_carentan`), which a levelshot is named by.
+    name: String,
     /// The fog a load with no server draws: CoD2 fly mode's map script
     /// `setExpFog` (`vcod_cod2::world::script_fog`).
     fog: Option<net::FogParams>,
@@ -2000,6 +2002,7 @@ fn main() -> Result<()> {
         (
             mode,
             Some(World {
+                name: map_base_name(&map),
                 bsp,
                 fog,
                 materials: cod4_map.take().map(|c| c.materials),
@@ -2813,6 +2816,15 @@ fn reopen_fs(
 
 /// `maps/mp/<map>.bsp` off the search path, parsed ([`MapWorld`]'s asset
 /// kind): what `CM_LoadMap` (CoDMP.exe 0x419c90) and `R_LoadWorldMap` read.
+/// A map argument's base name, as the renderer's world keeps it: no
+/// folder, no extension (`maps/mp/mp_carentan.bsp` -> `mp_carentan`).
+fn map_base_name(map: &str) -> String {
+    let file = map.rsplit(['/', '\\']).next().unwrap_or(map);
+    file.split_once('.')
+        .map_or(file, |(stem, _)| stem)
+        .to_string()
+}
+
 fn read_map(fs: &dyn AssetSource, map: &str) -> Result<MapWorld> {
     mapworld::find(fs, map).with_context(|| format!("cannot load map '{map}'"))
 }
@@ -2922,6 +2934,7 @@ fn load_map(
         r.set_hud_weapons(Some(&live.weapons));
     }
     *world = Some(World {
+        name: map_base_name(map),
         bsp,
         fog: None,
         materials: None,
@@ -3123,7 +3136,7 @@ struct App {
     /// `com_frameTime`'s last frame, ms since `start` (`Com_Frame`'s pace).
     frame_ms: u64,
     /// A screenshot command waiting for the next frame, and the writer.
-    shot: Option<screenshot::Request>,
+    shot: Option<screenshot::Command>,
     shooter: screenshot::Shooter,
     debug_overlay: bool,
     cull_mode: renderer::CullMode,
@@ -3762,9 +3775,7 @@ impl App {
                     }
                 },
                 Effect::Screenshot { jpeg, args } => {
-                    if let Some(req) = screenshot::parse(jpeg, &args) {
-                        self.shot = Some(req);
-                    }
+                    self.shot = Some(screenshot::parse(jpeg, &args));
                 }
                 Effect::Rcon(args) => self.rcon(&args),
                 Effect::Forward(line) => match &mut self.mode {
@@ -4518,7 +4529,7 @@ impl App {
             self.shell.cvar_f32("cl_forceavidemo") != 0.0,
         )?;
         if let Some(shot) = f.shot {
-            self.shot = Some(shot);
+            self.shot = Some(screenshot::Command::Screen(shot));
         }
         Some(f.step)
     }
@@ -4532,11 +4543,11 @@ impl App {
         }
     }
 
-    /// `fs_homepath/<fs_gamedir>/screenshots`: the mod's folder under
-    /// `fs_game`, else the base game's.
-    fn screenshot_dir(&self) -> std::path::PathBuf {
+    /// `fs_homepath/<fs_gamedir>`, where shots write: the mod's folder
+    /// under `fs_game`, else the base game's.
+    fn gamedir(&self) -> std::path::PathBuf {
         let game = self.fs_game.as_deref().unwrap_or(&self.mod_dir);
-        self.game_dir.join(game).join("screenshots")
+        self.game_dir.join(game)
     }
 
     /// The `fs_game` cvar as the directory to layer over `mod_dir`: the
@@ -4707,6 +4718,9 @@ impl App {
             r.load_world(&bsp, &self.fs)?;
         }
         self.world = Some(World {
+            name: map_base_name(
+                net::info_value_for_key(net.configstring(0), "mapname").unwrap_or_default(),
+            ),
             bsp,
             fog: None,
             materials: None,
@@ -4773,6 +4787,7 @@ impl App {
         self.reopen_cod2_fs()?;
         let bsp = self.load_cod2_map(&map)?;
         self.world = Some(World {
+            name: map_base_name(&map),
             bsp,
             fog: None,
             materials: None,
@@ -4824,6 +4839,7 @@ impl App {
             r.load_world(&bsp, &self.fs)?;
         }
         self.world = Some(World {
+            name: map_base_name(&map),
             bsp,
             fog: None,
             materials: Some(m.materials),
@@ -4913,6 +4929,7 @@ impl App {
             r.load_world(&bsp, &self.fs)?;
         }
         self.world = Some(World {
+            name: map_base_name(&map_name),
             bsp,
             fog: None,
             materials: Some(map.materials),
@@ -6041,7 +6058,7 @@ impl ApplicationHandler for App {
                                         // `screenshotJPEG <name>`, one word
                                         let args: Vec<String> =
                                             cmd.split(' ').skip(1).map(str::to_string).collect();
-                                        self.shot = screenshot::parse(true, &args);
+                                        self.shot = Some(screenshot::parse(true, &args));
                                     }
                                     if let Some(cmd) = play::demos::auto_command(
                                         tokens,
@@ -8580,8 +8597,9 @@ impl ApplicationHandler for App {
                 {
                     let lines = match cap {
                         Some(cap) => {
-                            let dir = self.screenshot_dir();
-                            self.shooter.save(self.game, &dir, &req, &cap)
+                            let dir = self.gamedir();
+                            let map = self.world.as_ref().map(|w| w.name.as_str());
+                            self.shooter.run(self.game, &dir, map, &req, &cap)
                         }
                         None => vec!["^1ERROR: cannot take screenshot".into()],
                     };

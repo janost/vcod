@@ -186,7 +186,9 @@ fixed `1000 / fps` ms a frame and writes each as a TGA.
 `screenshot` and `screenshotJPEG` write `screenshots/shotNNNN.tga` (top-down)
 or `.jpg` (quality 90) under the game folder, one count for both; a lone
 argument names the file, `silent` drops the `Wrote` line. The shot holds
-the frame before `r_gamma`, as D3D's front buffer does.
+the frame before `r_gamma`, as D3D's front buffer does. `screenshot
+levelshot` writes a resampled 128 x 128 `levelshots/<map>.tga`,
+`screenshot savegame <name>` a 512 x 512 `<name>.jpg`.
 
 ### Server
 
@@ -333,17 +335,18 @@ Ranked by how much a player notices, worst first.
    never asks the authorize server: an off-LAN client gets its challenge
    at once and its IP stands in for its ban guid. It does not send the
    master the status retail sends every 10 minutes. The client reads no
-   CD key from the registry; set `VCOD_CDKEY`
-   ([usage.md](../usage.md), "CD keys").
-2. **Screenshot odds.** `screenshot levelshot` and `savegame` write
-   nothing ([cod2-demos.md](../research/cod2-demos.md) 8).
-3. **Download names.** vcod-server refuses a `download` name with a `..`
+   CD key from the registry; set `VCOD_CDKEY` or enter it in the CD key
+   menu, which keeps it until vcod quits ([usage.md](../usage.md), "CD
+   keys").
+2. **Download names.** vcod-server refuses a `download` name with a `..`
    part and never reads from the filesystem root; retail serves both
    (cod2-protocol.md 17.5). A stock client never asks for either.
-4. **Voice options.** The Windows mixer dvars (`winvoice_mic_reclevel`,
-   `winvoice_mic_mute`, `winvoice_mic_scaler`), `winvoice_save_voice` and
-   the options page's record level meter do nothing
-   ([cod2-voice.md](../research/cod2-voice.md) 7).
+3. **Voice options.** `winvoice_mic_reclevel` scales the captured voice
+   where 1.3 sets the Windows mixer's recording volume;
+   `winvoice_mic_mute` (the mixer's playback mute for the microphone,
+   which vcod never plays back), `winvoice_save_voice` and the options
+   page's record level meter do nothing
+   ([cod2-voice.md](../research/cod2-voice.md) 4, 7).
 
 Pending human checks: the in-game script menus have not been checked on
 a GPU, and sound and voice chat have not been compared by ear.

@@ -206,7 +206,9 @@ The weapon byte is the client's own pick
   names (20), grenade indicators (21), mantle, hold breath and invalid
   command hints, XP and score bars (23).
 - The crosshair with the weapon's spread (Steady Aim's narrower), scope
-  overlays, a mounted gun's reticle, `cg_crosshairDynamic` (17).
+  overlays, a mounted gun's reticle, `cg_crosshairDynamic`, the team
+  colours over a player once `cg_friendlyNameFadeIn` or
+  `cg_enemyNameFadeIn` has passed (17).
 - World waypoints (Bomb Squad's icon over enemy claymores and C4) and
   offscreen ones with a pointer.
 - The killcam's letterbox and title; the prematch's countdown text. The
@@ -261,6 +263,9 @@ the clock a fixed `1000 / fps` ms a frame and writes each as a TGA.
 or `.jpg` (quality 90) under `main/` or the mod's folder, one count for
 both; a lone argument names the file, `silent` drops the `Wrote` line. The
 shot holds the frame before `r_gamma`, as 1.7's front buffer read does.
+`screenshot levelshot` writes a resampled 128 x 128
+`levelshots/<map>.tga`, `screenshot savegame <name>` a 512 x 512
+`<name>.jpg`.
 
 ### Server
 
@@ -450,11 +455,14 @@ Ranked by how much a player notices. The research-side lists are
 5. **Demos not yet swapped with a retail client.** The file layout is
    gated both ways against `iw3mp.exe`'s and a retail capture, but no
    retail client has played a vcod demo or recorded one for vcod
-   ([cod4-demos.md](../research/cod4-demos.md) 8). `screenshot levelshot` and
-   `savegame` write nothing.
-6. **Small menus.** The CD key menus are missing; Single Player's Yes
-   does nothing (this is a multiplayer client); the `winvoice_*` voice
-   settings are not read.
+   ([cod4-demos.md](../research/cod4-demos.md) 8).
+6. **Small menus.** Single Player's Yes does nothing (this is a
+   multiplayer client). Of the `winvoice_*` voice settings the record
+   level scales the captured voice (1.7 sets the Windows mixer) and the
+   scaler applies as 1.7's; the playback mute and `voice.wav` do nothing
+   ([cod4-voice.md](../research/cod4-voice.md) 4). The
+   CD key menu keeps a verified key until vcod quits, where 1.7 writes
+   the registry.
 7. **Server-side differences.** vcod-server never asks the authorize
    server, so it answers an off-LAN challenge at once where 1.7 waits on
    the authorize server (cod4-handshake.md 15). No PunkBuster (a stock

@@ -191,6 +191,7 @@ impl Cod2Client {
         let f = VoiceFrame {
             sending: may_send(held, active, sv_voice, cl_voice, rate),
             quality,
+            mic: crate::voice::shell_mic_gain(cx.shell),
         };
         self.voice
             .get_or_insert_with(|| VoiceChat::new(vcod_cod2::net::voice::SAMPLE_RATE))

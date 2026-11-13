@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use vcod_cod4::menuexp::atoi;
 use vcod_cod4::net::parse::Gamestate;
+use vcod_common::net::cdkey::{self, KeyGame};
 
 use super::ScriptMenus;
 
@@ -39,11 +40,16 @@ pub const SERVER_DVARS: [&str; 9] = [
 ];
 
 /// A dvar the front end keeps in the UI's table, vcod having no cvar for
-/// it: its own `ui_*` ones and the server settings Start New Server sets.
+/// it: its own `ui_*` ones, the server settings Start New Server sets and
+/// the CD key menu's five fields.
 pub fn ui_table_dvar(name: &str) -> bool {
     name.get(..3).is_some_and(|p| p.eq_ignore_ascii_case("ui_"))
         || SERVER_DVARS.iter().any(|d| d.eq_ignore_ascii_case(name))
+        || CDKEY_DVARS.iter().any(|d| d.eq_ignore_ascii_case(name))
 }
+
+/// `cdkey_menu`'s fields: the key's four quarters and its check.
+const CDKEY_DVARS: [&str; 5] = ["cdkey1", "cdkey2", "cdkey3", "cdkey4", "cdkey5"];
 
 /// What a front-end script asks the client to do.
 #[derive(Clone, Debug, PartialEq)]
@@ -277,6 +283,47 @@ impl ScriptMenus {
                 let is = self.dvar(&dvar).unwrap_or_default() == value;
                 if is == name.eq_ignore_ascii_case("closeMenuOnDvar") {
                     self.close_named(&menu, gs, out, depth + 1);
+                }
+            }
+            // `getCDKey` (`iw3mp.exe` 0x545cdf): the five fields cleared,
+            // then the key's quarters with 16 characters and the check with
+            // 4 (`CL_GetCDKey` 0x475ef0).
+            "getcdkey" => {
+                let (key, check) = cdkey::menu_key(KeyGame::Cod4);
+                for i in 1..=5 {
+                    self.set_dvar(&format!("cdkey{i}"), "");
+                }
+                if key.len() == 16 {
+                    for i in 0..4 {
+                        self.set_dvar(&format!("cdkey{}", i + 1), &key[i * 4..][..4]);
+                    }
+                }
+                if check.len() == 4 {
+                    self.set_dvar("cdkey5", &check);
+                }
+            }
+            // `verifyCDKey` (0x545e8a): the first four fields are the key,
+            // the fifth its check (`CL_CDKeyValidate` 0x4712e0);
+            // `ui_cdkeyvalid` takes the localized verdict and a valid key
+            // is set (`CL_SetCDKey` 0x475f70, whose registry write vcod
+            // leaves out).
+            "verifycdkey" => {
+                let field = |i: u32| self.dvar(&format!("cdkey{i}")).unwrap_or_default();
+                let key: String = (1..=4).map(field).collect();
+                let check = field(5);
+                let ok = cdkey::valid(&key, &check);
+                let msg = if ok {
+                    "EXE_CDKEYVALID"
+                } else {
+                    "EXE_CDKEYINVALID"
+                };
+                let text = (self.strings.as_ref())
+                    .and_then(|l| l.get(msg))
+                    .unwrap_or(msg)
+                    .to_string();
+                self.set_dvar("ui_cdkeyvalid", &text);
+                if ok {
+                    cdkey::store(KeyGame::Cod4, &key, &check, false);
                 }
             }
             // No single player, no list refresh in the front end's own

@@ -1957,6 +1957,43 @@ mod tests {
         assert_eq!(a.stats().misses, 0);
     }
 
+    /// `cdkey_menu` (cod4-front-end.md 7): the fields typed upper case
+    /// key by key, Verify sets `ui_cdkeyvalid` and keeps a valid key,
+    /// which the menu shows when it opens again.
+    #[test]
+    fn cod4_front_cd_key_menu_verifies_the_key() {
+        let Some((mut f, _shell)) = front() else {
+            return;
+        };
+        let gs = f.gs.clone();
+        f.menus.open_by_name("cdkey_menu", &gs);
+        assert_eq!(stack(&f).last().map(String::as_str), Some("cdkey_menu"));
+        assert_eq!(f.menus.dvar("cdkey1").as_deref(), Some(""));
+        for (i, part) in ["abcd", "2345", "efgh", "6789", "0882"].iter().enumerate() {
+            let dvar = format!("cdkey{}", i + 1);
+            click_item(&mut f, |it| {
+                it.dvar
+                    .as_deref()
+                    .is_some_and(|d| d.eq_ignore_ascii_case(&dvar))
+            });
+            assert!(f.menus.editing(), "{dvar} takes the keys");
+            assert!(f.key(KeyCode::KeyA, Some(part)), "{part}");
+        }
+        assert_eq!(f.menus.dvar("cdkey1").as_deref(), Some("ABCD"));
+        assert_eq!(f.menus.dvar("cdkey5").as_deref(), Some("0882"));
+        // the check's `onAccept` runs `verifyCDKey`
+        assert!(f.key(KeyCode::Enter, None));
+        let valid = f.menus.dvar("ui_cdkeyvalid").unwrap_or_default();
+        assert!(valid.to_ascii_lowercase().contains("valid"), "{valid}");
+        assert!(!valid.to_ascii_lowercase().contains("not"), "{valid}");
+        let (key, check) =
+            vcod_common::net::cdkey::menu_key(vcod_common::net::cdkey::KeyGame::Cod4);
+        assert_eq!((key.as_str(), check.as_str()), ("ABCD2345EFGH6789", "0882"));
+        f.menus.open_by_name("cdkey_menu", &gs);
+        assert_eq!(f.menus.dvar("cdkey3").as_deref(), Some("EFGH"));
+        vcod_common::net::cdkey::forget(vcod_common::net::cdkey::KeyGame::Cod4);
+    }
+
     /// Clicks the open menu's item whose action runs `uiScript <script>`.
     fn click_script(f: &mut Cod4Front, script: &str) {
         use vcod_cod4::scriptmenu::Cmd;

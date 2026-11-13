@@ -26,7 +26,10 @@ fn command(line: &str) -> Request {
     let Some(Effect::Screenshot { jpeg, args }) = effects.into_iter().next() else {
         panic!("{line}: no screenshot effect");
     };
-    screenshot::parse(jpeg, &args).expect("a shot")
+    match screenshot::parse(jpeg, &args) {
+        screenshot::Command::Screen(req) => req,
+        other => panic!("{line}: {other:?}"),
+    }
 }
 
 /// One frame from `eye` along `yaw` and `pitch` (radians, pitch up).

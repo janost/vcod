@@ -153,6 +153,7 @@ impl App {
         };
         self.world = Some(World {
             bsp,
+            name: crate::map_base_name(&map),
             fog: None,
             materials: None,
         });

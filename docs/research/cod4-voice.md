@@ -186,6 +186,20 @@ At the default 180 the angle test always passes, so Eavesdrop is a
   `eFlags` carries 0x200000, which pmove sets from the cmd's talk button
   (a menu or the console open). INFERRED (`CG_PlayerSprites`,
   `PM_UpdateViewAngles`).
+- The `winvoice_*` dvars (`iw3mp.exe` 0x57a92e..0x57aa37, flags 1 each):
+  `winvoice_mic_mute` bool 1 ("Mute the microphone" 0x6f5e58),
+  `winvoice_mic_reclevel` float 65535 in 0..65535 (0x70bec0),
+  `winvoice_save_voice` bool 0, `winvoice_mic_scaler` float 1 in
+  0.25..2 (0x70b2b4, 0x700c0c). VERIFIED (asm, strings). As on CoD2
+  (cod2-voice.md 4): the level, `ftol`'d to 16 bits (0x57aa5c, again on
+  change at 0x57ae21), sets the `VOLUME` control (0x50030001) of the `Mic`
+  (0x6f5f10) source under `DST_WAVEIN` (7) at 0x57b1d0, and the mute,
+  once at init (0x57aa92), the `MUTE` control (0x20010002) of `Mic` under
+  `DST_SPEAKERS` (4) at 0x57b860, both through `mixerSetControlDetails`
+  (0x57b330, 0x57b9b8). VERIFIED (asm). The scaler is held to 0.5
+  (0x6be648) .. 1.5 (0x70b4e0) into 0x71fb08 (0x57aedb..0x57af2e), and
+  the capture stores each sample as `_ftol2(sample * scaler)`'s low 16
+  bits (0x4ed14a..0x4ed165). VERIFIED (asm).
 
 ## 5. vcod
 
@@ -206,6 +220,11 @@ At the default 180 the angle test always passes, so Eavesdrop is a
   decode back to the tone) and not the enemy, `voice_global 1` reaches
   the enemy, the teammate's talker list names the talker, and the server
   stamps `lastVoiceTime`. VERIFIED live (vcod against vcod).
+- The `winvoice_*` dvars register archived at 1.7's defaults
+  (`Shell::register_cod4_options`); the voice page's record level slider
+  sets `winvoice_mic_reclevel`, and the capture applies the level and the
+  scaler as CoD2's does (section 4, `voice::mic_gain`).
 - Not done: the compass's voice fade for a talking friendly
-  (`beginVoiceFadeTime`), `winvoice_*` (the Windows mixer's record level,
-  mute and `voice.wav`), and the options page's record level meter.
+  (`beginVoiceFadeTime`), `winvoice_mic_mute` (the mixer's playback mute,
+  registered and unread), `winvoice_save_voice` (`voice.wav`), and the
+  options page's record level meter.

@@ -29,14 +29,24 @@ Ranked by how much a player notices.
   no retail client runs here. The framing is gated both ways against
   the binary and a retail capture (cod4-demos.md 8). S once a 1.7 client
   runs under Wine.
-- The CD key menus (`cdkey_menu`, `verifyCDKey`, `getCDKey`) and the
-  `winvoice_*` dvars (cod4-front-end.md 7, cod4-voice.md). S each.
-- Small HUD fades: `cg_enemyNameFadeIn`'s wait on the crosshair colour,
-  and the compass's voice fade, drawn off `isTalking` but not checked
-  against a retail capture with a talker (cod4-hud.md 15.9). S.
+- Small HUD fades: the compass's voice fade, drawn off `isTalking` but
+  not checked against a retail capture with a talker (cod4-hud.md 15.9).
+  S.
+- The crosshair name and the friendly names over heads (0x42e2a0,
+  0x42e1bd) are not drawn; their scan, times and alpha are read
+  (cod4-hud.md 17). M.
 
 ## Fixed
 
+- The crosshair never took the team colours live: 1.7's client sets
+  `weapFlags` 8 and 0x10 off its own scan each frame, which vcod now runs,
+  with the `cg_*NameFadeIn` wait before the colour (cod4-hud.md 17).
+- The `winvoice_*` dvars were not registered and the voice page's record
+  level slider sat greyed; they register at 1.7's defaults and the
+  capture applies the level and the scaler (cod4-voice.md 4, 5).
+- The CD key menu opened with greyed fields and no `getCDKey` or
+  `verifyCDKey`; it now shows, checks and keeps the key as 1.7's does,
+  minus the registry (cod4-front-end.md 7).
 - The prediction clipped other players as boxes where vcod-server clips
   capsules, so walking into a player at an angle corrected by up to 20
   units. It now clips 1.7's client capsule, a unit inside the server's
@@ -137,7 +147,8 @@ The 2026-10-26 audit's numbering, kept because other docs cite it.
 15. Fixed.
 16. Fixed.
 17. Fixed.
-18. Voice chat: done (cod4-voice.md). Left: `winvoice_*`.
+18. Voice chat: done (cod4-voice.md), `winvoice_*` included but the
+    playback mute and `voice.wav`.
 
 ## Not gaps
 

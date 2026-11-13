@@ -124,6 +124,8 @@ pub(crate) struct Cod4Client {
     /// The frame draws in third person (`play::cod4_third_person`).
     third_person: bool,
     shock_look: crate::play::cod4_shock::Look,
+    /// `CG_ScanForCrosshairEntity`'s target and its times.
+    crosshair: crate::cod4_crosshair::CrosshairTarget,
     turn: crate::play::cod2_shock::TurnCap,
     /// The voices `playLocalSound` started, by alias, for `stopLocalSound`.
     local_voices: HashMap<String, crate::audio::voices::VoiceId>,
@@ -287,6 +289,7 @@ impl Cod4Client {
             damage_roll: 0.0,
             third_person: false,
             shock_look: crate::play::cod4_shock::Look::NONE,
+            crosshair: Default::default(),
             turn: Default::default(),
             local_voices: HashMap::new(),
             trails_made: HashSet::new(),
@@ -630,6 +633,21 @@ impl Cod4Client {
         // `BG_CalculateView_DamageKick` turns the drawn view (pitch, roll)
         // and the gun its own way, never the cmd.
         let mut scene = scene;
+        // `CG_ScanForCrosshairEntity` sets `weapFlags` 8 and 0x10 itself
+        // each frame (0x42dbfb) and keeps when the crosshair came onto
+        // the player it names.
+        let range = self
+            .hud
+            .enemy_crosshair_range(&self.session, scene.view.view_weapon());
+        let fades = crate::cod4_crosshair::NameFades::read(cx.shell);
+        let bits = self.crosshair.scan(
+            scene.crosshair_hit.as_ref(),
+            range,
+            self.render_time,
+            &fades,
+        );
+        scene.view.weap_flags = scene.view.weap_flags & !0x18 | bits;
+        scene.view.name_seen = self.crosshair.seen();
         let dk = self.hud.damage_kick();
         let since = self.render_time - dk.time;
         scene.view.damage = (dk.time != 0).then_some((dk, since));
@@ -826,6 +844,7 @@ impl Cod4Client {
         let f = VoiceFrame {
             sending: may_send(held, active, sv_voice, cl_voice, rate),
             quality,
+            mic: crate::voice::shell_mic_gain(cx.shell),
         };
         self.voice
             .get_or_insert_with(|| VoiceChat::new(vcod_cod4::net::voice::SAMPLE_RATE))

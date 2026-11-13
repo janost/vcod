@@ -311,6 +311,29 @@ Read out of `gfx_d3d_mp_x86_s.dll` (image base `0x10000000`) and
   gamma pass's scene before the ramp, the next frame it draws.
 - There is no `cg_autoscreenshot` (VERIFIED, no such string in the exe or
   the DLL); nothing shoots at intermission or on a server command.
+- `levelshot` (`0x10026680`) names the file off the world's base name
+  (`rgp.world` `0x101d1b9c`, the pointer at `+4`; `R_LevelShot` on the Mac
+  build) and takes `R_TakeResampledScreenshot(128, 128, 3, 18)`
+  (`0x10026500`). Its header sets only bytes 2 (2), 12 and 14 (`0x80`) and
+  16 (24): byte 17 stays 0 over the capture's top-down rows (VERIFIED,
+  `0x100266c1`..`0x100266eb`), so a reader that honours the origin bit
+  shows it upside down. `Wrote %s` follows (VERIFIED, `0x10026707`).
+- `savegame` with three arguments and a non-empty second (`0x10026800`
+  ..`0x1002681a`) formats `%s.jpg` (`0x10196f7c`), takes a 512 x 512
+  resample with no header and writes it through `R_SaveJpg(name, 90, 512,
+  512, buf)` (`0x10026759`..`0x1002676b`), with no line (VERIFIED).
+- `R_TakeResampledScreenshot` reads the front buffer at the window's size
+  (`0x10026552`) and resamples it in place (`0x10026100`): the rows to the
+  target width, then the columns to its height (VERIFIED, the call order).
+  A shrinking pass (`0x10025d90`) is an area average: each source pixel
+  weighs the target count, each target covers the source count, the sum
+  times `1.0f / n` (`0x1019bd00`) plus `2^-30` (`0x1019be08`) rounded by
+  `fistp`; a growing one (`0x10025f00`) blends the two nearest source
+  pixels at the target's centre in units of `1 / 2m`, scale `0.5f / m`
+  (`0x1019bd38`), the last pixel copied past the end (VERIFIED for the
+  constants and loops; INFERRED, the Mac build's `R_DownsamplePixelData`
+  and `R_UpsamplePixelData`, for the weights). vcod runs the same passes
+  (`screenshot::resample`); its pixels are its own frame's.
 
 ### 8.3 `cl_avidemo`
 

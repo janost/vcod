@@ -1358,6 +1358,20 @@ impl Cod4Hud {
         out
     }
 
+    /// Weapon `weapon`'s `enemyCrosshairRange` off the zones' defs; 0
+    /// before they load or for no weapon.
+    pub(crate) fn enemy_crosshair_range(&self, s: &Cod4Session, weapon: u32) -> f32 {
+        let (Some(Some(l)), Some(gs)) = (&self.loaded, s.gamestate()) else {
+            return 0.0;
+        };
+        let list = crate::play::cod4::weapon_list(gs);
+        (weapon as usize)
+            .checked_sub(1)
+            .and_then(|i| list.get(i))
+            .and_then(|n| l.weapon_hud.get(n))
+            .map_or(0.0, |d| d.reticle.enemy_range)
+    }
+
     /// The crosshair and a sight's overlay (`cod4_crosshair`) off the
     /// drawn playerstate `ps` at a fov whose half tangents are `tan`
     /// (x, y); a gunner's off the turret he is locked to; nothing until
