@@ -80,9 +80,66 @@ impl Frame {
         }
     }
 
+    /// [`Frame::relative_to`] as 1.5b's and UO's `G_CalcTagAxis` rounds it
+    /// (UO 0x78982, 1.5b 0x6c27f): `MatrixInverseOrthogonal43` (UO
+    /// 0x3c6ec) transposes the parent and turns its negated origin through
+    /// the transpose, each component's sum rounded once
+    /// (`MatrixTransformVector` 0x3cd97), then [`Frame::within_stored`].
+    pub fn relative_to_stored(&self, parent: &Frame) -> Frame {
+        let [a0, a1, a2] = parent.axis.map(|a| a.as_dvec3());
+        let axis = [0, 1, 2].map(|k| Vec3::new(a0[k] as f32, a1[k] as f32, a2[k] as f32));
+        let n = (-parent.origin).as_dvec3();
+        let origin = Vec3::new(
+            ((n.x * a0.x + n.y * a0.y) + n.z * a0.z) as f32,
+            ((n.x * a1.x + n.y * a1.y) + n.z * a1.z) as f32,
+            ((n.x * a2.x + n.y * a2.y) + n.z * a2.z) as f32,
+        );
+        self.within_stored(&Frame { axis, origin })
+    }
+
     /// `AxisToAngles`, the way the link writes `r.currentAngles`.
     pub fn angles(&self) -> [f32; 3] {
         axis_to_angles(self.axis.map(|v| v.to_array()))
+    }
+
+    /// [`Frame::angles`] as 1.5b's and UO's `AxisToAngles` runs it (UO
+    /// 0x3e350, 1.5b 0x37100): pitch and yaw `vectoangles` of the forward;
+    /// the left turned back by `-yaw` then `-pitch`, each angle's radians
+    /// `(float)(-a * pi / 180)`, its `fsincos` and each component stored; the roll `vectosignedpitch` of that (UO 0x3ad1d) and its
+    /// sign by the turned left's y (cod11-movers.md 16, "The tag on 1.5
+    /// and UO").
+    pub fn angles_stored(&self) -> [f32; 3] {
+        let st = |x: f64| x as f32;
+        let [fwd, left, _] = self.axis;
+        let [pitch, yaw, _] = crate::game::builtins::math::vectoangles(fwd.to_array());
+        let sin_cos = |a: f32| {
+            let r = f64::from(st(f64::from(-a) * std::f64::consts::PI / 180.0));
+            (f64::from(st(r.sin())), f64::from(st(r.cos())))
+        };
+        let (s, c) = sin_cos(yaw);
+        let (lx, ly, lz) = (f64::from(left.x), f64::from(left.y), f64::from(left.z));
+        let x1 = f64::from(st(c * lx - s * ly));
+        let y1 = st(s * lx + c * ly);
+        let (s, c) = sin_cos(pitch);
+        let x2 = f64::from(st(s * lz + c * x1));
+        let z2 = f64::from(st(c * lz - s * x1));
+        let y1d = f64::from(y1);
+        let r = if y1 == 0.0 && x2 == 0.0 {
+            if z2 > 0.0 { -90.0 } else { 90.0 }
+        } else {
+            let len = f64::from(st((x2 * x2 + y1d * y1d).sqrt()));
+            st(z2.atan2(len) * -180.0 / std::f64::consts::PI)
+        };
+        let roll = if y1 < 0.0 {
+            if r < 0.0 {
+                st(f64::from(r) + 180.0)
+            } else {
+                st(f64::from(r) - 180.0)
+            }
+        } else {
+            -r
+        };
+        [pitch, yaw, roll]
     }
 }
 
@@ -335,6 +392,28 @@ fn model_bone(
     Some(vcod_common::skeleton::PoseBuffer::new(&skel).bone_world(&skel, bone))
 }
 
+/// [`model_bone`] as 1.5b's and UO's skeleton build leaves it
+/// (`PoseBuffer::stored_worlds` over the bind [`Record`]s a DObj with no
+/// anim tree holds): its origin and its matrix's axes in model space. 1.1d's
+/// tags match it to the print too (cod11-movers.md 16, "The tag on 1.5 and
+/// UO").
+///
+/// [`Record`]: vcod_common::skeleton::Record
+fn model_bone_stored(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    model: &str,
+    id: EntId,
+    tag: &str,
+) -> Option<(Vec3, [Vec3; 3])> {
+    let fs = host.fs.clone()?;
+    let assembly = entity_assembly(host, cx, model, id)?;
+    let skel = host.hit_rigs.rig(&*fs, &assembly)?;
+    let bone = host.hit_rigs.bone(&*fs, &assembly, &skel, tag)?;
+    let b = vcod_common::skeleton::PoseBuffer::new(&skel).stored_worlds(&skel)?[bone];
+    Some((b.origin, b.axes))
+}
+
 /// [`model_bone`] on CoD4: the zones' bind-pose tags
 /// (`Cod4HostState::model_tags`), the body's first, then each `attach`ed
 /// model's placed at the body tag it hangs on, as the DObj lists them
@@ -405,9 +484,7 @@ fn tag_frame(
     if let Some(slot) = client_slot(host, parent) {
         // The four-argument form only looks the bone up (0x6631b); posing it
         // would fix the frame's skeleton early.
-        let stored = pose
-            && vcod_common::patch::Arith::for_protocol(host.defs.proto)
-                == vcod_common::patch::Arith::Stored;
+        let stored = pose && stored_arith(host);
         let found = if stored && let Some((o, axis)) = client_bone_stored(host, slot, tag) {
             // `G_CalcTagParentAxis`: the tag's matrix times the parent's
             // stored axis, each element rounded once.
@@ -431,11 +508,37 @@ fn tag_frame(
     if model.is_empty() {
         return Err(LinkError::NoModel);
     }
-    let (o, r) = model_bone(host, cx, &model, parent, tag).ok_or_else(|| LinkError::NoTag {
+    let no_tag = || LinkError::NoTag {
         tag: tag.to_string(),
         model: model.clone(),
-    })?;
-    Ok(Frame::from_quat(o, r).within(&base))
+    };
+    if !matches!(host.ext, crate::game::host::HostExt::Cod1) {
+        let (o, r) = model_bone(host, cx, &model, parent, tag).ok_or_else(no_tag)?;
+        return Ok(Frame::from_quat(o, r).within(&base));
+    }
+    // CoD1's DObj with no anim tree holds its bind records; 1.1d's tag
+    // reads them too (cod11-movers.md 16, "The tag on 1.5 and UO").
+    let (o, axis) = model_bone_stored(host, cx, &model, parent, tag).ok_or_else(no_tag)?;
+    if !cod1_stored(host) {
+        return Ok(Frame { axis, origin: o }.within(&base));
+    }
+    let angles = vector(host, cx, parent, "angles");
+    let base = Frame {
+        axis: angles_to_axis(angles.into()),
+        origin: base.origin,
+    };
+    Ok(Frame { axis, origin: o }.within_stored(&base))
+}
+
+/// Whether the server's build rounds as 1.5b's and UO's -O0 engines do
+/// (`Arith::Stored`).
+fn stored_arith(host: &GameHost) -> bool {
+    vcod_common::patch::Arith::for_protocol(host.defs.proto) == vcod_common::patch::Arith::Stored
+}
+
+/// [`stored_arith`] on a CoD1 host: 1.5b's or UO's game module.
+fn cod1_stored(host: &GameHost) -> bool {
+    matches!(host.ext, crate::game::host::HostExt::Cod1) && stored_arith(host)
 }
 
 /// Whether `id`'s model carries `tag`, the `DObjGetBoneIndex` test
@@ -503,6 +606,7 @@ pub fn link(
     let frame = frame?;
     let rel = match offset {
         Some((origin, angles)) => Frame::from_pose(origin, angles),
+        None if cod1_stored(host) => field_frame(host, cx, child).relative_to_stored(&frame),
         None => field_frame(host, cx, child).relative_to(&frame),
     };
     host.links.insert(
@@ -684,9 +788,15 @@ fn run_one(host: &mut GameHost, cx: &mut Cx, links: &Links, id: EntId, fresh: bo
         base.origin = p;
     }
     let frame = tag_frame(host, cx, parent, base, link.tag.as_deref(), true).unwrap_or(base);
-    let placed = link.rel.within(&frame);
-    let origin = placed.origin.to_array();
-    let angles = placed.angles();
+    // `G_SetFixedLink`'s mode 0 (UO 0x78a69): `MatrixMultiply43` then
+    // `AxisToAngles`.
+    let (origin, angles) = if cod1_stored(host) {
+        let placed = link.rel.within_stored(&frame);
+        (placed.origin.to_array(), placed.angles_stored())
+    } else {
+        let placed = link.rel.within(&frame);
+        (placed.origin.to_array(), placed.angles())
+    };
     for (name, v) in [("origin", origin), ("angles", angles)] {
         let atom = cx.intern_folded(name);
         let _ = host.write_field(cx, id, atom, Value::Vector(v));
@@ -703,7 +813,7 @@ fn run_one(host: &mut GameHost, cx: &mut Cx, links: &Links, id: EntId, fresh: bo
     ) {
         world.collision.set_model_pose(
             model as usize,
-            placed.origin,
+            Vec3::from(origin),
             crate::game::mover::snap_angles(Vec3::from(angles)),
         );
     }

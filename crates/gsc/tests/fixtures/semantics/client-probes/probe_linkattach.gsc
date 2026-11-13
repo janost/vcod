@@ -11,7 +11,9 @@
 //	after it (att_second); detachAll (att_detachall); a link on the
 //	attachment's own root bone "tag_weapon" (att_root). Ends on a link to
 //	"tag_flash" with nothing attached, whose fatal is the last measurement.
-//	Run by tools/run_probe.sh with no client.
+//	Run by tools/run_probe.sh with no client. With `probe_exact 1` every
+//	vector prints as integer parts and exact remainders instead
+//	(`PROBE x ...`, the same columns), for the 1.5 and UO captures.
 
 main()
 {
@@ -77,9 +79,31 @@ phases()
 sample(phase, m, k1, k2, secs)
 {
 	frames = secs * 20;
+	exact = getcvar("probe_exact") == "1";
 	for (i = 0; i < frames; i++)
 	{
+		if (exact)
+		{
+			logPrint("PROBE x " + phase + " " + getTime() + " " + exact3(m.origin) + " " + exact3(m.angles) + " " + exact3(k1.origin) + " " + exact3(k1.angles) + " " + exact3(k2.origin) + " " + exact3(k2.angles) + "\n");
+			wait 0.05;
+			continue;
+		}
 		logPrint("PROBE m " + phase + " " + getTime() + " " + m.origin + " " + m.angles + " " + k1.origin + " " + k1.angles + " " + k2.origin + " " + k2.angles + "\n");
 		wait 0.05;
 	}
+}
+
+//	A float as its integer part and the remainder, which the subtraction
+//	keeps exact and `%g` prints to below the float's step. gsc has no
+//	`int`: the cvar's atoi of the printed float truncates it.
+exact(f)
+{
+	setcvar("probe_int", "" + f);
+	i = getcvarint("probe_int");
+	return i + " " + (f - i);
+}
+
+exact3(v)
+{
+	return exact(v[0]) + " " + exact(v[1]) + " " + exact(v[2]);
 }
