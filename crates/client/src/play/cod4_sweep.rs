@@ -26,6 +26,10 @@
 //! Each job is a server thread, a client thread and the renderer's; keep
 //! the whole run inside eight cores with `taskset -c 0-7`, which also
 //! caps the nav build's workers (`available_parallelism`).
+//!
+//! The `cod4_live_*` tests at the end share the sweep's [`rig`] and run
+//! in the suite on `run_held`'s clock (docs/dev/testing.md, CoD4 live
+//! tests).
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -38,6 +42,7 @@ use std::time::{Duration, Instant};
 use glam::Vec3;
 
 use super::cod4::Cod4Session;
+use super::cod4::tests::{clk_now, clk_sleep, run_held, since as clk_since};
 use super::cod4_menus::Join as MenuJoin;
 use crate::play::input::Action;
 use vcod_cod4::net::conn::Cp;
@@ -1071,7 +1076,8 @@ struct Rig {
 }
 
 /// Joins `addr` through the stock menus and loads `map` as `main` does,
-/// into a headless 320 x 240 renderer when there is an adapter.
+/// into a headless 320 x 240 renderer when there is an adapter. Waits on
+/// the thread's `sim` clock under `run_held`, else the wall.
 fn rig(root: &Path, map: &str, addr: std::net::SocketAddr) -> anyhow::Result<Rig> {
     use crate::audio::{AudioOpts, AudioSystem, bank};
     use crate::renderer::Renderer;
@@ -1080,10 +1086,10 @@ fn rig(root: &Path, map: &str, addr: std::net::SocketAddr) -> anyhow::Result<Rig
         class: Some(super::cod4_menus::DEFAULT_CLASS.into()),
     };
     let mut s = Cod4Session::connect(addr, "sweeper", Cp::Bare, join)?;
-    let t0 = Instant::now();
-    while s.gamestate().is_none() && t0.elapsed() < Duration::from_secs(60) {
-        s.step(t0.elapsed().as_secs_f64() * 1000.0)?;
-        std::thread::sleep(Duration::from_millis(16));
+    let t0 = clk_now();
+    while s.gamestate().is_none() && clk_since(t0) < Duration::from_secs(60) {
+        s.step(clk_since(t0).as_secs_f64() * 1000.0)?;
+        clk_sleep(Duration::from_millis(16));
     }
     anyhow::ensure!(s.gamestate().is_some(), "no gamestate");
     let mut m = crate::cod4_fly::load(root, None, map, &s.entity_assets())?;
@@ -1152,9 +1158,9 @@ fn rig(root: &Path, map: &str, addr: std::net::SocketAddr) -> anyhow::Result<Rig
 /// A menu left up past its auto answer (a new gametype's team menu)
 /// takes auto-assign, or the first class.
 fn answer_menu(c: &mut crate::cod4_client::Cod4Client, since: &mut Option<Instant>) {
-    let now = Instant::now();
+    let now = clk_now();
     let at = *since.get_or_insert(now);
-    if at.elapsed() > Duration::from_secs(3)
+    if now.saturating_duration_since(at) > Duration::from_secs(3)
         && let Some(gs) = c.session.gamestate().cloned()
     {
         let responses = c.session.menus.open().unwrap().responses.clone();
@@ -1925,65 +1931,84 @@ fn report(results: &BTreeMap<String, BTreeMap<String, Pair>>, gametypes: &[Strin
     o
 }
 
+/// vcod-server's war on mp_crash for a live test, loaded: `hostname`
+/// names it, `bots` non-shooting bots join.
+fn crash_war(
+    install: &vcod_cod4::install::Install,
+    hostname: &str,
+    cheats: bool,
+    bots: usize,
+) -> vcod_server::cod4::Cod4Server {
+    use vcod_server::cod4::{Cod4Config, Cod4Server};
+    let mut sv = Cod4Server::new(
+        Cod4Config {
+            map: "mp_crash".into(),
+            gametype: "war".into(),
+            hostname: hostname.into(),
+            max_clients: 4,
+        },
+        7,
+    );
+    sv.set_cvar("sv_pure", "0");
+    if cheats {
+        sv.set_cvar("sv_cheats", "1");
+    }
+    sv.set_cvar("scr_game_matchstarttime", "1");
+    sv.set_cvar("scr_game_playerwaittime", "1");
+    sv.load(Some(install)).unwrap();
+    if bots > 0 {
+        sv.add_bots(bots, false);
+    }
+    sv
+}
+
+/// [`run_held`]'s frame hook for these tests: the console each frame, as
+/// the dedicated server's loop drains it.
+fn drain(sv: &mut vcod_server::cod4::Cod4Server, at: Instant, _: &mut Instant) -> bool {
+    use vcod_server::engine::GameModule;
+    <vcod_server::cod4::Cod4Game as GameModule>::drain_console(sv, at);
+    true
+}
+
 /// The soak's first-use hitches: a surface's first bullet mark built its
 /// material (images, stages, pipelines) in the frame it landed, and an
 /// effect's first play loaded its sprite images, 15 to 250 ms each on
 /// lavapipe. With the level's effects taken the client builds both up
 /// front: a live client on vcod-server's mp_crash then fires into the
 /// ground, its tracers fly and marks land, and no mark shader registers
-/// and no fx image loads in play. Needs `COD4_DIR` and an adapter.
+/// and no fx image loads in play. Runs on [`run_held`]'s clock. Needs
+/// `COD4_DIR` and an adapter.
 #[test]
 fn cod4_live_first_impact_marks_build_nothing_in_play() {
-    use crate::cod2_client::Cod2Frame;
-    use vcod_server::cod4::{Cod4Config, Cod4Server, FRAME_MS};
     let Some(install) = vcod_cod4::testing::cod4_install() else {
         return;
     };
-    let done = Arc::new(AtomicBool::new(false));
-    let (addr_tx, addr_rx) = std::sync::mpsc::channel();
-    let server = {
-        let done = done.clone();
-        std::thread::spawn(move || {
-            use vcod_server::cod4::Cod4Game;
-            use vcod_server::engine::GameModule;
-            let install = vcod_cod4::testing::cod4_install().unwrap();
-            let mut sv = Cod4Server::new(
-                Cod4Config {
-                    map: "mp_crash".into(),
-                    gametype: "war".into(),
-                    hostname: "marks".into(),
-                    max_clients: 4,
-                },
-                7,
-            );
-            sv.set_cvar("sv_pure", "0");
-            sv.set_cvar("scr_game_matchstarttime", "1");
-            sv.set_cvar("scr_game_playerwaittime", "1");
-            sv.load(Some(&install)).unwrap();
-            let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-            sock.set_nonblocking(true).unwrap();
-            addr_tx.send(sock.local_addr().unwrap()).unwrap();
-            let mut buf = [0u8; 4096];
-            let mut next = Instant::now();
-            while !done.load(Ordering::Relaxed) {
-                while let Ok((n, from)) = sock.recv_from(&mut buf) {
-                    sv.handle_packet(from, &buf[..n], Instant::now());
-                }
-                let now = Instant::now();
-                if now >= next {
-                    next = now + Duration::from_millis(FRAME_MS as u64);
-                    <Cod4Game as GameModule>::drain_console(&mut sv, now);
-                    sv.tick_frames(now, 1);
-                }
-                for (to, p) in sv.take_outgoing() {
-                    let _ = sock.send_to(&p, to);
-                }
-                std::thread::sleep(Duration::from_millis(1));
-            }
-        })
+    let root = install.root().to_path_buf();
+    let _slot = crate::renderer::pipeline_check::live_session_slot();
+    let mut sv = crash_war(&install, "marks", false, 0);
+    let Some(seen) = run_held(&mut sv, move |addr| first_marks(&root, addr), drain) else {
+        return;
     };
-    let addr = addr_rx.recv_timeout(Duration::from_secs(300)).unwrap();
-    let rig = rig(install.root(), "mp_crash", addr).unwrap();
+    let warm = seen.warm.expect("the level's effects were never taken");
+    assert!(seen.marks > 0, "no impact mark landed");
+    assert_eq!(seen.shaders, warm.0, "a mark shader registered in play");
+    assert_eq!(seen.images, warm.1, "an fx image loaded in play");
+    assert!(warm.0 > 0 && warm.1 > 0, "nothing built with the level");
+}
+
+struct MarksSeen {
+    /// Mark shaders and fx images once the level's effects were taken.
+    warm: Option<(usize, usize)>,
+    marks: usize,
+    /// Mark shaders and fx images at the end.
+    shaders: usize,
+    images: usize,
+}
+
+/// [`cod4_live_first_impact_marks_build_nothing_in_play`]'s client; `None`
+/// without an adapter.
+fn first_marks(root: &Path, addr: SocketAddr) -> Option<MarksSeen> {
+    use crate::cod2_client::Cod2Frame;
     let Rig {
         mut c,
         fs,
@@ -1993,25 +2018,23 @@ fn cod4_live_first_impact_marks_build_nothing_in_play() {
         ui,
         mut audio,
         mut fx,
-    } = rig;
+    } = rig(root, "mp_crash", addr).unwrap();
     let Some((mut r, _)) = renderer else {
-        done.store(true, Ordering::Relaxed);
-        server.join().unwrap();
-        return;
+        c.session.disconnect();
+        return None;
     };
     let mut cam = crate::camera::FlyCamera::new(Vec3::ZERO, 0.0);
-    let start = Instant::now();
+    let start = clk_now();
     let mut last = start;
     let mut menu_since = None;
-    // (mark shaders once the level's effects were taken, marks seen)
     let mut warm: Option<(usize, usize)> = None;
     let mut marks = 0;
     let mut held = false;
-    while start.elapsed() < Duration::from_secs(120) && marks == 0 {
-        let now = Instant::now();
+    while clk_since(start) < Duration::from_secs(120) && marks == 0 {
+        let now = clk_now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let time = start.elapsed().as_secs_f32();
+        let time = now.duration_since(start).as_secs_f32();
         let frozen = c
             .session
             .client()
@@ -2055,16 +2078,15 @@ fn cod4_live_first_impact_marks_build_nothing_in_play() {
         if warm.is_some() {
             marks = r.mark_count();
         }
-        std::thread::sleep(Duration::from_millis(16));
+        clk_sleep(Duration::from_millis(16));
     }
     c.session.disconnect();
-    done.store(true, Ordering::Relaxed);
-    server.join().unwrap();
-    let warm = warm.expect("the level's effects were never taken");
-    assert!(marks > 0, "no impact mark landed");
-    assert_eq!(r.mark_shaders(), warm.0, "a mark shader registered in play");
-    assert_eq!(r.fx_images(), warm.1, "an fx image loaded in play");
-    assert!(warm.0 > 0 && warm.1 > 0, "nothing built with the level");
+    Some(MarksSeen {
+        warm,
+        marks,
+        shaders: r.mark_shaders(),
+        images: r.fx_images(),
+    })
 }
 
 /// The level's first-use builds run with the load, not in its first frames
@@ -2072,59 +2094,47 @@ fn cod4_live_first_impact_marks_build_nothing_in_play() {
 /// war beside two bots, and once [`rig`]'s prewarm has run the script
 /// menus are loaded and every model the play then draws (bodies, heads,
 /// weapons) was uploaded already; only a model with parts hidden (a
-/// shot-up car) or the stand-in box may upload in play. Needs `COD4_DIR` and an adapter.
+/// shot-up car) or the stand-in box may upload in play. Runs on
+/// [`run_held`]'s clock. Needs `COD4_DIR` and an adapter.
 #[test]
 fn cod4_live_join_builds_its_models_with_the_load() {
-    use crate::cod2_client::Cod2Frame;
-    use vcod_server::cod4::{Cod4Config, Cod4Server, FRAME_MS};
     let Some(install) = vcod_cod4::testing::cod4_install() else {
         return;
     };
-    let done = Arc::new(AtomicBool::new(false));
-    let (addr_tx, addr_rx) = std::sync::mpsc::channel();
-    let server = {
-        let done = done.clone();
-        std::thread::spawn(move || {
-            use vcod_server::cod4::Cod4Game;
-            use vcod_server::engine::GameModule;
-            let install = vcod_cod4::testing::cod4_install().unwrap();
-            let mut sv = Cod4Server::new(
-                Cod4Config {
-                    map: "mp_crash".into(),
-                    gametype: "war".into(),
-                    hostname: "prewarm".into(),
-                    max_clients: 4,
-                },
-                7,
-            );
-            sv.set_cvar("sv_pure", "0");
-            sv.set_cvar("scr_game_matchstarttime", "1");
-            sv.set_cvar("scr_game_playerwaittime", "1");
-            sv.load(Some(&install)).unwrap();
-            sv.add_bots(2, false);
-            let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-            sock.set_nonblocking(true).unwrap();
-            addr_tx.send(sock.local_addr().unwrap()).unwrap();
-            let mut buf = [0u8; 4096];
-            let mut next = Instant::now();
-            while !done.load(Ordering::Relaxed) {
-                while let Ok((n, from)) = sock.recv_from(&mut buf) {
-                    sv.handle_packet(from, &buf[..n], Instant::now());
-                }
-                let now = Instant::now();
-                if now >= next {
-                    next += Duration::from_millis(FRAME_MS as u64);
-                    <Cod4Game as GameModule>::drain_console(&mut sv, now);
-                    sv.tick_frames(now, 1);
-                }
-                for (to, p) in sv.take_outgoing() {
-                    let _ = sock.send_to(&p, to);
-                }
-                std::thread::sleep(Duration::from_millis(1));
-            }
-        })
+    let root = install.root().to_path_buf();
+    let _slot = crate::renderer::pipeline_check::live_session_slot();
+    let mut sv = crash_war(&install, "prewarm", false, 2);
+    let Some(seen) = run_held(&mut sv, move |addr| join_models(&root, addr), drain) else {
+        return;
     };
-    let addr = addr_rx.recv_timeout(Duration::from_secs(300)).unwrap();
+    assert!(seen.menus, "the script menus waited for the first frame");
+    assert!(
+        seen.bodies >= 2,
+        "the bots were never posed ({})",
+        seen.bodies
+    );
+    let late: Vec<_> = seen
+        .after
+        .difference(&seen.warm)
+        .filter(|k| !k.contains('#') && *k != BOX_KEY)
+        .collect();
+    assert!(late.is_empty(), "uploaded in play: {late:?}");
+}
+
+struct JoinSeen {
+    /// The script menus were loaded with the level.
+    menus: bool,
+    /// The models uploaded with the load, and by the end.
+    warm: std::collections::BTreeSet<String>,
+    after: std::collections::BTreeSet<String>,
+    /// The most bodies one frame posed.
+    bodies: usize,
+}
+
+/// [`cod4_live_join_builds_its_models_with_the_load`]'s client; `None`
+/// without an adapter.
+fn join_models(root: &Path, addr: SocketAddr) -> Option<JoinSeen> {
+    use crate::cod2_client::Cod2Frame;
     let Rig {
         mut c,
         fs,
@@ -2134,25 +2144,24 @@ fn cod4_live_join_builds_its_models_with_the_load() {
         ui,
         mut audio,
         mut fx,
-    } = rig(install.root(), "mp_crash", addr).unwrap();
+    } = rig(root, "mp_crash", addr).unwrap();
     let Some((mut r, _)) = renderer else {
-        done.store(true, Ordering::Relaxed);
-        server.join().unwrap();
-        return;
+        c.session.disconnect();
+        return None;
     };
     let menus = c.menus_loaded();
     let (warm, _) = c.uploads();
     let mut cam = crate::camera::FlyCamera::new(Vec3::ZERO, 0.0);
-    let start = Instant::now();
+    let start = clk_now();
     let mut last = start;
     let mut menu_since = None;
     let mut bodies = 0;
     let mut since_bodies = None;
     // Three seconds of play past the first frame that posed both bots.
-    while start.elapsed() < Duration::from_secs(90)
-        && since_bodies.is_none_or(|t: Instant| t.elapsed() < Duration::from_secs(3))
+    while clk_since(start) < Duration::from_secs(90)
+        && since_bodies.is_none_or(|t: Instant| clk_since(t) < Duration::from_secs(3))
     {
-        let now = Instant::now();
+        let now = clk_now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
         if c.session.spawn().is_none() && c.session.menus.open().is_some() {
@@ -2167,28 +2176,24 @@ fn cod4_live_join_builds_its_models_with_the_load() {
             ui: &ui,
             r: &mut r,
             console_open: false,
-            time: start.elapsed().as_secs_f32(),
+            time: now.duration_since(start).as_secs_f32(),
             dt,
         };
         c.pump(&mut cx, &mut cam);
         c.session.take_commands();
         bodies = bodies.max(c.uploads().1);
         if bodies >= 2 && since_bodies.is_none() {
-            since_bodies = Some(Instant::now());
+            since_bodies = Some(clk_now());
         }
-        std::thread::sleep(Duration::from_millis(16));
+        clk_sleep(Duration::from_millis(16));
     }
     c.session.disconnect();
-    done.store(true, Ordering::Relaxed);
-    server.join().unwrap();
-    assert!(menus, "the script menus waited for the first frame");
-    assert!(bodies >= 2, "the bots were never posed ({bodies})");
-    let (after, _) = c.uploads();
-    let late: Vec<_> = after
-        .difference(&warm)
-        .filter(|k| !k.contains('#') && *k != "<box>")
-        .collect();
-    assert!(late.is_empty(), "uploaded in play: {late:?}");
+    Some(JoinSeen {
+        menus,
+        warm,
+        after: c.uploads().0,
+        bodies,
+    })
 }
 
 /// A shot-up car builds no GPU data in play (cod4-client-perf.md 18): a
@@ -2197,60 +2202,54 @@ fn cod4_live_join_builds_its_models_with_the_load() {
 /// doors until its `partBits` take new states, and no dynamic model
 /// uploads past the prewarm's, the stand-in box aside: each hidden-part
 /// state draws the prewarmed upload less its hidden surfaces. Prints the
-/// client frame of each new state. Needs `COD4_DIR` and an adapter.
+/// client frame of each new state. Runs on [`run_held`]'s clock. Needs
+/// `COD4_DIR` and an adapter.
 #[test]
 fn cod4_live_shot_car_uploads_nothing_in_play() {
-    use super::cod4::Visual;
-    use crate::cod2_client::Cod2Frame;
-    use vcod_server::cod4::{Cod4Config, Cod4Server, FRAME_MS};
     let Some(install) = vcod_cod4::testing::cod4_install() else {
         return;
     };
-    let done = Arc::new(AtomicBool::new(false));
-    let (addr_tx, addr_rx) = std::sync::mpsc::channel();
-    let server = {
-        let done = done.clone();
-        std::thread::spawn(move || {
-            use vcod_server::cod4::Cod4Game;
-            use vcod_server::engine::GameModule;
-            let install = vcod_cod4::testing::cod4_install().unwrap();
-            let mut sv = Cod4Server::new(
-                Cod4Config {
-                    map: "mp_crash".into(),
-                    gametype: "war".into(),
-                    hostname: "carparts".into(),
-                    max_clients: 4,
-                },
-                7,
-            );
-            sv.set_cvar("sv_pure", "0");
-            sv.set_cvar("sv_cheats", "1");
-            sv.set_cvar("scr_game_matchstarttime", "1");
-            sv.set_cvar("scr_game_playerwaittime", "1");
-            sv.load(Some(&install)).unwrap();
-            let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-            sock.set_nonblocking(true).unwrap();
-            addr_tx.send(sock.local_addr().unwrap()).unwrap();
-            let mut buf = [0u8; 4096];
-            let mut next = Instant::now();
-            while !done.load(Ordering::Relaxed) {
-                while let Ok((n, from)) = sock.recv_from(&mut buf) {
-                    sv.handle_packet(from, &buf[..n], Instant::now());
-                }
-                let now = Instant::now();
-                if now >= next {
-                    next = now + Duration::from_millis(FRAME_MS as u64);
-                    <Cod4Game as GameModule>::drain_console(&mut sv, now);
-                    sv.tick_frames(now, 1);
-                }
-                for (to, p) in sv.take_outgoing() {
-                    let _ = sock.send_to(&p, to);
-                }
-                std::thread::sleep(Duration::from_millis(1));
-            }
-        })
+    let root = install.root().to_path_buf();
+    let _slot = crate::renderer::pipeline_check::live_session_slot();
+    let mut sv = crash_war(&install, "carparts", true, 0);
+    let Some(seen) = run_held(&mut sv, move |addr| shoot_car(&root, addr), drain) else {
+        return;
     };
-    let addr = addr_rx.recv_timeout(Duration::from_secs(300)).unwrap();
+    for (bits, ms) in &seen.firsts {
+        println!("car state {bits:08x?}: its first frame's pump {ms:.1} ms");
+    }
+    assert!(seen.target, "no car spot found");
+    assert!(
+        seen.firsts.len() >= 2,
+        "the car never broke: {:x?}",
+        seen.firsts
+    );
+    let boxed = usize::from(!seen.warm_keys.contains(BOX_KEY) && seen.keys.contains(BOX_KEY));
+    assert_eq!(
+        seen.uploads,
+        seen.warm + boxed,
+        "a model uploaded in play: {:?}",
+        seen.keys.difference(&seen.warm_keys).collect::<Vec<_>>()
+    );
+}
+
+struct CarSeen {
+    /// A car spot was found.
+    target: bool,
+    /// (state, the frame's pump wall ms) per new state drawn.
+    firsts: Vec<([u32; 4], f64)>,
+    /// Dynamic uploads and model keys after the prewarm, and at the end.
+    warm: usize,
+    warm_keys: std::collections::BTreeSet<String>,
+    uploads: usize,
+    keys: std::collections::BTreeSet<String>,
+}
+
+/// [`cod4_live_shot_car_uploads_nothing_in_play`]'s client; `None` without
+/// an adapter.
+fn shoot_car(root: &Path, addr: SocketAddr) -> Option<CarSeen> {
+    use super::cod4::Visual;
+    use crate::cod2_client::Cod2Frame;
     let Rig {
         mut c,
         fs,
@@ -2260,16 +2259,15 @@ fn cod4_live_shot_car_uploads_nothing_in_play() {
         ui,
         mut audio,
         mut fx,
-    } = rig(install.root(), "mp_crash", addr).unwrap();
+    } = rig(root, "mp_crash", addr).unwrap();
     let Some((mut r, _)) = renderer else {
-        done.store(true, Ordering::Relaxed);
-        server.join().unwrap();
-        return;
+        c.session.disconnect();
+        return None;
     };
     let warm = r.dynamic_uploads();
     let (warm_keys, _) = c.uploads();
     let mut cam = crate::camera::FlyCamera::new(Vec3::ZERO, 0.0);
-    let start = Instant::now();
+    let start = clk_now();
     let mut last = start;
     let mut menu_since = None;
     let mut held = false;
@@ -2277,16 +2275,15 @@ fn cod4_live_shot_car_uploads_nothing_in_play() {
     let mut target: Option<(u32, Vec3, Vec3)> = None;
     let mut placed_at = None;
     let mut states: Vec<[u32; 4]> = Vec::new();
-    // (state, the frame's pump ms) per new state drawn
     let mut firsts: Vec<([u32; 4], f64)> = Vec::new();
-    while start.elapsed() < Duration::from_secs(120) && firsts.len() < 4 {
-        if placed_at.is_some_and(|t: Instant| t.elapsed() > Duration::from_secs(20)) {
+    while clk_since(start) < Duration::from_secs(120) && firsts.len() < 4 {
+        if placed_at.is_some_and(|t: Instant| clk_since(t) > Duration::from_secs(20)) {
             break;
         }
-        let now = Instant::now();
+        let now = clk_now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let time = start.elapsed().as_secs_f32();
+        let time = now.duration_since(start).as_secs_f32();
         let frozen = c
             .session
             .client()
@@ -2307,10 +2304,13 @@ fn cod4_live_shot_car_uploads_nothing_in_play() {
                             eye.z,
                             to.y.atan2(to.x).to_degrees()
                         ));
-                        placed_at = Some(Instant::now());
+                        placed_at = Some(now);
                     }
                 }
-                Some((_, eye, aim)) if placed_at.unwrap().elapsed() > Duration::from_secs(2) => {
+                Some((_, eye, aim))
+                    if placed_at
+                        .is_some_and(|t: Instant| clk_since(t) > Duration::from_secs(2)) =>
+                {
                     let to = aim - eye;
                     cam.yaw = to.y.atan2(to.x);
                     cam.pitch = to.z.atan2(to.truncate().length());
@@ -2337,6 +2337,7 @@ fn cod4_live_shot_car_uploads_nothing_in_play() {
             time,
             dt,
         };
+        // Wall time, printed only: the frame's cost, not the play's clock.
         let t = Instant::now();
         c.pump(&mut cx, &mut cam);
         let ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -2353,24 +2354,17 @@ fn cod4_live_shot_car_uploads_nothing_in_play() {
             states.push(d.part_bits);
             firsts.push((d.part_bits, ms));
         }
-        std::thread::sleep(Duration::from_millis(16));
+        clk_sleep(Duration::from_millis(16));
     }
     c.session.disconnect();
-    done.store(true, Ordering::Relaxed);
-    server.join().unwrap();
-    for (bits, ms) in &firsts {
-        println!("car state {bits:08x?}: its first frame's pump {ms:.1} ms");
-    }
-    assert!(target.is_some(), "no car spot found");
-    assert!(firsts.len() >= 2, "the car never broke: {firsts:x?}");
-    let (keys, _) = c.uploads();
-    let boxed = usize::from(!warm_keys.contains(BOX_KEY) && keys.contains(BOX_KEY));
-    assert_eq!(
-        r.dynamic_uploads(),
-        warm + boxed,
-        "a model uploaded in play: {:?}",
-        keys.difference(&warm_keys).collect::<Vec<_>>()
-    );
+    Some(CarSeen {
+        target: target.is_some(),
+        firsts,
+        warm,
+        warm_keys,
+        uploads: r.dynamic_uploads(),
+        keys: c.uploads().0,
+    })
 }
 
 const BOX_KEY: &str = "<box>";
