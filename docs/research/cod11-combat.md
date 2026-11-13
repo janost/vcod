@@ -3455,9 +3455,26 @@ point of `knockback`, so a 45-damage carbine hit on a standing player adds
 `(int)(45 * 0.3) = 13`, that is 52 units per second along the shot direction,
 and a prone player takes `(int)(45 * 0.02) = 0` and is not moved at all.
 
-**As implemented.** `ClientSim::take_damage` (`crates/server/src/spectate.rs`)
-adds the velocity and starts the timer; what the timer does in pmove is
-16.1's last paragraph.
+The rounding. VERIFIED, 1.1d: `vDir` goes through `VectorNormalize2`
+(called at 0x43922, body 0x3da68): the squared length and its root on the
+x87 stack, the length stored as a float, each component times the
+unrounded reciprocal and stored. The scale stays on the stack; the y and z
+products are stored before their adds, the x product is added unrounded
+(0x439e7..0x439fb). VERIFIED, 1.5b (called at 0x3ee76, body 0x33216) and UO
+(0x47634, body 0x3a466): `VectorNormalize2` stores the squared length, the
+root (`sqrt` in double), the reciprocal and each component, and the
+knockback stores each product and each sum. VERIFIED, vcod measurement:
+normalized with `Vec3::normalize_or_zero` (float products and sums) the
+1.1d `-hitgrid` target's velocity after the wound and the kill read one
+float step off retail's in each component; with the two builds' rounding
+every `turret_ab` capture's target velocity is retail's to the bit on all
+three servers.
+
+**As implemented.** `finishPlayerDamage` normalizes `vDir` with
+`x87::normalize` on 1.1 and `x87::normalize2_stored` on 1.5 and UO;
+`ClientSim::take_damage` (`crates/server/src/spectate.rs`) adds the velocity
+and starts the timer; what the timer does in pmove is 16.1's last
+paragraph.
 
 **Impact feedback**, `0x43a5b` onward. VERIFIED: the offsets, immediates,
 event numbers and call targets named in the list below. INFERRED: the
