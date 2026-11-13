@@ -28,16 +28,10 @@ const POINT_TOLERANCE: f32 = 0.02;
 
 /// The rounds the replay still places off retail's, by frame time, each
 /// with its section of cod2-combat.md.
-const GAPS: &[(i32, &str)] = &[
-    (
-        13400,
-        "9.5 the hit pose: 0.02 along the line, crouched and still",
-    ),
-    (20500, "9.5 the hit pose: the strafe's first frame"),
-    (20850, "9.5 the hit pose: strafing"),
-    (21000, "9.5 the hit pose: strafing"),
-    (21100, "9.5 the hit pose: strafing"),
-];
+const GAPS: &[(i32, &str)] = &[(
+    13400,
+    "9.5 the hit pose: 0.0204 along a grazing face, inside the log's rounding",
+)];
 
 /// What one round found: (time, retail hit location, ours, how far along
 /// the line ours sits past retail's, the target's `eFlags`).
@@ -147,22 +141,14 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str) -> Vec<Round> {
             }
         }
         for (_, point, dir, loc, shot) in rounds.iter().filter(|r| r.0 == t) {
-            // The target's cmds up to the shot's, its packet, then the
-            // shooter's: each resets the skeleton cache.
-            let cmds: Vec<_> = target
-                .side
-                .cmds
-                .iter()
-                .filter(|c| c.server_time > done && c.server_time <= *shot)
-                .copied()
-                .collect();
-            if !cmds.is_empty() {
-                level.packet();
-                for c in &cmds {
-                    level.client_think(0, c);
-                    done = c.server_time;
-                }
-            }
+            // The target's packets sent by the one carrying the shot's cmd,
+            // whole, then the shooter's: each resets the skeleton cache.
+            run_packets(
+                &mut level,
+                &target.side,
+                &mut done,
+                shooter.side.sent_at(*shot),
+            );
             level.packet();
             let (a, b) = (*point - *dir * 64.0, *point + *dir * 64.0);
             let (f, client, hl) = level.round_trace(a, b, &Default::default());
@@ -180,6 +166,27 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str) -> Vec<Round> {
         }
     }
     out
+}
+
+/// Runs `side`'s (slot 0's) cmds past `done` in the packets sent by
+/// `sent`, a `packet()` before each. Retail runs a packet's cmds together,
+/// so a round falls between two of the target's packets, never inside one
+/// (cod2-combat.md 9.5).
+pub(super) fn run_packets(
+    level: &mut Cod2Level,
+    side: &super::cod2_combat_ab::Side,
+    done: &mut i32,
+    sent: i32,
+) {
+    let mut packet = None;
+    for (s, c) in side.packets_by(*done, sent) {
+        if packet != Some(s) {
+            packet = Some(s);
+            level.packet();
+        }
+        level.client_think(0, &c);
+        *done = c.server_time;
+    }
 }
 
 #[test]
