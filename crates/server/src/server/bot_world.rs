@@ -297,6 +297,42 @@ impl Server {
         (!crate::bots::friend_in_line(muzzle, spot.into(), &bodies)).then_some(spot)
     }
 
+    /// A tank driver's view of a `bas` base at `at`: where its shell is
+    /// aimed to burst on the base from the muzzle as it stands
+    /// ([`shell_aim`]), and whether a shell fired now along the gun's line
+    /// does, with no other body on foot across that line.
+    pub(super) fn shell_view(
+        &self,
+        slot: usize,
+        (gun, hull): (crate::bots::GunSight, vcod_gsc::EntId),
+        at: [f32; 3],
+        models: &[crate::game::combat::PlacedModel],
+    ) -> (Option<[f32; 3]>, bool) {
+        let Some(world) = self.game.world.as_ref().map(|w| &w.collision) else {
+            return (None, false);
+        };
+        let muzzle = glam::Vec3::from(gun.muzzle);
+        let shot = shell_aim(world, models, hull, muzzle, at.into());
+        let dir = glam::Vec3::from(gun.dir);
+        let end = muzzle + dir * (SHELL_RANGE + crate::bots::BREACH_NEAR);
+        if !breach_line(world, models, Some(hull), muzzle, end, at.into()) {
+            return (shot, false);
+        }
+        let bodies: Vec<(glam::Vec3, glam::Vec3)> = self
+            .core
+            .clients
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != slot)
+            .filter_map(|(_, c)| c.as_ref()?.sim.as_ref())
+            .filter(|o| o.pm_type == crate::spectate::PmType::Normal && !o.dead && o.seat.is_none())
+            .map(|o| (o.ps.origin + o.ps.mins(), o.ps.origin + o.ps.maxs()))
+            .collect();
+        let near = muzzle.distance(at.into()) + crate::bots::BREACH_NEAR;
+        let laid = !crate::bots::friend_in_line(muzzle, muzzle + dir * near, &bodies);
+        (shot, laid)
+    }
+
     /// The script models and vehicles within [`BREACH_MODEL_NEAR`] of a
     /// `bas` base, on such a level only: what a rocket fired at one meets
     /// besides the world, the base's own model among them.
@@ -782,34 +818,54 @@ impl Server {
                 next: *next,
                 rank,
             }),
-            script::UoObjectives::Bas(bases) => UoView::Bas(BasView {
-                bases: bases
+            script::UoObjectives::Bas(bases) => {
+                let shell: Vec<(Option<[f32; 3]>, bool)> = bases
                     .iter()
-                    .map(|b| BasBaseView {
-                        at: b.at,
-                        ours: b.team == team,
-                        breached: b.breached,
-                        planted: b.planted,
-                        blows_in: b.blows_in,
-                        charge: b.charge.map(|(bounds, model)| BombView {
-                            origin: model,
-                            aim: mid(bounds),
-                        }),
-                        shot: (rocket && b.team != team && !b.breached)
-                            .then(|| self.breach_shot(slot, b.at, breach.models))
-                            .flatten(),
-                        stands: if rocket && b.team != team && !b.breached {
-                            let _p = crate::tick_profile::phase("uo/breach stands");
-                            self.breach_stands(b.at, breach.models)
-                        } else {
-                            Vec::new()
-                        },
+                    .map(|b| match breach.tank {
+                        Some(t) if b.team != team && !b.breached => {
+                            self.shell_view(slot, t, b.at, breach.models)
+                        }
+                        _ => (None, false),
                     })
-                    .collect(),
-                launchers: breach.launchers.to_vec(),
-                guns: breach.guns.to_vec(),
-                rank,
-            }),
+                    .collect();
+                UoView::Bas(BasView {
+                    bases: bases
+                        .iter()
+                        .enumerate()
+                        .map(|(i, b)| BasBaseView {
+                            at: b.at,
+                            ours: b.team == team,
+                            breached: b.breached,
+                            planted: b.planted,
+                            blows_in: b.blows_in,
+                            charge: b.charge.map(|(bounds, model)| BombView {
+                                origin: model,
+                                aim: mid(bounds),
+                            }),
+                            shot: match breach.tank {
+                                _ if b.team == team || b.breached => None,
+                                Some(_) => shell[i].0,
+                                None if rocket => self.breach_shot(slot, b.at, breach.models),
+                                None => None,
+                            },
+                            stands: if rocket
+                                && breach.tank.is_none()
+                                && b.team != team
+                                && !b.breached
+                            {
+                                let _p = crate::tick_profile::phase("uo/breach stands");
+                                self.breach_stands(b.at, breach.models)
+                            } else {
+                                Vec::new()
+                            },
+                            laid: shell[i].1,
+                        })
+                        .collect(),
+                    launchers: breach.launchers.to_vec(),
+                    guns: breach.guns.to_vec(),
+                    rank,
+                })
+            }
         }
     }
 
@@ -1435,7 +1491,10 @@ impl crate::bots::driver::BotWorld for Server {
         self.bot_vehicle_views(views, teams);
         drop(p);
         let p = crate::tick_profile::phase("deal/breach models");
-        let breach_models = if views.iter().any(|(_, v)| v.rocket.is_some()) {
+        let breach_models = if views
+            .iter()
+            .any(|(_, v)| v.rocket.is_some() || v.seat.is_some_and(|s| s.sight.is_some()))
+        {
             self.bot_breach_models(uo.as_ref())
         } else {
             Vec::new()
@@ -1454,8 +1513,14 @@ impl crate::bots::driver::BotWorld for Server {
                     .iter()
                     .filter(|s| team(**s) == mine && *s < slot)
                     .count();
+                // The hull a tank's own shell passes.
+                let tank = view.seat.and_then(|s| s.sight).and_then(|g| {
+                    let rt = self.game.module.script.as_ref()?;
+                    Some((g, rt.host.vehicles.seat_of(*slot)?.0))
+                });
                 let breach = crate::bots::Breach {
                     rocket: view.rocket.is_some(),
+                    tank,
                     launchers: &launchers,
                     guns: &guns,
                     models: &breach_models,

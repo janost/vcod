@@ -1210,8 +1210,8 @@ fn kills(sv: &vcod_server::Server) -> Vec<Vec<String>> {
 }
 
 /// `bots` bots play `map`'s bas round, seed 7 (`BOTS_SEED`; the seed is
-/// made odd), three rockets a base; the round has to end on its bases.
-/// `None` without a UO install.
+/// made odd), three rockets a base (`BAS_HEALTH`, 3000; stock is 24500);
+/// the round has to end on its bases. `None` without a UO install.
 fn bas_round(map: &str, bots: usize, shoot: bool) -> Option<vcod_server::Server> {
     let Some(fs) = vcod_common::testing::uo_fs() else {
         eprintln!("COD_DIR has no uo/: skipping");
@@ -1225,7 +1225,8 @@ fn bas_round(map: &str, bots: usize, shoot: bool) -> Option<vcod_server::Server>
     let mut sv = vcod_server::Server::new(cfg, now);
     sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
     sv.test_seed_rng(std::env::var("BOTS_SEED").map_or(7, |v| v.parse().expect("BOTS_SEED")));
-    sv.set_cvar("scr_bas_basehealth", "3000");
+    let health = std::env::var("BAS_HEALTH").unwrap_or_else(|_| "3000".into());
+    sv.set_cvar("scr_bas_basehealth", &health);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let count = |sv: &vcod_server::Server, event: &str| {

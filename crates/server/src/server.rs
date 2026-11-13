@@ -7138,7 +7138,7 @@ fn breach_aim(
     muzzle: glam::Vec3,
     base: glam::Vec3,
 ) -> Option<[f32; 3]> {
-    use crate::bots::{BREACH_CLEAR, BREACH_MIN, BREACH_NEAR, BREACH_RANGE};
+    use crate::bots::{BREACH_MIN, BREACH_NEAR, BREACH_RANGE};
     let d = muzzle.distance(base);
     if !(BREACH_MIN..=BREACH_RANGE).contains(&d) {
         return None;
@@ -7146,27 +7146,7 @@ fn breach_aim(
     [40.0, 72.0, 16.0, 0.0].into_iter().find_map(|up| {
         let spot = base + glam::Vec3::Z * up;
         let dir = (spot - muzzle).normalize_or_zero();
-        let end = spot + dir * BREACH_NEAR;
-        let tr = world.missile_trace(muzzle, end);
-        let mut best = (tr.fraction, None);
-        for m in models {
-            if let Some((f, ..)) = m.clip(
-                muzzle,
-                end,
-                crate::game::missile::MISSILE_MODEL_MASK,
-                best.0,
-            ) {
-                best = (f, Some(m.origin));
-            }
-        }
-        let burst = muzzle + (end - muzzle) * best.0;
-        // The base's mesh reaches out toward the shooter: a strike on it
-        // inside the rocket's own splash took the shooter too.
-        let ok = burst.distance(muzzle) >= BREACH_CLEAR
-            && match best.1 {
-                Some(o) => o == base,
-                None => best.0 < 1.0 && burst.distance(base) < BREACH_NEAR,
-            }
+        let ok = breach_line(world, models, None, muzzle, spot + dir * BREACH_NEAR, base)
             && cone_clear(
                 world,
                 models,
@@ -7178,6 +7158,68 @@ fn breach_aim(
         ok.then_some(spot.into())
     })
 }
+
+/// Whether a round from `muzzle` toward `end` strikes the mesh of the
+/// base at `base` or bursts on the world within
+/// [`crate::bots::BREACH_NEAR`] of it, past [`crate::bots::BREACH_CLEAR`]:
+/// the base's mesh reaches out toward the shooter, and a strike on it
+/// inside the rocket's own splash took the shooter too. `skip` is a model
+/// the round passes: the tank that fires it.
+fn breach_line(
+    world: &vcod_common::collision::CollisionWorld,
+    models: &[crate::game::combat::PlacedModel],
+    skip: Option<vcod_gsc::EntId>,
+    muzzle: glam::Vec3,
+    end: glam::Vec3,
+    base: glam::Vec3,
+) -> bool {
+    use crate::bots::{BREACH_CLEAR, BREACH_NEAR};
+    let tr = world.missile_trace(muzzle, end);
+    let mut best = (tr.fraction, None);
+    for m in models.iter().filter(|m| Some(m.id) != skip) {
+        if let Some((f, ..)) = m.clip(
+            muzzle,
+            end,
+            crate::game::missile::MISSILE_MODEL_MASK,
+            best.0,
+        ) {
+            best = (f, Some(m.origin));
+        }
+    }
+    let burst = muzzle + (end - muzzle) * best.0;
+    burst.distance(muzzle) >= BREACH_CLEAR
+        && match best.1 {
+            Some(o) => o == base,
+            None => best.0 < 1.0 && burst.distance(base) < BREACH_NEAR,
+        }
+}
+
+/// Where a tank's shell from `muzzle` is aimed at a base whose script
+/// model stands at `base`, [`crate::bots::BREACH_MIN`] to
+/// [`SHELL_RANGE`] off, as [`breach_aim`] finds a rocket's: a shell has no
+/// spread to clear. `hull` is the tank, which its own shell passes.
+fn shell_aim(
+    world: &vcod_common::collision::CollisionWorld,
+    models: &[crate::game::combat::PlacedModel],
+    hull: vcod_gsc::EntId,
+    muzzle: glam::Vec3,
+    base: glam::Vec3,
+) -> Option<[f32; 3]> {
+    let d = muzzle.distance(base);
+    if !(crate::bots::BREACH_MIN..=SHELL_RANGE).contains(&d) {
+        return None;
+    }
+    [40.0, 72.0, 16.0, 0.0].into_iter().find_map(|up| {
+        let spot = base + glam::Vec3::Z * up;
+        let dir = (spot - muzzle).normalize_or_zero();
+        let end = spot + dir * crate::bots::BREACH_NEAR;
+        breach_line(world, models, Some(hull), muzzle, end, base).then_some(spot.into())
+    })
+}
+
+/// How far off a tank shells a base: inside it a shell at 10000 units/s
+/// falls under 16 units on the way.
+const SHELL_RANGE: f32 = 2000.0;
 
 /// Per group, the index of its first item `pass` takes, as a search of
 /// each group in order would find it, on up to [`BREACH_THREADS`] threads:

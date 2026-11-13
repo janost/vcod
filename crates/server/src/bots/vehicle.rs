@@ -71,6 +71,9 @@ const TURN_IN_PLACE: f32 = 50.0;
 const CREW_WAIT_TICKS: u32 = 200;
 /// A seat's gun fires once laid this near the enemy in yaw, within range.
 const LAID_DEG: f32 = 4.0;
+/// A tank shelling a `bas` base whose gun has not lain on it this long
+/// gets out: its line will not come.
+const SHELL_WAIT_TICKS: u32 = 200;
 pub(crate) const GUN_RANGE: f32 = 3000.0;
 /// A driver held by a teammate in its way this long backs off, when the
 /// way back is clear.
@@ -97,6 +100,7 @@ pub struct VehicleSpot {
     /// The vehicle file's box, in the hull's frame.
     pub mins: [f32; 3],
     pub maxs: [f32; 3],
+    pub tank: bool,
 }
 
 impl VehicleSpot {
@@ -153,6 +157,26 @@ pub struct SeatView {
     pub contact_ms: i32,
     /// `level.time`, ms: which frames this seat's exit press may land on.
     pub level_ms: i32,
+    /// A tank driver's main gun, when it fires a shell.
+    pub sight: Option<GunSight>,
+    /// The turret turns; the SU-152's and the Elefant's gun points the
+    /// hull's way, and the hull turns to the view for it.
+    pub traverse: bool,
+    /// The driver is capturing the other side's tank: the stock script
+    /// holds the hull and turret 15 s first (`_tankdrive_gmi.gsc`
+    /// `tank_capture_think`, `level.tank_capture_time`).
+    pub capturing: bool,
+}
+
+/// A tank's main gun as it stands this tick (`vehicle::fire::main_gun_sight`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GunSight {
+    /// Where a shell fired now leaves from, and along.
+    pub muzzle: [f32; 3],
+    pub dir: [f32; 3],
+    /// The chase camera the driver's view is cast from: the shell bends
+    /// toward where that view meets the world (coduo-vehicles.md 2, 13).
+    pub eye: [f32; 3],
 }
 
 /// Teammates on foot round a driven hull: a body the hull rolls into is
@@ -231,6 +255,8 @@ pub(crate) struct Rider {
     fighting: bool,
     /// The driver holds this tick for a teammate walking up to board.
     crew_wait: bool,
+    /// Ticks shelling a `bas` base since the gun last lay on it.
+    shell_wait: u32,
     /// Stall bookkeeping: ticks stalling, back-off ticks left and the way
     /// it steers, back-offs since the ride last made [`PROGRESS`], from
     /// where.
@@ -422,13 +448,27 @@ impl Bot {
             }
             _ => 0.0,
         };
-        if !free || reach == 0.0 {
+        // In `bas` a bot fetching a launcher, or walking to a stand to fire
+        // one, takes a tank near instead: its gun breaches a base too.
+        let breaching = matches!(view.uo, Some(super::UoView::Bas(_)))
+            && matches!(
+                self.objective_target(view),
+                Some(super::ObjTarget::Pickup { .. } | super::ObjTarget::Breach { aim: None, .. })
+            );
+        let reach_of = |s: &VehicleSpot| {
+            if breaching && s.tank {
+                SEEK_RANGE
+            } else {
+                reach
+            }
+        };
+        if !free || reach == 0.0 && !breaching {
             self.rider.target = None;
             return None;
         }
         // The pick is refreshed off this tick's list: a vehicle somebody
         // else took, or one driven off, drops out of it.
-        let near = |s: &VehicleSpot| s.gap(view.origin) < reach;
+        let near = |s: &VehicleSpot| s.gap(view.origin) < reach_of(s);
         let target = match self.rider.target {
             Some(t) => view.vehicles.iter().find(|s| s.num == t.num).copied(),
             None if self.rider.rest == 0 => view
@@ -480,6 +520,16 @@ impl Bot {
 
     /// One tick in a seat: drive, lay the gun, or get out.
     fn think_seat(&mut self, view: &BotView, seat: SeatView, mut cmd: UserCmd) -> UserCmd {
+        // A capture under way: nothing the keys do counts until it ends.
+        // Read as a stall, it got the driver out before the hull was his.
+        if seat.capturing && !self.rider.leaving {
+            let r = &mut self.rider;
+            (r.idle, r.stall, r.unmade, r.shell_wait) = (0, 0, 0, 0);
+            r.progress_from = seat.origin;
+            (cmd.forward, cmd.right, cmd.up) = (0, 0, 0);
+            cmd.angles = cmd_angles(view, [view.view[0], view.view[1]]);
+            return cmd;
+        }
         // The view stays where it is unless a gun or the walk-in turns it.
         let mut aim = [view.view[0], view.view[1]];
         let in_range = |p: [f32; 3]| super::dist_sq(seat.origin, p) < GUN_RANGE * GUN_RANGE;
@@ -497,7 +547,16 @@ impl Bot {
             Some(_) => view.friend_in_line,
             None => armor.is_some_and(|a| a.friend_in_line),
         };
-        self.rider.fighting = enemy.is_some();
+        // With nobody to shoot, a `bas` base the gun has a shot at.
+        let shell = seat
+            .sight
+            .filter(|_| seat.seat == 1 && enemy.is_none())
+            .and_then(|g| Some((g, bas_shot(view)?)));
+        self.rider.shell_wait = match shell {
+            Some((_, (_, true))) | None => 0,
+            Some(_) => self.rider.shell_wait + 1,
+        };
+        self.rider.fighting = enemy.is_some() || shell.is_some();
         if seat.seat == 1 {
             self.drive(view, seat, &mut cmd);
         } else if enemy.is_some() || seat.driven && seat.speed.abs() >= STALL_SPEED {
@@ -551,6 +610,20 @@ impl Bot {
                     cmd.buttons |= msg::BUTTON_ATTACK;
                 }
             }
+        } else if let Some((g, (spot, laid))) = shell {
+            // The view from the chase camera onto the base: the shell
+            // bends toward where it meets the world (coduo-vehicles.md 13),
+            // and goes when the server finds its line on the base.
+            aim = angles_from(g.eye, spot);
+            // A base is no player: the shell goes with shooting off, as
+            // a breach rocket does.
+            if laid {
+                cmd.buttons |= msg::BUTTON_ATTACK;
+            }
+            // The SU-152's and the Elefant's hull turns to the view.
+            if !seat.traverse {
+                cmd.up = 127;
+            }
         } else if seat.gun_yaw.is_some() && seat.seat == 1 {
             // A tank's turret looks the way it drives.
             aim = [0.0, seat.yaw];
@@ -560,7 +633,10 @@ impl Bot {
         // sliding, is about to destroy itself and everyone in it.
         let wedged = seat.contact_ms >= LEAVE_CONTACT_MS;
         let abandoned = seat.seat > 1 && !seat.driven && self.rider.idle > UNDRIVEN_TICKS;
-        let done = self.rider.seated > RIDE_TICKS
+        // A ride ends on its clock, but not while the gun breaches a base:
+        // 35 shells take one, three seconds apart.
+        let done = self.rider.seated > RIDE_TICKS && shell.is_none()
+            || self.rider.shell_wait > SHELL_WAIT_TICKS
             || self.rider.idle > IDLE_TICKS
             || wedged
             || abandoned
@@ -705,4 +781,27 @@ impl Bot {
             }
         }
     }
+}
+
+/// The other side's standing `bas` base nearest the bot that its tank's
+/// gun has a shot at: the aim point, and whether a shell fired now bursts
+/// on it.
+fn bas_shot(view: &BotView) -> Option<([f32; 3], bool)> {
+    let Some(super::UoView::Bas(b)) = view.uo.as_ref() else {
+        return None;
+    };
+    b.bases
+        .iter()
+        .filter(|x| !x.ours && !x.breached)
+        .filter_map(|x| Some((x.shot?, x.laid)))
+        .min_by(|a, b| {
+            super::dist_sq(view.origin, a.0).total_cmp(&super::dist_sq(view.origin, b.0))
+        })
+}
+
+/// The view (pitch, yaw) from `from` onto `at`.
+pub(crate) fn angles_from(from: [f32; 3], at: [f32; 3]) -> [f32; 2] {
+    let d: [f32; 3] = std::array::from_fn(|i| at[i] - from[i]);
+    let pitch = -d[2].atan2(d[0].hypot(d[1]).max(1.0)).to_degrees();
+    [pitch.clamp(-80.0, 80.0), d[1].atan2(d[0]).to_degrees()]
 }

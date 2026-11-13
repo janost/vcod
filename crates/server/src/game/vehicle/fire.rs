@@ -134,25 +134,22 @@ pub fn aim_point(
     })
 }
 
-/// The fire call's aim and round, `None` where retail refuses: no rider in
-/// the seat, an overheated MG, a gun the vehicle lacks, a missing tag.
-pub fn prepare(host: &mut GameHost, cx: &mut Cx, id: EntId, gun: Gun) -> Option<Shot> {
+/// Where a gun's round leaves from and along, before any spread.
+struct Line {
+    muzzle: Vec3,
+    dir: Vec3,
+    /// The flash tag's frame.
+    rot: Quat,
+    /// `tag_barrel`'s forward.
+    barrel: Vec3,
+}
+
+/// The fire calls' muzzle and direction for `gun` off the posed vehicle and
+/// the driver's last aim point.
+fn line(host: &mut GameHost, cx: &mut Cx, id: EntId, gun: Gun) -> Option<Line> {
     let v = host.vehicles.live.get(&id)?;
-    let (seat_no, weapon) = match gun {
-        Gun::Main => (1, v.weapons[0]),
-        Gun::Alt => (1, v.weapons[1]),
-        Gun::Gunner => (2, v.weapons[2]),
-    };
-    let attacker = v.seats[seat_no]?;
-    if weapon == 0
-        || (gun == Gun::Alt && v.guns.overheating[0])
-        || (gun == Gun::Gunner && v.guns.overheating[1])
-    {
-        return None;
-    }
     let aim_point = v.aim_point;
     let barrel_blocked = v.barrel_blocked;
-    let def = host.weapons.get(weapon)?.clone();
     let posed = seat::posed(host, cx, id)?;
     let flash = match gun {
         Gun::Main => "tag_flash",
@@ -180,6 +177,51 @@ pub fn prepare(host: &mut GameHost, cx: &mut Cx, id: EntId, gun: Gun) -> Option<
         (true, Some((b, _)), Some((f, _))) => muzzle - dir * f.distance(b),
         _ => muzzle,
     };
+    Some(Line {
+        muzzle,
+        dir,
+        rot,
+        barrel,
+    })
+}
+
+/// The muzzle a main-gun shell would leave from now and its direction (a
+/// shell has no spread), and where the driver's chase camera sits: what a
+/// bot in the driver's seat lays the gun with. `None` without a turret
+/// gun or its tags.
+pub fn main_gun_sight(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    id: EntId,
+) -> Option<([f32; 3], [f32; 3], [f32; 3])> {
+    let Line { muzzle, dir, .. } = line(host, cx, id, Gun::Main)?;
+    let (eye, _) = seat::posed(host, cx, id)?.tag("tag_chasecam")?;
+    Some((muzzle.to_array(), dir.to_array(), eye.to_array()))
+}
+
+/// The fire call's aim and round, `None` where retail refuses: no rider in
+/// the seat, an overheated MG, a gun the vehicle lacks, a missing tag.
+pub fn prepare(host: &mut GameHost, cx: &mut Cx, id: EntId, gun: Gun) -> Option<Shot> {
+    let v = host.vehicles.live.get(&id)?;
+    let (seat_no, weapon) = match gun {
+        Gun::Main => (1, v.weapons[0]),
+        Gun::Alt => (1, v.weapons[1]),
+        Gun::Gunner => (2, v.weapons[2]),
+    };
+    let attacker = v.seats[seat_no]?;
+    if weapon == 0
+        || (gun == Gun::Alt && v.guns.overheating[0])
+        || (gun == Gun::Gunner && v.guns.overheating[1])
+    {
+        return None;
+    }
+    let def = host.weapons.get(weapon)?.clone();
+    let Line {
+        muzzle,
+        dir,
+        rot,
+        barrel,
+    } = line(host, cx, id, gun)?;
     let projectile = def.weapon_type == "projectile";
     // Both arms get the flash tag's frame with the bent forward: its left
     // (`axis[1]`) as the spread's right, its up, then the muzzle.
