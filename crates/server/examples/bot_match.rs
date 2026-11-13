@@ -87,7 +87,8 @@
 //! kills, deaths, suicides, hits, rounds fired and the 12 s stalls split
 //! as above (held: `BotBody::holds`' engaged, cover, retreat or objective,
 //! or frozen by the script, on any tick of the window; `STALLS=1` prints
-//! every 20th stalled bot-tick to stderr as CoD4's does), plus the cover-hold and lean ticks, the
+//! every 20th stalled bot-tick to stderr as CoD4's does; for CoD1 where
+//! each stalled window begins), plus the cover-hold and lean ticks, the
 //! retreats, the smoke grenades thrown and the hits answered within 1 s.
 //! The mounted guns' mounts, seconds manned and kills (`GUNS=0`:
 //! bots leave the guns alone).
@@ -1171,6 +1172,9 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
     // Each bot's last 12 s: where it stood and whether it held still on
     // purpose there.
     let mut hist: HashMap<usize, VecDeque<([f32; 3], bool)>> = HashMap::new();
+    // `STALLS=1`: where each stalled window begins, to stderr.
+    let stall_log = std::env::var("STALLS").as_deref() == Ok("1");
+    let mut stalled_now: HashSet<usize> = HashSet::new();
     let mut bots: HashMap<usize, Life> = HashMap::new();
     let mut react = React::default();
     let mut stats = TickStats::from_env();
@@ -1480,9 +1484,23 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                 // spot is still within 150 units for up to 12 s after it.
                 if h.iter().any(|(_, held)| *held) {
                     m.held += 1;
+                    stalled_now.remove(&slot);
                 } else {
                     m.stalled += 1;
+                    if stall_log && stalled_now.insert(slot) {
+                        let (wp, next) = sv.bot_waypoints(slot);
+                        eprintln!(
+                            "{map} seed {seed} t{tick} bot {slot} stalled at {:?} (12 s at {:?}) lad {} wp {:?} next {:?}",
+                            b.origin.map(|x| x.round()),
+                            first.map(|x| x.round()),
+                            b.on_ladder as u8,
+                            wp.map(|p| p.map(|x| x.round())),
+                            next.map(|p| p.map(|x| x.round())),
+                        );
+                    }
                 }
+            } else {
+                stalled_now.remove(&slot);
             }
         }
     }
