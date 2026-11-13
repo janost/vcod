@@ -309,8 +309,9 @@ fn the_hint_picks_by_the_use_list_and_a_gunner_keeps_the_drop_hint() {
         return;
     };
     let (slot, dropper) = (run.slots[0], run.slots[1]);
-    // A drop just behind the gunner's spot, of a weapon he does not hold.
-    let behind = run.drop_gun(dropper, [BEHIND[0] - 30.0, BEHIND[1], BEHIND[2]]);
+    // A drop just behind the gunner's spot, of a weapon he does not hold: it
+    // leaves the dropper's hand and lands some 50 units ahead of him.
+    let behind = run.drop_gun(dropper, [BEHIND[0] - 70.0, BEHIND[1], BEHIND[2]]);
     let level = run.level();
     let w = level
         .rt
