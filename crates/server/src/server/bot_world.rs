@@ -312,10 +312,9 @@ impl Server {
             return (None, false);
         };
         let muzzle = glam::Vec3::from(gun.muzzle);
-        let shot = shell_aim(world, models, hull, muzzle, at.into());
+        let shot = shell_aim(world, models, hull, muzzle, gun.speed, at.into());
         let dir = glam::Vec3::from(gun.dir);
-        let end = muzzle + dir * (SHELL_RANGE + crate::bots::BREACH_NEAR);
-        if !breach_line(world, models, Some(hull), muzzle, end, at.into()) {
+        if !shell_lands(world, models, hull, muzzle, dir, gun.speed, at.into()) {
             return (shot, false);
         }
         let bodies: Vec<(glam::Vec3, glam::Vec3)> = self

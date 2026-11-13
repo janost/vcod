@@ -63,8 +63,15 @@ impl Server {
                         && seat.gun_speed > 0.0
                         && let Some((id, _)) = host.vehicles.seat_of(*slot)
                     {
-                        seat.sight = crate::game::vehicle::fire::main_gun_sight(host, cx, id)
-                            .map(|(muzzle, dir, eye)| GunSight { muzzle, dir, eye });
+                        let speed = seat.gun_speed;
+                        seat.sight = crate::game::vehicle::fire::main_gun_sight(host, cx, id).map(
+                            |(muzzle, dir, eye)| GunSight {
+                                muzzle,
+                                dir,
+                                eye,
+                                speed,
+                            },
+                        );
                     }
                 }
                 if view.seat.is_some() || !on {

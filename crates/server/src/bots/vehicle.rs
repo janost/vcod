@@ -171,9 +171,10 @@ pub struct SeatView {
 /// A tank's main gun as it stands this tick (`vehicle::fire::main_gun_sight`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GunSight {
-    /// Where a shell fired now leaves from, and along.
+    /// Where a shell fired now leaves from, along and how fast (units/s).
     pub muzzle: [f32; 3],
     pub dir: [f32; 3],
+    pub speed: f32,
     /// The chase camera the driver's view is cast from: the shell bends
     /// toward where that view meets the world (coduo-vehicles.md 2, 13).
     pub eye: [f32; 3],

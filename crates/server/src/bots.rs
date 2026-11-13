@@ -8502,6 +8502,7 @@ mod tests {
             sight: Some(GunSight {
                 muzzle: [100.0, 0.0, 60.0],
                 dir: [1.0, 0.0, 0.0],
+                speed: 10000.0,
                 eye: [-100.0, 0.0, 160.0],
             }),
             traverse,
