@@ -38,6 +38,8 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("vectordot", super::cod2::vector_dot),
     ("setgameendtime", set_game_end_time),
     ("isstring", is_string),
+    ("randomint", random_int),
+    ("randomfloat", random_float),
     ("randomintrange", random_int_range),
     ("randomfloatrange", random_float_range),
     ("assert", developer_statement),
@@ -174,6 +176,37 @@ fn is_string(
     Ok(Value::Int(
         matches!(a.first(), Some(Value::String(_))) as i32
     ))
+}
+
+/// `randomInt(n)`: `[0, n)` off `GameHost::rng`; `n` under 1 reads 0.
+/// 1.7's own generator is unread, so CoD4 keeps the xorshift draw rather
+/// than CoD1's `holdrand` (math.rs).
+fn random_int(
+    host: &mut GameHost,
+    _: &mut Cx,
+    _: Option<Target>,
+    a: &[Value],
+) -> Result<Value, ErrorKind> {
+    let n = match a.first() {
+        Some(Value::Int(i)) => *i,
+        Some(Value::Float(f)) => *f as i32,
+        _ => return Err(ErrorKind::BadType("randomInt takes a number")),
+    };
+    if n <= 0 {
+        return Ok(Value::Int(0));
+    }
+    Ok(Value::Int((host.rand_unit() * n as f32) as i32))
+}
+
+/// `randomFloat(f)`: `[0, f)` off `GameHost::rng`, as `random_int`.
+fn random_float(
+    host: &mut GameHost,
+    _: &mut Cx,
+    _: Option<Target>,
+    a: &[Value],
+) -> Result<Value, ErrorKind> {
+    let f = number(a.first(), "randomFloat takes a number")?;
+    Ok(Value::Float(host.rand_unit() * f as f32))
 }
 
 /// `randomIntRange(lo, hi)`: lo..hi, hi excluded, off the level's draw.
