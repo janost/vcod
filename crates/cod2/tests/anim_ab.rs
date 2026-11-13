@@ -6,7 +6,12 @@
 //! which are not on the wire, carry over), and the playerstate's
 //! `legsAnim`, `torsoAnim`, `legsTimer` and `torsoTimer` compared with the
 //! wire's. A field ours gets wrong must be named in [`GAPS`] with its row
-//! count. Needs `COD2_DIR`. `ANIM_REPORT=1` prints every mismatching row.
+//! count. A capture made under `RAND_TRACE=1` carries retail's `rand()`
+//! draws, and its clause picks take `BG_AnimScriptEvent`'s in order (each
+//! one consumed: the counts must agree); the others pick the first
+//! command. Needs `COD2_DIR`. `ANIM_REPORT=1` prints every mismatching row.
+
+use std::cell::Cell;
 
 use std::collections::BTreeMap;
 
@@ -29,12 +34,22 @@ const COMPARED: &[&str] = &["legsAnim", "torsoAnim", "legsTimer", "torsoTimer"];
 
 /// (capture, field, rows, why), each why a section of
 /// docs/research/cod2-player-anims.md.
-const GAPS: &[(&str, &str, usize, &str)] = &[
-    // The melee swing's command among the clause's five is retail's
-    // `rand()`, which the gate does not replay.
-    ("fire", "torsoAnim", 1, "9 the weapon's events"),
-    ("fire", "torsoTimer", 1, "9 the weapon's events"),
-];
+const GAPS: &[(&str, &str, usize, &str)] = &[];
+
+/// `BG_AnimScriptEvent`'s `rand() % numCommands` (lnxded 0x80d977a, in
+/// 0x80d96ee), the trace's site column.
+const PICK_SITE: &str = "80d977a";
+
+/// The trace's draws at [`PICK_SITE`] from `level.time` `from` on: the
+/// frame that sent the replay's first snapshot ran its cmds' picks after it.
+fn traced_picks(text: &str, from: i32) -> Vec<u32> {
+    text.lines()
+        .filter_map(|l| {
+            let w: Vec<&str> = l.strip_prefix("# rand ")?.split(' ').collect();
+            (w[1] == PICK_SITE && w[0].parse::<i32>().ok()? >= from).then(|| w[2].parse().unwrap())
+        })
+        .collect()
+}
 
 #[test]
 fn retail_anims_replay_on_vcod_pmove() {
@@ -44,8 +59,6 @@ fn retail_anims_replay_on_vcod_pmove() {
     let report = std::env::var_os("ANIM_REPORT").is_some();
     let table = AnimTable::load(&fs).unwrap();
     let weapon = field_index(&PLAYER_STATE_FIELDS, "weapon");
-    // Retail's `rand()` is not replayed: the first command (GAPS' melee).
-    let pick = |_: usize| 0;
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/moves");
     let mut worlds: BTreeMap<String, CollisionWorld> = BTreeMap::new();
     let mut unexplained = Vec::new();
@@ -54,7 +67,8 @@ fn retail_anims_replay_on_vcod_pmove() {
         ..Rules::default()
     };
     for name in CAPTURES.iter().chain(ANIM_CAPTURES) {
-        let cap = parse(&std::fs::read_to_string(format!("{dir}/{name}.txt")).unwrap());
+        let text = std::fs::read_to_string(format!("{dir}/{name}.txt")).unwrap();
+        let cap = parse(&text);
         // The probe's weapon at the index the map's registration gave it (3, or 4
         // on mp_farmhouse).
         let index = cap
@@ -85,6 +99,17 @@ fn retail_anims_replay_on_vcod_pmove() {
         let mut ps = PlayerState::from_wire(&cap.snaps[start].ps);
         let mut ws = weapon_from_wire(&cap.snaps[start].ps);
         let mut old = cap.cmds[ci];
+        let traced = text.contains("\n# rand ");
+        let draws = traced_picks(&text, cap.snaps[start].server_time);
+        let drawn = Cell::new(0);
+        let pick = |n: usize| {
+            if !traced {
+                return 0;
+            }
+            let k = drawn.get();
+            drawn.set(k + 1);
+            draws.get(k).map_or(0, |&v| v as usize % n)
+        };
         let mut wrong: BTreeMap<&str, (usize, String)> = BTreeMap::new();
         let mut rows = 0;
         for (k, snap) in cap.snaps.iter().enumerate().skip(start + 1) {
@@ -98,7 +123,10 @@ fn retail_anims_replay_on_vcod_pmove() {
                     weapon::update_sight_flag(&mut ps, &ws, &cmd, &oldcmd, &defs);
                 }
                 let prone = ps.view_height_target == pmove::VIEW_PRONE;
-                let input = weapon::anim_input(&table, &ps, &ws, &defs);
+                let input = pmove::AnimInput {
+                    pick: Some(&pick),
+                    ..weapon::anim_input(&table, &ps, &ws, &defs)
+                };
                 let scale = weapon::move_scale(&defs, ws.weapon);
                 pmove::player_step_anim(
                     &mut ps,
@@ -156,6 +184,13 @@ fn retail_anims_replay_on_vcod_pmove() {
             ws = weapon_from_wire(&snap.ps);
         }
         eprintln!("{name:<9} {rows:>4} rows, {} fields wrong", wrong.len());
+        if traced && drawn.get() != draws.len() {
+            unexplained.push(format!(
+                "{name}: {} clause picks, retail drew {}",
+                drawn.get(),
+                draws.len()
+            ));
+        }
         for (field, (n, first)) in &wrong {
             eprintln!("    {field}: {n} rows, first {first}");
             match GAPS.iter().find(|g| g.0 == *name && g.1 == *field) {

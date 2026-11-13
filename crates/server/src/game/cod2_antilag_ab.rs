@@ -31,7 +31,10 @@ const ORIGIN_TOLERANCE: f32 = 0.011;
 
 /// The rounds whose hit location the replay still gets wrong, by frame
 /// time, each with its section of cod2-combat.md.
-const GAPS: &[(i32, &str)] = &[(16950, "9.5 the hit pose: still, the hand for the torso")];
+const GAPS: &[(i32, &str)] = &[(
+    16950,
+    "9.5 the hit pose: still, a 0.4-unit corner of the right thumb's box for the torso",
+)];
 
 /// One round: (time, the target's live origin, retail's rewound origin,
 /// ours, retail's hit location, ours).
@@ -155,23 +158,11 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>) -> Vec<Round> {
         archive(&mut level, t);
         for (_, retail, point, dir, loc, lag) in rounds.iter().filter(|r| r.0 == t) {
             let ours = level.rewound_origin(0, *lag).and_then(|r| r.at());
-            // The target's cmds up to the shot's, its packet, then the
-            // shooter's: each resets the skeleton cache. The shooter's
-            // clock runs 100 ms behind the target's.
-            let cmds: Vec<_> = target
-                .side
-                .cmds
-                .iter()
-                .filter(|c| c.server_time > done && c.server_time <= *lag + 100)
-                .copied()
-                .collect();
-            if !cmds.is_empty() {
-                level.packet();
-                for c in &cmds {
-                    level.client_think(0, c);
-                    done = c.server_time;
-                }
-            }
+            // The target's packets sent by the one carrying the shot's
+            // cmd, whole, then the shooter's: each resets the skeleton
+            // cache. The shooter's clock runs 100 ms behind the target's.
+            let sent = shooter.side.sent_at(*lag) + 100;
+            super::cod2_hitpose_ab::run_packets(&mut level, &target.side, &mut done, sent);
             level.packet();
             let origins: HashMap<usize, Vec3> = ours.map(|o| (0, o)).into_iter().collect();
             let (a, b) = (*point - *dir * 64.0, *point + *dir * 64.0);

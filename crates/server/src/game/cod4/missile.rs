@@ -2391,7 +2391,7 @@ fn tumble_on_contact(
 
 /// `AngleNormalize180` as `MissileLandAngles` reads it: the turns kept on
 /// the stack, less the nearest whole one.
-fn normalize180(a: f32) -> f32 {
+pub(super) fn normalize180(a: f32) -> f32 {
     let turns = f64::from(a) * f64::from(0.002_777_777_8_f32);
     ((turns - (turns + 0.5).floor()) * 360.0) as f32
 }

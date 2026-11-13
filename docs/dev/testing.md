@@ -121,6 +121,11 @@ in process, on `play::cod4`'s `tests::sim` clock.
   builds the bots' graph inline. A helper thread on the wall (`live_www`'s
   HTTP server) holds the server's frames while it works, or the client's
   waits run the level minutes ahead of it.
+- A live test runs its server through `tests::run_held`, never on a thread
+  of its own pacing frames by `Instant`: under load such a client's
+  deadlines run out before it spawns. `play/cod4_sweep.rs`'s `rig` and
+  `answer_menu` wait on the thread's `sim` clock, the wall off one (the
+  sweep and the soak).
 - A live test that writes frames (`VCOD_C4_SHOTS`) runs through
   `tests::run_held`, each frame loop sleeping its 16 ms first. The client
   reads the session's clock through `play::cod4::clock_now`, never

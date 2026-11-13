@@ -1279,6 +1279,19 @@ to the first server-side change (below). VERIFIED, the captures.
 - The only rows `moves_ab` cannot replay are `frag`'s three after each
   blast: the thrower's own grenade lands beside him and `G_Damage`'s
   knockback (`pm_flags` 0x400, `pm_time`, the push) is server-side.
+  Their numbers are section 4's knockback: the pushes are 108, 100 and 96
+  long (to the float), `knockback * g_knockback / 250` for 27, 25 and 24,
+  with `pm_time` 54, 50 and 50 (48 clamped up), and `velocity[0]` stays 0.
+  VERIFIED, the capture's bits and the arithmetic. Each row is the first
+  snapshot after its blast and carries `pm_time` as set, so the push lands
+  after the frame's cmds and before the snapshot. INFERRED. The replay
+  could only apply it by running the blast: the missile's flight, the
+  `G_RadiusDamage` falloff, the gametype's damage callback and
+  `finishPlayerDamage`, all vcod-server's. The capture predates the
+  gametype's `PROBE damage` line, so not even the callback's damage is
+  logged. Closing the rows needs a server-side replay of a thrower's own
+  blast (`game::cod2_combat_ab` runs two clients, and compares the
+  target's knockback there, 9.2), not a pmove one.
 
 ### 9.2 Two clients: damage and the end frame
 
@@ -1567,15 +1580,54 @@ degrees off the view, head and neck eased one step from 0) with the
 helmet scored lands every point 0.5 to 2.7 units nearer the shooter and
 moves the second round of `hit-head` and `hit-legs` to another bone.
 
+- `SV_UserMove` (0x8090e34) runs every new cmd of a packet through
+  `SV_ClientThink` (the call at 0x809113d) in one loop, so a shot falls
+  between two of the target's packets, never inside one. VERIFIED, the
+  loop. Each `ClientThink_real` (Mac 0x1a3d00) ends with
+  `r.currentOrigin` set to `ps.origin` (after a `SV_LinkEntity` on the
+  snapped `pos.trBase`) and `r.currentAngles` to (0, the view's yaw, 0),
+  which the trace reads. VERIFIED, the stores.
+- `SV_PointTraceToEntity` (Mac 0x1bf0e8; lnxded 0x809d0b1 reads the box)
+  culls a body under a priority map by `actorLocationalMins` and `Maxs`,
+  (-64, -64, -32) and (64, 64, 72) at lnxded 0x817db88 and 0x817db94,
+  about `r.currentOrigin`, not by its bounds, then runs `G_DObjCalcPose`
+  and `DObjTraceline`. VERIFIED, the decompile and `.data`. So the
+  shooter's look-at builds the target's skeleton (and eases its controls)
+  for any view within that box, and a bone past the bounds (a prone
+  body's legs) takes rounds. INFERRED. vcod culls by the same box; no
+  gate row moved with it. VERIFIED, the gates.
+- `DObjTraceline` (Mac 0x76600) tests each box's circumscribed sphere
+  first: `XModelLoad` (Mac 0xbb616) stores the box's centre and `|maxs -
+  centre|^2` beside it. VERIFIED, the decompile. The test only skips boxes
+  that cannot be struck nearer. INFERRED.
+
 `game::cod2_hitpose_ab` replays the capture's 67 rounds on the posed
-body: all strike retail's bone, 62 within 0.02 along their line.
-VERIFIED, the gate. Its `GAPS` names the rest: four in the strafe, 0.06 to
-0.26 off (where the round fell among the target's own cmds is not logged,
-and the gate runs the target's cmds up to the shooter's cmd time), and
-one crouched round 0.0204 off. The cause of neither was found. Neither
-moves with the phase rule (9.3's variants). A legs node that faded to 0
-restarts; one that kept its node time instead put 18 of the 67 rounds
-off. VERIFIED, the gate.
+body: all strike retail's bone, 66 within 0.02 along their line.
+VERIFIED, the gate. The gate runs the target's cmds in whole packets,
+those its log sends by the shooter's packet carrying the shot's cmd (by
+the newest cmd each packet carries, the target's first on a tie). Running
+them up to the shot's cmd time instead split a packet and put the strafe's
+four rounds 0.08 to 0.26 off (20500, 20850, 21000, 21100); by packets they
+sit within 0.009. VERIFIED, the gate.
+
+Left in its `GAPS`: 13400, crouched and still, 0.0204 along the line. The
+round meets the left thigh's box on a grazing face (normal against the
+line -0.195). The log prints the point to 0.01 in x and y, which moves a
+hit on that face by up to 0.0248 along the line, so the round is inside
+the log's own precision. INFERRED, the arithmetic. The fixed 0.02 cannot
+tell it from a pose error; a tolerance off each round's face would, but
+18050 sits at twice such a bound (0.014 against 0.0069), so the pose is
+not exact either. INFERRED, the arithmetic. Neither moves with the phase rule (9.3's variants). A
+legs node that faded to 0 restarts; one that kept its node time instead
+put 18 of the 67 rounds off. VERIFIED, the gate.
+
+`game::cod2_antilag_ab`'s one row, 16950: the target stands still 3 s
+after a strafe and retail's round strikes `torso_lower` at the point
+vcod's torso box gives (0.50001 of the line). vcod's line first clips a
+corner of `j_thumb_ri_2`'s box, a 0.4-unit chord 4.7 units before the
+torso; `j_wrist_ri` misses by 1.8. VERIFIED, the gate. So retail's right
+thumb sits off vcod's by at least a few tenths of a unit; why is not
+known. The replay's packet order does not move it.
 
 ### 9.6 The aim block and the game's `rand()`
 
@@ -1852,6 +1904,14 @@ Left in the gate's `GAPS`:
   legs and torso anims, the eye and the forward match retail's to the
   printed digit, and the other six contacts match. VERIFIED, the gate.
   The struck body's bones are posed a little off; why is not known.
+  `Melee_Trace` (Mac 0x1c823a) traces from `G_GetPlayerViewOrigin` along
+  `G_GetPlayerViewDirection` under `bulletPriorityMap`, mask 0x2802831,
+  as vcod does. VERIFIED, the decompile. In `hit-melee` retail's
+  shoulder, elbow and hand contacts (10250, 13250, 16250) sit 0.03 to
+  0.15 nearer the shooter than vcod's and the pelvis contact (19250) 0.08
+  farther, which reads as the target's upper body pitched a few tenths of
+  a degree further toward the shooter. INFERRED, the signs. The actor box
+  cull (9.5) and whole-packet cmds do not move them. VERIFIED, the gate.
 - "9.7 the look-at flag on a turned body": in `hit-melee` the target's
   `pm_flags` 0x200000 (its look-at trace meeting the shooter, 9.2) is
   set one snapshot where retail's is clear and clear one where retail's

@@ -62,11 +62,6 @@ const WEAPON_CAPTURES: &[&str] = &["rifle", "smg", "bar", "pistol", "switch", "f
 /// entry shrinks. Each reason names its section of
 /// docs/research/cod2-movement.md, or of cod2-combat.md where it says so.
 const GAPS: &[(&str, &str, usize, &str)] = &[
-    // `EV_RESET_ADS` (149) off the weapon code as the body rises from prone.
-    ("stance", "eventSequence", 1, "17.3 weapon events"),
-    ("stance", "events[1]", 1, "17.3 weapon events"),
-    ("stance_colt", "eventSequence", 1, "17.3 weapon events"),
-    ("stance_colt", "events[1]", 1, "17.3 weapon events"),
     // The thrower's own frag lands beside him: its blast's knockback is
     // `G_Damage`'s, server-side (cod2-combat.md 9.1).
     ("frag", "pm_flags", 3, "cod2-combat.md 9.1"),

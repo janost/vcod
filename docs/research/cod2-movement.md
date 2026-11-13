@@ -1000,7 +1000,6 @@ off `PM_Accelerate`'s use of `stopspeed` and the plane count off
   checked `PM_CrashLand` only), and what its predictor does with the
   unsent `oldVelocity`.
 - The `almostGroundPlane` field's readers.
-- 17.3's remaining gap: `EV_RESET_ADS` rising out of prone.
 
 ## 15. What a CoD2 `MoveRules` needs
 
@@ -1244,11 +1243,29 @@ right):
   not pmove. Once the clip stored the closing distance and its square
   roots as floats (`cod2-d3dbsp-format.md`, "The trace A/B"), every one of
   those rows matches retail bit for bit. VERIFIED (`moves_ab`, both runs).
-- **Weapon events (open).** `stance` and `stance_colt` get `EV_RESET_ADS`
-  (149) as the body rises out of prone, which `pm_weapon` beside the move
-  does not raise; the ring slot after it shifts (`moves_ab`'s `GAPS`, one
-  row each of `eventSequence` and `events[1]`). VERIFIED. `ladder`'s
-  `EV_PUTAWAY_WEAPON` (155) as the body takes the ladder and
+- **Weapon events (closed).** `stance` and `stance_colt` get `EV_RESET_ADS`
+  (149) on the cmd that presses a move key while still prone (10951 in
+  `stance`, `forwardmove` 127 with the prone key held); without it the
+  ring slot after it shifted by one (one row each of `eventSequence` and
+  `events[1]`). VERIFIED, the captures. It is `PmoveSingle`'s (0x80e8934),
+  ahead of the move: with `pm_flags` 0x1 set, a `forwardmove` or
+  `rightmove` whose magnitude grew over the last cmd's asks
+  `PM_InteruptWeaponWithProneMove` (0x80ed2de), and when that says yes
+  clears `pm_flags` 0x800 and calls `PM_ExitAimDownSight` (0x80ecc72:
+  `PM_AddEvent` 0x95, then `pm_flags` 0x40 off), sighted or not. VERIFIED,
+  the decompile. The ask reads `weaponstate` (ps+0xd8): 0 to 2 and 4 to 9
+  say yes, 3 and 11 to 16 say no (the flags and the sight stay), and any
+  other (10, 17 to 22) first runs the weapon interrupt 0x80ef946
+  (`pm_flags` 0x810 off, `PM_ExitBinocularsQuick` 0x80effda for 17 to 22:
+  `fWeaponPosFrac` 0, `PM_ExitAimDownSight`, then 0x80effae's 0x20000 off
+  and `EV_BINOCULAR_EXIT` 0xa9; `weaponTime`, `weaponDelay` and
+  `weaponstate` 0, weapon anim 0) and says yes. VERIFIED, the decompile.
+  vcod raised none and cleared both flags on every weapon state. vcod:
+  `pmove::prone_move_interrupts`; the interrupt's `WeaponState` half runs
+  at the top of `pm_weapon` (`PlayerState::weapon_interrupt`), which
+  writes no event, so the ring keeps retail's order. Both rows match.
+  VERIFIED (`moves_ab`, both runs). `ladder`'s `EV_PUTAWAY_WEAPON` (155)
+  as the body takes the ladder and
   `EV_RAISE_WEAPON` (154) onto the empty hands 211 ms later (not as it
   leaves, which raises none) match through the ladder arm of `PM_Weapon`
   (`cod2-combat.md` 1.7). VERIFIED.

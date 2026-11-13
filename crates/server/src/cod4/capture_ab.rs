@@ -553,10 +553,10 @@ fn pair_ab(gate: &str, pair: &Pair, gaps: &[(&str, &str)]) {
 }
 
 /// Why a dropped weapon differs: it leaves from the body's middle, not
-/// `tag_weapon_right`, and `G_RunItem`'s fall (`trType` 5, then 3 for 50
+/// the hand's tag, and `G_RunItem`'s fall (`trType` 5, then 3 for 50
 /// ms) and its rest on its side (roll 90, ground 1022) are left out
-/// (cod4-combat.md 6).
-const ITEM: &str = "the dropped weapon's start and fall (cod4-combat.md 6)";
+/// (cod4-combat.md 6.1).
+const ITEM: &str = "the dropped weapon's start and fall (cod4-combat.md 6.1)";
 
 /// What the rocket run still differs in.
 const ROCKET_GAPS: &[(&str, &str)] = &[
@@ -590,29 +590,7 @@ fn cod4_throwback_ab() {
     pair_ab("cod4_throwback_ab", &THROWBACK, THROWBACK_GAPS);
 }
 
-/// Why the prone run's killcam differs: retail trims its look back to
-/// 4200, ours to 4250 (a frame older), and ends it a frame apart
-/// (cod4-combat.md 7). Its rows but the clocks are held to the killcam's
-/// frames from 50000 on.
-const TRIM: &str = "the killcam's trim, 4200 against ours 4250 (cod4-combat.md 7)";
-
-const PRONE_GAPS: &[(&str, &str)] = &[
-    ("* entity *:3", ITEM),
-    ("target ps commandTime", TRIM),
-    ("target ps deltaTime", TRIM),
-    ("target ps eventSequence 5", TRIM),
-    ("target ps events 5", TRIM),
-    ("target ps weap 5", TRIM),
-    ("target ps torsoAnim 5", TRIM),
-    ("target ps torsoTimer 5", TRIM),
-    ("target ps pm_flags 5", TRIM),
-    ("target ps legsAnim 5", TRIM),
-    ("target ps eFlags 5", TRIM),
-    ("target ps viewangles 5", TRIM),
-    ("target ps aimSpreadScale 5", TRIM),
-    ("target ps fWeaponPosFrac 5", TRIM),
-    ("target ps ammo 5", TRIM),
-];
+const PRONE_GAPS: &[(&str, &str)] = &[("* entity *:3", ITEM)];
 
 /// A prone body's death and its corpse's torso (cod4-combat.md 5).
 #[test]
@@ -624,8 +602,9 @@ const KCENT_GAPS: &[(&str, &str)] = &[
     ("* entity *:3", ITEM),
     (
         "target ps viewangles[1]",
-        "the killcam's archived view: ours keeps the shooter's spawn yaw 90 where \
-         its live view after `setviewpos` reads 0 (cod4-combat.md 7)",
+        "the killcam's archived view: retail's archive holds the shooter's \
+         `setviewpos` yaw 0 where its cmds sum to ours's 90; why is open \
+         (cod4-combat.md 15)",
     ),
     (
         "shooter ps origin[2]",
