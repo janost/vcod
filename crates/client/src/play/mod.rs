@@ -30,6 +30,7 @@ pub mod cod4_profile;
 pub mod cod4_shock;
 #[cfg(test)]
 mod cod4_sweep;
+pub mod cod4_third_person;
 pub mod cvars;
 pub mod demos;
 pub mod events;

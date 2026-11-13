@@ -121,6 +121,8 @@ pub(crate) struct Cod4Client {
     /// The damage kick's roll this frame, degrees (its pitch goes on the
     /// camera; cod4-client-view.md 14).
     damage_roll: f32,
+    /// The frame draws in third person (`play::cod4_third_person`).
+    third_person: bool,
     shock_look: crate::play::cod4_shock::Look,
     turn: crate::play::cod2_shock::TurnCap,
     /// The voices `playLocalSound` started, by alias, for `stopLocalSound`.
@@ -283,6 +285,7 @@ impl Cod4Client {
             shock: Default::default(),
             shock_kick: [0.0, 0.0],
             damage_roll: 0.0,
+            third_person: false,
             shock_look: crate::play::cod4_shock::Look::NONE,
             turn: Default::default(),
             local_voices: HashMap::new(),
@@ -604,6 +607,8 @@ impl Cod4Client {
         // (cod4-effects.md 12), which play off this frame's eye and view
         // weapon tags.
         prof.next(Stage::Scene);
+        self.session.third_person =
+            crate::play::cod4_third_person::Dvars::read(|n| cx.shell.cvar(n).map(str::to_string));
         let scene = self.session.scene();
         let Some(scene) = scene else {
             prof.next(Stage::Events);
@@ -635,14 +640,16 @@ impl Cod4Client {
             })
             .unwrap_or(false);
         // On a gun (`eFlags` 0x300) `CG_OffsetFirstPersonView` skips the
-        // kick (0x450063).
+        // kick (0x450063); in third person it does not run.
         let gunner = scene.view.eflags & 0x300 != 0;
-        let [dmg_pitch, _, dmg_roll] = match gunner {
+        let third = scene.third_person;
+        self.third_person = third.is_some();
+        let [dmg_pitch, _, dmg_roll] = match gunner || third.is_some() {
             false => dk.view(since, scene.view.pos_frac, overlay),
             true => [0.0; 3],
         };
         self.damage_roll = dmg_roll;
-        self.view = Some((scene.eye, scene.angles.y));
+        self.view = Some((third.map_or(scene.eye, |t| t.origin), scene.angles.y));
         self.view_ps = Some(scene.view);
         self.aim = Some((scene.eye, scene.angles));
         // Live, the server flies a free spectator by its cmd's moves (the
@@ -654,15 +661,17 @@ impl Cod4Client {
         if self.free {
             cam.update(&self.keys.input(), cx.dt);
         } else {
-            cam.pos = scene.eye;
             // The drawn view is the scene's: a capture's recorded one, live
-            // the predicted one. The earthquakes shake it (`CG_ShakeCamera`).
+            // the predicted one, or the third-person camera. The earthquakes
+            // shake it (`CG_ShakeCamera`).
+            let (pos, angles) = third.map_or((scene.eye, scene.angles), |t| (t.origin, t.angles));
+            cam.pos = pos;
             let [p, y, _] = self.quakes.shake(now as i32, scene.eye);
             // A gunner's clamp leaves the pitch in 0..360 (345 is 15 up,
             // cod4-client-view.md 13); the camera's own pitch clamp reads
             // -180..180.
-            cam.pitch = -angle_normalize180(scene.angles.x + p + dmg_pitch).to_radians();
-            cam.yaw = (scene.angles.y + y).to_radians();
+            cam.pitch = -angle_normalize180(angles.x + p + dmg_pitch).to_radians();
+            cam.yaw = (angles.y + y).to_radians();
         }
         self.shellshock(cx, scene.render_time);
         prof.next(Stage::Pose);
@@ -671,15 +680,30 @@ impl Cod4Client {
         // the gun's `tag_player` as the view turns it, and a held trigger
         // (`viewlocked` 2) jitters the view by the gun's
         // `vertViewJitter` / `horizViewJitter` (cod4-client-view.md 13).
+        // In third person the camera backs off the gun's `tag_player`
+        // raised by the view height, and nothing jitters (0x4508ba).
         if !self.free
             && let Some(eye) = self.turret_eye(&scene)
         {
-            cam.pos = eye;
-            self.view = Some((eye, scene.angles.y));
             self.aim = Some((eye, scene.angles));
-            let [p, y] = self.turret_jitter();
-            cam.pitch -= p.to_radians();
-            cam.yaw += y.to_radians();
+            if let Some(t) = third {
+                let (pos, angles) = self.session.third_person_camera(
+                    eye + Vec3::Z * t.view_height,
+                    scene.angles,
+                    t.dead_yaw,
+                    scene.view.client_num,
+                );
+                cam.pos = pos;
+                cam.pitch = -angle_normalize180(angles.x).to_radians();
+                cam.yaw = angles.y.to_radians();
+                self.view = Some((pos, scene.angles.y));
+            } else {
+                cam.pos = eye;
+                self.view = Some((eye, scene.angles.y));
+                let [p, y] = self.turret_jitter();
+                cam.pitch -= p.to_radians();
+                cam.yaw += y.to_radians();
+            }
         }
         // The mouse's next turn is from the view drawn.
         self.cam_left = Some((cam.pitch, cam.yaw));
@@ -1015,6 +1039,11 @@ impl Cod4Client {
         if let Some(v) = &mut self.view_ps {
             v.gun_dir = out.gun_dir;
         }
+        // `CG_AddViewWeapon` draws nothing in third person (0x45704e): the
+        // own shots flash and leave from the body's gun.
+        if scene.third_person.is_some() {
+            return;
+        }
         // `CG_PlayClientSoundAliasByName`: the clip's mapped notetracks.
         for alias in &out.sounds {
             cx.audio.play_local(cx.fs, alias);
@@ -1182,7 +1211,11 @@ impl Cod4Client {
         }
         // The client-side bullets of the other players' shots.
         let own = self.aim.map(|(eye, angles)| cod4_fx::OwnView {
-            client: self.view_tags.as_ref().map(|(c, _)| *c),
+            client: self.view_tags.as_ref().map(|(c, _)| *c).or_else(|| {
+                self.view_ps
+                    .filter(|_| self.third_person)
+                    .map(|v| v.client_num)
+            }),
             eye,
             angles,
             flash: self
@@ -1190,6 +1223,7 @@ impl Cod4Client {
                 .as_ref()
                 .and_then(|(_, t)| t.flash)
                 .map(|f| f.0),
+            third_person: self.third_person,
         });
         let hits: Vec<_> = match (self.session.world(), &self.sounds) {
             (Some(w), Some(s)) => fired
@@ -1219,9 +1253,26 @@ impl Cod4Client {
             }
         }
         let own_gun = self.own_gun();
+        // In third person our own shots flash and eject on our body's gun,
+        // as anyone's do (cod4-client-view.md 16.4).
+        let own_body = self
+            .view_ps
+            .filter(|_| self.third_person)
+            .map(|v| v.client_num);
         if let Some(e) = &mut self.effects {
             take_level_effects(e, cx);
             for f in fired {
+                let body_shot;
+                let f = match own_body {
+                    Some(c) if f.entity.is_none() && f.name.starts_with("EV_FIRE_WEAPON") => {
+                        body_shot = Fired {
+                            entity: Some(c),
+                            ..f.clone()
+                        };
+                        &body_shot
+                    }
+                    _ => f,
+                };
                 for p in e.plays(f, &weapons, &cs, &tags, self.view_tags.as_ref()) {
                     let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
                     cx.audio.play_fx(cx.fs, sounds);

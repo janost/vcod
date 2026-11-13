@@ -22,6 +22,7 @@ use vcod_cod4::net::clmsg::UserCmd;
 use vcod_cod4::net::delta::{ClientState, ENTITYNUM_NONE, EntityState, PlayerState};
 use vcod_cod4::net::fields::{CLIENT_STATE, PLAYER_STATE};
 use vcod_cod4::net::stats::Stats;
+use vcod_cod4::pmove::wire::{body_height, player_entity};
 
 use super::Cod4Zones;
 use super::clip::{Body4, Brush4, Cod4Clip};
@@ -2364,18 +2365,6 @@ fn view_only(ps: &mut PlayerState, cmd: &Cmd) {
     }
 }
 
-/// `r.maxs[2]` as `PM_CheckDuck` leaves it: 30 prone, 50 crouched, 70
-/// standing.
-fn body_height(pm_flags: u32) -> f32 {
-    if pm_flags & pmove::pmf::PRONE != 0 {
-        30.0
-    } else if pm_flags & pmove::pmf::DUCKED != 0 {
-        50.0
-    } else {
-        70.0
-    }
-}
-
 /// The loadout's playerstate fields.
 fn loadout_into(ps: &mut PlayerState, l: &super::weapons::Loadout) {
     for i in 0..4 {
@@ -2395,98 +2384,6 @@ fn loadout_into(ps: &mut PlayerState, l: &super::weapons::Loadout) {
     let m = ps.ammoclip.len();
     ps.ammoclip.copy_from_slice(&l.ammoclip[..m]);
     ps.weapon_models = l.weapon_models;
-}
-
-/// The entity's `fTorsoPitch` and `fWaistPitch`: 0 unless the eye's target
-/// is prone (`PM_GetEffectiveStance` 1, 0x8055ffe), else the playerstate's
-/// wrapped to -180..180 (`(x - floor(x + 0.5)) * 360` of the turns, the
-/// floor stored as a float) times the eye lerp's fraction toward prone
-/// (`1 - f` on a lerp up). 0x8052cc1..0x8052d5f.
-fn prone_pitches(ps: &PlayerState) -> (f32, f32) {
-    let int = |n: &str| ps.word(n) as i32;
-    if int("viewHeightTarget") != 11 {
-        return (0.0, 0.0);
-    }
-    let lerp_time = int("viewHeightLerpTime");
-    let frac = if lerp_time == 0 {
-        1.0
-    } else {
-        let down = int("viewHeightLerpDown") != 0;
-        let dur = vcod_cod4::pmove::view_height_lerp_duration(int("viewHeightLerpTarget"), down);
-        let f = (f64::from(int("commandTime") - lerp_time) / f64::from(dur)).clamp(0.0, 1.0);
-        if down { f } else { 1.0 - f }
-    };
-    let wrap = |name: &str| {
-        let t = f64::from(f32::from_bits(ps.word(name))) * f64::from(1.0f32 / 360.0);
-        let floor = (t + 0.5).floor() as f32;
-        ((t - f64::from(floor)) * 360.0 * frac) as f32
-    };
-    (wrap("fTorsoPitch"), wrap("fWaistPitch"))
-}
-
-/// `BG_PlayerStateToEntityState` (1.7's 0x8052940, inlined): the snapped
-/// origin and view angles (the capture's teammate at z 236 off its
-/// playerstate's 236.125), the lean, a prone body's torso and waist
-/// pitches, the weapon and its camo, the stance flags, the ground, and
-/// the box packed as `SV_LinkEntity` does (`x | (1 - mins.z) << 8 |
-/// (maxs.z + 32) << 16`: 0x66010f for the 30 x 70 body, VERIFIED live);
-/// `pos` reads `trType` 3 and `apos` 1 on the capture's still teammate
-/// (VERIFIED live). The angles' and pitches' sources are
-/// cod4-player-anims.md 8.
-pub fn player_entity(slot: usize, ps: &PlayerState) -> EntityState {
-    let mut e = EntityState::default();
-    e.0[0] = slot as u32;
-    e.0[1] = 1;
-    let mut set = |name: &str, v: u32| {
-        if let Some(w) = ent_word(1, name) {
-            e.0[w] = v;
-        }
-    };
-    for i in 0..3 {
-        let o = f32::from_bits(ps.word(&format!("origin[{i}]")));
-        set(&format!("lerp.pos.trBase[{i}]"), o.trunc().to_bits());
-    }
-    for i in 0..3 {
-        let a = f32::from_bits(ps.word(&format!("viewangles[{i}]")));
-        set(&format!("lerp.apos.trBase[{i}]"), a.trunc().to_bits());
-    }
-    set("lerp.u.player.leanf", ps.word("leanf"));
-    let (torso, waist) = prone_pitches(ps);
-    set("fTorsoPitch", torso.to_bits());
-    set("fWaistPitch", waist.to_bits());
-    set("lerp.u.player.movementDir", ps.word("movementDir"));
-    set("lerp.pos.trType", 3);
-    set("lerp.apos.trType", 1);
-    // 0x20000 for a dead body (`pm_type` past 6), 0x40000 for one down
-    // its sights (`PMF_SIGHT` 0x10), each cleared otherwise
-    // (0x8052a54..0x8052a82, 0x8052ca2, 0x8052cb1).
-    let mut e_flags = ps.word("eFlags") & !0x6_0000;
-    if ps.word("pm_type") > 6 {
-        e_flags |= 0x2_0000;
-    }
-    if ps.word("pm_flags") & 0x10 != 0 {
-        e_flags |= 0x4_0000;
-    }
-    set("lerp.eFlags", e_flags);
-    set("weapon", ps.word("weapon"));
-    // The held weapon's camo, `weaponmodels[weapon]` (0x8052af5..0x8052b03).
-    let held = ps.word("weapon") as usize;
-    set(
-        "weaponModel",
-        ps.weapon_models.get(held).map_or(0, |&m| u32::from(m)),
-    );
-    set("legsAnim", ps.word("legsAnim"));
-    set("torsoAnim", ps.word("torsoAnim"));
-    set("groundEntityNum", ps.word("groundEntityNum"));
-    // A gunner names his gun: `eFlags & 0x300` copies `viewlocked_entNum`
-    // (ps+0x59c) into `otherEntityNum` (0x8052ab9; cod4-gsc.md 9.2).
-    if ps.word("eFlags") & 0x300 != 0 {
-        set("otherEntityNum", ps.word("viewlocked_entNum"));
-    }
-    set("clientNum", slot as u32);
-    let h = body_height(ps.word("pm_flags")) as u32;
-    set("solid", 15 | (1 << 8) | ((h + 32) << 16));
-    e
 }
 
 /// The playerstate clocks an archived frame carries (`commandTime`,
@@ -2757,62 +2654,5 @@ mod tests {
         assert_eq!(cycle(&mut level, 1, 1, &no_axis), Some(1));
         let none = |_: u32| false;
         assert_eq!(cycle(&mut level, 1, 1, &none), None);
-    }
-
-    /// Others see a body's aim and lean: `apos` is the view `(int)`, which
-    /// the -100 field sends a half short up (the kill capture's aiming
-    /// shooter reads pitch 1.99951 and yaw -68.99414, cod4-player-anims.md
-    /// 8), `leanf` rides
-    /// along, and the torso and waist pitches only prone, eased by the
-    /// eye's lerp.
-    #[test]
-    fn a_body_carries_its_aim_its_lean_and_its_prone_pitches() {
-        let f = |v: f32| v.to_bits();
-        let mut ps = PlayerState::default();
-        ps.set("viewangles[0]", f(2.7));
-        ps.set("viewangles[1]", f(-69.6));
-        ps.set("leanf", f(-0.25));
-        ps.set("fTorsoPitch", f(10.0));
-        ps.set("fWaistPitch", f(350.0));
-        ps.set("viewHeightTarget", 60);
-        let word = |e: &EntityState, n: &str| f32::from_bits(e.0[ent_word(1, n).unwrap()]);
-        let e = player_entity(3, &ps);
-        assert_eq!(word(&e, "lerp.apos.trBase[0]"), 2.0);
-        assert_eq!(word(&e, "lerp.apos.trBase[1]"), -69.0);
-        let sent = e.sent();
-        assert_eq!(word(&sent, "lerp.apos.trBase[0]"), 1.9995117);
-        assert_eq!(word(&sent, "lerp.apos.trBase[1]"), -68.99414);
-        assert_eq!(word(&e, "lerp.u.player.leanf"), -0.25);
-        assert_eq!(word(&e, "fTorsoPitch"), 0.0);
-        ps.set("viewHeightTarget", 11);
-        let e = player_entity(3, &ps);
-        assert_eq!(word(&e, "fTorsoPitch"), 10.0);
-        assert!((word(&e, "fWaistPitch") + 10.0).abs() < 1e-3);
-        // Halfway down into prone: half the pitch.
-        ps.set("commandTime", 1200);
-        ps.set("viewHeightLerpTime", 1000);
-        ps.set("viewHeightLerpTarget", 11);
-        ps.set("viewHeightLerpDown", 1);
-        let e = player_entity(3, &ps);
-        assert_eq!(word(&e, "fTorsoPitch"), 5.0);
-    }
-
-    /// Others see the held weapon's camo: `weaponModel` is
-    /// `weaponmodels[weapon]` (cod4-client-view.md 4.7), and it rides the
-    /// wire's 4 bits.
-    #[test]
-    fn a_body_carries_its_weapons_camo() {
-        let mut ps = PlayerState::default();
-        ps.set("weapon", 2);
-        ps.weapon_models[1] = 6;
-        ps.weapon_models[2] = 3;
-        let model = |e: &EntityState| e.0[ent_word(1, "weaponModel").unwrap()];
-        let e = player_entity(3, &ps);
-        assert_eq!(model(&e), 3);
-        assert_eq!(model(&e.sent()), 3);
-        ps.set("weapon", 1);
-        assert_eq!(model(&player_entity(3, &ps)), 6);
-        ps.set("weapon", 0);
-        assert_eq!(model(&player_entity(3, &ps)), 0);
     }
 }

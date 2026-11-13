@@ -356,3 +356,189 @@ impl PlayerState {
         w
     }
 }
+
+/// `r.maxs[2]` as `PM_CheckDuck` leaves it: 30 prone, 50 crouched, 70
+/// standing.
+pub fn body_height(pm_flags: u32) -> f32 {
+    if pm_flags & super::pmf::PRONE != 0 {
+        30.0
+    } else if pm_flags & super::pmf::DUCKED != 0 {
+        50.0
+    } else {
+        70.0
+    }
+}
+
+/// The entity's `fTorsoPitch` and `fWaistPitch`: 0 unless the eye's target
+/// is prone (`PM_GetEffectiveStance` 1, `cod4_lnxded` 0x8055ffe), else the
+/// playerstate's wrapped to -180..180 (`(x - floor(x + 0.5)) * 360` of the
+/// turns, the floor stored as a float) times the eye lerp's fraction toward
+/// prone (`1 - f` on a lerp up). 0x8052cc1..0x8052d5f.
+fn prone_pitches(ps: &delta::PlayerState) -> (f32, f32) {
+    if int(ps, ix!("viewHeightTarget")) != 11 {
+        return (0.0, 0.0);
+    }
+    let lerp_time = int(ps, ix!("viewHeightLerpTime"));
+    let frac = if lerp_time == 0 {
+        1.0
+    } else {
+        let down = word(ps, ix!("viewHeightLerpDown")) != 0;
+        let dur = super::view_height_lerp_duration(int(ps, ix!("viewHeightLerpTarget")), down);
+        let f =
+            (f64::from(int(ps, ix!("commandTime")) - lerp_time) / f64::from(dur)).clamp(0.0, 1.0);
+        if down { f } else { 1.0 - f }
+    };
+    let wrap = |i: usize| {
+        let t = f64::from(float(ps, i)) * f64::from(1.0f32 / 360.0);
+        let floor = (t + 0.5).floor() as f32;
+        ((t - f64::from(floor)) * 360.0 * frac) as f32
+    };
+    (wrap(ix!("fTorsoPitch")), wrap(ix!("fWaistPitch")))
+}
+
+/// `BG_PlayerStateToEntityState` (1.7's `cod4_lnxded` 0x8052940, inlined):
+/// the snapped origin and view angles (the capture's teammate at z 236 off
+/// its playerstate's 236.125), the lean, a prone body's torso and waist
+/// pitches, the weapon and its camo, the stance flags, the ground, and
+/// the box packed as `SV_LinkEntity` does (`x | (1 - mins.z) << 8 |
+/// (maxs.z + 32) << 16`: 0x66010f for the 30 x 70 body, VERIFIED live);
+/// `pos` reads `trType` 3 and `apos` 1 on the capture's still teammate
+/// (VERIFIED live). The angles' and pitches' sources are
+/// cod4-player-anims.md 8. The server sends it for every other client;
+/// the client builds its own body from it (`cg.predictedPlayerEntity`,
+/// cod4-client-view.md 16).
+pub fn player_entity(slot: usize, ps: &delta::PlayerState) -> delta::EntityState {
+    let mut e = delta::EntityState::default();
+    e.0[0] = slot as u32;
+    e.0[1] = 1;
+    let mut put = |name: &str, v: u32| {
+        if let Some(f) = delta::EntityState::table(1).iter().find(|f| f.name == name) {
+            e.0[f.word()] = v;
+        }
+    };
+    let origin = ix!(3 "origin");
+    let angles = ix!(3 "viewangles");
+    for i in 0..3 {
+        put(
+            &format!("lerp.pos.trBase[{i}]"),
+            float(ps, origin[i]).trunc().to_bits(),
+        );
+        put(
+            &format!("lerp.apos.trBase[{i}]"),
+            float(ps, angles[i]).trunc().to_bits(),
+        );
+    }
+    put("lerp.u.player.leanf", word(ps, ix!("leanf")));
+    let (torso, waist) = prone_pitches(ps);
+    put("fTorsoPitch", torso.to_bits());
+    put("fWaistPitch", waist.to_bits());
+    put("lerp.u.player.movementDir", word(ps, ix!("movementDir")));
+    put("lerp.pos.trType", 3);
+    put("lerp.apos.trType", 1);
+    // 0x20000 for a dead body (`pm_type` past 6), 0x40000 for one down
+    // its sights (`PMF_SIGHT` 0x10), each cleared otherwise
+    // (0x8052a54..0x8052a82, 0x8052ca2, 0x8052cb1).
+    let own = word(ps, ix!("eFlags"));
+    let mut e_flags = own & !0x6_0000;
+    if word(ps, ix!("pm_type")) > 6 {
+        e_flags |= 0x2_0000;
+    }
+    if word(ps, ix!("pm_flags")) & 0x10 != 0 {
+        e_flags |= 0x4_0000;
+    }
+    put("lerp.eFlags", e_flags);
+    let held = word(ps, ix!("weapon"));
+    put("weapon", held);
+    // The held weapon's camo, `weaponmodels[weapon]` (0x8052af5..0x8052b03).
+    put(
+        "weaponModel",
+        ps.weapon_models
+            .get(held as usize)
+            .map_or(0, |&m| u32::from(m)),
+    );
+    put("legsAnim", word(ps, ix!("legsAnim")));
+    put("torsoAnim", word(ps, ix!("torsoAnim")));
+    put("groundEntityNum", word(ps, ix!("groundEntityNum")));
+    // A gunner names his gun: `eFlags & 0x300` copies `viewlocked_entNum`
+    // (ps+0x59c) into `otherEntityNum` (0x8052ab9; cod4-gsc.md 9.2).
+    if own & 0x300 != 0 {
+        put("otherEntityNum", word(ps, ix!("viewlocked_entNum")));
+    }
+    put("clientNum", slot as u32);
+    let h = body_height(word(ps, ix!("pm_flags"))) as u32;
+    put("solid", 15 | (1 << 8) | ((h + 32) << 16));
+    e
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn set_named(ps: &mut delta::PlayerState, name: &str, v: u32) {
+        let f = PLAYER_STATE.iter().find(|f| f.name == name).unwrap();
+        ps.words[f.word()] = v;
+    }
+
+    fn ent_f32(e: &delta::EntityState, name: &str) -> f32 {
+        let f = delta::EntityState::table(1)
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap();
+        f32::from_bits(e.0[f.word()])
+    }
+
+    /// Others see a body's aim and lean: `apos` is the view `(int)`, which
+    /// the -100 field sends a half short up (the kill capture's aiming
+    /// shooter reads pitch 1.99951 and yaw -68.99414, cod4-player-anims.md
+    /// 8), `leanf` rides along, and the torso and waist pitches only
+    /// prone, eased by the eye's lerp.
+    #[test]
+    fn a_body_carries_its_aim_its_lean_and_its_prone_pitches() {
+        let f = |v: f32| v.to_bits();
+        let mut ps = delta::PlayerState::default();
+        set_named(&mut ps, "viewangles[0]", f(2.7));
+        set_named(&mut ps, "viewangles[1]", f(-69.6));
+        set_named(&mut ps, "leanf", f(-0.25));
+        set_named(&mut ps, "fTorsoPitch", f(10.0));
+        set_named(&mut ps, "fWaistPitch", f(350.0));
+        set_named(&mut ps, "viewHeightTarget", 60);
+        let e = player_entity(3, &ps);
+        assert_eq!(ent_f32(&e, "lerp.apos.trBase[0]"), 2.0);
+        assert_eq!(ent_f32(&e, "lerp.apos.trBase[1]"), -69.0);
+        let sent = e.sent();
+        assert_eq!(ent_f32(&sent, "lerp.apos.trBase[0]"), 1.9995117);
+        assert_eq!(ent_f32(&sent, "lerp.apos.trBase[1]"), -68.99414);
+        assert_eq!(ent_f32(&e, "lerp.u.player.leanf"), -0.25);
+        assert_eq!(ent_f32(&e, "fTorsoPitch"), 0.0);
+        set_named(&mut ps, "viewHeightTarget", 11);
+        let e = player_entity(3, &ps);
+        assert_eq!(ent_f32(&e, "fTorsoPitch"), 10.0);
+        assert!((ent_f32(&e, "fWaistPitch") + 10.0).abs() < 1e-3);
+        // Halfway down into prone: half the pitch.
+        set_named(&mut ps, "commandTime", 1200);
+        set_named(&mut ps, "viewHeightLerpTime", 1000);
+        set_named(&mut ps, "viewHeightLerpTarget", 11);
+        set_named(&mut ps, "viewHeightLerpDown", 1);
+        let e = player_entity(3, &ps);
+        assert_eq!(ent_f32(&e, "fTorsoPitch"), 5.0);
+    }
+
+    /// Others see the held weapon's camo: `weaponModel` is
+    /// `weaponmodels[weapon]` (cod4-client-view.md 4.7), and it rides the
+    /// wire's 4 bits.
+    #[test]
+    fn a_body_carries_its_weapons_camo() {
+        let mut ps = delta::PlayerState::default();
+        set_named(&mut ps, "weapon", 2);
+        ps.weapon_models[1] = 6;
+        ps.weapon_models[2] = 3;
+        let model = |e: &delta::EntityState| ent_f32(e, "weaponModel").to_bits();
+        let e = player_entity(3, &ps);
+        assert_eq!(model(&e), 3);
+        assert_eq!(model(&e.sent()), 3);
+        set_named(&mut ps, "weapon", 1);
+        assert_eq!(model(&player_entity(3, &ps)), 6);
+        set_named(&mut ps, "weapon", 0);
+        assert_eq!(model(&player_entity(3, &ps)), 0);
+    }
+}

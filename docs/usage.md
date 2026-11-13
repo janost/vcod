@@ -311,6 +311,7 @@ Client cvars:
 | `name`, `cl_run`, `sensitivity`, `m_yaw`, `m_pitch`, `m_filter`, `m_forward`, `m_side` | As retail |
 | `cl_freelook` | 0 moves with the mouse's vertical motion unless `+mlook` is held (`m_forward`; `m_side` under `+strafe`) |
 | `cg_fov` | Cheat-protected: 80 unless the server runs `sv_cheats 1` |
+| `cg_thirdPerson`, `cg_thirdPersonRange`, `cg_thirdPersonAngle` | CoD4, cheat-protected: 1 draws the third-person view, the camera `cg_thirdPersonRange` (120) behind and turned `cg_thirdPersonAngle` (0) degrees about the eye |
 | `rate`, `snaps` | `rate` defaults to 25000; retail's first-run 5000 starves snapshots |
 | `com_maxfps` | Retail's frame cap, `timedemo` included (`1000 / com_maxfps` whole ms a frame). vcod's default is 0, no cap past vsync; retail's is 85 |
 | `cl_avidemo`, `cl_forceavidemo` | `cl_avidemo <fps>` moves the clock `1000 / fps` ms a frame, whatever the frame takes, and writes each frame in a game or demo as `screenshot silent` (UO: a negative count writes JPEGs). `cl_forceavidemo 1` writes outside a game too |
