@@ -54,7 +54,8 @@ pub(crate) fn friction(ps: &mut PlayerState, pml: &Pml, rules: &super::Rules) {
     if pml.walking {
         v.z = 0.0;
     }
-    let speed = d(fpu::length(v));
+    // The inlined `sqrtf` roots the kept sum and keeps the root (0x8056fa0).
+    let speed = fpu::dot(v, v).sqrt();
     if speed < 1.0 {
         ps.velocity = Vec3::ZERO;
         return;

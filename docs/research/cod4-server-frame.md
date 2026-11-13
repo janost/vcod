@@ -243,9 +243,9 @@ The frame is `1000 / sv_fps` in integer milliseconds (0x81770c4's
   got a message every frame whatever its `snaps`: 40 a second at 40.
   VERIFIED live. Off the LAN `snapshotMsec` is `1000 / snaps` with `snaps`
   clamped to 30 at most, 1000 for `snaps` 0 or less, and no `sv_fps` term
-  (`SV_UserinfoChanged`, 0x81704b5..0x81704d4). VERIFIED. That a `snaps
-  20` client off the LAN then gets every other frame at 40 is INFERRED;
-  no off-LAN run was made.
+  (`SV_UserinfoChanged`, 0x81704b5..0x81704d4). VERIFIED. Off the LAN a
+  `snaps 20` client got every other frame at 40, 20 a second (section
+  12). VERIFIED live.
 - `G_RunFrame` (0x80b61fc) bumps `level.framenum` (0x836f8a8), moves
   `level.time` (0x836f8ac) to `level.previousTime` (0x836f8b0), takes the
   frame's `svs.time` as `level.time` and stores the difference as
@@ -373,7 +373,7 @@ Field by field, against the capture's first snapshot (VERIFIED live):
   first snapshot is retail's word for word but `commandTime`. INFERRED
   (the order is the packet timing, not a rule).
 
-Open: the off-LAN snapshot rate above 20.
+Off the LAN, `sv_fps` and `snaps` together set the rate (section 12).
 
 `play::cod4`'s `cod4_live_sv_fps_40_frames_and_waits_as_retail` replays
 `play-1.7-svfps40.txt` through the client and joins vcod-server at
@@ -695,3 +695,84 @@ second test can write `contents` over a brush between, so skipping it
 is not safe; of the brush tests past the new axial check, about half
 repeat one the same sweep already made. VERIFIED (counters in a
 32-bot mp_crossfire run).
+
+## 12. Off the LAN: the snapshot rate and the unacked back-off
+
+### The runs
+
+`tools/cod4_offlan_capture.sh retail|ours <dir> [SVFPS:SNAPS ...]`:
+`cod4_lnxded` (or vcod-server) at 203.0.113.1, `cod4_probe` at
+198.51.100.2 in a child net namespace, the layout of
+`cod4-handshake.md` 15, so the probe is off the LAN for both
+`Sys_IsLANAddress` tests. A stand-in authorize server answers each
+`getIpAuthorize` with `accept` (`cod4-handshake.md` 15, "A stand-in
+authorize server"), so the probe joins at once. Each pair sets `sv_fps`
+over rcon and joins a spectator for 12 s; `cod4_probe --snaps N` sends a
+userinfo with that `snaps` on its first snapshot. mp_crash `war`, rate
+25000, `sv_maxRate` 0.
+
+### The rate
+
+A message goes out on the first frame whose `svs.time` has reached the
+slot's `nextSnapshotTime` (0x817b080's `jl`, section 4). INFERRED (control
+flow). Off the LAN that time is the larger of the rate's wait and
+`snapshotMsec` past the send (`cod4-handshake.md` 15), so a client gets a
+message every `ceil(snapshotMsec / frame)` frames: neither number alone
+sets the rate. INFERRED (the two rules). Messages a second over the last
+three quarters of each join, retail and vcod-server (debug build), the
+probe's receive times. VERIFIED live:
+
+| `sv_fps` | `snaps` | `snapshotMsec` | retail | vcod-server |
+|---|---|---|---|---|
+| 20 | 20 | 50 | 20.0 | 20.0 |
+| 40 | 20 | 50 | 20.0 | 20.0 |
+| 30 | 20 | 50 | 15.1 (two 33 ms frames) | 15.2 |
+| 20 | 30 | 33 | 20.0 | 20.0 |
+| 30 | 30 | 33 | 30.3 | 30.3 |
+| 40 | 30 | 33 | 20.0 | 20.0 |
+| 100 | 30 | 33 | 25.0 (four 10 ms frames) | 25.0 |
+| 100 | 20 | 50 | 20.0 | 20.0 |
+| 100 | 0 | 1000 | 1.0 | 1.0 |
+
+So off the LAN no client gets more than `snaps` 30 allows, and one at
+`sv_fps` 40 gets 20 whether it asks 20 or 30. A LAN client gets every
+frame (section 8). vcod-server matched every row before this run; nothing
+changed for it.
+
+### The back-off
+
+`SV_SendMessageToClient` reads the slot's state first (0x8178aff). For a
+client at `CS_ACTIVE` (4) whose `deltaMessage` (+0x8) is not negative and
+whose message number (+0x10, read at 0x8178ae2 before
+`SV_Netchan_Transmit` at 0x81786e6) is more than 28 (`cmp 0x1c`, 0x8178c27)
+past it, it sets `nextSnapshotTime` (+0x21464) to `svs.time + irand(0,
+pow(2, n)) * snapshotMsec` (`pow` 0x804a3ec, `irand` 0x8190f38, +0x804f4)
+and steps n (+0x804f8) up to 8 (0x8178c84..0x8178c98), and returns: no
+LAN test, no rate, no `rateDelayed`, no idle second. Every other message
+takes the paths of `cod4-handshake.md` 15 and zeroes n first (0x8178b08).
+VERIFIED (the immediates and offsets). That +0x8 is `deltaMessage` and
++0x10 the netchan's `outgoingSequence` is INFERRED (+0x10 indexes the
+frame ring at 0x8178aa1, and the netchan's remote address sits at +0x20,
+the LAN test's argument). `irand(min, max)` is q_shared's: the `holdrand`
+LCG (0x8272078, `* 0x343fd + 0x269ec3`), `min + ((holdrand >> 17) * (max -
+min) >> 15)` in 64 bits. VERIFIED (the code). So the draw shares
+`holdrand` with the game. INFERRED.
+
+So a client that stops acknowledging keeps its rate for 28 messages, then
+waits up to 1, 2, 4 ... 256 snapshot intervals between messages, each a
+random number of intervals, until it answers or times out. INFERRED.
+
+Live: the probe, through `tools/udp_relay.py`, was stopped 8 s into a join
+for 20 s (`OFFLAN_STOP=8:20`, `sv_fps` 20, `snaps` 20). Its last move
+acknowledged message 70 or 71. VERIFIED live.
+
+- Retail sent 72 to 102 50 ms apart, then 103 to 110 150, 253, 347, 1002,
+  2852, 3150, 899 and 9499 ms apart. VERIFIED live. Each gap fits `max(k,
+  1) * 50` with `k < 2^n` for n climbing from 0 at message 99. INFERRED.
+- vcod-server before: 50 ms apart to message 93, then 100 ms apart to the
+  end (a full snapshot each, its rate). VERIFIED live.
+- vcod-server after: 72 to 102 50 ms apart, then 150, 200, 300, 1150,
+  1300, 501, 9149 and 5500 ms. VERIFIED live. Its draws come off its own
+  `holdrand` (`Cod4Game::hold`), so the gaps differ and the bounds hold;
+  `cod4_an_unacking_client_backs_off` checks the bounds, the exponent and
+  the reset.

@@ -23,10 +23,13 @@ use vcod_common::net::trajectory::Trajectory;
 
 const EV_BULLET_HIT_SMALL: i32 = 173;
 const EV_BULLET_HIT_LARGE: i32 = 174;
-/// How far our muzzle offset may sit from retail's. A retail impact origin
-/// is whole units and the sway model is good to 0.04 degrees, about a
-/// quarter unit at this range.
-const OFFSET_TOL: f32 = 1.5;
+/// How far our muzzle offset may sit from retail's: 1.03 at most, measured
+/// 2026-11-13. Each side's impact is snapped to whole units, and the
+/// offset takes the sway out at that side's own clock (ours runs about 13.7
+/// s behind retail's), through this file's sway model, good to 0.04 degrees,
+/// about a quarter unit at this range. A bound of 1.0 needs ours on
+/// retail's clock, where the impacts would compare as they land.
+const OFFSET_TOL: f32 = 1.1;
 const LEANF_TOL: f32 = 0.01;
 /// `adsIdleAmount` of the scoped kar98k, and `idleCrouchFactor`.
 const ADS_IDLE: f32 = 45.0;

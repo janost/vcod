@@ -2106,7 +2106,8 @@ mod tests {
     /// The penetration walk's contacts for a fan of rounds on mp_crash,
     /// through its walls and two boxes (a player's and a solid's), with
     /// and without Deep Impact. Pinned bit for bit off the build that
-    /// first walked them (cod4-effects.md 12.1).
+    /// first walked them, retaken under 1.7's brush kernel float model
+    /// (cod4-effects.md 12.1, cod4-collision.md 2).
     #[test]
     fn the_penetration_walk_holds_on_mp_crash() {
         use crate::play::cod4_predict::{Solid, SolidKind};
@@ -2191,7 +2192,7 @@ mod tests {
         }
         assert_eq!(
             (contacts, hash),
-            (301, 0x5414_2c66_4388_8382),
+            (301, 0x3608_2852_1786_fd79),
             "{contacts} {hash:#x}"
         );
     }

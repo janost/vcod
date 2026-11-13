@@ -6637,9 +6637,15 @@ skyrocket`): a rocket fired 80 degrees up with `trDelta` (344, 350, 2756)
 went out with `apos.trBase` (280.09662, 45.49534, 0): `vectoangles`' pitch,
 down positive and wrapped into [0, 360), not Q3's -79.9.
 `missile_edge_ab::launch_angles_match_retail_on_1_1` holds ours within the panzerfaust's 3.5 degree `adsSpread` of it (each server
-draws the spread off its own RNG). INFERRED, `net/snapshots-uo-bazooka.bin`:
-UO's 16-bit angle field cannot tell the two signs apart (the round off
--0.88 and 359.12 is the same short). VERIFIED, `game.mp.uo.i386.so`:
+draws the spread off its own RNG). VERIFIED, `game.mp.uo.i386.so`: UO's
+`fire_rocket` calls `vectoangles` (0x5ff25) on `s.pos.trDelta` after the
+three `fistp`s that truncate it (0x5fe8c..0x5fecc), then `G_SetAngle`
+(0x5ff3c). VERIFIED, `net/snapshots-uo-bazooka.bin`: `trDelta` (2799, 22,
+43) goes out with `apos` pitch short -161 (65375) and yaw 81, which is
+359.12 and 0.45 truncated to 65536ths; -0.88 would truncate to -160, so the
+wrap shows on UO's wire. `uo_weapons_ab`'s two bazooka gates check `apos`
+against `vectoangles` of the wire `trDelta` on both sides and against
+retail's bits on the pinned draw. VERIFIED, `game.mp.uo.i386.so`:
 UO's `vectoangles` (0x3aded) wraps both angles into [0, 360) the same way,
 beside a separate `vectosignedangles` (0x3af4c). INFERRED: no bounce bit (0x03000000) is set, so
 13.1 explodes it on whatever it strikes: a body or anything else that takes

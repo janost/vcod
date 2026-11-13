@@ -401,7 +401,16 @@ fn replay(lines: &[Line], world: &CollisionWorld, weapons: &[Option<WeaponDef>])
             rebased.view_lerp_target,
             rebased.view_lerp_down,
         );
+        let prev = rebased;
         rebased = state_from(s, weapon, Some(eye));
+        // The capture records no weapon state either: carry ours, or a crawl
+        // with the sight button held raises the sight a prone move holds down
+        // and slows to the sighted speed after every rebase.
+        rebased.weaponstate = prev.weaponstate;
+        rebased.weapon_time_ms = prev.weapon_time_ms;
+        rebased.weapon_delay_ms = prev.weapon_delay_ms;
+        rebased.weap_anim = prev.weap_anim;
+        rebased.last_cmd_ads = prev.last_cmd_ads;
         rebased_st = s.ct;
         // Retail's cmds were rebased on retail's `delta_angles`, so the free
         // run takes them too.
@@ -693,63 +702,39 @@ fn report(path: &str, rows: &[Row], world: &CollisionWorld) {
     }
 }
 
-/// What the rebased run may read, from the measurement of 2026-09-23, with
-/// the velocity snap and the walk's accel floor (docs/research/cod11-mantle.md,
-/// "The tail of the default arm" and "The walk's accel floor"): the 8 ms
-/// capture reads |dz| p95 0.000, p99 0.017, max 0.125 and dxy p95 0.000,
-/// p99 0.001, max 2.9, the 25 ms one |dz| 0 throughout and dxy p95 0.004,
-/// p99 0.430, max 4.5, with 2 and 12 rows past a unit and no ground
-/// disagreement. Without the two the dxy p95 read 0.130 and 0.146. A box
-/// mover read 1.08 on every snapshot of the 3.3-degree street, and the
-/// facet polyhedron on terrain read 0.96 at a kerb-ramp foot.
-/// The outlier share: the two captures sit at 0.14% and 0.8%.
+/// What the walks may read, measured 2026-11-13: both runs, free and
+/// rebased, land on retail's origin to the bit on every snapshot of the 8 ms
+/// and 25 ms captures. The history: 2026-09-23 read |dz| max 0.125 and dxy
+/// max 4.5 rebased, with up to 12 rows past a unit, before the velocity snap
+/// and the walk's accel floor (docs/research/cod11-mantle.md, "The tail of
+/// the default arm" and "The walk's accel floor").
 const SLOPE: Tolerance = Tolerance {
-    p95_z: 0.02,
-    p95_xy: 0.05,
-    p99_z: 0.05,
-    p99_xy: 0.6,
-    max_z: 0.5,
-    outlier_share: 0.015,
+    origin: 0.0,
     view: None,
 };
 
-/// What the prone crawls may read, from the measurement of 2026-09-27 with
-/// the dive, the landing damp, the body swing while moving, the pitch cap,
-/// the fit trace at 24 and the eye's legs with the walk scale blended across
-/// them (docs/research/cod11-mantle.md, "Prone" and "The eye through a
-/// stance change"). The street reads |dz| max 0.125 and dxy p99 0.048, max
-/// 0.43; the mound to [`MOUND_UNTIL`] reads |dz| p99 0.129, max 0.173 and
-/// dxy max 0.52; neither has a row past a unit. The view: the body's yaw
-/// within 0.5 degrees, both prone pitches within 1.42, where our terrain
-/// trace names the other of two facets under a crawl, the view angles and
-/// `delta_angles` within one 16-bit step, and the eye on retail's to the
-/// printed hundredth. Before those the dives read 10.7 units off, the body
-/// stood still for 99 snapshots of retail's swing, the pitch cap was missing
-/// outright, 38.8 degrees on the street and 48.8 on the mound, and a
-/// sideways prone press read 2.7 units off. The body's bend, measured
-/// 2026-10-09 with `BG_CheckProneValid`'s ground samples: the street on
-/// retail's to the printed hundredth throughout, the mound `fTorsoHeight`
-/// within 0.0001 and both pitches within 0.11 degrees; without them all three
-/// read 0, up to 8 units and 19.3 degrees off. Measured 2026-10-18 with
-/// every `AngleDelta` and cap placement through the shorts
-/// (cod11-mantle.md, "`AngleDelta` and the angle folds at every call
-/// site"): the body's yaw, both prone pitches, the view and `delta_angles`
-/// on retail's within 3.1e-5 degrees on both crawls; the view yaw had read
-/// a short (0.0055) off where the cap held it.
+/// What the prone crawls may read, measured 2026-11-13: the origin on
+/// retail's to the bit in both runs on the street and the mound to
+/// [`MOUND_UNTIL`]; the eye, `fTorsoHeight` and both body pitches exact; the
+/// body's yaw, both prone pitches, the view and `delta_angles` within 3.1e-5
+/// degrees (the street's view yaw and prone pitches, two `AngleDelta` folds
+/// off a short; cod11-mantle.md, "`AngleDelta` and the angle folds at every
+/// call site"). The street's rebased run read dxy max 0.71 until it carried
+/// our weapon state across the rebase. The history: 2026-09-27 read |dz| max
+/// 0.173 and dxy max 0.52, both prone pitches 1.42 degrees off, before the
+/// dive, the landing damp, the body swing, the pitch cap, the fit trace at 24
+/// and the eye's legs (cod11-mantle.md, "Prone" and "The eye through a stance
+/// change"); 2026-10-09 the body's bend up to 8 units and 19.3 degrees off
+/// before `BG_CheckProneValid`'s ground samples.
 const PRONE: Tolerance = Tolerance {
-    p95_z: 0.02,
-    p95_xy: 0.05,
-    p99_z: 0.2,
-    p99_xy: 0.6,
-    max_z: 0.5,
-    outlier_share: 0.0,
+    origin: 0.0,
     view: Some(ViewTolerance {
-        direction: 0.001,
-        pitches: 0.001,
-        view: 0.001,
-        view_height: 0.01,
-        body_height: 0.01,
-        body_pitch: 0.2,
+        direction: 1e-4,
+        pitches: 1e-4,
+        view: 1e-4,
+        view_height: 0.0,
+        body_height: 0.0,
+        body_pitch: 0.0,
     }),
 };
 
@@ -761,12 +746,8 @@ const MOUND_UNTIL: i32 = 84000;
 
 /// What a replay may read, origin in units and the prone view in degrees.
 struct Tolerance {
-    p95_z: f32,
-    p95_xy: f32,
-    p99_z: f32,
-    p99_xy: f32,
-    max_z: f32,
-    outlier_share: f32,
+    /// Bound on |dz| and dxy on every snapshot, free and rebased.
+    origin: f32,
     /// Bounds on `ViewDelta`: the body's yaw, both prone pitches, and the
     /// view angles and `delta_angles` the caps push.
     view: Option<ViewTolerance>,
@@ -847,29 +828,18 @@ fn check_path(map: &str, gametype: &str, path: &str, tol: &Tolerance, until: Opt
             "{path}: the prone view parts from retail's: {v:?}"
         );
     }
-    assert!(
-        rebased.p95_dz <= tol.p95_z && rebased.p95_dxy <= tol.p95_xy,
-        "{path}: rebased p95 dz {:.3} dxy {:.3} past the tolerance",
-        rebased.p95_dz,
-        rebased.p95_dxy
-    );
-    assert!(
-        rebased.p99_dz <= tol.p99_z && rebased.p99_dxy <= tol.p99_xy,
-        "{path}: rebased p99 dz {:.3} dxy {:.3} past the tolerance",
-        rebased.p99_dz,
-        rebased.p99_dxy
-    );
-    assert!(
-        rebased.max_dz <= tol.max_z,
-        "{path}: rebased max dz {:.3} past the tolerance",
-        rebased.max_dz
-    );
-    assert!(
-        (rebased.outliers as f32) <= tol.outlier_share * rows.len() as f32,
-        "{path}: {} of {} snapshots land more than a unit from retail",
-        rebased.outliers,
-        rows.len()
-    );
+    for (run, st) in [("free", &free), ("rebased", &rebased)] {
+        assert!(
+            st.max_dz <= tol.origin && st.max_dxy <= tol.origin,
+            "{path}: the {run} run lands off retail's origin: max dz {:e} dxy {:e}",
+            st.max_dz,
+            st.max_dxy
+        );
+        assert_eq!(
+            st.ground_disagreements, 0,
+            "{path}: the {run} run's ground parts from retail's"
+        );
+    }
 }
 
 /// A capture that is not committed: `SLOPE_FIXTURE=<path> SLOPE_MAP=<map>

@@ -191,7 +191,7 @@ cargo run -p vcod-common --example cod4_capture -- out.txt --strings
 
 ## 9. What vcod-server's 1.7 server sends
 
-`vcod-server <map> --game cod4` (`crates/server/src/cod4/`) answers the out-of-band half of `handshake-1.7.txt` byte for byte, except the challenge's value, two `rand()` draws off the level's stream (`cod4::oob_ab`, cod4-combat.md 10.9). With an install it runs the level (`cod4-gsc.md` 7): the gamestate carries the script's configstrings, the dvar mirror and the baselines of the script's entities, and a client connects, picks a team and class and spawns as on retail (`cod4::wire_ab`). Building that gamestate brought out these facts:
+`vcod-server <map> --game cod4` (`crates/server/src/cod4/`) answers the out-of-band half of `handshake-1.7.txt` byte for byte, except the challenge's value, two `rand()` draws off the level's stream (`cod4::oob_ab`, cod4-combat.md 10.9). The capture holds one challenge. One draw pair at an unknown `svs.time` matches about one seed in 256 (64 draw offsets times 2^18 values of `svs.time` over 2^32), so even a minute of wall-clock milliseconds holds some 230 candidate seeds and `recover_game_seed` cannot pin this run's; the gate compares the reply's prefix and form, and `cod4::wire_ab::the_challenges_come_off_the_levels_rand` checks the draws on the walk run's recovered seed. INFERRED (the search's arithmetic). With an install it runs the level (`cod4-gsc.md` 7): the gamestate carries the script's configstrings, the dvar mirror and the baselines of the script's entities, and a client connects, picks a team and class and spawns as on retail (`cod4::wire_ab`). Building that gamestate brought out these facts:
 
 - Configstring 1 ends `\fs_game\\` (two backslashes) with `fs_game` empty, after `timescale`, on all four captures. VERIFIED live. `SV_SaveSystemInfo` appends `\fs_game\` explicitly when the dvar is empty. INFERRED.
 - A pure-off server's configstring 1 has no `sv_iwds` or `sv_iwdNames` key (`play-1.7-spec.txt`, `sv_pure\0`). VERIFIED live.
@@ -207,7 +207,7 @@ Gates:
 
 | Gate | Checks |
 |---|---|
-| `cod4::oob_ab` | the replies, configstrings 0, 1, 2, the map centre's x and y and the mirror against the capture after 30 s of the level (configstring 1 needs `$COD4_DIR`) |
+| `cod4::oob_ab` | the replies, configstrings 0, 2 and the mirror against the capture after 30 s of the level; with `$COD4_DIR` the slots the running level writes too: 1, the fog (9), the game end time (11), the map centre (12) and `\winner\0` (19), every slot below the localized strings retail holds |
 | `cod4::wire_ab` | three clients join `war` in process (`cod4-gsc.md` 7); the walker replays its captured cmds (cod4-pmove.md 15.1) and every snapshot's HUD elements (cod4-hud.md 5.1) |
 | `cod4::prematch_ab` | |
 | `cod4::disconnect_tests` | clients leave, one reconnects into its live slot; no script error |
@@ -547,3 +547,9 @@ Read with gdb on the same layout (retail under `unshare -rnm`, breakpoints on th
 
 - `SV_SendMessageToClient` (0x8178aff..0x8178bed): a loopback or LAN address (0x8178b3e) is due the next frame. Anyone else is due `(min(bytes, 1500) * 1000 + 48000) / rate` ms on, `rate` capped by `sv_maxRate` past 999, at least `snapshotMsec`. A client not `CS_ACTIVE` (4) with no download (`downloadName`, +0x212a4) waits at least a second (0x8178bd1..0x8178bed). VERIFIED (the code).
 - Both gamestates' second fragment left 957 ms after the first, the rest about 350 ms apart. VERIFIED live. vcod-server waits the same second (`cod4_an_idle_off_lan_client_waits_a_second`): its second fragments left 976 and 991 ms after the first, the rest 350 ms apart. VERIFIED live. Without that wait it sent the second 336 ms after the first.
+- A client in the world more than 28 messages past its last acknowledge is paced by a random back-off instead, LAN or not (`cod4-server-frame.md` 12). VERIFIED (the code).
+
+### A stand-in authorize server
+
+- `SV_AuthorizeIpPacket` (0x816fd62) takes a packet only from the authorize server's address (`SV_AuthorizeIpPacket: not from authorize server` 0x82309e4 otherwise), finds the slot by argv 1, the challenge (`SV_AuthorizeIpPacket: challenge not found` 0x8230a18), and stamps the slot's time. VERIFIED (the code and strings). Argv 2 is `deny` (0x8231222), `demo` (0x8231296) or `accept` (0x82312a7); argv 3 the reason (`CLIENT_UNKNOWN_TO_AUTH`, `BAD_CDKEY`, `INVALID_CDKEY`, `BANNED_CDKEY`); past a `deny`, argv 5 must equal the slot's `getchallenge` hex (`strcmp` at 0x816ffb8) or it answers `error\nEXE_ERR_BAD_CDKEY` and prints `rejecting connection due to mismatched GUID` (0x8230a44). An `accept` sends `challengeResponse %i` (0x823115c) when the slot holds no client yet (+0x28). INFERRED (control flow).
+- A stand-in at 127.0.0.2:20800 that answered each `getIpAuthorize` with `ipAuthorize <challenge> accept KEY_IS_GOOD 0 <hex>`, the request's challenge and hex, let `cod4_probe` in from 198.51.100.2 30 s after the start: `challengeResponse` came 13 ms after its first `getchallenge`. VERIFIED live. `tools/cod4_offlan_capture.sh` runs that stand-in, so an off-LAN run waits out no 20 minutes.

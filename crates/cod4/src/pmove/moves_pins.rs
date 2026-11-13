@@ -143,7 +143,7 @@ fn a_damage_timer_slows_the_walk_until_it_runs_out() {
     play(&mut whole, &keys[..], rules, RIFLE);
     assert_eq!(hurt.damage_timer, 0);
     assert!(hurt.origin.x < whole.origin.x);
-    assert_eq!(pin, 0x9d54_cd14_3d03_b557);
+    assert_eq!(pin, 0x34f7_0ba1_be41_c5a0);
 }
 
 #[test]

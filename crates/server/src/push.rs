@@ -3,6 +3,7 @@
 //! (docs/research/cod11-movers.md, section 12).
 
 use crate::area::Link;
+use crate::game::combat::Pass;
 use crate::game::host::GameHost;
 use crate::game::mover::Step;
 use crate::spectate::ClientSim;
@@ -58,6 +59,10 @@ pub fn push(
 ) -> Option<Vec<usize>> {
     let amove = step.to.1 - step.from.1;
     let yaw_short = (amove.y * ANGLE2SHORT) as i32 & 0xffff;
+    let seats: Vec<(u32, u32)> = sims
+        .iter()
+        .filter_map(|(s, sim)| sim.seat.map(|seat| (*s as u32, seat.vehicle)))
+        .collect();
 
     // The list is filtered once, against the mover where it now is.
     let kept: Vec<Kept> = step
@@ -66,12 +71,20 @@ pub fn push(
         .filter_map(|&n| {
             let link = host.area.last_link(n);
             if let Some(i) = sims.iter().position(|(s, _)| *s as u32 == n) {
-                return listed_client(host, step, n, sims[i].1, link, world)
+                let owners = Owners {
+                    host,
+                    seats: &seats,
+                };
+                return listed_client(&owners, step, n, sims[i].1, link, world)
                     .then_some(Kept::Client(i));
             }
             let id = host.ents.handle(n)?;
             let body = crate::game::item::push_body(host, cx, id)?;
-            item_in_way(host, step, n, &body, link, world).then_some(Kept::Item(id, body))
+            let owners = Owners {
+                host,
+                seats: &seats,
+            };
+            item_in_way(&owners, step, n, &body, link, world).then_some(Kept::Item(id, body))
         })
         .collect();
     let number = |k: &Kept, sims: &[(usize, &mut ClientSim)]| match k {
@@ -203,27 +216,67 @@ fn overlaps_moved(step: &Step, link: Option<Link>) -> bool {
     (0..3).all(|i| l.absmin[i] < maxs[i] && l.absmax[i] > mins[i])
 }
 
+/// `r.ownerNum` as the per-entity clip reads it, for what a push's candidate
+/// trace can meet: a seated client's is his vehicle, a driven UO vehicle's
+/// its driver (coduo-vehicles.md 13). Nothing else vcod links under the
+/// push masks has one: a missile's and a turret's contents miss them.
+struct Owners<'a> {
+    host: &'a GameHost,
+    /// Each seated client's slot and vehicle.
+    seats: &'a [(u32, u32)],
+}
+
+impl Owners<'_> {
+    fn of(&self, n: u32) -> Option<u32> {
+        if let Some(&(_, vehicle)) = self.seats.iter().find(|(s, _)| *s == n) {
+            return Some(vehicle);
+        }
+        let id = self.host.ents.handle(n)?;
+        self.host.vehicles.live.get(&id)?.seats[1].map(|s| s as u32)
+    }
+}
+
 /// `G_MoverPush`'s candidate trace (game.mp 0x554ee): a `trap_Trace` of
 /// the entity's box at its `r.currentOrigin` that does not move, passing the
-/// entity itself, kept only when it names the pusher (0x55515). The world
-/// clips first and a box inside it ends the trace there (`cod_lnxded`
-/// 0x80916f4); past it the first entity in the walk's order whose clip the
-/// box is inside names the trace (movers doc 12, "The candidate trace").
+/// entity itself, kept only when it names the pusher (0x55515).
 fn names_pusher(
-    host: &GameHost,
+    owners: &Owners,
+    step: &Step,
+    me: u32,
+    at: Vec3,
+    shape: (Vec3, Vec3),
+    mask: u32,
+    world: &CollisionWorld,
+) -> bool {
+    first_named(owners, step, me, at, shape, mask, world) == Some(step.number)
+}
+
+/// The entity a position test of `me`'s box names, `None` for the world or
+/// nothing. The world clips first and a box inside it ends the trace there
+/// (`cod_lnxded` 0x80916f4); past it the first entity in the walk's order
+/// whose clip the box is inside names the trace, skipping `me`, what `me`
+/// owns and what `me`'s owner owns (0x8090f18; movers doc 12, "The
+/// candidate trace").
+fn first_named(
+    owners: &Owners,
     step: &Step,
     me: u32,
     at: Vec3,
     (mins, maxs): (Vec3, Vec3),
     mask: u32,
     world: &CollisionWorld,
-) -> bool {
+) -> Option<u32> {
     if world.world_box_position_test(at, mins, maxs, mask) {
-        return false;
+        return None;
     }
+    let host = owners.host;
+    let pass = Pass {
+        ent: me,
+        owner: owners.of(me),
+    };
     let (lo, hi) = (at + mins, at + maxs);
     for n in host.area.trace_order(lo.into(), hi.into(), mask as i32) {
-        if n == me {
+        if pass.skips(n, owners.of(n)) {
             continue;
         }
         let inside = match entity_clip(host, step, n) {
@@ -240,10 +293,10 @@ fn names_pusher(
             }),
         };
         if inside {
-            return n == step.number;
+            return Some(n);
         }
     }
-    false
+    None
 }
 
 /// What an entity clips a trace with when it is a brush model (`r.bmodel`,
@@ -270,7 +323,7 @@ fn entity_clip(host: &GameHost, step: &Step, n: u32) -> Option<Pusher> {
 /// or one whose box the mover's box now overlaps and whose candidate trace
 /// names the mover (0x55405, 0x5540e, 0x554ee).
 fn listed_client(
-    host: &GameHost,
+    owners: &Owners,
     step: &Step,
     me: u32,
     sim: &ClientSim,
@@ -285,7 +338,7 @@ fn listed_client(
     sim.ps.ground_entity_num() == step.number
         || overlaps_moved(step, link)
             && names_pusher(
-                host,
+                owners,
                 step,
                 me,
                 sim.ps.origin,
@@ -352,7 +405,7 @@ pub enum ItemPush {
 /// link box overlaps the mover's moved box and its candidate trace under
 /// its own push mask names the mover.
 fn item_in_way(
-    host: &GameHost,
+    owners: &Owners,
     step: &Step,
     me: u32,
     item: &ItemBody,
@@ -362,7 +415,7 @@ fn item_in_way(
     item.ground == step.number as i32
         || overlaps_moved(step, link)
             && names_pusher(
-                host,
+                owners,
                 step,
                 me,
                 item.origin,
@@ -506,6 +559,30 @@ mod tests {
         // Standing on the top face: absmin.z = 8 + 0 - 1 = 7 overlaps.
         assert!(overlaps_moved(&s, player(32.0)));
         assert!(!overlaps_moved(&s, None));
+    }
+
+    /// The candidate trace passes what the listed entity's owner owns
+    /// (`cod_lnxded` 0x8090f18): another rider of the vehicle a rider sits in
+    /// does not name his trace, a stranger standing in him does.
+    #[test]
+    fn the_candidate_trace_passes_what_the_pass_owner_owns() {
+        let mut host = GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]);
+        let world = vcod_common::collision::test_world(&[]);
+        let (mins, maxs) = (Vec3::new(-15.0, -15.0, 0.0), Vec3::new(15.0, 15.0, 70.0));
+        let at = Vec3::new(0.0, 0.0, 0.125);
+        let body = Link::boxed(at.into(), mins.into(), maxs.into(), CONTENTS_BODY as i32);
+        let (me, other) = (1, 2);
+        host.area.link(me, &body);
+        host.area.link(other, &body);
+        let s = step((Vec3::ZERO, Vec3::ONE));
+        let named = |seats: &[(u32, u32)]| {
+            let owners = Owners { host: &host, seats };
+            first_named(&owners, &s, me, at, (mins, maxs), MASK_PLAYERSOLID, &world)
+        };
+        assert_eq!(named(&[]), Some(other));
+        assert_eq!(named(&[(me, 300), (other, 300)]), None);
+        // The owner itself is not passed: only what it owns.
+        assert_eq!(named(&[(me, other)]), Some(other));
     }
 
     /// The retail rest spots `tag` logged for slots 1 and 2 in a pushcand

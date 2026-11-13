@@ -1,8 +1,9 @@
 //! CoD4 1.7's indexed collision triangles: three vertex indices and no
 //! stored plane each, met by a point or a capsule sweep and by the
 //! capsule's position test, with a walkable bit per edge
-//! (`docs/research/cod4-collision.md` 3). The point sweep keeps 1.7's
-//! float stores; the capsule's arithmetic is plain `f32`.
+//! (`docs/research/cod4-collision.md` 3). The point and capsule sweeps keep
+//! 1.7's float model (what it stores, what stays on the x87 stack); the
+//! border's corner and the position test are plain `f32`.
 
 // A test written `!(a < b)` keeps the branch a NaN takes.
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
@@ -42,30 +43,10 @@ impl Contact {
 enum EdgeSweep {
     /// Not before the trace's fraction, or moving away.
     Clear,
-    /// Between the ends.
-    Struck(Contact),
+    /// Between the ends: the strike is written into the trace.
+    Struck,
     /// On the line past end 0 or end 1: only that corner is left to meet.
     Beyond(usize),
-}
-
-/// What [`Cx::cylinder_entry`] found: the entry's fraction and the
-/// measures the rest of the edge test reads again.
-struct Entry {
-    enter: f32,
-    /// The edge's squared length.
-    len2: f32,
-    across2: f32,
-    off: f32,
-    mid_scaled: f32,
-}
-
-/// The capsule's sphere nearer a triangle, met against the face.
-struct Face {
-    sphere: Vec3,
-    contact: Contact,
-    /// Whether the contact lies outside each edge, in the order 1.7 sweeps
-    /// them: `v0 v1`, `v0 v2`, `v1 v2`.
-    outside: [bool; 3],
 }
 
 fn corners(m: &IndexedMesh, i: usize) -> [Vec3; 3] {
@@ -149,179 +130,282 @@ impl Cx<'_> {
         })
     }
 
-    /// The capsule against triangle `i` (`CM_TraceCapsuleThroughTriangle`):
+    /// The capsule against triangle `i` (`CM_TraceCapsuleThroughTriangle`,
+    /// inlined in 1.7's tree walk at `cod4_lnxded` 0x8116cd1..0x8117aa6):
     /// its sphere nearer the face against the face 0.125 out; a contact
-    /// off the face sweeps the sphere at each edge it lies outside, and
-    /// past an edge's end at that corner. An edge contact takes the
-    /// edge's walkable bit (`3 i + the opposite corner`), a corner the
-    /// AND of the edges swept past (doc 3).
+    /// outside an edge sweeps the sphere at that edge (`v0 v1`, `v0 v2`,
+    /// `v1 v2`), and past an edge's end at that corner. An edge contact
+    /// takes the edge's walkable bit (`3 i + the opposite corner`), a
+    /// corner the AND of the edges swept past. Which values are stored
+    /// floats and which stay on the x87 stack (an `f64` here) is the
+    /// binary's (doc 3).
     fn capsule_tri4(&self, m: &IndexedMesh, i: usize, tr: &mut ClipTrace) {
-        let tri = corners(m, i);
-        let Some(face) = self.face_contact(tri, tr.fraction) else {
-            return;
-        };
-        let [a, b, c] = tri;
-        let edges = [
-            (a, a - b, [a, b], 2),
-            (a, a - c, [a, c], 1),
-            (b, b - c, [b, c], 0),
-        ];
-        let mut crossed = edges
-            .into_iter()
-            .zip(face.outside)
-            .filter_map(|(e, out)| out.then_some(e))
-            .peekable();
-        if crossed.peek().is_none() {
-            return face.contact.apply(tr, Some(false));
-        }
-        let mut corner = None;
-        let mut walk = true;
-        for (from, along, ends, opposite) in crossed {
-            let bit = m.edge_walkable(3 * i + opposite);
-            match self.sweep_edge(face.sphere, from, along, tr.fraction) {
-                EdgeSweep::Struck(hit) => return hit.apply(tr, Some(bit)),
-                EdgeSweep::Beyond(end) => {
-                    corner = Some(ends[end]);
-                    walk &= bit;
-                }
-                EdgeSweep::Clear => {}
-            }
-        }
-        if let Some(hit) = corner.and_then(|v| self.corner_contact(face.sphere, v, tr.fraction)) {
-            hit.apply(tr, Some(walk));
-        }
-    }
-
-    /// The face test of [`Self::capsule_tri4`]: `None` when the sweep
-    /// moves off the face or the sphere misses it before `limit`.
-    fn face_contact(&self, [a, b, c]: [Vec3; 3], limit: f32) -> Option<Face> {
         let sw = &self.sw;
-        let (ba, ca) = (a - b, a - c);
-        let scaled = ca.cross(ba);
-        let closing = sw.sweep.dot(scaled);
-        if !(closing < 0.0) {
-            return None;
+        let [a, b, c] = corners(m, i);
+        let [a64, c64] = [a, c].map(Vec3::as_dvec3);
+        let e01 = a - b;
+        let e02k = a64 - c64;
+        let e02 = a - c;
+        let nzk = e02k.x * f64::from(e01.y) - e02k.y * f64::from(e01.x);
+        let n = Vec3::new(
+            (f64::from(e01.z) * e02k.y - f64::from(e01.y) * e02k.z) as f32,
+            (e02k.z * f64::from(e01.x) - f64::from(e01.z) * e02k.x) as f32,
+            nzk as f32,
+        );
+        let sweep = sw.sweep.as_dvec3();
+        let closing_k =
+            (sweep.y * f64::from(n.y) + stored(sweep.x * f64::from(n.x))) + nzk * sweep.z;
+        if closing_k >= 0.0 {
+            return;
         }
-        let area2 = scaled.length();
-        let normal = scaled / area2;
+        let closing = stored(closing_k);
+        let (normal, len) = crate::x87::normalize_to_len(n);
+        let area2 = stored(len);
         // The lower sphere, or the upper under a face turned down.
-        let mut sphere = sw.start;
-        if normal.z < 0.0 {
-            sphere.z += sw.sphere_z;
+        let off = if normal.z >= 0.0 {
+            sw.sphere_z
         } else {
-            sphere.z -= sw.sphere_z;
-        }
-        let lead = sphere - sw.radius * normal - a;
-        let gap = lead.dot(normal);
-        let (fraction, solid, foot) = if gap >= 0.0 {
-            let f = -((gap - CLIP_EPS) / closing) * area2;
-            if limit <= f {
-                return None;
-            }
-            (f.max(0.0), false, lead)
-        } else {
+            -sw.sphere_z
+        };
+        let start = sw.start.as_dvec3();
+        let sphere_z = start.z - f64::from(off);
+        let sphere = Vec3::new(sw.start.x, sw.start.y, sphere_z as f32);
+        let nk = normal.as_dvec3();
+        let r = f64::from(sw.radius);
+        let lead = DVec3::new(
+            (-r * nk.x + start.x) - a64.x,
+            (nk.y * -r + start.y) - a64.y,
+            (-r * nk.z + sphere_z) - a64.z,
+        );
+        let gap = (nk.x * lead.x + nk.y * lead.y) + nk.z * lead.z;
+        let (fraction, solid, foot) = if 0.0 > gap {
             // Already through the face's plane: solid when the centre is
             // within a radius of it, measured from its foot on the plane.
-            let rel = sphere - a;
-            let d = rel.dot(normal);
-            if sw.radius * sw.radius <= d * d {
-                return None;
+            let rel = DVec3::new(start.x - a64.x, start.y - a64.y, sphere_z - a64.z);
+            let d = (nk.x * rel.x + nk.y * rel.y) + nk.z * rel.z;
+            if d * d >= r * r {
+                return;
             }
-            (0.0, true, rel - d * normal)
+            let foot = DVec3::new(rel.x + -d * nk.x, rel.y + nk.y * -d, rel.z + -d * nk.z);
+            (0.0, true, foot)
+        } else {
+            let g = -stored(gap - f64::from(CLIP_EPS));
+            let f = ((area2 * g) / closing) as f32;
+            if f >= tr.fraction {
+                return;
+            }
+            (f, false, lead)
         };
-        let m = sw.sweep.cross(foot);
-        let (s, t) = (m.dot(ba), m.dot(ca));
-        Some(Face {
-            sphere,
-            contact: Contact {
-                fraction,
-                normal,
-                startsolid: Some(solid),
-            },
-            outside: [s < 0.0, t > 0.0, closing > t - s],
-        })
+        let mut moment = DVec3::new(
+            foot.z * sweep.y - sweep.z * foot.y,
+            sweep.z * foot.x - foot.z * sweep.x,
+            sweep.x * foot.y - sweep.y * foot.x,
+        );
+        let e01k = e01.as_dvec3();
+        let s_k = e01k.z * moment.z + stored(e01k.y * moment.y + stored(e01k.x * moment.x));
+        let s = stored(s_k);
+        let mut outside = false;
+        let mut walk = true;
+        let mut corner = None;
+        // `None` when the edge is struck (the triangle is done), else the
+        // corner past an end, with the edge's walkable bit.
+        let edge = |from, along, ends: [Vec3; 2], opposite, tr: &mut ClipTrace| match self
+            .sweep_edge(sphere, from, along, tr)
+        {
+            EdgeSweep::Struck => {
+                tr.walkable = m.edge_walkable(3 * i + opposite);
+                None
+            }
+            EdgeSweep::Clear => Some(None),
+            EdgeSweep::Beyond(end) => Some(Some((ends[end], m.edge_walkable(3 * i + opposite)))),
+        };
+        if 0.0 > s_k {
+            // The moment goes through a float across the edge's call.
+            moment = DVec3::new(stored(moment.x), stored(moment.y), stored(moment.z));
+            let Some(beyond) = edge(a, e01, [a, b], 2, tr) else {
+                return;
+            };
+            if let Some((v, bit)) = beyond {
+                corner = Some(v);
+                walk = bit;
+            }
+            outside = true;
+        }
+        let e02s = e02.as_dvec3();
+        let t_k = (moment.x * e02s.x + moment.y * e02s.y) + moment.z * e02s.z;
+        let mut t = t_k;
+        if t_k > 0.0 {
+            t = stored(t_k);
+            let Some(beyond) = edge(a, e02, [a, c], 1, tr) else {
+                return;
+            };
+            if let Some((v, bit)) = beyond {
+                corner = Some(v);
+                walk &= bit;
+            }
+            outside = true;
+        }
+        if closing > t - s {
+            let Some(beyond) = edge(b, b - c, [b, c], 0, tr) else {
+                return;
+            };
+            if let Some((v, bit)) = beyond {
+                corner = Some(v);
+                walk &= bit;
+            }
+        } else if !outside {
+            tr.normal = normal;
+            tr.walkable = false;
+            tr.fraction = if -fraction < 0.0 { fraction } else { 0.0 };
+            tr.startsolid = solid;
+            return;
+        }
+        if let Some(v) = corner {
+            self.vertex4(sphere, v, walk, tr);
+        }
     }
 
-    /// The sphere at `sphere`, grown by the clip epsilon, swept at the line
-    /// `from + s along` (`CM_TraceSphereThroughEdge`, 1.7's 0x81150ae):
-    /// where it enters the cylinder round the line, then whether that
-    /// point lies between the ends. A sphere that starts inside the
+    /// `CM_TraceSphereThroughEdge` (1.7's 0x81150ae): the sphere at
+    /// `sphere`, grown by the clip epsilon, swept at the line `from + s
+    /// along`. Where it enters the cylinder round the line, then whether
+    /// that point lies between the ends; a sphere that starts inside the
     /// cylinder and closes on the line meets it at fraction 0, solid when
-    /// it is within its own radius.
-    fn sweep_edge(&self, sphere: Vec3, from: Vec3, along: Vec3, limit: f32) -> EdgeSweep {
-        let rel = sphere - from;
-        let Some(entry) = self.cylinder_entry(rel, along, limit) else {
-            return EdgeSweep::Clear;
-        };
+    /// it is within its own radius. A strike is written into `tr` (its
+    /// fraction, normal and, from inside, `startsolid`). Which values are
+    /// stored floats is the binary's (doc 3).
+    fn sweep_edge(&self, sphere: Vec3, from: Vec3, along: Vec3, tr: &mut ClipTrace) -> EdgeSweep {
         let sw = &self.sw;
-        let entering = entry.enter >= 0.0;
-        let at = if entering {
-            rel + entry.enter * sw.sweep
-        } else {
-            rel
-        };
-        let s = -at.dot(along);
-        if !(s > 0.0) {
+        let rel = (sphere - from).as_dvec3();
+        let al = along.as_dvec3();
+        let sweep = sw.sweep.as_dvec3();
+        let across = DVec3::new(
+            al.y * sweep.z - al.z * sweep.y,
+            al.z * sweep.x - sweep.z * al.x,
+            sweep.y * al.x - sweep.x * al.y,
+        );
+        let off = (rel.x * across.x + rel.y * across.y) + rel.z * across.z;
+        let across2 =
+            stored(across.z * across.z + stored(across.y * across.y + stored(across.x * across.x)));
+        let reach_k = f64::from(CLIP_EPS) + f64::from(sw.radius);
+        let reach = stored(reach_k);
+        let off2 = off * off;
+        let room = reach_k * reach_k * across2 - off2;
+        if 0.0 >= room {
+            return EdgeSweep::Clear;
+        }
+        let len2_k = (al.x * al.x + al.y * al.y) + al.z * al.z;
+        let len2 = stored(len2_k);
+        let half = stored((room * len2_k).sqrt() / across2);
+        let w = DVec3::new(
+            rel.y * al.z - rel.z * al.y,
+            rel.z * al.x - rel.x * al.z,
+            rel.x * al.y - rel.y * al.x,
+        );
+        let mid_scaled = (across.y * w.y + across.x * w.x) + across.z * w.z;
+        let mid = mid_scaled / across2;
+        if 0.0 > half + mid {
+            return EdgeSweep::Clear;
+        }
+        let enter = mid - half;
+        if enter >= f64::from(tr.fraction) {
+            return EdgeSweep::Clear;
+        }
+        if 0.0 > enter {
+            // Inside the cylinder already.
+            let s = -((rel.x * al.x + al.y * rel.y) + rel.z * al.z);
+            if 0.0 >= s {
+                return EdgeSweep::Beyond(0);
+            }
+            if s >= len2 {
+                return EdgeSweep::Beyond(1);
+            }
+            let k = s / len2;
+            let out = DVec3::new(al.x * k + rel.x, al.y * k + rel.y, al.z * k + rel.z);
+            if (out.x * sweep.x + out.y * sweep.y) + out.z * sweep.z >= 0.0 {
+                return EdgeSweep::Clear;
+            }
+            tr.normal = crate::x87::normalize_to(out.as_vec3());
+            tr.fraction = 0.0;
+            let inner = f64::from(sw.radius) * f64::from(sw.radius) * across2 - stored(off2);
+            let ms = stored(mid_scaled);
+            tr.startsolid = len2 * inner > ms * ms;
+            return EdgeSweep::Struck;
+        }
+        let at = rel + enter * sweep;
+        let s = -((al.x * at.x + al.y * at.y) + al.z * at.z);
+        if 0.0 >= s {
             return EdgeSweep::Beyond(0);
         }
-        if !(entry.len2 > s) {
+        if s >= len2 {
             return EdgeSweep::Beyond(1);
         }
-        // From the nearest point on the line out to the sphere's centre.
-        let out = at + (s / entry.len2) * along;
-        let contact = if entering {
-            Contact {
-                fraction: entry.enter,
-                normal: out * (1.0 / (sw.radius + CLIP_EPS)),
-                startsolid: None,
-            }
-        } else if out.dot(sw.sweep) < 0.0 {
-            let inner = sw.radius * sw.radius * entry.across2 - entry.off * entry.off;
-            Contact {
-                fraction: 0.0,
-                normal: out.normalize(),
-                startsolid: Some(entry.len2 * inner > entry.mid_scaled * entry.mid_scaled),
-            }
-        } else {
-            return EdgeSweep::Clear;
-        };
-        EdgeSweep::Struck(contact)
+        let k = s / len2;
+        let out = at + al * k;
+        let inv = 1.0 / reach;
+        tr.normal = Vec3::new(
+            (out.x * inv) as f32,
+            (stored(out.y) * inv) as f32,
+            (inv * stored(out.z)) as f32,
+        );
+        tr.fraction = enter as f32;
+        EdgeSweep::Struck
     }
 
-    /// Where the grown sphere `rel` off a point of the line enters the
-    /// cylinder round it, the cylinder's sides measured along
-    /// `along x sweep` and scaled by its squared length; `None` when it
-    /// never does before `limit`.
-    fn cylinder_entry(&self, rel: Vec3, along: Vec3, limit: f32) -> Option<Entry> {
+    /// `CM_TraceSphereThroughVertex` as the triangle arm inlines it
+    /// (`cod4_lnxded` 0x8117354..0x8117aa6): the sphere at `sphere`, grown
+    /// by the clip epsilon, swept at the corner `v`. The nearer root, its
+    /// normal one Newton step of the reciprocal length from unit; a sphere
+    /// already within reach meets it at fraction 0. `walkable` takes `walk`.
+    fn vertex4(&self, sphere: Vec3, v: Vec3, walk: bool, tr: &mut ClipTrace) {
         let sw = &self.sw;
-        let reach = sw.radius + CLIP_EPS;
-        let across = along.cross(sw.sweep);
-        let across2 = across.length_squared();
-        let off = rel.dot(across);
-        let room = reach * reach * across2 - off * off;
-        if room <= 0.0 {
-            return None;
+        let rel = sphere.as_dvec3() - v.as_dvec3();
+        let sweep = sw.sweep.as_dvec3();
+        let closing = (rel.x * sweep.x + rel.y * sweep.y) + rel.z * sweep.z;
+        if closing >= 0.0 {
+            return;
         }
-        let len2 = along.length_squared();
-        let mid_scaled = rel.cross(along).dot(across);
-        let mid = mid_scaled / across2;
-        let half = (room * len2).sqrt() / across2;
-        if mid + half < 0.0 || limit <= mid - half {
-            return None;
+        let dist2 = (rel.x * rel.x + rel.y * rel.y) + rel.z * rel.z;
+        let reach = f64::from(sw.radius) + f64::from(CLIP_EPS);
+        let gap = dist2 - reach * reach;
+        if 0.0 >= gap {
+            let inv = 1.0 / dist2.sqrt();
+            tr.normal = (rel * inv).as_vec3();
+            tr.walkable = walk;
+            tr.fraction = 0.0;
+            if f64::from(sw.radius) * f64::from(sw.radius) > dist2 {
+                tr.startsolid = true;
+            }
+            return;
         }
-        Some(Entry {
-            enter: mid - half,
-            len2,
-            across2,
-            off,
-            mid_scaled,
-        })
+        let a = f64::from(sw.sweep_len2);
+        let b2 = closing * closing;
+        let disc = b2 - gap * a;
+        if b2 * f64::from(GRAZE) > disc {
+            return;
+        }
+        let fraction = (-disc.sqrt() - closing) / a;
+        if fraction >= f64::from(tr.fraction) {
+            return;
+        }
+        let n = (rel + fraction * sweep).as_vec3().as_dvec3();
+        let inv = 1.0 / (f64::from(CLIP_EPS) + f64::from(sw.radius));
+        let k = n * inv;
+        let h = (3.0 - ((k.x * k.x + k.y * k.y) + k.z * k.z)) * 0.5;
+        tr.normal = Vec3::new(
+            (k.x * h) as f32,
+            (stored(k.y) * h) as f32,
+            (h * stored(k.z)) as f32,
+        );
+        tr.walkable = walk;
+        tr.fraction = fraction as f32;
     }
 
-    /// The sphere at `sphere`, grown by the clip epsilon, swept at the
-    /// point `v` (`CM_TraceSphereThroughVertex`): the nearer root, its
-    /// normal one Newton step of the reciprocal length from unit (doc 3);
-    /// a sphere already within reach meets it at fraction 0.
+    /// The border's corner: the sphere at `sphere`, grown by the clip
+    /// epsilon, swept at the point `v`, as [`Self::vertex4`] but in plain
+    /// `f32` (1.7's border arm at 0x811633c inlines its own, not yet read).
+    /// The nearer root, its normal one Newton step of the reciprocal
+    /// length from unit; a sphere already within reach meets it at
+    /// fraction 0.
     fn corner_contact(&self, sphere: Vec3, v: Vec3, limit: f32) -> Option<Contact> {
         let sw = &self.sw;
         let rel = sphere - v;
@@ -371,14 +455,13 @@ impl Cx<'_> {
         ];
         let mut sphere = self.sw.start;
         sphere.z += dz;
-        match self.sweep_edge(sphere, ends[0], ends[0] - ends[1], tr.fraction) {
-            EdgeSweep::Struck(hit) => hit.apply(tr, None),
+        match self.sweep_edge(sphere, ends[0], ends[0] - ends[1], tr) {
+            EdgeSweep::Struck | EdgeSweep::Clear => {}
             EdgeSweep::Beyond(end) => {
                 if let Some(hit) = self.corner_contact(sphere, ends[end], tr.fraction) {
                     hit.apply(tr, Some(false));
                 }
             }
-            EdgeSweep::Clear => {}
         }
     }
 

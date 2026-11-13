@@ -903,6 +903,9 @@ impl Cod1Module {
                         .to_string(),
                 };
                 let gun_id = gun.map(|(id, _)| *id).filter(|_| uo);
+                // UO's `Bullet_Fire_Extended` takes `Damage_Falloff` off the
+                // turret's own weapon file (0x7b0f9; coduo-diff.md 21).
+                let falloff = gun.filter(|_| uo).map(|(_, rec)| rec.def.falloff);
                 let r = crate::game::combat::bullet_fire_from(
                     shot.slot,
                     shot.pass(),
@@ -911,7 +914,7 @@ impl Cod1Module {
                     crate::game::combat::bullet_range(proto),
                     shot.damage,
                     shot.rifle_bullet,
-                    None,
+                    falloff,
                     &weapon_name,
                     &sims,
                     &rt.host.missiles.shot_targets(),

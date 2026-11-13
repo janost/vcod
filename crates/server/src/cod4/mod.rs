@@ -128,6 +128,9 @@ pub struct Client {
     /// Voice chat (`voice.rs`): the frames queued for this client this
     /// frame, its mute list and `sendVoice`.
     voice: voice::ClientVoice,
+    /// The exponent of the next unacked back-off draw (slot +0x804f8,
+    /// 0..=8); see [`Self::transmit`].
+    stall_exp: u32,
 }
 
 /// The pure lists: `sv_iwds`/`sv_iwdNames` in search order and the keyed
@@ -199,6 +202,10 @@ pub struct Cod4Game {
     /// The domains `dvar_bool`, `dvar_int` and `dvar_float` gave the dvars
     /// they made, keyed by the folded name (`oob::Domain`).
     domains: std::collections::HashMap<String, oob::Domain>,
+    /// `holdrand`'s `irand`, the unacked back-off's draw. Retail's stream
+    /// is the one the game draws from too (0x8272078); ours is the
+    /// engine's own, so the draws differ and their bounds hold.
+    hold: vcod_common::rng::HoldRand,
 }
 
 impl Cod4Game {
@@ -428,6 +435,7 @@ impl Cod4Server {
                 bots: None,
                 log: Default::default(),
                 killed: false,
+                hold: vcod_common::rng::HoldRand(seed as u32),
                 // `sv_fps`, registered by `SV_Init` (0x81735c8).
                 domains: [(
                     "sv_fps".to_string(),
@@ -1299,6 +1307,7 @@ impl Cod4Server {
         };
         ops.push(EOF);
         let block = self.game.huff.compress(&ops);
+        let sequence = c.link.netchan.outgoing_sequence as i32;
         let mut pkts = c
             .link
             .netchan
@@ -1318,18 +1327,29 @@ impl Cod4Server {
         // client (`next_fragment`; the gamestate's 350 ms apart, VERIFIED
         // live).
         let idle = c.state != State::Active && !c.download.active();
-        match link::pace(
-            svs,
-            bytes,
-            c.lan,
-            c.rates.send_rate(max_rate),
-            c.rates.snapshot_msec,
-            idle,
-        ) {
-            link::Pace::Lan => c.link.next_message_ms = svs - 1,
-            link::Pace::At { next, delayed } => {
-                c.link.next_message_ms = next;
-                c.link.rate_delayed = delayed;
+        // 0x8178aff..0x8178c98: a client in the world more than 28
+        // messages past its last acknowledge, LAN or not, is due
+        // `irand(0, 2^n) * snapshotMsec` on, n counting such messages from
+        // 0 up to 8 and back to 0 on any other (cod4-server-frame.md 12).
+        if c.state == State::Active && c.delta_message >= 0 && sequence - c.delta_message > 28 {
+            let k = self.game.hold.irand(0, 1 << c.stall_exp);
+            c.link.next_message_ms = svs + k * c.rates.snapshot_msec;
+            c.stall_exp = (c.stall_exp + 1).min(8);
+        } else {
+            c.stall_exp = 0;
+            match link::pace(
+                svs,
+                bytes,
+                c.lan,
+                c.rates.send_rate(max_rate),
+                c.rates.snapshot_msec,
+                idle,
+            ) {
+                link::Pace::Lan => c.link.next_message_ms = svs - 1,
+                link::Pace::At { next, delayed } => {
+                    c.link.next_message_ms = next;
+                    c.link.rate_delayed = delayed;
+                }
             }
         }
         let to = c.link.addr;
@@ -1663,6 +1683,7 @@ impl Cod4Server {
             reliable_kept: [true; MAX_RELIABLE_COMMANDS],
             download: download::Download::default(),
             voice: voice::client_voice(userinfo),
+            stall_exp: 0,
         });
     }
 

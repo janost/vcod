@@ -146,13 +146,18 @@ pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
                     if fpu::dot(clip, first) >= 0.0 {
                         continue;
                     }
-                    // The crease of the two planes.
-                    let (dir, _) = fpu::normalize(vcod_common::x87::cross(first, pj));
-                    clip = fpu::scale_kept(dir, fpu::dot(dir, pm.ps.velocity));
-                    end_clip = fpu::scale_kept(dir, fpu::dot(dir, end_velocity));
+                    // The crease of the two planes, inlined at 0x805e758..0x805e81a:
+                    // the cross product, its length, the direction and both
+                    // dots stay on the stack; only the clipped components
+                    // are stored, the third-plane test reading them unrounded.
+                    let dir = crease(first, pj);
+                    let along = |v: Vec3| dir * dir.dot(v.as_dvec3());
+                    let kept = along(pm.ps.velocity);
+                    clip = kept.as_vec3();
+                    end_clip = along(end_velocity).as_vec3();
                     // A third plane met too: stop dead.
                     if (1..planes.len())
-                        .any(|k| k != j && fpu::dot(clip, planes[order[k]]) < f64::from(MEETS))
+                        .any(|k| k != j && kept.dot(planes[order[k]].as_dvec3()) < f64::from(MEETS))
                     {
                         pm.ps.velocity = Vec3::ZERO;
                         return true;
@@ -171,6 +176,15 @@ pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
         pm.ps.velocity = primal;
     }
     bumps != 0
+}
+
+/// The unit direction along the crease of two planes, kept on the stack:
+/// `a x b` over its length (unscaled when the planes are parallel).
+fn crease(a: Vec3, b: Vec3) -> glam::DVec3 {
+    let c = a.as_dvec3().cross(b.as_dvec3());
+    let len = ((c.x * c.x + c.y * c.y) + c.z * c.z).sqrt();
+    let inv = if -len < 0.0 { 1.0 / len } else { 1.0 };
+    c * inv
 }
 
 /// `Jump_ClearState`.

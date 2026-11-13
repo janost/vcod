@@ -54,10 +54,13 @@ const EDITS: &[(&str, &str)] = &[
     ("adsGunKickYawMin", "40"),
     ("adsGunKickYawMax", "40"),
 ];
-/// How far an impact of ours may sit from retail's: both are snapped to
-/// whole units, and the aim agrees to a few hundredths of a degree, under
-/// half a unit at this range.
-const TOL: f32 = 1.5;
+/// How far an impact of ours may sit from retail's, both snapped to whole
+/// units. 1.1d's and 1.5b's rounds land on retail's every one (measured
+/// 2026-11-13); UO's sighted climb puts three of its 34 one unit low on one
+/// or two axes (cod15-movement.md 6, "The server's gun kick"), so its bound
+/// is one snap step on two axes.
+const EXACT: f32 = 0.0;
+const UO_TOL: f32 = std::f32::consts::SQRT_2;
 
 /// The stock file with [`EDITS`] applied: `WEAPONFILE\key\value...`.
 fn edited(stock: &[u8]) -> Vec<u8> {
@@ -297,7 +300,7 @@ fn ours(p: &'static Protocol, mut fs: Pk3Fs, cap: &Capture) -> Vec<Vec3> {
 
 /// The capture's impacts against ours, one for one. Returns how far the
 /// sighted rounds climbed on retail, the highest less the lowest.
-fn check(p: &'static Protocol, fs: Pk3Fs, tag: &str) -> f32 {
+fn check(p: &'static Protocol, fs: Pk3Fs, tag: &str, tol: f32) -> f32 {
     let path = format!("tests/fixtures/playerstate/{MAP}-dm-slope-8ms-gunkick-{tag}.txt");
     let text = std::fs::read_to_string(&path).expect("read the fixture");
     let cap = retail(&text);
@@ -311,7 +314,7 @@ fn check(p: &'static Protocol, fs: Pk3Fs, tag: &str) -> f32 {
         if report {
             println!("{line}");
         }
-        if !matches!((r, o), (Some(r), Some(o)) if r.distance(*o) <= TOL) {
+        if !matches!((r, o), (Some(r), Some(o)) if r.distance(*o) <= tol) {
             bad.push(line);
         }
     }
@@ -326,7 +329,7 @@ fn a_1_1_sighted_burst_stays_on_one_spot() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
         return;
     };
-    let climb = check(&PROTOCOL_V1, fs, "1.1");
+    let climb = check(&PROTOCOL_V1, fs, "1.1", EXACT);
     assert!(climb < 3.0, "{climb}");
 }
 
@@ -340,7 +343,7 @@ fn a_1_5_sighted_burst_climbs_with_the_gun_kick() {
     {
         return;
     }
-    let climb = check(&PROTOCOL_V6, fs, "1.5");
+    let climb = check(&PROTOCOL_V6, fs, "1.5", EXACT);
     assert!(climb > 50.0, "{climb}");
 }
 
@@ -350,6 +353,6 @@ fn a_uo_sighted_burst_climbs_with_the_gun_kick() {
     let Some(fs) = vcod_common::testing::uo_fs() else {
         return;
     };
-    let climb = check(&PROTOCOL_V22, fs, "uo");
+    let climb = check(&PROTOCOL_V22, fs, "uo", UO_TOL);
     assert!(climb > 50.0, "{climb}");
 }
