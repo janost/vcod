@@ -601,36 +601,40 @@ on the server.
 #### The turret
 
 `VEH_UpdateAim`, inlined in the vehicle think (0x809ff9b..0x80a038c).
-VERIFIED (the disassembly) for each point below, but the last two.
 
 - It runs when the vehicle has a target (+0x268) and the entity health
   over 0 and a `tag_barrel` (bone slot +0x324, from the name at
   0x80a4628; none skips it, 0x80a004c). With no target the turning state
   (+0x1e4) runs down 2, 1, 0 and nothing is notified (0x80a03d4).
+  VERIFIED (the disassembly).
 - The target is its entity's `r.currentOrigin` plus the offset (+0x290),
-  or the point (+0x284).
+  or the point (+0x284). VERIFIED (the disassembly).
 - It aims from `tag_barrel`'s world place (`G_DObjGetWorldTagPos`
   0x80cbfc4: the posed bone's place through `AnglesToAxis` of
-  `r.currentAngles`, plus the origin, 0x819016e).
+  `r.currentAngles`, plus the origin, 0x819016e). VERIFIED (the
+  disassembly).
 - In the frame of the angles (`AxisToAngles` 0x81951fe) of the world
   matrix (`G_DObjGetWorldTagMatrix` 0x80cbe9a) of the bone in slot
-  +0x320; with -1 there, the body's angles (0x80a0684). Nothing stores to
-  vehicle +0x320, and the vehicle pool (0x8586de0, eight of 0x354 bytes,
-  `.bss`) is reset only at +0x1b8 (0x80cce3b..0x80cce81), so the slot
-  names bone 0: `tag_origin` on the cobra (`bone_dump`). The gdb run below
-  read the frame (0, 250, 0) on a body at (0, -110, 0).
+  +0x320; with -1 there, the body's angles (0x80a0684). VERIFIED (the
+  disassembly). Nothing stores to vehicle +0x320, and the vehicle pool
+  (0x8586de0, eight of 0x354 bytes, `.bss`) is reset only at +0x1b8
+  (0x80cce3b..0x80cce81). VERIFIED (the disassembly). So the slot names
+  bone 0, `tag_origin` on the cobra (`bone_dump`). INFERRED (the two
+  facts). The gdb run below read the frame (0, 250, 0) on a body at (0,
+  -110, 0). VERIFIED (gdb).
 - The direction to the target is normalized with its length kept; its
   `vectoangles` (0x8191a72) taken back into the frame:
   `AxisToAngles(AnglesToAxis(dir) * transpose(AnglesToAxis(frame)))`
   (0x818e910, 0x818f6f6, 0x818effc): the target's pitch and yaw in the
-  frame.
+  frame. VERIFIED (the disassembly).
 - Each gun angle steps by 0x8194154: the target angle brought within 180
   of the gun's by whole turns, the gun moved `turretRotRate * 0.05`
   toward it unless the gap is within 0.001 or the step would pass it
   (then the target angle), normalised on the stack. Then held to
   `-turretVertSpanUp ..= turretVertSpanDown` and `-turretHorizSpanRight
   ..= turretHorizSpanLeft` (the file's +0xd8, +0xdc, +0xd4, +0xd0; the
-  field table's rows at 0x826dddc..0x826de0c).
+  field table's rows at 0x826dddc..0x826de0c). VERIFIED (the
+  disassembly).
 - The turning state: 2 while either `AnglesSubtract` (0x819397a) of the
   target angle and the gun angle before the step is 2 or more on an angle
   the spans left alone; else 2 goes to 1, and 1 notifies
@@ -639,10 +643,11 @@ VERIFIED (the disassembly) for each point below, but the last two.
   then at an entity a sight trace from the barrel (0x817cf14, mask 0x801,
   passing the vehicle and the target) for `turret_on_vistarget` or
   `turret_no_vis`, and at a point `turret_no_vis` (the strings at
-  0x8217aa0..0x8217ae8).
+  0x8217aa0..0x8217ae8). VERIFIED (the disassembly).
 - `Heli4::aim` and `heli_aim_from` do this, the x87 intermediates as
-  `f64`. Its sight trace passes only the helicopter: 0x801 holds no body
-  bit. INFERRED (the code).
+  `f64`. INFERRED (the code against the disassembly). Its sight trace
+  passes only the helicopter, which is enough under 0x801, a mask with no
+  body bit. INFERRED (the code).
 - gdb on retail running the idle capture's gsc (0x80a011c, 0x80a012e,
   0x80a01a3: the barrel, the direction, the frame, the target angles, the
   target in the frame, the gun) against the same values on ours, 159
