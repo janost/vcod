@@ -2382,6 +2382,16 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   (`vehiclepose::posed_collision`) for every shot, swing, missile step and
   blast probe, and `vehicle_hits_ab` matches all four within a fifth of
   retail's notify count with retail's amounts.
+- **The notify count rides the spread stream.** VERIFIED, vcod
+  measurement, 2026-11-13 (24 `test_seed_rng` seeds, 101-124, at the UO
+  install): ours lands front 82.3 notifies (sd 1.1) against retail's 70,
+  rear 69.0 (sd 3.5) against 58, side 56.1 (sd 3.8) against 65. The
+  offsets are systematic and the rear sits on the fifth's edge (69.6), so
+  the rear test passes or fails on the stream: it failed on 4 of 12 other
+  seeds, as did the side once. Any change to the number of server `rand`
+  draws per shot moves it; the per-leg tracer roll (coduo-diff.md 21) took
+  the default seed from a pass to 70. INFERRED: the cause is in the rounds
+  fired or missed, not the amounts, which match; open.
 - **A shell on a hull.** `G_MissileImpact` (0x5db67) runs `G_Damage` on a
   struck entity that takes damage: `Damage_Falloff` of the shell's flight
   distance, truncated (0x5de9d), the flight velocity as the direction, the
