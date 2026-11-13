@@ -504,7 +504,7 @@ Read off the `cod4_lnxded` 1.7 disassembly, 2026-11-12. The shape is CoD1's and 
 - `Sys_ConsoleInput` (0x81d44f2) and its copy inlined in `Sys_GetEvent` (0x81d49d2, called from 0x8123654) run a zero-timeout `select` on fd 0 (0x81d4aac) and a `read` of up to 256 bytes into 0x14119140 (0x81d4af2), the last byte read overwritten with a NUL. VERIFIED.
 - They read while `stdin_active` (0x8273740, 1 in the file) is set, and EOF clears it (0x81d4afb). The line is copied and queued as an event (0x81d4b31..0x81d4b63), as 1.1 does. INFERRED.
 
-vcod-server under `--game cod4` reads stdin as for 1.1. Each line runs through `Cod4Server::exec`, the dispatch rcon uses, and its output goes to the log. Gate: `stdin_console::tests::cod4_runs_a_stdin_line`.
+vcod-server under `--game cod4` reads stdin as 1.1 does without its tty editor, the terminal editing the line. Each line runs through `Cod4Server::exec`, the dispatch rcon uses, and its output goes to the log. Gate: `stdin_console::tests::cod4_runs_a_stdin_line`.
 
 ## 15. Off the LAN: the authorize round trip, `requeststats`, pacing
 

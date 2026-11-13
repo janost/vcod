@@ -110,9 +110,11 @@ const MAX_PACKETS_PER_FRAME: usize = 256;
 const PACKET_QUEUE: usize = 4 * MAX_PACKETS_PER_FRAME;
 
 fn main() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let matches = Args::command().get_matches();
     let args = Args::from_arg_matches(&matches)?;
+    let game = vcod_common::game::Game::resolve(args.game, &args.game_dir);
+    let tty = tty_console_wanted(&args, game);
+    init_log(tty);
     // `Com_AddStartupCommands` queues the command line in order, so a set
     // after `+map` runs again once the level is up (map-cycle doc 4.5).
     let map_index = matches.index_of("map").unwrap_or(0);
@@ -127,14 +129,13 @@ fn main() -> Result<()> {
     );
     let default_panic = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        #[cfg(unix)]
+        vcod_server::tty_console::restore();
         eprintln!("vcod-server {} panicked", vcod_server::VERSION);
         default_panic(info);
     }));
     let trace = args.trace;
-    let console = (!args.no_console).then(|| {
-        vcod_server::stdin_console::StdinConsole::spawn(std::io::BufReader::new(std::io::stdin()))
-    });
-    let game = vcod_common::game::Game::resolve(args.game, &args.game_dir);
+    let console = (!args.no_console).then(|| stdin_console(tty));
     if game == vcod_common::game::Game::Cod2 {
         let (mut server, net) = cod2_server(args)?;
         return serve(&mut server, net, console, trace);
@@ -146,6 +147,59 @@ fn main() -> Result<()> {
     game.ensure_supported()?;
     let (mut server, net) = cod1_server(args, &sets_after_map)?;
     serve(&mut server, net, console, trace)
+}
+
+/// Whether stdin gets CoD1's tty line editor: a terminal, `ttycon` not
+/// set to 0, and CoD1, as CoD2 1.3 and CoD4 1.7 force `ttycon` off
+/// (cod11-server-handshake.md, "The stdin console").
+fn tty_console_wanted(args: &Args, game: vcod_common::game::Game) -> bool {
+    #[cfg(unix)]
+    {
+        !args.no_console
+            && game == vcod_common::game::Game::Cod1
+            && last_set(&args.set, "ttycon")
+                .is_none_or(|v| vcod_server::game::builtins::cvar::atof(v) != 0.0)
+            && vcod_server::tty_console::is_tty()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (args, game);
+        false
+    }
+}
+
+/// The log on stderr. Under the tty console it goes through the writer
+/// that takes the typed line down around each record, coloured when
+/// stderr is a terminal unless `RUST_LOG_STYLE` says otherwise.
+fn init_log(tty: bool) {
+    let mut b = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    #[cfg(unix)]
+    if tty {
+        use std::io::IsTerminal;
+        b.target(env_logger::Target::Pipe(Box::new(
+            vcod_server::tty_console::LogStderr,
+        )));
+        if std::env::var_os("RUST_LOG_STYLE").is_none() && std::io::stderr().is_terminal() {
+            b.write_style(env_logger::WriteStyle::Always);
+        }
+    }
+    let _ = tty;
+    b.init();
+}
+
+/// The stdin console: the tty editor when [`tty_console_wanted`], else
+/// the line reader.
+fn stdin_console(tty: bool) -> vcod_server::stdin_console::StdinConsole {
+    use vcod_server::stdin_console::StdinConsole;
+    #[cfg(unix)]
+    if tty {
+        match StdinConsole::spawn_tty() {
+            Ok(c) => return c,
+            Err(e) => log::warn!("tty console: {e}"),
+        }
+    }
+    let _ = tty;
+    StdinConsole::spawn(std::io::BufReader::new(std::io::stdin()))
 }
 
 /// CoD1 (1.1, 1.5, UO): the install's paks, the map and its scripts

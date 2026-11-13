@@ -2,17 +2,27 @@
 //! all three retail Linux servers: each line typed or piped in goes into the
 //! console queue (`Cbuf_AddText`) and runs at the next `Cbuf_Execute` with
 //! the console's full privilege, through the dispatch rcon uses. EOF stops
-//! the reading, never the server. Retail's reads and their addresses:
+//! the reading, never the server. On a terminal CoD1 edits the line
+//! itself (`tty_console`). Retail's reads and their addresses:
 //! cod11-server-handshake.md, "The stdin console".
 
 use crate::engine::{Engine, GameModule};
 use std::io::BufRead;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, SyncSender, channel};
 use std::time::Duration;
 
-/// The lines a reader thread took off stdin, waiting for the frame loop.
+/// What a reader thread hands the frame loop.
+pub enum Input {
+    /// A line to run.
+    Line(String),
+    /// The tty console's tab: the names to complete against, answered on
+    /// the frame loop's thread, which owns them.
+    Names(SyncSender<Vec<String>>),
+}
+
+/// What a reader thread took off stdin, waiting for the frame loop.
 pub struct StdinConsole {
-    lines: Receiver<String>,
+    lines: Receiver<Input>,
 }
 
 impl StdinConsole {
@@ -26,6 +36,18 @@ impl StdinConsole {
         StdinConsole { lines }
     }
 
+    /// CoD1's tty console on fd 0 (`tty_console::start`), for a terminal
+    /// with `ttycon` on. Fails, leaving the terminal alone, when fd 0's
+    /// settings cannot be read or set.
+    #[cfg(unix)]
+    pub fn spawn_tty() -> std::io::Result<Self> {
+        ignore_tty_signals();
+        let (tx, lines) = channel();
+        log::info!("Started tty console (use --set ttycon=0 to disable)");
+        crate::tty_console::start(tx)?;
+        Ok(StdinConsole { lines })
+    }
+
     /// A console that has already read all of `input`, on this thread.
     #[cfg(test)]
     pub(crate) fn read_now(input: &[u8]) -> Self {
@@ -34,12 +56,28 @@ impl StdinConsole {
         StdinConsole { lines }
     }
 
+    /// A tab's request for names, answered through [`Self::queue`].
+    #[cfg(test)]
+    pub(crate) fn names_now<G: GameModule>(e: &mut Engine<G>) -> Vec<String> {
+        let (tx, lines) = channel();
+        let (reply, names) = std::sync::mpsc::sync_channel(1);
+        tx.send(Input::Names(reply)).unwrap();
+        StdinConsole { lines }.queue(e);
+        names.recv().unwrap()
+    }
+
     /// Queues every line read since the last call, as `Com_EventLoop`'s
     /// `SE_CONSOLE` case does: on the frame loop's thread, ahead of the
-    /// frame's `drain_console`.
+    /// frame's `drain_console`. A tab's request for names is answered
+    /// here too.
     pub fn queue<G: GameModule>(&self, e: &mut Engine<G>) {
-        for line in self.lines.try_iter() {
-            e.push_console(&line);
+        for input in self.lines.try_iter() {
+            match input {
+                Input::Line(line) => e.push_console(&line),
+                Input::Names(reply) => {
+                    let _ = reply.send(G::console_names(e));
+                }
+            }
         }
     }
 }
@@ -48,7 +86,7 @@ impl StdinConsole {
 /// or until the frame loop is gone. A read error (`EIO` for a background
 /// process reading its terminal) waits a second and tries again, as retail
 /// polls stdin every frame whatever the last read returned.
-fn read_lines(mut input: impl BufRead, tx: &Sender<String>) {
+fn read_lines(mut input: impl BufRead, tx: &Sender<Input>) {
     let mut buf = Vec::new();
     loop {
         buf.clear();
@@ -57,7 +95,7 @@ fn read_lines(mut input: impl BufRead, tx: &Sender<String>) {
             Ok(_) => {
                 let line = String::from_utf8_lossy(&buf);
                 let line = line.trim_end_matches(['\n', '\r']);
-                if !line.trim().is_empty() && tx.send(line.to_string()).is_err() {
+                if !line.trim().is_empty() && tx.send(Input::Line(line.to_string())).is_err() {
                     return;
                 }
             }
@@ -94,7 +132,12 @@ mod tests {
         let (tx, rx) = channel();
         read_lines(Cursor::new(input.to_vec()), &tx);
         drop(tx);
-        rx.into_iter().collect()
+        rx.into_iter()
+            .map(|i| match i {
+                Input::Line(l) => l,
+                Input::Names(_) => unreachable!("a pipe never completes"),
+            })
+            .collect()
     }
 
     /// One command a line, CR LF or LF, blank lines dropped, a last line

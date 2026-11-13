@@ -184,6 +184,12 @@ pub trait GameModule: Sized {
     /// `Cbuf_Execute`: the queued console lines. The loop runs it ahead
     /// of counting the frames owed (`Com_Frame`).
     fn drain_console(e: &mut Engine<Self>, now: Instant);
+    /// What the tty console's tab completes against: the commands, then
+    /// the cvars (`Cmd_CommandCompletion`, `Cvar_CommandCompletion`).
+    /// Only CoD1 runs that console.
+    fn console_names(_e: &Engine<Self>) -> Vec<String> {
+        Vec::new()
+    }
 
     /// `svs.time`, the network clock `SV_Frame`'s trace prints: the game
     /// clock unless the game keeps them apart (CoD1 1.5's match timeout).

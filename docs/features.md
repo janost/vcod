@@ -69,7 +69,8 @@ still missing against retail, and what vcod adds that retail never had.
   downloads and `getinfo` / `getstatus` as each retail server does them.
 - `dedicated` defaults to 1 (no heartbeat); `--set dedicated=2` opts in.
 - A stdin console as on the retail Linux servers: each line runs as a
-  server command (`--no-console` turns it off).
+  server command, with CoD1's line editor (history, tab completion) on a
+  terminal (`--no-console` turns it off).
 - No authorize server, no anti-cheat. Host for people you'd lend your car
   to.
 
