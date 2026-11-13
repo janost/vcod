@@ -56,9 +56,9 @@ struct Twin {
     last: i32,
     /// The spawn's `pm_type`: 0, or 4 for a spectator.
     pm_type: u32,
-    /// The spawn's spot and yaw (the script's pick is a `randomInt` off a
-    /// clock-seeded stream).
-    pin: crate::game::host::SpawnPin,
+    /// Each spawn's spot and yaw, in order (the script's pick is a
+    /// `randomInt` off a clock-seeded stream).
+    pins: Vec<crate::game::host::SpawnPin>,
     /// Each client command but `cp` (which `Probe` sends itself) by how
     /// far past the first snapshot its newest snapshot was when it went,
     /// an `mr`'s server id as `{sid}`.
@@ -118,13 +118,29 @@ fn twin(lines: &[Line]) -> Twin {
     // (`angle16_sent`) reads the rocket run's -90 as -89.99451, and
     // `delta_angles` off that goes out a short off retail's.
     let yaw = v("viewangles")[1].round();
+    // Each later spawn: an own snapshot back at `pm_type` 0 from a dead one
+    // (a killcam's frames carry the followed client's number).
+    let mut pins = vec![(pm_type == 0).then(|| (v("origin"), [0.0, yaw, 0.0]))];
+    let mut last = 0;
+    for f in snaps
+        .iter()
+        .filter(|f| f.server_time > spawn.server_time && f.ps.get("clientNum") == Some(slot))
+    {
+        let t = f.ps.get("pm_type").unwrap_or(0);
+        if t == 0 && last != 0 {
+            let at = [0, 1, 2].map(|k| f.ps.get_f32(&format!("origin[{k}]")).unwrap_or(0.0));
+            let yaw = f.ps.get_f32("viewangles[1]").unwrap_or(0.0).round();
+            pins.push(Some((at, [0.0, yaw, 0.0])));
+        }
+        last = t;
+    }
     Twin {
         slot,
         first: snaps[0].server_time,
         spawn: spawn.server_time,
         pm_type,
         last: snaps.last().unwrap().server_time,
-        pin: (pm_type == 0).then(|| (v("origin"), [0.0, yaw, 0.0])),
+        pins: if pm_type == 0 { pins } else { Vec::new() },
         commands: commands.into_values().collect(),
     }
 }
@@ -208,8 +224,8 @@ fn run(install: &vcod_cod4::install::Install, pair: &Pair, hook: &mut Hook) -> R
     }
     sv.load(Some(install)).unwrap();
     let mut pins = vec![VecDeque::new(); crate::server::MAX_CLIENTS];
-    for t in twins.iter().filter(|t| t.pin.is_some()) {
-        pins[t.slot as usize].push_back(t.pin);
+    for t in &twins {
+        pins[t.slot as usize].extend(t.pins.iter().copied());
     }
     sv.game.level.as_mut().unwrap().rt.host.spawn_pins =
         Some(std::rc::Rc::new(std::cell::RefCell::new(pins)));
