@@ -4936,7 +4936,7 @@ impl App {
         }
         self.world = None;
         self.fx.clear();
-        self.audio.on_gamestate("");
+        self.audio.on_gamestate("menu");
         if let Some(hud) = &mut self.hud {
             leave_server_hud(hud);
         }

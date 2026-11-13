@@ -1258,7 +1258,7 @@ pub fn shell_shock(
     let slot = client_receiver(host, recv)?;
     let [Value::String(a), duration] = args else {
         return Err(ErrorKind::Custom(
-            "USAGE: <player> shellshock(<shellshockname>, <duration>)".into(),
+            "USAGE: <player> shellshock(<shellshockname>, <duration>)\n".into(),
         ));
     };
     let name = cx.resolve(*a).to_string();
@@ -1267,7 +1267,7 @@ pub fn shell_shock(
         (first..=last).position(|i| host.configstrings[i].eq_ignore_ascii_case(&name))
     else {
         return Err(ErrorKind::Custom(format!(
-            "shellshock '{name}' was not precached"
+            "shellshock '{name}' was not precached\n"
         )));
     };
     let secs = match duration {
@@ -1300,7 +1300,9 @@ pub fn stop_shell_shock(
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
     if !args.is_empty() {
-        return Err(ErrorKind::Custom("USAGE: <player> stopshellshock()".into()));
+        return Err(ErrorKind::Custom(
+            "USAGE: <player> stopshellshock()\n".into(),
+        ));
     }
     host.client_shellshock[slot] = [0; 3];
     Ok(Value::Undefined)
@@ -1427,7 +1429,7 @@ mod tests {
             assert_eq!(
                 shell_shock(&mut host, cx, recv, &args),
                 Err(ErrorKind::Custom(
-                    "shellshock 'pain' was not precached".into()
+                    "shellshock 'pain' was not precached\n".into()
                 ))
             );
 

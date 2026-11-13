@@ -666,7 +666,8 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   list in several packets is read whole, not asked again. A server whose
   `infoResponse` names another protocol is dropped. Live, 2026-10-22:
   `getservers 1` listed 49 servers in one packet, `6` 50, UO's `22` 131 in
-  two (the first ending `\EOT`, the last `\EOF`). VERIFIED capture.
+  two (the first ending `\EOT`, the last `\EOF`). VERIFIED capture. The
+  1.5 query's format is `cod15-protocol-diff.md` 1.
 - Text sits where RTCW's `Item_SetTextExtents` puts it: baseline at
   `rect.y + textaligny`, x at `textalignx` less the width (right aligned)
   or half of it (centred). An owner draw with no label draws at
