@@ -254,6 +254,11 @@ bot does with the same keys. If one kills you, it earned it. The view holds:
   the nodes it covers for a while, and the bot plans round it. On CoD2
   and CoD4 a bot held up for a second plans round the teammate for 10 s,
   and the teammate steps aside.
+- On CoD1, 1.5 and UO any body in the way, teammate, enemy or human,
+  is planned round once it has held the bot up for a fifth of a second,
+  or walked through when no way goes round. Of two meeting head-on with
+  no way round, one stands aside on a node off the line until the other
+  has passed.
 
 ### Objectives
 
@@ -300,7 +305,7 @@ rewrites the cmd into the game's button bits, renumbers the game's
 weapons for the brain, answers the game's menus and fills the view from
 the game's playerstate. Behaviour differs by game, never by map: the
 `BotWorld` trait in `crates/server/src/bots/driver.rs` holds the
-differences as constants each game sets (`YIELDS`, `PMOVE_PROBES`,
+differences as constants each game sets (`YIELDS`, `SHUNS_BODIES`, `PMOVE_PROBES`,
 CoD4's `MANTLE_RESTS` and `PARTS_MATES_FLAT`).
 
 ### How a change is judged

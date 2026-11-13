@@ -597,6 +597,7 @@ impl Server {
             sprint_room: 0.0,
             push_off: None,
             unpin: None,
+            detour: false,
             pistol,
             rocket,
             primaries: [sim.ps.weapon_slots[1], sim.ps.weapon_slots[2]],

@@ -219,6 +219,9 @@ impl BotWorld for Cod2Server {
 
     /// Both on, CoD2's tdm bots stalled more for no kill (bot-combat.md 15).
     const YIELDS: bool = false;
+    /// Off: not measured here; `PARTS_MATES` plans round a still
+    /// teammate (bot-navigation.md section 3, "Bodies in the way").
+    const SHUNS_BODIES: bool = false;
     /// On: two teammates held each other at mp_decoy's (8650, -12570,
     /// -531) for whole matches (bot-objectives.md 11.5).
     const PARTS_MATES: bool = true;

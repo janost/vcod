@@ -2111,6 +2111,22 @@ const RISING_TICKS: u32 = 60;
 const PRESSED_TICKS: u32 = 10;
 const GIVE_TICKS: u32 = 20;
 const GIVE_STEP: f32 = 24.0;
+/// A body on the ground slower than this across, units/s, with another
+/// within [`BODY_REACH`] across and [`BODY_RISE`] up or down toward its
+/// next node, is held up by it; after [`BODY_TICKS`] its plans keep off
+/// the nodes the other stands over for [`SHUN_TICKS`]
+/// ([`Follower::bodies_in_way`]).
+const BODY_HELD_SPEED: f32 = 60.0;
+const BODY_REACH: f32 = 48.0;
+const BODY_RISE: f32 = 64.0;
+const BODY_TICKS: u32 = 4;
+const SHUN_TICKS: u32 = 60;
+/// The longest a bot stands aside for an oncoming body, the ticks before
+/// it does again, and how far it backs off when no node lies aside
+/// ([`Follower::stand_aside`]).
+const ASIDE_TICKS: u32 = 60;
+const ASIDE_REST: u32 = 60;
+const ASIDE_BACK: f32 = 64.0;
 /// The longest wait: a climb of mp_ship's 296-unit ladders takes about
 /// 110 ticks. With the climber still, the most of it: a climber that hangs
 /// on with the way clear is stuck for another reason (mp_ship's ladder at
@@ -2154,6 +2170,14 @@ impl Footing {
         on_ladder: false,
         velocity: Vec3::ZERO,
     };
+}
+
+/// How far `p` stands across from the segment `a` to `b`, all flat.
+fn seg_dist_flat(a: Vec3, b: Vec3, p: Vec3) -> f32 {
+    let (a, b, p) = (a.truncate(), b.truncate(), p.truncate());
+    let ab = b - a;
+    let t = ((p - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
+    p.distance(a + ab * t)
 }
 
 /// One bot's walk along the graph: the destination, the planned path and
@@ -2306,6 +2330,23 @@ pub struct Follower {
     pull_base: Option<usize>,
     /// Ticks before the next pull is tried, after one failed.
     pull_wait: u32,
+    /// Edges given up on, by the stall count or the bot's own unstick
+    /// ([`Self::stuck`]): what `bots::driver` tallies as edge stalls.
+    pub gave_up: u32,
+    /// Ticks held up by another body in the way ([`Self::bodies_in_way`]),
+    /// the nodes the plans keep off for it, sorted, until the tick given,
+    /// and whether the plan found no way round them.
+    body_ticks: u32,
+    shun: Arc<[u32]>,
+    shun_until: u32,
+    shun_through: bool,
+    /// Where the bodies [`Self::shun`] keeps off stood.
+    shunned: Vec<Vec3>,
+    /// A give way to an oncoming body ([`Self::stand_aside`]): the spot, the
+    /// way the other came from, the ticks left; and the ticks before the
+    /// next.
+    aside: Option<(Vec3, Vec3, u32)>,
+    aside_rest: u32,
 }
 
 /// A [`Follower`] plan set aside when its point goal moved off, and the
@@ -2392,6 +2433,11 @@ impl Follower {
         let clock = self.clock;
         self.avoid.retain(|e| e.2 > clock);
         self.dead.retain(|e| e.2 > clock);
+        if clock >= self.shun_until && !self.shun.is_empty() {
+            self.shun = Arc::default();
+            self.shun_through = false;
+            self.shunned.clear();
+        }
         if self.rest > 0 {
             self.rest -= 1;
             return None;
@@ -2884,6 +2930,7 @@ impl Follower {
                 // (mp_cassino's slot at (945, -775, 64), seed 1 with no
                 // vehicles; its roof dent, seed 25, bot-objectives.md 10.6).
                 self.fell = true;
+                self.gave_up += 1;
                 if let Some(from) = self.next.checked_sub(1).map(|i| self.path[i]) {
                     let to = self.path[self.next];
                     self.avoid_edge(from, to);
@@ -2979,6 +3026,7 @@ impl Follower {
                     .crowded(self.crowd.clone(), self.crowd_cost)
                     .noisy(self.noise)
                     .blocking(self.blocked.clone())
+                    .shunning(self.shun.clone())
                     .jumps_costing(self.jump_cost),
             );
         }
@@ -2993,8 +3041,23 @@ impl Follower {
             Plan::Found(path) => {
                 let s = self.search.take()?;
                 self.through = s.blocked.is_empty() && !self.blocked.is_empty();
+                self.shun_through = !self.shun.is_empty()
+                    && (s.shun.is_empty() || self.meets_shunned(g, here, &path));
                 self.penned = false;
                 Some(path)
+            }
+            Plan::Failed if self.search.as_ref().is_some_and(|s| !s.shun.is_empty()) => {
+                // No way round the bodies in the way: the same search
+                // through them, the bot waiting on them meanwhile.
+                let s = self.search.take()?;
+                self.search = Some(
+                    Search::new(g, s.from, s.to, s.avoid)
+                        .crowded(s.crowd, s.crowd_cost)
+                        .noisy(s.noise)
+                        .blocking(s.blocked)
+                        .jumps_costing(s.jump_cost),
+                );
+                None
             }
             Plan::Failed => {
                 let s = self.search.take()?;
@@ -3488,6 +3551,184 @@ impl Follower {
         Some(at)
     }
 
+    /// Another body (`others`, off the rungs: origin and velocity) in
+    /// the way: the body on the ground, off the rungs, slower than
+    /// [`BODY_HELD_SPEED`] for [`BODY_TICKS`] with another within
+    /// [`BODY_REACH`] across and [`BODY_RISE`] up or down, toward its next
+    /// node. The plan is made again keeping off the nodes the others' boxes
+    /// stand over ([`NavGraph::nodes_in_box`]) for [`SHUN_TICKS`], or through
+    /// them when no way goes round, and not again until those run out.
+    /// Before, the follower took one edge out of its plans after
+    /// [`STUCK_TICKS`] without closing, and the next plan took the edge
+    /// beside it past the same body (bot-navigation.md section 3, "Bodies
+    /// in the way"). Returns whether the plan was dropped.
+    pub fn bodies_in_way(
+        &mut self,
+        g: &NavGraph,
+        at: Vec3,
+        body: Footing,
+        others: &[(Vec3, Vec3)],
+    ) -> bool {
+        use vcod_common::pmove::{HALF_WIDTH, STEPSIZE};
+        let Some(&n) = self.path.get(self.next) else {
+            self.body_ticks = 0;
+            return false;
+        };
+        // Toward the next node, or the one after it when on the next.
+        let to = [Some(n), self.path.get(self.next + 1).copied()]
+            .into_iter()
+            .flatten()
+            .map(|n| (g.nodes[n as usize] - at).truncate())
+            .find(|d| d.length() > 8.0);
+        let ahead = |o: Vec3| {
+            let d = (o - at).truncate();
+            d.length() < BODY_REACH
+                && (o.z - at.z).abs() < BODY_RISE
+                && to.is_some_and(|w| d.dot(w) > 0.5 * d.length() * w.length())
+        };
+        let held = self.shun.is_empty()
+            && body.on_ground
+            && !body.on_ladder
+            && body.velocity.truncate().length() < BODY_HELD_SPEED;
+        let in_way: Vec<Vec3> = if held {
+            others.iter().map(|o| o.0).filter(|&o| ahead(o)).collect()
+        } else {
+            Vec::new()
+        };
+        if in_way.is_empty() {
+            self.body_ticks = 0;
+            return false;
+        }
+        self.body_ticks += 1;
+        if self.body_ticks < BODY_TICKS {
+            return false;
+        }
+        self.body_ticks = 0;
+        let mut nodes: Vec<u32> = in_way
+            .iter()
+            .flat_map(|&o| {
+                g.nodes_in_box(o, 2.0 * HALF_WIDTH, STEPSIZE)
+                    .into_iter()
+                    .chain(g.nearest(o.into()))
+            })
+            .collect();
+        // The node under way, when the others stand on the edge to it.
+        if let Some(&from) = self.next.checked_sub(1).and_then(|i| self.path.get(i)) {
+            let (a, b) = (g.nodes[from as usize], g.nodes[n as usize]);
+            if in_way
+                .iter()
+                .any(|&o| seg_dist_flat(a, b, o) < 2.0 * HALF_WIDTH)
+            {
+                nodes.push(n);
+            }
+        }
+        nodes.sort_unstable();
+        nodes.dedup();
+        self.shun = nodes.into();
+        self.shunned = in_way;
+        self.shun_until = self.clock + SHUN_TICKS;
+        self.path.clear();
+        self.search = None;
+        self.held = None;
+        self.pull_base = None;
+        self.fell = true;
+        true
+    }
+
+    /// Where to stand aside for an oncoming body in a way with no room to
+    /// pass: the plan found no way round the bodies in the way
+    /// ([`Self::bodies_in_way`]), and one of `oncoming` (origin, and the way
+    /// it heads: the bodies this one gives way to) stands in the way,
+    /// heading at the body. The spot is a node one or two level edges off
+    /// across the line between them ([`NavGraph::sidestep`]), clear of
+    /// that line by two half-widths, else [`ASIDE_BACK`] straight back
+    /// from the other. The bot rests there until no oncoming body is
+    /// ahead of it within two reaches across the way it came, or for
+    /// [`ASIDE_TICKS`], then plans again; not again for
+    /// [`ASIDE_REST`]. Pressed in a corridor, two bots each planned
+    /// through the other and paced until an unstick spell parted them
+    /// (bot-navigation.md section 3, "Bodies in the way").
+    pub fn stand_aside(
+        &mut self,
+        g: &NavGraph,
+        at: Vec3,
+        body: Footing,
+        oncoming: &[(Vec3, Vec3)],
+    ) -> Option<Vec3> {
+        use vcod_common::pmove::HALF_WIDTH;
+        self.aside_rest = self.aside_rest.saturating_sub(1);
+        if let Some((spot, dir, left)) = self.aside {
+            let ahead = oncoming.iter().any(|&(o, _)| {
+                let d = (o - at).truncate();
+                d.length() < 2.0 * BODY_REACH && d.dot(dir.truncate()) > 0.0
+            });
+            if left == 0 || !ahead {
+                self.aside = None;
+                self.aside_rest = ASIDE_REST;
+                self.shun = Arc::default();
+                self.shun_through = false;
+                self.path.clear();
+                self.search = None;
+                self.fell = true;
+                return None;
+            }
+            self.aside = Some((spot, dir, left - 1));
+            return Some(spot);
+        }
+        if !self.shun_through
+            || self.aside_rest > 0
+            || !body.on_ground
+            || body.on_ladder
+            || body.velocity.truncate().length() >= BODY_HELD_SPEED
+        {
+            return None;
+        }
+        let to = self
+            .path
+            .get(self.next)
+            .map(|&n| (g.nodes[n as usize] - at).truncate())?;
+        let &(o, _) = oncoming.iter().find(|&&(o, way)| {
+            let (d, way) = ((o - at).truncate(), way.truncate());
+            d.length() < BODY_REACH
+                && (o.z - at.z).abs() < BODY_RISE
+                && d.dot(to) > 0.5 * d.length() * to.length()
+                && (-d).dot(way) > 0.5 * d.length() * way.length()
+        })?;
+        let dir = (o - at).truncate().normalize_or_zero();
+        let clear = |p: Vec3| {
+            let off = (p - at).truncate();
+            off.perp_dot(dir).abs() > 2.0 * HALF_WIDTH
+                && (p - o).truncate().length() > 2.0 * HALF_WIDTH
+        };
+        let spot = g
+            .sidestep(at, dir.extend(0.0), clear)
+            .unwrap_or(at - dir.extend(0.0) * ASIDE_BACK);
+        self.aside = Some((spot, dir.extend(0.0), ASIDE_TICKS - 1));
+        Some(spot)
+    }
+
+    /// Whether `path`, from a body at `here`, runs into one of the bodies
+    /// [`Self::shun`] keeps off on its first two legs: the plan's start
+    /// can be a node beside or under one of them, which the search never
+    /// keeps off (mp_uo_stanjel's slope at (1, 2885, -154), two bots each
+    /// planning from the node between them).
+    fn meets_shunned(&self, g: &NavGraph, here: Vec3, path: &[u32]) -> bool {
+        let pts: Vec<Vec3> = std::iter::once(here)
+            .chain(path.iter().take(2).map(|&n| g.nodes[n as usize]))
+            .collect();
+        pts.windows(2).any(|w| {
+            self.shunned
+                .iter()
+                .any(|&o| seg_dist_flat(w[0], w[1], o) < 2.0 * vcod_common::pmove::HALF_WIDTH)
+        })
+    }
+
+    /// The waypoint the follower handed out this tick, for the bodies
+    /// that give way to it ([`Self::stand_aside`]).
+    pub fn heading(&self) -> Option<Vec3> {
+        self.last.filter(|_| self.waited == 0)
+    }
+
     /// Where to step instead of heading for `waypoint`: the body and
     /// another off the rungs stand pressed together on the ground (within
     /// two half-widths and 2 flat, a step in z), both slower than
@@ -3679,6 +3920,7 @@ impl Follower {
             self.avoid_edge(*from, to);
             self.reset();
             self.fell = true;
+            self.gave_up += 1;
         }
     }
 
@@ -4403,6 +4645,9 @@ pub struct Search {
     crowd_cost: f32,
     noise: u64,
     blocked: Arc<[u32]>,
+    /// Nodes another body stands over ([`Follower::bodies_in_way`]):
+    /// passed through only by the plan after this one fails.
+    shun: Arc<[u32]>,
     jump_cost: f32,
     cost: Vec<f32>,
     came: Vec<u32>,
@@ -4421,6 +4666,7 @@ impl Search {
             crowd_cost: CROWD_COST,
             noise: 0,
             blocked: Arc::default(),
+            shun: Arc::default(),
             jump_cost: 0.0,
             cost: vec![f32::INFINITY; n],
             came: vec![u32::MAX; n],
@@ -4473,6 +4719,12 @@ impl Search {
         self
     }
 
+    /// The search through none of `shun` (sorted) but its destination.
+    pub fn shunning(mut self, shun: Arc<[u32]>) -> Search {
+        self.shun = shun;
+        self
+    }
+
     /// Expands nodes until the path is found or ruled out, each one taken
     /// from `budget`; [`Plan::Pending`] once `budget` is 0.
     pub fn run(&mut self, g: &NavGraph, budget: &mut u32) -> Plan {
@@ -4506,7 +4758,9 @@ impl Search {
             let here = g.nodes[node as usize];
             for &next in &g.edges[node as usize] {
                 if self.avoid.contains(&(node, next))
-                    || (next != self.to && self.blocked.binary_search(&next).is_ok())
+                    || (next != self.to
+                        && (self.blocked.binary_search(&next).is_ok()
+                            || self.shun.binary_search(&next).is_ok()))
                 {
                     continue;
                 }
@@ -4517,7 +4771,7 @@ impl Search {
                     // hatch, and a bot fell past the rungs to its death
                     // (seed 969, bot-navigation.md section 3). The plan
                     // through the stuck edge comes next.
-                    if !self.avoid.is_empty() {
+                    if !self.avoid.is_empty() || !self.shun.is_empty() {
                         continue;
                     }
                     RISK_COST
@@ -6338,6 +6592,129 @@ mod tests {
         let w = (0..REST_TICKS + 2).find_map(|_| step(&mut f, goal));
         assert_eq!(w, Some([32.0, 0.0, 0.0]));
         assert!(!f.penned());
+    }
+
+    /// A body standing on node 1 of [`tiny`], in the way of a bot bound
+    /// along 0, 1, 2: after [`BODY_TICKS`] held up the plan goes round by
+    /// node 3. On [`row`] there is no way round: the plan goes through him,
+    /// and is not dropped again until the nodes he stood over are let go.
+    #[test]
+    fn a_body_in_the_way_is_planned_round() {
+        use crate::bots::Goal;
+        let held = |f: &mut Follower, g: &NavGraph, at: [f32; 3], others: &[(Vec3, Vec3)]| {
+            f.bodies_in_way(g, at.into(), Footing::STANDING, others)
+        };
+        let g = tiny();
+        let mut f = Follower::default();
+        let at = [-16.0, 16.0, 0.0];
+        let goal = Goal::To([64.0, 0.0, 0.0]);
+        let step = |f: &mut Follower| {
+            f.waypoint(&g, None, goal, at, Footing::STANDING, &mut 100, &mut || 0)
+        };
+        assert_eq!(step(&mut f), Some([32.0, 0.0, 0.0]));
+        let other = [(Vec3::new(28.0, 4.0, 0.0), Vec3::ZERO)];
+        for _ in 1..BODY_TICKS {
+            assert!(!held(&mut f, &g, at, &other));
+        }
+        // One behind the bot holds nothing up.
+        let behind = [(Vec3::new(-40.0, 16.0, 0.0), Vec3::ZERO)];
+        assert!(!held(&mut f, &g, at, &behind));
+        for _ in 1..BODY_TICKS {
+            assert!(!held(&mut f, &g, at, &other));
+        }
+        assert!(held(&mut f, &g, at, &other));
+        assert_eq!(step(&mut f), Some([32.0, 64.0, 0.0]));
+        assert_eq!(f.path, [0, 3, 2]);
+        // A corridor: through him, once.
+        let g = row();
+        let mut f = Follower::default();
+        let at = [8.0, 0.0, 0.0];
+        let goal = Goal::To([160.0, 0.0, 0.0]);
+        let step = |f: &mut Follower| {
+            f.waypoint(&g, None, goal, at, Footing::STANDING, &mut 100, &mut || 0)
+        };
+        let other = [(Vec3::new(36.0, 0.0, 0.0), Vec3::ZERO)];
+        assert_eq!(step(&mut f), Some([32.0, 0.0, 0.0]));
+        for _ in 1..BODY_TICKS {
+            assert!(!held(&mut f, &g, at, &other));
+        }
+        assert!(held(&mut f, &g, at, &other));
+        let w = (0..3).find_map(|_| step(&mut f));
+        assert_eq!(w, Some([32.0, 0.0, 0.0]));
+        assert_eq!(f.path, [0, 1, 2, 3, 4, 5]);
+        for _ in 0..2 * BODY_TICKS {
+            assert!(!held(&mut f, &g, at, &other));
+            step(&mut f);
+        }
+    }
+
+    /// Two bodies meet head-on in a corridor along +x with an alcove off
+    /// node 1: the one whose plan goes through the other stands aside in
+    /// the alcove until the other has passed it, then plans again.
+    #[test]
+    fn a_body_met_head_on_in_a_corridor_is_stood_aside_for() {
+        use crate::bots::Goal;
+        let mut nodes: Vec<Vec3> = (0..6)
+            .map(|i| Vec3::new(i as f32 * 32.0, 0.0, 0.0))
+            .collect();
+        nodes.push(Vec3::new(32.0, 48.0, 0.0));
+        let mut edges: Vec<Vec<u32>> = (0..6u32)
+            .map(|i| {
+                [i.wrapping_sub(1), i + 1]
+                    .into_iter()
+                    .filter(|&n| n < 6)
+                    .collect()
+            })
+            .collect();
+        edges[1].push(6);
+        edges.push(vec![1]);
+        let g = NavGraph::from_parts(nodes, edges);
+        let at = [8.0, 0.0, 0.0];
+        let mut f = Follower::default();
+        let step = |f: &mut Follower| {
+            f.waypoint(
+                &g,
+                None,
+                Goal::To([160.0, 0.0, 0.0]),
+                at,
+                Footing::STANDING,
+                &mut 100,
+                &mut || 0,
+            )
+        };
+        let other = Vec3::new(40.0, 0.0, 0.0);
+        let coming = [(other, Vec3::new(-100.0, 0.0, 0.0))];
+        assert_eq!(step(&mut f), Some([32.0, 0.0, 0.0]));
+        // Room to pass: no give way.
+        assert_eq!(
+            f.stand_aside(&g, at.into(), Footing::STANDING, &coming),
+            None
+        );
+        let held = |f: &mut Follower| {
+            f.bodies_in_way(&g, at.into(), Footing::STANDING, &[(other, Vec3::ZERO)])
+        };
+        assert!((0..BODY_TICKS).any(|_| held(&mut f)));
+        assert!((0..3).find_map(|_| step(&mut f)).is_some());
+        // One standing still is waited on, not given way to.
+        let still = [(other, Vec3::ZERO)];
+        assert_eq!(
+            f.stand_aside(&g, at.into(), Footing::STANDING, &still),
+            None
+        );
+        let spot = Some(Vec3::new(32.0, 48.0, 0.0));
+        assert_eq!(
+            f.stand_aside(&g, at.into(), Footing::STANDING, &coming),
+            spot
+        );
+        assert_eq!(
+            f.stand_aside(&g, at.into(), Footing::STANDING, &coming),
+            spot
+        );
+        // Past the bot: plan again.
+        let past = [(Vec3::new(-24.0, 0.0, 0.0), Vec3::new(-100.0, 0.0, 0.0))];
+        assert_eq!(f.stand_aside(&g, at.into(), Footing::STANDING, &past), None);
+        assert_eq!(step(&mut f), Some([32.0, 0.0, 0.0]));
+        assert_eq!(f.path, [0, 1, 2, 3, 4, 5]);
     }
 
     #[test]

@@ -434,6 +434,9 @@ pub struct BotView {
     /// that frees the body (`nav::unpin_yaw`), held for
     /// `nav::UNPIN_TICKS`.
     pub unpin: Option<f32>,
+    /// The follower planned round a body in the way this tick
+    /// (`nav::Follower::bodies_in_way`): held up, not stuck.
+    pub detour: bool,
     /// A held pistol's configstring index, when one is in the kit.
     pub pistol: Option<u8>,
     /// A held rocket launcher (`weaponClass rocketlauncher`) with a round
@@ -3201,8 +3204,9 @@ impl Bot {
         if standing || view.stop {
             self.restart_stall(view.origin);
             self.unstick_ticks = 0;
-        } else if view.unpin.is_some() && self.unstick_ticks == 0 {
-            // A pin with a heading out of it gets its run aside first.
+        } else if (view.unpin.is_some() || view.detour) && self.unstick_ticks == 0 {
+            // A pin with a heading out of it gets its run aside first, and
+            // a body in the way the plan round it.
             self.restart_stall(view.origin);
         } else if self.stall_ticks >= STALL_TICKS {
             // A creep covers about 8 units in ten ticks and is stuck only
@@ -4986,6 +4990,7 @@ mod tests {
             sprint_room: 0.0,
             push_off: None,
             unpin: None,
+            detour: false,
             pistol: None,
             rocket: None,
             primaries: [10, 0],

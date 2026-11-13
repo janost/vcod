@@ -1148,7 +1148,8 @@ before and after the driver moved behind `BotWorld`, 2026-10-23).
 
 CoD2's bots run the same driver in the same order. The route leaves out
 what the trait's consts name: no yields, no crowd and no blocked nodes
-(`YIELDS`), and none of the edge cues that step CoD1's pmove (lip, push
+(`YIELDS`), no plan round another body (`SHUNS_BODIES`, "Bodies in the
+way" below), and none of the edge cues that step CoD1's pmove (lip, push
 off, unpin; `PMOVE_PROBES`). Turned on, each made CoD2's bots stall
 more (bot-combat.md 15). Between the route and the drop probe
 `pre_think` walks a bot to a gun or a dropped gun. VERIFIED (`bot_match
@@ -1330,7 +1331,9 @@ else a spot it remembers or heard, section 4), `Roam`, or `Away(threat)`
   it, on the graph's edge, and the defender behind him gave up and planned
   the same edge again for about 11 s; the defuse came 1110 ticks after the
   plant. Planning round the edge takes the diagonal past him after one 2 s
-  stall, and the defuse comes 886 ticks after the plant.
+  stall, and the defuse comes 886 ticks after the plant. A body in the
+  way is planned round after 4 ticks held up now ("Bodies in the way",
+  below).
 
 The brain runs at the waypoint, looks 45 degrees up when it is more than 48
 units above or the body is on a ladder (`BotView::on_ladder`, `ps.on_ladder`),
@@ -2541,6 +2544,108 @@ seeds 307 and 661): keeping the roam's destination when an edge is
 avoided at the rim cleared seed 307, but seed 661's bot replanned for
 the next drop at (2560, -127, 385) and fell off the hatch's lip there to
 its death; dropped too.
+
+### Bodies in the way
+
+Retail has no bots; this section is measured on vcod-server only.
+
+Before, the graph knew nothing of bodies. A bot that met another player
+on an edge ran into him until the follower's stall count gave the edge
+up (40 ticks without closing, `STUCK_TICKS`), or its own 10-tick stall
+circle sent it on an unstick spell, and the next plan took the edge
+beside it past the same body: one 2 s stall per edge the body stood
+on. VERIFIED (measured, `ship_stalls` with the edge tally below, master
+55164194d, `dm`, 10 bots, shoot off, 4000 ticks, seeds 1-127 odd): of
+the edges the followers gave up on, those with another body within 64
+units were 458 of 527 on `mp_carentan`, 790 of 835 on `mp_harbor` and
+814 of 1109 on `mp_ship`; on `mp_uo_stanjel` (UO `tdm`, 2400 ticks) 58 of
+410.
+
+Two rules now, in the follower, run by the driver for every game whose
+`BotWorld::SHUNS_BODIES` is on (CoD1, 1.5 and UO; off for CoD2 and CoD4,
+whose `PARTS_MATES` plans round a still teammate, bot-objectives.md
+11.5 and 12.7):
+
+- Held up (`Follower::bodies_in_way`). A bot on the ground, off the
+  rungs, fighting nobody, slower than 60 units/s for `BODY_TICKS` (4)
+  with another body off the rungs within 48 across and 64 up or down
+  toward its next node, drops its plan. The next keeps off the nodes
+  that body's box stands over (`NavGraph::nodes_in_box`, two
+  half-widths, a step) and the node under way when he stands on its
+  edge, for 60 ticks (`SHUN_TICKS`), and starts at a node the bot walks
+  to. A plan that finds no way round goes through them
+  (`Search::shunning`, then the same search without them); so does one
+  whose first two legs from the body pass within two half-widths of
+  him, since the start node is never kept off. No second plan round a
+  body while the first's nodes are kept off. The tick it plans round,
+  the bot's stall circle starts again (`BotView::detour`): the circle
+  and the rule fired on the same tick, and the spell walked the bot off
+  its new plan. Any team counts: a dm or shoot-off enemy blocks as a
+  teammate does, and so does a human.
+- Head-on (`Follower::stand_aside`). With no way round, a bot that meets
+  head-on one it gives way to (any player not a bot, by his velocity;
+  any bot in a lower slot, by its follower's waypoint,
+  `bots::driver::oncoming`) heading at it within the same reach stands
+  aside: on a node one or two level edges off across the line between
+  them, two half-widths clear of it (`NavGraph::sidestep`), else 64
+  straight back. It rests there (`BotView::stop`) until no such body is
+  ahead of it within 96 along the way it came, for at most 60 ticks,
+  then plans again; not again for 60. Of two bots exactly one gives way.
+
+INFERRED (the traces, a temporary per-tick log of the follower): a
+plan's start is the node nearest the body or one it walks to
+(`walkable_start`, which walks the world with no bodies in it), and two
+bots meeting on `mp_uo_stanjel`'s slope at (1, 2885, -154) both planned
+from the node between them, round each other every 10 ticks, each plan
+restarting the stall circle, for 12 s and more (seeds 7 and 105, 642
+and 756 stalled bot-ticks); hence the first-two-legs rule and one plan
+round per shun.
+
+Measured with two tallies added for this (`Server::bot_edge_stalls`,
+read by `ship_stalls` and `bot_match`): the edges the followers gave up
+on and those with another body within 64 units, and in `ship_stalls`
+the bot-ticks held up by a body (moving under 60 units/s with another
+within 64 across and 64 up or down toward the waypoint, not holding on
+purpose). `bot_match` adds the mean time from a round's start to its
+first objective action (`to objective`).
+
+VERIFIED (measured, `ship_stalls`, `dm` 10 bots shoot off 4000 ticks,
+seeds 1-127 odd; `mp_uo_stanjel` UO `tdm` 2400 ticks; master 55164194d
+then this change; stalled bot-ticks / falls / edges given up / those by a
+body / bot-ticks held up by a body):
+
+| map | master | bodies in the way |
+|---|---|---|
+| `mp_carentan` | 0 / 0 / 527 / 458 / 20 907 | 0 / 0 / 55 / 31 / 11 380 |
+| `mp_harbor` | 0 / 0 / 835 / 790 / 41 341 | 0 / 0 / 79 / 67 / 23 555 |
+| `mp_ship` | 47 / 1 / 1 109 / 814 / 33 713 | 0 / 2 / 385 / 99 / 19 428 |
+| `mp_uo_stanjel` | 0 / 2 / 410 / 58 / 4 130 | 0 / 2 / 382 / 20 / 2 965 |
+
+`mp_ship`'s second fall (seed 65, an unstick spell off (3744, -792, 27)
+to -58) is not traced. With the plan round after 10 ticks held up
+instead of 4, the same sets gave up 215 / 341 / 616 / 391 edges and held
+17 326 / 35 406 / 27 422 / 3 836 bot-ticks: the 4-tick wait keeps most
+meetings under half a second.
+
+VERIFIED (measured, `bot_match`, shoot on, 12 000 ticks, seeds 1-6, the
+same two commits; stalled bot-ticks, kills, mean seconds to a round's
+first objective action):
+
+| set | master | bodies in the way |
+|---|---|---|
+| 1.1 `sd` 6 bots, `mp_carentan`, `mp_harbor` | 72, 531, 38.5 s (113 rounds) | 0, 524, 38.0 s (115) |
+| 1.1 `tdm` 10 bots, `mp_carentan`, `mp_harbor`, `mp_ship` | 1 658, 3 139 | 221, 3 167 |
+| UO `sd` 6 bots, `mp_uo_stanjel`, `mp_cassino` | 55, 420, 35.8 s (97) | 23, 424, 36.4 s (95) |
+
+`mp_ship` has no `sd`. `tdm`'s stalls were `mp_ship` seeds 1 (1 162), 2
+and 4 and `mp_carentan` seed 3 on master; `mp_ship` seeds 2 to 6 on this
+change (26, 6, 177, 12; not traced). Kills hold within the per-seed
+noise. The time to the objective moves inside it too: the meetings this
+removes cost a bot a second or two, against rounds of 25 to 45 s.
+Ladder meetings keep their own rules (`ladder_yield`, `head_on_yield`,
+`abreast_yield`, `rising_hold`, section 3 above): this applies on the
+ground only, and the mast ladder's head meetings on `mp_ship` are
+unchanged.
 
 ## 4. Memory and hearing
 

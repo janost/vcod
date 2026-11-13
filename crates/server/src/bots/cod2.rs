@@ -1489,6 +1489,7 @@ impl Cod2Bots {
             sprint_room: 0.0,
             push_off: None,
             unpin: None,
+            detour: false,
             pistol,
             rocket: None,
             primaries: [0; 2],

@@ -15,6 +15,10 @@
 //! it. It also counts the bot-ticks 12 s within 150 units, as
 //! `ship_stalls` does, split into `held` (holding still on purpose,
 //! `BotBody::holds`, on any tick of the 12 s) and `stalled` (the rest),
+//! and the edges the followers gave up on, with those by another body
+//! (`edges`, `by a body`: `Server::bot_edge_stalls`), and the mean time
+//! from a round's start (the match's, or the last `W;` line) to its first
+//! `A;` line (`to objective`),
 //! how close
 //! a team keeps: each playing bot-tick's distance to its nearest teammate
 //! and whether two or more stand within 400 units, the hits bots answer
@@ -861,6 +865,12 @@ struct Match {
     /// 12 s stall ticks with no hold, and those holding on purpose.
     stalled: u32,
     held: u32,
+    /// Edges the followers gave up on, and those by a body
+    /// (`Server::bot_edge_stalls`).
+    edges: [u32; 2],
+    /// Per round with an objective action, the ticks from the round's
+    /// start (the match's, or the last `W;` line) to its first `A;` line.
+    to_objective: Vec<usize>,
     log: Vec<String>,
     dm: bool,
     digest: Option<Digest>,
@@ -976,7 +986,7 @@ fn main() {
             a
         });
         println!(
-            "{} seed {}: ticks {} ended {} wins {:?} score axis {} allies {} stalled {} held {} {} actions {:?}",
+            "{} seed {}: ticks {} ended {} wins {:?} score axis {} allies {} stalled {} held {} edges {} by a body {} {} actions {:?} to objective {}",
             m.map,
             m.seed,
             m.ticks,
@@ -986,8 +996,11 @@ fn main() {
             m.scores[1],
             m.stalled,
             m.held,
+            m.edges[0],
+            m.edges[1],
             all.line(),
             m.actions,
+            to_objective(&m.to_objective),
         );
         if m.by_arm.len() > 1 {
             let k: BTreeMap<&str, u32> = m
@@ -1023,6 +1036,8 @@ fn summarize(what: &str, results: &[&Match]) {
     let mut arm_wins: BTreeMap<String, u32> = BTreeMap::new();
     let mut arm_actions: BTreeMap<String, u32> = BTreeMap::new();
     let (mut stalled, mut held, mut ended, mut scores) = (0, 0, 0, [0i64; 2]);
+    let mut edges = [0u32; 2];
+    let mut to_obj: Vec<usize> = Vec::new();
     for m in results {
         for (k, t) in &m.by_team {
             by_team.entry(k.clone()).or_default().add(t);
@@ -1048,6 +1063,9 @@ fn summarize(what: &str, results: &[&Match]) {
         ended += u32::from(m.ended);
         stalled += m.stalled;
         held += m.held;
+        edges[0] += m.edges[0];
+        edges[1] += m.edges[1];
+        to_obj.extend(&m.to_objective);
         scores[0] += i64::from(m.scores[0]);
         scores[1] += i64::from(m.scores[1]);
     }
@@ -1071,9 +1089,23 @@ fn summarize(what: &str, results: &[&Match]) {
     }
     println!("  ended {ended}  wins {wins:?}");
     println!(
-        "  score axis {} allies {}  actions {actions:?}  stalled {stalled} held {held}",
-        scores[0], scores[1]
+        "  score axis {} allies {}  actions {actions:?}  stalled {stalled} held {held}  edges {} by a body {}  to objective {}",
+        scores[0],
+        scores[1],
+        edges[0],
+        edges[1],
+        to_objective(&to_obj)
     );
+}
+
+/// The mean seconds to a round's first objective action, and the rounds.
+fn to_objective(ticks: &[usize]) -> String {
+    let mean = ticks.iter().sum::<usize>() as f64 / ticks.len().max(1) as f64;
+    format!(
+        "{:.1} s ({} rounds)",
+        mean * TICK_MS as f64 / 1000.0,
+        ticks.len()
+    )
 }
 
 /// One seeded match; `None` without game data.
@@ -1132,6 +1164,8 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
     let mut dump = net_dump(game, map, &o.gametype, seed);
     let mut seen = 0;
     let mut level = sv.server_id();
+    // The tick the round began and whether it has had an `A;` line yet.
+    let (mut round_start, mut acted) = (0, false);
     // (attacker, victim) -> tick of the attacker's first hit this life.
     let mut first_hit: HashMap<(String, String), usize> = HashMap::new();
     // Each bot's last 12 s: where it stood and whether it held still on
@@ -1347,6 +1381,9 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                 // [guid,] num, team, name, action
                 "A" if f.len() >= 5 => {
                     let n = f.len();
+                    if !std::mem::replace(&mut acted, true) {
+                        m.to_objective.push(tick - round_start);
+                    }
                     *m.actions
                         .entry(format!("{}:{}", f[n - 3], f[n - 1]))
                         .or_default() += 1;
@@ -1362,6 +1399,7 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                     };
                     *m.arm_wins.entry(o.arm(&who, seed)).or_default() += 1;
                     *m.wins.entry(who).or_default() += 1;
+                    (round_start, acted) = (tick, false);
                 }
                 // `exitLevel`'s own line; it has zeroed the team scores.
                 "ExitLevel: executed" => m.ended = true,
@@ -1448,6 +1486,7 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
             }
         }
     }
+    m.edges = sv.bot_edge_stalls();
     if let Some(st) = &stats {
         st.print(map, &o.gametype, seed);
     }
