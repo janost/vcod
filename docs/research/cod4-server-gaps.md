@@ -13,6 +13,15 @@ more.
 
 ## Fixed
 
+- A helicopter with no goal runs 1.7's no-goal think (0x808ba22, its
+  player-helicopter step with the stick zeroed): from rest it levels
+  pitch and roll and normalises its yaw, as a stock helicopter does for
+  its first 2 s. The turret is `VEH_UpdateAim` read off the binary: from
+  the posed `tag_barrel`, in the frame of bone 0's angles, the step and
+  the spans as 1.7 rounds them, and `turret_rotate_stopped`,
+  `turret_no_vis` and `turret_on_vistarget`. A retail capture of an idle
+  helicopter gates both (cod4-gsc.md 3.2, "The no-goal think", "The
+  turret", "The idle capture").
 - The helicopter's think runs 1.7's move trace (`script_vehicle_collision`
   with the normal on a world contact, the DObj radius' box) and its touch
   (a sticky missile resting on it rides along); its collision and tags
@@ -96,10 +105,13 @@ Open, by how much a player notices.
    minutes, then each after 7 s; vcod-server answers at once and an
    off-LAN client's address stands in for its ban guid
    (cod4-handshake.md 15).
-2. A helicopter with no goal runs 0x808ba22 on 1.7, which ours leaves
-   out: ours holds still. A stock helicopter spends its first 2 s so
-   (cod4-gsc.md 3.2). M. Its turret's tracking is vcod's reading of
-   `VEH_UpdateAim`, 0.45 degrees off retail at worst (`hardpoint_ab`). S.
+2. Closed: a helicopter with no goal runs 1.7's no-goal think and its
+   turret `VEH_UpdateAim` (Fixed above). What its gun still parts by: a
+   few ulps on a body that holds still, from the posed `tag_barrel` (ours
+   poses the tags off the zone's `baseMat`, 1.7's skeleton composes the
+   local bones), and in flight 0.13 degrees, as the flown body parts
+   (`hardpoint_ab` `STILL_GAPS`, `AIM`; cod4-gsc.md 3.2, "The turret"). M
+   to port the skeleton.
 3. What the five capture gates (`cod4::capture_ab`, cod4-combat.md 15)
    still tolerate: the dropped weapon's start and fall (1.7's rules read
    in cod4-combat.md 6.1, not ported; M), a grenade's strike on a
