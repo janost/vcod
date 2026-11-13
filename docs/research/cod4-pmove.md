@@ -155,7 +155,9 @@ stored float: the frametime (0x805e0f7), then after each bump `time_left -
 fraction * time_left` with one store (0x805e6d5..0x805e6e9); each bump's
 end is `time_left * velocity + origin` with one store per axis
 (0x805e166..0x805e1a5), and a timer (`pm_time`) restores the whole entry
-velocity (0x805e72c). VERIFIED (the instructions). No capture tells the
+velocity (0x805e72c). VERIFIED (the instructions). The crease of two
+planes keeps its direction and dots on the stack (0x805e758..0x805e81a,
+section 13.2). VERIFIED (the instructions). No capture tells the
 stored time left from one kept on the stack: the moves A/B and every
 server gate read the same rows either way; only `pmove::slide::pins`'
 digests move. VERIFIED (both run). `PM_StepSlideMove` differs: a step is tried when
@@ -568,13 +570,13 @@ row's cmds.
 
 | capture | rows | cmds | free run exact | resynced exact | free run's largest origin error |
 |---|---|---|---|---|---|
-| walk | 787 | 1223 | 0 (first: row 53, z one bit) | 762 | 0.008 units |
-| fly | 438 | 1303 | 131 | 436 | 0.000 units |
-| mantle | 297 | 882 | 137 | 290 | 0.000 units |
+| walk | 787 | 1223 | 787 | 787 | 0.000 units |
+| fly | 438 | 1303 | 243 (first: row 244, an ulp of vx) | 437 | 0.000 units |
+| mantle | 297 | 882 | 297 | 297 | 0.000 units |
 | lunge | 147 | 441 | 23 (first: row 155, the server's events) | 146 | 0.000 units |
 
-VERIFIED (the gate's output). The walk's free run stays within 0.008 units of
-retail over 42 s of running, strafing into walls, jumping, crouching and the
+VERIFIED (the gate's output). The walk's free run matches retail bit for
+bit over 42 s of running, strafing into walls, jumping, crouching and the
 refused prone; every wrong row is one of the gaps below.
 
 The server's `delta_angles` is a float the wire rounds to a short (section
@@ -589,25 +591,43 @@ server holds the float itself.
 
 ### 13.2 GAPS
 
-- The float model: the walk's z one bit off on the terrain (24 rows) and
-  the sign of a zero vz after it (11 rows), pressed into a wall on a slope;
-  the spectator's velocity a bit off twice (4 cells: the friction's
-  leftover at a stop, row 132, and a turn, row 244). The functions section 1 lists replay exactly
-  under the kept model; the trace kernels (`vcod_common::clipmap`) and the
-  rest of pmove still compute in the stored or plain float model, and the
-  last bits that move are there. INFERRED.
-- The steep step: rows 499 and 505..508 of the walk land a few ulps off
-  retail stepping onto and back off a 0.78 brush slope: ours reverts to the plain
-  slide, whose move equals the step's, where retail's step went further.
-  The revert test is retail's (section 1); the difference is upstream of
-  it. Not found.
+- The spectator's velocity an ulp off in a turn (row 244, x and y):
+  ours -403.2707 (0xc3c9a2a6) where retail reads -403.27066
+  (0xc3c9a2a5), flying back and left at 403 a second, a unit of z
+  speed down. VERIFIED (the gate, `MOVES_TRACE=fly:resync:244`). Not
+  found. 1.7 runs the x87 at 64-bit precision: it loads the control word
+  0x37f (rodata 0x823e28c) at 0x81d3f93 and every frame at 0x81d52a3.
+  VERIFIED (the disassembly). The kept model holds the stack in an `f64`
+  (53 bits), so a last bit can still part where a sum's rounding falls
+  between the two. That this row is one is not known.
+- The armed walk's frag throw (`grenadeTimeLeft`, the server's fuse) and
+  the lunge's server events stay (the reasons in the gate).
+- Closed: the walk's z one bit off on the terrain (24 rows), the sign of a
+  zero vz after it (11), the mantle capture's walk-off z (7) and the frag
+  replay's (4) were the triangle arm's capsule kernels; the steep step
+  (rows 499 and 505..508 of the walk and the frag replay, onto and back
+  off a 0.78 brush slope, where ours reverted to the plain slide) was the
+  brush kernel. Both keep 1.7's float model now (cod4-collision.md 2,
+  3). VERIFIED (the gate).
+- Closed: the spectator's leftover at row 132, where ours read x
+  1.2071e-10 and y 1.2676e-12 against retail's 7.1242e-11 and
+  7.4807e-13, the spectator flying up under the lean key. VERIFIED (the
+  gate). There `PM_SlideMove` creases what stopped it above with the
+  velocity's own plane, whose direction is square to the flat velocity,
+  so the dot is only rounding. INFERRED (the trace's velocities). 1.7
+  inlines the crease at 0x805e758..0x805e81a: the cross product, its length
+  (`fsqrt` at 0x805e79c), the reciprocal (0x805e8e6), the direction and
+  both dots stay on the stack and only the clipped components are stored,
+  the third-plane test (0.1 at 0x8209648) reading them unrounded.
+  VERIFIED (the instructions). vcod rounded the cross product and the
+  direction to floats; `slide::crease` keeps them and the row matches.
+  VERIFIED (the gate).
 
 ## 14. Open
 
-- The rest of pmove and the trace kernels in the kept model, which the
-  gaps above point at: `PM_StepSlideMove` at 0x805e930
-  and the `PM_SlideMove` it calls at 0x805e030 (both INFERRED, section 1)
-  are the next to read.
+- The rest of pmove in the kept model, which the spectator's gap may
+  point at: `PM_StepSlideMove` at 0x805e930 and the `PM_SlideMove` it
+  calls at 0x805e030 (both INFERRED, section 1) are the next to read.
 - Captures for the sprint, the ladder, a prone body and the sighted
   walk.
 - The server's open items are section 15's last list.
@@ -736,10 +756,9 @@ cod4-server-frame.md 2). What the server adds around the step:
   (`GScr_PlaceSpawnPoint`). 1.7's own (0x80c56c6) runs the same three traces
   with the same box, mask and offsets (cod4-collision.md 5). VERIFIED
   (the disassembly). The walker's spot (-22, 1789, 252) lands at
-  z 224.2543 (0x43604119) where retail's reads 224.25427 (0x43604118):
-  the drop's fraction off mp_crash's terrain is a bit off, every way of
-  rounding the lerp gives ours. VERIFIED (the gate). That is section
-  13.2's float model of the trace kernels.
+  z 224.25427 (0x43604118), retail's. VERIFIED (the gate). Under the
+  triangle arm's plain `f32` face fraction it landed at 224.2543
+  (0x43604119) (cod4-collision.md 3).
 - The snapshot leaves out every entity `hide` hid: `ScrCmd_Hide` sets
   `EF_NODRAW` and every bit of `r.clientMask`, INFERRED. The four
   `com_bomb_objective_d` models `war` hides (105, 109, 120, 364) are in
@@ -774,19 +793,19 @@ same server time, word for word, and ours is never resynced:
 
 | what | rows | exact | off only in the float model |
 |---|---|---|---|
-| the walker's playerstate (section 13's words, `holdBreathScale`, `eFlags`' pmove bits) and its teammate's origin and yaw | 789 | 410 | 379, the largest origin error 0.0083 at 70600 |
+| the walker's playerstate (section 13's words, `holdBreathScale`, `eFlags`' pmove bits) and its teammate's origin and yaw | 789 | 789 | |
 | the spectator's own playerstate (`commandTime` aside: its cmds are the probe's) | 789 | 789 | |
 | the walker's body as the spectator is sent it | 789 | 789 | |
 
 VERIFIED (the gate's output). The walker's run is `cod4_moves_ab`'s free
-run: the same words go wrong at the same rows (z a bit off on the terrain,
-the sign of a zero vz, x from the steep step at 70300 on), and every other
-word, the jumps, the crouch, the refused prone, the eye, the ground and the
-breath, is exact on all 789. The gate's `WALK_GAPS` counts the rows each
-wrong word takes. Taking 1.7's trace set-up (cod4-collision.md 2) moved the
-walker from 73 exact rows to 410, y and the body's origin to exact on all
-789, and the steep step's error from 0.0385 to 0.0083. VERIFIED (the
-gate).
+run, and like it matches on every row: the jumps, the crouch, the refused
+prone, the eye, the ground, the breath and the step onto the 0.78 brush
+slope at 70300. The gate's `WALK_GAPS` would count the rows a wrong word
+takes; it is empty. Taking 1.7's trace set-up (cod4-collision.md 2) moved
+the walker from 73 exact rows to 410; the triangle arm's capsule kernels
+in 1.7's float model to 448 (z on the terrain, the zero vz's sign, the
+spawn's drop); the brush kernel's to all 789 (the steep step, which the
+walk never resynced from). VERIFIED (the gate).
 
 ### 15.2 Open
 
@@ -834,7 +853,7 @@ clients, from the last spawn. VERIFIED (the gate):
   way while the bodies press), and the walker's path, the second stop on
   the target's round side included.
 - The flyer's playerstate matches but for `velocity[1]` in 4 rows of its
-  turn, a few ulps (section 13.2's float model).
+  turn, a few ulps (section 13.2's spectator gap).
 - The walker's spawn `delta_angles[1]` (9.00879, the spot's 124 less the
   last cmd's 114.99390) and its body's yaw match retail's. The 180 the
   gate once read there, from the spawn to the `setviewpos`, was the
@@ -978,8 +997,9 @@ GAPS:
   `delta_angles` is exact, and the 19 and 6 rows of the origin's x and
   y the gate listed went with it, the free run starting from the fitted
   float. VERIFIED (the gate).
-- The walk off over the terrain, a bit of the origin's height (7 cells):
-  section 13.2's float model. INFERRED.
+- The walk off over the terrain, a bit of the origin's height (7 cells),
+  closed: the triangle arm's capsule kernels in 1.7's float model
+  (section 13.2). VERIFIED (the gate).
 
 ### 17.4 The blockage
 

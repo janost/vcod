@@ -67,9 +67,9 @@ section 6 says.
   `CM_TraceThroughBrush` (axial sides against the capsule's box, other
   sides against the nearer sphere), `CM_PositionTest`, `CM_TestInLeaf`,
   `CM_TestBoxInBrush`, `CM_PointContents`, `CM_CullBox`, the AABB tree
-  walk with its partition stamps and `CM_TraceCapsuleThroughBorder` read
-  as CoD2 1.3's do, so CoD4 runs CoD2's kernels unchanged, the border
-  excepted (below). INFERRED.
+  walk with its partition stamps and `CM_TraceCapsuleThroughBorder` test
+  in CoD2 1.3's order, so CoD4 runs CoD2's kernels, the border and the
+  float model excepted (below). INFERRED.
 - `CM_Trace`'s set-up keeps more on the x87 stack than CoD2's, which
   stores each value. `cod4_lnxded` 0x811ce5c (the function that compares
   its model with 0xfff at 0x811d21d and ends with the 0.7 walkable test
@@ -93,6 +93,35 @@ section 6 says.
   `startsolid` per map in 79k to 440k traces; their digests are retaken
   under 1.7's set-up, which no capture contradicts. VERIFIED (the pins
   under both set-ups).
+- The brush kernel keeps its values on the x87 stack too. 1.7 inlines
+  `CM_TraceThroughBrush` in the leaf brush walk at 0x811ab08 (the
+  function that recurses on itself at 0x811ab63 and offsets each node
+  test by 0.125, 0x820e270), its leaf arm at 0x811ad67..0x811b40e.
+  VERIFIED (the instructions):
+  - Axial sides: `d1 = (start - bound) * sign - half` (the capsule's
+    half extents at trace work +0x90..+0x98) and `d2` from the end, both
+    left on the stack; `fmin(d1, 0.125)` is `0.125 - d1 < 0` picked by
+    `fcmovb` on the stack (0x811afc5..0x811afdf); the fraction `(d1 -
+    0.125) * recip * sign` (recip at +0x18..+0x20) is never stored.
+  - Other sides: the lift `|sphere_z * normal.z|` is one stored float
+    (0x811b13c), the distance `(radius + dist) + lift` and both ends'
+    dots less it stay on the stack, and so does the enter fraction `(d1
+    - 0.125) / (d1 - d2)` (0x811b1dc).
+  - The enter fraction rides the stack across every axial side and
+    plane and is stored once, into the trace (0x811b37c). The leave
+    fraction is stored at each update (0x811b2e7, 0x811b326), the
+    compare after a plane's update taking the unrounded quotient
+    (0x811b32b).
+  - A sweep with no entering side that stayed inside every one sets
+    `allsolid`, a fraction of 0 and surface flags (trace +0x10) of 0
+    (0x811b3fd..0x811b407).
+  vcod's CoD2 kernel (`cod2_lnxded` 0x08059dc0, cod2-d3dbsp-format.md)
+  stores each distance and fraction, as its trace A/B reads them. INFERRED.
+  `clipmap::trace::Cx::trace_brush_kept` is 1.7's arm, taken with the
+  set-up above. Before it, the walk capture's step onto a 0.78 brush
+  slope at 70300 landed a few ulps of x off retail's and the walk replay
+  never resynced from there; with it `cod4::wire_ab`'s walk matches all
+  789 rows (cod4-pmove.md 13.2, 15.1). VERIFIED (the gates).
 - `iw3mp.exe` 1.7's `CM_Trace` (0x4f4d30) stores each of these as CoD2
   does: the centre offset, the shifted end and the sweep each go through
   a float (0x4f4e1f, 0x4f4e4c, 0x4f4e65). VERIFIED (the instructions).
@@ -187,8 +216,64 @@ disassembly):
 
 `mesh4::point_tri4` takes those stores. With plain `f32` the walk
 capture's frag landed a last bit off at its terrain bounce; with them it
-lands on retail's. VERIFIED (`the_frag_flies_on_ours_as_on_retail`). The
-capsule kernels' arithmetic is still plain `f32`.
+lands on retail's. VERIFIED (`the_frag_flies_on_ours_as_on_retail`).
+
+The capsule's float model, inlined in the same walk at
+0x8116cd1..0x8117aa6. VERIFIED (the disassembly), each item:
+
+- The face. `v0 - v1` is three stored floats; `v0 - v2` stays on the
+  stack for the cross product, its stored copy (ebp-0x3c) serving the
+  edge tests. `n.x` and `n.y` are one store each; `n.z` is stored and
+  kept. The closing speed is `(sweep.y n.y + stored(sweep.x n.x)) +
+  sweep.z n.z`, compared unrounded and then stored (0x8116d52..0x8116d85).
+  `Vec3NormalizeTo` (0x8192a64) returns the length in `st(0)`, stored as
+  the face's scale (0x8116d9d).
+- The sphere's z (the start's, less or plus the end sphere's offset by
+  the stored normal's z sign, `fcmovnb` at 0x8116dd5) stays on the stack
+  and is stored for the edge kernel's argument. The lead point `start -
+  r n - v0` and its gap along `n` are kept. The fraction is `(scale *
+  -stored(gap - 0.125)) / closing`, one product and one quotient off the
+  stored scale and closing speed, rounded once (0x8116e67..0x8116e8c).
+  vcod computed `-((gap - 0.125) / closing) * scale` in `f32`, which
+  left mp_crash's terrain z a bit off.
+- A face contact past the plane already (gap under 0) measures from
+  its foot on the plane, kept; a centre within a radius gives fraction 0
+  and `startsolid` (0x811729f..0x8117324).
+- The edge coordinates. `s = v01 . m` (`m = sweep x foot`, kept) stores
+  each partial sum (0x8116ee7..0x8116f0e) and is compared unrounded;
+  `t = v02 . m` off the stored `v02` is kept. `m` goes through three
+  floats across the first edge's call (0x811754a..0x8117571), `t`
+  through one across the second's (0x8116f6c..0x8116f79), and the third
+  test is `closing > t - stored(s)` (0x8117226..0x8117236).
+- The edge kernel (`CM_TraceSphereThroughEdge`, 0x81150ae) returns 0 for
+  a strike written into the trace, 1 for none, 2 and 3 for past the
+  first and the second end. The sphere's offset from the edge's start is
+  three stored floats; `along x sweep` is kept, its squared length
+  stored after each partial sum; the reach `0.125 + r` is kept and
+  stored; the half chord `sqrt(room * len2) / across2` is stored
+  (0x81151f1); the entry, the edge's squared length (stored) and the
+  point's offset from the line are kept; the normal is that offset times
+  `1 / stored reach`, x off the kept offset, y and z off their stores
+  (0x81152e3..0x811530b). From inside the cylinder the normal is
+  `Vec3NormalizeTo` of the stored offset and `startsolid` is `len2 *
+  (r^2 across2 - stored(off^2)) > stored(mid)^2` (0x8115405..0x8115440).
+- The corner (0x8117354..0x81176f9, 0x8117a06..0x8117aa6). The offset,
+  closing speed, squared distance and discriminant are kept; the graze
+  test is `b^2 * 0.001 > disc` (0.001 at 0x8209640). The fraction is
+  `(-sqrt(disc) - b) / |sweep|^2` (trace work +0x34), kept. The normal's
+  three components are each stored, times `1 / (0.125 + r)` kept, then
+  times the Newton step's `(3 - |k|^2) * 0.5` (3.0 at 0x8209658, 0.5 at
+  0x8209628), x off its kept product and y, z off their stores
+  (0x81176c2..0x8117707). A sphere within reach takes fraction 0 and
+  the offset times `1 / sqrt(dist2)`.
+
+`mesh4::capsule_tri4`, `sweep_edge` and `vertex4` take this model.
+Before it, `cod4_moves_ab`'s walk had its z a bit off on the terrain on
+24 rows and a zero vz's sign on 11, the mantle capture's walk-off z on 7,
+and `placeSpawnPoint`'s drop stopped a bit under retail's; with it all
+of them match retail. VERIFIED (the gates). The border's own corner arm
+(0x811633c on) and the position test (`segment_tri_dist2`) are still
+plain `f32`.
 
 ## 4. Submodels and static models
 
@@ -278,17 +363,13 @@ down, mask 0x2810011, the player's box (-15,-15,0)..(15,15,70). VERIFIED
 - 1.7 addresses for the INFERRED facts above. `CM_Trace` should be
   findable off its `0xfff` box-model compare and the 0.7 walkable
   constant in `cod4_lnxded`.
-- The float model of the indexed arm's capsule kernels and of the brush
-  kernels on 1.7 (the point sweep's is section 3). The pmove A/B
-  (`cod4_moves_ab`) is the first gate that can show a last-bit
-  difference. Where to read it, VERIFIED (the disassembly: the
-  `triIndices` and `verts` globals 0x889dea4 and 0x889de9c): 1.7's AABB
-  tree walk for a trace is 0x811673a (recursive, 0x20-byte nodes,
-  `childCount` at +0x1a); the point sweep is its first triangle loop
-  (0x81169c0); the capsule's sphere, edge and vertex tests follow inline
-  (`fsqrt` at 0x81175f8, 0x8117784, 0x8117898, 0x8117a0c); the position
-  test's walk is 0x811546a.
+- The float model of the border arm (`CM_TraceSphereThroughBorder`,
+  0x811626a: its ends, then its own corner tests, `fsqrt` at 0x8116423,
+  0x811653a, 0x8116640, 0x81166d3) and of the position test's walk
+  (0x811546a). The trace's AABB tree walk is 0x811673a (recursive,
+  0x20-byte nodes, `childCount` at +0x1a; the `triIndices` and `verts`
+  globals 0x889dea4 and 0x889de9c). VERIFIED (the disassembly). No gate
+  shows a difference there yet.
 - `CM_TestBoxInBrush`'s strict bounds (section 2).
 - The server's pmove and script traces run over this clip map
-  (cod4-pmove.md 15). `placeSpawnPoint`'s drop onto mp_crash's terrain
-  stops a bit short of retail's: the indexed arm's float model.
+  (cod4-pmove.md 15).

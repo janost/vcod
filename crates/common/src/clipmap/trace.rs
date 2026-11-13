@@ -87,6 +87,9 @@ pub(super) struct Sweep {
     /// along the sweep, grown by [`REACH_SLACK`]: a brush box it misses
     /// has a side both ends clear.
     pub brush_reach: [Vec3; 2],
+    /// 1.7's float model: what `CM_Trace` and the brush kernel keep on the
+    /// x87 stack (cod4-collision.md 2); CoD2 1.3 stores each value.
+    pub kept: bool,
 }
 
 /// How far past a node's reach ([`ClipMap::node_reach`]) a sweep's box
@@ -103,6 +106,7 @@ impl Sweep {
     fn new(start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32, kept: bool) -> Sweep {
         let mut sw = Sweep {
             mask,
+            kept,
             ..Sweep::default()
         };
         for k in 0..3 {
@@ -420,6 +424,9 @@ impl<'a> Cx<'a> {
         if sw.brush_reach[1].cmplt(b.mins).any() || sw.brush_reach[0].cmpgt(b.maxs).any() {
             return;
         }
+        if sw.kept {
+            return self.trace_brush_kept(b, tr);
+        }
         let (mut enter, mut leave) = (0.0f32, tr.fraction);
         let mut allsolid = true;
         let mut lead: Option<Lead> = None;
@@ -518,6 +525,124 @@ impl<'a> Cx<'a> {
             Lead::Side(plane, material) => (self.map.planes[plane as usize].normal, material),
         };
         tr.fraction = enter;
+        tr.normal = normal;
+        tr.surface_flags = self.map.materials[material as usize].0;
+        tr.material = Some(material);
+        tr.walkable = false;
+    }
+
+    /// CoD4 1.7's `CM_TraceThroughBrush`, inlined in its leaf brush walk
+    /// (`cod4_lnxded` 0x811ad67..0x811b40e): [`Self::trace_brush`]'s tests
+    /// in its order, but every distance and the enter fraction stay on the
+    /// x87 stack (an `f64` here), the leave fraction is stored at each
+    /// update, the fraction goes out in one store, and a brush the sweep
+    /// starts all inside clears the surface flags (cod4-collision.md 2).
+    fn trace_brush_kept(&self, b: &CBrush, tr: &mut ClipTrace) {
+        let sw = &self.sw;
+        let eps = f64::from(CLIP_EPS);
+        // `fmin(d1, CLIP_EPS)` on the stack, the difference unrounded.
+        let fmin_eps = |d1: f64| if eps - d1 < 0.0 { eps } else { d1 };
+        let (mut enter, mut leave) = (0.0f64, tr.fraction);
+        let mut allsolid = true;
+        let mut lead: Option<Lead> = None;
+        for (pass, (sign, bound)) in [(-1.0f32, b.mins), (1.0, b.maxs)].into_iter().enumerate() {
+            for k in 0..3 {
+                let s = f64::from(sign);
+                let at = |p: f32| {
+                    (f64::from(p) - f64::from(bound[k])) * s - f64::from(sw.capsule_half[k])
+                };
+                let (d1, d2) = (at(sw.start[k]), at(sw.end[k]));
+                let recip = f64::from(sw.back_recip[k]);
+                if d1 > 0.0 {
+                    if d2 >= fmin_eps(d1) {
+                        return;
+                    }
+                    let f = (d1 - eps) * recip * s;
+                    if f >= f64::from(leave) {
+                        return;
+                    }
+                    if d2 > 0.0 {
+                        allsolid = false;
+                    }
+                    if f > enter || lead.is_none() {
+                        enter = enter.max(f);
+                        lead = Some(Lead::Axial {
+                            axis: k,
+                            sign,
+                            material: b.axial_material[pass][k],
+                        });
+                    }
+                } else if d2 > 0.0 {
+                    let f = d1 * recip * s;
+                    if enter >= f {
+                        return;
+                    }
+                    allsolid = false;
+                    if f - f64::from(leave) < 0.0 {
+                        leave = f as f32;
+                    }
+                }
+            }
+        }
+        for &(plane, material) in &b.sides {
+            let p = self.map.planes[plane as usize];
+            let lift = (sw.sphere_z * p.normal.z).abs();
+            let dist = (f64::from(sw.radius) + f64::from(p.dist)) + f64::from(lift);
+            let d1 = dot(sw.start, p.normal) - dist;
+            let d2 = dot(sw.end, p.normal) - dist;
+            if d1 > 0.0 {
+                if d2 >= fmin_eps(d1) {
+                    return;
+                }
+                if d2 > 0.0 {
+                    allsolid = false;
+                }
+                let denom = d1 - d2;
+                let num = d1 - eps;
+                if num > enter * denom {
+                    enter = num / denom;
+                    if enter >= f64::from(leave) {
+                        return;
+                    }
+                    lead = Some(Lead::Side(plane, material));
+                } else if lead.is_none() {
+                    lead = Some(Lead::Side(plane, material));
+                }
+            } else if d2 > 0.0 {
+                let denom = d1 - d2;
+                if d1 > f64::from(leave) * denom {
+                    let l = d1 / denom;
+                    leave = l as f32;
+                    if enter >= l {
+                        return;
+                    }
+                }
+                allsolid = false;
+            }
+        }
+        tr.contents = b.contents;
+        let Some(lead) = lead else {
+            tr.startsolid = true;
+            if allsolid {
+                tr.allsolid = true;
+                tr.fraction = 0.0;
+                tr.surface_flags = 0;
+            }
+            return;
+        };
+        let (normal, material) = match lead {
+            Lead::Axial {
+                axis,
+                sign,
+                material,
+            } => {
+                let mut n = Vec3::ZERO;
+                n[axis] = sign;
+                (n, material)
+            }
+            Lead::Side(plane, material) => (self.map.planes[plane as usize].normal, material),
+        };
+        tr.fraction = enter as f32;
         tr.normal = normal;
         tr.surface_flags = self.map.materials[material as usize].0;
         tr.material = Some(material);

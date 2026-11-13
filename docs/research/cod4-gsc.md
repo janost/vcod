@@ -1284,9 +1284,8 @@ The custom class tests build `custom1` off the stats `cac_getdata` reads
 
 - `ClientSpawn` ends in its own think, before the script's loadout lands:
   the spawn frame's ground, `holdBreathScale` and `pm_flags` are that
-  think's (cod4-pmove.md 15). The spot is `placeSpawnPoint`'s drop, a bit
-  under retail's on mp_crash's terrain (same section), one of
-  `cod4::wire_ab`'s `GAPS`.
+  think's (cod4-pmove.md 15). The spot is `placeSpawnPoint`'s drop,
+  retail's to the bit on mp_crash's terrain (same section).
 - The walker's spawn frame (serverTime 47900). VERIFIED live: `commandTime`
   the frame's time; the spot (pinned off the capture, since the script
   draws it from a clock-seeded `randomInt`); the view exactly the spot's

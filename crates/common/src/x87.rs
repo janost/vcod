@@ -42,9 +42,14 @@ pub fn normalize_in_place(v: Vec3) -> Vec3 {
 /// length and its root left on the stack, each component times the
 /// reciprocal and rounded once; a zero vector comes out as it went in.
 pub fn normalize_to(v: Vec3) -> Vec3 {
+    normalize_to_len(v).0
+}
+
+/// [`normalize_to`] with the length it returns in `st(0)`, unrounded.
+pub fn normalize_to_len(v: Vec3) -> (Vec3, f64) {
     let len = dot(v, v).sqrt();
     let inv = if len > 0.0 { 1.0 / len } else { 1.0 };
-    (v.as_dvec3() * inv).as_vec3()
+    ((v.as_dvec3() * inv).as_vec3(), len)
 }
 
 /// `VectorScale` by a factor left on the stack.

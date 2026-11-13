@@ -103,19 +103,6 @@ const CS_WEAPONS: u16 = 2258;
 /// entry shrinks. Each reason names its section of
 /// docs/research/cod4-pmove.md.
 const GAPS: &[(&str, &str, usize, &str)] = &[
-    // A last bit of z on mp_crash's terrain and the sign of a velocity's
-    // zero after it, pressed into a wall on a slope: the float model of
-    // the trace kernels (NEEDS-M6).
-    ("walk", "origin[2]", 24, "13.2 the float model"),
-    ("walk", "velocity[2]", 11, "13.2 the float model"),
-    // Rows 499 and 505..508: the step up and back down a 0.78 brush slope
-    // lands a few ulps off retail's, once.
-    ("walk", "origin[0]", 3, "13.2 the steep step"),
-    ("walk", "origin[1]", 1, "13.2 the steep step"),
-    // The armed walk's tail shares the walk's steep step and terrain bits.
-    ("frag", "origin[0]", 3, "13.2 the steep step"),
-    ("frag", "origin[1]", 1, "13.2 the steep step"),
-    ("frag", "origin[2]", 4, "13.2 the float model"),
     // The throw's cmd: the server's grenade timer init zeroes the fuse
     // inside `ClientEvents` (cod4-combat.md 10.1), which pmove alone cannot.
     (
@@ -124,12 +111,9 @@ const GAPS: &[(&str, &str, usize, &str)] = &[
         1,
         "cod4-combat.md 10.1, the server's fuse",
     ),
-    // The free spectator's unsnapped velocity a bit off twice: the
-    // friction's leftover at a stop (row 132) and a turn (row 244).
-    ("fly", "velocity[0]", 2, "13.2 the float model"),
-    ("fly", "velocity[1]", 2, "13.2 the float model"),
-    // The walk off over the terrain: a bit of the height.
-    ("mantle", "origin[2]", 7, "13.2 the float model"),
+    // The free spectator's velocity an ulp off in a turn (row 244).
+    ("fly", "velocity[0]", 1, "13.2 the spectator's turn"),
+    ("fly", "velocity[1]", 1, "13.2 the spectator's turn"),
     // The charge swing's hit: the server's `EV_MELEE_BLOOD` (37) on the
     // attacker, and the lunge carries him over the victim's dropped rifle,
     // whose ammo the server's touch hands him (`EV_AMMO_PICKUP`, 9).

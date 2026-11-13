@@ -76,6 +76,10 @@ more.
   (cod4-collision.md 2): a dead body's slide off a push matches retail's
   bit for bit, and the walk replay's exact rows went from 73 to 410
   (cod4-combat.md 15, cod4-pmove.md 15.1).
+- The brush kernel and the triangle arm's capsule kernels keep 1.7's
+  float model too (cod4-collision.md 2, 3): the walk replay matches on
+  all 789 rows, and `placeSpawnPoint`'s drop onto mp_crash's terrain
+  lands on retail's z, the walker's and the killcam capture's shooter's.
 - `ClientImpacts` notifies `touch` both ways after each cmd, another
   client clips as a capsule, and `SetClientViewAngle` keeps its turns on
   the x87 stack: a retail capture of a body pushed into another and a free

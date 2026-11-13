@@ -627,10 +627,6 @@ const KCENT_GAPS: &[(&str, &str)] = &[
         "the killcam's archived view: ours keeps the shooter's spawn yaw 90 where \
          its live view after `setviewpos` reads 0 (cod4-combat.md 7)",
     ),
-    (
-        "shooter ps origin[2]",
-        "`placeSpawnPoint`'s drop onto the terrain (cod4-pmove.md 13.2)",
-    ),
 ];
 
 /// A killcam with a `killcamentity`: the follower's playerstate names the
