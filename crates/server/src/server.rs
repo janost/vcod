@@ -1198,6 +1198,7 @@ fn mirror_vitals(clients: &mut [Option<Client>], rt: &script::ScriptRuntime) {
 fn mirror_vitals_of(sim: &mut ClientSim, rt: &script::ScriptRuntime, slot: usize) {
     sim.max_speed = rt.host.client_speed(slot);
     sim.gravity = rt.host.client_gravity();
+    sim.ps.bg = rt.host.bg_cvars();
     if sim.pm_type != crate::spectate::PmType::Normal {
         return;
     }

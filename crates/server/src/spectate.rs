@@ -865,9 +865,10 @@ impl ClientSim {
     }
 
     fn respawn(&mut self, mode: PmType, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
-        let rules = self.ps.rules;
+        let (rules, bg) = (self.ps.rules, self.ps.bg);
         self.ps = pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg);
         self.ps.rules = rules;
+        self.ps.bg = bg;
         // The turret rows live in the DObj's anim info, which outlives a
         // dismount; a spawn's `G_DObjUpdate` builds a fresh one.
         self.gunner_tree = Default::default();

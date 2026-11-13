@@ -6779,6 +6779,14 @@ impl ApplicationHandler for App {
                                         seat_now.map_or([0.0; 3], |(_, num, vang)| {
                                             drawn_vehicle_angles.get(&num).copied().unwrap_or(vang)
                                         });
+                                    // The cgame's `bg_*` cvars, off the 140/204 mirror.
+                                    // UO's cgame never registers `bg_nofatigue`.
+                                    predictor.bg = pmove::BgCvars {
+                                        nofatigue: false,
+                                        ..pmove::BgCvars::from_cvars(|c| {
+                                            join.cvars.get(c, net.configstrings(), &self.shell)
+                                        })
+                                    };
                                     let predicted = if ps_client == client_num && !demo {
                                         net.snapshots().newest().and_then(|s| {
                                             let bodies = play::predict::solid_bodies(

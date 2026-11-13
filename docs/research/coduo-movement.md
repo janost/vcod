@@ -338,9 +338,24 @@ for protocol 22, implements sections 1 to 7, 11 and 12, the fatigue
 breaths and sprint footstep ids included. The vehicle seat arm is
 `seat_move` (`coduo-vehicles.md` 3). Left out:
 
-- `bg_nofatigue` and the mirrored `bg_lmg_yawcap`: pmove uses the
-  defaults (`LMG_YAWCAP` 55). vcod-server registers both cvars but pmove
-  does not read them.
+
+`bg_nofatigue` and `bg_lmg_yawcap` are `BgCvars` (`crates/common/src/pmove.rs`),
+read as each cvar's integer, the way the module reads them:
+
+- `PM_UpdateFatigue` tests `bg_nofatigue.integer` (vmCvar .bss 0x1f28c0,
+  `+0xc` at 0x2aa69) on a sprinting cmd (`pm_flags` 0x10000) whose
+  `pm_type` is not 2; non-zero returns before the stamp, the drain and
+  the breath.
+  VERIFIED, `game.mp.uo.i386.so`. vcod-server reads its own cvar
+  (`GameHost::bg_cvars`).
+- UO's cgame never registers `bg_nofatigue`: its name is not among
+  `uo_cgame_mp_x86.dll`'s strings, and the vmCvar its `PM_UpdateFatigue`
+  tests (integer at 0x3053962c, read at 0x3000c43f) is in no row of the
+  cvar table. VERIFIED. So a UO client predicts the drain whatever the
+  server's mirror says, and so does vcod's predictor.
+- `bg_lmg_yawcap` is read once, `fild [vmCvar+0xc]` at 0x2b87b. VERIFIED.
+  The cgame registers it (table row 0x30085a30: vmCvar 0x30538fe0, flags
+  0xa00; VERIFIED), so the predictor takes the mirror's.
 
 The client sends `buttons` 0x8 to a UO server only, from `+sprint`, which
 vcod's default binds put on ALT. `BIND_COMMANDS`

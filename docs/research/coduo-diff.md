@@ -2158,7 +2158,6 @@ direction and a projectile explode's type in `es.scale` (section 21). Left:
 
 - what `coduo-vehicles.md` 14 leaves out; `iCompassTankInfo` stays 0, as on
   stock retail (section 9);
-- `bg_nofatigue` is registered and mirrored but not read;
 - battle rank's `GMI_RANK_*` path past what `dm` runs;
 - a retail UO client against vcod-server is a pending hand check.
 

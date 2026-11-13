@@ -1317,8 +1317,11 @@ the view sweeps 160 off with nothing pushed. The wire carries
 `vLadderVec` (0,-1,0 there) on all three.
 
 vcod: `pmove::cap_ladder_yaw`, ahead of the prone arm in both the move
-and the linked arm, with `LADDER_YAWCAP` 100 (the cvar's default; vcod
-reads no `bg_ladder_yawcap`). The push goes through `view_yaw_correction`
+and the linked arm, under `BgCvars::ladder_yawcap`, the cvar's integer:
+vcod-server's own `bg_ladder_yawcap` (`GameHost::bg_cvars`), the
+predictor's off the 140/204 mirror, where the 1.1 and UO cgames register
+it too (its name at `cgame_mp_x86.dll` 0x3006400c, UO
+`uo_cgame_mp_x86.dll` 0x30078d84; VERIFIED). 0 lifts the cap. The push goes through `view_yaw_correction`
 as the prone cap's does. vcod-server sends `vLadderVec` and the predictor
 reads it and the ladder flag back (`predict::from_wire`), so the client
 caps where the server does and its airborne ladder probe runs along
