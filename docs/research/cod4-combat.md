@@ -731,6 +731,58 @@ prints.
   capture). vcod: `Item4::clear_owner_at`, held to retail's by
   `cod4::planefx_ab`. VERIFIED (the gate, ours).
 
+### 6.1 The start and the fall on 1.7
+
+Read for a port; ours still starts at the box's middle and runs a plain
+arc to a rest.
+
+- `PlayerCmd_dropItem` (0x80aaf2a) passes `Drop_Weapon` (0x8091642) a
+  tag, the scr string at 0x836ef4c when the script gives none (stock
+  `dropWeaponForDeath` gives none). VERIFIED (the instructions, the
+  script). That tag is the hand's: ours's posed `tag_weapon_right` of the
+  dying body is (210.124, 2311.023, 285.961) in the killcam run and
+  (185.978, 2278.777, 246.538) in the prone run, where retail's item starts
+  at (210, 2311, 286) and (186, 2279, 246). VERIFIED (the gates' captures,
+  ours's pose). INFERRED that the tag is `tag_weapon_right`.
+- `LaunchItem` (0x80910ec): angles (0, the body's yaw plus the offset,
+  0); `G_Spawn`; `eType` 3, `index` the item, mins -1 and maxs 1 on every
+  axis (0x809141b..0x8091453), +0x120 0x407c0108, `clientNum` the dropper;
+  handler 16 (0x80914cd: think 0x8090050, touch 0x8092a44); origin at the
+  body's x, y and `z + (maxs.z - mins.z) / 2`; `trType` 5 from the level
+  time at the launch velocity; flags 0x10; `nextthink` 1000 on.
+  VERIFIED (the instructions).
+- With the tag found (`G_DObjGetWorldTagPos`, 0x80cc7ba), `Drop_Weapon`
+  traces the item's box from the body's box middle (`currentOrigin +
+  (mins + maxs) / 2`) to the tag's origin, mask the item's clipmask or
+  0x491, the body passed, and puts `trBase` and the origin at the trace's
+  end, `trTime` the level time; either way the item takes the body's
+  `currentAngles` (0x80918b1..0x80919f7). VERIFIED (the instructions).
+- `G_RunItem` (0x80908bc), each frame: with no ground (or a freed one) a
+  resting item falls from where it is (`trType` 5 from now, no velocity),
+  unless flag 1 at +0x17c holds it (0x809091a..0x809096b). A stationary or
+  linked item only thinks. A moving one evaluates its `pos` at the level
+  time plus 50 (0x8090974..0x8090986); when that is under 0.1 units off
+  (squared, 0x8209568) it aims one unit lower instead. It traces its box
+  there from its origin, mask as above, its owner passed. A clean trace
+  moves it. A hit takes the end; a hit under 0.01 of the way
+  (0x8209564) on ground steeper than 0.5 slides once along the plane and
+  traces again (0x8090c4d..0x8090d20); then `pos` becomes `trType` 3 from
+  now for 50 ms, from its origin, `trDelta` the move times 20
+  (0x8209574), and the origin the end (0x8090d5d..0x8090dd1). After the
+  link and the think, an item with +0x100 set whose trace went under 0.01
+  of the way rests: freed when the ground's normal points down or its
+  origin's contents hold 0x80000000 (0x817da9c); else its axis is rebuilt
+  on the normal (left the normal across its old forward, forward the left
+  across the normal), turned back into angles (0x81951fe), roll plus 90
+  (0x8215d6c) when `index` is set, `G_SetAngle`, `G_SetOrigin` at the end,
+  `groundEntityNum` the trace's entity, bit 0x100000 on that entity
+  (0x8090ab0..0x8090bed). VERIFIED (the instructions).
+- The prone run's item: (186, 2279, 246) at 46100 along
+  (-104.9452, -103.4213, 8.3989); `trType` 3 at 46250 from
+  (170, 2263, 239) along (-24.8587, -24.4981, -31.1728) for 50 ms; at rest
+  from 46300 on (169, 2262, 237), yaw -134.9945 where it fell at
+  -134.989, roll 90, ground 1022. VERIFIED live (`play-1.7-prone-*`).
+
 ## 7. The killcam
 
 `_killcam.gsc` sets `spectatorclient` to the attacker and `archivetime`
@@ -738,7 +790,7 @@ to `camtime + predelay` (2.5 + 2 s). The engine sends the follower the
 followed client's archived playerstate from that long ago, `otherFlags`
 2, `deltaTime` the look back, `killCamEntity` 1023, trimmed to the oldest
 frame the followed client was a player in, and writes the trim back into
-`archivetime`. `killCamEntity` is the script's `self.killcamentity`
+`archivetime` (the rule is 7.1). `killCamEntity` is the script's `self.killcamentity`
 (gclient +0x2f6c), 1023 for -1 (`cmovne` at 0x80a4aa9); its setter
 (0x808b288) refuses all but -1..1023 (`killcamentity can only be set to
 -1, or a valid entity number`, 0x8214d3c); `ClientSpawn` and the
@@ -749,10 +801,10 @@ reads the field into the killcam frame
 (`cod4::combat_ab::a_killcam_entity_rides_the_killcam_playerstate`).
 
 - The kill capture's target at 50000 reads the shooter's spawn frame of
-  46900 with `deltaTime` 3100 where 4500 was asked. VERIFIED live. The
-  trim's rule is INFERRED from that. Ours matches.
-- The follower gets the entities of the snapshot round at or before that
-  frame (each round's kept 200 frames, the playerstates' look-back):
+  46900 with `deltaTime` 3100 where 4500 was asked. VERIFIED live. Ours
+  matches.
+- The follower gets the entities of the snapshot round `archivetime`
+  back (each round's kept 200 frames, the playerstates' look-back; 7.1):
   retail's killcam frames carry the victim's living body (entity 0,
   `eType` 1) where the live world holds only the corpse. VERIFIED live.
   Without the archive 22 of the gate's killcam rows fail, with it none.
@@ -775,6 +827,46 @@ Connection Interrupted all killcam: 260 of 265 frames in the live gate
 without the shift, none with it. vcod: `level::shift_archived`;
 `cod4_combat_ab` compares the first `commandTime`; live gate
 `cod4_live_killcam_draws_no_interrupt_and_the_use_key_skips_it`.
+
+### 7.1 The look back, frame by frame
+
+`SpectatorClientEndFrame` (0x80a49f0) asks `SV_GetArchivedClientInfo`
+(0x81795e2) for the followed client `archivetime - psoffsettime` back
+(gclient +0x2f74 less +0x3070, 0x80a4a68..0x80a4a74), into a local copy.
+That call turns the age into whole frames, `age * sv_fps / 1000`
+(0x8179604..0x8179618), takes the archived frame that many back from the
+next one (at most 1200 back, 0x817961e), walks forward to the first frame
+still held (0x8178d0e), and finds the client in it; a client absent or
+without a playerstate fails (0x81796f1..0x817977c). On a failure the
+caller lowers `archivetime` itself by 50 and asks again, and at 0 ends
+the killcam: `spectatorclient`, `killcamentity` and +0x3074 go -1
+(0x80a4ac5..0x80a4b05). So the trim written back is `archivetime` stepped
+down 50 at a time, never the frame's age. VERIFIED (the instructions).
+`deltaTime` grows by `svs.time` less the found frame's time
+(0x8179782..0x8179785, 0x81798aa). VERIFIED (the instructions).
+
+`psoffsettime` is a plain int (field table row at 0x8214fec: offset 0x3070,
+setter 0x808b1aa stores `Scr_GetInt(0)`; its getter 0x808b194 reads
++0x2f74, `archivetime`'s cell). VERIFIED (the bytes). `_killcam::killcam`
+sets it to the `offsetTime` `Callback_PlayerKilled` passes on, the kill's
+`psOffsetTime`; `ClientSpawn`'s script and the killcam's end set it 0.
+VERIFIED (the script, `common_mp.ff`).
+
+`SV_BuildClientSnapshot` takes the killcam's entities on its own clock:
+`archivetime` alone (`G_GetClientArchiveTime`, 0x80b38a2, called at
+0x817a2f4), whole frames back the same way (0x817a31d..0x817a335), and
+writes a clamp back through 0x80b38cc. Each archived entity's clocks move
+up by that round's age, `svs.time` less its time (0x817a3b0..0x817a3c1):
+`pos.trTime` (+0x10), `apos.trTime` (+0x34) and `time2` (+0x70) where
+set, and +0x54 (a missile's `launchTime`) of `eType` 0, 4 and 0x42 always
+(0x817a849..0x817a8b6). VERIFIED (the instructions).
+
+So with a kill's `psOffsetTime` in 1..50 the playerstate comes a frame
+younger than the entities. The prone capture's killcam reads `deltaTime`
+4200 where its entities sit 4250 back. VERIFIED live. vcod:
+`Cod4Level::killcam_end_frame`, `killcam_entities`; `cod4_prone_death_ab`
+matches every killcam row, `deltaTime` and the end included. VERIFIED (the
+gate).
 
 The skip: `_killcam::waitSkipKillcamButton` waits for `useButtonPressed`
 to go 0 then 1. 1.7's `useButtonPressed` (0x80a9b46) tests `(buttons |
@@ -1546,12 +1638,11 @@ What the captures fixed on ours:
   stored angle (`cmovb` off a stored 0), so a level vector's -0 comes back
   +0. VERIFIED (the instructions). The prone body on level ground reads
   `fWaistPitch` 0 where ours sent -0. VERIFIED live.
-- The killcam's archived entities: each `pos.trTime` moves up by
-  `deltaTime`: the mover started at 41550 reads 45800 in a killcam 4250
-  back, the corpse cloned at 46550 reads 50800. VERIFIED live. The shift
-  only where set and on `apos.trTime` too, as `SV_GetArchivedClientInfo`
-  shifts the playerstate's clocks (7), is INFERRED; the address is not
-  found.
+- The killcam's archived entities: each `pos.trTime` moves up by the
+  round's age: the mover started at 41550 reads 45800 in a killcam 4250
+  back, the corpse cloned at 46550 reads 50800. VERIFIED live. Which words
+  move, and that the age is the entities' own, not the playerstate's
+  `deltaTime`: 7.1.
 - The killcam's frames leave out the temp entities the followed client
   was not sent: the victim's own `EV_BULLET_HIT_CLIENT_*` (17 + 42, 43)
   never appears in its killcam. VERIFIED live.
@@ -1609,21 +1700,46 @@ What the captures fixed on ours:
   `SetClientViewAngle` (cod4-pmove.md 15) stands as it was. VERIFIED (the
   gates).
 
+- The prone killcam's trim, 4200 on retail against ours 4250 and its end
+  a frame apart, was `psoffsettime`: the playerstate is asked
+  `archivetime - psoffsettime` back, the entities `archivetime` back
+  (7.1). Ours asked both at `archivetime`. With 7.1's rule the gate's 14
+  rows on the followed shooter's words are gone. VERIFIED (the gate).
+
 Open, with each gate's `GAPS`:
 
 - The dropped weapon (6): retail's leaves `trType` 5, then 3 for 50 ms, and
-  rests on its side (`apos` roll 90, ground 1022). VERIFIED live.
+  rests on its side (`apos` roll 90, ground 1022). VERIFIED live. What it
+  takes is in 6.1; ours's start and fall are still the box's middle and a
+  plain arc.
 - A grenade's strike on a standing body: the thrown back frag meets the
   shooter at 50100 (`EV_GRENADE_BOUNCE` parm 7, flesh, and the hurt) where
   ours flies on and comes to rest on the body (ground 1). VERIFIED live.
-  So `cod4_throwback_ab` stops at 50050.
+  So `cod4_throwback_ab` stops at 50050. Not looked at.
 - The second rocket takes entity 317 on retail, 316 on ours; nothing
-  either client saw held 316. VERIFIED live.
-- The prone killcam's trim: 4200 on retail, 4250 on ours, and its end a
-  frame apart. VERIFIED live. The followed shooter's words a frame off
-  (its `torsoTimer` and `pm_flags` among them, which the gate once filed
-  under damage) all fall in the killcam's frames, 50250 to 51050; the
-  gate holds those rows to times from 50000 on. VERIFIED (the gate).
+  either client saw held 316. VERIFIED live. Both runs' first rocket is
+  315, shown 47350..50850, gone at 50900 with no event on either side;
+  ours frees it on a `SURF_NOIMPACT` hit (the sky), which on 1.7 notifies
+  `death` and frees it with nothing spawned (0x8097579..0x80975aa).
+  VERIFIED (the instructions). Its fuse (`nextthink` 52300, 5 s) is not
+  reached, so `G_ExplodeMissile`'s burst entity (`G_Spawn` at 0x8093de5,
+  `eType` 0, `eFlags` 0x20) is not it either. `FireWeapon` (0x80a3030) and
+  `Weapon_RocketLauncher_Fire` (0x80a2d80) spawn nothing but the rocket
+  (`G_FireRocket`'s one `G_Spawn`, 0x8096d8f). VERIFIED (the
+  instructions). No stock script waits on `missile_fire`. VERIFIED (the
+  scripts). What took 316 on retail between the two shots is unknown.
 - The killcam run's archived view: the killcam frames read the shooter's
-  yaw 0 (after its `setviewpos`) where ours sends 90.00001, the spawn
-  yaw, though ours's live snapshots read 0. VERIFIED (the gate).
+  yaw 0 (its `setviewpos`'s) where ours sends 90, the spawn yaw. VERIFIED
+  (the gate). Not the wire: a live snapshot sends the view only on a
+  teleport, follow, view lock or intermission (0x813fa4d..0x813fa81), but
+  the archive's writer (0x816b6a8) sets the snapshot info's +0xd byte
+  (0x816b6b4), which sends the view rows always, and a follower's frame
+  has `otherFlags` 2. VERIFIED (the instructions). So retail's archived
+  playerstate held yaw 0. The shooter's cmds read yaw 4551 (25 degrees)
+  from 42068 on against `delta_angles` 65.00061 (VERIFIED, the capture),
+  and `PM_UpdateViewAngles` (0x80573fa, called from `PmoveSingle` at
+  0x805beec) sums the two for a living body (0x8057441..0x805744e), which
+  gives 90 on ours. INFERRED. The prone run's archived views do follow
+  its shooter's cmds that way (65.09949 from 62825 plus 79.99146, 124.00269
+  from 8012). VERIFIED live. Why the killcam run's stayed 0 is
+  unknown.

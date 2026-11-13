@@ -840,8 +840,7 @@ impl Cod2Level {
             .flatten()
             .map(|a| vcod_cod2::pmove::mantle::end_and_duration(a, &p.ps));
         if msec > 0 {
-            // A torso event's pick among a clause's commands, drawn only
-            // where a clause lists more than one (the melee swings).
+            // A torso event's pick among a clause's commands:
             // `BG_AnimScriptEvent` draws `rand() % n` for every clause with a
             // command, one command or more (lnxded 0x80d96ee).
             let weapon_cmd = vcod_cod2::pmove::weapon::WeaponCmd {

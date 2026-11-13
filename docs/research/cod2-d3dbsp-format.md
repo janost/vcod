@@ -354,7 +354,7 @@ The fixes, each VERIFIED in the disassembly:
 What the gate skips, and counts, because the clip map does not model it:
 - An entity: a `bulletTrace` that returned one, and the `physicsTrace` of the same segment (script_model vehicles on both maps).
 - A static model: a `bulletTrace` that stopped nearer than the clip map with its hit inside the bounding sphere of a `misc_model` whose xmodel has collision surfaces, at its `modelscale`. 48 records; VERIFIED, the gate: the `physicsTrace` of each of those segments matches.
-- `GAPS`: mp_toujane placement `near` 105, landed on the script_model panzer at (1047, 2751, 44).
+- `GAPS`: mp_toujane placement `near` 105, landed on the script_model panzer at (1047, 2751, 44). It starts at (1080.6719, 2643.8594, 131.125) and retail lands it at z 99.75969, on the hull. VERIFIED, the fixture's bits. The entity is the bombzone's intact `script_model` `xmodel/vehicle_panzer_ii_static` at angles (0.666642, 270, -0.0750181), one of three at that origin (its destroyed twin and an `xmodel/fx`). VERIFIED, the map's entity lump. `G_TraceCapsule` clips it through the xmodel's collision surfaces; the port has only the world's clip map, and vcod-server clips a script model's collision for a ray only (`builtins::combat::bullet_hit`), so closing the record needs a capsule trace against an xmodel's `CollSurf`s posed at the entity's angles. INFERRED, the trace's entity pass; which of the model's surfaces the capsule meets was not read.
 
 ## Render lumps
 

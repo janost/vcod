@@ -209,6 +209,9 @@ pub struct Heli4 {
     pub gun_pitch: f32,
     pub gun_yaw: f32,
     pub target: Option<TurretTarget>,
+    /// `VEH_UpdateAim`'s turning state (vehicle +0x1e4): 2 while the gun
+    /// turns far, run down a think at a time to `turret_rotate_stopped`.
+    pub turret_turning: u8,
     /// Rounds fired, which vary the spread's draw within a frame.
     pub shots: u32,
     /// Spawned this frame: `VEH_InitEntity` sets `nextthink` a frame on
@@ -329,12 +332,51 @@ pub(crate) fn heli_tag(c4: &Cod4HostState, h: &Heli4, tag: &str) -> Option<(Vec3
     let i = tags
         .iter()
         .position(|(n, _, _)| n.eq_ignore_ascii_case(tag))?;
-    let (_, p, q) = tags[i];
-    let (p, q) = match heli_pose_of(c4, h).get(i).copied().flatten() {
+    let (p, q) = heli_bone(c4, h, i)?;
+    Some((h.origin + h.quat() * p, h.quat() * q))
+}
+
+/// Bone `i` of a helicopter's model posed ([`heli_pose`]), in the model's
+/// space: its place and turn.
+fn heli_bone(c4: &Cod4HostState, h: &Heli4, i: usize) -> Option<(Vec3, Quat)> {
+    let (_, p, q) = *c4.model_tags.get(&h.model.to_ascii_lowercase())?.get(i)?;
+    Some(match heli_pose_of(c4, h).get(i).copied().flatten() {
         Some((rot, shift)) => (rot * p + shift, rot * q),
         None => (p, q),
+    })
+}
+
+/// What `VEH_UpdateAim` aims from and in (cod4-gsc.md 3.2, "The turret"):
+/// `tag_barrel`'s place (`G_DObjGetWorldTagPos` 0x80cbfc4, the bone's
+/// place through the body's [`axis4`] plus the origin, 0x819016e) and the
+/// angles of bone 0's matrix (`G_DObjGetWorldTagMatrix` 0x80cbe9a, the
+/// bone's turn as a matrix times the body's axis, then
+/// [`axis_to_angles4`]): the vehicle's flash-tag slot
+/// (+0x320) is never written, so it names bone 0. `None` without a
+/// `tag_barrel`, when the aim does not run (0x80a004c).
+fn heli_aim_from(c4: &Cod4HostState, h: &Heli4) -> Option<(Vec3, Vec3)> {
+    let tags = c4.model_tags.get(&h.model.to_ascii_lowercase())?;
+    let barrel = tags
+        .iter()
+        .position(|(n, _, _)| n.eq_ignore_ascii_case("tag_barrel"))?;
+    let axis = axis4(h.angles);
+    // `MatrixMultiply` (0x818effc): each row's last product first.
+    let through = |m: Vec3| {
+        let c = |k: usize| {
+            ((d(m.z) * d(axis[2][k]) + d(m.y) * d(axis[1][k])) + d(m.x) * d(axis[0][k])) as f32
+        };
+        Vec3::new(c(0), c(1), c(2))
     };
-    Some((h.origin + h.quat() * p, h.quat() * q))
+    let (p, _) = heli_bone(c4, h, barrel)?;
+    let at = |k: usize| {
+        (((d(p.x) * d(axis[0][k]) + d(p.y) * d(axis[1][k])) + d(p.z) * d(axis[2][k]))
+            + d(h.origin[k])) as f32
+    };
+    let place = Vec3::new(at(0), at(1), at(2));
+    let (_, q) = heli_bone(c4, h, 0)?;
+    // The bone's turn as 1.7 builds it: each row the turned unit axis.
+    let world = [Vec3::X, Vec3::Y, Vec3::Z].map(|e| through(q * e));
+    Some((place, axis_to_angles4(world)))
 }
 
 /// The first helicopter but `skip` whose model collision the segment
@@ -465,15 +507,140 @@ fn vectoyaw(v: Vec3) -> f32 {
     crate::game::builtins::math::vectoangles(v.to_array())[1]
 }
 
-/// `LinearTrackAngle`: `cur` toward `tgt` by at most `rate * dt` the
-/// short way round.
-fn track_angle(tgt: f32, cur: f32, rate: f32, dt: f32) -> f32 {
-    let d = norm180(tgt - cur);
-    let step = rate * dt;
-    if d.abs() <= step {
-        tgt
+/// A float on the x87 stack (an `f64` here).
+fn d(x: f32) -> f64 {
+    f64::from(x)
+}
+
+/// The double `M_PI / 180` 1.7's angle helpers multiply by (0x820a288).
+const DEG2RAD: f64 = 0.017_453_292_519_943_295;
+
+/// The float `1 / 360` of 1.7's inlined angle normalisers (0x8209630).
+const INV_360: f32 = 0.002_777_777_8;
+
+/// `AngleNormalize180` with the turns kept on the stack:
+/// `(x - floor(x + 0.5)) * 360`, `x` the angle times [`INV_360`].
+fn norm180_kept(a: f64) -> f32 {
+    let x = a * d(INV_360);
+    ((x - (x + 0.5).floor()) * 360.0) as f32
+}
+
+/// `AnglesToAxis` (`cod4_lnxded` 0x818e910): forward, left, up. Each
+/// angle times [`DEG2RAD`] stored as a float through `sinf` and `cosf`;
+/// forward's products stored as floats, left's and up's sums of products
+/// kept until one store.
+fn axis4(a: Vec3) -> [Vec3; 3] {
+    let sc = |deg: f32| {
+        let r = (d(deg) * DEG2RAD) as f32;
+        (d(r.sin()), d(r.cos()))
+    };
+    let (sy, cy) = sc(a.y);
+    let (sp, cp) = sc(a.x);
+    let (sr, cr) = sc(a.z);
+    let forward = Vec3::new((cy * cp) as f32, (sy * cp) as f32, -sp as f32);
+    let (spr, spc) = (sp * sr, sp * cr);
+    let left = Vec3::new(
+        (cy * spr - sy * cr) as f32,
+        (spr * sy + cy * cr) as f32,
+        (cp * sr) as f32,
+    );
+    let up = Vec3::new(
+        (sy * sr + cy * spc) as f32,
+        (spc * sy - sr * cy) as f32,
+        (cr * cp) as f32,
+    );
+    [forward, left, up]
+}
+
+/// `vectoangles` (`cod4_lnxded` 0x8191a72): each `atan2` in double times
+/// 180 (or -180) over the double pi, stored as a float, 360 added to a
+/// negative one and 0 to the rest (so a -0 comes back +0); the pitch's
+/// flat length kept as a double.
+fn vectoangles4(v: Vec3) -> Vec3 {
+    if v.y == 0.0 && v.x == 0.0 {
+        return Vec3::new(if -v.z < 0.0 { 270.0 } else { 90.0 }, 0.0, 0.0);
+    }
+    let pi = std::f64::consts::PI;
+    let wrap = |a: f32| (d(if a >= 0.0 { 0.0 } else { 360.0 }) + d(a)) as f32;
+    let yaw = (d(v.y).atan2(d(v.x)) * 180.0 / pi) as f32;
+    let flat = (d(v.x) * d(v.x) + d(v.y) * d(v.y)).sqrt();
+    let pitch = (d(v.z).atan2(flat) * -180.0 / pi) as f32;
+    Vec3::new(wrap(pitch), wrap(yaw), 0.0)
+}
+
+/// `AxisToAngles` (`cod4_lnxded` 0x81951fe): pitch and yaw off the
+/// forward row ([`vectoangles4`]); the roll off the left row turned back
+/// through the yaw and the pitch, each `sinf`/`cosf` of a stored radian.
+fn axis_to_angles4(m: [Vec3; 3]) -> Vec3 {
+    let a = vectoangles4(m[0]);
+    let l = m[1];
+    let sc = |deg: f32| {
+        let r = (-d(deg) * DEG2RAD) as f32;
+        (d(r.sin()), d(r.cos()))
+    };
+    let (s1, c1) = sc(a.y);
+    let t = (d((d(l.x) * c1) as f32) - d(l.y) * s1) as f32;
+    let v = (d(l.x) * s1 + c1 * d(l.y)) as f32;
+    let (s2, c2) = sc(a.x);
+    let w = d(t) * c2 + d(l.z) * s2;
+    let z = d(l.z) * c2 - d(t) * s2;
+    let roll = if v == 0.0 && w == 0.0 {
+        -(if -z >= 0.0 { 90.0 } else { -90.0 })
     } else {
-        norm180(cur + step.copysign(d))
+        let r = (z.atan2((d(v) * d(v) + w * w).sqrt()) * -180.0 / std::f64::consts::PI) as f32;
+        if v < 0.0 {
+            (if r < 0.0 { 180.0 } else { -180.0 } + d(r)) as f32
+        } else {
+            -r
+        }
+    };
+    Vec3::new(a.x, a.y, roll)
+}
+
+/// `to - from` normalized as `VEH_UpdateAim` does (0x80a00c3..0x80a0119):
+/// the length and its reciprocal kept, each stored difference times it
+/// stored.
+fn normalize4(to: Vec3, from: Vec3) -> Vec3 {
+    let dv = [0, 1, 2].map(|k| d(to[k]) - d(from[k]));
+    let len = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt();
+    let inv = if -len < 0.0 { 1.0 / len } else { 1.0 };
+    Vec3::from(dv.map(|x| (d(x as f32) * inv) as f32))
+}
+
+/// `AnglesSubtract`'s angle (`cod4_lnxded` 0x819397a): `a - b`
+/// normalised on the stack, stored.
+fn angle_sub4(a: f32, b: f32) -> f32 {
+    norm180_kept(d(a) - d(b))
+}
+
+/// The turret's angle step (`cod4_lnxded` 0x8194154): `tgt` brought
+/// within 180 of `cur` by whole turns, then `cur` toward it by `rate`
+/// a think unless the gap is within a thousandth or the step would pass
+/// it (then the target itself), normalised on the stack.
+fn track4(tgt: f32, cur: f32, rate: f32) -> f32 {
+    let (mut a, b) = (d(tgt), d(cur));
+    while a - b > 180.0 {
+        a -= 360.0;
+    }
+    while a - b < -180.0 {
+        a += 360.0;
+    }
+    let gap = a - b;
+    let step = if gap > 0.0 { d(rate) } else { -d(rate) } * d(DT);
+    let far = gap.abs() as f32 > 0.001 && step.abs() as f32 <= gap.abs() as f32;
+    norm180_kept(if far { b + step } else { a })
+}
+
+/// A gun angle held to `-below ..= above` as `VEH_UpdateAim` holds it
+/// (0x80a0235..0x80a0285): the top first, then the bottom off the angle
+/// as it came.
+fn clamp4(a: f32, below: f32, above: f32) -> f32 {
+    if -d(below) - d(a) >= 0.0 {
+        -below
+    } else if d(a) - d(above) < 0.0 {
+        a
+    } else {
+        above
     }
 }
 
@@ -627,6 +794,7 @@ impl Heli4 {
             gun_pitch: 0.0,
             gun_yaw: 0.0,
             target: None,
+            turret_turning: 0,
             shots: 0,
             fresh: true,
             next_think: 0,
@@ -647,6 +815,7 @@ impl Heli4 {
     pub fn think(&mut self, rand: &mut vcod_common::rng::GlibcRand) -> Vec<&'static str> {
         let mut notes = Vec::new();
         if !self.moving {
+            self.hold();
             return notes;
         }
         // Read once: the goal check below can start the hover, which
@@ -966,28 +1135,71 @@ impl Heli4 {
         notes.push("goal");
     }
 
-    /// `VEH_UpdateAim`'s turret: the gun tracks the target from the barrel
-    /// at `turretRotRate`, held inside the file's spans; `turret_on_target`
-    /// once both angles were within a degree of it, else
-    /// `turret_not_on_target`.
-    pub fn aim(&mut self, barrel: Vec3, target: Vec3) -> &'static str {
-        let local = self.quat().inverse() * (target - barrel);
-        let a = crate::game::builtins::math::vectoangles(local.to_array());
-        let (tp, ty) = (norm180(a[0]), norm180(a[1]));
-        let (dp, dy) = (
-            norm180(tp - self.gun_pitch).abs(),
-            norm180(ty - self.gun_yaw).abs(),
+    /// The no-goal think (`cod4_lnxded` 0x808ba22, run in place of
+    /// `VEH_UpdateMoveToGoal` while flag 2 is clear, 0x80a048f..0x80a04a0):
+    /// 1.7's player-helicopter step with its four stick bytes zeroed
+    /// (0x808ba6a..0x808ba76). Only a goal sets flag 2 and nothing clears
+    /// it, so it runs from rest, where it keeps the place, levels pitch and
+    /// roll to +0 (the tilt's spring at rest, plus the hover jitter's +0)
+    /// and normalises the yaw on the stack (0x808c719..0x808c798;
+    /// cod4-gsc.md 3.2, "The no-goal think").
+    fn hold(&mut self) {
+        self.angles = Vec3::new(0.0, super::missile::normalize180(self.angles.y), 0.0);
+    }
+
+    /// `VEH_UpdateAim`'s turret (`cod4_lnxded` 0x809ff9b..0x80a038c): the
+    /// target's direction from `barrel` (the posed `tag_barrel`) in the
+    /// axis of `frame` (bone 0's posed angles), and each gun angle tracked to
+    /// it at `turretRotRate` (0x8194154), held inside the file's spans.
+    /// Returns the notifies: `turret_rotate_stopped` two thinks after the
+    /// gun last turned far, then `turret_on_target` once both angles were
+    /// within a degree of it, else `turret_not_on_target`; the caller adds
+    /// the sight notify after it (cod4-gsc.md 3.2, "The turret").
+    pub fn aim(&mut self, barrel: Vec3, frame: Vec3, target: Vec3) -> Vec<&'static str> {
+        let dir = normalize4(target, barrel);
+        let toward = axis4(vectoangles4(dir));
+        let frame = axis4(frame);
+        let el = |j: usize| {
+            let (a, b) = (toward[0], frame[j]);
+            (d(a.z) * d(b.z) + d(a.y) * d(b.y) + d(a.x) * d(b.x)) as f32
+        };
+        let rel = vectoangles4(Vec3::new(el(0), el(1), el(2)));
+        let off = (
+            angle_sub4(rel.x, self.gun_pitch).abs(),
+            angle_sub4(rel.y, self.gun_yaw).abs(),
         );
         let rate = self.info.turret_rot_rate;
-        self.gun_pitch = track_angle(tp, self.gun_pitch, rate, DT)
-            .clamp(-self.info.span_up, self.info.span_down);
-        self.gun_yaw = track_angle(ty, self.gun_yaw, rate, DT)
-            .clamp(-self.info.span_right, self.info.span_left);
-        if dp >= 1.0 || dy >= 1.0 {
-            "turret_not_on_target"
-        } else {
-            "turret_on_target"
+        let (pitch, yaw) = (
+            track4(rel.x, self.gun_pitch, rate),
+            track4(rel.y, self.gun_yaw, rate),
+        );
+        self.gun_pitch = clamp4(pitch, self.info.span_up, self.info.span_down);
+        self.gun_yaw = clamp4(yaw, self.info.span_right, self.info.span_left);
+        let mut notes = Vec::new();
+        // Still turning: a gun far off on an angle the spans left alone.
+        let free = |a: f32, b: f32| norm180_kept(d(a) - d(b)) == 0.0;
+        if (off.0 >= 2.0 && free(pitch, self.gun_pitch))
+            || (off.1 >= 2.0 && free(yaw, self.gun_yaw))
+        {
+            self.turret_turning = 2;
+        } else if self.turret_turning == 2 {
+            self.turret_turning = 1;
+        } else if self.turret_turning == 1 {
+            notes.push("turret_rotate_stopped");
+            self.turret_turning = 0;
         }
+        if off.0 >= 1.0 || off.1 >= 1.0 {
+            notes.push("turret_not_on_target");
+        } else {
+            notes.push("turret_on_target");
+        }
+        notes
+    }
+
+    /// With no target `VEH_UpdateAim` only lets the turning state run down
+    /// (0x80a03d4..0x80a03fe), notifying nothing.
+    pub fn aim_idle(&mut self) {
+        self.turret_turning = self.turret_turning.saturating_sub(1);
     }
 
     /// The gun's forward in the world: the body's turn, then the turret's.
@@ -1132,9 +1344,36 @@ impl Cod4Level {
                 Some(TurretTarget::Ent(e, off)) => self.entity_origin(e).map(|o| o + off),
                 None => None,
             };
-            if let Some(t) = target {
-                let barrel = self.tag_world(&h, "tag_flash").unwrap_or(h.origin);
-                notes.push((h.aim(barrel, t), Vec::new()));
+            match (target, heli_aim_from(self.rt.host.cod4(), &h)) {
+                (Some(t), Some((barrel, frame))) => {
+                    let aimed = h.aim(barrel, frame, t);
+                    // On target at an entity, the sight trace from the
+                    // barrel (`SV_SightTrace` under 0x801, 0x80a0398,
+                    // passing the helicopter and the target; no body bit in
+                    // the mask, so passing the helicopter alone is enough).
+                    let seen = aimed.last() == Some(&"turret_on_target")
+                        && matches!(h.target, Some(TurretTarget::Ent(..)))
+                        && crate::game::builtins::cod4_trace::trace4(
+                            &self.rt.host,
+                            barrel,
+                            t,
+                            Vec3::ZERO,
+                            Vec3::ZERO,
+                            h.id.0,
+                            0x801,
+                        )
+                        .is_some_and(|tr| tr.fraction >= 1.0 && !tr.startsolid);
+                    let vis = if seen {
+                        "turret_on_vistarget"
+                    } else {
+                        "turret_no_vis"
+                    };
+                    for n in aimed.into_iter().chain([vis]) {
+                        notes.push((n, Vec::new()));
+                    }
+                }
+                (None, Some(_)) => h.aim_idle(),
+                _ => {}
             }
             let (origin, angles) = (h.origin, h.angles);
             if let Some(slot) = self
@@ -1717,7 +1956,7 @@ mod tests {
         let target = Vec3::new(500.0, 500.0, -500.0);
         let mut first = None;
         for i in 0..200 {
-            if h.aim(Vec3::ZERO, target) == "turret_on_target" {
+            if h.aim(Vec3::ZERO, h.angles, target).last() == Some(&"turret_on_target") {
                 first = Some(i);
                 break;
             }

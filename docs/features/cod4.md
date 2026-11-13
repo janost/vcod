@@ -295,7 +295,8 @@ has a handler (3.1).
   ("The perks").
 - Looping and triggered map effects go out as `ET_LOOP_FX` and `ET_FX`.
 - Hardpoints: the airstrike's three `ET_PLANE` jets and their bombs; the
-  helicopter (`ET_HELICOPTER`) flies its path, aims and fires its cannon
+  helicopter (`ET_HELICOPTER`) levels and holds until its first goal,
+  flies its path, aims and fires its cannon
   and rockets, pitches and rolls off its acceleration, wanders in the
   hover, notifies `script_vehicle_collision` when it flies into the
   world, takes hits on its turned gun, and smokes and crashes when shot
@@ -452,10 +453,8 @@ Ranked by how much a player notices. The research-side lists are
    settings are not read.
 8. **Server-side differences.** vcod-server never asks the authorize
    server, so it answers an off-LAN challenge at once where 1.7 waits on
-   the authorize server (cod4-handshake.md 15). A helicopter holds still
-   until its first goal, where 1.7 runs a flight of its own (a stock one's
-   first 2 s; cod4-gsc.md 3.2). No PunkBuster (a stock dedicated server
-   runs none either).
+   the authorize server (cod4-handshake.md 15). No PunkBuster (a stock
+   dedicated server runs none either).
 
 Pending human checks: pixel and by-ear comparisons with retail.
 
