@@ -637,3 +637,46 @@ fn a_run_through_foliage_rustles_every_half_second() {
     }
     assert_eq!(ps.foliage_sound_time, 0);
 }
+
+#[test]
+fn a_prone_move_leaves_the_sight_unless_the_weapon_is_busy() {
+    use weapon::{ev as wev, state};
+    let w = world(&[]);
+    let mut prone = standing(&w);
+    run(&mut prone, &w, 14, button::PRONE, 0);
+    assert_ne!(prone.pm_flags & pmf::PRONE, 0);
+    // One cmd that starts the forward key, from `weaponstate` `s`.
+    let step = |s: i32| {
+        let mut ps = prone.clone();
+        ps.weapon_state = s;
+        ps.pm_flags |= pmf::SIGHT | pmf::PRONE_SIGHT;
+        let seq = ps.event_sequence;
+        let mut old = cmd(ps.command_time, button::PRONE, 0, 0);
+        let c = cmd(ps.command_time + 50, button::PRONE, 127, 0);
+        player_step(
+            &mut ps,
+            &c,
+            &mut old,
+            MoveWorld::bare(&w),
+            Rules::default(),
+            0.0,
+        );
+        let evs: Vec<i32> = (seq..ps.event_sequence)
+            .map(|i| ps.events[(i & 3) as usize])
+            .collect();
+        (ps, evs)
+    };
+    // Ready: `PM_ExitAimDownSight`'s event, both sight flags off.
+    let (ps, evs) = step(state::READY);
+    assert_eq!(evs, [wev::RESET_ADS]);
+    assert_eq!(ps.pm_flags & (pmf::SIGHT | pmf::PRONE_SIGHT), 0);
+    assert!(!ps.weapon_interrupt);
+    // Firing keeps the sight and raises nothing.
+    let (ps, evs) = step(state::FIRING);
+    assert!(evs.is_empty());
+    assert_ne!(ps.pm_flags & pmf::PRONE_SIGHT, 0);
+    // The binoculars are cut off first, the weapon's half owed.
+    let (ps, evs) = step(state::BINOCULARS_HOLD);
+    assert_eq!(evs, [wev::RESET_ADS, wev::BINOCULAR_EXIT, wev::RESET_ADS]);
+    assert_eq!((ps.weapon_state, ps.weapon_interrupt), (state::READY, true));
+}

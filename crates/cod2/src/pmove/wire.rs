@@ -108,6 +108,7 @@ impl PlayerState {
             anim_movetype: 0,
             anim_strafing: 0,
             foliage_sound_time: i("foliageSoundTime"),
+            weapon_interrupt: false,
         }
     }
 

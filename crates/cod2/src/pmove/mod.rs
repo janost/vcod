@@ -302,6 +302,10 @@ pub struct PlayerState {
     /// ps+0x44: the cmd time of the last `EV_FOLIAGE_SOUND`, 0 once the body
     /// slowed past the reset interval ([`foliage_sound`]).
     pub foliage_sound_time: i32,
+    /// A prone move cut the melee's start or the binoculars off
+    /// ([`prone_move_interrupts`]): `PM_Weapon` owes the `WeaponState` half
+    /// of the interrupt. Not on the wire.
+    pub weapon_interrupt: bool,
 }
 
 impl Default for PlayerState {
@@ -356,6 +360,7 @@ impl Default for PlayerState {
             anim_movetype: 0,
             anim_strafing: 0,
             foliage_sound_time: 0,
+            weapon_interrupt: false,
         }
     }
 }
@@ -633,6 +638,30 @@ fn grew(now: i8, before: i8) -> bool {
     now != before && f32::from(before).abs() < f32::from(now).abs()
 }
 
+/// `PM_InteruptWeaponWithProneMove` (0x80ed2de): whether a prone move leaves
+/// the sight. Firing, the melee's relax and the offhand states keep it; the
+/// melee's start and the binoculars are cut off first by the weapon
+/// interrupt (0x80ef946), whose playerstate half runs here and whose
+/// `WeaponState` half `PM_Weapon` owes through `weapon_interrupt`.
+fn prone_move_interrupts(ps: &mut PlayerState) -> bool {
+    use weapon::state;
+    match ps.weapon_state {
+        state::READY..=state::DROPPING | state::RECHAMBERING..=state::RELOAD_END => true,
+        state::FIRING | state::MELEE_RELAX..=state::OFFHAND => false,
+        s => {
+            ps.pm_flags &= !(weapon::wpf::OFFHAND | pmf::PRONE_SIGHT);
+            if (state::BINOCULARS_ADS_EXIT..=state::BINOCULARS_RAISE_WEAPON).contains(&s) {
+                ps.add_event(weapon::ev::RESET_ADS, 0);
+                ps.pm_flags &= !(pmf::SIGHT | weapon::wpf::BINOCULARS);
+                ps.add_event(weapon::ev::BINOCULAR_EXIT, 0);
+            }
+            ps.weapon_state = state::READY;
+            ps.weapon_interrupt = true;
+            true
+        }
+    }
+}
+
 /// `PmoveSingle` (0x80e8934).
 pub(crate) fn pmove_single(pm: &mut Pmove) {
     if pm.ps.pm_flags & pmf::FROZEN != 0 {
@@ -650,15 +679,18 @@ pub(crate) fn pmove_single(pm: &mut Pmove) {
     if pm.ps.pm_type > pm_type::INTERMISSION {
         pm.tracemask &= !CONTENTS_BODY;
     }
-    // Prone: a move key pressed harder than last cmd interrupts the weapon
-    // and leaves the sight (`PM_InteruptWeaponWithProneMove` 0x80ed2de,
-    // whose weapon tests vcod does not model: it is taken to interrupt).
+    // Prone: a move key pressed harder than last cmd leaves the sight unless
+    // the weapon is busy (cod2-movement.md 17.3).
     if pm.ps.pm_flags & pmf::PRONE == 0 {
         pm.ps.pm_flags &= !pmf::PRONE_SIGHT;
     } else if grew(pm.cmd.forward_move, pm.oldcmd.forward_move)
         || grew(pm.cmd.right_move, pm.oldcmd.right_move)
     {
-        pm.ps.pm_flags &= !(pmf::PRONE_SIGHT | pmf::SIGHT);
+        if prone_move_interrupts(pm.ps) {
+            pm.ps.pm_flags &= !pmf::PRONE_SIGHT;
+            pm.ps.add_event(weapon::ev::RESET_ADS, 0);
+            pm.ps.pm_flags &= !pmf::SIGHT;
+        }
     } else if pm.ps.pm_flags & pmf::SIGHT == 0 && matches!(pm.ps.weapon_state, 0 | 1 | 2 | 5) {
         pm.ps.pm_flags &= !pmf::PRONE_SIGHT;
     }
