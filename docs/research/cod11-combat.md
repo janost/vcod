@@ -3187,20 +3187,32 @@ the script gave. The hold's thread runs ahead of the grid's in that
 frame's thread pass, so the grid reads the tilt; a frame later the
 target's cmds ran first.
 
-VERIFIED, the `-turn` captures' `CMDS` lines: every round's cmd carries
-the time of one of the target's cmds (both answer the same snapshot), so
-which packet the server ran first, and so whether the round met the tilt,
-is not in the capture. Retail's rounds met the upright body in `t_down2`
-(all three) and `t_up` (1.1d) and `t_yaw_down` (1.5b), the tilted one
-elsewhere (UO's `t_up` struck the head 47 units behind the feet, 17 up).
+**Which packet ran first.** VERIFIED, the `-turn` captures' `CMDS`
+lines: every round's cmd carries the time of one of the target's cmds
+(both answer the same snapshot), so whether the round met the tilt rides
+which of the two packets the server ran first. The stamps cannot say, and
+neither can the probes' send clocks (`w=`): two sends answering one
+snapshot land within microseconds. The `-turn` captures in the tree (all
+three 2026-11-13; the 2026-10-19 runs are in git at 55164194) log the
+server's own read order: `showpackets 1` prints each client packet as
+`Netchan_Process` takes it, ahead of the message's cmds
+(docs/dev/retail.md, "Receive order", which has the addresses and the
+counts). Each pair's order there decided the round:
+
+- VERIFIED, vcod measurement: `leanhit_ab` replays each run's cmds one a
+  packet in the server's read order (`common::cmds_read`), and every
+  round's point and direction of all three runs match retail's.
+- VERIFIED, vcod measurement: sent instead as one packet per client a
+  frame, the shooter's first, the rounds of `t_down`, `t_down2` and
+  `t_yaw_down` (1.1d), `t_down`, `t_down2`, `t_up` and `t_yaw_down` (1.5b)
+  and `t_down2` and `t_up` (UO) miss the body on ours.
 
 vcod: `setPlayerAngles` hands the angles to the client's
 `combat::DobjStamps` (`set_angles`), the cmd's `set_client_yaw` clears
 them, and every trace poses the body in `DobjStamps::frame`. VERIFIED,
 vcod measurement: every grid cell of the six captures sits within 0.0001
-median of retail's; the replay sends both clients' cmds one a packet in
-cmd time order, the shooter's first on a tie, so the rounds named above
-meet the tilt on ours (`TURN_ROUND_GAPS_*`).
+median of retail's, and with the read order every round of the `-turn`
+captures matches, with no gap.
 
 **One ease a build.** VERIFIED, game.mp.uo (coduo-vehicles.md 13, "The
 glide back"): each skeleton build that finds a bone unbuilt under the

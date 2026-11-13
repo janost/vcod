@@ -1633,7 +1633,19 @@ Cmd timing, VERIFIED off the captures:
   0x808cade, the `cmdCount` strings) skips a cmd stamped at or below the last
   one run. Dropped, ours matches 33750 to 0.02 and steps 139 at retail's
   origin. The landing at 34050 is the same shape with 34016 behind 34032.
-  Both rest on the fit: no capture logs receive order.
+  Both rest on the fit; that run logged no receive order.
+- VERIFIED, `-victim-15-recv.txt` (1.5b, 2026-11-13, the `-victim-15`
+  recipe under `showpackets 1`, `q=` on every `!cmd`, the server's read
+  order in its `RECV` lines; docs/dev/retail.md, "Receive order"): all 1020
+  of the gunner's cmds were read, in the order he sent them, and no `Out of
+  order` or `Dropped` line printed. INFERRED, off `SV_UserMove`'s test: of
+  them only the three stamped at or below one sent before (16350, 20700 and
+  27950, clock steps) ran on no frame. INFERRED, off that run and the three
+  leanhit `-turn` runs (cod11-combat.md 3.7, every cmd of six probes read
+  in send order): on loopback a cmd sent 17 ms ahead of another is read
+  ahead of it, so 33700 ran, and the 0.2 units at 33750 and the landing at
+  34050 have another cause, still open. Neither 1.5b run is replayed
+  (13.4).
 - `ct=` (`-victim-ct.txt`, placement `exact=` (1738.2423, 1860.1884,
   -23.874968) line 47, target placed at 9500 and gunner at 12750, script
   lines 26 and 28): its strafe steps 139 (line 1532). The two cmds stamped
@@ -1716,8 +1728,9 @@ are from the earlier takes (in the tree up to a78fced2) unless stated.
   26332, 27332, 30386, 30434, 31848, 35399 and 35949 late; UO's 20198, 22682,
   22783, 24949, 30149 and 33348 late and the first of each pair stamped
   25200, 30300 and 31200 early. A cmd stamped at or below one already run
-  runs on neither server. `ct=` cannot tell a cmd overtaken by a later one
-  (13.3's 1.5b strafe) from one that ran.
+  runs on neither server. `ct=` alone cannot tell a cmd overtaken by a
+  later one from one that ran; a capture's `RECV` lines can, and in
+  `-victim-15-recv.txt` none was overtaken (13.3).
 - VERIFIED, `-spawn-uo.txt`: UO's turret round rolls `g_tracerChanceLMG` on
   each player hit (`uo_turret_round`, `coduo-diff.md` 21): a tracer on the
   wound at 31100, none on the kill at 31150.

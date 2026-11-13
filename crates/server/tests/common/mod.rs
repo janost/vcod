@@ -2105,6 +2105,101 @@ pub fn cmds_walls(text: &str, who: &str) -> Vec<(i32, u64)> {
     out
 }
 
+/// Each cmd of a client's `CMDS` lines in the order it went out, its
+/// `serverTime` and the netchan sequence of its message (the `q=` token,
+/// the first absolute and the steps after it). Empty for a capture that
+/// logs no `q=`.
+fn cmds_seqs(text: &str, who: &str) -> Vec<(i32, u32)> {
+    let mut seqs = Vec::new();
+    for l in text.lines() {
+        let Some(rest) = l
+            .strip_prefix(who)
+            .and_then(|r| r.trim_start().strip_prefix("CMDS st="))
+        else {
+            continue;
+        };
+        let Some(q) = rest.split_whitespace().find_map(|t| t.strip_prefix("q=")) else {
+            return Vec::new();
+        };
+        let mut at = 0u32;
+        for (k, d) in q.split(',').enumerate() {
+            let d: u32 = d.parse().expect("a q= step");
+            at = if k == 0 { d } else { at.wrapping_add(d) };
+            seqs.push(at);
+        }
+    }
+    let sent = cmds_sent(text, who);
+    assert_eq!(sent.len(), seqs.len(), "{who}: a q= per cmd");
+    sent.into_iter().map(|c| c.0).zip(seqs).collect()
+}
+
+/// Every cmd the server ran of the clients `who` (in their slot order),
+/// as `(index into who, serverTime)`, in the order retail read their
+/// packets: the capture's `RECV` lines (`tools/recv_order.sh`, retail's
+/// `showpackets 1` print, docs/dev/retail.md "Receive order") matched to
+/// each client's `q=` sequences. A sequence matches the client whose next
+/// unread cmds hold it, once that client's slot has connected (`c<n>`); a
+/// cmd skipped over was never read, one the netchan dropped (`o<s>`) never
+/// ran, and one no newer than the client's newest run is skipped
+/// (`SV_UserMove`). Empty for a capture without `RECV` or `q=` lines.
+pub fn cmds_read(text: &str, who: &[&str]) -> Vec<(usize, i32)> {
+    /// How many unread cmds a match may skip, the packets lost before it.
+    const LOST: usize = 8;
+    let sent: Vec<Vec<(i32, u32)>> = who.iter().map(|w| cmds_seqs(text, w)).collect();
+    let tokens: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("RECV "))
+        .flat_map(|l| l.split(','))
+        .collect();
+    if tokens.is_empty() || sent.iter().any(Vec::is_empty) {
+        return Vec::new();
+    }
+    let n = who.len();
+    let (mut next, mut live, mut newest) = (vec![0; n], vec![false; n], vec![i32::MIN; n]);
+    let mut out = Vec::new();
+    // The entry the last print pushed, which an `o<s>` after it takes back.
+    let mut last: Option<(usize, i32)> = None;
+    for tok in tokens {
+        if let Some(slot) = tok.strip_prefix('c') {
+            let slot: usize = slot.parse().expect("a connect slot");
+            if slot < n {
+                live[slot] = true;
+            }
+            continue;
+        }
+        if tok.starts_with('o') {
+            if let Some((k, prev)) = last.take() {
+                assert_eq!(out.pop(), Some((k, newest[k])), "a dropped packet's cmd");
+                newest[k] = prev;
+            }
+            continue;
+        }
+        if tok.starts_with('d') {
+            continue;
+        }
+        let s: u32 = tok.parse().expect("a RECV sequence");
+        let hits: Vec<(usize, usize)> = (0..n)
+            .filter(|&k| live[k])
+            .filter_map(|k| {
+                let end = (next[k] + LOST).min(sent[k].len());
+                (next[k]..end).find(|&j| sent[k][j].1 == s).map(|j| (k, j))
+            })
+            .collect();
+        assert!(hits.len() < 2, "RECV {s} matches two clients: {hits:?}");
+        last = None;
+        if let Some(&(k, j)) = hits.first() {
+            next[k] = j + 1;
+            let t = sent[k][j].0;
+            if t > newest[k] {
+                last = Some((k, newest[k]));
+                newest[k] = t;
+                out.push((k, t));
+            }
+        }
+    }
+    out
+}
+
 /// The `ct=<serverTime>:<commandTime>` pairs of a client's `CMDS` lines,
 /// those prefixed `who` only, sorted by time.
 pub fn cmds_ran(text: &str, who: &str) -> Vec<(i32, i32)> {

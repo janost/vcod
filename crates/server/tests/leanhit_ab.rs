@@ -52,10 +52,6 @@ struct Case {
     /// and the setup's prone and stand wait for the shooter.
     join_ms: i64,
     late_ms: i64,
-    /// Phases whose round (point and direction) may part from retail's.
-    round_gaps: &'static [&'static str],
-    /// Phases whose round's direction alone may part from retail's.
-    dir_gaps: &'static [&'static str],
 }
 
 /// The join times of the `probe_bones` captures.
@@ -153,7 +149,17 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, c: &Case) -> Vec<String> {
             .newest()
             .is_some_and(|s| s.ps.field_i32(cl.protocol(), "pm_type") == 0)
     };
-    let send = |cl: &mut NetClient<common::ClientEnd>,
+    // Each cmd's place in retail's read order, keyed (0 target, 1 shooter;
+    // their slots) and `serverTime`, where the capture logs it.
+    let read: std::collections::HashMap<(usize, i32), usize> =
+        common::cmds_read(c.fixture, &["target", "shooter"])
+            .into_iter()
+            .enumerate()
+            .map(|(i, k)| (k, i))
+            .collect();
+    // A live client's cmds for this frame, unsent; a client not yet live
+    // sends its frame here.
+    let take = |cl: &mut NetClient<common::ClientEnd>,
                 hold: &mut common::ProbeHold,
                 input: (u8, u8, i8),
                 pressed: &[(i32, (u8, u8, i8))],
@@ -174,9 +180,12 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, c: &Case) -> Vec<String> {
                     c.weapon = w;
                 }
             }
-            cl.send_cmds(&cmds);
-        } else if let Some(c) = cl.send_frame(&UserCmd::default()) {
-            hold.last = c.server_time;
+            Some(cmds)
+        } else {
+            if let Some(c) = cl.send_frame(&UserCmd::default()) {
+                hold.last = c.server_time;
+            }
+            None
         }
     };
     for i in 0..4000i64 {
@@ -209,10 +218,40 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, c: &Case) -> Vec<String> {
                 }
             }
         }
-        if let Some(ca) = ca.as_mut() {
-            send(ca, &mut ha, ia, &pa, selected);
+        let sa = ca
+            .as_mut()
+            .and_then(|ca| take(ca, &mut ha, ia, &pa, selected));
+        let sb = take(&mut cb, &mut hb, ib, &pb, None);
+        let mut batch: Vec<(usize, UserCmd)> = sb.iter().flatten().map(|c| (0, *c)).collect();
+        batch.extend(sa.iter().flatten().map(|c| (1, *c)));
+        if !batch.is_empty()
+            && batch
+                .iter()
+                .all(|(k, c)| read.contains_key(&(*k, c.server_time)))
+        {
+            // One cmd a packet, as the net probe sent them, in the order
+            // retail read them (docs/research/cod11-combat.md 3.7).
+            batch.sort_by_key(|(k, c)| read[&(*k, c.server_time)]);
+            for (k, cmd) in batch {
+                let (cl, addr, q) = match k {
+                    0 => (&mut cb, common::ADDR_B, &qb),
+                    _ => (ca.as_mut().unwrap(), common::ADDR, &qa),
+                };
+                cl.send_cmds(&[cmd]);
+                let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
+                for p in pending {
+                    sv.handle_packet(addr, &p, now);
+                }
+            }
+        } else {
+            // The shooter's packet first.
+            if let (Some(ca), Some(cmds)) = (ca.as_mut(), &sa) {
+                ca.send_cmds(cmds);
+            }
+            if let Some(cmds) = &sb {
+                cb.send_cmds(cmds);
+            }
         }
-        send(&mut cb, &mut hb, ib, &pb, None);
         for (addr, q) in [(common::ADDR, &qa), (common::ADDR_B, &qb)] {
             let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
             for p in pending {
@@ -458,10 +497,7 @@ fn check(fs: vcod_common::pk3::Pk3Fs, c: &Case) {
     }
 
     let (rh, oh) = (hits(&retail), hits(&ours));
-    for (phase, r) in rh
-        .iter()
-        .filter(|(p, _)| !c.round_gaps.contains(&p.as_str()))
-    {
+    for (phase, r) in &rh {
         let o = oh.get(phase);
         let near = o.is_some_and(|o| {
             o.0 == r.0 && o.1 == r.1 && (0..3).all(|i| (o.2[i] - r.2[i]).abs() <= POINT_NEAR)
@@ -471,17 +507,13 @@ fn check(fs: vcod_common::pk3::Pk3Fs, c: &Case) {
         }
     }
     let (rd, od) = (dirs(&retail), dirs(&ours));
-    let dir_gap = |p: &str| c.round_gaps.contains(&p) || c.dir_gaps.contains(&p);
-    for (phase, r) in rd.iter().filter(|(p, _)| !dir_gap(p)) {
+    for (phase, r) in &rd {
         let o = od.get(phase).copied();
         if o.is_none_or(|o| (0..3).any(|i| (o[i] - r[i]).abs() > DIR_NEAR)) {
             bad.push(format!("round {phase} direction: retail {r:?} ours {o:?}"));
         }
     }
-    for phase in oh
-        .keys()
-        .filter(|p| !rh.contains_key(*p) && !c.round_gaps.contains(&p.as_str()))
-    {
+    for phase in oh.keys().filter(|p| !rh.contains_key(*p)) {
         bad.push(format!(
             "round {phase}: ours hit {:?}, retail none",
             oh[phase]
@@ -501,8 +533,6 @@ fn a_leaning_body_and_a_leaning_shooters_rounds_land_as_on_retail() {
             fixture: include_str!("fixtures/leanhit/mp_carentan-leanhit.txt"),
             join_ms: 8550,
             late_ms: 3450,
-            round_gaps: &[],
-            dir_gaps: &[],
         },
     );
 }
@@ -518,8 +548,6 @@ fn a_leaning_bodys_bones_sit_as_on_retail() {
             fixture: include_str!("fixtures/leanhit/mp_carentan-leanhit-bones.txt"),
             join_ms: JOIN_11,
             late_ms: LATE_11,
-            round_gaps: &[],
-            dir_gaps: &[],
         },
     );
 }
@@ -546,8 +574,6 @@ fn a_leaning_body_on_15_poses_as_on_retail() {
             fixture: include_str!("fixtures/leanhit/mp_carentan-leanhit-1.5.txt"),
             join_ms: 9450,
             late_ms: 2750,
-            round_gaps: &[],
-            dir_gaps: &[],
         },
     );
 }
@@ -563,8 +589,6 @@ fn a_leaning_body_on_uo_poses_as_on_retail() {
             fixture: include_str!("fixtures/leanhit/mp_carentan-leanhit-uo.txt"),
             join_ms: JOIN_UO,
             late_ms: LATE_UO,
-            round_gaps: &[],
-            dir_gaps: &[],
         },
     );
 }
@@ -580,8 +604,6 @@ fn cmds_case(fixture: &'static str, join_ms: i64, late_ms: i64) -> Case {
         fixture,
         join_ms,
         late_ms,
-        round_gaps: &[],
-        dir_gaps: &[],
     }
 }
 
@@ -665,40 +687,26 @@ fn a_round_on_uo_leaves_along_retails_aim_on_its_press() {
 
 /// The `-turn` and `-turnonce` captures' join times (their headers' first
 /// playing snapshots, joined as [`cmds_case`]'s are).
-const TURN_JOIN_11: i64 = 9000;
-const TURN_LATE_11: i64 = 2700;
+const TURN_JOIN_11: i64 = 7800;
+const TURN_LATE_11: i64 = 3000;
 const ONCE_JOIN_11: i64 = 9100;
 const ONCE_LATE_11: i64 = 2300;
-const TURN_JOIN_15: i64 = 8400;
-const TURN_LATE_15: i64 = 3800;
-const TURN_JOIN_UO: i64 = 8300;
-const TURN_LATE_UO: i64 = 4300;
+const TURN_JOIN_15: i64 = 8050;
+const TURN_LATE_15: i64 = 2750;
+const TURN_JOIN_UO: i64 = 8550;
+const TURN_LATE_UO: i64 = 3000;
 const ONCE_JOIN_15: i64 = 8400;
 const ONCE_LATE_15: i64 = 3800;
 const ONCE_JOIN_UO: i64 = 9150;
 const ONCE_LATE_UO: i64 = 4600;
 
-/// The `-turn` rounds that met the upright target: every round's cmd
-/// carries the time of a cmd of the target's (both answer the same
-/// snapshot), and the capture does not say which packet the server took
-/// first. Sent after his, the round meets the body upright; sent ahead,
-/// it meets the tilt the hold's `setPlayerAngles` left on him, which is
-/// what the replay sends (the shooter's packet first). The `-turnonce`
-/// captures measure the same rounds without the tilt
-/// (docs/research/cod11-combat.md 3.7).
-const TURN_ROUND_GAPS_11: &[&str] = &["t_down2", "t_up"];
-const TURN_ROUND_GAPS_15: &[&str] = &["t_down2", "t_yaw_down"];
-const TURN_ROUND_GAPS_UO: &[&str] = &["t_down2"];
-/// UO's `t_back` round strikes retail's point but leaves 0.016 degrees
-/// off its yaw: whether the cmd that fires aims along the view the hold's
-/// `setPlayerAngles` left or along the one the cmd quantized
-/// (docs/research/cod11-combat.md 15.1, "The cmd that fires"), which the
-/// replay's cmd placement does not settle here.
-const TURN_DIR_GAPS_UO: &[&str] = &["t_back"];
-
 /// `probe_turn 1` (docs/research/cod11-combat.md 3.7): the target's view
 /// turns at each phase's start, and nothing poses him until the shooter's
 /// round 1.5 s later, then the grid 0.3 s on and again a frame after.
+/// The round's cmd and one of the target's carry the same time, and
+/// whether it met the tilt rides which packet retail read first: the
+/// captures' `RECV` lines say, and the replay sends both clients' cmds one
+/// a packet in that order (`common::cmds_read`).
 fn turn_case(fixture: &'static str, join_ms: i64, late_ms: i64) -> Case {
     cmds_case(fixture, join_ms, late_ms)
 }
@@ -713,13 +721,7 @@ fn a_body_stands_in_the_angles_setplayerangles_gave_it_until_his_next_cmd() {
         return;
     };
     let fixture = include_str!("fixtures/leanhit/mp_carentan-leanhit-turn.txt");
-    check(
-        fs,
-        &Case {
-            round_gaps: TURN_ROUND_GAPS_11,
-            ..turn_case(fixture, TURN_JOIN_11, TURN_LATE_11)
-        },
-    );
+    check(fs, &turn_case(fixture, TURN_JOIN_11, TURN_LATE_11));
 }
 
 #[test]
@@ -728,13 +730,7 @@ fn a_body_stands_in_the_angles_setplayerangles_gave_it_until_his_next_cmd_on_15(
         return;
     };
     let fixture = include_str!("fixtures/leanhit/mp_carentan-leanhit-turn-1.5.txt");
-    check(
-        fs,
-        &Case {
-            round_gaps: TURN_ROUND_GAPS_15,
-            ..turn_case(fixture, TURN_JOIN_15, TURN_LATE_15)
-        },
-    );
+    check(fs, &turn_case(fixture, TURN_JOIN_15, TURN_LATE_15));
 }
 
 #[test]
@@ -743,14 +739,7 @@ fn a_body_stands_in_the_angles_setplayerangles_gave_it_until_his_next_cmd_on_uo(
         return;
     };
     let fixture = include_str!("fixtures/leanhit/mp_carentan-leanhit-turn-uo.txt");
-    check(
-        fs,
-        &Case {
-            round_gaps: TURN_ROUND_GAPS_UO,
-            dir_gaps: TURN_DIR_GAPS_UO,
-            ..turn_case(fixture, TURN_JOIN_UO, TURN_LATE_UO)
-        },
-    );
+    check(fs, &turn_case(fixture, TURN_JOIN_UO, TURN_LATE_UO));
 }
 
 /// `probe_turnonce 1`: the turn is set for 0.2 s only, so the round, the
