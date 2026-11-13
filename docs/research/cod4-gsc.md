@@ -347,9 +347,8 @@ disassembly).
   (vehicle +0x2a0) for `moveState` 1, toward goal plus wander (+0x230)
   for 2 (0x809fce2..0x809fcf4, 0x80a06b0, 0x80a0841). VERIFIED (the
   disassembly). With no goal a helicopter (type 5) runs 0x808ba22 instead
-  (0x80a048f..0x80a04a0). VERIFIED (the disassembly). That 0x808ba22 is a
-  piloted flight model whose stick inputs start at 0 and which reads
-  dvars (0x8582ba0..0x8582bac) is INFERRED. Then 0x809c1dc places the
+  (0x80a048f..0x80a04a0). VERIFIED (the disassembly). What it does: "The
+  no-goal think" below. Then 0x809c1dc places the
   entity (`G_SetOrigin` at 0x809c2d2, 0x80ca276 at 0x809c2de). VERIFIED
   (the calls); 0x80ca276 being `G_SetAngle` is INFERRED.
 - The move trace (0x80a04aa..0x80a05e3): under flag 2, when 0x815cfe0
@@ -385,9 +384,8 @@ disassembly).
   is empty (`entityHandlers` 0x826cee0, row 23). VERIFIED (the
   disassembly). A helicopter is an xmodel, so no missile touches it here.
   INFERRED. That +0x218 is the entity's link is INFERRED.
-- Then the turret (`VEH_UpdateAim`, `tag_barrel`'s place at 0x80a0063,
-  `tag_flash`'s matrix at 0x80a008b), `time2` and `nextthink`. VERIFIED
-  (the disassembly).
+- Then the turret (`VEH_UpdateAim`, "The turret" below), `time2` and
+  `nextthink`. VERIFIED (the disassembly).
 - The controller (handler 23's slot +0x1c, 0x80bab1e) poses the DObj:
   `tag_body` to (bodyPitch, 0, bodyRoll), the `lerp.u` words at +0x54 and
   +0x58; `tag_turret` to (0, gunYaw, 0); `tag_barrel` to (gunPitch, 0, 0)
@@ -413,12 +411,12 @@ On ours (`game::cod4::vehicle`):
   `tag_barrel` sits 7.3 degrees nose up at the bind pose, and retail's
   `tag_flash` points along the gun's pitch. The stock MP scripts never
   wait on `script_vehicle_collision`. VERIFIED (`common_mp`'s rawfiles).
-- Not ported: 0x808ba22. A stock helicopter runs it for its first 2 s:
-  `heli_fly` waits 2 s before its first goal. VERIFIED (`common_mp`'s
-  `_helicopter.gsc`). Ours holds still there. INFERRED (the code).
-- Turret: tracks from `tag_flash` at `turretRotRate`/s inside the spans;
-  `turret_on_target` once both angles are within a degree, else
-  `turret_not_on_target`. INFERRED (`VEH_UpdateAim`).
+- A stock helicopter runs 0x808ba22 for its first 2 s: `heli_fly` waits
+  2 s before its first goal. VERIFIED (`common_mp`'s `_helicopter.gsc`).
+  `Heli4::hold` is its at-rest case ("The no-goal think"). INFERRED (the
+  code against the disassembly).
+- Turret: `Heli4::aim` and `heli_aim_from` are `VEH_UpdateAim` ("The
+  turret"). INFERRED (the code against the disassembly).
 - `fireWeapon([tag[, target]])` raises `EV_FIRE_WEAPON` (26,
   `vcod_cod4::pmove::weapon::ev`, VERIFIED). A bullet weapon
   (`cobra_20mm_mp`) traces from the tag along the gun inside the hip
@@ -524,12 +522,15 @@ helicopter word at the same time past spawn.
 - Planes: bit for bit. VERIFIED (the gate).
 - Helicopter: bit for bit for 1.5 s; the turn through the first node
   parts by 0.005 degrees pitch, 0.08 yaw; the rest stays within 8 units,
-  1.9 degrees of body, 0.45 of gun. VERIFIED (the gate). The parting is
+  1.9 degrees of body, 0.124 of gun. VERIFIED (the gate). The parting is
   the float model (retail's x87 intermediates against our `f32`, steered
   by a goal vector shrinking to nothing at the node). INFERRED: the
   think's rules match the disassembly. `hardpoint_ab::GAPS` tolerates it.
-  The gun aims from the posed `tag_flash`; off the bind pose's it parted
-  by 1.6 degrees. VERIFIED (the gate, both ways).
+- The gun aims in the flown body's frame ("The turret"), so it parts as
+  the body does: 0.45 degrees at worst when ours aimed from `tag_flash` in
+  the body's own angles, 0.124 from `tag_barrel` in bone 0's. VERIFIED
+  (the gate, both ways). On a body that holds still it matches to a few
+  ulps (the idle capture below). VERIFIED (the gate).
 
 #### The collision capture
 
@@ -554,6 +555,124 @@ counted from the spawn. VERIFIED (the capture).
   started in solid, reads (0, 0, 0); 209 by 16 s. Ours: the same times,
   normals, places and count, the last place 0.1 off. VERIFIED (the
   gate).
+
+#### The no-goal think
+
+`cod4_lnxded` 0x808ba22, run by the vehicle think for a helicopter with
+no goal (above). Read off the disassembly; `Heli4::hold` is what it does
+on the server.
+
+- It is 1.7's player-helicopter step: it reads the 28 `vehHelicopter*`
+  dvars registered at 0x80ba309..0x80ba82d (`vehHelicopterMaxSpeed` 150
+  mph .. `vehHelicopterTiltMomentum` 0.4; `vehHelicopterJitterJerkyness`
+  0.3, `vehHelicopterHoverSpeedThreshold` 400). VERIFIED (the
+  disassembly, `tools/re/cod4_dvars.py`).
+- Its four stick bytes are locals zeroed at 0x808ba6a..0x808ba76 and
+  never written after, so on the server every stick input is 0. VERIFIED
+  (the disassembly).
+- Only `setVehGoalPos` sets flag 2 (vehicle +0x1c0, 0x809cb02); no store
+  in the vehicle code clears it, and `VEH_InitPhysics` (0x809d13a) zeroes
+  the velocity (vehicle +0x138), the tilt and its rate (+0x1a0..+0x1b0),
+  the yaw rate (+0x154) and the jitter (+0x1e8..+0x224). VERIFIED (the
+  disassembly). So it runs only before a helicopter's first goal, from
+  rest. INFERRED (the two facts above).
+- From rest every change it makes is 0: the velocity's (DiffTrack
+  0x818ec02 toward 0 from 0, then `+= 0.05` of it), so the move (0x80a0b08)
+  and the lookahead trace (0x808b920, `vehHelicopterLookaheadTime`, which
+  returns at a zero velocity) never run; the tilt's spring (its target
+  off the zero velocities, `vehHelicopterTiltSpeed` over the momentum);
+  the yaw rate's. INFERRED (the arithmetic read at rest).
+- The jitter only `setJitterParams` (0x809cc92) would start, and no row of
+  the vehicle method table (0x821be40, 25 rows) names it. VERIFIED
+  (`tools/re/cod4_builtins.py`).
+- Pitch and roll: the tilt times `vehHelicopterMaxPitch` and `MaxRoll`,
+  then (under the hover speed threshold, always at rest) the jitter's
+  `share * jitter + angle` (0x808cfd4..0x808d006), so `+0 + angle`: both
+  come out +0 whatever the spawn's angles. VERIFIED (the disassembly).
+- Yaw: the last think's yaw (r.currentAngles, copied in at 0x809fc60)
+  plus the rate's step, times the float 1/360, less `floor(x + 0.5)`,
+  times 360, all on the stack with one store (0x808c719..0x808c798).
+  VERIFIED (the disassembly). A spawn yawed 250 reads -110 from the first
+  think. VERIFIED (the idle capture).
+- It also tracks vehicle +0x2e4 toward 1 and +0x2e8 toward 0 at 4 a
+  second; `VEH_UpdateMoveToGoal` stores them too (0x809e9ce), and nothing
+  outside 0x808ba22 reads them. VERIFIED (the disassembly).
+
+#### The turret
+
+`VEH_UpdateAim`, inlined in the vehicle think (0x809ff9b..0x80a038c).
+VERIFIED (the disassembly) for each point below, but the last two.
+
+- It runs when the vehicle has a target (+0x268) and the entity health
+  over 0 and a `tag_barrel` (bone slot +0x324, from the name at
+  0x80a4628; none skips it, 0x80a004c). With no target the turning state
+  (+0x1e4) runs down 2, 1, 0 and nothing is notified (0x80a03d4).
+- The target is its entity's `r.currentOrigin` plus the offset (+0x290),
+  or the point (+0x284).
+- It aims from `tag_barrel`'s world place (`G_DObjGetWorldTagPos`
+  0x80cbfc4: the posed bone's place through `AnglesToAxis` of
+  `r.currentAngles`, plus the origin, 0x819016e).
+- In the frame of the angles (`AxisToAngles` 0x81951fe) of the world
+  matrix (`G_DObjGetWorldTagMatrix` 0x80cbe9a) of the bone in slot
+  +0x320; with -1 there, the body's angles (0x80a0684). Nothing stores to
+  vehicle +0x320, and the vehicle pool (0x8586de0, eight of 0x354 bytes,
+  `.bss`) is reset only at +0x1b8 (0x80cce3b..0x80cce81), so the slot
+  names bone 0: `tag_origin` on the cobra (`bone_dump`). The gdb run below
+  read the frame (0, 250, 0) on a body at (0, -110, 0).
+- The direction to the target is normalized with its length kept; its
+  `vectoangles` (0x8191a72) taken back into the frame:
+  `AxisToAngles(AnglesToAxis(dir) * transpose(AnglesToAxis(frame)))`
+  (0x818e910, 0x818f6f6, 0x818effc): the target's pitch and yaw in the
+  frame.
+- Each gun angle steps by 0x8194154: the target angle brought within 180
+  of the gun's by whole turns, the gun moved `turretRotRate * 0.05`
+  toward it unless the gap is within 0.001 or the step would pass it
+  (then the target angle), normalised on the stack. Then held to
+  `-turretVertSpanUp ..= turretVertSpanDown` and `-turretHorizSpanRight
+  ..= turretHorizSpanLeft` (the file's +0xd8, +0xdc, +0xd4, +0xd0; the
+  field table's rows at 0x826dddc..0x826de0c).
+- The turning state: 2 while either `AnglesSubtract` (0x819397a) of the
+  target angle and the gun angle before the step is 2 or more on an angle
+  the spans left alone; else 2 goes to 1, and 1 notifies
+  `turret_rotate_stopped` and goes to 0. Then, either off by a degree or
+  more: `turret_not_on_target`, `turret_no_vis`; else `turret_on_target`,
+  then at an entity a sight trace from the barrel (0x817cf14, mask 0x801,
+  passing the vehicle and the target) for `turret_on_vistarget` or
+  `turret_no_vis`, and at a point `turret_no_vis` (the strings at
+  0x8217aa0..0x8217ae8).
+- `Heli4::aim` and `heli_aim_from` do this, the x87 intermediates as
+  `f64`. Its sight trace passes only the helicopter: 0x801 holds no body
+  bit. INFERRED (the code).
+- gdb on retail running the idle capture's gsc (0x80a011c, 0x80a012e,
+  0x80a01a3: the barrel, the direction, the frame, the target angles, the
+  target in the frame, the gun) against the same values on ours, 159
+  thinks: wherever the barrel, the frame and the gun before the step match
+  (51 thinks), the direction, the target angles and the target in the
+  frame match word for word. Before the goal the barrel
+  lands an ulp off in 26 of 80 thinks: ours poses the tags off the zone's
+  bind-pose `baseMat`, 1.7's skeleton composes the model's local bones. In
+  flight the frame's roll lands an ulp off (the `AxisToAngles` roll's
+  extended intermediates against our `f64`). VERIFIED (gdb).
+
+#### The idle capture
+
+`cod4::hardpoint_ab::helicopter_idle_matches_retail` replays
+`crates/cod4/tests/fixtures/net/play-1.7-heli-idle.txt`. Recipe: the
+flight's, under `+set fs_game mods/vcodidle` with
+`crates/cod4/tests/fixtures/gsc/heli_idle/maps/mp/mp_crash_fx.gsc` in the
+mod's iwd and `--secs 30`. A cobra spawns over the first loop node at
+angles (8, 250, -6) with no goal for 4 s, its gun on a point ahead and
+below, then on one behind; then it flies a pass-through goal and is
+deleted. No hover radius and no stop goal, so no random draw. VERIFIED
+(the capture).
+
+- Before the goal every place and body word matches retail's, the body
+  (0, -110, 0) from the first think; the gun within 3.1e-5 degrees (the
+  barrel's ulps above), `hardpoint_ab::STILL_GAPS`. VERIFIED (the gate).
+  Without `Heli4::hold` the body read 8 degrees of pitch off from the
+  first think and the gun 7.4. VERIFIED (the gate, both ways).
+- Past the goal the flight's tolerances hold; the gun parts by 0.128 at
+  worst, as its body does. VERIFIED (the gate).
 
 #### Missiles under 1.7: attractors, the wobble, guidance
 
