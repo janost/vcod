@@ -2647,6 +2647,119 @@ Ladder meetings keep their own rules (`ladder_yield`, `head_on_yield`,
 ground only, and the mast ladder's head meetings on `mp_ship` are
 unchanged.
 
+### The ship's leftovers
+
+Retail has no bots; this section is measured on vcod-server only. Each
+leftover traced per tick (`ship_stalls` `TRACE=`, `bot_match`
+`STALLS=1`, and a temporary per-tick log of the follower and the cmd),
+release, 1.1, on "Bodies in the way"'s tip (ae407a223):
+
+- The item's seeds (6 bots, `dm`, shoot off): 1233 and 1521 (the
+  stairwell crease at (5445, 355, 292)), 991 and 797 (the dome slope at
+  (3789, -207, 352)) and 1345 stall 0 with no fall or death on that tip.
+  VERIFIED (measured).
+- `mp_ship` 1381's death on the spar at (4676, 64, 1172). Held up by a
+  bot coming the other way, the follower dropped its plan for one round
+  him (t1573), and the search took 7 ticks. With no waypoint and its
+  last 69 units off, past `WAIT_REACH`, the bot was not held and ran a
+  random heading (`Bot::think`'s wander) east-south-east off the spar's
+  side, fell to (4924, -18, 535) and died. VERIFIED (trace). The plan
+  round a body is now waited for where the body stands
+  (`Follower::rest_point`,
+  `nav::tests::a_body_waits_where_it_stands_for_the_plan_round_a_body`);
+  the seed has no death.
+- The deck pocket at (3527 to 3581, -165 to -7, 352) (`bot_match` `tdm`
+  seeds 4 and 5, 6 and 177 stalled bot-ticks). Its one plain way north is
+  the edge (3581, -7, 352) -> (3549, 33, 352) round the end of a block
+  whose south face stands at y 8 for x 3549 and over: a standing box
+  passes north only at x 3548 and under (box traces at x 3520 to 3596).
+  VERIFIED (traces). The graph's walk proves the edge from the node at a
+  run, and from rest at (3578, -7) too. VERIFIED (the walk). A bot
+  failed it twice over: a remembered spot turned its keys to a back key
+  and a strafe (forward -97, right -41), which retail scales by 0.7 and
+  0.8 (`pmove::SCALE_BACK`, `SCALE_STRAFE`), and against the face its
+  speed along it fell from 27 to 8 units/s until its stall circle fired
+  (seed 5, t7613 to t7638); and goals flipping between noises replanned
+  it to a stop at the corner (seed 4, t3850 to t3880). VERIFIED
+  (traces). Avoided twice, the edge is dead, and the pocket's other way
+  out is the risky drop (3496, -96, 352) -> (3450, -96, 272), which no
+  plan with an edge avoided takes: every
+  plan failed and the bot rested 20 ticks at a time until the dead edge
+  ran out 200 ticks on (seed 5 bot 8, level ticks 7640 to 7955). VERIFIED (trace,
+  the follower's avoid and dead lists; `nav_build` `EDGES=1`). Two
+  changes: the last plan, round the dead edges only, may take a risky
+  drop at `RISK_COST` (`Search::risking`,
+  `nav::tests::a_plan_round_a_dead_edge_takes_a_risky_drop`; the plan
+  round a stuck edge still takes none, as seed 969 needs); and under
+  `RECALL_PACE` (66 units/s) the keys keep the path's own run with no
+  pre-aim (`Bot::think_wander`,
+  `bots::tests::a_slow_body_keeps_the_path_under_a_recall`).
+- A health item on the ledge at (4603, -586, 52) (`tdm` seed 5 on the
+  pre-aim change, 388 stalled). A hurt bot's heal goal kept the
+  destination of its fight's plan, the hold floor node (4578, -576, -64)
+  116 under the item: within `RETARGET` (128) of the point, the goal had
+  not moved. Arrived there, it walked at the point under the ledge
+  while the item lay. VERIFIED (trace: `view.survive.heal`, the
+  follower's `dest`). A destination more than a jump off the height of
+  the node a plan to the point ends at (`NavGraph::goal_node`) now
+  reads as moved, for a parked plan too (`Follower::follow`,
+  `nav::tests::a_goal_a_floor_off_its_destination_is_planned_for_again`).
+- Two health items a hurt bot flipped between (`tdm` seeds 11 and 24
+  on the changes above, 210 and 741 stalled). The item was the nearest
+  across, picked afresh each tick: between one on the hold floor at
+  (4557, 631, -63) and one on the deck at (4418, 579, 56) the pick
+  changed as the bot moved and it paced between their ways at (4450,
+  700, -64) (seed 11); and the way to one at (5058, -319, 92) climbed the
+  stairwell over (5402, 321, 344), more than `HEAL_HEIGHT` (200) over
+  it, where the item dropped out, the bot's other goal took the jump drop
+  back to 204, and the item came back (seed 24). VERIFIED (traces,
+  `view.survive.heal` per tick). The item walked to is now kept while it
+  lies within `HEAL_REACH` across, at any height
+  (`retreat::nearest_pack`'s `held`, `Bot::heal_at`,
+  `bots::retreat::tests::a_hurt_bot_keeps_to_the_health_item_it_walks_to`).
+- `ship_stalls` seed 65's fall (10 bots). The roam ended at (3744, -794,
+  27), at the foot of a slope the walk up to (3744, -767, 40) climbs only
+  at a run: from rest the body hops in place, off the ground. VERIFIED
+  (walks from the node at a run and from rest). The next plan, made while
+  the body still came down onto the node at 137 units/s, started at
+  (3744, -767, 40), nearest it then; the bot pressed at it from the foot
+  until its unstick spell ran down the graph's own plain drop to
+  (3714, -800, -64), which the detector counts as a fall. VERIFIED
+  (trace). Not changed; the seed has no fall on this tip.
+- `ship_stalls` seed 9's fall (10 bots): the spell's fall is from the
+  mast deck at 480 to 352, where the plan was headed. Before it, the bot
+  on the platform at (3461, -189, 798) went for the drop to (3423, -192,
+  664) and fell past it to 480. VERIFIED (trace). Not traced further.
+- Tried and dropped: steering a climb whose foot stands aside of the
+  rungs (`NavGraph::face_ahead` finds none) at the rungs' middle on the
+  foot's side, for the hold ladder (3264, 602, -64) -> (3297, 576, 56),
+  where a bot run straight at the head from the east pinned on the wall's
+  end north of the rungs at (3289, 596, -64) (`tdm` seed 12). Over the
+  64 seeds below the edges given up rose from 385 to 687, bots ending off
+  the graph at (3590, 198, 616); only on the foot's floor, 687.
+  VERIFIED (measured).
+- Left: that hold ladder; the mast ladder at x 3808 between 485 and 616
+  and the shelf ladder at (5352, -70) between 352 and 448, each one
+  bot on the rungs under a body at the head (`tdm` seeds 6 and 4: 4 and
+  11 stalled bot-ticks); the mast ladder's head meetings at (4954 to
+  4964, 35 to 64, 1219) and the jump cue's routing leftover ("The jump cue
+  and the re-proof"), which no run on this tip showed.
+
+VERIFIED (measured, ae407a223 then this change; `ship_stalls` `dm` 10
+bots, shoot off, 4000 ticks, seeds 1-127 odd: stalled bot-ticks / falls /
+deaths / edges given up / those by a body / bot-ticks held up by a body;
+`bot_match` 1.1 `tdm` 10 bots, 12 000 ticks, `mp_carentan`, `mp_harbor`,
+`mp_ship`, seeds 1-6: stalled bot-ticks, kills):
+
+| set | ae407a223 | the leftovers |
+|---|---|---|
+| `ship_stalls` `mp_ship` | 0 / 2 / 0 / 385 / 99 / 19 428 | 0 / 1 / 0 / 384 / 107 / 19 337 |
+| `bot_match` `tdm` | 221, 3 167 | 15, 3 130 |
+| `bot_match` `tdm` `mp_ship` seeds 7-24 | 125 | TBD_EXTRA |
+
+The 15 are seed 4's shelf ladder and seed 6's mast ladder (above).
+Kills move within the per-seed noise.
+
 ## 4. Memory and hearing
 
 Two goals sit between a visible enemy and `Roam`, both kept by the brain
