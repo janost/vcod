@@ -733,7 +733,8 @@ fn sense<W: BotWorld>(
         _ => noises.to_vec(),
     };
     view.noise = super::loudest(&heard, slot, view.origin, hearing);
-    view.survive.heal = super::retreat::nearest_pack(&view, packs);
+    let heal_at = w.driver().bots.get(&slot).and_then(|b| b.heal_at);
+    view.survive.heal = super::retreat::nearest_pack(&view, packs, heal_at);
     let held = w.driver_mut().sidesteps.remove(&slot);
     if let Some(e) = enemy {
         (view.friend_in_line, view.sidestep) = w.friend_in_line(slot, e.origin, teams, held);

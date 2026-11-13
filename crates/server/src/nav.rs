@@ -2400,8 +2400,24 @@ impl Follower {
     /// top for its hatch and mp_ship's shelf at (5403, -160, 396) for a
     /// slope they never came off (bot-navigation.md section 3). Not while
     /// the follower rests on purpose: a body stuck before its first node
-    /// is left to its own unstick.
+    /// is left to its own unstick. Round a body in the way, where it
+    /// stands.
     pub fn rest_point(&self, at: [f32; 3], body: Footing) -> Option<[f32; 3]> {
+        // The plan round a body in the way ([`Self::bodies_in_way`]) is
+        // waited for where the body stands: on mp_ship's spar at (4676,
+        // 64, 1172), 69 from its last waypoint, a bot met head-on ran a
+        // random heading for the 7 ticks the search took and fell off it
+        // to its death (seed 1381, bot-navigation.md, "The ship's
+        // leftovers").
+        if self.rest == 0
+            && !self.shun.is_empty()
+            && self.path.is_empty()
+            && self.waited <= WAIT_TICKS
+            && body.on_ground
+            && !body.on_ladder
+        {
+            return Some(at);
+        }
         let p = self.last?;
         let at = Vec3::from(at);
         (self.rest == 0
@@ -2457,9 +2473,19 @@ impl Follower {
                 }
             }
             Goal::To(p) => {
-                let moved = self
-                    .dest
-                    .is_none_or(|d| g.nodes[d as usize].distance(Vec3::from(p)) > RETARGET);
+                // A destination within reach of the point but a floor off the
+                // node a plan to it ends at is no longer the point's: a hurt
+                // bot whose fight had planned to mp_ship's hold floor kept
+                // that node for the health item on the ledge 116 over it
+                // and paced under it while the item lay (bot-navigation.md,
+                // "The ship's leftovers").
+                let target = g.goal_node(p).map(|t| g.nodes[t as usize].z);
+                let off = |d: u32| {
+                    let n = g.nodes[d as usize];
+                    n.distance(Vec3::from(p)) > RETARGET
+                        || target.is_some_and(|z| (n.z - z).abs() > vcod_common::pmove::JUMP_HEIGHT)
+                };
+                let moved = self.dest.is_none_or(off);
                 if moved {
                     // A goal back within `PARK_TICKS` takes up the plan it
                     // left where it was: an enemy in sight for a tick or
@@ -2467,10 +2493,10 @@ impl Follower {
                     // flipped the goal and back, each replan started at
                     // the node behind the body, and the bot paced the
                     // step for 12 s (seed 17, bot-navigation.md "Jumps").
-                    let back = self.parked.take().filter(|k| {
-                        clock - k.at <= PARK_TICKS
-                            && g.nodes[k.dest as usize].distance(Vec3::from(p)) <= RETARGET
-                    });
+                    let back = self
+                        .parked
+                        .take()
+                        .filter(|k| clock - k.at <= PARK_TICKS && !off(k.dest));
                     if let Some(d) = self.dest.filter(|_| !self.path.is_empty() && !self.arrived) {
                         self.parked = Some(Parked {
                             dest: d,
@@ -3092,7 +3118,8 @@ impl Follower {
                         .crowded(s.crowd, s.crowd_cost)
                         .noisy(s.noise)
                         .blocking(blocked)
-                        .jumps_costing(s.jump_cost),
+                        .jumps_costing(s.jump_cost)
+                        .risking(),
                 );
                 None
             }
@@ -4649,6 +4676,9 @@ pub struct Search {
     /// passed through only by the plan after this one fails.
     shun: Arc<[u32]>,
     jump_cost: f32,
+    /// Risky drops stay in with edges avoided: the last plan, round the
+    /// dead edges only ([`Search::risking`]).
+    risks: bool,
     cost: Vec<f32>,
     came: Vec<u32>,
     open: BinaryHeap<Open>,
@@ -4668,6 +4698,7 @@ impl Search {
             blocked: Arc::default(),
             shun: Arc::default(),
             jump_cost: 0.0,
+            risks: false,
             cost: vec![f32::INFINITY; n],
             came: vec![u32::MAX; n],
             open: BinaryHeap::new(),
@@ -4725,6 +4756,13 @@ impl Search {
         self
     }
 
+    /// The search down risky drops (at [`RISK_COST`]) even with edges
+    /// avoided.
+    pub fn risking(mut self) -> Search {
+        self.risks = true;
+        self
+    }
+
     /// Expands nodes until the path is found or ruled out, each one taken
     /// from `budget`; [`Plan::Pending`] once `budget` is 0.
     pub fn run(&mut self, g: &NavGraph, budget: &mut u32) -> Plan {
@@ -4770,8 +4808,11 @@ impl Search {
                     // meeting at its head, plans took the drop down its
                     // hatch, and a bot fell past the rungs to its death
                     // (seed 969, bot-navigation.md section 3). The plan
-                    // through the stuck edge comes next.
-                    if !self.avoid.is_empty() || !self.shun.is_empty() {
+                    // through the stuck edge comes next, and round only the
+                    // dead ones it may take the drop: mp_ship's deck pocket
+                    // at (3560, -60, 352) has one plain way out, and with
+                    // it dead the bots stood there 10 s a time.
+                    if !self.risks && (!self.avoid.is_empty() || !self.shun.is_empty()) {
                         continue;
                     }
                     RISK_COST
@@ -6831,6 +6872,70 @@ mod tests {
         assert!(matches!(s.run(&g, &mut 100), Plan::Found(p) if p == [0, 2]));
     }
 
+    /// Round only the edges that failed twice, the plan may take a risky
+    /// drop: with the one plain way out of mp_ship's deck pocket at (3560,
+    /// -60, 352) dead, plans with no drop failed and the bots stood there
+    /// 10 s a time (bot-navigation.md, "The ship's leftovers").
+    #[test]
+    fn a_plan_round_a_dead_edge_takes_a_risky_drop() {
+        use crate::bots::Goal;
+        let nodes = vec![
+            Vec3::ZERO,
+            Vec3::new(64.0, 64.0, 0.0),
+            Vec3::new(128.0, 0.0, 0.0),
+        ];
+        let mut g = NavGraph::from_parts(nodes, vec![vec![1, 2], vec![2], vec![]]);
+        g.risky.insert((0, 2));
+        g.index_components();
+        let mut f = Follower::default();
+        f.avoid.push((0, 1, u32::MAX));
+        f.dead.push((0, 1, u32::MAX));
+        let mut budget = 100;
+        let plan = (0..4).find_map(|_| {
+            f.waypoint(
+                &g,
+                None,
+                Goal::To([128.0, 0.0, 0.0]),
+                [0.0, 0.0, 0.0],
+                Footing::STANDING,
+                &mut budget,
+                &mut || 0,
+            )
+        });
+        assert_eq!(plan, Some([128.0, 0.0, 0.0]), "down the drop");
+    }
+
+    /// A point goal within [`RETARGET`] of the destination, a floor over
+    /// it, is planned for again: a bot kept its hold floor node for a
+    /// health item on mp_ship's ledge 116 over it and paced under it.
+    #[test]
+    fn a_goal_a_floor_off_its_destination_is_planned_for_again() {
+        use crate::bots::Goal;
+        let nodes = vec![
+            Vec3::ZERO,
+            Vec3::new(64.0, 0.0, 0.0),
+            Vec3::new(64.0, 32.0, 100.0),
+        ];
+        let mut g = NavGraph::from_parts(nodes, vec![vec![1], vec![0, 2], vec![1]]);
+        g.index_components();
+        let mut f = Follower::default();
+        let wp = |f: &mut Follower, p| {
+            f.waypoint(
+                &g,
+                None,
+                Goal::To(p),
+                [0.0, 0.0, 0.0],
+                Footing::STANDING,
+                &mut 100,
+                &mut || 0,
+            )
+        };
+        wp(&mut f, [64.0, 0.0, 0.0]);
+        assert_eq!(f.dest, Some(1));
+        wp(&mut f, [64.0, 32.0, 100.0]);
+        assert_eq!(f.dest, Some(2));
+    }
+
     /// Node 0 to node 1 4000 units on, by a way `north` units off the line
     /// (nodes 2 to 9) or one `south` off it (10 to 17).
     fn two_ways(north: f32, south: f32) -> NavGraph {
@@ -7002,6 +7107,24 @@ mod tests {
             wp(&mut f, Goal::To([0.0, 0.0, 0.0]), 0);
         }
         assert_eq!(f.rest_point(at, Footing::STANDING), None, "waited out");
+    }
+
+    /// The plan round a body in the way is waited for where the body
+    /// stands, however far its last waypoint: on mp_ship's spar a bot ran
+    /// a random heading meanwhile and fell off it (seed 1381).
+    #[test]
+    fn a_body_waits_where_it_stands_for_the_plan_round_a_body() {
+        let mut f = Follower::default();
+        let at = [500.0, 0.0, 0.0];
+        assert_eq!(f.rest_point(at, Footing::STANDING), None);
+        f.shun = Arc::from([3u32]);
+        assert_eq!(f.rest_point(at, Footing::STANDING), Some(at));
+        let rungs = Footing {
+            on_ground: false,
+            on_ladder: true,
+            ..Footing::STANDING
+        };
+        assert_eq!(f.rest_point(at, rungs), None, "not on a ladder");
     }
 
     /// The run off mp_ship's mast platform at (3564, -127, 896) onto the
