@@ -12,13 +12,15 @@
 //!   jitter in [1, 3) per axis, and the lower slot's is the opposite;
 //! - the target's wire `solid` reads 0 on the snapshot after each push and
 //!   its packed value otherwise;
-//! - a spectator in slot 0 means no push at all.
+//! - a spectator in slot 0 means no push at all on 1.1; 1.5's scan passes
+//!   over him, and the 1.5 rig replays the push's `rand()` from retail's
+//!   seed.
 //!
 //! The pure test also runs our `stuck_in_client` on every snapshot of the
 //! bump capture, at retail's own positions, and it fires exactly where
 //! retail's did. `STUCK_REPORT=1` prints the first frames of each overlap,
-//! ours and retail's. The server half needs `COD_DIR`; the rest runs
-//! anywhere.
+//! ours and retail's. The server half needs `COD_DIR`, at a 1.1 install
+//! for the 1.1 captures and a 1.5 one for `-15`; the rest runs anywhere.
 
 use crate::common;
 
@@ -30,8 +32,9 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::movetrace::{Body, CONTENTS_BODY};
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::PROTOCOL_V1;
+use vcod_common::net::protocol::PROTOCOL_V6;
 use vcod_common::net::{NetClient, NetEvent};
+use vcod_common::pk3::Pk3Fs;
 use vcod_server::Server;
 use vcod_server::game::stuck::{StuckRules, StuckView, stuck_in_client};
 
@@ -390,15 +393,28 @@ type Client = NetClient<ClientEnd>;
 
 const MAP: &str = "mp_carentan";
 
-fn server() -> Option<(Server, Instant)> {
-    let fs = vcod_common::testing::game_fs_11()?;
+/// The 1.5b install's paks, `None` elsewhere (a UO install's `main/` is
+/// 1.5's, so this runs there too).
+fn fs_15() -> Option<Pk3Fs> {
+    let fs = vcod_common::testing::game_fs()?;
+    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
+        .then_some(fs)
+}
+
+/// A dm server on `fs`'s protocol, its pushes drawn from glibc's `rand()`
+/// under `seed` when given (`Server::pin_stuck_rand`).
+fn server(fs: Pk3Fs, seed: Option<(u32, usize)>) -> (Server, Instant) {
     let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let now = Instant::now();
     let mut sv = Server::new(common::cfg(MAP, "dm"), now);
+    sv.set_protocol(vcod_server::server::install_protocol(&fs));
+    if let Some((seed, skip)) = seed {
+        sv.pin_stuck_rand(seed, skip);
+    }
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
-    Some((sv, now))
+    (sv, now)
 }
 
 /// A client on the rig, by its address.
@@ -420,19 +436,19 @@ impl Peer {
     }
 
     fn num(&self) -> usize {
-        self.ps().field_i32(&PROTOCOL_V1, "clientNum") as usize
+        self.ps().field_i32(self.cl.protocol(), "clientNum") as usize
     }
 
     fn seen(&self) -> Seen {
         let ps = self.ps();
         Seen {
-            origin: ps.origin(&PROTOCOL_V1).into(),
+            origin: ps.origin(self.cl.protocol()).into(),
             vel: Vec2::new(
-                ps.field_f32(&PROTOCOL_V1, "velocity[0]"),
-                ps.field_f32(&PROTOCOL_V1, "velocity[1]"),
+                ps.field_f32(self.cl.protocol(), "velocity[0]"),
+                ps.field_f32(self.cl.protocol(), "velocity[1]"),
             ),
-            pm_flags: ps.field_i32(&PROTOCOL_V1, "pm_flags"),
-            pm_time: ps.field_i32(&PROTOCOL_V1, "pm_time"),
+            pm_flags: ps.field_i32(self.cl.protocol(), "pm_flags"),
+            pm_time: ps.field_i32(self.cl.protocol(), "pm_time"),
         }
     }
 
@@ -442,7 +458,7 @@ impl Peer {
         s.entities
             .get(&(other as u32))
             .expect("the pair is sent each other")
-            .field_i32(&PROTOCOL_V1, "solid")
+            .field_i32(self.cl.protocol(), "solid")
     }
 }
 
@@ -494,8 +510,8 @@ impl Rig {
 
 /// `spectator` first when asked, so it holds slot 0, then the target and the
 /// walker joined as allied carbines in that order.
-fn joined(spectator: bool) -> Option<Rig> {
-    let (sv, now) = server()?;
+fn joined(fs: Pk3Fs, seed: Option<(u32, usize)>, spectator: bool) -> Rig {
+    let (sv, now) = server(fs, seed);
     let mut rig = Rig {
         sv,
         now,
@@ -547,7 +563,7 @@ fn joined(spectator: bool) -> Option<Rig> {
     }
     let (t, w) = (rig.peers[first].num(), rig.peers[first + 1].num());
     assert!(t < w, "the target {t} is the lower slot, the walker {w}");
-    Some(rig)
+    rig
 }
 
 /// Where retail's walker was placed, on the flat brush floor the capture
@@ -568,8 +584,13 @@ fn facing(rig: &Rig, i: usize, yaw: f32) -> UserCmd {
 /// the walker a unit up, the way `probe_bump.gsc` does: queued for the next
 /// frame's script pass, after that frame's moves and before its end frame.
 /// Records the 40 frames from that one on.
-fn overlap_on_ours(spectator: bool, run: usize) -> Option<Vec<Frame>> {
-    let mut rig = joined(spectator)?;
+fn overlap_on_ours(
+    fs: Pk3Fs,
+    seed: Option<(u32, usize)>,
+    spectator: bool,
+    run: usize,
+) -> Vec<Frame> {
+    let mut rig = joined(fs, seed, spectator);
     let (ti, wi) = (rig.peers.len() - 2, rig.peers.len() - 1);
     let (tn, wn) = (rig.peers[ti].num(), rig.peers[wi].num());
     let yaw = 0.0;
@@ -625,15 +646,16 @@ fn overlap_on_ours(spectator: bool, run: usize) -> Option<Vec<Frame>> {
             target_solid: wp.solid_of(tn),
         });
     }
-    Some(frames)
+    frames
 }
 
 #[test]
 fn ours_pushes_the_still_pair_the_way_retail_does() {
-    let Some(frames) = overlap_on_ours(false, 0) else {
-        eprintln!("COD_DIR unset or has no main/: skipping");
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        eprintln!("COD_DIR unset or not 1.1's: skipping");
         return;
     };
+    let frames = overlap_on_ours(fs, None, false, 0);
     let ours = check_overlap("ours still", &frames, Case::BothStill, BAND_11);
     let (retail, _) = retail_pushes();
     assert_eq!(ours, retail, "push frames, ours against retail");
@@ -641,10 +663,11 @@ fn ours_pushes_the_still_pair_the_way_retail_does() {
 
 #[test]
 fn ours_pushes_only_the_walker_when_it_walks_in() {
-    let Some(frames) = overlap_on_ours(false, 15) else {
-        eprintln!("COD_DIR unset or has no main/: skipping");
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        eprintln!("COD_DIR unset or not 1.1's: skipping");
         return;
     };
+    let frames = overlap_on_ours(fs, None, false, 15);
     let ours = check_overlap("ours walking", &frames, Case::WalkerWalking, BAND_11);
     let (_, retail) = retail_pushes();
     println!("walking overlap: ours {ours} push frames, retail {retail}");
@@ -653,10 +676,11 @@ fn ours_pushes_only_the_walker_when_it_walks_in() {
 
 #[test]
 fn ours_does_not_push_beside_a_spectator_in_slot_0() {
-    let Some(frames) = overlap_on_ours(true, 0) else {
-        eprintln!("COD_DIR unset or has no main/: skipping");
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        eprintln!("COD_DIR unset or not 1.1's: skipping");
         return;
     };
+    let frames = overlap_on_ours(fs, None, true, 0);
     let first = frames[0];
     let overlap = (first.walker.origin - first.target.unwrap().origin).truncate();
     assert!(overlap.length() < 1.0, "the setorigin missed: {first:?}");
@@ -671,6 +695,62 @@ fn ours_does_not_push_beside_a_spectator_in_slot_0() {
             f.t
         );
     }
+}
+
+/// Retail 1.5b's `rand()` seed under `-overlap-spectator-15` and the draws
+/// before its first push, the joins' (player-clip doc 13.4).
+const SEED_15: (u32, usize) = (1252, 8);
+
+/// Each push frame's walker velocity.
+fn push_vels(frames: &[Frame]) -> Vec<Vec2> {
+    frames
+        .iter()
+        .filter(|f| f.walker.pushed_now())
+        .map(|f| f.walker.vel)
+        .collect()
+}
+
+/// 1.5b's scan passes over the spectator in slot 0, so the still pair is
+/// pushed apart beside him, on retail's draws: the first push, from the
+/// script's placement, to the bit, and as many push frames as retail's.
+/// The second push's positions ride each client's cmd clock (retail's
+/// walker ran 60 Hz cmds, its target's are not logged), so its direction
+/// is held to the band only.
+#[test]
+fn ours_15_pushes_the_still_pair_beside_a_spectator_in_slot_0() {
+    let Some(fs) = fs_15() else {
+        eprintln!("COD_DIR unset or not 1.5's: skipping");
+        return;
+    };
+    let frames = overlap_on_ours(fs, Some(SEED_15), true, 0);
+    check_overlap("ours 1.5 still", &frames, Case::BothStill, BAND_15);
+    let retail = retail_frames("overlap-spectator-15");
+    let at = overlaps("overlap-spectator-15");
+    let (ours, retail) = (push_vels(&frames), push_vels(&window(&retail, at[0])));
+    assert_eq!(ours.len(), retail.len(), "push frames: {ours:?} {retail:?}");
+    assert_eq!(ours[0], retail[0], "the first push's velocity");
+}
+
+/// The walking overlap beside the spectator on 1.5b: only the walker is
+/// pushed, as many frames as retail's. The walk starts on our own spot, not
+/// where retail's first push left the pair, so the draws past the still
+/// overlap's eight give other directions.
+#[test]
+fn ours_15_pushes_only_the_walker_beside_a_spectator_in_slot_0() {
+    let Some(fs) = fs_15() else {
+        eprintln!("COD_DIR unset or not 1.5's: skipping");
+        return;
+    };
+    let frames = overlap_on_ours(fs, Some((SEED_15.0, SEED_15.1 + 8)), true, 15);
+    let ours = check_overlap("ours 1.5 walking", &frames, Case::WalkerWalking, BAND_15);
+    let retail = retail_frames("overlap-spectator-15");
+    let at = overlaps("overlap-spectator-15");
+    let walking = window(&retail, at[1]);
+    assert_eq!(
+        ours,
+        push_vels(&walking).len(),
+        "push frames, ours against retail"
+    );
 }
 
 // ---------------------------------------------------------------- the wall

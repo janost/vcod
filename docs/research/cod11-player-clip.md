@@ -1690,6 +1690,7 @@ formula above, at draws past `k`:
 | `mp_carentan-dm-bump-overlap-*` | 1.1d | 631 | 6 | six frames from 34900 and 52900 |
 | `movers/mp_carentan-dm-pushcand-1.5.txt` | 1.5b | 428 | 8 | 17750, 20950 (17800 to its print) |
 | `movers/mp_carentan-dm-pushcand-uo.txt` | UO | 439 | 8 | 18100, 21300 (18150 to its print) |
+| `mp_carentan-dm-bump-overlap-spectator-15-*` | 1.5b | 1252 | 8 | six frames from 35900 and 53900 |
 
 Each push frame draws four, two per slot of the pair, lower slot first, and
 nothing else draws between the pushes. The search tried every `s` in
@@ -1701,6 +1702,14 @@ it on consecutive draws. INFERRED: the seed is `G_InitGame`'s
 `srand(Com_Milliseconds())` (map-cycle doc 4.8), 428 to 631 ms into the
 server's life, and the draws before the first push are the joins'
 challenges, two per client, plus two.
+
+VERIFIED, by replay: the `-overlap-spectator-15` search tried every `s` in
+[0, 65536) with up to 512 draws ahead, needing all six pushes (two still,
+four walking) on consecutive draws, and found `s` = 1252 at `k` = 8 alone.
+The origins are the walker's snapshots and the target's `BUMPT` lines, both
+printed exactly. INFERRED: the eight draws before the first push are the
+three clients' challenges (the spectator's too), two each, plus two, as in
+the captures above.
 
 ### 13.5 As implemented
 
@@ -1717,8 +1726,16 @@ spawn's think moves among the other live players (`GameHost::move_bodies`).
 `spawnbody_ab.rs` holds every trial's origin and touches against the three
 captures; `stuck_ab.rs` holds 13.4's capture. `game::stuck`'s unit tests
 replay 13.4's pushes from their seeds (`vcod_common::rng::GlibcRand`), and
-`push_candidate_ab` the 1.5 and UO captures through the server
-(`Server::pin_stuck_rand`).
+an ignored one reruns the `-overlap-spectator-15` seed search;
+`push_candidate_ab` replays the 1.5 and UO captures through the server
+(`Server::pin_stuck_rand`). `stuck_ab` runs the overlaps on an in-process
+1.5 server too, the spectator in slot 0, under `srand(1252)` past eight
+draws: the still pair's first push lands on retail's velocity to the bit
+and both overlaps push as many frames as retail's. vcod measurement: the
+still overlap's second push is 1.8 degrees off retail's, because where the
+first push left the pair rides each client's cmd clock (retail's walker
+sent 60 Hz cmds, ours one a frame, and the target's cmds are not logged),
+so that gate holds the later pushes to the jitter band only.
 
 Not modelled: an entity's own touch function from `ClientImpacts` (none on a
 player); a body `StuckInClient` marked CORPSE still reads as a body to the
