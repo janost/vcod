@@ -63,6 +63,7 @@ impl Server {
             self.game.module.driver.paths.clear();
             self.game.module.driver.sites.clear();
             self.game.module.bot_breach_stands.clear();
+            self.game.module.bot_shell_stands = Default::default();
         }
     }
 
@@ -828,6 +829,18 @@ impl Server {
                         _ => (None, false),
                     })
                     .collect();
+                // With no shot from where the hull stands, a spot that
+                // has one to drive to.
+                let targets: Vec<[f32; 3]> = bases
+                    .iter()
+                    .filter(|b| b.team != team && !b.breached)
+                    .map(|b| b.at)
+                    .collect();
+                let shot = shell.iter().any(|s| s.0.is_some());
+                let spot = {
+                    let _p = crate::tick_profile::phase("uo/shell stands");
+                    self.shell_stand(slot, breach.tank, &targets, breach.models, shot)
+                };
                 UoView::Bas(BasView {
                     bases: bases
                         .iter()
@@ -856,7 +869,10 @@ impl Server {
                                 let _p = crate::tick_profile::phase("uo/breach stands");
                                 self.breach_stands(b.at, breach.models)
                             } else {
-                                Vec::new()
+                                spot.filter(|s| s.0 == b.at)
+                                    .map(|s| s.1)
+                                    .into_iter()
+                                    .collect()
                             },
                             laid: shell[i].1,
                         })

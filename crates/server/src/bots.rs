@@ -729,7 +729,9 @@ pub struct BasBaseView {
     /// side's bases still standing.
     pub shot: Option<[f32; 3]>,
     /// With [`BotView::rocket`] held, the graph's spots round the base a
-    /// standing bot has such a shot from (`Server::breach_stands`).
+    /// standing bot has such a shot from (`Server::breach_stands`). In a
+    /// tank's driver's seat, the firing spot it drives to, on this base
+    /// only (`Server::shell_stand`).
     pub stands: Vec<[f32; 3]>,
     /// In a tank's driver's seat: a shell fired now bursts on the base
     /// (`Server::shell_laid`).
@@ -2114,18 +2116,23 @@ impl Bot {
                 };
                 let (mine, theirs) = (side(true), side(false));
                 // A tank's driver breaches with its gun: the other side's
-                // standing base it has a shot at, else the nearest, driven
-                // to (bot-objectives.md 7.2, "Tanks").
+                // standing base it has a shot at, else the one whose
+                // firing spot it drives to, else the nearest
+                // (bot-objectives.md 7.2, "Tanks").
                 if view.seat.is_some_and(|s| s.sight.is_some()) {
                     let standing = || theirs.iter().filter(|x| !x.breached);
-                    if let Some(t) = standing().find(|x| x.shot.is_some()).or_else(|| {
-                        standing().min_by(|x, y| {
-                            dist_sq(view.origin, x.at).total_cmp(&dist_sq(view.origin, y.at))
+                    if let Some(t) = standing()
+                        .find(|x| x.shot.is_some())
+                        .or_else(|| standing().find(|x| !x.stands.is_empty()))
+                        .or_else(|| {
+                            standing().min_by(|x, y| {
+                                dist_sq(view.origin, x.at).total_cmp(&dist_sq(view.origin, y.at))
+                            })
                         })
-                    }) {
+                    {
                         return Some(ObjTarget::Breach {
                             base: t.at,
-                            stand: None,
+                            stand: t.stands.first().copied(),
                             aim: t.shot,
                         });
                     }
@@ -8569,6 +8576,11 @@ mod tests {
         assert_eq!(bot.think(&v).forward, 127, "drives on");
 
         their_base(&mut v).shot = Some([2000.0, 0.0, 40.0]);
+        // The gun's line on the aim: no lift over the camera's view.
+        let dir = (glam::Vec3::new(2000.0, 0.0, 40.0) - glam::Vec3::new(100.0, 0.0, 60.0))
+            .normalize()
+            .to_array();
+        v.seat.as_mut().unwrap().sight.as_mut().unwrap().dir = dir;
         assert_eq!(bot.goal(&v), Goal::Hold);
         let cmd = bot.think(&v);
         assert_eq!((cmd.forward, cmd.right, cmd.up), (0, 0, 0), "holds");
@@ -8596,6 +8608,39 @@ mod tests {
         let mut v = shelling(true);
         their_base(&mut v).shot = Some([2000.0, 0.0, 40.0]);
         assert_eq!(bot.think(&v).up, 0);
+    }
+
+    /// With no shot from where the hull stands, the driver drives to the
+    /// firing spot the server found for it, not at the base.
+    #[test]
+    fn a_tank_driver_with_no_shot_drives_to_its_firing_spot() {
+        let bot = Bot::new("allies", false, 1);
+        let mut v = shelling(true);
+        their_base(&mut v).stands = vec![[1500.0, 900.0, 0.0]];
+        assert_eq!(bot.goal(&v), Goal::To([1500.0, 900.0, 0.0]));
+        their_base(&mut v).shot = Some([2000.0, 0.0, 40.0]);
+        assert_eq!(bot.goal(&v), Goal::Hold, "a shot on the way stops it");
+    }
+
+    /// A gun whose bent line lies under the aim (the camera's view met a
+    /// rise short of the base) has the view raised until it lies on it.
+    #[test]
+    fn a_gun_laid_short_of_the_aim_raises_the_view() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = shelling(true);
+        let spot = [2000.0, 0.0, 400.0];
+        their_base(&mut v).shot = Some(spot);
+        let camera = vehicle::angles_from([-100.0, 0.0, 160.0], spot);
+        let cam = cmd_angles(&v, camera)[0];
+        let pitch = |cmd: msg::UserCmd| cam - cmd.angles[0];
+        let first = pitch(bot.think(&v));
+        let later = (0..20).map(|_| pitch(bot.think(&v))).last().unwrap();
+        assert!(first > 0 && later > first, "{first} {later}");
+        // On the aim, the lift holds where it got to.
+        let dir = (glam::Vec3::from(spot) - glam::Vec3::new(100.0, 0.0, 60.0)).normalize();
+        v.seat.as_mut().unwrap().sight.as_mut().unwrap().dir = dir.to_array();
+        let held = pitch(bot.think(&v));
+        assert_eq!(pitch(bot.think(&v)), held);
     }
 
     /// A gun that never lies on the base gets the driver out after

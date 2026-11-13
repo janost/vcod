@@ -193,6 +193,8 @@ pub struct Cod1Module {
     /// Each `bas` base's origin and the graph's spots a rocket fired from
     /// bursts at it (`breach_stands`), for the life of the nav graph.
     pub(super) bot_breach_stands: Vec<([f32; 3], Vec<[f32; 3]>)>,
+    /// Tank drivers' firing spots round the `bas` bases.
+    pub(super) bot_shell_stands: bot_vehicles::ShellStands,
 }
 
 impl Cod1Module {
@@ -221,6 +223,7 @@ impl Cod1Module {
             bot_drives: Default::default(),
             bot_parked: Default::default(),
             bot_breach_stands: Vec::new(),
+            bot_shell_stands: Default::default(),
         }
     }
 }

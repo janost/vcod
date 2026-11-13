@@ -75,6 +75,12 @@ const LAID_DEG: f32 = 4.0;
 /// gets out: its line will not come.
 const SHELL_WAIT_TICKS: u32 = 200;
 pub(crate) const GUN_RANGE: f32 = 3000.0;
+/// The view's lift over a shell's aim ([`Rider::shell_lift`]) takes this
+/// share of the gun's pitch error a tick, up to `SHELL_LIFT_MAX` degrees,
+/// while the gun lies within `SHELL_LIFT_YAW` of the aim's yaw.
+const SHELL_LIFT_GAIN: f32 = 0.3;
+const SHELL_LIFT_MAX: f32 = 8.0;
+const SHELL_LIFT_YAW: f32 = 2.0;
 /// A driver held by a teammate in its way this long backs off, when the
 /// way back is clear.
 const BLOCKED_TICKS: u32 = 40;
@@ -258,6 +264,9 @@ pub(crate) struct Rider {
     crew_wait: bool,
     /// Ticks shelling a `bas` base since the gun last lay on it.
     shell_wait: u32,
+    /// Degrees of pitch the view is held over the chase camera's line to
+    /// the shell's aim, so the gun's bent line comes onto it.
+    shell_lift: f32,
     /// Stall bookkeeping: ticks stalling, back-off ticks left and the way
     /// it steers, back-offs since the ride last made [`PROGRESS`], from
     /// where.
@@ -553,6 +562,9 @@ impl Bot {
             .sight
             .filter(|_| seat.seat == 1 && enemy.is_none())
             .and_then(|g| Some((g, bas_shot(view)?)));
+        if shell.is_none() {
+            self.rider.shell_lift = 0.0;
+        }
         self.rider.shell_wait = match shell {
             Some((_, (_, true))) | None => 0,
             Some(_) => self.rider.shell_wait + 1,
@@ -616,6 +628,19 @@ impl Bot {
             // bends toward where it meets the world (coduo-vehicles.md 13),
             // and goes when the server finds its line on the base.
             aim = angles_from(g.eye, spot);
+            // The bend meets the world where the view does; with a rise
+            // between the camera and the base that falls short, and the
+            // gun lay under the shot (mp_foy seed 7, 2.5 degrees up of
+            // 4.9). The view is raised by what the gun's line lacks, once
+            // the turret has come round onto the aim.
+            let need = angles_from(g.muzzle, spot);
+            let have = angles_from([0.0; 3], g.dir);
+            if yaw_diff(need[1], have[1]).abs() < SHELL_LIFT_YAW {
+                self.rider.shell_lift = (self.rider.shell_lift
+                    + (need[0] - have[0]) * SHELL_LIFT_GAIN)
+                    .clamp(-SHELL_LIFT_MAX, SHELL_LIFT_MAX);
+            }
+            aim[0] += self.rider.shell_lift;
             // A base is no player: the shell goes with shooting off, as
             // a breach rocket does.
             if laid {
