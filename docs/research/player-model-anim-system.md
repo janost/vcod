@@ -312,7 +312,7 @@ VERIFIED: `weaponstate` 2 and event 156 appear in neither capture. In the supers
 
 VERIFIED: 4 appears on pavlov only. INFERRED: the bolt action; the carbine's `rechamberTime` is 0.1 s, under two snapshot intervals, and its 15-round clip never emptied.
 
-VERIFIED: pavlov's last round of a clip raised 161 `EV_FIRE_WEAPON_LASTSHOT` instead of 159 and wrote the same torso index 253.
+VERIFIED: neither combat capture empties a clip, and no trace in either holds 161 `EV_FIRE_WEAPON_LASTSHOT`. VERIFIED, `mp_carentan-tdm-lean.txt`: the `kar98k_sniper_mp`'s fifth shot (`scope_right_2`) raised 161 where its four before raised 159, wrote the torso index those four wrote, 237 (749 with the toggle), and went on to `weaponstate` 5 and 231 `pt_reload_stand_rifle`. VERIFIED, `mp_carentan-tdm-grenade.txt`: the last frag's `throw_down` raised 161 too (`cod11-combat.md` 1.14; the rule is 1.5 step 7).
 
 The next paragraph rests on the superseded pair. Its putaways came from a `cmd.weapon` of 0, but the putaway it measured is real and nothing since has measured another.
 

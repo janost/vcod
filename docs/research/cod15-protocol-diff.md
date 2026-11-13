@@ -35,7 +35,7 @@ Method:
 - `mod` read 1 from both servers on stock paks (live, VERIFIED). Section 13 has what sets it on 1.5b.
 - `challengeResponse <n>`: one integer, as on 1.1 (live capture, VERIFIED). Both format strings survive at 0x80ddeb8 and 0x80ddea0 (VERIFIED).
 - A connect with the wrong `protocol` key gets `error\nEXE_SERVER_IS_DIFFERENT_VER\x151.5\n` (live capture against a protocol-1 connect, VERIFIED; token at 0x80de2c6).
-- The master query is `getservers <protocol> full empty` in both, the protocol coming from the UI's `globalservers %d %d full empty` (string in both `ui_mp_x86.dll`s, VERIFIED). The master's answer to `getservers 6` is not measured here.
+- The master query is `getservers <protocol> full empty` in both, the protocol coming from the UI's `globalservers %d %d full empty` (string in both `ui_mp_x86.dll`s, VERIFIED). Live, 2026-10-22: `master.cod.pm` answered `getservers 6 full empty` with 50 servers in one packet, VERIFIED capture (`cod11-front-end.md` 12, beside 1's 49 and UO's 131).
 
 ## 2. Handshake and userinfo
 
@@ -416,6 +416,7 @@ Sources: 1.5b `cod_lnxded` disassembly, Ghidra exports of UO `coduo_lnxded` and 
 - UO's fallback branch clears the flag and returns through the same stub, so the next frame redirects again: on UO a failed www download never falls back to UDP (decompile, INFERRED). VERIFIED live 2026-10-20, connected (`sv_wwwDlDisconnected 0`), the wrong pak behind the URL (`crates/server/tests/fixtures/handshake/www-refuse-uo.txt`): after `chkfail` the server resent the gamestate, logged `clientDownload: 0 : begining` on two messages and redirected on the second. After the client's `wwwdl fail`, the same again. No block went over UDP.
 - `wwwdl` is the last row of UO's ucmd table, after `retransdl` (0x80f4fc8, string 0x80e4c1b, handler 0x808c298; VERIFIED). Subcommands compare case-blind (`Q_stricmp`, 0x8086a5a; VERIFIED). A `download` closes the transfer and keeps the name (0x808c25d) but touches none of the three www flags, so they outlive a transfer (decompile, INFERRED from the stores).
 - Live on loopback (UO, `mp_j5outpost`, 2026-10-15) the server took a `wwwdl chkfail` after the ack and printed `WARNING: client 'vcod' reports that the redirect download for 'main/nsf_mp_j5outpost.pk3' had wrong checksum.` and `you should check your download redirect configuration.` (VERIFIED). The redirect itself prints through `Com_DPrintf`, so `Redirecting client` is not in a `developer 0` log (VERIFIED, the run's log).
+- The warning's two `%s` are the client's name (client +0x10a44) and its download name (+0x10a64), two `Com_Printf` calls on the strings at 0x80de8c0 and 0x80de920 (1.5b 0x808b671, UO 0x808c478 on 0x80e47e0 and 0x80e4840; disassembly, VERIFIED). 1.5b's redirect writes a 0 to +0x10a64 once the block -1 message is out (0x808b81e), so its warning reads `''` (disassembly and `www-chkfail-15.txt`, VERIFIED). UO's redirect returns without that store (0x808c926) and its warning names the pak (`www-refuse-uo.txt`, VERIFIED).
 
 ### The client
 
@@ -447,7 +448,7 @@ Sources: 1.5b `cod_lnxded` disassembly, Ghidra exports of UO `coduo_lnxded` and 
 
 - On protocols 6 and 22 `sv_wwwDownload`, `sv_wwwBaseURL` and `sv_wwwDlDisconnected` are read per message. A client whose userinfo `cl_wwwDownload` is non-zero gets the redirect on every message until `wwwdl ack`, then nothing until `done`, `fail` or `chkfail` (`download::ServerDownload::write`, `download::wwwdl`).
 - The message is retail's byte for byte: the three fixtures above come out of `ServerDownload::write` unchanged (gate `the_redirect_is_retails_byte_for_byte`).
-- `fail` and `chkfail` resend the gamestate. `bbl8r` drops with `GMI_EXE_DOWNLOADDISCONNECTED`, logged live as `0:vcod GMI_EXE_DOWNLOADDISCONNECTED`, as retail's.
+- `fail` and `chkfail` resend the gamestate. The `chkfail` warning prints `''` for the pak on protocol 6 and its name on 22, as each retail server does. `bbl8r` drops with `GMI_EXE_DOWNLOADDISCONNECTED`, logged live as `0:vcod GMI_EXE_DOWNLOADDISCONNECTED`, as retail's.
 - One choice differs from UO's server and follows 1.5b: a client without `cl_wwwDownload` gets the pak over UDP rather than nothing. A retail UO client sees no change, since it sends `cl_wwwDownload 1`.
 - The request after a failed www transfer goes over UDP on protocol 6 and, on 22, waits a message and is redirected again, as each retail server does (`WwwConfig::udp_fallback`). `www_download` gates both against the captures above (`a_chkfail_on_1_5_falls_back_to_udp`, `a_refused_redirect_on_uo_is_redirected_again_until_the_client_leaves`). Live on loopback (2026-10-20), vcod-server on the UO install, connected, the wrong pak at the URL: the probe saw retail's sequence, one GET, three redirects, `fail` and the leave (VERIFIED).
 - Live on loopback (2026-10-15): vcod-server on the UO install with `mp_j5outpost`, `sv_pure 1` and the pak behind `python3 -m http.server`. The probe was redirected, fetched it, passed `cp` and stayed in. With `sv_wwwDlDisconnected 1` it was dropped, fetched, reconnected and passed (VERIFIED). `www_download` drives the same over an in-process transport.

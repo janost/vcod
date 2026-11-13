@@ -2807,7 +2807,7 @@ fn status_icon_name(
     let icon = cs
         .get(first..=last)
         .and_then(|r| r.iter().find(|s| s.eq_ignore_ascii_case(&name)))
-        .ok_or_else(|| ErrorKind::Custom(format!("Status icon '{name}' was not precached")))?;
+        .ok_or_else(|| ErrorKind::Custom(format!("Status icon '{name}' was not precached\n")))?;
     Ok(cx.intern_exact(icon))
 }
 
@@ -2832,7 +2832,7 @@ fn head_icon_index(
     cs.get(first..=last)
         .and_then(|r| r.iter().position(|s| s.eq_ignore_ascii_case(&name)))
         .map(|i| i as i32 + 1)
-        .ok_or_else(|| ErrorKind::Custom(format!("Head icon '{name}' was not precached")))
+        .ok_or_else(|| ErrorKind::Custom(format!("Head icon '{name}' was not precached\n")))
 }
 
 /// `.sessionsquad`'s names by stored value (1.5b getter 0x3b5e4).

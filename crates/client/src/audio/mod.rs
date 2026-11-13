@@ -469,8 +469,6 @@ impl AudioSystem {
         self.map.as_deref().is_some_and(|m| m != "menu")
     }
 
-    /// New map. Refilters the aliases by loadspec and drops everything keyed
-    /// to the old table.
     /// Where the connection's sound aliases sit, which United Offensive
     /// moved (docs/research/coduo-diff.md, section 7).
     pub fn set_protocol(&mut self, p: &vcod_common::net::protocol::Protocol) {
@@ -478,6 +476,8 @@ impl AudioSystem {
         self.uo = p.is_uo();
     }
 
+    /// New map. Refilters the aliases by loadspec and drops everything keyed
+    /// to the old table. With no level up (the front end) the map is `menu`.
     pub fn on_gamestate(&mut self, map: &str) {
         self.aliases = self.aliases_all.for_map(map);
         self.map = Some(map.to_string());

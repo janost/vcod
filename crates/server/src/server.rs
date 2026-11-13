@@ -2843,10 +2843,17 @@ impl Server {
             // `SV_WWWDownload` (UO 0x808c298), the redirect's replies.
             "wwwdl" => {
                 let sub = args.split_whitespace().next().unwrap_or("");
+                let uo = self.game.proto.is_uo();
                 let Some(c) = self.core.clients[slot].as_mut() else {
                     return false;
                 };
-                let name = c.download.as_ref().map_or("", |d| d.name.as_str());
+                // 1.5b's redirect clears the name it sent (0x808b81e), so its
+                // `chkfail` warning prints ''; UO's keeps it
+                // (cod15-protocol-diff.md 14).
+                let name = match &c.download {
+                    Some(d) if uo => d.name.as_str(),
+                    _ => "",
+                };
                 use crate::download::WwwReply;
                 match crate::download::wwwdl(&mut c.www, sub, &c.name, name) {
                     WwwReply::None => {}
