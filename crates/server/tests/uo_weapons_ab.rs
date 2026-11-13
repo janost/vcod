@@ -109,13 +109,15 @@ struct Run {
     missiles: Vec<(i32, u32, Flight)>,
 }
 
-/// A missile's `pos` trajectory as the wire carries it.
+/// A missile's `pos` trajectory and `apos.trBase` as the wire carries them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Flight {
     tr_type: i32,
     tr_time: i32,
     base: [f32; 3],
     delta: [f32; 3],
+    /// Degrees, as the 16-bit wire angle decodes.
+    apos: [f32; 3],
 }
 
 impl Run {
@@ -138,6 +140,7 @@ impl Run {
                         tr_time: e.field_i32(p, "pos.trTime"),
                         base: [0, 1, 2].map(|i| f(&format!("pos.trBase[{i}]"))),
                         delta: [0, 1, 2].map(|i| f(&format!("pos.trDelta[{i}]"))),
+                        apos: [0, 1, 2].map(|i| f(&format!("apos.trBase[{i}]"))),
                     },
                 ));
             }
@@ -281,6 +284,13 @@ fn cassino_world() -> vcod_common::collision::CollisionWorld {
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let props = vcod_common::props::collision_tris(&fs, &bsp.entities);
     vcod_common::collision::CollisionWorld::build(&bsp, &props)
+}
+
+/// A 16-bit wire angle as the snapshot decodes it: degrees truncated to
+/// 65536ths toward zero (`codec::write_angle_field`), 0 sent as 0.
+fn wire_angle(d: f32) -> f32 {
+    let short = (f64::from(d) * f64::from(65536.0f32 / 360.0)) as i64 as u16 as i16;
+    f32::from(short) * (360.0 / 65536.0)
 }
 
 fn deg_to_short(d: f32) -> i32 {
@@ -929,6 +939,17 @@ fn the_bazooka_rocket_flies_and_explodes_as_on_uo() {
         );
         let speed = glam::Vec3::from(first.delta).length();
         assert!((2797.0..=2800.0).contains(&speed), "speed {speed}");
+        // `apos` is `vectoangles` of the truncated `trDelta`, its pitch
+        // wrapped into [0, 360) before the wire truncates it: retail's
+        // (2799, 22, 43) reads short -161, not the -160 of -0.88 degrees
+        // (cod11-combat.md 13.6).
+        let angles = vcod_server::game::builtins::math::vectoangles(first.delta);
+        assert_eq!(
+            first.apos.map(f32::to_bits),
+            angles.map(|a| wire_angle(a).to_bits()),
+            "apos {:?} off vectoangles {angles:?}",
+            first.apos
+        );
         let rows = on
             .iter()
             .map(|(t, _, f)| {
@@ -1006,8 +1027,8 @@ fn the_bazooka_rocket_flies_and_explodes_as_on_uo() {
 /// `*-uo-bazooka.bin` recipe on port 34531 with the server under gdb):
 /// ours fires it from retail's spot along retail's view with the
 /// `gunrandom` pair gdb read off retail's `Weapon_RocketLauncher_Fire`
-/// (x 0xbea62115, y 0xbf0d3c83), and its `trBase` and `trDelta` go out
-/// on retail's bits (combat doc 13.6).
+/// (x 0xbea62115, y 0xbf0d3c83), and its `trBase`, `trDelta` and `apos`
+/// go out on retail's bits (combat doc 13.6).
 #[test]
 fn the_bazooka_rocket_leaves_on_retails_bits() {
     if vcod_common::testing::uo_fs().is_none() {
@@ -1047,12 +1068,16 @@ fn the_bazooka_rocket_leaves_on_retails_bits() {
             .find(|(t, ..)| *t >= fire)
             .expect("the rocket on a snapshot")
             .2;
-        (f.base.map(f32::to_bits), f.delta.map(f32::to_bits))
+        (
+            f.base.map(f32::to_bits),
+            f.delta.map(f32::to_bits),
+            f.apos.map(f32::to_bits),
+        )
     };
     let r = first(&retail);
     // gdb's `fire_rocket` stores (base, delta) for the same round.
     assert_eq!(
-        r,
+        (r.0, r.1),
         (
             [0xc42bb959, 0xc491015f, 0x4304af98],
             [0x452e7000, 0x42de0000, 0xc33d0000]
