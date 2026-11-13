@@ -1265,3 +1265,154 @@ jump and a drop off a roof (the eye and the gun dip).
   surfaces' bits off `vcod_cod4::anim::model_parts`). Without it every
   sedan draws both glass pairs over each other, inside and out
   (cod4-client-perf.md 15).
+
+## 16. The third-person view
+
+Addresses are `iw3mp.exe` 1.7's. `cg` is 0x74e338: the refdef's view
+origin is +0x492e0 (0x797618), its axis +0x492ec (0x797624),
+`refdefViewAngles` +0x4d360 (0x79b698) and the predicted playerstate
++0x4613c (0x794474), whose fields sit at their netfield offsets
+(`vcod_cod4::net::fields`).
+
+### 16.1 The dvars
+
+- `cg_thirdPerson` is a bool, default 0, flags 0x80 (`DVAR_CHEAT`),
+  "Use third person view", kept at 0x748638 (0x43cd7c..0x43cdbf).
+  VERIFIED (the instructions, the strings at 0x6caa88 and 0x6caa70).
+- `cg_thirdPersonRange` is a float, default 120 (0x70b2c0), 0 to 1024
+  (`fldz`, 0x70ba70), flags 0x80, kept at 0x8c6304 (0x43ccb1..0x43cd2a).
+  VERIFIED (the instructions, the floats, the name at 0x6caa08).
+- `cg_thirdPersonAngle` is a float, default 0, -180 (0x70b728) to 360
+  (0x70b4c8), flags 0x80, kept at 0x8c9408 (0x43cd13..0x43cd81).
+  VERIFIED (the instructions, the floats, the name at 0x6caa5c).
+- All three go through `Dvar_RegisterNew` (0x56c350): the name in `eax`,
+  then the type (0 bool, 1 float), the flags, the description, the
+  16-byte value and the 8-byte limits on the stack. VERIFIED (the
+  `add esp,0x24` after each call and the stores before it).
+
+### 16.2 When the view is in third person
+
+`cg.renderingThirdPerson` (0x794470) is set by 0x451d70, called at
+0x451e05 and 0x452960:
+
+- 1 when `cg_thirdPerson`'s value byte (+0xc) is set, or when the `pm_type`
+  of the playerstate the pointer at 0x74e35c names (+0x10, the
+  playerstate's +4) is 7 or more; else 0 (0x451d70..0x451d92).
+  VERIFIED (the instructions). That the pointer is `cg.snap` is
+  INFERRED (the same pointer's +0xe8 is compared as the drawn client,
+  +0xdc of a playerstate at +0xc). The kill capture's target reads
+  `pm_type` 7 from its death at 48000 until the killcam at 50000.
+  VERIFIED (`play_dump` of `play-1.7-kill-target.txt`).
+- Also 1 when the client info of `cg.predictedPlayerState.clientNum`
+  (0x794550; client infos at 0x839270, 0x4cc each) holds +0x4c0 other
+  than 0x3ff and +0x4c4 of 0 (0x451d97..0x451dbc), and when 0x79e864 is
+  set and `cg.predictedPlayerState.killCamEntity` (0x794d14, the
+  playerstate's +0x8a0) names an entity (0x3ff none) whose centity byte
+  +0x1c0 is set (0x451dc2..0x451deb). VERIFIED (the instructions). That
+  the first is a vehicle seat and the second an entity killcam is
+  INFERRED; 1.7's stock MP spawns no vehicle a player rides.
+
+### 16.3 The camera
+
+`CG_CalcViewValues` (its tail 0x451b36..0x451cc0) builds the view origin
+from the predicted origin, runs the gunner's view (0x4507b0, section
+13), and then, unless third person, 0x450050 (0x451c69..0x451c77); it
+sets the axis from `refdefViewAngles` (0x5635c0) and, in third person,
+calls 0x44fb20 last (0x451c97..0x451ca5). VERIFIED (the calls). That
+0x450050 is `CG_OffsetFirstPersonView`, the view height, bob, lean,
+landing dip and kicks, is INFERRED (its gunner test at 0x450063,
+section 14). So in third person none of those move the view.
+
+0x44fb20 (`CG_OffsetThirdPersonView`), each step VERIFIED (the
+instructions and the constants):
+
+1. The view origin's z gains the playerstate's `viewHeightCurrent`
+   (+0x118; 0x44fb34..0x44fb42).
+2. The focus angles are `refdefViewAngles`' pitch and yaw. With
+   `pm_type` 7 or more both the focus yaw and the camera's yaw are the
+   playerstate's `stats[1]` (+0x14c) as a float (0x44fb7a..0x44fb8e),
+   the dead yaw `player_die` writes toward the killer. The focus pitch
+   is held to 45 at most (0x70b320; 0x44fb92..0x44fba9).
+3. The focus forward is the focus angles' (roll 0), each angle times
+   the double 0.01745329238474369 (0x70b2d0) stored as a float and its
+   `fsincos` stored as floats (0x44fbab..0x44fc4c); the focus point is
+   512 (0x70ba78) along it from the view origin (0x44fc50..0x44fc7a).
+4. The camera starts at the view origin plus 8 in z (0x70ae88;
+   0x44fc7e..0x44fc94). The camera's angles are `refdefViewAngles` with
+   the pitch halved (0x70ace8) and `cg_thirdPersonAngle` taken off the
+   yaw (0x44fc98..0x44fcad); 0x563460's first vector of them (angles
+   in `edx`, the forward, right and up out), times
+   `-cg_thirdPersonRange`, moves the start (0x44fcb6..0x44fcf8).
+5. 0x44fa00 traces it in: `CG_TraceCapsule` (0x459ef0) from the view
+   origin to that point with the box -4..4 (0x6cdda4, 0x6cddb0), the
+   playerstate's `clientNum` (+0xdc) passed, mask 0x811. At fraction 1
+   the camera is the point; else the point at the fraction of the way is
+   raised by `(1 - fraction) * 32` (0x70b120) and traced to again from
+   the view origin, and the camera is that trace's fraction of the way
+   (0x44fa37..0x44fb08). The trace's end position is never read: both
+   are lerps of the start and end.
+6. The camera's pitch becomes `atan2(dz, max(dxy, 1)) * -57.2957763671875`
+   (0x70bb30) of the focus point less the camera (0x44fd04..0x44fd88),
+   and 0x5635c0 rebuilds the axis (+0x492ec) from those angles.
+   `refdefViewAngles` itself keeps the view's: only the axis turns.
+
+That 0x563460 is `AngleVectors` and 0x5635c0 `AnglesToAxis` is
+INFERRED (their arguments and use).
+
+### 16.4 Our own body
+
+- `CG_AddPacketEntities` (INFERRED name) sends the centity at 0x7973d8
+  through `CG_ProcessEntity` (0x435440) when the snapshot playerstate's
+  `otherFlags & 6` is set (0x452af0..0x452b6d); `CG_ProcessEntity`'s
+  `eType` 1 arm (the table at 0x435590) is 0x445370, which returns for
+  `eFlags` 0x20 or 0x20000, and for the entity whose number is the
+  snapshot playerstate's `clientNum` under `otherFlags & 6` unless
+  `cg.renderingThirdPerson` is set (0x44537e..0x4453b7). VERIFIED (the
+  instructions). That 0x7973d8 is `cg.predictedPlayerEntity`,
+  `BG_PlayerStateToEntityState` of the drawn playerstate, is INFERRED.
+- The server never sends the drawn playerstate's own entity: the kill
+  capture's shooter (client 1) is sent entity 0 and never entity 1.
+  VERIFIED (`play_dump` of `play-1.7-kill-shooter.txt`). So a dead
+  player's own body (`eFlags` 0x20000) is not drawn; his corpse is the
+  snapshot's `ET_PLAYER_CORPSE`.
+- 0x457010 (`CG_AddViewWeapon`, INFERRED name) returns before the view
+  weapon under `cg.renderingThirdPerson` (0x45704e). VERIFIED (the
+  instruction). The own shots' tracer start is cod4-effects.md 12.3.
+- 0x456d00 sets its flag at `[esp+0x18]` only for the entity whose
+  number is the snapshot playerstate's `clientNum` under `otherFlags & 6`
+  with `cg.renderingThirdPerson` clear (0x456d0d..0x456d38). VERIFIED
+  (the instructions). That the flag picks the view weapon over the
+  world model for the shot's flash and eject is INFERRED.
+
+### 16.5 vcod
+
+- The dvars are registered as 1.7's (`Shell::register_cod4_options`),
+  read each frame and held to their limits (`cod4_third_person::Dvars`).
+  VERIFIED (the test
+  `console::shell::tests::cod4_third_person_dvars_are_cheat_protected`).
+- `Cod4Session::scene` sets `Scene::third_person` under `cg_thirdPerson`
+  or `pm_type` 7 and up; the eye is then the drawn origin plus the view
+  height alone, and `cod4_third_person::camera` places the camera as
+  16.3, its traces `cod4_predict::Solids` (the clip map and the
+  snapshot's solids) under mask 0x811. The camera's steps are tested
+  one by one (`play::cod4_third_person::tests`).
+- The drawn playerstate's body is `vcod_cod4::pmove::wire::player_entity`
+  of it (the predicted one where the prediction ran), the server's
+  `BG_PlayerStateToEntityState`, at the drawn origin and view angles,
+  added after the solids so no trace meets it; not for a spectator nor
+  with `eFlags` 0x20 or 0x20000. The view weapon, the damage kick and a
+  gunner's jitter are dropped; our own shots flash and eject on the
+  body's gun; a gunner's camera backs off his `tag_player` raised by the
+  view height.
+- The walk capture on mp_crash at 60 frames a second, `cg_thirdPerson`
+  1: 2428 frames, each with the drawn body at the eye less the view
+  height and a camera no farther than 120 from 8 over the eye; 1252 at
+  the full range, 1176 nearer, mostly where the walker idles with a
+  wall 4 behind the camera's box. VERIFIED (the test
+  `play::cod4::tests::walk_capture_draws_its_own_body_in_third_person`).
+  The kill capture's target, `cg_thirdPerson` 0: 120 dead frames in
+  third person facing yaw 245, no own body drawn, first person again in
+  the killcam. VERIFIED (the test
+  `play::cod4::tests::kill_capture_dies_into_the_third_person_view`).
+- Left out: the vehicle-seat and entity-killcam arms of 16.2. The look
+  is pending a hand check.

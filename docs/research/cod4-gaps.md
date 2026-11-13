@@ -25,8 +25,6 @@ Ranked by how much a player notices.
 - Multichannel output: kira mixes stereo, so a 5.1 or 7.1 device gets
   the stereo mix on its front pair (cod4-sound.md 4.2, 5). The 139 alias
   rows whose curve no walked zone holds fall off straight. L.
-- The own third-person tracer start, which waits on a third-person view
-  (cod4-effects.md 12.3). S once a third-person view exists.
 - `iw3mp.exe` has neither played a vcod demo nor recorded one for vcod:
   no retail client runs here. The framing is gated both ways against
   the binary and a retail capture (cod4-demos.md 8). S once a 1.7 client
@@ -133,8 +131,8 @@ The 2026-10-26 audit's numbering, kept because other docs cite it.
     neither client as far as `CG_ResetEntity` reads (16).
 11. Fixed.
 12. Sound: fixed but for multichannel output (see Open).
-13. Fixed, turrets included. Left: the own third-person tracer start
-    (see Open).
+13. Fixed, turrets included, the own third-person tracer start too
+    (cod4-effects.md 12.3).
 14. Fixed; the gunner's body is drawn (cod4-client-view.md 13).
 15. Fixed.
 16. Fixed.

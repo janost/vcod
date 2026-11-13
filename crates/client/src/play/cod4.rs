@@ -36,6 +36,7 @@ use crate::play::cod4_kick;
 use crate::play::cod4_menus::{Join as MenuJoin, ScriptMenus};
 use crate::play::cod4_physics;
 use crate::play::cod4_predict::{self, Cod4Predictor, Cod4World, Ring, Solid};
+use crate::play::cod4_third_person::{self, ThirdPerson};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use vcod_cod2::player::{BodyFrame, Character, eflags as cod2_eflags};
@@ -301,6 +302,9 @@ pub struct Scene {
     pub hands: Option<String>,
     /// The newer snapshot's `dof*` fields (`crate::cod4_dof`).
     pub dof: crate::cod4_dof::PsDof,
+    /// `cg.renderingThirdPerson`: the camera drawn instead of the eye
+    /// (`play::cod4_third_person`); `None` in first person.
+    pub third_person: Option<ThirdPerson>,
 }
 
 /// The snapshots a live session keeps once it sheds (one minute at
@@ -592,6 +596,8 @@ pub struct Cod4Session {
     keep_snapshots: usize,
     /// The `physicsLaunch`ed parts this client flies (`play::cod4_physics`).
     pub physics: super::cod4_physics::Cod4Physics,
+    /// The third-person dvars the next [`Self::scene`] reads.
+    pub third_person: cod4_third_person::Dvars,
 }
 
 /// `cg.selectedLocation` and `locSelInputState`: where the location
@@ -860,6 +866,7 @@ impl Cod4Session {
             kick_seen: 0,
             keep_snapshots: KEEP_SNAPSHOTS,
             physics: Default::default(),
+            third_person: Default::default(),
         }
     }
 
@@ -2023,8 +2030,8 @@ impl Cod4Session {
         let old_ps = if reset { &new.ps } else { &old.ps };
         let f = |ps: &PlayerState, name: &str| ps_f32(ps, name);
         let lerp1 = |name: &str| f(old_ps, name) + (f(&new.ps, name) - f(old_ps, name)) * frac;
-        let mut eye =
-            vec3(|k| lerp1(&format!("origin[{k}]"))) + Vec3::Z * lerp1("viewHeightCurrent");
+        let mut view_height = lerp1("viewHeightCurrent");
+        let mut eye = vec3(|k| lerp1(&format!("origin[{k}]"))) + Vec3::Z * view_height;
         // Our own view is the newest cmd's over the next snapshot's
         // `delta_angles` (`PM_UpdateViewAngles`, unlerped); one we follow
         // (the killcam) lerps its own.
@@ -2360,7 +2367,8 @@ impl Cod4Session {
         if let Some(p) = &predicted {
             let ps = &p.ps;
             feet = p.origin;
-            eye = p.origin + Vec3::Z * ps.view_height_current;
+            view_height = ps.view_height_current;
+            eye = p.origin + Vec3::Z * view_height;
             angles = Vec3::from_array(ps.view_angles);
             velocity = ps.velocity;
         }
@@ -2369,12 +2377,17 @@ impl Cod4Session {
         // and 20, nothing rolls the view), then the floor 8 over the feet
         // (cod4-client-view.md 7).
         let land = self.kick.landing(render_time);
+        // In third person `CG_CalcViewValues` skips the whole first-person
+        // offset (0x451c69..0x451c77): the eye is the origin raised by
+        // the view height alone.
+        let third = cod4_third_person::rendering(self.third_person, u("pm_type"));
         // Not on a gun (`eFlags` 0x300, 0x450063).
-        if u("eFlags") & 0x300 == 0 {
+        if !third && u("eFlags") & 0x300 == 0 {
             eye.z += cod4_kick::eye_dip(land);
         }
         let leanf = predicted.as_ref().map_or(lerp1("leanf"), |p| p.ps.leanf);
-        if leanf != 0.0 {
+        let leaned = leanf != 0.0 && !third;
+        if leaned {
             eye = vcod_common::pmove::aim::add_lean(
                 eye,
                 vcod_common::x87::radians(angles.y),
@@ -2383,7 +2396,7 @@ impl Cod4Session {
             );
         }
         let light_eye = eye;
-        if leanf != 0.0 {
+        if leaned {
             eye.z = eye.z.max(feet.z + 8.0);
         }
         let pick = |pred: fn(&pm::PlayerState) -> u32, name: &str| {
@@ -2436,6 +2449,43 @@ impl Cod4Session {
             gun_dir: None,
         };
         let hands = model_cs(gs, view.viewmodel_index);
+        let third_person = third.then(|| {
+            let dead_yaw = (u("pm_type") >= 7).then_some(new.ps.stats[1] as f32);
+            let (origin, angles) = self.third_person_camera(eye, angles, dead_yaw, u("clientNum"));
+            ThirdPerson {
+                origin,
+                angles,
+                dead_yaw,
+                view_height,
+            }
+        });
+        // `CG_AddPacketEntities` adds `cg.predictedPlayerEntity`, the
+        // drawn playerstate's own body, under `otherFlags & 6`
+        // (0x452af0..0x452b6d); `CG_Player` (0x445370) draws it only in
+        // third person, and never with `eFlags` 0x20 or 0x20000, a dead
+        // one (0x44537e..0x4453b7): the corpse is the snapshot's.
+        if third && u("otherFlags") & 6 != 0 {
+            let ps = predicted
+                .as_ref()
+                .map_or_else(|| new.ps.clone(), |p| p.ps.to_wire(&new.ps));
+            let e = vcod_cod4::pmove::wire::player_entity(u("clientNum") as usize, &ps);
+            if ent_u32(&e, "lerp.eFlags") & 0x2_0020 == 0
+                && let Some(visual) = visual(gs, new, &weapons, &e)
+            {
+                entities.push(Drawn {
+                    number: e.number(),
+                    etype: ET_PLAYER,
+                    visual,
+                    origin: feet,
+                    angles,
+                    body: body_view(gs, new, &weapons, &e, feet, angles),
+                    vehicle: None,
+                    turret: None,
+                    firing: false,
+                    part_bits: [0; 4],
+                });
+            }
+        }
         Some(Scene {
             eye,
             light_eye,
@@ -2459,7 +2509,34 @@ impl Cod4Session {
                 .map(|n| f(&new.ps, n)),
                 viewmodel: ["dofViewmodelStart", "dofViewmodelEnd"].map(|n| f(&new.ps, n)),
             },
+            third_person,
         })
+    }
+
+    /// `CG_OffsetThirdPersonView`'s camera off `vieworg` (raised by the
+    /// view height) and the view's angles, its traces `CG_TraceCapsule`'s
+    /// through the clip map and the snapshot's solids but `pass`
+    /// (0x44fa00); unclipped before the level's clip map is in.
+    pub fn third_person_camera(
+        &self,
+        vieworg: Vec3,
+        angles: Vec3,
+        dead_yaw: Option<f32>,
+        pass: u32,
+    ) -> (Vec3, Vec3) {
+        use vcod_cod4::pmove::PmWorld;
+        let world = self.world.as_ref().map(|w| cod4_predict::Solids {
+            clip: &w.clip,
+            solids: &self.shot_solids,
+        });
+        let (mins, maxs) = cod4_third_person::BOX;
+        let trace = |a: Vec3, b: Vec3| {
+            world.as_ref().map_or(1.0, |w| {
+                w.trace(a, b, mins, maxs, pass, cod4_third_person::MASK)
+                    .fraction
+            })
+        };
+        cod4_third_person::camera(vieworg, angles, dead_yaw, self.third_person, &trace)
     }
 }
 
@@ -4748,6 +4825,7 @@ pub(crate) mod tests {
                 eye: scene.eye,
                 angles: scene.angles,
                 flash: None,
+                third_person: false,
             };
             for f in fired.iter().filter(|f| f.entity.is_none()) {
                 let defs = sounds.weapons.clone();
@@ -4763,6 +4841,27 @@ pub(crate) mod tests {
                     continue;
                 };
                 assert!(hit.own && hit.hit, "{hit:?}");
+                // In third person the same round's tracer starts 30 along
+                // its way from the eye (cod4-effects.md 12.3).
+                let third = OwnView {
+                    third_person: true,
+                    ..own
+                };
+                let t = first_bullet(
+                    f,
+                    &weapons,
+                    &defs,
+                    &HashMap::new(),
+                    Some(&third),
+                    &world.clip,
+                    &s.shot_solids,
+                )
+                .unwrap();
+                assert_eq!((t.start, t.end), (hit.start, hit.end));
+                assert_eq!(hit.muzzle, hit.start);
+                let lead = t.muzzle - t.start;
+                assert!((lead.length() - 30.0).abs() < 1e-3, "{lead}");
+                assert!(lead.normalize().dot((t.end - t.start).normalize()) > 0.97);
                 shots += 1;
                 // A round into the target's box plays nothing here.
                 bodies += usize::from(hit.body.is_some());
@@ -5026,6 +5125,98 @@ pub(crate) mod tests {
         assert_eq!(eased_cmd(&b, &snap, 110).angles, snap.angles);
         let late = cmd(400, 3640);
         assert_eq!(eased_cmd(&b, &late, 250).angles, late.angles);
+    }
+
+    /// The walk capture under `cg_thirdPerson` 1 on mp_crash
+    /// (cod4-client-view.md 16): the first-person offsets drop (the eye is
+    /// the drawn origin plus the view height), the drawn playerstate's
+    /// body (ours, or the one followed; none for a spectator) stands at
+    /// that origin, and the camera backs off it as
+    /// `CG_OffsetThirdPersonView` does: never past the range from 8 over
+    /// the eye, at the full range where nothing is behind, and nearer
+    /// where a wall stops the trace (the walker idles 4 off one). Off
+    /// again, the scene is first person with no own body.
+    #[test]
+    fn walk_capture_draws_its_own_body_in_third_person() {
+        let Some(world) = crash_world() else { return };
+        let text = std::fs::read_to_string(format!("{FIXTURES}/play-1.7-walk.txt")).unwrap();
+        let mut s = Cod4Session::open_capture(&text).unwrap();
+        s.set_world(world);
+        s.third_person.on = true;
+        let (mut ms, mut frames, mut full, mut pulled) = (0.0, 0, 0, 0);
+        while !s.finished() {
+            ms += 1000.0 / 60.0;
+            s.step(ms).unwrap();
+            let Some(sc) = s.scene() else { continue };
+            // Our own body, or the one we follow (`otherFlags` 2).
+            let own = sc.view.client_num;
+            let t = sc.third_person.expect("third person");
+            assert_eq!(t.dead_yaw, None);
+            let body = sc.entities.iter().find(|d| d.number == own);
+            // A spectator (`otherFlags` 0) has no body to draw.
+            if sc.view.other_flags & 6 == 0 {
+                assert!(body.is_none());
+                continue;
+            }
+            let body = body.expect("own body");
+            let frame = &body.body.as_ref().expect("posed").frame;
+            assert_eq!(sc.eye, body.origin + Vec3::Z * t.view_height);
+            assert_eq!(frame.angles, sc.angles.to_array());
+            assert_eq!(t.angles.y, sc.angles.y);
+            let back = (t.origin - (sc.eye + Vec3::Z * 8.0)).length();
+            assert!(back < 120.0 + 0.01, "{back}");
+            if (back - 120.0).abs() < 0.01 {
+                full += 1;
+            } else {
+                pulled += 1;
+            }
+            frames += 1;
+        }
+        println!("{frames} frames: {full} at the full range, {pulled} pulled in");
+        assert!(frames > 100 && full > 0 && pulled > 0);
+        s.third_person.on = false;
+        let sc = s.scene().unwrap();
+        assert!(sc.third_person.is_none());
+        assert!(sc.entities.iter().all(|d| d.number != sc.view.client_num));
+    }
+
+    /// The kill capture's target dies into the third-person view with
+    /// `cg_thirdPerson` 0 (`pm_type` 7, 0x451d80): the camera faces its
+    /// `stats[1]`, 245, and its own body is not drawn (`eFlags` 0x20000,
+    /// the snapshot's corpse is); the killcam that follows is first person.
+    #[test]
+    fn kill_capture_dies_into_the_third_person_view() {
+        let Some(world) = crash_world() else { return };
+        let text = std::fs::read_to_string(format!("{FIXTURES}/play-1.7-kill-target.txt")).unwrap();
+        let mut s = Cod4Session::open_capture(&text).unwrap();
+        s.set_world(world);
+        let (mut ms, mut dead, mut alive) = (0.0, 0, 0);
+        while !s.finished() {
+            ms += 1000.0 / 60.0;
+            s.step(ms).unwrap();
+            let Some(sc) = s.scene() else { continue };
+            // Neither our body nor, in the killcam, the killer's.
+            let me = sc.view.client_num;
+            assert!(
+                sc.entities
+                    .iter()
+                    .all(|d| d.number != me || d.etype != ET_PLAYER)
+            );
+            match sc.view.pm_type >= 7 {
+                true => {
+                    let t = sc.third_person.expect("dead view");
+                    assert_eq!(t.dead_yaw, Some(245.0));
+                    assert_eq!(t.angles.y, 245.0);
+                    dead += 1;
+                }
+                false => {
+                    assert!(sc.third_person.is_none());
+                    alive += 1;
+                }
+            }
+        }
+        println!("{dead} dead frames, {alive} alive");
+        assert!(dead > 60 && alive > 0);
     }
 
     /// The walk capture predicted: its own cmds replayed over mp_crash's
@@ -10650,6 +10841,7 @@ pub(crate) mod tests {
                     eye: scene.eye,
                     angles: scene.angles,
                     flash: None,
+                    third_person: false,
                 };
                 for f in fired
                     .iter()
@@ -10755,6 +10947,7 @@ pub(crate) mod tests {
                     eye: scene.eye,
                     angles: scene.angles,
                     flash: None,
+                    third_person: false,
                 };
                 let defs = sounds.weapons.clone();
                 for f in fired
@@ -11100,6 +11293,7 @@ pub(crate) mod tests {
                         eye: scene.eye,
                         angles: scene.angles,
                         flash: None,
+                        third_person: false,
                     };
                     for f in fired
                         .iter()
@@ -11273,6 +11467,7 @@ pub(crate) mod tests {
                         eye: scene.eye,
                         angles: scene.angles,
                         flash: None,
+                        third_person: false,
                     };
                     for f in &fired {
                         if f.name == "EV_BULLET_HIT" {
@@ -11465,6 +11660,7 @@ pub(crate) mod tests {
                             eye: scene.eye,
                             angles: scene.angles,
                             flash: None,
+                            third_person: false,
                         };
                         for f in fired
                             .iter()
@@ -11895,6 +12091,7 @@ pub(crate) mod tests {
                         eye: scene.eye,
                         angles: scene.angles,
                         flash: None,
+                        third_person: false,
                     };
                     let defs = sounds.weapons.clone();
                     if let Some(hit) = first_bullet(

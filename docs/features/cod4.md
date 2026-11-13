@@ -137,7 +137,7 @@ The weapon byte is the client's own pick
   A gunner's eye sits at `tag_player`; other gunners sit on their guns.
 
 **View weapon and view**
-([cod4-client-view.md](../research/cod4-client-view.md) 4, 14):
+([cod4-client-view.md](../research/cod4-client-view.md) 4, 14, 16):
 
 - The held weapon's view model at `cg_fov` 65 with the sight's zoom. Its
   clips follow `weapAnim` (idle, fire, reload, raise, drop, sprint, melee
@@ -155,6 +155,12 @@ The weapon byte is the client's own pick
   concussion's white-out over a still of its first frame, the camera
   kick, the concussion's mouse caps, the flashbang's tinnitus and sound
   mix (8). Earthquakes shake the view.
+- Third person: `cg_thirdPerson 1` (cheat-protected, as are
+  `cg_thirdPersonRange` and `cg_thirdPersonAngle`) draws our own body
+  under a camera backed off and traced against the world as 1.7's;
+  dying switches to it facing the killer until the killcam. Our own
+  tracers then start 30 units along the shot from the eye
+  ([cod4-effects.md](../research/cod4-effects.md) 12.3).
 
 **Rendering** ([cod4-world.md](../research/cod4-world.md)):
 
@@ -441,17 +447,15 @@ Ranked by how much a player notices. The research-side lists are
 4. **Stereo only.** A 5.1 or 7.1 device gets the stereo mix on its front
    pair ([cod4-sound.md](../research/cod4-sound.md) 5). 139 alias rows
    whose curve no zone holds fall off straight.
-5. **No third-person view**, so our own third-person tracer start is not
-   modelled ([cod4-effects.md](../research/cod4-effects.md) 12.3).
-6. **Demos not yet swapped with a retail client.** The file layout is
+5. **Demos not yet swapped with a retail client.** The file layout is
    gated both ways against `iw3mp.exe`'s and a retail capture, but no
    retail client has played a vcod demo or recorded one for vcod
    ([cod4-demos.md](../research/cod4-demos.md) 8). `screenshot levelshot` and
    `savegame` write nothing.
-7. **Small menus.** The CD key menus are missing; Single Player's Yes
+6. **Small menus.** The CD key menus are missing; Single Player's Yes
    does nothing (this is a multiplayer client); the `winvoice_*` voice
    settings are not read.
-8. **Server-side differences.** vcod-server never asks the authorize
+7. **Server-side differences.** vcod-server never asks the authorize
    server, so it answers an off-LAN challenge at once where 1.7 waits on
    the authorize server (cod4-handshake.md 15). No PunkBuster (a stock
    dedicated server runs none either).

@@ -414,7 +414,7 @@ const MENU_CVARS: &[(&str, &str)] = &[
 
 /// [`Shell::register_cod4_options`]'s dvars: name, default, flags
 /// (`Dvar_RegisterNew` 0x56c350 calls, cod4-front-end.md 9).
-const COD4_OPTION_DVARS: [(&str, &str, u32); 33] = [
+const COD4_OPTION_DVARS: [(&str, &str, u32); 36] = [
     // the custom classes' names, archived (`LiveStorage_StatsInit`,
     // 0x4fc5d7: flags 1; cod4-front-end.md 4.1)
     ("customclass1", "", ARCHIVE),
@@ -451,6 +451,11 @@ const COD4_OPTION_DVARS: [(&str, &str, u32); 33] = [
     ("monkeytoy", "0", ARCHIVE),
     // iw3mp.exe 0x5ba36b, archived (cod4-player-anims.md 10)
     ("ragdoll_enable", "1", ARCHIVE),
+    // the third-person view, 0x43ccb1..0x43cdbf: flags 0x80, the range
+    // 120 in 0..1024, the angle 0 in -180..360 (cod4-client-view.md 16)
+    ("cg_thirdPerson", "0", CHEAT),
+    ("cg_thirdPersonRange", "120", CHEAT),
+    ("cg_thirdPersonAngle", "0", CHEAT),
     // the scoreboard's ping graph, 0x449b84..0x44a0a3 (cod4-hud.md 7.1)
     ("cg_scoreboardPingGraph", "0", 0),
     ("cg_ScoresPing_MaxBars", "4", ARCHIVE),
@@ -1081,8 +1086,8 @@ impl Shell {
     /// `r_specular`, `r_fog`, `r_dlightLimit`,
     /// `r_lodScaleRigid`, `r_lodBiasRigid`, `r_drawWater`,
     /// `r_texFilterMipMode`, `monkeytoy`, the picmip and anisotropy dvars,
-    /// `r_aspectRatio`, the scoreboard's ping graph dvars and the custom
-    /// class names at iw3mp.exe's defaults; then
+    /// `r_aspectRatio`, the third-person dvars, the scoreboard's ping graph
+    /// dvars and the custom class names at iw3mp.exe's defaults; then
     /// [`Shell::cod4_set_picmip`].
     pub fn register_cod4_options(&mut self) {
         // `timedemo` is a command beside `demo` on 1.7 too (`CL_Init`,
@@ -2236,6 +2241,27 @@ mod tests {
         s.apply_systeminfo(r"\sv_cheats\1");
         s.execute("r_glow 0");
         assert_eq!(s.cvar("r_glow"), Some("0"));
+    }
+
+    /// 1.7's three third-person dvars are cheat dvars at their defaults.
+    #[test]
+    fn cod4_third_person_dvars_are_cheat_protected() {
+        let mut s = Shell::new();
+        s.register_cod4_options();
+        for (name, value) in [
+            ("cg_thirdPerson", "0"),
+            ("cg_thirdPersonRange", "120"),
+            ("cg_thirdPersonAngle", "0"),
+        ] {
+            assert_eq!(s.cvar(name), Some(value));
+            assert_eq!(
+                s.execute(&format!("{name} 1")),
+                [Effect::Print(format!("{name} is cheat protected."))]
+            );
+        }
+        s.apply_systeminfo(r"\sv_cheats\1");
+        s.execute("cg_thirdPerson 1");
+        assert_eq!(s.cvar("cg_thirdperson"), Some("1"));
     }
 
     #[test]

@@ -1734,13 +1734,15 @@ fn penetrate(
 }
 
 /// The drawn view for [`client_bullets`]: its client, its eye and angles
-/// (degrees, pitch down) and its view weapon's `tag_flash`.
+/// (degrees, pitch down), its view weapon's `tag_flash`, and whether it
+/// draws in third person (`cg.renderingThirdPerson`).
 #[derive(Clone, Copy, Debug)]
 pub struct OwnView {
     pub client: Option<u32>,
     pub eye: Vec3,
     pub angles: Vec3,
     pub flash: Option<Vec3>,
+    pub third_person: bool,
 }
 
 /// How a shot's rounds leave the gun (`DrawBulletImpacts`,
@@ -1884,18 +1886,16 @@ pub fn client_bullets(
         None => f.entity,
     };
     let (start, axis, muzzle) = match mine {
-        Some(v) => match f.aim.and_then(|a| a.from) {
-            Some(a) => (
-                a.eye,
-                vcod_common::x87::angle_vectors(Vec3::new(a.gun[0], a.gun[1], v.angles.z)),
-                v.flash.unwrap_or(a.eye),
-            ),
-            None => (
-                v.eye,
-                vcod_common::x87::angle_vectors(v.angles),
-                v.flash.unwrap_or(v.eye),
-            ),
-        },
+        Some(v) => {
+            let (start, axis) = match f.aim.and_then(|a| a.from) {
+                Some(a) => (
+                    a.eye,
+                    vcod_common::x87::angle_vectors(Vec3::new(a.gun[0], a.gun[1], v.angles.z)),
+                ),
+                None => (v.eye, vcod_common::x87::angle_vectors(v.angles)),
+            };
+            (start, axis, own_muzzle(v, start, axis[0]))
+        }
         None if gun => {
             let Some((pos, q)) = f.entity.and_then(|n| tags.get(&n)?.flash) else {
                 return Vec::new();
@@ -1945,6 +1945,22 @@ pub fn client_bullets(
             }
         })
         .collect()
+}
+
+/// Where the own shot's tracer starts (`DrawBulletImpacts`,
+/// 0x456743..0x4567eb): the view weapon's `tag_flash`, or in third person
+/// 30 (the double at 0x70b438) along the rounds' way from the eye
+/// (cod4-effects.md 12.3).
+fn own_muzzle(v: &OwnView, start: Vec3, forward: Vec3) -> Vec3 {
+    if v.third_person {
+        let k = |s: f32, d: f32| (f64::from(d) * 30.0 + f64::from(s)) as f32;
+        return Vec3::new(
+            k(start.x, forward.x),
+            k(start.y, forward.y),
+            k(start.z, forward.z),
+        );
+    }
+    v.flash.unwrap_or(start)
 }
 
 /// `cg_firstPersonTracerChance` and `cg_tracerchance` (iw3mp.exe

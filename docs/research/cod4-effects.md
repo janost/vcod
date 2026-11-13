@@ -503,9 +503,9 @@ does the same, so the explode plays.
   VERIFIED (the gate
   `play::cod4::tests::cod4_live_own_shots_fire_the_frame_they_press`).
   Off a real link the gap is the round trip plus up to a snapshot.
-- Not modelled: the drawn player's own shots in third person (12.3).
-  The spread, the bodies in the way and a shotgun's pellets are 12.2,
-  the turrets' rounds and the tracer rolls 12.3.
+- The spread, the bodies in the way and a shotgun's pellets are 12.2,
+  the turrets' rounds, the tracer rolls and the own shots' third-person
+  tracer start 12.3.
 
 ### 12.1 Penetration
 
@@ -697,9 +697,9 @@ does the same, so the explode plays.
   `runcr` on a crouched body (`eFlags` 4) read standing, as 1.7's mask
   reads them. VERIFIED (the gate
   `play::cod4::tests::cod4_live_a_bots_rounds_spread_by_his_legs_anim`).
-- Left out: vehicles' client-side rounds, the own third-person tracer
-  start (12.3), and the exit effect 1.7's `CG_BulletHitEvent` adds at a
-  player target (flag 4 along the muzzle line) on the server's event.
+- Left out: vehicles' client-side rounds and the exit effect 1.7's
+  `CG_BulletHitEvent` adds at a player target (flag 4 along the muzzle
+  line) on the server's event.
 
 ### 12.3 Turrets' rounds, tracer starts and rolls
 
@@ -745,8 +745,7 @@ Addresses are `iw3mp.exe` 1.7.
   tests (0x451da7..0x451deb): then the eye plus 30 (the double at
   0x70b438) along the client info's angles (+0x3e4, the same angles the
   rounds then leave along) (0x456799..0x4567eb). VERIFIED (the code).
-  That the two tests are a vehicle seat and a killcam on an entity is
-  INFERRED.
+  The flag's tests are cod4-client-view.md 16.
 - vcod: a gun's fire event takes `cod4_fx::Aim::turret` (the weapon's
   `player_spread`, our `commandTime`); the effects skip the tracers of
   the gun we man; `Cod4Effects::tracers` rolls the own shot once and
@@ -760,10 +759,14 @@ Addresses are `iw3mp.exe` 1.7.
   demolitions shotgun on mp_crash: every pellet within 0.05 degrees of
   the server's, 8 tracers or none a shot. VERIFIED (the gate
   `play::cod4::tests::cod4_live_own_shotgun_pellets_share_one_tracer_roll`).
-- Left out: the own third-person tracer start. vcod draws no
-  third-person view (no `cg_thirdPerson`, no vehicle seat in 1.7's
-  stock MP, no entity killcam), so our own shots always take the first
-  person arm.
+- vcod: under `cg.renderingThirdPerson` (`cg_thirdPerson` or a dead
+  playerstate, cod4-client-view.md 16) the own shot's tracer starts 30
+  along the rounds' axis from the shot's eye (`cod4_fx::client_bullets`,
+  `OwnView::third_person`), else at the view weapon's `tag_flash`. Every
+  own round of the kill capture's shooter on mp_crash, drawn again in
+  third person, keeps its start and end and starts its tracer 30 from
+  the eye within 15 degrees of its way. VERIFIED (the gate
+  `play::cod4::tests::own_shots_strike_mark_and_trace`).
 
 ## 13. The effect and weapon sets' colour
 
