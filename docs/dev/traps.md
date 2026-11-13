@@ -69,7 +69,7 @@ names holds the evidence.
   the tick: the view builders, the vehicle code and the admin read `bots`,
   `nav` and `paths` mid-tick. All three games run it in one order. What a
   game's route leaves out the trait carries as a const (`YIELDS`,
-  `PMOVE_PROBES`; CoD1 true, CoD2 and CoD4 false), and flipping one moves
+  `SHUNS_BODIES`, `PMOVE_PROBES`; CoD1 true, CoD2 and CoD4 false), and flipping one moves
   that game's draws. A per-game step goes in a hook (`feel`, `pre_route`,
   `routed`, `pre_think`, `keeps_alive`, `cmd`, `tick_done`), not in `step`.
 - Nav build: `Prim::Tri` is terrain only, and `under_ground`'s ray counts

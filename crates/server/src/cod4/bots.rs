@@ -281,6 +281,9 @@ impl BotWorld for Cod4Server {
 
     /// Off as on CoD2 (bot-combat.md 15).
     const YIELDS: bool = false;
+    /// Off: not measured here; `PARTS_MATES` plans round a still
+    /// teammate (bot-navigation.md section 3, "Bodies in the way").
+    const SHUNS_BODIES: bool = false;
     /// On: a guard standing in a door held his teammates in a queue
     /// behind him (bot-objectives.md 12.7). CoD2's is on too (11.5).
     const PARTS_MATES: bool = true;

@@ -90,16 +90,32 @@ const HEAL_REACH: f32 = 1200.0;
 const HEAL_HEIGHT: f32 = 200.0;
 
 /// The nearest of `packs` within [`HEAL_REACH`] across and [`HEAL_HEIGHT`]
-/// up or down of a body under [`HEAL_PCT`].
-pub(crate) fn nearest_pack(view: &BotView, packs: &[[f32; 3]]) -> Option<[f32; 3]> {
+/// up or down of a body under [`HEAL_PCT`]; `held`, the item walked to
+/// last tick, while it still lies there within [`HEAL_REACH`] across at
+/// any height. Picked afresh each tick, a bot between two items on
+/// mp_ship's hold at (4450, 700, -64), one on the floor and one on the
+/// deck over it, turned for whichever stood nearer across and paced
+/// between their ways for 10 s; and one whose way to an item climbed a
+/// stair more than [`HEAL_HEIGHT`] over it dropped the item at the top,
+/// took the drop back down for its other goal and climbed again
+/// (bot-navigation.md, "The ship's leftovers").
+pub(crate) fn nearest_pack(
+    view: &BotView,
+    packs: &[[f32; 3]],
+    held: Option<[f32; 3]>,
+) -> Option<[f32; 3]> {
     let v = &view.survive;
     if v.health * 100 >= v.max_health * HEAL_PCT {
         return None;
     }
     let o = view.origin;
+    let across = |p: &[f32; 3]| (p[0] - o[0]).hypot(p[1] - o[1]);
+    if let Some(h) = held.filter(|h| packs.contains(h) && across(h) < HEAL_REACH) {
+        return Some(h);
+    }
     packs
         .iter()
-        .map(|p| ((p[0] - o[0]).hypot(p[1] - o[1]), *p))
+        .map(|p| (across(p), *p))
         .filter(|(d, p)| *d < HEAL_REACH && (p[2] - o[2]).abs() < HEAL_HEIGHT)
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, p)| p)
@@ -487,11 +503,36 @@ mod tests {
         assert_eq!(bot.retreating(), 1);
     }
 
+    /// The item walked to is kept while it lies in reach, nearer items or
+    /// not.
+    #[test]
+    fn a_hurt_bot_keeps_to_the_health_item_it_walks_to() {
+        let (_, v) = hurt(1);
+        let (far, near) = ([600.0, 0.0, 64.0], [300.0, 0.0, 64.0]);
+        assert_eq!(nearest_pack(&v, &[far, near], None), Some(near));
+        assert_eq!(nearest_pack(&v, &[far, near], Some(far)), Some(far));
+        let over = [600.0, 0.0, 64.0 + HEAL_HEIGHT + 10.0];
+        assert_eq!(nearest_pack(&v, &[over, near], None), Some(near));
+        assert_eq!(
+            nearest_pack(&v, &[over, near], Some(over)),
+            Some(over),
+            "any height"
+        );
+        assert_eq!(
+            nearest_pack(&v, &[near], Some(far)),
+            Some(near),
+            "picked up"
+        );
+    }
+
     #[test]
     fn a_hurt_bot_out_of_a_fight_walks_to_a_health_item_near() {
         let (mut bot, mut v) = hurt(1);
         let pack = [400.0, 300.0, 64.0];
-        assert_eq!(nearest_pack(&v, &[pack, [5000.0, 0.0, 64.0]]), Some(pack));
+        assert_eq!(
+            nearest_pack(&v, &[pack, [5000.0, 0.0, 64.0]], None),
+            Some(pack)
+        );
         v.survive.heal = Some(pack);
         // In a fight the fight comes first.
         assert_ne!(bot.goal(&v), Goal::To(pack));
@@ -499,7 +540,7 @@ mod tests {
         assert_eq!(bot.goal(&v), Goal::To(pack));
         // Not hurt enough: no detour.
         v.survive.health = 90;
-        assert_eq!(nearest_pack(&v, &[pack]), None);
+        assert_eq!(nearest_pack(&v, &[pack], None), None);
         bot.set_retreat(false);
         v.survive.health = 30;
         assert_ne!(bot.goal(&v), Goal::To(pack));

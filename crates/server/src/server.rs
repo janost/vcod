@@ -4374,6 +4374,12 @@ impl Server {
         (at(a), at(b))
     }
 
+    /// Test-facing: the edges the bots' followers gave up on, and those
+    /// with another body near (`bots::driver::BotDriver::edge_stalls`).
+    pub fn bot_edge_stalls(&self) -> [u32; 2] {
+        self.game.module.driver.edge_stalls
+    }
+
     /// Test-facing: the ticks a bot has waited aside for a climber
     /// (`nav::Follower::yielding`).
     pub fn bot_yielding(&self, slot: usize) -> u32 {

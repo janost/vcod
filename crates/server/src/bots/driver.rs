@@ -68,6 +68,10 @@ pub(crate) struct BotDriver {
     pub(crate) noises: Vec<Noise>,
     /// Who may yell now, and who was alive last tick (`super::yell`).
     pub(crate) yells: super::yell::Gate,
+    /// Edges the followers gave up on ([`Follower::gave_up`]), and those
+    /// of them with another body within [`STALL_NEAR`]: the measure of
+    /// stalls on a body (`bot_match`, `ship_stalls`).
+    pub(crate) edge_stalls: [u32; 2],
 }
 
 impl BotDriver {
@@ -160,6 +164,9 @@ pub(crate) trait BotWorld {
     /// a teammate's path (`team::crowd`) and keeps off
     /// [`Self::blocked_nodes`].
     const YIELDS: bool = true;
+    /// The route plans round any other body standing in a bot's way
+    /// once it is held up by it ([`crate::nav::Follower::bodies_in_way`]).
+    const SHUNS_BODIES: bool = true;
     /// The route plans round a teammate standing still in the way of a
     /// bot held up beside him ([`mates_in_way`]).
     const PARTS_MATES: bool = false;
@@ -726,7 +733,8 @@ fn sense<W: BotWorld>(
         _ => noises.to_vec(),
     };
     view.noise = super::loudest(&heard, slot, view.origin, hearing);
-    view.survive.heal = super::retreat::nearest_pack(&view, packs);
+    let heal_at = w.driver().bots.get(&slot).and_then(|b| b.heal_at);
+    view.survive.heal = super::retreat::nearest_pack(&view, packs, heal_at);
     let held = w.driver_mut().sidesteps.remove(&slot);
     if let Some(e) = enemy {
         (view.friend_in_line, view.sidestep) = w.friend_in_line(slot, e.origin, teams, held);
@@ -990,6 +998,10 @@ fn mates_in_way(
     nodes.clone()
 }
 
+/// How near another body stands, flat and in height, for an edge given
+/// up on to count as a stall on a body ([`BotDriver::edge_stalls`]).
+const STALL_NEAR: f32 = 64.0;
+
 /// How far a teammate held up behind a bot may stand for it to give way,
 /// and how far it steps.
 const GIVE_WAY_REACH: f32 = 96.0;
@@ -1021,6 +1033,27 @@ fn give_way<W: BotWorld>(w: &W, slot: usize, teams: &[i32]) -> Option<[f32; 3]> 
     Some((me.origin + away * GIVE_WAY_STEP).to_array())
 }
 
+/// The bodies off the rungs the bot in `slot` gives way to when they meet
+/// it head-on ([`crate::nav::Follower::stand_aside`]), each with the way it
+/// heads: every player not a bot, by its velocity, and every bot in a
+/// lower slot, toward its waypoint. Of two bots one always gives way.
+fn oncoming<W: BotWorld>(
+    w: &W,
+    slot: usize,
+    standing: &[(usize, Vec3, Vec3)],
+) -> Vec<(Vec3, Vec3)> {
+    let d = w.driver();
+    standing
+        .iter()
+        .filter(|(s, _, _)| *s != slot)
+        .filter_map(|&(s, o, v)| match d.bots.contains_key(&s) {
+            false => Some((o, v)),
+            true if s < slot => Some((o, d.paths.get(&s)?.heading()? - o)),
+            true => None,
+        })
+        .collect()
+}
+
 /// Pass 3's walk for one bot on the graph `g`: the follower's waypoint
 /// toward `goal` and the edge cues it reads off the graph, after the
 /// yields to teammates on and off the ladders (`climbers`, `standing`).
@@ -1042,6 +1075,7 @@ fn route<W: BotWorld>(
     use super::team::{self, Squad};
     let g = g.clone();
     let mut follower = w.driver_mut().paths.remove(&slot).unwrap_or_default();
+    let gave_up = follower.gave_up;
     let shared = team_objective(view) && !solo.contains(&slot);
     let squad = shared && w.driver().bots.get(&slot).is_some_and(|b| b.squad);
     let noise = |t: i32| team::route_seed(w.server_id() as u32, t, slot);
@@ -1120,7 +1154,20 @@ fn route<W: BotWorld>(
     };
     let (others, aground) = (others(climbers), others(standing));
     let collision = world.map(|w| &w.collision);
-    if W::YIELDS
+    if W::SHUNS_BODIES && view.enemy.is_none() {
+        view.detour = follower.bodies_in_way(&g, at.into(), body, &aground);
+    }
+    let aside = (W::SHUNS_BODIES && view.enemy.is_none())
+        .then(|| {
+            let oncoming = oncoming(w, slot, standing);
+            follower.stand_aside(&g, at.into(), body, &oncoming)
+        })
+        .flatten();
+    if let Some(spot) = aside {
+        // Come to rest there, as on a leap's foot.
+        view.waypoint = Some(spot.into());
+        view.stop = true;
+    } else if W::YIELDS
         && let Some(spot) = follower.ladder_yield(&g, at.into(), body, &others, &aground)
     {
         // Come to rest there, as on a leap's foot.
@@ -1223,6 +1270,16 @@ fn route<W: BotWorld>(
             .map(|(_, o, v)| (o.to_array(), v.to_array()))
             .collect();
         view.mate_ahead = team::mate_ahead(at, to, &mates);
+    }
+    if follower.gave_up > gave_up {
+        let near = climbers.iter().chain(standing).any(|&(s, o, _)| {
+            s != slot
+                && (o - Vec3::from(at)).truncate().length() < STALL_NEAR
+                && (o.z - at[2]).abs() < STALL_NEAR
+        });
+        let tally = &mut w.driver_mut().edge_stalls;
+        tally[0] += 1;
+        tally[1] += u32::from(near);
     }
     w.routed(slot, &follower, &g);
     if let Some(b) = w.driver_mut().bots.get_mut(&slot) {

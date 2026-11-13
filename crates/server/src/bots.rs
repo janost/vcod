@@ -434,6 +434,9 @@ pub struct BotView {
     /// that frees the body (`nav::unpin_yaw`), held for
     /// `nav::UNPIN_TICKS`.
     pub unpin: Option<f32>,
+    /// The follower planned round a body in the way this tick
+    /// (`nav::Follower::bodies_in_way`): held up, not stuck.
+    pub detour: bool,
     /// A held pistol's configstring index, when one is in the kit.
     pub pistol: Option<u8>,
     /// A held rocket launcher (`weaponClass rocketlauncher`) with a round
@@ -1086,6 +1089,9 @@ pub struct Bot {
     /// by the driver where the game gives up goals no body reaches
     /// (`BotWorld::GIVES_UP_GOALS`); `None` elsewhere.
     pub(crate) arrived_goal: Option<[f32; 3]>,
+    /// The health item [`BotView`]'s vitals sent the bot to last tick
+    /// (`retreat::nearest_pack`'s `held`).
+    pub(crate) heal_at: Option<[f32; 3]>,
     /// The last think's view was set by a fight, a hurt look, a cover
     /// peek, a recalled spot or a retreat, not the walk: the walking
     /// view takes the path's heading at once ([`Bot::walk_turn`]).
@@ -1534,6 +1540,7 @@ impl Bot {
             walking: false,
             on_objective: false,
             arrived_goal: None,
+            heal_at: None,
             view_owned: false,
             rungs_ago: u32::MAX,
             rung_spell: false,
@@ -2902,6 +2909,7 @@ impl Bot {
             || self
                 .objective_target(view)
                 .is_some_and(|t| Self::at_objective(view, &t));
+        self.heal_at = view.survive.heal;
         let cmd = self.think_body(view);
         self.count_futile(view, &cmd);
         self.fired = cmd.buttons & msg::BUTTON_ATTACK != 0;
@@ -3201,8 +3209,9 @@ impl Bot {
         if standing || view.stop {
             self.restart_stall(view.origin);
             self.unstick_ticks = 0;
-        } else if view.unpin.is_some() && self.unstick_ticks == 0 {
-            // A pin with a heading out of it gets its run aside first.
+        } else if (view.unpin.is_some() || view.detour) && self.unstick_ticks == 0 {
+            // A pin with a heading out of it gets its run aside first, and
+            // a body in the way the plan round it.
             self.restart_stall(view.origin);
         } else if self.stall_ticks >= STALL_TICKS {
             // A creep covers about 8 units in ten ticks and is stuck only
@@ -3316,11 +3325,16 @@ impl Bot {
                 && view.sprint_room >= SPRINT_ROOM
                 && dist_sq(view.origin, r.at) > view.sprint_room * view.sprint_room
         };
-        // Not on a mantle edge (bot-combat.md 17.1).
+        // Not on a mantle edge (bot-combat.md 17.1). Not from under
+        // `RECALL_PACE` either: a turned key backs and strafes at retail's
+        // 0.7 and 0.8 scales, and a body against a wall slides along it
+        // only at the run the graph proved, as at mp_ship's deck corner
+        // at (3564, 8, 352) (bot-navigation.md, "The ship's leftovers").
         let mut recall_look = false;
         if self.shoot
             && view.enemy.is_none()
             && !view.mantle
+            && view.speed >= RECALL_PACE
             && pitch == 0.0
             && forward == 127
             && let Some(r) = self.recall
@@ -4635,6 +4649,9 @@ const CORNERED: u32 = 3;
 const CORNER: f32 = 96.0;
 /// Inside this of a leap's foot, flat, the run slows in proportion.
 const LEAP_SLOW: f32 = 48.0;
+/// Under this pace, units/s, the keys keep the path's own run: no
+/// pre-aim turns them.
+const RECALL_PACE: f32 = 66.0;
 /// A waypoint this far above the feet is up a ladder: look up, where
 /// `ladder_move` climbs at full rate.
 const CLIMB_HEIGHT: f32 = 48.0;
@@ -4986,6 +5003,7 @@ mod tests {
             sprint_room: 0.0,
             push_off: None,
             unpin: None,
+            detour: false,
             pistol: None,
             rocket: None,
             primaries: [10, 0],
@@ -5795,6 +5813,7 @@ mod tests {
         let (mut bot, mut v) = lost([0.0, 500.0, 124.0], [0.0; 3]);
         v.view = [0.0, 0.0, 0.0];
         v.waypoint = Some([500.0, 0.0, 64.0]);
+        v.speed = vcod_common::pmove::SPEED_RUN;
         let cmd = bot.think(&v);
         let yaw = cmd.angles[1] as f32 / ANGLE2SHORT;
         assert!((yaw - bot.skill.turn_deg).abs() < 0.1, "yaw {yaw}");
@@ -5967,6 +5986,7 @@ mod tests {
         v.waypoint = Some([0.0, 100.0, 64.0]);
         v.sprint_room = 600.0;
         v.fatigue = Some(1.0);
+        v.speed = vcod_common::pmove::SPEED_RUN;
         let think = |at: [f32; 3]| {
             let mut bot = Bot::new("allies", true, 1);
             bot.recall = Some(Recall {
@@ -5992,6 +6012,7 @@ mod tests {
     fn a_recall_look_keeps_off_a_mantle_edge() {
         let mut v = view();
         v.waypoint = Some([0.0, 100.0, 64.0]);
+        v.speed = vcod_common::pmove::SPEED_RUN;
         let think = |v: &BotView| {
             let mut bot = Bot::new("allies", true, 1);
             bot.recall = Some(Recall {
@@ -6006,6 +6027,29 @@ mod tests {
         assert_eq!(think(&v).right, 0, "a mantle edge keeps the view");
     }
 
+    /// Under [`RECALL_PACE`] the keys keep the path's run: turned off it,
+    /// a back key and a strafe at retail's 0.7 and 0.8 scales left a body
+    /// against mp_ship's deck corner at (3564, 8, 352) sliding along it at
+    /// a few units a tick (bot-navigation.md, "The ship's leftovers").
+    #[test]
+    fn a_slow_body_keeps_the_path_under_a_recall() {
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        let think = |v: &BotView| {
+            let mut bot = Bot::new("allies", true, 1);
+            bot.recall = Some(Recall {
+                at: [300.0, -300.0, 64.0],
+                ticks: 100,
+                seen: true,
+            });
+            bot.think(v)
+        };
+        v.speed = RECALL_PACE - 1.0;
+        assert_eq!(think(&v).right, 0, "slow: the path's own keys");
+        v.speed = vcod_common::pmove::SPEED_RUN;
+        assert_ne!(think(&v).right, 0, "at a run: turned to the spot");
+    }
+
     /// Slowing onto a stop under a recall look scales the turned keys, so
     /// the body still heads for the stop (bot-combat.md 17.1).
     #[test]
@@ -6013,6 +6057,7 @@ mod tests {
         let mut v = view();
         v.waypoint = Some([0.0, 24.0, 64.0]);
         v.stop = true;
+        v.speed = vcod_common::pmove::SPEED_RUN;
         // Already turned to the spot.
         v.view = [0.0, -45.0, 0.0];
         let mut bot = Bot::new("allies", true, 1);
