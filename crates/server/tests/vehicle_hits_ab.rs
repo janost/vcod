@@ -25,6 +25,12 @@ use vcod_common::net::protocol::PROTOCOL_V22;
 /// How long after the placement both logs are compared.
 const WINDOW_MS: i32 = 8000;
 
+/// The capture's shooter, `--probe-uo-weapon hold`, waits this long from
+/// its spawn before it sights and fires (`vehicle_probe::HOLD`'s
+/// "settle"): retail's first notify comes 1050-1100 ms after the
+/// placement, which the gsc makes on the spawn frame.
+const SETTLE_MS: i64 = 1000;
+
 /// Our run of the probe on `map` against a `vehicletype`; the script log.
 fn ours(map: &str, vehicletype: &str, cvars: &[(&str, &str)]) -> Option<Vec<String>> {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -49,8 +55,15 @@ fn ours(map: &str, vehicletype: &str, cvars: &[(&str, &str)]) -> Option<Vec<Stri
     let mut cl = NetClient::start_with_qport(common::ClientEnd(q.clone()), now, 0x2001);
     let mut join = Join::new("allies", "thompson_mp");
     let frame = Duration::from_millis(common::FRAME_MS as u64);
-    let mut hold = common::ProbeHold::default();
+    // The capture's net probe sends its cmds on a 60 Hz grid, so a stock
+    // thompson's kick settles between its 100 ms rounds
+    // (cod15-movement.md 6).
+    let mut hold = common::ProbeHold {
+        sixty: true,
+        ..Default::default()
+    };
     let mut placed_at: Option<i64> = None;
+    let mut pressed = false;
     for i in 0..2000i64 {
         now += frame;
         if placed_at.is_some_and(|at| (i - at) * common::FRAME_MS > i64::from(WINDOW_MS) + 1000) {
@@ -59,8 +72,27 @@ fn ours(map: &str, vehicletype: &str, cvars: &[(&str, &str)]) -> Option<Vec<Stri
         // The probe holds the view of its first spawned snapshot, which is
         // the placement's.
         let placed_seen = placed_at.is_some_and(|at| i > at);
+        let settled = placed_at.is_some_and(|at| (i - at) * common::FRAME_MS > SETTLE_MS);
         if placed_seen && cl.state() == vcod_common::net::NetState::Active {
-            cl.send_cmds(&hold.cmds(&cl, BUTTON_ATTACK | BUTTON_ADS));
+            let buttons = if settled {
+                BUTTON_ATTACK | BUTTON_ADS
+            } else {
+                0
+            };
+            let mut cmds = hold.cmds(&cl, buttons);
+            // The trigger goes down on the second cmd of its batch. The
+            // first after a frame aims along the view the gsc's
+            // `setPlayerAngles` left, the rest along the held view the cmd
+            // rebases back to, and every sixth cmd fires on the press's
+            // phase: retail's rounds left along the held view
+            // (coduo-vehicles.md 13, "The shooter's phase").
+            if settled && !pressed {
+                if let Some(c) = cmds.first_mut() {
+                    c.buttons = 0;
+                }
+                pressed = !cmds.is_empty();
+            }
+            cl.send_cmds(&cmds);
         } else if let Some(c) = cl.send_frame(&UserCmd::default()) {
             hold.last = c.server_time;
         }
