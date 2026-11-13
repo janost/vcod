@@ -2732,9 +2732,9 @@ and measures `doDamage` on a client and the killcam skipped by use:
   `player_die` hands the killed callback the world (1022) for both, and
   tdm's world arm takes a point off the victim's score and gives no
   killcam (VERIFIED, the log). A dead or killcam target never reaches the
-  callback (no `PROBE damage` line at 11850 or 14350; VERIFIED, the log):
-  INFERRED, `takedamage` is off for a client not playing, as 1.1's
-  `ClientEndFrame` leaves it. Stock UO tdm's world arm reads
+  callback (no `PROBE damage` line at 11850 or 14350; VERIFIED, the log).
+  The cause is `takedamage` off for a client not playing, as 1.1's
+  `ClientEndFrame` leaves it (INFERRED). Stock UO tdm's world arm reads
   `level.teamkill_penalty`, which nothing sets: a script runtime error at
   `developer 1`, which the probe sidesteps by setting it (VERIFIED, the log
   and its first run's console).
