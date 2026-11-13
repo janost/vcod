@@ -263,6 +263,26 @@ impl Side {
     pub(super) fn at(&self, time: i32) -> Option<&Snap> {
         self.snaps.iter().find(|s| s.time == time)
     }
+
+    /// The send time of the packet that first carried the cmd at `time`.
+    pub(super) fn sent_at(&self, time: i32) -> i32 {
+        self.cmds
+            .iter()
+            .position(|c| c.server_time == time)
+            .and_then(|k| self.sent.get(k).copied())
+            .unwrap_or(time)
+    }
+
+    /// The cmds past `done` whose packets were sent by `sent`, each with
+    /// its packet's send time: whole packets, as the server runs them.
+    pub(super) fn packets_by(&self, done: i32, sent: i32) -> Vec<(i32, UserCmd2)> {
+        self.cmds
+            .iter()
+            .enumerate()
+            .map(|(k, c)| (self.sent.get(k).copied().unwrap_or(c.server_time), *c))
+            .filter(|(s, c)| c.server_time > done && *s <= sent)
+            .collect()
+    }
 }
 
 pub(super) struct Capture {
