@@ -205,8 +205,7 @@ words to the entity (es+0xcc, +0xd0). VERIFIED (the stores). vcod's port
 is `vcod_cod2::pmove::anim`; `tests/anim_ab.rs` replays the movement
 captures in `tests/fixtures/moves/` and the `fire` and `hurt` ones beside
 them through pmove and `PM_Weapon` and matches every `legsAnim`,
-`torsoAnim`, `legsTimer` and `torsoTimer` but the rows its `GAPS` names
-(the melee swing's `rand()` pick). VERIFIED.
+`torsoAnim`, `legsTimer` and `torsoTimer`, its `GAPS` empty. VERIFIED.
 
 - `Mantle_Move` (0x80de260) calls `BG_AnimScriptAnimation(ps, 3, slot +
   20, 1)` every mantle frame, the slot the up anim's until the timer
@@ -309,12 +308,25 @@ them through pmove and `PM_Weapon` and matches every `legsAnim`,
   (0x80ef74e). Event numbers off `animEventTypesStr` (0x8184a20, `PAIN`
   0 .. `SHELLSHOCK` 18). VERIFIED (the table). The `fire` capture (two
   hip shots, reload, melee, a crouched, a prone and a sighted shot, a
-  prone reload stood out of, a shot on the run) replays on vcod's port
-  but for the melee's draw among its clause's five commands. VERIFIED
-  (capture).
+  prone reload stood out of, a shot on the run) replays on vcod's port,
+  the melee's command among its clause's five off retail's own draw.
+  VERIFIED (capture, `anim_ab`).
 - `BG_AnimScriptEvent` (0x80d96ee) picks its command `rand() % n` for
-  every event, `n` the clause's count. VERIFIED (the call). vcod-server
-  draws only where `n` > 1, and not glibc's sequence.
+  every event, `n` the clause's count (`call rand` at 0x80d977a, `idivl`
+  by the clause's +0x70). VERIFIED (the call). The `fire` capture is made
+  under `RAND_TRACE=1` (`tools/run_probe_cod2.sh`), so its `# rand` lines
+  hold the server's draws: nine at 0x80d977a from the first shot on, one
+  for each event with a matching clause, `n` 1 but for the melee's 5.
+  VERIFIED (capture). `anim_ab` hands each of vcod's picks the next of
+  those draws and requires as many picks as draws; nine and nine, and
+  every row matches. VERIFIED (the gate). A pick one command on from the
+  draw puts the melee's `torsoAnim` on `pt_melee_right2right_2` (267)
+  against retail's `pt_melee_right2right_1` (268), so the row reads the
+  draw. VERIFIED (the gate, by hand). This capture's melee draw
+  (173704750) gives 0; the one before it (no trace) took another command,
+  `torsoAnim` 264. VERIFIED (the old capture). vcod-server draws for
+  every clause with a command, off glibc's `rand()` (`GameRand`,
+  cod2-combat.md 9.6).
   `PM_DropTimers` (0x80e6936) runs both timers down to 0. VERIFIED.
 - `ClientSpawn` (Mac 0x1930a6) ends in `ClientThink_real` on the
   client's last cmd restamped to `level.time`, `commandTime` 100 ms
