@@ -622,11 +622,12 @@ in 1.5's paks already and `_callbacksetup.gsc` comes from `main/`
 - **Domination (`dom`).** Numbered `flag#` capture triggers, faster with
   more cappers; held flags open `mp_uo_spawn_*_secondary` spawns; wave
   respawns (`scr_dom_respawn_wave_time`) (INFERRED from the script).
-- **Shared.** Battle rank (`_rank_gmi`: `pers["rank"]`, status and head
-  icons `hud@us_rank1..5`, rank 4 gets `binoculars_artillery_mp` in the
-  `binocular` slot), a scripted killcam (`_killcam_gmi`, `rewindFx`), shell
-  shock, and the `satchel`, `smokegrenade` and `binocular` slots (INFERRED
-  from the scripts).
+- **Shared.** Battle rank (`_rank_gmi`: `pers["rank"]` 0..4, status and
+  head icons `hud@us_rank1..5` for both teams, `pers["rank"]` 4 gets
+  `binoculars_artillery_mp` in the `binocular` slot) (VERIFIED, the
+  `probe_tdmrank` captures, section 22 "Battle rank"). A scripted killcam
+  (`_killcam_gmi`, `rewindFx`), shell shock, and the `satchel`,
+  `smokegrenade` and `binocular` slots (INFERRED from the scripts).
 - **Engine support.** The three new modes have no engine code. They use
   1.1's `objective_*` builtins with 16 objectives (bound 0xf, VERIFIED). The
   `capturing` entity field is plain storage no engine code reads (INFERRED).
@@ -790,8 +791,8 @@ stock UO grenade, smoke, flash and satchel has `cookOffHold 1` (VERIFIED).
   temp event 183, then at a random point within `projectileRadius` 184 and
   `fire_artillery` (0x5ff4a), a missile dropping straight down armed 1750 ms
   later through `G_DropArtillery`, `projectileCount` (15) times (VERIFIED
-  decompile). The stock spotter weapon is a rank-4 reward from `_rank_gmi`
-  (INFERRED).
+  decompile). The stock spotter weapon is `_rank_gmi`'s reward at `pers["rank"]` 4
+  (VERIFIED, the `probe_tdmrank` captures, section 22 "Battle rank").
 - **Smoke and flash.** `projExplosionType smoke` routes a grenade to
   `G_ExplodeSmokeGrenade`: event 185, no damage, freed 15 s later
   (VERIFIED). `flashgrenade_mp` is the same type, so any flash effect is
@@ -1790,8 +1791,8 @@ below). Times are the snapshots' server times; ids and `eFlags` are the
 wire's, as `event_dump` prints them.
 
 - **Artillery** (`*-uo-arty.bin`, dm). With `binoculars_artillery_mp` in the
-  binocular slot and one round in its clip, as `_rank_gmi`'s rank 4 gets it,
-  sighting raises `EV_DEPLOY_WEAPON` (160) on weapon 6 and letting the sight
+  binocular slot and one round in its clip, as `_rank_gmi`'s `pers["rank"]`
+  4 gets it, sighting raises `EV_DEPLOY_WEAPON` (160) on weapon 6 and letting the sight
   go `EV_BREAKDOWN_WEAPON` (161): the binoculars ride the bipod's events.
   The trigger under the sight is `EV_FIRE_WEAPON_LASTSHOT` (166) (live,
   VERIFIED). The strike (live, VERIFIED):
@@ -2154,12 +2155,12 @@ Stage 1's list is mostly closed: the gametypes are section 22; artillery,
 smoke, the satchel and the flamethrower's `fdc` damage section 21; the mount
 hint and `spawnTriggerMount` `coduo-movement.md` 11; the cooked-out frag's
 `EV_GRENADE_SUICIDE` death (`Attack::Suicide`); `EV_BULLET_HIT`'s reflected
-direction and a projectile explode's type in `es.scale` (section 21). Left:
+direction and a projectile explode's type in `es.scale` (section 21);
+battle rank section 22. Left:
 
 - what `coduo-vehicles.md` 14 leaves out; `iCompassTankInfo` stays 0, as on
   stock retail (section 9);
 - `bg_nofatigue` is registered and mirrored but not read;
-- battle rank's `GMI_RANK_*` path past what `dm` runs;
 - a retail UO client against vcod-server is a pending hand check.
 
 ## 21. Server: UO's weapons on vcod-server
@@ -2703,6 +2704,90 @@ One more (port 32711, the same clients, `gametypes_ab`'s
   (VERIFIED, the log and captures). No team point is scored for the round:
   dom's team score is the flag count (`d 6 1`, then `d 6 0` at the
   restart). vcod-server matches.
+
+### Battle rank
+
+`_rank_gmi` (`pakuo01.pk3`) is UO's battle rank, shared by the stock
+gametypes. `client-probes/probe_tdmrank` runs stock `tdm` on mp_cassino
+(retail port 28977) with `scr_rank_ppr 2`, `scr_killcam 0`,
+`scr_forcerespawn 1`, `scr_artillery_first_interval 3` and a 1.5 min time
+limit, beside the two `--save-scripted` probes. The allied player kills the
+axis player twice per rank with `finishPlayerDamage`, the axis player then
+kills him, and the probe logs his weapon slots after each respawn. The
+captures are `tests/fixtures/gametypes/mp_cassino-tdmrank-*-uo.txt`;
+`gametypes_ab`'s `uo_battle_rank_climb_loadouts_and_map_end_reset_match_retail`
+compares every view. Ranks below are the icons' 1..5, `pers["rank"]` 0..4.
+
+- **Thresholds.** `DetermineBattleRank` reads `self.score` against
+  `scr_rank_ppr` (default 10) times 1..4: rank 2 at 10 points, 3 at 20, 4 at
+  30, 5 at 40 (VERIFIED, `_rank_gmi.gsc` `InitializeBattleRank`). Under
+  `ppr` 2 the capture promotes at scores 2, 4, 6 and 8 (VERIFIED, the log's
+  `PROBE rank alive at` lines). `scr_forcerank` overrides it (VERIFIED, the
+  script; not captured).
+- **When it changes.** A spawn writes the rank off the score before the
+  loadout (`tdm.gsc` `spawnPlayer`) (VERIFIED, the script). A living
+  player's rank moves in `CheckPlayersForRankChanges`, which
+  `updateGametypeCvars` runs once a second (VERIFIED, the script). A
+  promotion sends `s` `mp_promotion`, `f "GMI_RANK_PROMOTION"` and
+  `f "GMI_RANK_<n>_MESSAGE"` for the new rank n (2..5); the status icon
+  (`hud@us_rank<n>`), the head icon (`headicon@us_rank<n>`) and the HUD
+  rank icon at 119,405 (26x32, alpha 0.7) change in the same check
+  (VERIFIED, the attacker capture). A death keeps the rank: each respawn
+  reads the rank it died with (VERIFIED, the log's `PROBE rank spawned at`
+  lines).
+- **Demotion.** The probe drops the living rank-5 player's score from 8 to
+  5: `s` `mp_demotion`, `f "GMI_RANK_DEMOTION"`, no rank message, and the
+  icons back to rank 3 (VERIFIED, the capture and the log's
+  `PROBE rank demoted`). A dead player is never checked, so a suicide
+  across a threshold demotes silently at the respawn (INFERRED, the
+  script's `isalive` test).
+- **Loadout** (allied m1carbine, clip 15; colt, clip 7), reserve + clip
+  (VERIFIED, the log's `PROBE loadout` lines):
+
+  | Rank | m1carbine | colt | frags | smoke | satchel | binocular slot |
+  |---|---|---|---|---|---|---|
+  | 1 | 60+15 | 7+7 | 1 | 1 | none | none |
+  | 2 | 60+15 | 14+7 | 2 | 1 | none | none |
+  | 3 | 75+15 | 14+7 | 2 | 2 | none | `binoculars_mp`, 0 rounds |
+  | 4 | 75+15 | 21+7 | 2 | 2 | 1 | `binoculars_mp`, 0 rounds |
+  | 5 | 90+15 | 21+7 | 3 | 2 | 1 | `binoculars_artillery_mp`, 0 rounds |
+
+  The axis rank-1 loadout is a kar98k 25+5, a luger 8+8, one
+  `stielhandgranate_mp` and one smoke (VERIFIED, the log). The binoculars
+  need `level.allow_binoculars`, the artillery pair `level.allow_artillery`
+  (VERIFIED, the script).
+- **Artillery round.** `scr_artillery_first_interval` (3 s here, default
+  45) after the rank-5 spawn the binocular clip reads 1, with
+  `c "GMI_RANK_ARTILLERY_IN_PLACE" 2`, `s` `us_arty_gtg` and
+  `hud@fire_ready_shell.dds` at 160,455 (VERIFIED, the capture and the
+  log). The next comes `scr_artillery_interval` plus up to
+  `scr_artillery_interval_range` seconds after a strike (VERIFIED, the
+  script; not captured).
+- **Reset.** `tdm`'s `exitLevel(false)` zeroes each client's score
+  (`ExitLevel` above), so the restarted level spawns the rank-5 player at
+  rank 1 with the rank-1 loadout (VERIFIED, the log's `PROBE rank after
+  map end`). `ctf` and `dom` also zero `pers["score"]` and call
+  `ResetPlayerRank` at their match start (VERIFIED, `ctf.gsc` 1946-1957,
+  `dom.gsc` 2631-2642; not captured).
+- **Team icons.** Both teams wear the American icons: `_rank_gmi` sets only
+  `br_*icons_allies_*`, its axis precaches are commented out, and
+  `pakuo00.pk3` ships only `us_rank1..5` (VERIFIED, the script and the
+  pak). The axis probe sees the allied player's head icon climb
+  `headicon@us_rank1..5` with `headiconteam` allies (VERIFIED, the defender
+  capture).
+- **Sound configstrings.** `mp_promotion`, `us_arty_gtg` and
+  `mp_demotion` are registered when first played (`d 735`, `d 736`,
+  `d 737`) (VERIFIED, the capture).
+- **`setWeaponSlotWeapon` gives no rounds.** UO's method (0x480f9) takes
+  the slot's weapon (`BG_TakePlayerWeapon`, 0x4830a), gives the new one
+  (`BG_GivePlayerWeapon`, 0x48349), copies the slot bytes at
+  `ps+0x545`/`+0x546` and returns (0x48389); `BG_GivePlayerWeapon` (0x31d30)
+  sets the weapon bits and slot bytes only. 1.1's (0x43df4) and 1.5's
+  (0x3f93d) call the same two and no ammo setter (VERIFIED, disassembly of
+  all three modules). The clip and reserve stay what the weapon's indices
+  held, empty after a spawn's `memset`. vcod filled the clip and
+  `startAmmo`, which gave rank 3's binoculars 10 rounds against retail's
+  0; it now gives none on CoD1. vcod-server matches every view.
 
 ### Engine facts the gametypes reach
 
