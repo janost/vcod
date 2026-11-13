@@ -54,6 +54,10 @@ mod ev {
 /// `ET_GENERAL` and `ET_MISSILE`.
 const ET_GENERAL: i32 = 0;
 const ET_MISSILE: i32 = 4;
+/// `actorLocationalMins` and `actorLocationalMaxs` (lnxded 0x817db88,
+/// 0x817db94): the box a locational trace culls a body by.
+const ACTOR_LOCATIONAL_MINS: Vec3 = Vec3::new(-64.0, -64.0, -32.0);
+const ACTOR_LOCATIONAL_MAXS: Vec3 = Vec3::new(64.0, 64.0, 72.0);
 /// `Bullet_Fire`'s range for everything but a spread weapon, 8192
 /// (`Bullet_Endpos` handed 0x46000000, lnxded 0x8120484).
 const BULLET_RANGE: f32 = 8192.0;
@@ -1013,7 +1017,13 @@ impl Cod2Level {
                 Some(Rewind::Nowhere) => continue,
                 None => ps.origin,
             };
-            let (lo, hi) = (origin + ps.mins, origin + ps.maxs);
+            // A trace under a priority map culls a body by the actor box
+            // about `r.currentOrigin`, not its bounds, and builds the
+            // skeleton past the cull (cod2-combat.md 9.5).
+            let (lo, hi) = (
+                origin + ACTOR_LOCATIONAL_MINS,
+                origin + ACTOR_LOCATIONAL_MAXS,
+            );
             if !segment_meets_box(start, end, lo, hi, best.fraction) {
                 continue;
             }

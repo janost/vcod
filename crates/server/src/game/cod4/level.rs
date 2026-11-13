@@ -158,7 +158,8 @@ pub struct Player4 {
     pub old_velocity: [f32; 2],
     /// `client->spectatorClient`: the slot followed, -1 for none.
     pub spectator_client: i32,
-    /// The archived frame a killcam shows this client, by level time.
+    /// The archived entity round a killcam shows this client, by level
+    /// time (`archivetime` back).
     pub killcam_at: Option<i32>,
     /// The anim script's `MOVETYPE` and `STRAFING` conditions
     /// (`clientInfo_t.clientConditions`), which the wire does not carry.
@@ -1717,8 +1718,8 @@ impl Cod4Level {
     /// look back and `killCamEntity` the script's `killcamentity` (1023
     /// for -1, cod4_lnxded 0x80a4a9b; the kill capture's 50000 reads
     /// the shooter's spawn frame of 46900 with `deltaTime` 3100, VERIFIED
-    /// live). The snapshot's entities stay the live ones (cod4-combat.md
-    /// 7).
+    /// live). The snapshot's entities come from `archivetime` back
+    /// alone ([`Self::killcam_entities`], cod4-combat.md 7).
     fn killcam_end_frame(&mut self, slot: usize) -> bool {
         let Some(session) = self.rt.client_session(slot) else {
             return false;
@@ -1727,27 +1728,44 @@ impl Cod4Level {
         if target < 0 || back <= 0 {
             return false;
         }
-        let at = self.level_time - back;
-        // The oldest archived frame at or after the look back's time in
-        // which the followed client is a player; a look back past it is
-        // trimmed to it and written back (the kill capture's 4500 ms
-        // `archivetime` reads `deltaTime` 3100: the shooter's spawn at
-        // 46900, VERIFIED live).
-        let found = self
-            .history
-            .iter()
-            .rev()
-            .filter(|(t, _)| *t >= at)
-            .filter_map(|(t, f)| {
-                let ps = f.get(target as usize)?.as_ref()?;
-                (ps.word("otherFlags") & POF_PLAYER != 0).then(|| (*t, ps.clone()))
-            })
-            .next();
+        // `SpectatorClientEndFrame` (0x80a4a68..0x80a4aec) asks the archive
+        // `archivetime - psoffsettime` back, whole frames of it
+        // (0x8179604..0x817961c), and on a miss lowers `archivetime` by 50
+        // and asks again; the kill capture's 4500 reads `deltaTime` 3100,
+        // the shooter's spawn at 46900 (cod4-combat.md 7).
+        let offset = self
+            .rt
+            .client_field(slot, "psoffsettime")
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(0);
+        let mut archive = back;
+        let found = loop {
+            let ask = archive - offset;
+            if ask <= 0 {
+                return false;
+            }
+            let at = self.level_time - ask * self.sv_fps / 1000 * self.frame_ms();
+            let hit = self
+                .history
+                .iter()
+                .rev()
+                .find(|(t, _)| *t >= at)
+                .and_then(|(t, f)| {
+                    let ps = f.get(target as usize)?.as_ref()?;
+                    (ps.word("otherFlags") & POF_PLAYER != 0).then(|| (*t, ps.clone()))
+                });
+            if hit.is_some() || archive == 0 {
+                break hit;
+            }
+            archive = (archive - 50).max(0);
+        };
+        if archive != back {
+            self.rt.set_client_archive_ms(slot, archive);
+        }
         let Some((t, theirs)) = found else {
             return false;
         };
         let back = self.level_time - t;
-        self.rt.set_client_archive_ms(slot, back);
         // `self.killcamentity` (gclient +0x2f6c), -1 as none (0x80a4a9b).
         let kill_cam = self
             .rt
@@ -1756,6 +1774,7 @@ impl Cod4Level {
             .filter(|&n| n >= 0)
             .map_or(ENTITYNUM_NONE, |n| n as u32);
         let now = self.level_time;
+        let entities_at = now - archive * self.sv_fps / 1000 * self.frame_ms();
         let p = self.players[slot].as_mut().unwrap();
         let e_flags = followed_eflags(&p.ps, &theirs);
         p.ps = theirs;
@@ -1763,7 +1782,9 @@ impl Cod4Level {
         p.ps.set("eFlags", e_flags);
         p.ps.set("otherFlags", POF_FOLLOW);
         p.ps.set("killCamEntity", kill_cam);
-        p.killcam_at = Some(t);
+        // `SV_BuildClientSnapshot` takes the entities `archivetime` back,
+        // without `psoffsettime` (0x817a2f4..0x817a335).
+        p.killcam_at = Some(entities_at);
         self.hud_into(slot, false);
         true
     }
@@ -2192,19 +2213,21 @@ impl Cod4Level {
     }
 
     /// The entities a killcam follower is sent: the archived round at or
-    /// before the frame its playerstate came from (cod4-combat.md 7),
-    /// without the temp entities the followed client was not sent (the
-    /// victim's own flesh event, 17 + 42 or 43). A temp entity past its
-    /// look back is not in it. Each trajectory's time, where set, moves
-    /// up by the playerstate's `deltaTime`, as the archived playerstate's
-    /// clocks do: the killcam entity capture's mover started at 41550
-    /// reads 45800 in a killcam 4250 back.
+    /// before the frame `archivetime` names (cod4-combat.md 7), without
+    /// the temp entities the followed client was not sent (the victim's
+    /// own flesh event, 17 + 42 or 43). A temp entity past its look back
+    /// is not in it. `SV_BuildClientSnapshot` moves each one's clocks up
+    /// by the round's age (0x817a849..0x817a8b6): `pos.trTime`,
+    /// `apos.trTime` and `time2` where set, and word 0x54 (a missile's
+    /// `launchTime`) of `eType` 0, 4 and 0x42 always. The killcam entity
+    /// capture's mover started at 41550 reads 45800 in a killcam 4250
+    /// back.
     pub fn killcam_entities(&self, slot: usize) -> Option<BTreeMap<u32, EntityState>> {
         let p = self.players.get(slot)?.as_ref()?;
         let t = p.killcam_at?;
-        let back = p.ps.word("deltaTime");
         let followed = p.ps.word("clientNum") as usize;
-        let (_, w, scopes) = self.entity_history.iter().find(|(at, _, _)| *at <= t)?;
+        let (at, w, scopes) = self.entity_history.iter().find(|(at, _, _)| *at <= t)?;
+        let back = (self.level_time - at) as u32;
         let mut world = (**w).clone();
         for (n, scope) in scopes.iter() {
             if !scope.admits(followed) {
@@ -2212,12 +2235,13 @@ impl Cod4Level {
             }
         }
         for e in world.values_mut() {
-            for name in ["lerp.pos.trTime", "lerp.apos.trTime"] {
-                if let Some(w) = ent_word(e.etype(), name)
-                    && e.0[w] != 0
-                {
+            for w in [0x10 / 4, 0x34 / 4, 0x70 / 4] {
+                if e.0[w] != 0 {
                     e.0[w] = e.0[w].wrapping_add(back);
                 }
+            }
+            if matches!(e.etype(), 0 | 4 | 0x42) {
+                e.0[0x54 / 4] = e.0[0x54 / 4].wrapping_add(back);
             }
         }
         Some(world)

@@ -14,7 +14,9 @@
 //! its spawn (docs/research/cod4-gsc.md 3.2). What still differs is
 //! [`GAPS`]. `helicopter_collision_and_pose_match_retail` replays a second
 //! capture the same way: the posed tags, a trace through the turned gun
-//! and the move trace's notifies. Needs `COD4_DIR`.
+//! and the move trace's notifies; `helicopter_idle_matches_retail` a
+//! third: a helicopter with no goal and its gun on a still body. Needs
+//! `COD4_DIR`.
 //!
 //! `HARDPOINT_AB_REPORT=1` prints both runs' rows.
 
@@ -46,14 +48,31 @@ const GAPS: &[(&str, f32, &str)] = &[
     ("lerp.apos.trBase[0]", 2.5, FLIGHT),
     ("lerp.apos.trBase[1]", 2.5, FLIGHT),
     ("lerp.apos.trBase[2]", 2.5, FLIGHT),
-    ("lerp.u.vehicle.gunPitch", 0.5, AIM),
-    ("lerp.u.vehicle.gunYaw", 0.5, AIM),
+    ("lerp.u.vehicle.gunPitch", 0.13, AIM),
+    ("lerp.u.vehicle.gunYaw", 0.13, AIM),
 ];
 
-/// Why the gun is tolerated: it aims from the posed `tag_flash`, which
-/// matches retail's (`helicopter_collision_and_pose_match_retail`), but
-/// its tracking is vcod's reading of `VEH_UpdateAim` (cod4-gsc.md 3.2).
-const AIM: &str = "the turret's aim, INFERRED off VEH_UpdateAim (cod4-gsc.md 3.2)";
+/// Why the gun is tolerated in flight: `VEH_UpdateAim` aims from the posed
+/// `tag_barrel` in the body's frame, so the gun parts as the flown body
+/// does ([`FLIGHT`]). On a body that holds still it matches to
+/// [`STILL_GAPS`] (`helicopter_idle_matches_retail`, cod4-gsc.md 3.2, "The
+/// turret").
+const AIM: &str = "the gun in the flown body's frame (cod4-gsc.md 3.2)";
+
+/// The idle capture's tolerance before its goal, on a body that matches
+/// word for word: `VEH_UpdateAim`'s arithmetic matches retail's step for
+/// step given retail's barrel, but the posed `tag_barrel` lands an ulp off
+/// now and then ([`POSE`]), which the tracking carries a few ulps on.
+const STILL_GAPS: &[(&str, f32, &str)] = &[
+    ("lerp.u.vehicle.gunPitch", 5e-5, POSE),
+    ("lerp.u.vehicle.gunYaw", 5e-5, POSE),
+];
+
+/// Why a still gun is tolerated: ours poses the tags off the zone's
+/// bind-pose `baseMat`, 1.7's DObj skeleton composes the model's local
+/// bones (cod4-gsc.md 3.2, "The turret"; gdb on 0x80a011c read retail's
+/// barrel an ulp off ours where the gun parted).
+const POSE: &str = "the posed tag_barrel's place at an ulp (cod4-gsc.md 3.2)";
 
 /// Why the helicopter's flight is tolerated: the first 1.5 s match bit
 /// for bit, then the turn through the first node parts by a few hundredths
@@ -223,25 +242,23 @@ fn ours(
     (side(&probe.lines), aborts)
 }
 
-/// Retail's vehicles and ours, row by row: every [`FIELDS`] difference
-/// past its [`GAPS`] tolerance, and the largest of each field.
-#[test]
-fn hardpoint_flights_match_retail() {
-    let Some(install) = vcod_cod4::testing::cod4_install() else {
-        return;
-    };
-    let r = side(&retail("hardpoint"));
-    let (o, aborts) = ours(&install, &r, GSC, SEED);
-    assert!(aborts.is_empty(), "{aborts:?}");
-    let (rt, ot) = (tracks(&r), tracks(&o));
-    let report = std::env::var_os("HARDPOINT_AB_REPORT").is_some();
+/// The largest difference of each [`FIELDS`] field between retail's
+/// vehicles and ours at the same time past spawn, and the rows ours lacks.
+/// `tol` names the difference tolerated in a field at a time; every row
+/// past it is listed.
+fn compare(
+    rt: &Tracks,
+    ot: &Tracks,
+    tol: impl Fn(&str, i32) -> f32,
+    report: bool,
+) -> (Vec<String>, Vec<String>) {
     assert_eq!(
         rt.keys().collect::<Vec<_>>(),
         ot.keys().collect::<Vec<_>>(),
         "the vehicles"
     );
     if report {
-        for (key, rows) in &rt {
+        for (key, rows) in rt {
             for (tag, rows) in [("retail", rows), ("ours", &ot[key])] {
                 for (t, e) in rows.iter().filter(|(t, _)| [0, 50, 3000].contains(t)) {
                     eprintln!("{tag} {key:?} +{t}: {}", nonzero(e));
@@ -251,7 +268,8 @@ fn hardpoint_flights_match_retail() {
     }
     let mut worst: BTreeMap<&str, (f32, String)> = BTreeMap::new();
     let mut missing = Vec::new();
-    for (key, rows) in &rt {
+    let mut unexplained = Vec::new();
+    for (key, rows) in rt {
         let ours: BTreeMap<i32, &EntityState> = ot[key].iter().map(|(t, e)| (*t, e)).collect();
         for (t, re) in rows {
             let Some(oe) = ours.get(t) else {
@@ -262,21 +280,21 @@ fn hardpoint_flights_match_retail() {
                 let (Some(a), Some(b)) = (value(re, name), value(oe, name)) else {
                     continue;
                 };
-                let d = if word(re, name) == word(oe, name) {
-                    0.0
-                } else if name.contains("apos") || name.contains("gun") {
+                if word(re, name) == word(oe, name) {
+                    continue;
+                }
+                let d = if name.contains("apos") || name.contains("gun") {
                     // An angle: the short way round.
                     (a - b).rem_euclid(360.0).min((b - a).rem_euclid(360.0))
                 } else {
                     (a - b).abs()
                 }
-                .max(if word(re, name) == word(oe, name) {
-                    0.0
-                } else {
-                    f32::MIN_POSITIVE
-                });
-                if report && d > 0.0 {
+                .max(f32::MIN_POSITIVE);
+                if report {
                     eprintln!("{key:?} +{t} {name}: retail {a} ours {b}");
+                }
+                if d > tol(name, *t) {
+                    unexplained.push(format!("{key:?} +{t} {name}: retail {a} ours {b}"));
                 }
                 let w = worst.entry(name).or_insert((0.0, String::new()));
                 if d > w.0 {
@@ -285,15 +303,72 @@ fn hardpoint_flights_match_retail() {
             }
         }
     }
-    let mut unexplained = Vec::new();
     for (name, (d, at)) in &worst {
-        let tol = GAPS.iter().find(|g| g.0 == *name).map_or(0.0, |g| g.1);
-        eprintln!("{name}: worst {d} at {at} (tolerated {tol})");
-        if *d > tol {
-            unexplained.push(format!("{name}: {d} at {at}"));
-        }
+        eprintln!("{name}: worst {d} at {at}");
     }
     eprintln!("rows missing on ours: {}", missing.len());
+    (missing, unexplained)
+}
+
+/// Retail's vehicles and ours, row by row: every [`FIELDS`] difference
+/// past its [`GAPS`] tolerance, and the largest of each field.
+#[test]
+fn hardpoint_flights_match_retail() {
+    let Some(install) = vcod_cod4::testing::cod4_install() else {
+        return;
+    };
+    let r = side(&retail("hardpoint"));
+    let (o, aborts) = ours(&install, &r, GSC, SEED);
+    assert!(aborts.is_empty(), "{aborts:?}");
+    let report = std::env::var_os("HARDPOINT_AB_REPORT").is_some();
+    let gap = |name: &str, _| GAPS.iter().find(|g| g.0 == name).map_or(0.0, |g| g.1);
+    let (missing, unexplained) = compare(&tracks(&r), &tracks(&o), gap, report);
+    assert!(missing.is_empty(), "{missing:?}");
+    assert!(unexplained.is_empty(), "{}", unexplained.join("\n"));
+}
+
+/// The idle probe gsc (`heli_idle`), read over the zones' scripts.
+const IDLE_GSC: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../cod4/tests/fixtures/gsc/heli_idle"
+);
+
+/// How long past its spawn the idle capture's helicopter has no goal.
+const IDLE_MS: i32 = 4000;
+
+/// `cod4_hardpoint_ab`'s idle capture (`play-1.7-heli-idle.txt`): retail
+/// 1.7 under `+set fs_game mods/vcodidle +devmap mp_crash`, `war`, sv_pure
+/// 0, the gsc `crates/cod4/tests/fixtures/gsc/heli_idle/maps/mp/
+/// mp_crash_fx.gsc` packed in the mod's iwd, one `cod4_probe` (`--team axis
+/// --script idle --name owner --qport 4021 --secs 30`) under `unshare -rnm`.
+/// A cobra spawns pitched 8, yawed 250 and rolled -6 with no goal for 4 s
+/// while its gun tracks a point ahead and below, then one behind; then it
+/// flies a pass-through goal. Until the goal every word matches retail's
+/// but the gun's few ulps ([`STILL_GAPS`]): the no-goal think (0x808ba22)
+/// and the turret (`VEH_UpdateAim`) on a body that holds still
+/// (cod4-gsc.md 3.2). Past it the flight's [`GAPS`] hold, the gun's under
+/// the body's. No random draw reaches it (no hover radius, no stop), so
+/// the seed is the flight capture's.
+#[test]
+fn helicopter_idle_matches_retail() {
+    let Some(install) = vcod_cod4::testing::cod4_install() else {
+        return;
+    };
+    let r = side(&retail("heli-idle"));
+    let (o, aborts) = ours(&install, &r, IDLE_GSC, SEED);
+    assert!(aborts.is_empty(), "{aborts:?}");
+    let report = std::env::var_os("HARDPOINT_AB_REPORT").is_some();
+    let (rt, ot) = (tracks(&r), tracks(&o));
+    assert!(
+        rt.get(&(ET_HELICOPTER, 0))
+            .is_some_and(|rows| rows.len() > 100),
+        "the capture's helicopter"
+    );
+    let gap = |name: &str, t: i32| {
+        let gaps = if t <= IDLE_MS { STILL_GAPS } else { GAPS };
+        gaps.iter().find(|g| g.0 == name).map_or(0.0, |g| g.1)
+    };
+    let (missing, unexplained) = compare(&rt, &ot, gap, report);
     assert!(missing.is_empty(), "{missing:?}");
     assert!(unexplained.is_empty(), "{}", unexplained.join("\n"));
 }
@@ -338,8 +413,8 @@ fn probe_lines(s: &Side) -> Vec<(Vec<String>, Vec<f32>)> {
 /// think's `script_vehicle_collision` notifies (the first three, their
 /// normals and places, and the count by 16 s) at the same times. No
 /// random draw reaches them (hover radius 0), so the seed is the flight
-/// capture's. The places part by the turret's aim (a gun pitch 0.56
-/// degrees off, cod4-gsc.md 3.2) and the descent's float model.
+/// capture's. The posed places part by the printed thousandth, the
+/// descent's last place by its float model (cod4-gsc.md 3.2).
 #[test]
 fn helicopter_collision_and_pose_match_retail() {
     let Some(install) = vcod_cod4::testing::cod4_install() else {
@@ -355,12 +430,17 @@ fn helicopter_collision_and_pose_match_retail() {
         ol.iter().map(|l| &l.0).collect::<Vec<_>>(),
         "the lines"
     );
+    let report = std::env::var_os("HARDPOINT_AB_REPORT").is_some();
     for ((words, a), (_, b)) in rl.iter().zip(&ol) {
+        if report {
+            eprintln!("{words:?}: retail {a:?} ours {b:?}");
+        }
         assert_eq!(a.len(), b.len(), "{words:?} {a:?} {b:?}");
         // The time and the count are exact; the posed places within the
-        // aim's residue, the descent's last place within its float model.
+        // print's last digit, the descent's last place within its float
+        // model.
         let tol = match words.first().map(String::as_str) {
-            Some("tags" | "trace") => 0.01,
+            Some("tags" | "trace") => 0.002,
             Some("count") => 0.2,
             _ => 0.0,
         };

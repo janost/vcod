@@ -1175,6 +1175,17 @@ fn begin_change(
 /// `PM_Weapon` for one step of `c.msec` (see the module header for what is
 /// left out).
 pub fn pm_weapon(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, defs: &dyn Weapons) {
+    // The interrupt `PmoveSingle` took ahead of the move (0x80ef946):
+    // its playerstate half ran there, before the move's events.
+    if std::mem::take(&mut ps.weapon_interrupt) {
+        if (state::BINOCULARS_ADS_EXIT..=state::BINOCULARS_RAISE_WEAPON).contains(&ws.state) {
+            ws.pos_frac = 0.0;
+        }
+        ws.weapon_time = 0;
+        ws.weapon_delay = 0;
+        ws.state = state::READY;
+        start_anim(ps, ws, 0);
+    }
     // `PmoveSingle`'s default arm (`pm_type` 0 and 6) takes the mounted
     // reset in place of `PM_Weapon`, so a gunner killed on the gun keeps
     // his weapon until his release (cod2-turrets.md 14.1).

@@ -1032,6 +1032,8 @@ Still differing, the kill runs' `GAPS` (VERIFIED live, the fixtures):
 
 - The two dropped weapons' place. `Drop_Weapon` starts them at the posed body's tag (`G_DObjGetWorldTagMatrix`), and vcod's pose of the dying body is 0.01 off retail's on the tdm run (the tag at (298.07028, 642.31024, 44.839428) against (298.06473, 642.30334, 44.847702)) and two ulps of x off on the sd run. Their spin, angles at rest and flight match. VERIFIED live, the gate. That the rest is the idle clip's phase or the skeleton's float order, as in the hit pose's gaps (cod2-combat.md 9.5), is INFERRED.
 
+  What the tdm drop rules out (VERIFIED, the gate with the pose probed at the drop): both drops pose `tag_weapon_right` at 21200 on the last end frame's `clientInfo_t` (legs `pb_stand_alert` 153 since 16900, blended in over 170 ms from 138, torso none, the view's yaw -144.30542 as the body's), and easing the controls 0, 50 or 100 ms before the pose leaves the tag where it was to the bit, so the controls are settled and not the cause. The legs clip 50 ms on moves the tag by (0.0062, 0.0186, -0.0096); retail's tag sits (-0.0055, -0.0069, 0.0083) from vcod's, not along that line, so a plain phase shift of the idle clip does not account for it either. INFERRED, the two vectors. The sd drop, yaw 0, differs in two ulps of x alone, which reads as the transform's arithmetic order rather than the pose. INFERRED.
+
 Not covered: temp entities, and entity events past the spectator's last snapshot.
 
 ### 15.8 What the gametypes showed
