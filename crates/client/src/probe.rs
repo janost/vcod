@@ -1252,6 +1252,7 @@ pub fn probe(
                     c.server_time,
                     fall_walk.map(|_| c.angles[1]),
                     (c.buttons, c.wbuttons, c.up),
+                    client.last_sent_sequence(),
                     client.snapshots(),
                 );
             }
@@ -1262,7 +1263,7 @@ pub fn probe(
                 pickup.record(now, c, cmd.angles);
             }
             if save_turret {
-                turret.record(now, c, cmd.angles);
+                turret.record(now, c, cmd.angles, client.last_sent_sequence());
             }
             if save_bump {
                 bump.record(now, c);
@@ -10738,7 +10739,9 @@ struct TurretProbe {
     refused_noted: bool,
     viewlocked: i32,
     /// `(phase, ms, wire cmd, asked view)` per cmd sent from `aim` on.
-    cmds: Vec<(TurretPhase, u128, net::msg::UserCmd, [i32; 3])>,
+    /// Each cmd's phase, ms, the cmd as sent, the view asked for and the
+    /// netchan sequence of its message.
+    cmds: Vec<(TurretPhase, u128, net::msg::UserCmd, [i32; 3], u32)>,
     /// Every trace, turret, event and server line, in arrival order.
     lines: Vec<(TurretPhase, u128, String)>,
     stations: Vec<(TurretPhase, [f32; 3], [f32; 3])>,
@@ -10850,12 +10853,12 @@ impl TurretProbe {
         ));
     }
 
-    fn record(&mut self, now: Instant, sent: net::msg::UserCmd, asked: [i32; 3]) {
+    fn record(&mut self, now: Instant, sent: net::msg::UserCmd, asked: [i32; 3], seq: u32) {
         if matches!(self.phase, TurretPhase::Wait | TurretPhase::Done) {
             return;
         }
         let ms = self.ms(now);
-        self.cmds.push((self.phase, ms, sent, asked));
+        self.cmds.push((self.phase, ms, sent, asked, seq));
         if matches!(self.phase, TurretPhase::Yaw | TurretPhase::Pitch) {
             self.sweep_i += 1;
         }
@@ -11233,7 +11236,7 @@ fn write_turret_fixture(
         st = TURRET_STRAFE.as_millis(),
     ));
     out.push_str("# !station is where the phase started; one per phase.\n");
-    out.push_str("# !cmd view= is the absolute view asked for (wire shorts, before delta_angles); angles= went on the wire.\n");
+    out.push_str("# !cmd view= is the absolute view asked for (wire shorts, before delta_angles); angles= went on the wire; q= is its message's netchan sequence.\n");
     out.push_str(
         "# !trace is the gunner's playerstate per snapshot; hint is serverCursorHint:Val:String;\n",
     );
@@ -11276,11 +11279,11 @@ fn write_turret_fixture(
             .cmds
             .iter()
             .filter(|c| c.0 == phase)
-            .map(|(_, ms, c, v)| {
+            .map(|(_, ms, c, v, q)| {
                 (
                     *ms,
                     format!(
-                        "!cmd ms={ms} st={} buttons={} wbuttons={} weapon={} up={} forward={} right={} angles={},{},{} view={},{},{}",
+                        "!cmd ms={ms} st={} buttons={} wbuttons={} weapon={} up={} forward={} right={} angles={},{},{} view={},{},{} q={q}",
                         c.server_time, c.buttons, c.wbuttons, c.weapon, c.up, c.forward, c.right,
                         c.angles[0], c.angles[1], c.angles[2], v[0], v[1], v[2]
                     ),
@@ -11564,7 +11567,10 @@ const KILLCAM_TAIL: Duration = Duration::from_secs(3);
 /// replay runs each cmd on retail's side of a frame. `w=` is each cmd's
 /// wall clock at the send, the first in microseconds since the epoch and
 /// the steps after it, which orders two probes' packets on one host as
-/// the server received them.
+/// the server received them. `q=` is the netchan sequence of each cmd's
+/// message, the first absolute and the steps after it, which a retail
+/// server under `showpackets 1` prints as it reads each packet
+/// (docs/dev/retail.md, "Receive order").
 /// `client-probes/probe_fall` drops the player from a height. Writes no
 /// fixture.
 #[derive(Default)]
@@ -11572,6 +11578,7 @@ struct FallProbe {
     last: Option<Vec<i32>>,
     cmds: Vec<(i32, Option<i32>)>,
     walls: Vec<u64>,
+    seqs: Vec<u32>,
     inputs: Vec<String>,
     snaps: Vec<String>,
     ran: Vec<String>,
@@ -11588,6 +11595,7 @@ impl FallProbe {
         server_time: i32,
         yaw: Option<i32>,
         input: (u8, u8, i8),
+        seq: u32,
         ring: &vcod_common::net::snapshot::SnapshotRing,
     ) {
         let k = self.cmds.len();
@@ -11614,6 +11622,7 @@ impl FallProbe {
             self.last_msg = Some(s.message_num);
         }
         self.cmds.push((server_time, yaw));
+        self.seqs.push(seq);
         self.walls.push(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -11650,14 +11659,20 @@ impl FallProbe {
                 .chain(self.walls.windows(2).map(|w| w[1].saturating_sub(w[0])))
                 .map(|w| w.to_string())
                 .collect();
+            let seqs: Vec<String> = std::iter::once(self.seqs[0])
+                .chain(self.seqs.windows(2).map(|w| w[1].wrapping_sub(w[0])))
+                .map(|q| q.to_string())
+                .collect();
             println!(
-                "CMDS st={} d={}{yaws}{tail} w={}",
+                "CMDS st={} d={}{yaws}{tail} w={} q={}",
                 self.cmds[0].0,
                 steps.join(","),
-                walls.join(",")
+                walls.join(","),
+                seqs.join(",")
             );
             self.cmds.clear();
             self.walls.clear();
+            self.seqs.clear();
         }
     }
 
@@ -14598,7 +14613,7 @@ mod tests {
                 break;
             }
             let cmd = tp.cmd(now);
-            tp.record(now, cmd, cmd.angles);
+            tp.record(now, cmd, cmd.angles, 0);
             let pressed = cmd.buttons & BUTTON_USE != 0;
             if pressed && !down {
                 rises.push(tp.phase);

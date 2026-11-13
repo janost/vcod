@@ -729,6 +729,12 @@ impl<T: Transport> NetClient<T> {
         self.netchan.incoming_sequence
     }
 
+    /// The netchan sequence of the newest message sent, which the server's
+    /// `showpackets 1` print names (`s=`, docs/dev/retail.md).
+    pub fn last_sent_sequence(&self) -> u32 {
+        self.netchan.outgoing_sequence.wrapping_sub(1)
+    }
+
     /// Verbatim text of every serverCommand executed since the last call, in
     /// order. It reads the reliable ring `handle_server_command` already keeps
     /// verbatim for the scramble key rather than buffering a second copy, so
