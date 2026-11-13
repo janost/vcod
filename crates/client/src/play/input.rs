@@ -30,6 +30,12 @@ pub struct MouseLook {
     pub m_forward: f32,
     pub m_side: f32,
     pub freelook: bool,
+    /// `cl_mouseAccel`: the sensitivity grows by this times the motion's
+    /// counts per ms of the frame.
+    pub accel: f32,
+    /// The frame's `frame_msec` (0x142f608): ms since the last cmd's
+    /// frame, capped at 200.
+    pub frame_ms: i32,
 }
 
 impl Default for MouseLook {
@@ -42,6 +48,8 @@ impl Default for MouseLook {
             m_forward: 0.25,
             m_side: 0.25,
             freelook: true,
+            accel: 0.0,
+            frame_ms: 0,
         }
     }
 }
@@ -57,13 +65,22 @@ pub struct MouseMove {
 }
 
 impl MouseLook {
-    /// The motion scaled by the rate: `sensitivity * zoom` on both axes, or
+    /// The motion scaled by the rate: `(sensitivity + cl_mouseAccel *
+    /// |motion| / frame_msec) * zoom` on both axes (0x40b2ee..0x40b341), or
     /// on a mounted gun 2.5 on yaw and 2 on pitch with no sensitivity.
     fn scaled(&self, dx: f32, dy: f32, zoom: f32, mounted: bool) -> (f32, f32) {
         if mounted {
             (dx * 2.5, dy * 2.0)
         } else {
-            let s = self.sensitivity * zoom;
+            // Each step is stored to a float. Retail divides by a zero
+            // `frame_msec` too; with no accel that would only turn 0 into NaN.
+            let accel = if self.accel != 0.0 && self.frame_ms > 0 {
+                let rate = (dx * dx + dy * dy).sqrt() / self.frame_ms as f32;
+                rate * self.accel
+            } else {
+                0.0
+            };
+            let s = (accel + self.sensitivity) * zoom;
             (dx * s, dy * s)
         }
     }
@@ -103,6 +120,25 @@ impl MouseLook {
             out.forward = -((my * self.m_forward) as i32);
         }
         out
+    }
+}
+
+/// `cl_yawspeed`, `cl_pitchspeed` (both "140", archived) and
+/// `cl_anglespeedkey` ("1.5"), `CL_Init` (CoDMP.exe 0x41201f..0x41206c).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AngleSpeeds {
+    pub yaw: f32,
+    pub pitch: f32,
+    pub anglespeedkey: f32,
+}
+
+impl Default for AngleSpeeds {
+    fn default() -> Self {
+        AngleSpeeds {
+            yaw: 140.0,
+            pitch: 140.0,
+            anglespeedkey: 1.5,
+        }
     }
 }
 
@@ -188,8 +224,16 @@ pub enum Action {
     /// `+mlook` (CoDMP.exe 0x40a450): the mouse pitches the view whatever
     /// `cl_freelook` says.
     MLook,
-    /// `+strafe` (0x40a8c0): the mouse's horizontal motion strafes.
+    /// `+strafe` (0x40a8c0): the mouse's horizontal motion strafes, and
+    /// so do `+left` and `+right`.
     Strafe,
+    /// `+left`, `+right`, `+lookup` and `+lookdown` (0x40a7a0, 0x40a7c0,
+    /// 0x40a820, 0x40a840): turn the view at `cl_yawspeed` and
+    /// `cl_pitchspeed` ([`PlayInput::adjust_angles`]).
+    TurnLeft,
+    TurnRight,
+    LookUp,
+    LookDown,
     /// CoD2's own binds (`play::cod2_input`): `+frag`, `+smoke`,
     /// `+binoculars`, `+holdbreath`, `+melee_breath`, `+usereload`, and the
     /// impulses `toggleads` and `leaveads`. CoD1 ignores them.
@@ -640,6 +684,34 @@ impl PlayInput {
         self.mouse_axes[1] += m.side;
     }
 
+    /// `CL_AdjustAngles` (CoDMP.exe 0x40ade0), first in every cmd: the turn
+    /// keys at `frame_ms` (`cls.frametime`) times 0.001, times
+    /// `cl_anglespeedkey` while `+speed` is held. `+left` and `+right` turn
+    /// the yaw at `cl_yawspeed` unless `+strafe` is held, `+lookup` and
+    /// `+lookdown` the pitch at `cl_pitchspeed`, degrees a second. A key
+    /// counts its whole frame; retail's `CL_KeyState` weighs the part of it
+    /// the key was down. The shellshock cap is the mouse's alone.
+    pub fn adjust_angles(&mut self, frame_ms: i32, speeds: AngleSpeeds) {
+        let ads = self.down.contains(&Action::Ads);
+        let mut speed = frame_ms as f32;
+        if ads {
+            speed *= speeds.anglespeedkey;
+        }
+        let speed = speed * 0.001;
+        let key = |a: Action| if self.down.contains(&a) { 1.0f32 } else { 0.0 };
+        let mut turn = [0.0f32; 2];
+        if !self.down.contains(&Action::Strafe) {
+            turn[1] = (key(Action::TurnLeft) - key(Action::TurnRight)) * speeds.yaw * speed;
+        }
+        turn[0] = (key(Action::LookDown) - key(Action::LookUp)) * speeds.pitch * speed;
+        for (axis, d) in turn.into_iter().enumerate() {
+            let total = self.mouse_rest[axis] + d * SHORT_PER_DEG;
+            let whole = total.trunc();
+            self.raw_angles[axis] += whole as i32;
+            self.mouse_rest[axis] = total - whole;
+        }
+    }
+
     /// Whether `+mlook` and `+strafe` are held, which `CL_MouseMove` reads.
     pub fn mlook_strafe(&self) -> (bool, bool) {
         (
@@ -929,10 +1001,20 @@ impl PlayInput {
             self.down.contains(&Action::Forward),
             self.down.contains(&Action::Back),
         );
-        let right = axis(
+        // Under `+strafe`, `+right` and `+left` add their 127 too
+        // (0x40af20..0x40af5e).
+        let strafe = self.down.contains(&Action::Strafe);
+        let right = i32::from(axis(
             self.down.contains(&Action::Right),
             self.down.contains(&Action::Left),
-        );
+        )) + if strafe {
+            i32::from(axis(
+                self.down.contains(&Action::TurnRight),
+                self.down.contains(&Action::TurnLeft),
+            ))
+        } else {
+            0
+        };
 
         UserCmd {
             server_time,
@@ -941,7 +1023,7 @@ impl PlayInput {
             weapon,
             angles: self.cmd_angles(),
             forward: byte(i32::from(forward) + mouse_fwd),
-            right: byte(i32::from(right) + mouse_side),
+            right: byte(right + mouse_side),
             up,
             ..Default::default()
         }
@@ -1844,6 +1926,61 @@ mod tests {
             (pitch - 0.44).abs() < 1e-4,
             "mounted pitch is 2 x m_pitch, {pitch}"
         );
+    }
+
+    /// `cl_mouseAccel` (0x40b2ee..0x40b341): the sensitivity grows by the
+    /// accel times the motion's length per ms of the frame.
+    #[test]
+    fn mouse_accel_adds_the_motion_rate() {
+        let look = MouseLook {
+            accel: 0.5,
+            frame_ms: 10,
+            ..MouseLook::default()
+        };
+        // 30, 40: 50 counts in 10 ms, 5 + 0.5 x 5 = 7.5 a count.
+        let [pitch, yaw] = look.degrees(30.0, 40.0, 1.0, false);
+        assert!((yaw + 30.0 * 7.5 * 0.022).abs() < 1e-4, "{yaw}");
+        assert!((pitch - 40.0 * 7.5 * 0.022).abs() < 1e-4, "{pitch}");
+        let [_, mounted] = look.degrees(30.0, 40.0, 1.0, true);
+        assert!((mounted + 30.0 * 2.5 * 0.022).abs() < 1e-4, "{mounted}");
+    }
+
+    /// `CL_AdjustAngles` (0x40ade0): `+left` turns at `cl_yawspeed`
+    /// degrees a second, `+speed` times `cl_anglespeedkey`, `+lookdown`
+    /// at `cl_pitchspeed`; under `+strafe` `+right` strafes instead.
+    #[test]
+    fn the_turn_keys_turn_at_cl_yawspeed() {
+        let speeds = AngleSpeeds::default();
+        let mut i = synced(10);
+        i.key(Action::TurnLeft, true);
+        i.key(Action::LookDown, true);
+        for _ in 0..100 {
+            i.adjust_angles(10, speeds);
+        }
+        let [pitch, yaw, _] = i.cmd_angles();
+        assert!((yaw as f32 - 140.0 * SHORT_PER_DEG).abs() <= 2.0, "{yaw}");
+        assert!(
+            (pitch as f32 - 140.0 * SHORT_PER_DEG).abs() <= 2.0,
+            "{pitch}"
+        );
+
+        let mut i = synced(10);
+        i.key(Action::TurnRight, true);
+        i.key(Action::Ads, true);
+        i.adjust_angles(100, speeds);
+        let yaw = i.cmd_angles()[1];
+        assert!((yaw as f32 + 21.0 * SHORT_PER_DEG).abs() <= 1.0, "{yaw}");
+
+        let mut i = synced(10);
+        i.key(Action::Strafe, true);
+        i.key(Action::TurnRight, true);
+        i.key(Action::Right, true);
+        i.adjust_angles(100, speeds);
+        assert_eq!(i.cmd_angles()[1], 0);
+        assert_eq!(i.build(100, &held(10)).right, 127, "254 clamps to the byte");
+        i.key(Action::Right, false);
+        i.key(Action::Strafe, false);
+        assert_eq!(i.build(150, &held(10)).right, 0);
     }
 
     /// `m_filter` 1 spends the mean of this frame's motion and the last

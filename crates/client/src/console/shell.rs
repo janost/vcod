@@ -133,6 +133,9 @@ const COMMANDS: &[&str] = &[
     "+holdbreath",
     "+leanleft",
     "+leanright",
+    "+left",
+    "+lookdown",
+    "+lookup",
     "+melee",
     "+melee_breath",
     "+mlook",
@@ -142,6 +145,7 @@ const COMMANDS: &[&str] = &[
     "+moveup",
     "+prone",
     "+reload",
+    "+right",
     "+scores",
     "+smoke",
     "+speed",
@@ -163,6 +167,9 @@ const COMMANDS: &[&str] = &[
     "-holdbreath",
     "-leanleft",
     "-leanright",
+    "-left",
+    "-lookdown",
+    "-lookup",
     "-melee",
     "-melee_breath",
     "-mlook",
@@ -172,6 +179,7 @@ const COMMANDS: &[&str] = &[
     "-moveup",
     "-prone",
     "-reload",
+    "-right",
     "-scores",
     "-smoke",
     "-speed",
@@ -258,6 +266,11 @@ fn button(word: &str) -> Option<Action> {
         "sprint" => Action::Sprint,
         "mlook" => Action::MLook,
         "strafe" => Action::Strafe,
+        // CoDMP.exe 0x40a7a0..0x40a840 (cod11-console.md 5).
+        "left" => Action::TurnLeft,
+        "right" => Action::TurnRight,
+        "lookup" => Action::LookUp,
+        "lookdown" => Action::LookDown,
         "frag" => Action::Frag,
         "smoke" => Action::Smoke,
         "binoculars" => Action::Binoculars,
@@ -587,6 +600,12 @@ impl Shell {
         // through them (section 5).
         s.register("m_forward", "0.25", ARCHIVE);
         s.register("m_side", "0.25", ARCHIVE);
+        // CL_Init (0x41201f..0x412128): the turn keys' rates, archived but
+        // `cl_anglespeedkey`, and `cl_mouseAccel` (section 5).
+        s.register("cl_yawspeed", "140", ARCHIVE);
+        s.register("cl_pitchspeed", "140", ARCHIVE);
+        s.register("cl_anglespeedkey", "1.5", 0);
+        s.register("cl_mouseAccel", "0", ARCHIVE);
         // Retail's first-run rate is 5000, which starves snapshots on a busy server.
         s.register("rate", "25000", ARCHIVE | USERINFO);
         s.register("snaps", "20", ARCHIVE | USERINFO);
@@ -2154,18 +2173,22 @@ mod tests {
             s.complete("CL_"),
             [
                 "cl_allowDownload",
+                "cl_anglespeedkey",
                 "cl_avidemo",
                 "cl_forceavidemo",
                 "cl_freelook",
                 "cl_freezeDemo",
                 "cl_language",
                 "cl_maxpackets",
+                "cl_mouseAccel",
                 "cl_packetdup",
+                "cl_pitchspeed",
                 "cl_run",
                 "cl_stanceTemp",
                 "cl_timeNudge",
                 "cl_voice",
-                "cl_wwwDownload"
+                "cl_wwwDownload",
+                "cl_yawspeed",
             ]
         );
         assert!(s.complete("zzz").is_empty());

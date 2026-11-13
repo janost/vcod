@@ -172,6 +172,32 @@ argument. INFERRED, off the branch on `0x1432a00 & 0xc000` (the mounted
 `eFlags` bits): there the rate is the double `2.5` (0x5690b8) for yaw, and
 pitch is `2 * my * m_pitch` with no sensitivity.
 
+VERIFIED, `CL_MouseMove` (0x40b240): `speed` is
+`sqrt(mx * mx + my * my) / frame_msec` (`sqrt` 0x538fe0 at 0x40b2ee, the
+filtered counts; `frame_msec` the int at 0x142f608), stored as a float, and
+`cl_mouseAccel` is the cvar at 0x15ce848 (`"0"`, flags 1, registered at
+0x41210d). `CL_CreateNewCommands` (0x40b8d0) sets `frame_msec` to the ms
+since its last run, capped at 200 (0x40b8ef..0x40b8fc). vcod:
+`play::input::MouseLook::scaled`.
+
+VERIFIED, `CL_AdjustAngles` (0x40ade0), the first call of `CL_CreateCmd`
+(0x40b738), before `CL_CmdButtons`, `CL_KeyMove`, `CL_MouseMove` and
+`CL_JoystickMove`: `speed = cls.frametime` (int 0x155f3dc) times
+`cl_anglespeedkey` (0x142f61c, `"1.5"`, flags 0) while `+speed`'s `active`
+word (0x87a110) is set, times 0.001 (0x568e6c), stored as a float. Unless
+`+strafe` is held (0x87a0f8), the yaw (0x143a9a4) loses `CL_KeyState(+right)
+* cl_yawspeed * speed` and gains the same for `+left`; the pitch (0x143a9a0)
+loses it for `+lookup` and gains it for `+lookdown` at `cl_pitchspeed`.
+`cl_yawspeed` (0x142f5f4) and `cl_pitchspeed` (0x142f610) are `"140"`, flags
+1 (`CL_Init` 0x41201f..0x412056). The records: `+left` 0x87a028 (handler
+0x40a7a0), `+right` 0x87a040 (0x40a7c0), `+lookup` 0x87a088 (0x40a820),
+`+lookdown` 0x87a0a0 (0x40a840). `CL_KeyState` (0x40a5a0) is Q3's, the
+key's down ms over `frame_msec`, clamped to 0..1. Under `+strafe`,
+`CL_KeyMove` adds `CL_KeyState(+right) * 127` and `CL_KeyState(+left) *
+-127` to `rightmove` ahead of `+moveright` and `+moveleft`
+(0x40af20..0x40af5e). vcod: `play::input::PlayInput::adjust_angles`, once a
+frame, where a held key counts its whole frame.
+
 VERIFIED, `CL_MouseMove` (0x40b240): `CL_MouseEvent` adds the motion to
 one of two slot pairs (`0x143a948`/`0x143a950`, index `0x143a958`). With
 `m_filter` (cvar `0x161732c`, read as its integer at `+0x20`) 0 the
