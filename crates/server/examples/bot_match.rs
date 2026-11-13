@@ -114,6 +114,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 const TICK_MS: u64 = 50;
+/// A carrier's death this near a goal (or his pickup) counts as there.
+const NEAR_GOAL: f32 = 600.0;
 const WINDOW: usize = 240;
 const RADIUS: f32 = 150.0;
 /// A bot-tick is packed with this many teammates or more within
@@ -1134,6 +1136,15 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
     let mut level = sv.server_id();
     // (attacker, victim) -> tick of the attacker's first hit this life.
     let mut first_hit: HashMap<(String, String), usize> = HashMap::new();
+    // `re` carriers by client num, from their `re_pickup` to their capture,
+    // death or the round's end, and the tick of the pickup: a death counts
+    // `<team>:re_carrier_down` and a `re_down_<s>` bucket by seconds carried.
+    // `re_died_near_goal` counts deaths within `NEAR_GOAL` of a goal,
+    // `re_died_near_pickup` within it of where he took it.
+    let mut carriers: HashMap<String, (usize, [f32; 3], String)> = HashMap::new();
+    // Between a round's `W;` and the restart: a pickup then, after the
+    // round, counts as `re_late_pickup` and starts no carry.
+    let mut round_over = false;
     // Each bot's last 12 s: where it stood and whether it held still on
     // purpose there.
     let mut hist: HashMap<usize, VecDeque<([f32; 3], bool)>> = HashMap::new();
@@ -1205,7 +1216,12 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
         if sv.server_id() != level {
             // A restart (sd's rounds) keeps the log; every body respawns.
             level = sv.server_id();
+            if o.verbose {
+                m.log.push(format!("t{tick} server id {level}"));
+            }
             first_hit.clear();
+            carriers.clear();
+            round_over = false;
         }
         seen = seen.min(sv.script_log().len());
         let skill: HashMap<String, String> = sv
@@ -1223,6 +1239,9 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
         });
         for l in &lines {
             let f: Vec<&str> = l.trim_end().split(';').collect();
+            if o.verbose && (f[0] == "A" || f[0] == "W") {
+                m.log.push(format!("t{tick} {}", l.trim_end()));
+            }
             match f[0] {
                 // victim num, team, name, attacker num, team, name, weapon,
                 // damage, means of death, hit location; UO adds a guid
@@ -1273,6 +1292,41 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                     let (anum, ateam) = (f[4 + 2 * g], f[5 + 2 * g]);
                     if o.verbose {
                         m.log.push(format!("t{tick} kill {}", f[1..].join(";")));
+                    }
+                    if let Some((t, took, _)) = carriers.remove(vnum) {
+                        let s = (tick - t) as u64 * TICK_MS / 1000;
+                        let at = vnum
+                            .parse()
+                            .ok()
+                            .and_then(|n| sv.bot_body(n))
+                            .map(|b| b.origin);
+                        let near = |p: [f32; 3]| {
+                            at.is_some_and(|a| glam::Vec3::from(a).distance(p.into()) < NEAR_GOAL)
+                        };
+                        let place = if sv.re_goals().into_iter().any(near) {
+                            Some("goal")
+                        } else if near(took) {
+                            Some("pickup")
+                        } else {
+                            None
+                        };
+                        if let Some(place) = place {
+                            *m.actions
+                                .entry(format!("{vteam}:re_died_near_{place}"))
+                                .or_default() += 1;
+                        }
+                        let bucket = match s {
+                            0..5 => "0-5s",
+                            5..15 => "5-15s",
+                            15..30 => "15-30s",
+                            _ => "30s+",
+                        };
+                        *m.actions
+                            .entry(format!("{vteam}:re_carrier_down"))
+                            .or_default() += 1;
+                        *m.actions
+                            .entry(format!("{vteam}:re_down_{bucket}"))
+                            .or_default() += 1;
                     }
                     let v = tally(&mut m, o, vnum, vteam, &skill);
                     v.0.deaths += 1;
@@ -1347,6 +1401,25 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                 // [guid,] num, team, name, action
                 "A" if f.len() >= 5 => {
                     let n = f.len();
+                    match f[n - 1] {
+                        "re_pickup" if round_over => {
+                            *m.actions
+                                .entry(format!("{}:re_late_pickup", f[n - 3]))
+                                .or_default() += 1;
+                        }
+                        "re_pickup" => {
+                            let at = f[n - 4]
+                                .parse()
+                                .ok()
+                                .and_then(|n| sv.bot_body(n))
+                                .map_or([0.0; 3], |b| b.origin);
+                            carriers.insert(f[n - 4].to_string(), (tick, at, f[n - 3].to_string()));
+                        }
+                        "re_capture" => {
+                            carriers.remove(f[n - 4]);
+                        }
+                        _ => {}
+                    }
                     *m.actions
                         .entry(format!("{}:{}", f[n - 3], f[n - 1]))
                         .or_default() += 1;
@@ -1356,6 +1429,29 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                         .or_default() += 1;
                 }
                 "W" => {
+                    round_over = true;
+                    // Carries the round ended: `re_carry_at_end`, and
+                    // `re_end_near_goal` those within `NEAR_GOAL` of one.
+                    let goals = if carriers.is_empty() {
+                        Vec::new()
+                    } else {
+                        sv.re_goals()
+                    };
+                    for (num, (_, _, team)) in carriers.drain() {
+                        let at = num.parse().ok().and_then(|n| sv.bot_body(n));
+                        *m.actions
+                            .entry(format!("{team}:re_carry_at_end"))
+                            .or_default() += 1;
+                        if at.is_some_and(|b| {
+                            goals.iter().any(|g| {
+                                glam::Vec3::from(b.origin).distance((*g).into()) < NEAR_GOAL
+                            })
+                        }) {
+                            *m.actions
+                                .entry(format!("{team}:re_end_near_goal"))
+                                .or_default() += 1;
+                        }
+                    }
                     let who = match f.get(1) {
                         Some(t) if !t.is_empty() => t.to_string(),
                         _ => f.last().unwrap_or(&"").to_string(),
