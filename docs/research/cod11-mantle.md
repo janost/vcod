@@ -1718,6 +1718,16 @@ effect is under "The walk's accel floor". The 4.5 row is one 50 ms
 interval at 90 units/s beside a diagonal post brush at (-776, 2000), a
 cmd's worth, and is not chased.
 
+VERIFIED, vcod measurement 2026-11-13 (`playerstate_slope_ab.rs`, both
+captures and both prone crawls, the mound to its strafe at 84000): the free
+and the rebased run land on retail's origin to the bit on every snapshot,
+with no ground disagreement, and the gate holds them there. The street
+crawl's rebase had read dxy up to 0.71 over its last 35 snapshots, a crawl
+with the sight button held: the capture records no weapon state, a rebase
+built a ready weapon, the sight rose where the prone move holds it down, and
+the crawl slowed to the sighted speed. The replay now carries its own weapon
+state across a rebase, as it carries the eye's leg.
+
 ### Static models are clipped as a segment
 
 The 18.5 row of the 25 ms capture: at `commandTime` 1195225 retail stands

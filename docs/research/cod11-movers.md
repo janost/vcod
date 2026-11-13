@@ -646,6 +646,19 @@ so `cod_lnxded` decides what it names:
   `and ah,0x45`, `dec ah`, `cmp ah,0x40`, `jae`, 0x809100a..0x809101a) and
   takes the entity's `s.number` (`movzwl (%esi)` at 0x809103c into trace
   `+0x28`); a tie only ORs in `startsolid` and `allsolid`.
+- VERIFIED, the pass tests (0x8090f52..0x8090f75), all skipped when the
+  pass entity (moveclip `+0x6c`) is 0x3ff: the entity is the pass entity,
+  or its `r.ownerNum` (`+0x14c`) is the pass entity or the moveclip's pass
+  owner (`+0x70`). VERIFIED, `SV_Trace` (0x8091847..0x809185f): the
+  pass owner is the pass entity's `r.ownerNum`, -1 when that is 0x3ff, so
+  two unowned entities never pass each other. The pass entity's owner
+  itself still clips.
+
+vcod: `push::first_named` walks under `combat::Pass`'s rule with the
+owners vcod links under the push masks, a seated client's vehicle and a
+driven UO vehicle's driver (`push::Owners`); a missile's and a turret's
+contents miss the masks. `push::tests::the_candidate_trace_passes_what_the_pass_owner_owns`
+pins it.
 
 INFERRED: a position test is named by the world when the box starts in it,
 else by the first entity in walk order whose clip contains the box; later ones

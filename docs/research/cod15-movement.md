@@ -770,8 +770,16 @@ whose file has no spread and its gun-kick ranges pinned (pitch -60, yaw
 From the hip every round of all three strikes one spot. Down the sight
 1.1d's thirteen rounds stay within two units of it; 1.5b's climb from z
 18 to 81 and UO's from 15 to 81, each a few units across, the spring at
-its 4-degree `gunMaxPitch`. Ours replays the cmds on retail's level times
-and lands every round within a unit of retail's on all three.
+its 4-degree `gunMaxPitch`. Ours replays the cmds on retail's level times.
+VERIFIED, vcod measurement 2026-11-13: every round of the 1.1 and 1.5
+captures lands on retail's whole-unit impact, and the gate asserts it. On
+UO, rounds 22, 25 and 26 of 34, all down the sight while the spring
+climbs, land one unit low on y, round 22 on z too; the rest match. Ours is
+always the lower, so the UO aim sits a fraction of a unit under retail's
+there. The cause is not read: 1.5b's spring and composition replay
+exactly, so it is something UO's recoil (0x396bc), its spring at
+`client+0x4714` or its aim block does differently. A gdb read of the
+spring's angles per cmd on retail UO would settle it.
 
 Measured, VERIFIED (live, retail UO 1.51b): the `vehicle_armor_ab` sweep
 recipe on mp_cassino with the shooter's `--save-slope` on, its thompson

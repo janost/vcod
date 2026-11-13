@@ -2417,6 +2417,15 @@ carriers against the section 19 captures.
   (VERIFIED decompile; the capture's 21 rounds into the world carry 0x80 and
   no impact). On a player hit vcod rolls the tracer (the turret's `hmg`
   takes 0.7: the capture's 83 of 127).
+- A turret round falls off like any other. VERIFIED, objdump: `turret_fire`
+  stores `BG_GetInfoForWeapon` of the gun's weapon (0x5ab60) at `-0xc(%ebp)`,
+  the `weaponParms` at `-0x48` plus 0x3c, and passes those parms to
+  `Bullet_Fire` (0x5ab94); `Bullet_Fire_Extended` reads the falloff keys off
+  parms +0x3c (0x7b0bc..0x7b0df) and calls `Damage_Falloff` (0x7b0f9) with
+  no turret test. VERIFIED, `pakuo04.pk3`: every stock UO turret file
+  (`mg42_bipod_*`, `mg42_turret_mp`, `PTRS41_Antitank_Rifle_mp`, the tank
+  guns) carries 35, 8000, 10000, so only a round past 8000 units loses
+  damage. vcod: `TurretDef::falloff`, handed to the round on UO only.
 - **Aim.** The manned aim (0x6b950) clamps the view off the gun into the
   arcs with no 15-degree step and no `SetClientViewAngle`, and no UO turret
   path writes `viewlocked` (VERIFIED decompile; live in
