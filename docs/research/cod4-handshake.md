@@ -191,7 +191,7 @@ cargo run -p vcod-common --example cod4_capture -- out.txt --strings
 
 ## 9. What vcod-server's 1.7 server sends
 
-`vcod-server <map> --game cod4` (`crates/server/src/cod4/`) answers the out-of-band half of `handshake-1.7.txt` byte for byte, except the challenge's value, two `rand()` draws off the level's stream (`cod4::oob_ab`, cod4-combat.md 10.9). With an install it runs the level (`cod4-gsc.md` 7): the gamestate carries the script's configstrings, the dvar mirror and the baselines of the script's entities, and a client connects, picks a team and class and spawns as on retail (`cod4::wire_ab`). Building that gamestate brought out these facts:
+`vcod-server <map> --game cod4` (`crates/server/src/cod4/`) answers the out-of-band half of `handshake-1.7.txt` byte for byte, except the challenge's value, two `rand()` draws off the level's stream (`cod4::oob_ab`, cod4-combat.md 10.9). The capture holds one challenge. One draw pair at an unknown `svs.time` matches about one seed in 256 (64 draw offsets times 2^18 values of `svs.time` over 2^32), so even a minute of wall-clock milliseconds holds some 230 candidate seeds and `recover_game_seed` cannot pin this run's; the gate compares the reply's prefix and form, and `cod4::wire_ab::the_challenges_come_off_the_levels_rand` checks the draws on the walk run's recovered seed. INFERRED (the search's arithmetic). With an install it runs the level (`cod4-gsc.md` 7): the gamestate carries the script's configstrings, the dvar mirror and the baselines of the script's entities, and a client connects, picks a team and class and spawns as on retail (`cod4::wire_ab`). Building that gamestate brought out these facts:
 
 - Configstring 1 ends `\fs_game\\` (two backslashes) with `fs_game` empty, after `timescale`, on all four captures. VERIFIED live. `SV_SaveSystemInfo` appends `\fs_game\` explicitly when the dvar is empty. INFERRED.
 - A pure-off server's configstring 1 has no `sv_iwds` or `sv_iwdNames` key (`play-1.7-spec.txt`, `sv_pure\0`). VERIFIED live.
@@ -207,7 +207,7 @@ Gates:
 
 | Gate | Checks |
 |---|---|
-| `cod4::oob_ab` | the replies, configstrings 0, 1, 2, the map centre's x and y and the mirror against the capture after 30 s of the level (configstring 1 needs `$COD4_DIR`) |
+| `cod4::oob_ab` | the replies, configstrings 0, 2 and the mirror against the capture after 30 s of the level; with `$COD4_DIR` the slots the running level writes too: 1, the fog (9), the game end time (11), the map centre (12) and `\winner\0` (19), every slot below the localized strings retail holds |
 | `cod4::wire_ab` | three clients join `war` in process (`cod4-gsc.md` 7); the walker replays its captured cmds (cod4-pmove.md 15.1) and every snapshot's HUD elements (cod4-hud.md 5.1) |
 | `cod4::prematch_ab` | |
 | `cod4::disconnect_tests` | clients leave, one reconnects into its live slot; no script error |

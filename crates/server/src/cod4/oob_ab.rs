@@ -6,7 +6,6 @@
 
 use super::*;
 use vcod_cod4::net::capture;
-use vcod_cod4::net::wire::map_center;
 
 /// Replies that differ by nature, each with its reason.
 const GAPS: &[(&str, &str)] = &[(
@@ -110,26 +109,16 @@ fn retail_gamestate() -> Gamestate {
     panic!("no gamestate in the capture")
 }
 
-/// Engine configstrings the bare level leaves to the gsc boot (S-C4-2) or
-/// gets only partly, with their reasons.
-const CS_GAPS: &[(u16, &str)] = &[
-    (9, "fog: the map script's setExpFog"),
-    (
-        11,
-        "CS_GAMEENDTIME: _globallogic's setGameEndTime (619800 = 19800 + war's 10 min)",
-    ),
-    (
-        12,
-        "map centre: z is _spawnlogic's over the spawns' ground drop, which the bare level \
-         has no script for (the level's matches, cod4::wire_ab)",
-    ),
-    (19, "\\winner\\0: the game module's"),
-];
+/// The configstrings the running level writes, checked with an install:
+/// `default_mp.cfg`'s dvars in the serverinfo (1), the map script's
+/// `setExpFog` (9), `_globallogic`'s game end time (11, 19800 plus `war`'s
+/// ten minutes), the map centre over the spawns dropped to the ground (12)
+/// and `\winner\0` (19) (cod4-handshake.md 9).
+const SCRIPT_SLOTS: [u16; 5] = [1, 9, 11, 12, 19];
 
-/// The engine's configstrings 0, 1 (with `$COD4_DIR`'s iwds and zones),
-/// 2, 12's x and y and the dvar mirror against retail's gamestate; every
-/// other slot of retail's below the localized strings is named in
-/// [`CS_GAPS`].
+/// The engine's configstrings 0, 2 and the dvar mirror against retail's
+/// gamestate, and with `$COD4_DIR` the [`SCRIPT_SLOTS`] too; retail has no
+/// other slot below the localized strings.
 #[test]
 fn engine_configstrings_match_retail() {
     let retail = retail_gamestate();
@@ -160,16 +149,14 @@ fn engine_configstrings_match_retail() {
         // script's default, as retail's rcon reads both.
         assert_eq!(server.cvar("scr_war_scorelimit"), "750");
         assert_eq!(server.cvar("scr_game_playerwaittime"), "15");
-        checked.push(1);
-        let c = |gs: &Gamestate| map_center(gs.configstring(12));
-        assert_eq!(c(&ours)[..2], c(&retail)[..2], "map centre x, y");
+        checked.extend(SCRIPT_SLOTS);
     }
     checked.extend(20..276);
     for i in checked {
         assert_eq!(text(&ours, i), text(&retail, i), "configstring {i}");
     }
     for &i in retail.configstrings.keys().filter(|&&i| i < 309) {
-        let ok = matches!(i, 0..=2 | 20..=275) || CS_GAPS.iter().any(|(g, _)| *g == i);
-        assert!(ok, "retail's configstring {i} is neither checked nor a gap");
+        let ok = matches!(i, 0 | 2 | 20..=275) || SCRIPT_SLOTS.contains(&i);
+        assert!(ok, "retail's configstring {i} is not checked");
     }
 }
