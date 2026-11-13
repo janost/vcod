@@ -52,6 +52,9 @@ const TAG_TOL: f32 = 0.03;
 /// (cod11-movers.md 15).
 const TAG_ANGLE_TOL: f32 = 0.05;
 
+/// Below the logs' 0.01 step: a row's every print matches retail's.
+const PRINT_TOL: f32 = 0.005;
+
 fn report() -> bool {
     std::env::var("LINKTO_REPORT").is_ok_and(|v| v == "1")
 }
@@ -670,31 +673,11 @@ const SERVER4: &str = "tests/fixtures/movers/mp_carentan-dm-linkattach.txt";
 /// with retail's message (movers doc 16, "A tag on an attached model").
 #[test]
 fn a_tag_on_an_attached_model_takes_a_link_like_retail() {
-    let Some(mut fs) = vcod_common::testing::game_fs_11() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bytes = fs.read(&bsp_path).unwrap();
-    let bsp = vcod_common::bsp::parse(&bytes).unwrap();
-    let mut now = Instant::now();
-    let probe = "probe_linkattach";
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, probe), now);
-    // run_probe.sh's: the closing error ends the probe's thread.
-    sv.set_cvar("developer", "1");
-    sv.overlay_script(
-        &format!("maps/mp/gametypes/{probe}"),
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_linkattach.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    fs.overlay(&bsp_path, bytes);
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
-    for _ in 0..400 {
-        if !sv.script_aborts().is_empty() {
-            break;
-        }
-        common::run_alone(&mut sv, &mut now, FRAME_MS);
-    }
+    let sv = run_linkattach(fs, false);
     let retail_text = std::fs::read_to_string(SERVER4).unwrap();
     let retail = capture(retail_text.lines());
     let ours = capture(sv.script_log().iter().map(String::as_str));
@@ -709,9 +692,9 @@ fn a_tag_on_an_attached_model_takes_a_link_like_retail() {
             if report() {
                 println!("{phase} {k} retail {rv:?}\n{phase} {k} ours   {ov:?}");
             }
-            // The children sit on the hand's chain at its bind pose, which
-            // ours builds 0.02 units and 0.03 degrees off retail's at
-            // worst: the player-bone tolerances.
+            // The children sit on the hand's chain at its bind records'
+            // pose, retail's to the print (movers doc 16, "The tag on 1.5
+            // and UO"): two prints differ by 0.01 or not at all.
             let origins =
                 |v: &[[f32; 3]]| -> Vec<[f32; 3]> { v.iter().step_by(2).copied().collect() };
             let angles = |v: &[[f32; 3]]| -> Vec<[f32; 3]> {
@@ -721,8 +704,8 @@ fn a_tag_on_an_attached_model_takes_a_link_like_retail() {
                     .flat_map(|a| [[0.0; 3], *a])
                     .collect()
             };
-            if diff(&origins(rv), &origins(ov)) > TAG_TOL
-                || diff(&angles(rv), &angles(ov)) > TAG_ANGLE_TOL
+            if diff(&origins(rv), &origins(ov)) > PRINT_TOL
+                || diff(&angles(rv), &angles(ov)) > PRINT_TOL
             {
                 bad.push(format!("{phase} {k}: retail {rv:?} ours {ov:?}"));
             }
@@ -741,5 +724,119 @@ fn a_tag_on_an_attached_model_takes_a_link_like_retail() {
              'xmodel/playerbody_german_wehrmacht'"
         )),
         "{aborts:?}"
+    );
+}
+
+/// `probe_linkattach` on ours with no client, at the install's protocol,
+/// run until its closing fatal or 400 frames. `exact` sets `probe_exact`.
+fn run_linkattach(mut fs: vcod_common::pk3::Pk3Fs, exact: bool) -> vcod_server::Server {
+    let proto = vcod_server::server::install_protocol(&fs);
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bytes = fs.read(&bsp_path).unwrap();
+    let bsp = vcod_common::bsp::parse(&bytes).unwrap();
+    let mut now = Instant::now();
+    let probe = "probe_linkattach";
+    let mut sv = vcod_server::Server::new(common::cfg(MAP, probe), now);
+    sv.set_protocol(proto);
+    // run_probe.sh's: the closing error ends the probe's thread.
+    sv.set_cvar("developer", "1");
+    if exact {
+        sv.set_cvar("probe_exact", "1");
+    }
+    sv.overlay_script(
+        &format!("maps/mp/gametypes/{probe}"),
+        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_linkattach.gsc"),
+    );
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    fs.overlay(&bsp_path, bytes);
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    for _ in 0..400 {
+        if !sv.script_aborts().is_empty() {
+            break;
+        }
+        common::run_alone(&mut sv, &mut now, FRAME_MS);
+    }
+    sv
+}
+
+/// The `PROBE x` rows of `probe_linkattach` with `probe_exact 1`, by phase:
+/// each row's six vectors, each component its integer part plus remainder.
+fn exact_rows<'a>(lines: impl Iterator<Item = &'a str>) -> BTreeMap<String, Vec<[[f32; 3]; 6]>> {
+    let mut out: BTreeMap<String, Vec<[[f32; 3]; 6]>> = BTreeMap::new();
+    for line in lines.filter(|l| !l.starts_with('#')) {
+        let Some(rest) = line.find("PROBE x ").map(|i| &line[i + 8..]) else {
+            continue;
+        };
+        let t: Vec<&str> = rest.split_whitespace().collect();
+        let f = |i: usize| {
+            (t[2 + 2 * i].parse::<f64>().unwrap() + t[3 + 2 * i].parse::<f64>().unwrap()) as f32
+        };
+        let row = [0, 1, 2, 3, 4, 5].map(|v| [0, 1, 2].map(|c| f(3 * v + c)));
+        out.entry(t[0].to_string()).or_default().push(row);
+    }
+    out
+}
+
+/// [`a_tag_on_an_attached_model_takes_a_link_like_retail`] on 1.5b or UO,
+/// every float to retail's bit: the tag's matrix off the DObj's records
+/// through the engines' skeleton build and `G_CalcTagParentAxis`
+/// (cod11-movers.md 16, "The tag on 1.5 and UO").
+fn exact_linkattach(fs: vcod_common::pk3::Pk3Fs, fixture: &str) {
+    let sv = run_linkattach(fs, true);
+    let retail = exact_rows(fixture.lines());
+    let ours = exact_rows(sv.script_log().iter().map(String::as_str));
+    assert!(!retail.is_empty());
+    let mut bad = Vec::new();
+    for (phase, rows) in &retail {
+        let o = ours
+            .get(phase)
+            .unwrap_or_else(|| panic!("ours never ran {phase}"));
+        assert_eq!(rows.len(), o.len(), "{phase}: sample count");
+        for (k, (rv, ov)) in rows.iter().zip(o).enumerate() {
+            if report() {
+                println!("{phase} {k} retail {rv:?}\n{phase} {k} ours   {ov:?}");
+            }
+            let same = rv
+                .iter()
+                .flatten()
+                .zip(ov.iter().flatten())
+                .all(|(a, b)| a.to_bits() == b.to_bits());
+            if !same {
+                bad.push(format!("{phase} {k}: retail {rv:?} ours {ov:?}"));
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "{} rows differ:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
+#[test]
+fn a_tag_on_an_attached_model_takes_a_link_like_retail_on_15() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    if vcod_server::server::install_protocol(&fs).transport.version
+        != vcod_common::net::protocol::PROTOCOL_V6.transport.version
+    {
+        return;
+    }
+    exact_linkattach(
+        fs,
+        include_str!("fixtures/movers/mp_carentan-dm-linkattach-1.5.txt"),
+    );
+}
+
+#[test]
+fn a_tag_on_an_attached_model_takes_a_link_like_retail_on_uo() {
+    let Some(fs) = vcod_common::testing::uo_fs() else {
+        return;
+    };
+    exact_linkattach(
+        fs,
+        include_str!("fixtures/movers/mp_carentan-dm-linkattach-uo.txt"),
     );
 }
