@@ -241,7 +241,8 @@ ring and temp entities, means of death.
     (`cod11-items.md` 4.1, 14.7);
   - `--save-scripted` beside `probe_ctf`, `probe_dom`, `probe_hq`,
     `probe_bas`, their `*end` endings, `probe_ctftime`, `probe_tdmend`,
-    `probe_hqtime`, `probe_bastime`, `probe_domtime` and `probe_menuclock`;
+    `probe_hqtime`, `probe_bastime`, `probe_domtime`, `probe_tdmrank` and
+    `probe_menuclock`;
   - `--probe-say` beside `probe_threadorder`;
   - `--probe-uo-weapon direct` beside `probe_rise`.
 - On UO's mp_carentan the grenade script throws its one frag and the steps
