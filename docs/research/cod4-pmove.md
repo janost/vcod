@@ -594,12 +594,25 @@ server holds the float itself.
 - The spectator's velocity an ulp off in a turn (row 244, x and y):
   ours -403.2707 (0xc3c9a2a6) where retail reads -403.27066
   (0xc3c9a2a5), flying back and left at 403 a second, a unit of z
-  speed down. VERIFIED (the gate, `MOVES_TRACE=fly:resync:244`). Not
-  found. 1.7 runs the x87 at 64-bit precision: it loads the control word
-  0x37f (rodata 0x823e28c) at 0x81d3f93 and every frame at 0x81d52a3.
-  VERIFIED (the disassembly). The kept model holds the stack in an `f64`
-  (53 bits), so a last bit can still part where a sum's rounding falls
-  between the two. That this row is one is not known.
+  speed down. VERIFIED (the gate, `MOVES_TRACE=fly:resync:244`). 1.7
+  runs the x87 at 64-bit precision: it loads the control word 0x37f
+  (rodata 0x823e28c) at 0x81d3f93 and every frame at 0x81d52a3. VERIFIED
+  (the disassembly). Precision is not the cause: the row's three cmds
+  (55768, 55784, 55800) redone in C `long double` off ours' stored
+  inputs land on ours' bits, as they do in `double`. INFERRED (the
+  emulation reproduces ours bit for bit). The fly's friction
+  (0x8056f5e; its speed is the root of the kept sum, kept, 0x8056fa0,
+  which ours had stored, no gate row moving either way), wish (0x805db62..0x805dbdf), normalize
+  (0x805c705..0x805c75d, the length passed to `PM_Accelerate` as a float)
+  and `PM_Accelerate` (0x80592e8) read as ours does. VERIFIED (the
+  instructions). The one input that lands the row on retail's bits is
+  the last cmd's right vector: y 0xbf0a0f12 where ours is 0xbf0a0f13, x
+  unchanged (0x3f579514). INFERRED (a search of ±6 ulps on each cmd's x
+  and y). No float yaw near ours (57.36451, 0x42657542) gives that pair
+  through `sin` and `cos` of a stored or a kept radian, nor does the
+  unwrapped 417.3645. INFERRED (the same emulation). So the yaw, or how
+  1.7's `AngleVectors` reaches the right vector for a spectator, is
+  next to read.
 - The armed walk's frag throw (`grenadeTimeLeft`, the server's fuse) and
   the lunge's server events stay (the reasons in the gate).
 - Closed: the walk's z one bit off on the terrain (24 rows), the sign of a
