@@ -2740,10 +2740,11 @@ release, 1.1, on "Bodies in the way"'s tip (ae407a223):
   VERIFIED (measured).
 - Left: that hold ladder; the mast ladder at x 3808 between 485 and 616
   and the shelf ladder at (5352, -70) between 352 and 448, each one
-  bot on the rungs under a body at the head (`tdm` seeds 6 and 4: 4 and
-  11 stalled bot-ticks); the mast ladder's head meetings at (4954 to
-  4964, 35 to 64, 1219) and the jump cue's routing leftover ("The jump cue
-  and the re-proof"), which no run on this tip showed.
+  bot on the rungs under a body at the head (`tdm` seeds 6 and 4 before
+  the health item change: 4 and 11 stalled bot-ticks; VERIFIED,
+  measured, positions only); the mast ladder's head meetings at (4954
+  to 4964, 35 to 64, 1219) and the jump cue's routing leftover ("The
+  jump cue and the re-proof"), which no run here showed.
 
 VERIFIED (measured, ae407a223 then this change; `ship_stalls` `dm` 10
 bots, shoot off, 4000 ticks, seeds 1-127 odd: stalled bot-ticks / falls /
@@ -2754,11 +2755,15 @@ deaths / edges given up / those by a body / bot-ticks held up by a body;
 | set | ae407a223 | the leftovers |
 |---|---|---|
 | `ship_stalls` `mp_ship` | 0 / 2 / 0 / 385 / 99 / 19 428 | 0 / 1 / 0 / 384 / 107 / 19 337 |
-| `bot_match` `tdm` | 221, 3 167 | 15, 3 130 |
-| `bot_match` `tdm` `mp_ship` seeds 7-24 | 125 | TBD_EXTRA |
+| `bot_match` `tdm` | 221, 3 167 | 23, 3 092 |
+| `bot_match` `tdm` `mp_ship` seeds 7-24 | 125 | 173 |
 
-The 15 are seed 4's shelf ladder and seed 6's mast ladder (above).
-Kills move within the per-seed noise.
+The 23 are `mp_ship` seed 1, a bot at (3459, 427, 352) bound down the
+drop to (3423, 547, 129), not traced. Seeds 7-24 stall at the hold
+ladder at (3280, 575), the mast ladder at x 3808, the hatch ladder at
+(3359, 512) and the shelf slot at (5384, 289, 396) above the stairwell's
+drop to 204; not traced. Kills fall 2.4% over 18 matches of 140 to 198
+each.
 
 ## 4. Memory and hearing
 
