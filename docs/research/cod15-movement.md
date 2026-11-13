@@ -125,6 +125,23 @@ ground trace has zeroed `fJumpOriginZ` (0x305c8), so it never fires
 - `PM_Friction`'s ground control: 0x100 still multiplies by 0.3;
   otherwise 0x2000 with `pm_time <= 1800` multiplies by the curve
   (0x1ec14..0x1ec30). VERIFIED.
+- `PM_Friction`'s penalty arm past 1800: 0x2000 set with `pm_time > 1800`
+  clears 0x2000 and `fJumpOriginZ` and leaves the control unscaled (1.5b
+  0x1ec3f-0x1ec68; 1.5 cgame 0x30007c12-0x30007c1d; UO cgame
+  0x30008542-0x3000854b, `fJumpOriginZ` at `ps+0x6c` there). VERIFIED,
+  disassembly. The walk's top clears on the same test before it (1.5b
+  0x20076-0x200ac, 1.5 cgame 0x30008828-0x3000883d, UO cgame 0x300091fa),
+  and `PM_WalkMove` calls `PM_Friction` only after the top and
+  `PM_CheckJump` (1.5b 0x2027a, 1.5 cgame 0x300088e0, UO cgame
+  0x300092ab). VERIFIED. The arm sits behind `pml.walking` (1.5 cgame
+  0x30007bb2), which the other callers (`PM_AirMove`, 1.5b 0x1fea2;
+  0x1fcf9's arm, 0x1fd0b) run without. INFERRED, off that order: the
+  friction's clear never fires, since every frame that walks has already
+  had the top's clear, and a dead body walks only while its 0x100 or 0x200
+  timer runs, which takes the knockback branch ahead of the penalty's
+  (`pmove::ladder_check_skipped`). vcod clears at the top only
+  (`pmove::jump_penalty_landing`), which is equivalent. Backlog
+  2026-11-13 item 7 closed on this.
 - `PM_DropTimers` is 1.1's: it clears 0x100, 0x200 and 0x2000 when the
   timer runs out (mask 0xffffdcff at 0x25b3e) and leaves `fJumpOriginZ`.
   VERIFIED.
