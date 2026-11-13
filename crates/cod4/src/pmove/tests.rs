@@ -2949,7 +2949,7 @@ fn pmove_single_and_the_sprint_hold_their_pinned_traces() {
             heads.clone(),
             Rules::default(),
             RIFLE,
-            0x71740e6e360af1ce,
+            0xd967e9267c1db1c2,
         ),
         (
             "prone",
@@ -2957,7 +2957,7 @@ fn pmove_single_and_the_sprint_hold_their_pinned_traces() {
             heads.clone(),
             Rules::default(),
             RIFLE,
-            0x948afac463ce8e6e,
+            0x3c233fd660bb0642,
         ),
         (
             "mantle",

@@ -606,10 +606,6 @@ const KCENT_GAPS: &[(&str, &str)] = &[
          `setviewpos` yaw 0 where its cmds sum to ours's 90; why is open \
          (cod4-combat.md 15)",
     ),
-    (
-        "shooter ps origin[2]",
-        "`placeSpawnPoint`'s drop onto the terrain (cod4-pmove.md 13.2)",
-    ),
 ];
 
 /// A killcam with a `killcamentity`: the follower's playerstate names the

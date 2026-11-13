@@ -243,7 +243,7 @@ fn the_saw_mounts_at_its_arc_limits_and_lets_go_on_death() {
     let respawned = run.mount_state(slot);
     assert_eq!(
         mounted,
-        "owner Some(0) busy 1 barrel [-15.0, 45.0, 0.0] teleport true firing false stance Some(Stand) spot [-770.0, 68.0, 258.125]; active 1 eFlags 0x200 pm_flags 0x0 viewlocked 1 393 clamp 7.4999995 22.5 360.0 45.0 origin -770.0 68.0 258.125 view 69.99939 hint (12, 1, 1023)"
+        "owner Some(0) busy 1 barrel [-15.0, 45.0, 0.0] teleport true firing false stance Some(Stand) spot [-770.0, 68.0, 258.125]; active 1 eFlags 0x200 pm_flags 0x0 viewlocked 1 393 clamp 7.4999995 22.5 360.0 45.0 origin -770.0 68.0 258.125 view 69.99938 hint (12, 1, 1023)"
     );
     assert_eq!(
         tracked,

@@ -56,11 +56,7 @@ const WALKER_SPAWN_MS: i32 = 47_900;
 
 /// Each tolerated difference as a pattern over the [`diffs`] line's words
 /// (`*` any word, else a prefix of it), and why.
-const GAPS: &[(&str, &str)] = &[(
-    "walker ps origin[2]",
-    "`placeSpawnPoint`'s drop onto mp_crash's terrain stops a bit under retail's fraction: \
-         the trace kernels' float model (cod4-pmove.md 13.2, 15)",
-)];
+const GAPS: &[(&str, &str)] = &[];
 
 /// Whether `diff` is the [`GAPS`] row `pattern`.
 fn gap_matches(pattern: &str, diff: &str) -> bool {
@@ -932,28 +928,15 @@ const EFLAGS_PMOVE: u32 = 0x20_000c;
 /// What the walk replay still gets wrong, per compared word: (word, rows,
 /// why). The rows are exact, so a fix that rights one fails the gate until
 /// the entry shrinks.
-const WALK_GAPS: &[(&str, usize, &str)] = &[
-    // The spawn's drop lands a bit under retail (`placeSpawnPoint`), and
-    // the free run's z drifts a bit or two on the terrain as
-    // `cod4_moves_ab`'s free run does: the trace kernels' float model.
-    ("origin[2]", 374, "cod4-pmove.md 13.2, the float model"),
-    (
-        "velocity[2]",
-        20,
-        "cod4-pmove.md 13.2, the sign of a zero vz",
-    ),
-    // From 70300 the step onto a 0.78 brush slope lands a few ulps off and
-    // the run never resyncs: every later row's x keeps it.
-    ("origin[0]", 341, "cod4-pmove.md 13.2, the steep step"),
-];
+const WALK_GAPS: &[(&str, usize, &str)] = &[];
 
 /// What the walker's body, as the spectator is sent it, still gets wrong:
 /// (word, rows, why).
 const BODY_GAPS: &[(&str, usize, &str)] = &[];
 
-/// How far the walker's origin may stray from retail's: the steep step's
-/// 0.0083 (cod4-pmove.md 15.1).
-const WALK_MAX_ERROR: f32 = 0.01;
+/// How far the walker's origin may stray from retail's: not at all
+/// (cod4-pmove.md 15.1).
+const WALK_MAX_ERROR: f32 = 0.0;
 
 /// One walk replay row's differences: the walker's own words, and its
 /// teammate's body (entity 0) where both snapshots carry it.

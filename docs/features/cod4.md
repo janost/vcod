@@ -314,8 +314,8 @@ has a handler (3.1).
 
 **Movement** ([cod4-pmove.md](../research/cod4-pmove.md)). Each cmd runs
 1.7's pmove as it arrives, over the clip map and the other bodies. A
-walker replaying a retail capture moves as on retail within the trace
-kernels' float model (0.04 units over 40 s) (15). Mantles over
+walker replaying a retail capture moves as on retail bit for bit over
+40 s, on 1.7's float model of the trace kernels (15). Mantles over
 `MANTLE_ON` and `MANTLE_OVER` walls on 1.7's clips and timing, leaving
 1.7's blockage for other players (17). Bodies carry the legs and torso
 anims 1.7's anim script picks, the mantle's included, with view angles,
