@@ -31,12 +31,18 @@ Ranked by how much a player notices.
   no retail client runs here. The framing is gated both ways against
   the binary and a retail capture (cod4-demos.md 8). S once a 1.7 client
   runs under Wine.
-- Small HUD fades: `cg_enemyNameFadeIn`'s wait on the crosshair colour,
-  and the compass's voice fade, drawn off `isTalking` but not checked
-  against a retail capture with a talker (cod4-hud.md 15.9). S.
+- Small HUD fades: the compass's voice fade, drawn off `isTalking` but
+  not checked against a retail capture with a talker (cod4-hud.md 15.9).
+  S.
+- The crosshair name and the friendly names over heads (0x42e2a0,
+  0x42e1bd) are not drawn; their scan, times and alpha are read
+  (cod4-hud.md 17). M.
 
 ## Fixed
 
+- The crosshair never took the team colours live: 1.7's client sets
+  `weapFlags` 8 and 0x10 off its own scan each frame, which vcod now runs,
+  with the `cg_*NameFadeIn` wait before the colour (cod4-hud.md 17).
 - The `winvoice_*` dvars were not registered and the voice page's record
   level slider sat greyed; they register at 1.7's defaults and the
   capture applies the level and the scaler (cod4-voice.md 4, 5).

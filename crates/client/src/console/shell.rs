@@ -427,7 +427,13 @@ const WINVOICE_DVARS: [(&str, &str, u32); 4] = [
 
 /// [`Shell::register_cod4_options`]'s dvars: name, default, flags
 /// (`Dvar_RegisterNew` 0x56c350 calls, cod4-front-end.md 9).
-const COD4_OPTION_DVARS: [(&str, &str, u32); 37] = [
+const COD4_OPTION_DVARS: [(&str, &str, u32); 41] = [
+    // the crosshair names' wait and fade, ints, cheat-protected
+    // (`iw3mp.exe` 0x43d801..0x43d916, flags 0x80; cod4-hud.md 17)
+    ("cg_friendlyNameFadeIn", "0", CHEAT),
+    ("cg_enemyNameFadeIn", "250", CHEAT),
+    ("cg_friendlyNameFadeOut", "1500", CHEAT),
+    ("cg_enemyNameFadeOut", "250", CHEAT),
     // `Voice_Init`'s (`iw3mp.exe` 0x57a92e..0x57aa37, flags 1; CoD2's at
     // `CoD2MP_s.exe` 0x4b8dd0, flags 0x1001): see [`WINVOICE_DVARS`]
     WINVOICE_DVARS[0],

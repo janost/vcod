@@ -22,6 +22,77 @@ pub(crate) struct Dvars {
     pub enemy_colour: bool,
     /// `cg_drawTurretCrosshair` (1, archived: `iw3mp.exe` 0x43b194).
     pub draw_turret: bool,
+    pub fades: NameFades,
+}
+
+/// `cg_friendlyNameFadeIn`, `cg_enemyNameFadeIn`,
+/// `cg_friendlyNameFadeOut` and `cg_enemyNameFadeOut`, ms: ints 0 and
+/// up, cheat-protected, at 0, 250, 1500 and 250 (`iw3mp.exe`
+/// 0x43d801..0x43d916).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NameFades {
+    pub friendly_in: i32,
+    pub enemy_in: i32,
+    pub friendly_out: i32,
+    pub enemy_out: i32,
+}
+
+impl Default for NameFades {
+    fn default() -> Self {
+        NameFades {
+            friendly_in: 0,
+            enemy_in: 250,
+            friendly_out: 1500,
+            enemy_out: 250,
+        }
+    }
+}
+
+/// `CG_ScanForCrosshairEntity`'s memory (`iw3mp.exe` 0x79e630..0x79e638):
+/// the client last under the crosshair, when the crosshair came onto him
+/// and when it last saw him.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct CrosshairTarget {
+    client: u32,
+    start: i32,
+    last: i32,
+}
+
+impl CrosshairTarget {
+    /// One frame's scan at `now` (0x42dcc4..0x42de4d): the `weapFlags`
+    /// bits it sets, 8 over a teammate and 0x10 over an enemy within the
+    /// weapon's `enemyCrosshairRange`. A sighting keeps the start while it
+    /// is the same client seen again within the kind's fade-out (a
+    /// teammate's, or a spectator's), else starts over; an enemy out of
+    /// range is no sighting.
+    pub fn scan(
+        &mut self,
+        hit: Option<&crate::play::cod4::CrosshairHit>,
+        range: f32,
+        now: i32,
+        fades: &NameFades,
+    ) -> u32 {
+        let Some(h) = hit else {
+            return 0;
+        };
+        let (bit, fade_out) = match h.friendly {
+            None => (0, fades.friendly_out),
+            Some(true) => (WF_FRIENDLY, fades.friendly_out),
+            Some(false) if h.dist_sq < range * range => (WF_ENEMY, fades.enemy_out),
+            Some(false) => return 0,
+        };
+        if self.client != h.client || now - self.last > fade_out {
+            self.client = h.client;
+            self.start = now;
+        }
+        self.last = now;
+        bit
+    }
+
+    /// How long the crosshair had been on its client at its last sighting.
+    pub fn seen(&self) -> i32 {
+        self.last - self.start
+    }
 }
 
 impl Default for Dvars {
@@ -34,6 +105,7 @@ impl Default for Dvars {
             draw_gun: true,
             enemy_colour: true,
             draw_turret: true,
+            fades: NameFades::default(),
         }
     }
 }
@@ -57,6 +129,25 @@ impl Dvars {
             draw_gun: flag("cg_drawGun", d.draw_gun),
             enemy_colour: flag("cg_crosshairEnemyColor", d.enemy_colour),
             draw_turret: flag("cg_drawTurretCrosshair", d.draw_turret),
+            fades: NameFades::read(shell),
+        }
+    }
+}
+
+impl NameFades {
+    /// The shell's values over the defaults.
+    pub fn read(shell: &crate::console::shell::Shell) -> NameFades {
+        let d = NameFades::default();
+        let ms = |n: &str, def: i32| {
+            shell
+                .cvar(n)
+                .map_or(def, |v| vcod_common::text::atoi(v).max(0))
+        };
+        NameFades {
+            friendly_in: ms("cg_friendlyNameFadeIn", d.friendly_in),
+            enemy_in: ms("cg_enemyNameFadeIn", d.enemy_in),
+            friendly_out: ms("cg_friendlyNameFadeOut", d.friendly_out),
+            enemy_out: ms("cg_enemyNameFadeOut", d.enemy_out),
         }
     }
 }
@@ -171,13 +262,20 @@ fn aim_point(v: &View) -> [f32; 2] {
 
 /// `CG_CalcCrosshairColor` (0x430960): white, or with
 /// `crosshairColorChange` the team's colour over a friend and the enemy's
-/// over an enemy (under `cg_crosshairEnemyColor`), at `alpha` times
-/// `cg_crosshairAlpha`. The name fade-in's wait is not modelled.
+/// over an enemy (under `cg_crosshairEnemyColor`) once the crosshair has
+/// been on him the kind's name fade-in (0x430986..0x43099a,
+/// 0x4309f8..0x430a0c), at `alpha` times `cg_crosshairAlpha`.
 fn tint(v: &View, dv: &Dvars, alpha: f32) -> [f32; 4] {
     let flags = v.ps.weap_flags;
+    let seen = v.ps.name_seen;
     let [r, g, b] = match v.def.reticle.color_change {
-        true if flags & WF_FRIENDLY != 0 => v.team_rgb[0],
-        true if flags & WF_ENEMY != 0 && dv.enemy_colour => v.team_rgb[1],
+        true if flags & WF_FRIENDLY != 0 => match seen >= dv.fades.friendly_in {
+            true => v.team_rgb[0],
+            false => [1.0; 3],
+        },
+        true if flags & WF_ENEMY != 0 && dv.enemy_colour && seen >= dv.fades.enemy_in => {
+            v.team_rgb[1]
+        }
         _ => [1.0; 3],
     };
     [r, g, b, alpha * dv.alpha]
@@ -438,6 +536,81 @@ mod tests {
     use super::*;
     use std::fmt::Write;
 
+    /// `CG_ScanForCrosshairEntity`'s times: the same client seen again
+    /// within the fade-out keeps his start, a gap past it or another
+    /// client starts over, and an enemy out of range is no sighting.
+    #[test]
+    fn the_crosshair_target_keeps_when_it_came_on() {
+        use crate::play::cod4::CrosshairHit;
+        let fades = NameFades::default();
+        let hit = |client, friendly, dist: f32| CrosshairHit {
+            client,
+            friendly,
+            dist_sq: dist * dist,
+        };
+        let mut t = CrosshairTarget::default();
+        let enemy = hit(3, Some(false), 500.0);
+        assert_eq!(t.scan(Some(&enemy), 1000.0, 10_000, &fades), WF_ENEMY);
+        assert_eq!(t.scan(Some(&enemy), 1000.0, 10_200, &fades), WF_ENEMY);
+        assert_eq!(t.seen(), 200);
+        // off him for 250 ms: kept; past the enemy fade-out: anew
+        assert_eq!(t.scan(None, 1000.0, 10_300, &fades), 0);
+        t.scan(Some(&enemy), 1000.0, 10_450, &fades);
+        assert_eq!(t.seen(), 450);
+        t.scan(Some(&enemy), 1000.0, 10_701, &fades);
+        assert_eq!(t.seen(), 0);
+        // out of range: no bit, no sighting
+        assert_eq!(
+            t.scan(Some(&hit(3, Some(false), 1500.0)), 1000.0, 10_750, &fades),
+            0
+        );
+        assert_eq!(t.seen(), 0);
+        // a teammate keeps for the friendly fade-out
+        let friend = hit(5, Some(true), 9000.0);
+        assert_eq!(t.scan(Some(&friend), 1000.0, 11_000, &fades), WF_FRIENDLY);
+        t.scan(Some(&friend), 1000.0, 12_400, &fades);
+        assert_eq!(t.seen(), 1400);
+        // a spectator's view names without a bit
+        assert_eq!(t.scan(Some(&hit(5, None, 1.0)), 0.0, 12_500, &fades), 0);
+        assert_eq!(t.seen(), 1500);
+    }
+
+    /// `CG_CalcCrosshairColor` waits out `cg_enemyNameFadeIn` (250) before
+    /// an enemy turns the crosshair; a teammate's fade-in is 0.
+    #[test]
+    fn the_enemy_colour_waits_for_the_name_fade_in() {
+        let def = rifle();
+        fn view<'a>(p: &'a ViewPs, def: &'a WeaponHud) -> View<'a> {
+            View {
+                ps: p,
+                def,
+                tan_half_fov_y: 0.75,
+                tan_half_fov_x: 1.0,
+                turret: None,
+                to_ads: false,
+                team_rgb: [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]],
+            }
+        }
+        let dv = Dvars::default();
+        let mut p = ps();
+        p.weap_flags = WF_ENEMY;
+        p.name_seen = 249;
+        assert_eq!(tint(&view(&p, &def), &dv, 1.0), [1.0, 1.0, 1.0, 1.0]);
+        p.name_seen = 250;
+        assert_eq!(tint(&view(&p, &def), &dv, 1.0), [1.0, 0.0, 0.0, 1.0]);
+        p.weap_flags = WF_FRIENDLY;
+        p.name_seen = 0;
+        assert_eq!(tint(&view(&p, &def), &dv, 1.0), [0.0, 1.0, 0.0, 1.0]);
+        let slow = Dvars {
+            fades: NameFades {
+                friendly_in: 100,
+                ..dv.fades
+            },
+            ..dv
+        };
+        assert_eq!(tint(&view(&p, &def), &slow, 1.0), [1.0, 1.0, 1.0, 1.0]);
+    }
+
     fn rifle() -> WeaponHud {
         let mut d = WeaponHud::default();
         let r = &mut d.reticle;
@@ -526,6 +699,8 @@ mod tests {
         case("hip wide", draw(&ps(), &rifle(), &dv, wide, false));
         let mut p = ps();
         p.weap_flags = 0x10;
+        // on him for the enemy fade-in
+        p.name_seen = 250;
         p.view_height_current = 30.0;
         p.perks = 2;
         p.aim_spread_scale = 255.0;

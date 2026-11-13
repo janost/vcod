@@ -707,6 +707,9 @@ pub struct Reticle {
     pub side_pos: f32,
     /// `crosshairColorChange` (+1044).
     pub color_change: bool,
+    /// `enemyCrosshairRange` (+1040): how near an enemy under the
+    /// crosshair turns it (`CG_ScanForCrosshairEntity`).
+    pub enemy_range: f32,
     /// `hipSpreadStandMin`, `DuckedMin`, `ProneMin`, `hipSpreadMax`,
     /// `DuckedMax`, `ProneMax` (+1104..+1124), degrees.
     pub hip_spread: [f32; 6],
@@ -1013,6 +1016,7 @@ impl HudAssets {
                         min_ofs: int(556),
                         side_pos: flt(1152),
                         color_change: int(1044) != 0,
+                        enemy_range: flt(1040),
                         hip_spread: std::array::from_fn(|k| flt(1104 + 4 * k)),
                         cook_off_hold: int(1276) != 0,
                         ads_zoom_frac: [flt(1064), flt(1068)],

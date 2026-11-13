@@ -200,7 +200,9 @@ The weapon byte is the client's own pick
   names (20), grenade indicators (21), mantle, hold breath and invalid
   command hints, XP and score bars (23).
 - The crosshair with the weapon's spread (Steady Aim's narrower), scope
-  overlays, a mounted gun's reticle, `cg_crosshairDynamic` (17).
+  overlays, a mounted gun's reticle, `cg_crosshairDynamic`, the team
+  colours over a player once `cg_friendlyNameFadeIn` or
+  `cg_enemyNameFadeIn` has passed (17).
 - World waypoints (Bomb Squad's icon over enemy claymores and C4) and
   offscreen ones with a pointer.
 - The killcam's letterbox and title; the prematch's countdown text. The

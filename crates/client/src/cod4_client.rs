@@ -122,6 +122,8 @@ pub(crate) struct Cod4Client {
     /// camera; cod4-client-view.md 14).
     damage_roll: f32,
     shock_look: crate::play::cod4_shock::Look,
+    /// `CG_ScanForCrosshairEntity`'s target and its times.
+    crosshair: crate::cod4_crosshair::CrosshairTarget,
     turn: crate::play::cod2_shock::TurnCap,
     /// The voices `playLocalSound` started, by alias, for `stopLocalSound`.
     local_voices: HashMap<String, crate::audio::voices::VoiceId>,
@@ -284,6 +286,7 @@ impl Cod4Client {
             shock_kick: [0.0, 0.0],
             damage_roll: 0.0,
             shock_look: crate::play::cod4_shock::Look::NONE,
+            crosshair: Default::default(),
             turn: Default::default(),
             local_voices: HashMap::new(),
             trails_made: HashSet::new(),
@@ -625,6 +628,21 @@ impl Cod4Client {
         // `BG_CalculateView_DamageKick` turns the drawn view (pitch, roll)
         // and the gun its own way, never the cmd.
         let mut scene = scene;
+        // `CG_ScanForCrosshairEntity` sets `weapFlags` 8 and 0x10 itself
+        // each frame (0x42dbfb) and keeps when the crosshair came onto
+        // the player it names.
+        let range = self
+            .hud
+            .enemy_crosshair_range(&self.session, scene.view.view_weapon());
+        let fades = crate::cod4_crosshair::NameFades::read(cx.shell);
+        let bits = self.crosshair.scan(
+            scene.crosshair_hit.as_ref(),
+            range,
+            self.render_time,
+            &fades,
+        );
+        scene.view.weap_flags = scene.view.weap_flags & !0x18 | bits;
+        scene.view.name_seen = self.crosshair.seen();
         let dk = self.hud.damage_kick();
         let since = self.render_time - dk.time;
         scene.view.damage = (dk.time != 0).then_some((dk, since));
