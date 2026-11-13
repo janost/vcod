@@ -501,13 +501,19 @@ impl Conn {
     /// the connect's `protocol`, `challenge` and `qport`. Nothing goes
     /// when the name is the same.
     pub fn set_name(&mut self, name: &str) {
+        self.set_userinfo("name", name);
+    }
+
+    /// Any userinfo dvar the connect sent (`name`, `snaps`, `rate`), sent
+    /// as [`Conn::set_name`] sends a name.
+    pub fn set_userinfo(&mut self, key: &str, value: &str) {
         let pairs = vcod_common::net::connectionless::info_pairs(&self.userinfo);
-        if pairs.iter().any(|&(k, v)| k == "name" && v == name) {
+        if pairs.iter().any(|&(k, v)| k == key && v == value) {
             return;
         }
         let mut ui = String::new();
         for (k, v) in pairs {
-            let v = if k == "name" { name } else { v };
+            let v = if k == key { value } else { v };
             ui.push_str(&format!("\\{k}\\{v}"));
         }
         self.userinfo = ui;
