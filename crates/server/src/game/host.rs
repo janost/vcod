@@ -1998,6 +1998,30 @@ impl GameHost {
         rand_int(&mut self.rng)
     }
 
+    /// The host half of `TeleportPlayer` (1.1d 0x51380, combat doc 14.7):
+    /// `r.currentOrigin` a unit above `origin`, and a client the tree held
+    /// unlinked and linked again there with the box and contents it had.
+    fn teleport_client_link(&mut self, slot: usize, origin: [f32; 3]) {
+        let origin = [origin[0], origin[1], origin[2] + 1.0];
+        if let crate::game::fields::Route::Engine { slot: field, .. } =
+            crate::game::fields::route_entity("origin")
+            && let Some(e) = self
+                .ents
+                .by_number_mut(slot as u32)
+                .filter(|e| e.client.is_some())
+        {
+            e.engine[field] = Value::Vector(origin);
+        }
+        if self.area.last_link(slot as u32).is_none() {
+            return;
+        }
+        let contents = self.area.contents(slot as u32);
+        self.area.unlink(slot as u32);
+        let playing = !self.client_vitals[slot].dead;
+        self.link_client(slot, origin, self.client_box(slot), contents, playing);
+        self.client_link_origin[slot] = origin;
+    }
+
     /// Free an entity and everything the host hangs off it. Retail's
     /// `G_FreeEntity` unlinks the entity, which is what takes a submodel's
     /// brushes out of the clip and a trigger out of the touch pass, so the
@@ -2006,10 +2030,15 @@ impl GameHost {
         self.temp_entities.retain(|t| t.id != id);
         self.misc_spawners.remove(&id);
         // `G_FreeTurret` (turrets doc 8): a manned gun lets its gunner go
-        // before the record goes; the sim half waits for `ClientEndFrame`.
+        // before the record goes. `TeleportPlayer`'s link and origin happen
+        // here, in the freeing thread; the sim half waits for
+        // `ClientEndFrame`.
         if let Some(mut rec) = self.turrets.remove(&id)
             && let Some((slot, origin, stance)) = crate::game::turret::release(&mut rec)
         {
+            if matches!(self.ext, HostExt::Cod1) {
+                self.teleport_client_link(slot, origin);
+            }
             self.turret_ops
                 .push(crate::game::turret::TurretOp::Release {
                     slot,
