@@ -852,7 +852,14 @@ Tanks:
   `laid` is whether a shell fired now, along the line
   `vehicle::fire::main_gun_sight` reads off the posed turret and the
   driver's last aim point (the fire call's own bend), strikes the base, with
-  no body on foot across it.
+  no body on foot across it. Both trace the shell's fall (vehicle shells fly
+  `TR_GRAVITY`, `game::missile` `fire_rocket`), in eight chords, and the
+  shot's aim is lifted by the fall over the flight (`shell_lands`, 16 units
+  at 2000). Trap: traced straight, the allied Shermans on mp_foy laid on the
+  western axis bunker (-2502, 2264) from the south, and every shell fell
+  into the rise in front of it about 345 units short (seed 7, shells from
+  (-2570, 328, 173) bursting on the world at (-2515, 1920, 74)): 114 allied
+  shells over 8 seeds, 20 on a base.
 - With a shot the hull holds and the view goes from `tag_chasecam` onto
   the point: the round bends toward where that view meets the world, up to
   5 degrees of pitch and 2 of yaw off the barrel (coduo-vehicles.md 13),
@@ -872,6 +879,50 @@ Tanks:
   (`bots::tests::a_bas_tank_driver_shells_a_standing_base`,
   `a_turretless_tank_turns_its_hull_onto_the_base`,
   `a_driver_waits_out_a_tank_capture`.)
+
+The axis's wins at mp_foy and mp_kursk (2026-11-13, 8 seeds each, per side,
+counted off throwaway prints: shells fired, shells on a base, driver ticks
+by state), VERIFIED (measured):
+
+| | mp_foy axis | mp_foy allies | mp_kursk axis | mp_kursk allies |
+|---|---|---|---|---|
+| shells fired, before the fall | 611 | 114 | 739 | 476 |
+| shells on a base, before | 455 | 20 | 717 | 320 |
+| shells on a base, after | 523 | 117 | 722 | 321 |
+| ticks laid on a base, after | 30650 | 6329 | 41685 | 19115 |
+| ticks with a shot, line not on it | 409 | 3649 | 2508 | 2934 |
+| ticks driving (of them under 30 units/s) | 10385 (3926) | 15918 (5852) | 13697 (4377) | 14877 (5417) |
+| turretless ticks | 0 | 0 | 1010 | 11559 |
+| rides got out of | 89 | 65 | 79 | 84 |
+| hulls of this side's lost | 22 | 0 | 8 | 3 |
+
+- After the fall fix the allies' laid shells hit as the axis's do (112
+  fired laid on mp_foy, 117 base hits; 320 and 321 on mp_kursk), and the rounds still go to the axis 16 in 16. What is
+  left is where the tanks stand. Nearly every base shell comes from a tank
+  of the other side's, captured where the map parks it by the bases it
+  guards: the allied bots' own tanks, driven from their spawn at bases
+  9000 to 14000 units off, made no shell on a base in 8 seeds (mp_foy's
+  (-5086, -8199) 12 rides, mp_kursk's (-545, -15590) 8). VERIFIED (each
+  map's entity lump): mp_foy's Shermans stand 640 (-1398, -7399), 650
+  (-3387, -4572), 730 (3624, -5489) and 1100 to 2000 (-3788, -7340;
+  -4519, -6585; -4437, -6020) from an allied base, and those six gave the
+  axis 1200 to 6900 laid ticks each. Its Panzers by the axis bases stand
+  407 (3418, 2835), 420 to 460 (1644, 5973; 767, 6183), 497 (2541, 3022),
+  631 (-2012, 2662) and 686 (-2996, 2740) off; captured, (2541, 3022) gave
+  the allies no laid tick in 4 rides, (-2012, 2662) 516 in 2, (-2996, 2740)
+  4 in 2, and the allies reached the others too seldom to count. mp_kursk's T-34s
+  at (-6259, -11435) and (-4722, -12152), 700 and 1850 from the allied base
+  at (-6576, -12040), gave the axis 22800 laid ticks; the allies' best was
+  the Panzer at (-1268, -3035), 13300. The allies' other captures there
+  are the Elefants (turretless, slow to turn: 11559 ticks, 2934 with the
+  line off).
+- INFERRED (the counts above): the parking is the map's, and a human
+  capturing those Panzers would find them as close to their bases, but he
+  would back off for a line; ours shells only from where a shot is found
+  on the way. A back-off for a tank inside 900 units with no shot (to 1100
+  out) changed none of it (mp_foy 20784, mp_kursk 16306, both 16 axis
+  wins; not kept). What would move it is a stand search for hulls, as
+  `breach_stands` does for a body.
 
 Out of rounds:
 
@@ -970,7 +1021,14 @@ bots, shoot off; `four_uo_bots_end_a_bas_round_without_shooting`;
   to 12000 ticks shorter on the mean, past its 8 seeds' spread. The bases
   took 3932 shells of 700, 52 of 2500 and 1972 rockets. mp_foy and mp_kursk
   went to the axis 16 times in 16 (before 8 in 16); mp_italy 6 to 2, the
-  other two even.
+  other two even. With the shell's fall traced ("Tanks"): 39 of 40 end on
+  their bases, mean 20119, median 19819, 13339 to 34879; mp_foy 20042,
+  mp_italy 19299, mp_kursk 16329, mp_ponyri 22188 (one draw),
+  mp_rhinevalley 22996 (all 8 end; its 6 seeds that ended before run 20944
+  to 23362 on the mean, inside their spread of 16000 to 32000). The bases
+  took 4589 shells of 700, 60 of 2500 and 1799 rockets. Wins: mp_foy and
+  mp_kursk axis 16 of 16 (above), mp_italy axis 7 of 8, mp_ponyri allies 4
+  to 3, mp_rhinevalley allies 5 to 3.
 
 - The other gametypes (2026-10-15, two bots, seed 7,
   `tests/bot_objectives.rs`): `ctf` on mp_cassino with shoot on, a flag taken
