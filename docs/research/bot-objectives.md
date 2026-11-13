@@ -1096,7 +1096,8 @@ site met the defenders' half alone. Sent together they won 62% of the
 rounds that ended (168 of 273) against 47% on master. In `re` the
 captures doubled (9 to 18); pickups and round wins stay inside the run to
 run spread. Captures are still rare: most carriers die on the way, and
-the rounds end on eliminations (section 4.2).
+the rounds end on eliminations (section 4.2). Section 9.2 finds where:
+by the pickup, within 5 s.
 
 ### 9.1 Keeping apart (2026-11-11)
 
@@ -1191,6 +1192,108 @@ attackers are allies, axis on mp_dawnville and mp_railyard. VERIFIED
   rounds, 4 points down on about 430 rounds, is inside the noise of a
   difference (about 3 points a standard error); a longer run would
   settle it.
+
+### 9.2 The retrieval carrier (2026-11-13)
+
+Measured first, with `bot_match`'s carry counters (`bot-combat.md` 1,
+`re_*`). VERIFIED (measured, ours, `bot_match`, `GAMETYPE=re`, 10 bots,
+the twelve 1.1 maps whose arena lists `re`, seeds 1..=16, 12000 ticks,
+192 matches, master 55164194d):
+
+- 689 of 2206 `re_pickup` lines fall between a round's `W;` and its
+  restart: the round is over and the objective is still there to take.
+  On mp_depot, mp_harbor, mp_hurtgen, mp_powcamp and mp_railyard nearly
+  every pickup is one of those (13 to 30 live a map against 70 to 160
+  logged): the attackers win by elimination before anyone takes it.
+- Of the 1159 carries that ended on a capture or the carrier's death, 444
+  were captures (38%). 393 of the 715 deaths came within 5 s of the
+  pickup and 444 within 600 units of where he took it; 63 within 600
+  units of a goal.
+- VERIFIED (measured, the exposure + lead build below, mp_brecourt seeds 1 and
+  2, the bodies at each pickup in play): at 19 of 33 pickups four or five
+  defenders stood within 300 units of the carrier, and 15 of those
+  carriers died within 2 s. INFERRED (section 4.2): they are the
+  objective's guards, and the pickup sends them to where it lay (the
+  sweep) before the carrier is out of their ring.
+
+Two rules tried first, on with team play (`TEAMPLAY=`), measured inside
+the spread and not shipped:
+
+- Exposure. The driver kept, per enemy, where a bot of which team last
+  saw it, for 10 s and while the enemy was up. A carrier's plan paid
+  `1 + 3 * sum(max(0, 1 - d / 800))` times an edge's length into each
+  node over his team's sightings, read afresh each second and taken
+  when a plan started, through a per-node factor in the search next to
+  the crowd cost and the noise.
+- Lead. The escort (`team::ESCORTS`, one) made for the node 400 units
+  along the carrier's path ahead of him instead of the carrier's feet,
+  so it met what waited on his way first.
+
+The two rules and two arms added to them, same 12 maps and 10 bots.
+Survival is captures over captures and carrier deaths; the share is the
+attackers' share of rounds (allies attack but on mp_dawnville and
+mp_railyard). VERIFIED (measured, ours, `bot_match`, seeds 1..=16,
+192 matches a row):
+
+| Run | att W | def W | att share | live pickups | captures | carrier deaths | near pickup | survival |
+|---|---|---|---|---|---|---|---|---|
+| master | 1407 | 665 | 67.9% | 1517 | 444 | 715 | 444 | 38% |
+| exposure + lead | 1398 | 646 | 68.4% | 1493 | 466 | 692 | 399 | 40% |
+| + the sweep, past its first 800 units | 1401 | 589 | 70.4% | 1454 | 427 | 634 | 423 | 40% |
+| + the team forms up before a pickup | 1324 | 632 | 67.7% | 1208 | 384 | 525 | 321 | 42% |
+
+- The sweep: a node within 300 units of the shortest way from where the
+  objective lay to its goal cost 1.5 more, the way the defenders walk
+  back down (section 4.2). VERIFIED (the table, per map): carriers
+  survived more on mp_pavlov (52% to 74%), mp_carentan (76% to 87%) and
+  mp_dawnville (35% to 48%) and far less on mp_chateau (42% to 24%, 160
+  to 204 deaths, 118 near the pickup). Priced from the pickup on, it
+  was worse there still (20% over seeds 1..=8). Dropped.
+- Forming up: an attacker took a lying objective only with two
+  teammates (or all of its team still up) within 400 units. VERIFIED
+  (the table): survival rose because there were fewer carries; captures
+  fell by 60 and the attackers won 83 fewer rounds. Dropped.
+
+VERIFIED (measured, ours, `bot_match`, seeds 1..=8, mp_brecourt,
+mp_carentan, mp_chateau, mp_dawnville, mp_pavlov, mp_rocket and mp_ship,
+56 matches a row), arms tried on the way, each against master's 204
+captures, 363 carrier deaths (36%) and 56.1% of rounds:
+
+| Arm | captures | carrier deaths | survival | att share |
+|---|---|---|---|---|
+| a carrier within 600 units of his pickup fights as any bot while he sees an enemy | 194 | 335 | 37% | 60.1% |
+| every attacker escorts while the carrier is within 800 units of his pickup | 211 | 325 | 39% | 60.7% |
+| no pickup while a defender was seen within 600 units of it in the last 3 s | 166 | 298 | 36% | 52.9% |
+| lead alone | 235 | 343 | 41% | 58.5% |
+| exposure alone | 212 | 333 | 39% | 59.6% |
+| sweep alone (from the pickup on) | 199 | 362 | 35% | 59.9% |
+
+- INFERRED: run to run spread is wide. Master's two halves (seeds
+  1..=8 and 9..=16) gave 36% and 41% survival over the twelve maps, so a
+  difference of two points over 16 seeds is inside it. Exposure + lead
+  held master's round share and lost no map, but its 22 more captures
+  and 45 fewer deaths by the pickup are inside the spread too, so it was
+  dropped.
+Then the guard ring itself: no attacker took a lying objective while
+more than one defender was up (the scoreboard's count), and instead
+worked a ring from 150 to 300 units round it among the guards; 20 s
+after the first attacker came within 300 units it took it anyway.
+VERIFIED (measured, ours, `bot_match`, same 12 maps, seeds 1..=16, 192
+matches): 1308 attacker and 585 defender rounds (69.1%), 1165 live
+pickups, 351 captures, 543 carrier deaths, 288 of them by the pickup,
+39% survival, against master's 67.9%, 444, 715, 444 and 38%. INFERRED:
+fewer carries died by the pickup because there were fewer carries;
+survival and round share sit inside master's 36% to 41% band and
+captures fell by a fifth (mp_dawnville 70 to 52, mp_pavlov 92 to 70).
+Not shipped.
+
+- INFERRED: what kills carriers is the pickup inside the guard ring.
+  Rules on the route out start after the guards have closed on the
+  spot, and a carrier who stops to fight there, or waits for his team,
+  or whose team waits for a clear spot or a thinned ring, did no better.
+  Holding off the pickup trades carries for elimination wins that came
+  anyway. What is left is the guards' side: they stand within 250 units
+  of the objective (section 4.2) and close on it the moment it goes.
 
 ## 10. United Offensive vehicles
 
