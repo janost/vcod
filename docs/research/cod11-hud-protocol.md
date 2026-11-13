@@ -546,6 +546,20 @@ tie. VERIFIED, the retail round-restart target capture
 `b 2 0 1 1 0 0 0 0 0 -1 1 1 0`): the 0-score row leads the -1-score one
 though its slot is higher.
 
+VERIFIED: `CalculateRanks` (0x50c60) lists every slot whose `connected`
+(`cl[+0x20ec]`) is not 0 into `level.sortedClients` (`level+0x218`) in
+slot order, then calls `qsort(sortedClients, n, 4, SortRanks)` at 0x50cf0
+with `SortRanks` at 0x50078. VERIFIED: 1.5b's (`qsort` at 0x4fa9a,
+`SortRanks` 0x4f818, the client fields at `+0x20e8`, `+0x2184`, `+0x20dc`,
+`+0x20e0`) and UO's (0x590c6, 0x58e44, `+0x4520`, `+0x45bc`, `+0x4514`,
+`+0x4518`) take the same branches and return the same values. VERIFIED:
+`SortRanks` returns 1 whenever its left client is connecting, before it
+looks at the right one, so two connecting clients each sort after the
+other. INFERRED, off glibc's merge sort (it takes the left run's head
+while the compare is at most 0): connecting clients come out against slot
+order, the right run's first at every merge, which a stable sort on
+(connecting, spectator, score, deaths, slot) does not give.
+
 VERIFIED: token 4 is `deaths`. `cl[+0x20e4]` has no write site in the stock
 module's `.text` (`grep 0x20e4` finds three reads, no store) because the
 script writes it: the client field table registers `deaths` at 8420 =
@@ -563,7 +577,9 @@ for itself, not the default of an unwritten total.
 
 **As implemented** (`GameHost::scoreboard`, `crates/server/src/game/scoreboard.rs`):
 one row per online client in `SortRanks`' order (connecting last, then
-spectators by `sessionteam`, score descending, deaths ascending, slot). The
+spectators by `sessionteam`, score descending, deaths ascending), the
+slots listed in order and merged as glibc's `qsort` merges them
+(`item::msort`). The
 score, deaths and status icon come from the client's `.score`, `.deaths` and
 `.statusicon` script fields, the icon resolved to its 1-based slot in
 `CsRange::StatusIcon`. The team totals are the level's `setTeamScore`

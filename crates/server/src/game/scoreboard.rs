@@ -24,6 +24,7 @@ pub struct RosterSlot {
 }
 
 /// One client's row before `SortRanks`.
+#[derive(Clone)]
 pub struct Row {
     pub slot: usize,
     pub connecting: bool,
@@ -47,11 +48,10 @@ pub fn text(rows: Vec<Row>, scores: [i32; 2]) -> String {
 /// would take it past 1024 and counts only the rows written
 /// (cod2-protocol.md 3.4). 1.1 passes `None`.
 pub fn text_capped(mut rows: Vec<Row>, [axis, allies]: [i32; 2], cap: Option<usize>) -> String {
-    // `level.sortedClients[]`'s order, `SortRanks` (.so 0x50090): a
-    // connecting client last, then spectators last among themselves by
-    // slot, then score descending, then deaths ascending; ties keep the
-    // slot order (hud protocol doc, section 3).
-    rows.sort_by_key(|r| (r.connecting, r.spectator, -r.score, r.deaths, r.slot));
+    // `level.sortedClients[]`'s order: `CalculateRanks` lists the slots in
+    // order and glibc's `qsort` sorts them by `SortRanks` (hud protocol
+    // doc, section 3).
+    crate::game::item::msort(&mut rows, |a, b| sort_ranks(a, b) <= 0);
     let mut body = String::new();
     let mut count = 0;
     for r in rows {
@@ -64,6 +64,27 @@ pub fn text_capped(mut rows: Vec<Row>, [axis, allies]: [i32; 2], cap: Option<usi
         count += 1;
     }
     format!("b {count} {axis} {allies}{body}")
+}
+
+/// `SortRanks` (1.1d 0x50078, 1.5b 0x4f818, UO 0x58e44): a connecting
+/// client after anyone, two connecting ones included, which is no order,
+/// so glibc's merge puts the right run's first; spectators after the rest,
+/// among themselves by slot; then score down, deaths up, 0 on a tie.
+fn sort_ranks(a: &Row, b: &Row) -> i32 {
+    use std::cmp::Ordering::*;
+    if a.connecting {
+        return 1;
+    }
+    if b.connecting {
+        return -1;
+    }
+    let ord = match (a.spectator, b.spectator) {
+        (true, true) => a.slot.cmp(&b.slot),
+        (true, false) => Greater,
+        (false, true) => Less,
+        (false, false) => b.score.cmp(&a.score).then(a.deaths.cmp(&b.deaths)),
+    };
+    ord as i32
 }
 
 impl GameHost {
@@ -166,6 +187,26 @@ mod tests {
             ping: 50,
             icon: 0,
         }
+    }
+
+    /// `SortRanks` puts a connecting client after anyone, another
+    /// connecting one too, so glibc's merge takes the right run first and
+    /// connecting clients come out against slot order; spectators keep it.
+    #[test]
+    fn connecting_clients_sort_as_glibc_merges_them() {
+        let mut rows: Vec<Row> = (0..6).map(|s| row(s, 0)).collect();
+        for r in &mut rows[..3] {
+            r.connecting = true;
+        }
+        rows[3].spectator = true;
+        rows[4].spectator = true;
+        let slots: Vec<String> = text(rows, [0, 0])
+            .split(' ')
+            .skip(4)
+            .step_by(5)
+            .map(str::to_string)
+            .collect();
+        assert_eq!(slots, ["5", "3", "4", "2", "1", "0"]);
     }
 
     #[test]
