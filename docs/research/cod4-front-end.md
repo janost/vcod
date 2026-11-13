@@ -418,8 +418,24 @@ editor picked).
   The mark is not a `serverInfo_t` field, so `servercache.dat` does not
   keep it: a cached favourite shows until its ping answers. vcod joins
   stock 1.7 servers only; playing on CoD4x servers is not supported.
-- Left: the Create a Class editor's stat commands (section 4), and the
-  CD key menus (`cdkey_menu`, `verifyCDKey`, `getCDKey`).
+- Left: the Create a Class editor's stat commands (section 4).
+- `cdkey_menu` (`ui_mp.ff`): `onOpen` `setfocus firstkey`,
+  `setlocalvarint ui_show_cancel 1`, `uiScript getCDKey`; five
+  `ITEM_TYPE_UPREDITFIELD` (18) fields on `cdkey1`..`cdkey5`, Verify's
+  action `uiScript verifyCDKey`. VERIFIED (zone). The scripts are 1.1's:
+  `getCDKey` (`iw3mp.exe` 0x545cdf) reads `CL_GetCDKey` (0x475ef0), clears
+  the five dvars and fills the quarters at 16 characters and the check at
+  4; `verifyCDKey` (0x545e8a) joins the quarters, checks them with
+  `CL_CDKeyValidate` (0x4712e0, 1.1's `0x14002` loop and `%04x`
+  0x6d205c, compared over 4 characters) and sets `ui_cdkeyvalid` to the
+  localized `EXE_CDKEYVALID` (0x6eaf60) and calls `CL_SetCDKey`
+  (0x475f70), or sets `EXE_CDKEYINVALID` (0x6eaf80). VERIFIED (asm).
+  `CL_SetCDKey` copies the key to `cl_cdkey` (0x724b84) and its check
+  (0x724ba8) and jumps to 0x4fdfc0, which validates again and writes
+  value `codkey` (0x6e13d0) under `HKEY_LOCAL_MACHINE` (`push 0x80000002`,
+  0x4fe01f). VERIFIED (asm). vcod keeps the key for the session and
+  writes no registry (`net::cdkey::store`); the fields live in the UI's
+  dvar table (`front::ui_table_dvar`), which had greyed them before.
 
 ## 8. Sounds and music
 

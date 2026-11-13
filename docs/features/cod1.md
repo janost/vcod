@@ -47,8 +47,10 @@ Front end:
   nothing.
 - CD key authorization as the retail client does it: `getKeyAuthorize` to
   the authorize server before the challenge, off the LAN only, with the
-  key from `VCOD_CDKEY` or 1.1's `main/codkey`, and the stock `needcdkey`
-  and refusal messages ([usage](../usage.md#cd-keys)).
+  key from the CD key menu, `VCOD_CDKEY` or 1.1's `main/codkey`, and the
+  stock `needcdkey` and refusal messages ([usage](../usage.md#cd-keys)).
+  The CD key menu shows the key, checks a typed one as retail does and
+  keeps a valid one; on 1.1 it writes `main/codkey`.
 
 Joining:
 
@@ -361,8 +363,6 @@ Front end:
   server console.
 - A mod's UI DLL is ignored; only its menu files count
   ([cod11-front-end.md](../research/cod11-front-end.md) 16-17).
-- The CD key menu doesn't open (the console says so). Set the key through
-  `VCOD_CDKEY` or `main/codkey`.
 - Options: the sound provider and NVIDIA fog are stored but ignored, and
   the language picker stays hidden.
 

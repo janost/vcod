@@ -335,8 +335,9 @@ Ranked by how much a player notices, worst first.
    never asks the authorize server: an off-LAN client gets its challenge
    at once and its IP stands in for its ban guid. It does not send the
    master the status retail sends every 10 minutes. The client reads no
-   CD key from the registry; set `VCOD_CDKEY`
-   ([usage.md](../usage.md), "CD keys").
+   CD key from the registry; set `VCOD_CDKEY` or enter it in the CD key
+   menu, which keeps it until vcod quits ([usage.md](../usage.md), "CD
+   keys").
 2. **Download names.** vcod-server refuses a `download` name with a `..`
    part and never reads from the filesystem root; retail serves both
    (cod2-protocol.md 17.5). A stock client never asks for either.

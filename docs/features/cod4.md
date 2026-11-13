@@ -450,9 +450,10 @@ Ranked by how much a player notices. The research-side lists are
    gated both ways against `iw3mp.exe`'s and a retail capture, but no
    retail client has played a vcod demo or recorded one for vcod
    ([cod4-demos.md](../research/cod4-demos.md) 8).
-7. **Small menus.** The CD key menus are missing; Single Player's Yes
-   does nothing (this is a multiplayer client); the `winvoice_*` voice
-   settings are not read.
+7. **Small menus.** Single Player's Yes does nothing (this is a
+   multiplayer client); the `winvoice_*` voice settings are not read. The
+   CD key menu keeps a verified key until vcod quits, where 1.7 writes
+   the registry.
 8. **Server-side differences.** vcod-server never asks the authorize
    server, so it answers an off-LAN challenge at once where 1.7 waits on
    the authorize server (cod4-handshake.md 15). No PunkBuster (a stock

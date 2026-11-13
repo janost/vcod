@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use vcod_common::asset_source::{Asset, AssetSource};
 use vcod_common::localize::Localized;
+use vcod_common::net::cdkey;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::ui_menu::{
     self, FEEDER_ALLMAPS, FEEDER_MODS, FEEDER_MUTELIST, FEEDER_PLAYER_LIST, FEEDER_PLAYER_PROFILES,
@@ -127,14 +128,13 @@ fn item_states(menus: &[UiMenu]) -> Vec<Vec<ItemState>> {
 /// The stock menus vcod cannot run yet; `open` refuses them with a console
 /// line instead of drawing controls that do nothing. Any other menu the
 /// list loads, a mod's included, opens.
-const UNSUPPORTED: [&str; 10] = [
+const UNSUPPORTED: [&str; 9] = [
     "single_popmenu",
     "options_driverinfo",
     "options_credits",
     "language_restart_popmenu",
     "rec_restart_popmenu",
     "multi_menu",
-    "cdkey_menu",
     "connect",
     "single_player_menu",
     "auconfirm",
@@ -374,6 +374,9 @@ pub struct Ui {
     /// CoD2's menus' parsed rects, placed by their alignment for the
     /// window ([`Self::set_screen`]); `None` for CoD1.
     cod2: Option<cod2::Cod2Rects>,
+    /// Whose CD key the CD key menu shows and sets, and whether setting it
+    /// writes `main/codkey` (1.1 only).
+    key_game: (cdkey::KeyGame, bool),
 }
 
 /// The maps `levelshots/` holds an image for.
@@ -489,6 +492,16 @@ impl Ui {
             active_type: UIMENU_NONE,
             server_cvars: HashMap::new(),
             cod2: (fs.game() == vcod_common::game::Game::Cod2).then(cod2::Cod2Rects::default),
+            key_game: match fs.game() {
+                vcod_common::game::Game::Cod2 => (cdkey::KeyGame::Cod2, false),
+                _ => {
+                    let proto = vcod_common::net::protocol::install_protocol(fs);
+                    match proto.is_uo() {
+                        true => (cdkey::KeyGame::Uo, false),
+                        false => (cdkey::KeyGame::Cod1, proto.is_v1()),
+                    }
+                }
+            },
         }
         .with_list_menus()
     }
@@ -1044,6 +1057,13 @@ impl Ui {
                 "uiscript" if menu_on_dvar(arg(1)).is_some() => {
                     self.menu_on_dvar(&cmd[1..], shell, out);
                 }
+                "uiscript" if arg(1).eq_ignore_ascii_case("getCDKey") => {
+                    let (key, check) = cdkey::menu_key(self.key_game.0);
+                    self.cdkey_fields(&key, &check, out);
+                }
+                "uiscript" if arg(1).eq_ignore_ascii_case("verifyCDKey") => {
+                    self.verify_cdkey(shell, out);
+                }
                 "uiscript" => self.ui_script(&cmd[1..], out),
                 "scriptmenuresponse" => out.push(UiEffect::ScriptMenuResponse {
                     menu: self.menus[menu].name.clone(),
@@ -1106,6 +1126,42 @@ impl Ui {
             } else {
                 self.close_menu(menu, shell, out);
             }
+        }
+    }
+
+    /// `getCDKey` (ui_mp_x86.dll 1.1 0x4000a72c): the five fields cleared,
+    /// then the key's four quarters when it has 16 characters and the check
+    /// when it has 4.
+    fn cdkey_fields(&mut self, key: &str, check: &str, out: &mut Vec<UiEffect>) {
+        for i in 1..=5 {
+            self.set_cvar(&format!("cdkey{i}"), "", out);
+        }
+        if key.len() == 16 {
+            for i in 0..4 {
+                self.set_cvar(&format!("cdkey{}", i + 1), &key[i * 4..][..4], out);
+            }
+        }
+        if check.len() == 4 {
+            self.set_cvar("cdkey5", check, out);
+        }
+    }
+
+    /// `verifyCDKey` (0x4000a87e): the first four fields joined are the key,
+    /// the fifth its check; `ui_cdkeyvalid` says whether they pass, and a
+    /// valid key is set (`net::cdkey::store`).
+    fn verify_cdkey(&mut self, shell: &Shell, out: &mut Vec<UiEffect>) {
+        let field = |i: u32| self.cvar(&format!("cdkey{i}"), shell).unwrap_or_default();
+        let key: String = (1..=4).map(field).collect();
+        let check = field(5);
+        let ok = cdkey::valid(&key, &check);
+        let text = if ok {
+            "@EXE_CDKEYVALID"
+        } else {
+            "@EXE_CDKEYINVALID"
+        };
+        self.set_cvar("ui_cdkeyvalid", text, out);
+        if ok {
+            cdkey::store(self.key_game.0, &key, &check, self.key_game.1);
         }
     }
 
@@ -1633,7 +1689,7 @@ impl Ui {
         }
         if !click && !handled {
             // The Enter case (0x400138b6): no cursor test.
-            if matches!(item.kind, ITEM_TYPE_EDITFIELD | ITEM_TYPE_NUMERICFIELD) {
+            if is_edit_field(item.kind) {
                 self.options.editing = Some((top, i));
             } else {
                 self.item_action(top, &item, shell, out);
@@ -2053,10 +2109,7 @@ impl Ui {
         };
         let cursor = self.cursor;
         self.set_focus(m, target, cursor, shell, out);
-        if matches!(
-            self.menus[m].items[target].kind,
-            ITEM_TYPE_EDITFIELD | ITEM_TYPE_NUMERICFIELD
-        ) {
+        if is_edit_field(self.menus[m].items[target].kind) {
             self.options.editing = Some((m, target));
         }
     }
@@ -2687,6 +2740,15 @@ fn truncate_visible(text: &str, n: usize) -> String {
 /// `menudef.h`'s upper case edit field, which `Item_SetTextExtents`
 /// measures a cvar for beside 4 and 9 (0x40013ca4).
 const ITEM_TYPE_UPREDITFIELD: i32 = 15;
+
+/// The types `Item_HandleKey` edits (`ui_mp_x86.dll` 1.1 0x400139da,
+/// 0x40013a42: 4, 9 and 15); 15 types upper case (0x400127a5).
+pub(super) fn is_edit_field(kind: i32) -> bool {
+    matches!(
+        kind,
+        ITEM_TYPE_EDITFIELD | ITEM_TYPE_NUMERICFIELD | ITEM_TYPE_UPREDITFIELD
+    )
+}
 /// `menudef.h`'s `ITEM_ALIGN_CENTER2`: measured as right aligned, never
 /// kept (0x40013c28, 0x40013cf2).
 const ITEM_ALIGN_CENTER2: i32 = 3;
@@ -3162,7 +3224,7 @@ mod tests {
         let Some(mut ui) = ui() else { return };
         let mut out = Vec::new();
         ui.open_main(&Shell::new(), &mut out);
-        ui.open_menu("cdkey_menu", &Shell::new(), &mut out);
+        ui.open_menu("single_popmenu", &Shell::new(), &mut out);
         assert_eq!(ui.open.len(), 1);
         assert_eq!(ui.menus[ui.open[0]].name, "main");
     }
@@ -5023,6 +5085,63 @@ mod tests {
             .map(|s| s.addr.to_string())
             .collect();
         assert_eq!(rows, ["10.0.0.7:29661"]);
+    }
+
+    /// `cdkey_menu`: the upper-case fields take the key's quarters and its
+    /// check, Verify says whether they pass and keeps a valid key.
+    #[test]
+    fn the_cd_key_menu_verifies_what_is_typed() {
+        let Some(mut ui) = ui() else { return };
+        // UO's key, which nothing else in these tests reads
+        ui.key_game = (cdkey::KeyGame::Uo, false);
+        let mut shell = Shell::new();
+        ui.frame(Instant::now(), &shell);
+        let mut out = Vec::new();
+        ui.open_menu("cdkey_menu", &shell, &mut out);
+        apply(&mut shell, &out);
+        assert_eq!(top_name(&ui), "cdkey_menu");
+        assert_eq!(shell.cvar("cdkey1"), Some(""));
+        let m = ui.find("cdkey_menu").unwrap();
+        let fields: Vec<usize> = (0..ui.menus[m].items.len())
+            .filter(|&i| ui.menus[m].items[i].kind == ITEM_TYPE_UPREDITFIELD)
+            .collect();
+        assert_eq!(fields.len(), 5);
+        let verify = |ui: &mut Ui, shell: &mut Shell, parts: [&str; 5]| {
+            for (&i, text) in fields.iter().zip(parts) {
+                click_at(ui, m, i, shell);
+                let out = ui.edit_key(KeyCode::KeyA, Some(text), shell);
+                apply(shell, &out);
+                ui.options.editing = None;
+            }
+            click_named(ui, "cdkey_menu", "verify", shell);
+            shell.cvar("ui_cdkeyvalid").map(str::to_string)
+        };
+        let bad = verify(
+            &mut ui,
+            &mut shell,
+            ["abcd", "2345", "efgh", "6789", "0883"],
+        );
+        assert_eq!(bad.as_deref(), Some("@EXE_CDKEYINVALID"));
+        // typed lower case, kept upper case
+        assert_eq!(shell.cvar("cdkey1"), Some("ABCD"));
+        assert_eq!(cdkey::menu_key(cdkey::KeyGame::Uo).0, "");
+        // a full field takes nothing more
+        shell.execute("set cdkey5 \"\"");
+        let good = verify(
+            &mut ui,
+            &mut shell,
+            ["abcd", "2345", "efgh", "6789", "0882"],
+        );
+        assert_eq!(good.as_deref(), Some("@EXE_CDKEYVALID"));
+        let (key, check) = cdkey::menu_key(cdkey::KeyGame::Uo);
+        assert_eq!((key.as_str(), check.as_str()), ("ABCD2345EFGH6789", "0882"));
+        // reopened, the fields show the key
+        let mut out = Vec::new();
+        ui.open_menu("cdkey_menu", &shell, &mut out);
+        apply(&mut shell, &out);
+        assert_eq!(shell.cvar("cdkey4"), Some("6789"));
+        assert_eq!(shell.cvar("cdkey5"), Some("0882"));
+        cdkey::forget(cdkey::KeyGame::Uo);
     }
 
     #[test]

@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use vcod_common::localize::Localized;
 use vcod_common::text::atoi_msvc;
 use vcod_common::ui_menu::{
-    ITEM_TYPE_BIND, ITEM_TYPE_EDITFIELD, ITEM_TYPE_MULTI, ITEM_TYPE_NUMERICFIELD, ITEM_TYPE_SLIDER,
-    ITEM_TYPE_YESNO, UiItem,
+    ITEM_TYPE_BIND, ITEM_TYPE_MULTI, ITEM_TYPE_NUMERICFIELD, ITEM_TYPE_SLIDER, ITEM_TYPE_YESNO,
+    UiItem,
 };
 use vcod_common::ui_menu::{ITEM_TYPE_DECIMALFIELD, ITEM_TYPE_DVARENUM};
 
@@ -209,7 +209,7 @@ impl Ui {
                     }
                 }
             }
-            ITEM_TYPE_EDITFIELD | ITEM_TYPE_NUMERICFIELD => {
+            k if super::is_edit_field(k) => {
                 self.options.editing = Some((m, i));
                 return false;
             }
@@ -362,6 +362,7 @@ impl Ui {
         let item = &self.menus[m].items[i];
         // Q3's `Item_TextField_HandleKey`: a numeric field takes digits only.
         let numeric = item.kind == ITEM_TYPE_NUMERICFIELD;
+        let upper = item.kind == super::ITEM_TYPE_UPREDITFIELD;
         let file_name = item.file_name_only;
         let accept = item.accept.clone();
         let goto_next = item.max_chars_goto_next;
@@ -404,6 +405,7 @@ impl Ui {
                     .filter(|c| !c.is_control() && *c != '"')
                     .filter(|c| !numeric || c.is_ascii_digit())
                     .filter(|&c| !file_name || c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                    .map(|c| if upper { c.to_ascii_uppercase() } else { c })
                 {
                     if max == 0 || value.chars().count() < max {
                         value.push(c);
@@ -489,7 +491,7 @@ impl Ui {
                 }
                 bind_text(cvar, loc, shell)
             }
-            ITEM_TYPE_EDITFIELD | ITEM_TYPE_NUMERICFIELD => {
+            k if super::is_edit_field(k) => {
                 let v: Vec<char> = self.cvar(cvar, shell).unwrap_or_default().chars().collect();
                 let n = if item.max_paint_chars == 0 {
                     v.len()
