@@ -77,6 +77,10 @@ more.
 - Entity numbers follow retail's: `delete()` frees inside the call, so
   the free list keeps the scripts' delete order (cod4-combat.md 14).
 - `sv_fps` is read every frame (cod4-server-frame.md 8).
+- A client in the world more than 28 messages past its last acknowledge
+  is due a random `irand(0, 2^n)` snapshot intervals on, n climbing to 8,
+  as 1.7's `SV_SendMessageToClient`: a retail capture of a probe stopped
+  for 20 s saw the same eight messages (cod4-server-frame.md 12).
 - Off the LAN (cod4-handshake.md 15): bans answer the `getchallenge`;
   `sv_minPing` / `sv_maxPing` are read; a client out of the world waits
   a second between messages as on 1.7 (the gamestate's second fragment
@@ -121,9 +125,13 @@ Open, by how much a player notices.
    were the gates' replay, not the server; the prone killcam's trim was
    `psoffsettime`, which 1.7 takes off the playerstate's look back and
    not the entities' (cod4-combat.md 7.1).
-4. The off-LAN snapshot rate above 20 (cod4-server-frame.md), and why
-   retail counted its own public address as off the LAN
-   (cod4-handshake.md 15). S to measure.
+4. Closed: off the LAN `sv_fps` and `snaps` set the rate together,
+   `ceil(snapshotMsec / frame)` frames a message, and vcod-server matched
+   retail at nine pairs (cod4-server-frame.md 12). Its own public address
+   was off the LAN because `cod4_lnxded` runs at `dedicated 2` only, so
+   the challenge takes the subnet-blind test (cod4-handshake.md 15, "The
+   server's own address"). A client 28 messages behind on its acks backs
+   off as 1.7's (Fixed above).
 5. Closed: an empty `sv_master1` heartbeats `master.cod.pm:20810` at
    `dedicated 2`, as CoD1's and CoD2's servers do (`Cod4Server::heartbeat`).
 

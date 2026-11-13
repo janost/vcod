@@ -92,7 +92,9 @@ in the header of the fixture it produced. `--net-probe --game cod2` and
   pacing for them. `tools/offlan_capture.sh retail|ours <dir>` runs a server
   and the probe in two rootless network namespaces with public test
   addresses and logs every datagram. `--probe-rate` / `--probe-snaps` set the
-  probe's userinfo.
+  probe's userinfo. `tools/cod4_offlan_capture.sh` does the same for CoD4,
+  with a stand-in authorize server that accepts every client, one join per
+  `sv_fps:snaps` pair (cod4-server-frame.md 12).
 - Build a new mode on the probe's helpers, which encode retail's input rules:
   - the loop echoes `ps.weapon` in every cmd (a different byte reads as a
     holster request);
