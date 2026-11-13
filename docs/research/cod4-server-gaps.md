@@ -121,10 +121,14 @@ Open, by how much a player notices.
    (`hardpoint_ab` `STILL_GAPS`, `AIM`; cod4-gsc.md 3.2, "The turret"). M
    to port the skeleton.
 3. What the five capture gates (`cod4::capture_ab`, cod4-combat.md 15)
-   still tolerate: the dropped weapon's start and fall (1.7's rules read
-   in cod4-combat.md 6.1, not ported; M), a grenade's strike on a
-   standing body (M), the second rocket's entity number and a killcam's
-   archived view (both measured, cause open). Closed: the spawn's
+   still tolerate: a dying prone body's `tag_weapon_right`, 0.11 over
+   retail's, and the dropped weapon's hit `trDelta` that follows (the
+   anim's phase on the server's body, open; S to M), a grenade's strike
+   on a standing body (ours's posed hit boxes miss a box ahead of the
+   chest; M), the second rocket's entity number and a killcam's archived
+   view (both measured, cause open). Closed: the dropped weapon's start at
+   the hand's tag, its fall, its 50 ms move and its rest on its side
+   (`Drop_Weapon`, `G_RunItem`, cod4-combat.md 6.1). Closed: the spawn's
    `delta_angles` the rocket and touch gates listed after a `setviewpos`
    were the gates' replay, not the server; the prone killcam's trim was
    `psoffsettime`, which 1.7 takes off the playerstate's look back and

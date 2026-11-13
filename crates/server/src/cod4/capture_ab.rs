@@ -568,11 +568,12 @@ fn pair_ab(gate: &str, pair: &Pair, gaps: &[(&str, &str)]) {
     check(gate, &pair_diffs(&run, pair), &run.aborts, gaps);
 }
 
-/// Why a dropped weapon differs: it leaves from the body's middle, not
-/// the hand's tag, and `G_RunItem`'s fall (`trType` 5, then 3 for 50
-/// ms) and its rest on its side (roll 90, ground 1022) are left out
+/// Why a dropped weapon still differs: it starts at the dying body's
+/// `tag_weapon_right` as ours poses it, which on the prone body sits 0.11
+/// over retail's and on the standing one a few thousandths off; the start
+/// is rounded on the wire, the hit's move, times 20 in `trDelta`, is not
 /// (cod4-combat.md 6.1).
-const ITEM: &str = "the dropped weapon's start and fall (cod4-combat.md 6.1)";
+const ITEM_TAG: &str = "the dying body's tag_weapon_right as ours poses it (cod4-combat.md 6.1)";
 
 /// What the rocket run still differs in.
 const ROCKET_GAPS: &[(&str, &str)] = &[
@@ -606,7 +607,10 @@ fn cod4_throwback_ab() {
     pair_ab("cod4_throwback_ab", &THROWBACK, THROWBACK_GAPS);
 }
 
-const PRONE_GAPS: &[(&str, &str)] = &[("* entity *:3", ITEM)];
+const PRONE_GAPS: &[(&str, &str)] = &[
+    ("* entity 320:3 lerp.pos.trBase[2]", ITEM_TAG),
+    ("* entity 320:3 lerp.pos.trDelta", ITEM_TAG),
+];
 
 /// A prone body's death and its corpse's torso (cod4-combat.md 5).
 #[test]
@@ -615,7 +619,7 @@ fn cod4_prone_death_ab() {
 }
 
 const KCENT_GAPS: &[(&str, &str)] = &[
-    ("* entity *:3", ITEM),
+    ("* entity 319:3 lerp.pos.trDelta", ITEM_TAG),
     (
         "target ps viewangles[1]",
         "the killcam's archived view: retail's archive holds the shooter's \

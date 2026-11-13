@@ -136,7 +136,7 @@ impl Run {
             self.tick();
         }
         let items = &self.level().rt.host.cod4().items;
-        let item = items.iter().find(|i| i.resting).expect("a resting drop");
+        let item = items.iter().find(|i| i.resting()).expect("a resting drop");
         item.id.0
     }
 
