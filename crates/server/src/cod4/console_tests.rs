@@ -384,3 +384,37 @@ fn cod4_an_idle_off_lan_client_waits_a_second() {
         assert_eq!(c.link.next_message_ms - svs, next, "{ip:?}");
     }
 }
+
+/// A client in the world more than 28 messages past its last acknowledge,
+/// LAN or not, is next due `irand(0, 2^n) * snapshotMsec` on, n climbing to
+/// 8; one 28 behind, or any other, is paced by its link
+/// (`SV_SendMessageToClient`, 0x8178c1a; cod4-server-frame.md 12).
+#[test]
+fn cod4_an_unacking_client_backs_off() {
+    let Some((mut sv, _, _)) = two_playing() else {
+        return;
+    };
+    let svs = sv.core.sv_time_ms;
+    let c = sv.core.clients[0].as_mut().unwrap();
+    assert_eq!(c.state, State::Active);
+    c.delta_message = c.link.netchan.outgoing_sequence as i32 - 28;
+    sv.transmit(0, Vec::new());
+    let c = sv.core.clients[0].as_ref().unwrap();
+    assert_eq!((c.link.next_message_ms, c.stall_exp), (svs - 1, 0));
+    let msec = c.rates.snapshot_msec;
+    let mut longest = 0;
+    for n in 0..12u32 {
+        sv.transmit(0, Vec::new());
+        let c = sv.core.clients[0].as_ref().unwrap();
+        let wait = c.link.next_message_ms - svs;
+        assert!((0..msec << n.min(8)).contains(&wait), "{n}: {wait}");
+        assert_eq!((wait % msec, c.stall_exp), (0, (n + 1).min(8)));
+        longest = longest.max(wait);
+    }
+    assert!(longest >= 2 * msec, "{longest}");
+    let c = sv.core.clients[0].as_mut().unwrap();
+    c.delta_message = c.link.netchan.outgoing_sequence as i32 - 1;
+    sv.transmit(0, Vec::new());
+    let c = sv.core.clients[0].as_ref().unwrap();
+    assert_eq!((c.link.next_message_ms, c.stall_exp), (svs - 1, 0));
+}

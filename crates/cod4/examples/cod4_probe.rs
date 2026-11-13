@@ -73,8 +73,9 @@
 //! answers the team or class menu at each time past the first snapshot in
 //! place of `--team`'s two; answers at one time go in one packet.
 //! `--cmd "SECS TEXT"` (repeatable) sends TEXT as a client command SECS
-//! past the first snapshot (`say`, `kill`, `disconnect`). Every
-//! change of `pm_type` is logged.
+//! past the first snapshot (`say`, `kill`, `disconnect`). `--snaps N`
+//! sends a userinfo with `snaps N` on the first snapshot (the connect's
+//! says 20). Every change of `pm_type` is logged.
 //!
 //! `--download` fetches files over `svc_download` on the first gamestate,
 //! sending no usercmds meanwhile, as 1.7's `CL_InitDownloads` does: `auto`
@@ -680,6 +681,7 @@ fn main() -> Result<()> {
     };
     let scores = args.iter().any(|a| a == "--scores");
     let answers = opt("--answers").cloned();
+    let snaps = opt("--snaps").cloned();
     // `--cmd "SECS TEXT"`, any number: TEXT as a client command SECS past
     // the first snapshot.
     let mut extra: Vec<(f32, String)> = Vec::new();
@@ -877,6 +879,9 @@ fn main() -> Result<()> {
                         if first_snap.is_none() {
                             eprintln!("first snapshot at message {s}");
                             first_snap = Some(Instant::now());
+                            if let Some(n) = &snaps {
+                                conn.set_userinfo("snaps", n);
+                            }
                         }
                         let ps = &conn.client.snapshots[*i].ps;
                         let pm_type = ps_u32(ps, "pm_type");
