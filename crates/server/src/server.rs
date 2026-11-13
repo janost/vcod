@@ -5886,6 +5886,32 @@ impl Server {
         self.core.bans = bans;
     }
 
+    /// The console's commands for this version, then every cvar, for the
+    /// tty console's tab ([`crate::tty_console`]).
+    pub(crate) fn console_names(&self) -> Vec<String> {
+        let extra: &[&str] = if self.v15() {
+            console::COMMANDS_15
+        } else {
+            &[]
+        };
+        let mut names: Vec<String> = console::COMMANDS
+            .iter()
+            .chain(extra)
+            .map(|c| c.to_string())
+            .collect();
+        let cvars = match self.game.module.script.as_ref() {
+            Some(rt) => Some(rt.cvars()),
+            None => self.game.carried_cvars.as_ref(),
+        };
+        names.extend(
+            cvars
+                .into_iter()
+                .flat_map(|c| c.names())
+                .map(str::to_string),
+        );
+        names
+    }
+
     /// `SV_KillServer_f` (0x8084d3c) into `SV_Shutdown("EXE_SERVERKILLED")`:
     /// the final message to every client, the flatline to the masters,
     /// every slot freed and the level gone. The process stays; it reads
@@ -13266,6 +13292,27 @@ mod tests {
         sv.drain_console(t);
         assert_eq!(sv.script_cvar("scr_dm_timelimit").as_deref(), Some("5"));
         assert!(sv.quit_requested());
+    }
+
+    /// The tty console's tab asks the frame loop for its names: the
+    /// version's commands, then the cvars.
+    #[test]
+    fn a_tab_gets_the_commands_and_cvars() {
+        let t = Instant::now();
+        let mut sv = Server::new(cfg(), t);
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test("main() {}"),
+        );
+        sv.set_cvar("scr_dm_timelimit", "5");
+        let names = crate::stdin_console::StdinConsole::names_now(&mut sv);
+        assert_eq!(names[0], "map");
+        assert!(names.iter().any(|n| n == "killserver"));
+        assert!(
+            !names.iter().any(|n| n == "tempBanUser"),
+            "1.1 has no tempBanUser"
+        );
+        assert!(names.iter().any(|n| n == "scr_dm_timelimit"));
     }
 
     /// `banUser` and `banClient` against the replies a retail server gave

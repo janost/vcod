@@ -1294,7 +1294,7 @@ Read off `cod2_lnxded` with `objdump`, 2026-11-12. The shape is 1.1's (cod11-ser
 - With `ttycon` false it takes that path while `stdin_active` (0x8184420, 1 in the file) is set. This path has no `dedicated` test. EOF clears `stdin_active` (0x80d42dd). INFERRED.
 - `Sys_GetEvent` (0x80d484e) calls it at 0x80d48cc and queues the line as 1.1 does. INFERRED.
 
-vcod-server under `--game cod2` reads stdin as for 1.1. Each line runs through `Cod2Server::exec`, the dispatch rcon uses, and its output goes to the log. Gate: `stdin_console::tests::cod2_runs_a_stdin_line`.
+vcod-server under `--game cod2` reads stdin as 1.1 does without its tty editor, the terminal editing the line. Each line runs through `Cod2Server::exec`, the dispatch rcon uses, and its output goes to the log. Gate: `stdin_console::tests::cod2_runs_a_stdin_line`.
 
 ## 18. The client on a bad link
 

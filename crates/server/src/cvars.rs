@@ -320,6 +320,11 @@ impl Cvars {
         }
     }
 
+    /// Every cvar's name as registered, case-folded order.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.vars.values().map(|c| c.name.as_str())
+    }
+
     /// `Cvar_InfoString(bit)`: every cvar carrying `bit` as `(name,
     /// value)`, case-folded order, empty values left out as
     /// `Info_SetValueForKey` leaves them.

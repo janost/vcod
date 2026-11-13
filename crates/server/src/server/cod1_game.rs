@@ -289,6 +289,9 @@ impl crate::engine::GameModule for Cod1Game {
         let ack = e.ack_stamp(at.arrived);
         e.handle_packet_acked(from, pkt, at, ack);
     }
+    fn console_names(e: &Server) -> Vec<String> {
+        e.console_names()
+    }
     fn accepts_packets(e: &Server) -> bool {
         // `Com_EventLoop` hands a packet to `SV_PacketEvent` only while
         // `sv_running` is set.

@@ -24,6 +24,46 @@ pub fn next_restart_id(id: u8) -> u8 {
     (id & 0xf0) | (id.wrapping_add(1) & 0x0f)
 }
 
+/// The commands [`Command::parse`] knows on every version, spelled as
+/// retail registers them: what the tty console's tab completes.
+pub const COMMANDS: &[&str] = &[
+    "map",
+    "devmap",
+    "map_restart",
+    "map_rotate",
+    "status",
+    "clientkick",
+    "kick",
+    "dumpuser",
+    "serverinfo",
+    "systeminfo",
+    "say",
+    "set",
+    "seta",
+    "heartbeat",
+    "gameCompleteStatus",
+    "scriptUsage",
+    "stringUsage",
+    "quit",
+    "killserver",
+    "banUser",
+    "banClient",
+    "cvarlist",
+    "addbot",
+    "removebot",
+    "listbots",
+];
+
+/// The ones 1.5 and UO add.
+pub const COMMANDS_15: &[&str] = &[
+    "unbanUser",
+    "tempBanUser",
+    "tempBanClient",
+    "setdrawfriend",
+    "setfriendlyfire",
+    "setkillcam",
+];
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     /// `SV_Map_f` (0x8083c68), registered as `map` and `devmap`: the map
@@ -335,6 +375,17 @@ mod tests {
         assert_eq!(next_map_id(0x10), 0x20);
         assert_eq!(next_map_id(0x13), 0x23); // restarts in the low nibble survive
         assert_eq!(next_map_id(0xf0), 0x10); // 0xf0 + 0x10 wraps to 0x00, then +0x10
+    }
+
+    /// The tab's list and the parser agree.
+    #[test]
+    fn every_completed_command_parses() {
+        for c in COMMANDS.iter().chain(COMMANDS_15) {
+            assert!(
+                !matches!(Command::parse(c), Command::Unknown(_)),
+                "{c} is not a command"
+            );
+        }
     }
 
     #[test]

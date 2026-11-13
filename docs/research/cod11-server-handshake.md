@@ -1058,10 +1058,8 @@ Read off `cod_lnxded` 1.1d with `objdump`, 2026-11-12. CoD2 1.3's and CoD4
   printed first, is taken when `ttycon` is non-zero and `isatty(0)` returns
   1 (0x80c57df). Otherwise `stdin is not a tty, tty console mode failed` is
   printed and `ttycon` set to `"0"` (0x80c5865, 0x80c587c). INFERRED.
-- The tty mode is Q3 1.32's line editor: backspace, a 32-line history on
-  the arrow keys, tab completion. Enter writes a bare `\n` to fd 1
-  (0x80c5a2f) and returns the line. No `]` prompt is printed. INFERRED
-  (the branch's compares and writes).
+- The tty mode is Q3 1.32's line editor, below. No `]` prompt is printed.
+  INFERRED (no write of one on the branch).
 - The line path's `select` on fd 0 has a zero timeout (0x80c5f79). Its
   `read` takes up to 256 bytes into 0x8318240 (0x80c5fa8), and the last byte
   read is overwritten with a NUL (0x80c5fc9). VERIFIED.
@@ -1083,23 +1081,117 @@ Read off `cod_lnxded` 1.1d with `objdump`, 2026-11-12. CoD2 1.3's and CoD4
   `stderr` (0x80c6507, `stderr` at 0x80f8488), with no colour stripping in
   between. INFERRED.
 
+#### The tty line editor
+
+Read off `cod_lnxded` 1.1d with `objdump`, 2026-11-13. 1.5b and UO 1.51b
+carry the same editor, split into helpers: 1.5b's `Sys_ConsoleInput` is
+0x80d36ca, `tty_Hide` 0x80d30d9, `tty_Show` 0x80d3121, `Hist_Add`
+0x80d31b5 (its cap compare at 0x80d3271); UO's `Sys_ConsoleInput` is
+0x80c8a5e and `Hist_Add` 0x80c8549 (cap at 0x80c8605). VERIFIED. 1.5b
+reads `tty_erase` before the copy as 1.1d does (0x80d365a). INFERRED
+(instruction order).
+
+- Stdin is made non-blocking (`fcntl(0, F_SETFL, flags | O_NONBLOCK)`,
+  0x80c69b4). VERIFIED. The editor reads one byte a call (0x80c58db).
+  VERIFIED.
+- `tty_erase` (0x80e6470) and `tty_eof` (0x80e6474) are read out of the
+  zeroed local struct at 0x80c5818 and 0x80c5821, before the `rep movsl`
+  at 0x80c5837 copies the `tcgetattr` result into it. So `tty_erase` is 0.
+  INFERRED (instruction order).
+- A byte equal to `tty_erase`, 0x7f or 8 (0x80c58f3, 0x80c5901, 0x80c5906)
+  erases one character, writing `\b`, ` `, `\b` to fd 1, and nothing on an
+  empty line. VERIFIED. So NUL, DEL and BS all erase. INFERRED.
+- A byte that is not NUL and compares at most 0x1f as a signed char
+  (`cmp $0x1f,%dl; jg` at 0x80c596a) is a control byte. VERIFIED. Every
+  byte past 127 is one too. INFERRED.
+- Enter (`\n`, 0x80c5973): the 32 history slots of 0x11c bytes at
+  0x83184a0 shift down one, the line is copied into slot 0, the count
+  (0x80e647c) climbs while it is at most 0x1f (0x80c59e7) and
+  `hist_current` (0x80e6478) goes to -1 (0x80c59f2). VERIFIED. Every line
+  goes in, an empty one included, with no duplicate check. INFERRED. The
+  line is copied out (0x80c5a09), the field cleared (0x80c5a1b) and a bare
+  `\n` written to fd 1 (0x80c5a2f). VERIFIED.
+- Tab (0x80c5a40): `tty_Hide`, `Field_CompleteCommand` (0x806d43c, called
+  at 0x80c5ad9), a leading `\` cut off the result (0x80c5b16), the cursor
+  set to its length, `tty_Show`. VERIFIED.
+- Any other control byte reads one more (0x80c5b9c). If it is `[` or `O`
+  (0x80c5bb3, 0x80c5bb7) a third is read (0x80c5bc7): `A` is up, `B`
+  down, `C` and `D` do nothing (0x80c5be8, 0x80c5bde, 0x80c5bf1,
+  0x80c5bf9). VERIFIED. Anything else, a read that finds no byte
+  included, prints `droping ISCTL sequence: %d, tty_erase: %d` through the
+  developer print (0x80c5ebc) and reads stdin until it is empty
+  (0x80c5ed8). VERIFIED. So a byte past 127 (UTF-8) is dropped with the
+  one after it. INFERRED.
+- Up and down end with the same drain. Up shows the next older slot only
+  while one is left (`hist_current + 1 < count`, 0x80c5c0d). Down steps
+  `hist_current` back while it is at least 0 and shows that slot, or an
+  empty line at -1 (0x80c5d67). VERIFIED. So down on a line never taken
+  from the history clears it. INFERRED.
+- Any other byte goes into the buffer at the cursor (0x80c5ef5) and is
+  echoed (0x80c5f09). No compare against the 256-byte buffer's size is on
+  that path. INFERRED.
+- `tty_Hide` writes the backspace triple once per character while the hide
+  count (0x80e646c) is 0, then counts up. `tty_Show` counts down and at 0
+  rewrites the line. `Sys_Print` (0x80c6478) wraps its `fputs` to stderr
+  (0x80c6507) in the two (0x80c64be, 0x80c653e), so every print takes the
+  typed line down and puts it back. VERIFIED.
+- `Field_CompleteCommand` tokenizes the line (`Cmd_TokenizeString`
+  0x805b398) and takes `argv[0]` past one leading `\` or `/`. Empty, it
+  does nothing. VERIFIED. `FindMatches` (0x806d22c) runs over
+  `Cmd_CommandCompletion` (0x805b21c), then `Cvar_CommandCompletion`
+  (0x806f94c): a case-blind prefix compare, the first match copied, each
+  later one cutting the copy where the two differ. VERIFIED.
+- That cut runs over the later name's length only, so a later match that
+  is a prefix of the copy leaves it whole. INFERRED. Both lists are walked
+  newest registration first. INFERRED (Q3's `cmd_functions` and
+  `cvar_vars`).
+- One match: the line becomes `\%s` (0x80cfa68) of it, plus ` `
+  (0x80cfa64) when the line was one token, or else `ConcatRemaining`
+  (0x806d2f8): the old line past the word, found with `strstr`, or failing
+  that each later argument after a space, quoted with `"` (0x80cfa66) when
+  it holds one. VERIFIED.
+- Several: the line becomes `\%s` of the shared part plus
+  `ConcatRemaining`'s, `]%s\n` (0x80cfa6c) prints it, and `PrintMatches`
+  (0x806e3ec) prints `    %s\n` for each name starting with the shared
+  part, over the same two lists. VERIFIED.
+- Exit: `Sys_Quit` (0x80c6ad8) and `Sys_Error` (0x80c54e0) print
+  `Shutdown tty console` (0x80c6b24) and put back the saved settings with
+  `tcsetattr(0, TCSADRAIN)` (0x80c6b35). VERIFIED.
+
 vcod (`crates/server/src/stdin_console.rs`): a thread reads stdin a line at
 a time and the frame loop pushes each non-blank line into the console queue
 (`EngineCore::console`) ahead of `drain_console`. So a line runs on the
 server thread like an rcon or Ctrl-C `quit`, in all three games. vcod ignores
 `SIGTTIN` and `SIGTTOU` as retail does. EOF ends the thread. A read error
 (`EIO` for a background process on its terminal) is retried once a second.
-vcod differences:
 
-- No raw tty mode and no `ttycon`. The terminal's own line mode edits the
-  line.
-- Output is the log's: `log::info!` lines on stderr with env_logger's prefix.
+Under CoD1, on a terminal, with `ttycon` not set to 0 (`--set ttycon=0`),
+`crates/server/src/tty_console.rs` runs the editor above instead: the same
+raw mode, keys, history, flushes, completion, prints and exit restore. Its
+thread blocks on `read` rather than polling, and a tab asks the frame loop
+for the names, which it answers in `StdinConsole::queue`. CoD2 and CoD4
+keep the line reader, as their `ttycon` is forced off (cod2-protocol.md
+17.8, cod4-handshake.md 14.4). vcod differences:
+
+- The names are vcod's: the commands its console runs, in
+  `console::COMMANDS` order (and `COMMANDS_15` on 1.5 and UO), then the
+  cvars sorted case-folded. The shared part is the true common prefix, so
+  retail's uncut-prefix case above does not happen.
+- The line stops at 255 characters.
+- Output is the log's: `log::info!` lines on stderr with env_logger's
+  prefix, each taken around the typed line as `Sys_Print` does. The
+  completion lines print bare, as retail's.
+- Retail's `stdin is not a tty` line is not printed.
+- The terminal comes back from an `atexit` hook and the panic hook, so
+  `quit`, Ctrl-C, `SIGTERM` and a crash all restore it.
 - `--no-console` leaves stdin unread. Retail has no switch for that:
   `ttycon 0` only turns the line editor off.
 
 Gates: `stdin_console::tests` (a pipe's line arrives, its EOF stops only
-the reading, a line reaches CoD2's and CoD4's servers) and
-`server::tests::a_stdin_line_runs_on_the_console` (CoD1).
+the reading, a line reaches CoD2's and CoD4's servers),
+`server::tests::a_stdin_line_runs_on_the_console` (CoD1),
+`tty_console::tests` (keys to line, history, flushes and completion) and
+`server::tests::a_tab_gets_the_commands_and_cvars`.
 
 ### Pings (`SV_CalcPings`, 0x808cab8)
 
@@ -1396,8 +1488,11 @@ UO. INFERRED (the match).
   dropped; then rcon `status`, rcon `map mp_harbor` and `getinfo` went
   unanswered with the process up. Only the stdin console could load a map.
   VERIFIED (capture).
-- vcod: the same; a console `map` (only a test can push one; no stdin console)
-  brings it back.
+- The stdin read's tests are `dedicated` and `stdin_active` (above), which
+  `SV_Shutdown` leaves alone, so stdin keeps being read. INFERRED.
+- vcod: the same. Checked 2026-11-13 on a pty and on a pipe: after
+  `killserver` on stdin `getinfo` went unanswered, and a stdin `map
+  mp_harbor` (CoD4: `map mp_crash`) brought the server back.
 
 ### Out-of-band `disconnect`
 

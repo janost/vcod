@@ -176,9 +176,17 @@ command: every command in the rcon table below, with no password. The
 output goes to the log on stderr; the line is not echoed back. At EOF the
 server stops reading for good and keeps running, so `nohup`, `</dev/null` and a
 service manager are fine. Started in the background from a shell, it does
-not stop on its read. Retail's raw-mode line editor (`ttycon`, history, tab
-completion) isn't there: the terminal edits the line. `--no-console` leaves
-stdin alone.
+not stop on its read. After `killserver` the server answers nothing until
+a `map` typed here loads a level. `--no-console` leaves stdin alone.
+
+CoD1 (1.1, 1.5, UO) on a terminal runs retail's line editor: up and down
+walk the last 32 lines, tab completes the first word against the commands
+and cvars (several matches print and the line grows to what they share),
+and log lines print above what you are typing. Left and right do nothing.
+Up, down and any other control key also throw away keys typed ahead, and a
+non-ASCII character is dropped. The terminal is put back on exit. `--set ttycon=0` turns the editor off and
+the terminal edits the line, as on CoD2 and CoD4, whose retail servers turn
+it off too.
 
 ### rcon
 

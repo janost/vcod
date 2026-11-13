@@ -380,10 +380,7 @@ Client:
 
 Server:
 
-- Stdin runs server commands without retail's tty line editor (no
-  history, no tab completion). rcon is refused until
-  `--set rconPassword=...`. After `killserver` the process sits there
-  deaf.
+- rcon is refused until `--set rconPassword=...`.
 - rcon runs `map`, `devmap`, `map_restart`, `map_rotate`, `status`,
   `clientkick`, `kick`, `banUser`, `banClient`, `dumpuser`, `serverinfo`,
   `systeminfo`, `say`, `set`, `seta`, `cvarlist`, cvar queries,
