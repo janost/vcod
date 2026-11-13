@@ -269,6 +269,10 @@ Game:
   spawns, scoring, rounds and limits come from the stock scripts. A
   runtime error ends its thread only under `developer 1`
   ([cod11-gsc-language.md](../research/cod11-gsc-language.md)).
+- The script's `randomInt`, `randomIntRange`, `randomFloat` and
+  `randomFloatRange` draw from retail's generator, which the grenade's
+  tumble and UO's artillery share, reseeded every level
+  ([cod11-map-cycle.md](../research/cod11-map-cycle.md) 4.8).
 - All five stock gametypes are checked against retail: `dm`, `tdm` and
   `sd` end to end, `re` and `bel` through their key events
   ([cod11-gametypes-re-bel.md](../research/cod11-gametypes-re-bel.md)).

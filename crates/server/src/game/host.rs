@@ -646,11 +646,16 @@ pub struct GameHost {
     /// entity goes through and a blast's victim walk reads
     /// (`crate::area`, combat doc 14.7).
     pub area: crate::area::AreaTree,
-    /// `randomFloat`'s generator state: xorshift64*, so a draw is a real
-    /// uniform value and reproducible from a seed. Each level's load seeds
-    /// it anew (`Carry::seed`), as retail's `G_InitGame` seeds its LCG from
-    /// the wall clock (map-cycle doc 4.8).
+    /// The engine draws' generator state (pain anims, spread, pickups):
+    /// xorshift64*, so a draw is a real uniform value and reproducible from
+    /// a seed. Each level's load seeds it anew (`Carry::seed`).
     pub rng: u64,
+    /// CoD1's `holdrand`: the script's `randomInt`, `randomFloat`,
+    /// `randomIntRange` and `randomFloatRange`, the grenade's launch tumble
+    /// and UO's barrage draw from it. Each level's load seeds it
+    /// (`Carry::seed`), as `G_InitGame`'s `Rand_Init(trap_Milliseconds())`
+    /// does (map-cycle doc 4.8). CoD2 keeps its own (`Cod2HostState::rand`).
+    pub holdrand: vcod_common::rng::HoldRand,
     /// Every `logPrint` line, in order. Retail's `logPrint` writes to the
     /// server's `games_mp.log`; this is where that will come from, and it is
     /// what lets a test replay a retail capture.
@@ -845,6 +850,11 @@ pub struct GameHost {
     /// Test-facing: the next `rand()` values the item draws (launch climb,
     /// spin, respawn, lift) take, a retail capture's (`Server::pin_item_draws`).
     pub item_draw_pins: std::collections::VecDeque<i32>,
+    /// Test-facing: the points the next barrage incomings land on in turn
+    /// over the drawn ones, the draws still made. A gate replays a retail
+    /// capture's strike with them: its yaw and spread draw off clock-seeded
+    /// streams (map-cycle doc 4.8).
+    pub barrage_pins: std::collections::VecDeque<glam::Vec3>,
 }
 
 /// A `mins`, `maxs` pair.
@@ -1816,6 +1826,7 @@ impl GameHost {
             world: None,
             area: crate::area::AreaTree::unbounded(),
             rng: RNG_SEED,
+            holdrand: vcod_common::rng::HoldRand(RNG_SEED as u32),
             spawn_pins: None,
             script_log: Vec::new(),
             game_log: Vec::new(),
@@ -1867,6 +1878,7 @@ impl GameHost {
             test_item_lift: None,
             tracer_pins: Default::default(),
             item_draw_pins: Default::default(),
+            barrage_pins: Default::default(),
         }
     }
 
@@ -2158,10 +2170,17 @@ impl GameHost {
             }
             return true;
         }
-        let rng = &mut self.rng;
-        let Some(outs) = b.think(now_ms, || rand_unit(rng)) else {
+        let (rng, hold) = (&mut self.rng, &mut self.holdrand);
+        let Some(mut outs) = b.think(now_ms, hold, || rand_unit(rng)) else {
             return true;
         };
+        for out in &mut outs {
+            if let crate::game::artillery::Out::Incoming(at) = out
+                && let Some(pin) = self.barrage_pins.pop_front()
+            {
+                *at = pin;
+            }
+        }
         let b = self.barrages[i].clone();
         for out in outs {
             self.add_temp_entity(

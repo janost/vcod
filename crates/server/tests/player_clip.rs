@@ -93,6 +93,7 @@ fn server() -> Option<(Server, Instant)> {
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let now = Instant::now();
     let mut sv = Server::new(common::cfg(MAP, "dm"), now);
+    common::pin_carentan_pair(&mut sv);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     Some((sv, now))
@@ -125,6 +126,8 @@ fn joined() -> Option<Rig> {
 /// spectator the connect made it.
 fn joined_beside_a_spectator() -> Option<Rig> {
     let (mut sv, mut now) = server()?;
+    // A stays a spectator, so B alone spawns, on the spot A takes in `joined`.
+    common::pin_spawns_at(&mut sv, &[&[], &[common::CARENTAN_NORTH]]);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let mut ca = NetClient::start_with_qport(ClientEnd(qa.clone()), now, 0x2001);

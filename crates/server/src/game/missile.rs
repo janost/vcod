@@ -1332,6 +1332,7 @@ impl Missiles {
     pub fn fire_grenade(
         &mut self,
         ents: &mut ObjectTable,
+        hold: &mut vcod_common::rng::HoldRand,
         cx: &mut Cx,
         model: i32,
         owner: usize,
@@ -1357,9 +1358,9 @@ impl Missiles {
         angles.x = vcod_common::pmove::aim::angle_normalize_360(angles.x - LAUNCH_PITCH_LEAD);
         let delta = self.carry(velocity, carried);
         let tumble = Vec3::new(
-            self.draws.tumble(TUMBLE_PITCH),
+            self.draws.tumble(hold, TUMBLE_PITCH),
             0.0,
-            self.draws.tumble(TUMBLE_ROLL),
+            self.draws.tumble(hold, TUMBLE_ROLL),
         );
         let fuse = if fuse_left_ms > 0 {
             fuse_left_ms
@@ -1939,8 +1940,9 @@ impl Missiles {
     }
 }
 
-/// Retail's `rand()` for the missile code: the pool's own state, so a throw
-/// draws the same numbers whatever else the frame did, or a gate's pins.
+/// Retail's `rand()` for the bounces (12.7): the pool's own state, so a
+/// throw draws the same numbers whatever else the frame did, or a gate's
+/// pins. The pins cover the launch tumble too, which draws `holdrand`.
 pub struct Draws {
     rng: u64,
     pinned: std::collections::VecDeque<f64>,
@@ -1950,7 +1952,7 @@ impl Default for Draws {
     fn default() -> Draws {
         Draws {
             // xorshift degenerates on a zero state, so an unseeded pool
-            // would tumble every grenade identically.
+            // would bounce every grenade identically.
             rng: crate::game::host::RNG_SEED,
             pinned: std::collections::VecDeque::new(),
         }
@@ -1958,13 +1960,12 @@ impl Default for Draws {
 }
 
 impl Draws {
-    /// `flrand(-spread, spread) + rate`, `fire_grenade`'s tumble (11.2).
-    fn tumble(&mut self, rate: f32) -> f32 {
-        if let Some(v) = self.pinned.pop_front() {
-            return v as f32;
-        }
-        let u = crate::game::host::rand_unit(&mut self.rng);
-        -TUMBLE_SPREAD + 2.0 * TUMBLE_SPREAD * u + rate
+    /// `flrand(-spread, spread) + rate` off the level's `holdrand`,
+    /// `fire_grenade`'s tumble (11.2); a pin takes the value, the draw
+    /// still made.
+    fn tumble(&mut self, hold: &mut vcod_common::rng::HoldRand, rate: f32) -> f32 {
+        let drawn = hold.flrand(-TUMBLE_SPREAD, TUMBLE_SPREAD) + rate;
+        self.pinned.pop_front().map_or(drawn, |v| v as f32)
     }
 
     /// A floor contact's pitch rate factor (12.7): 1.1d's
@@ -2028,9 +2029,23 @@ mod tests {
         velocity: Vec3,
         now: i32,
     ) -> EntId {
-        let ents = &mut host.ents;
-        vm.with_cx(|cx| ms.fire_grenade(ents, cx, 0, 0, 8, origin, velocity, Vec3::ZERO, 4000, now))
-            .unwrap()
+        let (ents, hold) = (&mut host.ents, &mut host.holdrand);
+        vm.with_cx(|cx| {
+            ms.fire_grenade(
+                ents,
+                hold,
+                cx,
+                0,
+                0,
+                8,
+                origin,
+                velocity,
+                Vec3::ZERO,
+                4000,
+                now,
+            )
+        })
+        .unwrap()
     }
 
     /// A grenade thrown across a floor bounces, loses speed and settles a

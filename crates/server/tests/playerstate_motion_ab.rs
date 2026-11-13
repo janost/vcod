@@ -336,6 +336,12 @@ struct Replay {
     frames: Vec<PlayerState>,
 }
 
+/// A spawn point with room around it for every pose to move, by map: the
+/// script's pick draws off a clock-seeded `holdrand` (map-cycle doc 4.8),
+/// and a cramped point skips too many poses (`movement_disagrees`).
+const OPEN_SPAWNS: &[(&str, common::SpawnAt)] =
+    &[("mp_pavlov", ([-9248.0, 12176.0, 103.125], [0.0, 0.0, 0.0]))];
+
 /// Runs the capture's script against our server and keeps the playerstate at
 /// the end of each pose, the way the probe kept retail's.
 fn ours(map: &str, poses: &[Pose], join: (&str, &str), fs: vcod_common::pk3::Pk3Fs) -> Replay {
@@ -345,6 +351,9 @@ fn ours(map: &str, poses: &[Pose], join: (&str, &str), fs: vcod_common::pk3::Pk3
     let fs = Rc::new(fs);
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(map), now);
+    if let Some(&(_, spot)) = OPEN_SPAWNS.iter().find(|(m, _)| *m == map) {
+        common::pin_spawns_at(&mut sv, &[&[spot]]);
+    }
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(fs).expect("load the scripts");
 

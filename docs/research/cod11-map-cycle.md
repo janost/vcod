@@ -888,8 +888,70 @@ As implemented:
   under a second seed stream (each step xored with a constant), and the 1.5
   restart gates at a 1.5 install. INFERRED, off those runs: none rides a
   repeated draw on a later level, so none needs pins.
-- vcod keeps its xorshift generator, not `irand`'s LCG. The missiles'
-  tumble keeps its own state, reset at every load (`Missiles::rng`).
+- The script's four draws, the grenade's tumble and UO's barrage step
+  `GameHost::holdrand` (`vcod_common::rng::HoldRand`, the LCG CoD2 uses
+  too), seeded `seed as u32` from the level seed at each load.
+  `Server::pin_script_rand` sets it for the running level, for a gate that
+  replays a capture's draws. glibc's `rand()` stream (below) stays on
+  vcod's xorshift (`GameHost::rng`, `Missiles`' bounce draws).
+- Moving the draws to `holdrand` moved every test's first-level spawn
+  picks and the probe target's head and gear: 31 `vcod-server` tests at
+  1.1 and 7 at UO had stood on the xorshift's picks. The tests that need
+  a spot pin it (`common::pin_carentan_pair`, `pin_spawns_at`; turret
+  captures that predate `PROBE spawnat` pin the point whose spawn drift
+  matches retail's). `leanhit_ab` and `scriptmodel_ab` seed `holdrand`
+  with the smallest seed that draws the capture's logged `PROBE models`
+  set (variant `randomInt(3)`, then head `randomInt(20)`). The UO
+  artillery gate pins retail's shell points (`Server::pin_barrage_points`):
+  an incoming outside the client's view is not sent, so the count seen
+  rides the yaw and spread draws.
+
+**Who draws `holdrand`.** VERIFIED, every call site of `irand`, `flrand`
+and `Rand_Init` in each module (`R_386_PC32` relocations on 1.1d, calls
+to the PLT stubs on 1.5b and UO):
+
+| Build | `randomInt` | `randomFloat` | `randomIntRange` | `randomFloatRange` | `fire_grenade` | other |
+|---|---|---|---|---|---|---|
+| 1.1d | 0x5e470, `irand` at 0x5e4ad | 0x5e4bc, `flrand` at 0x5e4da | 0x5e4f0, `irand` at 0x5e53e | 0x5e554, `flrand` at 0x5e5c5 | `flrand` at 0x5459e, 0x545c2 | none |
+| 1.5b | 0x5f6a8, 0x5f702 | 0x5f715, 0x5f744 | 0x5f757, 0x5f7c6 | 0x5f7d9, 0x5f84f | 0x554df, 0x5550b | none |
+| UO 1.51b | 0x6b397, 0x6b3f1 | 0x6b404, 0x6b433 | 0x6b446, 0x6b4b5 | 0x6b4c8, 0x6b53e | 0x5fa95, 0x5fac1 | `G_BarrageThink` `irand` at 0x5e86b, 0x5e926, 0x5e946 |
+
+VERIFIED: `Rand_Init`'s one caller in each module is `G_InitGame`, so
+nothing else reseeds the stream inside a level. VERIFIED,
+`tools/re/dump_builtins.py`: the four are rows 34-37 of 1.1d's
+`functions` table, 36-39 of 1.5b's and 39-42 of UO's.
+
+**The builtins**, read in 1.1d; 1.5b and UO take the same branches
+(VERIFIED, their disassembly at the addresses above):
+
+- VERIFIED: `randomInt(n)` takes `Scr_GetInt(0)`; `n` not above 0 prints `"RandomInt
+  parm: %d  "` (.rodata 0x773c2) and raises `"RandomInt parm must be
+  positive integer.\n"` (0x773e0) without drawing; else `irand(0, n)`.
+- VERIFIED: `randomFloat(f)` is `flrand(0, Scr_GetFloat(0))`, no check.
+- VERIFIED: in `randomIntRange(lo, hi)`, `hi` not above `lo` raises `"RandomIntRange
+  range must be positive integer.\n"` (0x77440); else `irand(lo, hi)`.
+- VERIFIED: in `randomFloatRange(lo, hi)`, the `fcom` at 0x5e577 (1.5b `fucompp`
+  0x5f80f) raises `"Scr_RandomFloatRange range must be positive
+  float.\n"` (0x774c0) when `hi` is not above `lo`; an unordered
+  compare (a NaN bound) takes the draw.
+
+**The arithmetic.** VERIFIED: `irand` (1.1d 0x3d47c) is
+`min + ((max - min) * (s >> 17) >> 15)` in 32-bit ints. `flrand` (1.1d
+0x3d43c) is `(max - min) * (s >> 17) * 2^-15 + min` on the x87 stack
+(the factor a float at .rodata 0x72a40, 3.0517578e-05), returned
+unrounded; 1.5b's (0x380ea) and UO's (0x3f33a) store `s >> 17` through
+a float, divide by 32768 and round the result to a float before
+returning. INFERRED: for float bounds the two give the same float, since
+the 15-bit draw and the power-of-two scale add no rounding a float
+result keeps. VERIFIED, `fire_grenade` 1.1d 0x545aa, 0x545c7: the tumble
+adds 720 or 360 to the returned value on the x87 stack; `flrand(-45, 45)`
+is a multiple of 2^-14 under 45, so the sum is exact in a float either
+way (INFERRED).
+
+**The seed.** VERIFIED: the seed is `trap_Milliseconds()`'s return.
+INFERRED, off Q3's `trap_Milliseconds` being `Sys_Milliseconds`: it is
+the server process's wall clock in milliseconds, so no two runs draw
+alike and a capture's draws replay only from a seed recovered off them.
 
 ### 4.9 What a restart costs
 

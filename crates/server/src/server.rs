@@ -3429,6 +3429,24 @@ impl Server {
         }
     }
 
+    /// Test-facing: the points the next artillery incomings land on
+    /// (`GameHost::barrage_pins`).
+    pub fn pin_barrage_points(&mut self, points: Vec<[f32; 3]>) {
+        if let Some(rt) = self.game.module.script.as_mut() {
+            rt.host.barrage_pins = points.into_iter().map(glam::Vec3::from).collect();
+        }
+    }
+
+    /// Test-facing: the running level's `holdrand` from `seed`, as
+    /// `G_InitGame`'s `Rand_Init(trap_Milliseconds())` left it (map-cycle
+    /// doc 4.8): a gate replays a retail capture's script draws with the
+    /// seed recovered off them.
+    pub fn pin_script_rand(&mut self, seed: u32) {
+        if let Some(rt) = self.game.module.script.as_mut() {
+            rt.host.holdrand = vcod_common::rng::HoldRand(seed);
+        }
+    }
+
     /// Test-facing: the `gunrandom` pairs the next rockets' spread takes,
     /// read off retail under gdb (combat doc 13.6).
     pub fn pin_spread_draws(&mut self, draws: Vec<(f32, f32)>) {

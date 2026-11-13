@@ -59,6 +59,7 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
+    common::pin_carentan_pair(&mut sv);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
@@ -879,6 +880,7 @@ fn a_bullet_deaths_frame_is_retails() {
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
+    common::pin_carentan_pair(&mut sv);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
@@ -1085,6 +1087,7 @@ fn a_melee_swing_hits_and_the_kill_shows_the_melee_icon() {
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
+    common::pin_carentan_pair(&mut sv);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
@@ -1360,6 +1363,7 @@ fn two_placed_under(
         }
         None => vcod_server::Server::new(config, now),
     };
+    common::pin_carentan_pair(&mut sv);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
