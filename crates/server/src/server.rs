@@ -4361,6 +4361,14 @@ impl Server {
         }
     }
 
+    /// Test-facing: each `re` objective's goal standing point
+    /// (`ReObjView::goal`); empty on any other level.
+    pub fn re_goals(&mut self) -> Vec<[f32; 3]> {
+        self.bot_re()
+            .map(|(_, _, o)| o.iter().map(|(v, _, _)| v.goal).collect())
+            .unwrap_or_default()
+    }
+
     /// Test-facing: a bot's current waypoint node and the next, as points.
     pub fn bot_waypoints(&self, slot: usize) -> (Option<[f32; 3]>, Option<[f32; 3]>) {
         let (Some(g), Some(f)) = (
