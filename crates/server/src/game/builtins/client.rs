@@ -947,10 +947,10 @@ pub fn get_weapon_slot_weapon(
 
 /// `self setWeaponSlotWeapon(slot, name)` (player method 33, 0x43df4): the
 /// weapon given and put in the slot the caller names rather than the one its
-/// own file names, with a full clip and its `startAmmo` in reserve. Stock
-/// script runs it ahead of both setters and a `switchToWeapon` on the weapon
-/// it just placed (`sd.gsc` 540-543), so a weapon set into a slot has to
-/// come out usable.
+/// own file names. CoD1 gives no rounds: past `BG_GivePlayerWeapon` the
+/// method returns, so the clip and reserve stay what the weapon's clip and
+/// ammo indices held (empty after a spawn), and stock script sets both after
+/// it (coduo-diff.md 22, "Battle rank"). CoD2's gives its `startAmmo`.
 ///
 /// `"none"` is not a weapon name but weapon index 0, which empties the slot:
 /// retail compares the argument against `"none"` ahead of its name lookup
@@ -981,29 +981,10 @@ pub fn set_weapon_slot_weapon(
     let held_before = host.client_weapons[client].holds(index);
     register_given(host, client, &name, index)?;
     host.client_weapons[client].give_chain(&weapons, index, slot);
-    if host.profile.game == vcod_common::game::Game::Cod2 {
-        if let Some(def) = weapons.get(index) {
-            cod2_start_ammo(host, client, def, !held_before);
-        }
-        return Ok(Value::Undefined);
-    }
-    if let Some(def) = weapons.get(index) {
-        host.weapon_op(
-            client,
-            WeaponOp::SetClip {
-                clip_index: def.clip_index,
-                rounds: def.clip_size as i16,
-            },
-        );
-        if !def.clip_only {
-            host.weapon_op(
-                client,
-                WeaponOp::SetAmmo {
-                    ammo_index: def.ammo_index,
-                    rounds: def.start_ammo as i16,
-                },
-            );
-        }
+    if host.profile.game == vcod_common::game::Game::Cod2
+        && let Some(def) = weapons.get(index)
+    {
+        cod2_start_ammo(host, client, def, !held_before);
     }
     Ok(Value::Undefined)
 }
@@ -2127,18 +2108,15 @@ mod tests {
 
     /// `setWeaponSlotWeapon` is what precedes both setters in stock script
     /// (`sd.gsc` 540-543): it gives the weapon and puts it in the named slot,
-    /// loaded, so the `switchToWeapon` on the line after it has something to
-    /// switch to. Without it that whole sequence dies on the first line.
+    /// so the `switchToWeapon` on the line after it has something to switch
+    /// to. It gives no rounds: retail's method ends at `BG_GivePlayerWeapon`
+    /// (UO's rank-3 binoculars come out 0:0, coduo-diff.md 22).
     #[test]
-    fn setweaponslotweapon_gives_the_weapon_and_fills_the_slot() {
+    fn setweaponslotweapon_gives_the_weapon_without_rounds() {
         let Some((mut vm, mut host)) = armed_fixture() else {
             return;
         };
         let thompson = weapon_index("thompson_mp").unwrap();
-        let (clip_size, start_ammo) = {
-            let def = host.weapons.get(thompson).expect("the thompson");
-            (def.clip_size as i16, def.start_ammo as i16)
-        };
         vm.with_cx(|cx| {
             let e = loadout(&mut host, cx);
             let t = Some(Target::Entity(e));
@@ -2168,25 +2146,7 @@ mod tests {
             let nothing = Value::String(cx.intern_exact("not_a_weapon_mp"));
             assert!(set_weapon_slot_weapon(&mut host, cx, t, &[primary, nothing]).is_err());
         });
-        assert_eq!(
-            host.client_weapon_ops,
-            vec![
-                (
-                    0,
-                    WeaponOp::SetClip {
-                        clip_index: host.weapons.get(thompson).unwrap().clip_index,
-                        rounds: clip_size
-                    }
-                ),
-                (
-                    0,
-                    WeaponOp::SetAmmo {
-                        ammo_index: host.weapons.get(thompson).unwrap().ammo_index,
-                        rounds: start_ammo
-                    }
-                ),
-            ]
-        );
+        assert_eq!(host.client_weapon_ops, vec![]);
     }
 
     /// `"none"` is weapon index 0, not an unknown weapon: the slot empties

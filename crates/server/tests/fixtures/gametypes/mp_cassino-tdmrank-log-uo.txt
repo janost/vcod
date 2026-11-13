@@ -1,0 +1,124 @@
+# Retail CoD UO 1.51b dedicated server's games_mp.log for the probe_tdmrank run beside it
+# (the two mp_cassino-tdmrank-<role>-uo.txt fixtures), the engine's m:ss stamp stripped.
+------------------------------------------------------------
+InitGame: \g_gametype\probe_tdmrank\g_timeoutsallowed\0\gamename\CoD:United Offensive\mapname\mp_cassino\protocol\22\scr_allow_jeeps\1\scr_allow_tanks\1\shortversion\1.51\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\CoDHost\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_punkbuster\0\sv_pure\0
+PROBE state  | allies 0 axis 0 undef
+PROBE state  | allies 0 axis 0 playing
+J;0;0;vcod
+PROBE state  | 0 spectator sc=0 d=0 rank=undef st= head= | allies 0 axis 0 playing
+PROBE state  | 0 playing sc=0 d=0 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | allies 0 axis 0 playing
+PROBE placed 0 allies (192.00, 1072.00, 9.00) (0.00, 0.00, 0.00)
+J;0;1;vcod
+PROBE state  | 0 playing sc=0 d=0 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | 1 spectator sc=0 d=0 rank=undef st= head= | allies 0 axis 0 playing
+PROBE state  | 0 playing sc=0 d=0 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | 1 playing sc=0 d=0 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | allies 0 axis 0 playing
+PROBE players 0 1
+PROBE placed 1 axis (6304.00, -1656.00, 193.00) (0.00, 0.00, 0.00)
+PROBE rank start 0 sc=0 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds allies
+PROBE loadout start primary=m1carbine_mp:60:15 primaryb=none:0:0 pistol=colt_mp:7:7 grenade=fraggrenade_mp:1:1 smokegrenade=smokegrenade_mp:1:1 satchel=none:0:0 binocular=none:0:0
+PROBE rank start 1 sc=0 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds axis
+PROBE loadout start primary=kar98k_mp:25:5 primaryb=none:0:0 pistol=luger_mp:8:8 grenade=stielhandgranate_mp:1:1 smokegrenade=smokegrenade_mp:1:1 satchel=none:0:0 binocular=none:0:0
+K;0;1;axis;vcod;0;0;allies;vcod;m1carbine_mp;1000;MOD_RIFLE_BULLET;torso_upper
+PROBE killed 11650 1
+PROBE state  | 0 playing sc=1 d=0 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | 1 dead sc=0 d=1 rank=0 st=gfx/hud/hud@status_dead.tga head= | allies 1 axis 0 playing
+PROBE placed 1 axis (6304.00, -1656.00, 193.00) (0.00, 0.00, 0.00)
+PROBE state  | 0 playing sc=1 d=0 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | 1 playing sc=0 d=1 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | allies 1 axis 0 playing
+K;0;1;axis;vcod;0;0;allies;vcod;m1carbine_mp;1000;MOD_RIFLE_BULLET;torso_upper
+PROBE killed 15200 2
+PROBE state  | 0 playing sc=2 d=0 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | 1 dead sc=0 d=2 rank=0 st=gfx/hud/hud@status_dead.tga head= | allies 2 axis 0 playing
+PROBE state  | 0 playing sc=2 d=0 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds | 1 dead sc=0 d=2 rank=0 st=gfx/hud/hud@status_dead.tga head= | allies 2 axis 0 playing
+PROBE rank alive at 2 0 sc=2 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds allies
+PROBE placed 1 axis (6304.00, -1656.00, 193.00) (0.00, 0.00, 0.00)
+PROBE state  | 0 playing sc=2 d=0 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds | 1 playing sc=0 d=2 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | allies 2 axis 0 playing
+K;0;0;allies;vcod;0;1;axis;vcod;kar98k_mp;1000;MOD_RIFLE_BULLET;torso_upper
+PROBE died 18750
+PROBE state  | 0 dead sc=2 d=1 rank=1 st=gfx/hud/hud@status_dead.tga head= | 1 playing sc=1 d=2 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | allies 2 axis 1 playing
+PROBE placed 0 allies (192.00, 1072.00, 9.00) (0.00, 0.00, 0.00)
+PROBE state  | 0 playing sc=2 d=1 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds | 1 playing sc=1 d=2 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | allies 2 axis 1 playing
+PROBE rank spawned at 2 0 sc=2 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds allies
+PROBE loadout spawned at 2 primary=m1carbine_mp:60:15 primaryb=none:0:0 pistol=colt_mp:14:7 grenade=fraggrenade_mp:2:2 smokegrenade=smokegrenade_mp:1:1 satchel=none:0:0 binocular=none:0:0
+K;0;1;axis;vcod;0;0;allies;vcod;m1carbine_mp;1000;MOD_RIFLE_BULLET;torso_upper
+PROBE killed 23300 3
+PROBE state  | 0 playing sc=3 d=1 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds | 1 dead sc=1 d=3 rank=0 st=gfx/hud/hud@status_dead.tga head= | allies 3 axis 1 playing
+PROBE placed 1 axis (6304.00, -1656.00, 193.00) (0.00, 0.00, 0.00)
+PROBE state  | 0 playing sc=3 d=1 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds | 1 playing sc=1 d=3 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | allies 3 axis 1 playing
+K;0;1;axis;vcod;0;0;allies;vcod;m1carbine_mp;1000;MOD_RIFLE_BULLET;torso_upper
+PROBE killed 26850 4
+PROBE state  | 0 playing sc=4 d=1 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds | 1 dead sc=1 d=4 rank=0 st=gfx/hud/hud@status_dead.tga head= | allies 4 axis 1 playing
+PROBE state  | 0 playing sc=4 d=1 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds | 1 dead sc=1 d=4 rank=0 st=gfx/hud/hud@status_dead.tga head= | allies 4 axis 1 playing
+PROBE rank alive at 3 0 sc=4 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds allies
+PROBE placed 1 axis (6304.00, -1656.00, 193.00) (0.00, 0.00, 0.00)
+PROBE state  | 0 playing sc=4 d=1 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds | 1 playing sc=1 d=4 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | allies 4 axis 1 playing
+K;0;0;allies;vcod;0;1;axis;vcod;kar98k_mp;1000;MOD_RIFLE_BULLET;torso_upper
+PROBE died 30400
+PROBE state  | 0 dead sc=4 d=2 rank=2 st=gfx/hud/hud@status_dead.tga head= | 1 playing sc=2 d=4 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | allies 4 axis 2 playing
+PROBE state  | 0 dead sc=4 d=2 rank=2 st=gfx/hud/hud@status_dead.tga head= | 1 playing sc=2 d=4 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds | allies 4 axis 2 playing
+PROBE placed 0 allies (192.00, 1072.00, 9.00) (0.00, 0.00, 0.00)
+PROBE state  | 0 playing sc=4 d=2 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds | 1 playing sc=2 d=4 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds | allies 4 axis 2 playing
+PROBE rank spawned at 3 0 sc=4 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds allies
+PROBE loadout spawned at 3 primary=m1carbine_mp:75:15 primaryb=none:0:0 pistol=colt_mp:14:7 grenade=fraggrenade_mp:2:2 smokegrenade=smokegrenade_mp:2:2 satchel=none:0:0 binocular=binoculars_mp:0:0
+K;0;1;axis;vcod;0;0;allies;vcod;m1carbine_mp;1000;MOD_RIFLE_BULLET;torso_upper
+PROBE killed 34950 5
+PROBE state  | 0 playing sc=5 d=2 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds | 1 dead sc=2 d=5 rank=1 st=gfx/hud/hud@status_dead.tga head= | allies 5 axis 2 playing
+PROBE placed 1 axis (6304.00, -1656.00, 193.00) (0.00, 0.00, 0.00)
+PROBE state  | 0 playing sc=5 d=2 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds | 1 playing sc=2 d=5 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds | allies 5 axis 2 playing
+K;0;1;axis;vcod;0;0;allies;vcod;m1carbine_mp;1000;MOD_RIFLE_BULLET;torso_upper
+PROBE killed 38500 6
+PROBE state  | 0 playing sc=6 d=2 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds | 1 dead sc=2 d=6 rank=1 st=gfx/hud/hud@status_dead.tga head= | allies 6 axis 2 playing
+PROBE state  | 0 playing sc=6 d=2 rank=3 st=gfx/hud/hud@us_rank4.dds head=gfx/hud/headicon@us_rank4.dds | 1 dead sc=2 d=6 rank=1 st=gfx/hud/hud@status_dead.tga head= | allies 6 axis 2 playing
+PROBE rank alive at 4 0 sc=6 rank=3 st=gfx/hud/hud@us_rank4.dds head=gfx/hud/headicon@us_rank4.dds allies
+PROBE placed 1 axis (6304.00, -1656.00, 193.00) (0.00, 0.00, 0.00)
+PROBE state  | 0 playing sc=6 d=2 rank=3 st=gfx/hud/hud@us_rank4.dds head=gfx/hud/headicon@us_rank4.dds | 1 playing sc=2 d=6 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds | allies 6 axis 2 playing
+K;0;0;allies;vcod;0;1;axis;vcod;kar98k_mp;1000;MOD_RIFLE_BULLET;torso_upper
+PROBE died 42050
+PROBE state  | 0 dead sc=6 d=3 rank=3 st=gfx/hud/hud@status_dead.tga head= | 1 playing sc=3 d=6 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds | allies 6 axis 3 playing
+PROBE placed 0 allies (192.00, 1072.00, 9.00) (0.00, 0.00, 0.00)
+PROBE state  | 0 playing sc=6 d=3 rank=3 st=gfx/hud/hud@us_rank4.dds head=gfx/hud/headicon@us_rank4.dds | 1 playing sc=3 d=6 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds | allies 6 axis 3 playing
+PROBE rank spawned at 4 0 sc=6 rank=3 st=gfx/hud/hud@us_rank4.dds head=gfx/hud/headicon@us_rank4.dds allies
+PROBE loadout spawned at 4 primary=m1carbine_mp:75:15 primaryb=none:0:0 pistol=colt_mp:21:7 grenade=fraggrenade_mp:2:2 smokegrenade=smokegrenade_mp:2:2 satchel=satchelcharge_mp:1:1 binocular=binoculars_mp:0:0
+K;0;1;axis;vcod;0;0;allies;vcod;m1carbine_mp;1000;MOD_RIFLE_BULLET;torso_upper
+PROBE killed 46600 7
+PROBE state  | 0 playing sc=7 d=3 rank=3 st=gfx/hud/hud@us_rank4.dds head=gfx/hud/headicon@us_rank4.dds | 1 dead sc=3 d=7 rank=1 st=gfx/hud/hud@status_dead.tga head= | allies 7 axis 3 playing
+PROBE placed 1 axis (6304.00, -1656.00, 193.00) (0.00, 0.00, 0.00)
+PROBE state  | 0 playing sc=7 d=3 rank=3 st=gfx/hud/hud@us_rank4.dds head=gfx/hud/headicon@us_rank4.dds | 1 playing sc=3 d=7 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds | allies 7 axis 3 playing
+K;0;1;axis;vcod;0;0;allies;vcod;m1carbine_mp;1000;MOD_RIFLE_BULLET;torso_upper
+PROBE killed 50150 8
+PROBE state  | 0 playing sc=8 d=3 rank=3 st=gfx/hud/hud@us_rank4.dds head=gfx/hud/headicon@us_rank4.dds | 1 dead sc=3 d=8 rank=1 st=gfx/hud/hud@status_dead.tga head= | allies 8 axis 3 playing
+PROBE state  | 0 playing sc=8 d=3 rank=4 st=gfx/hud/hud@us_rank5.dds head=gfx/hud/headicon@us_rank5.dds | 1 dead sc=3 d=8 rank=1 st=gfx/hud/hud@status_dead.tga head= | allies 8 axis 3 playing
+PROBE rank alive at 5 0 sc=8 rank=4 st=gfx/hud/hud@us_rank5.dds head=gfx/hud/headicon@us_rank5.dds allies
+PROBE placed 1 axis (6304.00, -1656.00, 193.00) (0.00, 0.00, 0.00)
+PROBE state  | 0 playing sc=8 d=3 rank=4 st=gfx/hud/hud@us_rank5.dds head=gfx/hud/headicon@us_rank5.dds | 1 playing sc=3 d=8 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds | allies 8 axis 3 playing
+K;0;0;allies;vcod;0;1;axis;vcod;kar98k_mp;1000;MOD_RIFLE_BULLET;torso_upper
+PROBE died 53700
+PROBE state  | 0 dead sc=8 d=4 rank=4 st=gfx/hud/hud@status_dead.tga head= | 1 playing sc=4 d=8 rank=1 st=gfx/hud/hud@us_rank2.dds head=gfx/hud/headicon@us_rank2.dds | allies 8 axis 4 playing
+PROBE state  | 0 dead sc=8 d=4 rank=4 st=gfx/hud/hud@status_dead.tga head= | 1 playing sc=4 d=8 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds | allies 8 axis 4 playing
+PROBE placed 0 allies (192.00, 1072.00, 9.00) (0.00, 0.00, 0.00)
+PROBE state  | 0 playing sc=8 d=4 rank=4 st=gfx/hud/hud@us_rank5.dds head=gfx/hud/headicon@us_rank5.dds | 1 playing sc=4 d=8 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds | allies 8 axis 4 playing
+PROBE rank spawned at 5 0 sc=8 rank=4 st=gfx/hud/hud@us_rank5.dds head=gfx/hud/headicon@us_rank5.dds allies
+PROBE loadout spawned at 5 primary=m1carbine_mp:90:15 primaryb=none:0:0 pistol=colt_mp:21:7 grenade=fraggrenade_mp:3:3 smokegrenade=smokegrenade_mp:2:2 satchel=satchelcharge_mp:1:1 binocular=binoculars_artillery_mp:0:0
+PROBE rank artillery 0 sc=8 rank=4 st=gfx/hud/hud@us_rank5.dds head=gfx/hud/headicon@us_rank5.dds allies
+PROBE loadout artillery primary=m1carbine_mp:90:15 primaryb=none:0:0 pistol=colt_mp:21:7 grenade=fraggrenade_mp:3:3 smokegrenade=smokegrenade_mp:2:2 satchel=satchelcharge_mp:1:1 binocular=binoculars_artillery_mp:1:1
+PROBE state  | 0 playing sc=5 d=4 rank=4 st=gfx/hud/hud@us_rank5.dds head=gfx/hud/headicon@us_rank5.dds | 1 playing sc=4 d=8 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds | allies 8 axis 4 playing
+PROBE state  | 0 playing sc=5 d=4 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds | 1 playing sc=4 d=8 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds | allies 8 axis 4 playing
+PROBE rank demoted 0 sc=5 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds allies
+W;allies;0;vcod
+L;axis;0;vcod
+PROBE intermission 90100
+PROBE state  | 0 intermission sc=5 d=4 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds | 1 intermission sc=4 d=8 rank=2 st=gfx/hud/hud@us_rank3.dds head=gfx/hud/headicon@us_rank3.dds | allies 8 axis 4 intermission
+ExitLevel: executed
+RestartGame:
+------------------------------------------------------------
+------------------------------------------------------------
+InitGame: \g_gametype\probe_tdmrank\g_timeoutsallowed\0\gamename\CoD:United Offensive\mapname\mp_cassino\protocol\22\scr_allow_jeeps\1\scr_allow_tanks\1\shortversion\1.51\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\CoDHost\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_punkbuster\0\sv_pure\0
+PROBE state  | allies 0 axis 0 undef
+PROBE state  | allies 0 axis 0 playing
+J;0;1;vcod
+J;0;0;vcod
+PROBE state  | 0 spectator sc=0 d=0 rank=undef st= head= | 1 spectator sc=0 d=0 rank=undef st= head= | allies 0 axis 0 playing
+PROBE state  | 0 playing sc=0 d=0 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | 1 playing sc=0 d=0 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | allies 0 axis 0 playing
+PROBE rank after map end 0 sc=0 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds allies
+PROBE loadout after map end primary=m1carbine_mp:60:15 primaryb=none:0:0 pistol=colt_mp:7:7 grenade=fraggrenade_mp:1:1 smokegrenade=smokegrenade_mp:1:1 satchel=none:0:0 binocular=none:0:0
+PROBE done 102000
+Q;0;0;vcod
+PROBE state  | 1 playing sc=0 d=0 rank=0 st=gfx/hud/hud@us_rank1.dds head=gfx/hud/headicon@us_rank1.dds | allies 0 axis 0 playing
+Q;0;1;vcod
+PROBE state  | allies 0 axis 0 playing

@@ -10,7 +10,9 @@
 //! a defender's flag return and a rotation to mp_foy (`probe_ctftime`),
 //! `tdm`'s killcam and time limit (`probe_tdmend`), `hq`'s time limit
 //! (`probe_hqtime`), `bas`'s round clock (`probe_bastime`) and `dom`'s
-//! round clock and time limit (`probe_domtime`).
+//! round clock and time limit (`probe_domtime`), and `tdm`'s battle rank
+//! climbed from rank 1 to 5 with each rank's loadout, the artillery round, a
+//! live demotion and the reset at a map end (`probe_tdmrank`).
 //!
 //! Retail seeds the script's draws from the wall clock at every level
 //! (cod11-map-cycle.md 4.8), so ours runs a seed stepped per level too and
@@ -1170,4 +1172,9 @@ fn uo_headquarters_time_limit_matches_retail() {
 #[test]
 fn uo_domination_round_clock_and_time_limit_match_retail() {
     uo_gametype(&UO, "domtime", 100, 95_000);
+}
+
+#[test]
+fn uo_battle_rank_climb_loadouts_and_map_end_reset_match_retail() {
+    uo_gametype(&UO, "tdmrank", 120, 112_000);
 }
