@@ -858,6 +858,17 @@ The graph over a breached base:
   had no node, and the four-bot shoot-off seed 11 looped on 47 defuses. The
   ignored census `every_bas_charge_room_is_on_the_graph`
   (`tests/nav_census.rs`) checks all thirty stock charges.
+- Only bas entities widen the flood. Off the stock UO maps' entity lumps,
+  the other gametypes' entities past the spawns' box and its margin are
+  sd's `bombtrigger` `trigger_lookat`s (mp_rhinevalley's at -54237 21978,
+  mp_sicily's -14244 11339, mp_foy's -11477 4450, among others) and
+  mp_rhinevalley's `script_origin` `jesse1` (-7522 -8122 2299, gameobject
+  `bombzone`); every `bombzone_A` and `bombzone_B` lies inside. VERIFIED.
+  UO's `sd.gsc` turns the `bombtrigger` off at the start (2128-2129) and
+  moves it onto the planted bomb (2244-2245), so where the map parks it is
+  never walked to; no MP script names `jesse1` (VERIFIED, every `.gsc` in
+  the stock UO paks). INFERRED: neither needs the graph, so `nav_cover`
+  stays bas only.
 - Engine rules this needed: a brush model's clip follows a bare `origin` write
   (the rubble's lift), and a respawned brush entity links its model again (a
   restart's walls).

@@ -1615,6 +1615,14 @@ impl GameHost {
         crate::game::builtins::cvar::atof(self.cvars.get("g_gravity")) as i32
     }
 
+    /// The movement cvars every body's pmove reads, its `vmCvar.integer`s
+    /// (cod11-mantle.md, "The ladder yaw cap"; coduo-movement.md 1, 7).
+    pub fn bg_cvars(&self) -> vcod_common::pmove::BgCvars {
+        vcod_common::pmove::BgCvars::from_cvars(|n| {
+            self.cvars.lookup(n).map(|(_, v, _)| v.to_owned())
+        })
+    }
+
     /// The server runs 1.1's rules (`HostProfile::speaks_1_1`).
     pub fn speaks_1_1(&self) -> bool {
         self.profile.speaks_1_1

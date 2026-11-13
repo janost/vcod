@@ -199,12 +199,10 @@ pub const PRONE_YAWCAP: f32 = 85.0;
 pub const PRONE_SOFT_EDGE: f32 = PRONE_YAWCAP - PRONE_SOFT_MARGIN;
 const PRONE_SOFT_MARGIN: f32 = 5.0;
 /// United Offensive's `bg_lmg_yawcap` default, the cap round an LMG's
-/// `proneDirection` (coduo-movement.md 7). Mirrored to clients; vcod
-/// keeps the default.
+/// `proneDirection` (coduo-movement.md 7).
 pub const LMG_YAWCAP: f32 = 55.0;
 /// `bg_ladder_yawcap`'s default: how far a climber off the ground may look
-/// away from the rungs (cod11-mantle.md, "The ladder yaw cap"). Mirrored
-/// to clients; vcod keeps the default.
+/// away from the rungs (cod11-mantle.md, "The ladder yaw cap").
 pub const LADDER_YAWCAP: f32 = 100.0;
 pub const PRONE_SWING_DEG_PER_SEC: f32 = 55.0;
 /// How far the prone view may pitch off `proneTorsoPitch`, rodata 0x70c94
@@ -695,6 +693,8 @@ pub struct PlayerState {
     /// The cgame's bob cvars, which the gun, the sight and the eye bobs
     /// read; the caller copies them in.
     pub bob: BobCvars,
+    /// The movement cvars; the caller copies them in.
+    pub bg: BgCvars,
     /// The cmd running is a spectator's: [`spectator_move`] sets it for its
     /// slide and clears it after, so the hull and the step gate below read
     /// retail's `pm_type` 4 arms.
@@ -803,6 +803,46 @@ impl BobCvars {
             ducked: read("cg_bobAmplitudeDucked", d.ducked),
             prone: read("cg_bobAmplitudeProne", d.prone),
             max: read("cg_bobMax", d.max),
+        }
+    }
+}
+
+/// The game module's movement cvars pmove reads, each as its
+/// `vmCvar.integer`: `bg_ladder_yawcap` (all three patches), and on United
+/// Offensive `bg_lmg_yawcap` and `bg_nofatigue`. The server reads its own;
+/// the cgame's come over the 140/204 mirror (cod11-mantle.md, "The ladder
+/// yaw cap"; coduo-movement.md 1, 7).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BgCvars {
+    /// `bg_ladder_yawcap`; 0 lifts the cap.
+    pub ladder_yawcap: i32,
+    /// `bg_lmg_yawcap`.
+    pub lmg_yawcap: i32,
+    /// `bg_nofatigue`: a sprint drains nothing. UO's cgame never registers
+    /// it, so the predictor keeps it off.
+    pub nofatigue: bool,
+}
+
+impl Default for BgCvars {
+    fn default() -> Self {
+        BgCvars {
+            ladder_yawcap: LADDER_YAWCAP as i32,
+            lmg_yawcap: LMG_YAWCAP as i32,
+            nofatigue: false,
+        }
+    }
+}
+
+impl BgCvars {
+    /// The three out of a side's cvars through `atoi`; a missing one keeps
+    /// its default.
+    pub fn from_cvars(get: impl Fn(&str) -> Option<String>) -> Self {
+        let d = BgCvars::default();
+        let read = |name: &str, default: i32| get(name).map_or(default, |v| crate::text::atoi(&v));
+        BgCvars {
+            ladder_yawcap: read("bg_ladder_yawcap", d.ladder_yawcap),
+            lmg_yawcap: read("bg_lmg_yawcap", d.lmg_yawcap),
+            nofatigue: read("bg_nofatigue", 0) != 0,
         }
     }
 }
@@ -918,6 +958,7 @@ impl PlayerState {
             seat: None,
             fall_heights: FallHeights::default(),
             bob: BobCvars::default(),
+            bg: BgCvars::default(),
             spectator: false,
             rules: MoveRules::V1_1,
             jump_penalty: false,
@@ -1616,14 +1657,16 @@ fn update_sprint_flag(ps: &mut PlayerState, input: &PmInput, def: Option<&Weapon
 /// sprints nor holds the button refills it from a second after the last
 /// sprint, and a full bar clears the wind. Either way a cmd that does not
 /// sprint goes on to [`fatigue_sound`], unless it is still inside the
-/// refill's delay without the button. The products stay on the x87 stack
-/// until the store.
+/// refill's delay without the button. Under `bg_nofatigue` a sprinting
+/// cmd does none of it. The products stay on the x87 stack until the store.
 fn update_fatigue(ps: &mut PlayerState, input: &PmInput, dt: f32, events: &mut Vec<PmEvent>) {
     if ps.rules != MoveRules::Uo {
         return;
     }
     let step = |rate: f32| 0.001f32 as f64 * f64::from(msec(dt)) * f64::from(rate);
-    if ps.sprinting {
+    if ps.sprinting && ps.bg.nofatigue {
+        // `bg_nofatigue` skips the stamp, the drain and the breath (0x2aa63).
+    } else if ps.sprinting {
         ps.last_sprint_time = input.server_time;
         ps.fatigue = (f64::from(ps.fatigue) - step(SPRINT_FATIGUE)) as f32;
         if ps.fatigue < WINDED_FATIGUE {
@@ -3083,31 +3126,32 @@ pub fn pitch_for_yaw_on_normal(yaw_deg: f32, normal: Vec3) -> f32 {
 
 /// The ladder arm of `PM_UpdateViewAngles` (1.1 0x32e7d-0x32f75, 1.5
 /// 0x26270-0x263ca, UO 0x2b535-0x2b6a5): on last frame's ladder flag and
-/// off the ground, a view more than [`LADDER_YAWCAP`] off the rungs'
-/// facing, `AngleDelta(vectoyaw(vLadderVec) + 180, yaw)`, is pushed back
+/// off the ground and under a non-zero `bg_ladder_yawcap`, a view more
+/// than the cap off the rungs' facing, `AngleDelta(vectoyaw(vLadderVec) + 180, yaw)`, is pushed back
 /// onto the cap through `delta_angles` and placed at `facing -/+ cap`,
 /// through `AngleNormalize360` on 1.1 and `AngleNormalize360Accurate` on
 /// 1.5 and UO (cod11-mantle.md, "The ladder yaw cap").
 fn cap_ladder_yaw(ps: &mut PlayerState, world: &MoveWorld) {
-    if !ps.on_ladder || ps.on_ground {
+    if !ps.on_ladder || ps.on_ground || ps.bg.ladder_yawcap == 0 {
         return;
     }
+    let cap = ps.bg.ladder_yawcap as f32;
     let d = angle_delta(
         ladder_facing(ps.ladder_normal, ps.rules),
         view_deg(ps.yaw),
         delta_stored(ps.rules, world),
     );
-    if d.abs() <= LADDER_YAWCAP {
+    if d.abs() <= cap {
         return;
     }
-    let excess = d - LADDER_YAWCAP.copysign(d);
+    let excess = d - cap.copysign(d);
     // 1.1 keeps the facing on the x87 stack; 1.5 and UO stored it.
     let facing = if ps.rules.v15() {
         f64::from(ladder_facing(ps.ladder_normal, ps.rules))
     } else {
         vectoyaw(ps.ladder_normal) + 180.0
     };
-    let at = (facing - f64::from(LADDER_YAWCAP.copysign(excess))) as f32;
+    let at = (facing - f64::from(cap.copysign(excess))) as f32;
     let yaw = if ps.rules.v15() {
         normalize360_accurate(at)
     } else {
@@ -3133,7 +3177,7 @@ fn update_prone_view(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, d
         // UO caps any LMG at `bg_lmg_yawcap`, swings only an undeployed
         // body and pulls the view to none holding an LMG (0x2b15c).
         let cap = if ps.lmg && ps.rules == MoveRules::Uo {
-            LMG_YAWCAP
+            ps.bg.lmg_yawcap as f32
         } else {
             PRONE_YAWCAP
         };
@@ -6986,6 +7030,18 @@ mod tests {
         assert_eq!(at(-30.0, false, MoveRules::Uo).1, Some(350.0));
         assert_eq!(at(200.0, true, MoveRules::V1_1), (0.0, None));
         assert_eq!(at(189.0, false, MoveRules::V1_1), (0.0, None));
+        // The cap is the server's `bg_ladder_yawcap.integer`; 0 lifts it.
+        let capped = |cap: i32| {
+            let mut ps = PlayerState::spawn(Vec3::ZERO, 200.0);
+            ps.rules = MoveRules::V1_5;
+            ps.on_ladder = true;
+            ps.ladder_normal = -Vec3::Y;
+            ps.bg.ladder_yawcap = cap;
+            cap_ladder_yaw(&mut ps, &w);
+            ps.view_capped[1]
+        };
+        assert_eq!(capped(90), Some(180.0));
+        assert_eq!(capped(0), None);
     }
 
     /// `SetClientViewAngle`'s prone arm (1.1 0x41e30, 1.5 0x3bf08): the
@@ -9176,6 +9232,15 @@ mod tests {
         assert!(ps.winded && (ps.fatigue - 0.5).abs() < 0.01);
         run(&mut ps, PmInput::default(), 3600);
         assert!(!ps.winded && ps.fatigue == 1.0);
+        // `bg_nofatigue` 1: the sprint runs on a full bar (0x2aa63).
+        let mut fresh = PlayerState {
+            rules: MoveRules::Uo,
+            ..PlayerState::spawn(Vec3::ZERO, 0.0)
+        };
+        fresh.bg.nofatigue = true;
+        run(&mut fresh, PmInput::default(), 240);
+        run(&mut fresh, sprint, 1000);
+        assert!(fresh.sprinting && fresh.fatigue == 1.0);
     }
 
     /// Every patch drops the moves of a sighted prone body before the

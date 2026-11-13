@@ -3233,15 +3233,30 @@ impl App {
     }
 
     /// Gives the mouse to the view (`grabbed`) or takes it back.
-    /// `CL_MouseMove` (CoDMP.exe 0x40b240) once a frame: the motion since
-    /// the last frame, or with `m_filter` its mean with the last frame's,
-    /// turns the view or, online, moves the cmd (`MouseLook::moves`).
+    /// `CL_AdjustAngles` (CoDMP.exe 0x40ade0) online, then `CL_MouseMove`
+    /// (0x40b240) once a frame: the motion since the last frame, or with
+    /// `m_filter` its mean with the last frame's, turns the view or,
+    /// online, moves the cmd (`MouseLook::moves`).
     fn mouse_frame(&mut self) {
         let filter = self.shell.cvar_f32("m_filter") as i32 != 0;
         let (dx, dy) = self.mouse.take(filter);
         if !self.grabbed {
             self.mouse.clear();
             return;
+        }
+        // `frame_msec`, the ms since the last frame's cmd, at most 200
+        // (CoDMP.exe 0x40b8ef).
+        let frame_ms = Instant::now()
+            .saturating_duration_since(self.last_frame)
+            .as_millis()
+            .min(200) as i32;
+        if let Mode::Online { input, .. } = &mut self.mode {
+            let speeds = play::input::AngleSpeeds {
+                yaw: self.shell.cvar_f32("cl_yawspeed"),
+                pitch: self.shell.cvar_f32("cl_pitchspeed"),
+                anglespeedkey: self.shell.cvar_f32("cl_anglespeedkey"),
+            };
+            input.adjust_angles(frame_ms, speeds);
         }
         if dx == 0.0 && dy == 0.0 {
             return;
@@ -3253,6 +3268,8 @@ impl App {
             m_forward: self.shell.cvar_f32("m_forward"),
             m_side: self.shell.cvar_f32("m_side"),
             freelook: self.shell.cvar_f32("cl_freelook") as i32 != 0,
+            accel: self.shell.cvar_f32("cl_mouseAccel"),
+            frame_ms,
         };
         match &mut self.mode {
             Mode::Idle => {}
@@ -6779,6 +6796,14 @@ impl ApplicationHandler for App {
                                         seat_now.map_or([0.0; 3], |(_, num, vang)| {
                                             drawn_vehicle_angles.get(&num).copied().unwrap_or(vang)
                                         });
+                                    // The cgame's `bg_*` cvars, off the 140/204 mirror.
+                                    // UO's cgame never registers `bg_nofatigue`.
+                                    predictor.bg = pmove::BgCvars {
+                                        nofatigue: false,
+                                        ..pmove::BgCvars::from_cvars(|c| {
+                                            join.cvars.get(c, net.configstrings(), &self.shell)
+                                        })
+                                    };
                                     let predicted = if ps_client == client_num && !demo {
                                         net.snapshots().newest().and_then(|s| {
                                             let bodies = play::predict::solid_bodies(

@@ -2091,6 +2091,21 @@ with) for a script model and a UO vehicle, and `PlacedModel::clip` runs
 triangle. `model_bounds_ab` replays the probe on 1.1d, 1.5b and UO, every
 row to 1e-5.
 
+The client has no counterpart. VERIFIED, `cgame_mp_x86.dll` 1.1:
+`CG_ClipMoveToEntities` (0x30028df0) has two callers, the point trace
+(0x30029040, syscall 0x26) and the capsule trace (0x300290b0, syscall 0x28),
+and clips each entity of the solid list as an inline model or the box its
+`solid` packs (`cod11-player-clip.md` 5). VERIFIED, `CoDMP.exe`'s dispatcher
+(0x401df0, table 0x4041f0): the trace syscalls 0x26..0x29 call 0x424b50 and
+0x425040. INFERRED: those are Q3's `CM_BoxTrace` and
+`CM_TransformedBoxTrace` over a clip handle, so no cgame trace walks a DObj's
+collision surfaces and the cgame never meets a script model's mesh. VERIFIED, game.mp 0x61010 and `cod_lnxded` 0x80908f0
+(`cod11-player-clip.md` 4.1): a `script_model`'s contents are 0x2080, which
+misses `SV_LinkEntity`'s 0x2000001. INFERRED: it goes out with `solid` 0 and
+stays off the cgame's solid list (`CG_BuildSolidList`, 0x30028d50), and the
+whole-model bounds reject is the server's alone; vcod's predictor, which
+clips only `solid` bodies, matches.
+
 VERIFIED, live (retail 1.1d, mp_carentan, `probe_scriptmodel`'s pair parts, `+set probe_part rounds|grenade|blast`, fixtures
 `mp_carentan-scriptmodel-{rounds,grenade,blast}.txt`; recipe in each
 header): with an axis player 256 units off an allies `--probe-uo-weapon

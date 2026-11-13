@@ -236,6 +236,9 @@ pub struct Predictor {
     /// The systeminfo fall bounds every replay lands with; the caller keeps
     /// them current.
     pub fall_heights: vcod_common::pmove::FallHeights,
+    /// The cgame's movement cvars every replay runs under; the caller keeps
+    /// them current.
+    pub bg: vcod_common::pmove::BgCvars,
     /// In a UO vehicle seat, the vehicle's angles the view's arcs are
     /// measured from (`pm` +0x3c); the caller keeps them current.
     pub seat_angles: [f32; 3],
@@ -372,6 +375,7 @@ impl Predictor {
             .filter(|c| c.server_time == command_time);
         let mut pred = predict::from_wire(p, ps, last_cmd);
         pred.ps.fall_heights = self.fall_heights;
+        pred.ps.bg = self.bg;
         if let Some(seat) = &mut pred.ps.seat {
             seat.angles = self.seat_angles;
         }
