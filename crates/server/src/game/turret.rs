@@ -32,6 +32,10 @@ pub struct TurretDef {
     /// and a frame takes off (coduo-diff.md 21). 0 on 1.1's files.
     pub fire_heat: f32,
     pub cooldown_rate: f32,
+    /// `minDamagePercent`, `damageInnerRadius`, `damageOuterRadius`, which
+    /// UO's `Bullet_Fire_Extended` applies to a turret's round as to any
+    /// other (coduo-diff.md 21). 0 on 1.1's files.
+    pub falloff: crate::game::combat::Falloff,
 }
 
 /// `rec+0x20`, from the weapon's `stance` key; order per
@@ -149,6 +153,11 @@ impl TurretDef {
             use_hint_string: s("useHintString"),
             fire_heat: f("fireHeat"),
             cooldown_rate: f("cooldownRate"),
+            falloff: crate::game::combat::Falloff {
+                min_percent: f("minDamagePercent") as i32,
+                inner: f("damageInnerRadius") as i32,
+                outer: f("damageOuterRadius") as i32,
+            },
         })
     }
 }
@@ -1216,5 +1225,20 @@ mod tests {
         let text = String::from_utf8(fs.read("weapons/mp/mg42_bipod_stand_mp").unwrap()).unwrap();
         let d = TurretDef::parse(&text).unwrap();
         assert_eq!((d.left_arc, d.top_arc, d.fire_time_ms), (45.0, 40.0, 50));
+    }
+
+    /// UO's turret files carry the falloff keys its rounds take
+    /// (coduo-diff.md 21): whole to 8000 units, 35% past 10000.
+    #[test]
+    fn a_uo_turret_round_falls_off_past_8000() {
+        let Some(fs) = vcod_common::testing::uo_fs() else {
+            return;
+        };
+        let text = String::from_utf8(fs.read("weapons/mp/mg42_bipod_stand_mp").unwrap()).unwrap();
+        let f = TurretDef::parse(&text).unwrap().falloff;
+        assert_eq!((f.min_percent, f.inner, f.outer), (35, 8000, 10000));
+        assert_eq!(f.damage(8000.0, 60), 60);
+        assert_eq!(f.damage(9000.0, 60), 40);
+        assert_eq!(f.damage(10001.0, 60), 21);
     }
 }
