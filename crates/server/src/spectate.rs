@@ -2211,7 +2211,6 @@ impl ClientSim {
         Some(crate::game::combat::HitBody {
             slot,
             origin: self.ps.origin,
-            yaw: self.ps.yaw,
             mins: self.ps.mins(),
             maxs: self.ps.maxs(),
             pose,

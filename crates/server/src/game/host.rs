@@ -2486,6 +2486,11 @@ impl Host for GameHost {
         // "Block 1"). A map entity's `health` is still its own slot.
         if let Some(c) = &e.client {
             match cx.resolve_folded(field) {
+                // A CoD1 player's `r.currentAngles` live with his DObj's
+                // stamps, which place his body for a trace or a tag.
+                "angles" if matches!(self.ext, HostExt::Cod1) => {
+                    return Value::Vector(self.dobj_posed[ent.0 as usize].angles());
+                }
                 "health" => return Value::Int(self.client_vitals[ent.0 as usize].health),
                 "maxhealth" => return Value::Int(self.client_vitals[ent.0 as usize].max_health),
                 "maxspeed" if !self.speaks_1_1() => {
@@ -2719,10 +2724,18 @@ impl GameHost {
             self.client_squad[ent.0 as usize] = squad_of(cx, value)?;
             return Ok(());
         }
+        let cod1 = matches!(self.ext, HostExt::Cod1);
         let Some(e) = self.ents.get_mut(ent) else {
             return Err(ErrorKind::BadType("no such entity"));
         };
         if let Some(c) = e.client.as_mut() {
+            if cod1 && cx.resolve_folded(field) == "angles" {
+                let Value::Vector(v) = value else {
+                    return Err(ErrorKind::BadType("wrong type for an engine field"));
+                };
+                self.dobj_posed[ent.0 as usize].set_angles(v);
+                return Ok(());
+            }
             // 1.5's and UO's setter (1.5b 0x3b88e, UO 0x43b82) floors the
             // int at 0 and copies it, as a float, into the entity's `speed`.
             if max_speed {

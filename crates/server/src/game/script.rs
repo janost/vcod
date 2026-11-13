@@ -2631,9 +2631,6 @@ impl ScriptRuntime {
             return;
         };
         let host = &mut self.host;
-        if let Some(s) = host.dobj_posed.get_mut(slot) {
-            s.set_angles(None);
-        }
         self.vm.with_cx(|cx| {
             let field = cx.intern_folded("angles");
             let _ = host.set_field(cx, ent, field, Value::Vector([0.0, yaw, 0.0]));
@@ -5864,7 +5861,6 @@ mod tests {
         let body = |slot: usize, x: f32, y: f32| crate::game::combat::HitBody {
             slot,
             origin: glam::Vec3::new(x, y, 0.0),
-            yaw: 0.0,
             mins: crate::game::trigger::PLAYER_MINS.into(),
             maxs: crate::game::trigger::PLAYER_MAXS.into(),
             pose: Default::default(),

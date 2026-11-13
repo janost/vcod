@@ -2390,8 +2390,8 @@ sequence apart from addresses and struct offsets in each pair:
   the difference.
 
 vcod: `bonetrace::bone_trace_in` under `Arith::Stored` (the frame, the
-matrix, the slab), `HitBody::axis_stored` (`DobjStamps::axis_stored`
-through `x87::angles_to_axis` while a `setPlayerAngles` holds),
+matrix, the slab), `DobjStamps::axis_stored` (`x87::angles_to_axis` of
+the player's `r.currentAngles`),
 `combat::trace_point` for a round, a swing, a missile and a
 `bulletTrace` that stops on a body. The
 bone's quaternion and origin come from the engine's own pose (next
@@ -3224,9 +3224,20 @@ counts). Each pair's order there decided the round:
   `t_yaw_down` (1.1d), `t_down`, `t_down2`, `t_up` and `t_yaw_down` (1.5b)
   and `t_down2` and `t_up` (UO) miss the body on ours.
 
-vcod: `setPlayerAngles` hands the angles to the client's
-`combat::DobjStamps` (`set_angles`), the cmd's `set_client_yaw` clears
-them, and every trace poses the body in `DobjStamps::frame`. VERIFIED,
+VERIFIED, `game.mp.i386.so`'s entity field table: the `angles` field is
+`ent+0x140`, `r.currentAngles`, with the setter `Scr_SetAngles` (0x5c660),
+which hands the script's vector to `G_SetAngle` (0x67d9c). VERIFIED,
+`G_SetAngle`: it stores the three into `s.apos.trBase` (`+0x3c..0x44`),
+zeroes the trajectory's delta and stores them into `r.currentAngles`
+(`+0x140..0x148`). INFERRED: a script write of a player's `angles` turns
+the traced body until his next cmd as `setPlayerAngles` does.
+
+vcod: a CoD1 player's `r.currentAngles` live in his
+`combat::DobjStamps`, which his script `angles` field reads and writes
+(`GameHost::get_field`, `write_field`): the cmd's `set_client_yaw`, the
+spawn, `setPlayerAngles`, a turret mount and a script write all land
+there, and every trace and tag poses the body in `DobjStamps::frame` (all
+three angles; `HitBody` carries no turn of its own). VERIFIED,
 vcod measurement: every grid cell of the six captures sits within 0.0001
 median of retail's, and with the read order every round of the `-turn`
 captures matches, with no gap.

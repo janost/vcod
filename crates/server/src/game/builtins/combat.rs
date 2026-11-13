@@ -1460,7 +1460,6 @@ mod tests {
                 Some(crate::game::combat::HitBody {
                     slot,
                     origin: Vec3::from(feet[slot]),
-                    yaw: 0.0,
                     mins: crate::game::trigger::PLAYER_MINS.into(),
                     maxs: crate::game::trigger::PLAYER_MAXS.into(),
                     pose: Default::default(),
@@ -1544,7 +1543,6 @@ mod tests {
                     Some(crate::game::combat::HitBody {
                         slot,
                         origin: Vec3::new(x, 0.0, 0.0),
-                        yaw: 0.0,
                         mins: crate::game::trigger::PLAYER_MINS.into(),
                         maxs: crate::game::trigger::PLAYER_MAXS.into(),
                         pose: Default::default(),
