@@ -3,7 +3,7 @@
 //! board, as the use key would find them (`game::vehicle::seat::usable`).
 
 use super::*;
-use crate::bots::{ArmorView, Crowd, SeatView, VehicleSpot};
+use crate::bots::{ArmorView, Crowd, GunSight, SeatView, VehicleSpot};
 use crate::game::vehicle::info::KIND_TANK;
 
 /// `vc_bot_vehicles`: 0 stops bots boarding; one seated rides on.
@@ -56,6 +56,23 @@ impl Server {
                 if let Some(seat) = view.seat.as_mut().filter(|s| s.seat == 1) {
                     let mine = teams.get(*slot).copied().unwrap_or(0);
                     seat.crowd = crowd(host, *slot, mine, &walkers);
+                    if let Some((id, _)) = host.vehicles.seat_of(*slot) {
+                        seat.capturing = crate::game::vehicle::think::capturing(host, cx, id);
+                    }
+                    if seat.tank
+                        && seat.gun_speed > 0.0
+                        && let Some((id, _)) = host.vehicles.seat_of(*slot)
+                    {
+                        let speed = seat.gun_speed;
+                        seat.sight = crate::game::vehicle::fire::main_gun_sight(host, cx, id).map(
+                            |(muzzle, dir, eye)| GunSight {
+                                muzzle,
+                                dir,
+                                eye,
+                                speed,
+                            },
+                        );
+                    }
                 }
                 if view.seat.is_some() || !on {
                     continue;
@@ -75,6 +92,7 @@ impl Server {
                         yaw: v.pose.angles[1],
                         mins: info.mins,
                         maxs: info.maxs,
+                        tank: info.kind == KIND_TANK,
                     };
                     if spot.gap(view.origin) < reach
                         && crate::game::vehicle::seat::usable(host, cx, id, *slot)
@@ -130,6 +148,7 @@ impl Server {
                     yaw: v.pose.angles[1],
                     mins: info.mins,
                     maxs: info.maxs,
+                    tank: info.kind == KIND_TANK,
                 };
                 let mask = riders
                     .iter()
@@ -273,6 +292,7 @@ impl Server {
                     yaw: v.pose.angles[1],
                     mins: info.mins,
                     maxs: info.maxs,
+                    tank: info.kind == KIND_TANK,
                 })
             })
             .collect()
@@ -321,6 +341,9 @@ fn seat_view(
         crowd: Crowd::default(),
         contact_ms: v.phys.contact_ms(host.level_time_ms),
         level_ms: host.level_time_ms,
+        sight: None,
+        traverse: info.turret.horiz_left != 0.0 || info.turret.horiz_right != 0.0,
+        capturing: false,
     })
 }
 

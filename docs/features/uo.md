@@ -147,8 +147,8 @@ Everything from [cod1.md](cod1.md#bots), plus ([bots.md](../bots.md)):
   of bodies, and run from live ones.
 - Objectives: `sd`; `ctf` (take, carry, return); `dom` (stand in the flag
   zones); `hq` (take and neutralize the radio); `bas` (fetch a bazooka or
-  panzerschreck, breach a base with rockets from a spot with a shot at
-  it, plant on a breached base, defuse).
+  panzerschreck, or take a tank, and breach a base with rockets or shells
+  from a spot with a shot at it, plant on a breached base, defuse).
 - Vehicles (`vc_bot_vehicles`): a driver steers along the graph over
   ground its hull fits and waits for a teammate in its way; a tank driver
   stops to lay the turret on an enemy and fire; a gunner fires the MG; a

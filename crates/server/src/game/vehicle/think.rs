@@ -596,6 +596,12 @@ fn sync(v: &mut super::Vehicle) {
 }
 
 /// A script field read as an int, 0 when unset.
+/// The script holds the vehicle for a capture (`capturing`, set by stock
+/// `_tankdrive_gmi::tank_capture_think`): no driver input moves it.
+pub fn capturing(host: &mut GameHost, cx: &mut Cx, id: EntId) -> bool {
+    script_int(host, cx, id, "capturing") != 0
+}
+
 fn script_int(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> i32 {
     use vcod_gsc::Host;
     let atom = cx.intern_folded(name);

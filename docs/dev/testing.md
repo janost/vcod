@@ -63,7 +63,9 @@ What each holds:
 - `bots.rs` at UO: mp_cassino's six-bot tdm run, its walled-in spawns test
   and four mp_foy `bas` rounds
   (`uo_bots_breach_bases_until_a_bas_round_ends`, the two `four_*_bas_round`
-  runs, `a_seeded_bas_match_replays_beside_another`).
+  runs, `a_seeded_bas_match_replays_beside_another`). The rounds run at
+  `scr_bas_basehealth 3000`; `BAS_HEALTH=24500` plays them at stock,
+  `BAS_MAP=all` on the five stock bas maps, `BOTS_SEED=` another seed.
 - `tests/bot_vehicles.rs` at UO: bots boarding, driving and firing
   mp_cassino's tanks, rockets at one, and mp_kharkov's jeep. With a 1.1
   install it returns at once, as the UO files of the other two do.

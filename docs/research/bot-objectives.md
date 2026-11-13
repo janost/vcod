@@ -677,6 +677,37 @@ first everywhere.
   unset `count`: VERIFIED (measured, `four_shooting_uo_bots_end_a_bas_round`
   on the parked-vehicle change, bot-navigation.md "Parked vehicles"), a
   second abort. The bas gates in `tests/bots.rs` pass over the two.
+- VERIFIED (`pakuo04.pk3` `weapons/mp/sherman_turret_mp`,
+  `PanzerIV_turret_mp`, `t34_turret_mp`): `weaponType projectile`,
+  `projectileSpeed 10000`, `damage 700`, `explosionRadius 200` with 400
+  inner, `fireTime 3`. VERIFIED (`elefant_turret_mp`, `su152_turret_mp`):
+  `damage 2500`, `explosionRadius 400` with 600 inner, `fireTime 4`. So the
+  stock 24500 (`bas.gsc` 351, "700 tank shell * 35") is 35 direct shells
+  from the first three, 10 from the other two, 25 direct rockets.
+- VERIFIED (`pakuo03.pk3` `vehicles/elefant_mp`, `su152_mp`):
+  `turretHorizSpanLeft` and `turretHorizSpanRight` 0, `rotRate` 20; the
+  Sherman's and the T-34's 180 each. The gun of the first two points the
+  hull's way.
+- INFERRED (`bas.gsc` 3934, branch condition): damage whose inflictor is a
+  Flak 88 (`vehicletype` `flak88_mp` or `Flak88_MP`) is passed over before
+  the means test.
+- VERIFIED (`pakuo07.pk3` `weapons/mp/satchelcharge_mp`): `weaponType
+  grenade`, `weaponSlot satchel`, `explosionRadius 450` with 500 inner and
+  20 outer, `fuseTime 6`. VERIFIED (`pakuo01.pk3`
+  `maps/mp/gametypes/_rank_gmi.gsc` 85-89): one satchel from battle rank 3
+  up, none below; INFERRED (`_teams.gsc` `giveSatchelCharges`, 1357-1370,
+  and `_rank_gmi.gsc` `DetermineBattleRank`): given at spawn only with
+  `scr_battlerank` on, and rank 3 is a score of 30 (`scr_rank_ppr` 10). A
+  satchel's burst counts as `MOD_GRENADE_SPLASH`, at most 500 a base.
+- VERIFIED (`pakuo01.pk3` `maps/mp/_tankdrive_gmi.gsc` 33, 119-138):
+  `level.tank_capture_time` is 15000; outside `dm`, `tdm` and `hq` a T-34,
+  Sherman or SU-152 is the allies' and a Panzer IV or Elefant the axis'.
+  INFERRED (`tank_check_capture` 289, `tank_capture_think` 345-351): a
+  driver of the other side's tank sets its `capturing` to 1 for those 15 s.
+  While it is set the driver's reader neither fires nor aims
+  (coduo-vehicles.md, "The readers", VERIFIED there). INFERRED (code,
+  `game::vehicle::physics` `StepInput::capturing`): ours holds the
+  driver's keys and the turret as well.
 - VERIFIED (`bas.gsc` 330-345): `scr_bas_planttime` 15,
   `scr_bas_defusetime` 10 and `scr_bas_bombtime` 60 by default.
   INFERRED (`BaseAssault_bomb_countdown`, 3591-3598, loop body): the
@@ -751,8 +782,7 @@ first everywhere.
   units of the defender's spot). Trap: running home to defuse from anywhere,
   it was back for every plant (about 38 s of a 60 s fuse on mp_foy), and the
   round looped on defuses (seeds 17 and 19, 64 to 68 in 29 min).
-- A standing base is breached with rockets (below). A bot in a tank (section 10)
-  lays its gun on players and vehicles, not bases.
+- A standing base is breached with rockets and tank shells (below).
 
 The breach:
 
@@ -807,6 +837,92 @@ The breach:
   -0.303, 0.011), 7 degrees off where `spread_clear` clears 4; its splash
   killed it (72, `MOD_PROJECTILE_SPLASH`, tick 15068).
   (`bots::tests::a_bas_attacker_with_a_rocket_walks_to_a_stand_and_fires`.)
+
+Tanks:
+
+- A bot fetching a launcher, or walking to a stand with one, boards a tank
+  within 900 units (any vehicle's 400 off a far objective stays the rule
+  for the rest). In the driver's seat its objective is the other side's
+  standing base it has a shot at, else the nearest, driven to as any goal
+  (section 10.3); an enemy in reach still comes first.
+- `Server::shell_view` deals each such base a `shot` and `laid`. The shot is
+  a point on the base 400 to 2000 units from the gun's muzzle
+  (`tag_flash`) that a shell aimed there strikes, the breach test above
+  less the spread cone (a shell has none) and passing the tank's own hull.
+  `laid` is whether a shell fired now, along the line
+  `vehicle::fire::main_gun_sight` reads off the posed turret and the
+  driver's last aim point (the fire call's own bend), strikes the base, with
+  no body on foot across it. Both trace the shell's fall (vehicle shells fly
+  `TR_GRAVITY`, `game::missile` `fire_rocket`), in eight chords, and the
+  shot's aim is lifted by the fall over the flight (`shell_lands`, 16 units
+  at 2000). Trap: traced straight, the allied Shermans on mp_foy laid on the
+  western axis bunker (-2502, 2264) from the south, and every shell fell
+  into the rise in front of it about 345 units short (seed 7, shells from
+  (-2570, 328, 173) bursting on the world at (-2515, 1920, 74)): 114 allied
+  shells over 8 seeds, 20 on a base.
+- With a shot the hull holds and the view goes from `tag_chasecam` onto
+  the point: the round bends toward where that view meets the world, up to
+  5 degrees of pitch and 2 of yaw off the barrel (coduo-vehicles.md 13),
+  so a view laid from the camera brings the shell onto the point where one
+  laid from the muzzle passes over it by the camera's height. The gun fires
+  whenever `laid` holds, shooting on or off, as a breach rocket does. An
+  SU-152 or Elefant holds `upmove` as well, which turns its hull to the
+  view (coduo-vehicles.md 2). A gun that has not lain on the base for 10 s
+  gets the driver out; the 90 s ride clock waits while it shells.
+- The other side's tank holds its new driver 15 s for the capture (7.1):
+  the driver sends no keys and counts no stall or idle time meanwhile.
+  Trap: read as stalls, the wait got every driver of an enemy tank out
+  before the hull was his, and an SU-152 on mp_kursk was boarded, held and
+  left five times over at one spot, its gun pointing away from the base.
+- Satchels: none. One comes at battle rank 3 only (7.1) and bursts for 500
+  at most, 2% of a stock base.
+  (`bots::tests::a_bas_tank_driver_shells_a_standing_base`,
+  `a_turretless_tank_turns_its_hull_onto_the_base`,
+  `a_driver_waits_out_a_tank_capture`.)
+
+The axis's wins at mp_foy and mp_kursk (2026-11-13, 8 seeds each, per side,
+counted off throwaway prints: shells fired, shells on a base, driver ticks
+by state), VERIFIED (measured):
+
+| | mp_foy axis | mp_foy allies | mp_kursk axis | mp_kursk allies |
+|---|---|---|---|---|
+| shells fired, before the fall | 611 | 114 | 739 | 476 |
+| shells on a base, before | 455 | 20 | 717 | 320 |
+| shells on a base, after | 523 | 117 | 722 | 321 |
+| ticks laid on a base, after | 30650 | 6329 | 41685 | 19115 |
+| ticks with a shot, line not on it | 409 | 3649 | 2508 | 2934 |
+| ticks driving (of them under 30 units/s) | 10385 (3926) | 15918 (5852) | 13697 (4377) | 14877 (5417) |
+| turretless ticks | 0 | 0 | 1010 | 11559 |
+| rides got out of | 89 | 65 | 79 | 84 |
+| hulls of this side's lost | 22 | 0 | 8 | 3 |
+
+- After the fall fix the allies' laid shells hit as the axis's do (112
+  fired laid on mp_foy, 117 base hits; 320 and 321 on mp_kursk), and the rounds still go to the axis 16 in 16. What is
+  left is where the tanks stand. Nearly every base shell comes from a tank
+  of the other side's, captured where the map parks it by the bases it
+  guards: the allied bots' own tanks, driven from their spawn at bases
+  9000 to 14000 units off, made no shell on a base in 8 seeds (mp_foy's
+  (-5086, -8199) 12 rides, mp_kursk's (-545, -15590) 8). VERIFIED (each
+  map's entity lump): mp_foy's Shermans stand 640 (-1398, -7399), 650
+  (-3387, -4572), 730 (3624, -5489) and 1100 to 2000 (-3788, -7340;
+  -4519, -6585; -4437, -6020) from an allied base, and those six gave the
+  axis 1200 to 6900 laid ticks each. Its Panzers by the axis bases stand
+  407 (3418, 2835), 420 to 460 (1644, 5973; 767, 6183), 497 (2541, 3022),
+  631 (-2012, 2662) and 686 (-2996, 2740) off; captured, (2541, 3022) gave
+  the allies no laid tick in 4 rides, (-2012, 2662) 516 in 2, (-2996, 2740)
+  4 in 2, and the allies reached the others too seldom to count. mp_kursk's T-34s
+  at (-6259, -11435) and (-4722, -12152), 700 and 1850 from the allied base
+  at (-6576, -12040), gave the axis 22800 laid ticks; the allies' best was
+  the Panzer at (-1268, -3035), 13300. The allies' other captures there
+  are the Elefants (turretless, slow to turn: 11559 ticks, 2934 with the
+  line off).
+- INFERRED (the counts above): the parking is the map's, and a human
+  capturing those Panzers would find them as close to their bases, but he
+  would back off for a line; ours shells only from where a shot is found
+  on the way. A back-off for a tank inside 900 units with no shot (to 1100
+  out) changed none of it (mp_foy 20784, mp_kursk 16306, both 16 axis
+  wins; not kept). What would move it is a stand search for hulls, as
+  `breach_stands` does for a body.
 
 Out of rounds:
 
@@ -894,7 +1010,36 @@ Assets:
 Measured: ours, release, UO install, `scr_bas_basehealth 3000` for the `bas`
 gates in `tests/bots.rs` (`uo_bots_breach_bases_until_a_bas_round_ends`, two
 bots, shoot off; `four_uo_bots_end_a_bas_round_without_shooting`;
-`four_shooting_uo_bots_end_a_bas_round`).
+`four_shooting_uo_bots_end_a_bas_round`) unless a line says stock
+(`BAS_HEALTH=24500` there, `SET=scr_bas_basehealth=24500` in `bot_match`).
+
+- Stock health (2026-11-13, master 55164194d against the tanks above,
+  `bot_match UO=1 GAMETYPE=bas BOTS=4 TICKS=38000`, all five maps, seeds 1
+  to 8, 40 runs each), VERIFIED (measured). The round's length is the tick
+  of its `W;` line, 10 s (`scr_bas_endrounddelay`) past the last base; one
+  with none by tick 38000 ran out the 30 min clock (a draw logs no `W;`,
+  and a lead's `W;` comes past 38000). Before: 37 of 40 end on their bases, mean 27896,
+  median 27659, 18399 to 35479; mp_foy 27352, mp_italy 29894, mp_kursk
+  28214, mp_ponyri 28155 (three draws, 2 bases each), mp_rhinevalley 25962.
+  The bases took 5548 direct rockets (1000) and 16 shells (700) in all
+  (counted off a print in `GameHost::damage_nonclient`, not kept): a
+  tank's driver laid its gun only on players and vehicles, those 16 shells
+  among them, and nothing else reached a base (no satchel, no artillery). A round was 25 rockets a base, four a launcher at most, with
+  the walk to the next launcher between. After: 37 of 40 end on their
+  bases, mean 20287, median 20399, 13199 to 28979; mp_foy 20659, mp_italy
+  20546, mp_kursk 16266, mp_ponyri 23596 (one draw), mp_rhinevalley 20946
+  (two out of time: seed 2 at 3 bases to 2, seed 5 even). Every map is 4500
+  to 12000 ticks shorter on the mean, past its 8 seeds' spread. The bases
+  took 3932 shells of 700, 52 of 2500 and 1972 rockets. mp_foy and mp_kursk
+  went to the axis 16 times in 16 (before 8 in 16); mp_italy 6 to 2, the
+  other two even. With the shell's fall traced ("Tanks"): 39 of 40 end on
+  their bases, mean 20119, median 19819, 13339 to 34879; mp_foy 20042,
+  mp_italy 19299, mp_kursk 16329, mp_ponyri 22188 (one draw),
+  mp_rhinevalley 22996 (all 8 end; its 6 seeds that ended before run 20944
+  to 23362 on the mean, inside their spread of 16000 to 32000). The bases
+  took 4589 shells of 700, 60 of 2500 and 1799 rockets. Wins: mp_foy and
+  mp_kursk axis 16 of 16 (above), mp_italy axis 7 of 8, mp_ponyri allies 4
+  to 3, mp_rhinevalley allies 5 to 3.
 
 - The other gametypes (2026-10-15, two bots, seed 7,
   `tests/bot_objectives.rs`): `ctf` on mp_cassino with shoot on, a flag taken
@@ -1329,7 +1474,10 @@ stops boarding.
   passenger; that gun's round speed (`projectileSpeed` of a
   `weaponType projectile` file, the tanks' shells 10000; 0 for the MGs'
   bullets); and for the driver, whether a teammate on foot stands in the
-  hull's way (`Crowd`, 10.3).
+  hull's way (`Crowd`, 10.3), whether the script holds the hull for a
+  capture (`capturing`, 7.1), and a tank's main gun as it stands
+  (`GunSight`: the muzzle and line a shell fired now takes, and the chase
+  camera; 7.2, "Tanks").
 - `BotView::armor`: for a bot on foot with a loaded launcher, or one
   driving a tank, the nearest vehicle with a hostile rider (team rules as
   `bot_enemy`'s), its box's middle, velocity and riders, with a clear shot
@@ -1343,7 +1491,9 @@ stops boarding.
 - A bot with no enemy, no frag near, no plant or defuse under way and no
   throw in hand looks for one. With no objective (`dm`, `tdm`) any vehicle
   in the list will do; with an objective more than 1500 units off only one
-  within 400; with an objective nearer it walks on. The nearest wins and
+  within 400; with an objective nearer it walks on. In `bas` a bot after a
+  launcher, or on its way to a stand with one, takes a tank within 900
+  (7.2, "Tanks"). The nearest wins and
   the graph walks the bot to it (`Bot::goal`, ahead of the objective),
   to the clear node nearest it when the vehicle is parked over its own
   (bot-navigation.md, "Parked vehicles").
@@ -1397,9 +1547,11 @@ stops boarding.
   keys, and the stuck kill's death walk kills its riders with the tank
   as attacker, which stock `tdm.gsc` 815 cannot score
   (cod11-gsc-language.md, "Runtime errors below developer 1").
-- A tank's driver holds the hull still while it has an enemy or an enemy
-  vehicle to shoot, and every driver waits up to 10 s for a teammate
-  walking up to board.
+- A tank's driver holds the hull still while it has an enemy, an enemy
+  vehicle or a `bas` base to shoot, and every driver waits up to 10 s for a
+  teammate walking up to board. While the script holds the other side's
+  tank for its capture (7.1) the driver sends no keys and counts no stall,
+  idle or headway time.
 - A teammate on foot (not seated, axis or allies only) is in the way when
   he stands, in the hull's frame, within 40 units wide of its sides and
   ahead of its front by 120 plus 0.6 s of its speed (or as far behind its
@@ -1435,7 +1587,9 @@ stops boarding.
 - A seated bot with an enemy in range reads as engaged
   (`BotBody::engaged`), as a bot holding still to aim on foot does.
 - Out: a route's end, 5 s in a standing vehicle with nobody to shoot (a
-  rider) or with nothing to drive to (a driver), 90 s in the seat, four
+  rider) or with nothing to drive to (a driver), 90 s in the seat (not
+  while shelling a base), 10 s shelling a base with the gun's line never
+  on it, four
   stalls or 8 s of driving under 300 units, the same 8 s for a rider
   with nobody to shoot, 2 s idle in a vehicle nobody drives, or 5 s of
   the hull's unbroken contact (10.3). Seed 45's gunner, without the

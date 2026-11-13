@@ -7171,7 +7171,7 @@ fn breach_aim(
     muzzle: glam::Vec3,
     base: glam::Vec3,
 ) -> Option<[f32; 3]> {
-    use crate::bots::{BREACH_CLEAR, BREACH_MIN, BREACH_NEAR, BREACH_RANGE};
+    use crate::bots::{BREACH_MIN, BREACH_NEAR, BREACH_RANGE};
     let d = muzzle.distance(base);
     if !(BREACH_MIN..=BREACH_RANGE).contains(&d) {
         return None;
@@ -7179,27 +7179,7 @@ fn breach_aim(
     [40.0, 72.0, 16.0, 0.0].into_iter().find_map(|up| {
         let spot = base + glam::Vec3::Z * up;
         let dir = (spot - muzzle).normalize_or_zero();
-        let end = spot + dir * BREACH_NEAR;
-        let tr = world.missile_trace(muzzle, end);
-        let mut best = (tr.fraction, None);
-        for m in models {
-            if let Some((f, ..)) = m.clip(
-                muzzle,
-                end,
-                crate::game::missile::MISSILE_MODEL_MASK,
-                best.0,
-            ) {
-                best = (f, Some(m.origin));
-            }
-        }
-        let burst = muzzle + (end - muzzle) * best.0;
-        // The base's mesh reaches out toward the shooter: a strike on it
-        // inside the rocket's own splash took the shooter too.
-        let ok = burst.distance(muzzle) >= BREACH_CLEAR
-            && match best.1 {
-                Some(o) => o == base,
-                None => best.0 < 1.0 && burst.distance(base) < BREACH_NEAR,
-            }
+        let ok = breach_line(world, models, muzzle, spot + dir * BREACH_NEAR, base)
             && cone_clear(
                 world,
                 models,
@@ -7211,6 +7191,116 @@ fn breach_aim(
         ok.then_some(spot.into())
     })
 }
+
+/// Whether a round from `muzzle` toward `end` strikes the mesh of the
+/// base at `base` or bursts on the world within
+/// [`crate::bots::BREACH_NEAR`] of it, past [`crate::bots::BREACH_CLEAR`]:
+/// the base's mesh reaches out toward the shooter, and a strike on it
+/// inside the rocket's own splash took the shooter too.
+fn breach_line(
+    world: &vcod_common::collision::CollisionWorld,
+    models: &[crate::game::combat::PlacedModel],
+    muzzle: glam::Vec3,
+    end: glam::Vec3,
+    base: glam::Vec3,
+) -> bool {
+    use crate::bots::{BREACH_CLEAR, BREACH_NEAR};
+    let tr = world.missile_trace(muzzle, end);
+    let mut best = (tr.fraction, None);
+    for m in models {
+        if let Some((f, ..)) = m.clip(
+            muzzle,
+            end,
+            crate::game::missile::MISSILE_MODEL_MASK,
+            best.0,
+        ) {
+            best = (f, Some(m.origin));
+        }
+    }
+    let burst = muzzle + (end - muzzle) * best.0;
+    burst.distance(muzzle) >= BREACH_CLEAR
+        && match best.1 {
+            Some(o) => o == base,
+            None => best.0 < 1.0 && burst.distance(base) < BREACH_NEAR,
+        }
+}
+
+/// Where a tank's shell from `muzzle` at `speed` is aimed at a base whose
+/// script model stands at `base`, [`crate::bots::BREACH_MIN`] to
+/// [`SHELL_RANGE`] off, as [`breach_aim`] finds a rocket's: a shell has no
+/// spread to clear, but it falls (`TR_GRAVITY`), so the aim is lifted by
+/// the fall over the flight and the arc is traced ([`shell_lands`]). `hull`
+/// is the tank, which its own shell passes.
+fn shell_aim(
+    world: &vcod_common::collision::CollisionWorld,
+    models: &[crate::game::combat::PlacedModel],
+    hull: vcod_gsc::EntId,
+    muzzle: glam::Vec3,
+    speed: f32,
+    base: glam::Vec3,
+) -> Option<[f32; 3]> {
+    let d = muzzle.distance(base);
+    if !(crate::bots::BREACH_MIN..=SHELL_RANGE).contains(&d) || speed <= 0.0 {
+        return None;
+    }
+    [40.0, 72.0, 16.0, 0.0].into_iter().find_map(|up| {
+        let spot = base + glam::Vec3::Z * up;
+        let t = spot.distance(muzzle) / speed;
+        let aim =
+            spot + glam::Vec3::Z * (0.5 * vcod_common::net::trajectory::DEFAULT_GRAVITY * t * t);
+        let dir = (aim - muzzle).normalize_or_zero();
+        shell_lands(world, models, hull, muzzle, dir, speed, base).then_some(aim.into())
+    })
+}
+
+/// Whether a shell from `muzzle` along `dir` at `speed`, falling at
+/// `DEFAULT_GRAVITY`, strikes the base at `base` as [`breach_line`] takes
+/// it, traced along its arc in [`SHELL_ARC_STEPS`] chords. A straight
+/// line grazed the rise in front of mp_foy's western axis bunker, where
+/// every shell from the south fell into it 345 units short.
+fn shell_lands(
+    world: &vcod_common::collision::CollisionWorld,
+    models: &[crate::game::combat::PlacedModel],
+    hull: vcod_gsc::EntId,
+    muzzle: glam::Vec3,
+    dir: glam::Vec3,
+    speed: f32,
+    base: glam::Vec3,
+) -> bool {
+    let flight = (muzzle.distance(base) + crate::bots::BREACH_NEAR) / speed;
+    let at = |i: usize| {
+        let t = flight * i as f32 / SHELL_ARC_STEPS as f32;
+        muzzle + dir * speed * t
+            - glam::Vec3::Z * (0.5 * vcod_common::net::trajectory::DEFAULT_GRAVITY * t * t)
+    };
+    for i in 0..SHELL_ARC_STEPS {
+        let (a, b) = (at(i), at(i + 1));
+        let tr = world.missile_trace(a, b);
+        let mut best = (tr.fraction, None);
+        for m in models.iter().filter(|m| m.id != hull) {
+            if let Some((f, ..)) = m.clip(a, b, crate::game::missile::MISSILE_MODEL_MASK, best.0) {
+                best = (f, Some(m.origin));
+            }
+        }
+        if best.0 < 1.0 {
+            let burst = a + (b - a) * best.0;
+            return burst.distance(muzzle) >= crate::bots::BREACH_CLEAR
+                && match best.1 {
+                    Some(o) => o == base,
+                    None => burst.distance(base) < crate::bots::BREACH_NEAR,
+                };
+        }
+    }
+    false
+}
+
+/// Chords a shell's arc is traced in: over 2000 units it falls 16, so
+/// each chord sags under half a unit.
+const SHELL_ARC_STEPS: usize = 8;
+
+/// How far off a tank shells a base: inside it a shell at 10000 units/s
+/// falls under 16 units on the way.
+const SHELL_RANGE: f32 = 2000.0;
 
 /// Per group, the index of its first item `pass` takes, as a search of
 /// each group in order would find it, on up to [`BREACH_THREADS`] threads:
@@ -7311,6 +7401,42 @@ pub(crate) fn cone_clear(
 
 #[cfg(test)]
 mod tests {
+    /// A shell falls: one laid level grazes a lip in front of the base
+    /// and bursts on it 400 units short, while the aim lifted by the fall
+    /// clears the lip and lands on the wall by the base (mp_foy's western
+    /// axis bunker from the south, bot-objectives.md 7.2).
+    #[test]
+    fn a_shell_aim_clears_a_lip_its_fall_would_strike() {
+        use glam::Vec3;
+        let world = vcod_common::collision::test_world(&[
+            (Vec3::new(500.0, -64.0, 0.0), Vec3::new(520.0, 64.0, 36.0)),
+            (Vec3::new(900.0, -64.0, 0.0), Vec3::new(920.0, 64.0, 200.0)),
+        ]);
+        let hull = vcod_gsc::EntId(0, 0);
+        let (muzzle, base) = (Vec3::new(-900.0, 0.0, 40.0), Vec3::new(900.0, 0.0, 0.0));
+        assert!(!super::shell_lands(
+            &world,
+            &[],
+            hull,
+            muzzle,
+            Vec3::X,
+            10000.0,
+            base
+        ));
+        let aim = super::shell_aim(&world, &[], hull, muzzle, 10000.0, base).expect("a shot");
+        assert!(aim[2] > 40.0, "{aim:?}");
+        let dir = (Vec3::from(aim) - muzzle).normalize();
+        assert!(super::shell_lands(
+            &world,
+            &[],
+            hull,
+            muzzle,
+            dir,
+            10000.0,
+            base
+        ));
+    }
+
     /// The threaded search finds each group's first pass, as one group
     /// after another searched in order would, and nothing for a group with
     /// none.

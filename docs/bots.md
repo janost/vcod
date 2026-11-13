@@ -343,7 +343,10 @@ switches and every number it prints. Results go in that doc and
   vehicle near it and gets in with the use key. A driver drives toward
   its objective or an enemy, waits a moment for a teammate walking up to
   board, holds or backs off for a teammate in its way, and in a tank
-  stops to lay the turret on an enemy or enemy vehicle and fire. A gunner
+  stops to lay the turret on an enemy or enemy vehicle and fire. In `bas`
+  a bot after a launcher takes a tank near it instead, and its driver
+  shells the other side's standing bases; a driver of the other side's
+  tank waits out the script's 15 s capture first. A gunner
   fires the vehicle's machine gun. A bot on foot holding a rocket
   launcher fires it at an enemy-crewed vehicle in sight. Bots get out
   when they arrive, when stuck, or after 90 s (bot-objectives.md
@@ -359,6 +362,7 @@ Cannot:
   into a wall with nobody aboard still destroys itself.
 - Change seats, use the hatch, or run an enemy over.
 - Fetch a rocket launcher outside `bas`.
+- Throw a satchel or call artillery at a `bas` base.
 
 ### CoD2
 

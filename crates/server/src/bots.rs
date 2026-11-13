@@ -17,7 +17,7 @@ pub(crate) mod hunt;
 use crate::server::FRAME_MS;
 pub mod team;
 use vcod_common::net::msg::{self, NULL_USERCMD, UserCmd};
-pub use vehicle::{ArmorView, Crowd, SeatView, VehicleSpot};
+pub use vehicle::{ArmorView, Crowd, GunSight, SeatView, VehicleSpot};
 pub(crate) use vehicle::{
     GUN_RANGE as VEHICLE_GUN_RANGE, ROCKET_CLEAR_MARGIN, ROCKET_MIN as VEHICLE_ROCKET_MIN,
     ROCKET_RANGE as VEHICLE_ROCKET_RANGE, SEEK_RANGE as VEHICLE_SEEK_RANGE,
@@ -731,6 +731,9 @@ pub struct BasBaseView {
     /// With [`BotView::rocket`] held, the graph's spots round the base a
     /// standing bot has such a shot from (`Server::breach_stands`).
     pub stands: Vec<[f32; 3]>,
+    /// In a tank's driver's seat: a shell fired now bursts on the base
+    /// (`Server::shell_laid`).
+    pub laid: bool,
 }
 
 /// What the server deals a `bas` bot's view from, once a tick
@@ -738,6 +741,9 @@ pub struct BasBaseView {
 pub(crate) struct Breach<'a> {
     /// The bot holds a loaded rocket launcher ([`BotView::rocket`]).
     pub rocket: bool,
+    /// The bot drives a tank: its gun ([`SeatView::sight`]) and the hull,
+    /// which its own shell passes.
+    pub tank: Option<(GunSight, vcod_gsc::EntId)>,
     pub launchers: &'a [[f32; 3]],
     pub guns: &'a [[f32; 3]],
     /// The script models round the bases, which a rocket strikes.
@@ -2107,6 +2113,23 @@ impl Bot {
                     b.bases.iter().filter(|x| x.ours == ours).collect()
                 };
                 let (mine, theirs) = (side(true), side(false));
+                // A tank's driver breaches with its gun: the other side's
+                // standing base it has a shot at, else the nearest, driven
+                // to (bot-objectives.md 7.2, "Tanks").
+                if view.seat.is_some_and(|s| s.sight.is_some()) {
+                    let standing = || theirs.iter().filter(|x| !x.breached);
+                    if let Some(t) = standing().find(|x| x.shot.is_some()).or_else(|| {
+                        standing().min_by(|x, y| {
+                            dist_sq(view.origin, x.at).total_cmp(&dist_sq(view.origin, y.at))
+                        })
+                    }) {
+                        return Some(ObjTarget::Breach {
+                            base: t.at,
+                            stand: None,
+                            aim: t.shot,
+                        });
+                    }
+                }
                 // A charge on one of ours: every defender goes for it, and
                 // an attacker near it. One that does not shoot only from
                 // near: the planter cannot stop it, and a side's defuser
@@ -8430,6 +8453,7 @@ mod tests {
             charge: None,
             shot: None,
             stands: Vec::new(),
+            laid: false,
         };
         v.uo = Some(UoView::Bas(BasView {
             bases: vec![
@@ -8501,6 +8525,139 @@ mod tests {
         let cmd = bot.think(&v);
         assert_eq!(cmd.buttons & BUTTON_ATTACK, 0);
         assert_ne!(cmd.wbuttons & WBUTTON_RELOAD, 0, "the dry launcher reloads");
+    }
+
+    /// In a tank's driver's seat at `bas`: the hull at the origin, its gun's
+    /// muzzle 100 ahead and the chase camera 100 behind and 100 up.
+    fn shelling(traverse: bool) -> BotView {
+        let mut v = bas_view();
+        v.seat = Some(SeatView {
+            seat: 1,
+            tank: true,
+            origin: [0.0, 0.0, 0.0],
+            yaw: 0.0,
+            speed: 0.0,
+            gun_yaw: Some(0.0),
+            driven: true,
+            boarding: false,
+            gun_speed: 10000.0,
+            crowd: Crowd::default(),
+            contact_ms: 0,
+            level_ms: 0,
+            sight: Some(GunSight {
+                muzzle: [100.0, 0.0, 60.0],
+                dir: [1.0, 0.0, 0.0],
+                speed: 10000.0,
+                eye: [-100.0, 0.0, 160.0],
+            }),
+            traverse,
+            capturing: false,
+        });
+        v.waypoint = Some([1000.0, 0.0, 0.0]);
+        v
+    }
+
+    /// A tank's driver drives at the other side's standing base, and with a
+    /// shot at it holds the hull, lays the view from the chase camera on
+    /// the aim and fires once the server finds the shell's line on the
+    /// base, shooting off or on (bot-objectives.md 7.2, "Tanks").
+    #[test]
+    fn a_bas_tank_driver_shells_a_standing_base() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = shelling(true);
+        assert_eq!(bot.goal(&v), Goal::To([2000.0, 0.0, 0.0]));
+        assert_eq!(bot.think(&v).forward, 127, "drives on");
+
+        their_base(&mut v).shot = Some([2000.0, 0.0, 40.0]);
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        let cmd = bot.think(&v);
+        assert_eq!((cmd.forward, cmd.right, cmd.up), (0, 0, 0), "holds");
+        assert_eq!(cmd.buttons & BUTTON_ATTACK, 0, "the line is not on it");
+        let want = vehicle::angles_from([-100.0, 0.0, 160.0], [2000.0, 0.0, 40.0]);
+        assert_eq!(cmd.angles, cmd_angles(&v, want), "the view from the camera");
+        assert!(want[0] > 0.0, "looks down onto the base");
+
+        their_base(&mut v).laid = true;
+        assert_ne!(bot.think(&v).buttons & BUTTON_ATTACK, 0, "fires");
+        // Breached, the gun has nothing to do there.
+        their_base(&mut v).breached = true;
+        assert_eq!(bot.think(&v).buttons & BUTTON_ATTACK, 0);
+    }
+
+    /// The SU-152's and the Elefant's gun points the hull's way: the
+    /// driver holds `upmove`, which turns the hull to the view
+    /// (coduo-vehicles.md 2).
+    #[test]
+    fn a_turretless_tank_turns_its_hull_onto_the_base() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = shelling(false);
+        their_base(&mut v).shot = Some([2000.0, 0.0, 40.0]);
+        assert_eq!(bot.think(&v).up, 127);
+        let mut v = shelling(true);
+        their_base(&mut v).shot = Some([2000.0, 0.0, 40.0]);
+        assert_eq!(bot.think(&v).up, 0);
+    }
+
+    /// A gun that never lies on the base gets the driver out after
+    /// `SHELL_WAIT_TICKS`; the 90 s ride clock does not while it shells.
+    #[test]
+    fn a_tank_whose_line_never_comes_gets_out() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = shelling(true);
+        their_base(&mut v).shot = Some([2000.0, 0.0, 40.0]);
+        let out = (0..400).find(|f| {
+            v.seat.as_mut().unwrap().level_ms = f * 50;
+            bot.think(&v).buttons & msg::BUTTON_USE != 0
+        });
+        assert!(out.is_some_and(|f| f >= 200), "{out:?}");
+        let mut bot = Bot::new("allies", false, 1);
+        their_base(&mut v).laid = true;
+        let out = (0..2400).find(|f| {
+            v.seat.as_mut().unwrap().level_ms = f * 50;
+            bot.think(&v).buttons & msg::BUTTON_USE != 0
+        });
+        assert_eq!(out, None, "left a tank laid on the base");
+    }
+
+    /// The stock script holds the other side's tank 15 s for its capture:
+    /// its new driver sends no keys and does not give it up meanwhile.
+    #[test]
+    fn a_driver_waits_out_a_tank_capture() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = driving(Crowd::default());
+        v.seat.as_mut().unwrap().speed = 0.0;
+        v.seat.as_mut().unwrap().capturing = true;
+        for f in 0..320 {
+            v.seat.as_mut().unwrap().level_ms = f * 50;
+            let cmd = bot.think(&v);
+            assert_eq!((cmd.forward, cmd.right, cmd.buttons), (0, 0, 0), "tick {f}");
+        }
+        v.seat.as_mut().unwrap().capturing = false;
+        assert_eq!(bot.think(&v).forward, 127, "drives once it is his");
+    }
+
+    /// A `bas` bot on its way to fetch a launcher walks to a tank 800 units
+    /// off; another vehicle that far it passes by.
+    #[test]
+    fn a_bas_attacker_takes_a_tank_over_a_launcher() {
+        let mut v = bas_view();
+        let mut spot = VehicleSpot {
+            num: 70,
+            origin: [-800.0, 0.0, 0.0],
+            yaw: 0.0,
+            mins: [-100.0, -50.0, 0.0],
+            maxs: [100.0, 50.0, 80.0],
+            tank: true,
+        };
+        v.vehicles = vec![spot];
+        let mut b = Bot::new("allies", false, 1);
+        b.think(&v);
+        assert_eq!(b.goal(&v), Goal::To([-800.0, 0.0, 0.0]));
+        spot.tank = false;
+        v.vehicles = vec![spot];
+        let mut b = Bot::new("allies", false, 1);
+        b.think(&v);
+        assert_eq!(b.goal(&v), Goal::To([300.0, 200.0, 8.0]), "the launcher");
     }
 
     /// A breached base is planted as before, rocket or not.
@@ -9040,6 +9197,9 @@ mod tests {
             crowd,
             contact_ms: 0,
             level_ms: 0,
+            sight: None,
+            traverse: true,
+            capturing: false,
         });
         v
     }

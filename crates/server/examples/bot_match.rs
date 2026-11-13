@@ -856,6 +856,9 @@ struct Match {
     ended: bool,
     /// `W;` lines by winning team (or, in `dm`, player name).
     wins: BTreeMap<String, u32>,
+    /// The tick of each `W;` line: when each round ended (`bas` logs it
+    /// after `scr_bas_endrounddelay`).
+    win_ticks: Vec<usize>,
     /// [axis, allies] when the match ended or ran out.
     scores: [i32; 2],
     by_team: BTreeMap<String, Tally>,
@@ -989,12 +992,13 @@ fn main() {
             a
         });
         println!(
-            "{} seed {}: ticks {} ended {} wins {:?} score axis {} allies {} stalled {} held {} edges {} by a body {} {} actions {:?} to objective {}",
+            "{} seed {}: ticks {} ended {} wins {:?} at {:?} score axis {} allies {} stalled {} held {} edges {} by a body {} {} actions {:?} to objective {}",
             m.map,
             m.seed,
             m.ticks,
             m.ended,
             m.wins,
+            m.win_ticks,
             m.scores[0],
             m.scores[1],
             m.stalled,
@@ -1499,6 +1503,7 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                     };
                     *m.arm_wins.entry(o.arm(&who, seed)).or_default() += 1;
                     *m.wins.entry(who).or_default() += 1;
+                    m.win_ticks.push(tick);
                     (round_start, acted) = (tick, false);
                 }
                 // `exitLevel`'s own line; it has zeroed the team scores.
