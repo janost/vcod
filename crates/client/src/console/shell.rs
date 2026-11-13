@@ -440,13 +440,27 @@ const WINVOICE_DVARS: [(&str, &str, u32); 4] = [
 
 /// [`Shell::register_cod4_options`]'s dvars: name, default, flags
 /// (`Dvar_RegisterNew` 0x56c350 calls, cod4-front-end.md 9).
-const COD4_OPTION_DVARS: [(&str, &str, u32); 44] = [
+const COD4_OPTION_DVARS: [(&str, &str, u32); 56] = [
     // the crosshair names' wait and fade, ints, cheat-protected
     // (`iw3mp.exe` 0x43d801..0x43d916, flags 0x80; cod4-hud.md 17)
     ("cg_friendlyNameFadeIn", "0", CHEAT),
     ("cg_enemyNameFadeIn", "250", CHEAT),
     ("cg_friendlyNameFadeOut", "1500", CHEAT),
     ("cg_enemyNameFadeOut", "250", CHEAT),
+    // the names over heads (`iw3mp.exe` 0x43b1d8: flags 0x81; 0x43d4e5..
+    // 0x43d959: flags 0x80; cod4-hud.md 17.1)
+    ("cg_drawCrosshairNames", "1", ARCHIVE | CHEAT),
+    ("cg_drawFriendlyNames", "1", CHEAT),
+    ("cg_drawThroughWalls", "0", CHEAT),
+    ("cg_overheadNamesMaxDist", "10000", CHEAT),
+    ("cg_overheadNamesNearDist", "256", CHEAT),
+    ("cg_overheadNamesFarDist", "1024", CHEAT),
+    ("cg_overheadNamesFarScale", "0.6", CHEAT),
+    ("cg_overheadNamesSize", "0.5", CHEAT),
+    ("cg_overheadNamesFont", "2", CHEAT),
+    ("cg_overheadIconSize", "0.7", CHEAT),
+    ("cg_overheadRankSize", "0.5", CHEAT),
+    ("cg_overheadNamesGlow", "0 0 0 1", CHEAT),
     // `Voice_Init`'s (`iw3mp.exe` 0x57a92e..0x57aa37, flags 1; CoD2's at
     // `CoD2MP_s.exe` 0x4b8dd0, flags 0x1001): see [`WINVOICE_DVARS`]
     WINVOICE_DVARS[0],

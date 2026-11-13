@@ -32,12 +32,13 @@ Ranked by how much a player notices.
 - Small HUD fades: the compass's voice fade, drawn off `isTalking` but
   not checked against a retail capture with a talker (cod4-hud.md 15.9).
   S.
-- The crosshair name and the friendly names over heads (0x42e2a0,
-  0x42e1bd) are not drawn; their scan, times and alpha are read
-  (cod4-hud.md 17). M.
 
 ## Fixed
 
+- The crosshair name and the friendly names over heads were not drawn.
+  vcod now draws both as 1.7 does: over the posed `j_head`, sized by
+  distance, in the relative team colour with the rank's icon and level,
+  under the crosshair and friendly fades (cod4-hud.md 17.1).
 - The crosshair never took the team colours live: 1.7's client sets
   `weapFlags` 8 and 0x10 off its own scan each frame, which vcod now runs,
   with the `cg_*NameFadeIn` wait before the colour (cod4-hud.md 17).
