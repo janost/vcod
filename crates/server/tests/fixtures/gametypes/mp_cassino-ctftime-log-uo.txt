@@ -1,7 +1,7 @@
 # Retail CoD UO 1.51b dedicated server's games_mp.log for the probe_ctftime run beside it
 # (the two mp_cassino-ctftime-<role>-uo.txt fixtures), the engine's m:ss stamp stripped.
 ------------------------------------------------------------
-InitGame: \g_gametype\probe_ctftime\g_timeoutsallowed\0\gamename\CoD:United Offensive\mapname\mp_cassino\protocol\22\scr_allow_jeeps\1\scr_allow_tanks\1\shortversion\1.51\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\abc\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_punkbuster\0\sv_pure\0
+InitGame: \g_gametype\probe_ctftime\g_timeoutsallowed\0\gamename\CoD:United Offensive\mapname\mp_cassino\protocol\22\scr_allow_jeeps\1\scr_allow_tanks\1\shortversion\1.51\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\CoDHost\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_punkbuster\0\sv_pure\0
 PROBE prematch
 J;0;0;vcod
 PROBE placed 0 allies (192.00, 1072.00, 1.12) (0.00, 0.00, 0.00)
@@ -12,24 +12,28 @@ PROBE settled 1 (0.00, 0.00, 0.00)
 RestartGame:
 ------------------------------------------------------------
 ------------------------------------------------------------
-InitGame: \g_gametype\probe_ctftime\g_timeoutsallowed\0\gamename\CoD:United Offensive\mapname\mp_cassino\protocol\22\scr_allow_jeeps\1\scr_allow_tanks\1\shortversion\1.51\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\abc\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_punkbuster\0\sv_pure\0
+InitGame: \g_gametype\probe_ctftime\g_timeoutsallowed\0\gamename\CoD:United Offensive\mapname\mp_cassino\protocol\22\scr_allow_jeeps\1\scr_allow_tanks\1\shortversion\1.51\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\CoDHost\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_punkbuster\0\sv_pure\0
 J;0;1;vcod
 J;0;0;vcod
+PROBE placed 0 allies (192.00, 1072.00, 1.12) (0.00, 0.00, 0.00)
+PROBE placed 1 axis (6304.00, -1656.00, 185.12) (0.00, 0.00, 0.00)
+PROBE settled 1 (0.00, 0.00, 0.00)
+PROBE settled 0 (0.00, 0.00, 0.00)
 PROBE state allies_flag moved=0 axis_flag moved=0 | 0 playing st=gfx/hud/hud@us_rank1.dds sc=0 flag=0 | 1 playing st=gfx/hud/hud@us_rank1.dds sc=0 flag=0 | allies 0 axis 0 playing ended=0 map=0
 PROBE players 0 1
-PROBE to_flag 15350 (4963.00, -1987.00, 6.00)
+PROBE to_flag 14550 (4963.00, -1987.00, 6.00)
 A;0;0;allies;vcod;ctf_take
 A;0;0;axis;vcod;ctf_pickup
-PROBE picked_up 15400 1
+PROBE picked_up 14600 1
 PROBE state allies_flag moved=0 axis_flag moved=1 by=0 | 0 playing st=gfx/hud/hud@ctf_german.dds sc=0 flag=1 | 1 playing st=gfx/hud/hud@us_rank1.dds sc=0 flag=0 | allies 0 axis 0 playing ended=0 map=0
-PROBE facing 16400 (0.00, -90.00, 0.00)
+PROBE facing 15600 (0.00, 0.00, 0.00)
 K;0;0;allies;vcod;0;0;allies;vcod;none;100000;MOD_SUICIDE;none
-PROBE suicide 16400
+PROBE suicide 15600
 PROBE state allies_flag moved=0 axis_flag moved=1 by=0 | 0 dead st=gfx/hud/hud@status_dead.tga sc=0 flag=0 | 1 playing st=gfx/hud/hud@us_rank1.dds sc=0 flag=0 | allies 0 axis 0 playing ended=0 map=0
-PROBE dropped 17400 1 (4974.00, -1987.00, -7.88)
-PROBE to_drop 17400 (4974.00, -1987.00, 1.12)
+PROBE dropped 16600 1 (4974.00, -1987.00, -7.88)
+PROBE to_drop 16600 (4974.00, -1987.00, 1.12)
 A;0;1;axis;vcod;ctf_returned
-PROBE returned 17450 0
+PROBE returned 16650 0
 PROBE state allies_flag moved=0 axis_flag moved=0 | 0 dead st=gfx/hud/hud@status_dead.tga sc=0 flag=0 | 1 playing st=gfx/hud/hud@us_rank1.dds sc=0 flag=0 | allies 0 axis 0 playing ended=0 map=0
 PROBE state allies_flag moved=0 axis_flag moved=0 | 0 spectator st=gfx/hud/hud@status_dead.tga sc=0 flag=0 | 1 playing st=gfx/hud/hud@us_rank1.dds sc=0 flag=0 | allies 0 axis 0 playing ended=0 map=0
 PROBE placed 0 allies (192.00, 1072.00, 1.12) (0.00, 0.00, 0.00)
@@ -37,34 +41,34 @@ PROBE state allies_flag moved=0 axis_flag moved=0 | 0 playing st=gfx/hud/hud@us_
 PROBE settled 0 (0.00, 0.00, 0.00)
 PROBE state allies_flag moved=0 axis_flag moved=0 | 0 playing st=gfx/hud/hud@us_rank1.dds sc=0 flag=0 | 1 playing st=gfx/hud/hud@us_rank1.dds sc=0 flag=0 | allies 0 axis 0 playing ended=1 map=0
 PROBE state allies_flag moved=0 axis_flag moved=0 | 0 intermission st=gfx/hud/hud@us_rank1.dds sc=0 flag=0 | 1 intermission st=gfx/hud/hud@us_rank1.dds sc=0 flag=0 | allies 0 axis 0 intermission ended=1 map=1
-PROBE intermission 52400 0.783333
+PROBE intermission 51600 0.766667
 ExitLevel: executed
 ShutdownGame:
 ------------------------------------------------------------
 ------------------------------------------------------------
-InitGame: \g_gametype\probe_ctftime\g_timeoutsallowed\0\gamename\CoD:United Offensive\mapname\mp_foy\protocol\22\scr_allow_jeeps\1\scr_allow_tanks\1\shortversion\1.51\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\abc\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_punkbuster\0\sv_pure\0
-PROBE done mp_foy probe_ctftime 62350
+InitGame: \g_gametype\probe_ctftime\g_timeoutsallowed\0\gamename\CoD:United Offensive\mapname\mp_foy\protocol\22\scr_allow_jeeps\1\scr_allow_tanks\1\shortversion\1.51\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\CoDHost\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_punkbuster\0\sv_pure\0
+PROBE done mp_foy probe_ctftime 61550
 PROBE state allies_flag undef axis_flag undef | allies 0 axis 0 undef ended=undef map=undef
 PROBE state allies_flag moved=0 axis_flag moved=0 | allies 0 axis 0 playing ended=0 map=0
 J;0;1;vcod
 J;0;0;vcod
 PROBE state allies_flag moved=0 axis_flag moved=0 | 0 spectator st= sc=0 flag=0 | 1 spectator st= sc=0 flag=0 | allies 0 axis 0 playing ended=0 map=0
 PROBE state allies_flag moved=0 axis_flag moved=0 | 0 playing st=gfx/hud/hud@us_rank1.dds sc=0 flag=0 | 1 playing st=gfx/hud/hud@us_rank1.dds sc=0 flag=0 | allies 0 axis 0 playing ended=0 map=0
-PROBE placed 1 axis (-1816.00, 6184.00, 5.12) (0.00, 0.00, 0.00)
 PROBE placed 0 allies (-4832.00, -7886.00, 229.56) (0.00, 0.00, 0.00)
-PROBE settled 0 (0.00, 0.00, 0.00)
+PROBE placed 1 axis (-1816.00, 6184.00, 5.12) (0.00, 0.00, 0.00)
 PROBE settled 1 (0.00, 0.00, 0.00)
+PROBE settled 0 (0.00, 0.00, 0.00)
 RestartGame:
 ------------------------------------------------------------
 ------------------------------------------------------------
-InitGame: \g_gametype\probe_ctftime\g_timeoutsallowed\0\gamename\CoD:United Offensive\mapname\mp_foy\protocol\22\scr_allow_jeeps\1\scr_allow_tanks\1\shortversion\1.51\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\abc\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_punkbuster\0\sv_pure\0
-PROBE done mp_foy probe_ctftime 72250
+InitGame: \g_gametype\probe_ctftime\g_timeoutsallowed\0\gamename\CoD:United Offensive\mapname\mp_foy\protocol\22\scr_allow_jeeps\1\scr_allow_tanks\1\shortversion\1.51\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\CoDHost\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_punkbuster\0\sv_pure\0
+PROBE done mp_foy probe_ctftime 68900
 PROBE state allies_flag undef axis_flag undef | allies 0 axis 0 playing ended=undef map=undef
 PROBE state allies_flag moved=0 axis_flag moved=0 | allies 0 axis 0 playing ended=0 map=0
 J;0;1;vcod
 J;0;0;vcod
 PROBE state allies_flag moved=0 axis_flag moved=0 | 0 playing st=gfx/hud/hud@us_rank1.dds sc=0 flag=0 | 1 playing st=gfx/hud/hud@us_rank1.dds sc=0 flag=0 | allies 0 axis 0 playing ended=0 map=0
-Q;0;1;vcod
-PROBE state allies_flag moved=0 axis_flag moved=0 | 0 playing st=gfx/hud/hud@us_rank1.dds sc=0 flag=0 | allies 0 axis 0 playing ended=1 map=0
-Q;0;0;vcod
-PROBE state allies_flag moved=0 axis_flag moved=0 | allies 0 axis 0 playing ended=1 map=0
+PROBE placed 0 allies (-4832.00, -7886.00, 229.56) (0.00, 0.00, 0.00)
+PROBE placed 1 axis (-1816.00, 6184.00, 5.12) (0.00, 0.00, 0.00)
+PROBE settled 1 (0.00, 0.00, 0.00)
+PROBE settled 0 (0.00, 0.00, 0.00)

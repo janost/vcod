@@ -2642,15 +2642,16 @@ ends, the defender's return and a rotation to another map:
 
 - **ctf** (`probe_ctftime`, mp_cassino, `scr_ctf_roundlength 0.5`,
   `scr_ctf_timelimit 0.5`, no score or round limit). The allied player takes
-  the axis flag, faces yaw 0 and `suicide()`s: `drop_flag`'s `getPlant`
+  the axis flag, facing yaw 0 where the probe placed him, and `suicide()`s:
+  `drop_flag`'s `getPlant`
   puts it 11 units ahead, at (4974, -1987, -7.88). The axis player
   `setOrigin`s onto it and `ctf_think`'s own-team branch returns it one
   frame later: `A;...;axis;...;ctf_returned`,
   `GMI_CTF_PLAYER_RETURNED_FLAG_AXIS` and the returned sound, no
-  `TIMEOUT_RETURNING` (VERIFIED, the log's 17400 and 17450, and the
+  `TIMEOUT_RETURNING` (VERIFIED, the log's 16600 and 16650, and the
   captures). The round clock runs out 30 s into the level:
   `GMI_CTF_TIMEEXPIRED`, `endRound("draw")`; after the 10 s end-round delay
-  `game["timepassed"]` reads 0.78 and `checkTimeLimit` ends the map
+  `game["timepassed"]` reads 0.77 and `checkTimeLimit` ends the map
   (`MPSCRIPT_TIME_LIMIT_REACHED`, `MPSCRIPT_THE_GAME_IS_A_TIE`,
   intermission). The probe's own `setCvar("sv_mapRotation", "gametype
   probe_ctftime map mp_foy")` is what `exitLevel(false)` rotates through: a
@@ -2682,6 +2683,74 @@ ends, the defender's return and a rotation to another map:
   53650 (VERIFIED, the log and captures).
 
 All four match on vcod-server.
+
+A held view that "drifted to yaw -90" before the suicide (2026-10-17's
+capture, `PROBE facing 16400 (0.00, -90.00, 0.00)`; one earlier run read
+180) was the probe's own placement, on retail and on ours alike. ctf's
+match-start `map_restart` spawns both players in the restarted level's
+first frame, before `place_players` has threaded `place_on_spawn`, so that
+`waittill("spawned")` missed the spawn: no `PROBE placed` follows the
+`RestartGame:` line, and the attacker stood at the spawn point the script
+drew, `mp_uo_spawn_allies` at (-456, 772, 280) with `angles` "0 270 0"
+(the capture's origin (-456, 772, 272), VERIFIED, the BSP and the 2026-10-17
+log and capture). 180 is another allied point's facing. Nothing turned the
+view. The probe now places a player already playing when its watcher
+starts; the 2026-11-13 recapture reads `PROBE facing 15600 (0.00, 0.00,
+0.00)` with no `setPlayerAngles` before the suicide, and the drop lands
+where it did (VERIFIED, `mp_cassino-ctftime-log-uo.txt`).
+
+One more on mp_cassino (`probe_tdmskip`, `scr_tdm_timelimit 2`,
+`scr_tdm_scorelimit 0`, the same two clients,
+`gametypes_ab`'s `uo_team_deathmatch_do_damage_and_killcam_skip_match_retail`)
+wraps tdm's damage and killed callbacks to log what the engine hands them,
+and measures `doDamage` on a client and the killcam skipped by use:
+
+- **`doDamage` on a client.** `doDamage` (0x68e67) normalizes the
+  direction from `source` to the entity's `r.currentOrigin` (the client's
+  `ps.origin`) and passes NULL when its length is 0 (the `VectorNormalize`
+  at 0x68f54), takes the attacker (NULL when absent) and the inflictor (the
+  attacker when absent), rounds the damage through `fistp` under a 0xc00
+  control word (0x69000..0x6900b: truncated), and calls `G_Damage`. For a
+  client `G_Damage` (0x4fedb) goes straight to `G_DamageClient` (0x4fd4b),
+  which skips the world substitution the generic arm makes: it returns
+  without `takedamage` (+0x17d), with client +0x461c or +0x4620 set, or
+  unless client +0x4520 is 2, then calls `Scr_PlayerDamage` (0x7eef5) with
+  the damage times `g_fHitLocDamageMult[0]`, the weapon at the inflictor's
+  +0xcc (`s.weapon`; the attacker's with no inflictor, 0 with neither) and
+  `GScr_AddEntity`/`GScr_AddVector` (0x7e92d, 0x7e8fd), which push
+  `undefined` for NULL (VERIFIED decompile). +0x461c and +0x4620 are the
+  flags the `GAME_NOCLIPON` and `GAME_UFOON` toggles flip, and +0x4520 is
+  `pers.connected` (INFERRED, the toggles' strings and the score sort's
+  compare of it against 1). Live: the callback reads
+  `inf=0 att=0 dmg=30 fl=0 mod=MOD_UNKNOWN w=m1carbine_mp loc=none` for
+  `doDamage(30, src, attacker)`; `inf=undef att=undef w=none dir=undef` for
+  `doDamage(10.6, self.origin)` (10 damage); the given inflictor and
+  `w=kar98k_mp` (the inflictor's weapon: the axis player holds the kar98k,
+  the attacker the m1carbine) for
+  `doDamage(5, src, attacker, defender, "MOD_PISTOL_BULLET")`. A lethal
+  one runs `Callback_PlayerKilled` inside `finishPlayerDamage`, the
+  obituary and `K;` line naming the attacker; with no attacker
+  `player_die` hands the killed callback the world (1022) for both, and
+  tdm's world arm takes a point off the victim's score and gives no
+  killcam (VERIFIED, the log). A dead or killcam target never reaches the
+  callback (no `PROBE damage` line at 11850 or 14350; VERIFIED, the log).
+  The cause is `takedamage` off for a client not playing, as 1.1's
+  `ClientEndFrame` leaves it (INFERRED). Stock UO tdm's world arm reads
+  `level.teamkill_penalty`, which nothing sets: a script runtime error at
+  `developer 1`, which the probe sidesteps by setting it (VERIFIED, the log
+  and its first run's console).
+- **The killcam skipped by use.** UO's `tdm.gsc` `killcam` is 1.1's and
+  1.5's line for line (`waitSkipKillcamButton` waits a release, then a
+  press, and notifies `end_killcam`; VERIFIED, `pakuo` against `pak5` and
+  `pakb`). A tap 3.5 s into the replay ends it, and the victim is playing
+  at a spawn on the next snapshot, no dead frame between (the defender
+  capture's 16000 to 16900), as on 1.1 (`cod11-spectator-follow.md` 12.7):
+  `respawn`'s `waitRespawnButton` read the same press (VERIFIED, the
+  captures and log).
+
+vcod's player arm handed the callback the world for a missing attacker and
+a zero vector for a source on the body; it now passes `undefined` for both,
+as `G_DamageClient` does (`vehicle::g_damage`). The rest matched.
 
 One more (port 32711, the same clients, `gametypes_ab`'s
 `uo_domination_round_clock_and_time_limit_match_retail`):
@@ -2843,6 +2912,7 @@ compares every view. Ranks below are the icons' 1..5, `pers["rank"]` 0..4.
   vcod reproduces all of this (`GameHost::damage_nonclient`). `doDamage` on
   a player or a vehicle goes through `vehicle::g_damage`: a vehicle's own
   branch, a player's damage callback behind `G_DamageClient`'s rider branch
+  (a player's arguments: section 22, `probe_tdmskip`)
   (`coduo-vehicles.md` 14, "Riders"). A `radiusDamage((100,200,10), 200,
   100, 50)` on a script model at (100,200,0) with `setTakeDamage(true)`
   notifies `9 MOD_EXPLOSIVE (0, 0, 1) (100, 200, 10)` on retail and on vcod
@@ -2931,7 +3001,7 @@ All closed; `gametypes_ab::GAPS` is empty.
   Retail's burst at mp_foy's first restart (`mp_foy-bas-attacker-uo.txt`,
   `ms=19467`): `d 14 23300`, `d 13` with the fog, `d 3
   n\ambient_mp_foy\t\23300`, then `n` (VERIFIED).
-- Not measured: `doDamage` on a client.
+- `doDamage` on a client: measured, `probe_tdmskip` above.
 
 ## 23. HTTP downloads
 

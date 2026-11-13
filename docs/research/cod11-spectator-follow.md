@@ -580,6 +580,10 @@ lookup, the copy's retry, the shift and the snapshot's entity source.
   resumed `killcam`, and `respawn`'s `waitRespawnButton`, past its opening
   `wait 0`, read the same press, all inside one frame; `probe_wait0_yield`
   measures that a `wait 0` resumes inside its frame.
+- VERIFIED live, UO 1.51b tdm (`probe_tdmskip`, `coduo-diff.md` 22): the
+  same skip on UO's line-for-line copy of the script, a tap 3.5 s into the
+  replay, then the victim playing at a spawn on the next snapshot.
+  `gametypes_ab` replays it on vcod-server.
 - VERIFIED, `probe_notify_frame` (`cod11-gsc-language.md`, the thread pick):
   a notify's waiters resume on the notifier's frame, whichever was started
   first, which is why `waitKillcamTime`'s notify ends `killcam` on the frame

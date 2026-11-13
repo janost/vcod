@@ -960,7 +960,8 @@ pub fn occupant_radius_scale(kind: i32) -> f32 {
 /// player: a vehicle takes its own branch, a player its damage callback (an
 /// occupant's blast scaled, a tank driver untouchable but by his own tank).
 /// `builtins::uo::do_damage` sends every other entity down the generic arm.
-/// A missing attacker is the world's entity.
+/// A missing attacker is the world's entity for a vehicle and undefined in
+/// a player's callback.
 #[allow(clippy::too_many_arguments)]
 pub fn g_damage(
     host: &mut GameHost,
@@ -980,6 +981,9 @@ pub fn g_damage(
     };
     let d = glam::Vec3::from(origin) - glam::Vec3::from(point);
     let dir = d.normalize_or_zero().to_array();
+    // `doDamage` hands `G_Damage` no direction for a source on the origin
+    // (0x68f54's zero length), and the player callback reads it undefined.
+    let has_dir = d.length() != 0.0;
     if host.vehicles.live.contains_key(&target) {
         for (event, args) in vehicle_damage(
             host, cx, target, inflictor, attacker, dir, point, damage, dflags, mod_,
@@ -1011,16 +1015,21 @@ pub fn g_damage(
     };
     let weapon = inflictor_weapon(host, inflictor);
     let weapon = host.defs.weapon_name(weapon).unwrap_or("none").to_string();
-    let world = host.ents.world(cx);
+    // `G_DamageClient` passes the raw pointers on: no world stands in for a
+    // missing attacker here, unlike the generic arm (coduo-diff.md 22).
     let args = vec![
         inflictor.map_or(Value::Undefined, Value::Entity),
-        Value::Entity(attacker.unwrap_or(world)),
+        attacker.map_or(Value::Undefined, Value::Entity),
         Value::Int(damage),
         Value::Int(dflags),
         Value::String(cx.intern_exact(mod_)),
         Value::String(cx.intern_exact(&weapon)),
         Value::Vector(point),
-        Value::Vector(dir),
+        if has_dir {
+            Value::Vector(dir)
+        } else {
+            Value::Undefined
+        },
         Value::String(cx.intern_exact("none")),
     ];
     let callback = cx.func_ref(

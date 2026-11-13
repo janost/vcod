@@ -61,10 +61,8 @@ choreograph()
 	logPrint("PROBE picked_up " + getTime() + " " + isdefined(attacker.hasflag) + "\n");
 	wait 1;
 
-	// The flag drops 11 units ahead of where the body faces (getPlant), and
-	// the view a probe holds can drift by then, on retail as on ours.
+	// The flag drops 11 units ahead of where the body faces (getPlant).
 	logPrint("PROBE facing " + getTime() + " " + attacker.angles + "\n");
-	attacker setPlayerAngles((0, 0, 0));
 	attacker suicide();
 	logPrint("PROBE suicide " + getTime() + "\n");
 	wait 1;
@@ -140,7 +138,10 @@ str(v)
 }
 
 //	Every spawn is moved onto a fixed spot per team, so what each probe sees
-//	of the other is not the spawn script's random pick.
+//	of the other is not the spawn script's random pick. A player already
+//	playing when his watcher starts is placed at once: ctf's match-start
+//	map_restart spawns him in the level's first frame, before anyone waits
+//	on "spawned", and he would keep the spawn point's facing.
 place_players()
 {
 	for (;;)
@@ -160,18 +161,24 @@ place_players()
 
 place_on_spawn()
 {
+	if (self.sessionstate == "playing")
+		self place();
 	for (;;)
 	{
 		self waittill("spawned");
 		wait 0.05;
-		if (self.sessionstate != "playing")
-			continue;
-		self setOrigin(home(self.pers["team"]));
-		self setPlayerAngles((0, 0, 0));
-		logPrint("PROBE placed " + self getEntityNumber() + " " + self.pers["team"] + " " + self.origin + " " + self.angles + "\n");
-		wait 0.5;
-		logPrint("PROBE settled " + self getEntityNumber() + " " + self.angles + "\n");
+		if (self.sessionstate == "playing")
+			self place();
 	}
+}
+
+place()
+{
+	self setOrigin(home(self.pers["team"]));
+	self setPlayerAngles((0, 0, 0));
+	logPrint("PROBE placed " + self getEntityNumber() + " " + self.pers["team"] + " " + self.origin + " " + self.angles + "\n");
+	wait 0.5;
+	logPrint("PROBE settled " + self getEntityNumber() + " " + self.angles + "\n");
 }
 
 home(team)

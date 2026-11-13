@@ -1,0 +1,52 @@
+# Retail CoD UO 1.51b dedicated server's games_mp.log for the probe_tdmskip run beside it
+# (the two mp_cassino-tdmskip-<role>-uo.txt fixtures), the engine's m:ss stamp stripped.
+------------------------------------------------------------
+InitGame: \g_gametype\probe_tdmskip\g_timeoutsallowed\0\gamename\CoD:United Offensive\mapname\mp_cassino\protocol\22\scr_allow_jeeps\1\scr_allow_tanks\1\shortversion\1.51\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\CoDHost\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_punkbuster\0\sv_pure\0
+PROBE state  | allies 0 axis 0 undef
+PROBE state  | allies 0 axis 0 playing
+J;0;0;vcod
+PROBE state  | 0 spectator hp=0 sc=0 d=0 sp=-1 | allies 0 axis 0 playing
+PROBE state  | 0 playing hp=100 sc=0 d=0 sp=-1 | allies 0 axis 0 playing
+PROBE placed 0 allies (192.00, 1072.00, 9.00) (0.00, 0.00, 0.00)
+J;0;1;vcod
+PROBE state  | 0 playing hp=100 sc=0 d=0 sp=-1 | 1 spectator hp=0 sc=0 d=0 sp=-1 | allies 0 axis 0 playing
+PROBE state  | 0 playing hp=100 sc=0 d=0 sp=-1 | 1 playing hp=100 sc=0 d=0 sp=-1 | allies 0 axis 0 playing
+PROBE players 0 1
+PROBE placed 1 axis (6304.00, -1656.00, 193.00) (0.00, 0.00, 0.00)
+PROBE damage 8350 1 playing hp=100 inf=0 att=0 dmg=30 fl=0 mod=MOD_UNKNOWN w=m1carbine_mp pt=(192.00, 1072.00, 8.00) dir=(0.91, -0.41, 0.03) loc=none
+D;0;1;axis;vcod;0;0;allies;vcod;m1carbine_mp;30;MOD_UNKNOWN;none
+PROBE damaged 8350 1 hp=70
+PROBE back 1 8350 70
+PROBE state  | 0 playing hp=100 sc=0 d=0 sp=-1 | 1 playing hp=70 sc=0 d=0 sp=-1 | allies 0 axis 0 playing
+PROBE damage 9350 1 playing hp=70 inf=undef att=undef dmg=10 fl=0 mod=MOD_UNKNOWN w=none pt=self dir=undef loc=none
+D;0;1;axis;vcod;;-1;world;;none;10;MOD_UNKNOWN;none
+PROBE damaged 9350 1 hp=60
+PROBE back 2 9350 60
+PROBE state  | 0 playing hp=100 sc=0 d=0 sp=-1 | 1 playing hp=60 sc=0 d=0 sp=-1 | allies 0 axis 0 playing
+PROBE damage 10350 1 playing hp=60 inf=1 att=0 dmg=5 fl=0 mod=MOD_PISTOL_BULLET w=kar98k_mp pt=(192.00, 1072.00, 108.00) dir=(0.91, -0.41, 0.01) loc=none
+D;0;1;axis;vcod;0;0;allies;vcod;kar98k_mp;5;MOD_PISTOL_BULLET;none
+PROBE damaged 10350 1 hp=55
+PROBE back 3 10350 55
+PROBE state  | 0 playing hp=100 sc=0 d=0 sp=-1 | 1 playing hp=55 sc=0 d=0 sp=-1 | allies 0 axis 0 playing
+PROBE damage 11350 1 playing hp=55 inf=0 att=0 dmg=1000 fl=0 mod=MOD_RIFLE_BULLET w=m1carbine_mp pt=(192.00, 1072.00, 8.00) dir=(0.91, -0.41, 0.03) loc=none
+PROBE dying 11350 1 inf=0 att=0 dmg=1000 mod=MOD_RIFLE_BULLET w=m1carbine_mp dir=(0.91, -0.41, 0.03) loc=none
+K;0;1;axis;vcod;0;0;allies;vcod;m1carbine_mp;1000;MOD_RIFLE_BULLET;none
+PROBE damaged 11350 1 hp=0
+PROBE killed 11350 1 dead
+PROBE state  | 0 playing hp=100 sc=1 d=0 sp=-1 | 1 dead hp=0 sc=0 d=1 sp=-1 | allies 1 axis 0 playing
+PROBE back dead 11850 dead
+PROBE state  | 0 playing hp=100 sc=1 d=0 sp=-1 | 1 spectator hp=0 sc=0 d=1 sp=0 | allies 1 axis 0 playing
+PROBE back killcam 14350 spectator 7.6
+PROBE tap 16850
+PROBE state  | 0 playing hp=100 sc=1 d=0 sp=-1 | 1 playing hp=100 sc=0 d=1 sp=-1 | allies 1 axis 0 playing
+PROBE placed 1 axis (6304.00, -1656.00, 193.00) (0.00, 0.00, 0.00)
+PROBE respawned 16950
+PROBE damage 18950 1 playing hp=100 inf=undef att=undef dmg=1000 fl=0 mod=MOD_UNKNOWN w=none pt=(6304.00, -1656.00, 134.12) dir=(0.00, 0.00, 1.00) loc=none
+PROBE dying 18950 1 inf=1022 att=1022 dmg=1000 mod=MOD_UNKNOWN w=none dir=(0.00, 0.00, 1.00) loc=none
+K;0;1;axis;vcod;;-1;world;;none;1000;MOD_UNKNOWN;none
+PROBE damaged 18950 1 hp=0
+PROBE world 18950 dead
+PROBE state  | 0 playing hp=100 sc=1 d=0 sp=-1 | 1 dead hp=0 sc=-1 d=2 sp=-1 | allies 1 axis 0 playing
+PROBE state  | 0 playing hp=100 sc=1 d=0 sp=-1 | 1 playing hp=100 sc=-1 d=2 sp=-1 | allies 1 axis 0 playing
+PROBE placed 1 axis (6304.00, -1656.00, 193.00) (0.00, 0.00, 0.00)
+PROBE respawned 22050

@@ -8,7 +8,8 @@
 //! `probe_domend`, `probe_hqend`, `probe_basend`; same section, "Round and
 //! map ends"), and the clock ends: `ctf`'s round clock and time limit with
 //! a defender's flag return and a rotation to mp_foy (`probe_ctftime`),
-//! `tdm`'s killcam and time limit (`probe_tdmend`), `hq`'s time limit
+//! `tdm`'s killcam and time limit (`probe_tdmend`), `doDamage` on a client
+//! and the killcam skipped by use (`probe_tdmskip`), `hq`'s time limit
 //! (`probe_hqtime`), `bas`'s round clock (`probe_bastime`) and `dom`'s
 //! round clock and time limit (`probe_domtime`), and `tdm`'s battle rank
 //! climbed from rank 1 to 5 with each rank's loadout, the artillery round, a
@@ -1157,6 +1158,14 @@ fn uo_capture_the_flag_touch_return_time_limit_and_rotation_match_retail() {
 #[test]
 fn uo_team_deathmatch_killcam_and_time_limit_match_retail() {
     uo_gametype(&UO, "tdmend", 50, 45_000);
+}
+
+// `doDamage` on a client: the callback's arguments, a dead or killcam
+// target, a kill with and without an attacker; then the killcam skipped by
+// a use tap (coduo-diff.md 22).
+#[test]
+fn uo_team_deathmatch_do_damage_and_killcam_skip_match_retail() {
+    uo_gametype(&UO, "tdmskip", 40, 35_000);
 }
 
 #[test]
