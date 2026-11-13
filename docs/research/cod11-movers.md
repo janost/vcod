@@ -1986,9 +1986,74 @@ vcod: a non-client parent's tag resolves in the grafted rig of its model and
 attachments (`link::model_bone`, `hitrig::HitRigs::bone`), which also finds an
 attachment's root bone under its own name; `attach`, `detach` and `detachAll`
 run `link::model_changed`. `linkto_ab.rs`'s
-`a_tag_on_an_attached_model_takes_a_link_like_retail`: every row matches to
-0.02 units and 0.03 degrees, the hand chain's bind pose off retail's by that
-much.
+`a_tag_on_an_attached_model_takes_a_link_like_retail`: every row matches
+retail's print (next section).
+
+### The tag on 1.5 and UO
+
+Evidence: `probe_linkattach` with `probe_exact 1` (every vector printed as
+integer parts and exact remainders) on retail 1.5b and UO 1.51b, 2026-11-13:
+`mp_carentan-dm-linkattach-1.5.txt` and `-uo.txt` beside the 1.1d capture.
+VERIFIED, off the two captures: every row is the same float on both
+servers. VERIFIED, the 1.5b capture: the closing link to `tag_flash` with
+nothing attached is no fatal there; the console prints `WARNING: Server
+should have crashed here!` twice and the probe's next line runs. On UO it
+aborts the server after printing the part's bone list.
+
+The chain a link to a non-client's tag runs. Each function named below
+has the same instruction sequence on both modules; addresses are UO's,
+then 1.5b's.
+
+- VERIFIED: `G_GeneralLink` (0x78bc8, 0x6c4c5) calls `G_SetFixedLink(ent,
+  0)` (0x78a69, 0x6c366). That takes the parent's tag matrix from
+  `G_CalcTagParentAxis` (0x7882b, 0x6c128), multiplies the link record's
+  matrix (`record+0x10`) by it with `MatrixMultiply43` (0x3bc1c, 0x349cc)
+  into the origin, and writes `AxisToAngles` (0x3e350, 0x37100) of the
+  product into `r.currentAngles`.
+- VERIFIED: the three-argument link's record is `G_CalcTagAxis` (0x78982,
+  0x6c27f) with its second argument 0. `MatrixInverseOrthogonal43`
+  (0x3c6ec, 0x3549c) transposes the parent's matrix and turns the negated
+  origin (`vec3_origin - origin`, each component stored) through the
+  transpose with `MatrixTransformVector` (0x3cd97, 0x35b47). Then
+  `MatrixMultiply43` multiplies the child's `AnglesToAxis` and origin by
+  that inverse.
+- VERIFIED: every element of either multiply and of the transform is its
+  three products and the add on the x87 stack, rounded to a float once.
+- VERIFIED: `AxisToAngles` takes pitch and yaw from `vectoangles` (0x3aded,
+  0x33b9d) of the forward axis. The roll turns the left axis back by
+  `-yaw` and then `-pitch`. Each angle's radians are `(float)(-a * pi /
+  180)` (the doubles at UO 0x9dba0 and 0x9dba8), its sine and cosine come
+  from `fsincos` (UO 0x3f464) and are stored, and each turned component is
+  stored.
+- VERIFIED: `vectosignedpitch` (0x3ad1d, 0x33acd) of the turned left is
+  `(float)(atan2(z, (float)sqrt(x*x + y*y)) * -180 / pi)`, or -90 / 90
+  for a vertical vector. With the turned left's y below 0 the roll is
+  that plus 180 when it is negative and minus 180 otherwise; else it is
+  the negation.
+
+VERIFIED, vcod measurement (`linkto_ab`'s `_on_15` and `_on_uo`): with
+the parent's tag matrix built from the bind records a DObj with no anim
+tree holds (`skeleton::Record::bind`, each bone's bind rotation's shorts
+over 32767, unnormalized) through the skeleton build
+(`PoseBuffer::stored_worlds`, cod11-combat.md 3.1, "The pose on 1.5 and
+UO"), and the chain above, every float of all 114 rows is retail's bit on
+both servers. Before, the tag came off the normalized bind pose in `f32`:
+k1 sat 0.011 units and 0.018 degrees off (`-478.94553` against
+`-478.9361`), and the pose-keeping k2 sat 1 to 2 float steps off.
+
+VERIFIED, vcod measurement (`a_tag_on_an_attached_model_takes_a_link_like_retail`,
+the 1.1d capture): the same bind records bring every row of 1.1d's to its
+print, where the normalized bind pose left 113 rows a print step off (up to
+0.02 units and 0.03 degrees). INFERRED: 1.1d's DObj holds the same
+quantized bind rotation. Its build's arithmetic is not read; on 1.1 vcod
+composes the tag with the parent in `f32` as before.
+
+vcod: `link::model_bone_stored` (CoD1 hosts), and on 1.5b and UO
+`Frame::within_stored`, `Frame::relative_to_stored` and
+`Frame::angles_stored` in the link and `run_one`. A client parent's tag
+takes the same chain (`link::client_bone_stored`). Not ported: vehicle
+seat and gun tags (`vehicle::seat::posed`) and a turret's tags
+(`turretpose`) still pose through `glam`. No exact capture covers them.
 
 ### An item unlinked in mid-air
 

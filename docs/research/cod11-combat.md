@@ -2450,9 +2450,11 @@ below on the dumped records). The same holds on 1.5b
 
 vcod: `skeleton::Record`, kept by `PoseBuffer::blend_nodes` and the
 controllers, `PoseBuffer::stored_worlds` (the build), read by the stored
-bone trace and by a client parent's tag in `linkTo`
-(`link::client_bone_stored`, `G_CalcTagParentAxis` through the parent's
-stored `AnglesToAxis` and `Frame::within_stored`).
+bone trace and by a parent's tag in `linkTo`, a client's
+(`link::client_bone_stored`) or any other entity's bind records
+(`link::model_bone_stored`), `G_CalcTagParentAxis` through the parent's
+stored `AnglesToAxis` and `Frame::within_stored` (cod11-movers.md 16,
+"The tag on 1.5 and UO").
 
 VERIFIED, vcod measurement (`pronepose_ab`'s `probe_rays` gates, the
 target's own cmds replayed): on UO the target's origin, eight bone marks
