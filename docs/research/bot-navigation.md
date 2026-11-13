@@ -2762,8 +2762,41 @@ The 23 are `mp_ship` seed 1, a bot at (3459, 427, 352) bound down the
 drop to (3423, 547, 129), not traced. Seeds 7-24 stall at the hold
 ladder at (3280, 575), the mast ladder at x 3808, the hatch ladder at
 (3359, 512) and the shelf slot at (5384, 289, 396) above the stairwell's
-drop to 204; not traced. Kills fall 2.4% over 18 matches of 140 to 198
-each.
+drop to 204; not traced.
+
+Seeds 7-24 rose, so each of the five changes was switched off in turn
+(a temporary environment switch per change, not kept), alone and
+leaving the others on. A rerun of ae407a223 is the same to the bot-tick,
+so its spread is the spread across seeds: one seed with a stall of
+several hundred bot-ticks (a heal goal under a ledge, two items
+flipped between, the dead-edge pocket) moves a block of 18 seeds by more
+than any change. VERIFIED (measured; `bot_match` 1.1 `tdm` 10 bots,
+12 000 ticks, `mp_ship` only; stalled bot-ticks for seeds 1-6 and 7-24,
+kills over 1-24):
+
+| build | 1-6 | 7-24 | kills |
+|---|---|---|---|
+| ae407a223 (and again) | 221 | 125 | 3 739 |
+| all five | 23 | 173 | 3 711 |
+| the wait round a body alone | 99 | 452 | 3 823 |
+| the risky last plan alone | 24 | 411 | 3 749 |
+| no pre-aim when slow alone | 1 319 | 1 183 | 3 644 |
+| the floor-off retarget alone | 90 | 834 | 3 785 |
+| the held health item alone | 85 | 305 | 3 663 |
+| all but the wait | 0 | 371 | 3 782 |
+| all but the risky last plan | 80 | 247 | 3 737 |
+| all but no pre-aim when slow | 0 | 1 028 | 3 827 |
+| all but the floor-off retarget | 172 | 177 | 3 761 |
+| all but the held health item | 15 | 285 | 3 800 |
+
+No change alone takes ae407a223's 7-24 under 125, and every build with
+one change left out stalls more over 1-24 than all five (196). Over a
+wider block, seeds 25-72, ae407a223 stalls 3 153 bot-ticks (seeds 48,
+59, 31, 52 and 53 at 246 to 860 each) and all five 728 (none over 161);
+kills 7 542 and 7 450. VERIFIED (measured, the same runs). Seeds 7-24
+are a block where ae407a223 drew few long stalls, not a regression of
+one change: over seeds 1-72 the stalls go from 3 499 to 924 and kills
+from 11 281 to 11 161 (-1.1%).
 
 ## 4. Memory and hearing
 
