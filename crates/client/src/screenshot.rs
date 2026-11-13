@@ -1,7 +1,8 @@
 //! `screenshot`, `screenshotJPEG` and `cl_avidemo`'s shot a frame, as each
 //! game's renderer writes them: the file's name and folder, the TGA header
-//! and row order, the JPEG quality, the gamma and the console line
-//! (cod11-demos.md 10, cod2-demos.md 8, cod4-demos.md 10). The frame comes
+//! and row order, the JPEG quality, the gamma and the console line, and the
+//! `levelshot` and `savegame` pictures' filters (cod11-demos.md 10,
+//! cod2-demos.md 8, cod4-demos.md 10). The frame comes
 //! from `Renderer::request_capture` and `take_capture`.
 
 use std::path::{Path, PathBuf};
@@ -70,17 +71,32 @@ fn rules(game: Game) -> Rules {
     }
 }
 
+/// What a screenshot command writes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Command {
+    /// A shot into `screenshots/`.
+    Screen(Request),
+    /// `levelshot`: a 128 x 128 `levelshots/<map>.tga`, TGA from either
+    /// command.
+    Level,
+    /// `savegame <name>`: a 512 x 512 `<name>.jpg` at quality 90.
+    Savegame(String),
+}
+
 /// Reads `screenshot`'s or `screenshotJPEG`'s arguments (`args` past the
-/// word), alike in all three engines: `silent` as the first, else a lone
-/// argument names the file. `None` for `levelshot` and `savegame`, which
-/// vcod does not write.
-pub fn parse(jpeg: bool, args: &[String]) -> Option<Request> {
+/// word), alike in all three engines (cod11-demos.md 10.1): `levelshot`
+/// first, `savegame` with exactly one non-empty name after it, then
+/// `silent` as the first, else a lone argument names the file.
+pub fn parse(jpeg: bool, args: &[String]) -> Command {
     let first = args.first().map(String::as_str);
-    if matches!(first, Some("levelshot" | "savegame")) {
-        return None;
+    if first == Some("levelshot") {
+        return Command::Level;
+    }
+    if first == Some("savegame") && args.len() == 2 && !args[1].is_empty() {
+        return Command::Savegame(args[1].clone());
     }
     let silent = first == Some("silent");
-    Some(Request {
+    Command::Screen(Request {
         format: if jpeg { Format::Jpeg } else { Format::Tga },
         name: first
             .filter(|_| args.len() == 1 && !silent)
@@ -105,6 +121,46 @@ pub struct Shooter {
 }
 
 impl Shooter {
+    /// Runs `cmd` on `cap`: a shot into `gamedir`'s `screenshots/`, a
+    /// levelshot of `map` (the world's base name; nothing with no world,
+    /// where retail reads a null one) or a save game's picture, all under
+    /// `gamedir` (`fs_homepath/<fs_gamedir>`). Returns the console lines.
+    pub fn run(
+        &mut self,
+        game: Game,
+        gamedir: &Path,
+        map: Option<&str>,
+        cmd: &Command,
+        cap: &Capture,
+    ) -> Vec<String> {
+        let (path, bytes) = match cmd {
+            Command::Screen(req) => return self.save(game, &gamedir.join("screenshots"), req, cap),
+            Command::Level => {
+                let Some(map) = map else {
+                    return Vec::new();
+                };
+                (format!("levelshots/{map}.tga"), levelshot(game, cap))
+            }
+            Command::Savegame(name) => (format!("{name}.jpg"), savegame(game, cap)),
+        };
+        let full = gamedir.join(&path);
+        let mut lines = Vec::new();
+        let written = full
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|_| std::fs::write(&full, bytes));
+        if let Err(e) = written {
+            log::warn!("{}: {e}", full.display());
+            lines.push(format!("Failed to open {path}"));
+        }
+        // the levelshot's line follows whatever the write did; the save
+        // game's picture prints none
+        if *cmd == Command::Level {
+            lines.push(format!("Wrote {path}"));
+        }
+        lines
+    }
+
     /// Writes `cap` as `req` asks into `dir` (the game folder's
     /// `screenshots/`). Returns the console lines.
     pub fn save(&mut self, game: Game, dir: &Path, req: &Request, cap: &Capture) -> Vec<String> {
@@ -164,19 +220,165 @@ fn shown(path: &Path) -> String {
 /// An uncompressed 24-bit TGA: the 18-byte header (type 2, the size, 24
 /// bits, the origin bit), then B, G, R a pixel.
 pub fn tga(cap: &Capture, top_down: bool) -> Vec<u8> {
+    tga_rows(cap, top_down, if top_down { 0x20 } else { 0 })
+}
+
+/// [`tga`] with the rows in `top_down` order and `origin` as header byte
+/// 17, which a levelshot leaves 0 whatever order its rows run.
+fn tga_rows(cap: &Capture, top_down: bool, origin: u8) -> Vec<u8> {
     let (w, h) = (cap.width as usize, cap.height as usize);
     let mut out = vec![0u8; 18];
     out[2] = 2;
     out[12..14].copy_from_slice(&(cap.width as u16).to_le_bytes());
     out[14..16].copy_from_slice(&(cap.height as u16).to_le_bytes());
     out[16] = 24;
-    out[17] = if top_down { 0x20 } else { 0 };
+    out[17] = origin;
     out.reserve(w * h * 3);
     for y in 0..h {
         let row = if top_down { y } else { h - 1 - y };
         for px in cap.rgb[row * w * 3..][..w * 3].as_chunks::<3>().0 {
             out.extend_from_slice(&[px[2], px[1], px[0]]);
         }
+    }
+    out
+}
+
+/// `levelshot`'s file (cod11-demos.md 10.1, cod2-demos.md 8.1,
+/// cod4-demos.md 10.1): CoD1 box-filters the frame to 128 x 128 and writes
+/// it bottom-up as its other TGAs; CoD2 and CoD4 resample the front buffer
+/// and write its rows top-down under a header whose origin byte stays 0.
+pub fn levelshot(game: Game, cap: &Capture) -> Vec<u8> {
+    match game {
+        Game::Cod1 => tga_rows(&box_filter(cap, 128, 512.0, 384.0), false, 0),
+        Game::Cod2 | Game::Cod4 => tga_rows(&resample(cap, 128, 128), true, 0),
+    }
+}
+
+/// `savegame`'s 512 x 512 JPEG at quality 90, rows top-down.
+pub fn savegame(game: Game, cap: &Capture) -> Vec<u8> {
+    match game {
+        Game::Cod1 => jpeg(&box_filter(cap, 512, 2048.0, 1536.0), 90),
+        Game::Cod2 | Game::Cod4 => jpeg(&resample(cap, 512, 512), 90),
+    }
+}
+
+/// CoD1's `R_LevelShot` filter (`CoDMP.exe` 0x4b11c0, the save game's
+/// 0x4b1520): output pixel (x, y), counted from the bottom row as
+/// `glReadPixels` reads, averages 12 samples at `(x * 4 + i) * w / gw`,
+/// `(y * 3 + j) * h / gh` (i < 4, j < 3, truncated), the sum divided by 12
+/// truncating. `gw` and `gh` are 512 x 384 for the levelshot and 2048 x 1536
+/// for the save game; the scales are `w` times the f32 reciprocal. The
+/// result is top-down, as [`Capture`]s are.
+fn box_filter(cap: &Capture, size: u32, gw: f32, gh: f32) -> Capture {
+    let (w, h) = (cap.width as usize, cap.height as usize);
+    let xs = cap.width as f64 * f64::from(1.0 / gw);
+    let ys = cap.height as f64 * f64::from(1.0 / gh);
+    let n = size as usize;
+    let mut rgb = vec![0u8; n * n * 3];
+    for y in 0..n {
+        for x in 0..n {
+            let mut sum = [0u32; 3];
+            for j in 0..3 {
+                // the GL row, from the bottom
+                let gl = (((y * 3 + j) as f64 * ys) as usize).min(h - 1);
+                let row = h - 1 - gl;
+                for i in 0..4 {
+                    let col = (((x * 4 + i) as f64 * xs) as usize).min(w - 1);
+                    let px = &cap.rgb[(row * w + col) * 3..][..3];
+                    for c in 0..3 {
+                        sum[c] += u32::from(px[c]);
+                    }
+                }
+            }
+            let out = &mut rgb[((n - 1 - y) * n + x) * 3..][..3];
+            for c in 0..3 {
+                out[c] = (sum[c] / 12) as u8;
+            }
+        }
+    }
+    Capture {
+        width: size,
+        height: size,
+        rgb,
+    }
+}
+
+/// CoD2's and CoD4's `R_TakeResampledScreenshot` (`gfx_d3d_mp_x86_s.dll`
+/// 0x10026500 and 0x10026100, `iw3mp.exe` 0x60e990): the rows to `w`, then
+/// the columns to `h`, each pass an area average shrinking and a centred
+/// linear blend growing, rounded to bytes between the passes.
+fn resample(cap: &Capture, w: u32, h: u32) -> Capture {
+    let (sw, sh) = (cap.width as usize, cap.height as usize);
+    let (w, h) = (w as usize, h as usize);
+    let mut rows = vec![0u8; w * sh * 3];
+    for y in 0..sh {
+        let src: Vec<&[u8]> = (0..sw).map(|x| &cap.rgb[(y * sw + x) * 3..][..3]).collect();
+        for (x, px) in resample_line(&src, w).into_iter().enumerate() {
+            rows[(y * w + x) * 3..][..3].copy_from_slice(&px);
+        }
+    }
+    let mut rgb = vec![0u8; w * h * 3];
+    for x in 0..w {
+        let src: Vec<&[u8]> = (0..sh).map(|y| &rows[(y * w + x) * 3..][..3]).collect();
+        for (y, px) in resample_line(&src, h).into_iter().enumerate() {
+            rgb[(y * w + x) * 3..][..3].copy_from_slice(&px);
+        }
+    }
+    Capture {
+        width: w as u32,
+        height: h as u32,
+        rgb,
+    }
+}
+
+/// One line of `n` pixels to `m`. Shrinking (0x10025d90) weighs each source
+/// pixel by `m` and each output covers `n`, scale `1 / n`; growing
+/// (0x10025f00) blends the two nearest at the output's centre in units of
+/// `1 / 2m`, scale `0.5 / m`, the edges held. Each sum times its f32 scale
+/// rounds to nearest after a `2^-30` nudge, as the `fistp` there does.
+fn resample_line(src: &[&[u8]], m: usize) -> Vec<[u8; 3]> {
+    let n = src.len();
+    let round = |sum: u32, scale: f32| -> u8 {
+        let v = f64::from(sum as f32 * scale) + f64::from(2f32.powi(-30));
+        v.round_ties_even().clamp(0.0, 255.0) as u8
+    };
+    let px = |i: usize, c: usize| u32::from(src[i.min(n - 1)][c]);
+    let mut out = Vec::with_capacity(m);
+    if n > m {
+        let scale = 1.0 / n as f32;
+        // the current source pixel and the weight it has left
+        let (mut i, mut left) = (0usize, m);
+        for _ in 0..m {
+            let mut sum = [0u32; 3];
+            let mut need = n;
+            while need > 0 {
+                let take = left.min(need);
+                for (c, s) in sum.iter_mut().enumerate() {
+                    *s += px(i, c) * take as u32;
+                }
+                need -= take;
+                left -= take;
+                if left == 0 {
+                    i += 1;
+                    left = m;
+                }
+            }
+            out.push(sum.map(|s| round(s, scale)));
+        }
+    } else if n < m {
+        let scale = 0.5 / m as f32;
+        for j in 0..m {
+            // the centre in source pixels times 2m, from pixel 0's centre
+            let pos = (2 * j + 1) as i64 * n as i64 - m as i64;
+            let i = pos.div_euclid(2 * m as i64);
+            let frac = pos.rem_euclid(2 * m as i64) as u32;
+            let a = i.max(0) as usize;
+            let b = (i + 1).max(0) as usize;
+            let sum = |c| px(a, c) * (2 * m as u32 - frac) + px(b, c) * frac;
+            out.push([0, 1, 2].map(|c| round(sum(c), scale)));
+        }
+    } else {
+        out.extend(src.iter().map(|p| [p[0], p[1], p[2]]));
     }
     out
 }
@@ -283,17 +485,114 @@ mod tests {
             name: name.map(str::to_string),
             silent,
         };
-        assert_eq!(p(false, ""), Some(req(Format::Tga, None, false)));
-        assert_eq!(p(true, "silent"), Some(req(Format::Jpeg, None, true)));
-        assert_eq!(p(false, "foo"), Some(req(Format::Tga, Some("foo"), false)));
+        let shot = |format, name, silent| Command::Screen(req(format, name, silent));
+        assert_eq!(p(false, ""), shot(Format::Tga, None, false));
+        assert_eq!(p(true, "silent"), shot(Format::Jpeg, None, true));
+        assert_eq!(p(false, "foo"), shot(Format::Tga, Some("foo"), false));
         // two arguments: numbered; `silent` only first, case and all
-        assert_eq!(p(false, "foo bar"), Some(req(Format::Tga, None, false)));
-        assert_eq!(p(false, "silent x"), Some(req(Format::Tga, None, true)));
+        assert_eq!(p(false, "foo bar"), shot(Format::Tga, None, false));
+        assert_eq!(p(false, "silent x"), shot(Format::Tga, None, true));
+        assert_eq!(p(false, "Silent"), shot(Format::Tga, Some("Silent"), false));
+        assert_eq!(p(true, "levelshot x y"), Command::Level);
+        assert_eq!(p(false, "savegame s1"), Command::Savegame("s1".into()));
+        // `savegame` needs exactly one name after it, else it is a name
         assert_eq!(
-            p(false, "Silent"),
-            Some(req(Format::Tga, Some("Silent"), false))
+            p(false, "savegame"),
+            shot(Format::Tga, Some("savegame"), false)
         );
-        assert_eq!(p(false, "levelshot"), None);
+        assert_eq!(p(false, "savegame a b"), shot(Format::Tga, None, false));
+        let empty = vec!["savegame".to_string(), String::new()];
+        assert_eq!(parse(false, &empty), shot(Format::Tga, None, false));
+    }
+
+    #[test]
+    fn levelshots_and_save_games_land_where_each_game_writes_them() {
+        let dir = tempfile::tempdir().unwrap();
+        // red over the top half, blue below
+        let mut c = cap(640, 480);
+        c.rgb[..640 * 240 * 3]
+            .chunks_mut(3)
+            .for_each(|p| p.copy_from_slice(&[255, 0, 0]));
+        let mut s = Shooter::default();
+        for game in [Game::Cod1, Game::Cod2, Game::Cod4] {
+            let lines = s.run(game, dir.path(), Some("mp_x"), &Command::Level, &c);
+            assert_eq!(lines, ["Wrote levelshots/mp_x.tga"]);
+            let tga = std::fs::read(dir.path().join("levelshots/mp_x.tga")).unwrap();
+            // 128 x 128, 24 bits, origin byte 0 in every game
+            assert_eq!(
+                &tga[..18],
+                &[0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 0, 128, 0, 24, 0]
+            );
+            assert_eq!(tga.len(), 18 + 128 * 128 * 3);
+            // B G R: the red top last in CoD1's file, first in the others'
+            let (red, blue) = (&[0u8, 0, 255][..], &[255u8, 0, 0][..]);
+            let (first, last) = (&tga[18..21], &tga[tga.len() - 3..]);
+            match game {
+                Game::Cod1 => assert_eq!((first, last), (blue, red)),
+                _ => assert_eq!((first, last), (red, blue)),
+            }
+            let lines = s.run(
+                game,
+                dir.path(),
+                None,
+                &Command::Savegame("save/s1".into()),
+                &c,
+            );
+            assert!(lines.is_empty());
+            let jpg = std::fs::read(dir.path().join("save/s1.jpg")).unwrap();
+            let img = image::load_from_memory(&jpg).unwrap();
+            assert_eq!((img.width(), img.height()), (512, 512));
+            std::fs::remove_file(dir.path().join("save/s1.jpg")).unwrap();
+        }
+        // no world: no file, no line
+        assert!(
+            s.run(Game::Cod2, dir.path(), None, &Command::Level, &c)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn cod1s_box_filter_reads_twelve_points_a_pixel() {
+        // a 512 x 384 frame: output (x, y) averages columns 4x..4x+3 of GL
+        // rows 3y..3y+2, the frame's bottom row GL row 0
+        let (w, h) = (512usize, 384usize);
+        let rgb = (0..h)
+            .flat_map(|r| (0..w).flat_map(move |c| [(c % 4 * 10) as u8, (h - 1 - r) as u8, 0]))
+            .collect();
+        let out = box_filter(
+            &Capture {
+                width: 512,
+                height: 384,
+                rgb,
+            },
+            128,
+            512.0,
+            384.0,
+        );
+        // red: (0 + 10 + 20 + 30) * 3 / 12 = 15; green: GL rows 3y..3y+2
+        // average 3y + 1
+        let at = |x: usize, y_from_top: usize| &out.rgb[(y_from_top * 128 + x) * 3..][..3];
+        assert_eq!(at(0, 127), &[15, 1, 0]);
+        assert_eq!(at(5, 127 - 10), &[15, 31, 0]);
+    }
+
+    #[test]
+    fn the_d3d_resample_averages_areas_and_blends_up() {
+        let line = |v: &[u8], m| {
+            let px: Vec<[u8; 3]> = v.iter().map(|&b| [b, b, b]).collect();
+            let src: Vec<&[u8]> = px.iter().map(|p| &p[..]).collect();
+            resample_line(&src, m)
+                .iter()
+                .map(|p| p[0])
+                .collect::<Vec<_>>()
+        };
+        // 3 -> 2: (0 * 2 + 30 * 1) / 3 = 10, (30 * 1 + 61 * 2) / 3 = 50.67
+        assert_eq!(line(&[0, 30, 61], 2), [10, 51]);
+        // 4 -> 2: plain pairs, a half rounding up
+        assert_eq!(line(&[0, 1, 10, 20], 2), [1, 15]);
+        // 2 -> 4: centres at -0.25, 0.25, 0.75, 1.25; edges held
+        assert_eq!(line(&[0, 100], 4), [0, 25, 75, 100]);
+        assert_eq!(line(&[7, 9], 2), [7, 9]);
     }
 
     #[test]

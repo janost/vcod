@@ -487,8 +487,29 @@ the same in all three unless a bullet says otherwise. vcod:
   `<arg2>.jpg` (`0x55887c`) at 512 x 512, quality 90, with no line;
   `silent` (`0x55885c`) only silences; any other lone argument names the
   file; everything else numbers it.
-- vcod reads the same arguments and writes neither `levelshot` nor
-  `savegame`.
+- `R_LevelShot` (`0x4b11c0`) names the file off the world's base name
+  (`tr.world + 0x40`, `0x4b11da`), reads the back buffer as `GL_RGB`
+  (`0x4b125e`) and fills a 128 x 128 TGA whose header sets only bytes 2
+  (2), 12 and 14 (`0x80`) and 16 (24), so byte 17 is 0 and rows run
+  bottom-up (VERIFIED, `0x4b121a`..`0x4b1245`). Output pixel (x, y), y
+  from the bottom, sums the 12 samples at columns `(4x + i) * xs` and rows
+  `(3y + j) * ys`, i < 4, j < 3, each truncated through `ftol`
+  (`0x538be0`), with `xs = vidWidth * (1/512.0f)` (`0x568ef0`) and `ys =
+  vidHeight * (1/384.0f)` (`0x568eec`), and stores each sum divided by 12,
+  truncating, B, G, R (VERIFIED). The gamma table maps it under the
+  screenshot's condition (section 10.4; VERIFIED, `0x16c55b8`,
+  `0x16c3a8c`). `Wrote %s` follows (VERIFIED).
+- The save game's picture (`0x4b1520`) reads `GL_RGBA` (`0x1908`) and runs
+  the same 12-sample box to 512 x 512 with `xs = vidWidth * (1/2048.0f)`
+  (`0x56917c`) and `ys = vidHeight * (1/1536.0f)` (`0x569178`), alpha 0,
+  the table over all 4 bytes under the same condition, then `SaveJPG(name,
+  90, 512, 512, 1, buf)` (`0x4b17a9`, `0x4b17ac`), rows top-down as the
+  screenshot's JPEG (VERIFIED). It prints nothing (VERIFIED).
+- INFERRED: 1.5 and UO run the same two functions; their addresses are
+  not read.
+- vcod writes both as above (`screenshot::levelshot`, `savegame`), the map
+  named as the base name the client loaded; with no world it writes
+  nothing, where retail reads a null world.
 
 ### 10.2 Names
 

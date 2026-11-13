@@ -288,7 +288,7 @@ commands.
 | `ui_load` | Reload the menus off the list `ui_menuFiles` names |
 | `record [name]`, `stoprecord` | Record a demo to `demos/` in the game directory (the mod's first) |
 | `demo <name>` | Play one back (`.dm_1`, `.dm_2` or `.dm_3`, found without the extension). `cl_freezeDemo 1` pauses it; `nextdemo` holds a command to run at its end |
-| `screenshot [silent\|name]`, `screenshotJPEG [silent\|name]` | Write the next frame to `screenshots/` in the game folder: `shotNNNN.tga` or `.jpg`, or `<name>.tga`/`.jpg`. `silent` prints no `Wrote` line |
+| `screenshot [silent\|name]`, `screenshotJPEG [silent\|name]` | Write the next frame to `screenshots/` in the game folder: `shotNNNN.tga` or `.jpg`, or `<name>.tga`/`.jpg`. `silent` prints no `Wrote` line. `levelshot` writes `levelshots/<map>.tga` (128 x 128), `savegame <name>` writes `<name>.jpg` (512 x 512) |
 | `timedemo` | CoD1, UO: `set timedemo 1` before `demo` times it. CoD2, CoD4: `timedemo <name>` is a command, as retail's: it plays `<name>.dm_1` 50 ms a frame and prints the frame count and fps. CoD2 also writes `demos/timedemo_<map>_mode_<r_mode>.csv`, a `<frame>,<ms>` line a frame |
 
 Anything else goes to the server while connected (`callvote`, `kill`,

@@ -255,6 +255,9 @@ the clock a fixed `1000 / fps` ms a frame and writes each as a TGA.
 or `.jpg` (quality 90) under `main/` or the mod's folder, one count for
 both; a lone argument names the file, `silent` drops the `Wrote` line. The
 shot holds the frame before `r_gamma`, as 1.7's front buffer read does.
+`screenshot levelshot` writes a resampled 128 x 128
+`levelshots/<map>.tga`, `screenshot savegame <name>` a 512 x 512
+`<name>.jpg`.
 
 ### Server
 
@@ -446,8 +449,7 @@ Ranked by how much a player notices. The research-side lists are
 6. **Demos not yet swapped with a retail client.** The file layout is
    gated both ways against `iw3mp.exe`'s and a retail capture, but no
    retail client has played a vcod demo or recorded one for vcod
-   ([cod4-demos.md](../research/cod4-demos.md) 8). `screenshot levelshot` and
-   `savegame` write nothing.
+   ([cod4-demos.md](../research/cod4-demos.md) 8).
 7. **Small menus.** The CD key menus are missing; Single Player's Yes
    does nothing (this is a multiplayer client); the `winvoice_*` voice
    settings are not read.

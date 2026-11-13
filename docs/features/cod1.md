@@ -214,6 +214,9 @@ Screenshots ([cod11-demos.md](../research/cod11-demos.md) 10):
   bottom-up as retail's; `screenshotJPEG` a JPEG at quality 95. A lone
   name argument names the file, `silent` drops the `Wrote` line. Windowed,
   the shot is the framebuffer before `r_gamma`, as retail's.
+- `screenshot levelshot` writes the map's 128 x 128
+  `levelshots/<map>.tga`, `screenshot savegame <name>` a 512 x 512
+  `<name>.jpg`, both box-filtered as retail's.
 - `cg_autoscreenshot 1` shoots `<date-time>-<name>.jpg` on a 1.5 or UO
   server's `autoScreenshot`.
 - `cl_avidemo <fps>` steps the clock `1000 / fps` ms a frame and writes
@@ -366,7 +369,6 @@ Front end:
 Client:
 
 - No PunkBuster; PunkBuster servers refuse vcod.
-- `screenshot levelshot` and `screenshot savegame` write nothing.
 - No retail client has played a vcod demo; no retail client runs here.
   vcod plays a retail-recorded demo and writes retail's layout byte for
   byte ([cod11-demos.md](../research/cod11-demos.md) 9).
