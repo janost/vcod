@@ -1279,6 +1279,19 @@ to the first server-side change (below). VERIFIED, the captures.
 - The only rows `moves_ab` cannot replay are `frag`'s three after each
   blast: the thrower's own grenade lands beside him and `G_Damage`'s
   knockback (`pm_flags` 0x400, `pm_time`, the push) is server-side.
+  Their numbers are section 4's knockback: the pushes are 108, 100 and 96
+  long (to the float), `knockback * g_knockback / 250` for 27, 25 and 24,
+  with `pm_time` 54, 50 and 50 (48 clamped up), and `velocity[0]` stays 0.
+  VERIFIED, the capture's bits and the arithmetic. Each row is the first
+  snapshot after its blast and carries `pm_time` as set, so the push lands
+  after the frame's cmds and before the snapshot. INFERRED. The replay
+  could only apply it by running the blast: the missile's flight, the
+  `G_RadiusDamage` falloff, the gametype's damage callback and
+  `finishPlayerDamage`, all vcod-server's. The capture predates the
+  gametype's `PROBE damage` line, so not even the callback's damage is
+  logged. Closing the rows needs a server-side replay of a thrower's own
+  blast (`game::cod2_combat_ab` runs two clients, and compares the
+  target's knockback there, 9.2), not a pmove one.
 
 ### 9.2 Two clients: damage and the end frame
 
