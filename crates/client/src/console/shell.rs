@@ -412,9 +412,28 @@ const MENU_CVARS: &[(&str, &str)] = &[
     ("cg_vehicletrails", "1"),
 ];
 
+/// The voice options' dvars (cod2-voice.md 4, cod4-voice.md 4):
+/// `winvoice_mic_mute` (1) mutes the microphone's line in the Windows
+/// mixer's playback, `winvoice_mic_reclevel` (65535, 0..65535) sets its
+/// recording volume, `winvoice_save_voice` (0) appends heard voice to
+/// `voice.wav`, `winvoice_mic_scaler` (1, 0.25..2) scales each captured
+/// sample. vcod reads the level and the scaler (`voice::mic_gain`).
+const WINVOICE_DVARS: [(&str, &str, u32); 4] = [
+    ("winvoice_mic_mute", "1", ARCHIVE),
+    ("winvoice_mic_reclevel", "65535", ARCHIVE),
+    ("winvoice_save_voice", "0", ARCHIVE),
+    ("winvoice_mic_scaler", "1", ARCHIVE),
+];
+
 /// [`Shell::register_cod4_options`]'s dvars: name, default, flags
 /// (`Dvar_RegisterNew` 0x56c350 calls, cod4-front-end.md 9).
-const COD4_OPTION_DVARS: [(&str, &str, u32); 33] = [
+const COD4_OPTION_DVARS: [(&str, &str, u32); 37] = [
+    // `Voice_Init`'s (`iw3mp.exe` 0x57a92e..0x57aa37, flags 1; CoD2's at
+    // `CoD2MP_s.exe` 0x4b8dd0, flags 0x1001): see [`WINVOICE_DVARS`]
+    WINVOICE_DVARS[0],
+    WINVOICE_DVARS[1],
+    WINVOICE_DVARS[2],
+    WINVOICE_DVARS[3],
     // the custom classes' names, archived (`LiveStorage_StatsInit`,
     // 0x4fc5d7: flags 1; cod4-front-end.md 4.1)
     ("customclass1", "", ARCHIVE),
@@ -953,6 +972,13 @@ impl Shell {
         // `CG_Init` (Mac 0x145214), all archived (flags 0x1001): the chat's
         // and say field's places, the stance hint prints and the hints'
         // fade (cod2-hud.md 9, 14).
+        for (name, default, _) in WINVOICE_DVARS {
+            let kept = self.cvar(name).map(str::to_string);
+            self.register(name, default, ARCHIVE);
+            if let (Some(v), Some(c)) = (kept, self.cvars.get_mut(name)) {
+                c.value = v;
+            }
+        }
         for (name, default) in [
             ("snd_volume", "1"),
             ("cg_drawMantleHint", "1"),
@@ -2132,6 +2158,36 @@ mod tests {
             ]
         );
         assert!(s.complete("zzz").is_empty());
+    }
+
+    /// The voice options' four dvars register for CoD2 and CoD4 at
+    /// `Voice_Init`'s defaults, archived, keeping a config's value.
+    #[test]
+    fn winvoice_dvars_register_as_voice_init_does() {
+        let defaults = [
+            ("winvoice_mic_mute", "1"),
+            ("winvoice_mic_reclevel", "65535"),
+            ("winvoice_save_voice", "0"),
+            ("winvoice_mic_scaler", "1"),
+        ];
+        for cod4 in [false, true] {
+            let mut s = Shell::new();
+            assert_eq!(s.cvar("winvoice_mic_scaler"), None);
+            s.execute("seta winvoice_mic_scaler 1.25");
+            match cod4 {
+                true => s.register_cod4_options(),
+                false => s.use_cod2_cvars(),
+            }
+            for (name, default) in defaults {
+                let want = if name == "winvoice_mic_scaler" {
+                    "1.25"
+                } else {
+                    default
+                };
+                assert_eq!(s.cvar(name), Some(want), "{name}");
+                assert!(s.cvars[name].archive, "{name}");
+            }
+        }
     }
 
     /// CoD2's `snd_volume` registers at 1 and archived, keeping what the

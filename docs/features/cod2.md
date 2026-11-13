@@ -341,10 +341,12 @@ Ranked by how much a player notices, worst first.
 2. **Download names.** vcod-server refuses a `download` name with a `..`
    part and never reads from the filesystem root; retail serves both
    (cod2-protocol.md 17.5). A stock client never asks for either.
-3. **Voice options.** The Windows mixer dvars (`winvoice_mic_reclevel`,
-   `winvoice_mic_mute`, `winvoice_mic_scaler`), `winvoice_save_voice` and
-   the options page's record level meter do nothing
-   ([cod2-voice.md](../research/cod2-voice.md) 7).
+3. **Voice options.** `winvoice_mic_reclevel` scales the captured voice
+   where 1.3 sets the Windows mixer's recording volume;
+   `winvoice_mic_mute` (the mixer's playback mute for the microphone,
+   which vcod never plays back), `winvoice_save_voice` and the options
+   page's record level meter do nothing
+   ([cod2-voice.md](../research/cod2-voice.md) 4, 7).
 
 Pending human checks: the in-game script menus have not been checked on
 a GPU, and sound and voice chat have not been compared by ear.

@@ -37,9 +37,10 @@ use crate::hud::cod2elem::ScreenPlacement;
 /// `ui_zfeather` copy sets as the page closes; the aspect ratio
 /// (`vid_restart`), the texture page's picmip dvars (`r_applyPicmip`) and
 /// its anisotropy (`r_texFilterAnisoMin`, live), and `ragdoll_enable`.
+/// The voice page's record level slider, `winvoice_mic_reclevel`.
 /// Create a Class's class names, `customclass1`..`5`, which its rename
 /// field sets.
-const VCOD_CVARS: [(&str, &str); 38] = [
+const VCOD_CVARS: [(&str, &str); 39] = [
     ("customclass1", "customclass1"),
     ("customclass2", "customclass2"),
     ("customclass3", "customclass3"),
@@ -78,6 +79,7 @@ const VCOD_CVARS: [(&str, &str); 38] = [
     ("r_picmip_spec", "r_picmip_spec"),
     ("r_texFilterAnisoMin", "r_texfilteranisomin"),
     ("ragdoll_enable", "ragdoll_enable"),
+    ("winvoice_mic_reclevel", "winvoice_mic_reclevel"),
 ];
 
 /// The graphics pages' `ui_r_*` copies whose dvar vcod has

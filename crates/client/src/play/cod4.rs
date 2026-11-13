@@ -13089,6 +13089,7 @@ pub(crate) mod tests {
                         25000,
                     ),
                     quality,
+                    mic: Default::default(),
                 };
                 if real {
                     chat.frame(&mut t.voice, &f, None);

@@ -451,7 +451,10 @@ Ranked by how much a player notices. The research-side lists are
    retail client has played a vcod demo or recorded one for vcod
    ([cod4-demos.md](../research/cod4-demos.md) 8).
 7. **Small menus.** Single Player's Yes does nothing (this is a
-   multiplayer client); the `winvoice_*` voice settings are not read. The
+   multiplayer client). Of the `winvoice_*` voice settings the record
+   level scales the captured voice (1.7 sets the Windows mixer) and the
+   scaler applies as 1.7's; the playback mute and `voice.wav` do nothing
+   ([cod4-voice.md](../research/cod4-voice.md) 4). The
    CD key menu keeps a verified key until vcod quits, where 1.7 writes
    the registry.
 8. **Server-side differences.** vcod-server never asks the authorize
