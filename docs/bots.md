@@ -83,7 +83,7 @@ A change applies within half a second.
 | `vc_bot_minplayers` | 0 | [Minimum player count](#minimum-player-count). 0 is off. |
 | `vc_bot_autobalance` | 1 | [Keeps the teams even](#team-balance) in team gametypes. |
 | `vc_bot_shoot` | 1 | 0 stops bots firing. `--bots` without `--bots-shoot` sets it to 0. |
-| `vc_bot_names` | 1 | 0 names new bots `bot<slot>`. |
+| `vc_bot_names` | 1 | 0 names bots that join from then on `bot<slot>`; bots already in keep their names. |
 | `vc_bot_skill` | 1 | The [skill level](#skill), 0 to 3, of every bot `addbot ... skill N` didn't set. |
 | `vc_bot_vehicles` | 1 | United Offensive: 0 stops bots getting into vehicles; a bot already in one rides on until it gets out. |
 
@@ -154,8 +154,10 @@ differ by at most one.
 
 - Humans never move.
 - Bots pinned with `addbot allies` or `addbot axis` never move.
-- A bot switches only while dead or spectating. In round gametypes like
-  `sd` that usually means between rounds.
+- A bot switches only while dead or spectating, never during the
+  intermission. In `sd` and `re` a bot killed mid-round switches at once
+  and, as a human who changes team while dead, sits the round out and
+  spawns on its new team in the next.
 
 ## Slots
 
