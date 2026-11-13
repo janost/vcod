@@ -564,6 +564,18 @@ comes back as it went in. VERIFIED, disassembly and rodata 0x77954-0x7795c.
 The 1.1 cgame's `AngleNormalize180` (cgame_mp_x86.dll 0x3003c400) truncates
 the same way through MSVC's `_ftol` (0x3005a890); its callers pass the
 float difference, as 1.5 does. VERIFIED, disassembly.
+VERIFIED, disassembly of the 1.1 cgame: 0x3003c400 reads its argument as
+a float off the stack (`fld DWORD PTR [esp+0x4]`), and each caller rounds
+the difference into that slot (`fsub` then `fstp DWORD PTR [esp]`, e.g.
+0x30007925-0x3000792b, 0x300071b3-0x300071c1, 0x30007a86-0x30007a8d);
+the constants are 182.04445 (`.rdata` 0x30069380) and 360/65536
+(0x3006937c). INFERRED, arithmetic: a short times 360/65536 is exact in
+a float, so the float difference is the only step that parts the cgame's
+result from 1.1d's. vcod's predictor ran 1.1d's kept difference under `Arith::Msvc` until
+2026-11-13; `pmove::delta_stored` now stores it for a Windows client of
+any version, and 1.1d's server keeps it
+(`the_windows_1_1_predictor_stores_the_angle_delta`). `SetClientViewAngle`'s
+prone cone (`ProneCone::hold`) is the server's only and keeps 1.1d's.
 
 The call sites, read off the relocations (1.1d) and the call targets (1.5b,
 UO), and what vcod runs at each:
