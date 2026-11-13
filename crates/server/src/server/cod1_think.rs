@@ -997,7 +997,7 @@ impl Cod1Module {
         let Some(def) = weapons.get(weapon as usize) else {
             return;
         };
-        // UO's round rolls its tracer before the trace (coduo-diff.md 21).
+        // A UO round rolls its tracer on each leg (coduo-diff.md 21).
         let uo_round = match self.script.as_ref() {
             Some(rt) if eng.proto.is_uo() => {
                 let heavy = matches!(def.ammo_type.as_str(), "lmg" | "hmg" | "umg");
@@ -1008,7 +1008,7 @@ impl Cod1Module {
                 }));
                 Some(crate::game::combat::UoRound {
                     weapon: i32::from(weapon),
-                    tracer: crate::game::host::rand_unit(eng.rng) < chance,
+                    tracer_chance: chance,
                 })
             }
             _ => None,

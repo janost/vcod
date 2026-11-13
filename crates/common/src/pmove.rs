@@ -1271,7 +1271,7 @@ pub fn pmove(
     // `PM_UpdateViewAngles` runs ahead of the stance (`PmoveSingle` 0x340fc),
     // so the prone clamps read last frame's stance and pitches, and the
     // ladder cap last frame's ladder flag and ground.
-    cap_ladder_yaw(ps);
+    cap_ladder_yaw(ps, world);
     update_prone_view(ps, input, world, dt);
     update_lean(ps, input, true, world, dt);
     update_stance(ps, input, world, dt, &mut events);
@@ -1373,7 +1373,7 @@ fn linked_move(
 ) {
     // `PM_UpdateViewAngles`, ahead of the dispatch in every arm; under a link
     // the lean skips its wall clamp (0x32c63).
-    cap_ladder_yaw(ps);
+    cap_ladder_yaw(ps, world);
     update_prone_view(ps, input, world, dt);
     update_lean(ps, input, true, world, dt);
     // The arm's first store: `groundEntityNum` 1023, `pml.walking` and
@@ -3053,7 +3053,11 @@ fn enter_prone(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld) {
     // The torso starts on the ground's pitch, but no further than the cap
     // from the view, so lying down never yanks the view.
     let view_pitch = view_deg(-ps.pitch);
-    let d = angle_delta(ps.prone_direction_pitch, view_pitch, ps.rules);
+    let d = angle_delta(
+        ps.prone_direction_pitch,
+        view_pitch,
+        delta_stored(ps.rules, world),
+    );
     ps.prone_torso_pitch = if d < -PRONE_PITCHCAP {
         view_pitch - PRONE_PITCHCAP
     } else if d > PRONE_PITCHCAP {
@@ -3084,14 +3088,14 @@ pub fn pitch_for_yaw_on_normal(yaw_deg: f32, normal: Vec3) -> f32 {
 /// onto the cap through `delta_angles` and placed at `facing -/+ cap`,
 /// through `AngleNormalize360` on 1.1 and `AngleNormalize360Accurate` on
 /// 1.5 and UO (cod11-mantle.md, "The ladder yaw cap").
-fn cap_ladder_yaw(ps: &mut PlayerState) {
+fn cap_ladder_yaw(ps: &mut PlayerState, world: &MoveWorld) {
     if !ps.on_ladder || ps.on_ground {
         return;
     }
     let d = angle_delta(
         ladder_facing(ps.ladder_normal, ps.rules),
         view_deg(ps.yaw),
-        ps.rules,
+        delta_stored(ps.rules, world),
     );
     if d.abs() <= LADDER_YAWCAP {
         return;
@@ -3143,13 +3147,17 @@ fn update_prone_view(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, d
             prone && !ps.deployed(),
             prone && !lmg,
         );
-        cap_prone_pitch(ps);
+        cap_prone_pitch(ps, world);
         return;
     }
     let view = view_deg(ps.yaw);
     // `AngleNormalize180(AngleDelta(..))` (0x3306d, 0x3307b): folded through the
     // shorts twice, so the cap's push below truncates what retail's does.
-    let delta = angle_normalize180(angle_delta(ps.prone_direction, view, ps.rules));
+    let delta = angle_normalize180(angle_delta(
+        ps.prone_direction,
+        view,
+        delta_stored(ps.rules, world),
+    ));
     // The body turns past the soft edge, and inside it whenever the player
     // moves (0x330bd), and only into a direction it still fits in.
     let moving = input.forward != 0.0 || input.right != 0.0;
@@ -3189,7 +3197,7 @@ fn update_prone_view(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, d
         ps.view_capped[1] = Some(yaw);
         ps.yaw = view_rad(yaw);
     }
-    cap_prone_pitch(ps);
+    cap_prone_pitch(ps, world);
 }
 
 /// The prone pitch cap (1.1 0x33295.., 1.5 0x26ba0..): the view pitch no
@@ -3197,9 +3205,13 @@ fn update_prone_view(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, d
 /// `AngleDelta` on both. 1.1 places the view through the short-truncating
 /// `AngleNormalize180` (0x33346), 1.5 and UO through
 /// `AngleNormalize180Accurate` (cod11-mantle.md, "AngleDelta").
-fn cap_prone_pitch(ps: &mut PlayerState) {
+fn cap_prone_pitch(ps: &mut PlayerState, world: &MoveWorld) {
     let view_pitch = view_deg(-ps.pitch);
-    let d = angle_delta(ps.prone_torso_pitch, view_pitch, ps.rules);
+    let d = angle_delta(
+        ps.prone_torso_pitch,
+        view_pitch,
+        delta_stored(ps.rules, world),
+    );
     if d.abs() > PRONE_PITCHCAP {
         ps.view_pitch_correction = d - PRONE_PITCHCAP.copysign(d);
         let at = ps.prone_torso_pitch - PRONE_PITCHCAP.copysign(d);
@@ -3246,13 +3258,13 @@ impl ProneCone {
 
     /// `angles` held inside the cone, wire degrees.
     pub fn hold(self, mut angles: [f32; 3]) -> [f32; 3] {
-        let d = angle_normalize180(angle_delta(self.direction, angles[1], self.rules));
+        let d = angle_normalize180(angle_delta(self.direction, angles[1], self.rules.v15()));
         if d > 45.0 {
             angles[1] = short_normalize360(f64::from(self.direction - 45.0));
         } else if d < -45.0 {
             angles[1] = short_normalize360(f64::from(self.direction + 45.0));
         }
-        let d = angle_normalize180(angle_delta(self.torso_pitch, angles[0], self.rules));
+        let d = angle_normalize180(angle_delta(self.torso_pitch, angles[0], self.rules.v15()));
         if d > 45.0 {
             angles[0] = short_normalize180(f64::from(self.torso_pitch - 45.0));
         } else if d < -15.0 {
@@ -3469,7 +3481,7 @@ fn update_prone_pitch(ps: &mut PlayerState, world: &MoveWorld, dt: f32, events: 
     // shorts; 1.5 and UO through `AngleNormalize180Accurate` (0x2709a)
     // (cod11-mantle.md, "The prone pitches").
     let ease = |cur: f32, target: f32| {
-        let d = angle_delta(target, cur, rules);
+        let d = angle_delta(target, cur, delta_stored(rules, world));
         if d == 0.0 {
             return cur;
         }
@@ -4285,13 +4297,20 @@ fn vectoyaw(v: Vec3) -> f64 {
 /// `AngleDelta`: `a - b` through a truncated 16-bit angle, in -180..180.
 /// 1.1d's (0x3ec9c) subtracts on the x87 stack; 1.5b's (0x36c0a) and UO's
 /// (0x3de5a) store the float difference and call `AngleNormalize180`, which
-/// truncates the same way (cod11-mantle.md, "AngleDelta").
-pub(crate) fn angle_delta(a: f32, b: f32, rules: MoveRules) -> f32 {
-    if rules.v15() {
+/// truncates the same way, and so does every Windows cgame, whose
+/// `AngleNormalize180` takes the difference as a float argument
+/// ([`delta_stored`]; cod11-mantle.md, "AngleDelta").
+pub(crate) fn angle_delta(a: f32, b: f32, stored: bool) -> f32 {
+    if stored {
         short_normalize180(f64::from(a - b))
     } else {
         short_normalize180(f64::from(a) - f64::from(b))
     }
+}
+
+/// Whether this build's `AngleDelta` stores the difference: any but 1.1d's.
+fn delta_stored(rules: MoveRules, world: &MoveWorld) -> bool {
+    rules.v15() || world.world.arith() == crate::patch::Arith::Msvc
 }
 
 fn clamp_movement_dir(deg: i32, cap: i32) -> i32 {
@@ -4876,7 +4895,11 @@ fn ladder_move(
     // is 75 degrees, not the 90 the ground path uses. `AngleDelta` (0x33daa)
     // truncates to a short before the `(int)` takes the degree.
     ps.movement_dir = clamp_movement_dir(
-        angle_delta(ladder_facing(normal, ps.rules), view_deg(ps.yaw), ps.rules) as i32,
+        angle_delta(
+            ladder_facing(normal, ps.rules),
+            view_deg(ps.yaw),
+            delta_stored(ps.rules, world),
+        ) as i32,
         LADDER_MOVEMENT_DIR_CAP,
     );
 }
@@ -6851,6 +6874,8 @@ mod tests {
     /// reads 45 and holds nothing.
     #[test]
     fn the_prone_pitch_cap_measures_in_whole_shorts() {
+        let w = flat();
+        let w = MoveWorld::bare(&w);
         for rules in [MoveRules::V1_1, MoveRules::V1_5, MoveRules::Uo] {
             let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
             ps.rules = rules;
@@ -6858,7 +6883,7 @@ mod tests {
             ps.prone_torso_pitch = -0.003;
             // 45 down on the wire, 8192 shorts.
             ps.pitch = -view_rad(45.0);
-            cap_prone_pitch(&mut ps);
+            cap_prone_pitch(&mut ps, &w);
             assert_eq!(ps.view_pitch_correction, 0.0, "{rules:?}");
             assert_eq!(ps.view_capped[0], None, "{rules:?}");
         }
@@ -6898,8 +6923,26 @@ mod tests {
 
         ps.rules = MoveRules::V1_5;
         ps.pitch = -view_rad(10923.0 * (360.0 / 65536.0));
-        cap_prone_pitch(&mut ps);
+        cap_prone_pitch(&mut ps, &w);
         assert_eq!(ps.view_capped[0], Some(-4.1f32 + 45.0));
+    }
+
+    /// The 1.1 cgame passes `AngleNormalize180` the difference as a float
+    /// argument (cgame_mp_x86.dll 0x30007925-0x3000792b); 1.1d's
+    /// `AngleDelta` keeps it on the x87 stack (0x3ec9c). Here the kept
+    /// difference truncates to 1295 shorts and the float one rounds up to
+    /// 1296, so the Windows predictor reads a short more than the server.
+    #[test]
+    fn the_windows_1_1_predictor_stores_the_angle_delta() {
+        let w = flat();
+        let (a, b) = (-3.867_187_7_f32, -10.986_328_f32);
+        let short = |n: f32| n * (360.0 / 65536.0);
+        let delta = |w: &CollisionWorld| {
+            angle_delta(a, b, delta_stored(MoveRules::V1_1, &MoveWorld::bare(w)))
+        };
+        assert_eq!(delta(&w), short(1295.0), "1.1d");
+        w.set_arith(crate::patch::Arith::Msvc);
+        assert_eq!(delta(&w), short(1296.0), "the 1.1 cgame");
     }
 
     /// `PM_LadderMove` (0x33daa) takes the legs' angle off `AngleDelta`
@@ -6925,13 +6968,15 @@ mod tests {
     /// ground, or inside the cap, it stays (mp_ship-dm-ladder-turn*.txt).
     #[test]
     fn a_climber_looking_away_is_held_100_off_the_rungs() {
+        let w = crate::collision::test_world(&[]);
+        let w = MoveWorld::bare(&w);
         let at = |yaw: f32, ground: bool, rules: MoveRules| {
             let mut ps = PlayerState::spawn(Vec3::ZERO, yaw);
             ps.rules = rules;
             ps.on_ladder = true;
             ps.on_ground = ground;
             ps.ladder_normal = -Vec3::Y;
-            cap_ladder_yaw(&mut ps);
+            cap_ladder_yaw(&mut ps, &w);
             (ps.view_yaw_correction, ps.view_capped[1])
         };
         let (c, yaw) = at(200.0, false, MoveRules::V1_1);

@@ -658,7 +658,19 @@ pub fn bullet_fire(
     };
     let pass = Pass::client(shooter, sims);
     fire_round(
-        shooter, pass, muzzle, end, forward, round, sims, targets, world, models, hitlocs, bones,
+        shooter,
+        pass,
+        muzzle,
+        end,
+        forward,
+        round,
+        sims,
+        targets,
+        world,
+        models,
+        hitlocs,
+        bones,
+        Some(rng),
     )
 }
 
@@ -861,6 +873,7 @@ pub fn bullet_fire_to(
     };
     fire_round(
         shooter, pass, muzzle, end, forward, round, sims, targets, world, models, hitlocs, bones,
+        None,
     )
 }
 
@@ -955,9 +968,9 @@ struct Round<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct UoRound {
     pub weapon: i32,
-    /// The caller's `g_tracerChance(LMG)` roll came up: the first leg's
-    /// player hit or miss draws a tracer.
-    pub tracer: bool,
+    /// `g_tracerChanceLMG` for an `lmg`/`hmg`/`umg` gun, else
+    /// `g_tracerChance`: what each leg's tracer roll is under.
+    pub tracer_chance: f32,
 }
 
 /// `(int)(damage * multiplier)`: `G_Damage` multiplies on the x87 stack and
@@ -975,7 +988,8 @@ pub(crate) fn located_damage(damage: i32, multiplier: f32) -> i32 {
 /// any other surface, on nothing, on a halving that leaves no damage, or
 /// after 13 legs. A UO round's damage first takes its weapon's falloff over
 /// the leg, and its halving halves that (game.mp.uo 0x7a920); a UO model
-/// it meets (a vehicle) takes `G_Damage` and stops it.
+/// it meets (a vehicle) takes `G_Damage` and stops it. A UO round rolls its
+/// tracer off `rng` on each leg that may draw one (coduo-diff.md 21).
 #[allow(clippy::too_many_arguments)]
 fn fire_round(
     shooter: usize,
@@ -990,6 +1004,7 @@ fn fire_round(
     models: &[PlacedModel],
     hitlocs: &HitLocTable,
     mut bones: Option<&mut BoneTraceCtx>,
+    mut rng: Option<&mut u64>,
 ) -> ShotResult {
     let mut out = ShotResult::default();
     let priority = if round.rifle_bullet {
@@ -1004,20 +1019,26 @@ fn fire_round(
     };
     let (mod_, dflags) = bullet_mod(round.rifle_bullet);
     let (mut start, mut pass, mut damage) = (muzzle, pass, round.damage);
-    let tracer = |to: Vec3, weapon: i32| {
-        Effect::Impact(TempEntity {
-            event: vcod_common::net::event_ids::EV_BULLET_TRACER,
-            parm: weapon,
-            surf_type: 0,
-            other: 0,
-            attacker: 0,
-            weapon: 0,
-            origin: muzzle.into(),
-            client_num: 0,
-            scale: 0,
-            scope: Scope::Pvs,
-            quake: None,
-            origin2: Some(to.into()),
+    // `EV_BULLET_TRACER` from the leg's start, drawn when `g_tracerChance`
+    // beats the leg's `rand()` (0x7adb7, 0x7aeb1).
+    let mut tracer = |from: Vec3, to: Vec3| {
+        let u = round.uo?;
+        let drawn = crate::game::host::rand_unit(rng.as_deref_mut()?) < u.tracer_chance;
+        drawn.then(|| {
+            Effect::Impact(TempEntity {
+                event: vcod_common::net::event_ids::EV_BULLET_TRACER,
+                parm: u.weapon,
+                surf_type: 0,
+                other: 0,
+                attacker: 0,
+                weapon: 0,
+                origin: from.into(),
+                client_num: 0,
+                scale: 0,
+                scope: Scope::Pvs,
+                quake: None,
+                origin2: Some(to.into()),
+            })
         })
     };
     // A UO round draws its impact only on a leg whose pass entity is the
@@ -1046,12 +1067,11 @@ fn fire_round(
             origin2: None,
         })
     };
-    let mut first = true;
     for _ in 0..=MAX_BULLET_DEPTH {
-        let tracing = std::mem::replace(&mut first, false)
-            .then_some(round.uo)
-            .flatten()
-            .filter(|u| u.tracer);
+        // A surface with no impact draws the tracer instead, on a leg from
+        // the shooter only (0x7ac3f-0x7ac57, then 0x7ad40); so does a miss
+        // (0x7ae38). A player hit draws one on any leg.
+        let from_shooter = pass.ent == shooter as u32;
         let traced = trace_attack(
             start,
             end,
@@ -1077,9 +1097,7 @@ fn fire_round(
                 point,
                 ..
             } => {
-                if let Some(u) = tracing {
-                    out.effects.push(tracer(point, u.weapon));
-                }
+                out.effects.extend(tracer(start, point));
                 let dealt = leg_damage(start, point, damage);
                 if dealt <= 0 {
                     break;
@@ -1116,8 +1134,8 @@ fn fire_round(
                 takes_damage,
             } => {
                 let point = start + (end - start) * fraction;
-                if let Some(u) = tracing {
-                    out.effects.push(tracer(point, u.weapon));
+                if surface_flags & SURF_NO_IMPACT != 0 && from_shooter {
+                    out.effects.extend(tracer(start, point));
                 }
                 if surface_flags & SURF_NO_IMPACT == 0 && draws_impact(&pass) {
                     out.effects
@@ -1142,6 +1160,9 @@ fn fire_round(
                 break;
             }
             Traced::World(t) => {
+                if t.surface_flags & SURF_NO_IMPACT != 0 && from_shooter {
+                    out.effects.extend(tracer(start, t.endpos));
+                }
                 if t.surface_flags & SURF_NO_IMPACT == 0 && draws_impact(&pass) {
                     out.effects
                         .push(impact(t.endpos, t.normal, t.surface_flags, start));
@@ -1190,8 +1211,8 @@ fn fire_round(
                 break;
             }
             Traced::Nothing => {
-                if let Some(u) = tracing {
-                    out.effects.push(tracer(end, u.weapon));
+                if from_shooter {
+                    out.effects.extend(tracer(start, end));
                 }
                 break;
             }
@@ -3507,6 +3528,66 @@ mod tests {
     /// the player it hit, at half its damage, into the next player and then
     /// the wall behind; a pistol round stops on the first player, and so
     /// does a rifle round whose halving leaves nothing.
+    /// A UO round rolls its tracer on every leg that may draw one
+    /// (coduo-diff.md 21): through B into C both player hits draw, each from
+    /// its own leg's start, and the miss past B draws none, its pass entity
+    /// being B. A miss from the shooter draws one to the round's end.
+    #[test]
+    fn a_uo_round_rolls_its_tracer_on_each_leg() {
+        let a = new_for_test([0.0, 0.0, 0.0], 0.0);
+        let b = new_for_test([100.0, 0.0, 0.0], 180.0);
+        let c = new_for_test([200.0, 0.0, 0.0], 180.0);
+        let open = vcod_common::collision::test_world(&[]);
+        let table = HitLocTable::default();
+        let round = UoRound {
+            weapon: 7,
+            tracer_chance: 1.0,
+        };
+        let mut def = zero_spread_carbine();
+        def.damage_inner_radius = 1000;
+        def.damage_outer_radius = 5000;
+        let fire_uo = |sims: &[(usize, &ClientSim)], rng: &mut u64| {
+            let ps = &sims[0].1.ps;
+            bullet_fire(
+                0,
+                &def,
+                "m1carbine_mp",
+                Some(round),
+                false,
+                &SpreadStance::of(ps, 0, 0),
+                [-ps.pitch.to_degrees(), ps.yaw.to_degrees()],
+                sims,
+                &[],
+                Some(&open),
+                &[],
+                &table,
+                None,
+                rng,
+            )
+        };
+        let tracers = |r: &ShotResult| -> Vec<(f32, f32)> {
+            r.impacts()
+                .filter(|te| te.event == vcod_common::net::event_ids::EV_BULLET_TRACER)
+                .map(|te| (te.origin[0], te.origin2.unwrap()[0]))
+                .collect()
+        };
+        let mut rng = 1u64;
+        let r = fire_uo(&[(0, &a), (1, &b), (2, &c)], &mut rng);
+        let got = tracers(&r);
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert!((got[0].1 - 85.0).abs() < 0.01, "A to B: {got:?}");
+        assert!((got[1].0 - 85.0).abs() < 0.01, "B to C: {got:?}");
+        assert!((got[1].1 - 185.0).abs() < 0.01, "B to C: {got:?}");
+
+        let r = fire_uo(&[(0, &a), (1, &b)], &mut rng);
+        assert_eq!(tracers(&r).len(), 1, "B's hit, not the miss past him");
+
+        let r = fire_uo(&[(0, &a)], &mut rng);
+        let got = tracers(&r);
+        assert_eq!(got.len(), 1, "the miss from the shooter");
+        assert!(got[0].1 > 1000.0, "{got:?}");
+    }
+
     #[test]
     fn a_rifle_round_passes_through_a_player_at_half_damage_and_a_pistol_round_stops() {
         let a = new_for_test([0.0, 0.0, 0.0], 0.0);

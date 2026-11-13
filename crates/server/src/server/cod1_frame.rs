@@ -850,9 +850,9 @@ impl Cod1Module {
                 );
                 rt.set_client_body(slot, sim.hit_body(slot));
                 rt.set_client_dobj(slot, sim.dobj(slot));
-                if rt.apply_turret_releases(slot, sim) {
-                    rt.teleport_link(slot, sim);
-                }
+                // A gun freed this frame linked its gunner in the freeing
+                // thread (`GameHost::free_entity`); only the sim half is left.
+                rt.apply_turret_releases(slot, sim);
                 let shot = rt.turret_think_client(
                     slot,
                     sim,

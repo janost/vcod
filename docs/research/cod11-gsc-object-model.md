@@ -1878,7 +1878,7 @@ The capsule variant, `game.mp.i386.so` and `cod_lnxded` (1.1d):
 vcod tests a client's side as a capsule against a trigger's brushes
 (`trigger::capsule_contacts_hulls`) and a client against a client as capsule
 against capsule (`trigger::capsules_overlap`). Two other non-brush sides stay
-a box overlap, which matches retail for a capsule against a box (all axial
+a box overlap once the argument's contents pass (below), which matches retail for a capsule against a box (all axial
 sides). VERIFIED, a grep of the stock paks' `maps/MP` scripts: their
 `istouching` calls are a player against a trigger (`sd.gsc`, `re.gsc`,
 `_minefields.gsc`), never player against player.
@@ -1899,6 +1899,19 @@ The capsule pair, `cod_lnxded` (1.1d):
   `p1 <= z <= p2` and never passes, this tests the centres' gap.
 - INFERRED: the trace's own capsule is built from the receiver's box as Q3's
   `CM_Trace` does (0x8056310's `local_f4` / `local_1c` setup has that shape).
+- VERIFIED, decompile: a box model (0x1ff) goes to 0x8054648, the leaf
+  brush walk, which skips a brush whose contents (`+0x0`) miss the mask
+  (`*puVar2 & tw->contents`). `CM_TempBoxModel` writes the entity's
+  `r.contents` into that brush (`*DAT_0831b27c = param_3`). So any argument
+  that is no brush model, client or not, is touched only when its
+  `r.contents` is non-zero: a `spawn("script_origin")` (contents 0) never
+  is, a `script_model` (0x2080) is. VERIFIED, `game.mp.i386.so` 0x5a06c-
+  0x5a09c: the receiver's box goes first and the argument second, so it is
+  the argument's contents that count. Two brush models (0x59fa4, 0x59fb1)
+  take the plain box overlap with no contents test. vcod checked the
+  argument's contents only for a client pair until 2026-11-13; it now tests
+  them for every non-brush argument (`trigger::entity_contact`), and the
+  argument's `r.contents` there is the area tree's (0 when unlinked).
 
 ### 22.3 A client's `r.mins`/`r.maxs` follow the stance
 

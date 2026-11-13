@@ -7968,9 +7968,15 @@ The other walks and links:
   off those branches: a turret's release, from `turret_think_client` in the gunner's end frame
   or from `G_FreeTurret`, files him at the mount spot, at the head of his
   node's list, ahead of his next cmd's link. vcod links there
-  (`ScriptRuntime::teleport_link`); a `G_FreeTurret` release links in
-  the gunner's end frame, where vcod applies it, not in the deleting
-  thread. `ClientSpawn`'s release (0x426e1) is followed by its own unlink
+  (`ScriptRuntime::teleport_link`). VERIFIED, `game.mp.i386.so`:
+  `G_FreeTurret` (0x5297c) calls `TeleportPlayer` itself (0x52a0f), after
+  the gunner's stance event (`G_AddEvent`, 0x529f1). So a `G_FreeTurret`
+  release links in the freeing thread (`GameHost::free_entity`, since 2026-11-13; it used to
+  wait for the gunner's end frame), so the rest of that frame's script and
+  entity pass read him at the mount spot; the sim half (stance event,
+  teleport events, the lock let go) still lands at his end frame, with no
+  second link. INFERRED: no cmd of his runs between, as cmds run outside
+  `G_RunFrame`. `ClientSpawn`'s release (0x426e1) is followed by its own unlink
   (0x42708) and the spawn's link, so vcod skips it there. 1.5b's and UO's
   extra block after the lift tests `eFlags | 0xc000` (1.5b 0x50e44),
   never zero, so it never runs. `turret_ab`'s

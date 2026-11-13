@@ -2390,9 +2390,31 @@ carriers against the section 19 captures.
   `g_tracerChanceLMG` for an `lmg`/`hmg`/`umg` `ammoType` (the 0xab50c enum,
   def +0x90), else `g_tracerChance`. The return is whether anything was
   raised (VERIFIED decompile). vcod's player rounds carry the weapon and
-  reflection (the bipod gate's 36 impacts) and roll the tracer once a shot,
-  for its first leg's player hit or miss; retail rolls once a leg, which
-  differs only for a round through a body (INFERRED).
+  reflection (the bipod gate's 36 impacts).
+- The tracer roll is per leg, inside `Bullet_Fire_Extended` after the
+  trace. VERIFIED, disassembly of `game.mp.uo.i386.so`:
+  - a hit whose surface has `SURF_NOIMPACT` (`surfaceFlags & 4`, 0x7ac3f)
+    or whose entity has a client (`ent+0x160`, 0x7ac50; `ClientThink`
+    reads `client` there, 0x41d3e) skips the world impact for 0x7ad40,
+    which rolls when the pass entity is the attacker (`param_1 ==
+    param_2`) or the entity has a client (0x7ad40-0x7ad54);
+  - a miss (fraction not under 1, 0x7aa76-0x7aa86) rolls only when the
+    pass entity is the attacker (0x7ae38-0x7ae3e);
+  - the roll is `rand()` over 2^31 (0x7adb7, 0x7aeb1; `.rodata` 0xa5f44)
+    against `g_tracerChance`, or `g_tracerChanceLMG` for ammo types 3..5
+    (`weaponDef+0x90`, 0x7ad85-0x7ad9d); the tracer starts at the leg's
+    start (`param_3`, which the glass leg moves past the pane in place,
+    0x7b00a-0x7b03a) and ends at the hit point or, on a miss, the end
+    (0x7aef1-0x7af0f);
+  - the glass recursion (0x7b074) keeps the pass entity, the body one
+    (0x7b29f) passes the struck entity.
+  INFERRED, off that control flow: a round through a body draws a tracer
+  at each player it meets, none
+  on its miss past the body, and one on a miss or a no-impact surface past
+  glass. A world or model hit with an impact draws none. vcod rolled once a
+  shot, for the first leg's player or model hit or miss, until 2026-11-13;
+  `combat::fire_round` now rolls on each leg as above
+  (`a_uo_round_rolls_its_tracer_on_each_leg`).
 - **Falloff.** Each leg's damage is `Damage_Falloff` (0x7a7f8) of the leg's
   length (`VectorDistance(start, endpos)`) off the weapon's
   `minDamagePercent`, `damageInnerRadius` and `damageOuterRadius` (def

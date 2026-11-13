@@ -1649,15 +1649,10 @@ impl ScriptRuntime {
     }
 
     /// The sim half of every release `GameHost::free_entity` queued for
-    /// `slot` (`G_FreeTurret`, turrets doc 8), each temp entity queued.
-    /// Whether there was one.
-    pub fn apply_turret_releases(
-        &mut self,
-        slot: usize,
-        sim: &mut crate::spectate::ClientSim,
-    ) -> bool {
+    /// `slot` (`G_FreeTurret`, turrets doc 8), each temp entity queued. The
+    /// link was the freeing thread's.
+    pub fn apply_turret_releases(&mut self, slot: usize, sim: &mut crate::spectate::ClientSim) {
         let ops = std::mem::take(&mut self.host.turret_ops);
-        let mut released = false;
         for op in ops {
             match op {
                 TurretOp::Release {
@@ -1669,12 +1664,10 @@ impl ScriptRuntime {
                         self.push_temp_entity(te);
                     }
                     self.set_client_origin(slot, sim.origin());
-                    released = true;
                 }
                 op => self.host.turret_ops.push(op),
             }
         }
-        released
     }
 
     /// Drops the releases queued for a slot with no sim to apply them to.
@@ -6513,6 +6506,37 @@ mod tests {
     fn a_usable_turret_hints_mg42_with_its_hint_string_slot() {
         let (mut rt, _) = turret_rig();
         assert_eq!(rt.cursor_hint_pass(0, EYE, AT_GUN), (6, Some(0)));
+    }
+
+    /// `G_FreeTurret`'s `TeleportPlayer` runs in the freeing thread (combat
+    /// doc 14.7): the gunner is linked a unit above his mount spot and the
+    /// script reads him there before his end frame applies the sim half.
+    #[test]
+    fn freeing_a_manned_gun_links_its_gunner_at_once() {
+        use vcod_gsc::Host;
+        let (mut rt, gun) = turret_rig();
+        let rec = rt.host.turrets.get_mut(&gun).unwrap();
+        rec.owner = Some(0);
+        rec.busy = 1;
+        rec.mount_origin = [10.0, 20.0, 0.0];
+        let gunner_box = rt.host.client_box(0);
+        rt.host
+            .link_client(0, [30.0, 0.0, 0.0], gunner_box, 0x0200_0000, true);
+        rt.host.free_entity(gun);
+        let link = rt.host.area.last_link(0).expect("linked");
+        assert_eq!(
+            (link.absmin, link.contents),
+            ([-6.0, 4.0, 0.0], 0x0200_0000),
+            "a unit up, box and contents kept"
+        );
+        let me = rt.client_entity(0).unwrap();
+        let host = &mut rt.host;
+        let origin = rt.vm.with_cx(|cx| {
+            let f = cx.intern_folded("origin");
+            host.get_field(cx, me, f)
+        });
+        assert_eq!(origin, Value::Vector([10.0, 20.0, 1.0]));
+        assert_eq!(rt.host.client_link_origin[0], [10.0, 20.0, 1.0]);
     }
 
     /// The server drains each cmd's mount before the next cmd's pass, so the

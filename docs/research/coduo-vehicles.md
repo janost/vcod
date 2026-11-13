@@ -2382,6 +2382,34 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   (`vehiclepose::posed_collision`) for every shot, swing, missile step and
   blast probe, and `vehicle_hits_ab` matches all four within a fifth of
   retail's notify count with retail's amounts.
+- **The shooter's phase.** VERIFIED, vcod measurement, 2026-11-13 (24
+  `test_seed_rng` seeds at the UO install): with `vehicle_hits_ab` firing
+  from the first frame after the placement on even cmds, ours landed
+  front 82.3 notifies against retail's 70, rear 69.0 against 58, side 56.1
+  against 65, and its hits sat 3 to 7 units higher on every side; the rear
+  passed or failed on the RNG stream. Three harness differences from the
+  captures' recipe, each VERIFIED off the capture or the probe:
+  - the net probe's `hold` script settles 1000 ms from its spawn before it
+    sights and fires (`vehicle_probe::HOLD`); retail's first notify is
+    1050-1100 ms after the placement on all three captures, ours was 50;
+  - its cmds run on the 60 Hz grid (`ProbeHold::sixty`, cod15-movement.md
+    6), under which the stock kick settles between rounds;
+  - the gsc's `setPlayerAngles` each frame moves `ps.viewangles` to its
+    aim, and the aim block of the next cmd reads that view before the cmd
+    rebases back to the probe's held one (`ClientSim::update_aim`, combat
+    doc 15), so the first cmd after a frame aims along the gsc's angle and
+    the other two along the held view. The thompson fires every sixth cmd,
+    on the phase its press fell on. Ours pressed on the first cmd of a
+    frame's batch and every round left 3.2 degrees above the held view
+    (pitch 3.4 against 6.6 on the side), over the Willys's door cutout.
+    Retail's side hits sit at z -79.6, the held view's line at the near
+    panel -79.8, the gsc's -66. INFERRED: retail's press fell on a later
+    cmd of its frame.
+  With the three in the gate (the press on its batch's second cmd), ours
+  reads front 70 (retail 70), rear 53-66 (58), side 69-70 (65) over the
+  seeds, and the hits' mean z front -70.8 (-70.9), side -80.1 (-79.6),
+  rear -63.9 (-66.9). INFERRED: the earlier offsets were the harness's,
+  not the server's.
 - **A shell on a hull.** `G_MissileImpact` (0x5db67) runs `G_Damage` on a
   struck entity that takes damage: `Damage_Falloff` of the shell's flight
   distance, truncated (0x5de9d), the flight velocity as the direction, the

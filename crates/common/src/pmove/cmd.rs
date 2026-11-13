@@ -131,7 +131,8 @@ fn clamp_view(
             if arc.abs() < 1.0 {
                 continue;
             }
-            let d = super::angle_delta(seat.angles[i], view[i], ps.rules);
+            // A seat is UO's, whose difference is stored.
+            let d = super::angle_delta(seat.angles[i], view[i], true);
             if arc.abs() >= d.abs() {
                 continue;
             }
