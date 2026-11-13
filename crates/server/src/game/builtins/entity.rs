@@ -1931,6 +1931,39 @@ mod tests {
         });
     }
 
+    /// A non-brush argument is contacted through its temp box model, whose
+    /// `r.contents` must meet the mask of -1 (`cod_lnxded` 0x8054648,
+    /// object-model doc 22.2): a player standing on a `script_origin`
+    /// (contents 0) is not touching it, on a `script_model` (0x2080) is.
+    #[test]
+    fn is_touching_a_non_brush_partner_needs_its_contents() {
+        let (mut vm, mut host) = crate::game::testing_world_fixture();
+        vm.with_cx(|cx| {
+            let origin = cx.intern_folded("origin");
+            let player = host.ents.spawn_client(cx, 0, None).unwrap();
+            host.set_field(cx, player, origin, Value::Vector([0.0; 3]))
+                .unwrap();
+            let prop = host.ents.spawn(cx).unwrap();
+            host.set_field(cx, prop, origin, Value::Vector([4.0, 0.0, 8.0]))
+                .unwrap();
+            let touching = |host: &mut GameHost, cx: &mut Cx| {
+                is_touching(
+                    host,
+                    cx,
+                    Some(Target::Entity(player)),
+                    &[Value::Entity(prop)],
+                )
+            };
+            assert_eq!(touching(&mut host, cx), Ok(Value::Int(0)), "contents 0");
+            crate::game::spawn::link_script_model(&mut host, cx, prop);
+            assert_eq!(
+                touching(&mut host, cx),
+                Ok(Value::Int(1)),
+                "contents 0x2080"
+            );
+        });
+    }
+
     /// A client's side of `istouching` is the stance box its last cmd left
     /// in `r.maxs` (object-model doc 22.3): a trigger 60 up meets a
     /// standing player only, and a player stacked 60 over a crouched or

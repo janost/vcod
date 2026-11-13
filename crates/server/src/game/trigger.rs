@@ -1049,10 +1049,22 @@ pub fn entity_contact(host: &mut GameHost, cx: &mut Cx, a: EntId, b: EntId) -> b
             let ba = abs_bounds_with_atom(host, cx, a, origin_atom);
             let bb = abs_bounds_with_atom(host, cx, b, origin_atom);
             let is_client = |id: EntId| host.ents.get(id).is_some_and(|e| e.client.is_some());
+            if ma.is_some() {
+                return boxes_overlap(ba, bb);
+            }
+            // The argument's temp box or capsule model carries its
+            // `r.contents`, which the contact's mask of -1 must meet: a
+            // `script_origin` or a dead client is never touched (22.2). A
+            // brush model's inline model has its brushes' own contents.
+            let bmodel = host
+                .ents
+                .get(b)
+                .is_some_and(|e| e.brush_model.is_some_and(|n| n > 0));
+            if !bmodel && host.area.contents(b.0) == 0 {
+                return false;
+            }
             if is_client(a) && is_client(b) {
-                // The other's temp capsule model carries its `r.contents`,
-                // tested against the contact's mask of -1 first.
-                return host.area.contents(b.0) != 0 && capsules_overlap(ba, bb);
+                return capsules_overlap(ba, bb);
             }
             return boxes_overlap(ba, bb);
         }
