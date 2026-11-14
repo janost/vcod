@@ -189,8 +189,8 @@ impl Cod4Level {
                 continue;
             };
             let origin = origins.get(&slot).copied().unwrap_or(ps.origin);
-            let lo = origin + Vec3::new(-31.0, -31.0, -16.0);
-            let hi = origin + Vec3::new(31.0, 31.0, 86.0);
+            let lo = origin + super::combat::HIT_BROAD_MINS;
+            let hi = origin + super::combat::HIT_BROAD_MAXS;
             if !segment_meets_box(start, end, lo, hi, fraction) {
                 continue;
             }
