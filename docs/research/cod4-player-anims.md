@@ -337,10 +337,44 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
 - 1.7 turns a player's six control bones in `tag_origin`'s frame,
   `r * c * r^-1 * p`, the anim's own turn of each dropped
   (`DObjCalcSkel`'s second arm, cod4-gsc.md 3.2, "The skeleton").
-  VERIFIED (gdb). The server's hit poses compose them so
-  (`combat::skel_mats`); the client's drawn bodies still turn them in the
-  model's frame, CoD1's (`apply_controllers`), which reads the same while
-  the legs face the view and differs by the legs' yaw off it. INFERRED.
+  VERIFIED (gdb). CoD1 turned them in the model's frame
+  (`apply_controllers`), which reads the same while the legs face the view
+  and moves the head by the legs' yaw off it: 5 units on a body strafing 45
+  degrees and aiming 30 down. VERIFIED (the test below).
+- `iw3mp.exe`'s cgame controller (0x432b50) eases the controls through
+  `BG_Player_DoControllers` (0x407250: the targets off 0x406a60, then the
+  six spine and head angles at `clientInfo_t` +0x3f8 and `tag_origin`'s at
+  +0x440 through `BG_LerpAngles` 0x4070a0, its translation at +0x44c
+  through 0x407150) and keeps the six bones' indices (names at 0x729c10)
+  and a pointer to the angles on the centity (+0x44, +0x40). VERIFIED (the
+  instructions). 0x446280 sets them on the skeleton as `cod4_lnxded`'s
+  0x81b01e8 does: each bone's bits at skeleton +0x24 and +0x14, its local
+  `AnglesToQuat` (0x580a40) with no translation and weight 0; then bone 0
+  off `tag_origin`'s angles and translation, the +0x14 bit alone.
+  VERIFIED (the instructions). `BG_LerpAngles` steps each component by at
+  most the float step, `d` the stored difference: `step < d` adds it, `d <
+  -step` takes it off, else the target (0x4070af..0x4070d5); ours is
+  `Controllers::ease_toward`. VERIFIED (the instructions).
+- `iw3mp.exe`'s `DObjCalcSkel` composes the roots at 0x57f550, an attached
+  model's roots at 0x57f660 and every other bone at 0x57fbd0, which adds
+  the model's `trans` to the local's (0x57ff70..0x57ff8e) and tests the
+  control bit at 0x57fcb0. Its control arm (0x57fd4e..0x57ff15) is
+  `r^-1 * p`, then `l * m`, then `r * t`, each component summed in
+  `cod4_lnxded`'s order; the weight `2 / |q|^2` and the translation follow
+  the first arm's sums, as on the server. VERIFIED (the instructions).
+  `AnglesToQuat` takes its half angles off the float `M_PI / 360`
+  (0x70b298) through `fsincos` and stores its four products. VERIFIED (the
+  instructions). With the x87 at single precision every result is a
+  float. INFERRED (cod4-world.md, the lightgrid). The drawn bodies compose
+  so (`vcod_cod4::skel::player_mats` with `Cod4Arith::Client`); the
+  server's hit poses take the same function with `Cod4Arith::Server`.
+  Off the gdb dump's own bone 0, parents and angles, the client's
+  arithmetic lands within 1e-7 of retail's server words on all 804
+  control bones (`skel_ab`); a strafing body drawn by the client sits
+  within 2e-5 units of the server's arithmetic on every bone
+  (`a_drawn_bodys_control_bones_turn_as_the_servers`). VERIFIED (the
+  tests). That the client's words match `iw3mp.exe`'s is INFERRED (no
+  client dump).
 - The cgame lerps a player's `leanf` and `movementDir` between the two
   snapshots with its angles, each difference wrapped through `floor`
   (`CG_InterpolateEntityPosition`). INFERRED. vcod lerps them too; the
