@@ -89,6 +89,14 @@ impl ReadLog {
             .collect()
     }
 
+    /// Logs `paths`, each a key another log took, as read.
+    pub fn note_all(&self, paths: &[String]) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend(paths.iter().cloned());
+    }
+
     fn note(key: &str) {
         READ_LOG.with(|l| {
             if let Some(log) = l.borrow().as_ref() {

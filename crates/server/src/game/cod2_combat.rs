@@ -391,11 +391,28 @@ impl Combat {
         while self.weapons.len() <= host.cod2().weapons.len() {
             let index = self.weapons.len();
             let name = &host.cod2().weapons[index - 1];
-            let params = match vcod_cod2::weapon::load(fs, name) {
-                Ok(p) => {
+            // The file's parse a level over the same paks made, its two
+            // reads touched as a read's (cod4-server-frame.md 9.1).
+            let file = host.cod2().weapon_files.file(name);
+            let def = match file.and_then(|f| f.cod2_def.get()) {
+                Some(def) => {
+                    fs.touch(&format!("weapons/mp/{name}"));
+                    fs.touch("mp/playeranimtypes.txt");
+                    Ok(def.clone())
+                }
+                None => vcod_cod2::weapon::load(fs, name).map(|p| {
+                    let def = std::rc::Rc::new(p.def);
+                    if let Some(f) = file {
+                        let _ = f.cod2_def.set(def.clone());
+                    }
+                    def
+                }),
+            };
+            let params = match def {
+                Ok(def) => {
                     let table = host.weapons.get(index);
                     Some(WeaponParams::from_def(
-                        &p.def,
+                        &def,
                         table.map_or(0, |d| d.ammo_index),
                         table.map_or(0, |d| d.clip_index),
                         table.map_or(0, |d| d.alt_index as u8),

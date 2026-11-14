@@ -167,6 +167,9 @@ pub struct Cod2Game {
     cvars: crate::cvars::Cvars,
     /// The loaded level, `None` on a bare server.
     level: Option<Cod2Level>,
+    /// The level a load replaced, dropped at the next `Cbuf_Execute` so the
+    /// load's tick does not pay for it (cod4-server-frame.md 9.1).
+    retired: Option<Cod2Level>,
     /// Where a connecting client floats until the script places it:
     /// `mp_global_intermission`'s spot and view.
     spot: (Vec3, [f32; 3]),
@@ -253,6 +256,10 @@ impl crate::engine::GameModule for Cod2Game {
     }
 
     fn drain_console(e: &mut Cod2Server, now: Instant) {
+        if e.game.retired.is_some() {
+            let _p = crate::tick_profile::phase("console/drop level");
+            e.game.retired = None;
+        }
         e.drain_console(now);
     }
 
@@ -358,6 +365,7 @@ impl Cod2Server {
                 fs: None,
                 cvars,
                 level: None,
+                retired: None,
                 spot: (Vec3::ZERO, [0.0; 3]),
                 baselines: BTreeMap::new(),
                 server_id: 0,
@@ -1725,7 +1733,7 @@ fn spectator_wire(ps: &PlayerState, slot: usize) -> PlayerState2 {
 
 /// `mp_global_intermission`'s origin and angles, else the first spawn's,
 /// else the world's middle.
-fn intermission_spot(world: &MapWorld) -> (Vec3, [f32; 3]) {
+pub(crate) fn intermission_spot(world: &MapWorld) -> (Vec3, [f32; 3]) {
     let blocks = vcod_common::bsp::entity_blocks(&world.entities);
     let find = |want: &dyn Fn(&str) -> bool| {
         blocks.iter().find_map(|b| {
