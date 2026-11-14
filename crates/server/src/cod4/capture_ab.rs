@@ -525,12 +525,11 @@ const ROCKET: Pair = Pair {
 const THROWBACK: Pair = Pair {
     // Target `--script throwback`, shooter `--script frag --aim-z -60`
     // (cod4-gsc.md 9.3): the frag lands short of the target, which takes
-    // it and throws it back. Compared to the thrown grenade's strike on
-    // the shooter at 50100, which ours misses ([`THROWBACK_GAPS`]).
+    // it and throws it back, and it strikes the shooter's head at 50100.
     name: "throwback",
     seed: 3_487_136_041,
     gsc: None,
-    until: Some(50_050),
+    until: None,
     probes: TWO,
     cvars: &[],
 };
@@ -569,10 +568,10 @@ fn pair_ab(gate: &str, pair: &Pair, gaps: &[(&str, &str)]) {
 }
 
 /// Why a dropped weapon still differs: it starts at the dying body's
-/// `tag_weapon_right` as ours poses it, which on the prone body sits 0.11
-/// over retail's and on the standing one a few thousandths off; the start
-/// is rounded on the wire, the hit's move, times 20 in `trDelta`, is not
-/// (cod4-combat.md 6.1).
+/// `tag_weapon_right` as ours poses it, which lands within a few millionths
+/// of retail's (ours poses off quaternions, 1.7 composes its skeleton's
+/// matrices); the start is rounded on the wire, the hit's move, times 20 in
+/// `trDelta`, is not (cod4-combat.md 6.1).
 const ITEM_TAG: &str = "the dying body's tag_weapon_right as ours poses it (cod4-combat.md 6.1)";
 
 /// What the rocket run still differs in.
@@ -597,20 +596,20 @@ fn cod4_rocket_ab() {
     pair_ab("cod4_rocket_ab", &ROCKET, ROCKET_GAPS);
 }
 
-/// Nothing differs up to the strike.
-const THROWBACK_GAPS: &[(&str, &str)] = &[];
+const THROWBACK_GAPS: &[(&str, &str)] = &[(
+    "* entity 317:4 lerp.pos.trDelta",
+    "the bounce off the shooter's head box, off in trDelta's third decimal \
+     as ours poses the head (cod4-combat.md 15)",
+)];
 
-/// The live frag's flight, the hint, the pickup and the throw back
-/// (cod4-gsc.md 9.3).
+/// The live frag's flight, the hint, the pickup, the throw back and its
+/// strike on the shooter's head (cod4-gsc.md 9.3, cod4-combat.md 15).
 #[test]
 fn cod4_throwback_ab() {
     pair_ab("cod4_throwback_ab", &THROWBACK, THROWBACK_GAPS);
 }
 
-const PRONE_GAPS: &[(&str, &str)] = &[
-    ("* entity 320:3 lerp.pos.trBase[2]", ITEM_TAG),
-    ("* entity 320:3 lerp.pos.trDelta", ITEM_TAG),
-];
+const PRONE_GAPS: &[(&str, &str)] = &[("* entity 320:3 lerp.pos.trDelta", ITEM_TAG)];
 
 /// A prone body's death and its corpse's torso (cod4-combat.md 5).
 #[test]

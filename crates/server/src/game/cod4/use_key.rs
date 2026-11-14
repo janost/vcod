@@ -693,9 +693,16 @@ impl Cod4Level {
                     .map_or((0, 0), |d| (l.ammoclip[d.clip_slot], l.ammo[d.ammo_slot]))
             };
             let launched = self.rt.with_host(|host, cx| {
-                crate::game::builtins::cod4_combat::launch_weapon(host, cx, slot, held, None)
-                    .ok()
-                    .flatten()
+                crate::game::builtins::cod4_combat::launch_weapon(
+                    host,
+                    cx,
+                    slot,
+                    held,
+                    None,
+                    Some(id),
+                )
+                .ok()
+                .flatten()
             });
             if let Some(d) = launched
                 && let Some(i) = self.rt.host.cod4_mut().items.iter_mut().find(|i| i.id == d)
