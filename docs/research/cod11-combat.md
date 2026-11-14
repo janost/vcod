@@ -6117,13 +6117,19 @@ snapshot early, and the wall rebound reach z -16.84 against -2.64);
 `a_frag_rests_on_a_prone_players_back_on_15` holds every snapshot of both
 frags to retail's `trType` and ground, each base within 0.3.
 
-INFERRED: the body test reads the struck entity's contents, not whether
-it is a player, so a script model a script `setContents`es to 0x2000000
-takes the soft scale too. VERIFIED, `tools/re/dump_builtins.py`: the
+VERIFIED, live (retail UO, mp_carentan, `probe_scriptmodel`'s grenade
+part with `+set probe_contents`, `mp_carentan-scriptmodel-grenade-body-uo.txt`
+and the control `-grenade-uo.txt`, 2026-11-14): the body test reads the
+struck entity's contents, not whether it is a player. The frag strikes
+the barrel at (1403.45, 2643.40) on both; off the barrel given 0x2000000
+it leaves at 4.07 a frame along -y, off the stock 0x2080 barrel at 16.27,
+a quarter, UO's soft 0.1 against its 0.4. VERIFIED, `tools/re/dump_builtins.py`: the
 method exists on all three (1.1d 0x5dcec, 1.5b 0x5dc3c, UO 0x696b9); no
 stock script passes it more than 1 (coduo-diff.md 21). vcod reads the
 struck model's link contents (`PlacedModel::body`); its bounce stays
 silent only in water and off a player, as before.
+`scriptmodel_ab::a_uo_frag_bounces_soft_off_a_script_model_with_body_contents`
+replays both runs, every frame within 0.1.
 
 **The bounce off a player.** VERIFIED, `game.mp.i386.so`, read with
 `tools/re/annotate_func.py`: `G_RunMissile` pushes `bulletPriorityMap` on
