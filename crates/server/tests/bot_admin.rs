@@ -362,22 +362,22 @@ fn vc_bot_skill_and_addbot_skill_set_the_level() {
     assert!(rcon(&mut sv, &mut now, "addbot skill").contains("usage: addbot"));
 }
 
-/// A passed `callvote map` on a server of 46 bots while both humans take
+/// A passed `callvote map` on a full server of 62 bots while both humans take
 /// 15 s to load: a loading client acknowledges nothing, and the bots'
 /// reconnect lines are prints, which a client not active is never queued
 /// (docs/protocol-1.1.md, "The server command queue"), so neither human
 /// overflows its 64 slots and both play on the new map.
 #[test]
 fn a_voted_map_change_keeps_a_slow_loading_client() {
-    let Some((mut sv, mut now)) = server("tdm", 48) else {
+    let Some((mut sv, mut now)) = server("tdm", 64) else {
         eprintln!("COD_DIR unset: skipping");
         return;
     };
     let mut humans = vec![human(0, "allies", now), human(1, "axis", now)];
     run(&mut sv, &mut humans, &mut now, 4);
-    rcon(&mut sv, &mut now, "addbot 46");
+    rcon(&mut sv, &mut now, "addbot 62");
     run(&mut sv, &mut humans, &mut now, 4);
-    assert_eq!(sv.bot_slots().len(), 46);
+    assert_eq!(sv.bot_slots().len(), 62);
     let id = sv.server_id();
     humans[0].cl.send_reliable("callvote map mp_brecourt");
     run(&mut sv, &mut humans, &mut now, 1);
@@ -405,5 +405,22 @@ fn a_voted_map_change_keeps_a_slow_loading_client() {
             "{}",
             h.join.summary()
         );
+    }
+}
+
+/// 61 bots joining in one `addbot` each hear 61 connect prints from one
+/// script frame, more than their 64-slot ring holds before their acks:
+/// a bot is queued no print (protocol-1.1.md, "The server command
+/// queue"), so none of them is dropped for an overflow.
+#[test]
+fn sixty_one_bots_join_at_once_and_stay() {
+    let Some((mut sv, mut now)) = server("tdm", 61) else {
+        eprintln!("COD_DIR unset: skipping");
+        return;
+    };
+    rcon(&mut sv, &mut now, "addbot 61");
+    for _ in 0..2 * 20 {
+        frame(&mut sv, &mut [], &mut now);
+        assert_eq!(sv.bot_slots().len(), 61);
     }
 }

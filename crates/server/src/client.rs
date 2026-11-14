@@ -278,11 +278,17 @@ impl Client {
     /// of its acks first loses its unsent [`CmdKind::CanIgnore`] commands
     /// and takes no new one; then a pending command `cmd` supersedes is
     /// taken out and `cmd` goes on the end. A bot is never sent anything on
-    /// retail; here it reads the ring itself, so it gets every command as
-    /// is.
+    /// retail (0x808b68c); here it reads the ring itself, so it gets every
+    /// [`CmdKind::Reliable`] command as is and no ignorable one, which it
+    /// never reads: one frame's prints to 61 or more bots would overflow
+    /// the ring before their acks (protocol-1.1.md, "The server command
+    /// queue").
     pub fn queue_server_command(&mut self, cmd: &str) -> Queued {
         const RING: i32 = MAX_RELIABLE_COMMANDS as i32;
         let kind = CmdKind::of(cmd);
+        if self.is_bot && kind == CmdKind::CanIgnore {
+            return Queued::Dropped;
+        }
         let slot = |seq: i32| seq as usize & (MAX_RELIABLE_COMMANDS - 1);
         let mut seq = self.link.netchan.reliable_sequence as i32;
         let mut queued = Queued::Added;
