@@ -164,7 +164,10 @@ fn a_round_breaks_a_television_into_its_effect() {
     };
     let defs = std::sync::Arc::new(defs(&map, &[&common]));
     let mut d = DynEnts::new(defs.clone());
-    let tv = defs.iter().position(|d| d.model == "com_tv1_screen").unwrap();
+    let tv = defs
+        .iter()
+        .position(|d| d.model == "com_tv1_screen")
+        .unwrap();
     assert_eq!(defs[tv].health, 1);
     let p = defs[tv].origin + defs[tv].rot * Vec3::Z * 8.0;
     let mut broken = Vec::new();

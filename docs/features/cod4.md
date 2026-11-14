@@ -132,6 +132,13 @@ The weapon byte is the client's own pick
   blast leaves it be, as on 1.7; one first
   seen more than a second after its launch stays where it stood, as on
   1.7 ([cod4-gsc.md](../research/cod4-gsc.md) 3.6).
+- The map's props, its dynamic entities (mp_crash's 516 bottles, cans,
+  cinder blocks, crates, tyres and plates), draw where the map puts
+  them. A grenade's, a rocket's or a script's blast and every round this
+  client draws knock them about and they settle again; plates,
+  televisions, watermelons and paper boxes break, into their effect
+  where they have one. Each client runs its own, as on 1.7, and a map
+  restart sets them back ([cod4-world.md](../research/cod4-world.md) 13).
 - The airstrike's jets and the helicopter with turning rotors, rotor
   wash, damage-stage smoke and fire, and `playFxOnTag` effects on any
   model's tags (11).
@@ -454,11 +461,13 @@ Ranked by how much a player notices. The research-side lists are
 3. **Physics debris on vcod's solver.** A `physicsLaunch`ed part (a
    car's door or hood) flies, lands and settles under vcod's own contact
    solver, not ODE, so its path and spin differ in detail. A blast does
-   not push it, as on 1.7. A map's dynamic entities (the props 1.7 lets
-   bullets and blasts knock about) are not drawn at all. Ragdolls use
-   vcod's position-based solver,
-   so corpses fall differently too
+   not push it, as on 1.7, and a round does not either, where 1.7's
+   does. A map's props (bottles, crates, tyres, televisions) fly the
+   same way, so they land elsewhere than on 1.7; the knife's swing and
+   `physicsJitter` leave them still. Ragdolls use vcod's position-based
+   solver, so corpses fall differently too
    ([cod4-gsc.md](../research/cod4-gsc.md) 3.6,
+   [cod4-world.md](../research/cod4-world.md) 13,
    [cod4-player-anims.md](../research/cod4-player-anims.md) 10).
 4. **Stereo only.** A 5.1 or 7.1 device gets the stereo mix on its front
    pair ([cod4-sound.md](../research/cod4-sound.md) 5). 139 alias rows

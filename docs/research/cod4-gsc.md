@@ -1268,12 +1268,19 @@ VERIFIED (the registrations). Then:
   0xcc54498 (stride 0xcc) which only 0x5a7730 fills, at world 0's
   address (called from 0x48ee1b, `EV_PHYS_JITTER`'s path), and
   0x5a66ff zeroes; `Phys_ObjBulletImpact` (0x5a5a20) is
-  called only by the launch (0x434dda), a dynamic entity's bullet
-  (0x48e049, 0x48e34f) and its pieces' break (0x491271). VERIFIED (every
-  `call` to the two in the binary). So a blast does not
-  push a launched part: after its launch's push it meets gravity and
-  the world, nothing else, and the server sends nothing more (3.2). INFERRED (the callers
-  above). That the jitter's event is `EV_PHYS_JITTER` is INFERRED (the
+  called only by the launch (0x434dda), a round on a launched part
+  (0x48e049), a round on a dynamic entity (0x48e34f) and a dynamic
+  entity's pieces' break (0x491271). VERIFIED (every `call` to the two
+  in the binary). 0x48e049 is in 0x48df10, which takes a round's hit of
+  type 1 on an entity whose `centity_t` (0x84f2d8, stride 0x1dc) holds a
+  body at +0x18, and passes world 0 (0x48e043), not the part's world 1;
+  it runs from the client-side round's walk (0x455b92) and, under
+  `sv_clientSideBullets` 0, from the dynent round (0x48e0f0 through
+  0x48e060). VERIFIED (the code). So a blast does not push a launched
+  part, and a round does: after its launch's push it meets gravity, the
+  world and the rounds this client draws, and the server sends nothing
+  more (3.2). INFERRED (the callers above). vcod's rounds do not push a
+  part. The dynamic entities themselves: cod4-world.md 13. That the jitter's event is `EV_PHYS_JITTER` is INFERRED (the
   case after the jolt's, the event order).
 
 vcod (`vcod_cod4::physics`, `play::cod4_physics`):

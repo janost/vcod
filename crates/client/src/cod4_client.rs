@@ -224,6 +224,13 @@ fn perf_turn() -> Option<f32> {
     *RATE.get_or_init(|| std::env::var("VCOD_PERF_TURN").ok()?.parse().ok())
 }
 
+/// `VCOD_NO_DYNENTS=1`: the map's dynamic entities are not drawn, for a
+/// frame time A/B (cod4-client-perf.md 41); read once.
+fn no_dynents() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("VCOD_NO_DYNENTS").is_ok_and(|v| v == "1"))
+}
+
 fn shot_client(f: &Fired) -> Option<usize> {
     let e = f.state.as_ref()?;
     (matches!(f.name, "EV_FIRE_WEAPON" | "EV_FIRE_WEAPON_LASTSHOT")
@@ -1684,7 +1691,7 @@ impl Cod4Client {
             });
         }
         // The map's dynamic entities, each its def's model at its pose.
-        if let Some(w) = self.session.world().cloned() {
+        if let Some(w) = self.session.world().cloned().filter(|_| !no_dynents()) {
             for &(i, origin, rot) in &scene.dynents {
                 let name = &w.dynents[i as usize].model;
                 let model = self.models.get(name).cloned();

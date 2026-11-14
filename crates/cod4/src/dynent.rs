@@ -583,7 +583,9 @@ mod tests {
 
     #[test]
     fn a_blast_wakes_the_nearest_twenty_and_none_under_the_minimum_force() {
-        let defs: Vec<DynDef> = (0..30).map(|i| can(Vec3::X * (10.0 + 4.0 * i as f32))).collect();
+        let defs: Vec<DynDef> = (0..30)
+            .map(|i| can(Vec3::X * (10.0 + 4.0 * i as f32)))
+            .collect();
         let mut d = DynEnts::new(Arc::new(defs));
         d.explode(&blast(400.0, 0.0), [0, 0], 0);
         assert_eq!(d.awake(), 20);

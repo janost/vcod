@@ -2021,3 +2021,219 @@ orders a CoD4 map's world batches by their float sort, then their first
 soup's key (`cod4_places`), so the primary light comes before the
 material as in 1.7's key. `VCOD_C4_DRAW_ORDER=0` at load keeps the CoD1
 sorted shader list's order.
+
+## 13. Dynamic entities
+
+A map's physics props (bottles, cans, cinder blocks, crates, tyres,
+fruit, plates, televisions) are its clip map's dynamic entities. They are
+not script entities and not static models: each client loads, draws,
+pushes and breaks its own copy. Addresses are `iw3mp.exe` 1.7's (md5
+`8c40cde102a9d8297a8674cb149f96ed`) unless named `cod4_lnxded`, read
+with `objdump`; `vcod_cod4::dynent` is vcod's.
+
+### 13.1 Where they live
+
+- `clipMap_t` holds two lists: the counts as two u16 at +244, the
+  `DynEntityDef` lists at +248 and +252, then in block 1 the runtime
+  poses (0x20 each, +256), clients (0xC, +264) and collision links
+  (0x14, +272) per list (cod4-fastfile.md, `col_map_mp`). VERIFIED (the
+  walk). The client keeps the counts at 0x14099b4, the def lists at
+  0x14099b8, the poses at 0x14099c0, the clients at 0x14099c8 and the
+  links at 0x14099d0, two each (0x48d017..0x48d055). VERIFIED (the
+  loads).
+- `DynEntityDef`, 0x60: `type` (+0), the pose (+4: a quaternion x, y, z,
+  w, then the origin), the xmodel (+0x20), two u16 brush model indices
+  (+0x24, +0x26), `destroyFx` (+0x28), `destroyPieces` (+0x2c, an
+  `XModelPieces` of 0x10-byte model pieces), `physPreset` (+0x30),
+  `health` (+0x34), a `PhysMass` (+0x38..+0x5b) and `contents` (+0x5c).
+  The handles and the pose are VERIFIED (the walk and `dynent_dump` on
+  every stock map); the copy of +4..+0x1f into the pose is VERIFIED
+  (`rep movs` of 7 dwords at 0x48d06a); the health read is VERIFIED
+  (0x48d080); the quaternion's w last is VERIFIED (0x561100 builds the
+  axis's first row as `1 - 2(y y + z z), 2(x y + z w), 2(x z - y w)`);
+  `contents` is VERIFIED (tested against the walk's mask at 0x48ff57 and
+  0x48d4b1).
+- The type table (0x6bdb70, 8 bytes a type): `invalid` 0, `clutter` 1,
+  `destruct` 2. Its byte 4 sets client flag 1 at load (0x48d088), byte 6
+  lets a blast or a round push it (0x48e967, 0x48e2f7), byte 7 lets them
+  damage it (0x48eaac, 0x48e359): `clutter` 1, 0, 1, 0; `destruct` 1, 0,
+  1, 1. VERIFIED (the bytes and the tests).
+- The census (`dynent_dump`, every `mp_` zone): only list 0, the model
+  list, holds anything; no def names a brush model, an `XModelPieces` or
+  a non-zero `PhysMass`; `contents` is 1, 0x10 (the televisions' 81) or
+  0x11. mp_crash 498 clutter and 18 destruct; mp_shipment the most,
+  1901; mp_crossfire 957 and 92. The destructibles are watermelons (10
+  health, `props/watermelon`), televisions (`com_tv1_screen`, 1,
+  `explosions/tv_explosion_mp`), copy paper boxes (200,
+  `props/copypaper_box_exp`) and plates (75, no effect). Their presets
+  are the map's or, named `,bottle_plastic` and kin, `common_mp`'s.
+  VERIFIED (the census).
+
+### 13.2 Load and draw
+
+- `DynEntCl_InitEntities` (0x48d000) runs from 0x4402f3 (in 0x43fad0)
+  and from `CG_MapRestart` (0x44b350, which prints `CG_MapRestart`;
+  its call at 0x44b3eb), which the `n` and `B` server commands reach
+  (0x44c12e, 0x44c31a). VERIFIED (the calls and the jump table at
+  0x44c530). It sets each pose
+  copied from its def, the client's body handle 0, its flags 2 (drawn),
+  or 3 with the type's byte 4, its health the def's; then each is linked
+  (0x48c9a0), which sets the pose's +0x1c to the model's radius
+  (`XModel` +0xa8, 0x48c9d0) and links its bounds turned by the pose.
+  VERIFIED (the stores). That flag 2 is drawn is INFERRED (the break
+  clears both, 0x48de69).
+- A body is made on a dynent's first push only (`DynEntCl_CreatePhysObj`
+  0x48dca0): `Phys_ObjCreate` in world 0 (`edi` 0, 0x48dcc1) at the pose
+  at rest, then 0x490240 gives it the model's `physGeoms` through
+  `Phys_ObjSetCollisionFromXModel` (0x5a5710), else a box on the model's
+  bounds (0x48fd00, 0x5a5240) or, with the preset's +0x28 byte set, a
+  cylinder on them (0x5a54a0). VERIFIED (the calls). No stock dynent
+  preset sets the byte. VERIFIED (`phys_dump`). The bounds box takes no
+  flat-axis widening: that is in 0x5a5710's own no-geom path
+  (0x5a587a), which 0x490282 does not take. INFERRED.
+- Each frame `DynEntCl_ProcessEntities` (0x48d110, called from 0x5fa38d)
+  copies a woken entity's body state into its pose (0x5a6ec0 in world
+  0), destroys the body when its `+0x18` bit 2 is set
+  (0x48d16d..0x48d180), relinks one whose origin moved past 0.01
+  (0x55f4d0 with 0x6df494), then calls 0x5a6d50 with world 0 and
+  `cg.time`. VERIFIED (the calls). That the bit is ODE's disabled body
+  and 0x5a6d50 runs the world to the time is INFERRED (3.6's names).
+  World 0's `msecStep` lies between 17 and 67 ms as world 1's
+  (the tables at 0x71e7a4 and 0x71e7b0, index 0). VERIFIED.
+
+vcod: `dynent::defs` reads list 0 through the map zone and `common_mp`;
+`Cod4World::dynents` holds them; `Cod4Session::dynents` is the state,
+made again by `set_world`, a new gamestate and `n` / `B`; the scene
+draws each drawn one as an entity model at its pose, lit from 4 units
+above its origin (vcod's, as other entities). The F3 overlay counts
+them, the drawn ones and the woken ones.
+
+### 13.3 Blasts
+
+`DynEntCl_ExplosionEvent` (0x48e670) runs after `Ragdoll_ExplosionEvent`
+in each explode arm of `CG_EntityEvent` (cod4-gsc.md 3.6): `(local
+client, cylinder, origin, inner, outer, direction, scale, inner damage,
+outer damage)`. VERIFIED (the pushes at 0x436b58..0x436b79,
+0x436c7d..0x436cb6, 0x437249..0x437284, 0x4372d6..0x437311,
+0x437361..0x43736f):
+
+| Arm | Inner | Outer | Direction | Scale | Damage |
+|---|---|---|---|---|---|
+| grenade | 0 | `explosionRadius` | none | 1 | `explosionInnerDamage`, `..OuterDamage` |
+| rocket, custom | `explosionRadius` | `explosionRadius` | none | 1 | the same |
+| `physicsExplosionSphere` | `u` word 0 | `eventParm` | none | `u` word 1 | 0, 0 |
+| `..Cylinder` | the same, level | | none | `u` word 1 | 0, 0 |
+| `physicsJolt` | `u` word 0 | `eventParm` | `u` words 1..3 | 1 | 0, 0 |
+
+- Nothing with `dynEnt_active` 0 or an outer radius of 0 (0x48e67a,
+  0x48e6d6). VERIFIED.
+- The candidates: live entities (flag 1) whose `contents` meet 0x802013
+  and whose cube (origin plus or minus the pose's radius) meets the box
+  `origin +- outer sqrt 2`, unbounded in z for a cylinder (0x48e72d,
+  0x48e786, 0x48db30, 0x48ff50). Past `dynEnt_explodeMaxEnts` of them
+  the nearest that many by the squared distance to the cube (level for a
+  cylinder) are kept (0x48e5be, the sort at 0x48ef40 with 0x48e540).
+  VERIFIED.
+- Per candidate at squared distance `d` under `outer^2` (0x48e829): the
+  scale is the arm's, times `(outer - sqrt d) / (outer - inner)` when
+  `d` is past `inner^2` (0x48e841..0x48e86c); the force is the preset's
+  `explosiveForceScale` (+0x18) times that times `dynEnt_explodeForce`
+  (0x48e88e..0x48e895). With no direction a force under
+  `dynEnt_explodeMinForce` does nothing, and the direction is the pose's
+  origin less the blast's (z 0 for a cylinder), normalized, plus
+  `dynEnt_explodeUpbias` on z, normalized again (0x48e8d8..0x48e942); a
+  jolt's direction is its vector as given. VERIFIED.
+- A type that pushes gets its body (0x48e995) and
+  `Phys_ObjAddForce(force times direction)` (0x48eaa1) at the body's
+  position plus, per axis, `(r 2 / 32768 - 1) dynEnt_explodeSpinScale`,
+  `r` the high 15 bits of `x 0x343fd + 0x269ec3` on the shared state at
+  0x7209a8 (0x48e9a7..0x48ea9d). VERIFIED.
+- A type that breaks takes `(inner damage - outer damage) scale + outer
+  damage`, truncated (0x48eab6..0x48ead7), when it is not 0 (0x48de30).
+  VERIFIED.
+
+| Dvar | Default | Range |
+|---|---|---|
+| `dynEnt_active` | 1 | bool |
+| `dynEnt_bulletForce` | 1000 | 0..1e6 |
+| `dynEnt_explodeForce` | 12500 | 0..1e6 |
+| `dynEnt_explodeUpbias` | 0.5 | 0..2 |
+| `dynEnt_explodeSpinScale` | 3 | 0..100 |
+| `dynEnt_explodeMinForce` | 40 | 0..FLT_MAX |
+| `dynEnt_explodeMaxEnts` | 20 | 0..4096 |
+| `dynEntPieces_velocity`, `..angularVelocity` | (0, 0, 0) | +-1000, +-180 |
+| `dynEntPieces_impactForce` | 1000 | 0..1e6 |
+
+VERIFIED (the registrations at 0x48c1e0 and 0x490e00, the floats at
+0x70bae8, 0x70bba0, 0x6be648, 0x6c6310, 0x6c6304, 0x70b280, 0x700c0c,
+0x6f9e58, 0x70af58, 0x70bb9c, 0x70b698, 0x70b728).
+
+### 13.4 Rounds
+
+- `DynEntCl_EntityImpactEvent` (0x48e0f0) takes a round's start, end
+  and its weapon's `damage` (`WeaponDef` +0x34c, 0x455b9e) from the
+  client-side round's walk (0x455bbe, 0x456183) and the server's bullet
+  events (0x4587f9, 0x458db2); the melee swipe (0x48e3a0, from
+  `CG_EntityEvent` 0x4367a9) tries five rays through it. VERIFIED (the
+  calls).
+- It traces the dynents alone (0x48d6c0 under 0x802013): a live one
+  whose cube's sphere the ray meets (0x4f6e70) is traced in its frame
+  (0x490020) through its model's collision surfaces (0x58c5b0, nothing
+  with `collLod` below 0); the hit is type 2 for list 0, 3 for list 1,
+  with the index (0x4900cf). VERIFIED. The round's own world trace does
+  not stop at them. INFERRED (the separate trace).
+- On a hit, 0x48dd00 runs on the hit's surface type, or 0x43f460 for a
+  melee. VERIFIED (the calls). That they play the impact effect and
+  sound is INFERRED (0x48dd00's effect tables).
+- Then a body for a type that pushes and `Phys_ObjBulletImpact(world 0,
+  body, dynEnt_bulletForce, the preset's bulletForceScale)` at the hit
+  along the round (0x48e329..0x48e34f, the formula cod4-gsc.md 3.6's),
+  and the weapon's damage for a type that breaks (0x48e381). VERIFIED.
+
+### 13.5 Breaking
+
+`DynEntCl_EntityDamage` (0x48de30): health less the damage; at 0 or
+under, flags 1 and 2 cleared, the body destroyed, the entity unlinked
+(0x48f990) and taken out of the renderer's lists (0x608f80, 0x5fc400),
+then `destroyFx` played at the pose's origin and axis at `cg.time`
+(0x4a1560) and the pieces spawned (0x4912e0). VERIFIED (the calls). The
+renderer calls are INFERRED by their place. With no stock piece list,
+a stock destructible breaks into its effect alone or, a plate, into
+nothing. VERIFIED (13.1's census).
+
+### 13.6 Nothing on the wire
+
+- The client's arrays are filled from its own clip map and changed only
+  by its own events, rounds and frames (13.2..13.5). VERIFIED (the
+  callers).
+- `cod4_lnxded` registers no `dynEnt_` dvar and holds no `DynEntCl`
+  string; its dynent strings are an entity parse's (`Dyn Entity xmodel
+  [%s] has no collision LOD set.`, the missing preset error at
+  0x8075e84, `momofinertia`). VERIFIED (the strings).
+- One server command breaks one outright: `j <index> <list> <x y z>
+  <dx dy dz>` (`CG_ServerCommand`'s case at 0x44c055, then 0x48ee40,
+  which breaks without a health test). `cod4_lnxded` never sends it: no
+  format string starts `j `, and no command send passes `0x6a`. INFERRED
+  (the strings and the immediates).
+- So two clients' props part ways after a blast: each draws its own
+  random push points and steps its own world. INFERRED.
+
+### 13.7 vcod against retail
+
+- Ported: the load, the type table, the walks' masks, the cube distance,
+  the nearest twenty, the falloff, the force and its direction, the push
+  point's random offset (from vcod's own seed), the round's trace through
+  the model's collision, its push and damage, the break and its effect,
+  a sleeping body dropped where it lies, and `CG_MapRestart`'s restart.
+  VERIFIED (the code against the above; `dynent::tests`,
+  `dynent_census`, `cod4_live_a_frag_flings_the_maps_clutter_and_breaks_a_plate`).
+- The body is cod4-gsc.md 3.6's solver, not ODE, at a fixed 17 ms step.
+  mp_crash's pots stand inside an item clip brush (contents 0x400) over
+  their table; every point of theirs starts solid, so the solver met
+  nothing and they fell through the map. A body now passes the world
+  contents its def's origin lies in. vcod's.
+- Left out: the melee swipe, the server's bullet events (vcod's client
+  runs its rounds itself), the impact effect on a struck dynent, list 1
+  (no stock map holds one), pieces (none stock), `physicsJitter`
+  (`EV_PHYS_JITTER`, 0x48eb50) and the `j` command. Only the first leg of
+  a round that pierces is traced.

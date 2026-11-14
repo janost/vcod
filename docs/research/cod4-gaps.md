@@ -22,12 +22,13 @@ Ranked by how much a player notices.
   box points (corners, edge midpoints, face centres) meet the world as
   points, so a world edge between them can poke in, and `msecStep`
   stays 17 ms (cod4-gsc.md 3.6). A blast does not push a part on 1.7
-  either. The ragdoll is a position-based solver (cod4-player-anims.md
-  10). M.
-- A map's dynamic entities (mp_crash holds 516) are neither drawn nor
-  simulated: vcod reads their `DynEntityDef`s and keeps nothing. 1.7
-  draws them and pushes them with blasts (0x48e670), bullets (0x48e049)
-  and `physicsJitter`, and breaks them into pieces (cod4-gsc.md 3.6). L.
+  either, but a round does (0x48df10), and vcod's do not. The ragdoll is
+  a position-based solver (cod4-player-anims.md 10). M.
+- A map's dynamic entities miss a few of 1.7's pushes: the knife's swing
+  (0x48e3a0), `physicsJitter` (0x48eb50) and the server's bullet events
+  (vcod's client runs its rounds itself); a struck one plays no impact
+  effect, and a piercing round pushes only what its first leg passes
+  (cod4-world.md 13.7). S.
 - Multichannel output: kira mixes stereo, so a 5.1 or 7.1 device gets
   the stereo mix on its front pair (cod4-sound.md 4.2, 5). The 139 alias
   rows whose curve no walked zone holds fall off straight. L.
@@ -41,6 +42,11 @@ Ranked by how much a player notices.
 
 ## Fixed
 
+- A map's dynamic entities (mp_crash holds 516) were neither drawn nor
+  simulated. vcod now draws them, pushes them with blasts and rounds on
+  its rigid-body solver, breaks the destructible ones into their effect,
+  and sets them back on a map restart, as 1.7's client does with nothing
+  on the wire (cod4-world.md 13).
 - The crosshair name and the friendly names over heads were not drawn.
   vcod now draws both as 1.7 does: over the posed `j_head`, sized by
   distance, in the relative team colour with the rank's icon and level,
