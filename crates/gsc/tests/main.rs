@@ -1,5 +1,6 @@
 //! The crate's integration tests as one binary: linked once, not once per file.
 
+mod bench;
 mod client_probes_parse;
 mod cod4_waits;
 mod corpus;

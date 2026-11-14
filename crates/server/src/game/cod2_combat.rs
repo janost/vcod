@@ -180,6 +180,9 @@ impl Missile {
     }
 }
 
+/// Each character's hit rig, `None` where it failed to assemble.
+pub type RigCache = HashMap<Character, Option<Rc<PlayerRig>>>;
+
 /// The combat state a CoD2 level keeps beside its script host.
 #[derive(Default)]
 pub struct Combat {
@@ -193,7 +196,7 @@ pub struct Combat {
     /// `g_fHitLocDamageMult`, `info/mp_lochit_dmgtable` (1 by default).
     pub hitloc_mult: [f32; 19],
     anims: Option<PlayerAnimSet>,
-    rigs: HashMap<Character, Option<Rc<PlayerRig>>>,
+    rigs: RigCache,
     pub missiles: Vec<Missile>,
     /// The last few hits `G_Damage` handed the damage callback, newest
     /// last: what a test or a log reads back.
@@ -393,6 +396,17 @@ impl Combat {
     /// skeleton anew.
     pub fn new_stamp(&mut self) {
         self.stamp = self.stamp.wrapping_add(1);
+    }
+
+    /// The rigs assembled so far, for the next level of a restart
+    /// (`Cod2Init::rigs`).
+    pub fn rigs(&self) -> &RigCache {
+        &self.rigs
+    }
+
+    /// A restart's carried rigs ([`Self::rigs`]).
+    pub fn set_rigs(&mut self, rigs: RigCache) {
+        self.rigs = rigs;
     }
 
     /// The rig of the character `c` names, loaded once.

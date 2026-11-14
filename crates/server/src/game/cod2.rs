@@ -335,6 +335,12 @@ pub struct Cod2Init {
     pub overlay: Option<(String, String)>,
     pub carry: crate::game::script::Carry,
     pub configstrings: Option<Vec<String>>,
+    /// The hit rigs the last level assembled (`Combat::rigs`), over the
+    /// same paks: the spawn wave's first traces would read the same
+    /// xmodels again. A rig assembles on a body's first trace, after the
+    /// load's iwd lists (`pure_lists`) are taken, so its reads flag nothing
+    /// a client is sent.
+    pub rigs: Option<crate::game::cod2_combat::RigCache>,
 }
 
 /// A CoD2 level's game module (see the module header).
@@ -459,6 +465,7 @@ impl Cod2Level {
         // vcod-common's format registry.
         vcod_cod2::model::register();
         let mut laps = vcod_common::laps::Laps::new(format!("cod2 level {map} parts"));
+        let carried_rigs = init.rigs;
         // The static models' collision builds beside the world and the
         // script, which don't need it.
         let pak: &Pk3Fs = &fs;
@@ -507,6 +514,9 @@ impl Cod2Level {
             statics,
             rt.host.fs.as_deref(),
         );
+        if let Some(rigs) = carried_rigs {
+            combat.set_rigs(rigs);
+        }
         combat.rand = rt.host.cod2().rand.clone();
         let anims = rt.host.fs.as_deref().and_then(|fs| {
             vcod_cod2::pmove::AnimTable::load(fs)
@@ -1518,6 +1528,16 @@ impl Cod2Level {
     /// What the next level keeps of this one: `game[]` and every `pers[]`
     /// under `savePersist`, and on a restart of the same map the compiled
     /// closures (`restart`).
+    /// The hit rigs for the next level over `fs` ([`Cod2Init::rigs`]),
+    /// when it is this level's.
+    pub fn carried_rigs(
+        &self,
+        fs: Option<&Rc<Pk3Fs>>,
+    ) -> Option<crate::game::cod2_combat::RigCache> {
+        let same = matches!((self.rt.host.fs.as_ref(), fs), (Some(a), Some(b)) if Rc::ptr_eq(a, b));
+        same.then(|| self.combat.rigs().clone())
+    }
+
     pub fn take_carry(&self, restart: bool) -> crate::game::script::Carry {
         let all = self.rt.take_carry();
         let keep = self.save_persist();
@@ -1526,6 +1546,9 @@ impl Cod2Level {
             pers: if keep { all.pers } else { Vec::new() },
             scripts: all.scripts.filter(|_| restart),
             gametype: all.gametype,
+            // A restart keeps the paks' referenced flags, which a load
+            // through the caches would have set again.
+            models: all.models.filter(|_| restart),
             ..Default::default()
         }
     }
