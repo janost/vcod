@@ -1,0 +1,43 @@
+# Retail CoD 1.1d dedicated server log lines under the --save-turret client of
+# mp_carentan-dm-turret-linkmg2.txt beside this file. Captured 2026-11-14.
+# The -linkmg recipe with probe_bodylog 1 and probe_spawnlog 1 and the target a
+# --probe-fall net-probe that logs its cmds (-linkmg2-target.txt): the gun 298
+# linked to a script_origin that rises 24 and turns 40 from 11700 and comes
+# back from 14700 (movers doc 16), every hit's point and direction and the
+# struck body's origin, each to the float's last bit. map mp_carentan,
+# g_gametype probe_turret, dedicated 1, sv_maxclients 8, sv_pure 0, a homepath
+# holding no pak. Client 0 is the target, client 1 the gunner, each joined 3 s
+# after the one before as in the -linkmg run. All three inside one unshare -rn.
+#
+#   COD_DIR=<1.1 install> PORT=29010 PROBE_SECS=215 \
+#       tools/run_probe.sh client-probes/probe_turret mp_carentan +set probe_teleport 1 +set probe_linkmg 11700 +set probe_hitlog 1 +set probe_bodylog 1 +set probe_spawnlog 1
+#   vcod --game-dir <1.1 install> --net-probe 127.0.0.1:29010 --probe-team axis --probe-fall --probe-secs 190   # 3 s in
+#   vcod --game-dir <1.1 install> --net-probe 127.0.0.1:29010 --save-turret --capture-tag linkmg2 --probe-secs 180   # 3 s later
+#
+# Lines are copied from games_mp.log, the m:ss stamp kept; every line past InitGame.
+  0:01 PROBE linkmg link 1050 (1712.00, 1830.00, 8.00) (0.00, 229.00, 0.00)
+  0:01 PROBE turret 297 (-500.00, 1896.00, 175.00) (0.00, 295.00, 0.00)
+  0:01 PROBE turret 298 (1712.00, 1830.00, 8.00) (0.00, 229.00, 0.00)
+  0:03 J;0;vcod
+  0:03 PROBE spawned 0 3700
+  0:03 PROBE spawnat 0 (624.00, 1736.00, 8.13) (0.00, 0.00, 0.00)
+  0:03 PROBE models 0 xmodel/basehead_axis_b_05 xmodel/gear_german_helmet_falshrm_blk xmodel/gear_german_load2_falshrm xmodel/gear_german_bandolier
+  0:03 PROBE place 0 axis (1515.18, 1603.59, 8.00) 409 3700
+  0:06 J;1;vcod
+  0:06 PROBE spawned 1 6700
+  0:06 PROBE spawnat 1 (-952.00, 2296.01, -21.43) (0.00, 0.00, 0.00)
+  0:06 PROBE place 1 allies (1738.24, 1860.19, 8.00) 229 6700
+  0:11 PROBE linkmg up 11700 (1712.00, 1830.00, 8.00) (0.00, 229.00, 0.00)
+  0:14 PROBE linkmg down 14700 (1712.00, 1830.00, 32.00) (0.00, 268.99, 0.00)
+  0:16 PROBE linkmg rest 16700 (1712.00, 1830.00, 8.00) (0.00, 228.99, 0.00)
+  0:20 PROBE hitfine 20400 0 left_leg_upper 36 1519:481:79101.6,1613:536:10742.2,-7:312:84686.3 -0:659:586243,-0:741:483643,-0:123:76713.6
+  0:20 PROBE hitbody 20400 0 1515:182:373047,1603:587:280273,-31:874:959961 0:0:0,0:0:0,0:0:0
+  0:20 D;0;axis;vcod;1;allies;vcod;m1carbine_mp;36;MOD_RIFLE_BULLET;left_leg_upper
+  0:20 PROBE hitfine 20450 0 left_leg_upper 36 1517:32:226562,1612:358:276367,-7:623:308655 -0:662:212280,-0:739:139343,-0:123:76713.6
+  0:20 PROBE hitbody 20450 0 1513:766:113281,1601:984:741211,-31:874:910339 0:0:0,0:0:0,0:0:0
+  0:20 D;0;axis;vcod;1;allies;vcod;m1carbine_mp;36;MOD_RIFLE_BULLET;left_leg_upper
+  0:20 PROBE hitfine 20500 0 left_leg_upper 36 1511:663:85937.5,1606:757:324219,-8:291:114807 -0:662:928345,-0:738:655212,-0:122:125206
+  0:20 PROBE hitbody 20500 0 1511:244:628906,1599:169:677734,-31:874:910339 0:0:0,0:0:0,0:0:0
+  0:20 K;0;;vcod;1;;vcod;mg42_bipod_stand_mp;36;MOD_RIFLE_BULLET;left_leg_upper
+  0:26 Q;1;vcod
+  3:13 Q;0;vcod

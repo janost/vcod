@@ -50,8 +50,8 @@ impl Frame {
         }
     }
 
-    /// [`Frame::within`] as 1.5b's and UO's `MatrixMultiply43` rounds it:
-    /// each element's sum of products rounded once.
+    /// [`Frame::within`] as CoD1's `MatrixMultiply43` rounds it (1.1d
+    /// 0x3b96c): each element's sum of products rounded once.
     pub fn within_stored(&self, parent: &Frame) -> Frame {
         let [p0, p1, p2] = parent.axis.map(|a| a.as_dvec3());
         let to_world = |v: Vec3| {
@@ -64,8 +64,9 @@ impl Frame {
         }
     }
 
-    /// `self` in `parent`'s frame, the inverse of [`Frame::within`]:
-    /// `G_CalcTagAxis`' `MatrixInverseOrthogonal43` then `MatrixMultiply43`.
+    /// `self` in `parent`'s frame, the inverse of [`Frame::within`], with
+    /// each product rounded: the other games' link. CoD1's takes
+    /// [`Frame::relative_to_stored`] on all three builds.
     pub fn relative_to(&self, parent: &Frame) -> Frame {
         let local = |v: Vec3| {
             Vec3::new(
@@ -80,11 +81,14 @@ impl Frame {
         }
     }
 
-    /// [`Frame::relative_to`] as 1.5b's and UO's `G_CalcTagAxis` rounds it
-    /// (UO 0x78982, 1.5b 0x6c27f): `MatrixInverseOrthogonal43` (UO
-    /// 0x3c6ec) transposes the parent and turns its negated origin through
-    /// the transpose, each component's sum rounded once
-    /// (`MatrixTransformVector` 0x3cd97), then [`Frame::within_stored`].
+    /// [`Frame::relative_to`] as CoD1's `G_CalcTagAxis` rounds it (1.1d
+    /// 0x663d4, UO 0x78982, 1.5b 0x6c27f): `MatrixInverseOrthogonal43` (1.1d
+    /// 0x3e1a4, UO 0x3c6ec) transposes the parent and turns its negated
+    /// origin through the transpose, each component's sum rounded once
+    /// (`MatrixTransformVector`, 1.1d 0x3e220, UO 0x3cd97), then
+    /// [`Frame::within_stored`]. The child's origin comes back a hair off
+    /// zero, so a gun linked at its own origin rides an ulp off it
+    /// (cod11-movers.md 16).
     pub fn relative_to_stored(&self, parent: &Frame) -> Frame {
         let [a0, a1, a2] = parent.axis.map(|a| a.as_dvec3());
         let axis = [0, 1, 2].map(|k| Vec3::new(a0[k] as f32, a1[k] as f32, a2[k] as f32));
@@ -537,9 +541,16 @@ fn stored_arith(host: &GameHost) -> bool {
     vcod_common::patch::Arith::for_protocol(host.defs.proto) == vcod_common::patch::Arith::Stored
 }
 
+/// A CoD1 host, whose `G_CalcTagAxis` and `MatrixMultiply43` round each
+/// element's sum once on all three builds (game.mp 0x3e1a4, 0x3b96c;
+/// cod11-movers.md 16).
+fn cod1(host: &GameHost) -> bool {
+    matches!(host.ext, crate::game::host::HostExt::Cod1)
+}
+
 /// [`stored_arith`] on a CoD1 host: 1.5b's or UO's game module.
 fn cod1_stored(host: &GameHost) -> bool {
-    matches!(host.ext, crate::game::host::HostExt::Cod1) && stored_arith(host)
+    cod1(host) && stored_arith(host)
 }
 
 /// Whether `id`'s model carries `tag`, the `DObjGetBoneIndex` test
@@ -607,7 +618,7 @@ pub fn link(
     let frame = frame?;
     let rel = match offset {
         Some((origin, angles)) => Frame::from_pose(origin, angles),
-        None if cod1_stored(host) => field_frame(host, cx, child).relative_to_stored(&frame),
+        None if cod1(host) => field_frame(host, cx, child).relative_to_stored(&frame),
         None => field_frame(host, cx, child).relative_to(&frame),
     };
     host.links.insert(
@@ -794,6 +805,9 @@ fn run_one(host: &mut GameHost, cx: &mut Cx, links: &Links, id: EntId, fresh: bo
     let (origin, angles) = if cod1_stored(host) {
         let placed = link.rel.within_stored(&frame);
         (placed.origin.to_array(), placed.angles_stored())
+    } else if cod1(host) {
+        let placed = link.rel.within_stored(&frame);
+        (placed.origin.to_array(), placed.angles())
     } else {
         let placed = link.rel.within(&frame);
         (placed.origin.to_array(), placed.angles())
