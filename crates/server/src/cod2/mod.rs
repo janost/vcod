@@ -454,6 +454,7 @@ impl Cod2Server {
         }
         let t0 = std::time::Instant::now();
         self.load_level(Some(fs.clone()), init)?;
+        let p = crate::tick_profile::phase("load/baselines and pure");
         let level = self.game.level.as_mut().expect("a loaded level");
         // The load's writes ride the gamestate.
         level.rt.host.configstrings.take_writes();
@@ -466,6 +467,7 @@ impl Cod2Server {
             .map(|e| (e.number, e))
             .collect();
         self.game.iwds = pure_lists(&fs, self.core.checksum_feed);
+        drop(p);
         self.copy_script_configstrings();
         self.write_engine_configstrings();
         self.core.sent_configstrings = self.core.configstrings.clone();
@@ -669,6 +671,7 @@ impl Cod2Server {
     /// `;` as `Cbuf_ExecuteText` does: a passed `g_gametype` vote queues
     /// `g_gametype tdm; map_restart`.
     pub fn drain_console(&mut self, _now: Instant) {
+        let _p = crate::tick_profile::phase("console");
         let lines: Vec<String> = std::mem::take(&mut self.core.console)
             .iter()
             .flat_map(|l| crate::console::split_commands(l))

@@ -180,8 +180,14 @@ impl Missile {
     }
 }
 
-/// Each character's hit rig, `None` where it failed to assemble.
-pub type RigCache = HashMap<Character, Option<Rc<PlayerRig>>>;
+/// Each character's hit rig, `None` where it failed to assemble, and the
+/// xmodels they were assembled from, which a rig of another character
+/// sharing a body, head or gun takes instead of loading its own.
+#[derive(Clone, Default)]
+pub struct RigCache {
+    rigs: HashMap<Character, Option<Rc<PlayerRig>>>,
+    parts: vcod_cod2::player::RigParts,
+}
 
 /// The combat state a CoD2 level keeps beside its script host.
 #[derive(Default)]
@@ -192,7 +198,7 @@ pub struct Combat {
     clip: Option<Arc<ClipMap>>,
     /// The static models' collision (`CM_LoadStaticModels`), which only
     /// the locational trace clips.
-    statics: Option<vcod_common::collision::CollisionWorld>,
+    statics: Option<Rc<vcod_common::collision::CollisionWorld>>,
     /// `g_fHitLocDamageMult`, `info/mp_lochit_dmgtable` (1 by default).
     pub hitloc_mult: [f32; 19],
     anims: Option<PlayerAnimSet>,
@@ -259,6 +265,13 @@ impl Combat {
         statics: Option<vcod_common::collision::CollisionWorld>,
         fs: Option<&Pk3Fs>,
     ) -> Combat {
+        let (hitloc_mult, anims) = Self::tables(fs);
+        Self::with_parts(clip, statics.map(Rc::new), hitloc_mult, anims)
+    }
+
+    /// What the combat reads off the paks: the hit-location multipliers and
+    /// the player anim set the hit poses play (no clip loaded yet).
+    pub fn tables(fs: Option<&Pk3Fs>) -> ([f32; 19], Option<PlayerAnimSet>) {
         let hitloc_mult = fs
             .and_then(|fs| fs.load::<RawFile>("info/mp_lochit_dmgtable").ok())
             .and_then(|b| parse_hitloc_table(&b.text()))
@@ -270,13 +283,23 @@ impl Combat {
                 None
             }
         });
+        (hitloc_mult, anims)
+    }
+
+    /// [`Self::with_statics`] over parts already read ([`Self::tables`]).
+    pub fn with_parts(
+        clip: Option<Arc<ClipMap>>,
+        statics: Option<Rc<vcod_common::collision::CollisionWorld>>,
+        hitloc_mult: [f32; 19],
+        anims: Option<PlayerAnimSet>,
+    ) -> Combat {
         Combat {
             weapons: vec![None],
             clip,
             statics,
             hitloc_mult,
             anims,
-            rigs: HashMap::new(),
+            rigs: RigCache::default(),
             missiles: Vec::new(),
             hits: VecDeque::new(),
             rand: Default::default(),
@@ -287,7 +310,7 @@ impl Combat {
 
     /// The player anim tree and script, `None` without paks.
     pub fn player_anims(&self) -> Option<&vcod_common::animtree::PlayerAnims> {
-        self.anims.as_ref().map(|a| &a.anims)
+        self.anims.as_ref().map(|a| &*a.anims)
     }
 
     /// The clip a wire anim index plays (toggle ignored), loaded once.
@@ -411,17 +434,17 @@ impl Combat {
 
     /// The rig of the character `c` names, loaded once.
     fn rig(&mut self, fs: &Pk3Fs, c: &Character) -> Option<Rc<PlayerRig>> {
-        if let Some(r) = self.rigs.get(c) {
+        if let Some(r) = self.rigs.rigs.get(c) {
             return r.clone();
         }
-        let rig = match PlayerRig::assemble(fs, c) {
+        let rig = match PlayerRig::assemble_bones_with(fs, c, &mut self.rigs.parts) {
             Ok(r) => Some(Rc::new(r)),
             Err(e) => {
                 log::warn!("cod2: no hit rig for {}: {e:#}", c.body);
                 None
             }
         };
-        self.rigs.insert(c.clone(), rig.clone());
+        self.rigs.rigs.insert(c.clone(), rig.clone());
         rig
     }
 }

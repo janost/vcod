@@ -141,9 +141,13 @@ pub fn register_weapon(host: &mut GameHost, name: &str) -> Option<usize> {
         return None;
     }
     let fs = host.fs.clone()?;
-    let mut def = vcod_common::weapon::load(&*fs, name).ok()?;
-    let text = fs.read(&format!("weapons/mp/{name}")).unwrap_or_default();
-    let keys = vcod_common::xmodel::parse_weapon(&String::from_utf8_lossy(&text));
+    let file = host.cod2_mut().weapon_files.get(&fs, name, || {
+        let def = vcod_common::weapon::load(&*fs, name).ok()?;
+        let text = fs.read(&format!("weapons/mp/{name}")).unwrap_or_default();
+        let keys = vcod_common::xmodel::parse_weapon(&String::from_utf8_lossy(&text));
+        Some(crate::game::host::WeaponFile { def, keys })
+    })?;
+    let (mut def, keys) = (file.def.clone(), &file.keys);
     // 1.1's loader floors `clipSize` at 1; CoD2's binoculars keep their 0,
     // so the shared clip slot 0 stays empty on the wire (cod2-protocol.md
     // 15.6).
@@ -166,7 +170,7 @@ pub fn register_weapon(host: &mut GameHost, name: &str) -> Option<usize> {
         &host.cod2().weapons,
         defs,
     ));
-    g_register_weapon(host, &keys);
+    g_register_weapon(host, keys);
     Some(host.cod2().weapons.len())
 }
 
