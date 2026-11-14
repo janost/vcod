@@ -1210,24 +1210,35 @@ pub fn position_clear(host: &mut GameHost, cx: &mut Cx, id: EntId) -> bool {
     true
 }
 
-/// `clearVehiclePosition`'s victims (0x6950e): dropped items in the box.
+/// `VEH_GetMinsMaxs` (UO 0x8d5a6): the vehicle file's box scaled by 1.2
+/// (0xa75f4) and padded by 50 across and 20 up (`tv(-50, -50, 0)`,
+/// `tv(50, 50, 20)`), about `origin`. `clearVehiclePosition` and
+/// `verifyPosition` both search it (coduo-vehicles.md 16).
+fn search_box(host: &GameHost, id: EntId, origin: [f32; 3]) -> Option<([f32; 3], [f32; 3])> {
+    let v = host.vehicles.live.get(&id)?;
+    let info = host.vehicles.info_of(v);
+    const LO: [f32; 3] = [-50.0, -50.0, 0.0];
+    const HI: [f32; 3] = [50.0, 50.0, 20.0];
+    Some((
+        std::array::from_fn(|i| origin[i] + (info.mins[i] * 1.2 + LO[i])),
+        std::array::from_fn(|i| origin[i] + (info.maxs[i] * 1.2 + HI[i])),
+    ))
+}
+
+/// `clearVehiclePosition`'s victims (0x6950e): `trap_EntitiesInBox` over
+/// [`search_box`] under mask 0x4000100 (corpses and dropped items), at most
+/// ten, in the area tree's order.
 pub fn clutter_in_box(host: &mut GameHost, cx: &mut Cx, id: EntId) -> Vec<EntId> {
+    const MASK: i32 = 0x4000100;
     let origin = crate::game::item::origin_of(host, cx, id);
-    let Some(me) = vehicle_box(host, id, origin) else {
+    let Some((lo, hi)) = search_box(host, id, origin) else {
         return Vec::new();
     };
-    let items: Vec<EntId> = host
-        .ents
-        .iter_inuse()
-        .filter(|(_, e)| e.item.is_some_and(|i| !i.taken))
-        .map(|(e, _)| e)
-        .collect();
-    items
+    host.area
+        .entities_in_box(lo, hi, MASK)
         .into_iter()
-        .filter(|&e| {
-            let o = crate::game::item::origin_of(host, cx, e);
-            boxes_touch(me, (o, o))
-        })
+        .take(10)
+        .filter_map(|n| host.ents.handle(n))
         .collect()
 }
 

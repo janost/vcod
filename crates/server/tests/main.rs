@@ -9,6 +9,7 @@ mod bot_threads;
 mod bot_vehicles;
 mod bots;
 mod bump_ab;
+mod clearveh_uo_ab;
 mod client_fields;
 mod combat;
 mod common;

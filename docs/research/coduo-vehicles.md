@@ -2877,3 +2877,39 @@ roll delta, which no seat change turns, so 0 (INFERRED). vcod writes no
 roll. The turret view (0x30041550, `eFlags` 0x6000) has a sway and firing
 kick of its own off the turret weapon's file; that is a turret's, not a
 vehicle's: coduo-diff.md 19, "The turret view".
+
+## 16. Clearing and verifying a vehicle's spot
+
+VERIFIED, `game.mp.uo.i386.so` `VEH_GetMinsMaxs` (0x8d5a6): the box the
+two methods search is the vehicle file's `mins` and `maxs` (`info+0x36c`,
+`+0x378`) times 1.2 (the float at 0xa75f4), each component plus
+`tv(-50, -50, 0)` for the mins (0x8d648..0x8d6af) and `tv(50, 50, 20)` for
+the maxs (0x8d716..0x8d77d).
+
+VERIFIED, `clearVehiclePosition` (0x6950e): on a vehicle (`eType` 12,
+0x69534), that box about `r.currentOrigin` (`+0x13c`), `trap_EntitiesInBox`
+for at most ten entities under mask 0x4000100 (0x695e8), and for each the
+four steps of `delete` inline: `Scr_AddEntity` of itself and `Scr_Notify`
+of `death` (0x69646), `trap_UnlinkEntity` (0x69654), the touch and use
+handlers cleared (`+0x220`, `+0x21c`), `think = G_FreeEntity` and
+`nextthink = level.time + 100` (0x6968b..0x696a0).
+
+VERIFIED, `verifyPosition` (0x692e8): the same `VEH_GetMinsMaxs` box
+(0x69336) searched under mask 0x2800000 (0x69420), then the optional reset
+(`VEH_InitPhysics`, 0x6946a) and a `trap_Trace` (0x694da). vcod's
+`position_clear` still tests the file's own box against the bodies and
+the other vehicles and runs no trace; not measured.
+
+VERIFIED live, `client-probes/probe_clearveh` on mp_cassino (2026-11-14,
+`clearveh_uo_ab`): a test client stood over the first tank (186,
+`panzeriv_mp`, origin 4676, -1979) drops an `mp40_mp` that lands 129
+units ahead of the origin, past the file's 70 and inside the padded box,
+and a second 512 off. The call deletes the near one alone: its
+`waittill("death", e)` wakes after the calling thread's step at the same
+`getTime()` with `e` the item, a thread's `endon("death")` on it fires,
+and `isDefined` still reads 1 on it 50 ms on. UO's script `spawn` has no
+item classnames (`weapon_mp40_mp doesn't have a spawn function`, then the
+server aborts), so the probe drops. vcod: `clutter_in_box` walks the area
+tree over `VEH_GetMinsMaxs`'s box with retail's mask and count; it tested
+each item's origin against the file's box before, which missed the
+capture's item.
