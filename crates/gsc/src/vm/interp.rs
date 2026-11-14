@@ -1,13 +1,15 @@
 //! The instruction loop: walks `bytecode::Op` over a frame stack until it
 //! suspends, returns, or the caller-supplied budget runs out.
 //!
-//! The loop matches each op by reference and holds the top frame across
-//! it; a call or return changes the frame stack after the op (`After`). A
-//! call's arguments and a builtin's are read in place off the caller's
-//! stack, and a returned frame's buffers go back to `Vm::frame_pool`. Two
-//! numbers of one type take an inline arm in the arithmetic and compare ops
-//! ahead of the general `eval_*` (docs/research/cod4-server-frame.md 9,
-//! "The spawn wave"; `tests/bench.rs` is the microbench).
+//! `run_ops` runs the top frame's ops with its ip, stack depth and budget
+//! in locals, over `Prepared::fast` (the fused runs) and a stack sized to
+//! the function's deepest; a call or return leaves it for `step_ops` to
+//! change the frame stack (`Exit`). A call's arguments and a builtin's are
+//! read in place off the caller's stack, and a returned frame's buffers go
+//! back to `Vm::frame_pool`. Two numbers of one type take an inline arm in
+//! the arithmetic and compare ops ahead of the general `eval_*`
+//! (docs/research/cod4-server-frame.md 9, "The spawn wave", and 9.2;
+//! `tests/bench.rs` is the microbench).
 
 use std::rc::Rc;
 
@@ -1884,7 +1886,6 @@ impl Vm {
                         _ => pc + 1,
                     };
                 }
-                let _ = (dbg_pop, dbg_push);
                 assert_eq!(
                     sp as i32,
                     base_sp as i32 + effect,

@@ -90,7 +90,9 @@ CoD4 1.7's formats and wire.
 ## vcod-gsc (`crates/gsc`)
 
 The `.gsc` compiler and VM that runs Activision's stock gametype and map
-scripts: `vm/interp.rs`, `vm/sched.rs` (with its notify and pick indexes),
+scripts: `bytecode.rs` (the ops, the stack walk, and `prepare`'s fused ops
+and stack sizes `Vm::install` stores), `vm/interp.rs`, `vm/sched.rs` (with
+its notify and pick indexes),
 `vm/profile.rs` (a game's `VmProfile`), `heap.rs` (structs, and arrays as
 a list plus a map), `fxhash.rs` (the hasher its maps use).
 `tests/bench.rs` is the interpreter's microbench.

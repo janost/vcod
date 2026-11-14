@@ -837,6 +837,115 @@ thread's instructions, the box at a load average of 60 to 100. VERIFIED
   `load/spawn`, `load/compile` and `load/collision world`. INFERRED (the
   profiles).
 
+### 9.2 The op loop
+
+The 60-bot mp_toujane `dm` run with a `map_restart` every 5 ticks (as
+9.1), profiled with gperftools' CPU profiler at 4 kHz over 600 ticks,
+base and new side by side. In the base the script pass (`step_frames`)
+took 6482 samples: the op loop's own 36%, with `Vec::push` and `pop` on
+the frame's operand stack another 15% (each push a capacity check, each
+length a load through the frame), builtins 12% (`bulletTracePassed` 4.5%),
+entity field reads 9.7% (`GameHost::get_field`, two memo lookups and two
+entity lookups a read). Each op's dispatch ran about 40 instructions
+before its arm: the budget through a pointer, the frame stack's depth
+checked again, the frame indexed again, the depth stored for the error
+recovery (`Frame::op_base`), the code's and the line table's bounds.
+VERIFIED (the profiles, the disassembly).
+
+An op count (a counter in the loop, not kept) put 301 M ops in the run,
+283 M of them in the 38 restarts and waves, about 7.4 M a wave:
+`LoadLocal` 31%, `LoadField` 10%, `JumpIfFalse` 8%, `StoreLocal` 8%,
+`Const` 7%, `LoadIndex` 6%, `Lt` 5%. The commonest runs were `LoadLocal;
+LoadLocal; LoadIndex` (12.9 M, `spawnpoints[i]`), `Lt; JumpIfFalse`
+(13.1 M), `LoadLocal; LoadLocal; LoadIndex; LoadField` (8.8 M,
+`spawnpoints[i].origin`) and `LoadLocal; Const; Add; StoreLocal` (8.1 M,
+`i++`), out of `_spawnlogic.gsc`'s loops: `getSpawnpoint_DM`'s
+`distance(spawnpoints[i].origin, aliveplayers[j].origin)` with its
+`maps\mp\_utility::abs` call, `positionWouldTelefrag` per spawn point and
+`getAllOtherPlayers`' `add_to_array`. VERIFIED (the counts, the script).
+
+What changed, none of it in what a script computes:
+
+- `vm/interp.rs`: `run_ops` runs one frame's ops with its ip, stack depth
+  and budget in locals, written back when it leaves; `step_ops` makes a
+  call's or return's change to the frame stack (`Exit`). VERIFIED (the
+  code).
+- `bytecode::prepare`, at `Vm::install`: the stack walk `stack_depth` has
+  always run there now answers each op's depth on entry
+  (`Prepared::depths`) and the deepest (`Prepared::max_stack`). A frame's
+  stack is sized to the deepest, so a push is a store, and an op that fails
+  under the error recovery takes its depth from the walk, the depth every
+  path to it agrees on; the gsc tests assert the running depth equals it
+  at every op. VERIFIED (the code, the tests).
+- Fused ops (`bytecode::fuse`, `Prepared::fast`): at each position the
+  longest of 27 runs it names starts, as one op with its operands inline
+  (`IndexLocalsField`, `LtSizeJumpIfFalse`, `StepLtSize`, `StoreLoad2`,
+  `AndJump`, ...). `code` stays as compiled behind them, so a jump into a
+  run's middle lands where it did. A fused op takes its fast path only when
+  the budget covers its whole run and its values are ones it answers
+  without failing (an array and a key, two numbers, a live entity);
+  otherwise it runs its run's first op alone and the next op runs from
+  `fast` as usual. The budget falls by the ops run, so a run cut by the
+  budget stops where the ops one at a time stop. VERIFIED
+  (`fused_runs_answer_as_their_ops_at_every_budget`: every budget up to
+  the script's end, with and without the recovery, against the same script
+  unfused).
+- `GameHost`: one memo slot answers a read's route and its place in
+  `PLAIN_EXCEPT` (`AtomMemo::read`), `origin` is told by that place, not by
+  comparing the name's text, and `Host::get_live_field` answers the
+  liveness and the field from one entity lookup (`is_live` and
+  `get_field` were two calls and two lookups). VERIFIED (the code).
+- `Heap::own`'s copy leaves room for one more element, `add_to_array`'s
+  append. The entity field read and a builtin's queued spawns run out of
+  the loop's body (`Vm::entity_field`, `Vm::run_builtin_spawns`).
+  VERIFIED (the code).
+
+Tried and not kept: a 16-byte `Op` (a thin box for `WaitTill`'s binds)
+ran 4% more instructions, with its tag in a field's niche (three more
+instructions a dispatch) and without (the ip spilled every op); unchecked
+indexing of the stack, the
+locals and the ops ran 7.5% fewer instructions and no fewer ms on a CPU,
+and the crate has no `unsafe`. VERIFIED (the runs, the disassembly).
+
+The 9.1 runs, base (bd2ce538b) and new side by side, two pairs, the 38
+restart ticks' and 38 waves' medians with their quartiles, on a CPU and in
+the ticking thread's instructions, the box at a load average of 40 to 45.
+VERIFIED (the logs).
+
+| run | base | new |
+|---|---|---|
+| restart tick, ms on a CPU | 16.0 [15.9..17.0], 16.0 [15.9..17.0] | 15.8 [15.0..16.2], 15.0 [14.9..15.9] |
+| restart tick, M instructions | 161 [160..162], 161 [160..163] | 144 [142..146], 144 [142..145] |
+| wave, ms on a CPU | 53.3 [50.6..55.8], 54.8 [53.2..56.3] | 31.4 [29.9..32.5], 31.6 [30.9..32.7] |
+| wave, M instructions | 764 [751..778], 765 [752..779] | 373 [369..380], 374 [366..379] |
+| CoD4 mp_crash `war`, 40 bots, the wave (tick 60), M instructions | 234.2, 233.6 | 210.0, 209.0 |
+| CoD1 1.1 mp_carentan `dm`, 40 bots, ticks 3 and 4, M instructions | 72.8 and 130.6, 72.1 and 110.4 | 47.9 and 98.5, 48.3 and 108.8 |
+| `tests/bench.rs`, best of ten, ms | 34.8, 36.5, 33.0 | 20.4, 21.2, 22.1 |
+
+- The wave runs 51% fewer instructions and 42% fewer ms on a CPU. In the
+  profiles the script pass fell from 6482 samples to 3625; its builtins
+  held still (797 and 799), its entity field reads fell from 627 to 365,
+  and the rest, the interpreter, from 5058 to 2461. VERIFIED (the logs,
+  the profiles).
+- The restart tick's 10% is its own scripts' run (the level's bootstrap
+  and the gametype's `main`). CoD4's wave at tick 60 is half the bots'
+  `bots/moves` (10 ms of its 24) and its scripts' host calls, so it moves
+  by 10%. CoD1's tick 4 is its bots' pass split with the pass's threads,
+  so its count moves with the split. INFERRED (the logs' phases).
+- `DIGEST=1` and `NETDIGEST=600` printed the same lines before (master
+  2127ded43) and after on CoD1 1.1 mp_carentan `dm` (12 bots,
+  `RESTART=150`, 600 ticks) and `sd` (3000 ticks of rounds), UO
+  mp_carentan `sd` (3000 ticks), CoD2 mp_toujane `dm`, `tdm`, `sd`, `ctf`
+  and `hq` (12 bots, `RESTART=150`, 600 ticks), `sd` over 3000 ticks of
+  rounds and `tdm` at 60 bots (`RESTART=40`), and `DIGEST=1` on CoD4
+  mp_crash `war` (40 bots, 600 ticks) and `sd` (12 bots, 4000 ticks), as
+  on every run of the table. VERIFIED.
+- Left: the dispatch itself, one indirect jump an op (the `match` is 9%
+  of the script pass's samples), the loop's locals spilled around its
+  host calls, an entity field read's load of its engine slot
+  (`read_route`), the builtins (`bulletTracePassed` 8% of the pass), and
+  a thread's spawn (5.6%). INFERRED (the profiles).
+
 ## 10. Full servers, every game
 
 Section 9's runs had 8 to 12 bots. This one fills the server: 24 bots on
