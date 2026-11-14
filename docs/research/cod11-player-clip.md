@@ -1137,17 +1137,39 @@ vcod: `TerrainPart` keeps the partition's point bounds and
 trace's, computed as above (`TerrainPart::touches`; a point trace takes its
 segment's box, `touches_segment`). VERIFIED, vcod: `fall_ab` gates both
 corpse heights unmasked, the walk capture's -39.92 and every row of the
-second run (the -39.963 and -39.964 rows included). Not ported: the point
-arm's further tests in 0x8054c48 (0x8054d0f-0x8054e66). INFERRED, off their
-instruction sequence (read 2026-11-14): the arm forms the record's centre and
-half extents and the segment's midpoint and half delta (`tw+0x0`, `+0xc`,
-`+0x18..+0x20`), each stored once, then three tests (0x8054de7, 0x8054e22,
-0x8054e5a), each a cross-product term of the half delta and the centre
-offset squared against a sum of half-extent products squared; the arm
-returns 0 (no clip) when one fails (0x8054e7d, 0x8054e81, 0x8054e87) and 1
-after all three pass (0x8054e74): the separating-axis test of a segment
-against a box on the three cross axes. Which side of each `fcompp` is which,
-and so each test's direction and strictness, is unread.
+second run (the -39.963 and -39.964 rows included).
+
+The point arm of 0x8054c48 (0x8054d0f-0x8054e66; 1.5b 0x8058e29-0x8058ff0,
+UO 0x8058c5d on, the same code) runs for a point trace after the box test
+passes. VERIFIED, the disassembly: it forms, per axis, the centre offset
+`c = (end + start) - (hi + lo)`, the record's extent `h = hi - lo`, the
+segment box's span `bounds[1] - bounds[0]` and reads the stored delta
+(`tw+0x18`), then three tests in the order x, y, z, each of `cross^2`
+against `ext^2` with `cross = delta.j c.k - delta.k c.j` and
+`ext = h.k span.j + h.j span.k` for (j, k) = (y, z), (z, x), (x, y): the
+separating-axis test of the segment against the box on the axes
+`delta x e_i`, in doubled units. 1.1d keeps every product and both sums on
+the stack and stores only `c`, `h` and the span (its `fsts` of the cross
+term at 0x8054dde is not read back); 1.5b and UO store the cross term
+(-0x48, -0x44, -0x40) and the extent sum (-0x6c) of each. INFERRED, off the
+branches: an axis that has `cross^2 > ext^2` returns 0, and a pass of all
+three returns 1.
+
+VERIFIED, gdb on retail 1.1d and 1.5b (2026-11-14,
+`client-probes/probe_pointarm` on mp_carentan, slanted `bulletTrace`s near
+the spawns; fixtures `crates/common/tests/fixtures/patch/pointarm-1.1.txt`
+and `-1.5.txt`, the first 600 calls of each run): over 5534 calls on 1.1d
+(1252 pass) and 5433 on 1.5b (1249 pass) the reading above gives the
+return on every call, the trace's bounds are the segment's own box and the
+delta is `end - start` rounded once. The sample does not tell the stored
+cross terms from kept ones, nor the strict test from `>=`.
+
+vcod: `terrain::segment_bounds_meet` runs the arm for a point trace's
+terrain partitions and patches, with 1.5b's and UO's stores under
+`Arith::Stored` (`terrain::tests::the_point_arm_returns_what_retail_returned`
+replays both fixtures). INFERRED, from the geometry: a segment the arm
+rejects misses the box, so no clip it skips could have hit, and the arm
+moves no answer, only work.
 
 VERIFIED, `cod_lnxded`, a patch record's bounds: the patch branch of
 `CM_LoadMap` hands the same `record + 0xc` to `CM_GeneratePatchCollide`

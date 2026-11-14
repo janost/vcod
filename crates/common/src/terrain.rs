@@ -7,6 +7,8 @@
 //! (docs/research/cod11-mantle.md, "Terrain is a swept sphere, a patch is a
 //! facet", and "The terrain clip's arithmetic").
 
+use crate::patch::Arith;
+
 /// `CM_GenerateTerrainCollide`'s coplanarity factor (rodata 0x80cd2ec).
 const COPLANAR_EPS: f32 = f32::from_bits(0x31db_e6ff);
 /// A normal's z under this marks a downward face (0x80cd2f0), over its
@@ -504,10 +506,9 @@ impl TerrainPart {
     }
 
     /// The same test for a point trace, whose bounds are its segment's
-    /// (0x8056640-0x80566ee). The point arm's further segment tests in
-    /// 0x8054c48 are not ported.
-    pub(crate) fn touches_segment(&self, start: [f32; 3], end: [f32; 3]) -> bool {
-        segment_bounds_meet(self.lo, self.hi, start, end)
+    /// (0x8056640-0x80566ee), and its point arm's three cross-axis tests.
+    pub(crate) fn touches_segment(&self, start: [f32; 3], end: [f32; 3], arith: Arith) -> bool {
+        segment_bounds_meet(self.lo, self.hi, start, end, arith)
     }
 }
 
@@ -535,14 +536,43 @@ pub(crate) fn capsule_bounds_meet(
     })
 }
 
-/// 0x8054c48 for a point trace: the box against the segment's own.
+/// 0x8054c48 for a point trace (1.5b 0x8058d51, UO 0x8058b85): the box
+/// against the segment's own, then the point arm (0x8054d0f-0x8054e66), the
+/// separating-axis test of the segment against the box on the three axes
+/// `delta x e_i`, all in doubled units: the centre offset is
+/// `(end + start) - (hi + lo)`, the extents `hi - lo` and the segment box's
+/// spans `|delta|`. An axis separates when its cross term squared is over
+/// its extent sum squared, strictly. 1.1d keeps both sums on the stack (the
+/// cross term's store at 0x8054dde is not read back); 1.5b and UO store
+/// them (docs/research/cod11-player-clip.md 8.12).
 pub(crate) fn segment_bounds_meet(
     lo: [f32; 3],
     hi: [f32; 3],
     start: [f32; 3],
     end: [f32; 3],
+    arith: Arith,
 ) -> bool {
-    (0..3).all(|i| hi[i] >= start[i].min(end[i]) && lo[i] <= start[i].max(end[i]))
+    if !(0..3).all(|i| hi[i] >= start[i].min(end[i]) && lo[i] <= start[i].max(end[i])) {
+        return false;
+    }
+    let sum = |a: f32, b: f32| r(d(a) + d(b));
+    let dif = |a: f32, b: f32| r(d(a) - d(b));
+    let c: [f32; 3] = std::array::from_fn(|i| dif(sum(end[i], start[i]), sum(lo[i], hi[i])));
+    let h: [f32; 3] = std::array::from_fn(|i| dif(hi[i], lo[i]));
+    let (b0, b1) = (
+        std::array::from_fn::<f32, 3, _>(|i| start[i].min(end[i])),
+        std::array::from_fn::<f32, 3, _>(|i| start[i].max(end[i])),
+    );
+    let span: [f32; 3] = std::array::from_fn(|i| dif(b1[i], b0[i]));
+    let delta: [f32; 3] = std::array::from_fn(|i| dif(end[i], start[i]));
+    let stored = arith == Arith::Stored;
+    let var = |x: f64| if stored { d(r(x)) } else { x };
+    // (i, j, k): the axis `delta x e_i` takes components j and k.
+    [(1, 2), (2, 0), (0, 1)].into_iter().all(|(j, k)| {
+        let cross = var(d(delta[j]) * d(c[k]) - d(delta[k]) * d(c[j]));
+        let ext = var(d(h[k]) * d(span[j]) + d(h[j]) * d(span[k]));
+        cross * cross <= ext * ext
+    })
 }
 
 impl Terrain {
@@ -1089,6 +1119,46 @@ enum Sweep {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every point-arm call gdb logged on 1.1d and 1.5b reads the same
+    /// return here, and the trace's bounds and delta are the segment's
+    /// (docs/research/cod11-player-clip.md 8.12).
+    #[test]
+    fn the_point_arm_returns_what_retail_returned() {
+        for (file, arith) in [
+            ("pointarm-1.1.txt", Arith::Kept),
+            ("pointarm-1.5.txt", Arith::Stored),
+        ] {
+            let path = format!("{}/tests/fixtures/patch/{file}", env!("CARGO_MANIFEST_DIR"));
+            let text = std::fs::read_to_string(&path).unwrap();
+            let (mut pass, mut fail) = (0, 0);
+            for line in text.lines().filter(|l| !l.starts_with('#')) {
+                let w: Vec<&str> = line.split_whitespace().collect();
+                let v: Vec<f32> = w[..21]
+                    .iter()
+                    .map(|h| f32::from_bits(u32::from_str_radix(h, 16).unwrap()))
+                    .collect();
+                let at = |i: usize| [v[i], v[i + 1], v[i + 2]];
+                let (s, e, delta) = (at(0), at(3), at(6));
+                for i in 0..3 {
+                    assert_eq!(delta[i], e[i] - s[i], "{file}: {line}");
+                    assert_eq!(v[9 + i], s[i].min(e[i]), "{file}: {line}");
+                    assert_eq!(v[12 + i], s[i].max(e[i]), "{file}: {line}");
+                }
+                let retail = w[21] == "1";
+                assert_eq!(
+                    segment_bounds_meet(at(15), at(18), s, e, arith),
+                    retail,
+                    "{file}: {line}"
+                );
+                if retail { pass += 1 } else { fail += 1 }
+            }
+            assert!(
+                pass > 100 && fail > 100,
+                "{file}: {pass} passed, {fail} failed"
+            );
+        }
+    }
 
     fn flat_square() -> Terrain {
         // Two triangles of a 100-unit square at z 0, facing up

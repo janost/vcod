@@ -830,7 +830,7 @@ fn patch_meets(start: Vec3, end: Vec3, capsule: Capsule, patch: &WorldPatch, ari
         (end + capsule.center).to_array(),
     );
     if capsule.radius == 0.0 {
-        crate::terrain::segment_bounds_meet(lo, hi, s, e)
+        crate::terrain::segment_bounds_meet(lo, hi, s, e, arith)
     } else {
         crate::terrain::capsule_bounds_meet(lo, hi, s, e, capsule.offset.z, capsule.radius)
     }
@@ -3402,7 +3402,7 @@ impl CollisionWorld {
         let surface_flags = self.tris_surf[first];
         if capsule.radius == 0.0 {
             let (s, e) = (start + capsule.center, end + capsule.center);
-            if !tp.touches_segment(s.to_array(), e.to_array()) {
+            if !tp.touches_segment(s.to_array(), e.to_array(), self.arith()) {
                 return;
             }
             let (s, e) = (s.to_array(), e.to_array());
