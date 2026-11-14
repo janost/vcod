@@ -204,8 +204,9 @@ pub struct Cod4Zones {
     /// Each xmodel's bone names in its order, by lowercased model name
     /// (`hidePart`'s bits).
     pub model_bones: HashMap<String, Rc<Vec<String>>>,
-    /// Each xmodel's bones at its bind pose (`baseMat`), model space, by
-    /// lowercased model name (`getTagOrigin`).
+    /// Each xmodel's bones with no anim as 1.7's skeleton composes them
+    /// (`vcod_cod4::skel`), model space, by lowercased model name
+    /// (`getTagOrigin`).
     pub model_tags: HashMap<String, Rc<ModelTags>>,
     /// Each xmodel's bone parents and radius by lowercased name
     /// ([`ModelRig`]).
@@ -314,6 +315,8 @@ impl Cod4Zones {
                         Rc::new(ModelRig {
                             parents: m.bones.iter().map(|b| b.parent).collect(),
                             radius: x.radius,
+                            skel: vcod_cod4::skel::SkelModel::of(x),
+                            base: vcod_cod4::skel::base_mats(x),
                         })
                     });
                     skeletons.entry(key).or_insert(m);
@@ -325,13 +328,28 @@ impl Cod4Zones {
                 }
             }
         }
+        // An unanimated DObj's bones as 1.7's skeleton composes them
+        // (`vcod_cod4::skel`), the zone's `baseMat` where the arrays are
+        // short.
         let model_tags = skeletons
             .iter()
             .map(|(k, m): (&String, &vcod_common::model::Model)| {
+                let posed = model_rigs
+                    .get(k)
+                    .and_then(|r| r.skel.as_ref())
+                    .map(|s| s.base_pose());
                 let tags = m
                     .bones
                     .iter()
-                    .map(|b| (b.name.clone(), b.pos, b.rot))
+                    .enumerate()
+                    .map(|(i, b)| match posed.as_ref().and_then(|p| p.get(i)) {
+                        Some(p) => (
+                            b.name.clone(),
+                            glam::Vec3::from(p.trans),
+                            glam::Quat::from_array(p.quat).normalize(),
+                        ),
+                        None => (b.name.clone(), b.pos, b.rot),
+                    })
                     .collect();
                 (k.clone(), Rc::new(tags))
             })
@@ -433,6 +451,12 @@ pub type ModelTags = Vec<(String, glam::Vec3, glam::Quat)>;
 pub struct ModelRig {
     pub parents: Vec<i32>,
     pub radius: f32,
+    /// What 1.7's DObj skeleton composes the bones from
+    /// (`vcod_cod4::skel`); `None` when the zone's arrays are short.
+    pub skel: Option<vcod_cod4::skel::SkelModel>,
+    /// The zone's `baseMat`s, what a posed bone is told moved against
+    /// (`XModelTraceLineAnimated`).
+    pub base: Vec<vcod_cod4::skel::AnimMat>,
 }
 
 /// What registering one weapon file touches.

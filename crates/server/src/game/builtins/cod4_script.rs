@@ -945,7 +945,7 @@ pub(crate) fn posed_body_tag(
         .bones()
         .iter()
         .position(|b| b.name.eq_ignore_ascii_case(name))?;
-    let (pos, rot) = p.pose.bone_world(skel, i);
+    let (pos, rot) = crate::game::cod4::combat::skel_worlds(skel, &p.pose)[i];
     let (_, turn, _) = p.placed.to_scale_rotation_translation();
     let m = Mat3::from_quat(turn * rot);
     Some((

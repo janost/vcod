@@ -869,13 +869,13 @@ prone and killcam runs. VERIFIED (the gates).
   from 46300 on (169, 2262, 237), yaw -134.9945 where it fell at
   -134.989, roll 90, ground 1022. VERIFIED live (`play-1.7-prone-*`).
   Ours matches every word of both runs' items, on the live frames and the
-  killcam's, but the hit's `trDelta` on both: (-24.8591, -24.4986,
-  -31.1734) against (-24.8587, -24.4981, -31.1728) prone, (4.3898,
-  -0.9870, -39.2181) against (4.3897, -0.9870, -39.2175) standing, the
-  tag some 3e-5 units off retail's. VERIFIED (the gates). Ours composes
-  the skeleton off quaternions where 1.7 builds its matrices, the same
-  ulps the helicopter's posed `tag_barrel` shows (cod4-gsc.md 3.2).
-  INFERRED. The prone start's z read 247 against 246, the tag 0.11 high,
+  killcam's, the hit's `trDelta` included. VERIFIED (the gates). Before
+  the bodies' tags took 1.7's skeleton (cod4-gsc.md 3.2, "The skeleton")
+  the `trDelta` read (-24.8591, -24.4986, -31.1734) against (-24.8587,
+  -24.4981, -31.1728) prone, (4.3898, -0.9870, -39.2181) against (4.3897,
+  -0.9870, -39.2175) standing, the tag some 3e-5 units off retail's,
+  composed off quaternions. VERIFIED (the gates, both ways).
+  The prone start's z read 247 against 246, the tag 0.11 high,
   until the server's bodies took 1.7's controllers and the tag read the
   killing frame's skeleton (3.3): the round's trace eases the controls
   at 46150 and the drop in the same frame reads that pose, where ours
@@ -1807,12 +1807,13 @@ What the captures fixed on ours:
   (7.1). Ours asked both at `archivetime`. With 7.1's rule the gate's 14
   rows on the followed shooter's words are gone. VERIFIED (the gate).
 
+The dropped weapon (6.1) matches word for word on both runs, the hit's
+`trDelta` included, since the bodies' tags compose through 1.7's skeleton
+(cod4-gsc.md 3.2, "The skeleton"); before, the posed tag sat some 3e-5
+units off retail's. VERIFIED (the gates, both ways).
+
 Open, with each gate's `GAPS`:
 
-- The dropped weapon (6.1): the start at the tag, the fall, the 50 ms move
-  and the rest on its side are ours too; what differs is the hit's
-  `trDelta` on both runs, the posed tag some 3e-5 units off retail's
-  (`ITEM_TAG`). VERIFIED (the gates).
 - A grenade's strike on a standing body. The thrown back frag meets the
   shooter at 50100 (`EV_GRENADE_BOUNCE` parm 7, flesh, and the hurt).
   VERIFIED live. `G_RunMissile` traces through 0x80b4020 (`SV_Trace` with
@@ -1832,9 +1833,11 @@ Open, with each gate's `GAPS`:
   the shooter, looking 31 down, bends the spine by the whole of it and
   turns the head back up, and the frag enters the `head` box's +y face
   at 50100. VERIFIED (a trace on ours, the gate). The bounce reads
-  (26.753, 74.910, -171.278), the gate's one row left (`THROWBACK_GAPS`).
-  VERIFIED (the gate). That this is the skeleton's composition, as the
-  dropped weapon's, is INFERRED.
+  (26.752, 74.908, -171.276), the gate's one row left (`THROWBACK_GAPS`);
+  it read (26.753, 74.910, -171.278) with the head composed off
+  quaternions. VERIFIED (the gate, both ways). So 1.7's skeleton is not
+  what parts it, as it was the dropped weapon's: the box trace's or the
+  bounce's arithmetic is left. INFERRED (the two runs).
 - The second rocket takes entity 317 on retail, 316 on ours; nothing
   either client saw held 316. VERIFIED live. Both runs' first rocket is
   315, shown 47350..50850, gone at 50900 with no event on either side;
