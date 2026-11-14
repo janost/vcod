@@ -9606,6 +9606,16 @@ victim's snapshot cmds 303233 and 303284; that is the frame's
 `kill` captures do. VERIFIED (capture), same file: its two surviving
 hits (ms 26200, health 60; ms 26557, health 24) leave both timers at 0
 and `legsAnim` on the idle or the knockback's run.
+VERIFIED (capture), 1.5b and UO, the same recipe
+(`mp_carentan-dm-hit-target-paintimers-1.5.txt`, `-uo.txt`, 2026-11-14):
+one surviving hit each (1.5b ms 94781, health 33; UO ms 34188, health
+25) leaves both timers at 0. 1.5b's bullet death (ms 94981, index 13,
+1566.67 ms, hold 1616) reads `ct + timer` 103048, so the hold was set at
+101432, between the snapshot cmds 101416 and 101466 and off the frame's
+`level.time` 101450; UO's (ms 34396, index 14, 900 ms) at 40635, the
+victim's last cmd as of the snapshot before (`ct` 40635), off
+`level.time` 40650. INFERRED: on both the hold counts from the victim's last
+processed cmd, not the frame.
 
 VERIFIED (disassembly), the event argument at every `BG_AnimScriptEvent`
 call site: 1.1d `game.mp.i386.so` (13 `.rel.text` relocations, 0x2ee1a ..

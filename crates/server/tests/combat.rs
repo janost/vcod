@@ -2820,16 +2820,43 @@ fn a_rocket_that_strikes_a_player_hits_him_directly() {
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
 }
 
-/// What a shot does to the victim's anim timers on retail 1.1d: the
-/// `paintimers` capture's two surviving hits on a standing target leave
+/// What a shot does to the victim's anim timers on retail: the
+/// `paintimers` captures' surviving hits on a standing target leave
 /// `legsTimer` and `torsoTimer` at 0 (no game module raises `PAIN`), and
-/// its bullet death, inside the shooter's cmd, sets both to the clip's
+/// the bullet death, inside the shooter's cmd, sets both to the clip's
 /// length + 50 on the victim's last cmd, which the victim's cmds behind it
 /// run down (cod11-combat.md 16.4, "The dying body"). Ours is held to the
 /// same in [`a_shot_takes_health_and_a_second_one_kills`].
 #[test]
 fn a_shot_sets_the_victims_timers_as_retail_does() {
-    let text = include_str!("fixtures/playerstate/mp_carentan-dm-hit-target-paintimers.txt");
+    // 1.1d: `pb_stand_death_head_collapse`, index 21, a 900 ms clip.
+    paintimers(
+        include_str!("fixtures/playerstate/mp_carentan-dm-hit-target-paintimers.txt"),
+        2,
+        21,
+        950,
+    );
+    // 1.5b: `pb_death_run_stumble`, index 13, 1566.67 ms.
+    paintimers(
+        include_str!("fixtures/playerstate/mp_carentan-dm-hit-target-paintimers-1.5.txt"),
+        1,
+        13,
+        1616,
+    );
+    // UO: `pb_death_run_onfront`, index 14, a 900 ms clip.
+    paintimers(
+        include_str!("fixtures/playerstate/mp_carentan-dm-hit-target-paintimers-uo.txt"),
+        1,
+        14,
+        950,
+    );
+}
+
+/// One `paintimers` capture: `hits` surviving hits with both timers 0, and
+/// a bullet death playing clip `index` whose hold `hold` was set on a cmd
+/// from the snapshot before the death's on, ahead of the dead one's: UO's
+/// lands on that earlier snapshot's own cmd, the victim's last.
+fn paintimers(text: &str, hits: usize, index: i32, hold: i32) {
     let traces: Vec<std::collections::BTreeMap<&str, &str>> = text
         .lines()
         .filter_map(|l| l.strip_prefix("!trace "))
@@ -2841,10 +2868,10 @@ fn a_shot_sets_the_victims_timers_as_retail_does() {
         .collect();
     let int =
         |t: &std::collections::BTreeMap<&str, &str>, k: &str| -> i32 { t[k].parse().unwrap() };
-    let mut hits = 0;
+    let mut seen = 0;
     for w in traces.windows(2) {
         if int(&w[1], "damageEvent") > int(&w[0], "damageEvent") && int(&w[1], "health") > 0 {
-            hits += 1;
+            seen += 1;
             assert_eq!(
                 (int(&w[1], "legsTimer"), int(&w[1], "torsoTimer")),
                 (0, 0),
@@ -2853,18 +2880,17 @@ fn a_shot_sets_the_victims_timers_as_retail_does() {
             );
         }
     }
-    assert_eq!(hits, 2, "the capture's surviving hits");
-    // The bullet death: `pb_stand_death_*` index 21, a 900 ms clip.
+    assert_eq!(seen, hits, "the capture's surviving hits");
     let death = traces
         .windows(2)
         .find(|w| int(&w[0], "damageEvent") > 0 && int(&w[1], "pm_type") == 6)
         .expect("the bullet death");
     let (before, dead) = (&death[0], &death[1]);
-    assert_eq!(dead["legsAnim"], "21");
-    let stamped = int(dead, "ct") + int(dead, "legsTimer") - 950;
+    assert_eq!(int(dead, "legsAnim") & 511, index);
+    let stamped = int(dead, "ct") + int(dead, "legsTimer") - hold;
     assert_eq!(int(dead, "torsoTimer"), int(dead, "legsTimer"));
     assert!(
-        int(before, "ct") < stamped && stamped < int(dead, "ct"),
+        int(before, "ct") <= stamped && stamped < int(dead, "ct"),
         "stamped on a cmd between the two snapshots: {stamped}"
     );
 }
