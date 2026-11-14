@@ -1847,6 +1847,20 @@ ahead of its bot pass (0x0808cccc, one call per client with flag `+0x10a40`
 set: random buttons off `rand()`, then `SV_ClientThink` at 0x0808789c), so
 every bot's cmds run under one stamp.
 
+VERIFIED, 1.5b `cod_lnxded`: the bot pass 0x809421b bumps the stamp
+0x835f4a4 once (0x8094221) and calls the bot think 0x80940d2 for every
+client in slot order (0x809427b), which ends in `SV_ClientThink`
+(0x808ca58, called at 0x8094214); `SV_PacketEvent`'s bump is at 0x8093ae1,
+and 0x808dc4e hands the same stamp to the skeleton check (0x808dc71).
+VERIFIED, UO `coduo_lnxded`: the pass 0x809517c bumps 0x8488704
+(0x8095182) and calls the think 0x8095033 (0x80951dc), which calls
+`SV_ClientThink` (0x808d829, at 0x8095175). VERIFIED, live, both servers
+under gdb with two `addTestClient` bots, 2026-11-14
+(`crates/server/tests/fixtures/movers/botstamp-gdb-1.5.txt`, `-uo.txt`):
+on every frame one bump, then slot 0's and slot 1's `SV_ClientThink` under
+the same stamp. No capture has the two bots shooting one body: their
+buttons come off `rand()`.
+
 vcod: every engine trace (rounds in a cmd, turret rounds, missiles, blasts,
 the lookat trace) stamps its bodies through `GameHost::dobj_posed`;
 `replay_moves` starts a stamp at each new packet; the end frames' traces stay

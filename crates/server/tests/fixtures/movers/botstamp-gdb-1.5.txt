@@ -1,0 +1,145 @@
+# Retail CoD 1.5b cod_lnxded under gdb, mp_carentan, gametype probe_testclient (two addTestClient bots), 2026-11-14.
+#   COD_VERSION=1.5 COD_LNXDED=<a wrapper running gdb -batch -x <script> --args <server>> PORT=29000 SECS=40 \
+#       tools/run_probe.sh probe_testclient mp_carentan   (inside unshare -rn)
+# The gdb script, one breakpoint on the bot pass's stamp bump and one on the bot think's SV_ClientThink call:
+#   set pagination off
+#   set confirm off
+#   handle SIGPIPE nostop noprint
+#   set $n = 0
+#   break *0x8094221
+#   commands
+#   silent
+#   printf "BUMP stamp=%d\n", *(int*)0x835f4a4
+#   continue
+#   end
+#   break *0x8094214
+#   commands
+#   silent
+#   set $n = $n + 1
+#   printf "THINK client=%d stamp=%d\n", (*(int*)($ebp+8) - *(int*)0x83ccd90) / 0x5a9b4, *(int*)0x835f4a4
+#   if $n >= 40
+#     kill
+#     quit
+#   end
+#   continue
+#   end
+#   run
+# BUMP prints the skeleton stamp before the increment, THINK the client slot and the stamp; docs/research/cod11-movers.md 15 reads it.
+BUMP stamp=3
+BUMP stamp=20
+BUMP stamp=45
+BUMP stamp=47
+BUMP stamp=49
+BUMP stamp=51
+BUMP stamp=53
+BUMP stamp=55
+BUMP stamp=57
+BUMP stamp=59
+BUMP stamp=61
+BUMP stamp=63
+BUMP stamp=65
+BUMP stamp=67
+BUMP stamp=69
+BUMP stamp=71
+BUMP stamp=73
+BUMP stamp=75
+BUMP stamp=77
+BUMP stamp=79
+BUMP stamp=81
+BUMP stamp=83
+BUMP stamp=85
+BUMP stamp=87
+BUMP stamp=89
+BUMP stamp=91
+BUMP stamp=93
+BUMP stamp=95
+BUMP stamp=97
+BUMP stamp=99
+BUMP stamp=101
+BUMP stamp=103
+BUMP stamp=105
+BUMP stamp=107
+BUMP stamp=109
+BUMP stamp=111
+BUMP stamp=113
+BUMP stamp=115
+BUMP stamp=117
+BUMP stamp=119
+BUMP stamp=121
+BUMP stamp=123
+BUMP stamp=125
+BUMP stamp=127
+BUMP stamp=129
+BUMP stamp=131
+BUMP stamp=133
+BUMP stamp=135
+BUMP stamp=137
+BUMP stamp=139
+BUMP stamp=141
+BUMP stamp=143
+BUMP stamp=145
+BUMP stamp=147
+BUMP stamp=149
+BUMP stamp=151
+BUMP stamp=153
+BUMP stamp=155
+BUMP stamp=157
+THINK client=0 stamp=158
+THINK client=1 stamp=158
+BUMP stamp=159
+THINK client=0 stamp=160
+THINK client=1 stamp=160
+BUMP stamp=161
+THINK client=0 stamp=162
+THINK client=1 stamp=162
+BUMP stamp=163
+THINK client=0 stamp=164
+THINK client=1 stamp=164
+BUMP stamp=165
+THINK client=0 stamp=166
+THINK client=1 stamp=166
+BUMP stamp=167
+THINK client=0 stamp=168
+THINK client=1 stamp=168
+BUMP stamp=169
+THINK client=0 stamp=170
+THINK client=1 stamp=170
+BUMP stamp=171
+THINK client=0 stamp=172
+THINK client=1 stamp=172
+BUMP stamp=173
+THINK client=0 stamp=174
+THINK client=1 stamp=174
+BUMP stamp=175
+THINK client=0 stamp=176
+THINK client=1 stamp=176
+BUMP stamp=177
+THINK client=0 stamp=178
+THINK client=1 stamp=178
+BUMP stamp=179
+THINK client=0 stamp=180
+THINK client=1 stamp=180
+BUMP stamp=181
+THINK client=0 stamp=182
+THINK client=1 stamp=182
+BUMP stamp=183
+THINK client=0 stamp=184
+THINK client=1 stamp=184
+BUMP stamp=185
+THINK client=0 stamp=186
+THINK client=1 stamp=186
+BUMP stamp=187
+THINK client=0 stamp=188
+THINK client=1 stamp=188
+BUMP stamp=189
+THINK client=0 stamp=190
+THINK client=1 stamp=190
+BUMP stamp=191
+THINK client=0 stamp=192
+THINK client=1 stamp=192
+BUMP stamp=193
+THINK client=0 stamp=194
+THINK client=1 stamp=194
+BUMP stamp=195
+THINK client=0 stamp=196
+THINK client=1 stamp=196
