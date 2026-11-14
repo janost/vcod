@@ -98,7 +98,8 @@
 //! the guns bots picked up. The feature arms and `UO` are CoD1's only.
 //! `SPIKE_MS=<ms>` prints every tick past it with its phases, as CoD4's;
 //! `RESTART=<n>` runs a console `map_restart` every `n` ticks, so every
-//! bot spawns in one frame (the spawn wave, cod4-server-frame.md 9).
+//! bot spawns in one frame (the spawn wave, cod4-server-frame.md 9). Both
+//! work on CoD1 too.
 //!
 //! `GAME=cod4` runs CoD4 1.7 matches (`COD4_DIR=<install>`, maps
 //! `mp_crash` by default, `GAMETYPE=` any stock one, `war` by default,
@@ -1361,8 +1362,20 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
     let mut bots: HashMap<usize, Life> = HashMap::new();
     let mut react = React::default();
     let mut stats = TickStats::from_env();
+    // `SPIKE_MS=<ms>` and `RESTART=<n>`, as CoD2's.
+    let spike_ms: Option<f32> = std::env::var("SPIKE_MS").ok().and_then(|v| v.parse().ok());
+    if spike_ms.is_some() {
+        vcod_server::tick_profile::enable();
+    }
+    let restart: usize = std::env::var("RESTART")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     for tick in 0..o.ticks {
         now += Duration::from_millis(TICK_MS);
+        if restart > 0 && tick > 0 && tick % restart == 0 {
+            sv.core.console.push_back("map_restart".into());
+        }
         // A default arm never calls its hook, so an all-on run is the
         // stock game.
         for slot in sv.bot_slots() {
@@ -1432,11 +1445,22 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
         for ob in &mut crowd {
             ob.deliver(&mut sv, now);
         }
+        let sched = spike_ms.and_then(|_| vcod_server::tick_profile::sched());
         let t0 = Instant::now();
         sv.tick(now);
+        let ms = t0.elapsed().as_secs_f32() * 1000.0;
+        let phases = vcod_server::tick_profile::take();
         if let Some(st) = stats.as_mut() {
-            let ms = t0.elapsed().as_secs_f32() * 1000.0;
-            st.add(tick, ms, &vcod_server::tick_profile::take());
+            st.add(tick, ms, &phases);
+        }
+        if spike_ms.is_some_and(|s| ms > s) {
+            eprintln!(
+                "spike {} {} seed {seed} tick {tick} {ms:.1} ms ({}): {}",
+                map,
+                o.gametype,
+                vcod_server::tick_profile::split(sched, ms),
+                vcod_server::tick_profile::format(&phases, 1.0)
+            );
         }
         m.ticks = tick + 1;
         if let Some(d) = m.digest.as_mut() {

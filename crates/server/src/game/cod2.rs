@@ -1657,6 +1657,7 @@ impl Cod2Level {
             // A restart keeps the paks' referenced flags, which a load
             // through the caches would have set again.
             models: all.models.filter(|_| restart),
+            weapon_files: all.weapon_files,
             ..Default::default()
         }
     }
