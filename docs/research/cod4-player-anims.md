@@ -367,7 +367,10 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   instructions). With the x87 at single precision every result is a
   float. INFERRED (cod4-world.md, the lightgrid). The drawn bodies compose
   so (`vcod_cod4::skel::player_mats` with `Cod4Arith::Client`); the
-  server's hit poses take the same function with `Cod4Arith::Server`.
+  server's hit poses take the same composition with `Cod4Arith::Server`
+  over the locals 1.7's own sampler leaves (`player_mats_sampled`, 11).
+  The drawn bodies' locals still come off CoD1's sampler. INFERRED (the
+  code; no client dump).
   Off the gdb dump's own bone 0, parents and angles, the client's
   arithmetic lands within 1e-7 of retail's server words on all 804
   control bones (`skel_ab`); a strafing body drawn by the client sits
@@ -634,3 +637,58 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   through the fall, never turning about itself; once down nothing should
   turn or slide, and no limb roll about its length. Check at a high frame
   rate (`com_maxfps 0`) and at a low one (`com_maxfps 20`).
+
+## 11. The anim sampler
+
+- `DObjCalcAnim` (`cod4_lnxded` 0x81b4c8c) masks out the bones not asked
+  for and those already built or set by a controller (DObj +0x14), walks
+  the tree from its root at weight 1 with the clear flag set (0x81b4f6f),
+  then gives every asked bone no leaf reached its model's own local: a
+  root the identity, a non-root its `XModelQuat` shorts times the float
+  1/32767 (0x823ba10) stored, no shift, weight 0 (0x81b4d6c..0x81b4ecc).
+  VERIFIED (the instructions). The player clips key none of the six
+  control bones and not the head's `j_neck` or `j_head`. VERIFIED (gdb,
+  the `remap` lines of `fixtures/skel/player-anim-gdb.txt`).
+- The walk (0x81b2578): a node skips each child of weight 0 (+0x2c). With
+  one live child it hands that child its own weight and flags (0x81b46bc).
+  With two or more, the first child runs with the clear flag, the rest
+  without, each at its own weight and with `p5` set, summing into the
+  bones themselves when the node clears, else into scratch the first
+  child clears (0x81b2957..0x81b2a07). VERIFIED (the instructions). A
+  child node flagged 0x10 (+0x14) opens an additive tail, which no player
+  tree reached in the dump. VERIFIED (gdb).
+- The fold, by the node's flags: with `p5` clear (the root's), each bone
+  of non-zero weight times `1 / weight` kept, each word stored, the
+  weight left (0x81b4608..0x81b4678); with `p5` and the clear flag, the
+  quat times `w * r` and the shift times `w / weight`, the weight then
+  `w` (0x81b4a32..0x81b4abe); with `p5` alone, the scratch quat times
+  `w * r` and its shift times `w / weight` added into the bones, `w` added
+  to the weight (0x81b4b78..0x81b4c0d). `r` is the `0x5f3759df` step off
+  the stored bits of `((x^2 + y^2) + z^2) + w^2`, one Newton step with 0.5
+  and 1.5 (0x8209628, 0x820962c) on the kept sum; a zero quat is left.
+  VERIFIED (the instructions).
+- A leaf (`numframes` at parts +0xe): at node time 1 or with no frames
+  every part reads its last key. Under 256 frames (0x81b1534) the frame
+  `t * numframes` stays on the stack and the key search truncates its
+  stored float (0x81b1557..0x81b1578); at or past 256 the frame is stored
+  and 0x81b02b6 returns the key and the stored fraction past it, through
+  a coarse table first from 64 keys up (0x81b38d7). The fraction under
+  256 frames is kept. VERIFIED (the instructions).
+- The sums per part: a no-quat bone adds the weight to `w`; a held quat
+  adds `q * w`, each short times 1/32767 stored; a keyed one `(q0 * a +
+  acc) + q1 * b` with `b = frac * w` and `a = w - b` kept, `q0` the key
+  at or below the frame; a keyed shift `((v0 + (v1 - v0) * frac) * size +
+  mins) * w + acc`, a held one `o * w + acc`; every translation part adds
+  `w` to the weight. Each sum is stored once; nothing normalizes a leaf's
+  quat. VERIFIED (the instructions). Rebuilt from the zone's clips and
+  models and each tree's node times and weights, all 17392 words of the
+  280 player trees in `fixtures/skel/player-anim-gdb.txt` match, the x87
+  stack as an `f64` (`skel_ab`, `vcod_cod4::xanimcalc`). VERIFIED (the
+  test).
+- vcod-server's tree for a body is `root` over `main` over the legs and
+  torso nodes at their weights, each over its clips at their node times
+  and weights (`playerpose::player_leaves`), the shape every dumped tree
+  has. VERIFIED (gdb). Its hit poses take these locals
+  (`combat::Pose4`); CoD1's sampler had normalized each key and the
+  blend, which left the thrown back frag's bounce off a head box ulps off
+  retail's (cod4-combat.md 15.1). VERIFIED (the gate).

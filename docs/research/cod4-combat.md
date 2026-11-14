@@ -1955,9 +1955,16 @@ Open, with each gate's `GAPS`:
   all 374 distinct `BG_SwingAngles` calls, word for word. VERIFIED
   (`skel_ab`, `playerpose` tests). Neither moved the bounce's words.
   VERIFIED (the gate).
-- What is left is the parent chain: the anim sampler's locals of the
-  spine and neck bones between the control bones, which no dump checks
-  yet. INFERRED (every other input to the head bone now matches retail
-  word for word). The next step is a gdb dump of the shooter's skeleton
-  at `BounceMissile` (0x80946ba) on a fresh throw back pair, beside its
-  anim state. `THROWBACK_GAPS` keeps the row until then.
+- The parent chain: the server's bodies sampled their clips through
+  CoD1's sampler, each key's quat normalized as a float and the blend
+  normalized after. 1.7's walk (`DObjCalcAnim` 0x81b4c8c, the tree at
+  0x81b2578) sums each leaf's raw quat shorts times 1/32767 and its
+  quantized shifts, weighted, unnormalized, on the stack, and folds a
+  node of two or more live children by its weight or by the `0x5f3759df`
+  step (cod4-player-anims.md 11). VERIFIED (the instructions). Ported
+  (`vcod_cod4::xanimcalc`), it matches all 17392 words of 280 player
+  trees gdb dumped (`skel_ab`), and the bounce matches retail's word for
+  word: `THROWBACK_GAPS` is empty. VERIFIED (the gates). The locals a bone
+  no leaf reaches (the head's `j_neck` and `j_head` among them) did not
+  move it: the bounce matches with those left to CoD1's sampler too.
+  VERIFIED (the gate, both ways).

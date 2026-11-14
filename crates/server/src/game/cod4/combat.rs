@@ -201,7 +201,7 @@ pub struct PosedBody4 {
     pub entity: u32,
     pub origin: Vec3,
     pub rig: Rc<PlayerRig>,
-    pub pose: Rc<vcod_common::skeleton::PoseBuffer>,
+    pub pose: Rc<Pose4>,
     pub placed: glam::Mat4,
     /// The yaw the body is placed at (`r.currentAngles`).
     pub yaw: f32,
@@ -237,6 +237,91 @@ impl PosedBody4 {
     }
 }
 
+/// A body's pose for the server's traces and tags: the shared sampler's
+/// locals, and over them the locals 1.7's own sampler left on every bone
+/// its clips reach (`vcod_cod4::xanimcalc`, cod4-player-anims.md 11).
+pub struct Pose4 {
+    pub buf: vcod_common::skeleton::PoseBuffer,
+    pub sampled: Vec<Option<vcod_cod4::skel::AnimMat>>,
+}
+
+/// `b`'s pose at `now` ([`Pose4`]).
+fn pose4(
+    b: &PlayerBody,
+    rig: &PlayerRig,
+    set: &mut PlayerAnimSet,
+    src: &BodySource,
+    f: &BodyFrame,
+    now: i32,
+) -> Pose4 {
+    let buf = b.pose_in(rig, set, src, f, now, true, None);
+    let sampled = sample4(b, rig, set, src, f, now).unwrap_or_default();
+    Pose4 { buf, sampled }
+}
+
+/// `DObjCalcAnim` over `b`'s tree (`root` and `main` over the legs and
+/// torso nodes, cod4-player-anims.md 11): each bone's local, a bone no leaf
+/// reached its model's own. `None` for a gunner, or a clip or model the
+/// zones lack.
+fn sample4(
+    b: &PlayerBody,
+    rig: &PlayerRig,
+    set: &mut PlayerAnimSet,
+    src: &BodySource,
+    f: &BodyFrame,
+    now: i32,
+) -> Option<Vec<Option<vcod_cod4::skel::AnimMat>>> {
+    use vcod_cod4::xanimcalc::{Tree, calc};
+    let channels = b.leaves(set, src, f, now)?;
+    let skel = &rig.skeleton;
+    let mut held = Vec::new();
+    for (_, leaves) in &channels {
+        for l in leaves {
+            let parts = src.parts(&l.clip)?;
+            let remap: Vec<Option<usize>> =
+                parts.bones.iter().map(|n| skel.bone_index(n)).collect();
+            held.push((parts, remap));
+        }
+    }
+    let mut held = held.iter();
+    let nodes = channels
+        .iter()
+        .map(|(weight, leaves)| Tree::Node {
+            weight: *weight,
+            children: leaves
+                .iter()
+                .zip(held.by_ref())
+                .map(|(l, (parts, remap))| Tree::Leaf {
+                    parts,
+                    remap,
+                    time: l.time,
+                    weight: l.weight,
+                })
+                .collect(),
+        })
+        .collect();
+    let main = Tree::Node {
+        weight: 1.0,
+        children: vec![Tree::Node {
+            weight: 1.0,
+            children: nodes,
+        }],
+    };
+    let (mats, reached) = calc(&main, skel.bones().len());
+    mats.into_iter()
+        .zip(reached)
+        .zip(skel.bones())
+        .map(|((m, r), bone)| match r {
+            true => Some(Some(m)),
+            false => Some(
+                rig.models
+                    .iter()
+                    .find_map(|(model, _)| src.base_local(model, &bone.name)),
+            ),
+        })
+        .collect()
+}
+
 /// A posed body's bones as 1.7's `DObjCalcSkel` composes the locals the
 /// pose left (`vcod_cod4::skel::calc_posed`, cod4-gsc.md 3.2, "The
 /// skeleton"): each bone's place and turn in the body's frame. Its matrices
@@ -245,7 +330,7 @@ impl PosedBody4 {
 /// millionths off (cod4-combat.md 6.1).
 pub(crate) fn skel_worlds(
     skel: &vcod_common::skeleton::Skeleton,
-    pose: &vcod_common::skeleton::PoseBuffer,
+    pose: &Pose4,
     controls: Option<&Controllers>,
 ) -> Vec<(glam::Vec3, glam::Quat)> {
     worlds_of(&skel_mats(skel, pose, controls))
@@ -253,13 +338,19 @@ pub(crate) fn skel_worlds(
 
 /// The `DObjAnimMat`s [`skel_worlds`] reads: `DObjCalcSkel`'s bones, the
 /// controls' bones set as 1.7's controller sets them, in `cod4_lnxded`'s
-/// arithmetic (`vcod_cod4::skel::player_mats`).
+/// arithmetic (`vcod_cod4::skel::player_mats_sampled`).
 fn skel_mats(
     skel: &vcod_common::skeleton::Skeleton,
-    pose: &vcod_common::skeleton::PoseBuffer,
+    pose: &Pose4,
     controls: Option<&Controllers>,
 ) -> Vec<vcod_cod4::skel::AnimMat> {
-    vcod_cod4::skel::player_mats(skel, pose, controls, Cod4Arith::Server)
+    vcod_cod4::skel::player_mats_sampled(
+        skel,
+        &pose.buf,
+        &pose.sampled,
+        controls,
+        Cod4Arith::Server,
+    )
 }
 
 /// The struck face's normal in the body's frame as `DObjTraceline` gives
@@ -1187,7 +1278,7 @@ impl Cod4Level {
             eased[slot] = Some(now);
             b.ease_controls(&set.anims, &controller_frame(&f, end_frame[slot]), dt);
         }
-        let pose = b.pose_in(&rig, set, &*src, &f, now, true, None);
+        let pose = pose4(b, &rig, set, &src, &f, now);
         let placed = BodyFrame {
             origin,
             angles: [0.0, f.angles[1], 0.0],
@@ -1255,7 +1346,7 @@ impl Cod4Level {
             let Some(Some(set)) = anims.as_mut() else {
                 continue;
             };
-            let pose = bodies[slot].pose_in(&rig, set, &*src, &f, now, true, None);
+            let pose = pose4(&bodies[slot], &rig, set, &src, &f, now);
             let placed = BodyFrame {
                 origin: ps.origin,
                 angles: [0.0, f.angles[1], 0.0],
@@ -1298,7 +1389,7 @@ impl Cod4Level {
             eased[slot] = Some(now);
             b.ease_controls(&set.anims, &controller_frame(&f, end_frame[slot]), dt);
         }
-        let pose = b.pose_in(&rig, set, &*src, &f, now, true, None);
+        let pose = pose4(b, &rig, set, &src, &f, now);
         let skel = &rig.skeleton;
         let (i, bone) = skel
             .bones()

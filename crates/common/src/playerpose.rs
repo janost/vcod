@@ -1648,6 +1648,54 @@ fn pose_player_onto(
     pose
 }
 
+/// One leaf of the player tree as a node-time walk meets it: the clip, its
+/// node time (the fraction played) and its weight under its node.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Leaf {
+    pub clip: String,
+    pub time: f32,
+    pub weight: f32,
+}
+
+/// The tree [`pose_player`] blends, unsampled: `main`'s legs and torso
+/// nodes, each its weight and its leaves in anim index order. `None` for a
+/// gunner's or a rider's legs, whose rows this does not carry.
+pub fn player_leaves(
+    inputs: &PoseInputs,
+    mut clip: impl FnMut(&str) -> Option<Rc<XAnim>>,
+) -> Option<[(f32, Vec<Leaf>); 2]> {
+    if inputs.turret_leaves.is_some() || !inputs.seat_leaves.is_empty() {
+        return None;
+    }
+    let mut node = |layers: &[crate::animclock::Layer]| -> Vec<Leaf> {
+        let mut layers: Vec<&crate::animclock::Layer> = layers.iter().collect();
+        layers.sort_by_key(|l| l.index);
+        layers
+            .into_iter()
+            .filter_map(|l| {
+                let name = clip_name(inputs.anims, l.index, inputs.group_pitch, 0.0)?;
+                let anim = clip(name)?;
+                let time = match l.time {
+                    Some(t) => t,
+                    None => {
+                        let frames = anim.frame_count.saturating_sub(1).max(1) as f32;
+                        anim.frame_pos(l.seconds, anim.looping) / frames
+                    }
+                };
+                Some(Leaf {
+                    clip: name.to_string(),
+                    time,
+                    weight: l.weight,
+                })
+            })
+            .collect()
+    };
+    Some([
+        (inputs.nodes.legs, node(&inputs.legs_layers)),
+        (inputs.nodes.torso, node(&inputs.torso_layers)),
+    ])
+}
+
 /// The legs node's children by index into its clips: a clip, or a turret
 /// group at its weight over its rows, each a weight over its leaves.
 enum LegsShape {

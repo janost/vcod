@@ -269,3 +269,195 @@ fn a_players_controls_match_retails_word_for_word() {
     assert_eq!(checked, 255);
     assert!(off.is_empty(), "{checked} checked:\n{}", off.join("\n"));
 }
+
+/// Player bodies' anim trees as `cod4_lnxded` walked them under gdb, and
+/// the locals `DObjCalcAnim` left (its header the recipe).
+const ANIM_DUMP: &str = include_str!("fixtures/skel/player-anim-gdb.txt");
+
+/// 1.7's sampler (`vcod_cod4::xanimcalc`, cod4-player-anims.md 11) on each
+/// tree the dump caught: the leaves' clips at their node times and weights,
+/// the folds of two or more live children, every needed bone's local word
+/// for word.
+#[test]
+fn a_players_anim_locals_match_retails_word_for_word() {
+    use std::collections::HashMap;
+    use vcod_cod4::anim::script_string;
+    use vcod_cod4::xanimcalc::{Parts, Tree, calc};
+    let Some(install) = cod4_install() else {
+        return;
+    };
+    let zone = |name: &str| {
+        let z = Zone::open_path(&install.zone("english", name)).unwrap();
+        walk(z, WalkOptions { keep_bulk: true }).unwrap().assets
+    };
+    let zones = [zone("mp_crash"), zone("common_mp")];
+    let mut parts: HashMap<String, Parts> = HashMap::new();
+    let mut part = |name: &str| -> Parts {
+        parts
+            .entry(name.to_string())
+            .or_insert_with(|| {
+                zones
+                    .iter()
+                    .find_map(|a| {
+                        let x = a.xanims.iter().find(|x| x.name == name)?;
+                        Some(Parts::of(a, x).unwrap())
+                    })
+                    .expect(name)
+            })
+            .clone()
+    };
+    let bone_names = |models: &str| -> Vec<String> {
+        models
+            .split(',')
+            .flat_map(|m| {
+                let (a, x) = zones
+                    .iter()
+                    .find_map(|a| Some((a, a.xmodels.iter().find(|x| x.name == m)?)))
+                    .expect(m);
+                x.bone_names
+                    .iter()
+                    .map(|&i| script_string(a, i).to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    // Each model's own locals, the DObj's bones in model order: what a bone
+    // no leaf reached keeps (`SkelModel::base_locals`).
+    let bases = |models: &str| -> Vec<AnimMat> {
+        models
+            .split(',')
+            .flat_map(|m| {
+                let x = zones
+                    .iter()
+                    .find_map(|a| a.xmodels.iter().find(|x| x.name == m))
+                    .expect(m);
+                SkelModel::of(x).unwrap().base_locals()
+            })
+            .collect()
+    };
+    let remap = |p: &Parts, names: &[String]| -> Vec<Option<usize>> {
+        p.bones
+            .iter()
+            .map(|b| names.iter().position(|n| n == b))
+            .collect()
+    };
+    struct Walk<'a> {
+        time: f32,
+        leaf: Option<&'a str>,
+        kids: Vec<(usize, f32)>,
+    }
+    let (mut calcs, mut words, mut off) = (0, 0, Vec::new());
+    let mut lines = ANIM_DUMP.lines().filter(|l| !l.starts_with('#')).peekable();
+    while let Some(line) = lines.next() {
+        let t: Vec<&str> = line.split_whitespace().collect();
+        if t[0] != "calc" {
+            continue;
+        }
+        let names = bone_names(t[1]);
+        assert_eq!(names.len(), t[3].parse::<usize>().unwrap(), "{line}");
+        let mut walks: Vec<(usize, Walk)> = Vec::new();
+        let mut want = Vec::new();
+        while let Some(l) = lines.next_if(|l| !l.starts_with("calc")) {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            if w[0] == "walk" {
+                let kids = match w[6] {
+                    "kids" if w[7] != "-" => w[7]
+                        .split(',')
+                        .map(|k| {
+                            let (i, wt) = k.split_once(':').unwrap();
+                            (i.parse().unwrap(), bits(wt))
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                walks.push((
+                    w[1].parse().unwrap(),
+                    Walk {
+                        time: bits(w[2]),
+                        leaf: (w[6] == "leaf").then_some(w[7]),
+                        kids,
+                    },
+                ));
+            } else {
+                want.push(l);
+            }
+        }
+        let leaves: HashMap<&str, (Parts, Vec<Option<usize>>)> = walks
+            .iter()
+            .filter_map(|(_, w)| w.leaf)
+            .map(|n| {
+                let p = part(n);
+                let r = remap(&p, &names);
+                (n, (p, r))
+            })
+            .collect();
+        fn tree<'a>(
+            walks: &[(usize, Walk)],
+            leaves: &'a HashMap<&str, (Parts, Vec<Option<usize>>)>,
+            idx: usize,
+            weight: f32,
+        ) -> Tree<'a> {
+            let w = &walks.iter().find(|(i, _)| *i == idx).expect("walked").1;
+            match w.leaf {
+                Some(n) => {
+                    let (parts, remap) = &leaves[n];
+                    Tree::Leaf {
+                        parts,
+                        remap,
+                        time: w.time,
+                        weight,
+                    }
+                }
+                None => Tree::Node {
+                    weight,
+                    children: w
+                        .kids
+                        .iter()
+                        .map(|&(k, kw)| tree(walks, leaves, k, kw))
+                        .collect(),
+                },
+            }
+        }
+        let root = tree(&walks, &leaves, walks[0].0, 1.0);
+        let (mut mats, reached) = calc(&root, names.len());
+        for ((m, r), base) in mats.iter_mut().zip(&reached).zip(bases(t[1])) {
+            if !r {
+                *m = base;
+            }
+        }
+        calcs += 1;
+        for l in want {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            let b: usize = w[0].parse().unwrap();
+            let m = mats[b];
+            let ours = [
+                m.quat[0],
+                m.quat[1],
+                m.quat[2],
+                m.quat[3],
+                m.trans[0],
+                m.trans[1],
+                m.trans[2],
+                m.trans_weight,
+            ];
+            for (k, s) in w[1..].iter().enumerate() {
+                words += 1;
+                if ours[k].to_bits() != bits(s).to_bits() {
+                    off.push(format!(
+                        "{} bone {b} ({}) word {k}: retail {s} ours {:08x}",
+                        t[2],
+                        names[b],
+                        ours[k].to_bits()
+                    ));
+                }
+            }
+        }
+    }
+    assert_eq!((calcs, words), (280, 17392));
+    assert!(
+        off.is_empty(),
+        "{calcs} calcs, {} of {words} words off: {:#?}",
+        off.len(),
+        &off[..off.len().min(30)]
+    );
+}

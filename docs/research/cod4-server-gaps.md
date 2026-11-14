@@ -146,15 +146,14 @@ Open, by how much a player notices.
 2. Closed: the helicopter's flight and its gun match retail word for word
    (Fixed above; `hardpoint_ab` `GAPS` gone).
 3. What the five capture gates (`cod4::capture_ab`, cod4-combat.md 15)
-   still tolerate: the thrown back frag's bounce off the shooter's head,
-   a few ulps of `trDelta` (the torso pitch's swing folded in shorts held
-   the head 0.0027 degrees off; fixed. The control bones now go through
-   1.7's control path and its controller and swing arithmetic, each word
-   for word with a gdb dump; the anim sampler's spine and neck locals are
-   left, cod4-combat.md 15.1),
-   the second rocket's entity number
-   and a killcam's archived view (both measured, cause open). Closed: the
-   dropped weapon's hit `trDelta`, prone and standing: the bodies' tags
+   still tolerate: the second rocket's entity number and a killcam's
+   archived view (both measured, cause open). Closed: the
+   thrown back frag's bounce off the shooter's head: the torso pitch's
+   swing folds in floats, the control bones take 1.7's control arm and
+   controller, and the hit poses sample their clips through 1.7's
+   `DObjCalcAnim`, each word for word with a gdb dump (cod4-combat.md
+   15.1, cod4-player-anims.md 11). Closed: the dropped weapon's hit
+   `trDelta`, prone and standing: the bodies' tags
    and hit boxes compose through 1.7's skeleton (cod4-gsc.md 3.2, "The
    skeleton"). Closed: the grenade's strike on a
    standing body and the dying prone body's `tag_weapon_right`, 0.11 high:

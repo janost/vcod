@@ -344,61 +344,74 @@ pub fn model_parts(
 }
 
 /// A read cursor over one of an xanim's data streams.
-struct Cur<'a> {
+pub(crate) struct Cur<'a> {
     b: &'a [u8],
     at: usize,
     what: &'static str,
 }
 
 impl<'a> Cur<'a> {
-    fn new(b: &'a [u8], what: &'static str) -> Self {
+    pub(crate) fn new(b: &'a [u8], what: &'static str) -> Self {
         Cur { b, at: 0, what }
     }
-    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+    pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let s = self.b.get(self.at..self.at + n).with_context(|| {
             format!("{} ends at {} of {}", self.what, self.b.len(), self.at + n)
         })?;
         self.at += n;
         Ok(s)
     }
-    fn u8(&mut self) -> Result<u8> {
+    pub(crate) fn u8(&mut self) -> Result<u8> {
         Ok(self.take(1)?[0])
     }
-    fn u16(&mut self) -> Result<u16> {
+    pub(crate) fn u16(&mut self) -> Result<u16> {
         let s = self.take(2)?;
         Ok(u16::from_le_bytes([s[0], s[1]]))
     }
-    fn i16(&mut self) -> Result<i16> {
+    pub(crate) fn i16(&mut self) -> Result<i16> {
         Ok(self.u16()? as i16)
     }
-    fn f32(&mut self) -> Result<f32> {
+    pub(crate) fn f32(&mut self) -> Result<f32> {
         let s = self.take(4)?;
         Ok(f32::from_le_bytes([s[0], s[1], s[2], s[3]]))
     }
-    fn vec3(&mut self) -> Result<Vec3> {
+    pub(crate) fn vec3(&mut self) -> Result<Vec3> {
         Ok(Vec3::new(self.f32()?, self.f32()?, self.f32()?))
     }
 }
 
 /// The streams `XAnimCalcParts` reads in step, and the frame index type.
-struct Streams<'a> {
-    byte: Cur<'a>,
-    short: Cur<'a>,
-    int: Cur<'a>,
-    rshort: Cur<'a>,
-    rbyte: Cur<'a>,
+pub(crate) struct Streams<'a> {
+    pub(crate) byte: Cur<'a>,
+    pub(crate) short: Cur<'a>,
+    pub(crate) int: Cur<'a>,
+    pub(crate) rshort: Cur<'a>,
+    pub(crate) rbyte: Cur<'a>,
     indices: Cur<'a>,
     /// u16 frame indices (256 frames or more).
     wide: bool,
 }
 
-impl Streams<'_> {
+impl<'a> Streams<'a> {
+    /// `x`'s streams, each read from its start.
+    pub(crate) fn of(x: &'a XAnim) -> Streams<'a> {
+        Streams {
+            byte: Cur::new(&x.data_byte, "dataByte"),
+            short: Cur::new(&x.data_short, "dataShort"),
+            int: Cur::new(&x.data_int, "dataInt"),
+            rshort: Cur::new(&x.random_data_short, "randomDataShort"),
+            rbyte: Cur::new(&x.random_data_byte, "randomDataByte"),
+            indices: Cur::new(&x.indices, "indices"),
+            wide: x.num_frames >= 256,
+        }
+    }
+
     /// One track's key frames: its table size off `dataShort`, then
     /// `size + 1` frame indices: bytes off `dataByte` under 256 frames; at
     /// or past it shorts off `dataShort`, or, from 64 keys up, a coarse
     /// table there (one entry per 256 keys, plus one) and the keys in
     /// `indices`.
-    fn keys(&mut self) -> Result<Vec<u16>> {
+    pub(crate) fn keys(&mut self) -> Result<Vec<u16>> {
         let size = usize::from(self.short.u16()?);
         if !self.wide {
             return Ok(self
@@ -453,15 +466,7 @@ pub fn clip(a: &Assets, x: &XAnim) -> Result<cxanim::XAnim> {
         names.len()
     );
     let last = x.num_frames;
-    let mut s = Streams {
-        byte: Cur::new(&x.data_byte, "dataByte"),
-        short: Cur::new(&x.data_short, "dataShort"),
-        int: Cur::new(&x.data_int, "dataInt"),
-        rshort: Cur::new(&x.random_data_short, "randomDataShort"),
-        rbyte: Cur::new(&x.random_data_byte, "randomDataByte"),
-        indices: Cur::new(&x.indices, "indices"),
-        wide: last >= 256,
-    };
+    let mut s = Streams::of(x);
     let mut tracks: Vec<Track> = names
         .iter()
         .map(|n| Track {
@@ -609,6 +614,11 @@ pub const ENTITY_CLIPS: [&str; 1] = ["bh_rotors"];
 pub struct BodySource {
     raw: std::collections::HashMap<String, Vec<u8>>,
     clips: std::collections::HashMap<String, cxanim::XAnim>,
+    /// The same clips as 1.7's sampler reads them ([`crate::xanimcalc`]).
+    parts: std::collections::HashMap<String, crate::xanimcalc::Parts>,
+    /// Each of `models`' bones by name with the local 1.7 gives a bone no
+    /// leaf reached (`SkelModel::base_locals`).
+    bases: std::collections::HashMap<String, Vec<(String, crate::skel::AnimMat)>>,
     models: std::collections::HashMap<String, Model>,
     cache: vcod_common::asset_source::AssetCache,
 }
@@ -640,6 +650,7 @@ impl BodySource {
         let tree =
             vcod_common::animtree::AnimTree::parse(&String::from_utf8_lossy(&raw[ANIMTREE]))?;
         let mut clips = std::collections::HashMap::new();
+        let mut parts = std::collections::HashMap::new();
         let names = tree
             .nodes
             .iter()
@@ -660,22 +671,60 @@ impl BodySource {
             let Some((a, x)) = found else {
                 continue;
             };
-            match clip(a, x) {
-                Ok(c) => {
+            match clip(a, x).and_then(|c| Ok((c, crate::xanimcalc::Parts::of(a, x)?))) {
+                Ok((c, p)) => {
                     clips.insert(name.to_ascii_lowercase(), c);
+                    parts.insert(name.to_ascii_lowercase(), p);
                 }
                 Err(e) => log::warn!("cod4 anim {name}: {e:#}"),
             }
         }
+        let mut bases = std::collections::HashMap::new();
+        for name in models.keys() {
+            let found = zones.iter().find_map(|a| {
+                let x = a
+                    .xmodels
+                    .iter()
+                    .find(|x| x.name.eq_ignore_ascii_case(name))?;
+                Some((*a, x))
+            });
+            let Some((a, x)) = found else {
+                continue;
+            };
+            let Some(skel) = crate::skel::SkelModel::of(x) else {
+                continue;
+            };
+            let names = x
+                .bone_names
+                .iter()
+                .map(|&i| script_string(a, i).to_string());
+            bases.insert(
+                name.to_ascii_lowercase(),
+                names.zip(skel.base_locals()).collect(),
+            );
+        }
         Ok(BodySource {
             raw,
             clips,
+            parts,
+            bases,
             models: models
                 .into_iter()
                 .map(|(k, v)| (k.to_ascii_lowercase(), v))
                 .collect(),
             cache: Default::default(),
         })
+    }
+
+    /// The clip `name` as 1.7's sampler reads it.
+    pub fn parts(&self, name: &str) -> Option<&crate::xanimcalc::Parts> {
+        self.parts.get(&name.to_ascii_lowercase())
+    }
+
+    /// Bone `bone` of model `model` as 1.7 leaves a bone no leaf reached.
+    pub fn base_local(&self, model: &str, bone: &str) -> Option<crate::skel::AnimMat> {
+        let bones = self.bases.get(&model.to_ascii_lowercase())?;
+        bones.iter().find(|(n, _)| n == bone).map(|(_, m)| *m)
     }
 
     /// How many clips the tree named that a zone held.
