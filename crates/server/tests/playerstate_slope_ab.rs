@@ -715,11 +715,11 @@ const SLOPE: Tolerance = Tolerance {
 
 /// What the prone crawls may read, measured 2026-11-13: the origin on
 /// retail's to the bit in both runs on the street and the mound to
-/// [`MOUND_UNTIL`]; the eye, `fTorsoHeight` and both body pitches exact; the
-/// body's yaw, both prone pitches, the view and `delta_angles` within 3.1e-5
-/// degrees (the street's view yaw and prone pitches, two `AngleDelta` folds
-/// off a short; cod11-mantle.md, "`AngleDelta` and the angle folds at every
-/// call site"). The street's rebased run read dxy max 0.71 until it carried
+/// [`MOUND_UNTIL`]; the eye, `fTorsoHeight`, both body pitches, the body's
+/// yaw and `delta_angles` exact; the mound exact throughout; the street's
+/// prone pitches within 3.1e-5 degrees and its view yaw within 1.6e-5 (two
+/// `AngleDelta` folds off a short; cod11-mantle.md, "`AngleDelta` and the
+/// angle folds at every call site"), measured 2026-11-14. The street's rebased run read dxy max 0.71 until it carried
 /// our weapon state across the rebase. The history: 2026-09-27 read |dz| max
 /// 0.173 and dxy max 0.52, both prone pitches 1.42 degrees off, before the
 /// dive, the landing damp, the body swing, the pitch cap, the fit trace at 24
@@ -729,9 +729,9 @@ const SLOPE: Tolerance = Tolerance {
 const PRONE: Tolerance = Tolerance {
     origin: 0.0,
     view: Some(ViewTolerance {
-        direction: 1e-4,
-        pitches: 1e-4,
-        view: 1e-4,
+        direction: 0.0,
+        pitches: 3.1e-5,
+        view: 1.6e-5,
         view_height: 0.0,
         body_height: 0.0,
         body_pitch: 0.0,

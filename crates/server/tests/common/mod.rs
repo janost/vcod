@@ -620,6 +620,11 @@ pub struct Step {
     /// Every cmd retail's step sent once its clock ran (`!cmds`), `None` on
     /// a capture taken before the line existed.
     pub cmds: Option<CmdLog>,
+    /// A step without a log holds its input until our newest snapshot reads
+    /// this `serverTime`, in place of the weapon wait: a gate that reads the
+    /// level clock (the idle sway) opens each step where retail's opened.
+    /// `None` opens it after the wait.
+    pub open_at: Option<i32>,
 }
 
 /// A step's `!cmds` line: the newest snapshot's `serverTime` when the
@@ -747,6 +752,7 @@ pub fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
                 settled: BTreeMap::new(),
                 place: None,
                 cmds: None,
+                open_at: None,
             });
             continue;
         }
@@ -1063,7 +1069,7 @@ pub fn replay_as(
             base.weapon = held(&cl);
         }
         // A logged step's wait is in its log.
-        if step.wait_ready && step.cmds.is_none() {
+        if step.wait_ready && step.cmds.is_none() && step.open_at.is_none() {
             for i in 0..100 {
                 now += Duration::from_millis(FRAME_MS as u64);
                 cl.send_frame(&base);
@@ -1075,6 +1081,13 @@ pub fn replay_as(
                 if i * FRAME_MS >= WAIT_FLOOR_MS && ready {
                     break;
                 }
+            }
+        }
+        if let Some(at) = step.open_at.filter(|_| step.cmds.is_none()) {
+            while cl.snapshots().newest().is_some_and(|s| s.server_time < at) {
+                now += Duration::from_millis(FRAME_MS as u64);
+                cl.send_frame(&base);
+                self::step(&mut sv, &q, &mut cl, now);
             }
         }
         // The state the step opens in, before its first tap: retail's own

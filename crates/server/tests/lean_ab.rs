@@ -23,13 +23,16 @@ use vcod_common::net::trajectory::Trajectory;
 
 const EV_BULLET_HIT_SMALL: i32 = 173;
 const EV_BULLET_HIT_LARGE: i32 = 174;
-/// How far our muzzle offset may sit from retail's: 1.03 at most, measured
-/// 2026-11-13. Each side's impact is snapped to whole units, and the
-/// offset takes the sway out at that side's own clock (ours runs about 13.7
-/// s behind retail's), through this file's sway model, good to 0.04 degrees,
-/// about a quarter unit at this range. A bound of 1.0 needs ours on
-/// retail's clock, where the impacts would compare as they land.
-const OFFSET_TOL: f32 = 1.1;
+/// How far our muzzle offset may sit from retail's: none, measured
+/// 2026-11-14. Each step opens on retail's level clock, so both sides
+/// sway alike and every round strikes retail's whole-unit impact. Before
+/// that ours ran about 13.7 s behind and the offsets, each taken out at its
+/// side's own clock through this file's sway model, read 1.03 apart.
+const OFFSET_TOL: f32 = 0.0;
+/// How long after a tap step opens our replay's round leaves: the tap's
+/// cmd runs in the step's first frame and its event rides that frame's
+/// snapshot.
+const SHOT_LAG_MS: i32 = common::FRAME_MS as i32;
 const LEANF_TOL: f32 = 0.01;
 /// `adsIdleAmount` of the scoped kar98k, and `idleCrouchFactor`.
 const ADS_IDLE: f32 = 45.0;
@@ -146,9 +149,22 @@ fn a_leaning_scoped_shot_leaves_from_retails_muzzle() {
     let team = common::header_value(&text, "joined", &path).to_string();
     let held =
         vcod_server::configstrings::weapon_index(&weapon).expect("the joined weapon in CS 7");
-    let steps = parse_fixture(&text, held as u8);
+    let mut steps = parse_fixture(&text, held as u8);
     let retail = retail_shots(&text);
     assert_eq!(retail.len(), 7, "the capture's seven shots");
+    // Each fire step opens where its round leaves on retail's level clock.
+    // Each step opens on retail's level clock, so the sway matches: where
+    // retail's first trace did, and a tap step a frame before its round
+    // left, since retail's tap missed the step's first frame once (the
+    // probe's first snapshot came 16 ms into `scope_right_1`).
+    let mut shots = retail.iter();
+    for step in &mut steps {
+        step.open_at = if step.pulses > 0 {
+            shots.next().map(|s| s.server_time - SHOT_LAG_MS)
+        } else {
+            step.trace.first().and_then(|t| t.server_time)
+        };
+    }
 
     // The probe aimed every cmd at one absolute yaw, so the view every shot
     // reads is where the replay faces; the spawn's own facing is not.
@@ -168,11 +184,15 @@ fn a_leaning_scoped_shot_leaves_from_retails_muzzle() {
     for (i, (r, o)) in retail.iter().zip(&ours).enumerate() {
         let (rm, om) = (r.muzzle_offset(), o.muzzle_offset());
         let line = format!(
-            "shot {i}: leanf retail {} ours {}, offset retail {rm:.2} ours {om:.2}",
-            r.leanf, o.leanf
+            "shot {i} at {} / {}: leanf retail {} ours {}, offset retail {rm:.2} ours {om:.2}",
+            r.server_time, o.server_time, r.leanf, o.leanf
         );
         eprintln!("{line}");
-        if (r.leanf - o.leanf).abs() > LEANF_TOL || (rm - om).length() > OFFSET_TOL {
+        if r.server_time != o.server_time
+            || r.at != o.at
+            || (r.leanf - o.leanf).abs() > LEANF_TOL
+            || (rm - om).length() > OFFSET_TOL
+        {
             bad.push(line);
         }
     }
