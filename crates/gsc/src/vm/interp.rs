@@ -760,20 +760,7 @@ impl Vm {
                     }
                     Value::Struct(id) => Some(self.heap.get_field(id, name)),
                     Value::Entity(id) if host.is_live(id) => {
-                        let mut cx = Cx {
-                            interner: &mut self.interner,
-                            heap: &mut self.heap,
-                            level: self.level,
-                            game: self.game,
-                            notifies,
-                            spawns: field_spawns,
-                        };
-                        let v = host.get_field(&mut cx, id, name);
-                        debug_assert!(
-                            field_spawns.is_empty(),
-                            "Cx::spawn is only honoured from a builtin"
-                        );
-                        Some(v)
+                        Some(self.entity_field(host, notifies, field_spawns, id, name))
                     }
                     Value::Array(id) if name == self.size_atom => {
                         Some(Value::Int(self.heap.array_len(id) as i32))
@@ -854,20 +841,7 @@ impl Vm {
                             if !host.is_live(id) {
                                 fail!(DEAD_OBJECT);
                             }
-                            let mut cx = Cx {
-                                interner: &mut self.interner,
-                                heap: &mut self.heap,
-                                level: self.level,
-                                game: self.game,
-                                notifies,
-                                spawns: field_spawns,
-                            };
-                            let v = host.get_field(&mut cx, id, name);
-                            debug_assert!(
-                                field_spawns.is_empty(),
-                                "Cx::spawn is only honoured from a builtin"
-                            );
-                            v
+                            self.entity_field(host, notifies, field_spawns, id, name)
                         }
                         // An array's key count, a string's length. `_load.gsc` loops on it.
                         Value::Array(id) if name == self.size_atom => {
@@ -1208,46 +1182,10 @@ impl Vm {
                     // before the calling thread's next instruction (see
                     // `Cx::spawn`).
                     if !pending_spawns.is_empty() {
-                        let mut queue =
-                            std::collections::VecDeque::from(std::mem::take(&mut *pending_spawns));
-                        while let Some(queued) = queue.pop_front() {
-                            let target = queued.func;
-                            match self.functions.get(&target).cloned() {
-                                Some(f) => {
-                                    self.spawn(host, target, f, queued.recv, queued.args, errors);
-                                    spawned = true;
-                                }
-                                None => {
-                                    let e = ScriptError {
-                                        file: func.file,
-                                        func: func.name,
-                                        line: func.lines[at],
-                                        kind: self
-                                            .no_such_function("spawn of unknown function", target),
-                                    };
-                                    self.record_abort(&e);
-                                    errors.push(e);
-                                }
-                            }
-                            if let Some(token) = queued.then {
-                                let mut cx = Cx {
-                                    interner: &mut self.interner,
-                                    heap: &mut self.heap,
-                                    level: self.level,
-                                    game: self.game,
-                                    notifies,
-                                    spawns: field_spawns,
-                                };
-                                host.spawn_returned(&mut cx, token);
-                                // The engine code after one
-                                // `Scr_ExecEntThread` may start the next:
-                                // those threads go ahead of the rest of the
-                                // builtin's queue.
-                                for next in field_spawns.drain(..).rev() {
-                                    queue.push_front(next);
-                                }
-                            }
-                        }
+                        let (pending, field) = (&mut *pending_spawns, &mut *field_spawns);
+                        spawned |= self.run_builtin_spawns(
+                            host, func, at, notifies, errors, pending, field,
+                        );
                     }
                     push!(v);
                 }
@@ -1793,6 +1731,90 @@ impl Vm {
         *frame_sp = sp as u32;
         *remaining = left;
         exit
+    }
+
+    /// `get_field` on a live entity, through a `Cx` whose spawns go
+    /// nowhere (see [`Spawns`]).
+    #[inline(never)]
+    fn entity_field(
+        &mut self,
+        host: &mut dyn Host,
+        notifies: &mut Vec<(Target, Atom, Vec<Value>)>,
+        field_spawns: &mut Vec<QueuedSpawn>,
+        id: crate::value::EntId,
+        name: Atom,
+    ) -> Value {
+        let mut cx = Cx {
+            interner: &mut self.interner,
+            heap: &mut self.heap,
+            level: self.level,
+            game: self.game,
+            notifies,
+            spawns: field_spawns,
+        };
+        let v = host.get_field(&mut cx, id, name);
+        debug_assert!(
+            field_spawns.is_empty(),
+            "Cx::spawn is only honoured from a builtin"
+        );
+        v
+    }
+
+    /// Runs the threads a builtin just queued (`Cx::spawn`), each to its
+    /// first suspend, as retail's `Scr_ExecEntThread` from inside a builtin
+    /// does, before the calling thread's next op; whether any ran. `func`
+    /// and `at` name the call, for an unknown function's error.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn run_builtin_spawns(
+        &mut self,
+        host: &mut dyn Host,
+        func: &Function,
+        at: usize,
+        notifies: &mut Vec<(Target, Atom, Vec<Value>)>,
+        errors: &mut Vec<ScriptError>,
+        pending_spawns: &mut Vec<QueuedSpawn>,
+        field_spawns: &mut Vec<QueuedSpawn>,
+    ) -> bool {
+        let mut spawned = false;
+        let mut queue = std::collections::VecDeque::from(std::mem::take(pending_spawns));
+        while let Some(queued) = queue.pop_front() {
+            let target = queued.func;
+            match self.functions.get(&target).cloned() {
+                Some(f) => {
+                    self.spawn(host, target, f, queued.recv, queued.args, errors);
+                    spawned = true;
+                }
+                None => {
+                    let e = ScriptError {
+                        file: func.file,
+                        func: func.name,
+                        line: func.lines[at],
+                        kind: self.no_such_function("spawn of unknown function", target),
+                    };
+                    self.record_abort(&e);
+                    errors.push(e);
+                }
+            }
+            if let Some(token) = queued.then {
+                let mut cx = Cx {
+                    interner: &mut self.interner,
+                    heap: &mut self.heap,
+                    level: self.level,
+                    game: self.game,
+                    notifies,
+                    spawns: field_spawns,
+                };
+                host.spawn_returned(&mut cx, token);
+                // The engine code after one `Scr_ExecEntThread` may start
+                // the next: those threads go ahead of the rest of the
+                // builtin's queue.
+                for next in field_spawns.drain(..).rev() {
+                    queue.push_front(next);
+                }
+            }
+        }
+        spawned
     }
 
     fn no_such_function(&self, what: &str, target: FuncRef) -> ErrorKind {
