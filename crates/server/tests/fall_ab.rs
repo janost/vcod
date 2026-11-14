@@ -52,6 +52,7 @@ const CVARS: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-damage-cvars
 const WALK: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-walk.txt";
 const CORPSE: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-corpse.txt";
 const WALK_CORPSE: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-walk-corpse.txt";
+const SLICK_WALK: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-walk-slick.txt";
 const SLIDE_HIT: &str = "tests/fixtures/playerstate/mp_carentan-dm-slide-hit.txt";
 /// `--probe-fall-walk`'s yaw in the walk fixture.
 const WALK_YAW: f32 = 315.0;
@@ -380,6 +381,20 @@ struct Ours {
 /// The probe on our server, `sets` as `+set`s, until it logs `done`. Until
 /// the first drop the client sends 16 and 17 ms cmds of its own, walking at
 /// `walk` if given; from then on, retail's, shifted onto our clock.
+/// `surfaceparm slick` (0x2) ORed into every lump-0 material's surface
+/// flags: the map the slick capture's server loaded.
+fn slicken(mut bsp: Vec<u8>) -> Vec<u8> {
+    let word = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap()) as usize;
+    let (len, off) = (word(&bsp, 8), word(&bsp, 12));
+    for m in 0..len / 72 {
+        let o = off + m * 72 + 64;
+        let flags = word(&bsp, o) as u32 | vcod_common::collision::SURF_SLICK;
+        bsp[o..o + 4].copy_from_slice(&flags.to_le_bytes());
+    }
+    bsp
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_ours(
     gametype: &str,
     fs: vcod_common::pk3::Pk3Fs,
@@ -387,11 +402,14 @@ fn run_ours(
     walk: Option<f32>,
     hitch: Option<Hitch>,
     retail: &Retail,
+    slick: bool,
 ) -> Ours {
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{gametype}.gsc");
     let probe = std::fs::read_to_string(src).expect("read the probe");
     let bsp_path = fs.resolve_map(MAP).expect("the map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("bsp");
+    let bytes = fs.read(&bsp_path).expect("read the bsp");
+    let bytes = if slick { slicken(bytes) } else { bytes };
+    let bsp = vcod_common::bsp::parse(&bytes).expect("bsp");
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(common::cfg(MAP, gametype), now);
     sv.overlay_script(&format!("maps/mp/gametypes/{gametype}"), &probe);
@@ -637,6 +655,17 @@ fn compare_walk_rows(retail: &Retail, ours: &Ours, second: i32) -> Vec<String> {
 /// `sets` are the two bounds as retail's systeminfo carried them, `walk` the
 /// capture's `--probe-fall-walk` yaw.
 fn gate(fixture: &str, sets: &[(&str, &str)], walk: Option<f32>, hitch: Option<Hitch>) {
+    gate_on(fixture, sets, walk, hitch, false);
+}
+
+/// [`gate`] on the stock map or, with `slick`, on [`slicken`]'s.
+fn gate_on(
+    fixture: &str,
+    sets: &[(&str, &str)],
+    walk: Option<f32>,
+    hitch: Option<Hitch>,
+    slick: bool,
+) {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
         return;
     };
@@ -647,7 +676,7 @@ fn gate(fixture: &str, sets: &[(&str, &str)], walk: Option<f32>, hitch: Option<H
         "{fixture} has no finished run"
     );
     let retail_events = ring_events(retail.falls.iter());
-    let ours = run_ours(FALL_PROBE, fs, sets, walk, hitch, &retail);
+    let ours = run_ours(FALL_PROBE, fs, sets, walk, hitch, &retail, slick);
     if let Some(path) = std::env::var_os("FALL_DUMP") {
         let mut out = String::new();
         for r in &retail.falls {
@@ -684,7 +713,21 @@ fn gate(fixture: &str, sets: &[(&str, &str)], walk: Option<f32>, hitch: Option<H
     }
 
     let second = drop_time(&retail.probe, 1).expect("a second retail drop");
-    if walk.is_some() {
+    if slick {
+        // No landing stuns on slick ground: no row reads `pm_flags` 0x100,
+        // and every row matches, footsteps aside.
+        let stunned = retail
+            .falls
+            .iter()
+            .filter(|r| {
+                i32::from_str_radix(tail_field(&r.rest, "pm_flags=0x"), 16).unwrap() & 0x100 != 0
+            })
+            .count();
+        assert_eq!(stunned, 0, "retail stunned on slick ground");
+        let (lines, rows) = compare_rows(&retail, &ours, second, i32::MAX, false);
+        assert!(lines > 100, "only {lines} FALL lines past the second drop");
+        diffs.extend(rows);
+    } else if walk.is_some() {
         diffs.extend(compare_walk_rows(&retail, &ours, second));
     } else {
         let (lines, rows) = compare_rows(&retail, &ours, second, i32::MAX, true);
@@ -763,6 +806,15 @@ fn a_stunned_walk_into_a_wall_keeps_its_velocity_as_retail_does() {
     gate(WALK, &[], Some(WALK_YAW), Some(WALK_HITCH));
 }
 
+/// The walk run on a slick mp_carentan ([`SLICK_WALK`], every material
+/// `surfaceparm slick`): no ground friction, the walk's accel at 1.0, the
+/// slick gravity turned into ground speed, and no landing stun
+/// (cod11-mantle.md, "Slick ground").
+#[test]
+fn a_walk_on_slick_ground_slides_as_retail_does() {
+    gate_on(SLICK_WALK, &[], Some(WALK_YAW), None, true);
+}
+
 /// The walk run again with no stall, its client printing every snapshot
 /// that moved the corpse: the fatal drop's body slides on flat terrain and
 /// sinks 0.1 below a live player's rest, since a fall that ends above the
@@ -813,7 +865,7 @@ fn slide_gate(fixture: &str) {
         pressed >= 10,
         "retail pressed into the wall under a hit's timer on only {pressed} rows"
     );
-    let ours = run_ours(SLIDE_PROBE, fs, &[], Some(WALK_YAW), None, &retail);
+    let ours = run_ours(SLIDE_PROBE, fs, &[], Some(WALK_YAW), None, &retail, false);
     if let Some(path) = std::env::var_os("FALL_DUMP") {
         let mut out = String::new();
         for r in &retail.falls {

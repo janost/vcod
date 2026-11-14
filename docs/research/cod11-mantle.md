@@ -2409,9 +2409,25 @@ VERIFIED, read out of lump 0 of each map: no material of the fourteen
 and mp_neuville), of mp_stalingrad or mp_tigertown, or of any single-player
 map in 1.1's `pak[0-9].pk3` carries 0x2, and no `.shader` file in any pak
 declares `surfaceparm slick`. INFERRED: the arm never fires on stock
-content, so it was ported from the binary alone and is unmeasured against
-retail. A brush hit reports the struck side's material (lump 3), so a
+content. A brush hit reports the struck side's material (lump 3), so a
 custom map slicking one face of a brush reads slick on that face only.
+
+VERIFIED, live (retail 1.1d, 2026-11-14,
+`crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall-walk-slick.txt`):
+stock mp_carentan with 0x2 ORed into all 194 lump-0 materials' surface
+flags, served from a pk3 in the homepath, under `probe_fall`'s six drops
+and a `--probe-fall-walk 315` client. The walker slides: the probe's
+`after` lines read (1157.64, 1815.12) and (960.87, 1663.12) where the
+stock run's read (1231.15, 1815.12) every time, and no row carries the
+landing stun's `pm_flags` 0x100, the drops of 300 to 520 included; the
+damage callbacks read 23, 38, 74, 77 and 110 as the stock run's do (74
+against 76: the impact speed rides the cmd timing). vcod: `fall_ab`'s
+`a_walk_on_slick_ground_slides_as_retail_does` replays the run on the same
+map built from the stock one (`slicken`) and matches every `FALL` row past
+the second drop to the printed thousandth, velocity, `pm_flags`,
+`pm_time`, health and ring included; on the stock map it fails at the
+second drop's first airborne row. Not measured: 1.5b and UO, whose arms
+are ported the same way (cod15-movement.md).
 
 ## The wish speed
 
