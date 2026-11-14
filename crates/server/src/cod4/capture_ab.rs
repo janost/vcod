@@ -589,12 +589,7 @@ fn cod4_rocket_ab() {
     pair_ab("cod4_rocket_ab", &ROCKET, ROCKET_GAPS);
 }
 
-const THROWBACK_GAPS: &[(&str, &str)] = &[(
-    "* entity 317:4 lerp.pos.trDelta",
-    "the bounce off the shooter's head box, a few ulps off: the controls and \
-     control bones match a gdb dump, the anim sampler's spine and neck locals \
-     are unchecked (cod4-combat.md 15.1)",
-)];
+const THROWBACK_GAPS: &[(&str, &str)] = &[];
 
 /// The live frag's flight, the hint, the pickup, the throw back and its
 /// strike on the shooter's head (cod4-gsc.md 9.3, cod4-combat.md 15).

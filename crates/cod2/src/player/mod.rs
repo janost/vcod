@@ -484,6 +484,36 @@ impl PlayerBody {
         self.pose_with(rig, set, fs, f, now_ms, node_time, turret, false)
     }
 
+    /// The tree [`Self::pose_in`] blends at `now_ms`, unsampled
+    /// (`playerpose::player_leaves`): what 1.7's sampler walks.
+    pub fn leaves(
+        &self,
+        set: &mut PlayerAnimSet,
+        fs: &dyn AssetSource,
+        f: &BodyFrame,
+        now_ms: i32,
+    ) -> Option<[(f32, Vec<playerpose::Leaf>); 2]> {
+        let PlayerAnimSet { anims, clips } = set;
+        let inputs = PoseInputs {
+            anims,
+            legs: f.legs_anim,
+            torso: f.torso_anim,
+            legs_layers: self.legs.layers(now_ms),
+            torso_layers: self.torso.layers(now_ms),
+            nodes: self.torso.node_weights(now_ms),
+            group_pitch: f.torso_pitch,
+            turret_leaves: None,
+            turret_left: None,
+            seat_leaves: Vec::new(),
+            controllers: None,
+            leaf_times: Vec::new(),
+            node_time: true,
+            arith: vcod_common::patch::Arith::Stored,
+            binds: None,
+        };
+        playerpose::player_leaves(&inputs, |name| load_clip(clips, fs, name))
+    }
+
     /// [`Self::pose_in`]; a `drawn` pose skips the engine records
     /// (`playerpose::pose_player_drawn`), which only a trace reads.
     #[allow(clippy::too_many_arguments)]

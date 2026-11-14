@@ -316,7 +316,8 @@ impl SkelModel {
 #[derive(Clone, Copy, Debug)]
 pub struct PosedLocal {
     pub quat: [f32; 4],
-    /// The local translation, the model's own (`bind`) included.
+    /// A non-root's shift off the model's own translation (`bind`), as
+    /// `DObjCalcAnim` leaves it; a root's whole translation.
     pub trans: [f32; 3],
     /// Set by a control angle (0x81b01e8): `DObjCalcSkel` turns it in bone
     /// 0's frame ([`compose_controlled`]).
@@ -325,9 +326,8 @@ pub struct PosedLocal {
 
 /// `DObjCalcSkel` over a pose another sampler left: each bone's parent
 /// (-1 a root, a parent ahead of its child), its local, and the model's own
-/// translation off the parent (`bind`), which the local's includes. A root
-/// keeps its local; each other bone composes its local less `bind` with
-/// `bind` added back ([`compose`], [`compose_controlled`] for a control
+/// translation off the parent (`bind`). A root keeps its local; each other
+/// bone composes its local's shift with `bind` added ([`compose`], [`compose_controlled`] for a control
 /// bone), as 1.7 adds the model's `trans` to the anim's; all in `a`'s
 /// arithmetic (`iw3mp.exe`'s 0x57f550 for the roots, 0x57fbd0 for the rest).
 pub fn calc_posed(
@@ -356,7 +356,7 @@ pub fn calc_posed(
                 let bind = binds.get(b).copied().unwrap_or_default();
                 let local = AnimMat {
                     quat: l.quat,
-                    trans: [0, 1, 2].map(|k| l.trans[k] - bind[k]),
+                    trans: l.trans,
                     trans_weight: 0.0,
                 };
                 match l.control {
@@ -372,29 +372,53 @@ pub fn calc_posed(
 
 /// A player body's `DObjAnimMat`s: the locals `pose` left, `controls`'
 /// bones set as 1.7's controller sets them ([`set_controls`]), composed by
-/// [`calc_posed`] in `a`'s arithmetic. The server's hit poses and the
-/// client's drawn bodies both take it.
+/// [`calc_posed`] in `a`'s arithmetic. The client's drawn bodies take it.
 pub fn player_mats(
     skel: &Skeleton,
     pose: &PoseBuffer,
     controls: Option<&Controllers>,
     a: Cod4Arith,
 ) -> Vec<AnimMat> {
+    player_mats_sampled(skel, pose, &[], controls, a)
+}
+
+/// [`player_mats`] with the locals 1.7's sampler left
+/// ([`crate::xanimcalc::calc`]) in place of `pose`'s for each bone it
+/// reached (`sampled[b]` some): its quat as summed and its shift. The
+/// server's hit poses take it.
+pub fn player_mats_sampled(
+    skel: &Skeleton,
+    pose: &PoseBuffer,
+    sampled: &[Option<AnimMat>],
+    controls: Option<&Controllers>,
+    a: Cod4Arith,
+) -> Vec<AnimMat> {
     let bones = skel.bones();
     let parents: Vec<i32> = bones.iter().map(|b| b.parent).collect();
+    let binds: Vec<[f32; 3]> = bones.iter().map(|b| b.local_pos.to_array()).collect();
     let mut locals: Vec<PosedLocal> = (0..bones.len())
         .map(|b| {
+            if let Some(m) = sampled.get(b).copied().flatten() {
+                return PosedLocal {
+                    quat: m.quat,
+                    trans: m.trans,
+                    control: false,
+                };
+            }
             let (p, q) = pose.local(b);
+            let p = p.to_array();
             PosedLocal {
                 quat: q.to_array(),
-                trans: p.to_array(),
+                trans: match parents[b] < 0 {
+                    true => p,
+                    false => [0, 1, 2].map(|k| p[k] - binds[b][k]),
+                },
                 control: false,
             }
         })
         .collect();
-    let binds: Vec<[f32; 3]> = bones.iter().map(|b| b.local_pos.to_array()).collect();
     if let Some(c) = controls {
-        set_controls(skel, &mut locals, &binds, c, a);
+        set_controls(skel, &mut locals, c, a);
     }
     calc_posed(&parents, &locals, &binds, a)
 }
@@ -416,13 +440,7 @@ pub fn worlds_of(mats: &[AnimMat]) -> Vec<(glam::Vec3, glam::Quat)> {
 /// six control bones take their angles' quat (`AnglesToQuat`) and no shift
 /// off the model's, marked to turn in bone 0's frame, in place of the
 /// anim's local; `tag_origin` takes its angles' quat and translation.
-fn set_controls(
-    skel: &Skeleton,
-    locals: &mut [PosedLocal],
-    binds: &[[f32; 3]],
-    c: &Controllers,
-    a: Cod4Arith,
-) {
+fn set_controls(skel: &Skeleton, locals: &mut [PosedLocal], c: &Controllers, a: Cod4Arith) {
     for (name, angles) in [
         ("pelvis", c.pelvis),
         ("back_low", c.back_low),
@@ -434,7 +452,7 @@ fn set_controls(
         if let Some(b) = skel.bone_index(name) {
             locals[b] = PosedLocal {
                 quat: angles_to_quat_in(angles, a),
-                trans: binds[b],
+                trans: [0.0; 3],
                 control: true,
             };
         }
