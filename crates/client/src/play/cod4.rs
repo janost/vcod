@@ -4193,6 +4193,69 @@ pub(crate) mod tests {
         assert!(left.2 < level.2 - 3.0, "{left:?} {level:?}");
     }
 
+    /// The drawn body turns its control bones in `tag_origin`'s frame as
+    /// the server does (cod4-player-anims.md 8): the spectator capture's
+    /// walker strafing 45 degrees off its view and aiming 30 down, so
+    /// `tag_origin` yaws off the view. For the same pose and controls every
+    /// bone of the drawn body sits within a thousandth of a unit of
+    /// `cod4_lnxded`'s arithmetic, where CoD1's model-frame turn moves the
+    /// head by more than a unit.
+    #[test]
+    fn a_drawn_bodys_control_bones_turn_as_the_servers() {
+        use crate::play::cod4_players::Cod4Players;
+        use vcod_cod4::skel::{player_mats, worlds_of};
+        use vcod_common::playerpose::Cod4Arith;
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let text = std::fs::read_to_string(format!("{FIXTURES}/play-1.7-spec.txt")).unwrap();
+        let mut s = Cod4Session::open_capture(&text).unwrap();
+        let (_, weapons, src) =
+            crate::cod4_fly::load_bodies(install.root(), "mp_crash", &s.entity_assets()).unwrap();
+        let mut ms = 0.0;
+        let mut walker = None;
+        while walker.is_none() && !s.finished() {
+            ms += 1000.0 / 60.0;
+            s.step(ms).unwrap();
+            walker = s.scene().and_then(|scene| {
+                let d = scene.entities.iter().find(|d| d.number == 2)?;
+                Some((d.body.clone()?, scene.render_time, scene.server_time))
+            });
+        }
+        let (mut v, t, snap) = walker.unwrap();
+        v.frame.angles[0] = 30.0;
+        v.frame.movement_dir = 45.0;
+        let mut players = Cod4Players::default();
+        let mut out = Vec::new();
+        for k in 0..60 {
+            out = players.posed(&src, &weapons, &[(2, &v)], &[], t + k * 16, snap);
+        }
+        let (_, rig, drawn) = &out[0];
+        let (posed_rig, pose, controls) =
+            players.body_pose(&src, 2, &v.frame, t + 59 * 16).unwrap();
+        assert!(std::rc::Rc::ptr_eq(rig, &posed_rig));
+        assert!(controls.origin[1].abs() > 20.0, "{controls:?}");
+        assert!(controls.back_low[0].abs() > 5.0, "{controls:?}");
+        let server = worlds_of(&player_mats(
+            &rig.skeleton,
+            &pose,
+            Some(&controls),
+            Cod4Arith::Server,
+        ));
+        let body = &rig.models[0].1;
+        let at = |skins: &[glam::Mat4], b: usize| skins[b].transform_point3(body.bones[b].pos);
+        let theirs = rig.skeleton.skin_matrices(&server, 0);
+        let cod1 = pose.skin_matrices(&rig.skeleton, 0);
+        let worst = (0..body.bones.len())
+            .map(|b| at(&drawn.models[0].1, b).distance(at(&theirs, b)))
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-3, "{worst}");
+        let head = body.bones.iter().position(|b| b.name == "j_head").unwrap();
+        let off = at(&cod1, head).distance(at(&theirs, head));
+        println!("worst bone {worst:e}, CoD1's head {off:.2} off");
+        assert!(off > 1.0, "{off}");
+    }
+
     /// One body under two weapons is two rigs over one copy of its body
     /// and head: each rig baked its own before (cod4-client-perf.md 23).
     #[test]

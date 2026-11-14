@@ -781,6 +781,11 @@ otherwise.
   test's `bot_world(.., Vec::new())` and `nav_build` clip the clip map alone.
 - `CountPlayers`' shared `level.players` array is under
   [Script host and VM](#script-host-and-vm).
+- A CoD4 player's control bones turn in `tag_origin`'s frame, not the
+  model's as CoD1's do (`vcod_cod4::skel::player_mats`, both the server's
+  hit poses and the client's drawn bodies). `PoseBuffer::bone_worlds` of a
+  CoD4 body still holds CoD1's turn: a body strafing 45 degrees has its
+  head 5 units off (cod4-player-anims.md 8).
 - Cmds are thought on arrival, so a hit lands between the victim's cmds of a
   frame as the two clients' packets arrived. A gate replaying two retail
   captures sends each frame's packets in the order retail got them
