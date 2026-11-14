@@ -1336,6 +1336,20 @@ frame, before the probe's watcher wakes, the three weapon drops start 0.58,
 (`common::PROBE_JOIN_MS`, movers doc 15) they start 0.10, 0.09 and 0.13 off,
 and the gate allows 0.2 (`TAG_TOL`).
 
+VERIFIED, the 2026-11-14 1.5b recapture (`mp_carentan-dm-itemdrop-15.txt`
+since, the `--probe-items` client's `SPAWNED` and `CMDS` lines appended):
+the player spawns at 6850, and the rests after each `setOrigin` ride that
+run's cmds (the `flat` spot reads -23.85 a second after the first stand,
+-23.87 after the second, -23.83 at the drop; the 2026-10-20 run read -23.70
+at the first). `itemdrop_ab` runs ours alone until its spawn lands on 6850
+and sends every cmd on the logged times (`ProbeHold::framed`): every `PROBE`
+position, the three weapon drops' start against the dropper included,
+matches retail's print, and the launch points sit at most 0.00026 off
+retail's floats. VERIFIED, the gate, which holds that capture to 0.0005
+(`REPLAYED_TOL`) in place of `TAG_TOL` and `START_TOL`; the 1.1d and UO
+captures, without `CMDS` lines, keep those two. INFERRED: the 0.13 and the
+fifth of a unit were the spawn's frame and the cmd split.
+
 VERIFIED, `Drop_Item` (0x4ed30): the yaw is `ent+0x144` plus its third
 argument; a non-zero fourth argument zeroes the velocity, else the same 150
 (0x74e5c) and `200 + 50 * crandom()` (0x74e60..0x74e68); z is raised by half
