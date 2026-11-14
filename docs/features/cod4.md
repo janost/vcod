@@ -127,7 +127,9 @@ The weapon byte is the client's own pick
   cracked glass, never both (cod4-client-view.md 15).
 - A `physicsLaunch`ed part (a blown-up car's doors, hood, bumpers,
   mirrors and wheels) flies off its launch on this client, as 1.7's does,
-  bounces by its physics preset and comes to rest on the world; one first
+  bounces by its physics preset on its model's shape (brush, boxes or
+  cylinders, else its bounds), comes to rest on the world, and a later
+  blast leaves it be, as on 1.7; one first
   seen more than a second after its launch stays where it stood, as on
   1.7 ([cod4-gsc.md](../research/cod4-gsc.md) 3.6).
 - The airstrike's jets and the helicopter with turning rotors, rotor
@@ -310,11 +312,11 @@ has a handler (3.1).
 - Looping and triggered map effects go out as `ET_LOOP_FX` and `ET_FX`.
 - Hardpoints: the airstrike's three `ET_PLANE` jets and their bombs; the
   helicopter (`ET_HELICOPTER`) levels and holds until its first goal,
-  flies its path, aims and fires its cannon
-  and rockets, pitches and rolls off its acceleration, wanders in the
-  hover, notifies `script_vehicle_collision` when it flies into the
-  world, takes hits on its turned gun, and smokes and crashes when shot
-  down (3.2).
+  flies its path, aims and fires its cannon and rockets, pitches and rolls
+  off its acceleration, wanders in the hover (its flight and gun match
+  retail captures word for word), notifies `script_vehicle_collision` when
+  it flies into the world, takes hits on its turned gun, and smokes and
+  crashes when shot down (3.2).
 - `bulletTrace` scores bodies' posed hit boxes and the helicopter;
   `getTagOrigin` reads a player's posed bone (3.3). Bones compose as 1.7's
   skeleton composes them (3.2, "The skeleton").
@@ -450,8 +452,10 @@ Ranked by how much a player notices. The research-side lists are
    ([cod4-front-end.md](../research/cod4-front-end.md) 4).
 3. **Physics debris on vcod's solver.** A `physicsLaunch`ed part (a
    car's door or hood) flies, lands and settles under vcod's own contact
-   solver, not ODE, so its path and spin differ in detail, and a blast
-   does not push it. Ragdolls use vcod's position-based solver,
+   solver, not ODE, so its path and spin differ in detail. A blast does
+   not push it, as on 1.7. A map's dynamic entities (the props 1.7 lets
+   bullets and blasts knock about) are not drawn at all. Ragdolls use
+   vcod's position-based solver,
    so corpses fall differently too
    ([cod4-gsc.md](../research/cod4-gsc.md) 3.6,
    [cod4-player-anims.md](../research/cod4-player-anims.md) 10).

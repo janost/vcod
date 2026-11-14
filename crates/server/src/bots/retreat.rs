@@ -178,6 +178,31 @@ impl Bot {
         (!self.duty_bound(view)).then_some(Goal::To(p))
     }
 
+    /// Passes over a health item the bot cannot close on: its follower
+    /// walked out the plan to it ([`Bot::heal_walked`]) and the body came
+    /// no [`super::SHORT_GAIN`] nearer in [`super::SHORT_TICKS`]. A pack
+    /// dropped where no body fits ends a plan at the node nearest it, and
+    /// from there hurt bots walked at it into the wall for good
+    /// (bot-objectives.md 14.8).
+    pub(super) fn track_heal(&mut self, view: &BotView) {
+        let walked = std::mem::take(&mut self.heal_walked);
+        let Some(p) = view.survive.heal.filter(|_| walked) else {
+            self.heal_short = None;
+            return;
+        };
+        let d = super::dist_sq(view.origin, p).sqrt();
+        let (best, ticks) = match self.heal_short {
+            Some((at, best, ticks)) if at == p && d > best - super::SHORT_GAIN => (best, ticks + 1),
+            _ => (d, 0),
+        };
+        if ticks >= super::SHORT_TICKS {
+            self.shunned.push((p, super::SHUN_TICKS));
+            self.heal_short = None;
+        } else {
+            self.heal_short = Some((p, best, ticks));
+        }
+    }
+
     /// Stood at the cover: the body holds still on purpose.
     pub(super) fn holding_cover(&self, view: &BotView) -> bool {
         self.retreat.is_some() && view.survive.cover.is_some_and(|c| at_cover(view.origin, c))
@@ -544,6 +569,33 @@ mod tests {
         bot.set_retreat(false);
         v.survive.health = 30;
         assert_ne!(bot.goal(&v), Goal::To(pack));
+    }
+
+    /// A pack dropped where no body fits: the plan to it walked out, the
+    /// body comes no nearer, and after `SHORT_TICKS` the bot passes it
+    /// over. One still walking its plan, or closing in, keeps it.
+    #[test]
+    fn a_health_item_no_body_reaches_is_passed_over() {
+        let (mut bot, mut v) = hurt(1);
+        v.enemy = None;
+        let pack = [400.0, 300.0, 64.0];
+        v.survive.heal = Some(pack);
+        for _ in 0..=super::super::SHORT_TICKS {
+            bot.think(&v);
+        }
+        assert!(!bot.passes_over(pack), "still walking the plan");
+        for _ in 0..=super::super::SHORT_TICKS {
+            bot.heal_walked = true;
+            v.origin[0] += 1.0;
+            bot.think(&v);
+        }
+        assert!(!bot.passes_over(pack), "closing in");
+        for _ in 0..=super::super::SHORT_TICKS {
+            bot.heal_walked = true;
+            bot.think(&v);
+        }
+        assert!(bot.passes_over(pack));
+        assert!(!bot.passes_over([-400.0, 300.0, 64.0]));
     }
 
     #[test]

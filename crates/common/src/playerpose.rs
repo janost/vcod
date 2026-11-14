@@ -272,9 +272,16 @@ impl BodyAngles {
     ) {
         let ft = frametime_ms as f32;
         let m = input.movement_dir;
-        let yaw = angle_mod(input.view[1]);
+        let floats = matches!(updater, Updater::Cod4 { floats: true, .. });
+        // `cod4_lnxded` folds the view yaw in floats (0x804c67c); 1.1's and
+        // CoD2's in shorts.
+        let yaw = if floats {
+            normalize360_floor(input.view[1])
+        } else {
+            angle_mod(input.view[1])
+        };
         let climb = match updater {
-            Updater::Cod4(_) => MOVETYPE_CLIMB_COD4,
+            Updater::Cod4 { .. } => MOVETYPE_CLIMB_COD4,
             _ => MOVETYPE_CLIMB,
         };
         let climbing = self.movetype & climb != 0;
@@ -282,11 +289,12 @@ impl BodyAngles {
             Updater::Cod1 => (Mantle::default(), 1.0, 0.6),
             Updater::Cod2(mantle) => (mantle, 0.0, 0.6),
             // `fadd %st(0),%st` at 0x804cefe.
-            Updater::Cod4(mantle) => (mantle, 0.0, 2.0),
+            Updater::Cod4 { mantle, .. } => (mantle, 0.0, 2.0),
         };
         let swing_angles =
-            |dest, tolerance, clamp: f32, speed, ft, angle: &mut f32, on: &mut bool| {
-                swing_angles(
+            |dest, tolerance, clamp: f32, speed, ft, angle: &mut f32, on: &mut bool| match floats {
+                true => swing_angles_cod4(dest, tolerance, clamp, speed, ft, angle, on),
+                false => swing_angles(
                     dest,
                     tolerance,
                     (clamp, clamp - margin),
@@ -294,7 +302,7 @@ impl BodyAngles {
                     ft,
                     angle,
                     on,
-                )
+                ),
             };
         if !input.rides_bare() && !climbing && !mantle.on && self.movetype & MOVETYPE_IDLE != 0 {
             if self.firing {
@@ -393,8 +401,13 @@ pub enum Updater {
     Cod2(Mantle),
     /// 1.7's `BG_PlayerAngles` (`cod4_lnxded` 0x804c636): CoD2's with the
     /// climbs at CoD4's movetypes and the torso pitch toward twice the
-    /// view's (cod4-player-anims.md 8).
-    Cod4(Mantle),
+    /// view's (cod4-player-anims.md 8). `floats` folds the swings as
+    /// `cod4_lnxded` does ([`swing_angles_cod4`]), which the server's hit
+    /// poses take; the client keeps CoD2's shorts (cod4-combat.md 15.1).
+    Cod4 {
+        mantle: Mantle,
+        floats: bool,
+    },
 }
 
 /// CoD2's mantle (`eFlags` 0x4000), which 1.1's numbering has no bit for:
@@ -451,6 +464,80 @@ fn swing_angles(
     } else if swing < -clamp {
         *angle = angle_mod(dest + limit);
     }
+}
+
+/// 1.7's `BG_SwingAngles` (`cod4_lnxded` 0x804b3ba): CoD2's rules, its
+/// angles folded in floats where CoD2's go through shorts. Each swing is
+/// `AngleNormalize180` inline (`x = d * 0.0027777778f`, less its rounded
+/// floor stored as a float, times 360) and kept on the stack; the step's
+/// scale is `max(|swing| * 0.05, 0.5)` off the float `|swing|`
+/// (0x804b474), the move `scale * frametime * speed`; the angle is
+/// `AngleNormalize360` (0x8190540) of the float sum, and the clamp's swing
+/// is taken off the unrounded result.
+fn swing_angles_cod4(
+    dest: f32,
+    tolerance: f32,
+    clamp: f32,
+    speed: f32,
+    frametime_ms: f32,
+    angle: &mut f32,
+    swinging: &mut bool,
+) {
+    let fold180 = fold180_cod4;
+    let (dest64, tolerance) = (f64::from(dest), f64::from(tolerance));
+    if !*swinging {
+        let swing = fold180(f64::from(*angle) - dest64);
+        if swing > tolerance || swing < -tolerance {
+            *swinging = true;
+        }
+    }
+    let mut at = f64::from(*angle);
+    if *swinging {
+        let swing = fold180(dest64 - at);
+        let scale = (f64::from(swing.abs() as f32) * f64::from(0.05f32)).max(0.5);
+        let mut step = scale * f64::from(frametime_ms) * f64::from(speed);
+        if swing < 0.0 {
+            step = -step;
+            if step <= swing {
+                step = swing;
+                *swinging = false;
+            }
+        } else if step >= swing {
+            step = swing;
+            *swinging = false;
+        }
+        at = normalize360_floor64((at + step) as f32);
+        *angle = at as f32;
+    }
+    let swing = fold180(dest64 - at);
+    let clamp = f64::from(clamp);
+    if swing > clamp {
+        *angle = normalize360_floor((dest64 - clamp) as f32);
+    } else if swing < -clamp {
+        *angle = normalize360_floor((dest64 + clamp) as f32);
+    }
+}
+
+/// 1.7's inline `AngleNormalize180` of a difference `d` kept on the
+/// stack: `x = d * 0.0027777778f`, less `floor(x + 0.5)` stored as a
+/// float, times 360, unrounded.
+fn fold180_cod4(d: f64) -> f64 {
+    let x = d * f64::from(1.0f32 / 360.0);
+    (x - f64::from((x + 0.5).floor() as f32)) * 360.0
+}
+
+/// 1.7's `AngleNormalize360` (`cod4_lnxded` 0x8190540), unrounded:
+/// `x = a * 0.0027777778f`, less its floor stored as a float, times 360,
+/// less 360 once it reaches 360.
+fn normalize360_floor64(a: f32) -> f64 {
+    let x = f64::from(a) * f64::from(1.0f32 / 360.0);
+    let v = (x - f64::from(x.floor() as f32)) * 360.0;
+    if v < 360.0 { v } else { v - 360.0 }
+}
+
+/// [`normalize360_floor64`] stored.
+fn normalize360_floor(a: f32) -> f32 {
+    normalize360_floor64(a) as f32
 }
 
 /// What the entity adds to [`BodyInput`] for the controllers: the lean
@@ -865,16 +952,27 @@ impl Controllers {
             Split::Cod4(_) => MOVETYPE_CLIMB_COD4,
             _ => MOVETYPE_CLIMB,
         };
+        let cod4 = matches!(split, Split::Cod4(_));
+        // 1.7's `AnglesSubtract` (`cod4_lnxded` 0x819397a, called at
+        // 0x804d019 and 0x804d02c) folds each difference in floats.
+        let sub = |a: f32, b: f32| match cod4 {
+            true => fold180_cod4(f64::from(a) - f64::from(b)) as f32,
+            false => angle_subtract(a, b),
+        };
         if a.movetype & climb == 0 {
             t[0] = a.pitch;
             if prone {
-                let p = angle_normalize_180(t[0]);
+                let p = match cod4 {
+                    // 0x804d558..0x804d5a5.
+                    true => fold180_cod4(f64::from(t[0])) as f32,
+                    false => angle_normalize_180(t[0]),
+                };
                 t[0] = p * if p > 0.0 { 0.5 } else { 0.25 };
             }
         }
-        let h = [0usize, 1, 2].map(|i| angle_subtract(input.view[i], t[i]));
+        let h = [0usize, 1, 2].map(|i| sub(input.view[i], t[i]));
         let l = [0.0, a.legs_yaw, 0.0];
-        t = [0usize, 1, 2].map(|i| angle_subtract(t[i], l[i]));
+        t = [0usize, 1, 2].map(|i| sub(t[i], l[i]));
         let legs_off = (!input.dead()).then_some(input.view[1]);
         Self::split(split, t, h, l, legs_off, prone, crouch, slope)
     }
@@ -1260,9 +1358,12 @@ pub struct PoseInputs<'a> {
     /// at its layer's seconds.
     pub leaf_times: Vec<(usize, f32)>,
     /// Sample each clip at its engine node time ([`crate::animclock::Layer::time`])
-    /// rather than its seconds: the 1.5 and UO server's stored pose
-    /// (cod11-combat.md 3.1, "The clip's float time").
+    /// rather than its seconds: the servers' pose (cod11-combat.md 3.1,
+    /// "The clip's float time").
     pub node_time: bool,
+    /// Whose arithmetic the engine records follow ([`PoseBuffer::new_in`]):
+    /// 1.1d's kept stack or 1.5b's and UO's stores.
+    pub arith: crate::patch::Arith,
     /// The skeleton's bindings kept from pose to pose; `None` binds each
     /// clip afresh.
     pub binds: Option<&'a crate::skeleton::BindCache>,
@@ -1283,7 +1384,7 @@ pub fn pose_player(
     inputs: &PoseInputs,
     clip: impl FnMut(&str) -> Option<Rc<XAnim>>,
 ) -> PoseBuffer {
-    pose_player_onto(PoseBuffer::new(skel), skel, inputs, clip)
+    pose_player_onto(PoseBuffer::new_in(skel, inputs.arith), skel, inputs, clip)
 }
 
 /// [`pose_player`] for a body only drawn: the same locals, without the
@@ -1306,7 +1407,7 @@ fn pose_player_onto(
     let tree = &inputs.anims.tree;
     // The legs clips, or a gunner's placement rows as nodes of their own
     // under the turret group.
-    let mut legs: Vec<(Rc<XAnim>, f32, f32)> = Vec::new();
+    let mut legs: Vec<(Rc<XAnim>, f64, f32)> = Vec::new();
     let mut shape: Vec<LegsShape> = Vec::new();
     match inputs.turret_leaves {
         Some(current) => {
@@ -1339,8 +1440,8 @@ fn pose_player_onto(
                             continue;
                         };
                         let frame = match node_t {
-                            Some(nt) => nt * anim.frame_count.saturating_sub(1) as f32,
-                            None => anim.frame_pos(l.seconds, anim.looping),
+                            Some(nt) => node_frame(nt, &anim),
+                            None => f64::from(anim.frame_pos(l.seconds, anim.looping)),
                         };
                         ids.push(legs.len());
                         legs.push((anim, frame, w));
@@ -1358,7 +1459,7 @@ fn pose_player_onto(
         }
     }
     let torso = layer_clips(inputs, &inputs.torso_layers, &mut clip);
-    let bind = |clips: &[(Rc<XAnim>, f32, f32)]| -> Vec<_> {
+    let bind = |clips: &[(Rc<XAnim>, f64, f32)]| -> Vec<_> {
         clips
             .iter()
             .map(|(a, ..)| match inputs.binds {
@@ -1402,7 +1503,7 @@ enum LegsShape {
 }
 
 fn clips_at<'a>(
-    clips: &'a [(Rc<XAnim>, f32, f32)],
+    clips: &'a [(Rc<XAnim>, f64, f32)],
     binds: &'a [Rc<AnimBinding>],
 ) -> Vec<crate::skeleton::ClipAt<'a>> {
     clips
@@ -1417,8 +1518,17 @@ fn layer_clips(
     inputs: &PoseInputs,
     layers: &[crate::animclock::Layer],
     clip: &mut impl FnMut(&str) -> Option<Rc<XAnim>>,
-) -> Vec<(Rc<XAnim>, f32, f32)> {
+) -> Vec<(Rc<XAnim>, f64, f32)> {
     let mut out = Vec::new();
+    // The walk visits a node's children in anim index order (`cod_lnxded`
+    // 0x80bbea8), which sets the order its sums round in. Only the 1.1d
+    // pose takes it: 1.5b's and UO's keep the clock's order, which one
+    // 1.5b knockback kill still needs (cod11-combat.md 3.1, "The pose on
+    // 1.1").
+    let mut layers: Vec<&crate::animclock::Layer> = layers.iter().collect();
+    if inputs.arith == crate::patch::Arith::Kept {
+        layers.sort_by_key(|l| l.index);
+    }
     for l in layers {
         let node = inputs.anims.index.node_id(l.index);
         if let Some((_, leaves)) = inputs.seat_leaves.iter().find(|(n, _)| Some(*n) == node) {
@@ -1432,8 +1542,8 @@ fn layer_clips(
                     // own, which the channel clock does not keep.
                     let own = inputs.leaf_times.iter().find(|t| t.0 == leaf);
                     let frame = match own.filter(|_| inputs.node_time) {
-                        Some(&(_, t)) => t * anim.frame_count.saturating_sub(1) as f32,
-                        None => anim.frame_pos(l.seconds, anim.looping),
+                        Some(&(_, t)) => node_frame(t, &anim),
+                        None => f64::from(anim.frame_pos(l.seconds, anim.looping)),
                     };
                     out.push((anim, frame, l.weight * w));
                 }
@@ -1452,13 +1562,19 @@ fn layer_clips(
 }
 
 /// Where in `anim` a layer samples: off its seconds, or under
-/// [`PoseInputs::node_time`] the node time times `numframes`, stored, as
-/// the sampler takes it (UO `coduo_lnxded` 0x80b9b72).
-fn layer_frame(inputs: &PoseInputs, l: &crate::animclock::Layer, anim: &XAnim) -> f32 {
+/// [`PoseInputs::node_time`] its node time ([`node_frame`]).
+fn layer_frame(inputs: &PoseInputs, l: &crate::animclock::Layer, anim: &XAnim) -> f64 {
     match l.time.filter(|_| inputs.node_time) {
-        Some(t) => t * anim.frame_count.saturating_sub(1) as f32,
-        None => anim.frame_pos(l.seconds, anim.looping),
+        Some(t) => node_frame(t, anim),
+        None => f64::from(anim.frame_pos(l.seconds, anim.looping)),
     }
+}
+
+/// A node time times `numframes`, unrounded: 1.1d's sampler keeps the
+/// product on the stack (`cod_lnxded` 0x80b838a); 1.5b's and UO's store it
+/// (UO `coduo_lnxded` 0x80b9b72), which the stored walk does.
+fn node_frame(t: f32, anim: &XAnim) -> f64 {
+    f64::from(t) * f64::from(anim.frame_count.saturating_sub(1))
 }
 
 #[cfg(test)]
@@ -2431,9 +2547,18 @@ main
             }
             a.pitch
         };
-        let cod4 = Updater::Cod4(Mantle::default());
+        let cod4 = Updater::Cod4 {
+            mantle: Mantle::default(),
+            floats: false,
+        };
         assert!(near(settle(cod4, 30.0), 60.0));
         assert!(near(angle_normalize_180(settle(cod4, 330.0)), -60.0));
+        let floats = Updater::Cod4 {
+            mantle: Mantle::default(),
+            floats: true,
+        };
+        assert!(near(settle(floats, 30.0), 60.0));
+        assert!(near(angle_normalize_180(settle(floats, 330.0)), -60.0));
         assert!(near(settle(Updater::Cod2(Mantle::default()), 30.0), 18.0));
     }
 }

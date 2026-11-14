@@ -3223,6 +3223,22 @@ impl Server {
         }
     }
 
+    /// Sets a client's playerstate velocity and nothing else. Test-facing: a
+    /// placement that shares the spawn's frame keeps the velocity the cmds
+    /// run at the spawn point left (cod11-combat.md 2.1, "The street
+    /// placement"), and a replay hands ours retail's from the capture.
+    pub fn test_set_client_velocity(&mut self, slot: usize, velocity: [f32; 3]) {
+        if let Some(sim) = self
+            .core
+            .clients
+            .get_mut(slot)
+            .and_then(Option::as_mut)
+            .and_then(|c| c.sim.as_mut())
+        {
+            sim.ps.velocity = velocity.into();
+        }
+    }
+
     /// Queues a client `setorigin` as the script frame would, applied at the
     /// next tick's sim-op pass: after that tick's moves and before its end
     /// frame. Test-facing: the stuck gate overlaps two players the way

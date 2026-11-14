@@ -1764,7 +1764,8 @@ component as whole, thousandths and the rest (no `int()` in the engine, so
   helpers that store each difference and product sum: into the bone's frame
   at 1.5b 0x80d1f56 and UO 0x80c72ea, the sphere centre out of it at UO
   0x80c723e. Each slab distance `(p - plane) * sign` and each
-  `d1 / (d1 - d2)` is stored too.
+  `d1 / (d1 - d2)` is stored too. 1.1d's keeps them on the x87 stack
+  (13.6, cod11-combat.md 3.1, "The pose on 1.1").
 - vcod measurement: those stores move an entry by about 3e-5 (the
   `-spawn-uo` kill: x 1513.000610 stored, 1513.000637 not), far under the
   0.003 to 0.05 pose error 13.6 and 13.7 closed. vcod ports them
@@ -1873,20 +1874,41 @@ lands at 30200 on the idle, the kill at 30250 on the knockback's first frame.
   sample at that float time (its anim code not read), and both points
   matching was the two errors cancelling again.
 
-INFERRED: the kill's float step is two errors, the 1.1d slab's `f32`
+INFERRED: the kill's float step was two errors, the 1.1d slab's `f32`
 arithmetic and a pose 1e-5 off retail's, which cancel on the idle frame
-and not on the knockback's. Either fix alone moves the step from the kill
-to the wound. What is left: 1.1d's pose to the bit (its anim calc and
-skeleton build, with the dump as the reference), then the kept slab
-above. UO's `-hitgrid` and `-hitfine` kills run the stored slab and the
-stored build (cod11-combat.md 3.1), whose blend summation order is the
-part no capture has checked; no UO dump was taken. `KNOCKBACK_GAP` stays
-on 1.1d's and UO's `-hitgrid` and UO's `-hitfine` kill.
+and not on the knockback's.
+
+The pose to the bit, `mp_carentan-dm-turret-hitbody2.txt` (1.1d, the
+hitbody recipe rerun with `DObjCalcSkel`'s entry dumped as well,
+`-script.txt` and `-target.txt` beside it; wound 29450, kill 29500).
+vcod measurement, the dumped records against ours: sampling at the
+seconds put the animated bones 1e-5 off; at the node time 1e-7; with the
+node time's kept wrap and the sampler's and walk's kept arithmetic only
+the kill's 34 two-clip bones a float step off, and with the walk's anim
+index order none. VERIFIED, the arithmetic and the order:
+cod11-combat.md 3.1, "The pose on 1.1". vcod measurement: on that pose
+the kept build gives every matrix of the dump and the kept slab both
+fractions, and `-hitbody2`'s wound and kill points and `-hitgrid`'s
+knockback kill and every grid cell hold to the gates' bounds; the
+1.1d `KNOCKBACK_GAP` entry is gone.
+
+What is left, UO's `-hitgrid` and `-hitfine` kills (a step in x and y,
+a step in z). vcod measurement: 1.5b's stored walk and build match a
+gdb dump of its own knockback kill word for word with the run summed
+before the idle (cod11-combat.md 3.1), but in that order `-hitgrid-15`'s
+kill moves a step off in z, as UO's `-hitfine` kill sits; in the
+clock's order it matches. So 1.5b and UO keep the clock's order, and
+INFERRED a second error on the knockback frame of those replays (an
+input, the walk and build being retail's on the dump) cancels against it
+on 1.5b. Not yet found: no UO dump and no aligned 1.5b replay of a
+dumped run (the 1.5b dump's own replay places its target elsewhere).
+`KNOCKBACK_GAP` stays on UO's `-hitgrid` and `-hitfine` kills.
 
 vcod: `turret_ab`'s `hit_gate` replays each capture as `spawn_gate` does and
 holds the target's playerstate, each hit's point (`HIT_NEAR`, 0.001; 13.8)
-and each grid cell (`GRID_NEAR`, 0.005) to retail's; the knockback kills are
-listed as `KNOCKBACK_GAP`. The gunner's own rows are the `-spawn` gates'.
+and each grid cell (`GRID_NEAR`, 0.005) to retail's; UO's knockback kills are
+listed as `KNOCKBACK_GAP`. `the_hitbody2_capture_matches_retail_on_mp_carentan`
+holds `-hitbody2`'s hit points and struck body to the bit. The gunner's own rows are the `-spawn` gates'.
 
 ### 13.7 The frame ahead: UO's spawn DObj and the script trace
 

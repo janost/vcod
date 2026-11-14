@@ -821,6 +821,11 @@ line's `getTime()`. The client fixture records an item entity's `index`,
 `clientNum`, `eFlags`, `groundEntityNum` and trajectories, and none of its
 event fields. The probe is client 0.
 
+The times in sections 12 and 13 are the 2026-09-24 run's. The fixtures now
+hold the 2026-11-14 recapture (13.5), which runs 16600 ms earlier from the
+first `trigger` on (252 at 12700, 258 at 14750, 255 at 18150, 170 at 19650)
+with the same lines in the same order. VERIFIED, both script fixtures.
+
 ### 12.1 A stock server has no fg42 on mp_carentan
 
 VERIFIED, `default_mp.cfg` in `localized_english_pak0.pk3`: it carries
@@ -1189,7 +1194,8 @@ VERIFIED, found by this run and not by the gate, none of it item pickup:
   INFERRED: ours rests where its trace stops and retail about 0.2 units
   higher. Retail's first-spot `y` also reads -821.9 where ours stays at
   -822.0. Ruling: the second spot is closed by 13.5 (a replay artefact, not
-  pmove); the first is open, its fall never captured.
+  pmove); the first is closed by 13.5 as well, by the 2026-11-14 recapture
+  that logs its fall.
 - The `aim` phase's view: retail aims at (87.9, -90) and ours at (90, 69.1).
   INFERRED: ours stands exactly on the item's `x` and `y`, so the aim at it
   is straight down with a yaw read off rounding noise; a consequence of the
@@ -1213,7 +1219,11 @@ VERIFIED, found by this run and not by the gate, none of it item pickup:
 
 ### 13.5 Which frame runs a cmd
 
-VERIFIED, the client fixture: the probe client sends three cmds a frame,
+The times through the gate's paragraph below are the 2026-09-24 capture's;
+the recapture's second teleport lands at 14700 and reads -22.9 and then
+-23.7, the same steps. VERIFIED, the client fixture.
+
+VERIFIED, the 2026-09-24 client fixture: the probe client sends three cmds a frame,
 stamped on a snapshot's `serverTime` and 16 and 32 ms past it (31300,
 31316, 31332, 31350 ...), and logs each `!cmd` before the `!trace` read in
 the same pass. VERIFIED, the second teleport (`setOrigin` to the fg42 at z
@@ -1240,16 +1250,27 @@ the 29350 frame by the same rule. The gate holds the origin to 0.1
 (`ORIGIN_EPS`) from the second teleport on, which a two-cmd grid fails at
 31350 and from 31400 on.
 
-The first spot is held to 0.5 (`SPAWN_REST_EPS`). VERIFIED, the client
-fixture: the capture opens at 26950 with the player already resting at
-(468.0, -821.9, 31.7) on terrain triangle 501 (normal z 0.99985, tilted
-toward -y), and no cmd of the spawn's fall is recorded. VERIFIED, vcod's
-pmove from the teleport point (468, -822, 33.53) on 18, 16 and 16 ms cmds:
-the fourth cmd ends at 31.69 on the ground, and the next slides the player
-0.014 toward -y and down to 31.494, where it stays. INFERRED: retail's 31.7
-matches the end of that fourth cmd; its `y` 0.1 toward +y, up the slope,
-matches no cmd pattern tried. Ruling: open, the spawn's cmds unknown; the 0.5
-covers it and nothing else.
+The first spot was held to 0.5 (`SPAWN_REST_EPS`) while the capture held no
+cmd of the spawn's fall: the 2026-09-24 capture opens at 26950 with the
+player already resting at (468.0, -821.9, 31.7) on terrain triangle 501
+(normal z 0.99985, tilted toward -y). VERIFIED, that fixture's first
+`!trace`, now in git history.
+
+VERIFIED, the 2026-11-14 recapture (the fixture since): its `[phase wait]`
+logs a `!spawn` line per snapshot from the first spawned one (`t`, `ct`,
+origin) and every cmd past that snapshot's `commandTime`. The spawn and the
+first teleport land in one frame: the first spawned snapshot, 7400 with `ct`
+7400, already stands at (468.0, -822.0, 33.5), `setOrigin`'s z plus one.
+The fall reads 33.1 at 7450 (`ct` 7433) and 31.5 from 7500 (`ct` 7483) on,
+and the `stand` phase opens at (468.0, -822.0, 31.5). So this run rests where
+vcod's trace stops (31.494), and the older 31.7 and -821.9 rode that run's
+cmds. INFERRED. `pickup_ab` joins until its own first snapshot on the fg42,
+pairs it with retail's teleport snapshot, and replays every capture cmd from
+there: in the wait, a frame runs the cmds up to the `commandTime` retail's
+snapshot of it logged; from `stand` on, the rule above. VERIFIED, the gate:
+the fall's snapshots and the rest sit within `ORIGIN_EPS` of retail's, and
+the 0.5 is gone. With the wait's cmds run one frame later (every `ct` less
+17) ours reads 33.43 at 7450 and 31.76 at 7500, both outside 0.1. VERIFIED.
 
 ## 14. Flight, landing, nodrop and respawn
 
@@ -1314,6 +1335,20 @@ frame, before the probe's watcher wakes, the three weapon drops start 0.58,
 0.31 and 0.68 units off retail's; with the client held back
 (`common::PROBE_JOIN_MS`, movers doc 15) they start 0.10, 0.09 and 0.13 off,
 and the gate allows 0.2 (`TAG_TOL`).
+
+VERIFIED, the 2026-11-14 1.5b recapture (`mp_carentan-dm-itemdrop-15.txt`
+since, the `--probe-items` client's `SPAWNED` and `CMDS` lines appended):
+the player spawns at 6850, and the rests after each `setOrigin` ride that
+run's cmds (the `flat` spot reads -23.85 a second after the first stand,
+-23.87 after the second, -23.83 at the drop; the 2026-10-20 run read -23.70
+at the first). `itemdrop_ab` runs ours alone until its spawn lands on 6850
+and sends every cmd on the logged times (`ProbeHold::framed`): every `PROBE`
+position, the three weapon drops' start against the dropper included,
+matches retail's print, and the launch points sit at most 0.00026 off
+retail's floats. VERIFIED, the gate, which holds that capture to 0.0005
+(`REPLAYED_TOL`) in place of `TAG_TOL` and `START_TOL`; the 1.1d and UO
+captures, without `CMDS` lines, keep those two. INFERRED: the 0.13 and the
+fifth of a unit were the spawn's frame and the cmd split.
 
 VERIFIED, `Drop_Item` (0x4ed30): the yaw is `ent+0x144` plus its third
 argument; a non-zero fourth argument zeroes the velocity, else the same 150
