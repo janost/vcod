@@ -4019,7 +4019,10 @@ standard error, and the matches higher and lower:
 
 - VERIFIED (the table): CoD2's captures rise +0.72 ± 0.14 a match
   (higher in 19, lower in 1); its kills hold (-0.91 ± 1.03), its stalls
-  fall. The view does not touch CoD2 (above).
+  fall. The view does not touch CoD2 (above): with `CARRY=none` CoD2
+  plays the base's moves. VERIFIED (measured, `bot_match DIGEST=1`
+  against a build of the base, 9e558bb32, mp_toujane `ctf` seeds 1 and
+  2, 3000 ticks, the same digests).
 - VERIFIED (the table): UO's returns rise with the view (+0.44 ± 0.14,
   11 higher, 1 lower), a flag now read as lying; its captures move
   inside the spread (+0.09 ± 0.07 before to after, 4 higher, 1 lower),
