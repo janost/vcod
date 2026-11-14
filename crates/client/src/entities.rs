@@ -1874,6 +1874,7 @@ pub fn build_instances(
                         controllers,
                         leaf_times: Vec::new(),
                         node_time: false,
+                        arith: vcod_common::patch::Arith::Stored,
                         binds: Some(&assembly.binds),
                     };
                     st.pose =

@@ -470,6 +470,7 @@ impl PlayerBody {
             controllers: turret.is_none().then_some(self.controls),
             leaf_times: Vec::new(),
             node_time,
+            arith: vcod_common::patch::Arith::Stored,
             binds: Some(&rig.binds),
         };
         let mut load = |name: &str| load_clip(clips, fs, name);

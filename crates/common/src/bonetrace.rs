@@ -145,12 +145,14 @@ pub fn bone_trace_worlds(
     best
 }
 
-/// [`bone_trace`] in `arith`'s build. 1.1d's keeps its floats on the
-/// stack, which [`bone_trace`] stands in for; 1.5b's and United
-/// Offensive's (`SV_LocationalTraceModel`, 1.5b `cod_lnxded` 0x80d2000, UO
-/// `coduo_lnxded` 0x80c7394) store every assignment: each point moved into
-/// a bone's frame, each slab distance, each denominator and each fraction
-/// (cod11-combat.md 3.1, "The arithmetic on 1.5 and UO").
+/// [`bone_trace`] in `arith`'s build, `SV_LocationalTraceModel` over the
+/// engine's own skeleton build. 1.1d's (`cod_lnxded` 0x80c4564) keeps its
+/// floats on the x87 stack and stores each point moved into a bone's frame
+/// and the fraction; 1.5b's and United Offensive's (1.5b 0x80d2000, UO
+/// `coduo_lnxded` 0x80c7394) store every assignment: each point, each slab
+/// distance, each denominator and each fraction (cod11-combat.md 3.1, "The
+/// arithmetic on 1.5 and UO", "The arithmetic on 1.1"). The Windows
+/// cgames' stand in [`bone_trace`].
 pub fn bone_trace_in(
     skel: &Skeleton,
     pose: &PoseBuffer,
@@ -161,8 +163,9 @@ pub fn bone_trace_in(
     arith: Arith,
 ) -> Option<BoneHit> {
     match arith {
-        Arith::Stored => bone_trace_stored(skel, pose, start, end, priority, limit),
-        Arith::Kept | Arith::Msvc => bone_trace(skel, pose, start, end, priority, limit),
+        Arith::Stored => bone_trace_engine(skel, pose, start, end, priority, limit, false),
+        Arith::Kept => bone_trace_engine(skel, pose, start, end, priority, limit, true),
+        Arith::Msvc => bone_trace(skel, pose, start, end, priority, limit),
     }
 }
 
@@ -180,17 +183,36 @@ pub fn into_frame_stored(p: Vec3, rows: &[Vec3; 3], origin: Vec3) -> Vec3 {
     Vec3::new(dot(rows[0]), dot(rows[1]), dot(rows[2]))
 }
 
-/// 1.5b's and UO's slab test, store for store (UO 0x80c788a..0x80c7a8a).
-fn bone_trace_stored(
+/// 1.1d `cod_lnxded` 0x80c49ac..0x80c4aab (the body's frame 0x8066520
+/// alike): `p` into the frame whose axes are `rows`, at `origin`: each
+/// difference kept on the stack, each dot product rounded once.
+pub fn into_frame_kept(p: Vec3, rows: &[Vec3; 3], origin: Vec3) -> Vec3 {
+    let d = p.as_dvec3() - origin.as_dvec3();
+    let dot = |r: Vec3| st((d.x * f64::from(r.x) + d.y * f64::from(r.y)) + d.z * f64::from(r.z));
+    Vec3::new(dot(rows[0]), dot(rows[1]), dot(rows[2]))
+}
+
+/// The engine's slab test: 1.5b's and UO's store for store (UO
+/// 0x80c788a..0x80c7a8a), or 1.1d's (`kept`, 0x80c4ad0..0x80c4bce), which
+/// keeps each `(p - plane) * sign`, each `d1 - d2`, each `d1 / (d1 - d2)`
+/// and both bounds on the stack, its exit starting at the stored fraction,
+/// and rounds the entry once into the result (0x80c4c4f).
+fn bone_trace_engine(
     skel: &Skeleton,
     pose: &PoseBuffer,
     start: Vec3,
     end: Vec3,
     priority: &PriorityMap,
     limit: f32,
+    kept: bool,
 ) -> Option<BoneHit> {
     // Retail's build off the engine-side records where the pose kept them.
-    let worlds: Vec<(Vec3, [Vec3; 3])> = match pose.stored_worlds(skel) {
+    let built = if kept {
+        pose.kept_worlds(skel)
+    } else {
+        pose.stored_worlds(skel)
+    };
+    let worlds: Vec<(Vec3, [Vec3; 3])> = match built {
         Some(w) => w.iter().map(|b| (b.origin, b.axes)).collect(),
         None => pose
             .bone_worlds(skel)
@@ -198,6 +220,13 @@ fn bone_trace_stored(
             .map(|&(p, q)| (p, axes_stored(q.to_array())))
             .collect(),
     };
+    let into = if kept {
+        into_frame_kept
+    } else {
+        into_frame_stored
+    };
+    // A float the -O0 builds store; 1.1d's stays on the stack.
+    let r = |x: f64| if kept { x } else { f64::from(st(x)) };
     let mut best: Option<BoneHit> = None;
     let mut fraction = limit;
     let mut best_priority = MIN_PRIORITY;
@@ -210,25 +239,22 @@ fn bone_trace_stored(
             continue;
         }
         let (bp, rows) = worlds[bi];
-        let (ls, le) = (
-            into_frame_stored(start, &rows, bp),
-            into_frame_stored(end, &rows, bp),
-        );
-        let (mut enter, mut exit) = (0.0f32, fraction);
+        let (ls, le) = (into(start, &rows, bp), into(end, &rows, bp));
+        let (mut enter, mut exit) = (0.0f64, f64::from(fraction));
         let (mut starts_in, mut ends_in) = (true, true);
         let mut face: Option<(usize, f32)> = None;
         for (sign, planes) in [(-1.0f32, b.hit_mins), (1.0, b.hit_maxs)] {
             for axis in 0..3 {
-                let d1 = st((f64::from(ls[axis]) - f64::from(planes[axis])) * f64::from(sign));
-                let d2 = st((f64::from(le[axis]) - f64::from(planes[axis])) * f64::from(sign));
+                let d1 = r((f64::from(ls[axis]) - f64::from(planes[axis])) * f64::from(sign));
+                let d2 = r((f64::from(le[axis]) - f64::from(planes[axis])) * f64::from(sign));
                 if d1 > 0.0 {
                     if d2 > 0.0 {
                         continue 'bones;
                     }
                     starts_in = false;
-                    let den = st(f64::from(d1) - f64::from(d2));
-                    if f64::from(d1) > f64::from(enter) * f64::from(den) {
-                        enter = st(f64::from(d1) / f64::from(den));
+                    let den = r(d1 - d2);
+                    if d1 > enter * den {
+                        enter = r(d1 / den);
                         if enter >= exit {
                             continue 'bones;
                         }
@@ -236,9 +262,9 @@ fn bone_trace_stored(
                     }
                 } else if d2 > 0.0 {
                     ends_in = false;
-                    let den = st(f64::from(d1) - f64::from(d2));
-                    if f64::from(d1) > f64::from(exit) * f64::from(den) {
-                        exit = st(f64::from(d1) / f64::from(den));
+                    let den = r(d1 - d2);
+                    if d1 > exit * den {
+                        exit = r(d1 / den);
                         if enter >= exit {
                             continue 'bones;
                         }
@@ -247,7 +273,8 @@ fn bone_trace_stored(
             }
         }
         // One that starts inside and leaves flags the trace start-solid,
-        // which nothing reads, and scores nothing here (UO 0x80c7a8a).
+        // which nothing reads, and scores nothing here (UO 0x80c7a8a, 1.1d
+        // 0x80c4bc5).
         if starts_in && !ends_in {
             continue;
         }
@@ -260,9 +287,10 @@ fn bone_trace_stored(
                 normal: Vec3::ZERO,
             });
         }
-        if prio == best_priority && best.is_some() && enter >= fraction {
+        if prio == best_priority && best.is_some() && enter >= f64::from(fraction) {
             continue;
         }
+        let enter = st(enter);
         best_priority = prio;
         fraction = enter;
         let normal = face.map_or(Vec3::ZERO, |(axis, sign)| rows[axis] * sign);

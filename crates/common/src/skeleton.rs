@@ -2,6 +2,7 @@
 //! attachments) into one skeleton and evaluates anim poses into skin matrices.
 
 use crate::model::Model;
+use crate::patch::Arith;
 use crate::xanim::XAnim;
 use glam::{Mat4, Quat, Vec3};
 use std::collections::{HashMap, HashSet};
@@ -243,6 +244,11 @@ impl Skeleton {
             .collect()
     }
 
+    /// Model `model`'s bones as skeleton indices, in the model's own order.
+    pub fn model_map(&self, model: usize) -> &[usize] {
+        &self.maps[model]
+    }
+
     pub fn bone_count(&self) -> usize {
         self.bones.len()
     }
@@ -266,8 +272,10 @@ impl Skeleton {
 }
 
 /// One clip of a blend: the clip, its bone binding, the frame to sample and
-/// its weight.
-pub type ClipAt<'a> = (&'a XAnim, &'a AnimBinding, f32, f32);
+/// its weight. The frame is a double so a node time times `numframes`
+/// stays exact for the 1.1d sampler, which keeps that product on the x87
+/// stack.
+pub type ClipAt<'a> = (&'a XAnim, &'a AnimBinding, f64, f32);
 
 /// A child of an anim tree node in a blend: a clip at its weight, or a node
 /// of its own at a weight over its children (an MG42 group over its rows, a
@@ -306,7 +314,7 @@ fn node_sums(n: usize, children: &[Blend]) -> (Vec<glam::Vec4>, Vec<Vec3>, Vec<f
             &Blend::Clip((anim, binding, frame_pos, _)) => {
                 for (track, slot) in anim.tracks.iter().zip(&binding.0) {
                     let Some(bi) = *slot else { continue };
-                    let (p, q) = track.sample(frame_pos);
+                    let (p, q) = track.sample(frame_pos as f32);
                     // Signed as the loader left the track (`xanim::parse`):
                     // the sampler adds the raw keys.
                     let q = glam::Vec4::from(q.unwrap_or(Quat::IDENTITY));
@@ -346,12 +354,22 @@ pub struct PoseBuffer {
     /// their skeleton build ([`Record`]), kept by [`PoseBuffer::blend_nodes`]
     /// and the controllers; `None` once anything else has set a local.
     records: Option<Vec<Record>>,
+    /// Whose arithmetic the records' walk follows: 1.1d's kept stack
+    /// (`Arith::Kept`) or 1.5b's and UO's stores.
+    arith: Arith,
 }
 
 impl PoseBuffer {
     pub fn new(skel: &Skeleton) -> PoseBuffer {
+        PoseBuffer::new_in(skel, Arith::Stored)
+    }
+
+    /// [`PoseBuffer::new`] whose records the engine `arith` names walks:
+    /// 1.1d's (`Arith::Kept`) or 1.5b's and UO's (`Arith::Stored`).
+    pub fn new_in(skel: &Skeleton, arith: Arith) -> PoseBuffer {
         PoseBuffer {
             records: Some(skel.bones.iter().map(Record::bind).collect()),
+            arith,
             ..PoseBuffer::drawn(skel)
         }
     }
@@ -367,6 +385,7 @@ impl PoseBuffer {
                 .collect(),
             bind_pos: skel.bones.iter().map(|b| b.local_pos).collect(),
             records: None,
+            arith: Arith::Stored,
         }
     }
 
@@ -457,7 +476,7 @@ impl PoseBuffer {
     /// a node may hold nodes of its own ([`Blend`]).
     pub fn blend_tree(&mut self, nodes: &[Blend]) {
         if let Some(r) = self.records.as_mut() {
-            walk_records(r, nodes);
+            walk_records(r, nodes, self.arith);
         }
         let n = self.locals.len();
         let (rot, pos, weight) = node_sums(n, nodes);
@@ -639,39 +658,50 @@ fn raw_key_at(track: &crate::xanim::Track, k: usize) -> [i16; 4] {
         .map(|c| (c * 32767.0).round() as i16)
 }
 
-/// The two keys a frame falls between and how far, stored, as UO's
-/// sampler 0x80b9b72 finds them; the first or last key alone outside them.
-fn key_span<T>(frames: &[(u16, T)], frame_pos: f32) -> Option<(usize, usize, f32)> {
+/// The two keys a frame falls between and how far, as UO's sampler
+/// 0x80b9b72 finds them (the fraction stored) or 1.1d's 0x80b8370 (kept);
+/// the first or last key alone outside them.
+fn key_span<T>(frames: &[(u16, T)], frame_pos: f64, kept: bool) -> Option<(usize, usize, f64)> {
     let (first, last) = (frames.first()?, frames.last()?);
-    if frames.len() == 1 || frame_pos <= f32::from(first.0) {
+    if frames.len() == 1 || frame_pos <= f64::from(first.0) {
         return Some((0, 0, 0.0));
     }
-    if frame_pos >= f32::from(last.0) {
+    if frame_pos >= f64::from(last.0) {
         let k = frames.len() - 1;
         return Some((k, k, 0.0));
     }
-    let k = frames.partition_point(|(f, _)| f32::from(*f) <= frame_pos) - 1;
-    let (f0, f1) = (f32::from(frames[k].0), f32::from(frames[k + 1].0));
-    let frac = st((f64::from(frame_pos) - f64::from(f0)) / f64::from(f1 - f0));
-    Some((k, k + 1, frac))
+    let k = frames.partition_point(|(f, _)| f64::from(*f) <= frame_pos) - 1;
+    let (f0, f1) = (f64::from(frames[k].0), f64::from(frames[k + 1].0));
+    let frac = (frame_pos - f0) / (f1 - f0);
+    Some((k, k + 1, if kept { frac } else { f64::from(st(frac)) }))
 }
 
 /// One clip summed into `dest` at `weight` (UO 0x80b9b72): each key's
 /// shorts lerped and times `weight / 32767` (stored), each translation key
-/// lerped and times `weight`, every sum stored, the weight added.
+/// lerped and times `weight`, every sum stored, the weight added. 1.1d's
+/// (`cod_lnxded` 0x80b8370, `kept`) keeps the frame, the key fraction and
+/// `weight / 32767` on the stack and rounds each sum once.
 fn sample_records(
     dest: &mut [Record],
     anim: &XAnim,
     binding: &AnimBinding,
-    frame_pos: f32,
+    frame: f64,
     weight: f32,
+    kept: bool,
 ) {
     let w = f64::from(weight);
-    let scale = f64::from(st(f64::from(SHORT_SCALE) * w));
+    let (frame, scale) = if kept {
+        (frame, f64::from(SHORT_SCALE) * w)
+    } else {
+        (
+            f64::from(st(frame)),
+            f64::from(st(f64::from(SHORT_SCALE) * w)),
+        )
+    };
     for (track, slot) in anim.tracks.iter().zip(&binding.0) {
         let Some(bi) = *slot else { continue };
         let r = &mut dest[bi];
-        match key_span(&track.rot_keys, frame_pos) {
+        match key_span(&track.rot_keys, frame, kept) {
             None => r.q[3] = st(f64::from(r.q[3]) + w),
             Some((a, b, frac)) => {
                 let (k0, k1) = (raw_key_at(track, a), raw_key_at(track, b));
@@ -680,19 +710,19 @@ fn sample_records(
                     let v = if a == b {
                         s0
                     } else {
-                        f64::from(i32::from(k1[c]) - i32::from(k0[c])) * f64::from(frac) + s0
+                        f64::from(i32::from(k1[c]) - i32::from(k0[c])) * frac + s0
                     };
                     r.q[c] = st(f64::from(r.q[c]) + v * scale);
                 }
             }
         }
-        if let Some((a, b, frac)) = key_span(&track.trans_keys, frame_pos) {
+        if let Some((a, b, frac)) = key_span(&track.trans_keys, frame, kept) {
             let (v0, v1) = (track.trans_keys[a].1, track.trans_keys[b].1);
             for c in 0..3 {
                 let v = if a == b {
                     f64::from(v0[c])
                 } else {
-                    (f64::from(v1[c]) - f64::from(v0[c])) * f64::from(frac) + f64::from(v0[c])
+                    (f64::from(v1[c]) - f64::from(v0[c])) * frac + f64::from(v0[c])
                 };
                 r.t[c] = st(f64::from(r.t[c]) + v * w);
             }
@@ -708,14 +738,18 @@ fn sample_records(
 /// buffer and the rest added, and then a nested node normalizes the
 /// rotation sum to its weight, scales the offsets to its weight over their
 /// sum and (into `dest` when it had a buffer of its own) adds them, while
-/// the root divides every sum by the summed weight.
-fn walk(node: &Blend, weight: f32, dest: &mut [Record], first: bool, nested: bool) {
+/// the root divides every sum by the summed weight. 1.1d's walk
+/// (`cod_lnxded` 0x80bbea8, `kept`) runs the same calls and keeps each
+/// scale on the stack: the root's `1 / w`, a nested node's `w / sqrt` over
+/// the unrounded square sum (only the root stored, 0x80bc3de) and its
+/// offsets' `w / weight`.
+fn walk(node: &Blend, weight: f32, dest: &mut [Record], first: bool, nested: bool, kept: bool) {
     let children = match node {
         &Blend::Clip((anim, binding, frame, _)) => {
             if first {
                 dest.fill(Record::ZERO);
             }
-            sample_records(dest, anim, binding, frame, weight);
+            sample_records(dest, anim, binding, frame, weight, kept);
             return;
         }
         Blend::Node(_, c) => c,
@@ -728,7 +762,7 @@ fn walk(node: &Blend, weight: f32, dest: &mut [Record], first: bool, nested: boo
             }
             return;
         }
-        [only] => return walk(only, weight, dest, first, nested),
+        [only] => return walk(only, weight, dest, first, nested, kept),
         _ => {}
     }
     let mut own = if first {
@@ -742,7 +776,7 @@ fn walk(node: &Blend, weight: f32, dest: &mut [Record], first: bool, nested: boo
             None => dest,
         };
         for (i, child) in active.iter().enumerate() {
-            walk(child, child.weight(), buf, i == 0, true);
+            walk(child, child.weight(), buf, i == 0, true, kept);
         }
     }
     let w = f64::from(weight);
@@ -750,12 +784,28 @@ fn walk(node: &Blend, weight: f32, dest: &mut [Record], first: bool, nested: boo
     // 0x80be0f3..0x80be121, 1.5b 0x80c8d5f..0x80c8d8d).
     let len = |q: &[f32; 4]| {
         let q = q.map(f64::from);
-        st(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3])
+        let n = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+        if kept { n } else { f64::from(st(n)) }
+    };
+    // `w / sqrt(n)`: 1.1d's `fsqrt` stored and the quotient kept, 1.5b's
+    // and UO's libm root and the quotient stored.
+    let unit = |n: f64| {
+        let root = f64::from(st(n.sqrt()));
+        if kept {
+            w / root
+        } else {
+            f64::from(st(w / root))
+        }
+    };
+    let over = |d: f32| {
+        let s = w / f64::from(d);
+        if kept { s } else { f64::from(st(s)) }
     };
     match (nested, own) {
         (false, _) => {
             for r in dest.iter_mut().filter(|r| r.weight != 0.0) {
-                let inv = f64::from(st(1.0 / f64::from(r.weight)));
+                let inv = 1.0 / f64::from(r.weight);
+                let inv = if kept { inv } else { f64::from(st(inv)) };
                 r.q = r.q.map(|c| st(f64::from(c) * inv));
                 r.t = r.t.map(|c| st(f64::from(c) * inv));
             }
@@ -764,13 +814,13 @@ fn walk(node: &Blend, weight: f32, dest: &mut [Record], first: bool, nested: boo
             for (r, b) in dest.iter_mut().zip(&buf) {
                 let n = len(&b.q);
                 if n != 0.0 {
-                    let s = f64::from(st(w / f64::from(st(f64::from(n).sqrt()))));
+                    let s = unit(n);
                     for c in 0..4 {
                         r.q[c] = st(f64::from(r.q[c]) + f64::from(b.q[c]) * s);
                     }
                 }
                 if b.weight != 0.0 {
-                    let s = f64::from(st(w / f64::from(b.weight)));
+                    let s = over(b.weight);
                     r.weight = st(f64::from(r.weight) + w);
                     for c in 0..3 {
                         r.t[c] = st(f64::from(r.t[c]) + f64::from(b.t[c]) * s);
@@ -782,11 +832,11 @@ fn walk(node: &Blend, weight: f32, dest: &mut [Record], first: bool, nested: boo
             for r in dest.iter_mut() {
                 let n = len(&r.q);
                 if n != 0.0 {
-                    let s = f64::from(st(w / f64::from(st(f64::from(n).sqrt()))));
+                    let s = unit(n);
                     r.q = r.q.map(|c| st(f64::from(c) * s));
                 }
                 if r.weight != 0.0 {
-                    let s = f64::from(st(w / f64::from(r.weight)));
+                    let s = over(r.weight);
                     r.weight = weight;
                     r.t = r.t.map(|c| st(f64::from(c) * s));
                 }
@@ -797,8 +847,9 @@ fn walk(node: &Blend, weight: f32, dest: &mut [Record], first: bool, nested: boo
 
 /// [`PoseBuffer::blend_tree`]'s nodes through UO's anim calc (0x80bf2a8):
 /// the root's walk at weight 1 over the nodes and their clips, then every
-/// bone no clip keys back at its bind record.
-fn walk_records(records: &mut [Record], nodes: &[Blend]) {
+/// bone no clip keys back at its bind record; 1.1d's anim calc
+/// (`cod_lnxded` 0x80bcef8) under `Arith::Kept`.
+fn walk_records(records: &mut [Record], nodes: &[Blend], arith: Arith) {
     let bind: Vec<Record> = records.to_vec();
     let tree = Blend::Node(1.0, nodes.to_vec());
     // The bones a walked clip carries a track for (UO 0x80bab1c's mask).
@@ -818,7 +869,7 @@ fn walk_records(records: &mut [Record], nodes: &[Blend]) {
     }
     let mut keyed = vec![false; records.len()];
     mark(&tree, &mut keyed);
-    walk(&tree, 1.0, records, true, false);
+    walk(&tree, 1.0, records, true, false, arith == Arith::Kept);
     for (i, r) in records.iter_mut().enumerate() {
         if !keyed[i] {
             *r = Record {
@@ -896,42 +947,142 @@ impl PoseBuffer {
     /// parent's stored matrix (0x80c7f9a). `None` when the records are not
     /// kept.
     pub fn stored_worlds(&self, skel: &Skeleton) -> Option<Vec<StoredBone>> {
-        let records = self.records.as_ref()?;
-        let mut out: Vec<StoredBone> = Vec::with_capacity(records.len());
-        for (b, r) in skel.bones.iter().zip(records) {
-            let bone = match usize::try_from(b.parent) {
-                Err(_) => StoredBone {
-                    q: r.q,
-                    axes: axes_stored(r.q),
-                    origin: Vec3::from(r.t),
-                },
-                Ok(p) => {
-                    let pb = out[p];
-                    let q = if r.control {
-                        compose_control(pb.q, r.q)
-                    } else {
-                        compose(r.q, pb.q)
-                    };
-                    let t = [0, 1, 2]
-                        .map(|c| f64::from(st(f64::from(r.t[c]) + f64::from(b.local_pos[c]))));
-                    let [m0, m1, m2] = pb.axes.map(|a| a.as_dvec3());
-                    let o = pb.origin.as_dvec3();
-                    let origin = Vec3::new(
-                        st(((t[2] * m2.x + t[1] * m1.x) + t[0] * m0.x) + o.x),
-                        st(((t[2] * m2.y + t[1] * m1.y) + t[0] * m0.y) + o.y),
-                        st(((t[2] * m2.z + t[1] * m1.z) + t[0] * m0.z) + o.z),
-                    );
-                    StoredBone {
-                        q,
-                        axes: axes_stored(q),
-                        origin,
-                    }
-                }
-            };
-            out.push(bone);
-        }
-        Some(out)
+        Some(build_stored(skel, self.records.as_ref()?))
     }
+
+    /// [`build_kept`] over the kept records. `None` when they are not kept.
+    pub fn kept_worlds(&self, skel: &Skeleton) -> Option<Vec<StoredBone>> {
+        Some(build_kept(skel, self.records.as_ref()?))
+    }
+}
+
+/// [`PoseBuffer::stored_worlds`] over `records`.
+pub fn build_stored(skel: &Skeleton, records: &[Record]) -> Vec<StoredBone> {
+    let mut out: Vec<StoredBone> = Vec::with_capacity(records.len());
+    for (b, r) in skel.bones.iter().zip(records) {
+        let bone = match usize::try_from(b.parent) {
+            Err(_) => StoredBone {
+                q: r.q,
+                axes: axes_stored(r.q),
+                origin: Vec3::from(r.t),
+            },
+            Ok(p) => {
+                let pb = out[p];
+                let q = if r.control {
+                    compose_control(pb.q, r.q)
+                } else {
+                    compose(r.q, pb.q)
+                };
+                let t =
+                    [0, 1, 2].map(|c| f64::from(st(f64::from(r.t[c]) + f64::from(b.local_pos[c]))));
+                let [m0, m1, m2] = pb.axes.map(|a| a.as_dvec3());
+                let o = pb.origin.as_dvec3();
+                let origin = Vec3::new(
+                    st(((t[2] * m2.x + t[1] * m1.x) + t[0] * m0.x) + o.x),
+                    st(((t[2] * m2.y + t[1] * m1.y) + t[0] * m0.y) + o.y),
+                    st(((t[2] * m2.z + t[1] * m1.z) + t[0] * m0.z) + o.z),
+                );
+                StoredBone {
+                    q,
+                    axes: axes_stored(q),
+                    origin,
+                }
+            }
+        };
+        out.push(bone);
+    }
+    out
+}
+
+/// 1.1d's quaternion product `a * b` (`cod_lnxded` 0x80c35b7, the four
+/// arms of the build's first pass): each component's products and sum on
+/// the x87 stack, rounded once.
+fn compose_kept(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let ([ax, ay, az, aw], [bx, by, bz, bw]) = (a.map(f64::from), b.map(f64::from));
+    [
+        st(((ax * bw + aw * bx) + az * by) - ay * bz),
+        st(((ay * bw - az * bx) + aw * by) + ax * bz),
+        st(((az * bw + ay * bx) - ax * by) + aw * bz),
+        st(((aw * bw - ax * bx) - ay * by) - az * bz),
+    ]
+}
+
+/// A bone's axes off its quaternion as 1.1d's build writes its matrix: a
+/// root's (0x80c39b4, `root`) or any other bone's (0x80c3e80). `x * x`
+/// and `y * y` stored, `2 / |q|^2` and `x * s`, `y * s` kept, `xz`, `xw`
+/// and the diagonal's products stored as the binary spills them; each
+/// element rounded once.
+fn axes_kept(q: [f32; 4], root: bool) -> [Vec3; 3] {
+    let [x, y, z, w] = q.map(f64::from);
+    let (xx, yy) = (f64::from(st(x * x)), f64::from(st(y * y)));
+    let n = ((xx + yy) + z * z) + w * w;
+    if n == 0.0 {
+        return [Vec3::X, Vec3::Y, Vec3::Z];
+    }
+    let s = 2.0 / n;
+    let (xxs, yys) = (f64::from(st(xx * s)), f64::from(st(yy * s)));
+    // A root keeps `z * z * s` on the stack; any other bone stores `z * z`
+    // and its product.
+    let zzs = if root {
+        z * z * s
+    } else {
+        f64::from(st(f64::from(st(z * z)) * s))
+    };
+    let (xs, ys) = (x * s, y * s);
+    let wz = s * (w * z);
+    let (xz, xw) = (f64::from(st(xs * z)), f64::from(st(xs * w)));
+    [
+        Vec3::new(st(1.0 - (yys + zzs)), st(xs * y + wz), st(xz - ys * w)),
+        Vec3::new(st(xs * y - wz), st(1.0 - (xxs + zzs)), st(ys * z + xw)),
+        Vec3::new(
+            st(ys * w + xz),
+            st(ys * z - xw),
+            st(1.0 - f64::from(st(xxs + yys))),
+        ),
+    ]
+}
+
+/// Every bone's world as 1.1d's skeleton build (`cod_lnxded` 0x80c337c,
+/// `DObjCalcSkel`, syscall 0x70) composes `records`: a root's quaternion
+/// and offset as recorded; any other bone's quaternion its record times
+/// its parent's, a control bone's the other way round, and its offset plus
+/// its bind position turned through the parent's matrix (0x80c4078), the
+/// `x` sum kept on the stack and `y` and `z` stored first
+/// (cod11-combat.md 3.1, "The skeleton build on 1.1").
+pub fn build_kept(skel: &Skeleton, records: &[Record]) -> Vec<StoredBone> {
+    let mut out: Vec<StoredBone> = Vec::with_capacity(records.len());
+    for (b, r) in skel.bones.iter().zip(records) {
+        let Ok(p) = usize::try_from(b.parent) else {
+            out.push(StoredBone {
+                q: r.q,
+                axes: axes_kept(r.q, true),
+                origin: Vec3::from(r.t),
+            });
+            continue;
+        };
+        let pb = out[p];
+        let q = if r.control {
+            compose_kept(pb.q, r.q)
+        } else {
+            compose_kept(r.q, pb.q)
+        };
+        let (t, bind) = (r.t.map(f64::from), b.local_pos.as_dvec3());
+        let tx = t[0] + bind.x;
+        let (ty, tz) = (f64::from(st(t[1] + bind.y)), f64::from(st(t[2] + bind.z)));
+        let [m0, m1, m2] = pb.axes.map(|a| a.as_dvec3());
+        let o = pb.origin.as_dvec3();
+        let origin = Vec3::new(
+            st((tz * m2.x + (ty * m1.x + tx * m0.x)) + o.x),
+            st(((ty * m1.y + tx * m0.y) + tz * m2.y) + o.y),
+            st((tz * m2.z + (ty * m1.z + tx * m0.z)) + o.z),
+        );
+        out.push(StoredBone {
+            q,
+            axes: axes_kept(q, false),
+            origin,
+        });
+    }
+    out
 }
 
 #[cfg(test)]
