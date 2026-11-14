@@ -4512,6 +4512,27 @@ impl Server {
         }
     }
 
+    /// Test-facing: a `ctf` flag's guards once it is taken, on the
+    /// carrier's way out or closing on him, and nearer outposts
+    /// (`Bot::ctf_watch`, `ctf_close`, `ctf_near`).
+    pub fn test_bot_ctf_watch(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.ctf_watch = on;
+        }
+    }
+
+    pub fn test_bot_ctf_close(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.ctf_close = on;
+        }
+    }
+
+    pub fn test_bot_ctf_near(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.ctf_near = on;
+        }
+    }
+
     /// Test-facing: the ticks a bot has waited aside for a climber
     /// (`nav::Follower::yielding`).
     pub fn bot_yielding(&self, slot: usize) -> u32 {

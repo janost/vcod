@@ -1032,6 +1032,7 @@ impl Cod2Bots {
                         rank,
                         hunt: None,
                         lead: None,
+                        watch: None,
                     })))
                 }
                 UoObjectives::Hq { radios, next } => Some(UoView::Hq(HqView {

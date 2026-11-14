@@ -47,7 +47,8 @@
 //! asymmetry cancels). `dm` has no sides: there an odd slot takes axis's
 //! arm and an even one allies'.
 //! `ESCORT=`, `ROUTE=`, `HOLD=` and `SPRINT=` take the same values but turn
-//! on bot-objectives.md 14.12's rules, off by default, where they say. On
+//! on bot-objectives.md 14.12's rules, off by default, where they say;
+//! `WATCH=`, `CLOSE=` and `NEAROUT=` 14.13's. On
 //! `ctf` the actions add each carry and how it ended ([`CtfCarries`]).
 //! With an arm one-sided the totals add a row per arm, named by the
 //! one-sided features on for it. `VERBOSE=1` prints every kill. Seeds
@@ -147,6 +148,9 @@ struct CtfCarries {
     escorted: Vec<u32>,
     /// This tick's kills, victim to killer.
     killers: HashMap<usize, usize>,
+    /// Each client's team as last seen playing: a bot's rank on its side
+    /// by slot, odd ranks guarding their flag (`Bot::uo_target`).
+    sides: BTreeMap<usize, i32>,
     trace: Option<String>,
 }
 
@@ -182,6 +186,15 @@ impl CtfCarries {
         self.start.resize(flags.len(), None);
         self.escorted.resize(flags.len(), 0);
         let killers = std::mem::take(&mut self.killers);
+        for b in bodies {
+            self.sides.insert(b.0, b.1);
+        }
+        let sides = &self.sides;
+        let guards = |k: usize| {
+            sides
+                .get(&k)
+                .is_some_and(|t| sides.iter().filter(|(s, u)| **s < k && *u == t).count() % 2 == 1)
+        };
         for (((f, last), start), escorted) in flags
             .iter()
             .zip(self.last.iter_mut())
@@ -198,12 +211,22 @@ impl CtfCarries {
                         let goal: [f32; 3] =
                             std::array::from_fn(|i| (f.goal.0[i] + f.goal.1[i]) * 0.5);
                         let home = (v(goal) - v(at)).truncate().normalize_or_zero();
-                        let killer = killers.get(&c).and_then(|&k| origin(k)).map(|k| {
-                            let to = (v(k) - v(at)).truncate();
-                            (to.length(), to.normalize_or_zero().dot(home))
-                        });
+                        let killer =
+                            killers
+                                .get(&c)
+                                .and_then(|&k| Some((k, origin(k)?)))
+                                .map(|(k, p)| {
+                                    let to = (v(p) - v(at)).truncate();
+                                    (
+                                        to.length().round(),
+                                        (to.normalize_or_zero().dot(home) * 100.0).round() / 100.0,
+                                        k,
+                                        if guards(k) { "guard" } else { "taker" },
+                                        v(p).distance(v(from)).round(),
+                                    )
+                                });
                         eprintln!(
-                            "{label} t{tick} carrier {c} carried {} s ({} escorted), goal {:.0} to {:.0} off, at {:?}, scored {} killer (distance, cos to the way home) {killer:?}",
+                            "{label} t{tick} carrier {c} carried {} s ({} escorted), goal {:.0} to {:.0} off, at {:?}, scored {} killer (distance, cos to the way home, slot, role, off the flag's home) {killer:?}",
                             (tick - t0) as f32 * TICK_MS as f32 / 1000.0,
                             *escorted as f32 * TICK_MS as f32 / 1000.0,
                             v(from).distance(v(goal)),
@@ -323,17 +346,19 @@ struct Opts {
     verbose: bool,
     /// cover, retreat, team play, awareness, footwork, wariness, squad,
     /// aim, tactics, converge, lanes, far, cues, travel, carry, escort,
-    /// route, hold, sprint.
-    arms: [Arm; 19],
+    /// route, hold, sprint, watch, close, nearout.
+    arms: [Arm; 22],
 }
 
-const FEATURES: [&str; 19] = [
+const FEATURES: [&str; 22] = [
     "cover", "retreat", "teamplay", "aware", "footwork", "wary", "squad", "aim", "tactics",
     "converge", "lanes", "far", "cues", "travel", "carry", "escort", "route", "hold", "sprint",
+    "watch", "close", "nearout",
 ];
-const ARMS: [&str; 19] = [
+const ARMS: [&str; 22] = [
     "COVER", "RETREAT", "TEAMPLAY", "AWARE", "FOOTWORK", "WARY", "SQUAD", "AIM", "TACTICS",
     "CONVERGE", "LANES", "FAR", "CUES", "TRAVEL", "CARRY", "ESCORT", "ROUTE", "HOLD", "SPRINT",
+    "WATCH", "CLOSE", "NEAROUT",
 ];
 
 /// The side a client's arms follow: its team, or in `dm` its slot's
@@ -1540,6 +1565,9 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                 route,
                 hold,
                 sprint,
+                watch,
+                close,
+                nearout,
             ] = o.arms;
             if cover != Arm::All {
                 sv.test_bot_cover(slot, cover.on(team, seed));
@@ -1600,6 +1628,16 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
             }
             if given("SPRINT") {
                 sv.test_bot_ctf_sprint(slot, sprint.on(team, seed));
+            }
+            // And 14.13's.
+            if given("WATCH") {
+                sv.test_bot_ctf_watch(slot, watch.on(team, seed));
+            }
+            if given("CLOSE") {
+                sv.test_bot_ctf_close(slot, close.on(team, seed));
+            }
+            if given("NEAROUT") {
+                sv.test_bot_ctf_near(slot, nearout.on(team, seed));
             }
         }
         if let Some(ob) = observer.as_mut() {
@@ -3026,7 +3064,8 @@ mod cod2 {
             // bot walks straight to its objective (`Bot::lanes`); `FAR=0`,
             // `CUES=0`, `TRAVEL=0` turn off bot-objectives.md 14's rules,
             // `CARRY=0` 14.11's; `ESCORT=1`, `ROUTE=1`, `HOLD=1` turn on
-            // 14.12's, off by default.
+            // 14.12's, `WATCH=1`, `CLOSE=1`, `NEAROUT=1` 14.13's, off by
+            // default.
             if let Some(b) = sv.bots_mut() {
                 let off = |k: &str| matches!(std::env::var(k).as_deref(), Ok("0" | "none"));
                 let arms = [
@@ -3039,7 +3078,14 @@ mod cod2 {
                     !off("CARRY"),
                 ];
                 let on = |k: &str| matches!(std::env::var(k).as_deref(), Ok("1" | "all"));
-                let tried = [on("ESCORT"), on("ROUTE"), on("HOLD")];
+                let tried = [
+                    on("ESCORT"),
+                    on("ROUTE"),
+                    on("HOLD"),
+                    on("WATCH"),
+                    on("CLOSE"),
+                    on("NEAROUT"),
+                ];
                 for bot in b.bots_mut().values_mut() {
                     bot.tactics &= arms[0];
                     bot.converge &= arms[1];
@@ -3051,6 +3097,9 @@ mod cod2 {
                     bot.ctf_escort = tried[0];
                     bot.ctf_route = tried[1];
                     bot.ctf_hold = tried[2];
+                    bot.ctf_watch = tried[3];
+                    bot.ctf_close = tried[4];
+                    bot.ctf_near = tried[5];
                 }
             }
             if restart > 0 && tick > 0 && tick % restart == 0 {
@@ -3807,7 +3856,8 @@ mod cod4 {
             // bot walks straight to its objective (`Bot::lanes`); `FAR=0`,
             // `CUES=0`, `TRAVEL=0` turn off bot-objectives.md 14's rules,
             // `CARRY=0` 14.11's; `ESCORT=1`, `ROUTE=1`, `HOLD=1` turn on
-            // 14.12's, off by default.
+            // 14.12's, `WATCH=1`, `CLOSE=1`, `NEAROUT=1` 14.13's, off by
+            // default.
             if let Some(b) = sv.bots_mut() {
                 let off = |k: &str| matches!(std::env::var(k).as_deref(), Ok("0" | "none"));
                 let arms = [
@@ -3820,7 +3870,14 @@ mod cod4 {
                     !off("CARRY"),
                 ];
                 let on = |k: &str| matches!(std::env::var(k).as_deref(), Ok("1" | "all"));
-                let tried = [on("ESCORT"), on("ROUTE"), on("HOLD")];
+                let tried = [
+                    on("ESCORT"),
+                    on("ROUTE"),
+                    on("HOLD"),
+                    on("WATCH"),
+                    on("CLOSE"),
+                    on("NEAROUT"),
+                ];
                 for bot in b.bots_mut().values_mut() {
                     bot.tactics &= arms[0];
                     bot.converge &= arms[1];
@@ -3832,6 +3889,9 @@ mod cod4 {
                     bot.ctf_escort = tried[0];
                     bot.ctf_route = tried[1];
                     bot.ctf_hold = tried[2];
+                    bot.ctf_watch = tried[3];
+                    bot.ctf_close = tried[4];
+                    bot.ctf_near = tried[5];
                 }
             }
             // The script's `map_restart` and `exitLevel` run off the

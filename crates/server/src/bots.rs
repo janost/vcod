@@ -680,6 +680,10 @@ pub struct CtfView {
     /// The point the driver sends one of a carrier's escorts to, ahead of
     /// him along his path or at his side ([`Bot::ctf_escort`]).
     pub lead: Option<[f32; 3]>,
+    /// The outpost the driver keeps the bot on once its flag is taken,
+    /// looking at the carrier's way out ([`Bot::ctf_watch`],
+    /// bot-objectives.md 14.13).
+    pub watch: Option<GuardPost>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1129,6 +1133,18 @@ pub struct Bot {
     /// On United Offensive the carrier sprints on from an enemy in sight
     /// behind or beside him instead of turning the gun on him.
     pub ctf_sprint: bool,
+    /// bot-objectives.md 14.13's experiments on a `ctf` flag's guards
+    /// once the flag is taken, off by default (none raised captures past
+    /// the seed spread). `ctf_watch`: a guard near the flag's home holds
+    /// the outpost nearest it that sees the carrier's way out, looking at
+    /// that way, instead of making for his goal.
+    pub ctf_watch: bool,
+    /// The guards near the flag's home close on the carrier along his way
+    /// out instead of making for his goal.
+    pub ctf_close: bool,
+    /// The guards of a `ctf` flag at home hold outposts from a band
+    /// nearer it ([`posts::CTF_NEAR_BAND`]).
+    pub ctf_near: bool,
     /// The point its objective centres on, read at the top of the last
     /// think ([`Bot::objective_point`]).
     anchor: Option<[f32; 3]>,
@@ -1449,6 +1465,12 @@ pub(crate) enum GuardHold {
     /// Round the objective, walked in to with care: S&D defenders making
     /// for a planted bomb ([`Bot::cues`]).
     Back,
+    /// Out on the ways in from a band nearer the objective: a `ctf` flag
+    /// at home with [`Bot::ctf_near`] ([`posts::CTF_NEAR_BAND`]).
+    FarNear,
+    /// The one post the driver dealt ([`CtfView::watch`]): none dealt
+    /// round the point.
+    Watch,
 }
 
 /// What the objective wants of the bot right now.
@@ -1685,6 +1707,9 @@ impl Bot {
             ctf_route: false,
             ctf_hold: false,
             ctf_sprint: false,
+            ctf_watch: false,
+            ctf_close: false,
+            ctf_near: false,
             anchor: None,
             guarded: None,
             exposure: None,
@@ -2246,6 +2271,15 @@ impl Bot {
         };
         match uo {
             UoView::Ctf(c) => {
+                let far = |at: [f32; 3]| ObjTarget::Guard {
+                    at,
+                    inner: 0.0,
+                    hold: if self.ctf_near {
+                        GuardHold::FarNear
+                    } else {
+                        GuardHold::Far
+                    },
+                };
                 if c.carrying {
                     // The capture wants our flag home.
                     if c.ours.home.is_some() {
@@ -2281,6 +2315,14 @@ impl Bot {
                 // Ahead of our carrier or at his side ([`Bot::ctf_escort`]).
                 if let Some(at) = c.lead {
                     return Some(ObjTarget::Escort(at));
+                }
+                // On the carrier's way out ([`Bot::ctf_watch`]).
+                if let Some(p) = c.watch {
+                    return Some(ObjTarget::Guard {
+                        at: p.at,
+                        inner: 0.0,
+                        hold: GuardHold::Watch,
+                    });
                 }
                 if defends {
                     return Some(match c.ours.home {
@@ -2691,6 +2733,10 @@ impl Bot {
     /// one clearing a charge's blast), a zone, a radio.
     pub(crate) fn guard_anchor(&self, view: &BotView) -> Option<posts::Anchor> {
         match self.objective_target(view)? {
+            ObjTarget::Guard {
+                hold: GuardHold::Watch,
+                ..
+            } => None,
             ObjTarget::Guard { at, inner, .. } if inner < BAS_BLAST => Some(posts::Anchor::Ring {
                 at,
                 inner: inner.max(POST_INNER),
@@ -2769,7 +2815,9 @@ impl Bot {
         match self.objective_target(view) {
             Some(ObjTarget::Guard { hold, .. }) => match hold {
                 GuardHold::Far if self.far => GuardHold::Far,
+                GuardHold::FarNear if self.far => GuardHold::FarNear,
                 GuardHold::Back if self.far && self.cues => GuardHold::Back,
+                GuardHold::Watch => GuardHold::Watch,
                 _ => GuardHold::Near,
             },
             _ => GuardHold::Near,
@@ -8583,6 +8631,7 @@ mod tests {
             rank: 1,
             hunt: None,
             lead: None,
+            watch: None,
         })));
         assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 0.0]), "holds his goal");
         if let Some(UoView::Ctf(c)) = v.uo.as_mut() {
@@ -8624,6 +8673,7 @@ mod tests {
             rank: 2,
             hunt: None,
             lead: None,
+            watch: None,
         })));
         assert_eq!(bot.goal(&v), Goal::To([600.0, 0.0, 0.0]), "returns it");
         if let Some(UoView::Ctf(c)) = v.uo.as_mut() {

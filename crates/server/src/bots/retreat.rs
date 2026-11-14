@@ -534,6 +534,7 @@ mod tests {
                 rank: 0,
                 hunt: None,
                 lead: None,
+                watch: None,
             })));
             v.waypoint = Some(if ahead {
                 [64.0, 0.0, 0.0]

@@ -4153,3 +4153,100 @@ a match, 7 higher and none lower; kills +0.59 ± 0.93, stalls 194. INFERRED:
 the outposts the carrier passes on the way out see his back. That is
 section 14's rule, not the carrier's, and is left as it is here; a `ctf`
 outpost that turns to the carrier going out is the next step.
+
+### 14.13 A `ctf` flag's guards once it is taken, 2026-11-14
+
+14.12 found `FAR=none` lifting UO's captures past the spread and read it
+as the outposts round the flag seeing the carrier's back on his way out.
+Three rules for the guards of a `ctf` flag, each on its own switch and
+`bot_match` arm, off by default (`Bot::ctf_watch`, `ctf_close`,
+`ctf_near`; an arm given turns its rule on, as 14.12's). vcod's own, with
+nothing on retail to measure against.
+
+- Watch (`WATCH=`, `driver::ctf::deal_take`). When the flag leaves home
+  carried, each guard of it (a bot ranked to defend, 7.2) within 2000
+  units of its home takes the outpost round the home (14.1) within 800 of
+  him, 200 from another watcher's, that sees the graph's way from the
+  home to the carrier's goal 200 to 1500 off, the nearest; it looks at
+  the way's nearest node it sees on the home side of the way's node
+  nearest it (`CtfView::watch`, `GuardHold::Watch`), for 15 s.
+- Close (`CLOSE=`). The same guards walk for the node of that way
+  nearest them that the carrier, reckoned at 170 units a second from the
+  take, has not passed, as a hunt (`CtfView::hunt`), for 15 s.
+- Nearer (`NEAROUT=`, `posts::CTF_NEAR_BAND`). A `ctf` flag at home dealt
+  outposts from 300 along the graph out to a quarter of its run, clamped
+  to 600..800 (`GuardHold::FarNear`), against 14.1's 400 and 700..1500.
+
+A seen carrier sends the two nearest after him first, as 14.1.
+`CTF_TRACE=1` adds the killer's slot, his role (a guard of the flag by
+rank, else a taker) and his distance from where the carry started.
+
+Who kills the carriers. VERIFIED (measured, ours, release, the rules
+off, UO's set below, seeds 1..=16, `CTF_TRACE=1`): of 76 carries that
+ended, 14 captured and 62 fell to a killer the trace placed: 32 to the
+flag's guards (12 behind the carrier, cosine under -0.5; 15 beside; 5
+ahead), 21 of those within 1000 units of the flag's home; 30 to its
+side's takers (9 behind, 13 beside, 8 ahead), 9 within 1000. Seeds
+1..=8 alone: 11 guards, 19 takers.
+
+`FAR=none` again. VERIFIED (measured, the same runs): on this tip (the
+base of 14.12 with master merged, 5bcf662f4) `FAR=none` lifts UO's
+captures 7 to 11 over seeds 1..=8 (+0.12 ± 0.10 a match, 7 higher, 3
+lower) and 14 to 18 over 1..=16 (+0.06 ± 0.06), inside the spread both
+times. 14.12's +0.25 ± 0.09 does not hold up past its own build and
+seeds.
+
+VERIFIED (measured, ours, release): `bot_match` `GAMETYPE=ctf`, 10 bots,
+6000 ticks, seeds 1..=16. UO: mp_arnhem, mp_berlin, mp_cassino and
+mp_sicily (64 matches); CoD2: mp_toujane, mp_burgundy, mp_carentan and
+mp_matmata (64). Each rule alone. Totals, and the mean difference per
+match against before, its standard error and the matches higher and
+lower.
+
+| UO | carries | captures | on the run | returns | kills | stalled |
+|---|---|---|---|---|---|---|
+| before | 92 | 14 | 60 | 44 | 2495 | 243 |
+| watch | 75 | 17, +0.05 ± 0.05, 7/4 | 45, -0.23 ± 0.14 | 42 | 2499, +0.06 ± 0.33 | 323 |
+| close | 78 | 14, +0.00 ± 0.05, 5/5 | 50, -0.16 ± 0.14 | 41 | 2497, +0.03 ± 0.31 | 231 |
+| nearer | 71 | 18, +0.06 ± 0.07, 9/7 | 46, -0.22 ± 0.18 | 39 | 2431, -1.00 ± 0.48 | 388 |
+| `FAR=none` | 90 | 18, +0.06 ± 0.06, 10/6 | 55, -0.08 ± 0.19 | 48 | 2458, -0.58 ± 0.58 | 410 |
+
+| CoD2 | carries | captures | on the run | kills | stalled |
+|---|---|---|---|---|---|
+| before | 448 | 135 | 241 | 4366 | 53 |
+| watch | 415 | 123, -0.19 ± 0.19, 22/24 | 242, +0.02 ± 0.30 | 4243, -1.92 ± 0.67 | 0 |
+| close | 472 | 121, -0.22 ± 0.19, 20/27 | 283, +0.66 ± 0.36 | 4377, +0.17 ± 0.71 | 7 |
+| nearer | 444 | 107, -0.44 ± 0.20, 19/31 | 285, +0.69 ± 0.38 | 4387, +0.33 ± 0.75 | 14 |
+| `FAR=none` | 389 | 120, -0.23 ± 0.18, 20/25 | 217, -0.38 ± 0.40 | 4265, -1.58 ± 0.84 | 246 |
+
+- VERIFIED (the tables): no rule moves UO's captures past the spread; the
+  watch takes the guards' kills of the carrier from 21 to 10 over seeds
+  9..=16, but the carries fall with it (-0.27 ± 0.15, 6 higher, 11
+  lower), not traced. CoD2's captures
+  fall past two standard errors with the nearer band (-0.44 ± 0.20) and
+  its kills with the watch (-1.92 ± 0.67). All three stay off.
+- VERIFIED (measured, the build with the rules off against the base's,
+  `bot_match DIGEST=1`, mp_toujane `ctf` seeds 1 and 2, 3000 ticks; UO's
+  set, seeds 1..=8, every count): the same.
+
+The mp_cassino seed 4 trap (14.12). VERIFIED (measured, ours, a
+temporary per-tick print of the bot, `ROUTE=all` on a build of the base
+with the route's outposts left out, 14.12's earlier version, which
+reaches it): bot 3 stood on step node (5911, -2064, 22) for 40 ticks failing the
+climb to (5861, -2064, 52), gave the edge up and replanned through
+(5857, -2016, 52); the diagonal crossed a dent in the stepped block, and
+he fell in at (5879, -2036). The dent is 30 deep, about a body across,
+off the graph: box traces from inside are blocked all round at a lift of
+0.5 and 18 (0 to 4 units) and open east at 31. INFERRED
+(`NavGraph::walkable_start`, its branch conditions): each replan's start
+tried the 8 nearest nodes, all on the -8 floor beyond the walls, which a
+bot's walk reaches only with a jump; the jump start took only a node
+more than a step above the feet, and the rim's nodes at 22 sat outside
+the 8 by the score's height term, so the start fell back on the nearest
+with no jump, the walk pressed the wall, the stuck check rested him and
+the plan began there again to the match's end. The jump start now takes
+any of the 8 a bot's jump from rest reaches. VERIFIED (measured, the
+same build with the fix): that match's stalls 4046 to 8, the bot out
+with a jump at t88200; the 128 matches above and the CoD2 digests
+unchanged (the case never comes up on them). Not traced: why the climb
+to (5861, -2064, 52) failed, and the graph's edge over the dent.

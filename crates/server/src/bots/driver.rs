@@ -84,6 +84,10 @@ pub(crate) struct BotDriver {
     /// Per side (axis 0, allies 1), the stand of the other side's flag at
     /// home, as last seen there ([`ctf::danger`]).
     pub(crate) ctf_home: [Option<[f32; 3]>; 2],
+    /// Per side, its own flag's stand at home as last seen there, and its
+    /// take under way ([`ctf::deal_take`]).
+    pub(crate) ctf_base: [Option<[f32; 3]>; 2],
+    pub(crate) ctf_take: [Option<ctf::Take>; 2],
 }
 
 impl BotDriver {
@@ -591,7 +595,8 @@ fn deal_posts<W: BotWorld>(
         let centre = a.centre();
         let mut posted: Vec<(usize, posts::Post, Option<[f32; 3]>)> = Vec::new();
         let far = match want.hold {
-            super::GuardHold::Far => Some(kept.outer(&g, &clear, a)),
+            super::GuardHold::Far => Some(kept.outer(&g, &clear, a, &posts::OUT_BAND)),
+            super::GuardHold::FarNear => Some(kept.outer(&g, &clear, a, &posts::CTF_NEAR_BAND)),
             _ => None,
         };
         match far.filter(|o| !o.posts.is_empty()) {
@@ -1030,6 +1035,14 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
     w.deal(frame, &teams, &solo, round, &mut views);
     deal_squads(w, &mut views, &teams, round);
     deal_hot(w, &mut views, &teams);
+    // A `ctf` flag's guards on its carrier's way out (bot-objectives.md
+    // 14.13), before the posts read their targets.
+    if views
+        .iter()
+        .any(|(_, v)| matches!(v.uo.as_ref(), Some(super::UoView::Ctf(_))))
+    {
+        ctf::deal_take(w, &mut views, &teams);
+    }
     deal_posts(w, &mut views, &teams, &noises, &on_side);
     // A `ctf` carrier's escorts, and the edges near the enemies his side
     // saw of late, which his plan pays more on (bot-objectives.md 14.12).
