@@ -2819,6 +2819,41 @@ fn the_gunner_grid_capture_matches_15b_on_mp_carentan() {
     );
 }
 
+/// The `-hitfine-uo` recipe with `probe_hitwho`: a UO turret round's
+/// damage callback reads the gun as `eInflictor` and the gunner as
+/// `eAttacker` (`Bullet_Fire_Extended`'s inflictor argument, game.mp.uo
+/// 0x7b13c; cod11-turrets.md 6.3), every hit's point as `hit_gate` holds it.
+#[test]
+fn the_hitwho_capture_matches_uo_on_mp_carentan() {
+    const CVARS: &[(&str, &str)] = &[
+        ("probe_hitlog", "1"),
+        ("probe_hitwho", "1"),
+        ("probe_head", "basehead_axis_b_05"),
+    ];
+    let Some((script, log, mut rows)) = hit_replay(
+        "hitwho-uo",
+        vcod_common::testing::uo_fs,
+        &PROTOCOL_V22,
+        CVARS,
+    ) else {
+        return;
+    };
+    rows.extend(hitfine_rows(script.lines(), log.iter().map(String::as_str)));
+    let who = |lines: &mut dyn Iterator<Item = &str>| -> Vec<String> {
+        lines
+            .filter(|l| !l.starts_with('#'))
+            .filter_map(|l| l.split_once("PROBE hitwho ").map(|(_, r)| r.to_string()))
+            .collect()
+    };
+    let (theirs, ours) = (
+        who(&mut script.lines()),
+        who(&mut log.iter().map(String::as_str)),
+    );
+    assert_eq!(theirs.len(), 2, "retail's two hits");
+    assert_eq!(ours, theirs, "the callback's inflictor and attacker");
+    finish(rows, &[]);
+}
+
 #[test]
 fn the_hitgrid_capture_matches_retail_on_mp_carentan() {
     hit_gate(

@@ -532,8 +532,21 @@ is the pass entity, when its `r.ownerNum` is the pass entity, or when its
 `r.ownerNum` is the pass entity's own owner, read at 0x809184c and turned
 into -1 for 0x3ff at 0x809185f. VERIFIED, `turret_use` stores the
 gunner's number into the gun's `r.ownerNum` (1.1d 0x52ac4 at `+0x14c`);
-INFERRED, 1.5b 0x53008 (`+0x150`) and UO 0x5c955 (`+0x154`) are the same
-store, the field moved by the larger entity header. INFERRED, from those
+INFERRED, 1.5b 0x53008 (`+0x150`) is the same store, the field moved by
+the larger entity header. VERIFIED, UO: `turret_use` stores the player's
+`s.number` at the gun's `+0x154` (0x5c955), the offset `fire_grenade`
+writes the thrower's number to (0x5f8b4, `r.ownerNum`), and UO's
+`Bullet_Fire_Extended` passes its first argument's `s.number` to
+`trap_LocationalTrace` (0x7a9c7). VERIFIED, UO's damage inflictor:
+`Bullet_Fire` hands the gun on as `Bullet_Fire_Extended`'s eighth argument
+too (0x7a8da), which `G_Damage` takes as the inflictor (0x7b13c, the
+attacker only when it is null; 0x7b1e9); 1.1d's `G_Damage` takes the
+attacker twice (0x68be5..0x68be9). VERIFIED live, UO 1.51b,
+`mp_carentan-dm-turret-hitwho-uo-script.txt` (2026-11-14, `probe_hitwho`):
+both rounds that hit the target read `eInflictor` 298 `misc_mg42` and
+`eAttacker` 1 `player`; `turret_ab`'s
+`the_hitwho_capture_matches_uo_on_mp_carentan` reads the same on ours,
+the hits' points to the bit. INFERRED, from those
 three: a manned gun's round skips the gun and whatever the gunner owns,
 as the gunner's own pass did, and does not skip the gunner. INFERRED: the
 gun never clips a round either way, since its `r.contents` 0x200004
