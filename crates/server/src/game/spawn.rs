@@ -1980,6 +1980,9 @@ pub(crate) fn spawn_turret(
     rec.tags = bones
         .as_deref()
         .and_then(crate::game::turret::TurretTags::from_bones);
+    rec.gun = bones
+        .as_deref()
+        .and_then(crate::game::turret::GunRig::from_bones);
     host.turrets.insert(id, rec);
     host.link_turret(cx, id);
     let health = cx.intern_folded("health");
@@ -2007,8 +2010,12 @@ pub(crate) fn turret_model_changed(host: &mut GameHost, cx: &mut Cx, id: EntId) 
     let tags = bones
         .as_deref()
         .and_then(crate::game::turret::TurretTags::from_bones);
+    let gun = bones
+        .as_deref()
+        .and_then(crate::game::turret::GunRig::from_bones);
     if let Some(rec) = host.turrets.get_mut(&id) {
         rec.tags = tags;
+        rec.gun = gun;
         if let Some(rest) = rest {
             rec.rest_pitch = rest;
         }

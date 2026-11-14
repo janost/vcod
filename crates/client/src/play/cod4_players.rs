@@ -10,15 +10,13 @@ use glam::{Quat, Vec3};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use vcod_cod2::player::{
-    Character, PlayerAnimSet, PlayerBody, PlayerRig, PosedPlayer, RigParts, posed,
-};
+use vcod_cod2::player::{Character, PlayerAnimSet, PlayerBody, PlayerRig, PosedPlayer, RigParts};
 use vcod_cod4::anim::BodySource;
 use vcod_cod4::ragdoll::{
     CLIP_MASK, Dvars, Explosion, Ragdoll, RagdollDef, State as RagState, Sweep,
 };
 use vcod_common::animclock::Times;
-use vcod_common::playerpose::{BG_SWING_SPEED, LeanDvars};
+use vcod_common::playerpose::{BG_SWING_SPEED, Cod4Arith, LeanDvars};
 
 use crate::cod4_fly::WeaponModels;
 use crate::play::cod4::BodyView;
@@ -264,6 +262,30 @@ impl Cod4Players {
     /// index in `bodies`; one whose rig does not build is left out. Bodies
     /// not in `bodies` are forgotten. A gunner's gun in `guns` (parallel
     /// to `bodies`) puts his body on it.
+    /// Body `n`'s rig, its pose at `render_time` under `frame` and its
+    /// controls, as [`Self::posed`] last stepped it: what a test sets the
+    /// server's arithmetic against.
+    #[cfg(test)]
+    pub(crate) fn body_pose(
+        &mut self,
+        src: &BodySource,
+        n: u32,
+        frame: &vcod_cod2::player::BodyFrame,
+        render_time: i32,
+    ) -> Option<(
+        Rc<PlayerRig>,
+        vcod_common::skeleton::PoseBuffer,
+        vcod_common::playerpose::Controllers,
+    )> {
+        let body = self.bodies.get(&n)?;
+        let (_, Some((rig, _))) = body.rig.clone()? else {
+            return None;
+        };
+        let set = self.anims.as_mut()?.as_mut()?;
+        let pose = body.body.pose(&rig, set, src, frame, render_time, None);
+        Some((rig, pose, *body.body.controls()))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn posed(
         &mut self,
@@ -463,9 +485,18 @@ impl Cod4Players {
                 continue;
             }
             let pose = body.body.pose(&rig, set, src, &frame, render_time, turret);
-            let mut drawn = posed(&rig, &pose, &frame);
+            // `iw3mp.exe`'s `DObjCalcSkel` (0x57fbd0): the control bones
+            // turn in `tag_origin`'s frame (cod4-player-anims.md 8); a
+            // gunner's take none.
+            let controls = turret.is_none().then(|| *body.body.controls());
+            let worlds = vcod_cod4::skel::worlds_of(&vcod_cod4::skel::player_mats(
+                &rig.skeleton,
+                &pose,
+                controls.as_ref(),
+                Cod4Arith::Client,
+            ));
+            let mut drawn = posed_worlds(&rig, &worlds, &frame);
             if v.corpse {
-                let worlds = pose.bone_worlds(&rig.skeleton);
                 let body = self.bodies.get_mut(n).expect("inserted above");
                 if let Some(r) = ragdolled(
                     body,
@@ -482,7 +513,7 @@ impl Cod4Players {
             }
             let (_, turn, at) = drawn.transform.to_scale_rotation_translation();
             let tag = |b: Option<usize>| {
-                let (p, q) = pose.bone_world(&rig.skeleton, b?);
+                let (p, q) = *worlds.get(b?)?;
                 Some((turn * p + at, turn * q))
             };
             self.tags.insert(
@@ -498,6 +529,24 @@ impl Cod4Players {
             out.push((i, rig.clone(), drawn));
         }
         out
+    }
+}
+
+/// The skin matrices of every model of `rig` with its bones at `worlds`
+/// (the body's frame), under `f`'s transform.
+fn posed_worlds(
+    rig: &PlayerRig,
+    worlds: &[(Vec3, Quat)],
+    f: &vcod_cod2::player::BodyFrame,
+) -> PosedPlayer {
+    PosedPlayer {
+        transform: f.transform(),
+        models: rig
+            .models
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| (name.clone(), rig.skeleton.skin_matrices(worlds, i)))
+            .collect(),
     }
 }
 

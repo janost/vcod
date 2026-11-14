@@ -209,7 +209,7 @@ fn none_off(what: &str, off: &[String]) {
 
 /// 1.1d's four idle frames and the knockback kill, whose legs blend the
 /// run (anim 94) in at 0.001 before the idle (anim 122): the walk visits
-/// them in anim index order, the order 1.1d's pose sorts its layers into.
+/// them in anim index order, the order the pose sorts its layers into.
 #[test]
 fn the_targets_records_match_11ds_word_for_word() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
