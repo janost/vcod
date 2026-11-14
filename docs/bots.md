@@ -281,6 +281,19 @@ length split the team, and in S&D one attacker flanks from three
 attackers up and two from six: it goes for the same site, but round the
 main group's way when one up to five times as long exists (section 9.1).
 
+Round an objective a team does not stand in one spot
+([research/bot-objectives.md](research/bot-objectives.md) section 13).
+Guards of a site, a planted bomb, a radio or a flag each take their own
+post round it, at least 128 units from a teammate's, picked where the
+ways in cannot see them and from where they see the objective. Each
+crouches where that hides it, watches the objective, and moves to
+another post after 8 to 16 s. Takers of a domination flag or the radio
+spread over the zone the same way. Attackers and takers far from their
+objective (1200 units or more) are each sent by a different way in
+before they close on it, and in S&D the defenders all go to a site once
+one of them sees an enemy near it. CoD2 and CoD4 bots spread their routes
+over the map as the CoD1 ones do.
+
 ### Yells
 
 On CoD 1.1, 1.5, UO and CoD2 a bot yells through the stock quick
@@ -307,7 +320,7 @@ rewrites the cmd into the game's button bits, renumbers the game's
 weapons for the brain, answers the game's menus and fills the view from
 the game's playerstate. Behaviour differs by game, never by map: the
 `BotWorld` trait in `crates/server/src/bots/driver.rs` holds the
-differences as constants each game sets (`YIELDS`, `SHUNS_BODIES`, `PMOVE_PROBES`,
+differences as constants each game sets (`YIELDS`, `SPREADS`, `SHUNS_BODIES`, `PMOVE_PROBES`,
 CoD4's `MANTLE_RESTS` and `PARTS_MATES_FLAT`).
 
 ### How a change is judged
