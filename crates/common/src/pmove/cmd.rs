@@ -331,6 +331,7 @@ pub fn player_step(
     world: &MoveWorld,
     weapons: &[Option<WeaponDef>],
 ) -> PlayerStep {
+    super::weapon::prone_move_key(ps, cmd, weapons);
     let mut view = apply_view(ps, cmd.angles, *delta_angles);
     clamp_view(ps, cmd.angles, delta_angles, &mut view);
     let events = super::pmove(
@@ -343,6 +344,7 @@ pub fn player_step(
     // `pm->oldcmd` is the raw cmd: a talking cmd's sight still counts for
     // the next one's prone crawl test.
     ps.last_cmd_ads = cmd.buttons & msg::BUTTON_ADS != 0;
+    ps.last_cmd_moves = [cmd.forward, cmd.right];
     // Retail holds a prone view inside the cone around the body and the pitch
     // cap off the ground by pushing `delta_angles`, so the client's own
     // prediction lands in the same place, and the view the snapshot and the
