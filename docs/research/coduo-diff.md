@@ -1379,7 +1379,7 @@ The cgame side, `uo_cgame_mp_x86.dll`:
   plus the stance's `bg_viewheight`; for the ridden body `ps.origin` plus
   `viewHeightCurrent` (`ps+0xf8`) and the lean, moved forward first for a
   deployed `lmg` (`weaponClass` 3, `pm_flags` 0x20) (VERIFIED decompile).
-  It adds no walk bob, unlike the server's `CalcMuzzlePoint` (0x8b8ea,
+  It adds no walk bob, unlike the server's `CalcMuzzlePoint` (0x7b8ea,
   `cod11-combat.md` 2.1). A server's `EV_BULLET_TRACER` draws from its own
   `trBase`, that server muzzle.
 

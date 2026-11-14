@@ -1,0 +1,57 @@
+# Retail CoD 1.1d dedicated server, mp_carentan tdm, client-probes/probe_skyshot spot part on the street at (900, 1930) looking along +x, panzerfaust_mp, captured 2026-11-14 inside `unshare -rn`:
+#   PORT=28997 PROBE_SECS=40 tools/run_probe.sh client-probes/probe_skyshot mp_carentan +set probe_part spot +set probe_weapon panzerfaust_mp +set probe_x 900 +set probe_y 1930 +set probe_z -43 +set probe_yaw 0 +set probe_pitch 0
+#   vcod --net-probe 127.0.0.1:28997 --probe-team allies --probe-uo-weapon throw --probe-secs 25
+# The throw script holds the trigger with no sight for a second twice, 7 s apart; the first pull is dry (the clip is still empty). The second starts weaponstate 3 at once with fWeaponPosFrac 0 and forces the sight up; the rocket leaves once it is nearly up, after which the sight drops again (combat doc 1.4).
+# Retail server PROBE lines, then the shooter probe's VEH missile lines, then its VEH ps lines from 1.1 s before the launch to 0.2 s after.
+PROBE spot 1050 (900.00, 1930.00, -42.88) 0 0
+PROBE miss 13850 170 rocket (900.00, 1929.00, 18.00)
+PROBE miss 13900 170 rocket (1179.90, 1931.30, 21.10)
+PROBE miss 13950 170 rocket (1319.85, 1932.45, 22.65)
+PROBE miss 14000 170 rocket (1459.80, 1933.60, 24.20)
+PROBE miss 14050 170 rocket (1599.75, 1934.75, 25.75)
+PROBE miss 14100 170 rocket (1739.70, 1935.90, 27.30)
+PROBE miss 14150 170 rocket (1879.65, 1937.05, 28.85)
+PROBE miss 14200 170 rocket (1991.00, 1937.00, 30.00)
+PROBE miss 14250 170 rocket (1991.00, 1937.00, 30.00)
+PROBE miss 14300 170 rocket (1991.00, 1937.00, 30.00)
+PROBE miss 14350 170 rocket (1991.00, 1937.00, 30.00)
+VEH 13850 missile 170 type 2 base 900.000 1929.000 18.000 bits 0x44610000 0x44f12000 0x41900000 ground 1023 weapon 23 etype 4 evseq 0 ev 0 parm 0 apos 359.36548 0.47080144 0 atraj 0 0 0 0 0 traj 13750 2799 23 31
+VEH 13900 missile 170 type 2 base 900.000 1929.000 18.000 bits 0x44610000 0x44f12000 0x41900000 ground 1023 weapon 23 etype 4 evseq 0 ev 0 parm 0 apos 359.36548 0.47080144 0 atraj 0 0 0 0 0 traj 13750 2799 23 31
+VEH 13950 missile 170 type 2 base 900.000 1929.000 18.000 bits 0x44610000 0x44f12000 0x41900000 ground 1023 weapon 23 etype 4 evseq 0 ev 0 parm 0 apos 359.36548 0.47080144 0 atraj 0 0 0 0 0 traj 13750 2799 23 31
+VEH 14000 missile 170 type 2 base 900.000 1929.000 18.000 bits 0x44610000 0x44f12000 0x41900000 ground 1023 weapon 23 etype 4 evseq 0 ev 0 parm 0 apos 359.36548 0.47080144 0 atraj 0 0 0 0 0 traj 13750 2799 23 31
+VEH 14050 missile 170 type 2 base 900.000 1929.000 18.000 bits 0x44610000 0x44f12000 0x41900000 ground 1023 weapon 23 etype 4 evseq 0 ev 0 parm 0 apos 359.36548 0.47080144 0 atraj 0 0 0 0 0 traj 13750 2799 23 31
+VEH 14100 missile 170 type 2 base 900.000 1929.000 18.000 bits 0x44610000 0x44f12000 0x41900000 ground 1023 weapon 23 etype 4 evseq 0 ev 0 parm 0 apos 359.36548 0.47080144 0 atraj 0 0 0 0 0 traj 13750 2799 23 31
+VEH 14150 missile 170 type 0 base 1991.000 1937.000 30.000 bits 0x44f8e000 0x44f22000 0x41f00000 ground 1023 weapon 23 etype 0 evseq 1 ev 179 parm 143 apos 359.36548 0.47080144 0 atraj 0 0 0 0 0 traj 0 0 0 0
+VEH 14200 missile 170 type 0 base 1991.000 1937.000 30.000 bits 0x44f8e000 0x44f22000 0x41f00000 ground 1023 weapon 23 etype 0 evseq 1 ev 179 parm 143 apos 359.36548 0.47080144 0 atraj 0 0 0 0 0 traj 0 0 0 0
+VEH 14250 missile 170 type 0 base 1991.000 1937.000 30.000 bits 0x44f8e000 0x44f22000 0x41f00000 ground 1023 weapon 23 etype 0 evseq 1 ev 179 parm 143 apos 359.36548 0.47080144 0 atraj 0 0 0 0 0 traj 0 0 0 0
+VEH 14300 missile 170 type 0 base 1991.000 1937.000 30.000 bits 0x44f8e000 0x44f22000 0x41f00000 ground 1023 weapon 23 etype 0 evseq 1 ev 179 parm 143 apos 359.36548 0.47080144 0 atraj 0 0 0 0 0 traj 0 0 0 0
+VEH 14350 missile 170 type 0 base 1991.000 1937.000 30.000 bits 0x44f8e000 0x44f22000 0x41f00000 ground 1023 weapon 23 etype 0 evseq 1 ev 179 parm 143 apos 359.36548 0.47080144 0 atraj 0 0 0 0 0 traj 0 0 0 0
+VEH 14400 missile 170 type 0 base 1991.000 1937.000 30.000 bits 0x44f8e000 0x44f22000 0x41f00000 ground 1023 weapon 23 etype 0 evseq 1 ev 179 parm 143 apos 359.36548 0.47080144 0 atraj 0 0 0 0 0 traj 0 0 0 0
+VEH 14450 missile 170 type 0 base 1991.000 1937.000 30.000 bits 0x44f8e000 0x44f22000 0x41f00000 ground 1023 weapon 23 etype 0 evseq 1 ev 179 parm 143 apos 359.36548 0.47080144 0 atraj 0 0 0 0 0 traj 0 0 0 0
+VEH 12750 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 12732 z -42.941597
+VEH 12800 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 12784 z -42.941597
+VEH 12850 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 12833 z -42.941597
+VEH 12900 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 12883 z -42.941597
+VEH 12950 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 12933 z -42.941597
+VEH 13000 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 12982 z -42.941597
+VEH 13050 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 13032 z -42.941597
+VEH 13100 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 13082 z -42.941597
+VEH 13150 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 13133 z -42.941597
+VEH 13200 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 13183 z -42.941597
+VEH 13250 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 13233 z -42.941597
+VEH 13300 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 13283 z -42.941597
+VEH 13350 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 13333 z -42.941597
+VEH 13400 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 13383 z -42.941597
+VEH 13450 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 13433 z -42.941597
+VEH 13500 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.000 hint 0 255 hp 100 wstate 0 ct 13485 z -42.941597
+VEH 13550 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x410 weapon 23 pm_type 0 da 0 16384 frac 0.107 hint 0 255 hp 100 wstate 3 ct 13532 z -42.941597
+VEH 13600 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x410 weapon 23 pm_type 0 da 0 16384 frac 0.287 hint 0 255 hp 100 wstate 3 ct 13586 z -42.941597
+VEH 13650 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x410 weapon 23 pm_type 0 da 0 16384 frac 0.440 hint 0 255 hp 100 wstate 3 ct 13632 z -42.941597
+VEH 13700 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x410 weapon 23 pm_type 0 da 0 16384 frac 0.607 hint 0 255 hp 100 wstate 3 ct 13682 z -42.941597
+VEH 13750 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x410 weapon 23 pm_type 0 da 0 16384 frac 0.780 hint 0 255 hp 100 wstate 3 ct 13734 z -42.941597
+VEH 13800 ps pos 900.0 1929.6 -42.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x410 weapon 23 pm_type 0 da 0 16384 frac 0.943 hint 0 255 hp 100 wstate 3 ct 13783 z -42.941597
+VEH 13850 ps pos 900.0 1930.0 -41.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x18 weapon 23 pm_type 0 da 0 16384 frac 0.945 hint 0 255 hp 100 wstate 3 ct 13833 z -41.875
+VEH 13900 ps pos 900.0 1930.0 -41.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.863 hint 0 255 hp 100 wstate 3 ct 13882 z -41.875
+VEH 13950 ps pos 900.0 1930.0 -41.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x18 weapon 23 pm_type 0 da 0 16384 frac 0.780 hint 0 255 hp 100 wstate 3 ct 13932 z -41.875
+VEH 14000 ps pos 900.0 1930.0 -41.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x10 weapon 23 pm_type 0 da 0 16384 frac 0.697 hint 0 255 hp 100 wstate 3 ct 13982 z -41.875
+VEH 14050 ps pos 900.0 1930.0 -41.9 view 0.00 0.00 vehPos 0 vehType 0 vehMotion 0 locked 0 pm_flags 0x40000 eflags 0x18 weapon 23 pm_type 0 da 0 16384 frac 0.613 hint 0 255 hp 100 wstate 3 ct 14032 z -41.875

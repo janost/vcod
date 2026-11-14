@@ -39,7 +39,9 @@
 //	second and lets go twice, 6 s apart) is handed the frag and turned onto
 //	the middle of a barrel 64 units out, the target 160 out behind it. The
 //	barrel is deleted 5 s after the first grenade leaves, before the second.
-//	Each live grenade's origin is logged every frame.
+//	Each live grenade's origin is logged every frame. Under +set
+//	probe_contents <n> (UO) the barrel takes setContents(n) when it is
+//	spawned, logged as PROBE contents <time> <n>.
 //
 //	blast: the grenade part's thrower and aim with nothing in the way; the
 //	target waits 48 behind the thrower until a grenade comes to rest, then
@@ -353,6 +355,11 @@ pair_part(part)
 					model = spawn("script_model", ground_at(bpos));
 					model setmodel("xmodel/barrel_black1");
 					logPrint("PROBE rphase " + now + " shown " + model.origin + "\n");
+					if (getcvar("probe_contents") != "")
+					{
+						model setcontents(getcvarint("probe_contents"));
+						logPrint("PROBE contents " + now + " " + getcvarint("probe_contents") + "\n");
+					}
 				}
 			}
 			if (part == "prone" && now < placed + 1000)

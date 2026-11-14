@@ -343,7 +343,7 @@ pub fn eye_bob(ps: &PlayerState, view: [f32; 3]) -> Vec3 {
 }
 
 /// The walk bob 1.5's and UO's `CalcMuzzlePoint` (1.5 game 0x7e91f, UO
-/// 0x8b8ea) add to a shot's or a throw's start: [`eye_bob`]'s two factors
+/// 0x7b8ea) add to a shot's or a throw's start: [`eye_bob`]'s two factors
 /// at the game module's precision (`BG_GetBobCycle` 1.5 0x40a05 rounds the
 /// cycle to a float), the side one along the right of `ps.viewangles`
 /// (combat doc 2.1, "1.5 and United Offensive"). Returns `at` with the

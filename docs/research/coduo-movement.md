@@ -277,7 +277,7 @@ transitions, and `proneDirection` as the cap's centre (INFERRED from the
 writes above).
 
 A deployed LMG's rounds start from the eye pushed up to 19 forward along
-`proneDirection` by an 8-unit box trace, `CalcMuzzlePoint` 0x8b8ea
+`proneDirection` by an 8-unit box trace, `CalcMuzzlePoint` 0x7b8ea
 (VERIFIED; addresses and the rest of UO's muzzle in `cod11-combat.md` 2.1,
 "1.5 and United Offensive").
 
