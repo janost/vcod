@@ -1048,7 +1048,7 @@ fn axes_kept(q: [f32; 4], root: bool) -> [Vec3; 3] {
 /// its parent's, a control bone's the other way round, and its offset plus
 /// its bind position turned through the parent's matrix (0x80c4078), the
 /// `x` sum kept on the stack and `y` and `z` stored first
-/// (cod11-combat.md 3.1, "The skeleton build on 1.1").
+/// (cod11-combat.md 3.1, "The pose on 1.1").
 pub fn build_kept(skel: &Skeleton, records: &[Record]) -> Vec<StoredBone> {
     let mut out: Vec<StoredBone> = Vec::with_capacity(records.len());
     for (b, r) in skel.bones.iter().zip(records) {
