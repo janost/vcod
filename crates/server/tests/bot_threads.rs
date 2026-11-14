@@ -70,11 +70,12 @@ fn cod1_tick(sv: &vcod_server::Server) -> u64 {
     h.0
 }
 
-/// `bots` shooting bots on `map` `tdm` for `ticks`, on 1.1's or (with
-/// `uo`) UO's protocol.
+/// `bots` shooting bots on `map` under `gametype` for `ticks`, on 1.1's
+/// or (with `uo`) UO's protocol.
 fn cod1_match(
     fs: vcod_common::pk3::Pk3Fs,
     map: &str,
+    gametype: &str,
     uo: bool,
     bots: usize,
     ticks: usize,
@@ -86,7 +87,7 @@ fn cod1_match(
         map: map.into(),
         hostname: "vcod test".into(),
         max_clients: bots + 2,
-        gametype: "tdm".into(),
+        gametype: gametype.into(),
         test_entities: 0,
         trace: false,
         bots,
@@ -108,44 +109,57 @@ fn cod1_match(
         .collect()
 }
 
-/// 1.1: eight bots on mp_carentan for 60 s. Needs `COD_DIR` at 1.1.
+/// 1.1: eight bots on mp_carentan `tdm`, then `sd` (the objective
+/// roles, posts and hot sites), for 60 s each. Needs `COD_DIR` at 1.1.
 #[test]
 fn cod1_bots_move_alike_on_threads() {
     if vcod_common::testing::game_fs_11().is_none() {
         return;
     }
-    same_on_threads("1.1", || {
-        let fs = vcod_common::testing::game_fs_11().unwrap();
-        cod1_match(fs, "mp_carentan", false, 8, 1200)
-    });
+    for gt in ["tdm", "sd"] {
+        same_on_threads(&format!("1.1 {gt}"), || {
+            let fs = vcod_common::testing::game_fs_11().unwrap();
+            cod1_match(fs, "mp_carentan", gt, false, 8, 1200)
+        });
+    }
 }
 
-/// UO: eight bots on mp_cassino for 60 s, vehicles and all. Needs
-/// `COD_DIR` at a UO install.
+/// UO: eight bots on mp_cassino `tdm`, vehicles and all, then `ctf`, for
+/// 60 s each. Needs `COD_DIR` at a UO install.
 #[test]
 fn uo_bots_move_alike_on_threads() {
     if vcod_common::testing::uo_fs().is_none() {
         return;
     }
-    same_on_threads("UO", || {
-        let fs = vcod_common::testing::uo_fs().unwrap();
-        cod1_match(fs, "mp_cassino", true, 8, 1200)
-    });
+    for gt in ["tdm", "ctf"] {
+        same_on_threads(&format!("UO {gt}"), || {
+            let fs = vcod_common::testing::uo_fs().unwrap();
+            cod1_match(fs, "mp_cassino", gt, true, 8, 1200)
+        });
+    }
 }
 
-/// CoD2: ten bots on mp_toujane `tdm` for 60 s. Needs `COD2_DIR`.
+/// CoD2: ten bots on mp_toujane `tdm`, then `sd`, for 60 s each. Needs
+/// `COD2_DIR`.
 #[test]
 fn cod2_bots_move_alike_on_threads() {
-    use vcod_server::cod2::{Cod2Config, Cod2Server};
     if vcod_common::testing::cod2_fs().is_none() {
         return;
     }
-    same_on_threads("CoD2", || {
+    for gt in ["tdm", "sd"] {
+        same_on_threads(&format!("CoD2 {gt}"), || cod2_match(gt));
+    }
+}
+
+/// Each CoD2 bot's last cmd and body per tick over one seeded match.
+fn cod2_match(gametype: &str) -> Vec<u64> {
+    use vcod_server::cod2::{Cod2Config, Cod2Server};
+    {
         let fs = Rc::new(vcod_common::testing::cod2_fs().unwrap());
         let mut now = Instant::now();
         let cfg = Cod2Config {
             map: "mp_toujane".into(),
-            gametype: "tdm".into(),
+            gametype: gametype.into(),
             hostname: "vcod test".into(),
             max_clients: 12,
             gametype_script: None,
@@ -183,27 +197,35 @@ fn cod2_bots_move_alike_on_threads() {
                 h.0
             })
             .collect()
-    });
+    }
 }
 
-/// CoD4: ten bots on mp_crash `war` for 60 s. Needs `COD4_DIR`.
+/// CoD4: ten bots on mp_crash `war`, then `sd`, for 60 s each. Needs
+/// `COD4_DIR`.
 #[test]
 fn cod4_bots_move_alike_on_threads() {
-    use vcod_server::cod4::{Cod4Config, Cod4Game, Cod4Server};
-    use vcod_server::engine::GameModule;
     let Some(install) = vcod_cod4::testing::cod4_install() else {
         return;
     };
-    same_on_threads("CoD4", || {
+    for gt in ["war", "sd"] {
+        same_on_threads(&format!("CoD4 {gt}"), || cod4_match(&install, gt));
+    }
+}
+
+/// Each CoD4 bot's last cmd and body per tick over one seeded match.
+fn cod4_match(install: &vcod_cod4::install::Install, gametype: &str) -> Vec<u64> {
+    use vcod_server::cod4::{Cod4Config, Cod4Game, Cod4Server};
+    use vcod_server::engine::GameModule;
+    {
         let mut now = Instant::now();
         let cfg = Cod4Config {
             map: "mp_crash".into(),
-            gametype: "war".into(),
+            gametype: gametype.into(),
             hostname: "vcod test".into(),
             max_clients: 12,
         };
         let mut sv = Cod4Server::new(cfg, 3);
-        sv.load(Some(&install)).expect("load the level");
+        sv.load(Some(install)).expect("load the level");
         let mut slots = sv.add_bots(10, true);
         slots.sort_unstable();
         sv.bots_mut().unwrap().wait_for_graph();
@@ -238,5 +260,5 @@ fn cod4_bots_move_alike_on_threads() {
                 h.0
             })
             .collect()
-    });
+    }
 }
