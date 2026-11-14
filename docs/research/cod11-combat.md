@@ -2616,8 +2616,11 @@ below on the dumped records). The same holds on 1.5b
   the lower node summed first, 113 of 114 bones up to 1.1e-5 off the
   other way.
   So a vcod layer stands for the node of its anim index on all three
-  servers. vcod keeps the clock's order on 1.5b and UO for the
-  `-hitgrid-15` row alone (next section).
+  servers. vcod measurement (2026-11-14): with the turret round's start
+  off the gun's own skeleton (cod11-turrets.md 13.8) `-hitgrid-15`'s
+  row 30500 holds to the bit in anim index order as well; the 1.9e-6
+  was the muzzle's error cancelling against the clock's order. vcod
+  walks the children in anim index order on all three servers.
 - VERIFIED, the controls (game.mp.uo `G_DObjSetLocalTag` 0x88e34,
   `G_DObjSetControlTagAngles` 0x88ec0, both through 0x88cf6): the
   record is `QuatMultiply(roll, QuatMultiply(pitch, yaw))` (0x4d25f,

@@ -1892,12 +1892,12 @@ fractions, and `-hitbody2`'s wound and kill points and `-hitgrid`'s
 knockback kill and every grid cell hold to the gates' bounds; the
 1.1d `KNOCKBACK_GAP` entry is gone.
 
-What is left, UO's `-hitgrid` and `-hitfine` kills (a step in x and y,
-a step in z). vcod measurement: 1.5b's stored walk and build match a
-gdb dump of its own knockback kill word for word with the run summed
+What was left, UO's `-hitgrid` and `-hitfine` kills (a step in x and y,
+a step in z; closed at the end of this section by the gun's skeleton).
+vcod measurement: 1.5b's stored walk and build match a gdb dump of its own knockback kill word for word with the run summed
 before the idle (cod11-combat.md 3.1), but in that order `-hitgrid-15`'s
 kill moves a step off in z, as UO's `-hitfine` kill sits; in the
-clock's order it matches. So 1.5b and UO keep the clock's order, and
+clock's order it matches. So 1.5b and UO kept the clock's order, and
 INFERRED a second error on the knockback frame of those replays (an
 input, the walk and build being retail's on the dump) cancels against it
 on 1.5b.
@@ -1994,22 +1994,61 @@ entity 0 after the target's run clip is set (`coduo_lnxded` 0x809aa73). The DObj
   (UO 0x5aa52..0x5aa8d, 1.5b 0x5124b..0x51286). 1.1d keeps the reach on
   the stack (0x51574..0x51598).
 
-INFERRED: the step left on UO's `-hitgrid` and `-hitfine` kills is the
-round's start: ours turns the gun's bind tags by `angles_to_axis`
-(`turret::muzzle_stored`, 13.8), not by the gun's skeleton build, and on
-some aims that lands `tag_player` or `tag_flash` a float step off. The
-knockback frame only shows it: the wound's aim happens to round to
-retail's on every capture. Closing it takes the gun's DObj built as a
-player's is (controllers on `tag_aim`, `tag_aim_animated`, `tag_flash`,
-cod11-combat.md 16.3) and `DObjSkel2MatrixMultiply43`'s arithmetic.
-`KNOCKBACK_GAP` stays on UO's `-hitgrid` and `-hitfine` kills, and the
-clock's order on 1.5b and UO: in anim index order `-hitgrid-15`'s kill
-moves a step off, the same start error no longer cancelling.
+INFERRED, before the gun's skeleton was built (below): the step left on
+UO's `-hitgrid` and `-hitfine` kills was the round's start, ours then
+turning the gun's bind tags by `angles_to_axis` instead of the gun's
+skeleton build. The knockback frame only showed it: the wound's aim
+happened to round to retail's on every capture.
+
+The gun's skeleton under gdb (2026-11-14), one run on each of 1.5b and
+UO 1.51b, the `-hitgrid-15` and `-hitgrid-uo` recipes, the server under
+a gdb that only reads: after `trap_DObjGetMatrixArray` in
+`G_DObjGetLocalTagMatrix` (1.5b `game.mp` 0x6c95b, UO 0x79188: the
+matrix array and the bone) and after the fire's muzzle stores (1.5b
+0x51289, UO 0x5aa90). Kept as `vcod-common`'s
+`tests/fixtures/skel11/mp_carentan-turret-gun-15-gdb.txt` and
+`-uo-gdb.txt`, five distinct aims each, identical on the two servers.
+
+- VERIFIED, `game.mp.uo.i386.so` `G_DObjGetWorldTagMatrix` (0x791a0):
+  `G_DObjGetLocalTagMatrix` (0x79135: `trap_DObjGetBoneIndex`,
+  `G_DObjCalcBone`, then the matrix array plus 64 per bone), then
+  `AnglesToAxis` of `ent+0x148` and `ent+0x13c..0x144` into a 4x3,
+  then `DObjSkel2MatrixMultiply43` (0x3c184). 1.5b's (0x6c973) reads
+  `ent+0x144` and `ent+0x138`.
+- VERIFIED, `G_DObjCalcBone` (UO 0x78fe2): unless
+  `trap_DObjCreateSkelForBone` reports the bone built, it takes the
+  bone's hierarchy bits, runs `trap_DObjCalcAnim`, the entity's
+  controller (`ent+0x230`, `turret_controller` on a gun) and
+  `trap_DObjCalcSkel`.
+- VERIFIED, `DObjSkel2MatrixMultiply43` (UO 0x3c184, 1.5b 0x34f34,
+  the same instructions): each axis element is the bone row's three
+  products with the axis' column summed on the x87 stack and stored
+  once, the rows' fourth words written 0; each origin component the
+  bone origin's three products, then the 4x3's origin added, stored
+  once; the fourth row's last word 1.0.
+- VERIFIED, the dumps: the skeleton's built mask is 0x1d9f and its
+  control mask 0x1110 on every round. In `xmodel/mg42_bipod`'s bone
+  order (vcod's load of the model) those are `tag_origin`, `tag_dummy`,
+  `tag_pivot`, `bi_base`, `tag_aim`, `mg01`, `tag_aim_animated`,
+  `tag_player`, `tag_weapon` and `tag_flash` built, and the controls on
+  `tag_aim` (4), `tag_aim_animated` (8) and `tag_flash` (12).
+  INFERRED: `tag_weapon` (11) is built by the gunner's placement
+  (0x515a8's `G_DObjGetLocalTagMatrix`) on the same frame and barrel.
+- vcod measurement, `gunskel_ab`: the gun's bind records (no anim
+  tree), `turret_controller`'s three control records and the skeleton
+  build (`PoseBuffer::stored_worlds`, cod11-combat.md 3.1, "The pose on
+  1.5 and UO") give every built bone's matrix of both dumps word for
+  word, and `DObjSkel2MatrixMultiply43` on them both world tags; the
+  fire's arithmetic on those gives each dumped muzzle's bits
+  (`the_muzzle_lands_on_retail_s_bits_off_the_gun_skeleton`).
+- vcod measurement, `turret_ab`: with that muzzle UO's `-hitgrid` kill
+  (30450) and `-hitfine` kill (30200) land on retail's bits, and every
+  1.5b and UO hit and grid row holds with the walk in anim index order
+  (cod11-combat.md 3.1). The two `KNOCKBACK_GAP` entries are gone.
 
 vcod: `turret_ab`'s `hit_gate` replays each capture as `spawn_gate` does and
 holds the target's playerstate, each hit's point (`HIT_NEAR`, 0.001; 13.8)
-and each grid cell (`GRID_NEAR`, 0.005) to retail's; UO's knockback kills are
-listed as `KNOCKBACK_GAP`. `the_hitbody2_capture_matches_retail_on_mp_carentan`
+and each grid cell (`GRID_NEAR`, 0.005) to retail's, no row tolerated. `the_hitbody2_capture_matches_retail_on_mp_carentan`
 holds `-hitbody2`'s hit points and struck body to the bit. The gunner's own rows are the `-spawn` gates'.
 
 ### 13.7 The frame ahead: UO's spawn DObj and the script trace
@@ -2102,15 +2141,15 @@ module after the fire's muzzle stores (0x5aa90).
   (`turret::muzzle`, `the_muzzle_reach_moves_with_the_barrel`).
 - vcod measurement (`turret_ab`, `TURRET_REPORT=1`): with the range, the aim
   and the posed reach every first-frame wound of the 1.1d, 1.5b and UO
-  captures lands on retail's bits; each knockback kill stays as 13.6 leaves
-  it.
+  captures lands on retail's bits; the knockback kills do once the 1.5b
+  and UO muzzle reads the gun's own skeleton (13.6).
 
 vcod: `combat::bullet_range` (`UO_BULLET_RANGE` on UO), `combat::bullet_end`,
 `turret::AimRule::fire_angles`, `turret::muzzle` (1.1d) and
-`turret::muzzle_stored` (1.5b and UO: the reach and the start in the
-arithmetic 13.6 reads off 0x5a8b0). `turret_ab`'s hit rows must
-be retail's to the bit; each gate names the rows it tolerates
-(`KNOCKBACK_GAP`), which stay within `HIT_NEAR` (0.001).
+`turret::muzzle_stored` (1.5b and UO: `tag_flash` and `tag_player` off
+the gun's skeleton, `turretpose::GunSkel`, and the reach and the start in
+the arithmetic 13.6 reads off 0x5a8b0). `turret_ab`'s hit rows must be
+retail's to the bit; none is tolerated.
 
 ### 13.9 The gunner's own pose: the sync group's time and the blend out
 

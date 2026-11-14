@@ -28,6 +28,115 @@ pub fn tag_weapon_local(aim: Vec3, weapon: Vec3, angles2: [f32; 3]) -> (Vec3, Qu
     (aim + barrel * (weapon - aim), barrel)
 }
 
+/// A gun's DObj as 1.5b's and UO's server build it: the model's bind
+/// records (no anim tree), `turret_controller`'s three controls and the
+/// skeleton build (cod11-turrets.md 13.8).
+pub struct GunSkel {
+    skel: crate::skeleton::Skeleton,
+    aim: usize,
+    aim_animated: usize,
+    flash: usize,
+    player: usize,
+}
+
+impl std::fmt::Debug for GunSkel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GunSkel")
+            .field("bones", &self.skel.bone_count())
+            .finish()
+    }
+}
+
+impl GunSkel {
+    /// The gun's skeleton off its model's bones; `None` without one of
+    /// `tag_aim`, `tag_aim_animated`, `tag_flash` and `tag_player`.
+    pub fn new(name: &str, bones: &[crate::model::Bone]) -> Option<GunSkel> {
+        let model = crate::model::Model {
+            name: name.to_string(),
+            bones: bones.to_vec(),
+            lods: Vec::new(),
+            collision: Vec::new(),
+        };
+        let skel = crate::skeleton::Skeleton::build(&[&model]);
+        Some(GunSkel {
+            aim: skel.bone_index("tag_aim")?,
+            aim_animated: skel.bone_index("tag_aim_animated")?,
+            flash: skel.bone_index("tag_flash")?,
+            player: skel.bone_index("tag_player")?,
+            skel,
+        })
+    }
+
+    pub fn skeleton(&self) -> &crate::skeleton::Skeleton {
+        &self.skel
+    }
+
+    /// Every bone's matrix as `DObjCalcSkel` leaves it with the barrel at
+    /// `angles2`: `turret_controller` (UO game.mp 0x5c5e9) sets `tag_aim`
+    /// and `tag_aim_animated` to (`angles2[0]`, `angles2[1]`, 0) and
+    /// `tag_flash` to (`angles2[2]`, 0, 0).
+    pub fn build(&self, angles2: [f32; 3]) -> Vec<crate::skeleton::StoredBone> {
+        use crate::skeleton::{PoseBuffer, Record};
+        let mut pose = PoseBuffer::new(&self.skel);
+        let barrel = [angles2[0], angles2[1], 0.0];
+        for (bone, angles) in [
+            (self.aim, barrel),
+            (self.aim_animated, barrel),
+            (self.flash, [angles2[2], 0.0, 0.0]),
+        ] {
+            let (pos, rot) = pose.local(bone);
+            pose.set_control(bone, pos, rot, Record::tag(angles, Vec3::ZERO, true));
+        }
+        pose.stored_worlds(&self.skel)
+            .expect("a fresh pose keeps its records")
+    }
+
+    /// `tag_flash` and `tag_player` in the world as the fire's two
+    /// `G_DObjGetWorldTagMatrix` calls read them (UO game.mp 0x5a8dc,
+    /// 0x5a945): each bone's matrix through `DObjSkel2MatrixMultiply43`
+    /// with `AnglesToAxis(angles)` and `origin`, the gun's
+    /// `r.currentAngles` and `r.currentOrigin`.
+    pub fn flash_and_player(
+        &self,
+        origin: Vec3,
+        angles: Vec3,
+        angles2: [f32; 3],
+    ) -> (WorldTag, WorldTag) {
+        let bones = self.build(angles2);
+        let axis = crate::x87::angles_to_axis(angles);
+        (
+            skel2_matrix_multiply43(&bones[self.flash], &axis, origin),
+            skel2_matrix_multiply43(&bones[self.player], &axis, origin),
+        )
+    }
+}
+
+/// A tag's world matrix: its axis rows and origin.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldTag {
+    pub axes: [Vec3; 3],
+    pub origin: Vec3,
+}
+
+/// `DObjSkel2MatrixMultiply43` (UO game.mp 0x3c184): a bone's matrix
+/// times an axis and origin, each element's three products and their sums
+/// on the x87 stack and rounded once, the origin added last.
+pub fn skel2_matrix_multiply43(
+    bone: &crate::skeleton::StoredBone,
+    axis: &[Vec3; 3],
+    origin: Vec3,
+) -> WorldTag {
+    let [a0, a1, a2] = axis.map(|a| a.as_dvec3());
+    let row = |r: Vec3| {
+        let r = r.as_dvec3();
+        (r.x * a0 + r.y * a1) + r.z * a2
+    };
+    WorldTag {
+        axes: bone.axes.map(|r| row(r).as_vec3()),
+        origin: (row(bone.origin) + origin.as_dvec3()).as_vec3(),
+    }
+}
+
 /// What 0x515a8 (and the client's 0x300279b0) work out for a gunner.
 #[derive(Clone, Debug)]
 pub struct GunnerPlacement {
