@@ -75,6 +75,9 @@ pub struct TurretRecord {
     /// The model's tags, `None` when the model or a tag failed to load: the
     /// gun then fires no bullet, retail's missing-tag arm (turrets doc 6.3).
     pub tags: Option<TurretTags>,
+    /// The gun's DObj skeleton, which 1.5b's and UO's muzzle reads
+    /// (turrets doc 13.8); `None` where `tags` is.
+    pub gun: Option<GunRig>,
     /// The `level.time` of `turret_think_init`, while it is still to run:
     /// a map gun spawns with its barrel at 0 and starts its walk home only
     /// on the frames after that think (protocol doc, "A turret's
@@ -104,6 +107,25 @@ pub struct TurretTags {
     pub flash: Vec3,
     pub aim_animated: Vec3,
     pub weapon: Vec3,
+}
+
+/// A [`GunSkel`] shared by the record's clones: equal when it is the same
+/// load.
+///
+/// [`GunSkel`]: vcod_common::turretpose::GunSkel
+#[derive(Clone, Debug)]
+pub struct GunRig(pub std::rc::Rc<vcod_common::turretpose::GunSkel>);
+
+impl PartialEq for GunRig {
+    fn eq(&self, other: &GunRig) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl GunRig {
+    pub fn from_bones(bones: &[vcod_common::model::Bone]) -> Option<GunRig> {
+        vcod_common::turretpose::GunSkel::new("turret", bones).map(|g| GunRig(std::rc::Rc::new(g)))
+    }
 }
 
 impl TurretTags {
@@ -199,6 +221,7 @@ impl TurretRecord {
             teleport_bit: false,
             firing: false,
             tags: None,
+            gun: None,
             init_at: None,
             angle_set: false,
             heat: 0.0,
@@ -545,28 +568,27 @@ pub fn muzzle(
     (player + Vec3::from(forward) * reach).into()
 }
 
-/// [`muzzle`] in 1.5b's and UO's arithmetic (1.5b `game.mp` 0x5120d..
-/// 0x51286, UO 0x5aa14..0x5aa8d): the reach is `VectorNormalize`'s length,
+/// 1.5b's and UO's muzzle (1.5b `game.mp` 0x510d5.., UO 0x5a8b0..):
+/// `tag_flash` and `tag_player` off the gun's own skeleton
+/// ([`GunSkel::flash_and_player`]), the reach `VectorNormalize`'s length,
 /// the squared sum and its root each stored as a float (1.5b 0x32fb3,
-/// UO 0x3a203), and each component of `player + forward * reach` is
-/// rounded once.
+/// UO 0x3a203), and each component of `player + forward * reach` rounded
+/// once (turrets doc 13.8).
+///
+/// [`GunSkel::flash_and_player`]: vcod_common::turretpose::GunSkel::flash_and_player
 pub fn muzzle_stored(
-    tags: &TurretTags,
+    gun: &GunRig,
     turret_origin: [f32; 3],
     turret_angles: [f32; 3],
     angles2: [f32; 3],
     forward: [f32; 3],
 ) -> [f32; 3] {
-    use crate::game::spawn::transform;
-    use vcod_common::x87::angles_to_axis;
-    let barrel = angles_to_axis(Vec3::new(angles2[0], angles2[1], 0.0));
-    let gun = angles_to_axis(turret_angles.into());
-    let world = |pivot: Vec3, tag: Vec3| {
-        Vec3::from(turret_origin) + transform(pivot + transform(tag - pivot, &barrel), &gun)
-    };
-    let player = world(tags.aim, tags.player);
-    let flash = world(tags.aim_animated, tags.flash);
-    let d = flash - player;
+    let (flash, player) =
+        gun.0
+            .flash_and_player(turret_origin.into(), turret_angles.into(), angles2);
+    let (flash, player) = (flash.origin, player.origin);
+    let d = [0, 1, 2].map(|c| flash[c] - player[c]);
+    let d = Vec3::from(d);
     let reach = (vcod_common::x87::dot(d, d) as f32 as f64).sqrt() as f32;
     let f = Vec3::from(forward).as_dvec3();
     (player.as_dvec3() + f * f64::from(reach)).as_vec3().into()
@@ -1046,6 +1068,56 @@ mod tests {
         };
         assert!((reach([0.0; 3]) - 53.80957).abs() < 2e-5);
         assert!((reach([9.997559, 30.002686, 0.0]) - 53.80326).abs() < 2e-5);
+    }
+
+    /// Retail's muzzle on every aim of the gun dumps
+    /// (`vcod-common`'s `fixtures/skel11/mp_carentan-turret-gun-*-gdb.txt`,
+    /// identical on 1.5b and UO): the gun's angles2, then the forward and
+    /// muzzle the fire stored, the gun at (1712, 1830, 8) facing 229.
+    #[test]
+    fn the_muzzle_lands_on_retail_s_bits_off_the_gun_skeleton() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let bones = vcod_common::model::load_bones(&fs, "mg42_bipod").unwrap();
+        let gun = GunRig::from_bones(&bones).unwrap();
+        let v = |w: [u32; 3]| w.map(f32::from_bits);
+        for (a2, forward, theirs) in [
+            (
+                [0x411ff600, 0x41f00580, 0],
+                [0xbe406005, 0xbf777ba0, 0xbe31c5d4],
+                [0x44d5f135, 0x44e370fe, 0x41d62a03],
+            ),
+            (
+                [0x3f97e000, 0x4049bc00, 0],
+                [0xbf1d0a24, 0xbf4a1ae7, 0xbca9a245],
+                [0x44d55716, 0x44e3dae2, 0x41e56ef0],
+            ),
+            (
+                [0x3f967800, 0xbeecc000, 0],
+                [0xbf29781e, 0xbf3fcdb6, 0xbca8103c],
+                [0x44d544ae, 0x44e3ea34, 0x41e57399],
+            ),
+            (
+                [0x3f967800, 0xbf576800, 0],
+                [0xbf2abbfc, 0xbf3eada5, 0xbca8103c],
+                [0x44d542ce, 0x44e3ebe0, 0x41e57399],
+            ),
+            (
+                [0x3f951000, 0xbf66e000, 0],
+                [0xbf2aef9e, 0xbf3e7fb5, 0xbca67e32],
+                [0x44d54289, 0x44e3ec2d, 0x41e57841],
+            ),
+        ] {
+            let m = muzzle_stored(
+                &gun,
+                [1712.0, 1830.0, 8.0],
+                [0.0, 229.0, 0.0],
+                v(a2),
+                v(forward),
+            );
+            assert_eq!(m.map(f32::to_bits), theirs, "at {:?}", v(a2));
+        }
     }
 
     #[test]
