@@ -43,10 +43,6 @@ pub(crate) struct Frame {
     pub stack: Vec<Value>,
     pub sp: u32,
     pub recv: Option<Target>,
-    /// The operand stack's depth before the instruction now running, so a
-    /// runtime error the VM recovers from (`Vm::set_recover_errors`) can
-    /// put the stack back as that instruction's `stack_effect` leaves it.
-    pub op_base: u32,
     /// Test-only: what this frame's `stack` length must be once the call
     /// currently running on top of it returns, per `stack_effect`'s
     /// declared `(pop, push)` for that `Call`/`CallPtr`. Lives on the frame,
@@ -518,7 +514,6 @@ impl Vm {
             stack,
             sp: 0,
             recv,
-            op_base: 0,
             #[cfg(test)]
             stack_effect_check: None,
         }
@@ -584,10 +579,12 @@ impl Vm {
                     self.record_error(&e, true);
                     errors.push(e);
                     let f = frames.last_mut().expect("an error leaves its frame on top");
-                    let (pops, pushes) = crate::bytecode::stack_effect(
-                        &f.func_rc.code[(f.ip as usize).saturating_sub(1)],
-                    );
-                    f.sp = f.sp.min((f.op_base as i32 - pops).max(0) as u32);
+                    let at = (f.ip as usize).saturating_sub(1);
+                    let (pops, pushes) = crate::bytecode::stack_effect(&f.func_rc.code[at]);
+                    // The failed op's depth on entry, which every path to it
+                    // agrees on (`bytecode::Prepared::depths`).
+                    let base = f.func_rc.prepared.depths.get(at).map_or(f.sp, |&d| d.into());
+                    f.sp = f.sp.min((base as i32 - pops).max(0) as u32);
                     for _ in 0..pushes {
                         f.push(Value::Undefined);
                     }
@@ -696,7 +693,6 @@ impl Vm {
             stack,
             sp: frame_sp,
             recv: frame_recv,
-            op_base,
             #[cfg(test)]
             stack_effect_check,
             ..
@@ -704,8 +700,8 @@ impl Vm {
         let func: &Function = func_rc;
         let code = &func.code[..];
         // What runs: `code` with its runs fused (`bytecode::fuse`).
-        let fast = if func.fast.len() == code.len() {
-            &func.fast[..]
+        let fast = if func.prepared.fast.len() == code.len() {
+            &func.prepared.fast[..]
         } else {
             code
         };
@@ -714,8 +710,6 @@ impl Vm {
         let mut ip = *frame_ip as usize;
         let mut sp = *frame_sp as usize;
         let mut left = *remaining;
-        // The depth before the op now running.
-        let mut base_sp = sp;
         let Spawns {
             pending: pending_spawns,
             field: field_spawns,
@@ -723,7 +717,7 @@ impl Vm {
 
         // Sized for the deepest the function's code goes (`stack_depth`),
         // so a push only stores.
-        let need = func.max_stack as usize;
+        let need = func.prepared.max_stack as usize;
         if stack.len() < need {
             stack.resize(need, Value::Undefined);
         }
@@ -818,7 +812,12 @@ impl Vm {
             let at = ip;
             let op = &fast[at];
             ip += 1;
-            base_sp = sp;
+            #[cfg(test)]
+            let base_sp = sp;
+            #[cfg(test)]
+            if let Some(&d) = func.prepared.depths.get(at) {
+                assert_eq!(sp, usize::from(d), "the stack's depth at {at} is not the walk's");
+            }
             // A spawn ran another thread, which may have ended this one.
             let mut spawned = false;
 
@@ -1792,7 +1791,6 @@ impl Vm {
         };
         *frame_ip = ip as u32;
         *frame_sp = sp as u32;
-        *op_base = base_sp as u32;
         *remaining = left;
         exit
     }
@@ -1852,7 +1850,7 @@ mod tests {
     /// A fused run answers as its ops do one at a time, whatever budget
     /// cuts it, whatever types reach it, and with or without the error
     /// recovery: every budget up to past the script's end, against the same
-    /// script with `Function::fast` left empty.
+    /// script with `Prepared::fast` left empty.
     #[test]
     fn fused_runs_answer_as_their_ops_at_every_budget() {
         let src = r#"
@@ -1910,7 +1908,7 @@ pick( p, q )
             vm.install(fns).unwrap();
             if !fused {
                 for f in vm.functions.values_mut() {
-                    Rc::get_mut(f).unwrap().fast.clear();
+                    Rc::get_mut(f).unwrap().prepared.fast.clear();
                 }
             }
             vm.set_budget(budget);

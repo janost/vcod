@@ -285,8 +285,7 @@ impl<'a> Compiler<'a> {
             params,
             locals,
             code: self.code,
-            fast: Vec::new(),
-            max_stack: 0,
+            prepared: Default::default(),
             consts: self.consts,
             lines: self.lines,
         })

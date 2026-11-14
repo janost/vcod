@@ -127,7 +127,7 @@ pub enum Op {
     EndOn,
 
     // Fused ops: never compiled, only placed by [`fuse`] in
-    // `Function::fast`, each in place of the run of ops it names, which
+    // `Prepared::fast`, each in place of the run of ops it names, which
     // stay in `Function::code` behind it.
     /// `LoadLocal a; LoadLocal b`.
     LoadLocal2(u16, u16),
@@ -174,12 +174,8 @@ pub struct Function {
     pub params: u8,
     pub locals: u16,
     pub code: Vec<Op>,
-    /// `code` with its runs fused ([`fuse`]), what the interpreter runs;
     /// `Vm::install` fills it, so a compiler leaves it empty.
-    pub fast: Vec<Op>,
-    /// The deepest `code` takes the operand stack ([`stack_depth`]);
-    /// `Vm::install` fills it.
-    pub max_stack: u32,
+    pub prepared: Prepared,
     pub consts: Vec<Value>,
     /// Source line per instruction, for error attribution.
     pub lines: Vec<u32>,
@@ -263,7 +259,7 @@ pub(crate) fn stack_effect(op: &Op) -> (i32, i32) {
     }
 }
 
-/// The ops `Vm::run_ops` runs (`Function::fast`): `code` with a fused op
+/// The ops `Vm::run_ops` runs (`Prepared::fast`): `code` with a fused op
 /// in place of each op that starts one of the runs the fused ops name,
 /// longest first. The ops a run covers stay behind it, so a jump into the
 /// run's middle lands where it always did, and a fused op that cannot take
@@ -352,13 +348,60 @@ fn visit(
 /// on one path but not another — exactly the shape of bug a jump-target or
 /// terminator error produces, and the reason to run it on every function a
 /// loader accepts, not just in the compiler's own tests. Answers the
-/// deepest the operand stack gets, which `Vm::install` sizes each frame's
-/// stack to (`Function::max_stack`).
+/// deepest the operand stack gets.
 pub fn stack_depth(f: &Function) -> Result<usize, String> {
-    if f.code.is_empty() {
-        return Ok(0);
+    let entry = entry_depths(f)?;
+    Ok(deepest(f, &entry))
+}
+
+/// The deepest `f` takes the operand stack, from each op's depth on entry.
+fn deepest(f: &Function, entry: &[Option<i32>]) -> usize {
+    f.code
+        .iter()
+        .zip(entry)
+        .filter_map(|(op, d)| {
+            let d = (*d)?;
+            let (pop, push) = stack_effect(op);
+            Some(d.max(d - pop + push))
+        })
+        .max()
+        .unwrap_or(0) as usize
+}
+
+/// What `Vm::install` works out for a function before it runs, from
+/// [`stack_depth`]'s walk and [`fuse`].
+#[derive(Debug, Default)]
+pub struct Prepared {
+    /// `code` with its runs fused, what the interpreter runs.
+    pub fast: Vec<Op>,
+    /// Each op's operand stack depth on entry, the one every path agrees
+    /// on (0 for an op no path reaches): where an op that failed leaves the
+    /// stack under the error recovery (`Vm::set_recover_errors`).
+    pub depths: Vec<u16>,
+    /// The deepest the stack gets, which each frame's stack is sized to.
+    pub max_stack: u32,
+}
+
+/// [`Prepared`] for `f`, or [`stack_depth`]'s refusal. `size` is the
+/// interner's `size`.
+pub fn prepare(f: &Function, size: Atom) -> Result<Prepared, String> {
+    let entry = entry_depths(f)?;
+    let max_stack = deepest(f, &entry);
+    if max_stack > usize::from(u16::MAX) {
+        return Err(format!("operand stack {max_stack} deep"));
     }
-    let mut deepest = 0;
+    Ok(Prepared {
+        fast: fuse(&f.code, size),
+        depths: entry.iter().map(|d| d.unwrap_or(0) as u16).collect(),
+        max_stack: max_stack as u32,
+    })
+}
+
+/// Each op's depth on entry, `None` for an op no path reaches.
+fn entry_depths(f: &Function) -> Result<Vec<Option<i32>>, String> {
+    if f.code.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut entry_depth: Vec<Option<i32>> = vec![None; f.code.len()];
     let mut queue = std::collections::VecDeque::new();
     entry_depth[0] = Some(0);
@@ -374,7 +417,6 @@ pub fn stack_depth(f: &Function) -> Result<usize, String> {
             ));
         }
         let depth_out = depth_in - pop + push;
-        deepest = deepest.max(depth_in).max(depth_out);
 
         match op {
             // Terminal: function exits, no successor. Also the check for a
@@ -429,7 +471,7 @@ pub fn stack_depth(f: &Function) -> Result<usize, String> {
             )?,
         }
     }
-    Ok(deepest as usize)
+    Ok(entry_depth)
 }
 
 #[cfg(test)]
@@ -444,8 +486,7 @@ mod tests {
             params: 0,
             locals: 0,
             code,
-            fast: Vec::new(),
-            max_stack: 0,
+            prepared: Default::default(),
             consts: Vec::new(),
             lines,
         }
