@@ -1054,6 +1054,16 @@ The rest of the walk, in 1.5b's `game.mp.i386.so` unless named:
   holds x. vcod: `pmove::wish`'s `WishArith::Stored` arm under
   `MoveRules::v15()` off `Arith::Msvc`; `predict_ab`'s 1.5b kerb (ct
   29991) and pole (ct 30492) rows match. VERIFIED, `predict_ab`.
+- The air and ladder cmd scale (1.5b 0x1eec9, UO 0x23905) stores the
+  length (`sqrt` of the int sum, 1.5b 0x1efba, UO 0x239f6), then
+  `(speed * max) / (length * 127)` with both products on the stack, stored
+  once (0x1efdc, UO 0x23a18), and each factor after it, the walk or run
+  scale and the `pm_type` 2 and 3 factors, stored (0x1f025, 0x1f03d,
+  0x1f05b, 0x1f079). VERIFIED, disassembly. vcod: `pmove::cmd_scale`'s
+  stored arm under `Arith::Stored`; it had taken `127 * length` as a
+  float. The moves, ladder, bump, slope, spawn view and fall gates at a UO
+  install read the same either way (VERIFIED, 2026-11-14), so no capture
+  yet tells the two apart.
 - The Windows cgames' walk scale (1.1 `cgame_mp_x86.dll` 0x300076e0, 1.5
   0x30007e40, UO `uo_cgame_mp_x86.dll` 0x30008770, each called once from
   its `PM_WalkMove`: 1.1 0x300080d3, 1.5 0x3000891e) stores two steps and
