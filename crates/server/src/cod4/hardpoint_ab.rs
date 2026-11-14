@@ -15,8 +15,9 @@
 //! `helicopter_collision_and_pose_match_retail` replays a second
 //! capture the same way: the posed tags, a trace through the turned gun
 //! and the move trace's notifies; `helicopter_idle_matches_retail` a
-//! third: a helicopter with no goal and its gun on a still body. Needs
-//! `COD4_DIR`.
+//! third: a helicopter with no goal and its gun on a still body;
+//! `helicopter_yaw_matches_retail` a fourth: goal yaws and `setLookAtEnt`.
+//! Needs `COD4_DIR`.
 //!
 //! `HARDPOINT_AB_REPORT=1` prints both runs' rows.
 
@@ -306,6 +307,42 @@ fn helicopter_idle_matches_retail() {
     assert!(
         rt.get(&(ET_HELICOPTER, 0))
             .is_some_and(|rows| rows.len() > 100),
+        "the capture's helicopter"
+    );
+    let (missing, unexplained) = compare(&rt, &ot, report);
+    assert!(missing.is_empty(), "{missing:?}");
+    assert!(unexplained.is_empty(), "{}", unexplained.join("\n"));
+}
+
+/// The yaw probe gsc (`heli_yaw`), read over the zones' scripts.
+const YAW_GSC: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../cod4/tests/fixtures/gsc/heli_yaw"
+);
+
+/// `cod4_hardpoint_ab`'s yaw capture (`play-1.7-heli-yaw.txt`): retail 1.7
+/// under gdb (the run `flight`'s `yaw-gdb.txt` records), `+set fs_game
+/// mods/vcodyaw +devmap mp_crash`, `war`, sv_pure 0, the gsc
+/// `crates/cod4/tests/fixtures/gsc/heli_yaw/maps/mp/mp_crash_fx.gsc` packed
+/// in the mod's iwd, one `cod4_probe` (`--team axis --script idle --name
+/// owner --qport 4021`) under `unshare -rnm`, cut 4 s after the
+/// helicopter's delete. Goal yaws on a stop and in the hover, a target yaw,
+/// then `setLookAtEnt` on a script_origin while hovering and flying
+/// (cod4-gsc.md 3.2). No hover radius, so no random draw: the seed is the
+/// flight capture's.
+#[test]
+fn helicopter_yaw_matches_retail() {
+    let Some(install) = vcod_cod4::testing::cod4_install() else {
+        return;
+    };
+    let r = side(&retail("heli-yaw"));
+    let (o, aborts) = ours(&install, &r, YAW_GSC, SEED);
+    assert!(aborts.is_empty(), "{aborts:?}");
+    let report = std::env::var_os("HARDPOINT_AB_REPORT").is_some();
+    let (rt, ot) = (tracks(&r), tracks(&o));
+    assert!(
+        rt.get(&(ET_HELICOPTER, 0))
+            .is_some_and(|rows| rows.len() > 700),
         "the capture's helicopter"
     );
     let (missing, unexplained) = compare(&rt, &ot, report);

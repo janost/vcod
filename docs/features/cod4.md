@@ -312,8 +312,9 @@ has a handler (3.1).
 - Looping and triggered map effects go out as `ET_LOOP_FX` and `ET_FX`.
 - Hardpoints: the airstrike's three `ET_PLANE` jets and their bombs; the
   helicopter (`ET_HELICOPTER`) levels and holds until its first goal,
-  flies its path, aims and fires its cannon and rockets, pitches and rolls
-  off its acceleration, wanders in the hover (its flight and gun match
+  flies its path, turns to its goal yaw, target yaw or look-at entity,
+  aims and fires its cannon and rockets, pitches and rolls off its
+  acceleration, wanders in the hover (its flight and gun match
   retail captures word for word), notifies `script_vehicle_collision` when
   it flies into the world, takes hits on its turned gun, and smokes and
   crashes when shot down (3.2).

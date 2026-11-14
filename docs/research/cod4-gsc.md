@@ -298,6 +298,9 @@ Methods. VERIFIED (the disassembly):
 | `setHoverParams` | 0x809cc24 | radius, speed, rate in units/s |
 | `setVehGoalPos(pos, stop)` | 0x809ca7c | stop if second non-zero; refuses zero speed, accel or decel; leaves the hover |
 | `setTargetYaw` | 0x809c9da | as given |
+| `setGoalYaw`, `clearGoalYaw` | 0x809ca42, 0x809ca14 | the yaw at +0x2ac, its flag at +0x270 |
+| `setLookAtEnt` | 0x809c900 | an entity handle at +0x280; refuses a player's vehicle ("Can't set target on player's vehicle") and one with no health ("Vehicle must have health to control") |
+| `clearLookAtEnt` | 0x809c8d2 | the handle cleared |
 | `setTurretTargetVec` | 0x809d48a | refuses a player's vehicle and one with no health |
 | `setDamageStage` | 0x80ba890 | writes `un1` (+0xd4) |
 
@@ -315,8 +318,9 @@ VERIFIED (the disassembly):
   frames of accel per frame).
 - `phys.accel` moves half way to the frame's change, capped like it unless
   stopping. Position uses the mean of old and new velocity.
-- Yaw: the goal yaw once the stop is close enough to turn into it, else
-  the target yaw, else (hovering) hold, else along the move; at
+- Yaw: toward a look-at entity, else the goal yaw once the stop is close
+  enough to turn into it, else the target yaw, else (hovering) hold, else
+  along the move; at
   `setYawSpeed`'s rates, a fifth of them past the goal yaw; `goal_yaw`
   on reaching it.
 - Pitch, roll: toward `maxPitch` / `maxRoll` times smoothed accel plus fake
@@ -838,22 +842,60 @@ is the disassembly's:
   stored. Pitch and roll steer to an unstored target and read the tilt's
   up and down rates as stored floats; the yaw's rates are the stored ones,
   a fifth of them kept. VERIFIED (the disassembly).
+- The look-at (0x809e769..0x809e772, 0x809f19a..0x809f1f2): a non-zero
+  handle's low half at vehicle +0x280 sends the yaw to the entity
+  (`g_entities` 0x841f260 plus 628 times the handle less one, the
+  handle's base at 0x808af9e): its `r.currentOrigin` (+0x13c) less the
+  moved place (vehicle +0xc0), each difference stored, through
+  `vectoyaw` (0x8191c22) into the wanted yaw. VERIFIED (the
+  disassembly). It skips the goal and target yaws' choice (back at
+  0x809e849), not what follows: the goal yaw's slow-down, its overshoot
+  and `goal_yaw` still run when one is set. VERIFIED (the yaw run's
+  replay, whose look-at flight holds a goal yaw and notifies it).
+- The change's z through the velocity: the whole chain is kept at the
+  x87's 64 bits, and near rest `v0.z` and the change all but cancel, so
+  an `f64` there parts from retail by an ulp of the velocity's z: three
+  words over two thinks of the yaw run's hover, at 4e-10 and 2e-11. `vcod_common::x87::F80`
+  carries it (the direction's reciprocal, the limit's root and quotient,
+  the add back). VERIFIED (the replay, both ways).
 - The tilt (0x809ef90..0x809f36a): the fake drag's share stored around
   `Vec2Normalize`, the push's x kept, y stored; the push rate stored; the
   normalised push stored; the heading's sine and cosine of the new yaw
   stored. VERIFIED (the disassembly).
 
 `flight::tests::every_think_matches_retail_word_for_word` replays
-`crates/cod4/tests/fixtures/heli/think-gdb.txt`: retail 1.7 under gdb
-(`unshare -rnm`, the probe as in "The flight against retail") with
-breakpoints at 0x809e38a and its two returns (0x80a06e8, 0x80a084e)
-dumping the vehicle record, once with the idle capture's gsc (80 thinks)
-and once with the flight's (524: hover, stop goals, target yaw, near-goal
-notifies). From each think's record before, the record after matches word
-for word, and the notifies. VERIFIED (the test). No think in it holds a
-goal yaw (+0x270) or a look-at entity (+0x280); the goal yaw's arm follows
-the disassembly, and the look-at arm (0x809f19a) has no method on ours.
-INFERRED.
+`crates/cod4/tests/fixtures/heli/think-gdb.txt` and `yaw-gdb.txt`: retail
+1.7 under gdb (`unshare -rnm`, the probe as in "The flight against
+retail") with breakpoints at 0x809e38a and its two returns (0x80a06e8,
+0x80a084e) dumping the vehicle record, once with the idle capture's gsc
+(80 thinks), once with the flight's (524: hover, stop goals, target yaw,
+near-goal notifies), and once with the yaw capture's (802, below), which
+also dumps the look-at entity's origin. From each think's record before,
+the record after matches word for word, and the notifies. VERIFIED (the
+test). The yaw run reaches every arm the flight has: the stop with no
+hover radius, the goal yaw on a stop and in the hover, the target yaw
+with overshoot, the climb's ease, the turn's brake, the shed into a stop
+entered at speed, the turn that never brakes, and the look-at. VERIFIED
+(the replay, counted).
+
+#### The yaw capture
+
+`cod4::hardpoint_ab::helicopter_yaw_matches_retail` replays
+`crates/cod4/tests/fixtures/net/play-1.7-heli-yaw.txt`, the probe's
+capture of the gdb run above (`+set fs_game mods/vcodyaw`, the gsc
+`crates/cod4/tests/fixtures/gsc/heli_yaw/maps/mp/mp_crash_fx.gsc`), cut 4 s
+after the helicopter's delete. A cobra with hover radius 0 (no random
+draw) and `setYawSpeed(60, 30, 20, 0.3)` descends to a stop under goal yaw
+150, takes goal yaw -100 in the hover, climbs through a pass-through goal
+under target yaw -60, turns sharply through another, stops from speed
+under goal yaw 45, then looks at a script_origin (`setLookAtEnt`) while
+hovering, the point jumping once, and while flying to a stop with the goal
+yaw still set; `clearLookAtEnt` hands the yaw back to the goal yaw.
+VERIFIED (the capture). Every helicopter word matches retail's; with the
+look-at dropped on ours the yaw parts by 179 degrees. VERIFIED (the gate,
+both ways). The notifies' calls name them: 0x809ebe1 `goal`, 0x809eeb8
+`near_goal`, 0x809f235 `goal_yaw` (its `scr_const` read at 0x809f21c). VERIFIED
+(gdb, the disassembly).
 
 On the wire, a -100 angle field's zero bit tests the word: a non-zero
 angle under half a unit, or -0, goes out as a set bit and a short 0, which

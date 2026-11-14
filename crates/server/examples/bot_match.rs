@@ -184,17 +184,17 @@ struct Opts {
     console: Vec<String>,
     verbose: bool,
     /// cover, retreat, team play, awareness, footwork, wariness, squad,
-    /// aim, tactics, converge, lanes, far, cues, travel.
-    arms: [Arm; 14],
+    /// aim, tactics, converge, lanes, far, cues, travel, carry.
+    arms: [Arm; 15],
 }
 
-const FEATURES: [&str; 14] = [
+const FEATURES: [&str; 15] = [
     "cover", "retreat", "teamplay", "aware", "footwork", "wary", "squad", "aim", "tactics",
-    "converge", "lanes", "far", "cues", "travel",
+    "converge", "lanes", "far", "cues", "travel", "carry",
 ];
-const ARMS: [&str; 14] = [
+const ARMS: [&str; 15] = [
     "COVER", "RETREAT", "TEAMPLAY", "AWARE", "FOOTWORK", "WARY", "SQUAD", "AIM", "TACTICS",
-    "CONVERGE", "LANES", "FAR", "CUES", "TRAVEL",
+    "CONVERGE", "LANES", "FAR", "CUES", "TRAVEL", "CARRY",
 ];
 
 /// The side a client's arms follow: its team, or in `dm` its slot's
@@ -1395,6 +1395,7 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                 far,
                 cues,
                 travel,
+                carry,
             ] = o.arms;
             if cover != Arm::All {
                 sv.test_bot_cover(slot, cover.on(team, seed));
@@ -1437,6 +1438,9 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
             }
             if travel != Arm::All {
                 sv.test_bot_travel(slot, travel.on(team, seed));
+            }
+            if carry != Arm::All {
+                sv.test_bot_ctf_carry(slot, carry.on(team, seed));
             }
         }
         if let Some(ob) = observer.as_mut() {
@@ -2833,7 +2837,8 @@ mod cod2 {
             // (`Bot::tactics`); `CONVERGE=0`: no S&D defender leaves its
             // site for one under attack (`Bot::converge`); `LANES=0`: every
             // bot walks straight to its objective (`Bot::lanes`); `FAR=0`,
-            // `CUES=0`, `TRAVEL=0` turn off bot-objectives.md 14's rules.
+            // `CUES=0`, `TRAVEL=0` turn off bot-objectives.md 14's rules,
+            // `CARRY=0` 14.11's.
             if let Some(b) = sv.bots_mut() {
                 let off = |k: &str| matches!(std::env::var(k).as_deref(), Ok("0" | "none"));
                 let arms = [
@@ -2843,6 +2848,7 @@ mod cod2 {
                     !off("FAR"),
                     !off("CUES"),
                     !off("TRAVEL"),
+                    !off("CARRY"),
                 ];
                 for bot in b.bots_mut().values_mut() {
                     bot.tactics &= arms[0];
@@ -2851,6 +2857,7 @@ mod cod2 {
                     bot.far &= arms[3];
                     bot.cues &= arms[4];
                     bot.travel &= arms[5];
+                    bot.ctf_carry &= arms[6];
                 }
             }
             if restart > 0 && tick > 0 && tick % restart == 0 {
@@ -3574,7 +3581,8 @@ mod cod4 {
             // (`Bot::tactics`); `CONVERGE=0`: no S&D defender leaves its
             // site for one under attack (`Bot::converge`); `LANES=0`: every
             // bot walks straight to its objective (`Bot::lanes`); `FAR=0`,
-            // `CUES=0`, `TRAVEL=0` turn off bot-objectives.md 14's rules.
+            // `CUES=0`, `TRAVEL=0` turn off bot-objectives.md 14's rules,
+            // `CARRY=0` 14.11's.
             if let Some(b) = sv.bots_mut() {
                 let off = |k: &str| matches!(std::env::var(k).as_deref(), Ok("0" | "none"));
                 let arms = [
@@ -3584,6 +3592,7 @@ mod cod4 {
                     !off("FAR"),
                     !off("CUES"),
                     !off("TRAVEL"),
+                    !off("CARRY"),
                 ];
                 for bot in b.bots_mut().values_mut() {
                     bot.tactics &= arms[0];
@@ -3592,6 +3601,7 @@ mod cod4 {
                     bot.far &= arms[3];
                     bot.cues &= arms[4];
                     bot.travel &= arms[5];
+                    bot.ctf_carry &= arms[6];
                 }
             }
             // The script's `map_restart` and `exitLevel` run off the

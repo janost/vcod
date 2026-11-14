@@ -129,7 +129,7 @@ impl Cod2Server {
         self.game.cvars.set("mapname", map);
         self.shutdown_game_log();
         let p = crate::tick_profile::phase("load/drop level");
-        self.game.level = None;
+        self.game.retired = self.game.level.take();
         drop(p);
         self.core.configstrings = vec![String::new(); vcod_cod2::net::ops::MAX_CONFIGSTRINGS];
         self.game.baselines.clear();
@@ -196,7 +196,7 @@ impl Cod2Server {
         self.game.server_id = restart_server_id(self.game.server_id);
         self.game.snap_flags ^= 4;
         self.shutdown_game_log();
-        self.game.level = None;
+        self.game.retired = self.game.level.take();
         let fs = self.game.fs.clone();
         self.load_level(
             fs,
@@ -329,7 +329,7 @@ impl Cod2Server {
         let parts = Cod2Level::map_parts(&fs, &self.game.cfg.map, init.parts.take())
             .with_context(|| format!("map {} not loaded", self.game.cfg.map))?;
         laps.lap("map");
-        self.game.spot = super::intermission_spot(parts.world());
+        self.game.spot = parts.spots().intermission;
         let overlay =
             self.game.cfg.gametype_script.clone().filter(|(stem, _)| {
                 format!("maps/mp/gametypes/{}", self.game.cfg.gametype) == *stem

@@ -114,15 +114,15 @@ pub fn binocular_notify(event: i32) -> Option<&'static str> {
 pub fn level_world(
     map: &vcod_common::mapworld::MapWorld,
     clip: std::sync::Arc<vcod_cod2::collision::ClipMap>,
+    spots: &MapSpots,
 ) -> crate::world::World {
     let collision = vcod_cod2::collision::collision_world(map, clip, &[]);
     collision.set_arith(vcod_common::patch::Arith::Stored);
-    let spawn = vcod_common::bsp::find_spawn(&map.entities).unwrap_or(([0.0, 0.0, 64.0], 0.0));
     crate::world::World {
         collision,
         vis: map.visibility(),
-        spawn,
-        spawn_points: crate::nav::spawn_points(&map.entities),
+        spawn: spots.spawn,
+        spawn_points: spots.spawn_points.clone(),
         hazards: Vec::new(),
         rubble: Vec::new(),
         nav_cover: Vec::new(),
@@ -363,8 +363,29 @@ pub struct MapParts {
     hitloc_mult: [f32; 19],
     hit_anims: Option<vcod_cod2::player::PlayerAnimSet>,
     anims: Option<Rc<vcod_cod2::pmove::AnimTable>>,
+    spots: Rc<MapSpots>,
     /// The paths whose reads marked a pak referenced while these were built.
     reads: Vec<String>,
+}
+
+/// What a level reads off the map's entity lump past its spawn: the world's
+/// spawn spot and points ([`level_world`]) and the intermission view, parsed
+/// once per [`MapParts`].
+pub struct MapSpots {
+    spawn: ([f32; 3], f32),
+    spawn_points: Vec<[f32; 3]>,
+    /// `mp_global_intermission`'s origin and angles (`crate::cod2`'s).
+    pub intermission: (glam::Vec3, [f32; 3]),
+}
+
+impl MapSpots {
+    fn of(map: &vcod_common::mapworld::MapWorld) -> MapSpots {
+        MapSpots {
+            spawn: vcod_common::bsp::find_spawn(&map.entities).unwrap_or(([0.0, 0.0, 64.0], 0.0)),
+            spawn_points: crate::nav::spawn_points(&map.entities),
+            intermission: crate::cod2::intermission_spot(map),
+        }
+    }
 }
 
 impl MapParts {
@@ -382,6 +403,7 @@ pub enum PartsSource {
         map: String,
         world: Rc<vcod_common::mapworld::MapWorld>,
         clip: std::sync::Arc<vcod_cod2::collision::ClipMap>,
+        spots: Rc<MapSpots>,
         reads: vcod_common::pk3::ReadLog,
     },
 }
@@ -391,6 +413,14 @@ impl PartsSource {
         match self {
             PartsSource::Carried(p) => &p.world,
             PartsSource::Fresh { world, .. } => world,
+        }
+    }
+
+    /// The map's [`MapSpots`].
+    pub fn spots(&self) -> &MapSpots {
+        match self {
+            PartsSource::Carried(p) => &p.spots,
+            PartsSource::Fresh { spots, .. } => spots,
         }
     }
 }
@@ -494,6 +524,7 @@ impl Cod2Level {
         })?;
         Ok(PartsSource::Fresh {
             map: map.to_string(),
+            spots: Rc::new(MapSpots::of(&world)),
             world: Rc::new(world),
             clip,
             reads,
@@ -546,7 +577,7 @@ impl Cod2Level {
                 }
             };
             let p = crate::tick_profile::phase("load/collision world");
-            let world = Rc::new(level_world(&map_world, clip.clone()));
+            let world = Rc::new(level_world(&map_world, clip.clone(), parts.spots()));
             drop(p);
             laps.lap("collision world");
             let p = crate::tick_profile::phase("load/mantle anims");
@@ -588,6 +619,7 @@ impl Cod2Level {
                 map,
                 world,
                 clip,
+                spots,
                 reads,
             } => {
                 let host_fs = rt.host.fs.as_deref();
@@ -609,6 +641,7 @@ impl Cod2Level {
                     hitloc_mult,
                     hit_anims,
                     anims,
+                    spots,
                     reads: reads.paths(),
                 })
             }
@@ -1655,8 +1688,14 @@ impl Cod2Level {
             scripts: all.scripts.filter(|_| restart),
             gametype: all.gametype,
             // A restart keeps the paks' referenced flags, which a load
-            // through the caches would have set again.
-            models: all.models.filter(|_| restart),
+            // through the caches would have set again; any other load
+            // touches each entry's reads on its first use.
+            models: match restart {
+                true => all.models,
+                false => all
+                    .models
+                    .and_then(|m| m.for_reload(self.rt.host.fs.as_ref())),
+            },
             weapon_files: all.weapon_files,
             ..Default::default()
         }
