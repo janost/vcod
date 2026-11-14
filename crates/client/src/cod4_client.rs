@@ -224,6 +224,13 @@ fn perf_turn() -> Option<f32> {
     *RATE.get_or_init(|| std::env::var("VCOD_PERF_TURN").ok()?.parse().ok())
 }
 
+/// `VCOD_NO_DYNENTS=1`: the map's dynamic entities are not drawn, for a
+/// frame time A/B (cod4-client-perf.md 41); read once.
+fn no_dynents() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("VCOD_NO_DYNENTS").is_ok_and(|v| v == "1"))
+}
+
 fn shot_client(f: &Fired) -> Option<usize> {
     let e = f.state.as_ref()?;
     (matches!(f.name, "EV_FIRE_WEAPON" | "EV_FIRE_WEAPON_LASTSHOT")
@@ -1207,6 +1214,19 @@ impl Cod4Client {
     /// The fired events' sounds and effects, the map's ambient, and the
     /// zones' tables handed to the audio and fx systems on the first call.
     fn sound_and_fx(&mut self, cx: &mut Cod2Frame, fired: &[Fired], now_ms: i32) {
+        // Out of the session while its gamestate is read.
+        let mut dynents = self.session.dynents.take();
+        self.sound_and_fx_with(cx, fired, now_ms, &mut dynents);
+        self.session.dynents = dynents;
+    }
+
+    fn sound_and_fx_with(
+        &mut self,
+        cx: &mut Cod2Frame,
+        fired: &[Fired],
+        now_ms: i32,
+        dynents: &mut Option<vcod_cod4::dynent::DynEnts>,
+    ) {
         let tags = self.weapon_tags();
         let Some(gs) = self.session.gamestate() else {
             return;
@@ -1231,6 +1251,7 @@ impl Cod4Client {
             play_event_cues(cx.audio, cx.fs, s, &mut self.hud, fired, &weapons, &cs, &at);
         }
         // The blasts' pushes on the running and sleeping ragdolls.
+        let mut done = crate::play::cod4_dynents::Done::default();
         if let Some(s) = &self.sounds {
             for f in fired {
                 if let Some(e) = crate::play::cod4_players::explosion_of(f, &weapons, &s.weapons) {
@@ -1273,8 +1294,47 @@ impl Cod4Client {
                 .collect(),
             _ => Vec::new(),
         };
+        // The blasts and the rounds on the map's dynamic entities.
+        if let (Some(d), Some(w)) = (dynents.as_mut(), self.session.world()) {
+            let rounds: Vec<_> = hits
+                .iter()
+                .map(|h| h.iter().map(|h| (h.start, h.end)).collect())
+                .collect();
+            done = crate::play::cod4_dynents::on_fired(
+                d,
+                w,
+                fired,
+                &weapons,
+                &rounds,
+                self.render_time,
+            );
+        }
+        // A struck one's impact plays as the world's would there.
+        let dyn_hits: Vec<(usize, cod4_fx::BulletHit)> = done
+            .struck
+            .iter()
+            .map(|(i, s)| {
+                let hit = cod4_fx::BulletHit {
+                    start: s.at,
+                    muzzle: s.at,
+                    end: s.at,
+                    normal: s.normal,
+                    surf: s.surface_flags >> 20 & 0x1f,
+                    hit: true,
+                    own: false,
+                    body: None,
+                    pierced: [None; cod4_fx::PIERCE_MAX],
+                };
+                (*i, hit)
+            })
+            .collect();
         if let Some(s) = &mut self.sounds {
             let eye = self.view.map(|(eye, _)| eye);
+            for (i, hit) in &dyn_hits {
+                for c in s.bullet_cues(&fired[*i], &weapons, hit, eye) {
+                    cx.audio.play(cx.fs, c);
+                }
+            }
             for (f, hit) in fired.iter().zip(&hits) {
                 for c in hit.iter().flat_map(|h| s.bullet_cues(f, &weapons, h, eye)) {
                     cx.audio.play(cx.fs, c);
@@ -1290,6 +1350,26 @@ impl Cod4Client {
             .map(|v| v.client_num);
         if let Some(e) = &mut self.effects {
             take_level_effects(e, cx);
+            // A round's impact on a dynamic entity, as on the world
+            // (0x48dd00), and a broken one's `destroyFx` at its pose
+            // (0x48dec7).
+            for (i, hit) in &dyn_hits {
+                for p in e.bullet_plays(&fired[*i], &weapons, hit) {
+                    let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
+                    cx.audio.play_fx(cx.fs, sounds);
+                }
+            }
+            for b in &done.broken {
+                let Some(name) = &b.fx else { continue };
+                let at = crate::fx::sim::SpawnAt::Oriented {
+                    pos: b.origin,
+                    axis: b.axis,
+                };
+                if let Some(p) = e.play_named(name, at, None) {
+                    let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
+                    cx.audio.play_fx(cx.fs, sounds);
+                }
+            }
             for f in fired {
                 let body_shot;
                 let f = match own_body {
@@ -1485,11 +1565,40 @@ impl Cod4Client {
         [p, y]
     }
 
+    /// The map's dynamic entities, each its def's model at its pose, first
+    /// in the frame's instances: their indices hold while bodies and
+    /// entities come and go.
+    fn draw_dynents(
+        &mut self,
+        cx: &mut Cod2Frame,
+        scene: &Scene,
+        out: &mut Vec<DynamicModelInstance>,
+    ) {
+        let Some(w) = self.session.world().cloned().filter(|_| !no_dynents()) else {
+            return;
+        };
+        for &(i, origin, rot) in &scene.dynents {
+            let name = &w.dynents[i as usize].model;
+            let model = self.models.get(name).cloned();
+            let Some(handle) = self.upload(cx, name, || model) else {
+                continue;
+            };
+            out.push(DynamicModelInstance {
+                model: handle,
+                transform: Mat4::from_rotation_translation(rot, origin),
+                bones: None,
+                light_origin: origin + Vec3::Z * 4.0,
+                shader_time: None,
+            });
+        }
+    }
+
     fn draw(&mut self, cx: &mut Cod2Frame, scene: &Scene) {
         let mut instances = Vec::new();
         let mut submodels = Vec::new();
         #[cfg(test)]
         self.drawn_names.borrow_mut().clear();
+        self.draw_dynents(cx, scene, &mut instances);
         let bodies = crate::frame_prof::span(crate::frame_prof::Stage::Bodies);
         let posed = self.pose_bodies(cx, scene, &mut instances);
         drop(bodies);
@@ -2033,6 +2142,14 @@ impl Cod4Client {
         let (parts, flying) = self.session.physics.counts();
         if parts > 0 {
             lines.push(format!("cod4 physics: launched {parts}  flying {flying}"));
+        }
+        if let Some(d) = &self.session.dynents {
+            let drawn = d.ents.iter().filter(|e| e.drawn).count();
+            lines.push(format!(
+                "cod4 dynents: {}  drawn {drawn}  awake {}",
+                d.ents.len(),
+                d.awake()
+            ));
         }
         lines
     }

@@ -287,6 +287,9 @@ pub struct Scene {
     /// Pitch, yaw, roll.
     pub angles: Vec3,
     pub entities: Vec<Drawn>,
+    /// The map's dynamic entities that draw: the def's index and the pose
+    /// (`vcod_cod4::dynent`).
+    pub dynents: Vec<(u32, Vec3, glam::Quat)>,
     /// The time of the newer snapshot drawn (`cg.nextSnap`), whose
     /// states the entities carry.
     pub server_time: i32,
@@ -599,6 +602,9 @@ pub struct Cod4Session {
     keep_snapshots: usize,
     /// The `physicsLaunch`ed parts this client flies (`play::cod4_physics`).
     pub physics: super::cod4_physics::Cod4Physics,
+    /// The map's dynamic entities, made with the world and again by a
+    /// new gamestate or `CG_MapRestart` (cod4-world.md 13).
+    pub dynents: Option<vcod_cod4::dynent::DynEnts>,
     /// The third-person dvars the next [`Self::scene`] reads.
     pub third_person: cod4_third_person::Dvars,
 }
@@ -869,6 +875,7 @@ impl Cod4Session {
             kick_seen: 0,
             keep_snapshots: KEEP_SNAPSHOTS,
             physics: Default::default(),
+            dynents: None,
             third_person: Default::default(),
         }
     }
@@ -965,6 +972,7 @@ impl Cod4Session {
         self.pending.clear();
         self.sent_cmds.clear();
         self.predictor.reset();
+        self.restart_dynents();
         let map = self.map_name()?;
         if self.loaded_map.as_deref() == Some(map.as_str()) {
             log::info!("cod4: new gamestate for {map}, the map stays loaded");
@@ -980,6 +988,18 @@ impl Cod4Session {
     pub fn set_world(&mut self, world: Arc<Cod4World>) {
         self.world = Some(world);
         self.predictor.reset();
+        self.restart_dynents();
+    }
+
+    /// `DynEntCl_InitEntities` (iw3mp.exe 0x48d000, from `CG_Init` and
+    /// `CG_MapRestart` 0x44b3eb): every dynamic entity back at its def's
+    /// pose and health.
+    pub fn restart_dynents(&mut self) {
+        self.dynents = self.world.as_ref().map(|w| {
+            let mut d = vcod_cod4::dynent::DynEnts::new(w.dynents.clone());
+            d.pass_start_contents(|p| w.clip.point_contents(p));
+            d
+        });
     }
 
     /// The prediction world, when one was handed in.
@@ -2508,12 +2528,26 @@ impl Cod4Session {
                     .map(|s| s.origin)
             })
         });
+        // World 0 steps to the drawn time (`DynEntCl_ProcessEntities`).
+        let mut dynents = Vec::new();
+        if let (Some(d), Some(w)) = (&mut self.dynents, &self.world) {
+            let mut trace = vcod_cod4::physics::clip_trace_masked(&w.clip);
+            d.advance(render_time, &mut trace);
+            dynents.extend(
+                d.ents
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| e.drawn)
+                    .map(|(i, e)| (i as u32, e.origin, e.rot)),
+            );
+        }
         Some(Scene {
             crosshair_hit,
             eye,
             light_eye,
             angles,
             entities,
+            dynents,
             server_time: new.server_time,
             render_time,
             following: !own,
@@ -13169,6 +13203,130 @@ pub(crate) mod tests {
             }
         }
         assert!(problems.is_empty(), "{problems:#?}");
+    }
+
+    /// vcod-server's `war` on mp_crash, a held bot's frag bursting among
+    /// the map's clutter at 4 s and another on a destructible plate at
+    /// 6 s, watched by a spectator: the clutter the first reaches flies
+    /// and comes to rest again, the plate breaks and stops drawing, and
+    /// the scene draws every other dynamic entity at its def's pose
+    /// (cod4-world.md 13). Returns at once without an install.
+    #[test]
+    fn cod4_live_a_frag_flings_the_maps_clutter_and_breaks_a_plate() {
+        use vcod_server::cod4::{Cod4Config, Cod4Server};
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let world = Arc::new(crate::cod4_fly::load_world(install.root(), "mp_crash").unwrap());
+        let defs = world.dynents.clone();
+        assert_eq!(defs.len(), 516);
+        // The densest clutter, and a plate well away from it.
+        let near = |i: usize| {
+            defs.iter()
+                .filter(|d| d.origin.distance(defs[i].origin) < 128.0)
+                .count()
+        };
+        let pile = (0..defs.len()).max_by_key(|&i| near(i)).unwrap();
+        let plate = (0..defs.len())
+            .filter(|&i| defs[i].kind == vcod_cod4::dynent::DESTRUCT)
+            .max_by(|&a, &b| {
+                let d = |i: usize| defs[i].origin.distance(defs[pile].origin);
+                d(a).total_cmp(&d(b))
+            })
+            .unwrap();
+        let (pile_at, plate_at) = (defs[pile].origin, defs[plate].origin);
+        let mut sv = Cod4Server::new(
+            Cod4Config {
+                map: "mp_crash".into(),
+                gametype: "war".into(),
+                hostname: "vcod".into(),
+                max_clients: 12,
+            },
+            11,
+        );
+        sv.set_cvar("scr_game_playerwaittime", "1");
+        sv.set_cvar("scr_game_matchstarttime", "1");
+        sv.load(Some(&install)).unwrap();
+        let bot = sv.add_held_bot_for_test(false).unwrap();
+        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let addr = sock.local_addr().unwrap();
+        let clock = sim::Clock::new();
+        let client = sim::spawn(&clock, move || {
+            let join = MenuJoin {
+                team: Some("spectator".into()),
+                class: Some("assault_mp,0".into()),
+            };
+            let mut s = Cod4Session::connect(addr, "watcher", Cp::Bare, join).unwrap();
+            s.set_world(world.clone());
+            let mut most_awake = 0;
+            let mut drawn = Vec::new();
+            let t0 = clk_now();
+            while since(t0) < Duration::from_secs(14) {
+                let now = since(t0).as_secs_f64() * 1000.0;
+                s.step(now).unwrap();
+                s.take_commands();
+                clk_sleep(Duration::from_millis(16));
+                let fired = s.take_fired();
+                let Some(scene) = s.scene() else { continue };
+                let weapons = s.gamestate().map(weapon_list).unwrap_or_default();
+                if let Some(d) = s.dynents.as_mut() {
+                    crate::play::cod4_dynents::on_fired(
+                        d,
+                        &world,
+                        &fired,
+                        &weapons,
+                        &[],
+                        scene.render_time,
+                    );
+                }
+                most_awake = most_awake.max(s.dynents.as_ref().map_or(0, |d| d.awake()));
+                drawn = scene.dynents.clone();
+            }
+            s.disconnect();
+            (s.dynents.take().unwrap(), most_awake, drawn)
+        });
+        let mut bursts = 0;
+        serve(&mut sv, &sock, &clock, &client, |sv, _, _| {
+            let Some(l) = sv.game.level.as_mut() else {
+                return true;
+            };
+            let now = l.level_time();
+            let at = match bursts {
+                0 if now >= 4000 => pile_at + Vec3::Z * 8.0,
+                1 if now >= 6000 => plate_at + Vec3::Z * 4.0,
+                _ => return true,
+            };
+            assert!(l.burst_for_test(bot, "frag_grenade_mp", at));
+            bursts += 1;
+            true
+        });
+        assert_eq!(bursts, 2);
+        let (d, most_awake, drawn) = client.join().unwrap();
+        let moved: Vec<usize> = (0..defs.len())
+            .filter(|&i| d.ents[i].origin.distance(defs[i].origin) > 1.0)
+            .collect();
+        println!(
+            "pile {pile} at {pile_at}, plate {plate} at {plate_at}: {} moved, {most_awake} awake at most, {} drawn",
+            moved.len(),
+            drawn.len()
+        );
+        assert!((1..=40).contains(&most_awake), "{most_awake} awake");
+        assert!(!moved.is_empty(), "nothing moved");
+        assert_eq!(d.awake(), 0, "still moving at the end");
+        assert!(
+            !d.ents[plate].drawn && !d.ents[plate].live,
+            "the plate stands"
+        );
+        assert!(drawn.iter().all(|&(i, ..)| i as usize != plate));
+        assert_eq!(drawn.len(), d.ents.iter().filter(|e| e.drawn).count());
+        // What the blasts did not reach stands where its def put it.
+        for (i, e) in d.ents.iter().enumerate() {
+            let far = e.origin.distance(pile_at) > 400.0 && e.origin.distance(plate_at) > 400.0;
+            if far && e.drawn {
+                assert_eq!(e.origin, defs[i].origin, "{} moved", defs[i].model);
+            }
+        }
     }
 
     /// One step of a ragdoll: the ms run, its state and each def bone's

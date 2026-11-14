@@ -76,6 +76,8 @@ pub struct Cod4World {
     /// Each xmodel with a physics preset by lower-case name: what a
     /// `physicsLaunch`ed part flies as (`play::cod4_physics`).
     pub parts: HashMap<String, Arc<vcod_cod4::physics::PartModel>>,
+    /// The map's dynamic entities' defs (`vcod_cod4::dynent`).
+    pub dynents: Arc<Vec<vcod_cod4::dynent::DynDef>>,
 }
 
 impl Cod4World {
@@ -142,6 +144,7 @@ impl Cod4World {
             ragdoll: None,
             model_coll,
             parts: vcod_cod4::physics::part_models(&all),
+            dynents: Arc::new(vcod_cod4::dynent::defs(map, zones)),
         })
     }
 

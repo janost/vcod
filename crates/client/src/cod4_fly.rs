@@ -882,7 +882,9 @@ fn entity_models(
             },
         );
     }
-    let wanted = ents.models.iter().cloned().chain(
+    // The map's dynamic entities draw as entity models (`vcod_cod4::dynent`).
+    let dynents = zones.iter().flat_map(|a| vcod_cod4::dynent::model_names(a));
+    let wanted = ents.models.iter().cloned().chain(dynents).chain(
         weapons
             .values()
             .flat_map(|w| {

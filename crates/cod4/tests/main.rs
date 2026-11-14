@@ -4,6 +4,7 @@ mod anim_census;
 mod clip_census;
 mod cull_census;
 mod drawsurf_census;
+mod dynent_census;
 mod fx_census;
 mod hud_assets;
 mod iwi_census;

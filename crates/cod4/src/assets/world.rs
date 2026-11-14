@@ -1,9 +1,9 @@
 //! Map assets: the collision map, the render world, the light list
 //! (`com_map`), the game worlds and the entity string.
 
-use super::fx::fx;
+use super::fx::{Fx, fx};
 use super::material::{Image, Material, image, material};
-use super::misc::{LightDef, light_def, phys_preset};
+use super::misc::{LightDef, PhysPreset, light_def, phys_preset};
 use super::model::{XModel, brush_sides, xmodel};
 use super::{Id, asset, push};
 use crate::walk::{Follow, Handle, S, W, u16s};
@@ -75,6 +75,8 @@ pub struct ClipMap {
     pub brushes: Bulk,
     pub visibility: Bulk,
     pub map_ents: Option<Id<MapEnts>>,
+    /// The two `DynEntityDef` lists (0x60 each): [`DynEntityDef`].
+    pub dyn_ents: [Vec<DynEntityDef>; 2],
     /// Where the arrays other structs point into landed, for turning
     /// those pointers into indices.
     pub at: ClipAddrs,
@@ -245,7 +247,8 @@ fn clip_map_t<R: BufRead>(w: &mut W<R>) -> Result<ClipMap> {
         if w.inline_only(s.ptr(248 + 4 * k), 4)? {
             let a = w.load(0x60 * count)?;
             for i in 0..count {
-                dyn_ent_def(w, &a.elem(i, 0x60))?;
+                let d = dyn_ent_def(w, &a.elem(i, 0x60))?;
+                c.dyn_ents[k].push(d);
             }
         }
     }
@@ -281,24 +284,55 @@ fn cbrush<R: BufRead>(w: &mut W<R>, b: &S) -> Result<()> {
     Ok(())
 }
 
-/// `DynEntityDef`, 0x60.
-fn dyn_ent_def<R: BufRead>(w: &mut W<R>, d: &S) -> Result<()> {
-    xmodel(w, d.ptr(32), d.slot(32))?;
-    fx(w, d.ptr(40), d.slot(40))?;
+/// `DynEntityDef`, 0x60: a map's physics prop (cod4-world.md 13). The
+/// struct as loaded, and its handles.
+#[derive(Clone, Debug, Default)]
+pub struct DynEntityDef {
+    pub raw: Vec<u8>,
+    pub model: Option<Id<XModel>>,
+    pub destroy_fx: Option<Id<Fx>>,
+    pub pieces: Option<XModelPieces>,
+    pub preset: Option<Id<PhysPreset>>,
+}
+
+/// `XModelPieces`, 0xC: what a destructible dynamic entity breaks into.
+#[derive(Clone, Debug, Default)]
+pub struct XModelPieces {
+    pub name: String,
+    /// `XModelPiece`, 0x10 each: the model, then three floats (no stock
+    /// zone holds one to read them by).
+    pub pieces: Vec<(Option<Id<XModel>>, [f32; 3])>,
+}
+
+fn dyn_ent_def<R: BufRead>(w: &mut W<R>, d: &S) -> Result<DynEntityDef> {
+    let model = xmodel(w, d.ptr(32), d.slot(32))?;
+    let destroy_fx = fx(w, d.ptr(40), d.slot(40))?;
+    let mut pieces = None;
     if let Follow::Inline = w.follow(d.ptr(44), 4)? {
-        // XModelPieces, 0xC: name, count, 0x10-byte pieces each a model.
         let p = w.load(0xC)?;
-        w.xstring(p.ptr(0))?;
+        let mut out = XModelPieces {
+            name: w.xstring(p.ptr(0))?.unwrap_or_default(),
+            pieces: Vec::new(),
+        };
         if w.inline_only(p.ptr(8), 4)? {
             let n = p.i32(4).max(0) as usize;
             let a = w.load(0x10 * n)?;
             for i in 0..n {
-                xmodel(w, a.ptr(0x10 * i), a.slot(0x10 * i))?;
+                let e = a.elem(i, 0x10);
+                let m = xmodel(w, e.ptr(0), e.slot(0))?;
+                out.pieces.push((m, [e.f32(4), e.f32(8), e.f32(12)]));
             }
         }
+        pieces = Some(out);
     }
-    phys_preset(w, d.ptr(48), d.slot(48))?;
-    Ok(())
+    let preset = phys_preset(w, d.ptr(48), d.slot(48))?;
+    Ok(DynEntityDef {
+        raw: d.b.clone(),
+        model,
+        destroy_fx,
+        pieces,
+        preset,
+    })
 }
 
 /// `MapEnts`, 0xC: name, entity string, its length (with the NUL).

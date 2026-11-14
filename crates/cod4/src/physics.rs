@@ -111,6 +111,22 @@ impl Shape {
             .unwrap_or_else(|| Shape::of_bounds(model.mins.into(), model.maxs.into()))
     }
 
+    /// A dynamic entity's shape (0x490240): its model's `physGeoms` as
+    /// [`Self::of`] reads them, else a box on its bounds as they are, no
+    /// flat axis widened (0x48fd00, 0x5a5240).
+    pub fn of_dynent(model: &XModel) -> Shape {
+        if model.phys_geoms.is_some() {
+            return Shape::of(model);
+        }
+        let (mins, maxs) = (Vec3::from(model.mins), Vec3::from(model.maxs));
+        let (c, h) = ((mins + maxs) * 0.5, (maxs - mins) * 0.5);
+        Shape {
+            points: corners(c, Mat3::IDENTITY, h),
+            com: c,
+            inertia: box_inertia(h),
+        }
+    }
+
     /// A box on `mins`..`maxs`, its centre the centre of mass; any flat
     /// axis takes retail's 100-unit cube (0x5a587a).
     pub fn of_bounds(mins: Vec3, maxs: Vec3) -> Shape {
@@ -315,7 +331,12 @@ impl Body {
     /// `Phys_ObjCreate` (0x5a4fb0) at the entity's `origin` and `angles`
     /// (its `trBase`s), at rest, at time `now`.
     pub fn new(origin: Vec3, angles: Vec3, shape: &Shape, preset: &Preset, now: i32) -> Body {
-        let rot = angles_quat(angles.to_array());
+        Body::at(origin, angles_quat(angles.to_array()), shape, preset, now)
+    }
+
+    /// [`Self::new`] turned by `rot`: a dynamic entity's pose
+    /// (`DynEntCl_CreatePhysObj`, iw3mp.exe 0x48dca0).
+    pub fn at(origin: Vec3, rot: Quat, shape: &Shape, preset: &Preset, now: i32) -> Body {
         let mass = preset.mass.max(0.001);
         let inertia = shape.inertia * mass;
         let pos = origin + rot * shape.com;
@@ -370,6 +391,13 @@ impl Body {
         self.wake();
     }
 
+    /// `Phys_ObjAddForce` (0x5a5900): impulse `p` at world point `at`,
+    /// spent in one step, and the body woken.
+    pub fn push(&mut self, at: Vec3, p: Vec3) {
+        self.impulse(at - self.pos, p);
+        self.wake();
+    }
+
     fn wake(&mut self) {
         self.asleep = false;
         self.idle = 0.0;
@@ -407,6 +435,12 @@ impl Body {
     /// The drawn origin and angles at `time`: the frame's start state
     /// lerped toward the last step's.
     pub fn pose(&self, time: i32) -> (Vec3, Vec3) {
+        let (origin, rot) = self.pose_quat(time);
+        (origin, Vec3::from(quat_angles(rot)))
+    }
+
+    /// [`Self::pose`] as the model's origin and rotation.
+    pub fn pose_quat(&self, time: i32) -> (Vec3, Quat) {
         let span = self.sim_ms.wrapping_sub(self.from_ms);
         let f = if span > 0 {
             (time.wrapping_sub(self.from_ms) as f32 / span as f32).clamp(0.0, 1.0)
@@ -415,7 +449,7 @@ impl Body {
         };
         let pos = self.from.0.lerp(self.pos, f);
         let rot = self.from.1.slerp(self.rot, f).normalize();
-        (pos - rot * self.com, Vec3::from(quat_angles(rot)))
+        (pos - rot * self.com, rot)
     }
 
     /// The model's origin now.
@@ -575,9 +609,18 @@ impl Body {
 /// A point trace through `clip` under the world mask the fx world's
 /// bodies meet (`0x2806c91`, iw3mp.exe 0x5a6acf).
 pub fn clip_trace(clip: &crate::collision::ClipMap) -> impl FnMut(Vec3, Vec3, f32) -> Sweep + '_ {
-    move |a: Vec3, b: Vec3, r: f32| {
+    let mut t = clip_trace_masked(clip);
+    move |a: Vec3, b: Vec3, r: f32| t(a, b, r, crate::ragdoll::CLIP_MASK)
+}
+
+/// [`clip_trace`] under a given mask. `CM_Trace` (0x4f4d30, called at
+/// 0x5a6aea) clips brushes and terrain, not static models.
+pub fn clip_trace_masked(
+    clip: &crate::collision::ClipMap,
+) -> impl FnMut(Vec3, Vec3, f32, u32) -> Sweep + '_ {
+    move |a: Vec3, b: Vec3, r: f32, mask: u32| {
         let e = Vec3::splat(r);
-        let t = clip.trace(a, b, -e, e, crate::ragdoll::CLIP_MASK);
+        let t = clip.trace(a, b, -e, e, mask);
         Sweep {
             fraction: t.fraction,
             normal: t.normal,

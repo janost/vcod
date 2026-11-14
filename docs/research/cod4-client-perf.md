@@ -1784,3 +1784,27 @@ reading `encode`, `finish`, `submit`, `calls`, `entcalls`, `entbundled`,
 `prebundled`, `rebundled`; then the held view. If the fight's `finish`
 rises with it on, bundles are made more often than they replay, and the
 fix is a longer hold before a bundle, not the per-body split.
+
+## 41. The map's dynamic entities
+
+cod4-world.md 13 draws each map's dynamic entities as entity models, first
+in the frame's instances so their indices hold while bodies and entities
+come and go: 516 on mp_crash, 678 on mp_backlot, 1901 on mp_shipment, 141
+distinct models over the stock maps (`dynent_dump`). VERIFIED (the
+census).
+
+- CPU, the bodies: mp_crash's densest pile under a frag (12 woken) ran
+  2.2 s of world 0 in 12 to 18 ms over three runs, under 0.1 ms a 16 ms
+  frame (`dynent_census`, debug build). A blast wakes at most 20 a list
+  (`dynEnt_explodeMaxEnts`), and a sleeping body is dropped. VERIFIED
+  (the runs, ours).
+- The frame: not measured. The 2026-11-14 box had no Vulkan adapter
+  (`vulkaninfo` finds none, no lavapipe), so `tools/cod4_perf.sh` drew no
+  frame.
+
+Pending, lavapipe or a card: `GAMETYPE=war PORT=29015
+tools/cod4_perf.sh <out> mp_crash 25` with and without
+`VCOD_NO_DYNENTS=1`, then mp_backlot, reading `pose`, `models`, `draws`,
+`entcalls`, `entbundled` and `gpu.scene`. If the instances cost more than
+section 2's spread, the next cut is batching each model's dynents into
+one static draw while none is awake.
