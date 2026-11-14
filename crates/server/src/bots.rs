@@ -8492,7 +8492,7 @@ mod tests {
     /// (`CtfView::hunt`) chases him instead of guarding.
     #[test]
     fn a_ctf_bot_hunts_the_carrier_of_its_flag() {
-        let mut bot = Bot::new("axis", true, 1);
+        let bot = Bot::new("axis", true, 1);
         let mut v = view();
         let site = |x: f32| SiteView {
             mins: [x - 50.0, -50.0, 0.0],
