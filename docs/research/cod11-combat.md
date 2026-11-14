@@ -8617,8 +8617,12 @@ map trigger's brushes as vcod's segment test does where the round ends
 inside a brush's backed-off face; `multi_wait`'s `rand()` draw, which vcod
 takes off the host's own generator (no stock trigger sets `random`, so
 only the draw's place in the stream could show); a tank shell's walk on
-the belltower; a grenade blast's charges past the 14.1 falloff; and the
-`use` arm's `accumulate + 1` count.
+the belltower; a grenade blast's charges (a 2026-11-14 UO recapture of
+`probe_dmgshot` with the client's cmd times,
+`fixtures/triggers/mp_uo_stanjel-dmgshot-uo.txt`, replayed on them by
+`tests/common`'s `direct_replay`, holds every round and swing line, but
+ours' frag rests 3 units off retail's after its roll and charges one bush
+27 against 26); and the `use` arm's `accumulate + 1` count.
 
 **As implemented.** `crate::game::damage_trigger`: `spec_of` (the spawn's
 keys), `responds`, `activate`, `damaged` (`pain`/`die`, from
