@@ -2699,6 +2699,9 @@ fn gungrid_gate(
     };
     replay(&mut rig, &cap);
     let log = rig.sv.script_log();
+    if let Some(path) = std::env::var_os("GUNGRID_DUMP") {
+        std::fs::write(path, log.join("\n")).expect("write GUNGRID_DUMP");
+    }
     let rows = gungrid_rows(&cap, script.lines(), log.iter().map(String::as_str));
     assert!(
         script.contains("PROBE gungrid ") && log.iter().any(|l| l.contains("PROBE gungrid ")),
@@ -2759,6 +2762,11 @@ const GUNGRID_UO: &[(&str, &str)] = &[
     ("probe_gungrid", "1"),
     ("probe_head", "basehead_axis_a_02"),
 ];
+const GUNGRID_11: &[(&str, &str)] = &[
+    ("probe_hitgrid", "1"),
+    ("probe_gungrid", "1"),
+    ("probe_head", "basehead_axis_b_04"),
+];
 const GUNGRID_15: &[(&str, &str)] = &[
     ("probe_hitgrid", "1"),
     ("probe_gungrid", "1"),
@@ -2779,6 +2787,22 @@ fn the_gunner_grid_capture_matches_uo_on_mp_carentan() {
     );
 }
 
+/// The same on 1.1d (cod11-turrets.md 13.9). Open: the capture logs
+/// none of the gunner's attachments, a random draw, and a still gunner
+/// already reads three cells of the grid's left column off ours
+/// (13.10, "Open").
+#[test]
+#[ignore = "open: the 1.1d gunner grid, cod11-turrets.md 13.10"]
+fn the_gunner_grid_capture_matches_retail_on_mp_carentan() {
+    gungrid_gate(
+        "gungrid",
+        vcod_common::testing::game_fs_11,
+        &PROTOCOL_V1,
+        GUNGRID_11,
+        &[],
+    );
+}
+
 #[test]
 fn the_gunner_grid_capture_matches_15b_on_mp_carentan() {
     gungrid_gate(
@@ -2793,6 +2817,41 @@ fn the_gunner_grid_capture_matches_15b_on_mp_carentan() {
         GUNGRID_15,
         &[],
     );
+}
+
+/// The `-hitfine-uo` recipe with `probe_hitwho`: a UO turret round's
+/// damage callback reads the gun as `eInflictor` and the gunner as
+/// `eAttacker` (`Bullet_Fire_Extended`'s inflictor argument, game.mp.uo
+/// 0x7b13c; cod11-turrets.md 6.3), every hit's point as `hit_gate` holds it.
+#[test]
+fn the_hitwho_capture_matches_uo_on_mp_carentan() {
+    const CVARS: &[(&str, &str)] = &[
+        ("probe_hitlog", "1"),
+        ("probe_hitwho", "1"),
+        ("probe_head", "basehead_axis_b_05"),
+    ];
+    let Some((script, log, mut rows)) = hit_replay(
+        "hitwho-uo",
+        vcod_common::testing::uo_fs,
+        &PROTOCOL_V22,
+        CVARS,
+    ) else {
+        return;
+    };
+    rows.extend(hitfine_rows(script.lines(), log.iter().map(String::as_str)));
+    let who = |lines: &mut dyn Iterator<Item = &str>| -> Vec<String> {
+        lines
+            .filter(|l| !l.starts_with('#'))
+            .filter_map(|l| l.split_once("PROBE hitwho ").map(|(_, r)| r.to_string()))
+            .collect()
+    };
+    let (theirs, ours) = (
+        who(&mut script.lines()),
+        who(&mut log.iter().map(String::as_str)),
+    );
+    assert_eq!(theirs.len(), 2, "retail's two hits");
+    assert_eq!(ours, theirs, "the callback's inflictor and attacker");
+    finish(rows, &[]);
 }
 
 #[test]

@@ -2260,11 +2260,14 @@ impl ClientSim {
         self.anim.legs()
     }
 
-    /// This client's body as a locational trace meets it, `None` unless it
-    /// is alive and playing: the link where its last cmd left it, posed the
-    /// way its last end frame did (`docs/research/cod11-combat.md` 16.1).
+    /// This client's body as a locational trace meets it, `None` unless its
+    /// contents hold `CONTENTS_BODY`, the trace's mask: the link where its
+    /// last cmd left it, posed the way its last end frame did
+    /// (`docs/research/cod11-combat.md` 16.1). A `suicide()` that stays
+    /// `playing` is a corpse until its next end frame and a body again
+    /// after (5.1, "A suicide that stays playing").
     pub fn hit_body(&self, slot: usize) -> Option<crate::game::combat::HitBody> {
-        if self.dead {
+        if self.contents & CONTENTS_BODY == 0 {
             return None;
         }
         self.dobj(slot)
@@ -2311,15 +2314,15 @@ impl ClientSim {
     /// The turret placement's leaf blend at level time `now_ms`, `None`
     /// off a `turretanim` anim: the legs pose by its leaves, and its sync
     /// group steps at the mean frequency their weights give from the next
-    /// frame on (cod11-turrets.md 13.9). On 1.5 and UO the rows are the
-    /// carried weights (`gunner_tree`) the placement leaves, which the pose
-    /// reads at once, until the next end frame's step.
+    /// frame on (cod11-turrets.md 13.9). The rows are the carried weights
+    /// (`gunner_tree`) the placement leaves, which the pose reads at once,
+    /// until the next end frame's step: 1.1d's placement (game.mp
+    /// 0x515a8) runs UO's strict clears and two passes.
     pub fn set_gunner_blend(
         &mut self,
         placed: Option<&vcod_common::turretpose::GunnerPlacement>,
         now_ms: i32,
     ) {
-        let carried = self.ps.rules.v15();
         if let Some(g) = placed
             && self
                 .gunner_leaves
@@ -2329,14 +2332,13 @@ impl ClientSim {
             self.gunner_left = self.gunner_leaves.take();
         }
         match placed {
-            Some(g) if carried => {
+            Some(g) => {
                 self.gunner_tree.place(g, crate::server::FRAME_MS);
                 self.gunner_leaves = Some((g.node, Vec::new()));
                 self.gunner_rows_from_tree();
                 self.pose.turret_leaves.clone_from(&self.gunner_leaves);
                 self.pose.turret_left.clone_from(&self.gunner_left);
             }
-            Some(g) => self.gunner_leaves = Some((g.node, g.rows.clone())),
             None => {
                 self.gunner_leaves = None;
                 self.gunner_left = None;
@@ -2358,11 +2360,9 @@ impl ClientSim {
     /// (cod11-turrets.md 13.9, 13.10). Returns the turret group and the one
     /// left, as the pose now holds them, when he has either.
     pub fn land_gunner_goals(&mut self) -> Option<TurretLegs> {
-        if self.ps.rules.v15() {
-            let dt = (f64::from(0.001f32) * f64::from(crate::server::FRAME_MS)) as f32;
-            self.gunner_tree.step(dt);
-            self.gunner_rows_from_tree();
-        }
+        let dt = (f64::from(0.001f32) * f64::from(crate::server::FRAME_MS)) as f32;
+        self.gunner_tree.step(dt);
+        self.gunner_rows_from_tree();
         if self.gunner_leaves.is_none() && self.gunner_left.is_none() {
             return None;
         }

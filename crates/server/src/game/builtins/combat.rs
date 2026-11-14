@@ -950,9 +950,13 @@ fn bullet_entities(
     (hit, point)
 }
 
-/// The living body a `bulletTrace` segment scores a bone of closer than
-/// `limit`, passing `ignore` and a body seated in a vehicle it drives:
-/// slot and fraction.
+/// The body a `bulletTrace` segment scores a bone of closer than `limit`,
+/// passing `ignore` and a body seated in a vehicle it drives: slot and
+/// fraction. A body counts while its link carries `CONTENTS_BODY`, the
+/// trace's mask, not while it has health: a `suicide()` that stays
+/// `playing` is a corpse from `player_die`'s relink and a body again once
+/// its end frame links it (combat doc 5.1, "A suicide that stays
+/// playing"; `ClientSim::hit_body`).
 fn body_hit(
     host: &mut GameHost,
     start: Vec3,
@@ -964,7 +968,12 @@ fn body_hit(
         .client_bodies
         .iter()
         .flatten()
-        .filter(|b| !host.client_vitals[b.slot].dead)
+        // The relink a death makes lands at once, ahead of the mirror.
+        .filter(|b| {
+            host.area
+                .last_link(b.slot as u32)
+                .is_some_and(|l| l.contents & vcod_common::movetrace::CONTENTS_BODY as i32 != 0)
+        })
         .filter(|b| ignore.is_none_or(|i| i.0 as usize != b.slot))
         .cloned()
         .collect();

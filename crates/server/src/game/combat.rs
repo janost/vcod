@@ -3530,7 +3530,7 @@ mod tests {
         assert!((only(r.impacts(), "the wall impact").origin[0] - 40.0).abs() < 0.2);
 
         let open = vcod_common::collision::test_world(&[]);
-        b.dead = true;
+        b.die();
         let r = fire(&def, &[(0, &a), (1, &b)], &open, &mut rng);
         assert!(r.hits().next().is_none(), "a dead player is not hit again");
         assert!(
@@ -3540,6 +3540,7 @@ mod tests {
 
         // A pistol round names the pistol means of death and passes nothing.
         b.dead = false;
+        b.update_contents();
         let mut m = HashMap::new();
         m.insert("damage".to_string(), "30".to_string());
         let colt = WeaponDef::from_map(&m);

@@ -1603,6 +1603,34 @@ cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-compass --probe-secs 28
 Against ours: `vcod-server mp_harbor --gametype-script
 crates/gsc/tests/fixtures/semantics/client-probes/probe_suicide.gsc`.
 
+`+set probe_suicide_near 1` stands slot n 64 n units off the first spawn,
+for UO's mp_uo_harbor, whose first two spawns share no PVS (and 1.1d's
+mp_harbor, where the trace needs the line). `suicide_playing.rs` replays
+both near runs (`cod11-combat.md` 5.1).
+
+## probe_squad
+
+1.5's squad say between squad members (`cod15-protocol-diff.md` 13). The
+script puts each client on a side and in a squad by entity number at its
+begin: 0 and 1 axis `squad_alpha`, 2 axis `squad_bravo`, 3 allies
+`squad_alpha`. Four plain probes, 1.5 s apart; the fixture's header has the
+`--probe-say` times:
+
+```
+COD_VERSION=1.5 COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=45 tools/run_probe.sh client-probes/probe_squad mp_carentan
+cargo run -p vcod -- --game-dir <1.5> --net-probe 127.0.0.1:28970 --probe-say "12:say_squad a0" --probe-say "16:say_team t0" --probe-secs 25
+```
+
+`crates/server/tests/squad_ab.rs` replays it.
+
+## probe_tcrestart
+
+`addTestClient` across `map_restart(false)` on 1.1d, no client
+(`cod11-gsc-object-model.md` 25): `COD_LNXDED_HOME=<absolute, no '+'>
+PROBE_SECS=25 tools/run_probe.sh client-probes/probe_tcrestart mp_pavlov`.
+It runs no client, but replays only on a whole server
+(`crates/server/tests/testclient.rs`), so it lives here.
+
 ## probe_tankcompass
 
 What United Offensive's `G_GetNonPVSTankInfo` packs into

@@ -394,8 +394,19 @@ the index it holds. INFERRED: a held weapon is not given again; a new one
 takes the first empty slot its class allows, or none; every weapon on its
 alt-fire chain not yet held is held beside it with no slot (the
 `fg42_semi_mp` bit the capture reads beside the fg42's, section 12.4).
-INFERRED: a weapon whose `def+0x74` reads 6 or 7 is never given; that
-field's meaning is unread.
+VERIFIED, the weapon field table: `weaponClass` at 0x7cad8 names
+`def+0x74`, and its enum's name table at `.data` 0x7c964 reads `rifle`, `mg`,
+`smg`, `pistol`, `grenade`, `rocketlauncher`, `turret`, `non-player`, so 6 is
+`turret` and 7 `non-player`. VERIFIED, 1.5b's `BG_GivePlayerWeapon`
+compares `def+0x74` with 6 and 7 (0x2c250, 0x2c265; its table at 0x81760
+reads the same names), and UO's compares `def+0x80` with 7 and 9 (0x31d7a,
+0x31d92), its table at 0xab4e0 reading `rifle`, `mg`, `smg`, `lmg`,
+`pistol`, `grenade`, `rocketlauncher`, `turret`, `spotter`, `non-player`.
+INFERRED, off the branch to the `xor eax, eax` return ahead of the
+`RegisterItem` at 0x36a86: a turret or non-player class weapon is never
+given and never registered. `giveWeapon` (0x430e2) ignores the return and
+still runs its `Add_Ammo`. vcod: `never_given` in `builtins/client.rs`
+(`a_turret_class_weapon_is_never_given`).
 
 VERIFIED, `BG_IsPlayerWeaponInSlot(ps, weapon, followAlt)` (0x3a9f4): byte
 loads of `cl+0x315` and `cl+0x316` (0x3aa53, 0x3aa5e) and of

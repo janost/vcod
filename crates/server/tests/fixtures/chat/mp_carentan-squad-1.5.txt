@@ -1,0 +1,30 @@
+# Retail CoD 1.5b dedicated server: squad says between squad members, 2026-11-14.
+# client-probes/probe_squad on mp_carentan puts each client on a side and in a
+# squad at its begin: 0 axis squad_alpha, 1 axis squad_alpha, 2 axis
+# squad_bravo, 3 allies squad_alpha. Four plain probes, 1.5 s apart, all inside
+# one `unshare -rn`:
+#   COD_VERSION=1.5 COD_LNXDED_HOME=<absolute, no '+'> PORT=29020 PROBE_SECS=45 \
+#       tools/run_probe.sh client-probes/probe_squad mp_carentan
+#   cargo run -p vcod -- --game-dir <1.5, stock paks> --net-probe 127.0.0.1:29020 \
+#       --probe-say "12:say_squad a0" --probe-say "16:say_team t0" --probe-secs 25
+#   cargo run -p vcod -- ... --net-probe 127.0.0.1:29020 --probe-secs 25
+#   cargo run -p vcod -- ... --net-probe 127.0.0.1:29020 --probe-say "12:say_squad b2" --probe-secs 25
+#   cargo run -p vcod -- ... --net-probe 127.0.0.1:29020 --probe-say "12:say_squad a3" --probe-secs 25
+# !say <client> <command> in the order games_mp.log logged them; !chat <client>
+# every h/i line the client got, control bytes as \xNN; !log the say lines of
+# games_mp.log.
+!say 0 say_squad a0
+!say 2 say_squad b2
+!say 0 say_team t0
+!say 3 say_squad a3
+!chat 0 h "\x15\x15^9(\x14GAME_AXIS\x15 \x14PATCH_1_5_SQUADALPHA\x15)vcod^7: ^5a0"
+!chat 0 i "\x15\x15^9(\x14GAME_AXIS\x15)vcod^7: ^5t0"
+!chat 1 h "\x15\x15^9(\x14GAME_AXIS\x15 \x14PATCH_1_5_SQUADALPHA\x15)vcod^7: ^5a0"
+!chat 1 i "\x15\x15^9(\x14GAME_AXIS\x15)vcod^7: ^5t0"
+!chat 2 h "\x15\x15^9(\x14GAME_AXIS\x15 \x14PATCH_1_5_SQUADBRAVO\x15)vcod^7: ^5b2"
+!chat 2 i "\x15\x15^9(\x14GAME_AXIS\x15)vcod^7: ^5t0"
+!chat 3 h "\x15\x15^8(\x14GAME_ALLIES\x15 \x14PATCH_1_5_SQUADALPHA\x15)vcod^7: ^5a3"
+!log saysquad;0;0;vcod;a0
+!log saysquad;0;2;vcod;b2
+!log sayteam;0;0;vcod;t0
+!log saysquad;0;3;vcod;a3

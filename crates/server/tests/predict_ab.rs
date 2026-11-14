@@ -890,7 +890,9 @@ fn follow_seat(
 /// a `--probe-uoturret` capture): the use tap and its release are the
 /// game's, and the gunner's origin is the turret pass's `place_gunner`, so
 /// the sim mounts and lets go where retail's playerstate does and takes
-/// retail's origin while on the gun, as `follow_seat` does a seat's. The
+/// retail's origin while on the gun, as `follow_seat` does a seat's (ours'
+/// `place_gunner` lands on UO's within 0.066:
+/// `turret::tests::every_captured_uo_gunner_origin_replays`). The
 /// capture mounts standing, and its release carries 1.1's
 /// `EV_STANCE_FORCE_STAND` in the ring. Whether the snapshot's body was on a
 /// gun.

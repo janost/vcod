@@ -266,11 +266,25 @@ watch_hitlog()
 hitlog_damage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc)
 {
 	logPrint("PROBE hitfine " + gettime() + " " + self getEntityNumber() + " " + sHitLoc + " " + iDamage + " " + fine(vPoint) + " " + fine(vDir) + "\n");
+	if (getcvar("probe_hitwho") == "1")
+		logPrint("PROBE hitwho " + gettime() + " " + self getEntityNumber() + " " + hitwho(eInflictor) + " " + hitwho(eAttacker) + "\n");
 	if (getcvar("probe_bodylog") == "1")
 		logPrint("PROBE hitbody " + gettime() + " " + self getEntityNumber() + " " + fine(self.origin) + " " + fine(self.angles) + "\n");
 	if (getcvar("probe_hitgrid") == "1")
 		self hitgrid(vPoint, vDir);
 	self [[level.probe_hit_next]](eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
+}
+
+//	With `probe_hitwho 1` as well, the callback's inflictor and attacker:
+//
+//	PROBE hitwho <time> <entity number> <inflictor> <attacker>
+//
+//	each `<number>:<classname>`, or `-` when undefined.
+hitwho(e)
+{
+	if (!isdefined(e))
+		return "-";
+	return e getEntityNumber() + ":" + e.classname;
 }
 
 //	With `probe_hitgrid 1` as well: inside the damage callback, so on the
