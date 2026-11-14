@@ -1942,10 +1942,69 @@ table dumped; the run, its dumps and its replay not kept):
   the GOT slot of `bg`), and the one store through that slot is
   `G_RunFrame`'s `level.time` (0x59ca2).
 
-INFERRED: what is left on a plain run is an input of the 0.001 run clip
-(its start phase or its first weight) that a pause in the server's frame
-moves, as the gdb runs' pauses moved the clients' cmds. Not yet found.
-`KNOCKBACK_GAP` stays on UO's `-hitgrid` and `-hitfine` kills.
+Seven more UO runs (2026-11-14), the `-hitgrid-uo` recipe with
+`probe_spawnlog 1`, `probe_bodylog 1` and the target on the current
+`--probe-fall` log (`SPAWNED`, `ct=`, `w=`, `q=`): one with no debugger,
+kept as `mp_carentan-dm-turret-hitgrid-uo-cmds.txt` (with `-script.txt`
+and `-target.txt`), and six under a gdb that stops only where the setter
+spreads a movement clip's phase (`game.mp.uo` 0x1d147) and at
+`player_die` (0x4f972), the last three also on the first bone trace of
+entity 0 after the target's run clip is set (`coduo_lnxded` 0x809aa73). The DObj of entity `n` is
+`0x823b300 + 0x5c * *(short *)(0x8252d00 + 2n)` (VERIFIED, `coduo_lnxded`
+0x80725cb). The runs and their dumps are not kept.
+
+- VERIFIED, `game.mp.uo.i386.so`: `bg` (0x136a60) holds `time`,
+  `latestSnapshotTime` and `frametime`, and `G_RunFrame` is the only
+  writer of each (0x59ca2, 0x59cb6, 0x59ccb); every other use of its GOT
+  slot (0x1cfd3, 0x1d06a, 0x1d147, 0x1d66c..0x1d8b7, 0x1da7d, 0x1dae3,
+  0x1f33a, 0x1f402) reads, bar `G_InitGame`'s memset (0x5879d).
+- VERIFIED, the six gdb logs: the setter starts the knockback's run clip
+  (old 185, new 157, client 0) with `bg.time` at the kill's own level time
+  and a period of 6466 (`pb_stand_alert`'s length + 200). VERIFIED, the
+  first three runs' `player_die` reads: the run clip's two time slots are
+  equal, its weight 0x3a83126f (0.001) and its goal 1, the idle's goal 0.
+- vcod measurement: ours starts the run clip on the same frame at the same
+  phase word (0x3f2da635 on the 34 ms run below), so the run clip's phase
+  and first weight are retail's.
+- vcod measurement, the replays: the no-debugger run's kill (30050), every
+  cell and the struck body are retail's bits with no gap
+  (`the_cmdlog_hitgrid_capture_matches_uo_on_mp_carentan`), with its spawn
+  pinned or with `PRE_SPAWNAT`. Of the six gdb runs, two spawned on a
+  slope and drift (the spawn think's drift, 13.7: 0.33 units in y on one,
+  0.85 in x on the other), and four put the kill a float step off in x,
+  three of them a step in z as well, whatever the kill frame's cmds ran:
+  51, 34, 50 and 49 ms. So the step does not depend on a pause or on how
+  many cmds the kill frame ran.
+- vcod measurement, the 34 ms run's `player_die` dump: with the walk in
+  anim index order, our 107 body bones are retail's matrices and
+  quaternions word for word (the head part's bones come in another order);
+  in the clock's order the pelvis on down sit a float step or two off.
+- vcod measurement, a 50 ms run's trace dump: the body's origin and angles
+  (0x13c, 0x148), its axis and the local end (`ebp-0x48`) are retail's
+  words, the local start (`ebp-0x58`) is not: retail (0x4340e470,
+  0x435e04d0, 0x427239b5), ours (0x4340e468, 0x435e04c8, 0x427239b4), the
+  round's world start a float step off in each axis.
+- VERIFIED, the muzzle (UO `game.mp.uo` 0x5a8b0, 1.5b `game.mp` 0x510d5):
+  `G_DObjGetWorldTagMatrix` (UO 0x791a0) on `tag_flash` then `tag_player`,
+  each the gun's own skeleton matrix (`G_DObjGetLocalTagMatrix`) through
+  `DObjSkel2MatrixMultiply43` with `AnglesToAxis` of the gun's 0x148 and
+  its 0x13c; then `flash - player` stored per component, `VectorNormalize`
+  (UO 0x3a1c3, 1.5b 0x32f73: the squared sum stored, its double root
+  stored), and each component of `player + forward * reach` rounded once
+  (UO 0x5aa52..0x5aa8d, 1.5b 0x5124b..0x51286). 1.1d keeps the reach on
+  the stack (0x51574..0x51598).
+
+INFERRED: the step left on UO's `-hitgrid` and `-hitfine` kills is the
+round's start: ours turns the gun's bind tags by `angles_to_axis`
+(`turret::muzzle_stored`, 13.8), not by the gun's skeleton build, and on
+some aims that lands `tag_player` or `tag_flash` a float step off. The
+knockback frame only shows it: the wound's aim happens to round to
+retail's on every capture. Closing it takes the gun's DObj built as a
+player's is (controllers on `tag_aim`, `tag_aim_animated`, `tag_flash`,
+cod11-combat.md 16.3) and `DObjSkel2MatrixMultiply43`'s arithmetic.
+`KNOCKBACK_GAP` stays on UO's `-hitgrid` and `-hitfine` kills, and the
+clock's order on 1.5b and UO: in anim index order `-hitgrid-15`'s kill
+moves a step off, the same start error no longer cancelling.
 
 vcod: `turret_ab`'s `hit_gate` replays each capture as `spawn_gate` does and
 holds the target's playerstate, each hit's point (`HIT_NEAR`, 0.001; 13.8)
@@ -2047,7 +2106,9 @@ module after the fire's muzzle stores (0x5aa90).
   it.
 
 vcod: `combat::bullet_range` (`UO_BULLET_RANGE` on UO), `combat::bullet_end`,
-`turret::AimRule::fire_angles`, `turret::muzzle`. `turret_ab`'s hit rows must
+`turret::AimRule::fire_angles`, `turret::muzzle` (1.1d) and
+`turret::muzzle_stored` (1.5b and UO: the reach and the start in the
+arithmetic 13.6 reads off 0x5a8b0). `turret_ab`'s hit rows must
 be retail's to the bit; each gate names the rows it tolerates
 (`KNOCKBACK_GAP`), which stay within `HIT_NEAR` (0.001).
 
