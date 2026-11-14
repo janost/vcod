@@ -830,7 +830,7 @@ fn patch_meets(start: Vec3, end: Vec3, capsule: Capsule, patch: &WorldPatch, ari
         (end + capsule.center).to_array(),
     );
     if capsule.radius == 0.0 {
-        crate::terrain::segment_bounds_meet(lo, hi, s, e)
+        crate::terrain::segment_bounds_meet(lo, hi, s, e, arith)
     } else {
         crate::terrain::capsule_bounds_meet(lo, hi, s, e, capsule.offset.z, capsule.radius)
     }
@@ -2868,17 +2868,17 @@ impl CollisionWorld {
         // fraction 0 (a box always, a capsule all in solid or with a second
         // contact there), where the walk ends on whatever got there first:
         // retail's order names the contact. So does one stopped on terrain
-        // no leaf on its walk lists, which retail never clips
-        // (bsp-ibsp59-format.md, "The leaf walk").
-        let tied = trace.fraction < 1.0
-            && (NEAR_TIE.get()
-                || trace.fraction <= 0.0
-                    && (sweep.boxed || trace.allsolid || self.ties_at_zero(&sweep, trace))
-                || self.terrain_off_the_walk(&sweep, trace)
-                || self.brush_off_the_walk(&sweep, trace));
-        if (walk.patch_met.get() || tied)
-            && let Some(leaves) = &self.leaf_walk
-        {
+        // no leaf on its walk lists, which retail never clips, and one
+        // stopped on any model-0 brush (bsp-ibsp59-format.md, "The leaf
+        // walk"). The cheap tests go first.
+        let replay = walk.patch_met.get()
+            || trace.fraction < 1.0
+                && (NEAR_TIE.get()
+                    || self.on_world_brush(trace)
+                    || trace.fraction <= 0.0
+                        && (sweep.boxed || trace.allsolid || self.ties_at_zero(&sweep, trace))
+                    || self.terrain_off_the_walk(&sweep, trace));
+        if replay && let Some(leaves) = &self.leaf_walk {
             *trace = entry;
             self.clip_leaf_walk(leaves, &sweep, trace);
             let mut rest = Walk {
@@ -2941,47 +2941,12 @@ impl CollisionWorld {
         !listed
     }
 
-    /// Whether the trace stopped on a model-0 brush that no leaf the walk
-    /// enters short of the contact lists. A leaf lists a brush only where
-    /// the brush's volume reaches, and a sweep can meet its pushed-out
-    /// planes past an edge with no bevel, outside every such leaf: retail
-    /// never clips it there (bsp-ibsp59-format.md, "The leaf walk").
-    fn brush_off_the_walk(&self, sw: &TraceInput, trace: &Trace) -> bool {
-        let (Some(Prim::Brush(b)), Some(leaves)) = (trace.hit, &self.leaf_walk) else {
-            return false;
-        };
-        if self.brushes[b as usize].model != 0 {
-            return false;
-        }
-        let item = Item::Brush(b);
-        let lists = |leaf: u32| leaves.lists(leaf, item);
-        // A unit past the face the sweep stopped on is inside a brush it
-        // really touched, in a leaf that lists it; only a miss walks.
-        let dir = sw.end - sw.start;
-        let centre = sw.start + dir * trace.fraction + sw.capsule.center;
-        let below = if trace.normal.z > 0.0 {
-            -sw.capsule.offset
-        } else {
-            sw.capsule.offset
-        };
-        let inside = centre + below - trace.normal * (sw.capsule.radius + 1.0);
-        if lists(leaves.leaf_at(inside.to_array())) {
-            return false;
-        }
-        let mid = (sw.mins + sw.maxs) * 0.5;
-        let mut listed = false;
-        leaves.visit(
-            (sw.start + mid).to_array(),
-            (sw.end + mid).to_array(),
-            (sw.maxs - mid).to_array(),
-            sw.mins == Vec3::ZERO && sw.maxs == Vec3::ZERO,
-            trace.fraction,
-            |leaf, _| {
-                listed |= lists(leaf);
-                if listed { 0.0 } else { trace.fraction }
-            },
-        );
-        !listed
+    /// Whether the trace stopped on a model-0 brush. Every such trace
+    /// replays through the leaf walk, which names the brush retail's order
+    /// meets first and never clips one no leaf on the walk lists
+    /// (bsp-ibsp59-format.md, "The leaf walk").
+    fn on_world_brush(&self, trace: &Trace) -> bool {
+        matches!(trace.hit, Some(Prim::Brush(b)) if self.brushes[b as usize].model == 0)
     }
 
     /// Whether a capsule the BVH stopped at fraction 0 has a second contact
@@ -3402,7 +3367,7 @@ impl CollisionWorld {
         let surface_flags = self.tris_surf[first];
         if capsule.radius == 0.0 {
             let (s, e) = (start + capsule.center, end + capsule.center);
-            if !tp.touches_segment(s.to_array(), e.to_array()) {
+            if !tp.touches_segment(s.to_array(), e.to_array(), self.arith()) {
                 return;
             }
             let (s, e) = (s.to_array(), e.to_array());

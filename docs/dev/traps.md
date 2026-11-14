@@ -335,6 +335,8 @@ otherwise.
   - pmove's fall stores its gravity, its tail and the trace's end point, and
     `PM_ClipVelocity`, `VectorNormalize` and `PM_Friction` store theirs
     (`cod15-movement.md` 7).
+  - A body's capsule sweep against another (`movetrace::stored`,
+    `cod11-player-clip.md` 2.5).
   - A missile's arc and bounce (`Missile::kept`, combat doc 12.5).
   - The locational bone trace (`BoneTraceCtx::arith`, 3.1). Its hit point on
     a body keeps the stack (`combat::trace_point`).
@@ -365,6 +367,9 @@ otherwise.
     edge): it never clips.
 
   Leaf order names the surface a body standing on two floors steps on.
+  Every trace stopped on a model-0 brush replays through the leaf walk;
+  a test that skips the replay where a leaf lists the brush moves answers
+  (`bsp-ibsp59-format.md`, "The leaf walk").
 - A trace whose start is its end is a position test. Terrain reads
   `startsolid` only through `Terrain::position_test`.
 - A push's candidate and spot tests are retail's box against brushes, not the

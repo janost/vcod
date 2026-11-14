@@ -1961,8 +1961,36 @@ impacts and the target's entity. VERIFIED, vcod measurement: in `target`
 each of the three rounds meets the target's left upper leg 0.378 units nearer
 the gun than retail's `probe_hitlog` point, along the round's own direction,
 and the target's velocity after the first hit differs by up to 2 units a
-second; the cause is open (the victim recipe's other capture logs no hit
-points to compare against).
+second.
+
+VERIFIED, retail 1.1d, the same recipe rerun 2026-11-14 with the target a
+`--probe-fall` probe logging its cmds and with `probe_bodylog 1`
+(`mp_carentan-dm-turret-linkmg2.txt`, `-script.txt`, `-target.txt`): the
+three rounds meet the same leg on the same rays, and with the target's own
+cmd stamps ours meets it within 2.5e-4 of retail's point
+(`turret_ab::the_linked_gun_hits_match_retail_on_mp_carentan`). So the 0.378
+was the target, not the gun: the first capture logs no target cmds, its
+replay sends one every 16 ms, and the running target stands a fraction of a
+unit off retail's at the hit, which moves the contact along the ray. Its
+victim rows' velocity misses are the same cause.
+
+VERIFIED, the same capture: retail's target, placed 300 units along the
+linked gun's forward, stands at x 1515.182373047, y 1603.587280273, one
+float step above the 1515.182250977, 1603.587158203 the unlinked gun's
+`-hitbody` capture gives on both axes. VERIFIED, `objdump` of game.mp 1.1d:
+`G_CalcTagAxis` (0x663d4) inverts the parent through
+`MatrixInverseOrthogonal43` (0x3e1a4), which transposes the axis and turns
+the negated origin through it by `MatrixTransformVector` (0x3e220), each
+sum on the stack and stored once, and `MatrixMultiply43` (0x3b96c) rounds
+each element's sum once, its origin row with the add; `G_SetFixedLink`'s
+mode 0 calls it at 0x66642. INFERRED, from those: the child's offset in the
+parent's frame comes back a hair off zero, not zero, and each link frame
+puts the gun an ulp off its own origin, which the placement reads. vcod's
+1.1 link took the offset as an exact difference; with 1.5b's and UO's
+one-rounding form on 1.1d too (`link::Frame::relative_to_stored`,
+`within_stored`), the target lands on retail's x and y to the bit and every
+struck body reads retail's. Open: each hit point still reads 4 to 7 ulps
+off in z (and the third one 2 ulps in y), on the same direction.
 
 ### A tag parent's model change
 

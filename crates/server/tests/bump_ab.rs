@@ -1,5 +1,5 @@
-//! Our mover against retail's with another player in the way. The fixture is
-//! `--save-bump` against `client-probes/probe_bump` under `tools/run_probe.sh`:
+//! Our mover against retail's with another player in the way, on 1.1d, 1.5b
+//! and United Offensive (`CASES`). Each fixture is `--save-bump` against `client-probes/probe_bump` under `tools/run_probe.sh`:
 //! a walker's every usercmd and every snapshot, with the target player's
 //! entity (origin, `solid`) beside it, while the walker runs into, round and
 //! onto a standing, crouched and prone target. The replay runs the same cmds
@@ -22,12 +22,16 @@
 //! It writes velocity and the knockback timer after the frame's last move,
 //! so a push snapshot's origin still compares; the rebased run then starts
 //! the next interval from the pushed state like any other, and the free run
-//! adopts retail's velocity and timer at the snapshots `PUSHES` names.
+//! adopts retail's velocity and timer at the snapshots its case's `pushes`
+//! names.
 //!
 //! Rows that miss for a reason other than clipping are named in `GAPS`, which
-//! is empty. The fixture carries no `fJumpPeak`, so a rebased run starts
+//! is empty. 1.1d's fixture carries no `fJumpPeak`, so a rebased run starts
 //! airborne without a jump's step allowance; the free run carries its own
-//! from the takeoff, and both hold every jump row. Set
+//! from the takeoff, and both hold every jump row. 1.5b's and UO's carry it
+//! (`jump_peak=`), whose jump step and landing read it
+//! (cod15-movement.md 2, 5). The 1.1 fixture runs at a 1.1 install, the
+//! other two at a UO one (`main/` 1.5b's, `uo/` over it). Set
 //! `BUMP_REPORT=1` to print every snapshot's delta, and
 //! `BUMP_TRACE=<ct>` to print ours cmd by cmd into that clock. Needs
 //! `COD_DIR`; without the paks the replay returns early.
@@ -36,18 +40,45 @@ use glam::Vec3;
 use std::collections::BTreeMap;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld};
+use vcod_common::net::flags::PMF_JUMP_PENALTY;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::ENTITYNUM_NONE;
+use vcod_common::patch::Arith;
 use vcod_common::pmove::cmd::{self, ANGLE2SHORT};
-use vcod_common::pmove::{PMF_TIME_KNOCKBACK, PlayerState, pmove};
+use vcod_common::pmove::{MoveRules, PMF_TIME_KNOCKBACK, PlayerState, pmove};
 use vcod_common::weapon::WeaponDef;
 
-const FIXTURE: &str = "mp_carentan-dm-bump-walker.txt";
+/// One capture: its file, the patch's rules and each `StuckInClient` push
+/// in it, as (phase, snapshot `commandTime`): the snapshots whose `pm_time`
+/// reads a fresh 300. Checked against the fixture both ways, so a stale or
+/// missing entry fails.
+struct Case {
+    file: &'static str,
+    rules: MoveRules,
+    pushes: &'static [(&'static str, i32)],
+}
 
-/// Each `StuckInClient` push in the fixture, as (phase, snapshot
-/// `commandTime`): the snapshots whose `pm_time` reads a fresh 300. Checked
-/// against the fixture both ways, so a stale or missing entry fails.
-const PUSHES: &[(&str, i32)] = &[("crouch/jump", 70633), ("prone/jump", 97483)];
+/// 1.1d's, and 1.5b's and UO's on the same spot, script and probes: their
+/// bodies take the stored capsule sweep (player-clip doc 2.5).
+const CASES: &[Case] = &[
+    Case {
+        file: "mp_carentan-dm-bump-walker.txt",
+        rules: MoveRules::V1_1,
+        pushes: &[("crouch/jump", 70633), ("prone/jump", 97483)],
+    },
+    Case {
+        file: "mp_carentan-dm-bump-15-walker.txt",
+        rules: MoveRules::V1_5,
+        pushes: PUSHES_15,
+    },
+    Case {
+        file: "mp_carentan-dm-bump-uo-walker.txt",
+        rules: MoveRules::Uo,
+        pushes: PUSHES_UO,
+    },
+];
+const PUSHES_15: &[(&str, i32)] = &[("crouch/jump", 70234), ("prone/jump", 96833)];
+const PUSHES_UO: &[(&str, i32)] = &[("crouch/jump", 69882), ("prone/jump", 97082)];
 
 /// `pm_flags` 0x8, retail's held-jump latch.
 const PMF_JUMP_HELD: i32 = 0x8;
@@ -60,6 +91,8 @@ struct Snap {
     ground: u32,
     pm_flags: i32,
     pm_time: i32,
+    /// `fJumpPeak`, which 1.1d's capture lacks.
+    jump_peak: Option<f32>,
     target: Vec3,
     target_solid: i32,
     target_num: u32,
@@ -150,6 +183,7 @@ fn parse_fixture(text: &str) -> Fixture {
                     ground: int("ground") as u32,
                     pm_flags: int("pm_flags"),
                     pm_time: int("pm_time"),
+                    jump_peak: kv.get("jump_peak").map(|v| v.parse().expect("a float")),
                     target: parse_vec3(kv["target"]),
                     target_solid: int("target_solid"),
                     target_num: int("target_num") as u32,
@@ -211,21 +245,27 @@ fn run_cmd(
 
 /// Retail's playerstate at a snapshot: origin, velocity, ground, the held
 /// jump latch and the knockback timer.
-fn state_from(snap: &Snap, yaw_deg: f32, weapon: u8) -> PlayerState {
+fn state_from(snap: &Snap, yaw_deg: f32, weapon: u8, rules: MoveRules) -> PlayerState {
     let mut ps = PlayerState::spawn(snap.origin, yaw_deg);
+    ps.rules = rules;
     ps.velocity = snap.velocity;
     ps.on_ground = snap.ground != ENTITYNUM_NONE;
     ps.ground_entity = snap.ground;
     ps.jump_latched = snap.pm_flags & PMF_JUMP_HELD != 0;
+    ps.jump_origin_z = snap.jump_peak.unwrap_or(0.0);
     adopt_push(&mut ps, snap);
     ps.weapon = weapon;
     ps.weapons_held = 1 << weapon;
     ps
 }
 
+/// The timer and its flags, as `predict::from_wire` reads them: 1.5's and
+/// UO's jump penalty rides `pm_time`, which runs there whatever the flags
+/// (cod15-movement.md 2).
 fn adopt_push(ps: &mut PlayerState, snap: &Snap) {
     ps.knockback_flags = snap.pm_flags & PMF_TIME_KNOCKBACK;
-    ps.knockback_ms = if ps.knockback_flags != 0 {
+    ps.jump_penalty = ps.rules.v15() && snap.pm_flags & PMF_JUMP_PENALTY != 0;
+    ps.knockback_ms = if ps.knockback_flags != 0 || ps.rules.v15() {
         snap.pm_time as f32
     } else {
         0.0
@@ -273,7 +313,12 @@ fn is_push(s: &Snap) -> bool {
     s.pm_flags & PMF_TIME_KNOCKBACK != 0 && s.pm_time == 300
 }
 
-fn replay(fx: &Fixture, world: &CollisionWorld, weapons: &[Option<WeaponDef>]) -> Vec<Row> {
+fn replay(
+    fx: &Fixture,
+    case: &Case,
+    world: &CollisionWorld,
+    weapons: &[Option<WeaponDef>],
+) -> Vec<Row> {
     let yaw_deg = fx.yaw_deg;
     let weapon = fx
         .lines
@@ -312,7 +357,7 @@ fn replay(fx: &Fixture, world: &CollisionWorld, weapons: &[Option<WeaponDef>]) -
             Line::Snap(s) => s,
         };
         let Some(p) = prev.as_ref() else {
-            rebased = state_from(s, yaw_deg, weapon);
+            rebased = state_from(s, yaw_deg, weapon, case.rules);
             rebased_st = s.ct;
             prev = Some(s.clone());
             next_cmd = cmds.partition_point(|c| c.server_time <= s.ct);
@@ -324,7 +369,7 @@ fn replay(fx: &Fixture, world: &CollisionWorld, weapons: &[Option<WeaponDef>]) -
         if fresh_phase {
             // The free run starts over at each phase, from the snapshot
             // before the phase's first.
-            free = state_from(p, yaw_deg, weapon);
+            free = state_from(p, yaw_deg, weapon, case.rules);
             free_st = p.ct;
             fresh_phase = false;
         }
@@ -356,14 +401,19 @@ fn replay(fx: &Fixture, world: &CollisionWorld, weapons: &[Option<WeaponDef>]) -
             free.velocity = s.velocity;
             adopt_push(&mut free, s);
         }
-        rebased = state_from(s, yaw_deg, weapon);
+        rebased = state_from(s, yaw_deg, weapon, case.rules);
         rebased_st = s.ct;
         prev = Some(s.clone());
     }
-    let listed: Vec<(String, i32)> = PUSHES.iter().map(|(p, c)| (p.to_string(), *c)).collect();
+    let listed: Vec<(String, i32)> = case
+        .pushes
+        .iter()
+        .map(|(p, c)| (p.to_string(), *c))
+        .collect();
     assert_eq!(
         pushes_seen, listed,
-        "the fixture's push snapshots and PUSHES disagree"
+        "{}: the push snapshots and the case's pushes disagree",
+        case.file
     );
     rows
 }
@@ -467,24 +517,35 @@ fn report(rows: &[Row], spot: Vec3) {
     }
 }
 
-/// Loads the map the way the slope gate does, with `dm`'s gameobject rule.
-fn load() -> Option<(CollisionWorld, vcod_server::weapons::WeaponTable)> {
-    let fs = vcod_common::testing::game_fs_11()?;
+/// Loads the map the way the slope gate does, with `dm`'s gameobject rule,
+/// for the install `case` runs on: 1.1's paks for 1.1d's capture, a UO
+/// install's `main/` (1.5's) for 1.5b's and its `uo/` over it for UO's.
+fn load(case: &Case) -> Option<(CollisionWorld, vcod_server::weapons::WeaponTable)> {
+    let (fs, defs) = match case.rules {
+        MoveRules::V1_1 => (vcod_common::testing::game_fs_11()?, &vcod_server::defs::V1),
+        MoveRules::V1_5 => {
+            vcod_common::testing::uo_fs()?;
+            (vcod_common::testing::stock_fs()?, &vcod_server::defs::V15)
+        }
+        MoveRules::Uo => (vcod_common::testing::uo_fs()?, &vcod_server::defs::UO),
+    };
     let bsp_path = fs
         .resolve_map("mp_carentan")
         .expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse");
     let world = vcod_server::world::World::from_bsp(&bsp, Some(&fs)).collision;
     world.unlink_script_brushes(&bsp.entities, "dm");
-    Some((
-        world,
-        vcod_server::weapons::WeaponTable::load(&fs, &vcod_server::defs::V1),
-    ))
+    world.set_arith(if case.rules.v15() {
+        Arith::Stored
+    } else {
+        Arith::Kept
+    });
+    Some((world, vcod_server::weapons::WeaponTable::load(&fs, defs)))
 }
 
-fn fixture() -> Fixture {
+fn fixture(file: &str) -> Fixture {
     let path = format!(
-        "{}/tests/fixtures/playerstate/{FIXTURE}",
+        "{}/tests/fixtures/playerstate/{file}",
         env!("CARGO_MANIFEST_DIR")
     );
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
@@ -501,20 +562,28 @@ fn snaps(fx: &Fixture) -> impl Iterator<Item = &Snap> {
 /// Runs without the paks: the fixture's own shape.
 #[test]
 fn captured_solid_values_are_the_three_stance_packs_at_a_fixed_spot() {
-    let fx = fixture();
     let stand = Vec3::new(15.0, 15.0, 70.0);
     let pack = |z: f32| Body::pack_solid(Vec3::new(-15.0, -15.0, 0.0), stand.with_z(z));
     let expected: std::collections::BTreeSet<i32> =
         [pack(70.0), pack(50.0), pack(30.0)].into_iter().collect();
-    let captured: std::collections::BTreeSet<i32> = snaps(&fx)
-        .map(|s| s.target_solid)
-        .filter(|&v| v != 0)
-        .collect();
-    assert_eq!(captured, expected);
-    for s in snaps(&fx) {
-        assert_eq!(s.target, fx.spot.trunc(), "the target moved at ct={}", s.ct);
+    for case in CASES {
+        let fx = fixture(case.file);
+        let captured: std::collections::BTreeSet<i32> = snaps(&fx)
+            .map(|s| s.target_solid)
+            .filter(|&v| v != 0)
+            .collect();
+        assert_eq!(captured, expected, "{}", case.file);
+        for s in snaps(&fx) {
+            assert_eq!(
+                s.target,
+                fx.spot.trunc(),
+                "{}: the target moved at ct={}",
+                case.file,
+                s.ct
+            );
+        }
+        assert_eq!(fx.delta_angles, [0, 16384, 0], "{}", case.file);
     }
-    assert_eq!(fx.delta_angles, [0, 16384, 0]);
 }
 
 /// Runs without the paks. `PM_CrashLand`'s 0x2000 arm (`pm_time` 200) needs
@@ -523,7 +592,7 @@ fn captured_solid_values_are_the_three_stance_packs_at_a_fixed_spot() {
 /// (docs/research/cod11-player-clip.md 8.7).
 #[test]
 fn no_jump_landing_arms_the_0x2000_lockout() {
-    let fx = fixture();
+    let fx = fixture(CASES[0].file);
     let mut phase = "";
     let mut prev: Option<&Snap> = None;
     let mut landings = Vec::new();
@@ -587,12 +656,23 @@ fn dist(p: Vec3, spot: Vec3) -> f32 {
 
 #[test]
 fn the_mover_bumps_where_retail_does() {
-    let Some((world, weapons)) = load() else {
+    let mut ran = 0;
+    for case in CASES {
+        let Some((world, weapons)) = load(case) else {
+            continue;
+        };
+        println!("{}", case.file);
+        bumps_where_retail_does(case, &world, weapons.defs());
+        ran += 1;
+    }
+    if ran == 0 {
         eprintln!("COD_DIR unset or has no main/: skipping");
-        return;
-    };
-    let fx = fixture();
-    let rows = replay(&fx, &world, weapons.defs());
+    }
+}
+
+fn bumps_where_retail_does(case: &Case, world: &CollisionWorld, weapons: &[Option<WeaponDef>]) {
+    let fx = fixture(case.file);
+    let rows = replay(&fx, case, world, weapons);
     assert!(rows.len() > 1000, "only {} snapshots", rows.len());
     report(&rows, fx.spot);
     for p in phases(&rows) {
@@ -624,8 +704,14 @@ fn the_mover_bumps_where_retail_does() {
         let (retail, ours) = (min(|r| r.retail.origin), min(|r| r.ours_free));
         println!("{glance}: closest retail {retail:.4} ours {ours:.4}");
         // Inside the 0.125: retail backs off only a hit on the bare radius.
+        // 1.1d's glances pass under 30.1; UO's crouched one at 30.1039.
+        let inside = if case.rules == MoveRules::V1_1 {
+            30.1
+        } else {
+            30.125
+        };
         assert!(
-            retail < 30.1 && (ours - retail).abs() < 0.01,
+            retail < inside && (ours - retail).abs() < 0.01,
             "{glance}: closest retail {retail:.4} ours {ours:.4}"
         );
     }
@@ -644,8 +730,8 @@ fn the_mover_bumps_where_retail_does() {
     println!("rebased outside GAPS {}", stats(kept(), |r| r.rebased));
     if let Some(r) = kept().find(|r| misses(r.rebased)) {
         panic!(
-            "{} ct={} misses outside GAPS: {:?}",
-            r.phase, r.retail.ct, r.rebased
+            "{}: {} ct={} misses outside GAPS: {:?}",
+            case.file, r.phase, r.retail.ct, r.rebased
         );
     }
 }
