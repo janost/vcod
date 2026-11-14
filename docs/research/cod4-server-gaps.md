@@ -13,14 +13,26 @@ more.
 
 ## Fixed
 
+- The helicopter's flight is 1.7's `VEH_UpdateMoveToGoal` (0x809e38a)
+  with its float model: what the x87 keeps on its stack and what it
+  stores. The flight keeps its own angles apart from `r.currentAngles`,
+  which alone the link snaps. Every think of two gdb runs replays word
+  for word, and `hardpoint_ab`'s three captures match with no tolerance
+  (cod4-gsc.md 3.2, "The flight's float model").
+- Every CoD4 link snaps `r.currentAngles` with 1.7's flooring snap
+  (`SV_LinkEntity` 0x817e3f0): movers, script models and the rest of the
+  host's links (cod4-gsc.md 3.2, "The link's snap").
+- A -100 angle field under half a unit, or -0, goes out with its zero bit
+  set and a short 0, which the client reads as the smallest float above
+  zero, as 1.7's writer sends it (cod4-gsc.md 3.2, "The flight's float
+  model").
 - The server builds a DObj's bones as 1.7's `DObjCalcSkel` does
   (`vcod_cod4::skel`: the base locals, the controller's tags, the
   composition's float model): a helicopter's tags, a player body's tags
-  and hit boxes, and `getTagOrigin` on any other model. A helicopter's
-  think snaps its angles as 1.7's link does. The idle helicopter's gun
-  and the dropped weapons match retail word for word; a gdb dump of the
-  cobra's skeleton gates the port (cod4-gsc.md 3.2, "The skeleton",
-  "The link's snap").
+  and hit boxes, and `getTagOrigin` on any other model. The idle
+  helicopter's gun and the dropped weapons match retail word for word; a
+  gdb dump of the cobra's skeleton gates the port (cod4-gsc.md 3.2, "The
+  skeleton").
 - A helicopter with no goal runs 1.7's no-goal think (0x808ba22, its
   player-helicopter step with the stick zeroed): from rest it levels
   pitch and roll and normalises its yaw, as a stock helicopter does for
@@ -125,14 +137,8 @@ Open, by how much a player notices.
    minutes, then each after 7 s; vcod-server answers at once and an
    off-LAN client's address stands in for its ban guid
    (cod4-handshake.md 15).
-2. Closed: a helicopter with no goal runs 1.7's no-goal think and its
-   turret `VEH_UpdateAim`, and on a body that holds still its gun matches
-   retail word for word (Fixed above; `hardpoint_ab` `STILL_GAPS` gone).
-   Open: in flight the gun parts by 0.13 degrees as the flown body parts
-   (`hardpoint_ab` `AIM` under `FLIGHT`): the first word off is the
-   body's yaw step, an ulp at think 82 of the idle capture, then the turns
-   at the nodes (cod4-gsc.md 3.2, "The turret", "The flight against
-   retail"). M to port the flight think's float model.
+2. Closed: the helicopter's flight and its gun match retail word for word
+   (Fixed above; `hardpoint_ab` `GAPS` gone).
 3. What the five capture gates (`cod4::capture_ab`, cod4-combat.md 15)
    still tolerate: the thrown back frag's bounce off the shooter's head,
    now a few ulps of `trDelta` (the torso pitch's swing folded in shorts
