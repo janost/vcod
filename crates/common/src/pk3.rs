@@ -49,6 +49,65 @@ impl std::io::Seek for SharedFile {
     }
 }
 
+thread_local! {
+    /// The [`ReadLog`] this thread's flagged reads go to, if any.
+    static READ_LOG: std::cell::RefCell<Option<ReadLog>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The paths whose reads (or [`Pk3Fs::touch`]es) marked a pak referenced
+/// while it was installed on a thread: a load's part that a later load
+/// reuses instead of reading again touches these, so the referenced lists
+/// come out the same. [`crate::laps::par_map`] carries the caller's log
+/// into its workers.
+#[derive(Clone, Default)]
+pub struct ReadLog(std::sync::Arc<Mutex<Vec<String>>>);
+
+impl ReadLog {
+    /// The log installed on this thread.
+    pub fn current() -> Option<ReadLog> {
+        READ_LOG.with(|l| l.borrow().clone())
+    }
+
+    /// Installs `log` (or none) on this thread until the guard drops.
+    pub fn install(log: Option<ReadLog>) -> ReadLogGuard {
+        ReadLogGuard(READ_LOG.with(|l| l.replace(log)))
+    }
+
+    /// `f` with this log installed on the calling thread.
+    pub fn record<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _g = Self::install(Some(self.clone()));
+        f()
+    }
+
+    /// The paths logged so far, each once, in first-read order.
+    pub fn paths(&self) -> Vec<String> {
+        let v = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut seen = std::collections::HashSet::new();
+        v.iter().filter(|p| seen.insert(p.as_str())).cloned().collect()
+    }
+
+    fn note(key: &str) {
+        READ_LOG.with(|l| {
+            if let Some(log) = l.borrow().as_ref() {
+                log.0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(key.to_string());
+            }
+        });
+    }
+}
+
+/// Puts back the thread's previous [`ReadLog`] on drop.
+pub struct ReadLogGuard(Option<ReadLog>);
+
+impl Drop for ReadLogGuard {
+    fn drop(&mut self) {
+        let prev = self.0.take();
+        READ_LOG.with(|l| *l.borrow_mut() = prev);
+    }
+}
+
 /// Largest entry `Pk3Fs::read` will inflate. The biggest stock asset is a
 /// lightmapped BSP under 32 MiB; anything past this is a corrupt or hostile pak.
 pub const MAX_ENTRY_BYTES: u64 = 64 << 20;
@@ -621,6 +680,7 @@ impl Pk3Fs {
             && self.flags(&key)
         {
             self.referenced[*ai].store(true, Ordering::Relaxed);
+            ReadLog::note(&key);
         }
     }
 
@@ -727,6 +787,7 @@ impl Pk3Fs {
             .or_else(|| self.alias_index.get(&key))?;
         if flag && self.flags(&key) {
             self.referenced[*ai].store(true, Ordering::Relaxed);
+            ReadLog::note(&key);
         }
         // `fs_debug 1`'s line, for diffing what a load reads against retail.
         log::trace!("read {path} from {}", self.paks[*ai].qualified_name());

@@ -192,7 +192,7 @@ pub struct Combat {
     clip: Option<Arc<ClipMap>>,
     /// The static models' collision (`CM_LoadStaticModels`), which only
     /// the locational trace clips.
-    statics: Option<vcod_common::collision::CollisionWorld>,
+    statics: Option<Rc<vcod_common::collision::CollisionWorld>>,
     /// `g_fHitLocDamageMult`, `info/mp_lochit_dmgtable` (1 by default).
     pub hitloc_mult: [f32; 19],
     anims: Option<PlayerAnimSet>,
@@ -259,6 +259,13 @@ impl Combat {
         statics: Option<vcod_common::collision::CollisionWorld>,
         fs: Option<&Pk3Fs>,
     ) -> Combat {
+        let (hitloc_mult, anims) = Self::tables(fs);
+        Self::with_parts(clip, statics.map(Rc::new), hitloc_mult, anims)
+    }
+
+    /// What the combat reads off the paks: the hit-location multipliers and
+    /// the player anim set the hit poses play (no clip loaded yet).
+    pub fn tables(fs: Option<&Pk3Fs>) -> ([f32; 19], Option<PlayerAnimSet>) {
         let hitloc_mult = fs
             .and_then(|fs| fs.load::<RawFile>("info/mp_lochit_dmgtable").ok())
             .and_then(|b| parse_hitloc_table(&b.text()))
@@ -270,6 +277,16 @@ impl Combat {
                 None
             }
         });
+        (hitloc_mult, anims)
+    }
+
+    /// [`Self::with_statics`] over parts already read ([`Self::tables`]).
+    pub fn with_parts(
+        clip: Option<Arc<ClipMap>>,
+        statics: Option<Rc<vcod_common::collision::CollisionWorld>>,
+        hitloc_mult: [f32; 19],
+        anims: Option<PlayerAnimSet>,
+    ) -> Combat {
         Combat {
             weapons: vec![None],
             clip,
@@ -287,7 +304,7 @@ impl Combat {
 
     /// The player anim tree and script, `None` without paks.
     pub fn player_anims(&self) -> Option<&vcod_common::animtree::PlayerAnims> {
-        self.anims.as_ref().map(|a| &a.anims)
+        self.anims.as_ref().map(|a| &*a.anims)
     }
 
     /// The clip a wire anim index plays (toggle ignored), loaded once.

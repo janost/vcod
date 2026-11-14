@@ -144,9 +144,11 @@ impl BodyFrame {
 }
 
 /// The player animtree and script (`animtrees/multiplayer.atr`,
-/// `mp/playeranim.script`) and the clips loaded so far.
+/// `mp/playeranim.script`) and the clips loaded so far. A clone shares the
+/// tree and script.
+#[derive(Clone)]
 pub struct PlayerAnimSet {
-    pub anims: PlayerAnims,
+    pub anims: Rc<PlayerAnims>,
     clips: HashMap<String, Option<Rc<XAnim>>>,
 }
 
@@ -204,7 +206,7 @@ impl PlayerAnimSet {
         // `moveSpeed` is a float on CoD2 (lnxded 0x80d72e6; cod2-combat.md 9.3).
         anims.float_move_speed = true;
         Ok(PlayerAnimSet {
-            anims,
+            anims: Rc::new(anims),
             clips: HashMap::new(),
         })
     }
