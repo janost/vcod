@@ -63,7 +63,7 @@ use vcod_common::net::netchan::{NetchanParams, ServerNetchan};
 use vcod_common::net::protocol::{SnapshotHead, WireGame};
 use vcod_common::pk3::Pk3Fs;
 
-use crate::engine::{Lan, link};
+use crate::engine::{Lan, commands, link};
 use crate::game::cod2::Cod2Level;
 use crate::game::cod2_wire::to_cod2_entity;
 
@@ -141,6 +141,9 @@ pub struct Client {
     /// Voice chat (`voice.rs`): the frames queued for the client this
     /// frame, its mute list and `sendVoice`.
     voice: crate::voice::ClientVoice,
+    /// Each reliable ring slot's type: false for type 0, the commands a
+    /// client not ready loses ([`commands::add`]).
+    reliable_kept: [bool; MAX_RELIABLE_COMMANDS],
 }
 
 /// The pure lists of `SV_SpawnServer` (cod2-protocol.md 11.3).
@@ -1194,8 +1197,8 @@ impl Cod2Server {
         c.link.unsent = pkts.into();
     }
 
-    /// Queues a reliable server command (`SV_AddServerCommand`); a client
-    /// whose ring is full of unacknowledged ones is dropped.
+    /// `SV_AddServerCommand` for one game or engine command, its type read
+    /// off its letter ([`ignorable`]); a full ring drops the client.
     pub fn send_server_command(&mut self, slot: usize, text: &str) {
         let Some(c) = self.core.clients[slot].as_mut() else {
             return;
@@ -1207,13 +1210,16 @@ impl Cod2Server {
             return;
         }
         log::trace!("cod2: to client {slot}: {text:?}");
-        if c.link.netchan.reliable_sequence as i32 - c.link.reliable_ack
-            >= MAX_RELIABLE_COMMANDS as i32
-        {
+        let active = c.state == State::Active;
+        if !commands::add(
+            &mut c.link,
+            &mut c.reliable_kept,
+            active,
+            text,
+            !ignorable(text),
+        ) {
             self.drop_client(slot, "EXE_SERVERCOMMANDOVERFLOW");
-            return;
         }
-        push_command(c, text);
     }
 
     /// `SV_DropClient` (0x808f02e): the game lets go of the slot, which
@@ -1261,13 +1267,13 @@ impl Cod2Server {
             self.send_to_all(&format!("e \"\u{15}{name}^7 {mark}{reason}\""));
         }
         self.send_to_all(&format!("J {slot}"));
-        if let Some(c) = self.core.clients[slot].as_mut() {
+        if self.core.clients[slot].is_some() {
             let w = if localized {
                 format!("w \"{reason}\"")
             } else {
                 format!("w \"{name}^7 {reason}\" PB")
             };
-            push_command(c, &w);
+            self.send_server_command(slot, &w);
         }
         if self.client_count() == 0 {
             self.core.masters.force();
@@ -1613,6 +1619,7 @@ impl Cod2Server {
             download: house::Download::default(),
             test: false,
             voice: voice::client_voice(userinfo, rates.rate),
+            reliable_kept: [true; MAX_RELIABLE_COMMANDS],
         }
     }
 
@@ -1654,43 +1661,18 @@ impl Cod2Server {
     }
 }
 
-/// One more server command in the ring, past any check.
-fn push_command(c: &mut Client, text: &str) {
-    // `SV_AddServerCommand` (0x8094750) takes an unsent pending command
-    // out before it appends (`SV_FindPendingCommand` 0x8094530, 1.1's
-    // shape, protocol-1.1.md "Squash"): an equal `C` or `a` (a frame's
-    // give and `switchToOffhand` reach the client as one `C`,
-    // cod2-protocol.md 15.5), and a `d` of the same index (0x80944aa
-    // compares the first word), so a restart's fog cleared and set back
-    // goes out once, where the second write stood. VERIFIED, the switch.
-    // vcod squashes the type 1 letters it raises.
-    let same = |pending: &str| match text.as_bytes().first() {
-        Some(b'C' | b'a') => pending == text,
-        Some(b'd') => {
-            let word = |t: &str| {
-                t.get(2..)
-                    .and_then(|r| r.split(' ').next())
-                    .map(str::to_owned)
-            };
-            pending.starts_with('d') && word(pending) == word(text)
-        }
-        _ => false,
-    };
-    {
-        let ring = |i: i32| i as usize & (MAX_RELIABLE_COMMANDS - 1);
-        let seq = c.link.netchan.reliable_sequence as i32;
-        let from = c.link.reliable_sent.max(c.link.reliable_ack) + 1;
-        if let Some(at) = (from..=seq).find(|&i| same(&c.link.netchan.reliable[ring(i)])) {
-            for i in at..seq {
-                c.link.netchan.reliable[ring(i)] =
-                    std::mem::take(&mut c.link.netchan.reliable[ring(i + 1)]);
-            }
-            c.link.netchan.reliable_sequence -= 1;
-        }
-    }
-    c.link.netchan.reliable_sequence += 1;
-    let at = c.link.netchan.reliable_sequence as usize & (MAX_RELIABLE_COMMANDS - 1);
-    c.link.netchan.reliable[at] = text.to_string();
+/// Whether a command is type 0, read off its letter: every caller of
+/// `SV_SendServerCommand` (0x8094a10) and the game's
+/// `SV_GameSendServerCommand` (0x80917aa) pushes the type beside the
+/// letter it formats, one type a letter (cod2-protocol.md 3.4). Type 0 are
+/// the game messages `c`, `e`, `f`, `g` and the `iPrintLn` whose letter a
+/// player argument cost it (0x8110a60), the chat lines `h`, `i`, the
+/// local sound `s`, the team scores `G`, `H` and the menu notify `I`.
+fn ignorable(text: &str) -> bool {
+    matches!(
+        text.as_bytes().first(),
+        Some(b'c' | b'e' | b'f' | b'g' | b'h' | b'i' | b's' | b'G' | b'H' | b'I' | b' ')
+    )
 }
 
 /// The unacknowledged server commands, each `svc_serverCommand`.

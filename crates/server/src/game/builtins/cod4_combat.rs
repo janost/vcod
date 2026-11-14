@@ -733,15 +733,11 @@ pub struct CorpseSource {
 }
 
 /// `self dropItem(name [, tag])` (`PlayerCmd_dropItem`, `Drop_Weapon`,
-/// `LaunchItem`): a weapon the client holds with ammo to hand
-/// over goes into the world as an item (`ET_ITEM`, its class
-/// `weapon_<name>`) from the middle of the body's box, along the body's
-/// yaw at `g_dropForwardSpeed` (10) and up at `g_dropUpSpeedBase` (10),
-/// plus `crandom() * g_dropUpSpeedRand` (5) up and `crandom() *
-/// g_dropHorzSpeedRand` (100) on x and y, three draws in that order
-/// (0x80915b3..0x80915f9), and leaves the client's weapons
-/// (`BG_TakePlayerWeapon`). The start at the tag is left out
-/// (cod4-combat.md 6).
+/// `LaunchItem`): a weapon the client holds with ammo to hand over goes
+/// into the world as an item (`ET_ITEM`, its class `weapon_<name>`) at
+/// the hand's tag (`tag_weapon_right` when the script names none), and
+/// leaves the client's weapons (`BG_TakePlayerWeapon`); see
+/// [`launch_weapon`].
 fn drop_item(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -760,25 +756,38 @@ fn drop_item(
         with_loadout(host, slot, |l, t| l.take(t, weapon));
         return Ok(Value::Undefined);
     }
-    let Some(id) = launch_weapon(host, cx, slot, weapon)? else {
+    let tag = match args.get(1) {
+        Some(Value::String(s)) => cx.resolve(*s).to_string(),
+        _ => "tag_weapon_right".to_string(),
+    };
+    let Some(id) = launch_weapon(host, cx, slot, weapon, Some(&tag))? else {
         return Ok(Value::Undefined);
     };
     with_loadout(host, slot, |l, t| l.take(t, weapon));
     Ok(Value::Entity(id))
 }
 
-/// `Drop_Item`'s launch of `weapon` out of the client in `slot` (see
-/// [`drop_item`]): the item, its counts 0 until `itemWeaponSetAmmo`, its
-/// camo the client's `weaponmodels[weapon]` (both callers read it,
-/// `cod4_lnxded` 0x8092752, 0x80aafac); the client's weapons are left
-/// alone. `None` before the client's first end
-/// frame.
+/// `Drop_Item`'s launch of `weapon` out of the client in `slot`: the item,
+/// its counts 0 until `itemWeaponSetAmmo`, its camo the client's
+/// `weaponmodels[weapon]` (both callers read it, `cod4_lnxded` 0x8092752,
+/// 0x80aafac); the client's weapons are left alone. `LaunchItem`
+/// (0x80910ec) puts it at the body's x, y and `z + (maxs.z - mins.z) / 2`
+/// along its yaw at `g_dropForwardSpeed` (10) and up at
+/// `g_dropUpSpeedBase` (10), plus `crandom() * g_dropUpSpeedRand` (5) up
+/// and `crandom() * g_dropHorzSpeedRand` (100) on x and y, three draws in
+/// that order (0x80915b3..0x80915f9). With `tag` posed on the body,
+/// `Drop_Weapon` moves it to where its box swept from the body's box
+/// middle toward the tag stops (0x80918ed..0x80919f7); either way it takes
+/// the body's angles (cod4-combat.md 6.1). `None` before the client's first
+/// end frame.
 pub(crate) fn launch_weapon(
     host: &mut GameHost,
     cx: &mut Cx,
     slot: usize,
     weapon: usize,
+    tag: Option<&str>,
 ) -> Result<Option<EntId>, ErrorKind> {
+    use crate::game::cod4::item::{ITEM_MAXS, ITEM_MINS, MASK_ITEM};
     let Some(c) = host.cod4().corpse_source.get(slot).copied().flatten() else {
         return Ok(None);
     };
@@ -792,7 +801,11 @@ pub(crate) fn launch_weapon(
     let _ = vcod_gsc::Host::set_field(host, cx, id, classname, class);
     let yaw = c.yaw;
     let fwd = glam::Vec3::new(yaw.to_radians().cos(), yaw.to_radians().sin(), 0.0);
-    let base = glam::Vec3::from(c.origin) + glam::Vec3::Z * 35.0;
+    let (mins, maxs) = host.client_box(slot);
+    let (mins, maxs) = (glam::Vec3::from(mins), glam::Vec3::from(maxs));
+    let origin = glam::Vec3::from(c.origin);
+    let mut base = origin;
+    base.z = (f64::from(maxs.z - mins.z) * 0.5 + f64::from(origin.z)) as f32;
     let cvar = |host: &GameHost, name: &str, default: f32| match host.cvars.get(name) {
         "" => default,
         v => crate::game::builtins::cvar::atof(v),
@@ -813,6 +826,27 @@ pub(crate) fn launch_weapon(
     delta.z = (crandom() * f64::from(up_rand) + f64::from(up_base) + f64::from(delta.z)) as f32;
     delta.x = (crandom() * f64::from(horz) + f64::from(delta.x)) as f32;
     delta.y = (crandom() * f64::from(horz) + f64::from(delta.y)) as f32;
+    let hand = tag
+        .and_then(|t| super::cod4_script::posed_body_tag(host, slot as u32, t).map(|(at, _)| at));
+    if let (Some(at), Some(clip)) = (hand, host.cod4().clip.as_deref()) {
+        let mid = ((mins.as_dvec3() + maxs.as_dvec3()) * 0.5 + origin.as_dvec3()).as_vec3();
+        let world = crate::game::cod4::clip::Cod4Clip {
+            clip,
+            bodies: &[],
+            brushes: &host.cod4().trace_brushes,
+        };
+        let tr = vcod_cod4::pmove::PmWorld::trace(
+            &world,
+            mid,
+            at,
+            ITEM_MINS,
+            ITEM_MAXS,
+            slot as u32,
+            MASK_ITEM,
+        );
+        let (m, a) = (mid.as_dvec3(), at.as_dvec3());
+        base = (m + (a - m) * f64::from(tr.fraction)).as_vec3();
+    }
     let now = host.level_time_ms;
     let model = host.cod4().clients[slot].loadout.weapon_models[weapon];
     host.cod4_mut().items.push(Item4 {
@@ -821,11 +855,14 @@ pub(crate) fn launch_weapon(
         model,
         owner: slot as u32,
         clear_owner_at: now + 1000,
+        tr_type: crate::game::cod4::missile::TR_GRAVITY,
+        start_ms: now,
+        duration_ms: 0,
         base,
         delta,
-        yaw,
-        start_ms: now,
-        resting: false,
+        origin: base,
+        angles: glam::Vec3::new(0.0, yaw, 0.0),
+        ground: 0,
         clip: 0,
         stock: 0,
     });

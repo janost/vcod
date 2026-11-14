@@ -826,7 +826,10 @@ impl Cod2Level {
         priority: &PriorityMap,
         limit: f32,
     ) -> Option<vcod_common::bonetrace::BoneHit> {
+        let p = crate::tick_profile::phase("bodies/pose");
         let (rig, pose, _) = self.body_pose(slot, origin)?;
+        drop(p);
+        let _p = crate::tick_profile::phase("bodies/bones");
         // The DObj sits at `r.currentAngles`, the unsnapped view's yaw.
         let yaw = self.players[slot].as_ref()?.ps.view_angles[1];
         let placed = BodyFrame {
@@ -963,6 +966,7 @@ impl Cod2Level {
         priority: &PriorityMap,
         origins: &HashMap<usize, Rewind>,
     ) -> Contact {
+        let mut _p = crate::tick_profile::phase("trace/world");
         let mut best = match &self.combat.clip {
             Some(clip) => {
                 let t = clip.trace(start, end, Vec3::ZERO, Vec3::ZERO, mask & !CONTENTS_BODY);
@@ -989,6 +993,7 @@ impl Cod2Level {
         // `SV_Trace` with `locational` clips the static models after the
         // world, before the entities (cod2-d3dbsp-format.md, "The trace";
         // cod2-combat.md 9.3).
+        _p = crate::tick_profile::phase("trace/statics");
         if let Some(statics) = &self.combat.statics {
             let t = statics.point_trace(start, end, mask & !CONTENTS_BODY, true);
             if t.fraction < best.fraction {
@@ -1003,12 +1008,14 @@ impl Cod2Level {
                 };
             }
         }
+        _p = crate::tick_profile::phase("trace/entities");
         if let Some(e) = self.entity_contact(start, end, skip, best.fraction) {
             best = e;
         }
         if mask & CONTENTS_BODY == 0 {
             return best;
         }
+        _p = crate::tick_profile::phase("trace/bodies");
         for slot in self.targets(skip) {
             let ps = &self.players[slot].as_ref().expect("a target plays").ps;
             let origin = match origins.get(&slot) {

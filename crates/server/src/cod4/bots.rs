@@ -1152,7 +1152,7 @@ mod tests {
             .cod4()
             .items
             .iter()
-            .find(|i| i.resting)
+            .find(|i| i.resting())
             .cloned();
         let item = item.expect("a dropped weapon at rest");
         assert_eq!(item.model, 3);

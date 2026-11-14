@@ -96,6 +96,9 @@
 //! `ALLIES_SKILL=` set the levels; the totals split kills, hits, rounds,
 //! sighted rounds and time-to-kill by weapon class and by skill, and count
 //! the guns bots picked up. The feature arms and `UO` are CoD1's only.
+//! `SPIKE_MS=<ms>` prints every tick past it with its phases, as CoD4's;
+//! `RESTART=<n>` runs a console `map_restart` every `n` ticks, so every
+//! bot spawns in one frame (the spawn wave, cod4-server-frame.md 9).
 //!
 //! `GAME=cod4` runs CoD4 1.7 matches (`COD4_DIR=<install>`, maps
 //! `mp_crash` by default, `GAMETYPE=` any stock one, `war` by default,
@@ -538,7 +541,7 @@ impl TickStats {
             self.worst.1,
             self.worst.2,
         );
-        let mut rows: Vec<(&str, f32, f32)> = self
+        let mut rows: Vec<(&str, f32, f32, f32)> = self
             .phases
             .iter()
             .map(|(k, v)| {
@@ -548,13 +551,14 @@ impl TickStats {
                     *k,
                     v.iter().sum::<f32>() / n.max(1) as f32,
                     Self::pct(&v, 0.99),
+                    v.iter().copied().fold(0.0, f32::max),
                 )
             })
             .collect();
         rows.sort_by(|a, b| b.1.total_cmp(&a.1));
-        for (k, mean, p99) in rows {
+        for (k, mean, p99, max) in rows {
             if mean >= 0.01 || p99 >= 0.1 {
-                eprintln!("tickstats   {k:<28} mean {mean:6.3} p99 {p99:6.2} ms");
+                eprintln!("tickstats   {k:<28} mean {mean:6.3} p99 {p99:6.2} max {max:6.1} ms");
             }
         }
     }
@@ -2736,6 +2740,17 @@ mod cod2 {
         // (victim, attacker) -> the tick of the hit still to answer.
         let mut pending: HashMap<(usize, usize), usize> = HashMap::new();
         let mut stats = super::TickStats::from_env();
+        // `SPIKE_MS=<ms>`: each tick past it to stderr with its phases.
+        let spike_ms: Option<f32> = std::env::var("SPIKE_MS").ok().and_then(|v| v.parse().ok());
+        if spike_ms.is_some() {
+            vcod_server::tick_profile::enable();
+        }
+        // `RESTART=<n>`: a console `map_restart` every `n` ticks, each a
+        // spawn wave of every bot at once.
+        let restart: usize = std::env::var("RESTART")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         for tick in 0..ticks {
             now += Duration::from_millis(TICK_MS);
             // `TACTICS=0` (or `none`): every bot guards from the first spot in reach
@@ -2751,6 +2766,9 @@ mod cod2 {
                     bot.lanes &= arms[2];
                 }
             }
+            if restart > 0 && tick > 0 && tick % restart == 0 {
+                sv.core.console.push_back("map_restart".into());
+            }
             // The script's `map_restart` and `exitLevel` run off the
             // console, as `main.rs`'s loop drains it ahead of the frame.
             if let Some(ob) = observer.as_mut() {
@@ -2759,12 +2777,21 @@ mod cod2 {
             for ob in &mut crowd {
                 ob.deliver(&mut sv, now);
             }
+            let sched = spike_ms.and_then(|_| vcod_server::tick_profile::sched());
             let t0 = Instant::now();
             sv.drain_console(now);
             sv.tick_frames(now, 1);
+            let tick_ms = t0.elapsed().as_secs_f32() * 1000.0;
+            let phases = vcod_server::tick_profile::take();
             if let Some(st) = stats.as_mut() {
-                let ms = t0.elapsed().as_secs_f32() * 1000.0;
-                st.add(tick, ms, &vcod_server::tick_profile::take());
+                st.add(tick, tick_ms, &phases);
+            }
+            if spike_ms.is_some_and(|s| tick_ms > s) {
+                eprintln!(
+                    "spike {map} {gametype} seed {seed} tick {tick} {tick_ms:.1} ms ({}): {}",
+                    vcod_server::tick_profile::split(sched, tick_ms),
+                    vcod_server::tick_profile::format(&phases, 1.0)
+                );
             }
             m.ticks = tick + 1;
             if let Some(d) = m.digest.as_mut() {

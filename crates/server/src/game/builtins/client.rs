@@ -319,9 +319,10 @@ pub fn set_player_origin(
 }
 
 /// `self setPlayerAngles(angles)`, a player method (0x44df0): a straight
-/// `SetClientViewAngle` call. The script's `angles` moves now to what the
-/// prone arm leaves, as retail's `r.currentAngles` does (0x4209f); the
-/// sim's view is queued with the script's, which the sim holds the same.
+/// `SetClientViewAngle` call. The script's `angles`, `r.currentAngles`,
+/// moves now to what the prone arm leaves (0x4209f), and the DObj stands
+/// in them until the next cmd; the sim's view is queued with the script's,
+/// which the sim holds the same.
 pub fn set_player_angles(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -335,10 +336,6 @@ pub fn set_player_angles(
     let held = host.client_prone_cone[slot].map_or(angles, |cone| cone.hold(angles));
     let field = cx.intern_folded("angles");
     host.set_field(cx, entity_receiver(recv)?, field, Value::Vector(held))?;
-    // The DObj stands in `r.currentAngles` until the next cmd.
-    if let Some(s) = host.dobj_posed.get_mut(slot) {
-        s.set_angles(Some(held));
-    }
     host.client_sim_ops
         .push((slot, SimOp::SetViewAngles { angles }));
     Ok(Value::Undefined)
@@ -1347,6 +1344,29 @@ mod tests {
     fn set_origin(host: &mut GameHost, cx: &mut Cx, id: EntId, at: [f32; 3]) {
         let field = cx.intern_folded("origin");
         host.set_field(cx, id, field, Value::Vector(at)).unwrap();
+    }
+
+    /// A player's `angles` are his `r.currentAngles`, the turn a trace or a
+    /// tag poses his body in, pitch and roll too: a script write
+    /// (`Scr_SetAngles` 0x5c660 into `G_SetAngle`) and `setPlayerAngles`
+    /// move it (cod11-combat.md 3.7).
+    #[test]
+    fn a_players_angles_are_the_turn_his_body_is_posed_in() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
+            let field = cx.intern_folded("angles");
+            host.set_field(cx, c, field, Value::Vector([10.0, 20.0, 30.0]))
+                .unwrap();
+            assert_eq!(host.dobj_posed[0].angles(), [10.0, 20.0, 30.0]);
+            let args = [Value::Vector([-5.0, 90.0, 0.0])];
+            set_player_angles(&mut host, cx, Some(Target::Entity(c)), &args).unwrap();
+            assert_eq!(host.dobj_posed[0].angles(), [-5.0, 90.0, 0.0]);
+            assert_eq!(
+                host.get_field(cx, c, field),
+                Value::Vector([-5.0, 90.0, 0.0])
+            );
+        });
     }
 
     /// `setViewmodel` stores a model configstring index, not the name: the

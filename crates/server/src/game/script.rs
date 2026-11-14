@@ -2631,9 +2631,6 @@ impl ScriptRuntime {
             return;
         };
         let host = &mut self.host;
-        if let Some(s) = host.dobj_posed.get_mut(slot) {
-            s.set_angles(None);
-        }
         self.vm.with_cx(|cx| {
             let field = cx.intern_folded("angles");
             let _ = host.set_field(cx, ent, field, Value::Vector([0.0, yaw, 0.0]));
@@ -3581,7 +3578,10 @@ impl ScriptRuntime {
     /// The blasts it sets off go unwalked and its movers push no one;
     /// `Cod1Module::run_frame_cod1` runs the halves itself.
     pub fn run_frame(&mut self, now_ms: i32) {
+        let p = crate::tick_profile::phase("scripts/threads");
         self.run_threads(now_ms);
+        drop(p);
+        let _p = crate::tick_profile::phase("scripts/entity pass");
         let world = self.host.world.clone();
         let collision = world.as_deref().map(|w| &w.collision);
         let mut pass = self.begin_entity_pass(Vec::new());
@@ -3618,9 +3618,11 @@ impl ScriptRuntime {
         // Client events in the order the netcode raised them: a `Begin`
         // drained ahead of its own `Connect` finds no thread parked on the
         // notify and strands the client silently.
+        let mut _p = crate::tick_profile::phase("threads/client events");
         for ev in std::mem::take(&mut self.host.client_events) {
             self.dispatch_client_event(ev);
         }
+        _p = crate::tick_profile::phase("threads/notifies");
         // `G_RunFrame` starts under a new skeleton stamp, with the DObjs
         // where the last frame left them.
         self.host.dobj_time_ms = self.host.level_time_ms;
@@ -3638,7 +3640,9 @@ impl ScriptRuntime {
                 self.vm.notify(Target::Entity(id), event, &args);
             }
         }
+        _p = crate::tick_profile::phase("threads/triggers");
         self.trigger_rounds();
+        _p = crate::tick_profile::phase("threads/vm");
         // 1.1's second thread pass follows `G_DObjUpdateServerTime`; 1.5's
         // and UO's one pass runs before `G_XAnimUpdate` (1.5b 0x50821,
         // 0x50840; UO 0x59e4d, 0x59e6c), on the last frame's DObjs.
@@ -5864,7 +5868,6 @@ mod tests {
         let body = |slot: usize, x: f32, y: f32| crate::game::combat::HitBody {
             slot,
             origin: glam::Vec3::new(x, y, 0.0),
-            yaw: 0.0,
             mins: crate::game::trigger::PLAYER_MINS.into(),
             maxs: crate::game::trigger::PLAYER_MAXS.into(),
             pose: Default::default(),

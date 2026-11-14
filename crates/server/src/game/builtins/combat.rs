@@ -79,7 +79,10 @@ pub fn finish_player_damage(
         _ => None,
     };
     let dir = match dir {
-        Value::Vector(d) => Vec3::from(*d).normalize_or_zero().into(),
+        // `VectorNormalize2` into the knockback's copy (1.1d 0x43922 into
+        // 0x3da68; 1.5b 0x3ee76, UO 0x47634; cod11-combat.md 4.5).
+        Value::Vector(d) if host.speaks_1_1() => vcod_common::x87::normalize(Vec3::from(*d)).into(),
+        Value::Vector(d) => vcod_common::x87::normalize2_stored(Vec3::from(*d)).into(),
         _ => [0.0; 3],
     };
     let point = match point {
@@ -871,6 +874,7 @@ pub(crate) fn bullet_hit(
     hit_characters: bool,
     ignore: Option<EntId>,
 ) -> BulletHit {
+    let mut _p = crate::tick_profile::phase("bullet/world");
     let t = host.world.as_ref().map(|w| {
         let t = w.collision.shot_trace(start, end);
         (t, w.collision.entity_num(&t))
@@ -886,6 +890,7 @@ pub(crate) fn bullet_hit(
     // fraction (1.5b 0x8099b18; cod11-combat.md 2.7).
     let arith = vcod_common::patch::Arith::for_protocol(host.defs.proto);
     let mut point = t.map_or(end, |(t, _)| t.endpos);
+    _p = crate::tick_profile::phase("bullet/models");
     if let Some(e) = script_model_hit(host, cx, start, end, ignore, hit.map_or(1.0, |h| h.0)) {
         point = crate::game::combat::trace_point(start, end, e.0, arith);
         hit = Some(e);
@@ -893,6 +898,7 @@ pub(crate) fn bullet_hit(
     // `hitCharacters` keeps `CONTENTS_BODY` in the mask (0x5abfd): a body
     // the segment scores a bone of stops it, with no surface (3.2).
     if hit_characters {
+        _p = crate::tick_profile::phase("bullet/bodies");
         let limit = hit.map_or(1.0, |h| h.0);
         if let Some((slot, f)) = body_hit(host, start, end, ignore, limit) {
             let ent = host.ents.handle(slot as u32);
@@ -1460,7 +1466,6 @@ mod tests {
                 Some(crate::game::combat::HitBody {
                     slot,
                     origin: Vec3::from(feet[slot]),
-                    yaw: 0.0,
                     mins: crate::game::trigger::PLAYER_MINS.into(),
                     maxs: crate::game::trigger::PLAYER_MAXS.into(),
                     pose: Default::default(),
@@ -1544,7 +1549,6 @@ mod tests {
                     Some(crate::game::combat::HitBody {
                         slot,
                         origin: Vec3::new(x, 0.0, 0.0),
-                        yaw: 0.0,
                         mins: crate::game::trigger::PLAYER_MINS.into(),
                         maxs: crate::game::trigger::PLAYER_MAXS.into(),
                         pose: Default::default(),

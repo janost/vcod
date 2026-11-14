@@ -2044,7 +2044,16 @@ impl ClientSim {
             };
             let kb = ((damage as f32 * scale) as i32).min(KNOCKBACK_MAX);
             if kb > 0 && has_dir {
-                self.ps.velocity += dir * (kb as f32 * KNOCKBACK_UNITS);
+                let kvel = dir * (kb as f32 * KNOCKBACK_UNITS);
+                let x = self.ps.velocity.x;
+                self.ps.velocity += kvel;
+                // 1.1d keeps x's product on the stack into its add
+                // (0x439e7..0x439fb); 1.5b and UO store it (cod11-combat.md
+                // 4.5).
+                if self.ps.rules == pmove::MoveRules::V1_1 {
+                    let s = f64::from(kb as f32 * KNOCKBACK_UNITS);
+                    self.ps.velocity.x = (f64::from(x) + f64::from(dir.x) * s) as f32;
+                }
             }
             // The slide it starts, when no timer runs yet (0x43a22-0x43a4a).
             if kb > 0 && self.ps.knockback_ms == 0.0 {
@@ -2211,7 +2220,6 @@ impl ClientSim {
         Some(crate::game::combat::HitBody {
             slot,
             origin: self.ps.origin,
-            yaw: self.ps.yaw,
             mins: self.ps.mins(),
             maxs: self.ps.maxs(),
             pose,

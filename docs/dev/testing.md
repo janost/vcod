@@ -240,7 +240,9 @@ only yardstick.
     body, the check that a refactor moved no bot. `NETDIGEST=<N>` hashes
     every datagram sent, with an observer client joined.
     `VCOD_TICK_TRACE=<dir>` writes the tick's step log (bot-combat.md
-    section 1). `SPIKE_MS` logs slow ticks.
+    section 1). `SPIKE_MS` logs slow ticks (CoD2, CoD4); on CoD2
+    `RESTART=<n>` runs `map_restart` every `n` ticks, a spawn wave each
+    (cod4-server-frame.md 9).
 
   It prints kills, deaths, damage, time-to-kill, wins, objective actions,
   lives, wounds survived, retreats, cover holds, peeks and hunts and the

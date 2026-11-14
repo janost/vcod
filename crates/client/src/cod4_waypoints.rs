@@ -59,6 +59,12 @@ impl Eye {
         }
         past_the_window(-across, size)
     }
+
+    /// The pixel a world point lands on, `None` behind the eye
+    /// (`iw3mp.exe` 0x42d6d0, the overhead names' projection).
+    pub(crate) fn project(&self, at: Vec3) -> Option<Vec2> {
+        ((at - self.origin).dot(self.forward) >= 0.0).then(|| self.screen(at))
+    }
 }
 
 /// A behind-the-eye direction `v` pushed off a `size` window: an axis
