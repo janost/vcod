@@ -367,6 +367,9 @@ otherwise.
     edge): it never clips.
 
   Leaf order names the surface a body standing on two floors steps on.
+  Every trace stopped on a model-0 brush replays through the leaf walk;
+  a test that skips the replay where a leaf lists the brush moves answers
+  (`bsp-ibsp59-format.md`, "The leaf walk").
 - A trace whose start is its end is a position test. Terrain reads
   `startsolid` only through `Terrain::position_test`.
 - A push's candidate and spot tests are retail's box against brushes, not the
