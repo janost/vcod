@@ -259,11 +259,42 @@ impl PlayerRig {
         c: &Character,
         parts: &mut RigParts,
     ) -> Result<PlayerRig> {
+        Self::assemble_from(fs, c, parts, false)
+    }
+
+    /// [`Self::assemble_with`] over each model's bones alone
+    /// ([`model::load_bones`]), the skeleton the hit traces read: no
+    /// `xmodelsurfs` read, as the dedicated server's surface loader reads
+    /// none (cod2-protocol.md 11.3), and no LOD or collision mesh in its
+    /// models.
+    pub fn assemble_bones_with(
+        fs: &dyn AssetSource,
+        c: &Character,
+        parts: &mut RigParts,
+    ) -> Result<PlayerRig> {
+        Self::assemble_from(fs, c, parts, true)
+    }
+
+    fn assemble_from(
+        fs: &dyn AssetSource,
+        c: &Character,
+        parts: &mut RigParts,
+        bones_only: bool,
+    ) -> Result<PlayerRig> {
         let mut part = |name: &str, no_hits: bool| -> Result<Rc<Model>> {
             if let Some(m) = parts.get(&(name.to_string(), no_hits)) {
                 return Ok(m.clone());
             }
-            let mut m = model::load(fs, name)?;
+            let mut m = if bones_only {
+                Model {
+                    name: name.to_string(),
+                    bones: model::load_bones(fs, name)?,
+                    lods: Vec::new(),
+                    collision: Vec::new(),
+                }
+            } else {
+                model::load(fs, name)?
+            };
             if no_hits {
                 for b in &mut m.bones {
                     b.hit_mins = glam::Vec3::ZERO;

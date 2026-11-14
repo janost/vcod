@@ -180,8 +180,14 @@ impl Missile {
     }
 }
 
-/// Each character's hit rig, `None` where it failed to assemble.
-pub type RigCache = HashMap<Character, Option<Rc<PlayerRig>>>;
+/// Each character's hit rig, `None` where it failed to assemble, and the
+/// xmodels they were assembled from, which a rig of another character
+/// sharing a body, head or gun takes instead of loading its own.
+#[derive(Clone, Default)]
+pub struct RigCache {
+    rigs: HashMap<Character, Option<Rc<PlayerRig>>>,
+    parts: vcod_cod2::player::RigParts,
+}
 
 /// The combat state a CoD2 level keeps beside its script host.
 #[derive(Default)]
@@ -293,7 +299,7 @@ impl Combat {
             statics,
             hitloc_mult,
             anims,
-            rigs: HashMap::new(),
+            rigs: RigCache::default(),
             missiles: Vec::new(),
             hits: VecDeque::new(),
             rand: Default::default(),
@@ -428,17 +434,17 @@ impl Combat {
 
     /// The rig of the character `c` names, loaded once.
     fn rig(&mut self, fs: &Pk3Fs, c: &Character) -> Option<Rc<PlayerRig>> {
-        if let Some(r) = self.rigs.get(c) {
+        if let Some(r) = self.rigs.rigs.get(c) {
             return r.clone();
         }
-        let rig = match PlayerRig::assemble(fs, c) {
+        let rig = match PlayerRig::assemble_bones_with(fs, c, &mut self.rigs.parts) {
             Ok(r) => Some(Rc::new(r)),
             Err(e) => {
                 log::warn!("cod2: no hit rig for {}: {e:#}", c.body);
                 None
             }
         };
-        self.rigs.insert(c.clone(), rig.clone());
+        self.rigs.rigs.insert(c.clone(), rig.clone());
         rig
     }
 }
