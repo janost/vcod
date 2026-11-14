@@ -928,7 +928,7 @@ above:
 
 VERIFIED: `PM_ClearAimDownSightFlag` (`0x3ABD4`) is the same
 `and byte [ps+0xc], 0xdf`, and `PmoveSingle` calls it once, at `0x33EF9`, in
-the early dead arm. VERIFIED: `PM_UpdatePlayerWalkingFlag` (`0x33694`) sets
+the prone move key arm ("The prone move key", below). VERIFIED: `PM_UpdatePlayerWalkingFlag` (`0x33694`) sets
 `pm_flags 0x80` only when `0x20` is set, the player is not prone, and
 `weaponstate` is not one of 5, 6, 7, 8, 9. INFERRED: `0x80` is the ADS walk
 slow-down, and it is off for the whole of a reload while `0x20` stays on.
@@ -1042,6 +1042,53 @@ found it rather than ramping it down. And `pml.groundPlane` is read as
 `ps.on_ground`, the nearest thing vcod's mover carries. `advance_ads` runs first in `pm_weapon`, ahead of
 the grenade and the timers, as 0x39143 does, so the reload window and the
 `adsFire` force read the timers the frame starts with.
+
+#### The prone move key
+
+`PmoveSingle` opens with a test on the cmd's moves, ahead of the view
+update and of every flag (1.1d 0x33e75..0x33f2d, 1.5b 0x27fde with its
+call at 0x2808f, UO 0x2d67b with its call at 0x2d72c).
+
+- VERIFIED, 1.1d 0x33e75..0x33efe: the tests are `pm_flags` 1 (prone),
+  `cmd.forwardmove` against `oldcmd.forwardmove` and the strict compare of
+  their magnitudes (`fcompp` of the two `fabs`, `and ah,0x45; cmp ah,1`,
+  C0 alone), the same for `rightmove`, the call to
+  `PM_InteruptWeaponWithProneMove`, then `and [pm_flags+1],0xfb` and
+  `PM_ClearAimDownSightFlag`; 1.5b's and UO's decompiles read the same.
+  INFERRED, off the branches: on a prone body whose forward or right move
+  differs from the last cmd's and grew in magnitude, the arm calls the
+  interrupt, and when that returns non-zero clears 0x400 and the sight.
+- VERIFIED, `PM_InteruptWeaponWithProneMove` (1.1d 0x37488, 1.5b 0x2d4bc,
+  UO 0x338b0), its compares and stores; INFERRED, off its branches: it
+  returns 1 for `weaponstate` 0, 1, 2 and 5 to 9, and 0
+  for 3 (firing) and 11 (melee relax). Any other state (1.1's and 1.5's
+  4, the rechamber, and 10, the swing's windup) it sets to 0 with
+  `weaponTime` and `weaponDelay` 0, calls the weapon anim helper with
+  `WEAP_IDLE` (1.1d 0x3ae30, which writes only when `cmd.weapon` is
+  non-zero, `pm_type` is under 6 and the anim differs) and returns 1.
+- INFERRED, off UO 0x338b0's branches: it returns 0 first for a sighted
+  (`pm_flags` 0x20) weapon of `weaponClass` 3, an LMG on its bipod, and it
+  lists state 4 among the ones it keeps. So on UO the states it drops are 10, 12 and 13.
+- VERIFIED, live (`--probe-pronemove rifle`, springfield_mp, fixtures
+  `playerstate/mp_carentan-dm-slope-8ms-pronemove-rifle-{1.1,1.5,uo}.txt`):
+  a forward or right press under the sight clears 0x20 on the press's cmd
+  and the body crawls; a forward press 500 ms after a shot raises
+  `EV_RECHAMBER_WEAPON` again on 1.1d and 1.5b with `weaponTime` back at
+  924 (the rechamber restarts: the bolt bit is still set, so the next
+  `PM_Weapon` starts it from state 0), and UO's runs on; a forward press 50
+  ms into a swing's windup takes state 10 to 0 and `weapAnim` to 512, so
+  the swing never lands. `--probe-pronemove lmg` (mg30cal_mp and
+  binoculars_mp, `-lmg-uo.txt`): a press on the deployed bipod changes
+  nothing, a press in its breakdown restarts the breakdown (state 0, then
+  the deploy driver's breakdown again, its `LMG_BREAKDOWN` restarting the
+  torso), and a press 100 ms into the binoculars' raise takes state 12
+  to 13.
+
+vcod: `weapon::prone_move_key` from `cmd::player_step`, ahead of the view
+and of `pmove`, reading `PlayerState::last_cmd_moves` (the raw previous
+cmd, as `last_cmd_ads`). `moves_ab` replays all four captures; before the
+port the 1.1d one missed 10 fields (the sight, the origin, the weapon
+state and timers) on 1 to 3 snapshots each, and UO's lmg one 10 fields.
 
 ---
 
@@ -1473,7 +1520,12 @@ list below. INFERRED: the ordering, and every "when", "otherwise" and
   multiplies it by `hipSpreadProneDecay` (`0x260`, at `0x3863c`) and
   `eFlags & 0x20` by `hipSpreadDuckedDecay` (`0x25C`, at `0x38648`). The three
   arms are exclusive and airborne wins. The decay is then scaled by
-  `pml.frametime` (`0x3864e`).
+  `pml.frametime` (`0x3864e`). VERIFIED, UO 0x35e56: the same test on UO's
+  `eFlags` (ps+0x84), whose stance bits follow the eye on 1.5 and UO
+  (cod15-movement.md 3). VERIFIED, live (`pronemove-lmg-uo.txt`, ct 24590
+  to 24990): a body standing up from prone reads `eFlags` 0x20 while its
+  eye rises and decays at the crouch rate; vcod read the stance flags and
+  decayed three times as fast until `PlayerState::eflags_stance`.
 - The additions are skipped whole when `ps->fWeaponPosFrac == 1.0`
   (`0x38657`), an exact float compare, and in cgame an exact integer one
   against `0x3F800000`. The decay is not skipped, so a settled sight decays
@@ -2446,10 +2498,22 @@ below on the dumped records). The same holds on 1.5b
   then the root divides by the summed weight and a nested node
   normalizes its sum to its weight in place or, with a buffer of its
   own, adds it so normalized into its parent's. VERIFIED, the dump: a
-  clip that plays alone reaches the build as its raw shorts. INFERRED:
-  vcod's two-level legs/torso node list stands for the tree, with the
-  nodes and their clips in vcod's order; no capture yet checks a blend's
-  summation order.
+  clip that plays alone reaches the build as its raw shorts.
+  VERIFIED, 0x80bdbdc's loop: a node's children are the tree nodes from
+  its first child (`+0xe`) on, its child count at `+8`, visited by
+  ascending node index, and the game's anim index is that node index
+  (VERIFIED, `BG_FinalizePlayerAnims` walks `trap_XAnimGetAnimTreeSize`
+  entries by it). VERIFIED, 0x80be0f3..0x80be121 (1.5b 0x80c8d5f..
+  0x80c8d8d): a nested node's `|q|^2` is `((q0² + q1²) + q2²) + q3²` on
+  the x87 stack, stored once; vcod summed from q3 until 2026-11-14
+  (`skeleton::walk`). vcod measurement: ordering the legs group's clips
+  by ascending anim index puts the 1.5b `turret_ab` hitgrid row 30500
+  (`torso_upper`) 1.9e-6 off in z, the clock's fading-first order
+  (`ChannelClock::layers`) and descending index both hold it to the bit,
+  and no other pose gate tells the three apart (nor legs ahead of torso
+  under `main` from torso ahead, file order). Open: which tree node a
+  vcod layer stands for in that walk (a sibling pair 32/33 or 94/122 sits
+  in the row); vcod keeps the clock's order.
 - VERIFIED, the controls (game.mp.uo `G_DObjSetLocalTag` 0x88e34,
   `G_DObjSetControlTagAngles` 0x88ec0, both through 0x88cf6): the
   record is `QuatMultiply(roll, QuatMultiply(pitch, yaw))` (0x4d25f,
@@ -2499,18 +2563,40 @@ time is in [0, 1), each step stored; any other clip stops at 1 and keeps
 its old time when the sum is at or under 0. A nested node passes its
 children `dtime * rate`. VERIFIED, UO 0x80b816e: the frequency is the
 frame rate over `numframes` (`frame_count - 1`, header frames plus the
-loop bit less one), divided as floats and stored (0x80b83e9), 0 for one
-frame. VERIFIED, the sampler (UO 0x80b9b72, 1.5b 0x80c47de, the same
+loop bit less one), divided as floats (0x80b83e9) and stored to parts +8 (0x80b8407), 0 for one
+frame. VERIFIED, 1.5b: the loader 0x80c2dda divides at 0x80c3055 and
+stores at 0x80c3073, `fldz` at 0x80c305f. VERIFIED, the sampler (UO 0x80b9b72, 1.5b 0x80c47de, the same
 instructions): the frame is the time times `numframes` as floats,
 stored, and a key's fraction is taken off that.
 
 VERIFIED, 1.5b game.mp's player anim setter (the `trap_XAnimSetTime`
 calls): a looping movement clip replacing another starts at the old
 clip's `trap_XAnimGetTime`, and a death anim on a body not freshly
-cloned at 1.0. INFERRED, off `G_RunFrame`'s loop over
-`G_DObjUpdateServerTime` while it returns non-zero (cod11-movers.md 15):
-a notetrack due inside a frame splits that frame's step in two, which
-vcod does not model; no stock player clip the gates cover carries one.
+cloned at 1.0.
+
+A notetrack never splits a player's step. INFERRED, off the control
+flow of `G_XAnimUpdateEnt` (1.5b game.mp 0x50300) and the engine's step
+(UO 0x80bf1a2, 1.5b 0x80c9e0e): the game runs `Scr_RunCurrentThreads`
+and calls `G_DObjUpdateServerTime` again at the frame's whole `dtime`
+while it returns non-zero; the step returns non-zero only when the
+fraction of the step that reaches the next note (0x80bd01a, 1.5b
+0x80c7c86) is under 1, after stepping the node to `dtime * f + 0.001`
+from the frame's start time; the next call steps the whole `dtime` from
+that same start, so the split's last step stores the bits an unsplit one
+does. VERIFIED, UO 0x80bf22e: the 0.001 is the float at 0x80ea3d0, added
+to `dtime * f`. VERIFIED, UO 0x80bbc4c: the fraction is 1.0 whenever the
+DObj's owner (`dobj+0x12`, loaded at 0x80bf169) is 0, and the game's
+`DObjCreate` wrapper for a player passes 0 (UO game.mp 0x1e732, 1.5b
+0x1a35a; INFERRED that it lands in `+0x12`). VERIFIED, a census of the
+stock clips (1.5's `pak*` and UO's `pakuo00`/`01`, the notes after the
+keys): 83 of the 170 clips `mp/playeranim.script` names carry notes on
+1.5 and 86 of 217 on UO (the `pb_combatrun_*` footsteps, the prone
+crawls, the takeoffs' `gravity on`, the deaths' `bodyfall`, `pt_*`
+shots, swings and reloads), and the loader (1.5b 0x80c2cc4, UO
+0x80b8058) appends an `end` note at 1.0 to each. So a split would reach
+every run, and the owner test is what keeps it away. vcod's one step per
+frame is retail's for a player. Open: an entity whose DObj names an
+owner (`G_DObjUpdate` passes `G_GetGameId`) does split.
 
 vcod: `animclock::Play` keeps the node time beside the seconds, stepped
 in whole 50 ms frames with the sum in `f64` and stored as `f32`
@@ -2604,11 +2690,22 @@ weighted torso node restarts at 0, even for a movement clip.
 vcod: `animclock::ChannelClock::set` under the windowed (1.5/UO) setter
 keeps a fading clip's `Play` when the legs, or a fresh corpse's death,
 take it back. A torso one restarts at 0, and only a node no fading entry
-holds gets the phase (`a_weighted_node_keeps_its_time_on_15`). Not
-modelled (INFERRED edge): a node the other channel holds. A legs anim
-the torso has at weight, or a torso restart of a node the legs set this
-frame, would read the shared node's weight and time. vcod's two lerp
-frames keep separate clocks.
+holds gets the phase (`a_weighted_node_keeps_its_time_on_15`).
+
+The two channels never share a node on stock content. VERIFIED,
+`BG_PlayAnim` (1.1d game.mp 0x2c338, UO 0x1bfb9): a `both` line writes
+its anim into `legsAnim` and index 0 into `torsoAnim`
+(player-model-anim-system.md, "The takeoff and the landing"). VERIFIED,
+1.5b and UO `BG_PlayerAnimation` (1.5b game.mp 0x1aed5, the legs setter
+call at 0x1af97 before the torso's at 0x1afc2; UO 0x1f462, 0x1f524,
+0x1f54f): each setter runs only when its channel's wire value changed.
+VERIFIED, `mp/playeranim.script` on 1.5 and UO: no `torso` line names
+an anim a `legs` or `both` line names. INFERRED: so vcod's two clocks never
+stand for one node. One UO edge is left (VERIFIED, the files): `torso
+c_mp_lmg_deploy_prone` names a leaf of the atr's `legs` group, which
+the torso setter then raises beside the legs clip under `legs`, while
+vcod poses every torso layer under `torso` (`playerpose::pose_player`);
+no gate poses that deploy.
 
 VERIFIED, live (retail 1.5b and UO 1.51b, `probe_legs` with
 a `--save-legs --capture-tag stopgo-*` client, fixtures

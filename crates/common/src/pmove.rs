@@ -619,6 +619,14 @@ pub struct PlayerState {
     /// UO: this move's `PM_Weapon` raised `LMG_BREAKDOWN` again as a
     /// continue (`weapon::deploy_driver`). Cleared at the top of every move.
     pub breakdown_continue: bool,
+    /// 1.5 and UO: this move's `PM_CheckDuck` moved the eye's target into
+    /// prone or out of it (`pmove_t` +0xe8 on 1.5b, +0x100 on UO;
+    /// `step_view_target`). Cleared at the top of every move.
+    pub prone_flip: bool,
+    /// The same flip cleared the torso: `BG_PlayAnim(ps, 0, torso, 0, 0,
+    /// 1, 1)` (1.5b 0x2401b, 0x240e6; UO 0x28bfa, 0x28cf7), which UO skips
+    /// in a deploy or a breakdown.
+    pub prone_flip_clears_torso: bool,
     /// `ps.weapon`, a 1-based index into configstring 7; 0 is no weapon.
     pub weapon: u8,
     /// `ps.weapons`, bit N for weapon N.
@@ -671,6 +679,10 @@ pub struct PlayerState {
     /// The previous cmd's sight bit, retail's `pm->oldcmd.buttons & 0x10`.
     /// Only the prone arm of the ADS flag reads it.
     pub last_cmd_ads: bool,
+    /// The previous cmd's `forwardmove` and `rightmove`, retail's
+    /// `pm->oldcmd`, which the prone move key test reads
+    /// ([`weapon::prone_move_key`]).
+    pub last_cmd_moves: [i8; 2],
     /// Retail's `pm_flags` 0x80, the ADS walk: the sight held on a player
     /// who has the ADS flag, is not prone and is not reloading
     /// (`PM_UpdatePlayerWalkingFlag`, 0x33694). It is what puts
@@ -934,6 +946,8 @@ impl PlayerState {
             footsteps_xyspeed: 0.0,
             takeoff: None,
             breakdown_continue: false,
+            prone_flip: false,
+            prone_flip_clears_torso: false,
             weapon: 0,
             weapons_held: 0,
             weapon_slots: [0; weapon::NUM_SLOTS],
@@ -952,6 +966,7 @@ impl PlayerState {
             grenade_cancelled: false,
             last_cmd_angles: [0; 2],
             last_cmd_ads: false,
+            last_cmd_moves: [0; 2],
             walking: false,
             linked: false,
             mounted: None,
@@ -1083,6 +1098,15 @@ impl PlayerState {
     /// `server_time`: the time the running leg began, or 0.
     pub fn view_lerp_stamp(&self, server_time: i32) -> i32 {
         self.view_lerp_ms.map_or(0, |ms| server_time - ms)
+    }
+
+    /// The stance `ps.eFlags` carries (0x20 crouch, 0x40 prone): the stance
+    /// flags on 1.1, the eye's on 1.5 and UO (cod15-movement.md 3).
+    pub fn eflags_stance(&self) -> Stance {
+        match self.rules {
+            MoveRules::V1_1 => self.stance,
+            MoveRules::V1_5 | MoveRules::Uo => self.effective_stance(),
+        }
     }
 
     /// `PM_GetEffectiveStance` (0x34554): the stance the eye is in or
@@ -1267,6 +1291,8 @@ pub fn pmove(
     ps.land_anim = false;
     ps.takeoff = None;
     ps.breakdown_continue = false;
+    ps.prone_flip = false;
+    ps.prone_flip_clears_torso = false;
     let was_on_ground = ps.on_ground;
     // retail's `pml.previous_origin` and `previous_velocity`, taken at the
     // top of PmoveSingle
@@ -2526,15 +2552,31 @@ fn step_view_target(ps: &mut PlayerState) {
         } else if t != VIEW_PRONE {
             ps.jump_penalty = true;
             ps.knockback_ms = JUMP_PENALTY_MS;
+            prone_flip(ps);
             VIEW_PRONE
         } else {
             t
         }
-    } else if t == VIEW_PRONE || ps.ducked {
+    } else if t == VIEW_PRONE {
+        prone_flip(ps);
+        VIEW_CROUCH
+    } else if ps.ducked {
         VIEW_CROUCH
     } else {
         VIEW_STAND
     };
+}
+
+/// The two arms of [`step_view_target`] that take the eye's target into or
+/// out of prone mark the move and clear the torso
+/// ([`PlayerState::prone_flip_clears_torso`]).
+fn prone_flip(ps: &mut PlayerState) {
+    ps.prone_flip = true;
+    ps.prone_flip_clears_torso = !(ps.rules == MoveRules::Uo
+        && matches!(
+            ps.weaponstate,
+            weapon::WEAPON_DEPLOY | weapon::WEAPON_BREAKDOWN
+        ));
 }
 
 /// 1.5's `PM_ViewHeightAdjust` (0x226a6) for a live player: the running leg

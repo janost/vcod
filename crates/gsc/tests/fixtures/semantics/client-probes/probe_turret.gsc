@@ -218,6 +218,10 @@ pose_damage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPo
 //	few digits of the float itself:
 //
 //	PROBE hitfine <time> <entity number> <hit location> <damage> <point> <dir>
+//
+//	and with `probe_bodylog 1` the struck body's origin and angles:
+//
+//	PROBE hitbody <time> <entity number> <origin> <angles>
 watch_hitlog()
 {
 	if (getcvar("probe_hitlog") != "1")
@@ -230,6 +234,8 @@ watch_hitlog()
 hitlog_damage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc)
 {
 	logPrint("PROBE hitfine " + gettime() + " " + self getEntityNumber() + " " + sHitLoc + " " + iDamage + " " + fine(vPoint) + " " + fine(vDir) + "\n");
+	if (getcvar("probe_bodylog") == "1")
+		logPrint("PROBE hitbody " + gettime() + " " + self getEntityNumber() + " " + fine(self.origin) + " " + fine(self.angles) + "\n");
 	if (getcvar("probe_hitgrid") == "1")
 		self hitgrid(vPoint, vDir);
 	self [[level.probe_hit_next]](eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);

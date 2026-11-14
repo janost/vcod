@@ -17,6 +17,7 @@ mod mod_census;
 mod moves_ab;
 mod net_decode;
 mod render_pins;
+mod skel_ab;
 mod sound_census;
 mod sunshadow_census;
 mod view_census;

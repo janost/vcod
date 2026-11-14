@@ -107,6 +107,8 @@ pub struct Carry {
     /// The xmodels the level loaded for traces and links. A restart keeps
     /// the map and the paks, so it reads the same files (map-cycle doc 4.9).
     pub models: Option<crate::game::host::ModelCaches>,
+    /// CoD2's parsed weapon files, for a level over the same paks.
+    pub weapon_files: Option<crate::game::host::WeaponFiles>,
 }
 
 /// The two closures a level loaded, compiled, before any of it ran.
@@ -698,6 +700,10 @@ impl ScriptRuntime {
         host.spawn_pins = carry.spawn_pins;
         if let Some(items) = carry.items {
             host.items = items;
+        }
+        if let (Some(w), crate::game::host::HostExt::Cod2(c)) = (carry.weapon_files, &mut host.ext)
+        {
+            c.weapon_files = w;
         }
         if let Some(m) = carry.models {
             host.xmodel_collision = m.collision;
@@ -3032,6 +3038,10 @@ impl ScriptRuntime {
                 bounds: self.host.xmodel_bounds.clone(),
                 rigs: self.host.vehicles.rigs.clone(),
             }),
+            weapon_files: match &self.host.ext {
+                crate::game::host::HostExt::Cod2(c) => Some(c.weapon_files.clone()),
+                _ => None,
+            },
         }
     }
 

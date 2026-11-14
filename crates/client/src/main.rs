@@ -713,6 +713,18 @@ struct Args {
     /// `-uo`; moveshot_ab.rs replays it (cod11-combat.md 2.1).
     #[arg(long, value_enum, value_name = "PART")]
     probe_moveshot: Option<probe::MoveShot>,
+    /// With --save-slope: a move key pressed on a prone body, from the
+    /// street placement of `client-probes/probe_prone` (`+set
+    /// probe_teleport 1 +set probe_spot street`), facing world yaw 0.
+    /// `rifle` (any server, --probe-weapon springfield_mp) presses one
+    /// under the sight, in a rechamber and in a swing's windup, then a
+    /// prone press from a crouched walk back; `lmg` (United Offensive,
+    /// --probe-weapon mg30cal_mp) on the deployed bipod, through its
+    /// breakdown, and with the binoculars. Tag the fixture
+    /// `pronemove-<part>-<version>`; moves_ab.rs and animtimers_ab.rs
+    /// replay it.
+    #[arg(long, value_enum, value_name = "PART")]
+    probe_pronemove: Option<probe::ProneMove>,
     /// With --save-slope, on a United Offensive server: the bipod and
     /// grenade cook script from a placement of
     /// `client-probes/probe_uofoot` on mp_foy (`+set probe_teleport 1
@@ -1561,6 +1573,7 @@ fn main() -> Result<()> {
                 autofire: args.probe_autofire,
                 talk: args.probe_talk,
                 moveshot: args.probe_moveshot,
+                pronemove: args.probe_pronemove,
                 uofoot: args.probe_uofoot,
                 uoturret: args.probe_uoturret,
                 crouchjump: args.probe_crouchjump,

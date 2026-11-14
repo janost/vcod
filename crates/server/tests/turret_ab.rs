@@ -2348,9 +2348,23 @@ fn hit_gate(
     cvars: &'static [(&'static str, &'static str)],
     gaps: &[(&str, &str)],
 ) {
-    if fs().is_none() {
+    let Some((script, log, mut rows)) = hit_replay(tag, fs, p, cvars) else {
         return;
-    }
+    };
+    rows.extend(hitfine_rows(script.lines(), log.iter().map(String::as_str)));
+    rows.extend(hitgrid_rows(script.lines(), log.iter().map(String::as_str)));
+    finish(rows, gaps);
+}
+
+/// A hit-grid recipe's capture replayed: retail's `-script` half, our
+/// script log and the target's playerstate rows.
+fn hit_replay(
+    tag: &str,
+    fs: impl Fn() -> Option<Pk3Fs>,
+    p: &'static Protocol,
+    cvars: &'static [(&'static str, &'static str)],
+) -> Option<(String, Vec<String>, Vec<String>)> {
+    fs()?;
     let path = |half: &str| {
         format!(
             "{}/tests/fixtures/turret/mp_carentan-dm-turret-{tag}{half}.txt",
@@ -2365,15 +2379,32 @@ fn hit_gate(
         ..parse(&read(&path("")))
     };
     let place = place_ms(script.lines(), 0).expect("retail's PROBE place");
-    let Some(mut rig) = rig_aligned(&cap, &fs, p, REBASE_MAX_VICTIM, place, None) else {
-        return;
-    };
+    let mut rig = rig_aligned(&cap, &fs, p, REBASE_MAX_VICTIM, place, None)?;
     let ours = replay(&mut rig, &cap);
-    let mut rows = target_rows(&cap, &read(&path("-target")), &ours);
-    let log = rig.sv.script_log();
-    rows.extend(hitfine_rows(script.lines(), log.iter().map(String::as_str)));
-    rows.extend(hitgrid_rows(script.lines(), log.iter().map(String::as_str)));
-    finish(rows, gaps);
+    let rows = target_rows(&cap, &read(&path("-target")), &ours);
+    Some((script, rig.sv.script_log().to_vec(), rows))
+}
+
+/// `probe_bodylog`'s `PROBE hitbody` lines, retail's and ours, each a
+/// row where the struck body's origin or angles is not retail's to the
+/// bit (fine1's digits).
+fn hitbody_rows<'a>(
+    theirs: impl Iterator<Item = &'a str>,
+    mine: impl Iterator<Item = &'a str>,
+) -> Vec<String> {
+    let body = |log: Vec<&'a str>| -> Vec<&'a str> {
+        log.into_iter()
+            .filter(|l| !l.starts_with('#'))
+            .filter_map(|l| l.split_once("PROBE hitbody ").map(|(_, r)| r.trim()))
+            .collect()
+    };
+    let (theirs, mine) = (body(theirs.collect()), body(mine.collect()));
+    assert!(!theirs.is_empty(), "no PROBE hitbody line in retail's log");
+    if theirs == mine {
+        Vec::new()
+    } else {
+        vec![format!("[hitbody] retail {theirs:?} ours {mine:?}")]
+    }
 }
 
 /// Client 0's first `PROBE spawnat <num> <origin> <angles>` line.
@@ -2672,9 +2703,9 @@ fn the_hitlog_capture_matches_uo_on_mp_carentan() {
 }
 
 /// A kill on the knockback's first frame: the round's point a float step
-/// off retail's along the round, and the grid with it; the clip weights
-/// and the velocity are retail's, the cause is not found
-/// (`cod11-turrets.md` 13.6).
+/// off retail's along the round, and the grid with it. The body's origin,
+/// velocity and clip weights are retail's; the step is the 1.1d slab's
+/// `f32` arithmetic over a pose 1e-5 off retail's (`cod11-turrets.md` 13.6).
 const KNOCKBACK_GAP: &str = "the knockback's first frame's pose (turrets doc 13.6)";
 
 /// The 1.1d hit-grid capture's head: the capture predates the gsc's
@@ -2764,6 +2795,31 @@ fn the_hitgrid_capture_matches_uo_on_mp_carentan() {
         HITGRID,
         &[("[hit] 30450 0 ", KNOCKBACK_GAP)],
     );
+}
+
+/// The 1.1d hit recipe with the struck body's origin and angles logged,
+/// the server under gdb: the knockback kill's body stands where retail's
+/// does to the bit, so the round's float step there is the pose's and
+/// the trace's, not the move's (`cod11-turrets.md` 13.6). Its hit rows
+/// are the gapped kill the hit-grid gates already hold, and are not held
+/// here.
+#[test]
+fn the_hitbody_capture_matches_retail_on_mp_carentan() {
+    let cvars = &[
+        ("probe_bodylog", "1"),
+        ("probe_spawnlog", "1"),
+        ("probe_head", "basehead_axis_a_09"),
+    ];
+    let Some((script, log, mut rows)) = hit_replay(
+        "hitbody",
+        vcod_common::testing::game_fs_11,
+        &PROTOCOL_V1,
+        cvars,
+    ) else {
+        return;
+    };
+    rows.extend(hitbody_rows(script.lines(), log.iter().map(String::as_str)));
+    finish(rows, &[]);
 }
 
 /// The UO hit-grid recipe rerun with the target's spawn point logged and
