@@ -3,6 +3,9 @@
 //! (docs/research/cod4-gsc.md 3). CoD4 says dvar where CoD1 says cvar, so
 //! the dvar calls take the cvar handlers.
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
 
 use super::cvar;
@@ -240,7 +243,7 @@ fn random_float_range(
 /// The table, search column, value and result column a `tableLookup`
 /// call names, and the row it finds: the first whose search column
 /// equals the value, case-blind.
-fn lookup(host: &GameHost, cx: &Cx, a: &[Value]) -> Result<Option<String>, ErrorKind> {
+fn lookup(host: &mut GameHost, cx: &Cx, a: &[Value]) -> Result<Option<String>, ErrorKind> {
     let (Some(&Value::String(table)), Some(&col), Some(&value), Some(&out)) =
         (a.first(), a.get(1), a.get(2), a.get(3))
     else {
@@ -260,7 +263,8 @@ fn lookup(host: &GameHost, cx: &Cx, a: &[Value]) -> Result<Option<String>, Error
         "tableLookup's value is a string or a number",
     ))?;
     let name = cx.resolve(table).to_ascii_lowercase();
-    let Some(t) = host.cod4().string_tables.get(&name) else {
+    let c4 = host.cod4_mut();
+    let Some(t) = c4.string_tables.get(&name).cloned() else {
         return Err(ErrorKind::Custom(format!(
             "string table {name} is not loaded"
         )));
@@ -270,9 +274,30 @@ fn lookup(host: &GameHost, cx: &Cx, a: &[Value]) -> Result<Option<String>, Error
         let c = usize::try_from(c).ok().filter(|&c| c < cols)?;
         t.values.get(row * cols + c)?.as_deref()
     };
-    Ok((0..t.rows as usize)
-        .find(|&r| cell(r, col).is_some_and(|v| v.eq_ignore_ascii_case(&value)))
-        .map(|r| cell(r, out).unwrap_or("").to_string()))
+    // A search column off the table matches no row.
+    let Some(search) = usize::try_from(col).ok().filter(|&c| c < cols) else {
+        return Ok(None);
+    };
+    // The first row whose cell equals `value` ignoring ASCII case: the
+    // walk's answer, through the column's index.
+    let key = (name, search);
+    let current = c4
+        .table_index
+        .get(&key)
+        .is_some_and(|(at, _)| Rc::ptr_eq(at, &t));
+    if !current {
+        let mut index = HashMap::new();
+        for r in 0..t.rows as usize {
+            if let Some(v) = cell(r, col) {
+                index.entry(v.to_ascii_lowercase()).or_insert(r);
+            }
+        }
+        c4.table_index.insert(key.clone(), (t.clone(), index));
+    }
+    Ok(c4.table_index[&key]
+        .1
+        .get(&value.to_ascii_lowercase())
+        .map(|&r| cell(r, out).unwrap_or("").to_string()))
 }
 
 /// `tableLookup(table, searchColumn, value, resultColumn)`: the found row's

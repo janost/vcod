@@ -949,21 +949,29 @@ impl Cod2Level {
     /// playerstates (`ClientSpawn`), so the next cmd moves the new body.
     pub fn run_frame(&mut self, now_ms: i32) {
         // A cmd's drops pose their dropper under its packet's stamp.
+        let mut _p = crate::tick_profile::phase("frame/drops");
         self.place_drops();
         // `SV_RunFrame` resets the skeleton cache (lnxded 0x8096752).
         self.combat.new_stamp();
         self.frametime_ms = now_ms - self.level_time;
         self.level_time = now_ms;
         crate::tick_trace::step!("Scr_RunThreads");
+        _p = crate::tick_profile::phase("frame/scripts");
         self.rt.run_frame(now_ms);
+        _p = crate::tick_profile::phase("frame/drops");
         self.place_drops();
+        _p = crate::tick_profile::phase("frame/test clients");
         self.install_test_clients();
         crate::tick_trace::step!("G_RunFrame entities");
+        _p = crate::tick_profile::phase("frame/mantle and weapons");
         self.run_mantle_blocks();
         crate::game::builtins::cod2::write_weapon_configstrings(&mut self.rt.host);
         self.combat.sync_weapons(&self.rt.host);
+        _p = crate::tick_profile::phase("frame/missiles");
         self.run_missiles();
+        _p = crate::tick_profile::phase("frame/corpses");
         self.run_corpses();
+        _p = crate::tick_profile::phase("frame/spawns");
         for s in self.rt.take_client_spawns() {
             crate::tick_trace::step!("ClientSpawn slot {}", s.slot);
             let Some(p) = self.players.get_mut(s.slot).and_then(Option::as_mut) else {
@@ -1074,18 +1082,22 @@ impl Cod2Level {
             self.rt.host.cod2_mut().clients[s.slot].death_anim = 0;
             self.rt.set_client_origin(s.slot, origin);
         }
+        _p = crate::tick_profile::phase("frame/script ops");
         self.apply_sim_ops();
         self.apply_link_ops();
         // The ammo arrays the weapon builtins write are the host's own
         // (`GameHost::client_ammo`), which the playerstate is built from.
         self.rt.take_weapon_ops();
+        _p = crate::tick_profile::phase("frame/end frames");
         self.end_frame();
         crate::tick_trace::step!("identify_clients");
+        _p = crate::tick_profile::phase("frame/identify");
         self.identify_clients();
         // `CheckVote` (Mac 0x1aeb2a) last, past the identify pass
         // (0x811c382), as in 1.1: its line queues with the frame's commands,
         // ahead of the configstring 15 it clears.
         crate::tick_trace::step!("CheckVote");
+        _p = crate::tick_profile::phase("frame/vote");
         self.rt.check_vote(now_ms);
     }
 
@@ -1364,6 +1376,7 @@ impl Cod2Level {
             self.rt.host.cod2_mut().clients[slot].body = (p.ps.pm_type < pm_type::SPECTATOR)
                 .then(|| crate::game::cod2_blast::BlastBody::of(&p.ps));
             if p.ps.pm_type < pm_type::SPECTATOR || p.ps.pm_type >= pm_type::DEAD {
+                let _p = crate::tick_profile::phase("end frames/animate");
                 self.animate_body(slot, self.frametime_ms);
             }
             // After the entity copy, a client with health that overlaps
@@ -1373,10 +1386,12 @@ impl Cod2Level {
                 self.stuck_in_client(slot, eject);
             }
         }
+        let p = crate::tick_profile::phase("end frames/spectators and turrets");
         for slot in spectators {
             self.spectator_end_frame(slot);
         }
         self.turret_end_frame();
+        drop(p);
         // Every arm of `ClientEndFrame` ends zeroing `gclient+0x27c8`
         // (Mac 0x1a47a8).
         for slot in 0..self.players.len() {
@@ -1391,9 +1406,11 @@ impl Cod2Level {
                 !matches!(p.ps.pm_type, pm_type::SPECTATOR | pm_type::INTERMISSION)
             });
             if in_world {
+                let _p = crate::tick_profile::phase("end frames/look at");
                 self.look_at_flags(slot);
             }
         }
+        let _p = crate::tick_profile::phase("end frames/entity states");
         for slot in 0..self.players.len() {
             if let Some(p) = self.players[slot].as_mut() {
                 p.body_events.copy_from(&p.ps);

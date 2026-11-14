@@ -574,11 +574,19 @@ impl ScriptSource for Cod4Scripts {
     }
 }
 
+/// One `tableLookup` column's index: the table it was built on, and each
+/// cell's lowercased text to the first row holding it.
+pub type TableIndex = (Rc<StringTable>, HashMap<String, usize>);
+
 /// What CoD4's game module keeps on the host that CoD1's has no field for
 /// ([`crate::game::host::GameHost::cod4`]).
 pub struct Cod4HostState {
     /// The zones' string tables by lowercased name (`tableLookup`).
     pub string_tables: HashMap<String, Rc<StringTable>>,
+    /// `tableLookup`'s index by table and search column: each cell's
+    /// lowercased text to the first row holding it, built on the first
+    /// lookup in that column of the table it holds.
+    pub table_index: HashMap<(String, usize), TableIndex>,
     /// Each slot's stats block (`getStat`/`setStat`): the client's own
     /// once its `stats` packets are in, a fresh profile's before.
     pub stats: Vec<vcod_cod4::net::stats::Stats>,
@@ -908,6 +916,7 @@ impl Default for Cod4HostState {
     fn default() -> Self {
         Cod4HostState {
             string_tables: HashMap::new(),
+            table_index: HashMap::new(),
             stats: vec![vcod_cod4::net::stats::Stats::fresh(); MAX_CLIENTS],
             weapons: Vec::new(),
             table: weapons::Cod4Weapons::new(),

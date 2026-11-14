@@ -357,6 +357,10 @@ pub struct ObjectTable {
     reuse_after_ms: Option<i32>,
     /// `level.time` as the allocator sees it, for `reuse_after_ms`.
     clock_ms: i32,
+    /// Bumped by every mutable reach into a slot (a spawn, a free, a
+    /// `get_mut`): a cache over the table's contents is current while it
+    /// reads what it was built on (`GameHost::placed_script_models`).
+    edits: u64,
 }
 
 impl Default for ObjectTable {
@@ -378,7 +382,14 @@ impl ObjectTable {
             queued: std::collections::HashSet::new(),
             reuse_after_ms: None,
             clock_ms: 0,
+            edits: 0,
         }
+    }
+
+    /// [`Self::edits`]' count: unchanged means no slot was spawned, freed
+    /// or handed out mutably since the last read.
+    pub fn edits(&self) -> u64 {
+        self.edits
     }
 
     /// CoD2's `G_Spawn`: a freed slot is handed out again only `ms` after
@@ -434,6 +445,7 @@ impl ObjectTable {
 
     /// A fresh entity at `n`, with `G_Spawn`'s zero `origin` and `angles`.
     fn place(&mut self, cx: &mut Cx, n: u32) -> EntId {
+        self.edits += 1;
         let id = EntId(n, self.ent_gens[n as usize]);
         let script = cx.new_struct();
         let mut engine = vec![Value::Undefined; engine_slot_count()];
@@ -548,6 +560,7 @@ impl ObjectTable {
         if slot >= MAX_CLIENTS {
             return Err(ErrorKind::BadType("client slot out of range"));
         }
+        self.edits += 1;
         // A connect into a slot whose player the game never let go of (1.1's
         // reconnect, cod11-server-handshake.md "A reconnect into a held
         // slot") keeps the player's script object: its threads and its
@@ -644,6 +657,7 @@ impl ObjectTable {
     /// read it and a reset here would only be the second half of the same
     /// guarantee.
     pub fn free_client(&mut self, slot: usize) {
+        self.edits += 1;
         if slot < MAX_CLIENTS && self.ents[slot].take().is_some() {
             self.ent_gens[slot] = self.ent_gens[slot].wrapping_add(1);
         }
@@ -730,6 +744,7 @@ impl ObjectTable {
             return;
         }
         let n = id.0 as usize;
+        self.edits += 1;
         self.ents[n] = None;
         self.ent_gens[n] = self.ent_gens[n].wrapping_add(1);
         if id.0 >= FIRST_MAP_ENTITY && !self.queued.remove(&id.0) {
@@ -867,6 +882,7 @@ impl ObjectTable {
         if !self.current(id) {
             return None;
         }
+        self.edits += 1;
         match id.0.checked_sub(FIRST_HUD_ELEM) {
             Some(i) => self.huds[i as usize].as_mut(),
             None if id.0 == ENTITYNUM_WORLD => self.world.as_mut(),
@@ -907,6 +923,7 @@ impl ObjectTable {
 
     /// [`Self::iter_inuse`], mutable.
     pub fn iter_inuse_mut(&mut self) -> impl Iterator<Item = &mut GEntity> {
+        self.edits += 1;
         self.ents.iter_mut().flatten()
     }
 
