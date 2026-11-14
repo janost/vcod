@@ -690,6 +690,7 @@ pub fn probe(
         script: match save_ladder.as_deref() {
             Some("climb") => LADDER_CLIMB_SCRIPT,
             Some("turn") => LADDER_TURN_SCRIPT,
+            Some("grab") => LADDER_GRAB_SCRIPT,
             _ => LADDER_SCRIPT,
         },
         ..Default::default()
@@ -12159,6 +12160,17 @@ const LADDER_TURN_SCRIPT: &[LadderPhase] = &[
     ("foot-turn", 1500, 0, 0, 0.0, 160.0),
     ("foot-hold", 800, 0, 0, 0.0, 160.0),
 ];
+/// `--save-ladder grab`: from the first live snapshot, still and facing the
+/// probe's yaw while the gsc sets the body down at `probe_spot`, then turned
+/// 180 still and forward into the rungs: a grab that only the view's trace
+/// meets (cod15-movement.md 2, the second grab). Its yaw stays absolute.
+const LADDER_GRAB_SCRIPT: &[LadderPhase] = &[
+    ("wait", 2500, 0, 0, 0.0, 0.0),
+    ("face", 500, 0, 0, 0.0, -180.0),
+    ("still", 500, 0, 0, 0.0, -180.0),
+    ("walk", 2500, 127, 0, 0.0, -180.0),
+    ("hold", 500, 0, 0, 0.0, -180.0),
+];
 type LadderPhase = (&'static str, u64, i8, i8, f32, f32);
 const LADDER_SETTLE: Duration = Duration::from_millis(1500);
 
@@ -12285,10 +12297,12 @@ impl LadderProbe {
         use crate::play::input::Held;
         let p = wire();
         // Set down at the foot, the body takes the rungs before any key.
+        // The grab script starts off the rungs, at the first live snapshot.
+        let grab = std::ptr::eq(self.script, LADDER_GRAB_SCRIPT);
         if self.placed.is_none()
             && let Some(s) = snap
             && s.ps.field_i32(p, "pm_type") == PM_NORMAL
-            && s.ps.field_i32(p, "pm_flags") & net::flags::PMF_LADDER != 0
+            && (grab || s.ps.field_i32(p, "pm_flags") & net::flags::PMF_LADDER != 0)
         {
             self.placed = Some(now);
             self.foot = s.ps.origin(p);
@@ -12321,8 +12335,11 @@ impl LadderProbe {
             // put back what retail pushed since the placement.
             let into = t.as_millis() as f32 - (end - ms) as f32;
             let off = from + (to - from) * (into / ms as f32).min(1.0);
-            let pushed =
-                snap.map_or(0, |s| s.ps.field_i32(p, "delta_angles[1]")) - self.placed_delta;
+            let pushed = if grab {
+                0
+            } else {
+                snap.map_or(0, |s| s.ps.field_i32(p, "delta_angles[1]")) - self.placed_delta
+            };
             cmd.angles[1] = (deg_to_short(yaw.unwrap_or(0.0) + off) + pushed) & 0xffff;
         }
         if self.phase != Some(i) {
@@ -12560,6 +12577,8 @@ fn write_ladder_fixture(
         "climb"
     } else if std::ptr::eq(lp.script, LADDER_TURN_SCRIPT) {
         "turn"
+    } else if std::ptr::eq(lp.script, LADDER_GRAB_SCRIPT) {
+        "grab"
     } else {
         "full"
     };
@@ -12573,8 +12592,13 @@ fn write_ladder_fixture(
 # crates/gsc/tests/fixtures/semantics/client-probes/README.md, probe_ladder).\n\
 # The gsc puts the player at a ladder's foot facing the rungs (mp_ship's hold\n\
 # ladder, or probe_spot's); the script starts {} ms after the first snapshot\n\
-# on the rungs. Phases: (name, ms, forward, right, pitch, yaw offset):\n",
-        LADDER_SETTLE.as_millis()
+# {}. Phases: (name, ms, forward, right, pitch, yaw offset):\n",
+        LADDER_SETTLE.as_millis(),
+        if script == "grab" {
+            "in play"
+        } else {
+            "on the rungs"
+        }
     ));
     out.push_str(&format!(
         "# ladder foot={},{},{} yaw={yaw}\n",

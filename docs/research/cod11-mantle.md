@@ -1132,6 +1132,21 @@ refused rather than pinning it, and fails if a capture refuses every one.
 
 So ladders are brushes flagged at the material level, not entities.
 
+**The ground trace on the rungs.** VERIFIED, `PM_GroundTrace`: the arm that
+throws a rising body off the floor (`velocity.z > 0` and the velocity along
+the plane over 10, rodata 0x70bb0) opens with `test pm_flags, 0x10` and
+skips to the walk arm when it is set (1.1d `game.mp.i386.so` 0x305d1 to
+0x30687; 1.5b 0x21f2c to 0x22069). The flag is this frame's
+`PM_CheckLadderMove`'s, so a body that takes the rungs within the trace's
+quarter unit of the floor stays `pml.walking` for its next frame, which
+then runs without the airborne wall glue. VERIFIED, the
+`mp_ship-dm-ladder-grab-15.txt` capture (1.5b, 2026-11-14): the grab cmd at
+14066 lifts the body 0.2304 off the floor, and the next cmd leaves y at
+-93.12555 with velocity y 0 (snapshot 14082); with the arm run on the rungs
+vcod's glue pushed it to -93.133 and velocity y -1 a cmd early. vcod:
+`ground_trace` computes `thrown_off` only off the rungs
+(`ladder_ab::a_15_grab_waits_for_the_trace_along_the_normal`).
+
 **Movement**, `PM_LadderMove` (exported, 0x33944):
 
 - First calls `PM_CheckJump` ("Jumps"); if it jumped (push-off), runs the
