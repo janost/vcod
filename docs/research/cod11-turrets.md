@@ -1900,8 +1900,51 @@ kill moves a step off in z, as UO's `-hitfine` kill sits; in the
 clock's order it matches. So 1.5b and UO keep the clock's order, and
 INFERRED a second error on the knockback frame of those replays (an
 input, the walk and build being retail's on the dump) cancels against it
-on 1.5b. Not yet found: no UO dump and no aligned 1.5b replay of a
-dumped run (the 1.5b dump's own replay places its target elsewhere).
+on 1.5b.
+
+The UO kill under gdb (2026-11-14; the `-hitfine-uo` recipe with
+`probe_spawnlog 1` and `probe_bodylog 1`, `coduo_lnxded` stopped at
+`SV_LocationalTraceModel`'s call of the bone trace, 0x809aa73, only on
+the target's traces, the DObj, its skeleton, its tree and the anim info
+table dumped; the run, its dumps and its replay not kept):
+
+- VERIFIED, `coduo_lnxded`: the anim info table is 0x8434140 + 0x44 per
+  info (0x80bd8c0), a tree's info for node `n` the short at `tree + 0xc
+  + 2n` (0x80bd899), the DObj's tree at `dobj+0`, its skeleton at
+  `dobj+4` (0x80bf375, 0x80bf2b4). An info holds two 28-byte time slots
+  from `+0xc`, the one the walk samples picked by 0x8456180 (0x80bdd3f..
+  0x80bdd73); the server's step (0x80bd884) writes the slot at `+0x28`:
+  the new time at `+0x28` off the start time at `+0x2c`, the goal weight
+  `+0x38`, the weight `+0x3c`, the rate `+0x40`. `SV_LocationalTraceModel`
+  turns the ray by `ent+0x148` (`r.currentAngles`, 0x809a9a6) about
+  `ent+0x13c` (`r.currentOrigin`, 0x809a8c1).
+- VERIFIED, the dump of the kill: the legs hold `pb_stand_alert` (anim
+  and node 185) at weight 1 and `pb_combatrun_forward_loop` (node 157)
+  at 0.001 (`0x3a83126f`), the run's two time slots equal, its rate
+  0.2438; no other leaf has an info.
+- vcod measurement, that replay against the dump (ours handed retail's
+  settled origin: the spawn's think left retail's target a 1 unit/s drift
+  the gate does not hand on): both clips' node times and weights, the
+  origin, the angles and the local start and end are retail's words; the
+  skeleton's 114 matrices and quaternions are retail's word for word with
+  the run summed before the idle; in the clock's order 113 of them sit
+  up to 1.1e-5 off. The kill's point and the struck body (`PROBE hitbody`)
+  are retail's in either order. So the walk on UO also visits a node's
+  children by ascending anim index (cod11-combat.md 3.1).
+- vcod measurement, the same recipe with `probe_hitgrid 1` and no gdb
+  (one plain run): the kill sits a step off in z as `-hitfine-uo`'s does,
+  every grid cell within `GRID_NEAR` and the struck body retail's bits, in
+  either order. Starting the run clip at the phase of a setter time 2 to
+  12 ms earlier puts the point on retail's, past that a step the other
+  way. VERIFIED, `game.mp.uo.i386.so`: the phase's time is `bg.time`
+  (0x1d147, the GOT slot of `bg`), which `G_RunFrame` sets to
+  `level.time` (0x59ca2) and nothing else writes. A rerun with the grid
+  under gdb lost the run clip on the kill (the pause reordered the two
+  clients' cmds), so the gdb pause changes the outcome.
+
+INFERRED: what is left on a plain run is an input of the 0.001 run clip
+(its start phase or its first weight) that a pause in the frame moves;
+the pose is a few e-6 off retail's there. Not yet found.
 `KNOCKBACK_GAP` stays on UO's `-hitgrid` and `-hitfine` kills.
 
 vcod: `turret_ab`'s `hit_gate` replays each capture as `spawn_gate` does and
