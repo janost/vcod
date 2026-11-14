@@ -1846,4 +1846,94 @@ mod tests {
         // both paths.
         assert!(run_result(r#"main() { if ("a") { } }"#).is_err());
     }
+
+    /// A fused run answers as its ops do one at a time, whatever budget
+    /// cuts it, whatever types reach it, and with or without the error
+    /// recovery: every budget up to past the script's end, against the same
+    /// script with `Function::fast` left empty.
+    #[test]
+    fn fused_runs_answer_as_their_ops_at_every_budget() {
+        let src = r#"
+main()
+{
+    a = [];
+    for ( i = 0; i < 4; i++ )
+        a[i] = i * 2;
+    c = [];
+    for ( f = 0.5; f < a.size; f += 1.0 )
+        c[c.size] = f;
+    a[a.size] = c[1];
+    j = 0;
+    j += 0.5;
+    level.x = 3;
+    b[0] = level;
+    m["k"] = 7;
+    k = "k";
+    t = 0;
+    for ( i = 0; i < a.size; i++ )
+    {
+        x = a[i];
+        y = b[0].x;
+        z = m[k];
+        if ( x > 2 )
+            t += double( z );
+        if ( x <= 1.5 )
+            t += level.x;
+        if ( y >= 3 )
+            t += pick( x, y );
+    }
+    w = 3;
+    while ( w >= 0 )
+        w -= 1;
+    if ( i < "x" )
+        t += 100;
+    u = m[nope];
+    t += b[0].nope.size;
+    return t + j + w;
+}
+
+pick( p, q )
+{
+    r = p;
+    s = q;
+    if ( r < s )
+        return r;
+    return s;
+}
+"#;
+        let ast = crate::parse::parse_file(src).unwrap();
+        let outcome = |budget: u32, fused: bool, recover: bool| {
+            let mut vm = Vm::new();
+            let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+            vm.install(fns).unwrap();
+            if !fused {
+                for f in vm.functions.values_mut() {
+                    Rc::get_mut(f).unwrap().fast.clear();
+                }
+            }
+            vm.set_budget(budget);
+            vm.set_recover_errors(recover);
+            let mut host = TestHost::default();
+            let main = vm.func_ref("test/script", "main");
+            let r = vm.call_now(&mut host, main, None, vec![]);
+            let x = vm.interner.intern_folded("x");
+            format!(
+                "{r:?} {:?} {:?}",
+                host.calls,
+                vm.heap.get_field(vm.level, x)
+            )
+        };
+        let mut finished = false;
+        for budget in 1..2000 {
+            for recover in [false, true] {
+                let want = outcome(budget, false, recover);
+                assert_eq!(outcome(budget, true, recover), want, "budget {budget}");
+                finished |= recover && !want.contains("Budget");
+            }
+            if finished {
+                break;
+            }
+        }
+        assert!(finished, "the script ran out of budget throughout");
+    }
 }
