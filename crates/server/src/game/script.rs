@@ -1544,6 +1544,12 @@ impl ScriptRuntime {
         if let Some(g) = &placed {
             self.set_client_origin(slot, sim.origin());
             self.set_client_yaw(slot, g.yaw());
+            // The placement's `AxisToAngles` is `r.currentAngles`, which
+            // places the DObj for every trace until his next cmd writes
+            // `(0, view yaw, 0)` back (turrets doc 13.10).
+            if let Some(s) = self.host.dobj_posed.get_mut(slot) {
+                s.set_angles(Some(vcod_common::turretpose::quat_angles(g.rot)));
+            }
         }
         shot
     }
@@ -2153,6 +2159,19 @@ impl ScriptRuntime {
     pub fn set_client_body(&mut self, slot: usize, body: Option<crate::game::combat::HitBody>) {
         if let Some(b) = self.host.client_bodies.get_mut(slot) {
             *b = body;
+        }
+    }
+
+    /// [`crate::spectate::ClientSim::land_gunner_goals`] on the host's
+    /// copies of the slot's body, which script traces and tags read.
+    pub fn land_gunner_goals(&mut self, slot: usize, legs: &crate::spectate::TurretLegs) {
+        let bodies = [
+            self.host.client_bodies.get_mut(slot),
+            self.host.client_dobjs.get_mut(slot),
+        ];
+        for b in bodies.into_iter().flatten().flatten() {
+            b.pose.turret_leaves.clone_from(&legs.0);
+            b.pose.turret_left.clone_from(&legs.1);
         }
     }
 
