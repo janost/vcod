@@ -12,6 +12,9 @@ use crate::world::World;
 
 use super::{Bot, BotView, EnemyView, Goal, Noise, SeatView};
 
+mod par;
+pub use par::with_threads;
+
 /// A* nodes a tick may expand across all bots; a plan left unfinished
 /// resumes next tick (bot-navigation.md, section 3).
 const PLAN_BUDGET: u32 = 4000;
@@ -114,7 +117,7 @@ impl BotDriver {
 }
 
 /// A playing or idle body as the driver's team passes read it.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Body {
     pub(crate) origin: Vec3,
     pub(crate) velocity: Vec3,
@@ -395,6 +398,10 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
         let _p = crate::tick_profile::phase("bots/nav tick");
         w.nav_tick();
     }
+    // On a core by the plans, and parked again after them.
+    if w.driver().bots.len() > 1 {
+        par::wake();
+    }
     let head = crate::tick_profile::phase("bots/commands and inputs");
     let sid = w.server_id();
     // The team table once per frame; the game's team lookup may need its
@@ -434,13 +441,30 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
         .collect();
     drop(head);
     let mut views: Vec<(usize, BotView)> = Vec::new();
+    let mut fights: Vec<Option<EnemyView>> = Vec::new();
     let sensing = crate::tick_profile::phase("bots/sense");
     for &slot in &slots {
-        if let Some(view) = sense(w, slot, &teams, &noises, &on_side, &packs) {
+        if let Some((view, enemy)) = sense(w, slot, &teams, &noises, &on_side, &packs) {
             views.push((slot, view));
+            fights.push(enemy);
         }
     }
     drop(sensing);
+    let p = crate::tick_profile::phase("bots/covers");
+    let covers: Vec<CoverStep> = (views.iter().zip(&fights))
+        .map(|((slot, _), e)| cover(w, *slot, *e))
+        .collect();
+    // On threads each look runs in its bot's plan ([`plan`]): nothing
+    // before the plans reads a cover spot.
+    let planning = planning(w, views.len());
+    let covers = if planning {
+        Some(covers)
+    } else {
+        let found = look_covers(w, &covers);
+        land_covers(w, &mut views, covers, &found);
+        None
+    };
+    drop(p);
     let round = sid as u32;
     // Bots with team play off (`Bot::team_play`) rank by slot, keep by
     // a carrier, cover nobody and plan alone, as before `bots::team`.
@@ -489,15 +513,43 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
         .map(|(s, _)| *s)
         .collect();
     drop(p);
+    let p = crate::tick_profile::phase("bots/plans");
+    let cx = Shared {
+        teams: &teams,
+        solo: &solo,
+        paths: &paths,
+        main: &main,
+        climbers: &climbers,
+        standing: &standing,
+    };
+    let plans = if planning {
+        plan(w, &views, covers.as_deref(), &cx)
+    } else {
+        Vec::new()
+    };
+    par::rest();
+    if let Some(covers) = covers {
+        let found = match plans.len() == views.len() {
+            true => plans.iter().map(|p| p.cover.flatten()).collect(),
+            false => look_covers(w, &covers),
+        };
+        land_covers(w, &mut views, covers, &found);
+    }
+    let mut plans = plans.into_iter();
+    drop(p);
     for (slot, mut view) in views {
+        let plan = plans.next().unwrap_or_default();
         let looking = crate::tick_profile::phase("bots/cover and vantage");
         if let Some((threat, held)) = w.driver().bots.get(&slot).and_then(|b| b.cover_query())
             && let (Some(g), Some(world)) = (w.driver().nav.as_ref(), w.world())
         {
-            view.survive.cover =
-                super::retreat::cover_spot(g, &world.collision, view.origin, threat, held);
+            let key = (view.origin, threat, held);
+            view.survive.cover = match plan.retreat.filter(|p| p.0 == key) {
+                Some((_, spot)) => spot,
+                None => super::retreat::cover_spot(g, &world.collision, view.origin, threat, held),
+            };
         }
-        view.hunt = vantage(w, slot, view.origin);
+        view.hunt = vantage(w, slot, view.origin, plan.vantage);
         drop(looking);
         let p = crate::tick_profile::phase("bots/goal");
         if W::PARTS_MATES {
@@ -523,20 +575,7 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
         drop(p);
         if let Some(g) = w.driver().nav.clone().filter(|_| view.seat.is_none()) {
             let _p = crate::tick_profile::phase("bots/route");
-            route(
-                w,
-                slot,
-                &mut view,
-                goal,
-                &g,
-                &teams,
-                &solo,
-                &paths,
-                &main,
-                &climbers,
-                &standing,
-                &mut budget,
-            );
+            route(w, slot, &mut view, goal, &g, &cx, &mut budget, plan.route);
         }
         let probing = crate::tick_profile::phase("bots/probes");
         let p = crate::tick_profile::phase("probes/pre-think");
@@ -548,14 +587,14 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
             .get(&slot)
             .is_some_and(|b| b.reads_drops(&view))
         {
-            view.drop_ahead = drop_probe(w, slot);
+            view.drop_ahead = drop_probe(w, slot, plan.drops);
         }
         if w.driver()
             .bots
             .get(&slot)
             .is_some_and(|b| b.reads_walls(&view))
         {
-            view.wall_ahead = wall_probe(w, slot);
+            view.wall_ahead = wall_probe(w, slot, plan.walls);
         }
         drop(p);
         let p = crate::tick_profile::phase("probes/lob");
@@ -681,8 +720,8 @@ fn yell<W: BotWorld>(
 }
 
 /// Pass 2 for one bot: its view, with the enemy (cached), the noise it
-/// answers, the heal, the sidestep round a friend in the line and the
-/// cover spot.
+/// answers, the heal and the sidestep round a friend in the line; and the
+/// enemy its cover spot is looked for against ([`covers`]).
 fn sense<W: BotWorld>(
     w: &mut W,
     slot: usize,
@@ -690,7 +729,7 @@ fn sense<W: BotWorld>(
     noises: &[Noise],
     on_side: &[(usize, i32, [f32; 3])],
     packs: &[[f32; 3]],
-) -> Option<BotView> {
+) -> Option<(BotView, Option<EnemyView>)> {
     let now = w.now();
     w.feel(slot);
     let fresh = w
@@ -743,23 +782,97 @@ fn sense<W: BotWorld>(
             w.driver_mut().sidesteps.insert(slot, (p, since));
         }
     }
-    view.cover = cover(w, slot, enemy);
-    Some(view)
+    Some((view, enemy))
+}
+
+/// A bot's [`BotView::cover`] as its sense leaves it ([`cover`]): the
+/// spot, or the look to take for one.
+type CoverStep = Result<Option<super::cover::Spot>, CoverLook>;
+
+/// The spots of `steps`' looks, by view, on the pass's threads
+/// ([`par::map`]); `None` where a step took no look.
+fn look_covers<W: BotWorld>(w: &W, steps: &[CoverStep]) -> Vec<Option<super::cover::Spot>> {
+    let (Some(g), Some(world)) = (w.driver().nav.as_deref(), w.world()) else {
+        return vec![None; steps.len()];
+    };
+    par::map(steps, |s| s.as_ref().err().and_then(|l| l.find(g, world)))
+}
+
+/// Every view's [`BotView::cover`], each against the enemy its bot
+/// fights, `found` the spot each look found: kept as its bot's
+/// ([`BotDriver::covers`]). A bot's look reads its own spot, its body, its
+/// threat and the still world, and writes only its own spot, and no step
+/// between the senses and the routes reads a spot, so taking the looks
+/// after every bot's sense, not each after its own, moves nothing.
+fn land_covers<W: BotWorld>(
+    w: &mut W,
+    views: &mut [(usize, BotView)],
+    steps: Vec<CoverStep>,
+    found: &[Option<super::cover::Spot>],
+) {
+    let now = w.now();
+    for (((slot, view), step), &spot) in views.iter_mut().zip(steps).zip(found) {
+        view.cover = match step {
+            Ok(spot) => spot,
+            Err(_) => {
+                w.driver_mut().covers.insert(*slot, (now, spot));
+                spot
+            }
+        };
+    }
+}
+
+/// What [`cover`] looks for a spot with: the bot's body against its
+/// enemy, and the spot to check first (its own, else the one it was
+/// given).
+#[derive(Clone, Copy)]
+struct CoverLook {
+    body: CoverBody,
+    enemy: EnemyView,
+    first: Option<super::cover::Spot>,
+}
+
+impl CoverLook {
+    /// The spot, or none in range ([`super::cover::find`]).
+    fn find(&self, g: &NavGraph, world: &World) -> Option<super::cover::Spot> {
+        use super::cover;
+        let (body, e) = (self.body, self.enemy);
+        if super::dist_sq(body.origin.into(), e.origin) < cover::MIN_RANGE * cover::MIN_RANGE {
+            return None;
+        }
+        let clear = |a: Vec3, b: Vec3| world.collision.shot_trace(a, b).fraction >= 1.0;
+        // `PM_UpdateLean`'s sphere from the eye toward the full lean.
+        let lean_room = |a: Vec3, b: Vec3| {
+            let r = Vec3::splat(8.0);
+            world.collision.move_trace(a, b, -r, r, body.mask).fraction
+        };
+        let sight = cover::Sight {
+            threat_eye: body.threat_eye,
+            target: e.origin.into(),
+            lean: body.lean,
+            clear: &clear,
+            lean_room: &lean_room,
+        };
+        self.first
+            .and_then(|s| sight.recheck(s))
+            .or_else(|| cover::find(g, body.origin, &sight))
+    }
 }
 
 /// [`BotView::cover`] for the bot in `slot` fighting `enemy`: the spot it
 /// holds while that still hides and peeks, else the nearest that does
-/// ([`super::cover::find`]), looked at every [`COVER_REFRESH_MS`].
+/// ([`super::cover::find`]), looked at every [`COVER_REFRESH_MS`]: `Ok`
+/// with the spot, or `Err` with the look to take, whose spot [`covers`]
+/// keeps.
 fn cover<W: BotWorld>(
     w: &mut W,
     slot: usize,
     enemy: Option<EnemyView>,
-) -> Option<super::cover::Spot> {
-    use super::cover;
+) -> Result<Option<super::cover::Spot>, CoverLook> {
     let Some(e) = enemy.filter(|_| w.driver().bots.get(&slot).is_some_and(|b| b.cover.enabled))
     else {
         w.driver_mut().covers.remove(&slot);
-        return None;
+        return Ok(None);
     };
     let now = w.now();
     let held = w.driver().covers.get(&slot).copied();
@@ -775,39 +888,30 @@ fn cover<W: BotWorld>(
         && now.wrapping_sub(t) < COVER_REFRESH_MS
         && mine.is_none_or(|m| spot.is_some_and(|s| s.at == m.at))
     {
-        return spot;
+        return Ok(spot);
     }
-    let body = w.cover_body(slot, e.slot)?;
-    let (g, world) = (w.driver().nav.as_ref()?, w.world()?);
-    let spot = if super::dist_sq(body.origin.into(), e.origin) < cover::MIN_RANGE * cover::MIN_RANGE
-    {
-        None
-    } else {
-        let clear = |a: Vec3, b: Vec3| world.collision.shot_trace(a, b).fraction >= 1.0;
-        // `PM_UpdateLean`'s sphere from the eye toward the full lean.
-        let lean_room = |a: Vec3, b: Vec3| {
-            let r = Vec3::splat(8.0);
-            world.collision.move_trace(a, b, -r, r, body.mask).fraction
-        };
-        let sight = cover::Sight {
-            threat_eye: body.threat_eye,
-            target: e.origin.into(),
-            lean: body.lean,
-            clear: &clear,
-            lean_room: &lean_room,
-        };
-        mine.or(held.and_then(|(_, s)| s))
-            .and_then(|s| sight.recheck(s))
-            .or_else(|| cover::find(g, body.origin, &sight))
+    let Some(body) = w.cover_body(slot, e.slot) else {
+        return Ok(None);
     };
-    w.driver_mut().covers.insert(slot, (now, spot));
-    spot
+    if w.driver().nav.is_none() || w.world().is_none() {
+        return Ok(None);
+    }
+    Err(CoverLook {
+        body,
+        enemy: e,
+        first: mine.or(held.and_then(|(_, s)| s)),
+    })
 }
 
 /// [`BotView::hunt`] for the bot in `slot` standing at `from`: the vantage
 /// over the spot it hunts ([`super::hunt::vantage`]), looked for once per
-/// spot.
-fn vantage<W: BotWorld>(w: &mut W, slot: usize, from: [f32; 3]) -> Option<[f32; 3]> {
+/// spot; `planned`'s when its plan looked from there for that spot.
+fn vantage<W: BotWorld>(
+    w: &mut W,
+    slot: usize,
+    from: [f32; 3],
+    planned: Option<Looked>,
+) -> Option<[f32; 3]> {
     let Some(spot) = w.driver().bots.get(&slot).and_then(|b| b.hunt_query()) else {
         w.driver_mut().hunts.remove(&slot);
         return None;
@@ -818,6 +922,16 @@ fn vantage<W: BotWorld>(w: &mut W, slot: usize, from: [f32; 3]) -> Option<[f32; 
         return *v;
     }
     let (g, world) = (w.driver().nav.as_ref()?, w.world()?);
+    let v = match planned.filter(|p| p.0 == (spot, from)) {
+        Some((_, v)) => v,
+        None => hunt_vantage(g, world, from, spot),
+    };
+    w.driver_mut().hunts.insert(slot, (spot, v));
+    v
+}
+
+/// [`super::hunt::vantage`] from `from` over `spot`.
+fn hunt_vantage(g: &NavGraph, world: &World, from: [f32; 3], spot: [f32; 3]) -> Option<[f32; 3]> {
     let sees = |feet: Vec3| {
         world
             .collision
@@ -825,54 +939,77 @@ fn vantage<W: BotWorld>(w: &mut W, slot: usize, from: [f32; 3]) -> Option<[f32; 
             .fraction
             >= 1.0
     };
-    let v = super::hunt::vantage(g, from.into(), spot.into(), &sees).map(Into::into);
-    w.driver_mut().hunts.insert(slot, (spot, v));
-    v
+    super::hunt::vantage(g, from.into(), spot.into(), &sees).map(Into::into)
 }
 
 /// [`BotView::drop_ahead`] for the body in `slot`: per octant, the drop
-/// [`crate::nav::drop_ahead`] feels standing on the ground off a ladder.
-fn drop_probe<W: BotWorld>(w: &W, slot: usize) -> [Option<f32>; 8] {
+/// [`crate::nav::drop_ahead`] feels standing on the ground off a ladder;
+/// `planned`'s when its plan felt from these feet and every crease it
+/// felt afresh reads as here ([`crate::nav::Creases::merge`]).
+fn drop_probe<W: BotWorld>(w: &W, slot: usize, planned: Option<Dropped>) -> [Option<f32>; 8] {
     let standing = w.body(slot).filter(|b| b.on_ground && !b.on_ladder);
     let (Some(body), Some(world)) = (standing, w.world()) else {
         return [None; 8];
     };
-    let key = W::STILL_WORLD.then(|| body.origin.to_array().map(f32::to_bits));
+    let feet = body.origin.to_array().map(f32::to_bits);
+    let key = W::STILL_WORLD.then_some(feet);
     if let Some(d) = key.and_then(|k| w.driver().probes.borrow().drops.get(&k).copied()) {
         return d;
     }
     let creases = &mut w.driver().creases.borrow_mut();
-    let d = std::array::from_fn(|i| {
-        let (s, c) = (i as f32 * 45.0).to_radians().sin_cos();
-        let dir = Vec3::new(c, s, 0.0);
-        let look = super::HAZARD_LOOK;
-        crate::nav::drop_ahead(&world.collision, body.origin, dir, look, creases)
-    });
+    let d = match planned.filter(|p| p.0 == feet && creases.merge(&p.2)) {
+        Some((_, d, _)) => d,
+        None => drops(&world.collision, body.origin, &mut **creases),
+    };
     if let Some(k) = key {
         Probes::keep(&mut w.driver().probes.borrow_mut().drops, k, d);
     }
     d
 }
 
+/// [`drop_probe`]'s eight drops from `feet`.
+fn drops(
+    world: &vcod_common::collision::CollisionWorld,
+    feet: Vec3,
+    creases: &mut impl crate::nav::CreaseCache,
+) -> [Option<f32>; 8] {
+    std::array::from_fn(|i| {
+        let (s, c) = (i as f32 * 45.0).to_radians().sin_cos();
+        let dir = Vec3::new(c, s, 0.0);
+        let look = super::HAZARD_LOOK;
+        crate::nav::drop_ahead(world, feet, dir, look, creases)
+    })
+}
+
 /// [`BotView::wall_ahead`] for the body in `slot`: per octant, whether
-/// [`crate::nav::wall_ahead`] pins it standing on the ground off a ladder.
-fn wall_probe<W: BotWorld>(w: &W, slot: usize) -> [bool; 8] {
+/// [`crate::nav::wall_ahead`] pins it standing on the ground off a ladder;
+/// `planned`'s when its plan felt from these feet.
+fn wall_probe<W: BotWorld>(w: &W, slot: usize, planned: Option<Walled>) -> [bool; 8] {
     let standing = w.body(slot).filter(|b| b.on_ground && !b.on_ladder);
     let (Some(body), Some(world)) = (standing, w.world()) else {
         return [false; 8];
     };
-    let key = W::STILL_WORLD.then(|| body.origin.to_array().map(f32::to_bits));
+    let feet = body.origin.to_array().map(f32::to_bits);
+    let key = W::STILL_WORLD.then_some(feet);
     if let Some(d) = key.and_then(|k| w.driver().probes.borrow().walls.get(&k).copied()) {
         return d;
     }
-    let d = std::array::from_fn(|i| {
-        let (s, c) = (i as f32 * 45.0).to_radians().sin_cos();
-        crate::nav::wall_ahead(&world.collision, body.origin, Vec3::new(c, s, 0.0))
-    });
+    let d = match planned.filter(|p| p.0 == feet) {
+        Some((_, d)) => d,
+        None => walls(&world.collision, body.origin),
+    };
     if let Some(k) = key {
         Probes::keep(&mut w.driver().probes.borrow_mut().walls, k, d);
     }
     d
+}
+
+/// [`wall_probe`]'s eight headings from `feet`.
+fn walls(world: &vcod_common::collision::CollisionWorld, feet: Vec3) -> [bool; 8] {
+    std::array::from_fn(|i| {
+        let (s, c) = (i as f32 * 45.0).to_radians().sin_cos();
+        crate::nav::wall_ahead(world, feet, Vec3::new(c, s, 0.0))
+    })
 }
 
 /// The drop and wall probes' verdicts by the bit pattern of the feet they
@@ -1013,16 +1150,27 @@ const GIVE_WAY_STEP: f32 = 64.0;
 /// mp_crash's radio room door held a third outside it until the round
 /// ended: there was no way round them (bot-objectives.md 12.7).
 fn give_way<W: BotWorld>(w: &W, slot: usize, teams: &[i32]) -> Option<[f32; 3]> {
-    let me = w
-        .body(slot)
-        .filter(|b| b.playing && b.velocity.length() < MATE_STILL)?;
+    let d = w.driver();
+    give_way_among(&|s| w.body(s), d.nav.as_deref(), &d.paths, slot, teams)
+}
+
+/// [`give_way`] over the bodies `body` reads and the followers `paths`.
+fn give_way_among(
+    body: &dyn Fn(usize) -> Option<Body>,
+    g: Option<&NavGraph>,
+    paths: &BTreeMap<usize, Follower>,
+    slot: usize,
+    teams: &[i32],
+) -> Option<[f32; 3]> {
+    let me = body(slot).filter(|b| b.playing && b.velocity.length() < MATE_STILL)?;
     let team = teams.get(slot).copied()?;
-    let g = w.driver().nav.as_ref()?;
+    let g = g?;
     let mine = g.nearest(me.origin.to_array())?;
-    let queued = (w.driver().paths.iter())
+    let queued = paths
+        .iter()
         .filter(|(s, f)| **s != slot && teams.get(**s) == Some(&team) && f.mate_block.0 > 0)
         .filter(|(_, f)| f.mate_block.1.contains(&mine))
-        .filter_map(|(s, _)| w.body(*s))
+        .filter_map(|(s, _)| body(*s))
         .map(|b| b.origin)
         .filter(|o| o.distance(me.origin) < GIVE_WAY_REACH)
         .min_by(|a, b| a.distance(me.origin).total_cmp(&b.distance(me.origin)))?;
@@ -1037,26 +1185,95 @@ fn give_way<W: BotWorld>(w: &W, slot: usize, teams: &[i32]) -> Option<[f32; 3]> 
 /// it head-on ([`crate::nav::Follower::stand_aside`]), each with the way it
 /// heads: every player not a bot, by its velocity, and every bot in a
 /// lower slot, toward its waypoint. Of two bots one always gives way.
-fn oncoming<W: BotWorld>(
-    w: &W,
+fn oncoming(
+    bots: &BTreeMap<usize, Bot>,
+    paths: &BTreeMap<usize, Follower>,
     slot: usize,
     standing: &[(usize, Vec3, Vec3)],
 ) -> Vec<(Vec3, Vec3)> {
-    let d = w.driver();
     standing
         .iter()
         .filter(|(s, _, _)| *s != slot)
-        .filter_map(|&(s, o, v)| match d.bots.contains_key(&s) {
+        .filter_map(|&(s, o, v)| match bots.contains_key(&s) {
             false => Some((o, v)),
-            true if s < slot => Some((o, d.paths.get(&s)?.heading()? - o)),
+            true if s < slot => Some((o, paths.get(&s)?.heading()? - o)),
             true => None,
         })
         .collect()
 }
 
-/// Pass 3's walk for one bot on the graph `g`: the follower's waypoint
-/// toward `goal` and the edge cues it reads off the graph, after the
-/// yields to teammates on and off the ladders (`climbers`, `standing`).
+/// What pass 3's loop shares with every bot's route: the team table, the
+/// bots planning alone, the objective paths, the S&D main group, and who
+/// stands on and off the ladders.
+struct Shared<'a> {
+    teams: &'a [i32],
+    solo: &'a [usize],
+    paths: &'a [super::team::TeamPath],
+    main: &'a [usize],
+    climbers: &'a [(usize, Vec3, Vec3)],
+    standing: &'a [(usize, Vec3, Vec3)],
+}
+
+/// What a bot's route reads of its game and its brain ([`route_in`]),
+/// besides its view and goal: the plan of it on a worker thread holds only
+/// while the loop reads the same.
+#[derive(Clone, PartialEq)]
+struct RouteIn {
+    sid: i32,
+    squad: bool,
+    stuck: bool,
+    rng: u64,
+    blocked: Option<Arc<[u32]>>,
+    body: Option<Body>,
+    ps: Option<vcod_common::pmove::PlayerState>,
+    fall_kills: Option<f32>,
+}
+
+/// [`RouteIn`] for the bot in `slot` as its route starts, its stuck flag
+/// taken.
+fn route_in<W: BotWorld>(w: &mut W, slot: usize) -> RouteIn {
+    let stuck = w
+        .driver_mut()
+        .bots
+        .get_mut(&slot)
+        .is_some_and(|b| b.take_stuck());
+    let d = w.driver();
+    let bot = d.bots.get(&slot);
+    RouteIn {
+        sid: w.server_id(),
+        squad: bot.is_some_and(|b| b.squad),
+        stuck,
+        rng: bot.map_or(1, |b| b.rng),
+        blocked: W::YIELDS.then(|| w.blocked_nodes()),
+        body: w.body(slot),
+        ps: w.move_ps(slot),
+        fall_kills: w.fall_kills(slot),
+    }
+}
+
+/// A route walked on a worker thread ([`plan`]): what it read, and what it
+/// left of the follower, the view and the bot's generator.
+struct RoutePlan {
+    input: RouteIn,
+    view: BotView,
+    goal: Goal,
+    /// The bodies it gave way to ([`oncoming`]), when it read them.
+    oncoming: Option<Vec<(Vec3, Vec3)>>,
+    follower: Follower,
+    after: BotView,
+    rng: u64,
+    /// The plan budget its search took.
+    used: u32,
+    stalled: Option<bool>,
+}
+
+/// Pass 3's walk for one bot on the graph `g` ([`route_core`]), with its
+/// game's reads ([`route_in`]) and what it leaves: the stall tally, the
+/// game's `routed`, the bot's generator and goal, its follower. `planned`
+/// stands in for the walk when it read the same, with the budget at least
+/// a search's slice ([`crate::nav::PLAN_SLICE`]): then the search it ran
+/// from a full budget took the slice it takes here and stopped where it
+/// stops here.
 #[allow(clippy::too_many_arguments)]
 fn route<W: BotWorld>(
     w: &mut W,
@@ -1064,47 +1281,121 @@ fn route<W: BotWorld>(
     view: &mut BotView,
     goal: Goal,
     g: &Arc<NavGraph>,
-    teams: &[i32],
-    solo: &[usize],
-    paths: &[super::team::TeamPath],
-    main: &[usize],
-    climbers: &[(usize, Vec3, Vec3)],
-    standing: &[(usize, Vec3, Vec3)],
+    cx: &Shared,
     budget: &mut u32,
+    planned: Option<RoutePlan>,
 ) {
-    use super::team::{self, Squad};
-    let g = g.clone();
-    let mut follower = w.driver_mut().paths.remove(&slot).unwrap_or_default();
+    let input = route_in(w, slot);
+    let follower = w.driver_mut().paths.remove(&slot).unwrap_or_default();
     let gave_up = follower.gave_up;
-    let shared = team_objective(view) && !solo.contains(&slot);
-    let squad = shared && w.driver().bots.get(&slot).is_some_and(|b| b.squad);
-    let noise = |t: i32| team::route_seed(w.server_id() as u32, t, slot);
+    let d = w.driver();
+    let on = || oncoming(&d.bots, &d.paths, slot, cx.standing);
+    let planned = planned.filter(|p| {
+        *budget >= crate::nav::PLAN_SLICE
+            && p.goal == goal
+            && p.input == input
+            && p.view == *view
+            && p.oncoming.as_ref().is_none_or(|o| *o == on())
+    });
+    let (follower, rng, stalled) = match planned {
+        Some(p) => {
+            *budget -= p.used;
+            *view = p.after;
+            (p.follower, p.rng, p.stalled)
+        }
+        None => {
+            let (mut follower, mut rng) = (follower, input.rng);
+            let world = w.world();
+            let defs = w.weapon_defs();
+            let stalled = route_core::<W>(
+                &input,
+                &mut follower,
+                gave_up,
+                slot,
+                view,
+                goal,
+                g,
+                world,
+                defs,
+                &on,
+                cx,
+                budget,
+                &mut rng,
+            );
+            (follower, rng, stalled)
+        }
+    };
+    if let Some(near) = stalled {
+        let tally = &mut w.driver_mut().edge_stalls;
+        tally[0] += 1;
+        tally[1] += u32::from(near);
+    }
+    w.routed(slot, &follower, g);
+    if let Some(b) = w.driver_mut().bots.get_mut(&slot) {
+        b.rng = rng;
+        if W::GIVES_UP_GOALS {
+            b.arrived_goal = match goal {
+                Goal::To(p) if follower.walked_out() => Some(p),
+                _ => None,
+            };
+        }
+    }
+    w.driver_mut().paths.insert(slot, follower);
+}
+
+/// The follower's waypoint toward `goal` and the edge cues it reads off
+/// the graph, after the yields to teammates on and off the ladders
+/// (`climbers`, `standing`), over what [`route_in`] read: a function of
+/// its arguments alone, so a worker thread walks it as the loop would;
+/// `oncoming` the bodies the bot gives way to, read only when needed.
+/// `Some` when the follower gave up an edge (`gave_up` before), `true`
+/// with another body near ([`BotDriver::edge_stalls`]).
+#[allow(clippy::too_many_arguments)]
+fn route_core<W: BotWorld>(
+    input: &RouteIn,
+    follower: &mut Follower,
+    gave_up: u32,
+    slot: usize,
+    view: &mut BotView,
+    goal: Goal,
+    g: &NavGraph,
+    world: Option<&World>,
+    defs: &[Option<vcod_common::weapon::WeaponDef>],
+    oncoming: &dyn Fn() -> Vec<(Vec3, Vec3)>,
+    cx: &Shared,
+    budget: &mut u32,
+    rng: &mut u64,
+) -> Option<bool> {
+    use super::team::{self, Squad};
+    let (teams, standing, climbers) = (cx.teams, cx.standing, cx.climbers);
+    let shared = team_objective(view) && !cx.solo.contains(&slot);
+    let squad = shared && input.squad;
+    let noise = |t: i32| team::route_seed(input.sid as u32, t, slot);
     (follower.crowd, follower.crowd_cost, follower.noise) = match teams.get(slot) {
         // A flanker pays far more on the main group's ways than on its
         // other teammates'.
         Some(&t) if W::YIELDS && squad && view.squad == Squad::Flank => (
-            team::crowd(paths.iter().filter(|p| main.contains(&p.0)), slot, t),
+            team::crowd(cx.paths.iter().filter(|p| cx.main.contains(&p.0)), slot, t),
             crate::nav::FLANK_COST,
             noise(t),
         ),
         Some(&t) if W::YIELDS && shared => (
-            team::crowd(paths, slot, t),
+            team::crowd(cx.paths, slot, t),
             crate::nav::CROWD_COST,
             if squad { noise(t) } else { 0 },
         ),
         _ => (Vec::new(), crate::nav::CROWD_COST, 0),
     };
-    if W::YIELDS {
-        follower.blocked = w.blocked_nodes();
+    if let Some(blocked) = &input.blocked {
+        follower.blocked = blocked.clone();
     }
     if W::PARTS_MATES {
-        let body = w.body(slot);
         let fighting = view.enemy.is_some();
         follower.blocked = mates_in_way(
-            &mut follower,
-            &g,
+            follower,
+            g,
             slot,
-            body.as_ref(),
+            input.body.as_ref(),
             fighting,
             W::PARTS_MATES_ALOFT,
             W::PARTS_MATES_FLAT,
@@ -1113,21 +1404,17 @@ fn route<W: BotWorld>(
             standing,
         );
     }
-    if w.driver_mut()
-        .bots
-        .get_mut(&slot)
-        .is_some_and(|b| b.take_stuck())
-    {
+    if input.stuck {
         follower.stuck();
     }
-    let ps = w.move_ps(slot);
+    let ps = input.ps;
     // The pace the bot runs at: a light weapon's is cut to the graph's on
     // the ground (`Bot::think`).
     follower.move_scale = view.move_scale.min(1.0);
     // What a fall off a ladder takes from this body now: a hurt bot backed
     // off mp_ship's 296-unit hold ladder onto a climber's head and died of
     // it (bot-navigation.md section 3).
-    follower.fall_kills = w.fall_kills(slot);
+    follower.fall_kills = input.fall_kills;
     follower.long_mantles = W::LONG_MANTLES;
     follower.foot_slack = W::FOOT_SLACK;
     // Only where a game's own step proved the graph (`NavGraph::step`).
@@ -1139,13 +1426,11 @@ fn route<W: BotWorld>(
         on_ladder: ps.as_ref().is_some_and(|ps| ps.on_ladder),
         velocity: ps.as_ref().map_or(Vec3::ZERO, |ps| ps.velocity),
     };
-    // The bot's own generator, copied out so the world stays readable and
-    // written back below.
-    let mut rng = w.driver().bots.get(&slot).map_or(1, |b| b.rng);
-    let mut rand = || (vcod_common::rng::xorshift(&mut rng) >> 33) as i32 & 0x7fff_ffff;
+    // The bot's own generator, copied out ([`RouteIn::rng`]) and written
+    // back after.
+    let mut rand = || (vcod_common::rng::xorshift(rng) >> 33) as i32 & 0x7fff_ffff;
     // A seat plans from the vehicle on the ground under it.
     let at = view.seat.map_or(view.origin, |s| s.origin);
-    let world = w.world();
     let others = |all: &[(usize, Vec3, Vec3)]| -> Vec<(Vec3, Vec3)> {
         all.iter()
             .filter(|c| c.0 != slot)
@@ -1155,55 +1440,52 @@ fn route<W: BotWorld>(
     let (others, aground) = (others(climbers), others(standing));
     let collision = world.map(|w| &w.collision);
     if W::SHUNS_BODIES && view.enemy.is_none() {
-        view.detour = follower.bodies_in_way(&g, at.into(), body, &aground);
+        view.detour = follower.bodies_in_way(g, at.into(), body, &aground);
     }
     let aside = (W::SHUNS_BODIES && view.enemy.is_none())
-        .then(|| {
-            let oncoming = oncoming(w, slot, standing);
-            follower.stand_aside(&g, at.into(), body, &oncoming)
-        })
+        .then(|| follower.stand_aside(g, at.into(), body, oncoming))
         .flatten();
     if let Some(spot) = aside {
         // Come to rest there, as on a leap's foot.
         view.waypoint = Some(spot.into());
         view.stop = true;
     } else if W::YIELDS
-        && let Some(spot) = follower.ladder_yield(&g, at.into(), body, &others, &aground)
+        && let Some(spot) = follower.ladder_yield(g, at.into(), body, &others, &aground)
     {
         // Come to rest there, as on a leap's foot.
         view.waypoint = Some(spot.into());
         view.stop = true;
-    } else if W::YIELDS && follower.abreast_yield(&g, at.into(), body, &others) {
+    } else if W::YIELDS && follower.abreast_yield(g, at.into(), body, &others) {
         // No waypoint on the rungs climbs down (`Bot::think`).
         view.waypoint = None;
     } else if W::YIELDS
-        && let Some(head) = follower.head_on_yield(&g, at.into(), body, &others)
+        && let Some(head) = follower.head_on_yield(g, at.into(), body, &others)
     {
         view.waypoint = Some(head.into());
     } else {
-        view.waypoint = follower.waypoint(&g, collision, goal, at, body, budget, &mut rand);
+        view.waypoint = follower.waypoint(g, collision, goal, at, body, budget, &mut rand);
         // No waypoint while the next plan is searched for: come to rest on
         // the last one, as on a leap's foot.
         let resting = view.waypoint.is_none() && goal != Goal::Hold;
         let rest = follower.rest_point(at, body).filter(|_| resting);
-        if let Some(p) = follower.climb_line(&g) {
+        if let Some(p) = follower.climb_line(g) {
             view.ladder_middle = Some(p.into());
         }
-        view.back_face = follower.back_face(&g).map(|(y, m)| (y, m.into()));
+        view.back_face = follower.back_face(g).map(|(y, m)| (y, m.into()));
         if view.fatigue.is_some() {
-            view.sprint_room = follower.straight_run(&g, at.into());
+            view.sprint_room = follower.straight_run(g, at.into());
         }
-        view.jump = follower.jump_cued(&g);
-        view.leap = follower.leaping(&g);
+        view.jump = follower.jump_cued(g);
+        view.leap = follower.leaping(g);
         // A jump edge proved aimed beside its top: steer there.
-        if let (true, Some(w), Some(p)) = (view.jump, view.waypoint, follower.jump_aim(&g)) {
+        if let (true, Some(w), Some(p)) = (view.jump, view.waypoint, follower.jump_aim(g)) {
             view.waypoint = Some([p.x, p.y, w[2]]);
         }
-        view.stop = follower.holding(&g);
-        if let Some(foot) = ps.as_ref().and_then(|ps| follower.jump_wait(&g, at, ps)) {
+        view.stop = follower.holding(g);
+        if let Some(foot) = ps.as_ref().and_then(|ps| follower.jump_wait(g, at, ps)) {
             // A jump that fails from rest there is planned round; the body
             // holds still meanwhile.
-            let round = collision.is_some_and(|w| follower.rest_jump_fails(&g, w, foot));
+            let round = collision.is_some_and(|w| follower.rest_jump_fails(g, w, foot));
             view.waypoint = Some(if round { at } else { foot });
             view.stop = true;
             view.jump = false;
@@ -1225,10 +1507,10 @@ fn route<W: BotWorld>(
         {
             view.waypoint = Some(p.into());
         }
-        view.mantle = follower.mantling(&g);
+        view.mantle = follower.mantling(g);
         // Until the body stands at the landing: from there on to the node.
         if W::MANTLE_AIMS
-            && let (Some(w), Some(q)) = (view.waypoint, follower.mantle_land(&g))
+            && let (Some(w), Some(q)) = (view.waypoint, follower.mantle_land(g))
             && !view.stop
             && q.truncate().distance(glam::Vec2::new(at[0], at[1])) > MANTLE_LANDED
         {
@@ -1239,10 +1521,9 @@ fn route<W: BotWorld>(
         // 12.11).
         view.run_off = !body.on_ladder
             && ((follower.mantle_rests && view.mantle)
-                || follower.running_off(&g, collision, at.into(), super::BACK_DOWN_HEIGHT));
-        view.crouch_jump = view.jump && follower.crouch_jumping(&g);
+                || follower.running_off(g, collision, at.into(), super::BACK_DOWN_HEIGHT));
+        view.crouch_jump = view.jump && follower.crouch_jumping(g);
         if W::PMOVE_PROBES {
-            let defs = w.weapon_defs();
             view.lip = view.jump
                 && matches!((world, ps, view.waypoint), (Some(w), Some(ps), Some(to))
                 if crate::nav::lip_ahead(&w.collision, &ps, glam::Vec2::new(to[0], to[1]), defs));
@@ -1271,27 +1552,225 @@ fn route<W: BotWorld>(
             .collect();
         view.mate_ahead = team::mate_ahead(at, to, &mates);
     }
-    if follower.gave_up > gave_up {
-        let near = climbers.iter().chain(standing).any(|&(s, o, _)| {
-            s != slot
-                && (o - Vec3::from(at)).truncate().length() < STALL_NEAR
-                && (o.z - at[2]).abs() < STALL_NEAR
-        });
-        let tally = &mut w.driver_mut().edge_stalls;
-        tally[0] += 1;
-        tally[1] += u32::from(near);
+    if follower.gave_up <= gave_up {
+        return None;
     }
-    w.routed(slot, &follower, &g);
-    if let Some(b) = w.driver_mut().bots.get_mut(&slot) {
-        b.rng = rng;
-        if W::GIVES_UP_GOALS {
-            b.arrived_goal = match goal {
-                Goal::To(p) if follower.walked_out() => Some(p),
-                _ => None,
+    Some(climbers.iter().chain(standing).any(|&(s, o, _)| {
+        s != slot
+            && (o - Vec3::from(at)).truncate().length() < STALL_NEAR
+            && (o.z - at[2]).abs() < STALL_NEAR
+    }))
+}
+
+/// A vantage looked for on a worker thread: `(spot, from)` and what it
+/// found ([`vantage`]).
+type Looked = (([f32; 3], [f32; 3]), Option<[f32; 3]>);
+/// A retreat's cover looked for on a worker thread: `(from, threat,
+/// held)` and the spot ([`super::retreat::cover_spot`]).
+type Retreated = (([f32; 3], [f32; 3], Option<[f32; 3]>), Option<[f32; 3]>);
+/// Drops felt on a worker thread: the feet's bits, the drops and the
+/// creases felt afresh ([`drop_probe`]).
+type Dropped = ([u32; 3], [Option<f32>; 8], Vec<([i32; 3], bool)>);
+/// Walls felt on a worker thread: the feet's bits and the walls
+/// ([`wall_probe`]).
+type Walled = ([u32; 3], [bool; 8]);
+
+/// One bot's pass 3 worked out ahead on a worker thread ([`plan`]): each
+/// part with what it read, for the loop to take where it reads the same
+/// and work out afresh where it does not.
+#[derive(Default)]
+struct Plan {
+    /// The spot its cover look found, when it took one ([`cover`]).
+    cover: Option<Option<super::cover::Spot>>,
+    retreat: Option<Retreated>,
+    vantage: Option<Looked>,
+    route: Option<RoutePlan>,
+    drops: Option<Dropped>,
+    walls: Option<Walled>,
+}
+
+/// What every bot's [`plan_one`] reads: the graph, the world and the
+/// driver's state as pass 3 starts, each body, and the loop's [`Shared`].
+struct PlanCx<'a> {
+    g: &'a NavGraph,
+    world: &'a World,
+    defs: &'a [Option<vcod_common::weapon::WeaponDef>],
+    bots: &'a BTreeMap<usize, Bot>,
+    paths: &'a BTreeMap<usize, Follower>,
+    hunts: &'a BTreeMap<usize, ([f32; 3], Option<[f32; 3]>)>,
+    creases: &'a Creases,
+    probes: &'a Probes,
+    bodies: &'a [Option<Body>],
+    shared: &'a Shared<'a>,
+}
+
+/// Whether pass 3 plans `n` views on the pass's threads ([`plan`]): on more
+/// than one thread, for more than one bot, over a graph and a world.
+fn planning<W: BotWorld>(w: &W, n: usize) -> bool {
+    par::threads() > 1 && n > 1 && w.driver().nav.is_some() && w.world().is_some()
+}
+
+/// Pass 3's costly parts for every view on the pass's threads
+/// ([`par::map`]), in the views' order, with the cover looks `covers`
+/// pass 2 left them ([`land_covers`]); empty with no graph or world.
+/// Each bot's plan runs its loop turn up to its think over the state the
+/// pass starts with, the game's own hooks left out: the retreat's cover,
+/// the vantage, the way given, the goal, the route and the drop and wall
+/// probes. The loop then takes each part whose reads it matches (the
+/// route's [`RouteIn`], view and goal; the probes' feet and creases), so
+/// a bot moves as the loop alone would move it: whatever an earlier bot's
+/// turn or a hook changed fails its part's check.
+fn plan<W: BotWorld>(
+    w: &W,
+    views: &[(usize, BotView)],
+    covers: Option<&[CoverStep]>,
+    shared: &Shared,
+) -> Vec<Plan> {
+    let d = w.driver();
+    let (Some(g), Some(world)) = (d.nav.as_deref(), w.world()) else {
+        return Vec::new();
+    };
+    let slots = (views.iter().map(|v| v.0))
+        .chain(d.paths.keys().copied())
+        .max()
+        .map_or(0, |s| s + 1)
+        .max(shared.teams.len());
+    let bodies: Vec<Option<Body>> = (0..slots).map(|s| w.body(s)).collect();
+    let (sid, blocked) = (w.server_id(), W::YIELDS.then(|| w.blocked_nodes()));
+    let ins: Vec<(usize, &BotView, Option<&CoverStep>, RouteIn)> = views
+        .iter()
+        .enumerate()
+        .map(|(i, (slot, view))| {
+            let bot = d.bots.get(slot);
+            let input = RouteIn {
+                sid,
+                squad: bot.is_some_and(|b| b.squad),
+                stuck: bot.is_some_and(|b| b.stuck),
+                rng: bot.map_or(1, |b| b.rng),
+                blocked: blocked.clone(),
+                body: bodies[*slot],
+                ps: w.move_ps(*slot),
+                fall_kills: w.fall_kills(*slot),
             };
+            (*slot, view, covers.and_then(|c| c.get(i)), input)
+        })
+        .collect();
+    let gp = crate::tick_profile::phase("plans/gather");
+    let (creases, probes) = (d.creases.borrow(), d.probes.borrow());
+    let cx = PlanCx {
+        g,
+        world,
+        defs: w.weapon_defs(),
+        bots: &d.bots,
+        paths: &d.paths,
+        hunts: &d.hunts,
+        creases: &creases,
+        probes: &probes,
+        bodies: &bodies,
+        shared,
+    };
+    drop(gp);
+    let _mp = crate::tick_profile::phase("plans/map");
+    par::map(&ins, |(slot, view, cover, input)| {
+        plan_one::<W>(&cx, *slot, view, *cover, input)
+    })
+}
+
+/// [`plan`] for the bot in `slot` from its view `view` and its cover look,
+/// in the loop's order. The game's `pre_route` and `pre_think` are the loop's: a view
+/// the first changes fails the route's check.
+fn plan_one<W: BotWorld>(
+    cx: &PlanCx,
+    slot: usize,
+    view: &BotView,
+    cover: Option<&CoverStep>,
+    input: &RouteIn,
+) -> Plan {
+    let mut plan = Plan::default();
+    let mut view = view.clone();
+    match cover {
+        Some(Ok(spot)) => view.cover = *spot,
+        Some(Err(look)) => {
+            view.cover = look.find(cx.g, cx.world);
+            plan.cover = Some(view.cover);
+        }
+        None => {}
+    }
+    let Some(bot) = cx.bots.get(&slot) else {
+        return plan;
+    };
+    if let Some((threat, held)) = bot.cover_query() {
+        let spot = super::retreat::cover_spot(cx.g, &cx.world.collision, view.origin, threat, held);
+        plan.retreat = Some(((view.origin, threat, held), spot));
+        view.survive.cover = spot;
+    }
+    view.hunt = bot.hunt_query().and_then(|spot| match cx.hunts.get(&slot) {
+        Some(&(s, v)) if s == spot => v,
+        _ => {
+            let v = hunt_vantage(cx.g, cx.world, view.origin, spot);
+            plan.vantage = Some(((spot, view.origin), v));
+            v
+        }
+    });
+    if W::PARTS_MATES {
+        let body = |s: usize| cx.bodies.get(s).copied().flatten();
+        view.give_way = give_way_among(&body, Some(cx.g), cx.paths, slot, cx.shared.teams);
+    }
+    let goal = bot.goal(&view);
+    if view.seat.is_none() {
+        let read = std::cell::RefCell::new(None);
+        let on = || {
+            let o = oncoming(cx.bots, cx.paths, slot, cx.shared.standing);
+            *read.borrow_mut() = Some(o.clone());
+            o
+        };
+        let before = view.clone();
+        let mut follower = cx.paths.get(&slot).cloned().unwrap_or_default();
+        let gave_up = follower.gave_up;
+        let (mut budget, mut rng) = (PLAN_BUDGET, input.rng);
+        let stalled = route_core::<W>(
+            input,
+            &mut follower,
+            gave_up,
+            slot,
+            &mut view,
+            goal,
+            cx.g,
+            Some(cx.world),
+            cx.defs,
+            &on,
+            cx.shared,
+            &mut budget,
+            &mut rng,
+        );
+        plan.route = Some(RoutePlan {
+            input: input.clone(),
+            view: before,
+            goal,
+            oncoming: read.into_inner(),
+            follower,
+            after: view.clone(),
+            rng,
+            used: PLAN_BUDGET - budget,
+            stalled,
+        });
+    }
+    if let Some(b) = input.body.filter(|b| b.on_ground && !b.on_ladder) {
+        let feet = b.origin.to_array().map(f32::to_bits);
+        let collision = &cx.world.collision;
+        if bot.reads_drops(&view) && !(W::STILL_WORLD && cx.probes.drops.contains_key(&feet)) {
+            let mut read = crate::nav::CreaseRead {
+                base: cx.creases,
+                fresh: Vec::new(),
+            };
+            let d = drops(collision, b.origin, &mut read);
+            plan.drops = Some((feet, d, read.fresh));
+        }
+        if bot.reads_walls(&view) && !(W::STILL_WORLD && cx.probes.walls.contains_key(&feet)) {
+            plan.walls = Some((feet, walls(collision, b.origin)));
         }
     }
-    w.driver_mut().paths.insert(slot, follower);
+    plan
 }
 
 #[cfg(test)]
