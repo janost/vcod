@@ -152,10 +152,12 @@ pub fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec
     }
     let next = std::sync::atomic::AtomicUsize::new(0);
     let mut out: Vec<Option<R>> = (0..items.len()).map(|_| None).collect();
+    let reads = crate::pk3::ReadLog::current();
     std::thread::scope(|s| {
         let handles: Vec<_> = (0..threads)
             .map(|_| {
                 s.spawn(|| {
+                    let _reads = crate::pk3::ReadLog::install(reads.clone());
                     let mut done = Vec::new();
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

@@ -15,6 +15,7 @@ use std::rc::Rc;
 use glam::Vec3;
 use vcod_cod2::net::UserCmd2;
 use vcod_cod2::pmove::{PlayerState, Rules, pm_type};
+use vcod_common::asset_source::Asset;
 use vcod_common::movetrace::CONTENTS_BODY;
 use vcod_common::pk3::Pk3Fs;
 
@@ -341,6 +342,57 @@ pub struct Cod2Init {
     /// load's iwd lists (`pure_lists`) are taken, so its reads flag nothing
     /// a client is sent.
     pub rigs: Option<crate::game::cod2_combat::RigCache>,
+    /// The last level's [`MapParts`], taken when they are this map's over
+    /// the same paks.
+    pub parts: Option<Rc<MapParts>>,
+}
+
+/// What a load builds off the map and the paks alone, the same for every
+/// load of one map over one search path: the world, its clip map, the
+/// static models' collision, the hit poses' anim set (no clip loaded) and
+/// pmove's anim table. A `map_restart`, `fast_restart` or `map` of the same
+/// map takes the last level's (cod4-server-frame.md 9, "The restart's
+/// load") and touches the paths their reads flagged, so the referenced
+/// iwds come out as a fresh read's.
+pub struct MapParts {
+    map: String,
+    fs: std::rc::Weak<Pk3Fs>,
+    pub world: Rc<vcod_common::mapworld::MapWorld>,
+    pub clip: std::sync::Arc<vcod_cod2::collision::ClipMap>,
+    statics: Option<Rc<vcod_common::collision::CollisionWorld>>,
+    hitloc_mult: [f32; 19],
+    hit_anims: Option<vcod_cod2::player::PlayerAnimSet>,
+    anims: Option<Rc<vcod_cod2::pmove::AnimTable>>,
+    /// The paths whose reads marked a pak referenced while these were built.
+    reads: Vec<String>,
+}
+
+impl MapParts {
+    /// Whether these are `map`'s over `fs`.
+    fn fits(&self, fs: &Rc<Pk3Fs>, map: &str) -> bool {
+        std::ptr::eq(self.fs.as_ptr(), Rc::as_ptr(fs)) && self.map.eq_ignore_ascii_case(map)
+    }
+}
+
+/// A load's map: the last level's parts, or the world and clip just read
+/// with the log of what their reads flagged.
+pub enum PartsSource {
+    Carried(Rc<MapParts>),
+    Fresh {
+        map: String,
+        world: Rc<vcod_common::mapworld::MapWorld>,
+        clip: std::sync::Arc<vcod_cod2::collision::ClipMap>,
+        reads: vcod_common::pk3::ReadLog,
+    },
+}
+
+impl PartsSource {
+    pub fn world(&self) -> &vcod_common::mapworld::MapWorld {
+        match self {
+            PartsSource::Carried(p) => &p.world,
+            PartsSource::Fresh { world, .. } => world,
+        }
+    }
 }
 
 /// A CoD2 level's game module (see the module header).
@@ -351,6 +403,8 @@ pub struct Cod2Level {
     pub rules: Rules,
     pub combat: crate::game::cod2_combat::Combat,
     pub turrets: crate::game::cod2_turret::Turrets,
+    /// What this level's load built off the map and paks, for the next.
+    parts: Rc<MapParts>,
     /// The anim script pmove picks the legs and torso anims off; `None`
     /// without paks, which leaves them 0.
     pub anims: Option<Rc<vcod_cod2::pmove::AnimTable>>,
@@ -377,16 +431,7 @@ impl Cod2Level {
         cvars: crate::cvars::Cvars,
         now_ms: i32,
     ) -> anyhow::Result<Cod2Level> {
-        let loaded = vcod_cod2::map::LoadedMap::find(&*fs, map)?;
-        Self::load_loaded(
-            fs,
-            &loaded,
-            map,
-            gametype,
-            cvars,
-            now_ms,
-            Cod2Init::default(),
-        )
+        Self::load_with(fs, map, gametype, cvars, now_ms, Cod2Init::default())
     }
 
     /// [`Self::load`] with `overlay`, a script (canonical path, text) read
@@ -399,62 +444,68 @@ impl Cod2Level {
         cvars: crate::cvars::Cvars,
         now_ms: i32,
     ) -> anyhow::Result<Cod2Level> {
-        let loaded = vcod_cod2::map::LoadedMap::find(&*fs, map)?;
         let init = Cod2Init {
             overlay: Some(overlay),
             ..Default::default()
         };
-        Self::load_loaded(fs, &loaded, map, gametype, cvars, now_ms, init)
+        Self::load_with(fs, map, gametype, cvars, now_ms, init)
     }
 
-    /// [`Self::load`] over a map the caller already parsed, with what a
-    /// level boundary hands on ([`Cod2Init`]).
-    #[allow(clippy::too_many_arguments)]
-    pub fn load_map_with(
+    /// [`Self::load`] with what a level boundary hands on ([`Cod2Init`]):
+    /// the map's parts are its own when they are this map's over these
+    /// paks, else read and built here.
+    pub fn load_with(
         fs: Rc<Pk3Fs>,
-        file: &vcod_cod2::map::MapFile,
-        map_world: &vcod_common::mapworld::MapWorld,
         map: &str,
         gametype: &str,
         cvars: crate::cvars::Cvars,
         now_ms: i32,
-        init: Cod2Init,
+        mut init: Cod2Init,
     ) -> anyhow::Result<Cod2Level> {
-        let clip = std::sync::Arc::new(file.clip()?);
-        Self::load_level(fs, map_world, clip, map, gametype, cvars, now_ms, init)
+        let parts = Self::map_parts(&fs, map, init.parts.take())?;
+        Self::load_level(fs, parts, map, gametype, cvars, now_ms, init)
     }
 
-    /// [`Self::load_map_with`] over a [`vcod_cod2::map::LoadedMap`], whose
-    /// world and ClipMap were built side by side.
-    #[allow(clippy::too_many_arguments)]
-    pub fn load_loaded(
-        fs: Rc<Pk3Fs>,
-        loaded: &vcod_cod2::map::LoadedMap,
+    /// The map's world and clip for a load: `carried` when it is `map`'s
+    /// over `fs` (its reads' paks touched again), else read and parsed, the
+    /// reads logged for the next load. The rest of [`MapParts`] fills in
+    /// during [`Self::load_level`].
+    pub fn map_parts(
+        fs: &Rc<Pk3Fs>,
         map: &str,
-        gametype: &str,
-        cvars: crate::cvars::Cvars,
-        now_ms: i32,
-        init: Cod2Init,
-    ) -> anyhow::Result<Cod2Level> {
-        Self::load_level(
-            fs,
-            &loaded.world,
-            loaded.clip.clone(),
-            map,
-            gametype,
-            cvars,
-            now_ms,
-            init,
-        )
+        carried: Option<Rc<MapParts>>,
+    ) -> anyhow::Result<PartsSource> {
+        if let Some(p) = carried.filter(|p| p.fits(fs, map)) {
+            for path in &p.reads {
+                fs.touch(path);
+            }
+            return Ok(PartsSource::Carried(p));
+        }
+        let reads = vcod_common::pk3::ReadLog::default();
+        let (world, clip) = reads.record(|| -> anyhow::Result<_> {
+            let p = crate::tick_profile::phase("load/read and parse");
+            let file = vcod_cod2::map::MapFile::find(&**fs, map)?;
+            drop(p);
+            let p = crate::tick_profile::phase("load/world");
+            let world = file.world();
+            drop(p);
+            let _p = crate::tick_profile::phase("load/clip");
+            Ok((world, std::sync::Arc::new(file.clip()?)))
+        })?;
+        Ok(PartsSource::Fresh {
+            map: map.to_string(),
+            world: Rc::new(world),
+            clip,
+            reads,
+        })
     }
 
-    /// The level over the map's world and its ClipMap, which the engine's
-    /// collision and the combat's traces share.
+    /// The level over the map's parts, which the engine's collision and the
+    /// combat's traces share.
     #[allow(clippy::too_many_arguments)]
-    fn load_level(
+    pub fn load_level(
         fs: Rc<Pk3Fs>,
-        map_world: &vcod_common::mapworld::MapWorld,
-        clip: std::sync::Arc<vcod_cod2::collision::ClipMap>,
+        parts: PartsSource,
         map: &str,
         gametype: &str,
         mut cvars: crate::cvars::Cvars,
@@ -466,27 +517,44 @@ impl Cod2Level {
         vcod_cod2::model::register();
         let mut laps = vcod_common::laps::Laps::new(format!("cod2 level {map} parts"));
         let carried_rigs = init.rigs;
+        let (map_world, clip) = match &parts {
+            PartsSource::Carried(p) => (p.world.clone(), p.clip.clone()),
+            PartsSource::Fresh { world, clip, .. } => (world.clone(), clip.clone()),
+        };
         // The static models' collision builds beside the world and the
         // script, which don't need it.
         let pak: &Pk3Fs = &fs;
         let (rt, statics, world, rules) = std::thread::scope(|sc| {
             // The static models' collision for the bullets (`CM_LoadStaticModels`
             // off the `misc_model` blocks); nothing else clips it.
-            let statics = sc.spawn(|| {
-                let tris = vcod_common::props::collision_tris(pak, &map_world.entities);
-                (!tris.is_empty()).then(|| {
-                    vcod_common::collision::CollisionWorld::build(
-                        &vcod_common::mapworld::MapWorld::default(),
-                        &tris,
-                    )
-                })
-            });
-            let world = Rc::new(level_world(map_world, clip.clone()));
+            let statics = match &parts {
+                PartsSource::Carried(_) => Err(()),
+                PartsSource::Fresh { reads, .. } => {
+                    let reads = reads.clone();
+                    let entities = &map_world.entities;
+                    Ok(sc.spawn(move || {
+                        reads.record(|| {
+                            let tris = vcod_common::props::collision_tris(pak, entities);
+                            (!tris.is_empty()).then(|| {
+                                vcod_common::collision::CollisionWorld::build(
+                                    &vcod_common::mapworld::MapWorld::default(),
+                                    &tris,
+                                )
+                            })
+                        })
+                    }))
+                }
+            };
+            let p = crate::tick_profile::phase("load/collision world");
+            let world = Rc::new(level_world(&map_world, clip.clone()));
+            drop(p);
             laps.lap("collision world");
+            let p = crate::tick_profile::phase("load/mantle anims");
             let rules = Rules {
                 mantle_anims: vcod_cod2::pmove::mantle::anims(&fs),
                 ..Rules::default()
             };
+            drop(p);
             cvars.set("g_gametype", gametype);
             cvars.set("mapname", map);
             let configstrings = init
@@ -495,7 +563,7 @@ impl Cod2Level {
             let rt = ScriptRuntime::load_cod2_carry(
                 Box::new(PakScripts::new(fs.clone(), init.overlay)),
                 fs.clone(),
-                map_world,
+                &map_world,
                 Some(world.clone()),
                 map,
                 gametype,
@@ -505,25 +573,58 @@ impl Cod2Level {
                 init.carry,
             )?;
             laps.lap("script");
-            let statics = vcod_common::laps::joined(statics);
+            let p = crate::tick_profile::phase("load/static models");
+            let statics = statics
+                .ok()
+                .map(|h| vcod_common::laps::joined(h).map(Rc::new));
+            drop(p);
             laps.lap("static models");
             anyhow::Ok((rt, statics, world, rules))
         })?;
-        let mut combat = crate::game::cod2_combat::Combat::with_statics(
+        let p = crate::tick_profile::phase("load/combat and anims");
+        let parts = match parts {
+            PartsSource::Carried(p) => p,
+            PartsSource::Fresh {
+                map,
+                world,
+                clip,
+                reads,
+            } => {
+                let host_fs = rt.host.fs.as_deref();
+                let ((hitloc_mult, hit_anims), anims) = reads.record(|| {
+                    let anims = host_fs.and_then(|fs| {
+                        vcod_cod2::pmove::AnimTable::load(fs)
+                            .map_err(|e| log::warn!("cod2: no player anim script: {e:#}"))
+                            .ok()
+                            .map(Rc::new)
+                    });
+                    (crate::game::cod2_combat::Combat::tables(host_fs), anims)
+                });
+                Rc::new(MapParts {
+                    map,
+                    fs: Rc::downgrade(&fs),
+                    world,
+                    clip,
+                    statics: statics.flatten(),
+                    hitloc_mult,
+                    hit_anims,
+                    anims,
+                    reads: reads.paths(),
+                })
+            }
+        };
+        let mut combat = crate::game::cod2_combat::Combat::with_parts(
             Some(clip),
-            statics,
-            rt.host.fs.as_deref(),
+            parts.statics.clone(),
+            parts.hitloc_mult,
+            parts.hit_anims.clone(),
         );
         if let Some(rigs) = carried_rigs {
             combat.set_rigs(rigs);
         }
         combat.rand = rt.host.cod2().rand.clone();
-        let anims = rt.host.fs.as_deref().and_then(|fs| {
-            vcod_cod2::pmove::AnimTable::load(fs)
-                .map_err(|e| log::warn!("cod2: no player anim script: {e:#}"))
-                .ok()
-                .map(Rc::new)
-        });
+        let anims = parts.anims.clone();
+        drop(p);
         laps.lap("combat and anims");
         laps.finish();
         Ok(Cod2Level {
@@ -533,6 +634,7 @@ impl Cod2Level {
             rules,
             combat,
             turrets: Default::default(),
+            parts,
             anims,
             archive: Default::default(),
             mantle_blocks: Vec::new(),
@@ -1538,6 +1640,12 @@ impl Cod2Level {
         same.then(|| self.combat.rigs().clone())
     }
 
+    /// The map's parts for the next level ([`Cod2Init::parts`]); it keeps
+    /// them only for the same map over the same paks.
+    pub fn carried_parts(&self) -> Rc<MapParts> {
+        self.parts.clone()
+    }
+
     pub fn take_carry(&self, restart: bool) -> crate::game::script::Carry {
         let all = self.rt.take_carry();
         let keep = self.save_persist();
@@ -1549,6 +1657,7 @@ impl Cod2Level {
             // A restart keeps the paks' referenced flags, which a load
             // through the caches would have set again.
             models: all.models.filter(|_| restart),
+            weapon_files: all.weapon_files,
             ..Default::default()
         }
     }
