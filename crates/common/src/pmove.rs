@@ -4281,6 +4281,33 @@ fn wish_air(ps: &PlayerState, input: &PmInput) -> (Vec3, f32, f32) {
     (wishvel.normalize_or_zero(), wishvel.length(), scale)
 }
 
+/// 1.1d's `PM_AirMove` wish (0x2f036..0x2f11a): `PM_CmdScale` stored as a
+/// float (0x2f088), the view's forward and right with `z` zeroed and
+/// `VectorNormalize`d (0x2f0a7, 0x2f0b9), each wish component
+/// `forward * fmove + right * smove` rounded once (0x2f0f2), then
+/// normalized with its float length.
+fn wish_air_x87(ps: &PlayerState, input: &PmInput) -> (Vec3, f32, f32) {
+    let (fm, sm) = (input.forward * 127.0, input.right * 127.0);
+    let scale = cmd_scale_x87(ps, input) as f32;
+    let (forward, right) = view_vectors(ps, crate::patch::Arith::Kept);
+    let f = x87::normalize_in_place(forward.with_z(0.0));
+    let r = x87::normalize_in_place(right.with_z(0.0));
+    let c = |f: f32, r: f32| (f64::from(f) * f64::from(fm) + f64::from(r) * f64::from(sm)) as f32;
+    let wishvel = Vec3::new(c(f.x, r.x), c(f.y, r.y), 0.0);
+    let len = x87::dot(wishvel, wishvel).sqrt() as f32;
+    (x87::normalize_in_place(wishvel), len, scale)
+}
+
+/// 1.1d's `ProjectPointOnPlane` (game.mp 0x3f01c): `1 / |n|^2`, the dot and
+/// the scaled normal all on the stack, each component of `p - d * n'`
+/// rounded once.
+fn project_point_on_plane_x87(p: Vec3, n: Vec3) -> Vec3 {
+    let (p, n) = (p.as_dvec3(), n.as_dvec3());
+    let inv = 1.0 / ((n.x * n.x + n.y * n.y) + n.z * n.z);
+    let d = ((n.x * p.x + n.y * p.y) + n.z * p.z) * inv;
+    (p - (n * inv) * d).as_vec3()
+}
+
 /// Retail's Q3-shaped `PM_CmdScale` (0x2e5bc), shared by the air and ladder
 /// moves: `speed * max / (127 * total)` over forward, right and up, then
 /// the walk or run scale. It reads the cmd's own `upmove` (0x2e5e9), not
@@ -4863,7 +4890,11 @@ fn ladder_move(
     // `ProjectPointOnPlane(pml.right, flat right, vLadderVec)` (0x339fa):
     // strafing slides along the face instead of into or off it.
     let flat_right = x87::normalize(right.with_z(0.0));
-    let right = flat_right - normal * flat_right.dot(normal);
+    let right = if v15 || world.world.arith() == crate::patch::Arith::Msvc {
+        flat_right - normal * flat_right.dot(normal)
+    } else {
+        project_point_on_plane_x87(flat_right, normal)
+    };
     let (f, r) = (input.forward * 127.0, input.right * 127.0);
     let scale = if v15 {
         f64::from(cmd_scale(ps, input))
@@ -5002,8 +5033,12 @@ fn air_move(
     // `PM_AirMove` opens with `PM_Friction` (0x2f045): off the ground only
     // its sub-unit stop and the water term can bite.
     friction(ps, world, dt);
-    let (dir, len, scale) = wish_air(ps, input);
     let msvc = world.world.arith() == crate::patch::Arith::Msvc;
+    let (dir, len, scale) = if msvc || ps.rules.v15() {
+        wish_air(ps, input)
+    } else {
+        wish_air_x87(ps, input)
+    };
     if msvc {
         // The Windows cgames store the product too (1.1 0x30007fce) and
         // call their `PM_Accelerate` (0x30007fd7).
