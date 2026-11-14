@@ -15,8 +15,8 @@ use std::rc::Rc;
 use glam::Vec3;
 use vcod_cod2::net::UserCmd2;
 use vcod_cod2::pmove::{PlayerState, Rules, pm_type};
-use vcod_common::movetrace::CONTENTS_BODY;
 use vcod_common::asset_source::Asset;
+use vcod_common::movetrace::CONTENTS_BODY;
 use vcod_common::pk3::Pk3Fs;
 
 use crate::game::host::{ClientEvent, GameHost, SimOp, SpawnMode};

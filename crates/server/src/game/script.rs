@@ -701,7 +701,8 @@ impl ScriptRuntime {
         if let Some(items) = carry.items {
             host.items = items;
         }
-        if let (Some(w), crate::game::host::HostExt::Cod2(c)) = (carry.weapon_files, &mut host.ext) {
+        if let (Some(w), crate::game::host::HostExt::Cod2(c)) = (carry.weapon_files, &mut host.ext)
+        {
             c.weapon_files = w;
         }
         if let Some(m) = carry.models {

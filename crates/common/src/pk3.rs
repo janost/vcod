@@ -83,7 +83,10 @@ impl ReadLog {
     pub fn paths(&self) -> Vec<String> {
         let v = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut seen = std::collections::HashSet::new();
-        v.iter().filter(|p| seen.insert(p.as_str())).cloned().collect()
+        v.iter()
+            .filter(|p| seen.insert(p.as_str()))
+            .cloned()
+            .collect()
     }
 
     fn note(key: &str) {
@@ -1515,7 +1518,11 @@ mod tests {
         paths.sort();
         assert_eq!(paths, ["a.bsp", "c.bsp"]);
         let named = |fs: &Pk3Fs| {
-            let mut v: Vec<String> = fs.referenced_paks().iter().map(|p| p.name.clone()).collect();
+            let mut v: Vec<String> = fs
+                .referenced_paks()
+                .iter()
+                .map(|p| p.name.clone())
+                .collect();
             v.sort();
             v
         };
