@@ -7,7 +7,10 @@
 //! `COD4_DIR`.
 
 use vcod_cod4::assets::model::XModel;
-use vcod_cod4::skel::{AnimMat, SkelModel, angles_to_quat, compose_controlled};
+use vcod_cod4::skel::{
+    AnimMat, SkelModel, angles_to_quat, angles_to_quat_in, compose_controlled,
+    compose_controlled_in,
+};
 use vcod_cod4::testing::cod4_install;
 use vcod_cod4::walk::{WalkOptions, walk};
 use vcod_cod4::zone::Zone;
@@ -100,9 +103,11 @@ const PLAYER_DUMP: &str = include_str!("fixtures/skel/player-mp_crash-gdb.txt");
 
 /// A player body's control bones as 1.7 composed them: each one the dump
 /// shows its controller set rebuilt off retail's own bone 0, parent and
-/// angles through [`compose_controlled`], word for word.
+/// angles through [`compose_controlled`], word for word; `iw3mp.exe`'s
+/// arithmetic off the same inputs within a millionth.
 #[test]
 fn a_players_control_bones_match_retails_word_for_word() {
+    use vcod_common::playerpose::Cod4Arith;
     let Some(install) = cod4_install() else {
         return;
     };
@@ -110,6 +115,7 @@ fn a_players_control_bones_match_retails_word_for_word() {
     let models = walk(z, WalkOptions::default()).unwrap().assets.xmodels;
     let mut off = Vec::new();
     let (mut calcs, mut checked) = (0, 0);
+    let mut client_off = 0.0f32;
     let mut lines = PLAYER_DUMP
         .lines()
         .filter(|l| !l.starts_with('#'))
@@ -155,6 +161,20 @@ fn a_players_control_bones_match_retails_word_for_word() {
                 .unwrap_or_else(|| panic!("bone {b}'s parent {p} not dumped"));
             let m = compose_controlled(&mats[&0], parent, &local, skel.trans[b - skel.roots]);
             checked += 1;
+            // `iw3mp.exe`'s arm, every result a float, off the same inputs.
+            let client = compose_controlled_in(
+                &mats[&0],
+                parent,
+                &AnimMat {
+                    quat: angles_to_quat_in(angles, Cod4Arith::Client),
+                    ..local
+                },
+                skel.trans[b - skel.roots],
+                Cod4Arith::Client,
+            );
+            let q = (0..4).map(|k| (client.quat[k] - m.quat[k]).abs());
+            let t = (0..3).map(|k| (client.trans[k] - m.trans[k]).abs());
+            client_off = q.chain(t).fold(client_off, f32::max);
             if m != mats[&b] {
                 off.push(format!(
                     "calc {calcs} bone {b} {angles:?}: ours {m:?} retail {:?}",
@@ -164,6 +184,7 @@ fn a_players_control_bones_match_retails_word_for_word() {
         }
     }
     assert_eq!((calcs, checked), (200, 804));
+    assert!(client_off < 1e-6, "the client's arm off by {client_off}");
     assert!(
         off.is_empty(),
         "{} of {checked} off:\n{}",
