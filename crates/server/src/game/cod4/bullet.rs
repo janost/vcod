@@ -199,9 +199,8 @@ impl Cod4Level {
                 && h.fraction < fraction
             {
                 fraction = h.fraction;
-                let yaw = ps.view_angles[1].to_radians();
                 hit = Hit {
-                    normal: glam::Quat::from_rotation_z(yaw) * h.normal,
+                    normal: super::combat::entity_normal(ps.view_angles[1], h.normal),
                     surface_flags: SURF_FLESH,
                     contents: CONTENTS_BODY,
                     // `SV_ClipMoveToEntities` keeps the world's start in
