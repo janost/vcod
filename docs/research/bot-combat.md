@@ -62,6 +62,13 @@ an even seed count). Off means:
 | `TRAVEL=` | `bot-objectives.md` 14 | `test_bot_travel` | the walk behind a teammate keeps 200 back and a way in is dealt from 1200 out |
 | `CARRY=` | `bot-objectives.md` 14.11 | `test_bot_ctf_carry` | a `ctf` carrier closes on what it sees, and home while its flag is away stands in the goal |
 
+`ESCORT=`, `ROUTE=`, `HOLD=` and `SPRINT=` (`bot-objectives.md` 14.12,
+`test_bot_ctf_escort`, `_route`, `_hold`, `_sprint`) are the other way
+round: their rules are off by default, and an arm given turns its rule
+on where it says (`ESCORT=all` for every bot, `ESCORT=axis` for one
+side). On CoD2 `ESCORT=1`, `ROUTE=1`, `HOLD=1` turn one on for every
+bot; `SPRINT=` is United Offensive's alone.
+
 A default arm never calls its hook, so an all-default run plays the stock
 game bit for bit (checked: seeds 1 and 2 print the lines of the harness
 before the arms). `dm` has no sides: there an odd slot takes the arm

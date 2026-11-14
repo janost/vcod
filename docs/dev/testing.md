@@ -233,7 +233,10 @@ only yardstick.
   - Per side `AXIS_SKILL=`/`ALLIES_SKILL=`; one-sided `COVER=`, `RETREAT=`,
     `TEAMPLAY=`, `AWARE=`, `FOOTWORK=`, `WARY=`, `SQUAD=`, `AIM=`, `TACTICS=`,
     `CONVERGE=`, `LANES=`, `FAR=`, `CUES=`, `TRAVEL=`, `CARRY=` arms
-    (`dm` splits them by slot parity).
+    (`dm` splits them by slot parity), and `ESCORT=`, `ROUTE=`, `HOLD=`,
+    `SPRINT=`, which turn on rules that are off by default
+    (bot-objectives.md 14.12). On `ctf` it counts the carries and how each
+    ends (`ctf_carry_*`), and `CTF_TRACE=1` prints each carry's end.
   - `GAME=cod2` runs `vcod-server --game cod2`'s bots, split by weapon class
     and skill; `GUNS=0` keeps them off the mounted guns (docs/bots.md
     "CoD2"). `GAME=cod4` runs CoD4's, with each level's line and every script
