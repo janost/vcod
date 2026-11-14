@@ -2999,9 +2999,7 @@ impl Host for GameHost {
         let (except, route) = self
             .memo
             .read(self.profile, cx, field, ent.0 >= FIRST_HUD_ELEM);
-        let Some(e) = self.ents.get(ent) else {
-            return None;
-        };
+        let e = self.ents.get(ent)?;
         if except.is_none() {
             return Some(read_route(&self.ext, cx, ent, e, field, route));
         }
