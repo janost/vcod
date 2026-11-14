@@ -403,8 +403,15 @@ timers are out, and that frame neither fires, reloads nor swings; an
 unlatched rechamber (4) stands until the release check or the next shot
 ends it in that same frame. vcod: `pmove::weapon::advance_timers` leaves
 both, `pm_weapon` ends 11 behind the gate and the release check ends any
-state; `a_held_trigger_fires_the_frame_after_the_relax_ends`. No stock
-capture holds one.
+state; `a_held_trigger_fires_the_frame_after_the_relax_ends`. VERIFIED,
+live (retail 1.1d, `client-probes/probe_heldmelee`,
+`mp_carentan-heldmelee.txt`, 2026-11-14): an mp40's trigger held from
+3900 fires at 3950, 4050 and 4200 (the clip each frame); melee tapped
+with it at 4300 takes the round due next, and the held trigger's next
+round lands at 4950, 650 ms off the press, then every 100 to 150 ms.
+`combat.rs::an_automatic_held_through_a_swing_fires_as_on_retail`
+replays the capture's cmd times and holds every clip change to retail's
+frame. The unlatched rechamber (4) is not captured.
 
 ### 1.5 Firing
 
@@ -454,7 +461,14 @@ lerp first, the fire path `0x2ff54` / `0x36c0e` arming, then testing
 `weaponDelay`). INFERRED: an `adsFire` pull from short of the sight fires
 nothing, forces the sight up (section 1.13) and shoots on the frame the
 delay runs out, whatever the trigger does by then; the re-arm then
-computes 0 off the raised sight. A gun with a non-zero `fireDelay` re-arms
+computes 0 off the raised sight. VERIFIED, live (retail 1.1d,
+`probe_skyshot`'s spot part with `panzerfaust_mp` and the throw script,
+`mp_carentan-hippull-rocket.txt`, 2026-11-14, two runs): a hip pull
+reads `weaponstate` 3 at once with `fWeaponPosFrac` 0, the sight climbs
+(0.107, 0.287, 0.440, 0.607, 0.780, 0.943 a snapshot), the rocket shows
+on the snapshot 300 ms after the first raised one, and the sight drops
+again once the trigger is let go; `missile_edge_ab`'s
+`a_hip_panzerfaust_pull_fires_once_the_sight_is_up` holds the 300 ms. A gun with a non-zero `fireDelay` re-arms
 it on every pass and never fires; no stock gun has one (the four 1.1
 grenades, which skip the arm, and UO's binoculars do). vcod:
 `an_ads_fire_shot_waits_for_the_sight`,

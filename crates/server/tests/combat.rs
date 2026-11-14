@@ -2894,3 +2894,121 @@ fn paintimers(text: &str, hits: usize, index: i32, hold: i32) {
         "stamped on a cmd between the two snapshots: {stamped}"
     );
 }
+
+/// An mp40's trigger held through a melee tap on retail 1.1d
+/// (`fixtures/playerstate/mp_carentan-heldmelee.txt`,
+/// `client-probes/probe_heldmelee`): every clip change lands on retail's
+/// frame, the swing's relax ending into the held trigger's next round
+/// (cod11-combat.md 1.4). Ours' client sends the capture's cmd times
+/// (`CMDS`) and takes its buttons off the `PROBE_IN` lines as they land.
+#[test]
+fn an_automatic_held_through_a_swing_fires_as_on_retail() {
+    if vcod_common::testing::game_fs_11().is_none() {
+        return;
+    }
+    let text = include_str!("fixtures/playerstate/mp_carentan-heldmelee.txt");
+    let retail: Vec<String> = text
+        .lines()
+        .filter(|l| l.starts_with("PROBE"))
+        .map(str::to_string)
+        .collect();
+    let first = common::cmds_ran(text, "")[0].0;
+    let (mut ours, snap) = heldmelee_run(text, 0);
+    if let Some(t) = snap.filter(|&t| t != first) {
+        ours = heldmelee_run(text, (t - first) as i64).0;
+    }
+    assert_eq!(ours, retail);
+}
+
+/// One run of `probe_heldmelee` on ours, the client joined `late_ms`
+/// earlier than [`HELDMELEE_JOIN_MS`] puts its first snapshot on the
+/// capture's: the `PROBE` lines and that first snapshot's time.
+fn heldmelee_run(text: &str, late_ms: i64) -> (Vec<String>, Option<i32>) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::{Duration, Instant};
+    use vcod_common::net::{NetClient, NetEvent};
+    const PROBE: &str = "probe_heldmelee";
+    let fs = Rc::new(vcod_common::testing::game_fs_11().unwrap());
+    let bsp_path = fs.resolve_map("mp_carentan").unwrap();
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(common::cfg("mp_carentan", PROBE), now);
+    sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V1);
+    let src = std::fs::read_to_string(format!(
+        "../gsc/tests/fixtures/semantics/client-probes/{PROBE}.gsc"
+    ))
+    .expect("the probe");
+    sv.overlay_script(&format!("maps/mp/gametypes/{PROBE}"), &src);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(fs).expect("load the scripts");
+    let mut hold = common::ProbeHold {
+        aim: true,
+        framed: true,
+        times: common::cmds_times(text, ""),
+        ran: common::cmds_ran(text, ""),
+        ..Default::default()
+    };
+    let first = hold.ran.first().expect("the capture's CMDS lines").0;
+    let frame = Duration::from_millis(common::FRAME_MS as u64);
+    while (sv.game_time_ms() as i64) < first as i64 - HELDMELEE_JOIN_MS - late_ms {
+        now += frame;
+        sv.tick(now);
+        sv.take_outgoing();
+    }
+    let q = Rc::new(RefCell::new(common::Queues::default()));
+    let mut cl = NetClient::start_with_qport(common::ClientEnd(q.clone()), now, 0x2001);
+    let mut join = common::Join::new("axis", "mp40_mp");
+    let (mut buttons, mut selected) = (0u8, None::<u8>);
+    let mut first_snap = None;
+    for _ in 0..3000 {
+        if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
+            break;
+        }
+        now += frame;
+        let live = cl
+            .snapshots()
+            .newest()
+            .is_some_and(|s| s.ps.field_i32(cl.protocol(), "pm_type") == 0);
+        if live {
+            let mut cmds = hold.cmds(&cl, buttons);
+            if let Some(w) = selected {
+                for c in &mut cmds {
+                    c.weapon = w;
+                }
+            }
+            cl.send_cmds(&cmds);
+        } else if let Some(c) = cl.send_frame(&vcod_common::net::msg::UserCmd::default()) {
+            hold.last = c.server_time;
+        }
+        for e in common::step_at(&mut sv, common::ADDR, &q, &mut cl, now) {
+            if let NetEvent::ServerCommand(tokens) = e {
+                if tokens.first().map(String::as_str) == Some("a") {
+                    selected = tokens.get(1).and_then(|w| w.parse().ok());
+                }
+                if tokens.first().map(String::as_str) == Some("f")
+                    && let Some(b) = tokens
+                        .get(1)
+                        .and_then(|t| t.strip_prefix("PROBE_IN "))
+                        .and_then(|t| t.split_whitespace().next()?.parse().ok())
+                {
+                    buttons = b;
+                }
+                join.on_server_command(&tokens, &mut cl, now);
+            }
+        }
+        if let Some(s) = cl.snapshots().newest() {
+            first_snap.get_or_insert(s.server_time);
+        }
+    }
+    let lines = sv
+        .script_log()
+        .iter()
+        .map(|l| l.trim().to_string())
+        .filter(|l| l.starts_with("PROBE"))
+        .collect();
+    (lines, first_snap)
+}
+
+/// How long after its connect the client's first snapshot lands on ours.
+const HELDMELEE_JOIN_MS: i64 = 400;
