@@ -21,6 +21,8 @@ use super::clip::Cod4Clip;
 use super::combat::{BULLET_PRIORITY, BULLET_RANGE};
 use super::level::Cod4Level;
 
+mod flight;
+
 /// 1.7's `ET_HELICOPTER` and `ET_PLANE`.
 pub const ET_HELICOPTER: u32 = 12;
 pub const ET_PLANE: u32 = 13;
@@ -174,7 +176,13 @@ pub struct Heli4 {
     /// `un1.helicopterStage`, `setDamageStage`'s.
     pub stage: u32,
     pub origin: Vec3,
+    /// The flight's angles, which `G_SetAngle` (0x80ca276) also writes to
+    /// `apos.trBase`.
     pub angles: Vec3,
+    /// `r.currentAngles`: [`Self::angles`] as the link snapped them
+    /// (`mover::snap_angles4`). The turret, the tags, the riders and the
+    /// no-goal think read these; the flight keeps its own.
+    pub link_angles: Vec3,
     pub vel: Vec3,
     /// The velocity change a think, smoothed: what the body tilts by.
     pub smoothed_change: Vec3,
@@ -352,7 +360,7 @@ fn heli_moves_of(c4: &Cod4HostState, h: &Heli4) -> Vec<Option<BoneMove>> {
 /// `G_DObjGetWorldTagPos` places a bone (`MatrixTransformVector43`
 /// 0x819016e through the body's [`axis4`], plus the origin).
 fn heli_world_pos(h: &Heli4, p: [f32; 3]) -> Vec3 {
-    let axis = axis4(h.angles);
+    let axis = axis4(h.link_angles);
     let at = |k: usize| {
         (((d(p[0]) * d(axis[0][k]) + d(p[1]) * d(axis[1][k])) + d(p[2]) * d(axis[2][k]))
             + d(h.origin[k])) as f32
@@ -387,7 +395,7 @@ fn heli_aim_from(c4: &Cod4HostState, h: &Heli4) -> Option<(Vec3, Vec3)> {
         .iter()
         .position(|n| n.eq_ignore_ascii_case("tag_barrel"))?;
     let mats = heli_skel(c4, h)?;
-    let axis = axis4(h.angles);
+    let axis = axis4(h.link_angles);
     // `MatrixMultiply` (0x818effc): each row's last product first.
     let through = |m: [f32; 3]| {
         let c = |k: usize| {
@@ -441,7 +449,7 @@ pub(crate) fn heli_trace(
         if (start + seg * t).distance(h.origin) > radius {
             continue;
         }
-        let axis = vcod_common::x87::angles_to_axis(h.angles);
+        let axis = vcod_common::x87::angles_to_axis(h.link_angles);
         let local = |p: Vec3| {
             let d = p - h.origin;
             Vec3::new(d.dot(axis[0]), d.dot(axis[1]), d.dot(axis[2]))
@@ -512,20 +520,6 @@ fn carried(
 fn norm180(a: f32) -> f32 {
     let x = a * (1.0 / 360.0);
     (x - (x + 0.5).floor()) * 360.0
-}
-
-/// `speed` toward `target` by at most `accel * dt`.
-fn accelerate(speed: f32, target: f32, accel: f32, dt: f32) -> f32 {
-    if target <= speed {
-        (speed - accel * dt).max(target)
-    } else {
-        (speed + accel * dt).min(target)
-    }
-}
-
-/// `vectoyaw`.
-fn vectoyaw(v: Vec3) -> f32 {
-    crate::game::builtins::math::vectoangles(v.to_array())[1]
 }
 
 /// A float on the x87 stack (an `f64` here).
@@ -701,15 +695,6 @@ pub struct Hover {
 }
 
 impl Hover {
-    /// The hover flies at its own speed and rate, braking at half the rate.
-    fn pace(&self) -> Pace {
-        Pace {
-            speed: self.speed,
-            accel: self.rate,
-            decel: self.rate * 0.5,
-        }
-    }
-
     /// A new wander: `G_flrand(-radius, radius)` on x, y and z in turn,
     /// less half the last one; none with no radius.
     fn next_wander(&self, rand: &mut vcod_common::rng::GlibcRand) -> Vec3 {
@@ -720,48 +705,6 @@ impl Hover {
         let draw: [f32; 3] = std::array::from_fn(|_| super::missile::g_flrand(rand, -r, r));
         Vec3::from(draw) - self.wander * 0.5
     }
-}
-
-/// One angle's turn for a think: the top rate, the rates up to it and
-/// down from it, and the share of the stopping arc it may overshoot.
-struct Rates {
-    top: f32,
-    up: f32,
-    down: f32,
-    overshoot: f32,
-}
-
-impl Rates {
-    /// `angle` toward `goal` the short way: the rate climbs toward the top
-    /// until the stopping arc (less the overshoot) covers what is left,
-    /// then falls toward 0; a rate already turning away climbs back. Once
-    /// both the rate and the gap fit inside a think, it lands on `goal`.
-    fn steer(&self, angle: &mut f32, rate: &mut f32, goal: f32) {
-        let left = norm180(goal - *angle);
-        if left == 0.0 && *rate == 0.0 {
-            return;
-        }
-        let speed = rate.abs();
-        let arc = (1.0 - self.overshoot) * speed * 0.5 * (speed / self.down);
-        let (toward, by) = if left * *rate < 0.0 || arc < left.abs() {
-            (self.top, self.up)
-        } else {
-            (0.0, self.down)
-        };
-        if speed >= by * DT || left.abs() >= speed * DT {
-            let target = if left < 0.0 { -toward } else { toward };
-            *rate = accelerate(*rate, target, by, DT);
-            *angle = norm180(*rate * DT + *angle);
-        } else {
-            *angle = goal;
-            *rate = 0.0;
-        }
-    }
-}
-
-/// The horizontal part.
-fn flat(v: Vec3) -> glam::Vec2 {
-    glam::Vec2::new(v.x, v.y)
 }
 
 impl Heli4 {
@@ -778,6 +721,7 @@ impl Heli4 {
             stage: 0,
             origin,
             angles,
+            link_angles: crate::game::mover::snap_angles4(angles),
             vel: Vec3::ZERO,
             smoothed_change: Vec3::ZERO,
             speed: 0.0,
@@ -825,335 +769,39 @@ impl Heli4 {
 
     /// The body's turn.
     pub fn quat(&self) -> Quat {
-        angles_quat(self.angles.to_array())
+        angles_quat(self.link_angles.to_array())
     }
 
-    /// One think's flight (cod4-gsc.md 3.2; 1.7's think at 0x809e38a, the
-    /// turn and the tilt inlined in it): toward the goal, or while
-    /// hovering toward the goal plus the wander. Returns the notifies in
-    /// the order they go out. `rand` is the level's `G_rand`, which a new
-    /// wander draws from.
+    /// One think's flight (cod4-gsc.md 3.2): with no goal the no-goal
+    /// think, else `VEH_UpdateMoveToGoal` (0x809e38a, `flight`) toward the
+    /// goal, or while hovering the goal plus the wander, which the vehicle
+    /// think draws anew once the body is within a quarter of the hover
+    /// radius of it (0x80a06e8..0x80a0762). Returns the notifies in the
+    /// order they go out. `rand` is the level's `G_rand`.
     pub fn think(&mut self, rand: &mut vcod_common::rng::GlibcRand) -> Vec<&'static str> {
-        let mut notes = Vec::new();
         if !self.moving {
             self.hold();
-            return notes;
+            return Vec::new();
         }
-        // Read once: the goal check below can start the hover, which
-        // steers from the next think on.
+        // Read once: the goal check can start the hover, which steers from
+        // the next think on.
         let hovering = self.hovering;
         let aim = if hovering {
             self.goal + self.hover.wander
         } else {
             self.goal
         };
-        let to_aim = aim - self.origin;
-        let dist = to_aim.length();
-        if dist > 0.0 {
-            let dir = to_aim / dist;
-            self.fly(to_aim, dist, hovering);
-            let yaw = self.wanted_yaw(dir, hovering);
-            self.turn_yaw(yaw, &mut notes);
-            self.tilt(hovering);
-        }
+        let notes = self.move_to_goal(aim);
         if hovering {
-            let near = self.hover.radius * 0.25;
-            if (aim - self.origin).length_squared() < near * near {
+            let near = d(self.hover.radius) * d(0.25);
+            let gap: f64 = (0..3)
+                .map(|k| (d(aim[k]) - d(self.origin[k])).powi(2))
+                .sum();
+            if near * near > gap {
                 self.hover.wander = self.hover.next_wander(rand);
             }
-        } else {
-            self.goal_notifies(dist, &mut notes);
         }
         notes
-    }
-
-    /// The translation: the frame's velocity change toward `to_aim`,
-    /// eased, and the move by the mean of the old and new velocity.
-    fn fly(&mut self, to_aim: Vec3, dist: f32, hovering: bool) {
-        let before = self.vel;
-        // A stop goal or the hover flies only the frame's tail at the new
-        // velocity once the brake has to start; the head keeps the old.
-        let braked_for = if self.stop_at_goal || hovering {
-            self.brake_time(dist)
-        } else {
-            DT
-        };
-        let pace = if hovering {
-            self.hover.pace()
-        } else {
-            self.pace
-        };
-        let (target, rate) = if self.stopping {
-            (0.0, pace.decel)
-        } else {
-            (pace.speed, pace.accel)
-        };
-        let new_speed = accelerate(self.speed, target, rate, braked_for);
-        let wanted = to_aim / dist * new_speed;
-        let mut change = wanted - before;
-        // Below the set speed a turn never brakes: the change's part
-        // against the horizontal motion is dropped.
-        let along_motion = flat(before).normalize_or_zero();
-        if !self.stopping
-            && self.pace.speed >= self.speed
-            && flat(wanted).dot(flat(before)) > 0.0
-            && flat(change).dot(flat(before)) < 0.0
-        {
-            let back = flat(change).dot(along_motion);
-            change.x -= along_motion.x * back;
-            change.y -= along_motion.y * back;
-        }
-        let limit = rate * braked_for;
-        let size = change.length();
-        if limit < size && size > 0.0 {
-            change *= limit / size;
-        }
-        if !hovering {
-            change = self.ease_horizontal(to_aim, before, change, rate);
-            change = self.ease_vertical(to_aim.z, before.z, change);
-        }
-        self.vel = before + change;
-        self.speed = self.vel.length();
-        // Half way to this frame's change, held to its limit unless
-        // stopping at the goal.
-        let half_way = self.smoothed_change * 0.5 + change * 0.5;
-        let size = half_way.length();
-        self.smoothed_change = if limit < size && !self.stop_at_goal {
-            half_way * (limit / size)
-        } else {
-            half_way
-        };
-        if braked_for < DT {
-            self.origin += before * (DT - braked_for);
-        }
-        self.origin += (before + self.vel) * 0.5 * braked_for;
-    }
-
-    /// Whether the brake starts this frame (`stopping`), and how much of
-    /// the frame is left once it does: the next speed's stopping distance
-    /// against the distance left.
-    fn brake_time(&mut self, dist: f32) -> f32 {
-        let next = accelerate(self.speed, self.pace.speed, self.pace.accel, DT);
-        let stop_dist = next * 0.5 * (next / self.pace.decel);
-        let far_yet = stop_dist < dist - next * DT || self.speed <= 0.0;
-        self.stopping = !far_yet;
-        if far_yet || stop_dist >= dist {
-            return DT;
-        }
-        let coast = (dist - stop_dist) / self.speed;
-        (DT - coast).clamp(0.0, DT)
-    }
-
-    /// Outside the hover, the horizontal change toward a goal: a stop
-    /// sheds the speed it needs to arrive at rest; otherwise a turn whose
-    /// radius the rate cannot hold at this speed brakes by the turning
-    /// ability (fully toward a stop).
-    fn ease_horizontal(&self, to_aim: Vec3, vel: Vec3, change: Vec3, rate: f32) -> Vec3 {
-        let gap = flat(to_aim);
-        let gap_len = gap.length();
-        if gap_len < 1.0 {
-            return change;
-        }
-        let now = flat(vel);
-        let speed = now.length();
-        let next = now + flat(change);
-        let next_speed = next.length();
-        if self.stop_at_goal && next_speed > 0.0 {
-            let shed = speed * speed / (gap_len * 2.0) * DT;
-            if (next_speed - speed).abs() < shed {
-                let scaled = next * ((speed - shed) / next_speed);
-                return Vec3::new(scaled.x - vel.x, scaled.y - vel.y, change.z);
-            }
-            return change;
-        }
-        let off_line = gap.perp_dot(now).abs();
-        if gap_len >= off_line || speed == 0.0 {
-            return change;
-        }
-        let (side, ahead) = (off_line / speed, gap.dot(now) / speed);
-        let radius = (side * side + ahead * ahead) / (side * 2.0);
-        if !(radius > 1.0 && rate * radius < speed * speed) {
-            return change;
-        }
-        let ability = if self.stop_at_goal {
-            1.0
-        } else {
-            self.turning_ability
-        };
-        let brake = (speed * speed / radius).min(speed);
-        let k = -ability * brake / speed * DT;
-        Vec3::new(change.x + k * vel.x, change.y + k * vel.y, change.z)
-    }
-
-    /// Outside the hover, a climb or descent that would overshoot the
-    /// goal's height brakes, at most three frames of the set rate a frame.
-    fn ease_vertical(&self, rise: f32, climb: f32, change: Vec3) -> Vec3 {
-        let unopposed = climb * change.z >= 0.0 || rise * climb <= 0.0;
-        if unopposed || change.z.abs() < 0.001 || climb.abs() < 0.001 {
-            return change;
-        }
-        let to_rest = climb * DT / -change.z;
-        let to_height = rise / (climb * 0.5);
-        if to_height == 0.0 || to_height >= to_rest {
-            return change;
-        }
-        let needed = -climb * DT / to_height;
-        if change.z * change.z < needed * needed {
-            let most = self.pace.accel * DT * 3.0;
-            return Vec3::new(change.x, change.y, needed.clamp(-most, most));
-        }
-        change
-    }
-
-    /// The yaw this think steers to: the goal yaw once a stop or the hover
-    /// is close enough to swing into it, else the target yaw, else the
-    /// hover holds its heading, else along the move.
-    fn wanted_yaw(&self, dir: Vec3, hovering: bool) -> f32 {
-        if let Some(goal_yaw) = self.goal_yaw
-            && (self.stopping || hovering)
-        {
-            let top = self.yaw.top;
-            let stop_time = self.speed / self.pace.decel;
-            let swing_time = top / self.yaw.up * 2.0;
-            let swing_angle = top * 0.5 * swing_time;
-            let left = norm180(goal_yaw - self.angles.y).abs();
-            let due = stop_time <= swing_time
-                || (left > swing_angle && stop_time <= swing_time + (left - swing_angle) / top);
-            if due {
-                return goal_yaw;
-            }
-        }
-        self.target_yaw.unwrap_or_else(|| {
-            if hovering {
-                self.angles.y
-            } else {
-                vectoyaw(dir)
-            }
-        })
-    }
-
-    /// The yaw toward `wanted` at `setYawSpeed`'s rates, a fifth of them
-    /// once the rate has swung past the goal yaw (until `wanted` moves);
-    /// `goal_yaw` when the heading reaches or crosses the goal yaw.
-    fn turn_yaw(&mut self, wanted: f32, notes: &mut Vec<&'static str>) {
-        if self.yaw.slow_for != wanted {
-            self.yaw.slow_for = wanted;
-            self.yaw.slowed = false;
-        }
-        let off_goal = self
-            .goal_yaw
-            .map(|g| self.angles.y - g)
-            .filter(|d| d.abs() > 0.001);
-        let rate_before = self.angle_rates[1];
-        let scale = if self.yaw.slowed { 0.2 } else { 1.0 };
-        let overshoot = if self.goal_yaw.is_some() || self.target_yaw.is_some() {
-            self.yaw.overshoot
-        } else {
-            0.0
-        };
-        let rates = Rates {
-            top: self.yaw.top,
-            up: self.yaw.up * scale,
-            down: self.yaw.down * scale,
-            overshoot,
-        };
-        rates.steer(&mut self.angles.y, &mut self.angle_rates[1], wanted);
-        let Some(goal_yaw) = self.goal_yaw else {
-            return;
-        };
-        if self.angle_rates[1] * rate_before < 0.0 {
-            self.yaw.slowed = true;
-        }
-        if let Some(was) = off_goal {
-            let now = self.angles.y - goal_yaw;
-            if now * was < 0.0 || now.abs() < 0.001 {
-                notes.push("goal_yaw");
-            }
-        }
-    }
-
-    /// Pitch and roll toward the smoothed change plus the fake drag, along
-    /// and across the heading: `maxPitch` and `maxRoll` times
-    /// `f + (1 - f) 0.1` (`f` the change against the file's `accel`),
-    /// scaled down while braking, at a rate `45 g + (1 - g)` (`g` the set
-    /// rate's, or once a hovering body sits level the hover's).
-    fn tilt(&mut self, hovering: bool) {
-        let ground = flat(self.vel);
-        let drag_share = ground.length().min(self.air_resistance) / self.air_resistance;
-        let drag = ground.normalize_or_zero() * (drag_share * drag_share * 5.0);
-        let mut push = self.smoothed_change;
-        push.x += drag.x;
-        push.y += drag.y;
-        let push_rate = flat(push).length() / DT;
-        let f = self.accel_share(push_rate);
-        let scale = f + (1.0 - f) * 0.1;
-        // Braking, the lean eases off once the change would stop the
-        // body sooner than it settles (2.5 s at full rate, 3.5 at none).
-        let mut ease = 1.0;
-        if self.stopping && push_rate > 0.0 {
-            let braking_for = ground.length() / push_rate;
-            let settle = (1.0 - f) * 3.5 + f * 2.5;
-            ease = (braking_for / settle).min(1.0);
-        }
-
-        let level = self.angles.x.abs() <= 5.0
-            && self.angles.z.abs() <= 5.0
-            && self.angle_rates[0].abs() <= 3.0
-            && self.angle_rates[2].abs() <= 3.0;
-        self.hover.settled = hovering && (self.hover.settled || level);
-        let g = self.accel_share(if self.hover.settled {
-            self.hover.rate
-        } else {
-            self.pace.accel
-        });
-        let up = g * 45.0 + (1.0 - g);
-        let rates = Rates {
-            top: MAX_TILT_VEL,
-            up,
-            down: up * 0.4,
-            overshoot: 0.0,
-        };
-
-        let heading = self.angles.y * 0.017_453_292;
-        let facing = glam::Vec2::new(heading.cos(), heading.sin());
-        let dir = flat(push.normalize_or_zero());
-        let pitch = self.max_pitch * (dir.dot(facing) * ease) * scale;
-        rates.steer(&mut self.angles.x, &mut self.angle_rates[0], pitch);
-        let roll = self.max_roll * (dir.perp_dot(facing) * ease) * scale;
-        rates.steer(&mut self.angles.z, &mut self.angle_rates[2], roll);
-    }
-
-    /// `x` over the vehicle file's `accel`, held to 0..1.
-    fn accel_share(&self, x: f32) -> f32 {
-        x.clamp(0.0, self.info.accel) / self.info.accel
-    }
-
-    /// Outside the hover: `near_goal` on every think that starts nearer
-    /// than `setNearGoalNotifyDist`, and `goal` once the goal is reached:
-    /// a pass-through goal within a frame's flight, a stop goal inside the
-    /// hover radius under 2 mph (with no radius, at rest), which starts
-    /// the hover.
-    fn goal_notifies(&mut self, dist: f32, notes: &mut Vec<&'static str>) {
-        if self.near_goal_dist != 0.0 && dist < self.near_goal_dist {
-            notes.push("near_goal");
-        }
-        let radius = self.hover.radius;
-        let reached = match (self.stop_at_goal, radius == 0.0) {
-            (false, _) => dist <= self.speed * DT,
-            (true, true) => self.speed == 0.0 && (self.stopping || dist == 0.0),
-            (true, false) => dist <= radius && self.speed < 2.0 * MPH,
-        };
-        if !reached {
-            return;
-        }
-        if self.stop_at_goal {
-            self.hovering = true;
-            if radius == 0.0 {
-                self.vel = Vec3::ZERO;
-                self.smoothed_change = Vec3::ZERO;
-            }
-        }
-        notes.push("goal");
     }
 
     /// The no-goal think (`cod4_lnxded` 0x808ba22, run in place of
@@ -1165,7 +813,7 @@ impl Heli4 {
     /// and normalises the yaw on the stack (0x808c719..0x808c798;
     /// cod4-gsc.md 3.2, "The no-goal think").
     fn hold(&mut self) {
-        self.angles = Vec3::new(0.0, super::missile::normalize180(self.angles.y), 0.0);
+        self.angles = Vec3::new(0.0, super::missile::normalize180(self.link_angles.y), 0.0);
     }
 
     /// `VEH_UpdateAim`'s turret (`cod4_lnxded` 0x809ff9b..0x80a038c): the
@@ -1349,17 +997,17 @@ impl Cod4Level {
             }
             h.next_think = now + THINK_MS;
             h.thought = true;
-            let (from, from_angles) = (h.origin, h.angles);
+            let (from, from_angles) = (h.origin, h.link_angles);
             let mut notes: Vec<(&'static str, Vec<Value>)> = h
                 .think(&mut self.rt.host.cod4_mut().rand)
                 .into_iter()
                 .map(|n| (n, Vec::new()))
                 .collect();
             // A think that moved or turned the body sets and links it
-            // (0x809c1dc), and the link snaps its angles (`mover::snap_angles4`).
-            if h.origin != from || h.angles != from_angles {
-                h.angles = crate::game::mover::snap_angles4(h.angles);
-            }
+            // (0x809c1dc): `G_SetAngle` writes `apos.trBase` and
+            // `r.currentAngles`, and the link snaps the latter alone
+            // (`mover::snap_angles4`). Unchanged angles snap to themselves.
+            h.link_angles = crate::game::mover::snap_angles4(h.angles);
             if let Some(n) = self.heli_collision(&h, from) {
                 let arg = Value::Vector(n.to_array());
                 notes.push(("script_vehicle_collision", vec![arg]));
@@ -1401,7 +1049,7 @@ impl Cod4Level {
                 (None, Some(_)) => h.aim_idle(),
                 _ => {}
             }
-            let (origin, angles) = (h.origin, h.angles);
+            let (origin, angles) = (h.origin, h.link_angles);
             if let Some(slot) = self
                 .rt
                 .host
@@ -1476,7 +1124,7 @@ impl Cod4Level {
     fn carry_riders(&mut self, h: &Heli4, before: (Vec3, Vec3)) {
         let (from, from_angles) = before;
         let turned = Vec3::from_array(std::array::from_fn(|k| {
-            norm180(h.angles[k] - from_angles[k])
+            norm180(h.link_angles[k] - from_angles[k])
         }));
         if (h.origin - from).length_squared() < 0.001 && turned.length_squared() < 0.001 {
             return;
@@ -1502,7 +1150,7 @@ impl Cod4Level {
         {
             let (at, angles) = carried(
                 (from, from_angles),
-                (h.origin, h.angles),
+                (h.origin, h.link_angles),
                 (m.origin, m.angles),
             );
             m.origin = at;
@@ -1827,7 +1475,7 @@ mod tests {
         assert!(h.hovering);
         assert!(nose_down > 3.0 && nose_up < -3.0, "{nose_down} {nose_up}");
         assert!(
-            (h.angles.y - vectoyaw(h.goal)).abs() < 5.0,
+            (h.angles.y - vectoangles4(h.goal).y).abs() < 5.0,
             "{:?}",
             h.angles
         );
@@ -1912,8 +1560,8 @@ mod tests {
         d
     }
 
-    /// Pins the flight's every word over the arms the hardpoint gates
-    /// miss: a stop with no hover radius, a goal yaw, a target yaw, a
+    /// Pins the flight's every word over the arms neither the hardpoint
+    /// gates nor `flight`'s retail replay reach: a stop with no hover radius, a goal yaw, a target yaw, a
     /// climb and a descent, a sharp pass-through turn, a stop entered at
     /// speed.
     #[test]
@@ -1965,12 +1613,12 @@ mod tests {
         assert_eq!(
             digests,
             [
-                0xd507_cc93_7afc_fb66,
-                0x9d7c_0a93_156d_4dd1,
-                0x82a9_3e34_3529_1deb,
-                0x7c4e_8920_12d9_8e29,
-                0xd060_6ce8_19ac_c22b,
-                0x2954_9d76_e87e_07ac,
+                0x38d7_d413_415d_c8dd,
+                0xe5c8_56c7_8ac4_b574,
+                0x2df1_e161_46ee_6d36,
+                0xe5a9_5f60_954e_9c68,
+                0x55da_482c_bf59_246f,
+                0x1798_1673_f85f_5cdc,
             ],
             "{digests:#x?}"
         );
