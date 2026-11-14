@@ -3290,6 +3290,12 @@ impl ScriptRuntime {
         self.vm.with_cx(|cx| host.shot_models(cx))
     }
 
+    /// `GameHost::muzzle_boxes`, for UO's bipod muzzle trace.
+    pub fn muzzle_boxes(&mut self, mask: i32) -> Vec<vcod_common::movetrace::ClipBox> {
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| host.muzzle_boxes(cx, mask))
+    }
+
     /// `GameHost::placed_script_models`, for a blast the sim side charges.
     pub fn placed_script_models(&mut self) -> Vec<crate::game::combat::PlacedModel> {
         let host = &mut self.host;

@@ -5,7 +5,8 @@
 //! leaning, so 1.5's and UO's `CalcMuzzlePoint` adds the walk bob and the
 //! lean to every round; `bipod` (UO) fires an mg30cal from the bipod short
 //! of a wall, the view swung off it, so the muzzle trace stops on the wall,
-//! then prone off the bipod (docs/research/cod11-combat.md 2.1). Each
+//! then prone off the bipod (docs/research/cod11-combat.md 2.1); `bipodpoint`
+//! puts a bare `setContents(1)` script model in the trace's way. Each
 //! server ran the weapon with `common::STEADY_WEAPON` applied: no spread and no gun kick,
 //! so a round leaves along the view from the muzzle and its impact on the
 //! wall 1090 units out reads the muzzle across the view.
@@ -49,6 +50,8 @@ struct Part {
     spot: &'static str,
     weapon: &'static str,
     at: [f32; 2],
+    /// More of the probe's cvars.
+    cvars: &'static [(&'static str, &'static str)],
 }
 
 const WALK: Part = Part {
@@ -56,12 +59,28 @@ const WALK: Part = Part {
     spot: "street",
     weapon: "thompson_mp",
     at: [900.0, 1930.0],
+    cvars: &[],
 };
 const BIPOD: Part = Part {
     name: "bipod",
     spot: "wall",
     weapon: "mg30cal_mp",
     at: [1971.0, 1930.0],
+    cvars: &[],
+};
+/// The bipod short of the wall with a bare `setContents(1)` script model
+/// 17 ahead at the muzzle's height: its temp box is a point, which the
+/// muzzle trace meets 9 out, short of the wall's 12.875.
+const BIPOD_POINT: Part = Part {
+    name: "bipodpoint",
+    spot: "wall",
+    weapon: "mg30cal_mp",
+    at: [1971.0, 1930.0],
+    cvars: &[
+        ("probe_block", "17"),
+        ("probe_block_z", "-13"),
+        ("probe_block_bare", "1"),
+    ],
 };
 
 fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
@@ -208,6 +227,9 @@ fn ours(p: &'static Protocol, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
     sv.overlay_script(&format!("maps/mp/gametypes/{PROBE}"), &probe);
     sv.set_cvar("probe_teleport", "1");
     sv.set_cvar("probe_spot", part.spot);
+    for (k, v) in part.cvars {
+        sv.set_cvar(k, v);
+    }
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
@@ -413,4 +435,15 @@ fn a_uo_bipod_muzzle_stops_on_the_wall_as_on_retail() {
         return;
     };
     check(&PROTOCOL_V22, fs, BIPOD, "uo");
+}
+
+/// The same bipod with a script model's point in the muzzle trace's way:
+/// retail's `trap_Trace` (mask 0x11) stops on it 0.125 short, so the
+/// muzzle sits at x 1979.875 (cod11-combat.md 2.1).
+#[test]
+fn a_uo_bipod_muzzle_stops_on_a_script_model_as_on_retail() {
+    let Some(fs) = vcod_common::testing::uo_fs() else {
+        return;
+    };
+    check(&PROTOCOL_V22, fs, BIPOD_POINT, "uo");
 }

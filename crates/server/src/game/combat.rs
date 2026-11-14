@@ -568,12 +568,13 @@ pub fn muzzle_point(ps: &PlayerState) -> Vec3 {
     muzzle_point_in(ps, None)
 }
 
-/// [`muzzle_point`] with the world UO's deployed LMG traces its muzzle
-/// against. On 1.5 and UO it is `CalcMuzzlePoint` (1.5 game 0x7e91f, UO
-/// 0x8b8ea): `ps.origin` plus the eye (UO: 28 in a vehicle seat), then,
-/// unless on a turret, UO's bipod trace, the walk bob, the lean and a
-/// floor 8 over the feet (combat doc 2.1, "1.5 and United Offensive").
-pub fn muzzle_point_in(ps: &PlayerState, world: Option<&CollisionWorld>) -> Vec3 {
+/// [`muzzle_point`] with what UO's deployed LMG traces its muzzle against:
+/// the world and the box entities [`MuzzleWorld`] holds. On 1.5 and UO it
+/// is `CalcMuzzlePoint` (1.5 game 0x7e91f, UO 0x7b8ea): `ps.origin` plus
+/// the eye (UO: 28 in a vehicle seat), then, unless on a turret, UO's
+/// bipod trace, the walk bob, the lean and a floor 8 over the feet (combat
+/// doc 2.1, "1.5 and United Offensive").
+pub fn muzzle_point_in(ps: &PlayerState, world: Option<MuzzleWorld<'_>>) -> Vec3 {
     if !ps.rules.v15() {
         // `G_AddLean`, the offset `PlayerState::view` adds, on the snapped
         // origin.
@@ -600,27 +601,41 @@ pub fn muzzle_point_in(ps: &PlayerState, world: Option<&CollisionWorld>) -> Vec3
     p
 }
 
-/// UO's muzzle height over a seated rider's origin (game rodata 0xb5f88).
+/// UO's muzzle height over a seated rider's origin (game rodata 0xa5f88).
 const UO_SEAT_MUZZLE_HEIGHT: f32 = 28.0;
 /// How far over the feet 1.5's and UO's muzzle stays (1.5 rodata 0x8f1c4,
-/// UO 0xb5f90).
+/// UO 0xa5f90).
 const MUZZLE_FLOOR: f32 = 8.0;
-/// UO's deployed-LMG muzzle trace reach (rodata 0xb5f8c).
+/// UO's deployed-LMG muzzle trace reach (rodata 0xa5f8c).
 const BIPOD_MUZZLE_REACH: f32 = 19.0;
 
+/// The world and the box entities UO's bipod muzzle trace meets: each
+/// linked script model whose contents meet its mask 0x11, as its temp box
+/// (`GameHost::muzzle_boxes`).
+#[derive(Clone, Copy)]
+pub struct MuzzleWorld<'a> {
+    pub world: &'a CollisionWorld,
+    pub boxes: &'a [vcod_common::movetrace::ClipBox],
+}
+
+/// The mask of UO's bipod muzzle trace (game.mp.uo 0x7ba74).
+pub const BIPOD_MUZZLE_MASK: i32 = 0x11;
+
 /// UO's `CalcMuzzlePoint` arm for an LMG on its bipod (`weaponClass` 3 with
-/// pm_flags 0x20, 0x8b9b6..0x8ba6a): an 8-unit box (.data 0xbe93c) traced
-/// from the muzzle 19 forward along `proneDirection` under mask 0x11, the
-/// muzzle moved to where it stops unless it is all solid. Only the world
-/// is traced here; retail's `trap_Trace` meets entities too.
-fn bipod_muzzle(ps: &PlayerState, world: Option<&CollisionWorld>, muzzle: Vec3) -> Vec3 {
-    let Some(world) = world else {
+/// pm_flags 0x20, 0x7b9b6..0x7bae2): an 8-unit box (.data 0xae93c) traced
+/// from the muzzle 19 forward along `proneDirection` under mask 0x11 with
+/// the shooter passed (`trap_Trace` 0x7bab0), the muzzle moved to where
+/// it stops unless it is all solid.
+fn bipod_muzzle(ps: &PlayerState, world: Option<MuzzleWorld<'_>>, muzzle: Vec3) -> Vec3 {
+    let Some(w) = world else {
         return muzzle;
     };
     let yaw = ps.prone_direction.to_radians();
     let end = muzzle + Vec3::new(yaw.cos(), yaw.sin(), 0.0) * BIPOD_MUZZLE_REACH;
     let half = Vec3::splat(8.0);
-    let tr = world.move_trace(muzzle, end, -half, half, 0x11);
+    let tr = vcod_common::movetrace::MoveWorld::bare(w.world)
+        .with_clip_boxes(w.boxes)
+        .box_trace(muzzle, end, -half, half, BIPOD_MUZZLE_MASK as u32);
     if tr.allsolid { muzzle } else { tr.endpos }
 }
 
@@ -633,7 +648,8 @@ fn bipod_muzzle(ps: &PlayerState, world: Option<&CollisionWorld>, muzzle: Vec3) 
 /// swayed gun rather than the view; `weapon_name` is what the callback is
 /// told (`BG_GetInfoForWeapon(weapon)->name`). Damage is `weaponDef.damage`
 /// through the hit-location table with no distance term (2.4), halved at
-/// each player a rifle round passes through (2.4, step 5).
+/// each player a rifle round passes through (2.4, step 5). `muzzle_boxes`
+/// is what a UO bipod's muzzle trace meets besides `world`.
 #[allow(clippy::too_many_arguments)]
 pub fn bullet_fire(
     shooter: usize,
@@ -646,6 +662,7 @@ pub fn bullet_fire(
     sims: &[(usize, &ClientSim)],
     targets: &[ShotTarget],
     world: Option<&CollisionWorld>,
+    muzzle_boxes: &[vcod_common::movetrace::ClipBox],
     models: &[PlacedModel],
     hitlocs: &HitLocTable,
     bones: Option<&mut BoneTraceCtx>,
@@ -660,7 +677,11 @@ pub fn bullet_fire(
     } else {
         BULLET_RANGE
     };
-    let (muzzle, forward, end) = aim_end(me, def, ads, stance, aim, range, world, rng);
+    let muzzle_world = world.map(|world| MuzzleWorld {
+        world,
+        boxes: muzzle_boxes,
+    });
+    let (muzzle, forward, end) = aim_end(me, def, ads, stance, aim, range, muzzle_world, rng);
     let round = Round {
         damage: def.damage,
         rifle_bullet: def.sounds.rifle_bullet,
@@ -698,7 +719,7 @@ pub fn aim_end(
     stance: &SpreadStance,
     aim: [f32; 2],
     range: f32,
-    world: Option<&CollisionWorld>,
+    world: Option<MuzzleWorld<'_>>,
     rng: &mut u64,
 ) -> (Vec3, Vec3, Vec3) {
     let muzzle = muzzle_point_in(&me.ps, world);
@@ -2915,6 +2936,7 @@ mod tests {
             &[],
             Some(world),
             &[],
+            &[],
             &table,
             None,
             rng,
@@ -3069,6 +3091,7 @@ mod tests {
             &[(0, &a), (1, &b)],
             &[],
             Some(&world),
+            &[],
             &[],
             &table,
             Some(&mut ctx),
@@ -3553,6 +3576,7 @@ mod tests {
                 sims,
                 &[],
                 Some(&open),
+                &[],
                 &[],
                 &table,
                 None,

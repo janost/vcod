@@ -1285,18 +1285,40 @@ amp` (0x87650 4.0, 0x87658 pi/2, 0x87660 0.2, 0x87664 0.75), the
 horizontal `sin c * amp`, `amp` the speed times the `viewHeightTarget`
 stance's `bg_bobAmplitude*`. VERIFIED (rodata read from the file).
 
-VERIFIED, UO 1.51b `game.mp.uo.i386.so` `CalcMuzzlePoint` (0x8b8ea): the
+VERIFIED, UO 1.51b `game.mp.uo.i386.so` `CalcMuzzlePoint` (0x7b8ea): the
 same shape off UO's playerstate (`viewHeightCurrent` `ps+0xf8`, `eFlags`
 `ps+0x84`, viewangles `ps+0xe8`), with three changes. A rider (`eFlags`
-0x100000, UO's in-vehicle bit) takes 28 (rodata 0xb5f88) in place of the
+0x100000, UO's in-vehicle bit) takes 28 (rodata 0xa5f88) in place of the
 eye; the mount test is UO's 0x6000; and between the mount test and the
 bob, a weapon of `weaponClass` 3 (`lmg`) with `pm_flags` 0x20 (the bipod)
-traces an 8-unit box (.data 0xbe93c/0xbe948, -8..8) from the muzzle 19
-forward (rodata 0xb5f8c) along `(0, proneDirection, 0)` (`ps+0x5a4`) under
+traces an 8-unit box (.data 0xae93c/0xae948, -8..8) from the muzzle 19
+forward (rodata 0xa5f8c) along `(0, proneDirection, 0)` (`ps+0x5a4`) under
 mask 0x11, passing the shooter, and takes the end point unless the trace's
-byte +0x2e is set. The floor is 8 (0xb5f90). VERIFIED. INFERRED: byte
+byte +0x2e is set. The floor is 8 (0xa5f90). VERIFIED. INFERRED: byte
 +0x2e is `allsolid` (`cod11-mantle.md`'s ground trace reads it so).
-`FireWeapon` (0x8bd05) and `FireWeaponMelee` (0x8bef7) call it as 1.5's
+VERIFIED (disassembly): the trace is `trap_Trace` at 0x7bab0 with the
+shooter's `s.number` as the pass entity and 0x11 pushed at 0x7ba74.
+VERIFIED, `cod_lnxded` 1.1d, the per-entity clip (0x809105c): a trace
+without the locational flag (`clip+0x54`, tested at 0x80910c8) goes to
+the arm at 0x8091390, which clips an inline model's brushes and any other
+entity as `CM_TempBoxModel(r.mins, r.maxs)` (0x804baf8). VERIFIED (gdb,
+retail UO, `probe_moveshot`'s `probe_block`, 2026-11-14): a script model's
+`r.mins`/`r.maxs` read zero (its abs box the origin ±1), so a barrel with
+`setContents(1)` on the ground 14 and 24 ahead of a deployed mg30cal
+never stops the trace (fraction 1, entity 1023: the box at muzzle height
+passes over the point), while a bare `setContents(1)` script model at
+the muzzle's height 17 ahead of the wall spot stops it at fraction
+0.467, endpos x 1979.875 (8.125 short of the point), normal (-1, 0, 0),
+entity 170. INFERRED: only a script model whose origin a script put
+inside the swept box changes a bipod muzzle; brush entities clip through
+their brushes on the same arm (not measured). vcod: `bipod_muzzle` boxes
+the linked script models whose contents meet 0x11
+(`GameHost::muzzle_boxes`); `moveshot_ab`'s
+`a_uo_bipod_muzzle_stops_on_a_script_model_as_on_retail` replays the
+point capture (`-moveshot-bipodpoint-uo.txt`, on the homepath with the
+steady mg30cal), every round on retail's unit, and fails with the world
+alone (rounds 4 to 6 two units off).
+`FireWeapon` (0x7bd05) and `FireWeaponMelee` (0x7bef7) call it as 1.5's
 do. VERIFIED.
 
 **Measured.** `mp_carentan-scriptmodel-throw-1.5.txt` (1.5b,

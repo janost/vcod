@@ -1032,6 +1032,17 @@ impl Cod1Module {
             .as_ref()
             .map(|rt| rt.host.missiles.shot_targets())
             .unwrap_or_default();
+        // What a UO bipod's muzzle trace meets besides the world (combat doc 2.1).
+        let deployed = eng.clients[attacker]
+            .as_ref()
+            .and_then(|c| c.sim.as_ref())
+            .is_some_and(|s| s.ps.deployed());
+        let muzzle_boxes = match self.script.as_mut() {
+            Some(rt) if eng.proto.is_uo() && deployed => {
+                rt.muzzle_boxes(crate::game::combat::BIPOD_MUZZLE_MASK)
+            }
+            _ => Vec::new(),
+        };
         // The bodies are posed off the last end frame (combat doc, 16.1).
         let result = {
             let sims: Vec<(usize, &crate::spectate::ClientSim)> = eng
@@ -1064,6 +1075,7 @@ impl Cod1Module {
                     &sims,
                     &targets,
                     collision,
+                    &muzzle_boxes,
                     &models,
                     &self.hitlocs,
                     bones.as_mut(),

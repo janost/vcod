@@ -1721,6 +1721,37 @@ impl GameHost {
         out
     }
 
+    /// What UO's bipod muzzle trace (`trap_Trace`, mask `mask`) meets
+    /// besides the world: each linked `script_model` whose contents meet
+    /// the mask, as the temp box of its `r.mins`/`r.maxs` about its origin,
+    /// a point unless a script gave it a box (cod11-combat.md 2.1).
+    pub fn muzzle_boxes(&mut self, cx: &mut Cx, mask: i32) -> Vec<vcod_common::movetrace::ClipBox> {
+        use crate::game::entity::LinkKind;
+        let origin = cx.intern_folded("origin");
+        let ids: Vec<(EntId, crate::game::entity::LinkShape)> = self
+            .ents
+            .iter_inuse()
+            .filter(|(_, e)| !e.unlinked)
+            .filter_map(|(id, e)| Some((id, *e.link.as_ref()?)))
+            .filter(|(_, l)| l.kind == LinkKind::ScriptModel && l.contents & mask != 0)
+            .collect();
+        ids.into_iter()
+            .map(|(id, l)| {
+                let at = match self.get_field(cx, id, origin) {
+                    Value::Vector(v) => glam::Vec3::from(v),
+                    _ => glam::Vec3::ZERO,
+                };
+                vcod_common::movetrace::ClipBox {
+                    entity: id.0,
+                    owner: ENTITYNUM_NONE as u32,
+                    mins: at + glam::Vec3::from(l.mins),
+                    maxs: at + glam::Vec3::from(l.maxs),
+                    contents: l.contents as u32,
+                }
+            })
+            .collect()
+    }
+
     /// Every in-use `script_model` with its `.model` text, in entity order:
     /// the classname and model reads behind [`Self::placed_script_models`],
     /// walked again only once a slot was spawned, freed or reached mutably

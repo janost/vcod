@@ -266,7 +266,11 @@ fn a_trigger_hurt_corpse_falls_like_retail_15() {
 #[test]
 fn a_trigger_hurt_corpse_falls_like_retail_uo() {
     let uo = vcod_common::testing::uo_fs;
-    replay_on(uo, "tests/fixtures/triggers/mp_carentan-dm-hurtfall-uo.txt", &[]);
+    replay_on(
+        uo,
+        "tests/fixtures/triggers/mp_carentan-dm-hurtfall-uo.txt",
+        &[],
+    );
     replay_on(
         uo,
         "tests/fixtures/triggers/mp_carentan-dm-hurtlow-uo.txt",
