@@ -190,6 +190,9 @@ pub struct Save {
     /// `--probe-moveshot <part>`: the slope capture's walk is
     /// [`moveshot_script`] from a `client-probes/probe_moveshot` placement.
     pub moveshot: Option<MoveShot>,
+    /// `--probe-pronemove <part>`: the slope capture's walk is
+    /// [`pronemove_script`] from the street placement.
+    pub pronemove: Option<ProneMove>,
     /// `--probe-uofoot <yaw>`: the slope capture's walk is [`uofoot_script`]
     /// from a `client-probes/probe_uofoot` placement facing that world yaw,
     /// on United Offensive.
@@ -386,6 +389,7 @@ pub fn probe(
         autofire: probe_autofire,
         talk: probe_talk,
         moveshot: probe_moveshot,
+        pronemove: probe_pronemove,
         uofoot: probe_uofoot,
         uoturret: probe_uoturret,
         crouchjump: probe_crouchjump,
@@ -461,6 +465,7 @@ pub fn probe(
         || probe_autofire
         || probe_talk
         || probe_moveshot.is_some()
+        || probe_pronemove.is_some()
         || probe_uofoot.is_some()
         || probe_uoturret.is_some()
         || probe_crouchjump.is_some()
@@ -480,6 +485,8 @@ pub fn probe(
         ProneScript::new(0.0, talk_script())
     } else if let Some(part) = probe_moveshot {
         ProneScript::new(0.0, moveshot_script(part))
+    } else if let Some(part) = probe_pronemove {
+        ProneScript::switching(0.0, pronemove_script(part), part.switches())
     } else if let Some(yaw) = probe_uofoot {
         ProneScript::switching(yaw, uofoot_script(), UOFOOT_SWITCHES)
     } else if let Some(yaw) = probe_uoturret {
@@ -1722,6 +1729,8 @@ pub fn probe(
                                 SlopeWalk::Talk
                             } else if let Some(part) = probe_moveshot {
                                 SlopeWalk::MoveShot(part)
+                            } else if let Some(part) = probe_pronemove {
+                                SlopeWalk::ProneMove(part)
                             } else if probe_uofoot.is_some() {
                                 SlopeWalk::UoFoot
                             } else if probe_uoturret.is_some() {
@@ -1839,6 +1848,8 @@ pub fn probe(
                 SlopeWalk::Talk
             } else if let Some(part) = probe_moveshot {
                 SlopeWalk::MoveShot(part)
+            } else if let Some(part) = probe_pronemove {
+                SlopeWalk::ProneMove(part)
             } else if probe_uofoot.is_some() {
                 SlopeWalk::UoFoot
             } else if probe_uoturret.is_some() {
@@ -7497,6 +7508,7 @@ enum SlopeWalk {
     Autofire,
     Talk,
     MoveShot(MoveShot),
+    ProneMove(ProneMove),
     Vehicle,
     UoFoot,
     UoTurret,
@@ -7554,6 +7566,22 @@ fn write_slope_fixture(
             "# Captured with {env}tools/run_probe.sh client-probes/probe_moveshot {map} +set probe_teleport 1\n\
              # +set probe_spot {spot} and --net-probe --save-slope --probe-moveshot {name} --probe-cmd-ms {cmd_ms}:\n\
              # moveshot_script({name}) from the placement, facing world yaw 0. !cmd is a\n"
+        ));
+    } else if let SlopeWalk::ProneMove(part) = walk {
+        let env = match protocol.transport.version {
+            6 => "COD_VERSION=1.5 ",
+            22 => "COD_VERSION=uo ",
+            _ => "",
+        };
+        let name = part.name();
+        let binoculars = match part {
+            ProneMove::Lmg => " +set probe_binoculars 1",
+            ProneMove::Rifle => "",
+        };
+        out.push_str(&format!(
+            "# Captured with {env}tools/run_probe.sh client-probes/probe_prone {map} +set probe_teleport 1\n\
+             # +set probe_spot street{binoculars} and --net-probe --save-slope --probe-pronemove {name} --probe-cmd-ms {cmd_ms}:\n\
+             # pronemove_script({name}) from the placement, facing world yaw 0. !cmd is a\n"
         ));
     } else if walk == SlopeWalk::PatchWalk {
         let env = match protocol.transport.version {
@@ -8131,6 +8159,125 @@ impl MoveShot {
             MoveShot::Walk => "walk",
             MoveShot::Bipod => "bipod",
         }
+    }
+}
+
+/// `--probe-pronemove`: which part of [`pronemove_script`] runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum ProneMove {
+    /// Any server, with a bolt-action (`--probe-weapon springfield_mp`):
+    /// a move key pressed prone while sighted, while rechambering and
+    /// while winding up a swing, then a prone press from a crouched walk
+    /// back.
+    Rifle,
+    /// United Offensive, with an LMG (`--probe-weapon mg30cal_mp`): a move
+    /// key pressed on the deployed bipod and through its breakdown; then
+    /// the binoculars (`+set probe_binoculars 1`), lowered on a prone
+    /// press, raised prone with a move key pressed through the raise, and
+    /// lowered prone with the stand pressed through the lowering.
+    Lmg,
+}
+
+impl ProneMove {
+    fn name(self) -> &'static str {
+        match self {
+            ProneMove::Rifle => "rifle",
+            ProneMove::Lmg => "lmg",
+        }
+    }
+
+    fn switches(self) -> &'static [(u64, &'static str)] {
+        match self {
+            ProneMove::Rifle => &[],
+            ProneMove::Lmg => &[(10000, "binoculars_mp")],
+        }
+    }
+}
+
+/// `--probe-pronemove`, from the street placement facing world yaw 0:
+/// `PM_InteruptWeaponWithProneMove`'s cases, each a move key pressed on a
+/// prone body (cod11-combat.md 1.13), and the anim timers they leave
+/// (player-model-anim-system.md, "The takeoff and the landing").
+fn pronemove_script(part: ProneMove) -> Vec<ProneStep> {
+    use net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_MELEE, WBUTTON_CROUCH, WBUTTON_PRONE};
+    const P: u8 = WBUTTON_PRONE;
+    const C: u8 = WBUTTON_CROUCH;
+    const A: u8 = BUTTON_ATTACK;
+    const S: u8 = BUTTON_ADS;
+    const M: u8 = BUTTON_MELEE;
+    let step = |at_ms, buttons, wbuttons, forward, right| ProneStep {
+        at_ms,
+        buttons,
+        wbuttons,
+        forward,
+        right,
+        up: if wbuttons & (P | C) != 0 { -127 } else { 0 },
+        yaw: 0.0,
+        pitch: 0.0,
+    };
+    match part {
+        ProneMove::Rifle => vec![
+            step(0, 0, 0, 0, 0),
+            step(1000, 0, P, 0, 0),
+            // The sight up, then a forward and a right press under it.
+            step(3000, S, P, 0, 0),
+            step(4500, S, P, 127, 0),
+            step(5500, S, P, 0, 0),
+            step(7000, S, P, 0, 127),
+            step(8000, S, P, 0, 0),
+            // A sighted shot, a forward press in its rechamber.
+            step(9500, S | A, P, 0, 0),
+            step(9600, S, P, 0, 0),
+            step(10000, S, P, 127, 0),
+            step(11000, S, P, 0, 0),
+            step(12500, 0, P, 0, 0),
+            // A swing, a forward press 50 ms into its windup.
+            step(13500, M, P, 0, 0),
+            step(13550, M, P, 127, 0),
+            step(14000, 0, P, 127, 0),
+            step(14500, 0, P, 0, 0),
+            // A plain crawl, the stand.
+            step(15000, 0, P, 127, 0),
+            step(16000, 0, P, 0, 0),
+            step(16500, 0, 0, 0, 0),
+            // The prone press from a crouched walk back.
+            step(18500, 0, C, 0, 0),
+            step(19500, 0, C, -127, 0),
+            step(20500, 0, P, -127, 0),
+            step(22000, 0, P, 0, 0),
+            step(22500, 0, 0, 0, 0),
+            step(24500, 0, 0, 0, 0),
+        ],
+        ProneMove::Lmg => vec![
+            step(0, 0, 0, 0, 0),
+            step(1000, 0, P, 0, 0),
+            // The bipod down, a forward press on it.
+            step(3000, S, P, 0, 0),
+            step(5000, S, P, 127, 0),
+            step(6000, S, P, 0, 0),
+            // The breakdown, a forward press 100 ms into it.
+            step(7000, 0, P, 0, 0),
+            step(7100, 0, P, 127, 0),
+            step(8500, 0, P, 0, 0),
+            step(9000, 0, 0, 0, 0),
+            // The binoculars come up from 10000 (`ProneMove::switches`):
+            // raised standing, lowered on the prone press, then lowered
+            // 100 ms after it, inside the drop.
+            step(12500, S, 0, 0, 0),
+            step(14000, 0, P, 0, 0),
+            step(15500, 0, 0, 0, 0),
+            step(17000, S, 0, 0, 0),
+            step(18500, S, P, 0, 0),
+            step(18600, 0, P, 0, 0),
+            // Raised prone, a forward press 100 ms into the raise.
+            step(20500, S, P, 0, 0),
+            step(20600, S, P, 127, 0),
+            step(21500, S, P, 0, 0),
+            // Lowered prone, the stand pressed 200 ms into it.
+            step(23500, 0, P, 0, 0),
+            step(23700, 0, 0, 0, 0),
+            step(26000, 0, 0, 0, 0),
+        ],
     }
 }
 

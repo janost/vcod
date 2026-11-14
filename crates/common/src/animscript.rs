@@ -766,6 +766,30 @@ impl AnimState {
         apply_event(&mut self.torso, sel.torso.as_ref(), at, &resolve, &hold);
     }
 
+    /// An unforced event's choice (`dropweapon`, `raiseweapon`: 1.1d
+    /// game.mp and UO pass `BG_AnimScriptEvent` force 0): `BG_PlayAnim`
+    /// takes a channel only while its timer reads under [`LERP_MS`], so
+    /// a breakdown or a reload still held keeps the torso through a weapon
+    /// change.
+    pub fn event_unforced(
+        &mut self,
+        sel: &Selection,
+        now_ms: i32,
+        hold_ms: i32,
+        resolve: impl Fn(&str) -> Option<i32>,
+        length: impl Fn(&str) -> Option<u32>,
+    ) {
+        let free = |c: &Channel| {
+            c.held_until_ms
+                .is_none_or(|t| t.wrapping_sub(hold_ms) < LERP_MS)
+        };
+        let sel = Selection {
+            legs: sel.legs.clone().filter(|_| free(&self.legs)),
+            torso: sel.torso.clone().filter(|_| free(&self.torso)),
+        };
+        self.event(&sel, now_ms, hold_ms, resolve, length);
+    }
+
     /// The continuous torso choice, which every settled retail pose reads as
     /// index 0 (docs/research/player-model-anim-system.md, "The weapon
     /// channel"): an event anim that ran out gives the channel back to no
@@ -773,6 +797,41 @@ impl AnimState {
     pub fn clear_torso(&mut self, now_ms: i32, hold_ms: i32) {
         if self.torso.released(hold_ms) && self.torso.index != 0 {
             self.torso.start(0, None, now_ms);
+        }
+    }
+
+    /// 1.5's and UO's prone flip: `BG_PlayAnim(ps, 0, torso, 0, 0, 1, 1)`,
+    /// forced and a continue with no timer, so a torso on another anim
+    /// restarts on index 0 while its timer runs on, and one already on 0
+    /// is left alone.
+    pub fn clear_torso_held(&mut self, now_ms: i32) {
+        if self.torso.index != 0 {
+            self.torso.index = 0;
+            self.torso.toggle = !self.torso.toggle;
+            self.torso.start_ms = now_ms;
+        }
+    }
+
+    /// A continue on the anim the torso already plays, whose clip loops:
+    /// `BG_PlayAnim` sets the timer again (record flag 0x80, which
+    /// `BG_FinalizePlayerAnims` sets off `XAnimIsLooped`) and leaves the
+    /// index and the toggle.
+    pub fn reset_torso_timer(
+        &mut self,
+        sel: &Selection,
+        hold_ms: i32,
+        length: impl Fn(&str) -> Option<u32>,
+    ) {
+        let Some(anim) = sel.torso.as_ref() else {
+            return;
+        };
+        let hold = anim
+            .duration_ms
+            .or_else(|| length(&anim.name).map(|d| d.max(MIN_EVENT_HOLD_MS)));
+        if let Some(d) = hold {
+            let until = hold_ms.wrapping_add(d as i32 + LERP_MS);
+            self.torso.held_until_ms = Some(until);
+            self.torso.timer_until_ms = Some(until);
         }
     }
 

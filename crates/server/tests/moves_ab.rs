@@ -494,6 +494,16 @@ const CAPTURES: &[Capture] = &[
         protocol: &PROTOCOL_V6,
         rules: MoveRules::V1_5,
     },
+    Capture {
+        file: PRONEMOVE_1_1,
+        protocol: &PROTOCOL_V1,
+        rules: MoveRules::V1_1,
+    },
+    Capture {
+        file: PRONEMOVE_1_5,
+        protocol: &PROTOCOL_V6,
+        rules: MoveRules::V1_5,
+    },
 ];
 
 const MOVES_1_1: &str = "mp_carentan-dm-slope-8ms-moves-1.1.txt";
@@ -523,6 +533,17 @@ const SPEEDGRAV_UO: &str = "mp_carentan-dm-slope-8ms-speedgrav-uo.txt";
 const TALK_1_1: &str = "mp_carentan-dm-slope-8ms-talk-1.1.txt";
 const TALK_1_5: &str = "mp_carentan-dm-slope-8ms-talk-1.5.txt";
 const TALK_UO: &str = "mp_carentan-dm-slope-8ms-talk-uo.txt";
+/// The prone move key (`--probe-pronemove rifle`, `pronemove_script` in
+/// `crates/client/src/probe.rs`, springfield_mp): pressed prone under the
+/// sight, in a rechamber and in a swing's windup, which
+/// `PM_InteruptWeaponWithProneMove` answers per patch (cod11-combat.md
+/// 1.13), then a prone press from a crouched walk back.
+const PRONEMOVE_1_1: &str = "mp_carentan-dm-slope-8ms-pronemove-rifle-1.1.txt";
+const PRONEMOVE_1_5: &str = "mp_carentan-dm-slope-8ms-pronemove-rifle-1.5.txt";
+const PRONEMOVE_UO: &str = "mp_carentan-dm-slope-8ms-pronemove-rifle-uo.txt";
+/// The same on UO's bipod and binoculars (`--probe-pronemove lmg`,
+/// mg30cal_mp).
+const PRONEMOVE_LMG_UO: &str = "mp_carentan-dm-slope-8ms-pronemove-lmg-uo.txt";
 
 /// Fields a capture's replay may miss, with how many snapshots and why.
 /// The 1.5 captures replay under 1.5b's stored arithmetic
@@ -551,6 +572,10 @@ fn the_predictor_replays_each_patch_under_its_own_rules() {
         if c.rules == MoveRules::V1_1 && !install_11 {
             continue;
         }
+        // And a 1.5 springfield capture on 1.5's.
+        if c.file == PRONEMOVE_1_5 && install_11 {
+            continue;
+        }
         let text = std::fs::read_to_string(format!("{FIXTURE_DIR}/{}", c.file)).unwrap();
         let r = replay(
             c.protocol,
@@ -560,9 +585,12 @@ fn the_predictor_replays_each_patch_under_its_own_rules() {
             &weapons,
         );
         print(c.file, &r);
-        // The held-trigger script is 12 s against the moves script's 60.
+        // The held-trigger script is 12 s against the moves script's 60,
+        // the prone move key's 25.
         let floor = if c.file == SPRINGFIELD_HELD_1_1 {
             200
+        } else if c.file == PRONEMOVE_1_1 || c.file == PRONEMOVE_1_5 {
+            400
         } else {
             500
         };
@@ -653,6 +681,31 @@ fn the_talk_captures_fail_under_the_other_rules() {
         let off = r.count("fWeaponPosFrac") + r.count("pm_flags");
         assert!(off > 20, "{file}: {off}");
     }
+}
+
+/// United Offensive's prone move key (`PRONEMOVE_UO`, `PRONEMOVE_LMG_UO`):
+/// UO keeps a rechamber and drops a bipod's or the binoculars' raise and
+/// lowering. Needs `COD_DIR` at a UO install.
+#[test]
+fn the_predictor_replays_uo_prone_moves() {
+    let mut failures = Vec::new();
+    for file in [PRONEMOVE_UO, PRONEMOVE_LMG_UO] {
+        let text = std::fs::read_to_string(format!("{FIXTURE_DIR}/{file}")).unwrap();
+        let Some((world, weapons)) = uo_setup(&text, "mp_carentan") else {
+            return;
+        };
+        let r = replay(
+            &PROTOCOL_V22,
+            MoveRules::Uo,
+            &parse(&PROTOCOL_V22, &text),
+            &world,
+            &weapons,
+        );
+        print(file, &r);
+        assert!(r.compared > 400, "{file}: only {} snapshots", r.compared);
+        failures.extend(over(&r, &[]).into_iter().map(|f| format!("{file}: {f}")));
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 /// United Offensive's talk mask (`TALK_UO`), which keeps the sight as
