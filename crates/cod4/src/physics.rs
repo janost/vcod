@@ -4,7 +4,7 @@
 //! map. Retail's model and where this one differs: cod4-gsc.md 3.6.
 
 use crate::assets::Assets;
-use crate::assets::model::{PhysGeomList, XModel};
+use crate::assets::model::{PhysBrush, PhysGeomList, XModel};
 use crate::ragdoll::{Sweep, Trace};
 use glam::{Mat3, Quat, Vec3};
 use std::collections::HashMap;
@@ -102,7 +102,7 @@ pub struct Shape {
 
 impl Shape {
     /// `Phys_ObjSetCollisionFromXModel` (0x5a5710): the model's `physGeoms`
-    /// when it has boxes or cylinders, else a box on its bounds.
+    /// when it has any, else a box on its bounds.
     pub fn of(model: &XModel) -> Shape {
         model
             .phys_geoms
@@ -128,11 +128,20 @@ impl Shape {
         }
     }
 
-    /// The boxes' corners and the cylinders' rims, with the list's
-    /// `PhysMass`; `None` when the list has no box or cylinder.
+    /// The brushes' and boxes' corners and the cylinders' rims, with the
+    /// list's `PhysMass`; `None` when the list gives no point.
     fn of_geoms(list: &PhysGeomList) -> Option<Shape> {
         let mut points = Vec::new();
-        for g in list.geoms.iter().filter(|g| !g.brush) {
+        for g in &list.geoms {
+            if let Some(b) = &g.brush {
+                if b.planes.is_empty() {
+                    let (lo, hi) = (Vec3::from(b.mins), Vec3::from(b.maxs));
+                    points.extend(corners((lo + hi) * 0.5, Mat3::IDENTITY, (hi - lo) * 0.5));
+                } else {
+                    points.extend(brush_corners(b));
+                }
+                continue;
+            }
             let axis = Mat3::from_cols(
                 g.orientation[0].into(),
                 g.orientation[1].into(),
@@ -212,14 +221,44 @@ pub fn part_models(zones: &[&Assets]) -> HashMap<String, Arc<PartModel>> {
     out
 }
 
-/// A box's eight corners: centre `at`, axes the columns of `axis`.
+/// A box's points: its eight corners, then its edges' midpoints and its
+/// faces' centres, so a world edge poking in between two corners meets
+/// one; centre `at`, axes the columns of `axis`.
 fn corners(at: Vec3, axis: Mat3, h: Vec3) -> Vec<Vec3> {
-    (0..8)
-        .map(|i| {
-            let s = |b: usize| if i >> b & 1 == 0 { -1.0 } else { 1.0 };
-            at + axis * Vec3::new(s(0) * h.x, s(1) * h.y, s(2) * h.z)
-        })
-        .collect()
+    let grid = (0..27).map(|i| Vec3::new((i % 3) as f32, (i / 3 % 3) as f32, (i / 9) as f32) - 1.0);
+    let mut out: Vec<Vec3> = grid.filter(|g| *g != Vec3::ZERO).collect();
+    // Corners first, then edges, then faces.
+    out.sort_by_key(|g| std::cmp::Reverse(g.abs().element_sum() as u32));
+    out.into_iter().map(|g| at + axis * (g * h)).collect()
+}
+
+/// A brush's corners: every point where three of its planes (the six of
+/// its bounds, then its sides) meet that lies inside all of them.
+fn brush_corners(b: &PhysBrush) -> Vec<Vec3> {
+    let (lo, hi) = (Vec3::from(b.mins), Vec3::from(b.maxs));
+    let mut planes: Vec<(Vec3, f32)> = (0..3)
+        .flat_map(|k| [(-Vec3::AXES[k], -lo[k]), (Vec3::AXES[k], hi[k])])
+        .collect();
+    planes.extend(b.planes.iter().map(|p| (Vec3::new(p[0], p[1], p[2]), p[3])));
+    const EPS: f32 = 0.01;
+    let mut out: Vec<Vec3> = Vec::new();
+    for i in 0..planes.len() {
+        for j in i + 1..planes.len() {
+            for k in j + 1..planes.len() {
+                let ((a, da), (bn, db), (c, dc)) = (planes[i], planes[j], planes[k]);
+                let det = a.dot(bn.cross(c));
+                if det.abs() < 1e-6 {
+                    continue;
+                }
+                let p = (bn.cross(c) * da + c.cross(a) * db + a.cross(bn) * dc) / det;
+                let inside = planes.iter().all(|(n, d)| n.dot(p) <= d + EPS);
+                if inside && !out.iter().any(|q| q.distance(p) < EPS) {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// A solid box's inertia per unit of mass, `h` its half sizes.
@@ -414,10 +453,13 @@ impl Body {
         let w = self.avel;
         let dq = Quat::from_xyzw(w.x, w.y, w.z, 0.0) * self.rot;
         self.rot = (self.rot + dq * (0.5 * dt)).normalize();
-        // The centre itself never crosses a surface in one step.
+        // The centre itself never crosses a surface in one step, and keeps
+        // only the speed it moved with: a world edge poking in between the
+        // corners would otherwise hold it with a speed it never loses.
         let s = trace(old, self.pos, 0.0);
         if !s.startsolid && s.fraction < 1.0 {
             self.pos = old + (self.pos - old) * s.fraction;
+            self.vel *= s.fraction;
             let into = self.vel.dot(s.normal);
             if into < 0.0 {
                 self.vel -= s.normal * into;
@@ -806,7 +848,7 @@ mod tests {
     fn a_models_geoms_give_its_points_and_mass() {
         let list = PhysGeomList {
             geoms: vec![crate::assets::model::PhysGeom {
-                brush: false,
+                brush: None,
                 kind: GEOM_BOX,
                 orientation: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
                 offset: [0.0, -1.0, 12.75],
@@ -817,12 +859,125 @@ mod tests {
             products: [0.0; 3],
         };
         let s = Shape::of_geoms(&list).unwrap();
-        assert_eq!(s.points.len(), 8);
+        assert_eq!(s.points.len(), 26);
         assert_eq!(s.com, Vec3::new(0.0, -1.0, 12.75));
         assert!(s.points.contains(&Vec3::new(18.0, 17.5, 24.5)));
         assert_eq!(s.inertia.x_axis.x, 159.9);
+        // A brush gives its corners: a sedan hood's box, and a cube with
+        // one edge cut off by a side.
+        let hood = PhysBrush {
+            mins: [-3.5, -24.0, -8.0],
+            maxs: [41.5, 24.0, 0.0],
+            planes: vec![],
+        };
+        let mut c = brush_corners(&hood);
+        assert_eq!(c.len(), 8);
+        assert!(c.contains(&Vec3::new(41.5, -24.0, -8.0)));
+        let wedge = PhysBrush {
+            mins: [0.0; 3],
+            maxs: [10.0; 3],
+            planes: vec![[1.0, 0.0, 1.0, 10.0]],
+        };
+        c = brush_corners(&wedge);
+        assert_eq!(c.len(), 6, "{c:?}");
+        assert!(c.iter().all(|p| p.x + p.z <= 10.01));
+        let one = PhysGeomList {
+            geoms: vec![crate::assets::model::PhysGeom {
+                brush: Some(hood),
+                kind: 0,
+                orientation: [[0.0; 3]; 3],
+                offset: [0.0; 3],
+                half_lengths: [0.0; 3],
+            }],
+            center_of_mass: [19.04, 0.0, -3.56],
+            moments: [195.1, 130.4, 318.9],
+            products: [0.0, 16.9, 0.0],
+        };
+        let s = Shape::of_geoms(&one).unwrap();
+        assert_eq!((s.points.len(), s.com), (26, Vec3::new(19.04, 0.0, -3.56)));
+        assert!(s.points.contains(&Vec3::new(41.5, 0.0, -4.0)));
         // `me_corrugated_metal8x8`'s moments are a box's per unit mass.
         let b = box_inertia(Vec3::new(48.0, 1.0, 48.0));
         assert!((b.x_axis.x - 768.33).abs() < 0.01);
+    }
+
+    /// A world of convex brushes (their planes `n . p <= dist`), traced
+    /// as points the way the clip map's kernels do, with their skin: a
+    /// start within it that closes on a face at all stops at once.
+    fn brushes(solid: &[Vec<(Vec3, f32)>]) -> impl FnMut(Vec3, Vec3, f32) -> Sweep + '_ {
+        move |a: Vec3, b: Vec3, _r: f32| {
+            let mut best = Sweep {
+                fraction: 1.0,
+                normal: Vec3::ZERO,
+                startsolid: false,
+            };
+            'brush: for brush in solid {
+                let (mut enter, mut leave, mut out) = (-1.0f32, 1.0f32, false);
+                let mut normal = Vec3::ZERO;
+                for &(n, dist) in brush {
+                    let (d1, d2) = (n.dot(a) - dist, n.dot(b) - dist);
+                    out |= d1 > 0.0;
+                    if d1 > 0.0 && (d2 >= SKIN || d2 >= d1) {
+                        continue 'brush;
+                    }
+                    if d1 <= 0.0 && d2 <= 0.0 {
+                        continue;
+                    }
+                    if d1 > d2 {
+                        let f = ((d1 - SKIN) / (d1 - d2)).max(0.0);
+                        if f > enter {
+                            (enter, normal) = (f, n);
+                        }
+                    } else {
+                        leave = leave.min(((d1 + SKIN) / (d1 - d2)).min(1.0));
+                    }
+                }
+                if !out {
+                    return Sweep {
+                        fraction: 0.0,
+                        normal: Vec3::Z,
+                        startsolid: true,
+                    };
+                }
+                if enter > -1.0 && enter < leave && enter < best.fraction {
+                    best = Sweep {
+                        fraction: enter,
+                        normal,
+                        startsolid: false,
+                    };
+                }
+            }
+            best
+        }
+    }
+
+    #[test]
+    fn a_box_held_on_its_centre_by_a_ridge_comes_to_rest() {
+        // A floor, and a ridge 20 high whose top pokes between a sedan
+        // hood's eight corners (no other point) and holds the box on its
+        // centre: the centre's guard leaves it no speed to keep.
+        let side = |s: f32| {
+            (
+                Vec3::new(0.0, s * 1.5, 1.0).normalize(),
+                20.0 / 1.5f32.hypot(1.0),
+            )
+        };
+        let world = [
+            vec![(Vec3::Z, 0.0), (-Vec3::Z, 100.0)],
+            vec![side(1.0), side(-1.0), (-Vec3::Z, 0.0)],
+        ];
+        let mut trace = brushes(&world);
+        let mut shape = Shape::of_bounds(Vec3::new(-22.5, -24.0, -4.0), Vec3::new(22.5, 24.0, 4.0));
+        shape.points.truncate(8);
+        let preset = Preset {
+            mass: 15.0,
+            bounce: 0.1,
+            friction: 0.5,
+            bullet_force_scale: 0.6,
+        };
+        let d = Dvars::default();
+        let mut b = Body::new(Vec3::new(0.0, 3.0, 26.0), Vec3::ZERO, &shape, &preset, 0);
+        run(&mut b, 10000, &mut trace, &d);
+        assert!(b.asleep, "pos {} vel {} avel {}", b.pos, b.vel, b.avel);
     }
 }
