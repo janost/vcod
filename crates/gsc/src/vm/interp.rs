@@ -1734,6 +1734,64 @@ impl Vm {
                         _ => push!(c),
                     }
                 }
+                Op::StepLtSize {
+                    i,
+                    c,
+                    a,
+                    body,
+                    exit,
+                    extra,
+                } => {
+                    let x = locals[i as usize];
+                    let sum = match (x, func.consts[c as usize]) {
+                        (Value::Int(x), Value::Int(y)) => Some(Value::Int(x.wrapping_add(y))),
+                        (Value::Float(x), Value::Float(y)) => Some(Value::Float(x + y)),
+                        _ => None,
+                    };
+                    match (sum, locals[a as usize]) {
+                        // `AddConst`'s store, then `LtSizeJumpIfFalse` on it.
+                        (Some(v), Value::Array(id)) if left >= u32::from(extra) => {
+                            left -= u32::from(extra);
+                            locals[i as usize] = v;
+                            let x = to_f32(v).expect("a number");
+                            let n = self.heap.array_len(id) as i32;
+                            ip = if x < n as f32 { body } else { exit } as usize;
+                        }
+                        _ => push!(x),
+                    }
+                }
+                Op::LtLevelSizeJumpIfFalse { i, f, to } => {
+                    let x = locals[i as usize];
+                    match (to_f32(x), self.heap.get_field(self.level, f)) {
+                        (Some(x), Value::Array(id)) if left >= 5 => {
+                            left -= 5;
+                            let n = self.heap.array_len(id) as i32;
+                            ip = if x < n as f32 { at + 6 } else { to as usize };
+                        }
+                        _ => push!(x),
+                    }
+                }
+                Op::LtLocalConstJumpIfFalse { a, c, to } => {
+                    let x = locals[a as usize];
+                    match (to_f32(x), to_f32(func.consts[c as usize])) {
+                        (Some(x), Some(y)) if left >= 3 => {
+                            left -= 3;
+                            ip = if x < y { at + 4 } else { to as usize };
+                        }
+                        _ => push!(x),
+                    }
+                }
+                Op::SubLocals(a, b) => {
+                    let x = locals[a as usize];
+                    match eval_sub(x, locals[b as usize]) {
+                        Ok(v) if left >= 2 => {
+                            left -= 2;
+                            push!(v);
+                            ip = at + 3;
+                        }
+                        _ => push!(x),
+                    }
+                }
                 Op::LtSizeJumpIfFalse { i, a, to } => {
                     let x = locals[i as usize];
                     match (to_f32(x), locals[a as usize]) {
@@ -1801,13 +1859,17 @@ impl Vm {
             #[cfg(test)]
             {
                 let ran = 1 + (dbg_left - left) as usize;
-                let effect: i32 = code[at..at + ran]
-                    .iter()
-                    .map(|o| {
-                        let (pop, push) = crate::bytecode::stack_effect(o);
-                        push - pop
-                    })
-                    .sum();
+                // Along the run's path: a `Jump` inside it goes on at its
+                // target.
+                let (mut pc, mut effect) = (at, 0);
+                for _ in 0..ran {
+                    let (pop, push) = crate::bytecode::stack_effect(&code[pc]);
+                    effect += push - pop;
+                    pc = match code[pc] {
+                        Op::Jump(t) => t as usize,
+                        _ => pc + 1,
+                    };
+                }
                 let _ = (dbg_pop, dbg_push);
                 assert_eq!(
                     sp as i32,
@@ -1997,6 +2059,7 @@ main()
         if ( y >= 3 )
             t += pick( x, y );
     }
+    record( t, x, y, z );
     w = 3;
     while ( w >= 0 )
         w -= 1;
@@ -2015,6 +2078,20 @@ main()
         if ( isdefined( e ) || n )
             t += 2;
     }
+    g = 1;
+    for ( i = 0; i < level.arr.size; i++ )
+    {
+        if ( i > 100 )
+            g = 0;
+        d = i - g;
+        if ( d < 3 )
+            continue;
+        g += d;
+    }
+    record( g, d );
+    for ( k = 0.5; k < c.size; k += 1 )
+        t += k;
+    record( t, k );
     if ( i < "x" )
         t += 100;
     u = m[nope];

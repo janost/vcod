@@ -164,6 +164,33 @@ pub enum Op {
     /// JumpIfTrue t; Pop`, an `||`'s.
     AndJump(u32),
     OrJump(u32),
+    /// `AddConst` on a loop's `i` (`dst` and `src` both `i`), with or
+    /// without its `Jump`, then the `LtSizeJumpIfFalse` it reaches on `i`:
+    /// a loop's step and condition. `body` is the op past the condition,
+    /// `exit` its jump, `extra` the run's length less one.
+    StepLtSize {
+        i: u16,
+        c: u16,
+        a: u16,
+        body: u32,
+        exit: u32,
+        extra: u8,
+    },
+    /// `LoadLocal i; LoadLevel; LoadField f; LoadField size; Lt;
+    /// JumpIfFalse to`: a loop's `i < level.f.size`.
+    LtLevelSizeJumpIfFalse {
+        i: u16,
+        f: Atom,
+        to: u32,
+    },
+    /// `LoadLocal a; Const c; Lt; JumpIfFalse to`.
+    LtLocalConstJumpIfFalse {
+        a: u16,
+        c: u16,
+        to: u32,
+    },
+    /// `LoadLocal a; LoadLocal b; Sub`.
+    SubLocals(u16, u16),
     /// `LoadLocal i; LoadLocal a; LoadField size; Lt; JumpIfFalse t`: a
     /// loop's `i < a.size`.
     LtSizeJumpIfFalse {
@@ -271,7 +298,12 @@ pub(crate) fn stack_effect(op: &Op) -> (i32, i32) {
         | Op::GtJumpIfFalse(_)
         | Op::LeJumpIfFalse(_)
         | Op::GeJumpIfFalse(_) => (2, 0),
-        Op::LtSizeJumpIfFalse { .. } | Op::AddConst { .. } => (0, 0),
+        Op::LtSizeJumpIfFalse { .. }
+        | Op::AddConst { .. }
+        | Op::StepLtSize { .. }
+        | Op::LtLevelSizeJumpIfFalse { .. }
+        | Op::LtLocalConstJumpIfFalse { .. } => (0, 0),
+        Op::SubLocals(..) => (0, 1),
         Op::LtLocalJumpIfFalse(..)
         | Op::GtLocalJumpIfFalse(..)
         | Op::LtConstJumpIfFalse(..)
@@ -294,7 +326,7 @@ pub(crate) fn stack_effect(op: &Op) -> (i32, i32) {
 /// The runs are the spawn wave's commonest (cod4-server-frame.md 9.2).
 pub(crate) fn fuse(code: &[Op], size: Atom) -> Vec<Op> {
     (0..code.len())
-        .map(|i| fused_at(&code[i..], size).unwrap_or_else(|| code[i].clone()))
+        .map(|i| fused_at(code, i, size).unwrap_or_else(|| code[i].clone()))
         .collect()
 }
 
@@ -306,10 +338,74 @@ fn jump_target(op: Option<&Op>) -> u32 {
     }
 }
 
-fn fused_at(run: &[Op], size: Atom) -> Option<Op> {
+/// `LoadLocal i; LoadLocal a; LoadField size; Lt; JumpIfFalse to` at
+/// `code[at]`, as `(i, a, to)`.
+fn lt_size_at(code: &[Op], at: usize, size: Atom) -> Option<(u16, u16, u32)> {
+    match code.get(at..at + 5)? {
+        &[
+            Op::LoadLocal(i),
+            Op::LoadLocal(a),
+            Op::LoadField(f),
+            Op::Lt,
+            Op::JumpIfFalse(to),
+        ] if f == size => Some((i, a, to)),
+        _ => None,
+    }
+}
+
+/// The fused op for the run starting at `code[at]`.
+fn fused_at(code: &[Op], at: usize, size: Atom) -> Option<Op> {
     use Op::*;
+    let run = &code[at..];
     let op = |k: usize| run.get(k);
     Some(match (op(0)?, op(1)?) {
+        (&LoadLocal(src), &Const(c)) if matches!((op(2), op(3)), (Some(Add), Some(&StoreLocal(d))) if d == src) =>
+        {
+            // The condition straight after the step, or where its `Jump`
+            // lands.
+            let (cond, extra) = match op(4) {
+                Some(&Jump(t)) => (t as usize, 9),
+                _ => (at + 4, 8),
+            };
+            match lt_size_at(code, cond, size) {
+                Some((i, a, exit)) if i == src => StepLtSize {
+                    i,
+                    c,
+                    a,
+                    body: cond as u32 + 5,
+                    exit,
+                    extra,
+                },
+                _ => {
+                    let to = match op(4) {
+                        Some(&Jump(t)) => Some(t),
+                        _ => None,
+                    };
+                    AddConst {
+                        dst: src,
+                        src,
+                        c,
+                        to,
+                    }
+                }
+            }
+        }
+        (&LoadLocal(i), LoadLevel) => match run.get(2..6)? {
+            &[LoadField(f), LoadField(s), Lt, JumpIfFalse(to)] if s == size && f != size => {
+                LtLevelSizeJumpIfFalse { i, f, to }
+            }
+            _ => return None,
+        },
+        (&LoadLocal(a), &Const(c))
+            if matches!((op(2), op(3)), (Some(Lt), Some(JumpIfFalse(_)))) =>
+        {
+            LtLocalConstJumpIfFalse {
+                a,
+                c,
+                to: jump_target(op(3)),
+            }
+        }
+        (&LoadLocal(a), &LoadLocal(b)) if matches!(op(2), Some(Sub)) => SubLocals(a, b),
         (&LoadLocal(i), &LoadLocal(a))
             if matches!(
                 (op(2), op(3), op(4)),
