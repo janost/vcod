@@ -2212,6 +2212,48 @@ fn the_victim_capture_matches_retail_on_mp_carentan() {
     finish(diff(&cap, &ours, &fs), &[]);
 }
 
+const FIXTURE_LINKMG: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/turret/mp_carentan-dm-turret-linkmg.txt"
+);
+const FIXTURE_LINKMG_SCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/turret/mp_carentan-dm-turret-linkmg-script.txt"
+);
+
+/// The victim recipe with the gun linked to a script_origin that rises and
+/// turns under the gunner through the yaw sweep and back through the pitch
+/// sweep (`probe_linkmg`, movers doc 16 "A linked turret"): the gunner, the
+/// gun and the target diffed on retail's level clock in every phase but
+/// `target`, whose rounds meet the target's leg 0.378 units nearer along
+/// retail's own ray (open in movers doc 16).
+#[test]
+fn the_linked_gun_capture_matches_retail_on_mp_carentan() {
+    if vcod_common::testing::game_fs_11().is_none() {
+        return;
+    }
+    let mut cap = parse(&read(FIXTURE_LINKMG));
+    cap.cvars = &[("probe_linkmg", "11700")];
+    let place = place_ms(read(FIXTURE_LINKMG_SCRIPT).lines(), 0).expect("retail's PROBE place");
+    let Some(mut rig) = rig_aligned(
+        &cap,
+        &vcod_common::testing::game_fs_11,
+        &PROTOCOL_V1,
+        REBASE_MAX_VICTIM,
+        place,
+        None,
+    ) else {
+        return;
+    };
+    let ours = replay(&mut rig, &cap);
+    let fs = vcod_common::testing::game_fs_11().unwrap();
+    let rows = diff(&cap, &ours, &fs)
+        .into_iter()
+        .filter(|r| !r.starts_with("[target]"))
+        .collect();
+    finish(rows, &[]);
+}
+
 /// The phases after the 2026-10-19 run's dismount, which puts the gunner
 /// back on his spot: the 142 step off the sandbags and the slide down the
 /// face (turrets doc 13.3). Its sweep logs no `ct=`, so which frame ran a

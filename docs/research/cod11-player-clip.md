@@ -1090,7 +1090,16 @@ trace's, computed as above (`TerrainPart::touches`; a point trace takes its
 segment's box, `touches_segment`). VERIFIED, vcod: `fall_ab` gates both
 corpse heights unmasked, the walk capture's -39.92 and every row of the
 second run (the -39.963 and -39.964 rows included). Not ported: the point
-arm's further tests in 0x8054c48 (0x8054d0f-0x8054e66).
+arm's further tests in 0x8054c48 (0x8054d0f-0x8054e66). INFERRED, off their
+instruction sequence (read 2026-11-14): the arm forms the record's centre and
+half extents and the segment's midpoint and half delta (`tw+0x0`, `+0xc`,
+`+0x18..+0x20`), each stored once, then three tests (0x8054de7, 0x8054e22,
+0x8054e5a), each a cross-product term of the half delta and the centre
+offset squared against a sum of half-extent products squared; the arm
+returns 0 (no clip) when one fails (0x8054e7d, 0x8054e81, 0x8054e87) and 1
+after all three pass (0x8054e74): the separating-axis test of a segment
+against a box on the three cross axes. Which side of each `fcompp` is which,
+and so each test's direction and strictness, is unread.
 
 VERIFIED, `cod_lnxded`, a patch record's bounds: the patch branch of
 `CM_LoadMap` hands the same `record + 0xc` to `CM_GeneratePatchCollide`
