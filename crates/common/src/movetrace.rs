@@ -232,10 +232,10 @@ impl<'a> MoveWorld<'a> {
             if b_max.cmplt(swept_min).any() || b_min.cmpgt(swept_max).any() {
                 continue;
             }
-            if self.world.arith() == Arith::Kept {
-                kept::clip_capsule(&mut t, start, end, mins, maxs, b);
-            } else {
-                clip_capsule(&mut t, start, end, mover, (maxs - mins).z * 0.5, b);
+            match self.world.arith() {
+                Arith::Kept => kept::clip_capsule(&mut t, start, end, mins, maxs, b),
+                Arith::Stored => stored::clip_capsule(&mut t, start, end, mins, maxs, b),
+                Arith::Msvc => clip_capsule(&mut t, start, end, mover, (maxs - mins).z * 0.5, b),
             }
         }
         for b in self.clip_boxes {
@@ -584,6 +584,234 @@ mod kept {
             return;
         }
         store(tw, f, flat);
+    }
+}
+
+/// 1.5b's and United Offensive's capsule through capsule, every float
+/// variable stored: the dispatcher (`cod_lnxded` 1.5b 0x805a181, UO
+/// `coduo_lnxded` 0x8059fb5) picks the end spheres and the cylinder off the
+/// two capsules' z relation, and its sphere (0x8059bb2, UO 0x80599e6) and
+/// cylinder (0x8059e37, UO 0x8059c6b) report a hit by returning 0, which
+/// ends the dispatch (docs/research/cod11-player-clip.md 2.5).
+mod stored {
+    use super::{BODY_RADIUS_EPS, Body};
+    use crate::collision::{Prim, Trace};
+    use crate::x87;
+    use glam::Vec3;
+
+    /// The trace work the primitives read and write (`traceWork_t`).
+    struct Work {
+        start: Vec3,
+        end: Vec3,
+        /// tw+0x18, stored by `CM_Trace`.
+        delta: Vec3,
+        /// tw+0x24, `deltaLenSq`, stored.
+        a: f32,
+        /// tw+0xf8 and +0xfc, the mover's radius and half height.
+        r_m: f32,
+        hh_m: f32,
+        fraction: f32,
+        normal: Vec3,
+        hit: bool,
+        startsolid: bool,
+        allsolid: bool,
+    }
+
+    fn up(p: Vec3, dz: f32) -> Vec3 {
+        Vec3::new(p.x, p.y, p.z + dz)
+    }
+
+    pub(super) fn clip_capsule(
+        t: &mut Trace,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        b: &Body,
+    ) {
+        // `CM_TransformedBoxTrace` (1.5b 0x805b366, UO 0x805b19a) and
+        // `CM_Trace` (0x805aba1, UO 0x805a9d5): the box made symmetric, the
+        // points shifted into the body's frame, the capsule off the half
+        // size, each step stored.
+        let off = ((mins.as_dvec3() + maxs.as_dvec3()) * 0.5).as_vec3();
+        let half = maxs - off;
+        let s = (start + off) - b.origin;
+        let e = (end + off) - b.origin;
+        let r_m = if half.x > half.z { half.z } else { half.x };
+        let hh_m = half.z;
+        let off_m = hh_m - r_m;
+        let delta = e - s;
+        let a = x87::dot(delta, delta) as f32;
+        let mut tw = Work {
+            start: s,
+            end: e,
+            delta,
+            a,
+            r_m,
+            hh_m,
+            fraction: 1.0,
+            normal: Vec3::ZERO,
+            hit: false,
+            startsolid: false,
+            allsolid: false,
+        };
+        dispatch(&mut tw, b, off_m);
+        if !tw.hit {
+            return;
+        }
+        // `SV_ClipMoveToEntities`, as 1.1d's: the solid flags carry over
+        // whatever the fraction, the trace itself only when it is shorter.
+        if tw.allsolid {
+            t.allsolid = true;
+        } else if tw.startsolid {
+            t.startsolid = true;
+        }
+        if tw.fraction < t.fraction {
+            t.fraction = tw.fraction;
+            t.normal = tw.normal;
+            t.surface_flags = 0;
+            t.hit = Some(Prim::Body(b.entity));
+            t.startsolid |= tw.startsolid;
+        }
+    }
+
+    /// 0x805a181: the mover's spheres at its centre plus and less `off_m`,
+    /// the body's off its bounds; a start wholly above the body's top
+    /// sphere (or below its bottom) tries that sphere first and stops there
+    /// on a hit or a move away.
+    fn dispatch(tw: &mut Work, b: &Body, off_m: f32) {
+        let (st, sb) = (up(tw.start, off_m), up(tw.start, -off_m));
+        let (et, eb) = (up(tw.end, off_m), up(tw.end, -off_m));
+        let c = ((b.mins.as_dvec3() + b.maxs.as_dvec3()) * 0.5).as_vec3();
+        let sym = b.maxs - c;
+        let radius = if sym.x > sym.z { sym.z } else { sym.x };
+        let offs = sym.z - radius;
+        let top = up(c, offs);
+        let bottom = up(c, -offs);
+        if sb.z > top.z {
+            if !sphere(tw, sb, eb, top, radius) || tw.delta.z >= 0.0 {
+                return;
+            }
+        } else if bottom.z > st.z && (!sphere(tw, st, et, bottom, radius) || 0.0 >= tw.delta.z) {
+            return;
+        }
+        if !cylinder(tw, c, offs, radius) {
+            return;
+        }
+        if eb.z > top.z {
+            if top.z >= sb.z {
+                sphere(tw, sb, eb, top, radius);
+            }
+        } else if bottom.z > et.z && st.z >= bottom.z {
+            sphere(tw, st, et, bottom, radius);
+        }
+    }
+
+    /// The start inside: fraction 0, the normal `rel` normalized.
+    fn start_solid(tw: &mut Work, rel: Vec3, allsolid: bool) {
+        tw.fraction = 0.0;
+        tw.startsolid = true;
+        tw.normal = x87::normalize2_stored(rel);
+        tw.hit = true;
+        tw.allsolid |= allsolid;
+    }
+
+    /// A hit at the backed-off root `f`, clamped at 0.
+    fn take(tw: &mut Work, f: f32, n: Vec3) {
+        tw.fraction = if f > 0.0 { f } else { 0.0 };
+        tw.normal = n;
+        tw.hit = true;
+    }
+
+    /// `VectorNormalize2` (1.5b 0x8066a90): the normal and the length,
+    /// each stored.
+    fn normalize2(v: Vec3) -> (Vec3, f32) {
+        let len = f64::from(x87::dot(v, v) as f32).sqrt() as f32;
+        (x87::normalize2_stored(v), len)
+    }
+
+    /// `(-b - sqrt(disc)) / a`, stored.
+    fn raw_root(b: f32, disc: f32, a: f32) -> f32 {
+        ((-f64::from(b) - f64::from(disc).sqrt()) / f64::from(a)) as f32
+    }
+
+    /// 0x8059bb2: the mover's sphere from `s` to `e` against the body's at
+    /// `o`. `false` on a hit or a start inside.
+    fn sphere(tw: &mut Work, s: Vec3, e: Vec3, o: Vec3, r: f32) -> bool {
+        let rel = s - o;
+        let sum = f64::from(r) + f64::from(tw.r_m);
+        let rr = (sum * sum) as f32;
+        let c = (x87::dot(rel, rel) - f64::from(rr)) as f32;
+        if 0.0 >= c {
+            let rel2 = e - o;
+            start_solid(tw, rel, f64::from(rr) >= x87::dot(rel2, rel2));
+            return false;
+        }
+        let b = x87::dot(tw.delta, rel) as f32;
+        if b >= 0.0 {
+            return true;
+        }
+        let a = tw.a;
+        let disc = (f64::from(b) * f64::from(b) - f64::from(a) * f64::from(c)) as f32;
+        if 0.0 > disc {
+            return true;
+        }
+        let (n, len) = normalize2(rel);
+        let f0 = raw_root(b, disc, a);
+        let f = (f64::from(f0) + f64::from(len) * f64::from(BODY_RADIUS_EPS) / f64::from(b)) as f32;
+        if tw.fraction > f {
+            take(tw, f, n);
+            return false;
+        }
+        true
+    }
+
+    /// 0x8059e37: the mover's centre against the body's upright cylinder
+    /// about `o`, its half span `h` plus the mover's half height less its
+    /// radius, in the plane. `false` on a hit or a start inside.
+    fn cylinder(tw: &mut Work, o: Vec3, h: f32, r: f32) -> bool {
+        let rel = tw.start - o;
+        let sum = f64::from(r) + f64::from(tw.r_m);
+        let rr = (sum * sum) as f32;
+        let rx = f64::from(rel.x);
+        let ry = f64::from(rel.y);
+        let c = ((rx * rx + ry * ry) - f64::from(rr)) as f32;
+        let span = || ((f64::from(tw.hh_m) - f64::from(tw.r_m)) + f64::from(h)) as f32;
+        if 0.0 >= c {
+            let span = span();
+            if rel.z > span || -span > rel.z {
+                return true;
+            }
+            let ez = tw.end.z - o.z;
+            start_solid(tw, rel.with_z(0.0), span >= ez && ez >= -span);
+            return false;
+        }
+        let (dx, dy) = (f64::from(tw.delta.x), f64::from(tw.delta.y));
+        let b = (dx * rx + dy * ry) as f32;
+        if b >= 0.0 {
+            return true;
+        }
+        let a = (dx * dx + dy * dy) as f32;
+        let disc = (f64::from(b) * f64::from(b) - f64::from(a) * f64::from(c)) as f32;
+        if 0.0 > disc {
+            return true;
+        }
+        let (n, len) = normalize2(rel.with_z(0.0));
+        let back = (f64::from(len) * f64::from(BODY_RADIUS_EPS) / f64::from(b)) as f32;
+        let f0 = raw_root(b, disc, a);
+        let f = f0 + back;
+        if tw.fraction > f {
+            let span = span();
+            let z = (((f64::from(f) - f64::from(back)) * f64::from(tw.delta.z)
+                + f64::from(tw.start.z))
+                - f64::from(o.z)) as f32;
+            if z > span || -span > z {
+                return true;
+            }
+            take(tw, f, n);
+            return false;
+        }
+        true
     }
 }
 

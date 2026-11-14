@@ -278,9 +278,57 @@ VERIFIED, `bump_ab` on `mp_carentan-dm-bump-walker.txt`: a sweep in f32 world
 coordinates lands one to four ulps off retail on six of the bump capture's
 rows (the stand jump's fall onto the target, a crouched head-on stop, a prone
 glance); in the body's frame with these roundings every row reads retail's
-bits. `movetrace::kept` is the port, run under `Arith::Kept` only: 1.5b's and
-UO's stored builds and the Windows cgames keep the f32 world-frame sweep,
-not read.
+bits. `movetrace::kept` is the port, run under `Arith::Kept` only. 1.5b's
+and UO's stored builds take section 2.5's; the Windows cgames keep the f32
+world-frame sweep, not read.
+
+### 2.5 The capsule sweep on 1.5b and UO
+
+VERIFIED, `cod_lnxded` 1.5b and `coduo_lnxded` UO 1.51b, the disassembly:
+`CM_Trace` (1.5b 0x805aba1, UO 0x805a9d5) reaches the capsule through
+capsule at 0x805b236 (UO 0x805b06a) on the same `0x1fe` model test as 1.1d,
+to a dispatcher at 1.5b 0x805a181 (UO 0x8059fb5) whose sphere is 0x8059bb2
+(UO 0x80599e6) and cylinder 0x8059e37 (UO 0x8059c6b). The UO copies are
+1.5b's instruction for instruction but for the globals' and `sqrt`'s
+addresses. The 0.125 backoffs are rodata 0x80d7224 and 0x80d7228 (UO
+0x80dca44, 0x80dca48), the half at 0x80d722c. `CM_Trace` stores the box's
+centre, the shifted start and end and the delta (`tw+0x18`) and its
+squared length (`tw+0x24`) as 1.1d does.
+
+VERIFIED, the same: every float variable is stored, where 1.1d keeps the
+stack (2.4):
+
+- the sphere: `rel` (-0x18..-0x10), the summed radius squared (-0x2c),
+  `c = |rel|^2 - R^2` (-0x24), `b = delta . rel` (-0x20), the discriminant
+  (-0x28), `VectorNormalize2`'s length (-0x34, 1.5b 0x8066a90, which stores
+  the squared length and the length), the raw root (-0x4c) and the backed
+  off root (-0x30); the backoff `0.125 len / b` stays on the stack;
+- the cylinder: the same in the plane, `a = delta.x^2 + delta.y^2` (-0x1c)
+  and the backoff (-0x34) stored too, and its z test recovers the root as
+  `(f - back) * delta.z + start.z - o.z`, stored (-0x50), against the span
+  `(hh - r) + h` (-0x4c);
+- the start test reads `0 >= c`, the hit test `fraction > f`, and the hit
+  stores `max(f, 0)` and the normal off the start.
+
+VERIFIED, the same: each primitive returns 0 on a hit or a start inside and
+1 otherwise, and the dispatcher stops on a 0. Off its branches (INFERRED):
+a start whose lower sphere is above the body's top sphere tries the top
+sphere first and stops on a hit or a move with `delta.z >= 0`; a start
+whose upper sphere is below the body's bottom sphere does the same with the
+bottom and `delta.z <= 0`; then the cylinder, then the end sphere the move
+crosses into, if it started on the other side. The capsule's radius is
+`half.z` when `half.x > half.z`, else `half.x`, off the stored symmetric
+box, the body's the same off its bounds.
+
+VERIFIED, retail 1.5b and UO 1.51b (`probe_bump`, 2026-11-14, fixtures
+`crates/server/tests/fixtures/playerstate/mp_carentan-dm-bump-15-walker.txt`
+and `-uo-walker.txt`, the 1.1d recipe on the same spot): `bump_ab` replays
+every snapshot of both runs exact, rebased and free, with the port
+(`movetrace::stored`, under `Arith::Stored`). 1.1d's sweep (2.4) on the
+1.5b run misses one crouched head-on row by 3.05e-5 (ct 60132), and so
+does the f32 world-frame one. The 1.5b and UO fixtures carry `fJumpPeak`
+(`jump_peak=`), and the replay takes the penalty's `pm_time` with no flag
+(cod15-movement.md 2), as `predict::from_wire` does.
 
 ### 2.3 A step does not climb a player
 

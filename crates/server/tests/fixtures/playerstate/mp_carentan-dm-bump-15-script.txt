@@ -1,0 +1,18 @@
+# Retail CoD 1.5b dedicated server log lines under the player-clip capture
+# mp_carentan-dm-bump-15-walker.txt beside this file.
+# map mp_carentan, g_gametype probe_bump (whose main() calls
+# maps\mp\gametypes\dm::main()), probe_teleport 1, dedicated 1,
+# sv_maxclients 8, sv_pure 0, stock scr_* defaults. Captured 2026-11-14.
+# Clients: 0 the --probe-bump-target (axis), 1 the --save-bump walker (allies).
+#
+# PROBE place <time> <clientNum> <team> <origin> <yaw>: a probe_teleport move.
+#
+# The three processes ran in one `unshare -rn`, the target 12 s after the
+# server, the walker 10 s after the target:
+#   COD_VERSION=1.5 PORT=29010 PROBE_SECS=200 \
+#       tools/run_probe.sh client-probes/probe_bump mp_carentan +set probe_teleport 1
+#   vcod --net-probe 127.0.0.1:29010 --probe-bump-target --probe-team axis --probe-secs 185
+#   vcod --net-probe 127.0.0.1:29010 --save-bump --probe-team allies --probe-secs 170 --capture-tag 15
+PROBE place 13450 0 axis (1132.00, -376.00, -151.88) 0
+PROBE place 12950 0 axis (1132.00, -376.00, -151.88) 0
+PROBE place 22850 1 allies (932.00, -376.00, -151.88) 0

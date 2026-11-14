@@ -751,7 +751,12 @@ corner with a +x wall, into both (`docs/research/cod11-player-clip.md`
 10.4). Its files are `-bump-overlap-wall-walker.txt` and
 `-bump-overlap-wall-script.txt`.
 
-All eight files are retail evidence. A walker run against `vcod-server`
+The 1.5b and UO runs (`COD_VERSION=1.5|uo`, the walker with `--capture-tag
+15` or `uo`) are `-bump-15-walker.txt` and `-bump-uo-walker.txt`, their gsc
+lines `-bump-15-script.txt` and `-bump-uo-script.txt`.
+
+All eight 1.1d files are retail evidence.
+The four 1.5b and UO ones are too. A walker run against `vcod-server`
 overwrites the untagged one and refuses the tagged ones without
 `--overwrite-fixture`: move them to `tmp/` and `git checkout` the fixture
 directory after.

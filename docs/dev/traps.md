@@ -335,6 +335,8 @@ otherwise.
   - pmove's fall stores its gravity, its tail and the trace's end point, and
     `PM_ClipVelocity`, `VectorNormalize` and `PM_Friction` store theirs
     (`cod15-movement.md` 7).
+  - A body's capsule sweep against another (`movetrace::stored`,
+    `cod11-player-clip.md` 2.5).
   - A missile's arc and bounce (`Missile::kept`, combat doc 12.5).
   - The locational bone trace (`BoneTraceCtx::arith`, 3.1). Its hit point on
     a body keeps the stack (`combat::trace_point`).

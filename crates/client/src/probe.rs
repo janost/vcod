@@ -13560,7 +13560,7 @@ impl BumpProbe {
             None => "target=none".to_string(),
         };
         format!(
-            "!snap msg={} t={} ct={} origin={},{},{} vel={},{},{} ground={} pm_type={} pm_flags={} pm_time={} speed={} stance={} {target}",
+            "!snap msg={} t={} ct={} origin={},{},{} vel={},{},{} ground={} pm_type={} pm_flags={} pm_time={} jump_peak={} speed={} stance={} {target}",
             snap.message_num,
             snap.server_time,
             i("commandTime"),
@@ -13574,6 +13574,7 @@ impl BumpProbe {
             i("pm_type"),
             i("pm_flags"),
             i("pm_time"),
+            f("fJumpPeak"),
             i("speed"),
             BumpStance::of_pm_flags(i("pm_flags")).label(),
         )
@@ -13806,9 +13807,10 @@ fn write_bump_fixture(
         "# !cmd is a usercmd as it went on the wire (angles rebased on delta_angles), ms\n",
     );
     out.push_str(
-        "# after the placement. !snap is the walker's playerstate per snapshot, stance from\n",
+        "# after the placement. !snap is the walker's playerstate per snapshot (jump_peak\n",
     );
-    out.push_str("# pm_flags, with the target's entity: target= its pos.trBase, target_vel its\n");
+    out.push_str("# its fJumpPeak), stance from pm_flags, with the target's entity: target= its\n");
+    out.push_str("# pos.trBase, target_vel its\n");
     out.push_str("# pos.trDelta, target_solid its packed solid. Floats are printed exactly.\n");
     for n in &bp.notes {
         out.push_str(n);
