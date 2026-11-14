@@ -45,6 +45,28 @@ impl AnimMat {
     }
 }
 
+impl AnimMat {
+    /// The rows `DObjTraceline` builds for the struck bone's face normal
+    /// (0x81ad4e6..0x81ad5aa): [`Self::axis`]'s, but `xy` is stored and
+    /// the first row's `yy + zz` kept on the stack.
+    pub fn trace_axis(&self) -> [[f32; 3]; 3] {
+        let [x, y, z, w] = self.quat.map(d);
+        let t = d(self.trans_weight);
+        let (xt, yt, zt) = (x * t, y * t, z * t);
+        let xx = f(x * xt);
+        let xy = d(f(y * xt));
+        let yy = f(y * yt);
+        let (xz, xw) = (z * xt, w * xt);
+        let (yz, yw) = (z * yt, w * yt);
+        let (zz, zw) = (z * zt, w * zt);
+        [
+            [f(1.0 - (d(yy) + zz)), f(xy + zw), f(xz - yw)],
+            [f(xy - zw), f(1.0 - (zz + d(xx))), f(yz + xw)],
+            [f(xz + yw), f(yz - xw), f(1.0 - d(f(d(xx) + d(yy))))],
+        ]
+    }
+}
+
 /// A float on the x87 stack (an `f64` here).
 fn d(x: f32) -> f64 {
     f64::from(x)

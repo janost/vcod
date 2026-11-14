@@ -201,6 +201,8 @@ pub struct PosedBody4 {
     pub rig: Rc<PlayerRig>,
     pub pose: Rc<vcod_common::skeleton::PoseBuffer>,
     pub placed: glam::Mat4,
+    /// The yaw the body is placed at (`r.currentAngles`).
+    pub yaw: f32,
 }
 
 impl PosedBody4 {
@@ -222,16 +224,11 @@ impl PosedBody4 {
         let inv = self.placed.inverse();
         let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
         let skel = &self.rig.skeleton;
-        let h = bone_trace_worlds(
-            skel,
-            &skel_worlds(skel, &self.pose),
-            ls,
-            le,
-            priority,
-            limit,
-        )?;
-        let n = self.placed.transform_vector3(h.normal).normalize_or_zero();
-        Some((h, n))
+        let mats = skel_mats(skel, &self.pose);
+        let worlds = worlds_of(&mats);
+        let mut h = bone_trace_worlds(skel, &worlds, ls, le, priority, limit)?;
+        h.normal = struck_normal(&mats, &worlds, &h);
+        Some((h, entity_normal(self.yaw, h.normal)))
     }
 }
 
@@ -245,6 +242,26 @@ pub(crate) fn skel_worlds(
     skel: &vcod_common::skeleton::Skeleton,
     pose: &vcod_common::skeleton::PoseBuffer,
 ) -> Vec<(glam::Vec3, glam::Quat)> {
+    worlds_of(&skel_mats(skel, pose))
+}
+
+/// Each bone's place and turn off its `DObjAnimMat`.
+fn worlds_of(mats: &[vcod_cod4::skel::AnimMat]) -> Vec<(glam::Vec3, glam::Quat)> {
+    mats.iter()
+        .map(|m| {
+            (
+                glam::Vec3::from(m.trans),
+                glam::Quat::from_array(m.quat).normalize(),
+            )
+        })
+        .collect()
+}
+
+/// The `DObjAnimMat`s [`skel_worlds`] reads: `DObjCalcSkel`'s bones.
+fn skel_mats(
+    skel: &vcod_common::skeleton::Skeleton,
+    pose: &vcod_common::skeleton::PoseBuffer,
+) -> Vec<vcod_cod4::skel::AnimMat> {
     let bones = skel.bones();
     let parents: Vec<i32> = bones.iter().map(|b| b.parent).collect();
     let locals: Vec<([f32; 4], [f32; 3])> = (0..bones.len())
@@ -255,14 +272,47 @@ pub(crate) fn skel_worlds(
         .collect();
     let binds: Vec<[f32; 3]> = bones.iter().map(|b| b.local_pos.to_array()).collect();
     vcod_cod4::skel::calc_posed(&parents, &locals, &binds)
-        .iter()
-        .map(|m| {
-            (
-                glam::Vec3::from(m.trans),
-                glam::Quat::from_array(m.quat).normalize(),
-            )
-        })
-        .collect()
+}
+
+/// The struck face's normal in the body's frame as `DObjTraceline` gives
+/// it (0x81ad4e6..0x81ad615): the face's axis row of the bone's weighted
+/// matrix ([`vcod_cod4::skel::AnimMat::trace_axis`]), signed.
+fn struck_normal(
+    mats: &[vcod_cod4::skel::AnimMat],
+    worlds: &[(glam::Vec3, glam::Quat)],
+    h: &vcod_common::bonetrace::BoneHit,
+) -> Vec3 {
+    let (Some(m), Some((_, turn))) = (mats.get(h.bone), worlds.get(h.bone)) else {
+        return h.normal;
+    };
+    let local = turn.inverse() * h.normal;
+    let k = (0..3)
+        .max_by(|&a, &b| local[a].abs().total_cmp(&local[b].abs()))
+        .unwrap_or(0);
+    Vec3::from(m.trace_axis()[k]) * local[k].signum()
+}
+
+/// A body-frame normal in the world (`cod4_lnxded` 0x817e01b..0x817e075):
+/// summed over `AnglesToAxis` of the body's yaw (0x818e910) on the stack,
+/// one store a component.
+pub(super) fn entity_normal(yaw: f32, n: Vec3) -> Vec3 {
+    let axis = vcod_common::x87::angles_to_axis(Vec3::new(0.0, yaw, 0.0));
+    let at = |c: usize| {
+        (f64::from(n.x) * f64::from(axis[0][c])
+            + f64::from(n.y) * f64::from(axis[1][c])
+            + f64::from(n.z) * f64::from(axis[2][c])) as f32
+    };
+    Vec3::new(at(0), at(1), at(2))
+}
+
+/// `f` with the view and lean the controllers read off the body's
+/// `clientInfo_t`: the last end frame's, once there was one.
+fn controller_frame(f: &BodyFrame, end_frame: Option<([f32; 3], f32)>) -> BodyFrame {
+    let mut c = *f;
+    if let Some((angles, lean)) = end_frame {
+        (c.angles, c.lean) = (angles, lean);
+    }
+    c
 }
 
 /// What the level keeps for the shots: the body poses, the hit poses' rigs,
@@ -277,6 +327,11 @@ pub struct Combat4 {
     /// controller only when the frame's skeleton is not yet built
     /// (0x80ca75b, 0x80ca9c7), so once a frame however many traces meet it.
     eased: Vec<Option<i32>>,
+    /// Each body's view angles and `leanf` as the last `ClientEndFrame`
+    /// copied them into its `clientInfo_t` (`cod4_lnxded` 0x80a6ed0..
+    /// 0x80a6f00), which the controllers read (0x804cfcb, 0x804d031)
+    /// rather than the playerstate a cmd since moved (cod4-combat.md 3.3).
+    end_frame: Vec<Option<([f32; 3], f32)>>,
     /// The level's weapon defs by number, as pmove reads them.
     pub defs: Vec<WeaponDef>,
     /// Each frame's live origins (`SV_GetClientPositionAtTime`'s archive),
@@ -334,6 +389,7 @@ impl Combat4 {
             src,
             bodies: vec![cod4_body(); slots],
             eased: vec![None; slots],
+            end_frame: vec![None; slots],
             blood: vec![(0, None); slots],
             hit_dir: vec![None; slots],
             aim_spread: vec![0.0; slots],
@@ -989,8 +1045,7 @@ impl Cod4Level {
             if let Some(h) = self.body_trace(slot, origin, start, end, priority, limit)
                 && h.fraction < limit
             {
-                let yaw = ps.view_angles[1].to_radians();
-                let normal = glam::Quat::from_rotation_z(yaw) * h.normal;
+                let normal = entity_normal(ps.view_angles[1], h.normal);
                 limit = h.fraction;
                 best = Some((slot, h, normal));
             }
@@ -1077,6 +1132,7 @@ impl Cod4Level {
         let Some(f) = self.body_frame(slot, origin) else {
             return;
         };
+        self.combat.end_frame[slot] = Some((f.angles, f.lean));
         let Combat4 { anims, bodies, .. } = &mut self.combat;
         let Some(Some(set)) = anims.as_mut() else {
             return;
@@ -1131,6 +1187,7 @@ impl Cod4Level {
             anims,
             bodies,
             eased,
+            end_frame,
             ..
         } = &mut self.combat;
         let set = anims.as_mut()?.as_mut()?;
@@ -1138,7 +1195,7 @@ impl Cod4Level {
         let built = ease && eased[slot] != Some(now);
         if built {
             eased[slot] = Some(now);
-            b.ease_controls(&set.anims, &f, dt);
+            b.ease_controls(&set.anims, &controller_frame(&f, end_frame[slot]), dt);
         }
         let pose = b.pose_in(&rig, set, &*src, &f, now, true, None);
         let placed = BodyFrame {
@@ -1150,7 +1207,12 @@ impl Cod4Level {
         let inv = placed.inverse();
         let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
         let skel = &rig.skeleton;
-        let hit = bone_trace_worlds(skel, &skel_worlds(skel, &pose), ls, le, priority, limit);
+        let mats = skel_mats(skel, &pose);
+        let worlds = worlds_of(&mats);
+        let hit = bone_trace_worlds(skel, &worlds, ls, le, priority, limit).map(|mut h| {
+            h.normal = struck_normal(&mats, &worlds, &h);
+            h
+        });
         if built {
             // The frame's skeleton: a tag read later in the frame (the
             // dying body's `tag_weapon_right`) reads this pose.
@@ -1214,6 +1276,7 @@ impl Cod4Level {
                 rig,
                 pose: Rc::new(pose),
                 placed,
+                yaw: f.angles[1],
             });
         }
         out
@@ -1233,13 +1296,14 @@ impl Cod4Level {
             anims,
             bodies,
             eased,
+            end_frame,
             ..
         } = &mut self.combat;
         let set = anims.as_mut()?.as_mut()?;
         let b = &mut bodies[slot];
         if eased[slot] != Some(now) {
             eased[slot] = Some(now);
-            b.ease_controls(&set.anims, &f, dt);
+            b.ease_controls(&set.anims, &controller_frame(&f, end_frame[slot]), dt);
         }
         let pose = b.pose_in(&rig, set, &*src, &f, now, true, None);
         let skel = &rig.skeleton;

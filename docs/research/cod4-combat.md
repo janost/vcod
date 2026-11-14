@@ -447,6 +447,10 @@ gates).
   meets the shooter's `head` box at 50100, entering its +y face, whose
   normal reads (0.3478, 0.8072, -0.4769) on ours against the reflection's
   (0.348, 0.808, -0.476) on retail. VERIFIED (the gate, a trace on ours).
+- The torso pitch's swing and the controllers' differences fold in
+  floats, the controllers read the last end frame's view, and the struck
+  face's normal comes off the bone's weighted matrix (15.1). VERIFIED
+  (the instructions).
 
 ## 4. Damage
 
@@ -1832,12 +1836,10 @@ Open, with each gate's `GAPS`:
   a trace on ours). Under 1.7's updater, broad box and once-a-frame ease
   the shooter, looking 31 down, bends the spine by the whole of it and
   turns the head back up, and the frag enters the `head` box's +y face
-  at 50100. VERIFIED (a trace on ours, the gate). The bounce reads
-  (26.752, 74.908, -171.276), the gate's one row left (`THROWBACK_GAPS`);
-  it read (26.753, 74.910, -171.278) with the head composed off
-  quaternions. VERIFIED (the gate, both ways). So 1.7's skeleton is not
-  what parts it, as it was the dropped weapon's: the box trace's or the
-  bounce's arithmetic is left. INFERRED (the two runs).
+  at 50100. VERIFIED (a trace on ours, the gate). The bounce read
+  (26.752, 74.908, -171.276), the head composed off quaternions (26.753,
+  74.910, -171.278). VERIFIED (the gate, both ways). What parted it, and
+  what is left, is 15.1.
 - The second rocket takes entity 317 on retail, 316 on ours; nothing
   either client saw held 316. VERIFIED live. Both runs' first rocket is
   315, shown 47350..50850, gone at 50900 with no event on either side;
@@ -1865,3 +1867,61 @@ Open, with each gate's `GAPS`:
   its shooter's cmds that way (65.09949 from 62825 plus 79.99146, 124.00269
   from 8012). VERIFIED live. Why the killcam run's stayed 0 is
   unknown.
+
+### 15.1 The throw back's bounce off the head
+
+- `BounceMissile` (0x80946ba) mirrors the velocity at the contact
+  (`BG_EvaluateTrajectoryDelta` at `previousTime + (int)(float)(frame *
+  fraction)`, 0x8094702..0x8094737) in the trace's plane: the dot's first
+  two products stored as floats, the third sum kept, `-2` times it
+  (0x820a24c) along the normal, each component stored (0x8094742..
+  0x80947ad). The bounce factor is `parallelBounce + (perpendicularBounce
+  - parallelBounce) * (dot / -|v|)` for the surface type (`surfaceFlags`
+  bits 20..24 into `WeaponDef` +0x5c0 and +0x634), the stored dot and the
+  kept length, times each component (0x8094c16..0x8094c59). VERIFIED (the
+  instructions). Ours does the same; replayed on our inputs, a model of
+  that arithmetic gives ours's words. VERIFIED (a Python model of the
+  instructions against the gate's words).
+- So the normal parted it. Solved from retail's words (the reflection keeps
+  the length; the frag's flesh factor is 0.2 both ways), retail's normal
+  was (0.3478266, 0.8072591, -0.4768118) against ours's (0.3478169,
+  0.8072385, -0.4768535): 0.0027 degrees about the shooter's right.
+  INFERRED (the reflection). That is half of the 0.0055 the torso
+  pitch's swing stood short of twice the view's (62.08923 for 62.09471,
+  11303 shorts): ours folded the swings in shorts, CoD1's
+  `AngleNormalize360`. VERIFIED (a trace on ours). 1.7's `BG_SwingAngles` (0x804b3ba) folds each
+  swing as `x = d * 0.0027777778f` less `floor(x + 0.5)` stored, times
+  360, and the angle through `AngleNormalize360` (0x8190540: `x -
+  floor(x)` times 360, less 360 at 360) of the float sum; the view yaw
+  `BG_PlayerAngles` swings toward goes through the same (0x804c67c).
+  VERIFIED (the instructions). With the swing on floats the bounce came
+  within ten ulps of retail's. VERIFIED (the gate).
+- The controllers read the view and `leanf` off the body's `clientInfo_t`
+  (+0x3e8, +0x3e4; 0x804cfcb, 0x804d031), which `ClientEndFrame` copies
+  from the playerstate and entity (0x80a6ec7..0x80a6f00), so a trace
+  before the frame's end poses the last end frame's aim. VERIFIED (the
+  instructions). Their differences go through `AnglesSubtract`
+  (0x819397a, the fold above per component; 0x804d019, 0x804d02c).
+  VERIFIED (the instructions). Neither moved this run's words. VERIFIED
+  (the gate).
+- The hit box's normal: `SV_Trace`'s entity clip (0x817dcca) takes the
+  body's frame off `AnglesToAxis` of `r.currentAngles` (0x818e910, the
+  angles times the double `M_PI / 180` stored, `sinf` and `cosf`),
+  moves the line into it (0x819211a) and poses the body; `DObjTraceline`
+  (0x81acb18) returns the struck face's sign times that row of the
+  bone's weighted matrix (0x81ad4e6..0x81ad615: `xx`, `xy` and `yy`
+  stored, `1 - (yy + zz)` kept), and the clip turns it back summed over
+  the frame's rows, one store a component (0x817e01b..0x817e075).
+  VERIFIED (the instructions). Ours takes both forms (`struck_normal`,
+  `entity_normal`); the bounce's z, which the yaw leaves alone, then sits
+  one to three ulps from retail's and x and y ten and six. VERIFIED (the
+  gate).
+- What is left is the head bone's own matrix. Retail's words need the
+  body-frame normal's x one ulp under ours's (0x3f60f04e for 0x3f60f04f)
+  and z one to three ulps further out. INFERRED (a model of the yaw's
+  turn and of the mirror against retail's words). The server poses the
+  controllers as CoD1's `G_DObjSetControlTagAngles` did, a glam quat turned
+  into the parent's frame (`playerpose::apply_controllers`), not 1.7's
+  `AnglesToQuat` (0x81b0008) and `DObjCalcSkel`'s control path
+  (0x81b00de). INFERRED (the code). Porting that path is the open step;
+  `THROWBACK_GAPS` keeps the row until then.

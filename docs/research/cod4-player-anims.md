@@ -318,6 +318,12 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   neck and head turn back by it. Trap: CoD2's 0.6 factor here, with no
   `back_up`, shows only 0.3 of the aim on the spine (looking straight up
   reads as a slight upward aim).
+- 1.7's `BG_SwingAngles` (0x804b3ba) and `AngleNormalize360` (0x8190540)
+  fold in floats (`x - floor(x)` of the turns, times 360), not CoD1's
+  shorts, and the controllers' `AnglesSubtract` (0x819397a) the same way.
+  VERIFIED (the instructions). Trap: the shorts leave the torso pitch up to
+  a short off twice the view and the head that much off level, which the
+  throw back's bounce off a head box reads (cod4-combat.md 15.1).
 - The cgame lerps a player's `leanf` and `movementDir` between the two
   snapshots with its angles, each difference wrapped through `floor`
   (`CG_InterpolateEntityPosition`). INFERRED. vcod lerps them too; the

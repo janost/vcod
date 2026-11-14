@@ -272,7 +272,13 @@ impl BodyAngles {
     ) {
         let ft = frametime_ms as f32;
         let m = input.movement_dir;
-        let yaw = angle_mod(input.view[1]);
+        let cod4 = matches!(updater, Updater::Cod4(_));
+        // 1.7 folds the view yaw in floats (0x804c67c); 1.1's and CoD2's in shorts.
+        let yaw = if cod4 {
+            normalize360_floor(input.view[1])
+        } else {
+            angle_mod(input.view[1])
+        };
         let climb = match updater {
             Updater::Cod4(_) => MOVETYPE_CLIMB_COD4,
             _ => MOVETYPE_CLIMB,
@@ -285,8 +291,9 @@ impl BodyAngles {
             Updater::Cod4(mantle) => (mantle, 0.0, 2.0),
         };
         let swing_angles =
-            |dest, tolerance, clamp: f32, speed, ft, angle: &mut f32, on: &mut bool| {
-                swing_angles(
+            |dest, tolerance, clamp: f32, speed, ft, angle: &mut f32, on: &mut bool| match cod4 {
+                true => swing_angles_cod4(dest, tolerance, clamp, speed, ft, angle, on),
+                false => swing_angles(
                     dest,
                     tolerance,
                     (clamp, clamp - margin),
@@ -294,7 +301,7 @@ impl BodyAngles {
                     ft,
                     angle,
                     on,
-                )
+                ),
             };
         if !input.rides_bare() && !climbing && !mantle.on && self.movetype & MOVETYPE_IDLE != 0 {
             if self.firing {
@@ -451,6 +458,80 @@ fn swing_angles(
     } else if swing < -clamp {
         *angle = angle_mod(dest + limit);
     }
+}
+
+/// 1.7's `BG_SwingAngles` (`cod4_lnxded` 0x804b3ba): CoD2's rules, its
+/// angles folded in floats where CoD2's go through shorts. Each swing is
+/// `AngleNormalize180` inline (`x = d * 0.0027777778f`, less its rounded
+/// floor stored as a float, times 360) and kept on the stack; the step's
+/// scale is `max(|swing| * 0.05, 0.5)` off the float `|swing|`
+/// (0x804b474), the move `scale * frametime * speed`; the angle is
+/// `AngleNormalize360` (0x8190540) of the float sum, and the clamp's swing
+/// is taken off the unrounded result.
+fn swing_angles_cod4(
+    dest: f32,
+    tolerance: f32,
+    clamp: f32,
+    speed: f32,
+    frametime_ms: f32,
+    angle: &mut f32,
+    swinging: &mut bool,
+) {
+    let fold180 = fold180_cod4;
+    let (dest64, tolerance) = (f64::from(dest), f64::from(tolerance));
+    if !*swinging {
+        let swing = fold180(f64::from(*angle) - dest64);
+        if swing > tolerance || swing < -tolerance {
+            *swinging = true;
+        }
+    }
+    let mut at = f64::from(*angle);
+    if *swinging {
+        let swing = fold180(dest64 - at);
+        let scale = (f64::from(swing.abs() as f32) * f64::from(0.05f32)).max(0.5);
+        let mut step = scale * f64::from(frametime_ms) * f64::from(speed);
+        if swing < 0.0 {
+            step = -step;
+            if step <= swing {
+                step = swing;
+                *swinging = false;
+            }
+        } else if step >= swing {
+            step = swing;
+            *swinging = false;
+        }
+        at = normalize360_floor64((at + step) as f32);
+        *angle = at as f32;
+    }
+    let swing = fold180(dest64 - at);
+    let clamp = f64::from(clamp);
+    if swing > clamp {
+        *angle = normalize360_floor((dest64 - clamp) as f32);
+    } else if swing < -clamp {
+        *angle = normalize360_floor((dest64 + clamp) as f32);
+    }
+}
+
+/// 1.7's inline `AngleNormalize180` of a difference `d` kept on the
+/// stack: `x = d * 0.0027777778f`, less `floor(x + 0.5)` stored as a
+/// float, times 360, unrounded.
+fn fold180_cod4(d: f64) -> f64 {
+    let x = d * f64::from(1.0f32 / 360.0);
+    (x - f64::from((x + 0.5).floor() as f32)) * 360.0
+}
+
+/// 1.7's `AngleNormalize360` (`cod4_lnxded` 0x8190540), unrounded:
+/// `x = a * 0.0027777778f`, less its floor stored as a float, times 360,
+/// less 360 once it reaches 360.
+fn normalize360_floor64(a: f32) -> f64 {
+    let x = f64::from(a) * f64::from(1.0f32 / 360.0);
+    let v = (x - f64::from(x.floor() as f32)) * 360.0;
+    if v < 360.0 { v } else { v - 360.0 }
+}
+
+/// [`normalize360_floor64`] stored.
+fn normalize360_floor(a: f32) -> f32 {
+    normalize360_floor64(a) as f32
 }
 
 /// What the entity adds to [`BodyInput`] for the controllers: the lean
@@ -865,16 +946,27 @@ impl Controllers {
             Split::Cod4(_) => MOVETYPE_CLIMB_COD4,
             _ => MOVETYPE_CLIMB,
         };
+        let cod4 = matches!(split, Split::Cod4(_));
+        // 1.7's `AnglesSubtract` (`cod4_lnxded` 0x819397a, called at
+        // 0x804d019 and 0x804d02c) folds each difference in floats.
+        let sub = |a: f32, b: f32| match cod4 {
+            true => fold180_cod4(f64::from(a) - f64::from(b)) as f32,
+            false => angle_subtract(a, b),
+        };
         if a.movetype & climb == 0 {
             t[0] = a.pitch;
             if prone {
-                let p = angle_normalize_180(t[0]);
+                let p = match cod4 {
+                    // 0x804d558..0x804d5a5.
+                    true => fold180_cod4(f64::from(t[0])) as f32,
+                    false => angle_normalize_180(t[0]),
+                };
                 t[0] = p * if p > 0.0 { 0.5 } else { 0.25 };
             }
         }
-        let h = [0usize, 1, 2].map(|i| angle_subtract(input.view[i], t[i]));
+        let h = [0usize, 1, 2].map(|i| sub(input.view[i], t[i]));
         let l = [0.0, a.legs_yaw, 0.0];
-        t = [0usize, 1, 2].map(|i| angle_subtract(t[i], l[i]));
+        t = [0usize, 1, 2].map(|i| sub(t[i], l[i]));
         let legs_off = (!input.dead()).then_some(input.view[1]);
         Self::split(split, t, h, l, legs_off, prone, crouch, slope)
     }
