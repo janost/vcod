@@ -802,6 +802,7 @@ impl Server {
                     rank,
                     hunt: None,
                     lead: None,
+                    watch: None,
                 }))
             }
             script::UoObjectives::Dom(flags) => UoView::Dom(DomView {

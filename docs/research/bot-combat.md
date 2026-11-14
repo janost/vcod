@@ -67,7 +67,9 @@ an even seed count). Off means:
 round: their rules are off by default, and an arm given turns its rule
 on where it says (`ESCORT=all` for every bot, `ESCORT=axis` for one
 side). On CoD2 `ESCORT=1`, `ROUTE=1`, `HOLD=1` turn one on for every
-bot; `SPRINT=` is United Offensive's alone.
+bot; `SPRINT=` is United Offensive's alone. `WATCH=`, `CLOSE=` and
+`NEAROUT=` (`bot-objectives.md` 14.13, `test_bot_ctf_watch`, `_close`,
+`_near`) do the same for a `ctf` flag's guards, `=1` on CoD2.
 
 A default arm never calls its hook, so an all-default run plays the stock
 game bit for bit (checked: seeds 1 and 2 print the lines of the harness

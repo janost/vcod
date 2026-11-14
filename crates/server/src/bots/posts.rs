@@ -311,6 +311,32 @@ pub const OUT_NEAR: f32 = 400.0;
 pub const OUT_FAR_MIN: f32 = 700.0;
 pub const OUT_FAR_MAX: f32 = 1500.0;
 const OUT_REACH_SHARE: f32 = 0.4;
+
+/// The band [`outer`] deals outposts in: from `near` along the graph out
+/// to `share` of the graph's run, clamped to `far_min..far_max`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Band {
+    pub near: f32,
+    pub far_min: f32,
+    pub far_max: f32,
+    pub share: f32,
+}
+
+/// Section 14's band.
+pub const OUT_BAND: Band = Band {
+    near: OUT_NEAR,
+    far_min: OUT_FAR_MIN,
+    far_max: OUT_FAR_MAX,
+    share: OUT_REACH_SHARE,
+};
+
+/// A `ctf` flag's with `Bot::ctf_near` (bot-objectives.md 14.13).
+pub const CTF_NEAR_BAND: Band = Band {
+    near: 300.0,
+    far_min: 600.0,
+    far_max: 800.0,
+    share: 0.25,
+};
 /// The flood that measures the graph's run stops here.
 const OUT_FLOOD: f32 = 4000.0;
 /// A lane enters this far past the outposts' far edge, along the graph.
@@ -373,13 +399,14 @@ fn flood_tree(g: &NavGraph, start: u32, far: f32) -> BTreeMap<u32, (f32, u32)> {
 /// standing eye sees the lane [`WATCH_AHEAD`] further out; scored by
 /// whether a crouched body there hides from that point. Once per anchor
 /// and graph: a few hundred traces.
-pub fn outer(g: &NavGraph, clear: &dyn Fn(Vec3, Vec3) -> bool, a: &Anchor) -> Outer {
+pub fn outer(g: &NavGraph, clear: &dyn Fn(Vec3, Vec3) -> bool, a: &Anchor, band: &Band) -> Outer {
     let Some(start) = g.nearest(a.start()) else {
         return Outer::default();
     };
     let tree = flood_tree(g, start, OUT_FLOOD);
     let run = tree.values().map(|c| c.0).fold(0.0f32, f32::max);
-    let far = (run * OUT_REACH_SHARE).clamp(OUT_FAR_MIN, OUT_FAR_MAX);
+    let far = (run * band.share).clamp(band.far_min, band.far_max);
+    let near = band.near;
     let centre = Vec3::from(a.centre());
     let entry_at = far + OUT_ENTRY;
     let mut entries: [Option<(f32, u32)>; SECTORS] = [None; SECTORS];
@@ -397,7 +424,7 @@ pub fn outer(g: &NavGraph, clear: &dyn Fn(Vec3, Vec3) -> bool, a: &Anchor) -> Ou
     }
     // Each lane's path, entry first, as (feet, cost); one whose path meets
     // an earlier lane's at the band's middle is that lane.
-    let mid = (OUT_NEAR + far) * 0.5;
+    let mid = (near + far) * 0.5;
     let mut lanes: Vec<Vec<(Vec3, f32)>> = Vec::new();
     let mut mids: Vec<Vec3> = Vec::new();
     for &(_, e) in entries.iter().flatten() {
@@ -431,18 +458,18 @@ pub fn outer(g: &NavGraph, clear: &dyn Fn(Vec3, Vec3) -> bool, a: &Anchor) -> Ou
     for (l, path) in lanes.iter().enumerate() {
         let band: Vec<&(Vec3, f32)> = path
             .iter()
-            .filter(|(_, c)| *c >= OUT_NEAR * 0.5 && *c <= far + BESIDE)
+            .filter(|(_, c)| *c >= near * 0.5 && *c <= far + BESIDE)
             .collect();
         let mut near: Vec<(f32, f32, u32)> = tree
             .iter()
-            .filter(|(_, (c, _))| *c >= OUT_NEAR && *c <= far)
+            .filter(|(_, (c, _))| *c >= near && *c <= far)
             .filter_map(|(&n, &(c, _))| {
                 let p = g.nodes[n as usize];
                 let off = band
                     .iter()
                     .map(|(q, _)| q.distance(p))
                     .fold(f32::INFINITY, f32::min);
-                (off < BESIDE && (p - centre).truncate().length() >= OUT_NEAR * 0.75)
+                (off < BESIDE && (p - centre).truncate().length() >= near * 0.75)
                     .then_some((off, c, n))
             })
             .collect();
@@ -891,19 +918,25 @@ impl Posts {
         s
     }
 
-    /// The outposts of `a` on `g` ([`outer`]), made now if new.
+    /// The outposts of `a` on `g` in `band` ([`outer`]), made now if new;
+    /// cached under the anchor's key with a band other than [`OUT_BAND`]
+    /// in its eighth word.
     pub fn outer(
         &mut self,
         g: &Arc<NavGraph>,
         clear: &dyn Fn(Vec3, Vec3) -> bool,
         a: &Anchor,
+        band: &Band,
     ) -> Arc<Outer> {
         self.on_graph(g);
-        let key = a.key();
+        let mut key = a.key();
+        if *band != OUT_BAND {
+            key[8] = band.far_max.to_bits();
+        }
         if let Some((_, s)) = self.outers.iter().find(|(k, _)| *k == key) {
             return s.clone();
         }
-        let s = Arc::new(outer(g, clear, a));
+        let s = Arc::new(outer(g, clear, a, band));
         if self.outers.len() >= 64 {
             self.outers.remove(0);
         }
@@ -1010,7 +1043,7 @@ mod tests {
             inner: 48.0,
             outer: 400.0,
         };
-        let o = outer(&g, &|_, _| true, &a);
+        let o = outer(&g, &|_, _| true, &a, &OUT_BAND);
         let lanes: std::collections::BTreeSet<u8> = o.posts.iter().map(|p| p.lane).collect();
         assert_eq!(lanes.len(), 4, "a lane per corridor");
         for p in &o.posts {

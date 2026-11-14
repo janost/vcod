@@ -2,11 +2,13 @@
 //! by default: the escorts the driver deals round him ([`deal_escort`],
 //! `Bot::ctf_escort`) and the edges near enemies his side saw of late and
 //! near the outposts by the flag he took, which his plan pays more on
-//! ([`danger`], `Bot::ctf_route`).
+//! ([`danger`], `Bot::ctf_route`). Once a side's flag is taken, its
+//! guards near home hold the carrier's way out or close on him along it
+//! ([`deal_take`], `Bot::ctf_watch`, `Bot::ctf_close`, 14.13).
 
 use glam::Vec3;
 
-use super::super::{BotView, UoView, dist_sq};
+use super::super::{BotView, GuardPost, UoView, dist_sq};
 use super::BotWorld;
 use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
 use crate::nav::NavGraph;
@@ -166,6 +168,236 @@ pub(super) fn deal_escort<W: BotWorld>(
     }
 }
 
+/// A side's `ctf` flag taken from home and carried (bot-objectives.md
+/// 14.13): when, where it stood, the graph's way from there to the
+/// carrier's goal, and the guards [`deal_take`] keeps on it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Take {
+    since: i32,
+    home: Vec3,
+    exit: Vec<Vec3>,
+    /// The guards kept on an outpost looking at the way out
+    /// (`Bot::ctf_watch`), and their posts.
+    watch: Vec<(usize, GuardPost)>,
+    /// The guards closing on the carrier along it (`Bot::ctf_close`).
+    close: Vec<usize>,
+}
+
+/// Guards within this of their flag's home when it is taken stay on its
+/// way out ([`deal_take`]).
+const TAKE_NEAR: f32 = 2000.0;
+/// A watcher takes an outpost within this of where he stands.
+const WATCH_REACH: f32 = 800.0;
+/// An outpost sees the way out at a point this near and no nearer than
+/// [`WATCH_MIN`].
+const WATCH_SEE: f32 = 1500.0;
+const WATCH_MIN: f32 = 200.0;
+/// Two watchers' outposts stand at least this far apart.
+const WATCH_APART: f32 = 200.0;
+/// A watcher holds this long past the take, ms; a closer closes this long.
+const WATCH_MS: i32 = 15_000;
+const CLOSE_MS: i32 = 15_000;
+/// The pace a closer reckons the carrier makes along his way, units a
+/// second (run speed 190, his way not straight).
+const CARRIER_PACE: f32 = 170.0;
+/// A closer's point moves on at most this often, ms.
+const CLOSE_STEP_MS: i32 = 1000;
+
+/// Keeps per side its flag's home while it stands there (`base`) and,
+/// once it is carried, a [`Take`]; while one runs, the guards of the side
+/// that stood within [`TAKE_NEAR`] of the home at the take, a guard
+/// being a bot ranked to defend with team play on, with `Bot::ctf_watch`
+/// hold the outpost round the home (`posts`' `outers`) within
+/// [`WATCH_REACH`] that sees the carrier's way out, looking at it toward
+/// the home ([`super::super::CtfView::watch`]), for [`WATCH_MS`]; with
+/// `Bot::ctf_close` walk for the point on his way nearest them that he
+/// has not passed by the pace he makes ([`CARRIER_PACE`]), as a hunt
+/// ([`super::super::CtfView::hunt`]), for [`CLOSE_MS`]. A watcher or
+/// closer that dies leaves it; a sighting of the carrier sends the
+/// nearest two after him as before (`deal_hunt`, which runs after).
+pub(super) fn deal_take<W: BotWorld>(w: &mut W, views: &mut [(usize, BotView)], teams: &[i32]) {
+    let Some(g) = w.driver().nav.clone() else {
+        return;
+    };
+    let now = w.now();
+    let mut takes = std::mem::take(&mut w.driver_mut().ctf_take);
+    let mut base = w.driver().ctf_base;
+    for (i, team) in [TEAM_AXIS, TEAM_ALLIES].into_iter().enumerate() {
+        let mine = |s: usize| teams.get(s) == Some(&team);
+        let ours = views
+            .iter()
+            .filter(|(s, _)| mine(*s))
+            .find_map(|(_, v)| match v.uo.as_ref() {
+                Some(UoView::Ctf(c)) => Some(c.ours),
+                _ => None,
+            });
+        let Some(ours) = ours else {
+            takes[i] = None;
+            continue;
+        };
+        if let Some(h) = ours.home {
+            base[i] = Some(h.stand);
+            takes[i] = None;
+            continue;
+        }
+        if !ours.carried {
+            takes[i] = None;
+            continue;
+        }
+        let Some(home) = base[i] else {
+            continue;
+        };
+        let guard = |s: usize, v: &BotView, on: fn(&super::super::Bot) -> bool| {
+            mine(s)
+                && v.playing
+                && !v.dead
+                && v.seat.is_none()
+                && matches!(v.uo.as_ref(), Some(UoView::Ctf(c)) if !c.carrying && c.rank % 2 == 1)
+                && dist_sq(v.origin, home) < TAKE_NEAR * TAKE_NEAR
+                && w.driver()
+                    .bots
+                    .get(&s)
+                    .is_some_and(|b| b.team_play && b.tactics && on(b))
+        };
+        if takes[i].is_none() {
+            let exit: Vec<Vec3> = match (g.nearest(home), g.nearest(ours.goal.stand)) {
+                (Some(a), Some(b)) => g
+                    .path_toward(a, b)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|n| g.nodes[n as usize])
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let mut t = Take {
+                since: now,
+                home: Vec3::from(home),
+                exit,
+                ..Default::default()
+            };
+            let outs = outposts(&w.driver().posts, home);
+            if let Some(world) = w.world() {
+                let clear = |a: Vec3, b: Vec3| world.collision.shot_trace(a, b).fraction >= 1.0;
+                for (s, v) in views.iter() {
+                    if !guard(*s, v, |b| b.ctf_watch) {
+                        continue;
+                    }
+                    let feet = Vec3::from(v.origin);
+                    let pick = outs
+                        .iter()
+                        .filter(|p| p.distance(feet) < WATCH_REACH)
+                        .filter(|p| {
+                            t.watch
+                                .iter()
+                                .all(|(_, q)| Vec3::from(q.at).distance(**p) >= WATCH_APART)
+                        })
+                        .filter_map(|p| watch_look(&t.exit, *p, &clear).map(|l| (*p, l)))
+                        .min_by(|x, y| x.0.distance(feet).total_cmp(&y.0.distance(feet)));
+                    if let Some((at, look)) = pick {
+                        t.watch.push((
+                            *s,
+                            GuardPost {
+                                at: at.into(),
+                                crouch: false,
+                                look: look.into(),
+                                careful: None,
+                            },
+                        ));
+                    }
+                }
+            }
+            t.close = views
+                .iter()
+                .filter(|(s, v)| guard(*s, v, |b| b.ctf_close))
+                .map(|(s, _)| *s)
+                .collect();
+            takes[i] = Some(t);
+        }
+        let Some(t) = takes[i].as_mut() else {
+            continue;
+        };
+        let alive = |s: usize, views: &[(usize, BotView)]| {
+            views
+                .iter()
+                .any(|(x, v)| *x == s && v.playing && !v.dead && v.seat.is_none())
+        };
+        t.watch.retain(|(s, _)| alive(*s, views));
+        t.close.retain(|s| alive(*s, views));
+        let age = now.wrapping_sub(t.since);
+        if age < WATCH_MS {
+            for (s, p) in &t.watch {
+                if let Some((_, v)) = views.iter_mut().find(|(x, _)| x == s)
+                    && let Some(UoView::Ctf(c)) = v.uo.as_mut()
+                {
+                    c.watch = Some(*p);
+                    v.guard_post = Some(*p);
+                }
+            }
+        }
+        if age < CLOSE_MS && !t.exit.is_empty() {
+            // Where he is reckoned to be along his way, by the step.
+            let ran = (age / CLOSE_STEP_MS * CLOSE_STEP_MS) as f32 / 1000.0 * CARRIER_PACE;
+            let reckoned = index_along(t.home, &t.exit, ran);
+            for s in &t.close {
+                if let Some((_, v)) = views.iter_mut().find(|(x, _)| x == s)
+                    && let Some(UoView::Ctf(c)) = v.uo.as_mut()
+                {
+                    let feet = Vec3::from(v.origin);
+                    let nearest = (0..t.exit.len())
+                        .min_by(|a, b| {
+                            t.exit[*a]
+                                .distance(feet)
+                                .total_cmp(&t.exit[*b].distance(feet))
+                        })
+                        .unwrap_or(0);
+                    c.hunt = Some(t.exit[nearest.max(reckoned)].into());
+                }
+            }
+        }
+    }
+    w.driver_mut().ctf_take = takes;
+    w.driver_mut().ctf_base = base;
+}
+
+/// Where an outpost at `p` looks along the way out `exit`: of the way's
+/// nodes from [`WATCH_MIN`] to [`WATCH_SEE`] off whose chest its standing
+/// eye sees, the nearest it of those on the home side of the way's node
+/// nearest it, else the nearest it.
+fn watch_look(exit: &[Vec3], p: Vec3, clear: &dyn Fn(Vec3, Vec3) -> bool) -> Option<Vec3> {
+    const EYE: f32 = vcod_common::pmove::VIEW_STAND;
+    let at =
+        (0..exit.len()).min_by(|a, b| exit[*a].distance(p).total_cmp(&exit[*b].distance(p)))?;
+    let seen: Vec<usize> = (0..exit.len())
+        .filter(|&j| {
+            let d = exit[j].distance(p);
+            (WATCH_MIN..WATCH_SEE).contains(&d)
+                && clear(p + Vec3::Z * EYE, exit[j] + Vec3::Z * (EYE * 2.0 / 3.0))
+        })
+        .collect();
+    let near = |js: &mut dyn Iterator<Item = usize>| {
+        js.min_by(|a, b| exit[*a].distance(p).total_cmp(&exit[*b].distance(p)))
+    };
+    near(&mut seen.iter().copied().filter(|j| *j < at))
+        .or_else(|| near(&mut seen.iter().copied()))
+        .map(|j| exit[j])
+}
+
+/// The index of the node of `path` (walked from `from`) `ahead` units
+/// along it, its last past its end.
+fn index_along(from: Vec3, path: &[Vec3], ahead: f32) -> usize {
+    let mut left = ahead;
+    let mut at = from;
+    for (i, &p) in path.iter().enumerate() {
+        let d = at.distance(p);
+        if d >= left {
+            return i;
+        }
+        left -= d;
+        at = p;
+    }
+    path.len().saturating_sub(1)
+}
+
 /// The point `ahead` units along `path` from `from`, else its last node,
 /// else `from`.
 fn along(from: Vec3, path: &[Vec3], ahead: f32) -> Vec3 {
@@ -299,5 +531,25 @@ mod tests {
         );
         assert_eq!(along(Vec3::ZERO, &path, 900.0), path[1]);
         assert_eq!(along(Vec3::ONE, &[], 900.0), Vec3::ONE);
+    }
+
+    /// A watcher looks at the way out where it sees it, home side of the
+    /// way's node nearest it first; a node it cannot see is passed over.
+    #[test]
+    fn a_watcher_looks_back_along_the_way_out() {
+        let exit: Vec<Vec3> = (0..10)
+            .map(|i| Vec3::new(i as f32 * 200.0, 0.0, 0.0))
+            .collect();
+        let p = Vec3::new(1000.0, 300.0, 0.0);
+        let all = |_: Vec3, _: Vec3| true;
+        assert_eq!(watch_look(&exit, p, &all), Some(Vec3::new(800.0, 0.0, 0.0)));
+        let past_home = |_: Vec3, b: Vec3| b.x >= 1000.0;
+        assert_eq!(
+            watch_look(&exit, p, &past_home),
+            Some(Vec3::new(1000.0, 0.0, 0.0))
+        );
+        assert_eq!(watch_look(&exit, p, &|_, _| false), None);
+        assert_eq!(index_along(Vec3::ZERO, &exit, 450.0), 3);
+        assert_eq!(index_along(Vec3::ZERO, &exit, 9000.0), 9);
     }
 }
