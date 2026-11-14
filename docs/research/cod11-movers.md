@@ -1927,7 +1927,28 @@ INFERRED: an unlinked turret never goes back to the 3.
 
 INFERRED, off `turret_think` running in `G_RunFrame`'s entity loop and
 `turret_think_client` in `ClientEndFrame` (turrets doc 6): a gunner reads the
-gun where this frame's link put it. The capture had no gunner.
+gun where this frame's link put it.
+
+VERIFIED, a gunner on the linked gun, retail 1.1d, mp_carentan, 2026-11-14:
+`crates/server/tests/fixtures/turret/mp_carentan-dm-turret-linkmg.txt` (the
+`--save-turret` gunner) and its `-script.txt` half, off `probe_turret` with
+`probe_linkmg 11700`: the gun 298 linked to a script_origin at its origin at
+1050, which from 11700 rises 24 over 2 s turning 40 left and from 14700 comes
+back over 1.5 s with half-second ramps (yaw reads 228.99 at rest after). The
+moves ran through the gunner's yaw sweep and the start of his pitch sweep.
+VERIFIED, off the capture: the gunner holds z -23.9 until the snapshot of
+12950, reads 12.1 from 13000 (the gun 15.6 up by then) and holds 12.1 through
+the gun's descent and every phase after until the dismount (24000) puts him
+back at -23.9. `turret_ab.rs`'s
+`the_linked_gun_capture_matches_retail_on_mp_carentan` replays the gunner's
+cmds on retail's level clock and holds every row of every phase but `target`
+exact: gunner origin, view, `delta_angles`, the gun's `angles2`, events,
+impacts and the target's entity. VERIFIED, vcod measurement: in `target`
+each of the three rounds meets the target's left upper leg 0.378 units nearer
+the gun than retail's `probe_hitlog` point, along the round's own direction,
+and the target's velocity after the first hit differs by up to 2 units a
+second; the cause is open (the victim recipe's other capture logs no hit
+points to compare against).
 
 ### A tag parent's model change
 
