@@ -4478,6 +4478,14 @@ impl Server {
         }
     }
 
+    /// Test-facing: whether a `ctf` carrier keeps for home and waits in
+    /// cover (`Bot::ctf_carry`).
+    pub fn test_bot_ctf_carry(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.ctf_carry = on;
+        }
+    }
+
     /// Test-facing: the ticks a bot has waited aside for a climber
     /// (`nav::Follower::yielding`).
     pub fn bot_yielding(&self, slot: usize) -> u32 {

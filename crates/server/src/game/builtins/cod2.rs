@@ -145,7 +145,11 @@ pub fn register_weapon(host: &mut GameHost, name: &str) -> Option<usize> {
         let def = vcod_common::weapon::load(&*fs, name).ok()?;
         let text = fs.read(&format!("weapons/mp/{name}")).unwrap_or_default();
         let keys = vcod_common::xmodel::parse_weapon(&String::from_utf8_lossy(&text));
-        Some(crate::game::host::WeaponFile { def, keys })
+        Some(crate::game::host::WeaponFile {
+            def,
+            keys,
+            cod2_def: Default::default(),
+        })
     })?;
     let (mut def, keys) = (file.def.clone(), &file.keys);
     // 1.1's loader floors `clipSize` at 1; CoD2's binoculars keep their 0,
@@ -339,7 +343,7 @@ pub(crate) fn bullet_trace_passed(
         Some(Value::Entity(id)) => Some(*id),
         _ => None,
     };
-    let (hit, _) = super::combat::bullet_hit(
+    let passed = super::combat::bullet_passed(
         host,
         cx,
         glam::Vec3::from(from),
@@ -347,7 +351,7 @@ pub(crate) fn bullet_trace_passed(
         chars,
         ignore,
     );
-    Ok(Value::Int(i32::from(hit.is_none())))
+    Ok(Value::Int(i32::from(passed)))
 }
 
 /// `self closeInGameMenu()` (`PlayerCmd_CloseInGameMenu` 0x80fbed2): the

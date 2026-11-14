@@ -940,8 +940,14 @@ mod tests {
                 glam::Vec3::new(300.0, 0.0, 0.0),
                 ramp,
             );
+            // The entity pass steps a segment on the frame that sees it end.
+            let mut frame = 0;
             [500, 1500, 2500].map(|t| {
-                host.level_time_ms = t;
+                while frame < t {
+                    frame += 50;
+                    host.level_time_ms = frame;
+                    crate::game::mover::run_one(&mut host, cx, e);
+                }
                 let ents = crate::game::wire::packet_entities(&mut host, cx, p);
                 to_cod2_entity(&ents[&e.0]).unwrap().i32("pos.trType")
             })

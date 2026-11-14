@@ -1,0 +1,21 @@
+# Retail CoD United Offensive 1.51b dedicated server, mp_carentan tdm, client-probes/probe_skyshot spot part with the shooter's eye inside the 0x2080 caulk brush (1164..1220, -544..-528, 366..430) over a window, looking flat along +y, bazooka_mp, captured 2026-11-14 inside `unshare -rn`:
+#   COD_VERSION=uo COD_DIR=<a UO install> PORT=28997 PROBE_SECS=45 tools/run_probe.sh client-probes/probe_skyshot mp_carentan +set probe_part spot +set probe_weapon bazooka_mp +set probe_x 1192 +set probe_y -536 +set probe_z 340 +set probe_yaw 90 +set probe_pitch 0
+#   vcod --game-dir <the same install> --mod-dir uo --net-probe 127.0.0.1:28997 --probe-team allies --probe-uo-weapon aim --probe-secs 28
+# The rocket's first move starts inside the brush: a start-solid contact, so it goes off at the end of that move, on the launch snapshot, as on 1.1d and 1.5b (combat doc 11.1, 12.3). UO packs the reversed flight's byte as 1.5b does (parm 104).
+# Retail server PROBE lines, then the shooter probe's VEH missile lines (the rocket reaches the wire already exploded).
+PROBE spot 1050 (1192.00, -536.00, 340.12) 90 0
+PROBE miss 7750 170 rocket (1192.00, -536.00, 401.12)
+PROBE miss 7800 170 rocket (1165.00, -258.00, 411.00)
+PROBE miss 7850 170 rocket (1165.00, -258.00, 411.00)
+PROBE miss 7900 170 rocket (1165.00, -258.00, 411.00)
+PROBE miss 7950 170 rocket (1165.00, -258.00, 411.00)
+PROBE miss 8000 170 rocket (1165.00, -258.00, 411.00)
+PROBE miss 8050 170 rocket (1165.00, -258.00, 411.00)
+PROBE miss 8100 170 rocket (1165.00, -258.00, 411.00)
+VEH 7750 missile 170 type 0 base 1165.000 -258.000 411.000 bits 0x4491a000 0xc3810000 0x43cd8000 ground 0 weapon 5 etype 0 evseq 1 ev 185 parm 104 apos -2.175293 95.597534 0 atraj 0 0 0 0 0 traj 0 0 0 0
+VEH 7800 missile 170 type 0 base 1165.000 -258.000 411.000 bits 0x4491a000 0xc3810000 0x43cd8000 ground 0 weapon 5 etype 0 evseq 1 ev 185 parm 104 apos -2.175293 95.597534 0 atraj 0 0 0 0 0 traj 0 0 0 0
+VEH 7850 missile 170 type 0 base 1165.000 -258.000 411.000 bits 0x4491a000 0xc3810000 0x43cd8000 ground 0 weapon 5 etype 0 evseq 1 ev 185 parm 104 apos -2.175293 95.597534 0 atraj 0 0 0 0 0 traj 0 0 0 0
+VEH 7900 missile 170 type 0 base 1165.000 -258.000 411.000 bits 0x4491a000 0xc3810000 0x43cd8000 ground 0 weapon 5 etype 0 evseq 1 ev 185 parm 104 apos -2.175293 95.597534 0 atraj 0 0 0 0 0 traj 0 0 0 0
+VEH 7950 missile 170 type 0 base 1165.000 -258.000 411.000 bits 0x4491a000 0xc3810000 0x43cd8000 ground 0 weapon 5 etype 0 evseq 1 ev 185 parm 104 apos -2.175293 95.597534 0 atraj 0 0 0 0 0 traj 0 0 0 0
+VEH 8000 missile 170 type 0 base 1165.000 -258.000 411.000 bits 0x4491a000 0xc3810000 0x43cd8000 ground 0 weapon 5 etype 0 evseq 1 ev 185 parm 104 apos -2.175293 95.597534 0 atraj 0 0 0 0 0 traj 0 0 0 0
+VEH 8050 missile 170 type 0 base 1165.000 -258.000 411.000 bits 0x4491a000 0xc3810000 0x43cd8000 ground 0 weapon 5 etype 0 evseq 1 ev 185 parm 104 apos -2.175293 95.597534 0 atraj 0 0 0 0 0 traj 0 0 0 0

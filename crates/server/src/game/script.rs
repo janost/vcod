@@ -706,9 +706,23 @@ impl ScriptRuntime {
             c.weapon_files = w;
         }
         if let Some(m) = carry.models {
-            host.xmodel_collision = m.collision;
-            host.xmodel_bounds = m.bounds;
-            host.vehicles.rigs = m.rigs;
+            let fs = host.fs.as_ref().map(Rc::as_ptr);
+            match &m.reload {
+                None => {
+                    host.xmodel_collision = m.collision;
+                    host.xmodel_bounds = m.bounds;
+                    host.vehicles.rigs = m.rigs;
+                    host.xmodel_reads = m.reads;
+                    host.xmodel_untouched = m.untouched;
+                }
+                Some(paks) if fs == Some(paks.as_ptr()) => {
+                    host.xmodel_collision = m.collision;
+                    host.xmodel_bounds = m.bounds;
+                    host.xmodel_reads = m.reads;
+                    host.xmodel_untouched = m.untouched;
+                }
+                Some(_) => {}
+            }
         }
 
         // `_load.gsc::main`, in mp_pavlov's own closure, calls `getEntArray`
@@ -3037,6 +3051,9 @@ impl ScriptRuntime {
                 collision: self.host.xmodel_collision.clone(),
                 bounds: self.host.xmodel_bounds.clone(),
                 rigs: self.host.vehicles.rigs.clone(),
+                reads: self.host.xmodel_reads.clone(),
+                untouched: self.host.xmodel_untouched.clone(),
+                reload: None,
             }),
             weapon_files: match &self.host.ext {
                 crate::game::host::HostExt::Cod2(c) => Some(c.weapon_files.clone()),
@@ -3288,6 +3305,12 @@ impl ScriptRuntime {
     pub fn shot_models(&mut self) -> Vec<crate::game::combat::PlacedModel> {
         let host = &mut self.host;
         self.vm.with_cx(|cx| host.shot_models(cx))
+    }
+
+    /// `GameHost::muzzle_boxes`, for UO's bipod muzzle trace.
+    pub fn muzzle_boxes(&mut self, mask: i32) -> Vec<vcod_common::movetrace::ClipBox> {
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| host.muzzle_boxes(cx, mask))
     }
 
     /// `GameHost::placed_script_models`, for a blast the sim side charges.
@@ -4130,13 +4153,14 @@ impl ScriptRuntime {
             let origin = f(cx, "origin");
             match gametype {
                 "ctf" => {
-                    let [team, trigger, goal, mobile, moved, carried] = [
+                    let [team, trigger, goal, mobile, moved, carried, hasflag] = [
                         "team",
                         "trigger",
                         "goal",
                         "mobile_trigger",
                         "moved",
                         "carried_by",
+                        "hasflag",
                     ]
                     .map(|n| f(cx, n));
                     let mut flags = Vec::new();
@@ -4151,9 +4175,14 @@ impl ScriptRuntime {
                         ) else {
                             return None;
                         };
-                        let carrier = ent(host.get_field(cx, flag, carried)).and_then(|c| {
-                            client_ents.iter().find(|(_, e)| *e == c).map(|(s, _)| *s)
-                        });
+                        // `drop_flag` leaves `carried_by` naming the fallen
+                        // carrier until `reset_flag`; his `hasflag` it clears
+                        // (bot-objectives.md 14.11).
+                        let carrier = ent(host.get_field(cx, flag, carried))
+                            .filter(|&c| ent(host.get_field(cx, c, hasflag)) == Some(flag))
+                            .and_then(|c| {
+                                client_ents.iter().find(|(_, e)| *e == c).map(|(s, _)| *s)
+                            });
                         let moved = truthy(host.get_field(cx, flag, moved));
                         let team = host.get_field(cx, flag, team);
                         flags.push(CtfFlag {

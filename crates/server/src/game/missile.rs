@@ -803,8 +803,11 @@ impl Missile {
         let soft = silent || model_body;
         if self.uo {
             // UO's `G_MissileImpact` bounces off a player or a vehicle that
-            // takes damage with no event (0x5d841).
-            let quiet = player.is_some() || (model.is_some() && model_takes_damage);
+            // takes damage with no event (0x5d841): `tr.entityNum` decides,
+            // whether the hull's model or its clip in the world named it.
+            let quiet = player.is_some()
+                || (model.is_some() && model_takes_damage)
+                || models.iter().any(|m| m.id.0 == ground && m.takes_damage);
             let loud = self.bounce(prev_ms, now_ms, &tr, ground, soft, silent, draws) && !quiet;
             if loud {
                 self.events.add(EV_GRENADE_BOUNCE, material);

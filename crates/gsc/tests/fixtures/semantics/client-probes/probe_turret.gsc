@@ -17,6 +17,7 @@ main()
 	thread watch_hitlog();
 	thread watch_spawns();
 	thread watch_gungrid();
+	thread watch_linkmg();
 	maps\mp\gametypes\dm::main();
 }
 
@@ -40,6 +41,37 @@ log_turrets()
 	guns = getentarray("misc_mg42", "classname");
 	for (i = 0; i < guns.size; i++)
 		logPrint("PROBE turret " + guns[i] getEntityNumber() + " " + guns[i].origin + " " + guns[i].angles + "\n");
+}
+
+//	With `probe_linkmg <ms>`: the capture's gun is linked to a script_origin
+//	at its origin a second in (movers doc 16, "A linked turret"). At level
+//	time <ms> the parent rises 24 over 2 s turning 40 left, holds 1 s, then
+//	goes back down over 1.5 s with half-second ramps turning back, each step
+//	logged:
+//
+//	PROBE linkmg <step> <time> <gun origin> <gun angles>
+watch_linkmg()
+{
+	at = getcvarint("probe_linkmg");
+	if (at <= 0)
+		return;
+	wait 1;
+	gun = probe_gun();
+	mp = spawn("script_origin", gun.origin);
+	mp.angles = gun.angles;
+	gun linkto(mp);
+	logPrint("PROBE linkmg link " + getTime() + " " + gun.origin + " " + gun.angles + "\n");
+	while (getTime() < at)
+		wait 0.05;
+	logPrint("PROBE linkmg up " + getTime() + " " + gun.origin + " " + gun.angles + "\n");
+	mp movez(24, 2);
+	mp rotateyaw(40, 2);
+	wait 3;
+	logPrint("PROBE linkmg down " + getTime() + " " + gun.origin + " " + gun.angles + "\n");
+	mp movez(-24, 1.5, 0.5, 0.5);
+	mp rotateyaw(-40, 1.5);
+	wait 2;
+	logPrint("PROBE linkmg rest " + getTime() + " " + gun.origin + " " + gun.angles + "\n");
 }
 
 //	The gun the capture uses: the one nearest (1712 1830 8).

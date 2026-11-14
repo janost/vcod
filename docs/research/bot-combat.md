@@ -60,6 +60,7 @@ an even seed count). Off means:
 | `FAR=` | `bot-objectives.md` 14 | `test_bot_far` | guards hold posts round the objective (section 13), none out on the ways in |
 | `CUES=` | `bot-objectives.md` 14 | `test_bot_cues` | no guard is pulled back by a cue, none walks in with care, no `ctf` bot hunts its flag's carrier |
 | `TRAVEL=` | `bot-objectives.md` 14 | `test_bot_travel` | the walk behind a teammate keeps 200 back and a way in is dealt from 1200 out |
+| `CARRY=` | `bot-objectives.md` 14.11 | `test_bot_ctf_carry` | a `ctf` carrier closes on what it sees, and home while its flag is away stands in the goal |
 
 A default arm never calls its hook, so an all-default run plays the stock
 game bit for bit (checked: seeds 1 and 2 print the lines of the harness
