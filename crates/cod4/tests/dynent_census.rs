@@ -114,3 +114,69 @@ fn a_blast_flings_mp_crashs_clutter_and_it_settles() {
         );
     }
 }
+
+/// A round fired down onto one of mp_crash's soup cans meets its model,
+/// and throws it; two of a 40-damage weapon's rounds break a 75-health
+/// plate, which then neither draws nor meets a third.
+#[test]
+fn rounds_throw_mp_crashs_clutter_and_break_a_plate() {
+    let (Some(map), Some(common)) = (zone("mp_crash"), zone("common_mp")) else {
+        return;
+    };
+    let defs = std::sync::Arc::new(defs(&map, &[&common]));
+    let mut d = DynEnts::new(defs.clone());
+    let can = defs.iter().position(|d| d.model == "com_soup_can").unwrap();
+    let top = defs[can].origin + Vec3::Z * 64.0;
+    let (struck, broken) = d.bullet(top, defs[can].origin - Vec3::Z * 8.0, 40, 0);
+    let s = struck.expect("the round missed the can");
+    assert_eq!(s.index, can);
+    assert!(broken.is_empty());
+    assert!(s.at.z > defs[can].origin.z && s.at.z < top.z, "{}", s.at);
+    let b = d.ents[can].body.as_ref().unwrap();
+    assert!(b.vel.z < -10.0, "{}", b.vel);
+    assert_eq!(d.awake(), 1);
+    let plate = defs.iter().position(|d| d.kind == DESTRUCT).unwrap();
+    let p = defs[plate].origin;
+    // Along its face's normal, whichever axis it is.
+    let mut hits = 0;
+    for _ in 0..3 {
+        for dir in [Vec3::X, Vec3::Y, Vec3::Z] {
+            let (s, broken) = d.bullet(p + dir * 32.0, p - dir * 32.0, 40, 0);
+            if s.is_some_and(|s| s.index == plate) {
+                hits += 1;
+                // A plate has no `destroyFx`: nothing to play.
+                assert!(broken.is_empty());
+                assert_eq!(d.ents[plate].drawn, hits < 2, "hit {hits}");
+                break;
+            }
+        }
+    }
+    assert_eq!(hits, 2, "the plate took {hits} rounds");
+    assert!(!d.ents[plate].drawn && !d.ents[plate].live);
+}
+
+/// mp_broadcast's televisions (`com_tv1_screen`, 1 health) break on a
+/// round into their `destroyFx`, at their pose.
+#[test]
+fn a_round_breaks_a_television_into_its_effect() {
+    let (Some(map), Some(common)) = (zone("mp_broadcast"), zone("common_mp")) else {
+        return;
+    };
+    let defs = std::sync::Arc::new(defs(&map, &[&common]));
+    let mut d = DynEnts::new(defs.clone());
+    let tv = defs.iter().position(|d| d.model == "com_tv1_screen").unwrap();
+    assert_eq!(defs[tv].health, 1);
+    let p = defs[tv].origin + defs[tv].rot * Vec3::Z * 8.0;
+    let mut broken = Vec::new();
+    for dir in [Vec3::X, Vec3::Y, -Vec3::X, -Vec3::Y] {
+        broken = d.bullet(p + dir * 48.0, p - dir * 48.0, 40, 0).1;
+        if !broken.is_empty() {
+            break;
+        }
+    }
+    let b = broken.first().expect("no round broke the set");
+    assert_eq!(b.index, tv);
+    assert_eq!(b.fx.as_deref(), Some("explosions/tv_explosion_mp"));
+    assert_eq!(b.origin, defs[tv].origin);
+    assert!(!d.ents[tv].drawn);
+}

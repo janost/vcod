@@ -519,3 +519,141 @@ impl DynEnts {
             .map(|(e, d)| (d, e.origin, e.rot))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A clutter can at `at`: a 4-unit box, 1 unit of mass, explosive
+    /// force scale 0.01 (125 at full force).
+    fn can(at: Vec3) -> DynDef {
+        let shape = Shape::of_bounds(Vec3::splat(-2.0), Vec3::splat(2.0));
+        DynDef {
+            kind: CLUTTER,
+            model: "can".into(),
+            rot: Quat::IDENTITY,
+            origin: at,
+            radius: 2.0,
+            coll: None,
+            destroy_fx: None,
+            health: 0,
+            contents: 1,
+            body: Some((
+                Arc::new(shape),
+                Preset {
+                    mass: 1.0,
+                    bounce: 0.1,
+                    friction: 0.5,
+                    bullet_force_scale: 0.5,
+                },
+            )),
+            explosive_force_scale: 0.01,
+        }
+    }
+
+    fn blast(outer: f32, inner: f32) -> Explosion {
+        Explosion {
+            origin: Vec3::ZERO,
+            inner,
+            outer,
+            cylinder: false,
+            impulse: Vec3::ZERO,
+            scale: 1.0,
+        }
+    }
+
+    #[test]
+    fn a_blast_falls_off_from_inner_to_outer_and_tips_up() {
+        // 50 off the edge of a 0..200 blast: falloff 150/200 of 125.
+        let defs = vec![can(Vec3::X * 52.0), can(Vec3::X * 300.0)];
+        let mut d = DynEnts::new(Arc::new(defs));
+        d.dvars.explode_spin_scale = 0.0;
+        assert!(d.explode(&blast(200.0, 0.0), [0, 0], 0).is_empty());
+        assert_eq!(d.awake(), 1, "the far can woke");
+        let v = d.ents[0].body.as_ref().unwrap().vel;
+        let want = Vec3::new(1.0, 0.0, 0.5).normalize() * (125.0 * 150.0 / 200.0);
+        assert!(v.distance(want) < 1e-3, "{v} {want}");
+        // Inside the inner radius the whole force.
+        let mut d = DynEnts::new(Arc::new(vec![can(Vec3::X * 52.0)]));
+        d.dvars.explode_spin_scale = 0.0;
+        d.explode(&blast(200.0, 100.0), [0, 0], 0);
+        let v = d.ents[0].body.as_ref().unwrap().vel;
+        assert!((v.length() - 125.0).abs() < 1e-3, "{v}");
+    }
+
+    #[test]
+    fn a_blast_wakes_the_nearest_twenty_and_none_under_the_minimum_force() {
+        let defs: Vec<DynDef> = (0..30).map(|i| can(Vec3::X * (10.0 + 4.0 * i as f32))).collect();
+        let mut d = DynEnts::new(Arc::new(defs));
+        d.explode(&blast(400.0, 0.0), [0, 0], 0);
+        assert_eq!(d.awake(), 20);
+        assert!(d.ents[..20].iter().all(|e| e.body.is_some()));
+        // 125 times a falloff under 40/125 pushes nothing.
+        let mut d = DynEnts::new(Arc::new(vec![can(Vec3::X * 150.0)]));
+        d.explode(&blast(200.0, 0.0), [0, 0], 0);
+        assert_eq!(d.awake(), 0);
+        // A jolt's impulse is its direction, whatever the force.
+        let mut e = blast(200.0, 0.0);
+        e.impulse = Vec3::Z;
+        d.explode(&e, [0, 0], 0);
+        assert_eq!(d.awake(), 1);
+    }
+
+    #[test]
+    fn a_destructible_takes_its_falloff_damage_and_breaks_into_its_effect() {
+        let mut plate = can(Vec3::X * 52.0);
+        plate.kind = DESTRUCT;
+        plate.health = 100;
+        plate.destroy_fx = Some("props/plate".into());
+        let mut d = DynEnts::new(Arc::new(vec![plate]));
+        // 150/200 of the way from 20 to 120: 95, standing at 5.
+        assert!(d.explode(&blast(200.0, 0.0), [120, 20], 0).is_empty());
+        assert_eq!(d.ents[0].health, 5);
+        let b = d.explode(&blast(200.0, 0.0), [120, 20], 0);
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].fx.as_deref(), Some("props/plate"));
+        assert!(!d.ents[0].drawn && !d.ents[0].live && d.ents[0].body.is_none());
+        // Gone, a third meets nothing.
+        assert!(d.explode(&blast(200.0, 0.0), [120, 20], 0).is_empty());
+    }
+
+    #[test]
+    fn a_body_that_comes_to_rest_is_dropped_where_it_lies() {
+        let mut d = DynEnts::new(Arc::new(vec![can(Vec3::Z * 2.2)]));
+        d.dvars.explode_spin_scale = 0.0;
+        let mut e = blast(200.0, 0.0);
+        e.origin = Vec3::new(-30.0, 0.0, 2.2);
+        d.explode(&e, [0, 0], 0);
+        // A floor at z 0.
+        let mut floor = |a: Vec3, b: Vec3, _r: f32, _m: u32| {
+            let skin = 0.125;
+            if a.z <= 0.0 {
+                return Sweep {
+                    fraction: 0.0,
+                    normal: Vec3::Z,
+                    startsolid: true,
+                };
+            }
+            let f = if b.z < skin && b.z < a.z {
+                ((a.z - skin) / (a.z - b.z)).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            Sweep {
+                fraction: f,
+                normal: Vec3::Z,
+                startsolid: false,
+            }
+        };
+        let mut t = 0;
+        while d.awake() > 0 && t < 10_000 {
+            t += 16;
+            d.advance(t, &mut floor);
+        }
+        assert_eq!(d.awake(), 0, "awake at {t}");
+        let e = &d.ents[0];
+        assert!(e.origin.x > 10.0, "{}", e.origin);
+        assert!((e.origin.z - 2.1).abs() < 0.5, "{}", e.origin);
+        assert!(e.drawn && e.live);
+    }
+}
