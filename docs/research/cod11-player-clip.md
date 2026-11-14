@@ -1067,8 +1067,14 @@ Every cmd the client sent up to 52914 ran on `level.time` 51950, the
 landing and the death among them, which is why both read 51950; the first
 cmd past 52150 ran clamped to 52150; every later one had a span of 0 and
 returned. The server then caught up to 53950 with no packets between, and
-53950 is the first snapshot after the stall. The stall's cause was not
-measured.
+53950 is the first snapshot after the stall. VERIFIED, three reruns of
+the recipe (2026-10-08's `mp_carentan-dm-fall-walk-corpse.txt`, killed at
+50750, and two on 2026-11-14, killed at 51700 and 51850): no snapshot
+lags its `commandTime` by more than 200 ms anywhere in a run, the fatal
+landing included, and the per-second summaries advance the server time by
+about 1000 each second. INFERRED: the stall rides the host, not the
+recipe: nothing in the probe or the death stops a frame, and vcod replays
+it as an input (`WALK_HITCH`) rather than a rule.
 
 VERIFIED: `pm_type` 6 is written by `ClientEndFrame` (0x41079), not at the
 death. INFERRED: the cmds after the death inside the stall run as
