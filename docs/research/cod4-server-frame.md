@@ -400,6 +400,10 @@ jobs, each run pinned to cores 0-7 (`taskset`) under a memory cap.
   `head/configstrings`), on CoD1 `console/map_restart` (`/load`,
   `/settle`, `/reenter`; the level load's `load/compile`, `load/spawn`
   with its `spawn/*` parts, `load/bootstrap`, cod11-map-cycle.md 4.9),
+  on CoD2 `console` with a load's `load/carry`, `load/drop level`,
+  `load/read and parse`, `load/world`, `load/clip`, `load/collision world`,
+  `load/mantle anims`, `load/static models`, `load/combat and anims`,
+  `load/spawn frames`, `load/baselines and pure` and `load/connect`,
   `frame` (`G_RunFrame`:
   `frame/touch triggers`, `frame/scripts`, `frame/script ops`,
   `frame/entities`, `frame/trace bodies`, `frame/mantle and hud`,
@@ -425,8 +429,9 @@ jobs, each run pinned to cores 0-7 (`taskset`) under a memory cap.
   thread's kernel wait channel and the syscall every other thread of the
   process is in.
 - `vcod-server` with `VCOD_TICK_PROFILE_MS=<ms>` logs each tick past it;
-  `bot_match GAME=cod2|cod4 SPIKE_MS=<ms>` prints them (`RESTART=<n>`
-  on CoD2 runs a `map_restart` every `n` ticks, a spawn wave each); the
+  `bot_match SPIKE_MS=<ms>` (any game) prints them (`RESTART=<n>`
+  on CoD1 and CoD2 runs a `map_restart` every `n` ticks, a spawn wave
+  each); the
   soak logs every
   tick past `VCOD_SOAK_TICK_LOG_MS` (100), with `VCOD_SOAK_TICK_WATCH=1`
   the waits, and `VCOD_SOAK_CLIENT_LOG_MS` the client's slow frames
