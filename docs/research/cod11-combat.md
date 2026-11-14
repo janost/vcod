@@ -717,9 +717,14 @@ conditions.
   the name table at `.data` file offset 0xab468 starts `bullet`,
   `grenade`, `projectile`, `spotter`, `gas`. VERIFIED, `snapshots-uo-flame.bin`: the followed
   flamethrower's `weapAnim` reads 2 in every burst and 0 between them,
-  never with 0x200, from 33050 to 35400. INFERRED: `pml+0x88` is the
-  held weapon's def. vcod clears the toggle after a UO step on a `gas`
-  weapon whose `weapAnim` changed (`pm_weapon`).
+  never with 0x200, from 33050 to 35400. VERIFIED: `pml+0x88` is the held
+  weapon's def. UO's `PmoveSingle` stores `BG_GetInfoForWeapon` of
+  `ps->weapon` (ps `+0xd8`) there at 0x2d668 and 0x2db69 through the GOT
+  slot `[ebx+0xf00]`, `R_386_GLOB_DAT pml` (0xb4718); 1.5b's at the same
+  offset (0x28189, 0x28478; slot 0x89ad8, `pml`); 1.1d's at `pml+0x84`
+  (0x33f43, 0x340db, the relocations naming `pml`), off `ps+0xb0`. vcod
+  clears the toggle after a UO step on a `gas` weapon whose `weapAnim`
+  changed (`pm_weapon`).
 
 VERIFIED, off the grenade capture, whose `to_frag` step is the first
 uncorrupted putaway anyone has measured: the putaway stores `WEAP_DROP` and
@@ -837,6 +842,25 @@ conditions.
 
 The first of those two never runs on 1.1 MP; 1.14 has the capture that says
 so and the path a throw takes instead.
+
+The dry pull. VERIFIED, `.so` 0x38a44 (step 1 of 1.5's fire path), the
+grenade arm (`weaponType` 1 off `pml+0x84`, 0x38a52): with the fire path's
+argument 0, a trigger pull rather than an expired delay, it sets
+`grenadeTimeLeft` to `fuseTime` (0x38a95), the pullback anim and
+`EV_PULLBACK_WEAPON` (0x38abf) only when the clip (`ps+0x20c` at the def's
+clip index `+0x1a8`, 0x38a85) holds a round, then sets `weaponDelay` to
+`holdFireTime` (0x38adf) and clears `weaponTime` (0x38ae4) either way;
+every arm ends at `weaponstate` 3 (0x38ba1). VERIFIED, step 2 (0x38bbc) on
+an empty clip: no `EV_NOAMMO` for a grenade (the `weaponType` test at
+0x38c0e), a reload with rounds in reserve (0x38c2c), else the
+index-preserving idle and 500 more `weaponTime` (0x38c68). VERIFIED, 1.5b's
+step 1 (game.mp 0x2fb0a) is the same, testing the clip through
+`PM_WeaponAmmoAvailable` (`BG_ClipForWeapon`'s slot of `ps+0x20c`); UO's
+(0x3679b) also requires `grenadeTimeLeft` 0, its cooked grenade. INFERRED:
+a dry pull holds state 3 for `holdFireTime` with `weaponTime` 500. INFERRED:
+no stock weapon gets there, since `BG_TakePlayerWeapon` takes a `clipOnly`
+grenade on its last round (1.5, step 9). vcod: `pmove::weapon::fire`,
+`a_dry_grenade_pull_holds_the_firing_state`.
 
 ### 1.12 What stops `PM_Weapon` outright
 
@@ -1552,6 +1576,22 @@ list below. INFERRED: the ordering, and every "when", "otherwise" and
   with the replay sending that cmd after the spawn: with the dropped cmd
   left out of `oldcmd`, ours read `aimSpreadScale` 226 where retail's read
   0). vcod: `ClientSim::stale_cmd`, off `Client::last_usercmd_st`.
+- 1.1d and 1.5b rotate it the same way. VERIFIED, 1.1d `ClientThink`
+  (0x41540): `rep movs` of six words from `client+0x20f0` (`pers.cmd`) to
+  `+0x2108` (`pers.oldcmd`) at 0x41570, `trap_GetUsercmd` into `pers.cmd`
+  (0x41582), `level.time` into `+0x21e4` (0x41592), then `ClientThink_real`
+  (0x3fee0) unless `g_synchronousClients` (0x4159b); `ClientThink_real`
+  copies `pers.oldcmd` into the pmove's `oldcmd` (0x4007b..0x40087).
+  VERIFIED, 1.5b `ClientThink` (0x39bb9): the six words from `+0x20ec` to
+  `+0x2104` (0x39bf3..0x39c35), the fetch at 0x39c53, `level.time` into
+  `+0x21ec` (0x39c6d).
+- VERIFIED, all three `ClientThink_real`s (1.1d 0x3ff31..0x3ff4c, 1.5b
+  0x391bb..0x391db, UO 0x40d40..0x40d60): the stale return also needs
+  `ps.clientNum` (`+0xac`, UO `+0xd4`) to be the entity's own number, so a
+  follower, whose playerstate is the followed player's copy
+  (`cod11-spectator-follow.md`), runs every cmd it is handed. INFERRED: vcod
+  keeps a follower's clock in `last_processed_st`, off its own cmds, so its
+  cmds are stale there only when the clock repeats; not measured.
 - `hipSpreadMoveAdd` (`0x258`) non-zero (`0x386fe`) with either of
   `cmd.forwardmove` / `cmd.rightmove` non-zero (`0x38712`) adds it flat
   (`0x38719`); airborne adds 1.28 twice (`0x3873c`-`0x3874a`). The whole add
@@ -6942,8 +6982,18 @@ holds the freed entity (0x66add, 0x66ae5) and 0x3ff into `r.ownerNum`
 (`+0x14c`) where it holds its number (0x66aef, 0x66af7), on every entity in
 use. VERIFIED, 1.5b and UO: `G_FreeEntityRefs` makes the same two stores
 (`+0x1a0` and `+0x150` on 1.5b, `+0x1a8` and `+0x154` on UO;
-`cod11-turrets.md` 8). INFERRED: `+0x198` is `parent`, which `fire_grenade`
-and `fire_rocket` write with the thrower (UO 0x5f8c0, 0x5fd6e).
+`cod11-turrets.md` 8). VERIFIED, every access to `gentity+0x198` in 1.1d
+`game.mp.i386.so`: stores of the thrower in `fire_grenade` (0x5442d) and
+`fire_rocket` (0x546a5) (UO's 0x5f8c0, 0x5fd6e at `+0x1a8`); a store of the
+door in the unexported function at 0x56a14 that spawns a door's trigger
+(`G_Spawn`, contents 0x40000000, `touch` `Touch_DoorTrigger`,
+`trap_LinkEntity`; objdump files it under `Blocked_DoorRotate`); the clears
+in `G_FreeEntity` and `G_FreeEntityRefs` (0x66ae5, 0x68699); loads in
+`G_MissileImpact` (0x53d47) and `G_ExplodeMissile` (0x53f52) as the splash's
+attacker, and in `Touch_DoorTrigger` (0x57d51, 0x57d7a), which hands it to
+`Use_BinaryMover` (0x560ec) as the mover. INFERRED: the name is Q3's
+`parent`, whose missiles and door triggers use that field the same three
+ways; no string in the module names it.
 
 VERIFIED: every missile splash hands `G_RadiusDamage` its attacker off
 `parent`: 1.1d `G_ExplodeMissile` 0x53f52 and `G_MissileImpact` 0x53d47
