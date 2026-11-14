@@ -480,6 +480,15 @@ impl Cod1Module {
             for attack in attacks {
                 self.fire(eng, attack, &mut rounds, &mut bodies, &weapons);
             }
+            // A callback in them (a fall's damage) mirrored the sim's
+            // unsnapped origin back; the touch pass's callbacks still read
+            // the snapped one unless a `setOrigin` moved him.
+            if let Some(rt) = self.script.as_mut()
+                && let Some(sim) = eng.clients[t.slot].as_ref().and_then(|c| c.sim.as_ref())
+                && sim.origin() == t.origin
+            {
+                rt.set_client_origin(t.slot, glam::Vec3::from(t.origin).trunc().into());
+            }
             // Retail runs the touch pass per usercmd inside `ClientThink_real`
             // (0x405b3), right after the link. The item half follows the
             // trigger half, and the use key after both.

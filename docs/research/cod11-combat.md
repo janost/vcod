@@ -4369,9 +4369,27 @@ lifted height.
   the touch pass of a cmd still airborne and the fall damage the next cmd's
   `PM_CrashLand` through `ClientEvents` (0x3fda8), the dead player's landing
   of `cod11-player-clip.md` 8.8.
+- VERIFIED, the same three runs on retail 1.5b and UO
+  (`-hurtfall-1.5.txt`, `-hurtlow-1.5.txt`, `-hurtland-1.5.txt` and the
+  `-uo` three, 2026-11-14): the same callback arguments, and every killed
+  callback's origin reads whole units, the snapped `r.currentOrigin` of
+  the touch pass (5.5). 1.5b's `-hurtland` kills first at -42.00 and
+  raises no fall damage callback at all. UO's lands first: `MOD_FALLING`
+  66 at health 100, then the slab's kill in the same frame at health 34,
+  its origin (900.00, 1929.00, -43.00) though the body stands at y
+  1929.39. INFERRED: the landing's `ClientEvents` and the touch pass
+  belong to one cmd, so the fall damage's callback leaves
+  `r.currentOrigin` snapped for the touch that follows.
+- VERIFIED, a 1.5b `-hurtlow` run whose client was first playing at 2750,
+  the drop's own frame (kept out of the fixtures): the body drifts +0.17
+  on x and y a frame from the drop on and falls faster than the replay.
+  The fixture is a run playing by 2400. What the spawn frame's drop
+  carries is not read.
 
 **As implemented.** `ScriptRuntime::deliver_world_hit` passes the callback
-undefined vectors. `crates/server/tests/hurtfall_ab.rs` replays each
+undefined vectors. The cmd loop (`Cod1Module`'s think, `cod1_think.rs`)
+puts the snapped origin back on the host after a fall's callback mirrored
+the sim's, unless a `setOrigin` in it moved the player. `crates/server/tests/hurtfall_ab.rs` replays each
 capture's cmds on vcod-server and holds every `PROBE` line exact.
 
 ### 5.9 The hurt's cadence, its flags and its sound
@@ -9554,9 +9572,17 @@ pmove runs them down by its msec. The clip's length is the engine's
 `XAnimGetLength` (syscall 0x5d, `cod_lnxded` 0x08088b3d..0x08088b5b,
 VERIFIED disassembly): the part's frame count over its float framerate,
 times 1000.0 (0x080d4ea8), stored under a 0xc00 control word, so
-truncated: 1.1d's 92 frames at 30 read 3066, not a rounded 3067. INFERRED:
-1.5b and UO store it the same way
-(their clips here are exact or round down either way).
+truncated: 1.1d's 92 frames at 30 read 3066, not a rounded 3067.
+VERIFIED (disassembly), 1.5b and UO store it the same way: their syscall
+0x61 (`cod_lnxded` 1.5b case 0x808f568 off the table at 0x80df1fc, UO
+0x809037a off 0x80e50fc) calls the length (1.5b 0x80c9b5e, UO 0x80beef2:
+the part's u16 frame count `fild`ed and `fdivs` its float framerate, left
+on the stack), multiplies by 1000.0 (1.5b 0x80df1f8, UO 0x80e50f8) and
+`fistpl`s under the control word ORed with 0xc00. VERIFIED (capture), the
+`killtimers` runs: 1.5b's `pb_stand_death_neckdeath` (index 19, 47 frames
+at 30, 1566.67) reads 1615 one cmd behind and its `_thrash` (index 20,
+3066.67) 3115, UO's index 19 1613 three cmds behind; a rounded hold
+(1617, 3117) reads 1616 or 1614 and 3116 or 3114 there.
 
 VERIFIED (capture), a death raised inside the packet pass on
 all three servers (`mp_carentan-dm-hit-target-killtimers{,-1.5,-uo}.txt`,
