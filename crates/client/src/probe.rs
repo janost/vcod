@@ -11855,8 +11855,9 @@ const KILLCAM_TAIL: Duration = Duration::from_secs(3);
 /// message, the first absolute and the steps after it, which a retail
 /// server under `showpackets 1` prints as it reads each packet
 /// (docs/dev/retail.md, "Receive order"). A `SPAWNED` line gives the first
-/// `PM_NORMAL` snapshot's time, `commandTime`, origin and view: where the
-/// spawn pick put the player.
+/// `PM_NORMAL` snapshot's time, `commandTime`, origin, view and velocity:
+/// where the spawn pick (or a placement in its frame) put the player, and
+/// what the cmds run there left him.
 /// `client-probes/probe_fall` drops the player from a height. Writes no
 /// fixture.
 #[derive(Default)]
@@ -11890,8 +11891,9 @@ impl FallProbe {
         self.spawned = true;
         let o = s.ps.origin(p);
         let v = s.ps.viewangles(p);
+        let vel = ["velocity[0]", "velocity[1]", "velocity[2]"].map(|n| s.ps.field_f32(p, n));
         println!(
-            "SPAWNED t={} ct={} origin={},{},{} view={},{},{}",
+            "SPAWNED t={} ct={} origin={},{},{} view={},{},{} vel={},{},{}",
             s.server_time,
             s.ps.field_i32(p, "commandTime"),
             o[0],
@@ -11899,7 +11901,10 @@ impl FallProbe {
             o[2],
             v[0],
             v[1],
-            v[2]
+            v[2],
+            vel[0],
+            vel[1],
+            vel[2]
         );
     }
 

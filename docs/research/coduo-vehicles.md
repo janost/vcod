@@ -1109,6 +1109,40 @@ that move, alias and snapped origin (`compare_impacts`).
   `FIRST_DROP_GAPS`. Closing them needs a recapture with the victim's
   `CMDS` lines replayed through `ProbeHold::times`, plus his spawn pinned.
 
+  VERIFIED, the 2026-11-14 recaptures, whose fixtures append each probe
+  client's `SPAWNED` and `CMDS` lines: the victim's first spawned snapshot
+  already stands on the placement (`SPAWNED t` is `PROBE victim`'s time,
+  `ct` the same), so the spawn and the placement share a frame, and its
+  velocity is what the cmds run at the spawn point left (0 on some runs;
+  (-10, 27, -12), (12, -10, -3) and (13, -1, -2) on three others). The
+  spawn point itself stays unlogged. `vehicle_runover_ab` now runs ours
+  alone until the victim's placement lands on the capture's time, sends
+  his cmds on the `CMDS` times with the buttons, prone key and up move of
+  their `in=` changes, and gives his placement the `SPAWNED` velocity
+  (`Server::test_set_client_velocity`). The first drop then matches
+  retail's to the hundredth on every standing and prone-teammate run
+  tried, the spawn's velocity included. VERIFIED, the gate. The fixture
+  `mp_kharkov-jeep-runover-prone-team-uo.txt` is now such a run, its gap
+  gone and its creep held to 0.15. Still open:
+
+  - standing: the recaptures' first drops match, and then the flight
+    after the hit runs past the 4 units the 2026-10-17 capture keeps; the jeep's own drive rides its driver's cmds, which the
+    gate sends on its own clock (on the capture's, ours' jeep lurches 1.65
+    units/s at the seat where retail's stays still; not run down). The
+    2026-10-17 capture and its gap stay. INFERRED.
+  - bail: the 2026-11-14 runs' first drops match, and their corpses fly
+    6.8, 11.0 and 11.3 off retail's, past `CORPSE`, the driver's clock again. The older
+    capture and its gap stay. INFERRED.
+  - prone: the fall matches, and a prone body landing on the grade slides
+    0.1 to 0.3 units off retail's (two runs), so the 2026-10-17 capture,
+    whose drop ours meets, stays. VERIFIED, the gate on those runs.
+  - a driverless jeep over a prone victim (`probe_victim prone`,
+    `probe_victim_ahead 300`, `--probe-vehicle bail`): retail crushes him
+    10 a cmd with the jeep as inflictor and attacker (VERIFIED, six
+    captures), and ours meets it on none of them: the driverless jeep's
+    path rides the driver's cmds, so its hits land on other frames. No
+    fixture is committed. INFERRED.
+
 **Run-over by a driverless jeep.** Retail UO 1.51b, 2026-10-20, the same
 probe with `--probe-vehicle bail` for the driver (out at full throttle a
 second into the drive) and the victim 300 ahead (fixture
