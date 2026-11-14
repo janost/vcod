@@ -155,7 +155,14 @@ pub fn angle_vectors_of_radians(rad: Vec3) -> [Vec3; 3] {
 /// midpoint lies that close, else `exact`, the [`F80`] steps.
 fn stored(x: f64, scale: f64, exact: impl FnOnce() -> f32) -> f32 {
     let f = x as f32;
-    if f.is_normal() {
+    if f.is_normal() && scale <= 2.0 * x.abs() {
+        // The slack is then under 8 of `x`'s ulps, and a float midpoint in
+        // `x`'s binade is an `f64` whose low 29 mantissa bits are 2^28.
+        let low = (x.to_bits() & ((1 << 29) - 1)) as i64;
+        if (low - (1 << 28)).abs() > 16 {
+            return f;
+        }
+    } else if f.is_normal() {
         let mid = |g: f32| (f64::from(f) + f64::from(g)) * 0.5;
         let slack = scale * f64::EPSILON * 2.0;
         if (x - mid(f.next_up())).abs() > slack && (x - mid(f.next_down())).abs() > slack {
