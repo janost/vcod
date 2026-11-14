@@ -93,6 +93,12 @@ impl CrosshairTarget {
     pub fn seen(&self) -> i32 {
         self.last - self.start
     }
+
+    /// The client last under the crosshair and when the crosshair came
+    /// onto him and last saw him (0x79e630, 0x79e638, 0x79e634).
+    pub fn sighting(&self) -> (u32, i32, i32) {
+        (self.client, self.start, self.last)
+    }
 }
 
 impl Default for Dvars {

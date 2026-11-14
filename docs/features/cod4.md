@@ -209,6 +209,9 @@ The weapon byte is the client's own pick
   overlays, a mounted gun's reticle, `cg_crosshairDynamic`, the team
   colours over a player once `cg_friendlyNameFadeIn` or
   `cg_enemyNameFadeIn` has passed (17).
+- Names over heads: the player under the crosshair and every teammate
+  in sight, sized by distance, in team colours with the rank icon
+  (17.1).
 - World waypoints (Bomb Squad's icon over enemy claymores and C4) and
   offscreen ones with a pointer.
 - The killcam's letterbox and title; the prematch's countdown text. The

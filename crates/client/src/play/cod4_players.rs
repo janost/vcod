@@ -78,7 +78,7 @@ type RagSkinsKey = (u64, usize, [u32; 16]);
 /// Each rig model's name and skin matrices.
 type Skins = Vec<(String, Vec<glam::Mat4>)>;
 
-type HeldRig = (Option<String>, Option<(Rc<PlayerRig>, [Option<usize>; 2])>);
+type HeldRig = (Option<String>, Option<(Rc<PlayerRig>, [Option<usize>; 3])>);
 
 /// A corpse's ragdoll: not started, running or asleep, or refused (the
 /// tunnel test, a def bone missing, `ragdoll_max_simulating` reached at
@@ -132,6 +132,9 @@ pub struct Cod4Players {
     last_ms: Option<i32>,
     /// The last [`Self::posed`]'s weapon tags by entity number.
     pub tags: HashMap<u32, WeaponTags>,
+    /// The last [`Self::posed`]'s `j_head` in the world by entity number,
+    /// where a name draws over (`cod4_names`).
+    pub heads: HashMap<u32, Vec3>,
     /// Set by the caller; without it corpses only play their death anims.
     pub ragdoll: Option<RagdollWorld>,
     /// The blasts' jitter draws.
@@ -149,6 +152,7 @@ impl Default for Cod4Players {
             lean: LeanDvars::default(),
             last_ms: None,
             tags: HashMap::new(),
+            heads: HashMap::new(),
             ragdoll: None,
             seed: 1,
         }
@@ -275,6 +279,7 @@ impl Cod4Players {
             .map_or(0, |t| render_time.wrapping_sub(t).clamp(0, 1000));
         self.last_ms = Some(render_time);
         self.tags.clear();
+        self.heads.clear();
         let swing_speed = self.swing_speed;
         if self.set(src).is_none() {
             return Vec::new();
@@ -382,14 +387,14 @@ impl Cod4Players {
                                     .iter()
                                     .position(|b| b.name.eq_ignore_ascii_case(name))
                             };
-                            let tags = [bone("tag_flash"), bone("tag_brass")];
+                            let tags = [bone("tag_flash"), bone("tag_brass"), bone("j_head")];
                             (rig, tags)
                         });
                     body.rig = Some((held.cloned(), rig.clone()));
                     rig
                 }
             };
-            let Some((rig, [flash, brass])) = rig else {
+            let Some((rig, [flash, brass, head])) = rig else {
                 continue;
             };
             let body = self.bodies.get_mut(n).expect("inserted above");
@@ -487,6 +492,9 @@ impl Cod4Players {
                     brass: tag(brass),
                 },
             );
+            if let Some((p, _)) = tag(head) {
+                self.heads.insert(*n, p);
+            }
             out.push((i, rig.clone(), drawn));
         }
         out
