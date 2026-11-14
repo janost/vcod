@@ -246,6 +246,11 @@ bot does with the same keys. If one kills you, it earned it. The view holds:
   under the game's movement rules.
 - A* plans over the graph. Searches share a per-tick budget and may take
   several ticks, so many bots planning at once do not spike the frame.
+- Each bot's cover, route and drop and wall probes are worked out on up to
+  four threads beside the server's own; the server keeps a result only
+  where the bot's turn reads what it was worked out from, so every bot
+  moves as it would on one thread. `VCOD_BOT_THREADS=<n>` sets the
+  threads, `1` none.
 - The follower turns the path into keys: it steers at the next node,
   jumps by the rule that proved the jump, waits out the jump cooldown,
   climbs at the rate the ladder was proven at, and takes a risky drop

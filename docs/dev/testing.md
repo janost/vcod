@@ -49,6 +49,7 @@ picks through `Server::pin_spawns`, as `gametypes_ab` does.
 |---|---|---|
 | pmove, collision or nav | `cargo test --release -p vcod-server --test server -- --ignored nav_census::` | ~8 s, 65 s CPU at 1.1; 20-60 s, 340 s CPU at UO |
 | bots | `cargo test --release -p vcod-server --test server -- --ignored bots::` | ~5 s at 1.1; ~7 min at UO |
+| the bots' driver or its threads | `cargo test --release -p vcod-server --test server -- bot_threads::` (not ignored; each install it finds) | ~10 s a game |
 | UO bot vehicles | `-- --ignored bot_vehicles::` at a UO install | ~30 s |
 | shaders or render layouts | `renderer::pipeline_check` (lavapipe env below) | |
 | CoD2 maps, CoD2 load path | `cod2_map_census`, `cod2_load_profile` | |
@@ -240,7 +241,9 @@ only yardstick.
     body, the check that a refactor moved no bot. `NETDIGEST=<N>` hashes
     every datagram sent, with an observer client joined.
     `VCOD_TICK_TRACE=<dir>` writes the tick's step log (bot-combat.md
-    section 1). `SPIKE_MS` logs slow ticks.
+    section 1). `SPIKE_MS` logs slow ticks; `TICKSTATS=1` (with `JOBS=1`)
+    prints each phase's mean, p50, p99 and max a tick. `VCOD_BOT_THREADS=1`
+    runs the bots' pass serial: its digests match the threaded run's.
 
   It prints kills, deaths, damage, time-to-kill, wins, objective actions,
   lives, wounds survived, retreats, cover holds, peeks and hunts and the

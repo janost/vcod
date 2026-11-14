@@ -393,8 +393,10 @@ jobs, each run pinned to cores 0-7 (`taskset`) under a memory cap.
   per thread, nested parts named `outer/inner`: `console`, `packets`,
   `head` (`head/pings`, `head/bots` with `bots/manage`, `bots/nav tick`,
   `bots/commands and inputs`, `bots/sense`, `bots/deal`, `bots/bodies and
-  paths`, `bots/cover and vantage`, `bots/goal`, `bots/route` (the plan
-  budget), `bots/probes`, `bots/think`, `bots/land`, `bots/moves`,
+  paths`, `bots/covers` (pass 2's cover looks), `bots/plans` (the
+  per-bot plans on the pass's threads, docs/dev/server-tick.md), `bots/cover
+  and vantage`, `bots/goal`, `bots/route` (the plan budget), `bots/probes`,
+  `bots/think`, `bots/land`, `bots/moves`,
   `head/configstrings`), on CoD1 `console/map_restart` (`/load`,
   `/settle`, `/reenter`; the level load's `load/compile`, `load/spawn`
   with its `spawn/*` parts, `load/bootstrap`, cod11-map-cycle.md 4.9),

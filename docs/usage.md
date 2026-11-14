@@ -528,6 +528,7 @@ Server (`vcod-server <map> --game cod4`, or a CoD4 install):
   summary; `--test-entities <n>` adds invisible moving entities to
   exercise the entity encoding; `VCOD_TICK_TRACE=<path>` writes the
   tick's step log; `VCOD_TICK_PROFILE_MS=<ms>` logs every tick slower
-  than that.
+  than that. `VCOD_BOT_THREADS=<n>` sets the threads the bots think on
+  (default the cores up to 4; `1` thinks on the tick's own thread).
 - `RUST_LOG` sets the log level (default `info`); `WGPU_BACKEND` narrows
   the graphics backend.
