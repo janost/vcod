@@ -1543,7 +1543,17 @@ impl ScriptRuntime {
                 shot = Some(TurretShot {
                     slot,
                     gun: id.0,
-                    muzzle: muzzle(tags, origin, angles, rec.angles2, forward).into(),
+                    muzzle: match rule {
+                        AimRule::V1 => muzzle(tags, origin, angles, rec.angles2, forward),
+                        AimRule::V15 | AimRule::Uo => crate::game::turret::muzzle_stored(
+                            tags,
+                            origin,
+                            angles,
+                            rec.angles2,
+                            forward,
+                        ),
+                    }
+                    .into(),
                     dir: forward.into(),
                     damage: rec.dmg,
                     rifle_bullet: rec.def.rifle_bullet,

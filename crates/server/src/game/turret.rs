@@ -545,6 +545,33 @@ pub fn muzzle(
     (player + Vec3::from(forward) * reach).into()
 }
 
+/// [`muzzle`] in 1.5b's and UO's arithmetic (1.5b `game.mp` 0x5120d..
+/// 0x51286, UO 0x5aa14..0x5aa8d): the reach is `VectorNormalize`'s length,
+/// the squared sum and its root each stored as a float (1.5b 0x32fb3,
+/// UO 0x3a203), and each component of `player + forward * reach` is
+/// rounded once.
+pub fn muzzle_stored(
+    tags: &TurretTags,
+    turret_origin: [f32; 3],
+    turret_angles: [f32; 3],
+    angles2: [f32; 3],
+    forward: [f32; 3],
+) -> [f32; 3] {
+    use crate::game::spawn::transform;
+    use vcod_common::x87::angles_to_axis;
+    let barrel = angles_to_axis(Vec3::new(angles2[0], angles2[1], 0.0));
+    let gun = angles_to_axis(turret_angles.into());
+    let world = |pivot: Vec3, tag: Vec3| {
+        Vec3::from(turret_origin) + transform(pivot + transform(tag - pivot, &barrel), &gun)
+    };
+    let player = world(tags.aim, tags.player);
+    let flash = world(tags.aim_animated, tags.flash);
+    let d = flash - player;
+    let reach = (vcod_common::x87::dot(d, d) as f32 as f64).sqrt() as f32;
+    let f = Vec3::from(forward).as_dvec3();
+    (player.as_dvec3() + f * f64::from(reach)).as_vec3().into()
+}
+
 /// `G_DObjGetLocalTagMatrix(turret, "tag_weapon")` for 0x515a8 (turrets
 /// doc 7): the tag in the gun's model space, turned with the barrel about
 /// `tag_aim` the way the controller turns it.

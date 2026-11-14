@@ -2745,11 +2745,10 @@ fn the_hitlog_capture_matches_uo_on_mp_carentan() {
 }
 
 /// A UO kill on the knockback's first frame: the round's point a float
-/// step off retail's, and the grid with it. The body's origin, velocity
-/// and clip weights are retail's; 1.1d's kill matches since its pose and
-/// trace keep the x87 stack, and 1.5b's stored walk and build match its
-/// gdb dump word for word, so what is left is in the frame's inputs
-/// (`cod11-turrets.md` 13.6).
+/// step off retail's. The body, its run clip and its skeleton are
+/// retail's; the round's start, `tag_player` and `tag_flash` off the gun's
+/// own skeleton, is a float step off on some aims (`cod11-turrets.md`
+/// 13.6, 13.8).
 const KNOCKBACK_GAP: &str = "the knockback's first frame's pose (turrets doc 13.6)";
 
 /// The 1.1d hit-grid capture's head: the capture predates the gsc's
@@ -2957,6 +2956,30 @@ fn the_grounded_hitgrid_capture_matches_uo_on_mp_carentan() {
         HITGRID_GROUND,
         &[],
     );
+}
+
+/// The `-hitgrid-uo` recipe rerun with the target's cmd log, its spawn and
+/// the struck body logged, no debugger: the knockback kill, every cell and
+/// the body land on retail's bits (`cod11-turrets.md` 13.6).
+#[test]
+fn the_cmdlog_hitgrid_capture_matches_uo_on_mp_carentan() {
+    let cvars = &[
+        ("probe_hitgrid", "1"),
+        ("probe_spawnlog", "1"),
+        ("probe_bodylog", "1"),
+    ];
+    let Some((script, log, mut rows)) = hit_replay(
+        "hitgrid-uo-cmds",
+        vcod_common::testing::uo_fs,
+        &PROTOCOL_V22,
+        cvars,
+    ) else {
+        return;
+    };
+    rows.extend(hitfine_rows(script.lines(), log.iter().map(String::as_str)));
+    rows.extend(hitgrid_rows(script.lines(), log.iter().map(String::as_str)));
+    rows.extend(hitbody_rows(script.lines(), log.iter().map(String::as_str)));
+    finish(rows, &[]);
 }
 
 /// A `D;` or `K;` line's kind, teams, weapon, damage, means of death and hit
