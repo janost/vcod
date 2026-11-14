@@ -3277,6 +3277,10 @@ impl Bot {
         if view.seat.is_some() {
             self.retreat = None;
         }
+        // The memory runs in a seat and on the walk to one too: without it a
+        // driver's goal was the tick's raw noise, gone on the next, and each
+        // flip planned the hull a new route (bot-objectives.md 10.8).
+        self.remember(view);
         if let Some(cmd) = self.think_vehicle(view, cmd) {
             return cmd;
         }
@@ -3296,7 +3300,6 @@ impl Bot {
             self.kill = true;
         }
         self.obj.live = true;
-        self.remember(view);
         self.quiet_ticks = match view.enemy {
             Some(e) => {
                 self.seen_speed = e.velocity[0].hypot(e.velocity[1]);
@@ -9487,6 +9490,19 @@ mod tests {
             capturing: false,
         });
         v
+    }
+
+    /// A driver remembers a noise as a bot on foot does: its goal holds on
+    /// the ticks the noise is not heard, and the hull's route with it
+    /// (bot-objectives.md 10.8).
+    #[test]
+    fn a_driver_keeps_a_noise_it_heard_as_its_goal() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = driving(Crowd::default());
+        v.noise = Some([2000.0, 500.0, 64.0]);
+        bot.think(&v);
+        v.noise = None;
+        assert_eq!(bot.goal(&v), Goal::To([2000.0, 500.0, 64.0]));
     }
 
     #[test]

@@ -518,7 +518,10 @@ files):
   target and the probed turn-away; seeds 41 to 79 odd, 2 of 4 before
   and 1 of 2 after. The one left (seed 73) is a throw at 269 units by a
   bot already hurt: the blast at that range is about 30, which the
-  250-unit minimum accepts.
+  250-unit minimum accepts. Run again 2026-11-14 (the same set, seeds 1
+  to 79 odd): no frag killed its thrower, 9 frag kills on c6d7e1bd9 and
+  13 with 10.8's changes, seed 73's 2 among them. VERIFIED (measured).
+  No health-aware range was added: the tally no longer shows the case.
 - The tick a throw started still went out with zero angles and no target
   recorded: only the stage ticks after it aimed and remembered the enemy.
   VERIFIED (measured, ours, 2026-10-19, release, `tests/bots.rs`
@@ -1049,6 +1052,14 @@ bots, shoot off; `four_uo_bots_end_a_bas_round_without_shooting`;
   flag at tick 843 and 4 more in the 60 s after; `hq` on mp_cassino with shoot
   on, a radio held at tick 1102 (shoot off, the two contest it for good). No
   script abort. VERIFIED (measured).
+- `ctf` on mp_cassino, `tests/bot_objectives.rs`
+  `uo_bots_take_and_capture_a_flag_on_cassino`'s set (two shooting bots, a
+  pickup within 3000 ticks, a capture within 4000 more), the 80 even seeds
+  2 to 160: 80 took a flag and 10 captured, on c6d7e1bd9 and with 10.8's
+  changes alike (seed 146 captured on the second only, seed 54 on the
+  first). The test's comment had 54 before the jump cue and 47 on
+  2026-10-21. VERIFIED (measured, 2026-11-14). Not traced; the gate's
+  five seeds still capture on seed 16.
 - Current numbers (2026-10-20, master a5c81855 against the weapon rules above,
   the four-bot shooting gate, all five maps, seeds 1 to 11 odd), VERIFIED
   (measured): all 60 runs end on their bases. After: mp_foy 10359 to 14239,
@@ -1841,6 +1852,49 @@ aborts from tick 1037, after a driver and a gunner left one tank on tick
 938. Not measured on retail, which needs two clients' exits on one
 frame. Bots now press use on frames of their own seat's, so none of
 theirs coincide.
+
+### 10.8 A driver's memory, 2026-11-14
+
+Retail has no bots; this section is measured on vcod-server only.
+
+`tests/bots.rs` `uo_tdm_games_that_stalled_or_never_sprinted` went red
+on master once the CoD1 script draws moved onto retail's `holdrand`
+(777a5d9c3, seed 43; at df82d8f0a seed 19): the new spawn picks led the
+games into two stalls no commit had made. Each traced per tick, release,
+UO, on c6d7e1bd9.
+
+- Seed 19, vehicles on: bot 5 drove tank 191 from (795, -1343, -8) to
+  (1437, -1022, 33) and turned the hull in place there for 5 s. Its goal
+  flipped every one to three ticks between `Goal::Roam` and the tick's
+  noise, (2033, -549, 40) or (3290, -921, 46): `Bot::think` returned
+  from `think_vehicle` before `Bot::remember`, so a seated bot's goal
+  read `BotView::noise` raw, set only on the tick a sound arrives, and
+  a recall from before boarding never ran down. Each flip planned the
+  hull a new route (`Server::drive_waypoint`, a roam's a random far
+  node), the waypoint swung behind the hull, and a tank turns in place
+  past 50 degrees off. The route that held then ran out at the node
+  nearest that old recall, (1433, -997, 76), and the driver sat its 100
+  idle ticks before getting out: 12 s within 150 units. VERIFIED (trace:
+  the seat's keys and route per tick, the goal each replan). The memory
+  now runs before the vehicle's think, in a seat and on the walk to one
+  (`bots::tests::a_driver_keeps_a_noise_it_heard_as_its_goal`); on foot
+  it ran at the same point of the tick before, so a walking bot's think
+  is unchanged.
+- Seed 43: a bot on foot at mp_cassino's roof jumps (4851, -1296, 256)
+  to (4896, -1337, 280) to (4938, -1393, 303). bot-navigation.md "The
+  ship's leftovers" has it: a goal far off the graph read as moved
+  every tick.
+
+VERIFIED (measured, release, UO, c6d7e1bd9 then both changes): the gate
+fails at seed 19 then passes at all eight seeds. `bot_match` `UO=1`
+`tdm` `mp_cassino`, 6 bots, 6000 ticks, seeds 1 to 24: stalled bot-ticks
+0 then 55 (seed 2, a bot on foot on the roof at (4537, -1296, 256)
+walked between plans east and west, its goal between two noises; not
+traced further), kills 1061 then 1083. Inside the per-seed spread.
+
+Left: a drive route that ends short of a goal the hull cannot reach
+still holds the driver `IDLE_TICKS` (5 s) before it gets out. INFERRED
+(the seed 19 trace, read off `Bot::drive`).
 
 ## 11. CoD2's `sd`, `ctf` and `hq`
 
