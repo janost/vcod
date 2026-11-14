@@ -141,6 +141,9 @@ pub enum Op {
     LocalField(u16, Atom),
     /// `LoadLocal a; LoadLocal k; LoadIndex`.
     IndexLocals(u16, u16),
+    /// `LoadLevel; LoadField f; LoadLocal k; LoadIndex; LoadField g`:
+    /// `level.f[k].g`.
+    LevelIndexField(Atom, u16, Atom),
     /// `LoadLocal a; LoadLocal k; LoadIndex; LoadField f`.
     IndexLocalsField(u16, u16, Atom),
     /// `Lt; JumpIfFalse t`, and the other three orderings.
@@ -291,9 +294,11 @@ pub(crate) fn stack_effect(op: &Op) -> (i32, i32) {
         Op::LoadLocal2(..) => (0, 2),
         Op::StoreLoad(..) => (1, 1),
         Op::ReturnLocal(_) => (0, 0),
-        Op::LevelField(_) | Op::LocalField(..) | Op::IndexLocals(..) | Op::IndexLocalsField(..) => {
-            (0, 1)
-        }
+        Op::LevelField(_)
+        | Op::LocalField(..)
+        | Op::IndexLocals(..)
+        | Op::IndexLocalsField(..)
+        | Op::LevelIndexField(..) => (0, 1),
         Op::LtJumpIfFalse(_)
         | Op::GtJumpIfFalse(_)
         | Op::LeJumpIfFalse(_)
@@ -459,7 +464,10 @@ fn fused_at(code: &[Op], at: usize, size: Atom) -> Option<Op> {
         (&LoadLocal(a), &LoadField(f)) => LocalField(a, f),
         (&LoadLocal(a), Return) => ReturnLocal(a),
         (&StoreLocal(a), &LoadLocal(b)) => StoreLoad(a, b),
-        (LoadLevel, &LoadField(f)) => LevelField(f),
+        (LoadLevel, &LoadField(f)) => match run.get(2..5) {
+            Some(&[LoadLocal(k), LoadIndex, LoadField(g)]) if f != size => LevelIndexField(f, k, g),
+            _ => LevelField(f),
+        },
         (Lt, &JumpIfFalse(t)) => LtJumpIfFalse(t),
         (Gt, &JumpIfFalse(t)) => GtJumpIfFalse(t),
         (Le, &JumpIfFalse(t)) => LeJumpIfFalse(t),

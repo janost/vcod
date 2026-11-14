@@ -1654,6 +1654,26 @@ impl Vm {
                         None => push!(obj),
                     }
                 }
+                Op::LevelIndexField(f, k, name) => {
+                    let v = match (
+                        self.heap.get_field(self.level, f),
+                        array_key(locals[k as usize]),
+                    ) {
+                        (Value::Array(id), Some(key)) if left >= 4 => {
+                            let elem = self.heap.get_index(id, key);
+                            field_of!(elem, name)
+                        }
+                        _ => None,
+                    };
+                    match v {
+                        Some(v) => {
+                            left -= 4;
+                            push!(v);
+                            ip = at + 5;
+                        }
+                        None => push!(Value::Struct(self.level)),
+                    }
+                }
                 Op::LtJumpIfFalse(to) => cmp_jump!(to, <),
                 Op::GtJumpIfFalse(to) => cmp_jump!(to, >),
                 Op::LeJumpIfFalse(to) => cmp_jump!(to, <=),
@@ -2071,6 +2091,12 @@ main()
             t += 1;
         if ( isdefined( e ) || n )
             t += 2;
+    }
+    level.arr2 = b;
+    for ( i = 0; i < 3; i++ )
+    {
+        g = level.arr2[i].x;
+        record( g );
     }
     g = 1;
     for ( i = 0; i < level.arr.size; i++ )
