@@ -3,7 +3,9 @@
 //!
 //! Language surface and the evidence behind it:
 //! docs/research/cod11-gsc-language.md; CoD2's changes,
-//! docs/research/cod2-gsc-diff.md section 3.
+//! docs/research/cod2-gsc-diff.md section 3. What the interpreter does
+//! for speed, and the numbers: docs/research/cod4-server-frame.md 9 ("The
+//! spawn wave"); `tests/bench.rs` is its microbench.
 
 pub mod ast;
 pub mod atom;
