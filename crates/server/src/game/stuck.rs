@@ -496,6 +496,115 @@ mod tests {
         );
     }
 
+    /// 1.5b's pushes in `mp_carentan-dm-bump-overlap-spectator-15-*` (a
+    /// spectator in slot 0, the target in 1, the walker in 2), to the bit:
+    /// both still, pushed again a frame later, then the walker walking into
+    /// the still target four frames running. Origins are the walker's
+    /// snapshots and the target's own `BUMPT` lines.
+    fn overlap_spectator_15() -> [CapturedPush; 6] {
+        let still = [932.0, -376.0, -151.875];
+        let target = [1139.3832, -419.7399, -151.8062];
+        let walk = |hi: [f32; 3], hi_vel: [f32; 2]| CapturedPush {
+            lo: target,
+            hi,
+            lo_moving: false,
+            hi_moving: true,
+            hi_vel,
+            rounded: false,
+        };
+        [
+            CapturedPush {
+                lo: [932.0, -376.0, -150.875],
+                hi: still,
+                lo_moving: false,
+                hi_moving: false,
+                hi_vel: [133.40303, -135.29092],
+                rounded: false,
+            },
+            CapturedPush {
+                lo: [925.3428, -369.24475, -151.86539],
+                hi: [934.205, -378.23804, -151.875],
+                lo_moving: true,
+                hi_moving: true,
+                hi_vel: [118.81112, -148.26973],
+                rounded: false,
+            },
+            CapturedPush {
+                lo: [1139.3832, -419.7399, -150.875],
+                ..walk([1139.3832, -419.7399, -151.875], [-182.67647, -52.242794])
+            },
+            walk([1131.446, -422.27084, -151.875], [-185.24553, -42.238518]),
+            walk([1123.5167, -424.26804, -151.875], [-178.96811, -63.799778]),
+            walk([1116.0023, -427.2191, -151.875], [-180.4835, -59.377632]),
+        ]
+    }
+
+    /// Every `(seed, skip)` under `seeds` and `max_skip` whose draws give
+    /// each of `frames`' pushes to the bit, on consecutive draws (four a
+    /// frame): how player-clip doc 13.4's seeds were found.
+    fn seed_search(
+        rules: StuckRules,
+        lo_slot: usize,
+        frames: &[CapturedPush],
+        seeds: std::ops::Range<u32>,
+        max_skip: usize,
+    ) -> Vec<(u32, usize)> {
+        let fits = |draws: &[u32]| {
+            let mut it = draws.iter().copied();
+            frames.iter().all(|f| {
+                let at = |o: [f32; 3], moving: bool| StuckView {
+                    origin: Vec3::from(o),
+                    vel_xy: if moving { Vec2::X } else { Vec2::ZERO },
+                    ..view(0.0, 0.0)
+                };
+                let spec = StuckView {
+                    own_view: false,
+                    ..view(500.0, 0.0)
+                };
+                let mut views = vec![Some(spec); lo_slot];
+                views.push(Some(at(f.lo, f.lo_moving)));
+                views.push(Some(at(f.hi, f.hi_moving)));
+                let mut next = || it.next().unwrap_or(0);
+                stuck_in_client(lo_slot, &views, rules, &mut next);
+                stuck_in_client(lo_slot + 1, &views, rules, &mut next)
+                    .is_some_and(|p| p.self_vel == Vec2::from(f.hi_vel))
+            })
+        };
+        let mut found = Vec::new();
+        for seed in seeds {
+            let mut g = vcod_common::rng::GlibcRand::new(seed);
+            let draws: Vec<u32> = (0..max_skip + 4 * frames.len())
+                .map(|_| g.next_u31())
+                .collect();
+            for skip in 0..max_skip {
+                if fits(&draws[skip..]) {
+                    found.push((seed, skip));
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn the_15_overlap_spectator_capture_replays_from_its_seed() {
+        replay(StuckRules::V1_5, 1252, 8, 1, &overlap_spectator_15());
+    }
+
+    /// The search behind the seed above: one fit in the first 2^16 seeds
+    /// and 512 draws (player-clip doc 13.4). A few seconds.
+    #[test]
+    #[ignore]
+    fn the_15_overlap_spectator_seed_is_the_only_fit() {
+        let found = seed_search(
+            StuckRules::V1_5,
+            1,
+            &overlap_spectator_15(),
+            0..1 << 16,
+            512,
+        );
+        assert_eq!(found, [(1252, 8)]);
+    }
+
     /// The draw's ends against the binaries' constants: 1.1d's `-1 -
     /// r/2^30` spans (-3, -1], 1.5b's `2r/2^31 - 1` [-1, 1).
     #[test]

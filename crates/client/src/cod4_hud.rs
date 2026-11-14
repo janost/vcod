@@ -1421,13 +1421,7 @@ impl Cod4Hud {
         else {
             return Vec::new();
         };
-        let rgb = |n: &str| {
-            let v = self.server_dvar(s, n).unwrap_or_default();
-            let mut c = v
-                .split_whitespace()
-                .map(|x| x.parse::<f32>().unwrap_or(1.0));
-            [0; 3].map(|_| c.next().unwrap_or(1.0))
-        };
+        let rgb = |n: &str| self.team_rgb(s, n);
         let view = crate::cod4_crosshair::View {
             ps,
             def,
@@ -1444,6 +1438,62 @@ impl Cod4Hud {
             &sp,
             &|m| image_of(l, m),
         )
+    }
+
+    /// A `g_TeamColor_*` server dvar's colour, white where unset.
+    pub(crate) fn team_rgb(&self, s: &Cod4Session, name: &str) -> [f32; 3] {
+        let v = self.server_dvar(s, name).unwrap_or_default();
+        let mut c = v
+            .split_whitespace()
+            .map(|x| x.parse::<f32>().unwrap_or(1.0));
+        [0; 3].map(|_| c.next().unwrap_or(1.0))
+    }
+
+    /// The names over heads (`cod4_names::quads`) of `names`, projected
+    /// through the drawn view `eye`: each its client's name
+    /// (`CL_GetClientName`) in his colour relative to us
+    /// (`CG_RelativeTeamColor`) with his rank's icon and level off
+    /// `mp/rankIconTable.csv` and `mp/rankTable.csv`; nothing before the
+    /// zones load (cod4-hud.md 17.1).
+    pub(crate) fn overhead_names(
+        &self,
+        s: &Cod4Session,
+        names: &[crate::cod4_names::Name],
+        eye: &crate::cod4_waypoints::Eye,
+        dv: &crate::cod4_names::Dvars,
+    ) -> Vec<HudQuad> {
+        use crate::cod4_names::{Look, Relation, quads};
+        use crate::play::cod4::{client_team, client_u32};
+        let mut out = Vec::new();
+        let (Some(Some(l)), Some(snap)) = (&self.loaded, s.client().snapshots.last()) else {
+            return out;
+        };
+        let sp = ScreenPlacement::cod4(eye.size[0], eye.size[1]);
+        let font = l.fonts.pick(dv.font, 1.0, &sp);
+        let client = |n: u32| snap.clients.iter().find(|c| c.0[0] == n);
+        let me = s.gamestate().map_or(u32::MAX, |g| g.client_num as u32);
+        let mine = client(me).map_or(0, client_team);
+        for n in names {
+            let Some(c) = client(n.client) else {
+                continue;
+            };
+            let text = client_name(c);
+            let rank = client_u32(c, "rank") as i32;
+            let prestige = client_u32(c, "prestige") as i32;
+            let look = Look {
+                font,
+                text: &text,
+                rgb: self.team_rgb(s, Relation::of(n.client, client_team(c), me, mine).dvar()),
+                rank_icon: l
+                    .rank_icons
+                    .get(&(rank, prestige))
+                    .filter(|m| !m.is_empty())
+                    .and_then(|m| image_of(l, m)),
+                rank_level: l.rank_levels.get(&rank).cloned(),
+            };
+            quads(n, &look, eye, dv, &mut out);
+        }
+        out
     }
 
     /// The `low health` menu's owner draw 112: its background material

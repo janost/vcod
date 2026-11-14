@@ -2798,6 +2798,72 @@ are a block where ae407a223 drew few long stalls, not a regression of
 one change: over seeds 1-72 the stalls go from 3 499 to 924 and kills
 from 11 281 to 11 161 (-1.1%).
 
+### A goal far off the graph, the ladders again, 2026-11-14
+
+Retail has no bots; this section is measured on vcod-server only. Traced
+per tick (a temporary per-tick log of the follower, the cmd and the
+goal), release, on c6d7e1bd9.
+
+- UO `tests/bots.rs` `uo_tdm_games_that_stalled_or_never_sprinted` seed
+  43 (bot-objectives.md 10.8): a bot bound for a noise at (4146, -2366,
+  212), 220 over the nearest node (4129, -2352, -8), turned at the foot
+  of mp_cassino's roof jump (4851, -1296, 256) to (4896, -1337, 280)
+  between the foot and the top every two to three ticks for 12 s. The
+  follower read a point goal as moved when its destination node stood
+  more than `RETARGET` (128) off the point, and for a point that far off
+  the graph its own node does: every tick the plan was parked and the
+  one parked the tick before taken up (`PARK_TICKS`), so the waypoint
+  went back to the state of two ticks before. VERIFIED (trace: the
+  follower's reset from the moved branch on 134 of 255 traced ticks,
+  the goal constant). A point now moves when it lies more than
+  `RETARGET` off its destination and the node it maps to does too, or a
+  floor off it as before (`Follower::follow`,
+  `nav::tests::a_goal_far_off_the_graph_keeps_its_plan`). A point on
+  the graph reads as before.
+- mp_ship's ladder stalls, `bot_match` 1.1 `tdm` 10 bots, 12 000 ticks,
+  seeds 1 to 72, `STALLS=1` (each 12 s window's start). VERIFIED
+  (measured, positions only):
+  - The shelf ladder at (5352, -70), 352 to 448, with no other body
+    near: seeds 7, 16, 21, 26, 30, 41 and 55. Traced on seed 7 (bot 7,
+    t5500 to t5745): up the ladder, along the shelf at 448 to (5343,
+    -155), down to the slot at (5403, -160, 396), off the drop for the
+    stairwell floor at (5405, -192, 204), landed on the floor at 352
+    instead; the follower planned again from there without the edge
+    (the drop onto a floor partway, section 3) and the plan went back
+    up the ladder to the same drop, three times in 12 s. VERIFIED
+    (trace). No meeting.
+  - The hold ladder at (3280, -440), -64 to 56, its head (3337, -440,
+    56): seeds 1, 4, 17, 20 and 21. Seed 4 (bot 4, t245 to t485): up
+    the ladder, pinned by a teammate standing at (3376, -404) on its way
+    on, then bound back down, it waited aside for two climbers in turn,
+    the second of which stood fighting 11 units off the head for 35
+    ticks (`ladder_yield`'s wait holds while a body off the rungs stands
+    between the spot and the rungs). Seed 1 (bot 2, t11640 to t11890):
+    two teammates held still at (3318, -415) and (3334, -441), and the
+    bot pressed between them at the head, went down, came back up. Each
+    a crowd at the head in a fight. VERIFIED (traces). INFERRED: a
+    rule for these trades one wait for another; not changed.
+  - The ladder at x 3354 (its head (3370, -380, 56), top 352): seeds 10
+    and 44, positions only. The mast ladder at x 3808: no stall in the
+    72 seeds. VERIFIED (measured).
+
+VERIFIED (measured; c6d7e1bd9 then the two changes of bot-objectives.md
+10.8 and this section; `bot_match` 1.1 `tdm` `mp_ship` 10 bots 12 000
+ticks; stalled bot-ticks per seed block, kills over 1 to 72; `ship_stalls`
+`dm` 10 bots shoot off 4000 ticks seeds 1 to 127 odd: stalled bot-ticks
+/ falls / deaths / edges given up / those by a body / bot-ticks held up
+by a body):
+
+| set | c6d7e1bd9 | both changes |
+|---|---|---|
+| `bot_match` seeds 1-6 / 7-24 / 25-72 | 113 / 202 / 1 213 | 56 / 334 / 994 |
+| `bot_match` seeds 1-72, kills | 1 528, 11 270 | 1 384, 11 398 |
+| `ship_stalls` `mp_ship` | 0 / 1 / 0 / 364 / 101 / 21 060 | the same |
+
+Inside the per-seed spread on `mp_ship`; the change closes the UO gate.
+c6d7e1bd9's 1 528 over seeds 1-72 against the 924 above is the base's
+own: the CoD1 script draws moved every spawn pick.
+
 ### The pass on threads
 
 The bots' pass works its costly per-bot parts out on worker threads

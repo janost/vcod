@@ -104,7 +104,8 @@ scripts: `vm/interp.rs`, `vm/sched.rs`, `vm/profile.rs` (a game's
     `engine::answer_status` (the `getinfo`/`getstatus` reply).
   - `core.rs` `EngineCore`, the engine state each game embeds as `core`.
   - `slot.rs` `Link`, a client slot's connection half, each client struct's
-    `link`.
+    `link`. `commands.rs` CoD2's and CoD4's server-command queue
+    (`SV_AddServerCommand`); CoD1's is `Client::queue_server_command`.
   - `link.rs` the LAN test, rates, pacing, ping. `archive.rs` the killcam
     ring. `rotation.rs` `map_rotate`'s walk. `challenge.rs` the challenge
     table. `bans.rs` `ban.txt` and the temporary bans. `gamelog.rs`

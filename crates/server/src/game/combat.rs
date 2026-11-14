@@ -216,7 +216,16 @@ impl<'a> BoneTraceCtx<'a> {
     }
 }
 
-/// One client's skeleton under the current stamp (`GameHost::dobj_posed`):
+/// `r.currentAngles` as a rotation, each angle turned to radians by the
+/// double `pi / 180` and rounded to a float, as `AngleVectors` does
+/// (`x87::radians`).
+pub fn body_frame(angles: [f32; 3]) -> Quat {
+    let [p, y, r] = angles.map(vcod_common::x87::radians);
+    Quat::from_euler(glam::EulerRot::ZYX, y, p, r)
+}
+
+/// One client's skeleton under the current stamp (`GameHost::dobj_posed`)
+/// and his `r.currentAngles`:
 /// when each bone was first posed and by which build. Each build that finds
 /// a bone missing runs the DObj's controller hook, which on 1.5 and UO eases
 /// the controls one more step from where the last build left them, in this
@@ -232,11 +241,16 @@ pub struct DobjStamps {
     /// The controls the last build eased to (the record's `+0x408` block),
     /// kept across stamps: the next build eases on from them.
     record: Option<vcod_common::playerpose::Controllers>,
-    /// `r.currentAngles`, which places the DObj, while a `setPlayerAngles`
-    /// holds them (pitch and roll too) until the client's next cmd writes
-    /// `(0, view yaw, 0)` back (`SetClientViewAngle` 0x4209f,
-    /// `ClientThink_real` 0x405e2; cod11-combat.md 3.7).
-    angles: Option<[f32; 3]>,
+    /// The player's `r.currentAngles`, degrees: what places his DObj for a
+    /// trace or a tag (cod11-combat.md 3.7) and what his script `angles`
+    /// field reads and writes (`GameHost::get_field`). Each cmd writes
+    /// `(0, view yaw, 0)` (`ClientThink_real` 0x405e2); `SetClientViewAngle`
+    /// (0x4209f: `setPlayerAngles`, a turret mount) and `Scr_SetAngles`
+    /// (0x5c660) write all three, held until his next cmd. A UO rider's end
+    /// frame turns them to the seat tag (game.mp.uo 0x9048f), but his next
+    /// cmd writes them back (0x41c74..0x41ca7) before another client's
+    /// round meets him.
+    angles: [f32; 3],
 }
 
 impl DobjStamps {
@@ -304,25 +318,23 @@ impl DobjStamps {
         inputs
     }
 
-    /// `setPlayerAngles` wrote `r.currentAngles`; `None` once a cmd wrote
-    /// them back.
-    pub fn set_angles(&mut self, angles: Option<[f32; 3]>) {
+    /// `r.currentAngles`, degrees.
+    pub fn angles(&self) -> [f32; 3] {
+        self.angles
+    }
+
+    pub fn set_angles(&mut self, angles: [f32; 3]) {
         self.angles = angles;
     }
 
-    /// The rotation a trace poses `body` in: `r.currentAngles`.
-    pub fn frame(&self, body: &HitBody) -> Quat {
-        self.angles
-            .map_or_else(|| body.frame(), vcod_common::turretpose::angles_quat)
+    /// The rotation a trace or a tag poses the body in.
+    pub fn frame(&self) -> Quat {
+        body_frame(self.angles)
     }
 
-    /// [`Self::frame`]'s axes as `AnglesToAxis` rounds them
-    /// (`x87::angles_to_axis`).
-    pub fn axis_stored(&self, body: &HitBody) -> [Vec3; 3] {
-        self.angles.map_or_else(
-            || body.axis_stored(),
-            |a| vcod_common::x87::angles_to_axis(a.into()),
-        )
+    /// [`Self::frame`]'s axes as `AnglesToAxis` rounds them.
+    pub fn axis_stored(&self) -> [Vec3; 3] {
+        vcod_common::x87::angles_to_axis(self.angles.into())
     }
 
     /// The controls the last build eased to, which the end frame's record
@@ -1315,39 +1327,17 @@ impl Traced {
 /// playing client has one: its contents are BODY, the bit the bullet and the
 /// blast masks both carry, where a corpse's CORPSE and a dead or spectating
 /// client's 0 meet neither.
-/// The link half (origin, yaw, box) is what the body's last cmd left, the pose
-/// half what its last end frame did (section 16.1).
+/// The link half (origin, box) is what the body's last cmd left, the pose
+/// half what its last end frame did (section 16.1). Its turn is the
+/// player's `r.currentAngles`, which `DobjStamps` holds.
 #[derive(Clone, Debug)]
 pub struct HitBody {
     pub slot: usize,
     /// `r.currentOrigin`, at the feet.
     pub origin: Vec3,
-    /// Radians. A player entity is yaw-only.
-    pub yaw: f32,
     pub mins: Vec3,
     pub maxs: Vec3,
     pub pose: BodyPose,
-}
-
-impl HitBody {
-    /// `r.currentAngles` as a rotation, what a trace poses the body in: the
-    /// yaw the last cmd wrote. A UO rider's end frame turns it to the seat
-    /// tag (game.mp.uo 0x9048f), but his next cmd writes `(0, view yaw, 0)`
-    /// back (0x41c74..0x41ca7) before another client's round meets him.
-    pub fn frame(&self) -> Quat {
-        Quat::from_rotation_z(self.yaw)
-    }
-
-    /// 1.5b's and UO's `AnglesToAxis` of `(0, yaw, 0)` (UO 0x806a46e over
-    /// `AngleVectors` 0x80674ad): the yaw's float radians, its `fsincos`
-    /// stored, forward, left and up.
-    pub fn axis_stored(&self) -> [Vec3; 3] {
-        let (s, c) = (
-            f64::from(self.yaw).sin() as f32,
-            f64::from(self.yaw).cos() as f32,
-        );
-        [Vec3::new(c, s, 0.0), Vec3::new(-s, c, 0.0), Vec3::Z]
-    }
 }
 
 /// What `ClientEndFrame`'s `BG_PlayerAnimation` hands the DObj: its models,
@@ -1718,12 +1708,10 @@ pub fn trace_bodies_faced(
             continue;
         };
         let stamps = posed.as_deref_mut().and_then(|p| p.get_mut(body.slot));
-        let frame = stamps
-            .as_deref()
-            .map_or_else(|| body.frame(), |s| s.frame(body));
-        let axis_stored = stamps
-            .as_deref()
-            .map_or_else(|| body.axis_stored(), |s| s.axis_stored(body));
+        // `r.currentAngles`; a trace with no host poses at zero.
+        let angles = stamps.as_deref().map_or([0.0; 3], DobjStamps::angles);
+        let frame = body_frame(angles);
+        let axis_stored = vcod_common::x87::angles_to_axis(angles.into());
         let pose = stamped_pose(&skel, body, anims, rigs, fs, *now_ms, stamps);
         // Into the body's own frame: its `tag_origin` sits at the feet.
         let (ls, le) = if arith == Arith::Stored {
@@ -2411,17 +2399,8 @@ mod tests {
     fn a_strike_on_a_turned_body_lands_on_retails_bits() {
         let b = |h: u32| f32::from_bits(h);
         let mut stamps = DobjStamps::default();
-        stamps.set_angles(Some([0.0, 225.0, 0.0]));
-        let body = HitBody {
-            slot: 0,
-            origin: Vec3::ZERO,
-            yaw: b(0x407b53d1),
-            mins: Vec3::ZERO,
-            maxs: Vec3::ZERO,
-            pose: BodyPose::default(),
-        };
-        let axis = stamps.axis_stored(&body);
-        assert_eq!(axis, body.axis_stored());
+        stamps.set_angles([0.0, 225.0, 0.0]);
+        let axis = stamps.axis_stored();
         assert_eq!(axis[0].x.to_bits(), 0xbf3504f4);
         let start = Vec3::new(b(0x44b2bde3), b(0x4526e093), b(0x409d9b68));
         let end = Vec3::new(b(0x44b69c49), b(0x4528cfc7), b(0xc15acbe7));
@@ -2870,6 +2849,18 @@ mod tests {
         assert_eq!((45.0 * t.multiplier("head")) as i32, 67);
     }
 
+    /// `GameHost::dobj_posed` for slots facing `yaws` (degrees), the
+    /// `r.currentAngles` each one's last cmd wrote.
+    fn facing(yaws: &[f32]) -> Vec<DobjStamps> {
+        yaws.iter()
+            .map(|&y| {
+                let mut s = DobjStamps::default();
+                s.set_angles([0.0, y, 0.0]);
+                s
+            })
+            .collect()
+    }
+
     fn new_for_test(origin: [f32; 3], yaw_deg: f32) -> ClientSim {
         let mut sim = ClientSim::spectator(origin, yaw_deg, [0; 3]);
         sim.become_player(origin, yaw_deg, [0; 3]);
@@ -3057,13 +3048,14 @@ mod tests {
         );
         settle(&mut b);
         let mut rigs = HitRigs::default();
+        let mut posed = facing(&[0.0, 180.0]);
         let mut ctx = BoneTraceCtx {
             fs: &fs,
             anims: &anims,
             rigs: &mut rigs,
             arith: vcod_common::patch::Arith::Kept,
             now_ms: 0,
-            posed: None,
+            posed: Some(&mut posed),
         };
         let mut rng = 1u64;
         let r = bullet_fire(
@@ -3119,13 +3111,14 @@ mod tests {
         );
         let mut rigs = HitRigs::default();
         let mut trace_at = |z: f32, body: &HitBody| {
+            let mut posed = facing(&[0.0, 180.0]);
             let mut ctx = BoneTraceCtx {
                 fs: &fs,
                 anims: &anims,
                 rigs: &mut rigs,
                 arith: vcod_common::patch::Arith::Kept,
                 now_ms: 50,
-                posed: None,
+                posed: Some(&mut posed),
             };
             trace_bodies(
                 Vec3::new(-100.0, 0.0, z),
@@ -3176,13 +3169,14 @@ mod tests {
         let body = b.hit_body(1).expect("a live body");
         let mut rigs = HitRigs::default();
         let mut trace = |limit: f32| {
+            let mut posed = facing(&[0.0, 180.0]);
             let mut ctx = BoneTraceCtx {
                 fs: &fs,
                 anims: &anims,
                 rigs: &mut rigs,
                 arith: vcod_common::patch::Arith::Kept,
                 now_ms: 50,
-                posed: None,
+                posed: Some(&mut posed),
             };
             trace_bodies(
                 Vec3::new(-100.0, 0.0, 30.0),
@@ -4106,27 +4100,10 @@ mod tests {
         HitBody {
             slot,
             origin: Vec3::new(x, 0.0, 0.0),
-            yaw: 0.0,
             mins: PLAYER_MINS.into(),
             maxs: PLAYER_MAXS.into(),
             pose: Default::default(),
         }
-    }
-
-    /// A rider's trace frame is the yaw his last cmd wrote (game.mp.uo
-    /// 0x41c74), not the seat tag his end frame turned it to: the
-    /// controllers read the tag, the frame does not.
-    #[test]
-    fn a_rider_is_posed_in_his_cmds_yaw() {
-        let mut body = box_body(0, 0.0);
-        body.yaw = 1.0;
-        body.pose.seat = Some(vcod_common::playerpose::BodySeat::new(
-            [-30.0, 90.0, 0.0],
-            1,
-            1,
-            0.0,
-        ));
-        assert!((body.frame() * Vec3::X - Vec3::new(1f32.cos(), 1f32.sin(), 0.0)).length() < 1e-5);
     }
 
     /// `CanDamage` traces with the victim as its pass entity, so another
@@ -4215,13 +4192,14 @@ mod tests {
                 maxs: PLAYER_MAXS.into(),
                 eye: back_feet + Vec3::Z * 60.0,
             };
+            let mut posed = facing(&[yaw.unwrap_or(0.0), 225.0]);
             let mut ctx = BoneTraceCtx {
                 fs: &fs,
                 anims: &anims,
                 rigs: &mut rigs,
                 arith: vcod_common::patch::Arith::Kept,
                 now_ms: 0,
-                posed: None,
+                posed: Some(&mut posed),
             };
             let hits = radius_damage(
                 at,

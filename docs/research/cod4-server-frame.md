@@ -404,9 +404,20 @@ jobs, each run pinned to cores 0-7 (`taskset`) under a memory cap.
   `frame/touch triggers`, `frame/scripts`, `frame/script ops`,
   `frame/entities`, `frame/trace bodies`, `frame/mantle and hud`,
   `frame/end frames`, `frame/vote and archive`, `frame/flush` with the
-  `game log` write), `frame out`, `timeouts`, `messages` (`messages/snapshot`,
-  `messages/snapshot world`), `archive`, `heartbeat`. Off it costs a
-  relaxed load a phase.
+  `game log` write; on CoD2 `frame/drops`, `frame/scripts`,
+  `frame/test clients`, `frame/mantle and weapons`, `frame/missiles`,
+  `frame/corpses`, `frame/spawns`, `frame/script ops`, `frame/end frames`
+  with `end frames/animate`, `end frames/look at`, `end frames/spectators
+  and turrets` and `end frames/entity states`, `frame/identify`,
+  `frame/vote`), `frame out`, `timeouts`, `messages` (`messages/snapshot`,
+  `messages/snapshot world`), `archive`, `heartbeat`. Every game's script
+  pass splits into `scripts/threads` (`threads/client events`,
+  `threads/notifies`, `threads/triggers`, which runs the woken threads,
+  and `threads/vm`) and `scripts/entity pass`; a script trace into
+  `bullet/world`, `bullet/models` (`models/script`, `models/vehicles`)
+  and `bullet/bodies`; CoD2's locational trace into `trace/world`,
+  `trace/statics`, `trace/entities` and `trace/bodies` (`bodies/pose`,
+  `bodies/bones`). Off it costs a relaxed load a phase.
 - `tick_profile::Split` splits a tick's wall time off
   `/proc/thread-self` into run (on a CPU), queued (runnable, no CPU),
   asleep (the rest), minor and major faults and voluntary switches.
@@ -414,7 +425,9 @@ jobs, each run pinned to cores 0-7 (`taskset`) under a memory cap.
   thread's kernel wait channel and the syscall every other thread of the
   process is in.
 - `vcod-server` with `VCOD_TICK_PROFILE_MS=<ms>` logs each tick past it;
-  `bot_match GAME=cod4 SPIKE_MS=<ms>` prints them; the soak logs every
+  `bot_match GAME=cod2|cod4 SPIKE_MS=<ms>` prints them (`RESTART=<n>`
+  on CoD2 runs a `map_restart` every `n` ticks, a spawn wave each); the
+  soak logs every
   tick past `VCOD_SOAK_TICK_LOG_MS` (100), with `VCOD_SOAK_TICK_WATCH=1`
   the waits, and `VCOD_SOAK_CLIENT_LOG_MS` the client's slow frames
   beside them, all stamped with the seconds since the process started.
@@ -515,6 +528,55 @@ of a level, which waits on the graph it asks for, is left out. VERIFIED
   the first soak's 73 s tick stays unreproduced, and this section's
   harness reading (the client's draws in the same process) is the one
   left standing. INFERRED.
+
+### The spawn wave
+
+A live CoD2 server with bots logged a 113 ms tick whose `frame` was
+103.9 ms with only 8.4 ms named (`models/script` x992), on a CPU, 1548
+minor faults. The phases above, added for it, name the rest. VERIFIED
+(the `bot_match` logs below, `GAME=cod2 RESTART=20`, seed 1).
+
+- It is the frame every player spawns in: a level's start or a
+  `map_restart`. Each spawn runs the gametype's spawn script, and
+  `getSpawnpoint_DM` and `_NearTeam` (`maps/mp/gametypes/_spawnlogic.gsc`,
+  CoD2's `iw_*.iwd`) weigh every spawn point against every other player,
+  then sight-check up to 15 of them with `bulletTracePassed`
+  (`maxNumSightChecks = 15`). VERIFIED (the script). Retail runs the same
+  script and traces in that frame. INFERRED.
+- mp_toujane `dm`, 60 bots, the wave's frame: about 180 ms on a CPU,
+  2735 minor faults. `frame/scripts` (`threads/triggers`, the woken spawn
+  threads) holds two thirds of it, `end frames/look at` the rest. Timed
+  per builtin for one run: 70379 `distance` and 54688 `distanceSquared`
+  calls, 905 script traces (845 `bulletTracePassed`); the builtins all
+  together under a fifth of the script time, the interpreter the rest.
+  VERIFIED (the logs). The 113 ms tick fits a server near 64 clients,
+  15 traces a spawn. INFERRED.
+- `end frames/look at` is `ClientEndFrame`'s crosshair trace, 15000 units
+  a client: its time is `trace/bodies`' `bodies/pose`, every body's
+  skeleton built once a frame on the first trace near it
+  (`G_DObjCalcPose`, lnxded 0x811e3c0): 95 of the 103 ms, in 80 calls
+  for 60 bodies. VERIFIED (the logs).
+- Each script trace walked every entity for the `script_model`s
+  (`GameHost::placed_script_models`, cod11-combat.md 2.7). That walk is
+  now kept until `ObjectTable::edits` moves (a spawn, a free, any
+  `get_mut`), and the origin, angles, unlink, `takedamage` and contents
+  are still read per call: 91% of the wave's calls reuse it,
+  `models/script` fell from 2.5 to 0.6 ms a tick on average. The wave's
+  CPU time stays within its spread (seven waves, 162 to 191 ms before,
+  150 to 181 after): the interpreter is the wave. VERIFIED (the logs).
+- The same wave on CoD4 (mp_crash `war`, 40 bots, the prematch's end,
+  tick 60) spent 74 ms of a 120 ms `frame/scripts` in 37880 `tableLookup`
+  calls, each a walk of the table's rows. A per-column index (each cell's
+  lowercased text to its first row, `Cod4HostState::table_index`) gives
+  the walk's row: 24 ms. VERIFIED (the logs). CoD1 1.1's `dm` on
+  mp_carentan, 40 bots, has no wave past 30 ms (`frame` max 27.5 ms).
+  VERIFIED (the logs).
+- Every pair of runs, CoD1, CoD2 (`dm`, `tdm`, `sd`, `ctf`, `hq`) and
+  CoD4, printed the same `DIGEST=1` line before and after. VERIFIED.
+- Left: the interpreter's cost per op and the bodies' pose builds. A
+  field read (`GameHost::get_field`'s route, `fields::route_entity_cod2`)
+  was 13% of the script's samples. INFERRED (75 gdb stack samples of a
+  dev build).
 
 ## 10. Full servers, every game
 

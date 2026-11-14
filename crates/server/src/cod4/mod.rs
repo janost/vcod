@@ -39,7 +39,7 @@ use vcod_common::net::codec::MsgWriter;
 use vcod_common::net::netchan::{NetchanParams, ServerNetchan};
 use vcod_common::net::protocol::{SnapshotHead, WireGame};
 
-use crate::engine::link;
+use crate::engine::{commands, link};
 
 /// The frame at `sv_fps` 20, the dvar's default; a server steps
 /// [`Cod4Server::frame_ms`].
@@ -121,7 +121,7 @@ pub struct Client {
     bot: bool,
     last_connect_ms: i32,
     /// Each reliable ring slot's `svscmd_type`: false for
-    /// `SV_CMD_CAN_IGNORE` ([`add_server_command`]).
+    /// `SV_CMD_CAN_IGNORE` ([`commands::add`]).
     reliable_kept: [bool; MAX_RELIABLE_COMMANDS],
     /// The file in flight (cod4-handshake.md 11).
     download: download::Download,
@@ -1365,7 +1365,14 @@ impl Cod4Server {
         let Some(c) = self.core.clients[slot].as_mut() else {
             return;
         };
-        if !add_server_command(c, text, !ignorable(text)) {
+        let active = c.state == State::Active;
+        if !commands::add(
+            &mut c.link,
+            &mut c.reliable_kept,
+            active,
+            text,
+            !ignorable(text),
+        ) {
             self.drop_client(slot, "EXE_SERVERCOMMANDOVERFLOW");
         }
     }
@@ -1779,100 +1786,6 @@ fn ignorable(text: &str) -> bool {
         text.as_bytes().first(),
         Some(b'J' | b'G' | b'H' | b'I' | b'c' | b'e' | b'f' | b'g' | b'h' | b'i' | b' ')
     )
-}
-
-/// `SV_AddServerCommand` (0x81769b2) on one client's ring:
-/// - A client not `CS_ACTIVE`, or more than 63 commands past its ack
-///   (0x81769df), first loses its unsent ignorable commands, and an
-///   ignorable command is then not queued at all.
-/// - A reliable command takes the place of the first unsent reliable one
-///   it [`supersedes`]: that one leaves the ring and the new one goes last
-///   (the walk capture's `u L u L` read `u L`, and its `C 40` from the
-///   frag's give follows the next `J`, VERIFIED live).
-///
-/// False when the ring would hold more than 128 unacked commands
-/// (retail's `== 0x81` test); the caller drops the client.
-fn add_server_command(c: &mut Client, text: &str, reliable: bool) -> bool {
-    let pending = c.link.netchan.reliable_sequence as i32 - c.link.reliable_ack;
-    if c.state != State::Active || pending > 63 {
-        edit_unsent(c, |cmds| cmds.retain(|(_, kept)| *kept));
-        if !reliable {
-            return true;
-        }
-    }
-    let stale = unsent(c)
-        .map(ring_slot)
-        .position(|s| c.reliable_kept[s] && supersedes(text, &c.link.netchan.reliable[s]));
-    if let Some(i) = stale {
-        edit_unsent(c, |cmds| drop(cmds.remove(i)));
-    }
-    let seq = c.link.netchan.reliable_sequence as i32 + 1;
-    if seq - c.link.reliable_ack > MAX_RELIABLE_COMMANDS as i32 {
-        return false;
-    }
-    c.link.netchan.reliable_sequence = seq as u32;
-    let slot = ring_slot(seq);
-    c.link.netchan.reliable[slot] = text.to_string();
-    c.reliable_kept[slot] = reliable;
-    true
-}
-
-/// Whether reliable `new` replaces the unsent reliable `old`
-/// (0x8176a76..0x8176bff): one letter, not a configstring chunk `x`..`z`
-/// (0x8176abe), and then the same text after it (0x8176adb), or a letter
-/// any later one replaces (`C D a b o p q r t`, the jump table at
-/// 0x82326a8), or a `d`/`v` naming the same first word (0x8176b85).
-fn supersedes(new: &str, old: &str) -> bool {
-    let (new, old) = (new.as_bytes(), old.as_bytes());
-    let Some((&letter, rest)) = new.split_first() else {
-        return false;
-    };
-    if old.first() != Some(&letter) || (b'x'..=b'z').contains(&letter) {
-        return false;
-    }
-    fn first_word(t: &[u8]) -> Option<&[u8]> {
-        t.get(2..).and_then(|r| r.split(|&b| b == b' ').next())
-    }
-    rest == &old[1..]
-        || match letter {
-            b'C' | b'D' | b'a' | b'b' | b'o' | b'p' | b'q' | b'r' | b't' => true,
-            b'd' | b'v' => first_word(new) == first_word(old),
-            _ => false,
-        }
-}
-
-/// A sequence number's slot in the 128-command ring.
-fn ring_slot(seq: i32) -> usize {
-    seq as usize & (MAX_RELIABLE_COMMANDS - 1)
-}
-
-/// The sequence numbers no message has carried yet:
-/// `reliableSent + 1 ..= reliableSequence`.
-fn unsent(c: &Client) -> std::ops::RangeInclusive<i32> {
-    c.link.reliable_sent + 1..=c.link.netchan.reliable_sequence as i32
-}
-
-/// Takes the unsent commands (text, reliable) out of the ring, lets `edit`
-/// drop some, and packs the rest back from `reliableSent + 1`, the
-/// sequence ending on the last of them.
-fn edit_unsent(c: &mut Client, edit: impl FnOnce(&mut Vec<(String, bool)>)) {
-    let mut cmds: Vec<(String, bool)> = unsent(c)
-        .map(ring_slot)
-        .map(|s| {
-            (
-                std::mem::take(&mut c.link.netchan.reliable[s]),
-                c.reliable_kept[s],
-            )
-        })
-        .collect();
-    edit(&mut cmds);
-    let mut seq = c.link.reliable_sent;
-    for (text, kept) in cmds {
-        seq += 1;
-        c.link.netchan.reliable[ring_slot(seq)] = text;
-        c.reliable_kept[ring_slot(seq)] = kept;
-    }
-    c.link.netchan.reliable_sequence = seq as u32;
 }
 
 /// A userinfo's `name`.

@@ -209,6 +209,9 @@ The weapon byte is the client's own pick
   overlays, a mounted gun's reticle, `cg_crosshairDynamic`, the team
   colours over a player once `cg_friendlyNameFadeIn` or
   `cg_enemyNameFadeIn` has passed (17).
+- Names over heads: the player under the crosshair and every teammate
+  in sight, sized by distance, in team colours with the rank icon
+  (17.1).
 - World waypoints (Bomb Squad's icon over enemy claymores and C4) and
   offscreen ones with a pointer.
 - The killcam's letterbox and title; the prematch's countdown text. The
@@ -360,8 +363,9 @@ against a retail kill capture, entity numbers included:
 - Melee swings and hurts; `kill` works under `sv_cheats` (10.4, 10.5).
 - Retail captures gate a rocket's flight, a grenade's throw back, a
   prone death and a killcam on a helicopter-style kill (15). A hit's push
-  and timers land a frame late, and a dropped weapon falls straight, not
-  from the hand (12, 15).
+  and timers land a frame late (12, 15). A dropped weapon leaves the
+  hand, falls and comes to rest on its side as 1.7's does (6.1). A thrown
+  grenade can pass a standing body's arms that retail's meets (15).
 
 **Voice** ([cod4-voice.md](../research/cod4-voice.md) 3). Relayed under
 `sv_voice 1` (off by default, as retail): team, dead to dead,

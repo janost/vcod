@@ -565,9 +565,11 @@ otherwise.
   `GameHost::dobj_posed` (`combat::DobjStamps`). Each client packet (on
   retail the bots' pass as one) and `G_RunFrame` start a stamp. On 1.5 and
   UO each build eases the controls a step from the last build's, so a body
-  nothing traces keeps its controls. `setPlayerAngles` tilts the traced body
-  by its pitch and roll until his next cmd (cod11-combat.md 3.7). A new trace
-  that skips the stamps poses a body retail never built.
+  nothing traces keeps its controls. The stamps hold the player's
+  `r.currentAngles`, which his script `angles` field reads and writes:
+  `setPlayerAngles` or a script write tilts the traced body by its pitch and
+  roll until his next cmd (cod11-combat.md 3.7). A new trace that skips the
+  stamps poses a body retail never built, at angles 0.
 
 ### Assets, rendering, sound
 

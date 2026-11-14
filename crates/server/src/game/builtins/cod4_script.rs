@@ -926,7 +926,20 @@ pub(crate) fn posed_tag(host: &GameHost, id: EntId, name: &str) -> Option<(Vec3,
         let m = Mat3::from_quat(turn);
         return Some((at, [m.x_axis, m.y_axis, m.z_axis]));
     }
-    let p = host.cod4().posed_bodies.iter().find(|p| p.entity == id.0)?;
+    posed_body_tag(host, id.0, name)
+}
+
+/// [`posed_tag`] of the playing body `entity` the last frame posed.
+pub(crate) fn posed_body_tag(
+    host: &GameHost,
+    entity: u32,
+    name: &str,
+) -> Option<(Vec3, [Vec3; 3])> {
+    let p = host
+        .cod4()
+        .posed_bodies
+        .iter()
+        .find(|p| p.entity == entity)?;
     let skel = &p.rig.skeleton;
     let i = skel
         .bones()

@@ -25,6 +25,11 @@ struct Player {
     /// Every server command and OOB line, in arrival order, gamestates as
     /// `gamestate <serverid>`.
     log: Vec<String>,
+    /// Frames a new map's gamestate keeps the client busy loading: it
+    /// sends nothing and reads nothing.
+    load_frames: usize,
+    /// Frames left of the current load.
+    loading: usize,
 }
 
 struct Rig {
@@ -36,10 +41,16 @@ struct Rig {
 
 impl Rig {
     fn new(map: &str, gametype: &str, set: &[(&str, &str)]) -> Option<Rig> {
+        Rig::with_slots(map, gametype, set, 4)
+    }
+
+    /// [`Rig::new`] with `slots` client slots.
+    fn with_slots(map: &str, gametype: &str, set: &[(&str, &str)], slots: usize) -> Option<Rig> {
         let fs = Rc::new(vcod_common::testing::cod2_fs()?);
         let now = Instant::now();
         let mut cfg = super::tests::cfg(map);
         cfg.gametype = gametype.into();
+        cfg.max_clients = slots;
         let mut sv = Cod2Server::new(cfg, 7, now);
         sv.exec_default_cfg(&*fs);
         sv.set_cvar("sv_pure", "0");
@@ -71,6 +82,8 @@ impl Rig {
                 team,
                 buttons: 0,
                 log: Vec::new(),
+                load_frames: 0,
+                loading: 0,
             });
         }
         Some(rig)
@@ -81,6 +94,10 @@ impl Rig {
     fn run(&mut self, secs: f32) {
         for _ in 0..(secs * 20.0) as usize {
             for p in self.players.iter_mut() {
+                if p.loading > 0 {
+                    p.loading -= 1;
+                    continue;
+                }
                 let pkt = if p.cl.parser.gamestate.is_some() {
                     let base = p.cl.parser.snapshot().map_or(0, |s| s.server_time);
                     let mut cmd = p.cl.idle_cmd(base + FRAME_MS);
@@ -98,6 +115,9 @@ impl Rig {
                 let Some(p) = self.players.iter_mut().find(|p| p.addr == to) else {
                     continue; // a bot's, which has no address
                 };
+                if p.loading > 0 {
+                    continue;
+                }
                 if let Some(pl) = oob::payload(&pkt) {
                     p.log.push(format!("oob {}", latin1(pl).replace('\n', " ")));
                     continue;
@@ -105,6 +125,10 @@ impl Rig {
                 let parsed = p.cl.receive(&pkt).expect("a message that parses");
                 let Some(parsed) = parsed else { continue };
                 if parsed.gamestate {
+                    // vcod's client loads the map off a new gamestate.
+                    if p.log.iter().any(|l| l.starts_with("gamestate ")) {
+                        p.loading = p.load_frames;
+                    }
                     let gs = p.cl.parser.gamestate.as_ref().unwrap();
                     p.log.push(format!("gamestate {}", p.cl.server_id()));
                     let map = vcod_common::net::info_value_for_key(gs.configstring(0), "mapname")
@@ -780,4 +804,38 @@ fn bots_play_again_after_every_level_change() {
     assert_eq!(rig.sv.game.cfg.map, "mp_carentan");
     rig.assert_playing("callvote map");
     rig.bots_playing(&bots, "callvote map");
+}
+
+/// A passed `callvote map` on a full server while both clients take 15 s
+/// to load the new map. A client loading sends no acknowledge, and the 50
+/// bots' reconnect prints pile up in its ring past the 128 slots. Retail
+/// queues a client not `CS_ACTIVE` only its type 1 commands
+/// (`SV_AddServerCommand` 0x8094750, cod2-protocol.md 3.4), so neither is
+/// dropped with `EXE_SERVERCOMMANDOVERFLOW` and both play on the new map.
+#[test]
+fn a_voted_map_change_keeps_a_slow_loading_client() {
+    let Some(mut rig) = Rig::with_slots("mp_toujane", "tdm", &[], 52) else {
+        return;
+    };
+    rig.run(4.0);
+    rig.assert_playing("joined");
+    let bots = rig.sv.add_bots(50, false);
+    assert_eq!(bots.len(), 50);
+    rig.run(4.0);
+    rig.assert_playing("bots joined");
+    for p in &mut rig.players {
+        p.load_frames = 15 * 20;
+    }
+    rig.players[0].cl.add_reliable("callvote map mp_carentan");
+    rig.run(1.0);
+    rig.players[1].cl.add_reliable("vote yes");
+    rig.run(25.0);
+    assert_eq!(rig.sv.game.cfg.map, "mp_carentan");
+    for p in &rig.players {
+        assert_eq!(
+            p.log.iter().filter(|l| l.starts_with("gamestate")).count(),
+            2
+        );
+    }
+    rig.assert_playing("callvote map");
 }

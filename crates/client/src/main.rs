@@ -26,6 +26,7 @@ mod cod4_hud;
 mod cod4_loading;
 mod cod4_look;
 mod cod4_menu;
+mod cod4_names;
 mod cod4_radar;
 mod cod4_scoreboard;
 mod cod4_spotshadow;

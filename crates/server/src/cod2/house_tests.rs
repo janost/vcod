@@ -340,9 +340,10 @@ fn an_off_lan_client_is_paced_by_its_rate_and_snaps() {
     let t = h.sv.time_ms();
     h.pump(&mut p, 20, false);
     assert!(p.gaps(t).iter().all(|&g| g == 100), "{:?}", p.gaps(t));
-    // A 6000-byte burst of commands: five fragments.
+    // A 6000-byte burst of commands no later one squashes: five
+    // fragments.
     for i in 0..60 {
-        h.sv.send_server_command(0, &format!("print \"{i:03} {}\"", "x".repeat(90)));
+        h.sv.send_server_command(0, &format!("v pace{i:03} \"{}\"", "x".repeat(90)));
     }
     let t = h.sv.time_ms();
     h.pump(&mut p, 60, false);
@@ -354,7 +355,10 @@ fn an_off_lan_client_is_paced_by_its_rate_and_snaps() {
     assert!(big.len() >= 4, "{:?}", p.sent);
     assert!(big.windows(2).all(|w| w[1].0 - w[0].0 == 350), "{big:?}");
     assert_eq!(
-        p.commands.iter().filter(|c| c.starts_with("print")).count(),
+        p.commands
+            .iter()
+            .filter(|c| c.starts_with("v pace"))
+            .count(),
         60
     );
 }

@@ -706,10 +706,9 @@ client's 0x94.
 `dropWeaponForDeath` drops the last droppable weapon through `dropItem`:
 an `ET_ITEM` (3) whose `index` is the weapon number (27), from the middle
 of the body's box along its yaw at `g_dropForwardSpeed` (10) and up at
-`g_dropUpSpeedBase` (10) (VERIFIED, the defaults), falling under gravity
-until a trace meets the world. INFERRED (`Drop_Item`, `LaunchItem`). The
-three `crandom` spreads are drawn and added (10.9); the start at
-`tag_weapon_right` and `G_RunItem`'s bounce are left out.
+`g_dropUpSpeedBase` (10) (VERIFIED, the defaults), falling under gravity. INFERRED (`Drop_Item`, `LaunchItem`). The three
+`crandom` spreads are drawn and added (10.9). The start at the hand's tag
+and `G_RunItem`'s fall and rest are 6.1.
 `itemWeaponSetAmmo(clip, stock)` keeps the counts. A living player whose
 box meets an item at rest and who holds the same weapon takes clip and
 stock into the reserve up to `maxAmmo` (+820), gets `EV_AMMO_PICKUP` (9),
@@ -733,8 +732,9 @@ prints.
 
 ### 6.1 The start and the fall on 1.7
 
-Read for a port; ours still starts at the box's middle and runs a plain
-arc to a rest.
+vcod: `builtins::cod4_combat::launch_weapon` (the start) and
+`game::cod4::item` (`G_RunItem`), held to retail's by `cod4::capture_ab`'s
+prone and killcam runs. VERIFIED (the gates).
 
 - `PlayerCmd_dropItem` (0x80aaf2a) passes `Drop_Weapon` (0x8091642) a
   tag, the scr string at 0x836ef4c when the script gives none (stock
@@ -751,15 +751,29 @@ arc to a rest.
   body's x, y and `z + (maxs.z - mins.z) / 2`; `trType` 5 from the level
   time at the launch velocity; flags 0x10; `nextthink` 1000 on.
   VERIFIED (the instructions).
+- `LaunchItem` leaves `r.ownerNum` 0 and `clipmask` 0, so the item's own
+  traces pass no entity and take mask 0x491; its `groundEntityNum` stays
+  `G_Spawn`'s 0 until the rest. VERIFIED (the instructions, the stores
+  0x8091392..0x809153e). Retail's flying item reads ground 0. VERIFIED
+  live.
+- Before the spawn `LaunchItem` walks a list of the dropped weapons
+  (0x8370c04, its length the dvar at 0x84bc29c) and, with no free slot,
+  frees the one farthest from every playing client (0x809122e..0x809135c).
+  VERIFIED (the instructions). INFERRED that the dvar is
+  `g_maxDroppedWeapons` (16). vcod: not ported.
 - With the tag found (`G_DObjGetWorldTagPos`, 0x80cc7ba), `Drop_Weapon`
   traces the item's box from the body's box middle (`currentOrigin +
   (mins + maxs) / 2`) to the tag's origin, mask the item's clipmask or
   0x491, the body passed, and puts `trBase` and the origin at the trace's
   end, `trTime` the level time; either way the item takes the body's
   `currentAngles` (0x80918b1..0x80919f7). VERIFIED (the instructions).
-- `G_RunItem` (0x80908bc), each frame: with no ground (or a freed one) a
-  resting item falls from where it is (`trType` 5 from now, no velocity),
-  unless flag 1 at +0x17c holds it (0x809091a..0x809096b). A stationary or
+- `G_RunItem` (0x80908bc), each frame: with no ground, or a ground entity
+  whose `pos.trType` is set, an item not already falling (`trType` 5 or
+  10) falls from where it is (`trType` 5 from now, no velocity), unless
+  flag 1 at +0x17c holds it (0x80908cb..0x809096b). VERIFIED (the
+  instructions). A client's entity always has a `trType`, so an item met
+  mid-air, its ground still 0, falls on from rest the next frame.
+  INFERRED. A stationary or
   linked item only thinks. A moving one evaluates its `pos` at the level
   time plus 50 (0x8090974..0x8090986); when that is under 0.1 units off
   (squared, 0x8209568) it aims one unit lower instead. It traces its box
@@ -777,11 +791,41 @@ arc to a rest.
   (0x8215d6c) when `index` is set, `G_SetAngle`, `G_SetOrigin` at the end,
   `groundEntityNum` the trace's entity, bit 0x100000 on that entity
   (0x8090ab0..0x8090bed). VERIFIED (the instructions).
+- The arithmetic. The move's end is `start + (goal - start) fraction` on
+  the stack; the slide adds `normal (1 - (goal - start) . normal)` to the
+  goal, kept, then stored, and traces from the stored end
+  (0x8090c92..0x8090d20). The 50 ms move's `trDelta` takes x off the
+  stack, y and z off their stored differences, each times 20 (0x8090d91..
+  0x8090dc7). At rest `left = normal x forward` stays on the stack and is
+  stored, `forward = left x normal` is stored (0x8090b18..0x8090b7a),
+  `forward` the old angles' `AngleVectors` (0x818ea3a). VERIFIED (the
+  instructions).
+- `AxisToAngles` (0x81951fe): pitch and yaw are the forward's
+  `vectoangles` (0x8191a72: yaw `180 / pi * atan2(y, x)` stored, then 360
+  or 0 added; pitch `-180 / pi * atan2(z, |xy|)` the same way, the flat
+  length unrounded). The roll turns the left back by the negated yaw and
+  pitch (`sinf`, `cosf` of the radians stored as floats; `a = x cos - y
+  sin` and `b = x sin + y cos` stored, the pitch's turn kept) and is
+  `-180 / pi * atan2(d, sqrt(b^2 + c^2))` (the float -180 at 0x820decc),
+  negated for `b` at least 0, else less 180 when positive and plus 180
+  when negative. VERIFIED (the instructions).
 - The prone run's item: (186, 2279, 246) at 46100 along
   (-104.9452, -103.4213, 8.3989); `trType` 3 at 46250 from
   (170, 2263, 239) along (-24.8587, -24.4981, -31.1728) for 50 ms; at rest
   from 46300 on (169, 2262, 237), yaw -134.9945 where it fell at
   -134.989, roll 90, ground 1022. VERIFIED live (`play-1.7-prone-*`).
+  Ours matches every word of both runs' items, on the live frames and the
+  killcam's, but the start's z on the prone run (247 against 246) and the
+  hit's `trDelta` on both. VERIFIED (the gates). The start is the posed
+  tag: ours poses the prone body's `tag_weapon_right` at z 246.538 at the
+  drop, and retail's hit, a fraction 0.2369 of its last step where ours's
+  is 0.2543 on the same floor, puts retail's tag 0.11 lower, at about
+  246.42. INFERRED (the two `trDelta`s). Ours's prone idle reads that z
+  some 250 ms of its breathing cycle earlier, so the anim's phase on the
+  server's body differs. INFERRED. On the standing body the start agrees
+  to a few thousandths (`trDelta` (4.3898, -0.9870, -39.2181) against
+  (4.3897, -0.9870, -39.2175)). VERIFIED (the gate). What sets the phase
+  of the dying body's pose on 1.7 is open.
 
 ## 7. The killcam
 
@@ -1378,8 +1422,8 @@ those anims.
 - A rocket's flight, the live grenade's throw back, a prone death's torso
   and a `killcamentity` killcam are gated against retail captures (15);
   what those gates still tolerate is 15's open list: the dropped weapon's
-  fall, a grenade's strike on a body, the second rocket's number, a
-  killcam's trim and its archived view.
+  start on a prone body, a grenade's strike on a body, the second rocket's
+  number and a killcam's archived view.
 - The use key's weapon swap is gated live on ours (cod4-gsc.md 9.1); its
   retail capture is uncommitted, so no A/B gate.
 - The terrain triangle normal's last bit.
@@ -1708,14 +1752,26 @@ What the captures fixed on ours:
 
 Open, with each gate's `GAPS`:
 
-- The dropped weapon (6): retail's leaves `trType` 5, then 3 for 50 ms, and
-  rests on its side (`apos` roll 90, ground 1022). VERIFIED live. What it
-  takes is in 6.1; ours's start and fall are still the box's middle and a
-  plain arc.
+- The dropped weapon (6.1): the start at the tag, the fall, the 50 ms move
+  and the rest on its side are ours too; what differs is the dying prone
+  body's tag, 0.11 high, and the hit's `trDelta` that follows from it on
+  both runs (`ITEM_TAG`). VERIFIED (the gates).
 - A grenade's strike on a standing body: the thrown back frag meets the
   shooter at 50100 (`EV_GRENADE_BOUNCE` parm 7, flesh, and the hurt) where
   ours flies on and comes to rest on the body (ground 1). VERIFIED live.
-  So `cod4_throwback_ab` stops at 50050. Not looked at.
+  So `cod4_throwback_ab` stops at 50050. `G_RunMissile` traces through
+  0x80b4020 (`SV_Trace` with a point box, the locational flag and
+  `bulletPriorityMap` 0x826ce60, 0x80973df and 0x809765b), the map ours's
+  `missile_trace` passes too. VERIFIED (the instructions). Retail's frag
+  stops 0.99 of the way along its 50100 step, at (128, 2122, 285), 13
+  units ahead of the shooter's origin (123, 2110, 236) at chest height;
+  its bounce, `trDelta` (26.759, 74.923, -171.269) at 0.2 of the speed,
+  reflects off a normal near (0.348, 0.808, -0.476), forward and down.
+  INFERRED (the reflection). Ours's posed hit boxes meet that segment
+  nowhere; extended it meets `torso_upper` at 1.25 along it. VERIFIED (a
+  trace on ours). So retail met a box ahead of the chest, a forearm or a
+  hand, that ours poses elsewhere. INFERRED. Which box, and why ours's
+  pose of the standing shooter misses it, are open.
 - The second rocket takes entity 317 on retail, 316 on ours; nothing
   either client saw held 316. VERIFIED live. Both runs' first rocket is
   315, shown 47350..50850, gone at 50900 with no event on either side;

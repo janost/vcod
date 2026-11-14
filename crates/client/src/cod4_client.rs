@@ -126,6 +126,10 @@ pub(crate) struct Cod4Client {
     shock_look: crate::play::cod4_shock::Look,
     /// `CG_ScanForCrosshairEntity`'s target and its times.
     crosshair: crate::cod4_crosshair::CrosshairTarget,
+    /// The friendly names' sightings, and this frame's names over heads
+    /// (`cod4_names`).
+    names: crate::cod4_names::OverheadNames,
+    overhead: (Vec<crate::cod4_names::Name>, crate::cod4_names::Dvars),
     turn: crate::play::cod2_shock::TurnCap,
     /// The voices `playLocalSound` started, by alias, for `stopLocalSound`.
     local_voices: HashMap<String, crate::audio::voices::VoiceId>,
@@ -290,6 +294,8 @@ impl Cod4Client {
             third_person: false,
             shock_look: crate::play::cod4_shock::Look::NONE,
             crosshair: Default::default(),
+            names: Default::default(),
+            overhead: Default::default(),
             turn: Default::default(),
             local_voices: HashMap::new(),
             trails_made: HashSet::new(),
@@ -325,6 +331,9 @@ impl Cod4Client {
             self.session.set_world(w);
         }
         self.players = Cod4Players::default();
+        // The level's start clears the friendly names' sightings (the
+        // memset of 0x7439d0 at `iw3mp.exe` 0x43fba8).
+        self.names = Default::default();
         self.session.legs_movetypes = self
             .bodies
             .as_ref()
@@ -735,6 +744,7 @@ impl Cod4Client {
             self.view_tags = Some((gun, *t));
         }
         self.depth_of_field(cx, &scene, cam);
+        self.names_frame(cx, &scene, cam);
         // `FX_CullElemForSpawn` tests each element's `spawnRange` against
         // the drawn camera (cod4-effects.md 5): without it every element
         // of an effect spawned, its near and far versions both.
@@ -1372,6 +1382,43 @@ impl Cod4Client {
         }
     }
 
+    /// This frame's names over heads (`cod4_names`) from the drawn view,
+    /// each over its posed `j_head` or its drawn origin; none while the
+    /// camera flies free.
+    fn names_frame(&mut self, cx: &Cod2Frame, scene: &Scene, cam: &FlyCamera) {
+        if self.free {
+            self.overhead.0.clear();
+            return;
+        }
+        let view = crate::cod4_names::View {
+            now: self.render_time,
+            eye: cam.pos,
+            forward: crate::camera::basis(cam.yaw, cam.pitch).0,
+            third_person: self.third_person,
+            pm_type: scene.view.pm_type,
+        };
+        let heads = &self.players.heads;
+        let origin = |n: u32| {
+            scene
+                .entities
+                .iter()
+                .find(|d| d.number == n)
+                .map(|d| d.origin)
+                .unwrap_or_default()
+        };
+        let dv = crate::cod4_names::Dvars::read(cx.shell);
+        let names = crate::cod4_names::session_frame(
+            &mut self.names,
+            &self.session,
+            view,
+            &self.crosshair,
+            &|n| heads.get(&n).copied(),
+            &origin,
+            &dv,
+        );
+        self.overhead = (names, dv);
+    }
+
     /// The drawn bodies' weapon tags and the mounted guns' flashes, by
     /// entity: where the others' shots flash and leave from.
     fn weapon_tags(&self) -> HashMap<u32, WeaponTags> {
@@ -1798,6 +1845,14 @@ impl Cod4Client {
                 tan: [1.0 / ndc(view.right).x, 1.0 / ndc(view.up).y],
                 size: [size.0, size.1],
             };
+            // The names over heads draw before the hudelems
+            // (`CG_Draw2D`, cod4-hud.md 17.1).
+            q.extend(self.hud.overhead_names(
+                &self.session,
+                &self.overhead.0,
+                &eye,
+                &self.overhead.1,
+            ));
             q.extend(
                 self.hud
                     .offscreen_waypoints(&self.session, &eye, self.render_time),

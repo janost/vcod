@@ -1058,7 +1058,7 @@ pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: 
         i.clip = counts.clip;
     }
     if let Some(line) = out.log {
-        log::info!("script: {line}");
+        log::debug!("script: {line}");
         // 1.1's `Weapon: %i %s` as is; 1.5's, UO's and CoD2's
         // `Weapon;%d;%d;%s;%s` and `Item;...` with the GUID (0), the slot,
         // the cleaned name and the item (cod11-map-cycle.md 9).

@@ -104,7 +104,7 @@ pub fn ent_f32(e: &EntityState, name: &str) -> f32 {
     f32::from_bits(ent_u32(e, name))
 }
 
-fn client_u32(c: &ClientState, name: &str) -> u32 {
+pub(crate) fn client_u32(c: &ClientState, name: &str) -> u32 {
     CLIENT_STATE
         .iter()
         .find(|f| f.name == name)
@@ -9572,6 +9572,187 @@ pub(crate) mod tests {
                 "{class}: right side at {left_edge}, expected {}",
                 640.0 + 2.0 * spread
             );
+        }
+    }
+
+    /// [`live_war_pair_on`]: the other player set down 100 ahead of us
+    /// (`standBefore`), our view on his chest for a second and then
+    /// turned away. The names over heads (`cod4_names`, cod4-hud.md 17.1)
+    /// run off the frame's crosshair scan as the client's do: an enemy's
+    /// crosshair name waits out `cg_enemyNameFadeIn` (250) and fades over
+    /// `cg_enemyNameFadeOut` (250), with no friendly name; a teammate's
+    /// friendly name is up at once and fades over
+    /// `cg_friendlyNameFadeOut` (1500). Each draws in its team colour,
+    /// across the point it projects to.
+    #[test]
+    fn cod4_live_names_over_heads_fade_by_team() {
+        use crate::cod4_names::{Dvars, OverheadNames, View, session_frame};
+        use crate::cod4_waypoints::Eye;
+        /// A frame's sighting `(start, last)` of him, his names' alphas
+        /// (the crosshair's, the friendly loop's) and whether their glyphs
+        /// took the expected colour across his projected point.
+        type Log = Vec<(i32, Option<(i32, i32)>, Option<f32>, Option<f32>, bool)>;
+        let run = |teams: [&'static str; 2]| {
+            let enemy = teams[0] != teams[1];
+            let mut crosshair = crate::cod4_crosshair::CrosshairTarget::default();
+            let mut names = OverheadNames::default();
+            let mut placed: Option<Duration> = None;
+            let mut on_since: Option<i32> = None;
+            let mut turned = false;
+            let mut log: Log = Vec::new();
+            let t0 = clk_now();
+            live_war_pair_on(
+                teams,
+                ["assault_mp,0", "assault_mp,0"],
+                Some(GSC),
+                move |f| {
+                    let t = since(t0);
+                    if f.level < 3000 || !f.both {
+                        return None;
+                    }
+                    let Some(at) = placed else {
+                        f.tx.send((1, "maps/mp/mp_crash_fx", "standBefore", "joiner"))
+                            .ok();
+                        placed = Some(t);
+                        return None;
+                    };
+                    if t - at < Duration::from_millis(300) {
+                        return None;
+                    }
+                    let him = f.e.gamestate()?.client_num as u32;
+                    if !turned {
+                        if on_since.is_none() && t - at > Duration::from_secs(6) {
+                            // A wall in the way: set him down again.
+                            placed = None;
+                            return None;
+                        }
+                        let ps = &f.e.client().snapshots.last()?.ps;
+                        let chest = vec3(|k| ps_f32(ps, &format!("origin[{k}]"))) + Vec3::Z * 40.0;
+                        let d = chest - f.eye;
+                        let yaw = d.y.atan2(d.x).to_degrees();
+                        let pitch = -d.z.atan2(d.truncate().length()).to_degrees();
+                        let wrap = |a: f32| (a + 540.0).rem_euclid(360.0) - 180.0;
+                        f.s.turn([wrap(pitch - f.angles.x), wrap(yaw - f.angles.y)]);
+                    }
+                    let scene = f.s.scene()?;
+                    let now = scene.render_time;
+                    let range = f.hud.enemy_crosshair_range(f.s, scene.view.view_weapon());
+                    let fades = crate::cod4_crosshair::NameFades::default();
+                    crosshair.scan(scene.crosshair_hit.as_ref(), range, now, &fades);
+                    let (p, y) = (scene.angles.x.to_radians(), scene.angles.y.to_radians());
+                    let forward = Vec3::new(p.cos() * y.cos(), p.cos() * y.sin(), -p.sin());
+                    let view = View {
+                        now,
+                        eye: scene.eye,
+                        forward,
+                        third_person: false,
+                        pm_type: scene.view.pm_type,
+                    };
+                    let dv = Dvars::default();
+                    let snap = f.s.client().snapshots.last()?;
+                    let origin = |n: u32| {
+                        snap.entities
+                            .iter()
+                            .find(|e| e.number() == n)
+                            .map_or(Vec3::ZERO, origin_of)
+                    };
+                    let drawn =
+                        session_frame(&mut names, f.s, view, &crosshair, &|_| None, &origin, &dv);
+                    let alpha = |x: bool| {
+                        drawn
+                            .iter()
+                            .find(|n| n.client == him && n.crosshair == x)
+                            .map(|n| n.alpha)
+                    };
+                    // His name's glyphs: in his colour, across where he
+                    // projects.
+                    let up = forward.cross(Vec3::Z).cross(forward).normalize();
+                    let eye = Eye {
+                        origin: scene.eye,
+                        forward,
+                        left: up.cross(forward),
+                        up,
+                        tan: [0.75, 0.5625],
+                        size: [1280.0, 960.0],
+                    };
+                    let rgb = f.hud.team_rgb(
+                        f.s,
+                        match enemy {
+                            true => "g_TeamColor_EnemyTeam",
+                            false => "g_TeamColor_MyTeam",
+                        },
+                    );
+                    let mine: Vec<_> = drawn.iter().filter(|n| n.client == him).copied().collect();
+                    let quads = f.hud.overhead_names(f.s, &mine, &eye, &dv);
+                    // Behind the eye it draws nothing (0x42d6d0).
+                    let drawn_right = mine.first().is_none_or(|n| {
+                        let Some(px) = eye.project(n.at()) else {
+                            return quads.is_empty();
+                        };
+                        let glyphs: Vec<_> = quads
+                            .iter()
+                            .filter(|q| q.rgba[..3] == rgb && q.rgba[3] == n.alpha)
+                            .collect();
+                        let xs = glyphs.iter().flat_map(|q| q.verts.iter().map(|v| v[0]));
+                        let (lo, hi) =
+                            xs.fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(x), b.max(x)));
+                        !glyphs.is_empty() && lo < px.x && px.x < hi
+                    });
+                    let (who, start, last) = crosshair.sighting();
+                    let sighting = (who == him).then_some((start, last));
+                    log.push((now, sighting, alpha(true), alpha(false), drawn_right));
+                    let named = alpha(enemy).is_some_and(|a| a == 1.0);
+                    if named && on_since.is_none() {
+                        on_since = Some(now);
+                    }
+                    if !turned && on_since.is_some_and(|s| now - s > 1000) {
+                        turned = true;
+                        f.s.turn([0.0, 180.0]);
+                    }
+                    (turned && on_since.is_some_and(|s| now - s > 3000)).then(|| log.clone())
+                },
+            )
+        };
+        const GSC: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../cod4/tests/fixtures/gsc/streak_kill"
+        );
+        for teams in [["allies", "axis"], ["allies", "allies"]] {
+            let enemy = teams[0] != teams[1];
+            let Some(log) = run(teams) else {
+                return;
+            };
+            let log = log.unwrap_or_else(|| panic!("{teams:?}: never named him"));
+            let (fade_in, fade_out) = if enemy { (250, 250) } else { (0, 1500) };
+            let mut faded = false;
+            for &(now, sighting, cross, friendly, drawn_right) in &log {
+                assert!(drawn_right, "{teams:?} at {now}: {log:?}");
+                if enemy {
+                    assert_eq!(friendly, None, "an enemy's friendly name at {now}");
+                }
+                // The crosshair's name follows the sighting's times.
+                let want = sighting.and_then(|(start, last)| {
+                    let a = crate::cod4_names::alpha(now, start, last, fade_in, fade_out);
+                    (a > 0.001).then_some(a)
+                });
+                assert_eq!(cross, want, "{teams:?} at {now}: {log:?}");
+                if let Some(a) = if enemy { cross } else { friendly } {
+                    faded |= a < 1.0;
+                }
+            }
+            // On him past the fade-in, then off him and faded out.
+            assert!(
+                log.iter()
+                    .any(|l| l.2 == Some(1.0) && l.1.is_some_and(|(s, x)| x - s >= fade_in)),
+                "{teams:?}: {log:?}"
+            );
+            assert!(faded, "{teams:?}: the name never faded: {log:?}");
+            assert_eq!(log.last().map(|l| (l.2, l.3)), Some((None, None)));
+            if !enemy {
+                // A teammate's friendly name is up the frame he is seen.
+                let first = log.iter().position(|l| l.3.is_some()).unwrap();
+                assert_eq!(log[first].3, Some(1.0), "{log:?}");
+            }
         }
     }
 

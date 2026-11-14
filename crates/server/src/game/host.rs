@@ -465,6 +465,10 @@ impl EntityHit {
     }
 }
 
+/// Each in-use `script_model` and its `.model` text, in entity order
+/// ([`GameHost::placed_script_models`]' walk).
+type ScriptModels = std::sync::Arc<[(EntId, String)]>;
+
 pub struct GameHost {
     pub configstrings: crate::configstrings::ConfigStrings,
     pub ents: ObjectTable,
@@ -833,6 +837,10 @@ pub struct GameHost {
     /// `script_model` is filed in the area tree under; `None` for a name
     /// that did not load.
     pub xmodel_bounds: HashMap<String, Option<Bounds>>,
+    /// [`GameHost::placed_script_models`]' walk: each in-use
+    /// `script_model` and its `.model`, in entity order, as of
+    /// `ObjectTable::edits` (the `.0`) and the profile (the `.1`).
+    script_models: Option<(u64, usize, ScriptModels)>,
     /// `level+0x1d5c`, the 32 most recent drops (`crate::game::item`).
     pub drop_ring: crate::game::item::DropRing,
     /// The player animtree and the rig cache a locational trace poses a body
@@ -1528,35 +1536,23 @@ impl GameHost {
     /// is read, but not once `delete` has unlinked it, though its slot waits
     /// (docs/research/cod11-combat.md 2.7).
     pub fn placed_script_models(&mut self, cx: &mut Cx) -> Vec<crate::game::combat::PlacedModel> {
-        let classname = cx.intern_folded("classname");
-        let model = cx.intern_folded("model");
         let origin = cx.intern_folded("origin");
         let angles = cx.intern_folded("angles");
-        let ids: Vec<EntId> = self.ents.iter_inuse().map(|(id, _)| id).collect();
         let vec = |v: Value| match v {
             Value::Vector(v) => glam::Vec3::from(v),
             _ => glam::Vec3::ZERO,
         };
         let mut out = Vec::new();
-        for id in ids {
+        for (id, name) in self.script_models(cx).iter() {
+            let id = *id;
             if self.ents.get(id).is_none_or(|e| e.unlinked) {
                 continue;
             }
-            let Value::String(c) = self.get_field(cx, id, classname) else {
-                continue;
-            };
-            if cx.resolve(c) != "script_model" {
-                continue;
-            }
-            let Value::String(m) = self.get_field(cx, id, model) else {
-                continue;
-            };
-            let name = cx.resolve(m).to_string();
-            let Some(tris) = self.xmodel_tris(&name) else {
+            let Some(tris) = self.xmodel_tris(name) else {
                 continue;
             };
             let bounds = self
-                .model_bounds_of(&name)
+                .model_bounds_of(name)
                 .map(|(lo, hi)| (glam::Vec3::from(lo), glam::Vec3::from(hi)));
             out.push(crate::game::combat::PlacedModel {
                 id,
@@ -1575,6 +1571,41 @@ impl GameHost {
             });
         }
         out
+    }
+
+    /// Every in-use `script_model` with its `.model` text, in entity order:
+    /// the classname and model reads behind [`Self::placed_script_models`],
+    /// walked again only once a slot was spawned, freed or reached mutably
+    /// (`ObjectTable::edits`), so a frame's burst of traces walks once.
+    fn script_models(&mut self, cx: &mut Cx) -> ScriptModels {
+        let edits = self.ents.edits();
+        let profile = std::ptr::from_ref(self.profile) as usize;
+        if let Some((at, p, list)) = &self.script_models
+            && (*at, *p) == (edits, profile)
+        {
+            return list.clone();
+        }
+        let classname = cx.intern_folded("classname");
+        let model = cx.intern_folded("model");
+        let ids: Vec<EntId> = self.ents.iter_inuse().map(|(id, _)| id).collect();
+        let mut list = Vec::new();
+        for id in ids {
+            let Value::String(c) = self.get_field(cx, id, classname) else {
+                continue;
+            };
+            if cx.resolve(c) != "script_model" {
+                continue;
+            }
+            let Value::String(m) = self.get_field(cx, id, model) else {
+                continue;
+            };
+            list.push((id, cx.resolve(m).to_string()));
+        }
+        // The reads above take no mutable slot, so the count still holds.
+        debug_assert_eq!(edits, self.ents.edits());
+        let list: ScriptModels = list.into();
+        self.script_models = Some((edits, profile, list.clone()));
+        list
     }
 
     /// What a round, a swing or a missile's locational trace meets besides
@@ -1872,6 +1903,7 @@ impl GameHost {
             client_objectives: vec![[Objective::default(); MAX_OBJECTIVES]; MAX_CLIENTS],
             xmodel_collision: HashMap::new(),
             xmodel_bounds: HashMap::new(),
+            script_models: None,
             drop_ring: Default::default(),
             anims: None,
             hit_rigs: Default::default(),
@@ -2486,6 +2518,11 @@ impl Host for GameHost {
         // "Block 1"). A map entity's `health` is still its own slot.
         if let Some(c) = &e.client {
             match cx.resolve_folded(field) {
+                // A CoD1 player's `r.currentAngles` live with his DObj's
+                // stamps, which place his body for a trace or a tag.
+                "angles" if matches!(self.ext, HostExt::Cod1) => {
+                    return Value::Vector(self.dobj_posed[ent.0 as usize].angles());
+                }
                 "health" => return Value::Int(self.client_vitals[ent.0 as usize].health),
                 "maxhealth" => return Value::Int(self.client_vitals[ent.0 as usize].max_health),
                 "maxspeed" if !self.speaks_1_1() => {
@@ -2719,10 +2756,18 @@ impl GameHost {
             self.client_squad[ent.0 as usize] = squad_of(cx, value)?;
             return Ok(());
         }
+        let cod1 = matches!(self.ext, HostExt::Cod1);
         let Some(e) = self.ents.get_mut(ent) else {
             return Err(ErrorKind::BadType("no such entity"));
         };
         if let Some(c) = e.client.as_mut() {
+            if cod1 && cx.resolve_folded(field) == "angles" {
+                let Value::Vector(v) = value else {
+                    return Err(ErrorKind::BadType("wrong type for an engine field"));
+                };
+                self.dobj_posed[ent.0 as usize].set_angles(v);
+                return Ok(());
+            }
             // 1.5's and UO's setter (1.5b 0x3b88e, UO 0x43b82) floors the
             // int at 0 and copies it, as a float, into the entity's `speed`.
             if max_speed {

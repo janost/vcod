@@ -315,9 +315,6 @@ pub fn use_by(
     let stance = rec.def.stance;
     let field = cx.intern_folded("angles");
     let _ = host.write_field(cx, user, field, vcod_gsc::Value::Vector(view));
-    if let Some(s) = host.dobj_posed.get_mut(slot) {
-        s.set_angles(Some(view));
-    }
     host.client_sim_ops.push((
         slot,
         crate::game::host::SimOp::Mount {

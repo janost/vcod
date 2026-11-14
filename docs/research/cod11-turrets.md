@@ -1815,6 +1815,25 @@ the target's idle, the kill on the next frame, the knockback's first (legs
   hundredth-of-a-degree turn on the knockback frame was clip 157 at weight 0
   where retail's setter had raised it to 0.001.
 
+What is left on the knockback frame, `-hitgrid` (1.1d, 30450). vcod
+measurement, with the target's velocity now retail's to the bit (combat doc
+4.5): the round's point is one float step off retail's in x and y (1.2e-4),
+and every grid cell sits 1.3e-4 to 1.7e-4 longer than retail's, a few cells
+on another bone -7e-5 to -1.3e-4, two at an edge 1e-3. Scaling the weight
+the legs setter raises clip 157 to (`Ramp::raised`'s 0.001) by 0, 1 and 2
+moves the cells by up to 1.8e-3 each way and the round's point by four float
+steps, and at 1 the per-cell spread cancels: the clip's weight and phase are
+retail's, and the rest is an offset common to the round and the whole grid.
+Ruled out: the knockback velocity (fixed, the offset did not move), turning
+the trace into the body's frame by `AnglesToAxis` with each dot product
+rounded once instead of the quaternion (no change), and the target's spawn
+point (`-hitgrid-uo` with either of mp_carentan's first two dm spawns
+pinned instead of `PRE_SPAWNAT` lands 147 rows off). INFERRED:
+the earlier hundredth-of-a-degree turn was the clip's weight, which 13.6's
+0.001 closed; the remaining 1e-4 is a translation along the round, cause
+not found. `KNOCKBACK_GAP` stays on 1.1d's and UO's `-hitgrid` and UO's
+`-hitfine` kill.
+
 vcod: `turret_ab`'s `hit_gate` replays each capture as `spawn_gate` does and
 holds the target's playerstate, each hit's point (`HIT_NEAR`, 0.001; 13.8)
 and each grid cell (`GRID_NEAR`, 0.005) to retail's; the knockback kills are

@@ -2480,11 +2480,20 @@ impl Follower {
                 // that node for the health item on the ledge 116 over it
                 // and paced under it while the item lay (bot-navigation.md,
                 // "The ship's leftovers").
-                let target = g.goal_node(p).map(|t| g.nodes[t as usize].z);
+                // A point farther off the graph than `RETARGET`, a noise
+                // in the air over a floor 220 under it, moves only with the
+                // node it maps to: read off the point itself it moved every
+                // tick, each tick parked the plan and took up the last one,
+                // and a bot at mp_cassino's roof jump at (4870, -1313, 256)
+                // turned between its foot and its top for 12 s (seed 43,
+                // bot-navigation.md "The ship's leftovers").
+                let target = g.goal_node(p).map(|t| g.nodes[t as usize]);
                 let off = |d: u32| {
                     let n = g.nodes[d as usize];
-                    n.distance(Vec3::from(p)) > RETARGET
-                        || target.is_some_and(|z| (n.z - z).abs() > vcod_common::pmove::JUMP_HEIGHT)
+                    (n.distance(Vec3::from(p)) > RETARGET
+                        && target.is_none_or(|t| n.distance(t) > RETARGET))
+                        || target
+                            .is_some_and(|t| (n.z - t.z).abs() > vcod_common::pmove::JUMP_HEIGHT)
                 };
                 let moved = self.dest.is_none_or(off);
                 if moved {
@@ -7012,6 +7021,40 @@ mod tests {
         assert_eq!(f.dest, Some(1));
         wp(&mut f, [64.0, 32.0, 100.0]);
         assert_eq!(f.dest, Some(2));
+    }
+
+    /// A point farther off the graph than `RETARGET`, a noise in the air
+    /// over a floor, keeps the plan to the node it maps to: read off the
+    /// point it moved every tick and the plan was parked and swapped for
+    /// the last one each tick (bot-navigation.md "The ship's leftovers").
+    #[test]
+    fn a_goal_far_off_the_graph_keeps_its_plan() {
+        use crate::bots::Goal;
+        let nodes = vec![
+            Vec3::ZERO,
+            Vec3::new(64.0, 0.0, 0.0),
+            Vec3::new(128.0, 0.0, 0.0),
+        ];
+        let mut g = NavGraph::from_parts(nodes, vec![vec![1], vec![0, 2], vec![1]]);
+        g.index_components();
+        let mut f = Follower::default();
+        let p = [128.0, 0.0, 220.0];
+        for _ in 0..3 {
+            f.waypoint(
+                &g,
+                None,
+                Goal::To(p),
+                [0.0, 0.0, 0.0],
+                Footing::STANDING,
+                &mut 100,
+                &mut || 0,
+            );
+            assert_eq!(f.dest, Some(2));
+            assert!(
+                f.parked.is_none(),
+                "the plan was parked as if the goal moved"
+            );
+        }
     }
 
     /// Node 0 to node 1 4000 units on, by a way `north` units off the line
