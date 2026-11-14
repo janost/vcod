@@ -299,6 +299,23 @@ before they close on it, and in S&D the defenders all go to a site once
 one of them sees an enemy near it. CoD2 and CoD4 bots spread their routes
 over the map as the CoD1 ones do.
 
+Most guards hold from farther out
+([research/bot-objectives.md](research/bot-objectives.md) section 14):
+S&D defenders before a plant, the planters round their bomb, `ctf`
+defenders, the holders of a `dom` flag or the radio. One of a side
+stays by the objective; the rest take posts 400 to 1500 units out on
+the ways in, 400 or more apart on different lanes, watching down the
+lane, crouched behind cover where there is some. A guard seen or shot
+on its post leaves it for another. When an enemy is seen near the
+objective, a shot is heard near it, a teammate dies there or an enemy
+stands on it (a defuse, the radio's capture), half the outlying guards,
+the nearest first and a second or so apart, walk back in by their own
+ways, slowed and looking at the objective, crouched for the last 300
+units; the rest hold. After a plant the defenders walk in the same way.
+In `ctf` the two bots nearest a sighting of the enemy carrying their
+flag go after him. On the move a bot keeps 360 units behind a teammate
+ahead, and takes its own way in from 700 units out.
+
 ### Yells
 
 On CoD 1.1, 1.5, UO and CoD2 a bot yells through the stock quick

@@ -460,8 +460,16 @@ pub(crate) const OBJ_NEAR: f32 = 800.0;
 /// objective ([`super::posts::assign`]), with team play and
 /// `Bot::tactics` on, and [`super::BotView::exposure`] for every bot
 /// near its objective. The surveys are made here, once per objective
-/// and graph, before any bot thinks.
-fn deal_posts<W: BotWorld>(w: &mut W, views: &mut [(usize, BotView)], teams: &[i32]) {
+/// and graph, before any bot thinks. With `Bot::far` on, a side's guards
+/// hold outposts on the ways in and its cues pull a share of them back
+/// ([`deal_far`]); `noises` and `on_side` are the tick's, for the cues.
+fn deal_posts<W: BotWorld>(
+    w: &mut W,
+    views: &mut [(usize, BotView)],
+    teams: &[i32],
+    noises: &[Noise],
+    on_side: &[(usize, i32, [f32; 3])],
+) {
     use super::posts;
     let Some(g) = w.driver().nav.clone() else {
         return;
@@ -469,8 +477,8 @@ fn deal_posts<W: BotWorld>(w: &mut W, views: &mut [(usize, BotView)], teams: &[i
     let (now, round) = (w.now(), w.server_id() as u32);
     // Each living bot on foot with an objective that holds still: the
     // anchor its posts are dealt round (a guard), else one its exposure is
-    // counted against, and whether it plays by posts.
-    let wants: Vec<(usize, i32, posts::Anchor, bool, bool)> = views
+    // counted against, whether it plays by posts, and how it holds.
+    let wants: Vec<Want> = views
         .iter()
         .filter(|(_, v)| v.playing && !v.dead && v.seat.is_none())
         .filter_map(|(s, v)| {
@@ -480,7 +488,17 @@ fn deal_posts<W: BotWorld>(w: &mut W, views: &mut [(usize, BotView)], teams: &[i
                 None => (b.counted_anchor(v)?, false),
             };
             let posted = guard && b.tactics && b.team_play;
-            Some((*s, *teams.get(*s)?, a, posted, b.lane_target(v)))
+            Some(Want {
+                slot: *s,
+                team: *teams.get(*s)?,
+                anchor: a,
+                posted,
+                lane: b.lane_target(v),
+                hold: b.guard_hold(v),
+                cues: b.cues,
+                travel: b.travel && b.team_play,
+                hearing: b.skill.hearing,
+            })
         })
         .collect();
     let mut kept = std::mem::take(&mut w.driver_mut().posts);
@@ -499,7 +517,8 @@ fn deal_posts<W: BotWorld>(w: &mut W, views: &mut [(usize, BotView)], teams: &[i
     };
     let (mut groups, mut laned): (Groups, Groups) = Default::default();
     let mut surveys: Vec<(posts::Key, std::sync::Arc<posts::Survey>, posts::Anchor)> = Vec::new();
-    for &(slot, team, a, posted, lane) in &wants {
+    for want in &wants {
+        let (slot, team, a) = (want.slot, want.team, want.anchor);
         let key = a.key();
         let survey = kept.survey(&g, &clear, &a);
         let Some(i) = views.iter().position(|(s, _)| *s == slot) else {
@@ -515,13 +534,13 @@ fn deal_posts<W: BotWorld>(w: &mut W, views: &mut [(usize, BotView)], teams: &[i
             }
             v.exposure = kept.exposure.get(&slot).copied();
         }
-        if posted {
+        if want.posted {
             join(&mut groups, (team, key), (slot, v.origin.into()));
         }
-        if lane {
+        if want.lane {
             join(&mut laned, (team, key), (slot, v.origin.into()));
         }
-        if (posted || lane) && !surveys.iter().any(|(k, _, _)| *k == key) {
+        if (want.posted || want.lane) && !surveys.iter().any(|(k, _, _)| *k == key) {
             surveys.push((key, survey, a));
         }
     }
@@ -529,33 +548,374 @@ fn deal_posts<W: BotWorld>(w: &mut W, views: &mut [(usize, BotView)], teams: &[i
         |groups: &Groups, s: &usize| groups.iter().any(|(_, g)| g.iter().any(|(m, _)| m == s));
     kept.held.retain(|s, _| member(&groups, s));
     kept.lanes.retain(|s, _| member(&laned, s));
+    kept.collapse
+        .retain(|s, c| member(&groups, s) && now.wrapping_sub(c.until) < 0);
+    kept.falling.retain(|_, f| now.wrapping_sub(f.until) < 0);
+    let first = |slot: usize| wants.iter().find(|x| x.slot == slot);
     for ((_, key), bots) in &laned {
         let Some((_, survey, a)) = surveys.iter().find(|(k, _, _)| k == key) else {
             continue;
         };
         let centre = Vec3::from(a.centre());
-        for (slot, via) in posts::lanes(survey, *key, centre, bots, &mut kept.lanes, now) {
+        let far = match first(bots[0].0) {
+            Some(x) if x.travel => posts::TRAVEL_LANE_FAR,
+            _ => posts::LANE_FAR,
+        };
+        for (slot, via) in posts::lanes(survey, *key, centre, bots, &mut kept.lanes, now, far) {
             if let Some((_, v)) = views.iter_mut().find(|(s, _)| *s == slot) {
                 v.lane = Some(via.into());
             }
         }
     }
-    for ((_, key), guards) in &groups {
+    let died: Vec<(i32, [f32; 3])> = kept
+        .alive
+        .iter()
+        .filter(|(s, (t, _))| teams.get(**s) == Some(t) && !on_side.iter().any(|c| c.0 == **s))
+        .map(|(_, x)| *x)
+        .collect();
+    for ((team, key), guards) in &groups {
         let Some((_, survey, a)) = surveys.iter().find(|(k, _, _)| k == key) else {
             continue;
         };
-        for (slot, p) in posts::assign(survey, *key, guards, &mut kept.held, now, round) {
+        let Some(want) = first(guards[0].0).copied() else {
+            continue;
+        };
+        let centre = a.centre();
+        let mut posted: Vec<(usize, posts::Post, Option<[f32; 3]>)> = Vec::new();
+        let far = match want.hold {
+            super::GuardHold::Far => Some(kept.outer(&g, &clear, a)),
+            _ => None,
+        };
+        match far.filter(|o| !o.posts.is_empty()) {
+            Some(outer) => {
+                let tick = Tick {
+                    now,
+                    round,
+                    teams,
+                    noises,
+                    on_side,
+                    died: &died,
+                };
+                deal_far(
+                    &mut kept,
+                    &tick,
+                    views,
+                    &wants,
+                    *team,
+                    *key,
+                    centre,
+                    guards,
+                    survey,
+                    &outer,
+                    &mut posted,
+                );
+            }
+            None => {
+                let careful = (want.hold == super::GuardHold::Back).then_some(centre);
+                for (slot, p) in posts::assign(survey, *key, guards, &mut kept.held, now, round) {
+                    posted.push((slot, p, careful));
+                }
+            }
+        }
+        for (slot, p, careful) in posted {
             if let Some((_, v)) = views.iter_mut().find(|(s, _)| *s == slot) {
                 v.guard_post = Some(super::GuardPost {
                     at: p.at.into(),
                     crouch: p.crouch,
-                    look: a.centre(),
+                    look: p.look.into(),
+                    careful,
                 });
             }
         }
     }
+    deal_hunt(&mut kept, views, &wants, teams, now);
+    kept.alive = on_side.iter().map(|&(s, t, p)| (s, (t, p))).collect();
     w.driver_mut().posts = kept;
 }
+
+/// One bot's part in [`deal_posts`].
+#[derive(Clone, Copy)]
+struct Want {
+    slot: usize,
+    team: i32,
+    anchor: super::posts::Anchor,
+    posted: bool,
+    lane: bool,
+    hold: super::GuardHold,
+    cues: bool,
+    travel: bool,
+    hearing: f32,
+}
+
+/// What [`deal_far`] reads of the tick.
+struct Tick<'a> {
+    now: i32,
+    round: u32,
+    teams: &'a [i32],
+    noises: &'a [Noise],
+    on_side: &'a [(usize, i32, [f32; 3])],
+    /// Each side's clients playing last tick and not this one: team, feet.
+    died: &'a [(i32, [f32; 3])],
+}
+
+/// The salt of the draw that picks the one guard of a side kept near its
+/// objective ([`deal_far`]).
+const NEAR_SALT: u32 = 0x6e65_6172;
+
+/// The cue a side's bots perceive this tick at its objective `centre`
+/// (bot-objectives.md 14), and where: a sighting by any of its bots (the
+/// call-out reaches the side), a shot or blast near it a guard hears
+/// ([`super::loudest`]'s range), a teammate's death near it with a guard
+/// in earshot, an enemy on it with a guard in earshot.
+fn cue_at(
+    tick: &Tick,
+    views: &[(usize, BotView)],
+    wants: &[Want],
+    team: i32,
+    centre: [f32; 3],
+    guards: &[(usize, Vec3)],
+) -> Option<(super::posts::Cue, [f32; 3])> {
+    use super::posts::{self, Cue};
+    let near = |p: [f32; 3], r: f32| super::dist_sq(p, centre) < r * r;
+    let heard_by = |p: [f32; 3], r: f32| {
+        guards
+            .iter()
+            .any(|(_, f)| super::dist_sq(f.to_array(), p) < r * r)
+    };
+    let seen = views
+        .iter()
+        .filter(|(s, v)| tick.teams.get(*s) == Some(&team) && v.playing && !v.dead)
+        .filter_map(|(_, v)| v.enemy.map(|e| e.origin))
+        .find(|e| near(*e, posts::CUE_SEEN));
+    if let Some(e) = seen {
+        return Some((Cue::Sighting, e));
+    }
+    let fire = tick.noises.iter().find(|n| {
+        near(n.at, posts::CUE_FIRE)
+            && guards.iter().any(|(s, f)| {
+                let hearing = wants
+                    .iter()
+                    .find(|x| x.slot == *s)
+                    .map_or(1.0, |x| x.hearing);
+                *s != n.source && super::dist_sq(f.to_array(), n.at) < (n.radius * hearing).powi(2)
+            })
+    });
+    if let Some(n) = fire {
+        return Some((Cue::Gunfire, n.at));
+    }
+    if let Some((_, p)) = tick.died.iter().find(|(t, p)| {
+        *t == team && near(*p, posts::CUE_DEATH) && heard_by(*p, posts::CUE_DEATH_HEAR)
+    }) {
+        return Some((Cue::Death, *p));
+    }
+    let sides = [
+        crate::game::script::TEAM_AXIS,
+        crate::game::script::TEAM_ALLIES,
+    ];
+    tick.on_side
+        .iter()
+        .find(|(_, t, p)| {
+            *t != team
+                && sides.contains(t)
+                && near(*p, posts::CUE_CONTACT)
+                && heard_by(centre, posts::CUE_CONTACT_HEAR)
+        })
+        .map(|(_, _, p)| (Cue::Contact, *p))
+}
+
+/// One side's far guards of one objective (bot-objectives.md 14): one
+/// kept near it (from two guards up, by a draw of the round) and those a
+/// cue pulled back take posts round it ([`super::posts::assign`]), the
+/// pulled back walking in with care; the rest outposts apart on the ways
+/// in ([`super::posts::OUTER`]), leaving one an enemy saw or shot them on.
+/// A cue pulls back [`super::posts::COLLAPSE_SHARE`] of the outposted,
+/// nearest it first, their starts staggered; a cue again holds them there.
+#[allow(clippy::too_many_arguments)]
+fn deal_far(
+    kept: &mut super::posts::Posts,
+    tick: &Tick,
+    views: &[(usize, BotView)],
+    wants: &[Want],
+    team: i32,
+    key: super::posts::Key,
+    centre: [f32; 3],
+    guards: &[(usize, Vec3)],
+    survey: &super::posts::Survey,
+    outer: &super::posts::Outer,
+    out: &mut Vec<(usize, super::posts::Post, Option<[f32; 3]>)>,
+) {
+    use super::posts;
+    let (now, round) = (tick.now, tick.round);
+    let side = usize::from(team == crate::game::script::TEAM_ALLIES);
+    let near_one = (guards.len() >= 2)
+        .then(|| {
+            guards
+                .iter()
+                .min_by_key(|(s, _)| (posts::draw(*s, round, NEAR_SALT), *s))
+                .map(|(s, _)| *s)
+        })
+        .flatten();
+    let back = |kept: &posts::Posts, s: usize| {
+        kept.collapse
+            .get(&s)
+            .is_some_and(|c| c.key == key && now.wrapping_sub(c.start) >= 0)
+    };
+    let pulled =
+        |kept: &posts::Posts, s: usize| kept.collapse.get(&s).is_some_and(|c| c.key == key);
+    let cues = wants
+        .iter()
+        .find(|x| x.slot == guards[0].0)
+        .is_some_and(|x| x.cues);
+    if cues && let Some((_, at)) = cue_at(tick, views, wants, team, centre, guards) {
+        let until = now.wrapping_add(posts::COLLAPSE_MS);
+        match kept.falling.get_mut(&(side, key)) {
+            Some(f) => {
+                f.until = until;
+                for (s, _) in guards {
+                    if let Some(c) = kept.collapse.get_mut(s).filter(|c| c.key == key) {
+                        c.until = until;
+                    }
+                }
+            }
+            None => {
+                let mut out_guards: Vec<(f32, usize)> = guards
+                    .iter()
+                    .filter(|(s, _)| Some(*s) != near_one && !pulled(kept, *s))
+                    .map(|(s, f)| (super::dist_sq(f.to_array(), at), *s))
+                    .collect();
+                out_guards.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+                let n = ((out_guards.len() as f32 * posts::COLLAPSE_SHARE).ceil() as usize)
+                    .clamp(1, out_guards.len().max(1))
+                    .min(out_guards.len());
+                for (i, (_, s)) in out_guards.iter().take(n).enumerate() {
+                    let draw = posts::draw(*s, round, now as u32) % posts::STAGGER_DRAW_MS;
+                    let start = now.wrapping_add(i as i32 * posts::STAGGER_MS + draw as i32);
+                    kept.collapse
+                        .insert(*s, posts::Collapse { key, start, until });
+                }
+                if n > 0 {
+                    kept.falling.insert(
+                        (side, key),
+                        posts::Falling {
+                            fired: now,
+                            until,
+                            back: false,
+                        },
+                    );
+                    kept.tally[side].cues += 1;
+                }
+            }
+        }
+    }
+    // The first of the pulled back within reach of the objective.
+    if let Some(f) = kept.falling.get_mut(&(side, key)).filter(|f| !f.back) {
+        let home = guards.iter().any(|(s, feet)| {
+            kept.collapse
+                .get(s)
+                .is_some_and(|c| c.key == key && now.wrapping_sub(c.start) >= 0)
+                && super::dist_sq(feet.to_array(), centre) < posts::BACK_NEAR * posts::BACK_NEAR
+        });
+        if home {
+            f.back = true;
+            kept.tally[side].back += 1;
+            kept.tally[side].back_ms += now.wrapping_sub(f.fired).max(0) as u64;
+        }
+    }
+    type Guards = Vec<(usize, Vec3)>;
+    let (inner, outside): (Guards, Guards) = guards
+        .iter()
+        .partition(|(s, _)| Some(*s) == near_one || back(kept, *s));
+    // Seen or shot on its outpost: off it for another, a hop away.
+    let okey = posts::outer_key(key);
+    for (s, _) in &outside {
+        let Some(v) = views.iter().find(|(x, _)| x == s).map(|(_, v)| v) else {
+            continue;
+        };
+        if let Some(h) = kept.held.get_mut(s).filter(|h| h.key == okey)
+            && h.reached.is_some()
+            && (v.hurt.is_some() || v.enemy.is_some())
+        {
+            h.burnt = Some((h.post.at, now.wrapping_add(posts::BURN_MS)));
+            h.reached = Some(now.wrapping_sub(h.hold));
+        }
+    }
+    for (slot, p) in posts::assign(survey, key, &inner, &mut kept.held, now, round) {
+        let careful = back(kept, slot).then_some(centre);
+        out.push((slot, p, careful));
+    }
+    for (slot, p) in posts::assign_by(
+        &outer.posts,
+        &posts::OUTER,
+        okey,
+        &outside,
+        &mut kept.held,
+        now,
+        round,
+    ) {
+        out.push((slot, p, None));
+    }
+}
+
+/// A `ctf` side's bots sent after the enemy carrying its flag
+/// (bot-objectives.md 14): while one of them saw him within
+/// [`CARRIER_MS`], the [`HUNTERS`] nearest that sighting, with
+/// `Bot::cues` on, chase it ([`super::CtfView::hunt`]).
+fn deal_hunt(
+    kept: &mut super::posts::Posts,
+    views: &mut [(usize, BotView)],
+    wants: &[Want],
+    teams: &[i32],
+    now: i32,
+) {
+    use super::UoView;
+    use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
+    for (side, team) in [TEAM_AXIS, TEAM_ALLIES].into_iter().enumerate() {
+        let mine = |s: usize| teams.get(s) == Some(&team);
+        let carrier =
+            views
+                .iter()
+                .filter(|(s, _)| mine(*s))
+                .find_map(|(_, v)| match v.uo.as_ref() {
+                    Some(UoView::Ctf(c)) => Some(c.ours.carrier),
+                    _ => None,
+                });
+        let Some(Some(k)) = carrier else {
+            kept.carrier[side] = None;
+            continue;
+        };
+        if let Some(e) = views
+            .iter()
+            .filter(|(s, v)| mine(*s) && v.playing && !v.dead)
+            .find_map(|(_, v)| v.enemy.filter(|e| e.slot == k))
+        {
+            kept.carrier[side] = Some((e.origin, now));
+        }
+        let Some((at, _)) = kept.carrier[side].filter(|(_, t)| now.wrapping_sub(*t) < CARRIER_MS)
+        else {
+            continue;
+        };
+        let cues = |s: usize| wants.iter().any(|x| x.slot == s && x.cues);
+        let mut hunters: Vec<(f32, usize)> = views
+            .iter()
+            .filter(|(s, v)| mine(*s) && v.playing && !v.dead && cues(*s))
+            .filter(|(_, v)| matches!(v.uo.as_ref(), Some(UoView::Ctf(c)) if !c.carrying))
+            .map(|(s, v)| (super::dist_sq(v.origin, at), *s))
+            .collect();
+        hunters.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+        for (_, s) in hunters.into_iter().take(HUNTERS) {
+            if let Some((_, v)) = views.iter_mut().find(|(x, _)| *x == s)
+                && let Some(UoView::Ctf(c)) = v.uo.as_mut()
+            {
+                c.hunt = Some(at);
+            }
+        }
+    }
+}
+
+/// A sighting of the enemy carrying a side's flag sends [`HUNTERS`] of it
+/// after him for this long, ms ([`deal_hunt`]).
+const CARRIER_MS: i32 = 5000;
+const HUNTERS: usize = 2;
 
 /// How near its probe's landing a body on a mantle edge has climbed
 /// ([`BotWorld::MANTLE_AIMS`]): a body in front of the wall stands at least
@@ -658,7 +1018,7 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
     w.deal(frame, &teams, &solo, round, &mut views);
     deal_squads(w, &mut views, &teams, round);
     deal_hot(w, &mut views, &teams);
-    deal_posts(w, &mut views, &teams);
+    deal_posts(w, &mut views, &teams, &noises, &on_side);
     drop(p);
 
     // Pass 3: the tick's waypoint toward each brain's goal, then its
@@ -1427,6 +1787,8 @@ struct RouteIn {
     squad: bool,
     /// `Bot::tactics`, which [`BotWorld::SPREADS`] reads.
     tactics: bool,
+    /// `Bot::travel`: the walk behind a teammate ahead keeps farther back.
+    travel: bool,
     stuck: bool,
     rng: u64,
     blocked: Option<Arc<[u32]>>,
@@ -1449,6 +1811,7 @@ fn route_in<W: BotWorld>(w: &mut W, slot: usize) -> RouteIn {
         sid: w.server_id(),
         squad: bot.is_some_and(|b| b.squad),
         tactics: bot.is_some_and(|b| b.tactics),
+        travel: bot.is_some_and(|b| b.travel && b.team_play),
         stuck,
         rng: bot.map_or(1, |b| b.rng),
         blocked: W::YIELDS.then(|| w.blocked_nodes()),
@@ -1758,7 +2121,12 @@ fn route_core<W: BotWorld>(
             .filter(|(s, _, _)| *s != slot && teams.get(*s) == Some(t))
             .map(|(_, o, v)| (o.to_array(), v.to_array()))
             .collect();
-        view.mate_ahead = team::mate_ahead(at, to, &mates);
+        let spacing = if input.travel {
+            team::TRAVEL_SPACING
+        } else {
+            team::SPACING
+        };
+        view.mate_ahead = team::mate_within(at, to, &mates, spacing);
     }
     if follower.gave_up <= gave_up {
         return None;
@@ -1854,6 +2222,7 @@ fn plan<W: BotWorld>(
                 sid,
                 squad: bot.is_some_and(|b| b.squad),
                 tactics: bot.is_some_and(|b| b.tactics),
+                travel: bot.is_some_and(|b| b.travel && b.team_play),
                 stuck: bot.is_some_and(|b| b.stuck),
                 rng: bot.map_or(1, |b| b.rng),
                 blocked: blocked.clone(),

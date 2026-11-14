@@ -784,6 +784,7 @@ impl Server {
                     dropped: f.dropped.map(&mut site),
                     goal: site(f.goal),
                     carried: f.carrier.is_some(),
+                    carrier: f.carrier,
                 };
                 let ours = flags.iter().find(|f| f.team == team);
                 let theirs = flags.iter().find(|f| f.team != team);
@@ -799,6 +800,7 @@ impl Server {
                     carrying: theirs.carrier == Some(slot),
                     escort,
                     rank,
+                    hunt: None,
                 }))
             }
             script::UoObjectives::Dom(flags) => UoView::Dom(DomView {

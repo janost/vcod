@@ -54,13 +54,6 @@ const EDITS: &[(&str, &str)] = &[
     ("adsGunKickYawMin", "40"),
     ("adsGunKickYawMax", "40"),
 ];
-/// How far an impact of ours may sit from retail's, both snapped to whole
-/// units. 1.1d's and 1.5b's rounds land on retail's every one (measured
-/// 2026-11-13); UO's sighted climb puts three of its 34 one unit low on one
-/// or two axes (cod15-movement.md 6, "The server's gun kick"), so its bound
-/// is one snap step on two axes.
-const EXACT: f32 = 0.0;
-const UO_TOL: f32 = std::f32::consts::SQRT_2;
 
 /// The stock file with [`EDITS`] applied: `WEAPONFILE\key\value...`.
 fn edited(stock: &[u8]) -> Vec<u8> {
@@ -119,6 +112,8 @@ struct Capture {
     cmds: Vec<Cmd>,
     snaps: Vec<(i32, i32)>,
     impacts: Vec<Vec3>,
+    /// Where retail's player stood on the first snapshot.
+    origin: [f32; 3],
 }
 
 fn retail(text: &str) -> Capture {
@@ -126,9 +121,18 @@ fn retail(text: &str) -> Capture {
     let mut snaps = Vec::new();
     let mut impacts = Impacts::default();
     let mut da = [0; 3];
+    let mut origin = None;
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("!snap ") {
             da = ints(field(rest, "da").unwrap());
+            origin.get_or_insert_with(|| {
+                let v: Vec<f32> = field(rest, "origin")
+                    .unwrap()
+                    .split(',')
+                    .map(|c| c.parse().unwrap())
+                    .collect();
+                [v[0], v[1], v[2]]
+            });
             let num = |k| field(rest, k).unwrap().parse::<i32>().unwrap();
             snaps.push((num("t"), num("ct")));
             let cur = field(rest, "imp")
@@ -164,6 +168,7 @@ fn retail(text: &str) -> Capture {
         cmds,
         snaps,
         impacts: impacts.all,
+        origin: origin.expect("a snapshot"),
     }
 }
 
@@ -184,7 +189,8 @@ fn our_impacts(p: &Protocol, s: &vcod_common::net::snapshot::Snapshot) -> Vec<(u
 }
 
 /// The probe on ours: joined allies with the edited thompson, placed by the
-/// gametype, held until ours' clock reaches the capture's first snapshot,
+/// gametype and moved onto the origin retail's first snapshot read, held
+/// until ours' clock reaches that snapshot,
 /// then each frame the cmds retail's snapshot of that frame had
 /// acknowledged, at their own times: the sight's idle sway runs on the
 /// level time, so both servers aim on the same one.
@@ -245,6 +251,10 @@ fn ours(p: &'static Protocol, mut fs: Pk3Fs, cap: &Capture) -> Vec<Vec3> {
         }
     }
     assert!(placed_at.is_some(), "the probe never placed the client");
+    // Where the drop onto the street settles rides the cmd clock of the fall
+    // (y 1929.94 to 1930.12 over the UO captures from this spot), and the
+    // capture holds no cmds from before it settled: stand where retail's did.
+    sv.place_client(0, cap.origin, 90.0);
 
     let delta = |cl: &vcod_common::net::NetClient<common::ClientEnd>| {
         cl.snapshots().newest().map_or([0; 3], |s| {
@@ -298,9 +308,10 @@ fn ours(p: &'static Protocol, mut fs: Pk3Fs, cap: &Capture) -> Vec<Vec3> {
     impacts.all
 }
 
-/// The capture's impacts against ours, one for one. Returns how far the
+/// The capture's impacts against ours, one for one, each on retail's whole
+/// unit. Returns how far the
 /// sighted rounds climbed on retail, the highest less the lowest.
-fn check(p: &'static Protocol, fs: Pk3Fs, tag: &str, tol: f32) -> f32 {
+fn check(p: &'static Protocol, fs: Pk3Fs, tag: &str) -> f32 {
     let path = format!("tests/fixtures/playerstate/{MAP}-dm-slope-8ms-gunkick-{tag}.txt");
     let text = std::fs::read_to_string(&path).expect("read the fixture");
     let cap = retail(&text);
@@ -314,7 +325,7 @@ fn check(p: &'static Protocol, fs: Pk3Fs, tag: &str, tol: f32) -> f32 {
         if report {
             println!("{line}");
         }
-        if !matches!((r, o), (Some(r), Some(o)) if r.distance(*o) <= tol) {
+        if r.is_none() || r != o {
             bad.push(line);
         }
     }
@@ -329,7 +340,7 @@ fn a_1_1_sighted_burst_stays_on_one_spot() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
         return;
     };
-    let climb = check(&PROTOCOL_V1, fs, "1.1", EXACT);
+    let climb = check(&PROTOCOL_V1, fs, "1.1");
     assert!(climb < 3.0, "{climb}");
 }
 
@@ -343,7 +354,7 @@ fn a_1_5_sighted_burst_climbs_with_the_gun_kick() {
     {
         return;
     }
-    let climb = check(&PROTOCOL_V6, fs, "1.5", EXACT);
+    let climb = check(&PROTOCOL_V6, fs, "1.5");
     assert!(climb > 50.0, "{climb}");
 }
 
@@ -353,6 +364,6 @@ fn a_uo_sighted_burst_climbs_with_the_gun_kick() {
     let Some(fs) = vcod_common::testing::uo_fs() else {
         return;
     };
-    let climb = check(&PROTOCOL_V22, fs, "uo", UO_TOL);
+    let climb = check(&PROTOCOL_V22, fs, "uo");
     assert!(climb > 50.0, "{climb}");
 }
