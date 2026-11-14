@@ -146,8 +146,8 @@ pub struct DeathGrenade4 {
 pub const ITEM_NO_OWNER: u32 = 64;
 
 /// A weapon in the world (`LaunchItem`): its entity, the weapon number and
-/// camo, the owner's slot and its gravity arc from `start_ms`, at rest once
-/// `resting`.
+/// camo, the owner's slot, and its `pos`, origin, angles and ground as
+/// `G_RunItem` moves them (`game::cod4::item`, cod4-combat.md 6.1).
 #[derive(Clone, Debug)]
 pub struct Item4 {
     pub id: EntId,
@@ -159,14 +159,31 @@ pub struct Item4 {
     /// When the drop's think hands it to anyone: `owner` becomes 64
     /// (`cod4_lnxded` 0x8090050), 1000 ms past the drop (cod4-combat.md 6).
     pub clear_owner_at: i32,
+    /// `pos.trType`: `TR_GRAVITY` (5) from the launch, `TR_LINEAR_STOP`
+    /// (3) for 50 ms after a hit, `TR_STATIONARY` (0) at rest.
+    pub tr_type: u32,
+    /// `pos.trTime` and `trDuration`.
+    pub start_ms: i32,
+    pub duration_ms: i32,
+    /// `pos.trBase` and `trDelta`.
     pub base: Vec3,
     pub delta: Vec3,
-    pub yaw: f32,
-    pub start_ms: i32,
-    pub resting: bool,
+    /// `r.currentOrigin`.
+    pub origin: Vec3,
+    /// `apos.trBase`, `r.currentAngles`.
+    pub angles: Vec3,
+    /// `groundEntityNum`: 0 from `G_Spawn` until the rest.
+    pub ground: u32,
     /// `itemWeaponSetAmmo`'s clip and stock: what a taker gets.
     pub clip: i32,
     pub stock: i32,
+}
+
+impl Item4 {
+    /// At rest where it fell (`TR_STATIONARY`).
+    pub fn resting(&self) -> bool {
+        self.tr_type == super::missile::TR_STATIONARY
+    }
 }
 
 /// A playing body's hit boxes as one frame posed them: its entity, the
@@ -1282,35 +1299,38 @@ impl Cod4Level {
         self.combat.aim_spread[slot] = f32::from_bits(ps.word("aimSpreadScale")) / 255.0;
     }
 
-    /// The weapons `dropItem` launched: each runs its gravity arc from its
-    /// drop and comes to rest where a trace down meets the world (the
-    /// bounce `G_RunItem` gives a fall is left out, cod4-combat.md 6).
+    /// The weapons `dropItem` launched, each through `G_RunItem`
+    /// (`game::cod4::item`): the world and the brush entities clip it, a
+    /// client's entity counts as moving ground, and one freed at its rest
+    /// goes.
     pub(super) fn run_items(&mut self) {
         let now = self.level_time();
-        let gravity = 800.0f32;
         let clip = self.clip.clone();
+        let in_use: Vec<bool> = self.players.iter().map(|p| p.is_some()).collect();
+        let brushes = self.brushes.clone();
         let host = &mut self.rt.host;
         let mut items = std::mem::take(&mut host.cod4_mut().items);
         items.retain(|i| host.ents.get(i.id).is_some());
+        let mut freed = Vec::new();
         for it in items.iter_mut() {
+            let Some(c) = clip.as_deref() else { continue };
+            let world = super::clip::Cod4Clip {
+                clip: c,
+                bodies: &[],
+                brushes: &brushes,
+            };
+            let moves = |n: u32| in_use.get(n as usize).copied().unwrap_or(false);
+            let contents = |p: Vec3| c.point_contents(p);
+            if let super::item::Step::Freed = super::item::run(it, now, &world, moves, contents) {
+                freed.push(it.id);
+            }
             if it.owner != ITEM_NO_OWNER && now >= it.clear_owner_at {
                 it.owner = ITEM_NO_OWNER;
             }
-            if it.resting {
-                continue;
-            }
-            let t = (now - it.start_ms) as f32 * 0.001;
-            let at = it.base + it.delta * t - Vec3::Z * (0.5 * gravity * t * t);
-            let Some(c) = clip.as_deref() else { continue };
-            let from = it.base + it.delta * (t - 0.05).max(0.0)
-                - Vec3::Z * (0.5 * gravity * (t - 0.05).max(0.0).powi(2));
-            let tr = c.trace(from, at, Vec3::splat(-1.0), Vec3::splat(1.0), 0x491);
-            if tr.fraction < 1.0 {
-                it.base = from + (at - from) * tr.fraction;
-                it.delta = Vec3::ZERO;
-                it.start_ms = now;
-                it.resting = true;
-            }
+        }
+        items.retain(|i| !freed.contains(&i.id));
+        for id in freed {
+            host.ents.free(id);
         }
         host.cod4_mut().items = items;
     }
@@ -1324,7 +1344,7 @@ impl Cod4Level {
     pub(super) fn touch_items(&mut self) {
         let items = self.rt.host.cod4().items.clone();
         let mut taken = Vec::new();
-        for it in items.iter().filter(|i| i.resting) {
+        for it in items.iter().filter(|i| i.resting()) {
             let Some(d) = self.combat.defs.get(it.weapon as usize).cloned() else {
                 continue;
             };
@@ -1372,8 +1392,8 @@ impl Cod4Level {
 
     /// Each live item as 1.7 sends it: `ET_ITEM` (3), `index` its weapon
     /// plus 128 times its camo (`cod4_lnxded` 0x80916e3..0x80916ee),
-    /// `clientNum` its dropper, `pos` its arc (`TR_GRAVITY`, 5) or rest
-    /// (`TR_STATIONARY`, 0) truncated.
+    /// `clientNum` its dropper, its `pos`, angles and ground (the wire
+    /// rounds `trBase`).
     pub(crate) fn item_entities(&self) -> Vec<EntityState> {
         let host = &self.rt.host;
         host.cod4()
@@ -1392,16 +1412,15 @@ impl Cod4Level {
                 };
                 set("index", i.weapon + 128 * u32::from(i.model));
                 set("clientNum", i.owner);
-                set("lerp.pos.trType", if i.resting { 0 } else { 5 });
+                set("groundEntityNum", i.ground);
+                set("lerp.pos.trType", i.tr_type);
                 set("lerp.pos.trTime", i.start_ms as u32);
+                set("lerp.pos.trDuration", i.duration_ms as u32);
                 for k in 0..3 {
-                    set(
-                        &format!("lerp.pos.trBase[{k}]"),
-                        i.base[k].trunc().to_bits(),
-                    );
+                    set(&format!("lerp.pos.trBase[{k}]"), i.base[k].to_bits());
                     set(&format!("lerp.pos.trDelta[{k}]"), i.delta[k].to_bits());
+                    set(&format!("lerp.apos.trBase[{k}]"), i.angles[k].to_bits());
                 }
-                set("lerp.apos.trBase[1]", i.yaw.to_bits());
                 e
             })
             .collect()
@@ -1484,7 +1503,7 @@ impl Cod4Level {
             .cod4()
             .items
             .iter()
-            .filter(|i| i.resting)
+            .filter(|i| i.resting())
             .map(|i| i.base)
             .collect()
     }

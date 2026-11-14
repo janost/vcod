@@ -27,6 +27,7 @@ pub mod clip;
 pub mod combat;
 pub mod corpse;
 pub mod entity_damage;
+pub mod item;
 pub mod level;
 pub mod missile;
 mod turret;

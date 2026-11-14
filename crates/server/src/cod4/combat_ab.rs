@@ -744,8 +744,10 @@ fn a_dropped_rifle_hands_its_ammo_over() {
             let at = level.items_at_rest().first().copied();
             let ps = level.pm_state(1).unwrap();
             before = Some(ps.ammo);
+            // 10 units off the item, its box still over it: the rifle
+            // lies against a wall, and a body on top of it starts in solid.
             if let Some(o) = at {
-                level.set_view_pos(1, [o.x, o.y, o.z + 61.0], [0.0; 3]);
+                level.set_view_pos(1, [o.x, o.y - 10.0, o.z + 61.0], [0.0; 3]);
             }
         }
     };
