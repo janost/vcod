@@ -1031,6 +1031,7 @@ impl Cod2Bots {
                         escort: theirs.carrier.filter(|c| c != slot).and_then(origin_of),
                         rank,
                         hunt: None,
+                        lead: None,
                     })))
                 }
                 UoObjectives::Hq { radios, next } => Some(UoView::Hq(HqView {

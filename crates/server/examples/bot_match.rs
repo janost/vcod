@@ -46,6 +46,9 @@
 //! `allies` or `alt` (axis on odd seeds, allies on even, so the map's own
 //! asymmetry cancels). `dm` has no sides: there an odd slot takes axis's
 //! arm and an even one allies'.
+//! `ESCORT=`, `ROUTE=`, `HOLD=` and `SPRINT=` take the same values but turn
+//! on bot-objectives.md 14.12's rules, off by default, where they say. On
+//! `ctf` the actions add each carry and how it ended ([`CtfCarries`]).
 //! With an arm one-sided the totals add a row per arm, named by the
 //! one-sided features on for it. `VERBOSE=1` prints every kill. Seeds
 //! default to 1..=8.
@@ -125,6 +128,141 @@ use std::time::{Duration, Instant};
 const TICK_MS: u64 = 50;
 /// A carrier's death this near a goal (or his pickup) counts as there.
 const NEAR_GOAL: f32 = 600.0;
+
+/// `ctf` carries, UO's and CoD2's (bot-objectives.md 14.12), off the
+/// flags each tick: per flag its carrier, where he stood and his side's
+/// score. A carry counts `ctf_carries`; it ends in `ctf_carry_captured`
+/// (his side's score rose), else `ctf_carry_down` (he fell or dropped it),
+/// with `ctf_carry_down_near_goal` those within [`NEAR_GOAL`] of the goal
+/// and `ctf_carry_down_on_run` the rest. Carries running at the end count
+/// `ctf_carry_at_end`. `CTF_TRACE=1` prints each carry's end to stderr:
+/// its length, the run, and where the killer stood against the way home.
+#[derive(Default)]
+struct CtfCarries {
+    last: Vec<Option<(usize, [f32; 3])>>,
+    scores: [i32; 2],
+    /// Per flag, the tick and place its carry started, and the ticks of it
+    /// with a teammate playing within [`ESCORTED`].
+    start: Vec<Option<(usize, [f32; 3])>>,
+    escorted: Vec<u32>,
+    /// This tick's kills, victim to killer.
+    killers: HashMap<usize, usize>,
+    trace: Option<String>,
+}
+
+impl CtfCarries {
+    fn new(label: String) -> Self {
+        CtfCarries {
+            trace: (std::env::var("CTF_TRACE").as_deref() == Ok("1")).then_some(label),
+            ..Default::default()
+        }
+    }
+
+    /// A `K;` line's victim and killer, client numbers.
+    fn killed(&mut self, victim: &str, killer: &str) {
+        if let (Ok(v), Ok(k)) = (victim.parse(), killer.parse()) {
+            self.killers.insert(v, k);
+        }
+    }
+
+    /// `bodies`: each playing body's client, team and feet.
+    #[allow(clippy::too_many_arguments)]
+    fn step(
+        &mut self,
+        tick: usize,
+        flags: &[vcod_server::game::script::CtfFlag],
+        origin: impl Fn(usize) -> Option<[f32; 3]>,
+        bodies: &[(usize, i32, [f32; 3])],
+        scores: [i32; 2],
+        actions: &mut BTreeMap<String, u32>,
+    ) {
+        use vcod_server::game::script::TEAM_AXIS;
+        let mut count = |k: &str| *actions.entry(k.to_string()).or_default() += 1;
+        self.last.resize(flags.len(), None);
+        self.start.resize(flags.len(), None);
+        self.escorted.resize(flags.len(), 0);
+        let killers = std::mem::take(&mut self.killers);
+        for (((f, last), start), escorted) in flags
+            .iter()
+            .zip(self.last.iter_mut())
+            .zip(self.start.iter_mut())
+            .zip(self.escorted.iter_mut())
+        {
+            // Scores are [axis, allies]; the carrier is the other side's.
+            let side = usize::from(f.team == TEAM_AXIS);
+            match (*last, f.carrier) {
+                (Some((c, _)), Some(n)) if c == n => {}
+                (Some((c, at)), _) => {
+                    if let (Some(label), Some((t0, from))) = (&self.trace, *start) {
+                        let v = glam::Vec3::from;
+                        let goal: [f32; 3] =
+                            std::array::from_fn(|i| (f.goal.0[i] + f.goal.1[i]) * 0.5);
+                        let home = (v(goal) - v(at)).truncate().normalize_or_zero();
+                        let killer = killers.get(&c).and_then(|&k| origin(k)).map(|k| {
+                            let to = (v(k) - v(at)).truncate();
+                            (to.length(), to.normalize_or_zero().dot(home))
+                        });
+                        eprintln!(
+                            "{label} t{tick} carrier {c} carried {} s ({} escorted), goal {:.0} to {:.0} off, at {:?}, scored {} killer (distance, cos to the way home) {killer:?}",
+                            (tick - t0) as f32 * TICK_MS as f32 / 1000.0,
+                            *escorted as f32 * TICK_MS as f32 / 1000.0,
+                            v(from).distance(v(goal)),
+                            v(at).distance(v(goal)),
+                            at.map(f32::round),
+                            scores[side] > self.scores[side],
+                        );
+                    }
+                    if scores[side] > self.scores[side] {
+                        count("ctf_carry_captured");
+                    } else {
+                        count("ctf_carry_down");
+                        let goal = std::array::from_fn(|i| (f.goal.0[i] + f.goal.1[i]) * 0.5);
+                        count(
+                            if glam::Vec3::from(at).distance(glam::Vec3::from(goal)) < NEAR_GOAL {
+                                "ctf_carry_down_near_goal"
+                            } else {
+                                "ctf_carry_down_on_run"
+                            },
+                        );
+                    }
+                }
+                _ => {}
+            }
+            *last = f.carrier.map(|c| {
+                let kept = last.filter(|(l, _)| *l == c).map(|(_, at)| at);
+                if kept.is_none() {
+                    count("ctf_carries");
+                    *start = origin(c).map(|p| (tick, p));
+                    *escorted = 0;
+                }
+                count("ctf_carry_ticks");
+                if let Some(&(_, team, at)) = bodies.iter().find(|b| b.0 == c)
+                    && bodies.iter().any(|b| {
+                        b.0 != c
+                            && b.1 == team
+                            && glam::Vec3::from(b.2).distance(glam::Vec3::from(at)) < ESCORTED
+                    })
+                {
+                    *escorted += 1;
+                    count("ctf_escorted_ticks");
+                }
+                (c, origin(c).or(kept).unwrap_or_default())
+            });
+        }
+        self.scores = scores;
+    }
+
+    fn end(&self, actions: &mut BTreeMap<String, u32>) {
+        let n = self.last.iter().flatten().count() as u32;
+        if n > 0 {
+            *actions.entry("ctf_carry_at_end".into()).or_default() += n;
+        }
+    }
+}
+
+/// A carry tick is escorted with a teammate this near ([`CtfCarries`]).
+const ESCORTED: f32 = 500.0;
+
 const WINDOW: usize = 240;
 const RADIUS: f32 = 150.0;
 /// A bot-tick is packed with this many teammates or more within
@@ -184,17 +322,18 @@ struct Opts {
     console: Vec<String>,
     verbose: bool,
     /// cover, retreat, team play, awareness, footwork, wariness, squad,
-    /// aim, tactics, converge, lanes, far, cues, travel, carry.
-    arms: [Arm; 15],
+    /// aim, tactics, converge, lanes, far, cues, travel, carry, escort,
+    /// route, hold, sprint.
+    arms: [Arm; 19],
 }
 
-const FEATURES: [&str; 15] = [
+const FEATURES: [&str; 19] = [
     "cover", "retreat", "teamplay", "aware", "footwork", "wary", "squad", "aim", "tactics",
-    "converge", "lanes", "far", "cues", "travel", "carry",
+    "converge", "lanes", "far", "cues", "travel", "carry", "escort", "route", "hold", "sprint",
 ];
-const ARMS: [&str; 15] = [
+const ARMS: [&str; 19] = [
     "COVER", "RETREAT", "TEAMPLAY", "AWARE", "FOOTWORK", "WARY", "SQUAD", "AIM", "TACTICS",
-    "CONVERGE", "LANES", "FAR", "CUES", "TRAVEL", "CARRY",
+    "CONVERGE", "LANES", "FAR", "CUES", "TRAVEL", "CARRY", "ESCORT", "ROUTE", "HOLD", "SPRINT",
 ];
 
 /// The side a client's arms follow: its team, or in `dm` its slot's
@@ -1349,6 +1488,7 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
     // `re_died_near_goal` counts deaths within `NEAR_GOAL` of a goal,
     // `re_died_near_pickup` within it of where he took it.
     let mut carriers: HashMap<String, (usize, [f32; 3], String)> = HashMap::new();
+    let mut ctf = (o.gametype == "ctf").then(|| CtfCarries::new(format!("{map} seed {seed}")));
     // Between a round's `W;` and the restart: a pickup then, after the
     // round, counts as `re_late_pickup` and starts no carry.
     let mut round_over = false;
@@ -1396,6 +1536,10 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                 cues,
                 travel,
                 carry,
+                escort,
+                route,
+                hold,
+                sprint,
             ] = o.arms;
             if cover != Arm::All {
                 sv.test_bot_cover(slot, cover.on(team, seed));
@@ -1441,6 +1585,21 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
             }
             if carry != Arm::All {
                 sv.test_bot_ctf_carry(slot, carry.on(team, seed));
+            }
+            // bot-objectives.md 14.12's rules are off by default: set, the
+            // arm turns them on where it says.
+            let given = |k: &str| std::env::var(k).is_ok();
+            if given("ESCORT") {
+                sv.test_bot_ctf_escort(slot, escort.on(team, seed));
+            }
+            if given("ROUTE") {
+                sv.test_bot_ctf_route(slot, route.on(team, seed));
+            }
+            if given("HOLD") {
+                sv.test_bot_ctf_hold(slot, hold.on(team, seed));
+            }
+            if given("SPRINT") {
+                sv.test_bot_ctf_sprint(slot, sprint.on(team, seed));
             }
         }
         if let Some(ob) = observer.as_mut() {
@@ -1561,6 +1720,9 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                     let g = usize::from(f.len() >= 13);
                     let (vnum, vteam) = (f[1 + g], f[2 + g]);
                     let (anum, ateam) = (f[4 + 2 * g], f[5 + 2 * g]);
+                    if let Some(c) = ctf.as_mut() {
+                        c.killed(vnum, anum);
+                    }
                     if o.verbose {
                         m.log.push(format!("t{tick} kill {}", f[1..].join(";")));
                     }
@@ -1744,6 +1906,26 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
             break;
         }
         m.scores = sv.team_scores();
+        if let Some(c) = ctf.as_mut()
+            && let Some(vcod_server::game::script::UoObjectives::Ctf(flags)) = sv.bot_uo()
+        {
+            let bodies: Vec<(usize, i32, [f32; 3])> = sv
+                .bot_slots()
+                .into_iter()
+                .filter_map(|n| {
+                    let b = sv.bot_body(n).filter(|b| b.playing && !b.dead)?;
+                    Some((n, sv.bot_team(n), b.origin))
+                })
+                .collect();
+            c.step(
+                tick,
+                &flags,
+                |n| sv.bot_body(n).map(|b| b.origin),
+                &bodies,
+                m.scores,
+                &mut m.actions,
+            );
+        }
         // Bots dead or off the field this tick: a fight on one ends with
         // its target down.
         let down: HashSet<usize> = sv
@@ -1851,6 +2033,9 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                 stalled_now.remove(&slot);
             }
         }
+    }
+    if let Some(c) = &ctf {
+        c.end(&mut m.actions);
     }
     m.edges = sv.bot_edge_stalls();
     ObjSpread::add_cues(&mut m.obj, sv.bot_cue_tally());
@@ -2831,6 +3016,8 @@ mod cod2 {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
+        let mut ctf =
+            (gametype == "ctf").then(|| super::CtfCarries::new(format!("{map} seed {seed}")));
         for tick in 0..ticks {
             now += Duration::from_millis(TICK_MS);
             // `TACTICS=0` (or `none`): every bot guards from the first spot in reach
@@ -2838,7 +3025,8 @@ mod cod2 {
             // site for one under attack (`Bot::converge`); `LANES=0`: every
             // bot walks straight to its objective (`Bot::lanes`); `FAR=0`,
             // `CUES=0`, `TRAVEL=0` turn off bot-objectives.md 14's rules,
-            // `CARRY=0` 14.11's.
+            // `CARRY=0` 14.11's; `ESCORT=1`, `ROUTE=1`, `HOLD=1` turn on
+            // 14.12's, off by default.
             if let Some(b) = sv.bots_mut() {
                 let off = |k: &str| matches!(std::env::var(k).as_deref(), Ok("0" | "none"));
                 let arms = [
@@ -2850,6 +3038,8 @@ mod cod2 {
                     !off("TRAVEL"),
                     !off("CARRY"),
                 ];
+                let on = |k: &str| matches!(std::env::var(k).as_deref(), Ok("1" | "all"));
+                let tried = [on("ESCORT"), on("ROUTE"), on("HOLD")];
                 for bot in b.bots_mut().values_mut() {
                     bot.tactics &= arms[0];
                     bot.converge &= arms[1];
@@ -2858,6 +3048,9 @@ mod cod2 {
                     bot.cues &= arms[4];
                     bot.travel &= arms[5];
                     bot.ctf_carry &= arms[6];
+                    bot.ctf_escort = tried[0];
+                    bot.ctf_route = tried[1];
+                    bot.ctf_hold = tried[2];
                 }
             }
             if restart > 0 && tick > 0 && tick % restart == 0 {
@@ -3161,6 +3354,11 @@ mod cod2 {
                     continue;
                 }
                 let (vnum, anum, ateam) = (f[2], f[6], f[7]);
+                if let Some(c) = ctf.as_mut()
+                    && f[0] == "K"
+                {
+                    c.killed(vnum, anum);
+                }
                 let def = level
                     .combat
                     .weapons
@@ -3241,6 +3439,32 @@ mod cod2 {
                 }
             }
             seen = log.len();
+            if let Some(c) = ctf.as_mut()
+                && let Some(l) = sv.level_mut()
+            {
+                let scores = l.rt.with_host(|h, _| h.team_scores);
+                if let Some(vcod_server::game::script::UoObjectives::Ctf(flags)) =
+                    l.rt.cod2_ctf_objectives(l.players.len())
+                {
+                    let origin = |n: usize| -> Option<[f32; 3]> {
+                        Some(l.players.get(n)?.as_ref()?.ps.origin.into())
+                    };
+                    let live: Vec<usize> = (0..l.players.len()).filter(|&n| l.playing(n)).collect();
+                    let mut bodies: Vec<(usize, i32, [f32; 3])> = Vec::new();
+                    for n in live {
+                        let team = l.rt.client_team(n);
+                        if let Some(p) = l.players.get(n).and_then(Option::as_ref)
+                            && p.ps.pm_type == 0
+                        {
+                            bodies.push((n, team, p.ps.origin.into()));
+                        }
+                    }
+                    c.step(tick, &flags, origin, &bodies, scores, &mut m.actions);
+                }
+            }
+        }
+        if let Some(c) = &ctf {
+            c.end(&mut m.actions);
         }
         if verbose && let Some(l) = sv.level() {
             for e in l.rt.aborts() {
@@ -3582,7 +3806,8 @@ mod cod4 {
             // site for one under attack (`Bot::converge`); `LANES=0`: every
             // bot walks straight to its objective (`Bot::lanes`); `FAR=0`,
             // `CUES=0`, `TRAVEL=0` turn off bot-objectives.md 14's rules,
-            // `CARRY=0` 14.11's.
+            // `CARRY=0` 14.11's; `ESCORT=1`, `ROUTE=1`, `HOLD=1` turn on
+            // 14.12's, off by default.
             if let Some(b) = sv.bots_mut() {
                 let off = |k: &str| matches!(std::env::var(k).as_deref(), Ok("0" | "none"));
                 let arms = [
@@ -3594,6 +3819,8 @@ mod cod4 {
                     !off("TRAVEL"),
                     !off("CARRY"),
                 ];
+                let on = |k: &str| matches!(std::env::var(k).as_deref(), Ok("1" | "all"));
+                let tried = [on("ESCORT"), on("ROUTE"), on("HOLD")];
                 for bot in b.bots_mut().values_mut() {
                     bot.tactics &= arms[0];
                     bot.converge &= arms[1];
@@ -3602,6 +3829,9 @@ mod cod4 {
                     bot.cues &= arms[4];
                     bot.travel &= arms[5];
                     bot.ctf_carry &= arms[6];
+                    bot.ctf_escort = tried[0];
+                    bot.ctf_route = tried[1];
+                    bot.ctf_hold = tried[2];
                 }
             }
             // The script's `map_restart` and `exitLevel` run off the

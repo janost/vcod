@@ -4486,6 +4486,32 @@ impl Server {
         }
     }
 
+    /// Test-facing: a `ctf` carrier's escorts, safer route and hold from
+    /// an enemy ahead (`Bot::ctf_escort`, `ctf_route`, `ctf_hold`).
+    pub fn test_bot_ctf_escort(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.ctf_escort = on;
+        }
+    }
+
+    pub fn test_bot_ctf_route(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.ctf_route = on;
+        }
+    }
+
+    pub fn test_bot_ctf_hold(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.ctf_hold = on;
+        }
+    }
+
+    pub fn test_bot_ctf_sprint(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.ctf_sprint = on;
+        }
+    }
+
     /// Test-facing: the ticks a bot has waited aside for a climber
     /// (`nav::Follower::yielding`).
     pub fn bot_yielding(&self, slot: usize) -> u32 {

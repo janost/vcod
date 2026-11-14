@@ -30,6 +30,13 @@ const COVER_HEIGHT: f32 = 48.0;
 const HOLD_TICKS: u32 = 60;
 /// No retreat lasts longer than this, ticks.
 const RETREAT_TICKS: u32 = 200;
+/// A `ctf` carrier holds from an enemy within this ahead of him: within
+/// 60 degrees of his way.
+const AHEAD_NEAR: f32 = 1500.0;
+const AHEAD_COS: f32 = 0.5;
+/// After a hold from an enemy ahead the carrier runs on at least this
+/// long, ticks, before another.
+const AHEAD_REST: u32 = 100;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Why {
@@ -37,6 +44,8 @@ pub(crate) enum Why {
     Hurt,
     /// The clip ran dry, the reserve holds more, and no pistol came out.
     Dry,
+    /// A `ctf` carrier saw an enemy ahead (`Bot::ctf_hold`).
+    Ahead,
 }
 
 /// A retreat under way.
@@ -141,6 +150,7 @@ impl Bot {
             None => 0,
             Some(r) if r.held > 0 => 3,
             Some(r) if r.why == Why::Hurt => 1,
+            Some(r) if r.why == Why::Ahead => 4,
             Some(_) => 2,
         }
     }
@@ -150,6 +160,51 @@ impl Bot {
     /// [`Bot::goal`] reads it.
     pub(crate) fn cover_query(&self) -> Option<([f32; 3], Option<[f32; 3]>)> {
         self.retreat.map(|r| (r.threat, r.cover))
+    }
+
+    /// A `ctf` carrier holding in cover from an enemy ahead
+    /// (`Bot::ctf_hold`): its goal outranks the run home.
+    pub(super) fn holding_ahead(&self) -> bool {
+        self.retreat.is_some_and(|r| r.why == Why::Ahead)
+    }
+
+    /// An enemy in sight within [`AHEAD_NEAR`] of a `ctf` carrier with
+    /// `ctf_hold` on, within 60 degrees of his next waypoint (else his
+    /// goal): his eye.
+    fn enemy_ahead(&self, view: &BotView) -> Option<[f32; 3]> {
+        let Some(UoView::Ctf(c)) = view.uo.as_ref() else {
+            return None;
+        };
+        if !self.ctf_hold || !self.team_play || !c.carrying {
+            return None;
+        }
+        let (e, eye) = (view.enemy?, view.survive.enemy_eye?);
+        let flat = |p: [f32; 3]| glam::Vec2::new(p[0] - view.origin[0], p[1] - view.origin[1]);
+        let to = flat(e.origin);
+        let way = flat(view.waypoint.unwrap_or(c.theirs.goal.stand)).try_normalize()?;
+        (to.length() < AHEAD_NEAR && to.normalize_or_zero().dot(way) > AHEAD_COS).then_some(eye)
+    }
+
+    /// A United Offensive `ctf` carrier with `ctf_sprint` on and the breath
+    /// to sprint, an enemy in sight not within 60 degrees of his way: he
+    /// sprints on rather than fire back. Most carriers fell to fire from
+    /// behind or the side (bot-objectives.md 14.12).
+    pub(super) fn flees(&self, view: &BotView) -> bool {
+        let Some(UoView::Ctf(c)) = view.uo.as_ref() else {
+            return false;
+        };
+        if !self.ctf_sprint || !self.team_play || !c.carrying || view.fatigue.is_none() {
+            return false;
+        }
+        let Some(e) = view.enemy else {
+            return false;
+        };
+        let flat = |p: [f32; 3]| glam::Vec2::new(p[0] - view.origin[0], p[1] - view.origin[1]);
+        let way = flat(view.waypoint.unwrap_or(c.theirs.goal.stand));
+        flat(e.origin)
+            .normalize_or_zero()
+            .dot(way.normalize_or_zero())
+            <= AHEAD_COS
     }
 
     /// The goal of a retreat with cover found: the cover, or holding it.
@@ -296,6 +351,7 @@ impl Bot {
         }
         let duty = self.duty_bound(view);
         let seen = view.enemy.and(view.survive.enemy_eye);
+        self.ahead_rest = self.ahead_rest.saturating_sub(1);
         if let Some(r) = self.retreat.as_mut() {
             r.ticks += 1;
             r.cover = view.survive.cover;
@@ -312,15 +368,35 @@ impl Bot {
                         || (r.held > 0 && view.enemy.is_none() && view.survive.heal.is_some())
                 }
                 Why::Dry => (view.clip > 0 && view.busy_ms == 0) || !loaded,
+                Why::Ahead => {
+                    r.held >= HOLD_TICKS || !matches!(&view.uo, Some(UoView::Ctf(c)) if c.carrying)
+                }
             };
-            if duty || done || r.cover.is_none() || r.ticks >= RETREAT_TICKS {
+            let ahead = r.why == Why::Ahead;
+            if (duty && !ahead) || done || r.cover.is_none() || r.ticks >= RETREAT_TICKS {
                 self.retreat = None;
+                if ahead {
+                    self.ahead_rest = AHEAD_REST;
+                }
             }
             return;
         }
         let Some(threat) = seen else {
             return;
         };
+        // A carrier holds from an enemy ahead rather than run into him.
+        if self.ahead_rest == 0
+            && let Some(eye) = self.enemy_ahead(view)
+        {
+            self.retreat = Some(Retreat {
+                why: Why::Ahead,
+                threat: eye,
+                cover: None,
+                ticks: 0,
+                held: 0,
+            });
+            return;
+        }
         if duty || self.switch_to.is_some() {
             return;
         }
@@ -425,6 +501,64 @@ mod tests {
         v.survive.clip_size = 8;
         v.survive.enemy_eye = Some([100.0, 0.0, 144.0]);
         (bot, v)
+    }
+
+    /// A `ctf` carrier (`Bot::ctf_hold`) that sees an enemy ahead holds in
+    /// cover from him, its goal over the run home; one behind it runs on,
+    /// and with the rule off it runs on too. With `Bot::ctf_sprint` it
+    /// sprints from one behind.
+    #[test]
+    fn a_ctf_carrier_holds_in_cover_from_an_enemy_ahead() {
+        use crate::bots::{CtfFlagView, CtfView, SiteView};
+        let carrier = |seed, ahead: bool, on: bool| {
+            let (mut bot, mut v) = engaged(seed);
+            bot.ctf_hold = on;
+            v.survive.enemy_eye = Some([100.0, 0.0, 144.0]);
+            let site = |x: f32| SiteView {
+                mins: [x - 50.0, -50.0, 0.0],
+                maxs: [x + 50.0, 50.0, 100.0],
+                stand: [x, 0.0, 0.0],
+            };
+            let flag = |x: f32, carried: bool| CtfFlagView {
+                home: (!carried).then(|| site(x)),
+                dropped: None,
+                goal: site(-x),
+                carried,
+                carrier: carried.then_some(0),
+            };
+            v.uo = Some(UoView::Ctf(Box::new(CtfView {
+                ours: flag(3000.0, false),
+                theirs: flag(if ahead { -3000.0 } else { 3000.0 }, true),
+                carrying: true,
+                escort: None,
+                rank: 0,
+                hunt: None,
+                lead: None,
+            })));
+            v.waypoint = Some(if ahead {
+                [64.0, 0.0, 0.0]
+            } else {
+                [-64.0, 0.0, 0.0]
+            });
+            bot.think(&v);
+            (bot, v)
+        };
+        let (bot, mut v) = carrier(1, true, true);
+        assert_eq!(bot.retreating(), 4);
+        let cover = [-300.0, 200.0, 0.0];
+        v.survive.cover = Some(cover);
+        assert_eq!(bot.goal(&v), Goal::To(cover));
+        assert_eq!(carrier(1, false, true).0.retreating(), 0, "behind");
+        assert_eq!(carrier(1, true, false).0.retreating(), 0, "off");
+        // On United Offensive (breath to sprint) with `ctf_sprint` on, he
+        // sprints on from one behind and not from one ahead.
+        let (mut bot, mut v) = carrier(1, false, false);
+        v.fatigue = Some(1.0);
+        assert!(!bot.flees(&v), "off");
+        bot.ctf_sprint = true;
+        assert!(bot.flees(&v), "behind");
+        v.waypoint = Some([64.0, 0.0, 0.0]);
+        assert!(!bot.flees(&v), "ahead");
     }
 
     #[test]

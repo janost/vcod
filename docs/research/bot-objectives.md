@@ -4035,4 +4035,121 @@ standard error, and the matches higher and lower:
   for their flag (2660 bot-ticks). INFERRED: on UO's maps a capture is held back by
   the run home (4000 to 5000 units on mp_berlin, alone), not the wait;
   an escort that walks ahead of the carrier, or a route the enemy does
-  not hold, is the next step.
+  not hold, is the next step (14.12 measures both).
+
+### 14.12 The carrier's run home, 2026-11-14
+
+Four rules for a `ctf` carrier's run home, each on its own switch and
+`bot_match` arm. None raised captures or the carrier's survival past the
+seed spread in both games, so all four are off by default
+(`Bot::ctf_escort`, `ctf_route`, `ctf_hold`, `ctf_sprint`; an arm given
+turns its rule on, bot-combat.md 1). vcod's own, with nothing on retail
+to measure against.
+
+- Escort (`ESCORT=`, `driver::ctf::deal_escort`). With no flag of the
+  side lying out and the carrier more than 800 units from his goal: of
+  the attackers not hunting, the 3 nearest within 1500, and with the own
+  flag home one of its holders when there are two or more, the nearest.
+  The one nearest the point 700 units along the carrier's path walks for
+  it (`CtfView::lead`, an `ObjTarget::Escort`); the rest for points 200
+  behind him and 200 to his left and right, snapped to the graph.
+- Route (`ROUTE=`, `driver::ctf::danger`). The carrier's plan pays
+  `nav::DANGER_COST` (2) more on the edges out of nodes within 600 units
+  of where his side saw an enemy in the last 8 s, and within 300 of the
+  outposts round the flag he took (`posts::outer`, section 14.1), in
+  place of the crowd cost, with his route noise. A new marked edge on his
+  way ahead drops the plan, at most every 40 ticks.
+- Hold (`HOLD=`, `Bot::holding_ahead`). An enemy in sight within 1500
+  units and 60 degrees of his way: the carrier takes the retreat's cover
+  from him (bot-combat.md 5) for 3 s, then runs on for at least 5 s.
+- Sprint (`SPRINT=`, `Bot::flees`, United Offensive). An enemy in sight
+  not within 60 degrees of his way: the carrier keeps his keys on the
+  path and sprints while he has the breath, instead of turning the gun on
+  him.
+
+`bot_match` counts each carry (`ctf_carries`, off the flags each tick,
+`CtfCarries`) and how it ends: a capture (the side's score rose), a death
+or drop within 600 units of the goal, one farther out (on the run), or
+the match's end; and the carry ticks with a teammate playing within 500
+units. `CTF_TRACE=1` prints each end with the killer's distance and the
+cosine of his bearing against the way home.
+
+What the carriers die of. VERIFIED (measured, ours, release, the rules
+off, UO's set below, `CTF_TRACE=1`): 30 of 36 carries that ended fell,
+every one to a killer the trace placed; 13 stood behind the carrier
+(cosine under -0.5), 12 beside him and 5 ahead, from 52 to 1481 units off
+(median 605). 19 of the 36 carries never had a teammate within 500 units,
+and 44% of all carry ticks had one (8009 of 18077). INFERRED (code,
+`Bot::uo_target`): once their flag is carried the other side's holders
+leave for the goal its carrier makes for ("carried off: hold the goal"),
+so they run the carrier's way, behind him; the two nearest a sighting
+of him hunt him (14.1).
+
+VERIFIED (measured, ours, release): `bot_match` `GAMETYPE=ctf`, 10 bots,
+6000 ticks, seeds 1..=8. UO: mp_arnhem, mp_berlin, mp_cassino and
+mp_sicily (32 matches); CoD2: mp_toujane, mp_burgundy, mp_carentan and
+mp_matmata (32). Each rule alone, the others off. Totals, and for
+captures, carrier deaths on the run and kills the mean difference per
+match against before, its standard error and the matches higher and
+lower. Near: deaths within 600 of the goal.
+
+| UO | carries | captures | on the run | near | returns | kills | stalled |
+|---|---|---|---|---|---|---|---|
+| before | 42 | 6 | 28 | 2 | 22 | 1230 | 90 |
+| escort | 43 | 9, +0.09 ± 0.09, 2/1 | 29, +0.03 ± 0.16 | 1 | 26 | 1258, +0.88 ± 0.72 | 74 |
+| route | 51 | 6, +0.00 ± 0.08, 3/3 | 28, +0.00 ± 0.13 | 4 | 25 | 1240, +0.31 ± 0.48 | 135 |
+| hold | 44 | 6, +0.00 ± 0.06, 2/2 | 32, +0.12 ± 0.12 | 0 | 30 | 1232, +0.06 ± 0.47 | 69 |
+| sprint | 48 | 11, +0.16 ± 0.10, 4/1 | 26, -0.06 ± 0.13 | 1 | 18 | 1243, +0.41 ± 0.53 | 373 |
+| all four | 46 | 5, -0.03 ± 0.07, 2/3 | 23, -0.16 ± 0.12 | 9 | 26 | 1203, -0.84 ± 0.57 | 132 |
+
+| CoD2 | carries | captures | on the run | near | kills | stalled |
+|---|---|---|---|---|---|---|
+| before | 219 | 57 | 130 | 22 | 2178 | 0 |
+| escort | 226 | 54, -0.09 ± 0.23, 8/11 | 138, +0.25 ± 0.61 | 22 | 2147, -0.97 ± 1.46 | 176 |
+| route | 231 | 55, -0.06 ± 0.20, 10/10 | 106, -0.75 ± 0.50 | 48 | 2043, -4.22 ± 1.27 | 143 |
+| hold | 240 | 43, -0.44 ± 0.24, 7/15 | 164, +1.06 ± 0.51 | 15 | 2206, +0.88 ± 0.90 | 93 |
+| escort, route, hold | 217 | 46, -0.34 ± 0.22, 8/12 | 113, -0.53 ± 0.64 | 35 | 2095, -2.59 ± 1.32 | 82 |
+
+- VERIFIED (the tables): no rule moves captures past two standard
+  errors in either game. UO's sprint and escort rows gain 5 and 3 of 6
+  captures inside the spread; CoD2's hold loses 14 and puts more carriers
+  down on the run (+1.06 ± 0.51), the hold giving the chasers time.
+- VERIFIED (the tables): CoD2's route keeps carriers alive on the run
+  (-0.75 ± 0.50; the versions below, about -1.9) but more of them
+  fall near the goal (22 to 48), waiting there for their own flag
+  (14.11), and the kills fall past the spread (-4.22 ± 1.27). INFERRED:
+  the escorts keeping by him (section 9) follow him round, out of the
+  fights.
+- VERIFIED (the tables): the stalls rise in most rows, each inside the
+  spread (sprint's, the most, +8.8 ± 6.6 a match); one UO match of the
+  route's earlier versions stalled 4046 ticks (below).
+- VERIFIED (measured, the build with the rules off against a build of
+  the base, fdbe1e34f, with the counters, the same runs): every count
+  matches, both games.
+
+Versions measured before these, VERIFIED (measured, the same runs and
+build line):
+
+- Escort with the flankers 200 ahead and to the sides, attackers alone:
+  UO captures +0.06 ± 0.06, CoD2 +0.25 ± 0.22. Flankers behind, attackers
+  alone: UO +0.16 ± 0.08 (4 higher, none lower), CoD2 -0.09 ± 0.21 and its
+  carries down (-1.28 ± 0.50). The holder walking out raised the escorted
+  share of carry ticks from 42% to 48% (8985 of 18584).
+- Route on the sightings alone, dropping the plan on every new marked
+  edge: CoD2's carriers on the run -1.81 ± 0.59, its kills -6.91 ± 1.65,
+  and one UO match (mp_cassino seed 4) 4046 stalled ticks. With the
+  40-tick wait: CoD2 -1.94 ± 0.55 and kills -5.66 ± 1.65, so the kills do
+  not fall for the replans; the UO match stalled as before, bot 3, not a
+  carrier, at (5882, -2038, -8) short of the edge (5909, -1973, -8) to
+  (5911, -2019, 22) from tick 1954 to the end: a divergence onto a trap
+  the rule did not make, not traced. With the outposts that match no
+  longer reaches it (most stalled in a match: 66).
+- Escort and sprint together on UO: captures +0.03 ± 0.08.
+
+What does move UO's captures. VERIFIED (measured, the same runs):
+`FAR=none`, the guards holding round their flag instead of out on its
+ways in (14.1): 54 carries and 14 captures against 42 and 6, +0.25 ± 0.09
+a match, 7 higher and none lower; kills +0.59 ± 0.93, stalls 194. INFERRED:
+the outposts the carrier passes on the way out see his back. That is
+section 14's rule, not the carrier's, and is left as it is here; a `ctf`
+outpost that turns to the carrier going out is the next step.

@@ -2026,6 +2026,9 @@ pub const CROWD_COST: f32 = 1.0;
 /// [`CROWD_COST`] for an S&D flanker on the main group's paths: a way
 /// round up to this much longer again is taken (bot-objectives.md 9.1).
 pub const FLANK_COST: f32 = 4.0;
+/// [`CROWD_COST`] for a `ctf` carrier on the edges near enemies his side
+/// saw of late (bot-objectives.md 14.12).
+pub const DANGER_COST: f32 = 2.0;
 /// A bot's own route noise ([`Search::noisy`]): each [`NOISE_CELL`]-wide
 /// square of the map costs it up to this fraction more or less, so a
 /// team's plans split over ways of near the same length. Drawn per square,
@@ -2226,6 +2229,9 @@ pub struct Follower {
     /// The bot's route noise seed ([`Search::noisy`]), 0 for none. Set
     /// with [`Self::crowd`].
     pub noise: u64,
+    /// Ticks before a `ctf` carrier's plan may be dropped again for a
+    /// sighting on its way ahead (`bots::driver`, bot-objectives.md 14.12).
+    pub danger_wait: u32,
     /// Nodes a parked vehicle stands over, sorted
     /// ([`NavGraph::blocked_near`]): a plan runs through none but its own
     /// ends, and a path with one ahead is planned again. Set by the
@@ -3962,6 +3968,11 @@ impl Follower {
             spot
         };
         Some((p, moving, under_way))
+    }
+
+    /// Drops the plan, so the next waypoint plans afresh to the same goal.
+    pub fn replan(&mut self) {
+        self.reset();
     }
 
     /// The bot's own stall circle caught the body on the way to the
