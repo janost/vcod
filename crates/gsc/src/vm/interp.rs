@@ -1189,7 +1189,7 @@ impl Vm {
                         ab => ab,
                     };
                     let v = match (a, b) {
-                        (_, Value::Float(y)) if y == 0.0 => {
+                        (_, Value::Float(0.0)) => {
                             return Err(err(ErrorKind::BadType("division by zero")));
                         }
                         (Value::Float(x), Value::Float(y)) => Value::Float(x / y),

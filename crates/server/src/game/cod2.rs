@@ -1546,6 +1546,9 @@ impl Cod2Level {
             pers: if keep { all.pers } else { Vec::new() },
             scripts: all.scripts.filter(|_| restart),
             gametype: all.gametype,
+            // A restart keeps the paks' referenced flags, which a load
+            // through the caches would have set again.
+            models: all.models.filter(|_| restart),
             ..Default::default()
         }
     }
