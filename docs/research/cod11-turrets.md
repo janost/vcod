@@ -1936,15 +1936,15 @@ table dumped; the run, its dumps and its replay not kept):
   every grid cell within `GRID_NEAR` and the struck body retail's bits, in
   either order. Starting the run clip at the phase of a setter time 2 to
   12 ms earlier puts the point on retail's, past that a step the other
-  way. VERIFIED, `game.mp.uo.i386.so`: the phase's time is `bg.time`
-  (0x1d147, the GOT slot of `bg`), which `G_RunFrame` sets to
-  `level.time` (0x59ca2) and nothing else writes. A rerun with the grid
-  under gdb lost the run clip on the kill (the pause reordered the two
-  clients' cmds), so the gdb pause changes the outcome.
+  way. A rerun with the grid under gdb had no run clip on the kill at
+  all.
+- VERIFIED, `game.mp.uo.i386.so`: the phase's time is `bg.time` (0x1d147,
+  the GOT slot of `bg`), and the one store through that slot is
+  `G_RunFrame`'s `level.time` (0x59ca2).
 
 INFERRED: what is left on a plain run is an input of the 0.001 run clip
-(its start phase or its first weight) that a pause in the frame moves;
-the pose is a few e-6 off retail's there. Not yet found.
+(its start phase or its first weight) that a pause in the server's frame
+moves, as the gdb runs' pauses moved the clients' cmds. Not yet found.
 `KNOCKBACK_GAP` stays on UO's `-hitgrid` and `-hitfine` kills.
 
 vcod: `turret_ab`'s `hit_gate` replays each capture as `spawn_gate` does and
