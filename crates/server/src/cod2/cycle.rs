@@ -4,7 +4,7 @@
 //! script's `exitLevel`). Addresses are cod2_lnxded's.
 
 use std::rc::Rc;
-use vcod_common::asset_source::{Asset, AssetSource, RawFile};
+use vcod_common::asset_source::{AssetSource, RawFile};
 
 use vcod_common::pk3::Pk3Fs;
 
@@ -87,17 +87,20 @@ impl Cod2Server {
     /// through `ClientConnect`. Each gets its gamestate when its next
     /// message carries the old id (`client_packet`).
     pub(super) fn spawn_server(&mut self, map: &str) -> anyhow::Result<()> {
-        let (carry, rigs) = match self.game.level.as_ref() {
+        let p = crate::tick_profile::phase("load/carry");
+        let (carry, rigs, parts) = match self.game.level.as_ref() {
             Some(level) => {
                 // One dvar table on retail: what the script set stays set.
                 self.game.cvars = level.rt.host.cvars.clone();
                 (
                     level.take_carry(false),
                     level.carried_rigs(self.game.fs.as_ref()),
+                    Some(level.carried_parts()),
                 )
             }
             None => Default::default(),
         };
+        drop(p);
         let gametype = self.game.cvars.get("g_gametype").to_string();
         let line = format!("loadingnewmap\n{map}\n{gametype}");
         let to: Vec<_> = self
@@ -125,7 +128,9 @@ impl Cod2Server {
         self.game.cfg.map = map.to_string();
         self.game.cvars.set("mapname", map);
         self.shutdown_game_log();
+        let p = crate::tick_profile::phase("load/drop level");
         self.game.level = None;
+        drop(p);
         self.core.configstrings = vec![String::new(); vcod_cod2::net::ops::MAX_CONFIGSTRINGS];
         self.game.baselines.clear();
         self.core.checksum_feed = self.rand();
@@ -135,9 +140,11 @@ impl Cod2Server {
             Cod2Init {
                 carry,
                 rigs,
+                parts,
                 ..Default::default()
             },
         )?;
+        let _p = crate::tick_profile::phase("load/connect");
         for slot in 0..self.core.clients.len() {
             // A zombie is no client to carry over (`state < CS_CONNECTED`).
             if self.core.clients[slot]
@@ -184,6 +191,7 @@ impl Cod2Server {
         let persist = level.save_persist();
         let carry = level.take_carry(true);
         let rigs = level.carried_rigs(self.game.fs.as_ref());
+        let parts = Some(level.carried_parts());
         let configstrings = level.rt.configstrings().to_vec();
         self.game.server_id = restart_server_id(self.game.server_id);
         self.game.snap_flags ^= 4;
@@ -196,6 +204,7 @@ impl Cod2Server {
                 carry,
                 configstrings: Some(configstrings),
                 rigs,
+                parts,
                 ..Default::default()
             },
         )?;
@@ -316,12 +325,11 @@ impl Cod2Server {
             return Ok(());
         };
         let mut laps = vcod_common::laps::Laps::new(format!("cod2 level {}", self.game.cfg.map));
-        let file = vcod_cod2::map::MapFile::find(&*fs, &self.game.cfg.map)
+        let mut init = init;
+        let parts = Cod2Level::map_parts(&fs, &self.game.cfg.map, init.parts.take())
             .with_context(|| format!("map {} not loaded", self.game.cfg.map))?;
-        laps.lap("read and parse");
-        let world = file.world();
-        laps.lap("world");
-        self.game.spot = super::intermission_spot(&world);
+        laps.lap("map");
+        self.game.spot = super::intermission_spot(parts.world());
         let overlay =
             self.game.cfg.gametype_script.clone().filter(|(stem, _)| {
                 format!("maps/mp/gametypes/{}", self.game.cfg.gametype) == *stem
@@ -341,12 +349,10 @@ impl Cod2Server {
             .init(&self.game.cvars, &game, &info, self.core.sv_time_ms);
         // `G_InitGame`'s `srand` and the script's generator share one seed:
         // retail's wall clock in ms, here a draw (cod2-combat.md 9.6).
-        let mut init = init;
         init.carry.seed = Some(u64::from(self.game_seed()));
-        let mut level = Cod2Level::load_map_with(
+        let mut level = Cod2Level::load_level(
             fs,
-            &file,
-            &world,
+            parts,
             &self.game.cfg.map,
             &self.game.cfg.gametype,
             self.game.cvars.clone(),
@@ -355,11 +361,13 @@ impl Cod2Server {
         )
         .context("loading the level")?;
         laps.lap("level");
+        let p = crate::tick_profile::phase("load/spawn frames");
         for _ in 0..super::SPAWN_FRAMES {
             self.core.sv_time_ms += super::SPAWN_FRAME_MS;
             level.rt.script_lag_ms += super::SPAWN_FRAME_MS - super::FRAME_MS;
             level.run_frame(self.core.sv_time_ms);
         }
+        drop(p);
         laps.lap("spawn frames");
         laps.finish();
         for e in level.rt.aborts() {

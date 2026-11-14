@@ -400,6 +400,10 @@ jobs, each run pinned to cores 0-7 (`taskset`) under a memory cap.
   `head/configstrings`), on CoD1 `console/map_restart` (`/load`,
   `/settle`, `/reenter`; the level load's `load/compile`, `load/spawn`
   with its `spawn/*` parts, `load/bootstrap`, cod11-map-cycle.md 4.9),
+  on CoD2 `console` with a load's `load/carry`, `load/drop level`,
+  `load/read and parse`, `load/world`, `load/clip`, `load/collision world`,
+  `load/mantle anims`, `load/static models`, `load/combat and anims`,
+  `load/spawn frames`, `load/baselines and pure` and `load/connect`,
   `frame` (`G_RunFrame`:
   `frame/touch triggers`, `frame/scripts`, `frame/script ops`,
   `frame/entities`, `frame/trace bodies`, `frame/mantle and hud`,
@@ -425,8 +429,9 @@ jobs, each run pinned to cores 0-7 (`taskset`) under a memory cap.
   thread's kernel wait channel and the syscall every other thread of the
   process is in.
 - `vcod-server` with `VCOD_TICK_PROFILE_MS=<ms>` logs each tick past it;
-  `bot_match GAME=cod2|cod4 SPIKE_MS=<ms>` prints them (`RESTART=<n>`
-  on CoD2 runs a `map_restart` every `n` ticks, a spawn wave each); the
+  `bot_match SPIKE_MS=<ms>` (any game) prints them (`RESTART=<n>`
+  on CoD1 and CoD2 runs a `map_restart` every `n` ticks, a spawn wave
+  each); the
   soak logs every
   tick past `VCOD_SOAK_TICK_LOG_MS` (100), with `VCOD_SOAK_TICK_WATCH=1`
   the waits, and `VCOD_SOAK_CLIENT_LOG_MS` the client's slow frames
@@ -654,7 +659,83 @@ queued), the ticks `TICKSTATS=1`'s ms a tick. VERIFIED (the logs).
   and `sd`, 600 ticks each, and on each run of the table. VERIFIED.
 - Left: the level's first rig assembly (the xmodel reads), the restart's
   load, and the builtins themselves (`bulletTracePassed`'s traces,
-  `getEntArray`'s walk of every entity).
+  `getEntArray`'s walk of every entity). The first two are "The restart's
+  load" below.
+
+#### The restart's load
+
+A CoD2 `map_restart` (the console's, a full `SV_SpawnServer`) and a
+`fast_restart` (the script's `map_restart(true)`, every `sd` round) both
+ran the whole level load inside one tick. Its `load/*` phases on mp_toujane
+`dm`, 60 bots: about 130 ms of `console`, of it `load/combat and anims`
+27-37 ms (`mp/playeranim.script` and the animtree parsed twice, for the
+hit poses and for pmove's anim table, every clip's length read),
+`load/read and parse` 19-26 (the `.d3dbsp` inflated and parsed),
+`load/clip` 19-24, `load/static models` 19-36 (the `misc_model` xmodels
+and their triangle tree, joined after the script), `load/world` 6-12,
+`load/collision world` 3-17, the script's compile, spawn and bootstrap
+about 10 together, `load/drop level` 3, `load/spawn frames` 2-3.
+VERIFIED (the logs).
+
+What changed, none of it in what a level holds:
+
+- `MapParts` (`game/cod2.rs`): the world, the clip map, the static
+  models' collision, the hit poses' anim set (no clip loaded), pmove's
+  anim table and the hit-location multipliers, built once per map and
+  search path. The level keeps them and a `map_restart`, `fast_restart` or
+  `map` of the same map takes them (`Cod2Init::parts`). Their reads went
+  through a `pk3::ReadLog`, which `laps::par_map` carries into its
+  workers; a reuse touches every path it logged, so the referenced iwds
+  come out as a fresh read's. VERIFIED (`cod2::cycle_tests`, "a reload of
+  the map reuses its parts": without the touches `iw_04` drops out of
+  `sv_referencedIwds`).
+- The weapon files (`Cod2HostState::weapon_files`, carried as
+  `Carry::weapon_files` over the same paks): each of a level's 20
+  `precacheItem`s read and parsed its file twice. A reuse touches
+  `weapons/mp/<name>`. `precacheItem`'s time a level fell from 1.8 ms to
+  0.26. VERIFIED (a per-builtin timer, not kept).
+- The hit rigs (`PlayerRig::assemble_bones_with`): the server's rig takes
+  each xmodel's bones alone and shares its parts between characters. The
+  level's first wave spent 36-55 ms in `bodies/pose` inflating every LOD's
+  `xmodelsurfs/` for meshes no trace reads; now 1.1-1.8 ms. VERIFIED (the
+  logs). The dedicated server's surface loader reads nothing (cod2-protocol.md
+  11.3), so retail's rig never fails on a mesh; vcod's no longer drops an
+  attachment whose `xmodelsurfs/` does not parse. INFERRED.
+- CoD1 and CoD4 share none of this load. CoD1's `map_restart` keeps its
+  map, area tree and compiled scripts (`Carry`, cod11-map-cycle.md 4.7)
+  and CoD4's `fast_restart` its zones and iwds (`Cod4Zones`, "Long runs,
+  past 40 ms" above). VERIFIED (the code).
+
+Before (the base) and after, two runs each in turn, seed 1, `SPIKE_MS=15`,
+on the shared box at a load average of 100 to 110: the ms below are on a
+CPU (`tick_profile::Split`'s run), as the wall times ran 1.5 to 4 times
+that with the queueing. VERIFIED (the logs).
+
+| run | restart tick before | after | first wave before | after | p50 before | after |
+|---|---|---|---|---|---|---|
+| CoD2 mp_toujane `dm`, 60 bots, `RESTART=40` (`map_restart`), 200 ticks | 116-138 | 30-48 | 113-132 | 74-80 | 25-36 | 23-26 |
+| CoD2 mp_carentan `tdm`, 12 bots, `RESTART=40`, 240 ticks | 134-172 | 37-54 | 14-16 | 5, under 15 | 3.2-5.8 | 5.5-6.1 |
+| CoD2 mp_toujane `sd`, 24 bots, 4000 ticks (each round's `fast_restart`) | 106-128 | 25-38 | 43-45 | 20-21 | 4.0-5.7 | 3.8-9.7 |
+| CoD4 mp_crash `sd`, 12 bots, 4000 ticks | 46-55 | 32-47 | - | - | 4.1-6.8 | 4.8-6.6 |
+| CoD1 1.1 mp_carentan `sd`, 12 bots, 3000 ticks (`console/map_restart`, wall) | 29-36 | 27-32 | - | - | 6.9-7.7 | 7.6-8.6 |
+
+- The p50s moved with the box's load, not the change, and CoD4's and
+  CoD1's rows, whose load paths the change leaves alone, are the spread.
+  INFERRED.
+- Single runs while the box was quieter (the after one at a load
+  average of 27) put mp_toujane `dm`'s restart tick at 107-128 ms of wall
+  time before and 21-30 after, and its restart wave at 44-45 ms after.
+  VERIFIED (the logs).
+- `DIGEST=1` matched before and after on every run of the table, and
+  `NETDIGEST=600` with it through four `map_restart`s on CoD2 mp_toujane
+  `dm` and `sd` (12 bots, 600 ticks) and through the `sd` rounds of CoD1
+  1.1 and UO mp_carentan (12 bots, 3000 ticks). VERIFIED.
+- Left: CoD2's spawn wave, 40-45 ms at 60 bots, of it 14 ms in builtins
+  a level (`bulletTracePassed` 4.3-4.9 ms over 845 calls, `getEntArray`
+  1.7 ms over 511) and the interpreter the rest; and the restart's own
+  15-20 ms of `console` (`load/spawn` 3, `load/collision world` 2.5-4.4,
+  `load/drop level` 2-3.7, a `map_restart`'s compile 1.7, the spawn frames
+  1.7). VERIFIED (the logs, a quiet box).
 
 ## 10. Full servers, every game
 

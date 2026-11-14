@@ -1,6 +1,7 @@
 //! Vector arithmetic rounded the way the 1.1 binaries' x87 code rounds it:
-//! every intermediate kept on the 80-bit stack (an `f64` here) and one
-//! rounding to `f32` where the binary stores. The game module's
+//! every intermediate kept on the 80-bit stack (an `f64` here, or an
+//! [`F80`] where an `f64` would round twice) and one rounding to `f32`
+//! where the binary stores. The game module's
 //! `VectorNormalize` (game.mp 0x3d8d8) and `CrossProduct` (0x3d86c) and the
 //! engine's copies (`cod_lnxded` 0x8065a38, 0x80659cc) round alike.
 
@@ -84,10 +85,11 @@ pub fn normalize2_stored(v: Vec3) -> Vec3 {
 /// module alike (`cod_lnxded` 0x8063388, 1.5b 0x806759d, UO 0x80674ad;
 /// game.mp 0x3b228, 1.5b 0x33e18, UO 0x3b068): forward, right, up. Each
 /// angle times the double `M_PI * 2 / 360` is stored as a float, its
-/// `fsincos` stored as floats, and each component's sum of products kept on
-/// the stack until one store. Rounding every product to a float instead
-/// turns a pitched, yawed and rolled model by a few ulps, and a slide down
-/// its face ends thousandths short (movers doc 22).
+/// `fsincos` stored as floats, and each component's products and sum kept
+/// on the stack at the 64-bit precision the process runs at ([`F80`])
+/// until one store. Rounding every product to a float instead turns a
+/// pitched, yawed and rolled model by a few ulps, and a slide down its
+/// face ends thousandths short (movers doc 22).
 pub fn angle_vectors(angles: Vec3) -> [Vec3; 3] {
     angle_vectors_of_radians(Vec3::new(
         radians(angles.x),
@@ -97,13 +99,22 @@ pub fn angle_vectors(angles: Vec3) -> [Vec3; 3] {
 }
 
 /// The radians the Linux builds' `AngleVectors` turn a degree angle into:
-/// times the double `M_PI * 2 / 360`, stored as a float. pmove's
-/// `ps.yaw` and `-ps.pitch` hold exactly these (`cmd::apply_view`).
+/// times the double `M_PI * 2 / 360` on the stack, stored as a float.
+/// pmove's `ps.yaw` and `-ps.pitch` hold exactly these (`cmd::apply_view`).
 pub fn radians(deg: f32) -> f32 {
-    (f64::from(deg) * (std::f64::consts::PI * 2.0 / 360.0)) as f32
+    const K: f64 = std::f64::consts::PI * 2.0 / 360.0;
+    let x = f64::from(deg) * K;
+    stored(x, x.abs(), || {
+        (F80::from_f32(deg) * F80::from_f64(K)).to_f32()
+    })
 }
 
 /// [`angle_vectors`] of angles already turned to radians by [`radians`].
+/// `right` and `up`'s first two components are a product of three floats
+/// plus one of two: the triple product takes 72 bits, so an `f64` sum
+/// rounds twice where the x87's rounds once, and lands a float ulp off
+/// about once in 10^8, more often where the two terms nearly cancel
+/// (`the_kept_sums_round_at_64_bits`).
 pub fn angle_vectors_of_radians(rad: Vec3) -> [Vec3; 3] {
     let sin_cos = |r: f32| {
         let r = f64::from(r);
@@ -112,10 +123,205 @@ pub fn angle_vectors_of_radians(rad: Vec3) -> [Vec3; 3] {
     let (sp, cp) = sin_cos(rad.x);
     let (sy, cy) = sin_cos(rad.y);
     let (sr, cr) = sin_cos(rad.z);
-    let forward = DVec3::new(cp * cy, cp * sy, -sp);
-    let right = DVec3::new(-sr * sp * cy + cr * sy, -sr * sp * sy - cr * cy, -sr * cp);
-    let up = DVec3::new(cr * sp * cy + sr * sy, cr * sp * sy - sr * cy, cr * cp);
-    [forward.as_vec3(), right.as_vec3(), up.as_vec3()]
+    // `p * c + d * e`, `p` the exact product of two floats.
+    let sum = |p: f64, c: f64, d: f64, e: f64| {
+        let pc = p * c;
+        let s = pc + d * e;
+        stored(s, pc.abs() + s.abs(), || {
+            let f = F80::from_f64;
+            (f(p) * f(c) + f(d) * f(e)).to_f32()
+        })
+    };
+    let forward = Vec3::new((cp * cy) as f32, (cp * sy) as f32, -sp as f32);
+    // game.mp 0x3b2b8..0x3b2f5: `-sr * sp` once, times `cy` and `sy`.
+    let srsp = -sr * sp;
+    let right = Vec3::new(
+        sum(srsp, cy, cr, sy),
+        sum(srsp, sy, -cr, cy),
+        (-sr * cp) as f32,
+    );
+    // 0x3b2fe..0x3b33e: `cr * sp` once, times `cy` and `sy`.
+    let crsp = cr * sp;
+    let up = Vec3::new(
+        sum(crsp, cy, sr, sy),
+        sum(crsp, sy, -sr, cy),
+        (cr * cp) as f32,
+    );
+    [forward, right, up]
+}
+
+/// The float the x87 stores for a value an `f64` computed as `x`, within
+/// `2^-52 * scale` of the exact one: `x`'s own rounding when no float
+/// midpoint lies that close, else `exact`, the [`F80`] steps.
+fn stored(x: f64, scale: f64, exact: impl FnOnce() -> f32) -> f32 {
+    let f = x as f32;
+    if f.is_normal() && scale <= 2.0 * x.abs() {
+        // The slack is then under 8 of `x`'s ulps, and a float midpoint in
+        // `x`'s binade is an `f64` whose low 29 mantissa bits are 2^28.
+        let low = (x.to_bits() & ((1 << 29) - 1)) as i64;
+        if (low - (1 << 28)).abs() > 16 {
+            return f;
+        }
+    } else if f.is_normal() {
+        let mid = |g: f32| (f64::from(f) + f64::from(g)) * 0.5;
+        let slack = scale * f64::EPSILON * 2.0;
+        if (x - mid(f.next_up())).abs() > slack && (x - mid(f.next_down())).abs() > slack {
+            return f;
+        }
+    }
+    exact()
+}
+
+/// A value on the x87 stack of the Linux servers, whose control word keeps
+/// the default 64-bit precision: `m * 2^e`, `m` 0 or with its top bit set.
+/// Only the operations [`angle_vectors`] needs, each rounded to nearest
+/// even as the FPU rounds; no infinities or NaNs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct F80 {
+    neg: bool,
+    m: u64,
+    e: i32,
+}
+
+impl F80 {
+    /// A double, exactly.
+    pub fn from_f64(x: f64) -> F80 {
+        let bits = x.to_bits();
+        let neg = bits >> 63 != 0;
+        let exp = ((bits >> 52) & 0x7ff) as i32;
+        let frac = bits & ((1 << 52) - 1);
+        let (m, e) = if exp == 0 {
+            (frac, -1074)
+        } else {
+            (frac | 1 << 52, exp - 1075)
+        };
+        F80::round(neg, u128::from(m), e)
+    }
+
+    /// A float, exactly.
+    pub fn from_f32(x: f32) -> F80 {
+        F80::from_f64(f64::from(x))
+    }
+
+    /// `m * 2^e` rounded to a 64-bit mantissa.
+    fn round(neg: bool, m: u128, e: i32) -> F80 {
+        if m == 0 {
+            return F80 { neg, m: 0, e: 0 };
+        }
+        let bits = 128 - m.leading_zeros() as i32;
+        if bits <= 64 {
+            let sh = 64 - bits;
+            return F80 {
+                neg,
+                m: (m << sh) as u64,
+                e: e - sh,
+            };
+        }
+        let sh = bits - 64;
+        let (mut q, rem, half) = (m >> sh, m & ((1 << sh) - 1), 1u128 << (sh - 1));
+        if rem > half || rem == half && q & 1 == 1 {
+            q += 1;
+        }
+        let (q, e) = if q >> 64 != 0 {
+            (q >> 1, e + sh + 1)
+        } else {
+            (q, e + sh)
+        };
+        F80 {
+            neg,
+            m: q as u64,
+            e,
+        }
+    }
+
+    /// `fadd`; an exact zero is `+0` unless both terms are `-0`.
+    fn sum(self, o: F80) -> F80 {
+        if o.m == 0 {
+            return if self.m == 0 {
+                F80 {
+                    neg: self.neg && o.neg,
+                    ..self
+                }
+            } else {
+                self
+            };
+        }
+        if self.m == 0 {
+            return o;
+        }
+        let (big, small) = if (self.e, self.m) >= (o.e, o.m) {
+            (self, o)
+        } else {
+            (o, self)
+        };
+        // Two bits of headroom for the carry; what the alignment shifts out
+        // of the smaller term survives as a sticky bit.
+        let a = u128::from(big.m) << 62;
+        let sh = (big.e - small.e) as u32;
+        let b = u128::from(small.m) << 62;
+        let b = if sh >= 127 {
+            1
+        } else {
+            (b >> sh) | u128::from(b & ((1u128 << sh) - 1) != 0)
+        };
+        let (neg, m) = if big.neg == small.neg {
+            (big.neg, a + b)
+        } else if a == b {
+            (false, 0)
+        } else {
+            (big.neg, a - b)
+        };
+        F80::round(neg, m, big.e - 62)
+    }
+
+    /// `fstps`: rounded to a float, nearest even.
+    pub fn to_f32(self) -> f32 {
+        if self.m == 0 {
+            return if self.neg { -0.0 } else { 0.0 };
+        }
+        // The leading bit's exponent; under -126 the float is subnormal and
+        // keeps fewer than 24 bits.
+        let lead = self.e + 63;
+        let keep = if lead < -126 { 24 - (-126 - lead) } else { 24 };
+        let sh = (64 - keep).min(127) as u32;
+        let m = u128::from(self.m);
+        let (mut q, rem, half) = (m >> sh, m & ((1u128 << sh) - 1), 1u128 << (sh - 1));
+        if rem > half || rem == half && q & 1 == 1 {
+            q += 1;
+        }
+        let v = (q as f64 * 2f64.powi(self.e + sh as i32)) as f32;
+        if self.neg { -v } else { v }
+    }
+}
+
+/// `fchs`.
+impl std::ops::Neg for F80 {
+    type Output = F80;
+    fn neg(self) -> F80 {
+        F80 {
+            neg: !self.neg,
+            ..self
+        }
+    }
+}
+
+/// `fmul`.
+impl std::ops::Mul for F80 {
+    type Output = F80;
+    fn mul(self, o: F80) -> F80 {
+        F80::round(
+            self.neg != o.neg,
+            u128::from(self.m) * u128::from(o.m),
+            self.e + o.e,
+        )
+    }
+}
+
+impl std::ops::Add for F80 {
+    type Output = F80;
+    fn add(self, o: F80) -> F80 {
+        self.sum(o)
+    }
 }
 
 /// The float `pi / 180` the Windows cgames' `AngleVectors` multiply by (1.1
@@ -198,6 +404,127 @@ pub fn rotation_matrix(angles: Vec3) -> [Vec3; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The model `angle_vectors` replaced: every stack value an `f64`.
+    fn angle_vectors_f64(angles: Vec3) -> [Vec3; 3] {
+        let rad = |deg: f32| (f64::from(deg) * (std::f64::consts::PI * 2.0 / 360.0)) as f32;
+        let sin_cos = |deg: f32| {
+            let r = f64::from(rad(deg));
+            (f64::from(r.sin() as f32), f64::from(r.cos() as f32))
+        };
+        let (sp, cp) = sin_cos(angles.x);
+        let (sy, cy) = sin_cos(angles.y);
+        let (sr, cr) = sin_cos(angles.z);
+        let forward = DVec3::new(cp * cy, cp * sy, -sp);
+        let right = DVec3::new(-sr * sp * cy + cr * sy, -sr * sp * sy - cr * cy, -sr * cp);
+        let up = DVec3::new(cr * sp * cy + sr * sy, cr * sp * sy - sr * cy, cr * cp);
+        [forward.as_vec3(), right.as_vec3(), up.as_vec3()]
+    }
+
+    /// [`angle_vectors`] with every step through [`F80`], no `f64` path.
+    fn angle_vectors_f80(angles: Vec3) -> [Vec3; 3] {
+        let k = F80::from_f64(std::f64::consts::PI * 2.0 / 360.0);
+        let sin_cos = |deg: f32| {
+            let r = f64::from((F80::from_f32(deg) * k).to_f32());
+            (F80::from_f32(r.sin() as f32), F80::from_f32(r.cos() as f32))
+        };
+        let (sp, cp) = sin_cos(angles.x);
+        let (sy, cy) = sin_cos(angles.y);
+        let (sr, cr) = sin_cos(angles.z);
+        let v = |x: F80, y: F80, z: F80| Vec3::new(x.to_f32(), y.to_f32(), z.to_f32());
+        let (srsp, crsp) = (-sr * sp, cr * sp);
+        [
+            v(cp * cy, cp * sy, -sp),
+            v(srsp * cy + cr * sy, srsp * sy + -cr * cy, -sr * cp),
+            v(crsp * cy + sr * sy, crsp * sy + -sr * cy, cr * cp),
+        ]
+    }
+
+    /// Angles (as bits) and the forward, right and up retail's 1.1d
+    /// `AngleVectors` (game.mp 0x3b228) wrote for them, read with gdb on
+    /// the live server, whose x87 control word is 0x137f (64-bit
+    /// precision). An `f64` sum lands each a float ulp off in one
+    /// component (cod11-movers.md 22).
+    const RETAIL_1_1D: [([u32; 3], [u32; 9]); 3] = [
+        (
+            [1099807040, 1102888640, 1025343488],
+            [
+                1063221737, 1052980346, 3197881319, 1053610912, 3211435836, 3123156517, 1049553211,
+                1039673846, 1064557627,
+            ],
+        ),
+        (
+            [1079015936, 1128529664, 1117623216],
+            [
+                3212161202, 3196902753, 3177758401, 835481921, 1045372465, 3212490097, 3197097589,
+                1064344752, 1044825817,
+            ],
+        ),
+        (
+            [1093149312, 1109722048, 1126746584],
+            [
+                1060977527, 1059453250, 3191521751, 3207358586, 1060556072, 3192111702, 3150844831,
+                3196534067, 3212240672,
+            ],
+        ),
+    ];
+
+    fn bits(axes: [Vec3; 3]) -> [u32; 9] {
+        let a = axes.map(|v| v.to_array().map(f32::to_bits));
+        std::array::from_fn(|i| a[i / 3][i % 3])
+    }
+
+    #[test]
+    fn the_kept_sums_round_at_64_bits() {
+        for (angles, want) in RETAIL_1_1D {
+            let a = Vec3::from_array(angles.map(f32::from_bits));
+            assert_eq!(bits(angle_vectors(a)), want, "{a}");
+            assert_ne!(bits(angle_vectors_f64(a)), want, "{a}");
+        }
+    }
+
+    /// The `f64` path with its fallback gives what every step at 64 bits
+    /// gives, near-cancelling sums included.
+    #[test]
+    fn the_fast_path_agrees_with_the_f80_steps() {
+        let grid = |s: u32| s as f32 * (360.0 / 65536.0);
+        for i in 0..200_000u32 {
+            let a = Vec3::new(
+                grid(i.wrapping_mul(7919) % 65536) - 90.0,
+                grid(i.wrapping_mul(104_729) % 65536),
+                grid(i.wrapping_mul(31) % 65536),
+            );
+            assert_eq!(bits(angle_vectors(a)), bits(angle_vectors_f80(a)), "{a}");
+        }
+        for (angles, _) in RETAIL_1_1D {
+            let a = Vec3::from_array(angles.map(f32::from_bits));
+            assert_eq!(bits(angle_vectors(a)), bits(angle_vectors_f80(a)));
+        }
+    }
+
+    #[test]
+    fn f80_rounds_to_nearest_even() {
+        let one = F80::from_f32(1.0);
+        // 1 + 2^-64 is a tie at 64 bits and rounds to 1; 1 + 3 * 2^-65 up.
+        let tie = F80::from_f64(2f64.powi(-64));
+        assert_eq!(one + tie, one);
+        assert_eq!(one + tie + tie, one);
+        let up = F80::from_f64(3.0 * 2f64.powi(-65));
+        assert_eq!((one + up).m, (1u64 << 63) + 1);
+        assert_eq!((one + -one).to_f32().to_bits(), 0);
+        assert_eq!(
+            (F80::from_f32(-0.0) + F80::from_f32(-0.0))
+                .to_f32()
+                .to_bits(),
+            0x8000_0000
+        );
+        assert_eq!(
+            (F80::from_f32(0.1) * F80::from_f32(3.0)).to_f32(),
+            0.1f32 * 3.0
+        );
+        let tiny = F80::from_f32(f32::from_bits(1));
+        assert_eq!(tiny.to_f32().to_bits(), 1);
+    }
 
     /// The cgames' float is `pi / 180` rounded once, Rust's `to_radians`
     /// factor; the Linux servers' double puts some shorts-grid angles a

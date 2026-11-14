@@ -1432,8 +1432,14 @@ fn fire(ps: &mut PlayerState, def: &WeaponDef, events: &mut Vec<PmEvent>) {
     if grenade && ps.grenade_time_left_ms == 0 {
         if ps.ammoclip[def.clip_index] > 0 {
             pullback(ps, def, events);
+            return;
         }
-        return;
+        // A dry pull arms the same hold without the pin (`.so` 0x38a5c ..
+        // 0x38aeb, then state 3 at 0x38ba1) and goes on to the dry arm
+        // below (section 1.11).
+        ps.weapon_delay_ms = ms(def.hold_fire_time);
+        ps.weapon_time_ms = 0;
+        ps.weaponstate = WEAPON_FIRING;
     }
     let (ci, ai) = (def.clip_index, def.ammo_index);
     // `.so` 0x38a44 arms the shot's timers and state ahead of the ammo check
@@ -1788,9 +1794,12 @@ mod tests {
         assert_eq!(ps.ammoclip[1], 2);
     }
 
-    /// An empty clip has nothing to pull: no event, no fuse, no state change.
+    /// An empty clip has no pin to pull, but the pull still arms the hold
+    /// (`.so` 0x38a44): `weaponDelay` `holdFireTime`, state 3, then the dry
+    /// arm's idle and 500 ms (0x38bbc), with no `EV_NOAMMO` for a grenade
+    /// and no fuse. With rounds in reserve the same pull begins a reload.
     #[test]
-    fn a_grenade_with_an_empty_clip_does_nothing() {
+    fn a_dry_grenade_pull_holds_the_firing_state() {
         let (mut ps, w) = armed(&frag());
         ps.ammoclip[1] = 0;
         ps.ammo[1] = 0;
@@ -1799,10 +1808,21 @@ mod tests {
             attack: true,
             ..Default::default()
         };
-        let ev = step(&mut ps, &w, &held, 4);
+        let ev = step(&mut ps, &w, &held, 1);
         assert_eq!(ev, Vec::<i32>::new());
         assert_eq!(ps.grenade_time_left_ms, 0);
-        assert_eq!(ps.weaponstate, WEAPON_READY);
+        assert_eq!(ps.weaponstate, WEAPON_FIRING);
+        assert_eq!((ps.weapon_delay_ms, ps.weapon_time_ms), (600, 500));
+        // The held trigger fires nothing while the times run.
+        assert_eq!(step(&mut ps, &w, &held, 3), Vec::<i32>::new());
+        assert_eq!(ps.weaponstate, WEAPON_FIRING);
+
+        let (mut ps, w) = armed(&frag());
+        ps.ammoclip[1] = 0;
+        ps.ammo[1] = 2;
+        step(&mut ps, &w, &held, 1);
+        assert_ne!(ps.weaponstate, WEAPON_FIRING);
+        assert_eq!(ps.grenade_time_left_ms, 0);
     }
 
     /// The `cancel` step of `mp_carentan-tdm-grenade.txt`: a weapon change

@@ -336,12 +336,12 @@ pub fn pose(rig: &Rig, pose: &mut skeleton::PoseBuffer, anim: &ViewAnim, ads: [f
             .filter_map(|((n, t), w)| {
                 let (c, b) = rig.clip(n)?;
                 let t = t.clamp(0.0, 1.0) * c.duration();
-                Some((&**c, b, c.frame_pos(t, false), w))
+                Some((&**c, b, f64::from(c.frame_pos(t, false)), w))
             })
             .collect();
         match layers.as_slice() {
             [] => {}
-            [(c, b, t, _)] => pose.apply(c, b, *t),
+            [(c, b, t, _)] => pose.apply(c, b, *t as f32),
             _ => pose.blend(&layers),
         }
     }

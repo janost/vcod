@@ -4837,6 +4837,7 @@ impl Server {
             gametype: carry.gametype,
             seed: Some(self.game.module.level_seed),
             spawn_pins: self.game.module.spawn_pins.clone(),
+            weapon_files: None,
         };
         self.game.module.level_seed =
             vcod_common::rng::xorshift(&mut self.game.module.level_seed) | 1;

@@ -2702,10 +2702,12 @@ fn the_hitlog_capture_matches_uo_on_mp_carentan() {
     );
 }
 
-/// A kill on the knockback's first frame: the round's point a float step
-/// off retail's along the round, and the grid with it. The body's origin,
-/// velocity and clip weights are retail's; the step is the 1.1d slab's
-/// `f32` arithmetic over a pose 1e-5 off retail's (`cod11-turrets.md` 13.6).
+/// A UO kill on the knockback's first frame: the round's point a float
+/// step off retail's, and the grid with it. The body's origin, velocity
+/// and clip weights are retail's; 1.1d's kill matches since its pose and
+/// trace keep the x87 stack, and 1.5b's stored walk and build match its
+/// gdb dump word for word, so what is left is in the frame's inputs
+/// (`cod11-turrets.md` 13.6).
 const KNOCKBACK_GAP: &str = "the knockback's first frame's pose (turrets doc 13.6)";
 
 /// The 1.1d hit-grid capture's head: the capture predates the gsc's
@@ -2766,7 +2768,7 @@ fn the_hitgrid_capture_matches_retail_on_mp_carentan() {
         vcod_common::testing::game_fs_11,
         &PROTOCOL_V1,
         HEAD_HITGRID,
-        &[("[hit] 30450 0 ", KNOCKBACK_GAP)],
+        &[],
     );
 }
 
@@ -2818,6 +2820,30 @@ fn the_hitbody_capture_matches_retail_on_mp_carentan() {
     ) else {
         return;
     };
+    rows.extend(hitbody_rows(script.lines(), log.iter().map(String::as_str)));
+    finish(rows, &[]);
+}
+
+/// The hitbody recipe rerun with the skeleton build's records dumped as
+/// well (`common/tests/fixtures/skel11`): the wound and the knockback kill,
+/// every hit row and the struck body held to retail's bits
+/// (`cod11-turrets.md` 13.6).
+#[test]
+fn the_hitbody2_capture_matches_retail_on_mp_carentan() {
+    let cvars = &[
+        ("probe_bodylog", "1"),
+        ("probe_spawnlog", "1"),
+        ("probe_head", "basehead_axis_b_02"),
+    ];
+    let Some((script, log, mut rows)) = hit_replay(
+        "hitbody2",
+        vcod_common::testing::game_fs_11,
+        &PROTOCOL_V1,
+        cvars,
+    ) else {
+        return;
+    };
+    rows.extend(hitfine_rows(script.lines(), log.iter().map(String::as_str)));
     rows.extend(hitbody_rows(script.lines(), log.iter().map(String::as_str)));
     finish(rows, &[]);
 }
