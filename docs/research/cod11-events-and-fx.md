@@ -603,8 +603,18 @@ snapshot of the frame its script step ran:
 - With forward `(0 3 4)`: 171, event 192, `scale` the byte dir of
   `(0, 0.6, 0.8)`, which reads back as `(0, 0.526, 0.851)`.
 - At `(8900 9930 -38)`, 8000 units off past the map's edge: 172 is still
-  sent, and ours sends it too. Which rule of the snapshot cull lets it
-  through was not read.
+  sent, and ours sends it too. INFERRED, off the two below: it passes the
+  plain cluster test. VERIFIED, the entity pass `0x808e298`: an entity without `SVF_BROADCAST` (`svFlags
+  & 0x18` clear, 0x808e364) must share a flood with the viewer's area
+  through `areanum` or `areanum2` (`CM_AreasConnected` 0x8053f44: no area
+  below 0, then one flood number, called at 0x808e386 and 0x808e3a0) and
+  have a linked cluster the viewer's PVS row lists (0x808e3b0 on); a temp
+  entity takes no other path. VERIFIED, vcod measurement off mp_carentan's
+  lumps (`Visibility::link_clusters`, the ported link): the point's box
+  lies inside model 0's bounds, (-8513, -6721, -637) to (10817, 11649,
+  2369), in an open leaf of cluster 40 and area 0, and the PVS row of the
+  probe's cluster (592, its eye at (900, 1930, 17)) lists 40: the spot is
+  past the playable ground, not past the tree.
 - Three `playLoopedFx` calls: 173, 174 and 175, all `eType` 10, the
   far one included (the broadcast flag), with `scale`, `origin2` and
   `angles2` as above: `0.2` s is period 200, `1.2345` s is 1235.

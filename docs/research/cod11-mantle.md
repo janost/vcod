@@ -2012,9 +2012,36 @@ under the radius) and for each it passes the vertex's sphere (strictly
 under the radius) are tested. Terrain is one-sided here as in the sweep: a
 capsule wholly under a face is not inside it.
 
+VERIFIED, 0x8053280's arithmetic, the instructions: every distance,
+barycentric and edge term stays on the x87 stack. The stores are the axis
+(`-0x34`), the moved sphere centre's z (`tw+0x8`), the far end's distance
+(`fsts -0x30` at 0x8053365, compared unrounded against minus the radius at
+0x8053368 and as the stored float against the radius at 0x8053423), and
+copies of the foot and the edge offsets (`-0xc..-0x4`, `-0x18..-0x10`) that
+nothing reads back. Each dot product sums x, y, then z.
+
+VERIFIED, 1.5b `cod_lnxded` 0x8056941, called at 0x805732a from the terrain
+arm (0x80572f0) of the leaf position test 0x8058494: the same tests in the
+same order, with every variable stored as a float, `half_height - radius`
+(`-0x68`) included, and each dot product still summed on the stack before
+its store. It reads the triangle and edge records 1.5b's own
+`CM_GenerateTerrainCollide` built (the planes and edge frames of
+`cod15-movement.md` 7). VERIFIED, `coduo_lnxded` 0x8056773 (from 0x805715c,
+under the leaf position test's terrain call at 0x8058457) matches 0x8056941
+instruction for instruction, 720 instructions with absolute addresses
+masked. INFERRED, off the branch shapes of both builds: in the deep arm an
+unordered compare of the far end's barycentrics reads inside, one of the
+near end's reads outside.
+
 vcod: `Terrain::position_test`, which `CollisionWorld::clip_terrain` runs
 for a capsule trace whose start is its end; the sweep's `d_s - d_e <= 0`
-skip would let no zero-length capsule read `startsolid` in terrain.
+skip would let no zero-length capsule read `startsolid` in terrain. Under
+`Arith::Stored` it stores where 1.5b does and reads `edges_v22` and the
+triangles' v22 planes (`the_two_builds_part_at_a_slanted_rim`). INFERRED,
+off the port: on a flat square's diagonal 1.5b's planes put the axis a hair
+outside both triangles (`u` -1.4e-7) and the deep arm tests no edge, so a
+capsule sunk through the face there reads clear on 1.5b and UO and inside on
+1.1d (`a_capsule_sunk_into_the_face_is_inside`).
 VERIFIED, vcod measurement against
 `crates/server/tests/fixtures/movers/mp_carentan-dm-worldcopy.txt`: a
 world copy's terrain floor rising under a player and a health pack moves
