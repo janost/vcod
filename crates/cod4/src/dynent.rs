@@ -278,13 +278,16 @@ impl DynEnts {
         }
     }
 
-    /// Lets each body pass the world contents its def's origin lies in
-    /// (`contents` a point's): mp_crash's pots stand inside an item clip
-    /// brush over their table, in which every point of theirs would start
-    /// solid and meet nothing. vcod's; ODE's colliders push a body out.
+    /// Lets each body pass the world contents but solid its def's centre
+    /// of mass lies in (`contents` a point's): mp_crash's pots stand inside
+    /// an item clip brush over their table, in which every point of theirs
+    /// would start solid and meet nothing, so they fell through the map.
+    /// vcod's.
     pub fn pass_start_contents(&mut self, contents: impl Fn(Vec3) -> u32) {
         for (e, d) in self.ents.iter_mut().zip(self.defs.iter()) {
-            e.pass = contents(d.origin) & crate::ragdoll::CLIP_MASK;
+            let com = d.body.as_ref().map_or(Vec3::ZERO, |b| b.0.com);
+            let c = contents(d.origin + d.rot * com);
+            e.pass = c & crate::ragdoll::CLIP_MASK & !vcod_common::clipmap::CONTENTS_SOLID;
         }
     }
 

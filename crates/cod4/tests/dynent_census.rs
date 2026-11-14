@@ -66,6 +66,13 @@ fn a_blast_flings_mp_crashs_clutter_and_it_settles() {
     let origin = defs[at].origin + Vec3::Z * 8.0;
     let mut d = DynEnts::new(defs.clone());
     d.pass_start_contents(|p| clip.point_contents(p));
+    let com = |i: usize| defs[i].origin + defs[i].rot * defs[i].body.as_ref().unwrap().0.com;
+    let solid = (0..defs.len())
+        .filter(|&i| clip.point_contents(com(i)) & 1 != 0)
+        .count();
+    let passing = d.ents.iter().filter(|e| e.pass != 0).count();
+    println!("{solid} centres in solid, {passing} passing their start's contents");
+    assert!(passing > 0 && solid < 10, "{solid} {passing}");
     let blast = Explosion {
         origin,
         inner: 0.0,

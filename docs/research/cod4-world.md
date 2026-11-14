@@ -2232,7 +2232,9 @@ nothing. VERIFIED (13.1's census).
   mp_crash's pots stand inside an item clip brush (contents 0x400) over
   their table; every point of theirs starts solid, so the solver met
   nothing and they fell through the map. A body now passes the world
-  contents its def's origin lies in. vcod's.
+  contents but solid its def's centre of mass lies in: 9 of mp_crash's
+  516 pass some, and no centre lies in solid. vcod's. VERIFIED
+  (`dynent_census`, ours).
 - Left out: the melee swipe, the server's bullet events (vcod's client
   runs its rounds itself), list 1
   (no stock map holds one), pieces (none stock), `physicsJitter`
