@@ -4,8 +4,8 @@
 #   vcod --game-dir <the same install> --mod-dir uo --net-probe 127.0.0.1:28997 --probe-team axis --probe-weapon kar98k_mp --probe-uo-weapon direct --probe-secs 40
 # The PROBE lines are the server's games_mp.log, the CMDS lines after them the client's. Replayed on
 # the capture's clock (tests/common direct_replay) every line holds but the frag's: ours rests at
-# (-1806, 3420, -65) against (-1809, 3421, -65) and charges bush 92 27 against 26, so no gate holds
-# it yet (cod11-combat.md 14.8, "Left open").
+# (-1806, 3420, -65) against (-1809, 3421, -65) and charges bush 92 27 against 26, its throw leaving
+# 3.9 off along the right and 3.1 in z, so no gate holds it yet (cod11-combat.md 14.8, "Left open").
 PROBE phase shot
 PROBE trigger 86 player -
 PROBE damage 86 120 player -

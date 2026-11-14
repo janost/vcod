@@ -8621,8 +8621,12 @@ the belltower; a grenade blast's charges (a 2026-11-14 UO recapture of
 `probe_dmgshot` with the client's cmd times,
 `fixtures/triggers/mp_uo_stanjel-dmgshot-uo.txt`, replayed on them by
 `tests/common`'s `direct_replay`, holds every round and swing line, but
-ours' frag rests 3 units off retail's after its roll and charges one bush
-27 against 26); and the `use` arm's `accumulate + 1` count.
+ours' frag rests 3 units off retail's and charges one bush 27 against 26:
+it leaves (-1853.50, 3240.49, 37.16) where retail's left (-1853.47,
+3244.39, 34.04), the same along x, 3.9 apart along the view's right and
+3.1 in z with the thrower at (-1862, 3232, -13.6) pitched 46.9 (VERIFIED,
+the capture's `VEH missile` lines against ours'; INFERRED: UO's walk bob
+off a `bobCycle` the probe's per-frame `setOrigin` hold leaves apart); and the `use` arm's `accumulate + 1` count.
 
 **As implemented.** `crate::game::damage_trigger`: `spec_of` (the spawn's
 keys), `responds`, `activate`, `damaged` (`pain`/`die`, from
