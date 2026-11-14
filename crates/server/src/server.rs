@@ -4282,6 +4282,13 @@ impl Server {
                 .bots
                 .get(&slot)
                 .and_then(|b| b.exposure()),
+            guard: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .and_then(|b| b.guard_point()),
         })
     }
 
@@ -4424,6 +4431,35 @@ impl Server {
     /// with another body near (`bots::driver::BotDriver::edge_stalls`).
     pub fn bot_edge_stalls(&self) -> [u32; 2] {
         self.game.module.driver.edge_stalls
+    }
+
+    /// Read-only, for `bot_match`: per side (axis, allies), the cues that
+    /// pulled guards back, those a guard came back from, and the ms from
+    /// cue to the first back (bot-objectives.md 14).
+    pub fn bot_cue_tally(&self) -> [(u32, u32, u64); 2] {
+        self.game.module.driver.posts.cue_tally()
+    }
+
+    /// Test-facing: whether a bot guards from the ways in (`Bot::far`).
+    pub fn test_bot_far(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.far = on;
+        }
+    }
+
+    /// Test-facing: whether a bot's guards answer cues (`Bot::cues`).
+    pub fn test_bot_cues(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.cues = on;
+        }
+    }
+
+    /// Test-facing: whether a bot keeps farther apart on the way
+    /// (`Bot::travel`).
+    pub fn test_bot_travel(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.travel = on;
+        }
     }
 
     /// Test-facing: the ticks a bot has waited aside for a climber

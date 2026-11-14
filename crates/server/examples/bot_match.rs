@@ -183,17 +183,17 @@ struct Opts {
     console: Vec<String>,
     verbose: bool,
     /// cover, retreat, team play, awareness, footwork, wariness, squad,
-    /// aim, tactics, converge, lanes.
-    arms: [Arm; 11],
+    /// aim, tactics, converge, lanes, far, cues, travel.
+    arms: [Arm; 14],
 }
 
-const FEATURES: [&str; 11] = [
+const FEATURES: [&str; 14] = [
     "cover", "retreat", "teamplay", "aware", "footwork", "wary", "squad", "aim", "tactics",
-    "converge", "lanes",
+    "converge", "lanes", "far", "cues", "travel",
 ];
-const ARMS: [&str; 11] = [
+const ARMS: [&str; 14] = [
     "COVER", "RETREAT", "TEAMPLAY", "AWARE", "FOOTWORK", "WARY", "SQUAD", "AIM", "TACTICS",
-    "CONVERGE", "LANES",
+    "CONVERGE", "LANES", "FAR", "CUES", "TRAVEL",
 ];
 
 /// The side a client's arms follow: its team, or in `dm` its slot's
@@ -861,9 +861,9 @@ const OBJ_NEAR: f32 = 800.0;
 const STILL_TICKS: usize = 40;
 const STILL_RADIUS: f32 = 32.0;
 
-/// A bot's objective point, exposure and cover hold, as [`ObjSample`]
-/// takes them.
-type ObjInfo = (Option<[f32; 3]>, Option<f32>, bool);
+/// A bot's objective point, exposure, cover hold and guarded point, as
+/// [`ObjSample`] takes them.
+type ObjInfo = (Option<[f32; 3]>, Option<f32>, bool, Option<[f32; 3]>);
 
 /// One playing bot's tick for [`ObjSpread`]: slot, team, feet, its
 /// objective's point, the share of that objective's ways in that see it,
@@ -875,6 +875,8 @@ struct ObjSample {
     point: Option<[f32; 3]>,
     exposure: Option<f32>,
     cover: bool,
+    /// The point it guards, a guard only (`Bot::guard_point`).
+    guard: Option<[f32; 3]>,
 }
 
 /// The playing bot-ticks near their objective (bot-objectives.md 13):
@@ -893,6 +895,15 @@ struct ObjSpread {
     exposed_ticks: u64,
     exposure: f64,
     cover: u64,
+    /// Guards' bot-ticks anywhere and their summed distance from the point
+    /// they guard (bot-objectives.md 14).
+    guard_ticks: u64,
+    guard_dist: f64,
+    /// Cues that pulled guards back, those a guard came back from, and the
+    /// summed ms from cue to the first back (`Server::bot_cue_tally`).
+    cues: u64,
+    backs: u64,
+    back_ms: u64,
 }
 
 impl ObjSpread {
@@ -905,6 +916,23 @@ impl ObjSpread {
         self.exposed_ticks += o.exposed_ticks;
         self.exposure += o.exposure;
         self.cover += o.cover;
+        self.guard_ticks += o.guard_ticks;
+        self.guard_dist += o.guard_dist;
+        self.cues += o.cues;
+        self.backs += o.backs;
+        self.back_ms += o.back_ms;
+    }
+
+    /// A match's cue counts for one side, off the driver at its end.
+    fn add_cues(out: &mut BTreeMap<String, ObjSpread>, tally: [(u32, u32, u64); 2]) {
+        for (team, (cues, back, ms)) in ["axis", "allies"].into_iter().zip(tally) {
+            if cues > 0 {
+                let o = out.entry(team.to_string()).or_default();
+                o.cues += u64::from(cues);
+                o.backs += u64::from(back);
+                o.back_ms += ms;
+            }
+        }
     }
 
     /// One tick of every playing bot into `out` by team; `trail` keeps
@@ -924,6 +952,11 @@ impl ObjSpread {
         }
         let dist = |a: [f32; 3], b: [f32; 3]| glam::Vec3::from(a).distance(glam::Vec3::from(b));
         for x in samples {
+            if let Some(g) = x.guard {
+                let o = out.entry(x.team.clone()).or_default();
+                o.guard_ticks += 1;
+                o.guard_dist += f64::from(dist(x.at, g));
+            }
             if !x.point.is_some_and(|p| dist(x.at, p) < OBJ_NEAR) {
                 continue;
             }
@@ -952,13 +985,17 @@ impl ObjSpread {
     fn line(&self) -> String {
         let share = |n: u64, of: u64| 100.0 * n as f64 / of.max(1) as f64;
         format!(
-            "near objective {:8} bot-ticks mate {:4.0} packed {:4.1}% still {:4.1}% exposed {:4.1}% cover hold {:4.1}%",
+            "near objective {:8} bot-ticks mate {:4.0} packed {:4.1}% still {:4.1}% exposed {:4.1}% cover hold {:4.1}% guard dist {:4.0} cues {:4} back {:4} in {:4.1} s",
             self.ticks,
             self.mate / self.mate_ticks.max(1) as f64,
             share(self.packed, self.mate_ticks),
             share(self.still, self.ticks),
             100.0 * self.exposure / self.exposed_ticks.max(1) as f64,
             share(self.cover, self.ticks),
+            self.guard_dist / self.guard_ticks.max(1) as f64,
+            self.cues,
+            self.backs,
+            self.back_ms as f64 / 1000.0 / self.backs.max(1) as f64,
         )
     }
 }
@@ -1342,6 +1379,9 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                 tactics,
                 converge,
                 lanes,
+                far,
+                cues,
+                travel,
             ] = o.arms;
             if cover != Arm::All {
                 sv.test_bot_cover(slot, cover.on(team, seed));
@@ -1375,6 +1415,15 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
             }
             if lanes != Arm::All {
                 sv.test_bot_lanes(slot, lanes.on(team, seed));
+            }
+            if far != Arm::All {
+                sv.test_bot_far(slot, far.on(team, seed));
+            }
+            if cues != Arm::All {
+                sv.test_bot_cues(slot, cues.on(team, seed));
+            }
+            if travel != Arm::All {
+                sv.test_bot_travel(slot, travel.on(team, seed));
             }
         }
         if let Some(ob) = observer.as_mut() {
@@ -1730,6 +1779,7 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                     point: b.objective,
                     exposure: b.exposure,
                     cover: b.holds_cover,
+                    guard: b.guard,
                 })
             })
             .collect();
@@ -1775,6 +1825,7 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
         }
     }
     m.edges = sv.bot_edge_stalls();
+    ObjSpread::add_cues(&mut m.obj, sv.bot_cue_tally());
     if let Some(st) = &stats {
         st.print(map, &o.gametype, seed);
     }
@@ -2757,14 +2808,25 @@ mod cod2 {
             // `TACTICS=0` (or `none`): every bot guards from the first spot in reach
             // (`Bot::tactics`); `CONVERGE=0`: no S&D defender leaves its
             // site for one under attack (`Bot::converge`); `LANES=0`: every
-            // bot walks straight to its objective (`Bot::lanes`).
+            // bot walks straight to its objective (`Bot::lanes`); `FAR=0`,
+            // `CUES=0`, `TRAVEL=0` turn off bot-objectives.md 14's rules.
             if let Some(b) = sv.bots_mut() {
                 let off = |k: &str| matches!(std::env::var(k).as_deref(), Ok("0" | "none"));
-                let arms = [!off("TACTICS"), !off("CONVERGE"), !off("LANES")];
+                let arms = [
+                    !off("TACTICS"),
+                    !off("CONVERGE"),
+                    !off("LANES"),
+                    !off("FAR"),
+                    !off("CUES"),
+                    !off("TRAVEL"),
+                ];
                 for bot in b.bots_mut().values_mut() {
                     bot.tactics &= arms[0];
                     bot.converge &= arms[1];
                     bot.lanes &= arms[2];
+                    bot.far &= arms[3];
+                    bot.cues &= arms[4];
+                    bot.travel &= arms[5];
                 }
             }
             if restart > 0 && tick > 0 && tick % restart == 0 {
@@ -2864,7 +2926,15 @@ mod cod2 {
                 .map(|b| {
                     b.bots()
                         .iter()
-                        .map(|(s, b)| (*s, (b.objective_point(), b.exposure(), b.holds_cover())))
+                        .map(|(s, b)| {
+                            let info = (
+                                b.objective_point(),
+                                b.exposure(),
+                                b.holds_cover(),
+                                b.guard_point(),
+                            );
+                            (*s, info)
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
@@ -2873,7 +2943,7 @@ mod cod2 {
                 .iter()
                 .filter_map(|&s| {
                     let p = level.players.get(s)?.as_ref()?;
-                    let (point, exposure, cover) = *objinfo.get(&s)?;
+                    let (point, exposure, cover, guard) = *objinfo.get(&s)?;
                     let team = teams.get(&s)?.clone();
                     (level.playing(s) && p.ps.pm_type == 0 && (team == "axis" || team == "allies"))
                         .then(|| super::ObjSample {
@@ -2883,6 +2953,7 @@ mod cod2 {
                             point,
                             exposure,
                             cover,
+                            guard,
                         })
                 })
                 .collect();
@@ -3152,6 +3223,9 @@ mod cod2 {
             .bots_mut()
             .map_or(0, |b| b.bots().values().map(|b| b.throws()).sum());
         m.smokes = sv.bots_mut().map_or(0, |b| b.smokes());
+        if let Some(b) = sv.bots_mut() {
+            super::ObjSpread::add_cues(&mut m.obj, b.cue_tally());
+        }
         if let Some(st) = &stats {
             st.print(map, gametype, seed);
         }
@@ -3475,14 +3549,25 @@ mod cod4 {
             // `TACTICS=0` (or `none`): every bot guards from the first spot in reach
             // (`Bot::tactics`); `CONVERGE=0`: no S&D defender leaves its
             // site for one under attack (`Bot::converge`); `LANES=0`: every
-            // bot walks straight to its objective (`Bot::lanes`).
+            // bot walks straight to its objective (`Bot::lanes`); `FAR=0`,
+            // `CUES=0`, `TRAVEL=0` turn off bot-objectives.md 14's rules.
             if let Some(b) = sv.bots_mut() {
                 let off = |k: &str| matches!(std::env::var(k).as_deref(), Ok("0" | "none"));
-                let arms = [!off("TACTICS"), !off("CONVERGE"), !off("LANES")];
+                let arms = [
+                    !off("TACTICS"),
+                    !off("CONVERGE"),
+                    !off("LANES"),
+                    !off("FAR"),
+                    !off("CUES"),
+                    !off("TRAVEL"),
+                ];
                 for bot in b.bots_mut().values_mut() {
                     bot.tactics &= arms[0];
                     bot.converge &= arms[1];
                     bot.lanes &= arms[2];
+                    bot.far &= arms[3];
+                    bot.cues &= arms[4];
+                    bot.travel &= arms[5];
                 }
             }
             // The script's `map_restart` and `exitLevel` run off the
@@ -3550,7 +3635,15 @@ mod cod4 {
                 .map(|b| {
                     b.bots()
                         .iter()
-                        .map(|(s, b)| (*s, (b.objective_point(), b.exposure(), b.holds_cover())))
+                        .map(|(s, b)| {
+                            let info = (
+                                b.objective_point(),
+                                b.exposure(),
+                                b.holds_cover(),
+                                b.guard_point(),
+                            );
+                            (*s, info)
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
@@ -3591,7 +3684,7 @@ mod cod4 {
                 .iter()
                 .filter_map(|&s| {
                     let ps = level.pm_state(s)?;
-                    let (point, exposure, cover) = *objinfo.get(&s)?;
+                    let (point, exposure, cover, guard) = *objinfo.get(&s)?;
                     let team = state.get(&s)?.1.clone();
                     (ps.pm_type == 0
                         && ps.other_flags & vcod_cod4::pmove::POF_PLAYER != 0
@@ -3604,6 +3697,7 @@ mod cod4 {
                             point,
                             exposure,
                             cover,
+                            guard,
                         })
                 })
                 .collect();
@@ -3744,6 +3838,9 @@ mod cod4 {
             .bots_mut()
             .map_or(0, |b| b.bots().values().map(|b| b.throws()).sum());
         (m.mounts, m.throw_backs) = sv.bots_mut().map_or((0, 0), |b| b.gun_counts());
+        if let Some(b) = sv.bots_mut() {
+            super::ObjSpread::add_cues(&mut m.obj, b.cue_tally());
+        }
         if let Some(st) = &stats {
             st.print(map, gametype, seed);
         }

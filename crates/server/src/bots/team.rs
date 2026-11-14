@@ -89,6 +89,8 @@ pub const REAR_HOLD: u32 = 40;
 /// A teammate ahead within this, across, eases a bot out of a fight to a
 /// walk ([`mate_ahead`]): about a frag's blast apart.
 pub const SPACING: f32 = 200.0;
+/// [`SPACING`] for a bot with `Bot::travel` on (bot-objectives.md 14).
+pub const TRAVEL_SPACING: f32 = 360.0;
 /// ... and within this up or down.
 pub const SPACING_RISE: f32 = 96.0;
 /// A teammate slower than this, across, is not walking the same way: a
@@ -124,6 +126,16 @@ pub fn route_seed(round: u32, team: i32, slot: usize) -> u64 {
 /// bot at `at` heading for `toward`: `mates` holds each one's feet and
 /// velocity, the bot itself left out.
 pub fn mate_ahead(at: [f32; 3], toward: [f32; 3], mates: &[([f32; 3], [f32; 3])]) -> bool {
+    mate_within(at, toward, mates, SPACING)
+}
+
+/// [`mate_ahead`] within `spacing` across.
+pub fn mate_within(
+    at: [f32; 3],
+    toward: [f32; 3],
+    mates: &[([f32; 3], [f32; 3])],
+    spacing: f32,
+) -> bool {
     let flat = |v: [f32; 3]| glam::Vec2::new(v[0], v[1]);
     let Some(dir) = (flat(toward) - flat(at)).try_normalize() else {
         return false;
@@ -131,7 +143,7 @@ pub fn mate_ahead(at: [f32; 3], toward: [f32; 3], mates: &[([f32; 3], [f32; 3])]
     mates.iter().any(|&(p, v)| {
         let to = flat(p) - flat(at);
         let v = flat(v);
-        to.length() < SPACING
+        to.length() < spacing
             && (p[2] - at[2]).abs() < SPACING_RISE
             // Inside 45 degrees of the bot's way, and walking along it.
             && to.dot(dir) > std::f32::consts::FRAC_1_SQRT_2 * to.length()
