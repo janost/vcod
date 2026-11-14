@@ -302,6 +302,8 @@ impl Cod4Bots {
         fresh.man_guns = self.man_guns;
         fresh.throw_back = self.throw_back;
         fresh.gun.carry_counts(&self.gun);
+        // `bot_match`'s cue counts run over the whole match.
+        fresh.driver.posts.tally = self.driver.posts.tally;
         if same_map {
             fresh.driver.nav_job = self.driver.nav_job.take();
             fresh.driver.nav = self.driver.nav.take();
@@ -359,6 +361,11 @@ impl Cod4Bots {
 
     pub fn bots_mut(&mut self) -> &mut BTreeMap<usize, Bot> {
         &mut self.driver.bots
+    }
+
+    /// `bot_match`'s cue counts (`Server::bot_cue_tally`).
+    pub fn cue_tally(&self) -> [(u32, u32, u64); 2] {
+        self.driver.posts.cue_tally()
     }
 
     /// Block the tick on the graph's build rather than let the bots wander

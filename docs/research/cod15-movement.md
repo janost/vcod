@@ -788,15 +788,23 @@ From the hip every round of all three strikes one spot. Down the sight
 1.1d's thirteen rounds stay within two units of it; 1.5b's climb from z
 18 to 81 and UO's from 15 to 81, each a few units across, the spring at
 its 4-degree `gunMaxPitch`. Ours replays the cmds on retail's level times.
-VERIFIED, vcod measurement 2026-11-13: every round of the 1.1 and 1.5
-captures lands on retail's whole-unit impact, and the gate asserts it. On
-UO, rounds 22, 25 and 26 of 34, all down the sight while the spring
-climbs, land one unit low on y, round 22 on z too; the rest match. Ours is
-always the lower, so the UO aim sits a fraction of a unit under retail's
-there. The cause is not read: 1.5b's spring and composition replay
-exactly, so it is something UO's recoil (0x396bc), its spring at
-`client+0x4714` or its aim block does differently. A gdb read of the
-spring's angles per cmd on retail UO would settle it.
+VERIFIED, vcod measurement 2026-11-14: every round of all three captures
+lands on retail's whole-unit impact, and the gate asserts it. The three
+UO rounds that read one unit low on 2026-11-13 (22, 25 and 26 of 34) were
+the replay's stance, not the aim: the probe drops the player 5 units onto
+the street, and where the drop settles rides the cmd clock of the fall
+(y 1929.937 to 1930.125 over the UO captures from this spot, VERIFIED,
+their first snapshots). Ours settled at y 1929.795, z 0.007 lower, and the
+three were the rounds whose impact sat within 0.14 of the next unit.
+The gate now stands ours on the origin of retail's first snapshot. UO's
+`BG_WeaponFireRecoil` (0x396bc), its spring (0x38ac6 stepping 0x388a0),
+`BG_CalculateWeaponAngles` (0x38d25), `BG_CalculateWeaponPosition_Sway`
+(0x392b2), `BG_CalculateViewAngles` (0x391dd), the aim block of
+`ClientThink_real` (0x40c91) and `CalcMuzzlePoints` (0x7bc58) disassemble
+to 1.5b's instruction for instruction but for the struct and field
+offsets and three gates on `pm_flags` 0x100000 (a vehicle seat,
+`BG_AllowPlayerWeaponAtVehiclePos`) and, in `CalcMuzzlePoint`, the LMG's
+bipod reach (VERIFIED, a normalized diff of the disassembly).
 
 Measured, VERIFIED (live, retail UO 1.51b): the `vehicle_armor_ab` sweep
 recipe on mp_cassino with the shooter's `--save-slope` on, its thompson

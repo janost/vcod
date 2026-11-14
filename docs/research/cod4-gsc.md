@@ -1770,9 +1770,9 @@ frag` thrower at 123 2110 300 and a `--script throwback` target at 207
 2291 296. Live gate: the client's
 `cod4_live_frag_at_the_feet_is_thrown_back`. A second run, the thrower
 aiming 60 under the target's feet (`play-1.7-throwback-*.txt`), is
-`cod4::capture_ab::cod4_throwback_ab`: hint, pickup, hold and throw match
-retail word for word up to the thrown grenade's strike on the thrower
-(cod4-combat.md 15). VERIFIED (the gate).
+`cod4::capture_ab::cod4_throwback_ab`: hint, pickup, hold, throw and the
+thrown grenade's strike on the thrower's head match retail word for word
+but the bounce's `trDelta` (cod4-combat.md 15). VERIFIED (the gate).
 
 - With a live frag at rest near it the target's hint reads 44 (the frag's
   weapon 40 plus 4), string -1, the grenade's entity, and

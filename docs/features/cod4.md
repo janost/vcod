@@ -364,8 +364,9 @@ against a retail kill capture, entity numbers included:
 - Retail captures gate a rocket's flight, a grenade's throw back, a
   prone death and a killcam on a helicopter-style kill (15). A hit's push
   and timers land a frame late (12, 15). A dropped weapon leaves the
-  hand, falls and comes to rest on its side as 1.7's does (6.1). A thrown
-  grenade can pass a standing body's arms that retail's meets (15).
+  hand, falls and comes to rest on its side as 1.7's does (6.1), and
+  `g_maxDroppedWeapons` frees the one farthest from the players past its
+  cap. A thrown grenade strikes a body's head where retail's does (15).
 
 **Voice** ([cod4-voice.md](../research/cod4-voice.md) 3). Relayed under
 `sv_voice 1` (off by default, as retail): team, dead to dead,
