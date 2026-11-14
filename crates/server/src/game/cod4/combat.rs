@@ -22,7 +22,7 @@ use vcod_cod4::anim::BodySource;
 use vcod_cod4::net::delta::{EntityState, PlayerState};
 use vcod_cod4::pmove::weapon::{WEAPTYPE_GRENADE, WeaponDef, ev as wev};
 use vcod_common::animclock::Times;
-use vcod_common::bonetrace::{PriorityMap, bone_trace};
+use vcod_common::bonetrace::{PriorityMap, bone_trace_worlds};
 use vcod_gsc::{EntId, Value};
 
 use super::level::{Cod4Level, PM_DEAD, PsExt};
@@ -221,10 +221,48 @@ impl PosedBody4 {
         }
         let inv = self.placed.inverse();
         let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
-        let h = bone_trace(&self.rig.skeleton, &self.pose, ls, le, priority, limit)?;
+        let skel = &self.rig.skeleton;
+        let h = bone_trace_worlds(
+            skel,
+            &skel_worlds(skel, &self.pose),
+            ls,
+            le,
+            priority,
+            limit,
+        )?;
         let n = self.placed.transform_vector3(h.normal).normalize_or_zero();
         Some((h, n))
     }
+}
+
+/// A posed body's bones as 1.7's `DObjCalcSkel` composes the locals the
+/// pose left (`vcod_cod4::skel::calc_posed`, cod4-gsc.md 3.2, "The
+/// skeleton"): each bone's place and turn in the body's frame. Its matrices
+/// place the dying body's `tag_weapon_right` word for word where the
+/// quaternions' composition (`PoseBuffer::bone_worlds`) landed a few
+/// millionths off (cod4-combat.md 6.1).
+pub(crate) fn skel_worlds(
+    skel: &vcod_common::skeleton::Skeleton,
+    pose: &vcod_common::skeleton::PoseBuffer,
+) -> Vec<(glam::Vec3, glam::Quat)> {
+    let bones = skel.bones();
+    let parents: Vec<i32> = bones.iter().map(|b| b.parent).collect();
+    let locals: Vec<([f32; 4], [f32; 3])> = (0..bones.len())
+        .map(|b| {
+            let (p, q) = pose.local(b);
+            (q.to_array(), p.to_array())
+        })
+        .collect();
+    let binds: Vec<[f32; 3]> = bones.iter().map(|b| b.local_pos.to_array()).collect();
+    vcod_cod4::skel::calc_posed(&parents, &locals, &binds)
+        .iter()
+        .map(|m| {
+            (
+                glam::Vec3::from(m.trans),
+                glam::Quat::from_array(m.quat).normalize(),
+            )
+        })
+        .collect()
 }
 
 /// What the level keeps for the shots: the body poses, the hit poses' rigs,
@@ -1111,7 +1149,8 @@ impl Cod4Level {
         .transform();
         let inv = placed.inverse();
         let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
-        let hit = bone_trace(&rig.skeleton, &pose, ls, le, priority, limit);
+        let skel = &rig.skeleton;
+        let hit = bone_trace_worlds(skel, &skel_worlds(skel, &pose), ls, le, priority, limit);
         if built {
             // The frame's skeleton: a tag read later in the frame (the
             // dying body's `tag_weapon_right`) reads this pose.
@@ -1209,7 +1248,7 @@ impl Cod4Level {
             .iter()
             .enumerate()
             .find(|(_, b)| b.has_hit_box() && b.hit_location == hitloc)?;
-        let (pos, rot) = pose.bone_world(skel, i);
+        let (pos, rot) = skel_worlds(skel, &pose)[i];
         let local = pos + rot * ((bone.hit_mins + bone.hit_maxs) * 0.5);
         let placed = BodyFrame {
             origin: ps.origin,

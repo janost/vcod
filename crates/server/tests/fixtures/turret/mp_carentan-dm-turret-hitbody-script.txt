@@ -1,0 +1,41 @@
+# Retail CoD 1.1d dedicated server log lines under the --save-turret client of
+# mp_carentan-dm-turret-hitbody.txt beside this file. Captured 2026-11-14.
+# The -hitgrid recipe with probe_hitgrid 0, probe_spawnlog 1 and
+# probe_bodylog 1: every hit's point and direction and the struck body's
+# origin and angles, each to the float's last bit. The server ran under gdb
+# with breakpoints on SV_LocationalTraceModel's entry (cod_lnxded 0x80c4564)
+# and its return (0x80912f5) dumping the DObj's bone matrices, the body's
+# frame, the local ray and the fraction (cod11-turrets.md 13.6). map
+# mp_carentan, g_gametype probe_turret, probe_teleport 1, probe_hitlog 1,
+# dedicated 1, sv_maxclients 8, sv_pure 0, a homepath holding no pak.
+# Client 0 is a --probe-team axis --probe-fall net-probe standing as the
+# target, client 1 the --save-turret gunner. All three inside one unshare -rn.
+#
+#   COD_DIR=<1.1 install> COD_LNXDED_HOME=<abs> PORT=28984 PROBE_SECS=230 \
+#       tools/run_probe.sh client-probes/probe_turret mp_carentan +set probe_teleport 1 +set probe_hitlog 1 +set probe_hitgrid 0 +set probe_bodylog 1 +set probe_spawnlog 1
+#   vcod --game-dir <1.1 install> --net-probe 127.0.0.1:28984 --probe-team axis --probe-fall --probe-secs 200   # 10 s in
+#   vcod --game-dir <1.1 install> --net-probe 127.0.0.1:28984 --save-turret --capture-tag hitbody --probe-secs 190   # 5 s later
+#
+# PROBE hitfine <time> <num> <hitloc> <damage> <point> <dir> and
+# PROBE hitbody <time> <num> <origin> <angles>, each component
+# <int>:<thousandths>:<millionths of a thousandth> (probe_turret.gsc fine1).
+# Lines are copied from games_mp.log, the m:ss stamp kept; every line past InitGame.
+  0:01 PROBE turret 297 (-500.00, 1896.00, 175.00) (0.00, 295.00, 0.00)
+  0:01 PROBE turret 298 (1712.00, 1830.00, 8.00) (0.00, 229.00, 0.00)
+  0:10 J;0;vcod
+  0:11 PROBE spawned 0 11050
+  0:11 PROBE spawnat 0 (192.00, 1280.00, 0.13) (0.00, 0.00, 0.00)
+  0:11 PROBE models 0 xmodel/basehead_axis_a_09 xmodel/gear_german_helmet_falshrm_blk xmodel/gear_german_load1_falshrm xmodel/gear_german_bandolier
+  0:11 PROBE place 0 axis (1515.18, 1603.59, 8.00) 409 11050
+  0:16 J;1;vcod
+  0:16 PROBE spawned 1 16550
+  0:16 PROBE spawnat 1 (-1008.00, 2088.00, 144.12) (0.00, 0.00, 0.00)
+  0:16 PROBE place 1 allies (1738.24, 1860.19, 8.00) 229 16550
+  0:30 PROBE hitfine 30200 0 torso_upper 53 1518:597:900391,1612:586:59570.3,22:892:703980 -0:664:571167,-0:746:943298,-0:20:515554
+  0:30 PROBE hitbody 30200 0 1515:182:250977,1603:587:158203,-31:874:956116 0:0:0,0:0:0,0:0:0
+  0:30 D;0;axis;vcod;1;allies;vcod;m1carbine_mp;53;MOD_RIFLE_BULLET;torso_upper
+  0:30 PROBE hitfine 30250 0 torso_upper 53 1516:2:319336,1611:209:350586,22:836:162598 -0:667:145142,-0:744:645203,-0:20:515554
+  0:30 PROBE hitbody 30250 0 1513:191:40039.1,1601:353:393555,-31:874:910339 0:0:0,0:0:0,0:0:0
+  0:30 K;0;;vcod;1;;vcod;mg42_bipod_stand_mp;53;MOD_RIFLE_BULLET;torso_upper
+  0:36 Q;1;vcod
+  3:30 Q;0;vcod

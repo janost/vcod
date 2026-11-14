@@ -316,7 +316,8 @@ has a handler (3.1).
   world, takes hits on its turned gun, and smokes and crashes when shot
   down (3.2).
 - `bulletTrace` scores bodies' posed hit boxes and the helicopter;
-  `getTagOrigin` reads a player's posed bone (3.3).
+  `getTagOrigin` reads a player's posed bone (3.3). Bones compose as 1.7's
+  skeleton composes them (3.2, "The skeleton").
 - The use key and touch pass reach game object triggers, `trigger_use`
   and dropped weapons (swap the gun in hand). A planter raises the
   briefcase (9).
