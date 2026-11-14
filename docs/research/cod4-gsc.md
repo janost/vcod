@@ -693,9 +693,30 @@ How 1.7's server builds a DObj's bones, read off `cod4_lnxded`.
   quat (`AnglesToQuat` 0x81b0008), a zero translation (`vec3_origin`
   0x821be20) and weight 0 (0x81b00de). VERIFIED (the disassembly).
   0x81afa6c and 0x81b01e8 set a bone the same way and also its bit at
-  skeleton +0x10, which sends it down `DObjCalcSkel`'s second arm
-  (0x81ae5da, relative to bone 0's matrix). INFERRED (the bits). No port
-  takes that arm.
+  skeleton +0x10 (DObj +0x24; 0x81b0228), which sends it down
+  `DObjCalcSkel`'s second arm (0x81ae2d8 to 0x81ae5da). VERIFIED (the
+  disassembly). A player's controller (`BG_Player_DoControllers`,
+  0x8056b48, from the player entity's handler 0x80a480e) sets `back_low`,
+  `back_mid`, `back_up`, `neck`, `head` and `pelvis` through 0x81b01e8,
+  each off `clientInfo_t` +0x3fc in that order, 12 bytes apart, a bone
+  the model lacks (0xfe from the name lookup) skipped; then bone 0
+  (`tag_origin`) through 0x81b0144, which takes its angles (+0x444) and
+  its translation (+0x450) and sets only the +0x14 bit. VERIFIED (the
+  disassembly). `DObjCalcAnim` masks every bone so set out of its tree
+  walk (0x81b4cca..0x81b4ce5, the walk at 0x81b4f6f). VERIFIED (the
+  disassembly). A control bone so keeps no anim of its own: the second
+  arm rebuilds each from its angles' quat alone (below). VERIFIED (gdb).
+- The second arm, a control bone `c` under parent `p` with bone 0's `r`:
+  `m = r^-1 * p`, each component's partial sums stored
+  (0x81ae5da..0x81ae67f); `t = c * m`, `w` and `y` stored, `x` and `z`
+  kept (0x81ae682..0x81ae763); the bone's quat `r * t`, kept for the
+  weight (0x81ae766..0x81ae819), which and the translation then run as
+  the first arm's (0x81ae3a7). The control turns in `tag_origin`'s frame,
+  where CoD1's turned in the model's. VERIFIED (the disassembly).
+  `vcod_cod4::skel::compose_controlled` is its port: rebuilt off retail's
+  own bone 0, parent and angles, all 804 control bones of 200 player
+  skeletons gdb dumped match word for word, `tag_origin` yawed up to 42
+  degrees. VERIFIED (`skel_ab`, `fixtures/skel/player-mp_crash-gdb.txt`).
 - `AnglesToQuat`: each angle times the double pi / 360 (0x8238538) stored
   as a float through `sinf` and `cosf`, the roll's cosine kept on the
   stack; `x = sr cy cp - cr sp sy`, `y = cr cy sp + sr sy cp`, `z = cr sy
@@ -739,7 +760,8 @@ How 1.7's server builds a DObj's bones, read off `cod4_lnxded`.
   ulp off now and then; with the composed skeleton alone the idle gate
   still read 8 gun words off before the goal, against 6 before. VERIFIED
   (the gate). The rest was the link's snap below.
-- A player body's locals come from vcod's own sampler and controllers;
+- A player body's locals come from vcod's own sampler and controllers,
+  the control bones' through the second arm (`combat::skel_mats`);
   composed through 0x81ae164 instead of as quaternions, the dying body's
   `tag_weapon_right` lands where 1.7's does word for word on both
   dropped-weapon captures (cod4-combat.md 6.1). VERIFIED (`capture_ab`).

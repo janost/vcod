@@ -274,6 +274,35 @@ impl F80 {
         F80::round(neg, m, big.e - 62)
     }
 
+    /// The value as a double; exact for one of 53 bits or fewer (a
+    /// float's product with an integer's float).
+    pub fn to_f64(self) -> f64 {
+        let v = self.m as f64 * 2f64.powi(self.e);
+        if self.neg { -v } else { v }
+    }
+
+    /// `frndint` under round-down: the greatest integer not above.
+    pub fn floor(self) -> F80 {
+        if self.m == 0 || self.e >= 0 {
+            return self;
+        }
+        let sh = -self.e;
+        let (int, frac) = if sh >= 64 {
+            (0, self.m)
+        } else {
+            (self.m >> sh, self.m & ((1u64 << sh) - 1))
+        };
+        let int = if self.neg && frac != 0 { int + 1 } else { int };
+        if int == 0 {
+            return F80 {
+                neg: false,
+                m: 0,
+                e: 0,
+            };
+        }
+        F80::round(self.neg, u128::from(int), 0)
+    }
+
     /// `fstps`: rounded to a float, nearest even.
     pub fn to_f32(self) -> f32 {
         if self.m == 0 {
@@ -321,6 +350,14 @@ impl std::ops::Add for F80 {
     type Output = F80;
     fn add(self, o: F80) -> F80 {
         self.sum(o)
+    }
+}
+
+/// `fsub`.
+impl std::ops::Sub for F80 {
+    type Output = F80;
+    fn sub(self, o: F80) -> F80 {
+        self.sum(-o)
     }
 }
 

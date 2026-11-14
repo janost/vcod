@@ -217,19 +217,26 @@ impl SkelModel {
     }
 }
 
+/// One bone's local as the sampler or a controller left it.
+#[derive(Clone, Copy, Debug)]
+pub struct PosedLocal {
+    pub quat: [f32; 4],
+    /// The local translation, the model's own (`bind`) included.
+    pub trans: [f32; 3],
+    /// Set by a control angle (0x81b01e8): `DObjCalcSkel` turns it in bone
+    /// 0's frame ([`compose_controlled`]).
+    pub control: bool,
+}
+
 /// `DObjCalcSkel` over a pose another sampler left: each bone's parent
-/// (-1 a root, a parent ahead of its child), its local quat and
-/// translation, and the model's own translation off the parent (`bind`),
-/// which the local's includes. A root keeps its local; each other bone
-/// composes its local less `bind` with `bind` added back ([`compose`]), as
-/// 1.7 adds the model's `trans` to the anim's.
-pub fn calc_posed(
-    parents: &[i32],
-    locals: &[([f32; 4], [f32; 3])],
-    binds: &[[f32; 3]],
-) -> Vec<AnimMat> {
+/// (-1 a root, a parent ahead of its child), its local, and the model's own
+/// translation off the parent (`bind`), which the local's includes. A root
+/// keeps its local; each other bone composes its local less `bind` with
+/// `bind` added back ([`compose`], [`compose_controlled`] for a control
+/// bone), as 1.7 adds the model's `trans` to the anim's.
+pub fn calc_posed(parents: &[i32], locals: &[PosedLocal], binds: &[[f32; 3]]) -> Vec<AnimMat> {
     let mut out: Vec<AnimMat> = Vec::with_capacity(locals.len());
-    for (b, &(quat, trans)) in locals.iter().enumerate() {
+    for (b, l) in locals.iter().enumerate() {
         let parent = parents
             .get(b)
             .and_then(|&p| usize::try_from(p).ok())
@@ -237,8 +244,8 @@ pub fn calc_posed(
         let m = match parent {
             None => {
                 let mut m = AnimMat {
-                    quat,
-                    trans,
+                    quat: l.quat,
+                    trans: l.trans,
                     trans_weight: 0.0,
                 };
                 m.trans_weight = root_weight(&mut m.quat);
@@ -247,11 +254,14 @@ pub fn calc_posed(
             Some(p) => {
                 let bind = binds.get(b).copied().unwrap_or_default();
                 let local = AnimMat {
-                    quat,
-                    trans: [0, 1, 2].map(|k| trans[k] - bind[k]),
+                    quat: l.quat,
+                    trans: [0, 1, 2].map(|k| l.trans[k] - bind[k]),
                     trans_weight: 0.0,
                 };
-                compose(&out[p], &local, bind)
+                match l.control {
+                    true => compose_controlled(&out[0], &out[p], &local, bind),
+                    false => compose(&out[p], &local, bind),
+                }
             }
         };
         out.push(m);
@@ -274,9 +284,7 @@ fn root_weight(q: &mut [f32; 4]) -> f32 {
 
 /// One non-root bone of `DObjCalcSkel` (0x81ae2de..0x81ae54d): the quat
 /// `parent * local` kept on the stack for the weight and stored; the
-/// translation the local's plus `trans` (x and y stored, z kept) turned by
-/// the parent's weighted matrix and added to the parent's, each row's
-/// partial sums stored as the binary stores them.
+/// translation [`place`]s.
 pub fn compose(parent: &AnimMat, local: &AnimMat, trans: [f32; 3]) -> AnimMat {
     let [px, py, pz, pw] = parent.quat.map(d);
     let [cx, cy, cz, cw] = local.quat.map(d);
@@ -284,13 +292,72 @@ pub fn compose(parent: &AnimMat, local: &AnimMat, trans: [f32; 3]) -> AnimMat {
     let x = ((cx * pw + cw * px) + py * cz) - pz * cy;
     let y = ((pw * cy - px * cz) + cw * py) + cx * pz;
     let z = ((cz * pw + px * cy) - cx * py) + cw * pz;
+    let (quat, trans_weight) = weighted([x, y, z, w]);
+    AnimMat {
+        quat,
+        trans: place(parent, local, trans),
+        trans_weight,
+    }
+}
+
+/// A control bone of `DObjCalcSkel` (its bit at skeleton +0x24, set by
+/// 0x81b01e8; the arm at 0x81ae5da..0x81ae819): the control's quat `l`
+/// turns the parent `p` in bone 0's frame `r`, `r * (l * (r^-1 * p))`,
+/// each step's components stored as the binary stores them, the bone's own
+/// anim dropped; the weight and translation as [`compose`]'s.
+pub fn compose_controlled(
+    root: &AnimMat,
+    parent: &AnimMat,
+    local: &AnimMat,
+    trans: [f32; 3],
+) -> AnimMat {
+    let [px, py, pz, pw] = parent.quat.map(d);
+    let [rx, ry, rz, rw] = root.quat.map(d);
+    // `r^-1 * p`, each partial sum stored (0x81ae5da..0x81ae67f).
+    let a = d(f(d(f(d(f(px * rw - pw * rx)) - pz * ry)) + py * rz));
+    let b = d(f(d(f(d(f(d(f(rw * py)) + rx * pz)) - pw * ry)) - px * rz));
+    let c = d(f(d(f(d(f(pz * rw - rx * py)) + px * ry)) - pw * rz));
+    let dw = d(f(((rw * pw + px * rx) + ry * py) + pz * rz));
+    // `l * m` (0x81ae682..0x81ae763): w and y stored, x and z kept.
+    let [lx, ly, lz, lw] = local.quat.map(d);
+    let e = d(f(d(f(d(f(c * lw)) + b * lx)) - a * ly));
+    let tw = d(f(dw * lw));
+    let tw = d(f(tw - a * lx));
+    let tw = d(f(tw - b * ly));
+    let tw = d(f(tw - c * lz));
+    let tx = ((a * lw + dw * lx) + c * ly) - b * lz;
+    let ty = d(f(((b * lw - c * lx) + ly * dw) + lz * a));
+    let tz = e + d(f(dw * lz));
+    // `r * t` (0x81ae766..0x81ae819), kept for the weight.
+    let w = ((rw * tw - rx * tx) - ry * ty) - rz * tz;
+    let x = ((rw * tx + tw * rx) + ry * tz) - ty * rz;
+    let y = ((rw * ty - rx * tz) + tw * ry) + rz * tx;
+    let z = ((rw * tz + rx * ty) - tx * ry) + tw * rz;
+    let (quat, trans_weight) = weighted([x, y, z, w]);
+    AnimMat {
+        quat,
+        trans: place(parent, local, trans),
+        trans_weight,
+    }
+}
+
+/// A bone's quat stored and its weight `2 / |q|^2` off the kept sums
+/// (0x81ae3a7..0x81ae3d3); a zero quat becomes `w` 1, weight 2 (0x81ae5bb).
+fn weighted([x, y, z, w]: [f64; 4]) -> ([f32; 4], f32) {
     let s = ((x * x + y * y) + z * z) + w * w;
-    let (quat, trans_weight) = if s == 0.0 {
+    if s == 0.0 {
         ([f(x), f(y), f(z), 1.0], 2.0)
     } else {
         ([f(x), f(y), f(z), f(w)], f(2.0 / s))
-    };
+    }
+}
 
+/// A bone's translation (0x81ae3de..0x81ae54d): the local's plus `trans`
+/// (x and y stored, z kept) turned by the parent's weighted matrix and
+/// added to the parent's, each row's partial sums stored as the binary
+/// stores them.
+fn place(parent: &AnimMat, local: &AnimMat, trans: [f32; 3]) -> [f32; 3] {
+    let [px, py, pz, pw] = parent.quat.map(d);
     let lx = d(f(d(local.trans[0]) + d(trans[0])));
     let ly = d(f(d(local.trans[1]) + d(trans[1])));
     let lz = d(local.trans[2]) + d(trans[2]);
@@ -321,11 +388,7 @@ pub fn compose(parent: &AnimMat, local: &AnimMat, trans: [f32; 3]) -> AnimMat {
     let z1 = (xz - yw) * lx + (xw + yz) * ly;
     let nz = f((z1 + (1.0 - (xx + yy)) * lz) + tz);
 
-    AnimMat {
-        quat,
-        trans: [nx, ny, nz],
-        trans_weight,
-    }
+    [nx, ny, nz]
 }
 
 #[cfg(test)]

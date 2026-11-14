@@ -320,13 +320,27 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   reads as a slight upward aim).
 - 1.7's `BG_SwingAngles` (0x804b3ba) and `AngleNormalize360` (0x8190540)
   fold in floats (`x - floor(x)` of the turns, times 360), not CoD1's
-  shorts, and the controllers' `AnglesSubtract` (0x819397a) the same way.
-  VERIFIED (the instructions). Trap: the shorts leave the torso pitch up to
-  a short off twice the view and the head that much off level, which the
-  throw back's bounce off a head box reads (cod4-combat.md 15.1). The
-  server's hit poses take the float fold; the client's watched bodies
-  keep the shorts, since the fold cycles a still yaw between 0 and 360
-  (cod4-combat.md 15.1). INFERRED.
+  shorts, and the controllers' `AnglesSubtract` (0x819397a) the same way,
+  on the 64-bit x87 stack between stores. VERIFIED (the instructions).
+  Ours matches all 374 distinct swings and all 255 controller runs of a
+  gdb dump word for word (cod4-combat.md 15.1). VERIFIED (the tests).
+  Trap: the shorts leave the torso pitch up to a short off twice the view
+  and the head that much off level, which the throw back's bounce off a
+  head box reads (cod4-combat.md 15.1).
+- `iw3mp.exe` folds in floats as well, each step stored, and its
+  `AngleNormalize360` (0x561610) never returns 360.0; it eases the
+  controls by a float step (0x407288). VERIFIED (the instructions). The
+  watched bodies take the client's arithmetic and the server's hit poses
+  the server's (`playerpose::Cod4Arith`, cod4-combat.md 15.1). That the
+  client's swing matches `iw3mp.exe` word for word is INFERRED (no
+  client dump).
+- 1.7 turns a player's six control bones in `tag_origin`'s frame,
+  `r * c * r^-1 * p`, the anim's own turn of each dropped
+  (`DObjCalcSkel`'s second arm, cod4-gsc.md 3.2, "The skeleton").
+  VERIFIED (gdb). The server's hit poses compose them so
+  (`combat::skel_mats`); the client's drawn bodies still turn them in the
+  model's frame, CoD1's (`apply_controllers`), which reads the same while
+  the legs face the view and differs by the legs' yaw off it. INFERRED.
 - The cgame lerps a player's `leanf` and `movementDir` between the two
   snapshots with its angles, each difference wrapped through `floor`
   (`CG_InterpolateEntityPosition`). INFERRED. vcod lerps them too; the
