@@ -24,6 +24,7 @@ pub mod ragdoll;
 pub mod rootmotion;
 pub mod scriptmenu;
 pub mod shock;
+pub mod skel;
 pub mod sound;
 pub mod source;
 pub mod state;
