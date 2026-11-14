@@ -2419,6 +2419,21 @@ prone, and the scale reads the cmd's byte, not the stance. Reading a held
 stance key as `upmove` 127 gives a wish of 134 and a slide 3 units a second
 slower (the 1.1 turns rows of `moves_ab.rs`).
 
+Where 1.1d's air wish rounds. VERIFIED, `objdump` of `PM_AirMove`
+(0x2f036..0x2f11a): `PM_CmdScale`'s `st(0)` is stored as a float
+(0x2f088); `pml.forward` and `pml.right` get `z` 0 and go through
+`VectorNormalize` (0x2f0a7, 0x2f0b9); each wish component is `forward *
+fmove + right * smove` on the stack, stored once (0x2f0f2), `z` 0;
+`VectorNormalize` of the wish leaves its float length, which times the
+stored scale stays on the stack into the accelerate (0x2f119, 0x2f140).
+VERIFIED, `objdump` of `ProjectPointOnPlane` (0x3f01c), which the ladder's
+strafe calls (0x339fa): `1 / |n|^2`, the dot and `n * inv` all on the
+stack, each component of `p - d * (n * inv)` rounded once. vcod:
+`pmove::wish_air_x87` and `project_point_on_plane_x87`, 1.1d's server only.
+VERIFIED, vcod measurement 2026-11-14: the slope, bump and ladder gates read
+the same with and without them (every row already exact), so no capture
+yet tells the two roundings apart.
+
 The walk flag. VERIFIED: `PM_UpdatePlayerWalkingFlag` (0x33694) clears
 `pm_flags` 0x80 first (0x3369d) and sets it (0x336dd) when `pm_type` is 5 or
 less, `cmd.buttons` has 0x10 (pm+0x8), `pm_flags` bit 0x1 (prone) is clear,
