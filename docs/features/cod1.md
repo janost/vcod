@@ -303,7 +303,9 @@ Game:
   or use key, items on retail's arc and respawn timer.
 - Mounted MG42s: mount, aim inside the arc (1.1's 15-degree step and view
   snap, 1.5's plain clamp), fire, dismount. A round passes the gun, not
-  the gunner. 1.1d and 1.5b captures replay against ours.
+  the gunner. Two gunners firing at each other trade rounds in retail's
+  slot order, and a round meets a gunner on a turning gun where retail's
+  does. 1.1d, 1.5b and UO captures replay against ours.
 - Map triggers (`trigger_damage` fires off rounds, swings, grenades and
   blasts), script movers that carry and shove players and items, and
   `linkTo` on script models, brush models, items, turrets, player tags and

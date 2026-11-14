@@ -9077,7 +9077,8 @@ traces. A victim below the gunner takes its feedback on the next frame.
   (`ClientSim::hit_body`), and the delivery inside the loop makes that
   death visible before the later gunner traces. No test pins it: carentan's
   rig has two clients and the guns' arcs do not overlap. No retail capture
-  covers either case.
+  covers it. Two gunners firing at each other are captured:
+  cod11-turrets.md 13.10.
 
 VERIFIED, two runs against ours, the `probe_passthru` recipe
 of `client-probes/README.md` with one `--probe-target --probe-team axis` and
