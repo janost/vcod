@@ -104,6 +104,10 @@ pub const CS_LAYOUT_COD4: CsLayout = CsLayout {
 /// 1.7's gamestate carries is 2314 (cod4-handshake.md 5).
 pub const MAX_CONFIGSTRINGS: usize = 2442;
 
+/// `g_maxDroppedWeapons`' top (its range 2..32, default 16; cod4-combat.md
+/// 6.1), the length of the dropped weapons' list.
+pub const MAX_DROPPED_WEAPONS: usize = 32;
+
 /// The level time the match ends (`setGameEndTime`).
 pub const CS_GAMEENDTIME: usize = 11;
 /// The map centre `setMapCenter` writes.
@@ -619,6 +623,9 @@ pub struct Cod4HostState {
     pub death_grenades: Vec<combat::DeathGrenade4>,
     /// The weapons `dropItem` put in the world (`combat::Item4`).
     pub items: Vec<combat::Item4>,
+    /// `g_maxDroppedWeapons`' list (`cod4_lnxded` 0x8370c04): the item each
+    /// slot holds, by slot (`builtins::cod4_combat::hold_dropped`).
+    pub dropped_weapons: [Option<vcod_gsc::EntId>; MAX_DROPPED_WEAPONS],
     /// The grenades in the world and the fuses' burst entities
     /// (`missile`).
     pub missiles: Vec<missile::Missile4>,
@@ -929,6 +936,7 @@ impl Default for Cod4HostState {
             damage_ops: Vec::new(),
             death_grenades: Vec::new(),
             items: Vec::new(),
+            dropped_weapons: [None; MAX_DROPPED_WEAPONS],
             missiles: Vec::new(),
             bursts: Vec::new(),
             free_next: Vec::new(),
