@@ -1137,8 +1137,8 @@ the build read only off model 0 (section 2, "Ladders"); since
 The tick runs in four passes over the bots in slot order
 (`bots::driver::step`, one driver over a game's `BotWorld`): every bot's
 server commands first; then every bot's view (enemy refresh, view,
-hearing, heal, sidestep, cover, in that order per bot) and the objective
-roles over all of them; then per bot the retreat's cover, the hunt's
+hearing, heal, sidestep, in that order per bot), every bot's cover look
+and the objective roles over all of them; then per bot the retreat's cover, the hunt's
 vantage, the goal, the seat, the follower below, the drop and lob probes
 and `think`; then the replies, gamestates and cmds. The follower's rand
 draws come off the bot's own generator, so a bot's walk depends on the
@@ -2863,6 +2863,92 @@ by a body):
 Inside the per-seed spread on `mp_ship`; the change closes the UO gate.
 c6d7e1bd9's 1 528 over seeds 1-72 against the 924 above is the base's
 own: the CoD1 script draws moved every spawn pick.
+
+### The pass on threads
+
+The bots' pass works its costly per-bot parts out on worker threads
+(docs/dev/server-tick.md, "The bots' threads") and moves every bot as it
+did on one thread. VERIFIED (release `bot_match DIGEST=1`, 12 bots, 2000
+ticks, seeds 1 and 2, on 1.1 mp_carentan `tdm`, UO mp_cassino `tdm`, CoD2
+mp_toujane `tdm` and CoD4 mp_crash `war`: the same digests before the
+threads, serial and on eight threads, 2026-11-14; `bot_threads::`, one
+match per game serial against four threads, every tick's cmds and bodies).
+The gate catches a plan that reads wrong: worked out from a bot's
+generator with one bit flipped, the bots part at tick 5 on 1.1, 4 on CoD2
+and 63 on CoD4. VERIFIED (`bot_threads::`, 2026-11-14). With the objective
+tactics (bot-objectives.md 13) merged in, 1.1 mp_carentan `sd`, UO
+mp_cassino `ctf`, CoD2 mp_toujane `sd` and CoD4 mp_crash `sd` give the
+same digests serial, on four threads and on the tactics branch's own tip
+(54db31752), seeds 1 and 2; `bot_threads::` covers `sd` (UO `ctf`) beside
+`tdm`. VERIFIED (release `bot_match DIGEST=1`, 12 bots, 2000 ticks,
+2026-11-14). The posts, the hot sites and `stand_room` are dealt or felt
+before the plans and reach them in the views; the route's `SPREADS` reads
+`Bot::tactics` through `RouteIn`. INFERRED (`driver::step`).
+
+- The plan budget stays shared and spent in slot order. A route worked out
+  on a worker searches from a full budget (4000), and the loop takes it only
+  while its own budget left is at least `PLAN_SLICE` (2000), then spends
+  what the worker's search spent. INFERRED (`Follower::plan`: a search
+  runs the least of the budget and `PLAN_SLICE`, a follower plans at most
+  once a tick, and from either budget the same slice stops at the same
+  node). No budget is split, so no plan moves.
+- A bot's route reads the followers of the bots before it twice: the way it
+  gives a teammate queued behind it (`give_way`) and the bodies it stands
+  aside for (`oncoming`, the lower slots' headings after their routes this
+  tick). A plan reads them as pass 3 starts; the loop compares the way given
+  through the view, and the bodies only when the plan read them
+  (`Follower::stand_aside` reads them past its own tests). INFERRED
+  (`driver::route`). Read for every route, the bodies sent 19 341 of 1.1's
+  47 892 planned routes back to the ticking thread; read only when needed,
+  `bots/route` fell from 0.43 to 0.03 ms a tick. VERIFIED (measured,
+  mp_carentan `tdm`, 12 bots, 2000 ticks, seeds 1 and 2, 2026-11-14).
+- A crease cell keeps the verdict felt from the first spot read in it, so a
+  drop probe on a worker reads the level's cells and keeps those it felt
+  aside; the loop keeps its probe only where no cell it felt was filled
+  since with another verdict (`Creases::merge`), else probes again.
+  INFERRED (`nav::CreaseRead`).
+- The loop took 47 625 of CoD2's 47 940 routes and 12 505 of its 12 533
+  drop probes from the plans, CoD4 47 592 of 47 940 and 4 948 of 4 962.
+  VERIFIED (counted, the digest runs above).
+- The cover looks come after every bot's sense, and on threads in each
+  bot's plan, after the objective roles: a look writes only its own bot's
+  spot and only `Bot::think` reads one. INFERRED (`driver::land_covers`;
+  `BotView::cover`'s one reader is `cover_engage`).
+
+| game, map, 12 bots | `head/bots` before: mean / p50 / p99 / max ms | after | tick before: p50 / p99 / max | after |
+|---|---|---|---|---|
+| 1.1 mp_carentan `tdm` | 2.31 / 1.75 / 8.94 / 14.5 | 1.54 / 1.01 / 6.65 / 9.4 | 3.55 / 11.10 / 16.0 | 2.39 / 8.20 / 10.9 |
+| UO mp_cassino `tdm` | 2.13 / 1.77 / 9.10 / 12.3 | 1.50 / 1.06 / 8.30 / 12.7 | 3.82 / 11.33 / 14.9 | 3.44 / 10.96 / 15.7 |
+| CoD2 mp_toujane `tdm` | 1.22 / 1.13 / 2.65 / 6.5 | 0.77 / 0.70 / 2.05 / 6.3 | 2.33 / 4.19 / 10.3 | 1.71 / 3.52 / 8.3 |
+| CoD4 mp_crash `war` | 1.37 / 1.18 / 3.83 / 9.3 | 1.12 / 0.92 / 3.52 / 11.9 | 2.46 / 5.40 / 15.9 | 2.23 / 5.22 / 20.3 |
+
+VERIFIED (release `bot_match TICKSTATS=1 JOBS=1`, seed 1, 2000 ticks,
+the default four threads after; run at normal priority on a 30-core
+machine whose other jobs ran at idle priority, 2026-11-14).
+
+- A tick's plans take at least its slowest bot's plan: on CoD2 that
+  averaged 0.25 ms of 0.8 ms of plans a tick, and four threads ran the
+  pass as fast as eight (`head/bots` 0.95 against 0.98 ms on CoD2, 1.59
+  against 1.67 on 1.1). The slowest ticks are one bot's long search or
+  cover look, which no thread count splits. VERIFIED (measured, the runs
+  above and their eight-thread twins).
+- Threads started afresh each tick cost more than they saved (`bots/plans`
+  0.94 ms against 0.70 ms of the same work on one thread: 0.22 ms
+  starting them, 0.53 waiting on them); parked workers woken by the job
+  joined it 0.1 to 0.4 ms late; woken after the nav tick and spinning
+  until the plans are in, `bots/plans` takes 0.34 ms. VERIFIED (measured,
+  CoD2 mp_toujane `tdm`, 12 bots, 2000 ticks).
+- On a machine with more runnable threads than cores the pass on threads
+  ran slower than serial (CoD2 `head/bots` 4.6 against 1.6 ms, threads
+  started each tick, a load of 100 on 30 cores): its workers waited for a
+  core. `VCOD_BOT_THREADS=1`
+  runs it serial. VERIFIED (measured, 2026-11-14).
+- What stays on the ticking thread: CoD2's 0.77 ms is `bots/moves` 0.26
+  (the cmds through `ClientThink`), `bots/plans` 0.36 and `bots/sense`
+  0.10 (the enemy sight: the games' levels are not `Sync`); 1.1's
+  `bots/probes` keeps 0.26 ms (the lob probe and `pre_think` stay
+  serial). VERIFIED
+  (measured, the runs above).
 
 ## 4. Memory and hearing
 

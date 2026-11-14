@@ -72,6 +72,8 @@ The game is the detected install's (or `--game`'s).
   ([testing.md](testing.md#performance)).
 - `VCOD_TICK_TRACE`, `VCOD_TICK_PROFILE_MS`: the server tick's step log and
   slow ticks ([server-tick.md](server-tick.md#tracing-a-tick)).
+- `VCOD_BOT_THREADS=<n>`: the threads the bots' pass plans on, `1` serial
+  ([server-tick.md](server-tick.md#the-bots-threads)).
 - `VCOD_NETSIM="ping=100,jitter=20,loss=2"` gives the client a bad link
   without root. `vcod --net-probe ADDR --probe-clock` measures the clock on
   one.

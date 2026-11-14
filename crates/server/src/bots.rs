@@ -12,6 +12,7 @@ pub mod cod2;
 pub mod cod4;
 pub(crate) mod cover;
 pub(crate) mod driver;
+pub use driver::with_threads;
 pub(crate) mod hunt;
 pub(crate) mod posts;
 
@@ -235,6 +236,8 @@ impl Default for Skill {
 
 /// What the brain needs to know about its own body this tick. The server
 /// fills it from the sim, the weapon table and the script's team table.
+/// Compared whole by the pass's plans on worker threads (`driver::par`).
+#[derive(Clone, PartialEq)]
 pub struct BotView {
     pub origin: [f32; 3],
     /// `ps.viewHeightCurrent`: the eye, and the muzzle a round leaves from,
@@ -516,7 +519,7 @@ pub struct GuardPost {
 /// Behind Enemy Lines as the bot plays it (docs/research/bot-objectives.md,
 /// "Behind Enemy Lines"): a few allies score by staying alive, the axis
 /// hunt them, and an axis player who kills one takes his place.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BelView {
     /// The bot is allied: the hunted side.
     pub hunted: bool,
@@ -531,7 +534,7 @@ pub struct BelView {
 
 /// The stock `re.gsc` objectives as the server read them this frame
 /// (docs/research/bot-objectives.md, "Retrieval").
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ReView {
     pub role: ObjRole,
     /// Each objective still standing.
@@ -543,7 +546,7 @@ pub struct ReView {
     pub escort: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ReObjView {
     /// The middle of its pickup trigger while it lies there to be taken.
     pub pickup: Option<[f32; 3]>,
@@ -574,7 +577,7 @@ pub enum ObjRole {
 
 /// The stock `sd.gsc` objectives as the server read them this frame
 /// (docs/research/bot-objectives.md).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SdView {
     pub role: ObjRole,
     /// The bombzones still standing, A before B; empty once a bomb is down.
@@ -602,7 +605,7 @@ pub struct SdView {
 
 /// CoD4's carried bomb (`_gameobjects.gsc` `setKeyObject`,
 /// docs/research/bot-objectives.md 12).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct KeyBomb {
     /// Where the bomb lies, for the one bot that walks into it to take it.
     pub fetch: Option<[f32; 3]>,
@@ -613,7 +616,7 @@ pub struct KeyBomb {
     pub defuse_ticks: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SiteView {
     /// The zone's absolute bounds.
     pub mins: [f32; 3],
@@ -622,7 +625,7 @@ pub struct SiteView {
     pub stand: [f32; 3],
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BombView {
     /// The defuse trigger's origin, which the script's 64-unit range reads.
     pub origin: [f32; 3],
@@ -634,7 +637,7 @@ pub struct BombView {
 /// A United Offensive objective gametype as the bot plays it
 /// (docs/research/bot-objectives.md section 7). The server fills it on a
 /// `ctf`, `dom`, `hq` or `bas` level from `ScriptRuntime::uo_objectives`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum UoView {
     Ctf(Box<CtfView>),
     Dom(DomView),
@@ -656,7 +659,7 @@ impl UoView {
 }
 
 /// Capture the flag: the bot's team's flag and the other team's.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CtfView {
     pub ours: CtfFlagView,
     pub theirs: CtfFlagView,
@@ -668,7 +671,7 @@ pub struct CtfView {
     pub rank: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CtfFlagView {
     /// Its trigger at home, while it stands there.
     pub home: Option<SiteView>,
@@ -682,13 +685,13 @@ pub struct CtfFlagView {
 }
 
 /// Domination: every flag zone and who holds it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DomView {
     pub flags: Vec<DomFlagView>,
     pub rank: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DomFlagView {
     pub site: SiteView,
     /// The bot's team holds it; neutral and the other team's are taken by
@@ -700,7 +703,7 @@ pub struct DomFlagView {
 }
 
 /// Headquarters: the radio on show.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct HqView {
     pub radio: Option<HqRadioView>,
     /// No radio up: the compass marker of the next one.
@@ -708,7 +711,7 @@ pub struct HqView {
     pub rank: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HqRadioView {
     pub at: [f32; 3],
     /// How near across a body has to stand.
@@ -726,7 +729,7 @@ pub struct HqRadioView {
 }
 
 /// Base assault: the bases still alive on either side.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BasView {
     pub bases: Vec<BasBaseView>,
     /// Rocket launchers lying about to be picked up with the use key: the
@@ -739,7 +742,7 @@ pub struct BasView {
     pub rank: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BasBaseView {
     pub at: [f32; 3],
     pub ours: bool,
@@ -854,7 +857,7 @@ const REACQUIRE_ERROR: f32 = 1.25;
 const HIT_BY_ERROR: f32 = 0.75;
 
 /// The last hit another client dealt a bot.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hurt {
     /// The attacker's client slot.
     pub slot: usize,
@@ -865,7 +868,7 @@ pub struct Hurt {
     pub dir: [f32; 3],
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct EnemyView {
     /// The enemy's client slot, so a switch of target reads as one.
     pub slot: usize,

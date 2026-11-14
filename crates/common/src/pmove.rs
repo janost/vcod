@@ -449,7 +449,7 @@ impl VehicleSeat {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlayerState {
     pub origin: Vec3, // feet
     pub velocity: Vec3,
