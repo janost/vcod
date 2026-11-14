@@ -596,6 +596,29 @@ fn a_gametype_script_from_disk_runs() {
 /// the compile a first load of the map makes, and the configstrings and
 /// baselines of the same map change with nothing carried. A changed
 /// gametype script is compiled afresh.
+/// A `map_restart` or a `fast_restart` takes the level's map parts instead
+/// of reading them again, and still references the iwds a fresh load
+/// does; another map reads its own.
+#[test]
+fn a_reload_of_the_map_reuses_its_parts_and_references_the_same_iwds() {
+    let Some(mut rig) = Rig::new("mp_toujane", "dm", &[]) else {
+        return;
+    };
+    let parts = |rig: &Rig| rig.sv.game.level.as_ref().unwrap().carried_parts();
+    let first = parts(&rig);
+    let fresh = rig.sv.game.iwds.referenced.clone();
+    assert!(!fresh.is_empty());
+    for cmd in ["map_restart", "fast_restart", "map mp_toujane"] {
+        rig.console(cmd);
+        rig.run(1.0);
+        assert!(Rc::ptr_eq(&first, &parts(&rig)), "{cmd}");
+        assert_eq!(rig.sv.game.iwds.referenced, fresh, "{cmd}");
+    }
+    rig.console("map mp_carentan");
+    rig.run(1.0);
+    assert!(!Rc::ptr_eq(&first, &parts(&rig)));
+}
+
 #[test]
 fn a_map_change_resumes_the_gametype_compile_where_a_fresh_one_lands() {
     let Some(fs) = vcod_common::testing::cod2_fs() else {
