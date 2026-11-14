@@ -34,6 +34,12 @@ pub enum ArrayKey {
 struct Elems {
     dense: Vec<Value>,
     sparse: BTreeMap<ArrayKey, Value>,
+    /// The keys in the order they were first written, for
+    /// [`Heap::array_keys_newest_first`]; `None` while that is
+    /// `0..dense.len()` (each key appended in turn, none cleared but the
+    /// last), which a list never leaves and so never allocates. `None`
+    /// implies `sparse` is empty.
+    order: Option<Vec<ArrayKey>>,
 }
 
 impl Elems {
@@ -52,6 +58,13 @@ impl Elems {
         }
     }
 
+    /// The first-write order, written out.
+    fn order_mut(&mut self) -> &mut Vec<ArrayKey> {
+        let n = self.dense.len();
+        self.order
+            .get_or_insert_with(|| (0..n).map(|i| ArrayKey::Int(i as i32)).collect())
+    }
+
     /// Whether `k` is new.
     fn insert(&mut self, k: ArrayKey, v: Value) -> bool {
         if let Some(i) = self.dense_index(k) {
@@ -59,7 +72,14 @@ impl Elems {
             return false;
         }
         if k != ArrayKey::Int(self.dense.len() as i32) || self.dense.len() >= i32::MAX as usize {
-            return self.sparse.insert(k, v).is_none();
+            let new = self.sparse.insert(k, v).is_none();
+            if new {
+                self.order_mut().push(k);
+            }
+            return new;
+        }
+        if let Some(order) = self.order.as_mut() {
+            order.push(k);
         }
         self.dense.push(v);
         // The keys past it that now run on from the vector join it.
@@ -75,15 +95,32 @@ impl Elems {
 
     /// Whether `k` was there.
     fn remove(&mut self, k: ArrayKey) -> bool {
-        let Some(i) = self.dense_index(k) else {
-            return self.sparse.remove(&k).is_some();
-        };
+        let last = self.dense.len().checked_sub(1);
+        match self.dense_index(k) {
+            Some(i) if self.order.is_none() && Some(i) == last => {}
+            Some(_) => self.drop_from_order(k),
+            None => {
+                if self.sparse.remove(&k).is_none() {
+                    return false;
+                }
+                self.drop_from_order(k);
+                return true;
+            }
+        }
+        let i = self.dense_index(k).expect("a dense key");
         // The keys after it no longer run unbroken from 0.
         for (j, v) in self.dense.drain(i + 1..).enumerate() {
             self.sparse.insert(ArrayKey::Int((i + 1 + j) as i32), v);
         }
         self.dense.pop();
         true
+    }
+
+    fn drop_from_order(&mut self, k: ArrayKey) {
+        let order = self.order_mut();
+        if let Some(i) = order.iter().rposition(|o| *o == k) {
+            order.remove(i);
+        }
     }
 
     fn len(&self) -> usize {
@@ -104,15 +141,23 @@ impl Elems {
             )
             .chain(above.map(|(k, v)| (*k, *v)))
     }
+
+    /// The keys, the most recently added first.
+    fn keys_newest_first(&self) -> Vec<ArrayKey> {
+        match &self.order {
+            Some(o) => o.iter().rev().copied().collect(),
+            None => (0..self.dense.len())
+                .rev()
+                .map(|i| ArrayKey::Int(i as i32))
+                .collect(),
+        }
+    }
 }
 
 #[derive(Default)]
 pub struct Heap {
     structs: Vec<FxHashMap<Atom, Value>>,
     arrays: Vec<Elems>,
-    /// Each array's keys in the order they were first written, for
-    /// [`Heap::array_keys_newest_first`].
-    orders: Vec<Vec<ArrayKey>>,
     /// Arrays a second place may hold ([`Heap::share`]): a write through
     /// one copies it first ([`Heap::own`]).
     shared: Vec<bool>,
@@ -132,7 +177,6 @@ impl Heap {
     pub fn new_array(&mut self) -> ArrayId {
         let id = ArrayId(self.arrays.len() as u32);
         self.arrays.push(Elems::default());
-        self.orders.push(Vec::new());
         self.shared.push(false);
         id
     }
@@ -161,13 +205,11 @@ impl Heap {
             return a;
         }
         let elems = self.arrays[i].clone();
-        let order = self.orders[i].clone();
         for (_, v) in elems.iter() {
             self.share(v);
         }
         let id = ArrayId(self.arrays.len() as u32);
         self.arrays.push(elems);
-        self.orders.push(order);
         self.shared.push(false);
         id
     }
@@ -206,9 +248,7 @@ impl Heap {
     /// dropped rather than panicking.
     pub fn set_index(&mut self, a: ArrayId, k: ArrayKey, v: Value) {
         if let Some(elems) = self.arrays.get_mut(a.0 as usize) {
-            if elems.insert(k, v) {
-                self.orders[a.0 as usize].push(k);
-            }
+            elems.insert(k, v);
         } else {
             log::warn!("dropped a write to array {} (out of range)", a.0);
         }
@@ -219,13 +259,8 @@ impl Heap {
     /// An undefined value from anywhere else is stored by [`Self::set_index`]
     /// and counted (`probe_undef_call_into_unset`).
     pub fn clear_index(&mut self, a: ArrayId, k: ArrayKey) {
-        if let Some(elems) = self.arrays.get_mut(a.0 as usize)
-            && elems.remove(k)
-        {
-            let order = &mut self.orders[a.0 as usize];
-            if let Some(i) = order.iter().rposition(|o| *o == k) {
-                order.remove(i);
-            }
+        if let Some(elems) = self.arrays.get_mut(a.0 as usize) {
+            elems.remove(k);
         }
     }
 
@@ -249,9 +284,9 @@ impl Heap {
     /// `getArrayKeys`, docs/research/cod4-gsc.md 3); an id out of range
     /// yields nothing.
     pub fn array_keys_newest_first(&self, a: ArrayId) -> Vec<ArrayKey> {
-        self.orders
+        self.arrays
             .get(a.0 as usize)
-            .map(|o| o.iter().rev().copied().collect())
+            .map(Elems::keys_newest_first)
             .unwrap_or_default()
     }
 
@@ -335,6 +370,13 @@ mod tests {
             }
             h.set_index(a, ArrayKey::Int(1), Value::Int(99));
             want.insert(ArrayKey::Int(1), Value::Int(99));
+            let mut order: Vec<ArrayKey> = keys.to_vec();
+            order.retain(|k| Some(*k) != clear);
+            if clear == Some(ArrayKey::Int(1)) {
+                order.push(ArrayKey::Int(1));
+            }
+            order.reverse();
+            assert_eq!(h.array_keys_newest_first(a), order);
             let got = h.array_entries(a);
             let want: Vec<_> = want.into_iter().collect();
             assert_eq!(got, want);
@@ -344,6 +386,26 @@ mod tests {
             }
             assert_eq!(h.get_index(a, ArrayKey::Int(7)), Value::Undefined);
         }
+    }
+
+    /// A list's keys come back newest first without a written order, and
+    /// clearing its last key keeps it a list.
+    #[test]
+    fn a_list_lists_its_keys_newest_first() {
+        let mut h = Heap::new();
+        let a = h.new_array();
+        for i in 0..4 {
+            h.set_index(a, ArrayKey::Int(i), Value::Int(i));
+        }
+        h.clear_index(a, ArrayKey::Int(3));
+        h.set_index(a, ArrayKey::Int(3), Value::Int(9));
+        let keys: Vec<_> = (0..4).rev().map(ArrayKey::Int).collect();
+        assert_eq!(h.array_keys_newest_first(a), keys);
+        h.clear_index(a, ArrayKey::Int(1));
+        h.set_index(a, ArrayKey::Int(1), Value::Int(8));
+        let keys = [1, 3, 2, 0].map(ArrayKey::Int);
+        assert_eq!(h.array_keys_newest_first(a), keys);
+        assert_eq!(h.array_len(a), 4);
     }
 
     /// A `StructId`/`ArrayId` can now be minted outside this crate (`Vm::heap`),
