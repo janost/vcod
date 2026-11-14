@@ -10,7 +10,7 @@
 //! mp_harbor's sea wall: a rocket, a frag and UO's smoke grenade into the
 //! water raise retail's splash (12.1). A rocket fired with the shooter's eye
 //! inside mp_carentan's 0x2080 kerb brush starts solid and goes off at
-//! the end of its first move (11.1, 12.3).
+//! the end of its first move on all three (11.1, 12.3).
 //!
 //! `ME_REPORT=1` prints both logs. The 1.1d tests need `COD_DIR` at a 1.1
 //! install, the 1.5b rows a 1.5 or UO one, the UO ones a UO one; each
@@ -785,7 +785,9 @@ fn a_rocket_into_water_splashes() {
 /// The integer `trDelta` whose `vectoangles` is the `apos` retail's
 /// missile line shows (`fire_rocket` truncates the delta and takes its
 /// angles off it), near `speed` along those angles; `None` unless exactly
-/// one fits.
+/// one fits. UO's wire carries `apos` in 65536ths of a turn (combat doc
+/// 13.6), which more than one delta can fit: those take the angles' shorts
+/// and the fit nearest the angles' own point.
 fn delta_for_apos(lines: &[String], speed: f32) -> Option<[f32; 3]> {
     let l = lines.iter().find(|l| l.contains(" missile "))?;
     let t: Vec<&str> = l.split(' ').collect();
@@ -793,7 +795,7 @@ fn delta_for_apos(lines: &[String], speed: f32) -> Option<[f32; 3]> {
     let apos = [t[at].parse::<f32>().ok()?, t[at + 1].parse::<f32>().ok()?];
     let (p, y) = (apos[0].to_radians(), apos[1].to_radians());
     let near = glam::Vec3::new(p.cos() * y.cos(), p.cos() * y.sin(), -p.sin()) * speed;
-    let mut fits = Vec::new();
+    let (mut fits, mut shorts) = (Vec::new(), Vec::new());
     for dx in -2..=2 {
         for dy in -2..=2 {
             for dz in -2..=2 {
@@ -806,10 +808,27 @@ fn delta_for_apos(lines: &[String], speed: f32) -> Option<[f32; 3]> {
                 if a[0] == apos[0] && a[1] == apos[1] {
                     fits.push(d);
                 }
+                if (0..2).all(|k| wire_short(a[k]) == short(apos[k])) {
+                    shorts.push(d);
+                }
             }
         }
     }
+    if fits.is_empty() {
+        let off = |d: &[f32; 3]| (glam::Vec3::from(*d) - near).length();
+        return shorts.into_iter().min_by(|a, b| off(a).total_cmp(&off(b)));
+    }
     (fits.len() == 1).then(|| fits[0])
+}
+
+/// A decoded wire angle back to its 65536ths of a turn.
+fn short(a: f32) -> i32 {
+    ((f64::from(a) * 65536.0 / 360.0).round() as i64 & 0xffff) as i32
+}
+
+/// `ANGLE2SHORT`: an angle truncated to 65536ths of a turn, UO's wire unit.
+fn wire_short(a: f32) -> i32 {
+    ((a * 65536.0 / 360.0) as i32) & 0xffff
 }
 
 /// A rocket fired with the shooter's eye inside mp_carentan's 0x2080 caulk
@@ -817,18 +836,25 @@ fn delta_for_apos(lines: &[String], speed: f32) -> Option<[f32; 3]> {
 /// brush, so the first move starts solid, and every protocol reads that as
 /// a contact at the move's end, where the rocket goes off in mid-air on
 /// the launch snapshot. 1.1d keeps the trace's zero normal (parm 0), 1.5b
-/// packs the reversed flight (combat doc 11.1, 12.3). Ours flies retail's
+/// and UO pack the reversed flight (combat doc 11.1, 12.3). Ours flies retail's
 /// `trDelta`, recovered off its launch angles.
 #[test]
 fn a_rocket_fired_inside_a_kerb_brush_goes_off_at_once() {
-    for (fs, fixture) in [
+    for (fs, fixture, weapon) in [
         (
             vcod_common::testing::game_fs_11(),
             include_str!("fixtures/missiles/mp_carentan-kerb-rocket.txt"),
+            "panzerfaust_mp",
         ),
         (
             fs_15(),
             include_str!("fixtures/missiles/mp_carentan-kerb-rocket-15.txt"),
+            "panzerfaust_mp",
+        ),
+        (
+            vcod_common::testing::uo_fs(),
+            include_str!("fixtures/missiles/mp_carentan-kerb-rocket-uo.txt"),
+            "bazooka_mp",
         ),
     ] {
         let Some(fs) = fs else {
@@ -843,7 +869,7 @@ fn a_rocket_fired_inside_a_kerb_brush_goes_off_at_once() {
             SKYSHOT,
             &[
                 ("probe_part", "spot"),
-                ("probe_weapon", "panzerfaust_mp"),
+                ("probe_weapon", weapon),
                 ("probe_x", "1192"),
                 ("probe_y", "-536"),
                 ("probe_z", "340"),

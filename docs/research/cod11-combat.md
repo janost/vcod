@@ -5988,11 +5988,17 @@ the ordering and the conditions in it.
   explode packs parm 0, the zero normal of a trace that started solid and
   met nothing after; 1.5b's packs 104, the byte of the reversed flight.
   INFERRED: 1.1's brush would not stop a 0x11 move, so the contact also
-  confirms 11.1's clipmask. `missile_edge_ab`'s
-  `a_rocket_fired_inside_a_kerb_brush_goes_off_at_once` replays both, the
-  round flying retail's `trDelta` (the one integer delta whose
-  `vectoangles` is the capture's `apos`); under the old 0x11 mask it
-  fails on both.
+  confirms 11.1's clipmask. VERIFIED, live (retail UO, the same spot,
+  `mp_carentan-kerb-rocket-uo.txt`, 2026-11-14): a `bazooka_mp` round goes
+  off the same way, 280 units out at (1165, -258, 411) on the launch
+  snapshot (`EV_ROCKET_EXPLODE` 185 in UO's numbering), parm 104 as on
+  1.5b; a `panzerfaust_mp` run read the same. `missile_edge_ab`'s
+  `a_rocket_fired_inside_a_kerb_brush_goes_off_at_once` replays all three,
+  the round flying retail's `trDelta` (the one integer delta whose
+  `vectoangles` is the capture's `apos`; on UO, whose wire sends `apos` in
+  65536ths, the nearest of the two deltas a unit apart that fit, which
+  explode on the same snapped point); under the old 0x11 mask it fails on
+  1.1d and 1.5b.
 - Otherwise `G_MissileImpact(ent, &tr, dir)` runs, and `G_RunThink(ent)`
   follows only when `s.eType` is still 4. VERIFIED: `G_MissileImpact`'s
   explode path sets `s.eType` to 0 (13.1), so the test is what stops a
