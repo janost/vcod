@@ -8,6 +8,7 @@
 pub mod archive;
 pub mod bans;
 pub mod challenge;
+pub mod commands;
 pub mod core;
 pub mod game;
 pub mod gamelog;
