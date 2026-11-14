@@ -6,6 +6,7 @@ pub mod assets;
 pub mod bullet;
 pub mod collision;
 pub mod drawsurf;
+pub mod dynent;
 pub mod fx;
 pub mod hud;
 pub mod image;
