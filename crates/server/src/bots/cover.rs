@@ -313,7 +313,10 @@ impl Bot {
             && !self.objective_busy(view)
             && match self.objective_target(view) {
                 None => true,
-                Some(t) => matches!(t, ObjTarget::Guard { .. } | ObjTarget::Sweep(_)),
+                Some(t) => matches!(
+                    t,
+                    ObjTarget::Guard { .. } | ObjTarget::Escort(_) | ObjTarget::Sweep(_)
+                ),
             }
     }
 

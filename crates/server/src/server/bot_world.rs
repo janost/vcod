@@ -569,6 +569,9 @@ impl Server {
             }),
             post: None,
             give_way: None,
+            guard_post: None,
+            lane: None,
+            exposure: None,
             // Probed in pass 3, on the ticks the brain throws.
             lob: None,
             waypoint: None,
@@ -713,6 +716,7 @@ impl Server {
                 lead: false,
                 cover: None,
                 key: None,
+                hot: None,
             },
         ))
     }

@@ -179,15 +179,18 @@ struct Opts {
     /// Console lines run once the level is up (the per-side `addbot`s).
     console: Vec<String>,
     verbose: bool,
-    /// cover, retreat, team play, awareness, footwork, wariness, squad, aim.
-    arms: [Arm; 8],
+    /// cover, retreat, team play, awareness, footwork, wariness, squad,
+    /// aim, tactics, converge, lanes.
+    arms: [Arm; 11],
 }
 
-const FEATURES: [&str; 8] = [
-    "cover", "retreat", "teamplay", "aware", "footwork", "wary", "squad", "aim",
+const FEATURES: [&str; 11] = [
+    "cover", "retreat", "teamplay", "aware", "footwork", "wary", "squad", "aim", "tactics",
+    "converge", "lanes",
 ];
-const ARMS: [&str; 8] = [
-    "COVER", "RETREAT", "TEAMPLAY", "AWARE", "FOOTWORK", "WARY", "SQUAD", "AIM",
+const ARMS: [&str; 11] = [
+    "COVER", "RETREAT", "TEAMPLAY", "AWARE", "FOOTWORK", "WARY", "SQUAD", "AIM", "TACTICS",
+    "CONVERGE", "LANES",
 ];
 
 /// The side a client's arms follow: its team, or in `dm` its slot's
@@ -846,6 +849,115 @@ fn install_trace(game: &str, map: &str, gametype: &str, seed: u64) {
     }
 }
 
+/// A bot-tick is near its objective within this of the point the
+/// objective centres on (`Bot::objective_point`).
+const OBJ_NEAR: f32 = 800.0;
+/// A body within this of where it stood `STILL_TICKS` before stands still.
+const STILL_TICKS: usize = 40;
+const STILL_RADIUS: f32 = 32.0;
+
+/// A bot's objective point, exposure and cover hold, as [`ObjSample`]
+/// takes them.
+type ObjInfo = (Option<[f32; 3]>, Option<f32>, bool);
+
+/// One playing bot's tick for [`ObjSpread`]: slot, team, feet, its
+/// objective's point, the share of that objective's ways in that see it,
+/// on a held cover spot.
+struct ObjSample {
+    slot: usize,
+    team: String,
+    at: [f32; 3],
+    point: Option<[f32; 3]>,
+    exposure: Option<f32>,
+    cover: bool,
+}
+
+/// The playing bot-ticks near their objective (bot-objectives.md 13):
+/// with a teammate playing, the sum of the nearest one's distance and
+/// those with [`PACK`] or more inside [`PACK_RANGE`]; those standing still
+/// ([`STILL_RADIUS`] over [`STILL_TICKS`]); the share of the objective's
+/// ways in that see the body (`BotView::exposure`), over the ticks with a
+/// sample; those on a cover spot.
+#[derive(Default, Clone)]
+struct ObjSpread {
+    ticks: u64,
+    mate_ticks: u64,
+    mate: f64,
+    packed: u64,
+    still: u64,
+    exposed_ticks: u64,
+    exposure: f64,
+    cover: u64,
+}
+
+impl ObjSpread {
+    fn add(&mut self, o: &ObjSpread) {
+        self.ticks += o.ticks;
+        self.mate_ticks += o.mate_ticks;
+        self.mate += o.mate;
+        self.packed += o.packed;
+        self.still += o.still;
+        self.exposed_ticks += o.exposed_ticks;
+        self.exposure += o.exposure;
+        self.cover += o.cover;
+    }
+
+    /// One tick of every playing bot into `out` by team; `trail` keeps
+    /// each one's feet over the last [`STILL_TICKS`].
+    fn feed(
+        out: &mut BTreeMap<String, ObjSpread>,
+        samples: &[ObjSample],
+        trail: &mut HashMap<usize, VecDeque<[f32; 3]>>,
+    ) {
+        trail.retain(|s, _| samples.iter().any(|x| x.slot == *s));
+        for x in samples {
+            let t = trail.entry(x.slot).or_default();
+            t.push_back(x.at);
+            if t.len() > STILL_TICKS + 1 {
+                t.pop_front();
+            }
+        }
+        let dist = |a: [f32; 3], b: [f32; 3]| glam::Vec3::from(a).distance(glam::Vec3::from(b));
+        for x in samples {
+            if !x.point.is_some_and(|p| dist(x.at, p) < OBJ_NEAR) {
+                continue;
+            }
+            let o = out.entry(x.team.clone()).or_default();
+            o.ticks += 1;
+            let d: Vec<f32> = samples
+                .iter()
+                .filter(|o| o.slot != x.slot && o.team == x.team)
+                .map(|o| dist(o.at, x.at))
+                .collect();
+            if let Some(near) = d.iter().copied().reduce(f32::min) {
+                o.mate_ticks += 1;
+                o.mate += f64::from(near);
+                o.packed += u64::from(d.iter().filter(|&&v| v < PACK_RANGE).count() >= PACK);
+            }
+            let t = &trail[&x.slot];
+            o.still += u64::from(t.len() == STILL_TICKS + 1 && dist(t[0], x.at) < STILL_RADIUS);
+            if let Some(e) = x.exposure {
+                o.exposed_ticks += 1;
+                o.exposure += f64::from(e);
+            }
+            o.cover += u64::from(x.cover);
+        }
+    }
+
+    fn line(&self) -> String {
+        let share = |n: u64, of: u64| 100.0 * n as f64 / of.max(1) as f64;
+        format!(
+            "near objective {:8} bot-ticks mate {:4.0} packed {:4.1}% still {:4.1}% exposed {:4.1}% cover hold {:4.1}%",
+            self.ticks,
+            self.mate / self.mate_ticks.max(1) as f64,
+            share(self.packed, self.mate_ticks),
+            share(self.still, self.ticks),
+            100.0 * self.exposure / self.exposed_ticks.max(1) as f64,
+            share(self.cover, self.ticks),
+        )
+    }
+}
+
 #[derive(Default, Clone)]
 struct Match {
     net: Option<Digest>,
@@ -877,6 +989,8 @@ struct Match {
     /// Per round with an objective action, the ticks from the round's
     /// start (the match's, or the last `W;` line) to its first `A;` line.
     to_objective: Vec<usize>,
+    /// Near the objective, by team ([`ObjSpread`]).
+    obj: BTreeMap<String, ObjSpread>,
     log: Vec<String>,
     dm: bool,
     digest: Option<Digest>,
@@ -937,7 +1051,7 @@ fn main() {
         seeds = (1..=8).collect();
     }
     println!(
-        "maps {} gametype {} bots {} ticks {} uo {} set {:?} console {:?} cover/retreat/teamplay/aware/footwork/wary/squad/aim {:?}",
+        "maps {} gametype {} bots {} ticks {} uo {} set {:?} console {:?} cover/retreat/teamplay/aware/footwork/wary/squad/aim/tactics/converge/lanes {:?}",
         opts.maps.join(","),
         opts.gametype,
         opts.bots,
@@ -1009,6 +1123,9 @@ fn main() {
             m.actions,
             to_objective(&m.to_objective),
         );
+        for (k, o) in &m.obj {
+            println!("{} seed {}: obj {k} {}", m.map, m.seed, o.line());
+        }
         if m.by_arm.len() > 1 {
             let k: BTreeMap<&str, u32> = m
                 .by_arm
@@ -1045,7 +1162,12 @@ fn summarize(what: &str, results: &[&Match]) {
     let (mut stalled, mut held, mut ended, mut scores) = (0, 0, 0, [0i64; 2]);
     let mut edges = [0u32; 2];
     let mut to_obj: Vec<usize> = Vec::new();
+    let mut obj: BTreeMap<String, ObjSpread> = BTreeMap::new();
     for m in results {
+        for (k, t) in &m.obj {
+            obj.entry(k.clone()).or_default().add(t);
+            obj.entry("all".into()).or_default().add(t);
+        }
         for (k, t) in &m.by_team {
             by_team.entry(k.clone()).or_default().add(t);
         }
@@ -1093,6 +1215,9 @@ fn summarize(what: &str, results: &[&Match]) {
     if by_arm.len() > 1 {
         rows("arm  ", &by_arm);
         println!("  arm wins {arm_wins:?}  arm actions {arm_actions:?}");
+    }
+    for (k, t) in &obj {
+        println!("  obj   {k:<13} {}", t.line());
     }
     println!("  ended {ended}  wins {wins:?}");
     println!(
@@ -1187,6 +1312,7 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
     // Each bot's last 12 s: where it stood and whether it held still on
     // purpose there.
     let mut hist: HashMap<usize, VecDeque<([f32; 3], bool)>> = HashMap::new();
+    let mut trail: HashMap<usize, VecDeque<[f32; 3]>> = HashMap::new();
     // `STALLS=1`: where each stalled window begins, to stderr.
     let stall_log = std::env::var("STALLS").as_deref() == Ok("1");
     let mut stalled_now: HashSet<usize> = HashSet::new();
@@ -1199,7 +1325,19 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
         // stock game.
         for slot in sv.bot_slots() {
             let team = arm_side(&slot.to_string(), team_name(&mut sv, slot, m.dm), m.dm);
-            let [cover, retreat, team_play, aware, footwork, wary, squad, aim] = o.arms;
+            let [
+                cover,
+                retreat,
+                team_play,
+                aware,
+                footwork,
+                wary,
+                squad,
+                aim,
+                tactics,
+                converge,
+                lanes,
+            ] = o.arms;
             if cover != Arm::All {
                 sv.test_bot_cover(slot, cover.on(team, seed));
             }
@@ -1223,6 +1361,15 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
             }
             if aim != Arm::All {
                 sv.test_bot_human_aim(slot, aim.on(team, seed));
+            }
+            if tactics != Arm::All {
+                sv.test_bot_tactics(slot, tactics.on(team, seed));
+            }
+            if converge != Arm::All {
+                sv.test_bot_converge(slot, converge.on(team, seed));
+            }
+            if lanes != Arm::All {
+                sv.test_bot_lanes(slot, lanes.on(team, seed));
             }
         }
         if let Some(ob) = observer.as_mut() {
@@ -1565,6 +1712,23 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                 t.packed += u64::from(close >= PACK);
             }
         }
+        let samples: Vec<ObjSample> = sv
+            .bot_slots()
+            .into_iter()
+            .filter_map(|s| {
+                let b = sv.bot_body(s).filter(|b| b.playing && !b.dead)?;
+                let team = team_name(&mut sv, s, m.dm);
+                (team != "none").then(|| ObjSample {
+                    slot: s,
+                    team: team.to_string(),
+                    at: b.origin,
+                    point: b.objective,
+                    exposure: b.exposure,
+                    cover: b.holds_cover,
+                })
+            })
+            .collect();
+        ObjSpread::feed(&mut m.obj, &samples, &mut trail);
         for slot in sv.bot_slots() {
             let Some(b) = sv.bot_body(slot).filter(|b| b.playing && !b.deployed) else {
                 hist.remove(&slot);
@@ -2231,6 +2395,8 @@ mod cod2 {
         picks: BTreeMap<String, u32>,
         /// Weapons a living bot came to hold that it did not spawn with.
         pickups: u32,
+        /// Near the objective, by team ([`super::ObjSpread`]).
+        obj: BTreeMap<String, super::ObjSpread>,
         log: Vec<String>,
         digest: Option<Digest>,
     }
@@ -2389,6 +2555,9 @@ mod cod2 {
                 println!("  {} seed {} {l}", m.map, m.seed);
             }
             println!("{} seed {}: ticks {} {}", m.map, m.seed, m.ticks, line(m));
+            for (k, t) in &m.obj {
+                println!("{} seed {}: obj {k} {}", m.map, m.seed, t.line());
+            }
             if let Some(d) = &m.digest {
                 d.print(&m.map, &gametype, m.seed, m.ticks);
             }
@@ -2427,6 +2596,7 @@ mod cod2 {
         }
         println!("spawn picks {picks:?}");
         println!("pickups {pickups}");
+        let mut all_obj: BTreeMap<String, super::ObjSpread> = BTreeMap::new();
         for map in &maps {
             let mut t = Cod2Match {
                 map: map.clone(),
@@ -2461,8 +2631,18 @@ mod cod2 {
                 t.smokes += m.smokes;
                 t.hurt += m.hurt;
                 t.answered += m.answered;
+                for (k, o) in &m.obj {
+                    t.obj.entry(k.clone()).or_default().add(o);
+                    all_obj.entry(k.clone()).or_default().add(o);
+                }
             }
             println!("{map} total: {}", line(&t));
+            for (k, o) in &t.obj {
+                println!("{map} total: obj {k} {}", o.line());
+            }
+        }
+        for (k, o) in &all_obj {
+            println!("all maps: obj {k} {}", o.line());
         }
     }
 
@@ -2548,6 +2728,7 @@ mod cod2 {
         let stall_log = std::env::var("STALLS").as_deref() == Ok("1");
         let mut seen = 0;
         let mut hist: HashMap<usize, VecDeque<([f32; 3], bool)>> = HashMap::new();
+        let mut trail: HashMap<usize, VecDeque<[f32; 3]>> = HashMap::new();
         let mut last: HashMap<usize, ([f32; 3], u8, i32)> = HashMap::new();
         let mut mantling: HashMap<usize, bool> = HashMap::new();
         let mut gunning: HashMap<usize, bool> = HashMap::new();
@@ -2557,6 +2738,19 @@ mod cod2 {
         let mut stats = super::TickStats::from_env();
         for tick in 0..ticks {
             now += Duration::from_millis(TICK_MS);
+            // `TACTICS=0` (or `none`): every bot guards from the first spot in reach
+            // (`Bot::tactics`); `CONVERGE=0`: no S&D defender leaves its
+            // site for one under attack (`Bot::converge`); `LANES=0`: every
+            // bot walks straight to its objective (`Bot::lanes`).
+            if let Some(b) = sv.bots_mut() {
+                let off = |k: &str| matches!(std::env::var(k).as_deref(), Ok("0" | "none"));
+                let arms = [!off("TACTICS"), !off("CONVERGE"), !off("LANES")];
+                for bot in b.bots_mut().values_mut() {
+                    bot.tactics &= arms[0];
+                    bot.converge &= arms[1];
+                    bot.lanes &= arms[2];
+                }
+            }
             // The script's `map_restart` and `exitLevel` run off the
             // console, as `main.rs`'s loop drains it ahead of the frame.
             if let Some(ob) = observer.as_mut() {
@@ -2635,7 +2829,36 @@ mod cod2 {
                 }
                 tick - *at < 20
             });
+            // Per bot: its objective's point, the share of its ways in that see it, on
+            // a cover spot (`ObjSpread`).
+            let objinfo: HashMap<usize, super::ObjInfo> = sv
+                .bots_mut()
+                .map(|b| {
+                    b.bots()
+                        .iter()
+                        .map(|(s, b)| (*s, (b.objective_point(), b.exposure(), b.holds_cover())))
+                        .collect()
+                })
+                .unwrap_or_default();
             let level = sv.level()?;
+            let samples: Vec<super::ObjSample> = slots
+                .iter()
+                .filter_map(|&s| {
+                    let p = level.players.get(s)?.as_ref()?;
+                    let (point, exposure, cover) = *objinfo.get(&s)?;
+                    let team = teams.get(&s)?.clone();
+                    (level.playing(s) && p.ps.pm_type == 0 && (team == "axis" || team == "allies"))
+                        .then(|| super::ObjSample {
+                            slot: s,
+                            team,
+                            at: p.ps.origin.into(),
+                            point,
+                            exposure,
+                            cover,
+                        })
+                })
+                .collect();
+            super::ObjSpread::feed(&mut m.obj, &samples, &mut trail);
             for &slot in &slots {
                 let Some(p) = level.players.get(slot).and_then(Option::as_ref) else {
                     continue;
@@ -2963,6 +3186,8 @@ mod cod4 {
         /// A line per level run: how it began, its ticks, the bot-ticks
         /// playing, the kills, whether its match ended.
         levels: Vec<String>,
+        /// Near the objective, by team ([`super::ObjSpread`]).
+        obj: BTreeMap<String, super::ObjSpread>,
         log: Vec<String>,
         digest: Option<Digest>,
     }
@@ -3059,7 +3284,12 @@ mod cod4 {
             )
         };
         let mut errors: BTreeMap<&str, u32> = BTreeMap::new();
+        let mut all_obj: BTreeMap<String, super::ObjSpread> = BTreeMap::new();
         for m in &results {
+            for (k, o) in &m.obj {
+                println!("{} seed {}: obj {k} {}", m.map, m.seed, o.line());
+                all_obj.entry(k.clone()).or_default().add(o);
+            }
             for l in m.log.iter().chain(&m.levels) {
                 println!("  {} seed {} {l}", m.map, m.seed);
             }
@@ -3077,6 +3307,9 @@ mod cod4 {
             for (e, n) in &m.errors {
                 *errors.entry(e).or_default() += n;
             }
+        }
+        for (k, o) in &all_obj {
+            println!("all runs: obj {k} {}", o.line());
         }
         println!("{gametype} script errors: {} distinct", errors.len());
         for (e, n) in &errors {
@@ -3190,6 +3423,7 @@ mod cod4 {
         let mut errors_seen = 0;
         let mut level_id = sv.server_id();
         let mut hist: HashMap<usize, VecDeque<([f32; 3], bool)>> = HashMap::new();
+        let mut trail: HashMap<usize, VecDeque<[f32; 3]>> = HashMap::new();
         let mut last: HashMap<usize, ([f32; 3], u32, i32)> = HashMap::new();
         let mut mantling: HashMap<usize, bool> = HashMap::new();
         // The level under way: how it began, its first tick, its playing
@@ -3210,6 +3444,19 @@ mod cod4 {
         };
         for tick in 0..ticks {
             now += Duration::from_millis(TICK_MS);
+            // `TACTICS=0` (or `none`): every bot guards from the first spot in reach
+            // (`Bot::tactics`); `CONVERGE=0`: no S&D defender leaves its
+            // site for one under attack (`Bot::converge`); `LANES=0`: every
+            // bot walks straight to its objective (`Bot::lanes`).
+            if let Some(b) = sv.bots_mut() {
+                let off = |k: &str| matches!(std::env::var(k).as_deref(), Ok("0" | "none"));
+                let arms = [!off("TACTICS"), !off("CONVERGE"), !off("LANES")];
+                for bot in b.bots_mut().values_mut() {
+                    bot.tactics &= arms[0];
+                    bot.converge &= arms[1];
+                    bot.lanes &= arms[2];
+                }
+            }
             // The script's `map_restart` and `exitLevel` run off the
             // console, as `main.rs`'s loop drains it ahead of the frame.
             if leave.contains(&tick) {
@@ -3268,6 +3515,17 @@ mod cod4 {
             // Per bot: holding still on purpose (a fight, cover, a retreat,
             // its objective, as CoD2's), and the team it asked for (the
             // `K;` lines leave the teams empty, `_globallogic.gsc`).
+            // Per bot: its objective's point, the share of its ways in that see it, on
+            // a cover spot (`ObjSpread`).
+            let objinfo: HashMap<usize, super::ObjInfo> = sv
+                .bots_mut()
+                .map(|b| {
+                    b.bots()
+                        .iter()
+                        .map(|(s, b)| (*s, (b.objective_point(), b.exposure(), b.holds_cover())))
+                        .collect()
+                })
+                .unwrap_or_default();
             let state: HashMap<usize, (bool, String)> = sv
                 .bots_mut()
                 .map(|b| {
@@ -3301,6 +3559,27 @@ mod cod4 {
                 }
                 errors_seen = errs.len().max(errors_seen);
             }
+            let samples: Vec<super::ObjSample> = slots
+                .iter()
+                .filter_map(|&s| {
+                    let ps = level.pm_state(s)?;
+                    let (point, exposure, cover) = *objinfo.get(&s)?;
+                    let team = state.get(&s)?.1.clone();
+                    (ps.pm_type == 0
+                        && ps.other_flags & vcod_cod4::pmove::POF_PLAYER != 0
+                        && !level.rt.client_vitals(s).dead
+                        && team != "none")
+                        .then(|| super::ObjSample {
+                            slot: s,
+                            team,
+                            at: ps.origin.into(),
+                            point,
+                            exposure,
+                            cover,
+                        })
+                })
+                .collect();
+            super::ObjSpread::feed(&mut m.obj, &samples, &mut trail);
             for &slot in &slots {
                 let Some(ps) = level.pm_state(slot) else {
                     continue;

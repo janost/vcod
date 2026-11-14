@@ -72,6 +72,8 @@ pub(crate) struct BotDriver {
     /// of them with another body within [`STALL_NEAR`]: the measure of
     /// stalls on a body (`bot_match`, `ship_stalls`).
     pub(crate) edge_stalls: [u32; 2],
+    /// The guards' posts round their objectives ([`super::posts`]).
+    pub(crate) posts: super::posts::Posts,
 }
 
 impl BotDriver {
@@ -164,6 +166,11 @@ pub(crate) trait BotWorld {
     /// a teammate's path (`team::crowd`) and keeps off
     /// [`Self::blocked_nodes`].
     const YIELDS: bool = true;
+    /// With [`Self::YIELDS`] off, the route still pays to share a
+    /// teammate's path and plans with the bot's own noise and flank on an
+    /// objective level, for a bot with `Bot::tactics` on
+    /// (bot-objectives.md 13). Neither yields to anyone.
+    const SPREADS: bool = false;
     /// The route plans round any other body standing in a bot's way
     /// once it is held up by it ([`crate::nav::Follower::bodies_in_way`]).
     const SHUNS_BODIES: bool = true;
@@ -373,6 +380,180 @@ fn deal_squads<W: BotWorld>(w: &W, views: &mut [(usize, BotView)], teams: &[i32]
     }
 }
 
+/// An S&D site with an enemy seen within this of its stand is under
+/// attack, and stays so this long past the last such sighting, ms
+/// ([`super::SdView::hot`]).
+const HOT_NEAR: f32 = 1000.0;
+pub(crate) const HOT_MS: i32 = 10_000;
+
+/// [`super::SdView::hot`] over each side's S&D defenders before a plant,
+/// from the enemies its playing bots see this tick: the site nearest a
+/// sighting within [`HOT_NEAR`], held [`HOT_MS`] past the last one.
+fn deal_hot<W: BotWorld>(w: &mut W, views: &mut [(usize, BotView)], teams: &[i32]) {
+    use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
+    let (now, round) = (w.now(), w.server_id() as u32);
+    let posts = &mut w.driver_mut().posts;
+    if posts.round != round {
+        posts.round = round;
+        posts.hot = [None; 2];
+    }
+    for (i, team) in [TEAM_AXIS, TEAM_ALLIES].into_iter().enumerate() {
+        let mine = |s: usize| teams.get(s) == Some(&team);
+        let sites: Vec<[f32; 3]> = views
+            .iter()
+            .filter(|(s, _)| mine(*s))
+            .find_map(|(_, v)| {
+                v.sd.as_ref()
+                    .filter(|sd| sd.role == super::ObjRole::Defend && sd.bomb.is_none())
+                    .map(|sd| sd.sites.iter().map(|x| x.stand).collect())
+            })
+            .unwrap_or_default();
+        if sites.len() < 2 {
+            w.driver_mut().posts.hot[i] = None;
+            continue;
+        }
+        let near = views
+            .iter()
+            .filter(|(s, v)| mine(*s) && v.playing && !v.dead)
+            .filter_map(|(_, v)| v.enemy.map(|e| e.origin))
+            .flat_map(|e| {
+                sites
+                    .iter()
+                    .enumerate()
+                    .map(move |(k, st)| (k, super::dist_sq(e, *st)))
+            })
+            .filter(|(_, d)| *d < HOT_NEAR * HOT_NEAR)
+            .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+        let hot = &mut w.driver_mut().posts.hot[i];
+        match near {
+            Some((k, _)) => *hot = Some((k, now.wrapping_add(HOT_MS))),
+            None if hot.is_some_and(|(_, until)| now.wrapping_sub(until) >= 0) => *hot = None,
+            None => {}
+        }
+        let h = hot.map(|(k, _)| k);
+        for (s, v) in views.iter_mut().filter(|(s, _)| mine(*s)) {
+            let on = w
+                .driver()
+                .bots
+                .get(s)
+                .is_some_and(|b| b.converge && b.team_play);
+            if let Some(sd) =
+                v.sd.as_mut()
+                    .filter(|sd| on && sd.role == super::ObjRole::Defend)
+            {
+                sd.hot = h;
+            }
+        }
+    }
+}
+
+/// Every [`SHELTER_EVERY`]th tick a bot near its objective samples how
+/// many of the ways in see it ([`super::BotView::exposure`]).
+const SHELTER_EVERY: i32 = 5;
+/// Near its objective: within this of the point it centres on.
+pub(crate) const OBJ_NEAR: f32 = 800.0;
+
+/// [`super::BotView::guard_post`] over each side's guards of one
+/// objective ([`super::posts::assign`]), with team play and
+/// `Bot::tactics` on, and [`super::BotView::exposure`] for every bot
+/// near its objective. The surveys are made here, once per objective
+/// and graph, before any bot thinks.
+fn deal_posts<W: BotWorld>(w: &mut W, views: &mut [(usize, BotView)], teams: &[i32]) {
+    use super::posts;
+    let Some(g) = w.driver().nav.clone() else {
+        return;
+    };
+    let (now, round) = (w.now(), w.server_id() as u32);
+    // Each living bot on foot with an objective that holds still: the
+    // anchor its posts are dealt round (a guard), else one its exposure is
+    // counted against, and whether it plays by posts.
+    let wants: Vec<(usize, i32, posts::Anchor, bool, bool)> = views
+        .iter()
+        .filter(|(_, v)| v.playing && !v.dead && v.seat.is_none())
+        .filter_map(|(s, v)| {
+            let b = w.driver().bots.get(s)?;
+            let (a, guard) = match b.guard_anchor(v) {
+                Some(a) => (a, true),
+                None => (b.counted_anchor(v)?, false),
+            };
+            let posted = guard && b.tactics && b.team_play;
+            Some((*s, *teams.get(*s)?, a, posted, b.lane_target(v)))
+        })
+        .collect();
+    let mut kept = std::mem::take(&mut w.driver_mut().posts);
+    let Some(world) = w.world() else {
+        w.driver_mut().posts = kept;
+        return;
+    };
+    let clear = |a: Vec3, b: Vec3| world.collision.shot_trace(a, b).fraction >= 1.0;
+    type Groups = Vec<((i32, posts::Key), Vec<(usize, Vec3)>)>;
+    let join = |groups: &mut Groups, k: (i32, posts::Key), m: (usize, Vec3)| match groups
+        .iter_mut()
+        .find(|(g, _)| *g == k)
+    {
+        Some((_, g)) => g.push(m),
+        None => groups.push((k, vec![m])),
+    };
+    let (mut groups, mut laned): (Groups, Groups) = Default::default();
+    let mut surveys: Vec<(posts::Key, std::sync::Arc<posts::Survey>, posts::Anchor)> = Vec::new();
+    for &(slot, team, a, posted, lane) in &wants {
+        let key = a.key();
+        let survey = kept.survey(&g, &clear, &a);
+        let Some(i) = views.iter().position(|(s, _)| *s == slot) else {
+            continue;
+        };
+        let v = &mut views[i].1;
+        if super::dist_sq(v.origin, a.centre()) < OBJ_NEAR * OBJ_NEAR {
+            if (now / crate::server::FRAME_MS + slot as i32) % SHELTER_EVERY == 0 {
+                match survey.exposure(&clear, Vec3::from(v.origin), v.eye_height) {
+                    Some(e) => kept.exposure.insert(slot, e),
+                    None => kept.exposure.remove(&slot),
+                };
+            }
+            v.exposure = kept.exposure.get(&slot).copied();
+        }
+        if posted {
+            join(&mut groups, (team, key), (slot, v.origin.into()));
+        }
+        if lane {
+            join(&mut laned, (team, key), (slot, v.origin.into()));
+        }
+        if (posted || lane) && !surveys.iter().any(|(k, _, _)| *k == key) {
+            surveys.push((key, survey, a));
+        }
+    }
+    let member =
+        |groups: &Groups, s: &usize| groups.iter().any(|(_, g)| g.iter().any(|(m, _)| m == s));
+    kept.held.retain(|s, _| member(&groups, s));
+    kept.lanes.retain(|s, _| member(&laned, s));
+    for ((_, key), bots) in &laned {
+        let Some((_, survey, a)) = surveys.iter().find(|(k, _, _)| k == key) else {
+            continue;
+        };
+        let centre = Vec3::from(a.centre());
+        for (slot, via) in posts::lanes(survey, *key, centre, bots, &mut kept.lanes, now) {
+            if let Some((_, v)) = views.iter_mut().find(|(s, _)| *s == slot) {
+                v.lane = Some(via.into());
+            }
+        }
+    }
+    for ((_, key), guards) in &groups {
+        let Some((_, survey, a)) = surveys.iter().find(|(k, _, _)| k == key) else {
+            continue;
+        };
+        for (slot, p) in posts::assign(survey, *key, guards, &mut kept.held, now, round) {
+            if let Some((_, v)) = views.iter_mut().find(|(s, _)| *s == slot) {
+                v.guard_post = Some(super::GuardPost {
+                    at: p.at.into(),
+                    crouch: p.crouch,
+                    look: a.centre(),
+                });
+            }
+        }
+    }
+    w.driver_mut().posts = kept;
+}
+
 /// How near its probe's landing a body on a mantle edge has climbed
 /// ([`BotWorld::MANTLE_AIMS`]): a body in front of the wall stands at least
 /// its radius and the wall's depth short of it.
@@ -452,6 +633,8 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
     let p = crate::tick_profile::phase("bots/deal");
     w.deal(frame, &teams, &solo, round, &mut views);
     deal_squads(w, &mut views, &teams, round);
+    deal_hot(w, &mut views, &teams);
+    deal_posts(w, &mut views, &teams);
     drop(p);
 
     // Pass 3: the tick's waypoint toward each brain's goal, then its
@@ -1079,15 +1262,17 @@ fn route<W: BotWorld>(
     let shared = team_objective(view) && !solo.contains(&slot);
     let squad = shared && w.driver().bots.get(&slot).is_some_and(|b| b.squad);
     let noise = |t: i32| team::route_seed(w.server_id() as u32, t, slot);
+    let spreads =
+        W::YIELDS || (W::SPREADS && w.driver().bots.get(&slot).is_some_and(|b| b.tactics));
     (follower.crowd, follower.crowd_cost, follower.noise) = match teams.get(slot) {
         // A flanker pays far more on the main group's ways than on its
         // other teammates'.
-        Some(&t) if W::YIELDS && squad && view.squad == Squad::Flank => (
+        Some(&t) if spreads && squad && view.squad == Squad::Flank => (
             team::crowd(paths.iter().filter(|p| main.contains(&p.0)), slot, t),
             crate::nav::FLANK_COST,
             noise(t),
         ),
-        Some(&t) if W::YIELDS && shared => (
+        Some(&t) if spreads && shared => (
             team::crowd(paths, slot, t),
             crate::nav::CROWD_COST,
             if squad { noise(t) } else { 0 },

@@ -950,6 +950,9 @@ impl Cod4Bots {
             frag_near,
             post: None,
             give_way: None,
+            guard_post: None,
+            lane: None,
+            exposure: None,
             lob: None,
             waypoint: None,
             hazard_ahead: [false; 8],
@@ -1383,6 +1386,7 @@ impl Cod4Bots {
                     plant_ticks,
                     defuse_ticks,
                 }),
+                hot: None,
             });
         }
     }
