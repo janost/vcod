@@ -529,7 +529,7 @@ pub struct Prepared {
     /// Each op's operand stack depth on entry, the one every path agrees
     /// on (0 for an op no path reaches): where an op that failed leaves the
     /// stack under the error recovery (`Vm::set_recover_errors`).
-    pub depths: Vec<u16>,
+    pub depths: Vec<u32>,
     /// The deepest the stack gets, which each frame's stack is sized to.
     pub max_stack: u32,
 }
@@ -538,14 +538,10 @@ pub struct Prepared {
 /// interner's `size`.
 pub fn prepare(f: &Function, size: Atom) -> Result<Prepared, String> {
     let entry = entry_depths(f)?;
-    let max_stack = deepest(f, &entry);
-    if max_stack > usize::from(u16::MAX) {
-        return Err(format!("operand stack {max_stack} deep"));
-    }
     Ok(Prepared {
         fast: fuse(&f.code, size),
-        depths: entry.iter().map(|d| d.unwrap_or(0) as u16).collect(),
-        max_stack: max_stack as u32,
+        depths: entry.iter().map(|d| d.unwrap_or(0) as u32).collect(),
+        max_stack: deepest(f, &entry) as u32,
     })
 }
 

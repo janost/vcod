@@ -583,12 +583,7 @@ impl Vm {
                     let (pops, pushes) = crate::bytecode::stack_effect(&f.func_rc.code[at]);
                     // The failed op's depth on entry, which every path to it
                     // agrees on (`bytecode::Prepared::depths`).
-                    let base = f
-                        .func_rc
-                        .prepared
-                        .depths
-                        .get(at)
-                        .map_or(f.sp, |&d| d.into());
+                    let base = f.func_rc.prepared.depths.get(at).copied().unwrap_or(f.sp);
                     f.sp = f.sp.min((base as i32 - pops).max(0) as u32);
                     for _ in 0..pushes {
                         f.push(Value::Undefined);
@@ -824,8 +819,7 @@ impl Vm {
             #[cfg(test)]
             if let Some(&d) = func.prepared.depths.get(at) {
                 assert_eq!(
-                    sp,
-                    usize::from(d),
+                    sp, d as usize,
                     "the stack's depth at {at} is not the walk's"
                 );
             }
