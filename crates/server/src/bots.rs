@@ -514,6 +514,10 @@ pub struct GuardPost {
     pub at: [f32; 3],
     pub crouch: bool,
     pub look: [f32; 3],
+    /// Walking in to it with care: a guard pulled back to the objective
+    /// (bot-objectives.md 14) walks the last [`CAREFUL_NEAR`] looking at
+    /// `toward`, the objective, and crouches the last [`CAREFUL_CROUCH`].
+    pub careful: Option<[f32; 3]>,
 }
 
 /// Behind Enemy Lines as the bot plays it (docs/research/bot-objectives.md,
@@ -669,6 +673,10 @@ pub struct CtfView {
     /// compass shows teammates).
     pub escort: Option<[f32; 3]>,
     pub rank: usize,
+    /// Where a teammate last saw the enemy carrying the bot's flag, for a
+    /// bot the driver sends after him (bot-objectives.md 14, with
+    /// [`Bot::cues`] on).
+    pub hunt: Option<[f32; 3]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -682,6 +690,8 @@ pub struct CtfFlagView {
     /// carrier's own flag at home.
     pub goal: SiteView,
     pub carried: bool,
+    /// Who carries it: the driver knows him when a teammate sees him.
+    pub carrier: Option<usize>,
 }
 
 /// Domination: every flag zone and who holds it.
@@ -1032,6 +1042,8 @@ pub struct BotBody {
     /// in that saw it ([`Bot::exposure`]).
     pub objective: Option<[f32; 3]>,
     pub exposure: Option<f32>,
+    /// The point it guarded last think ([`Bot::guard_point`]).
+    pub guard: Option<[f32; 3]>,
 }
 
 impl BotBody {
@@ -1079,9 +1091,28 @@ pub struct Bot {
     /// driver dealt it ([`BotView::lane`]); off, straight there as before
     /// (a `bot_match` measuring arm).
     pub lanes: bool,
+    /// With [`Self::tactics`], guards an objective from the ways in, with
+    /// at most one teammate near it, and leaves a post it was seen or shot
+    /// on ([`GuardHold::Far`], bot-objectives.md 14); off, round the
+    /// objective as section 13 (a `bot_match` measuring arm).
+    pub far: bool,
+    /// With [`Self::far`], a share of the guards walks back to the
+    /// objective with care on a cue (an enemy seen or heard near it, a
+    /// teammate killed there, an enemy on it), S&D defenders make for a
+    /// planted bomb with care, and on `ctf` the nearest teammates go for
+    /// the enemy carrying their flag when one of them sees him
+    /// (bot-objectives.md 14); off, they hold (a `bot_match` arm).
+    pub cues: bool,
+    /// With [`Self::squad`], walks farther behind a teammate ahead and
+    /// takes a way in from nearer its objective (bot-objectives.md 14);
+    /// off, as section 9.1 (a `bot_match` arm).
+    pub travel: bool,
     /// The point its objective centres on, read at the top of the last
     /// think ([`Bot::objective_point`]).
     anchor: Option<[f32; 3]>,
+    /// The point it guarded at the last think, a guard on its post or in
+    /// its ring only ([`Bot::guard_point`]).
+    guarded: Option<[f32; 3]>,
     /// [`BotView::exposure`] at the last think.
     exposure: Option<f32>,
     /// Ticks left on the hold a one-life round starts with
@@ -1375,15 +1406,29 @@ struct Objective {
     shy: Option<([f32; 3], u32)>,
 }
 
+/// Where a guard's posts stand (bot-objectives.md 14).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GuardHold {
+    /// Round the objective, as section 13 deals them.
+    Near,
+    /// Out on the ways in, with at most one teammate near the objective;
+    /// cues pull a share back ([`Bot::far`], [`Bot::cues`]).
+    Far,
+    /// Round the objective, walked in to with care: S&D defenders making
+    /// for a planted bomb ([`Bot::cues`]).
+    Back,
+}
+
 /// What the objective wants of the bot right now.
 #[derive(Clone, Copy, Debug)]
 enum ObjTarget {
     Plant(SiteView),
     /// Stand within [`GUARD_RADIUS`] of a point and fight from there, but
-    /// no nearer than `inner`.
+    /// no nearer than `inner`; `hold` says where its posts stand.
     Guard {
         at: [f32; 3],
         inner: f32,
+        hold: GuardHold,
     },
     /// Walk within `reach` of the bomb, rest the view on it and hold use
     /// `ticks`: S&D's defuse, and base assault's plant and defuse.
@@ -1462,6 +1507,10 @@ const POST_INNER: f32 = 48.0;
 const POST_REACH: f32 = 150.0;
 /// A guard on its post looks this far either side of its objective, degrees.
 const WATCH_DEG: i32 = 60;
+/// A guard pulled back to its objective walks the last this far in and
+/// crouches the last this far ([`GuardPost::careful`]).
+const CAREFUL_NEAR: f32 = 700.0;
+const CAREFUL_CROUCH: f32 = 300.0;
 /// An attacker steps off the bomb it planted: a body on the line from a
 /// defender's eye to the trigger blocks the defuse's `isLookingAt`, which
 /// is the defender's problem, not the bot's to make.
@@ -1595,7 +1644,11 @@ impl Bot {
             tactics: true,
             converge: true,
             lanes: true,
+            far: true,
+            cues: true,
+            travel: true,
             anchor: None,
+            guarded: None,
             exposure: None,
             start_hold: 0,
             footwork: true,
@@ -1936,7 +1989,11 @@ impl Bot {
         let t = self.objective_wanted(view)?;
         match (self.obj.shy, Self::target_point(&t)) {
             (Some((at, _)), Some(p)) if dist_sq(at, p) < SHY_SAME * SHY_SAME => {
-                Some(ObjTarget::Guard { at: p, inner: 0.0 })
+                Some(ObjTarget::Guard {
+                    at: p,
+                    inner: 0.0,
+                    hold: GuardHold::Near,
+                })
             }
             _ => Some(t),
         }
@@ -2013,6 +2070,7 @@ impl Bot {
             (ObjRole::Attack, Some(b)) => Some(ObjTarget::Guard {
                 at: b.origin,
                 inner: BOMB_GUARD_INNER,
+                hold: GuardHold::Far,
             }),
             (ObjRole::Attack, None) => match (sd.key, sd.cover) {
                 (
@@ -2024,10 +2082,12 @@ impl Bot {
                 (_, Some(at)) => Some(ObjTarget::Guard {
                     at,
                     inner: team::COVER_INNER,
+                    hold: GuardHold::Near,
                 }),
                 (Some(k), None) if !k.mine => site().map(|s| ObjTarget::Guard {
                     at: s.stand,
                     inner: 0.0,
+                    hold: GuardHold::Near,
                 }),
                 _ => site().map(ObjTarget::Plant),
             },
@@ -2040,6 +2100,7 @@ impl Bot {
             (ObjRole::Defend, Some(b)) => Some(ObjTarget::Guard {
                 at: b.origin,
                 inner: BOMB_GUARD_INNER,
+                hold: GuardHold::Back,
             }),
             (ObjRole::Defend, None) => sd
                 .hot
@@ -2049,6 +2110,7 @@ impl Bot {
                 .map(|s| ObjTarget::Guard {
                     at: s.stand,
                     inner: 0.0,
+                    hold: GuardHold::Far,
                 }),
         }
     }
@@ -2112,6 +2174,7 @@ impl Bot {
                 (!lying.is_empty()).then(|| ObjTarget::Guard {
                     at: lying[re.rank % lying.len()],
                     inner: 0.0,
+                    hold: GuardHold::Far,
                 })
             }
         }
@@ -2123,7 +2186,17 @@ impl Bot {
     fn uo_target(&self, view: &BotView, uo: &UoView) -> Option<ObjTarget> {
         let rank = uo.rank();
         let defends = rank % 2 == 1;
-        let guard = |at: [f32; 3]| ObjTarget::Guard { at, inner: 0.0 };
+        let guard = |at: [f32; 3]| ObjTarget::Guard {
+            at,
+            inner: 0.0,
+            hold: GuardHold::Near,
+        };
+        // Held from the ways in (bot-objectives.md 14).
+        let far = |at: [f32; 3]| ObjTarget::Guard {
+            at,
+            inner: 0.0,
+            hold: GuardHold::Far,
+        };
         match uo {
             UoView::Ctf(c) => {
                 if c.carrying {
@@ -2143,13 +2216,19 @@ impl Bot {
                 {
                     return Some(ObjTarget::Deliver(d.stand));
                 }
+                // After the enemy carrying our flag, where a teammate last
+                // saw him.
+                if let Some(at) = c.hunt {
+                    return Some(ObjTarget::Chase(at));
+                }
                 if defends {
                     return Some(match c.ours.home {
-                        Some(h) => guard(h.stand),
+                        Some(h) => far(h.stand),
                         // Carried off: hold the goal their carrier needs.
                         None => ObjTarget::Guard {
                             at: c.ours.goal.stand,
                             inner: 0.0,
+                            hold: GuardHold::Near,
                         },
                     });
                 }
@@ -2165,7 +2244,7 @@ impl Bot {
                 let open: Vec<usize> = (0..d.flags.len()).filter(|i| !d.flags[*i].ours).collect();
                 if open.is_empty() {
                     let n = d.flags.len();
-                    return (n > 0).then(|| guard(d.flags[rank % n].site.stand));
+                    return (n > 0).then(|| far(d.flags[rank % n].site.stand));
                 }
                 let pick = self
                     .obj
@@ -2175,7 +2254,7 @@ impl Bot {
                 Some(ObjTarget::Occupy(d.flags[pick].site))
             }
             UoView::Hq(h) => match h.radio {
-                Some(r) if r.ours => Some(guard(r.at)),
+                Some(r) if r.ours => Some(far(r.at)),
                 Some(r) => Some(ObjTarget::Radio {
                     at: r.at,
                     radius: r.radius,
@@ -2304,6 +2383,7 @@ impl Bot {
                     // Our charge: hold its room against the defuse, then
                     // clear the blast before it goes.
                     Some(c) if t.planted => ObjTarget::Guard {
+                        hold: GuardHold::Near,
                         at: c.origin,
                         inner: if t.blows_in.is_some_and(|s| s > BAS_CLEAR_S) {
                             0.0
@@ -2389,6 +2469,7 @@ impl Bot {
             .map(|m| ObjTarget::Guard {
                 at: m.goal,
                 inner: m.goal_clear,
+                hold: GuardHold::Near,
             })
     }
 
@@ -2396,7 +2477,7 @@ impl Bot {
         let o = view.origin;
         match t {
             ObjTarget::Plant(s) => inside_site(o, s),
-            ObjTarget::Guard { at, inner } => {
+            ObjTarget::Guard { at, inner, .. } => {
                 let d = dist_sq(o, *at);
                 let outer = GUARD_RADIUS.max(inner + GUARD_BAND);
                 d < outer * outer && d >= inner * inner
@@ -2447,12 +2528,12 @@ impl Bot {
             // Too close: any way out will do, and the roam leaves the ring
             // well before it gets anywhere.
             // A charge about to blow: away from it, the way out of its room.
-            ObjTarget::Guard { at, inner }
+            ObjTarget::Guard { at, inner, .. }
                 if inner >= BAS_BLAST && dist_sq(view.origin, at) < inner * inner =>
             {
                 Goal::Away(at)
             }
-            ObjTarget::Guard { at, inner } if dist_sq(view.origin, at) < inner * inner => {
+            ObjTarget::Guard { at, inner, .. } if dist_sq(view.origin, at) < inner * inner => {
                 Goal::Roam
             }
             ObjTarget::Guard { at, .. } | ObjTarget::Escort(at) => Goal::To(at),
@@ -2512,6 +2593,18 @@ impl Bot {
         self.lanes && self.team_play && self.objective_target(view).is_some_and(|t| Self::laned(&t))
     }
 
+    /// The objective a guard pulled back to it walks in to with care, while
+    /// within [`CAREFUL_NEAR`] of it and off its post
+    /// ([`GuardPost::careful`]).
+    fn careful(&self, view: &BotView) -> Option<[f32; 3]> {
+        let p = self
+            .objective_target(view)
+            .and_then(|t| self.post(view, &t))?;
+        let at = p.careful?;
+        (!Self::on_post(view, &p) && dist_sq(view.origin, at) < CAREFUL_NEAR * CAREFUL_NEAR)
+            .then_some(at)
+    }
+
     fn on_post(view: &BotView, p: &GuardPost) -> bool {
         let o = view.origin;
         (p.at[0] - o[0]).hypot(p.at[1] - o[1]) < posts::ARRIVE
@@ -2532,7 +2625,7 @@ impl Bot {
     /// one clearing a charge's blast), a zone, a radio.
     pub(crate) fn guard_anchor(&self, view: &BotView) -> Option<posts::Anchor> {
         match self.objective_target(view)? {
-            ObjTarget::Guard { at, inner } if inner < BAS_BLAST => Some(posts::Anchor::Ring {
+            ObjTarget::Guard { at, inner, .. } if inner < BAS_BLAST => Some(posts::Anchor::Ring {
                 at,
                 inner: inner.max(POST_INNER),
                 outer: GUARD_RADIUS.max(inner + GUARD_BAND) + POST_REACH,
@@ -2594,6 +2687,27 @@ impl Bot {
     /// The point its objective centred on at the last think, if any.
     pub fn objective_point(&self) -> Option<[f32; 3]> {
         self.anchor
+    }
+
+    /// The point it guarded at the last think, standing guard on its post
+    /// or in its ring: a site, a bomb, a flag, a radio (`bot_match`'s guard
+    /// distance).
+    pub fn guard_point(&self) -> Option<[f32; 3]> {
+        self.guarded
+    }
+
+    /// Where the posts of what the bot guards stand ([`GuardHold`]), by
+    /// its switches: a far guard with [`Self::far`] off holds near, and so
+    /// does one walking back with [`Self::cues`] off.
+    pub(crate) fn guard_hold(&self, view: &BotView) -> GuardHold {
+        match self.objective_target(view) {
+            Some(ObjTarget::Guard { hold, .. }) => match hold {
+                GuardHold::Far if self.far => GuardHold::Far,
+                GuardHold::Back if self.far && self.cues => GuardHold::Back,
+                _ => GuardHold::Near,
+            },
+            _ => GuardHold::Near,
+        }
     }
 
     /// The share of its objective's ways in that saw it at the last
@@ -3138,6 +3252,10 @@ impl Bot {
         self.on_objective =
             self.objective_busy(view) || target.is_some_and(|t| self.at_post(view, &t));
         self.anchor = target.map(|t| Self::anchor_point(&t));
+        self.guarded = match target {
+            Some(ObjTarget::Guard { at, .. }) if self.on_objective => Some(at),
+            _ => None,
+        };
         self.exposure = view.exposure;
         self.heal_at = view.survive.heal;
         let mut cmd = self.think_body(view);
@@ -3600,6 +3718,27 @@ impl Bot {
             [pitch, yaw] = look;
             recall_look = true;
         }
+        // Pulled back to its objective, a guard walks the last stretch in
+        // looking at it while the keys keep the path, as a recall does
+        // (bot-objectives.md 14).
+        let careful = self.careful(view).filter(|_| steering);
+        if !recall_look
+            && view.enemy.is_none()
+            && !view.mantle
+            && view.on_ground
+            && !view.on_ladder
+            && pitch == 0.0
+            && forward == 127
+            && let Some(at) = careful
+        {
+            let (_, ty) = aim_angles(view, at);
+            let look = self.turn_toward(view, [0.0, ty]);
+            let d = yaw_diff(yaw, look[1]).to_radians();
+            forward = (d.cos() * 127.0).round() as i8;
+            cmd.right = (-d.sin() * 127.0).round() as i8;
+            [pitch, yaw] = look;
+            recall_look = true;
+        }
         // Slowing onto a leap's foot, then standing on it. Under a recall
         // look the keys are turned off the view, so both scale: a forward
         // key set along the view walked mp_carentan's bots away from their
@@ -3697,6 +3836,17 @@ impl Bot {
             cmd.wbuttons |= msg::WBUTTON_CROUCH;
             cmd.up = -127;
         }
+        // The last of a careful walk in, crouched.
+        if careful.is_some_and(|at| dist_sq(view.origin, at) < CAREFUL_CROUCH * CAREFUL_CROUCH)
+            && view.enemy.is_none()
+            && view.on_ground
+            && !view.on_ladder
+            && !view.jump
+            && !view.mantle
+        {
+            cmd.wbuttons |= msg::WBUTTON_CROUCH;
+            cmd.up = -127;
+        }
         // Off the rungs backwards onto a floor behind: jump facing the
         // rungs, which reflects the jump out, then brake facing the same
         // way until the body lands, as `nav::push_off` proved it.
@@ -3764,7 +3914,9 @@ impl Bot {
         // A plain run behind a teammate just ahead eases to a walk
         // (`Bot::spaced`): a team in single file opens out to a blast's
         // width apart instead of falling to one burst or frag.
-        let ease = self.spaced(view)
+        let ease = (self.spaced(view)
+            || careful
+                .is_some_and(|at| dist_sq(view.origin, at) >= CAREFUL_CROUCH * CAREFUL_CROUCH))
             && steering
             && view.on_ground
             && !view.on_ladder
@@ -5404,6 +5556,7 @@ mod tests {
             at: [-150.0, 60.0, 64.0],
             crouch: true,
             look: [0.0, 0.0, 64.0],
+            careful: None,
         };
         v.guard_post = Some(post);
         assert_eq!(bot.goal(&v), Goal::To(post.at), "to the post, not held");
@@ -8302,6 +8455,70 @@ mod tests {
             forward(false, true, false, true),
             forward(true, true, false, true)
         );
+    }
+
+    /// A guard pulled back to its objective (`GuardPost::careful`) walks
+    /// at half keys looking at the objective from `CAREFUL_NEAR` in and
+    /// crouches from `CAREFUL_CROUCH`; out past it, it runs.
+    #[test]
+    fn a_guard_pulled_back_walks_in_with_care() {
+        let think = |at: [f32; 3]| {
+            let mut bot = Bot::new("axis", false, 1);
+            let mut v = sd_view(ObjRole::Defend);
+            v.origin = at;
+            v.view = [0.0, 90.0, 0.0];
+            v.waypoint = Some([at[0] + 400.0, at[1], 64.0]);
+            v.on_ground = true;
+            v.move_scale = 1.0;
+            v.guard_post = Some(GuardPost {
+                at: [100.0, 60.0, 64.0],
+                crouch: false,
+                look: [0.0, 0.0, 64.0],
+                careful: Some([0.0, 0.0, 64.0]),
+            });
+            bot.think(&v)
+        };
+        let far = think([-1500.0, 0.0, 64.0]);
+        assert_eq!(far.forward.max(far.right.abs()), 127, "runs");
+        let near = think([-500.0, 0.0, 64.0]);
+        let keys = f32::from(near.forward).hypot(f32::from(near.right));
+        assert!(keys < 80.0, "walks: {near:?}");
+        assert_eq!(near.wbuttons & msg::WBUTTON_CROUCH, 0);
+        let close = think([-200.0, 0.0, 64.0]);
+        assert_ne!(close.wbuttons & msg::WBUTTON_CROUCH, 0, "crouched");
+    }
+
+    /// A `ctf` bot the driver sends after the enemy carrying its flag
+    /// (`CtfView::hunt`) chases him instead of guarding.
+    #[test]
+    fn a_ctf_bot_hunts_the_carrier_of_its_flag() {
+        let bot = Bot::new("axis", true, 1);
+        let mut v = view();
+        let site = |x: f32| SiteView {
+            mins: [x - 50.0, -50.0, 0.0],
+            maxs: [x + 50.0, 50.0, 100.0],
+            stand: [x, 0.0, 0.0],
+        };
+        let flag = |home: Option<SiteView>, goal: SiteView, carrier: Option<usize>| CtfFlagView {
+            home,
+            dropped: None,
+            goal,
+            carried: carrier.is_some(),
+            carrier,
+        };
+        v.uo = Some(UoView::Ctf(Box::new(CtfView {
+            ours: flag(None, site(3000.0), Some(7)),
+            theirs: flag(Some(site(3000.0)), site(0.0), None),
+            carrying: false,
+            escort: None,
+            rank: 1,
+            hunt: None,
+        })));
+        assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 0.0]), "holds his goal");
+        if let Some(UoView::Ctf(c)) = v.uo.as_mut() {
+            c.hunt = Some([1500.0, 200.0, 0.0]);
+        }
+        assert_eq!(bot.goal(&v), Goal::To([1500.0, 200.0, 0.0]));
     }
 
     /// The view on the lob with the gun kicked 17 degrees up off it (a

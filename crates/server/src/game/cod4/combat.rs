@@ -36,6 +36,12 @@ use crate::follow::SessionState;
 pub const BULLET_PRIORITY: PriorityMap = [1, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0];
 pub const RIFLE_PRIORITY: PriorityMap = [1, 9, 9, 9, 8, 7, 6, 6, 6, 6, 5, 5, 4, 4, 4, 4, 3, 3, 0];
 
+/// The box round a body's origin a trace must meet before the body is
+/// posed and its hit boxes walked: 1.7's `.data` 0x826e41c..0x826e430,
+/// read by both entity clips (0x817d82b, 0x817ded1; cod4-combat.md 3).
+pub const HIT_BROAD_MINS: Vec3 = Vec3::new(-64.0, -64.0, -32.0);
+pub const HIT_BROAD_MAXS: Vec3 = Vec3::new(64.0, 64.0, 72.0);
+
 /// `hitLocation_t` by number, as `G_GetHitLocationString` names them.
 pub const HITLOC_NAMES: [&str; 19] = [
     "none",
@@ -208,8 +214,8 @@ impl PosedBody4 {
         priority: &PriorityMap,
         limit: f32,
     ) -> Option<(vcod_common::bonetrace::BoneHit, Vec3)> {
-        let lo = self.origin + Vec3::new(-31.0, -31.0, -16.0);
-        let hi = self.origin + Vec3::new(31.0, 31.0, 86.0);
+        let lo = self.origin + HIT_BROAD_MINS;
+        let hi = self.origin + HIT_BROAD_MAXS;
         if !segment_meets_box(start, end, lo, hi, limit) {
             return None;
         }
@@ -229,6 +235,10 @@ pub struct Combat4 {
     anims: Option<Option<PlayerAnimSet>>,
     rigs: HashMap<Character, Option<Rc<PlayerRig>>>,
     bodies: Vec<PlayerBody>,
+    /// The level time each body's controls last eased: 1.7 runs the
+    /// controller only when the frame's skeleton is not yet built
+    /// (0x80ca75b, 0x80ca9c7), so once a frame however many traces meet it.
+    eased: Vec<Option<i32>>,
     /// The level's weapon defs by number, as pmove reads them.
     pub defs: Vec<WeaponDef>,
     /// Each frame's live origins (`SV_GetClientPositionAtTime`'s archive),
@@ -264,6 +274,14 @@ pub struct Combat4 {
     pub(super) penetration: Option<Option<Rc<super::bullet::PenTable>>>,
 }
 
+/// A body under 1.7's angle updater and controllers (cod4-player-anims.md
+/// 8) at the lean dvars' defaults; a bare [`PlayerBody`] runs CoD2's.
+fn cod4_body() -> PlayerBody {
+    let mut b = PlayerBody::default();
+    b.cod4_lean = Some(vcod_common::playerpose::LeanDvars::default());
+    b
+}
+
 impl Combat4 {
     /// `ClientSpawn`'s memset of the whole client (`cod4_lnxded` 0x80a7cc9,
     /// 0x3184 bytes) drops the blood and the blow not yet fed back, so a
@@ -276,7 +294,8 @@ impl Combat4 {
     pub fn new(src: Option<Rc<BodySource>>, slots: usize) -> Combat4 {
         Combat4 {
             src,
-            bodies: vec![PlayerBody::default(); slots],
+            bodies: vec![cod4_body(); slots],
+            eased: vec![None; slots],
             blood: vec![(0, None); slots],
             hit_dir: vec![None; slots],
             aim_spread: vec![0.0; slots],
@@ -883,10 +902,8 @@ impl Cod4Level {
             let ps =
                 vcod_cod4::pmove::PlayerState::from_wire(&self.players[slot].as_ref().unwrap().ps);
             let origin = origins.get(&slot).copied().unwrap_or(ps.origin);
-            // The hit boxes reach past the link box (a head over 70):
-            // the broad test takes the box grown 16 every way.
-            let lo = origin + Vec3::new(-31.0, -31.0, -16.0);
-            let hi = origin + Vec3::new(31.0, 31.0, 86.0);
+            let lo = origin + HIT_BROAD_MINS;
+            let hi = origin + HIT_BROAD_MAXS;
             if !segment_meets_box(start, end, lo, hi, best.fraction) {
                 continue;
             }
@@ -926,8 +943,8 @@ impl Cod4Level {
             let ps =
                 vcod_cod4::pmove::PlayerState::from_wire(&self.players[slot].as_ref().unwrap().ps);
             let origin = origins.get(&slot).copied().unwrap_or(ps.origin);
-            let lo = origin + Vec3::new(-31.0, -31.0, -16.0);
-            let hi = origin + Vec3::new(31.0, 31.0, 86.0);
+            let lo = origin + HIT_BROAD_MINS;
+            let hi = origin + HIT_BROAD_MAXS;
             if !segment_meets_box(start, end, lo, hi, limit) {
                 continue;
             }
@@ -1072,10 +1089,17 @@ impl Cod4Level {
         let now = self.level_time();
         let src = self.combat.src.clone()?;
         let dt = self.frame_time();
-        let Combat4 { anims, bodies, .. } = &mut self.combat;
+        let Combat4 {
+            anims,
+            bodies,
+            eased,
+            ..
+        } = &mut self.combat;
         let set = anims.as_mut()?.as_mut()?;
         let b = &mut bodies[slot];
-        if ease {
+        let built = ease && eased[slot] != Some(now);
+        if built {
+            eased[slot] = Some(now);
             b.ease_controls(&set.anims, &f, dt);
         }
         let pose = b.pose_in(&rig, set, &*src, &f, now, true, None);
@@ -1087,7 +1111,23 @@ impl Cod4Level {
         .transform();
         let inv = placed.inverse();
         let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
-        bone_trace(&rig.skeleton, &pose, ls, le, priority, limit)
+        let hit = bone_trace(&rig.skeleton, &pose, ls, le, priority, limit);
+        if built {
+            // The frame's skeleton: a tag read later in the frame (the
+            // dying body's `tag_weapon_right`) reads this pose.
+            let entity = self.rt.client_entity(slot).map(|e| e.0);
+            if let Some(p) = self
+                .rt
+                .host
+                .cod4_mut()
+                .posed_bodies
+                .iter_mut()
+                .find(|p| Some(p.entity) == entity)
+            {
+                p.pose = Rc::new(pose);
+            }
+        }
+        hit
     }
 
     /// Every playing body posed where it stands at this frame's time, for
@@ -1150,10 +1190,18 @@ impl Cod4Level {
         let now = self.level_time();
         let src = self.combat.src.clone()?;
         let dt = self.frame_time();
-        let Combat4 { anims, bodies, .. } = &mut self.combat;
+        let Combat4 {
+            anims,
+            bodies,
+            eased,
+            ..
+        } = &mut self.combat;
         let set = anims.as_mut()?.as_mut()?;
         let b = &mut bodies[slot];
-        b.ease_controls(&set.anims, &f, dt);
+        if eased[slot] != Some(now) {
+            eased[slot] = Some(now);
+            b.ease_controls(&set.anims, &f, dt);
+        }
         let pose = b.pose_in(&rig, set, &*src, &f, now, true, None);
         let skel = &rig.skeleton;
         let (i, bone) = skel

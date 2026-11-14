@@ -191,7 +191,9 @@ not yet confirmed on 1.7.
 - The server poses the same bodies for its shots (`game::cod4::combat`):
   each xmodel's `XBoneInfo` (0x28 a bone at `XModel`+164) gives a bone its
   hit box and `partClassification` its hit location
-  (`vcod_cod4::anim::bones`; cod4-combat.md 3).
+  (`vcod_cod4::anim::bones`; cod4-combat.md 3), under section 8's updater
+  and controllers, eased once in a frame that poses it (cod4-combat.md
+  3.3).
 - Left out: the clip's float node time and the `duration` floor of 500 ms
   (`BG_FinalizePlayerAnims`); `hideWeapon` and the knife model; turret gunners' placement.
   Death ragdolls are section 10.

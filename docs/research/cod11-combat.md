@@ -1255,8 +1255,12 @@ puts `leanf` on record: it moves about 0.143 a 50 ms frame toward a held
 side (settled at -1 362 ms in, and from -1 to +1 in 721 ms), about 0.179 a
 frame back to centre when released (308 ms from 1), and a crouched lean
 settles at -0.5. VERIFIED (capture). `crates/server/tests/lean_ab.rs`
-replays it: ours puts every muzzle within 0.7 units of retail's and settles
-each ramp within one frame of it.
+replays it with each step opened on retail's level clock, so both sides
+sway alike: every round leaves on retail's snapshot and strikes retail's
+whole-unit impact, and each ramp settles within one frame of retail's.
+VERIFIED, vcod measurement 2026-11-14. On our own clock (about 13.7 s
+behind) the offsets read up to 1.03 apart, the sway model's and the two
+snaps' error.
 
 #### 1.5 and United Offensive
 

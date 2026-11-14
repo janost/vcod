@@ -57,6 +57,9 @@ pub struct WeaponDef4 {
     pub move_speed_scale: f32,
     /// `clipOnly` (+1280).
     pub clip_only: bool,
+    /// `avoidDropCleanup` (+1020): `g_maxDroppedWeapons`' cap never frees
+    /// this weapon's item (cod4-combat.md 6.1).
+    pub avoid_drop_cleanup: bool,
     /// The scales pmove reads (`moveSpeedScale` +1048 and the two after).
     pub mv: vcod_cod4::pmove::WeaponMove,
     pub ammo_name: String,
@@ -94,6 +97,7 @@ impl WeaponDef4 {
             drop_ammo_max: int(1352),
             move_speed_scale: f32::from_bits(int(1048) as u32),
             clip_only: int(1280) != 0,
+            avoid_drop_cleanup: int(1020) != 0,
             mv: vcod_cod4::pmove::WeaponMove::from_raw(&w.raw).unwrap_or_default(),
             ammo_name: s("ammoName"),
             clip_name: s("clipName"),

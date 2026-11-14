@@ -760,7 +760,7 @@ fn drop_item(
         Some(Value::String(s)) => cx.resolve(*s).to_string(),
         _ => "tag_weapon_right".to_string(),
     };
-    let Some(id) = launch_weapon(host, cx, slot, weapon, Some(&tag))? else {
+    let Some(id) = launch_weapon(host, cx, slot, weapon, Some(&tag), None)? else {
         return Ok(Value::Undefined);
     };
     with_loadout(host, slot, |l, t| l.take(t, weapon));
@@ -778,14 +778,16 @@ fn drop_item(
 /// that order (0x80915b3..0x80915f9). With `tag` posed on the body,
 /// `Drop_Weapon` moves it to where its box swept from the body's box
 /// middle toward the tag stops (0x80918ed..0x80919f7); either way it takes
-/// the body's angles (cod4-combat.md 6.1). `None` before the client's first
-/// end frame.
+/// the body's angles (cod4-combat.md 6.1). `taking` is the item a swap is
+/// picking up, which the dropped weapons' cap leaves ([`hold_dropped`]).
+/// `None` before the client's first end frame.
 pub(crate) fn launch_weapon(
     host: &mut GameHost,
     cx: &mut Cx,
     slot: usize,
     weapon: usize,
     tag: Option<&str>,
+    taking: Option<EntId>,
 ) -> Result<Option<EntId>, ErrorKind> {
     use crate::game::cod4::item::{ITEM_MAXS, ITEM_MINS, MASK_ITEM};
     let Some(c) = host.cod4().corpse_source.get(slot).copied().flatten() else {
@@ -795,6 +797,7 @@ pub(crate) fn launch_weapon(
         .ents
         .spawn(cx)
         .map_err(|_| ErrorKind::Custom("G_Spawn: no free entities".into()))?;
+    hold_dropped(host, cx, id, taking);
     let name = host.cod4().table.defs[weapon].name.clone();
     let classname = cx.intern_folded("classname");
     let class = Value::String(cx.intern_exact(&format!("weapon_{name}")));
@@ -867,6 +870,84 @@ pub(crate) fn launch_weapon(
         stock: 0,
     });
     Ok(Some(id))
+}
+
+/// `LaunchItem`'s hold on the new item `id` (`cod4_lnxded` 0x8091174..
+/// 0x8091387, right after its `G_Spawn`): the first empty slot of the list's
+/// first `g_maxDroppedWeapons`; with none, the item of a full list farthest
+/// from its nearest playing client is freed and its slot taken. An item a
+/// pickup is taking (entity flag 0x1000000, 0x8091201) or whose weapon has
+/// `avoidDropCleanup` (0x809121f) is never freed; with none to free, slot
+/// 0's is, with a warning (0x8215cd4).
+fn hold_dropped(host: &mut GameHost, cx: &mut Cx, id: EntId, taking: Option<EntId>) {
+    let n = match host.cvars.get("g_maxDroppedWeapons") {
+        "" => 16,
+        v => crate::game::builtins::cvar::atoi(v),
+    }
+    .clamp(2, crate::game::cod4::MAX_DROPPED_WEAPONS as i32) as usize;
+    let held = |host: &GameHost, e: Option<EntId>| {
+        e.filter(|&e| host.ents.get(e).is_some() && host.cod4().items.iter().any(|i| i.id == e))
+    };
+    let free = (0..n).find(|&k| held(host, host.cod4().dropped_weapons[k]).is_none());
+    let slot = free.unwrap_or_else(|| {
+        // Each playing client's `r.currentOrigin` (`sess.connected` 2,
+        // `sessionState` 0: 0x8091288, 0x8091291).
+        let (state, origin) = (cx.intern_folded("sessionstate"), cx.intern_folded("origin"));
+        let players: Vec<glam::Vec3> = (0..host.cod4().clients.len())
+            .filter_map(|c| {
+                let e = host.ents.handle(c as u32)?;
+                host.ents.get(e)?.client.as_ref()?;
+                let playing = matches!(vcod_gsc::Host::get_field(host, cx, e, state),
+                    Value::String(s) if cx.resolve(s) == "playing");
+                match vcod_gsc::Host::get_field(host, cx, e, origin) {
+                    Value::Vector(v) if playing => Some(glam::Vec3::from(v)),
+                    _ => None,
+                }
+            })
+            .collect();
+        // The largest of each item's nearest squared distance (1e12 with no
+        // one playing), the first slot on a tie (0x80912e9).
+        let mut best: Option<(usize, f32)> = None;
+        for k in 0..n {
+            let Some(e) = host.cod4().dropped_weapons[k] else {
+                continue;
+            };
+            let Some(it) = host.cod4().items.iter().find(|i| i.id == e) else {
+                continue;
+            };
+            let avoid = host
+                .cod4()
+                .table
+                .get(it.weapon as usize)
+                .is_some_and(|d| d.avoid_drop_cleanup);
+            if Some(e) == taking || avoid {
+                continue;
+            }
+            let near = players
+                .iter()
+                .map(|p| it.origin.distance_squared(*p))
+                .fold(999_998_029_824.0f32, f32::min);
+            if best.is_none_or(|(_, d)| near > d) {
+                best = Some((k, near));
+            }
+        }
+        let k = best.map_or_else(
+            || {
+                log::warn!(
+                    "Could not find a suitable weapon entity to free out of {n} possible.  \
+                     Using index zero."
+                );
+                0
+            },
+            |(k, _)| k,
+        );
+        if let Some(e) = host.cod4().dropped_weapons[k] {
+            host.cod4_mut().items.retain(|i| i.id != e);
+            host.ents.free(e);
+        }
+        k
+    });
+    host.cod4_mut().dropped_weapons[slot] = Some(id);
 }
 
 /// `item itemWeaponSetAmmo(clip, stock [, alt])`: the counts the item
@@ -943,4 +1024,66 @@ fn is_mantling(
 ) -> Result<Value, ErrorKind> {
     client_receiver(host, recv)?;
     Ok(Value::Int(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An M16 item (weapon 27) at `x` on the level's list.
+    fn item(host: &mut GameHost, cx: &mut Cx, x: f32) -> EntId {
+        let id = host.ents.spawn(cx).unwrap();
+        host.cod4_mut().items.push(Item4 {
+            id,
+            weapon: 27,
+            model: 0,
+            owner: 64,
+            clear_owner_at: 0,
+            tr_type: 0,
+            start_ms: 0,
+            duration_ms: 0,
+            base: glam::Vec3::new(x, 0.0, 0.0),
+            delta: glam::Vec3::ZERO,
+            origin: glam::Vec3::new(x, 0.0, 0.0),
+            angles: glam::Vec3::ZERO,
+            ground: 0,
+            clip: 0,
+            stock: 0,
+        });
+        id
+    }
+
+    /// `g_maxDroppedWeapons`' cap (cod4-combat.md 6.1): a new item takes
+    /// the first empty slot; a full list frees the first item (none
+    /// playing, so every item ties) but the one a pickup is taking.
+    #[test]
+    fn a_full_dropped_weapons_list_frees_one_for_the_new_item() {
+        let Some(mut rt) = crate::game::cod4::boot::booted_for_test() else {
+            return;
+        };
+        rt.with_host(|host, cx| {
+            host.cvars.set("g_maxDroppedWeapons", "2");
+            let a = item(host, cx, 0.0);
+            hold_dropped(host, cx, a, None);
+            let b = item(host, cx, 100.0);
+            hold_dropped(host, cx, b, None);
+            assert_eq!(host.cod4().dropped_weapons[..3], [Some(a), Some(b), None]);
+            let c = item(host, cx, 200.0);
+            hold_dropped(host, cx, c, None);
+            assert!(host.ents.get(a).is_none(), "the first item freed");
+            assert!(host.cod4().items.iter().all(|i| i.id != a));
+            assert_eq!(host.cod4().dropped_weapons[..2], [Some(c), Some(b)]);
+            // A swap picking `c` up drops `d`: `b` goes instead.
+            let d = item(host, cx, 300.0);
+            hold_dropped(host, cx, d, Some(c));
+            assert!(host.ents.get(b).is_none() && host.ents.get(c).is_some());
+            assert_eq!(host.cod4().dropped_weapons[..2], [Some(c), Some(d)]);
+            // A slot whose item went (picked up) is empty again.
+            host.cod4_mut().items.retain(|i| i.id != c);
+            let e = item(host, cx, 400.0);
+            hold_dropped(host, cx, e, None);
+            assert!(host.ents.get(d).is_some());
+            assert_eq!(host.cod4().dropped_weapons[..2], [Some(e), Some(d)]);
+        });
+    }
 }
