@@ -148,6 +148,22 @@ pub enum Op {
     GtJumpIfFalse(u32),
     LeJumpIfFalse(u32),
     GeJumpIfFalse(u32),
+    /// `LoadLocal b; Lt; JumpIfFalse t` and `Const c; Lt; JumpIfFalse t`,
+    /// and the same with `Gt`.
+    LtLocalJumpIfFalse(u16, u32),
+    GtLocalJumpIfFalse(u16, u32),
+    LtConstJumpIfFalse(u16, u32),
+    GtConstJumpIfFalse(u16, u32),
+    /// `StoreLocal a; LoadLocal b; LoadLocal c`.
+    StoreLoad2(u16, u16, u16),
+    /// `LoadLocal k; LoadIndex`.
+    IndexLocal(u16),
+    /// `Add; StoreLocal a`.
+    AddStore(u16),
+    /// `Dup; JumpIfFalse t; Pop`, an `&&`'s left side, and `Dup;
+    /// JumpIfTrue t; Pop`, an `||`'s.
+    AndJump(u32),
+    OrJump(u32),
     /// `LoadLocal i; LoadLocal a; LoadField size; Lt; JumpIfFalse t`: a
     /// loop's `i < a.size`.
     LtSizeJumpIfFalse {
@@ -256,6 +272,16 @@ pub(crate) fn stack_effect(op: &Op) -> (i32, i32) {
         | Op::LeJumpIfFalse(_)
         | Op::GeJumpIfFalse(_) => (2, 0),
         Op::LtSizeJumpIfFalse { .. } | Op::AddConst { .. } => (0, 0),
+        Op::LtLocalJumpIfFalse(..)
+        | Op::GtLocalJumpIfFalse(..)
+        | Op::LtConstJumpIfFalse(..)
+        | Op::GtConstJumpIfFalse(..) => (1, 0),
+        Op::StoreLoad2(..) => (1, 2),
+        Op::IndexLocal(_) => (1, 1),
+        Op::AddStore(_) => (2, 0),
+        // A run that jumps leaves the left side, one that falls through
+        // pops it.
+        Op::AndJump(_) | Op::OrJump(_) => (1, 0),
     }
 }
 
@@ -270,6 +296,14 @@ pub(crate) fn fuse(code: &[Op], size: Atom) -> Vec<Op> {
     (0..code.len())
         .map(|i| fused_at(&code[i..], size).unwrap_or_else(|| code[i].clone()))
         .collect()
+}
+
+/// A `JumpIfFalse`'s target.
+fn jump_target(op: Option<&Op>) -> u32 {
+    match op {
+        Some(&Op::JumpIfFalse(t)) => t,
+        _ => unreachable!("matched as a JumpIfFalse"),
+    }
 }
 
 fn fused_at(run: &[Op], size: Atom) -> Option<Op> {
@@ -303,6 +337,28 @@ fn fused_at(run: &[Op], size: Atom) -> Option<Op> {
             Some(&LoadField(f)) => IndexLocalsField(a, k, f),
             _ => IndexLocals(a, k),
         },
+        (&LoadLocal(k), LoadIndex) => IndexLocal(k),
+        (&LoadLocal(b), Lt) if matches!(op(2), Some(JumpIfFalse(_))) => {
+            LtLocalJumpIfFalse(b, jump_target(op(2)))
+        }
+        (&LoadLocal(b), Gt) if matches!(op(2), Some(JumpIfFalse(_))) => {
+            GtLocalJumpIfFalse(b, jump_target(op(2)))
+        }
+        (&Const(c), Lt) if matches!(op(2), Some(JumpIfFalse(_))) => {
+            LtConstJumpIfFalse(c, jump_target(op(2)))
+        }
+        (&Const(c), Gt) if matches!(op(2), Some(JumpIfFalse(_))) => {
+            GtConstJumpIfFalse(c, jump_target(op(2)))
+        }
+        (&StoreLocal(a), &LoadLocal(b)) if matches!(op(2), Some(LoadLocal(_))) => {
+            let Some(&LoadLocal(c)) = op(2) else {
+                unreachable!()
+            };
+            StoreLoad2(a, b, c)
+        }
+        (Dup, &JumpIfFalse(t)) if matches!(op(2), Some(Pop)) => AndJump(t),
+        (Dup, &JumpIfTrue(t)) if matches!(op(2), Some(Pop)) => OrJump(t),
+        (Add, &StoreLocal(a)) => AddStore(a),
         (&LoadLocal(a), &LoadLocal(b)) => LoadLocal2(a, b),
         (&LoadLocal(a), &LoadField(f)) => LocalField(a, f),
         (&LoadLocal(a), Return) => ReturnLocal(a),

@@ -794,6 +794,23 @@ impl Vm {
             }};
         }
 
+        // A fused `LoadLocal`/`Const`, compare and `JumpIfFalse`: two
+        // numbers compare as `numeric_cmp` does (as floats); any other pair
+        // runs the first op alone, so the compare's error comes from it.
+        macro_rules! operand_cmp_jump {
+            ($b:expr, $to:expr, $cmp:tt) => {{
+                let b = $b;
+                match (to_f32(stack[sp - 1]), to_f32(b)) {
+                    (Some(x), Some(y)) if left >= 2 => {
+                        left -= 2;
+                        sp -= 1;
+                        ip = if x $cmp y { ip + 2 } else { $to as usize };
+                    }
+                    _ => push!(b),
+                }
+            }};
+        }
+
         let exit = loop {
             if left == 0 {
                 break Exit::Step(Step::Running);
@@ -1647,6 +1664,76 @@ impl Vm {
                 Op::GtJumpIfFalse(to) => cmp_jump!(to, >),
                 Op::LeJumpIfFalse(to) => cmp_jump!(to, <=),
                 Op::GeJumpIfFalse(to) => cmp_jump!(to, >=),
+                Op::LtLocalJumpIfFalse(b, to) => operand_cmp_jump!(locals[b as usize], to, <),
+                Op::GtLocalJumpIfFalse(b, to) => operand_cmp_jump!(locals[b as usize], to, >),
+                Op::LtConstJumpIfFalse(c, to) => {
+                    operand_cmp_jump!(func.consts[c as usize], to, <)
+                }
+                Op::GtConstJumpIfFalse(c, to) => {
+                    operand_cmp_jump!(func.consts[c as usize], to, >)
+                }
+                Op::StoreLoad2(a, b, c) => {
+                    let v = pop!();
+                    self.heap.share(v);
+                    locals[a as usize] = v;
+                    if left >= 2 {
+                        left -= 2;
+                        push!(locals[b as usize]);
+                        push!(locals[c as usize]);
+                        ip = at + 3;
+                    }
+                }
+                Op::IndexLocal(k) => match (stack[sp - 1], array_key(locals[k as usize])) {
+                    (Value::Array(id), Some(key)) if left > 0 => {
+                        left -= 1;
+                        stack[sp - 1] = self.heap.get_index(id, key);
+                        ip = at + 2;
+                    }
+                    _ => push!(locals[k as usize]),
+                },
+                Op::AddStore(a) => {
+                    let y = pop!();
+                    let x = pop!();
+                    let v = match (x, y) {
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_add(y)),
+                        (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
+                        _ => tri!(eval_add(&mut self.interner, x, y)),
+                    };
+                    if left > 0 {
+                        left -= 1;
+                        self.heap.share(v);
+                        locals[a as usize] = v;
+                        ip = at + 2;
+                    } else {
+                        push!(v);
+                    }
+                }
+                // `JumpIfFalse`'s reading of the left side, which a string
+                // only fails as `not_of` does.
+                Op::AndJump(to) | Op::OrJump(to) => {
+                    let c = stack[sp - 1];
+                    let not = match c {
+                        Value::Int(i) => Some(i == 0),
+                        _ => not_of(c, &self.interner).ok(),
+                    };
+                    let jump = match (op, not) {
+                        (Op::AndJump(_), Some(not)) => Some(not),
+                        (_, Some(not)) => Some(!not),
+                        (_, None) => None,
+                    };
+                    match jump {
+                        Some(true) if left >= 1 => {
+                            left -= 1;
+                            ip = to as usize;
+                        }
+                        Some(false) if left >= 2 => {
+                            left -= 2;
+                            sp -= 1;
+                            ip = at + 3;
+                        }
+                        _ => push!(c),
+                    }
+                }
                 Op::LtSizeJumpIfFalse { i, a, to } => {
                     let x = locals[i as usize];
                     match (to_f32(x), locals[a as usize]) {
@@ -1913,6 +2000,21 @@ main()
     w = 3;
     while ( w >= 0 )
         w -= 1;
+    level.arr = a;
+    n = "s" + w;
+    for ( i = 0; i < 6; i++ )
+    {
+        e = level.arr[i];
+        q = e + 1;
+        if ( e < 3 && q > 1 || e > 5 )
+            t += 1;
+        if ( e > 2 )
+            t += e;
+        if ( q < t )
+            t += 1;
+        if ( isdefined( e ) || n )
+            t += 2;
+    }
     if ( i < "x" )
         t += 100;
     u = m[nope];
