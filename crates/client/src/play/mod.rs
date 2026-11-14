@@ -20,6 +20,7 @@ mod cod2_soak;
 pub mod cod2_sound;
 pub mod cod2_view;
 pub mod cod4;
+pub mod cod4_dynents;
 pub mod cod4_input;
 pub mod cod4_kick;
 pub mod cod4_menus;

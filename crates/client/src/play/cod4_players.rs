@@ -598,17 +598,20 @@ pub fn explosion_of(
     weapons: &[String],
     defs: &HashMap<String, crate::cod4_audio::WeaponAv>,
 ) -> Option<Explosion> {
+    let radius = crate::play::cod4::weapon_name(weapons, f.weapon)
+        .and_then(|w| defs.get(w))
+        .map(|w| w.explosion_radius);
+    explosion_at(f, radius)
+}
+
+/// [`explosion_of`] with the fired weapon's `explosionRadius` given.
+pub fn explosion_at(f: &crate::play::cod4::Fired, radius: Option<f32>) -> Option<Explosion> {
     let word = |k: usize| {
         f.state.as_ref().map_or(0.0, |e| {
             crate::play::cod4::ent_f32(e, &format!("lerp.u.anonymous.data[{k}]"))
         })
     };
-    let radius = || {
-        crate::play::cod4::weapon_name(weapons, f.weapon)
-            .and_then(|w| defs.get(w))
-            .map(|w| w.explosion_radius)
-            .filter(|r| *r > 0.0)
-    };
+    let radius = || radius.filter(|r| *r > 0.0);
     let mut e = Explosion {
         origin: f.origin,
         inner: 0.0,

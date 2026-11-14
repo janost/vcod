@@ -1207,6 +1207,19 @@ impl Cod4Client {
     /// The fired events' sounds and effects, the map's ambient, and the
     /// zones' tables handed to the audio and fx systems on the first call.
     fn sound_and_fx(&mut self, cx: &mut Cod2Frame, fired: &[Fired], now_ms: i32) {
+        // Out of the session while its gamestate is read.
+        let mut dynents = self.session.dynents.take();
+        self.sound_and_fx_with(cx, fired, now_ms, &mut dynents);
+        self.session.dynents = dynents;
+    }
+
+    fn sound_and_fx_with(
+        &mut self,
+        cx: &mut Cod2Frame,
+        fired: &[Fired],
+        now_ms: i32,
+        dynents: &mut Option<vcod_cod4::dynent::DynEnts>,
+    ) {
         let tags = self.weapon_tags();
         let Some(gs) = self.session.gamestate() else {
             return;
@@ -1231,6 +1244,7 @@ impl Cod4Client {
             play_event_cues(cx.audio, cx.fs, s, &mut self.hud, fired, &weapons, &cs, &at);
         }
         // The blasts' pushes on the running and sleeping ragdolls.
+        let mut broken = Vec::new();
         if let Some(s) = &self.sounds {
             for f in fired {
                 if let Some(e) = crate::play::cod4_players::explosion_of(f, &weapons, &s.weapons) {
@@ -1273,6 +1287,21 @@ impl Cod4Client {
                 .collect(),
             _ => Vec::new(),
         };
+        // The blasts and the rounds on the map's dynamic entities.
+        if let (Some(d), Some(w)) = (dynents.as_mut(), self.session.world()) {
+            let rounds: Vec<_> = hits
+                .iter()
+                .map(|h| h.iter().map(|h| (h.start, h.end)).collect())
+                .collect();
+            broken = crate::play::cod4_dynents::on_fired(
+                d,
+                w,
+                fired,
+                &weapons,
+                &rounds,
+                self.render_time,
+            );
+        }
         if let Some(s) = &mut self.sounds {
             let eye = self.view.map(|(eye, _)| eye);
             for (f, hit) in fired.iter().zip(&hits) {
@@ -1290,6 +1319,18 @@ impl Cod4Client {
             .map(|v| v.client_num);
         if let Some(e) = &mut self.effects {
             take_level_effects(e, cx);
+            // A broken dynamic entity's `destroyFx` at its pose (0x48dec7).
+            for b in &broken {
+                let Some(name) = &b.fx else { continue };
+                let at = crate::fx::sim::SpawnAt::Oriented {
+                    pos: b.origin,
+                    axis: b.axis,
+                };
+                if let Some(p) = e.play_named(name, at, None) {
+                    let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
+                    cx.audio.play_fx(cx.fs, sounds);
+                }
+            }
             for f in fired {
                 let body_shot;
                 let f = match own_body {
@@ -1641,6 +1682,23 @@ impl Cod4Client {
                 light_origin: light_origin(d),
                 shader_time: None,
             });
+        }
+        // The map's dynamic entities, each its def's model at its pose.
+        if let Some(w) = self.session.world().cloned() {
+            for &(i, origin, rot) in &scene.dynents {
+                let name = &w.dynents[i as usize].model;
+                let model = self.models.get(name).cloned();
+                let Some(handle) = self.upload(cx, name, || model) else {
+                    continue;
+                };
+                instances.push(DynamicModelInstance {
+                    model: handle,
+                    transform: Mat4::from_rotation_translation(rot, origin),
+                    bones: None,
+                    light_origin: origin + Vec3::Z * 4.0,
+                    shader_time: None,
+                });
+            }
         }
         self.vehicles.end();
         self.drawn = (instances.len(), submodels.len(), posed.len());
@@ -2033,6 +2091,14 @@ impl Cod4Client {
         let (parts, flying) = self.session.physics.counts();
         if parts > 0 {
             lines.push(format!("cod4 physics: launched {parts}  flying {flying}"));
+        }
+        if let Some(d) = &self.session.dynents {
+            let drawn = d.ents.iter().filter(|e| e.drawn).count();
+            lines.push(format!(
+                "cod4 dynents: {}  drawn {drawn}  awake {}",
+                d.ents.len(),
+                d.awake()
+            ));
         }
         lines
     }

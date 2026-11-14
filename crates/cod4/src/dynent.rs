@@ -152,6 +152,24 @@ pub fn defs(map: &Assets, refs: &[&Assets]) -> Vec<DynDef> {
     out
 }
 
+/// The model names of `a`'s dynamic entities (list 0), each once.
+pub fn model_names(a: &Assets) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for c in a
+        .clip_maps_pvs
+        .iter()
+        .chain(a.clip_maps.iter().map(|c| &c.0))
+    {
+        for m in c.dyn_ents[0].iter().filter_map(|d| d.model) {
+            let name = a.xmodels[m.index()].name.trim_start_matches(',');
+            if !out.iter().any(|n| n == name) {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// The `dynEnt_*` dvars at their 1.7 defaults (0x48c1e0).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Dvars {
