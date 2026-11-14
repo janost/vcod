@@ -209,8 +209,9 @@ fn uo_bots_take_and_capture_a_flag_on_cassino() {
     // A seed draw: any bot change reshuffles which seeds take a flag
     // in 150 s and capture one in 200 s more. Over 80 seed pairs in 1-161
     // (2n and 2n + 1 play alike), 79 took one and 54 captured before the
-    // jump cue (24cff5ab), 77 and 47 after (2026-10-21), so one seed fails
-    // two runs in five: the first of these to capture passes.
+    // jump cue (24cff5ab), 77 and 47 after (2026-10-21), 80 and 10 on
+    // 2026-11-14 (bot-objectives.md 7.2), so a seed fails most runs: the first
+    // of these to capture passes.
     let mut runs = Vec::new();
     for seed in [14, 16, 18, 20, 22] {
         let Some((mut sv, mut now)) = uo_server("mp_cassino", "ctf", true, &[], seed) else {
