@@ -980,11 +980,12 @@ impl Vm {
                 return Err(InstallError::Duplicate(key));
             }
         }
-        for f in fns {
+        for mut f in fns {
             let key = FuncRef {
                 file: f.file,
                 name: f.name,
             };
+            f.fast = crate::bytecode::fuse(&f.code, self.size_atom);
             let next = self.file_order.len() as u32;
             self.file_order.entry(f.file).or_insert(next);
             self.functions.insert(key, Rc::new(f));
@@ -1554,6 +1555,7 @@ pub(crate) mod tests {
             params: 0,
             locals: 0,
             code: vec![crate::bytecode::Op::Pop, crate::bytecode::Op::ReturnUndef],
+            fast: Vec::new(),
             consts: Vec::new(),
             lines: vec![1, 1],
         };
@@ -1574,6 +1576,7 @@ pub(crate) mod tests {
             params: 0,
             locals: 0,
             code: vec![crate::bytecode::Op::ReturnUndef],
+            fast: Vec::new(),
             consts: Vec::new(),
             lines: vec![1],
         };

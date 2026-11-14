@@ -125,6 +125,44 @@ pub enum Op {
     },
     /// Pops the receiver and the event name.
     EndOn,
+
+    // Fused ops: never compiled, only placed by [`fuse`] in
+    // `Function::fast`, each in place of the run of ops it names, which
+    // stay in `Function::code` behind it.
+    /// `LoadLocal a; LoadLocal b`.
+    LoadLocal2(u16, u16),
+    /// `StoreLocal a; LoadLocal b`.
+    StoreLoad(u16, u16),
+    /// `LoadLocal a; Return`.
+    ReturnLocal(u16),
+    /// `LoadLevel; LoadField f`.
+    LevelField(Atom),
+    /// `LoadLocal a; LoadField f`.
+    LocalField(u16, Atom),
+    /// `LoadLocal a; LoadLocal k; LoadIndex`.
+    IndexLocals(u16, u16),
+    /// `LoadLocal a; LoadLocal k; LoadIndex; LoadField f`.
+    IndexLocalsField(u16, u16, Atom),
+    /// `Lt; JumpIfFalse t`, and the other three orderings.
+    LtJumpIfFalse(u32),
+    GtJumpIfFalse(u32),
+    LeJumpIfFalse(u32),
+    GeJumpIfFalse(u32),
+    /// `LoadLocal i; LoadLocal a; LoadField size; Lt; JumpIfFalse t`: a
+    /// loop's `i < a.size`.
+    LtSizeJumpIfFalse {
+        i: u16,
+        a: u16,
+        to: u32,
+    },
+    /// `LoadLocal src; Const c; Add; StoreLocal dst`, then with `to`
+    /// `Jump to`: a loop's `i++`.
+    AddConst {
+        dst: u16,
+        src: u16,
+        c: u16,
+        to: Option<u32>,
+    },
 }
 
 /// `Debug` only, for `Frame`'s derive (`vm/interp.rs`) -- nothing formats a
@@ -136,6 +174,9 @@ pub struct Function {
     pub params: u8,
     pub locals: u16,
     pub code: Vec<Op>,
+    /// `code` with its runs fused ([`fuse`]), what the interpreter runs;
+    /// `Vm::install` fills it, so a compiler leaves it empty.
+    pub fast: Vec<Op>,
     pub consts: Vec<Value>,
     /// Source line per instruction, for error attribution.
     pub lines: Vec<u32>,
@@ -204,7 +245,76 @@ pub(crate) fn stack_effect(op: &Op) -> (i32, i32) {
         Op::Jump(_) | Op::ReturnUndef => (0, 0),
         Op::WaitTill { .. } | Op::EndOn => (2, 0),
         Op::Notify { argc } | Op::WaitTillMatch { argc } => (2 + i32::from(*argc), 0),
+        // A fused op's whole run.
+        Op::LoadLocal2(..) => (0, 2),
+        Op::StoreLoad(..) => (1, 1),
+        Op::ReturnLocal(_) => (0, 0),
+        Op::LevelField(_) | Op::LocalField(..) | Op::IndexLocals(..) | Op::IndexLocalsField(..) => {
+            (0, 1)
+        }
+        Op::LtJumpIfFalse(_)
+        | Op::GtJumpIfFalse(_)
+        | Op::LeJumpIfFalse(_)
+        | Op::GeJumpIfFalse(_) => (2, 0),
+        Op::LtSizeJumpIfFalse { .. } | Op::AddConst { .. } => (0, 0),
     }
+}
+
+/// The ops `Vm::run_ops` runs (`Function::fast`): `code` with a fused op
+/// in place of each op that starts one of the runs the fused ops name,
+/// longest first. The ops a run covers stay behind it, so a jump into the
+/// run's middle lands where it always did, and a fused op that cannot take
+/// its fast path (a type it does not handle, a budget too short for its
+/// whole run) runs its first op alone. `size` is the interner's `size`.
+/// The runs are the spawn wave's commonest (cod4-server-frame.md 9.2).
+pub(crate) fn fuse(code: &[Op], size: Atom) -> Vec<Op> {
+    (0..code.len())
+        .map(|i| fused_at(&code[i..], size).unwrap_or_else(|| code[i].clone()))
+        .collect()
+}
+
+fn fused_at(run: &[Op], size: Atom) -> Option<Op> {
+    use Op::*;
+    let op = |k: usize| run.get(k);
+    Some(match (op(0)?, op(1)?) {
+        (&LoadLocal(i), &LoadLocal(a))
+            if matches!(
+                (op(2), op(3), op(4)),
+                (Some(&LoadField(f)), Some(Lt), Some(JumpIfFalse(_))) if f == size
+            ) =>
+        {
+            let Some(&JumpIfFalse(to)) = op(4) else {
+                unreachable!()
+            };
+            LtSizeJumpIfFalse { i, a, to }
+        }
+        (&LoadLocal(src), &Const(c))
+            if matches!((op(2), op(3)), (Some(Add), Some(StoreLocal(_)))) =>
+        {
+            let Some(&StoreLocal(dst)) = op(3) else {
+                unreachable!()
+            };
+            let to = match op(4) {
+                Some(&Jump(t)) => Some(t),
+                _ => None,
+            };
+            AddConst { dst, src, c, to }
+        }
+        (&LoadLocal(a), &LoadLocal(k)) if matches!(op(2), Some(LoadIndex)) => match op(3) {
+            Some(&LoadField(f)) => IndexLocalsField(a, k, f),
+            _ => IndexLocals(a, k),
+        },
+        (&LoadLocal(a), &LoadLocal(b)) => LoadLocal2(a, b),
+        (&LoadLocal(a), &LoadField(f)) => LocalField(a, f),
+        (&LoadLocal(a), Return) => ReturnLocal(a),
+        (&StoreLocal(a), &LoadLocal(b)) => StoreLoad(a, b),
+        (LoadLevel, &LoadField(f)) => LevelField(f),
+        (Lt, &JumpIfFalse(t)) => LtJumpIfFalse(t),
+        (Gt, &JumpIfFalse(t)) => GtJumpIfFalse(t),
+        (Le, &JumpIfFalse(t)) => LeJumpIfFalse(t),
+        (Ge, &JumpIfFalse(t)) => GeJumpIfFalse(t),
+        _ => return None,
+    })
 }
 
 fn visit(
@@ -327,6 +437,7 @@ mod tests {
             params: 0,
             locals: 0,
             code,
+            fast: Vec::new(),
             consts: Vec::new(),
             lines,
         }

@@ -703,6 +703,12 @@ impl Vm {
         } = fr;
         let func: &Function = func_rc;
         let code = &func.code[..];
+        // What runs: `code` with its runs fused (`bytecode::fuse`).
+        let fast = if func.fast.len() == code.len() {
+            &func.fast[..]
+        } else {
+            code
+        };
         let locals = &mut locals[..];
         let self_recv = *frame_recv;
         let mut ip = *frame_ip as usize;
@@ -747,13 +753,68 @@ impl Vm {
             };
         }
 
+        // `LoadField`'s answer for a value it reads without failing:
+        // `None` for a dead entity or a value with no such field.
+        macro_rules! field_of {
+            ($obj:expr, $name:expr) => {{
+                let name = $name;
+                match $obj {
+                    Value::Struct(_) | Value::Entity(_) if name == self.size_atom => {
+                        Some(Value::Int(1))
+                    }
+                    Value::Struct(id) => Some(self.heap.get_field(id, name)),
+                    Value::Entity(id) if host.is_live(id) => {
+                        let mut cx = Cx {
+                            interner: &mut self.interner,
+                            heap: &mut self.heap,
+                            level: self.level,
+                            game: self.game,
+                            notifies,
+                            spawns: field_spawns,
+                        };
+                        let v = host.get_field(&mut cx, id, name);
+                        debug_assert!(
+                            field_spawns.is_empty(),
+                            "Cx::spawn is only honoured from a builtin"
+                        );
+                        Some(v)
+                    }
+                    Value::Array(id) if name == self.size_atom => {
+                        Some(Value::Int(self.heap.array_len(id) as i32))
+                    }
+                    Value::String(a) if name == self.size_atom => {
+                        Some(Value::Int(self.interner.resolve(a).len() as i32))
+                    }
+                    _ => None,
+                }
+            }};
+        }
+        // A fused compare and `JumpIfFalse`: `Lt`'s two floats inline, any
+        // other pair through `numeric_cmp`, as the compare ops do.
+        macro_rules! cmp_jump {
+            ($to:expr, $cmp:tt) => {{
+                let b = pop!();
+                let a = pop!();
+                let r = match (a, b) {
+                    (Value::Float(x), Value::Float(y)) => x $cmp y,
+                    _ => tri!(numeric_cmp(a, b, |x, y| x $cmp y)) == Value::Int(1),
+                };
+                if left > 0 {
+                    left -= 1;
+                    ip = if r { ip + 1 } else { $to as usize };
+                } else {
+                    push!(Value::Int(r as i32));
+                }
+            }};
+        }
+
         let exit = loop {
             if left == 0 {
                 break Exit::Step(Step::Running);
             }
             left -= 1;
             let at = ip;
-            let op = &code[at];
+            let op = &fast[at];
             ip += 1;
             base_sp = sp;
             // A spawn ran another thread, which may have ended this one.
@@ -765,9 +826,11 @@ impl Vm {
             // `Return` runs, so that pair is checked through
             // `Frame::stack_effect_check` instead (`step_ops`).
             #[cfg(test)]
-            let (dbg_pop, dbg_push) = crate::bytecode::stack_effect(op);
+            let (dbg_pop, dbg_push) = crate::bytecode::stack_effect(&code[at]);
             #[cfg(test)]
             let dbg_op_repr = format!("{op:?}");
+            #[cfg(test)]
+            let dbg_left = left;
 
             match *op {
                 Op::Const(idx) => push!(func.consts[idx as usize]),
@@ -1551,6 +1614,128 @@ impl Vm {
                     let args = &stack[base..base + argc as usize];
                     self.notify_from(thread_id, target, event, args);
                 }
+                // Fused runs (`bytecode::fuse`): each takes its fast path
+                // only when its whole run fits the budget and its values
+                // are ones it answers without failing, and otherwise runs
+                // its run's first op alone, the next op then running from
+                // `fast` at `at + 1`.
+                Op::LoadLocal2(a, b) => {
+                    push!(locals[a as usize]);
+                    if left > 0 {
+                        left -= 1;
+                        push!(locals[b as usize]);
+                        ip = at + 2;
+                    }
+                }
+                Op::StoreLoad(a, b) => {
+                    let v = pop!();
+                    self.heap.share(v);
+                    locals[a as usize] = v;
+                    if left > 0 {
+                        left -= 1;
+                        push!(locals[b as usize]);
+                        ip = at + 2;
+                    }
+                }
+                Op::ReturnLocal(a) => {
+                    if left > 0 {
+                        left -= 1;
+                        ip = at + 2;
+                        break Exit::Return(locals[a as usize]);
+                    }
+                    push!(locals[a as usize]);
+                }
+                Op::LevelField(name) => {
+                    if left > 0 {
+                        left -= 1;
+                        let v = if name == self.size_atom {
+                            Value::Int(1)
+                        } else {
+                            self.heap.get_field(self.level, name)
+                        };
+                        push!(v);
+                        ip = at + 2;
+                    } else {
+                        push!(Value::Struct(self.level));
+                    }
+                }
+                Op::LocalField(a, name) => {
+                    let obj = locals[a as usize];
+                    match field_of!(obj, name) {
+                        Some(v) if left > 0 => {
+                            left -= 1;
+                            push!(v);
+                            ip = at + 2;
+                        }
+                        _ => push!(obj),
+                    }
+                }
+                Op::IndexLocals(a, k) => {
+                    match (locals[a as usize], array_key(locals[k as usize])) {
+                        (Value::Array(id), Some(key)) if left >= 2 => {
+                            left -= 2;
+                            push!(self.heap.get_index(id, key));
+                            ip = at + 3;
+                        }
+                        (obj, _) => push!(obj),
+                    }
+                }
+                Op::IndexLocalsField(a, k, name) => {
+                    let obj = locals[a as usize];
+                    let v = match (obj, array_key(locals[k as usize])) {
+                        (Value::Array(id), Some(key)) if left >= 3 => {
+                            let elem = self.heap.get_index(id, key);
+                            field_of!(elem, name)
+                        }
+                        _ => None,
+                    };
+                    match v {
+                        Some(v) => {
+                            left -= 3;
+                            push!(v);
+                            ip = at + 4;
+                        }
+                        None => push!(obj),
+                    }
+                }
+                Op::LtJumpIfFalse(to) => cmp_jump!(to, <),
+                Op::GtJumpIfFalse(to) => cmp_jump!(to, >),
+                Op::LeJumpIfFalse(to) => cmp_jump!(to, <=),
+                Op::GeJumpIfFalse(to) => cmp_jump!(to, >=),
+                Op::LtSizeJumpIfFalse { i, a, to } => {
+                    let x = locals[i as usize];
+                    match (to_f32(x), locals[a as usize]) {
+                        // `LoadField size`'s `Int`, then `Lt` through
+                        // `numeric_cmp` as two floats.
+                        (Some(x), Value::Array(id)) if left >= 4 => {
+                            left -= 4;
+                            let n = self.heap.array_len(id) as i32;
+                            ip = if x < n as f32 { at + 5 } else { to as usize };
+                        }
+                        _ => push!(x),
+                    }
+                }
+                Op::AddConst { dst, src, c, to } => {
+                    let x = locals[src as usize];
+                    let sum = match (x, func.consts[c as usize]) {
+                        (Value::Int(x), Value::Int(y)) => Some(Value::Int(x.wrapping_add(y))),
+                        (Value::Float(x), Value::Float(y)) => Some(Value::Float(x + y)),
+                        _ => None,
+                    };
+                    let run = if to.is_some() { 4 } else { 3 };
+                    match sum {
+                        // A number: `StoreLocal`'s `share` has nothing to do.
+                        Some(v) if left >= run => {
+                            left -= run;
+                            locals[dst as usize] = v;
+                            ip = match to {
+                                Some(t) => t as usize,
+                                None => at + 4,
+                            };
+                        }
+                        _ => push!(x),
+                    }
+                }
                 Op::EndOn => {
                     let event = pop!();
                     let recv = pop!();
@@ -1580,12 +1765,24 @@ impl Vm {
                 }
             }
 
+            // A fused op ran as many of `code`'s ops as it took budget.
             #[cfg(test)]
-            assert_eq!(
-                sp as i32,
-                base_sp as i32 - dbg_pop + dbg_push,
-                "stack_effect disagreement at {dbg_op_repr} (before {base_sp}, pop {dbg_pop}, push {dbg_push})"
-            );
+            {
+                let ran = 1 + (dbg_left - left) as usize;
+                let effect: i32 = code[at..at + ran]
+                    .iter()
+                    .map(|o| {
+                        let (pop, push) = crate::bytecode::stack_effect(o);
+                        push - pop
+                    })
+                    .sum();
+                let _ = (dbg_pop, dbg_push);
+                assert_eq!(
+                    sp as i32,
+                    base_sp as i32 + effect,
+                    "stack_effect disagreement at {dbg_op_repr} (before {base_sp}, {ran} ops)"
+                );
+            }
 
             if spawned && self.was_killed(thread_id) {
                 break Exit::Step(Step::Returned(Value::Undefined));
