@@ -2134,16 +2134,17 @@ unlinked, stays at 96.09 for the 2 s sampled; one that had landed at -22.91,
 lifted 60 and unlinked, stays at 37.09. VERIFIED, off the wire half: from the
 unlink both go out `pos.trType` 5 with `trTime` the snapshot's own time and
 the same `trBase`, as the landed one went out before its link (30650..30750).
-VERIFIED, `objdump` of game.mp 1.1d, the store: `G_RunItem` writes the
-trace's end into `r.currentOrigin` and reads a start in solid as fraction 0
-(0x4ec08..0x4ec0e), so with the bounce byte `ent+0x160` set and no
-`CONTENTS_NODROP` there it calls `G_BounceItem` (0x4ec6b) every frame.
-That traces down from the origin for a start in solid (0x4e987, 0x4e9b3)
-and, with no plane facing up (`fcomp` against the normal's z at 0x4e9bd),
-takes its moving arm: `r.currentOrigin` plus the plane's normal into
-`r.currentOrigin` and `pos.trBase` (0x4eac0..0x4eb00) and `level.time`
-into `pos.trTime` (0x4eb08), `pos.trType` left at 5. So the type stays 5,
-and the time and base are written again each frame. VERIFIED, vcod
+VERIFIED, `objdump` of game.mp 1.1d, the store: `G_RunItem` copies the
+trace's end into `r.currentOrigin`, writes fraction 0 for a start in solid
+(0x4ec08..0x4ec0e) and calls `G_BounceItem` at 0x4ec6b behind the bounce
+byte `ent+0x160` and a `CONTENTS_NODROP` test. `G_BounceItem` traces down
+from the origin (0x4e987, 0x4e9b3), compares the normal's z (`fcomp` at
+0x4e9bd), and its moving arm adds the plane's normal to `r.currentOrigin`,
+copies it into `pos.trBase` (0x4eac0..0x4eb00) and stores `level.time` in
+`pos.trTime` (0x4eb08), with no store to `pos.trType`. INFERRED, off that
+flow: a mid-air item that starts in solid with no floor under it takes the
+moving arm every frame, so the type stays 5 and the time and base are
+written again each frame. VERIFIED, vcod
 measurement 2026-11-14 (`linkto_ab::enable_link_to_turrets_tags_and_items_follow_retail`):
 both unlinked items take that arm on every frame of the hold, 104 frames,
 each a start in solid whose drop meets no floor, so the zero normal leaves

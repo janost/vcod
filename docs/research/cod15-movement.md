@@ -521,11 +521,12 @@ script's `setOrigin` (cod11-combat.md 2.1, "The thrower's slide").
   0x200 set (0x2734f-0x27369), not under the penalty; a new grab needs a
   second hit along the face's normal (0x27652, 0x277a9); leaving the rungs
   airborne plays the jump anim (0x27838). VERIFIED calls. VERIFIED, the
-  stores: the first trace's normal goes into `vLadderVec` (ps+0x58,
-  0x27699..0x276c6) before the second trace, and only the flag waits for
-  it (`or pm_flags, 0x10` at 0x277e1); UO the same (objdump 0x2ccc8, the
-  store from 0x2cd1c, the second trace 0x2ce1f). So a refused grab sends
-  the rungs' normal without the flag. VERIFIED, `--save-ladder grab`
+  stores: the first trace's normal goes into `vLadderVec` (ps+0x58) at
+  0x27699..0x276c6, ahead of the second trace's call at 0x277a9, and the
+  flag's `or pm_flags, 0x10` sits at 0x277e1, after it; UO the same
+  (objdump 0x2ccc8, the store from 0x2cd1c, the second trace 0x2ce1f).
+  INFERRED, off that order: a refused grab sends the rungs' normal
+  without the flag. VERIFIED, `--save-ladder grab`
   captures (2026-11-14, `crates/server/tests/fixtures/playerstate/mp_ship-dm-ladder-grab-{11,15,uo}.txt`):
   set down at (4308, -94, 57) beside the hold ladder and walked in at yaw
   60, 1.5b's snapshot 13982 and UO's 14082 carry `vLadderVec` (0, -1, 0)
