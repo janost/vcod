@@ -232,7 +232,7 @@ only yardstick.
   - `MAPS=`, `GAMETYPE=`, `BOTS=`, `TICKS=`, `JOBS=`, `SET=`, `UO=1`.
   - Per side `AXIS_SKILL=`/`ALLIES_SKILL=`; one-sided `COVER=`, `RETREAT=`,
     `TEAMPLAY=`, `AWARE=`, `FOOTWORK=`, `WARY=`, `SQUAD=`, `AIM=`, `TACTICS=`,
-    `CONVERGE=`, `LANES=`, `FAR=`, `CUES=`, `TRAVEL=` arms
+    `CONVERGE=`, `LANES=`, `FAR=`, `CUES=`, `TRAVEL=`, `CARRY=` arms
     (`dm` splits them by slot parity).
   - `GAME=cod2` runs `vcod-server --game cod2`'s bots, split by weapon class
     and skill; `GUNS=0` keeps them off the mounted guns (docs/bots.md

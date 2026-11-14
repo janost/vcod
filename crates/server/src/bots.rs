@@ -1107,6 +1107,11 @@ pub struct Bot {
     /// takes a way in from nearer its objective (bot-objectives.md 14);
     /// off, as section 9.1 (a `bot_match` arm).
     pub travel: bool,
+    /// A `ctf` carrier keeps for its goal through a fight, and while its
+    /// own flag is away returns it from near or waits in cover near the
+    /// goal (bot-objectives.md 14.11); off, it closes on what it sees and
+    /// stands in the goal (a `bot_match` arm).
+    pub ctf_carry: bool,
     /// The point its objective centres on, read at the top of the last
     /// think ([`Bot::objective_point`]).
     anchor: Option<[f32; 3]>,
@@ -1522,7 +1527,8 @@ const CAREFUL_CROUCH: f32 = 300.0;
 /// defender's eye to the trigger blocks the defuse's `isLookingAt`, which
 /// is the defender's problem, not the bot's to make.
 const BOMB_GUARD_INNER: f32 = 96.0;
-/// An attacker this near its own dropped flag returns it on the way.
+/// An attacker this near its own dropped flag returns it on the way, and
+/// a carrier waiting on it ([`Bot::ctf_carry`]).
 const CTF_RETURN_NEAR: f32 = 1000.0;
 /// A pickup trigger is aimed at and used from within this, horizontally:
 /// `G_GetActivateEnt` reaches 128 units from the eye.
@@ -1654,6 +1660,7 @@ impl Bot {
             far: true,
             cues: true,
             travel: true,
+            ctf_carry: true,
             anchor: None,
             guarded: None,
             exposure: None,
@@ -2209,12 +2216,22 @@ impl Bot {
         match uo {
             UoView::Ctf(c) => {
                 if c.carrying {
-                    // The capture wants our flag home: wait in the goal.
-                    return Some(if c.ours.home.is_some() {
-                        ObjTarget::Deliver(c.theirs.goal.stand)
-                    } else {
-                        ObjTarget::Occupy(c.theirs.goal)
-                    });
+                    // The capture wants our flag home.
+                    if c.ours.home.is_some() {
+                        return Some(ObjTarget::Deliver(c.theirs.goal.stand));
+                    }
+                    if !self.ctf_carry {
+                        return Some(ObjTarget::Occupy(c.theirs.goal));
+                    }
+                    // Our flag lying near: the carrier's touch returns it
+                    // too. Else wait on a post near the goal, in cover
+                    // from its ways in, while the rest bring it back.
+                    if let Some(d) = c.ours.dropped
+                        && dist_sq(view.origin, d.stand) < CTF_RETURN_NEAR * CTF_RETURN_NEAR
+                    {
+                        return Some(ObjTarget::Deliver(d.stand));
+                    }
+                    return Some(guard(c.theirs.goal.stand));
                 }
                 // Our flag lying out: a touch returns it, and their carrier
                 // cannot score until it is home.
@@ -8534,6 +8551,62 @@ mod tests {
             c.hunt = Some([1500.0, 200.0, 0.0]);
         }
         assert_eq!(bot.goal(&v), Goal::To([1500.0, 200.0, 0.0]));
+    }
+
+    /// A `ctf` carrier (`Bot::ctf_carry`) keeps for its goal through a
+    /// fight; with its own flag away it returns the flag lying near
+    /// itself, else guards round the goal instead of standing in it.
+    #[test]
+    fn a_ctf_carrier_keeps_home_and_waits_near_the_goal() {
+        let mut bot = Bot::new("axis", true, 1);
+        let mut v = view();
+        let site = |x: f32| SiteView {
+            mins: [x - 50.0, -50.0, 0.0],
+            maxs: [x + 50.0, 50.0, 100.0],
+            stand: [x, 0.0, 0.0],
+        };
+        let ours = CtfFlagView {
+            home: None,
+            dropped: Some(site(600.0)),
+            goal: site(3000.0),
+            carried: false,
+            carrier: None,
+        };
+        v.uo = Some(UoView::Ctf(Box::new(CtfView {
+            ours,
+            theirs: CtfFlagView {
+                home: None,
+                dropped: None,
+                goal: site(0.0),
+                carried: true,
+                carrier: Some(0),
+            },
+            carrying: true,
+            escort: None,
+            rank: 2,
+            hunt: None,
+        })));
+        assert_eq!(bot.goal(&v), Goal::To([600.0, 0.0, 0.0]), "returns it");
+        if let Some(UoView::Ctf(c)) = v.uo.as_mut() {
+            c.ours.dropped = None;
+            c.ours.carried = true;
+            c.ours.carrier = Some(7);
+        }
+        assert!(matches!(
+            bot.objective_target(&v),
+            Some(ObjTarget::Guard {
+                at: [0.0, 0.0, 0.0],
+                hold: GuardHold::Near,
+                ..
+            })
+        ));
+        assert!(bot.carrying(&v), "keeps for the goal through a fight");
+        bot.ctf_carry = false;
+        assert!(matches!(
+            bot.objective_target(&v),
+            Some(ObjTarget::Occupy(_))
+        ));
+        assert!(!bot.carrying(&v));
     }
 
     /// The view on the lob with the gun kicked 17 degrees up off it (a
