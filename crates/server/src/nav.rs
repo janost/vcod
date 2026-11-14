@@ -1518,7 +1518,10 @@ impl NavGraph {
     /// the bot runs that first leg as a jump edge ([`Follower::jumping`]).
     /// mp_cassino's roof dent at (4948, -1413, 280), 23 under the roof
     /// round it, held a bot pressing at the node at 280 beyond its wall for
-    /// 12 s (bot-objectives.md 10.6).
+    /// 12 s (bot-objectives.md 10.6). The node may stand as low as the feet:
+    /// mp_cassino's pocket at (5882, -2038, -8), 30 under the steps round
+    /// it, is ringed by nodes on its own floor beyond the walls
+    /// (bot-objectives.md 14.13).
     pub fn walkable_start(&self, world: &CollisionWorld, p: Vec3) -> Option<(u32, bool)> {
         use vcod_common::pmove::JUMP_HEIGHT;
         let (cx, cy) = self.column(p);
@@ -1548,21 +1551,22 @@ impl NavGraph {
             .map(|&(_, n)| ((self.nodes[n as usize] - p).truncate().length(), n))
             .collect();
         below.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        // Up out of it, from rest: a body that found no walk out stands.
+        // Out of it with a jump, from rest: a body that found no walk out
+        // stands. The node may stand no higher than the feet: a pit's way
+        // out is over its rim to the floor beyond.
         let jumps = |n: u32| {
             let to = self.nodes[n as usize];
-            to.z - p.z > vcod_common::pmove::STEPSIZE
-                && matches!(
-                    as_a_bot(|| walk_with(
-                        world,
-                        p,
-                        Some(Vec3::ZERO),
-                        to.truncate(),
-                        Some(to.z),
-                        Gait::Forward
-                    )),
-                    Walked::Arrived(_, true)
-                )
+            matches!(
+                as_a_bot(|| walk_with(
+                    world,
+                    p,
+                    Some(Vec3::ZERO),
+                    to.truncate(),
+                    Some(to.z),
+                    Gait::Forward
+                )),
+                Walked::Arrived(_, true)
+            )
         };
         tried
             .iter()
