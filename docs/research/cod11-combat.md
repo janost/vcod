@@ -1391,7 +1391,8 @@ muzzle across the view (impacts are whole units, truncated toward zero):
   and back, crouched and sighted strafes, leaning still both ways
   (`leanf` ±0.5) and leaning while strafing (a lean slows the strafe to
   71). VERIFIED (captures). Replayed cmd for cmd on ours, every round
-  lands on retail's unit or the next (`moveshot_ab`). With the bob taken
+  lands on retail's unit or the next (`moveshot_ab`; on retail's unit since the
+  2026-11-14 recaptures, "The street placement" below). With the bob taken
   out of `muzzle_point_in` 21 of UO's rounds and 15 of 1.5's miss by 1.4
   to 2.2 units; with the lean taken out all 18 leaning rounds on each miss
   by 8 to 15. VERIFIED (gate runs on those reverts). So the rule above holds on the move:
@@ -1447,6 +1448,22 @@ With the probe's 8 ms cmds ours rests on retail's -23.874996 to the bit.
 VERIFIED (`moveshot_ab`, both cadences); the mechanism
 INFERRED from the arithmetic. The UO throw's two float steps above (36.125 plus
 two ulps) are that z: -23.874996 + 60. INFERRED.
+
+VERIFIED, the 2026-11-14 recaptures of `walk` on 1.5b and UO (the
+fixtures since), which log the wait from the first spawned snapshot
+(`!wsnap`, `!wcmd`): the spawn and the placement share a frame, the first
+spawned snapshot already at (900, 1930, -37), `setOrigin`'s z plus one. Its
+velocity is what the cmds the server ran at the spawn point before that
+frame left: UO's run reads (0, 0, 0) and falls straight onto (900,
+1929.976, -43.123833); 1.5b's reads (-2, -11, -2) and slides to
+(899.72845, 1928.4014, -43.236317). `moveshot_ab` pairs its own placement
+snapshot with retail's, gives ours retail's velocity there
+(`Server::test_set_client_velocity`), and runs each frame on the wait's
+cmds up to retail's `commandTime`: both rests land on retail's bits, and
+all 58 rounds of each capture and the 14 of the bipod's land on retail's
+unit, so the gate compares impacts exactly. VERIFIED, the gate. INFERRED:
+the 0.18 and the unit's slack came from the cmds and velocity the older
+captures did not log.
 
 VERIFIED, `ClientEndFrame` `0x410f1`: `client+0x2240` is
 `ps->aimSpreadScale / 255.0`. INFERRED: it is computed once a frame, since
@@ -5609,6 +5626,17 @@ colt prints the no-alternate message and sends nothing. vcod:
 written back to the script host (`ScriptRuntime::set_client_slots`).
 `weapsel_ab` replays the capture's cmds verbatim and matches every
 transition.
+
+VERIFIED, the 2026-11-14 recapture (the fixture since, its `!trace` lines
+carrying `commandTime`): every time above lands 3450 ms earlier (the
+putaway at 11350, the colt's raise at 12000, the dry pull at 25700 with
+`weaponTime` 618, the two `weapalt`s at 36300 and 40300 with 682 and 699).
+`weapsel_ab` runs each frame on the cmds up to retail's `commandTime` for
+it, and all 71 transitions land on retail's snapshot with retail's entry
+`weaponTime`, so it matches them exactly. VERIFIED, the gate. The 75 and
+60 ms it allowed before came from running a frame on the cmds sent before
+its snapshot arrived. INFERRED: that rule is a cmd or two off the one the
+server ran.
 
 ---
 

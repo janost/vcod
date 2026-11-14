@@ -1939,7 +1939,7 @@ traced further), kills 1061 then 1083. Inside the per-seed spread.
 
 Left: a drive route that ends short of a goal the hull cannot reach
 still holds the driver `IDLE_TICKS` (5 s) before it gets out. INFERRED
-(the seed 19 trace, read off `Bot::drive`).
+(the seed 19 trace, read off `Bot::drive`). Closed in 14.10.
 
 ## 11. CoD2's `sd`, `ctf` and `hq`
 
@@ -3808,10 +3808,155 @@ per-match difference that names the rule's own count. VERIFIED
 
 ### 14.7 What is left
 
-- UO `hq`'s radio room on mp_arnhem pins bots under the radio (14.4);
-  the collapse sends more there.
+- UO `hq`'s radio room on mp_arnhem pinned bots under the radio (14.4);
+  14.8 traces it to a health item no body reaches and closes it.
 - A collapse is per objective: a sighting near site A pulls A's guards
   only, and in `ctf` the hunters chase a seen carrier but nobody looks
   for an unseen one (the compass shows none, 7.1).
 - Outposts score cover against the one lane point they watch, not the
   whole lane; a guard in the open is burnt off it once seen.
+
+### 14.8 A health item no body reaches, 2026-11-14
+
+Retail has no bots; this section is measured on vcod-server only.
+14.4's mp_arnhem `hq` seed 3 stall, traced per tick (temporary prints of
+the brain's goal and its source, the follower's destination, and box
+traces at the goal; release, UO, 6773f08d8):
+
+- VERIFIED (trace): the stalled bots were not after the radio. Each was
+  hurt, and its goal was `Bot::heal_goal`'s, a health item at (86.2,
+  1875.0, 128.9) in the radio's room. A standing (70) and a crouched
+  (50) box at the item start solid (brushes 11065 and 11066), and the
+  nearest graph node stands 120 off it at (199.6, 1920.0, 128.1).
+- INFERRED (the box traces, cod11-items.md 1: a touch needs the origin
+  within 36 across): the item lies where stock `dropHealth` let it
+  fall, out of every body's reach.
+- VERIFIED (trace): the plan to the item ended at node (97, 1968, 154),
+  97 off it and within `RETARGET`, so the follower read the goal as
+  unmoved, walked the plan out (`Follower::walked_out`) and headed
+  straight at the item. A body that stepped off the node's ledge fell 26,
+  under `ARRIVED_DROP`, so no plan came again: it pressed at (44, 1992,
+  128) against brush 581 while the item lay. Bots 2, 3 and 7 stalled on
+  it, the first from tick 2610 (`STALLS=1`).
+- The fix, a bot rule (`Bot::track_heal`): a hurt bot whose follower
+  walked out the plan to its health item (`Bot::heal_walked`, set by
+  the driver's route) and that comes no `SHORT_GAIN` (16) nearer it in
+  `SHORT_TICKS` (3 s) passes the item over for `SHUN_TICKS` (60 s): the
+  driver leaves it out of `retreat::nearest_pack`
+  (`bots::retreat::tests::a_health_item_no_body_reaches_is_passed_over`).
+  CoD2 and CoD4 bots walk to no health items and play as before.
+
+VERIFIED (measured, release, UO, 14.4's `hq` set, 6773f08d8 then the
+rule): stalled bot-ticks 5289 → 436, mp_arnhem seed 3 4747 → 23 and
+seed 4 139 → 0; the other 14 matches play the same to the bot-tick.
+The 4724 one match drops is more than any other match of the set
+stalls (204). With the three rules of section 14 off (`FAR=none
+CUES=none TRAVEL=none`) the same match stalls 912 → 10 (INFERRED: the
+same item; not traced). The `hq` score
+1483 → 1604 (+7.6 ± 5.1 a match), kills 789 → 803: inside the spread.
+UO `ctf` (14.4's set) and 1.1 `sd` (14.3's) play the same to the
+bot-tick. With 14.9 and 14.10 as well, `hq` stalls 5289 → 26 (mp_berlin
+seeds 1 and 3, 150 and 204, go too), the score 1483 → 1635 (+9.5 ± 12.1),
+kills 789 → 807.
+
+### 14.9 The mp_ship shelf ladder loop, 2026-11-14
+
+bot-navigation.md "A goal far off the graph, the ladders again" left the
+shelf ladder at (5352, -70): a bot up the ladder, along the shelf at 448,
+down to the slot at (5403, -160, 396), off the drop for the stairwell
+floor at (5405, -192, 204), landed on the ledge at 336 to 352, and back
+up the ladder for the same drop. Retail has no bots; measured on
+vcod-server only. Traced per tick (temporary prints of the goal, the
+waypoint, the follower's plan and the rules that reset it), release,
+1.1 `tdm` 10 bots, on 6773f08d8:
+
+- VERIFIED (trace, seed 7 bot 7, t5500 to t5745): the bot's goal, a
+  remembered noise round (4800, -300, 96), moved by more than
+  `RETARGET` while it fell off the slot (tick 5580, from (4829, -340)
+  to (4810, -307)). The follower planned again in the air, so on landing
+  at (5389, -201, 352) the plan under way had no drop edge and the
+  partway rule (`a_drop_that_lands_partway_down_is_planned_again`)
+  never fired; the plan from the ledge went back up the ladder. On the
+  second loop the rule fired and planned again with the edge kept, as
+  it was written to: the plan from the ledge took the ladder and the
+  same drop.
+- VERIFIED (trace, seed 21 bot 5, ticks 200 to 440): with the drop
+  avoided on landing, the goal moved and came back within `PARK_TICKS`
+  and the plan parked before the landing was taken up, the avoided drop
+  in it, at (5345, -149, 352); the bot ran the loop again.
+- INFERRED (the same trace once parked plans were dropped, read off
+  `Follower::plan`): avoided, the drop still came back. A plan round an
+  avoided edge also leaves out every risky drop, none reached the goal,
+  and the fallback search round the dead edges alone took the drop.
+- The fix, in the follower: the drop edge under way when the body
+  leaves the ground is kept through a plan made in the air
+  (`Follower::falling_off`). Landed more than a jump over the drop's
+  foot, within `REACH` of it across and more than a jump under its top
+  (`Follower::landed_partway`), the follower plans again round the
+  drop, which it marks dead for `AVOID_TICKS` (10 s) so the fallback
+  search does not take it either; and avoiding an edge drops a parked
+  plan through it (`Follower::avoid_edge`)
+  (`nav::tests::a_drop_landed_partway_down_is_not_taken_again`). A body
+  standing partway with no fall read keeps the edge, as before. Seed
+  1409 of `ship_stalls`, 2026-10-18b's trap for avoiding this drop,
+  plays the same with the rule.
+
+VERIFIED (measured, release, 1.1; `bot_match` `tdm` `mp_ship` 10 bots
+12 000 ticks seeds 1 to 72, `STALLS=1`; "the others" is this branch
+with this section's landing rule taken out, sections 14.8 and 14.10 and
+the parked-plan drop kept):
+
+| build | stalled bot-ticks | kills | 12 s windows at the shelf ladder and slot |
+|---|---|---|---|
+| 6773f08d8 | 1 384 | 11 403 | 21, in seeds 7, 16, 21, 26, 30, 41, 55 |
+| the others | 987 | 11 280 | 17, in seeds 13, 15, 19, 21, 26, 30, 46 |
+| this branch | 556 | 11 277 | 0 |
+
+- VERIFIED (the table): the shelf loop goes. The landing rule alone
+  takes stalls 987 → 556 (-6.0 ± 2.7 a match, 12 of 72 lower, 6 higher),
+  kills -0.04 ± 1.03; the branch against 6773f08d8 -11.5 ± 4.6 stalled
+  bot-ticks a match, kills -1.75 ± 1.57 (-1.1%, inside the spread).
+- VERIFIED (measured): `ship_stalls` `dm` 10 bots 4000 ticks seeds 1 to
+  127 odd, stalled / falls / deaths / edges given up / those by a body /
+  bot-ticks held up by a body: 0 / 1 / 0 / 364 / 101 / 21 060 on
+  6773f08d8's moves (a build of this branch with the landing rule
+  switched off; a shoot-off `dm` drops no health item and has no
+  vehicle), 0 / 0 / 0 / 359 / 98 / 21 010 on this branch.
+- VERIFIED (measured): 14.3's 1.1 `sd` set on this branch against
+  6773f08d8: stalled 4 → 3, plants 96 → 93, defuses 34 → 36, kills
+  885 → 902 (+0.71 ± 0.57 a match), all inside the spread.
+
+### 14.10 A drive route that ends short of its goal, 2026-11-14
+
+10.8's leftover. Retail has no bots; measured on vcod-server only.
+
+- INFERRED (`Server::drive_waypoint`, `Bot::drive`): a goal no node a
+  hull fits on reaches routes to the fitting node nearest it. Driven
+  there, the route has no node left and the waypoint is `None`, read as
+  idle: the driver sat up to `IDLE_TICKS` (5 s) and only then got out,
+  unless its goal moved first and a new route took the hull on toward
+  the same unreachable spot.
+- VERIFIED (measured, a temporary per-tick print of the driver's seat
+  at a route's end short of its goal, release, UO, `bot_match` `tdm`
+  `mp_cassino` 6 bots 6000 ticks seeds 1 to 24): 15 such spells, 542
+  driver bot-ticks; two sat the whole 100 ticks.
+- The fix: a route whose last node stands more than `PASS` (110) off
+  its goal is short (`DriveRoute::short`); run out, it marks the seat
+  (`SeatView::short`), and the driver gets out at once and walks on
+  (`bots::tests::a_driver_short_of_a_goal_it_cannot_reach_gets_out`). A
+  route that ends on its goal keeps the idle wait.
+
+VERIFIED (measured, release, UO, the same set, the rule off then on):
+the spells' bot-ticks 542 → 38 (17 exits, each its use press's frames);
+stalled bot-ticks 55 → 55, kills 1083 → 1077 (-0.25 ± 0.37 a match).
+`bot_vehicles` `ON_ONLY=1` seeds 1 to 47 odd (24 games): kills 624 → 615
+(-0.38 ± 0.22), boardings 246 → 260 (+0.58 ± 0.31), bot-ticks seated
+113 773 → 114 434, stuck drivers 2 → 1; 19 of the 24 games play the same
+to the bot-tick. The drivers' idle time goes; every outcome count moves
+inside the spread. On the branch, UO `ctf` (14.4's set) stalls 63 → 247
+(+11.5 ± 11.5): all of it mp_cassino seed 2, where one driver's exit
+early on changes the match, and bot 0 paces the steps between the
+floors at 208 and 240 at (150 to 195, 1000 to 1290) after a respawn,
+its goal a chase moving every second (VERIFIED, trace, positions and
+goals only); not traced further.
+

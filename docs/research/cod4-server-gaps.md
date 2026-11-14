@@ -141,9 +141,11 @@ Open, by how much a player notices.
    (Fixed above; `hardpoint_ab` `GAPS` gone).
 3. What the five capture gates (`cod4::capture_ab`, cod4-combat.md 15)
    still tolerate: the thrown back frag's bounce off the shooter's head,
-   in `trDelta`'s third decimal (1.7's skeleton moved it by a few
-   thousandths, x and y away from retail and z toward it: the box trace's
-   or the bounce's arithmetic, open), the second rocket's entity number
+   now a few ulps of `trDelta` (the torso pitch's swing folded in shorts
+   held the head 0.0027 degrees off; fixed, the head bone's matrix is
+   left: the server poses the controllers as CoD1 did, not through 1.7's
+   `AnglesToQuat` and `DObjCalcSkel` control path, cod4-combat.md 15.1),
+   the second rocket's entity number
    and a killcam's archived view (both measured, cause open). Closed: the
    dropped weapon's hit `trDelta`, prone and standing: the bodies' tags
    and hit boxes compose through 1.7's skeleton (cod4-gsc.md 3.2, "The

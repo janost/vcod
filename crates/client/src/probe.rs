@@ -501,6 +501,7 @@ pub fn probe(
     let mut slope_stats = SlopeStats::default();
     let mut slope_capture = SlopeCapture {
         every_state: slope_every_state,
+        wait_log: probe_moveshot.is_some(),
         ..SlopeCapture::default()
     };
     // Every mode that needs a spawned player drives the same stock-menu join;
@@ -1251,10 +1252,11 @@ pub fn probe(
         };
         last_sent = sent.or(last_sent);
         if let Some(c) = sent {
-            // `--probe-vehicle`, `--probe-uo-weapon` and `--probe-ride` log
-            // their cmd times too, which a gate replays where a landing rides
-            // the split.
-            if probe_fall || probe_ride || vehicle.is_some() {
+            // `--probe-vehicle`, `--probe-uo-weapon`, `--probe-ride` and
+            // `--probe-items` log their cmd times too, which a gate replays
+            // where a landing rides the split.
+            if probe_fall || probe_ride || probe_items || vehicle.is_some() {
+                fall.spawned(client.snapshots().newest());
                 fall.record_cmd(
                     c.server_time,
                     fall_walk.map(|_| c.angles[1]),
@@ -1314,6 +1316,9 @@ pub fn probe(
             // playerstate says it is dead.
             if triggers && join.settled(now) {
                 trigger_probe.observe(now, s);
+            }
+            if save_slope {
+                slope_capture.observe_wait(s);
             }
             if slope && join.settled(now) {
                 slope_stats.observe(now, s);
@@ -1510,6 +1515,12 @@ pub fn probe(
             }
         }
 
+        if save_pickup
+            && !join.settled(now)
+            && let Some(s) = client.snapshots().newest()
+        {
+            pickup.before_settle(s);
+        }
         if save_pickup && join.settled(now) && !wrote_pickup {
             let done = match client.snapshots().newest() {
                 Some(s) => {
@@ -7323,9 +7334,71 @@ struct SlopeCapture {
     /// base for the first pair (a teleport's view and `delta_angles` hide
     /// its angles).
     before: std::collections::VecDeque<net::msg::UserCmd>,
+    /// `--probe-moveshot`: from the first spawned snapshot until the capture
+    /// opens, a `!wsnap` line per snapshot and a `!wcmd` per cmd the server
+    /// had not run by the first, so a replay falls from the placement on
+    /// retail's cmds (cod11-combat.md 2.1, "The street placement").
+    wait_log: bool,
+    wait: Vec<String>,
+    wait_seen: Option<u32>,
 }
 
 impl SlopeCapture {
+    fn cmd_line(head: &str, c: &net::msg::UserCmd) -> String {
+        format!(
+            "{head} st={} buttons={} wbuttons={} weapon={} up={} forward={} right={} angles={},{},{}",
+            c.server_time,
+            c.buttons,
+            c.wbuttons,
+            c.weapon,
+            c.up,
+            c.forward,
+            c.right,
+            c.angles[0],
+            c.angles[1],
+            c.angles[2]
+        )
+    }
+
+    /// A snapshot before the capture opens, under [`Self::wait_log`].
+    fn observe_wait(&mut self, snap: &net::snapshot::Snapshot) {
+        let p = wire();
+        let i = |n: &str| snap.ps.field_i32(p, n);
+        if !self.wait_log
+            || self.recording()
+            || self.wait_seen == Some(snap.message_num)
+            || (self.wait_seen.is_none() && i("pm_type") != PM_NORMAL)
+        {
+            return;
+        }
+        if self.wait_seen.is_none() {
+            let ct = i("commandTime");
+            let past: Vec<String> = self
+                .before
+                .iter()
+                .filter(|c| c.server_time > ct)
+                .map(|c| Self::cmd_line("!wcmd", c))
+                .collect();
+            self.wait.extend(past);
+        }
+        self.wait_seen = Some(snap.message_num);
+        let f = |n: &str| snap.ps.field_f32(p, n);
+        self.wait.push(format!(
+            "!wsnap msg={} t={} ct={} origin={},{},{} vel={},{},{} ground={} pm_flags={}",
+            snap.message_num,
+            snap.server_time,
+            i("commandTime"),
+            f("origin[0]"),
+            f("origin[1]"),
+            f("origin[2]"),
+            f("velocity[0]"),
+            f("velocity[1]"),
+            f("velocity[2]"),
+            i("groundEntityNum"),
+            i("pm_flags"),
+        ));
+    }
+
     fn recording(&self) -> bool {
         !self.snaps.is_empty()
     }
@@ -7334,6 +7407,9 @@ impl SlopeCapture {
         if self.recording() {
             self.cmds.push(c);
         } else {
+            if self.wait_seen.is_some() {
+                self.wait.push(Self::cmd_line("!wcmd", &c));
+            }
             if self.before.len() == 8 {
                 self.before.pop_front();
             }
@@ -7682,6 +7758,16 @@ fn write_slope_fixture(
     if protocol.is_uo() {
         let cs7 = configstrings.get(7).map(String::as_str).unwrap_or("");
         out.push_str(&format!("# cs7 {cs7}\n"));
+    }
+    if !capture.wait.is_empty() {
+        out.push_str(
+            "# !wsnap and !wcmd: the wait from the first spawned snapshot until the capture opens,\n\
+             # each cmd the server had not run by that snapshot, in the order the probe saw them.\n",
+        );
+        for l in &capture.wait {
+            out.push_str(l);
+            out.push('\n');
+        }
     }
     let mut next_snap = capture.snaps.iter().peekable();
     for (i, c) in capture.cmds.iter().enumerate() {
@@ -10163,6 +10249,11 @@ struct PickupProbe {
     notes: Vec<String>,
     /// Every phase entered, in order.
     visited: Vec<PickupPhase>,
+    /// The last cmds sent before the first spawned snapshot, of which those
+    /// past its `commandTime` ran after the spawn and go in the log.
+    before_spawn: std::collections::VecDeque<(net::msg::UserCmd, [i32; 3])>,
+    /// The first spawned snapshot's message, once seen.
+    spawned: Option<u32>,
     /// What each phase took: an `a <index>` or a pickup event on the
     /// playerstate's ring.
     took: Vec<(PickupPhase, String)>,
@@ -10227,11 +10318,55 @@ impl PickupProbe {
     }
 
     fn record(&mut self, now: Instant, sent: net::msg::UserCmd, asked: [i32; 3]) {
-        if matches!(self.phase, PickupPhase::Wait | PickupPhase::Done) {
+        match self.phase {
+            PickupPhase::Done => {}
+            PickupPhase::Wait if self.spawned.is_none() => {
+                if self.before_spawn.len() == 8 {
+                    self.before_spawn.pop_front();
+                }
+                self.before_spawn.push_back((sent, asked));
+            }
+            _ => {
+                let ms = self.ms(now);
+                self.cmds.push((self.phase, ms, sent, asked));
+            }
+        }
+    }
+
+    /// A snapshot before the settle: from the first spawned one on, one
+    /// `!spawn` line each, so the spawn teleport's fall replays on the cmds
+    /// that ran it (cod11-items.md 13.5).
+    fn before_settle(&mut self, snap: &net::snapshot::Snapshot) {
+        let p = wire();
+        let f = |n: &str| snap.ps.field_i32(p, n);
+        if self.spawned.is_none() {
+            if f("pm_type") != PM_NORMAL {
+                return;
+            }
+            let ct = f("commandTime");
+            let past: Vec<_> = self
+                .before_spawn
+                .drain(..)
+                .filter(|(c, _)| c.server_time > ct)
+                .collect();
+            for (c, v) in past {
+                self.cmds.push((PickupPhase::Wait, 0, c, v));
+            }
+        } else if self.spawned == Some(snap.message_num) {
             return;
         }
-        let ms = self.ms(now);
-        self.cmds.push((self.phase, ms, sent, asked));
+        self.spawned = Some(snap.message_num);
+        self.lines.push((
+            PickupPhase::Wait,
+            0,
+            format!(
+                "!spawn t={} ct={} pm_type={} origin={}",
+                snap.server_time,
+                f("commandTime"),
+                f("pm_type"),
+                vec_str(snap.ps.origin(p)),
+            ),
+        ));
     }
 
     fn enter(&mut self, now: Instant, next: PickupPhase) {
@@ -10558,6 +10693,8 @@ fn write_pickup_fixture(
         PICKUP_LATE_TAP.as_millis()
     ));
     out.push_str("# !cmd view= is the absolute view asked for (wire shorts, before delta_angles); angles= went on the wire.\n");
+    out.push_str("# [phase wait] holds every cmd from the first spawned snapshot's commandTime on and a !spawn\n");
+    out.push_str("# line per snapshot until the settle: t serverTime, ct commandTime.\n");
     out.push_str("# !trace clip and ammo are the non-zero entries as index:value; hint is serverCursorHint:Val:String.\n");
     out.push_str("# !item is every eType 3 entity within 256 units; pos and apos are type,time,base xyz,delta xyz.\n");
     out.push_str("# !server is every server command, tokens joined, control bytes as \\xNN.\n");
@@ -11717,7 +11854,10 @@ const KILLCAM_TAIL: Duration = Duration::from_secs(3);
 /// the server received them. `q=` is the netchan sequence of each cmd's
 /// message, the first absolute and the steps after it, which a retail
 /// server under `showpackets 1` prints as it reads each packet
-/// (docs/dev/retail.md, "Receive order").
+/// (docs/dev/retail.md, "Receive order"). A `SPAWNED` line gives the first
+/// `PM_NORMAL` snapshot's time, `commandTime`, origin, view and velocity:
+/// where the spawn pick (or a placement in its frame) put the player, and
+/// what the cmds run there left him.
 /// `client-probes/probe_fall` drops the player from a height. Writes no
 /// fixture.
 #[derive(Default)]
@@ -11732,11 +11872,42 @@ struct FallProbe {
     last_input: Option<(u8, u8, i8)>,
     last_snap: Option<i32>,
     last_msg: Option<u32>,
+    spawned: bool,
 }
 
 const FALL_CMDS_PER_LINE: usize = 60;
 
 impl FallProbe {
+    /// One `SPAWNED` line at the first `PM_NORMAL` snapshot, so a gate can
+    /// pin the spawn point the pick took and replay the spawn's fall.
+    fn spawned(&mut self, snap: Option<&net::snapshot::Snapshot>) {
+        let Some(s) = snap.filter(|_| !self.spawned) else {
+            return;
+        };
+        let p = wire();
+        if s.ps.field_i32(p, "pm_type") != PM_NORMAL {
+            return;
+        }
+        self.spawned = true;
+        let o = s.ps.origin(p);
+        let v = s.ps.viewangles(p);
+        let vel = ["velocity[0]", "velocity[1]", "velocity[2]"].map(|n| s.ps.field_f32(p, n));
+        println!(
+            "SPAWNED t={} ct={} origin={},{},{} view={},{},{} vel={},{},{}",
+            s.server_time,
+            s.ps.field_i32(p, "commandTime"),
+            o[0],
+            o[1],
+            o[2],
+            v[0],
+            v[1],
+            v[2],
+            vel[0],
+            vel[1],
+            vel[2]
+        );
+    }
+
     fn record_cmd(
         &mut self,
         server_time: i32,
@@ -12287,9 +12458,10 @@ impl LadderProbe {
                     .join(",")
             };
             let rest = format!(
-                "serverTime={} weapon={} weaponstate={} weaponTime={} weaponDelay={} weapAnim={} \
-weapons={} slots={},{} clip={} ammo={} eventSequence={} events={} eventParms={}",
+                "serverTime={} commandTime={} weapon={} weaponstate={} weaponTime={} weaponDelay={} \
+weapAnim={} weapons={} slots={},{} clip={} ammo={} eventSequence={} events={} eventParms={}",
                 snap.server_time,
+                i("commandTime"),
                 i("weapon"),
                 i("weaponstate"),
                 i("weaponTime"),
@@ -12473,7 +12645,10 @@ fn write_weapsel_fixture(
         "# at 38 s, all from its settled join (WEAPSEL_FIRE, WEAPSEL_COMMANDS in probe.rs).\n",
     );
     out.push_str("# !cmd is a usercmd as it went on the wire; !press a command and what PlayInput made of it.\n");
-    out.push_str("# !trace clip and ammo are the non-zero entries as index:value.\n");
+    out.push_str(
+        "# !trace clip and ammo are the non-zero entries as index:value; commandTime is the last\n",
+    );
+    out.push_str("# cmd the server ran before the snapshot.\n");
     out.push_str("# !server is every server command, tokens joined, control bytes as \\xNN.\n");
     for r in &lp.rows {
         out.push_str(r);
