@@ -847,10 +847,11 @@ is the disassembly's:
   (`g_entities` 0x841f260 plus 628 times the handle less one, the
   handle's base at 0x808af9e): its `r.currentOrigin` (+0x13c) less the
   moved place (vehicle +0xc0), each difference stored, through
-  `vectoyaw` (0x8191c22) into the wanted yaw. It skips the goal and
-  target yaws' choice (back at 0x809e849), not what follows: the goal
-  yaw's slow-down, its overshoot and `goal_yaw` still run when one is
-  set. VERIFIED (the disassembly).
+  `vectoyaw` (0x8191c22) into the wanted yaw. VERIFIED (the
+  disassembly). It skips the goal and target yaws' choice (back at
+  0x809e849), not what follows: the goal yaw's slow-down, its overshoot
+  and `goal_yaw` still run when one is set. VERIFIED (the yaw run's
+  replay, whose look-at flight holds a goal yaw and notifies it).
 - The change's z through the velocity: the whole chain is kept at the
   x87's 64 bits, and near rest `v0.z` and the change all but cancel, so
   an `f64` there parts from retail by an ulp of the velocity's z: three
