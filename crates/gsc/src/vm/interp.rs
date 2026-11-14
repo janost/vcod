@@ -1474,9 +1474,15 @@ impl Vm {
                     // (`thread_id` is `None` there); the registration is
                     // simply dropped.
                     if let Some(id) = thread_id
-                        && let Some(idx) = self.threads.iter().position(|t| t.id == id)
+                        && let Some(idx) = self.thread_index(id)
                     {
                         self.threads[idx].endons.push((target, event, depth));
+                        self.notify_index
+                            .endons
+                            .entry((target, event))
+                            .or_default()
+                            .push(id);
+                        self.notify_index_pushed();
                     }
                 }
             }

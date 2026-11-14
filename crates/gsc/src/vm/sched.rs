@@ -44,13 +44,101 @@ pub(crate) enum ThreadState {
     },
 }
 
+impl ThreadState {
+    /// A parked thread's due time, and whether it parked at
+    /// `waittillframeend`.
+    fn due(&self) -> Option<(i32, bool)> {
+        match *self {
+            ThreadState::WaitingUntil(d) => Some((d, false)),
+            ThreadState::FrameEnd(d) => Some((d, true)),
+            _ => None,
+        }
+    }
+}
+
 /// A thread's place among those due at one clock reading: retail's list
 /// for that time takes a `wait` or a notify's wake at its head and a
 /// `waittillframeend` at its tail (cod2-gsc-diff.md 3.2).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Turn {
+pub(crate) enum Turn {
     Newest(Reverse<u64>),
     FrameEnd(u64),
+}
+
+/// [`Vm::thread_index`] over `threads`.
+fn thread_index_in(threads: &[Thread], id: ThreadId) -> Option<usize> {
+    threads.binary_search_by_key(&id, |t| t.id).ok()
+}
+
+/// The threads that registered an endon, or parked a `waittill`, on each
+/// (target, event): every one that has, and some that since stopped, which
+/// a notify checks against the thread before it acts. A notify reads its
+/// own entry instead of walking every thread; the walk was most of CoD4's
+/// script time (cod4-server-frame.md 9, "The spawn wave").
+#[derive(Default)]
+pub(crate) struct NotifyIndex {
+    pub endons: crate::fxhash::FxHashMap<(Target, Atom), Vec<ThreadId>>,
+    pub waits: crate::fxhash::FxHashMap<(Target, Atom), Vec<ThreadId>>,
+    /// Entries pushed since the index was last rebuilt, and the count
+    /// that rebuilds it.
+    pushed: usize,
+    rebuild_at: usize,
+}
+
+impl NotifyIndex {
+    /// The entries of every thread's endons and `waittill`, which is all a
+    /// notify could act on.
+    fn rebuild(&mut self, threads: &[Thread]) {
+        self.endons.clear();
+        self.waits.clear();
+        self.pushed = 0;
+        for t in threads {
+            for &(target, event, _) in &t.endons {
+                self.endons.entry((target, event)).or_default().push(t.id);
+                self.pushed += 1;
+            }
+            if let ThreadState::WaitingNotify { target, event, .. } = t.state {
+                self.waits.entry((target, event)).or_default().push(t.id);
+                self.pushed += 1;
+            }
+        }
+        self.rebuild_at = 2 * self.pushed + 4096;
+    }
+}
+
+/// The keys `step_runnable` picks by, one pushed each time a thread turns
+/// runnable or parks on the clock: a runnable thread's queue stamp, a
+/// parked one's due time and turn. A key whose thread has since moved on is
+/// dropped when it comes up. The pick was a walk of every thread each step,
+/// most of CoD4's script time once the notifies were indexed
+/// (cod4-server-frame.md 9, "The spawn wave").
+#[derive(Default)]
+pub(crate) struct ReadyIndex {
+    /// `Runnable` threads, the latest queued first.
+    runnable: std::collections::BTreeSet<(Reverse<u64>, ThreadId)>,
+    /// `WaitingUntil` and `FrameEnd` threads by due time, then turn.
+    timed: std::collections::BTreeSet<(i32, Turn, ThreadId)>,
+}
+
+impl ReadyIndex {
+    fn rebuild(&mut self, threads: &[Thread]) {
+        self.runnable.clear();
+        self.timed.clear();
+        for t in threads {
+            match t.state {
+                ThreadState::Runnable => {
+                    self.runnable.insert((Reverse(t.seq), t.id));
+                }
+                ThreadState::WaitingUntil(d) => {
+                    self.timed.insert((d, Turn::Newest(Reverse(t.seq)), t.id));
+                }
+                ThreadState::FrameEnd(d) => {
+                    self.timed.insert((d, Turn::FrameEnd(t.seq), t.id));
+                }
+                ThreadState::WaitingNotify { .. } => {}
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -144,6 +232,8 @@ impl Vm {
         let id = ThreadId(self.next_thread);
         self.next_thread += 1;
         let seq = self.queue_seq();
+        // `thread_index` searches on it.
+        debug_assert!(self.threads.last().is_none_or(|t| t.id < id));
         self.threads.push(Thread {
             id,
             frames: vec![frame],
@@ -151,6 +241,7 @@ impl Vm {
             endons: Vec::new(),
             seq,
         });
+        self.queue_ready(id);
         self.thread_returned = None;
         if self.spawn_depth < Self::MAX_SPAWN_DEPTH {
             self.spawn_depth += 1;
@@ -221,21 +312,31 @@ impl Vm {
     ) {
         let target = target.into();
         let event = self.interner.fold_atom(event);
-        let mut i = 0;
-        while i < self.threads.len() {
+        let key = (target, event);
+        // The threads with an endon on it, in start order; each checked
+        // against its own endons, as a walk of every thread would.
+        let mut cands = self.notify_index.endons.remove(&key).unwrap_or_default();
+        cands.sort_unstable();
+        cands.dedup();
+        let mut keep = Vec::new();
+        for id in cands {
+            let Some(i) = self.thread_index(id) else {
+                continue;
+            };
             // The outermost call whose endon this is.
-            let depth = self.threads[i]
+            let Some(d) = self.threads[i]
                 .endons
                 .iter()
                 .filter(|&&(t, e, _)| t == target && e == event)
                 .map(|e| e.2)
-                .min();
+                .min()
+            else {
+                continue;
+            };
             let parked = !self.threads[i].frames.is_empty();
-            if let Some(d) = depth.filter(|_| Some(self.threads[i].id) != from)
-                && self.endons_end_with_call
-                && d > 1
-                && parked
-            {
+            if Some(id) == from {
+                keep.push(id);
+            } else if self.endons_end_with_call && d > 1 && parked {
                 // CoD4: only that call ends; its caller reads `undefined`
                 // from it and runs on (`probe_endon_return`).
                 let seq = self.next_seq;
@@ -248,15 +349,16 @@ impl Vm {
                 }
                 t.state = ThreadState::Runnable;
                 t.seq = seq;
-                i += 1;
-            } else if depth.is_some() && Some(self.threads[i].id) != from {
+                self.queue_ready(id);
+            } else {
                 let t = self.threads.remove(i);
                 if self.kill_mid_step {
                     self.killed.push(t.id);
                 }
-            } else {
-                i += 1;
             }
+        }
+        if !keep.is_empty() {
+            self.notify_index.endons.insert(key, keep);
         }
 
         // A waiter binds the arguments into its locals.
@@ -269,22 +371,40 @@ impl Vm {
         // The waiters this notify wakes, picked before they are ordered:
         // waking one changes no other's match, and the stable sort keeps
         // their order as it would among all the threads.
+        let mut cands = self.notify_index.waits.remove(&key).unwrap_or_default();
+        cands.sort_unstable_by(|a, b| b.cmp(a));
+        cands.dedup();
+        let mut keep = Vec::new();
+        let mut order: Vec<usize> = Vec::new();
         let interner = &self.interner;
-        let mut order: Vec<usize> = (0..self.threads.len())
-            .rev()
-            .filter(|&i| {
-                matches!(
-                    &self.threads[i].state,
-                    ThreadState::WaitingNotify { target: wt, event: we, matches, .. }
-                        if *wt == target && *we == event
-                            && matches.iter().enumerate().all(|(k, m)| {
-                                args.get(k).is_some_and(|a| {
-                                    super::interp::values_equal(interner, *m, *a).unwrap_or(false)
-                                })
-                            })
-                )
-            })
-            .collect();
+        for id in cands {
+            let Some(i) = thread_index_in(&self.threads, id) else {
+                continue;
+            };
+            let ThreadState::WaitingNotify {
+                target: wt,
+                event: we,
+                matches,
+                ..
+            } = &self.threads[i].state
+            else {
+                continue;
+            };
+            if *wt != target || *we != event {
+                continue;
+            }
+            if matches.iter().enumerate().all(|(k, m)| {
+                args.get(k)
+                    .is_some_and(|a| super::interp::values_equal(interner, *m, *a).unwrap_or(false))
+            }) {
+                order.push(i);
+            } else {
+                keep.push(id);
+            }
+        }
+        if !keep.is_empty() {
+            self.notify_index.waits.insert(key, keep);
+        }
         if self.newest_waiter_first {
             order.sort_by_key(|&i| match self.threads[i].state {
                 ThreadState::WaitingNotify { parked, .. } => parked,
@@ -308,7 +428,108 @@ impl Vm {
                 frame.locals[slot as usize] =
                     args.get(arg_idx).copied().unwrap_or(Value::Undefined);
             }
+            let id = t.id;
+            self.queue_ready(id);
         }
+    }
+
+    /// Pushes thread `id`'s key as its state and stamp now give it
+    /// ([`ReadyIndex`]), rebuilding the index once the keys outnumber the
+    /// threads well past what a frame's churn leaves behind.
+    fn queue_ready(&mut self, id: ThreadId) {
+        let Some(i) = self.thread_index(id) else {
+            return;
+        };
+        let t = &self.threads[i];
+        let ready = &mut self.ready;
+        match t.state {
+            ThreadState::Runnable => {
+                ready.runnable.insert((Reverse(t.seq), id));
+            }
+            ThreadState::WaitingUntil(d) => {
+                ready.timed.insert((d, Turn::Newest(Reverse(t.seq)), id));
+            }
+            ThreadState::FrameEnd(d) => {
+                ready.timed.insert((d, Turn::FrameEnd(t.seq), id));
+            }
+            ThreadState::WaitingNotify { .. } => {}
+        }
+        if ready.runnable.len() + ready.timed.len() > 2 * self.threads.len() + 4096 {
+            ready.rebuild(&self.threads);
+        }
+    }
+
+    /// The thread `step_runnable` picks with the clock at `now` and the
+    /// frame's `level.time` at `level`, its key taken out of the index: the
+    /// earliest due, among those due together the latest queued, a
+    /// `waittillframeend` behind them; a runnable thread counts as due now.
+    /// A thread is due on the clock or between it and `level`; one due on
+    /// `level` itself waits a frame, and one behind the clock waits for it
+    /// to come round again.
+    fn next_ready(&mut self, now: i32, level: i32) -> Option<(i32, Turn, ThreadId)> {
+        let runnable = loop {
+            let Some(&(Reverse(seq), id)) = self.ready.runnable.first() else {
+                break None;
+            };
+            let live = self.thread_index(id).is_some_and(|i| {
+                let t = &self.threads[i];
+                matches!(t.state, ThreadState::Runnable) && t.seq == seq
+            });
+            if live {
+                break Some((now, Turn::Newest(Reverse(seq)), id));
+            }
+            self.ready.runnable.pop_first();
+        };
+        let from = (now, Turn::Newest(Reverse(u64::MAX)), ThreadId(0));
+        let timed = loop {
+            let Some(&key) = self.ready.timed.range(from..).next() else {
+                break None;
+            };
+            let (d, turn, id) = key;
+            let live = self.thread_index(id).is_some_and(|i| {
+                let t = &self.threads[i];
+                match (t.state.due(), turn) {
+                    (Some((due, false)), Turn::Newest(Reverse(seq))) => due == d && t.seq == seq,
+                    (Some((due, true)), Turn::FrameEnd(seq)) => due == d && t.seq == seq,
+                    _ => false,
+                }
+            });
+            if live {
+                break (d == now || d < level).then_some(key);
+            }
+            self.ready.timed.remove(&key);
+        };
+        let next = match (runnable, timed) {
+            (Some(r), Some(t)) => Some(r.min(t)),
+            (r, t) => r.or(t),
+        }?;
+        match next.1 {
+            Turn::Newest(Reverse(seq)) if Some(next) == runnable => {
+                self.ready.runnable.remove(&(Reverse(seq), next.2));
+            }
+            _ => {
+                self.ready.timed.remove(&next);
+            }
+        }
+        Some(next)
+    }
+
+    /// Counts an entry pushed onto `notify_index`, rebuilding it once the
+    /// entries pushed reach twice the live ones of the last rebuild: those
+    /// no notify read back (a dead thread's, a freed entity's) would
+    /// otherwise pile up.
+    pub(crate) fn notify_index_pushed(&mut self) {
+        let index = &mut self.notify_index;
+        index.pushed += 1;
+        if index.pushed > index.rebuild_at.max(4096) {
+            index.rebuild(&self.threads);
+        }
+    }
+
+    /// The index of the thread `id` in `threads`, which holds them in start
+    /// order and so in id order.
+    pub(crate) fn thread_index(&self, id: ThreadId) -> Option<usize> {
+        thread_index_in(&self.threads, id)
     }
 
     /// Steps the thread `id` -- assumed `Runnable`, a no-op otherwise or if
@@ -343,7 +564,7 @@ impl Vm {
         id: ThreadId,
         errors: &mut Vec<ScriptError>,
     ) -> Option<Value> {
-        let idx = self.threads.iter().position(|t| t.id == id)?;
+        let idx = self.thread_index(id)?;
         if !matches!(self.threads[idx].state, ThreadState::Runnable) {
             return None;
         }
@@ -359,7 +580,7 @@ impl Vm {
 
         match result {
             Ok(Step::Returned(v)) => {
-                if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
+                if let Some(idx) = self.thread_index(id) {
                     self.threads.remove(idx);
                 }
                 returned = Some(v);
@@ -382,19 +603,21 @@ impl Vm {
                 };
                 let deadline = (self.now_ms + delay_ms) & CLOCK_MASK;
                 let seq = self.queue_seq();
-                if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
+                if let Some(idx) = self.thread_index(id) {
                     self.threads[idx].frames = frames;
                     self.threads[idx].state = ThreadState::WaitingUntil(deadline);
                     self.threads[idx].seq = seq;
+                    self.queue_ready(id);
                 }
             }
             Ok(Step::Suspend(Suspend::FrameEnd)) => {
                 let at = self.now_ms;
                 let seq = self.queue_seq();
-                if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
+                if let Some(idx) = self.thread_index(id) {
                     self.threads[idx].frames = frames;
                     self.threads[idx].state = ThreadState::FrameEnd(at);
                     self.threads[idx].seq = seq;
+                    self.queue_ready(id);
                 }
             }
             Ok(Step::Suspend(Suspend::WaitTill {
@@ -403,7 +626,13 @@ impl Vm {
                 binds,
                 matches,
             })) => {
-                if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
+                if let Some(idx) = self.thread_index(id) {
+                    self.notify_index
+                        .waits
+                        .entry((target, event))
+                        .or_default()
+                        .push(id);
+                    self.notify_index_pushed();
                     self.threads[idx].frames = frames;
                     self.threads[idx].state = ThreadState::WaitingNotify {
                         target,
@@ -432,14 +661,14 @@ impl Vm {
                 };
                 self.record_abort(&e);
                 errors.push(e);
-                if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
+                if let Some(idx) = self.thread_index(id) {
                     self.threads.remove(idx);
                 }
             }
             Err(e) => {
                 self.record_abort(&e);
                 errors.push(e);
-                if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
+                if let Some(idx) = self.thread_index(id) {
                     self.threads.remove(idx);
                 }
             }
@@ -532,28 +761,12 @@ impl Vm {
         let mut steps = 0;
         while steps < Self::MAX_THREADS_PER_FRAME {
             let now = self.now_ms;
-            let next = self
-                .threads
-                .iter()
-                .filter_map(|t| match t.state {
-                    ThreadState::Runnable => Some((now, Turn::Newest(Reverse(t.seq)), t.id)),
-                    // Due on the clock or between it and `level.time`; one
-                    // due on `level.time` itself waits a frame, and one
-                    // behind the clock waits for it to come round again.
-                    ThreadState::WaitingUntil(d) if d == now || (now < d && d < level) => {
-                        Some((d, Turn::Newest(Reverse(t.seq)), t.id))
-                    }
-                    ThreadState::FrameEnd(d) if d == now || (now < d && d < level) => {
-                        Some((d, Turn::FrameEnd(t.seq), t.id))
-                    }
-                    _ => None,
-                })
-                .min();
+            let next = self.next_ready(now, level);
             let Some((at, _, tid)) = next else {
                 return errors;
             };
             self.now_ms = at;
-            let Some(idx) = self.threads.iter().position(|t| t.id == tid) else {
+            let Some(idx) = self.thread_index(tid) else {
                 continue;
             };
             // Freeing an entity or a hudelem ends every thread whose `self`

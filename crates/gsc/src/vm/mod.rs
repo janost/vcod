@@ -587,6 +587,11 @@ pub struct Vm {
     /// Returned frames' locals and operand stacks, emptied, for the next
     /// call to reuse (`interp::Vm::recycle_frame`).
     frame_pool: Vec<(Vec<Value>, Vec<Value>)>,
+    /// Who an endon or a `waittill` registered on each (target, event)
+    /// ([`sched::NotifyIndex`]).
+    notify_index: sched::NotifyIndex,
+    /// The threads the scheduler may pick next ([`sched::ReadyIndex`]).
+    ready: sched::ReadyIndex,
 }
 
 impl Default for Vm {
@@ -640,6 +645,8 @@ impl Vm {
             kill_mid_step: false,
             killed: Vec::new(),
             frame_pool: Vec::new(),
+            notify_index: Default::default(),
+            ready: Default::default(),
         }
     }
 
@@ -701,8 +708,8 @@ impl Vm {
         if !self.endons_end_with_call {
             return;
         }
-        if let Some(t) = thread.and_then(|id| self.threads.iter_mut().find(|t| t.id == id)) {
-            t.endons.retain(|e| e.2 <= depth);
+        if let Some(i) = thread.and_then(|id| self.thread_index(id)) {
+            self.threads[i].endons.retain(|e| e.2 <= depth);
         }
     }
 
