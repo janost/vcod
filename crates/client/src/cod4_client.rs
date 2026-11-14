@@ -1533,11 +1533,40 @@ impl Cod4Client {
         [p, y]
     }
 
+    /// The map's dynamic entities, each its def's model at its pose, first
+    /// in the frame's instances: their indices hold while bodies and
+    /// entities come and go.
+    fn draw_dynents(
+        &mut self,
+        cx: &mut Cod2Frame,
+        scene: &Scene,
+        out: &mut Vec<DynamicModelInstance>,
+    ) {
+        let Some(w) = self.session.world().cloned().filter(|_| !no_dynents()) else {
+            return;
+        };
+        for &(i, origin, rot) in &scene.dynents {
+            let name = &w.dynents[i as usize].model;
+            let model = self.models.get(name).cloned();
+            let Some(handle) = self.upload(cx, name, || model) else {
+                continue;
+            };
+            out.push(DynamicModelInstance {
+                model: handle,
+                transform: Mat4::from_rotation_translation(rot, origin),
+                bones: None,
+                light_origin: origin + Vec3::Z * 4.0,
+                shader_time: None,
+            });
+        }
+    }
+
     fn draw(&mut self, cx: &mut Cod2Frame, scene: &Scene) {
         let mut instances = Vec::new();
         let mut submodels = Vec::new();
         #[cfg(test)]
         self.drawn_names.borrow_mut().clear();
+        self.draw_dynents(cx, scene, &mut instances);
         let bodies = crate::frame_prof::span(crate::frame_prof::Stage::Bodies);
         let posed = self.pose_bodies(cx, scene, &mut instances);
         drop(bodies);
@@ -1689,23 +1718,6 @@ impl Cod4Client {
                 light_origin: light_origin(d),
                 shader_time: None,
             });
-        }
-        // The map's dynamic entities, each its def's model at its pose.
-        if let Some(w) = self.session.world().cloned().filter(|_| !no_dynents()) {
-            for &(i, origin, rot) in &scene.dynents {
-                let name = &w.dynents[i as usize].model;
-                let model = self.models.get(name).cloned();
-                let Some(handle) = self.upload(cx, name, || model) else {
-                    continue;
-                };
-                instances.push(DynamicModelInstance {
-                    model: handle,
-                    transform: Mat4::from_rotation_translation(rot, origin),
-                    bones: None,
-                    light_origin: origin + Vec3::Z * 4.0,
-                    shader_time: None,
-                });
-            }
         }
         self.vehicles.end();
         self.drawn = (instances.len(), submodels.len(), posed.len());

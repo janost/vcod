@@ -74,6 +74,9 @@ The game is the detected install's (or `--game`'s).
   slow ticks ([server-tick.md](server-tick.md#tracing-a-tick)).
 - `VCOD_BOT_THREADS=<n>`: the threads the bots' pass plans on, `1` serial
   ([server-tick.md](server-tick.md#the-bots-threads)).
+- `VCOD_NO_DYNENTS=1`: a CoD4 map's dynamic entities are not drawn, for a
+  frame time A/B (cod4-client-perf.md 41). The F3 overlay's `cod4
+  dynents` line counts them, the drawn ones and the woken ones.
 - `VCOD_NETSIM="ping=100,jitter=20,loss=2"` gives the client a bad link
   without root. `vcod --net-probe ADDR --probe-clock` measures the clock on
   one.
