@@ -453,7 +453,7 @@ fn a_players_anim_locals_match_retails_word_for_word() {
             }
         }
     }
-    assert!(calcs > 0);
+    assert_eq!((calcs, words), (280, 17392));
     assert!(
         off.is_empty(),
         "{calcs} calcs, {} of {words} words off: {:#?}",
