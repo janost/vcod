@@ -2172,10 +2172,12 @@ VERIFIED (the registrations at 0x48c1e0 and 0x490e00, the floats at
 
 - `DynEntCl_EntityImpactEvent` (0x48e0f0) takes a round's start, end
   and its weapon's `damage` (`WeaponDef` +0x34c, 0x455b9e) from the
-  client-side round's walk (0x455bbe, 0x456183) and the server's bullet
-  events (0x4587f9, 0x458db2); the melee swipe (0x48e3a0, from
-  `CG_EntityEvent` 0x4367a9) tries five rays through it. VERIFIED (the
-  calls).
+  client-side round's walk (0x455bbe, 0x456183), from 0x4587f9 (in
+  0x458790, under `sv_clientSideBullets` 0, 0x4587de) and from 0x458db2
+  (in 0x458cf0); the melee swipe (0x48e3a0, from `CG_EntityEvent`
+  0x4367a9) tries five rays through it. VERIFIED (the calls). That
+  0x458790 and 0x458cf0 play the server's bullet hit events is INFERRED
+  (the dvar test).
 - It traces the dynents alone (0x48d6c0 under 0x802013): a live one
   whose cube's sphere the ray meets (0x4f6e70) is traced in its frame
   (0x490020) through its model's collision surfaces (0x58c5b0, nothing
