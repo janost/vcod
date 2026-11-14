@@ -73,6 +73,9 @@ pub(crate) enum Suspend {
 /// longer one would overrun the 24-bit script clock.
 const MAX_WAIT_SECONDS: f32 = 16777.0;
 
+/// The most returned frames' buffers [`Vm::recycle_frame`] keeps.
+const FRAME_POOL_MAX: usize = 64;
+
 /// Converts an Int or Float value to `f32`; any other value has no numeric
 /// reading.
 fn to_f32(v: Value) -> Option<f32> {
@@ -439,10 +442,24 @@ impl Vm {
         recv: Option<Target>,
         args: Vec<Value>,
     ) -> Frame {
-        for a in &args {
+        self.make_frame_from(func, func_rc, recv, &args)
+    }
+
+    /// [`Self::make_frame`] off a slice: a call's arguments read in place
+    /// on the caller's stack. The locals and the operand stack reuse a
+    /// returned frame's buffers ([`Vm::recycle_frame`]).
+    pub(crate) fn make_frame_from(
+        &mut self,
+        func: FuncRef,
+        func_rc: Rc<Function>,
+        recv: Option<Target>,
+        args: &[Value],
+    ) -> Frame {
+        for a in args {
             self.heap.share(*a);
         }
-        let mut locals = vec![Value::Undefined; func_rc.locals as usize];
+        let (mut locals, stack) = self.frame_pool.pop().unwrap_or_default();
+        locals.resize(func_rc.locals as usize, Value::Undefined);
         let take = args.len().min(func_rc.params as usize);
         locals[..take].copy_from_slice(&args[..take]);
         Frame {
@@ -450,11 +467,23 @@ impl Vm {
             func_rc,
             ip: 0,
             locals,
-            stack: Vec::new(),
+            stack,
             recv,
             op_base: 0,
             #[cfg(test)]
             stack_effect_check: None,
+        }
+    }
+
+    /// A returned frame's buffers, emptied, for the next call's
+    /// [`Self::make_frame_from`]. The pool keeps as many as the deepest
+    /// call stack it has seen unwind, up to [`FRAME_POOL_MAX`].
+    fn recycle_frame(&mut self, f: Frame) {
+        if self.frame_pool.len() < FRAME_POOL_MAX {
+            let (mut locals, mut stack) = (f.locals, f.stack);
+            locals.clear();
+            stack.clear();
+            self.frame_pool.push((locals, stack));
         }
     }
 
@@ -535,6 +564,11 @@ impl Vm {
         // routed anywhere: `Op::CallBuiltin` is the only drain point, so a
         // spawn from `get_field`/`set_field` has no defined moment to run at.
         let mut field_spawns = Vec::new();
+        // The top frame's function, taken again only when the frame stack's
+        // depth moves: one op pushes or pops at most one frame, so the top
+        // frame changes only with the depth.
+        let mut depth = frames.len();
+        let mut func = frames[depth - 1].func_rc.clone();
         loop {
             // CoD2: ended by a nested spawn's notify (`Vm::set_kill_mid_step`);
             // the thread's entry is gone, so its frames are dropped.
@@ -545,13 +579,17 @@ impl Vm {
                 return Ok(Step::Running);
             }
             *remaining -= 1;
-            let top = frames.len() - 1;
-            frames[top].op_base = frames[top].stack.len() as u32;
-            let func = frames[top].func_rc.clone();
-            let ip = frames[top].ip as usize;
-            let op = func.code[ip].clone();
+            if frames.len() != depth {
+                depth = frames.len();
+                func = frames[depth - 1].func_rc.clone();
+            }
+            let top = depth - 1;
+            let fr = &mut frames[top];
+            fr.op_base = fr.stack.len() as u32;
+            let ip = fr.ip as usize;
+            fr.ip += 1;
+            let op = &func.code[ip];
             let line = func.lines[ip];
-            frames[top].ip += 1;
 
             let err = |kind: ErrorKind| ScriptError {
                 file: func.file,
@@ -574,8 +612,7 @@ impl Vm {
                 };
             }
 
-            // Test-only: captured before `op` is consumed by the match
-            // below, so `stack_effect`'s table can be checked against what
+            // Test-only: captured before the match below, so `stack_effect`'s table can be checked against what
             // this instruction actually does to the operand stack. A
             // non-threaded `Call`/`CallPtr` doesn't push its declared
             // return value onto *this* frame -- it pushes a new one and the
@@ -585,7 +622,7 @@ impl Vm {
             // `Frame::stack_effect_check` instead of a same-instruction
             // delta.
             #[cfg(test)]
-            let (dbg_pop, dbg_push) = crate::bytecode::stack_effect(&op);
+            let (dbg_pop, dbg_push) = crate::bytecode::stack_effect(op);
             #[cfg(test)]
             let dbg_is_call = matches!(
                 op,
@@ -604,7 +641,7 @@ impl Vm {
             #[cfg(test)]
             let dbg_op_repr = format!("{op:?}");
 
-            match op {
+            match *op {
                 Op::Const(idx) => push!(func.consts[idx as usize]),
                 Op::LoadLocal(slot) => {
                     let v = frames[top].locals[slot as usize];
@@ -927,20 +964,6 @@ impl Vm {
                     has_recv,
                     threaded,
                 } => {
-                    let mut args = Vec::with_capacity(argc as usize);
-                    for _ in 0..argc {
-                        args.push(pop!());
-                    }
-                    args.reverse();
-                    // A receiver-less call inherits the caller's `self`, which
-                    // is what carries the client entity from
-                    // `CodeCallback_PlayerConnect` into the gametype's own
-                    // callback (probe_self).
-                    let recv = if has_recv {
-                        as_target(pop!())
-                    } else {
-                        frames[top].recv
-                    };
                     let callee = self.functions.get(&target).cloned().ok_or_else(|| {
                         err(ErrorKind::Custom(format!(
                             "no such function {}::{}",
@@ -948,12 +971,28 @@ impl Vm {
                             self.interner.resolve(target.name)
                         )))
                     })?;
+                    // The arguments are the stack's top `argc` values, the
+                    // receiver under them. A receiver-less call inherits the
+                    // caller's `self`, which is what carries the client
+                    // entity from `CodeCallback_PlayerConnect` into the
+                    // gametype's own callback (probe_self).
+                    let stack = &frames[top].stack;
+                    let base = stack.len() - argc as usize;
+                    let recv = if has_recv {
+                        as_target(stack[base - 1])
+                    } else {
+                        frames[top].recv
+                    };
                     if threaded {
+                        let args = stack[base..].to_vec();
+                        frames[top].stack.truncate(base - usize::from(has_recv));
                         self.spawn(host, target, callee, recv, args, errors);
                         let v = self.thread_returned.take().filter(|_| self.thread_returns);
                         push!(v.unwrap_or(Value::Undefined));
                     } else {
-                        frames.push(self.make_frame(target, callee, recv, args));
+                        let frame = self.make_frame_from(target, callee, recv, &stack[base..]);
+                        frames[top].stack.truncate(base - usize::from(has_recv));
+                        frames.push(frame);
                     }
                 }
                 Op::CallBuiltin {
@@ -961,12 +1000,14 @@ impl Vm {
                     argc,
                     has_recv,
                 } => {
-                    let mut args = Vec::with_capacity(argc as usize);
-                    for _ in 0..argc {
-                        args.push(pop!());
-                    }
-                    args.reverse();
-                    let recv = if has_recv { as_target(pop!()) } else { None };
+                    // The builtin reads its arguments in place, off the
+                    // stack's top `argc` values, the receiver under them.
+                    let base = frames[top].stack.len() - argc as usize;
+                    let recv = if has_recv {
+                        as_target(frames[top].stack[base - 1])
+                    } else {
+                        None
+                    };
                     if let Some(Target::Entity(id)) = recv
                         && !host.is_live(id)
                     {
@@ -980,7 +1021,10 @@ impl Vm {
                         notifies,
                         spawns: &mut pending_spawns,
                     };
-                    let v = host.builtin(&mut cx, name, recv, &args).map_err(err)?;
+                    let v = host
+                        .builtin(&mut cx, name, recv, &frames[top].stack[base..])
+                        .map_err(err)?;
+                    frames[top].stack.truncate(base - usize::from(has_recv));
                     // Retail's `Scr_ExecEntThread` from inside a builtin:
                     // each queued thread runs to its first suspend here,
                     // before the calling thread's next instruction (see
@@ -1242,7 +1286,8 @@ impl Vm {
                 }
                 Op::Return => {
                     let v = pop!();
-                    frames.pop();
+                    let done = frames.pop().expect("a frame is running");
+                    self.recycle_frame(done);
                     self.end_call_endons(thread_id, frames.len());
                     if frames.is_empty() {
                         return Ok(Step::Returned(v));
@@ -1250,7 +1295,8 @@ impl Vm {
                     frames.last_mut().unwrap().stack.push(v);
                 }
                 Op::ReturnUndef => {
-                    frames.pop();
+                    let done = frames.pop().expect("a frame is running");
+                    self.recycle_frame(done);
                     self.end_call_endons(thread_id, frames.len());
                     if frames.is_empty() {
                         return Ok(Step::Returned(Value::Undefined));
@@ -1282,7 +1328,7 @@ impl Vm {
                 Op::WaitTillFrameEnd => {
                     return Ok(Step::Suspend(Suspend::FrameEnd));
                 }
-                Op::WaitTill { binds } => {
+                Op::WaitTill { ref binds } => {
                     let event = pop!();
                     let recv = pop!();
                     let target = as_target(recv).ok_or_else(|| {
@@ -1302,7 +1348,7 @@ impl Vm {
                     return Ok(Step::Suspend(Suspend::WaitTill {
                         target,
                         event,
-                        binds,
+                        binds: binds.clone(),
                         matches: Box::new([]),
                     }));
                 }

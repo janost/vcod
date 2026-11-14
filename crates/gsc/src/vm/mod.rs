@@ -5,6 +5,8 @@
 //! siblings, because they read `Vm`'s private fields directly.
 
 use std::collections::HashMap;
+
+use crate::fxhash::FxHashMap;
 use std::rc::Rc;
 
 use crate::atom::{Atom, Interner};
@@ -299,6 +301,11 @@ impl Cx<'_> {
         self.interner.resolve_folded(a)
     }
 
+    /// [`Interner::id`]: what a host's per-atom cache is keyed on.
+    pub fn interner_id(&self) -> u64 {
+        self.interner.id()
+    }
+
     pub fn new_struct(&mut self) -> StructId {
         self.heap.new_struct()
     }
@@ -497,16 +504,16 @@ impl From<StructId> for Target {
 #[derive(Clone)]
 pub struct Program {
     interner: Interner,
-    functions: HashMap<FuncRef, Rc<Function>>,
-    file_order: HashMap<Atom, u32>,
+    functions: FxHashMap<FuncRef, Rc<Function>>,
+    file_order: FxHashMap<Atom, u32>,
 }
 
 pub struct Vm {
     interner: Interner,
     heap: Heap,
-    functions: HashMap<FuncRef, Rc<Function>>,
+    functions: FxHashMap<FuncRef, Rc<Function>>,
     /// Each file's place in install order, for `thread_usage`.
-    file_order: HashMap<Atom, u32>,
+    file_order: FxHashMap<Atom, u32>,
     level: StructId,
     game: ArrayId,
     /// `.size` on an array or string, interned once here rather than per
@@ -577,6 +584,9 @@ pub struct Vm {
     /// Threads a notify ended since the outermost step began, for
     /// `kill_mid_step`'s check.
     killed: Vec<sched::ThreadId>,
+    /// Returned frames' locals and operand stacks, emptied, for the next
+    /// call to reuse (`interp::Vm::recycle_frame`).
+    frame_pool: Vec<(Vec<Value>, Vec<Value>)>,
 }
 
 impl Default for Vm {
@@ -589,8 +599,8 @@ impl Vm {
     pub fn new() -> Self {
         Self::from_program(&Program {
             interner: Interner::default(),
-            functions: HashMap::new(),
-            file_order: HashMap::new(),
+            functions: FxHashMap::default(),
+            file_order: FxHashMap::default(),
         })
     }
 
@@ -629,6 +639,7 @@ impl Vm {
             next_wait: 0,
             kill_mid_step: false,
             killed: Vec::new(),
+            frame_pool: Vec::new(),
         }
     }
 

@@ -10,6 +10,7 @@ pub mod atom;
 pub mod bytecode;
 pub mod compile;
 mod definite;
+pub mod fxhash;
 pub mod heap;
 pub mod lex;
 pub mod load;

@@ -469,6 +469,69 @@ impl EntityHit {
 /// ([`GameHost::placed_script_models`]' walk).
 type ScriptModels = std::sync::Arc<[(EntId, String)]>;
 
+/// The routes and builtins `profile`'s tables give each atom's folded
+/// name, worked out on first use: the table lookups hash the name's text,
+/// which was a seventh of the spawn wave's script time
+/// (cod4-server-frame.md 9, "The spawn wave"). Keyed on the interner
+/// ([`Cx::interner_id`]) and the profile; either changing empties it.
+#[derive(Default)]
+struct AtomMemo {
+    interner: u64,
+    profile: usize,
+    entity: Vec<Option<Route>>,
+    hud: Vec<Option<Route>>,
+    builtins: Vec<Option<Option<builtins::score::Builtin>>>,
+}
+
+impl AtomMemo {
+    fn check(&mut self, profile: &'static crate::game::profile::HostProfile, cx: &Cx) {
+        let p = profile as *const _ as usize;
+        if self.interner != cx.interner_id() || self.profile != p {
+            *self = AtomMemo {
+                interner: cx.interner_id(),
+                profile: p,
+                ..AtomMemo::default()
+            };
+        }
+    }
+
+    /// `route_hud` (a hudelem's field) or `route_entity` of `field`.
+    fn route(
+        &mut self,
+        profile: &'static crate::game::profile::HostProfile,
+        cx: &Cx,
+        field: Atom,
+        hud: bool,
+    ) -> Route {
+        self.check(profile, cx);
+        let (cache, f) = if hud {
+            (&mut self.hud, profile.route_hud)
+        } else {
+            (&mut self.entity, profile.route_entity)
+        };
+        let i = field.0 as usize;
+        if cache.len() <= i {
+            cache.resize(i + 1, None);
+        }
+        *cache[i].get_or_insert_with(|| f(cx.resolve_folded(field)))
+    }
+
+    /// The handler `profile`'s builtin set gives `name`.
+    fn builtin(
+        &mut self,
+        profile: &'static crate::game::profile::HostProfile,
+        cx: &Cx,
+        name: Atom,
+    ) -> Option<builtins::score::Builtin> {
+        self.check(profile, cx);
+        let i = name.0 as usize;
+        if self.builtins.len() <= i {
+            self.builtins.resize(i + 1, None);
+        }
+        *self.builtins[i].get_or_insert_with(|| (profile.builtins)().get(cx.resolve_folded(name)))
+    }
+}
+
 pub struct GameHost {
     pub configstrings: crate::configstrings::ConfigStrings,
     pub ents: ObjectTable,
@@ -721,6 +784,9 @@ pub struct GameHost {
     /// The game version whose scripts run here and every rule it differs
     /// in (`game::profile`); `defs` starts as its tables.
     pub profile: &'static crate::game::profile::HostProfile,
+    /// What `profile`'s tables answer for each field and builtin name,
+    /// per atom ([`AtomMemo`]).
+    memo: AtomMemo,
     /// CoD2's Radiant keys, `radiant/keys.txt` as the load read it
     /// (`fields::parse_radiant_keys`); `None` runs 1.1's compiled-in set.
     pub radiant_keys: Option<std::collections::HashMap<String, fields::FieldType>>,
@@ -1871,6 +1937,7 @@ impl GameHost {
             items: crate::items::Items::default(),
             defs: profile.defs,
             profile,
+            memo: AtomMemo::default(),
             radiant_keys: None,
             ext: HostExt::of(profile),
             client_name_mode: builtins::cvar::ClientNameMode::default(),
@@ -2484,7 +2551,7 @@ impl Host for GameHost {
     ) -> Result<Value, ErrorKind> {
         // `resolve_folded`, not `resolve`: the atom carries the spelling the
         // script used (`setCullFog`), and dispatch matches the folded form.
-        match self.builtins().get(cx.resolve_folded(name)) {
+        match self.memo.builtin(self.profile, cx, name) {
             Some(f) => f(self, cx, recv, args),
             None => Err(ErrorKind::MissingBuiltin(name)),
         }
@@ -2602,11 +2669,9 @@ impl Host for GameHost {
                 _ => {}
             }
         }
-        let route = if ent.0 >= FIRST_HUD_ELEM {
-            (self.profile.route_hud)(cx.resolve_folded(field))
-        } else {
-            (self.profile.route_entity)(cx.resolve_folded(field))
-        };
+        let route = self
+            .memo
+            .route(self.profile, cx, field, ent.0 >= FIRST_HUD_ELEM);
         match route {
             Route::Engine {
                 slot,
@@ -2726,11 +2791,9 @@ impl GameHost {
         {
             return r;
         }
-        let route = if ent.0 >= FIRST_HUD_ELEM {
-            (self.profile.route_hud)(cx.resolve_folded(field))
-        } else {
-            (self.profile.route_entity)(cx.resolve_folded(field))
-        };
+        let route = self
+            .memo
+            .route(self.profile, cx, field, ent.0 >= FIRST_HUD_ELEM);
         // CoD4's `killcamentity` setter (cod4_lnxded 0x808b288): -1 or an
         // entity number, else a script error (cod4-combat.md 7).
         if matches!(self.ext, HostExt::Cod4(_))
