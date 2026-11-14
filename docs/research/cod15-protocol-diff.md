@@ -356,6 +356,8 @@ The field (1.5b setter 0x3b515, getter 0x3b5e4; UO's hooks 0x43803 and 0x438d2, 
 
 vcod-server keeps the field on protocols 6 and 22 (`GameHost::client_squad`); on 1.1 the name is a plain script variable.
 
+VERIFIED live, 1.5b, `client-probes/probe_squad` on mp_carentan (2026-11-14, `crates/server/tests/fixtures/chat/mp_carentan-squad-1.5.txt`): the script puts four probes in squads at their begin (0 and 1 axis `squad_alpha`, 2 axis `squad_bravo`, 3 allies `squad_alpha`). Client 0's `say_squad` reached clients 0 and 1 as an `h` line with `PATCH_1_5_SQUADALPHA`, client 2's reached client 2 alone with `PATCH_1_5_SQUADBRAVO`, client 3's reached client 3 alone with `GAME_ALLIES` (an allied speaker's squad mate on the other side does not hear it), and client 0's `say_team` reached 0, 1 and 2 as an `i` line. `games_mp.log` held `saysquad;0;<slot>;<name>;<text>` for each squad say. vcod: `squad_ab` replays the says on vcod-server and gets every client's lines byte for byte; the same probes against `vcod-server --gametype-script` read the same.
+
 ### PunkBuster on the Linux server
 
 The 1.5b Linux server has no `pbsv.so` here and runs without PunkBuster (section 2). Live against it (2026-10-14, VERIFIED):

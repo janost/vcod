@@ -87,6 +87,7 @@ mod spawnclip_ab;
 mod spawnint_uo_ab;
 mod spawnview_ab;
 mod specspawn_ab;
+mod squad_ab;
 mod stuck_ab;
 mod suicide_playing;
 mod testclient;
