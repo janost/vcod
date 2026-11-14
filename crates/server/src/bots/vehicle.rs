@@ -166,6 +166,9 @@ pub struct SeatView {
     /// holds the hull and turret 15 s first (`_tankdrive_gmi.gsc`
     /// `tank_capture_think`, `level.tank_capture_time`).
     pub capturing: bool,
+    /// The driver's route ran out at the node nearest a goal the hull
+    /// cannot reach: nothing more to drive to (`Server::drive_waypoint`).
+    pub short: bool,
 }
 
 /// A tank's main gun as it stands this tick (`vehicle::fire::main_gun_sight`).
@@ -676,6 +679,12 @@ impl Bot {
         r.crew_wait = crew;
         let hold = seat.tank && r.fighting || crew;
         let Some(to) = to.filter(|_| !hold) else {
+            // Short of a goal the hull cannot reach, the driver gets out
+            // at once and walks on: idle, it sat 5 s at the route's end
+            // first (bot-objectives.md 14.10).
+            if !hold && to.is_none() && seat.short {
+                r.leaving = true;
+            }
             r.stall = 0;
             r.idle = if hold { 0 } else { r.idle + 1 };
             // Ground made counts from where a hold left the hull: from an

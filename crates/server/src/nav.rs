@@ -2243,6 +2243,9 @@ pub struct Follower {
     /// The body fell off its path: the next plan starts at a node it walks
     /// to ([`NavGraph::nearest_walkable`]).
     fell: bool,
+    /// The drop edge under way when the body left the ground, kept through
+    /// a plan made in the air ([`Self::landed_partway`]).
+    falling_off: Option<(u32, u32)>,
     /// The body was on a ladder when the plan began: it starts at one of
     /// the ladder's ends ([`NavGraph::nearest_ladder_end`]).
     on_rungs: bool,
@@ -2460,6 +2463,7 @@ impl Follower {
             return None;
         }
         let here = Vec3::from(at);
+        let drop_landed = self.landed_partway(g, here, body, landed);
         match goal {
             Goal::Hold => {
                 self.reset();
@@ -2537,6 +2541,20 @@ impl Follower {
                     self.dest = g.goal_node(p);
                 }
             }
+        }
+        // Down a drop onto a floor partway: plan round it, and not through
+        // it again for `AVOID_TICKS` (a dead edge), where no way round
+        // takes the bot. From the floor at 352 the plan to the floor at
+        // 204 went back up mp_ship's shelf ladder at (5352, -70) to the
+        // same slot, and bots looped ladder, shelf, slot and ledge for 12 s
+        // and more; the goal had often moved in the air, so the plan under
+        // way on landing was another (bot-objectives.md 14.9).
+        if let Some((a, b)) = drop_landed {
+            self.avoid_edge(a, b);
+            self.avoid_edge(a, b);
+            self.reset();
+            self.fell = true;
+            return None;
         }
         // A vehicle parked over a node ahead, short of the path's end: plan
         // again round it, from a node the body walks to. Its first node
@@ -2876,8 +2894,9 @@ impl Follower {
         // for the floor at 204 landed on the ledge at 336 over its
         // waypoint, turned on the spot until an unstick spell took it off
         // (bot-navigation.md section 3). Plan again from where it landed,
-        // the edge not avoided: round it, the plan went back up to the
-        // shelf and on by a jump edge the bot bounced under. Within a jump
+        // the edge not avoided here: round it, the plan went back up to the
+        // shelf and on by a jump edge the bot bounced under (a landing off
+        // the fall itself plans round it, above). Within a jump
         // of the top the body may still stand on the drop's own slope: one
         // backing off mp_ship's dome at (3648, -317, 618) stood on its 45
         // degree face 23 under the node, planned again from there and
@@ -4509,6 +4528,36 @@ impl Follower {
         }
     }
 
+    /// The drop edge the body just landed partway down: in the air off a
+    /// drop more than a jump high (its edge kept in [`Self::falling_off`]),
+    /// it came down more than a jump over the drop's foot, within
+    /// [`REACH`] of it across and more than a jump under its top.
+    fn landed_partway(
+        &mut self,
+        g: &NavGraph,
+        here: Vec3,
+        body: Footing,
+        landed: bool,
+    ) -> Option<(u32, u32)> {
+        let jump = vcod_common::pmove::JUMP_HEIGHT;
+        if body.on_ground || body.on_ladder {
+            let edge = self.falling_off.take().filter(|_| landed)?;
+            let (top, foot) = (g.nodes[edge.0 as usize], g.nodes[edge.1 as usize]);
+            return (here.z - foot.z > jump
+                && (foot - here).truncate().length() < REACH
+                && top.z - here.z > jump)
+                .then_some(edge);
+        }
+        if self.next > 0
+            && let (Some(&a), Some(&b)) = (self.path.get(self.next - 1), self.path.get(self.next))
+            && g.nodes[a as usize].z - g.nodes[b as usize].z > jump
+            && self.falling_off.is_none()
+        {
+            self.falling_off = Some((a, b));
+        }
+        None
+    }
+
     /// Whether the plan to the point goal is walked out: the body heads
     /// straight at the point ([`Self::arrival`]).
     pub fn walked_out(&self) -> bool {
@@ -4535,6 +4584,16 @@ impl Follower {
     /// with a running start, and no turn into it gives one
     /// (bot-combat.md 17.1).
     fn avoid_edge(&mut self, a: u32, b: u32) {
+        // A plan parked through it is no plan round it: taken up when the
+        // goal came back, it led a bot down mp_ship's slot drop again 5 s
+        // after the drop was avoided (bot-objectives.md 14.9).
+        if self
+            .parked
+            .as_ref()
+            .is_some_and(|k| k.path.windows(2).any(|w| (w[0], w[1]) == (a, b)))
+        {
+            self.parked = None;
+        }
         let until = self.clock + AVOID_TICKS;
         if self.avoid.iter().any(|e| (e.0, e.1) == (a, b)) {
             self.dead.push((a, b, until));
@@ -10349,10 +10408,67 @@ mod tests {
         );
         assert_eq!(at([5404.4, -200.4, 336.125]), None);
         assert!(f.fell, "planned from where it landed");
-        // Not round the drop: avoided, the plan from mp_ship's ledge went
-        // back up to the shelf and on by a jump edge it bounced under
-        // (seed 1409).
+        // Standing on the ledge with no fall read, the edge is kept: the
+        // body may have walked there.
         assert!(f.avoid.is_empty());
+    }
+
+    /// Landed partway down mp_ship's slot drop, on the ledge at 336, the
+    /// bot plans round the drop and not through it again for a while, even
+    /// when its goal moved in the air and the plan under way on landing
+    /// was another: from the ledge the plan went back up the shelf ladder
+    /// to the same slot (bot-objectives.md 14.9).
+    #[test]
+    fn a_drop_landed_partway_down_is_not_taken_again() {
+        let g = NavGraph::from_parts(
+            vec![
+                Vec3::new(5384.0, -161.0, 396.125),
+                Vec3::new(5403.0, -160.0, 396.125),
+                Vec3::new(5405.0, -192.0, 204.125),
+                Vec3::new(5376.0, -196.0, 204.125),
+                Vec3::new(5000.0, -196.0, 204.125),
+            ],
+            vec![vec![1], vec![2], vec![3, 4], vec![2, 4], vec![3]],
+        );
+        let air = Footing {
+            on_ground: false,
+            still: false,
+            ..Footing::STANDING
+        };
+        for moved in [false, true] {
+            let mut f = Follower::default();
+            let goal = crate::bots::Goal::To([5376.0, -196.0, 204.125]);
+            let mut budget = 100;
+            let mut at = |p: [f32; 3], goal, body| {
+                f.waypoint(&g, None, goal, p, body, &mut budget, &mut || 0)
+            };
+            let st = Footing::STANDING;
+            assert_eq!(
+                at([5384.0, -161.0, 396.125], goal, st),
+                Some([5405.0, -192.0, 204.125])
+            );
+            assert_eq!(
+                at([5398.0, -184.0, 396.125], goal, st),
+                Some([5405.0, -192.0, 204.125])
+            );
+            let fall = if moved {
+                crate::bots::Goal::To([5000.0, -196.0, 204.125])
+            } else {
+                goal
+            };
+            at([5402.0, -198.0, 380.0], fall, air);
+            assert_eq!(
+                at([5404.4, -200.4, 336.125], fall, st),
+                None,
+                "moved {moved}"
+            );
+            assert!(f.fell, "moved {moved}");
+            assert!(
+                f.avoid.iter().any(|e| (e.0, e.1) == (1, 2)),
+                "moved {moved}"
+            );
+            assert!(f.dead.iter().any(|e| (e.0, e.1) == (1, 2)), "moved {moved}");
+        }
     }
 
     /// mp_ship's hold floor at 56: a bot run along the wall at y -400 for

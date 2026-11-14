@@ -1641,7 +1641,7 @@ impl crate::bots::driver::BotWorld for Server {
         &mut self,
         slot: usize,
         goal: crate::bots::Goal,
-        seat: &crate::bots::SeatView,
+        seat: &mut crate::bots::SeatView,
     ) -> Option<[f32; 3]> {
         Server::drive_waypoint(self, slot, goal, seat)
     }
