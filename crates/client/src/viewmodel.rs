@@ -240,14 +240,14 @@ impl ViewWeapon {
         let anims = self.anims.clone();
         let sight = anims.get(&which).map(|(clip, binding)| {
             let t = t.clamp(0.0, 1.0) * clip.duration();
-            (&**clip, binding, clip.frame_pos(t, false), 1.0)
+            (&**clip, binding, f64::from(clip.frame_pos(t, false)), 1.0)
         });
         let (main, main_pos) = match main {
             WeaponAnim::AdsUp | WeaponAnim::AdsDown => (WeaponAnim::Idle, 0.0),
             m => (m, main_pos),
         };
         let (clip, binding) = anims.get(&main).unwrap_or(&anims[&WeaponAnim::Idle]);
-        let main = [(&**clip, binding, main_pos, 1.0)];
+        let main = [(&**clip, binding, f64::from(main_pos), 1.0)];
         match &sight {
             Some(s) => self
                 .pose

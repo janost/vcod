@@ -2548,6 +2548,87 @@ retail's bits, and since the clip's float time below so is every ray.
 Before that the rays sat within 3 steps (1.5b's prone idle moves, and
 the dump's locals up to 8 steps off ours where a key is lerped).
 
+#### The pose on 1.1
+
+1.1d's `cod_lnxded` runs the anim calc, the skeleton build and the bone
+trace of 1.5b and UO (the sections above) in the same calls and on the
+same records, optimized: its floats stay on the x87 stack and only some
+are stored. VERIFIED, read out of a live 1.1d server under gdb (the run
+of `turret/mp_carentan-dm-turret-hitbody2-script.txt`, dumps in
+`common/tests/fixtures/skel11/`): `DObjCalcAnim` is syscall 0x6f
+(0x80bcef8), `DObjCalcSkel` 0x70 (0x80c337c), `DObjUpdateServerTime`
+0x6c (0x80bf008); at `DObjCalcSkel`'s entry the skeleton (`dobj+4`,
+`dobj+0x17` bones) holds the frame's records after the matrices, 32
+bytes a bone as on UO, the control mask at `skel+0x10` and the built
+mask at `skel+0x20`; after it each record holds its bone's world
+quaternion and origin.
+
+- VERIFIED, the node time (0x80bbab0, the leaf arm): `old + dtime * rate
+  * frequency` as on 1.5b, and a looping clip's wrap by 1 on the stack
+  before the one store. vcod measurement: storing the sum before the
+  wrap (1.5b's) put the target's idle one float step under retail's
+  `+0x28` from its first wrap on, the pose 1e-7 off; kept, every node
+  time of the dump is retail's.
+- VERIFIED, the sampler (0x80b8370; 0x80b8904 for clips past 255 frames,
+  0x80b8e98 at time 1): the frame `time * numframes` (`fildl`, `fmulp`,
+  0x80b838a), `weight / 32767` (the float at 0x80db1ec, `0x38000100`) and
+  each key's fraction `(frame - key) / (next - key)` stay on the stack;
+  each rotation sum `q + (k0 + (k1 - k0) * f) * s`, each translation sum
+  `t + ((v1 - v0) * f + v0) * w` and the weight sum are stored once.
+- VERIFIED, the walk (0x80bbea8): the root's `1 / w` and a nested node's
+  scales stay on the stack; a nested node's `w / sqrt(n)` stores only
+  the `fsqrt` of the unrounded square sum (0x80bc3de); the offsets' `w /
+  weight` stay on the stack too. The unkeyed bones take the same bind
+  records as UO's (0x80bcef8).
+- VERIFIED, the dump's info table (`0x82f59a0 + 0x44 * info`, the server
+  time at `+0x28`, the weight at `+0x3c`): on the knockback kill the legs
+  node holds `pb_stand_alert` (anim 122, tree node 60 in vcod's parse of
+  `animtrees/multiplayer.atr`) at weight 1 and `pb_combatrun_forward_loop`
+  (anim 94, node 92) at 0.001.
+- vcod measurement, the walk's order: summed stand_alert first, 34 of the
+  kill's records sit a float step off retail's; run first, all match. So
+  a node's children are walked in anim index order, not in the atr's.
+- VERIFIED, 1.5b: a log of the sampler's calls (1.5b 0x80c47de) on its
+  own knockback kill takes the run before the idle.
+- vcod measurement: vcod's stored walk in that order gives every record
+  of that 1.5b dump, and its stored build every matrix (`skel11_ab`).
+- VERIFIED, the build (0x80c337c): the first pass composes each
+  quaternion, its record times its parent's or for a control bone the
+  other way, each component's four products and three sums on the stack
+  and stored once (0x80c35b7 and three copies); the second pass writes
+  each matrix off `2 / |q|^2` kept, `x * x` and `y * y` stored, a root's
+  `z * z * s` kept (0x80c39b4) and any other bone's `z * z` and its
+  product stored (0x80c3e80), `x * s` and `y * s` kept, `xz`, `xw` and
+  the diagonal's two products stored as the binary spills them, each
+  element rounded once; a bone's origin is its offset plus its bind
+  position, the `x` sum kept and `y` and `z` stored first (0x80c4061),
+  turned through the parent's matrix and added to its origin, each
+  component rounded once (0x80c4078).
+- VERIFIED, the dump: the target's five parts graft by name (`dobj+0x48`
+  all 0xff). A part grafted at a tag (its root turned through the tag's
+  matrix, 0x80c3bf1) is not ported; INFERRED, off the character scripts'
+  `attach` calls, no stock player part takes a tag.
+- VERIFIED, the trace (0x80c4564): the body's frame (0x8066520) and each
+  bone's keep each difference and store each dot product once; the slab
+  (0x80c4ad0..0x80c4bce) keeps `(p - plane) * sign`, `d1 - d2`, each `d1
+  / (d1 - d2)` and both bounds, the exit starting at the stored fraction,
+  and rounds the entry once into the result (0x80c4c4f).
+
+vcod: `skeleton::build_kept` (the build), `PoseBuffer::new_in` with
+`Arith::Kept` (the sampler and walk), `animclock::Play::kept`,
+`playerpose::layer_clips` (the anim index order, 1.1d only), and
+`bonetrace::bone_trace_in` under `Arith::Kept` with `into_frame_kept`.
+`skel11_ab` holds the records of five calls off their clips' times and
+weights and the build off retail's records, every word, and 1.5b's
+stored walk and build on its kill. VERIFIED, vcod measurement: with them
+`turret_ab`'s 1.1d `-hitgrid` knockback kill and both hits of
+`-hitbody2` are retail's bits (cod11-turrets.md 13.6). Open: 1.5b's and
+UO's poses keep the clock's layer order. In anim index order 1.5b's
+`-hitgrid-15` knockback kill moves one float step off in z, so a second
+error on that frame cancels against the order there (INFERRED; the
+dumped kill's records and build match, so it lies in that replay's
+inputs, not the walk).
+
 #### The clip's float time
 
 The frame a 1.5b or UO clip is sampled at is not its seconds times its
@@ -2600,11 +2681,11 @@ owner (`G_DObjUpdate` passes `G_GetGameId`) does split.
 
 vcod: `animclock::Play` keeps the node time beside the seconds, stepped
 in whole 50 ms frames with the sum in `f64` and stored as `f32`
-(`Play::step`), `Layer::time` hands it out, and the server's pose on
-1.5 and UO samples at `time * numframes` (`PoseInputs::node_time`).
+(`Play::step`), `Layer::time` hands it out, and the server's pose on all
+three servers samples at `time * numframes` (`PoseInputs::node_time`).
 A clip under a node with children (whose frequency the clock does not
-hold) stays on the seconds, and 1.1d keeps them throughout: its pose is
-the glam one, not the stored build.
+hold) stays on the seconds. 1.1d steps the same way with its wrap kept
+(next section, "The pose on 1.1").
 
 A leaf under a plain node keeps its own time. VERIFIED, UO
 `coduo_lnxded` 0x80bd884: a node with children whose flags (`+0xc`) carry
