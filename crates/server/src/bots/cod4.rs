@@ -952,6 +952,7 @@ impl Cod4Bots {
             give_way: None,
             guard_post: None,
             lane: None,
+            stand_room: true,
             exposure: None,
             lob: None,
             waypoint: None,

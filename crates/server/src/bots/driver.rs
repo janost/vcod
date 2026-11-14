@@ -896,6 +896,7 @@ fn sense<W: BotWorld>(
             .is_some_and(|b| b.ignores(e.slot))
     });
     let mut view = w.view(slot, enemy)?;
+    view.stand_room = stand_room(w, view.origin);
     let hearing = w.driver().bots.get(&slot).map_or(1.0, |b| b.skill.hearing);
     // On a side with team play on, only the teammates nearest a
     // noise go to it.
@@ -928,6 +929,26 @@ fn sense<W: BotWorld>(
     }
     view.cover = cover(w, slot, enemy);
     Some(view)
+}
+
+/// [`BotView::stand_room`]: a standing box at `feet` starts clear, the
+/// test `update_stance` makes before a crouched or prone body may rise
+/// (bot-objectives.md 13.9). Clear until the world is up.
+fn stand_room<W: BotWorld>(w: &W, feet: [f32; 3]) -> bool {
+    use vcod_common::pmove::{HALF_WIDTH, HEIGHT_STAND};
+    let Some(world) = w.world() else {
+        return true;
+    };
+    let o = Vec3::from(feet);
+    let mask = vcod_common::collision::MASK_PLAYERSOLID & !vcod_common::movetrace::CONTENTS_BODY;
+    let (mins, maxs) = (
+        Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0),
+        Vec3::new(HALF_WIDTH, HALF_WIDTH, HEIGHT_STAND),
+    );
+    !world
+        .collision
+        .move_trace(o, o, mins, maxs, mask)
+        .startsolid
 }
 
 /// [`BotView::cover`] for the bot in `slot` fighting `enemy`: the spot it

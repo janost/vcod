@@ -3474,10 +3474,67 @@ radio's points (`hq`), summed. VERIFIED (measured, ours, release):
 
 ### 13.8 What is left
 
-- mp_cassino `ctf`'s pin at (5779, -1990, 82) (13.5), a movement one.
 - The posts are a node's verdict against eight fixed ways in, not the
   enemy a guard fights: in a fight `cover::find` takes over (bot-combat.md
   4). A guard does not yet move off a post an enemy sees it on before its
   hold runs out.
 - Defuses fall wherever bombs are guarded (13.4, 13.6, 13.7). The
   defuser (`SdView::lead`) still walks the straight way in alone.
+
+### 13.9 A body that ducks where it could not stand again
+
+13.5's mp_cassino `ctf` pin, traced per tick (temporary prints of the
+brain's stall state, the body's eye and the box fits, release, UO, the
+code before this section's merge, seed 2):
+
+- VERIFIED (trace): bot "Lag Leader" jumped the step from (5822, -1960,
+  52) onto the ledge at z 82, walked on along its path at 150 units/s and
+  stopped at (5788.8, -1972.0, 82.0) on a fight (`engaged`). Footwork
+  crouched it, then laid it down (eye 60 → 40 → 11 over ticks 2432 to
+  2441). The fight ended, the prone key went up, and the eye stayed at
+  11: it crawled at 11 units/s to (5779.0, -1990.0, 82.0) and stopped.
+  The stall's unstick spells fired (ticks 2580 to 2690) and no heading
+  moved it.
+- VERIFIED (measured, a box trace with `MASK_PLAYERSOLID` less bodies and
+  UO's patch arithmetic): at both points the standing (70), crouched (50)
+  and prone (30) boxes start solid; a box 1 to 12 units across does not,
+  nor the standing box 16 units east. A one-unit floor trace there meets
+  patch 371 at z 100, over the feet. The node (5760, -1967, 82) on the
+  path is clear.
+- INFERRED (`pmove::update_stance`, its `fits` test, and the walk): the
+  move let the standing body slide into the terrain patch's edge (a
+  terrain clip's start in solid never reads all solid, cod11-mantle.md),
+  so it stood and walked there, but a prone body rises only where the
+  standing or crouched box fits. Neither did, so it stayed prone for good
+  (`EV_STANCE_FORCE_PRONE`), and the prone box's own check held its
+  crawl. `PM_CorrectAllSolid`'s one-unit nudges free nothing that deep.
+  The same rule holds a player there.
+- The fix, a bot rule: the driver reads whether the standing box at the
+  feet starts clear (`BotView::stand_room`, one box trace a bot a tick),
+  and a standing bot on the ground takes no crouch or prone key where it
+  does not (`Bot::think`), from footwork, cover, a post or anything else.
+  A body already down keeps its keys.
+- VERIFIED (measured, release, UO, the same code with the rule): mp_cassino
+  `ctf` seed 2's stalls 2400 → 81, seed 1's 1191 → 431.
+
+Again on the tip with section 10.8's two fixes merged and this rule,
+before against after as in 13.4 and 13.5, VERIFIED (measured, release):
+
+| Run | still (each side) | exposed | mate | packed | objective | stalled |
+|---|---|---|---|---|---|---|
+| 1.1 `sd` allies | 53% → 32%, -20.8 ± 1.7, 24 of 24 | 36% → 31% | 154 → 219 | 76% → 67%, -9.3 ± 4.5 | plants 95 → 89 (-0.25 ± 0.26), defuses 46 → 25 (-0.88 ± 0.20) | 61 → 0 |
+| 1.1 `sd` axis | 62% → 43%, -19.2 ± 1.2, 24 of 24 | 37% → 29% | 197 → 237 | 51% → 55% | allies W 53 → 70, axis W 54 → 54 | |
+| UO `ctf` allies | 87% → 69%, -18.1 ± 1.9, 16 of 16 | 45% → 33% | 241 → 287 | 20% → 17% | takes 20 → 22, captures 2 → 4 | 645 → 121 |
+| UO `ctf` axis | 88% → 66%, -21.5 ± 1.2, 16 of 16 | 61% → 52% | 248 → 389 | 19% → 16% | | |
+| UO `hq` allies | 51% → 40%, -10.8 ± 4.6, 13 of 16 | 36% → 24% | 217 → 268 | 64% → 66% | score 1888 → 1914 | 1354 → 1046 |
+| UO `hq` axis | 56% → 32%, -23.8 ± 5.0, 15 of 16 | 41% → 29% | 219 → 270 | 66% → 57% | | |
+
+- VERIFIED (the table): the `ctf` stalls fall below before's; plants
+  and the `hq` score sit inside the spread.
+- UO `ctf` captures stay rare either way (2 to 6 in 16 ten-bot matches).
+  INFERRED (`Bot::uo_target`, section 7.2): a carrier whose own flag is
+  away waits in its goal, and no bot goes for the other side's carrier;
+  his flag comes home only when a fight kills him by chance and a
+  teammate or the 20 s timer returns it. With two bots (section 7.2's
+  80-seed tally, 10 captures) both take a flag and both wait, so a
+  capture needs the two to meet. Not traced.

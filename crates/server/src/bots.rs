@@ -339,6 +339,10 @@ pub struct BotView {
     /// ([`posts::assign`]), with team play and [`Bot::tactics`] on: it
     /// walks there and holds it instead of the first spot in reach.
     pub guard_post: Option<GuardPost>,
+    /// A standing box at the feet starts clear (`driver::stand_room`): a
+    /// body that crouches or lies down where it does not cannot rise again
+    /// (`pmove::update_stance`), so a standing bot takes neither there.
+    pub stand_room: bool,
     /// A way in to the objective the bot makes for, dealt by the driver
     /// apart from its teammates' ([`posts::lanes`]): it walks there first.
     pub lane: Option<[f32; 3]>,
@@ -3133,7 +3137,15 @@ impl Bot {
         self.anchor = target.map(|t| Self::anchor_point(&t));
         self.exposure = view.exposure;
         self.heal_at = view.survive.heal;
-        let cmd = self.think_body(view);
+        let mut cmd = self.think_body(view);
+        // Overlapping a terrain patch the move lets it walk into, a body
+        // that ducked could never stand again: mp_cassino's ledge at
+        // (5779, -1990, 82) held one prone for 100 s (bot-objectives.md
+        // 13.9).
+        if !view.stand_room && view.on_ground && view.eye_height >= vcod_common::pmove::VIEW_STAND {
+            cmd.wbuttons &= !(msg::WBUTTON_CROUCH | msg::WBUTTON_PRONE);
+            cmd.up = cmd.up.max(0);
+        }
         self.count_futile(view, &cmd);
         self.fired = cmd.buttons & msg::BUTTON_ATTACK != 0;
         let living = view.playing && !view.dead;
@@ -5226,6 +5238,7 @@ mod tests {
             give_way: None,
             guard_post: None,
             lane: None,
+            stand_room: true,
             exposure: None,
             lob: None,
             waypoint: None,
@@ -5400,6 +5413,13 @@ mod tests {
         // It looks within `WATCH_DEG` of the site's middle.
         let toward = (-60.0f32).atan2(150.0).to_degrees();
         assert!(yaw_diff(bot.heading, toward).abs() <= WATCH_DEG as f32 + 0.5);
+        // Where a standing box would not fit, it stays up: it could not
+        // rise again.
+        v.stand_room = false;
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.wbuttons & (msg::WBUTTON_CROUCH | msg::WBUTTON_PRONE), 0);
+        assert!(cmd.up >= 0);
+        v.stand_room = true;
         bot.tactics = false;
         v.origin = [100.0, 0.0, 64.0];
         assert_eq!(bot.goal(&v), Goal::Hold, "anywhere in the ring");

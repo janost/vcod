@@ -571,6 +571,7 @@ impl Server {
             give_way: None,
             guard_post: None,
             lane: None,
+            stand_room: true,
             exposure: None,
             // Probed in pass 3, on the ticks the brain throws.
             lob: None,
