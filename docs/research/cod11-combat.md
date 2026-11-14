@@ -6369,7 +6369,17 @@ prone pose's. Open: on brecourt the target settles on retail's origin
 still strikes him 1.47 earlier along its flight (snapshot 2: y 802.38
 against 803.85); the 1.1d prone pose on the grade, not the timing, is the
 remaining cause (player-model-anim-system.md, "The prone body on a
-grade").
+grade"). VERIFIED, vcod measurement against the grenade part retaken the
+same way (`mp_carentan-scriptmodel-grenade-cmds.txt`, the target a
+`--probe-fall` client, the thrower's `SPAWNED` line kept), replayed on
+both clients' stamps with the times plumbing the prone gate uses: of 158
+missile snapshots all but 17 match retail's to the bit. The first frag's
+strike on the barrel (snapshots 1 and 2) reads z 11.350475 against
+11.350476, one float step, and the next contact re-bases it exactly; the
+second frag leaves the target's posed bones 0.025 off retail's (snapshot
+84 on), the idle clip's pose the 0.1 gate already names. Open: the script
+model clip's last bit on 1.1d and the target's idle pose; `scriptmodel_ab`
+keeps the grenade part at its 0.1.
 
 vcod: the move trace (`game::missile`) runs `combat::trace_bodies_faced`
 on every live body but the owner's while it passes, with the bone trace's
