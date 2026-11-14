@@ -631,6 +631,15 @@ first everywhere.
   carrier's death leaves the flag at his feet with the mobile trigger on
   it, and 20 s lying there sends it home. With `scr_ctf_showoncompass`
   0, the default (304), no compass marker follows a carried flag.
+- VERIFIED (`hold_flag` 2905-2944, `reset_flag` 3089-3123, `drop_flag`):
+  `carried_by` is set in `hold_flag` (2913) and cleared only in
+  `reset_flag` (3104) and the spawn (2687); the carrier's `hasflag` is
+  set in `hold_flag` (2912) and cleared by `drop_flag` (3195) and the
+  capture (3072). A flag lying out still names its fallen carrier in
+  `carried_by` (14.11).
+- VERIFIED (`ctf_think` 2701-2814): the return's branch tests only the
+  toucher's team and `moved`, so a carrier's own touch returns his flag
+  too; CoD2's `flag` (1095-1166) the same, by `atbase`.
 - VERIFIED (`dom.gsc` `Flag_InitTriggers`, `Flag_ZoneThink`, 1461-1750):
   the flags are the triggers `flag1` .. `flag14` by targetname, each with
   a `team` (`neutral` at the start). INFERRED (branch conditions): each
@@ -733,8 +742,9 @@ first everywhere.
 
 ### 7.2 The brain
 
-- **ctf.** The carrier makes for the carried flag's goal, and waits inside it
-  while his own flag is away. His own flag lying out is returned by a touch: a
+- **ctf.** The carrier makes for the carried flag's goal, and while his own
+  flag is away returns it from near or waits on a post round the goal
+  (14.11). His own flag lying out is returned by a touch: a
   defender goes for it, and so does an attacker within 1000 units or one whose
   team's carrier is out. A defender stands by his flag at home, or by the goal
   its carrier needs while it is carried. An attacker takes the other flag, at
@@ -3960,3 +3970,66 @@ floors at 208 and 240 at (150 to 195, 1000 to 1290) after a respawn,
 its goal a chase moving every second (VERIFIED, trace, positions and
 goals only); not traced further.
 
+### 14.11 The `ctf` carrier home, 2026-11-14
+
+A playtest report: a carrier reaches its base and waits there for its
+own flag; captures are rare (13.8, 14.4). INFERRED (7.1 and 11.1, branch
+conditions): in both games the capture wants the carrier's own flag
+home, United Offensive's `flag_carrier_atgoal_wait` passing over a touch
+while it is `moved`, CoD2's `flag` capturing only on the own flag's
+trigger at base. The waiting is the script's; how the bot spends it is
+vcod's. VERIFIED (the pk3s' `maps/MP/gametypes/`): CoD1 1.1 and 1.5
+ship no `ctf`.
+
+- The view. VERIFIED (measured, a temporary per-think print of every
+  carrier's place and view, release, UO, 14.4's set, seeds 1..=8, the
+  rules below off): mp_arnhem seed 3's carrier took the flag at tick
+  2919 and was killed at 2984, and his view went on reading him as
+  carrying; respawned, he walked to his goal and stood 1 unit off it,
+  never capturing, while both sides read the flag as carried, not
+  lying, so nobody went to return or take it until `flag_timeout`
+  sent it home. 11 of the 39 carries the views read (these included)
+  ended within 400 units of a goal with the own flag home, 3 of them in
+  a capture. INFERRED (7.1):
+  `ScriptRuntime::uo_objectives` took `carried_by` for the carrier, which
+  `drop_flag` leaves set. It now takes him only while his `hasflag` is
+  the flag (`a_fallen_uo_ctf_carrier_leaves_the_flag_lying`). CoD2's
+  reader goes by the player's `flag`, which `dropFlag` clears.
+- The carrier (`Bot::ctf_carry`). Through a fight it keeps for its goal
+  with the keys on the path, the gun on the enemy (`Bot::carrying`, the
+  `re` carrier's rule, 9). Its own flag away: lying within 1000 units
+  (`CTF_RETURN_NEAR`) it walks over it, a return; else it takes a post
+  round the goal (`GuardHold::Near`, section 13's: in cover from the
+  ways in, the goal in sight), and walks onto the goal once its flag is
+  home. Teammates go for a flag lying out and for a seen carrier as
+  before (7.2, 14.1). Off (`bot_match` `CARRY=`), it closes on what it
+  sees and stands in the goal.
+
+VERIFIED (measured, ours, release): `bot_match` `GAMETYPE=ctf`, 10 bots,
+6000 ticks, seeds 1..=8. UO: mp_arnhem, mp_berlin, mp_cassino and
+mp_sicily (32 matches); CoD2: mp_toujane, mp_burgundy, mp_carentan and
+mp_matmata (32). Per match, the mean difference against before, its
+standard error, and the matches higher and lower:
+
+| Run | UO takes | captures | returns | kills | stalled | CoD2 captures | kills | stalled |
+|---|---|---|---|---|---|---|---|---|
+| before | 39 | 3 | 17 | 1251 | 722 | 34 | 2207 | 162 |
+| the view alone | 42 | 5 | 31 | 1252 | 287 | | | |
+| after | 42 | 6 | 22 | 1230 | 90 | 57 | 2178 | 0 |
+
+- VERIFIED (the table): CoD2's captures rise +0.72 ± 0.14 a match
+  (higher in 19, lower in 1); its kills hold (-0.91 ± 1.03), its stalls
+  fall. The view does not touch CoD2 (above).
+- VERIFIED (the table): UO's returns rise with the view (+0.44 ± 0.14,
+  11 higher, 1 lower), a flag now read as lying; its captures move
+  inside the spread (+0.09 ± 0.07 before to after, 4 higher, 1 lower),
+  kills hold (-0.66 ± 0.63). Stalls fall inside the spread (-19.8 ±
+  16.5): 512 of the before's 722 are one match, mp_cassino seed 3, not
+  traced.
+- VERIFIED (the trace, after): of UO's 42 carries 34 end more than 400
+  units from the goal, the carrier dead on the way; 8 come within 400,
+  6 capture, and 3 carriers waited within 400 units of their goal
+  for their flag (2660 bot-ticks). INFERRED: on UO's maps a capture is held back by
+  the run home (4000 to 5000 units on mp_berlin, alone), not the wait;
+  an escort that walks ahead of the carrier, or a route the enemy does
+  not hold, is the next step.
