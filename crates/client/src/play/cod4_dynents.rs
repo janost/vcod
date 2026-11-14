@@ -5,13 +5,23 @@
 //! `DynEntCl_EntityImpactEvent` (0x48e0f0).
 
 use glam::Vec3;
-use vcod_cod4::dynent::{Broken, DynEnts};
+use vcod_cod4::dynent::{Broken, DynEnts, Struck};
 
 use super::cod4::{Fired, weapon_name};
 use super::cod4_predict::Cod4World;
 
+/// What the fired events did to the dynamic entities.
+#[derive(Default)]
+pub struct Done {
+    /// Those that broke.
+    pub broken: Vec<Broken>,
+    /// Where a round met one, by the fired event's index: its impact
+    /// effect plays there (0x48dd00).
+    pub struck: Vec<(usize, Struck)>,
+}
+
 /// `fired`'s blasts and `rounds` (per fired event, each round's start and
-/// end) on `d` at `now`; returns what broke.
+/// end) on `d` at `now`.
 pub fn on_fired(
     d: &mut DynEnts,
     world: &Cod4World,
@@ -19,8 +29,9 @@ pub fn on_fired(
     weapons: &[String],
     rounds: &[Vec<(Vec3, Vec3)>],
     now: i32,
-) -> Vec<Broken> {
-    let mut broken = Vec::new();
+) -> Done {
+    let mut done = Done::default();
+    let broken = &mut done.broken;
     for (i, f) in fired.iter().enumerate() {
         let def = weapon_name(weapons, f.weapon)
             .and_then(|w| world.defs.get(w))
@@ -38,8 +49,10 @@ pub fn on_fired(
         // A round does its weapon's `damage` (0x455b9e).
         let damage = def.map_or(0, |w| w.damage);
         for &(start, end) in rounds.get(i).into_iter().flatten() {
-            broken.extend(d.bullet(start, end, damage, now).1);
+            let (struck, b) = d.bullet(start, end, damage, now);
+            broken.extend(b);
+            done.struck.extend(struck.map(|s| (i, s)));
         }
     }
-    broken
+    done
 }

@@ -26,9 +26,8 @@ Ranked by how much a player notices.
   a position-based solver (cod4-player-anims.md 10). M.
 - A map's dynamic entities miss a few of 1.7's pushes: the knife's swing
   (0x48e3a0), `physicsJitter` (0x48eb50) and the server's bullet events
-  (vcod's client runs its rounds itself); a struck one plays no impact
-  effect, and a piercing round pushes only what its first leg passes
-  (cod4-world.md 13.7). S.
+  (vcod's client runs its rounds itself), and a piercing round pushes
+  only what its first leg passes (cod4-world.md 13.7). S.
 - Multichannel output: kira mixes stereo, so a 5.1 or 7.1 device gets
   the stereo mix on its front pair (cod4-sound.md 4.2, 5). The 139 alias
   rows whose curve no walked zone holds fall off straight. L.

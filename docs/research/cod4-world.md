@@ -2223,7 +2223,8 @@ nothing. VERIFIED (13.1's census).
 - Ported: the load, the type table, the walks' masks, the cube distance,
   the nearest twenty, the falloff, the force and its direction, the push
   point's random offset (from vcod's own seed), the round's trace through
-  the model's collision, its push and damage, the break and its effect,
+  the model's collision, its push and damage, its impact effect and sound
+  as the world's on the struck surface, the break and its effect,
   a sleeping body dropped where it lies, and `CG_MapRestart`'s restart.
   VERIFIED (the code against the above; `dynent::tests`,
   `dynent_census`, `cod4_live_a_frag_flings_the_maps_clutter_and_breaks_a_plate`).
@@ -2233,7 +2234,7 @@ nothing. VERIFIED (13.1's census).
   nothing and they fell through the map. A body now passes the world
   contents its def's origin lies in. vcod's.
 - Left out: the melee swipe, the server's bullet events (vcod's client
-  runs its rounds itself), the impact effect on a struck dynent, list 1
+  runs its rounds itself), list 1
   (no stock map holds one), pieces (none stock), `physicsJitter`
   (`EV_PHYS_JITTER`, 0x48eb50) and the `j` command. Only the first leg of
   a round that pierces is traced.

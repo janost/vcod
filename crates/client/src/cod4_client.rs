@@ -1251,7 +1251,7 @@ impl Cod4Client {
             play_event_cues(cx.audio, cx.fs, s, &mut self.hud, fired, &weapons, &cs, &at);
         }
         // The blasts' pushes on the running and sleeping ragdolls.
-        let mut broken = Vec::new();
+        let mut done = crate::play::cod4_dynents::Done::default();
         if let Some(s) = &self.sounds {
             for f in fired {
                 if let Some(e) = crate::play::cod4_players::explosion_of(f, &weapons, &s.weapons) {
@@ -1300,7 +1300,7 @@ impl Cod4Client {
                 .iter()
                 .map(|h| h.iter().map(|h| (h.start, h.end)).collect())
                 .collect();
-            broken = crate::play::cod4_dynents::on_fired(
+            done = crate::play::cod4_dynents::on_fired(
                 d,
                 w,
                 fired,
@@ -1309,8 +1309,32 @@ impl Cod4Client {
                 self.render_time,
             );
         }
+        // A struck one's impact plays as the world's would there.
+        let dyn_hits: Vec<(usize, cod4_fx::BulletHit)> = done
+            .struck
+            .iter()
+            .map(|(i, s)| {
+                let hit = cod4_fx::BulletHit {
+                    start: s.at,
+                    muzzle: s.at,
+                    end: s.at,
+                    normal: s.normal,
+                    surf: s.surface_flags >> 20 & 0x1f,
+                    hit: true,
+                    own: false,
+                    body: None,
+                    pierced: [None; cod4_fx::PIERCE_MAX],
+                };
+                (*i, hit)
+            })
+            .collect();
         if let Some(s) = &mut self.sounds {
             let eye = self.view.map(|(eye, _)| eye);
+            for (i, hit) in &dyn_hits {
+                for c in s.bullet_cues(&fired[*i], &weapons, hit, eye) {
+                    cx.audio.play(cx.fs, c);
+                }
+            }
             for (f, hit) in fired.iter().zip(&hits) {
                 for c in hit.iter().flat_map(|h| s.bullet_cues(f, &weapons, h, eye)) {
                     cx.audio.play(cx.fs, c);
@@ -1326,8 +1350,16 @@ impl Cod4Client {
             .map(|v| v.client_num);
         if let Some(e) = &mut self.effects {
             take_level_effects(e, cx);
-            // A broken dynamic entity's `destroyFx` at its pose (0x48dec7).
-            for b in &broken {
+            // A round's impact on a dynamic entity, as on the world
+            // (0x48dd00), and a broken one's `destroyFx` at its pose
+            // (0x48dec7).
+            for (i, hit) in &dyn_hits {
+                for p in e.bullet_plays(&fired[*i], &weapons, hit) {
+                    let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
+                    cx.audio.play_fx(cx.fs, sounds);
+                }
+            }
+            for b in &done.broken {
                 let Some(name) = &b.fx else { continue };
                 let at = crate::fx::sim::SpawnAt::Oriented {
                     pos: b.origin,
