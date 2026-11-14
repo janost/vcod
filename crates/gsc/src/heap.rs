@@ -204,7 +204,16 @@ impl Heap {
         if !self.shared.get(i).copied().unwrap_or(false) {
             return a;
         }
-        let elems = self.arrays[i].clone();
+        // Room for one more: the copy is most often a write's
+        // (`add_to_array`'s append).
+        let src = &self.arrays[i];
+        let mut dense = Vec::with_capacity(src.dense.len() + 1);
+        dense.extend_from_slice(&src.dense);
+        let elems = Elems {
+            dense,
+            sparse: src.sparse.clone(),
+            order: src.order.clone(),
+        };
         for (_, v) in elems.iter() {
             self.share(v);
         }

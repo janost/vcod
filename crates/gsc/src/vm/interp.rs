@@ -721,6 +721,13 @@ impl Vm {
             field: field_spawns,
         } = spawns;
 
+        // Sized for the deepest the function's code goes (`stack_depth`),
+        // so a push only stores.
+        let need = func.max_stack as usize;
+        if stack.len() < need {
+            stack.resize(need, Value::Undefined);
+        }
+        let stack = &mut stack[..];
         macro_rules! pop {
             () => {{
                 sp -= 1;
@@ -729,12 +736,7 @@ impl Vm {
         }
         macro_rules! push {
             ($v:expr) => {{
-                let v = $v;
-                if sp < stack.len() {
-                    stack[sp] = v;
-                } else {
-                    stack.push(v);
-                }
+                stack[sp] = $v;
                 sp += 1;
             }};
         }

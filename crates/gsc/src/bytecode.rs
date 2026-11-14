@@ -177,6 +177,9 @@ pub struct Function {
     /// `code` with its runs fused ([`fuse`]), what the interpreter runs;
     /// `Vm::install` fills it, so a compiler leaves it empty.
     pub fast: Vec<Op>,
+    /// The deepest `code` takes the operand stack ([`stack_depth`]);
+    /// `Vm::install` fills it.
+    pub max_stack: u32,
     pub consts: Vec<Value>,
     /// Source line per instruction, for error attribution.
     pub lines: Vec<u32>,
@@ -348,11 +351,14 @@ fn visit(
 /// This is the check that catches a miscompile that leaves a value behind
 /// on one path but not another — exactly the shape of bug a jump-target or
 /// terminator error produces, and the reason to run it on every function a
-/// loader accepts, not just in the compiler's own tests.
-pub fn stack_depth(f: &Function) -> Result<(), String> {
+/// loader accepts, not just in the compiler's own tests. Answers the
+/// deepest the operand stack gets, which `Vm::install` sizes each frame's
+/// stack to (`Function::max_stack`).
+pub fn stack_depth(f: &Function) -> Result<usize, String> {
     if f.code.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
+    let mut deepest = 0;
     let mut entry_depth: Vec<Option<i32>> = vec![None; f.code.len()];
     let mut queue = std::collections::VecDeque::new();
     entry_depth[0] = Some(0);
@@ -368,6 +374,7 @@ pub fn stack_depth(f: &Function) -> Result<(), String> {
             ));
         }
         let depth_out = depth_in - pop + push;
+        deepest = deepest.max(depth_in).max(depth_out);
 
         match op {
             // Terminal: function exits, no successor. Also the check for a
@@ -422,7 +429,7 @@ pub fn stack_depth(f: &Function) -> Result<(), String> {
             )?,
         }
     }
-    Ok(())
+    Ok(deepest as usize)
 }
 
 #[cfg(test)]
@@ -438,6 +445,7 @@ mod tests {
             locals: 0,
             code,
             fast: Vec::new(),
+            max_stack: 0,
             consts: Vec::new(),
             lines,
         }

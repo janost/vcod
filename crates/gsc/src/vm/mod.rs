@@ -967,8 +967,9 @@ impl Vm {
     /// before anything is inserted, so a rejected `install` call changes
     /// nothing.
     pub fn install(&mut self, fns: Vec<Function>) -> Result<(), InstallError> {
+        let mut depths = Vec::with_capacity(fns.len());
         for f in &fns {
-            crate::bytecode::stack_depth(f).map_err(InstallError::BadStack)?;
+            depths.push(crate::bytecode::stack_depth(f).map_err(InstallError::BadStack)?);
         }
         let mut seen = std::collections::HashSet::new();
         for f in &fns {
@@ -980,12 +981,13 @@ impl Vm {
                 return Err(InstallError::Duplicate(key));
             }
         }
-        for mut f in fns {
+        for (mut f, depth) in fns.into_iter().zip(depths) {
             let key = FuncRef {
                 file: f.file,
                 name: f.name,
             };
             f.fast = crate::bytecode::fuse(&f.code, self.size_atom);
+            f.max_stack = depth as u32;
             let next = self.file_order.len() as u32;
             self.file_order.entry(f.file).or_insert(next);
             self.functions.insert(key, Rc::new(f));
@@ -1556,6 +1558,7 @@ pub(crate) mod tests {
             locals: 0,
             code: vec![crate::bytecode::Op::Pop, crate::bytecode::Op::ReturnUndef],
             fast: Vec::new(),
+            max_stack: 0,
             consts: Vec::new(),
             lines: vec![1, 1],
         };
@@ -1577,6 +1580,7 @@ pub(crate) mod tests {
             locals: 0,
             code: vec![crate::bytecode::Op::ReturnUndef],
             fast: Vec::new(),
+            max_stack: 0,
             consts: Vec::new(),
             lines: vec![1],
         };
