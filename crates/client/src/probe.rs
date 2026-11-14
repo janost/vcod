@@ -12182,12 +12182,16 @@ const WEAPSEL_FIRE: std::ops::Range<Duration> = Duration::from_secs(15)..Duratio
 /// The weapon-select script's commands past the dry pulls, from the settled
 /// join: `probe_weapsel` has put the thompson in hand by 22 s. Two
 /// `weapalt`s switch it to semi and back, `weapon colt_mp` takes the pistol
-/// by name, and a `weapalt` on the pistol has no mode to switch to.
-const WEAPSEL_COMMANDS: [(Duration, &str); 4] = [
+/// by name, and a `weapalt` on the pistol has no mode to switch to. The
+/// thompson then comes back, and the pistol is asked for again 500 ms on,
+/// the pistol's 300 ms drop and 200 ms into the thompson's 400 ms raise.
+const WEAPSEL_COMMANDS: [(Duration, &str); 6] = [
     (Duration::from_secs(26), "weapalt"),
     (Duration::from_secs(30), "weapalt"),
     (Duration::from_secs(34), "weapon colt_mp"),
     (Duration::from_secs(38), "weapalt"),
+    (Duration::from_secs(42), "weapon thompson_mp"),
+    (Duration::from_millis(42500), "weapon colt_mp"),
 ];
 
 impl LadderProbe {
@@ -12666,7 +12670,10 @@ fn write_weapsel_fixture(
     out.push_str("# puts a loaded thompson in the primary slot at 20 s; the client pulls the trigger every 700 ms\n");
     out.push_str("# from 15 to 19 s and runs `weapalt` at 26 and 30 s, `weapon colt_mp` at 34 s and `weapalt`\n");
     out.push_str(
-        "# at 38 s, all from its settled join (WEAPSEL_FIRE, WEAPSEL_COMMANDS in probe.rs).\n",
+        "# at 38 s, `weapon thompson_mp` at 42 s and `weapon colt_mp` at 42.5 s, inside the\n",
+    );
+    out.push_str(
+        "# thompson's raise, all from its settled join (WEAPSEL_FIRE, WEAPSEL_COMMANDS in probe.rs).\n",
     );
     out.push_str("# !cmd is a usercmd as it went on the wire; !press a command and what PlayInput made of it.\n");
     out.push_str(

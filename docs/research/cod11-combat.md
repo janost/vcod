@@ -629,6 +629,16 @@ conditions.
   disassembly). INFERRED: so the cmd a released shot's time runs out on,
   still in state 3, reaches the switch, as does a grenade pullback, which
   holds `weaponTime` at 0.
+- A switch inside a raise. VERIFIED, retail 1.1d
+  (`crates/server/tests/fixtures/playerstate/mp_carentan-dm-weapsel-raise.txt`,
+  2026-11-14, `--probe-weapsel` with `weapon thompson_mp` at 42 s and
+  `weapon colt_mp` 500 ms on): the thompson raises from ms 45497 (state 1,
+  `weaponTime` 400, no delay); the pistol's byte goes out at 45679, and
+  the next snapshot (45696) reads state 2, `weaponTime` 349 (the
+  thompson's `dropTime` 0.35, `weapon::stored_ms`) and `WEAP_DROP`, so a
+  running raise is cut short; the pistol is up at 46058 and idle at 46443.
+  vcod: `begin_change` lets state 1 through, and `weapsel_ab` replays both
+  captures.
 - Same function: with `pm_flags & 0x10` set and `ps->weapon` non-zero it
   begins a change to weapon 0. VERIFIED, cgame `0x300112e0`: with the bit set
   and `ps->weapon` 0 it returns before `cmd.weapon` is read, so a climber

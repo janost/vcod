@@ -33,6 +33,10 @@ const MAP: &str = "mp_carentan";
 const PROBE_PATH: &str = "maps/mp/gametypes/probe_weapsel";
 const PROBE_SRC: &str = "../gsc/tests/fixtures/semantics/client-probes/probe_weapsel.gsc";
 const FIXTURE: &str = "tests/fixtures/playerstate/mp_carentan-dm-weapsel.txt";
+/// The same recipe with the probe's last two commands: the thompson back,
+/// then the pistol asked for inside its raise (combat doc 1.8, "A switch
+/// inside a raise").
+const RAISE_FIXTURE: &str = "tests/fixtures/playerstate/mp_carentan-dm-weapsel-raise.txt";
 
 /// Rows that are known divergences, each a substring of the row it excuses
 /// and a ruling in the research doc.
@@ -352,8 +356,14 @@ fn diff(retail: &[Sample], ours: &[Sample]) -> Vec<String> {
 
 #[test]
 fn the_weapon_selection_matches_retail_on_mp_carentan() {
+    for fixture in [FIXTURE, RAISE_FIXTURE] {
+        selection_matches(fixture);
+    }
+}
+
+fn selection_matches(fixture: &str) {
     let Some(mut rig) = rig() else { return };
-    let text = std::fs::read_to_string(FIXTURE).expect("the capture");
+    let text = std::fs::read_to_string(fixture).expect("the capture");
     let cap = parse(&text);
     let ours = replay(&mut rig, &cap);
     assert_eq!(rig.sv.script_aborts(), Vec::<String>::new());
@@ -373,7 +383,7 @@ fn the_weapon_selection_matches_retail_on_mp_carentan() {
             println!("gap: {r}");
         }
     }
-    assert!(real.is_empty(), "{}", real.join("\n"));
+    assert!(real.is_empty(), "{fixture}:\n{}", real.join("\n"));
 }
 
 /// The dry pull, which the transition diff only sees as its event and its
