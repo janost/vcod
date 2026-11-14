@@ -2740,16 +2740,9 @@ fn the_hitlog_capture_matches_uo_on_mp_carentan() {
         "hitfine-uo",
         vcod_common::testing::uo_fs,
         &PROTOCOL_V22,
-        &[("[hit] 30200 0 ", KNOCKBACK_GAP)],
+        &[],
     );
 }
-
-/// A UO kill on the knockback's first frame: the round's point a float
-/// step off retail's. The body, its run clip and its skeleton are
-/// retail's; the round's start, `tag_player` and `tag_flash` off the gun's
-/// own skeleton, is a float step off on some aims (`cod11-turrets.md`
-/// 13.6, 13.8).
-const KNOCKBACK_GAP: &str = "the knockback's first frame's pose (turrets doc 13.6)";
 
 /// The 1.1d hit-grid capture's head: the capture predates the gsc's
 /// `PROBE models` line, and its head cells read the boxes of the `a` axis
@@ -2836,7 +2829,7 @@ fn the_hitgrid_capture_matches_uo_on_mp_carentan() {
         vcod_common::testing::uo_fs,
         &PROTOCOL_V22,
         HITGRID,
-        &[("[hit] 30450 0 ", KNOCKBACK_GAP)],
+        &[],
     );
 }
 
