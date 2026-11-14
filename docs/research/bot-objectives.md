@@ -3525,6 +3525,8 @@ radio's points (`hq`), summed. VERIFIED (measured, ours, release):
   hold runs out.
 - Defuses fall wherever bombs are guarded (13.4, 13.6, 13.7). The
   defuser (`SdView::lead`) still walks the straight way in alone.
+- Section 14 takes up both: a guard seen or shot on an outpost leaves
+  it (14.1), and defuses come back with the outposts (14.3, 14.6).
 
 ### 13.9 A body that ducks where it could not stand again
 
@@ -3679,3 +3681,137 @@ cue started; `back`, those a pulled-back guard came within 300 of the
 objective from (`BACK_NEAR`), and the mean seconds from the cue to it
 (`Server::bot_cue_tally`, `Cod2Bots::cue_tally`, `Cod4Bots::cue_tally`).
 The `mate` and `packed` columns are section 13.3's, near the objective.
+
+### 14.3 Measured: CoD1 1.1 `sd`
+
+13.4's set: `bot_match`, `GAMETYPE=sd`, 10 bots, mp_carentan, mp_harbor,
+mp_dawnville, mp_brecourt, mp_depot and mp_pavlov, seeds 1..=4, 6000
+ticks (24 matches a row), before `FAR=none CUES=none TRAVEL=none`
+(section 13's moves). Allies attack but on mp_pavlov. Per match, before
+against after: the mean difference, its standard error, and the matches
+that moved the other way; whole-map mate per map (six). VERIFIED
+(measured, ours, release, `feat/bot-objective-spread`):
+
+| Count | allies | axis |
+|---|---|---|
+| guard dist | 175 → 314, +139 ± 20, lower in 2 of 24 | 168 → 595, +428 ± 42, 0 of 24 |
+| mate near the objective | 219 → 274, +55 ± 10 | 237 → 434, +196 ± 27 |
+| packed near the objective | 67% → 45%, -22.0 ± 3.0, higher in 2 of 24 | 55% → 29%, -25.3 ± 3.0, 2 of 24 |
+| mate, whole map | 256 → 316, +60 ± 7, 6 of 6 maps higher | 247 → 399, +153 ± 33, 6 of 6 |
+| cues, back, to the first back | 110, 86, 2.2 s | 139, 34, 5.0 s |
+
+| Run | plants | defuses | allies W | axis W | kills | stalled |
+|---|---|---|---|---|---|---|
+| before | 89 | 25 | 70 | 54 | 950 | 0 |
+| after | 96 | 34 | 61 | 52 | 885 | 4 |
+
+- VERIFIED (the tables): the defenders' guards stand three and a half
+  times as far from their site, and both sides pack 22 to 25 points
+  less near the objective, in 22 of 24 matches.
+- VERIFIED (the tables): defuses rise (25 → 34, +0.38 ± 0.17 a match,
+  lower in 3 of 24; axis 21 → 29), back past what 13.4 lost (46 → 25
+  there); 14.6 finds it is the outposts' doing, not the walk back.
+  Plants hold (+0.29 ± 0.24); round wins move inside the spread (allies
+  -0.38 ± 0.25). Kills fall (-2.7 ± 1.2 a match, 7%); why is not traced.
+
+### 14.4 Measured: United Offensive `ctf` and `hq`, CoD4 1.7 `sd`
+
+13.5's and 13.6's sets, before as in 14.3. UO: mp_arnhem, mp_berlin,
+mp_cassino, mp_sicily, seeds 1..=4 (16 matches); CoD4: mp_crash,
+mp_backlot, mp_strike, 8 bots, seeds 1..=3 (9 matches). VERIFIED
+(measured, ours, release):
+
+| Count, per match | UO `ctf` allies | UO `ctf` axis | UO `hq` allies | UO `hq` axis | CoD4 `sd` allies | CoD4 `sd` axis |
+|---|---|---|---|---|---|---|
+| guard dist | 126 → 435, +309 ± 33 | 157 → 496, +339 ± 37 | 183 → 325, +142 ± 40 | 165 → 307, +142 ± 31 | 160 → 547, +387 ± 67 | 161 → 660, +499 ± 58 |
+| packed near | 17% → 5%, -12.3 ± 1.9 | 16% → 8%, -8.7 ± 2.4 | 66% → 46%, -20.5 ± 4.1 | 57% → 44%, -13.2 ± 4.1 | 33% → 26%, -6.0 ± 6.3 | 40% → 26%, -13.8 ± 3.2 |
+| mate near | 287 → 630 | 389 → 694 | 268 → 322 | 270 → 379 | 309 → 425 | 286 → 433 |
+| cues, back, to back | 27, 18, 7.6 s | 35, 21, 8.3 s | 27, 22, 1.5 s | 20, 15, 4.0 s | 36, 26, 2.0 s | 37, 17, 1.6 s |
+
+| Run | UO `ctf` takes | captures | returns | stalled | UO `hq` score | stalled | CoD4 plants | defuses | stalled |
+|---|---|---|---|---|---|---|---|---|---|
+| before | 22 | 4 | 3 | 121 | 1914 | 1046 | 34 | 14 | 0 |
+| after | 19 | 4 | 5 | 63 | 1483 | 5289 | 31 | 15 | 0 |
+
+- VERIFIED (the tables): guards stand two to four times as far off in
+  every game and pack less; `ctf` captures, CoD4's plants and defuses
+  and the stalls of `ctf` and CoD4 hold.
+- UO `hq`: the score falls inside the spread (-27 ± 18 a match). The
+  stalls' rise (+265 ± 238) is one match, mp_arnhem seed 3 (4747 of
+  5289). VERIFIED (trace, a temporary print of the brain's goal, post
+  and waypoint): the stalled bots circle under the held radio at
+  (144, 1959, 154), their waypoint the goal (86, 1875, 128) that the
+  body does not reach; the same match with the three rules off stalls
+  three bots in the same room from tick 4895 (912 bot-ticks).
+  INFERRED: the collapse brings more guards into that room sooner; the
+  pin is the movement's, as 13.5's was, and stays a follow-up.
+- `ctf` captures stay rare (4 in 16 matches) with the carrier hunt on.
+  INFERRED (13.9): a carrier is seen and chased only when the hunters
+  meet his way home.
+
+### 14.5 Measured: CoD2 1.3 `sd`, `ctf` and `hq`
+
+13.7's set: `GAME=cod2`, 10 bots, mp_toujane, mp_burgundy, mp_carentan,
+mp_matmata, seeds 1..=4, 6000 ticks (16 matches a row), before as in
+14.3. VERIFIED (measured, ours, release):
+
+| Count, per match | `sd` allies | `sd` axis | `ctf` allies | `ctf` axis | `hq` allies | `hq` axis |
+|---|---|---|---|---|---|---|
+| guard dist | 174 → 306, +132 ± 31 | 171 → 741, +570 ± 47 | 147 → 361, +215 ± 23 | 147 → 406, +260 ± 53 | 152 → 439, +288 ± 38 | 135 → 454, +320 ± 77 |
+| packed near | 46% → 24%, -22.3 ± 5.1 | 43% → 21%, -21.8 ± 2.1 | 17% → 14%, -3.7 ± 2.3 | 16% → 10%, -5.9 ± 1.9 | 51% → 43%, -8.6 ± 4.6 | 56% → 40%, -16.4 ± 4.3 |
+| mate near | 249 → 345 | 273 → 429 | 333 → 489 | 374 → 490 | 273 → 323 | 257 → 332 |
+| cues, back, to back | 63, 63, 0.9 s | 109, 55, 6.9 s | 81, 52, 5.7 s | 81, 52, 6.3 s | 46, 41, 1.3 s | 32, 29, 1.1 s |
+
+| Run | `sd` plants | defuses | `ctf` captures | `hq` score | kills `sd` / `ctf` / `hq` | stalled `sd` / `ctf` / `hq` |
+|---|---|---|---|---|---|---|
+| before | 69 | 34 | 20 | 2778 | 703 / 1073 / 1193 | 235 / 0 / 266 |
+| after | 66 | 41 | 15 | 2736 | 645 / 1125 / 1168 | 98 / 0 / 6 |
+
+- VERIFIED (the tables): guards stand two to four times as far off, and
+  `sd` packs 22 points less on both sides. Defuses rise inside the
+  spread (+0.44 ± 0.45 a match), plants hold (-0.19 ± 0.31). `ctf`
+  captures fall inside it (-0.31 ± 0.33, 6 matches lower, 4 higher), the
+  `hq` score holds (-2.6 ± 6.4). Stalls fall in `sd` and `hq`.
+
+### 14.6 Each rule alone: CoD1 1.1 `sd`
+
+14.3's set, each row the shipped build with one rule's arm off, or
+only `FAR` on. Columns the totals and, against the shipped row, the
+per-match difference that names the rule's own count. VERIFIED
+(measured, ours, release):
+
+| Run | allies gdist | axis gdist | allies packed near | axis packed near | allies whole-map packed | plants | defuses | kills | stalled |
+|---|---|---|---|---|---|---|---|---|---|
+| before | 175 | 168 | 67% | 55% | 62% | 89 | 25 | 950 | 0 |
+| `FAR` alone | 347 | 625 | 51% | 26% | 52% | 102 | 39 | 891 | 0 |
+| `CUES=none` | 428 | 622 | 40% | 29% | 41% | 94 | 35 | 885 | 0 |
+| `TRAVEL=none` | 285 | 604 | 56% | 29% | 56% | 96 | 33 | 919 | 37 |
+| all three | 314 | 595 | 45% | 29% | 44% | 96 | 34 | 885 | 4 |
+
+- VERIFIED (the table): the outposts carry the spread round the
+  objective and the defuses: `FAR` alone stands the defenders 457 ± 36
+  farther off and raises defuses 25 → 39.
+- VERIFIED (the table, `CUES=none` → all three): the cues bring guards
+  back in (guard dist -114 ± 24 allies, -27 ± 11 axis, 19 and 20 of 24
+  matches lower; still -4.3 ± 1.8 and -2.1 ± 0.9). Defuses do not move
+  with them (35 → 34): the walk back on a plant (`GuardHold::Back`) is
+  part of `CUES`, and with it off the defenders still go to the bomb, as
+  section 13 had them, from posts farther out. Why the outposts raise
+  defuses is not traced.
+- VERIFIED (the table, `TRAVEL=none` → all three): the attackers' whole
+  map packs 11.9 ± 3.5 points less (6 of 6 maps) and their nearest
+  teammate stands 42 ± 11 farther (per map); near the objective they
+  pack 11.0 ± 3.2 less (18 of 24).
+- Kills fall about 7% with the outposts (-2.5 ± 1.0 a match `FAR`
+  alone), the round share stays inside the spread in every row. All
+  three ship.
+
+### 14.7 What is left
+
+- UO `hq`'s radio room on mp_arnhem pins bots under the radio (14.4);
+  the collapse sends more there.
+- A collapse is per objective: a sighting near site A pulls A's guards
+  only, and in `ctf` the hunters chase a seen carrier but nobody looks
+  for an unseen one (the compass shows none, 7.1).
+- Outposts score cover against the one lane point they watch, not the
+  whole lane; a guard in the open is burnt off it once seen.
