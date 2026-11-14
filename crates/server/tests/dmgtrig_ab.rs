@@ -447,16 +447,38 @@ const RETAIL_SPAWNED: &[&str] = &[
     "PROBE done",
 ];
 
-/// Needs `COD_DIR` at a 1.1 or 1.5 install; a UO one returns early.
-#[test]
-fn a_script_spawned_trigger_damage_matches_retail() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
-        return;
-    };
+/// The same probe on retail UO, 2026-11-14, no client: the same lines but
+/// for the mod UO's `"damage"` notify carries.
+const RETAIL_SPAWNED_UO: &[&str] = &[
+    "PROBE spawned trigger_damage 32000 (844.00, 3480.00, -21.25)",
+    "PROBE phase 1550 origin",
+    "PROBE health 1550 32000",
+    "PROBE phase 2550 above",
+    "PROBE health 2550 32000",
+    "PROBE damage 100 MOD_EXPLOSIVE 2550",
+    "PROBE phase 3550 centre",
+    "PROBE health 3550 32000",
+    "PROBE damage 100 MOD_EXPLOSIVE 3550",
+    "PROBE phase 4550 under_centre",
+    "PROBE health 4550 32000",
+    "PROBE damage 100 MOD_EXPLOSIVE 4550",
+    "PROBE phase 5550 past_top",
+    "PROBE health 5550 32000",
+    "PROBE phase 6550 moved_old_centre",
+    "PROBE health 6550 32000",
+    "PROBE phase 7550 moved_new_centre",
+    "PROBE health 7550 32000",
+    "PROBE damage 100 MOD_EXPLOSIVE 7550",
+    "PROBE phase 8550 back",
+    "PROBE health 8550 32000",
+    "PROBE damage 100 MOD_EXPLOSIVE 8550",
+    "PROBE phase 9550 deleted",
+    "PROBE done",
+];
+
+/// Ours' `PROBE` lines of `client-probes/probe_dmgspawn.gsc` on `fs`.
+fn spawned_run(fs: vcod_common::pk3::Pk3Fs) -> Vec<String> {
     let proto = vcod_server::server::install_protocol(&fs);
-    if proto.transport.version == vcod_common::net::protocol::PROTOCOL_V22.transport.version {
-        return;
-    }
     let fs = std::rc::Rc::new(fs);
     let bsp_path = fs.resolve_map("mp_carentan").expect("mp_carentan");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
@@ -470,10 +492,10 @@ fn a_script_spawned_trigger_damage_matches_retail() {
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(fs).expect("load the scripts");
     common::run_alone(&mut sv, &mut now, 11000);
-    let ours: Vec<&str> = sv
+    let ours: Vec<String> = sv
         .script_log()
         .iter()
-        .map(|l| l.trim())
+        .map(|l| l.trim().to_string())
         .filter(|l| l.starts_with("PROBE"))
         .collect();
     if std::env::var_os("DMGTRIG_REPORT").is_some() {
@@ -481,7 +503,29 @@ fn a_script_spawned_trigger_damage_matches_retail() {
             eprintln!("{l}");
         }
     }
-    assert_eq!(ours, RETAIL_SPAWNED);
+    ours
+}
+
+/// Needs `COD_DIR` at a 1.1 or 1.5 install; a UO one returns early.
+#[test]
+fn a_script_spawned_trigger_damage_matches_retail() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    let proto = vcod_server::server::install_protocol(&fs);
+    if proto.transport.version == vcod_common::net::protocol::PROTOCOL_V22.transport.version {
+        return;
+    }
+    assert_eq!(spawned_run(fs), RETAIL_SPAWNED);
+}
+
+/// Needs `COD_DIR` at a UO install.
+#[test]
+fn a_script_spawned_trigger_damage_matches_retail_uo() {
+    let Some(fs) = vcod_common::testing::uo_fs() else {
+        return;
+    };
+    assert_eq!(spawned_run(fs), RETAIL_SPAWNED_UO);
 }
 
 /// `client-probes/probe_dmgspawnshot.gsc` on retail 1.1d, mp_carentan,
@@ -516,6 +560,19 @@ fn a_round_on_a_script_spawned_trigger_damage_matches_retail() {
     if proto.transport.version == vcod_common::net::protocol::PROTOCOL_V22.transport.version {
         return;
     }
+    let ours = direct_run_on(fs, proto, "mp_carentan", "probe_dmgspawnshot");
+    let ours: Vec<&str> = ours.iter().map(String::as_str).collect();
+    assert_eq!(ours, RETAIL_SPAWNED_SHOT);
+}
+
+/// Retail UO logged the same lines, 2026-11-14 (cod11-combat.md 14.8).
+/// Needs `COD_DIR` at a UO install.
+#[test]
+fn a_round_on_a_script_spawned_trigger_damage_matches_retail_uo() {
+    let Some(fs) = vcod_common::testing::uo_fs() else {
+        return;
+    };
+    let proto = vcod_server::server::install_protocol(&fs);
     let ours = direct_run_on(fs, proto, "mp_carentan", "probe_dmgspawnshot");
     let ours: Vec<&str> = ours.iter().map(String::as_str).collect();
     assert_eq!(ours, RETAIL_SPAWNED_SHOT);

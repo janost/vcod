@@ -8420,7 +8420,9 @@ INFERRED: so the first blast's miss is `CanDamage` reading the
 world-sized box's centre, not anything about the spawn, and an `origin`
 write relinks the trigger and moves its centre with it. VERIFIED, the same
 logs: the `"damage"` notify carries two arguments on 1.1d and 1.5b (4.2),
-hence no mod.
+hence no mod. VERIFIED, the same probe on retail UO, 2026-11-14: every
+line alike but the blasts' mod, `MOD_EXPLOSIVE` (UO's five-argument
+notify); `dmgtrig_ab`'s `..._matches_retail_uo` holds it.
 
 VERIFIED, `client-probes/probe_dmgspawnshot.gsc` on retail 1.1d (two runs)
 and 1.5b, mp_carentan, one axis `--probe-uo-weapon direct`
@@ -8434,7 +8436,16 @@ UO round did; at (0, 0, -20), (0, 0, -1) and (0, 0, 0) it logs nothing.
 INFERRED: `G_CheckHitTriggerDamage`'s `trap_SightTraceToEntity(start, 0,
 0, end, ent, -1)` clips the segment against the copy alone, and a round's
 end, backed off the world's face, does not reach the same face in a copy
-at the same place.
+at the same place. VERIFIED, the same probe on retail UO, 2026-11-14:
+the same lines (`a_round_on_a_script_spawned_trigger_damage_matches_retail_uo`).
+
+**Left open** (not captured): whether `trap_SightTraceToEntity` meets a
+map trigger's brushes as vcod's segment test does where the round ends
+inside a brush's backed-off face; `multi_wait`'s `rand()` draw, which vcod
+takes off the host's own generator (no stock trigger sets `random`, so
+only the draw's place in the stream could show); a tank shell's walk on
+the belltower; a grenade blast's charges past the 14.1 falloff; and the
+`use` arm's `accumulate + 1` count.
 
 **As implemented.** `crate::game::damage_trigger`: `spec_of` (the spawn's
 keys), `responds`, `activate`, `damaged` (`pain`/`die`, from
