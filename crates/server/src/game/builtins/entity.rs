@@ -10,6 +10,7 @@ use crate::game::host::{GameHost, LinkOp, SpawnMode, SpawnRequest};
 use crate::game::trigger::{PLAYER_MAXS, PLAYER_MINS};
 use crate::server::MAX_CLIENTS;
 use glam::Vec3;
+use std::rc::Rc;
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 
 /// `delete()`'s deferred-free window: the `delete` entity method (0x5da14,
@@ -188,15 +189,42 @@ pub fn get_ent_array(
     let lowered = cx.resolve(key).to_ascii_lowercase();
     let field = cx.intern_folded(&lowered);
 
-    let ids: Vec<EntId> = host.ents.iter_inuse().map(|(id, _)| id).collect();
-    let arr = cx.new_array();
-    let mut n = 0;
-    for id in ids {
-        let got = host.get_field(cx, id, field);
-        if values_match(cx, got, want) {
-            cx.set_index(arr, ArrayKey::Int(n), Value::Entity(id));
-            n += 1;
+    // A text looked up by an engine field is answered from the walk the
+    // table's last edits left (`EntArrays`).
+    let memo = match want {
+        Value::String(w) => host.plain_engine_slot(cx, field).map(|slot| (slot, w)),
+        _ => None,
+    };
+    let profile = std::ptr::from_ref(host.profile) as usize;
+    let stamp = |host: &GameHost, slot| (host.ents.edits(), host.ents.slot_edits(slot));
+    let known = memo.and_then(|(slot, w)| {
+        let at = stamp(host, slot);
+        host.ent_arrays.get(at, profile, slot, cx.resolve(w))
+    });
+    let matched: Rc<[EntId]> = match known {
+        Some(ids) => ids,
+        None => {
+            let ids: Vec<EntId> = host.ents.iter_inuse().map(|(id, _)| id).collect();
+            let mut matched = Vec::new();
+            for id in ids {
+                let got = host.get_field(cx, id, field);
+                if values_match(cx, got, want) {
+                    matched.push(id);
+                }
+            }
+            let matched: Rc<[EntId]> = matched.into();
+            if let Some((slot, w)) = memo {
+                let text = cx.resolve(w).to_string();
+                let slot_edits = host.ents.slot_edits(slot);
+                host.ent_arrays
+                    .put(slot, &text, slot_edits, matched.clone());
+            }
+            matched
         }
+    };
+    let arr = cx.new_array();
+    for (n, id) in matched.iter().enumerate() {
+        cx.set_index(arr, ArrayKey::Int(n as i32), Value::Entity(*id));
     }
     Ok(Value::Array(arr))
 }
@@ -1458,6 +1486,61 @@ mod tests {
             }
             // Spawn order, not alphabetical: entity number decides.
             assert_eq!(got, ["b", "a", "c"]);
+        });
+    }
+
+    /// A kept answer (`EntArrays`) follows every change the walk would
+    /// see: a write into or out of the text, a spawn, a free, and a write
+    /// through a plain mutable reach.
+    #[test]
+    fn get_ent_array_answers_follow_the_table() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let t = cx.intern_folded("targetname");
+            assert!(
+                host.plain_engine_slot(cx, t).is_some(),
+                "the answer is kept"
+            );
+            let name = |cx: &mut Cx, n: &str| Value::String(cx.intern_exact(n));
+            let mut ids = Vec::new();
+            for n in ["x", "y", "x"] {
+                let id = host.ents.spawn(cx).unwrap();
+                let v = name(cx, n);
+                host.set_field(cx, id, t, v).unwrap();
+                ids.push(id);
+            }
+            let ask = |host: &mut GameHost, cx: &mut Cx| -> Vec<EntId> {
+                let (x, key) = (name(cx, "x"), name(cx, "targetname"));
+                let Value::Array(arr) = get_ent_array(host, cx, None, &[x, key]).unwrap() else {
+                    panic!("not an array");
+                };
+                (0..cx.array_len(arr) as i32)
+                    .map(|i| match cx.get_index(arr, ArrayKey::Int(i)) {
+                        Value::Entity(e) => e,
+                        v => panic!("{v:?}"),
+                    })
+                    .collect()
+            };
+            assert_eq!(ask(&mut host, cx), [ids[0], ids[2]]);
+            let x = name(cx, "x");
+            host.set_field(cx, ids[1], t, x).unwrap();
+            assert_eq!(ask(&mut host, cx), [ids[0], ids[1], ids[2]]);
+            let z = name(cx, "z");
+            host.set_field(cx, ids[0], t, z).unwrap();
+            assert_eq!(ask(&mut host, cx), [ids[1], ids[2]]);
+            let late = host.ents.spawn(cx).unwrap();
+            let x = name(cx, "x");
+            host.set_field(cx, late, t, x).unwrap();
+            assert_eq!(ask(&mut host, cx), [ids[1], ids[2], late]);
+            host.ents.free(ids[2]);
+            assert_eq!(ask(&mut host, cx), [ids[1], late]);
+            let Some(crate::game::fields::Route::Engine { slot, .. }) =
+                Some(crate::game::fields::route_entity("targetname"))
+            else {
+                panic!("targetname is an engine field");
+            };
+            host.ents.get_mut(late).unwrap().engine[slot] = name(cx, "y");
+            assert_eq!(ask(&mut host, cx), [ids[1]]);
         });
     }
 

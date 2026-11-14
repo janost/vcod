@@ -357,10 +357,13 @@ pub struct ObjectTable {
     reuse_after_ms: Option<i32>,
     /// `level.time` as the allocator sees it, for `reuse_after_ms`.
     clock_ms: i32,
-    /// Bumped by every mutable reach into a slot (a spawn, a free, a
-    /// `get_mut`): a cache over the table's contents is current while it
-    /// reads what it was built on (`GameHost::placed_script_models`).
+    /// Bumped by every mutable reach into an entity slot `iter_inuse` walks
+    /// (a spawn, a free, a `get_mut`; not a HUD element's or the world's): a
+    /// cache over those slots is current while it reads what it was built
+    /// on (`GameHost::placed_script_models`, `GameHost::ent_arrays`).
     edits: u64,
+    /// Per engine slot, the writes to that slot alone ([`Self::get_mut_slot`]).
+    slot_edits: Vec<u64>,
 }
 
 impl Default for ObjectTable {
@@ -383,6 +386,7 @@ impl ObjectTable {
             reuse_after_ms: None,
             clock_ms: 0,
             edits: 0,
+            slot_edits: Vec::new(),
         }
     }
 
@@ -818,12 +822,15 @@ impl ObjectTable {
     /// dropped. A `ThinkFn::RespawnItem` is left armed for the item pass.
     #[must_use]
     pub fn run_think(&mut self, id: EntId, now_ms: i32) -> Option<ThinkFn> {
-        let e = self.get_mut(id)?;
-        let think = e.think.filter(|t| *t != ThinkFn::RespawnItem)?;
-        // Retail's `nextthink` of 0 is "no think", not "due now".
+        // Retail's `nextthink` of 0 is "no think", not "due now". An entity
+        // with none due is not reached mutably, so `edits` holds.
+        let e = self.get(id)?;
+        e.think.filter(|t| *t != ThinkFn::RespawnItem)?;
         if e.nextthink == 0 || e.nextthink > now_ms {
             return None;
         }
+        let e = self.get_mut(id)?;
+        let think = e.think.filter(|t| *t != ThinkFn::RespawnItem)?;
         e.think = None;
         e.nextthink = 0;
         match think {
@@ -882,7 +889,10 @@ impl ObjectTable {
         if !self.current(id) {
             return None;
         }
-        self.edits += 1;
+        // A HUD element or the world is no slot `iter_inuse` walks.
+        if id.0 < FIRST_HUD_ELEM && id.0 != ENTITYNUM_WORLD {
+            self.edits += 1;
+        }
         match id.0.checked_sub(FIRST_HUD_ELEM) {
             Some(i) => self.huds[i as usize].as_mut(),
             None if id.0 == ENTITYNUM_WORLD => self.world.as_mut(),
@@ -898,6 +908,37 @@ impl ObjectTable {
     }
 
     /// Whatever holds entity number `n` now.
+    /// [`Self::get_mut`] for a write to what no reader of [`Self::edits`]
+    /// reads (the client fields, the script struct, `apos_base`, the
+    /// attachments, the loop sound and events): the count stays. A caller writes nothing else through
+    /// it.
+    pub fn get_mut_quiet(&mut self, id: EntId) -> Option<&mut GEntity> {
+        if !self.current(id) || id.0 >= FIRST_HUD_ELEM || id.0 == ENTITYNUM_WORLD {
+            return self.get_mut(id);
+        }
+        self.ents[id.0 as usize].as_mut()
+    }
+
+    /// [`Self::get_mut`] for a write to engine slot `slot` alone: it moves
+    /// [`Self::slot_edits`] of `slot`, not [`Self::edits`].
+    pub fn get_mut_slot(&mut self, id: EntId, slot: usize) -> Option<&mut GEntity> {
+        if !self.current(id) || id.0 >= FIRST_HUD_ELEM || id.0 == ENTITYNUM_WORLD {
+            return self.get_mut(id);
+        }
+        if self.slot_edits.len() <= slot {
+            self.slot_edits.resize(slot + 1, 0);
+        }
+        self.slot_edits[slot] += 1;
+        self.ents[id.0 as usize].as_mut()
+    }
+
+    /// How many [`Self::get_mut_slot`] writes engine slot `slot` took: a
+    /// cache over that slot is current while this and [`Self::edits`] both
+    /// read what it was built on.
+    pub fn slot_edits(&self, slot: usize) -> u64 {
+        self.slot_edits.get(slot).copied().unwrap_or(0)
+    }
+
     pub fn by_number_mut(&mut self, n: u32) -> Option<&mut GEntity> {
         let id = self.handle(n)?;
         self.get_mut(id)
