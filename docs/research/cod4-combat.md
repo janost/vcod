@@ -1896,18 +1896,28 @@ Open, with each gate's `GAPS`:
   `BG_PlayerAngles` swings toward goes through the same (0x804c67c).
   VERIFIED (the instructions). With the swing on floats the bounce came
   within ten ulps of retail's. VERIFIED (the gate).
-- The float fold cycles a still yaw at 0: an angle of 8.7e-6 (360 folded)
-  swinging to 0 sums to a hair under 0, which folds to 360.0 once stored,
-  and 360.0 folds back to 8.7e-6, frame after frame. INFERRED (the
-  instructions' arithmetic, traced on ours). A dead body's `tag_origin`
-  yaw takes the legs' yaw raw (0x804cfe6, the dead test at 0x804d075) and
-  the controls ease linearly with no wrap (0x804d5fb..0x804d652).
-  VERIFIED (the instructions). So the control swings toward 0 and 360 in
-  turn, up to 36 degrees a frame at 10 frames a second: on ours a corpse
-  placed at yaw 360 kicked its ragdoll's neck to 33 degrees
-  (`cod4_live_ragdolls_hold_still_once_down`). VERIFIED (the test). Only the server's hit poses
-  take the float fold (`Updater::Cod4 { floats }`); the client, whose
-  `iw3mp.exe` arithmetic is not read yet, keeps CoD2's shorts. INFERRED.
+- The server's fold can store 360.0 for a yaw at rest: a swing to 0 off
+  an angle a hair over 0 sums to a hair under 0 on the stack, and
+  `AngleNormalize360` (0x8190540) tests for 360 before it stores
+  (0x8190580..0x819058a), so it returns a hair under 360, stored 360.0.
+  VERIFIED (gdb: `BG_SwingAngles` from 0x32ffff13 to 0 returned
+  0x43b40000). A dead body's `tag_origin` yaw takes the legs' yaw raw
+  (0x804cfe6, the dead test at 0x804d075) and the controls ease linearly
+  with no wrap (0x804d5fb..0x804d652). VERIFIED (the instructions). Such
+  a yaw swings the control toward 0 and 360 in turn, up to 18 degrees a
+  frame: on ours a corpse placed at yaw 360 kicked its ragdoll's neck to
+  33 degrees (`cod4_live_ragdolls_hold_still_once_down`). VERIFIED (the
+  test). `iw3mp.exe` folds in floats too, every step stored
+  (`AngleSubtract` 0x561690, `AnglesSubtract` 0x561530,
+  `BG_SwingAngles` 0x4062b0), and its `AngleNormalize360` (0x561610)
+  stores `(x - floor(x)) * 360` before it takes 360 off one that reaches
+  it, so a hair under 0 comes back 0 and a yaw at rest never reads 360.0.
+  VERIFIED (the instructions). Its controls ease by a step stored as a
+  float, `(float)frametime * 0.36` (0x407288, `BG_LerpAngles` 0x4070a0),
+  as ours did. VERIFIED (the instructions). The client's bodies take
+  that arithmetic (`Cod4Arith::Client`), the server's hit poses
+  `cod4_lnxded`'s (`Cod4Arith::Server`); the ragdoll test holds still
+  under the client's. VERIFIED (the test).
 - The controllers read the view and `leanf` off the body's `clientInfo_t`
   (+0x3e8, +0x3e4; 0x804cfcb, 0x804d031), which `ClientEndFrame` copies
   from the playerstate and entity (0x80a6ec7..0x80a6f00), so a trace
@@ -1928,12 +1938,26 @@ Open, with each gate's `GAPS`:
   `entity_normal`); the bounce's z, which the yaw leaves alone, then sits
   one to three ulps from retail's and x and y ten and six. VERIFIED (the
   gate).
-- What is left is the head bone's own matrix. Retail's words need the
-  body-frame normal's x one ulp under ours's (0x3f60f04e for 0x3f60f04f)
-  and z one to three ulps further out. INFERRED (a model of the yaw's
-  turn and of the mirror against retail's words). The server poses the
-  controllers as CoD1's `G_DObjSetControlTagAngles` did, a glam quat turned
-  into the parent's frame (`playerpose::apply_controllers`), not 1.7's
-  `AnglesToQuat` (0x81b0008) and `DObjCalcSkel`'s control path
-  (0x81b00de). INFERRED (the code). Porting that path is the open step;
-  `THROWBACK_GAPS` keeps the row until then.
+- The head bone's matrix: a player's six control bones go down
+  `DObjCalcSkel`'s second arm (cod4-gsc.md 3.2, "The skeleton"), turned
+  in `tag_origin`'s frame with no anim of their own, where the server
+  had posed them as CoD1's `G_DObjSetControlTagAngles` did, a glam quat
+  turned into the parent's frame. VERIFIED (gdb; `skel_ab`). Ported
+  (`skel::compose_controlled`), the bounce's words moved from (10, 6, 0)
+  ulps off retail's to (26, 9, 2). VERIFIED (the gate).
+- The controller's arithmetic: 1.7 eases each control by `frametime *
+  0.36f` kept on the x87 stack (18.0000007 a 50 ms frame, 0x804d5de),
+  not a float's 18.0; the legs' yaw less the view's folds in floats
+  (0x804d355); every swing and fold keeps the 64-bit stack
+  (`BG_SwingAngles` 0x804b3ba, `AnglesSubtract` 0x819397a). VERIFIED (the
+  instructions). Fed retail's `clientInfo_t` inputs, ours's controls
+  match retail's on all 255 controller runs gdb dumped, and ours's swing
+  all 374 distinct `BG_SwingAngles` calls, word for word. VERIFIED
+  (`skel_ab`, `playerpose` tests). Neither moved the bounce's words.
+  VERIFIED (the gate).
+- What is left is the parent chain: the anim sampler's locals of the
+  spine and neck bones between the control bones, which no dump checks
+  yet. INFERRED (every other input to the head bone now matches retail
+  word for word). The next step is a gdb dump of the shooter's skeleton
+  at `BounceMissile` (0x80946ba) on a fresh throw back pair, beside its
+  anim state. `THROWBACK_GAPS` keeps the row until then.

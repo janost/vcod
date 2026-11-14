@@ -591,8 +591,9 @@ fn cod4_rocket_ab() {
 
 const THROWBACK_GAPS: &[(&str, &str)] = &[(
     "* entity 317:4 lerp.pos.trDelta",
-    "the bounce off the shooter's head box, a few ulps off: the head bone's \
-     controllers pose as CoD1's, not 1.7's control path (cod4-combat.md 15.1)",
+    "the bounce off the shooter's head box, a few ulps off: the controls and \
+     control bones match a gdb dump, the anim sampler's spine and neck locals \
+     are unchecked (cod4-combat.md 15.1)",
 )];
 
 /// The live frag's flight, the hint, the pickup, the throw back and its

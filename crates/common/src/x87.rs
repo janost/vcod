@@ -274,6 +274,28 @@ impl F80 {
         F80::round(neg, m, big.e - 62)
     }
 
+    /// `frndint` under round-down: the greatest integer not above.
+    pub fn floor(self) -> F80 {
+        if self.m == 0 || self.e >= 0 {
+            return self;
+        }
+        let sh = -self.e;
+        let (int, frac) = if sh >= 64 {
+            (0, self.m)
+        } else {
+            (self.m >> sh, self.m & ((1u64 << sh) - 1))
+        };
+        let int = if self.neg && frac != 0 { int + 1 } else { int };
+        if int == 0 {
+            return F80 {
+                neg: false,
+                m: 0,
+                e: 0,
+            };
+        }
+        F80::round(self.neg, u128::from(int), 0)
+    }
+
     /// `fsqrt`; a negative's root is that of its magnitude.
     pub fn sqrt(self) -> F80 {
         if self.m == 0 {

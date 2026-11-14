@@ -23,6 +23,7 @@ use vcod_cod4::net::delta::{EntityState, PlayerState};
 use vcod_cod4::pmove::weapon::{WEAPTYPE_GRENADE, WeaponDef, ev as wev};
 use vcod_common::animclock::Times;
 use vcod_common::bonetrace::{PriorityMap, bone_trace_worlds};
+use vcod_common::playerpose::Controllers;
 use vcod_gsc::{EntId, Value};
 
 use super::level::{Cod4Level, PM_DEAD, PsExt};
@@ -203,6 +204,9 @@ pub struct PosedBody4 {
     pub placed: glam::Mat4,
     /// The yaw the body is placed at (`r.currentAngles`).
     pub yaw: f32,
+    /// The controls the pose took, which its skeleton sets as 1.7's
+    /// controller does ([`skel_worlds`]).
+    pub controls: Controllers,
 }
 
 impl PosedBody4 {
@@ -224,7 +228,7 @@ impl PosedBody4 {
         let inv = self.placed.inverse();
         let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
         let skel = &self.rig.skeleton;
-        let mats = skel_mats(skel, &self.pose);
+        let mats = skel_mats(skel, &self.pose, Some(&self.controls));
         let worlds = worlds_of(&mats);
         let mut h = bone_trace_worlds(skel, &worlds, ls, le, priority, limit)?;
         h.normal = struck_normal(&mats, &worlds, &h);
@@ -241,8 +245,9 @@ impl PosedBody4 {
 pub(crate) fn skel_worlds(
     skel: &vcod_common::skeleton::Skeleton,
     pose: &vcod_common::skeleton::PoseBuffer,
+    controls: Option<&Controllers>,
 ) -> Vec<(glam::Vec3, glam::Quat)> {
-    worlds_of(&skel_mats(skel, pose))
+    worlds_of(&skel_mats(skel, pose, controls))
 }
 
 /// Each bone's place and turn off its `DObjAnimMat`.
@@ -257,21 +262,68 @@ fn worlds_of(mats: &[vcod_cod4::skel::AnimMat]) -> Vec<(glam::Vec3, glam::Quat)>
         .collect()
 }
 
-/// The `DObjAnimMat`s [`skel_worlds`] reads: `DObjCalcSkel`'s bones.
+/// The `DObjAnimMat`s [`skel_worlds`] reads: `DObjCalcSkel`'s bones, the
+/// controls' bones set as 1.7's controller sets them ([`set_controls`]).
 fn skel_mats(
     skel: &vcod_common::skeleton::Skeleton,
     pose: &vcod_common::skeleton::PoseBuffer,
+    controls: Option<&Controllers>,
 ) -> Vec<vcod_cod4::skel::AnimMat> {
     let bones = skel.bones();
     let parents: Vec<i32> = bones.iter().map(|b| b.parent).collect();
-    let locals: Vec<([f32; 4], [f32; 3])> = (0..bones.len())
+    let mut locals: Vec<vcod_cod4::skel::PosedLocal> = (0..bones.len())
         .map(|b| {
             let (p, q) = pose.local(b);
-            (q.to_array(), p.to_array())
+            vcod_cod4::skel::PosedLocal {
+                quat: q.to_array(),
+                trans: p.to_array(),
+                control: false,
+            }
         })
         .collect();
     let binds: Vec<[f32; 3]> = bones.iter().map(|b| b.local_pos.to_array()).collect();
+    if let Some(c) = controls {
+        set_controls(skel, &mut locals, &binds, c);
+    }
     vcod_cod4::skel::calc_posed(&parents, &locals, &binds)
+}
+
+/// The tags `BG_Player_DoControllers` sets (`cod4_lnxded` 0x8056b48,
+/// cod4-player-anims.md 8): the spine's and head's six control bones take
+/// their angles' quat (`AnglesToQuat` 0x81b0008) and no shift off the
+/// model's, marked to turn in bone 0's frame (0x81b01e8), in place of the
+/// anim's local; `tag_origin` takes its angles' quat and its translation
+/// (0x81b0144).
+fn set_controls(
+    skel: &vcod_common::skeleton::Skeleton,
+    locals: &mut [vcod_cod4::skel::PosedLocal],
+    binds: &[[f32; 3]],
+    c: &Controllers,
+) {
+    use vcod_cod4::skel::{PosedLocal, angles_to_quat};
+    for (name, angles) in [
+        ("pelvis", c.pelvis),
+        ("back_low", c.back_low),
+        ("back_mid", c.back_mid),
+        ("back_up", c.back_up),
+        ("neck", c.neck),
+        ("head", c.head),
+    ] {
+        if let Some(b) = skel.bone_index(name) {
+            locals[b] = PosedLocal {
+                quat: angles_to_quat(angles),
+                trans: binds[b],
+                control: true,
+            };
+        }
+    }
+    if let Some(b) = skel.bone_index("tag_origin") {
+        locals[b] = PosedLocal {
+            quat: angles_to_quat(c.origin),
+            trans: c.origin_trans.to_array(),
+            control: false,
+        };
+    }
 }
 
 /// The struck face's normal in the body's frame as `DObjTraceline` gives
@@ -368,12 +420,12 @@ pub struct Combat4 {
 }
 
 /// A body under 1.7's angle updater and controllers (cod4-player-anims.md
-/// 8) at the lean dvars' defaults, its swings folded in floats as
-/// `cod4_lnxded`'s; a bare [`PlayerBody`] runs CoD2's.
+/// 8) at the lean dvars' defaults, its arithmetic `cod4_lnxded`'s; a bare
+/// [`PlayerBody`] runs CoD2's.
 fn cod4_body() -> PlayerBody {
     let mut b = PlayerBody::default();
     b.cod4_lean = Some(vcod_common::playerpose::LeanDvars::default());
-    b.float_swing = true;
+    b.cod4_arith = vcod_common::playerpose::Cod4Arith::Server;
     b
 }
 
@@ -1209,7 +1261,8 @@ impl Cod4Level {
         let inv = placed.inverse();
         let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
         let skel = &rig.skeleton;
-        let mats = skel_mats(skel, &pose);
+        let controls = *b.controls();
+        let mats = skel_mats(skel, &pose, Some(&controls));
         let worlds = worlds_of(&mats);
         let hit = bone_trace_worlds(skel, &worlds, ls, le, priority, limit).map(|mut h| {
             h.normal = struck_normal(&mats, &worlds, &h);
@@ -1228,6 +1281,7 @@ impl Cod4Level {
                 .find(|p| Some(p.entity) == entity)
             {
                 p.pose = Rc::new(pose);
+                p.controls = controls;
             }
         }
         hit
@@ -1279,6 +1333,7 @@ impl Cod4Level {
                 pose: Rc::new(pose),
                 placed,
                 yaw: f.angles[1],
+                controls: *bodies[slot].controls(),
             });
         }
         out
@@ -1314,7 +1369,7 @@ impl Cod4Level {
             .iter()
             .enumerate()
             .find(|(_, b)| b.has_hit_box() && b.hit_location == hitloc)?;
-        let (pos, rot) = skel_worlds(skel, &pose)[i];
+        let (pos, rot) = skel_worlds(skel, &pose, Some(b.controls()))[i];
         let local = pos + rot * ((bone.hit_mins + bone.hit_maxs) * 0.5);
         let placed = BodyFrame {
             origin: ps.origin,
