@@ -469,6 +469,11 @@ otherwise.
   killed callback. UO's rank icon is destroyed on it (coduo-diff.md 22).
 - A killed gunner keeps the turret until its own end-frame turn.
   `player_die` releases nothing.
+- A gunner's placement writes `r.currentAngles` (the body's yaw, not the
+  view's), which a trace poses him in until his next cmd. The weight step
+  that lands his rows runs for every DObj before the entity pass, not in
+  his own end frame, so a lower slot's round meets his last placement
+  landed (`ClientSim::land_gunner_goals`, `cod11-turrets.md` 13.10).
 - `setPlayerIgnoreRadiusDamage` is a level flag read only by the
   `radiusDamage` builtin.
 - The body queue is eight entities at 64..71 with no timer. A corpse lives

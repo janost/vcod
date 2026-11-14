@@ -927,6 +927,51 @@ by state), VERIFIED (measured):
   out) changed none of it (mp_foy 20784, mp_kursk 16306, both 16 axis
   wins; not kept). What would move it is a stand search for hulls, as
   `breach_stands` does for a body.
+- The stand search for hulls, tried 2026-11-14 and not kept (commit
+  1c0e9fdfc, backed out after it): a driver with no shot from where it
+  stands drove to a firing spot, per base 16 sectors by 3 bands 500 to
+  1800 units off, the band's middlemost graph node a hull fits on whose
+  muzzle, turned to the base, `shell_aim` finds a shot from, the nearest
+  by drive over the hull's nodes (a spot reached with no shot for 2 s
+  given up for the next, picked again every 15 s). With it the view was
+  raised by what the gun's bent line lacked of the aim's pitch: on mp_foy
+  seed 7 an allied Panzer at (957, 4335, -104) with a shot at the base at
+  (1228, 6157) had its gun 2.5 degrees under the 4.9 it needed (the
+  camera's view met the rise short of the base), and lay there unlaid.
+  VERIFIED (measured, mp_foy, seeds 1 to 8, per driver tick, counted off a
+  throwaway print):
+
+  | | axis off | axis on | allies off | allies on |
+  |---|---|---|---|---|
+  | ticks laid on a base | 32889 | 31147 | 3123 | 10811 |
+  | ticks with a shot, line not on it | 265 | 523 | 2283 | 2871 |
+  | ticks with no shot (driving to a spot, on) | 14437 | 16506 | 16260 | 23539 |
+  | rounds won | 8 | 8 | 0 | 0 |
+
+  The allies' laid ticks went up 3.5 times and their bases destroyed
+  from 5 to 8 in 8 rounds, and mp_foy still went to the axis 8 in 8.
+  INFERRED (the counts): the allies' own Shermans park 9000 to 14000 off
+  the axis bases, so their drive to a spot outlasts the axis's shelling
+  from the Shermans captured beside the allied bases; a spot does not
+  change who reaches a hull first.
+- The five maps with the spots (the stock-health `bot_match` below, same
+  seeds, master df82d8f0a), VERIFIED (measured):
+
+  | map | before mean | after mean | before wins axis-allies | after |
+  |---|---|---|---|---|
+  | mp_foy | 20789 | 22186 | 8-0 | 8-0 |
+  | mp_italy | 16081 | 22119 | 8-0 | 5-3 |
+  | mp_kursk | 16799 | 17924 | 4-4 | 5-3 |
+  | mp_ponyri | 25439 | 23989 | 4-4 | 5-3 |
+  | mp_rhinevalley | 18531 | 18899 | 6-2 | 4-4 |
+  | all 40 | 19528 (13759 to 33799) | 21023 (13799 to 35479) | 30-10 | 27-13 |
+
+  Every run ends on its bases both times. Each map's mean moved inside
+  its 8 seeds' spread, so the spots were not kept. mp_rhinevalley, whose
+  6 common seeds went 20944 to 23362 on the mean with the shell's fall
+  traced (above), runs 18531 on all 8 seeds at this master and 18899
+  with the spots, inside their 14899 to 25099: no regression at this
+  tip, and the spots do not move it.
 
 Out of rounds:
 

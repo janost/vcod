@@ -27,6 +27,7 @@ mod fall_ab;
 mod flood_protect;
 mod fx_ab;
 mod gametypes_ab;
+mod gunduel_ab;
 mod gunkick_ab;
 mod hitching_client;
 mod hud;
