@@ -72,6 +72,57 @@ pub struct Sched {
     minflt: u64,
     majflt: u64,
     nvcsw: u64,
+    /// User-space instructions this thread retired ([`instructions`]).
+    insns: Option<u64>,
+}
+
+/// The user-space instructions the calling thread has retired since its
+/// first call, off a `perf_event_open` counter (Linux, where
+/// `perf_event_paranoid` lets a process count itself); `None` where there
+/// is none. A count moves little with the load of a shared machine, where
+/// time on a CPU moves with its neighbours' (cod4-server-frame.md 9).
+pub fn instructions() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        thread_local! {
+            static FD: i32 = open_instructions();
+        }
+        let fd = FD.with(|fd| *fd);
+        if fd < 0 {
+            return None;
+        }
+        let mut n = 0u64;
+        // SAFETY: a read of 8 bytes into `n` from a counter fd this thread opened.
+        let got = unsafe { libc::read(fd, (&raw mut n).cast(), 8) };
+        (got == 8).then_some(n)
+    }
+    #[cfg(not(target_os = "linux"))]
+    None
+}
+
+/// A counting `perf_event_open` for the calling thread's user-space
+/// instructions: `PERF_TYPE_HARDWARE` (0), `PERF_COUNT_HW_INSTRUCTIONS`
+/// (1), the version-0 attribute (64 bytes) with `exclude_kernel` and
+/// `exclude_hv` (flag bits 5 and 6). -1 when the kernel refuses.
+#[cfg(target_os = "linux")]
+fn open_instructions() -> i32 {
+    let mut attr = [0u64; 8];
+    attr[0] = 64 << 32;
+    attr[1] = 1;
+    attr[5] = (1 << 5) | (1 << 6);
+    // SAFETY: the attribute is 64 initialised bytes the kernel only reads;
+    // pid 0 and cpu -1 count this thread on any CPU.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_perf_event_open,
+            attr.as_ptr(),
+            0 as libc::pid_t,
+            -1 as libc::c_int,
+            -1 as libc::c_int,
+            0 as libc::c_ulong,
+        )
+    };
+    fd as i32
 }
 
 pub fn sched() -> Option<Sched> {
@@ -95,6 +146,7 @@ pub fn sched() -> Option<Sched> {
         minflt,
         majflt,
         nvcsw,
+        insns: instructions(),
     })
 }
 
@@ -111,6 +163,8 @@ pub struct Split {
     pub majflt: u64,
     /// Voluntary context switches: the times it slept.
     pub sleeps: u64,
+    /// User-space instructions retired, in millions ([`instructions`]).
+    pub minsns: Option<f32>,
 }
 
 impl Split {
@@ -126,6 +180,7 @@ impl Split {
             minflt: b.minflt - a.minflt,
             majflt: b.majflt - a.majflt,
             sleeps: b.nvcsw - a.nvcsw,
+            minsns: a.insns.zip(b.insns).map(|(a, b)| (b - a) as f32 / 1e6),
         })
     }
 }
@@ -136,7 +191,11 @@ impl std::fmt::Display for Split {
             f,
             "run {:.1} ms, queued {:.1} ms, asleep {:.1} ms, faults {}/{}, sleeps {}",
             self.run_ms, self.queued_ms, self.asleep_ms, self.minflt, self.majflt, self.sleeps
-        )
+        )?;
+        if let Some(m) = self.minsns {
+            write!(f, ", {m:.1} M insns")?;
+        }
+        Ok(())
     }
 }
 

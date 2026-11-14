@@ -242,8 +242,10 @@ only yardstick.
     body, the check that a refactor moved no bot. `NETDIGEST=<N>` hashes
     every datagram sent, with an observer client joined.
     `VCOD_TICK_TRACE=<dir>` writes the tick's step log (bot-combat.md
-    section 1). `SPIKE_MS` logs slow ticks (every game); on CoD1 and
-    CoD2 `RESTART=<n>` runs `map_restart` every `n` ticks, a spawn wave
+    section 1). `SPIKE_MS` logs slow ticks (every game), with the ticking
+    thread's instructions where the kernel lets a process count them, the
+    number to compare on a loaded machine (cod4-server-frame.md 9.1); on
+    CoD1 and CoD2 `RESTART=<n>` runs `map_restart` every `n` ticks, a spawn wave
     each (cod4-server-frame.md 9). `TICKSTATS=1` (with `JOBS=1`) prints each
     phase's mean, p50, p99 and max a tick. `VCOD_BOT_THREADS=1` runs the
     bots' pass serial: its digests match the threaded run's.

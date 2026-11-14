@@ -323,7 +323,8 @@ fn ours_pair_in(
 
 /// One run of [`ours_pair_in`], the clients joining `shift` ms later than
 /// [`TARGET_PLAYS_AFTER_JOIN_MS`] says, and the target's first playing
-/// snapshot time.
+/// snapshot time. `part` is `probe_part`'s value, then any more of the
+/// probe's cvars as `name value` words.
 #[allow(clippy::too_many_arguments)]
 fn ours_pair_run(
     fs: Rc<vcod_common::pk3::Pk3Fs>,
@@ -346,7 +347,11 @@ fn ours_pair_run(
     let mut sv = vcod_server::Server::new(common::cfg(map, "probe_scriptmodel"), now);
     sv.set_protocol(proto);
     sv.overlay_script("maps/mp/gametypes/probe_scriptmodel", SCRIPT);
-    sv.set_cvar("probe_part", part);
+    let mut words = part.split_whitespace();
+    sv.set_cvar("probe_part", words.next().unwrap_or(""));
+    while let (Some(k), Some(v)) = (words.next(), words.next()) {
+        sv.set_cvar(k, v);
+    }
     let world = vcod_server::world::World::from_bsp(&bsp, Some(&fs));
     let target_play = target_log.map(first_play);
     if let Some(at) = thrower_at {
@@ -742,6 +747,41 @@ fn a_frag_bounces_off_a_script_model_and_a_players_bones() {
         include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-grenade.txt"),
         ours_pair("grenade", true, 16_000),
     );
+}
+
+/// mp_carentan on UO: the grenade part's barrel with `setContents`
+/// 0x2000000, a body's contents: the frag leaves it at a quarter of the
+/// speed it leaves the stock 0x2080 barrel with, UO's soft scale 0.1
+/// against its 0.4 (docs/research/cod11-combat.md 12.4).
+#[test]
+fn a_uo_frag_bounces_soft_off_a_script_model_with_body_contents() {
+    if vcod_common::testing::uo_fs().is_none() {
+        return;
+    }
+    for (fixture, contents) in [
+        (
+            include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-grenade-body-uo.txt"),
+            "33554432",
+        ),
+        (
+            include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-grenade-uo.txt"),
+            "8320",
+        ),
+    ] {
+        compare_throws(
+            fixture,
+            ours_pair_in(
+                vcod_common::testing::uo_fs().unwrap(),
+                "mp_carentan",
+                &format!("grenade probe_contents {contents}"),
+                true,
+                16_000,
+                None,
+                None,
+                None,
+            ),
+        );
+    }
 }
 
 /// mp_carentan on 1.1d: a barrel between a resting frag and both players

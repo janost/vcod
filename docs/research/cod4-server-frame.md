@@ -424,7 +424,10 @@ jobs, each run pinned to cores 0-7 (`taskset`) under a memory cap.
   `bodies/bones`). Off it costs a relaxed load a phase.
 - `tick_profile::Split` splits a tick's wall time off
   `/proc/thread-self` into run (on a CPU), queued (runnable, no CPU),
-  asleep (the rest), minor and major faults and voluntary switches.
+  asleep (the rest), minor and major faults and voluntary switches, and
+  where the kernel lets a process count itself (`perf_event_open`) the
+  user-space instructions the ticking thread retired (`M insns`), which a
+  loaded machine moves far less than the run time (9.1).
 - `tick_profile::Watch` samples, every millisecond of a tick, the ticking
   thread's kernel wait channel and the syscall every other thread of the
   process is in.
@@ -735,7 +738,104 @@ that with the queueing. VERIFIED (the logs).
   1.7 ms over 511) and the interpreter the rest; and the restart's own
   15-20 ms of `console` (`load/spawn` 3, `load/collision world` 2.5-4.4,
   `load/drop level` 2-3.7, a `map_restart`'s compile 1.7, the spawn frames
-  1.7). VERIFIED (the logs, a quiet box).
+  1.7). VERIFIED (the logs, a quiet box). 9.1 takes up the builtins and
+  the restart's tail.
+
+### 9.1 The wave's builtins and the restart's tail
+
+The 60-bot mp_toujane `dm` run with a `map_restart` every 5 ticks
+(`bot_match GAME=cod2 RESTART=5 TICKS=200 SPIKE_MS=10`, seed 1: 38
+restarts, each with its wave three ticks on), profiled with gperftools'
+CPU profiler at 2 kHz. Base and new ran side by side, so both saw the
+same load. Sample counts, whole run, VERIFIED (the profiles):
+
+| part | base | new |
+|---|---|---|
+| the level frame (`Cod2Level::run_frame`) | 2932 | 2835 |
+| the script pass's builtins | 595 | 395 |
+| `bulletTracePassed` | 260 | 157 |
+| `getEntArray` | 102 | 21 |
+| the script models' xmodel loads (`GameHost::xmodel_tris`) | 92 | 0 |
+| `Combat::sync_weapons` (the weapon files read a third time) | 81 | 22 |
+| the restart (`drain_console`) | 766 | 569 |
+
+- `getEntArray` walked every entity per call, 511 calls a wave, for the
+  same few answers (`"player"` and the spawn points' classname). A
+  walk's answer over an engine field is now kept (`GameHost::ent_arrays`,
+  `EntArrays`) while `ObjectTable::edits` holds and that field's own
+  `ObjectTable::slot_edits` reads what it was walked at. Three changes
+  keep the counts still through a wave: a client field's, a script
+  field's, an attachment's, a gun's loop sound's and a think check's
+  reach (`ObjectTable::get_mut_quiet`) move neither; an engine field's
+  write moves its slot's count alone (`get_mut_slot`); and the write
+  takes the entity into or out of a kept answer over that slot
+  (`EntArrays::wrote`), so a player's `noclass` to `player` keeps the
+  `"player"` answer current. 478 of a wave's 508 calls are answered so.
+  VERIFIED (a count, not kept). The answer is the walk's, in entity
+  order. VERIFIED (`get_ent_array_answers_follow_the_table`, the digests
+  below).
+- `bulletTracePassed` without characters (`_spawnlogic.gsc`'s sight
+  checks) stops at the world: a segment the world stops is not passed,
+  and the entity pass after it could only shorten the segment
+  (`combat::bullet_passed`). INFERRED (the pass's order, 2.7 of
+  cod11-combat.md). The pass's model lookups still run
+  (`GameHost::touch_shot_models`), as each model's first lookup in a
+  level loads it and touches its reads. With characters the whole trace
+  runs, as the bodies' poses and rigs build on it. VERIFIED (the code).
+- The script models' collision and bounds caches went with the level on
+  a `map_restart` or `map` (a load that clears the paks' referenced
+  flags); only a `fast_restart` carried them. Each entry now keeps the
+  paths its load flagged (`ModelReads`, through `pk3::ReadLog`), a load
+  over the same paks takes the caches (`ModelCaches::for_reload`), and
+  an entry's first use in the new level touches its paths
+  (`GameHost::xmodel_untouched`), when the level's own load would have
+  read them. VERIFIED (the code, the `NETDIGEST` runs below).
+- `Combat::sync_weapons` parsed every registered weapon's file a third
+  time each level (`vcod_cod2::weapon::load`). The parse rides on the
+  registration's carried file (`WeaponFile::cod2_def`) and a reuse
+  touches `weapons/mp/<name>` and `mp/playeranimtypes.txt`, the two
+  files it reads. VERIFIED (the code).
+- The restart parsed the map's entity lump four times past the spawn:
+  the intermission view, the world's spawn spot, the bots' spawn points
+  and the collision world's own read. The first three are parsed once
+  per map's parts (`MapSpots`). The replaced level now drops at the next
+  tick's `Cbuf_Execute` (`Cod2Game::retired`, the `drop level` phase),
+  off the restart's tick. VERIFIED (the code, the logs).
+
+Base and new side by side, two pairs, the 38 restart ticks' and the 38
+waves' medians with their quartiles, on a CPU and in the ticking
+thread's instructions, the box at a load average of 60 to 100. VERIFIED
+(the logs).
+
+| run | base | new |
+|---|---|---|
+| restart tick, ms on a CPU | 25.6 [22.7..28.4], 25.9 [23.9..27.0] | 17.3 [15.9..17.9], 16.9 [15.3..17.9] |
+| restart tick, M instructions | 240 [238..242], 238 [236..240] | 161 [160..163], 162 [160..163] |
+| wave, ms on a CPU | 56.8 [53.6..59.1], 56.9 [54.0..59.0] | 54.8 [53.2..56.8], 53.5 [49.5..55.3] |
+| wave, M instructions | 802 [791..816], 805 [791..815] | 764 [751..777], 764 [750..780] |
+| CoD4 mp_crash `war`, 40 bots, the wave (tick 60), M instructions | 234.7, 234.6 | 232.9, 232.0 |
+| CoD1 1.1 mp_carentan `dm`, 40 bots, ticks 3 and 4, M instructions | 77.9 and 117.4 | 73.2 and 114.4 |
+
+- The whole 200-tick run under `VCOD_BOT_THREADS=1`, counted around the
+  process: 123.4 G instructions before (two runs within 0.1%), 118.7 G
+  after; the same run with no restart, 88.6 G both. So a restart and its
+  wave cost 13% fewer instructions. VERIFIED (the runs).
+- The wave is the interpreter: 5% fewer instructions, inside its spread on
+  a CPU. CoD4's and CoD1's waves share only `getEntArray`'s change and
+  move by 1 to 4%; CoD1's ticking thread splits its bots' work with the
+  pass's threads, so its count is the split's as much as the change's.
+  INFERRED (the counts, the profiles).
+- `DIGEST=1` and `NETDIGEST=600` printed the same lines before and after
+  on CoD2 mp_toujane `dm` and `sd` (12 bots, `RESTART=150`, 600 ticks),
+  `sd` over 3000 ticks of rounds (each round's `fast_restart`), `tdm` at
+  60 bots (`RESTART=40`), CoD1 1.1 and UO mp_carentan `sd` (12 bots, 3000
+  ticks), and `DIGEST=1` on CoD4 mp_crash `war` (40 bots, 600 ticks) and
+  `sd` (12 bots, 4000 ticks), as on every run of the tables. VERIFIED.
+- Left: the wave's interpreter (the op loop, 31% of the script pass's
+  samples, and each entity field read's walk to its engine slot), the
+  world's part of the sight traces (3.6% of the frame), and the restart's
+  `load/spawn`, `load/compile` and `load/collision world`. INFERRED (the
+  profiles).
 
 ## 10. Full servers, every game
 

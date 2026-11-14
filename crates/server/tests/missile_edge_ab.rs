@@ -10,7 +10,7 @@
 //! mp_harbor's sea wall: a rocket, a frag and UO's smoke grenade into the
 //! water raise retail's splash (12.1). A rocket fired with the shooter's eye
 //! inside mp_carentan's 0x2080 kerb brush starts solid and goes off at
-//! the end of its first move (11.1, 12.3).
+//! the end of its first move on all three (11.1, 12.3).
 //!
 //! `ME_REPORT=1` prints both logs. The 1.1d tests need `COD_DIR` at a 1.1
 //! install, the 1.5b rows a 1.5 or UO one, the UO ones a UO one; each
@@ -544,14 +544,9 @@ fn a_swing_at_nothing_raises_no_event() {
     }
 }
 
-/// The floor swing's truncated event origin: ours reads x 1375 where
-/// retail reads 1374 with y 2615 on both, though the shooter faces yaw 45
-/// from (1368, 2608.1). At pitch 80 a 64-unit swing from the eye 60 up meets
-/// the floor 7.5 out along each axis; retail's x lands under 7, a start or
-/// aim a fraction of a unit off ours that this capture cannot pin (combat
-/// doc 2.5).
-const FLOOR_POS_GAP: f32 = 1.0;
-
+/// Each swing's event at the floor lands on the truncated endpos of the
+/// trace from (1368, 2608, 37), retail's (1375, 2615, -23) (combat doc
+/// 2.5).
 #[test]
 fn a_swing_at_the_floor_raises_the_miss() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
@@ -586,11 +581,7 @@ fn a_swing_at_the_floor_raises_the_miss() {
     for (a, b) in r.iter().zip(&o) {
         let (ta, tb): (Vec<&str>, Vec<&str>) = (a.split(' ').collect(), b.split(' ').collect());
         assert_eq!(ta[..6], tb[..6], "retail {r:?}\nours {o:?}");
-        let pos = |t: &[&str]| -> [f32; 3] { std::array::from_fn(|k| t[7 + k].parse().unwrap()) };
-        assert!(
-            dist(pos(&ta), pos(&tb)) <= FLOOR_POS_GAP,
-            "retail {r:?}\nours {o:?}"
-        );
+        assert_eq!(ta[6..10], tb[6..10], "retail {r:?}\nours {o:?}");
     }
 }
 
@@ -785,7 +776,9 @@ fn a_rocket_into_water_splashes() {
 /// The integer `trDelta` whose `vectoangles` is the `apos` retail's
 /// missile line shows (`fire_rocket` truncates the delta and takes its
 /// angles off it), near `speed` along those angles; `None` unless exactly
-/// one fits.
+/// one fits. UO's wire carries `apos` in 65536ths of a turn (combat doc
+/// 13.6), which more than one delta can fit: those take the angles' shorts
+/// and the fit nearest the angles' own point.
 fn delta_for_apos(lines: &[String], speed: f32) -> Option<[f32; 3]> {
     let l = lines.iter().find(|l| l.contains(" missile "))?;
     let t: Vec<&str> = l.split(' ').collect();
@@ -793,7 +786,7 @@ fn delta_for_apos(lines: &[String], speed: f32) -> Option<[f32; 3]> {
     let apos = [t[at].parse::<f32>().ok()?, t[at + 1].parse::<f32>().ok()?];
     let (p, y) = (apos[0].to_radians(), apos[1].to_radians());
     let near = glam::Vec3::new(p.cos() * y.cos(), p.cos() * y.sin(), -p.sin()) * speed;
-    let mut fits = Vec::new();
+    let (mut fits, mut shorts) = (Vec::new(), Vec::new());
     for dx in -2..=2 {
         for dy in -2..=2 {
             for dz in -2..=2 {
@@ -806,10 +799,27 @@ fn delta_for_apos(lines: &[String], speed: f32) -> Option<[f32; 3]> {
                 if a[0] == apos[0] && a[1] == apos[1] {
                     fits.push(d);
                 }
+                if (0..2).all(|k| wire_short(a[k]) == short(apos[k])) {
+                    shorts.push(d);
+                }
             }
         }
     }
+    if fits.is_empty() {
+        let off = |d: &[f32; 3]| (glam::Vec3::from(*d) - near).length();
+        return shorts.into_iter().min_by(|a, b| off(a).total_cmp(&off(b)));
+    }
     (fits.len() == 1).then(|| fits[0])
+}
+
+/// A decoded wire angle back to its 65536ths of a turn.
+fn short(a: f32) -> i32 {
+    ((f64::from(a) * 65536.0 / 360.0).round() as i64 & 0xffff) as i32
+}
+
+/// `ANGLE2SHORT`: an angle truncated to 65536ths of a turn, UO's wire unit.
+fn wire_short(a: f32) -> i32 {
+    ((a * 65536.0 / 360.0) as i32) & 0xffff
 }
 
 /// A rocket fired with the shooter's eye inside mp_carentan's 0x2080 caulk
@@ -817,18 +827,25 @@ fn delta_for_apos(lines: &[String], speed: f32) -> Option<[f32; 3]> {
 /// brush, so the first move starts solid, and every protocol reads that as
 /// a contact at the move's end, where the rocket goes off in mid-air on
 /// the launch snapshot. 1.1d keeps the trace's zero normal (parm 0), 1.5b
-/// packs the reversed flight (combat doc 11.1, 12.3). Ours flies retail's
+/// and UO pack the reversed flight (combat doc 11.1, 12.3). Ours flies retail's
 /// `trDelta`, recovered off its launch angles.
 #[test]
 fn a_rocket_fired_inside_a_kerb_brush_goes_off_at_once() {
-    for (fs, fixture) in [
+    for (fs, fixture, weapon) in [
         (
             vcod_common::testing::game_fs_11(),
             include_str!("fixtures/missiles/mp_carentan-kerb-rocket.txt"),
+            "panzerfaust_mp",
         ),
         (
             fs_15(),
             include_str!("fixtures/missiles/mp_carentan-kerb-rocket-15.txt"),
+            "panzerfaust_mp",
+        ),
+        (
+            vcod_common::testing::uo_fs(),
+            include_str!("fixtures/missiles/mp_carentan-kerb-rocket-uo.txt"),
+            "bazooka_mp",
         ),
     ] {
         let Some(fs) = fs else {
@@ -843,7 +860,7 @@ fn a_rocket_fired_inside_a_kerb_brush_goes_off_at_once() {
             SKYSHOT,
             &[
                 ("probe_part", "spot"),
-                ("probe_weapon", "panzerfaust_mp"),
+                ("probe_weapon", weapon),
                 ("probe_x", "1192"),
                 ("probe_y", "-536"),
                 ("probe_z", "340"),
@@ -881,6 +898,70 @@ fn a_rocket_fired_inside_a_kerb_brush_goes_off_at_once() {
         assert_eq!(ol.0 - o[0].0, rl.0 - r[0].0, "retail {rl:?}, ours {ol:?}");
         assert_eq!((&ol.1, &ol.2), (&rl.1, &rl.2), "retail {rl:?}, ours {ol:?}");
     }
+}
+
+/// A panzerfaust pulled from the hip on 1.1d: `adsFire` forces the sight
+/// up and the rocket leaves when the delay the raise left runs out, the
+/// trigger let go by then (combat doc 1.4): 300 ms from the snapshot the
+/// sight starts up. Ours flies retail's `trDelta`, recovered off its
+/// launch angles; where the street placement's slide left the body differs
+/// run to run on retail, so the launch point is not held.
+#[test]
+fn a_hip_panzerfaust_pull_fires_once_the_sight_is_up() {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        return;
+    };
+    let fixture = retail(include_str!(
+        "fixtures/missiles/mp_carentan-hippull-rocket.txt"
+    ));
+    let delta = delta_for_apos(&fixture, 2800.0).expect("one delta fits retail's apos");
+    let log = ours_pinned(
+        fs,
+        "mp_carentan",
+        "probe_skyshot",
+        SKYSHOT,
+        &[
+            ("probe_part", "spot"),
+            ("probe_weapon", "panzerfaust_mp"),
+            ("probe_x", "900"),
+            ("probe_y", "1930"),
+            ("probe_z", "-42"),
+            ("probe_yaw", "0"),
+            ("probe_pitch", "0"),
+        ],
+        Script::Throw,
+        14_000,
+        Vec::new(),
+        vec![delta],
+    );
+    report(&fixture, &log);
+    // From the snapshot the sight starts up to the one the rocket shows on.
+    let rise = |lines: &[String], launch: i32| -> i32 {
+        let frac = |l: &String| -> Option<(i32, f32)> {
+            let t: Vec<&str> = l.split(' ').collect();
+            let at = t.iter().position(|w| *w == "frac")?;
+            Some((t[1].parse().ok()?, t[at + 1].parse().ok()?))
+        };
+        let ps: Vec<(i32, f32)> = lines
+            .iter()
+            .filter(|l| l.contains(" ps "))
+            .filter_map(frac)
+            .filter(|(t, _)| *t <= launch)
+            .collect();
+        let up = ps
+            .iter()
+            .rposition(|(_, f)| *f == 0.0)
+            .expect("a hip snapshot")
+            + 1;
+        launch - ps[up].0
+    };
+    let (r, o) = (first_rocket(&fixture), first_rocket(&log));
+    assert!(!o.is_empty(), "ours fired nothing: {log:?}");
+    assert_eq!(
+        rise(&log, o[0].0),
+        rise(&fixture, r[0].0),
+        "the sight's rise"
+    );
 }
 
 /// UO frees a smoke grenade on its splash: the temp entity goes out and
