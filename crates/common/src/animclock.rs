@@ -91,6 +91,9 @@ struct Play {
     /// A sync group's node (an MG42 gunner's turret anim), whose step
     /// stores its increment before the sum ([`Play::step`]).
     sync: bool,
+    /// 1.1d's step, which wraps a looping clip on the stack before its one
+    /// store ([`Play::step`]).
+    kept: bool,
 }
 
 /// The server frame the engine steps a node time by: `level.frametime`
@@ -114,7 +117,9 @@ impl Play {
     /// would leave it at or under 0 is dropped.
     ///
     /// A sync node's arm (1.5b 0x80c86dc..0x80c86f8) stores the increment
-    /// `frequency * rate * dtime` as a float first, then the sum.
+    /// `frequency * rate * dtime` as a float first, then the sum. 1.1d's
+    /// leaf arm (`cod_lnxded` 0x80bbab0) keeps the sum and a looping clip's
+    /// wrap by 1 on the stack and stores the result once.
     fn step(&self, t: f32) -> f32 {
         let dt = f64::from(STEP_MS as f32 * 0.001);
         let inc = dt * f64::from(self.rate) * f64::from(self.frequency);
@@ -123,6 +128,16 @@ impl Play {
         } else {
             inc
         };
+        if self.kept && self.looping {
+            let mut next = f64::from(t) + inc;
+            while next < 0.0 {
+                next += 1.0;
+            }
+            while next >= 1.0 {
+                next -= 1.0;
+            }
+            return next as f32;
+        }
         let mut next = (f64::from(t) + inc) as f32;
         if self.looping {
             while next < 0.0 {
@@ -421,8 +436,12 @@ impl ChannelClock {
         at: Times,
         window: Option<&mut i32>,
     ) -> Touches {
+        // 1.1's setter (no window) is 1.1d's, whose step keeps its wrap.
+        let kept = window.is_none();
+        self.current.kept = kept;
         self.current.settle(at.clock_ms);
         for (p, _) in self.fading.iter_mut().flatten() {
+            p.kept = kept;
             p.settle(at.clock_ms);
         }
         let index = wire & !TOGGLE;
@@ -505,6 +524,7 @@ impl ChannelClock {
         now_ms: i32,
         window: Option<&mut i32>,
     ) -> Touches {
+        let kept = window.is_none();
         let motion = |i: i32| anims.motion(i).filter(|_| i != 0);
         let (old_index, new_index) = (self.anim & !TOGGLE, wire & !TOGGLE);
         let (old, new) = (motion(old_index), motion(new_index));
@@ -521,6 +541,7 @@ impl ChannelClock {
                 frequency: n.frequency,
                 looping: n.looping,
                 sync: false,
+                kept,
             };
             self.weight = Ramp::new(1.0, 1.0, now_ms, 0.0);
             self.fading = [None; FADES];
@@ -612,6 +633,7 @@ impl ChannelClock {
                 frequency: new.map_or(0.0, |n| n.frequency),
                 looping: new.is_some_and(|n| n.looping),
                 sync: false,
+                kept,
             },
         };
         self.weight = Ramp::raised(from, 1.0, now_ms, (1.0 - from) * blend);

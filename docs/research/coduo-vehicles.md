@@ -842,15 +842,17 @@ origin's unlifted one in `Vehicles::lifted`, until his origin is next
 mirrored. The seats the frame's threads left are applied ahead of the
 script's sim ops, so a dismount's pop sets the velocity and a hit after it
 adds its knockback. `vehicle_die_ab` replays the three captures: every
-line from the kill on matches retail's, the death blast's victims and
-their damage included, except:
-
-- the gunner's body, within 4 units (the kill comes mid-turn of his gun;
-  retail's three runs put him 3.3 apart);
-- a dismounted driver's first fall frame (the probe client's cmd clock);
-- the corpses of riders killed in place: they leave the hull a cmd at a
-  time (11.6) along retail's path, but the probe client's cmd clock apart,
-  the gunner's from his mid-turn spot.
+line from the kill on matches retail's word for word, the death blast's
+victims and their damage, the gunner's mid-turn body, the dismounted
+driver's first fall frame and the corpses leaving the hull included.
+VERIFIED, the gate on the 2026-11-14 recaptures, whose fixtures carry each
+probe client's `CMDS` lines: ours joins both clients on the capture's
+clock (client 0 as late as its `PROBE place`, client 1 as much later as
+its own) and each sends the cmds and use taps the lines logged. The 4, 2.2
+and 6.5 units the gate allowed before were the cmd clock: the 2026-10-17
+captures logged none, and ours sent 16, 16 and 18 ms a frame and tapped on
+its own clock. INFERRED, from the gate going exact once the cmds are
+retail's.
 
 ### 11.3 Changing seats
 
@@ -1019,18 +1021,17 @@ starts under 1.0, unlinks the hull and pushes him off at 200 from its
 origin. The corpse leaves a cmd at a time, as the three
 `client-probes/probe_vehdie` captures show: Panzer IV killed by itself,
 the driver's corpse 0.65 along x at the kill's next frame and 8.7 half a
-second on, the gunner's 20 units out (VERIFIED, capture,
-`mp_cassino-tank-die-*-uo.txt`).
+second on, the gunner's 20 units out (VERIFIED, the 2026-10-17 capture);
+the 2026-11-14 recapture now in `mp_cassino-tank-die-self-uo.txt` reads
+0.37 and 8.33, the gunner 20.8 out (VERIFIED, capture).
 
 vcod runs it as `ClientSim::vehicle_overlap` before each UO cmd's pmove,
 the collmap instance taken out of the collision world for the cmd
 (`CollisionWorld::unlink_model_instance`), and deals the run-over and
 prone damage ahead of the cmd's pmove (`Server::vehicle_overlap_hits`), so
 a kill there runs the pmove on the corpse. `vehicle_die_ab` sends the
-probe's 16, 16 and 18 ms cmds a frame and puts the driver's corpse within
-1 unit of retail's at both lines, the gunner's within 6.2 from his
-mid-turn start (INFERRED, the residue is the probe client's cmd clock,
-which no capture logs).
+probe clients' own cmds (11.2) and puts both corpses on retail's numbers at
+both lines. VERIFIED, the gate.
 
 **Run-over, standing and prone.** Retail UO 1.51b, 2026-10-17,
 `client-probes/probe_vehicle_ram` with `probe_victim` (fixtures
@@ -1107,6 +1108,40 @@ that move, alias and snapped origin (`compare_impacts`).
   line for line (`compare_first_drop`) and names the other three in
   `FIRST_DROP_GAPS`. Closing them needs a recapture with the victim's
   `CMDS` lines replayed through `ProbeHold::times`, plus his spawn pinned.
+
+  VERIFIED, the 2026-11-14 recaptures, whose fixtures append each probe
+  client's `SPAWNED` and `CMDS` lines: the victim's first spawned snapshot
+  already stands on the placement (`SPAWNED t` is `PROBE victim`'s time,
+  `ct` the same), so the spawn and the placement share a frame, and its
+  velocity is what the cmds run at the spawn point left (0 on some runs;
+  (-10, 27, -12), (12, -10, -3) and (13, -1, -2) on three others). The
+  spawn point itself stays unlogged. `vehicle_runover_ab` now runs ours
+  alone until the victim's placement lands on the capture's time, sends
+  his cmds on the `CMDS` times with the buttons, prone key and up move of
+  their `in=` changes, and gives his placement the `SPAWNED` velocity
+  (`Server::test_set_client_velocity`). The first drop then matches
+  retail's to the hundredth on every standing and prone-teammate run
+  tried, the spawn's velocity included. VERIFIED, the gate. The fixture
+  `mp_kharkov-jeep-runover-prone-team-uo.txt` is now such a run, its gap
+  gone and its creep held to 0.15. Still open:
+
+  - standing: the recaptures' first drops match, and then the flight
+    after the hit runs past the 4 units the 2026-10-17 capture keeps; the jeep's own drive rides its driver's cmds, which the
+    gate sends on its own clock (on the capture's, ours' jeep lurches 1.65
+    units/s at the seat where retail's stays still; not run down). The
+    2026-10-17 capture and its gap stay. INFERRED.
+  - bail: the 2026-11-14 runs' first drops match, and their corpses fly
+    6.8, 11.0 and 11.3 off retail's, past `CORPSE`, the driver's clock again. The older
+    capture and its gap stay. INFERRED.
+  - prone: the fall matches, and a prone body landing on the grade slides
+    0.1 to 0.3 units off retail's (two runs), so the 2026-10-17 capture,
+    whose drop ours meets, stays. VERIFIED, the gate on those runs.
+  - a driverless jeep over a prone victim (`probe_victim prone`,
+    `probe_victim_ahead 300`, `--probe-vehicle bail`): retail crushes him
+    10 a cmd with the jeep as inflictor and attacker (VERIFIED, six
+    captures), and ours meets it on none of them: the driverless jeep's
+    path rides the driver's cmds, so its hits land on other frames. No
+    fixture is committed. INFERRED.
 
 **Run-over by a driverless jeep.** Retail UO 1.51b, 2026-10-20, the same
 probe with `--probe-vehicle bail` for the driver (out at full throttle a

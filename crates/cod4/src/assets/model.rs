@@ -64,11 +64,20 @@ pub struct PhysGeomList {
 /// (1 a box) at `offset` along `orientation`'s rows, `halfLengths` in size.
 #[derive(Clone, Debug)]
 pub struct PhysGeom {
-    pub brush: bool,
+    pub brush: Option<PhysBrush>,
     pub kind: i32,
     pub orientation: [[f32; 3]; 3],
     pub offset: [f32; 3],
     pub half_lengths: [f32; 3],
+}
+
+/// A `physGeoms` brush in the model's frame: `BrushWrapper`'s bounds and
+/// its side planes (normal, dist), solid where every `n . p <= dist`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PhysBrush {
+    pub mins: [f32; 3],
+    pub maxs: [f32; 3],
+    pub planes: Vec<[f32; 4]>,
 }
 
 /// `XModelCollSurf_s`, 0x2C: its triangles (0x30 each: plane, `svec`,
@@ -298,12 +307,13 @@ fn phys_geom_list<R: BufRead>(w: &mut W<R>) -> Result<PhysGeomList> {
             let a = w.load(0x44 * n)?;
             for i in 0..n {
                 let g = a.elem(i, 0x44);
-                let brush = w.inline_only(g.ptr(0), 4)?;
-                if brush {
-                    brush_wrapper(w)?;
-                }
+                let brush = if w.inline_only(g.ptr(0), 4)? {
+                    Some(brush_wrapper(w)?)
+                } else {
+                    None
+                };
                 geoms.push(PhysGeom {
-                    brush: g.ptr(0) != Pointer::Null,
+                    brush,
                     kind: g.i32(4),
                     orientation: [g.vec3(8), g.vec3(20), g.vec3(32)],
                     offset: g.vec3(44),
@@ -322,8 +332,9 @@ fn phys_geom_list<R: BufRead>(w: &mut W<R>) -> Result<PhysGeomList> {
     })
 }
 
-/// `BrushWrapper`, 0x50: sides, adjacency bytes, planes.
-pub(crate) fn brush_wrapper<R: BufRead>(w: &mut W<R>) -> Result<()> {
+/// `BrushWrapper`, 0x50: bounds (+0, +16), sides, adjacency bytes, then
+/// one `cplane_s` (0x14) per side at +76.
+pub(crate) fn brush_wrapper<R: BufRead>(w: &mut W<R>) -> Result<PhysBrush> {
     let b = w.load(0x50)?;
     let sides = b.u32(28) as usize;
     if w.inline_only(b.ptr(32), 4)? {
@@ -332,10 +343,26 @@ pub(crate) fn brush_wrapper<R: BufRead>(w: &mut W<R>) -> Result<()> {
     if w.inline_only(b.ptr(48), 1)? {
         w.bulk(1, b.u32(72) as usize)?;
     }
+    let mut planes = Vec::new();
     if let Follow::Inline = w.follow(b.ptr(76), 4)? {
-        w.bulk(4, 0x14 * sides)?;
+        let p = w.bulk_kept(4, 0x14 * sides)?;
+        let f = |o: usize| f32::from_le_bytes(p[o..o + 4].try_into().unwrap());
+        planes = (0..sides)
+            .map(|i| {
+                [
+                    f(i * 0x14),
+                    f(i * 0x14 + 4),
+                    f(i * 0x14 + 8),
+                    f(i * 0x14 + 12),
+                ]
+            })
+            .collect();
     }
-    Ok(())
+    Ok(PhysBrush {
+        mins: b.vec3(0),
+        maxs: b.vec3(16),
+        planes,
+    })
 }
 
 /// `cbrushside_t`, 0xC, `n` of them, each plane inline or shared.

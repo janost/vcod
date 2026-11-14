@@ -31,21 +31,38 @@ const SEATED_MS: i64 = 2000;
 const AHEAD_MS: i64 = 6000;
 /// `BAIL`: the throttle's time before the exit, which keeps it held.
 const BAIL_MS: i64 = 1000;
-/// The recipes start the driver's probe 2 s after the victim's.
-const DRIVER_LATE_MS: i64 = 2000;
+/// How long after the victim connects ours places him, run alone for
+/// `common::PROBE_JOIN_MS` before: the capture's `PROBE victim` time less
+/// this is how much longer ours runs alone, so both clocks agree and the
+/// victim's cmds go out on the times the capture's `CMDS` lines logged.
+const VICTIM_PLACED_MS: i64 = 1400;
 
 /// Our PROBE lines, and the `EV_SOUND_ALIAS` temp entities the victim's
 /// snapshots carried, each once as `VEH <time> temp <n> ev 172 parm <p>
 /// other 0 pos <x> <y> <z>` in the probe client's format. The victim is
 /// allied, the driver on `driver_team`; `cvars` go on top of the probe's.
 /// With `bail` the driver drives `vehicle_probe.rs` `BAIL`, out 1 s in.
+/// The clients join on the capture's clock: the victim as late as
+/// `PROBE victim` puts him, the driver as much later as `PROBE place`
+/// came, and the victim sends his cmds on the times of the capture's
+/// `victim CMDS` lines.
 fn ours(
     victim: &str,
     driver_team: &str,
     cvars: &[(&str, &str)],
     bail: bool,
+    capture: &str,
 ) -> Option<Vec<String>> {
     let fs = vcod_common::testing::uo_fs()?;
+    let at = |head: &str| {
+        capture
+            .lines()
+            .find(|l| l.starts_with(head))
+            .and_then(time)
+            .unwrap_or_else(|| panic!("a {head}line in the capture")) as i64
+    };
+    let late_ms = at("PROBE victim ") - common::PROBE_JOIN_MS - VICTIM_PLACED_MS;
+    let driver_late_ms = at("PROBE place ") - at("PROBE victim ");
     let p = &PROTOCOL_V22;
     let bsp_path = fs.resolve_map(MAP).expect("the map in the UO paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
@@ -70,7 +87,7 @@ fn ours(
     }
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
-    common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
+    common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS + late_ms);
     let (qa, qb) = (
         Rc::new(RefCell::new(Queues::default())),
         Rc::new(RefCell::new(Queues::default())),
@@ -97,13 +114,34 @@ fn ours(
         ..Default::default()
     };
     let mut hold = common::ProbeHold::default();
-    let prone = victim == "prone";
+    victim_hold.times = common::cmds_times(capture, "victim");
+    victim_hold.ran = common::cmds_ran(capture, "victim");
+    // The velocity the victim's placement kept: it shares his spawn's frame,
+    // and the cmds run at the spawn point before it leave him moving
+    // (coduo-vehicles.md 11.6, "The first drop").
+    let spawn_vel: Option<[f32; 3]> = capture
+        .lines()
+        .find_map(|l| l.strip_prefix("victim SPAWNED "))
+        .and_then(|l| l.split_whitespace().find_map(|w| w.strip_prefix("vel=")))
+        .map(|v| {
+            let v: Vec<f32> = v
+                .split(',')
+                .map(|c| c.parse().expect("a velocity"))
+                .collect();
+            [v[0], v[1], v[2]]
+        });
+    // A capture from before the probe logged CMDS lines holds the victim
+    // prone from his placement, as he lay down on the gsc's `PROBE_IN`.
+    let mut victim_in = common::cmds_inputs(capture, "victim");
+    if victim_hold.times.is_empty() && victim == "prone" {
+        victim_in.push((i32::MIN, (0, 0x40, -127)));
+    }
     let mut placed_at: Option<i64> = None;
     let mut sounds = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for i in 0..3000i64 {
         now += frame;
-        if cb.is_none() && i * common::FRAME_MS >= DRIVER_LATE_MS {
+        if cb.is_none() && i * common::FRAME_MS >= driver_late_ms {
             cb = Some(NetClient::start_with_qport(
                 ClientEnd(qb.clone()),
                 now,
@@ -125,6 +163,9 @@ fn ours(
         };
         if victim_hold.base.is_none() {
             victim_hold.base = placed_yaw(sv.script_log(), "PROBE victim ").map(|y| [0.0, y, 0.0]);
+            if let (Some(_), Some(v)) = (victim_hold.base, spawn_vel) {
+                sv.test_set_client_velocity(0, v);
+            }
         }
         if hold.base.is_none() {
             hold.base = placed_yaw(sv.script_log(), "PROBE place ").map(|y| [10.0, y, 0.0]);
@@ -142,10 +183,15 @@ fn ours(
                 continue;
             }
             let mut cmds = h.cmds(cl, buttons);
-            if prone && h.framed {
+            // The victim's buttons, prone key and up move as his capture's
+            // `in=` changes set them: he lies down on the cmd retail's
+            // probe client pressed it on, the `PROBE_IN` it answers.
+            if h.framed {
                 for c in &mut cmds {
-                    c.wbuttons = 0x40;
-                    c.up = -127;
+                    let at = victim_in.partition_point(|(st, _)| *st <= c.server_time);
+                    if let Some(&(_, (b, wb, up))) = at.checked_sub(1).map(|k| &victim_in[k]) {
+                        (c.buttons, c.wbuttons, c.up) = (b, wb, up);
+                    }
                 }
             }
             cl.send_cmds(&cmds);
@@ -216,10 +262,12 @@ fn placed_yaw(log: &[String], head: &str) -> Option<f32> {
         .and_then(|l| l.split_whitespace().last()?.parse().ok())
 }
 
-fn retail(path: &str) -> Vec<String> {
-    std::fs::read_to_string(path)
-        .unwrap()
-        .lines()
+fn read(path: &str) -> String {
+    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"))
+}
+
+fn retail(text: &str) -> Vec<String> {
+    text.lines()
         .filter(|l| l.starts_with("PROBE ") || l.starts_with("VEH "))
         .map(str::to_string)
         .collect()
@@ -351,15 +399,14 @@ const CREEP: Drift = Drift {
     why: "the probe client's cmd clock in the corpse's creep",
 };
 
-/// Where a prone victim settles: his lie-down slides him from where he
-/// landed, and the slide rides when the probe client got the gsc's
-/// `PROBE_IN`; retail's two prone runs lie (0.50, 0.99) apart, and ours
-/// on the other's spot to the hundredth; the corpse creeps a little
-/// further apart.
+/// Where a prone teammate's victim settles and creeps: with his capture's
+/// cmds, prone press and spawn velocity replayed he lies on retail's spot
+/// to the hundredth, and his corpse creeps up to 0.13 apart under the
+/// jeep, whose driver's cmds no replay sends (coduo-vehicles.md 11.6).
 const LIE_DOWN: Drift = Drift {
     after: -1000,
-    within: 1.1,
-    why: "where the prone victim's lie-down left him",
+    within: 0.15,
+    why: "the prone victim's creep under the jeep",
 };
 
 /// The driverless jeep's victim, dead from the strike's frame on: the gsc
@@ -430,10 +477,6 @@ const FIRST_DROP_GAPS: &[(&str, &str)] = &[
         "stand",
         "two, four and eight of the probe client's cmds by the first three frames, not two, five and eight",
     ),
-    (
-        "prone-team",
-        "one, six and seven of the probe client's cmds by the first three frames, not two, five and eight",
-    ),
     ("bail", "13.9 units/s across the ground the spawn left him"),
 ];
 
@@ -485,6 +528,18 @@ fn compare(retail: &[String], ours: &[String], upto: i32, drift: Drift) {
         .find(|l| l.starts_with("PROBE dmg "))
         .map(|l| time_rel(l))
         .expect("retail's first hit");
+    if std::env::var_os("RUNOVER_REPORT").is_some() {
+        let off = |a: &str, b: &str| -> f32 {
+            words(a)
+                .iter()
+                .zip(words(b))
+                .filter_map(|(x, y)| Some((x.parse::<f32>().ok()? - y.parse::<f32>().ok()?).abs()))
+                .filter(|d| d.is_finite())
+                .fold(0.0, f32::max)
+        };
+        let worst = r.iter().zip(&o).map(|(a, b)| off(a, b)).fold(0.0, f32::max);
+        eprintln!("drift: {worst} at most ({})", drift.why);
+    }
     let mut drifted = false;
     for (a, b) in r.iter().zip(&o) {
         if same(a, b, 0.01) {
@@ -508,8 +563,9 @@ fn compare(retail: &[String], ours: &[String], upto: i32, drift: Drift) {
 
 #[test]
 fn a_jeep_runs_over_a_standing_player_twice() {
-    let r = retail("tests/fixtures/vehicles/mp_kharkov-jeep-runover-stand-uo.txt");
-    let Some(o) = ours("stand", "axis", &[], false) else {
+    let text = read("tests/fixtures/vehicles/mp_kharkov-jeep-runover-stand-uo.txt");
+    let r = retail(&text);
+    let Some(o) = ours("stand", "axis", &[], false, &text) else {
         return;
     };
     compare_first_drop("stand", &r, &o);
@@ -519,8 +575,9 @@ fn a_jeep_runs_over_a_standing_player_twice() {
 
 #[test]
 fn a_prone_player_under_a_jeep_takes_ten_a_cmd() {
-    let r = retail("tests/fixtures/vehicles/mp_kharkov-jeep-runover-prone-uo.txt");
-    let Some(o) = ours("prone", "axis", &[], false) else {
+    let text = read("tests/fixtures/vehicles/mp_kharkov-jeep-runover-prone-uo.txt");
+    let r = retail(&text);
+    let Some(o) = ours("prone", "axis", &[], false, &text) else {
         return;
     };
     compare_first_drop("prone", &r, &o);
@@ -533,8 +590,15 @@ fn a_prone_player_under_a_jeep_takes_ten_a_cmd() {
 /// weapon), and once dead keeps taking both until his end frame.
 #[test]
 fn a_teammate_s_jeep_makes_a_prone_player_hurt_himself() {
-    let r = retail("tests/fixtures/vehicles/mp_kharkov-jeep-runover-prone-team-uo.txt");
-    let Some(o) = ours("prone", "allies", &[("scr_friendlyfire", "0")], false) else {
+    let text = read("tests/fixtures/vehicles/mp_kharkov-jeep-runover-prone-team-uo.txt");
+    let r = retail(&text);
+    let Some(o) = ours(
+        "prone",
+        "allies",
+        &[("scr_friendlyfire", "0")],
+        false,
+        &text,
+    ) else {
         return;
     };
     compare_first_drop("prone-team", &r, &o);
@@ -549,8 +613,15 @@ fn a_teammate_s_jeep_makes_a_prone_player_hurt_himself() {
 /// callback reads the origin the cmd started from (coduo-vehicles.md 11.6).
 #[test]
 fn a_driverless_jeep_runs_over_a_standing_player() {
-    let r = retail("tests/fixtures/vehicles/mp_kharkov-jeep-runover-bail-uo.txt");
-    let Some(o) = ours("stand", "axis", &[("probe_victim_ahead", "300")], true) else {
+    let text = read("tests/fixtures/vehicles/mp_kharkov-jeep-runover-bail-uo.txt");
+    let r = retail(&text);
+    let Some(o) = ours(
+        "stand",
+        "axis",
+        &[("probe_victim_ahead", "300")],
+        true,
+        &text,
+    ) else {
         return;
     };
     compare_first_drop("bail", &r, &o);

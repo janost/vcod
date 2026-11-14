@@ -1120,8 +1120,19 @@ The body:
   axis taking -50..50 (0x5a587a, the floats at 0x70ba44 and 0x6be7e8).
   VERIFIED (disassembly). The body sits at the mass centre: 0x5a47c0
   moves it by the turned offset and the geoms back by it. INFERRED (the
-  code). Stock car parts (`vehicle_80s_sedan1_*_door_lf` and kin) carry no
-  `physGeoms`: their bounds box. VERIFIED (`phys_dump` on mp_backlot).
+  code). Of a stock car's parts, the hood and the two right doors
+  (`vehicle_80s_sedan1_*_hood`, `_door_rf`, `_door_rb` and the wagon's
+  and hatchback's kin) carry one brush geom each, the rest
+  (`_door_lf`, bumpers, mirrors, lights) no `physGeoms`: their bounds
+  box. VERIFIED (`phys_dump` on mp_backlot). A brush geom is a
+  `BrushWrapper` in the model's frame: the sedan hood's bounds (-3.5,
+  -24, -8) .. (41.5, 24, 0), its `PhysMass` centre (19.04, 0, -3.56) and
+  moments (195.1, 130.4, 318.9) per unit of mass. VERIFIED (`phys_dump`).
+  All 37 brush geoms of `common_mp` and the `mp_` zones are such boxes,
+  with no side past their bounds. VERIFIED (`phys_dump`, every zone).
+  The brush becomes geom class 3 (0x5a5420 copies the geom and calls
+  0x5a4ab0 with 3), which ODE meets through the game's own collider.
+  INFERRED (the class number, not its collider, read).
 - The presets the stock cars launch: `car_door` mass 25, bounce 0.1,
   friction 0.5, scale 0.6; `car_hood` 15, 0.1, 0.5, 0.6; `tire` 18, 0.8,
   0.8, 0.6. VERIFIED (`phys_dump`, mp_backlot.ff).
@@ -1172,20 +1183,47 @@ VERIFIED (the registrations). Then:
   (the immediate). With `phys_collUseEntities` and
   `phys_interBodyCollision` 0, parts meet the world alone. INFERRED (the
   names).
-- `physicsExplosionSphere`'s event calls `Ragdoll_ExplosionEvent` and
-  0x48e670, among the dynamic entities' code (0x437241, 0x437284).
-  Whether a blast pushes a launched part is not read. INFERRED.
+- Each explode case of
+  `CG_EntityEvent` calls `Ragdoll_ExplosionEvent` (0x5bdc10) and then
+  0x48e670: the grenade's at 0x436b3e and 0x436b79, the rocket's at
+  0x436c75 and 0x436cb6, the custom one's at 0x436e24 and 0x436e65,
+  `physicsExplosionSphere`'s at 0x437241 and 0x437284, the cylinder's
+  at 0x4372ce and 0x437311, the jolt's at 0x437359 and 0x437311 (its
+  jump to 0x4372e6). VERIFIED (the calls). 0x48e670 walks the map's
+  dynamic entities (the lists at 0x14099b8..0x14099c8, picked by
+  0x48e560) and pushes each through `Phys_ObjAddForce` (0x5a5900, call at
+  0x48eaa1); the ragdoll's pushes go the same way at 0x5bdfe0.
+  VERIFIED (disassembly). The worlds: `Phys_ObjCreate` takes its world
+  in `edi`, 0 for a dynamic entity (0x48dcc1, 0x48ed98), 1 for a
+  launched part (0x434d44), for a broken dynamic entity's pieces
+  (0x490fd0, beside "Failed to spawn pieces model") and at 0x4a21b4, 2
+  for a ragdoll's bones (0x5bc9d3). VERIFIED (the immediates). What
+  0x4a21b4's caller makes is not read. The only callers of
+  `Phys_ObjAddForce` are 0x48eaa1, 0x5bdfe0, `Phys_ObjBulletImpact`'s
+  0x5a5daf and 0x5a25a1, a jitter that reads a per-world list at
+  0xcc54498 (stride 0xcc) which only 0x5a7730 fills, at world 0's
+  address (called from 0x48ee1b, `EV_PHYS_JITTER`'s path), and
+  0x5a66ff zeroes; `Phys_ObjBulletImpact` (0x5a5a20) is
+  called only by the launch (0x434dda), a dynamic entity's bullet
+  (0x48e049, 0x48e34f) and its pieces' break (0x491271). VERIFIED (every
+  `call` to the two in the binary). So a blast does not
+  push a launched part: after its launch's push it meets gravity and
+  the world, nothing else, and the server sends nothing more (3.2). INFERRED (the callers
+  above). That the jitter's event is `EV_PHYS_JITTER` is INFERRED (the
+  case after the jolt's, the event order).
 
 vcod (`vcod_cod4::physics`, `play::cod4_physics`):
 
 - Ported: the 1000 ms rule, the refusal without a preset, a brush model
-  and `eFlags` 0x20 left out, the shape (boxes and cylinders, else the
-  bounds box), the mass centre, the push with its up bias, spin scale and
+  and `eFlags` 0x20 left out, the shape (brushes, boxes and cylinders,
+  else the bounds box), the mass centre, the push with its up bias, spin scale and
   formula, gravity, the clock (two steps at most, the lerp), the drag,
   the per-body sleep on the squared speeds, the contact friction and
-  bounce, the world-only collision under 0x2806c91. VERIFIED (the code
-  against the above).
-- In place of ODE: one impulse solver per body. Each box corner and 16
+  bounce, the world-only collision under 0x2806c91, and no push from a
+  blast. VERIFIED (the code against the above).
+- In place of ODE: one impulse solver per body. Each box's (and an
+  axial brush's) 8 corners, 12 edge midpoints and 6 face centres, a
+  brush with sides' corners (where three of its planes meet), and 16
   points round each cylinder sweep the clip map as points along their
   velocity over the step; the kernels' 0.125 skin is the contact layer; a
   corner already in the world is traced out from the centre and pushed
@@ -1193,20 +1231,31 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   bounces by the preset, from the corner where the step found it; ten
   passes of sequential impulses with Coulomb friction (the preset's times
   `phys_frictionScale`); the centre itself is never moved through a
-  surface. A brush geom is left out (a model with only brushes takes its
-  bounds box), `msecStep` stays 17 ms, a world edge between two corners
-  can poke into a box, and a blast does not push a part. vcod's.
+  surface, and when its move is cut short its speed is cut with it.
+  `msecStep` stays 17 ms, and a world edge between two of a box's 26
+  points can still poke into it. vcod's.
+- Why the 26 points and the cut speed: with the hood's brush in place
+  of its bounds box, the hood in the live gate below came down with its
+  low corners on two floors 18 units apart and a 39-degree clip map
+  surface (normal (-0.12, -0.61, 0.78)) between them through its
+  centre. Each step the centre's move was cut to nothing
+  while its speed (about 55 units/s along the ramp) stayed, so it never
+  slept (1739 steps in 30 s). With the edge and face points the box
+  meets the ramp, and the cut speed lets a centre held that way sleep
+  (`a_box_held_on_its_centre_by_a_ridge_comes_to_rest`, on the box's 8
+  corners alone, fails without the cut). VERIFIED (the runs, ours).
 - Tests: `physics::tests` (free fall at `phys_gravity`, the push formula,
   a 0.8 bounce, a launched door that lands and sleeps, a fast part thrown
   into a corner staying out of all three planes, a tilted box settling
-  flat, the clock, a model's geoms) and the live
+  flat, the clock, a model's geoms and brushes, a box held on its
+  centre by a ridge) and the live
   `cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest`: vcod-server's
   `war` on mp_backlot, a held bot's frags bursting on the first
   destructible until `_destructible.gsc` blows the sedan up; its 9
   launched parts (both mirrors, both bumpers, both right doors, two wheels
-  and the hood) flew 14 to 199 units off their spots and went to sleep
-  within 1.6 to 2.7 s, every point clear of the world and resting on it.
-  VERIFIED (the tests, ours). How a part looks in flight and at rest is
+  and the hood) flew 14 to 154 units off their spots and went to sleep
+  within 1.6 to 2.1 s (92 to 120 steps), every point clear of the world
+  and resting on it, the same on three runs. VERIFIED (the tests, ours). How a part looks in flight and at rest is
   pending a human's look.
 - The ragdoll (`cod4-player-anims.md` 10) keeps its point solver. This
   body could carry it once the bones are rigid capsules held by joint

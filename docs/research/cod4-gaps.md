@@ -18,10 +18,16 @@ Ranked by how much a player notices.
   challenge and hides them in the browser (cod4-handshake.md 13). L.
 - Retail's `mpdata` is never read: a retail rank does not carry over.
   By choice.
-- Rigid-body physics is vcod's solver, not ODE: a launched part's corners
-  meet the world as points, brush geoms are left out, `msecStep` stays
-  17 ms, and a blast does not push a part (cod4-gsc.md 3.6). The ragdoll
-  is a position-based solver (cod4-player-anims.md 10). M.
+- Rigid-body physics is vcod's solver, not ODE: a launched part's 26
+  box points (corners, edge midpoints, face centres) meet the world as
+  points, so a world edge between them can poke in, and `msecStep`
+  stays 17 ms (cod4-gsc.md 3.6). A blast does not push a part on 1.7
+  either. The ragdoll is a position-based solver (cod4-player-anims.md
+  10). M.
+- A map's dynamic entities (mp_crash holds 516) are neither drawn nor
+  simulated: vcod reads their `DynEntityDef`s and keeps nothing. 1.7
+  draws them and pushes them with blasts (0x48e670), bullets (0x48e049)
+  and `physicsJitter`, and breaks them into pieces (cod4-gsc.md 3.6). L.
 - Multichannel output: kira mixes stereo, so a 5.1 or 7.1 device gets
   the stereo mix on its front pair (cod4-sound.md 4.2, 5). The 139 alias
   rows whose curve no walked zone holds fall off straight. L.
