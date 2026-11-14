@@ -2827,9 +2827,20 @@ vcod (`builtins/client.rs` `add_test_client`): the host connects the slot and
 runs the callback inside the call, queues the `begin` notify, and
 `Server::install_test_client` gives the slot an active `Client` with no
 netchan and no bot brain. The counter lives in `Server` and survives a map
-change. Not modelled: a slot a UDP client once held (address no longer zero,
-so retail's port-0 bot is not refused there), and the test client across a
-map change.
+change.
+
+VERIFIED live, `probe_tcrestart` on retail 1.1d mp_pavlov (2026-11-14,
+`testclient.rs`'s `a_test_client_rejoins_after_a_map_restart_as_on_retail`,
+which ours matches line for line): a test client added at 5050 is `bot0`
+(the counter's first value, unrefused past the limit), and its `begin`
+waiter runs at the same `getTime()`. `map_restart(false)` at 6050: the new
+level's script clock carries on (6050), its first frame's
+`getentarray("player")` holds no player, the test client's
+`ClientConnect` runs again at 6350 with `sessionstate` `spectator` and its
+`begin` at 6400, and the next `addTestClient` at 11150 is `bot1` in slot 1.
+Not run: a slot a UDP client once held (address no longer zero, so
+retail's port-0 bot is not refused there; it needs a connect and a drop
+inside the server's first 3 s) and a `map` change.
 
 ## Open, and worth a probe
 

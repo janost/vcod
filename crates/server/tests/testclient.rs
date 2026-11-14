@@ -94,3 +94,63 @@ fn status_lists_test_clients_as_retail() {
         ]
     );
 }
+
+/// `probe_tcrestart` on mp_pavlov against retail 1.1d (2026-11-14): a test
+/// client added past `sv_reconnectlimit` survives a `map_restart(false)`,
+/// absent from the new level's player list until its `ClientConnect` runs
+/// again 300 ms on, and the name counter carries on across the restart
+/// (docs/research/cod11-gsc-object-model.md 25).
+#[test]
+fn a_test_client_rejoins_after_a_map_restart_as_on_retail() {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        return;
+    };
+    let retail = [
+        "PROBE level  t 0",
+        "PROBE connect 0 bot0 state spectator t 5050",
+        "PROBE added num 0 name bot0",
+        "PROBE begin 0 t 5050",
+        "PROBE restart",
+        "PROBE level 1 t 6050",
+        "PROBE players 0",
+        "PROBE connect 0 bot0 state spectator t 6350",
+        "PROBE begin 0 t 6400",
+        "PROBE connect 1 bot1 state spectator t 11150",
+        "PROBE added2 num 1 name bot1",
+        "PROBE done",
+        "PROBE begin 1 t 11150",
+    ];
+    let mut now = Instant::now();
+    let bsp_path = fs
+        .resolve_map("mp_pavlov")
+        .expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut sv = vcod_server::Server::new(common::cfg("mp_pavlov", "probe_tcrestart"), now);
+    sv.overlay_script(
+        "maps/mp/gametypes/probe_tcrestart",
+        include_str!("../../gsc/tests/fixtures/semantics/probe_tcrestart.gsc"),
+    );
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    // A restart starts a new script log, so the lines are kept per level.
+    let mut lines: Vec<String> = Vec::new();
+    let mut seen = 0;
+    for _ in 0..400 {
+        common::run_alone(&mut sv, &mut now, 50);
+        let log = sv.script_log();
+        if log.len() < seen {
+            seen = 0;
+        }
+        lines.extend(
+            log[seen..]
+                .iter()
+                .filter(|l| l.starts_with("PROBE "))
+                .cloned(),
+        );
+        seen = log.len();
+        if lines.iter().any(|l| l.starts_with("PROBE begin 1")) {
+            break;
+        }
+    }
+    assert_eq!(lines, retail);
+}
