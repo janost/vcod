@@ -224,8 +224,9 @@ called builtin without a handler; `LEFT_OUT` is empty. VERIFIED (the test).
   instructions).
 - `getEye` (0x80c2eea): `r.currentOrigin` + 40 (0x820ded4) in z, any
   entity or stance. VERIFIED (the instructions). `getTagOrigin` /
-  `getTagAngles` place the bind pose (`baseMat`) by origin and angles; a
-  playing body reads its posed bone (3.3). INFERRED (the code). Traces
+  `getTagAngles` place the model's bones composed with no anim (3.2, "The
+  skeleton") by origin and angles; a playing body reads its posed bone
+  (3.3). INFERRED (the code). Traces
   use 3.3's world.
 
 Hudelem fields: 19 rows at 0x8215a20, 28 bytes `{name, offset, type, mask,
@@ -405,12 +406,16 @@ On ours (`game::cod4::vehicle`):
 - `carry_riders` moves a sticky missile resting on the helicopter;
   `lost_ground` counts a helicopter's collision as ground. INFERRED (no
   capture holds a grenade on a helicopter).
-- `heli_pose` sets the three tags' turns in place of their bind turns,
-  places kept; everything under them follows. That the slot's turn stands
-  in for the bone's own is INFERRED off the capture below: the cobra's
-  `tag_barrel` sits 7.3 degrees nose up at the bind pose, and retail's
-  `tag_flash` points along the gun's pitch. The stock MP scripts never
-  wait on `script_vehicle_collision`. VERIFIED (`common_mp`'s rawfiles).
+- `heli_mats` builds the DObj's skeleton as 1.7 does ("The skeleton"
+  below): the three tags' locals take the angles' quats in place of their
+  base turns, places kept; everything under them follows. VERIFIED (the
+  skeleton gate). The cobra's `tag_barrel` sits 7.3 degrees nose up at
+  the base pose, and retail's `tag_flash` points along the gun's pitch.
+  VERIFIED (the collision capture). `bone_moves` tells the trace's moved
+  bones from the rest against the zone's `baseMat` word for word, as
+  `XModelTraceLineAnimated` does (its base is the model's +0x1c,
+  0x81cb06a). VERIFIED (the disassembly). The stock MP scripts never wait
+  on `script_vehicle_collision`. VERIFIED (`common_mp`'s rawfiles).
 - A stock helicopter runs 0x808ba22 for its first 2 s: `heli_fly` waits
   2 s before its first goal. VERIFIED (`common_mp`'s `_helicopter.gsc`).
   `Heli4::hold` is its at-rest case ("The no-goal think"). INFERRED (the
@@ -547,7 +552,10 @@ counted from the spawn. VERIFIED (the capture).
 
 - Retail's `tag_flash` sits along the gun's pitch from `tag_barrel`
   (16.58 degrees down at `gunPitch` 16.66). VERIFIED (the capture).
-- The trace meets the barrel at retail's point, within 0.01, with
+- The posed `tag_barrel` and `tag_flash` and the trace's point print
+  retail's digits. VERIFIED (the gate); off the zone's `baseMat` they
+  printed a thousandth off.
+- The trace meets the barrel at retail's point with
   retail's normal word for word (-0.112754, 0, 0.993623): the base pose's
   normal of a gun yawed 99.8 degrees. VERIFIED (the gate).
 - The first notify comes 5600 ms past the spawn with the body at z 750.08
@@ -592,8 +600,10 @@ on the server.
 - Yaw: the last think's yaw (r.currentAngles, copied in at 0x809fc60)
   plus the rate's step, times the float 1/360, less `floor(x + 0.5)`,
   times 360, all on the stack with one store (0x808c719..0x808c798).
-  VERIFIED (the disassembly). A spawn yawed 250 reads -110 from the first
-  think. VERIFIED (the idle capture).
+  VERIFIED (the disassembly). A spawn yawed 250 comes out -109.99999
+  (0xc2dbffff), which the think's link snaps to -110 ("The link's
+  snap" below); the next think reads -110 and keeps it. VERIFIED (gdb at
+  0x808c719 and 0x808c79b).
 - It also tracks vehicle +0x2e4 toward 1 and +0x2e8 toward 0 at 4 a
   second; `VEH_UpdateMoveToGoal` stores them too (0x809e9ce), and nothing
   outside 0x808ba22 reads them. VERIFIED (the disassembly).
@@ -653,11 +663,111 @@ on the server.
   target in the frame, the gun) against the same values on ours, 159
   thinks: wherever the barrel, the frame and the gun before the step match
   (51 thinks), the direction, the target angles and the target in the
-  frame match word for word. Before the goal the barrel
-  lands an ulp off in 26 of 80 thinks: ours poses the tags off the zone's
-  bind-pose `baseMat`, 1.7's skeleton composes the model's local bones. In
-  flight the frame's roll lands an ulp off (the `AxisToAngles` roll's
-  extended intermediates against our `f64`). VERIFIED (gdb).
+  frame match word for word. VERIFIED (gdb). Before the goal the barrel
+  landed an ulp off in 26 of 80 thinks. Its cause was the body's yaw, not
+  the pose: retail's `r.currentAngles` reads -110 (0xc2dc0000) where ours
+  kept -109.99999, as ours ran no link snap. VERIFIED (gdb, 0x80a0068).
+  With the snap and "The skeleton", the barrel's place matches every word
+  of the first 81 thinks; the first off is think 82, in flight, where the
+  body's yaw is an ulp off (0xc2db4001 against 0xc2db4000, the flight's
+  yaw step, "The flight against retail"). VERIFIED (gdb against ours).
+
+#### The skeleton
+
+How 1.7's server builds a DObj's bones, read off `cod4_lnxded`.
+`vcod_cod4::skel` is its port; `heli_mats` runs it for a helicopter and
+`game::cod4::combat::skel_worlds` composes a player body's pose with it.
+
+- `G_DObjGetWorldTagPos` (0x80cbfc4) and `G_DObjGetWorldTagMatrix`
+  (0x80cbe9a) call `G_DObjCalcBone` (0x80ca732), then read the bone's
+  0x20-byte `DObjAnimMat` (quat, translation, weight) out of the DObj's
+  skeleton (DObj +0x48; 0x817c2aa returns it). VERIFIED (the disassembly).
+- `G_DObjCalcBone`: the server's DObj (`Com_GetServerDObj` 0x8125e12: the
+  slot index at 0x88e7780 + 2 * entnum, the DObj at 0x88e7fa0 + 100 *
+  index); if 0x817cd6e says the bone is built under the current skeleton
+  stamp (0x13ed7ac4), nothing more. Else its hierarchy bits (0x81abf36),
+  the entity type's controller (the handler table 0x826cefc, indexed by
+  the byte at entity +0x16e), then `DObjCalcSkel` (0x81af4f8). VERIFIED
+  (the disassembly). A stale stamp gets a fresh skeleton with no bone
+  built (0x817cda4..). VERIFIED (the disassembly). 0x817bed2 bumps the
+  stamp ahead of every `G_RunFrame` (cod4-server-frame.md, step 6). So a
+  DObj's bones are built once a frame, by the first tag read, with the
+  controller's angles of that moment. INFERRED (the three facts).
+- A controller's tag (0x81abb2a, 0x81af996): only a bone in the call's
+  hierarchy bits and not yet set this stamp; its local takes the angles'
+  quat (`AnglesToQuat` 0x81b0008), a zero translation (`vec3_origin`
+  0x821be20) and weight 0 (0x81b00de). VERIFIED (the disassembly).
+  0x81afa6c and 0x81b01e8 set a bone the same way and also its bit at
+  skeleton +0x10, which sends it down `DObjCalcSkel`'s second arm
+  (0x81ae5da, relative to bone 0's matrix). INFERRED (the bits). No port
+  takes that arm.
+- `AnglesToQuat`: each angle times the double pi / 360 (0x8238538) stored
+  as a float through `sinf` and `cosf`, the roll's cosine kept on the
+  stack; `x = sr cy cp - cr sp sy`, `y = cr cy sp + sr sy cp`, `z = cr sy
+  cp - sr cy sp`, `w = cr cy cp + sr sp sy`, each stored. VERIFIED (the
+  disassembly).
+- `DObjCalcSkel`: the bones the call needs less those built
+  (0x81af50a..0x81af558). `DObjCalcAnim` (0x81b4c8c) runs first; with no
+  anim tree a root's local is the identity quat with no translation and
+  weight 0 (0x81b4dc0..0x81b4df3), a non-root's quat each `XModelQuat`
+  short times the float 0x38000100 (1 / 32767) stored, no translation,
+  weight 0 (0x81b4e6b..0x81b4ecc). VERIFIED (the disassembly). A bone a
+  controller set is skipped. VERIFIED (the bit test at 0x81b4e65).
+- Then per model: the bones a later model shares by name copied from the
+  first (0x81af655..0x81af67f); a root keeps its local and takes the
+  weight `2 / (x^2 + y^2 + z^2 + w^2)` summed on the stack, a zero quat
+  becoming `w` 1, weight 2 (0x81af7ab..0x81af850); every other bone in
+  order through 0x81ae164. VERIFIED (the disassembly).
+- 0x81ae164, a bone `c` under parent `p` (bone less `parentList`'s
+  offset): the quat `p * c` (Hamilton), each component summed on the
+  stack in the order `w = ((pw cw - cx px) - py cy) - pz cz` and its
+  kin, stored, and its weight `2 / |q|^2` off the unstored sums. The
+  translation: the local's plus the model's `trans` (12 bytes a bone),
+  x and y stored, z kept; turned by the parent's matrix built off its
+  quat times its weight (`a = w px`, `b = w pz` stored, `w py` kept; the
+  products `xx`, `xy`, `xw`, `yy`, `yz`, `yw`, `zw` stored, `xz` and
+  `zz` kept) and added to the parent's translation, x's partial sums
+  stored twice, y's and z's kept to one store (0x81ae3de..0x81ae54d).
+  VERIFIED (the disassembly).
+- `G_DObjGetWorldTagMatrix`'s rows off a bone (0x80cbef3..0x80cbf8a): the
+  same weighted products, `1 - (yy + zz)` with the sum stored, then times
+  the entity's `AnglesToAxis` (0x818effc); the place through
+  `MatrixTransformVector43` (0x819016e). VERIFIED (the disassembly).
+- gdb at 0x80a0068 dumped the cobra's skeleton on all 159 thinks of the
+  idle capture's gsc: the nine bones the barrel's chain builds (0..3, 41,
+  42, 43, 47, 48; `tag_body` 2, `tag_turret` 41, `tag_barrel` 48, the
+  flash-tag slot 0). Rebuilt from the zone and each think's gun angles,
+  every word matches, the x87 sums as `f64`. VERIFIED
+  (`crates/cod4/tests/skel_ab.rs`,
+  `fixtures/skel/cobra-idle-gdb.txt`).
+- Off the zone's `baseMat` (ours before), the cobra's barrel landed an
+  ulp off now and then; with the composed skeleton alone the idle gate
+  still read 8 gun words off before the goal, against 6 before. VERIFIED
+  (the gate). The rest was the link's snap below.
+- A player body's locals come from vcod's own sampler and controllers;
+  composed through 0x81ae164 instead of as quaternions, the dying body's
+  `tag_weapon_right` lands where 1.7's does word for word on both
+  dropped-weapon captures (cod4-combat.md 6.1). VERIFIED (`capture_ab`).
+  That the sampler's locals are 1.7's word for word is INFERRED off it.
+- `getTagOrigin` on any other entity reads the model's bones so composed
+  with no anim (`Cod4Zones::model_tags`); they sit within 0.01 of the
+  zone's `baseMat` (cod4-player-anims.md 4). VERIFIED (the census).
+
+#### The link's snap
+
+`SV_LinkEntity` (0x817e3f0) snaps each component of `r.currentAngles`
+within a thousandth of a degree of a whole one to it: `n = floor(a +
+0.5)` (`frndint` under round-down, then `fistp`), and `a = n` when `(n -
+a)^2` is under the float 0x358637be (1e-6, at 0x8212470), on every link
+(0x817e426..0x817e5ba). VERIFIED (the disassembly). gdb watching the
+idle cobra's yaw caught the store at 0x817e53a, from the think's set and
+link (0x809c1dc, which runs `G_SetOrigin`, `G_SetAngle` and the link when
+the place or the angles changed). VERIFIED (gdb). CoD1's snap truncates
+`a + 0.5` (`mover::snap_angles`), which leaves a negative angle alone.
+VERIFIED (cod11-movers.md 12). vcod-server snaps a helicopter's angles
+after a think that moved or turned it (`link_snap4`). INFERRED (the
+code). Other CoD4 entities link through the CoD1 snap. INFERRED (the
+code; no capture yet tells them apart).
 
 #### The idle capture
 
@@ -671,13 +781,15 @@ below, then on one behind; then it flies a pass-through goal and is
 deleted. No hover radius and no stop goal, so no random draw. VERIFIED
 (the capture).
 
-- Before the goal every place and body word matches retail's, the body
-  (0, -110, 0) from the first think; the gun within 3.1e-5 degrees (the
-  barrel's ulps above), `hardpoint_ab::STILL_GAPS`. VERIFIED (the gate).
+- Before the goal every place, body and gun word matches retail's, the
+  body (0, -110, 0) from the first think. VERIFIED (the gate). It took
+  the link's snap and the skeleton ("The turret"); without them the gun
+  parted by 3.1e-5 degrees. VERIFIED (the gate, both ways).
   Without `Heli4::hold` the body read 8 degrees of pitch off from the
   first think and the gun 7.4. VERIFIED (the gate, both ways).
 - Past the goal the flight's tolerances hold; the gun parts by 0.128 at
-  worst, as its body does. VERIFIED (the gate).
+  worst, as its body does: the first gun word off follows the body's yaw
+  parting by an ulp at think 82. VERIFIED (the gate, gdb).
 
 #### Missiles under 1.7: attractors, the wobble, guidance
 
