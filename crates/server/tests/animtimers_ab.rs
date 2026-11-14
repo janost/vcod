@@ -58,8 +58,9 @@ struct Snap {
     t: i32,
     ct: i32,
     timers: [i32; 2],
-    /// `legsAnim`, printed beside a miss, never compared.
-    legs: i32,
+    /// `legsAnim` and `torsoAnim`, printed beside a miss; compared, toggle
+    /// aside, only where the test asks.
+    anims: [i32; 2],
 }
 
 struct Capture {
@@ -93,7 +94,7 @@ fn retail(text: &str) -> Capture {
                 t: num("t"),
                 ct: num("ct"),
                 timers: [timer("legsTimer"), timer("torsoTimer")],
-                legs: timer("legsAnim"),
+                anims: [timer("legsAnim"), timer("torsoAnim")],
             });
         } else if let Some(rest) = line.strip_prefix("!cmd ") {
             let angles: [i32; 3] = ints(field(rest, "angles").unwrap());
@@ -120,9 +121,15 @@ fn retail(text: &str) -> Capture {
     }
 }
 
-/// Ours over the capture: `commandTime` to the two timers and `legsAnim`,
-/// one entry per snapshot.
-fn ours(p: &'static Protocol, fs: Pk3Fs, cap: &Capture) -> BTreeMap<i32, [i32; 3]> {
+/// Ours over the capture, with the gametype's `cvars` on top of the street
+/// placement's: `commandTime` to the two timers, `legsAnim` and
+/// `torsoAnim`, one entry per snapshot.
+fn ours(
+    p: &'static Protocol,
+    fs: Pk3Fs,
+    cap: &Capture,
+    cvars: &[(&str, &str)],
+) -> BTreeMap<i32, [i32; 4]> {
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{PROBE}.gsc");
     let probe = std::fs::read_to_string(src).expect("read the probe");
     let bsp_path = fs.resolve_map(MAP).expect("the map in the paks");
@@ -133,6 +140,9 @@ fn ours(p: &'static Protocol, fs: Pk3Fs, cap: &Capture) -> BTreeMap<i32, [i32; 3
     sv.overlay_script(&format!("maps/mp/gametypes/{PROBE}"), &probe);
     sv.set_cvar("probe_teleport", "1");
     sv.set_cvar("probe_spot", "street");
+    for (k, v) in cvars {
+        sv.set_cvar(k, v);
+    }
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
@@ -229,6 +239,7 @@ fn ours(p: &'static Protocol, fs: Pk3Fs, cap: &Capture) -> BTreeMap<i32, [i32; 3
                     s.ps.field_i32(p, "legsTimer"),
                     s.ps.field_i32(p, "torsoTimer"),
                     s.ps.field_i32(p, "legsAnim"),
+                    s.ps.field_i32(p, "torsoAnim"),
                 ],
             );
         }
@@ -236,13 +247,24 @@ fn ours(p: &'static Protocol, fs: Pk3Fs, cap: &Capture) -> BTreeMap<i32, [i32; 3
     out
 }
 
-/// Retail's timers against ours on every snapshot both reached; returns
-/// how many non-zero retail timers were compared.
+/// Retail's timers against ours on every snapshot both reached, and with
+/// `anims` the two channels' anim indices too; returns how many non-zero
+/// retail timers were compared.
 fn check(p: &'static Protocol, fs: Pk3Fs, tag: &str) -> usize {
+    check_with(p, fs, tag, &[], false)
+}
+
+fn check_with(
+    p: &'static Protocol,
+    fs: Pk3Fs,
+    tag: &str,
+    cvars: &[(&str, &str)],
+    anims: bool,
+) -> usize {
     let path = format!("tests/fixtures/playerstate/{MAP}-dm-slope-8ms-{tag}.txt");
     let text = std::fs::read_to_string(&path).expect("read the fixture");
     let cap = retail(&text);
-    let ours = ours(p, fs, &cap);
+    let ours = ours(p, fs, &cap, cvars);
     let report = std::env::var_os("TIMERS_REPORT").is_some();
     let mut bad = Vec::new();
     let mut live = 0;
@@ -256,16 +278,24 @@ fn check(p: &'static Protocol, fs: Pk3Fs, tag: &str) -> usize {
             let (r, o) = (s.timers[i], ours_ct[i]);
             live += usize::from(r != 0);
             let line = format!(
-                "{tag} ct {}: {name} retail {r} ours {o} (legsAnim retail {} ours {})",
+                "{tag} ct {}: {name} retail {r} ours {o} (legsAnim retail {} ours {}, torsoAnim retail {} ours {})",
                 s.ct,
-                s.legs & 511,
-                ours_ct[2] & 511
+                s.anims[0] & 511,
+                ours_ct[2] & 511,
+                s.anims[1] & 511,
+                ours_ct[3] & 511
             );
             if report && (r != 0 || o != 0) {
                 println!("{line}");
             }
             if r != o && !GAPS.iter().any(|g| (g.0, g.1, g.2) == (tag, s.ct, name)) {
                 bad.push(line);
+            }
+        }
+        for (i, name) in ["legsAnim", "torsoAnim"].into_iter().enumerate() {
+            let (r, o) = (s.anims[i] & 511, ours_ct[2 + i] & 511);
+            if anims && r != o && !GAPS.iter().any(|g| (g.0, g.1, g.2) == (tag, s.ct, name)) {
+                bad.push(format!("{tag} ct {}: {name} retail {r} ours {o}", s.ct));
             }
         }
     }
@@ -321,4 +351,50 @@ fn the_anim_timers_run_like_retail_on_uo() {
     };
     let live = check(&PROTOCOL_V22, fs, "sprint-uo");
     assert!(live > 100, "{live}");
+}
+
+/// The prone move key (`--probe-pronemove rifle`, springfield_mp): the
+/// sighted, rechambering and swinging presses, the dive from a crouched
+/// walk back and its `jumpbk` (`both pb_chicken_dance_crouch`, the torso
+/// on 0), with both channels' anims compared.
+#[test]
+fn the_prone_move_anims_run_like_retail_on_1_1() {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        return;
+    };
+    let live = check_with(&PROTOCOL_V1, fs, "pronemove-rifle-1.1", &[], true);
+    assert!(live > 20, "{live}");
+}
+
+#[test]
+fn the_prone_move_anims_run_like_retail_on_1_5() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
+        return;
+    }
+    let live = check_with(&PROTOCOL_V6, fs, "pronemove-rifle-1.5", &[], true);
+    assert!(live > 20, "{live}");
+}
+
+/// UO's rifle run, then the bipod and the binoculars (`--probe-pronemove
+/// lmg`, mg30cal_mp, `probe_binoculars 1`): the breakdown continue on each
+/// prone flip and the flips' torso clears.
+#[test]
+fn the_prone_move_anims_run_like_retail_on_uo() {
+    let Some(fs) = vcod_common::testing::uo_fs() else {
+        return;
+    };
+    let live = check_with(&PROTOCOL_V22, fs, "pronemove-rifle-uo", &[], true);
+    assert!(live > 20, "{live}");
+    let live = check_with(
+        &PROTOCOL_V22,
+        vcod_common::testing::uo_fs().unwrap(),
+        "pronemove-lmg-uo",
+        &[("probe_binoculars", "1")],
+        true,
+    );
+    assert!(live > 50, "{live}");
 }
