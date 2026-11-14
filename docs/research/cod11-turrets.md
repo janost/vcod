@@ -1828,9 +1828,60 @@ rounded once instead of the quaternion (no change), and the target's spawn
 point (`-hitgrid-uo` with either of mp_carentan's first two dm spawns
 pinned instead of `PRE_SPAWNAT` lands 147 rows off). INFERRED:
 the earlier hundredth-of-a-degree turn was the clip's weight, which 13.6's
-0.001 closed; the remaining 1e-4 is a translation along the round, cause
-not found. `KNOCKBACK_GAP` stays on 1.1d's and UO's `-hitgrid` and UO's
-`-hitfine` kill.
+0.001 closed.
+
+The knockback kill measured on retail, `mp_carentan-dm-turret-hitbody.txt`
+(1.1d, with `-script.txt` and `-target.txt`): the hit recipe with
+`probe_bodylog 1`, which logs the struck body's `origin` and `angles` as
+`fine1` prints them, and the server under gdb, breakpoints on
+`SV_LocationalTraceModel`'s entry (`cod_lnxded` 0x80c4564) and on its
+caller's return (0x80912f5) dumping the DObj's bone matrices (bone `i` at
+`*(dobj+4) + 0x30 + 64 * i`: three axis rows of four floats, then the
+translation), the body's frame, the ray in it and the fraction. The wound
+lands at 30200 on the idle, the kill at 30250 on the knockback's first frame.
+
+- VERIFIED, `-hitbody-script.txt`: the kill's body stands at (1513.191040,
+  1601.353394, -31.874910), angles (0, 0, 0); the wound's at (1515.182251,
+  1603.587158, -31.874956). vcod measurement: ours logs the same digits
+  for both, so the knockback move (its three cmds' slides and the snap) is
+  retail's. `the_hitbody_capture_matches_retail_on_mp_carentan` holds them.
+- VERIFIED, the gdb dump: the ray in the body's frame is retail's to the
+  bit on both hits. Retail's fraction on `torso_upper` (bone `back_up`) is
+  0x3d0d14e9 on the wound and 0x3d0e75af on the kill; vcod's `f32` slab
+  gives 0x3d0d14e9 and 0x3d0e75ae, the kill's point one float step off in x.
+- VERIFIED, 1.1d's arithmetic, `cod_lnxded`: each point into a bone's
+  frame keeps `p - origin` on the x87 stack (the `fsts` at 0x80c49b1 does
+  not pop) and stores each dot product once (start 0x80c49eb, 0x80c4a05,
+  0x80c4a20; end 0x80c4a62, 0x80c4a7e, 0x80c4aab); the slab loop
+  (0x80c4ad0..0x80c4bce) keeps `(p - plane) * sign`, `d1 - d2`,
+  `d1 / (d1 - d2)` and both bounds on the stack, the exit starting at the
+  result's stored fraction; the entry is rounded once into the result
+  (0x80c4c4f). The body's frame (0x8066520) keeps each difference and
+  stores each dot product once (0x806655f, 0x8066578, 0x8066592).
+- vcod measurement: that arithmetic in `f64` over retail's dumped matrices
+  gives retail's fraction on both hits. Over ours it gives the kill's
+  (0x3d0e75af) and puts the wound a step off (0x3d0d14ea). Our 1.1d pose
+  against the dump, body bones 0..79 (the head part's bones come in
+  another order): on the wound frame the torso sits 5e-6 to 1.1e-5 off in
+  translation and up to 9e-6 in its axes (pelvis 9.4e-6, `back_up`
+  1.1e-5), on the kill frame 5e-7 to 6e-6 (`back_up` 5.7e-6), the limbs
+  and fingers up to 1.3e-4 on both.
+- vcod measurement: sampling 1.1d's clips at 1.5b's node time
+  (cod11-combat.md 3.1, "The clip's float time") left the wound's bones
+  as they were and put the kill's `back_up` 3.8e-5 off, though both points
+  then landed on retail's bits with the kept slab. INFERRED: 1.1d does not
+  sample at that float time (its anim code not read), and both points
+  matching was the two errors cancelling again.
+
+INFERRED: the kill's float step is two errors, the 1.1d slab's `f32`
+arithmetic and a pose 1e-5 off retail's, which cancel on the idle frame
+and not on the knockback's. Either fix alone moves the step from the kill
+to the wound. What is left: 1.1d's pose to the bit (its anim calc and
+skeleton build, with the dump as the reference), then the kept slab
+above. UO's `-hitgrid` and `-hitfine` kills run the stored slab and the
+stored build (cod11-combat.md 3.1), whose blend summation order is the
+part no capture has checked; no UO dump was taken. `KNOCKBACK_GAP` stays
+on 1.1d's and UO's `-hitgrid` and UO's `-hitfine` kill.
 
 vcod: `turret_ab`'s `hit_gate` replays each capture as `spawn_gate` does and
 holds the target's playerstate, each hit's point (`HIT_NEAR`, 0.001; 13.8)
