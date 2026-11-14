@@ -573,10 +573,88 @@ minor faults. The phases above, added for it, name the rest. VERIFIED
   VERIFIED (the logs).
 - Every pair of runs, CoD1, CoD2 (`dm`, `tdm`, `sd`, `ctf`, `hq`) and
   CoD4, printed the same `DIGEST=1` line before and after. VERIFIED.
-- Left: the interpreter's cost per op and the bodies' pose builds. A
+- Left then: the interpreter's cost per op and the bodies' pose builds. A
   field read (`GameHost::get_field`'s route, `fields::route_entity_cod2`)
   was 13% of the script's samples. INFERRED (75 gdb stack samples of a
   dev build).
+
+#### The interpreter and the host, made faster
+
+A release build profiled with gperftools' CPU profiler (2 kHz, 24 waves
+of the 60-bot mp_toujane `dm` run, `RESTART=5`) put the script pass's
+samples in: the op loop itself (each op cloned out of the code, the
+function's `Rc` cloned per op, the frame indexed again per access, a
+`Vec` for every call's and builtin's arguments and a new frame's locals
+and stack); SipHash of a name's text for every entity field route
+(`fields::route_entity*`, 8%) and every builtin dispatch (`BuiltinSet::get`,
+5%); and arrays as `BTreeMap`s (`Heap::get_index`, 6%). `end frames/look
+at`'s `bodies/pose` was the hit rigs assembled again after every restart:
+`PlayerRig::assemble` inflating the xmodels out of the iwds, 89% of
+`body_pose`'s samples. On CoD4's mp_crash wave, once those were fast,
+`notify` walking every thread for its endons and waiters was 43% of the
+script's samples and the scheduler's pick, a minimum over every thread
+each step, 39%. VERIFIED (the profiles).
+
+What changed, none of it in what a script computes:
+
+- `vm/interp.rs`: each op is matched by reference; the top frame's
+  function is taken again only when the call depth moves, and the frame
+  is held across the op, a call or return landing after it (`After`).
+  A call's and a builtin's arguments are read in place off the caller's
+  stack; a returned frame's buffers are reused (`Vm::frame_pool`). Two
+  ints or two floats take an inline arm in `+ - * /` and the compares,
+  the arm `eval_*` would take; an int condition skips `not_of`.
+- `heap.rs`: an array holds its keys 0..n in a `Vec` and only the rest in
+  the `BTreeMap` (`Elems`), walked in the same `ArrayKey` order; the
+  first-write order `getArrayKeys` reads is written out only once an array
+  stops being a list.
+- The VM's maps hash with FxHash (`fxhash.rs`, in the crate: `vcod-gsc`
+  still depends on `anyhow` and `log` alone).
+- `vm/sched.rs`: a notify reads the threads registered on its (target,
+  event) from `NotifyIndex`, and the pick reads `ReadyIndex` (the runnable
+  threads by queue stamp, the parked by due time and turn); `threads`,
+  in id order, is searched by bisection. An index holds every thread that
+  could qualify and some that no longer do: each is checked against the
+  thread, so the threads woken, killed and picked, and their order, are
+  the walk's.
+- `GameHost`'s `AtomMemo`: each atom's route, builtin handler, and
+  whether its read is the route alone (every name outside
+  `PLAIN_EXCEPT`), worked out once per interner (`Interner::id`) and
+  profile.
+- CoD2's `map_restart`, `map` of the same paks and `fast_restart` carry
+  the hit rigs (`Cod2Init::rigs`), and the `fast_restart` the xmodel
+  caches (`Carry::models`). A rig assembles on a body's first trace, after
+  the load took its referenced iwds (`pure_lists`), so the reads it skips
+  flagged nothing a client is sent. INFERRED (the load's order). Every
+  datagram an observer was sent through four `map_restart`s on mp_toujane
+  `dm` and `sd` hashed the same before and after (`NETDIGEST=600`).
+  VERIFIED.
+
+Before (the base) and after, run in turn twice each on the shared box,
+seed 1; the wave's CPU ms is `tick_profile::Split`'s run time (nothing
+queued), the ticks `TICKSTATS=1`'s ms a tick. VERIFIED (the logs).
+
+| run | wave CPU before | after | ticks p50 / p99 / max before | after |
+|---|---|---|---|---|
+| CoD2 mp_toujane `dm`, 60 bots, `RESTART=40`, 200 ticks | first 112-133, restarts 110-142 | first 72-77, restarts 49-61 | 9.0-9.2 / 128-135 / 144-149 | 7.9-8.3 / 118-126 / 141-157 |
+| CoD2 mp_carentan `tdm`, 12 bots, `RESTART=40`, 240 ticks | under 15 | under 15 | 1.22-1.26 / 192-197 / 199-205 | 1.15-1.17 / 169-193 / 201-226 |
+| CoD4 mp_crash `war`, 40 bots, 400 ticks (prematch end, ticks 60 and 62) | 30-32, 27-34 | 25-26, under 15 | 5.4-5.7 / 9.1 / 30-34 | 3.9-4.1 / 6.6 / 25-26 |
+| CoD1 1.1 mp_carentan `dm`, 40 bots, 400 ticks | none past 15 | none past 15 | 8.4-8.7 / 13.4-13.7 / 15-22 | 7.9-8.4 / 13.0-14.1 / 14-16 |
+
+- On mp_toujane the wave's `frame/scripts` fell from 78-102 ms to 40-53,
+  and a restart's `end frames/look at` from 29-38 ms to 1-4.4. The
+  level's first wave still assembles the rigs. The ticks' p99 and max on
+  CoD2 are the `map_restart` ticks themselves (the load: 112-157 ms, 92-111
+  of it on a CPU), which this leaves alone.
+- `tests/bench.rs` (`getSpawnpoint_DM`'s loops, 60 spawns over 40 points
+  and 60 players, a table host): 57 ms before, 34 to 41 after, best of
+  ten. VERIFIED (the runs).
+- `DIGEST=1` matched before and after on CoD1 `dm` and `sd`, CoD2 `dm`,
+  `tdm`, `sd`, `ctf` and `hq` (restarts every 150 ticks) and CoD4 `war`
+  and `sd`, 600 ticks each, and on each run of the table. VERIFIED.
+- Left: the level's first rig assembly (the xmodel reads), the restart's
+  load, and the builtins themselves (`bulletTracePassed`'s traces,
+  `getEntArray`'s walk of every entity).
 
 ## 10. Full servers, every game
 

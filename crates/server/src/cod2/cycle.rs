@@ -87,11 +87,14 @@ impl Cod2Server {
     /// through `ClientConnect`. Each gets its gamestate when its next
     /// message carries the old id (`client_packet`).
     pub(super) fn spawn_server(&mut self, map: &str) -> anyhow::Result<()> {
-        let carry = match self.game.level.as_ref() {
+        let (carry, rigs) = match self.game.level.as_ref() {
             Some(level) => {
                 // One dvar table on retail: what the script set stays set.
                 self.game.cvars = level.rt.host.cvars.clone();
-                level.take_carry(false)
+                (
+                    level.take_carry(false),
+                    level.carried_rigs(self.game.fs.as_ref()),
+                )
             }
             None => Default::default(),
         };
@@ -131,6 +134,7 @@ impl Cod2Server {
             fs,
             Cod2Init {
                 carry,
+                rigs,
                 ..Default::default()
             },
         )?;
@@ -179,6 +183,7 @@ impl Cod2Server {
         }
         let persist = level.save_persist();
         let carry = level.take_carry(true);
+        let rigs = level.carried_rigs(self.game.fs.as_ref());
         let configstrings = level.rt.configstrings().to_vec();
         self.game.server_id = restart_server_id(self.game.server_id);
         self.game.snap_flags ^= 4;
@@ -190,6 +195,7 @@ impl Cod2Server {
             Cod2Init {
                 carry,
                 configstrings: Some(configstrings),
+                rigs,
                 ..Default::default()
             },
         )?;
