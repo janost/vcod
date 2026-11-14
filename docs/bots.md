@@ -313,7 +313,10 @@ the nearest first and a second or so apart, walk back in by their own
 ways, slowed and looking at the objective, crouched for the last 300
 units; the rest hold. After a plant the defenders walk in the same way.
 In `ctf` the two bots nearest a sighting of the enemy carrying their
-flag go after him. On the move a bot keeps 360 units behind a teammate
+flag go after him. A carrier keeps running home through a fight, gun on
+the enemy; home while its own flag is away, it returns that flag if it
+lies within 1000 units, else waits in cover near its base until the
+flag is back. On the move a bot keeps 360 units behind a teammate
 ahead, and takes its own way in from 700 units out.
 
 ### Yells
