@@ -871,6 +871,7 @@ pub(crate) fn bullet_hit(
     hit_characters: bool,
     ignore: Option<EntId>,
 ) -> BulletHit {
+    let mut _p = crate::tick_profile::phase("bullet/world");
     let t = host.world.as_ref().map(|w| {
         let t = w.collision.shot_trace(start, end);
         (t, w.collision.entity_num(&t))
@@ -886,6 +887,7 @@ pub(crate) fn bullet_hit(
     // fraction (1.5b 0x8099b18; cod11-combat.md 2.7).
     let arith = vcod_common::patch::Arith::for_protocol(host.defs.proto);
     let mut point = t.map_or(end, |(t, _)| t.endpos);
+    _p = crate::tick_profile::phase("bullet/models");
     if let Some(e) = script_model_hit(host, cx, start, end, ignore, hit.map_or(1.0, |h| h.0)) {
         point = crate::game::combat::trace_point(start, end, e.0, arith);
         hit = Some(e);
@@ -893,6 +895,7 @@ pub(crate) fn bullet_hit(
     // `hitCharacters` keeps `CONTENTS_BODY` in the mask (0x5abfd): a body
     // the segment scores a bone of stops it, with no surface (3.2).
     if hit_characters {
+        _p = crate::tick_profile::phase("bullet/bodies");
         let limit = hit.map_or(1.0, |h| h.0);
         if let Some((slot, f)) = body_hit(host, start, end, ignore, limit) {
             let ent = host.ents.handle(slot as u32);
