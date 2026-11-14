@@ -92,7 +92,8 @@ takes the target.
 VERIFIED. `rotatevelocity((0,180,0), 2, 0, 0)` turned yaw 9 degrees per 50 ms
 frame (180 deg/s) for exactly 2 s, ending at 0 after a full turn, and raised
 `rotatedone`. The vector is deg/s, the second argument a duration, accel and
-decel as section 4.
+decel seconds of ramp. Unlike section 4's verbs the ramps keep the peak rate
+and shorten the turn to `v * (T - ta/2 - td/2)` (section 24).
 
 ## 7. The completion notifies
 
@@ -556,7 +557,9 @@ VERIFIED, the other verbs:
 | `ScriptEntCmd_RotateTo` | setup at `0x60b3c` | `0x60b4b` |
 | `ScriptEntCmd_GravityMove` (`0x60590`) | copies `r.currentOrigin` into `trBase` (`0x60667`), no evaluation before | |
 
-INFERRED: `0x5feb0` evaluates a running trajectory as `0x5fb38` does. After a
+VERIFIED, game.mp 0x5fec5..0x5fed8 and `probe_moverramp` (section 24,
+phases `w` and `m`): `0x5feb0` evaluates a running trajectory into
+`r.currentAngles` as `0x5fb38` does. After a
 move verb on a moving entity `getorigin()` reads the new `trBase`, one frame
 further on than before the call (a stalled trajectory runs a frame ahead of
 where the mover holds), and the verb's link puts the clip there. That is the
@@ -3196,3 +3199,103 @@ INFERRED: the one row is the stored `dt` and stored `base + delta * dt` of
 `G_MoverTeam`; with 1.1d's `evaluate_kept` ours reads 1.1d's value there.
 `ride_ab.rs`'s `mover_script_reads_match_retail_on_1_5` and `_on_uo` replay
 both, every line exact.
+
+## 24. Segments to the last bit
+
+Evidence: three captures off one probe on mp_carentan, no client,
+2026-11-14: `crates/server/tests/fixtures/movers/mp_carentan-dm-moverramp.txt`
+(retail 1.1d), `-moverramp-1.5.txt` (1.5b) and `-moverramp-uo.txt` (UO
+1.51b), off `client-probes/probe_moverramp.gsc`. Each row is `.origin` or
+`.angles` every frame, each component's float written out bit for bit.
+`ride_ab.rs`'s `mover_ramps_match_retail` and its `_on_1_5` and `_on_uo`
+twins replay them, every row exact. VERIFIED: the 1.5b and UO captures are
+identical; 1.1d's differs from them only in low bits. Addresses are 1.1d
+`game.mp.i386.so` unless named.
+
+**The setup.** VERIFIED, `0x5fb38` (the moves' and rotates' setup), off its
+loads and stores: the displacement `d = dest - cur` is stored per component
+before anything else (0x5fb47..0x5fb6d); a group whose `trType` is not 0 is
+then evaluated at `level.time` into `cur` (0x5fb70..0x5fb88), where the first
+segment starts. With no ramps: `trDuration` is `time * 1000.0f` truncated
+(the `fistp` under a chop control word, 0x5fbe6), `trDelta` is
+`d * (1000 / trDuration)` on the stack (0x5fc26..0x5fc49), and the setup
+writes the cruise as `time`, the decel as 0 and the destination. With a
+ramp: cruise `time - accel - decel` stored (0x5fc60..0x5fc67), speed
+`2|d| / (2 time - accel - decel)` stored (0x5fc85..0x5fca6), the velocity
+`VectorNormalize2(d) * speed` (0x5fcab..0x5fcdf). The first segment is
+`TR_ACCELERATE` (accel set, 0x5fd41), else `TR_LINEAR_STOP` over the cruise
+with `trDelta = v * cruise * (1000 / trDuration)` (0x5fdc6..0x5fdf3), else
+`TR_DECCELERATE` (0x5fe54), each `trDelta` but the cruise's the velocity
+itself. The setup stores the accelerating segment's end (its evaluation at
+`trTime + trDuration`, 0x5fd50, or `cur` without one, 0x5fd5f), the cruise's
+end `v * cruise + accelEnd` (0x5fe5a..0x5fe82) and the destination
+(0x5fe85), and ends evaluating the first segment at `level.time` into `cur`
+(0x5fea0). The entity fields: `pos` speed `+0x1e0`, cruise `+0x268`, decel
+`+0x274`, the three ends `+0x1a4`, `+0x1b0`, `+0x1bc`; `apos` `+0x1e4`,
+`+0x1d0`, `+0x26c`, `+0x1e8`, `+0x280`, `+0x28c` (`ScriptEntCmd_RotateVelocity`
+pushes them at 0x60efa..0x60f24, `Reached_ScriptMover` reads them at
+0x5f9b4..0x5f9e1 and 0x5fa57..0x5fa84).
+
+**The checks.** VERIFIED, the strings at 0x78b4c..0x78bc0 and their pushes in
+every verb but `movegravity` (`moveTo` 0x60467..0x60514, `rotateVelocity`
+0x60e37..0x60ee4): a time not above 0, a negative accel and a negative decel
+are `Scr_ParamError`s; `accel + decel` above the time (summed on the stack,
+compared with the float time, 0x60ed1..0x60edf) is the `Scr_Error`
+`accel time plus decel time is greater than total time`. Ramps that fill the
+time exactly pass. `movegravity` checks nothing and truncates its duration
+the same way (0x6065b).
+
+**`rotateVelocity`.** VERIFIED, `0x5feb0`: the same shape with the velocity as
+every segment's `trDelta` and the cruise `time - accel - decel`
+(0x5ffa1..0x5ffac): no speed is derived from a distance, so ramps shorten the
+turn. The destination is evaluated: with no ramps the one segment at its end
+(0x5ff95), else a decelerating segment from the cruise's end at its end
+(0x60173..0x601d5), or the cruise's end without one (0x601e5). VERIFIED, the
+capture, phase `v`: `rotatevelocity((25, 90, -10), 1.5, 0.3, 0.4)` settles at
+yaw 103.4967, where `90 * (1.5 - 0.15 - 0.2)` is 103.5 and `90 * 1.5` 135.
+
+**The step.** VERIFIED, `0x5f7b0`, the helper `Reached_ScriptMover` calls for
+each group once its `trTime + trDuration` is not past `level.time`
+(0x5f9a2..0x5f9ae, 0x5fa45..0x5fa51): an ended `TR_ACCELERATE` with a cruise
+above 0 becomes `TR_LINEAR_STOP` from `accelEnd` with
+`trDelta = (cruiseEnd - accelEnd) * (1000 / trDuration)` (0x5f7d3..0x5f864); an
+ended `TR_LINEAR_STOP`, or an accelerating segment with no cruise, with a decel
+above 0 becomes `TR_DECCELERATE` from `cruiseEnd` with
+`trDelta = speed * VectorNormalize(dest - cruiseEnd)` (0x5f888..0x5f931);
+anything else settles stationary on the destination, a `TR_GRAVITY` where it
+evaluates at `level.time` (0x5f93b..0x5f96e). Each new segment's `trTime` is
+`level.time` (0x5f7f8, 0x5f8a5, 0x5f96b), not the old segment's end.
+INFERRED, off that store and the once-a-frame call: a segment ending between
+frames hands over on the frame that sees it end, the group holding the old
+segment's end (`BG_EvaluateTrajectory` clamps both ramps and the cruise at
+their end, 0x2c673, 0x2c767, 0x2c800) for the part of the frame past it, so
+the move lasts longer than its time. VERIFIED, the capture, phase `x`:
+`movex(100, 1.7, 0.33, 0.27)` called at 3350 moves 2.05 units on the pass of
+3700, where its 330 ms accel ended at 3680, against 2.98 the pass before, and
+settles on the pass of 5100, a frame past 3350 + 1700.
+
+**The ramps.** VERIFIED, `BG_EvaluateTrajectory`'s arms 9 and 10 (jump table
+at 0x700a8: 0x2c767, 0x2c800): the time clamped at the end, `dt` the
+milliseconds times `0.001f`, `phase = |delta| / (trDuration * 0.001f)` with
+`|delta|` stored and the rest on the stack, the direction `VectorNormalize2`'s;
+`base + dir * (phase / 2 * dt * dt)` and
+`(base + delta * dt) - dir * (phase / 2 * dt * dt)`, one rounding each.
+VERIFIED, 1.5b `game.mp.i386.so` 0x1bc0a and 0x1bd22: the same with `dt`,
+`|delta|` and `phase` stored, and the decelerating arm's `base + delta * dt`
+stored before the ramp term. 1.5b's step and setup store what 1.1d keeps:
+the cruise's `cruiseEnd - accelEnd` and `1000 / trDuration` (0x630ea,
+0x63121) and the velocity (0x63753).
+
+**A verb on a moving mover.** VERIFIED, the capture, phases `k`, `w` and
+`m`: a `moveto` mid-accel, a `rotatevelocity` on a running `rotateyaw` and
+on a running `rotatevelocity` each read straight after the call the running
+segment's value at `level.time`, a frame past the row before.
+
+vcod: `game::mover::Plan` holds the setup's fields (`Segs`);
+`Plan::start_toward` and `Plan::start_velocity` are the two setups,
+`Plan::step` the helper, one step a frame; `ramp_kept` and `ramp_stored` the
+ramp arms; `Ramp::check` the argument errors. VERIFIED, vcod measurement
+2026-11-14: the replay failed on the old model (segments chained at their
+own end, `rotatevelocity` scaled to `v * T`, durations rounded, overrunning
+ramps trimmed); on the port every row of the three captures matches.
+

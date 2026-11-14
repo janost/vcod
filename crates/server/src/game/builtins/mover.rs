@@ -61,6 +61,8 @@ fn vector(v: Option<&Value>) -> Option<Vec3> {
 /// The receiver, checked against retail's class gate, and the `(duration,
 /// accel, decel)` triple every verb but `moveGravity` ends with. `first` is
 /// how many arguments come before the duration.
+///
+/// [`ramped`] adds the triple's checks, which `moveGravity` (0x60590) skips.
 fn call(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -88,6 +90,20 @@ fn call(
     let accel = number(args.get(first + 1)).unwrap_or(0.0);
     let decel = number(args.get(first + 2)).unwrap_or(0.0);
     Ok((id, Ramp::new(secs, accel, decel)))
+}
+
+/// [`call`] for a verb that checks its time and ramps ([`Ramp::check`]).
+fn ramped(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+    first: usize,
+    what: &'static str,
+) -> Result<(EntId, Ramp), ErrorKind> {
+    let (id, m) = call(host, cx, recv, args, first, what)?;
+    m.check().map_err(ErrorKind::BadType)?;
+    Ok((id, m))
 }
 
 /// The entity's own `origin`/`angles`, which the integrator keeps current.
@@ -121,7 +137,7 @@ pub fn move_to(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let (id, m) = call(host, cx, recv, args, 1, "moveTo takes a point and a time")?;
+    let (id, m) = ramped(host, cx, recv, args, 1, "moveTo takes a point and a time")?;
     let Some(dest) = vector(args.first()) else {
         return Err(ErrorKind::BadType("moveTo takes a point and a time"));
     };
@@ -143,7 +159,7 @@ fn move_axis(
     axis: usize,
     what: &'static str,
 ) -> Result<Value, ErrorKind> {
-    let (id, m) = call(host, cx, recv, args, 1, what)?;
+    let (id, m) = ramped(host, cx, recv, args, 1, what)?;
     let Some(d) = number(args.first()) else {
         return Err(ErrorKind::BadType(what));
     };
@@ -214,7 +230,7 @@ pub fn rotate_to(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let what = "rotateTo takes angles and a time";
-    let (id, m) = call(host, cx, recv, args, 1, what)?;
+    let (id, m) = ramped(host, cx, recv, args, 1, what)?;
     let Some(dest) = vector(args.first()) else {
         return Err(ErrorKind::BadType(what));
     };
@@ -253,7 +269,7 @@ fn rotate_axis(
     axis: usize,
     what: &'static str,
 ) -> Result<Value, ErrorKind> {
-    let (id, m) = call(host, cx, recv, args, 1, what)?;
+    let (id, m) = ramped(host, cx, recv, args, 1, what)?;
     let Some(d) = number(args.first()) else {
         return Err(ErrorKind::BadType(what));
     };
@@ -306,7 +322,7 @@ pub fn rotate_velocity(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let what = "rotateVelocity takes a velocity and a time";
-    let (id, m) = call(host, cx, recv, args, 1, what)?;
+    let (id, m) = ramped(host, cx, recv, args, 1, what)?;
     let Some(v) = vector(args.first()) else {
         return Err(ErrorKind::BadType(what));
     };
