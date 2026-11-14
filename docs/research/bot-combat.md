@@ -54,6 +54,9 @@ an even seed count). Off means:
 | `WARY=` | 10 | `test_bot_wary` | peeks from a spot the one way, peeks on through the 3 s hold, walks onto a lost enemy's spot until it forgets it |
 | `SQUAD=` | `bot-objectives.md` 9.1 | `test_bot_squad` | no route noise, no walk behind a teammate, no hold at a round's start, every S&D attacker in the main group |
 | `AIM=` | 18 | `test_bot_human_aim` | the aim before section 18: straight turns, an error resampled every 4-8 ticks, every sway and kick taken back at once |
+| `TACTICS=` | `bot-objectives.md` 13 | `test_bot_tactics` | guards hold the first spot inside their ring, takers of a zone or radio its one stand; CoD2 and CoD4 routes pay no crowd cost |
+| `CONVERGE=` | `bot-objectives.md` 13 | `test_bot_converge` | S&D defenders keep their own site while the other is under attack |
+| `LANES=` | `bot-objectives.md` 13 | `test_bot_lanes` | a bot walks straight to its site, zone or radio, no way in dealt |
 
 A default arm never calls its hook, so an all-default run plays the stock
 game bit for bit (checked: seeds 1 and 2 print the lines of the harness
@@ -84,6 +87,7 @@ Everything it counts comes off the script's `logPrint` lines (the
 | cover hold, lean | `bot_cover_state` | Bot-ticks playing on a held cover spot, and with `ps.lean` off zero (section 4). |
 | answered | `D;`, bodies | Of the hits a bot takes from an enemy (one per attacker until answered or 1 s passes), the share it answers within 1 s: a tick after the hit's with `BotBody::firing` and that attacker as `BotBody::target`. Fire at someone else does not count; a bot killed inside the second has not answered. Printed with the hit count. |
 | blindsided | `K;`, bodies | Of a bot's deaths to an enemy, the share whose killer was never its `BotBody::target` that life, reaction delay included. Printed with the death count. |
+| obj: near objective, mate, packed, still, exposed, cover hold | bodies, `Bot::objective_point`, `BotView::exposure` | Per team, the playing bot-ticks within 800 units of the point the bot's objective centres on; of those, the nearest teammate's mean distance, the share with two or more teammates within 400, the share within 32 units of where it stood 2 s before, the mean share of the objective's ways in that see it (`bot-objectives.md` 13.3), and the share on a held cover spot. CoD2 and CoD4 print it too. |
 | mate, packed | bodies | Each bot-tick playing with a teammate playing adds its 3D distance to the nearest one: `mate` is the mean. `packed` is the share of those bot-ticks with two or more teammates within 400 units. Bots only. `dm` prints 0. |
 | grenades thrown | bodies | Frags let go (`BotBody::throws`, counted at the release; a throw put back is not one). |
 | grenade hits, kills | `D;`, `K;` | Lines with `MOD_GRENADE_SPLASH` on another player, by the thrower; kills are the `K;` ones. A frag that kills its own thrower is a suicide. |

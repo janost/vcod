@@ -4268,6 +4268,20 @@ impl Server {
                 .bots
                 .get(&slot)
                 .is_some_and(|b| b.on_objective()),
+            objective: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .and_then(|b| b.objective_point()),
+            exposure: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .and_then(|b| b.exposure()),
         })
     }
 
@@ -4342,6 +4356,30 @@ impl Server {
     pub fn test_bot_squad(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.squad = on;
+        }
+    }
+
+    /// Test-facing: whether an S&D defender converges on a site under
+    /// attack (`Bot::converge`).
+    pub fn test_bot_converge(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.converge = on;
+        }
+    }
+
+    /// Test-facing: whether a bot walks to its objective by a way in
+    /// dealt apart from its teammates' (`Bot::lanes`).
+    pub fn test_bot_lanes(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.lanes = on;
+        }
+    }
+
+    /// Test-facing: whether a bot plays its objective by posts
+    /// (`Bot::tactics`).
+    pub fn test_bot_tactics(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.tactics = on;
         }
     }
 
