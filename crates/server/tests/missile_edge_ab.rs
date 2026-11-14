@@ -544,14 +544,9 @@ fn a_swing_at_nothing_raises_no_event() {
     }
 }
 
-/// The floor swing's truncated event origin: ours reads x 1375 where
-/// retail reads 1374 with y 2615 on both, though the shooter faces yaw 45
-/// from (1368, 2608.1). At pitch 80 a 64-unit swing from the eye 60 up meets
-/// the floor 7.5 out along each axis; retail's x lands under 7, a start or
-/// aim a fraction of a unit off ours that this capture cannot pin (combat
-/// doc 2.5).
-const FLOOR_POS_GAP: f32 = 1.0;
-
+/// Each swing's event at the floor lands on the truncated endpos of the
+/// trace from (1368, 2608, 37), retail's (1375, 2615, -23) (combat doc
+/// 2.5).
 #[test]
 fn a_swing_at_the_floor_raises_the_miss() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
@@ -586,11 +581,7 @@ fn a_swing_at_the_floor_raises_the_miss() {
     for (a, b) in r.iter().zip(&o) {
         let (ta, tb): (Vec<&str>, Vec<&str>) = (a.split(' ').collect(), b.split(' ').collect());
         assert_eq!(ta[..6], tb[..6], "retail {r:?}\nours {o:?}");
-        let pos = |t: &[&str]| -> [f32; 3] { std::array::from_fn(|k| t[7 + k].parse().unwrap()) };
-        assert!(
-            dist(pos(&ta), pos(&tb)) <= FLOOR_POS_GAP,
-            "retail {r:?}\nours {o:?}"
-        );
+        assert_eq!(ta[6..10], tb[6..10], "retail {r:?}\nours {o:?}");
     }
 }
 

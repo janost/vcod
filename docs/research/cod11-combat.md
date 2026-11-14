@@ -1942,10 +1942,15 @@ script model raises 167 naming the model and takes it 71, 73 and 73 as
 `MOD_MELEE` with the M1 carbine. INFERRED, off the mask (0x2802031, the
 bullet's): a swing strikes a shootable grenade's box as a round does. vcod
 ports all four (`a_swing_damages_what_takes_damage`,
-`crates/server/tests/missile_edge_ab.rs`). One gap stands: the floor swing's truncated
-event origin reads x 1375 on ours and 1374 on retail, y 2615 on both, from
-(1368, 2608.1) facing yaw 45; the start or the aim is a fraction of a unit
-off ours in a way that capture cannot pin (`FLOOR_POS_GAP`).
+`crates/server/tests/missile_edge_ab.rs`). VERIFIED (gdb, retail 1.1d,
+the floor recipe, 2026-11-14): `Weapon_Melee`'s trace starts at the muzzle
+(1368, 2608, 37), forward (0.122758113, 0.122758113, -0.98481518), and
+stops at fraction 0.965837955, endpos (1375.58813, 2615.58813, -23.875),
+normal (0, 0, 1); the temp entity reads (1375, 2615, -23) on the wire.
+The 2026-10-17 capture's x 1374 is not what this recipe gives: a rerun
+without gdb read 1375 too, so that run's shooter stood off (1368, 2608) by
+a fraction (INFERRED, off the muzzle's truncated origin). Ours matches the
+new capture exactly; `FLOOR_POS_GAP` is gone.
 
 **As implemented.** `melee_fire` (`crates/server/src/game/combat.rs`) shares
 `trace_attack` with `bullet_fire`, so the two cannot disagree about a
