@@ -2971,6 +2971,29 @@ product to a float instead moves no row of `movers_ab`, `push_ab`,
 `linkto_ab`, `turret_ab`, `scriptmodel_ab` or the vehicle gates at the 1.1 and
 UO installs. pmove's own turns are below.
 
+**The stack's precision.** VERIFIED, gdb attached to the live retail
+servers (1.1d and 1.5b on mp_carentan, UO 1.51b on mp_cassino): the x87
+control word reads 0x137f on 1.1d and UO and 0x37f on 1.5b, precision
+control 3 on all three, so a kept value carries a 64-bit mantissa, not an
+`f64`'s 53. VERIFIED, the same sessions calling each game module's
+`AngleVectors` (1.1d 0x3b228, 1.5b 0x33e18, UO 0x3b068) on the three angle
+triples of `x87::tests::RETAIL_1_1D`: the three servers write the same bits,
+and each triple has one right or up component a float ulp off what `f64`
+sums give. INFERRED, from the instruction order above: `(-sr * sp) * cy` and
+its three kin are 72-bit products, which an `f64` rounds before the sum and
+the x87 rounds at 64 bits, so the two models part when their roundings
+straddle a float midpoint: about once in 10^8 shorts-grid triples, more
+often where the two terms nearly cancel and the component lies near 0. The
+radians product, a float times a double, can part the same way; no angle in
+10^6 did. INFERRED: an `f64` sine rounded to a float can differ from the
+x87's 64-bit `fsincos` rounded to one at a like rate; not measured.
+
+vcod: `x87::F80` takes those steps at 64 bits. `angle_vectors_of_radians`
+and `radians` keep the `f64` result unless a float midpoint lies within its
+error bound, and only then take the 64-bit steps
+(`the_fast_path_agrees_with_the_f80_steps`), so the common case costs what
+it did. The sines stay `f64` ones.
+
 **pmove's turns.** VERIFIED, the relocations against `AngleVectors` in 1.1d
 `game.mp.i386.so` and the PLT calls in 1.5b's and UO's (0x13b00, 0x175b4): the
 player move turns through the game module's `AngleVectors` in:

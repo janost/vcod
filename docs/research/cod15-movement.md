@@ -292,6 +292,23 @@ previous cmd left. With the off-ground ground samples above, a prone body
 that drops writes the chest height and pitches it reads mid-air, and
 nothing rewrites them once it lands and lies still.
 
+VERIFIED, gdb on retail 1.5b (breakpoints at the entries of
+`BG_CheckProneValid` 0x1cf58 and `Pmove` 0x28a02, printing the forwarder's
+return address; `probe_pronebones` on mp_carentan's flat spot with
+`--probe-fall-prone 225`): the first placement's lie-down cmd, the drop's
+first, calls the check twice at the placed origin (-22.75): from
+`PM_CheckDuck`'s lie-down test (the call at 0x238cd, skip flag 0, ground
+flag 1, `groundEntityNum` still the ground of the cmd before the placement),
+then from `PM_UpdatePronePitch`'s airborne arm (0x26ed6, skip 1, ground 0),
+each with the body's three pointers. Every later cmd of the drop calls it
+once, from 0x26ed6, at the origin the cmd before left, and so does the
+second placement's first cmd, the body already prone. INFERRED: the pitch
+arm writes the three fields after the lie-down test in the same cmd, so only
+its body reaches the wire. VERIFIED, vcod measurement (`check_prone` traced
+under `pronepose_ab`'s `a_prone_body_on_flat_ground_poses_like_15`): ours
+makes the same two calls on that cmd, the lie-down's with `entry` and the
+stale ground, then the airborne one, and one airborne call a cmd after.
+
 VERIFIED, live (retail 1.5b and UO 1.51b, `client-probes/probe_pronebones`,
 fixtures in `crates/server/tests/fixtures/pronebones/`): a prone body
 dropped from `setorigin`'s raised unit onto mp_carentan's flat spot
@@ -863,6 +880,12 @@ end under `Arith::Stored`, which the server sets on protocols 6 and 22
 build (section 8); `play::replay` runs the Linux build only to compare
 against it.
 
+- The terrain position test (1.5b `cod_lnxded` 0x8056941, UO
+  `coduo_lnxded` 0x8056773) stores every distance, barycentric and edge
+  term and reads the build's own triangle planes and edge frames, where
+  1.1d's 0x8053280 keeps them on the stack. VERIFIED. vcod:
+  `Terrain::position_test` under `Arith::Stored` (`cod11-mantle.md`, "A
+  trace that does not move").
 - The locational bone trace (1.5b `cod_lnxded` 0x80d2000, UO
   `coduo_lnxded` 0x80c7394) stores every transformed point, slab distance
   and entry fraction, where 1.1d's 0x80c4564 keeps them. VERIFIED. The

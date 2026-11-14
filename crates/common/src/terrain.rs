@@ -722,57 +722,77 @@ impl Terrain {
     /// at `sw.start` is inside one of the partition's triangles. The sweep
     /// above reads no contact off a zero-length trace, so this is the only
     /// way terrain reads `startsolid`. Unlike the sweep, the radius is
-    /// unpadded.
-    pub(crate) fn position_test(&self, part: &TerrainPart, sw: &CapsuleSweep) -> bool {
-        let rad = sw.radius;
-        let hr = sw.half_height - rad;
+    /// unpadded. 1.1d keeps every intermediate on the stack but the far
+    /// end's distance and the axis; `stored` is 1.5b's and UO's build
+    /// (1.5b 0x8056941, UO 0x8056773), which stores every variable and
+    /// reads the planes and edge frames that build made (cod11-mantle.md,
+    /// "A trace that does not move").
+    pub(crate) fn position_test(
+        &self,
+        part: &TerrainPart,
+        sw: &CapsuleSweep,
+        stored: bool,
+    ) -> bool {
+        let st = |x: f64| if stored { d(r(x)) } else { x };
+        let rad = d(sw.radius);
+        let hr = st(d(sw.half_height) - rad);
         let mut s = sw.start;
         let axis = if part.down {
-            s[2] += hr;
-            hr * -2.0
+            s[2] = r(d(s[2]) + hr);
+            r(hr * -2.0)
         } else {
-            s[2] -= hr;
-            hr + hr
+            s[2] = r(d(s[2]) - hr);
+            r(hr + hr)
         };
-        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-        let inside = |u: f32, v: f32| u >= 0.0 && v >= 0.0 && u + v <= 1.0;
+        let rad_sq = rad * rad;
+        let dot = |a: [f64; 3], b: [f32; 3]| (a[0] * d(b[0]) + a[1] * d(b[1])) + a[2] * d(b[2]);
+        let sd = s.map(d);
+        let edges = if stored { &self.edges_v22 } else { &self.edges };
         for ti in part.first..part.first + part.count {
             let t = &self.tris[ti as usize];
             if t.degenerate {
                 continue;
             }
-            let ds = dot(s, t.normal) - t.dist;
+            let pl = if stored { t.v22 } else { t.planes() };
+            let n2 = d(pl.normal[2]);
+            let ds = st(dot(sd, pl.normal) - d(pl.dist));
             if ds >= rad {
                 continue;
             }
-            let u0 = dot(s, t.u) - t.ud;
-            let v0 = dot(s, t.v) - t.vd;
             if ds <= -rad {
                 // Deep behind the face: inside where the axis crosses the
-                // triangle within the radius of its plane.
-                let far = axis * t.normal[2] + ds;
-                if far <= -rad {
+                // triangle within the radius of its plane. 1.1d tests the
+                // far end unrounded against `-rad` and its stored float
+                // against `rad`.
+                let far = d(axis) * n2 + ds;
+                if st(far) <= -rad {
                     continue;
                 }
-                let tn = (-rad - ds) / t.normal[2];
-                if inside(u0 + tn * t.u[2], v0 + tn * t.v[2]) {
+                let tn = st((-rad - ds) / n2);
+                let u0 = st(dot(sd, pl.u) - d(pl.ud));
+                let v0 = st(dot(sd, pl.v) - d(pl.vd));
+                let (un, vn) = (st(tn * d(pl.u[2]) + u0), st(tn * d(pl.v[2]) + v0));
+                if un >= 0.0 && vn >= 0.0 && un + vn <= 1.0 {
                     return true;
                 }
-                let tf = if far < rad {
-                    axis
+                let tf = if d(r(far)) < rad {
+                    d(axis)
                 } else {
-                    (rad - ds) / t.normal[2]
+                    st((rad - ds) / n2)
                 };
-                if inside(u0 + tf * t.u[2], v0 + tf * t.v[2]) {
+                let (uf, vf) = (st(tf * d(pl.u[2]) + u0), st(tf * d(pl.v[2]) + v0));
+                // An unordered compare skips nothing here, as both builds
+                // branch.
+                if !(0.0 > uf || 0.0 > vf || uf + vf > 1.0) {
                     return true;
                 }
                 continue;
             }
             // Within the radius of the plane: the centre's foot on it.
-            let p: [f32; 3] = std::array::from_fn(|i| s[i] - ds * t.normal[i]);
-            let (u, v) = (dot(p, t.u) - t.ud, dot(p, t.v) - t.vd);
+            let p: [f64; 3] = std::array::from_fn(|i| st(-ds * d(pl.normal[i]) + sd[i]));
+            let (u, v) = (st(dot(p, pl.u) - d(pl.ud)), st(dot(p, pl.v) - d(pl.vd)));
             let bits =
-                u32::from(u + v > 1.0) | (u32::from(u < 0.0) << 1) | (u32::from(v < 0.0) << 2);
+                u32::from(u + v > 1.0) | (u32::from(0.0 > u) << 1) | (u32::from(0.0 > v) << 2);
             if bits == 0 {
                 return true;
             }
@@ -781,21 +801,21 @@ impl Terrain {
                     let Some(&q) = self.verts.get(t.verts[i] as usize) else {
                         continue;
                     };
-                    let e: [f32; 3] = std::array::from_fn(|k| s[k] - q[k]);
-                    if dot(e, e) < rad * rad {
+                    let e: [f64; 3] = std::array::from_fn(|k| st(sd[k] - d(q[k])));
+                    if (e[0] * e[0] + e[1] * e[1]) + e[2] * e[2] < rad_sq {
                         return true;
                     }
                 } else {
-                    let Some(ed) = self.edges.get(t.edges[i] as usize) else {
+                    let Some(ed) = edges.get(t.edges[i] as usize) else {
                         continue;
                     };
-                    let e: [f32; 3] = std::array::from_fn(|k| s[k] - ed.origin[k]);
-                    let along = dot(e, ed.w);
-                    if along < 0.0 || along > ed.len {
+                    let e: [f64; 3] = std::array::from_fn(|k| st(sd[k] - d(ed.origin[k])));
+                    let along = st(dot(e, ed.w));
+                    if !(along >= 0.0 && along <= d(ed.len)) {
                         continue;
                     }
-                    let perp: [f32; 3] = std::array::from_fn(|k| e[k] - along * ed.w[k]);
-                    if dot(perp, perp) < rad * rad {
+                    let q: [f64; 3] = std::array::from_fn(|k| st(-along * d(ed.w[k]) + e[k]));
+                    if (q[0] * q[0] + q[1] * q[1]) + q[2] * q[2] < rad_sq {
                         return true;
                     }
                 }
@@ -1239,14 +1259,44 @@ mod tests {
         let t = flat_square();
         let at = |feet: [f32; 3]| {
             let c = [feet[0], feet[1], feet[2] + 35.0];
-            t.position_test(&t.parts[0], &sweep(c, c))
+            [false, true].map(|stored| t.position_test(&t.parts[0], &sweep(c, c), stored))
         };
-        assert!(!at([50.0, 50.0, 0.125]));
-        assert!(at([50.0, 50.0, -0.8]));
-        assert!(at([50.0, 50.0, -40.0]), "the axis through the face");
-        assert!(!at([50.0, 50.0, -80.0]), "wholly under it");
-        assert!(at([110.0, 50.0, -6.0]), "the edge cylinder");
-        assert!(!at([120.0, 50.0, -6.0]));
+        assert_eq!(at([50.0, 50.0, 0.125]), [false; 2]);
+        assert_eq!(at([50.0, 50.0, -0.8]), [true; 2]);
+        assert_eq!(
+            at([40.0, 50.0, -40.0]),
+            [true; 2],
+            "the axis through the face"
+        );
+        // On the diagonal 1.5b's planes put the axis a hair outside both
+        // triangles (u -1.4e-7), and the deep arm tests no edge.
+        assert_eq!(at([50.0, 50.0, -40.0]), [true, false]);
+        assert_eq!(at([50.0, 50.0, -80.0]), [false; 2], "wholly under it");
+        assert_eq!(at([110.0, 50.0, -6.0]), [true; 2], "the edge cylinder");
+        assert_eq!(at([120.0, 50.0, -6.0]), [false; 2]);
+    }
+
+    /// 1.5b's and UO's position test stores every step and reads their own
+    /// planes and edge frames, 1.1d's keeps the stack: on a slanted sheet a
+    /// capsule standing at the rim reads inside under one build and clear
+    /// under the other, either way round.
+    #[test]
+    fn the_two_builds_part_at_a_slanted_rim() {
+        let points = [
+            [3.7, 1.3, 2.9],
+            [1.1, 97.3, 13.7],
+            [103.9, 99.1, 31.3],
+            [98.3, 2.9, 7.1],
+        ];
+        let mut t = Terrain::default();
+        t.add_partition(&points, &[[0, 1, 2], [0, 2, 3]]);
+        let at = |c: [u32; 3]| {
+            let c = c.map(f32::from_bits);
+            [false, true].map(|stored| t.position_test(&t.parts[0], &sweep(c, c), stored))
+        };
+        // (90.96331, 100.55016, 30.1036) and (105.532265, 99.987595, 29.958782).
+        assert_eq!(at([1119218999, 1120475567, 1106301996]), [false, true]);
+        assert_eq!(at([1121128581, 1120401830, 1106226070]), [true, false]);
     }
 
     #[test]

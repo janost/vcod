@@ -384,8 +384,8 @@ switches and every number it prints. Results go in that doc and
   tank waits out the script's 15 s capture first. A gunner
   fires the vehicle's machine gun. A bot on foot holding a rocket
   launcher fires it at an enemy-crewed vehicle in sight. Bots get out
-  when they arrive, when stuck, or after 90 s (bot-objectives.md
-  section 10).
+  when they arrive, where the hull can get no nearer, when stuck, or
+  after 90 s (bot-objectives.md sections 10 and 14.10).
 
 Cannot:
 

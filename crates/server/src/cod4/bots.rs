@@ -521,7 +521,7 @@ impl BotWorld for Cod4Server {
         &[]
     }
 
-    fn drive_waypoint(&mut self, _: usize, _: Goal, _: &SeatView) -> Option<[f32; 3]> {
+    fn drive_waypoint(&mut self, _: usize, _: Goal, _: &mut SeatView) -> Option<[f32; 3]> {
         None
     }
 

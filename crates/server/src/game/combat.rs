@@ -7,7 +7,7 @@ use crate::game::temp_entity::{Scope, TempEntity};
 use crate::spectate::ClientSim;
 use glam::{Quat, Vec3};
 use vcod_common::animtree::PlayerAnims;
-use vcod_common::bonetrace::{PriorityMap, bone_trace_in, into_frame_stored};
+use vcod_common::bonetrace::{PriorityMap, bone_trace_in, into_frame_kept, into_frame_stored};
 use vcod_common::collision::{CONTENTS_GLASS, CollisionWorld, sound_material};
 use vcod_common::net::events::dir_to_byte;
 use vcod_common::net::protocol::ENTITYNUM_WORLD;
@@ -1451,7 +1451,12 @@ impl BodyPose {
                     .collect(),
             },
             leaf_times: self.seat_ramp.leaf_times(now_ms),
-            node_time: self.rules.v15(),
+            node_time: true,
+            arith: if self.rules.v15() {
+                Arith::Stored
+            } else {
+                Arith::Kept
+            },
             binds: None,
         }
     }
@@ -1735,15 +1740,20 @@ pub fn trace_bodies_faced(
         let axis_stored = vcod_common::x87::angles_to_axis(angles.into());
         let pose = stamped_pose(&skel, body, anims, rigs, fs, *now_ms, stamps);
         // Into the body's own frame: its `tag_origin` sits at the feet.
-        let (ls, le) = if arith == Arith::Stored {
-            let axis = axis_stored;
-            (
-                into_frame_stored(start, &axis, body.origin),
-                into_frame_stored(end, &axis, body.origin),
-            )
-        } else {
-            let inv = frame.inverse();
-            (inv * (start - body.origin), inv * (end - body.origin))
+        let (ls, le) = match arith {
+            Arith::Stored => (
+                into_frame_stored(start, &axis_stored, body.origin),
+                into_frame_stored(end, &axis_stored, body.origin),
+            ),
+            // 1.1d's `0x8066520`: each difference kept, each dot stored.
+            Arith::Kept => (
+                into_frame_kept(start, &axis_stored, body.origin),
+                into_frame_kept(end, &axis_stored, body.origin),
+            ),
+            Arith::Msvc => {
+                let inv = frame.inverse();
+                (inv * (start - body.origin), inv * (end - body.origin))
+            }
         };
         // A bone past `limit` lies behind what the trace already met: the
         // box can open in front of a hull or wall the bones stand behind
@@ -1758,7 +1768,7 @@ pub fn trace_bodies_faced(
             .copied()
             .unwrap_or("none");
         limit = hit.fraction;
-        let normal = if arith == Arith::Stored {
+        let normal = if arith != Arith::Msvc {
             // UO 0x8069154: each component of the turned normal rounded once.
             let [f, l, u] = axis_stored.map(|a| a.as_dvec3());
             let n = hit.normal.as_dvec3();

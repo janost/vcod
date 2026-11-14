@@ -13,7 +13,9 @@
 //!
 //! Ours runs the same probe gametype, replays the capture's cmds at their
 //! own times (gunkick_ab.rs's replay) and compares every impact in order,
-//! and every snapshot's `bobCycle`.
+//! on retail's whole unit, and every snapshot's `bobCycle`. A capture that
+//! logs the wait (`!wsnap`, `!wcmd`) has the placement's fall replayed on
+//! its cmds and the rest compared to the bit.
 //! `MOVESHOT_REPORT=1` prints both sides. The 1.5 capture runs at a 1.5
 //! install, the UO ones at a UO install.
 
@@ -30,16 +32,12 @@ use vcod_common::pk3::Pk3Fs;
 
 const MAP: &str = "mp_carentan";
 const PROBE: &str = "probe_moveshot";
-/// How far an impact of ours may sit from retail's: both are snapped to
-/// whole units, so one the same muzzle leaves lands on the same unit or,
-/// a hair over a unit edge, the next.
-const TOL: f32 = 1.0;
 
-/// Rounds of ours that may land off retail's by more than [`TOL`]: part,
-/// tag, round and why. Empty since the wait before the script sends the
-/// probe's 8 ms cmds: the street placement's fall then lands near enough
-/// retail's on every cmd phase (cod11-combat.md 2.1, "The street
-/// placement").
+/// Rounds of ours that may land off retail's unit: part,
+/// tag, round and why. Empty since the captures log the wait's cmds and
+/// the placement's velocity: the street placement's fall then rests on
+/// retail's bits and every round lands on retail's unit (cod11-combat.md
+/// 2.1, "The street placement").
 const GAPS: &[(&str, &str, usize, &str)] = &[];
 
 /// One part of the probe: its `probe_spot`, the weapon and where the
@@ -127,6 +125,11 @@ struct Capture {
     snaps: Vec<(i32, i32)>,
     impacts: Vec<Vec3>,
     states: Vec<State>,
+    /// The wait before the script, where the capture logs it: each
+    /// `!wsnap`'s `(serverTime, commandTime, origin, velocity)` and each
+    /// `!wcmd` as it went on the wire.
+    wait_snaps: Vec<(i32, i32, [f32; 3], [f32; 3])>,
+    wait_cmds: Vec<UserCmd>,
 }
 
 /// A snapshot's commandTime, origin, `bobCycle` and `leanf`: what the
@@ -139,8 +142,34 @@ fn retail(text: &str) -> Capture {
     let mut states = Vec::new();
     let mut impacts = Impacts::default();
     let mut da = [0; 3];
+    let (mut wait_snaps, mut wait_cmds) = (Vec::new(), Vec::new());
     for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("!snap ") {
+        if let Some(rest) = line.strip_prefix("!wsnap ") {
+            let num = |k| field(rest, k).unwrap().parse::<i32>().unwrap();
+            let o: Vec<f32> = field(rest, "origin")
+                .unwrap()
+                .split(',')
+                .map(|c| c.parse().unwrap())
+                .collect();
+            let v: Vec<f32> = field(rest, "vel")
+                .unwrap()
+                .split(',')
+                .map(|c| c.parse().unwrap())
+                .collect();
+            wait_snaps.push((num("t"), num("ct"), [o[0], o[1], o[2]], [v[0], v[1], v[2]]));
+        } else if let Some(rest) = line.strip_prefix("!wcmd ") {
+            let num = |k| field(rest, k).unwrap().parse::<i32>().unwrap();
+            wait_cmds.push(UserCmd {
+                server_time: num("st"),
+                angles: ints(field(rest, "angles").unwrap()),
+                buttons: num("buttons") as u8,
+                wbuttons: num("wbuttons") as u8,
+                forward: num("forward") as i8,
+                right: num("right") as i8,
+                up: num("up") as i8,
+                ..NULL_USERCMD
+            });
+        } else if let Some(rest) = line.strip_prefix("!snap ") {
             da = ints(field(rest, "da").unwrap());
             let num = |k| field(rest, k).unwrap().parse::<i32>().unwrap();
             snaps.push((num("t"), num("ct")));
@@ -191,6 +220,8 @@ fn retail(text: &str) -> Capture {
         snaps,
         impacts: impacts.all,
         states,
+        wait_snaps,
+        wait_cmds,
     }
 }
 
@@ -254,7 +285,7 @@ fn ours(p: &'static Protocol, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
     // The net probe's cmds while it waits, idle at world yaw 0: one every
     // `--probe-cmd-ms` (8 here) from its first snapshot on, so the fall
     // after the placement steps as retail's did.
-    let idle = |cl: &mut vcod_common::net::NetClient<common::ClientEnd>| {
+    let idle = |cl: &mut vcod_common::net::NetClient<common::ClientEnd>, lag: i32| {
         let Some(s) = cl.snapshots().newest() else {
             cl.send_frame(&UserCmd {
                 weapon,
@@ -266,7 +297,7 @@ fn ours(p: &'static Protocol, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
         let frame_ms = common::FRAME_MS as i32;
         let batch: Vec<UserCmd> = (1..=6)
             .map(|k| UserCmd {
-                server_time: s.server_time + (k * frame_ms + 5) / 6,
+                server_time: s.server_time - lag + (k * frame_ms + 5) / 6,
                 angles: da.map(|d| (-d) & 0xffff),
                 weapon,
                 ..NULL_USERCMD
@@ -275,11 +306,52 @@ fn ours(p: &'static Protocol, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
         cl.send_cmds(&batch);
     };
     // Until the gametype has put the body on the spot, and a second more,
-    // as retail's capture opens.
+    // as retail's capture opens. A capture that logged the wait has the
+    // fall from the placement run on its cmds: ours' clock less `shift` is
+    // retail's, and each frame runs the cmds up to the `commandTime`
+    // retail's snapshot of it reports. Until then the idle cmds stop at the
+    // newest snapshot's time, so none past ours' placement ran before it.
+    let retail_place = cap
+        .wait_snaps
+        .iter()
+        .find(|w| (w.2[0] - part.at[0]).abs() < 1.0 && (w.2[1] - part.at[1]).abs() < 1.0);
+    let lag = if retail_place.is_some() {
+        common::FRAME_MS as i32
+    } else {
+        0
+    };
+    let mut shift = None::<i32>;
+    let mut next_wait = 0;
     let mut placed_at = None;
     for i in 0..400 {
         now += Duration::from_millis(common::FRAME_MS as u64);
-        idle(&mut cl);
+        let newest = cl.snapshots().newest().map(|s| s.server_time);
+        match (shift, newest, retail_place) {
+            (Some(d), Some(st), Some(&(_, place_ct, _, _))) => {
+                let t = st + common::FRAME_MS as i32 - d;
+                let ct = cap
+                    .wait_snaps
+                    .iter()
+                    .take_while(|w| w.0 <= t)
+                    .last()
+                    .map_or(i32::MIN, |w| w.1);
+                let mut batch = Vec::new();
+                while let Some(c) = cap.wait_cmds.get(next_wait)
+                    && c.server_time <= ct
+                {
+                    next_wait += 1;
+                    if c.server_time > place_ct {
+                        batch.push(UserCmd {
+                            server_time: c.server_time + d,
+                            weapon,
+                            ..*c
+                        });
+                    }
+                }
+                cl.send_cmds(&batch);
+            }
+            _ => idle(&mut cl, lag),
+        }
         frame(&mut sv, &mut cl, &mut join, now);
         let on_spot = cl.snapshots().newest().is_some_and(|s| {
             let o = s.ps.origin(p);
@@ -288,6 +360,18 @@ fn ours(p: &'static Protocol, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
                 && (o[1] - part.at[1]).abs() < 1.0
                 && s.ps.field_i32(p, "weapon") == weapon as i32
         });
+        if shift.is_none()
+            && let (Some(r), Some(s)) = (retail_place, cl.snapshots().newest())
+        {
+            let o = s.ps.origin(p);
+            if (o[0] - part.at[0]).abs() < 1.0 && (o[1] - part.at[1]).abs() < 1.0 {
+                shift = Some(s.server_time - r.0);
+                // The placement shares the spawn's frame and keeps what
+                // the cmds run at the spawn point left: retail's, from its
+                // snapshot (cod11-combat.md 2.1, "The street placement").
+                sv.test_set_client_velocity(0, r.3);
+            }
+        }
         if on_spot && placed_at.is_none() {
             placed_at = Some(i);
         }
@@ -314,7 +398,7 @@ fn ours(p: &'static Protocol, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
             break;
         }
         if t < first {
-            idle(&mut cl);
+            idle(&mut cl, 0);
         } else {
             let ct = cap
                 .snaps
@@ -380,6 +464,21 @@ fn check(p: &'static Protocol, fs: Pk3Fs, part: Part, tag: &str) {
     }
     let retail = cap.impacts;
     let mut bad = Vec::new();
+    // Where the placement's fall left the body, at the script's first
+    // snapshot: retail's to the bit once the capture logs the wait's cmds
+    // (cod11-combat.md 2.1, "The street placement").
+    if !cap.wait_snaps.is_empty() {
+        let r = cap.states.first().expect("a snapshot");
+        match our_states.iter().find(|o| o.0 == r.0) {
+            Some(o) if o.1 == r.1 => {}
+            o => bad.push(format!(
+                "rest at ct {}: retail {:?} ours {:?}",
+                r.0,
+                r.1,
+                o.map(|o| o.1)
+            )),
+        }
+    }
     // The walk bob rides every moving round, so its phase matches retail's
     // on every snapshot both sides sent, a lean-strafe's start included
     // (coduo-movement.md 16).
@@ -397,7 +496,7 @@ fn check(p: &'static Protocol, fs: Pk3Fs, part: Part, tag: &str) {
             println!("{line}");
         }
         let gap = GAPS.iter().any(|g| (g.0, g.1, g.2) == (part.name, tag, i));
-        if !gap && !matches!((r, o), (Some(r), Some(o)) if r.distance(*o) <= TOL) {
+        if !gap && !matches!((r, o), (Some(r), Some(o)) if r == o) {
             bad.push(line);
         }
     }
