@@ -4,8 +4,9 @@ How vcod's debug bots (`--bots`) play stock Search & Destroy, Retrieval
 (section 4) and Behind Enemy Lines (section 5), what changes on a
 United Offensive server (section 6), UO's own `ctf`, `dom`, `hq` and
 `bas` (section 7), UO's vehicles (section 10), CoD2's `sd`, `ctf` and
-`hq` (section 11), and CoD4's `sd`, `sab`, `dom` and `koth` (section
-12). The brain is
+`hq` (section 11), CoD4's `sd`, `sab`, `dom` and `koth` (section
+12), and how a team spreads round an objective in all of them (section
+13). The brain is
 `crates/server/src/bots.rs` (`ObjTarget`, `think_objective`); the server fills
 `BotView::sd` and `BotView::linked` in `crates/server/src/server/bot_world.rs`
 (`bot_sd`, `site_stand`) from `ScriptRuntime::sd_objectives`
@@ -1230,7 +1231,8 @@ view.
   ahead still runs along (`nav::CROWD_COST`, `team::crowd`,
   `Follower::crowd`), so a way round up to twice as long is taken over
   the teammate's. Read when a plan starts; `dm`, `tdm` and `bel` plan as
-  before, so the `dm` stall runs (`ship_stalls`) are unchanged.
+  before, so the `dm` stall runs (`ship_stalls`) are unchanged. CoD2 and
+  CoD4 pay it too since section 13 (`BotWorld::SPREADS`).
 - Noise answering. On any level with sides, `tdm` and `bel` included,
   only the two teammates nearest a noise go to it (`team::answers`);
   the rest of the side keeps its own way (`bot-combat.md` 7).
@@ -3242,3 +3244,297 @@ the third column the give-up with every jump edge 64 longer in A*
   it on: `sd` mp_crash seed 2 234, `war` mp_cargoship seed 2 165 (12.18's
   body held in the air at (1174, -141, 45)), `koth` mp_crash_snow seed
   12 155. Not traced.
+
+## 13. Posts, lanes and a site under attack (2026-11-14)
+
+A playtest report: on objective gametypes the bots clumped. Attackers went
+to the site together in nearly one line, stood in one place after the
+plant and waited; defenders stood clumped on the site; the same in `ctf`
+and `hq`. vcod's own rules, with nothing on retail to measure against;
+`bot_match`'s near-objective counts (below) are the yardstick. One layer
+in the driver serves every game through `BotWorld` (`bots/posts.rs`,
+`driver::deal_posts`, `driver::deal_hot`), computed once a tick in the
+deal pass, before any bot thinks.
+
+### 13.1 Why they clumped
+
+- A guard (`ObjTarget::Guard`: a site's defender, the bomb's guards after
+  a plant, a planter's cover, the `re` goal ring, a `ctf` defender, the
+  `hq` radio's holders, a `bas` charge room) held still the first tick
+  it stood inside its ring (`Bot::at_objective`, 250 units). Teammates
+  coming the same way crossed the ring's edge at the same place and stood
+  there together until a fight moved them. INFERRED (code).
+- A zone's takers (`Occupy`: a `dom` flag, a `ctf` goal; `Radio`: the
+  `hq` radio) all walked to the zone's one stand (`NavGraph::zone_stand`,
+  `radio_stand`). INFERRED (code).
+- The route spreading of section 9 (crowd cost, route noise, the S&D
+  flank) ran only where `BotWorld::YIELDS` holds: CoD1, 1.5 and UO.
+  CoD2's and CoD4's attackers planned the one shortest way. INFERRED
+  (code, `driver::route`).
+
+### 13.2 The rules
+
+- Survey (`posts::survey`, once per objective and graph, cached in
+  `BotDriver::posts`). A flood along the graph from the objective out to
+  its reach plus 700 units. The ways in: per eighth of the compass round
+  the objective, the node nearest 400 units past the reach along the
+  graph. The posts: graph nodes where the objective asks (a ring 48 to
+  400 units round a guarded point and 160 up or down, a zone's bounds
+  16 in, a radio's radius and height less 16), reached along the graph
+  within 1.6 times their distance across, thinned to 40 apart, at most 48;
+  in a ring, only those from whose crouched eye the point's middle (40
+  over it) is in line. Each post scores the share of the ways in from
+  whose standing eye a crouched body there (eye 40, chest 26.7) is hidden;
+  hidden from half or more, the bot crouches there.
+- Posts (`posts::assign`). Each side's guards of one objective, in slot
+  order, keep their post until 8 to 16 s after reaching it (a draw per
+  bot and post), or 20 s unreached, or a teammate earlier in slot order
+  stands within 128 units of it; then each takes the best post 128 or
+  more from its teammates' and 64 off its last, by score, plus a draw of
+  up to 0.35, less a unit per 1500 of distance. More guards than posts
+  that far apart share. On it the bot holds, crouched where the post
+  hides it, looking within 60 degrees of the objective (`Bot::watch_heading`).
+  Not for a moving point: an `re` carrier's escort and a `ctf` carrier's
+  are `ObjTarget::Escort` and hold the 250-unit ring as before; nor a
+  `bas` charge's blast clearing.
+- Lanes (`posts::lanes`). A bot 1200 or more from a site to plant, a
+  zone or a radio it makes for is dealt one of the objective's ways in
+  whose detour by straight lines is at most 1.3 times the direct line,
+  the most direct first, in turn by slot among its side's bots for that
+  objective. It walks there first, and on to the objective once within
+  160 of it, nearer the objective than it, or 30 s on.
+- A site under attack (`driver::deal_hot`, `SdView::hot`). Before a
+  plant, a site with an enemy one of the defenders sees within 1000
+  units of its stand is under attack for 10 s past the last such
+  sighting, and every defender guards it instead of its own site.
+- CoD2's and CoD4's routes pay the crowd cost and plan with the route
+  noise and flank of section 9 (`BotWorld::SPREADS`), without the yields.
+- Each rule has its own switch (`Bot::tactics` for posts and the
+  CoD2/CoD4 route spreading, `Bot::converge`, `Bot::lanes`), and
+  `bot_match` its arm (`TACTICS=`, `CONVERGE=`, `LANES=`; on CoD2 and
+  CoD4 `TACTICS=0`, `CONVERGE=0`, `LANES=0` turn one off for all bots).
+
+### 13.3 Counts
+
+`bot_match` prints a line per team (`obj`) over the playing bot-ticks
+within 800 units of the point the bot's objective centres on
+(`Bot::objective_point`: the site, the bomb, the zone, the radio, the
+goal): `mate` the mean distance to the nearest playing teammate,
+`packed` the share with two or more within 400, `still` the share
+within 32 units of where the body stood 2 s before, `exposed` the mean
+share of the objective's ways in with a line to the body's eye or
+chest (sampled every fifth tick, `BotView::exposure`), `cover hold` the
+share on a fight's cover spot (bot-combat.md 4).
+
+### 13.4 Measured: CoD1 1.1 `sd`
+
+`bot_match`, `GAMETYPE=sd`, 10 bots, mp_carentan, mp_harbor,
+mp_dawnville, mp_brecourt, mp_depot and mp_pavlov, seeds 1..=4, 6000
+ticks (24 matches a row). Before is every new rule off (`TACTICS=none
+CONVERGE=none LANES=none`, which plays master's moves); allies attack but
+on mp_pavlov. Rows are the totals; the spread is over the 24 matches'
+own before-and-after differences (mean difference, its standard error,
+and the matches that went down). VERIFIED (measured, ours, release,
+`feat/bot-objective-tactics`):
+
+| Run | attackers mate | packed | still | exposed | defenders mate | packed | still | exposed | plants | defuses | allies W | axis W |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| before | 155 | 78.4% | 52.4% | 31.5% | 202 | 50.7% | 64.2% | 35.9% | 98 | 40 | 59 | 50 |
+| posts | 187 | 75.4% | 41.4% | 24.1% | 267 | 45.8% | 49.8% | 28.3% | 93 | 35 | 56 | 47 |
+| posts + converge | 185 | 74.9% | 29.2% | 25.2% | 242 | 50.6% | 44.8% | 27.6% | 81 | 33 | 63 | 58 |
+| all three | 208 | 68.8% | 32.4% | 24.4% | 234 | 53.1% | 44.1% | 28.3% | 86 | 23 | 67 | 54 |
+
+(Columns by team: allies, the attackers but on mp_pavlov; axis.)
+
+Per match, before against all three:
+
+| Count | allies | axis |
+|---|---|---|
+| mate | 154 → 221, +67 ± 12, lower in 2 of 24 | 203 → 235, +32 ± 10, 5 of 24 |
+| packed | 77% → 64%, -13.5 ± 3.4 points, 19 of 24 | 51% → 54%, +3.1 ± 1.7, 9 of 24 |
+| still | 53% → 32%, -21.3 ± 2.0, 24 of 24 | 62% → 42%, -20.0 ± 0.9, 24 of 24 |
+| exposed | 36% → 31%, -4.3 ± 1.2, 19 of 24 | 37% → 29%, -7.3 ± 0.9, 24 of 24 |
+| cover hold | 10.0% → 13.2%, +3.2 ± 1.5 | 6.8% → 8.8%, +2.0 ± 1.0 |
+
+- VERIFIED (the tables): time standing still near the objective falls by
+  a fifth of all bot-ticks on both sides in every match, and the
+  ways in see less of the bots; the attackers stand half as far again
+  from their nearest teammate and pack 13 points less. The defenders'
+  packing does not fall: they still meet at a site, now the one under
+  attack.
+- VERIFIED (the tables): the rounds' split holds: allies 54% of 109
+  rounds before, 55% of 121 after. More rounds end on eliminations
+  before a plant (98 plants in 109 rounds, 86 in 121: -0.50 ± 0.20 a
+  match), and a planted bomb is defused less (40 of 98, 23 of 86:
+  -0.71 ± 0.24 a match). INFERRED (the posts and converge rows): the
+  converging defenders cost plants (93 → 81 with converge on), as
+  section 9.2 expected of them; the bomb's guards on posts cost
+  defuses. Both are the other side's objective working, and neither
+  moves the round share, so all three ship.
+
+### 13.5 Measured: United Offensive `ctf` and `hq`
+
+`bot_match`, `UO=1`, 10 bots, mp_arnhem, mp_berlin, mp_cassino and
+mp_sicily, seeds 1..=4, 6000 ticks (16 matches a row), before with every
+new rule off. UO's `hq.gsc` logs no `A;` action; its score is the
+radio's points, both teams summed. VERIFIED (measured, ours, release):
+
+| Count, per match | `ctf` allies | `ctf` axis | `hq` allies | `hq` axis |
+|---|---|---|---|---|
+| mate | 287 → 306, +20 ± 26 | 258 → 387, +128 ± 44 | 233 → 279, +45 ± 40 | 283 → 301, +18 ± 51 |
+| packed | 17% → 19%, +1.9 ± 2.7 | 16% → 18%, +2.3 ± 2.2 | 67% → 60%, -6.6 ± 5.6 | 61% → 57%, -3.8 ± 7.4 |
+| still | 87% → 68%, -18.5 ± 1.9, 15 of 16 lower | 87% → 66%, -21.1 ± 2.5, 15 of 16 | 54% → 36%, -17.3 ± 4.3, 15 of 16 | 48% → 34%, -14.5 ± 5.7, 13 of 16 |
+| exposed | 44% → 33%, -10.9 ± 1.8, 14 of 16 | 60% → 54%, -6.4 ± 1.9, 13 of 16 | 38% → 25%, -12.7 ± 2.7, 16 of 16 | 40% → 31%, -8.6 ± 3.3, 13 of 16 |
+
+| Run | `ctf` takes | captures | returns | defended | stalled | `hq` score | stalled |
+|---|---|---|---|---|---|---|---|
+| before | 19 | 3 | 1 | 44 | 916 | 1465 | 1747 |
+| after | 26 | 6 | 6 | 41 | 3765 | 2035 | 173 |
+
+- VERIFIED (the tables): still time near the objective falls by 15 to
+  21 points of bot-ticks in both gametypes, nearly every match, and the
+  ways in see less of the bots. `ctf` guards were not packed before (one
+  or two bots a flag); the `hq` radio's zone packs the takers by the
+  script's rule, and its packing moves inside the spread.
+- VERIFIED (the tables): `ctf` takes, captures and returns rise (+0.44 ±
+  0.33, +0.19 ± 0.14 and +0.31 ± 0.20 a match), `hq`'s score rises by
+  36 ± 16 a match (12 of 16 higher).
+- `ctf` stalls rose, all but 174 of them in two matches. VERIFIED
+  (measured, a temporary trace of the bot's goal, waypoint and cmd):
+  mp_cassino seed 2's 2400 are one bot (slot 7) from about tick 2500 at
+  (5779, -1990, 82), walking to its post at (5136, -1967, -8), its keys
+  at forward 115 toward the waypoint (5766, -2016, 82), no unstick spell
+  firing, and held there after its objective moved across the map to
+  (-192, 1): pinned whatever the goal. Before, seed 4's 916 were one bot
+  at (1098, -105, 128), another spot. INFERRED: the posts walked a bot
+  onto a pin the follower already had; it is the movement's, not the
+  posts', and stays a follow-up (seed 1's 1191 not traced).
+
+### 13.6 Measured: CoD4 1.7 `sd`
+
+`bot_match`, `GAME=cod4`, 8 bots, mp_crash, mp_backlot and mp_strike,
+seeds 1..=3, 6000 ticks (9 matches a row), before with `TACTICS=none
+CONVERGE=none LANES=none`. VERIFIED (measured, ours, release):
+
+| Count, per match | allies | axis |
+|---|---|---|
+| mate | 193 → 304, +111 ± 22, higher in 9 of 9 | 185 → 288, +103 ± 18, 9 of 9 |
+| packed | 37% → 31%, -6.0 ± 9.6 | 33% → 37%, +3.4 ± 4.7 |
+| still | 60% → 33%, -27.2 ± 2.4, lower in 9 of 9 | 60% → 39%, -20.9 ± 2.1, 9 of 9 |
+| exposed | 47% → 34%, -12.5 ± 1.8, 8 of 9 | 44% → 38%, -6.3 ± 2.3, 7 of 9 |
+
+| Run | pickups | plants | defuses | kills | levels ended | stalled |
+|---|---|---|---|---|---|---|
+| before | 63 | 35 | 21 | 188 | 36 | 0 |
+| after | 61 | 34 | 15 | 240 | 41 | 0 |
+
+- VERIFIED (the tables): still time near the objective falls by a fifth
+  to a quarter of bot-ticks and the nearest teammate stands 100 units
+  farther in every match; pickups and plants hold. Defuses fall (-0.67 ±
+  0.24 a match), as on CoD1 (13.4): the bomb's guards hold covered posts
+  round it. CoD4's routes now pay the crowd cost and the route noise
+  (`BotWorld::SPREADS`), part of the spread.
+- `dm`, `tdm` and the arms off play master's moves: VERIFIED (measured,
+  `bot_match DIGEST=1` against a build of the base, c6d7e1bd9): UO `tdm`
+  mp_cassino seeds 9, 19 and 43 (1800 ticks) and 1.1 `sd` mp_carentan and
+  mp_harbor seeds 1 and 2 with `TACTICS=none CONVERGE=none LANES=none`
+  (3000 ticks) print the same digests.
+
+### 13.7 Measured: CoD2 1.3 `sd`, `ctf` and `hq`
+
+`bot_match`, `GAME=cod2`, 10 bots, mp_toujane, mp_burgundy, mp_carentan
+and mp_matmata, seeds 1..=4, 6000 ticks (16 matches a row), before with
+`TACTICS=none CONVERGE=none LANES=none`. CoD2's `ctf.gsc` and `hq.gsc`
+log no `A;` action: the score is the teams' captures (`ctf`) and the
+radio's points (`hq`), summed. VERIFIED (measured, ours, release):
+
+| Count, per match | `sd` allies | `sd` axis | `ctf` allies | `ctf` axis | `hq` allies | `hq` axis |
+|---|---|---|---|---|---|---|
+| mate | 113 → 239, +126 ± 14 | 179 → 273, +94 ± 18 | 310 → 353, +42 ± 25 | 389 → 371, -18 ± 41 | 189 → 271, +82 ± 22 | 261 → 280, +20 ± 25 |
+| packed | 70% → 45%, -25.5 ± 7.3 | 43% → 41%, -1.9 ± 2.3 | 21% → 18%, -2.5 ± 3.1 | 16% → 20%, +4.7 ± 2.5 | 70% → 55%, -15.0 ± 4.8 | 55% → 50%, -4.5 ± 4.2 |
+| still | 47% → 29%, -17.6 ± 3.4 | 59% → 30%, -29.2 ± 1.6 | 65% → 55%, -9.8 ± 2.9 | 65% → 51%, -13.4 ± 3.3 | 45% → 27%, -18.2 ± 4.1 | 27% → 24%, -3.5 ± 4.5 |
+| exposed | 50% → 44%, -6.5 ± 1.6 | 50% → 44%, -6.6 ± 1.0 | 54% → 51%, -3.1 ± 1.9 | 64% → 47%, -17.7 ± 1.9 | 46% → 39%, -7.4 ± 1.5 | 43% → 43%, -0.8 ± 2.5 |
+
+| Run | `sd` plants | defuses | `ctf` captures | `hq` score | stalled `sd` / `ctf` / `hq` |
+|---|---|---|---|---|---|
+| before | 64 | 42 | 26 | 2703 | 83 / 0 / 72 |
+| after | 76 | 32 | 18 | 2636 | 215 / 0 / 93 |
+
+- VERIFIED (the tables): the `sd` attackers (allies) pack 25 points less
+  and their nearest teammate stands twice as far off; every side's still
+  time falls but `hq`'s axis. Before, CoD2's routes paid no crowd cost
+  (13.1): this is where the route spreading shows most.
+- VERIFIED (the tables): `sd` plants rise (+0.75 ± 0.27 a match),
+  defuses fall inside the spread (-0.62 ± 0.43). `ctf` captures fall
+  (-0.50 ± 0.37 a match, 8 matches lower, 3 higher) and the `hq` score
+  (-4 ± 5): both inside two standard errors. INFERRED: both sides play by
+  the same rules, so a capture lost is a defence won; a longer run would
+  settle `ctf`.
+- `sd` stalls: 215 in one match (mp_carentan), not traced.
+
+### 13.8 What is left
+
+- The posts are a node's verdict against eight fixed ways in, not the
+  enemy a guard fights: in a fight `cover::find` takes over (bot-combat.md
+  4). A guard does not yet move off a post an enemy sees it on before its
+  hold runs out.
+- Defuses fall wherever bombs are guarded (13.4, 13.6, 13.7). The
+  defuser (`SdView::lead`) still walks the straight way in alone.
+
+### 13.9 A body that ducks where it could not stand again
+
+13.5's mp_cassino `ctf` pin, traced per tick (temporary prints of the
+brain's stall state, the body's eye and the box fits, release, UO, the
+code before this section's merge, seed 2):
+
+- VERIFIED (trace): bot "Lag Leader" jumped the step from (5822, -1960,
+  52) onto the ledge at z 82, walked on along its path at 150 units/s and
+  stopped at (5788.8, -1972.0, 82.0) on a fight (`engaged`). Footwork
+  crouched it, then laid it down (eye 60 → 40 → 11 over ticks 2432 to
+  2441). The fight ended, the prone key went up, and the eye stayed at
+  11: it crawled at 11 units/s to (5779.0, -1990.0, 82.0) and stopped.
+  The stall's unstick spells fired (ticks 2580 to 2690) and no heading
+  moved it.
+- VERIFIED (measured, a box trace with `MASK_PLAYERSOLID` less bodies and
+  UO's patch arithmetic): at both points the standing (70), crouched (50)
+  and prone (30) boxes start solid; a box 1 to 12 units across does not,
+  nor the standing box 16 units east. A one-unit floor trace there meets
+  patch 371 at z 100, over the feet. The node (5760, -1967, 82) on the
+  path is clear.
+- INFERRED (`pmove::update_stance`, its `fits` test, and the walk): the
+  move let the standing body slide into the terrain patch's edge (a
+  terrain clip's start in solid never reads all solid, cod11-mantle.md),
+  so it stood and walked there, but a prone body rises only where the
+  standing or crouched box fits. Neither did, so it stayed prone for good
+  (`EV_STANCE_FORCE_PRONE`), and the prone box's own check held its
+  crawl. `PM_CorrectAllSolid`'s one-unit nudges free nothing that deep.
+  The same rule holds a player there.
+- The fix, a bot rule: the driver reads whether the standing box at the
+  feet starts clear (`BotView::stand_room`, one box trace a bot a tick),
+  and a standing bot on the ground takes no crouch or prone key where it
+  does not (`Bot::think`), from footwork, cover, a post or anything else.
+  A body already down keeps its keys.
+- VERIFIED (measured, release, UO, the same code with the rule): mp_cassino
+  `ctf` seed 2's stalls 2400 → 81, seed 1's 1191 → 431.
+
+Again on the tip with section 10.8's two fixes merged and this rule,
+before against after as in 13.4 and 13.5, VERIFIED (measured, release):
+
+| Run | still (each side) | exposed | mate | packed | objective | stalled |
+|---|---|---|---|---|---|---|
+| 1.1 `sd` allies | 53% → 32%, -20.8 ± 1.7, 24 of 24 | 36% → 31% | 154 → 219 | 76% → 67%, -9.3 ± 4.5 | plants 95 → 89 (-0.25 ± 0.26), defuses 46 → 25 (-0.88 ± 0.20) | 61 → 0 |
+| 1.1 `sd` axis | 62% → 43%, -19.2 ± 1.2, 24 of 24 | 37% → 29% | 197 → 237 | 51% → 55% | allies W 53 → 70, axis W 54 → 54 | |
+| UO `ctf` allies | 87% → 69%, -18.1 ± 1.9, 16 of 16 | 45% → 33% | 241 → 287 | 20% → 17% | takes 20 → 22, captures 2 → 4 | 645 → 121 |
+| UO `ctf` axis | 88% → 66%, -21.5 ± 1.2, 16 of 16 | 61% → 52% | 248 → 389 | 19% → 16% | | |
+| UO `hq` allies | 51% → 40%, -10.8 ± 4.6, 13 of 16 | 36% → 24% | 217 → 268 | 64% → 66% | score 1888 → 1914 | 1354 → 1046 |
+| UO `hq` axis | 56% → 32%, -23.8 ± 5.0, 15 of 16 | 41% → 29% | 219 → 270 | 66% → 57% | | |
+
+- VERIFIED (the table): the `ctf` stalls fall below before's; plants
+  and the `hq` score sit inside the spread.
+- UO `ctf` captures stay rare either way (2 to 6 in 16 ten-bot matches).
+  INFERRED (`Bot::uo_target`, section 7.2): a carrier whose own flag is
+  away waits in its goal, and no bot goes for the other side's carrier;
+  his flag comes home only when a fight kills him by chance and a
+  teammate or the 20 s timer returns it. With two bots (section 7.2's
+  80-seed tally, 10 captures) both take a flag and both wait, so a
+  capture needs the two to meet. Not traced.

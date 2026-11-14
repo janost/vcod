@@ -281,6 +281,7 @@ impl BotWorld for Cod4Server {
 
     /// Off as on CoD2 (bot-combat.md 15).
     const YIELDS: bool = false;
+    const SPREADS: bool = true;
     /// Off: not measured here; `PARTS_MATES` plans round a still
     /// teammate (bot-navigation.md section 3, "Bodies in the way").
     const SHUNS_BODIES: bool = false;

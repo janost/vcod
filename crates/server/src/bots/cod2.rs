@@ -963,6 +963,7 @@ impl Cod2Bots {
                 lead,
                 cover,
                 key: None,
+                hot: None,
             });
         }
     }
@@ -1451,6 +1452,10 @@ impl Cod2Bots {
             frag_near: frag_near(level, slot),
             post: None,
             give_way: None,
+            guard_post: None,
+            lane: None,
+            stand_room: true,
+            exposure: None,
             lob: None,
             waypoint: None,
             hazard_ahead: [false; 8],
