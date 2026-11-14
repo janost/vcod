@@ -2609,9 +2609,15 @@ below on the dumped records). The same holds on 1.5b
   (`torso_upper`) 1.9e-6 off in z, the clock's fading-first order
   (`ChannelClock::layers`) and descending index both hold it to the bit,
   and no other pose gate tells the three apart (nor legs ahead of torso
-  under `main` from torso ahead, file order). Open: which tree node a
-  vcod layer stands for in that walk (a sibling pair 32/33 or 94/122 sits
-  in the row); vcod keeps the clock's order.
+  under `main` from torso ahead, file order). VERIFIED, a UO gdb dump of
+  a knockback kill (cod11-turrets.md 13.6): the legs' two clips are the
+  tree nodes of their anim indices (157 and 185, each node's info off
+  `tree + 0xc + 2n`), and the skeleton is retail's word for word with
+  the lower node summed first, 113 of 114 bones up to 1.1e-5 off the
+  other way.
+  So a vcod layer stands for the node of its anim index on all three
+  servers. vcod keeps the clock's order on 1.5b and UO for the
+  `-hitgrid-15` row alone (next section).
 - VERIFIED, the controls (game.mp.uo `G_DObjSetLocalTag` 0x88e34,
   `G_DObjSetControlTagAngles` 0x88ec0, both through 0x88cf6): the
   record is `QuatMultiply(roll, QuatMultiply(pitch, yaw))` (0x4d25f,
@@ -2724,8 +2730,10 @@ stored walk and build on its kill. VERIFIED, vcod measurement: with them
 UO's poses keep the clock's layer order. In anim index order 1.5b's
 `-hitgrid-15` knockback kill moves one float step off in z, so a second
 error on that frame cancels against the order there (INFERRED; the
-dumped kill's records and build match, so it lies in that replay's
-inputs, not the walk).
+dumped kills' records and builds match in index order on 1.5b and UO, so
+it lies in that replay's inputs, not the walk). On UO no gate tells the
+two orders apart; cod11-turrets.md 13.6 narrows that input to the run
+clip's on a plain run.
 
 #### The clip's float time
 
