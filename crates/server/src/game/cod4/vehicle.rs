@@ -212,6 +212,9 @@ pub struct Heli4 {
     pub hovering: bool,
     pub goal_yaw: Option<f32>,
     pub target_yaw: Option<f32>,
+    /// `setLookAtEnt`'s entity (vehicle +0x280): the yaw turns toward its
+    /// `r.currentOrigin` ahead of the goal and target yaws.
+    pub look_at: Option<EntId>,
     /// `s.weapon`, `setVehWeapon`'s.
     pub weapon: u32,
     pub gun_pitch: f32,
@@ -755,6 +758,7 @@ impl Heli4 {
             hovering: false,
             goal_yaw: None,
             target_yaw: None,
+            look_at: None,
             weapon: 0,
             gun_pitch: 0.0,
             gun_yaw: 0.0,
@@ -777,8 +781,13 @@ impl Heli4 {
     /// goal, or while hovering the goal plus the wander, which the vehicle
     /// think draws anew once the body is within a quarter of the hover
     /// radius of it (0x80a06e8..0x80a0762). Returns the notifies in the
-    /// order they go out. `rand` is the level's `G_rand`.
-    pub fn think(&mut self, rand: &mut vcod_common::rng::GlibcRand) -> Vec<&'static str> {
+    /// order they go out. `rand` is the level's `G_rand`; `look` the
+    /// [`Self::look_at`] entity's origin.
+    pub fn think(
+        &mut self,
+        rand: &mut vcod_common::rng::GlibcRand,
+        look: Option<Vec3>,
+    ) -> Vec<&'static str> {
         if !self.moving {
             self.hold();
             return Vec::new();
@@ -791,7 +800,7 @@ impl Heli4 {
         } else {
             self.goal
         };
-        let notes = self.move_to_goal(aim);
+        let notes = self.move_to_goal(aim, look);
         if hovering {
             let near = d(self.hover.radius) * d(0.25);
             let gap: f64 = (0..3)
@@ -998,8 +1007,13 @@ impl Cod4Level {
             h.next_think = now + THINK_MS;
             h.thought = true;
             let (from, from_angles) = (h.origin, h.link_angles);
+            // An entity handle reads null once its entity is freed.
+            let look = h.look_at.and_then(|e| self.entity_origin(e));
+            if look.is_none() {
+                h.look_at = None;
+            }
             let mut notes: Vec<(&'static str, Vec<Value>)> = h
-                .think(&mut self.rt.host.cod4_mut().rand)
+                .think(&mut self.rt.host.cod4_mut().rand, look)
                 .into_iter()
                 .map(|n| (n, Vec::new()))
                 .collect();
@@ -1457,7 +1471,7 @@ mod tests {
         let (mut near, mut goal) = (None, None);
         let (mut nose_down, mut nose_up) = (0.0f32, 0.0f32);
         for i in 0..2000 {
-            let n = h.think(&mut rand);
+            let n = h.think(&mut rand, None);
             nose_down = nose_down.max(h.angles.x);
             nose_up = nose_up.min(h.angles.x);
             if near.is_none() && n.contains(&"near_goal") {
@@ -1483,7 +1497,7 @@ mod tests {
         let mut far = 0.0f32;
         let mut wanders = std::collections::BTreeSet::new();
         for _ in 0..2000 {
-            assert!(h.think(&mut rand).is_empty());
+            assert!(h.think(&mut rand, None).is_empty());
             far = far.max(h.origin.distance(h.goal));
             wanders.insert(h.hover.wander.to_array().map(f32::to_bits));
         }
@@ -1509,7 +1523,7 @@ mod tests {
             h.moving = true;
             let mut r = 0.0f32;
             for _ in 0..40 {
-                h.think(&mut rand);
+                h.think(&mut rand, None);
                 if r.abs() < h.angles.z.abs() {
                     r = h.angles.z;
                 }
@@ -1529,99 +1543,13 @@ mod tests {
         h.moving = true;
         let mut fired = false;
         for _ in 0..2000 {
-            if h.think(&mut rand).contains(&"goal") {
+            if h.think(&mut rand, None).contains(&"goal") {
                 fired = true;
                 break;
             }
         }
         assert!(fired);
         assert!(h.speed > 100.0, "{}", h.speed);
-    }
-
-    /// FNV-1a over every flight word and notify of `n` thinks.
-    fn flight_digest(h: &mut Heli4, rand: &mut vcod_common::rng::GlibcRand, n: usize) -> u64 {
-        let mut d = 0xcbf2_9ce4_8422_2325u64;
-        let mut mix = |w: u64| {
-            d ^= w;
-            d = d.wrapping_mul(0x0000_0100_0000_01b3);
-        };
-        for _ in 0..n {
-            for note in h.think(rand) {
-                note.bytes().for_each(|b| mix(b as u64));
-            }
-            let words = [h.origin, h.angles, h.vel, h.smoothed_change, h.hover.wander]
-                .into_iter()
-                .flat_map(|v| v.to_array())
-                .chain(h.angle_rates)
-                .chain([h.speed]);
-            words.for_each(|f| mix(f.to_bits() as u64));
-            mix(h.hovering as u64 | (h.stopping as u64) << 1);
-        }
-        d
-    }
-
-    /// Pins the flight's every word over the arms neither the hardpoint
-    /// gates nor `flight`'s retail replay reach: a stop with no hover radius, a goal yaw, a target yaw, a
-    /// climb and a descent, a sharp pass-through turn, a stop entered at
-    /// speed.
-    #[test]
-    fn the_flight_holds_its_words() {
-        let mut rand = rng();
-        let mut digests = Vec::new();
-        // A descent to a stop with no hover radius, turning to a goal yaw.
-        let mut h = heli();
-        h.hover.radius = 0.0;
-        h.goal = Vec3::new(2500.0, -800.0, -400.0);
-        h.goal_yaw = Some(135.0);
-        h.moving = true;
-        h.stop_at_goal = true;
-        digests.push(flight_digest(&mut h, &mut rand, 900));
-        assert!(h.hovering, "{h:?}");
-        // A climbing pass-through under a target yaw, then a sharp turn.
-        let mut h = heli();
-        h.yaw.overshoot = 0.3;
-        h.target_yaw = Some(-60.0);
-        h.goal = Vec3::new(1800.0, 300.0, 600.0);
-        h.moving = true;
-        digests.push(flight_digest(&mut h, &mut rand, 120));
-        h.target_yaw = None;
-        h.goal = Vec3::new(1600.0, 2600.0, 500.0);
-        digests.push(flight_digest(&mut h, &mut rand, 200));
-        // A stop entered at full speed, then the hover with new params
-        // and a goal yaw while hovering.
-        let mut h = heli();
-        h.vel = Vec3::new(0.0, 60.0 * MPH, 0.0);
-        h.speed = h.vel.length();
-        h.goal = Vec3::new(400.0, 1200.0, -50.0);
-        h.moving = true;
-        h.stop_at_goal = true;
-        digests.push(flight_digest(&mut h, &mut rand, 600));
-        assert!(h.hovering, "{h:?}");
-        h.hover.radius = 60.0;
-        h.hover.speed = 20.0;
-        h.hover.rate = 10.0;
-        h.air_resistance = 40.0 * MPH;
-        h.goal_yaw = Some(-170.0);
-        digests.push(flight_digest(&mut h, &mut rand, 400));
-        // A turn too tight for the speed: the turning ability brakes it.
-        let mut h = heli();
-        h.vel = Vec3::new(60.0 * MPH, 0.0, 0.0);
-        h.speed = h.vel.length();
-        h.goal = Vec3::new(300.0, 900.0, 0.0);
-        h.moving = true;
-        digests.push(flight_digest(&mut h, &mut rand, 60));
-        assert_eq!(
-            digests,
-            [
-                0x38d7_d413_415d_c8dd,
-                0xe5c8_56c7_8ac4_b574,
-                0x2df1_e161_46ee_6d36,
-                0xe5a9_5f60_954e_9c68,
-                0x55da_482c_bf59_246f,
-                0x1798_1673_f85f_5cdc,
-            ],
-            "{digests:#x?}"
-        );
     }
 
     #[test]

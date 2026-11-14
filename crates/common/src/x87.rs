@@ -174,8 +174,8 @@ fn stored(x: f64, scale: f64, exact: impl FnOnce() -> f32) -> f32 {
 
 /// A value on the x87 stack of the Linux servers, whose control word keeps
 /// the default 64-bit precision: `m * 2^e`, `m` 0 or with its top bit set.
-/// Only the operations [`angle_vectors`] needs, each rounded to nearest
-/// even as the FPU rounds; no infinities or NaNs.
+/// The four operations and the root, each rounded to nearest even as the
+/// FPU rounds; no infinities or NaNs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct F80 {
     neg: bool,
@@ -274,6 +274,53 @@ impl F80 {
         F80::round(neg, m, big.e - 62)
     }
 
+    /// `fsqrt`; a negative's root is that of its magnitude.
+    pub fn sqrt(self) -> F80 {
+        if self.m == 0 {
+            return self;
+        }
+        // An even exponent, the radicand 127 or 128 bits wide: the root
+        // has 64.
+        let (r, e) = if self.e & 1 == 0 {
+            (u128::from(self.m) << 64, self.e - 64)
+        } else {
+            (u128::from(self.m) << 63, self.e - 63)
+        };
+        let mut x = (r as f64).sqrt() as u128;
+        for _ in 0..3 {
+            x = (x + r / x) / 2;
+        }
+        while x.checked_mul(x).is_none_or(|s| s > r) {
+            x -= 1;
+        }
+        while (x + 1).checked_mul(x + 1).is_some_and(|s| s <= r) {
+            x += 1;
+        }
+        // The root lies past `x + 1/2` exactly when the remainder passes
+        // `x`; it is never on the half.
+        let up = r - x * x > x;
+        F80::round(
+            false,
+            (x << 1 | u128::from(up)) << 1 | u128::from(up),
+            e / 2 - 2,
+        )
+    }
+
+    /// Rounded to a double, nearest even (a `fstpl`).
+    pub fn to_f64(self) -> f64 {
+        if self.m == 0 {
+            return if self.neg { -0.0 } else { 0.0 };
+        }
+        let sh = 11u32;
+        let m = u128::from(self.m);
+        let (mut q, rem, half) = (m >> sh, m & ((1u128 << sh) - 1), 1u128 << (sh - 1));
+        if rem > half || rem == half && q & 1 == 1 {
+            q += 1;
+        }
+        let v = q as f64 * 2f64.powi(self.e + sh as i32);
+        if self.neg { -v } else { v }
+    }
+
     /// `fstps`: rounded to a float, nearest even.
     pub fn to_f32(self) -> f32 {
         if self.m == 0 {
@@ -321,6 +368,51 @@ impl std::ops::Add for F80 {
     type Output = F80;
     fn add(self, o: F80) -> F80 {
         self.sum(o)
+    }
+}
+
+/// `fsub`.
+impl std::ops::Sub for F80 {
+    type Output = F80;
+    fn sub(self, o: F80) -> F80 {
+        self.sum(-o)
+    }
+}
+
+/// `fdiv`; the divisor is never zero.
+impl std::ops::Div for F80 {
+    type Output = F80;
+    fn div(self, o: F80) -> F80 {
+        if self.m == 0 {
+            return F80 {
+                neg: self.neg != o.neg,
+                ..self
+            };
+        }
+        // 64 or 65 quotient bits, then a guard bit and the sticky rest.
+        let (n, d) = (u128::from(self.m) << 64, u128::from(o.m));
+        let (q, r) = (n / d, n % d);
+        let guard = u128::from(r << 1 >= d);
+        let sticky = u128::from(r << 1 != d * guard);
+        F80::round(
+            self.neg != o.neg,
+            (q << 2) | guard << 1 | sticky,
+            self.e - o.e - 64 - 2,
+        )
+    }
+}
+
+/// The x87's compare (`fucomi`).
+impl PartialOrd for F80 {
+    fn partial_cmp(&self, o: &F80) -> Option<std::cmp::Ordering> {
+        let d = *self - *o;
+        Some(if d.m == 0 {
+            std::cmp::Ordering::Equal
+        } else if d.neg {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Greater
+        })
     }
 }
 
@@ -500,6 +592,23 @@ mod tests {
             let a = Vec3::from_array(angles.map(f32::from_bits));
             assert_eq!(bits(angle_vectors(a)), bits(angle_vectors_f80(a)));
         }
+    }
+
+    #[test]
+    fn f80_divides_and_roots_to_nearest_even() {
+        let f = F80::from_f64;
+        // 1/3 at 64 bits: 0xaaaa..aaab * 2^-65.
+        let third = f(1.0) / f(3.0);
+        assert_eq!((third.m, third.e), (0xaaaa_aaaa_aaaa_aaab, -65));
+        assert_eq!((f(1.0) / f(3.0)).to_f64(), 1.0 / 3.0);
+        assert_eq!((f(-6.0) / f(4.0)).to_f64(), -1.5);
+        // sqrt 2 at 64 bits: 0xb504f333f9de6484 (its next bit 0).
+        let r2 = f(2.0).sqrt();
+        assert_eq!((r2.m, r2.e), (0xb504_f333_f9de_6484, -63));
+        assert_eq!(f(9.0).sqrt().to_f64(), 3.0);
+        assert_eq!(f(0.25).sqrt().to_f64(), 0.5);
+        assert!(f(1.0) - f(2f64.powi(-60)) < f(1.0));
+        assert!(f(-1.0) < f(0.0) && f(2.0) > f(1.5));
     }
 
     #[test]

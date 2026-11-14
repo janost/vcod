@@ -16,9 +16,11 @@ more.
 - The helicopter's flight is 1.7's `VEH_UpdateMoveToGoal` (0x809e38a)
   with its float model: what the x87 keeps on its stack and what it
   stores. The flight keeps its own angles apart from `r.currentAngles`,
-  which alone the link snaps. Every think of two gdb runs replays word
-  for word, and `hardpoint_ab`'s three captures match with no tolerance
-  (cod4-gsc.md 3.2, "The flight's float model").
+  which alone the link snaps. Its yaw takes `setGoalYaw`'s and
+  `setLookAtEnt`'s arms as 1.7 does. Every think of three gdb runs
+  replays word for word, and `hardpoint_ab`'s four captures match with no
+  tolerance (cod4-gsc.md 3.2, "The flight's float model", "The yaw
+  capture").
 - Every CoD4 link snaps `r.currentAngles` with 1.7's flooring snap
   (`SV_LinkEntity` 0x817e3f0): movers, script models and the rest of the
   host's links (cod4-gsc.md 3.2, "The link's snap").

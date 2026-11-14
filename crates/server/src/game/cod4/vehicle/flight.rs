@@ -2,11 +2,12 @@
 //! flight toward its goal with the turn and the tilt inlined, ported with
 //! 1.7's float model: what the x87 keeps on its stack is an `f64` here,
 //! what it stores is an `f32` (cod4-gsc.md 3.2, "The flight's float
-//! model"). `crates/cod4/tests/fixtures/heli/think-gdb.txt` holds retail's
-//! vehicle record before and after each call, and the test below replays
-//! every one.
+//! model"). `crates/cod4/tests/fixtures/heli/think-gdb.txt` and
+//! `yaw-gdb.txt` hold retail's vehicle record before and after each call,
+//! and the test below replays every one.
 
 use glam::Vec3;
+use vcod_common::x87::F80;
 
 use super::{DT, Heli4, INV_360, MAX_TILT_VEL, d, vectoangles4};
 
@@ -75,9 +76,10 @@ fn steer4(angle: &mut f32, rate: &mut f32, target: f64, top: f32, rates: (f64, f
 
 impl Heli4 {
     /// One call of `VEH_UpdateMoveToGoal` toward `aim` (the goal, or the
-    /// goal plus the wander while hovering). Returns the notifies in their
-    /// order: `goal_yaw`, `near_goal`, `goal`.
-    pub(super) fn move_to_goal(&mut self, aim: Vec3) -> Vec<&'static str> {
+    /// goal plus the wander while hovering), `look` the look-at entity's
+    /// `r.currentOrigin`. Returns the notifies in their order: `goal_yaw`,
+    /// `near_goal`, `goal`.
+    pub(super) fn move_to_goal(&mut self, aim: Vec3, look: Option<Vec3>) -> Vec<&'static str> {
         let mut notes = Vec::new();
         let hovering = self.hovering;
         let o = self.origin;
@@ -89,7 +91,7 @@ impl Heli4 {
         let dist = (d(dz) * d(dz) + d(flat2)).sqrt() as f32;
         if dist > 0.0 {
             let dir = self.fly4(dx, dy, dz, flat2, dist, hovering);
-            self.turn4(dir, hovering, &mut notes);
+            self.turn4(dir, hovering, look, &mut notes);
             self.tilt4(hovering);
         }
         if hovering {
@@ -194,7 +196,11 @@ impl Heli4 {
         let (wx, wy) = (d(dir.x) * new_speed, d(dir.y) * new_speed);
         let mut cx = (wx - d(v0.x)) as f32;
         let mut cy = (wy - d(v0.y)) as f32;
-        let mut cz = d(dz) * inv * new_speed - d(v0.z);
+        // z's change is kept at 64 bits: the velocity adds it back to
+        // `v0.z`, and near rest the two all but cancel.
+        let e = F80::from_f64;
+        let mut cz =
+            F80::from_f32(dz) * (e(1.0) / F80::from_f32(dist)) * e(new_speed) - F80::from_f32(v0.z);
         // Below the set speed a turn never brakes (0x809f701..0x809f7c2);
         // the call spills x and the change's z as floats.
         if !self.stopping
@@ -207,25 +213,28 @@ impl Heli4 {
             cx = (d(cx) - d((d(nx) * back) as f32)) as f32;
             cy = (d(cy) - back * d(ny)) as f32;
             dx = d(dx as f32);
-            cz = d(cz as f32);
+            cz = F80::from_f32(cz.to_f32());
         }
         // Held to the limit (0x809e594..0x809e5d9).
-        let size = (d(cx) * d(cx) + d(cy) * d(cy) + cz * cz).sqrt();
-        if size > d(limit) {
-            let k = d(limit) / size;
-            cx = (d(cx) * k) as f32;
-            cy = (d(cy) * k) as f32;
-            cz *= k;
+        let (fx, fy) = (F80::from_f32(cx), F80::from_f32(cy));
+        let size = (fx * fx + fy * fy + cz * cz).sqrt();
+        if size > F80::from_f32(limit) {
+            let k = F80::from_f32(limit) / size;
+            cx = (fx * k).to_f32();
+            cy = (fy * k).to_f32();
+            cz = cz * k;
         }
         if !hovering {
             (cx, cy) = self.ease_flat4((cx, cy), v0, dx, dy, flat2, rate);
-            cz = self.ease_rise4(cz, v0.z, dz);
+            if let Some(c) = self.ease_rise4(cz.to_f64(), v0.z, dz) {
+                cz = e(c);
+            }
         }
         // The velocity, the speed, the smoothed change (0x809e5ef..0x809e6b1).
         let vel = Vec3::new(
             (d(v0.x) + d(cx)) as f32,
             (d(cy) + d(v0.y)) as f32,
-            (d(v0.z) + cz) as f32,
+            (F80::from_f32(v0.z) + cz).to_f32(),
         );
         self.vel = vel;
         self.speed =
@@ -233,7 +242,7 @@ impl Heli4 {
         let sc = self.smoothed_change;
         let sx = d(sc.x) + (d(cx) - d(sc.x)) * 0.5;
         let sy = d(sc.y) + (d(cy) - d(sc.y)) * 0.5;
-        let sz = d(sc.z) + (cz - d(sc.z)) * 0.5;
+        let sz = d(sc.z) + (cz.to_f64() - d(sc.z)) * 0.5;
         self.smoothed_change = Vec3::new(sx as f32, sy as f32, sz as f32);
         let size = (sx * sx + sy * sy + sz * sz).sqrt();
         if size > d(limit) && !self.stop_at_goal {
@@ -319,37 +328,53 @@ impl Heli4 {
 
     /// Outside the hover, a climb or descent that would pass the goal's
     /// height brakes, at most three frames of the set rate a frame
-    /// (0x809f97f..0x809fa5d).
-    fn ease_rise4(&self, cz: f64, vz: f32, dz: f32) -> f64 {
+    /// (0x809f97f..0x809fa5d). `None` leaves the change as it was.
+    fn ease_rise4(&self, cz: f64, vz: f32, dz: f32) -> Option<f64> {
         if dz == 0.0
             || 0.001 > cz.abs() as f32
             || 0.001 > vz.abs()
             || cz * d(vz) >= 0.0
             || d(dz) * d(vz) <= 0.0
         {
-            return cz;
+            return None;
         }
         let a = -d(DT) * d(vz);
         let to_height = d(dz) / (0.5 * d(vz));
         if a / cz <= to_height {
-            return cz;
+            return None;
         }
         let needed = a / to_height;
         if needed * needed <= cz * cz {
-            return cz;
+            return None;
         }
         let most = d(self.pace.accel) * d(DT) * 3.0;
         let c = if needed - most < 0.0 { needed } else { most };
-        if -most - needed >= 0.0 { -most } else { c }
+        Some(if -most - needed >= 0.0 { -most } else { c })
     }
 
-    /// The yaw (0x809e751..0x809ef8a): the goal yaw once a stop or the
-    /// hover is close enough to swing into it, else the target yaw, else
+    /// The yaw (0x809e751..0x809ef8a): toward the look-at entity's origin
+    /// from the moved place (each difference stored, then `vectoyaw`,
+    /// 0x809f19a..0x809f1f2); else the goal yaw once a stop or the hover
+    /// is close enough to swing into it, else the target yaw, else
     /// (hovering) hold, else along `dir`; a fifth of the rates once the
     /// rate swung past the goal yaw, until the wanted yaw moves.
-    /// `setLookAtEnt`'s arm (vehicle +0x280, 0x809f19a) has no method here.
-    fn turn4(&mut self, dir: Vec3, hovering: bool, notes: &mut Vec<&'static str>) {
+    fn turn4(
+        &mut self,
+        dir: Vec3,
+        hovering: bool,
+        look: Option<Vec3>,
+        notes: &mut Vec<&'static str>,
+    ) {
         let ay = self.angles.y;
+        let o = self.origin;
+        let look = look.map(|at| {
+            let to = Vec3::new(
+                (d(at.x) - d(o.x)) as f32,
+                (d(at.y) - d(o.y)) as f32,
+                (d(at.z) - d(o.z)) as f32,
+            );
+            vectoangles4(to).y
+        });
         let due = self.goal_yaw.filter(|&gy| {
             if !(self.stopping || hovering) {
                 return false;
@@ -364,7 +389,8 @@ impl Heli4 {
             let left = d(norm_e(d(gy) - d(ay)).abs() as f32);
             left > swing_angle && swing + (left - swing_angle) / top >= stop_time
         });
-        let wanted = due
+        let wanted = look
+            .or(due)
             .or(self.target_yaw)
             .unwrap_or_else(|| if hovering { ay } else { vectoangles4(dir).y });
         let off = self.goal_yaw.map(|gy| d(ay) - d(gy));
@@ -497,10 +523,7 @@ mod tests {
 
     fn heli(r: &Rec) -> Heli4 {
         let mut h = Heli4::new(EntId(1, 0), 0, 0, v(r, 0xc0), v(r, 0xd8));
-        assert_eq!(
-            (r[&0x280], f(r, 0xf0), f(r, 0xf8)),
-            (0, MAX_TILT_VEL, MAX_TILT_VEL)
-        );
+        assert_eq!((f(r, 0xf0), f(r, 0xf8)), (MAX_TILT_VEL, MAX_TILT_VEL));
         h.moving = true;
         h.vel = v(r, 0x138);
         h.angle_rates = v(r, 0x150).to_array();
@@ -566,13 +589,10 @@ mod tests {
             .collect()
     }
 
-    /// Every think of retail's two runs (the idle and the flight captures'
-    /// gsc under gdb at 0x809e38a and its two returns to the vehicle think)
-    /// from retail's record before it: the record after it word for word,
-    /// and its notifies.
-    #[test]
-    fn every_think_matches_retail_word_for_word() {
-        let text = include_str!("../../../../../cod4/tests/fixtures/heli/think-gdb.txt");
+    /// Replays one fixture: from retail's record before each think, the
+    /// record after it word for word, and its notifies. Returns the runs,
+    /// the thinks, and what parted.
+    fn replay(text: &str) -> (usize, usize, Vec<String>) {
         let (mut rec, mut runs, mut thinks) = (Rec::new(), 0, 0);
         let mut off = Vec::new();
         for line in text.lines().filter(|l| !l.starts_with('#')) {
@@ -582,13 +602,18 @@ mod tests {
                 continue;
             }
             let parts: Vec<&str> = line.trim_start_matches("think ").split('|').collect();
-            let aim: Vec<f32> = parts[0]
-                .split_whitespace()
-                .map(|w| f32::from_bits(u32::from_str_radix(w, 16).unwrap()))
-                .collect();
+            let floats = |s: &str| -> Vec<f32> {
+                s.split_whitespace()
+                    .map(|w| f32::from_bits(u32::from_str_radix(w, 16).unwrap()))
+                    .collect()
+            };
+            let aim = floats(parts[0]);
             rec.extend(words(parts[1]));
+            let look = parts.get(4).map(|p| floats(p)).filter(|v| !v.is_empty());
+            // The look-at handle's entity number (`EntHandle`'s low half).
+            assert_eq!(rec[&0x280] & 0xffff != 0, look.is_some(), "think {thinks}");
             let mut h = heli(&rec);
-            let notes = h.move_to_goal(Vec3::from_slice(&aim));
+            let notes = h.move_to_goal(Vec3::from_slice(&aim), look.map(|v| Vec3::from_slice(&v)));
             rec.extend(words(parts[2]));
             let ours = written(&h);
             for (o, w) in &ours {
@@ -609,7 +634,23 @@ mod tests {
             }
             thinks += 1;
         }
-        assert_eq!((runs, thinks), (2, 604));
+        (runs, thinks, off)
+    }
+
+    /// Every think of retail's runs under gdb at 0x809e38a and its two
+    /// returns to the vehicle think: the idle and the flight captures'
+    /// gsc (`think-gdb.txt`), and the yaw probe's goal yaws and look-at
+    /// (`yaw-gdb.txt`).
+    #[test]
+    fn every_think_matches_retail_word_for_word() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../cod4/tests/fixtures/heli/");
+        let mut off = Vec::new();
+        for (file, want) in [("think-gdb.txt", (2, 604)), ("yaw-gdb.txt", (1, 802))] {
+            let text = std::fs::read_to_string(format!("{dir}{file}")).unwrap();
+            let (runs, thinks, o) = replay(&text);
+            assert_eq!((runs, thinks), want, "{file}");
+            off.extend(o.into_iter().map(|l| format!("{file}: {l}")));
+        }
         assert!(
             off.is_empty(),
             "{} off:\n{}",
