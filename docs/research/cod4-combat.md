@@ -221,10 +221,10 @@ constants; the algebra between them is INFERRED.
   4.27 / 20` of 40 is 31, Stopping Power's 140 per cent makes 43; Deep
   Impact's doubled depth gives 35 without it
   (`perk_tests::a_round_goes_through_a_wall_and_deep_impact_goes_further`).
-- The first leg eases each body's hit pose a frame; later legs trace the
-  same poses without stepping them, so penetration moves no pose a plain
-  round would not. INFERRED (ours: a `PlayerBody`'s controls ease per
-  trace, not per frame).
+- The first leg eases each body's hit pose; later legs trace the same
+  poses without stepping them, so penetration moves no pose a plain round
+  would not. INFERRED (ours: a body's controls ease at most once a frame,
+  3.3).
 
 ### 3.2 The eye and the gun's angles
 
@@ -412,6 +412,41 @@ constants; the algebra between them is INFERRED.
   capture's `fWeaponPosFrac` rises to 1). VERIFIED live. Trap: 0x80000 is
   the detonator's; the wall capture (3.1) was taken with it, so it fired
   from the hip.
+
+### 3.3 The hit pose on the server
+
+vcod: `game::cod4::combat` (`body_trace_eased`, `HIT_BROAD_MINS`), held to
+retail's by `cod4::capture_ab`'s throw back and prone runs. VERIFIED (the
+gates).
+
+- Both entity clips of `SV_Trace` (0x817d6ac, 0x817dcca) pose a body and
+  walk its hit boxes only when the trace meets the box `r.currentOrigin +
+  (-64, -64, -32)..(64, 64, 72)` (`.data` 0x826e41c..0x826e430, read at
+  0x817d82b and 0x817ded1; no store to it). VERIFIED (the instructions,
+  the floats). Ours took (-31, -31, -16)..(31, 31, 86), so a grenade's
+  step past the shooter's chest a frame before its strike built no pose.
+- The pose (0x80ca732, 0x80ca99e) returns early when the skeleton is
+  already built for the bones asked (0x80ca754, 0x80ca9c0); else it runs
+  the entity handler's `controller` (handler table +0x1c, 0x80ca785,
+  0x80ca9d3; the player's is 0x80a480e), then builds the skeleton
+  (0x81af4f8). VERIFIED (the instructions). The player's controller is
+  `BG_Player_DoControllersInternal` (0x804cf90) at `level.frametime`
+  (0x80a4838), easing each control 0.36 degrees a ms (0x820963c,
+  0x804d5de..0x804d5e7). VERIFIED (the instructions, the float). So a
+  body's controls ease once in each frame something poses it, however
+  many traces meet it, and a tag read later in that frame (the dying
+  body's `tag_weapon_right`, 6.1) reads that frame's skeleton. INFERRED
+  (that the skeleton's "built" lasts a server frame). Nothing poses every
+  player each frame: no path from `ClientEndFrame` (0x80a68b8) or the
+  frame's entity pass reaches the pose but a gunner's turret
+  (0x80b79e4), a linked entity's tag (0x80cbab2, entity +0x218) and the
+  use list's turret tag (0x80d2c30). INFERRED (the call graph).
+- The server's bodies take 1.7's angle updater and controllers
+  (cod4-player-anims.md 8: the torso pitch toward twice the view's, no
+  `back_up`); ours ran CoD2's. With the three rules the throw back's frag
+  meets the shooter's `head` box at 50100, entering its +y face, whose
+  normal reads (0.3478, 0.8072, -0.4769) on ours against the reflection's
+  (0.348, 0.808, -0.476) on retail. VERIFIED (the gate, a trace on ours).
 
 ## 4. Damage
 
@@ -756,11 +791,30 @@ prone and killcam runs. VERIFIED (the gates).
   `G_Spawn`'s 0 until the rest. VERIFIED (the instructions, the stores
   0x8091392..0x809153e). Retail's flying item reads ground 0. VERIFIED
   live.
-- Before the spawn `LaunchItem` walks a list of the dropped weapons
-  (0x8370c04, its length the dvar at 0x84bc29c) and, with no free slot,
-  frees the one farthest from every playing client (0x809122e..0x809135c).
-  VERIFIED (the instructions). INFERRED that the dvar is
-  `g_maxDroppedWeapons` (16). vcod: not ported.
+- Right after its `G_Spawn` (0x8091169) `LaunchItem` holds the new item
+  in a list of entity handles (0x8370c04), its length the integer of the
+  dvar at 0x84bc29c (0x8091174..0x8091184). VERIFIED (the instructions).
+  That dvar is `g_maxDroppedWeapons` (0x8219d45, `Dvar_RegisterInt` at
+  0x80b4a03 storing it at 0x80b4a08), default 16 in 2..32, flags 0.
+  VERIFIED (the instructions, the string). The item takes the first empty slot (0x8091199,
+  0x80911dd). VERIFIED (the instructions). With none, it frees one slot's
+  item (`G_FreeEntity`, 0x80cc040) and takes that slot (0x8091317..
+  0x8091387): of the items not being picked up (entity flag 0x1000000,
+  0x8091201) whose weapon's `avoidDropCleanup` (+0x3fc, `weaponDefFields`
+  offset 1020) is 0 (0x809121f..0x809122c), the one whose nearest playing
+  client (`sess.connected` 2 and `sessionState` 0, 0x8091288, 0x8091291)
+  stands farthest by squared distance from its `r.currentOrigin`, 1e12
+  with no one playing (0x8215e58), the first on a tie (a strict `>` from
+  -1, 0x80912e9). VERIFIED (the instructions, the floats). With none to
+  free it prints `Could not find a suitable weapon entity to free out of
+  %i possible.  Using index zero.` (0x8215cd4) and frees slot 0's
+  (0x8091614..0x809163c). VERIFIED (the instructions, the string). The
+  flag is set and cleared inside the pickup (0x809227c, 0x8092350,
+  0x8092427), so a swap's dropped gun never frees the one it takes.
+  INFERRED. A slot whose item was picked up or freed reads empty.
+  INFERRED (the handle). vcod: `builtins::cod4_combat::hold_dropped`,
+  checked by `a_full_dropped_weapons_list_frees_one_for_the_new_item`.
+  VERIFIED (the test, ours).
 - With the tag found (`G_DObjGetWorldTagPos`, 0x80cc7ba), `Drop_Weapon`
   traces the item's box from the body's box middle (`currentOrigin +
   (mins + maxs) / 2`) to the tag's origin, mask the item's clipmask or
@@ -815,17 +869,18 @@ prone and killcam runs. VERIFIED (the gates).
   from 46300 on (169, 2262, 237), yaw -134.9945 where it fell at
   -134.989, roll 90, ground 1022. VERIFIED live (`play-1.7-prone-*`).
   Ours matches every word of both runs' items, on the live frames and the
-  killcam's, but the start's z on the prone run (247 against 246) and the
-  hit's `trDelta` on both. VERIFIED (the gates). The start is the posed
-  tag: ours poses the prone body's `tag_weapon_right` at z 246.538 at the
-  drop, and retail's hit, a fraction 0.2369 of its last step where ours's
-  is 0.2543 on the same floor, puts retail's tag 0.11 lower, at about
-  246.42. INFERRED (the two `trDelta`s). Ours's prone idle reads that z
-  some 250 ms of its breathing cycle earlier, so the anim's phase on the
-  server's body differs. INFERRED. On the standing body the start agrees
-  to a few thousandths (`trDelta` (4.3898, -0.9870, -39.2181) against
-  (4.3897, -0.9870, -39.2175)). VERIFIED (the gate). What sets the phase
-  of the dying body's pose on 1.7 is open.
+  killcam's, but the hit's `trDelta` on both: (-24.8591, -24.4986,
+  -31.1734) against (-24.8587, -24.4981, -31.1728) prone, (4.3898,
+  -0.9870, -39.2181) against (4.3897, -0.9870, -39.2175) standing, the
+  tag some 3e-5 units off retail's. VERIFIED (the gates). Ours composes
+  the skeleton off quaternions where 1.7 builds its matrices, the same
+  ulps the helicopter's posed `tag_barrel` shows (cod4-gsc.md 3.2).
+  INFERRED. The prone start's z read 247 against 246, the tag 0.11 high,
+  until the server's bodies took 1.7's controllers and the tag read the
+  killing frame's skeleton (3.3): the round's trace eases the controls
+  at 46150 and the drop in the same frame reads that pose, where ours
+  read the frame before's, one ease short. VERIFIED (the gate, which
+  read 247 under 1.7's controllers until the drop read that pose).
 
 ## 7. The killcam
 
@@ -1633,8 +1688,10 @@ snapshot from the later spawn. What still differs is each gate's `GAPS`.
   each wobble's `trDelta` is a unit in the last place off. VERIFIED (the
   gate).
 - Throw back: the frag aimed 60 under the target's feet (`--aim-z -60`)
-  lands short. VERIFIED live. The hint, the pickup, the hold and the throw
-  match word for word up to 50050. VERIFIED (the gate).
+  lands short; thrown back, it strikes the shooter's head at 50100 and
+  falls to the ground. VERIFIED live. The hint, the pickup, the hold, the
+  throw, the strike's event and the fall match word for word; the bounce's
+  `trDelta` differs in its third decimal. VERIFIED (the gate).
 - Prone death: under `scr_player_maxhealth 30` the target lies down (`--script
   prone`) and the shooter's second round kills it at 46150: the corpse
   reads `legsAnim` 0x34, `torsoAnim` 0x200 (the death flips the prone
@@ -1753,25 +1810,31 @@ What the captures fixed on ours:
 Open, with each gate's `GAPS`:
 
 - The dropped weapon (6.1): the start at the tag, the fall, the 50 ms move
-  and the rest on its side are ours too; what differs is the dying prone
-  body's tag, 0.11 high, and the hit's `trDelta` that follows from it on
-  both runs (`ITEM_TAG`). VERIFIED (the gates).
-- A grenade's strike on a standing body: the thrown back frag meets the
-  shooter at 50100 (`EV_GRENADE_BOUNCE` parm 7, flesh, and the hurt) where
-  ours flies on and comes to rest on the body (ground 1). VERIFIED live.
-  So `cod4_throwback_ab` stops at 50050. `G_RunMissile` traces through
-  0x80b4020 (`SV_Trace` with a point box, the locational flag and
-  `bulletPriorityMap` 0x826ce60, 0x80973df and 0x809765b), the map ours's
-  `missile_trace` passes too. VERIFIED (the instructions). Retail's frag
-  stops 0.99 of the way along its 50100 step, at (128, 2122, 285), 13
-  units ahead of the shooter's origin (123, 2110, 236) at chest height;
-  its bounce, `trDelta` (26.759, 74.923, -171.269) at 0.2 of the speed,
-  reflects off a normal near (0.348, 0.808, -0.476), forward and down.
-  INFERRED (the reflection). Ours's posed hit boxes meet that segment
-  nowhere; extended it meets `torso_upper` at 1.25 along it. VERIFIED (a
-  trace on ours). So retail met a box ahead of the chest, a forearm or a
-  hand, that ours poses elsewhere. INFERRED. Which box, and why ours's
-  pose of the standing shooter misses it, are open.
+  and the rest on its side are ours too; what differs is the hit's
+  `trDelta` on both runs, the posed tag some 3e-5 units off retail's
+  (`ITEM_TAG`). VERIFIED (the gates).
+- A grenade's strike on a standing body. The thrown back frag meets the
+  shooter at 50100 (`EV_GRENADE_BOUNCE` parm 7, flesh, and the hurt).
+  VERIFIED live. `G_RunMissile` traces through 0x80b4020 (`SV_Trace` with
+  a point box, the locational flag and `bulletPriorityMap` 0x826ce60,
+  0x80973df and 0x809765b), the map ours's `missile_trace` passes too.
+  VERIFIED (the instructions). Retail's frag stops near the end of its
+  50100 step, at (128, 2122, 285), 13 units ahead of the shooter's origin
+  (123, 2110, 236); its bounce, `trDelta` (26.759, 74.923, -171.269) at
+  0.2 of the speed, reflects off a normal near (0.348, 0.808, -0.476).
+  INFERRED (the reflection). Ours flew on, met the chest a frame later
+  and came to rest on the body (ground 1). VERIFIED (the gate). Ours's
+  server bodies ran CoD2's angle updater and controllers (0.6 of the view
+  on the spine, of which `back_up`'s half goes nowhere), and the step a
+  frame before the strike met no broad box of ours, so the controls eased
+  only at 50100 and stood short of their goal (3.3). VERIFIED (the code,
+  a trace on ours). Under 1.7's updater, broad box and once-a-frame ease
+  the shooter, looking 31 down, bends the spine by the whole of it and
+  turns the head back up, and the frag enters the `head` box's +y face
+  at 50100. VERIFIED (a trace on ours, the gate). The bounce reads
+  (26.753, 74.910, -171.278), the gate's one row left (`THROWBACK_GAPS`).
+  VERIFIED (the gate). That this is the skeleton's composition, as the
+  dropped weapon's, is INFERRED.
 - The second rocket takes entity 317 on retail, 316 on ours; nothing
   either client saw held 316. VERIFIED live. Both runs' first rocket is
   315, shown 47350..50850, gone at 50900 with no event on either side;

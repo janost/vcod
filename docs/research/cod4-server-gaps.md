@@ -77,6 +77,10 @@ more.
 - Entity numbers follow retail's: `delete()` frees inside the call, so
   the free list keeps the scripts' delete order (cod4-combat.md 14).
 - `sv_fps` is read every frame (cod4-server-frame.md 8).
+- `g_maxDroppedWeapons` caps the dropped weapons: past it the item
+  farthest from the playing clients is freed (cod4-combat.md 6.1).
+- Hit poses: 1.7's controllers and broad box, eased once a frame; a tag
+  read later in the frame reads that pose (cod4-combat.md 3.3).
 - A client in the world more than 28 messages past its last acknowledge
   is due a random `irand(0, 2^n)` snapshot intervals on, n climbing to 8,
   as 1.7's `SV_SendMessageToClient`: a retail capture of a probe stopped
@@ -121,12 +125,15 @@ Open, by how much a player notices.
    (`hardpoint_ab` `STILL_GAPS`, `AIM`; cod4-gsc.md 3.2, "The turret"). M
    to port the skeleton.
 3. What the five capture gates (`cod4::capture_ab`, cod4-combat.md 15)
-   still tolerate: a dying prone body's `tag_weapon_right`, 0.11 over
-   retail's, and the dropped weapon's hit `trDelta` that follows (the
-   anim's phase on the server's body, open; S to M), a grenade's strike
-   on a standing body (ours's posed hit boxes miss a box ahead of the
-   chest; M), the second rocket's entity number and a killcam's archived
-   view (both measured, cause open). Closed: the dropped weapon's start at
+   still tolerate: the dropped weapon's hit `trDelta` and the thrown back
+   frag's bounce off the shooter's head, each in its third decimal (ours
+   composes the posed skeleton off quaternions, 1.7 its matrices; part of
+   2's M), the second rocket's entity number and a killcam's archived
+   view (both measured, cause open). Closed: the grenade's strike on a
+   standing body and the dying prone body's `tag_weapon_right`, 0.11 high:
+   the server's bodies ran CoD2's controllers, met traces inside half
+   1.7's broad box, and eased per trace where 1.7 eases once a frame
+   (cod4-combat.md 3.3). Closed: the dropped weapon's start at
    the hand's tag, its fall, its 50 ms move and its rest on its side
    (`Drop_Weapon`, `G_RunItem`, cod4-combat.md 6.1). Closed: the spawn's
    `delta_angles` the rocket and touch gates listed after a `setviewpos`
