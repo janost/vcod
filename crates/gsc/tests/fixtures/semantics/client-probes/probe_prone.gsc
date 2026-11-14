@@ -58,5 +58,9 @@ try_place()
 	}
 	self setorigin(spot);
 	self setplayerangles((0, yaw, 0));
+	//	UO's dm gives no binoculars; `probe_binoculars 1` does, for
+	//	--probe-pronemove lmg.
+	if (getcvar("probe_binoculars") == "1")
+		self giveWeapon("binoculars_mp");
 	logPrint("PROBE place " + getTime() + " " + self getEntityNumber() + " " + spot + " " + yaw + "\n");
 }

@@ -191,6 +191,7 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
     if let Some(cmd) = last_cmd {
         ps.last_cmd_angles = [cmd.angles[0], cmd.angles[1]];
         ps.last_cmd_ads = cmd.buttons & msg::BUTTON_ADS != 0;
+        ps.last_cmd_moves = [cmd.forward, cmd.right];
         ps.melee_latched = cmd.buttons & msg::BUTTON_MELEE != 0;
     }
 

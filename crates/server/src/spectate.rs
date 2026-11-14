@@ -284,11 +284,10 @@ pub struct ClientSim {
     /// `PM_Footsteps` left, which every arm that raises one runs ahead of.
     /// A tick that ran several moves keeps the last.
     jumped: Option<(pmove::Takeoff, i32, vcod_common::animscript::Movetype)>,
-    /// Each cmd since the last `update_anims` whose move raised UO's
-    /// `LMG_BREAKDOWN` continue ([`pmove::PlayerState`]'s
-    /// `breakdown_continue`): its serverTime and the `movetype` its
-    /// `PM_Footsteps` left, which UO runs ahead of `PM_Weapon`.
-    breakdown_continue: Vec<(i32, vcod_common::animscript::Movetype)>,
+    /// What each cmd since the last `update_anims` did to the torso outside
+    /// the weapon events, with the cmd's serverTime: a prone flip's clear
+    /// and UO's `LMG_BREAKDOWN` continue ([`TorsoCmd`]).
+    torso_cmds: Vec<(i32, TorsoCmd)>,
     /// `ps.jumpTime`: the serverTime of the step the last jump took, 0 since
     /// the spawn. The client's own prediction refuses a jump inside 500 ms
     /// of it (docs/research/cod11-mantle.md, "Jumps").
@@ -599,6 +598,19 @@ fn weapon_anim_event(event: i32) -> Option<&'static str> {
 /// the `movetype` condition it selects by ([`ClientSim::note_footsteps`]).
 pub type AnimEvent = (PmEvent, i32, vcod_common::animscript::Movetype);
 
+/// A move's write to the torso that is not a weapon event, in the order a
+/// cmd runs them: `PM_CheckDuck`'s, then `PM_Weapon`'s.
+#[derive(Clone, Copy, Debug)]
+enum TorsoCmd {
+    /// 1.5's and UO's prone flip ([`pmove::PlayerState`]'s
+    /// `prone_flip_clears_torso`): index 0 as a forced continue, no timer.
+    ProneFlipClear,
+    /// UO's `LMG_BREAKDOWN` continue (`breakdown_continue`), with the
+    /// `movetype` its `PM_Footsteps` left, which UO runs ahead of
+    /// `PM_Weapon`.
+    BreakdownContinue(vcod_common::animscript::Movetype),
+}
+
 /// Horizontal speed below which the animscript sees an idle player, whatever
 /// the input. A player pressed into geometry keeps a few units a second and
 /// retail's capture animates it standing; the value sits between that
@@ -648,7 +660,7 @@ impl ClientSim {
             gunner_left: None,
             gunner_tree: Default::default(),
             jumped: None,
-            breakdown_continue: Vec::new(),
+            torso_cmds: Vec::new(),
             jump_time: 0,
             land_anim: None,
             link_to: None,
@@ -920,7 +932,7 @@ impl ClientSim {
         self.was_airborne = false;
         self.strafing = None;
         self.jumped = None;
-        self.breakdown_continue.clear();
+        self.torso_cmds.clear();
         self.jump_time = 0;
         self.land_anim = None;
         // `ClientSpawn`'s memset: the damage fields read 0 again after a
@@ -1299,12 +1311,8 @@ impl ClientSim {
             return self.eflags();
         }
         // 1.5's follow the stepped eye target (cod15-movement.md 3).
-        let stance = match self.ps.rules {
-            pmove::MoveRules::V1_1 => self.ps.stance,
-            pmove::MoveRules::V1_5 | pmove::MoveRules::Uo => self.ps.effective_stance(),
-        };
         self.eflags()
-            | match stance {
+            | match self.ps.eflags_stance() {
                 pmove::Stance::Stand => 0,
                 pmove::Stance::Crouch => EF_CROUCH,
                 pmove::Stance::Prone => EF_PRONE,
@@ -1504,6 +1512,7 @@ impl ClientSim {
         self.last_cmd_angles = cmd.angles;
         self.ps.last_cmd_angles = [cmd.angles[0], cmd.angles[1]];
         self.ps.last_cmd_ads = cmd.buttons & vcod_common::net::msg::BUTTON_ADS != 0;
+        self.ps.last_cmd_moves = [cmd.forward, cmd.right];
     }
 
     /// Advance one frame, returning the events the move raised, already in the
@@ -1758,9 +1767,15 @@ impl ClientSim {
         if self.pm_type == PmType::Normal && !self.dead && self.footsteps_select() {
             self.footsteps_movetype = self.footsteps_movetype_of(cmd);
         }
+        if self.ps.prone_flip_clears_torso {
+            self.torso_cmds
+                .push((cmd.server_time, TorsoCmd::ProneFlipClear));
+        }
         if self.ps.breakdown_continue {
-            self.breakdown_continue
-                .push((cmd.server_time, self.footsteps_movetype));
+            self.torso_cmds.push((
+                cmd.server_time,
+                TorsoCmd::BreakdownContinue(self.footsteps_movetype),
+            ));
         }
         match self.ps.rules {
             pmove::MoveRules::V1_1 => before,
@@ -1886,25 +1901,17 @@ impl ClientSim {
             }
             _ => {}
         }
-        // UO's breakdown continue: the clause's anim restarts the torso
-        // only where it differs from the one playing.
-        for (at, movetype) in std::mem::take(&mut self.breakdown_continue) {
-            let conditions = Conditions {
-                movetype,
-                ..conditions.clone()
-            };
-            let sel = script.select_event("lmg_breakdown", &conditions);
-            if sel.torso.as_ref().and_then(|a| resolve(&a.name))
-                != Some(self.anim.torso() & !vcod_common::net::flags::ANIM_TOGGLEBIT)
-            {
-                Self::play_event(&mut self.anim, &sel, (now_ms, at), resolve, length);
-            }
-        }
         // The weapon channel: retail's `PM_Weapon` raises a script event on
         // entering a state, and the `EVENTS` block's own clauses pick the
         // torso index by stance, weapon and class
         // (docs/research/player-model-anim-system.md, "The weapon channel").
+        // A cmd's prone flip clear and breakdown continue run ahead of its
+        // weapon events, and every cmd's ahead of the next one's.
+        let mut torso_cmds = std::mem::take(&mut self.torso_cmds).into_iter().peekable();
         for &(e, at, movetype) in events {
+            while let Some((t, c)) = torso_cmds.next_if(|&(t, _)| t <= at) {
+                self.torso_cmd(c, (now_ms, t), &conditions, inputs);
+            }
             let Some(name) = weapon_anim_event(e.event) else {
                 continue;
             };
@@ -1919,7 +1926,16 @@ impl ClientSim {
             } else {
                 script.select_event(name, &conditions)
             };
-            Self::play_event(&mut self.anim, &sel, (now_ms, at), resolve, length);
+            // The weapon change's two events are raised unforced (1.1d
+            // game.mp 0x3c338's callers, UO's), every other one forced.
+            if matches!(name, "dropweapon" | "raiseweapon") {
+                self.anim.event_unforced(&sel, now_ms, at, resolve, length);
+            } else {
+                Self::play_event(&mut self.anim, &sel, (now_ms, at), resolve, length);
+            }
+        }
+        for (t, c) in torso_cmds {
+            self.torso_cmd(c, (now_ms, t), &conditions, inputs);
         }
         // Nothing is selected while off the ground -- retail returns before
         // the selection unless the ladder flag is set (@0x323a2), which is
@@ -1962,6 +1978,45 @@ impl ClientSim {
     /// The landing is the one clause measured to break it -- its `weaponclass
     /// pistol AND grenade` arm is a `both` one and writes the legs alone --
     /// and its caller clears the torso of the selection before it gets here.
+    /// One [`TorsoCmd`] at `at` on the hold clock. The breakdown continue
+    /// restarts the torso only where its clause's anim differs from the one
+    /// playing; on the same anim it sets the timer again when the clip
+    /// loops (`BG_PlayAnim`'s flag 0x80, UO game.mp 0x1c122; no stock
+    /// `LMG_BREAKDOWN` clause reaches it, player-model-anim-system.md,
+    /// "The takeoff and the landing").
+    fn torso_cmd(
+        &mut self,
+        c: TorsoCmd,
+        (now_ms, at): (i32, i32),
+        conditions: &vcod_common::animscript::Conditions,
+        inputs: &AnimInputs,
+    ) {
+        let resolve = |name: &str| inputs.anims.wire_of(name);
+        let length = |name: &str| inputs.anims.length_ms(name);
+        match c {
+            TorsoCmd::ProneFlipClear => self.anim.clear_torso_held(now_ms),
+            TorsoCmd::BreakdownContinue(movetype) => {
+                let conditions = vcod_common::animscript::Conditions {
+                    movetype,
+                    ..conditions.clone()
+                };
+                let sel = inputs
+                    .anims
+                    .script
+                    .select_event("lmg_breakdown", &conditions);
+                let playing = self.anim.torso() & !vcod_common::net::flags::ANIM_TOGGLEBIT;
+                match sel.torso.as_ref().and_then(|a| resolve(&a.name)) {
+                    Some(index) if index == playing => {
+                        if inputs.anims.motion(index).is_some_and(|m| m.looping) {
+                            self.anim.reset_torso_timer(&sel, at, length);
+                        }
+                    }
+                    _ => Self::play_event(&mut self.anim, &sel, (now_ms, at), resolve, length),
+                }
+            }
+        }
+    }
+
     fn play_event(
         anim: &mut vcod_common::animscript::AnimState,
         sel: &vcod_common::animscript::Selection,

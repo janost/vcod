@@ -311,13 +311,17 @@ pub fn adjust_aim_spread_scale(
         Some(def) if def.hip_spread_decay_rate != 0.0 => {
             let mut decay = def.hip_spread_decay_rate;
             // The three stance arms are exclusive and airborne wins; a link
-            // is not airborne (0x38622).
+            // is not airborne (0x38622). The stance is the `eFlags` one
+            // (1.1d ps+0x80 at 0x38632, UO ps+0x84 at 0x35e56), so on 1.5 and UO a
+            // body standing up from prone decays at the crouch rate until
+            // its eye has risen.
             let airborne = !ps.on_ground && !ps.linked;
+            let stance = ps.eflags_stance();
             if airborne {
                 decay *= 0.5;
-            } else if ps.stance == Stance::Prone {
+            } else if stance == Stance::Prone {
                 decay *= def.hip_spread_prone_decay;
-            } else if ps.stance == Stance::Crouch {
+            } else if stance == Stance::Crouch {
                 decay *= def.hip_spread_ducked_decay;
             }
             let (mut add, mut turn) = (0.0, 0.0);
@@ -667,11 +671,12 @@ fn deploy_driver(ps: &mut PlayerState, def: &WeaponDef, events: &mut Vec<PmEvent
         return;
     }
     // State 13's arm (0x35bed) raises `LMG_BREAKDOWN` again, forced and as
-    // a continue, while `viewHeightLerpTarget` reads non-zero: the same
-    // clause's anim is left alone, a stance change's clause restarts the
+    // a continue, on the move whose `PM_CheckDuck` took the eye into or out
+    // of prone (`pmove_t` +0x100, `PlayerState::prone_flip`): the same
+    // clause's anim is left alone, the other stance's clause restarts the
     // torso on its own timer (player-model-anim-system.md, "The takeoff
     // and the landing").
-    if ps.weaponstate == WEAPON_BREAKDOWN && ps.view_lerp_target != 0.0 {
+    if ps.weaponstate == WEAPON_BREAKDOWN && ps.prone_flip {
         ps.breakdown_continue = true;
     }
     match ps.weaponstate {
@@ -702,6 +707,63 @@ pub fn interrupt_with_sprint(ps: &mut PlayerState) {
         ps.weaponstate = WEAPON_READY;
         if ps.weapon != 0 {
             hold_anim(ps, WEAP_RAISE);
+        }
+    }
+}
+
+/// `PmoveSingle`'s prone move key, the first thing a cmd runs (1.1d
+/// 0x33e75, 1.5b 0x27fde, UO 0x2d67b; cod11-combat.md 1.13): on a prone
+/// body (`pm_flags` 1) whose forward or right move grew in magnitude since
+/// the last cmd, `PM_InteruptWeaponWithProneMove` (1.1d 0x37488, 1.5b
+/// 0x2d4bc, UO 0x338b0) drops a busy state, and the sight goes with it
+/// unless the state is one the press leaves alone.
+pub fn prone_move_key(
+    ps: &mut PlayerState,
+    cmd: &crate::net::msg::UserCmd,
+    weapons: &[Option<WeaponDef>],
+) {
+    if ps.stance != Stance::Prone {
+        return;
+    }
+    let grew = |old: i8, new: i8| old != new && i16::from(old).abs() < i16::from(new).abs();
+    if !grew(ps.last_cmd_moves[0], cmd.forward) && !grew(ps.last_cmd_moves[1], cmd.right) {
+        return;
+    }
+    let def = weapons.get(ps.weapon as usize).and_then(Option::as_ref);
+    if interrupt_with_prone_move(ps, def, cmd.weapon) {
+        ps.ads_active = false;
+    }
+}
+
+/// `PM_InteruptWeaponWithProneMove`: whether the sight drops. A shot and a
+/// swing's relax keep both; the reloads, a raise, a drop and (on UO) a
+/// rechamber keep the state; anything else (1.1's and 1.5's rechamber, a
+/// swing's windup, UO's deploy and breakdown) goes back to ready with its
+/// timers cleared and the idle anim, and the next `PM_Weapon` starts over
+/// from there. UO keeps a sighted LMG first of all.
+fn interrupt_with_prone_move(
+    ps: &mut PlayerState,
+    def: Option<&WeaponDef>,
+    cmd_weapon: u8,
+) -> bool {
+    let uo = ps.rules == MoveRules::Uo;
+    if uo && ps.ads_active && def.is_some_and(WeaponDef::is_lmg) {
+        return false;
+    }
+    match ps.weaponstate {
+        WEAPON_READY | WEAPON_RAISING | WEAPON_DROPPING => true,
+        WEAPON_RELOADING..=WEAPON_RELOAD_END => true,
+        WEAPON_RECHAMBERING if uo => true,
+        WEAPON_FIRING | WEAPON_MELEE_RELAX => false,
+        _ => {
+            ps.weapon_time_ms = 0;
+            ps.weapon_delay_ms = 0;
+            ps.weaponstate = WEAPON_READY;
+            // The anim helper reads the cmd's weapon byte (`pm->cmd + 6`).
+            if cmd_weapon != 0 {
+                hold_anim(ps, WEAP_IDLE);
+            }
+            true
         }
     }
 }
