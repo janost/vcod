@@ -731,6 +731,13 @@ mp_carentan's collision: horizontal residual max 0.099 units, mean 0.049
 each snapshot fed again from 16 units under the floor lifts onto
 mp_carentan's floor at -23.875 (capture: -23.9).
 
+VERIFIED, the UO replay: `every_captured_uo_gunner_origin_replays` runs the
+same port over UO's capture (`mp_carentan-dm-turret-uo.txt`, 14.3), UO's
+`mg42_bipod_stand_mp` `animHorRotateInc` and UO's mp_carentan collision:
+all 260 mounted snapshots on a turret anim land within 0.066 units of
+retail's origin in all three axes (the one-decimal rounding). `predict_ab`'s
+`follow_turret` takes retail's origin for the gunner on the strength of it.
+
 Not determined:
 
 - Which time `XAnimCalcAbsDelta` samples a root with more than one key at.

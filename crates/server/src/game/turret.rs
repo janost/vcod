@@ -1313,6 +1313,78 @@ mod tests {
         );
     }
 
+    /// The same replay on UO's capture (`mp_carentan-dm-turret-uo.txt`):
+    /// every snapshot the gunner sat the gun on a turret anim, his origin
+    /// off ours' `place_gunner` and trace down against retail's, printed to
+    /// a tenth.
+    #[test]
+    fn every_captured_uo_gunner_origin_replays() {
+        let Some(fs) = vcod_common::testing::uo_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).unwrap();
+        let bones = vcod_common::model::load_bones(&fs, "mg42_bipod").unwrap();
+        let tags = TurretTags::from_bones(&bones).unwrap();
+        let def = String::from_utf8(fs.read("weapons/mp/mg42_bipod_stand_mp").unwrap()).unwrap();
+        let inc = TurretDef::parse(&def).unwrap().anim_hor_rotate_inc;
+        let bsp = vcod_common::bsp::parse(&fs.read("maps/mp/mp_carentan.bsp").unwrap()).unwrap();
+        let world = crate::world::World::from_bsp(&bsp, None);
+        let gun = Vec3::new(1712.0, 1830.0, 8.0);
+        let turret = (gun, vcod_common::turretpose::angles_quat([0.0, 229.0, 0.0]));
+        let text = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/turret/mp_carentan-dm-turret-uo.txt"
+        ))
+        .unwrap();
+        let field = |l: &str, k: &str| -> Vec<f32> {
+            let v = l.split(' ').find_map(|w| w.strip_prefix(k)).unwrap();
+            v.split(',').map(|x| x.parse().unwrap()).collect()
+        };
+        let lines: Vec<&str> = text.lines().collect();
+        let mut angles2 = [0.0; 3];
+        let (mut n, mut max) = (0, 0.0f32);
+        for (i, l) in lines.iter().enumerate() {
+            if l.starts_with("!turret ") {
+                angles2.copy_from_slice(&field(l, "angles2="));
+            }
+            if !l.starts_with("!trace ") {
+                continue;
+            }
+            let ms = l.split(' ').find(|w| w.starts_with("ms=")).unwrap();
+            if let Some(t) = lines[i + 1..]
+                .iter()
+                .take_while(|n| !n.starts_with("!trace "))
+                .find(|n| n.starts_with("!turret ") && n.split(' ').any(|w| w == ms))
+            {
+                angles2.copy_from_slice(&field(t, "angles2="));
+            }
+            let mounted = field(l, "eFlags=")[0] as i32 & vcod_common::net::flags::EF_MOUNTED;
+            if mounted == 0 {
+                continue;
+            }
+            let legs = field(l, "legsAnim=")[0] as i32;
+            let want = Vec3::from_slice(&field(l, "origin="));
+            let Some(placed) = vcod_common::turretpose::place_gunner(
+                &anims,
+                |n| vcod_common::xanim::load(&fs, n).ok().map(std::rc::Rc::new),
+                legs,
+                tag_weapon_local(&tags, angles2),
+                turret,
+                want,
+                inc,
+            ) else {
+                continue;
+            };
+            let at = lift_onto_floor(&world.collision, placed.origin, gun.z);
+            let err = (at - want).length();
+            assert!(err < 0.25, "line {}: {at:?} vs {want:?}, off {err}", i + 1);
+            max = max.max(err);
+            n += 1;
+        }
+        assert!(n > 100, "{n} mounted snapshots on a turret anim");
+        eprintln!("UO placement residual over {n} snapshots: max {max:.3}");
+    }
+
     #[test]
     fn the_real_stand_file_parses() {
         let Some(fs) = vcod_common::testing::game_fs() else {
