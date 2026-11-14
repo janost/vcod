@@ -13,6 +13,14 @@ more.
 
 ## Fixed
 
+- The server builds a DObj's bones as 1.7's `DObjCalcSkel` does
+  (`vcod_cod4::skel`: the base locals, the controller's tags, the
+  composition's float model): a helicopter's tags, a player body's tags
+  and hit boxes, and `getTagOrigin` on any other model. A helicopter's
+  think snaps its angles as 1.7's link does. The idle helicopter's gun
+  and the dropped weapons match retail word for word; a gdb dump of the
+  cobra's skeleton gates the port (cod4-gsc.md 3.2, "The skeleton",
+  "The link's snap").
 - A helicopter with no goal runs 1.7's no-goal think (0x808ba22, its
   player-helicopter step with the stick zeroed): from rest it levels
   pitch and roll and normalises its yaw, as a stock helicopter does for
@@ -118,18 +126,22 @@ Open, by how much a player notices.
    off-LAN client's address stands in for its ban guid
    (cod4-handshake.md 15).
 2. Closed: a helicopter with no goal runs 1.7's no-goal think and its
-   turret `VEH_UpdateAim` (Fixed above). What its gun still parts by: a
-   few ulps on a body that holds still, from the posed `tag_barrel` (ours
-   poses the tags off the zone's `baseMat`, 1.7's skeleton composes the
-   local bones), and in flight 0.13 degrees, as the flown body parts
-   (`hardpoint_ab` `STILL_GAPS`, `AIM`; cod4-gsc.md 3.2, "The turret"). M
-   to port the skeleton.
+   turret `VEH_UpdateAim`, and on a body that holds still its gun matches
+   retail word for word (Fixed above; `hardpoint_ab` `STILL_GAPS` gone).
+   Open: in flight the gun parts by 0.13 degrees as the flown body parts
+   (`hardpoint_ab` `AIM` under `FLIGHT`): the first word off is the
+   body's yaw step, an ulp at think 82 of the idle capture, then the turns
+   at the nodes (cod4-gsc.md 3.2, "The turret", "The flight against
+   retail"). M to port the flight think's float model.
 3. What the five capture gates (`cod4::capture_ab`, cod4-combat.md 15)
-   still tolerate: the dropped weapon's hit `trDelta` and the thrown back
-   frag's bounce off the shooter's head, each in its third decimal (ours
-   composes the posed skeleton off quaternions, 1.7 its matrices; part of
-   2's M), the second rocket's entity number and a killcam's archived
-   view (both measured, cause open). Closed: the grenade's strike on a
+   still tolerate: the thrown back frag's bounce off the shooter's head,
+   in `trDelta`'s third decimal (1.7's skeleton moved it by a few
+   thousandths, x and y away from retail and z toward it: the box trace's
+   or the bounce's arithmetic, open), the second rocket's entity number
+   and a killcam's archived view (both measured, cause open). Closed: the
+   dropped weapon's hit `trDelta`, prone and standing: the bodies' tags
+   and hit boxes compose through 1.7's skeleton (cod4-gsc.md 3.2, "The
+   skeleton"). Closed: the grenade's strike on a
    standing body and the dying prone body's `tag_weapon_right`, 0.11 high:
    the server's bodies ran CoD2's controllers, met traces inside half
    1.7's broad box, and eased per trace where 1.7 eases once a frame
