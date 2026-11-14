@@ -33,6 +33,8 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("cleargoalyaw", clear_goal_yaw),
     ("settargetyaw", set_target_yaw),
     ("cleartargetyaw", clear_target_yaw),
+    ("setlookatent", set_look_at_ent),
+    ("clearlookatent", clear_look_at_ent),
     ("setvehweapon", set_veh_weapon),
     ("fireweapon", fire_weapon),
     ("setturrettargetvec", set_turret_target_vec),
@@ -426,6 +428,38 @@ fn clear_target_yaw(
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
     heli(host, recv)?.target_yaw = None;
+    Ok(Value::Undefined)
+}
+
+/// `setLookAtEnt(ent)` (0x809c900): the yaw turns toward the entity from
+/// then on; refused on a vehicle with no health.
+fn set_look_at_ent(
+    host: &mut GameHost,
+    _: &mut Cx,
+    recv: Option<Target>,
+    a: &[Value],
+) -> Result<Value, ErrorKind> {
+    let Some(&Value::Entity(t)) = a.first() else {
+        return Err(ErrorKind::Custom("Invalid entity".into()));
+    };
+    let h = heli(host, recv)?;
+    if h.health <= 0 {
+        return Err(ErrorKind::Custom(
+            "Vehicle must have health to control".into(),
+        ));
+    }
+    h.look_at = Some(t);
+    Ok(Value::Undefined)
+}
+
+/// `clearLookAtEnt()` (0x809c8d2).
+fn clear_look_at_ent(
+    host: &mut GameHost,
+    _: &mut Cx,
+    recv: Option<Target>,
+    _: &[Value],
+) -> Result<Value, ErrorKind> {
+    heli(host, recv)?.look_at = None;
     Ok(Value::Undefined)
 }
 
