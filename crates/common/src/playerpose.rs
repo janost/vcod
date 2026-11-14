@@ -1358,9 +1358,12 @@ pub struct PoseInputs<'a> {
     /// at its layer's seconds.
     pub leaf_times: Vec<(usize, f32)>,
     /// Sample each clip at its engine node time ([`crate::animclock::Layer::time`])
-    /// rather than its seconds: the 1.5 and UO server's stored pose
-    /// (cod11-combat.md 3.1, "The clip's float time").
+    /// rather than its seconds: the servers' pose (cod11-combat.md 3.1,
+    /// "The clip's float time").
     pub node_time: bool,
+    /// Whose arithmetic the engine records follow ([`PoseBuffer::new_in`]):
+    /// 1.1d's kept stack or 1.5b's and UO's stores.
+    pub arith: crate::patch::Arith,
     /// The skeleton's bindings kept from pose to pose; `None` binds each
     /// clip afresh.
     pub binds: Option<&'a crate::skeleton::BindCache>,
@@ -1381,7 +1384,7 @@ pub fn pose_player(
     inputs: &PoseInputs,
     clip: impl FnMut(&str) -> Option<Rc<XAnim>>,
 ) -> PoseBuffer {
-    pose_player_onto(PoseBuffer::new(skel), skel, inputs, clip)
+    pose_player_onto(PoseBuffer::new_in(skel, inputs.arith), skel, inputs, clip)
 }
 
 /// [`pose_player`] for a body only drawn: the same locals, without the
@@ -1404,7 +1407,7 @@ fn pose_player_onto(
     let tree = &inputs.anims.tree;
     // The legs clips, or a gunner's placement rows as nodes of their own
     // under the turret group.
-    let mut legs: Vec<(Rc<XAnim>, f32, f32)> = Vec::new();
+    let mut legs: Vec<(Rc<XAnim>, f64, f32)> = Vec::new();
     let mut shape: Vec<LegsShape> = Vec::new();
     match inputs.turret_leaves {
         Some(current) => {
@@ -1437,8 +1440,8 @@ fn pose_player_onto(
                             continue;
                         };
                         let frame = match node_t {
-                            Some(nt) => nt * anim.frame_count.saturating_sub(1) as f32,
-                            None => anim.frame_pos(l.seconds, anim.looping),
+                            Some(nt) => node_frame(nt, &anim),
+                            None => f64::from(anim.frame_pos(l.seconds, anim.looping)),
                         };
                         ids.push(legs.len());
                         legs.push((anim, frame, w));
@@ -1456,7 +1459,7 @@ fn pose_player_onto(
         }
     }
     let torso = layer_clips(inputs, &inputs.torso_layers, &mut clip);
-    let bind = |clips: &[(Rc<XAnim>, f32, f32)]| -> Vec<_> {
+    let bind = |clips: &[(Rc<XAnim>, f64, f32)]| -> Vec<_> {
         clips
             .iter()
             .map(|(a, ..)| match inputs.binds {
@@ -1500,7 +1503,7 @@ enum LegsShape {
 }
 
 fn clips_at<'a>(
-    clips: &'a [(Rc<XAnim>, f32, f32)],
+    clips: &'a [(Rc<XAnim>, f64, f32)],
     binds: &'a [Rc<AnimBinding>],
 ) -> Vec<crate::skeleton::ClipAt<'a>> {
     clips
@@ -1515,8 +1518,17 @@ fn layer_clips(
     inputs: &PoseInputs,
     layers: &[crate::animclock::Layer],
     clip: &mut impl FnMut(&str) -> Option<Rc<XAnim>>,
-) -> Vec<(Rc<XAnim>, f32, f32)> {
+) -> Vec<(Rc<XAnim>, f64, f32)> {
     let mut out = Vec::new();
+    // The walk visits a node's children in anim index order (`cod_lnxded`
+    // 0x80bbea8), which sets the order its sums round in. Only the 1.1d
+    // pose takes it: 1.5b's and UO's keep the clock's order, which one
+    // 1.5b knockback kill still needs (cod11-combat.md 3.1, "The pose on
+    // 1.1").
+    let mut layers: Vec<&crate::animclock::Layer> = layers.iter().collect();
+    if inputs.arith == crate::patch::Arith::Kept {
+        layers.sort_by_key(|l| l.index);
+    }
     for l in layers {
         let node = inputs.anims.index.node_id(l.index);
         if let Some((_, leaves)) = inputs.seat_leaves.iter().find(|(n, _)| Some(*n) == node) {
@@ -1530,8 +1542,8 @@ fn layer_clips(
                     // own, which the channel clock does not keep.
                     let own = inputs.leaf_times.iter().find(|t| t.0 == leaf);
                     let frame = match own.filter(|_| inputs.node_time) {
-                        Some(&(_, t)) => t * anim.frame_count.saturating_sub(1) as f32,
-                        None => anim.frame_pos(l.seconds, anim.looping),
+                        Some(&(_, t)) => node_frame(t, &anim),
+                        None => f64::from(anim.frame_pos(l.seconds, anim.looping)),
                     };
                     out.push((anim, frame, l.weight * w));
                 }
@@ -1550,13 +1562,19 @@ fn layer_clips(
 }
 
 /// Where in `anim` a layer samples: off its seconds, or under
-/// [`PoseInputs::node_time`] the node time times `numframes`, stored, as
-/// the sampler takes it (UO `coduo_lnxded` 0x80b9b72).
-fn layer_frame(inputs: &PoseInputs, l: &crate::animclock::Layer, anim: &XAnim) -> f32 {
+/// [`PoseInputs::node_time`] its node time ([`node_frame`]).
+fn layer_frame(inputs: &PoseInputs, l: &crate::animclock::Layer, anim: &XAnim) -> f64 {
     match l.time.filter(|_| inputs.node_time) {
-        Some(t) => t * anim.frame_count.saturating_sub(1) as f32,
-        None => anim.frame_pos(l.seconds, anim.looping),
+        Some(t) => node_frame(t, anim),
+        None => f64::from(anim.frame_pos(l.seconds, anim.looping)),
     }
+}
+
+/// A node time times `numframes`, unrounded: 1.1d's sampler keeps the
+/// product on the stack (`cod_lnxded` 0x80b838a); 1.5b's and UO's store it
+/// (UO `coduo_lnxded` 0x80b9b72), which the stored walk does.
+fn node_frame(t: f32, anim: &XAnim) -> f64 {
+    f64::from(t) * f64::from(anim.frame_count.saturating_sub(1))
 }
 
 #[cfg(test)]

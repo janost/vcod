@@ -717,9 +717,14 @@ conditions.
   the name table at `.data` file offset 0xab468 starts `bullet`,
   `grenade`, `projectile`, `spotter`, `gas`. VERIFIED, `snapshots-uo-flame.bin`: the followed
   flamethrower's `weapAnim` reads 2 in every burst and 0 between them,
-  never with 0x200, from 33050 to 35400. INFERRED: `pml+0x88` is the
-  held weapon's def. vcod clears the toggle after a UO step on a `gas`
-  weapon whose `weapAnim` changed (`pm_weapon`).
+  never with 0x200, from 33050 to 35400. VERIFIED: `pml+0x88` is the held
+  weapon's def. UO's `PmoveSingle` stores `BG_GetInfoForWeapon` of
+  `ps->weapon` (ps `+0xd8`) there at 0x2d668 and 0x2db69 through the GOT
+  slot `[ebx+0xf00]`, `R_386_GLOB_DAT pml` (0xb4718); 1.5b's at the same
+  offset (0x28189, 0x28478; slot 0x89ad8, `pml`); 1.1d's at `pml+0x84`
+  (0x33f43, 0x340db, the relocations naming `pml`), off `ps+0xb0`. vcod
+  clears the toggle after a UO step on a `gas` weapon whose `weapAnim`
+  changed (`pm_weapon`).
 
 VERIFIED, off the grenade capture, whose `to_frag` step is the first
 uncorrupted putaway anyone has measured: the putaway stores `WEAP_DROP` and
@@ -837,6 +842,25 @@ conditions.
 
 The first of those two never runs on 1.1 MP; 1.14 has the capture that says
 so and the path a throw takes instead.
+
+The dry pull. VERIFIED, `.so` 0x38a44 (step 1 of 1.5's fire path), the
+grenade arm (`weaponType` 1 off `pml+0x84`, 0x38a52): with the fire path's
+argument 0, a trigger pull rather than an expired delay, it sets
+`grenadeTimeLeft` to `fuseTime` (0x38a95), the pullback anim and
+`EV_PULLBACK_WEAPON` (0x38abf) only when the clip (`ps+0x20c` at the def's
+clip index `+0x1a8`, 0x38a85) holds a round, then sets `weaponDelay` to
+`holdFireTime` (0x38adf) and clears `weaponTime` (0x38ae4) either way;
+every arm ends at `weaponstate` 3 (0x38ba1). VERIFIED, step 2 (0x38bbc) on
+an empty clip: no `EV_NOAMMO` for a grenade (the `weaponType` test at
+0x38c0e), a reload with rounds in reserve (0x38c2c), else the
+index-preserving idle and 500 more `weaponTime` (0x38c68). VERIFIED, 1.5b's
+step 1 (game.mp 0x2fb0a) is the same, testing the clip through
+`PM_WeaponAmmoAvailable` (`BG_ClipForWeapon`'s slot of `ps+0x20c`); UO's
+(0x3679b) also requires `grenadeTimeLeft` 0, its cooked grenade. INFERRED:
+a dry pull holds state 3 for `holdFireTime` with `weaponTime` 500. INFERRED:
+no stock weapon gets there, since `BG_TakePlayerWeapon` takes a `clipOnly`
+grenade on its last round (1.5, step 9). vcod: `pmove::weapon::fire`,
+`a_dry_grenade_pull_holds_the_firing_state`.
 
 ### 1.12 What stops `PM_Weapon` outright
 
@@ -1552,6 +1576,22 @@ list below. INFERRED: the ordering, and every "when", "otherwise" and
   with the replay sending that cmd after the spawn: with the dropped cmd
   left out of `oldcmd`, ours read `aimSpreadScale` 226 where retail's read
   0). vcod: `ClientSim::stale_cmd`, off `Client::last_usercmd_st`.
+- 1.1d and 1.5b rotate it the same way. VERIFIED, 1.1d `ClientThink`
+  (0x41540): `rep movs` of six words from `client+0x20f0` (`pers.cmd`) to
+  `+0x2108` (`pers.oldcmd`) at 0x41570, `trap_GetUsercmd` into `pers.cmd`
+  (0x41582), `level.time` into `+0x21e4` (0x41592), then `ClientThink_real`
+  (0x3fee0) unless `g_synchronousClients` (0x4159b); `ClientThink_real`
+  copies `pers.oldcmd` into the pmove's `oldcmd` (0x4007b..0x40087).
+  VERIFIED, 1.5b `ClientThink` (0x39bb9): the six words from `+0x20ec` to
+  `+0x2104` (0x39bf3..0x39c35), the fetch at 0x39c53, `level.time` into
+  `+0x21ec` (0x39c6d).
+- VERIFIED, all three `ClientThink_real`s (1.1d 0x3ff31..0x3ff4c, 1.5b
+  0x391bb..0x391db, UO 0x40d40..0x40d60): the stale return also needs
+  `ps.clientNum` (`+0xac`, UO `+0xd4`) to be the entity's own number, so a
+  follower, whose playerstate is the followed player's copy
+  (`cod11-spectator-follow.md`), runs every cmd it is handed. INFERRED: vcod
+  keeps a follower's clock in `last_processed_st`, off its own cmds, so its
+  cmds are stale there only when the clock repeats; not measured.
 - `hipSpreadMoveAdd` (`0x258`) non-zero (`0x386fe`) with either of
   `cmd.forwardmove` / `cmd.rightmove` non-zero (`0x38712`) adds it flat
   (`0x38719`); airborne adds 1.28 twice (`0x3873c`-`0x3874a`). The whole add
@@ -2548,6 +2588,87 @@ retail's bits, and since the clip's float time below so is every ray.
 Before that the rays sat within 3 steps (1.5b's prone idle moves, and
 the dump's locals up to 8 steps off ours where a key is lerped).
 
+#### The pose on 1.1
+
+1.1d's `cod_lnxded` runs the anim calc, the skeleton build and the bone
+trace of 1.5b and UO (the sections above) in the same calls and on the
+same records, optimized: its floats stay on the x87 stack and only some
+are stored. VERIFIED, read out of a live 1.1d server under gdb (the run
+of `turret/mp_carentan-dm-turret-hitbody2-script.txt`, dumps in
+`common/tests/fixtures/skel11/`): `DObjCalcAnim` is syscall 0x6f
+(0x80bcef8), `DObjCalcSkel` 0x70 (0x80c337c), `DObjUpdateServerTime`
+0x6c (0x80bf008); at `DObjCalcSkel`'s entry the skeleton (`dobj+4`,
+`dobj+0x17` bones) holds the frame's records after the matrices, 32
+bytes a bone as on UO, the control mask at `skel+0x10` and the built
+mask at `skel+0x20`; after it each record holds its bone's world
+quaternion and origin.
+
+- VERIFIED, the node time (0x80bbab0, the leaf arm): `old + dtime * rate
+  * frequency` as on 1.5b, and a looping clip's wrap by 1 on the stack
+  before the one store. vcod measurement: storing the sum before the
+  wrap (1.5b's) put the target's idle one float step under retail's
+  `+0x28` from its first wrap on, the pose 1e-7 off; kept, every node
+  time of the dump is retail's.
+- VERIFIED, the sampler (0x80b8370; 0x80b8904 for clips past 255 frames,
+  0x80b8e98 at time 1): the frame `time * numframes` (`fildl`, `fmulp`,
+  0x80b838a), `weight / 32767` (the float at 0x80db1ec, `0x38000100`) and
+  each key's fraction `(frame - key) / (next - key)` stay on the stack;
+  each rotation sum `q + (k0 + (k1 - k0) * f) * s`, each translation sum
+  `t + ((v1 - v0) * f + v0) * w` and the weight sum are stored once.
+- VERIFIED, the walk (0x80bbea8): the root's `1 / w` and a nested node's
+  scales stay on the stack; a nested node's `w / sqrt(n)` stores only
+  the `fsqrt` of the unrounded square sum (0x80bc3de); the offsets' `w /
+  weight` stay on the stack too. The unkeyed bones take the same bind
+  records as UO's (0x80bcef8).
+- VERIFIED, the dump's info table (`0x82f59a0 + 0x44 * info`, the server
+  time at `+0x28`, the weight at `+0x3c`): on the knockback kill the legs
+  node holds `pb_stand_alert` (anim 122, tree node 60 in vcod's parse of
+  `animtrees/multiplayer.atr`) at weight 1 and `pb_combatrun_forward_loop`
+  (anim 94, node 92) at 0.001.
+- vcod measurement, the walk's order: summed stand_alert first, 34 of the
+  kill's records sit a float step off retail's; run first, all match. So
+  a node's children are walked in anim index order, not in the atr's.
+- VERIFIED, 1.5b: a log of the sampler's calls (1.5b 0x80c47de) on its
+  own knockback kill takes the run before the idle.
+- vcod measurement: vcod's stored walk in that order gives every record
+  of that 1.5b dump, and its stored build every matrix (`skel11_ab`).
+- VERIFIED, the build (0x80c337c): the first pass composes each
+  quaternion, its record times its parent's or for a control bone the
+  other way, each component's four products and three sums on the stack
+  and stored once (0x80c35b7 and three copies); the second pass writes
+  each matrix off `2 / |q|^2` kept, `x * x` and `y * y` stored, a root's
+  `z * z * s` kept (0x80c39b4) and any other bone's `z * z` and its
+  product stored (0x80c3e80), `x * s` and `y * s` kept, `xz`, `xw` and
+  the diagonal's two products stored as the binary spills them, each
+  element rounded once; a bone's origin is its offset plus its bind
+  position, the `x` sum kept and `y` and `z` stored first (0x80c4061),
+  turned through the parent's matrix and added to its origin, each
+  component rounded once (0x80c4078).
+- VERIFIED, the dump: the target's five parts graft by name (`dobj+0x48`
+  all 0xff). A part grafted at a tag (its root turned through the tag's
+  matrix, 0x80c3bf1) is not ported; INFERRED, off the character scripts'
+  `attach` calls, no stock player part takes a tag.
+- VERIFIED, the trace (0x80c4564): the body's frame (0x8066520) and each
+  bone's keep each difference and store each dot product once; the slab
+  (0x80c4ad0..0x80c4bce) keeps `(p - plane) * sign`, `d1 - d2`, each `d1
+  / (d1 - d2)` and both bounds, the exit starting at the stored fraction,
+  and rounds the entry once into the result (0x80c4c4f).
+
+vcod: `skeleton::build_kept` (the build), `PoseBuffer::new_in` with
+`Arith::Kept` (the sampler and walk), `animclock::Play::kept`,
+`playerpose::layer_clips` (the anim index order, 1.1d only), and
+`bonetrace::bone_trace_in` under `Arith::Kept` with `into_frame_kept`.
+`skel11_ab` holds the records of five calls off their clips' times and
+weights and the build off retail's records, every word, and 1.5b's
+stored walk and build on its kill. VERIFIED, vcod measurement: with them
+`turret_ab`'s 1.1d `-hitgrid` knockback kill and both hits of
+`-hitbody2` are retail's bits (cod11-turrets.md 13.6). Open: 1.5b's and
+UO's poses keep the clock's layer order. In anim index order 1.5b's
+`-hitgrid-15` knockback kill moves one float step off in z, so a second
+error on that frame cancels against the order there (INFERRED; the
+dumped kill's records and build match, so it lies in that replay's
+inputs, not the walk).
+
 #### The clip's float time
 
 The frame a 1.5b or UO clip is sampled at is not its seconds times its
@@ -2600,11 +2721,11 @@ owner (`G_DObjUpdate` passes `G_GetGameId`) does split.
 
 vcod: `animclock::Play` keeps the node time beside the seconds, stepped
 in whole 50 ms frames with the sum in `f64` and stored as `f32`
-(`Play::step`), `Layer::time` hands it out, and the server's pose on
-1.5 and UO samples at `time * numframes` (`PoseInputs::node_time`).
+(`Play::step`), `Layer::time` hands it out, and the server's pose on all
+three servers samples at `time * numframes` (`PoseInputs::node_time`).
 A clip under a node with children (whose frequency the clock does not
-hold) stays on the seconds, and 1.1d keeps them throughout: its pose is
-the glam one, not the stored build.
+hold) stays on the seconds. 1.1d steps the same way with its wrap kept
+(next section, "The pose on 1.1").
 
 A leaf under a plain node keeps its own time. VERIFIED, UO
 `coduo_lnxded` 0x80bd884: a node with children whose flags (`+0xc`) carry
@@ -6861,8 +6982,18 @@ holds the freed entity (0x66add, 0x66ae5) and 0x3ff into `r.ownerNum`
 (`+0x14c`) where it holds its number (0x66aef, 0x66af7), on every entity in
 use. VERIFIED, 1.5b and UO: `G_FreeEntityRefs` makes the same two stores
 (`+0x1a0` and `+0x150` on 1.5b, `+0x1a8` and `+0x154` on UO;
-`cod11-turrets.md` 8). INFERRED: `+0x198` is `parent`, which `fire_grenade`
-and `fire_rocket` write with the thrower (UO 0x5f8c0, 0x5fd6e).
+`cod11-turrets.md` 8). VERIFIED, every access to `gentity+0x198` in 1.1d
+`game.mp.i386.so`: stores of the thrower in `fire_grenade` (0x5442d) and
+`fire_rocket` (0x546a5) (UO's 0x5f8c0, 0x5fd6e at `+0x1a8`); a store of the
+door in the unexported function at 0x56a14 that spawns a door's trigger
+(`G_Spawn`, contents 0x40000000, `touch` `Touch_DoorTrigger`,
+`trap_LinkEntity`; objdump files it under `Blocked_DoorRotate`); the clears
+in `G_FreeEntity` and `G_FreeEntityRefs` (0x66ae5, 0x68699); loads in
+`G_MissileImpact` (0x53d47) and `G_ExplodeMissile` (0x53f52) as the splash's
+attacker, and in `Touch_DoorTrigger` (0x57d51, 0x57d7a), which hands it to
+`Use_BinaryMover` (0x560ec) as the mover. INFERRED: the name is Q3's
+`parent`, whose missiles and door triggers use that field the same three
+ways; no string in the module names it.
 
 VERIFIED: every missile splash hands `G_RadiusDamage` its attacker off
 `parent`: 1.1d `G_ExplodeMissile` 0x53f52 and `G_MissileImpact` 0x53d47

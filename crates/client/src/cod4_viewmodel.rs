@@ -1177,12 +1177,12 @@ impl Cod4View {
                 .filter(|&(_, w)| w > 0.0)
                 .filter_map(|((node, t), w)| {
                     let (c, b) = rig.clip(node)?;
-                    Some((&**c, b, c.frame_pos(t * c.duration(), false), w))
+                    Some((&**c, b, f64::from(c.frame_pos(t * c.duration(), false)), w))
                 })
                 .collect();
             match layers.as_slice() {
                 [] => {}
-                [(c, b, t, _)] => pose.apply(c, b, *t),
+                [(c, b, t, _)] => pose.apply(c, b, *t as f32),
                 _ => pose.blend(&layers),
             }
         }

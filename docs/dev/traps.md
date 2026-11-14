@@ -310,7 +310,10 @@ otherwise.
   game module of the three servers, never float products. pmove's turns take
   the move world's `Arith` (`x87::angle_vectors_in`): the Windows cgames
   multiply by a float `pi / 180` and store `sr * sp` (movers doc 22,
-  "pmove's turns").
+  "pmove's turns"). The servers' x87 runs at 64 bits, so an `f64` sum of
+  the turn's triple products lands a float ulp off now and then; the turn
+  falls back to `x87::F80` near a float midpoint (movers doc 22, "The
+  stack's precision").
 - A trace an entity's clip cuts short of the world's ends where `SV_Trace`
   puts it, off the unshifted points (`sv_trace_endpos`), not where
   `CM_BoxTrace` would (movers doc 21, 22).
@@ -326,8 +329,9 @@ otherwise.
   - Patches are built with cracks along other facet seams, which a round
     slips through.
   - The brush clip stores its distances (`bsp-ibsp59-format.md`, "Patch
-    collision on 1.5 and UO"), and so do the patch capsule arm and the
-    terrain capsule clip, which reads the UO-built planes and edge frames.
+    collision on 1.5 and UO"), and so do the patch capsule arm, the
+    terrain capsule clip and the terrain position test, which read the
+    UO-built planes and edge frames.
   - pmove's fall stores its gravity, its tail and the trace's end point, and
     `PM_ClipVelocity`, `VectorNormalize` and `PM_Friction` store theirs
     (`cod15-movement.md` 7).
