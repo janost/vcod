@@ -3583,3 +3583,99 @@ before against after as in 13.4 and 13.5, VERIFIED (measured, release):
   teammate or the 20 s timer returns it. With two bots (section 7.2's
   80-seed tally, 10 captures) both take a flag and both wait, so a
   capture needs the two to meet. Not traced.
+
+## 14. Holding from the ways in, cues, spread travel (2026-11-14)
+
+A playtest report after section 13: guards of an `sd` site, a `ctf` flag
+or an `hq` radio still stood close round it; they should spread far out
+into cover, come back with care on a cue (the bomb's plant, a defuse),
+and a team on the move should spread more. vcod's own rules, with
+nothing on retail to measure against. One layer in the driver for every
+game (`bots/posts.rs`, `driver::deal_posts`, `driver::deal_far`,
+`driver::deal_hunt`), dealt once a tick before any bot thinks, so the
+plans read it alike serial and on threads (`bot_threads`).
+
+### 14.1 The rules
+
+- Who holds far (`GuardHold`, `Bot::guard_hold`). A guard of a point
+  that holds still and that its side holds against an attack: an S&D
+  site's defender before a plant, the attackers round their planted bomb,
+  a `re` objective's guards, a `ctf` defender with its flag home, a `dom`
+  flag held and the `hq` radio held. A planter's cover, a `bas` charge,
+  the `re` goal ring, a given-up point and a `ctf` goal waiting on a
+  flag hold near, as section 13. S&D defenders making for a planted bomb
+  hold near too, walking in with care (below).
+- Outposts (`posts::outer`, once per objective and graph, cached in
+  `Posts::outers`). A flood along the graph from the objective out to
+  4000 units; the band runs from 400 units along the graph out to 40%
+  of the farthest node reached, clamped to 700..1500 (`OUT_NEAR`,
+  `OUT_FAR_MIN`, `OUT_FAR_MAX`). Per eighth of the compass, a lane: the
+  shortest way in from the node 400 past the band's edge; lanes whose
+  paths pass within 256 at the band's middle are one. Candidates are
+  graph nodes in the band within 192 across of a lane's path, 96 apart,
+  16 a lane, whose standing eye sees a standing chest on the lane 400
+  further out along it. Each scores 1 where a crouched body there hides
+  from that point (it crouches there and peeks over), 0.4 in the open,
+  0.15 more beside the path than in it. It watches that point, down its
+  lane, within 60 degrees (`Bot::watch_heading`).
+- Dealing (`posts::assign_by`, `posts::OUTER`). From two far guards of
+  a side up, one, drawn per round (`NEAR_SALT`), keeps a post round the
+  objective (section 13's); the rest take outposts, at least 400 from a
+  teammate's (200, then any, where the lanes leave no room), a post on a
+  lane a teammate holds costing 0.5, held 15 to 30 s, given up 30 s
+  unreached, the next one costing a unit per 600 of walk from the last.
+  An outpost held while an enemy is in sight or a hit lands is burnt:
+  the guard leaves it at once for one at least 256 off it (`BURN_NEAR`)
+  for 30 s (`BURN_MS`), 13.8's open item.
+- Cues (`driver::cue_at`, `posts::Cue`). Per side and objective, the
+  first of:
+  - a sighting: a bot of the side sees an enemy within 900 of the
+    objective (`CUE_SEEN`): the call-out reaches the side;
+  - gunfire: a shot or blast within 600 of it (`CUE_FIRE`) that a guard
+    hears, its own range scaled by the guard's hearing (`loudest`'s);
+  - a death: a teammate stopped playing within 700 of it (`CUE_DEATH`)
+    with a guard within 1500 (`CUE_DEATH_HEAR`);
+  - contact: an enemy stands within 160 of it (`CUE_CONTACT`: the
+    defuse, the radio's capture, the flag's touch) with a guard within
+    1000 (`CUE_CONTACT_HEAR`).
+  A cue a side's bots could not perceive reaches none of them.
+- The collapse (`driver::deal_far`). A cue pulls half the outposted
+  guards back (`COLLAPSE_SHARE`, at least one), nearest the cue first,
+  starts staggered 1 s apart plus a draw of up to 0.6 s
+  (`STAGGER_MS`). Each keeps its outpost until its start, then takes a
+  post round the objective and walks in by its own route; the rest hold
+  their approach. A cue again within 20 s (`COLLAPSE_MS`) holds them
+  there; past it they go back out. After a plant the S&D defenders but
+  the defuser take posts round the bomb walking in with care
+  (`GuardHold::Back`); the defuser goes straight (`SdView::lead`).
+- Walking in with care (`GuardPost::careful`, `Bot::careful`). Within
+  700 of the objective (`CAREFUL_NEAR`) and off its post, the guard
+  walks at half keys looking at the objective while the keys keep the
+  path (as a recall look), and crouches the last 300
+  (`CAREFUL_CROUCH`); an enemy in sight ends both.
+- The `ctf` carrier (`driver::deal_hunt`, `CtfView::hunt`). While a bot
+  of a side saw the enemy carrying its flag within the last 5 s
+  (`CARRIER_MS`), the two of its bots nearest that sighting (`HUNTERS`)
+  chase it, before their own role. 13.9's open item: before, no bot
+  went for the carrier.
+- Travel (`Bot::travel`). The walk behind a teammate ahead
+  (section 9.1) keeps 360 back (`team::TRAVEL_SPACING`, against 200),
+  and a way in is dealt from 700 units out (`posts::TRAVEL_LANE_FAR`,
+  against 1200).
+- Switches: `Bot::far` (outposts, the one near, burnt posts), `Bot::cues`
+  (the collapse, the careful walk, the carrier hunt), `Bot::travel`;
+  `bot_match` `FAR=`, `CUES=`, `TRAVEL=` (on CoD2 and CoD4 `=0` turns
+  one off for all bots). All three off play section 13's moves:
+  VERIFIED (measured, `bot_match DIGEST=1` against a build of the base,
+  a0eda1a20, 1.1 `sd` mp_carentan seeds 1 and 2, 3000 ticks, the same
+  digests).
+
+### 14.2 Counts
+
+`bot_match`'s `obj` line adds, per team: `guard dist`, the mean distance
+from the point it guards over a guard's bot-ticks on its post or in its
+ring, anywhere on the map (`Bot::guard_point`); `cues`, the collapses a
+cue started; `back`, those a pulled-back guard came within 300 of the
+objective from (`BACK_NEAR`), and the mean seconds from the cue to it
+(`Server::bot_cue_tally`, `Cod2Bots::cue_tally`, `Cod4Bots::cue_tally`).
+The `mate` and `packed` columns are section 13.3's, near the objective.

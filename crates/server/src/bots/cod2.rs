@@ -458,6 +458,8 @@ impl Cod2Bots {
         fresh.driver.nav_background = self.driver.nav_background;
         fresh.man_guns = self.man_guns;
         fresh.smokes = self.smokes;
+        // `bot_match`'s cue counts run over the whole match.
+        fresh.driver.posts.tally = self.driver.posts.tally;
         if !new_map {
             fresh.driver.nav_job = self.driver.nav_job.take();
             fresh.driver.nav = self.driver.nav.take();

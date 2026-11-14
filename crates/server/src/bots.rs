@@ -1110,8 +1110,8 @@ pub struct Bot {
     /// The point its objective centres on, read at the top of the last
     /// think ([`Bot::objective_point`]).
     anchor: Option<[f32; 3]>,
-    /// The point it guarded at the last think, a guard only
-    /// ([`Bot::guard_point`]).
+    /// The point it guarded at the last think, a guard on its post or in
+    /// its ring only ([`Bot::guard_point`]).
     guarded: Option<[f32; 3]>,
     /// [`BotView::exposure`] at the last think.
     exposure: Option<f32>,
@@ -2689,8 +2689,9 @@ impl Bot {
         self.anchor
     }
 
-    /// The point it guarded at the last think: a site, a bomb, a flag, a
-    /// radio (`bot_match`'s guard distance).
+    /// The point it guarded at the last think, standing guard on its post
+    /// or in its ring: a site, a bomb, a flag, a radio (`bot_match`'s guard
+    /// distance).
     pub fn guard_point(&self) -> Option<[f32; 3]> {
         self.guarded
     }
@@ -3252,7 +3253,7 @@ impl Bot {
             self.objective_busy(view) || target.is_some_and(|t| self.at_post(view, &t));
         self.anchor = target.map(|t| Self::anchor_point(&t));
         self.guarded = match target {
-            Some(ObjTarget::Guard { at, .. }) => Some(at),
+            Some(ObjTarget::Guard { at, .. }) if self.on_objective => Some(at),
             _ => None,
         };
         self.exposure = view.exposure;
