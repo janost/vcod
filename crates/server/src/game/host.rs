@@ -219,6 +219,52 @@ pub struct Cod2HostState {
     /// CoD2 weapons dropped from a tag, waiting for the dropper's pose
     /// (`game::cod2_items::TagDrop`).
     pub tag_drops: Vec<crate::game::cod2_items::TagDrop>,
+    /// The weapon files the registrations read, which the next level over
+    /// the same paks takes ([`WeaponFiles`]).
+    pub weapon_files: WeaponFiles,
+}
+
+/// The weapon files CoD2's registrations (`precacheItem` and kin) read and
+/// parsed, by the name the script gave, kept across levels over one
+/// search path (`Carry::weapon_files`): a restart registers the same list,
+/// so it takes them instead of reading and parsing each file twice again,
+/// and touches the file, so its iwd is referenced as a read's would be
+/// (cod4-server-frame.md 9, "The restart's load").
+#[derive(Clone, Default)]
+pub struct WeaponFiles {
+    fs: std::rc::Weak<vcod_common::pk3::Pk3Fs>,
+    files: HashMap<String, Rc<WeaponFile>>,
+}
+
+/// One weapon file: its def and its keys.
+pub struct WeaponFile {
+    pub def: vcod_common::weapon::WeaponDef,
+    pub keys: HashMap<String, String>,
+}
+
+impl WeaponFiles {
+    /// `name`'s file off `fs`, parsed once per search path by `parse`;
+    /// `None` where `parse` fails, which is tried again next time.
+    pub fn get(
+        &mut self,
+        fs: &Rc<vcod_common::pk3::Pk3Fs>,
+        name: &str,
+        parse: impl FnOnce() -> Option<WeaponFile>,
+    ) -> Option<Rc<WeaponFile>> {
+        if !std::ptr::eq(self.fs.as_ptr(), Rc::as_ptr(fs)) {
+            *self = WeaponFiles {
+                fs: Rc::downgrade(fs),
+                files: HashMap::new(),
+            };
+        }
+        if let Some(f) = self.files.get(name) {
+            fs.touch(&format!("weapons/mp/{name}"));
+            return Some(f.clone());
+        }
+        let f = Rc::new(parse()?);
+        self.files.insert(name.to_string(), f.clone());
+        Some(f)
+    }
 }
 
 impl Default for Cod2HostState {
@@ -234,6 +280,7 @@ impl Default for Cod2HostState {
             death_pins: Vec::new(),
             drop_pins: Default::default(),
             tag_drops: Vec::new(),
+            weapon_files: WeaponFiles::default(),
         }
     }
 }
