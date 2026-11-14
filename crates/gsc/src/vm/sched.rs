@@ -1,5 +1,13 @@
 //! The frame scheduler. A thread suspends by being left unstepped, which is
 //! the whole reason the compiler emits bytecode rather than walking the AST.
+//!
+//! `threads` stays in start order, which is id order, so a thread is found
+//! by binary search. Two indexes stand in for walks of every thread: the
+//! threads registered on each notify's (target, event) (`NotifyIndex`) and
+//! the scheduler's next pick (`ReadyIndex`). Each holds every thread that
+//! could qualify and some that no longer do; a candidate is checked against
+//! the thread itself, so the order and the result are the walk's
+//! (docs/research/cod4-server-frame.md 9, "The spawn wave").
 
 use std::cmp::Reverse;
 use std::rc::Rc;

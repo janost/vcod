@@ -1,5 +1,13 @@
 //! The instruction loop: walks `bytecode::Op` over a frame stack until it
 //! suspends, returns, or the caller-supplied budget runs out.
+//!
+//! The loop matches each op by reference and holds the top frame across
+//! it; a call or return changes the frame stack after the op (`After`). A
+//! call's arguments and a builtin's are read in place off the caller's
+//! stack, and a returned frame's buffers go back to `Vm::frame_pool`. Two
+//! numbers of one type take an inline arm in the arithmetic and compare ops
+//! ahead of the general `eval_*` (docs/research/cod4-server-frame.md 9,
+//! "The spawn wave"; `tests/bench.rs` is the microbench).
 
 use std::rc::Rc;
 
