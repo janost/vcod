@@ -1,6 +1,7 @@
 //! Vector arithmetic rounded the way the 1.1 binaries' x87 code rounds it:
-//! every intermediate kept on the 80-bit stack (an `f64` here) and one
-//! rounding to `f32` where the binary stores. The game module's
+//! every intermediate kept on the 80-bit stack (an `f64` here, or an
+//! [`F80`] where an `f64` would round twice) and one rounding to `f32`
+//! where the binary stores. The game module's
 //! `VectorNormalize` (game.mp 0x3d8d8) and `CrossProduct` (0x3d86c) and the
 //! engine's copies (`cod_lnxded` 0x8065a38, 0x80659cc) round alike.
 
@@ -104,7 +105,7 @@ pub fn radians(deg: f32) -> f32 {
     const K: f64 = std::f64::consts::PI * 2.0 / 360.0;
     let x = f64::from(deg) * K;
     stored(x, x.abs(), || {
-        F80::from_f32(deg).mul(F80::from_f64(K)).to_f32()
+        (F80::from_f32(deg) * F80::from_f64(K)).to_f32()
     })
 }
 
@@ -128,7 +129,7 @@ pub fn angle_vectors_of_radians(rad: Vec3) -> [Vec3; 3] {
         let s = pc + d * e;
         stored(s, pc.abs() + s.abs(), || {
             let f = F80::from_f64;
-            f(p).mul(f(c)).add(f(d).mul(f(e))).to_f32()
+            (f(p) * f(c) + f(d) * f(e)).to_f32()
         })
     };
     let forward = Vec3::new((cp * cy) as f32, (cp * sy) as f32, -sp as f32);
@@ -226,24 +227,8 @@ impl F80 {
         }
     }
 
-    pub fn neg(self) -> F80 {
-        F80 {
-            neg: !self.neg,
-            ..self
-        }
-    }
-
-    /// `fmul`.
-    pub fn mul(self, o: F80) -> F80 {
-        F80::round(
-            self.neg != o.neg,
-            u128::from(self.m) * u128::from(o.m),
-            self.e + o.e,
-        )
-    }
-
     /// `fadd`; an exact zero is `+0` unless both terms are `-0`.
-    pub fn add(self, o: F80) -> F80 {
+    fn sum(self, o: F80) -> F80 {
         if o.m == 0 {
             return if self.m == 0 {
                 F80 {
@@ -299,6 +284,36 @@ impl F80 {
         }
         let v = (q as f64 * 2f64.powi(self.e + sh as i32)) as f32;
         if self.neg { -v } else { v }
+    }
+}
+
+/// `fchs`.
+impl std::ops::Neg for F80 {
+    type Output = F80;
+    fn neg(self) -> F80 {
+        F80 {
+            neg: !self.neg,
+            ..self
+        }
+    }
+}
+
+/// `fmul`.
+impl std::ops::Mul for F80 {
+    type Output = F80;
+    fn mul(self, o: F80) -> F80 {
+        F80::round(
+            self.neg != o.neg,
+            u128::from(self.m) * u128::from(o.m),
+            self.e + o.e,
+        )
+    }
+}
+
+impl std::ops::Add for F80 {
+    type Output = F80;
+    fn add(self, o: F80) -> F80 {
+        self.sum(o)
     }
 }
 
@@ -403,26 +418,18 @@ mod tests {
     fn angle_vectors_f80(angles: Vec3) -> [Vec3; 3] {
         let k = F80::from_f64(std::f64::consts::PI * 2.0 / 360.0);
         let sin_cos = |deg: f32| {
-            let r = f64::from(F80::from_f32(deg).mul(k).to_f32());
+            let r = f64::from((F80::from_f32(deg) * k).to_f32());
             (F80::from_f32(r.sin() as f32), F80::from_f32(r.cos() as f32))
         };
         let (sp, cp) = sin_cos(angles.x);
         let (sy, cy) = sin_cos(angles.y);
         let (sr, cr) = sin_cos(angles.z);
         let v = |x: F80, y: F80, z: F80| Vec3::new(x.to_f32(), y.to_f32(), z.to_f32());
-        let (srsp, crsp) = (sr.neg().mul(sp), cr.mul(sp));
+        let (srsp, crsp) = (-sr * sp, cr * sp);
         [
-            v(cp.mul(cy), cp.mul(sy), sp.neg()),
-            v(
-                srsp.mul(cy).add(cr.mul(sy)),
-                srsp.mul(sy).add(cr.neg().mul(cy)),
-                sr.neg().mul(cp),
-            ),
-            v(
-                crsp.mul(cy).add(sr.mul(sy)),
-                crsp.mul(sy).add(sr.neg().mul(cy)),
-                cr.mul(cp),
-            ),
+            v(cp * cy, cp * sy, -sp),
+            v(srsp * cy + cr * sy, srsp * sy + -cr * cy, -sr * cp),
+            v(crsp * cy + sr * sy, crsp * sy + -sr * cy, cr * cp),
         ]
     }
 
@@ -493,20 +500,19 @@ mod tests {
         let one = F80::from_f32(1.0);
         // 1 + 2^-64 is a tie at 64 bits and rounds to 1; 1 + 3 * 2^-65 up.
         let tie = F80::from_f64(2f64.powi(-64));
-        assert_eq!(one.add(tie), one);
-        assert_eq!(one.add(tie).add(tie), one);
+        assert_eq!(one + tie, one);
+        assert_eq!(one + tie + tie, one);
         let up = F80::from_f64(3.0 * 2f64.powi(-65));
-        assert_eq!(one.add(up).m, (1u64 << 63) + 1);
-        assert_eq!(one.add(one.neg()).to_f32().to_bits(), 0);
+        assert_eq!((one + up).m, (1u64 << 63) + 1);
+        assert_eq!((one + -one).to_f32().to_bits(), 0);
         assert_eq!(
-            F80::from_f32(-0.0)
-                .add(F80::from_f32(-0.0))
+            (F80::from_f32(-0.0) + F80::from_f32(-0.0))
                 .to_f32()
                 .to_bits(),
             0x8000_0000
         );
         assert_eq!(
-            F80::from_f32(0.1).mul(F80::from_f32(3.0)).to_f32(),
+            (F80::from_f32(0.1) * F80::from_f32(3.0)).to_f32(),
             0.1f32 * 3.0
         );
         let tiny = F80::from_f32(f32::from_bits(1));
