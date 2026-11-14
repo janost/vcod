@@ -969,9 +969,8 @@ impl Vm {
     pub fn install(&mut self, fns: Vec<Function>) -> Result<(), InstallError> {
         let mut prepared = Vec::with_capacity(fns.len());
         for f in &fns {
-            prepared.push(
-                crate::bytecode::prepare(f, self.size_atom).map_err(InstallError::BadStack)?,
-            );
+            prepared
+                .push(crate::bytecode::prepare(f, self.size_atom).map_err(InstallError::BadStack)?);
         }
         let mut seen = std::collections::HashSet::new();
         for f in &fns {

@@ -583,7 +583,12 @@ impl Vm {
                     let (pops, pushes) = crate::bytecode::stack_effect(&f.func_rc.code[at]);
                     // The failed op's depth on entry, which every path to it
                     // agrees on (`bytecode::Prepared::depths`).
-                    let base = f.func_rc.prepared.depths.get(at).map_or(f.sp, |&d| d.into());
+                    let base = f
+                        .func_rc
+                        .prepared
+                        .depths
+                        .get(at)
+                        .map_or(f.sp, |&d| d.into());
                     f.sp = f.sp.min((base as i32 - pops).max(0) as u32);
                     for _ in 0..pushes {
                         f.push(Value::Undefined);
@@ -803,7 +808,11 @@ impl Vm {
             let base_sp = sp;
             #[cfg(test)]
             if let Some(&d) = func.prepared.depths.get(at) {
-                assert_eq!(sp, usize::from(d), "the stack's depth at {at} is not the walk's");
+                assert_eq!(
+                    sp,
+                    usize::from(d),
+                    "the stack's depth at {at} is not the walk's"
+                );
             }
             // A spawn ran another thread, which may have ended this one.
             let mut spawned = false;
@@ -1183,9 +1192,8 @@ impl Vm {
                     // `Cx::spawn`).
                     if !pending_spawns.is_empty() {
                         let (pending, field) = (&mut *pending_spawns, &mut *field_spawns);
-                        spawned |= self.run_builtin_spawns(
-                            host, func, at, notifies, errors, pending, field,
-                        );
+                        spawned |= self
+                            .run_builtin_spawns(host, func, at, notifies, errors, pending, field);
                     }
                     push!(v);
                 }

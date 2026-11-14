@@ -642,6 +642,9 @@ struct AtomMemo {
     hud: Vec<Option<Route>>,
     builtins: Vec<Option<Option<builtins::score::Builtin>>>,
     plain: Vec<Option<bool>>,
+    /// [`AtomMemo::read`]'s answers, an entity's and a hudelem's.
+    reads: Vec<Option<(bool, Route)>>,
+    hud_reads: Vec<Option<(bool, Route)>>,
 }
 
 /// The names `GameHost::get_field` answers ahead of the field's route, for
@@ -693,6 +696,30 @@ impl AtomMemo {
             cache.resize(i + 1, None);
         }
         *cache[i].get_or_insert_with(|| f(cx.resolve_folded(field)))
+    }
+
+    /// [`Self::plain`] and [`Self::route`] together, what a read asks.
+    fn read(
+        &mut self,
+        profile: &'static crate::game::profile::HostProfile,
+        cx: &Cx,
+        field: Atom,
+        hud: bool,
+    ) -> (bool, Route) {
+        self.check(profile, cx);
+        let (cache, f) = if hud {
+            (&mut self.hud_reads, profile.route_hud)
+        } else {
+            (&mut self.reads, profile.route_entity)
+        };
+        let i = field.0 as usize;
+        if cache.len() <= i {
+            cache.resize(i + 1, None);
+        }
+        *cache[i].get_or_insert_with(|| {
+            let name = cx.resolve_folded(field);
+            (!PLAIN_EXCEPT.contains(&name), f(name))
+        })
     }
 
     /// Whether `field` is outside [`PLAIN_EXCEPT`], so a read takes its
@@ -2859,6 +2886,67 @@ pub fn rand_int(state: &mut u64) -> i32 {
     (vcod_common::rng::xorshift(state) >> 33) as i32 & 0x7fff_ffff
 }
 
+/// The field read through its route alone ([`GameHost::read_routed`]),
+/// on the entity `e` is.
+fn read_route(
+    ext: &HostExt,
+    cx: &mut Cx,
+    ent: EntId,
+    e: &crate::game::entity::GEntity,
+    field: Atom,
+    route: Route,
+) -> Value {
+    match route {
+        Route::Engine {
+            slot,
+            ty: FieldType::Enum(names),
+        } => match e.engine[slot] {
+            Value::Int(i) => match names.get(i as usize) {
+                Some(n) => Value::String(cx.intern_exact(n)),
+                None => Value::Undefined,
+            },
+            other => other,
+        },
+        // `Scr_GetGenericField`'s type-8 arm (0x6248c) reads the model
+        // byte through `G_ModelName`, so a model never set reads model
+        // configstring 0, "".
+        Route::Engine {
+            slot,
+            ty: FieldType::ModelIndex,
+        } => match e.engine[slot] {
+            Value::Undefined => Value::String(cx.intern_exact("")),
+            other => other,
+        },
+        // `Scr_GetGenericField` reads an int, float or vector straight
+        // out of the zeroed `gentity_t` (object model doc, section 4):
+        // never undefined.
+        Route::Engine { slot, ty } if ent.0 < FIRST_HUD_ELEM => match (e.engine[slot], ty) {
+            (Value::Undefined, FieldType::Int) => Value::Int(0),
+            (Value::Undefined, FieldType::Float) => Value::Float(0.0),
+            (Value::Undefined, FieldType::Vector) => Value::Vector([0.0; 3]),
+            (v, _) => v,
+        },
+        Route::Engine { slot, .. } => e.engine[slot],
+        // `e.client` is `Some` only for an entity `spawn_client` made:
+        // that is the real test, not a number range that would merely
+        // coincide with it. Retail errors on a null `ent->client`; a
+        // read has no error channel, so a client-less entity reads
+        // undefined and the write path carries the error.
+        Route::Client(i) => match &e.client {
+            Some(c) if i == fields::archive_time_index() => {
+                Value::Float(archive_time_seconds(archive_time_ms(c[i])))
+            }
+            Some(c) => c[i],
+            // CoD4 reaches the client fields only for a client: on any
+            // other entity `pers` and `maxhealth` are its own (the
+            // helicopter's, cod4-gsc.md 3.2).
+            None if matches!(ext, HostExt::Cod4(_)) => cx.get_field(e.script, field),
+            None => Value::Undefined,
+        },
+        Route::Script => cx.get_field(e.script, field),
+    }
+}
+
 impl Host for GameHost {
     fn builtin(
         &mut self,
@@ -2893,12 +2981,14 @@ impl Host for GameHost {
     }
 
     fn get_field(&mut self, cx: &mut Cx, ent: EntId, field: Atom) -> Value {
-        let plain = self.memo.plain(self.profile, cx, field);
+        let (plain, route) = self
+            .memo
+            .read(self.profile, cx, field, ent.0 >= FIRST_HUD_ELEM);
         let Some(e) = self.ents.get(ent) else {
             return Value::Undefined;
         };
         if plain {
-            return self.read_routed(cx, ent, field);
+            return read_route(&self.ext, cx, ent, e, field, route);
         }
         // A player's health lives on the host, not in the entity's engine
         // slot: retail's `health` setter (`Scr_SetHealth`) writes
@@ -2991,7 +3081,7 @@ impl Host for GameHost {
                 _ => {}
             }
         }
-        self.read_routed(cx, ent, field)
+        read_route(&self.ext, cx, ent, e, field, route)
     }
 
     /// The field write, then `Scr_SetOrigin`'s link (0x5c64f) for an
@@ -3070,55 +3160,7 @@ impl GameHost {
         let Some(e) = self.ents.get(ent) else {
             return Value::Undefined;
         };
-        match route {
-            Route::Engine {
-                slot,
-                ty: FieldType::Enum(names),
-            } => match e.engine[slot] {
-                Value::Int(i) => match names.get(i as usize) {
-                    Some(n) => Value::String(cx.intern_exact(n)),
-                    None => Value::Undefined,
-                },
-                other => other,
-            },
-            // `Scr_GetGenericField`'s type-8 arm (0x6248c) reads the model
-            // byte through `G_ModelName`, so a model never set reads model
-            // configstring 0, "".
-            Route::Engine {
-                slot,
-                ty: FieldType::ModelIndex,
-            } => match e.engine[slot] {
-                Value::Undefined => Value::String(cx.intern_exact("")),
-                other => other,
-            },
-            // `Scr_GetGenericField` reads an int, float or vector straight
-            // out of the zeroed `gentity_t` (object model doc, section 4):
-            // never undefined.
-            Route::Engine { slot, ty } if ent.0 < FIRST_HUD_ELEM => match (e.engine[slot], ty) {
-                (Value::Undefined, FieldType::Int) => Value::Int(0),
-                (Value::Undefined, FieldType::Float) => Value::Float(0.0),
-                (Value::Undefined, FieldType::Vector) => Value::Vector([0.0; 3]),
-                (v, _) => v,
-            },
-            Route::Engine { slot, .. } => e.engine[slot],
-            // `e.client` is `Some` only for an entity `spawn_client` made:
-            // that is the real test, not a number range that would merely
-            // coincide with it. Retail errors on a null `ent->client`; a
-            // read has no error channel, so a client-less entity reads
-            // undefined and the write path carries the error.
-            Route::Client(i) => match &e.client {
-                Some(c) if i == fields::archive_time_index() => {
-                    Value::Float(archive_time_seconds(archive_time_ms(c[i])))
-                }
-                Some(c) => c[i],
-                // CoD4 reaches the client fields only for a client: on any
-                // other entity `pers` and `maxhealth` are its own (the
-                // helicopter's, cod4-gsc.md 3.2).
-                None if matches!(self.ext, HostExt::Cod4(_)) => cx.get_field(e.script, field),
-                None => Value::Undefined,
-            },
-            Route::Script => cx.get_field(e.script, field),
-        }
+        read_route(&self.ext, cx, ent, e, field, route)
     }
 
     /// The field write alone, with no link: what a caller that links the
