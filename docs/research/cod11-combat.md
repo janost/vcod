@@ -3990,7 +3990,7 @@ it left slot 0's snapshot. The `probe_compass` run saw the same
 `ClientEndFrame` (`game.mp.uo.i386.so`, Ghidra output): the same compares
 of `sessionState` against 3, 2 and 1 pick the arm, and only the 1 arm
 stores 6 (7 linked) with the same `svFlags` and `takedamage` writes, so UO
-keeps a playing suicide at `pm_type` 0 too; not run live there.
+keeps a playing suicide at `pm_type` 0 too. VERIFIED live on UO since (below).
 
 vcod: the end frame keys the dead arm on the session, not the health
 (`ClientSim::session`, set in the end-frame loop;
@@ -3999,8 +3999,25 @@ vcod: the end frame keys the dead arm on the session, not the health
 `playing` keeps the body on the wire with contents, `dead` alone writes
 `pm_type` 6, and a sim no script client backs keeps the health rule. The
 death's own relink as a corpse (step 13) clears `solid` until the body's
-next link, so the suicide's frame goes out with `solid` 0 (INFERRED, off
-step 13; the probe logged no `solid`). VERIFIED, ours after
+next link, so the suicide's frame goes out with `solid` 0.
+
+VERIFIED live, 2026-11-14, `probe_suicide` with `probe_suicide_near 1`
+(slot 1 64 units off slot 0) on retail 1.1d mp_harbor and UO 1.51b
+mp_uo_harbor, two `--probe-compass` clients (whose `COMPASS` lines carry
+each player's `solid`): slot 1 reads `solid` 0x66010f in slot 0's
+snapshots, 0 on the one snapshot of the suicide's frame, and 0x66010f again
+on the next, on both servers. Slot 0's `bulletTrace` (hitCharacters on)
+from his eye at slot 1 misses him right after the `suicide()` (the
+corpse's contents), stops on him 1.5 s on with his session still
+`playing`, and still stops on him straight after the script writes
+`dead`, ahead of that frame's end frame; both servers alike. vcod: a
+script trace takes a body whose link carries `CONTENTS_BODY`
+(`builtins::combat::body_hit`) and whose sim's contents do
+(`ClientSim::hit_body`), not one with health; it skipped every body at
+health 0 before. `suicide_playing.rs` replays both runs. Open: on UO
+ours' script prints the resting body's `origin` z as 0.13 where retail's
+prints 0.12, the playerstates both 0.125 to three decimals, on every step
+of the run (1.1d prints 0.12 on both); not traced. VERIFIED, ours after
 the fix, the same probe pair against `vcod-server --gametype-script`:
 `pm_type` 0 and slot 1 in slot 0's snapshot until the `dead` write, then
 6 and gone on the same frame.

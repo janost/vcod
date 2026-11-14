@@ -33,7 +33,12 @@ Callback_PlayerConnect()
 	self.sessionstate = "playing";
 	self.maxhealth = 100;
 	self.health = 100;
-	self spawn(level.spawns[n].origin, level.spawns[n].angles);
+	//	`probe_suicide_near 1` stands slot n 64 n units off the first spawn,
+	//	for a map whose first two spawns share no PVS.
+	if(getcvar("probe_suicide_near") == "1")
+		self spawn(level.spawns[0].origin + (64 * n, 0, 0), level.spawns[0].angles);
+	else
+		self spawn(level.spawns[n].origin, level.spawns[n].angles);
 	logPrint("PROBE begin " + n + " at " + self.origin + "\n");
 	if(n == 0)
 		level.watcher = self;

@@ -95,3 +95,107 @@ fn a_suicide_that_stays_playing_keeps_pm_type_0() {
     assert!(in_phase(2).count() > 5, "{seen:?}");
     assert!(in_phase(2).all(|pm| pm == 6), "{seen:?}");
 }
+
+/// `client-probes/probe_suicide` with `probe_suicide_near 1` against
+/// retail, two clients 64 units apart (2026-11-14, recipe in the probes'
+/// README): after the `suicide()` slot 0's trace from his eye misses
+/// slot 1, whose `player_die` relinked him as a corpse; 3 s on, still
+/// `playing`, his end frame has linked him back as a body and the trace
+/// stops on him, and still does right after the script writes `dead`
+/// (cod11-combat.md 5.1, "A suicide that stays playing").
+fn probe_suicide_near(
+    fs: vcod_common::pk3::Pk3Fs,
+    map: &str,
+    proto: &'static vcod_common::net::protocol::Protocol,
+) -> Vec<String> {
+    let mut now = Instant::now();
+    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_suicide"), now);
+    sv.set_protocol(proto);
+    sv.overlay_script(
+        "maps/mp/gametypes/probe_suicide",
+        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_suicide.gsc"),
+    );
+    sv.set_cvar("probe_suicide_near", "1");
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    common::run_alone(&mut sv, &mut now, 8000);
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let mut a = common::connect(&mut sv, &qa, &mut now);
+    for _ in 0..40 {
+        now += Duration::from_millis(50);
+        a.send_frame(&NULL_USERCMD);
+        common::step(&mut sv, &qa, &mut a, now);
+    }
+    let mut b =
+        vcod_common::net::NetClient::start_with_qport(common::ClientEnd(qb.clone()), now, 0x2222);
+    for _ in 0..500 {
+        now += Duration::from_millis(50);
+        a.send_frame(&NULL_USERCMD);
+        b.send_frame(&NULL_USERCMD);
+        common::step_pair(&mut sv, (&qa, &mut a), (&qb, &mut b), now);
+        if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
+            break;
+        }
+    }
+    sv.script_log()
+        .iter()
+        .filter(|l| l.starts_with("PROBE "))
+        .cloned()
+        .collect()
+}
+
+/// Retail 1.1d on mp_harbor.
+#[test]
+fn a_playing_suicide_is_traced_again_as_retail_11d_traces_it() {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        return;
+    };
+    let retail = [
+        "PROBE begin 0 at (-7352.00, -7976.00, 115.99)",
+        "PROBE begin 1 at (-7288.00, -7976.00, 115.99)",
+        "PROBE step alive health 100 state playing trace 1 origin (-7288.00, -7976.00, 0.12)",
+        "PROBE killed 1 MOD_SUICIDE health 0",
+        "PROBE step suicide_playing health 0 state playing trace none origin (-7288.00, -7976.00, 0.12)",
+        "PROBE step suicide_playing2 health 0 state playing trace 1 origin (-7288.00, -7976.00, 0.12)",
+        "PROBE step dead_session health 0 state dead trace 1 origin (-7288.00, -7976.00, 0.12)",
+        "PROBE step respawned health 100 state playing trace none origin (-8160.00, -7000.00, 115.99)",
+        "PROBE done",
+    ];
+    assert_eq!(probe_suicide_near(fs, "mp_harbor", &PROTOCOL_V1), retail);
+}
+
+/// Retail UO 1.51b on mp_uo_harbor. Ours prints the resting body's `z`
+/// as 0.13 where retail prints 0.12 (both playerstates carry 0.125; open,
+/// cod11-combat.md 5.1), so the lines are compared up to the origin.
+#[test]
+fn a_playing_suicide_is_traced_again_as_retail_uo_traces_it() {
+    let Some(fs) = vcod_common::testing::uo_fs() else {
+        return;
+    };
+    let retail = [
+        "PROBE begin 0 at (-7352.00, -7976.00, 115.99)",
+        "PROBE begin 1 at (-7288.00, -7976.00, 115.99)",
+        "PROBE step alive health 100 state playing trace 1",
+        "PROBE killed 1 MOD_SUICIDE health 0",
+        "PROBE step suicide_playing health 0 state playing trace none",
+        "PROBE step suicide_playing2 health 0 state playing trace 1",
+        "PROBE step dead_session health 0 state dead trace 1",
+        "PROBE step respawned health 100 state playing trace none",
+        "PROBE done",
+    ];
+    let ours: Vec<String> = probe_suicide_near(
+        fs,
+        "mp_uo_harbor",
+        &vcod_common::net::protocol::PROTOCOL_V22,
+    )
+    .into_iter()
+    .map(|l| match l.split_once(" origin (") {
+        Some((head, _)) if l.starts_with("PROBE step ") => head.to_string(),
+        _ => l,
+    })
+    .collect();
+    assert_eq!(ours, retail);
+}

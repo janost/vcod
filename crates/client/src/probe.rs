@@ -12668,7 +12668,7 @@ fn write_weapsel_fixture(
 /// `iCompassFriendInfo`, eye, yaw or player entity list changed, with the
 /// field decoded the way the cgame reads it (offsets `field * 4 - 1020`, yaw
 /// the signed top byte times 360/256) and the players the snapshot carries
-/// with their origins. Two of these on one team measure
+/// with their origins, `eFlags` and `solid`. Two of these on one team measure
 /// `G_GetNonPVSFriendlyInfo` (docs/research/cod11-hud-protocol.md, section
 /// 9, "Compass friendlies"). Writes no fixture.
 #[derive(Default)]
@@ -12729,11 +12729,12 @@ impl CompassProbe {
             .map(|(n, e)| {
                 let t = Trajectory::read(e, p, "pos");
                 format!(
-                    "{n}@{:.1},{:.1},{:.1} ef={:#x}",
+                    "{n}@{:.1},{:.1},{:.1} ef={:#x} solid={:#x}",
                     t.base.x,
                     t.base.y,
                     t.base.z,
-                    e.field_i32(p, "eFlags")
+                    e.field_i32(p, "eFlags"),
+                    e.field_i32(p, "solid")
                 )
             })
             .collect();

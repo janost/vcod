@@ -2260,11 +2260,14 @@ impl ClientSim {
         self.anim.legs()
     }
 
-    /// This client's body as a locational trace meets it, `None` unless it
-    /// is alive and playing: the link where its last cmd left it, posed the
-    /// way its last end frame did (`docs/research/cod11-combat.md` 16.1).
+    /// This client's body as a locational trace meets it, `None` unless its
+    /// contents hold `CONTENTS_BODY`, the trace's mask: the link where its
+    /// last cmd left it, posed the way its last end frame did
+    /// (`docs/research/cod11-combat.md` 16.1). A `suicide()` that stays
+    /// `playing` is a corpse until its next end frame and a body again
+    /// after (5.1, "A suicide that stays playing").
     pub fn hit_body(&self, slot: usize) -> Option<crate::game::combat::HitBody> {
-        if self.dead {
+        if self.contents & CONTENTS_BODY == 0 {
             return None;
         }
         self.dobj(slot)

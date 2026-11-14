@@ -1594,6 +1594,11 @@ cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-compass --probe-secs 28
 Against ours: `vcod-server mp_harbor --gametype-script
 crates/gsc/tests/fixtures/semantics/client-probes/probe_suicide.gsc`.
 
+`+set probe_suicide_near 1` stands slot n 64 n units off the first spawn,
+for UO's mp_uo_harbor, whose first two spawns share no PVS (and 1.1d's
+mp_harbor, where the trace needs the line). `suicide_playing.rs` replays
+both near runs (`cod11-combat.md` 5.1).
+
 ## probe_squad
 
 1.5's squad say between squad members (`cod15-protocol-diff.md` 13). The
