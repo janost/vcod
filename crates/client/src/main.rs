@@ -384,7 +384,8 @@ struct Args {
     /// client-probes/probe_pickup's teleport onto the first fg42, stands on
     /// it, aims at it and takes it with the use key, takes the second one's
     /// ammo by touch after the probe's second teleport, then swaps the
-    /// carbine for a panzerfaust and back. Writes
+    /// carbine for a panzerfaust and back, logging every cmd and snapshot
+    /// from the spawn on. Writes
     /// crates/server/tests/fixtures/items/<map>-dm-pickup.txt.
     /// Retail evidence when taken against tools/run_probe.sh; a run against
     /// vcod-server overwrites it.
@@ -459,9 +460,10 @@ struct Args {
     probe_killcam_skip_ms: Option<u64>,
     /// With `--net-probe` and `--probe-team`: stand still and print a `FALL`
     /// line per snapshot whose ground entity, `pm_flags`, `pm_time`, events
-    /// or health moved, and a `CMDS` line of the `serverTime`s it sent every
-    /// 60 cmds; `client-probes/probe_fall` does the dropping. Writes no
-    /// fixture.
+    /// or health moved, a `CMDS` line of the `serverTime`s it sent every 60
+    /// cmds, and a `SPAWNED` line at the first spawned snapshot (time,
+    /// `commandTime`, origin, view, velocity); `client-probes/probe_fall`
+    /// does the dropping. Writes no fixture.
     #[arg(long)]
     probe_fall: bool,
     /// With `--probe-fall`: hold forward on every cmd at this world yaw, so
@@ -502,7 +504,8 @@ struct Args {
     probe_ride: bool,
     /// With `--net-probe` and `--probe-team`: stand still and print an `ITEM`
     /// line per snapshot an item entity appeared, changed or left, with its
-    /// index, owner, ground, both trajectories and its event ring;
+    /// index, owner, ground, both trajectories and its event ring, and its
+    /// cmds as `SPAWNED` and `CMDS` lines (`--probe-fall`'s);
     /// `client-probes/probe_itemdrop` drops, spawns and respawns the items.
     /// Writes no fixture.
     #[arg(long)]
@@ -709,7 +712,8 @@ struct Args {
     /// --probe-weapon thompson_mp) fires bursts strafing, running,
     /// crouched, sighted and leaning; `bipod` (UO, `+set probe_spot wall`,
     /// --probe-weapon mg30cal_mp) from the bipod deployed short of a wall
-    /// with the view swung off it. Tag the fixture `moveshot-<part>-1.5` or
+    /// with the view swung off it. The wait before the script goes in as
+    /// `!wsnap` and `!wcmd` lines. Tag the fixture `moveshot-<part>-1.5` or
     /// `-uo`; moveshot_ab.rs replays it (cod11-combat.md 2.1).
     #[arg(long, value_enum, value_name = "PART")]
     probe_moveshot: Option<probe::MoveShot>,

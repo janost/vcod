@@ -437,7 +437,7 @@ impl BotWorld for Cod2Server {
     }
 
     /// No seats on CoD2.
-    fn drive_waypoint(&mut self, _: usize, _: Goal, _: &SeatView) -> Option<[f32; 3]> {
+    fn drive_waypoint(&mut self, _: usize, _: Goal, _: &mut SeatView) -> Option<[f32; 3]> {
         None
     }
 
