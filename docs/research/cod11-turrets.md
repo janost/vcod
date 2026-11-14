@@ -738,9 +738,10 @@ Not determined:
   their last frame, and no captured firing snapshot blends them.
 - The body's yaw. VERIFIED, 7.1: `BG_PlayerStateToEntityState` is called at a
   lower address than the `AxisToAngles` store. INFERRED: the entity state is
-  built before the store, so the yaw never reaches the wire and no capture
-  can check it. vcod blends the leaves' yaw rotations by weight. The client
-  works the same yaw out for itself and draws it (14.7).
+  built before the store, so the yaw never reaches the wire. vcod blends the
+  leaves' yaw rotations by weight. The client works the same yaw out for
+  itself and draws it (14.7). A trace reads it through `r.currentAngles`,
+  and 13.10's captures pin it to retail's on 1.5b and UO.
 - Whether the goal weights pose anything besides this routine's own deltas
   (the gunner's server-side body for a locational hit, for one). vcod does
   not keep them.
@@ -1466,15 +1467,12 @@ Where vcod differs or chooses:
   rounds to 54 first.
 - A gun with no `stopFireSound` keeps its loop through the frame the timer
   runs out (6.4's `je` past the clear).
-- INFERRED: every gunner's aim and fire run in `turret_think_client` before
-  any gunner's round is traced, so two gunners in each other's arc can both
-  fire in one frame and kill each other. Retail traces and delivers each hit
-  inside that gunner's own `ClientEndFrame`, so the second gunner is already
-  dead before his shot.
-- The hit trace poses a gunner in the view-yaw frame `place_gunner` wrote
-  that frame. INFERRED, from 7.1's `AxisToAngles`: retail's body yaw comes off
-  the gun's axis instead, up to about 45 degrees off the view yaw at the arc
-  edges; no capture pins which pose a live round meets.
+- Each gunner's round is traced and delivered inside his own turn of the
+  `ClientEndFrame` pass, as retail's: a higher slot killed by a lower
+  slot's round fires nothing that frame. VERIFIED, 13.10.
+- A trace meets a gunner in the placement's body angles until his next cmd
+  or `setPlayerAngles`, with his last placement's rows landed before the
+  entity pass. VERIFIED, 13.10.
 - The gunner's `ps.eFlags` 0x400 (`EF_FIRING`) comes from `fire_tick`'s shot
   and from `PmoveSingle`'s trigger bit (combat doc 16.5), set for every cmd
   with attack held, his own weapon ready and its clip loaded. INFERRED,
@@ -2116,6 +2114,101 @@ reads weight 0 and drops out, and the layer before it (the idle at the
 mount, the aim group at the first shot) poses as itself. vcod measurement
 (`TURRET_REPORT=1`, both gunner-grid captures): every cell within 0.0001 (UO
 5.7e-5, 1.5b 8.4e-5).
+
+### 13.10 Two gunners in each other's arc
+
+`client-probes/probe_gunduel` (tdm, mp_carentan, any patch) mans
+mp_carentan's gun at (1712 1830 8), gun A, with an allied
+`--probe-uo-weapon direct` client (slot 0), moves the map's other gun 300
+units in front of it facing back, gun B, and mans it with an axis one
+(slot 1), both through `useby` at level time 20000. The script sets both
+views every frame and drives both triggers: `turn_b` sweeps gun B 40 right
+to 40 left and back at 4 degrees a frame while A holds the trigger on B's
+chest; `turn_a` swaps the roles; `duel` has both fire at each other and,
+0.5 s in, every hit kill. Every hit logs its point and direction to the
+float's last bit and a 5 by 5 `bulletTrace` grid round the point (the pose
+the round met); every frame logs each gunner's origin. Captures (recipe in
+each header), all 2026-11-14, each with both clients' `CMDS` lines and the
+server's receive order (`RECV`, docs/dev/retail.md "Receive order"):
+`crates/server/tests/fixtures/gunduel/mp_carentan-gunduel.txt` (1.1d),
+`-gunduel-1.5.txt` (1.5b), `-gunduel-uo.txt` (UO 1.51b). `gunduel_ab`
+replays them.
+
+The kill frame:
+
+- VERIFIED, all three captures: from 26250 to 26650 each frame logs one hit
+  of A's round on B and one of B's on A. At 26700, the `lethal` frame, the
+  log holds A's round on B only, and none after: the lower slot's round
+  killed B inside A's `ClientEndFrame`, and B's own end frame released the
+  gun instead of firing (6.1's `sessionstate` test, 8). INFERRED: a higher
+  slot's gunner never trades a kill with a lower one in the same frame;
+  the lower slot's round always lands first.
+- vcod: ours traces and delivers each gunner's round inside his own turn of
+  the `ClientEndFrame` pass (`server/cod1_frame.rs`), so the replay logs
+  retail's hits, frame, victim and attacker, on all three.
+
+The pose a round meets (backlog #74). Two writes decide it:
+
+- VERIFIED, 7.1: the placement stores `AxisToAngles` of the gun's axis
+  times the body's yaw axis into `ent.r.currentAngles` (1.1d 0x51ffb), and
+  a trace places the DObj by `r.currentAngles` (combat doc 3.7).
+  VERIFIED, vcod measurement, the 1.1d capture: with the gunner's DObj
+  stood in the view's yaw after his own end frame, slot 1's rounds on slot
+  0 in `turn_a` (the victim placed that frame) read up to 9.2 units off
+  retail's along the ray, one torso hit reads as a head hit and two rounds
+  hit that missed on retail; stood in the placement's angles, every hit
+  lands where retail's did, to 0.011 on 1.1d and to two float steps on 1.5b
+  and UO. INFERRED: from the
+  placement to his next cmd (`ClientThink_real`'s `(0, view yaw, 0)`) or
+  `setPlayerAngles`, every trace meets the gunner turned by the placement's
+  body yaw, about 8 degrees off the view's with the barrel straight ahead,
+  which resolves 7.2's "the body's yaw" for a trace.
+- VERIFIED, 13.7 and 13.9: 1.1d's `G_DObjUpdateServerTime` and 1.5b's and
+  UO's `G_XAnimUpdate` run once per frame after the thread passes and
+  before the entity pass and every `ClientEndFrame`, and their weight step
+  (1.1d `cod_lnxded` 0x80bb130, 1.5b 0x80c788a, UO 0x80bcc1e) lands every
+  goal the placement set a frame earlier. VERIFIED, vcod measurement: with
+  the step taken in each gunner's own end frame, slot 0's rounds on slot 1
+  in `turn_b` (the victim not yet placed this frame) read up to 0.77 off on
+  1.1d and 1.06 on 1.5b, on every other frame of the sweep; landed for
+  every gunner before the entity pass, they read retail's to two float
+  steps on 1.5b and UO and on 1.1d outside the arc's middle (below).
+  INFERRED: a lower slot's round meets a higher slot's gunner at his last
+  frame's placement, landed, and the gun's new aim has not moved him yet.
+
+vcod: the placement stands the gunner's DObj in `quat_angles` of its body
+rotation (`DobjStamps::set_angles`) until his next cmd or `setPlayerAngles`;
+`ClientSim::land_gunner_goals` runs the weight step for every client right
+after the thread passes (1.5's and UO's `GunnerTree::step`, moved out of
+`commit_pose`; 1.1's rows copied onto the pose), and the host's copies of
+a gunner's body are refreshed after his placement so a later slot's script
+trace reads it. Ours lands after both of 1.1d's thread passes, where
+retail's step sits between them: a gunner traced in 1.1d's second pass
+reads his rows a frame early on ours. INFERRED, unmeasured.
+
+The origins: VERIFIED, vcod measurement, every `PROBE at` row of the three
+captures reads retail's to one float step (2^-13 at 1024..2048).
+
+Open, held as `gunduel_ab` gaps:
+
+- The duel on 1.5b and UO (`DUEL_GAPS`): a round on a firing gunner reads
+  0.01 to 0.37 off along the ray from the second frame both fire, cells up
+  to 7.8, on both victims; the first frame reads retail's points and cells
+  to 0.0013. Not determined. Ruled out: the frame order above (both
+  victims are off, the one placed this frame too) and the aim group (the
+  turn phases' victims hold the aim leaves and match). INFERRED: the fire
+  group's node time or its blend out of the aim group, which no earlier
+  capture traced in the end-frame pass (13.9's grids run in the thread
+  pass).
+- 1.1d (`POSE_GAPS_11`): points 0.0004 to 0.011 off on a gunner his own end
+  frame placed, cells to 0.06; on one not yet placed, retail's points to
+  the float step where his blend has no `forward` leaf and 0.08 to 0.2 off
+  where it has one (the sweep's middle, `s` -12 to 24, and the duel), cells
+  0.1 to 0.3 throughout. Not determined. Ruled out by vcod measurement: the
+  DObj's frame (standing it in the placement's angles past the cmd and
+  `setPlayerAngles` puts slot 1's rounds up to 2.8 off). 1.1d has no
+  gunner grid capture (13.9's are 1.5b and UO), and its bone trace is not
+  ported store for store (13.5).
 
 ## 14. The client
 

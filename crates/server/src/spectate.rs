@@ -206,6 +206,13 @@ pub struct VehicleOverlap {
     pub at: Vec3,
 }
 
+/// A gunner's turret group and the one his legs left, each with its rows
+/// and leaves (`ClientSim::gunner_leaves`, `gunner_left`).
+pub type TurretLegs = (
+    Option<(usize, Vec<vcod_common::turretpose::TurretRow>)>,
+    Option<(usize, Vec<vcod_common::turretpose::TurretRow>)>,
+);
+
 pub struct ClientSim {
     pub ps: pmove::PlayerState,
     pub pm_type: PmType,
@@ -2288,6 +2295,27 @@ impl ClientSim {
         }
     }
 
+    /// The weight step of 1.1d's `G_DObjUpdateServerTime` (0x80bb130) and
+    /// of 1.5's and UO's `G_XAnimUpdate` (UO game.mp 0x69983), after the
+    /// frame's thread passes and before any end frame: the goals the last
+    /// placement set land on the rows, so a lower slot's round meets them
+    /// before this gunner's own end frame places him again
+    /// (cod11-turrets.md 13.9, 13.10). Returns the turret group and the one
+    /// left, as the pose now holds them, when he has either.
+    pub fn land_gunner_goals(&mut self) -> Option<TurretLegs> {
+        if self.ps.rules.v15() {
+            let dt = (f64::from(0.001f32) * f64::from(crate::server::FRAME_MS)) as f32;
+            self.gunner_tree.step(dt);
+            self.gunner_rows_from_tree();
+        }
+        if self.gunner_leaves.is_none() && self.gunner_left.is_none() {
+            return None;
+        }
+        self.pose.turret_leaves.clone_from(&self.gunner_leaves);
+        self.pose.turret_left.clone_from(&self.gunner_left);
+        Some((self.gunner_leaves.clone(), self.gunner_left.clone()))
+    }
+
     /// `gunner_leaves` and `gunner_left` as `gunner_tree` holds them now.
     fn gunner_rows_from_tree(&mut self) {
         let tree = &self.gunner_tree;
@@ -2378,13 +2406,6 @@ impl ClientSim {
         angles.movetype = self.movetype.bit();
         angles.step(&input, frametime_ms, swing_speed);
         angles.update_conditions(&input);
-        // `G_XAnimUpdate`'s weight step, ahead of the end frames (UO
-        // game.mp 0x69983; cod11-turrets.md 13.9).
-        if self.ps.rules.v15() {
-            let dt = (f64::from(0.001f32) * f64::from(frametime_ms)) as f32;
-            self.gunner_tree.step(dt);
-            self.gunner_rows_from_tree();
-        }
         let (eased, mut seat_ramp) = (self.pose.eased, self.pose.seat_ramp.clone());
         self.pose = crate::game::combat::BodyPose {
             assembly: self.assembly.clone(),

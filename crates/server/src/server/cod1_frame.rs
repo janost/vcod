@@ -56,6 +56,16 @@ impl Cod1Module {
             crate::tick_trace::step!("Scr_RunThreads");
             rt.run_threads(sv_time_ms);
             *test_client_counter = rt.host.test_clients.counter;
+            // 1.1's `G_DObjUpdateServerTime` lands each gunner's last
+            // placement before the entity pass (turrets doc 13.10).
+            for (slot, c) in clients.iter_mut().enumerate() {
+                let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) else {
+                    continue;
+                };
+                if let Some(legs) = sim.land_gunner_goals() {
+                    rt.land_gunner_goals(slot, &legs);
+                }
+            }
             for (slot, port, name) in std::mem::take(&mut rt.host.test_clients.added) {
                 Server::install_test_client(clients, slot, port, name, proto, sv_time_ms);
             }
@@ -859,6 +869,12 @@ impl Cod1Module {
                     buttons & vcod_common::net::msg::BUTTON_ATTACK != 0,
                     self.anims.as_deref().map(|a| (a, &mut self.hit_rigs)),
                 );
+                // A script trace in a later slot's callback meets the body
+                // the placement just moved (turrets doc 13.10).
+                if sim.gunner_leaves.is_some() {
+                    rt.set_client_body(slot, sim.hit_body(slot));
+                    rt.set_client_dobj(slot, sim.dobj(slot));
+                }
                 sim.end_frame_entity = sim.linked().then(|| {
                     let e = sim.to_entity(proto, slot, c.last_processed_st);
                     (sv_time_ms, e)
