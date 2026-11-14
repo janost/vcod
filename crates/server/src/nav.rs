@@ -1999,7 +1999,7 @@ const WAIT_REACH: f32 = 48.0;
 const WAIT_TICKS: u32 = 40;
 /// The most of the tick's plan budget one follower's search takes, so a
 /// long search leaves some for the bots after it.
-const PLAN_SLICE: u32 = 2000;
+pub(crate) const PLAN_SLICE: u32 = 2000;
 /// How long the edge a follower got stuck on stays out of its plans. What
 /// blocks a proven edge is mostly a body: a bot guarding the bomb at the
 /// foot of mp_rocket's stairs held another there for 11 s.
@@ -2183,7 +2183,7 @@ fn seg_dist_flat(a: Vec3, b: Vec3, p: Vec3) -> f32 {
 /// One bot's walk along the graph: the destination, the planned path and
 /// the bookkeeping that notices when it has gone wrong. The server keeps one
 /// per bot and asks it for the waypoint every tick.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Follower {
     dest: Option<u32>,
     path: Vec<u32>,
@@ -2351,6 +2351,7 @@ pub struct Follower {
 
 /// A [`Follower`] plan set aside when its point goal moved off, and the
 /// tick it was.
+#[derive(Clone)]
 struct Parked {
     dest: u32,
     path: Vec<u32>,
@@ -3673,8 +3674,9 @@ impl Follower {
 
     /// Where to stand aside for an oncoming body in a way with no room to
     /// pass: the plan found no way round the bodies in the way
-    /// ([`Self::bodies_in_way`]), and one of `oncoming` (origin, and the way
-    /// it heads: the bodies this one gives way to) stands in the way,
+    /// ([`Self::bodies_in_way`]), and one of `oncoming`'s (origin, and the
+    /// way it heads: the bodies this one gives way to; read only past the
+    /// tests on this body, at most once) stands in the way,
     /// heading at the body. The spot is a node one or two level edges off
     /// across the line between them ([`NavGraph::sidestep`]), clear of
     /// that line by two half-widths, else [`ASIDE_BACK`] straight back
@@ -3689,12 +3691,12 @@ impl Follower {
         g: &NavGraph,
         at: Vec3,
         body: Footing,
-        oncoming: &[(Vec3, Vec3)],
+        oncoming: impl FnOnce() -> Vec<(Vec3, Vec3)>,
     ) -> Option<Vec3> {
         use vcod_common::pmove::HALF_WIDTH;
         self.aside_rest = self.aside_rest.saturating_sub(1);
         if let Some((spot, dir, left)) = self.aside {
-            let ahead = oncoming.iter().any(|&(o, _)| {
+            let ahead = oncoming().iter().any(|&(o, _)| {
                 let d = (o - at).truncate();
                 d.length() < 2.0 * BODY_REACH && d.dot(dir.truncate()) > 0.0
             });
@@ -3723,7 +3725,7 @@ impl Follower {
             .path
             .get(self.next)
             .map(|&n| (g.nodes[n as usize] - at).truncate())?;
-        let &(o, _) = oncoming.iter().find(|&&(o, way)| {
+        let &(o, _) = oncoming().iter().find(|&&(o, way)| {
             let (d, way) = ((o - at).truncate(), way.truncate());
             d.length() < BODY_REACH
                 && (o.z - at.z).abs() < BODY_RISE
@@ -4673,6 +4675,7 @@ pub enum Plan {
 /// An A* under way, over the directed edges with Euclidean cost and
 /// heuristic. [`Search::run`] expands at most its budget per call, so a long
 /// plan spreads over ticks rather than stalling one.
+#[derive(Clone)]
 pub struct Search {
     from: u32,
     to: u32,
@@ -4886,7 +4889,7 @@ impl NavGraph {
 }
 
 /// A* open-list entry; a min-heap on `f`, ties to the lower node index.
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 struct Open {
     f: f32,
     node: u32,
@@ -4984,6 +4987,24 @@ pub fn with_step<R>(step: Option<Arc<dyn WalkStep>>, f: impl FnOnce() -> R) -> R
     let r = f();
     STEP.set(was);
     r
+}
+
+/// The walks' rules and step in force on a thread ([`with_rules`],
+/// [`with_step`]), carried to a worker thread that walks for it: the bots'
+/// pass plans on workers under the ticking thread's (`bots::driver::par`).
+#[derive(Clone)]
+pub(crate) struct WalkRules(MoveRules, Option<Arc<dyn WalkStep>>);
+
+impl WalkRules {
+    /// This thread's.
+    pub(crate) fn here() -> WalkRules {
+        WalkRules(RULES.get(), own_step())
+    }
+
+    /// Runs `f` under them.
+    pub(crate) fn enter<R>(&self, f: impl FnOnce() -> R) -> R {
+        with_rules(self.0, || with_step(self.1.clone(), f))
+    }
 }
 
 /// The step in force ([`with_step`]).
@@ -5268,7 +5289,7 @@ pub(crate) fn drop_ahead(
     p: Vec3,
     dir: Vec3,
     look: f32,
-    creases: &mut Creases,
+    creases: &mut impl CreaseCache,
 ) -> Option<f32> {
     use vcod_common::pmove::{HALF_WIDTH, JUMP_HEIGHT, MIN_WALK_NORMAL, STEPSIZE, Stance};
     let mins = Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0);
@@ -5351,10 +5372,64 @@ pub(crate) fn drop_ahead(
 #[derive(Default)]
 pub struct Creases(std::collections::HashMap<[i32; 3], bool>);
 
-impl Creases {
+/// The crease verdicts [`drop_ahead`] reads and fills: a level's
+/// [`Creases`], or a worker's [`CreaseRead`] over them.
+pub(crate) trait CreaseCache {
+    /// Whether the spot `p` drains into a crease, felt from `p` the first
+    /// time its cell is read.
+    fn drains(&mut self, world: &CollisionWorld, p: Vec3) -> bool;
+}
+
+fn crease_cell(p: Vec3) -> [i32; 3] {
+    (p / 8.0).floor().as_ivec3().to_array()
+}
+
+impl CreaseCache for Creases {
     fn drains(&mut self, world: &CollisionWorld, p: Vec3) -> bool {
-        let cell = (p / 8.0).floor().as_ivec3().to_array();
-        *self.0.entry(cell).or_insert_with(|| drains(world, p))
+        *self
+            .0
+            .entry(crease_cell(p))
+            .or_insert_with(|| drains(world, p))
+    }
+}
+
+impl Creases {
+    /// Keeps the cells a [`CreaseRead`] felt, when each reads as here
+    /// wherever both hold it: then a probe that read them on a worker read
+    /// what it would have read here. `false` keeps none.
+    pub(crate) fn merge(&mut self, fresh: &[([i32; 3], bool)]) -> bool {
+        if fresh
+            .iter()
+            .any(|(c, v)| self.0.get(c).is_some_and(|k| k != v))
+        {
+            return false;
+        }
+        for &(c, v) in fresh {
+            self.0.entry(c).or_insert(v);
+        }
+        true
+    }
+}
+
+/// [`Creases`] read from a worker thread: a cell they lack is felt into
+/// `fresh`, in the order felt, for [`Creases::merge`].
+pub(crate) struct CreaseRead<'a> {
+    pub(crate) base: &'a Creases,
+    pub(crate) fresh: Vec<([i32; 3], bool)>,
+}
+
+impl CreaseCache for CreaseRead<'_> {
+    fn drains(&mut self, world: &CollisionWorld, p: Vec3) -> bool {
+        let cell = crease_cell(p);
+        if let Some(&v) = self.base.0.get(&cell) {
+            return v;
+        }
+        if let Some(&(_, v)) = self.fresh.iter().find(|c| c.0 == cell) {
+            return v;
+        }
+        let v = drains(world, p);
+        self.fresh.push((cell, v));
+        v
     }
 }
 
@@ -6737,7 +6812,7 @@ mod tests {
         assert_eq!(step(&mut f), Some([32.0, 0.0, 0.0]));
         // Room to pass: no give way.
         assert_eq!(
-            f.stand_aside(&g, at.into(), Footing::STANDING, &coming),
+            f.stand_aside(&g, at.into(), Footing::STANDING, || coming.to_vec()),
             None
         );
         let held = |f: &mut Follower| {
@@ -6748,21 +6823,24 @@ mod tests {
         // One standing still is waited on, not given way to.
         let still = [(other, Vec3::ZERO)];
         assert_eq!(
-            f.stand_aside(&g, at.into(), Footing::STANDING, &still),
+            f.stand_aside(&g, at.into(), Footing::STANDING, || still.to_vec()),
             None
         );
         let spot = Some(Vec3::new(32.0, 48.0, 0.0));
         assert_eq!(
-            f.stand_aside(&g, at.into(), Footing::STANDING, &coming),
+            f.stand_aside(&g, at.into(), Footing::STANDING, || coming.to_vec()),
             spot
         );
         assert_eq!(
-            f.stand_aside(&g, at.into(), Footing::STANDING, &coming),
+            f.stand_aside(&g, at.into(), Footing::STANDING, || coming.to_vec()),
             spot
         );
         // Past the bot: plan again.
         let past = [(Vec3::new(-24.0, 0.0, 0.0), Vec3::new(-100.0, 0.0, 0.0))];
-        assert_eq!(f.stand_aside(&g, at.into(), Footing::STANDING, &past), None);
+        assert_eq!(
+            f.stand_aside(&g, at.into(), Footing::STANDING, || past.to_vec()),
+            None
+        );
         assert_eq!(step(&mut f), Some([32.0, 0.0, 0.0]));
         assert_eq!(f.path, [0, 1, 2, 3, 4, 5]);
     }

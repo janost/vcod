@@ -53,7 +53,7 @@ pub(crate) struct Retreat {
 }
 
 /// What the retreat reads off the body; the server fills it.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Vitals {
     pub health: i32,
     pub max_health: i32,

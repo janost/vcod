@@ -105,6 +105,37 @@ ping rings, pacing, fragments and timeout clock are its `link`
   archive, `cfg`) beside its game module, `Cod1Game::module` (`Cod1Module`).
   `Lend` is what the engine lends the module for one call.
 
+## The bots' threads
+
+The bots' pass stays where `HEAD` puts it, on the ticking thread, and
+every write it makes stays there, in slot order. Inside it
+(`bots::driver::step`) two kinds of per-bot work run on worker threads
+over `&` reads of the driver and the world:
+
+- each bot's cover look (`cover::find`), taken after every bot's sense;
+- each bot's plan (`driver::plan`): the retreat's cover, the hunt's
+  vantage, the way given, the goal, the route (A*, the follower's walks
+  and traces) and the drop and wall probes, over the state pass 3 starts
+  with, the game's own hooks (`pre_route`, `pre_think`) left out.
+
+Pass 3's loop then runs as on one thread and takes a planned part only
+where its reads match: a route's game reads (`RouteIn`), view, goal, the
+bodies it gave way to and a budget of at least a search's slice; a
+probe's feet and the creases it felt (`Creases::merge`). Anything an
+earlier bot's turn or a hook changed fails the check and is worked out
+there and then, so the bots move as on one thread: `bot_threads::`
+(testing.md) runs one seeded match per game both ways and compares every
+tick. What stays on the ticking thread: the commands, the enemy sight
+(the games' levels are not `Sync`), the objective deal, the hooks, the
+lob probe, `think` and the cmds (`bots/moves`).
+
+The workers are a pool per ticking thread (`driver::par`), woken after
+the nav tick so they are on a core by the plans, spinning until the plans
+are in, parked between ticks. `VCOD_BOT_THREADS=<n>` sets the threads, the
+ticking one among them (default the cores up to 4; `1` runs the pass as
+before it had workers). Measured in bot-navigation.md section 3, "The
+pass on threads".
+
 ## Tracing a tick
 
 - `VCOD_TICK_TRACE=<path>` on `vcod-server` writes the tick's step log

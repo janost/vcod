@@ -80,7 +80,9 @@ still missing against retail, and what vcod adds that retail never had.
 and `listbots` work in all four games. One driver runs them over a nav
 graph built from each game's own pmove; they join through the stock
 menus, play the objectives and fight. On CoD1, UO and CoD2 they also yell
-the stock quick messages ("Grenade!", "Enemy down!"). Retail has no bots,
+the stock quick messages ("Grenade!", "Enemy down!"). Their routes, cover
+and probes are worked out on up to four threads beside the server's own
+(`VCOD_BOT_THREADS`), moving every bot as one thread would. Retail has no bots,
 so there's no oracle to blame for these ([bots.md](bots.md)).
 
 ### Measuring against retail
