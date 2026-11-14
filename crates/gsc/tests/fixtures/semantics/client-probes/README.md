@@ -1614,6 +1614,14 @@ cargo run -p vcod -- --game-dir <1.5> --net-probe 127.0.0.1:28970 --probe-say "1
 
 `crates/server/tests/squad_ab.rs` replays it.
 
+## probe_tcrestart
+
+`addTestClient` across `map_restart(false)` on 1.1d, no client
+(`cod11-gsc-object-model.md` 25): `COD_LNXDED_HOME=<absolute, no '+'>
+PROBE_SECS=25 tools/run_probe.sh client-probes/probe_tcrestart mp_pavlov`.
+It runs no client, but replays only on a whole server
+(`crates/server/tests/testclient.rs`), so it lives here.
+
 ## probe_tankcompass
 
 What United Offensive's `G_GetNonPVSTankInfo` packs into

@@ -128,7 +128,7 @@ fn a_test_client_rejoins_after_a_map_restart_as_on_retail() {
     let mut sv = vcod_server::Server::new(common::cfg("mp_pavlov", "probe_tcrestart"), now);
     sv.overlay_script(
         "maps/mp/gametypes/probe_tcrestart",
-        include_str!("../../gsc/tests/fixtures/semantics/probe_tcrestart.gsc"),
+        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_tcrestart.gsc"),
     );
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
