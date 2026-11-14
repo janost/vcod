@@ -343,6 +343,9 @@ pub struct PlayerBody {
     /// A CoD4 body's lean dvars: its controls are CoD4's
     /// ([`Controllers::cod4`]); `None` poses CoD2's.
     pub cod4_lean: Option<LeanDvars>,
+    /// A CoD4 body's swings folded in floats, as `cod4_lnxded` folds them
+    /// (the server's hit poses); `false` folds them in shorts.
+    pub float_swing: bool,
 }
 
 impl PlayerBody {
@@ -391,7 +394,10 @@ impl PlayerBody {
         let input = Self::input(anims, f);
         let (_, mantle) = body_flags(f.eflags);
         let updater = match self.cod4_lean {
-            Some(_) => Updater::Cod4(mantle),
+            Some(_) => Updater::Cod4 {
+                mantle,
+                floats: self.float_swing,
+            },
             None => Updater::Cod2(mantle),
         };
         self.angles

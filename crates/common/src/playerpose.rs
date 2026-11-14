@@ -272,15 +272,16 @@ impl BodyAngles {
     ) {
         let ft = frametime_ms as f32;
         let m = input.movement_dir;
-        let cod4 = matches!(updater, Updater::Cod4(_));
-        // 1.7 folds the view yaw in floats (0x804c67c); 1.1's and CoD2's in shorts.
-        let yaw = if cod4 {
+        let floats = matches!(updater, Updater::Cod4 { floats: true, .. });
+        // `cod4_lnxded` folds the view yaw in floats (0x804c67c); 1.1's and
+        // CoD2's in shorts.
+        let yaw = if floats {
             normalize360_floor(input.view[1])
         } else {
             angle_mod(input.view[1])
         };
         let climb = match updater {
-            Updater::Cod4(_) => MOVETYPE_CLIMB_COD4,
+            Updater::Cod4 { .. } => MOVETYPE_CLIMB_COD4,
             _ => MOVETYPE_CLIMB,
         };
         let climbing = self.movetype & climb != 0;
@@ -288,10 +289,10 @@ impl BodyAngles {
             Updater::Cod1 => (Mantle::default(), 1.0, 0.6),
             Updater::Cod2(mantle) => (mantle, 0.0, 0.6),
             // `fadd %st(0),%st` at 0x804cefe.
-            Updater::Cod4(mantle) => (mantle, 0.0, 2.0),
+            Updater::Cod4 { mantle, .. } => (mantle, 0.0, 2.0),
         };
         let swing_angles =
-            |dest, tolerance, clamp: f32, speed, ft, angle: &mut f32, on: &mut bool| match cod4 {
+            |dest, tolerance, clamp: f32, speed, ft, angle: &mut f32, on: &mut bool| match floats {
                 true => swing_angles_cod4(dest, tolerance, clamp, speed, ft, angle, on),
                 false => swing_angles(
                     dest,
@@ -400,8 +401,13 @@ pub enum Updater {
     Cod2(Mantle),
     /// 1.7's `BG_PlayerAngles` (`cod4_lnxded` 0x804c636): CoD2's with the
     /// climbs at CoD4's movetypes and the torso pitch toward twice the
-    /// view's (cod4-player-anims.md 8).
-    Cod4(Mantle),
+    /// view's (cod4-player-anims.md 8). `floats` folds the swings as
+    /// `cod4_lnxded` does ([`swing_angles_cod4`]), which the server's hit
+    /// poses take; the client keeps CoD2's shorts (cod4-combat.md 15.1).
+    Cod4 {
+        mantle: Mantle,
+        floats: bool,
+    },
 }
 
 /// CoD2's mantle (`eFlags` 0x4000), which 1.1's numbering has no bit for:
@@ -2523,9 +2529,18 @@ main
             }
             a.pitch
         };
-        let cod4 = Updater::Cod4(Mantle::default());
+        let cod4 = Updater::Cod4 {
+            mantle: Mantle::default(),
+            floats: false,
+        };
         assert!(near(settle(cod4, 30.0), 60.0));
         assert!(near(angle_normalize_180(settle(cod4, 330.0)), -60.0));
+        let floats = Updater::Cod4 {
+            mantle: Mantle::default(),
+            floats: true,
+        };
+        assert!(near(settle(floats, 30.0), 60.0));
+        assert!(near(angle_normalize_180(settle(floats, 330.0)), -60.0));
         assert!(near(settle(Updater::Cod2(Mantle::default()), 30.0), 18.0));
     }
 }

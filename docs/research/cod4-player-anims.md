@@ -323,7 +323,10 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   shorts, and the controllers' `AnglesSubtract` (0x819397a) the same way.
   VERIFIED (the instructions). Trap: the shorts leave the torso pitch up to
   a short off twice the view and the head that much off level, which the
-  throw back's bounce off a head box reads (cod4-combat.md 15.1).
+  throw back's bounce off a head box reads (cod4-combat.md 15.1). The
+  server's hit poses take the float fold; the client's watched bodies
+  keep the shorts, since the fold cycles a still yaw between 0 and 360
+  (cod4-combat.md 15.1). INFERRED.
 - The cgame lerps a player's `leanf` and `movementDir` between the two
   snapshots with its angles, each difference wrapped through `floor`
   (`CG_InterpolateEntityPosition`). INFERRED. vcod lerps them too; the

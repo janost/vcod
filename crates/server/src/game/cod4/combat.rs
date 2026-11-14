@@ -368,10 +368,12 @@ pub struct Combat4 {
 }
 
 /// A body under 1.7's angle updater and controllers (cod4-player-anims.md
-/// 8) at the lean dvars' defaults; a bare [`PlayerBody`] runs CoD2's.
+/// 8) at the lean dvars' defaults, its swings folded in floats as
+/// `cod4_lnxded`'s; a bare [`PlayerBody`] runs CoD2's.
 fn cod4_body() -> PlayerBody {
     let mut b = PlayerBody::default();
     b.cod4_lean = Some(vcod_common::playerpose::LeanDvars::default());
+    b.float_swing = true;
     b
 }
 

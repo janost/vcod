@@ -1896,6 +1896,18 @@ Open, with each gate's `GAPS`:
   `BG_PlayerAngles` swings toward goes through the same (0x804c67c).
   VERIFIED (the instructions). With the swing on floats the bounce came
   within ten ulps of retail's. VERIFIED (the gate).
+- The float fold cycles a still yaw at 0: an angle of 8.7e-6 (360 folded)
+  swinging to 0 sums to a hair under 0, which folds to 360.0 once stored,
+  and 360.0 folds back to 8.7e-6, frame after frame. INFERRED (the
+  instructions' arithmetic, traced on ours). A dead body's `tag_origin`
+  yaw takes the legs' yaw raw (0x804cfe6, the dead test at 0x804d075) and
+  the controls ease linearly with no wrap (0x804d5fb..0x804d652).
+  VERIFIED (the instructions). So the control swings toward 0 and 360 in
+  turn, up to 36 degrees a frame at 10 frames a second: on ours a corpse
+  placed at yaw 360 kicked its ragdoll's neck to 33 degrees
+  (`cod4_live_ragdolls_hold_still_once_down`). VERIFIED (the test). Only the server's hit poses
+  take the float fold (`Updater::Cod4 { floats }`); the client, whose
+  `iw3mp.exe` arithmetic is not read yet, keeps CoD2's shorts. INFERRED.
 - The controllers read the view and `leanf` off the body's `clientInfo_t`
   (+0x3e8, +0x3e4; 0x804cfcb, 0x804d031), which `ClientEndFrame` copies
   from the playerstate and entity (0x80a6ec7..0x80a6f00), so a trace
