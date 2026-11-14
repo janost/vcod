@@ -4447,7 +4447,6 @@ impl Server {
         self.game.module.driver.paths.clear();
         self.game.module.driver.sites.clear();
         self.game.module.bot_breach_stands.clear();
-        self.game.module.bot_shell_stands = Default::default();
         self.game.module.driver.noises.clear();
         self.game.module.driver.covers.clear();
         self.game.module.driver.hunts.clear();
