@@ -102,7 +102,11 @@ more.
 - `g_maxDroppedWeapons` caps the dropped weapons: past it the item
   farthest from the playing clients is freed (cod4-combat.md 6.1).
 - Hit poses: 1.7's controllers and broad box, eased once a frame; a tag
-  read later in the frame reads that pose (cod4-combat.md 3.3).
+  read later in the frame reads that pose (cod4-combat.md 3.3). The six
+  control bones turn in `tag_origin`'s frame through `DObjCalcSkel`'s
+  second arm, and the controls ease, fold and swing on the x87 stack as
+  1.7's, all word for word with a gdb dump of two moving players
+  (cod4-gsc.md 3.2, cod4-combat.md 15.1).
 - A client in the world more than 28 messages past its last acknowledge
   is due a random `irand(0, 2^n)` snapshot intervals on, n climbing to 8,
   as 1.7's `SV_SendMessageToClient`: a retail capture of a probe stopped
@@ -143,10 +147,11 @@ Open, by how much a player notices.
    (Fixed above; `hardpoint_ab` `GAPS` gone).
 3. What the five capture gates (`cod4::capture_ab`, cod4-combat.md 15)
    still tolerate: the thrown back frag's bounce off the shooter's head,
-   now a few ulps of `trDelta` (the torso pitch's swing folded in shorts
-   held the head 0.0027 degrees off; fixed, the head bone's matrix is
-   left: the server poses the controllers as CoD1 did, not through 1.7's
-   `AnglesToQuat` and `DObjCalcSkel` control path, cod4-combat.md 15.1),
+   a few ulps of `trDelta` (the torso pitch's swing folded in shorts held
+   the head 0.0027 degrees off; fixed. The control bones now go through
+   1.7's control path and its controller and swing arithmetic, each word
+   for word with a gdb dump; the anim sampler's spine and neck locals are
+   left, cod4-combat.md 15.1),
    the second rocket's entity number
    and a killcam's archived view (both measured, cause open). Closed: the
    dropped weapon's hit `trDelta`, prone and standing: the bodies' tags
