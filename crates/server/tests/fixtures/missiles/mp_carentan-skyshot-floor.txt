@@ -1,24 +1,25 @@
-# Retail CoD 1.1d dedicated server, mp_carentan tdm, client-probes/probe_skyshot air part looking 80 down, three melee swings at the floor, captured 2026-10-17:
-#   PORT=32501 PROBE_SECS=40 tools/run_probe.sh client-probes/probe_skyshot mp_carentan +set probe_part air +set probe_pitch 80
-#   vcod --net-probe 127.0.0.1:32501 --probe-team allies --probe-uo-weapon melee --probe-secs 25
+# Retail CoD 1.1d dedicated server, mp_carentan tdm, client-probes/probe_skyshot air part looking 80 down, three melee swings at the floor, captured 2026-11-14 inside `unshare -rn`:
+#   PORT=28997 PROBE_SECS=40 tools/run_probe.sh client-probes/probe_skyshot mp_carentan +set probe_part air +set probe_pitch 80
+#   vcod --net-probe 127.0.0.1:28997 --probe-team allies --probe-uo-weapon melee --probe-secs 25
 # The air capture's control: each swing raises EV_MELEE_MISS (167) on the world, parm 5, which the probe's temp lines do show.
+# A gdb run of the same recipe read Weapon_Melee's trace: muzzle (1368, 2608, 37), forward (0.122758113, 0.122758113, -0.98481518), endpos (1375.58813, 2615.58813, -23.875), fraction 0.965837955 (combat doc 2.5).
 # Retail server PROBE lines, then the shooter probe's VEH missile and temp lines (vehicle_probe.rs report).
 PROBE air 1050 (1368.00, 2608.00, -23.75) 45 80
-VEH 11350 temp 170 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 11400 temp 170 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 11450 temp 170 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 11500 temp 170 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 11550 temp 170 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 11600 temp 170 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 12850 temp 171 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 12900 temp 171 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 12950 temp 171 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 13000 temp 171 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 13050 temp 171 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 13100 temp 171 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 14350 temp 172 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 14400 temp 172 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 14450 temp 172 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 14500 temp 172 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 14550 temp 172 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
-VEH 14600 temp 172 ev 167 parm 5 other 1022 pos 1374.0 2615.0 -23.0
+VEH 5350 temp 170 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 5400 temp 170 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 5450 temp 170 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 5500 temp 170 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 5550 temp 170 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 5600 temp 170 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 6850 temp 171 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 6900 temp 171 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 6950 temp 171 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 7000 temp 171 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 7050 temp 171 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 7100 temp 171 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 8350 temp 172 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 8400 temp 172 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 8450 temp 172 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 8500 temp 172 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 8550 temp 172 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12
+VEH 8600 temp 172 ev 167 parm 5 other 1022 pos 1375.0 2615.0 -23.0 surf 0 scale 0 weapon 12

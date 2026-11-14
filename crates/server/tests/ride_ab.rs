@@ -803,7 +803,7 @@ fn mover_script_reads_match_retail() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    mover_reads(&PROTOCOL_V1, fs, MOVERREADS);
+    mover_reads(&PROTOCOL_V1, fs, MOVERREADS_PROBE, MOVERREADS);
 }
 
 #[test]
@@ -817,7 +817,7 @@ fn mover_script_reads_match_retail_on_1_5() {
         eprintln!("COD_DIR is not a 1.5 install: skipping");
         return;
     }
-    mover_reads(&PROTOCOL_V6, fs, MOVERREADS_15);
+    mover_reads(&PROTOCOL_V6, fs, MOVERREADS_PROBE, MOVERREADS_15);
 }
 
 #[test]
@@ -826,22 +826,77 @@ fn mover_script_reads_match_retail_on_uo() {
         eprintln!("COD_DIR is not a UO install: skipping");
         return;
     };
-    mover_reads(&PROTOCOL_V22, fs, MOVERREADS_UO);
+    mover_reads(&PROTOCOL_V22, fs, MOVERREADS_PROBE, MOVERREADS_UO);
 }
 
-fn mover_reads(proto: &'static Protocol, fs: vcod_common::pk3::Pk3Fs, fixture: &str) {
+/// A gsc-only mover probe: its gametype name and source.
+type MoverProbe = (&'static str, &'static str);
+
+const MOVERREADS_PROBE: MoverProbe = (
+    "probe_moverreads",
+    include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_moverreads.gsc"),
+);
+
+const MOVERRAMP_PROBE: MoverProbe = (
+    "probe_moverramp",
+    include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_moverramp.gsc"),
+);
+
+const MOVERRAMP: &str = "tests/fixtures/movers/mp_carentan-dm-moverramp.txt";
+const MOVERRAMP_15: &str = "tests/fixtures/movers/mp_carentan-dm-moverramp-1.5.txt";
+const MOVERRAMP_UO: &str = "tests/fixtures/movers/mp_carentan-dm-moverramp-uo.txt";
+
+/// Mover segments to the float's last bit (movers doc 24): ramps on and off
+/// frame boundaries, the chain from one segment into the next, a verb on a
+/// mover mid-segment, `rotateVelocity`'s ramps. Server alone, every line
+/// exact. `MOVERREADS_REPORT=1` prints both sides.
+#[test]
+fn mover_ramps_match_retail() {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    mover_reads(&PROTOCOL_V1, fs, MOVERRAMP_PROBE, MOVERRAMP);
+}
+
+#[test]
+fn mover_ramps_match_retail_on_1_5() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
+        eprintln!("COD_DIR is not a 1.5 install: skipping");
+        return;
+    }
+    mover_reads(&PROTOCOL_V6, fs, MOVERRAMP_PROBE, MOVERRAMP_15);
+}
+
+#[test]
+fn mover_ramps_match_retail_on_uo() {
+    let Some(fs) = vcod_common::testing::uo_fs() else {
+        eprintln!("COD_DIR is not a UO install: skipping");
+        return;
+    };
+    mover_reads(&PROTOCOL_V22, fs, MOVERRAMP_PROBE, MOVERRAMP_UO);
+}
+
+fn mover_reads(
+    proto: &'static Protocol,
+    fs: vcod_common::pk3::Pk3Fs,
+    (name, source): MoverProbe,
+    fixture: &str,
+) {
     let bsp_path = fs.resolve_map(MAP).expect("map in mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_moverreads"), now);
+    let mut sv = vcod_server::Server::new(common::cfg(MAP, name), now);
     sv.set_protocol(proto);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_moverreads",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_moverreads.gsc"),
-    );
+    sv.overlay_script(&format!("maps/mp/gametypes/{name}"), source);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load scripts");
-    for _ in 0..400 {
+    for _ in 0..600 {
         common::run_alone(&mut sv, &mut now, FRAME_MS);
         if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
             break;

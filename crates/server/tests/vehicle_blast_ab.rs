@@ -5,7 +5,8 @@
 //! `PROBE_IN` lines (`--probe-uo-weapon direct`): a bazooka round strikes
 //! the hull (`G_MissileImpact`'s direct `G_Damage`, an explode 186 with
 //! `eFlags` 0x100000) and a frag goes off by it or on its deck
-//! (`G_RadiusDamage` on the hull, scaled by the frag's `vehiclescale`).
+//! (`G_RadiusDamage` on the hull, scaled by the frag's `vehiclescale`),
+//! its strikes on the hull bouncing it with no event.
 //! The fixtures are retail UO 1.51b's: the probe's log
 //! (`fixtures/vehicles/*-blast-*-uo.txt`, recipe in each header) and the
 //! shooter's snapshots (`*-uo-blasttank.bin` and kin, the explodes).
@@ -21,7 +22,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::NetEvent;
-use vcod_common::net::event_ids::{EV_UO_PROJECTILE_EXPLODE, EV_UO_PROJECTILE_EXPLODE_NOMARKS};
+use vcod_common::net::event_ids::{
+    EV_GRENADE_BOUNCE, EV_UO_PROJECTILE_EXPLODE, EV_UO_PROJECTILE_EXPLODE_NOMARKS,
+};
 use vcod_common::net::events::{EventTracker, GameEvent};
 use vcod_common::net::protocol::PROTOCOL_V22;
 
@@ -131,6 +134,11 @@ type Explodes = Vec<(i32, GameEvent)>;
 
 fn is_explode(ev: &GameEvent) -> bool {
     ev.event == EV_UO_PROJECTILE_EXPLODE || ev.event == EV_UO_PROJECTILE_EXPLODE_NOMARKS
+}
+
+/// The explodes and a frag's bounces (UO's 181), each a gate holds.
+fn is_held(ev: &GameEvent) -> bool {
+    is_explode(ev) || ev.event == EV_GRENADE_BOUNCE
 }
 
 /// `BLAST_MISSILES=1`: each missile in a snapshot, its trajectory and
@@ -276,7 +284,7 @@ fn ours(c: &Case) -> Option<(Vec<String>, Explodes)> {
             print_missiles("ours  ", s);
             print_ps("ours  ", s);
             for ev in tracker.drain(s, p) {
-                if is_explode(&ev) {
+                if is_held(&ev) {
                     explodes.push((s.server_time, ev));
                 }
             }
@@ -299,7 +307,7 @@ fn retail_explodes(tag: &str) -> Explodes {
         print_missiles("retail", &f.snapshot);
         print_ps("retail", &f.snapshot);
         for ev in tracker.drain(&f.snapshot, p) {
-            if is_explode(&ev) {
+            if is_held(&ev) {
                 out.push((f.snapshot.server_time, ev));
             }
         }
@@ -449,6 +457,25 @@ fn check(c: &Case) {
     }
     let fires_r = fires(&retail);
     let fires_o = fires(&log);
+    // A frag's bounces, by its throw and the ms since it: none off a hull,
+    // which takes damage while the frag's `damage` is 0 (`G_MissileImpact`,
+    // coduo-vehicles.md 13).
+    let bounces = |ex: &Explodes, fires: &[i32]| -> Vec<((usize, i32), i32)> {
+        ex.iter()
+            .filter(|(_, e)| e.event == EV_GRENADE_BOUNCE)
+            .map(|(t, e)| (since_fire(fires, *t), e.parm))
+            .collect()
+    };
+    assert_eq!(
+        bounces(&ours_ex, &fires_o),
+        bounces(&retail_ex, &fires_r),
+        "the bounces"
+    );
+    let ours_ex: Explodes = ours_ex.into_iter().filter(|(_, e)| is_explode(e)).collect();
+    let retail_ex: Explodes = retail_ex
+        .into_iter()
+        .filter(|(_, e)| is_explode(e))
+        .collect();
     assert_eq!(ours_ex.len(), retail_ex.len(), "the explodes");
     for ((ot, o), (rt, r)) in ours_ex.iter().zip(&retail_ex) {
         // A round's struck face is where the spread put it.

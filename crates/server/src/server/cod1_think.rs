@@ -480,6 +480,15 @@ impl Cod1Module {
             for attack in attacks {
                 self.fire(eng, attack, &mut rounds, &mut bodies, &weapons);
             }
+            // A callback in them (a fall's damage) mirrored the sim's
+            // unsnapped origin back; the touch pass's callbacks still read
+            // the snapped one unless a `setOrigin` moved him.
+            if let Some(rt) = self.script.as_mut()
+                && let Some(sim) = eng.clients[t.slot].as_ref().and_then(|c| c.sim.as_ref())
+                && sim.origin() == t.origin
+            {
+                rt.set_client_origin(t.slot, glam::Vec3::from(t.origin).trunc().into());
+            }
             // Retail runs the touch pass per usercmd inside `ClientThink_real`
             // (0x405b3), right after the link. The item half follows the
             // trigger half, and the use key after both.
@@ -1023,6 +1032,17 @@ impl Cod1Module {
             .as_ref()
             .map(|rt| rt.host.missiles.shot_targets())
             .unwrap_or_default();
+        // What a UO bipod's muzzle trace meets besides the world (combat doc 2.1).
+        let deployed = eng.clients[attacker]
+            .as_ref()
+            .and_then(|c| c.sim.as_ref())
+            .is_some_and(|s| s.ps.deployed());
+        let muzzle_boxes = match self.script.as_mut() {
+            Some(rt) if eng.proto.is_uo() && deployed => {
+                rt.muzzle_boxes(crate::game::combat::BIPOD_MUZZLE_MASK)
+            }
+            _ => Vec::new(),
+        };
         // The bodies are posed off the last end frame (combat doc, 16.1).
         let result = {
             let sims: Vec<(usize, &crate::spectate::ClientSim)> = eng
@@ -1055,6 +1075,7 @@ impl Cod1Module {
                     &sims,
                     &targets,
                     collision,
+                    &muzzle_boxes,
                     &models,
                     &self.hitlocs,
                     bones.as_mut(),
