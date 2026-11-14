@@ -167,8 +167,9 @@ pub struct Cod2Game {
     cvars: crate::cvars::Cvars,
     /// The loaded level, `None` on a bare server.
     level: Option<Cod2Level>,
-    /// The level a load replaced, dropped at the next `Cbuf_Execute` so the
-    /// load's tick does not pay for it (cod4-server-frame.md 9.1).
+    /// The level a load replaced, dropped at the next `Cbuf_Execute` (the
+    /// next tick's head), so the load's tick does not pay for it
+    /// (cod4-server-frame.md 9.1).
     retired: Option<Cod2Level>,
     /// Where a connecting client floats until the script places it:
     /// `mp_global_intermission`'s spot and view.
@@ -256,10 +257,6 @@ impl crate::engine::GameModule for Cod2Game {
     }
 
     fn drain_console(e: &mut Cod2Server, now: Instant) {
-        if e.game.retired.is_some() {
-            let _p = crate::tick_profile::phase("console/drop level");
-            e.game.retired = None;
-        }
         e.drain_console(now);
     }
 
@@ -679,6 +676,10 @@ impl Cod2Server {
     /// `;` as `Cbuf_ExecuteText` does: a passed `g_gametype` vote queues
     /// `g_gametype tdm; map_restart`.
     pub fn drain_console(&mut self, _now: Instant) {
+        if self.game.retired.is_some() {
+            let _p = crate::tick_profile::phase("drop level");
+            self.game.retired = None;
+        }
         let _p = crate::tick_profile::phase("console");
         let lines: Vec<String> = std::mem::take(&mut self.core.console)
             .iter()
