@@ -3428,7 +3428,10 @@ impl CollisionWorld {
             return;
         }
         if start == end {
-            if self.terrain.position_test(&tp, &sweep) {
+            if self
+                .terrain
+                .position_test(&tp, &sweep, self.arith() == Arith::Stored)
+            {
                 trace.startsolid = true;
                 trace.allsolid = true;
                 trace.fraction = 0.0;
