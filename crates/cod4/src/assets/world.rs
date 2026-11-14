@@ -299,7 +299,8 @@ pub struct DynEntityDef {
 #[derive(Clone, Debug, Default)]
 pub struct XModelPieces {
     pub name: String,
-    /// `XModelPiece`, 0x10 each: the model and its offset off the whole.
+    /// `XModelPiece`, 0x10 each: the model, then three floats (no stock
+    /// zone holds one to read them by).
     pub pieces: Vec<(Option<Id<XModel>>, [f32; 3])>,
 }
 
