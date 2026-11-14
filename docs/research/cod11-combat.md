@@ -6355,6 +6355,22 @@ the brecourt retake's rests within a unit. INFERRED: 1.1 never reads a
 missile's `groundEntityNum` again (12.6), so on 1.1 it changes the wire
 field only.
 
+VERIFIED, live (retail 1.1d, 2026-11-14, the same recipe with both
+clients' `CMDS` lines kept: `mp_carentan-scriptmodel-prone-rest-cmds.txt`,
+`mp_brecourt-scriptmodel-prone-rest-cmds.txt`): the carentan rest moves
+with the cmd timing, (1459.23, 2701.89, -1.08) against the older
+capture's (1459.67, 2702.32, -1.35). With each client's cmds sent on
+their logged stamps, three a frame as the net probe sends them, ours
+matches every snapshot of both carentan frags to the bit, `trType` and
+ground included (`scriptmodel_ab::a_frag_rests_on_a_prone_players_back_like_retail`),
+so the unit the older gates allow is the even 16 ms cadence's, not the
+prone pose's. Open: on brecourt the target settles on retail's origin
+(1659.001, 780.999, -104.091) with the logged cmds, and the first frag
+still strikes him 1.47 earlier along its flight (snapshot 2: y 802.38
+against 803.85); the 1.1d prone pose on the grade, not the timing, is the
+remaining cause (player-model-anim-system.md, "The prone body on a
+grade").
+
 vcod: the move trace (`game::missile`) runs `combat::trace_bodies_faced`
 on every live body but the owner's while it passes, with the bone trace's
 struck face as the normal (`bonetrace::BoneHit::normal`, the entry face's

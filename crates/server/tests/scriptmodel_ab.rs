@@ -400,10 +400,12 @@ fn ours_pair_run(
     // 1.5's and UO's thrower sends the net probe's cmds, three a frame from
     // each snapshot's time: how far he falls before the script's next
     // `setOrigin` check decides whether it puts him back (cod11-combat.md
-    // 2.1, "The thrower's slide"). 1.1's captures log no thrower.
+    // 2.1, "The thrower's slide"). So does 1.1's where the capture logs his
+    // cmds; the older 1.1 captures log neither client's.
+    let framed = proto.transport.version != PROTOCOL_V1.transport.version || target_log.is_some();
     let aim = || common::ProbeHold {
         aim: true,
-        framed: proto.transport.version != PROTOCOL_V1.transport.version,
+        framed,
         ..Default::default()
     };
     let (mut ha, mut hb) = (aim(), aim());
@@ -411,9 +413,10 @@ fn ours_pair_run(
         hb = common::ProbeHold {
             base: Some([0.0, yaw, 0.0]),
             // 1.5's and UO's target keeps the body his drop's last airborne
-            // cmd wrote; 1.1's lies flat after any drop, and its captures
-            // settle on the grade where the even cadence puts him.
-            framed: proto.transport.version != PROTOCOL_V1.transport.version,
+            // cmd wrote; 1.1's lies flat after any drop, and the captures
+            // that log no cmds settle on the grade where the even cadence
+            // puts him.
+            framed,
             ..Default::default()
         };
         if let Some(log) = target_log {
@@ -860,6 +863,63 @@ fn a_frag_rests_on_a_prone_players_back() {
             or.2, rr.2,
             "grenade {g}'s ground: retail {rr:?}, ours {or:?}"
         );
+    }
+}
+
+/// [`a_frag_rests_on_a_prone_players_back`] on a 1.1d capture that logged
+/// both clients' cmds, sent on their stamps: every snapshot of both frags,
+/// the throw, the strike on his back and the rest there with his number its
+/// ground, then the second's flight and rest, on retail's frames to the bit
+/// (docs/research/cod11-combat.md 12.4).
+#[test]
+fn a_frag_rests_on_a_prone_players_back_like_retail() {
+    prone_cmds_gate(
+        "mp_carentan",
+        225.0,
+        include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-prone-rest-cmds.txt"),
+    );
+}
+
+fn prone_cmds_gate(map: &str, yaw: f32, fixture: &str) {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        return;
+    };
+    let ours = ours_pair_in(
+        fs,
+        map,
+        "prone",
+        true,
+        12_000,
+        Some(yaw),
+        Some(landed(fixture)),
+        Some(fixture),
+    );
+    let retail: Vec<String> = fixture
+        .lines()
+        .filter(|l| !l.contains(" etype 0 "))
+        .map(str::to_string)
+        .collect();
+    report(&retail, &ours);
+    let (r, o) = (missile_grounds(&retail), missile_grounds(&ours));
+    if std::env::var_os("SM_REPORT").is_some() {
+        eprintln!("retail {r:?}\nours   {o:?}");
+    }
+    assert_eq!((r.len(), o.len()), (2, 2), "{map}: {o:?}");
+    let off = |a: [f32; 3], b: [f32; 3]| {
+        (0..3)
+            .map(|i| (a[i].to_bits() as i64 - b[i].to_bits() as i64).unsigned_abs() as u32)
+            .max()
+            .unwrap()
+    };
+    for g in 0..2 {
+        assert!(r[g].len() > 10, "{map}: grenade {g}: {:?}", r[g]);
+        for (s, (a, b)) in r[g].iter().zip(&o[g]).enumerate() {
+            assert!(
+                a.0 == b.0 && a.2 == b.2 && off(a.1, b.1) == 0,
+                "{map}: grenade {g} snapshot {s}: retail {a:?}, ours {b:?}"
+            );
+        }
+        assert_eq!(r[g].len(), o[g].len(), "{map}: grenade {g}'s snapshots");
     }
 }
 
