@@ -900,6 +900,70 @@ fn a_rocket_fired_inside_a_kerb_brush_goes_off_at_once() {
     }
 }
 
+/// A panzerfaust pulled from the hip on 1.1d: `adsFire` forces the sight
+/// up and the rocket leaves when the delay the raise left runs out, the
+/// trigger let go by then (combat doc 1.4): 300 ms from the snapshot the
+/// sight starts up. Ours flies retail's `trDelta`, recovered off its
+/// launch angles; where the street placement's slide left the body differs
+/// run to run on retail, so the launch point is not held.
+#[test]
+fn a_hip_panzerfaust_pull_fires_once_the_sight_is_up() {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        return;
+    };
+    let fixture = retail(include_str!(
+        "fixtures/missiles/mp_carentan-hippull-rocket.txt"
+    ));
+    let delta = delta_for_apos(&fixture, 2800.0).expect("one delta fits retail's apos");
+    let log = ours_pinned(
+        fs,
+        "mp_carentan",
+        "probe_skyshot",
+        SKYSHOT,
+        &[
+            ("probe_part", "spot"),
+            ("probe_weapon", "panzerfaust_mp"),
+            ("probe_x", "900"),
+            ("probe_y", "1930"),
+            ("probe_z", "-42"),
+            ("probe_yaw", "0"),
+            ("probe_pitch", "0"),
+        ],
+        Script::Throw,
+        14_000,
+        Vec::new(),
+        vec![delta],
+    );
+    report(&fixture, &log);
+    // From the snapshot the sight starts up to the one the rocket shows on.
+    let rise = |lines: &[String], launch: i32| -> i32 {
+        let frac = |l: &String| -> Option<(i32, f32)> {
+            let t: Vec<&str> = l.split(' ').collect();
+            let at = t.iter().position(|w| *w == "frac")?;
+            Some((t[1].parse().ok()?, t[at + 1].parse().ok()?))
+        };
+        let ps: Vec<(i32, f32)> = lines
+            .iter()
+            .filter(|l| l.contains(" ps "))
+            .filter_map(frac)
+            .filter(|(t, _)| *t <= launch)
+            .collect();
+        let up = ps
+            .iter()
+            .rposition(|(_, f)| *f == 0.0)
+            .expect("a hip snapshot")
+            + 1;
+        launch - ps[up].0
+    };
+    let (r, o) = (first_rocket(&fixture), first_rocket(&log));
+    assert!(!o.is_empty(), "ours fired nothing: {log:?}");
+    assert_eq!(
+        rise(&log, o[0].0),
+        rise(&fixture, r[0].0),
+        "the sight's rise"
+    );
+}
+
 /// UO frees a smoke grenade on its splash: the temp entity goes out and
 /// the grenade is gone from that snapshot on, never popped (combat doc
 /// 12.1).
