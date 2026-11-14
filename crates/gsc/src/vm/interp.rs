@@ -1,5 +1,13 @@
 //! The instruction loop: walks `bytecode::Op` over a frame stack until it
 //! suspends, returns, or the caller-supplied budget runs out.
+//!
+//! The loop matches each op by reference and holds the top frame across
+//! it; a call or return changes the frame stack after the op (`After`). A
+//! call's arguments and a builtin's are read in place off the caller's
+//! stack, and a returned frame's buffers go back to `Vm::frame_pool`. Two
+//! numbers of one type take an inline arm in the arithmetic and compare ops
+//! ahead of the general `eval_*` (docs/research/cod4-server-frame.md 9,
+//! "The spawn wave"; `tests/bench.rs` is the microbench).
 
 use std::rc::Rc;
 
@@ -45,6 +53,16 @@ pub(crate) struct Frame {
     stack_effect_check: Option<i32>,
 }
 
+/// An op's change to the frame stack, made after the op's own work on the
+/// top frame.
+enum After {
+    Next,
+    /// A call's new frame, waiting in `step_ops`'s `called`.
+    Call,
+    /// The top frame returned this.
+    Return(Value),
+}
+
 /// What one step of the interpreter can produce. Interpreter-internal, same
 /// as `Frame`.
 pub(crate) enum Step {
@@ -72,6 +90,9 @@ pub(crate) enum Suspend {
 /// The first `wait` retail refuses as too long (`cod_lnxded` 0x80d7fe4): a
 /// longer one would overrun the 24-bit script clock.
 const MAX_WAIT_SECONDS: f32 = 16777.0;
+
+/// The most returned frames' buffers [`Vm::recycle_frame`] keeps.
+const FRAME_POOL_MAX: usize = 64;
 
 /// Converts an Int or Float value to `f32`; any other value has no numeric
 /// reading.
@@ -439,10 +460,24 @@ impl Vm {
         recv: Option<Target>,
         args: Vec<Value>,
     ) -> Frame {
-        for a in &args {
+        self.make_frame_from(func, func_rc, recv, &args)
+    }
+
+    /// [`Self::make_frame`] off a slice: a call's arguments read in place
+    /// on the caller's stack. The locals and the operand stack reuse a
+    /// returned frame's buffers ([`Vm::recycle_frame`]).
+    pub(crate) fn make_frame_from(
+        &mut self,
+        func: FuncRef,
+        func_rc: Rc<Function>,
+        recv: Option<Target>,
+        args: &[Value],
+    ) -> Frame {
+        for a in args {
             self.heap.share(*a);
         }
-        let mut locals = vec![Value::Undefined; func_rc.locals as usize];
+        let (mut locals, stack) = self.frame_pool.pop().unwrap_or_default();
+        locals.resize(func_rc.locals as usize, Value::Undefined);
         let take = args.len().min(func_rc.params as usize);
         locals[..take].copy_from_slice(&args[..take]);
         Frame {
@@ -450,11 +485,23 @@ impl Vm {
             func_rc,
             ip: 0,
             locals,
-            stack: Vec::new(),
+            stack,
             recv,
             op_base: 0,
             #[cfg(test)]
             stack_effect_check: None,
+        }
+    }
+
+    /// A returned frame's buffers, emptied, for the next call's
+    /// [`Self::make_frame_from`]. The pool keeps as many as the deepest
+    /// call stack it has seen unwind, up to [`FRAME_POOL_MAX`].
+    fn recycle_frame(&mut self, f: Frame) {
+        if self.frame_pool.len() < FRAME_POOL_MAX {
+            let (mut locals, mut stack) = (f.locals, f.stack);
+            locals.clear();
+            stack.clear();
+            self.frame_pool.push((locals, stack));
         }
     }
 
@@ -535,24 +582,41 @@ impl Vm {
         // routed anywhere: `Op::CallBuiltin` is the only drain point, so a
         // spawn from `get_field`/`set_field` has no defined moment to run at.
         let mut field_spawns = Vec::new();
+        // The top frame's function, taken again only when the frame stack's
+        // depth moves: one op pushes or pops at most one frame, so the top
+        // frame changes only with the depth.
+        let mut depth = frames.len();
+        let mut func = frames[depth - 1].func_rc.clone();
+        // A call's new frame, pushed once the op lets go of the top one.
+        let mut called: Option<Frame> = None;
+        // Whether a thread ran since `killed` was last read: only a spawn
+        // runs another thread, so only a spawn can end this one.
+        let mut spawned = true;
         loop {
             // CoD2: ended by a nested spawn's notify (`Vm::set_kill_mid_step`);
             // the thread's entry is gone, so its frames are dropped.
-            if !self.killed.is_empty() && thread_id.is_some_and(|id| self.killed.contains(&id)) {
-                return Ok(Step::Returned(Value::Undefined));
+            if spawned {
+                spawned = false;
+                if !self.killed.is_empty() && thread_id.is_some_and(|id| self.killed.contains(&id))
+                {
+                    return Ok(Step::Returned(Value::Undefined));
+                }
             }
             if *remaining == 0 {
                 return Ok(Step::Running);
             }
             *remaining -= 1;
-            let top = frames.len() - 1;
-            frames[top].op_base = frames[top].stack.len() as u32;
-            let func = frames[top].func_rc.clone();
-            let ip = frames[top].ip as usize;
-            let op = func.code[ip].clone();
+            if frames.len() != depth {
+                depth = frames.len();
+                func = frames[depth - 1].func_rc.clone();
+            }
+            let top = depth - 1;
+            let fr = &mut frames[top];
+            fr.op_base = fr.stack.len() as u32;
+            let ip = fr.ip as usize;
+            fr.ip += 1;
+            let op = &func.code[ip];
             let line = func.lines[ip];
-            frames[top].ip += 1;
-
             let err = |kind: ErrorKind| ScriptError {
                 file: func.file,
                 func: func.name,
@@ -562,20 +626,16 @@ impl Vm {
 
             macro_rules! pop {
                 () => {
-                    frames[top]
-                        .stack
-                        .pop()
-                        .expect("stack_depth guarantees a value here")
+                    fr.stack.pop().expect("stack_depth guarantees a value here")
                 };
             }
             macro_rules! push {
                 ($v:expr) => {
-                    frames[top].stack.push($v)
+                    fr.stack.push($v)
                 };
             }
 
-            // Test-only: captured before `op` is consumed by the match
-            // below, so `stack_effect`'s table can be checked against what
+            // Test-only: captured before the match below, so `stack_effect`'s table can be checked against what
             // this instruction actually does to the operand stack. A
             // non-threaded `Call`/`CallPtr` doesn't push its declared
             // return value onto *this* frame -- it pushes a new one and the
@@ -585,7 +645,7 @@ impl Vm {
             // `Frame::stack_effect_check` instead of a same-instruction
             // delta.
             #[cfg(test)]
-            let (dbg_pop, dbg_push) = crate::bytecode::stack_effect(&op);
+            let (dbg_pop, dbg_push) = crate::bytecode::stack_effect(op);
             #[cfg(test)]
             let dbg_is_call = matches!(
                 op,
@@ -600,20 +660,22 @@ impl Vm {
             #[cfg(test)]
             let dbg_is_return = matches!(op, Op::Return | Op::ReturnUndef);
             #[cfg(test)]
-            let dbg_stack_before = frames[top].stack.len() as i32;
+            let dbg_stack_before = fr.stack.len() as i32;
             #[cfg(test)]
             let dbg_op_repr = format!("{op:?}");
 
-            match op {
+            // What the op does to the frame stack, once `fr` is let go.
+            let mut after = After::Next;
+            match *op {
                 Op::Const(idx) => push!(func.consts[idx as usize]),
                 Op::LoadLocal(slot) => {
-                    let v = frames[top].locals[slot as usize];
+                    let v = fr.locals[slot as usize];
                     push!(v);
                 }
                 Op::StoreLocal(slot) => {
                     let v = pop!();
                     self.heap.share(v);
-                    frames[top].locals[slot as usize] = v;
+                    fr.locals[slot as usize] = v;
                 }
                 Op::LoadField(name) => {
                     let obj = pop!();
@@ -741,11 +803,11 @@ impl Vm {
                     self.heap.set_index(id, k, v);
                 }
                 Op::OwnLocal(slot) => {
-                    if let Value::Array(id) = frames[top].locals[slot as usize] {
+                    if let Value::Array(id) = fr.locals[slot as usize] {
                         let own = self.heap.own(id);
-                        frames[top].locals[slot as usize] = Value::Array(own);
+                        fr.locals[slot as usize] = Value::Array(own);
                     }
-                    let v = frames[top].locals[slot as usize];
+                    let v = fr.locals[slot as usize];
                     push!(v);
                 }
                 Op::ClearIndex => {
@@ -767,15 +829,15 @@ impl Vm {
                 // Each also copies a shared array before the write
                 // (`Heap::own`) and stores the copy back where it was read.
                 Op::EnsureArrayLocal(slot) => {
-                    let id = match frames[top].locals[slot as usize] {
+                    let id = match fr.locals[slot as usize] {
                         Value::Array(id) => {
                             let own = self.heap.own(id);
-                            frames[top].locals[slot as usize] = Value::Array(own);
+                            fr.locals[slot as usize] = Value::Array(own);
                             own
                         }
                         Value::Undefined => {
                             let id = self.heap.new_array();
-                            frames[top].locals[slot as usize] = Value::Array(id);
+                            fr.locals[slot as usize] = Value::Array(id);
                             id
                         }
                         _ => return Err(err(ErrorKind::BadType("indexing needs an array"))),
@@ -892,10 +954,7 @@ impl Vm {
                     push!(Value::Array(id));
                 }
                 Op::LoadSelf => {
-                    let v = frames[top]
-                        .recv
-                        .map(target_to_value)
-                        .unwrap_or(Value::Undefined);
+                    let v = fr.recv.map(target_to_value).unwrap_or(Value::Undefined);
                     push!(v);
                 }
                 Op::LoadLevel => push!(Value::Struct(self.level)),
@@ -927,20 +986,6 @@ impl Vm {
                     has_recv,
                     threaded,
                 } => {
-                    let mut args = Vec::with_capacity(argc as usize);
-                    for _ in 0..argc {
-                        args.push(pop!());
-                    }
-                    args.reverse();
-                    // A receiver-less call inherits the caller's `self`, which
-                    // is what carries the client entity from
-                    // `CodeCallback_PlayerConnect` into the gametype's own
-                    // callback (probe_self).
-                    let recv = if has_recv {
-                        as_target(pop!())
-                    } else {
-                        frames[top].recv
-                    };
                     let callee = self.functions.get(&target).cloned().ok_or_else(|| {
                         err(ErrorKind::Custom(format!(
                             "no such function {}::{}",
@@ -948,12 +993,30 @@ impl Vm {
                             self.interner.resolve(target.name)
                         )))
                     })?;
+                    // The arguments are the stack's top `argc` values, the
+                    // receiver under them. A receiver-less call inherits the
+                    // caller's `self`, which is what carries the client
+                    // entity from `CodeCallback_PlayerConnect` into the
+                    // gametype's own callback (probe_self).
+                    let stack = &fr.stack;
+                    let base = stack.len() - argc as usize;
+                    let recv = if has_recv {
+                        as_target(stack[base - 1])
+                    } else {
+                        fr.recv
+                    };
                     if threaded {
+                        let args = stack[base..].to_vec();
+                        fr.stack.truncate(base - usize::from(has_recv));
                         self.spawn(host, target, callee, recv, args, errors);
+                        spawned = true;
                         let v = self.thread_returned.take().filter(|_| self.thread_returns);
                         push!(v.unwrap_or(Value::Undefined));
                     } else {
-                        frames.push(self.make_frame(target, callee, recv, args));
+                        let frame = self.make_frame_from(target, callee, recv, &stack[base..]);
+                        fr.stack.truncate(base - usize::from(has_recv));
+                        called = Some(frame);
+                        after = After::Call;
                     }
                 }
                 Op::CallBuiltin {
@@ -961,12 +1024,14 @@ impl Vm {
                     argc,
                     has_recv,
                 } => {
-                    let mut args = Vec::with_capacity(argc as usize);
-                    for _ in 0..argc {
-                        args.push(pop!());
-                    }
-                    args.reverse();
-                    let recv = if has_recv { as_target(pop!()) } else { None };
+                    // The builtin reads its arguments in place, off the
+                    // stack's top `argc` values, the receiver under them.
+                    let base = fr.stack.len() - argc as usize;
+                    let recv = if has_recv {
+                        as_target(fr.stack[base - 1])
+                    } else {
+                        None
+                    };
                     if let Some(Target::Entity(id)) = recv
                         && !host.is_live(id)
                     {
@@ -980,7 +1045,10 @@ impl Vm {
                         notifies,
                         spawns: &mut pending_spawns,
                     };
-                    let v = host.builtin(&mut cx, name, recv, &args).map_err(err)?;
+                    let v = host
+                        .builtin(&mut cx, name, recv, &fr.stack[base..])
+                        .map_err(err)?;
+                    fr.stack.truncate(base - usize::from(has_recv));
                     // Retail's `Scr_ExecEntThread` from inside a builtin:
                     // each queued thread runs to its first suspend here,
                     // before the calling thread's next instruction (see
@@ -992,6 +1060,7 @@ impl Vm {
                         match self.functions.get(&target).cloned() {
                             Some(f) => {
                                 self.spawn(host, target, f, queued.recv, queued.args, errors);
+                                spawned = true;
                             }
                             None => {
                                 let e = err(ErrorKind::Custom(format!(
@@ -1041,11 +1110,7 @@ impl Vm {
                     args.reverse();
                     // Same inheritance as `Op::Call`; `[[f]]()` is how
                     // `_callbacksetup` reaches every gametype callback.
-                    let recv = if has_recv {
-                        as_target(pop!())
-                    } else {
-                        frames[top].recv
-                    };
+                    let recv = if has_recv { as_target(pop!()) } else { fr.recv };
                     let callee = self.functions.get(&target).cloned().ok_or_else(|| {
                         err(ErrorKind::Custom(format!(
                             "no such function {}::{}",
@@ -1055,26 +1120,45 @@ impl Vm {
                     })?;
                     if threaded {
                         self.spawn(host, target, callee, recv, args, errors);
+                        spawned = true;
                         let v = self.thread_returned.take().filter(|_| self.thread_returns);
                         push!(v.unwrap_or(Value::Undefined));
                     } else {
-                        frames.push(self.make_frame(target, callee, recv, args));
+                        called = Some(self.make_frame(target, callee, recv, args));
+                        after = After::Call;
                     }
                 }
+                // Two numbers inline, as `eval_*` answers them; any other
+                // pair through `eval_*`.
                 Op::Add => {
                     let b = pop!();
                     let a = pop!();
-                    push!(eval_add(&mut self.interner, a, b).map_err(err)?);
+                    let v = match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_add(y)),
+                        (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
+                        _ => eval_add(&mut self.interner, a, b).map_err(err)?,
+                    };
+                    push!(v);
                 }
                 Op::Sub => {
                     let b = pop!();
                     let a = pop!();
-                    push!(eval_sub(a, b).map_err(err)?);
+                    let v = match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_sub(y)),
+                        (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
+                        _ => eval_sub(a, b).map_err(err)?,
+                    };
+                    push!(v);
                 }
                 Op::Mul => {
                     let b = pop!();
                     let a = pop!();
-                    push!(eval_mul(a, b).map_err(err)?);
+                    let v = match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_mul(y)),
+                        (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
+                        _ => eval_mul(a, b).map_err(err)?,
+                    };
+                    push!(v);
                 }
                 Op::Div => {
                     let b = pop!();
@@ -1084,10 +1168,14 @@ impl Vm {
                 Op::MulNumber => {
                     let b = pop!();
                     let a = pop!();
-                    if matches!(a, Value::Vector(_)) || matches!(b, Value::Vector(_)) {
-                        return Err(err(ErrorKind::BadType("pair has unmatching types")));
-                    }
-                    push!(eval_mul(a, b).map_err(err)?);
+                    let v = match (a, b) {
+                        (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
+                        (Value::Vector(_), _) | (_, Value::Vector(_)) => {
+                            return Err(err(ErrorKind::BadType("pair has unmatching types")));
+                        }
+                        _ => eval_mul(a, b).map_err(err)?,
+                    };
+                    push!(v);
                 }
                 Op::MulVector => {
                     let b = pop!();
@@ -1108,10 +1196,14 @@ impl Vm {
                         }
                         ab => ab,
                     };
-                    if matches!(b, Value::Float(y) if y == 0.0) {
-                        return Err(err(ErrorKind::BadType("division by zero")));
-                    }
-                    push!(eval_div(a, b).map_err(err)?);
+                    let v = match (a, b) {
+                        (_, Value::Float(0.0)) => {
+                            return Err(err(ErrorKind::BadType("division by zero")));
+                        }
+                        (Value::Float(x), Value::Float(y)) => Value::Float(x / y),
+                        _ => eval_div(a, b).map_err(err)?,
+                    };
+                    push!(v);
                 }
                 Op::Mod => {
                     let b = pop!();
@@ -1153,22 +1245,38 @@ impl Vm {
                 Op::Lt => {
                     let b = pop!();
                     let a = pop!();
-                    push!(numeric_cmp(a, b, |x, y| x < y).map_err(err)?);
+                    let v = match (a, b) {
+                        (Value::Float(x), Value::Float(y)) => Value::Int((x < y) as i32),
+                        _ => numeric_cmp(a, b, |x, y| x < y).map_err(err)?,
+                    };
+                    push!(v);
                 }
                 Op::Gt => {
                     let b = pop!();
                     let a = pop!();
-                    push!(numeric_cmp(a, b, |x, y| x > y).map_err(err)?);
+                    let v = match (a, b) {
+                        (Value::Float(x), Value::Float(y)) => Value::Int((x > y) as i32),
+                        _ => numeric_cmp(a, b, |x, y| x > y).map_err(err)?,
+                    };
+                    push!(v);
                 }
                 Op::Le => {
                     let b = pop!();
                     let a = pop!();
-                    push!(numeric_cmp(a, b, |x, y| x <= y).map_err(err)?);
+                    let v = match (a, b) {
+                        (Value::Float(x), Value::Float(y)) => Value::Int((x <= y) as i32),
+                        _ => numeric_cmp(a, b, |x, y| x <= y).map_err(err)?,
+                    };
+                    push!(v);
                 }
                 Op::Ge => {
                     let b = pop!();
                     let a = pop!();
-                    push!(numeric_cmp(a, b, |x, y| x >= y).map_err(err)?);
+                    let v = match (a, b) {
+                        (Value::Float(x), Value::Float(y)) => Value::Int((x >= y) as i32),
+                        _ => numeric_cmp(a, b, |x, y| x >= y).map_err(err)?,
+                    };
+                    push!(v);
                 }
                 Op::Neg => {
                     let v = pop!();
@@ -1217,46 +1325,39 @@ impl Vm {
                         _ => return Err(err(ErrorKind::BadType("(vector) needs a vector"))),
                     }
                 }
-                Op::Jump(t) => frames[top].ip = t,
+                Op::Jump(t) => fr.ip = t,
                 Op::JumpIfFalse(t) => {
                     let c = pop!();
-                    if not_of(c, &self.interner).map_err(err)? {
-                        frames[top].ip = t;
+                    let not = match c {
+                        Value::Int(i) => i == 0,
+                        _ => not_of(c, &self.interner).map_err(err)?,
+                    };
+                    if not {
+                        fr.ip = t;
                     }
                 }
                 Op::JumpIfTrue(t) => {
                     let c = pop!();
-                    if !not_of(c, &self.interner).map_err(err)? {
-                        frames[top].ip = t;
+                    let not = match c {
+                        Value::Int(i) => i == 0,
+                        _ => not_of(c, &self.interner).map_err(err)?,
+                    };
+                    if !not {
+                        fr.ip = t;
                     }
                 }
                 Op::Pop => {
                     pop!();
                 }
                 Op::Dup => {
-                    let v = *frames[top]
+                    let v = *fr
                         .stack
                         .last()
                         .expect("stack_depth guarantees a value here");
                     push!(v);
                 }
-                Op::Return => {
-                    let v = pop!();
-                    frames.pop();
-                    self.end_call_endons(thread_id, frames.len());
-                    if frames.is_empty() {
-                        return Ok(Step::Returned(v));
-                    }
-                    frames.last_mut().unwrap().stack.push(v);
-                }
-                Op::ReturnUndef => {
-                    frames.pop();
-                    self.end_call_endons(thread_id, frames.len());
-                    if frames.is_empty() {
-                        return Ok(Step::Returned(Value::Undefined));
-                    }
-                    frames.last_mut().unwrap().stack.push(Value::Undefined);
-                }
+                Op::Return => after = After::Return(pop!()),
+                Op::ReturnUndef => after = After::Return(Value::Undefined),
                 Op::Wait => {
                     let s = pop!();
                     let seconds = to_f32(s)
@@ -1282,7 +1383,7 @@ impl Vm {
                 Op::WaitTillFrameEnd => {
                     return Ok(Step::Suspend(Suspend::FrameEnd));
                 }
-                Op::WaitTill { binds } => {
+                Op::WaitTill { ref binds } => {
                     let event = pop!();
                     let recv = pop!();
                     let target = as_target(recv).ok_or_else(|| {
@@ -1302,7 +1403,7 @@ impl Vm {
                     return Ok(Step::Suspend(Suspend::WaitTill {
                         target,
                         event,
-                        binds,
+                        binds: binds.clone(),
                         matches: Box::new([]),
                     }));
                 }
@@ -1381,9 +1482,29 @@ impl Vm {
                     // (`thread_id` is `None` there); the registration is
                     // simply dropped.
                     if let Some(id) = thread_id
-                        && let Some(idx) = self.threads.iter().position(|t| t.id == id)
+                        && let Some(idx) = self.thread_index(id)
                     {
-                        self.threads[idx].endons.push((target, event, frames.len()));
+                        self.threads[idx].endons.push((target, event, depth));
+                        self.notify_index
+                            .endons
+                            .entry((target, event))
+                            .or_default()
+                            .push(id);
+                        self.notify_index_pushed();
+                    }
+                }
+            }
+
+            match after {
+                After::Next => {}
+                After::Call => frames.push(called.take().expect("a call's frame")),
+                After::Return(v) => {
+                    let done = frames.pop().expect("a frame is running");
+                    self.recycle_frame(done);
+                    self.end_call_endons(thread_id, frames.len());
+                    match frames.last_mut() {
+                        Some(caller) => caller.stack.push(v),
+                        None => return Ok(Step::Returned(v)),
                     }
                 }
             }

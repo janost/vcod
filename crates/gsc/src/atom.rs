@@ -19,18 +19,21 @@
 //! with no reclamation. Not fixed here: the heap this feeds is dropped
 //! whole on map change, and G1 has no GC.
 
-use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::fxhash::FxHashMap;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Atom(pub u32);
 
-#[derive(Default, Clone)]
 pub struct Interner {
+    /// [`Interner::id`].
+    id: u64,
     /// Exact-text lookup, for string values and array keys.
-    by_exact: HashMap<String, Atom>,
+    by_exact: FxHashMap<String, Atom>,
     /// Case-folded lookup, for identifiers, field names, file paths,
     /// function names and event names.
-    by_folded: HashMap<String, Atom>,
+    by_folded: FxHashMap<String, Atom>,
     /// The spelling first interned for each atom; what `resolve` returns.
     text: Vec<String>,
     /// The case-folded form of the same atom; what `resolve_folded` returns.
@@ -42,7 +45,48 @@ pub struct Interner {
     pub vectors_g: bool,
 }
 
+/// The next [`Interner::id`].
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+impl Default for Interner {
+    fn default() -> Self {
+        Interner {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            by_exact: FxHashMap::default(),
+            by_folded: FxHashMap::default(),
+            text: Vec::new(),
+            folded: Vec::new(),
+            canon: Vec::new(),
+            vectors_g: false,
+        }
+    }
+}
+
+/// A clone takes a new [`Interner::id`]: the two go on interning apart, so
+/// one atom number may come to name two texts.
+impl Clone for Interner {
+    fn clone(&self) -> Self {
+        Interner {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            by_exact: self.by_exact.clone(),
+            by_folded: self.by_folded.clone(),
+            text: self.text.clone(),
+            folded: self.folded.clone(),
+            canon: self.canon.clone(),
+            vectors_g: self.vectors_g,
+        }
+    }
+}
+
 impl Interner {
+    /// This interner's own number, unique in the process: a host that
+    /// caches what it worked out per atom keys the cache on it, since an
+    /// atom only means one text within one interner, which never takes an
+    /// atom back.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
     /// Interns by exact text: two spellings of one word get two atoms.
     pub fn intern_exact(&mut self, s: &str) -> Atom {
         if let Some(&a) = self.by_exact.get(s) {

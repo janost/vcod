@@ -265,3 +265,11 @@ only yardstick.
 - `--example bot_vehicles` (UO) plays each seed with bots' vehicles off and
   on (`bot-objectives.md` 10.6).
 - `bot-navigation.md`'s Build times set the census floors.
+
+## The gsc interpreter
+
+`cargo test --release -p vcod-gsc --test gsc bench:: -- --ignored
+--nocapture` runs `tests/bench.rs`: CoD2's `getSpawnpoint_DM` loops for
+60 spawns over a table host, best of ten, and the result it must keep. A
+change to the interpreter, the heap or the scheduler reports it before and
+after (cod4-server-frame.md 9, "The spawn wave").
