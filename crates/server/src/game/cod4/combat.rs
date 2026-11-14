@@ -21,9 +21,10 @@ use vcod_cod2::player::{BodyFrame, Character, PlayerAnimSet, PlayerBody, PlayerR
 use vcod_cod4::anim::BodySource;
 use vcod_cod4::net::delta::{EntityState, PlayerState};
 use vcod_cod4::pmove::weapon::{WEAPTYPE_GRENADE, WeaponDef, ev as wev};
+use vcod_cod4::skel::worlds_of;
 use vcod_common::animclock::Times;
 use vcod_common::bonetrace::{PriorityMap, bone_trace_worlds};
-use vcod_common::playerpose::Controllers;
+use vcod_common::playerpose::{Cod4Arith, Controllers};
 use vcod_gsc::{EntId, Value};
 
 use super::level::{Cod4Level, PM_DEAD, PsExt};
@@ -250,80 +251,15 @@ pub(crate) fn skel_worlds(
     worlds_of(&skel_mats(skel, pose, controls))
 }
 
-/// Each bone's place and turn off its `DObjAnimMat`.
-fn worlds_of(mats: &[vcod_cod4::skel::AnimMat]) -> Vec<(glam::Vec3, glam::Quat)> {
-    mats.iter()
-        .map(|m| {
-            (
-                glam::Vec3::from(m.trans),
-                glam::Quat::from_array(m.quat).normalize(),
-            )
-        })
-        .collect()
-}
-
 /// The `DObjAnimMat`s [`skel_worlds`] reads: `DObjCalcSkel`'s bones, the
-/// controls' bones set as 1.7's controller sets them ([`set_controls`]).
+/// controls' bones set as 1.7's controller sets them, in `cod4_lnxded`'s
+/// arithmetic (`vcod_cod4::skel::player_mats`).
 fn skel_mats(
     skel: &vcod_common::skeleton::Skeleton,
     pose: &vcod_common::skeleton::PoseBuffer,
     controls: Option<&Controllers>,
 ) -> Vec<vcod_cod4::skel::AnimMat> {
-    let bones = skel.bones();
-    let parents: Vec<i32> = bones.iter().map(|b| b.parent).collect();
-    let mut locals: Vec<vcod_cod4::skel::PosedLocal> = (0..bones.len())
-        .map(|b| {
-            let (p, q) = pose.local(b);
-            vcod_cod4::skel::PosedLocal {
-                quat: q.to_array(),
-                trans: p.to_array(),
-                control: false,
-            }
-        })
-        .collect();
-    let binds: Vec<[f32; 3]> = bones.iter().map(|b| b.local_pos.to_array()).collect();
-    if let Some(c) = controls {
-        set_controls(skel, &mut locals, &binds, c);
-    }
-    vcod_cod4::skel::calc_posed(&parents, &locals, &binds)
-}
-
-/// The tags `BG_Player_DoControllers` sets (`cod4_lnxded` 0x8056b48,
-/// cod4-player-anims.md 8): the spine's and head's six control bones take
-/// their angles' quat (`AnglesToQuat` 0x81b0008) and no shift off the
-/// model's, marked to turn in bone 0's frame (0x81b01e8), in place of the
-/// anim's local; `tag_origin` takes its angles' quat and its translation
-/// (0x81b0144).
-fn set_controls(
-    skel: &vcod_common::skeleton::Skeleton,
-    locals: &mut [vcod_cod4::skel::PosedLocal],
-    binds: &[[f32; 3]],
-    c: &Controllers,
-) {
-    use vcod_cod4::skel::{PosedLocal, angles_to_quat};
-    for (name, angles) in [
-        ("pelvis", c.pelvis),
-        ("back_low", c.back_low),
-        ("back_mid", c.back_mid),
-        ("back_up", c.back_up),
-        ("neck", c.neck),
-        ("head", c.head),
-    ] {
-        if let Some(b) = skel.bone_index(name) {
-            locals[b] = PosedLocal {
-                quat: angles_to_quat(angles),
-                trans: binds[b],
-                control: true,
-            };
-        }
-    }
-    if let Some(b) = skel.bone_index("tag_origin") {
-        locals[b] = PosedLocal {
-            quat: angles_to_quat(c.origin),
-            trans: c.origin_trans.to_array(),
-            control: false,
-        };
-    }
+    vcod_cod4::skel::player_mats(skel, pose, controls, Cod4Arith::Server)
 }
 
 /// The struck face's normal in the body's frame as `DObjTraceline` gives

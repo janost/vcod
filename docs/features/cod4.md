@@ -118,7 +118,7 @@ The weapon byte is the client's own pick
 
 - Players and corpses posed from `legsAnim` / `torsoAnim` with heads and
   held weapons. Aim pitch, lean and prone pitches bend the spine and head
-  as 1.7's controllers do.
+  as 1.7's controllers and skeleton do (8).
 - Corpses go ragdoll on the server's `startRagdoll`: `ragdoll.cfg`'s
   bodies under a position-based solver. Grenade, rocket and script
   blasts push them; bullets do not, as on 1.7 (10).

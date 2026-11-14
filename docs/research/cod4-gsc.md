@@ -765,7 +765,8 @@ How 1.7's server builds a DObj's bones, read off `cod4_lnxded`.
   still read 8 gun words off before the goal, against 6 before. VERIFIED
   (the gate). The rest was the link's snap below.
 - A player body's locals come from vcod's own sampler and controllers,
-  the control bones' through the second arm (`combat::skel_mats`);
+  the control bones' through the second arm (`skel::player_mats`, which
+  the client's drawn bodies take too, cod4-player-anims.md 8);
   composed through 0x81ae164 instead of as quaternions, the dying body's
   `tag_weapon_right` lands where 1.7's does word for word on both
   dropped-weapon captures (cod4-combat.md 6.1). VERIFIED (`capture_ab`).
