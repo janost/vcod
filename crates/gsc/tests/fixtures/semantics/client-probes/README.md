@@ -599,6 +599,15 @@ as a mouse does (rebased on the placement's `delta_angles`); it writes
 replays (`docs/research/cod11-mantle.md`, "The ladder yaw cap"). The
 1.5 and UO captures took the tags `turn-1.5` and `turn-uo`.
 
+`--save-ladder grab` starts at the first live snapshot instead: it stands
+still facing the probe's yaw while the gsc sets the body down, turns 180
+in place and walks forward into the rungs, its yaw absolute. The
+second-grab captures (`cod15-movement.md` 2) are `+set probe_spot 1 +set
+probe_spot_x 4308 +set probe_spot_y -94 +set probe_spot_z 57 +set
+probe_spot_yaw 240` with `--probe-ladder 240 --save-ladder grab
+--capture-tag grab-11` (`grab-15`, `grab-uo` on those servers), which
+`ladder_ab.rs`'s grab gate replays.
+
 On 1.5 and UO the same lines run with `COD_VERSION=1.5` or `uo` on the
 server's (`COD_DIR` holding the stock 1.5 `main/`, and UO's `uo/`) and
 `--capture-tag 1.5` or `--capture-tag uo` on the client's, which for UO

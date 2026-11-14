@@ -9,7 +9,7 @@
 //! every snapshot, diffing the origin and velocity at every snapshot's
 //! `commandTime`.
 //!
-//! The wire carries no `vLadderVec`, so a rebased run on the rungs takes the
+//! The older captures log no `vLadderVec`, so a rebased run on the rungs takes the
 //! normal the probe faced, square into the rungs. Set
 //! `LADDER_REPORT=1` to print every snapshot's delta. Needs `COD_DIR`;
 //! without the paks the replay returns early.
@@ -53,6 +53,8 @@ struct Snap {
     pm_flags: i32,
     da: [i32; 3],
     weapon: u8,
+    /// `vLadderVec`, in the captures that log it.
+    lv: Option<Vec3>,
 }
 
 enum Line {
@@ -108,6 +110,7 @@ fn parse_fixture(text: &str) -> Vec<Line> {
                 pm_flags: int("pm_flags"),
                 da: ints("da"),
                 weapon: int("weapon") as u8,
+                lv: kv.get("lv").map(|v| parse_vec3(v)),
             })),
             _ => {}
         }
@@ -145,7 +148,9 @@ fn state_from(snap: &Snap, climb_weapon: u8, yaw: f32, rules: MoveRules) -> Play
     ps.ground_entity = snap.ground;
     ps.jump_latched = snap.pm_flags & PMF_JUMP_HELD != 0;
     ps.on_ladder = snap.pm_flags & PMF_LADDER != 0;
-    if ps.on_ladder {
+    if let Some(lv) = snap.lv {
+        ps.ladder_normal = lv;
+    } else if ps.on_ladder {
         let yaw = yaw.to_radians();
         ps.ladder_normal = -Vec3::new(yaw.cos(), yaw.sin(), 0.0);
     }
@@ -427,4 +432,78 @@ fn retail_climbs_at_the_level_and_clamped_rates() {
         assert_eq!(settled("down-look-down"), -95.0, "{name}");
         assert_eq!(settled("down-back"), -59.0, "{name}");
     }
+}
+
+/// The `--save-ladder grab` captures (`mp_ship-dm-ladder-grab-*.txt`): set
+/// down 23 units left of the hold ladder's foot at (4308, -94, 57) facing
+/// away, turned to yaw 60 and walked into the rungs. The view's 8-unit trace
+/// meets them a cmd or two before a trace along their normal does, so 1.5b
+/// and UO send `vLadderVec` without the ladder flag for those snapshots
+/// (14082, 13982), where 1.1d grabs on the first walking cmd
+/// (cod15-movement.md 2). Every snapshot replays from retail's the one
+/// before, `vLadderVec` included, and matches to the bit.
+#[test]
+fn a_15_grab_waits_for_the_trace_along_the_normal() {
+    let Some((world, weapons)) = load() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let install_11 = vcod_common::testing::game_fs_11().is_some();
+    let uo_weapons = vcod_common::testing::uo_fs()
+        .map(|fs| vcod_server::weapons::WeaponTable::load(&fs, &vcod_server::defs::UO));
+    let grabs = [
+        ("mp_ship-dm-ladder-grab-11.txt", MoveRules::V1_1),
+        ("mp_ship-dm-ladder-grab-15.txt", MoveRules::V1_5),
+        ("mp_ship-dm-ladder-grab-uo.txt", MoveRules::Uo),
+    ];
+    let mut ran = 0;
+    for (name, rules) in grabs {
+        if rules == MoveRules::V1_1 && !install_11 {
+            continue;
+        }
+        let weapons = match rules {
+            MoveRules::Uo => match &uo_weapons {
+                Some(w) => w,
+                None => continue,
+            },
+            _ => &weapons,
+        };
+        world.set_arith(if rules.v15() {
+            Arith::Stored
+        } else {
+            Arith::Kept
+        });
+        let lines = fixture(name);
+        let rows = replay(&lines, 240.0, rules, &world, weapons.defs());
+        report(&rows);
+        // The snapshots past the turn, when the walk starts.
+        let walk: Vec<&Row> = rows
+            .iter()
+            .filter(|r| matches!(r.phase.as_str(), "walk" | "hold"))
+            .collect();
+        assert!(walk.len() > 40, "{name}: {} walk snapshots", walk.len());
+        for r in &walk {
+            assert!(
+                !r.rebased.ladder_disagrees,
+                "{name} {} ct={}: ours on the ladder {}, retail pm_flags {:#x}",
+                r.phase, r.retail.ct, r.ours_rebased.on_ladder, r.retail.pm_flags
+            );
+            assert_eq!(
+                Some(r.ours_rebased.ladder_normal),
+                r.retail.lv,
+                "{name} {} ct={}: vLadderVec",
+                r.phase,
+                r.retail.ct
+            );
+            assert!(
+                size(r.rebased) == 0.0 && r.rebased.dv == 0.0,
+                "{name} {} ct={}: rebased {:?}",
+                r.phase,
+                r.retail.ct,
+                r.rebased
+            );
+        }
+        ran += 1;
+    }
+    println!("{ran} grab captures");
 }

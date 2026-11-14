@@ -690,6 +690,7 @@ pub fn probe(
         script: match save_ladder.as_deref() {
             Some("climb") => LADDER_CLIMB_SCRIPT,
             Some("turn") => LADDER_TURN_SCRIPT,
+            Some("grab") => LADDER_GRAB_SCRIPT,
             _ => LADDER_SCRIPT,
         },
         ..Default::default()
@@ -12159,6 +12160,17 @@ const LADDER_TURN_SCRIPT: &[LadderPhase] = &[
     ("foot-turn", 1500, 0, 0, 0.0, 160.0),
     ("foot-hold", 800, 0, 0, 0.0, 160.0),
 ];
+/// `--save-ladder grab`: from the first live snapshot, still and facing the
+/// probe's yaw while the gsc sets the body down at `probe_spot`, then turned
+/// 180 still and forward into the rungs: a grab that only the view's trace
+/// meets (cod15-movement.md 2, the second grab). Its yaw stays absolute.
+const LADDER_GRAB_SCRIPT: &[LadderPhase] = &[
+    ("wait", 2500, 0, 0, 0.0, 0.0),
+    ("face", 500, 0, 0, 0.0, -180.0),
+    ("still", 500, 0, 0, 0.0, -180.0),
+    ("walk", 2500, 127, 0, 0.0, -180.0),
+    ("hold", 500, 0, 0, 0.0, -180.0),
+];
 type LadderPhase = (&'static str, u64, i8, i8, f32, f32);
 const LADDER_SETTLE: Duration = Duration::from_millis(1500);
 
@@ -12170,12 +12182,16 @@ const WEAPSEL_FIRE: std::ops::Range<Duration> = Duration::from_secs(15)..Duratio
 /// The weapon-select script's commands past the dry pulls, from the settled
 /// join: `probe_weapsel` has put the thompson in hand by 22 s. Two
 /// `weapalt`s switch it to semi and back, `weapon colt_mp` takes the pistol
-/// by name, and a `weapalt` on the pistol has no mode to switch to.
-const WEAPSEL_COMMANDS: [(Duration, &str); 4] = [
+/// by name, and a `weapalt` on the pistol has no mode to switch to. The
+/// thompson then comes back, and the pistol is asked for again 500 ms on,
+/// the pistol's 300 ms drop and 200 ms into the thompson's 400 ms raise.
+const WEAPSEL_COMMANDS: [(Duration, &str); 6] = [
     (Duration::from_secs(26), "weapalt"),
     (Duration::from_secs(30), "weapalt"),
     (Duration::from_secs(34), "weapon colt_mp"),
     (Duration::from_secs(38), "weapalt"),
+    (Duration::from_secs(42), "weapon thompson_mp"),
+    (Duration::from_millis(42500), "weapon colt_mp"),
 ];
 
 impl LadderProbe {
@@ -12285,10 +12301,12 @@ impl LadderProbe {
         use crate::play::input::Held;
         let p = wire();
         // Set down at the foot, the body takes the rungs before any key.
+        // The grab script starts off the rungs, at the first live snapshot.
+        let grab = std::ptr::eq(self.script, LADDER_GRAB_SCRIPT);
         if self.placed.is_none()
             && let Some(s) = snap
             && s.ps.field_i32(p, "pm_type") == PM_NORMAL
-            && s.ps.field_i32(p, "pm_flags") & net::flags::PMF_LADDER != 0
+            && (grab || s.ps.field_i32(p, "pm_flags") & net::flags::PMF_LADDER != 0)
         {
             self.placed = Some(now);
             self.foot = s.ps.origin(p);
@@ -12321,8 +12339,11 @@ impl LadderProbe {
             // put back what retail pushed since the placement.
             let into = t.as_millis() as f32 - (end - ms) as f32;
             let off = from + (to - from) * (into / ms as f32).min(1.0);
-            let pushed =
-                snap.map_or(0, |s| s.ps.field_i32(p, "delta_angles[1]")) - self.placed_delta;
+            let pushed = if grab {
+                0
+            } else {
+                snap.map_or(0, |s| s.ps.field_i32(p, "delta_angles[1]")) - self.placed_delta
+            };
             cmd.angles[1] = (deg_to_short(yaw.unwrap_or(0.0) + off) + pushed) & 0xffff;
         }
         if self.phase != Some(i) {
@@ -12560,6 +12581,8 @@ fn write_ladder_fixture(
         "climb"
     } else if std::ptr::eq(lp.script, LADDER_TURN_SCRIPT) {
         "turn"
+    } else if std::ptr::eq(lp.script, LADDER_GRAB_SCRIPT) {
+        "grab"
     } else {
         "full"
     };
@@ -12573,8 +12596,13 @@ fn write_ladder_fixture(
 # crates/gsc/tests/fixtures/semantics/client-probes/README.md, probe_ladder).\n\
 # The gsc puts the player at a ladder's foot facing the rungs (mp_ship's hold\n\
 # ladder, or probe_spot's); the script starts {} ms after the first snapshot\n\
-# on the rungs. Phases: (name, ms, forward, right, pitch, yaw offset):\n",
-        LADDER_SETTLE.as_millis()
+# {}. Phases: (name, ms, forward, right, pitch, yaw offset):\n",
+        LADDER_SETTLE.as_millis(),
+        if script == "grab" {
+            "in play"
+        } else {
+            "on the rungs"
+        }
     ));
     out.push_str(&format!(
         "# ladder foot={},{},{} yaw={yaw}\n",
@@ -12642,7 +12670,10 @@ fn write_weapsel_fixture(
     out.push_str("# puts a loaded thompson in the primary slot at 20 s; the client pulls the trigger every 700 ms\n");
     out.push_str("# from 15 to 19 s and runs `weapalt` at 26 and 30 s, `weapon colt_mp` at 34 s and `weapalt`\n");
     out.push_str(
-        "# at 38 s, all from its settled join (WEAPSEL_FIRE, WEAPSEL_COMMANDS in probe.rs).\n",
+        "# at 38 s, `weapon thompson_mp` at 42 s and `weapon colt_mp` at 42.5 s, inside the\n",
+    );
+    out.push_str(
+        "# thompson's raise, all from its settled join (WEAPSEL_FIRE, WEAPSEL_COMMANDS in probe.rs).\n",
     );
     out.push_str("# !cmd is a usercmd as it went on the wire; !press a command and what PlayInput made of it.\n");
     out.push_str(

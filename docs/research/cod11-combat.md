@@ -629,6 +629,16 @@ conditions.
   disassembly). INFERRED: so the cmd a released shot's time runs out on,
   still in state 3, reaches the switch, as does a grenade pullback, which
   holds `weaponTime` at 0.
+- A switch inside a raise. VERIFIED, retail 1.1d
+  (`crates/server/tests/fixtures/playerstate/mp_carentan-dm-weapsel-raise.txt`,
+  2026-11-14, `--probe-weapsel` with `weapon thompson_mp` at 42 s and
+  `weapon colt_mp` 500 ms on): the thompson raises from ms 45497 (state 1,
+  `weaponTime` 400, no delay); the pistol's byte goes out at 45679, and
+  the next snapshot (45696) reads state 2, `weaponTime` 349 (the
+  thompson's `dropTime` 0.35, `weapon::stored_ms`) and `WEAP_DROP`, so a
+  running raise is cut short; the pistol is up at 46058 and idle at 46443.
+  vcod: `begin_change` lets state 1 through, and `weapsel_ab` replays both
+  captures.
 - Same function: with `pm_flags & 0x10` set and `ps->weapon` non-zero it
   begins a change to weapon 0. VERIFIED, cgame `0x300112e0`: with the bit set
   and `ps->weapon` 0 it returns before `cmd.weapon` is read, so a climber
@@ -6347,6 +6357,32 @@ off retail's) and on the brecourt retake, each frag's resting ground, and
 the brecourt retake's rests within a unit. INFERRED: 1.1 never reads a
 missile's `groundEntityNum` again (12.6), so on 1.1 it changes the wire
 field only.
+
+VERIFIED, live (retail 1.1d, 2026-11-14, the same recipe with both
+clients' `CMDS` lines kept: `mp_carentan-scriptmodel-prone-rest-cmds.txt`,
+`mp_brecourt-scriptmodel-prone-rest-cmds.txt`): the carentan rest moves
+with the cmd timing, (1459.23, 2701.89, -1.08) against the older
+capture's (1459.67, 2702.32, -1.35). With each client's cmds sent on
+their logged stamps, three a frame as the net probe sends them, ours
+matches every snapshot of both carentan frags to the bit, `trType` and
+ground included (`scriptmodel_ab::a_frag_rests_on_a_prone_players_back_like_retail`),
+so the unit the older gates allow is the even 16 ms cadence's, not the
+prone pose's. Open: on brecourt the target settles on retail's origin
+(1659.001, 780.999, -104.091) with the logged cmds, and the first frag
+still strikes him 1.47 earlier along its flight (snapshot 2: y 802.38
+against 803.85); the 1.1d prone pose on the grade, not the timing, is the
+remaining cause (player-model-anim-system.md, "The prone body on a
+grade"). VERIFIED, vcod measurement against the grenade part retaken the
+same way (`mp_carentan-scriptmodel-grenade-cmds.txt`, the target a
+`--probe-fall` client, the thrower's `SPAWNED` line kept), replayed on
+both clients' stamps with the times plumbing the prone gate uses: of 158
+missile snapshots all but 17 match retail's to the bit. The first frag's
+strike on the barrel (snapshots 1 and 2) reads z 11.350475 against
+11.350476, one float step, and the next contact re-bases it exactly; the
+second frag leaves the target's posed bones 0.025 off retail's (snapshot
+84 on), the idle clip's pose the 0.1 gate already names. Open: the script
+model clip's last bit on 1.1d and the target's idle pose; `scriptmodel_ab`
+keeps the grenade part at its 0.1.
 
 vcod: the move trace (`game::missile`) runs `combat::trace_bodies_faced`
 on every live body but the owner's while it passes, with the bone trace's

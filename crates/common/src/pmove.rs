@@ -3867,7 +3867,10 @@ fn ground_trace(ps: &mut PlayerState, world: &MoveWorld, mask: u32, input: &PmIn
     if t.fraction < 1.0 && ps.rules == MoveRules::V1_1 {
         ps.jump_origin_z = 0.0;
     }
-    let thrown_off = thrown_off_ground(ps, t.normal);
+    // The thrown-off arm opens with `pm_flags` 0x10 (1.1 0x305d1, 1.5
+    // 0x21f2c): a body on the rungs rising off the floor keeps the ground
+    // (cod11-mantle.md, "Ladders").
+    let thrown_off = !ps.on_ladder && thrown_off_ground(ps, t.normal);
     // 1.5's steep branch ends the penalty (0x220f5, 0x22107).
     if ps.rules.v15() && t.fraction < 1.0 && !thrown_off && t.normal.z < MIN_WALK_NORMAL {
         ps.jump_penalty = false;
@@ -3876,8 +3879,7 @@ fn ground_trace(ps: &mut PlayerState, world: &MoveWorld, mask: u32, input: &PmIn
     // The kickoff raises the takeoff anim unforced, a step off a drop of
     // more than 64 forced (`PM_GroundTrace` 1.1 0x30474, 1.5 0x31ccd's
     // caller, UO alike; `PM_GroundTraceMissed` 1.1 0x3037c, 1.5 0x31a17).
-    // Not on the rungs: retail's kickoff test opens with `pm_flags` 0x10.
-    if t.fraction < 1.0 && thrown_off && !ps.on_ladder {
+    if t.fraction < 1.0 && thrown_off {
         ps.takeoff.get_or_insert(Takeoff::raised(false, input));
     } else if t.fraction >= 1.0 && ps.on_ground && !ps.on_ladder {
         // `PM_GroundTraceMissed` traces without `PM_trace`, under the
@@ -4711,8 +4713,11 @@ fn check_ladder_move(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld) -
         t.fraction < 1.0 && t.surface_flags & crate::collision::SURF_LADDER != 0
     };
     let mut ladder = is_ladder(&t) && (!walking || input.forward > 0.0);
-    // 1.5 confirms a new grab along the face's normal (0x27652, 0x277a9).
+    // 1.5 stores the view trace's normal (0x27699), then confirms a new
+    // grab along it (0x27652, 0x277a9): a refused grab keeps the normal,
+    // which goes on the wire as `vLadderVec` (cod15-movement.md 2).
     if ladder && ps.rules.v15() && !was_on_ladder {
+        ps.ladder_normal = t.normal;
         let back = pm_trace(
             ps,
             world,

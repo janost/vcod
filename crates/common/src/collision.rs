@@ -627,10 +627,18 @@ fn clip_brush_capsule(
 /// the plane, `end` behind it), the fraction backs off
 /// `SURFACE_CLIP_EPSILON` along the segment, and the crossing point has to
 /// land inside the edge planes within `MODEL_BARY_EPS`. A closer hit
-/// replaces the trace's; a tie does not. Retail leaves a fraction under
-/// zero as it is, which pmove reads the same as zero (it moves the origin
-/// only for a positive one); ours clamps.
-fn clip_segment_model(trace: &mut Trace, start: Vec3, end: Vec3, mt: &ModelTri, prim: Prim) {
+/// replaces the trace's; a tie does not, unless `takes_tie` (the trace
+/// holds an entity's contact, which retail clips after the static models).
+/// Retail leaves a fraction under zero as it is, which pmove reads the same
+/// as zero (it moves the origin only for a positive one); ours clamps.
+fn clip_segment_model(
+    trace: &mut Trace,
+    start: Vec3,
+    end: Vec3,
+    mt: &ModelTri,
+    prim: Prim,
+    takes_tie: bool,
+) {
     let [a, b, c] = mt.tri;
     let n = (b - a).cross(c - a).normalize();
     let d1 = n.dot(start - a);
@@ -639,7 +647,7 @@ fn clip_segment_model(trace: &mut Trace, start: Vec3, end: Vec3, mt: &ModelTri, 
         return;
     }
     let f = (d1 - SURFACE_CLIP_EPSILON) / (d1 - d2);
-    if f >= trace.fraction {
+    if f > trace.fraction || f == trace.fraction && !takes_tie {
         return;
     }
     let p = start + (end - start) * (d1 / (d1 - d2));
@@ -688,7 +696,7 @@ pub fn clip_model_tris(
     };
     for (i, mt) in tris.iter().enumerate() {
         if mt.contents & mask != 0 {
-            clip_segment_model(&mut trace, start, end, mt, Prim::Model(i as u32));
+            clip_segment_model(&mut trace, start, end, mt, Prim::Model(i as u32), false);
         }
     }
     trace
@@ -746,7 +754,14 @@ pub fn clip_model_surfs(
             continue;
         }
         for i in s.tris.clone() {
-            clip_segment_model(&mut trace, start, end, &tris[i], Prim::Model(i as u32));
+            clip_segment_model(
+                &mut trace,
+                start,
+                end,
+                &tris[i],
+                Prim::Model(i as u32),
+                false,
+            );
         }
     }
     trace
@@ -3269,7 +3284,18 @@ impl CollisionWorld {
                 if !statics || mt.contents & mask == 0 {
                     return;
                 }
-                clip_segment_model(trace, start, end, mt, prim);
+                // `SV_Trace` clips the static models after the world and
+                // before the entities, each pass taking only a nearer
+                // fraction, so a static model wins a tie with a submodel
+                // and loses one with model 0 (bsp-ibsp59-format.md, "The
+                // leaf walk").
+                let entity_hit = match trace.hit {
+                    Some(Prim::Brush(b)) => self.brushes[b as usize].model != 0,
+                    Some(Prim::Terrain(p)) => self.terrain_model[p as usize] != 0,
+                    Some(Prim::Patch(p)) => self.patches[p as usize].model != 0,
+                    _ => false,
+                };
+                clip_segment_model(trace, start, end, mt, prim, entity_hit);
             }
             // Never stored in world.prims; only movetrace.rs and the world
             // clip construct them.
@@ -4550,6 +4576,7 @@ mod tests {
                             end,
                             &world.model_tris[i as usize],
                             *prim,
+                            false,
                         );
                     }
                     // Never stored in world.prims.
@@ -5116,6 +5143,34 @@ mod tests {
             (t.endpos.x - 192.0).abs() < 1.0,
             "should stop at the door face, got {t:?}"
         );
+    }
+
+    /// `SV_Trace` clips the static models after the world and before the
+    /// entities (`cod_lnxded` 0x80916f4), each pass replacing only a nearer
+    /// fraction, so a prop face flush with a door's face names the prop.
+    #[test]
+    fn a_static_model_wins_a_tie_with_a_submodel() {
+        let face = |x: f32| {
+            let c = |y: f32, z: f32| Vec3::new(x, y, z);
+            let mt = |tri| ModelTri {
+                tri,
+                contents: CONTENTS_SOLID,
+                surface_flags: 21 << 20,
+            };
+            [
+                mt([c(-8.0, 0.0), c(8.0, 64.0), c(8.0, 0.0)]),
+                mt([c(-8.0, 0.0), c(-8.0, 64.0), c(8.0, 64.0)]),
+            ]
+        };
+        let (start, end) = (Vec3::new(150.0, 0.0, 32.0), Vec3::new(250.0, 0.0, 32.0));
+        let door = CollisionWorld::build(&two_model_world("script_brushmodel"), &[]);
+        let alone = door.shot_trace(start, end);
+        assert!(matches!(alone.hit, Some(Prim::Brush(_))), "{alone:?}");
+        let world = CollisionWorld::build(&two_model_world("script_brushmodel"), &face(192.0));
+        let t = world.shot_trace(start, end);
+        assert_eq!(t.fraction, alone.fraction);
+        assert!(matches!(t.hit, Some(Prim::Model(_))), "{t:?}");
+        assert_eq!(sound_material(t.surface_flags), 21);
     }
 
     /// A pose moves a submodel's brushes with its entity: the door that

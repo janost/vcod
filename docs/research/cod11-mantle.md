@@ -781,6 +781,21 @@ with "0", "1" or "2" (0x3001df6d). INFERRED: the event sets the client's
 stance to stand, crouch or prone, which its next cmd carries (CoDMP.exe
 0x40ae90 reads `cl_stance` 1 as crouch and 2 as prone).
 
+VERIFIED live, 2026-11-14 (`crates/common/tests/fixtures/net/snapshots-follow-stance.bin`
+on 1.1d, `-follow-stance-uo.bin` on UO 1.51b, each with its gamestate): a
+`--probe-follow --save-snapshots` spectator (client 1) following a
+`--probe-fall --probe-fall-prone 90` client 0 under `probe_pronedrop`
+reads the followed body's airborne refusals in its own playerstate's ring,
+141 on 1.1d and wire 143 on UO, with the playerstate's `clientNum` 0; on
+1.1d its first followed snapshot (20100) also carries client 0's 140. So
+a follower's cgame meets these events in the "sent to other clients" arm
+and its `cl_stance` stays. vcod: playerstate events carry the
+playerstate's `clientNum`, which `forced_stance` tests against the
+gamestate's (`play::events::tests::a_follower_keeps_its_stance_through_the_followed_bodys_events`).
+INFERRED, not measured: the cgame side (the printed warning, `cl_stance`
+and `cl_stanceTemp` on a retail client) needs the Windows client, which
+no capture here runs.
+
 VERIFIED live: `client-probes/probe_pronedrop` on
 `tools/run_probe.sh mp_carentan` with a `--probe-fall --probe-fall-prone 90`
 client, which holds prone on every cmd. Lifted 100 units over the street at
@@ -1131,6 +1146,22 @@ refused rather than pinning it, and fails if a capture refuses every one.
    set `PMF_LADDER` (pm_flags bit 0x10).
 
 So ladders are brushes flagged at the material level, not entities.
+
+**The ground trace on the rungs.** VERIFIED, `PM_GroundTrace`: the arm that
+throws a rising body off the floor (`velocity.z > 0` and the velocity along
+the plane over 10, rodata 0x70bb0) opens with `test pm_flags, 0x10` and a
+`jne` past it (1.1d `game.mp.i386.so` 0x305d1 to 0x30687; 1.5b 0x21f2c to
+0x22069). INFERRED, off that branch: with the flag set the arm is skipped,
+and since the flag is this frame's `PM_CheckLadderMove`'s, a body that
+takes the rungs within the trace's quarter unit of the floor stays
+`pml.walking` for its next frame, which then runs without the airborne
+wall glue. VERIFIED, the
+`mp_ship-dm-ladder-grab-15.txt` capture (1.5b, 2026-11-14): the grab cmd at
+14066 lifts the body 0.2304 off the floor, and the next cmd leaves y at
+-93.12555 with velocity y 0 (snapshot 14082); with the arm run on the rungs
+vcod's glue pushed it to -93.133 and velocity y -1 a cmd early. vcod:
+`ground_trace` computes `thrown_off` only off the rungs
+(`ladder_ab::a_15_grab_waits_for_the_trace_along_the_normal`).
 
 **Movement**, `PM_LadderMove` (exported, 0x33944):
 
@@ -2379,9 +2410,25 @@ VERIFIED, read out of lump 0 of each map: no material of the fourteen
 and mp_neuville), of mp_stalingrad or mp_tigertown, or of any single-player
 map in 1.1's `pak[0-9].pk3` carries 0x2, and no `.shader` file in any pak
 declares `surfaceparm slick`. INFERRED: the arm never fires on stock
-content, so it was ported from the binary alone and is unmeasured against
-retail. A brush hit reports the struck side's material (lump 3), so a
+content. A brush hit reports the struck side's material (lump 3), so a
 custom map slicking one face of a brush reads slick on that face only.
+
+VERIFIED, live (retail 1.1d, 2026-11-14,
+`crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall-walk-slick.txt`):
+stock mp_carentan with 0x2 ORed into all 194 lump-0 materials' surface
+flags, served from a pk3 in the homepath, under `probe_fall`'s six drops
+and a `--probe-fall-walk 315` client. The walker slides: the probe's
+`after` lines read (1157.64, 1815.12) and (960.87, 1663.12) where the
+stock run's read (1231.15, 1815.12) every time, and no row carries the
+landing stun's `pm_flags` 0x100, the drops of 300 to 520 included; the
+damage callbacks read 23, 38, 74, 77 and 110 as the stock run's do (74
+against 76: the impact speed rides the cmd timing). vcod: `fall_ab`'s
+`a_walk_on_slick_ground_slides_as_retail_does` replays the run on the same
+map built from the stock one (`slicken`) and matches every `FALL` row past
+the second drop to the printed thousandth, velocity, `pm_flags`,
+`pm_time`, health and ring included; on the stock map it fails at the
+second drop's first airborne row. Not measured: 1.5b and UO, whose arms
+are ported the same way (cod15-movement.md).
 
 ## The wish speed
 

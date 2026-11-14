@@ -349,6 +349,54 @@ mod tests {
         assert_eq!(forced_stance(&ev(EV_STANCE_FORCE_CROUCH, 2), 2, true), None);
     }
 
+    /// Retail 1.1d and UO 1.51b (`net/snapshots-follow-stance{,-uo}.bin`,
+    /// 2026-11-14): a spectator (client 1) following client 0 through
+    /// `probe_pronedrop`'s lifts reads the followed body's airborne 141s
+    /// (UO's 143), and on 1.1d its 140 too, in its own playerstate's ring, under
+    /// the followed `clientNum`. The cgame's arm takes them as another
+    /// client's and leaves `cl_stance` alone (cod11-mantle.md, "The
+    /// forced-stance events").
+    #[test]
+    fn a_follower_keeps_its_stance_through_the_followed_bodys_events() {
+        use vcod_common::net::event_ids::{
+            EV_STANCE_FORCE_CROUCH, EV_STANCE_FORCE_PRONE, EV_STANCE_FORCE_STAND,
+        };
+        use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V22};
+        use vcod_common::testing::{fixture_frames, fixture_gamestate};
+        for (p, tag) in [
+            (PROTOCOL_V1, "follow-stance"),
+            (PROTOCOL_V22, "follow-stance-uo"),
+        ] {
+            let (gs, snaps) = (
+                format!("net/gamestate-{tag}.bin"),
+                format!("net/snapshots-{tag}.bin"),
+            );
+            let own = fixture_gamestate(&p, &gs).client_num;
+            assert_eq!(own, 1, "{tag}");
+            let mut tracker = EventTracker::new();
+            let mut stance = Vec::new();
+            for frame in fixture_frames(&p, &gs, &snaps) {
+                for ev in tracker.drain(&frame.snapshot, &p) {
+                    if matches!(
+                        ev.event,
+                        EV_STANCE_FORCE_STAND | EV_STANCE_FORCE_CROUCH | EV_STANCE_FORCE_PRONE
+                    ) {
+                        assert_eq!((ev.entity_num, ev.client_num), (u32::MAX, 0), "{tag}");
+                        assert_eq!(forced_stance(&ev, own, false), None, "{tag}");
+                        stance.push(ev.event);
+                    }
+                }
+            }
+            assert!(
+                stance.contains(&EV_STANCE_FORCE_CROUCH),
+                "{tag}: {stance:?}"
+            );
+            if tag == "follow-stance" {
+                assert!(stance.contains(&EV_STANCE_FORCE_STAND), "{tag}: {stance:?}");
+            }
+        }
+    }
+
     const FOOTSTEP: i32 = 1;
 
     fn tracking(at: i32) -> PredictedEvents {

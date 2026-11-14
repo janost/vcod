@@ -1,0 +1,827 @@
+# Retail CoD UO 1.51b dedicated server: one player on a ladder.
+# map mp_ship, client-probes/probe_ladder under tools/run_probe.sh with +set
+# probe_teleport 1, the client --probe-ladder 240 --save-ladder grab (recipe in
+# crates/gsc/tests/fixtures/semantics/client-probes/README.md, probe_ladder).
+# The gsc puts the player at a ladder's foot facing the rungs (mp_ship's hold
+# ladder, or probe_spot's); the script starts 1500 ms after the first snapshot
+# in play. Phases: (name, ms, forward, right, pitch, yaw offset):
+# ladder foot=4308,-94,58 yaw=240
+#   wait 2500 0 0 0 0
+#   face 500 0 0 0 -180
+#   still 500 0 0 0 -180
+#   walk 2500 127 0 0 -180
+#   hold 500 0 0 0 -180
+# !cmd is a usercmd as it went on the wire (angles rebased on delta_angles);
+# !snap the playerstate per snapshot, da= its delta_angles, view= its viewangles,
+# lv= its vLadderVec. Floats exact.
+[phase wait]
+!cmd st=10550 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=36 t=10550 ct=10532 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10566 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=36 t=10550 ct=10532 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10582 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=36 t=10550 ct=10532 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10600 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=37 t=10600 ct=10582 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10616 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=37 t=10600 ct=10582 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10632 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=37 t=10600 ct=10582 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10650 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=38 t=10650 ct=10632 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10666 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=38 t=10650 ct=10632 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10682 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=38 t=10650 ct=10632 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10700 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=39 t=10700 ct=10682 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10716 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=39 t=10700 ct=10682 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10732 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=39 t=10700 ct=10682 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10750 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=40 t=10750 ct=10732 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10766 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=40 t=10750 ct=10732 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10782 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=40 t=10750 ct=10732 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10800 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=41 t=10800 ct=10782 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10816 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=41 t=10800 ct=10782 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10832 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=41 t=10800 ct=10782 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10850 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=42 t=10850 ct=10832 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10866 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=42 t=10850 ct=10832 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10882 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=42 t=10850 ct=10832 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10900 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=43 t=10900 ct=10882 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10916 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=43 t=10900 ct=10882 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10932 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=43 t=10900 ct=10882 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10948 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=43 t=10900 ct=10882 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10950 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=44 t=10950 ct=10948 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10966 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=44 t=10950 ct=10948 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=10982 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=44 t=10950 ct=10948 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11000 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=45 t=11000 ct=10982 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11016 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=45 t=11000 ct=10982 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11032 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=45 t=11000 ct=10982 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11050 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=46 t=11050 ct=11032 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11066 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=46 t=11050 ct=11032 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11082 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=46 t=11050 ct=11032 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11100 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=47 t=11100 ct=11082 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11116 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=47 t=11100 ct=11082 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11132 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=47 t=11100 ct=11082 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11150 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=48 t=11150 ct=11132 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11166 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=48 t=11150 ct=11132 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11182 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=48 t=11150 ct=11132 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11200 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=49 t=11200 ct=11182 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11216 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=49 t=11200 ct=11182 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11232 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=49 t=11200 ct=11182 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11250 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=50 t=11250 ct=11232 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11266 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=50 t=11250 ct=11232 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11282 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=50 t=11250 ct=11232 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11300 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=51 t=11300 ct=11282 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11316 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=51 t=11300 ct=11282 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11332 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=51 t=11300 ct=11282 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11350 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=52 t=11350 ct=11332 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11366 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=52 t=11350 ct=11332 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11382 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=52 t=11350 ct=11332 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11400 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=53 t=11400 ct=11382 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11416 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=53 t=11400 ct=11382 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11432 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=53 t=11400 ct=11382 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11450 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=54 t=11450 ct=11432 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11466 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=54 t=11450 ct=11432 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11482 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=54 t=11450 ct=11432 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11498 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=54 t=11450 ct=11432 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11500 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=55 t=11500 ct=11498 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11516 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=55 t=11500 ct=11498 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11532 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=55 t=11500 ct=11498 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11550 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=56 t=11550 ct=11532 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11566 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=56 t=11550 ct=11532 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11582 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=56 t=11550 ct=11532 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11600 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=57 t=11600 ct=11582 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11616 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=57 t=11600 ct=11582 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11632 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=57 t=11600 ct=11582 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11650 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=58 t=11650 ct=11632 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11666 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=58 t=11650 ct=11632 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11682 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=58 t=11650 ct=11632 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11700 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=59 t=11700 ct=11682 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11716 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=59 t=11700 ct=11682 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11732 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=59 t=11700 ct=11682 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11750 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=60 t=11750 ct=11732 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11766 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=60 t=11750 ct=11732 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11782 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=60 t=11750 ct=11732 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11800 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=61 t=11800 ct=11782 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11816 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=61 t=11800 ct=11782 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11832 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=61 t=11800 ct=11782 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11850 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=62 t=11850 ct=11832 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11866 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=62 t=11850 ct=11832 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11882 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=62 t=11850 ct=11832 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11898 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=62 t=11850 ct=11832 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11900 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=63 t=11900 ct=11898 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11916 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=63 t=11900 ct=11898 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11932 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=63 t=11900 ct=11898 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11950 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=64 t=11950 ct=11932 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11966 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=64 t=11950 ct=11932 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=11982 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=64 t=11950 ct=11932 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12000 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=65 t=12000 ct=11982 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12016 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=65 t=12000 ct=11982 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12032 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=65 t=12000 ct=11982 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12050 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=66 t=12050 ct=12032 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12066 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=66 t=12050 ct=12032 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12082 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=66 t=12050 ct=12032 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12100 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=67 t=12100 ct=12082 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12116 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=67 t=12100 ct=12082 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12132 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=67 t=12100 ct=12082 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12150 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=68 t=12150 ct=12132 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12166 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=68 t=12150 ct=12132 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12182 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=68 t=12150 ct=12132 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12200 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=69 t=12200 ct=12182 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12216 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=69 t=12200 ct=12182 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12232 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=69 t=12200 ct=12182 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12250 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=70 t=12250 ct=12232 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12266 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=70 t=12250 ct=12232 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12282 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=70 t=12250 ct=12232 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12300 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=71 t=12300 ct=12282 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12316 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=71 t=12300 ct=12282 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12332 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=71 t=12300 ct=12282 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12350 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=72 t=12350 ct=12332 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12366 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=72 t=12350 ct=12332 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12382 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=72 t=12350 ct=12332 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12400 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=73 t=12400 ct=12382 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12416 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=73 t=12400 ct=12382 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12432 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=73 t=12400 ct=12382 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12448 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=73 t=12400 ct=12382 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12450 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=74 t=12450 ct=12448 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12466 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=74 t=12450 ct=12448 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12482 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=74 t=12450 ct=12448 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12500 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=75 t=12500 ct=12482 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12516 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=75 t=12500 ct=12482 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12532 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=75 t=12500 ct=12482 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12550 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=76 t=12550 ct=12532 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12566 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=76 t=12550 ct=12532 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12582 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=76 t=12550 ct=12532 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12600 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=77 t=12600 ct=12582 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12616 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=77 t=12600 ct=12582 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12632 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=77 t=12600 ct=12582 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12650 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=78 t=12650 ct=12632 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12666 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=78 t=12650 ct=12632 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12682 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=78 t=12650 ct=12632 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12700 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=79 t=12700 ct=12682 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12716 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=79 t=12700 ct=12682 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12732 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=79 t=12700 ct=12682 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12750 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=80 t=12750 ct=12732 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12767 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=80 t=12750 ct=12732 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12783 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=80 t=12750 ct=12732 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12800 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=81 t=12800 ct=12783 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12816 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=81 t=12800 ct=12783 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12832 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=81 t=12800 ct=12783 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12850 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=82 t=12850 ct=12832 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12866 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=82 t=12850 ct=12832 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12882 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=82 t=12850 ct=12832 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12900 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=83 t=12900 ct=12882 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12916 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=83 t=12900 ct=12882 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12932 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=83 t=12900 ct=12882 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12950 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=84 t=12950 ct=12932 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12967 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=84 t=12950 ct=12932 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=12983 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=84 t=12950 ct=12932 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=13000 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=85 t=13000 ct=12983 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=13016 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=85 t=13000 ct=12983 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=13034 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=85 t=13000 ct=12983 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=13050 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=86 t=13050 ct=13034 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+[phase face]
+!cmd st=13066 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,28990,0
+!snap msg=86 t=13050 ct=13034 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=13083 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,27876,0
+!snap msg=86 t=13050 ct=13034 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-119.99817,0 lv=0,0,0
+!cmd st=13100 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,26827,0
+!snap msg=87 t=13100 ct=13083 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-131.87988,0 lv=0,0,0
+!cmd st=13116 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,25779,0
+!snap msg=87 t=13100 ct=13083 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-131.87988,0 lv=0,0,0
+!cmd st=13132 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,24730,0
+!snap msg=87 t=13100 ct=13083 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-131.87988,0 lv=0,0,0
+!cmd st=13150 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,23616,0
+!snap msg=88 t=13150 ct=13132 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-149.16138,0 lv=0,0,0
+!cmd st=13166 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,22502,0
+!snap msg=88 t=13150 ct=13132 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-149.16138,0 lv=0,0,0
+!cmd st=13183 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,21388,0
+!snap msg=88 t=13150 ct=13132 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-149.16138,0 lv=0,0,0
+!cmd st=13200 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,20339,0
+!snap msg=89 t=13200 ct=13183 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-167.51953,0 lv=0,0,0
+!cmd st=13216 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,19291,0
+!snap msg=89 t=13200 ct=13183 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-167.51953,0 lv=0,0,0
+!cmd st=13232 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,18242,0
+!snap msg=89 t=13200 ct=13183 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,-167.51953,0 lv=0,0,0
+!cmd st=13250 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,17194,0
+!snap msg=90 t=13250 ct=13232 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,175.19897,0 lv=0,0,0
+!cmd st=13266 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,16080,0
+!snap msg=90 t=13250 ct=13232 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,175.19897,0 lv=0,0,0
+!cmd st=13282 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,15031,0
+!snap msg=90 t=13250 ct=13232 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,175.19897,0 lv=0,0,0
+!cmd st=13300 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,13982,0
+!snap msg=91 t=13300 ct=13282 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,157.56042,0 lv=0,0,0
+!cmd st=13316 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,12934,0
+!snap msg=91 t=13300 ct=13282 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,157.56042,0 lv=0,0,0
+!cmd st=13332 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,11885,0
+!snap msg=91 t=13300 ct=13282 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,157.56042,0 lv=0,0,0
+!cmd st=13348 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,10837,0
+!snap msg=91 t=13300 ct=13282 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,157.56042,0 lv=0,0,0
+!cmd st=13350 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,9723,0
+!snap msg=92 t=13350 ct=13348 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,134.5221,0 lv=0,0,0
+!cmd st=13366 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,8674,0
+!snap msg=92 t=13350 ct=13348 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,134.5221,0 lv=0,0,0
+!cmd st=13382 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,7625,0
+!snap msg=92 t=13350 ct=13348 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,134.5221,0 lv=0,0,0
+!cmd st=13400 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,6577,0
+!snap msg=93 t=13400 ct=13382 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,116.87805,0 lv=0,0,0
+!cmd st=13416 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,5528,0
+!snap msg=93 t=13400 ct=13382 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,116.87805,0 lv=0,0,0
+!cmd st=13432 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,4414,0
+!snap msg=93 t=13400 ct=13382 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,116.87805,0 lv=0,0,0
+!cmd st=13450 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,3366,0
+!snap msg=94 t=13450 ct=13432 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,99.2395,0 lv=0,0,0
+!cmd st=13466 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,2317,0
+!snap msg=94 t=13450 ct=13432 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,99.2395,0 lv=0,0,0
+!cmd st=13482 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,1268,0
+!snap msg=94 t=13450 ct=13432 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,99.2395,0 lv=0,0,0
+!cmd st=13500 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,220,0
+!snap msg=95 t=13500 ct=13482 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,81.95801,0 lv=0,0,0
+!cmd st=13516 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,64642,0
+!snap msg=95 t=13500 ct=13482 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,81.95801,0 lv=0,0,0
+!cmd st=13532 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,63593,0
+!snap msg=95 t=13500 ct=13482 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,81.95801,0 lv=0,0,0
+[phase still]
+!cmd st=13550 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=96 t=13550 ct=13532 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,64.31946,0 lv=0,0,0
+!cmd st=13566 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=96 t=13550 ct=13532 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,64.31946,0 lv=0,0,0
+!cmd st=13582 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=96 t=13550 ct=13532 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,64.31946,0 lv=0,0,0
+!cmd st=13600 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=97 t=13600 ct=13582 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13616 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=97 t=13600 ct=13582 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13632 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=97 t=13600 ct=13582 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13650 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=98 t=13650 ct=13632 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13666 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=98 t=13650 ct=13632 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13682 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=98 t=13650 ct=13632 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13700 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=99 t=13700 ct=13682 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13716 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=99 t=13700 ct=13682 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13732 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=99 t=13700 ct=13682 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13750 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=100 t=13750 ct=13732 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13766 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=100 t=13750 ct=13732 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13782 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=100 t=13750 ct=13732 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13800 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=101 t=13800 ct=13782 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13816 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=101 t=13800 ct=13782 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13832 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=101 t=13800 ct=13782 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13850 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=102 t=13850 ct=13832 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13866 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=102 t=13850 ct=13832 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13882 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=102 t=13850 ct=13832 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13898 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=102 t=13850 ct=13832 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13900 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=103 t=13900 ct=13898 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13916 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=103 t=13900 ct=13898 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13950 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=104 t=13950 ct=13916 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13966 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=104 t=13950 ct=13916 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13982 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=104 t=13950 ct=13916 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=13998 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=104 t=13950 ct=13916 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=14000 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=105 t=14000 ct=13998 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=14016 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=105 t=14000 ct=13998 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=14032 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=105 t=14000 ct=13998 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+[phase walk]
+!cmd st=14050 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=106 t=14050 ct=14032 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=14066 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=106 t=14050 ct=14032 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=14082 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=106 t=14050 ct=14032 origin=4308,-94,56.247192 vel=0,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,0,0
+!cmd st=14100 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=107 t=14100 ct=14082 origin=4309.362,-93.125435,56.125 vel=36,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14116 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=107 t=14100 ct=14082 origin=4309.362,-93.125435,56.125 vel=36,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14132 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=107 t=14100 ct=14082 origin=4309.362,-93.125435,56.125 vel=36,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14150 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=108 t=14150 ct=14132 origin=4311.8916,-93.125435,56.125 vel=58,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14166 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=108 t=14150 ct=14132 origin=4311.8916,-93.125435,56.125 vel=58,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14182 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=108 t=14150 ct=14132 origin=4311.8916,-93.125435,56.125 vel=58,0,0 ground=1022 pm_type=0 pm_flags=262144 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14200 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=109 t=14200 ct=14182 origin=4313.492,-93.132996,57.6134 vel=23,-1,44 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14216 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=109 t=14200 ct=14182 origin=4313.492,-93.132996,57.6134 vel=23,-1,44 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14232 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=109 t=14200 ct=14182 origin=4313.492,-93.132996,57.6134 vel=23,-1,44 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14250 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=110 t=14250 ct=14232 origin=4314.12,-93.132996,60.582157 vel=9,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14266 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=110 t=14250 ct=14232 origin=4314.12,-93.132996,60.582157 vel=9,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14282 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=110 t=14250 ct=14232 origin=4314.12,-93.132996,60.582157 vel=9,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14300 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=111 t=14300 ct=14282 origin=4314.354,-93.132996,63.550907 vel=3,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14316 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=111 t=14300 ct=14282 origin=4314.354,-93.132996,63.550907 vel=3,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14332 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=111 t=14300 ct=14282 origin=4314.354,-93.132996,63.550907 vel=3,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14350 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=112 t=14350 ct=14332 origin=4314.4063,-93.132996,66.51965 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14366 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=112 t=14350 ct=14332 origin=4314.4063,-93.132996,66.51965 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14382 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=112 t=14350 ct=14332 origin=4314.4063,-93.132996,66.51965 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14400 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=113 t=14400 ct=14382 origin=4314.4063,-93.132996,69.488396 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14416 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=113 t=14400 ct=14382 origin=4314.4063,-93.132996,69.488396 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14432 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=113 t=14400 ct=14382 origin=4314.4063,-93.132996,69.488396 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14450 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=114 t=14450 ct=14432 origin=4314.4063,-93.132996,72.45714 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14466 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=114 t=14450 ct=14432 origin=4314.4063,-93.132996,72.45714 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14482 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=114 t=14450 ct=14432 origin=4314.4063,-93.132996,72.45714 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14498 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=114 t=14450 ct=14432 origin=4314.4063,-93.132996,72.45714 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14500 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=115 t=14500 ct=14498 origin=4314.4063,-93.132996,76.37588 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14516 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=115 t=14500 ct=14498 origin=4314.4063,-93.132996,76.37588 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14550 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=116 t=14550 ct=14516 origin=4314.4063,-93.133,77.44462 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14566 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=116 t=14550 ct=14516 origin=4314.4063,-93.133,77.44462 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14582 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=116 t=14550 ct=14516 origin=4314.4063,-93.133,77.44462 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14598 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=116 t=14550 ct=14516 origin=4314.4063,-93.133,77.44462 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=12 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14600 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=117 t=14600 ct=14598 origin=4314.4063,-93.132996,82.31336 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14616 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=117 t=14600 ct=14598 origin=4314.4063,-93.132996,82.31336 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14632 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=117 t=14600 ct=14598 origin=4314.4063,-93.132996,82.31336 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14650 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=118 t=14650 ct=14632 origin=4314.4063,-93.132996,84.33211 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14666 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=118 t=14650 ct=14632 origin=4314.4063,-93.132996,84.33211 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14682 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=118 t=14650 ct=14632 origin=4314.4063,-93.132996,84.33211 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14700 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=119 t=14700 ct=14682 origin=4314.4063,-93.132996,87.30085 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14716 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=119 t=14700 ct=14682 origin=4314.4063,-93.132996,87.30085 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14732 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=119 t=14700 ct=14682 origin=4314.4063,-93.132996,87.30085 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14750 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=120 t=14750 ct=14732 origin=4314.4063,-93.132996,90.26959 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14766 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=120 t=14750 ct=14732 origin=4314.4063,-93.132996,90.26959 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14782 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=120 t=14750 ct=14732 origin=4314.4063,-93.132996,90.26959 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14800 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=121 t=14800 ct=14782 origin=4314.4063,-93.132996,93.23834 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14816 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=121 t=14800 ct=14782 origin=4314.4063,-93.132996,93.23834 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14832 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=121 t=14800 ct=14782 origin=4314.4063,-93.132996,93.23834 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14850 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=122 t=14850 ct=14832 origin=4314.4063,-93.132996,96.20709 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14866 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=122 t=14850 ct=14832 origin=4314.4063,-93.132996,96.20709 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14882 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=122 t=14850 ct=14832 origin=4314.4063,-93.132996,96.20709 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14900 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=123 t=14900 ct=14882 origin=4314.4063,-93.132996,99.17584 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14916 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=123 t=14900 ct=14882 origin=4314.4063,-93.132996,99.17584 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14932 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=123 t=14900 ct=14882 origin=4314.4063,-93.132996,99.17584 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14950 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=124 t=14950 ct=14932 origin=4314.4063,-93.132996,102.14459 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14966 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=124 t=14950 ct=14932 origin=4314.4063,-93.132996,102.14459 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=14982 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=124 t=14950 ct=14932 origin=4314.4063,-93.132996,102.14459 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15000 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=125 t=15000 ct=14982 origin=4314.4063,-93.132996,105.11334 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15016 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=125 t=15000 ct=14982 origin=4314.4063,-93.132996,105.11334 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15032 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=125 t=15000 ct=14982 origin=4314.4063,-93.132996,105.11334 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15050 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=126 t=15050 ct=15032 origin=4314.4063,-93.132996,108.08209 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15066 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=126 t=15050 ct=15032 origin=4314.4063,-93.132996,108.08209 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15082 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=126 t=15050 ct=15032 origin=4314.4063,-93.132996,108.08209 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15098 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=126 t=15050 ct=15032 origin=4314.4063,-93.132996,108.08209 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15100 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=127 t=15100 ct=15082 origin=4314.4063,-93.132996,111.05084 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15116 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=127 t=15100 ct=15082 origin=4314.4063,-93.132996,111.05084 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15132 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=127 t=15100 ct=15082 origin=4314.4063,-93.132996,111.05084 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15150 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=128 t=15150 ct=15132 origin=4314.4063,-93.132996,114.01959 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15166 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=128 t=15150 ct=15132 origin=4314.4063,-93.132996,114.01959 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15182 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=128 t=15150 ct=15132 origin=4314.4063,-93.132996,114.01959 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15200 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=129 t=15200 ct=15182 origin=4314.4063,-93.132996,116.98834 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15216 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=129 t=15200 ct=15182 origin=4314.4063,-93.132996,116.98834 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15232 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=129 t=15200 ct=15182 origin=4314.4063,-93.132996,116.98834 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15250 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=130 t=15250 ct=15232 origin=4314.4063,-93.132996,119.95709 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15266 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=130 t=15250 ct=15232 origin=4314.4063,-93.132996,119.95709 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15282 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=130 t=15250 ct=15232 origin=4314.4063,-93.132996,119.95709 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15300 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=131 t=15300 ct=15282 origin=4314.4063,-93.132996,122.92584 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15316 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=131 t=15300 ct=15282 origin=4314.4063,-93.132996,122.92584 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15332 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=131 t=15300 ct=15282 origin=4314.4063,-93.132996,122.92584 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15350 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=132 t=15350 ct=15332 origin=4314.4063,-93.132996,125.89459 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15366 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=132 t=15350 ct=15332 origin=4314.4063,-93.132996,125.89459 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15382 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=132 t=15350 ct=15332 origin=4314.4063,-93.132996,125.89459 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15400 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=133 t=15400 ct=15382 origin=4314.4063,-93.132996,128.86334 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15416 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=133 t=15400 ct=15382 origin=4314.4063,-93.132996,128.86334 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15432 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=133 t=15400 ct=15382 origin=4314.4063,-93.132996,128.86334 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15450 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=134 t=15450 ct=15432 origin=4314.4063,-93.132996,131.83208 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15466 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=134 t=15450 ct=15432 origin=4314.4063,-93.132996,131.83208 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15482 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=134 t=15450 ct=15432 origin=4314.4063,-93.132996,131.83208 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15500 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=135 t=15500 ct=15482 origin=4314.4063,-93.132996,134.80081 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15516 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=135 t=15500 ct=15482 origin=4314.4063,-93.132996,134.80081 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15532 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=135 t=15500 ct=15482 origin=4314.4063,-93.132996,134.80081 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15550 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=136 t=15550 ct=15532 origin=4314.4063,-93.132996,137.76955 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15566 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=136 t=15550 ct=15532 origin=4314.4063,-93.132996,137.76955 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15582 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=136 t=15550 ct=15532 origin=4314.4063,-93.132996,137.76955 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15598 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=136 t=15550 ct=15532 origin=4314.4063,-93.132996,137.76955 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15600 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=137 t=15600 ct=15598 origin=4314.4063,-93.132996,141.68828 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15616 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=137 t=15600 ct=15598 origin=4314.4063,-93.132996,141.68828 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15650 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=138 t=15650 ct=15616 origin=4314.4063,-93.133,142.75702 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15666 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=138 t=15650 ct=15616 origin=4314.4063,-93.133,142.75702 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15682 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=138 t=15650 ct=15616 origin=4314.4063,-93.133,142.75702 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15698 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=138 t=15650 ct=15616 origin=4314.4063,-93.133,142.75702 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15700 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=139 t=15700 ct=15698 origin=4314.4063,-93.132996,147.62576 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15716 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=139 t=15700 ct=15698 origin=4314.4063,-93.132996,147.62576 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15732 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=139 t=15700 ct=15698 origin=4314.4063,-93.132996,147.62576 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15750 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=140 t=15750 ct=15732 origin=4314.4063,-93.132996,149.6445 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15766 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=140 t=15750 ct=15732 origin=4314.4063,-93.132996,149.6445 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15782 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=140 t=15750 ct=15732 origin=4314.4063,-93.132996,149.6445 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15800 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=141 t=15800 ct=15782 origin=4314.4063,-93.132996,152.61324 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15816 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=141 t=15800 ct=15782 origin=4314.4063,-93.132996,152.61324 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15832 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=141 t=15800 ct=15782 origin=4314.4063,-93.132996,152.61324 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15850 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=142 t=15850 ct=15832 origin=4314.4063,-93.132996,155.58197 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15866 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=142 t=15850 ct=15832 origin=4314.4063,-93.132996,155.58197 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15882 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=142 t=15850 ct=15832 origin=4314.4063,-93.132996,155.58197 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15900 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=143 t=15900 ct=15882 origin=4314.4063,-93.132996,158.5507 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15916 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=143 t=15900 ct=15882 origin=4314.4063,-93.132996,158.5507 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15932 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=143 t=15900 ct=15882 origin=4314.4063,-93.132996,158.5507 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15950 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=144 t=15950 ct=15932 origin=4314.4063,-93.132996,161.51944 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15966 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=144 t=15950 ct=15932 origin=4314.4063,-93.132996,161.51944 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=15982 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=144 t=15950 ct=15932 origin=4314.4063,-93.132996,161.51944 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16000 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=145 t=16000 ct=15982 origin=4314.4063,-93.132996,164.48817 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16016 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=145 t=16000 ct=15982 origin=4314.4063,-93.132996,164.48817 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16032 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=145 t=16000 ct=15982 origin=4314.4063,-93.132996,164.48817 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16048 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=145 t=16000 ct=15982 origin=4314.4063,-93.132996,164.48817 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16050 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=146 t=16050 ct=16048 origin=4314.4063,-93.132996,168.4069 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16066 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=146 t=16050 ct=16048 origin=4314.4063,-93.132996,168.4069 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16100 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=147 t=16100 ct=16066 origin=4314.4063,-93.133,169.47565 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16116 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=147 t=16100 ct=16066 origin=4314.4063,-93.133,169.47565 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16132 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=147 t=16100 ct=16066 origin=4314.4063,-93.133,169.47565 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16148 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=147 t=16100 ct=16066 origin=4314.4063,-93.133,169.47565 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16150 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=148 t=16150 ct=16148 origin=4314.4063,-93.132996,174.34439 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16166 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=148 t=16150 ct=16148 origin=4314.4063,-93.132996,174.34439 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16182 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=148 t=16150 ct=16148 origin=4314.4063,-93.132996,174.34439 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16200 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=149 t=16200 ct=16182 origin=4314.4063,-93.132996,176.36313 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16216 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=149 t=16200 ct=16182 origin=4314.4063,-93.132996,176.36313 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16232 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=149 t=16200 ct=16182 origin=4314.4063,-93.132996,176.36313 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16250 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=150 t=16250 ct=16232 origin=4314.4063,-93.132996,179.33186 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16266 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=150 t=16250 ct=16232 origin=4314.4063,-93.132996,179.33186 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16282 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=150 t=16250 ct=16232 origin=4314.4063,-93.132996,179.33186 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16300 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=151 t=16300 ct=16282 origin=4314.4063,-93.132996,182.3006 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16316 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=151 t=16300 ct=16282 origin=4314.4063,-93.132996,182.3006 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16332 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=151 t=16300 ct=16282 origin=4314.4063,-93.132996,182.3006 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16350 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=152 t=16350 ct=16332 origin=4314.4063,-93.132996,185.26933 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16366 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=152 t=16350 ct=16332 origin=4314.4063,-93.132996,185.26933 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16382 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=152 t=16350 ct=16332 origin=4314.4063,-93.132996,185.26933 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16400 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=153 t=16400 ct=16382 origin=4314.4063,-93.132996,188.23807 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16416 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=153 t=16400 ct=16382 origin=4314.4063,-93.132996,188.23807 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16432 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=153 t=16400 ct=16382 origin=4314.4063,-93.132996,188.23807 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16450 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=154 t=16450 ct=16432 origin=4314.4063,-93.132996,191.2068 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16466 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=154 t=16450 ct=16432 origin=4314.4063,-93.132996,191.2068 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16482 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=154 t=16450 ct=16432 origin=4314.4063,-93.132996,191.2068 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16500 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=155 t=16500 ct=16482 origin=4314.4063,-93.132996,194.17554 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16516 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=155 t=16500 ct=16482 origin=4314.4063,-93.132996,194.17554 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16532 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=155 t=16500 ct=16482 origin=4314.4063,-93.132996,194.17554 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16548 buttons=0 wbuttons=0 weapon=12 up=0 forward=127 right=0 angles=0,62807,0
+!snap msg=155 t=16500 ct=16482 origin=4314.4063,-93.132996,194.17554 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+[phase hold]
+!cmd st=16550 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=156 t=16550 ct=16548 origin=4314.4063,-93.132996,198.09427 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16566 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=156 t=16550 ct=16548 origin=4314.4063,-93.132996,198.09427 vel=0,-1,59 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16600 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=157 t=16600 ct=16566 origin=4314.4063,-93.129,198.91626 vel=0,0,44 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16616 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=157 t=16600 ct=16566 origin=4314.4063,-93.129,198.91626 vel=0,0,44 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16632 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=157 t=16600 ct=16566 origin=4314.4063,-93.129,198.91626 vel=0,0,44 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16648 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=157 t=16600 ct=16566 origin=4314.4063,-93.129,198.91626 vel=0,0,44 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16650 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=158 t=16650 ct=16648 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16666 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=158 t=16650 ct=16648 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16682 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=158 t=16650 ct=16648 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16700 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=159 t=16700 ct=16682 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16716 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=159 t=16700 ct=16682 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16732 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=159 t=16700 ct=16682 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16750 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=160 t=16750 ct=16732 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16766 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=160 t=16750 ct=16732 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16782 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=160 t=16750 ct=16732 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16800 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=161 t=16800 ct=16782 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16816 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=161 t=16800 ct=16782 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16832 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=161 t=16800 ct=16782 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16850 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=162 t=16850 ct=16832 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16866 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=162 t=16850 ct=16832 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16882 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=162 t=16850 ct=16832 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16900 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=163 t=16900 ct=16882 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16916 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=163 t=16900 ct=16882 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16932 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=163 t=16900 ct=16882 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16950 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=164 t=16950 ct=16932 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16966 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=164 t=16950 ct=16932 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=16982 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=164 t=16950 ct=16932 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=17000 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=165 t=17000 ct=16982 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=17016 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=165 t=17000 ct=16982 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=17032 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=165 t=17000 ct=16982 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=17050 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,62807,0
+!snap msg=166 t=17050 ct=17032 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
+!cmd st=17066 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,30039,0
+!snap msg=166 t=17050 ct=17032 origin=4314.4063,-93.125,199.55472 vel=0,0,0 ground=1023 pm_type=0 pm_flags=262160 pm_time=0 da=0,13652,0 weapon=0 view=0,60.00183,0 lv=0,-1,0
