@@ -173,6 +173,17 @@ the wire's numbering.
   starts 3 s past the weapon pick, after the seat. `--slope-from-spawn` logs
   from the spawn, whose pick sets the seat's `legsAnim` toggle (13).
 
+- `--probe-fall`, `--probe-ride`, `--probe-vehicle`, `--probe-uo-weapon`
+  and `--probe-items` print `CMDS` lines (every cmd's time, input changes,
+  each snapshot's `commandTime`) and one `SPAWNED` line (the first spawned
+  snapshot's time, origin, view and velocity). A gate replays them on the
+  capture's clock: ours runs alone until its spawn or placement lands on
+  the capture's time (`vehicle_die_ab`, `vehicle_runover_ab`,
+  `itemdrop_ab`), then sends the cmds through `ProbeHold::framed` with
+  `times` and `ran`. A placement in the spawn's frame keeps the velocity
+  the cmds run at the spawn point left, which the gate hands ours from
+  `SPAWNED` (`Server::test_set_client_velocity`, cod11-combat.md 2.1).
+
 ### Receive order
 
 Two probes on one server answer the same snapshot within microseconds,
