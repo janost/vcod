@@ -1,3 +1,10 @@
+# cod4_lnxded 1.7 under gdb (unshare -rnm), fs_game mods/vcodidle then mods/vcodhp, devmap mp_crash,
+# war, sv_pure 0, one cod4_probe joining axis (--script idle --qport 4021), the heli_idle and the
+# hardpoint_flight gsc. Breakpoints at VEH_UpdateMoveToGoal (0x809e38a) and its two returns into
+# the vehicle think (0x80a06e8, 0x80a084e) dump the vehicle record (entity +0x164) before and after
+# each call, and the notifies between. Per think: the aim's three words | the record's words
+# (offset=word, hex) changed since the last think's after | those the call changed | the notifies.
+# docs/research/cod4-gsc.md 3.2, "The flight's float model".
 run idle
 think 44b40000 42200000 44a10000 | c0=c40c0000 c4=c40c0000 c8=44880000 d8=00000000 dc=c2dc0000 e0=00000000 f0=42340000 f4=42b40000 f8=42340000 fc=41c80000 100=41700000 138=00000000 13c=00000000 140=00000000 150=00000000 154=00000000 158=00000000 15c=00000000 160=00000000 164=00000000 168=41c80000 16c=41c80000 1c8=00000001 224=00000000 228=41200000 22c=40a00000 23c=00000000 24c=44300000 250=43b00000 254=43300000 25c=00000000 260=44840000 264=3f000000 26c=00000000 270=00000000 274=00000000 278=00000000 280=00000000 29c=00000000 2ac=00000000 2b0=bf800000 2b4=3dcccccd 2b8=00000000 2bc=00000000 | c0=c40be527 c4=c40bf7f2 c8=44880158 d8=bde66667 dc=c2dbe000 e0=bde66667 138=41863f5f 13c=40a118d7 140=3fd6cbca 150=c0100000 154=3fa00000 158=c0100000 15c=41063f5f 160=402118d7 164=3f56cbca 25c=418ccccd 2b0=4185980e | 
 think 44b40000 42200000 44a10000 |  | c0=c40b949b c4=c40bdfc8 c8=4488055f d8=beaccccd dc=c2dba000 e0=beaccccd 138=42063f5e 13c=412118d8 140=4056cbc7 150=c0900000 154=40200000 158=c0900000 15c=41495f0e 160=4071a544 164=3fa118d5 25c=420ccccd | 
