@@ -746,9 +746,11 @@ fn walk(node: &Blend, weight: f32, dest: &mut [Record], first: bool, nested: boo
         }
     }
     let w = f64::from(weight);
+    // `((q0² + q1²) + q2²) + q3²` on the x87 stack, stored once (UO
+    // 0x80be0f3..0x80be121, 1.5b 0x80c8d5f..0x80c8d8d).
     let len = |q: &[f32; 4]| {
         let q = q.map(f64::from);
-        st(q[3] * q[3] + q[2] * q[2] + q[1] * q[1] + q[0] * q[0])
+        st(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3])
     };
     match (nested, own) {
         (false, _) => {
