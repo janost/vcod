@@ -11,8 +11,8 @@
 //! zones' (`Cod4Server::set_script_overrides`), the probe joins in process
 //! on retail's level clock as `wire_ab`'s do, and each plane's and the
 //! helicopter's wire state is compared with retail's at the same time past
-//! its spawn (docs/research/cod4-gsc.md 3.2). What still differs is
-//! [`GAPS`]. `helicopter_collision_and_pose_match_retail` replays a second
+//! its spawn, word for word (docs/research/cod4-gsc.md 3.2).
+//! `helicopter_collision_and_pose_match_retail` replays a second
 //! capture the same way: the posed tags, a trace through the turned gun
 //! and the move trace's notifies; `helicopter_idle_matches_retail` a
 //! third: a helicopter with no goal and its gun on a still body. Needs
@@ -38,33 +38,6 @@ const GSC: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../cod4/tests/fixtures/gsc/hardpoint_flight"
 );
-
-/// The fields compared, each with the largest difference tolerated (0:
-/// bit for bit) and why. A field not listed is not compared.
-const GAPS: &[(&str, f32, &str)] = &[
-    ("lerp.pos.trBase[0]", 10.0, FLIGHT),
-    ("lerp.pos.trBase[1]", 10.0, FLIGHT),
-    ("lerp.pos.trBase[2]", 2.0, FLIGHT),
-    ("lerp.apos.trBase[0]", 2.5, FLIGHT),
-    ("lerp.apos.trBase[1]", 2.5, FLIGHT),
-    ("lerp.apos.trBase[2]", 2.5, FLIGHT),
-    ("lerp.u.vehicle.gunPitch", 0.13, AIM),
-    ("lerp.u.vehicle.gunYaw", 0.13, AIM),
-];
-
-/// Why the gun is tolerated in flight: `VEH_UpdateAim` aims from the posed
-/// `tag_barrel` in the body's frame, so the gun parts as the flown body
-/// does ([`FLIGHT`]). On a body that holds still it matches word for word
-/// (`helicopter_idle_matches_retail`, cod4-gsc.md 3.2, "The turret").
-const AIM: &str = "the gun in the flown body's frame (cod4-gsc.md 3.2)";
-
-/// Why the helicopter's flight is tolerated: the first 1.5 s match bit
-/// for bit, then the turn through the first node parts by a few hundredths
-/// of a degree (cod4-gsc.md 3.2, "The flight against retail"): the think's
-/// float model, retail's x87 intermediates against ours in `f32`, steering
-/// along a goal vector that shrinks to nothing at the node. The planes
-/// match bit for bit.
-const FLIGHT: &str = "the helicopter think's float model at the nodes (cod4-gsc.md 3.2)";
 
 /// The fields of a plane or helicopter the comparison reads.
 const FIELDS: &[&str] = &[
@@ -227,15 +200,9 @@ fn ours(
 }
 
 /// The largest difference of each [`FIELDS`] field between retail's
-/// vehicles and ours at the same time past spawn, and the rows ours lacks.
-/// `tol` names the difference tolerated in a field at a time; every row
-/// past it is listed.
-fn compare(
-    rt: &Tracks,
-    ot: &Tracks,
-    tol: impl Fn(&str, i32) -> f32,
-    report: bool,
-) -> (Vec<String>, Vec<String>) {
+/// vehicles and ours at the same time past spawn, the rows ours lacks and
+/// every row whose words differ.
+fn compare(rt: &Tracks, ot: &Tracks, report: bool) -> (Vec<String>, Vec<String>) {
     assert_eq!(
         rt.keys().collect::<Vec<_>>(),
         ot.keys().collect::<Vec<_>>(),
@@ -277,9 +244,7 @@ fn compare(
                 if report {
                     eprintln!("{key:?} +{t} {name}: retail {a} ours {b}");
                 }
-                if d > tol(name, *t) {
-                    unexplained.push(format!("{key:?} +{t} {name}: retail {a} ours {b}"));
-                }
+                unexplained.push(format!("{key:?} +{t} {name}: retail {a} ours {b}"));
                 let w = worst.entry(name).or_insert((0.0, String::new()));
                 if d > w.0 {
                     *w = (d, format!("{key:?} +{t}: retail {a} ours {b}"));
@@ -294,8 +259,7 @@ fn compare(
     (missing, unexplained)
 }
 
-/// Retail's vehicles and ours, row by row: every [`FIELDS`] difference
-/// past its [`GAPS`] tolerance, and the largest of each field.
+/// Retail's vehicles and ours, row by row: every [`FIELDS`] word.
 #[test]
 fn hardpoint_flights_match_retail() {
     let Some(install) = vcod_cod4::testing::cod4_install() else {
@@ -305,8 +269,7 @@ fn hardpoint_flights_match_retail() {
     let (o, aborts) = ours(&install, &r, GSC, SEED);
     assert!(aborts.is_empty(), "{aborts:?}");
     let report = std::env::var_os("HARDPOINT_AB_REPORT").is_some();
-    let gap = |name: &str, _| GAPS.iter().find(|g| g.0 == name).map_or(0.0, |g| g.1);
-    let (missing, unexplained) = compare(&tracks(&r), &tracks(&o), gap, report);
+    let (missing, unexplained) = compare(&tracks(&r), &tracks(&o), report);
     assert!(missing.is_empty(), "{missing:?}");
     assert!(unexplained.is_empty(), "{}", unexplained.join("\n"));
 }
@@ -316,9 +279,6 @@ const IDLE_GSC: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../cod4/tests/fixtures/gsc/heli_idle"
 );
-
-/// How long past its spawn the idle capture's helicopter has no goal.
-const IDLE_MS: i32 = 4000;
 
 /// `cod4_hardpoint_ab`'s idle capture (`play-1.7-heli-idle.txt`): retail
 /// 1.7 under `+set fs_game mods/vcodidle +devmap mp_crash`, `war`, sv_pure
@@ -330,9 +290,9 @@ const IDLE_MS: i32 = 4000;
 /// flies a pass-through goal. Until the goal every word matches retail's:
 /// the no-goal think (0x808ba22), the link's snap of its yaw, the skeleton
 /// and the turret (`VEH_UpdateAim`) on a body that holds still
-/// (cod4-gsc.md 3.2). Past it the flight's [`GAPS`] hold, the gun's under
-/// the body's. No random draw reaches it (no hover radius, no stop), so
-/// the seed is the flight capture's.
+/// (cod4-gsc.md 3.2). Past it the flight and the gun match too. No
+/// random draw reaches it (no hover radius, no stop), so the seed is the
+/// flight capture's.
 #[test]
 fn helicopter_idle_matches_retail() {
     let Some(install) = vcod_cod4::testing::cod4_install() else {
@@ -348,11 +308,7 @@ fn helicopter_idle_matches_retail() {
             .is_some_and(|rows| rows.len() > 100),
         "the capture's helicopter"
     );
-    let gap = |name: &str, t: i32| {
-        let gaps: &[(&str, f32, &str)] = if t <= IDLE_MS { &[] } else { GAPS };
-        gaps.iter().find(|g| g.0 == name).map_or(0.0, |g| g.1)
-    };
-    let (missing, unexplained) = compare(&rt, &ot, gap, report);
+    let (missing, unexplained) = compare(&rt, &ot, report);
     assert!(missing.is_empty(), "{missing:?}");
     assert!(unexplained.is_empty(), "{}", unexplained.join("\n"));
 }

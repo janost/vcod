@@ -1207,7 +1207,7 @@ impl GameHost {
     /// fields: a mover's `r.currentOrigin`, which runs a frame ahead of what
     /// script reads (movers doc, section 8). Every link first snaps
     /// `.angles` (`r.currentAngles`) as `SV_LinkEntity` does, linked or not
-    /// (`mover::snap_angles`, movers doc 12, "The snap on every link").
+    /// (the profile's `link_snap`, movers doc 12, "The snap on every link").
     pub fn link_entity_at(&mut self, cx: &mut Cx, id: EntId, pose: Option<([f32; 3], [f32; 3])>) {
         use crate::game::entity::LinkKind;
         let Some(e) = self.ents.get(id) else {
@@ -1228,7 +1228,7 @@ impl GameHost {
             Some(p) => p,
             None => (vector(self, cx, "origin"), vector(self, cx, "angles")),
         };
-        let angles = crate::game::mover::snap_angles(raw.into()).to_array();
+        let angles = (self.profile.link_snap)(raw.into()).to_array();
         if angles != raw {
             let atom = cx.intern_folded("angles");
             let _ = self.write_field(cx, id, atom, Value::Vector(angles));

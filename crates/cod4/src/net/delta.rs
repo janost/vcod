@@ -177,6 +177,17 @@ pub fn angle16_sent(word: u32) -> u32 {
     short_angle(v as i32 as i16)
 }
 
+/// [`angle16_sent`] for a field of `bits` -100 or -87. A -100 field's zero
+/// bit tests the word, so a non-zero angle under half a unit (or -0) goes
+/// out as a set bit and a short 0, which the client reads as the smallest
+/// float above zero ([`Code::Angle`]'s reader).
+fn angle_field_sent(bits: i32, word: u32) -> u32 {
+    match angle16_sent(word) {
+        0 if bits == -100 && word != 0 => 1,
+        v => v,
+    }
+}
+
 /// The value behind a set change bit (for `-85`, past its toggle bit).
 fn read_value(r: &mut MsgReader, ctx: &Ctx, from: u32, f: &Field) -> u32 {
     Code::of(f.bits).read(r, ctx, from)
@@ -670,7 +681,7 @@ impl EntityState {
     pub fn sent(mut self) -> Self {
         for f in Self::table(self.etype()) {
             if matches!(f.bits, -100 | -87) {
-                self.0[f.word()] = angle16_sent(self.0[f.word()]);
+                self.0[f.word()] = angle_field_sent(f.bits, self.0[f.word()]);
             }
         }
         self
@@ -753,7 +764,7 @@ impl PlayerState {
     pub fn sent_angles(&mut self) {
         for f in fields::PLAYER_STATE {
             if matches!(f.bits, -100 | -87) {
-                self.words[f.word()] = angle16_sent(self.words[f.word()]);
+                self.words[f.word()] = angle_field_sent(f.bits, self.words[f.word()]);
             }
         }
     }

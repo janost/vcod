@@ -59,6 +59,10 @@ pub struct HostProfile {
     /// A link's angle snap keeps the unsnapped angles for the wire's
     /// `apos.trBase` (`Entity::apos_base`, cod2-protocol.md 15.6).
     pub unsnapped_apos: bool,
+    /// `SV_LinkEntity`'s snap of `r.currentAngles` on every link:
+    /// CoD1's truncating one (`mover::snap_angles`) or 1.7's flooring one
+    /// (`mover::snap_angles4`).
+    pub link_snap: fn(glam::Vec3) -> glam::Vec3,
     /// A script field's route on an entity and on a HUD element
     /// (`game::fields`).
     pub route_entity: fn(&str) -> Route,
@@ -203,6 +207,7 @@ const fn cod1(defs: &'static Defs, builtins: fn() -> &'static BuiltinSet, v1: bo
         weapons: WeaponNumbering::Fixed,
         init_winner: false,
         unsnapped_apos: false,
+        link_snap: crate::game::mover::snap_angles,
         route_entity: fields::route_entity,
         route_hud: fields::route_hud,
         trigger_kind: trigger::kind_of,
@@ -266,6 +271,7 @@ pub static COD2: HostProfile = HostProfile {
     weapons: WeaponNumbering::Registered,
     init_winner: true,
     unsnapped_apos: true,
+    link_snap: crate::game::mover::snap_angles,
     route_entity: fields::route_entity_cod2,
     route_hud: fields::route_hud_cod2,
     trigger_kind: trigger::kind_of_cod2,
@@ -325,6 +331,7 @@ pub static COD4: HostProfile = HostProfile {
     weapons: WeaponNumbering::Fixed,
     init_winner: true,
     unsnapped_apos: true,
+    link_snap: crate::game::mover::snap_angles4,
     route_entity: fields::route_entity_cod2,
     route_hud: fields::route_hud_cod4,
     trigger_kind: trigger::kind_of_cod2,
