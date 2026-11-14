@@ -781,6 +781,21 @@ with "0", "1" or "2" (0x3001df6d). INFERRED: the event sets the client's
 stance to stand, crouch or prone, which its next cmd carries (CoDMP.exe
 0x40ae90 reads `cl_stance` 1 as crouch and 2 as prone).
 
+VERIFIED live, 2026-11-14 (`crates/common/tests/fixtures/net/snapshots-follow-stance.bin`
+on 1.1d, `-follow-stance-uo.bin` on UO 1.51b, each with its gamestate): a
+`--probe-follow --save-snapshots` spectator (client 1) following a
+`--probe-fall --probe-fall-prone 90` client 0 under `probe_pronedrop`
+reads the followed body's airborne refusals in its own playerstate's ring,
+141 on 1.1d and wire 143 on UO, with the playerstate's `clientNum` 0; on
+1.1d its first followed snapshot (20100) also carries client 0's 140. So
+a follower's cgame meets these events in the "sent to other clients" arm
+and its `cl_stance` stays. vcod: playerstate events carry the
+playerstate's `clientNum`, which `forced_stance` tests against the
+gamestate's (`play::events::tests::a_follower_keeps_its_stance_through_the_followed_bodys_events`).
+INFERRED, not measured: the cgame side (the printed warning, `cl_stance`
+and `cl_stanceTemp` on a retail client) needs the Windows client, which
+no capture here runs.
+
 VERIFIED live: `client-probes/probe_pronedrop` on
 `tools/run_probe.sh mp_carentan` with a `--probe-fall --probe-fall-prone 90`
 client, which holds prone on every cmd. Lifted 100 units over the street at
