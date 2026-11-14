@@ -49,7 +49,7 @@ picks through `Server::pin_spawns`, as `gametypes_ab` does.
 |---|---|---|
 | pmove, collision or nav | `cargo test --release -p vcod-server --test server -- --ignored nav_census::` | ~8 s, 65 s CPU at 1.1; 20-60 s, 340 s CPU at UO |
 | bots | `cargo test --release -p vcod-server --test server -- --ignored bots::` | ~5 s at 1.1; ~7 min at UO |
-| the bots' driver or its threads | `cargo test --release -p vcod-server --test server -- bot_threads::` (not ignored; each install it finds) | ~10 s a game |
+| the bots' driver or its threads | `cargo test --release -p vcod-server --test server -- bot_threads::` (not ignored; each install it finds; `tdm` and `sd`, UO `ctf`) | ~15 s a game |
 | UO bot vehicles | `-- --ignored bot_vehicles::` at a UO install | ~30 s |
 | shaders or render layouts | `renderer::pipeline_check` (lavapipe env below) | |
 | CoD2 maps, CoD2 load path | `cod2_map_census`, `cod2_load_profile` | |

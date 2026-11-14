@@ -2875,7 +2875,15 @@ threads, serial and on eight threads, 2026-11-14; `bot_threads::`, one
 match per game serial against four threads, every tick's cmds and bodies).
 The gate catches a plan that reads wrong: worked out from a bot's
 generator with one bit flipped, the bots part at tick 5 on 1.1, 4 on CoD2
-and 63 on CoD4. VERIFIED (`bot_threads::`, 2026-11-14).
+and 63 on CoD4. VERIFIED (`bot_threads::`, 2026-11-14). With the objective
+tactics (bot-objectives.md 13) merged in, 1.1 mp_carentan `sd`, UO
+mp_cassino `ctf`, CoD2 mp_toujane `sd` and CoD4 mp_crash `sd` give the
+same digests serial, on four threads and on the tactics branch's own tip
+(54db31752), seeds 1 and 2; `bot_threads::` covers `sd` (UO `ctf`) beside
+`tdm`. VERIFIED (release `bot_match DIGEST=1`, 12 bots, 2000 ticks,
+2026-11-14). The posts, the hot sites and `stand_room` are dealt or felt
+before the plans and reach them in the views; the route's `SPREADS` reads
+`Bot::tactics` through `RouteIn`. INFERRED (`driver::step`).
 
 - The plan budget stays shared and spent in slot order. A route worked out
   on a worker searches from a full budget (4000), and the loop takes it only
