@@ -1701,13 +1701,25 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
     at z 51.7 (its ground the tank) and its explode's down trace (mask
     0x11) meets nothing: surface 0, parm 0, the splash point 10 up
     (VERIFIED, live).
+  - A frag that strikes a hull bounces with no event and charges nothing
+    on the strike: the deck frag's hull contacts and the jeep's second
+    frag, which strikes its flank and its body before it rolls back to the
+    thrower, raise no 181 (`EV_GRENADE_BOUNCE`) there, and the hull's first
+    notify is the splash's (VERIFIED, `*-uo-fragtank.bin`,
+    `*-uo-fragjeep.bin`, `event_dump`). INFERRED: that is
+    `G_MissileImpact`'s arm for a struck entity that takes damage while
+    the frag's `damage` is 0 (cod11-combat.md 13.1), keyed on
+    `tr.entityNum`.
   - The bazooka's hip spread (7°) draws on each server, so its contacts
     repeat neither between two retail runs nor against ours; the amounts
     do (VERIFIED, live).
 
   `vehicle_blast_ab` replays all four: notifies, the shooter's own blasts
-  and the explodes match field for field, a rocket's aim within its spread
-  (VERIFIED, replay). It rests on three rules: the frag's `vehiclescale`
+  and the explodes match field for field, a rocket's aim within its spread,
+  and each frag's bounces by the ms since its throw and their surface
+  (VERIFIED, replay). Ours named the jeep's flank through its clip in the
+  world rather than its posed model and so raised a metal bounce there,
+  until the quiet rule read the struck entity. It rests on three rules: the frag's `vehiclescale`
   (without it ours charged 120 by the flank); a wreck with no contents
   meets no trace (the entity clip skips one whose `r.contents` meet none
   of the mask, `coduo_lnxded` 0x809a72a, VERIFIED decompile; else the
