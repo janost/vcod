@@ -480,7 +480,7 @@ impl Tally {
 /// `TICKSTATS=1` (any game): each tick's wall time and its
 /// `vcod_server::tick_profile` phases, printed per match to stderr as
 /// `tickstats <map> <gametype> seed <s>: ticks N p50 p90 p99 max` and a
-/// line per phase (mean and p99 ms a tick, longest mean first). Tick 0,
+/// line per phase (mean, p50, p99 and max ms a tick, longest mean first). Tick 0,
 /// which waits on the nav graph, is left out. Run with `JOBS=1`: matches
 /// beside each other share the CPUs.
 #[derive(Default)]
@@ -535,7 +535,7 @@ impl TickStats {
             self.worst.1,
             self.worst.2,
         );
-        let mut rows: Vec<(&str, f32, f32)> = self
+        let mut rows: Vec<(&str, f32, [f32; 3])> = self
             .phases
             .iter()
             .map(|(k, v)| {
@@ -544,14 +544,16 @@ impl TickStats {
                 (
                     *k,
                     v.iter().sum::<f32>() / n.max(1) as f32,
-                    Self::pct(&v, 0.99),
+                    [0.5, 0.99, 1.0].map(|p| Self::pct(&v, p)),
                 )
             })
             .collect();
         rows.sort_by(|a, b| b.1.total_cmp(&a.1));
-        for (k, mean, p99) in rows {
+        for (k, mean, [p50, p99, max]) in rows {
             if mean >= 0.01 || p99 >= 0.1 {
-                eprintln!("tickstats   {k:<28} mean {mean:6.3} p99 {p99:6.2} ms");
+                eprintln!(
+                    "tickstats   {k:<28} mean {mean:6.3} p50 {p50:6.2} p99 {p99:6.2} max {max:6.1} ms"
+                );
             }
         }
     }

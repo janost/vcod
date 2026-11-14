@@ -5,6 +5,7 @@ mod blast_entity_uo_ab;
 mod bootstrap;
 mod bot_admin;
 mod bot_objectives;
+mod bot_threads;
 mod bot_vehicles;
 mod bots;
 mod bump_ab;
