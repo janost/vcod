@@ -48,8 +48,18 @@ fn main() -> Result<()> {
             for g in &g.geoms {
                 println!(
                     "  geom brush {} type {} offset {:?} half {:?} axis {:?}",
-                    g.brush, g.kind, g.offset, g.half_lengths, g.orientation
+                    g.brush.is_some(),
+                    g.kind,
+                    g.offset,
+                    g.half_lengths,
+                    g.orientation
                 );
+                if let Some(b) = &g.brush {
+                    println!("    brush mins {:?} maxs {:?}", b.mins, b.maxs);
+                    for p in &b.planes {
+                        println!("    plane {p:?}");
+                    }
+                }
             }
         }
     }
