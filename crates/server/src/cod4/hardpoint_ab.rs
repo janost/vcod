@@ -54,25 +54,9 @@ const GAPS: &[(&str, f32, &str)] = &[
 
 /// Why the gun is tolerated in flight: `VEH_UpdateAim` aims from the posed
 /// `tag_barrel` in the body's frame, so the gun parts as the flown body
-/// does ([`FLIGHT`]). On a body that holds still it matches to
-/// [`STILL_GAPS`] (`helicopter_idle_matches_retail`, cod4-gsc.md 3.2, "The
-/// turret").
+/// does ([`FLIGHT`]). On a body that holds still it matches word for word
+/// (`helicopter_idle_matches_retail`, cod4-gsc.md 3.2, "The turret").
 const AIM: &str = "the gun in the flown body's frame (cod4-gsc.md 3.2)";
-
-/// The idle capture's tolerance before its goal, on a body that matches
-/// word for word: `VEH_UpdateAim`'s arithmetic matches retail's step for
-/// step given retail's barrel, but the posed `tag_barrel` lands an ulp off
-/// now and then ([`POSE`]), which the tracking carries a few ulps on.
-const STILL_GAPS: &[(&str, f32, &str)] = &[
-    ("lerp.u.vehicle.gunPitch", 5e-5, POSE),
-    ("lerp.u.vehicle.gunYaw", 5e-5, POSE),
-];
-
-/// Why a still gun is tolerated: ours poses the tags off the zone's
-/// bind-pose `baseMat`, 1.7's DObj skeleton composes the model's local
-/// bones (cod4-gsc.md 3.2, "The turret"; gdb on 0x80a011c read retail's
-/// barrel an ulp off ours where the gun parted).
-const POSE: &str = "the posed tag_barrel's place at an ulp (cod4-gsc.md 3.2)";
 
 /// Why the helicopter's flight is tolerated: the first 1.5 s match bit
 /// for bit, then the turn through the first node parts by a few hundredths
@@ -343,8 +327,8 @@ const IDLE_MS: i32 = 4000;
 /// --script idle --name owner --qport 4021 --secs 30`) under `unshare -rnm`.
 /// A cobra spawns pitched 8, yawed 250 and rolled -6 with no goal for 4 s
 /// while its gun tracks a point ahead and below, then one behind; then it
-/// flies a pass-through goal. Until the goal every word matches retail's
-/// but the gun's few ulps ([`STILL_GAPS`]): the no-goal think (0x808ba22)
+/// flies a pass-through goal. Until the goal every word matches retail's:
+/// the no-goal think (0x808ba22), the link's snap of its yaw, the skeleton
 /// and the turret (`VEH_UpdateAim`) on a body that holds still
 /// (cod4-gsc.md 3.2). Past it the flight's [`GAPS`] hold, the gun's under
 /// the body's. No random draw reaches it (no hover radius, no stop), so
@@ -365,7 +349,7 @@ fn helicopter_idle_matches_retail() {
         "the capture's helicopter"
     );
     let gap = |name: &str, t: i32| {
-        let gaps = if t <= IDLE_MS { STILL_GAPS } else { GAPS };
+        let gaps: &[(&str, f32, &str)] = if t <= IDLE_MS { &[] } else { GAPS };
         gaps.iter().find(|g| g.0 == name).map_or(0.0, |g| g.1)
     };
     let (missing, unexplained) = compare(&rt, &ot, gap, report);
