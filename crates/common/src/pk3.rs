@@ -1495,6 +1495,37 @@ mod tests {
         assert_eq!(fs.read("b.txt").unwrap(), b"loc");
     }
 
+    /// A part a reload reuses touches what its reads flagged: the log takes
+    /// the flagged reads on the recording thread and `par_map`'s workers,
+    /// and nothing read outside it.
+    #[test]
+    fn a_read_log_replays_the_reads_that_flagged() {
+        let dir = tempfile::tempdir().unwrap();
+        make_pk3(dir.path(), "pak0.pk3", &[("a.bsp", "x"), ("b.menu", "y")]);
+        make_pk3(dir.path(), "pak1.pk3", &[("c.bsp", "z")]);
+        make_pk3(dir.path(), "pak2.pk3", &[("d.bsp", "w")]);
+        let fs = Pk3Fs::open(dir.path()).unwrap();
+        let log = ReadLog::default();
+        log.record(|| {
+            fs.read("b.menu").unwrap();
+            crate::laps::par_map(&["a.bsp", "c.bsp"], |p| fs.read(p));
+        });
+        fs.read("d.bsp").unwrap();
+        let mut paths = log.paths();
+        paths.sort();
+        assert_eq!(paths, ["a.bsp", "c.bsp"]);
+        let named = |fs: &Pk3Fs| {
+            let mut v: Vec<String> = fs.referenced_paks().iter().map(|p| p.name.clone()).collect();
+            v.sort();
+            v
+        };
+        fs.clear_references();
+        for p in &paths {
+            fs.touch(p);
+        }
+        assert_eq!(named(&fs), ["pak0", "pak1"]);
+    }
+
     #[test]
     fn reads_mark_their_pak_referenced() {
         let dir = tempfile::tempdir().unwrap();
