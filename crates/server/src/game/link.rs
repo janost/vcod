@@ -815,7 +815,7 @@ fn run_one(host: &mut GameHost, cx: &mut Cx, links: &Links, id: EntId, fresh: bo
         world.collision.set_model_pose(
             model as usize,
             Vec3::from(origin),
-            crate::game::mover::snap_angles(Vec3::from(angles)),
+            (host.profile.link_snap)(Vec3::from(angles)),
         );
     }
 }

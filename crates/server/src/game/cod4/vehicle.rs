@@ -539,25 +539,6 @@ const DEG2RAD: f64 = 0.017_453_292_519_943_295;
 /// The float `1 / 360` of 1.7's inlined angle normalisers (0x8209630).
 const INV_360: f32 = 0.002_777_777_8;
 
-/// `SV_LinkEntity`'s snap of `r.currentAngles` (`cod4_lnxded`
-/// 0x817e426..0x817e5ba): each angle within a thousandth of a whole
-/// degree becomes it, `(n - a)^2 < 1e-6` (the float 0x358637be at
-/// 0x8212470) with `n = floor(a + 0.5)` (`frndint` rounding down, then
-/// `fistp`). CoD1's truncates instead (`mover::snap_angles`), which leaves
-/// a negative angle alone.
-fn link_snap4(a: Vec3) -> Vec3 {
-    let snap = |c: f32| {
-        let n = (d(c) + 0.5).floor();
-        let off = n - d(c);
-        if off * off < d(f32::from_bits(0x3586_37be)) {
-            n as f32
-        } else {
-            c
-        }
-    };
-    Vec3::new(snap(a.x), snap(a.y), snap(a.z))
-}
-
 /// `AngleNormalize180` with the turns kept on the stack:
 /// `(x - floor(x + 0.5)) * 360`, `x` the angle times [`INV_360`].
 fn norm180_kept(a: f64) -> f32 {
@@ -1375,9 +1356,9 @@ impl Cod4Level {
                 .map(|n| (n, Vec::new()))
                 .collect();
             // A think that moved or turned the body sets and links it
-            // (0x809c1dc), and the link snaps its angles (`link_snap4`).
+            // (0x809c1dc), and the link snaps its angles (`mover::snap_angles4`).
             if h.origin != from || h.angles != from_angles {
-                h.angles = link_snap4(h.angles);
+                h.angles = crate::game::mover::snap_angles4(h.angles);
             }
             if let Some(n) = self.heli_collision(&h, from) {
                 let arg = Value::Vector(n.to_array());
