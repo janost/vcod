@@ -404,11 +404,11 @@ fn melee_swings_hit_miss_and_pass_behind() {
 
 const MELEE: &str = "\
 ahead: lost [135, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2281.4976, 297.0] events [37, 0, 0, 0] parms [0, 0, 0, 0]
-side: lost [138, 0, 0] hits [(2, 0, 6)] te 35 parm 1 other 0 weapon 27 at [215.01053, 2301.2673, 288.9895] events [37, 37, 0, 0] parms [0, 0, 0, 0]
+side: lost [138, 0, 0] hits [(2, 0, 6)] te 35 parm 1 other 0 weapon 27 at [215.01054, 2301.2673, 288.98947] events [37, 37, 0, 0] parms [0, 0, 0, 0]
 edge: lost [0, 0, 0] hits [] events [37, 37, 0, 0] parms [0, 0, 0, 0]
 edge near: lost [0, 0, 0] hits [] events [37, 37, 0, 0] parms [0, 0, 0, 0]
 far right: lost [0, 0, 0] hits [] events [37, 37, 0, 0] parms [0, 0, 0, 0]
-far ahead: lost [136, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2310.835, 297.0] events [37, 37, 37, 0] parms [0, 0, 0, 0]
+far ahead: lost [136, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2310.8347, 297.0] events [37, 37, 37, 0] parms [0, 0, 0, 0]
 reach 2322: lost [138, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2312.0305, 297.0] events [37, 37, 37, 37] parms [0, 0, 0, 0]
 reach 2326: lost [0, 0, 0] hits [] events [37, 37, 37, 37] parms [0, 0, 0, 0]
 reach right: lost [0, 0, 0] hits [] events [37, 37, 37, 37] parms [0, 0, 0, 0]

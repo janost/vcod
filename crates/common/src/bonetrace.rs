@@ -4,7 +4,7 @@
 
 use crate::patch::Arith;
 use crate::skeleton::{PoseBuffer, Skeleton, axes_stored};
-use glam::Vec3;
+use glam::{Quat, Vec3};
 
 /// The winning bone, in the frame the ray was given in.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -86,7 +86,19 @@ pub fn bone_trace(
     priority: &PriorityMap,
     limit: f32,
 ) -> Option<BoneHit> {
-    let worlds = pose.bone_worlds(skel);
+    bone_trace_worlds(skel, &pose.bone_worlds(skel), start, end, priority, limit)
+}
+
+/// [`bone_trace`] on bones another build composed: `worlds` each bone's
+/// place and turn in the skeleton's frame, in its order.
+pub fn bone_trace_worlds(
+    skel: &Skeleton,
+    worlds: &[(Vec3, Quat)],
+    start: Vec3,
+    end: Vec3,
+    priority: &PriorityMap,
+    limit: f32,
+) -> Option<BoneHit> {
     let mut best: Option<BoneHit> = None;
     let mut best_priority = MIN_PRIORITY;
     for (bi, b) in skel.bones().iter().enumerate() {

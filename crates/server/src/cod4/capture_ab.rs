@@ -567,13 +567,6 @@ fn pair_ab(gate: &str, pair: &Pair, gaps: &[(&str, &str)]) {
     check(gate, &pair_diffs(&run, pair), &run.aborts, gaps);
 }
 
-/// Why a dropped weapon still differs: it starts at the dying body's
-/// `tag_weapon_right` as ours poses it, which lands within a few millionths
-/// of retail's (ours poses off quaternions, 1.7 composes its skeleton's
-/// matrices); the start is rounded on the wire, the hit's move, times 20 in
-/// `trDelta`, is not (cod4-combat.md 6.1).
-const ITEM_TAG: &str = "the dying body's tag_weapon_right as ours poses it (cod4-combat.md 6.1)";
-
 /// What the rocket run still differs in.
 const ROCKET_GAPS: &[(&str, &str)] = &[
     (
@@ -609,7 +602,7 @@ fn cod4_throwback_ab() {
     pair_ab("cod4_throwback_ab", &THROWBACK, THROWBACK_GAPS);
 }
 
-const PRONE_GAPS: &[(&str, &str)] = &[("* entity 320:3 lerp.pos.trDelta", ITEM_TAG)];
+const PRONE_GAPS: &[(&str, &str)] = &[];
 
 /// A prone body's death and its corpse's torso (cod4-combat.md 5).
 #[test]
@@ -617,15 +610,12 @@ fn cod4_prone_death_ab() {
     pair_ab("cod4_prone_death_ab", &PRONE, PRONE_GAPS);
 }
 
-const KCENT_GAPS: &[(&str, &str)] = &[
-    ("* entity 319:3 lerp.pos.trDelta", ITEM_TAG),
-    (
-        "target ps viewangles[1]",
-        "the killcam's archived view: retail's archive holds the shooter's \
+const KCENT_GAPS: &[(&str, &str)] = &[(
+    "target ps viewangles[1]",
+    "the killcam's archived view: retail's archive holds the shooter's \
          `setviewpos` yaw 0 where its cmds sum to ours's 90; why is open \
          (cod4-combat.md 15)",
-    ),
-];
+)];
 
 /// A killcam with a `killcamentity`: the follower's playerstate names the
 /// script's inflictor, and that entity rides the archived frames with its
