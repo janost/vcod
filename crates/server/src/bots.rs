@@ -677,6 +677,9 @@ pub struct CtfView {
     /// bot the driver sends after him (bot-objectives.md 14, with
     /// [`Bot::cues`] on).
     pub hunt: Option<[f32; 3]>,
+    /// The point the driver sends one of a carrier's escorts to, ahead of
+    /// him along his path or at his side ([`Bot::ctf_escort`]).
+    pub lead: Option<[f32; 3]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1112,6 +1115,20 @@ pub struct Bot {
     /// goal (bot-objectives.md 14.11); off, it closes on what it sees and
     /// stands in the goal (a `bot_match` arm).
     pub ctf_carry: bool,
+    /// bot-objectives.md 14.12's experiments on a `ctf` carrier's run
+    /// home, off by default (none raised captures past the seed spread),
+    /// each switched on by its `bot_match` arm. `ctf_escort`: the
+    /// teammates nearest the carrier, and one of his flag's holders, walk
+    /// one ahead along his path and the rest behind his shoulders.
+    pub ctf_escort: bool,
+    /// The carrier plans round where his side saw enemies of late and
+    /// round the outposts by the flag he took.
+    pub ctf_route: bool,
+    /// The carrier holds in cover from an enemy in sight ahead of him.
+    pub ctf_hold: bool,
+    /// On United Offensive the carrier sprints on from an enemy in sight
+    /// behind or beside him instead of turning the gun on him.
+    pub ctf_sprint: bool,
     /// The point its objective centres on, read at the top of the last
     /// think ([`Bot::objective_point`]).
     anchor: Option<[f32; 3]>,
@@ -1351,6 +1368,9 @@ pub struct Bot {
     retreat: Option<retreat::Retreat>,
     hurt_at: i32,
     dry_had: bool,
+    /// Ticks before a `ctf` carrier may hold from an enemy ahead again
+    /// (`retreat::AHEAD_REST`).
+    ahead_rest: u32,
     /// Boarding, driving and leaving a vehicle (`vehicle`).
     rider: vehicle::Rider,
     /// The last cmd held the trigger.
@@ -1661,6 +1681,10 @@ impl Bot {
             cues: true,
             travel: true,
             ctf_carry: true,
+            ctf_escort: false,
+            ctf_route: false,
+            ctf_hold: false,
+            ctf_sprint: false,
             anchor: None,
             guarded: None,
             exposure: None,
@@ -1761,6 +1785,7 @@ impl Bot {
             retreat: None,
             hurt_at: i32::MAX,
             dry_had: false,
+            ahead_rest: 0,
         }
     }
 
@@ -1911,6 +1936,12 @@ impl Bot {
         }
         if self.start_held(view) {
             return Goal::Hold;
+        }
+        // A `ctf` carrier holding in cover from an enemy ahead.
+        if self.holding_ahead()
+            && let Some(g) = self.retreat_goal(view)
+        {
+            return g;
         }
         // A carrier keeps for the goal and fights on the way.
         if self.carrying(view)
@@ -2246,6 +2277,10 @@ impl Bot {
                 // saw him.
                 if let Some(at) = c.hunt {
                     return Some(ObjTarget::Chase(at));
+                }
+                // Ahead of our carrier or at his side ([`Bot::ctf_escort`]).
+                if let Some(at) = c.lead {
+                    return Some(ObjTarget::Escort(at));
                 }
                 if defends {
                     return Some(match c.ours.home {
@@ -3961,6 +3996,7 @@ impl Bot {
             && self.pushed_off.is_none()
             && self.unpin.is_none()
             && !self.creep.creeping();
+        let flees = self.flees(view);
         self.sprint_leg = !ease
             && view.fatigue.is_some()
             && steering
@@ -3973,7 +4009,7 @@ impl Bot {
             && !view.run_off
             && self.pushed_off.is_none()
             && self.unpin.is_none()
-            && view.enemy.is_none()
+            && (view.enemy.is_none() || flees)
             && view.on_ground
             && !view.on_ladder
             && view.sprint_room
@@ -4013,6 +4049,7 @@ impl Bot {
                 [pitch, yaw] = aim;
             } else if let Some(e) = view.enemy
                 && !(clearing && view.lmg)
+                && !flees
                 && let Some(aim) = self.engage(view, e, &mut cmd)
             {
                 if clearing {
@@ -8545,6 +8582,7 @@ mod tests {
             escort: None,
             rank: 1,
             hunt: None,
+            lead: None,
         })));
         assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 0.0]), "holds his goal");
         if let Some(UoView::Ctf(c)) = v.uo.as_mut() {
@@ -8585,6 +8623,7 @@ mod tests {
             escort: None,
             rank: 2,
             hunt: None,
+            lead: None,
         })));
         assert_eq!(bot.goal(&v), Goal::To([600.0, 0.0, 0.0]), "returns it");
         if let Some(UoView::Ctf(c)) = v.uo.as_mut() {
@@ -8601,6 +8640,26 @@ mod tests {
             })
         ));
         assert!(bot.carrying(&v), "keeps for the goal through a fight");
+        // Not carrying, dealt a point by the carrier ([`Bot::ctf_escort`]).
+        if let Some(UoView::Ctf(c)) = v.uo.as_mut() {
+            c.carrying = false;
+            c.ours.carried = false;
+            c.ours.carrier = None;
+            c.ours.home = Some(site(3000.0));
+            c.theirs.home = None;
+            c.lead = Some([700.0, 0.0, 0.0]);
+        }
+        assert!(matches!(
+            bot.objective_target(&v),
+            Some(ObjTarget::Escort([700.0, 0.0, 0.0]))
+        ));
+        if let Some(UoView::Ctf(c)) = v.uo.as_mut() {
+            c.carrying = true;
+            c.lead = None;
+            c.ours.home = None;
+            c.ours.carried = true;
+            c.ours.carrier = Some(7);
+        }
         bot.ctf_carry = false;
         assert!(matches!(
             bot.objective_target(&v),

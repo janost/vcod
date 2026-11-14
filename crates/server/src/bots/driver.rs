@@ -12,6 +12,7 @@ use crate::world::World;
 
 use super::{Bot, BotView, EnemyView, Goal, Noise, SeatView};
 
+mod ctf;
 mod par;
 pub use par::with_threads;
 
@@ -77,6 +78,12 @@ pub(crate) struct BotDriver {
     pub(crate) edge_stalls: [u32; 2],
     /// The guards' posts round their objectives ([`super::posts`]).
     pub(crate) posts: super::posts::Posts,
+    /// Each side's sightings of enemies on a `ctf` level, `(team, where,
+    /// sv_time)`, kept [`ctf::DANGER_MS`] ([`ctf::sightings`]).
+    pub(crate) ctf_seen: Vec<(i32, [f32; 3], i32)>,
+    /// Per side (axis 0, allies 1), the stand of the other side's flag at
+    /// home, as last seen there ([`ctf::danger`]).
+    pub(crate) ctf_home: [Option<[f32; 3]>; 2],
 }
 
 impl BotDriver {
@@ -918,6 +925,10 @@ fn deal_hunt(
 const CARRIER_MS: i32 = 5000;
 const HUNTERS: usize = 2;
 
+/// A `ctf` carrier's plan is dropped for a new sighting on its way at most
+/// this often, ticks ([`route_core`]).
+const DANGER_REPLAN: u32 = 40;
+
 /// How near its probe's landing a body on a mantle edge has climbed
 /// ([`BotWorld::MANTLE_AIMS`]): a body in front of the wall stands at least
 /// its radius and the wall's depth short of it.
@@ -1020,6 +1031,34 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
     deal_squads(w, &mut views, &teams, round);
     deal_hot(w, &mut views, &teams);
     deal_posts(w, &mut views, &teams, &noises, &on_side);
+    // A `ctf` carrier's escorts, and the edges near the enemies his side
+    // saw of late, which his plan pays more on (bot-objectives.md 14.12).
+    let danger = if views
+        .iter()
+        .any(|(_, v)| matches!(v.uo.as_ref(), Some(super::UoView::Ctf(_))))
+    {
+        ctf::deal_escort(w, &mut views, &teams, &on_side);
+        let now = w.now();
+        let mut seen = std::mem::take(&mut w.driver_mut().ctf_seen);
+        ctf::sightings(&mut seen, &views, &teams, now);
+        let routed = views.iter().any(|(s, v)| {
+            matches!(v.uo.as_ref(), Some(super::UoView::Ctf(c)) if c.carrying)
+                && w.driver()
+                    .bots
+                    .get(s)
+                    .is_some_and(|b| b.ctf_route && b.team_play)
+        });
+        ctf::homes(&mut w.driver_mut().ctf_home, &views, &teams);
+        let d = w.driver();
+        let danger = match d.nav.as_ref() {
+            Some(g) if routed => ctf::danger(g, &seen, &d.posts, d.ctf_home),
+            _ => Vec::new(),
+        };
+        w.driver_mut().ctf_seen = seen;
+        danger
+    } else {
+        Vec::new()
+    };
     drop(p);
 
     // Pass 3: the tick's waypoint toward each brain's goal, then its
@@ -1065,6 +1104,7 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
         main: &main,
         climbers: &climbers,
         standing: &standing,
+        danger: &danger,
     };
     let plans = if planning {
         plan(w, &views, covers.as_deref(), &cx)
@@ -1784,6 +1824,9 @@ struct Shared<'a> {
     main: &'a [usize],
     climbers: &'a [(usize, Vec3, Vec3)],
     standing: &'a [(usize, Vec3, Vec3)],
+    /// Per side, the edges a `ctf` carrier of it plans round
+    /// ([`ctf::danger`]).
+    danger: &'a [(i32, Vec<(u32, u32)>)],
 }
 
 /// What a bot's route reads of its game and its brain ([`route_in`]),
@@ -1797,6 +1840,8 @@ struct RouteIn {
     tactics: bool,
     /// `Bot::travel`: the walk behind a teammate ahead keeps farther back.
     travel: bool,
+    /// `Bot::ctf_route` with team play.
+    ctf_route: bool,
     stuck: bool,
     rng: u64,
     blocked: Option<Arc<[u32]>>,
@@ -1820,6 +1865,7 @@ fn route_in<W: BotWorld>(w: &mut W, slot: usize) -> RouteIn {
         squad: bot.is_some_and(|b| b.squad),
         tactics: bot.is_some_and(|b| b.tactics),
         travel: bot.is_some_and(|b| b.travel && b.team_play),
+        ctf_route: bot.is_some_and(|b| b.ctf_route && b.team_play),
         stuck,
         rng: bot.map_or(1, |b| b.rng),
         blocked: W::YIELDS.then(|| w.blocked_nodes()),
@@ -1952,7 +1998,22 @@ fn route_core<W: BotWorld>(
     let squad = shared && input.squad;
     let noise = |t: i32| team::route_seed(input.sid as u32, t, slot);
     let spreads = W::YIELDS || (W::SPREADS && input.tactics);
+    let carrier = input.ctf_route
+        && spreads
+        && matches!(view.uo.as_ref(), Some(super::UoView::Ctf(c)) if c.carrying);
+    let was = std::mem::take(&mut follower.crowd);
     (follower.crowd, follower.crowd_cost, follower.noise) = match teams.get(slot) {
+        // A `ctf` carrier plans round where his side saw enemies of late,
+        // not round his teammates' ways (bot-objectives.md 14.12).
+        Some(&t) if carrier => (
+            cx.danger
+                .iter()
+                .find(|d| d.0 == t)
+                .map(|d| d.1.clone())
+                .unwrap_or_default(),
+            crate::nav::DANGER_COST,
+            noise(t),
+        ),
         // A flanker pays far more on the main group's ways than on its
         // other teammates'.
         Some(&t) if spreads && squad && view.squad == Squad::Flank => (
@@ -1967,6 +2028,20 @@ fn route_core<W: BotWorld>(
         ),
         _ => (Vec::new(), crate::nav::CROWD_COST, 0),
     };
+    // A sighting new since the plan on the carrier's way ahead: plan again,
+    // at most every [`DANGER_REPLAN`] ticks. Every tick a sighting moved and
+    // the plan was dropped, and the carrier stood (UO mp_cassino seed 4).
+    follower.danger_wait = follower.danger_wait.saturating_sub(1);
+    if carrier
+        && follower.danger_wait == 0
+        && follower
+            .ahead()
+            .map(|(a, b)| (a.min(b), a.max(b)))
+            .any(|e| follower.crowd.binary_search(&e).is_ok() && was.binary_search(&e).is_err())
+    {
+        follower.replan();
+        follower.danger_wait = DANGER_REPLAN;
+    }
     if let Some(blocked) = &input.blocked {
         follower.blocked = blocked.clone();
     }
@@ -2233,6 +2308,7 @@ fn plan<W: BotWorld>(
                 squad: bot.is_some_and(|b| b.squad),
                 tactics: bot.is_some_and(|b| b.tactics),
                 travel: bot.is_some_and(|b| b.travel && b.team_play),
+                ctf_route: bot.is_some_and(|b| b.ctf_route && b.team_play),
                 stuck: bot.is_some_and(|b| b.stuck),
                 rng: bot.map_or(1, |b| b.rng),
                 blocked: blocked.clone(),
