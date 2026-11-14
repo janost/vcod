@@ -9,11 +9,11 @@
 //! cmds from the first `a` on, verbatim with retail's stamps, retail's clock
 //! shifted onto ours at that command: everything after it is the script's
 //! own fixed waits and the client's answers. Each retail snapshot is a frame
-//! of ours, run after the cmds retail's client sent before it arrived. Each side is reduced to its transitions (`weapon`,
-//! `weaponstate`, the `weapAnim` index, the slot words, and the ring's
-//! events with their parms) and the two lists are matched in order within
-//! [`SLACK_MS`]. A state's entry also carries its `weaponTime`, matched
-//! within [`TIME_SLACK_MS`].
+//! of ours, run after the cmds up to that snapshot's `commandTime`. Each
+//! side is reduced to its transitions (`weapon`, `weaponstate`, the
+//! `weapAnim` index, the slot words, and the ring's events with their
+//! parms) and the two lists are matched in order on the same snapshot. A
+//! state's entry also carries its `weaponTime`, which must match too.
 //!
 //! Needs `COD_DIR`; without the paks it returns early.
 
@@ -33,12 +33,6 @@ const MAP: &str = "mp_carentan";
 const PROBE_PATH: &str = "maps/mp/gametypes/probe_weapsel";
 const PROBE_SRC: &str = "../gsc/tests/fixtures/semantics/client-probes/probe_weapsel.gsc";
 const FIXTURE: &str = "tests/fixtures/playerstate/mp_carentan-dm-weapsel.txt";
-/// How far apart in time a retail transition and ours may land: a snapshot
-/// and a half, the replay's cmd grid being coarser than the capture's.
-const SLACK_MS: i32 = 75;
-/// How far a state's entry `weaponTime` may differ: the frame the first
-/// snapshot of the state lands in.
-const TIME_SLACK_MS: i32 = 60;
 
 /// Rows that are known divergences, each a substring of the row it excuses
 /// and a ruling in the research doc.
@@ -87,8 +81,9 @@ struct Capture {
     cmds: Vec<(i32, UserCmd)>,
     /// The snapshot time the first `a` rode.
     anchor_t: i32,
-    /// Each snapshot from there on as `(ms it arrived at, serverTime)`.
-    frames: Vec<(i32, i32)>,
+    /// Each snapshot from there on as `(ms it arrived at, serverTime,
+    /// commandTime)`.
+    frames: Vec<(i32, i32, i32)>,
     retail: Vec<Sample>,
 }
 
@@ -141,7 +136,7 @@ fn parse(text: &str) -> Capture {
                     anchor_t = Some(t);
                 }
                 if anchor_t.is_some() {
-                    frames.push((i("ms"), t));
+                    frames.push((i("ms"), t, i("commandTime")));
                     retail.push(Sample {
                         t,
                         weapon: i("weapon"),
@@ -246,9 +241,10 @@ impl Rig {
 
 /// Idles until our first `a`, then replays the capture on retail's clock
 /// moved onto ours there: each retail snapshot is one frame of ours, run
-/// after every cmd retail's client had sent before that snapshot reached
-/// it, each cmd with retail's own stamp moved by the same shift. Returns
-/// our samples in retail's time, the one that carried the `a` first.
+/// after every cmd up to the `commandTime` retail's snapshot of that frame
+/// reports, each cmd with retail's own stamp moved by the same shift.
+/// Returns our samples in retail's time, the one that carried the `a`
+/// first.
 fn replay(rig: &mut Rig, cap: &Capture) -> Vec<Sample> {
     let frame = Duration::from_millis(FRAME_MS as u64);
     let mut first = None;
@@ -272,10 +268,10 @@ fn replay(rig: &mut Rig, cap: &Capture) -> Vec<Sample> {
     let base = rig.now;
     let mut out = vec![first];
     let mut i = 0;
-    for &(ms, t) in &cap.frames[1..] {
+    for &(_, t, ct) in &cap.frames[1..] {
         let at = base + Duration::from_millis((t - cap.anchor_t) as u64);
         let mut batch = Vec::new();
-        while i < cap.cmds.len() && cap.cmds[i].0 < ms {
+        while i < cap.cmds.len() && cap.cmds[i].1.server_time <= ct {
             let mut c = cap.cmds[i].1;
             c.server_time -= shift;
             batch.push(c);
@@ -329,16 +325,16 @@ fn diff(retail: &[Sample], ours: &[Sample]) -> Vec<String> {
     let o = transitions(ours);
     let mut used = vec![false; o.len()];
     let mut rows = Vec::new();
-    for (t, what, time) in r.iter().filter(|x| x.0 <= end - SLACK_MS) {
+    for (t, what, time) in r.iter().filter(|x| x.0 <= end) {
         let hit = o
             .iter()
             .enumerate()
-            .find(|(k, x)| !used[*k] && x.1 == *what && (x.0 - t).abs() <= SLACK_MS);
+            .find(|(k, x)| !used[*k] && x.1 == *what && x.0 == *t);
         match hit {
             Some((k, x)) => {
                 used[k] = true;
                 if let (Some(a), Some(b)) = (time, x.2)
-                    && (a - b).abs() > TIME_SLACK_MS
+                    && *a != b
                 {
                     rows.push(format!("t={t} {what}: weaponTime retail {a} ours {b}"));
                 }
@@ -347,7 +343,7 @@ fn diff(retail: &[Sample], ours: &[Sample]) -> Vec<String> {
         }
     }
     for (k, (t, what, _)) in o.iter().enumerate() {
-        if !used[k] && *t <= end - SLACK_MS && *t >= retail[0].t + SLACK_MS {
+        if !used[k] && *t <= end && *t > retail[0].t {
             rows.push(format!("t={t} {what}: ours only"));
         }
     }
@@ -400,7 +396,7 @@ fn the_dry_pull_holds_the_firing_state() {
     assert_eq!((r.state, r.anim), (3, 0), "retail's own reading");
     assert_eq!((o.state, o.anim), (r.state, r.anim));
     assert!(
-        (o.time - r.time).abs() <= TIME_SLACK_MS,
+        o.time == r.time,
         "weaponTime retail {} ours {}",
         r.time,
         o.time

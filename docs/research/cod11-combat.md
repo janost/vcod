@@ -5489,6 +5489,17 @@ written back to the script host (`ScriptRuntime::set_client_slots`).
 `weapsel_ab` replays the capture's cmds verbatim and matches every
 transition.
 
+VERIFIED, the 2026-11-14 recapture (the fixture since, its `!trace` lines
+carrying `commandTime`): every time above lands 3450 ms earlier (the
+putaway at 11350, the colt's raise at 12000, the dry pull at 25700 with
+`weaponTime` 618, the two `weapalt`s at 36300 and 40300 with 682 and 699).
+`weapsel_ab` runs each frame on the cmds up to retail's `commandTime` for
+it, and all 71 transitions land on retail's snapshot with retail's entry
+`weaponTime`, so it matches them exactly. VERIFIED, the gate. The 75 and
+60 ms it allowed before came from running a frame on the cmds sent before
+its snapshot arrived. INFERRED: that rule is a cmd or two off the one the
+server ran.
+
 ---
 
 ## 10. Open cells

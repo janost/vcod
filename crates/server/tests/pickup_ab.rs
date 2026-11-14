@@ -51,11 +51,8 @@ const PITCH_CLAMP_SHORT: i32 = 16000;
 /// The origin a snapshot may differ by before it is a row: the capture
 /// prints a tenth of a unit, so up to 0.05 on each axis.
 const ORIGIN_EPS: f32 = 0.1;
-/// The same until the second teleport, while both stand where the spawn's
-/// teleport left them: that fall ran before the capture began, on cmds it
-/// never recorded, and its rest rides on them
-/// (`docs/research/cod11-items.md`, 13.5).
-const SPAWN_REST_EPS: f32 = 0.5;
+/// `PROBE teleport 0 1`'s spot, mp_carentan's first fg42.
+const FIRST_FG42: [f32; 2] = [468.0, -822.0];
 
 /// Rows of either diff that are known divergences, each a substring of the
 /// row it excuses and a ruling in the research doc's section 13.
@@ -188,9 +185,17 @@ fn item_key(index: i32, client: i32, ground: i32, at: [f32; 3]) -> ItemKey {
 struct Capture {
     /// `(name, first trace time, last trace time)` per phase past `wait`.
     phases: Vec<(String, i32, i32)>,
-    /// Every cmd from `stand` on, as `(st, cmd)` with the absolute view.
+    /// Every cmd from the spawn on (from `stand` on in a capture without
+    /// `!spawn` lines), as `(st, cmd)` with the absolute view.
     cmds: Vec<(i32, UserCmd)>,
     retail: Vec<Sample>,
+    /// The wait's snapshots from the spawn on, `serverTime` to
+    /// `commandTime`, and the first of them on the first fg42: the
+    /// teleport's.
+    spawn_ct: BTreeMap<i32, i32>,
+    teleport: Option<i32>,
+    /// The same snapshots' origins, from the teleport's on.
+    spawn_origins: Vec<(i32, [f32; 3])>,
 }
 
 impl Capture {
@@ -210,6 +215,9 @@ fn parse(text: &str) -> Capture {
     let mut last_seq = None;
     let mut last_trace_ms = None;
     let mut pending: Vec<String> = Vec::new();
+    let mut spawn_ct = BTreeMap::new();
+    let mut teleport = None;
+    let mut spawn_origins = Vec::new();
     for line in text.lines() {
         if let Some(name) = line
             .strip_prefix("[phase ")
@@ -218,10 +226,20 @@ fn parse(text: &str) -> Capture {
             phase = name.to_string();
             continue;
         }
-        if let Some(rest) = line.strip_prefix("!cmd ") {
-            if phase == "wait" {
-                continue;
+        if let Some(rest) = line.strip_prefix("!spawn ") {
+            let m = kv(rest);
+            let i = |k: &str| m[k].parse::<i32>().unwrap();
+            spawn_ct.insert(i("t"), i("ct"));
+            let o = vec3(m["origin"]);
+            if teleport.is_none()
+                && dist([o[0], o[1], 0.0], [FIRST_FG42[0], FIRST_FG42[1], 0.0]) < 1.0
+            {
+                teleport = Some(i("t"));
             }
+            if teleport.is_some() {
+                spawn_origins.push((i("t"), o));
+            }
+        } else if let Some(rest) = line.strip_prefix("!cmd ") {
             let m = kv(rest);
             let i = |k: &str| m[k].parse::<i32>().unwrap();
             let view = vec3(m["view"]);
@@ -310,6 +328,9 @@ fn parse(text: &str) -> Capture {
         phases,
         cmds,
         retail,
+        spawn_ct,
+        teleport,
+        spawn_origins,
     }
 }
 
@@ -325,8 +346,11 @@ struct Rig {
 }
 
 /// The probe as our gametype under the recipe's two cvars, one client
-/// through the stock menus, and a second to let the first teleport settle.
-fn rig() -> Option<Rig> {
+/// through the stock menus: up to the snapshot that shows the first
+/// teleport when the capture logged its spawn (`Capture::teleport`), so the
+/// replay runs the fall on retail's cmds, else a second past the join to
+/// let that teleport settle.
+fn rig(cap: &Capture) -> Option<Rig> {
     let fs = vcod_common::testing::game_fs_11()?;
     let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
@@ -342,7 +366,10 @@ fn rig() -> Option<Rig> {
     // logged as an `other` before its first spawn.
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(Queues::default()));
-    let (cl, join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
+    let (cl, join) = match cap.teleport {
+        Some(_) => join_to_teleport(&mut sv, &q, &mut now),
+        None => common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp"),
+    };
     assert!(join.findings().is_empty(), "{}", join.summary());
     let mut rig = Rig {
         sv,
@@ -352,12 +379,44 @@ fn rig() -> Option<Rig> {
         last_seq: None,
         log_seen: 0,
     };
-    for _ in 0..20 {
-        let h = holding(&rig.cl);
-        rig.frame(&CADENCE.map(|off| (off, h)), 0);
+    if cap.teleport.is_none() {
+        for _ in 0..20 {
+            let h = holding(&rig.cl);
+            rig.frame(&CADENCE.map(|off| (off, h)), 0);
+        }
     }
     assert_eq!(rig.sv.script_aborts(), Vec::<String>::new());
     Some(rig)
+}
+
+/// `common::join` up to the first snapshot that stands the player on the
+/// first fg42: the frame of the gsc probe's first `setOrigin`.
+fn join_to_teleport(
+    sv: &mut Server,
+    q: &Rc<RefCell<Queues>>,
+    now: &mut Instant,
+) -> (NetClient<ClientEnd>, common::Join) {
+    let mut cl = common::connect(sv, q, now);
+    let mut j = common::Join::new("allies", "m1carbine_mp");
+    for _ in 0..400 {
+        *now += Duration::from_millis(FRAME_MS as u64);
+        cl.send_frame(&holding(&cl));
+        for e in common::step(sv, q, &mut cl, *now) {
+            if let NetEvent::ServerCommand(tokens) = e {
+                j.on_server_command(&tokens, &mut cl, *now);
+            }
+        }
+        let on = cl.snapshots().newest().is_some_and(|s| {
+            let o = s.ps.origin(&PROTOCOL_V1);
+            s.ps.field_i32(&PROTOCOL_V1, "pm_type") == 0
+                && (o[0] - FIRST_FG42[0]).abs() < 1.0
+                && (o[1] - FIRST_FG42[1]).abs() < 1.0
+        });
+        if on {
+            return (cl, j);
+        }
+    }
+    panic!("ours never teleported the player: {}", j.summary());
 }
 
 impl Rig {
@@ -469,7 +528,7 @@ fn cadence(cl: &NetClient<ClientEnd>, cmds: &[(i32, UserCmd)]) -> Vec<UserCmd> {
 
 /// The view each retail snapshot reports, as the capture cmd's exact wire
 /// words that asked for it. A cmd's `st` is the client's clock, not the
-/// server frame that ran it: the aim's first cmd, stamped 27983, is on
+/// server frame that ran it: the 2026-09-24 aim's first cmd, stamped 27983, is on
 /// retail's 28050 snapshot, not its 28000 one. So the view goes by the
 /// snapshot; the rest of the cmd goes by `st`.
 fn retail_views(cap: &Capture) -> BTreeMap<i32, [i32; 3]> {
@@ -491,24 +550,32 @@ fn retail_views(cap: &Capture) -> BTreeMap<i32, [i32; 3]> {
         .collect()
 }
 
-/// Replays every cmd from `stand` on, on retail's clock: frame `t` runs the
-/// cmds stamped in `[t - 50, t)`, at their own offsets, under the view
-/// retail's snapshot at `t` reports. Returns one sample per frame, tagged
-/// with the retail snapshot it pairs with, and every log line with that
-/// same time.
+/// Replays every cmd from the spawn's teleport on (from `stand` on in a
+/// capture without one), on retail's clock: frame `t` runs the cmds up to
+/// the `commandTime` retail's snapshot at `t` reports where the capture
+/// logged it, else those stamped in `[t - 50, t)`, at their own offsets,
+/// under the view retail's snapshot at `t` reports. Returns one sample per
+/// frame, tagged with the retail snapshot it pairs with, and every log line
+/// with that same time.
 fn replay(rig: &mut Rig, cap: &Capture) -> (Vec<Sample>, Vec<(i32, String)>) {
     rig.new_log();
     let cmds = &cap.cmds;
     let first = cmds.first().expect("cmds past wait").0;
     let end = cap.phases.last().unwrap().2;
-    let mut t = first - first.rem_euclid(FRAME_MS as i32);
+    let mut t = cap
+        .teleport
+        .unwrap_or(first - first.rem_euclid(FRAME_MS as i32));
     let mut i = 0;
     let views = retail_views(cap);
     let (mut samples, mut log) = (Vec::new(), Vec::new());
     while t + FRAME_MS as i32 <= end {
         let at = t + FRAME_MS as i32;
         let mut frame = Vec::new();
-        while i < cmds.len() && cmds[i].0 < at {
+        let ran = |st: i32| match cap.spawn_ct.get(&at) {
+            Some(&ct) => st <= ct,
+            None => st < at,
+        };
+        while i < cmds.len() && ran(cmds[i].0) {
             let (st, mut c) = cmds[i];
             if let Some(view) = views.get(&at) {
                 c.angles = *view;
@@ -625,14 +692,17 @@ fn ring(events: &[(i32, i32)]) -> String {
 /// snapshot.
 fn diff_snapshots(cap: &Capture, ours: &[Sample], rows: &mut Vec<String>) {
     let ours: BTreeMap<i32, Sample> = ours.iter().map(|s| (s.t, s.clone())).collect();
-    // The second teleport is the capture's first jump in origin.
-    let start = cap.retail.first().expect("retail snapshots").origin;
-    let second_spot = cap
-        .retail
-        .iter()
-        .find(|s| dist(s.origin, start) > 100.0)
-        .expect("the second teleport")
-        .t;
+    // The spawn teleport's fall, past its own snapshot.
+    for &(t, origin) in cap.spawn_origins.iter().skip(1) {
+        match ours.get(&t) {
+            None => rows.push(format!("[wait] t={t} no sample of ours")),
+            Some(o) if dist(origin, o.origin) > ORIGIN_EPS => rows.push(format!(
+                "[wait] t={t} origin: retail {origin:?} ours {:?}",
+                o.origin
+            )),
+            Some(_) => {}
+        }
+    }
     for r in &cap.retail {
         let phase = cap.phase_of(r.t).unwrap_or("?");
         let Some(o) = ours.get(&r.t) else {
@@ -648,11 +718,7 @@ fn diff_snapshots(cap: &Capture, ours: &[Sample], rows: &mut Vec<String>) {
         row("hint", r.hint.clone(), o.hint.clone());
         row("ring", ring(&r.events), ring(&o.events));
         row("items", format!("{:?}", r.nums), format!("{:?}", o.nums));
-        let eps = match r.t < second_spot {
-            true => SPAWN_REST_EPS,
-            false => ORIGIN_EPS,
-        };
-        if dist(r.origin, o.origin) > eps {
+        if dist(r.origin, o.origin) > ORIGIN_EPS {
             row(
                 "origin",
                 format!("{:?}", r.origin),
@@ -679,13 +745,13 @@ fn finish(rows: Vec<String>) {
 
 #[test]
 fn the_pickups_match_retail_on_mp_carentan() {
-    let Some(mut rig) = rig() else { return };
     let text = read(CLIENT);
     assert!(
         !text.contains("# BROKEN"),
         "the committed capture is marked broken"
     );
     let cap = parse(&text);
+    let Some(mut rig) = rig(&cap) else { return };
     let (ours, _) = replay(&mut rig, &cap);
     let mut rows = Vec::new();
     for (name, a, b) in &cap.phases {
@@ -802,8 +868,8 @@ fn others<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<String> {
 
 #[test]
 fn the_engine_notifies_match_retail_on_mp_carentan() {
-    let Some(mut rig) = rig() else { return };
     let cap = parse(&read(CLIENT));
+    let Some(mut rig) = rig(&cap) else { return };
     let retail_text = read(SCRIPT);
     let retail: Vec<&str> = retail_text
         .lines()
