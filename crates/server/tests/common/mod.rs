@@ -2380,3 +2380,122 @@ pub fn spawn_points(fs: &vcod_common::pk3::Pk3Fs, map: &str) -> Vec<([f32; 3], [
         })
         .collect()
 }
+
+/// How long after its connect a client's first snapshot lands on ours.
+const DIRECT_JOIN_MS: i64 = 400;
+
+/// `client-probes/<probe>.gsc` on ours with one axis
+/// `--probe-uo-weapon direct` client holding `weapon`, replayed on the
+/// capture `text`'s clock: the client joins so its first snapshot lands on
+/// the capture's (rejoining once when ours' join ran long), sends the
+/// capture's cmd times (`CMDS`, [`ProbeHold::framed`]) at the newest
+/// snapshot's view, and takes its buttons off the `PROBE_IN` lines as
+/// they land. Returns the script's `PROBE` lines.
+pub fn direct_replay(
+    fs: fn() -> Option<vcod_common::pk3::Pk3Fs>,
+    proto: &'static vcod_common::net::protocol::Protocol,
+    map: &str,
+    probe: &str,
+    weapon: &str,
+    text: &str,
+) -> Vec<String> {
+    let first = cmds_ran(text, "")[0].0;
+    let run = |late_ms| direct_replay_once(fs().unwrap(), proto, map, probe, weapon, text, late_ms);
+    let (lines, snap) = run(0);
+    match snap.filter(|&t| t != first) {
+        Some(t) => run((t - first) as i64).0,
+        None => lines,
+    }
+}
+
+/// One run of [`direct_replay`], the client joined `late_ms` earlier:
+/// the `PROBE` lines and the client's first snapshot time.
+fn direct_replay_once(
+    fs: vcod_common::pk3::Pk3Fs,
+    proto: &'static vcod_common::net::protocol::Protocol,
+    map: &str,
+    probe: &str,
+    weapon: &str,
+    text: &str,
+    late_ms: i64,
+) -> (Vec<String>, Option<i32>) {
+    let fs = Rc::new(fs);
+    let bsp_path = fs.resolve_map(map).unwrap();
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut now = Instant::now();
+    let mut sv = Server::new(cfg(map, probe), now);
+    sv.set_protocol(proto);
+    let src = std::fs::read_to_string(format!(
+        "../gsc/tests/fixtures/semantics/client-probes/{probe}.gsc"
+    ))
+    .expect("the probe");
+    sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), &src);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(fs).expect("load the scripts");
+    let mut hold = ProbeHold {
+        aim: true,
+        framed: true,
+        times: cmds_times(text, ""),
+        ran: cmds_ran(text, ""),
+        ..Default::default()
+    };
+    let first = hold.ran.first().expect("the capture's CMDS lines").0;
+    let frame = Duration::from_millis(FRAME_MS as u64);
+    while (sv.game_time_ms() as i64) < first as i64 - DIRECT_JOIN_MS - late_ms {
+        now += frame;
+        sv.tick(now);
+        sv.take_outgoing();
+    }
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut cl = NetClient::start_with_qport(ClientEnd(q.clone()), now, 0x2001);
+    let mut join = Join::new("axis", weapon);
+    let (mut buttons, mut selected) = (0u8, None::<u8>);
+    let mut first_snap = None;
+    for _ in 0..3000 {
+        if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
+            break;
+        }
+        now += frame;
+        let live = cl
+            .snapshots()
+            .newest()
+            .is_some_and(|s| s.ps.field_i32(cl.protocol(), "pm_type") == 0);
+        if live {
+            let mut cmds = hold.cmds(&cl, buttons);
+            if let Some(w) = selected {
+                for c in &mut cmds {
+                    c.weapon = w;
+                }
+            }
+            cl.send_cmds(&cmds);
+        } else if let Some(c) = cl.send_frame(&UserCmd::default()) {
+            hold.last = c.server_time;
+        }
+        for e in step_at(&mut sv, ADDR, &q, &mut cl, now) {
+            if let NetEvent::ServerCommand(tokens) = e {
+                if tokens.first().map(String::as_str) == Some("a") {
+                    selected = tokens.get(1).and_then(|w| w.parse().ok());
+                }
+                if tokens.first().map(String::as_str) == Some("f")
+                    && let Some(b) = tokens
+                        .get(1)
+                        .and_then(|t| t.strip_prefix("PROBE_IN "))
+                        .and_then(|t| t.split_whitespace().next()?.parse().ok())
+                {
+                    buttons = b;
+                }
+                join.on_server_command(&tokens, &mut cl, now);
+            }
+        }
+        if let Some(s) = cl.snapshots().newest() {
+            first_snap.get_or_insert(s.server_time);
+        }
+    }
+    let lines = sv
+        .script_log()
+        .iter()
+        .map(|l| l.trim().to_string())
+        .filter(|l| l.starts_with("PROBE"))
+        .collect();
+    (lines, first_snap)
+}

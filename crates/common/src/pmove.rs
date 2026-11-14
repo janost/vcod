@@ -4269,16 +4269,43 @@ fn yaw_forward(ps: &PlayerState, arith: crate::patch::Arith) -> Vec3 {
 /// `PM_AirMove` at 0x2f083): the magnitude rule over forward, right and up,
 /// and the walk/run pick, with no stance, lean, weapon or wade factor. The
 /// cmd's `upmove` dilutes the horizontal wish the way Q3's does.
-fn wish_air(ps: &PlayerState, input: &PmInput) -> (Vec3, f32, f32) {
+fn wish_air(ps: &PlayerState, input: &PmInput, stored: bool) -> (Vec3, f32, f32) {
     let (f, r, u) = (input.forward * 127.0, input.right * 127.0, input.up * 127.0);
     if f.abs().max(r.abs()).max(u.abs()) <= 0.0 {
         return (Vec3::ZERO, 0.0, 0.0);
     }
-    let scale = cmd_scale(ps, input);
+    let scale = cmd_scale(ps, input, stored);
     let fwd = Vec3::new(ps.yaw.cos(), ps.yaw.sin(), 0.0);
     let right = Vec3::new(ps.yaw.sin(), -ps.yaw.cos(), 0.0);
     let wishvel = fwd * f + right * r;
     (wishvel.normalize_or_zero(), wishvel.length(), scale)
+}
+
+/// 1.1d's `PM_AirMove` wish (0x2f036..0x2f11a): `PM_CmdScale` stored as a
+/// float (0x2f088), the view's forward and right with `z` zeroed and
+/// `VectorNormalize`d (0x2f0a7, 0x2f0b9), each wish component
+/// `forward * fmove + right * smove` rounded once (0x2f0f2), then
+/// normalized with its float length.
+fn wish_air_x87(ps: &PlayerState, input: &PmInput) -> (Vec3, f32, f32) {
+    let (fm, sm) = (input.forward * 127.0, input.right * 127.0);
+    let scale = cmd_scale_x87(ps, input) as f32;
+    let (forward, right) = view_vectors(ps, crate::patch::Arith::Kept);
+    let f = x87::normalize_in_place(forward.with_z(0.0));
+    let r = x87::normalize_in_place(right.with_z(0.0));
+    let c = |f: f32, r: f32| (f64::from(f) * f64::from(fm) + f64::from(r) * f64::from(sm)) as f32;
+    let wishvel = Vec3::new(c(f.x, r.x), c(f.y, r.y), 0.0);
+    let len = x87::dot(wishvel, wishvel).sqrt() as f32;
+    (x87::normalize_in_place(wishvel), len, scale)
+}
+
+/// 1.1d's `ProjectPointOnPlane` (game.mp 0x3f01c): `1 / |n|^2`, the dot and
+/// the scaled normal all on the stack, each component of `p - d * n'`
+/// rounded once.
+fn project_point_on_plane_x87(p: Vec3, n: Vec3) -> Vec3 {
+    let (p, n) = (p.as_dvec3(), n.as_dvec3());
+    let inv = 1.0 / ((n.x * n.x + n.y * n.y) + n.z * n.z);
+    let d = ((n.x * p.x + n.y * p.y) + n.z * p.z) * inv;
+    (p - (n * inv) * d).as_vec3()
 }
 
 /// Retail's Q3-shaped `PM_CmdScale` (0x2e5bc), shared by the air and ladder
@@ -4286,14 +4313,22 @@ fn wish_air(ps: &PlayerState, input: &PmInput) -> (Vec3, f32, f32) {
 /// the walk or run scale. It reads the cmd's own `upmove` (0x2e5e9), not
 /// the stance bits: a prone body whose client sends `up` 0 falls off a
 /// ledge on the undiluted wish (cod11-mantle.md, "The wish speed").
-fn cmd_scale(ps: &PlayerState, input: &PmInput) -> f32 {
+///
+/// `stored` is 1.5b's and UO's (1.5b 0x1eec9, UO 0x23905): the length stored, then
+/// `(speed * max) / (length * 127)` on the stack and stored once, and each
+/// factor after it stored (cod15-movement.md 7).
+fn cmd_scale(ps: &PlayerState, input: &PmInput, stored: bool) -> f32 {
     let (f, r, u) = (input.forward * 127.0, input.right * 127.0, input.up * 127.0);
     let max = f.abs().max(r.abs()).max(u.abs());
     if max <= 0.0 {
         return 0.0;
     }
     let total = (f * f + r * r + u * u).sqrt();
-    let mut scale = ps.speed * max / (127.0 * total);
+    let mut scale = if stored {
+        ((f64::from(ps.speed) * f64::from(max)) / (f64::from(total) * 127.0)) as f32
+    } else {
+        ps.speed * max / (127.0 * total)
+    };
     // 1.5 takes a lean as the walk here too (0x1eec9).
     let lean = ps.rules.v15() && ps.lean != 0.0;
     if ps.walking || input.walk_slow || lean {
@@ -4863,10 +4898,18 @@ fn ladder_move(
     // `ProjectPointOnPlane(pml.right, flat right, vLadderVec)` (0x339fa):
     // strafing slides along the face instead of into or off it.
     let flat_right = x87::normalize(right.with_z(0.0));
-    let right = flat_right - normal * flat_right.dot(normal);
+    let right = if v15 || world.world.arith() == crate::patch::Arith::Msvc {
+        flat_right - normal * flat_right.dot(normal)
+    } else {
+        project_point_on_plane_x87(flat_right, normal)
+    };
     let (f, r) = (input.forward * 127.0, input.right * 127.0);
     let scale = if v15 {
-        f64::from(cmd_scale(ps, input))
+        f64::from(cmd_scale(
+            ps,
+            input,
+            world.world.arith() == crate::patch::Arith::Stored,
+        ))
     } else {
         cmd_scale_x87(ps, input)
     };
@@ -5002,8 +5045,16 @@ fn air_move(
     // `PM_AirMove` opens with `PM_Friction` (0x2f045): off the ground only
     // its sub-unit stop and the water term can bite.
     friction(ps, world, dt);
-    let (dir, len, scale) = wish_air(ps, input);
     let msvc = world.world.arith() == crate::patch::Arith::Msvc;
+    let (dir, len, scale) = if msvc || ps.rules.v15() {
+        wish_air(
+            ps,
+            input,
+            world.world.arith() == crate::patch::Arith::Stored,
+        )
+    } else {
+        wish_air_x87(ps, input)
+    };
     if msvc {
         // The Windows cgames store the product too (1.1 0x30007fce) and
         // call their `PM_Accelerate` (0x30007fd7).
@@ -5299,18 +5350,23 @@ fn step_slide(
     // `stepSize + 1`, `stepUp` a unit under what it reached and nothing under
     // 1 (0x351ca-0x351e8), the slide again from up there
     // (docs/research/cod11-mantle.md, "The step-up stops a unit short").
+    // The Linux builds keep `stepSize + 1` and its product with the
+    // fraction on the stack (1.1d 0x35173-0x351d8, 1.5b 0x29ccf, 0x29d46).
+    let linux = world.world.arith() != crate::patch::Arith::Msvc;
+    let lift = f64::from(step_size) + 1.0;
     let mut step = 0.0;
     if blocked {
-        let up = pm_trace(
-            ps,
-            world,
-            start_o,
-            start_o + Vec3::Z * (step_size + 1.0),
-            mins,
-            maxs,
-            mask,
-        );
-        let room = (step_size + 1.0) * up.fraction - 1.0;
+        let top = if linux {
+            start_o.with_z((f64::from(start_o.z) + lift) as f32)
+        } else {
+            start_o + Vec3::Z * (step_size + 1.0)
+        };
+        let up = pm_trace(ps, world, start_o, top, mins, maxs, mask);
+        let room = if linux {
+            (lift * f64::from(up.fraction) - 1.0) as f32
+        } else {
+            (step_size + 1.0) * up.fraction - 1.0
+        };
         if !up.allsolid && room >= 1.0 {
             step = room;
             ps.origin = start_o + Vec3::Z * room;
@@ -5324,16 +5380,20 @@ fn step_slide(
     // it reaches 9 units under the plain slide (docs/research/cod11-mantle.md,
     // "The ground snap").
     if ground_plane || step != 0.0 {
-        let reach = step + if ground_plane { snap } else { 0.0 };
-        let down = pm_trace(
-            ps,
-            world,
-            ps.origin,
-            ps.origin - Vec3::Z * reach,
-            mins,
-            maxs,
-            mask,
-        );
+        // `end[2] -= stepUp`, then the snap: 1.1d keeps the difference on
+        // the stack (0x352d8-0x352f6), 1.5b stores it (0x29e89, 0x29eaa).
+        let z = f64::from(ps.origin.z) - f64::from(step);
+        let z = match world.world.arith() {
+            crate::patch::Arith::Kept if ground_plane => (z - f64::from(snap)) as f32,
+            crate::patch::Arith::Stored if ground_plane => {
+                (f64::from(z as f32) - f64::from(snap)) as f32
+            }
+            crate::patch::Arith::Msvc => {
+                ps.origin.z - (step + if ground_plane { snap } else { 0.0 })
+            }
+            _ => z as f32,
+        };
+        let down = pm_trace(ps, world, ps.origin, ps.origin.with_z(z), mins, maxs, mask);
         // A down pass that meets a player drops the step and the snap and
         // keeps the plain slide (0x3533a; docs/research/cod11-player-clip.md 2.3).
         if world.entity_num(&down) < MAX_CLIENTS {
@@ -5358,11 +5418,32 @@ fn step_slide(
     // (docs/research/cod11-mantle.md, "The ground snap").
     // A jump's step that ends at or above the jump's origin is reverted too
     // (0x35450-0x35468).
+    // The Linux builds take both dots on the stack; 1.1d's stepped x stays
+    // there too, unrounded (0x353ff-0x35447), 1.5b stores it (0x2a04e).
     let v = ps.velocity.truncate();
-    let flat = v.dot((down_o - start_o).truncate());
-    let stepped = v.dot((ps.origin - start_o).truncate());
+    let flat_d = (down_o - start_o).truncate();
+    let reverted = match world.world.arith() {
+        crate::patch::Arith::Msvc => {
+            let flat = v.dot(flat_d);
+            let stepped = v.dot((ps.origin - start_o).truncate());
+            flat + STEP_REVERT_EPS > stepped
+        }
+        arith => {
+            let (vx, vy) = (f64::from(v.x), f64::from(v.y));
+            let flat =
+                (vx * f64::from(flat_d.x) + vy * f64::from(flat_d.y)) + f64::from(STEP_REVERT_EPS);
+            let sx = f64::from(ps.origin.x) - f64::from(start_o.x);
+            let sx = if arith == crate::patch::Arith::Stored {
+                f64::from(sx as f32)
+            } else {
+                sx
+            };
+            let sy = f64::from(ps.origin.y - start_o.y);
+            flat > vy * sy + vx * sx
+        }
+    };
     let peak = peak.unwrap_or(0.0);
-    if flat + STEP_REVERT_EPS > stepped || jump_step && ps.origin.z >= peak {
+    if reverted || jump_step && ps.origin.z >= peak {
         ps.origin = down_o;
         ps.velocity = down_v;
         // The ground snap proper (0x354cc-0x3557b): a reverted move on a
@@ -5387,11 +5468,23 @@ fn step_slide(
     }
     // A jump's step that rose is held to the speed that just reaches the
     // jump's origin, and to none within 0.1 of it (0x355a4-0x35655).
+    // 1.1d keeps `left` and the root's argument on the stack
+    // (0x355cd-0x355f9), 1.5b stores `left` (0x2a3a3) and takes the root of
+    // the double product (0x2a3d4-0x2a3f5).
     if jump_step && ps.origin.z > down_o.z {
-        let left = peak - ps.origin.z;
-        ps.velocity.z = if left < 0.1 {
+        let left = f64::from(peak) - f64::from(ps.origin.z);
+        let left = match world.world.arith() {
+            crate::patch::Arith::Kept => left,
+            _ => f64::from(left as f32),
+        };
+        ps.velocity.z = if left < f64::from(0.1f32) {
             0.0
+        } else if linux {
+            ps.velocity
+                .z
+                .min(((left + left) * f64::from(ps.gravity)).sqrt() as f32)
         } else {
+            let left = left as f32;
             ps.velocity.z.min((2.0 * left * ps.gravity).sqrt())
         };
     }

@@ -2212,6 +2212,48 @@ fn the_victim_capture_matches_retail_on_mp_carentan() {
     finish(diff(&cap, &ours, &fs), &[]);
 }
 
+const FIXTURE_LINKMG: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/turret/mp_carentan-dm-turret-linkmg.txt"
+);
+const FIXTURE_LINKMG_SCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/turret/mp_carentan-dm-turret-linkmg-script.txt"
+);
+
+/// The victim recipe with the gun linked to a script_origin that rises and
+/// turns under the gunner through the yaw sweep and back through the pitch
+/// sweep (`probe_linkmg`, movers doc 16 "A linked turret"): the gunner, the
+/// gun and the target diffed on retail's level clock in every phase but
+/// `target`. The capture logs no target cmds, so the running target stands
+/// off retail's there; `-linkmg2` below logs them (movers doc 16).
+#[test]
+fn the_linked_gun_capture_matches_retail_on_mp_carentan() {
+    if vcod_common::testing::game_fs_11().is_none() {
+        return;
+    }
+    let mut cap = parse(&read(FIXTURE_LINKMG));
+    cap.cvars = &[("probe_linkmg", "11700")];
+    let place = place_ms(read(FIXTURE_LINKMG_SCRIPT).lines(), 0).expect("retail's PROBE place");
+    let Some(mut rig) = rig_aligned(
+        &cap,
+        &vcod_common::testing::game_fs_11,
+        &PROTOCOL_V1,
+        REBASE_MAX_VICTIM,
+        place,
+        None,
+    ) else {
+        return;
+    };
+    let ours = replay(&mut rig, &cap);
+    let fs = vcod_common::testing::game_fs_11().unwrap();
+    let rows = diff(&cap, &ours, &fs)
+        .into_iter()
+        .filter(|r| !r.starts_with("[target]"))
+        .collect();
+    finish(rows, &[]);
+}
+
 /// The phases after the 2026-10-19 run's dismount, which puts the gunner
 /// back on his spot: the 142 step off the sandbags and the slide down the
 /// face (turrets doc 13.3). Its sweep logs no `ct=`, so which frame ran a
@@ -2820,6 +2862,43 @@ fn the_hitbody_capture_matches_retail_on_mp_carentan() {
     ) else {
         return;
     };
+    rows.extend(hitbody_rows(script.lines(), log.iter().map(String::as_str)));
+    finish(rows, &[]);
+}
+
+/// The linked-gun recipe rerun with the target logging its cmds and every
+/// struck body logged (`-linkmg2`): the bodies the rounds strike retail's to
+/// the bit and every hit within [`HIT_NEAR`] of retail's point. The points
+/// still read a few ulps off in z (open, movers doc 16), which `finish`
+/// prints under `TURRET_REPORT=1` and this gate does not hold.
+#[test]
+fn the_linked_gun_hits_match_retail_on_mp_carentan() {
+    let cvars = &[
+        ("probe_linkmg", "11700"),
+        ("probe_bodylog", "1"),
+        ("probe_spawnlog", "1"),
+        ("probe_head", "basehead_axis_b_05"),
+    ];
+    let Some((script, log, mut rows)) = hit_replay(
+        "linkmg2",
+        vcod_common::testing::game_fs_11,
+        &PROTOCOL_V1,
+        cvars,
+    ) else {
+        return;
+    };
+    let hits = hitfine_rows(script.lines(), log.iter().map(String::as_str));
+    if report() {
+        for r in hits.iter().filter(|r| r.starts_with("[hit] ")) {
+            println!("open: {r}");
+        }
+    }
+    assert_eq!(
+        hitfine(log.iter().map(String::as_str)).len(),
+        3,
+        "the three rounds' hits"
+    );
+    rows.extend(hits.into_iter().filter(|r| !r.starts_with("[hit] ")));
     rows.extend(hitbody_rows(script.lines(), log.iter().map(String::as_str)));
     finish(rows, &[]);
 }

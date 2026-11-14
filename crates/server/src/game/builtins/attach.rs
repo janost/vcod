@@ -84,7 +84,7 @@ pub fn attach(
     let tag = cx.intern_exact(&tag_text.to_ascii_lowercase());
     let e = host
         .ents
-        .get_mut(id)
+        .get_mut_quiet(id)
         .ok_or(ErrorKind::BadType("no such entity"))?;
     if ignore {
         e.attach_ignore_collision |= 1 << e.attachments.len();
@@ -108,7 +108,7 @@ fn detach_pair(
     let tag = tag.to_ascii_lowercase();
     let e = host
         .ents
-        .get_mut(id)
+        .get_mut_quiet(id)
         .ok_or(ErrorKind::BadType("no such entity"))?;
     let Some(i) = e
         .attachments
@@ -168,7 +168,7 @@ pub fn detach_all(
     let id = entity_receiver(recv)?;
     let e = host
         .ents
-        .get_mut(id)
+        .get_mut_quiet(id)
         .ok_or(ErrorKind::BadType("no such entity"))?;
     e.attachments.clear();
     e.attach_ignore_collision = 0;

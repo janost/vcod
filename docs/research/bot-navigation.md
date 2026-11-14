@@ -711,6 +711,13 @@ How it got there, one line a round (VERIFIED, measured):
   over, +2.6 G); `trace_node` without recursion (103.1 G but `cycles:u` 44
   to 49-50 G); ending the BVH pass at the first met patch and keeping the
   walk's stack between walks (nothing measurable).
+- 2026-11-14 the brush rule's dead leaf lookups (bsp-ibsp59-format.md,
+  "The leaf walk"): every trace stopped on a model-0 brush replays as
+  before, without the leaf test and walk that never found a brush listed,
+  and the cheap replay tests run first. `mp_depot` 11.5-12.0 s to
+  10.4-10.7 of CPU, `mp_carentan` 6.3-6.5 to 5.8-6.2 (release, three runs
+  each, the two binaries alternating, load 10-30); every graph digest of
+  the 1.1 and UO builds unchanged.
 - Not changed: the flood's layers are a barrier each (walks kept 16
   threads 66% busy on `mp_ship`'s 149 layers, 85-89% on `mp_rocket` and
   `mp_hurtgen`'s 46-54, at load 57); a back down off a ledge away from a

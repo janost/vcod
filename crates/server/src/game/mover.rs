@@ -5,17 +5,19 @@
 //! `getorigin()` on one side and the `pos`/`apos` trajectory groups on the
 //! other. The three facts that shape this module are its sections 4 and 9.
 //!
-//! A verb builds a **plan**: a queue of [`Trajectory`] segments, one per
-//! phase of the trapezoidal velocity profile, plus the notify to raise when
-//! the last one ends. Retail sends exactly those segments and nothing
-//! between them, so the plan is both the simulation and the wire format;
-//! there is no second representation to keep in sync.
+//! A verb builds a **plan**: the first [`Trajectory`] segment of the
+//! trapezoidal velocity profile and the ends its setup stores for the rest,
+//! plus the notify to raise when the last one settles. Retail sends exactly
+//! those segments and nothing between them, so the plan is both the
+//! simulation and the wire format; there is no second representation to
+//! keep in sync.
 //!
-//! Each frame the integrator retires the segment whose duration has elapsed,
-//! starts the next from the position the last one reached, and writes the
-//! evaluated origin and angles back into the entity's own fields, which is
-//! what the capture shows retail doing: `getorigin()` and `.angles` both read
-//! the interpolated value on every frame of a move.
+//! Each frame the integrator steps a segment whose duration has elapsed into
+//! the next, which starts on that frame from the end the setup stored
+//! (movers doc 24), and writes the evaluated origin and angles back into the
+//! entity's own fields, which is what the capture shows retail doing:
+//! `getorigin()` and `.angles` both read the interpolated value on every
+//! frame of a move.
 //!
 //! A brush model's clip follows its trajectory one frame ahead of what
 //! script reads, on retail's `G_MoverTeam` clock, and each move is handed to
@@ -29,6 +31,7 @@ use vcod_common::net::trajectory::{
     TR_ACCELERATE, TR_DECCELERATE, TR_GRAVITY, TR_LINEAR, TR_LINEAR_STOP, TR_SINE, TR_STATIONARY,
     Trajectory,
 };
+use vcod_common::x87;
 use vcod_gsc::EntId;
 use vcod_gsc::Host;
 
@@ -38,54 +41,45 @@ pub const MOVEDONE: &str = "movedone";
 /// `"rotatedone"`, the angular half's.
 pub const ROTATEDONE: &str = "rotatedone";
 
-/// One group's motion: the trajectory on the wire now, the segments still to
-/// come, and whether finishing them owes a notify.
+/// One group's motion: the trajectory on the wire now, the segment state
+/// `Reached_ScriptMover` chains the next segment from, and whether finishing
+/// owes a notify.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Plan {
     current: Trajectory,
-    queue: std::collections::VecDeque<Trajectory>,
+    /// What the verb's setup left for the segments after the first.
+    segs: Segs,
     /// `Some` while a verb's segments are still running.
     notify: Option<&'static str>,
     /// Whether a verb has ever run on this group. A rotate leaves `pos`
     /// untouched, and writing an unstarted group's zero trajectory back onto
     /// the entity would teleport it to the origin.
     started: bool,
-    /// Where a bounded verb settles, which is its destination rather than
-    /// where its segments run out when the two differ (`Movers::move_to`).
-    dest: Option<Vec3>,
     /// 1.5b's and UO's `BG_EvaluateTrajectory` ([`bg_evaluate`]).
     stored: bool,
 }
 
+/// The seven fields a verb's setup writes per group (game.mp `pos`: speed
+/// `ent+0x1e0`, cruise seconds `+0x268`, decel seconds `+0x274`, the ends
+/// `+0x1a4`, `+0x1b0`, `+0x1bc`; `apos`: `+0x1e4`, `+0x1d0`, `+0x26c`,
+/// `+0x1e8`, `+0x280`, `+0x28c`, movers doc 24). A verb with no ramps
+/// writes only the cruise, decel and destination.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Segs {
+    speed: f32,
+    cruise: f32,
+    decel: f32,
+    accel_end: Vec3,
+    cruise_end: Vec3,
+    dest: Vec3,
+}
+
 impl Plan {
-    /// Where the plan has the group at `t`, without retiring anything: the
-    /// segments chained the way [`Plan::advance`] will chain them.
+    /// Where the running segment has the group at `t`: `BG_EvaluateTrajectory`
+    /// on it alone, clamped at its end, as a verb on a moving mover and
+    /// `G_MoverTeam` read it (0x5fb75, 0x5feca).
     fn at(&self, t: i32) -> Vec3 {
-        let mut cur = self.current;
-        let mut queue = self.queue.iter();
-        if self.notify.is_none() {
-            return bg_evaluate(self.stored, &cur, t);
-        }
-        loop {
-            let end = cur.tr_time + cur.tr_duration;
-            if t < end {
-                return bg_evaluate(self.stored, &cur, t);
-            }
-            match queue.next() {
-                Some(next) => {
-                    let base = bg_evaluate(self.stored, &cur, end);
-                    cur = Trajectory {
-                        tr_time: end,
-                        base,
-                        ..*next
-                    };
-                }
-                None if cur.tr_type == TR_GRAVITY => {
-                    return bg_evaluate(self.stored, &cur, t.min(gravity_stop(end)));
-                }
-                None => return bg_evaluate(self.stored, &cur, end),
-            }
-        }
+        bg_evaluate(self.stored, &self.current, t)
     }
 
     /// `G_MoverTeam`'s blocked arm: the running segment starts a frame later,
@@ -96,93 +90,295 @@ impl Plan {
     fn stall(&mut self) {
         self.current.tr_time += crate::server::FRAME_MS;
     }
-}
 
-impl Plan {
-    /// Starts a verb: the queue replaces whatever was running. A second verb
-    /// on a moving entity taking over rather than queueing behind it is
-    /// UNVERIFIED (movers doc, section 10); it is the reading that keeps one
-    /// group to one trajectory, which is all the wire can carry. The caller
-    /// sets `current` stationary where the verb starts first, and the
-    /// destination after.
-    fn start(&mut self, now_ms: i32, segments: Vec<Trajectory>, notify: &'static str) {
-        self.dest = None;
-        let mut q: std::collections::VecDeque<Trajectory> = segments.into();
-        let Some(mut first) = q.pop_front() else {
-            return;
-        };
-        first.tr_time = now_ms;
-        first.base = bg_evaluate(self.stored, &self.current, now_ms);
-        self.current = first;
-        self.queue = q;
-        self.notify = Some(notify);
-        self.started = true;
-    }
-
-    /// Retires every segment whose duration has elapsed by `now_ms`. Returns
-    /// the notify owed, once, on the frame the last one ends.
+    /// `G_MoverTeam`'s tail for one group at level time `now_ms`: when the
+    /// running segment's time is up, `Reached_ScriptMover` steps to the
+    /// next one, at most one a frame (0x5f9a2..0x5f9f8). Returns the notify
+    /// owed, once, on the frame the last one settles.
     fn advance(&mut self, now_ms: i32) -> Option<&'static str> {
-        while self.notify.is_some() {
-            let end = self.current.tr_time + self.current.tr_duration;
-            if now_ms < end {
-                return None;
-            }
-            match self.queue.pop_front() {
-                Some(mut next) => {
-                    next.tr_time = end;
-                    next.base = bg_evaluate(self.stored, &self.current, end);
-                    self.current = next;
-                }
-                None => return self.finish(end, now_ms),
-            }
+        if self.notify.is_none()
+            || self.current.tr_type == TR_STATIONARY
+            || self.current.tr_time + self.current.tr_duration > now_ms
+        {
+            return None;
         }
-        None
+        if self.step(now_ms) {
+            self.notify.take()
+        } else {
+            None
+        }
     }
 
-    /// The last segment ended at `end`, seen on the frame at `now_ms`. A
-    /// bounded move settles to stationary at the point it reached, which is
-    /// what the capture shows; a `movegravity` settles where it is at
-    /// `now_ms`, the first frame past its time (0x5f93b, movers doc 5).
-    fn finish(&mut self, end: i32, now_ms: i32) -> Option<&'static str> {
-        let base = if self.current.tr_type == TR_GRAVITY {
-            bg_evaluate(self.stored, &self.current, now_ms)
+    /// The segment step `Reached_ScriptMover` calls (0x5f7b0): an ended
+    /// accelerating segment goes on into the cruise when it lasts, an ended
+    /// cruise (or an accelerating segment with none) into the decelerating
+    /// one when there is one, each starting at `now_ms`, the frame that saw
+    /// the end, not at the end itself. Anything else settles stationary on
+    /// the destination, a `movegravity` where its arc is at `now_ms`
+    /// (0x5f93b). Returns whether the group settled.
+    fn step(&mut self, now_ms: i32) -> bool {
+        let s = self.segs;
+        let tr = &mut self.current;
+        if tr.tr_type == TR_ACCELERATE && s.cruise > 0.0 {
+            let dur = trunc_ms(s.cruise);
+            // `(cruiseEnd - accelEnd) * (1000 / dur)` on the stack; 1.5b
+            // stores the difference and the factor (0x630ea, 0x63121).
+            let k = per_ms(self.stored, dur);
+            let stored = self.stored;
+            let d = |a: f32, b: f32| scaled(stored, f64::from(a) - f64::from(b), k);
+            *tr = Trajectory {
+                tr_type: TR_LINEAR_STOP,
+                tr_time: now_ms,
+                tr_duration: dur,
+                base: s.accel_end,
+                delta: Vec3::new(
+                    d(s.cruise_end.x, s.accel_end.x),
+                    d(s.cruise_end.y, s.accel_end.y),
+                    d(s.cruise_end.z, s.accel_end.z),
+                ),
+            };
+            return false;
+        }
+        if matches!(tr.tr_type, TR_ACCELERATE | TR_LINEAR_STOP) && s.decel > 0.0 {
+            let dir = normalize_in_place(self.stored, s.dest - s.cruise_end);
+            let v = |c: f32| (f64::from(s.speed) * f64::from(c)) as f32;
+            *tr = Trajectory {
+                tr_type: TR_DECCELERATE,
+                tr_time: now_ms,
+                tr_duration: trunc_ms(s.decel),
+                base: s.cruise_end,
+                delta: Vec3::new(v(dir.x), v(dir.y), v(dir.z)),
+            };
+            return false;
+        }
+        let base = if tr.tr_type == TR_GRAVITY {
+            bg_evaluate(self.stored, tr, now_ms)
         } else {
-            self.dest
-                .unwrap_or_else(|| bg_evaluate(self.stored, &self.current, end))
+            s.dest
         };
-        self.current = Trajectory {
+        *tr = Trajectory {
             tr_type: TR_STATIONARY,
-            tr_time: end,
+            tr_time: now_ms,
             base,
-            ..self.current
+            ..*tr
         };
-        self.notify.take()
+        true
+    }
+
+    /// The move and rotate verbs' setup (0x5fb38) toward `dest` from `cur`,
+    /// `r.currentOrigin` or `r.currentAngles`: the displacement is taken off
+    /// `cur` as script left it, then a running trajectory is evaluated at
+    /// `now_ms` into `cur`, where the first segment starts. Returns the
+    /// start, which the verb writes back and links.
+    fn start_toward(&mut self, now_ms: i32, cur: Vec3, dest: Vec3, m: Ramp) -> Vec3 {
+        let d = dest - cur;
+        let cur = self.running_start(now_ms, cur);
+        let stored = self.stored;
+        if m.accel == 0.0 && m.decel == 0.0 {
+            let dur = trunc_ms(m.secs);
+            self.segs.cruise = m.secs;
+            self.segs.decel = 0.0;
+            self.segs.dest = dest;
+            let k = per_ms(stored, dur);
+            let v = |c: f32| scaled(stored, f64::from(c), k);
+            self.current = Trajectory {
+                tr_type: TR_LINEAR_STOP,
+                tr_time: now_ms,
+                tr_duration: dur,
+                base: cur,
+                delta: Vec3::new(v(d.x), v(d.y), v(d.z)),
+            };
+            return self.begin(now_ms);
+        }
+        let (secs, accel, decel) = (f64::from(m.secs), f64::from(m.accel), f64::from(m.decel));
+        let cruise = (secs - accel - decel) as f32;
+        let dist = x87::dot(d, d).sqrt() as f32;
+        let speed = ((f64::from(dist) * 2.0) / (secs * 2.0 - accel - decel)) as f32;
+        let dir = normalize2(self.stored, d);
+        // The velocity stays on the stack for the cruise's delta; its
+        // stored copy feeds the accelerating delta and the cruise's end.
+        // 1.5b stores it at once (0x63753).
+        let vf = (dir.as_dvec3() * f64::from(speed)).as_vec3();
+        let v = if stored {
+            vf.as_dvec3()
+        } else {
+            dir.as_dvec3() * f64::from(speed)
+        };
+        self.segs.cruise = cruise;
+        self.segs.decel = m.decel;
+        self.segs.speed = speed;
+        self.segs.dest = dest;
+        if m.accel != 0.0 {
+            self.current = Trajectory {
+                tr_type: TR_ACCELERATE,
+                tr_time: now_ms,
+                tr_duration: trunc_ms(m.accel),
+                base: cur,
+                delta: vf,
+            };
+            self.segs.accel_end = self.at(now_ms + self.current.tr_duration);
+        } else {
+            self.segs.accel_end = cur;
+            self.current = if cruise != 0.0 {
+                let dur = trunc_ms(cruise);
+                let k = per_ms(stored, dur);
+                let c = f64::from(cruise);
+                let x = |v: f64| {
+                    let d = v * c;
+                    scaled(stored, if stored { f64::from(d as f32) } else { d }, k)
+                };
+                Trajectory {
+                    tr_type: TR_LINEAR_STOP,
+                    tr_time: now_ms,
+                    tr_duration: dur,
+                    base: cur,
+                    delta: Vec3::new(x(v.x), x(v.y), x(v.z)),
+                }
+            } else {
+                Trajectory {
+                    tr_type: TR_DECCELERATE,
+                    tr_time: now_ms,
+                    tr_duration: trunc_ms(m.decel),
+                    base: cur,
+                    delta: vf,
+                }
+            };
+        }
+        self.segs.cruise_end = mul_add(vf, cruise, self.segs.accel_end);
+        self.begin(now_ms)
+    }
+
+    /// `rotateVelocity`'s setup (0x5feb0): the delta is the velocity on
+    /// every segment, the cruise lasts what the ramps leave, and the
+    /// destination is where the segments run out, so ramps shorten the turn
+    /// to `v * (T - ta/2 - td/2)`.
+    fn start_velocity(&mut self, now_ms: i32, cur: Vec3, v: Vec3, m: Ramp) -> Vec3 {
+        let cur = self.running_start(now_ms, cur);
+        let segment = |tr_type: i32, secs: f32, base: Vec3| Trajectory {
+            tr_type,
+            tr_time: now_ms,
+            tr_duration: trunc_ms(secs),
+            base,
+            delta: v,
+        };
+        if m.accel == 0.0 && m.decel == 0.0 {
+            self.segs.cruise = m.secs;
+            self.segs.decel = 0.0;
+            self.current = segment(TR_LINEAR_STOP, m.secs, cur);
+            self.segs.dest = self.at(now_ms + self.current.tr_duration);
+            return self.begin(now_ms);
+        }
+        let (secs, accel, decel) = (f64::from(m.secs), f64::from(m.accel), f64::from(m.decel));
+        let cruise = (secs - accel - decel) as f32;
+        self.segs.cruise = cruise;
+        self.segs.decel = m.decel;
+        self.segs.speed = x87::dot(v, v).sqrt() as f32;
+        if m.accel != 0.0 {
+            self.current = segment(TR_ACCELERATE, m.accel, cur);
+            self.segs.accel_end = self.at(now_ms + self.current.tr_duration);
+        } else {
+            self.segs.accel_end = cur;
+            self.current = if cruise != 0.0 {
+                segment(TR_LINEAR_STOP, cruise, cur)
+            } else {
+                segment(TR_DECCELERATE, m.decel, cur)
+            };
+        }
+        let cruise_end = mul_add(v, cruise, self.segs.accel_end);
+        self.segs.cruise_end = cruise_end;
+        self.segs.dest = if m.decel != 0.0 {
+            let tail = segment(TR_DECCELERATE, m.decel, cruise_end);
+            bg_evaluate(self.stored, &tail, now_ms + tail.tr_duration)
+        } else {
+            cruise_end
+        };
+        self.begin(now_ms)
+    }
+
+    /// `cur` as a verb's setup starts from it: a group whose `trType` is not
+    /// 0 is evaluated at `now_ms` first (0x5fb70, 0x5fec5).
+    fn running_start(&self, now_ms: i32, cur: Vec3) -> Vec3 {
+        if self.current.tr_type != TR_STATIONARY {
+            self.at(now_ms)
+        } else {
+            cur
+        }
+    }
+
+    /// The setup's last evaluation, of the first segment at `now_ms`
+    /// (0x5fea0, 0x60204): where the verb leaves `cur`.
+    fn begin(&mut self, now_ms: i32) -> Vec3 {
+        self.started = true;
+        self.at(now_ms)
     }
 }
 
-/// The level time a `movegravity` ending at `end` stops on: the first
-/// frame at or past it, whose `Reached_ScriptMover` evaluates the arc there
-/// (0x5f93b).
-fn gravity_stop(end: i32) -> i32 {
-    let f = crate::server::FRAME_MS;
-    end.div_euclid(f) * f + if end.rem_euclid(f) == 0 { 0 } else { f }
+/// Seconds as a `trDuration`: times `1000.0f` on the stack and truncated
+/// (the setups' `fistp` under a chop control word, 0x5fbe6).
+fn trunc_ms(secs: f32) -> i32 {
+    (f64::from(secs) * 1000.0) as i32
+}
+
+/// `1000 / dur`, the factor a linear segment's delta takes: on the stack,
+/// or stored on 1.5b and UO.
+fn per_ms(stored: bool, dur: i32) -> f64 {
+    let k = 1000.0 / f64::from(dur);
+    if stored { f64::from(k as f32) } else { k }
+}
+
+/// `d * k`, rounded once to a float. 1.5b loads `d` from a float first.
+fn scaled(stored: bool, d: f64, k: f64) -> f32 {
+    let d = if stored { f64::from(d as f32) } else { d };
+    (d * k) as f32
+}
+
+/// `v * s + a` per component, one rounding (0x5fe5a, 0x6012f).
+fn mul_add(v: Vec3, s: f32, a: Vec3) -> Vec3 {
+    let f = |v: f32, a: f32| (f64::from(v) * f64::from(s) + f64::from(a)) as f32;
+    Vec3::new(f(v.x, a.x), f(v.y, a.y), f(v.z, a.z))
+}
+
+/// The module's `VectorNormalize2`, 1.1d's or 1.5b's and UO's.
+fn normalize2(stored: bool, v: Vec3) -> Vec3 {
+    if stored {
+        x87::normalize2_stored(v)
+    } else {
+        x87::normalize(v)
+    }
+}
+
+/// The module's `VectorNormalize`, in place.
+fn normalize_in_place(stored: bool, v: Vec3) -> Vec3 {
+    if stored {
+        x87::normalize_stored(v)
+    } else {
+        x87::normalize_in_place(v)
+    }
 }
 
 /// `BG_EvaluateTrajectory` (game.mp 0x2c600) as the 1.1d build runs it:
 /// a linear trajectory's `delta * dt + base` stays on the x87 stack until
 /// the store, `dt` the milliseconds times `0.001f`, so the turn a frame
 /// lands a float step off an `f32` evaluation (movers doc 12, "The
-/// residual yaw"). A gravity arc is `Trajectory::evaluate_kept` (0x2c6c0),
-/// every other type `Trajectory::evaluate`.
+/// residual yaw"). A gravity arc is `Trajectory::evaluate_kept` (0x2c6c0);
+/// the ramps are [`ramp_kept`] (0x2c767, 0x2c800); every other type
+/// `Trajectory::evaluate`.
 ///
 /// 1.5b and UO store `dt` to a float before the mul-add (1.5b
-/// `0x1b8f5`), `stored`.
+/// `0x1b8f5`), `stored`, and each ramp's terms ([`ramp_stored`]).
 fn bg_evaluate(stored: bool, tr: &Trajectory, t: i32) -> Vec3 {
     if tr.tr_type == TR_GRAVITY {
         return if stored {
             tr.evaluate_stored(t)
         } else {
             tr.evaluate_kept(t)
+        };
+    }
+    if matches!(tr.tr_type, TR_ACCELERATE | TR_DECCELERATE) {
+        return if stored {
+            ramp_stored(tr, t)
+        } else {
+            ramp_kept(tr, t)
         };
     }
     let dt = |t: i32| {
@@ -203,6 +399,44 @@ fn bg_evaluate(stored: bool, tr: &Trajectory, t: i32) -> Vec3 {
     )
 }
 
+/// 1.1d's `TR_ACCELERATE` and `TR_DECCELERATE` arms (0x2c767, 0x2c800):
+/// the time clamped at the segment's end, `phase` the stored length of the
+/// delta over the duration, both kept on the stack, the direction
+/// `VectorNormalize2`'s; `base + dir * (phase/2 dt^2)` accelerating,
+/// `(base + delta dt) - dir * (phase/2 dt^2)` decelerating, one rounding.
+fn ramp_kept(tr: &Trajectory, t: i32) -> Vec3 {
+    let k = f64::from(0.001_f32);
+    let dt = f64::from(t.min(tr.tr_time + tr.tr_duration) - tr.tr_time) * k;
+    let len = x87::dot(tr.delta, tr.delta).sqrt() as f32;
+    let phase = f64::from(len) / (f64::from(tr.tr_duration) * k);
+    let dir = x87::normalize(tr.delta).as_dvec3();
+    let (base, delta) = (tr.base.as_dvec3(), tr.delta.as_dvec3());
+    let out = if tr.tr_type == TR_ACCELERATE {
+        let s = phase * 0.5 * dt * dt;
+        dir * s + base
+    } else {
+        let s = -phase * 0.5 * dt * dt;
+        (delta * dt + base) + dir * s
+    };
+    out.as_vec3()
+}
+
+/// 1.5b's ramp arms (game.mp 0x1bc0a, 0x1bd22), which UO shares: `dt`,
+/// the length and `phase` each stored as a float, the decelerating
+/// segment's `base + delta dt` stored before the ramp term is added.
+fn ramp_stored(tr: &Trajectory, t: i32) -> Vec3 {
+    let k = f64::from(0.001_f32);
+    let dt = f64::from((f64::from(t.min(tr.tr_time + tr.tr_duration) - tr.tr_time) * k) as f32);
+    let len = x87::dot(tr.delta, tr.delta).sqrt() as f32;
+    let phase = f64::from((f64::from(len) / (f64::from(tr.tr_duration) * k)) as f32);
+    let dir = x87::normalize2_stored(tr.delta).as_dvec3();
+    let base = tr.base.as_dvec3();
+    if tr.tr_type == TR_ACCELERATE {
+        return (phase * 0.5 * dt * dt * dir + base).as_vec3();
+    }
+    let a = (tr.delta.as_dvec3() * dt + base).as_vec3().as_dvec3();
+    (-phase * 0.5 * dt * dt * dir + a).as_vec3()
+}
 /// Every entity a mover verb has been called on, and what it is doing.
 #[derive(Default)]
 pub struct Movers {
@@ -327,75 +561,55 @@ impl Movers {
 
     /// `moveto` and the three axis verbs, which differ only in how the
     /// caller builds `dest` (movers doc, section 3: the axis verbs take a
-    /// delta, `moveto` a destination).
-    ///
-    /// The segments' velocities come from `from`, the origin script reads,
-    /// but a verb on a moving entity starts its `trBase` where the running
-    /// trajectory has it at `now_ms`, a frame further on: the ride
-    /// capture's `moveto` on the descending slab sent `trBase` z 28 with a
-    /// velocity of -30 from the 30 script read, ran out 2 units short and
-    /// settled on `dest` (movers doc, section 14). Returns the start, which
-    /// the verb writes into `r.currentOrigin` and links (0x5fb38): `getorigin()`
-    /// reads it straight after the call (movers doc 12, "A blocked mover").
+    /// delta, `moveto` a destination), from `from`, the origin script
+    /// reads ([`Plan::start_toward`]). A verb on a moving entity starts its
+    /// `trBase` where the running trajectory has it at `now_ms`, a frame
+    /// further on: the ride capture's `moveto` on the descending slab sent
+    /// `trBase` z 28 with a velocity of -30 from the 30 script read, ran out
+    /// 2 units short and settled on `dest` (movers doc, section 14). Returns
+    /// the start, which the verb writes into `r.currentOrigin` and links:
+    /// `getorigin()` reads it straight after the call (movers doc 12, "A
+    /// blocked mover").
     pub fn move_to(&mut self, id: EntId, now_ms: i32, from: Vec3, dest: Vec3, m: Ramp) -> Vec3 {
         let row = self.row(id);
-        let base = if row.pos.started {
-            row.pos.at(now_ms)
-        } else {
-            from
-        };
-        row.pos.current = stationary(base);
-        row.pos.start(now_ms, m.segments(dest - from), MOVEDONE);
-        row.pos.dest = Some(dest);
-        base
+        let start = row.pos.start_toward(now_ms, from, dest, m);
+        row.pos.notify = Some(MOVEDONE);
+        start
     }
 
-    /// `rotateto` and the three axis verbs, per component from `from` to
-    /// `dest` (`rotateto`'s caller folds `dest` within 180 of `from`, movers
-    /// doc 23). Started like [`Self::move_to`], which is INFERRED for the angles: no
-    /// capture holds a rotate called on an entity already turning.
-    ///
-    /// A stationary group starts from `from`, `r.currentAngles`, not from
-    /// its settled `trBase`: the two differ by the quantization
-    /// `Reached_ScriptMover` leaves (movers doc 12, "The residual yaw").
-    /// Returns the start, which the verb's own link snaps into
-    /// `r.currentAngles` ([`snap_angles`]).
+    /// `rotateto` and the three axis verbs, per component from `from`,
+    /// `r.currentAngles`, to `dest` (`rotateto`'s caller folds `dest` within
+    /// 180 of `from`, movers doc 23), on the moves' setup. A stationary group
+    /// starts from `from`, not from its settled `trBase`: the two differ by
+    /// the quantization `Reached_ScriptMover` leaves (movers doc 12, "The
+    /// residual yaw"). Returns the start, which the verb's own link snaps
+    /// into `r.currentAngles` ([`snap_angles`]).
     pub fn rotate_to(&mut self, id: EntId, now_ms: i32, from: Vec3, dest: Vec3, m: Ramp) -> Vec3 {
         let row = self.row(id);
-        let base = if row.apos.notify.is_some() {
-            row.apos.at(now_ms)
-        } else {
-            from
-        };
-        row.apos.current = stationary(base);
-        row.apos.start(now_ms, m.segments(dest - from), ROTATEDONE);
-        row.apos.dest = Some(dest);
-        base
+        let start = row.apos.start_toward(now_ms, from, dest, m);
+        row.apos.notify = Some(ROTATEDONE);
+        start
     }
 
-    /// `movegravity(velocity, seconds)`: one unbounded-shape segment on a
-    /// gravity trajectory, bounded only in when the notify comes.
+    /// `movegravity(velocity, seconds)`: one gravity segment from `from`,
+    /// `r.currentOrigin` with no evaluation of what ran before (0x60667),
+    /// bounded only in when the notify comes.
     pub fn move_gravity(&mut self, id: EntId, now_ms: i32, from: Vec3, velocity: Vec3, secs: f32) {
         let row = self.row(id);
-        row.pos.current = stationary(from);
-        row.pos.start(
-            now_ms,
-            vec![Trajectory {
-                tr_type: TR_GRAVITY,
-                tr_time: now_ms,
-                tr_duration: ms(secs),
-                base: from,
-                delta: velocity,
-            }],
-            MOVEDONE,
-        );
+        row.pos.current = Trajectory {
+            tr_type: TR_GRAVITY,
+            tr_time: now_ms,
+            tr_duration: trunc_ms(secs),
+            base: from,
+            delta: velocity,
+        };
+        row.pos.notify = Some(MOVEDONE);
+        row.pos.started = true;
     }
 
-    /// `rotatevelocity(degreesPerSecond, seconds, accel, decel)`. Retail's
-    /// own capture ended a `(0,180,0)` over 2 s at 360 degrees, so the verb
-    /// is `rotateto` with the target the velocity times the duration; that
-    /// the ramps then preserve the total angle rather than the peak rate is
-    /// INFERRED from the two sharing one handler shape.
+    /// `rotatevelocity(degreesPerSecond, seconds, accel, decel)`
+    /// ([`Plan::start_velocity`]): retail's own capture ended a `(0,180,0)`
+    /// over 2 s at 360 degrees.
     pub fn rotate_velocity(
         &mut self,
         id: EntId,
@@ -404,8 +618,10 @@ impl Movers {
         v: Vec3,
         m: Ramp,
     ) -> Vec3 {
-        let dest = from + v * m.secs;
-        self.rotate_to(id, now_ms, from, dest, m)
+        let row = self.row(id);
+        let start = row.apos.start_velocity(now_ms, from, v, m);
+        row.apos.notify = Some(ROTATEDONE);
+        start
     }
 }
 
@@ -1263,8 +1479,7 @@ fn submodel(host: &GameHost, id: EntId) -> Option<usize> {
         .filter(|&n| n > 0)
 }
 
-/// A verb's duration and its two ramps, all in seconds, and the segment
-/// builder they share (movers doc, section 4).
+/// A verb's duration and its two ramps, all in seconds (movers doc 4).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ramp {
     pub secs: f32,
@@ -1274,59 +1489,27 @@ pub struct Ramp {
 
 impl Ramp {
     pub fn new(secs: f32, accel: f32, decel: f32) -> Self {
-        let secs = secs.max(0.0);
-        // Retail's own clamp is unmeasured; ramps that do not fit inside the
-        // duration would give a negative cruise time and a segment that runs
-        // backwards, so they are trimmed rather than trusted.
-        let (mut accel, mut decel) = (accel.max(0.0), decel.max(0.0));
-        if accel + decel > secs {
-            let scale = if accel + decel > 0.0 {
-                secs / (accel + decel)
-            } else {
-                0.0
-            };
-            accel *= scale;
-            decel *= scale;
-        }
         Ramp { secs, accel, decel }
     }
 
-    /// The trapezoid for a total displacement `d`: cruise velocity
-    /// `d / (T - ta/2 - td/2)`, an accelerating segment of `ta`, a linear one
-    /// for the rest, and a decelerating one of `td`. `tr_time` and `base` are
-    /// filled in by [`Plan`] as each segment starts.
-    fn segments(&self, d: Vec3) -> Vec<Trajectory> {
-        let effective = self.secs - self.accel / 2.0 - self.decel / 2.0;
-        let delta = if effective > 0.0 {
-            d / effective
-        } else {
-            Vec3::ZERO
-        };
-        let cruise = self.secs - self.accel - self.decel;
-        let mut out = Vec::new();
-        let mut push = |tr_type: i32, secs: f32| {
-            if secs > 0.0 {
-                out.push(Trajectory {
-                    tr_type,
-                    tr_time: 0,
-                    tr_duration: ms(secs),
-                    base: Vec3::ZERO,
-                    delta,
-                });
-            }
-        };
-        push(TR_ACCELERATE, self.accel);
-        push(TR_LINEAR_STOP, cruise);
-        push(TR_DECCELERATE, self.decel);
-        if out.is_empty() {
-            // A zero-duration verb still has to settle at the destination
-            // and raise its notify, which one empty segment does.
-            out.push(Trajectory {
-                tr_type: TR_LINEAR_STOP,
-                ..Trajectory::default()
-            });
+    /// The verbs' argument checks (game.mp 0x60467..0x60514 on `moveTo`,
+    /// the same on every verb): the error each raises, in retail's order.
+    /// The sum of the ramps is taken on the stack against the float time,
+    /// so ramps that fill the time exactly pass.
+    pub fn check(&self) -> Result<(), &'static str> {
+        if self.secs <= 0.0 {
+            return Err("total time must be positive");
         }
-        out
+        if self.accel < 0.0 {
+            return Err("accel time must be nonnegative");
+        }
+        if self.decel < 0.0 {
+            return Err("decel time must be nonnegative");
+        }
+        if f64::from(self.accel) + f64::from(self.decel) > f64::from(self.secs) {
+            return Err("accel time plus decel time is greater than total time");
+        }
+        Ok(())
     }
 }
 
@@ -1339,68 +1522,26 @@ fn stationary(at: Vec3) -> Trajectory {
     }
 }
 
-/// Seconds as the milliseconds a `trDuration` is in.
-fn ms(secs: f32) -> i32 {
-    (secs.max(0.0) * 1000.0).round() as i32
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The trapezoid retail measured: `movez(96, 2, 0.5, 0.5)` is three
-    /// segments of 500/1000/500 ms, all carrying the cruise velocity 64, and
-    /// they cover 16, 64 and 16 units (movers doc, section 9).
+    /// `movez(96, 2, 0.5, 0.5)` from z 592: the three segments retail sends
+    /// (movers doc 9), 500/1000/500 ms, each carrying the cruise velocity
+    /// 64 and starting where the last ran out, then the destination and the
+    /// notify once.
     #[test]
     fn a_ramped_move_is_the_three_segments_retail_sends() {
-        let segs = Ramp::new(2.0, 0.5, 0.5).segments(Vec3::new(0.0, 0.0, 96.0));
-        let kinds: Vec<(i32, i32, f32)> = segs
-            .iter()
-            .map(|t| (t.tr_type, t.tr_duration, t.delta.z))
-            .collect();
-        assert_eq!(
-            kinds,
-            vec![
-                (TR_ACCELERATE, 500, 64.0),
-                (TR_LINEAR_STOP, 1000, 64.0),
-                (TR_DECCELERATE, 500, 64.0),
-            ]
-        );
-    }
-
-    /// A move with no ramps is one linear segment at `distance / duration`,
-    /// and the accel-only case is what says the two ends are independent:
-    /// `500 / (2 - 0.25)` is 285.71, not `500 / 1.5`.
-    #[test]
-    fn the_cruise_speed_is_the_measured_formula() {
-        let plain = Ramp::new(2.0, 0.0, 0.0).segments(Vec3::new(500.0, 0.0, 0.0));
-        assert_eq!(plain.len(), 1);
-        assert_eq!(plain[0].tr_type, TR_LINEAR_STOP);
-        assert!((plain[0].delta.x - 250.0).abs() < 0.01);
-
-        let accel_only = Ramp::new(2.0, 0.5, 0.0).segments(Vec3::new(500.0, 0.0, 0.0));
-        assert_eq!(accel_only.len(), 2);
-        assert!(
-            (accel_only[0].delta.x - 285.714).abs() < 0.01,
-            "{}",
-            accel_only[0].delta.x
-        );
-    }
-
-    /// The segments are chained through their own evaluation, so a ramped
-    /// move lands exactly on its destination and settles stationary there,
-    /// and the notify comes on the frame the last one ends.
-    #[test]
-    fn a_ramped_move_lands_on_its_destination_and_notifies_once() {
         let mut plan = Plan::default();
-        plan.current.base = Vec3::new(0.0, 0.0, 592.0);
-        plan.start(
+        let from = Vec3::new(0.0, 0.0, 592.0);
+        let start = plan.start_toward(
             1000,
-            Ramp::new(2.0, 0.5, 0.5).segments(Vec3::new(0.0, 0.0, 96.0)),
-            MOVEDONE,
+            from,
+            Vec3::new(0.0, 0.0, 688.0),
+            Ramp::new(2.0, 0.5, 0.5),
         );
-
-        // The three boundaries retail's own capture carries.
+        plan.notify = Some(MOVEDONE);
+        assert_eq!(start, from);
         for (at, z, kind) in [
             (1000, 592.0, TR_ACCELERATE),
             (1500, 608.0, TR_LINEAR_STOP),
@@ -1408,45 +1549,83 @@ mod tests {
         ] {
             assert_eq!(plan.advance(at), None, "not done at {at}");
             assert_eq!(plan.current.tr_type, kind, "at {at}");
-            assert!(
-                (plan.current.base.z - z).abs() < 0.01,
-                "at {at}: base {}",
-                plan.current.base.z
-            );
+            assert_eq!(plan.current.tr_time, at);
+            assert_eq!(plan.current.base.z, z, "at {at}");
+            assert_eq!(plan.current.delta.z, 64.0, "at {at}");
         }
         assert_eq!(plan.advance(3000), Some(MOVEDONE));
         assert_eq!(plan.current.tr_type, TR_STATIONARY);
-        assert!((plan.current.base.z - 688.0).abs() < 0.01);
+        assert_eq!(plan.current.base.z, 688.0);
         assert_eq!(plan.advance(4000), None, "the notify comes once");
     }
 
-    /// `at` reads ahead without retiring anything, chaining the segments the
-    /// way `advance` will; a stall holds the running segment a frame, and
-    /// the notify comes that much later (movers doc, section 12).
+    /// The accel-only case says the two ends are independent:
+    /// `500 / (2 - 0.25)` is 285.71, not `500 / 1.5`.
+    #[test]
+    fn the_cruise_speed_is_the_measured_formula() {
+        let mut plan = Plan::default();
+        plan.start_toward(
+            0,
+            Vec3::ZERO,
+            Vec3::new(500.0, 0.0, 0.0),
+            Ramp::new(2.0, 0.5, 0.0),
+        );
+        assert_eq!(plan.current.tr_type, TR_ACCELERATE);
+        assert!((plan.current.delta.x - 285.714).abs() < 0.001);
+        assert_eq!(plan.segs.decel, 0.0);
+    }
+
+    /// A segment that ends between frames hands over on the frame that sees
+    /// it end, from where it ran out: `movex(100, 1.7, 0.33, 0.27)`'s accel
+    /// lasts 330 ms and its cruise starts at 350 (movers doc 24).
+    #[test]
+    fn a_segment_hands_over_on_the_frame_that_sees_it_end() {
+        let mut plan = Plan::default();
+        plan.start_toward(
+            0,
+            Vec3::ZERO,
+            Vec3::new(100.0, 0.0, 0.0),
+            Ramp::new(1.7, 0.33, 0.27),
+        );
+        plan.notify = Some(MOVEDONE);
+        assert_eq!(plan.current.tr_duration, 330);
+        assert_eq!(plan.advance(300), None);
+        assert_eq!(plan.current.tr_type, TR_ACCELERATE);
+        let end = plan.at(330);
+        assert_eq!(plan.at(350), end, "clamped at its end");
+        plan.advance(350);
+        assert_eq!(plan.current.tr_type, TR_LINEAR_STOP);
+        assert_eq!((plan.current.tr_time, plan.current.base), (350, end));
+    }
+
+    /// A stall holds the running segment a frame, and the notify comes that
+    /// much later (movers doc, section 12).
     #[test]
     fn a_stall_holds_the_plan_a_frame() {
         let mut plan = Plan::default();
-        plan.current.base = Vec3::new(0.0, 0.0, 592.0);
-        plan.start(
+        plan.start_toward(
             1000,
-            Ramp::new(2.0, 0.5, 0.5).segments(Vec3::new(0.0, 0.0, 96.0)),
-            MOVEDONE,
+            Vec3::ZERO,
+            Vec3::new(0.0, 0.0, 50.0),
+            Ramp::new(1.0, 0.0, 0.0),
         );
-        assert!(
-            (plan.at(2500).z - 672.0).abs() < 0.01,
-            "{}",
-            plan.at(2500).z
-        );
-        assert!((plan.at(5000).z - 688.0).abs() < 0.01);
-        assert_eq!(plan.current.tr_type, TR_ACCELERATE, "at retired nothing");
-
+        plan.notify = Some(MOVEDONE);
         let before = plan.at(1200);
         plan.stall();
         assert_eq!(plan.at(1250), before);
-        assert_eq!(plan.advance(3000), None);
-        assert_eq!(plan.advance(3050), Some(MOVEDONE));
+        assert_eq!(plan.advance(2000), None);
+        assert_eq!(plan.advance(2050), Some(MOVEDONE));
     }
 
+    /// Ramps that overrun the time, a time that is not positive and a
+    /// negative ramp are retail's script errors, not trimmed.
+    #[test]
+    fn the_verbs_argument_checks_are_retails() {
+        assert_eq!(Ramp::new(1.0, 0.5, 0.5).check(), Ok(()));
+        assert!(Ramp::new(1.0, 0.6, 0.5).check().is_err());
+        assert!(Ramp::new(0.0, 0.0, 0.0).check().is_err());
+        assert!(Ramp::new(1.0, -0.1, 0.0).check().is_err());
+    }
     /// `movegravity` notifies on the frame its time runs out and stops there,
     /// the arc evaluated at that frame (`probe_moverreads`, movers doc 5).
     #[test]

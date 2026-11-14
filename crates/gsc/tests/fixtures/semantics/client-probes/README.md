@@ -751,7 +751,12 @@ corner with a +x wall, into both (`docs/research/cod11-player-clip.md`
 10.4). Its files are `-bump-overlap-wall-walker.txt` and
 `-bump-overlap-wall-script.txt`.
 
-All eight files are retail evidence. A walker run against `vcod-server`
+The 1.5b and UO runs (`COD_VERSION=1.5|uo`, the walker with `--capture-tag
+15` or `uo`) are `-bump-15-walker.txt` and `-bump-uo-walker.txt`, their gsc
+lines `-bump-15-script.txt` and `-bump-uo-script.txt`.
+
+All eight 1.1d files are retail evidence.
+The four 1.5b and UO ones are too. A walker run against `vcod-server`
 overwrites the untagged one and refuses the tagged ones without
 `--overwrite-fixture`: move them to `tmp/` and `git checkout` the fixture
 directory after.
@@ -2809,3 +2814,21 @@ vcod --net-probe 127.0.0.1:34715 --game-dir <install> [--mod-dir uo] --probe-tea
 `crates/server/tests/fixtures/pronecrouch/mp_carentan-{1.1,1.5,uo}.txt` are
 the 2026-10-21 captures, cut to the fields `pronecrouch_ab.rs` reads, with
 the server's `PROBE` lines.
+
+## probe_pointarm
+
+Two slanted `bulletTrace`s a frame for 60 s near mp_carentan's deathmatch
+spawns, for a gdb run that logs each call of the leaf walk's bounds test
+that reaches its point arm (`docs/research/cod11-player-clip.md` 8.12). It
+logs no results of its own. The retail binary runs under gdb with a Python
+breakpoint script at the arm's entry (1.1d 0x8054d0f, 1.5b 0x8058e29) and
+its pass (0x8054e66, 0x8058ff0), through `COD_LNXDED` pointing at a wrapper
+that `exec`s `gdb -batch -x <script> --args <binary> "$@"`:
+
+```
+COD_LNXDED=<wrapper> PORT=29010 PROBE_SECS=120 \
+    tools/run_probe.sh client-probes/probe_pointarm mp_carentan
+```
+
+The logs are `crates/common/tests/fixtures/patch/pointarm-1.1.txt` and
+`-1.5.txt`, whose headers give the line format.

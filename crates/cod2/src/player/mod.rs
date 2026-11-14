@@ -19,8 +19,8 @@ use vcod_common::net::flags::{
     EF_CROUCH, EF_DEAD, EF_FIRING, EF_MOUNTED_DUCK, EF_MOUNTED_PRONE, EF_MOUNTED_STAND, EF_PRONE,
 };
 use vcod_common::playerpose::{
-    self, BodyAngles, BodyInput, BodySlope, Controllers, EF_ADS, LeanDvars, Mantle, PoseInputs,
-    Updater,
+    self, BodyAngles, BodyInput, BodySlope, Cod4Arith, Controllers, EF_ADS, LeanDvars, Mantle,
+    PoseInputs, Updater,
 };
 use vcod_common::skeleton::{PoseBuffer, Skeleton};
 use vcod_common::xanim::{self, XAnim};
@@ -343,9 +343,10 @@ pub struct PlayerBody {
     /// A CoD4 body's lean dvars: its controls are CoD4's
     /// ([`Controllers::cod4`]); `None` poses CoD2's.
     pub cod4_lean: Option<LeanDvars>,
-    /// A CoD4 body's swings folded in floats, as `cod4_lnxded` folds them
-    /// (the server's hit poses); `false` folds them in shorts.
-    pub float_swing: bool,
+    /// Whose 1.7 arithmetic a CoD4 body's folds and eases follow: the
+    /// server's hit poses take `cod4_lnxded`'s, the drawn bodies
+    /// `iw3mp.exe`'s.
+    pub cod4_arith: Cod4Arith,
 }
 
 impl PlayerBody {
@@ -396,7 +397,7 @@ impl PlayerBody {
         let updater = match self.cod4_lean {
             Some(_) => Updater::Cod4 {
                 mantle,
-                floats: self.float_swing,
+                arith: self.cod4_arith,
             },
             None => Updater::Cod2(mantle),
         };
@@ -416,10 +417,15 @@ impl PlayerBody {
             waist_pitch: f.waist_pitch,
         };
         let target = match &self.cod4_lean {
-            Some(lean) => Controllers::cod4(&self.angles, &input, &slope, lean),
+            Some(lean) => Controllers::cod4(&self.angles, &input, &slope, lean, self.cod4_arith),
             None => Controllers::cod2(&self.angles, &input, &slope),
         };
-        self.controls.ease_toward(&target, frametime_ms);
+        // `cod4_lnxded` eases on the x87 stack; `iw3mp.exe` (0x407288)
+        // stores its step as a float, as 1.5 and UO do.
+        match (self.cod4_lean, self.cod4_arith) {
+            (Some(_), Cod4Arith::Server) => self.controls.ease_toward_cod4(&target, frametime_ms),
+            _ => self.controls.ease_toward(&target, frametime_ms),
+        }
     }
 
     fn input(anims: &PlayerAnims, f: &BodyFrame) -> BodyInput {

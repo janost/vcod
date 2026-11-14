@@ -874,23 +874,62 @@ pub(crate) fn bullet_hit(
     hit_characters: bool,
     ignore: Option<EntId>,
 ) -> BulletHit {
-    let mut _p = crate::tick_profile::phase("bullet/world");
+    let world = bullet_world(host, start, end);
+    bullet_entities(host, cx, (start, end), hit_characters, ignore, world)
+}
+
+/// Whether [`bullet_hit`]'s segment meets nothing. Without
+/// `hit_characters`, a segment the world stops skips the entity pass,
+/// which could only shorten it; the pass's model lookups still run, as
+/// their loads and touches are the pass's ([`GameHost::touch_shot_models`]).
+pub(crate) fn bullet_passed(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    start: Vec3,
+    end: Vec3,
+    hit_characters: bool,
+    ignore: Option<EntId>,
+) -> bool {
+    let world = bullet_world(host, start, end);
+    if world.0.is_some() && !hit_characters {
+        let _p = crate::tick_profile::phase("bullet/models");
+        host.touch_shot_models(cx);
+        return false;
+    }
+    let (hit, _) = bullet_entities(host, cx, (start, end), hit_characters, ignore, world);
+    hit.is_none()
+}
+
+/// [`bullet_hit`]'s world trace: what it meets and the point it ends at.
+fn bullet_world(host: &mut GameHost, start: Vec3, end: Vec3) -> BulletHit {
+    let _p = crate::tick_profile::phase("bullet/world");
     let t = host.world.as_ref().map(|w| {
         let t = w.collision.shot_trace(start, end);
         (t, w.collision.entity_num(&t))
     });
     // A brush entity's clip names its entity, a world copy's included.
-    let mut hit = t.filter(|(t, _)| t.fraction < 1.0).map(|(t, n)| {
+    let hit = t.filter(|(t, _)| t.fraction < 1.0).map(|(t, n)| {
         let ent = (n < vcod_common::net::protocol::ENTITYNUM_WORLD)
             .then(|| host.ents.handle(n))
             .flatten();
         (t.fraction, t.normal, ent, t.surface_flags)
     });
+    (hit, t.map_or(end, |(t, _)| t.endpos))
+}
+
+/// [`bullet_hit`]'s entity pass over the world trace's answer.
+fn bullet_entities(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    (start, end): (Vec3, Vec3),
+    hit_characters: bool,
+    ignore: Option<EntId>,
+    (mut hit, mut point): BulletHit,
+) -> BulletHit {
     // The world trace's own end point, unless the entity pass lowers the
     // fraction (1.5b 0x8099b18; cod11-combat.md 2.7).
     let arith = vcod_common::patch::Arith::for_protocol(host.defs.proto);
-    let mut point = t.map_or(end, |(t, _)| t.endpos);
-    _p = crate::tick_profile::phase("bullet/models");
+    let mut _p = crate::tick_profile::phase("bullet/models");
     if let Some(e) = script_model_hit(host, cx, start, end, ignore, hit.map_or(1.0, |h| h.0)) {
         point = crate::game::combat::trace_point(start, end, e.0, arith);
         hit = Some(e);

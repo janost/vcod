@@ -1617,6 +1617,37 @@ route's rebased p95 dxy in `playerstate_slope_ab.rs` from 0.004 to 0.001
 and the prone mound's free run from median 0.176, max 19.79 to 0.163,
 19.49; `bump_ab.rs` and the other statistics did not move.
 
+### The step's arithmetic
+
+Where `PM_StepSlideMove` rounds, 1.1d (game.mp 0x34fbc) and 1.5b (0x29942).
+VERIFIED, `objdump` of both:
+
+- The up trace's end z is the start's z plus `stepSize + 1`, the sum on the
+  stack and stored once (1.1d 0x35173-0x3518c, 1.5b 0x29ccf-0x29ce0), and
+  `stepUp` is `(stepSize + 1) * fraction - 1` with the product on the stack,
+  stored once (1.1d 0x351c4-0x351d8, 1.5b 0x29d46-0x29d5f).
+- The down trace's end z is the origin's z less `stepUp`, then less the
+  snap on a ground plane: 1.1d keeps the difference on the stack and stores
+  once (0x352d8-0x352f6); 1.5b stores it, then the snap's difference
+  (0x29e89-0x29eac).
+- The revert's two dots, `velocity . (down - start)` plus 0.001 and
+  `velocity . (origin - start)`, stay on the stack on both. The first's
+  displacement is stored on both (1.1d 0x35158, 0x35160; 1.5b 0x29c98,
+  0x29ca4); the second's is stored on 1.5b (0x2a04e, 0x2a064), and on 1.1d
+  only its y (0x35411), its x read off the stack unrounded (0x35405 stores a
+  copy).
+- A jump's step that rose: 1.1d keeps `peak - z`, its double and the
+  product with `ps.gravity` on the stack into `fsqrt`, the root stored
+  (0x355cd-0x355f9); 1.5b stores `peak - z` (0x2a3a3) and takes the
+  double `sqrt` of `(left + left) * gravity` (0x2a3d4-0x2a3f5).
+
+vcod: `pmove::step_slide` under the server's `Arith::Kept` and
+`Arith::Stored`; the Windows cgames' rounding is not read and keeps the
+float steps. VERIFIED, vcod measurement 2026-11-14: the moves, ladder,
+bump, slope, spawn view, fall, predict, ride and stuck gates at the 1.1 and
+UO installs read the same with and without it, so no capture yet tells the
+roundings apart.
+
 ### The slide's same-plane test
 
 VERIFIED, `game.mp.i386.so` 1.1d `PM_SlideMove` (0x347c0): each bump's
@@ -2418,6 +2449,21 @@ bit puts nothing into the wish: the probe's cmds hold `upmove` 0 while
 prone, and the scale reads the cmd's byte, not the stance. Reading a held
 stance key as `upmove` 127 gives a wish of 134 and a slide 3 units a second
 slower (the 1.1 turns rows of `moves_ab.rs`).
+
+Where 1.1d's air wish rounds. VERIFIED, `objdump` of `PM_AirMove`
+(0x2f036..0x2f11a): `PM_CmdScale`'s `st(0)` is stored as a float
+(0x2f088); `pml.forward` and `pml.right` get `z` 0 and go through
+`VectorNormalize` (0x2f0a7, 0x2f0b9); each wish component is `forward *
+fmove + right * smove` on the stack, stored once (0x2f0f2), `z` 0;
+`VectorNormalize` of the wish leaves its float length, which times the
+stored scale stays on the stack into the accelerate (0x2f119, 0x2f140).
+VERIFIED, `objdump` of `ProjectPointOnPlane` (0x3f01c), which the ladder's
+strafe calls (0x339fa): `1 / |n|^2`, the dot and `n * inv` all on the
+stack, each component of `p - d * (n * inv)` rounded once. vcod:
+`pmove::wish_air_x87` and `project_point_on_plane_x87`, 1.1d's server only.
+VERIFIED, vcod measurement 2026-11-14: the slope, bump and ladder gates read
+the same with and without them (every row already exact), so no capture
+yet tells the two roundings apart.
 
 The walk flag. VERIFIED: `PM_UpdatePlayerWalkingFlag` (0x33694) clears
 `pm_flags` 0x80 first (0x3369d) and sets it (0x336dd) when `pm_type` is 5 or

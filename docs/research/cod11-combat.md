@@ -403,8 +403,15 @@ timers are out, and that frame neither fires, reloads nor swings; an
 unlatched rechamber (4) stands until the release check or the next shot
 ends it in that same frame. vcod: `pmove::weapon::advance_timers` leaves
 both, `pm_weapon` ends 11 behind the gate and the release check ends any
-state; `a_held_trigger_fires_the_frame_after_the_relax_ends`. No stock
-capture holds one.
+state; `a_held_trigger_fires_the_frame_after_the_relax_ends`. VERIFIED,
+live (retail 1.1d, `client-probes/probe_heldmelee`,
+`mp_carentan-heldmelee.txt`, 2026-11-14): an mp40's trigger held from
+3900 fires at 3950, 4050 and 4200 (the clip each frame); melee tapped
+with it at 4300 takes the round due next, and the held trigger's next
+round lands at 4950, 650 ms off the press, then every 100 to 150 ms.
+`combat.rs::an_automatic_held_through_a_swing_fires_as_on_retail`
+replays the capture's cmd times and holds every clip change to retail's
+frame. The unlatched rechamber (4) is not captured.
 
 ### 1.5 Firing
 
@@ -454,7 +461,14 @@ lerp first, the fire path `0x2ff54` / `0x36c0e` arming, then testing
 `weaponDelay`). INFERRED: an `adsFire` pull from short of the sight fires
 nothing, forces the sight up (section 1.13) and shoots on the frame the
 delay runs out, whatever the trigger does by then; the re-arm then
-computes 0 off the raised sight. A gun with a non-zero `fireDelay` re-arms
+computes 0 off the raised sight. VERIFIED, live (retail 1.1d,
+`probe_skyshot`'s spot part with `panzerfaust_mp` and the throw script,
+`mp_carentan-hippull-rocket.txt`, 2026-11-14, two runs): a hip pull
+reads `weaponstate` 3 at once with `fWeaponPosFrac` 0, the sight climbs
+(0.107, 0.287, 0.440, 0.607, 0.780, 0.943 a snapshot), the rocket shows
+on the snapshot 300 ms after the first raised one, and the sight drops
+again once the trigger is let go; `missile_edge_ab`'s
+`a_hip_panzerfaust_pull_fires_once_the_sight_is_up` holds the 300 ms. A gun with a non-zero `fireDelay` re-arms
 it on every pass and never fires; no stock gun has one (the four 1.1
 grenades, which skip the arm, and UO's binoculars do). vcod:
 `an_ads_fire_shot_waits_for_the_sight`,
@@ -1309,18 +1323,40 @@ amp` (0x87650 4.0, 0x87658 pi/2, 0x87660 0.2, 0x87664 0.75), the
 horizontal `sin c * amp`, `amp` the speed times the `viewHeightTarget`
 stance's `bg_bobAmplitude*`. VERIFIED (rodata read from the file).
 
-VERIFIED, UO 1.51b `game.mp.uo.i386.so` `CalcMuzzlePoint` (0x8b8ea): the
+VERIFIED, UO 1.51b `game.mp.uo.i386.so` `CalcMuzzlePoint` (0x7b8ea): the
 same shape off UO's playerstate (`viewHeightCurrent` `ps+0xf8`, `eFlags`
 `ps+0x84`, viewangles `ps+0xe8`), with three changes. A rider (`eFlags`
-0x100000, UO's in-vehicle bit) takes 28 (rodata 0xb5f88) in place of the
+0x100000, UO's in-vehicle bit) takes 28 (rodata 0xa5f88) in place of the
 eye; the mount test is UO's 0x6000; and between the mount test and the
 bob, a weapon of `weaponClass` 3 (`lmg`) with `pm_flags` 0x20 (the bipod)
-traces an 8-unit box (.data 0xbe93c/0xbe948, -8..8) from the muzzle 19
-forward (rodata 0xb5f8c) along `(0, proneDirection, 0)` (`ps+0x5a4`) under
+traces an 8-unit box (.data 0xae93c/0xae948, -8..8) from the muzzle 19
+forward (rodata 0xa5f8c) along `(0, proneDirection, 0)` (`ps+0x5a4`) under
 mask 0x11, passing the shooter, and takes the end point unless the trace's
-byte +0x2e is set. The floor is 8 (0xb5f90). VERIFIED. INFERRED: byte
+byte +0x2e is set. The floor is 8 (0xa5f90). VERIFIED. INFERRED: byte
 +0x2e is `allsolid` (`cod11-mantle.md`'s ground trace reads it so).
-`FireWeapon` (0x8bd05) and `FireWeaponMelee` (0x8bef7) call it as 1.5's
+VERIFIED (disassembly): the trace is `trap_Trace` at 0x7bab0 with the
+shooter's `s.number` as the pass entity and 0x11 pushed at 0x7ba74.
+VERIFIED, `cod_lnxded` 1.1d, the per-entity clip (0x809105c): a trace
+without the locational flag (`clip+0x54`, tested at 0x80910c8) goes to
+the arm at 0x8091390, which clips an inline model's brushes and any other
+entity as `CM_TempBoxModel(r.mins, r.maxs)` (0x804baf8). VERIFIED (gdb,
+retail UO, `probe_moveshot`'s `probe_block`, 2026-11-14): a script model's
+`r.mins`/`r.maxs` read zero (its abs box the origin ±1), so a barrel with
+`setContents(1)` on the ground 14 and 24 ahead of a deployed mg30cal
+never stops the trace (fraction 1, entity 1023: the box at muzzle height
+passes over the point), while a bare `setContents(1)` script model at
+the muzzle's height 17 ahead of the wall spot stops it at fraction
+0.467, endpos x 1979.875 (8.125 short of the point), normal (-1, 0, 0),
+entity 170. INFERRED: only a script model whose origin a script put
+inside the swept box changes a bipod muzzle; brush entities clip through
+their brushes on the same arm (not measured). vcod: `bipod_muzzle` boxes
+the linked script models whose contents meet 0x11
+(`GameHost::muzzle_boxes`); `moveshot_ab`'s
+`a_uo_bipod_muzzle_stops_on_a_script_model_as_on_retail` replays the
+point capture (`-moveshot-bipodpoint-uo.txt`, on the homepath with the
+steady mg30cal), every round on retail's unit, and fails with the world
+alone (rounds 4 to 6 two units off).
+`FireWeapon` (0x7bd05) and `FireWeaponMelee` (0x7bef7) call it as 1.5's
 do. VERIFIED.
 
 **Measured.** `mp_carentan-scriptmodel-throw-1.5.txt` (1.5b,
@@ -1999,10 +2035,15 @@ script model raises 167 naming the model and takes it 71, 73 and 73 as
 `MOD_MELEE` with the M1 carbine. INFERRED, off the mask (0x2802031, the
 bullet's): a swing strikes a shootable grenade's box as a round does. vcod
 ports all four (`a_swing_damages_what_takes_damage`,
-`crates/server/tests/missile_edge_ab.rs`). One gap stands: the floor swing's truncated
-event origin reads x 1375 on ours and 1374 on retail, y 2615 on both, from
-(1368, 2608.1) facing yaw 45; the start or the aim is a fraction of a unit
-off ours in a way that capture cannot pin (`FLOOR_POS_GAP`).
+`crates/server/tests/missile_edge_ab.rs`). VERIFIED (gdb, retail 1.1d,
+the floor recipe, 2026-11-14): `Weapon_Melee`'s trace starts at the muzzle
+(1368, 2608, 37), forward (0.122758113, 0.122758113, -0.98481518), and
+stops at fraction 0.965837955, endpos (1375.58813, 2615.58813, -23.875),
+normal (0, 0, 1); the temp entity reads (1375, 2615, -23) on the wire.
+The 2026-10-17 capture's x 1374 is not what this recipe gives: a rerun
+without gdb read 1375 too, so that run's shooter stood off (1368, 2608) by
+a fraction (INFERRED, off the muzzle's truncated origin). Ours matches the
+new capture exactly; `FLOOR_POS_GAP` is gone.
 
 **As implemented.** `melee_fire` (`crates/server/src/game/combat.rs`) shares
 `trace_attack` with `bullet_fire`, so the two cannot disagree about a
@@ -2568,9 +2609,15 @@ below on the dumped records). The same holds on 1.5b
   (`torso_upper`) 1.9e-6 off in z, the clock's fading-first order
   (`ChannelClock::layers`) and descending index both hold it to the bit,
   and no other pose gate tells the three apart (nor legs ahead of torso
-  under `main` from torso ahead, file order). Open: which tree node a
-  vcod layer stands for in that walk (a sibling pair 32/33 or 94/122 sits
-  in the row); vcod keeps the clock's order.
+  under `main` from torso ahead, file order). VERIFIED, a UO gdb dump of
+  a knockback kill (cod11-turrets.md 13.6): the legs' two clips are the
+  tree nodes of their anim indices (157 and 185, each node's info off
+  `tree + 0xc + 2n`), and the skeleton is retail's word for word with
+  the lower node summed first, 113 of 114 bones up to 1.1e-5 off the
+  other way.
+  So a vcod layer stands for the node of its anim index on all three
+  servers. vcod keeps the clock's order on 1.5b and UO for the
+  `-hitgrid-15` row alone (next section).
 - VERIFIED, the controls (game.mp.uo `G_DObjSetLocalTag` 0x88e34,
   `G_DObjSetControlTagAngles` 0x88ec0, both through 0x88cf6): the
   record is `QuatMultiply(roll, QuatMultiply(pitch, yaw))` (0x4d25f,
@@ -2683,8 +2730,10 @@ stored walk and build on its kill. VERIFIED, vcod measurement: with them
 UO's poses keep the clock's layer order. In anim index order 1.5b's
 `-hitgrid-15` knockback kill moves one float step off in z, so a second
 error on that frame cancels against the order there (INFERRED; the
-dumped kill's records and build match, so it lies in that replay's
-inputs, not the walk).
+dumped kills' records and builds match in index order on 1.5b and UO, so
+it lies in that replay's inputs, not the walk). On UO no gate tells the
+two orders apart; cod11-turrets.md 13.6 narrows that input to the run
+clip's on a plain run.
 
 #### The clip's float time
 
@@ -4507,9 +4556,27 @@ lifted height.
   the touch pass of a cmd still airborne and the fall damage the next cmd's
   `PM_CrashLand` through `ClientEvents` (0x3fda8), the dead player's landing
   of `cod11-player-clip.md` 8.8.
+- VERIFIED, the same three runs on retail 1.5b and UO
+  (`-hurtfall-1.5.txt`, `-hurtlow-1.5.txt`, `-hurtland-1.5.txt` and the
+  `-uo` three, 2026-11-14): the same callback arguments, and every killed
+  callback's origin reads whole units, the snapped `r.currentOrigin` of
+  the touch pass (5.5). 1.5b's `-hurtland` kills first at -42.00 and
+  raises no fall damage callback at all. UO's lands first: `MOD_FALLING`
+  66 at health 100, then the slab's kill in the same frame at health 34,
+  its origin (900.00, 1929.00, -43.00) though the body stands at y
+  1929.39. INFERRED: the landing's `ClientEvents` and the touch pass
+  belong to one cmd, so the fall damage's callback leaves
+  `r.currentOrigin` snapped for the touch that follows.
+- VERIFIED, a 1.5b `-hurtlow` run whose client was first playing at 2750,
+  the drop's own frame (kept out of the fixtures): the body drifts +0.17
+  on x and y a frame from the drop on and falls faster than the replay.
+  The fixture is a run playing by 2400. What the spawn frame's drop
+  carries is not read.
 
 **As implemented.** `ScriptRuntime::deliver_world_hit` passes the callback
-undefined vectors. `crates/server/tests/hurtfall_ab.rs` replays each
+undefined vectors. The cmd loop (`Cod1Module`'s think, `cod1_think.rs`)
+puts the snapped origin back on the host after a fall's callback mirrored
+the sim's, unless a `setOrigin` in it moved the player. `crates/server/tests/hurtfall_ab.rs` replays each
 capture's cmds on vcod-server and holds every `PROBE` line exact.
 
 ### 5.9 The hurt's cadence, its flags and its sound
@@ -6119,11 +6186,17 @@ the ordering and the conditions in it.
   explode packs parm 0, the zero normal of a trace that started solid and
   met nothing after; 1.5b's packs 104, the byte of the reversed flight.
   INFERRED: 1.1's brush would not stop a 0x11 move, so the contact also
-  confirms 11.1's clipmask. `missile_edge_ab`'s
-  `a_rocket_fired_inside_a_kerb_brush_goes_off_at_once` replays both, the
-  round flying retail's `trDelta` (the one integer delta whose
-  `vectoangles` is the capture's `apos`); under the old 0x11 mask it
-  fails on both.
+  confirms 11.1's clipmask. VERIFIED, live (retail UO, the same spot,
+  `mp_carentan-kerb-rocket-uo.txt`, 2026-11-14): a `bazooka_mp` round goes
+  off the same way, 280 units out at (1165, -258, 411) on the launch
+  snapshot (`EV_ROCKET_EXPLODE` 185 in UO's numbering), parm 104 as on
+  1.5b; a `panzerfaust_mp` run read the same. `missile_edge_ab`'s
+  `a_rocket_fired_inside_a_kerb_brush_goes_off_at_once` replays all three,
+  the round flying retail's `trDelta` (the one integer delta whose
+  `vectoangles` is the capture's `apos`; on UO, whose wire sends `apos` in
+  65536ths, the nearest of the two deltas a unit apart that fit, which
+  explode on the same snapped point); under the old 0x11 mask it fails on
+  1.1d and 1.5b.
 - Otherwise `G_MissileImpact(ent, &tr, dir)` runs, and `G_RunThink(ent)`
   follows only when `s.eType` is still 4. VERIFIED: `G_MissileImpact`'s
   explode path sets `s.eType` to 0 (13.1), so the test is what stops a
@@ -6215,13 +6288,19 @@ snapshot early, and the wall rebound reach z -16.84 against -2.64);
 `a_frag_rests_on_a_prone_players_back_on_15` holds every snapshot of both
 frags to retail's `trType` and ground, each base within 0.3.
 
-INFERRED: the body test reads the struck entity's contents, not whether
-it is a player, so a script model a script `setContents`es to 0x2000000
-takes the soft scale too. VERIFIED, `tools/re/dump_builtins.py`: the
+VERIFIED, live (retail UO, mp_carentan, `probe_scriptmodel`'s grenade
+part with `+set probe_contents`, `mp_carentan-scriptmodel-grenade-body-uo.txt`
+and the control `-grenade-uo.txt`, 2026-11-14): the body test reads the
+struck entity's contents, not whether it is a player. The frag strikes
+the barrel at (1403.45, 2643.40) on both; off the barrel given 0x2000000
+it leaves at 4.07 a frame along -y, off the stock 0x2080 barrel at 16.27,
+a quarter, UO's soft 0.1 against its 0.4. VERIFIED, `tools/re/dump_builtins.py`: the
 method exists on all three (1.1d 0x5dcec, 1.5b 0x5dc3c, UO 0x696b9); no
 stock script passes it more than 1 (coduo-diff.md 21). vcod reads the
 struck model's link contents (`PlacedModel::body`); its bounce stays
 silent only in water and off a player, as before.
+`scriptmodel_ab::a_uo_frag_bounces_soft_off_a_script_model_with_body_contents`
+replays both runs, every frame within 0.1.
 
 **The bounce off a player.** VERIFIED, `game.mp.i386.so`, read with
 `tools/re/annotate_func.py`: `G_RunMissile` pushes `bulletPriorityMap` on
@@ -8522,7 +8601,9 @@ INFERRED: so the first blast's miss is `CanDamage` reading the
 world-sized box's centre, not anything about the spawn, and an `origin`
 write relinks the trigger and moves its centre with it. VERIFIED, the same
 logs: the `"damage"` notify carries two arguments on 1.1d and 1.5b (4.2),
-hence no mod.
+hence no mod. VERIFIED, the same probe on retail UO, 2026-11-14: every
+line alike but the blasts' mod, `MOD_EXPLOSIVE` (UO's five-argument
+notify); `dmgtrig_ab`'s `..._matches_retail_uo` holds it.
 
 VERIFIED, `client-probes/probe_dmgspawnshot.gsc` on retail 1.1d (two runs)
 and 1.5b, mp_carentan, one axis `--probe-uo-weapon direct`
@@ -8536,7 +8617,24 @@ UO round did; at (0, 0, -20), (0, 0, -1) and (0, 0, 0) it logs nothing.
 INFERRED: `G_CheckHitTriggerDamage`'s `trap_SightTraceToEntity(start, 0,
 0, end, ent, -1)` clips the segment against the copy alone, and a round's
 end, backed off the world's face, does not reach the same face in a copy
-at the same place.
+at the same place. VERIFIED, the same probe on retail UO, 2026-11-14:
+the same lines (`a_round_on_a_script_spawned_trigger_damage_matches_retail_uo`).
+
+**Left open** (not captured): whether `trap_SightTraceToEntity` meets a
+map trigger's brushes as vcod's segment test does where the round ends
+inside a brush's backed-off face; `multi_wait`'s `rand()` draw, which vcod
+takes off the host's own generator (no stock trigger sets `random`, so
+only the draw's place in the stream could show); a tank shell's walk on
+the belltower; a grenade blast's charges (a 2026-11-14 UO recapture of
+`probe_dmgshot` with the client's cmd times,
+`fixtures/triggers/mp_uo_stanjel-dmgshot-uo.txt`, replayed on them by
+`tests/common`'s `direct_replay`, holds every round and swing line, but
+ours' frag rests 3 units off retail's and charges one bush 27 against 26:
+it leaves (-1853.50, 3240.49, 37.16) where retail's left (-1853.47,
+3244.39, 34.04), the same along x, 3.9 apart along the view's right and
+3.1 in z with the thrower at (-1862, 3232, -13.6) pitched 46.9 (VERIFIED,
+the capture's `VEH missile` lines against ours'; INFERRED: UO's walk bob
+off a `bobCycle` the probe's per-frame `setOrigin` hold leaves apart); and the `use` arm's `accumulate + 1` count.
 
 **As implemented.** `crate::game::damage_trigger`: `spec_of` (the spawn's
 keys), `responds`, `activate`, `damaged` (`pain`/`die`, from
@@ -9713,9 +9811,17 @@ pmove runs them down by its msec. The clip's length is the engine's
 `XAnimGetLength` (syscall 0x5d, `cod_lnxded` 0x08088b3d..0x08088b5b,
 VERIFIED disassembly): the part's frame count over its float framerate,
 times 1000.0 (0x080d4ea8), stored under a 0xc00 control word, so
-truncated: 1.1d's 92 frames at 30 read 3066, not a rounded 3067. INFERRED:
-1.5b and UO store it the same way
-(their clips here are exact or round down either way).
+truncated: 1.1d's 92 frames at 30 read 3066, not a rounded 3067.
+VERIFIED (disassembly), 1.5b and UO store it the same way: their syscall
+0x61 (`cod_lnxded` 1.5b case 0x808f568 off the table at 0x80df1fc, UO
+0x809037a off 0x80e50fc) calls the length (1.5b 0x80c9b5e, UO 0x80beef2:
+the part's u16 frame count `fild`ed and `fdivs` its float framerate, left
+on the stack), multiplies by 1000.0 (1.5b 0x80df1f8, UO 0x80e50f8) and
+`fistpl`s under the control word ORed with 0xc00. VERIFIED (capture), the
+`killtimers` runs: 1.5b's `pb_stand_death_neckdeath` (index 19, 47 frames
+at 30, 1566.67) reads 1615 one cmd behind and its `_thrash` (index 20,
+3066.67) 3115, UO's index 19 1613 three cmds behind; a rounded hold
+(1617, 3117) reads 1616 or 1614 and 3116 or 3114 there.
 
 VERIFIED (capture), a death raised inside the packet pass on
 all three servers (`mp_carentan-dm-hit-target-killtimers{,-1.5,-uo}.txt`,
@@ -9733,6 +9839,16 @@ victim's snapshot cmds 303233 and 303284; that is the frame's
 `kill` captures do. VERIFIED (capture), same file: its two surviving
 hits (ms 26200, health 60; ms 26557, health 24) leave both timers at 0
 and `legsAnim` on the idle or the knockback's run.
+VERIFIED (capture), 1.5b and UO, the same recipe
+(`mp_carentan-dm-hit-target-paintimers-1.5.txt`, `-uo.txt`, 2026-11-14):
+one surviving hit each (1.5b ms 94781, health 33; UO ms 34188, health
+25) leaves both timers at 0. 1.5b's bullet death (ms 94981, index 13,
+1566.67 ms, hold 1616) reads `ct + timer` 103048, so the hold was set at
+101432, between the snapshot cmds 101416 and 101466 and off the frame's
+`level.time` 101450; UO's (ms 34396, index 14, 900 ms) at 40635, the
+victim's last cmd as of the snapshot before (`ct` 40635), off
+`level.time` 40650. INFERRED: on both the hold counts from the victim's last
+processed cmd, not the frame.
 
 VERIFIED (disassembly), the event argument at every `BG_AnimScriptEvent`
 call site: 1.1d `game.mp.i386.so` (13 `.rel.text` relocations, 0x2ee1a ..

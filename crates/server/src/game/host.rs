@@ -240,6 +240,9 @@ pub struct WeaponFiles {
 pub struct WeaponFile {
     pub def: vcod_common::weapon::WeaponDef,
     pub keys: HashMap<String, String>,
+    /// CoD2's own parse of it, which `Combat::sync_weapons` reads: made
+    /// on the first level's read, taken by a later one's.
+    pub cod2_def: std::cell::OnceCell<Rc<vcod_cod2::weapon::WeaponDef>>,
 }
 
 impl WeaponFiles {
@@ -264,6 +267,11 @@ impl WeaponFiles {
         let f = Rc::new(parse()?);
         self.files.insert(name.to_string(), f.clone());
         Some(f)
+    }
+
+    /// `name`'s file as a registration last took it.
+    pub fn file(&self, name: &str) -> Option<&Rc<WeaponFile>> {
+        self.files.get(name)
     }
 }
 
@@ -515,6 +523,111 @@ impl EntityHit {
 /// Each in-use `script_model` and its `.model` text, in entity order
 /// ([`GameHost::placed_script_models`]' walk).
 type ScriptModels = std::sync::Arc<[(EntId, String)]>;
+
+/// `getEntArray(text, key)`'s matches for a key routed to an engine slot,
+/// by slot and text, in entity order. A slot changes only through a mutable
+/// reach into its entity, which moves `ObjectTable::edits` or, for a write
+/// to that slot alone, its `ObjectTable::slot_edits`; an answer holds while
+/// both read what it was built on. A spawn wave's 500 calls walk the table
+/// once per edit instead of once each (cod4-server-frame.md 9.1).
+#[derive(Default)]
+pub(crate) struct EntArrays {
+    edits: u64,
+    profile: usize,
+    answers: Vec<EntArray>,
+}
+
+/// One kept `getEntArray` answer.
+struct EntArray {
+    slot: usize,
+    text: Box<str>,
+    /// `ObjectTable::slot_edits` of `slot` as the answer last matched it.
+    at: u64,
+    ids: Rc<[EntId]>,
+}
+
+impl EntArrays {
+    /// The answer for `slot` and `text` built at `edits` and `slot_edits`
+    /// under `profile`.
+    pub(crate) fn get(
+        &mut self,
+        (edits, slot_edits): (u64, u64),
+        profile: usize,
+        slot: usize,
+        text: &str,
+    ) -> Option<Rc<[EntId]>> {
+        if (self.edits, self.profile) != (edits, profile) {
+            self.edits = edits;
+            self.profile = profile;
+            self.answers.clear();
+            return None;
+        }
+        let i = self
+            .answers
+            .iter()
+            .position(|a| a.slot == slot && &*a.text == text)?;
+        if self.answers[i].at != slot_edits {
+            self.answers.swap_remove(i);
+            return None;
+        }
+        Some(self.answers[i].ids.clone())
+    }
+
+    /// Whether an answer over `slot` is kept.
+    pub(crate) fn watches(&self, slot: usize) -> bool {
+        self.answers.iter().any(|a| a.slot == slot)
+    }
+
+    /// A write to `ent`'s `slot` that read `old` before and `new` after, at
+    /// `edits` and the slot's edits `before` and `after` it: each answer over
+    /// the slot current before it takes `ent` in or out as its text is `new`
+    /// or `old`, and is restamped; any other goes.
+    pub(crate) fn wrote(
+        &mut self,
+        cx: &Cx,
+        ent: EntId,
+        slot: usize,
+        [old, new]: [Value; 2],
+        (edits, before, after): (u64, u64, u64),
+    ) {
+        if self.edits != edits {
+            return;
+        }
+        let is = |v: Value, text: &str| matches!(v, Value::String(a) if cx.resolve(a) == text);
+        self.answers.retain_mut(|a| {
+            if a.slot != slot {
+                return true;
+            }
+            if a.at != before {
+                return false;
+            }
+            a.at = after;
+            let (was, now) = (is(old, &a.text), is(new, &a.text));
+            if was != now {
+                let mut v = a.ids.to_vec();
+                match (v.binary_search_by_key(&ent.0, |id| id.0), now) {
+                    (Err(i), true) => v.insert(i, ent),
+                    (Ok(i), false) => {
+                        v.remove(i);
+                    }
+                    _ => {}
+                }
+                a.ids = v.into();
+            }
+            true
+        });
+    }
+
+    /// Keeps an answer [`Self::get`] missed, at the slot edits it read.
+    pub(crate) fn put(&mut self, slot: usize, text: &str, slot_edits: u64, ids: Rc<[EntId]>) {
+        self.answers.push(EntArray {
+            slot,
+            text: text.into(),
+            at: slot_edits,
+            ids,
+        });
+    }
+}
 
 /// The routes and builtins `profile`'s tables give each atom's folded
 /// name, worked out on first use: the table lookups hash the name's text,
@@ -985,10 +1098,19 @@ pub struct GameHost {
     /// `script_model` is filed in the area tree under; `None` for a name
     /// that did not load.
     pub xmodel_bounds: HashMap<String, Option<Bounds>>,
+    /// The flagged reads behind `xmodel_collision` and `xmodel_bounds`.
+    pub xmodel_reads: ModelReads,
+    /// The carried entries a reload has not used yet, whose reads their
+    /// first use touches ([`ModelCaches::reload`]).
+    pub xmodel_untouched: ModelReads,
     /// [`GameHost::placed_script_models`]' walk: each in-use
     /// `script_model` and its `.model`, in entity order, as of
-    /// `ObjectTable::edits` (the `.0`) and the profile (the `.1`).
-    script_models: Option<(u64, usize, ScriptModels)>,
+    /// `ObjectTable::edits` and the `classname` and `model` slots' edits
+    /// (the `.0`) and the profile (the `.1`).
+    script_models: Option<([u64; 3], usize, ScriptModels)>,
+    /// `getEntArray`'s answers over engine fields, as of one
+    /// `ObjectTable::edits` ([`EntArrays`]).
+    pub(crate) ent_arrays: EntArrays,
     /// `level+0x1d5c`, the 32 most recent drops (`crate::game::item`).
     pub drop_ring: crate::game::item::DropRing,
     /// The player animtree and the rig cache a locational trace poses a body
@@ -1025,6 +1147,48 @@ pub struct ModelCaches {
     pub collision: HashMap<String, Option<std::sync::Arc<[ModelTri]>>>,
     pub bounds: HashMap<String, Option<Bounds>>,
     pub rigs: HashMap<String, Option<Rc<crate::game::vehicle::seat::Rig>>>,
+    /// The flagged reads behind each `collision` and `bounds` entry.
+    pub reads: ModelReads,
+    /// Those of the entries no level used since the flags were cleared.
+    pub untouched: ModelReads,
+    /// For a load that cleared the referenced flags (a CoD2 `map` or
+    /// `map_restart`), the paks the caches came off: a level over them
+    /// takes the caches and touches each entry's reads on its first use,
+    /// when its own load would have read them (cod4-server-frame.md 9.1).
+    pub reload: Option<std::rc::Weak<vcod_common::pk3::Pk3Fs>>,
+}
+
+/// The paths a model cache entry's load flagged, by `.model` name.
+#[derive(Clone, Default)]
+pub struct ModelReads {
+    pub collision: HashMap<String, Rc<[String]>>,
+    pub bounds: HashMap<String, Rc<[String]>>,
+}
+
+impl ModelCaches {
+    /// The caches for a load that clears the referenced flags over `fs`:
+    /// the vehicles' rigs, read with no log, stay behind.
+    pub fn for_reload(self, fs: Option<&Rc<vcod_common::pk3::Pk3Fs>>) -> Option<ModelCaches> {
+        Some(ModelCaches {
+            rigs: HashMap::new(),
+            untouched: self.reads.clone(),
+            reload: Some(Rc::downgrade(fs?)),
+            ..self
+        })
+    }
+}
+
+/// `f`'s result and the paths its reads flagged, which an outer log also
+/// takes.
+fn logged<R>(f: impl FnOnce() -> R) -> (R, Rc<[String]>) {
+    let outer = vcod_common::pk3::ReadLog::current();
+    let log = vcod_common::pk3::ReadLog::default();
+    let r = log.record(f);
+    let paths = log.paths();
+    if let Some(outer) = outer {
+        outer.note_all(&paths);
+    }
+    (r, paths.into())
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -1327,13 +1491,20 @@ impl GameHost {
             return None;
         }
         if let Some(b) = self.xmodel_bounds.get(name) {
-            return *b;
+            let b = *b;
+            if let (Some(paths), Some(fs)) = (self.xmodel_untouched.bounds.remove(name), &self.fs) {
+                paths.iter().for_each(|p| fs.touch(p));
+            }
+            return b;
         }
-        let b = self.fs.as_ref().and_then(|fs| {
-            let (lo, hi) = vcod_common::model::bounds(&**fs, name.strip_prefix("xmodel/")?)?;
-            Some((lo.to_array(), hi.to_array()))
+        let (b, paths) = logged(|| {
+            self.fs.as_ref().and_then(|fs| {
+                let (lo, hi) = vcod_common::model::bounds(&**fs, name.strip_prefix("xmodel/")?)?;
+                Some((lo.to_array(), hi.to_array()))
+            })
         });
         self.xmodel_bounds.insert(name.to_string(), b);
+        self.xmodel_reads.bounds.insert(name.to_string(), paths);
         b
     }
 
@@ -1660,22 +1831,31 @@ impl GameHost {
     /// prefix and all), loading it on first use.
     pub fn xmodel_tris(&mut self, name: &str) -> Option<std::sync::Arc<[ModelTri]>> {
         if let Some(t) = self.xmodel_collision.get(name) {
-            return t.clone();
+            let t = t.clone();
+            if let (Some(paths), Some(fs)) =
+                (self.xmodel_untouched.collision.remove(name), &self.fs)
+            {
+                paths.iter().for_each(|p| fs.touch(p));
+            }
+            return t;
         }
-        let tris = self.fs.as_ref().and_then(|fs| {
-            let model = vcod_common::model::load(&**fs, name.strip_prefix("xmodel/")?).ok()?;
-            let at_rest = vcod_common::props::Placement {
-                model: String::new(),
-                origin: glam::Vec3::ZERO,
-                angles: glam::Vec3::ZERO,
-                scale: glam::Vec3::ONE,
-                precalc: glam::Vec3::ONE,
-            };
-            let mut out = Vec::new();
-            vcod_common::props::placed_collision_tris(&at_rest, &model, &mut out);
-            (!out.is_empty()).then(|| std::sync::Arc::from(out))
+        let (tris, paths) = logged(|| {
+            self.fs.as_ref().and_then(|fs| {
+                let model = vcod_common::model::load(&**fs, name.strip_prefix("xmodel/")?).ok()?;
+                let at_rest = vcod_common::props::Placement {
+                    model: String::new(),
+                    origin: glam::Vec3::ZERO,
+                    angles: glam::Vec3::ZERO,
+                    scale: glam::Vec3::ONE,
+                    precalc: glam::Vec3::ONE,
+                };
+                let mut out = Vec::new();
+                vcod_common::props::placed_collision_tris(&at_rest, &model, &mut out);
+                (!out.is_empty()).then(|| std::sync::Arc::from(out))
+            })
         });
         self.xmodel_collision.insert(name.to_string(), tris.clone());
+        self.xmodel_reads.collision.insert(name.to_string(), paths);
         tris
     }
 
@@ -1721,20 +1901,73 @@ impl GameHost {
         out
     }
 
+    /// [`Self::placed_script_models`]' model lookups alone, for a trace the
+    /// world settled: each linked model's collision and bounds, loaded (and
+    /// their reads touched) where the placing would have.
+    pub fn touch_shot_models(&mut self, cx: &mut Cx) {
+        for (id, name) in self.script_models(cx).iter() {
+            if self.ents.get(*id).is_none_or(|e| e.unlinked) {
+                continue;
+            }
+            if self.xmodel_tris(name).is_some() {
+                self.model_bounds_of(name);
+            }
+        }
+    }
+
+    /// What UO's bipod muzzle trace (`trap_Trace`, mask `mask`) meets
+    /// besides the world: each linked `script_model` whose contents meet
+    /// the mask, as the temp box of its `r.mins`/`r.maxs` about its origin,
+    /// a point unless a script gave it a box (cod11-combat.md 2.1).
+    pub fn muzzle_boxes(&mut self, cx: &mut Cx, mask: i32) -> Vec<vcod_common::movetrace::ClipBox> {
+        use crate::game::entity::LinkKind;
+        let origin = cx.intern_folded("origin");
+        let ids: Vec<(EntId, crate::game::entity::LinkShape)> = self
+            .ents
+            .iter_inuse()
+            .filter(|(_, e)| !e.unlinked)
+            .filter_map(|(id, e)| Some((id, *e.link.as_ref()?)))
+            .filter(|(_, l)| l.kind == LinkKind::ScriptModel && l.contents & mask != 0)
+            .collect();
+        ids.into_iter()
+            .map(|(id, l)| {
+                let at = match self.get_field(cx, id, origin) {
+                    Value::Vector(v) => glam::Vec3::from(v),
+                    _ => glam::Vec3::ZERO,
+                };
+                vcod_common::movetrace::ClipBox {
+                    entity: id.0,
+                    owner: ENTITYNUM_NONE as u32,
+                    mins: at + glam::Vec3::from(l.mins),
+                    maxs: at + glam::Vec3::from(l.maxs),
+                    contents: l.contents as u32,
+                }
+            })
+            .collect()
+    }
+
     /// Every in-use `script_model` with its `.model` text, in entity order:
     /// the classname and model reads behind [`Self::placed_script_models`],
     /// walked again only once a slot was spawned, freed or reached mutably
     /// (`ObjectTable::edits`), so a frame's burst of traces walks once.
     fn script_models(&mut self, cx: &mut Cx) -> ScriptModels {
-        let edits = self.ents.edits();
+        let classname = cx.intern_folded("classname");
+        let model = cx.intern_folded("model");
+        let slot = |host: &mut Self, cx: &Cx, f| {
+            host.plain_engine_slot(cx, f)
+                .map_or(0, |s| host.ents.slot_edits(s))
+        };
+        let edits = [
+            self.ents.edits(),
+            slot(self, cx, classname),
+            slot(self, cx, model),
+        ];
         let profile = std::ptr::from_ref(self.profile) as usize;
         if let Some((at, p, list)) = &self.script_models
             && (*at, *p) == (edits, profile)
         {
             return list.clone();
         }
-        let classname = cx.intern_folded("classname");
-        let model = cx.intern_folded("model");
         let ids: Vec<EntId> = self.ents.iter_inuse().map(|(id, _)| id).collect();
         let mut list = Vec::new();
         for id in ids {
@@ -1750,7 +1983,7 @@ impl GameHost {
             list.push((id, cx.resolve(m).to_string()));
         }
         // The reads above take no mutable slot, so the count still holds.
-        debug_assert_eq!(edits, self.ents.edits());
+        debug_assert_eq!(edits[0], self.ents.edits());
         let list: ScriptModels = list.into();
         self.script_models = Some((edits, profile, list.clone()));
         list
@@ -2052,7 +2285,10 @@ impl GameHost {
             client_objectives: vec![[Objective::default(); MAX_OBJECTIVES]; MAX_CLIENTS],
             xmodel_collision: HashMap::new(),
             xmodel_bounds: HashMap::new(),
+            xmodel_reads: ModelReads::default(),
+            xmodel_untouched: ModelReads::default(),
             script_models: None,
+            ent_arrays: EntArrays::default(),
             drop_ring: Default::default(),
             anims: None,
             hit_rigs: Default::default(),
@@ -2467,7 +2703,7 @@ impl GameHost {
         let (loop_sound, stop) = loop_tick(rec, loop_index, self.frozen);
         rec.firing = false;
         slew_home(rec);
-        if let Some(ent) = self.ents.get_mut(id) {
+        if let Some(ent) = self.ents.get_mut_quiet(id) {
             ent.loop_sound = loop_sound;
             if stop {
                 ent.events
@@ -2773,7 +3009,7 @@ impl Host for GameHost {
         self.write_field(cx, ent, field, value)?;
         if ent.0 < FIRST_HUD_ELEM
             && cx.resolve_folded(field) == "angles"
-            && let Some(e) = self.ents.get_mut(ent)
+            && let Some(e) = self.ents.get_mut_quiet(ent)
         {
             e.apos_base = None;
         }
@@ -2812,6 +3048,19 @@ impl Host for GameHost {
 }
 
 impl GameHost {
+    /// The engine slot an entity's `field` reads, when its read is that slot
+    /// alone (a plain name routed to the engine table); `None` for a client
+    /// or script field, or one [`PLAIN_EXCEPT`] names.
+    pub(crate) fn plain_engine_slot(&mut self, cx: &Cx, field: Atom) -> Option<usize> {
+        if !self.memo.plain(self.profile, cx, field) {
+            return None;
+        }
+        match self.memo.route(self.profile, cx, field, false) {
+            Route::Engine { slot, .. } => Some(slot),
+            _ => None,
+        }
+    }
+
     /// The field read through its route alone: all a read of a name
     /// outside [`PLAIN_EXCEPT`] does.
     fn read_routed(&mut self, cx: &mut Cx, ent: EntId, field: Atom) -> Value {
@@ -2881,6 +3130,31 @@ impl GameHost {
         field: Atom,
         value: Value,
     ) -> Result<(), ErrorKind> {
+        // A `getEntArray` answer over this slot follows the write
+        // (`EntArrays::wrote`).
+        let watch = if ent.0 < FIRST_HUD_ELEM {
+            self.plain_engine_slot(cx, field)
+                .filter(|s| self.ent_arrays.watches(*s))
+        } else {
+            None
+        };
+        let old = watch.map(|s| (self.read_routed(cx, ent, field), self.ents.slot_edits(s)));
+        let r = self.write_field_alone(cx, ent, field, value);
+        if let (Some(slot), Some((old, before))) = (watch, old) {
+            let new = self.read_routed(cx, ent, field);
+            let at = (self.ents.edits(), before, self.ents.slot_edits(slot));
+            self.ent_arrays.wrote(cx, ent, slot, [old, new], at);
+        }
+        r
+    }
+
+    fn write_field_alone(
+        &mut self,
+        cx: &mut Cx,
+        ent: EntId,
+        field: Atom,
+        value: Value,
+    ) -> Result<(), ErrorKind> {
         if ent.0 >= FIRST_HUD_ELEM
             && let Some(r) = self.set_hud_field(cx, ent, field, value)
         {
@@ -2906,6 +3180,19 @@ impl GameHost {
                 ));
             }
         }
+        // A plain name off the tables is the entity's script struct alone,
+        // in the VM's heap: no slot of the table is reached, so
+        // `ObjectTable::edits` holds.
+        if matches!(route, Route::Script)
+            && ent.0 < FIRST_HUD_ELEM
+            && self.memo.plain(self.profile, cx, field)
+        {
+            let Some(e) = self.ents.get(ent) else {
+                return Err(ErrorKind::BadType("no such entity"));
+            };
+            cx.set_field(e.script, field, value);
+            return Ok(());
+        }
         let max_speed = !self.speaks_1_1() && cx.resolve_folded(field) == "maxspeed";
         if !self.speaks_1_1()
             && cx.resolve_folded(field) == "sessionsquad"
@@ -2915,7 +3202,28 @@ impl GameHost {
             return Ok(());
         }
         let cod1 = matches!(self.ext, HostExt::Cod1);
-        let Some(e) = self.ents.get_mut(ent) else {
+        // A client field's write reaches no engine slot (but `maxspeed`'s
+        // `speed`), so it leaves `ObjectTable::edits` alone.
+        // The reach names what the write moves (`ObjectTable::edits`): a
+        // client field, or what the client arm below keeps off the entity,
+        // moves none of what the table's caches read, an engine field its
+        // own slot alone.
+        let client_arm = cx.resolve_folded(field);
+        let client_arm = matches!(
+            client_arm,
+            "health" | "maxhealth" | "statusicon" | "headicon" | "headiconteam"
+        ) || (cod1 && client_arm == "angles");
+        let has_client = self.ents.get(ent).is_some_and(|e| e.client.is_some());
+        let reach = match route {
+            _ if max_speed && has_client => self.ents.get_mut(ent),
+            _ if client_arm && has_client => self.ents.get_mut_quiet(ent),
+            Route::Client(_) => self.ents.get_mut_quiet(ent),
+            Route::Engine { slot, .. } if ent.0 < FIRST_HUD_ELEM => {
+                self.ents.get_mut_slot(ent, slot)
+            }
+            _ => self.ents.get_mut(ent),
+        };
+        let Some(e) = reach else {
             return Err(ErrorKind::BadType("no such entity"));
         };
         if let Some(c) = e.client.as_mut() {

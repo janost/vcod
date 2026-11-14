@@ -9,7 +9,8 @@
 //! allied client replaying those cmds (`ProbeHold::framed`), and every
 //! `PROBE` line must match: the frame the slab kills on, the callback's
 //! undefined point and direction, and the corpse's fall, landing and slide
-//! (`docs/research/cod11-combat.md` 5.8).
+//! (`docs/research/cod11-combat.md` 5.8). The same three on 1.5b (`-1.5`)
+//! and UO (`-uo`).
 //!
 //! Three more, `-hurtrate`, `-hurtslow` and `-hurtonce`, each on 1.1d,
 //! 1.5b (`-1.5`) and UO (`-uo`), hold the hurt's cadence (combat doc 5.9):
@@ -237,6 +238,47 @@ fn a_trigger_hurt_kill_just_over_the_ground_lands_like_retail() {
 fn a_trigger_hurt_kill_before_a_hard_landing_matches_retail() {
     replay(
         "tests/fixtures/triggers/mp_carentan-dm-hurtland.txt",
+        &[("probe_lift", "120")],
+    );
+}
+
+/// The three corpse falls on 1.5b and UO: the same slab heights, each
+/// capture's own join time.
+#[test]
+fn a_trigger_hurt_corpse_falls_like_retail_15() {
+    replay_on(
+        fs_15,
+        "tests/fixtures/triggers/mp_carentan-dm-hurtfall-1.5.txt",
+        &[],
+    );
+    replay_on(
+        fs_15,
+        "tests/fixtures/triggers/mp_carentan-dm-hurtlow-1.5.txt",
+        &[("probe_late_lift", "203")],
+    );
+    replay_on(
+        fs_15,
+        "tests/fixtures/triggers/mp_carentan-dm-hurtland-1.5.txt",
+        &[("probe_lift", "120")],
+    );
+}
+
+#[test]
+fn a_trigger_hurt_corpse_falls_like_retail_uo() {
+    let uo = vcod_common::testing::uo_fs;
+    replay_on(
+        uo,
+        "tests/fixtures/triggers/mp_carentan-dm-hurtfall-uo.txt",
+        &[],
+    );
+    replay_on(
+        uo,
+        "tests/fixtures/triggers/mp_carentan-dm-hurtlow-uo.txt",
+        &[("probe_late_lift", "203")],
+    );
+    replay_on(
+        uo,
+        "tests/fixtures/triggers/mp_carentan-dm-hurtland-uo.txt",
         &[("probe_lift", "120")],
     );
 }
