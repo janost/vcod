@@ -70,6 +70,16 @@ pub fn normalize_stored(v: Vec3) -> Vec3 {
     (v.as_dvec3() * f64::from(inv)).as_vec3()
 }
 
+/// 1.5b's and UO's `VectorNormalize2` (game.mp 0x33216, UO 0x3a466): the
+/// rounding of [`normalize_stored`], and a zero vector comes out `+0.0` in
+/// every component.
+pub fn normalize2_stored(v: Vec3) -> Vec3 {
+    if f64::from(dot(v, v) as f32).sqrt() as f32 == 0.0 {
+        return Vec3::ZERO;
+    }
+    normalize_stored(v)
+}
+
 /// `AngleVectors` as all three Linux servers round it, engine and game
 /// module alike (`cod_lnxded` 0x8063388, 1.5b 0x806759d, UO 0x80674ad;
 /// game.mp 0x3b228, 1.5b 0x33e18, UO 0x3b068): forward, right, up. Each

@@ -237,7 +237,7 @@ fn vector(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> [f32; 3] {
 }
 
 /// A bone of the client's posed body in the body's own frame: the model
-/// faces its `yaw` about the feet (`crate::game::item::tag_start`'s pose),
+/// turns by its `r.currentAngles` about the feet (`crate::game::item::tag_start`'s pose),
 /// and `tag_origin`'s local tag turns the body from there by the legs' yaw
 /// off the view (`docs/research/cod11-combat.md` 16.4).
 pub fn client_bone(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec3, Quat)> {
@@ -270,7 +270,7 @@ pub fn client_bone(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec3,
         let (lp, lr) = pose.local(b);
         (local, rot) = (local + rot * lp, rot * lr);
     }
-    let frame = body.frame();
+    let frame = host.dobj_posed[slot].frame();
     Some((frame * local, frame * rot))
 }
 
@@ -314,11 +314,12 @@ fn client_bone_stored(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Ve
     Some((b.origin, b.axes))
 }
 
-/// [`client_bone`] in the model's own frame, before the body's yaw: what
+/// [`client_bone`] in the model's own frame, before the body's turn: what
 /// a link holds in the parent entity's `angles` (`G_CalcTagParentAxis`
 /// multiplies the tag's model-space matrix by the parent's axis).
 fn client_bone_local(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec3, Quat)> {
-    let frame = host.client_dobjs.get(slot)?.as_ref()?.frame().inverse();
+    host.client_dobjs.get(slot)?.as_ref()?;
+    let frame = host.dobj_posed.get(slot)?.frame().inverse();
     let (o, r) = client_bone(host, slot, tag)?;
     Some((frame * o, frame * r))
 }

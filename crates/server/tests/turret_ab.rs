@@ -2671,9 +2671,10 @@ fn the_hitlog_capture_matches_uo_on_mp_carentan() {
     );
 }
 
-/// A kill on the knockback's first frame: the body turned about a
-/// hundredth of a degree off retail's, cause not found (`cod11-turrets.md`
-/// 13.6).
+/// A kill on the knockback's first frame: the round's point a float step
+/// off retail's along the round, and the grid with it; the clip weights
+/// and the velocity are retail's, the cause is not found
+/// (`cod11-turrets.md` 13.6).
 const KNOCKBACK_GAP: &str = "the knockback's first frame's pose (turrets doc 13.6)";
 
 /// The 1.1d hit-grid capture's head: the capture predates the gsc's

@@ -2390,8 +2390,8 @@ sequence apart from addresses and struct offsets in each pair:
   the difference.
 
 vcod: `bonetrace::bone_trace_in` under `Arith::Stored` (the frame, the
-matrix, the slab), `HitBody::axis_stored` (`DobjStamps::axis_stored`
-through `x87::angles_to_axis` while a `setPlayerAngles` holds),
+matrix, the slab), `DobjStamps::axis_stored` (`x87::angles_to_axis` of
+the player's `r.currentAngles`),
 `combat::trace_point` for a round, a swing, a missile and a
 `bulletTrace` that stops on a body. The
 bone's quaternion and origin come from the engine's own pose (next
@@ -3224,9 +3224,20 @@ counts). Each pair's order there decided the round:
   `t_yaw_down` (1.1d), `t_down`, `t_down2`, `t_up` and `t_yaw_down` (1.5b)
   and `t_down2` and `t_up` (UO) miss the body on ours.
 
-vcod: `setPlayerAngles` hands the angles to the client's
-`combat::DobjStamps` (`set_angles`), the cmd's `set_client_yaw` clears
-them, and every trace poses the body in `DobjStamps::frame`. VERIFIED,
+VERIFIED, `game.mp.i386.so`'s entity field table: the `angles` field is
+`ent+0x140`, `r.currentAngles`, with the setter `Scr_SetAngles` (0x5c660),
+which hands the script's vector to `G_SetAngle` (0x67d9c). VERIFIED,
+`G_SetAngle`: it stores the three into `s.apos.trBase` (`+0x3c..0x44`),
+zeroes the trajectory's delta and stores them into `r.currentAngles`
+(`+0x140..0x148`). INFERRED: a script write of a player's `angles` turns
+the traced body until his next cmd as `setPlayerAngles` does.
+
+vcod: a CoD1 player's `r.currentAngles` live in his
+`combat::DobjStamps`, which his script `angles` field reads and writes
+(`GameHost::get_field`, `write_field`): the cmd's `set_client_yaw`, the
+spawn, `setPlayerAngles`, a turret mount and a script write all land
+there, and every trace and tag poses the body in `DobjStamps::frame` (all
+three angles; `HitBody` carries no turn of its own). VERIFIED,
 vcod measurement: every grid cell of the six captures sits within 0.0001
 median of retail's, and with the read order every round of the `-turn`
 captures matches, with no gap.
@@ -3444,9 +3455,26 @@ point of `knockback`, so a 45-damage carbine hit on a standing player adds
 `(int)(45 * 0.3) = 13`, that is 52 units per second along the shot direction,
 and a prone player takes `(int)(45 * 0.02) = 0` and is not moved at all.
 
-**As implemented.** `ClientSim::take_damage` (`crates/server/src/spectate.rs`)
-adds the velocity and starts the timer; what the timer does in pmove is
-16.1's last paragraph.
+The rounding. VERIFIED, 1.1d: `vDir` goes through `VectorNormalize2`
+(called at 0x43922, body 0x3da68): the squared length and its root on the
+x87 stack, the length stored as a float, each component times the
+unrounded reciprocal and stored. The scale stays on the stack; the y and z
+products are stored before their adds, the x product is added unrounded
+(0x439e7..0x439fb). VERIFIED, 1.5b (called at 0x3ee76, body 0x33216) and UO
+(0x47634, body 0x3a466): `VectorNormalize2` stores the squared length, the
+root (`sqrt` in double), the reciprocal and each component, and the
+knockback stores each product and each sum. VERIFIED, vcod measurement:
+normalized with `Vec3::normalize_or_zero` (float products and sums) the
+1.1d `-hitgrid` target's velocity after the wound and the kill read one
+float step off retail's in each component; with the two builds' rounding
+every `turret_ab` capture's target velocity is retail's to the bit on all
+three servers.
+
+**As implemented.** `finishPlayerDamage` normalizes `vDir` with
+`x87::normalize` on 1.1 and `x87::normalize2_stored` on 1.5 and UO;
+`ClientSim::take_damage` (`crates/server/src/spectate.rs`) adds the velocity
+and starts the timer; what the timer does in pmove is 16.1's last
+paragraph.
 
 **Impact feedback**, `0x43a5b` onward. VERIFIED: the offsets, immediates,
 event numbers and call targets named in the list below. INFERRED: the
