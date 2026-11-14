@@ -101,7 +101,7 @@ fn field_vec(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> Vec3 {
 
 /// Every verb ends in `trap_LinkEntity`, whose snap rounds a component of
 /// `r.currentAngles` (`.angles`) within a thousandth of an integer
-/// (`mover::snap_angles`); a rotate first sets them to its start, a move
+/// (the profile's `link_snap`); a rotate first sets them to its start, a move
 /// `r.currentOrigin` to its (`origin`, `Some` for a move verb).
 fn linked(host: &mut GameHost, cx: &mut Cx, id: EntId, origin: Option<Vec3>, angles: Vec3) {
     if let Some(o) = origin {
@@ -109,7 +109,7 @@ fn linked(host: &mut GameHost, cx: &mut Cx, id: EntId, origin: Option<Vec3>, ang
         let _ = host.write_field(cx, id, atom, Value::Vector(o.into()));
     }
     let atom = cx.intern_folded("angles");
-    let v = Value::Vector(crate::game::mover::snap_angles(angles).into());
+    let v = Value::Vector((host.profile.link_snap)(angles).into());
     let _ = host.write_field(cx, id, atom, v);
     crate::game::mover::verb_linked(host, cx, id);
 }

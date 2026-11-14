@@ -525,17 +525,11 @@ file (`Cod4Server::set_script_overrides`) and compares every plane and
 helicopter word at the same time past spawn.
 
 - Planes: bit for bit. VERIFIED (the gate).
-- Helicopter: bit for bit for 1.5 s; the turn through the first node
-  parts by 0.005 degrees pitch, 0.08 yaw; the rest stays within 8 units,
-  1.9 degrees of body, 0.124 of gun. VERIFIED (the gate). The parting is
-  the float model (retail's x87 intermediates against our `f32`, steered
-  by a goal vector shrinking to nothing at the node). INFERRED: the
-  think's rules match the disassembly. `hardpoint_ab::GAPS` tolerates it.
-- The gun aims in the flown body's frame ("The turret"), so it parts as
-  the body does: 0.45 degrees at worst when ours aimed from `tag_flash` in
-  the body's own angles, 0.124 from `tag_barrel` in bone 0's. VERIFIED
-  (the gate, both ways). On a body that holds still it matches to a few
-  ulps (the idle capture below). VERIFIED (the gate).
+- Helicopter: bit for bit, body, gun and all, through the nodes, the
+  hover and the flight home. VERIFIED (the gate, no tolerance). Before
+  "The flight's float model" the turn through the first node parted by
+  0.08 degrees of yaw and the gun by up to 0.13. VERIFIED (the gate,
+  both ways).
 
 #### The collision capture
 
@@ -667,10 +661,11 @@ on the server.
   landed an ulp off in 26 of 80 thinks. Its cause was the body's yaw, not
   the pose: retail's `r.currentAngles` reads -110 (0xc2dc0000) where ours
   kept -109.99999, as ours ran no link snap. VERIFIED (gdb, 0x80a0068).
-  With the snap and "The skeleton", the barrel's place matches every word
-  of the first 81 thinks; the first off is think 82, in flight, where the
-  body's yaw is an ulp off (0xc2db4001 against 0xc2db4000, the flight's
-  yaw step, "The flight against retail"). VERIFIED (gdb against ours).
+  With the snap and "The skeleton", the barrel's place matched every word
+  of the first 81 thinks; think 82, in flight, read the body's yaw an ulp
+  off (0xc2db4001 against 0xc2db4000), the flight's yaw step. VERIFIED
+  (gdb against ours). With "The flight's float model" all 159 match.
+  VERIFIED (the idle capture's gate).
 
 #### The skeleton
 
@@ -762,12 +757,21 @@ a)^2` is under the float 0x358637be (1e-6, at 0x8212470), on every link
 (0x817e426..0x817e5ba). VERIFIED (the disassembly). gdb watching the
 idle cobra's yaw caught the store at 0x817e53a, from the think's set and
 link (0x809c1dc, which runs `G_SetOrigin`, `G_SetAngle` and the link when
-the place or the angles changed). VERIFIED (gdb). CoD1's snap truncates
-`a + 0.5` (`mover::snap_angles`), which leaves a negative angle alone.
-VERIFIED (cod11-movers.md 12). vcod-server snaps a helicopter's angles
-after a think that moved or turned it (`link_snap4`). INFERRED (the
-code). Other CoD4 entities link through the CoD1 snap. INFERRED (the
-code; no capture yet tells them apart).
+the place or the angles changed). VERIFIED (gdb). `G_SetAngle`
+(0x80ca276) writes the angles to `s.lerp.apos.trBase` (+0x3c) and
+`r.currentAngles` (+0x148), and the link snaps +0x148 alone, so the wire
+carries the flight's unsnapped angles and the vehicle's own angles
+(+0xd8) never see the snap. VERIFIED (the disassembly; the gdb replay in
+"The flight's float model" shows no change to +0xd8 between thinks).
+CoD1's snap truncates `a + 0.5` (`mover::snap_angles`), which leaves a
+negative angle alone. VERIFIED (cod11-movers.md 12). vcod-server's CoD4
+links take 1.7's (`mover::snap_angles4`, `HostProfile::link_snap`):
+movers, script models and the host's other links, and `Heli4` keeps
+`link_angles` (`r.currentAngles`) beside its flight's `angles`. The
+turret, the tags, the riders and the no-goal think read `link_angles`.
+INFERRED (the code). The mover, combat and capture gates read the same
+with either snap; no capture yet holds a CoD4 mover at a negative angle
+a thousandth off a whole one. VERIFIED (the gates).
 
 #### The idle capture
 
@@ -787,9 +791,75 @@ deleted. No hover radius and no stop goal, so no random draw. VERIFIED
   parted by 3.1e-5 degrees. VERIFIED (the gate, both ways).
   Without `Heli4::hold` the body read 8 degrees of pitch off from the
   first think and the gun 7.4. VERIFIED (the gate, both ways).
-- Past the goal the flight's tolerances hold; the gun parts by 0.128 at
-  worst, as its body does: the first gun word off follows the body's yaw
-  parting by an ulp at think 82. VERIFIED (the gate, gdb).
+- Past the goal the flight and the gun match word for word too. VERIFIED
+  (the gate). Before "The flight's float model" the gun parted by 0.128
+  at worst, after the body's yaw parted by an ulp at think 82. VERIFIED
+  (the gate, gdb).
+
+#### The flight's float model
+
+`VEH_UpdateMoveToGoal` (0x809e38a) as `game::cod4::vehicle::flight` ports
+it, x87 values kept on the stack as `f64`, stores as `f32`. A Ghidra
+decompile of the function served as the map of its arms; each item below
+is the disassembly's:
+
+- The aim: x's difference stays on the stack, y's and z's are stored; the
+  flat length squared is stored, the length is stored
+  (0x809e3b6..0x809e426). The direction's three components are stored; z's
+  product also stays on the stack for the change (0x809e51d..0x809e56a).
+  VERIFIED (the disassembly).
+- The brake (0x809ea42..0x809eb1a): the next speed, its stopping distance
+  `0.5 next (next / decel)` and `dist - 0.05 next` all on the stack; the
+  frame's tail `0.05 - (dist - stop) / speed` is stored as a float only
+  when it is under 0.05, and taken only when above 0. VERIFIED (the
+  disassembly).
+- The new speed stays on the stack; the change's limit `rate dt` is stored
+  (0x809e4c3..0x809e51d, 0x809f6e9, 0x809fa6f). x and y of the change are
+  stored, z stays on the stack. Under the set speed the turn-never-brakes
+  arm calls `Vec2Normalize` (0x81915d8), which spills the aim's x and the
+  change's z to floats around the call (0x809f73f..0x809f7c2); its x drops
+  a stored product, its y one kept. VERIFIED (the disassembly).
+- The stop's shed and the turn's brake (0x809ecc1..0x809eddc,
+  0x809fb07..0x809fb8f), the climb's ease (0x809f97f..0x809fa5d): every
+  intermediate on the stack, the compares against stored `|x|` floats. The
+  brake writes the velocity in passing; the velocity's store at
+  0x809e5ef..0x809e60f overwrites it from the think's first copy. VERIFIED
+  (the disassembly).
+- The smoothed change: each half-way sum stored and kept, its length off
+  the kept values; a scale by the limit takes x kept, y and z stored
+  (0x809e63c..0x809e6b1, 0x809f7c7). VERIFIED (the disassembly).
+- The move: `((v' + v) 0.5) dt` plus the place, the head's x kept when the
+  brake started in the frame (0x809e6bd..0x809e74f, 0x809ee2a). VERIFIED
+  (the disassembly).
+- The angles (yaw 0x809e8ff..0x809ef32, pitch 0x809f38a..0x809f4e9, roll
+  0x809f50c..0x809f6ae): the gap normalised on the stack and kept; the
+  rate's step and its limits on the stack, the rate stored; the angle
+  takes the kept rate, `angle + rate 0.05` normalised on the stack, then
+  stored. Pitch and roll steer to an unstored target and read the tilt's
+  up and down rates as stored floats; the yaw's rates are the stored ones,
+  a fifth of them kept. VERIFIED (the disassembly).
+- The tilt (0x809ef90..0x809f36a): the fake drag's share stored around
+  `Vec2Normalize`, the push's x kept, y stored; the push rate stored; the
+  normalised push stored; the heading's sine and cosine of the new yaw
+  stored. VERIFIED (the disassembly).
+
+`flight::tests::every_think_matches_retail_word_for_word` replays
+`crates/cod4/tests/fixtures/heli/think-gdb.txt`: retail 1.7 under gdb
+(`unshare -rnm`, the probe as in "The flight against retail") with
+breakpoints at 0x809e38a and its two returns (0x80a06e8, 0x80a084e)
+dumping the vehicle record, once with the idle capture's gsc (80 thinks)
+and once with the flight's (524: hover, stop goals, target yaw, near-goal
+notifies). From each think's record before, the record after matches word
+for word, and the notifies. VERIFIED (the test). No think in it holds a
+goal yaw (+0x270) or a look-at entity (+0x280); the goal yaw's arm follows
+the disassembly, and the look-at arm (0x809f19a) has no method on ours.
+INFERRED.
+
+On the wire, a -100 angle field's zero bit tests the word: a non-zero
+angle under half a unit, or -0, goes out as a set bit and a short 0, which
+the client reads as the smallest float above zero. The flight capture's
+hovering roll sits there for 49 snapshots. VERIFIED (the gate;
+`delta::angle_field_sent`).
 
 #### Missiles under 1.7: attractors, the wobble, guidance
 

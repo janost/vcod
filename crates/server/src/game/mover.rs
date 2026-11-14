@@ -431,6 +431,7 @@ impl Movers {
 /// trajectory (movers doc 8, and 12 "The residual yaw").
 pub fn run_one(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec<Done>, Option<Step>) {
     let level_ms = host.level_time_ms;
+    let link_snap = host.profile.link_snap;
     let mut done = Vec::new();
     let Some(mut m) = host.movers.rows.remove(&id) else {
         return (done, None);
@@ -495,13 +496,13 @@ pub fn run_one(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec<Do
         } else {
             before + (target - before)
         };
-        (turned, snap_angles(turned))
+        (turned, link_snap(turned))
     } else {
         (before, before)
     };
     // `Reached_ScriptMover` quantizes after the links, so no link snaps it.
     let reached_at = (!m.sine && done.iter().any(|d| d.event == ROTATEDONE))
-        .then(|| reached_angles(m.apos.current.base));
+        .then(|| reached_angles(link_snap(m.apos.current.base)));
     let fields = [
         (m.pos.started, "origin", origin),
         (m.apos.started || moving, "angles", angles),
@@ -736,14 +737,30 @@ pub fn snap_angles(a: Vec3) -> Vec3 {
     Vec3::new(snap(a.x), snap(a.y), snap(a.z))
 }
 
+/// 1.7's `SV_LinkEntity` snap (`cod4_lnxded` 0x817e426..0x817e5ba,
+/// cod4-gsc.md 3.2, "The link's snap"): as [`snap_angles`], but `n =
+/// floor(a + 0.5)` (`frndint` rounding down, then `fistp`) against the
+/// float 0x358637be (0x8212470), so a negative angle snaps too.
+pub fn snap_angles4(a: Vec3) -> Vec3 {
+    let snap = |c: f32| {
+        let n = (f64::from(c) + 0.5).floor();
+        let d = n - f64::from(c);
+        if d * d < f64::from(f32::from_bits(0x3586_37be)) {
+            n as f32
+        } else {
+            c
+        }
+    };
+    Vec3::new(snap(a.x), snap(a.y), snap(a.z))
+}
+
 /// `Reached_ScriptMover`'s angular half (0x5fa57..0x5fb13): the settled
-/// trajectory's base, linked (snapped), then pitch and roll through
+/// trajectory's base, linked (`a`, snapped by the caller), then pitch and roll through
 /// `AngleNormalize180` and yaw through `AngleNormalize360`, both truncated
 /// to 65536ths. Nothing links the entity after, so `r.currentAngles`
 /// keeps the quantized value while `apos.trBase` keeps the target.
-fn reached_angles(base: Vec3) -> Vec3 {
+fn reached_angles(a: Vec3) -> Vec3 {
     use vcod_common::pmove::aim::{angle_normalize_180, angle_normalize_360};
-    let a = snap_angles(base);
     Vec3::new(
         angle_normalize_180(a.x),
         angle_normalize_360(a.y),
@@ -1100,7 +1117,7 @@ pub fn stall(host: &mut GameHost, cx: &mut vcod_gsc::Cx, step: &Step) {
     m.apos.stall();
     // `r.currentAngles` re-evaluated off the shifted trajectory and linked
     // (0x55838..0x5585d), so a quantized yaw goes back to the target.
-    let a = snap_angles(if m.apos.started {
+    let a = (host.profile.link_snap)(if m.apos.started {
         bg_evaluate(m.apos.stored, &m.apos.current, host.level_time_ms)
     } else {
         step.from.1
