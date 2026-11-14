@@ -231,6 +231,34 @@ fn uo_bots_take_and_capture_a_flag_on_cassino() {
     panic!("no flag captured on any seed (seed, pickup tick): {runs:?}");
 }
 
+/// UO capture the flag: a carrier who falls leaves the flag lying in the
+/// bots' view, though `drop_flag` keeps the flag's `carried_by` naming him
+/// (bot-objectives.md 14.11). Read that way, the flag stayed carried by
+/// the dead bot until it went home.
+#[test]
+fn a_fallen_uo_ctf_carrier_leaves_the_flag_lying() {
+    use vcod_server::game::script::UoObjectives;
+    for seed in [14, 16, 18, 20, 22] {
+        let Some((mut sv, mut now)) = uo_server("mp_cassino", "ctf", true, &[], seed) else {
+            return;
+        };
+        if wait_for(&mut sv, &mut now, "ctf_pickup", 3000).is_none() {
+            continue;
+        }
+        for _ in 0..4000 {
+            now += FRAME;
+            sv.tick(now);
+            let Some(UoObjectives::Ctf(flags)) = sv.bot_uo() else {
+                panic!("no ctf state");
+            };
+            if flags.iter().any(|f| f.dropped.is_some()) {
+                return;
+            }
+        }
+    }
+    panic!("no flag seen lying on any seed");
+}
+
 /// UO domination on mp_cassino: the bots stand in flag zones until they
 /// turn (`dom.gsc` `Flag_ZoneThink`).
 #[test]

@@ -4130,13 +4130,14 @@ impl ScriptRuntime {
             let origin = f(cx, "origin");
             match gametype {
                 "ctf" => {
-                    let [team, trigger, goal, mobile, moved, carried] = [
+                    let [team, trigger, goal, mobile, moved, carried, hasflag] = [
                         "team",
                         "trigger",
                         "goal",
                         "mobile_trigger",
                         "moved",
                         "carried_by",
+                        "hasflag",
                     ]
                     .map(|n| f(cx, n));
                     let mut flags = Vec::new();
@@ -4151,9 +4152,14 @@ impl ScriptRuntime {
                         ) else {
                             return None;
                         };
-                        let carrier = ent(host.get_field(cx, flag, carried)).and_then(|c| {
-                            client_ents.iter().find(|(_, e)| *e == c).map(|(s, _)| *s)
-                        });
+                        // `drop_flag` leaves `carried_by` naming the fallen
+                        // carrier until `reset_flag`; his `hasflag` it clears
+                        // (bot-objectives.md 14.11).
+                        let carrier = ent(host.get_field(cx, flag, carried))
+                            .filter(|&c| ent(host.get_field(cx, c, hasflag)) == Some(flag))
+                            .and_then(|c| {
+                                client_ents.iter().find(|(_, e)| *e == c).map(|(s, _)| *s)
+                            });
                         let moved = truthy(host.get_field(cx, flag, moved));
                         let team = host.get_field(cx, flag, team);
                         flags.push(CtfFlag {
