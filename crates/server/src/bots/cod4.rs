@@ -361,6 +361,11 @@ impl Cod4Bots {
         &mut self.driver.bots
     }
 
+    /// `bot_match`'s cue counts (`Server::bot_cue_tally`).
+    pub fn cue_tally(&self) -> [(u32, u32, u64); 2] {
+        self.driver.posts.cue_tally()
+    }
+
     /// Block the tick on the graph's build rather than let the bots wander
     /// until it lands: the in-process measuring runs set it.
     pub fn wait_for_graph(&mut self) {

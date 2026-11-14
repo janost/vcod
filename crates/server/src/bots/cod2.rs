@@ -519,6 +519,11 @@ impl Cod2Bots {
         &mut self.driver.bots
     }
 
+    /// `bot_match`'s cue counts (`Server::bot_cue_tally`).
+    pub fn cue_tally(&self) -> [(u32, u32, u64); 2] {
+        self.driver.posts.cue_tally()
+    }
+
     /// Block the tick on the graph's build rather than let the bots wander
     /// until it lands: the in-process measuring runs set it.
     pub fn wait_for_graph(&mut self) {
@@ -1014,6 +1019,7 @@ impl Cod2Bots {
                         dropped: f.dropped.map(&mut site),
                         goal: site(f.goal),
                         carried: f.carrier.is_some(),
+                        carrier: f.carrier,
                     };
                     let (ours_v, theirs_v) = (flag(ours), flag(theirs));
                     Some(UoView::Ctf(Box::new(CtfView {
@@ -1022,6 +1028,7 @@ impl Cod2Bots {
                         carrying: theirs.carrier == Some(*slot),
                         escort: theirs.carrier.filter(|c| c != slot).and_then(origin_of),
                         rank,
+                        hunt: None,
                     })))
                 }
                 UoObjectives::Hq { radios, next } => Some(UoView::Hq(HqView {
