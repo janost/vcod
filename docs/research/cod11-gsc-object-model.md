@@ -944,15 +944,20 @@ same way.
 `GameHost::register_item` holds the rest of `RegisterItem`: the bit, the
 alt-fire link, both models per registered item, configstring 8.
 
-INFERRED: the alt-fire link's model precache is the same pair. M2 reads retail
-as precaching offsets 0x188 and 0x31c of the weapon definition for a chained
-alt mode, a different struct from `bg_itemlist`'s +0x8/+0xc; that they name
-the same strings is unconfirmed, and `register_item` uses +0x8/+0xc for base
-and alt alike. VERIFIED, the choice is inert on stock content: all five
-alt-fire files (`bar_slow_mp`, `fg42_semi_mp`, `mp44_semi_mp`,
-`ppsh_semi_mp`, `thompson_semi_mp`) carry their base weapon's exact
-`worldModel` and an empty `projectileModel`, so an alt registration interns
-onto a slot the base already took.
+VERIFIED, the instructions of `RegisterItem` (0x4e504, relocations
+resolved with `tools/re/annotate_func.py`): the `giType` 1 arm (0x4e590)
+loops from the item's own index: the bit set (0x4e5a0), `BG_GetInfoForWeapon`
+(0x4e5af), `G_ModelIndex` of `def+0x188` (0x4e5c0) and of `def+0x31c`
+(0x4e5d2), then `def+0x2fc` as the next index until it is 0 or the start
+(0x4e5e0..0x4e5e6). Only the other arm (0x4e5f0) reads `bg_itemlist`'s
++0x8/+0xc. VERIFIED, the weapon field table in `.data`: `worldModel` at
+0x7ce08 names offset 0x188, `projectileModel` at 0x7d168 names 0x31c. So a
+weapon and every mode on its chain precache their own weapon file's
+`worldModel` and `projectileModel`, which is what `item_models` reads.
+VERIFIED, the shipped files: all five alt-fire files (`bar_slow_mp`,
+`fg42_semi_mp`, `mp44_semi_mp`, `ppsh_semi_mp`, `thompson_semi_mp`) carry
+their base weapon's exact `worldModel` and an empty `projectileModel`, so an
+alt registration interns onto a slot the base already took.
 
 ## 16. The builtins the stock `dm` bootstrap reaches
 

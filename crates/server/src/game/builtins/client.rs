@@ -718,17 +718,31 @@ fn weapon_argument(
 
 /// `BG_GivePlayerWeapon`'s `RegisterItem(weapon, 1)` (0x36a38): a weapon
 /// the player does not hold yet is registered, which past
-/// `level.initializing` is a script error unless it was precached.
+/// `level.initializing` is a script error unless it was precached. A
+/// turret or non-player class is never given, so never registered
+/// ([`never_given`]).
 fn register_given(
     host: &mut GameHost,
     slot: usize,
     name: &str,
     index: usize,
 ) -> Result<(), ErrorKind> {
-    if host.client_weapons[slot].holds(index) {
+    if host.client_weapons[slot].holds(index) || never_given(host, index) {
         return Ok(());
     }
     host.register_item(name)
+}
+
+/// CoD1's `BG_GivePlayerWeapon` returns 0 ahead of its `RegisterItem` for a
+/// `weaponClass turret` or `non-player` weapon (1.1d 0x36a69, 1.5b 0x2c250,
+/// UO 0x31d7a; cod11-items.md 5): `giveWeapon` and `setWeaponSlotWeapon`
+/// hold nothing and register nothing for it.
+fn never_given(host: &GameHost, index: usize) -> bool {
+    host.profile.weapons == crate::game::profile::WeaponNumbering::Fixed
+        && host
+            .weapons
+            .get(index)
+            .is_some_and(|d| matches!(d.weapon_class.as_str(), "turret" | "non-player"))
 }
 
 /// `self giveWeapon(name)` (`PlayerCmd_giveWeapon` 0x43020): hold the weapon,
@@ -751,7 +765,9 @@ pub fn give_weapon(
     let (name, index) = weapon_argument(host, cx, args)?;
     register_given(host, slot, &name, index)?;
     let weapons = host.weapons.clone();
-    host.client_weapons[slot].give_chain(&weapons, index, weapons.slot(index));
+    if !never_given(host, index) {
+        host.client_weapons[slot].give_chain(&weapons, index, weapons.slot(index));
+    }
     if let Some(def) = weapons.get(index) {
         host.weapon_op(
             slot,
@@ -977,7 +993,9 @@ pub fn set_weapon_slot_weapon(
     let name = host.weapon_name(index).unwrap_or_default();
     let held_before = host.client_weapons[client].holds(index);
     register_given(host, client, &name, index)?;
-    host.client_weapons[client].give_chain(&weapons, index, slot);
+    if !never_given(host, index) {
+        host.client_weapons[client].give_chain(&weapons, index, slot);
+    }
     if host.profile.game == vcod_common::game::Game::Cod2
         && let Some(def) = weapons.get(index)
     {
@@ -2036,6 +2054,29 @@ mod tests {
             );
             assert!(!host.client_weapons[0].holds(weapon_index("mp40_mp").unwrap()));
         });
+    }
+
+    /// `BG_GivePlayerWeapon` returns before its `RegisterItem` for a turret
+    /// class weapon: past `level.initializing` an unprecached
+    /// `mg42_bipod_stand_mp` is no error, and nothing is held.
+    #[test]
+    fn a_turret_class_weapon_is_never_given() {
+        let Some((mut vm, mut host)) = armed_fixture() else {
+            return;
+        };
+        let mg = weapon_index("mg42_bipod_stand_mp").unwrap();
+        assert_eq!(host.weapons.get(mg).unwrap().weapon_class, "turret");
+        host.initializing = false;
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn_client(cx, 0, None).unwrap();
+            let t = Some(Target::Entity(e));
+            let arg = Value::String(cx.intern_exact("mg42_bipod_stand_mp"));
+            give_weapon(&mut host, cx, t, &[arg]).unwrap();
+            let slot = Value::String(cx.intern_exact("primary"));
+            set_weapon_slot_weapon(&mut host, cx, t, &[slot, arg]).unwrap();
+        });
+        assert!(!host.client_weapons[0].holds(mg));
+        assert_eq!(host.client_weapons[0].slots[1], 0);
     }
 
     /// The stock allies loadout on client 0, with the ops it pushed dropped:
