@@ -2699,6 +2699,9 @@ fn gungrid_gate(
     };
     replay(&mut rig, &cap);
     let log = rig.sv.script_log();
+    if let Some(path) = std::env::var_os("GUNGRID_DUMP") {
+        std::fs::write(path, log.join("\n")).expect("write GUNGRID_DUMP");
+    }
     let rows = gungrid_rows(&cap, script.lines(), log.iter().map(String::as_str));
     assert!(
         script.contains("PROBE gungrid ") && log.iter().any(|l| l.contains("PROBE gungrid ")),
@@ -2759,6 +2762,11 @@ const GUNGRID_UO: &[(&str, &str)] = &[
     ("probe_gungrid", "1"),
     ("probe_head", "basehead_axis_a_02"),
 ];
+const GUNGRID_11: &[(&str, &str)] = &[
+    ("probe_hitgrid", "1"),
+    ("probe_gungrid", "1"),
+    ("probe_head", "basehead_axis_b_04"),
+];
 const GUNGRID_15: &[(&str, &str)] = &[
     ("probe_hitgrid", "1"),
     ("probe_gungrid", "1"),
@@ -2775,6 +2783,22 @@ fn the_gunner_grid_capture_matches_uo_on_mp_carentan() {
         vcod_common::testing::uo_fs,
         &PROTOCOL_V22,
         GUNGRID_UO,
+        &[],
+    );
+}
+
+/// The same on 1.1d (cod11-turrets.md 13.9). Open: the capture logs
+/// none of the gunner's attachments, a random draw, and a still gunner
+/// already reads three cells of the grid's left column off ours
+/// (13.10, "Open").
+#[test]
+#[ignore = "open: the 1.1d gunner grid, cod11-turrets.md 13.10"]
+fn the_gunner_grid_capture_matches_retail_on_mp_carentan() {
+    gungrid_gate(
+        "gungrid",
+        vcod_common::testing::game_fs_11,
+        &PROTOCOL_V1,
+        GUNGRID_11,
         &[],
     );
 }

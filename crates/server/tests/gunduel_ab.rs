@@ -484,23 +484,15 @@ const DUEL_GAPS: &[Gap] = &[
     },
 ];
 
-/// 1.1d: every gunner's points and cells (cod11-turrets.md 13.10, "Open"):
+/// 1.1d: victim 1's points and cells (cod11-turrets.md 13.10, "Open"):
 /// 0.0004 to 0.011 on a body his own end frame placed, 0.08 to 0.2 in
 /// the arc's middle on one it has not, and cells to 0.06 and 0.3.
-const POSE_GAPS_11: &[Gap] = &[
-    Gap {
-        victim: 0,
-        from: 0,
-        to: i32::MAX,
-        why: "turrets doc 13.10, the 1.1d gunner pose",
-    },
-    Gap {
-        victim: 1,
-        from: 0,
-        to: i32::MAX,
-        why: "turrets doc 13.10, the 1.1d gunner pose",
-    },
-];
+const POSE_GAPS_11: &[Gap] = &[Gap {
+    victim: 1,
+    from: 0,
+    to: i32::MAX,
+    why: "turrets doc 13.10, the 1.1d gunner pose",
+}];
 
 #[test]
 fn two_gunners_in_each_others_arc_match_retail() {

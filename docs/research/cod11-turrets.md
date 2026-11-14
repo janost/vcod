@@ -2323,20 +2323,59 @@ goal time the whole distance's (cod11-movers.md 15, "The weight ramp").
 INFERRED: a body traced before the next step reads a clip just set at 0.001,
 not 0.
 
-vcod: `turretpose::GunnerTree` holds a 1.5 or UO gunner's rows and leaves as
+vcod: `turretpose::GunnerTree` holds a gunner's rows and leaves as
 the anim info does: `GunnerTree::place` runs the strict clear, the first
 pass, the strict clear and the second pass on `GunnerPlacement::walked`;
 `GunnerTree::step` is the weight step. `ClientSim::set_gunner_blend` places
 and hands the pose the result at once; `commit_pose` steps at each end frame,
 ahead of the placement. The tree lives until the next spawn (INFERRED, off
 UO's `G_DObjUpdate` rebuilding the DObj when the spawn sets the model, 13.7).
-1.1d's gunner keeps the placement's rows. `animclock`'s `Ramp::raised` starts
+1.1d's gunner takes the same tree (below, "1.1d's placement").
+`animclock`'s `Ramp::raised` starts
 a node at 0 from `0.001 * goal`. `pose_player` matches the current and the
 left turret group to legs layers by node: on a group's first frame its layer
 reads weight 0 and drops out, and the layer before it (the idle at the
 mount, the aim group at the first shot) poses as itself. vcod measurement
 (`TURRET_REPORT=1`, both gunner-grid captures): every cell within 0.0001 (UO
 5.7e-5, 1.5b 8.4e-5).
+
+#### 1.1d's placement
+
+VERIFIED, 1.1d `game.mp.i386.so` 0x515a8 (relocations resolved): the same
+calls in the same order as UO's 0x6ac06. `trap_XAnimClearTreeGoalWeightsStrict`
+(0x5172f), the first pass's `trap_XAnimSetGoalWeight` calls (0x51812,
+0x5195b, 0x519b6), `trap_XAnimCalcAbsDelta` (0x519d4), the second strict
+clear (0x51a33), then each row and leaf through `trap_XAnimGetWeight` and
+`trap_XAnimSetGoalWeight` at a blend time of `1 / (1000 / level.frametime *
+|weight - goal|)` (1000.0 at 0x758f4, `level+0x1f0`), 0 when that is 0, rate
+1.0 (0x51a43..0x51e57). VERIFIED, `G_RunFrame` (0x50478): the threads
+(0x50653), then `trap_DObjInitServerTime` on every entity with a DObj
+(0x5069f), then `G_DObjUpdateServerTime` (0x506ed), before the entity pass
+and `ClientEndFrame` (0x50abd). So 1.1d carries the rows across frames as
+1.5b and UO do; vcod ran its own placement's rows on 1.1 until 2026-11-14.
+vcod measurement, `gunduel_ab` on 1.1d with the tree: victim 0 reads
+retail's points and cells within `NEAR_15` (its `POSE_GAPS_11` entry
+dropped); victim 1 unchanged (13.10, "Open").
+
+VERIFIED live, `mp_carentan-dm-turret-gungrid.txt` (1.1d, 2026-11-14,
+`-script.txt` and `-target.txt` beside it): the 13.9 recipe on 1.1d.
+`the_gunner_grid_capture_matches_retail_on_mp_carentan` replays it
+(`#[ignore]`d, open). vcod measurement (`GUNGRID_DUMP=<path>`): with the
+tree, 2622 cells past `GUNGRID_NEAR` over 260 mounted frames, 4552
+without. The yaw sweep's first frames at the gun's centre read every cell
+to 0.0005; frames at either arc edge hold 5 to 15 cells off, and every
+still frame of the crouch phases three cells of the left column (5, 10,
+15: one side only or 1.2 off). Not determined. INFERRED: the gunner's
+attachments, a random draw the probe logs only for the target (`PROBE
+models 0`); a recapture logging and pinning his would settle it.
+
+The dismount: the
+probe's grid stops once the gunner is back within 4 units of his spot, so
+the capture holds one frame past the release (33400, `legsAnim` 544,
+`eFlags` 24), too few to read the blend out. vcod clears both groups at
+the release (`set_gunner_blend(None)`), so a fading `standMG42_aim` layer
+poses through `layer_clips`; INFERRED, off the weight step and the strict
+clear above: retail's group keeps its carried rows while it fades. Open.
 
 ### 13.10 Two gunners in each other's arc
 
@@ -2402,8 +2441,8 @@ The pose a round meets (backlog #74). Two writes decide it:
 vcod: the placement stands the gunner's DObj in `quat_angles` of its body
 rotation (`DobjStamps::set_angles`) until his next cmd or `setPlayerAngles`;
 `ClientSim::land_gunner_goals` runs the weight step for every client right
-after the thread passes (1.5's and UO's `GunnerTree::step`, moved out of
-`commit_pose`; 1.1's rows copied onto the pose), and the host's copies of
+after the thread passes (`GunnerTree::step`, moved out of `commit_pose`),
+and the host's copies of
 a gunner's body are refreshed after his placement so a later slot's script
 trace reads it. Ours lands after both of 1.1d's thread passes, where
 retail's step sits between them: a gunner traced in 1.1d's second pass
@@ -2423,14 +2462,16 @@ Open, held as `gunduel_ab` gaps:
   group's node time or its blend out of the aim group, which no earlier
   capture traced in the end-frame pass (13.9's grids run in the thread
   pass).
-- 1.1d (`POSE_GAPS_11`): points 0.0004 to 0.011 off on a gunner his own end
+- 1.1d (`POSE_GAPS_11`, victim 1 since 2026-11-14's carried rows, 13.9
+  "1.1d's placement"): points 0.0004 to 0.011 off on a gunner his own end
   frame placed, cells to 0.06; on one not yet placed, retail's points to
   the float step where his blend has no `forward` leaf and 0.08 to 0.2 off
   where it has one (the sweep's middle, `s` -12 to 24, and the duel), cells
-  0.1 to 0.3 throughout. Not determined. Ruled out by vcod measurement: the
+  0.1 to 0.3 throughout (vcod measurement, 2026-11-14: victim 1's grid rows
+  to 1.10). Not determined. Ruled out by vcod measurement: the
   DObj's frame (standing it in the placement's angles past the cmd and
-  `setPlayerAngles` puts slot 1's rounds up to 2.8 off). 1.1d has no
-  gunner grid capture (13.9's are 1.5b and UO), and its bone trace is not
+  `setPlayerAngles` puts slot 1's rounds up to 2.8 off). 1.1d's gunner
+  grid (13.9, "1.1d's placement") is open too, and its bone trace is not
   ported store for store (13.5).
 
 ## 14. The client
