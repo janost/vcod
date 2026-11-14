@@ -1185,6 +1185,12 @@ pub struct Bot {
     /// The health item [`BotView`]'s vitals sent the bot to last tick
     /// (`retreat::nearest_pack`'s `held`).
     pub(crate) heal_at: Option<[f32; 3]>,
+    /// The driver's follower walked out the plan to the health item this
+    /// tick: the body heads straight at it (`Bot::track_heal`).
+    pub(crate) heal_walked: bool,
+    /// The health item headed straight at, the nearest the body came to
+    /// it and the ticks since it last came [`SHORT_GAIN`] nearer.
+    heal_short: Option<([f32; 3], f32, u32)>,
     /// The last think's view was set by a fight, a hurt look, a cover
     /// peek, a recalled spot or a retreat, not the walk: the walking
     /// view takes the path's heading at once ([`Bot::walk_turn`]).
@@ -1230,8 +1236,9 @@ pub struct Bot {
     /// A weapon switch under way: the byte every cmd carries until
     /// `ps.weapon` reads it (AGENTS.md, "Every cmd carries the weapon").
     switch_to: Option<u8>,
-    /// `bas` launchers tapped for with nothing taken, and the ticks each
-    /// stays passed over ([`SHUN_TICKS`]); the last tapped and its taps.
+    /// `bas` launchers tapped for with nothing taken and health items no
+    /// body reaches (`Bot::track_heal`), and the ticks each stays passed
+    /// over ([`SHUN_TICKS`]); the last launcher tapped and its taps.
     shunned: Vec<([f32; 3], u32)>,
     tapped: Option<([f32; 3], u32)>,
     /// The `bas` launcher walked to, the nearest the body has come to it
@@ -1671,6 +1678,8 @@ impl Bot {
             on_objective: false,
             arrived_goal: None,
             heal_at: None,
+            heal_walked: false,
+            heal_short: None,
             view_owned: false,
             rungs_ago: u32::MAX,
             rung_spell: false,
@@ -2605,6 +2614,11 @@ impl Bot {
             .then_some(at)
     }
 
+    /// Whether the bot passes over the health item at `p` (`Bot::track_heal`).
+    pub(crate) fn passes_over(&self, p: [f32; 3]) -> bool {
+        self.shunned.iter().any(|s| arrived(s.0, p))
+    }
+
     fn on_post(view: &BotView, p: &GuardPost) -> bool {
         let o = view.origin;
         (p.at[0] - o[0]).hypot(p.at[1] - o[1]) < posts::ARRIVE
@@ -3247,6 +3261,7 @@ impl Bot {
     pub(crate) fn think(&mut self, view: &BotView) -> UserCmd {
         self.clock = self.clock.wrapping_add(1);
         self.track_reach(view);
+        self.track_heal(view);
         // Read before the think moves the objective's state, as the goal was.
         let target = self.objective_target(view);
         self.on_objective =
@@ -9080,6 +9095,7 @@ mod tests {
             }),
             traverse,
             capturing: false,
+            short: false,
         });
         v.waypoint = Some([1000.0, 0.0, 0.0]);
         v
@@ -9728,6 +9744,7 @@ mod tests {
             sight: None,
             traverse: true,
             capturing: false,
+            short: false,
         });
         v
     }
@@ -9791,6 +9808,27 @@ mod tests {
         v.waypoint = Some([0.0, 1000.0, 64.0]);
         let rolls = (0..60).find(|_| bot.think(&v).forward > 0);
         assert!(rolls.is_some(), "the hull never rolled on");
+    }
+
+    /// At a route's end short of a goal the hull cannot reach, the driver
+    /// gets out at once; at a route's end on its goal it sits out the idle
+    /// wait first (bot-objectives.md 14.10).
+    #[test]
+    fn a_driver_short_of_a_goal_it_cannot_reach_gets_out() {
+        let out = |short: bool| {
+            let mut bot = Bot::new("allies", false, 1);
+            let mut v = driving(Crowd::default());
+            v.waypoint = None;
+            let seat = v.seat.as_mut().unwrap();
+            seat.speed = 0.0;
+            seat.short = short;
+            (0..200).find(|i| {
+                v.seat.as_mut().unwrap().level_ms = *i * 50;
+                bot.think(&v).buttons & msg::BUTTON_USE != 0
+            })
+        };
+        assert!(out(true).is_some_and(|i| i < 4), "{:?}", out(true));
+        assert!(out(false).is_some_and(|i| i >= 100), "{:?}", out(false));
     }
 
     /// A hull wedged on something bounces off it, so its speed never

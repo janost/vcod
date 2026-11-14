@@ -343,6 +343,7 @@ fn seat_view(
         level_ms: host.level_time_ms,
         sight: None,
         traverse: info.turret.horiz_left != 0.0 || info.turret.horiz_right != 0.0,
+        short: false,
         capturing: false,
     })
 }
@@ -436,6 +437,9 @@ pub(super) struct DriveRoute {
     next: usize,
     /// The goal point it was planned for, `None` for a roam.
     goal: Option<[f32; 3]>,
+    /// Its last node stands more than [`PASS`] off the goal: the hull
+    /// cannot reach it.
+    short: bool,
     planned_ms: i32,
     /// Nearest the hull has come to the next node, and when.
     best: f32,
@@ -534,12 +538,13 @@ impl BotDrives {
 impl Server {
     /// The point a bot driving a vehicle steers at toward `goal`, along a
     /// route over the graph's nodes its hull fits on (no ladder, jump or
-    /// step-high edge); `None` with nothing to drive to.
+    /// step-high edge); `None` with nothing to drive to, `seat.short` set
+    /// when that is a route run out short of the goal.
     pub(super) fn drive_waypoint(
         &mut self,
         slot: usize,
         goal: crate::bots::Goal,
-        seat: &SeatView,
+        seat: &mut SeatView,
     ) -> Option<[f32; 3]> {
         use crate::bots::Goal;
         let g = self.game.module.driver.nav.clone()?;
@@ -586,12 +591,16 @@ impl Server {
                 b.rng = rng;
             }
             let path = path?;
+            let short = want
+                .zip(path.last())
+                .is_some_and(|(p, &n)| g.nodes[n as usize].distance(glam::Vec3::from(p)) > PASS);
             self.game.module.bot_drives.routes.insert(
                 slot,
                 DriveRoute {
                     path,
                     next: 0,
                     goal: want,
+                    short,
                     planned_ms: now,
                     best: f32::INFINITY,
                     best_ms: now,
@@ -605,7 +614,9 @@ impl Server {
             r.best_ms = now;
         }
         let Some(&n) = r.path.get(r.next) else {
-            // Driven out: a goal is there, a roam plans again next tick.
+            // Driven out: a goal is there, or as near as the hull goes; a
+            // roam plans again next tick.
+            seat.short = r.short;
             return None;
         };
         let d = flat(g.nodes[n as usize]);

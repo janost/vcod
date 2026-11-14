@@ -308,8 +308,9 @@ pub(crate) trait BotWorld {
     fn blocked_nodes(&self) -> Arc<[u32]>;
     /// The weapon table the edge probes step pmove with.
     fn weapon_defs(&self) -> &[Option<vcod_common::weapon::WeaponDef>];
-    /// The driver's seat's waypoint toward `goal`.
-    fn drive_waypoint(&mut self, slot: usize, goal: Goal, seat: &SeatView) -> Option<[f32; 3]>;
+    /// The driver's seat's waypoint toward `goal`; marks
+    /// [`SeatView::short`] when the route ran out short of it.
+    fn drive_waypoint(&mut self, slot: usize, goal: Goal, seat: &mut SeatView) -> Option<[f32; 3]>;
     /// The bot in `slot` is out of a driver's seat.
     fn forget_drive(&mut self, slot: usize);
     /// [`BotView::lob`]: the throw of grenade `weapon` that bursts nearest
@@ -1109,9 +1110,10 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
         drop(brain);
         // A seat leaves the walk's follower alone; a driver steers along
         // a route its hull fits (`drive_waypoint`).
-        if let Some(s) = view.seat.filter(|s| s.seat == 1) {
+        if let Some(mut s) = view.seat.filter(|s| s.seat == 1) {
             let _p = crate::tick_profile::phase("goal/drive");
-            view.waypoint = w.drive_waypoint(slot, goal, &s);
+            view.waypoint = w.drive_waypoint(slot, goal, &mut s);
+            view.seat = Some(s);
         } else {
             w.forget_drive(slot);
         }
@@ -1316,8 +1318,14 @@ fn sense<W: BotWorld>(
         _ => noises.to_vec(),
     };
     view.noise = super::loudest(&heard, slot, view.origin, hearing);
-    let heal_at = w.driver().bots.get(&slot).and_then(|b| b.heal_at);
-    view.survive.heal = super::retreat::nearest_pack(&view, packs, heal_at);
+    let bot = w.driver().bots.get(&slot);
+    let heal_at = bot.and_then(|b| b.heal_at);
+    let open: Vec<[f32; 3]> = packs
+        .iter()
+        .copied()
+        .filter(|p| bot.is_none_or(|b| !b.passes_over(*p)))
+        .collect();
+    view.survive.heal = super::retreat::nearest_pack(&view, &open, heal_at);
     let held = w.driver_mut().sidesteps.remove(&slot);
     if let Some(e) = enemy {
         (view.friend_in_line, view.sidestep) = w.friend_in_line(slot, e.origin, teams, held);
@@ -1903,6 +1911,8 @@ fn route<W: BotWorld>(
     w.routed(slot, &follower, g);
     if let Some(b) = w.driver_mut().bots.get_mut(&slot) {
         b.rng = rng;
+        b.heal_walked = matches!(goal, Goal::To(p)
+            if follower.walked_out() && view.survive.heal == Some(p));
         if W::GIVES_UP_GOALS {
             b.arrived_goal = match goal {
                 Goal::To(p) if follower.walked_out() => Some(p),
