@@ -643,8 +643,8 @@ struct AtomMemo {
     builtins: Vec<Option<Option<builtins::score::Builtin>>>,
     plain: Vec<Option<bool>>,
     /// [`AtomMemo::read`]'s answers, an entity's and a hudelem's.
-    reads: Vec<Option<(bool, Route)>>,
-    hud_reads: Vec<Option<(bool, Route)>>,
+    reads: Vec<Option<(Except, Route)>>,
+    hud_reads: Vec<Option<(Except, Route)>>,
 }
 
 /// The names `GameHost::get_field` answers ahead of the field's route, for
@@ -664,6 +664,13 @@ const PLAIN_EXCEPT: &[&str] = &[
     "alpha",
     "glowalpha",
 ];
+
+/// A field name's place in [`PLAIN_EXCEPT`], `None` for a plain one.
+type Except = Option<u8>;
+
+/// `origin`'s [`Except`].
+const ORIGIN: Except = Some(8);
+const _: () = assert!(matches!(PLAIN_EXCEPT[8].as_bytes(), b"origin"));
 
 impl AtomMemo {
     fn check(&mut self, profile: &'static crate::game::profile::HostProfile, cx: &Cx) {
@@ -698,14 +705,15 @@ impl AtomMemo {
         *cache[i].get_or_insert_with(|| f(cx.resolve_folded(field)))
     }
 
-    /// [`Self::plain`] and [`Self::route`] together, what a read asks.
+    /// [`Self::plain`] and [`Self::route`] together, what a read asks: the
+    /// name's place in [`PLAIN_EXCEPT`] and its route.
     fn read(
         &mut self,
         profile: &'static crate::game::profile::HostProfile,
         cx: &Cx,
         field: Atom,
         hud: bool,
-    ) -> (bool, Route) {
+    ) -> (Except, Route) {
         self.check(profile, cx);
         let (cache, f) = if hud {
             (&mut self.hud_reads, profile.route_hud)
@@ -718,7 +726,8 @@ impl AtomMemo {
         }
         *cache[i].get_or_insert_with(|| {
             let name = cx.resolve_folded(field);
-            (!PLAIN_EXCEPT.contains(&name), f(name))
+            let except = PLAIN_EXCEPT.iter().position(|n| *n == name);
+            (except.map(|i| i as u8), f(name))
         })
     }
 
@@ -2981,14 +2990,20 @@ impl Host for GameHost {
     }
 
     fn get_field(&mut self, cx: &mut Cx, ent: EntId, field: Atom) -> Value {
-        let (plain, route) = self
+        self.get_live_field(cx, ent, field)
+            .unwrap_or(Value::Undefined)
+    }
+
+    /// `is_live` is `ents.get`'s answer, which the read looks up anyway.
+    fn get_live_field(&mut self, cx: &mut Cx, ent: EntId, field: Atom) -> Option<Value> {
+        let (except, route) = self
             .memo
             .read(self.profile, cx, field, ent.0 >= FIRST_HUD_ELEM);
         let Some(e) = self.ents.get(ent) else {
-            return Value::Undefined;
+            return None;
         };
-        if plain {
-            return read_route(&self.ext, cx, ent, e, field, route);
+        if except.is_none() {
+            return Some(read_route(&self.ext, cx, ent, e, field, route));
         }
         // A player's health lives on the host, not in the entity's engine
         // slot: retail's `health` setter (`Scr_SetHealth`) writes
@@ -3000,16 +3015,18 @@ impl Host for GameHost {
                 // A CoD1 player's `r.currentAngles` live with his DObj's
                 // stamps, which place his body for a trace or a tag.
                 "angles" if matches!(self.ext, HostExt::Cod1) => {
-                    return Value::Vector(self.dobj_posed[ent.0 as usize].angles());
+                    return Some(Value::Vector(self.dobj_posed[ent.0 as usize].angles()));
                 }
-                "health" => return Value::Int(self.client_vitals[ent.0 as usize].health),
-                "maxhealth" => return Value::Int(self.client_vitals[ent.0 as usize].max_health),
+                "health" => return Some(Value::Int(self.client_vitals[ent.0 as usize].health)),
+                "maxhealth" => {
+                    return Some(Value::Int(self.client_vitals[ent.0 as usize].max_health));
+                }
                 "maxspeed" if !self.speaks_1_1() => {
-                    return Value::Int(self.client_max_speed[ent.0 as usize]);
+                    return Some(Value::Int(self.client_max_speed[ent.0 as usize]));
                 }
                 "sessionsquad" if !self.speaks_1_1() => {
                     let name = SQUADS[self.client_squad[ent.0 as usize] as usize];
-                    return Value::String(cx.intern_exact(name));
+                    return Some(Value::String(cx.intern_exact(name)));
                 }
                 // Retail keeps an icon index and reads 0 back as ""
                 // (0x41b7c); the name is stored here, so only the unset
@@ -3017,7 +3034,7 @@ impl Host for GameHost {
                 "statusicon" => {
                     let i = fields::client_index("statusicon");
                     if c[i] == Value::Undefined {
-                        return Value::String(cx.intern_exact(""));
+                        return Some(Value::String(cx.intern_exact("")));
                     }
                 }
                 "headicon" => {
@@ -3031,11 +3048,11 @@ impl Host for GameHost {
                                 .map_or("", String::as_str)
                         }
                     };
-                    return Value::String(cx.intern_exact(name));
+                    return Some(Value::String(cx.intern_exact(name)));
                 }
                 "headiconteam" => {
                     let name = HEAD_ICON_TEAMS[head_icon_team_of(c) as usize];
-                    return Value::String(cx.intern_exact(name));
+                    return Some(Value::String(cx.intern_exact(name)));
                 }
                 _ => {}
             }
@@ -3044,21 +3061,21 @@ impl Host for GameHost {
         // `cloneplayer` set to the player's (`G_SetOrigin`, Mac 0x1c3574)
         // and its fall moves; the engine slot is never written for one
         // (cod2-hud.md 19.1, the death icons).
-        if cx.resolve_folded(field) == "origin"
+        if except == ORIGIN
             && let Some(o) = self.bodies.cod2_origin(ent.0)
         {
-            return Value::Vector(o.to_array());
+            return Some(Value::Vector(o.to_array()));
         }
         // A CoD4 corpse's `origin` is where `clonePlayer` stood it; the
         // engine slot is never written for one either (the death icons,
         // cod4-hud.md 16.4).
         if self.profile.game == vcod_common::game::Game::Cod4
-            && cx.resolve_folded(field) == "origin"
+            && except == ORIGIN
             && let Some(o) = self
                 .bodies
                 .tr_base(ent.0, &crate::game::cod4::COD4_HOST_PROTO)
         {
-            return Value::Vector(o.to_array());
+            return Some(Value::Vector(o.to_array()));
         }
         if ent.0 >= FIRST_HUD_ELEM {
             // The two lanes of the packed colour word, each its own getter
@@ -3068,20 +3085,20 @@ impl Host for GameHost {
             match cx.resolve_folded(field) {
                 n @ ("color" | "glowcolor") if n == "color" || cod4 => {
                     let w = word(n);
-                    return Value::Vector([
+                    return Some(Value::Vector([
                         fields::hud_color_float(w & 0xff),
                         fields::hud_color_float((w >> 8) & 0xff),
                         fields::hud_color_float((w >> 16) & 0xff),
-                    ]);
+                    ]));
                 }
                 n @ ("alpha" | "glowalpha") if n == "alpha" || cod4 => {
                     let packed = if n == "alpha" { "color" } else { "glowcolor" };
-                    return Value::Float(fields::hud_color_float(word(packed) >> 24));
+                    return Some(Value::Float(fields::hud_color_float(word(packed) >> 24)));
                 }
                 _ => {}
             }
         }
-        read_route(&self.ext, cx, ent, e, field, route)
+        Some(read_route(&self.ext, cx, ent, e, field, route))
     }
 
     /// The field write, then `Scr_SetOrigin`'s link (0x5c64f) for an

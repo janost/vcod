@@ -480,6 +480,13 @@ pub trait Host {
         true
     }
 
+    /// [`Host::get_field`] on a live entity, `None` for a dead one
+    /// ([`Host::is_live`]): a script's field read, which a host that looks
+    /// the entity up once for both can answer in one call.
+    fn get_live_field(&mut self, cx: &mut Cx, ent: EntId, field: Atom) -> Option<Value> {
+        self.is_live(ent).then(|| self.get_field(cx, ent, field))
+    }
+
     /// The other half of a `Cx::spawn_then`, with its token. A spawn queued
     /// here starts before the builtin's remaining queued threads.
     fn spawn_returned(&mut self, _cx: &mut Cx, _token: u32) {}

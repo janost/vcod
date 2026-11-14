@@ -764,9 +764,7 @@ impl Vm {
                         Some(Value::Int(1))
                     }
                     Value::Struct(id) => Some(self.heap.get_field(id, name)),
-                    Value::Entity(id) if host.is_live(id) => {
-                        Some(self.entity_field(host, notifies, field_spawns, id, name))
-                    }
+                    Value::Entity(id) => self.entity_field(host, notifies, field_spawns, id, name),
                     Value::Array(id) if name == self.size_atom => {
                         Some(Value::Int(self.heap.array_len(id) as i32))
                     }
@@ -847,10 +845,10 @@ impl Vm {
                         }
                         Value::Struct(id) => self.heap.get_field(id, name),
                         Value::Entity(id) => {
-                            if !host.is_live(id) {
-                                fail!(DEAD_OBJECT);
+                            match self.entity_field(host, notifies, field_spawns, id, name) {
+                                Some(v) => v,
+                                None => fail!(DEAD_OBJECT),
                             }
-                            self.entity_field(host, notifies, field_spawns, id, name)
                         }
                         // An array's key count, a string's length. `_load.gsc` loops on it.
                         Value::Array(id) if name == self.size_atom => {
@@ -1741,8 +1739,8 @@ impl Vm {
         exit
     }
 
-    /// `get_field` on a live entity, through a `Cx` whose spawns go
-    /// nowhere (see [`Spawns`]).
+    /// An entity's field, `None` for a dead entity, through a `Cx` whose
+    /// spawns go nowhere (see [`Spawns`]).
     #[inline(never)]
     fn entity_field(
         &mut self,
@@ -1751,7 +1749,7 @@ impl Vm {
         field_spawns: &mut Vec<QueuedSpawn>,
         id: crate::value::EntId,
         name: Atom,
-    ) -> Value {
+    ) -> Option<Value> {
         let mut cx = Cx {
             interner: &mut self.interner,
             heap: &mut self.heap,
@@ -1760,7 +1758,7 @@ impl Vm {
             notifies,
             spawns: field_spawns,
         };
-        let v = host.get_field(&mut cx, id, name);
+        let v = host.get_live_field(&mut cx, id, name);
         debug_assert!(
             field_spawns.is_empty(),
             "Cx::spawn is only honoured from a builtin"
