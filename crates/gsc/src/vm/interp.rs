@@ -1,13 +1,15 @@
 //! The instruction loop: walks `bytecode::Op` over a frame stack until it
 //! suspends, returns, or the caller-supplied budget runs out.
 //!
-//! The loop matches each op by reference and holds the top frame across
-//! it; a call or return changes the frame stack after the op (`After`). A
-//! call's arguments and a builtin's are read in place off the caller's
-//! stack, and a returned frame's buffers go back to `Vm::frame_pool`. Two
-//! numbers of one type take an inline arm in the arithmetic and compare ops
-//! ahead of the general `eval_*` (docs/research/cod4-server-frame.md 9,
-//! "The spawn wave"; `tests/bench.rs` is the microbench).
+//! `run_ops` runs the top frame's ops with its ip, stack depth and budget
+//! in locals, over `Prepared::fast` (the fused runs) and a stack sized to
+//! the function's deepest; a call or return leaves it for `step_ops` to
+//! change the frame stack (`Exit`). A call's arguments and a builtin's are
+//! read in place off the caller's stack, and a returned frame's buffers go
+//! back to `Vm::frame_pool`. Two numbers of one type take an inline arm in
+//! the arithmetic and compare ops ahead of the general `eval_*`
+//! (docs/research/cod4-server-frame.md 9, "The spawn wave", and 9.2;
+//! `tests/bench.rs` is the microbench).
 
 use std::rc::Rc;
 
@@ -17,7 +19,7 @@ use crate::heap::ArrayKey;
 use crate::value::{FuncRef, Value, format_number};
 
 use super::sched::ThreadId;
-use super::{Cx, ErrorKind, Host, ScriptError, Target, Vm};
+use super::{Cx, ErrorKind, Host, QueuedSpawn, ScriptError, Target, Vm};
 
 /// Interpreter-internal: not part of the public API, since nothing outside
 /// this crate drives `step_frames` directly, and doing so needs the
@@ -37,12 +39,12 @@ pub(crate) struct Frame {
     pub func_rc: Rc<Function>,
     pub ip: u32,
     pub locals: Vec<Value>,
+    /// The operand stack's buffer: its first `sp` values are the stack,
+    /// the rest stale values a returned frame's run left, overwritten as
+    /// the stack grows back over them.
     pub stack: Vec<Value>,
+    pub sp: u32,
     pub recv: Option<Target>,
-    /// The operand stack's depth before the instruction now running, so a
-    /// runtime error the VM recovers from (`Vm::set_recover_errors`) can
-    /// put the stack back as that instruction's `stack_effect` leaves it.
-    pub op_base: u32,
     /// Test-only: what this frame's `stack` length must be once the call
     /// currently running on top of it returns, per `stack_effect`'s
     /// declared `(pop, push)` for that `Call`/`CallPtr`. Lives on the frame,
@@ -53,14 +55,40 @@ pub(crate) struct Frame {
     stack_effect_check: Option<i32>,
 }
 
-/// An op's change to the frame stack, made after the op's own work on the
-/// top frame.
-enum After {
-    Next,
-    /// A call's new frame, waiting in `step_ops`'s `called`.
-    Call,
-    /// The top frame returned this.
+impl Frame {
+    /// Pushes onto the operand stack from outside the op loop: a call's
+    /// value landing on its caller.
+    pub(crate) fn push(&mut self, v: Value) {
+        let sp = self.sp as usize;
+        if sp < self.stack.len() {
+            self.stack[sp] = v;
+        } else {
+            self.stack.push(v);
+        }
+        self.sp += 1;
+    }
+}
+
+/// How [`Vm::run_ops`] left its frame.
+enum Exit {
+    /// A call's new frame, for the frame stack's top.
+    Call(Frame),
+    /// The frame returned this.
     Return(Value),
+    Step(Step),
+    /// The op at the frame's `ip - 1` failed.
+    Err(ErrorKind),
+}
+
+/// The spawns a builtin queues (`Cx::spawn`), drained by `Op::CallBuiltin`
+/// the moment it returns, and a field hook's queue, asserted empty at each
+/// hook rather than routed anywhere: `Op::CallBuiltin` is the only drain
+/// point, so a spawn from `get_field`/`set_field` has no defined moment to
+/// run at.
+#[derive(Default)]
+struct Spawns {
+    pending: Vec<QueuedSpawn>,
+    field: Vec<QueuedSpawn>,
 }
 
 /// What one step of the interpreter can produce. Interpreter-internal, same
@@ -486,8 +514,8 @@ impl Vm {
             ip: 0,
             locals,
             stack,
+            sp: 0,
             recv,
-            op_base: 0,
             #[cfg(test)]
             stack_effect_check: None,
         }
@@ -498,10 +526,9 @@ impl Vm {
     /// call stack it has seen unwind, up to [`FRAME_POOL_MAX`].
     fn recycle_frame(&mut self, f: Frame) {
         if self.frame_pool.len() < FRAME_POOL_MAX {
-            let (mut locals, mut stack) = (f.locals, f.stack);
+            let mut locals = f.locals;
             locals.clear();
-            stack.clear();
-            self.frame_pool.push((locals, stack));
+            self.frame_pool.push((locals, f.stack));
         }
     }
 
@@ -554,11 +581,15 @@ impl Vm {
                     self.record_error(&e, true);
                     errors.push(e);
                     let f = frames.last_mut().expect("an error leaves its frame on top");
-                    let (pops, pushes) = crate::bytecode::stack_effect(
-                        &f.func_rc.code[(f.ip as usize).saturating_sub(1)],
-                    );
-                    f.stack.truncate((f.op_base as i32 - pops).max(0) as usize);
-                    f.stack.extend((0..pushes).map(|_| Value::Undefined));
+                    let at = (f.ip as usize).saturating_sub(1);
+                    let (pops, pushes) = crate::bytecode::stack_effect(&f.func_rc.code[at]);
+                    // The failed op's depth on entry, which every path to it
+                    // agrees on (`bytecode::Prepared::depths`).
+                    let base = f.func_rc.prepared.depths.get(at).copied().unwrap_or(f.sp);
+                    f.sp = f.sp.min((base as i32 - pops).max(0) as u32);
+                    for _ in 0..pushes {
+                        f.push(Value::Undefined);
+                    }
                 }
                 r => return r,
             }
@@ -566,6 +597,8 @@ impl Vm {
     }
 
     /// `step_frames` without the recovery: the first error ends the call.
+    /// Runs the top frame's ops in [`Self::run_ops`] and makes the frame
+    /// stack's change a call or return leaves behind.
     fn step_ops(
         &mut self,
         host: &mut dyn Host,
@@ -575,107 +608,245 @@ impl Vm {
         notifies: &mut Vec<(Target, Atom, Vec<Value>)>,
         errors: &mut Vec<ScriptError>,
     ) -> Result<Step, ScriptError> {
+        // CoD2: ended by a nested spawn's notify (`Vm::set_kill_mid_step`);
+        // the thread's entry is gone, so its frames are dropped.
+        if self.was_killed(thread_id) {
+            return Ok(Step::Returned(Value::Undefined));
+        }
         // What a builtin queued through `Cx::spawn`, drained by
-        // `Op::CallBuiltin` the moment the builtin returns.
-        let mut pending_spawns = Vec::new();
-        // A field hook's own queue, asserted empty at each hook rather than
-        // routed anywhere: `Op::CallBuiltin` is the only drain point, so a
-        // spawn from `get_field`/`set_field` has no defined moment to run at.
-        let mut field_spawns = Vec::new();
-        // The top frame's function, taken again only when the frame stack's
-        // depth moves: one op pushes or pops at most one frame, so the top
-        // frame changes only with the depth.
-        let mut depth = frames.len();
-        let mut func = frames[depth - 1].func_rc.clone();
-        // A call's new frame, pushed once the op lets go of the top one.
-        let mut called: Option<Frame> = None;
-        // Whether a thread ran since `killed` was last read: only a spawn
-        // runs another thread, so only a spawn can end this one.
-        let mut spawned = true;
+        // `Op::CallBuiltin` the moment the builtin returns, and a field
+        // hook's own queue (see `run_ops`).
+        let mut spawns = Spawns::default();
         loop {
-            // CoD2: ended by a nested spawn's notify (`Vm::set_kill_mid_step`);
-            // the thread's entry is gone, so its frames are dropped.
-            if spawned {
-                spawned = false;
-                if !self.killed.is_empty() && thread_id.is_some_and(|id| self.killed.contains(&id))
-                {
-                    return Ok(Step::Returned(Value::Undefined));
-                }
-            }
-            if *remaining == 0 {
-                return Ok(Step::Running);
-            }
-            *remaining -= 1;
-            if frames.len() != depth {
-                depth = frames.len();
-                func = frames[depth - 1].func_rc.clone();
-            }
-            let top = depth - 1;
-            let fr = &mut frames[top];
-            fr.op_base = fr.stack.len() as u32;
-            let ip = fr.ip as usize;
-            fr.ip += 1;
-            let op = &func.code[ip];
-            let line = func.lines[ip];
-            let err = |kind: ErrorKind| ScriptError {
-                file: func.file,
-                func: func.name,
-                line,
-                kind,
-            };
-
-            macro_rules! pop {
-                () => {
-                    fr.stack.pop().expect("stack_depth guarantees a value here")
-                };
-            }
-            macro_rules! push {
-                ($v:expr) => {
-                    fr.stack.push($v)
-                };
-            }
-
-            // Test-only: captured before the match below, so `stack_effect`'s table can be checked against what
-            // this instruction actually does to the operand stack. A
-            // non-threaded `Call`/`CallPtr` doesn't push its declared
-            // return value onto *this* frame -- it pushes a new one and the
-            // value lands on this frame only once the callee's `Return`
-            // runs, possibly in a later `step_frames` call -- so those, and
-            // `Return`/`ReturnUndef`, are checked as a pair via
-            // `Frame::stack_effect_check` instead of a same-instruction
-            // delta.
-            #[cfg(test)]
-            let (dbg_pop, dbg_push) = crate::bytecode::stack_effect(op);
-            #[cfg(test)]
-            let dbg_is_call = matches!(
-                op,
-                Op::Call {
-                    threaded: false,
-                    ..
-                } | Op::CallPtr {
-                    threaded: false,
-                    ..
-                }
+            let depth = frames.len();
+            let fr = frames.last_mut().expect("a frame is running");
+            let exit = self.run_ops(
+                host,
+                fr,
+                depth,
+                remaining,
+                thread_id,
+                notifies,
+                errors,
+                &mut spawns,
             );
+            match exit {
+                Exit::Call(frame) => frames.push(frame),
+                Exit::Return(v) => {
+                    let done = frames.pop().expect("a frame is running");
+                    self.recycle_frame(done);
+                    self.end_call_endons(thread_id, frames.len());
+                    let Some(caller) = frames.last_mut() else {
+                        return Ok(Step::Returned(v));
+                    };
+                    caller.push(v);
+                    #[cfg(test)]
+                    {
+                        let expected = caller.stack_effect_check.take().unwrap_or_else(|| {
+                            panic!("a return into a frame with no pending call expectation")
+                        });
+                        assert_eq!(
+                            caller.sp as i32, expected,
+                            "stack_effect disagreement across a call/return pair"
+                        );
+                    }
+                }
+                Exit::Step(step) => return Ok(step),
+                Exit::Err(kind) => {
+                    let f = frames.last().expect("an error leaves its frame on top");
+                    return Err(ScriptError {
+                        file: f.func_rc.file,
+                        func: f.func_rc.name,
+                        line: f.func_rc.lines[(f.ip as usize).saturating_sub(1)],
+                        kind,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Whether `thread_id` was ended by a thread a spawn ran: only a spawn
+    /// runs another thread, so only after one can this one have ended.
+    fn was_killed(&self, thread_id: Option<ThreadId>) -> bool {
+        !self.killed.is_empty() && thread_id.is_some_and(|id| self.killed.contains(&id))
+    }
+
+    /// Runs `fr`'s ops until one calls, returns, suspends or fails, or the
+    /// budget runs out. The instruction pointer, the operand stack's depth
+    /// and the budget live in locals here and go back to `fr` and
+    /// `remaining` on the way out. `depth` is the frame stack's depth with
+    /// `fr` on top.
+    #[allow(clippy::too_many_arguments)]
+    fn run_ops(
+        &mut self,
+        host: &mut dyn Host,
+        fr: &mut Frame,
+        depth: usize,
+        remaining: &mut u32,
+        thread_id: Option<ThreadId>,
+        notifies: &mut Vec<(Target, Atom, Vec<Value>)>,
+        errors: &mut Vec<ScriptError>,
+        spawns: &mut Spawns,
+    ) -> Exit {
+        let Frame {
+            func_rc,
+            ip: frame_ip,
+            locals,
+            stack,
+            sp: frame_sp,
+            recv: frame_recv,
             #[cfg(test)]
-            let dbg_is_return = matches!(op, Op::Return | Op::ReturnUndef);
+            stack_effect_check,
+            ..
+        } = fr;
+        let func: &Function = func_rc;
+        let code = &func.code[..];
+        // What runs: `code` with its runs fused (`bytecode::fuse`).
+        let fast = if func.prepared.fast.len() == code.len() {
+            &func.prepared.fast[..]
+        } else {
+            code
+        };
+        let locals = &mut locals[..];
+        let self_recv = *frame_recv;
+        let mut ip = *frame_ip as usize;
+        let mut sp = *frame_sp as usize;
+        let mut left = *remaining;
+        let Spawns {
+            pending: pending_spawns,
+            field: field_spawns,
+        } = spawns;
+
+        // Sized for the deepest the function's code goes (`stack_depth`),
+        // so a push only stores.
+        let need = func.prepared.max_stack as usize;
+        if stack.len() < need {
+            stack.resize(need, Value::Undefined);
+        }
+        let stack = &mut stack[..];
+        macro_rules! pop {
+            () => {{
+                sp -= 1;
+                stack[sp]
+            }};
+        }
+        macro_rules! push {
+            ($v:expr) => {{
+                stack[sp] = $v;
+                sp += 1;
+            }};
+        }
+        // Ends the run with an error raised by the op now running.
+        macro_rules! fail {
+            ($kind:expr) => {
+                break Exit::Err($kind)
+            };
+        }
+        macro_rules! tri {
+            ($e:expr) => {
+                match $e {
+                    Ok(v) => v,
+                    Err(kind) => fail!(kind),
+                }
+            };
+        }
+
+        // `LoadField`'s answer for a value it reads without failing:
+        // `None` for a dead entity or a value with no such field.
+        macro_rules! field_of {
+            ($obj:expr, $name:expr) => {{
+                let name = $name;
+                match $obj {
+                    Value::Struct(_) | Value::Entity(_) if name == self.size_atom => {
+                        Some(Value::Int(1))
+                    }
+                    Value::Struct(id) => Some(self.heap.get_field(id, name)),
+                    Value::Entity(id) => self.entity_field(host, notifies, field_spawns, id, name),
+                    Value::Array(id) if name == self.size_atom => {
+                        Some(Value::Int(self.heap.array_len(id) as i32))
+                    }
+                    Value::String(a) if name == self.size_atom => {
+                        Some(Value::Int(self.interner.resolve(a).len() as i32))
+                    }
+                    _ => None,
+                }
+            }};
+        }
+        // A fused compare and `JumpIfFalse`: `Lt`'s two floats inline, any
+        // other pair through `numeric_cmp`, as the compare ops do.
+        macro_rules! cmp_jump {
+            ($to:expr, $cmp:tt) => {{
+                let b = pop!();
+                let a = pop!();
+                let r = match (a, b) {
+                    (Value::Float(x), Value::Float(y)) => x $cmp y,
+                    _ => tri!(numeric_cmp(a, b, |x, y| x $cmp y)) == Value::Int(1),
+                };
+                if left > 0 {
+                    left -= 1;
+                    ip = if r { ip + 1 } else { $to as usize };
+                } else {
+                    push!(Value::Int(r as i32));
+                }
+            }};
+        }
+
+        // A fused `LoadLocal`/`Const`, compare and `JumpIfFalse`: two
+        // numbers compare as `numeric_cmp` does (as floats); any other pair
+        // runs the first op alone, so the compare's error comes from it.
+        macro_rules! operand_cmp_jump {
+            ($b:expr, $to:expr, $cmp:tt) => {{
+                let b = $b;
+                match (to_f32(stack[sp - 1]), to_f32(b)) {
+                    (Some(x), Some(y)) if left >= 2 => {
+                        left -= 2;
+                        sp -= 1;
+                        ip = if x $cmp y { ip + 2 } else { $to as usize };
+                    }
+                    _ => push!(b),
+                }
+            }};
+        }
+
+        let exit = loop {
+            if left == 0 {
+                break Exit::Step(Step::Running);
+            }
+            left -= 1;
+            let at = ip;
+            let op = &fast[at];
+            ip += 1;
             #[cfg(test)]
-            let dbg_stack_before = fr.stack.len() as i32;
+            let base_sp = sp;
+            #[cfg(test)]
+            if let Some(&d) = func.prepared.depths.get(at) {
+                assert_eq!(
+                    sp, d as usize,
+                    "the stack's depth at {at} is not the walk's"
+                );
+            }
+            // A spawn ran another thread, which may have ended this one.
+            let mut spawned = false;
+
+            // Test-only: `stack_effect`'s table checked against what this
+            // op does to the operand stack. A non-threaded `Call`/`CallPtr`
+            // pushes its value onto this frame only once the callee's
+            // `Return` runs, so that pair is checked through
+            // `Frame::stack_effect_check` instead (`step_ops`).
+            #[cfg(test)]
+            let (dbg_pop, dbg_push) = crate::bytecode::stack_effect(&code[at]);
             #[cfg(test)]
             let dbg_op_repr = format!("{op:?}");
+            #[cfg(test)]
+            let dbg_left = left;
 
-            // What the op does to the frame stack, once `fr` is let go.
-            let mut after = After::Next;
             match *op {
                 Op::Const(idx) => push!(func.consts[idx as usize]),
-                Op::LoadLocal(slot) => {
-                    let v = fr.locals[slot as usize];
-                    push!(v);
-                }
+                Op::LoadLocal(slot) => push!(locals[slot as usize]),
                 Op::StoreLocal(slot) => {
                     let v = pop!();
                     self.heap.share(v);
-                    fr.locals[slot as usize] = v;
+                    locals[slot as usize] = v;
                 }
                 Op::LoadField(name) => {
                     let obj = pop!();
@@ -687,23 +858,10 @@ impl Vm {
                         }
                         Value::Struct(id) => self.heap.get_field(id, name),
                         Value::Entity(id) => {
-                            if !host.is_live(id) {
-                                return Err(err(DEAD_OBJECT));
+                            match self.entity_field(host, notifies, field_spawns, id, name) {
+                                Some(v) => v,
+                                None => fail!(DEAD_OBJECT),
                             }
-                            let mut cx = Cx {
-                                interner: &mut self.interner,
-                                heap: &mut self.heap,
-                                level: self.level,
-                                game: self.game,
-                                notifies,
-                                spawns: &mut field_spawns,
-                            };
-                            let v = host.get_field(&mut cx, id, name);
-                            debug_assert!(
-                                field_spawns.is_empty(),
-                                "Cx::spawn is only honoured from a builtin"
-                            );
-                            v
                         }
                         // An array's key count, a string's length. `_load.gsc` loops on it.
                         Value::Array(id) if name == self.size_atom => {
@@ -712,11 +870,7 @@ impl Vm {
                         Value::String(a) if name == self.size_atom => {
                             Value::Int(self.interner.resolve(a).len() as i32)
                         }
-                        _ => {
-                            return Err(err(ErrorKind::BadType(
-                                "field access needs a struct or entity",
-                            )));
-                        }
+                        _ => fail!(ErrorKind::BadType("field access needs a struct or entity")),
                     };
                     push!(v);
                 }
@@ -728,7 +882,7 @@ impl Vm {
                         Value::Struct(id) => self.heap.set_field(id, name, v),
                         Value::Entity(id) => {
                             if !host.is_live(id) {
-                                return Err(err(DEAD_OBJECT));
+                                fail!(DEAD_OBJECT);
                             }
                             let mut cx = Cx {
                                 interner: &mut self.interner,
@@ -736,58 +890,60 @@ impl Vm {
                                 level: self.level,
                                 game: self.game,
                                 notifies,
-                                spawns: &mut field_spawns,
+                                spawns: field_spawns,
                             };
-                            host.store_field(&mut cx, id, name, v).map_err(err)?;
+                            tri!(host.store_field(&mut cx, id, name, v));
                             debug_assert!(
                                 field_spawns.is_empty(),
                                 "Cx::spawn is only honoured from a builtin"
                             );
                         }
-                        _ => {
-                            return Err(err(ErrorKind::BadType(
-                                "field assignment needs a struct or entity",
-                            )));
-                        }
+                        _ => fail!(ErrorKind::BadType(
+                            "field assignment needs a struct or entity"
+                        )),
                     }
                 }
                 Op::LoadIndex => {
                     let key = pop!();
                     let obj = pop!();
-                    // A vector reads its components under 0..2 as floats:
-                    // `_utility::vectorScale` does so on every stock S&D
-                    // plant. What retail does with any other key is
-                    // unmeasured, so it is refused rather than guessed.
-                    if let Value::Vector(v) = obj {
-                        let Value::Int(i @ 0..=2) = key else {
-                            return Err(err(ErrorKind::BadType("vector index must be 0, 1 or 2")));
-                        };
-                        push!(Value::Float(v[i as usize]));
-                        continue;
-                    }
-                    // A string reads one character under an int key; past
-                    // the end is fatal (`probe_string_index`, 1.1d and UO).
-                    // UO's `_gameobjects::main` splits a name this way.
-                    if let Value::String(a) = obj {
-                        let Value::Int(i) = key else {
-                            return Err(err(ErrorKind::BadType("string index must be an int")));
-                        };
-                        let s = self.interner.resolve(a);
-                        let Some(&b) = usize::try_from(i).ok().and_then(|i| s.as_bytes().get(i))
-                        else {
-                            return Err(err(ErrorKind::BadType("string index out of range")));
-                        };
-                        let c = (b as char).to_string();
-                        push!(Value::String(self.interner.intern_exact(&c)));
-                        continue;
-                    }
-                    let Value::Array(id) = obj else {
-                        return Err(err(ErrorKind::BadType("indexing needs an array")));
+                    let v = match obj {
+                        Value::Array(id) => {
+                            let Some(k) = array_key(key) else {
+                                fail!(ErrorKind::BadType("array key must be a string or a number"));
+                            };
+                            self.heap.get_index(id, k)
+                        }
+                        // A vector reads its components under 0..2 as
+                        // floats: `_utility::vectorScale` does so on every
+                        // stock S&D plant. What retail does with any other
+                        // key is unmeasured, so it is refused rather than
+                        // guessed.
+                        Value::Vector(v) => {
+                            let Value::Int(i @ 0..=2) = key else {
+                                fail!(ErrorKind::BadType("vector index must be 0, 1 or 2"));
+                            };
+                            Value::Float(v[i as usize])
+                        }
+                        // A string reads one character under an int key;
+                        // past the end is fatal (`probe_string_index`, 1.1d
+                        // and UO). UO's `_gameobjects::main` splits a name
+                        // this way.
+                        Value::String(a) => {
+                            let Value::Int(i) = key else {
+                                fail!(ErrorKind::BadType("string index must be an int"));
+                            };
+                            let s = self.interner.resolve(a);
+                            let Some(&b) =
+                                usize::try_from(i).ok().and_then(|i| s.as_bytes().get(i))
+                            else {
+                                fail!(ErrorKind::BadType("string index out of range"));
+                            };
+                            let c = (b as char).to_string();
+                            Value::String(self.interner.intern_exact(&c))
+                        }
+                        _ => fail!(ErrorKind::BadType("indexing needs an array")),
                     };
-                    let k = array_key(key).ok_or_else(|| {
-                        err(ErrorKind::BadType("array key must be a string or a number"))
-                    })?;
-                    push!(self.heap.get_index(id, k));
+                    push!(v);
                 }
                 Op::StoreIndex => {
                     let v = pop!();
@@ -795,30 +951,29 @@ impl Vm {
                     let obj = pop!();
                     self.heap.share(v);
                     let Value::Array(id) = obj else {
-                        return Err(err(ErrorKind::BadType("indexing needs an array")));
+                        fail!(ErrorKind::BadType("indexing needs an array"));
                     };
-                    let k = array_key(key).ok_or_else(|| {
-                        err(ErrorKind::BadType("array key must be a string or a number"))
-                    })?;
+                    let Some(k) = array_key(key) else {
+                        fail!(ErrorKind::BadType("array key must be a string or a number"));
+                    };
                     self.heap.set_index(id, k, v);
                 }
                 Op::OwnLocal(slot) => {
-                    if let Value::Array(id) = fr.locals[slot as usize] {
+                    if let Value::Array(id) = locals[slot as usize] {
                         let own = self.heap.own(id);
-                        fr.locals[slot as usize] = Value::Array(own);
+                        locals[slot as usize] = Value::Array(own);
                     }
-                    let v = fr.locals[slot as usize];
-                    push!(v);
+                    push!(locals[slot as usize]);
                 }
                 Op::ClearIndex => {
                     let key = pop!();
                     let obj = pop!();
                     let Value::Array(id) = obj else {
-                        return Err(err(ErrorKind::BadType("indexing needs an array")));
+                        fail!(ErrorKind::BadType("indexing needs an array"));
                     };
-                    let k = array_key(key).ok_or_else(|| {
-                        err(ErrorKind::BadType("array key must be a string or a number"))
-                    })?;
+                    let Some(k) = array_key(key) else {
+                        fail!(ErrorKind::BadType("array key must be a string or a number"));
+                    };
                     self.heap.clear_index(id, k);
                 }
                 // Retail auto-vivifies an `Undefined` index-assignment target
@@ -829,18 +984,18 @@ impl Vm {
                 // Each also copies a shared array before the write
                 // (`Heap::own`) and stores the copy back where it was read.
                 Op::EnsureArrayLocal(slot) => {
-                    let id = match fr.locals[slot as usize] {
+                    let id = match locals[slot as usize] {
                         Value::Array(id) => {
                             let own = self.heap.own(id);
-                            fr.locals[slot as usize] = Value::Array(own);
+                            locals[slot as usize] = Value::Array(own);
                             own
                         }
                         Value::Undefined => {
                             let id = self.heap.new_array();
-                            fr.locals[slot as usize] = Value::Array(id);
+                            locals[slot as usize] = Value::Array(id);
                             id
                         }
-                        _ => return Err(err(ErrorKind::BadType("indexing needs an array"))),
+                        _ => fail!(ErrorKind::BadType("indexing needs an array")),
                     };
                     push!(Value::Array(id));
                 }
@@ -860,11 +1015,11 @@ impl Vm {
                                 self.heap.set_field(sid, name, Value::Array(id));
                                 id
                             }
-                            _ => return Err(err(ErrorKind::BadType("indexing needs an array"))),
+                            _ => fail!(ErrorKind::BadType("indexing needs an array")),
                         },
                         Value::Entity(eid) => {
                             if !host.is_live(eid) {
-                                return Err(err(DEAD_OBJECT));
+                                fail!(DEAD_OBJECT);
                             }
                             let mut cx = Cx {
                                 interner: &mut self.interner,
@@ -872,7 +1027,7 @@ impl Vm {
                                 level: self.level,
                                 game: self.game,
                                 notifies,
-                                spawns: &mut field_spawns,
+                                spawns: field_spawns,
                             };
                             let cur = host.get_field(&mut cx, eid, name);
                             debug_assert!(
@@ -889,10 +1044,14 @@ impl Vm {
                                             level: self.level,
                                             game: self.game,
                                             notifies,
-                                            spawns: &mut field_spawns,
+                                            spawns: field_spawns,
                                         };
-                                        host.store_field(&mut cx, eid, name, Value::Array(own))
-                                            .map_err(err)?;
+                                        tri!(host.store_field(
+                                            &mut cx,
+                                            eid,
+                                            name,
+                                            Value::Array(own)
+                                        ));
                                     }
                                     own
                                 }
@@ -904,26 +1063,21 @@ impl Vm {
                                         level: self.level,
                                         game: self.game,
                                         notifies,
-                                        spawns: &mut field_spawns,
+                                        spawns: field_spawns,
                                     };
-                                    host.store_field(&mut cx, eid, name, Value::Array(id))
-                                        .map_err(err)?;
+                                    tri!(host.store_field(&mut cx, eid, name, Value::Array(id)));
                                     debug_assert!(
                                         field_spawns.is_empty(),
                                         "Cx::spawn is only honoured from a builtin"
                                     );
                                     id
                                 }
-                                _ => {
-                                    return Err(err(ErrorKind::BadType("indexing needs an array")));
-                                }
+                                _ => fail!(ErrorKind::BadType("indexing needs an array")),
                             }
                         }
-                        _ => {
-                            return Err(err(ErrorKind::BadType(
-                                "field assignment needs a struct or entity",
-                            )));
-                        }
+                        _ => fail!(ErrorKind::BadType(
+                            "field assignment needs a struct or entity"
+                        )),
                     };
                     push!(Value::Array(id));
                 }
@@ -931,11 +1085,11 @@ impl Vm {
                     let key = pop!();
                     let obj = pop!();
                     let Value::Array(outer) = obj else {
-                        return Err(err(ErrorKind::BadType("indexing needs an array")));
+                        fail!(ErrorKind::BadType("indexing needs an array"));
                     };
-                    let k = array_key(key).ok_or_else(|| {
-                        err(ErrorKind::BadType("array key must be a string or a number"))
-                    })?;
+                    let Some(k) = array_key(key) else {
+                        fail!(ErrorKind::BadType("array key must be a string or a number"));
+                    };
                     let id = match self.heap.get_index(outer, k) {
                         Value::Array(id) => {
                             let own = self.heap.own(id);
@@ -949,13 +1103,12 @@ impl Vm {
                             self.heap.set_index(outer, k, Value::Array(id));
                             id
                         }
-                        _ => return Err(err(ErrorKind::BadType("indexing needs an array"))),
+                        _ => fail!(ErrorKind::BadType("indexing needs an array")),
                     };
                     push!(Value::Array(id));
                 }
                 Op::LoadSelf => {
-                    let v = fr.recv.map(target_to_value).unwrap_or(Value::Undefined);
-                    push!(v);
+                    push!(self_recv.map(target_to_value).unwrap_or(Value::Undefined))
                 }
                 Op::LoadLevel => push!(Value::Struct(self.level)),
                 // `game` is array-typed on retail, measured
@@ -974,10 +1127,9 @@ impl Vm {
                     let z = pop!();
                     let y = pop!();
                     let x = pop!();
-                    let bad = || err(ErrorKind::BadType("vector component must be a number"));
-                    let x = to_f32(x).ok_or_else(bad)?;
-                    let y = to_f32(y).ok_or_else(bad)?;
-                    let z = to_f32(z).ok_or_else(bad)?;
+                    let (Some(x), Some(y), Some(z)) = (to_f32(x), to_f32(y), to_f32(z)) else {
+                        fail!(ErrorKind::BadType("vector component must be a number"));
+                    };
                     push!(Value::Vector([x, y, z]));
                 }
                 Op::Call {
@@ -986,37 +1138,35 @@ impl Vm {
                     has_recv,
                     threaded,
                 } => {
-                    let callee = self.functions.get(&target).cloned().ok_or_else(|| {
-                        err(ErrorKind::Custom(format!(
-                            "no such function {}::{}",
-                            self.interner.resolve(target.file),
-                            self.interner.resolve(target.name)
-                        )))
-                    })?;
+                    let Some(callee) = self.functions.get(&target).cloned() else {
+                        fail!(self.no_such_function("no such function", target));
+                    };
                     // The arguments are the stack's top `argc` values, the
                     // receiver under them. A receiver-less call inherits the
                     // caller's `self`, which is what carries the client
                     // entity from `CodeCallback_PlayerConnect` into the
                     // gametype's own callback (probe_self).
-                    let stack = &fr.stack;
-                    let base = stack.len() - argc as usize;
+                    let base = sp - argc as usize;
                     let recv = if has_recv {
                         as_target(stack[base - 1])
                     } else {
-                        fr.recv
+                        self_recv
                     };
                     if threaded {
-                        let args = stack[base..].to_vec();
-                        fr.stack.truncate(base - usize::from(has_recv));
+                        let args = stack[base..sp].to_vec();
+                        sp = base - usize::from(has_recv);
                         self.spawn(host, target, callee, recv, args, errors);
                         spawned = true;
                         let v = self.thread_returned.take().filter(|_| self.thread_returns);
                         push!(v.unwrap_or(Value::Undefined));
                     } else {
-                        let frame = self.make_frame_from(target, callee, recv, &stack[base..]);
-                        fr.stack.truncate(base - usize::from(has_recv));
-                        called = Some(frame);
-                        after = After::Call;
+                        let frame = self.make_frame_from(target, callee, recv, &stack[base..sp]);
+                        sp = base - usize::from(has_recv);
+                        #[cfg(test)]
+                        {
+                            *stack_effect_check = Some(base_sp as i32 - dbg_pop + dbg_push);
+                        }
+                        break Exit::Call(frame);
                     }
                 }
                 Op::CallBuiltin {
@@ -1026,16 +1176,16 @@ impl Vm {
                 } => {
                     // The builtin reads its arguments in place, off the
                     // stack's top `argc` values, the receiver under them.
-                    let base = fr.stack.len() - argc as usize;
+                    let base = sp - argc as usize;
                     let recv = if has_recv {
-                        as_target(fr.stack[base - 1])
+                        as_target(stack[base - 1])
                     } else {
                         None
                     };
                     if let Some(Target::Entity(id)) = recv
                         && !host.is_live(id)
                     {
-                        return Err(err(DEAD_ENTITY));
+                        fail!(DEAD_ENTITY);
                     }
                     let mut cx = Cx {
                         interner: &mut self.interner,
@@ -1043,52 +1193,18 @@ impl Vm {
                         level: self.level,
                         game: self.game,
                         notifies,
-                        spawns: &mut pending_spawns,
+                        spawns: pending_spawns,
                     };
-                    let v = host
-                        .builtin(&mut cx, name, recv, &fr.stack[base..])
-                        .map_err(err)?;
-                    fr.stack.truncate(base - usize::from(has_recv));
+                    let v = tri!(host.builtin(&mut cx, name, recv, &stack[base..sp]));
+                    sp = base - usize::from(has_recv);
                     // Retail's `Scr_ExecEntThread` from inside a builtin:
                     // each queued thread runs to its first suspend here,
                     // before the calling thread's next instruction (see
                     // `Cx::spawn`).
-                    let mut queue =
-                        std::collections::VecDeque::from(std::mem::take(&mut pending_spawns));
-                    while let Some(queued) = queue.pop_front() {
-                        let target = queued.func;
-                        match self.functions.get(&target).cloned() {
-                            Some(f) => {
-                                self.spawn(host, target, f, queued.recv, queued.args, errors);
-                                spawned = true;
-                            }
-                            None => {
-                                let e = err(ErrorKind::Custom(format!(
-                                    "spawn of unknown function {}::{}",
-                                    self.interner.resolve(target.file),
-                                    self.interner.resolve(target.name)
-                                )));
-                                self.record_abort(&e);
-                                errors.push(e);
-                            }
-                        }
-                        if let Some(token) = queued.then {
-                            let mut cx = Cx {
-                                interner: &mut self.interner,
-                                heap: &mut self.heap,
-                                level: self.level,
-                                game: self.game,
-                                notifies,
-                                spawns: &mut field_spawns,
-                            };
-                            host.spawn_returned(&mut cx, token);
-                            // The engine code after one `Scr_ExecEntThread`
-                            // may start the next: those threads go ahead of
-                            // the rest of the builtin's queue.
-                            for next in field_spawns.drain(..).rev() {
-                                queue.push_front(next);
-                            }
-                        }
+                    if !pending_spawns.is_empty() {
+                        let (pending, field) = (&mut *pending_spawns, &mut *field_spawns);
+                        spawned |= self
+                            .run_builtin_spawns(host, func, at, notifies, errors, pending, field);
                     }
                     push!(v);
                 }
@@ -1099,33 +1215,33 @@ impl Vm {
                 } => {
                     let ptr = pop!();
                     let Value::Function(target) = ptr else {
-                        return Err(err(ErrorKind::BadType(
-                            "call target is not a function pointer",
-                        )));
+                        fail!(ErrorKind::BadType("call target is not a function pointer"));
                     };
-                    let mut args = Vec::with_capacity(argc as usize);
-                    for _ in 0..argc {
-                        args.push(pop!());
-                    }
-                    args.reverse();
+                    let base = sp - argc as usize;
+                    sp = base;
                     // Same inheritance as `Op::Call`; `[[f]]()` is how
                     // `_callbacksetup` reaches every gametype callback.
-                    let recv = if has_recv { as_target(pop!()) } else { fr.recv };
-                    let callee = self.functions.get(&target).cloned().ok_or_else(|| {
-                        err(ErrorKind::Custom(format!(
-                            "no such function {}::{}",
-                            self.interner.resolve(target.file),
-                            self.interner.resolve(target.name)
-                        )))
-                    })?;
+                    let recv = if has_recv {
+                        as_target(pop!())
+                    } else {
+                        self_recv
+                    };
+                    let Some(callee) = self.functions.get(&target).cloned() else {
+                        fail!(self.no_such_function("no such function", target));
+                    };
+                    let args = &stack[base..base + argc as usize];
                     if threaded {
-                        self.spawn(host, target, callee, recv, args, errors);
+                        self.spawn(host, target, callee, recv, args.to_vec(), errors);
                         spawned = true;
                         let v = self.thread_returned.take().filter(|_| self.thread_returns);
                         push!(v.unwrap_or(Value::Undefined));
                     } else {
-                        called = Some(self.make_frame(target, callee, recv, args));
-                        after = After::Call;
+                        let frame = self.make_frame_from(target, callee, recv, args);
+                        #[cfg(test)]
+                        {
+                            *stack_effect_check = Some(base_sp as i32 - dbg_pop + dbg_push);
+                        }
+                        break Exit::Call(frame);
                     }
                 }
                 // Two numbers inline, as `eval_*` answers them; any other
@@ -1136,7 +1252,7 @@ impl Vm {
                     let v = match (a, b) {
                         (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_add(y)),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
-                        _ => eval_add(&mut self.interner, a, b).map_err(err)?,
+                        _ => tri!(eval_add(&mut self.interner, a, b)),
                     };
                     push!(v);
                 }
@@ -1146,7 +1262,7 @@ impl Vm {
                     let v = match (a, b) {
                         (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_sub(y)),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
-                        _ => eval_sub(a, b).map_err(err)?,
+                        _ => tri!(eval_sub(a, b)),
                     };
                     push!(v);
                 }
@@ -1156,14 +1272,14 @@ impl Vm {
                     let v = match (a, b) {
                         (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_mul(y)),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
-                        _ => eval_mul(a, b).map_err(err)?,
+                        _ => tri!(eval_mul(a, b)),
                     };
                     push!(v);
                 }
                 Op::Div => {
                     let b = pop!();
                     let a = pop!();
-                    push!(eval_div(a, b).map_err(err)?);
+                    push!(tri!(eval_div(a, b)));
                 }
                 Op::MulNumber => {
                     let b = pop!();
@@ -1171,21 +1287,21 @@ impl Vm {
                     let v = match (a, b) {
                         (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
                         (Value::Vector(_), _) | (_, Value::Vector(_)) => {
-                            return Err(err(ErrorKind::BadType("pair has unmatching types")));
+                            fail!(ErrorKind::BadType("pair has unmatching types"));
                         }
-                        _ => eval_mul(a, b).map_err(err)?,
+                        _ => tri!(eval_mul(a, b)),
                     };
                     push!(v);
                 }
                 Op::MulVector => {
                     let b = pop!();
                     let a = pop!();
-                    push!(eval_vector_op(a, b, false).map_err(err)?);
+                    push!(tri!(eval_vector_op(a, b, false)));
                 }
                 Op::DivVector => {
                     let b = pop!();
                     let a = pop!();
-                    push!(eval_vector_op(a, b, true).map_err(err)?);
+                    push!(tri!(eval_vector_op(a, b, true)));
                 }
                 Op::DivFloat => {
                     let b = pop!();
@@ -1197,49 +1313,47 @@ impl Vm {
                         ab => ab,
                     };
                     let v = match (a, b) {
-                        (_, Value::Float(0.0)) => {
-                            return Err(err(ErrorKind::BadType("division by zero")));
-                        }
+                        (_, Value::Float(0.0)) => fail!(ErrorKind::BadType("division by zero")),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x / y),
-                        _ => eval_div(a, b).map_err(err)?,
+                        _ => tri!(eval_div(a, b)),
                     };
                     push!(v);
                 }
                 Op::Mod => {
                     let b = pop!();
                     let a = pop!();
-                    push!(eval_mod(a, b).map_err(err)?);
+                    push!(tri!(eval_mod(a, b)));
                 }
                 Op::BitAnd => {
                     let b = pop!();
                     let a = pop!();
-                    push!(eval_bitand(a, b).map_err(err)?);
+                    push!(tri!(eval_bitand(a, b)));
                 }
                 Op::BitOr => {
                     let b = pop!();
                     let a = pop!();
-                    push!(eval_bitor(a, b).map_err(err)?);
+                    push!(tri!(eval_bitor(a, b)));
                 }
                 Op::BitXor => {
                     let b = pop!();
                     let a = pop!();
-                    push!(eval_bitxor(a, b).map_err(err)?);
+                    push!(tri!(eval_bitxor(a, b)));
                 }
                 Op::Shl | Op::Shr => {
                     let b = pop!();
                     let a = pop!();
-                    push!(eval_shift(a, b, matches!(op, Op::Shl)).map_err(err)?);
+                    push!(tri!(eval_shift(a, b, matches!(op, Op::Shl))));
                 }
                 Op::Eq => {
                     let b = pop!();
                     let a = pop!();
-                    let eq = values_equal(&self.interner, a, b).map_err(err)?;
+                    let eq = tri!(values_equal(&self.interner, a, b));
                     push!(Value::Int(eq as i32));
                 }
                 Op::Ne => {
                     let b = pop!();
                     let a = pop!();
-                    let eq = values_equal(&self.interner, a, b).map_err(err)?;
+                    let eq = tri!(values_equal(&self.interner, a, b));
                     push!(Value::Int(!eq as i32));
                 }
                 Op::Lt => {
@@ -1247,7 +1361,7 @@ impl Vm {
                     let a = pop!();
                     let v = match (a, b) {
                         (Value::Float(x), Value::Float(y)) => Value::Int((x < y) as i32),
-                        _ => numeric_cmp(a, b, |x, y| x < y).map_err(err)?,
+                        _ => tri!(numeric_cmp(a, b, |x, y| x < y)),
                     };
                     push!(v);
                 }
@@ -1256,7 +1370,7 @@ impl Vm {
                     let a = pop!();
                     let v = match (a, b) {
                         (Value::Float(x), Value::Float(y)) => Value::Int((x > y) as i32),
-                        _ => numeric_cmp(a, b, |x, y| x > y).map_err(err)?,
+                        _ => tri!(numeric_cmp(a, b, |x, y| x > y)),
                     };
                     push!(v);
                 }
@@ -1265,7 +1379,7 @@ impl Vm {
                     let a = pop!();
                     let v = match (a, b) {
                         (Value::Float(x), Value::Float(y)) => Value::Int((x <= y) as i32),
-                        _ => numeric_cmp(a, b, |x, y| x <= y).map_err(err)?,
+                        _ => tri!(numeric_cmp(a, b, |x, y| x <= y)),
                     };
                     push!(v);
                 }
@@ -1274,17 +1388,17 @@ impl Vm {
                     let a = pop!();
                     let v = match (a, b) {
                         (Value::Float(x), Value::Float(y)) => Value::Int((x >= y) as i32),
-                        _ => numeric_cmp(a, b, |x, y| x >= y).map_err(err)?,
+                        _ => tri!(numeric_cmp(a, b, |x, y| x >= y)),
                     };
                     push!(v);
                 }
                 Op::Neg => {
                     let v = pop!();
-                    push!(eval_neg(v).map_err(err)?);
+                    push!(tri!(eval_neg(v)));
                 }
                 Op::Not => {
                     let v = pop!();
-                    push!(Value::Int(not_of(v, &self.interner).map_err(err)? as i32));
+                    push!(Value::Int(tri!(not_of(v, &self.interner)) as i32));
                 }
                 Op::CastInt => {
                     let v = pop!();
@@ -1293,11 +1407,14 @@ impl Vm {
                         Value::Float(f) => f as i32,
                         Value::String(s) | Value::Localized(s) => {
                             let text = self.interner.resolve(s);
-                            string_int(text).ok_or_else(|| {
-                                err(ErrorKind::Custom(format!("cannot cast \"{text}\" to int")))
-                            })?
+                            match string_int(text) {
+                                Some(i) => i,
+                                None => fail!(ErrorKind::Custom(format!(
+                                    "cannot cast \"{text}\" to int"
+                                ))),
+                            }
                         }
-                        _ => return Err(err(ErrorKind::BadType("(int) needs a number"))),
+                        _ => fail!(ErrorKind::BadType("(int) needs a number")),
                     };
                     push!(Value::Int(i));
                 }
@@ -1308,13 +1425,14 @@ impl Vm {
                         Value::Float(f) => f,
                         Value::String(s) | Value::Localized(s) => {
                             let text = self.interner.resolve(s);
-                            string_float(text).ok_or_else(|| {
-                                err(ErrorKind::Custom(format!(
+                            match string_float(text) {
+                                Some(f) => f,
+                                None => fail!(ErrorKind::Custom(format!(
                                     "cannot cast \"{text}\" to float"
-                                )))
-                            })?
+                                ))),
+                            }
                         }
-                        _ => return Err(err(ErrorKind::BadType("(float) needs a number"))),
+                        _ => fail!(ErrorKind::BadType("(float) needs a number")),
                     };
                     push!(Value::Float(f));
                 }
@@ -1322,85 +1440,76 @@ impl Vm {
                     let v = pop!();
                     match v {
                         Value::Vector(_) => push!(v),
-                        _ => return Err(err(ErrorKind::BadType("(vector) needs a vector"))),
+                        _ => fail!(ErrorKind::BadType("(vector) needs a vector")),
                     }
                 }
-                Op::Jump(t) => fr.ip = t,
+                Op::Jump(t) => ip = t as usize,
                 Op::JumpIfFalse(t) => {
                     let c = pop!();
                     let not = match c {
                         Value::Int(i) => i == 0,
-                        _ => not_of(c, &self.interner).map_err(err)?,
+                        _ => tri!(not_of(c, &self.interner)),
                     };
                     if not {
-                        fr.ip = t;
+                        ip = t as usize;
                     }
                 }
                 Op::JumpIfTrue(t) => {
                     let c = pop!();
                     let not = match c {
                         Value::Int(i) => i == 0,
-                        _ => not_of(c, &self.interner).map_err(err)?,
+                        _ => tri!(not_of(c, &self.interner)),
                     };
                     if !not {
-                        fr.ip = t;
+                        ip = t as usize;
                     }
                 }
-                Op::Pop => {
-                    pop!();
-                }
-                Op::Dup => {
-                    let v = *fr
-                        .stack
-                        .last()
-                        .expect("stack_depth guarantees a value here");
-                    push!(v);
-                }
-                Op::Return => after = After::Return(pop!()),
-                Op::ReturnUndef => after = After::Return(Value::Undefined),
+                Op::Pop => sp -= 1,
+                Op::Dup => push!(stack[sp - 1]),
+                Op::Return => break Exit::Return(pop!()),
+                Op::ReturnUndef => break Exit::Return(Value::Undefined),
                 Op::Wait => {
                     let s = pop!();
-                    let seconds = to_f32(s)
-                        .ok_or_else(|| err(ErrorKind::BadType("wait needs a number of seconds")))?;
+                    let Some(seconds) = to_f32(s) else {
+                        fail!(ErrorKind::BadType("wait needs a number of seconds"));
+                    };
                     // Retail's two refusals, in its order: a negative wait
                     // (NaN included), then one the 24-bit clock cannot
                     // hold (docs/research/cod11-gsc-language.md, "The
                     // script clock").
                     if seconds.is_nan() || seconds < 0.0 {
-                        return Err(err(ErrorKind::Custom(format!(
+                        fail!(ErrorKind::Custom(format!(
                             "negative wait of {} is not allowed",
                             crate::value::format_g(seconds)
-                        ))));
+                        )));
                     }
                     if seconds >= MAX_WAIT_SECONDS {
-                        return Err(err(ErrorKind::Custom(format!(
+                        fail!(ErrorKind::Custom(format!(
                             "wait of {:.0} seconds is too long",
                             seconds
-                        ))));
+                        )));
                     }
-                    return Ok(Step::Suspend(Suspend::Wait { seconds }));
+                    break Exit::Step(Step::Suspend(Suspend::Wait { seconds }));
                 }
                 Op::WaitTillFrameEnd => {
-                    return Ok(Step::Suspend(Suspend::FrameEnd));
+                    break Exit::Step(Step::Suspend(Suspend::FrameEnd));
                 }
                 Op::WaitTill { ref binds } => {
                     let event = pop!();
                     let recv = pop!();
-                    let target = as_target(recv).ok_or_else(|| {
-                        err(ErrorKind::BadType(
-                            "waittill needs an entity or struct receiver",
-                        ))
-                    })?;
+                    let Some(target) = as_target(recv) else {
+                        fail!(ErrorKind::BadType(
+                            "waittill needs an entity or struct receiver"
+                        ));
+                    };
                     let Value::String(event) = event else {
-                        return Err(err(ErrorKind::BadType(
-                            "waittill needs a string event name",
-                        )));
+                        fail!(ErrorKind::BadType("waittill needs a string event name"));
                     };
                     // Event names fold, string values do not, so the name a
                     // literal or a concatenation produced is folded here
                     // rather than at the interner (atom.rs).
                     let event = self.interner.fold_atom(event);
-                    return Ok(Step::Suspend(Suspend::WaitTill {
+                    break Exit::Step(Step::Suspend(Suspend::WaitTill {
                         target,
                         event,
                         binds: binds.clone(),
@@ -1408,29 +1517,27 @@ impl Vm {
                     }));
                 }
                 Op::WaitTillMatch { argc } => {
-                    let mut matches = Vec::with_capacity(argc as usize);
-                    for _ in 0..argc {
-                        matches.push(pop!());
-                    }
-                    matches.reverse();
+                    let base = sp - argc as usize;
+                    let matches: Box<[Value]> = stack[base..sp].into();
+                    sp = base;
                     let event = pop!();
                     let recv = pop!();
-                    let target = as_target(recv).ok_or_else(|| {
-                        err(ErrorKind::BadType(
-                            "waittillmatch needs an entity or struct receiver",
-                        ))
-                    })?;
+                    let Some(target) = as_target(recv) else {
+                        fail!(ErrorKind::BadType(
+                            "waittillmatch needs an entity or struct receiver"
+                        ));
+                    };
                     let Value::String(event) = event else {
-                        return Err(err(ErrorKind::BadType(
-                            "waittillmatch needs a string event name",
-                        )));
+                        fail!(ErrorKind::BadType(
+                            "waittillmatch needs a string event name"
+                        ));
                     };
                     let event = self.interner.fold_atom(event);
-                    return Ok(Step::Suspend(Suspend::WaitTill {
+                    break Exit::Step(Step::Suspend(Suspend::WaitTill {
                         target,
                         event,
                         binds: Box::new([]),
-                        matches: matches.into_boxed_slice(),
+                        matches,
                     }));
                 }
                 // `notify` and `endon` both resolve where they execute:
@@ -1439,45 +1546,314 @@ impl Vm {
                 // registered earlier in a step must be visible to a notify a
                 // nested spawn fires later in that same step.
                 Op::Notify { argc } => {
-                    let mut args = Vec::with_capacity(argc as usize);
-                    for _ in 0..argc {
-                        args.push(pop!());
-                    }
-                    args.reverse();
+                    let base = sp - argc as usize;
+                    sp = base;
                     let event = pop!();
                     let recv = pop!();
                     let Value::String(event) = event else {
-                        return Err(err(ErrorKind::BadType("notify needs a string event name")));
+                        fail!(ErrorKind::BadType("notify needs a string event name"));
                     };
                     // Redundant, not load-bearing: every path that drains
                     // `notifies` goes through `Vm::notify`, which folds
                     // again. Kept so the queued atom matches what
                     // `waittill`/`endon` stored.
                     let event = self.interner.fold_atom(event);
-                    let target = as_target(recv).ok_or_else(|| {
-                        err(ErrorKind::BadType(
-                            "notify needs an entity or struct receiver",
-                        ))
-                    })?;
+                    let Some(target) = as_target(recv) else {
+                        fail!(ErrorKind::BadType(
+                            "notify needs an entity or struct receiver"
+                        ));
+                    };
                     // Resolved here, as retail's `VM_Notify` is: the endon
                     // kills land and the waiters turn runnable now, so a
                     // thread this step spawns after the notify neither
                     // dies by it nor wakes to it (`probe_endon_late`). A
-                    // waiter only turns runnable; nothing runs here.
-                    self.notify_from(thread_id, target, event, &args);
+                    // waiter only turns runnable; nothing runs here. The
+                    // arguments are read where they lie, above the stack.
+                    let args = &stack[base..base + argc as usize];
+                    self.notify_from(thread_id, target, event, args);
+                }
+                // Fused runs (`bytecode::fuse`): each takes its fast path
+                // only when its whole run fits the budget and its values
+                // are ones it answers without failing, and otherwise runs
+                // its run's first op alone, the next op then running from
+                // `fast` at `at + 1`.
+                Op::LoadLocal2(a, b) => {
+                    push!(locals[a as usize]);
+                    if left > 0 {
+                        left -= 1;
+                        push!(locals[b as usize]);
+                        ip = at + 2;
+                    }
+                }
+                Op::StoreLoad(a, b) => {
+                    let v = pop!();
+                    self.heap.share(v);
+                    locals[a as usize] = v;
+                    if left > 0 {
+                        left -= 1;
+                        push!(locals[b as usize]);
+                        ip = at + 2;
+                    }
+                }
+                Op::ReturnLocal(a) => {
+                    if left > 0 {
+                        left -= 1;
+                        ip = at + 2;
+                        break Exit::Return(locals[a as usize]);
+                    }
+                    push!(locals[a as usize]);
+                }
+                Op::LevelField(name) => {
+                    if left > 0 {
+                        left -= 1;
+                        let v = if name == self.size_atom {
+                            Value::Int(1)
+                        } else {
+                            self.heap.get_field(self.level, name)
+                        };
+                        push!(v);
+                        ip = at + 2;
+                    } else {
+                        push!(Value::Struct(self.level));
+                    }
+                }
+                Op::LocalField(a, name) => {
+                    let obj = locals[a as usize];
+                    match field_of!(obj, name) {
+                        Some(v) if left > 0 => {
+                            left -= 1;
+                            push!(v);
+                            ip = at + 2;
+                        }
+                        _ => push!(obj),
+                    }
+                }
+                Op::IndexLocals(a, k) => {
+                    match (locals[a as usize], array_key(locals[k as usize])) {
+                        (Value::Array(id), Some(key)) if left >= 2 => {
+                            left -= 2;
+                            push!(self.heap.get_index(id, key));
+                            ip = at + 3;
+                        }
+                        (obj, _) => push!(obj),
+                    }
+                }
+                Op::IndexLocalsField(a, k, name) => {
+                    let obj = locals[a as usize];
+                    let v = match (obj, array_key(locals[k as usize])) {
+                        (Value::Array(id), Some(key)) if left >= 3 => {
+                            let elem = self.heap.get_index(id, key);
+                            field_of!(elem, name)
+                        }
+                        _ => None,
+                    };
+                    match v {
+                        Some(v) => {
+                            left -= 3;
+                            push!(v);
+                            ip = at + 4;
+                        }
+                        None => push!(obj),
+                    }
+                }
+                Op::LevelIndexField(f, k, name) => {
+                    let v = match (
+                        self.heap.get_field(self.level, f),
+                        array_key(locals[k as usize]),
+                    ) {
+                        (Value::Array(id), Some(key)) if left >= 4 => {
+                            let elem = self.heap.get_index(id, key);
+                            field_of!(elem, name)
+                        }
+                        _ => None,
+                    };
+                    match v {
+                        Some(v) => {
+                            left -= 4;
+                            push!(v);
+                            ip = at + 5;
+                        }
+                        None => push!(Value::Struct(self.level)),
+                    }
+                }
+                Op::LtJumpIfFalse(to) => cmp_jump!(to, <),
+                Op::GtJumpIfFalse(to) => cmp_jump!(to, >),
+                Op::LeJumpIfFalse(to) => cmp_jump!(to, <=),
+                Op::GeJumpIfFalse(to) => cmp_jump!(to, >=),
+                Op::LtLocalJumpIfFalse(b, to) => operand_cmp_jump!(locals[b as usize], to, <),
+                Op::GtLocalJumpIfFalse(b, to) => operand_cmp_jump!(locals[b as usize], to, >),
+                Op::LtConstJumpIfFalse(c, to) => {
+                    operand_cmp_jump!(func.consts[c as usize], to, <)
+                }
+                Op::GtConstJumpIfFalse(c, to) => {
+                    operand_cmp_jump!(func.consts[c as usize], to, >)
+                }
+                Op::StoreLoad2(a, b, c) => {
+                    let v = pop!();
+                    self.heap.share(v);
+                    locals[a as usize] = v;
+                    if left >= 2 {
+                        left -= 2;
+                        push!(locals[b as usize]);
+                        push!(locals[c as usize]);
+                        ip = at + 3;
+                    }
+                }
+                Op::IndexLocal(k) => match (stack[sp - 1], array_key(locals[k as usize])) {
+                    (Value::Array(id), Some(key)) if left > 0 => {
+                        left -= 1;
+                        stack[sp - 1] = self.heap.get_index(id, key);
+                        ip = at + 2;
+                    }
+                    _ => push!(locals[k as usize]),
+                },
+                Op::AddStore(a) => {
+                    let y = pop!();
+                    let x = pop!();
+                    let v = match (x, y) {
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_add(y)),
+                        (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
+                        _ => tri!(eval_add(&mut self.interner, x, y)),
+                    };
+                    if left > 0 {
+                        left -= 1;
+                        self.heap.share(v);
+                        locals[a as usize] = v;
+                        ip = at + 2;
+                    } else {
+                        push!(v);
+                    }
+                }
+                // `JumpIfFalse`'s reading of the left side, which a string
+                // only fails as `not_of` does.
+                Op::AndJump(to) | Op::OrJump(to) => {
+                    let c = stack[sp - 1];
+                    let not = match c {
+                        Value::Int(i) => Some(i == 0),
+                        _ => not_of(c, &self.interner).ok(),
+                    };
+                    let jump = match (op, not) {
+                        (Op::AndJump(_), Some(not)) => Some(not),
+                        (_, Some(not)) => Some(!not),
+                        (_, None) => None,
+                    };
+                    match jump {
+                        Some(true) if left >= 1 => {
+                            left -= 1;
+                            ip = to as usize;
+                        }
+                        Some(false) if left >= 2 => {
+                            left -= 2;
+                            sp -= 1;
+                            ip = at + 3;
+                        }
+                        _ => push!(c),
+                    }
+                }
+                Op::StepLtSize {
+                    i,
+                    c,
+                    a,
+                    body,
+                    exit,
+                    extra,
+                } => {
+                    let x = locals[i as usize];
+                    let sum = match (x, func.consts[c as usize]) {
+                        (Value::Int(x), Value::Int(y)) => Some(Value::Int(x.wrapping_add(y))),
+                        (Value::Float(x), Value::Float(y)) => Some(Value::Float(x + y)),
+                        _ => None,
+                    };
+                    match (sum, locals[a as usize]) {
+                        // `AddConst`'s store, then `LtSizeJumpIfFalse` on it.
+                        (Some(v), Value::Array(id)) if left >= u32::from(extra) => {
+                            left -= u32::from(extra);
+                            locals[i as usize] = v;
+                            let x = to_f32(v).expect("a number");
+                            let n = self.heap.array_len(id) as i32;
+                            ip = if x < n as f32 { body } else { exit } as usize;
+                        }
+                        _ => push!(x),
+                    }
+                }
+                Op::LtLevelSizeJumpIfFalse { i, f, to } => {
+                    let x = locals[i as usize];
+                    match (to_f32(x), self.heap.get_field(self.level, f)) {
+                        (Some(x), Value::Array(id)) if left >= 5 => {
+                            left -= 5;
+                            let n = self.heap.array_len(id) as i32;
+                            ip = if x < n as f32 { at + 6 } else { to as usize };
+                        }
+                        _ => push!(x),
+                    }
+                }
+                Op::LtLocalConstJumpIfFalse { a, c, to } => {
+                    let x = locals[a as usize];
+                    match (to_f32(x), to_f32(func.consts[c as usize])) {
+                        (Some(x), Some(y)) if left >= 3 => {
+                            left -= 3;
+                            ip = if x < y { at + 4 } else { to as usize };
+                        }
+                        _ => push!(x),
+                    }
+                }
+                Op::SubLocals(a, b) => {
+                    let x = locals[a as usize];
+                    match eval_sub(x, locals[b as usize]) {
+                        Ok(v) if left >= 2 => {
+                            left -= 2;
+                            push!(v);
+                            ip = at + 3;
+                        }
+                        _ => push!(x),
+                    }
+                }
+                Op::LtSizeJumpIfFalse { i, a, to } => {
+                    let x = locals[i as usize];
+                    match (to_f32(x), locals[a as usize]) {
+                        // `LoadField size`'s `Int`, then `Lt` through
+                        // `numeric_cmp` as two floats.
+                        (Some(x), Value::Array(id)) if left >= 4 => {
+                            left -= 4;
+                            let n = self.heap.array_len(id) as i32;
+                            ip = if x < n as f32 { at + 5 } else { to as usize };
+                        }
+                        _ => push!(x),
+                    }
+                }
+                Op::AddConst { dst, src, c, to } => {
+                    let x = locals[src as usize];
+                    let sum = match (x, func.consts[c as usize]) {
+                        (Value::Int(x), Value::Int(y)) => Some(Value::Int(x.wrapping_add(y))),
+                        (Value::Float(x), Value::Float(y)) => Some(Value::Float(x + y)),
+                        _ => None,
+                    };
+                    let run = if to.is_some() { 4 } else { 3 };
+                    match sum {
+                        // A number: `StoreLocal`'s `share` has nothing to do.
+                        Some(v) if left >= run => {
+                            left -= run;
+                            locals[dst as usize] = v;
+                            ip = match to {
+                                Some(t) => t as usize,
+                                None => at + 4,
+                            };
+                        }
+                        _ => push!(x),
+                    }
                 }
                 Op::EndOn => {
                     let event = pop!();
                     let recv = pop!();
                     let Value::String(event) = event else {
-                        return Err(err(ErrorKind::BadType("endon needs a string event name")));
+                        fail!(ErrorKind::BadType("endon needs a string event name"));
                     };
                     let event = self.interner.fold_atom(event);
-                    let target = as_target(recv).ok_or_else(|| {
-                        err(ErrorKind::BadType(
-                            "endon needs an entity or struct receiver",
-                        ))
-                    })?;
+                    let Some(target) = as_target(recv) else {
+                        fail!(ErrorKind::BadType(
+                            "endon needs an entity or struct receiver"
+                        ));
+                    };
                     // No thread to register against under `call_now`
                     // (`thread_id` is `None` there); the registration is
                     // simply dropped.
@@ -1495,51 +1871,128 @@ impl Vm {
                 }
             }
 
-            match after {
-                After::Next => {}
-                After::Call => frames.push(called.take().expect("a call's frame")),
-                After::Return(v) => {
-                    let done = frames.pop().expect("a frame is running");
-                    self.recycle_frame(done);
-                    self.end_call_endons(thread_id, frames.len());
-                    match frames.last_mut() {
-                        Some(caller) => caller.stack.push(v),
-                        None => return Ok(Step::Returned(v)),
-                    }
-                }
-            }
-
-            // Not reached for an op that returned out of `step_frames`
-            // directly (`Wait`, `WaitTill`, or a `?`-propagated error) --
-            // those never got this far, and there is nothing to check for
-            // them here in any case (frames unchanged, and `pop!` already
-            // panics on an over-declared pop).
+            // A fused op ran as many of `code`'s ops as it took budget.
             #[cfg(test)]
-            if dbg_is_call {
-                let caller = frames.len() - 2;
-                frames[caller].stack_effect_check = Some(dbg_stack_before - dbg_pop + dbg_push);
-            } else if dbg_is_return {
-                if let Some(caller) = frames.last_mut() {
-                    let expected = caller.stack_effect_check.take().unwrap_or_else(|| {
-                        panic!(
-                            "{dbg_op_repr} returned into a frame with no pending call expectation"
-                        )
-                    });
-                    assert_eq!(
-                        caller.stack.len() as i32,
-                        expected,
-                        "stack_effect disagreement across a call/return pair at {dbg_op_repr}"
-                    );
+            {
+                let ran = 1 + (dbg_left - left) as usize;
+                // Along the run's path: a `Jump` inside it goes on at its
+                // target.
+                let (mut pc, mut effect) = (at, 0);
+                for _ in 0..ran {
+                    let (pop, push) = crate::bytecode::stack_effect(&code[pc]);
+                    effect += push - pop;
+                    pc = match code[pc] {
+                        Op::Jump(t) => t as usize,
+                        _ => pc + 1,
+                    };
                 }
-            } else {
-                let actual = frames[top].stack.len() as i32;
                 assert_eq!(
-                    actual,
-                    dbg_stack_before - dbg_pop + dbg_push,
-                    "stack_effect disagreement at {dbg_op_repr} (before {dbg_stack_before}, pop {dbg_pop}, push {dbg_push})"
+                    sp as i32,
+                    base_sp as i32 + effect,
+                    "stack_effect disagreement at {dbg_op_repr} (before {base_sp}, {ran} ops)"
                 );
             }
+
+            if spawned && self.was_killed(thread_id) {
+                break Exit::Step(Step::Returned(Value::Undefined));
+            }
+        };
+        *frame_ip = ip as u32;
+        *frame_sp = sp as u32;
+        *remaining = left;
+        exit
+    }
+
+    /// An entity's field, `None` for a dead entity, through a `Cx` whose
+    /// spawns go nowhere (see [`Spawns`]).
+    #[inline(never)]
+    fn entity_field(
+        &mut self,
+        host: &mut dyn Host,
+        notifies: &mut Vec<(Target, Atom, Vec<Value>)>,
+        field_spawns: &mut Vec<QueuedSpawn>,
+        id: crate::value::EntId,
+        name: Atom,
+    ) -> Option<Value> {
+        let mut cx = Cx {
+            interner: &mut self.interner,
+            heap: &mut self.heap,
+            level: self.level,
+            game: self.game,
+            notifies,
+            spawns: field_spawns,
+        };
+        let v = host.get_live_field(&mut cx, id, name);
+        debug_assert!(
+            field_spawns.is_empty(),
+            "Cx::spawn is only honoured from a builtin"
+        );
+        v
+    }
+
+    /// Runs the threads a builtin just queued (`Cx::spawn`), each to its
+    /// first suspend, as retail's `Scr_ExecEntThread` from inside a builtin
+    /// does, before the calling thread's next op; whether any ran. `func`
+    /// and `at` name the call, for an unknown function's error.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn run_builtin_spawns(
+        &mut self,
+        host: &mut dyn Host,
+        func: &Function,
+        at: usize,
+        notifies: &mut Vec<(Target, Atom, Vec<Value>)>,
+        errors: &mut Vec<ScriptError>,
+        pending_spawns: &mut Vec<QueuedSpawn>,
+        field_spawns: &mut Vec<QueuedSpawn>,
+    ) -> bool {
+        let mut spawned = false;
+        let mut queue = std::collections::VecDeque::from(std::mem::take(pending_spawns));
+        while let Some(queued) = queue.pop_front() {
+            let target = queued.func;
+            match self.functions.get(&target).cloned() {
+                Some(f) => {
+                    self.spawn(host, target, f, queued.recv, queued.args, errors);
+                    spawned = true;
+                }
+                None => {
+                    let e = ScriptError {
+                        file: func.file,
+                        func: func.name,
+                        line: func.lines[at],
+                        kind: self.no_such_function("spawn of unknown function", target),
+                    };
+                    self.record_abort(&e);
+                    errors.push(e);
+                }
+            }
+            if let Some(token) = queued.then {
+                let mut cx = Cx {
+                    interner: &mut self.interner,
+                    heap: &mut self.heap,
+                    level: self.level,
+                    game: self.game,
+                    notifies,
+                    spawns: field_spawns,
+                };
+                host.spawn_returned(&mut cx, token);
+                // The engine code after one `Scr_ExecEntThread` may start
+                // the next: those threads go ahead of the rest of the
+                // builtin's queue.
+                for next in field_spawns.drain(..).rev() {
+                    queue.push_front(next);
+                }
+            }
         }
+        spawned
+    }
+
+    fn no_such_function(&self, what: &str, target: FuncRef) -> ErrorKind {
+        ErrorKind::Custom(format!(
+            "{what} {}::{}",
+            self.interner.resolve(target.file),
+            self.interner.resolve(target.name)
+        ))
     }
 }
 
@@ -1584,5 +2037,131 @@ mod tests {
         // `if` stays strict: this is the divergence, not a relaxation of
         // both paths.
         assert!(run_result(r#"main() { if ("a") { } }"#).is_err());
+    }
+
+    /// A fused run answers as its ops do one at a time, whatever budget
+    /// cuts it, whatever types reach it, and with or without the error
+    /// recovery: every budget up to past the script's end, against the same
+    /// script with `Prepared::fast` left empty.
+    #[test]
+    fn fused_runs_answer_as_their_ops_at_every_budget() {
+        let src = r#"
+main()
+{
+    a = [];
+    for ( i = 0; i < 4; i++ )
+        a[i] = i * 2;
+    c = [];
+    for ( f = 0.5; f < a.size; f += 1.0 )
+        c[c.size] = f;
+    a[a.size] = c[1];
+    j = 0;
+    j += 0.5;
+    level.x = 3;
+    b[0] = level;
+    m["k"] = 7;
+    k = "k";
+    t = 0;
+    for ( i = 0; i < a.size; i++ )
+    {
+        x = a[i];
+        y = b[0].x;
+        z = m[k];
+        if ( x > 2 )
+            t += double( z );
+        if ( x <= 1.5 )
+            t += level.x;
+        if ( y >= 3 )
+            t += pick( x, y );
+    }
+    record( t, x, y, z );
+    w = 3;
+    while ( w >= 0 )
+        w -= 1;
+    level.arr = a;
+    n = "s" + w;
+    for ( i = 0; i < 6; i++ )
+    {
+        e = level.arr[i];
+        q = e + 1;
+        if ( e < 3 && q > 1 || e > 5 )
+            t += 1;
+        if ( e > 2 )
+            t += e;
+        if ( q < t )
+            t += 1;
+        if ( isdefined( e ) || n )
+            t += 2;
+    }
+    level.arr2 = b;
+    for ( i = 0; i < 3; i++ )
+    {
+        g = level.arr2[i].x;
+        record( g );
+    }
+    g = 1;
+    for ( i = 0; i < level.arr.size; i++ )
+    {
+        if ( i > 100 )
+            g = 0;
+        d = i - g;
+        if ( d < 3 )
+            continue;
+        g += d;
+    }
+    record( g, d );
+    for ( k = 0.5; k < c.size; k += 1 )
+        t += k;
+    record( t, k );
+    if ( i < "x" )
+        t += 100;
+    u = m[nope];
+    t += b[0].nope.size;
+    return t + j + w;
+}
+
+pick( p, q )
+{
+    r = p;
+    s = q;
+    if ( r < s )
+        return r;
+    return s;
+}
+"#;
+        let ast = crate::parse::parse_file(src).unwrap();
+        let outcome = |budget: u32, fused: bool, recover: bool| {
+            let mut vm = Vm::new();
+            let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+            vm.install(fns).unwrap();
+            if !fused {
+                for f in vm.functions.values_mut() {
+                    Rc::get_mut(f).unwrap().prepared.fast.clear();
+                }
+            }
+            vm.set_budget(budget);
+            vm.set_recover_errors(recover);
+            let mut host = TestHost::default();
+            let main = vm.func_ref("test/script", "main");
+            let r = vm.call_now(&mut host, main, None, vec![]);
+            let x = vm.interner.intern_folded("x");
+            format!(
+                "{r:?} {:?} {:?}",
+                host.calls,
+                vm.heap.get_field(vm.level, x)
+            )
+        };
+        let mut finished = false;
+        for budget in 1..2000 {
+            for recover in [false, true] {
+                let want = outcome(budget, false, recover);
+                assert_eq!(outcome(budget, true, recover), want, "budget {budget}");
+                finished |= recover && !want.contains("Budget");
+            }
+            if finished {
+                break;
+            }
+        }
+        assert!(finished, "the script ran out of budget throughout");
     }
 }

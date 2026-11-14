@@ -285,6 +285,7 @@ impl<'a> Compiler<'a> {
             params,
             locals,
             code: self.code,
+            prepared: Default::default(),
             consts: self.consts,
             lines: self.lines,
         })

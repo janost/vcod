@@ -125,6 +125,90 @@ pub enum Op {
     },
     /// Pops the receiver and the event name.
     EndOn,
+
+    // Fused ops: never compiled, only placed by [`fuse`] in
+    // `Prepared::fast`, each in place of the run of ops it names, which
+    // stay in `Function::code` behind it.
+    /// `LoadLocal a; LoadLocal b`.
+    LoadLocal2(u16, u16),
+    /// `StoreLocal a; LoadLocal b`.
+    StoreLoad(u16, u16),
+    /// `LoadLocal a; Return`.
+    ReturnLocal(u16),
+    /// `LoadLevel; LoadField f`.
+    LevelField(Atom),
+    /// `LoadLocal a; LoadField f`.
+    LocalField(u16, Atom),
+    /// `LoadLocal a; LoadLocal k; LoadIndex`.
+    IndexLocals(u16, u16),
+    /// `LoadLevel; LoadField f; LoadLocal k; LoadIndex; LoadField g`:
+    /// `level.f[k].g`.
+    LevelIndexField(Atom, u16, Atom),
+    /// `LoadLocal a; LoadLocal k; LoadIndex; LoadField f`.
+    IndexLocalsField(u16, u16, Atom),
+    /// `Lt; JumpIfFalse t`, and the other three orderings.
+    LtJumpIfFalse(u32),
+    GtJumpIfFalse(u32),
+    LeJumpIfFalse(u32),
+    GeJumpIfFalse(u32),
+    /// `LoadLocal b; Lt; JumpIfFalse t` and `Const c; Lt; JumpIfFalse t`,
+    /// and the same with `Gt`.
+    LtLocalJumpIfFalse(u16, u32),
+    GtLocalJumpIfFalse(u16, u32),
+    LtConstJumpIfFalse(u16, u32),
+    GtConstJumpIfFalse(u16, u32),
+    /// `StoreLocal a; LoadLocal b; LoadLocal c`.
+    StoreLoad2(u16, u16, u16),
+    /// `LoadLocal k; LoadIndex`.
+    IndexLocal(u16),
+    /// `Add; StoreLocal a`.
+    AddStore(u16),
+    /// `Dup; JumpIfFalse t; Pop`, an `&&`'s left side, and `Dup;
+    /// JumpIfTrue t; Pop`, an `||`'s.
+    AndJump(u32),
+    OrJump(u32),
+    /// `AddConst` on a loop's `i` (`dst` and `src` both `i`), with or
+    /// without its `Jump`, then the `LtSizeJumpIfFalse` it reaches on `i`:
+    /// a loop's step and condition. `body` is the op past the condition,
+    /// `exit` its jump, `extra` the run's length less one.
+    StepLtSize {
+        i: u16,
+        c: u16,
+        a: u16,
+        body: u32,
+        exit: u32,
+        extra: u8,
+    },
+    /// `LoadLocal i; LoadLevel; LoadField f; LoadField size; Lt;
+    /// JumpIfFalse to`: a loop's `i < level.f.size`.
+    LtLevelSizeJumpIfFalse {
+        i: u16,
+        f: Atom,
+        to: u32,
+    },
+    /// `LoadLocal a; Const c; Lt; JumpIfFalse to`.
+    LtLocalConstJumpIfFalse {
+        a: u16,
+        c: u16,
+        to: u32,
+    },
+    /// `LoadLocal a; LoadLocal b; Sub`.
+    SubLocals(u16, u16),
+    /// `LoadLocal i; LoadLocal a; LoadField size; Lt; JumpIfFalse t`: a
+    /// loop's `i < a.size`.
+    LtSizeJumpIfFalse {
+        i: u16,
+        a: u16,
+        to: u32,
+    },
+    /// `LoadLocal src; Const c; Add; StoreLocal dst`, then with `to`
+    /// `Jump to`: a loop's `i++`.
+    AddConst {
+        dst: u16,
+        src: u16,
+        c: u16,
+        to: Option<u32>,
+    },
 }
 
 /// `Debug` only, for `Frame`'s derive (`vm/interp.rs`) -- nothing formats a
@@ -136,6 +220,8 @@ pub struct Function {
     pub params: u8,
     pub locals: u16,
     pub code: Vec<Op>,
+    /// `Vm::install` fills it, so a compiler leaves it empty.
+    pub prepared: Prepared,
     pub consts: Vec<Value>,
     /// Source line per instruction, for error attribution.
     pub lines: Vec<u32>,
@@ -204,7 +290,190 @@ pub(crate) fn stack_effect(op: &Op) -> (i32, i32) {
         Op::Jump(_) | Op::ReturnUndef => (0, 0),
         Op::WaitTill { .. } | Op::EndOn => (2, 0),
         Op::Notify { argc } | Op::WaitTillMatch { argc } => (2 + i32::from(*argc), 0),
+        // A fused op's whole run.
+        Op::LoadLocal2(..) => (0, 2),
+        Op::StoreLoad(..) => (1, 1),
+        Op::ReturnLocal(_) => (0, 0),
+        Op::LevelField(_)
+        | Op::LocalField(..)
+        | Op::IndexLocals(..)
+        | Op::IndexLocalsField(..)
+        | Op::LevelIndexField(..) => (0, 1),
+        Op::LtJumpIfFalse(_)
+        | Op::GtJumpIfFalse(_)
+        | Op::LeJumpIfFalse(_)
+        | Op::GeJumpIfFalse(_) => (2, 0),
+        Op::LtSizeJumpIfFalse { .. }
+        | Op::AddConst { .. }
+        | Op::StepLtSize { .. }
+        | Op::LtLevelSizeJumpIfFalse { .. }
+        | Op::LtLocalConstJumpIfFalse { .. } => (0, 0),
+        Op::SubLocals(..) => (0, 1),
+        Op::LtLocalJumpIfFalse(..)
+        | Op::GtLocalJumpIfFalse(..)
+        | Op::LtConstJumpIfFalse(..)
+        | Op::GtConstJumpIfFalse(..) => (1, 0),
+        Op::StoreLoad2(..) => (1, 2),
+        Op::IndexLocal(_) => (1, 1),
+        Op::AddStore(_) => (2, 0),
+        // A run that jumps leaves the left side, one that falls through
+        // pops it.
+        Op::AndJump(_) | Op::OrJump(_) => (1, 0),
     }
+}
+
+/// The ops `Vm::run_ops` runs (`Prepared::fast`): `code` with a fused op
+/// in place of each op that starts one of the runs the fused ops name,
+/// longest first. The ops a run covers stay behind it, so a jump into the
+/// run's middle lands where it always did, and a fused op that cannot take
+/// its fast path (a type it does not handle, a budget too short for its
+/// whole run) runs its first op alone. `size` is the interner's `size`.
+/// The runs are the spawn wave's commonest (cod4-server-frame.md 9.2).
+pub(crate) fn fuse(code: &[Op], size: Atom) -> Vec<Op> {
+    (0..code.len())
+        .map(|i| fused_at(code, i, size).unwrap_or_else(|| code[i].clone()))
+        .collect()
+}
+
+/// A `JumpIfFalse`'s target.
+fn jump_target(op: Option<&Op>) -> u32 {
+    match op {
+        Some(&Op::JumpIfFalse(t)) => t,
+        _ => unreachable!("matched as a JumpIfFalse"),
+    }
+}
+
+/// `LoadLocal i; LoadLocal a; LoadField size; Lt; JumpIfFalse to` at
+/// `code[at]`, as `(i, a, to)`.
+fn lt_size_at(code: &[Op], at: usize, size: Atom) -> Option<(u16, u16, u32)> {
+    match code.get(at..at + 5)? {
+        &[
+            Op::LoadLocal(i),
+            Op::LoadLocal(a),
+            Op::LoadField(f),
+            Op::Lt,
+            Op::JumpIfFalse(to),
+        ] if f == size => Some((i, a, to)),
+        _ => None,
+    }
+}
+
+/// The fused op for the run starting at `code[at]`.
+fn fused_at(code: &[Op], at: usize, size: Atom) -> Option<Op> {
+    use Op::*;
+    let run = &code[at..];
+    let op = |k: usize| run.get(k);
+    Some(match (op(0)?, op(1)?) {
+        (&LoadLocal(src), &Const(c)) if matches!((op(2), op(3)), (Some(Add), Some(&StoreLocal(d))) if d == src) =>
+        {
+            // The condition straight after the step, or where its `Jump`
+            // lands.
+            let (cond, extra) = match op(4) {
+                Some(&Jump(t)) => (t as usize, 9),
+                _ => (at + 4, 8),
+            };
+            match lt_size_at(code, cond, size) {
+                Some((i, a, exit)) if i == src => StepLtSize {
+                    i,
+                    c,
+                    a,
+                    body: cond as u32 + 5,
+                    exit,
+                    extra,
+                },
+                _ => {
+                    let to = match op(4) {
+                        Some(&Jump(t)) => Some(t),
+                        _ => None,
+                    };
+                    AddConst {
+                        dst: src,
+                        src,
+                        c,
+                        to,
+                    }
+                }
+            }
+        }
+        (&LoadLocal(i), LoadLevel) => match run.get(2..6)? {
+            &[LoadField(f), LoadField(s), Lt, JumpIfFalse(to)] if s == size && f != size => {
+                LtLevelSizeJumpIfFalse { i, f, to }
+            }
+            _ => return None,
+        },
+        (&LoadLocal(a), &Const(c))
+            if matches!((op(2), op(3)), (Some(Lt), Some(JumpIfFalse(_)))) =>
+        {
+            LtLocalConstJumpIfFalse {
+                a,
+                c,
+                to: jump_target(op(3)),
+            }
+        }
+        (&LoadLocal(a), &LoadLocal(b)) if matches!(op(2), Some(Sub)) => SubLocals(a, b),
+        (&LoadLocal(i), &LoadLocal(a))
+            if matches!(
+                (op(2), op(3), op(4)),
+                (Some(&LoadField(f)), Some(Lt), Some(JumpIfFalse(_))) if f == size
+            ) =>
+        {
+            let Some(&JumpIfFalse(to)) = op(4) else {
+                unreachable!()
+            };
+            LtSizeJumpIfFalse { i, a, to }
+        }
+        (&LoadLocal(src), &Const(c))
+            if matches!((op(2), op(3)), (Some(Add), Some(StoreLocal(_)))) =>
+        {
+            let Some(&StoreLocal(dst)) = op(3) else {
+                unreachable!()
+            };
+            let to = match op(4) {
+                Some(&Jump(t)) => Some(t),
+                _ => None,
+            };
+            AddConst { dst, src, c, to }
+        }
+        (&LoadLocal(a), &LoadLocal(k)) if matches!(op(2), Some(LoadIndex)) => match op(3) {
+            Some(&LoadField(f)) => IndexLocalsField(a, k, f),
+            _ => IndexLocals(a, k),
+        },
+        (&LoadLocal(k), LoadIndex) => IndexLocal(k),
+        (&LoadLocal(b), Lt) if matches!(op(2), Some(JumpIfFalse(_))) => {
+            LtLocalJumpIfFalse(b, jump_target(op(2)))
+        }
+        (&LoadLocal(b), Gt) if matches!(op(2), Some(JumpIfFalse(_))) => {
+            GtLocalJumpIfFalse(b, jump_target(op(2)))
+        }
+        (&Const(c), Lt) if matches!(op(2), Some(JumpIfFalse(_))) => {
+            LtConstJumpIfFalse(c, jump_target(op(2)))
+        }
+        (&Const(c), Gt) if matches!(op(2), Some(JumpIfFalse(_))) => {
+            GtConstJumpIfFalse(c, jump_target(op(2)))
+        }
+        (&StoreLocal(a), &LoadLocal(b)) if matches!(op(2), Some(LoadLocal(_))) => {
+            let Some(&LoadLocal(c)) = op(2) else {
+                unreachable!()
+            };
+            StoreLoad2(a, b, c)
+        }
+        (Dup, &JumpIfFalse(t)) if matches!(op(2), Some(Pop)) => AndJump(t),
+        (Dup, &JumpIfTrue(t)) if matches!(op(2), Some(Pop)) => OrJump(t),
+        (Add, &StoreLocal(a)) => AddStore(a),
+        (&LoadLocal(a), &LoadLocal(b)) => LoadLocal2(a, b),
+        (&LoadLocal(a), &LoadField(f)) => LocalField(a, f),
+        (&LoadLocal(a), Return) => ReturnLocal(a),
+        (&StoreLocal(a), &LoadLocal(b)) => StoreLoad(a, b),
+        (LoadLevel, &LoadField(f)) => match run.get(2..5) {
+            Some(&[LoadLocal(k), LoadIndex, LoadField(g)]) if f != size => LevelIndexField(f, k, g),
+            _ => LevelField(f),
+        },
+        (Lt, &JumpIfFalse(t)) => LtJumpIfFalse(t),
+        (Gt, &JumpIfFalse(t)) => GtJumpIfFalse(t),
+        (Le, &JumpIfFalse(t)) => LeJumpIfFalse(t),
+        (Ge, &JumpIfFalse(t)) => GeJumpIfFalse(t),
+        _ => return None,
+    })
 }
 
 fn visit(
@@ -238,10 +507,56 @@ fn visit(
 /// This is the check that catches a miscompile that leaves a value behind
 /// on one path but not another — exactly the shape of bug a jump-target or
 /// terminator error produces, and the reason to run it on every function a
-/// loader accepts, not just in the compiler's own tests.
-pub fn stack_depth(f: &Function) -> Result<(), String> {
+/// loader accepts, not just in the compiler's own tests. Answers the
+/// deepest the operand stack gets.
+pub fn stack_depth(f: &Function) -> Result<usize, String> {
+    let entry = entry_depths(f)?;
+    Ok(deepest(f, &entry))
+}
+
+/// The deepest `f` takes the operand stack, from each op's depth on entry.
+fn deepest(f: &Function, entry: &[Option<i32>]) -> usize {
+    f.code
+        .iter()
+        .zip(entry)
+        .filter_map(|(op, d)| {
+            let d = (*d)?;
+            let (pop, push) = stack_effect(op);
+            Some(d.max(d - pop + push))
+        })
+        .max()
+        .unwrap_or(0) as usize
+}
+
+/// What `Vm::install` works out for a function before it runs, from
+/// [`stack_depth`]'s walk and [`fuse`].
+#[derive(Debug, Default)]
+pub struct Prepared {
+    /// `code` with its runs fused, what the interpreter runs.
+    pub fast: Vec<Op>,
+    /// Each op's operand stack depth on entry, the one every path agrees
+    /// on (0 for an op no path reaches): where an op that failed leaves the
+    /// stack under the error recovery (`Vm::set_recover_errors`).
+    pub depths: Vec<u32>,
+    /// The deepest the stack gets, which each frame's stack is sized to.
+    pub max_stack: u32,
+}
+
+/// [`Prepared`] for `f`, or [`stack_depth`]'s refusal. `size` is the
+/// interner's `size`.
+pub fn prepare(f: &Function, size: Atom) -> Result<Prepared, String> {
+    let entry = entry_depths(f)?;
+    Ok(Prepared {
+        fast: fuse(&f.code, size),
+        depths: entry.iter().map(|d| d.unwrap_or(0) as u32).collect(),
+        max_stack: deepest(f, &entry) as u32,
+    })
+}
+
+/// Each op's depth on entry, `None` for an op no path reaches.
+fn entry_depths(f: &Function) -> Result<Vec<Option<i32>>, String> {
     if f.code.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let mut entry_depth: Vec<Option<i32>> = vec![None; f.code.len()];
     let mut queue = std::collections::VecDeque::new();
@@ -312,7 +627,7 @@ pub fn stack_depth(f: &Function) -> Result<(), String> {
             )?,
         }
     }
-    Ok(())
+    Ok(entry_depth)
 }
 
 #[cfg(test)]
@@ -327,6 +642,7 @@ mod tests {
             params: 0,
             locals: 0,
             code,
+            prepared: Default::default(),
             consts: Vec::new(),
             lines,
         }

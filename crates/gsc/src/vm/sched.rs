@@ -353,7 +353,7 @@ impl Vm {
                 t.frames.truncate(d - 1);
                 t.endons.retain(|e| e.2 < d);
                 if let Some(f) = t.frames.last_mut() {
-                    f.stack.push(Value::Undefined);
+                    f.push(Value::Undefined);
                 }
                 t.state = ThreadState::Runnable;
                 t.seq = seq;

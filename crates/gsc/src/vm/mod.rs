@@ -480,6 +480,13 @@ pub trait Host {
         true
     }
 
+    /// [`Host::get_field`] on a live entity, `None` for a dead one
+    /// ([`Host::is_live`]): a script's field read, which a host that looks
+    /// the entity up once for both can answer in one call.
+    fn get_live_field(&mut self, cx: &mut Cx, ent: EntId, field: Atom) -> Option<Value> {
+        self.is_live(ent).then(|| self.get_field(cx, ent, field))
+    }
+
     /// The other half of a `Cx::spawn_then`, with its token. A spawn queued
     /// here starts before the builtin's remaining queued threads.
     fn spawn_returned(&mut self, _cx: &mut Cx, _token: u32) {}
@@ -967,8 +974,10 @@ impl Vm {
     /// before anything is inserted, so a rejected `install` call changes
     /// nothing.
     pub fn install(&mut self, fns: Vec<Function>) -> Result<(), InstallError> {
+        let mut prepared = Vec::with_capacity(fns.len());
         for f in &fns {
-            crate::bytecode::stack_depth(f).map_err(InstallError::BadStack)?;
+            prepared
+                .push(crate::bytecode::prepare(f, self.size_atom).map_err(InstallError::BadStack)?);
         }
         let mut seen = std::collections::HashSet::new();
         for f in &fns {
@@ -980,11 +989,12 @@ impl Vm {
                 return Err(InstallError::Duplicate(key));
             }
         }
-        for f in fns {
+        for (mut f, prepared) in fns.into_iter().zip(prepared) {
             let key = FuncRef {
                 file: f.file,
                 name: f.name,
             };
+            f.prepared = prepared;
             let next = self.file_order.len() as u32;
             self.file_order.entry(f.file).or_insert(next);
             self.functions.insert(key, Rc::new(f));
@@ -1554,6 +1564,7 @@ pub(crate) mod tests {
             params: 0,
             locals: 0,
             code: vec![crate::bytecode::Op::Pop, crate::bytecode::Op::ReturnUndef],
+            prepared: Default::default(),
             consts: Vec::new(),
             lines: vec![1, 1],
         };
@@ -1574,6 +1585,7 @@ pub(crate) mod tests {
             params: 0,
             locals: 0,
             code: vec![crate::bytecode::Op::ReturnUndef],
+            prepared: Default::default(),
             consts: Vec::new(),
             lines: vec![1],
         };
