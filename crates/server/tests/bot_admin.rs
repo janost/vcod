@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::msg::NULL_USERCMD;
-use vcod_common::net::{NetClient, NetEvent};
+use vcod_common::net::{NetClient, NetEvent, NetState};
 use vcod_server::Server;
 
 const MAP: &str = "mp_carentan";
@@ -358,4 +358,50 @@ fn vc_bot_skill_and_addbot_skill_set_the_level() {
     let list = rcon(&mut sv, &mut now, "listbots");
     assert!(list.contains("vc_bot_skill 2"), "{list}");
     assert!(rcon(&mut sv, &mut now, "addbot skill").contains("usage: addbot"));
+}
+
+/// A passed `callvote map` on a server of 30 bots while both humans take
+/// 15 s to load: a loading client acknowledges nothing, and the bots'
+/// reconnect lines are prints, which a client not active is never queued
+/// (docs/protocol-1.1.md, "The server command queue"), so neither human
+/// overflows its 64 slots and both play on the new map.
+#[test]
+fn a_voted_map_change_keeps_a_slow_loading_client() {
+    let Some((mut sv, mut now)) = server("tdm", 32) else {
+        eprintln!("COD_DIR unset: skipping");
+        return;
+    };
+    let mut humans = vec![human(0, "allies", now), human(1, "axis", now)];
+    run(&mut sv, &mut humans, &mut now, 4);
+    rcon(&mut sv, &mut now, "addbot 30");
+    run(&mut sv, &mut humans, &mut now, 4);
+    assert_eq!(sv.bot_slots().len(), 30);
+    let id = sv.server_id();
+    humans[0].cl.send_reliable("callvote map mp_brecourt");
+    run(&mut sv, &mut humans, &mut now, 1);
+    humans[1].cl.send_reliable("vote yes");
+    for _ in 0..400 {
+        if sv.server_id() != id {
+            break;
+        }
+        frame(&mut sv, &mut humans, &mut now);
+    }
+    assert_ne!(sv.server_id(), id, "the vote never changed the map");
+    // The load: no packet either way.
+    for _ in 0..15 * 20 {
+        now += Duration::from_millis(50);
+        sv.tick(now);
+        sv.take_outgoing();
+    }
+    run(&mut sv, &mut humans, &mut now, 8);
+    for (slot, h) in humans.iter().enumerate() {
+        assert_eq!(h.cl.state(), NetState::Active, "{}", h.join.summary());
+        assert_eq!(h.cl.server_id(), i32::from(sv.server_id()));
+        assert_eq!(
+            sv.client_field(slot, "sessionstate").as_deref(),
+            Some("playing"),
+            "{}",
+            h.join.summary()
+        );
+    }
 }

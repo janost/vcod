@@ -190,7 +190,10 @@ impl Cod2Server {
             let texts = (c.link.reliable_ack + 1..=seq)
                 .map(|s| c.link.netchan.reliable[s as usize & (MAX_RELIABLE_COMMANDS - 1)].clone())
                 .collect();
+            // Read is sent: `SV_AddServerCommand` squashes only commands not
+            // yet sent, and a bot's are never written to a message.
             c.link.reliable_ack = seq;
+            c.link.reliable_sent = seq;
             inbox.insert(slot, texts);
         }
         if let Some(b) = self.game.bots.as_mut() {

@@ -17,13 +17,21 @@ pub(super) fn two_playing() -> Option<(Cod4Server, Vec<Probe>, Instant)> {
 
 /// [`two_playing`] with `sets` (`+set` lines) ahead of the load.
 pub(super) fn two_playing_with(sets: &[(&str, &str)]) -> Option<(Cod4Server, Vec<Probe>, Instant)> {
+    two_playing_in(8, sets)
+}
+
+/// [`two_playing_with`] on a server of `slots` clients.
+fn two_playing_in(
+    slots: usize,
+    sets: &[(&str, &str)],
+) -> Option<(Cod4Server, Vec<Probe>, Instant)> {
     let install = vcod_cod4::testing::cod4_install()?;
     let mut sv = Cod4Server::new(
         Cod4Config {
             map: "mp_crash".into(),
             gametype: "war".into(),
             hostname: "CoD4Host".into(),
-            max_clients: 8,
+            max_clients: slots,
         },
         7,
     );
@@ -201,6 +209,57 @@ fn cod4_a_map_vote_changes_the_map() {
         .iter()
         .flatten()
         .filter(|c| c.state == State::Active)
+        .count();
+    assert_eq!(active, 2);
+}
+
+/// A passed `map` vote on a full server while both clients take 15 s to
+/// load: a loading client sends nothing, and the 50 bots reconnecting
+/// send it their prints. A client not `CS_ACTIVE` is queued only its
+/// reliable commands (`SV_AddServerCommand` 0x81769b2), so neither is
+/// dropped and both are back in on the new gamestate. (CoD4's ring held
+/// 52 here with every command kept, so it never overflowed; CoD2's did,
+/// `a_voted_map_change_keeps_a_slow_loading_client`.)
+#[test]
+fn cod4_a_map_vote_keeps_a_slow_loading_client() {
+    let Some((mut sv, mut probes, mut now)) = two_playing_in(52, &[]) else {
+        return;
+    };
+    assert_eq!(sv.add_bots(50, false).len(), 50);
+    run_ms(&mut sv, &mut probes, &mut now, 4000);
+    let id = sv.server_id();
+    probes[1].command("callvote map mp_crash");
+    run_ms(&mut sv, &mut probes, &mut now, 500);
+    probes[0].command("vote yes");
+    while sv.server_id() == id {
+        assert!(sv.core.sv_time_ms < 200_000, "the vote never passed");
+        step(&mut sv, &mut probes, &mut now);
+    }
+    // The load: no packet either way.
+    for _ in 0..15_000 / FRAME_MS {
+        now += Duration::from_millis(FRAME_MS as u64);
+        sv.drain_console();
+        sv.tick_frames(now, 1);
+        sv.take_outgoing();
+    }
+    // The bots' prints went nowhere: what waits is reliable.
+    for s in 0..2 {
+        let c = sv.core.clients[s].as_ref().unwrap();
+        assert_eq!(c.state, State::Connected);
+        let mut waiting = c.link.reliable_ack + 1..=c.link.netchan.reliable_sequence as i32;
+        assert!(!waiting.is_empty());
+        assert!(waiting.all(|q| c.reliable_kept[q as usize & (MAX_RELIABLE_COMMANDS - 1)]));
+    }
+    run_ms(&mut sv, &mut probes, &mut now, 8000);
+    for p in &probes {
+        assert_eq!(p.server_id(), Some(sv.server_id()));
+    }
+    let active = (0..2)
+        .filter(|&s| {
+            sv.core.clients[s]
+                .as_ref()
+                .is_some_and(|c| c.state == State::Active)
+        })
         .count();
     assert_eq!(active, 2);
 }
