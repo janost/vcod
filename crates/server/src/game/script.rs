@@ -1539,21 +1539,20 @@ impl ScriptRuntime {
                 angles,
             ));
             // A missing tag skips the round and its event, not the flags.
-            if let Some(tags) = &rec.tags {
+            let at = match (rule, &rec.tags, &rec.gun) {
+                (AimRule::V1, Some(tags), _) => {
+                    Some(muzzle(tags, origin, angles, rec.angles2, forward))
+                }
+                (AimRule::V15 | AimRule::Uo, Some(_), Some(gun)) => Some(
+                    crate::game::turret::muzzle_stored(gun, origin, angles, rec.angles2, forward),
+                ),
+                _ => None,
+            };
+            if let Some(at) = at {
                 shot = Some(TurretShot {
                     slot,
                     gun: id.0,
-                    muzzle: match rule {
-                        AimRule::V1 => muzzle(tags, origin, angles, rec.angles2, forward),
-                        AimRule::V15 | AimRule::Uo => crate::game::turret::muzzle_stored(
-                            tags,
-                            origin,
-                            angles,
-                            rec.angles2,
-                            forward,
-                        ),
-                    }
-                    .into(),
+                    muzzle: at.into(),
                     dir: forward.into(),
                     damage: rec.dmg,
                     rifle_bullet: rec.def.rifle_bullet,

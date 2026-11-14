@@ -1674,14 +1674,10 @@ fn layer_clips(
 ) -> Vec<(Rc<XAnim>, f64, f32)> {
     let mut out = Vec::new();
     // The walk visits a node's children in anim index order (`cod_lnxded`
-    // 0x80bbea8), which sets the order its sums round in. Only the 1.1d
-    // pose takes it: 1.5b's and UO's keep the clock's order, which one
-    // 1.5b knockback kill still needs (cod11-combat.md 3.1, "The pose on
-    // 1.1").
+    // 0x80bbea8, UO 0x80bd899), which sets the order its sums round in
+    // (cod11-combat.md 3.1).
     let mut layers: Vec<&crate::animclock::Layer> = layers.iter().collect();
-    if inputs.arith == crate::patch::Arith::Kept {
-        layers.sort_by_key(|l| l.index);
-    }
+    layers.sort_by_key(|l| l.index);
     for l in layers {
         let node = inputs.anims.index.node_id(l.index);
         if let Some((_, leaves)) = inputs.seat_leaves.iter().find(|(n, _)| Some(*n) == node) {
