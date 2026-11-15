@@ -2312,7 +2312,8 @@ impl ClientSim {
     }
 
     /// The turret placement's leaf blend at level time `now_ms`, `None`
-    /// off a `turretanim` anim: the legs pose by its leaves, and its sync
+    /// off a `turretanim` anim and at the release, which keeps the group as
+    /// the one left: the legs pose by its leaves, and its sync
     /// group steps at the mean frequency their weights give from the next
     /// frame on (cod11-turrets.md 13.9). The rows are the carried weights
     /// (`gunner_tree`) the placement leaves, which the pose reads at once,
@@ -2333,15 +2334,24 @@ impl ClientSim {
         }
         match placed {
             Some(g) => {
+                if self.gunner_left.as_ref().is_some_and(|(n, _)| *n == g.node) {
+                    self.gunner_left = None;
+                }
                 self.gunner_tree.place(g, crate::server::FRAME_MS);
                 self.gunner_leaves = Some((g.node, Vec::new()));
                 self.gunner_rows_from_tree();
                 self.pose.turret_leaves.clone_from(&self.gunner_leaves);
                 self.pose.turret_left.clone_from(&self.gunner_left);
             }
+            // The release: the group fades out under the next legs anim on
+            // the rows it carried, which the DObj keeps (13.9, "The
+            // dismount").
             None => {
-                self.gunner_leaves = None;
-                self.gunner_left = None;
+                if self.gunner_leaves.is_some() {
+                    self.gunner_left = self.gunner_leaves.take();
+                }
+                self.pose.turret_leaves = None;
+                self.pose.turret_left.clone_from(&self.gunner_left);
             }
         }
         if let Some(g) = placed {

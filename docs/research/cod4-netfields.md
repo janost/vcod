@@ -254,14 +254,25 @@ What the two states a reader holds do not fix, the parse records:
   own unquantized state, and a playerstate sends rows by its own rule
   (origin and velocity by the first bit), so the bits are kept, not
   rebuilt. INFERRED, not yet confirmed on 1.7.
-- `MSG_WriteDeltaPlayerstate` (0x813f586, called from 0x816b930) sends
-  the `-87` view angles only with `otherFlags` 2 (`testb $0x2,0x14`),
-  an `eFlags` 2 flip (the two states' +0xb0 XORed), a
+- `MSG_WriteDeltaPlayerstate` (0x813f586, called from 0x816b930)
+  considers the `-87` view angles only with `otherFlags` 2 (`testb
+  $0x2,0x14`), an `eFlags` 2 flip (the two states' +0xb0 XORed), a
   `viewlocked_entNum` (+0x59c) other than 0x3ff or `pm_type` 5, tested
   inline for the last-sent count (0x813fa4a..0x813fa81) and again for
   the row writes (0x813faba..0x8140c05). VERIFIED (the disassembly). A
-  set byte +0xd of its first argument skips the test and sends them;
-  that this is the archived snapshot cod4-pmove.md names is INFERRED.
+  set byte +0xd of its first argument skips the test; that this is the
+  archived snapshot cod4-pmove.md names is INFERRED. A considered row
+  sets the last-sent count without a compare (0x813fa87), but its write
+  goes through the field writer 0x813e20a, which compares the two words
+  and writes a 0 bit for an equal one (0x813e268, 0x813e47b). VERIFIED
+  (the disassembly). So a teleport sends only the view rows that moved:
+  the kcent shooter's `setviewpos` frame (42100) sends its yaw, its pitch
+  and roll kept. VERIFIED live
+  (`net_decode::a_teleport_sends_only_the_view_rows_that_changed`). The
+  compare is against the server's own base, the view the server holds,
+  not the one the client last read, so a client's view can stay on a
+  stale value: the killcam of cod4-combat.md 15. INFERRED (the gate's
+  match). vcod sent every considered row until the kcent gate.
 - A `-85` HUD colour's short form, the alpha toggled between 0 and 0xff
   (`delta::Change::Toggled`). In `play-1.7-walk.txt` HUD elems whose
   alpha reads 0xf8 (the long form's 31 x 8) go to 0 through the toggle:
