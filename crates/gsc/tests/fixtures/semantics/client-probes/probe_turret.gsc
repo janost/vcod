@@ -147,6 +147,8 @@ try_place(gun)
 	self.probe_spot = spot;
 	if (self.pers["team"] == "axis")
 		self swap_head();
+	else
+		self pin_models();
 	self setorigin(spot);
 	self setplayerangles((0, yaw, 0));
 	logPrint("PROBE place " + self getEntityNumber() + " " + self.pers["team"] + " " + spot + " " + yaw + " " + getTime() + "\n");
@@ -219,6 +221,28 @@ swap_head()
 			else
 				self attach(models[i], tags[i]);
 		}
+	}
+	line = "PROBE models " + self getEntityNumber();
+	n = self getattachsize();
+	for (i = 0; i < n; i++)
+		line = line + " " + self getattachmodelname(i);
+	logPrint(line + "\n");
+}
+
+//	The gunner's attachments are a random draw too (the character, then
+//	its head): every placement logs them, and `probe_gunner_model0`,
+//	`probe_gunner_model1` ... (the `xmodel/` names) put that list on him in
+//	place of his own, so a replay can wear what a capture's gunner wore
+//	(cod11-turrets.md 13.9):
+//
+//	PROBE models <entity number> <model>...
+pin_models()
+{
+	if (getcvar("probe_gunner_model0") != "")
+	{
+		self detachall();
+		for (i = 0; getcvar("probe_gunner_model" + i) != ""; i++)
+			self attach(getcvar("probe_gunner_model" + i));
 	}
 	line = "PROBE models " + self getEntityNumber();
 	n = self getattachsize();
@@ -356,7 +380,8 @@ whole(x)
 //	it, rows 30..54 over his origin, each from 40 behind the column to 40
 //	past it. A cell is the distance to where the ray stopped on him, as
 //	fine1 prints it, or `-`; the rows read the pose his turret anim gave
-//	him, the fire leaves included (cod11-turrets.md 13.9):
+//	him, the fire leaves included (cod11-turrets.md 13.9); with
+//	`probe_gungrid_tail <ms>` also that long past each return to the spot:
 //
 //	PROBE gungrid <time> <entity number> <cell>...
 watch_gungrid()
@@ -388,7 +413,17 @@ gungrid(fwd, right)
 		return;
 	d = self.origin - self.probe_spot;
 	if (d[0] * d[0] + d[1] * d[1] < 16)
-		return;
+	{
+		//	With `probe_gungrid_tail <ms>` the grid goes on that long past
+		//	his return to the spot: the dismount's blend out.
+		tail = getcvarint("probe_gungrid_tail");
+		if (tail <= 0 || !isdefined(self.probe_gungrid_off))
+			return;
+		if (gettime() - self.probe_gungrid_off > tail)
+			return;
+	}
+	else
+		self.probe_gungrid_off = gettime();
 	line = "PROBE gungrid " + gettime() + " " + self getEntityNumber();
 	for (i = 0; i < 5; i++)
 	{
