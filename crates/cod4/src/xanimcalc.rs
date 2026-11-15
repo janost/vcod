@@ -5,9 +5,9 @@
 //! without normalizing them, and each node of two or more live children
 //! folding their sums. The locals it leaves are what `DObjCalcSkel`
 //! composes ([`crate::skel`]). Both binaries run the same sums in the same
-//! order; `cod4_lnxded`'s x87 stack is an `f64` here, one rounding to `f32`
-//! where the binary stores, and `iw3mp.exe`'s every result a float
-//! ([`Cod4Arith`]).
+//! order; either binary's x87 stack is an `f64` here, one rounding to `f32`
+//! where the binary stores, `iw3mp.exe` storing a few values `cod4_lnxded`
+//! keeps ([`Cod4Arith`]).
 
 use anyhow::{Result, ensure};
 
