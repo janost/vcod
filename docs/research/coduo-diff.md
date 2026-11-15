@@ -494,6 +494,25 @@ has the seats, the drive step and vcod-server's vehicles.
   - `coduo-vehicles.md` 11's seat 1 entry sets the vehicle's `r.ownerNum` to
     the driver, so the scan's driver test and `G_GetTankIndex`'s owner test
     never hold together (INFERRED).
+  - The writers, read 2026-11-16 off every store to `+0x154` in
+    `game.mp.uo.i386.so` (17 of them):
+    - `VEH_LinkPlayer` (the static function at 0x8998d) on seat 1 writes
+      the vehicle's `eFlags |= 0x100000`, `r.ownerNum` and
+      `otherEntityNum` to the player (0x89e25, 0x89e35, 0x89e43), and the
+      player's `r.ownerNum` to the vehicle on any seat (0x89e4e)
+      (VERIFIED; the seat-1 gate at 0x89e09 INFERRED).
+    - `VEH_UnlinkPlayer` (0x89fb2) writes the record's seat to 1023 on any
+      seat (0x8a1c3), and the vehicle's `r.ownerNum` back to 1023 only on
+      seat 1 (0x8a204, 0x8a225) (VERIFIED, the stores; INFERRED, the
+      seat-1 branch).
+    - The vehicle's other writers are `G_InitGentity` (0x79724) and
+      `G_FreeEntityRefs` (0x79a8a), both 1023. The rest write a
+      missile's, a turret's or the player's own (VERIFIED, the stores and
+      their functions' symbols).
+  - INFERRED, from the stores: a seat 1 that holds someone and an
+    `r.ownerNum` of 1023 never hold together, whatever a script does
+    (`addVehicleToCompass` included), so `iCompassTankInfo` is 0 on every
+    UO MP server. vcod-server never writes the field, which sends that 0.
   - Retail UO 1.51b on mp_berlin (`client-probes/probe_tankcompass`, recipe
     in its header): an axis client drove the Panzer IV and an axis viewer
     moved round the tdm spawns. In 11 of the viewer's 257 changed snapshots
