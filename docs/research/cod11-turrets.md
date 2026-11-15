@@ -773,7 +773,8 @@ Not determined:
   clip's time (`place_gunner_at`, `ClientSim::legs_seconds`), all 362 match
   (VERIFIED, `ownline_ab`). INFERRED, the match: the delta reads each leaf's
   root at the group's own time. The other leaves carry one key, so the
-  time moves nothing there.
+  time moves nothing there. The client's placement reads the same time off
+  its own legs clock (14.7).
 - The body's yaw. VERIFIED, 7.1: `BG_PlayerStateToEntityState` is called at a
   lower address than the `AxisToAngles` store. INFERRED: the entity state is
   built before the store, so the yaw never reaches the wire. vcod blends the
@@ -2979,6 +2980,24 @@ INFERRED: the leaves' root yaw cancels the barrel's, so the body stays
 square to the gun and the column blend swings the arms after the barrel;
 the server's view yaw, which follows the barrel, would turn the whole body
 instead.
+
+VERIFIED, `cgame_mp_x86.dll` (1.1): `CG_Player` calls the clip step
+0x30004e40 at 0x300282b4 and, on an `eFlags & 0xc000` test, the placement
+0x300279b0 at 0x300282c5. INFERRED: the placement's `XAnimCalcAbsDelta`
+reads the legs clips as this frame's step left them, so a firing gunner's
+`fire_30left` leaves give their root at the clip's time, as on the server
+(7.2). vcod: `entities::place_body` takes the legs clip's seconds after
+this frame's step (`gunner_legs_seconds`, the step run on a copy of the
+clocks ahead of the pose's own). VERIFIED, vcod measurement
+(`entities::gunner_ab`, the client's tests): vcod-server runs the ownline
+sweep with the trigger held (7.2) and a spectator over the gun; drawn at
+each snapshot's time and fed the server's own origin, the client places
+the gunner where the server does on all 361 mounted frames to 2.5e-4;
+read at frame 0, 97 sit off. The drawn body starts from the entity's
+snapped `pos.trBase` instead, 0.875 units over the server's z on
+mp_carentan's floor, which moves the row blend: the drawn spot sits about
+0.09 units off the server's horizontally. INFERRED: a retail client draws
+off the same snapped origin, the only one the cgame gets.
 
 ### 14.8 The 1.5 and UO replay
 

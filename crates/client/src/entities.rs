@@ -29,7 +29,9 @@ use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::skeleton::{AnimBinding, PoseBuffer, Skeleton};
 use vcod_common::static_light::SceneLight;
 use vcod_common::turretpose::quat_angles;
-use vcod_common::turretpose::{GunnerPlacement, angles_quat, place_gunner, tag_weapon_local};
+use vcod_common::turretpose::{
+    GunnerPlacement, GunnerRule, angles_quat, place_gunner_at, tag_weapon_local,
+};
 use vcod_common::vehiclepose::{self, VehicleFields};
 use vcod_common::xanim::{self, XAnim};
 
@@ -904,6 +906,89 @@ fn update_channels(
     vcod_common::animclock::update_body((legs, torso), anims, wires, seen, at, window);
 }
 
+/// What a body's channel updates read off its entity: the client number,
+/// the snapped origin the rate is measured from, the flags.
+fn seen(ent: &EntityState, p: &Protocol) -> Seen {
+    Seen {
+        client_num: ent.field_i32(p, "clientNum"),
+        tr_base: Vec3::new(
+            ent.field_f32(p, "pos.trBase[0]"),
+            ent.field_f32(p, "pos.trBase[1]"),
+            ent.field_f32(p, "pos.trBase[2]"),
+        ),
+        eflags: ent.field_i32(p, "eFlags"),
+    }
+}
+
+/// `CG_Player`'s step of one body's clips (0x30004e40, called at
+/// 0x300282b4): the frames since the entity was last in the snapshot advance
+/// nothing (0x3001bd00 steps only the newest snapshot's entities), so a body
+/// back in view resumes its clips; then the two channel updates, the clips
+/// on the drawn clock and the rate measured off the newest snapshot's
+/// `pos.trBase` whenever a newer snapshot came in. `present` is the render
+/// time the entity was last seen.
+fn step_clocks(
+    (legs, torso, window, present): (&mut ChannelClock, &mut ChannelClock, &mut i32, &mut i32),
+    anims: &PlayerAnims,
+    rules: MoveRules,
+    wires: (i32, i32),
+    seen: &Seen,
+    at: Times,
+    frametime_ms: i32,
+) {
+    let unseen = at
+        .clock_ms
+        .wrapping_sub(frametime_ms)
+        .wrapping_sub(*present);
+    if unseen > 0 {
+        legs.pause(unseen);
+        torso.pause(unseen);
+    }
+    *present = at.clock_ms;
+    update_channels((legs, torso, window), anims, rules, wires, seen, at);
+}
+
+/// One body's clocks as [`step_clocks`] takes them: legs, torso, the stance
+/// window, the render time last seen.
+type BodyClocks = (ChannelClock, ChannelClock, i32, i32);
+
+impl EntityAnim {
+    fn clocks(&self) -> BodyClocks {
+        (
+            self.legs,
+            self.torso,
+            self.stance_window_ms,
+            self.present_ms,
+        )
+    }
+}
+
+/// The legs clip's time a gunner's placement reads his leaves at: `CG_Player`
+/// steps the clips (0x300282b4) before it places him (0x300282c5), so this
+/// is the time after this frame's step, which runs on a copy of `clocks`
+/// here and for real with the pose. A body not yet clocked starts from the
+/// clocks [`EntityAnim::new`] gives it.
+fn gunner_legs_seconds(
+    clocks: Option<BodyClocks>,
+    anims: &PlayerAnims,
+    rules: MoveRules,
+    ent: &EntityState,
+    p: &Protocol,
+    at: Times,
+    frametime_ms: i32,
+) -> f32 {
+    let (mut legs, mut torso, mut window, mut present) = clocks.unwrap_or((
+        ChannelClock::default(),
+        ChannelClock::default(),
+        0,
+        at.clock_ms,
+    ));
+    let wires = (ent.field_i32(p, "legsAnim"), ent.field_i32(p, "torsoAnim"));
+    let clocks = (&mut legs, &mut torso, &mut window, &mut present);
+    step_clocks(clocks, anims, rules, wires, &seen(ent, p), at, frametime_ms);
+    legs.seconds_of(wires.0, at.clock_ms)
+}
+
 /// A rider's seat node and leaves this frame, and those of the node the
 /// last seat change left.
 #[derive(Clone, Default)]
@@ -1025,6 +1110,13 @@ fn loaded(
     Ok((Rc::new(m), h))
 }
 
+/// A gun's `tag_aim` and `tag_weapon` bind positions in model space.
+fn aim_tags(skeleton: &Skeleton) -> Option<(Vec3, Vec3)> {
+    let bind = PoseBuffer::new(skeleton);
+    let tag = |n: &str| Some(bind.bone_world(skeleton, skeleton.bone_index(n)?).0);
+    tag("tag_aim").zip(tag("tag_weapon"))
+}
+
 /// Loads and uploads a turret's xmodel with its skeleton, caching failures as `None`.
 fn resolve_turret_rig<'a>(
     cache: &'a mut HashMap<String, Option<TurretRig>>,
@@ -1037,9 +1129,7 @@ fn resolve_turret_rig<'a>(
         let rig = match loaded(parts, renderer, fs, name) {
             Ok((m, handle)) => handle.map(|handle| {
                 let skeleton = Skeleton::build(&[&*m]);
-                let bind = PoseBuffer::new(&skeleton);
-                let tag = |n: &str| Some(bind.bone_world(&skeleton, skeleton.bone_index(n)?).0);
-                let aim_tags = tag("tag_aim").zip(tag("tag_weapon"));
+                let aim_tags = aim_tags(&skeleton);
                 TurretRig {
                     handle,
                     skeleton,
@@ -1321,18 +1411,19 @@ fn model_rotation(visual: &EntityVisual, angles: Vec3) -> Quat {
     }
 }
 
-/// 0x300279b0 (turrets doc 14.5): a mounted player's origin, body rotation
-/// and leaf blend for the wire anim `anim`, off the gun its `otherEntityNum`
-/// names, and the gun's z for the trace down. `None` leaves the body where
-/// the snapshot put it, as the routine's early returns do.
+/// 0x300279b0 (turrets doc 14.7): a mounted player's origin, body rotation
+/// and leaf blend for his `legsAnim`, off the gun his `otherEntityNum`
+/// names, and the gun's z for the trace down; each leaf's root is read at
+/// the legs clip's time `seconds` gives (turrets doc 7.2). `None` leaves the
+/// body where the snapshot put it, as the routine's early returns do.
 #[allow(clippy::too_many_arguments)]
 fn place_body(
     anims: &PlayerAnims,
-    anim: i32,
     ent: &EntityState,
     p: &Protocol,
     guns: &HashMap<u32, GunFrame>,
     pos: Vec3,
+    seconds: impl FnOnce() -> f32,
     clips: &mut HashMap<String, Option<Rc<XAnim>>>,
     fs: &dyn AssetSource,
 ) -> Option<(GunnerPlacement, f32)> {
@@ -1347,14 +1438,16 @@ fn place_body(
     if gun.rotate_inc <= 0.0 {
         return None; // not a turret file: the column split would divide by 0
     }
-    place_gunner(
+    place_gunner_at(
+        GunnerRule::Cod1,
         anims,
         |n| load_clip(clips, fs, n),
-        anim,
+        ent.field_i32(p, "legsAnim"),
         gun.tag_weapon?,
         (gun.pos, gun.rot),
         pos,
         gun.rotate_inc,
+        seconds(),
     )
     .map(|g| (g, gun.pos.z))
 }
@@ -1597,16 +1690,17 @@ pub fn build_instances(
         // A gunner stands and turns where its gun puts it, traced down.
         let snap_pos = pos;
         let placed = match (&visual, anims) {
-            (EntityVisual::Player { .. }, Some(anims)) if etype == ET_PLAYER => place_body(
-                anims,
-                ent.field_i32(p, "legsAnim"),
-                ent,
-                p,
-                &guns,
-                pos,
-                clips,
-                fs,
-            ),
+            (EntityVisual::Player { .. }, Some(anims)) if etype == ET_PLAYER => {
+                let at = Times {
+                    clock_ms: render_time,
+                    snapshot_ms: latest_snapshot_ms,
+                };
+                let seconds = || {
+                    let clocks = states.get(&num).map(EntityAnim::clocks);
+                    gunner_legs_seconds(clocks, anims, rules, ent, p, at, frametime_ms)
+                };
+                place_body(anims, ent, p, &guns, pos, seconds, clips, fs)
+            }
             _ => None,
         };
         let placed = placed.map(|(g, gun_z)| {
@@ -1767,36 +1861,18 @@ pub fn build_instances(
                     let lean = lerp_field("leanf");
                     let eflags = ent.field_i32(p, "eFlags");
 
-                    // cgame 0x30004e40's two channel updates (0x30003be0):
-                    // the clips run on the drawn clock, and the rate is
-                    // measured off the newest snapshot's `pos.trBase`
-                    // whenever a newer snapshot came in.
                     let at = Times {
                         clock_ms: render_time,
                         snapshot_ms: latest_snapshot_ms,
                     };
-                    let seen = Seen {
-                        client_num: ent.field_i32(p, "clientNum"),
-                        tr_base: Vec3::new(
-                            ent.field_f32(p, "pos.trBase[0]"),
-                            ent.field_f32(p, "pos.trBase[1]"),
-                            ent.field_f32(p, "pos.trBase[2]"),
-                        ),
-                        eflags,
-                    };
-                    // The frames since it last was in the snapshot advanced
-                    // nothing (0x3001bd00 steps only the newest snapshot's
-                    // entities), so a body back in view resumes its clips.
-                    let unseen = render_time
-                        .wrapping_sub(frametime_ms)
-                        .wrapping_sub(st.present_ms);
-                    if unseen > 0 {
-                        st.legs.pause(unseen);
-                        st.torso.pause(unseen);
-                    }
-                    st.present_ms = render_time;
-                    let channels = (&mut st.legs, &mut st.torso, &mut st.stance_window_ms);
-                    update_channels(channels, anims, rules, (legs_wire, torso_wire), &seen, at);
+                    let clocks = (
+                        &mut st.legs,
+                        &mut st.torso,
+                        &mut st.stance_window_ms,
+                        &mut st.present_ms,
+                    );
+                    let wires = (legs_wire, torso_wire);
+                    step_clocks(clocks, anims, rules, wires, &seen(ent, p), at, frametime_ms);
 
                     // Corpses keep their death-clip pose; their aim fields are
                     // stale and would twist the body forever. A gunner runs no
@@ -2291,6 +2367,10 @@ pub fn build_instances(
         vehicle_wheels,
     }
 }
+
+#[cfg(test)]
+#[path = "entities_gunner_ab.rs"]
+mod gunner_ab;
 
 #[cfg(test)]
 mod tests {
