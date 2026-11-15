@@ -594,15 +594,13 @@ fn thrower_spawn(text: &str) -> i64 {
 }
 
 /// The spawn point under `at`, where a spawn's think left a body, as the
-/// gametype hands it to `spawn`: dropped onto the floor by
-/// `placeSpawnpoint`'s player box (its ceiling check, then the fall).
+/// gametype hands it to `spawn`: placed by the server's own
+/// `placeSpawnpoint` (`placed_origin`).
 fn placed_spawn_under(
     world: &vcod_server::world::World,
     points: Vec<([f32; 3], [f32; 3])>,
     at: [f32; 3],
 ) -> ([f32; 3], [f32; 3]) {
-    use glam::Vec3;
-    use vcod_server::game::trigger::{PLAYER_MAXS, PLAYER_MINS};
     let (origin, angles) = points
         .into_iter()
         .filter(|(p, _)| {
@@ -610,17 +608,8 @@ fn placed_spawn_under(
         })
         .min_by(|a, b| a.0[2].total_cmp(&b.0[2]))
         .expect("a spawn point under the body");
-    let (mins, maxs) = (Vec3::from(PLAYER_MINS), Vec3::from(PLAYER_MAXS));
-    let start = Vec3::from(origin);
-    let c = &world.collision;
-    let up = c.box_trace(start, start + Vec3::new(0.0, 0.0, 128.0), mins, maxs);
-    let down = c.box_trace(
-        up.endpos,
-        up.endpos - Vec3::new(0.0, 0.0, 262144.0),
-        mins,
-        maxs,
-    );
-    (down.endpos.into(), angles)
+    let (placed, _) = vcod_server::game::builtins::entity::placed_origin(&world.collision, origin);
+    (placed, angles)
 }
 
 fn line_time(l: &str) -> i32 {
