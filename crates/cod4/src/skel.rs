@@ -3,8 +3,9 @@
 //! controller sets (0x81b00de), and `DObjCalcSkel`'s composition of them
 //! into model-space bones (0x81af4f8, 0x81ae164), each float rounded where
 //! the binary stores it. docs/research/cod4-gsc.md 3.2, "The skeleton".
-//! `iw3mp.exe`'s `DObjCalcSkel` runs the same sums in the same order with
-//! every result a float ([`Cod4Arith::Client`], cod4-player-anims.md 8).
+//! `iw3mp.exe`'s `DObjCalcSkel` runs the same sums in the same order,
+//! here with every result a float ([`Cod4Arith::Client`],
+//! cod4-player-anims.md 8).
 
 use crate::assets::model::XModel;
 use std::ops::{Add, Mul, Neg, Sub};
@@ -83,19 +84,28 @@ fn f(x: f64) -> f32 {
 }
 
 /// A value on the x87 stack: `cod4_lnxded` keeps its 64-bit mantissa (an
-/// `f64` here); `iw3mp.exe` runs the x87 at single precision, Direct3D 9's
-/// default, so every result there is a float (`single`).
+/// `f64` here), `iw3mp.exe` a double (cod4-player-anims.md 11). `single`
+/// rounds every result to a float, as the client's composition still
+/// assumes.
 #[derive(Clone, Copy)]
-struct X {
-    v: f64,
+pub(crate) struct X {
+    pub(crate) v: f64,
     single: bool,
 }
 
 impl X {
-    fn of(v: f32, a: Cod4Arith) -> X {
+    pub(crate) fn of(v: f32, a: Cod4Arith) -> X {
         X {
             v: d(v),
             single: a == Cod4Arith::Client,
+        }
+    }
+
+    /// `v` on a stack that keeps its precision between stores.
+    pub(crate) fn kept(v: f32) -> X {
+        X {
+            v: d(v),
+            single: false,
         }
     }
 
@@ -103,7 +113,7 @@ impl X {
         q.map(|v| X::of(v, a))
     }
 
-    fn with(self, v: f64) -> X {
+    pub(crate) fn with(self, v: f64) -> X {
         X {
             v: if self.single { d(f(v)) } else { v },
             single: self.single,
@@ -111,14 +121,14 @@ impl X {
     }
 
     /// The value stored to a float and loaded back.
-    fn st(self) -> X {
+    pub(crate) fn st(self) -> X {
         X {
             v: d(f(self.v)),
             single: self.single,
         }
     }
 
-    fn f(self) -> f32 {
+    pub(crate) fn f(self) -> f32 {
         f(self.v)
     }
 }
@@ -141,6 +151,13 @@ impl Mul for X {
     type Output = X;
     fn mul(self, o: X) -> X {
         self.with(self.v * o.v)
+    }
+}
+
+impl std::ops::Div for X {
+    type Output = X;
+    fn div(self, o: X) -> X {
+        self.with(self.v / o.v)
     }
 }
 

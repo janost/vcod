@@ -259,10 +259,9 @@ fn pose4(
     Pose4 { buf, sampled }
 }
 
-/// `DObjCalcAnim` over `b`'s tree (`root` and `main` over the legs and
-/// torso nodes, cod4-player-anims.md 11): each bone's local, a bone no leaf
-/// reached its model's own. `None` for a gunner, or a clip or model the
-/// zones lack.
+/// `DObjCalcAnim` over `b`'s tree at its node times
+/// (`vcod_cod4::xanimcalc::player_locals`) in `cod4_lnxded`'s arithmetic.
+/// `None` for a clip the zones lack.
 fn sample4(
     b: &PlayerBody,
     rig: &PlayerRig,
@@ -271,55 +270,9 @@ fn sample4(
     f: &BodyFrame,
     now: i32,
 ) -> Option<Vec<Option<vcod_cod4::skel::AnimMat>>> {
-    use vcod_cod4::xanimcalc::{Tree, calc};
-    let channels = b.leaves(set, src, f, now)?;
-    let skel = &rig.skeleton;
-    let mut held = Vec::new();
-    for (_, leaves) in &channels {
-        for l in leaves {
-            let parts = src.parts(&l.clip)?;
-            let remap: Vec<Option<usize>> =
-                parts.bones.iter().map(|n| skel.bone_index(n)).collect();
-            held.push((parts, remap));
-        }
-    }
-    let mut held = held.iter();
-    let nodes = channels
-        .iter()
-        .map(|(weight, leaves)| Tree::Node {
-            weight: *weight,
-            children: leaves
-                .iter()
-                .zip(held.by_ref())
-                .map(|(l, (parts, remap))| Tree::Leaf {
-                    parts,
-                    remap,
-                    time: l.time,
-                    weight: l.weight,
-                })
-                .collect(),
-        })
-        .collect();
-    let main = Tree::Node {
-        weight: 1.0,
-        children: vec![Tree::Node {
-            weight: 1.0,
-            children: nodes,
-        }],
-    };
-    let (mats, reached) = calc(&main, skel.bones().len());
-    mats.into_iter()
-        .zip(reached)
-        .zip(skel.bones())
-        .map(|((m, r), bone)| match r {
-            true => Some(Some(m)),
-            false => Some(
-                rig.models
-                    .iter()
-                    .find_map(|(model, _)| src.base_local(model, &bone.name)),
-            ),
-        })
-        .collect()
+    let channels = b.leaves(set, src, f, now, true)?;
+    let models: Vec<&str> = rig.models.iter().map(|(m, _)| m.as_str()).collect();
+    vcod_cod4::xanimcalc::player_locals(src, &rig.skeleton, &models, &channels, Cod4Arith::Server)
 }
 
 /// A posed body's bones as 1.7's `DObjCalcSkel` composes the locals the

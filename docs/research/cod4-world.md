@@ -154,9 +154,9 @@ static models carry a non-zero `groundLighting`, 14962 of mp_creek's 22311
   up). Corners 0-3 come from the cell's grid point, 4-7 from the next
   along the row axis (0x6279b0 twice, 0x628025 and 0x628044); the point
   is under the floor when either call found it so. VERIFIED
-  (0x627e90-0x628051). That vcod's `f32` arithmetic matches assumes the
-  x87 runs at single precision, as Direct3D 9 sets it by default.
-  INFERRED.
+  (0x627e90-0x628051). vcod's arithmetic is `f32`; `iw3mp.exe`'s x87
+  runs at double precision (cod4-player-anims.md 11), so a value it keeps
+  between stores can sit an ulp off vcod's. INFERRED.
 - The corners in order: one with no entry is skipped, one under 0.001
   (0x70b278) dropped. When its `needsTrace` has the corner's bit, 0x627d50
   traces from `p` to the corner moved 0.01 (0x70afb8) toward `p`, through
@@ -782,8 +782,8 @@ Where the partitions go (`R_SetupSunShadowMaps`, 0x639900):
   over the scale (0x70b1f8, 0x70b120); each partition's clip origin `(2 x
   - 1, 1 - 2 y)` (2.0 at 0x70ae50). The sun's view matrix's columns are
   right negated, up and forward, the translation the snapped origin
-  negated. VERIFIED (0x6394ca-0x639720). That vcod's `f32` arithmetic
-  matches assumes the x87 at single precision. INFERRED.
+  negated. VERIFIED (0x6394ca-0x639720). vcod's arithmetic is `f32`, the x87's
+  double precision aside (cod4-player-anims.md 11). INFERRED.
 - A surface or model whose primary light is the sun draws technique 9
   while the map is on, else 8. INFERRED (`R_UpdateDrawMethod`,
   `litTechType`).

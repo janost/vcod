@@ -14,6 +14,7 @@ use vcod_cod4::skel::{
 use vcod_cod4::testing::cod4_install;
 use vcod_cod4::walk::{WalkOptions, walk};
 use vcod_cod4::zone::Zone;
+use vcod_common::playerpose::Cod4Arith;
 
 const DUMP: &str = include_str!("fixtures/skel/cobra-idle-gdb.txt");
 
@@ -280,12 +281,84 @@ const ANIM_DUMP: &str = include_str!("fixtures/skel/player-anim-gdb.txt");
 /// for word.
 #[test]
 fn a_players_anim_locals_match_retails_word_for_word() {
-    use std::collections::HashMap;
-    use vcod_cod4::anim::script_string;
-    use vcod_cod4::xanimcalc::{Parts, Tree, calc};
-    let Some(install) = cod4_install() else {
+    let Some((calcs, words, off)) = anim_locals(Cod4Arith::Server) else {
         return;
     };
+    assert_eq!((calcs, words), (280, 17392));
+    assert!(
+        off.is_empty(),
+        "{calcs} calcs, {} of {words} words off: {:#?}",
+        off.len(),
+        &off[..off.len().min(30)]
+    );
+}
+
+/// The same trees in `iw3mp.exe`'s arithmetic, what the drawn bodies
+/// take: the same sums, its x87 at double precision and storing a few
+/// values the server keeps (cod4-player-anims.md 11). No client dump
+/// exists, so this bounds how far the two binaries' words part: a shift
+/// whose `mins` and `size` nearly cancel parts most.
+#[test]
+fn a_players_drawn_anim_locals_part_from_retails_by_their_stores() {
+    let Some((calcs, words, off)) = anim_locals(Cod4Arith::Client) else {
+        return;
+    };
+    assert_eq!((calcs, words), (280, 17392));
+    let worst = off.iter().map(|o| o.1).fold(0.0f32, f32::max);
+    println!("{} of {words} words off, worst {worst:e}", off.len());
+    assert!(!off.is_empty() && worst < 4e-6, "{worst}");
+}
+
+/// The calcs sampled, the words checked, and each word off retail's with
+/// how far.
+type Sampled = (usize, usize, Vec<(String, f32)>);
+
+/// Each tree of `ANIM_DUMP` rebuilt and sampled in `a`'s arithmetic: the
+/// calcs, the words checked, and each word off retail's with how far.
+fn anim_locals(a: Cod4Arith) -> Option<Sampled> {
+    anim_locals_in(a, false)
+}
+
+/// Each tree of `ANIM_DUMP` as `main`'s nodes and their leaves, through
+/// `xanimcalc::player_locals` over a skeleton of its models, what the
+/// server's hit poses and the drawn bodies sample by: every needed bone's
+/// local word for word, but a head's copies of body bones, which the
+/// skeleton merges into the body's.
+#[test]
+fn a_players_anim_locals_through_the_shared_sampler_match_retails() {
+    let Some((calcs, words, off)) = anim_locals_in(Cod4Arith::Server, true) else {
+        return;
+    };
+    assert_eq!((calcs, words), (280, 17392));
+    let bones: std::collections::BTreeSet<String> = off
+        .iter()
+        .map(|o| {
+            o.0.split(" word")
+                .next()
+                .unwrap()
+                .split_once(' ')
+                .unwrap()
+                .1
+                .to_string()
+        })
+        .collect();
+    assert!(
+        off.is_empty(),
+        "{} of {words} words off: {bones:#?}",
+        off.len()
+    );
+}
+
+/// [`anim_locals`]; `shared` samples each tree through
+/// `xanimcalc::player_locals`, a dumped bone found by name.
+fn anim_locals_in(a: Cod4Arith, shared: bool) -> Option<Sampled> {
+    use std::collections::HashMap;
+    use vcod_cod4::anim::BodySource;
+    use vcod_cod4::anim::script_string;
+    use vcod_cod4::xanimcalc::{Parts, Tree, calc, player_locals};
+    use vcod_common::playerpose::Leaf;
+    use vcod_common::skeleton::Skeleton;
+    let install = cod4_install()?;
     let zone = |name: &str| {
         let z = Zone::open_path(&install.zone("english", name)).unwrap();
         walk(z, WalkOptions { keep_bulk: true }).unwrap().assets
@@ -346,7 +419,10 @@ fn a_players_anim_locals_match_retails_word_for_word() {
         leaf: Option<&'a str>,
         kids: Vec<(usize, f32)>,
     }
-    let (mut calcs, mut words, mut off) = (0, 0, Vec::new());
+    // Per model set: its skeleton, its models' names and a source holding
+    // their own locals.
+    let mut sources: HashMap<String, (Skeleton, Vec<String>, BodySource)> = HashMap::new();
+    let (mut calcs, mut words, mut off, mut skipped) = (0, 0, Vec::new(), 0);
     let mut lines = ANIM_DUMP.lines().filter(|l| !l.starts_with('#')).peekable();
     while let Some(line) = lines.next() {
         let t: Vec<&str> = line.split_whitespace().collect();
@@ -356,6 +432,7 @@ fn a_players_anim_locals_match_retails_word_for_word() {
         let names = bone_names(t[1]);
         assert_eq!(names.len(), t[3].parse::<usize>().unwrap(), "{line}");
         let mut walks: Vec<(usize, Walk)> = Vec::new();
+        let mut copies: Vec<usize> = Vec::new();
         let mut want = Vec::new();
         while let Some(l) = lines.next_if(|l| !l.starts_with("calc")) {
             let w: Vec<&str> = l.split_whitespace().collect();
@@ -419,16 +496,77 @@ fn a_players_anim_locals_match_retails_word_for_word() {
             }
         }
         let root = tree(&walks, &leaves, walks[0].0, 1.0);
-        let (mut mats, reached) = calc(&root, names.len());
+        let (mut mats, reached) = calc(&root, names.len(), a);
         for ((m, r), base) in mats.iter_mut().zip(&reached).zip(bases(t[1])) {
             if !r {
                 *m = base;
             }
         }
+        if shared {
+            let (skel, models, src) = sources.entry(t[1].to_string()).or_insert_with(|| {
+                let mut built = HashMap::new();
+                let list: Vec<String> = t[1].split(',').map(str::to_string).collect();
+                for m in &list {
+                    let (a, x) = zones
+                        .iter()
+                        .find_map(|a| Some((a, a.xmodels.iter().find(|x| &x.name == m)?)))
+                        .expect(m);
+                    let model =
+                        vcod_cod4::anim::model(a, x, |id| a.materials[id.index()].name.clone())
+                            .unwrap()
+                            .expect(m);
+                    built.insert(m.clone(), model);
+                }
+                let skel = Skeleton::build(&list.iter().map(|m| &built[m]).collect::<Vec<_>>());
+                let src = BodySource::from_zones(&[&zones[0], &zones[1]], built).unwrap();
+                (skel, list, src)
+            });
+            let walk = |i: usize| &walks.iter().find(|(k, _)| *k == i).expect("walked").1;
+            let main = walk(walks[0].0).kids.as_slice();
+            assert_eq!(main.len(), 1, "{line}");
+            let channels: Vec<(f32, Vec<Leaf>)> = walk(main[0].0)
+                .kids
+                .iter()
+                .map(|&(node, weight)| {
+                    let leaves = walk(node)
+                        .kids
+                        .iter()
+                        .map(|&(k, w)| Leaf {
+                            clip: walk(k).leaf.expect("a leaf under a node").to_string(),
+                            time: walk(k).time,
+                            weight: w,
+                        })
+                        .collect();
+                    (weight, leaves)
+                })
+                .collect();
+            let models: Vec<&str> = models.iter().map(String::as_str).collect();
+            let locals = player_locals(src, skel, &models, &channels, a).expect("every clip held");
+            // The DObj's bones are each model's in turn; the skeleton keeps
+            // the body's and merges the head's into them by name.
+            let dobj: Vec<usize> = (0..models.len())
+                .flat_map(|i| skel.model_map(i).iter().copied())
+                .collect();
+            assert_eq!(dobj.len(), names.len(), "{line}");
+            for (b, m) in mats.iter_mut().enumerate() {
+                assert_eq!(skel.bones()[dobj[b]].name, names[b]);
+                *m = locals[dobj[b]].unwrap_or_else(|| panic!("{} has no local", names[b]));
+            }
+            // A head's own copy of a body bone (its spine, neck and wrists)
+            // is that body bone in the skeleton: its drawn place is the
+            // body's, its own unkeyed local not one vcod keeps.
+            copies = (0..names.len())
+                .filter(|&b| dobj[..b].contains(&dobj[b]))
+                .collect();
+        }
         calcs += 1;
         for l in want {
             let w: Vec<&str> = l.split_whitespace().collect();
             let b: usize = w[0].parse().unwrap();
+            if copies.contains(&b) {
+                skipped += w.len() - 1;
+                continue;
+            }
             let m = mats[b];
             let ours = [
                 m.quat[0],
@@ -442,22 +580,20 @@ fn a_players_anim_locals_match_retails_word_for_word() {
             ];
             for (k, s) in w[1..].iter().enumerate() {
                 words += 1;
-                if ours[k].to_bits() != bits(s).to_bits() {
-                    off.push(format!(
-                        "{} bone {b} ({}) word {k}: retail {s} ours {:08x}",
-                        t[2],
-                        names[b],
-                        ours[k].to_bits()
+                let theirs = bits(s);
+                if ours[k].to_bits() != theirs.to_bits() {
+                    off.push((
+                        format!(
+                            "{} bone {b} ({}) word {k}: retail {s} ours {:08x}",
+                            t[2],
+                            names[b],
+                            ours[k].to_bits()
+                        ),
+                        (ours[k] - theirs).abs(),
                     ));
                 }
             }
         }
     }
-    assert_eq!((calcs, words), (280, 17392));
-    assert!(
-        off.is_empty(),
-        "{calcs} calcs, {} of {words} words off: {:#?}",
-        off.len(),
-        &off[..off.len().min(30)]
-    );
+    Some((calcs, words + skipped, off))
 }
