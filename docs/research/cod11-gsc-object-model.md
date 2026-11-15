@@ -2838,9 +2838,21 @@ level's script clock carries on (6050), its first frame's
 `getentarray("player")` holds no player, the test client's
 `ClientConnect` runs again at 6350 with `sessionstate` `spectator` and its
 `begin` at 6400, and the next `addTestClient` at 11150 is `bot1` in slot 1.
+VERIFIED live, `probe_tcmapchange` on retail 1.1d (2026-11-15, the same
+script with `exitLevel(false)` and `sv_mapRotation "gametype
+probe_tcmapchange map mp_carentan"`; `testclient.rs`'s
+`a_test_client_reconnects_but_never_begins_after_a_map_change_as_on_retail`,
+which ours matches line for line): across a map change the new level's
+clock carries on (6050 on mp_carentan), its first frame holds no player,
+and the test client's `ClientConnect` runs again at 6350 as `bot0`,
+`spectator`, as after the restart, but its `begin` never comes (none in
+the 24 s the run went on). INFERRED, from the restart's `begin` at 6400:
+`map_restart` enters a test client into the world itself, a map load puts
+it back to connected and nothing it sends would enter it, since it sends
+nothing. The next `addTestClient` is still `bot1` in slot 1.
 Not run: a slot a UDP client once held (address no longer zero, so
 retail's port-0 bot is not refused there; it needs a connect and a drop
-inside the server's first 3 s) and a `map` change.
+inside the server's first 3 s).
 
 ## Open, and worth a probe
 
