@@ -1513,8 +1513,13 @@ fn vm_cache_key(m: &model::Model) -> String {
 }
 
 /// Each player is 4-7 part instances, so 32 players plus corpses and dropped
-/// weapons land at 200-280.
-const MAX_DYNAMIC_INSTANCES: usize = 512;
+/// weapons land at 200-280; a CoD4 map's dynents add up to 1901 unskinned
+/// ones (cod4-client-perf.md 41).
+const MAX_DYNAMIC_INSTANCES: usize = 4096;
+/// Skinned instances the bone buffer holds, each up to [`MAX_INSTANCE_BONES`].
+const MAX_SKINNED_INSTANCES: usize = 512;
+// mp_shipment's dynents must leave room for every entity besides them.
+const _: () = assert!(MAX_DYNAMIC_INSTANCES >= 1901 + MAX_SKINNED_INSTANCES);
 pub(crate) const DYNAMIC_INSTANCE_STRIDE: u64 = 80;
 /// Unskinned instances point at a shared identity block of this many matrices.
 pub const MAX_INSTANCE_BONES: usize = 128;
@@ -6419,13 +6424,16 @@ impl Renderer {
         Some(self.dynamic.models.len() - 1)
     }
 
-    /// Instances past `MAX_DYNAMIC_INSTANCES` are dropped (warned once); a
-    /// stale handle is skipped. Written to the GPU in [`Self::render`].
+    /// Instances past `MAX_DYNAMIC_INSTANCES`, and skinned ones past
+    /// `MAX_SKINNED_INSTANCES`, are dropped (warned once); a stale handle is
+    /// skipped. Written to the GPU in [`Self::render`].
     pub fn set_dynamic_models(&mut self, instances: &[DynamicModelInstance]) {
         static OVERFLOW_WARNED: std::sync::Once = std::sync::Once::new();
+        static SKINNED_WARNED: std::sync::Once = std::sync::Once::new();
 
         let mut handles = Vec::with_capacity(instances.len());
         let mut items = Vec::with_capacity(instances.len());
+        let mut skinned = 0;
         for (src, inst) in instances.iter().enumerate() {
             if handles.len() == MAX_DYNAMIC_INSTANCES {
                 OVERFLOW_WARNED.call_once(|| {
@@ -6438,6 +6446,17 @@ impl Renderer {
             let ModelHandle(idx) = inst.model;
             if idx >= self.dynamic.handles.len() {
                 continue;
+            }
+            if inst.bones.is_some() {
+                if skinned == MAX_SKINNED_INSTANCES {
+                    SKINNED_WARNED.call_once(|| {
+                        log::warn!(
+                            "more than {MAX_SKINNED_INSTANCES} skinned entities this frame; dropping the rest"
+                        );
+                    });
+                    continue;
+                }
+                skinned += 1;
             }
             handles.push((src, inst));
             items.push((idx, inst.transform.to_cols_array(), inst.bones.as_deref()));
@@ -11876,7 +11895,7 @@ fn create_dynamic_pass(
         mapped_at_creation: false,
     });
 
-    // Worst case: every instance skinned at the cap, plus the identity block.
+    // Worst case: every skinned instance at the bone cap, plus the identity block.
     let storage = |binding, visibility| wgpu::BindGroupLayoutEntry {
         binding,
         visibility,
@@ -11898,7 +11917,7 @@ fn create_dynamic_pass(
     });
     let bone_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("dynamic bone matrices"),
-        size: (MAX_DYNAMIC_INSTANCES + 1) as u64 * MAX_INSTANCE_BONES as u64 * 64,
+        size: (MAX_SKINNED_INSTANCES + 1) as u64 * MAX_INSTANCE_BONES as u64 * 64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
