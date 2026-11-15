@@ -1503,7 +1503,12 @@ impl ScriptRuntime {
                     glam::Vec3::from(origin),
                     vcod_common::turretpose::angles_quat(angles),
                 );
-                vcod_common::turretpose::place_gunner(
+                // The leaves' root deltas at the group's own time: a firing
+                // gunner's `fire_30left` leaves key a second spot (turrets
+                // doc 7.2).
+                let seconds = sim.legs_seconds(self.host.level_time_ms);
+                vcod_common::turretpose::place_gunner_at(
+                    vcod_common::turretpose::GunnerRule::Cod1,
                     anims,
                     |name| rigs.clip(fs, name),
                     sim.legs_anim(),
@@ -1511,6 +1516,7 @@ impl ScriptRuntime {
                     turret,
                     sim.ps.origin,
                     rec.def.anim_hor_rotate_inc,
+                    seconds,
                 )
             }
             _ => None,

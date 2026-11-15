@@ -472,12 +472,40 @@ pub enum GunnerRule {
 pub fn place_gunner_by(
     rule: GunnerRule,
     anims: &PlayerAnims,
+    clip: impl FnMut(&str) -> Option<Rc<XAnim>>,
+    legs_anim: i32,
+    tag_weapon: (Vec3, Quat),
+    turret: (Vec3, Quat),
+    player_origin: Vec3,
+    rotate_inc: f32,
+) -> Option<GunnerPlacement> {
+    place_gunner_at(
+        rule,
+        anims,
+        clip,
+        legs_anim,
+        tag_weapon,
+        turret,
+        player_origin,
+        rotate_inc,
+        0.0,
+    )
+}
+
+/// [`place_gunner_by`] with every leaf's root delta sampled at the turret
+/// group's clip time `seconds` (`XAnimCalcAbsDelta` reads the leaves at
+/// their time, cod11-turrets.md 7.2), not at frame 0.
+#[allow(clippy::too_many_arguments)]
+pub fn place_gunner_at(
+    rule: GunnerRule,
+    anims: &PlayerAnims,
     mut clip: impl FnMut(&str) -> Option<Rc<XAnim>>,
     legs_anim: i32,
     tag_weapon: (Vec3, Quat),
     turret: (Vec3, Quat),
     player_origin: Vec3,
     rotate_inc: f32,
+    seconds: f32,
 ) -> Option<GunnerPlacement> {
     let tree = &anims.tree;
     let node = anims.index.node_id(legs_anim)?;
@@ -518,7 +546,8 @@ pub fn place_gunner_by(
         let (mut trans, mut rot) = (Vec3::ZERO, Quat::from_xyzw(0.0, 0.0, 0.0, 0.0));
         for &(leaf, w) in weights {
             let anim = clip(&tree.nodes[leaf].name)?;
-            let (t, r) = anim.root.as_ref().map_or((None, None), |r| r.sample(0.0));
+            let at = anim.frame_pos(seconds, anim.looping);
+            let (t, r) = anim.root.as_ref().map_or((None, None), |r| r.sample(at));
             trans += w * t.unwrap_or(Vec3::ZERO);
             rot += r.unwrap_or(Quat::IDENTITY) * w;
         }

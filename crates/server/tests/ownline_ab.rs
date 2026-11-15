@@ -244,12 +244,11 @@ fn a_sweeping_gunner_is_placed_where_retail_places_him() {
     placement("mp_carentan-nofire-1.1.txt", &[("probe_nofire", "1")]);
 }
 
-/// The firing gunner's placement. Open: 97 of 362 frames read up to 0.57
-/// off, in each row's sweep from 12 to 40 right of the gun and the two
-/// frames after the swing back left, where the trigger-up sweep reads
-/// retail's on every frame (cod11-turrets.md 13.11).
+/// The same with the trigger held: the fire group's `fire_30left` leaves
+/// key a second root spot, and the placement reads each leaf's root at the
+/// group's own time (cod11-turrets.md 7.2). Read at frame 0, 97 of 362
+/// frames sat up to 0.57 off.
 #[test]
-#[ignore = "open: the 1.1d firing gunner's placement, cod11-turrets.md 13.11"]
 fn a_firing_gunner_is_placed_where_retail_places_him() {
     placement("mp_carentan-1.1.txt", &[]);
 }
