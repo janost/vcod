@@ -21,3 +21,6 @@ tempfile.workspace = true
 [[test]]
 name = "cod2"
 path = "tests/main.rs"
+
+[lints]
+workspace = true

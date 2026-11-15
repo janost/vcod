@@ -1197,9 +1197,7 @@ impl WorldVis {
     /// Group bounds only; retail marks every surface of a hit group.
     fn mark_group(&self, g: &mapworld::CullGroup, frustum: &Frustum, vis: &mut Visible) {
         if frustum.intersects_aabb(Vec3::from(g.mins), Vec3::from(g.maxs)) {
-            for s in g.first_soup as usize..(g.first_soup + g.soup_count) as usize {
-                vis.soups[s] = true;
-            }
+            vis.soups[g.first_soup as usize..(g.first_soup + g.soup_count) as usize].fill(true);
         }
     }
 }
