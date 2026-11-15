@@ -428,25 +428,20 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// A bracket read. CoD2 compiles one on `self` and `level` and checks
-    /// it at run time (cod2-gsc-diff.md 3.4).
-    fn check_array(&self, obj: &Expr) -> Result<(), CompileError> {
-        match obj {
-            Expr::SelfRef | Expr::LevelRef | Expr::AnimRef if self.dialect == Dialect::Cod1 => {
-                Err(self.err("not an array, string, or vector"))
-            }
-            _ => Ok(()),
-        }
-    }
-
-    /// A bracket write: CoD2 refuses one on `self` and `level` as `not an
-    /// lvalue` (`probe_c2k`, `probe_c2m`).
+    /// A bracket write on `self`, `level` or `anim`: CoD1 refuses one as
+    /// `not an array, string, or vector` (`probe_level_bracket`, 1.1d, 1.5b
+    /// and UO), CoD2 as `not an lvalue` (`probe_c2k`, `probe_c2m`). A
+    /// bracket read compiles in both and fails at run time (cod2-gsc-diff.md
+    /// 3.4; `probe_level_bracket_read`).
     fn check_index_write(&self, obj: &Expr) -> Result<(), CompileError> {
         match obj {
             Expr::SelfRef | Expr::LevelRef | Expr::AnimRef if self.dialect.cod2_family() => {
                 Err(self.err("not an lvalue"))
             }
-            _ => self.check_array(obj),
+            Expr::SelfRef | Expr::LevelRef | Expr::AnimRef if self.dialect == Dialect::Cod1 => {
+                Err(self.err("not an array, string, or vector"))
+            }
+            _ => Ok(()),
         }
     }
 
@@ -731,7 +726,6 @@ impl<'a> Compiler<'a> {
                 self.emit(Op::LoadField(a));
             }
             Expr::Index(obj, idx) => {
-                self.check_array(obj)?;
                 self.compile_expr(obj)?;
                 self.compile_expr(idx)?;
                 self.emit(Op::LoadIndex);
@@ -1366,6 +1360,8 @@ mod tests {
         assert_eq!(cod2_err("m() { self[0][1] = \"w\"; }"), "not an lvalue");
         assert_eq!(cod2_err("m() { game.x = 1; }"), "not an object");
         let ast = crate::parse::parse_file("m() { x = self[1]; }").unwrap();
+        assert!(compile_file(&ast, "test/script", &mut Interner::default()).is_ok());
+        let ast = crate::parse::parse_file("m() { self[1] = 1; }").unwrap();
         let e = compile_file(&ast, "test/script", &mut Interner::default()).unwrap_err();
         assert_eq!(e.msg, "not an array, string, or vector");
     }

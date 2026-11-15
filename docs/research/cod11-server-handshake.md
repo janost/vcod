@@ -2041,7 +2041,9 @@ vcod:
   flagging reads at that point: each indexed model's descriptor and LOD 0
   `xmodelparts` (retail's `G_ModelIndex` precache); 1.5's every
   `soundaliases/*.csv`; UO's map sound load spec; each `#using_animtree` tree
-  on both.
+  on both. Its own player anim load reads `animtrees/multiplayer.atr`
+  (`animtree::PlayerAnims::load`) inside the window, as retail's does
+  (`a_pak_holding_the_load_spec_or_an_animtree_is_referenced`).
 - The UO gates (mp_cassino dm, ctf, dom, hq; mp_foy bas; mp_j5outpost) and the
   1.5 gate (mp_carentan) match retail's pair exactly;
   `a_pak_holding_the_load_spec_or_an_animtree_is_referenced` covers a pak
@@ -2063,11 +2065,20 @@ Post-clear reads, retail UO's `fs_debug 1` against vcod's `read <file> from
   VERIFIED (strings).
 - The animtree reads follow the compile: `Can't find animtrees/turret88.atr`,
   `animtrees/flak88.atr`, `animtrees/multiplayer.atr`, after
-  `mp/playeranim.script` on mp_foy. VERIFIED (log). Each is a loaded script's
-  `#using_animtree` (`_flak_gmi.gsc`'s `flak88`). INFERRED.
+  `mp/playeranim.script` on mp_foy. VERIFIED (log). The first two are loaded
+  scripts' `#using_animtree` (`_flak_gmi.gsc`'s `flak88`). INFERRED. No
+  stock 1.5 or UO script names `multiplayer` (VERIFIED, every `.gsc` in
+  1.5's `main/` and UO's `pakuo*`); the game modules hold the string beside
+  `mp/playeranim.script` (1.5b `game.mp.i386.so` 0x7329a and 0x73000, UO
+  `game.mp.uo.i386.so` 0x98b5a and 0x98800; VERIFIED, strings), so the
+  player anim init reads it. INFERRED.
 - All three servers hold `animtrees/%s.atr` (file offsets 1.1d 0x8e904, 1.5b
-  0x98e04, UO 0x9ed44). VERIFIED (strings). vcod reads the tree on 1.5 too;
-  that 1.5b does at the same point. INFERRED.
+  0x98e04, UO 0x9ed44). VERIFIED (strings). Retail 1.5b with `fs_debug 1`
+  on mp_carentan dm (2026-11-15) reads `animtrees/multiplayer.atr` from
+  `pak5` right after `mp/playeranim.script`, after the load's pak clear.
+  VERIFIED (log). Its dm loads no script with a `#using_animtree`, so the
+  script trees' read on 1.5b stays unmeasured; vcod makes it at the same
+  point as UO's. INFERRED.
 - A scratch UO install with `uo/zzz_spec.pk3` (only
   `soundloadspecs/mp/mp_foy.csv`) and `uo/zzz_tree.pk3` (only
   `animtrees/flak88.atr`), mp_foy bas: retail lists `uo/zzz_tree uo/zzz_spec

@@ -1,0 +1,120 @@
+# Retail CoD UO 1.51b dedicated server, votes called and cast by three clients.
+# map mp_carentan, g_gametype tdm, g_allowVoteKick 1, g_allowVoteKillCam 1,
+# g_allowVoteFriendlyFire 1, g_allowVoteDrawFriend 1, g_allowVoteTempBanClient 1 (the other
+# g_allowVote* at their defaults), dedicated 1, sv_maxclients 8, sv_pure 0. Captured 2026-11-15 with
+# COD_VERSION=uo tools/run_server.sh mp_carentan +set g_gametype tdm and those +sets, COD_DIR
+# holding the stock 1.5 main/ and UO uo/ paks only, and three probes started 0.15 s apart with
+# --mod-dir uo: vcod --net-probe --probe-name Able --probe-team axis, --probe-name Baker
+# --probe-team allies, --probe-name Charlie --probe-team spectator, each with the --probe-say lines
+# below (--probe-secs 66). The server put Able in slot 0, Baker in 1 and Charlie in 2.
+# !say <client> <secs> <command>: a client command at its second after that client's gamestate.
+# !cmd <client> <line>: what that client got, in arrival order: every e line, n, and each
+# change to configstrings 16..19 (UO's vote slots) as `d <index> <value>`, control bytes as \xNN.
+!say Able 8.0 callvote
+!say Able 9.0 callvote clientkick 1
+!say Able 10.0 callvote map mp_nowhere
+!say Able 11.0 callvote typemap dm mp_nowhere
+!say Able 12.0 callvote killcam 1
+!say Able 13.0 callvote friendlyfire 5
+!say Able 14.0 callvote drawfriend 7
+!say Baker 15.0 vote no
+!say Able 17.0 callvote friendlyfire 2
+!say Baker 18.0 vote yes
+!say Charlie 20.0 callvote map_restart
+!say Able 25.0 callvote kick baker
+!say Baker 26.0 vote no
+!say Able 28.0 callvote tempBanClient 1
+!say Charlie 30.0 vote yes
+!cmd Able e "GAME_INVALIDVOTESTRING"
+!cmd Able e "GAME_VOTECOMMANDSARE\x15 map_restart, map_rotate, map <mapname>, g_gametype <typename>, typemap <typename> <mapname>, kick <player>, clientkick <clientnum>, tempBanUser <player>, tempBanClient <clientNum>, drawfriend <value>, killcam <value>, friendlyfire <value>"
+!cmd Able e "GAME_VOTINGNOTENABLED"
+!cmd Able e "\x15the server doesn't have that map"
+!cmd Able e "\x15the server doesn't have that map"
+!cmd Able e "PATCH_1_5_KILLCAM_NOCHANGE"
+!cmd Able e "PATCH_1_5_VOTE_ARG_NOTVALID\x155"
+!cmd Able e "GAME_CALLEDAVOTE\x15Able"
+!cmd Able d 16 30000
+!cmd Able d 17 PATCH_1_5_VOTE_DRAWFRIEND\x14MENU_OFF
+!cmd Able d 18 1
+!cmd Able d 19 0
+!cmd Able d 19 1
+!cmd Able e "GAME_VOTEFAILED"
+!cmd Able d 16 
+!cmd Able e "GAME_CALLEDAVOTE\x15Able"
+!cmd Able d 16 30000
+!cmd Able d 17 PATCH_1_5_VOTE_FRIENDLYFIRE\x14MENU_REFLECT
+!cmd Able d 19 0
+!cmd Able d 18 2
+!cmd Able e "GAME_VOTEPASSED"
+!cmd Able d 16 
+!cmd Able e "GAME_CALLEDAVOTE\x15Able"
+!cmd Able d 16 30000
+!cmd Able d 17 GAME_VOTE_KICK\x15(1)Baker
+!cmd Able d 18 1
+!cmd Able d 19 1
+!cmd Able e "GAME_VOTEFAILED"
+!cmd Able d 16 
+!cmd Able e "GAME_CALLEDAVOTE\x15Able"
+!cmd Able d 16 30000
+!cmd Able d 19 0
+!cmd Able e "GAME_VOTEFAILED"
+!cmd Able d 16 
+!cmd Baker e "GAME_CALLEDAVOTE\x15Able"
+!cmd Baker d 16 30000
+!cmd Baker d 17 PATCH_1_5_VOTE_DRAWFRIEND\x14MENU_OFF
+!cmd Baker d 18 1
+!cmd Baker d 19 0
+!cmd Baker e "GAME_VOTECAST"
+!cmd Baker d 19 1
+!cmd Baker e "GAME_VOTEFAILED"
+!cmd Baker d 16 
+!cmd Baker e "GAME_CALLEDAVOTE\x15Able"
+!cmd Baker d 16 30000
+!cmd Baker d 17 PATCH_1_5_VOTE_FRIENDLYFIRE\x14MENU_REFLECT
+!cmd Baker d 19 0
+!cmd Baker e "GAME_VOTECAST"
+!cmd Baker d 18 2
+!cmd Baker e "GAME_VOTEPASSED"
+!cmd Baker d 16 
+!cmd Baker e "GAME_CALLEDAVOTE\x15Able"
+!cmd Baker d 16 30000
+!cmd Baker d 17 GAME_VOTE_KICK\x15(1)Baker
+!cmd Baker d 18 1
+!cmd Baker e "GAME_VOTECAST"
+!cmd Baker d 19 1
+!cmd Baker e "GAME_VOTEFAILED"
+!cmd Baker d 16 
+!cmd Baker e "GAME_CALLEDAVOTE\x15Able"
+!cmd Baker d 16 30000
+!cmd Baker d 19 0
+!cmd Baker e "GAME_VOTEFAILED"
+!cmd Baker d 16 
+!cmd Charlie e "GAME_CALLEDAVOTE\x15Able"
+!cmd Charlie d 16 30000
+!cmd Charlie d 17 PATCH_1_5_VOTE_DRAWFRIEND\x14MENU_OFF
+!cmd Charlie d 18 1
+!cmd Charlie d 19 0
+!cmd Charlie d 19 1
+!cmd Charlie e "GAME_VOTEFAILED"
+!cmd Charlie d 16 
+!cmd Charlie e "GAME_CALLEDAVOTE\x15Able"
+!cmd Charlie d 16 30000
+!cmd Charlie d 17 PATCH_1_5_VOTE_FRIENDLYFIRE\x14MENU_REFLECT
+!cmd Charlie d 19 0
+!cmd Charlie d 18 2
+!cmd Charlie e "GAME_VOTEPASSED"
+!cmd Charlie d 16 
+!cmd Charlie e "GAME_NOSPECTATORCALLVOTE"
+!cmd Charlie e "GAME_CALLEDAVOTE\x15Able"
+!cmd Charlie d 16 30000
+!cmd Charlie d 17 GAME_VOTE_KICK\x15(1)Baker
+!cmd Charlie d 18 1
+!cmd Charlie d 19 1
+!cmd Charlie e "GAME_VOTEFAILED"
+!cmd Charlie d 16 
+!cmd Charlie e "GAME_CALLEDAVOTE\x15Able"
+!cmd Charlie d 16 30000
+!cmd Charlie d 19 0
+!cmd Charlie e "GAME_NOSPECTATORVOTE"
+!cmd Charlie e "GAME_VOTEFAILED"
+!cmd Charlie d 16 

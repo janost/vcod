@@ -1,3 +1,15 @@
+# probe_anim_bracket
+PROBE_ERROR script compile error
+
+# probe_anim_bracket_read
+PROBE at anim_bracket_read
+PROBE_FATAL struct is not an array
+
+# probe_anim_dot
+PROBE at anim_dot_write
+PROBE anim_dot_write_ok 1
+PROBE anim_dot_read 1
+
 # probe_arith
 PROBE div_int_int 0
 PROBE div_int_int_exact 2
@@ -282,6 +294,9 @@ PROBE game_size_after_two 2
 PROBE at game_persist
 PROBE game_persist_after_wait russian
 
+# probe_game_dotread
+PROBE_ERROR script compile error
+
 # probe_game_dotwrite
 PROBE_ERROR script compile error
 
@@ -359,6 +374,10 @@ PROBE level_dot_read 1
 
 # probe_level_bracket
 PROBE_ERROR script compile error
+
+# probe_level_bracket_read
+PROBE at level_bracket_read
+PROBE_FATAL struct is not an array
 
 # probe_level_size
 PROBE level_size_after_one_field 1
@@ -554,6 +573,10 @@ PROBE self_threaded_mark marked
 # probe_self_bracket
 PROBE_ERROR script compile error
 
+# probe_self_bracket_read
+PROBE at self_bracket_read
+PROBE_FATAL struct is not an array
+
 # probe_size
 PROBE size_array 3
 PROBE size_empty_array 0
@@ -708,3 +731,4 @@ PROBE wait0_yield d after
 PROBE wait0_yield c before
 PROBE wait0_yield c after
 PROBE wait0_yield done 1
+

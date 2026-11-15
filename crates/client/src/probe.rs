@@ -916,7 +916,8 @@ pub fn probe(
                 }
                 NetEvent::ConfigstringChanged(i) => {
                     println!("configstring {i} changed");
-                    if (15..=18).contains(&i) {
+                    let vote = client.protocol().cs.vote;
+                    if (vote..vote + 4).contains(&i) {
                         // The vote's time, string, yes and no counts, with
                         // the newest snapshot's time for the countdown.
                         println!(
