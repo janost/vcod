@@ -138,12 +138,13 @@ impl Rig {
         self.drained = self.sv.script_log().len();
     }
 
-    fn new_fires(&mut self) -> usize {
+    /// The lookat's `PROBE fire` and `PROBE looking` lines logged since the
+    /// last call.
+    fn new_fires(&mut self) -> (usize, usize) {
         let log = self.sv.script_log();
-        let n = log[self.drained.min(log.len())..]
-            .iter()
-            .filter(|l| l.starts_with("PROBE fire "))
-            .count();
+        let new = &log[self.drained.min(log.len())..];
+        let count = |p: &str| new.iter().filter(|l| l.starts_with(p)).count();
+        let n = (count("PROBE fire "), count("PROBE looking "));
         self.drained = log.len();
         n
     }
@@ -202,11 +203,12 @@ fn rig() -> Option<Rig> {
 // --------------------------------------------------------------- the replay
 
 /// One of our snapshots during a replay, at `ms` from the window's first cmd,
-/// with the lookat fires the frame logged.
+/// with the lookat fires and `isLookingAt` answers the frame logged.
 struct Ours {
     ms: i64,
     ps: PlayerState,
     fires: usize,
+    looking: usize,
 }
 
 /// Every capture cmd with `st` in `[from, to]`, across phases, in order.
@@ -314,13 +316,14 @@ fn replay(
             (&rig.qb, &mut rig.cb),
             rig.now,
         );
-        let fires = rig.new_fires();
+        let (fires, looking) = rig.new_fires();
         let cl = if slot == 0 { &rig.ca } else { &rig.cb };
         if let Some(s) = cl.snapshots().newest() {
             out.push(Ours {
                 ms: (i + 1) * FRAME_MS,
                 ps: s.ps.clone(),
                 fires,
+                looking,
             });
         }
     }
@@ -716,10 +719,15 @@ fn stations(fx: &SdFixture) -> Vec<((f32, f32), i32, i32)> {
 
 /// Retail's `PROBE fire` clock stamps.
 fn retail_fires() -> Vec<i32> {
+    retail_stamps("PROBE fire ")
+}
+
+/// The clock stamps of retail's lookat lines that start with `prefix`.
+fn retail_stamps(prefix: &str) -> Vec<i32> {
     read(LOOKAT)
         .lines()
         .filter_map(|l| {
-            l.strip_prefix("PROBE fire ")?
+            l.strip_prefix(prefix)?
                 .split_whitespace()
                 .nth(1)?
                 .parse()
@@ -800,6 +808,43 @@ fn the_defuse_and_the_lookat_match_retail_on_mp_carentan() {
     if report() {
         println!("lookat: {} stations differ", rows.len());
     }
+
+    // The defuse's span: each frame's fires and answers, the last fire
+    // with no answer beside it, the trigger gone with the round.
+    let (from, to) = (defuse.traces[0].server_time, end);
+    let looking = retail_stamps("PROBE looking ");
+    let in_span = |v: &[i32]| v.iter().filter(|t| (from..=to).contains(t)).count();
+    let span = ours
+        .iter()
+        .filter(|s| (from..=to).contains(&(t0 + s.ms as i32)));
+    let (of, ol) = span.fold((0, 0), |(f, l), s| (f + s.fires, l + s.looking));
+    let last_fire = |v: &[i32]| v.iter().copied().filter(|&t| t <= to).max();
+    let retail_last = last_fire(&retail).expect("a retail fire");
+    let ours_last = ours
+        .iter()
+        .rev()
+        .find(|s| s.fires > 0)
+        .expect("a fire of ours");
+    if report() {
+        println!(
+            "defuse: retail {} fires {} answers, last fire {retail_last} answered {}; \
+             ours {of} fires {ol} answers, last fire answered {}",
+            in_span(&retail),
+            in_span(&looking),
+            looking.contains(&retail_last),
+            ours_last.looking,
+        );
+    }
+    assert_eq!(
+        (of, ol),
+        (in_span(&retail), in_span(&looking)),
+        "the defuse's fires and isLookingAt answers"
+    );
+    assert_eq!(
+        (ours_last.looking > 0),
+        looking.contains(&retail_last),
+        "an isLookingAt answer beside the defuse's last fire"
+    );
 
     let defused = rig
         .sv

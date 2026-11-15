@@ -87,7 +87,7 @@ fn retail(path: &str, p: &Protocol) -> SnapRun {
     }
 }
 
-fn ours(fs: vcod_common::pk3::Pk3Fs, p: &'static Protocol) -> SnapRun {
+fn ours(fs: vcod_common::pk3::Pk3Fs, p: &'static Protocol, cvars: &[(&str, &str)]) -> SnapRun {
     use super::{ClientEnd, Queues};
     use vcod_common::net::NetClient;
     const SNAP_MAP: &str = "mp_carentan";
@@ -100,6 +100,9 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, p: &'static Protocol) -> SnapRun {
         "maps/mp/gametypes/probe_snapcull",
         include_str!("../../../gsc/tests/fixtures/semantics/client-probes/probe_snapcull.gsc"),
     );
+    for (k, v) in cvars {
+        sv.set_cvar(k, v);
+    }
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let (qa, qb) = (
@@ -161,8 +164,18 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, p: &'static Protocol) -> SnapRun {
 
 /// `probe_snapcull`'s rows, retail's `fixture` against ours.
 pub fn matches(fixture: &str, fs: vcod_common::pk3::Pk3Fs, p: &'static Protocol) {
+    matches_with(fixture, fs, p, &[]);
+}
+
+/// [`matches`] with the probe's `cvars` set on ours as retail's run set them.
+pub fn matches_with(
+    fixture: &str,
+    fs: vcod_common::pk3::Pk3Fs,
+    p: &'static Protocol,
+    cvars: &[(&str, &str)],
+) {
     let r = retail(fixture, p);
-    let o = ours(fs, p);
+    let o = ours(fs, p, cvars);
     let names = |s: &SnapRun| s.steps.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
     assert_eq!(names(&r), names(&o), "steps");
     let fmt = |c: Vec<(i32, i32)>| {

@@ -224,3 +224,21 @@ fn the_11_solid_eye_and_compass_match_retail() {
         &vcod_common::net::protocol::PROTOCOL_V1,
     );
 }
+
+/// The same on 1.1d with `probe_fresh 1`: the subject reaches the cull fog
+/// never sounded, and the fog still culls nothing, his entity on the
+/// viewer's snapshot and off the compass throughout (docs/protocol-1.1.md,
+/// "Which entities a client is sent").
+#[test]
+fn the_11_cull_fog_keeps_a_never_sounded_subject_as_on_retail() {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        eprintln!("COD_DIR is not a 1.1 install: skipping");
+        return;
+    };
+    common::snapcull::matches_with(
+        "tests/fixtures/entities/snapcull-carentan-11-fresh.txt",
+        fs,
+        &vcod_common::net::protocol::PROTOCOL_V1,
+        &[("probe_fresh", "1")],
+    );
+}

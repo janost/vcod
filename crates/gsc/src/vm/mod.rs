@@ -523,6 +523,13 @@ pub struct Vm {
     file_order: FxHashMap<Atom, u32>,
     level: StructId,
     game: ArrayId,
+    /// The bare `anim`, a struct of its own like `level`
+    /// (`probe_anim_dot`, cod11-gsc-language.md "Why: the compiler types
+    /// the bare globals").
+    anim: StructId,
+    /// 1.5b's bracket read on a struct reads undefined, where 1.1d and UO
+    /// fail it (`probe_level_bracket_read`).
+    struct_index_reads_undefined: bool,
     /// `.size` on an array or string, interned once here rather than per
     /// `LoadField` — `_load.gsc` reads it inside three loops.
     size_atom: Atom,
@@ -622,6 +629,7 @@ impl Vm {
         let mut heap = Heap::new();
         let level = heap.new_struct();
         let game = heap.new_array();
+        let anim = heap.new_struct();
         let mut interner = program.interner.clone();
         let size_atom = interner.intern_folded("size");
         Vm {
@@ -631,6 +639,8 @@ impl Vm {
             file_order: program.file_order.clone(),
             level,
             game,
+            anim,
+            struct_index_reads_undefined: false,
             size_atom,
             threads: Vec::new(),
             next_thread: 0,
@@ -674,6 +684,14 @@ impl Vm {
     /// (cod2-protocol.md 15.7); CoD1's reads undefined (not measured).
     pub fn set_thread_returns(&mut self, on: bool) {
         self.thread_returns = on;
+    }
+
+    /// A bracket read on a struct (`level["k"]`) reads undefined (1.5b)
+    /// instead of failing `struct is not an array` (1.1d, UO; VERIFIED live,
+    /// `probe_level_bracket_read`, cod11-gsc-language.md "Why: the compiler
+    /// types the bare globals").
+    pub fn set_struct_index_reads_undefined(&mut self, on: bool) {
+        self.struct_index_reads_undefined = on;
     }
 
     pub fn set_newest_waiter_first(&mut self, on: bool) {
@@ -1248,7 +1266,8 @@ pub(crate) mod tests {
     }
 
     /// Retail rejects the wrong access on a bare global when it compiles
-    /// (`probe_game_dotwrite`, `probe_level_bracket`); `.size` takes any.
+    /// (`probe_game_dotwrite`, `probe_game_dotread`, `probe_level_bracket`,
+    /// `probe_anim_bracket`); a bracket read and `.size` compile.
     #[test]
     fn a_bare_global_accessed_the_wrong_way_does_not_compile() {
         let compiles = |src: &str| {
@@ -1260,7 +1279,6 @@ pub(crate) mod tests {
             "main() { return game.foo; }",
             "main() { game.foo[0] = 1; }",
             "main() { level[\"k\"] = 1; }",
-            "main() { return level[\"k\"]; }",
             "main() { self[\"k\"] = 1; }",
             "main() { anim[0] = 1; }",
         ] {
@@ -1268,10 +1286,39 @@ pub(crate) mod tests {
         }
         for src in [
             "main() { return game.size + level.size + self.size; }",
+            "main() { return level[\"k\"]; }",
+            "main() { return self[\"k\"] + anim[0]; }",
             "main() { game[\"k\"] = 1; level.k = 1; level.a[0] = 1; }",
         ] {
             assert!(compiles(src), "{src} did not compile");
         }
+    }
+
+    /// A bracket read on a struct fails at run time on 1.1d and UO and reads
+    /// undefined on 1.5b; `anim` is a struct of its own
+    /// (`probe_level_bracket_read`, `probe_anim_dot`).
+    #[test]
+    fn a_bracket_read_on_a_struct_fails_but_on_1_5() {
+        assert_eq!(
+            run_err("main() { return level[\"k\"]; }"),
+            ErrorKind::BadType("struct is not an array")
+        );
+        assert_eq!(
+            run_err("main() { return anim[0]; }"),
+            ErrorKind::BadType("struct is not an array")
+        );
+        let ast = crate::parse::parse_file("main() { level.k = 1; return level[\"k\"]; }").unwrap();
+        let mut vm = Vm::new();
+        vm.apply_profile(&super::profile::VmProfile::COD1_15);
+        let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let main = vm.func_ref("test/script", "main");
+        let v = vm
+            .call_now(&mut TestHost::default(), main, None, vec![])
+            .unwrap();
+        assert_eq!(v, Value::Undefined);
+        let (v, _, _) = run("main() { anim.k = 2; level.k = 1; return anim.k; }");
+        assert_eq!(v, Value::Int(2));
     }
 
     /// `.size` of a struct or an entity is 1, whatever fields it carries.

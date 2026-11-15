@@ -278,10 +278,11 @@ fn a_pure_server_s_systeminfo_matches_uo() {
     }
 }
 
-/// A pak in `uo/` is listed once the level reads a file from it, and two
-/// reads only the load makes: the map's sound load spec and each
-/// `#using_animtree`'s tree (bas's `_flak_gmi.gsc` names `flak88`).
-/// Retail UO with `fs_debug 1` reads both on mp_foy bas
+/// A pak in `uo/` is listed once the level reads a file from it, and three
+/// reads only the load makes: the map's sound load spec, each
+/// `#using_animtree`'s tree (bas's `_flak_gmi.gsc` names `flak88`) and the
+/// player's `multiplayer` tree. Retail UO with `fs_debug 1` reads all three
+/// on mp_foy bas
 /// (cod11-server-handshake.md, "The four cvars").
 #[test]
 fn a_pak_holding_the_load_spec_or_an_animtree_is_referenced() {
@@ -296,6 +297,7 @@ fn a_pak_holding_the_load_spec_or_an_animtree_is_referenced() {
     let files = [
         ("zzz_spec", "soundloadspecs/mp/mp_foy.csv"),
         ("zzz_tree", "animtrees/flak88.atr"),
+        ("zzz_mptree", "animtrees/multiplayer.atr"),
     ];
     for (pak, file) in files {
         let bytes = stock.read(file).expect(file);

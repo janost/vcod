@@ -249,7 +249,10 @@ const fn cod1(defs: &'static Defs, builtins: fn() -> &'static BuiltinSet, v1: bo
 /// 1.1.
 pub static COD1_11: HostProfile = cod1(&defs::V1, BuiltinSet::v11, true);
 /// 1.5.
-pub static COD1_15: HostProfile = cod1(&defs::V15, BuiltinSet::v15, false);
+pub static COD1_15: HostProfile = HostProfile {
+    vm: VmProfile::COD1_15,
+    ..cod1(&defs::V15, BuiltinSet::v15, false)
+};
 /// United Offensive 1.51.
 pub static COD1_UO: HostProfile = cod1(&defs::UO, BuiltinSet::uo, false);
 
