@@ -571,7 +571,7 @@ row's cmds.
 | capture | rows | cmds | free run exact | resynced exact | free run's largest origin error |
 |---|---|---|---|---|---|
 | walk | 787 | 1223 | 787 | 787 | 0.000 units |
-| fly | 438 | 1303 | 243 (first: row 244, an ulp of vx) | 437 | 0.000 units |
+| fly | 438 | 1303 | 438 | 438 | 0.000 units |
 | mantle | 297 | 882 | 297 | 297 | 0.000 units |
 | lunge | 147 | 441 | 23 (first: row 155, the server's events) | 146 | 0.000 units |
 
@@ -591,8 +591,8 @@ server holds the float itself.
 
 ### 13.2 GAPS
 
-- The spectator's velocity an ulp off in a turn (row 244, x and y):
-  ours -403.2707 (0xc3c9a2a6) where retail reads -403.27066
+- Closed: the spectator's velocity an ulp off in a turn (row 244, x and
+  y): ours -403.2707 (0xc3c9a2a6) where retail reads -403.27066
   (0xc3c9a2a5), flying back and left at 403 a second, a unit of z
   speed down. VERIFIED (the gate, `MOVES_TRACE=fly:resync:244`). 1.7
   runs the x87 at 64-bit precision: it loads the control word 0x37f
@@ -609,10 +609,12 @@ server holds the float itself.
   the last cmd's right vector: y 0xbf0a0f12 where ours is 0xbf0a0f13, x
   unchanged (0x3f579514). INFERRED (a search of ±6 ulps on each cmd's x
   and y). No float yaw near ours (57.36451, 0x42657542) gives that pair
-  through `sin` and `cos` of a stored or a kept radian, nor does the
-  unwrapped 417.3645. INFERRED (the same emulation). So the yaw, or how
-  1.7's `AngleVectors` reaches the right vector for a spectator, is
-  next to read.
+  through a correctly rounded `sin` and `cos`. INFERRED (the same
+  emulation). 1.7's `AngleVectors` (0x818ea3a, called from `PmoveSingle`
+  at 0x805bf18) calls glibc's `sinf` and `cosf`, which are not correctly
+  rounded (cod4-combat.md 15). VERIFIED (the instructions, gdb). With
+  `x87::angle_vectors_libm` the fly capture's free run matches all 438
+  rows and the touch gate's flyer every row. VERIFIED (the gates).
 - The armed walk's frag throw (`grenadeTimeLeft`, the server's fuse) and
   the lunge's server events stay (the reasons in the gate).
 - Closed: the walk's z one bit off on the terrain (24 rows), the sign of a
@@ -638,8 +640,7 @@ server holds the float itself.
 
 ## 14. Open
 
-- The rest of pmove in the kept model, which the spectator's gap may
-  point at: `PM_StepSlideMove` at 0x805e930 and the `PM_SlideMove` it
+- The rest of pmove in the kept model: `PM_StepSlideMove` at 0x805e930 and the `PM_SlideMove` it
   calls at 0x805e030 (both INFERRED, section 1) are the next to read.
 - Captures for the sprint, the ladder, a prone body and the sighted
   walk.
@@ -865,8 +866,8 @@ clients, from the last spawn. VERIFIED (the gate):
 - Every printed line matches retail's, time and count (one a frame each
   way while the bodies press), and the walker's path, the second stop on
   the target's round side included.
-- The flyer's playerstate matches but for `velocity[1]` in 4 rows of its
-  turn, a few ulps (section 13.2's spectator gap).
+- The flyer's playerstate matches every row; its turn's `velocity[1]`,
+  a few ulps off in 4 rows, was section 13.2's spectator gap.
 - The walker's spawn `delta_angles[1]` (9.00879, the spot's 124 less the
   last cmd's 114.99390) and its body's yaw match retail's. The 180 the
   gate once read there, from the spawn to the `setviewpos`, was the

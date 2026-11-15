@@ -129,7 +129,7 @@ pub fn client_pick(
     if buttons & super::button::MELEE == 0 || pm_flags & pmf::PRONE != 0 {
         return NONE;
     }
-    let view = vcod_common::x87::angle_vectors(eye.angles);
+    let view = vcod_common::x87::angle_vectors_libm(eye.angles);
     let region = AUTOMELEE_REGION.map(|r| r * eye.fov_scale_inv);
     let best = bodies
         .iter()

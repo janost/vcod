@@ -15,6 +15,7 @@ pub mod game_dir;
 pub mod iwi;
 pub mod laps;
 pub mod leafwalk;
+pub mod libm;
 pub mod localize;
 pub mod mapworld;
 pub mod material;
