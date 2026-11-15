@@ -2258,13 +2258,22 @@ with four more steps (`snapcull-carentan-{11,15,uo}.txt`; 1.5b's gated by
   all three;
 - under `setCullFog(0, 1000, ...)`: `0x00ffc6c1` on 1.5b and UO (the fog
   test hides him); 0 on 1.1, where slot 1 still carries the earlier
-  `SVF_BROADCAST`, so 1.1's row says nothing about fog;
+  `SVF_BROADCAST` (the fresh run below settles 1.1's fog);
 - on 1.5b and UO a `playSound` inside the fog reads 0 for 400 ms, as
   without one: the broadcast time is tested before the fog. `setExpFog`
   puts the word back to 0;
 - slot 1's own entity list empties under the fog on 1.5b and UO (all it
   was sent lies past 1000 units) and keeps all 22 entities on 1.1, whose
   builder has no fog test.
+
+VERIFIED live, the same probe on 1.1d with `+set probe_fresh 1`, which
+skips the `sound` step's `playSound` (2026-11-15,
+`snapcull-carentan-11-fresh.txt`, gated by `uocull_ab`'s
+`the_11_cull_fog_keeps_a_never_sounded_subject_as_on_retail`): slot 1,
+never sounded, reads 0 from his move into slot 0's PVS through the fog and
+the exponential fog with no change, and his own entity list keeps all 22
+entities under the fog. 1.1's cull fog hides nothing from the snapshot
+builder whatever the broadcast flag.
 
 VERIFIED, `BG_PlayerStateToEntityState` (`0x2cbe8`): `s.eType` is 1 when
 the playerstate's `pm_flags` has `0x10000` or `0x40000`, else 7.
