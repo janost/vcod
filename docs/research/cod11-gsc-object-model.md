@@ -2719,7 +2719,7 @@ Differences run 3 found, each since closed:
 | first linked frame `groundEntityNum` 1023 | 177 (23.2) | the linked arm and the submodel's entity number (23.2). VERIFIED, vcod measurement (`sd_plant_ab.rs`, 2026-10-16): the gate compares `groundEntityNum` on every trace, no row allowed; the release window's first frame reads 1023 as on retail once the replay leads in with hold1's last three frames of use (ours runs that frame's cmds linked); replayed from the placement it read 177 |
 | hold2's last trace | `pm_type` 0 | VERIFIED, vcod measurement (`sd_plant_ab.rs`, 2026-10-16): with `probe_teleport 1` on ours too, `pm_type` 0 as retail; the gate compares `pm_type`, ground and the linked hold (to 0 units) on every trace of plant and defuse |
 | fractional `velocity` (`183.4, 27.0`) | whole | VERIFIED: `PmoveSingle`'s default arm calls `trap_SnapVector` on `ps.velocity` (`ps+0x20`) at 0x34451; the snap and the walk's accel floor it exposed are in (`docs/research/cod11-mantle.md`, "The tail of the default arm", "The walk's accel floor"). INFERRED: the missing snap is why the two servers' defenders parted after the match-start restart (retail's velocity 1.3 degrees off the view, ours on it). Not re-run against ours |
-| post-plant teleport one frame after completion; a `PROBE looking` beside the defuse's last fire | teleport on the completion frame; fire and no `looking` | INFERRED: thread order in a frame. Retail runs the threads the lookat queue woke before the timed waits due that frame (the drain's `Scr_RunCurrentThreads` precedes `Scr_SetTime`, 23.1), resuming the plant's `wait 0.05` loop ahead of the probe's older poller; vcod stepped every runnable thread in one pass, start order. vcod now runs the queue's rounds as retail (`cod11-gsc-language.md`, "Engine notifies and the trigger queue"). VERIFIED, `crates/server/tests/sd_plant_ab.rs` 2026-10-20 (plant cmds replayed with `probe_teleport 1`): the teleport lands on retail's frame 91800 at `-512.0, 2688.0, -15.0`, ours at the plant spot the frame before, next frame z -15.75 where retail's trace reads -15.8 (the gate's `teleport lands` row). The `looking` is not re-measured: the gate counts fires per station only |
+| post-plant teleport one frame after completion; a `PROBE looking` beside the defuse's last fire | teleport on the completion frame; fire and no `looking` | INFERRED: thread order in a frame. Retail runs the threads the lookat queue woke before the timed waits due that frame (the drain's `Scr_RunCurrentThreads` precedes `Scr_SetTime`, 23.1), resuming the plant's `wait 0.05` loop ahead of the probe's older poller; vcod stepped every runnable thread in one pass, start order. vcod now runs the queue's rounds as retail (`cod11-gsc-language.md`, "Engine notifies and the trigger queue"). VERIFIED, `crates/server/tests/sd_plant_ab.rs` 2026-10-20 (plant cmds replayed with `probe_teleport 1`): the teleport lands on retail's frame 91800 at `-512.0, 2688.0, -15.0`, ours at the plant spot the frame before, next frame z -15.75 where retail's trace reads -15.8 (the gate's `teleport lands` row). VERIFIED, `sd_plant_ab.rs` 2026-11-15: over the defuse's span ours logs 201 fires and 200 `looking` answers as retail does, and no answer beside the last fire (retail's at 124600), the gate's defuse assertions |
 | every configstring change, ascending, before every command | `d` and `s` in script order (`d 531`, `d 532`, `s 8`, `d 533` at the plant; run 9) | configstrings go in write order off `ConfigStrings::set`'s log (`cod11-map-cycle.md` 4.5). INFERRED: no command in these runs names a configstring set after it |
 | restart with no `d 13` or `d 12`, its `d 3` `t` 0 | carries them | `cod11-map-cycle.md` 8.2: vcod sends `d 13 70050` and an ambient `t` of 70050 |
 | no `sv_referencedPaks`/`sv_referencedPakNames` in systeminfo | carries both (run 9) | the server writes both (`Server::level_paks`, `cod11-server-handshake.md`, "The four cvars") |
@@ -2838,9 +2838,21 @@ level's script clock carries on (6050), its first frame's
 `getentarray("player")` holds no player, the test client's
 `ClientConnect` runs again at 6350 with `sessionstate` `spectator` and its
 `begin` at 6400, and the next `addTestClient` at 11150 is `bot1` in slot 1.
+VERIFIED live, `probe_tcmapchange` on retail 1.1d (2026-11-15, the same
+script with `exitLevel(false)` and `sv_mapRotation "gametype
+probe_tcmapchange map mp_carentan"`; `testclient.rs`'s
+`a_test_client_reconnects_but_never_begins_after_a_map_change_as_on_retail`,
+which ours matches line for line): across a map change the new level's
+clock carries on (6050 on mp_carentan), its first frame holds no player,
+and the test client's `ClientConnect` runs again at 6350 as `bot0`,
+`spectator`, as after the restart, but its `begin` never comes (none in
+the 24 s the run went on). INFERRED, from the restart's `begin` at 6400:
+`map_restart` enters a test client into the world itself, a map load puts
+it back to connected and nothing it sends would enter it, since it sends
+nothing. The next `addTestClient` is still `bot1` in slot 1.
 Not run: a slot a UDP client once held (address no longer zero, so
 retail's port-0 bot is not refused there; it needs a connect and a drop
-inside the server's first 3 s) and a `map` change.
+inside the server's first 3 s).
 
 ## Open, and worth a probe
 

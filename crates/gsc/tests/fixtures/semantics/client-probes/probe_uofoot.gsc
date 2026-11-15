@@ -6,6 +6,7 @@
 //	crouch the hmgcrouching ones at (-1080 -3313), and mount open ground
 //	in front of a script trigger_mount spawned crouched
 //	(spawnTriggerMount), which the client sees only as serverCursorHint 7.
+//	probe_fires 1 logs each of its "trigger" notifies.
 //	docs/research/coduo-movement.md, section 11.
 
 main()
@@ -27,8 +28,10 @@ watch_teleports()
 	if (getcvar("probe_spot") == "mount")
 	{
 		//	15 ahead of the spot and 1 up is inside it (G_CheckForCursorHints).
-		spawnTriggerMount((-130, 2598, -20), (-70, 2640, 40), 1);
+		m = spawnTriggerMount((-130, 2598, -20), (-70, 2640, 40), 1);
 		logPrint("PROBE mount spawned\n");
+		if (getcvar("probe_fires") == "1")
+			m thread log_fires();
 	}
 	for (;;)
 	{
@@ -36,6 +39,17 @@ watch_teleports()
 		for (i = 0; i < players.size; i++)
 			players[i] try_place();
 		wait 0.05;
+	}
+}
+
+//	Under probe_fires 1, one line per "trigger" the mount raises, on the
+//	clock its waiter woke at.
+log_fires()
+{
+	for (;;)
+	{
+		self waittill("trigger", other);
+		logPrint("PROBE fire " + getTime() + "\n");
 	}
 }
 

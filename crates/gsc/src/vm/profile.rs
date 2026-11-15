@@ -23,10 +23,13 @@ pub struct VmProfile {
     /// A function's `endon`s end when it returns
     /// ([`super::Vm::set_endons_end_with_call`]).
     pub endons_end_with_call: bool,
+    /// A bracket read on a struct reads undefined
+    /// ([`super::Vm::set_struct_index_reads_undefined`]).
+    pub struct_index_reads_undefined: bool,
 }
 
 impl VmProfile {
-    /// CoD 1.1, 1.5 and United Offensive.
+    /// CoD 1.1 and United Offensive.
     pub const COD1: VmProfile = VmProfile {
         dialect: Dialect::Cod1,
         vectors_g: false,
@@ -35,6 +38,13 @@ impl VmProfile {
         thread_returns: false,
         frame_waits: false,
         endons_end_with_call: false,
+        struct_index_reads_undefined: false,
+    };
+
+    /// CoD 1.5: 1.1's rules but for its bracket read on a struct.
+    pub const COD1_15: VmProfile = VmProfile {
+        struct_index_reads_undefined: true,
+        ..VmProfile::COD1
     };
 
     /// CoD2 1.3 (docs/research/cod2-gsc-diff.md).
@@ -46,6 +56,7 @@ impl VmProfile {
         thread_returns: true,
         frame_waits: false,
         endons_end_with_call: false,
+        struct_index_reads_undefined: false,
     };
 
     /// CoD4 1.7: CoD2's rules until a retail probe says otherwise
@@ -68,5 +79,6 @@ impl super::Vm {
         self.set_thread_returns(p.thread_returns);
         self.set_frame_waits(p.frame_waits);
         self.set_endons_end_with_call(p.endons_end_with_call);
+        self.set_struct_index_reads_undefined(p.struct_index_reads_undefined);
     }
 }

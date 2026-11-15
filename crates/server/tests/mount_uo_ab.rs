@@ -7,6 +7,10 @@
 //! compares the run of states the snapshots carried: `pm_flags` (the
 //! bipod's sight bit and the stance), `serverCursorHint` and its value.
 //!
+//! The `-mount-fires` capture of the same script under `probe_fires 1`
+//! logs each `"trigger"` the mount raised (`mp_foy-uofoot-mount-fires-uo.txt`):
+//! one per cmd the server ran, which ours has to match.
+//!
 //! `MOUNT_REPORT=1` prints both runs. Needs `COD_DIR` at a UO install;
 //! without one it returns early.
 
@@ -63,8 +67,16 @@ fn ints<const N: usize>(s: &str) -> [i32; N] {
 /// Retail's states, one per snapshot, and the cmds up to the first that
 /// asks for another weapon.
 fn retail(spot: &str) -> (Vec<State>, Vec<Cmd>) {
-    let path = format!("tests/fixtures/playerstate/mp_foy-dm-slope-8ms-uofoot-{spot}.txt");
+    let (states, cmds, _) = retail_capture(spot);
+    (states, cmds)
+}
+
+/// [`retail`] off the capture tagged `uofoot-<tag>`, with each snapshot's
+/// `(t, ct)`.
+fn retail_capture(tag: &str) -> (Vec<State>, Vec<Cmd>, Vec<(i32, i32)>) {
+    let path = format!("tests/fixtures/playerstate/mp_foy-dm-slope-8ms-uofoot-{tag}.txt");
     let text = std::fs::read_to_string(path).expect("read the fixture");
+    let mut snaps = Vec::new();
     let mut states = Vec::new();
     let mut cmds = Vec::new();
     let mut da = [0; 3];
@@ -72,6 +84,8 @@ fn retail(spot: &str) -> (Vec<State>, Vec<Cmd>) {
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("!snap ") {
             da = ints(field(rest, "da").unwrap());
+            let num = |k| field(rest, k).unwrap().parse::<i32>().unwrap();
+            snaps.push((num("t"), num("ct")));
             states.push(State {
                 pm_flags: field(rest, "pm_flags").unwrap().parse().unwrap(),
                 hint: wire_field(rest, "serverCursorHint"),
@@ -98,12 +112,18 @@ fn retail(spot: &str) -> (Vec<State>, Vec<Cmd>) {
             });
         }
     }
-    (states, cmds)
+    (states, cmds, snaps)
 }
 
 /// The probe on ours: joined allies with the 30 cal, placed by the
 /// gametype, then the capture's cmds at their own spacing.
-fn ours((spot, at): (&str, [f32; 2]), cmds: &[Cmd]) -> Vec<State> {
+fn ours(spot: (&str, [f32; 2]), cmds: &[Cmd]) -> Vec<State> {
+    ours_run(spot, cmds, false).0
+}
+
+/// [`ours`], and under `fires` (`probe_fires 1`) how many `"trigger"`s
+/// the mount raised from the first of `cmds` on.
+fn ours_run((spot, at): (&str, [f32; 2]), cmds: &[Cmd], fires: bool) -> (Vec<State>, usize) {
     let fs = vcod_common::testing::uo_fs().unwrap();
     let p = &PROTOCOL_V22;
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{PROBE}.gsc");
@@ -116,6 +136,9 @@ fn ours((spot, at): (&str, [f32; 2]), cmds: &[Cmd]) -> Vec<State> {
     sv.overlay_script(&format!("maps/mp/gametypes/{PROBE}"), &probe);
     sv.set_cvar("probe_teleport", "1");
     sv.set_cvar("probe_spot", spot);
+    if fires {
+        sv.set_cvar("probe_fires", "1");
+    }
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
@@ -164,6 +187,13 @@ fn ours((spot, at): (&str, [f32; 2]), cmds: &[Cmd]) -> Vec<State> {
     }
     assert!(placed_at.is_some(), "the probe never placed the client");
 
+    let fired = |sv: &vcod_server::Server| {
+        sv.script_log()
+            .iter()
+            .filter(|l| l.starts_with("PROBE fire "))
+            .count()
+    };
+    let fired_before = fired(&sv);
     let mut out = Vec::new();
     let mut next_frame = now + Duration::from_millis(common::FRAME_MS as u64);
     let mut last_st = cmds[0].st;
@@ -184,7 +214,9 @@ fn ours((spot, at): (&str, [f32; 2]), cmds: &[Cmd]) -> Vec<State> {
             ..c.cmd
         });
     }
-    out
+    // The last cmds' notifies go out on the next frame.
+    frame(&mut sv, &mut cl, &mut join, next_frame);
+    (out, fired(&sv) - fired_before)
 }
 
 /// Consecutive repeats folded, anything ahead of the first hint 7 (the
@@ -245,6 +277,49 @@ fn check(spot: (&str, [f32; 2])) {
 #[test]
 fn a_script_mount_deploys_as_on_uo() {
     check(MOUNT);
+}
+
+/// A mount raises `"trigger"` once per cmd the server runs, on the clock
+/// of the frame after it: retail's capture holds as many in each frame as
+/// the cmds the snapshot's `commandTime` moved past, a cmd stamped at or
+/// before the last one run never running (`SV_UserMove`). Ours raises the
+/// same count over the replayed cmds (coduo-movement.md 11).
+#[test]
+fn a_script_mount_fires_once_per_cmd_as_on_uo() {
+    if vcod_common::testing::uo_fs().is_none() {
+        return;
+    }
+    let (_, cmds, snaps) = retail_capture("mount-fires");
+    let text =
+        std::fs::read_to_string("tests/fixtures/playerstate/mp_foy-uofoot-mount-fires-uo.txt")
+            .expect("read the fires");
+    let fires: std::collections::HashMap<i32, usize> = text
+        .lines()
+        .filter_map(|l| {
+            let mut w = l.strip_prefix("fires ")?.split(' ');
+            Some((w.next()?.parse().ok()?, w.next()?.parse().ok()?))
+        })
+        .collect();
+    let mut ran: Vec<i32> = Vec::new();
+    for c in &cmds {
+        if ran.last().is_none_or(|&last| c.st > last) {
+            ran.push(c.st);
+        }
+    }
+    for w in snaps.windows(2) {
+        let ((_, c0), (t, c1)) = (w[0], w[1]);
+        if c1 > *ran.last().unwrap() {
+            break;
+        }
+        let n = ran.iter().filter(|&&st| c0 < st && st <= c1).count();
+        assert_eq!(
+            fires.get(&t).copied().unwrap_or(0),
+            n,
+            "retail's frame at {t}"
+        );
+    }
+    let (_, ours) = ours_run(MOUNT, &cmds, true);
+    assert_eq!(ours, ran.len(), "ours' fires over {} cmds", cmds.len());
 }
 
 /// The same on the `hmgstanding` sandbags: the hint off the brush, the

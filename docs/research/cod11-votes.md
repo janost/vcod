@@ -1,6 +1,6 @@
 # Votes: `callvote`, `vote`, `CheckVote`
 
-How the 1.1 and 1.5 game modules run a vote, what the client draws, and what two retail runs showed. vcod: server `crates/server/src/game/vote.rs`, client `crates/client/src/hud/vote.rs`, gate `crates/server/tests/votes_ab.rs`.
+How the 1.1 and 1.5 game modules run a vote, what the client draws, and what three retail runs showed. vcod: server `crates/server/src/game/vote.rs`, client `crates/client/src/hud/vote.rs`, gate `crates/server/tests/votes_ab.rs`.
 
 Modules:
 
@@ -194,7 +194,7 @@ vcod builds the same rows from the newest snapshot's client states (`frontend/pl
 
 ## 6. The retail runs
 
-Two runs, `tools/run_server.sh mp_carentan +set g_gametype tdm` on 1.1d and on 1.5b (five `g_allowVote*` gates opened), with three `--net-probe` clients named Able (axis), Baker (allies) and Charlie (spectator) sending `--probe-say` commands, plus rcon lines on 1.1d. The probe prints every vote configstring change with its snapshot time, and the playerstate's vote bit. Captures: `crates/server/tests/fixtures/votes/mp_carentan-tdm-votes.txt` and `...-votes-1.5.txt`. VERIFIED, both: `votes_ab.rs` replays each on vcod and matches every line.
+Three runs, `tools/run_server.sh mp_carentan +set g_gametype tdm` on 1.1d, on 1.5b and on UO 1.51b (the last two with five `g_allowVote*` gates opened), with three `--net-probe` clients named Able (axis), Baker (allies) and Charlie (spectator) sending `--probe-say` commands, plus rcon lines on 1.1d. The probe prints every vote configstring change with its snapshot time, and the playerstate's vote bit. Captures: `crates/server/tests/fixtures/votes/mp_carentan-tdm-votes.txt`, `...-votes-1.5.txt` and `...-votes-uo.txt`. VERIFIED, all three: `votes_ab.rs` replays each on vcod and matches every line.
 
 What they show beyond the sections above, VERIFIED:
 
@@ -203,3 +203,4 @@ What they show beyond the sections above, VERIFIED:
 - An rcon `map_restart` during a vote drops it silently, but configstring 15 keeps its old time (no `d 15` came), so a retail client draws the vote until that time passes; `vote` then answers `GAME_NOVOTEINPROGRESS`. vcod matches: its restart keeps the table and starts a new `level`.
 - `g_allowvote 0` from rcon refuses the next call at once.
 - 1.5: a vote nobody answers fails 30 s after the call (35150 to 65150).
+- UO 1.51b (2026-11-15, the 1.5b recipe and its `--probe-say` lines on `COD_VERSION=uo`, `--mod-dir uo`; `...-votes-uo.txt`, `votes_ab.rs`'s `votes_run_as_uo_ran_them`, which ours matches line for line): the same vote list in `GAME_VOTECOMMANDSARE`, the same `e` strings and refusals as 1.5b's (`PATCH_1_5_*`, `GAME_NOSPECTATORCALLVOTE`, `GAME_NOSPECTATORVOTE`), the four configstrings at 16..19 with the time absolute (`30000` past the call), a `tempBanClient` vote on the slot a failed `kick` named rewriting only the time and the no count (its string and yes count read the same), and a vote nobody answers failing 30 s on (40950 to 70950).
