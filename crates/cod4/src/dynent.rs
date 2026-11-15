@@ -13,7 +13,7 @@ use vcod_common::clipmap::ClipTrace;
 
 use crate::assets::Assets;
 use crate::assets::model::{XModel, XModelCollSurf};
-use crate::physics::{Body, Dvars as PhysDvars, Preset, Shape};
+use crate::physics::{Body, Dvars as PhysDvars, Jitter, Preset, Shape};
 use crate::ragdoll::{Explosion, Sweep};
 
 /// A sweep of a sphere of the given radius from the first point to the
@@ -27,6 +27,28 @@ pub const DESTRUCT: u32 = 2;
 /// The contents a blast's and a round's dynent walks take (0x48e592,
 /// 0x48e1d0).
 pub const MASK: u32 = 0x80_2013;
+
+/// `player_meleeRange`, `..Width` and `..Height` at their 1.7 defaults
+/// (64, 10, 10; the dvars at 0x7323ec, 0x734b28 and 0x7322a0, read by
+/// the swing's rays at 0x48e439..0x48e4d5).
+const MELEE_RANGE: f32 = 64.0;
+const MELEE_WIDTH: f32 = 10.0;
+const MELEE_HEIGHT: f32 = 10.0;
+/// Where the swing's five rays end, in widths right and heights up: the
+/// rodata pairs at 0x6d3cc8 (the server's at 0x82173e0 hold the same).
+const MELEE_OFFSETS: [[f32; 2]; 5] = [
+    [0.0, 0.0],
+    [1.0, 1.0],
+    [-1.0, 1.0],
+    [1.0, -1.0],
+    [-1.0, -1.0],
+];
+/// The jitter's candidate box half size over its radius (the double at
+/// 0x70ae78, a float's `sqrt 2`).
+const JITTER_REACH: f64 = 1.414_213_538_169_860_8;
+/// The regions a physics world holds at once (0x5a7738); a sixth takes
+/// the last one's place (0x5a773d).
+const JITTER_MAX: usize = 5;
 
 /// What the type table (0x6bdb70, 8 bytes a type) says of `kind`: whether
 /// it starts live for the walks (byte 4, client flag 1, 0x48d088), takes
@@ -466,6 +488,72 @@ impl DynEnts {
         (Some(s), broken)
     }
 
+    /// The knife's swing on the dynamic entities (0x48e3a0, from
+    /// `EV_FIRE_MELEE` at 0x4367a9): five rays from the swinger's `eye`
+    /// along `view` (forward, right, up) to `player_meleeRange` ahead and
+    /// the corners of a `..Width` by `..Height` box, each through
+    /// [`Self::bullet`] with the weapon's `meleeDamage` until one meets an
+    /// entity. Its contact plays `melee_knife_hit_other` there (0x48e2c8)
+    /// in place of a round's impact.
+    pub fn melee(
+        &mut self,
+        eye: Vec3,
+        [forward, right, up]: [Vec3; 3],
+        damage: i32,
+        now: i32,
+    ) -> (Option<Struck>, Vec<Broken>) {
+        let reach = eye + forward * MELEE_RANGE;
+        for [x, y] in MELEE_OFFSETS {
+            let end = reach + right * (x * MELEE_WIDTH) + up * (y * MELEE_HEIGHT);
+            let (s, b) = self.bullet(eye, end, damage, now);
+            if s.is_some() {
+                return (s, b);
+            }
+        }
+        (None, Vec::new())
+    }
+
+    /// `EV_PHYS_JITTER` (0x48eb50, from `CG_EntityEvent` at 0x4373ab): a
+    /// body for every live entity that takes pushes and whose cube meets
+    /// the box `origin +- outer sqrt 2`, unbounded in z, the nearest
+    /// `dynEnt_explodeMaxEnts` of them when more do (0x48db30, 0x48ef40);
+    /// then the region held for each body's next step
+    /// (`Phys_AddJitterRegion` 0x5a7730, which also wakes the bodies
+    /// within `outer` of it, level). Its push is [`Body`]'s.
+    pub fn jitter(&mut self, j: Jitter, now: i32) {
+        if !self.dvars.active || j.outer == 0.0 {
+            return;
+        }
+        let reach = (f64::from(j.outer) * JITTER_REACH) as f32;
+        let meets = |o: Vec3, r: f32| {
+            (o.x - j.origin.x).abs() <= r + reach && (o.y - j.origin.y).abs() <= r + reach
+        };
+        let mut hit: Vec<(usize, f32)> = (0..self.ents.len())
+            .filter(|&i| self.ents[i].live && self.defs[i].contents & MASK != 0)
+            .filter(|&i| meets(self.ents[i].origin, self.defs[i].radius))
+            .map(|i| (i, self.dist_sq(i, j.origin, true)))
+            .collect();
+        if hit.len() > self.dvars.explode_max_ents {
+            hit.sort_by(|a, b| a.1.total_cmp(&b.1));
+            hit.truncate(self.dvars.explode_max_ents);
+        }
+        for (i, _) in hit {
+            if traits(self.defs[i].kind).1 {
+                self.make_body(i, now);
+            }
+        }
+        for e in &mut self.ents {
+            let Some(b) = &mut e.body else { continue };
+            self.rand = self.rand.wrapping_mul(0x343fd).wrapping_add(0x269ec3);
+            b.jitter_rand = self.rand;
+            if b.jitter.len() == JITTER_MAX {
+                b.jitter[JITTER_MAX - 1] = j;
+            } else {
+                b.jitter.push(j);
+            }
+        }
+    }
+
     /// `DynEntCl_EntityDamage` (0x48de30): `dmg` off entity `i`'s health;
     /// at 0 or below it stops drawing and meeting anything, its body goes,
     /// and its `destroyFx` plays at its pose.
@@ -620,6 +708,119 @@ mod tests {
         assert!(!d.ents[0].drawn && !d.ents[0].live && d.ents[0].body.is_none());
         // Gone, a third meets nothing.
         assert!(d.explode(&blast(200.0, 0.0), [120, 20], 0).is_empty());
+    }
+
+    /// [`can`] with a face at x -2 in its frame, facing -x, that a round
+    /// along +x meets.
+    fn walled_can(at: Vec3) -> DynDef {
+        let face = [
+            -1.0,
+            0.0,
+            0.0,
+            2.0,
+            0.0,
+            1.0 / 32.0,
+            0.0,
+            -0.25,
+            0.0,
+            0.0,
+            1.0 / 32.0,
+            -0.25,
+        ];
+        DynDef {
+            kind: DESTRUCT,
+            health: 100,
+            coll: Some(Arc::new(vec![XModelCollSurf {
+                tris: vec![face],
+                mins: [-3.0, -9.0, -9.0],
+                maxs: [-1.0, 25.0, 25.0],
+                bone: 0,
+                contents: 1,
+                surface_flags: 0,
+            }])),
+            ..can(at)
+        }
+    }
+
+    /// A floor at z 0 under the kernels' 0.125 skin.
+    fn floor(a: Vec3, b: Vec3, _r: f32, _m: u32) -> Sweep {
+        let skin = 0.125;
+        if a.z <= 0.0 {
+            return Sweep {
+                fraction: 0.0,
+                normal: Vec3::Z,
+                startsolid: true,
+            };
+        }
+        let f = if b.z < skin && b.z < a.z {
+            ((a.z - skin) / (a.z - b.z)).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        Sweep {
+            fraction: f,
+            normal: Vec3::Z,
+            startsolid: false,
+        }
+    }
+
+    #[test]
+    fn a_swing_tries_its_five_rays_until_one_meets_a_prop() {
+        let view = [Vec3::X, Vec3::Y, Vec3::Z];
+        // 40 ahead, the upper right ray's line (64, 10, 10) passes the
+        // can's origin; the centre ray passes 8.8 off it.
+        let mut d = DynEnts::new(Arc::new(vec![walled_can(Vec3::new(40.0, 6.25, 6.25))]));
+        let (s, broken) = d.melee(Vec3::ZERO, view, 135, 0);
+        let s = s.expect("the corner ray meets the can");
+        assert_eq!(s.index, 0);
+        // At the face, less the kernels' skin.
+        assert!(s.at.x > 37.8 && s.at.x < 38.0, "{}", s.at);
+        // `meleeDamage` 135 breaks it; a push woke it first.
+        assert!(broken.is_empty(), "no destroyFx to play");
+        assert!(!d.ents[0].live);
+        // Past `player_meleeRange` nothing.
+        let mut d = DynEnts::new(Arc::new(vec![walled_can(Vec3::X * 70.0)]));
+        assert_eq!(d.melee(Vec3::ZERO, view, 135, 0).0, None);
+        // Straight ahead the centre ray pushes it along +x and damages it.
+        let mut d = DynEnts::new(Arc::new(vec![walled_can(Vec3::X * 40.0)]));
+        let (s, _) = d.melee(Vec3::ZERO, view, 50, 0);
+        assert!(s.is_some());
+        assert_eq!(d.ents[0].health, 50);
+        let v = d.ents[0].body.as_ref().unwrap().vel;
+        assert!(v.x > 0.0, "{v}");
+    }
+
+    #[test]
+    fn a_jitter_lifts_the_props_on_the_ground_in_its_radius() {
+        let near = can(Vec3::new(10.0, 0.0, 2.2));
+        let far = can(Vec3::new(500.0, 0.0, 2.2));
+        let mut d = DynEnts::new(Arc::new(vec![near, far]));
+        let j = Jitter {
+            origin: Vec3::ZERO,
+            inner: 0.0,
+            outer: 100.0,
+            min: 1.0,
+            max: 1.0,
+        };
+        d.jitter(j, 0);
+        assert!(d.ents[0].body.is_some(), "a body for the near can");
+        assert!(d.ents[1].body.is_none(), "none past the box");
+        d.advance(17, &mut floor);
+        // Each contact of a 1-unit mass under the region takes about
+        // (1 - 1/200^3) * 1000 / 17 straight up, the falloff 0.9 at 10 of
+        // 100: the can leaves the floor.
+        let b = d.ents[0].body.as_ref().unwrap();
+        assert!(b.vel.z > 50.0, "{}", b.vel);
+        assert!(b.jitter.is_empty(), "the region lasts one step");
+        // An outer radius of 0 does nothing.
+        let mut d = DynEnts::new(Arc::new(vec![can(Vec3::new(10.0, 0.0, 2.2))]));
+        d.jitter(Jitter { outer: 0.0, ..j }, 0);
+        assert_eq!(d.awake(), 0);
+        // Without the region the can only settles.
+        let mut d = DynEnts::new(Arc::new(vec![can(Vec3::new(10.0, 0.0, 2.2))]));
+        d.make_body(0, 0);
+        d.advance(17, &mut floor);
+        assert!(d.ents[0].body.as_ref().unwrap().vel.z <= 0.0);
     }
 
     #[test]

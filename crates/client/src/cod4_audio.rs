@@ -22,6 +22,20 @@ const ENTITYNUM_WORLD: u32 = 1022;
 /// index the alias names from here (cod4-sound.md 4).
 pub const CS_SOUND_ALIASES: u16 = 1342;
 
+/// A swing's contact on a dynamic entity: `melee_knife_hit_other` (the
+/// handle at 0x84db74, registered at 0x43e5dd) at the point on the world
+/// (`DynEntCl_EntityImpactEvent`'s melee arm, 0x48e2b9).
+pub fn swing_cue(pos: Vec3) -> Cue {
+    Cue {
+        alias: "melee_knife_hit_other".into(),
+        source: Source::Entity {
+            num: ENTITYNUM_WORLD,
+            pos,
+        },
+        delay_s: 0.0,
+    }
+}
+
 /// The weapon fields the event arms read, by weapon name.
 #[derive(Clone, Debug, Default)]
 pub struct WeaponAv {

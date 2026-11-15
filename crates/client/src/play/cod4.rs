@@ -13081,7 +13081,8 @@ pub(crate) mod tests {
     /// `physicsLaunch`es its parts, watched by a spectator: each part this
     /// client sees launched flies off its spot (`play::cod4_physics`), and
     /// goes to sleep clear of the world, resting on what is under it
-    /// (cod4-gsc.md 3.6). Returns at once without an install.
+    /// (cod4-gsc.md 3.6); a round that meets a resting one pushes it on
+    /// and it sleeps again. Returns at once without an install.
     #[test]
     fn cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest() {
         use vcod_cod4::ragdoll::CLIP_MASK;
@@ -13119,6 +13120,10 @@ pub(crate) mod tests {
             let mut s = Cod4Session::connect(addr, "watcher", Cp::Bare, join).unwrap();
             s.set_world(world.clone());
             let mut parts: BTreeMap<u32, Seen> = BTreeMap::new();
+            // At 22 s a round slanting down onto the first resting part
+            // the shot's trace meets (`Phys_ObjBulletImpact` off 0x48df10):
+            // the part, where it was hit, whether it woke, its last origin.
+            let mut shot: Option<(u32, Vec3, bool, Vec3)> = None;
             let t0 = clk_now();
             while since(t0) < Duration::from_secs(30) {
                 let now = since(t0).as_secs_f64() * 1000.0;
@@ -13126,6 +13131,7 @@ pub(crate) mod tests {
                 s.take_commands();
                 clk_sleep(Duration::from_millis(16));
                 let Some(scene) = s.scene() else { continue };
+                let mut resting = Vec::new();
                 for d in &scene.entities {
                     let Some(b) = s.physics.body(d.number) else {
                         continue;
@@ -13138,10 +13144,35 @@ pub(crate) mod tests {
                         .or_insert_with(|| (m.clone(), d.origin, 0.0, None));
                     e.2 = e.2.max(d.origin.distance(e.1));
                     e.3 = Some((b.asleep, b.steps, b.world_points().collect()));
+                    if b.asleep {
+                        resting.push((d.number, d.origin));
+                    }
+                    if let Some(sh) = shot.as_mut().filter(|sh| sh.0 == d.number) {
+                        sh.2 |= !b.asleep;
+                        sh.3 = d.origin;
+                    }
+                }
+                if shot.is_none() && since(t0) > Duration::from_secs(22) {
+                    let w = crate::cod4_fx::ShotWorld {
+                        clip: &world.clip,
+                        solids: &s.shot_solids,
+                    };
+                    let hit = resting.iter().find_map(|&(n, o)| {
+                        let (start, end) = (
+                            o + Vec3::new(-48.0, 0.0, 48.0),
+                            o + Vec3::new(16.0, 0.0, -16.0),
+                        );
+                        let (at, met) = crate::cod4_fx::first_contact(w, start, end);
+                        (met == Some(n)).then_some((n, o, at, (end - start).normalize()))
+                    });
+                    if let Some((n, o, at, dir)) = hit {
+                        assert!(s.physics.shoot(n, at, dir, 1000.0));
+                        shot = Some((n, o, false, o));
+                    }
                 }
             }
             s.disconnect();
-            parts
+            (parts, shot)
         });
         // From 4 s, a frag bursts on the car every 600 ms, 12 in all.
         let mut car = None;
@@ -13170,7 +13201,10 @@ pub(crate) mod tests {
             true
         });
         assert!(car.is_some(), "no destructible on mp_backlot");
-        let parts = client.join().unwrap();
+        let (parts, shot) = client.join().unwrap();
+        let (n, from, woke, to) = shot.expect("a round meets a resting part");
+        println!("shot part {n}: {from} -> {to}");
+        assert!(woke && to.distance(from) > 1.0, "{n}: {from} -> {to}");
         for (n, (m, at, far, b)) in &parts {
             let b = b.as_ref().unwrap();
             println!(
@@ -13277,6 +13311,7 @@ pub(crate) mod tests {
                         &fired,
                         &weapons,
                         &[],
+                        None,
                         scene.render_time,
                     );
                 }
