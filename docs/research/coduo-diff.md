@@ -1002,10 +1002,34 @@ stock UO grenade, smoke, flash and satchel has `cookOffHold 1` (VERIFIED).
   <= d < lod_max`, and at -1 only a `lod_min` of 0 (VERIFIED decompile).
   `weap_mg42_loop` and `weap_mg34_loop` in `gmi_mp_vehicles_ge.csv` split on
   it: the near file inside 1800 units, the distant one past it (VERIFIED,
-  the csv). vcod: `audio::alias::lod_admits`, `pick_lod`. How the pick
-  weighs and excludes repeats among the admitted rows (0x438300's counter at
-  row +0x10) is read only in outline; vcod applies its 1.1 weighting to them
-  (INFERRED).
+  the csv). vcod: `audio::alias::lod_admits`, `pick_lod`.
+- **The pick among the admitted rows**, read off 0x438300..0x438552
+  (2026-11-16):
+  - The records are 0x4c bytes: `+0x10` the pick counter, `+0x3c`
+    `probability`, `+0x40`/`+0x44` the lods, `+0x48` the hash chain
+    (VERIFIED, the operands).
+  - The lookup (0x436710) calls the name compare (0x436744) and the lod
+    test (0x436750) on each record of the hash chain (VERIFIED, the
+    calls).
+  - It returns the first that passes both, the group's last admitted row
+    in sorted order, the chain being LIFO as 1.1's (1e) (INFERRED).
+  - Walking back over the group as 1.1's does, a row the inline lod test
+    (0x438416..0x438463) refuses branches to 0x4384a7, past the count, the
+    weight and the counter maximum at 0x438465..0x4384a5 (INFERRED, the
+    branch).
+  - The repeat rule compares the admitted count with 2 (0x4384b8) and the
+    chosen counter with their maximum (0x4384c5); its second walk
+    (0x4384e0..0x438543) counts down that many rows, a refused one adding
+    its count back (`inc` at 0x4384f6, `dec` at 0x43853e) (INFERRED, the
+    loop's shape).
+  - The chosen row's counter becomes that maximum plus one (0x438545)
+    (VERIFIED, the store).
+  - So 1.1's rule runs over the admitted rows alone: two admitted rows of
+    a larger group may repeat, and a pick at another distance leaves these
+    rows' counters as they were (INFERRED).
+  - vcod: `pick_lod` keeps the group's counters per alias
+    (`audio::AudioSystem::pick_counts`);
+    `a_lod_pick_repeats_by_the_admitted_rows_alone` pins it.
 
 ### Sound blend entities
 
