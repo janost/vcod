@@ -1058,9 +1058,10 @@ disassembly) offsets:
   degrees wide of the helicopter from 950 off, with the stock strength and
   with 0: the same flight to the first wobble (same draws off the level's
   `rand()`), then the attracted one passes over 20 nearer. VERIFIED (the
-  test, ours). A retail capture of an RPG's two flights gates the rest:
-  every point of the path matches, each wobble's `trDelta` a unit in the
-  last place off (cod4-combat.md 15). VERIFIED (the gate).
+  test, ours). A retail capture of an RPG's two flights gates the rest,
+  word for word: the wobble's `AngleVectors` takes glibc's `sinf` and
+  `cosf` and `vectoangles` keeps its flat length a double (cod4-combat.md
+  15). VERIFIED (the gate).
 
 ### 3.3 The script traces
 

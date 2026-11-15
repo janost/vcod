@@ -1684,13 +1684,15 @@ after the start: `target` (allies, `--goto "207 2291 296"`) and `shooter`
 on retail's clock, seed and spawn spots, a frame's two packets in the
 order retail received them, and compares every playerstate
 word, health, ammo and every entity by number, both clients, snapshot by
-snapshot from the later spawn. What still differs is each gate's `GAPS`.
+snapshot from the later spawn. Each gate's `GAPS` is empty: ours matches
+every row of the five runs (the touch run's is cod4-pmove.md 15.3).
+VERIFIED (the gates).
 
 - Rocket: `demolitions_mp,0`'s RPG (weapon 29) from 697 -2038 200, one
   round at yaw 105 pitch -10 that flies 3.5 s, one at the target that
-  flies 1.15 s. VERIFIED live. The path's points match on every row;
-  each wobble's `trDelta` is a unit in the last place off. VERIFIED (the
-  gate).
+  flies 1.15 s. VERIFIED live. Ours matches every row, the second
+  rocket's number and each wobble's `trDelta` included (below). VERIFIED
+  (the gate).
 - Throw back: the frag aimed 60 under the target's feet (`--aim-z -60`)
   lands short; thrown back, it strikes the shooter's head at 50100 and
   falls to the ground. VERIFIED live. The hint, the pickup, the hold, the
@@ -1816,7 +1818,7 @@ The dropped weapon (6.1) matches word for word on both runs, the hit's
 (cod4-gsc.md 3.2, "The skeleton"); before, the posed tag sat some 3e-5
 units off retail's. VERIFIED (the gates, both ways).
 
-Open, with each gate's `GAPS`:
+What the gates once listed, each closed:
 
 - A grenade's strike on a standing body. The thrown back frag meets the
   shooter at 50100 (`EV_GRENADE_BOUNCE` parm 7, flesh, and the hurt).
@@ -1840,33 +1842,53 @@ Open, with each gate's `GAPS`:
   (26.752, 74.908, -171.276), the head composed off quaternions (26.753,
   74.910, -171.278). VERIFIED (the gate, both ways). What parted it, and
   what is left, is 15.1.
-- The second rocket takes entity 317 on retail, 316 on ours; nothing
-  either client saw held 316. VERIFIED live. Both runs' first rocket is
-  315, shown 47350..50850, gone at 50900 with no event on either side;
-  ours frees it on a `SURF_NOIMPACT` hit (the sky), which on 1.7 notifies
-  `death` and frees it with nothing spawned (0x8097579..0x80975aa).
-  VERIFIED (the instructions). Its fuse (`nextthink` 52300, 5 s) is not
-  reached, so `G_ExplodeMissile`'s burst entity (`G_Spawn` at 0x8093de5,
-  `eType` 0, `eFlags` 0x20) is not it either. `FireWeapon` (0x80a3030) and
-  `Weapon_RocketLauncher_Fire` (0x80a2d80) spawn nothing but the rocket
-  (`G_FireRocket`'s one `G_Spawn`, 0x8096d8f). VERIFIED (the
-  instructions). No stock script waits on `missile_fire`. VERIFIED (the
-  scripts). What took 316 on retail between the two shots is unknown.
-- The killcam run's archived view: the killcam frames read the shooter's
-  yaw 0 (its `setviewpos`'s) where ours sends 90, the spawn yaw. VERIFIED
-  (the gate). Not the wire: a live snapshot sends the view only on a
-  teleport, follow, view lock or intermission (0x813fa4d..0x813fa81), but
-  the archive's writer (0x816b6a8) sets the snapshot info's +0xd byte
-  (0x816b6b4), which sends the view rows always, and a follower's frame
-  has `otherFlags` 2. VERIFIED (the instructions). So retail's archived
-  playerstate held yaw 0. The shooter's cmds read yaw 4551 (25 degrees)
-  from 42068 on against `delta_angles` 65.00061 (VERIFIED, the capture),
-  and `PM_UpdateViewAngles` (0x80573fa, called from `PmoveSingle` at
-  0x805beec) sums the two for a living body (0x8057441..0x805744e), which
-  gives 90 on ours. INFERRED. The prone run's archived views do follow
-  its shooter's cmds that way (65.09949 from 62825 plus 79.99146, 124.00269
-  from 8012). VERIFIED live. Why the killcam run's stayed 0 is
-  unknown.
+- The second rocket's number. A retail run of the rocket recipe under
+  gdb, breaking at `G_Spawn`'s return (0x80cbcbf) and `G_TempEntity`
+  (0x80cbd96), shows 316 taken 450 ms after the first shot by a temp
+  entity, event 3 (`EV_SOUND_ALIAS`) at the shooter, made by
+  `playSoundToTeam` (0x80c3edc, its `G_TempEntity` at 0x80c3f35) and freed
+  350 ms on (0x80b6118). VERIFIED (gdb). `_battlechatter_mp.gsc`'s
+  `reloadTracking` waits on `reload_start` and plays the reload line to
+  the shooter's team but the shooter, so neither probe saw it. VERIFIED
+  (the script, `common_mp.ff`). `ClientEvents` (0x80a581e, its jump table
+  0x8217d98 from event 19) notifies `reload_start` on
+  `EV_RELOAD_START_NOTIFY` (19, 0x80a5b0f), `reload` on
+  `EV_RELOAD_ADDAMMO` (20, 0x80a5afc), `grenade_pullback` with the
+  weapon's name on `EV_PULLBACK_WEAPON` (25) as on `EV_PREP_OFFHAND` (32,
+  both 0x80a5ab5) and `detonate` on `EV_DETONATE` (63, 0x80a58e5), each
+  through `Scr_Notify` (0x80c7604). VERIFIED (the instructions). vcod
+  raised none of the first three; with them the second rocket takes 317.
+  VERIFIED (the gate). vcod's pmove raises no `EV_DETONATE`, so that arm
+  is not ported. INFERRED (the code).
+- The wobble's `trDelta`. 1.7's `AngleVectors` (0x818ea3a) turns each
+  angle into radians through the double `M_PI / 180` (0x820a288), stores
+  them, and calls `sinf` and `cosf` (plt 0x804a9fc, 0x804a6cc), the
+  host's glibc, whose results since 2.28 are not correctly rounded: at the
+  yaw 100.63505 (radians 0x3fe0d224) `cosf` gives 0xbe3cfb5e where the
+  correctly rounded is 0xbe3cfb5d. VERIFIED (gdb at 0x8097b4e: 78 wobble
+  frames' angles and forward from a fresh run, all 78 matching a model on
+  the host's `sinf` and `cosf`, 77 the correctly rounded `sin`).
+  `vcod_common::libm` ports glibc's two (bit for bit with the host's on 4
+  million inputs, its tests), and `x87::angle_vectors_libm` is 1.7's
+  `AngleVectors`. 1.7's `vectoangles` (0x8191a72) keeps the pitch's flat
+  length a double into `atan2` (`fstpl` at 0x8191afc) where the shared
+  one stored a float; the trajectory step (0x8095928) puts
+  `vectoangles(trDelta)` into the angles every frame (0x8095bad), so from
+  50350 the run's `trDelta` drifted up to 11 ulps. VERIFIED (the gate, both
+  ways). `game::cod4::missile` takes both.
+- The killcam run's archived view. Retail's killcam frames carry no view
+  row, so the follower keeps the yaw 0 of its own `setviewpos`, and the
+  gate read ours's 90 against it. VERIFIED live. The rows are considered
+  (`otherFlags` 2) but the field writer writes one only changed, against
+  the server's own base (cod4-netfields.md 7). VERIFIED (the
+  instructions). That base held the target's real view: after its
+  `setviewpos` it turned back to its spawn's 90 (`cod4_probe` re-aims
+  there), and the archived shooter's view was 90 too, so nothing went
+  out. INFERRED. A fresh run under gdb reads the archive's copy of the
+  shooter (0x816b8af) holding its live view, and there, the target having
+  turned back to -90, the killcam sends the shooter's 124. VERIFIED
+  (gdb, the run's capture). With the compare ours's 90 rows are gone.
+  VERIFIED (the gate).
 
 ### 15.1 The throw back's bounce off the head
 
