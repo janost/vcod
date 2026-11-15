@@ -1,12 +1,15 @@
 //! A United Offensive jeep running over a player, ours against retail's
-//! (`fixtures/vehicles/mp_kharkov-jeep-runover-{stand,prone}-uo.txt`,
+//! (`fixtures/vehicles/mp_kharkov-jeep-runover-*-uo.txt`,
 //! `client-probes/probe_vehicle_ram` with `probe_victim`, recipes in their
 //! headers): mp_kharkov's second Horch, driven straight ahead by
 //! `--probe-vehicle ram`, meets client 0 150 units ahead of it.
 //! `VEH_PlayerCollision`'s run-over damage, knock and `vehicle_hit_person`
 //! (docs/research/coduo-vehicles.md 13), and a prone body under the hull
 //! taking `ClientThink_real`'s 10 points a cmd (11.6). The victim's fall
-//! from his first placement is compared too (`compare_first_drop`).
+//! from his first placement is compared too (`compare_first_drop`). The
+//! `bail` rows' driver gets out a second into the drive and the jeep rolls
+//! on driverless. A capture's `CMDS` lines replay both clients' cmds on
+//! retail's times.
 //!
 //! `RUNOVER_REPORT=1` prints both sides' lines, `RUNOVER_DUMP=<path>`
 //! writes ours. Needs `COD_DIR` at a UO
@@ -114,6 +117,21 @@ fn ours(
         ..Default::default()
     };
     let mut hold = common::ProbeHold::default();
+    // A capture that logged the driver's `CMDS` lines replays them: his cmds
+    // on their times, the use taps on the cmds that carried them, and the
+    // throttle from `SEATED_MS` past the first tap's end, as
+    // `vehicle_probe.rs` holds it.
+    let driver_in = common::cmds_inputs(capture, "driver");
+    let replay_driver = !driver_in.is_empty();
+    if replay_driver {
+        hold.framed = true;
+        hold.times = common::cmds_times(capture, "driver");
+        hold.ran = common::cmds_ran(capture, "driver");
+    }
+    let throttle_from = driver_in
+        .windows(2)
+        .find(|w| w[0].1.0 & BUTTON_USE != 0)
+        .map(|w| w[1].0 + SEATED_MS as i32);
     victim_hold.times = common::cmds_times(capture, "victim");
     victim_hold.ran = common::cmds_ran(capture, "victim");
     // The velocity the victim's placement kept: it shares his spawn's frame,
@@ -171,11 +189,11 @@ fn ours(
             hold.base = placed_yaw(sv.script_log(), "PROBE place ").map(|y| [10.0, y, 0.0]);
         }
         let clients = [
-            Some((&mut ca, &mut victim_hold, 0)),
+            Some((&mut ca, &mut victim_hold, 0, true)),
             cb.as_mut()
-                .map(|cb| (cb, &mut hold, if tap { BUTTON_USE } else { 0 })),
+                .map(|cb| (cb, &mut hold, if tap { BUTTON_USE } else { 0 }, false)),
         ];
-        for (cl, h, buttons) in clients.into_iter().flatten() {
+        for (cl, h, buttons, is_victim) in clients.into_iter().flatten() {
             if h.base.is_none() || cl.state() != NetState::Active {
                 if let Some(c) = cl.send_frame(&UserCmd::default()) {
                     h.last = c.server_time;
@@ -185,12 +203,18 @@ fn ours(
             let mut cmds = h.cmds(cl, buttons);
             // The victim's buttons, prone key and up move as his capture's
             // `in=` changes set them: he lies down on the cmd retail's
-            // probe client pressed it on, the `PROBE_IN` it answers.
+            // probe client pressed it on, the `PROBE_IN` it answers. The
+            // driver's the same way when his are replayed.
+            let ins = if is_victim { &victim_in } else { &driver_in };
             if h.framed {
                 for c in &mut cmds {
-                    let at = victim_in.partition_point(|(st, _)| *st <= c.server_time);
-                    if let Some(&(_, (b, wb, up))) = at.checked_sub(1).map(|k| &victim_in[k]) {
+                    let at = ins.partition_point(|(st, _)| *st <= c.server_time);
+                    if let Some(&(_, (b, wb, up))) = at.checked_sub(1).map(|k| &ins[k]) {
                         (c.buttons, c.wbuttons, c.up) = (b, wb, up);
+                    }
+                    if let (false, Some(from)) = (is_victim, throttle_from) {
+                        let on = (from..from + throttle as i32).contains(&c.server_time);
+                        c.forward = if on { 127 } else { 0 };
                     }
                 }
             }
@@ -378,19 +402,6 @@ struct Drift {
     why: &'static str,
 }
 
-/// The victim knocked through the air between the two hits, and his corpse
-/// after: the gsc reads his origin after however many of the probe
-/// client's cmds a frame ran, which retail's own clock spaces unevenly
-/// (+550 to +650 steps of 14, 3.8 and 17.6 units on retail, 10.6 each on
-/// ours, 16, 16 and 18 ms apart), so a line sits up to a cmd's travel
-/// (3.8 at 212 units/s) off; the fall's height drifts 0.9 by the second
-/// hit, and its sound's snapped origin a unit.
-const FLIGHT: Drift = Drift {
-    after: 150,
-    within: 4.0,
-    why: "the probe client's cmd clock in the flight",
-};
-
 /// A prone corpse creeping off the hull's line: retail's +1150 repeats
 /// +1100 (a frame no cmd reached), the creep a cmd at a time.
 const CREEP: Drift = Drift {
@@ -407,20 +418,6 @@ const LIE_DOWN: Drift = Drift {
     after: -1000,
     within: 0.15,
     why: "the prone victim's creep under the jeep",
-};
-
-/// The driverless jeep's victim, dead from the strike's frame on: the gsc
-/// reads his corpse, knocked off at 418 units/s, after however many of the
-/// probe client's cmds that frame ran past the kill. Retail's capture ran
-/// two (14.2 units out), ours runs three (20.9); retail's other runs put
-/// the death frame's corpse 7.5 and 27.7 out. From there the corpse rides
-/// the cmd clock as in [`FLIGHT`] and comes to rest 3.5 off. The strike's
-/// frame itself (the damage, its point and the origin the callback reads)
-/// is exact.
-const CORPSE: Drift = Drift {
-    after: 0,
-    within: 5.5,
-    why: "the probe client's cmd clock in the corpse's flight",
 };
 
 fn words(l: &str) -> Vec<String> {
@@ -468,17 +465,14 @@ fn first_drop(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// The first drops no gate can replay: the captures logged no `CMDS`
-/// lines, and the drop from the placement rides the probe client's cmd
-/// clock (stand, prone under a teammate) and the velocity his spawn left
-/// (bail) (coduo-vehicles.md 11.6, "The first drop").
-const FIRST_DROP_GAPS: &[(&str, &str)] = &[
-    (
-        "stand",
-        "two, four and eight of the probe client's cmds by the first three frames, not two, five and eight",
-    ),
-    ("bail", "13.9 units/s across the ground the spawn left him"),
-];
+/// The first drops no gate replays: a victim who lies down on his
+/// placement lands on the grade 0.35 units short of retail's spot, where
+/// retail's second drop, already prone, lands (coduo-vehicles.md 11.6,
+/// "The first drop").
+const FIRST_DROP_GAPS: &[(&str, &str)] = &[(
+    "bail-prone",
+    "the prone press's landing slides 0.35 units short of retail's",
+)];
 
 /// The victim's first drop on ours against retail's, line for line to the
 /// hundredth, unless [`FIRST_DROP_GAPS`] names `capture`: then at least one
@@ -507,8 +501,21 @@ fn compare_first_drop(capture: &str, retail: &[String], ours: &[String]) {
 
 /// Retail's lines against ours one for one: whole words (times, damage,
 /// health, alias indices) equal, decimals within 0.01 up to `drift.after`
-/// ms past the first hit and within `drift.within` from there.
-fn compare(retail: &[String], ours: &[String], upto: i32, drift: Drift) {
+/// ms past the first hit and within `drift.within` from there; every one
+/// within 0.01 without a drift.
+fn compare(retail: &[String], ours: &[String], upto: i32, drift: Option<Drift>) {
+    let Some(drift) = drift else {
+        let (r, o) = (around_hit(retail, upto, true), around_hit(ours, upto, true));
+        let differ: Vec<String> = r
+            .iter()
+            .zip(&o)
+            .filter(|(a, b)| !same(a, b, 0.01))
+            .map(|(a, b)| format!("retail {a}\nours   {b}"))
+            .collect();
+        assert!(differ.is_empty(), "{}", differ.join("\n"));
+        assert_eq!(r.len(), o.len(), "line counts\nretail {r:#?}\nours {o:#?}");
+        return;
+    };
     // Captures from before the probe logged `dmgorigin` carry none.
     let origins = retail.iter().any(|l| l.starts_with("PROBE dmgorigin "));
     let (r, o) = (
@@ -569,7 +576,7 @@ fn a_jeep_runs_over_a_standing_player_twice() {
         return;
     };
     compare_first_drop("stand", &r, &o);
-    compare(&r, &o, 1000, FLIGHT);
+    compare(&r, &o, 1000, None);
     compare_impacts(&r, &o);
 }
 
@@ -581,7 +588,7 @@ fn a_prone_player_under_a_jeep_takes_ten_a_cmd() {
         return;
     };
     compare_first_drop("prone", &r, &o);
-    compare(&r, &o, 1000, CREEP);
+    compare(&r, &o, 1000, Some(CREEP));
     compare_impacts(&r, &o);
 }
 
@@ -602,7 +609,7 @@ fn a_teammate_s_jeep_makes_a_prone_player_hurt_himself() {
         return;
     };
     compare_first_drop("prone-team", &r, &o);
-    compare(&r, &o, 1000, LIE_DOWN);
+    compare(&r, &o, 1000, Some(LIE_DOWN));
     compare_impacts(&r, &o);
 }
 
@@ -625,6 +632,27 @@ fn a_driverless_jeep_runs_over_a_standing_player() {
         return;
     };
     compare_first_drop("bail", &r, &o);
-    compare(&r, &o, 1000, CORPSE);
+    compare(&r, &o, 1000, None);
+    compare_impacts(&r, &o);
+}
+
+/// A driverless jeep over a prone victim: 10 a cmd, the jeep both
+/// inflictor and attacker, until its probes' strike kills him; the corpse
+/// takes that strike's push alone and creeps (coduo-vehicles.md 11.6).
+#[test]
+fn a_driverless_jeep_runs_over_a_prone_player() {
+    let text = read("tests/fixtures/vehicles/mp_kharkov-jeep-runover-bail-prone-uo.txt");
+    let r = retail(&text);
+    let Some(o) = ours(
+        "prone",
+        "axis",
+        &[("probe_victim_ahead", "300")],
+        true,
+        &text,
+    ) else {
+        return;
+    };
+    compare_first_drop("bail-prone", &r, &o);
+    compare(&r, &o, 1000, None);
     compare_impacts(&r, &o);
 }

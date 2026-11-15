@@ -1068,7 +1068,9 @@ weapon and health. The victim's origin matches to the hundredth up to
 150 ms past the first strike, and after it within a probe client cmd's
 travel (INFERRED: the gsc reads it after however many of the probe's cmds
 a frame ran; retail's flight steps 14, 3.8 and 17.6 units over three
-frames, ours 10.6 each). Where a prone victim lies down is the probe
+frames, ours 10.6 each); the standing row has since moved to a 2026-11-14
+recapture that replays both clients' cmds and matches exactly ("The first
+drop" below). Where a prone victim lies down is the probe
 client's timing too: retail's two prone runs lie 1.1 units apart. The same
 captures carry the Horch's own ram sounds as it strikes the Panzer past
 the victim, `EV_SOUND_ALIAS` parm 7 (`vehicle_impact`) at z 1825 and 2409
@@ -1123,25 +1125,68 @@ that move, alias and snapped origin (`compare_impacts`).
   retail's to the hundredth on every standing and prone-teammate run
   tried, the spawn's velocity included. VERIFIED, the gate. The fixture
   `mp_kharkov-jeep-runover-prone-team-uo.txt` is now such a run, its gap
-  gone and its creep held to 0.15. Still open:
+  gone and its creep held to 0.15.
 
-  - standing: the recaptures' first drops match, and then the flight
-    after the hit runs past the 4 units the 2026-10-17 capture keeps; the jeep's own drive rides its driver's cmds, which the
-    gate sends on its own clock (on the capture's, ours' jeep lurches 1.65
-    units/s at the seat where retail's stays still; not run down). The
-    2026-10-17 capture and its gap stay. INFERRED.
-  - bail: the 2026-11-14 runs' first drops match, and their corpses fly
-    6.8, 11.0 and 11.3 off retail's, past `CORPSE`, the driver's clock again. The older
-    capture and its gap stay. INFERRED.
+  The driver's `CMDS` lines replay too (2026-11-15): his cmds on their
+  times, his use taps on the cmds that carried them (`in=` 64), and the
+  throttle from 2000 ms past the first tap's end, where
+  `vehicle_probe.rs` holds it, for 6 s (`RAM`) or to the exit tap's end
+  (`BAIL`). The jeep then moves on retail's frame: its first move had
+  landed 50 ms early on the gate's own clock. With it, and the corpse rule
+  below, the 2026-11-14 recaptures that log the victim's spawn velocity
+  match retail line for line to the hundredth, first drop, flight, both
+  strikes, corpse and ram sounds included: standing (runs 6 and 7) and
+  driverless standing (runs 6 and 7, and the first run, whose velocity
+  was 0) (VERIFIED, the gate on each). Standing run 4, which logs no
+  spawn velocity, matches to its second strike and takes that one a frame
+  early on ours (125 at +900 against retail's 131 at +950); not run down.
+  `mp_kharkov-jeep-runover-stand-uo.txt` and
+  `mp_kharkov-jeep-runover-bail-uo.txt` are now runs 6, compared with no
+  drift, and both `FIRST_DROP_GAPS` entries are gone. Still open:
+
   - prone: the fall matches, and a prone body landing on the grade slides
     0.1 to 0.3 units off retail's (two runs), so the 2026-10-17 capture,
     whose drop ours meets, stays. VERIFIED, the gate on those runs.
-  - a driverless jeep over a prone victim (`probe_victim prone`,
-    `probe_victim_ahead 300`, `--probe-vehicle bail`): retail crushes him
-    10 a cmd with the jeep as inflictor and attacker (VERIFIED, six
-    captures), and ours meets it on none of them: the driverless jeep's
-    path rides the driver's cmds, so its hits land on other frames. No
-    fixture is committed. INFERRED.
+  - a victim who lies down on his placement 300 ahead (the driverless
+    prone runs below) lands 300 ms later on the grade, and retail slides
+    him 0.35 units on along y over two frames where ours stops: every one
+    of the six runs, (-1032.09, 7763.64) then (-1032.00, 7763.87) on run 6
+    against ours' (-1032.24, 7763.31). Retail's second drop onto the same
+    spot, already prone, lands on ours' point (VERIFIED, captures). So
+    the slide belongs to the prone press's transition on landing, which
+    ours lacks (INFERRED). `FIRST_DROP_GAPS` names `bail-prone`.
+
+**A strike that kills.** `VEH_PlayerCollision` runs inside the drive
+step's probe loop (0x827ab), on each of the six `vehCheckSolidOffsets`
+probes whose trace meets a body, each probe passing on through it under a
+mask without `CONTENTS_BODY` (0x2000000) (VERIFIED decompile). So one
+think can push a body up to six times. `player_die` (0x4f972) sets
+`r.contents` (+0x120) to `CONTENTS_CORPSE` 0x4000000 (VERIFIED
+decompile). A strike that kills him therefore leaves a corpse outside
+the later probes' mask, which takes that strike's push alone (INFERRED,
+the mask against the contents). vcod's think queues its strikes and
+`server::crush` applies them after the driven steps; it skips a body a
+strike before it killed. Without that, the driverless jeep's three
+strikes in its killing think left the prone corpse at 392 units/s
+along, past the 0.8 dot that unlinks the hull, and it flew 26 units a
+frame where retail's creeps 0.2; the driven standing run's second strike
+threw its corpse past retail's (VERIFIED, the gate with and without).
+
+**Run-over of a prone body by a driverless jeep.** Retail UO 1.51b,
+2026-11-14, `probe_victim prone`, `probe_victim_ahead 300`, the driver
+on `--probe-vehicle bail` (fixture
+`crates/server/tests/fixtures/vehicles/mp_kharkov-jeep-runover-bail-prone-uo.txt`,
+run 6 of six, recipe in its header): 5200 ms after the driver's
+placement the rolling Horch's hull covers the prone victim, and each of
+his cmds takes 10, `MOD_CRUSH_JEEP`, the Horch (182) both inflictor and
+attacker, weapon `none`, his origin as the point, three, two and four a
+frame by the cmds that frame ran. 150 ms on, the drive step's strike
+deals 110 (`150 min(speed / 400, 1)` at 293 units/s) on the frame's time
+and kills him; in run 7 his tenth 10 killed him first. No
+`vehicle_hit_person` plays, as he lies prone. The corpse creeps 0.2
+units a frame (VERIFIED, six captures). `vehicle_runover_ab`'s
+`a_driverless_jeep_runs_over_a_prone_player` matches every line to the
+hundredth (VERIFIED, the gate).
 
 **Run-over by a driverless jeep.** Retail UO 1.51b, 2026-10-20, the same
 probe with `--probe-vehicle bail` for the driver (out at full throttle a
@@ -1176,8 +1221,10 @@ and strikes the standing victim once.
   The probe sets it to 0.
 
 `vehicle_runover_ab`'s `a_driverless_jeep_runs_over_a_standing_player`
-replays it: the damage line, its point and the callback's origin match
-retail's exactly, the corpse within one cmd's travel.
+replays it on the 2026-11-14 recapture run 6, which logs both clients'
+cmds: every line matches retail's to the hundredth, the corpse's flight
+included, once ours runs the victim's cmds on their times (the whole
+cmds a frame above). VERIFIED, the gate.
 
 ### 11.7 A rider killed in his seat
 
