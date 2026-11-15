@@ -1435,11 +1435,9 @@ impl BodyPose {
                 .as_ref()
                 .map(|(n, l)| (*n, l.as_slice()))
                 .filter(|_| mounted),
-            turret_left: self
-                .turret_left
-                .as_ref()
-                .map(|(n, l)| (*n, l.as_slice()))
-                .filter(|_| mounted),
+            // A group the gunner left fades on its carried rows past the
+            // dismount as well (cod11-turrets.md 13.9, "The dismount").
+            turret_left: self.turret_left.as_ref().map(|(n, l)| (*n, l.as_slice())),
             controllers: self.eased.or_else(|| self.target_controllers()),
             seat_leaves: match self.seat_ramp.at(now_ms) {
                 ramped if !ramped.is_empty() => ramped,
