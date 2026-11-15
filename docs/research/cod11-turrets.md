@@ -558,8 +558,17 @@ corner and at the centre never meets the gunner (`turret_ab`'s
 `a_gunner_never_meets_his_own_round`); the muzzle sits
 `|tag_flash - tag_player|` along the view, ahead of his bones. VERIFIED
 (capture): the fire and target phases of the 1.1d, 1.5b and UO turret
-fixtures carry no pain event on the gunner. Not measured on retail: a
-placement that puts the gunner's body in front of that point.
+fixtures carry no pain event on the gunner. VERIFIED live (retail 1.1d,
+2026-11-15, `client-probes/probe_ownline`, fixture
+`crates/server/tests/fixtures/ownline/mp_carentan-1.1.txt`): one gunner on
+mp_carentan's gun (298) swept pitch -40 to 60 in rows of 10, each a yaw sweep
+60 right to 60 left of the gun at 4 degrees a frame, past both arcs, with
+the trigger held (`EF_FIRING` on 341 of the sweep's 343 snapshots); no damage
+callback ran. `ownline_ab` replays it and reads no hit on ours. INFERRED:
+the placement (7.2) runs right before the shot (6.1) and always stands the
+body behind the gun, so no stock gun puts its gunner in his own line; a
+script cannot move him between the two (no thread runs inside
+`ClientEndFrame`).
 
 VERIFIED, absence in 0x51488..0x53400: no operand at `+0x3ec`, `+0x3f8` or
 `+0x3fc`, no read of any ammo or clip array, no `overheat` string anywhere in
@@ -753,9 +762,18 @@ retail's origin in all three axes (the one-decimal rounding). `predict_ab`'s
 
 Not determined:
 
-- Which time `XAnimCalcAbsDelta` samples a root with more than one key at.
-  vcod reads frame 0. Only the three `fire_30left` leaves differ, by 0.7 at
-  their last frame, and no captured firing snapshot blends them.
+- Which time `XAnimCalcAbsDelta` samples a root with more than one key
+  at: resolved. VERIFIED live (retail 1.1d, 2026-11-15,
+  `client-probes/probe_ownline`, the 6.3 sweep, fixtures
+  `crates/server/tests/fixtures/ownline/`): with the trigger up, vcod's
+  placement reads retail's origin on all 362 frames of the sweep to the
+  float step; with it held, read at frame 0, 97 frames sat up to 0.57 off,
+  in each row's sweep from 12 to 40 right of the gun (the columns that blend
+  `fire_30left`) and the two frames after the swing back. Read at the legs
+  clip's time (`place_gunner_at`, `ClientSim::legs_seconds`), all 362 match
+  (VERIFIED, `ownline_ab`). INFERRED, the match: the delta reads each leaf's
+  root at the group's own time. The other leaves carry one key, so the
+  time moves nothing there.
 - The body's yaw. VERIFIED, 7.1: `BG_PlayerStateToEntityState` is called at a
   lower address than the `AxisToAngles` store. INFERRED: the entity state is
   built before the store, so the yaw never reaches the wire. vcod blends the

@@ -272,18 +272,21 @@ impl Cod4Players {
         n: u32,
         frame: &vcod_cod2::player::BodyFrame,
         render_time: i32,
-    ) -> Option<(
-        Rc<PlayerRig>,
-        vcod_common::skeleton::PoseBuffer,
-        vcod_common::playerpose::Controllers,
-    )> {
+    ) -> Option<BodyPose> {
         let body = self.bodies.get(&n)?;
         let (_, Some((rig, _))) = body.rig.clone()? else {
             return None;
         };
         let set = self.anims.as_mut()?.as_mut()?;
-        let pose = body.body.pose(&rig, set, src, frame, render_time, None);
-        Some((rig, pose, *body.body.controls()))
+        let shared = body.body.pose(&rig, set, src, frame, render_time, None);
+        let (pose, sampled) = drawn_locals(&body.body, &rig, set, src, frame, render_time, None);
+        Some(BodyPose {
+            rig,
+            shared,
+            pose,
+            sampled,
+            controls: *body.body.controls(),
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -484,14 +487,16 @@ impl Cod4Players {
                 out.push((i, rig.clone(), drawn));
                 continue;
             }
-            let pose = body.body.pose(&rig, set, src, &frame, render_time, turret);
+            let (pose, sampled) =
+                drawn_locals(&body.body, &rig, set, src, &frame, render_time, turret);
             // `iw3mp.exe`'s `DObjCalcSkel` (0x57fbd0): the control bones
             // turn in `tag_origin`'s frame (cod4-player-anims.md 8); a
             // gunner's take none.
             let controls = turret.is_none().then(|| *body.body.controls());
-            let worlds = vcod_cod4::skel::worlds_of(&vcod_cod4::skel::player_mats(
+            let worlds = vcod_cod4::skel::worlds_of(&vcod_cod4::skel::player_mats_sampled(
                 &rig.skeleton,
                 &pose,
+                &sampled,
                 controls.as_ref(),
                 Cod4Arith::Client,
             ));
@@ -529,6 +534,56 @@ impl Cod4Players {
             out.push((i, rig.clone(), drawn));
         }
         out
+    }
+}
+
+/// What [`Cod4Players::body_pose`] hands a test: the rig, the shared
+/// sampler's pose, the drawn locals ([`drawn_locals`]) and the controls.
+#[cfg(test)]
+pub(crate) struct BodyPose {
+    pub rig: Rc<PlayerRig>,
+    pub shared: vcod_common::skeleton::PoseBuffer,
+    pub pose: vcod_common::skeleton::PoseBuffer,
+    pub sampled: Vec<Option<vcod_cod4::skel::AnimMat>>,
+    pub controls: vcod_common::playerpose::Controllers,
+}
+
+/// A drawn body's locals at `render_time`: `iw3mp.exe`'s `DObjCalcAnim`
+/// (0x5875f0) over its tree, each clip off its seconds, in the client's
+/// arithmetic (`vcod_cod4::xanimcalc::player_locals`, cod4-player-anims.md
+/// 11), over the bind pose. A gunner's legs, whose turret rows that tree
+/// does not carry, or a clip the zones lack keep the shared sampler's
+/// pose.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn drawn_locals(
+    body: &PlayerBody,
+    rig: &PlayerRig,
+    set: &mut PlayerAnimSet,
+    src: &BodySource,
+    frame: &vcod_cod2::player::BodyFrame,
+    render_time: i32,
+    turret: Option<(usize, &[vcod_common::turretpose::TurretRow])>,
+) -> (
+    vcod_common::skeleton::PoseBuffer,
+    Vec<Option<vcod_cod4::skel::AnimMat>>,
+) {
+    let sampled = turret.is_none().then(|| {
+        let channels = body.leaves(set, src, frame, render_time, false)?;
+        let models: Vec<&str> = rig.models.iter().map(|(m, _)| m.as_str()).collect();
+        vcod_cod4::xanimcalc::player_locals(
+            src,
+            &rig.skeleton,
+            &models,
+            &channels,
+            Cod4Arith::Client,
+        )
+    });
+    match sampled.flatten() {
+        Some(s) => (vcod_common::skeleton::PoseBuffer::drawn(&rig.skeleton), s),
+        None => (
+            body.pose(rig, set, src, frame, render_time, turret),
+            Vec::new(),
+        ),
     }
 }
 

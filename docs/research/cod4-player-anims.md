@@ -364,13 +364,15 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   the first arm's sums, as on the server. VERIFIED (the instructions).
   `AnglesToQuat` takes its half angles off the float `M_PI / 360`
   (0x70b298) through `fsincos` and stores its four products. VERIFIED (the
-  instructions). With the x87 at single precision every result is a
-  float. INFERRED (cod4-world.md, the lightgrid). The drawn bodies compose
+  instructions). vcod composes the client's bones with every result a
+  float, as if the x87 ran at single precision; it runs at double (11),
+  so a value the client keeps between stores can sit an ulp off vcod's.
+  INFERRED (no client dump). The drawn bodies compose
   so (`vcod_cod4::skel::player_mats` with `Cod4Arith::Client`); the
   server's hit poses take the same composition with `Cod4Arith::Server`
   over the locals 1.7's own sampler leaves (`player_mats_sampled`, 11).
-  The drawn bodies' locals still come off CoD1's sampler. INFERRED (the
-  code; no client dump).
+  The drawn bodies' locals come off 1.7's sampler in the client's
+  arithmetic (11).
   Off the gdb dump's own bone 0, parents and angles, the client's
   arithmetic lands within 1e-7 of retail's server words on all 804
   control bones (`skel_ab`); a strafing body drawn by the client sits
@@ -612,7 +614,8 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   After: neck twist 0 at 4 ms and at most 13 degrees at 100 ms (that
   number measured from the first step, whose 50 ms swing the measure
   itself turns); every corpse that slept moved under a unit and turned
-  its pelvis and spine under 4 degrees in its last 900 ms; seven of
+  its pelvis and spine under 4 degrees in its last 900 ms (a run's
+  measure, not a bound: see below); seven of
   eight slept in `cod4_live_corpses_ragdoll_onto_the_floor` and none
   froze at max life. VERIFIED (the tests, ours).
 - Not taken: ODE's angular sleep test. This solver's resting points
@@ -624,6 +627,29 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   step: vcod's damping takes 1.6 to 7% of each point's speed every
   sixtieth of a second, linear and angular together, already more.
   VERIFIED (the runs, ours).
+- The linear rule does not bound how far a body moves in the 900 ms
+  before it sleeps: the timer starts the step every point drops under 20
+  units a second, and a body decaying from there covers more than a
+  unit. With the drawn bodies on 1.7's sampler (11), `mp_crash`'s corpse
+  67 at 4 ms frames fell the same way to its floor contact at 357 ms,
+  then took a different bounce off a start pose 1e-5 units off the old
+  one: under 20 units a second from 630 ms, 18 at 663, 14 at 714 to 816,
+  asleep at 1547, 1.70 units from where its window began. The old
+  sampler's run had slowed to 13 by 561 ms and moved 0.72. VERIFIED (the
+  runs, ours). Measured per step from the start of the step, the
+  resting bodies' turns average 0.2 to 0.5 rad/s and peak at 1.35: an
+  angular test at `phys_autoDisableAngular`'s 1 rad/s keeps every corpse
+  awake to `ragdoll_max_life`; averaged over six steps it lets corpse 67
+  sleep at 1751 ms having moved 0.60, while corpse 64 at 100 ms frames
+  then moves 1.35. VERIFIED (the runs, ours). Neither is taken.
+- So `cod4_live_ragdolls_hold_still_once_down` no longer bounds that
+  slide at a unit: the bound held only by how a bounce fell. It holds the
+  corpses to what the rule promises, at 4 ms and 100 ms frames: asleep by
+  `ragdoll_max_life` (at 4 ms every one before it; at 100 ms, with 50 ms
+  steps, two of six freeze at it on either sampler), every step's
+  fastest point under 20 units a second over the 900 ms before a body
+  sleeps (`Ragdoll::step_speeds`), no point moving once asleep, and the
+  neck under 30 degrees. VERIFIED (the test, ours).
 - The skins a frame reuses between steps (cod4-client-perf.md 38, item
   4) are keyed on the ragdoll's version, which every step bumps, and on
   the corpse's transform: they are the step's pose, never one between.
@@ -692,3 +718,47 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   (`combat::Pose4`); CoD1's sampler had normalized each key and the
   blend, which left the thrown back frag's bounce off a head box ulps off
   retail's (cod4-combat.md 15.1). VERIFIED (the gate).
+- `iw3mp.exe` runs the same sampler: `DObjCalcAnim` at 0x5875f0, the
+  walk at 0x5872c0 (a leaf at 0x586b20; the clip sums under 256 frames at
+  0x587c70, past it at 0x588e30, at node time 1 at 0x585500; the key
+  search at 0x587ab0 and 0x587b90), the root's fold at 0x586c10, the
+  clearing child's at 0x586ea0, a later child's at 0x586fe0. The sums
+  under 256 frames, a keyed shift's (0x585450) and the three folds run in
+  `cod4_lnxded`'s order; a quat short scales by the double at 0x70b2a0,
+  which holds the float 1/32767's value. VERIFIED (the instructions).
+  The sums past 256 frames follow the same order. INFERRED (only their
+  frame and key search read). `DObjCalcAnim` has one call site
+  (0x5801f6). VERIFIED (the call sites). That the view weapon's DObj is
+  posed through it too is INFERRED.
+- The client stores values the server keeps on the stack: the frame
+  `t * numframes` under 256 frames (0x587cac), the key fraction
+  (0x587b8a), the lerp's `b = frac * w` and `a = w - b` (0x587f07,
+  0x587f17), a keyed shift's lerp and its `size * v + mins` (0x58546b,
+  0x5854a2), the root fold's `1 / weight` (0x586c61), and in both nested
+  folds the sum of squares, its half, the step, `w * r` and `w / weight`
+  (0x586f07..0x586f98, 0x587049..0x5870e7). VERIFIED (the instructions).
+- `iw3mp.exe` creates its device with behaviour flags 0x46 (0x5f47ab,
+  through 0x5f44d0 to `CreateDevice` at 0x5f4528), which hold
+  `D3DCREATE_FPU_PRESERVE`, and its CRT sets `_PC_53` at start up
+  (`_controlfp_s(0, 0x10000, 0x30000)`, 0x682894, called at 0x67a6b3): its
+  x87 runs at double precision, not single. VERIFIED (the instructions).
+  Its other `fldcw`s load a word off the stack (295) or 0x70bf28 (5, in
+  0x68b2bb..0x68bcd7); that none of them leaves the x87 at single
+  precision is INFERRED (the ones read save and restore around a
+  truncation).
+- The drawn bodies sample so (`xanimcalc::player_locals` in the client's
+  arithmetic: a double between stores, the client's stores), each clip
+  off its seconds rather than the server's 50 ms node time; a gunner's
+  legs, whose turret rows the tree does not carry, keep the shared
+  sampler. Through the same function, the server's arithmetic matches every
+  word of the 280 dumped trees but a head's copies of body bones,
+  which vcod's skeleton merges into the body's; the client's arithmetic
+  parts from them on 2120 words by at most 1.9e-6, a shift whose `mins`
+  and `size` nearly cancel most (`skel_ab`). VERIFIED (the tests). The drawn body
+  takes the sampler's locals word for word
+  (`a_drawn_bodys_control_bones_turn_as_the_servers`). VERIFIED (the
+  test). That the client's words match `iw3mp.exe`'s is INFERRED (no
+  client dump).
+- The view weapon still samples through CoD1's layered sampler: its tree
+  (`CG_CreateWeaponViewModelXAnim`) and the goal weights its anims and
+  sight layer blend by are unread. INFERRED (the code).

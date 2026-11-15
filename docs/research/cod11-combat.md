@@ -7541,8 +7541,17 @@ origin because `FireWeapon` runs inside the window where
   unlinked client's `absmin` and `absmax` are those of its last cmd's link,
   at the snapped origin, while a linked client's are relinked every frame at
   the anchored, unsnapped one. So the second chance (14.1) is the one place
-  a blast reads a client's snapped origin. INFERRED: a `setOrigin` links
-  unsnapped, and that box holds until the client's next cmd relinks it.
+  a blast reads a client's snapped origin. VERIFIED live (retail 1.1d,
+  2026-11-15, `client-probes/probe_setoriginlink`, fixture
+  `crates/server/tests/fixtures/setoriginlink/mp_carentan-1.1.txt`): a
+  client set to (932.75, -376.75, 2224.25) under mp_carentan's sky brush
+  with a blast over it takes the second chance's 10 from radius 597.546875
+  in the `setOrigin`'s frame, five times the distance of the unsnapped
+  origin's midpoint (597.55; the truncated one's 599.96). Two frames on,
+  his cmds having run, the edge sits at five times the truncated origin's
+  midpoint distance. Two runs read the same. So a `setOrigin` links
+  unsnapped and the next cmd relinks him snapped (INFERRED, the edges
+  against the two distances). `setoriginlink_ab` replays it.
 - INFERRED, unmeasured: a `CodeCallback_PlayerDamage` that called
   `radiusDamage` before its first `wait`, from a hit inside a cmd, would read
   the client running that cmd at its snapped origin. No stock script does.

@@ -39,9 +39,20 @@ Ranked by how much a player notices.
 - Small HUD fades: the compass's voice fade, drawn off `isTalking` but
   not checked against a retail capture with a talker (cod4-hud.md 15.9).
   S.
+- The view weapon's anims still sum through CoD1's layered sampler: the
+  tree 1.7 builds for it and the goal weights it blends by are unread
+  (cod4-player-anims.md 11). M.
+- The drawn bodies' skeleton composes with every result a float, where
+  `iw3mp.exe` runs the x87 at double precision: a bone can sit an ulp
+  off (cod4-player-anims.md 8, 11). S.
 
 ## Fixed
 
+- Drawn players and corpses summed their clips through CoD1's sampler,
+  which normalizes each key and the blend. They now take 1.7's walk as
+  `iw3mp.exe` runs it, its stores included, the server's own tree
+  matching 280 gdb trees word for word through the same function
+  (cod4-player-anims.md 11).
 - A round did not push a flying car part, and the props missed the
   knife's swing, `physicsJitter`, and every leg of a piercing round past
   the first; a round into the open sky pushed what it passed. vcod now

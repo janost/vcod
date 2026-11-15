@@ -445,6 +445,9 @@ pub struct Ragdoll {
     pub state: State,
     msec: f32,
     still_ms: f32,
+    /// Each step's end (ms run) and its fastest point's speed as the sleep
+    /// test reads it.
+    speeds: Vec<(f32, f32)>,
     acc_ms: f32,
     /// The last step's length, ms: a point's `pos - prev` moved over it.
     last_ms: f32,
@@ -823,6 +826,7 @@ impl Ragdoll {
             state: State::Running,
             msec: 0.0,
             still_ms: 0.0,
+            speeds: Vec::new(),
             acc_ms: 0.0,
             last_ms: STEP_MS,
             version: 0,
@@ -939,6 +943,12 @@ impl Ragdoll {
             .points
             .iter()
             .all(|p| (p.pos - p.prev).length() / dt < self.dvars.sleep_speed);
+        let fastest = self
+            .points
+            .iter()
+            .map(|p| (p.pos - p.prev).length() / dt)
+            .fold(0.0f32, f32::max);
+        self.speeds.push((self.msec, fastest));
         if still {
             self.still_ms += ms;
         } else {
@@ -1227,6 +1237,12 @@ impl Ragdoll {
     /// The ms simulated.
     pub fn msec(&self) -> f32 {
         self.msec
+    }
+
+    /// Each step it ran: the ms run at its end and its fastest point's speed,
+    /// units a second, as the sleep test reads it.
+    pub fn step_speeds(&self) -> &[(f32, f32)] {
+        &self.speeds
     }
 
     /// Changes whenever [`Self::pose`] may: equal versions of one ragdoll

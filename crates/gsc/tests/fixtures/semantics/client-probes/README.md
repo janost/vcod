@@ -2746,6 +2746,44 @@ cargo run -p vcod -- --net-probe 127.0.0.1:34671 --probe-team axis \
 Retail's logs are `crates/server/tests/fixtures/istouching/`, replayed by
 `crates/server/tests/istouching_ab.rs`.
 
+## probe_ownline
+
+A gunner sweeping mp_carentan's gun over both arcs with the trigger held
+(`docs/research/cod11-turrets.md` 6.3, 7.2): one direct-mode allied client,
+mounted by `useby` at level time 20000; every damage callback and his origin
+each frame logged. `+set probe_nofire 1` sweeps with the trigger up.
+
+```
+COD_DIR=<1.1 install> COD_LNXDED_HOME=<absolute, no '+'> PORT=28974 SECS=48 \
+    tools/run_probe.sh client-probes/probe_ownline mp_carentan [+set probe_nofire 1]
+# 8 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28974 --probe-team allies \
+    --probe-weapon m1carbine_mp --probe-uo-weapon direct --probe-secs 38
+```
+
+Retail's logs, each with the client's `SPAWNED` and `CMDS` lines appended
+(prefixed `gunner`), are `crates/server/tests/fixtures/ownline/`, replayed
+by `crates/server/tests/ownline_ab.rs`.
+
+## probe_setoriginlink
+
+Which origin a `setOrigin` links a player at (`docs/research/cod11-combat.md`
+14.3): one direct-mode client on mp_carentan, set in the air under the sky
+brush over the garden at a fractional origin, and `radiusDamage` swept by
+radius over the brush in the `setOrigin`'s frame and two frames on, where the
+second chance starts to land.
+
+```
+COD_DIR=<1.1 install> COD_LNXDED_HOME=<absolute, no '+'> PORT=28974 SECS=30 \
+    tools/run_probe.sh client-probes/probe_setoriginlink mp_carentan
+# 8 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28974 --probe-team axis \
+    --probe-weapon kar98k_mp --probe-uo-weapon direct --probe-secs 20
+```
+
+Retail's log is `crates/server/tests/fixtures/setoriginlink/`, replayed by
+`crates/server/tests/setoriginlink_ab.rs`.
+
 ## probe_threadorder
 
 Which order a frame runs the threads one client packet woke

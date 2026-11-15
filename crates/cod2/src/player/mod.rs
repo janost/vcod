@@ -485,13 +485,16 @@ impl PlayerBody {
     }
 
     /// The tree [`Self::pose_in`] blends at `now_ms`, unsampled
-    /// (`playerpose::player_leaves`): what 1.7's sampler walks.
+    /// (`playerpose::player_leaves`): what 1.7's sampler walks. Each clip
+    /// at its node time when `node_time` (the server's), else off its
+    /// seconds (a drawn body's, stepped by the frame).
     pub fn leaves(
         &self,
         set: &mut PlayerAnimSet,
         fs: &dyn AssetSource,
         f: &BodyFrame,
         now_ms: i32,
+        node_time: bool,
     ) -> Option<[(f32, Vec<playerpose::Leaf>); 2]> {
         let PlayerAnimSet { anims, clips } = set;
         let inputs = PoseInputs {
@@ -507,7 +510,7 @@ impl PlayerBody {
             seat_leaves: Vec::new(),
             controllers: None,
             leaf_times: Vec::new(),
-            node_time: true,
+            node_time,
             arith: vcod_common::patch::Arith::Stored,
             binds: None,
         };

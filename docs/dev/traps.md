@@ -786,6 +786,10 @@ otherwise.
   hit poses and the client's drawn bodies). `PoseBuffer::bone_worlds` of a
   CoD4 body still holds CoD1's turn: a body strafing 45 degrees has its
   head 5 units off (cod4-player-anims.md 8).
+- `iw3mp.exe`'s x87 runs at double precision, not Direct3D's single: it
+  creates its device with `D3DCREATE_FPU_PRESERVE` over the CRT's `_PC_53`
+  (cod4-player-anims.md 11). A port of the client's arithmetic keeps
+  doubles between the binary's stores; its stores are not the server's.
 - Cmds are thought on arrival, so a hit lands between the victim's cmds of a
   frame as the two clients' packets arrived. A gate replaying two retail
   captures sends each frame's packets in the order retail got them
