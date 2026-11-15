@@ -154,7 +154,7 @@ and `walker_draws_its_view_weapon`; the zones' census is
 - The rig is `handModel` (or the hands `CS_MODELS + viewmodelIndex`
   names, `CG_UpdateHandViewmodels`) with `gunModel[0]` grafted at
   `tag_weapon`; node `n` plays its `n`th view anim (`idleAnim` 1, `fireAnim` 3), an empty one idle's.
-  INFERRED (`CG_RegisterWeapon`, `CG_CreateWeaponViewModelXAnim`). Every `common_mp` weapon with a gun
+  VERIFIED (`CG_CreateWeaponViewModelXAnim`, cod4-player-anims.md 12). Every `common_mp` weapon with a gun
   but the placeholder `defaultweapon_mp` (111) has both models whole in
   `common_mp` and each named clip in a zone, case-folded
   (`viewmodel_M4m203_knife_melee_1`). VERIFIED (`view_census`).
@@ -167,9 +167,9 @@ and `walker_draws_its_view_weapon`; the zones' census is
   `fWeaponPosFrac` and ADS down (32) at its complement, the wanted one's
   goal 1 over 0.1 s; it is up while `pm_flags` 0x10 and not `weapFlags`
   2, unless a reload's `weaponTime` is still past
-  `adsReloadTransTime`. INFERRED (`WeaponRunXModelAnims`,
-  `PlayADSAnim`, the anim rate). Left out: the crossfade a 1 asks
-  for. The camo, the rocket, the goggles and the perks' rates are
+  `adsReloadTransTime`; a 1 cuts in over 0.5 s. VERIFIED (the
+  instructions, cod4-player-anims.md 12, which has the tree, the goal
+  weights and the clock). The camo, the rocket, the goggles and the perks' rates are
   section 4.7.
 - `hideTags[8]` sits at `WeaponDef`+216 as zone script string indices:
   read there, `mp5_mp` names `tag_acog`, `tag_ak47_mount` and

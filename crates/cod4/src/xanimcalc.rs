@@ -65,6 +65,12 @@ pub struct Parts {
     pub name: String,
     /// `numframes` (+0xe): the last key frame.
     pub num_frames: u16,
+    /// +0x10.
+    pub looped: bool,
+    /// +0x28: frames a second.
+    pub framerate: f32,
+    /// +0x2c: node time a second.
+    pub frequency: f32,
     pub bones: Vec<String>,
     /// By the clip's bone.
     pub rot: Vec<Rot>,
@@ -155,6 +161,9 @@ impl Parts {
         Ok(Parts {
             name: x.name.clone(),
             num_frames: x.num_frames,
+            looped: x.looped,
+            framerate: x.framerate,
+            frequency: x.frequency,
             bones,
             rot,
             trans,

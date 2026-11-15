@@ -364,18 +364,30 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   the first arm's sums, as on the server. VERIFIED (the instructions).
   `AnglesToQuat` takes its half angles off the float `M_PI / 360`
   (0x70b298) through `fsincos` and stores its four products. VERIFIED (the
-  instructions). vcod composes the client's bones with every result a
-  float, as if the x87 ran at single precision; it runs at double (11),
-  so a value the client keeps between stores can sit an ulp off vcod's.
-  INFERRED (no client dump). The drawn bodies compose
-  so (`vcod_cod4::skel::player_mats` with `Cod4Arith::Client`); the
+  instructions). Its x87 runs at double precision (11) and it stores
+  other values than the server: the first arm stores each component of
+  `parent * local` once; the control arm keeps every partial sum of
+  `r^-1 * p`, `l * m` and `r * t` and stores each component once; the
+  weight is `2 / s` with `s = ((x^2 + y^2) + z^2) + w^2` off the stored
+  quat, `s` stored (0x57ff18..0x57ff63; a root's at 0x57f5e0..0x57f607);
+  the translation adds the model's `trans` with all three sums stored
+  (0x57ff70..0x57ff8e), builds the parent's matrix with `t * px`, `t *
+  py`, `t * pz`, the nine products and the nine entries stored
+  (0x57ff91..0x5800bc), and sums each row as the local's `y` term, its
+  `x`, its `z`, then the parent's translation, storing once
+  (0x5800c3..0x58014c). `AnglesToQuat` takes `fsincos` of the stored half
+  angle and stores each sine and cosine and the four products, the sums
+  kept (0x580a40..0x580b5e). VERIFIED (the instructions). The drawn
+  bodies compose so (`vcod_cod4::skel::player_mats` with
+  `Cod4Arith::Client`); the
   server's hit poses take the same composition with `Cod4Arith::Server`
   over the locals 1.7's own sampler leaves (`player_mats_sampled`, 11).
   The drawn bodies' locals come off 1.7's sampler in the client's
   arithmetic (11).
   Off the gdb dump's own bone 0, parents and angles, the client's
-  arithmetic lands within 1e-7 of retail's server words on all 804
-  control bones (`skel_ab`); a strafing body drawn by the client sits
+  arithmetic parts from retail's server words on 141 words of the 804
+  control bones, by at most 6e-8 (`skel_ab`; with every result a float,
+  as vcod had it, 149 by 9e-8); a strafing body drawn by the client sits
   within 2e-5 units of the server's arithmetic on every bone
   (`a_drawn_bodys_control_bones_turn_as_the_servers`). VERIFIED (the
   tests). That the client's words match `iw3mp.exe`'s is INFERRED (no
@@ -759,6 +771,93 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   (`a_drawn_bodys_control_bones_turn_as_the_servers`). VERIFIED (the
   test). That the client's words match `iw3mp.exe`'s is INFERRED (no
   client dump).
-- The view weapon still samples through CoD1's layered sampler: its tree
-  (`CG_CreateWeaponViewModelXAnim`) and the goal weights its anims and
-  sight layer blend by are unread. INFERRED (the code).
+- The view weapon samples through the same function over its own tree
+  (12).
+
+## 12. The view weapon's tree
+
+- `CG_CreateWeaponViewModelXAnim` (`iw3mp.exe` 0x4541d0) makes 33 anims
+  (0x581190, the count 0x21 at 0x4541d9): node 0 `root` over the 32 nodes
+  1..=32 (`XAnimBlend` 0x5810c0 with first child 1, 32 children, flags
+  0), node `n` the weapon's view anim at `WeaponDef` +0x50 + 4n, an empty
+  name idle's (0x45420e..0x45424f). VERIFIED (the instructions). Nodes 31
+  and 32 are ADS up and ADS down (+0xcc, +0xd0, read at 0x4542a1 and
+  0x4542d7). VERIFIED.
+- `CG_RegisterWeapon` (0x4543ce..0x454498) sets the root and idle to
+  weight 1 at once, idle at rate 1, and, for a weapon naming ADS down, ADS
+  down to weight 1 at rate 0 held at time 1 (0x584e90). VERIFIED (the
+  instructions).
+- Each frame 0x456f60 runs `WeaponRunXModelAnims` (0x453c70) for the view
+  weapon, then the tree's step (0x583bf0) by the frame's ms times the
+  float 0.001 (0x70af98), then the notetracks (0x454ae0). From `PM_DEAD`
+  on it instead sends every weapon's tree to idle, or empty idle (0x454100),
+  stepping none. VERIFIED (the instructions).
+- `WeaponRunXModelAnims` sets the sight first: an `aimDownSight` weapon
+  calls `PlayADSAnim` (0x453b30) for up while `pm_flags` 0x10 and not
+  `weapFlags` 2, unless a reload's `weaponTime` is still past
+  `adsReloadTransTime`, else for down, at `fWeaponPosFrac` as it stands;
+  a weapon with no sight that names ADS down calls it for down at 0
+  (0x453d11..0x453d24). Then, when `weapAnim` or the weapon (0x79e6b0)
+  changed, its switch (the table at 0x454080) starts the node it names with
+  no blend; a 0 or a 1 tests nodes 1..30 (0x583b20): one not finished sets
+  the last anim to -1 and, for a 0, returns; a 1 goes on with a 0.5 s
+  blend (0x6be648). With none left it starts idle, or empty idle with the
+  weapon's clip at 0 (`ps` +0x35c by the clip index at `WeaponDef`
+  +0x330). VERIFIED (the instructions).
+- A node's start (0x453a40) sends it toward weight 1 over the blend at its
+  rate, restarted, and every other node of 1..30 toward 0 over the blend at
+  rate 1. The rate (0x4539d0): the clip's `numframes / framerate` stored,
+  times the double 1000 truncated (0x68b360's `cvttsd2si`) to ms, over the
+  node's `g_animRateOffsets` time; 0 for a time of 0, 1 for a node with
+  none; a perk divides it (cod4-client-view.md 4.7). VERIFIED (the
+  instructions).
+- `PlayADSAnim` sends the wanted node toward 1 and the other toward 0, both
+  over 0.1 s (0x6b72dc) at rate 0, then sets up's time to the fraction and
+  down's to `1 - fraction` (0x453bc2..0x453c5b). VERIFIED (the
+  instructions).
+- The info's state (`XAnimInfo` +0x18..+0x34): time, the time before the
+  step, the loops before and after it, the seconds left to the goal, the
+  goal weight, the weight, the rate, an instant flag. VERIFIED (the loads
+  and stores below).
+- `XAnimSetGoalWeight` (0x584fd0): a goal under the float 0.001
+  (0x70b278) is 0; a node with no info and a goal of 0 stays without one,
+  else gets a zeroed info. With the restart flag (0x5827d0) a node at time
+  0 and no loops, or one that looped in the last step, stays; with no blend
+  or no weight it goes back to time 0 (0x582690); else the old info fades
+  to 0 over the blend (0x584470) beside a new one (0x582700). Then
+  0x584a80: with no blend the weight is the goal at once; else a weight of
+  0 starts at the goal times the float 0.001, the seconds left are the blend
+  when the old goal lay on the same side of the new one as the weight (the
+  product at 0x584b32..0x584b44) or the shorter of the two (0x409400), and,
+  for a goal not 0, at least the blend times the share the weight has to
+  go, `(goal - w) / goal` rising, `(w - goal) / w` falling (0x584b8e..0x584bc5,
+  the longer through 0x4093c0); the goal and rate are stored. VERIFIED (the
+  instructions).
+- The step: each weight moves `(goal - w) * dt / left` while more than `dt`
+  is left, the seconds left less `dt`, a weight under 1e-6 (0x70b230)
+  jumping to the goal times 0.001; else it is the goal (0x582899..0x5828ec).
+  A leaf of weight 0, or whose clip has no frequency, takes the root's clock
+  at 0; each copies its time and loops before the step (0x5829a7, 0x5829f6).
+  A leaf at weight 0 with a goal of 0 is freed (0x581910). Each other leaf's
+  time adds `rate * frequency * dt`, stored (0x5822c0): a looping clip
+  wraps, counting its loops; one that does not holds at the float
+  0.99999988 (0x70b610) for a step, then at 1 (0x582328..0x582366). A
+  node is finished (0x583b20) with no info, a time that wrapped, a time of
+  1 or a loop in the last step. VERIFIED (the instructions).
+- vcod steps the tree so (`vcod_cod4::xanimtree::FlatTree`), one per
+  weapon kept while another is out, and samples it through
+  `xanimcalc::calc` and `skel::player_mats_sampled` in the client's
+  arithmetic (`cod4_viewmodel`). VERIFIED (the tests:
+  `the_m16s_tree_blends_its_main_clip_and_its_sight`, the `xanimtree` unit
+  tests). INFERRED: the infos under the root in node order (the walk's sums
+  follow it), and a blended restart's new info taking the old one's place
+  with the old after it (0x582700 unread). A bone no leaf reaches takes the
+  bind local of vcod's model, not its `XModelQuat` shorts times 1/32767 as
+  `DObjCalcAnim` gives it; that the drawn words match `iw3mp.exe`'s is
+  INFERRED (no client dump).
+- The M16's ADS up and down clips key `tag_ads` alone, which none of its
+  main clips keys, so the root's divide leaves each bone its own clip's:
+  ADS down's end leaves the rig at rest, ADS up's carries it about 5
+  units. A clip that does not loop reads finished on the switch after the
+  step that brought it to 1, two steps past its end. VERIFIED (the zone,
+  the tests).

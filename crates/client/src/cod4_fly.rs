@@ -864,7 +864,7 @@ fn entity_models(
             .then(|| {
                 let mut anim = |n: usize| {
                     let name = def.xanims.get(n).cloned().flatten()?;
-                    decode_clip(zones, &mut clips, &name)
+                    decode_clip(zones, &mut clips, &name).map(|c| c.0)
                 };
                 Some([anim(1)?, anim(3)?])
             })
@@ -985,14 +985,15 @@ fn add_whole_material(
 
 /// A clip decoded once per name (lowercase), `None` where no zone holds
 /// it whole or it does not decode.
-type Clips = HashMap<String, Option<Arc<vcod_common::xanim::XAnim>>>;
+/// A clip decoded for the shared sampler and as 1.7's sampler reads it.
+type Clip = (
+    Arc<vcod_common::xanim::XAnim>,
+    Arc<vcod_cod4::xanimcalc::Parts>,
+);
+type Clips = HashMap<String, Option<Clip>>;
 
 /// Clip `n` out of the first of `zones` holding it whole, decoded once.
-fn decode_clip(
-    zones: &[&Assets],
-    clips: &mut Clips,
-    n: &str,
-) -> Option<Arc<vcod_common::xanim::XAnim>> {
+fn decode_clip(zones: &[&Assets], clips: &mut Clips, n: &str) -> Option<Clip> {
     clips
         .entry(n.to_ascii_lowercase())
         .or_insert_with(|| {
@@ -1002,9 +1003,10 @@ fn decode_clip(
             });
             let (z, x) = found?;
             vcod_cod4::anim::clip(z, x)
+                .and_then(|c| Ok((c, vcod_cod4::xanimcalc::Parts::of(z, x)?)))
                 .inspect_err(|e| log::warn!("cod4 weapon anim {n}: {e:#}"))
                 .ok()
-                .map(Arc::new)
+                .map(|(c, p)| (Arc::new(c), Arc::new(p)))
         })
         .clone()
 }
@@ -1136,12 +1138,13 @@ fn view_def(
     };
     let idle = anim_name(1)?;
     let mut clip = |n: &str| decode_clip(zones, clips, n);
-    let anims = (0..33)
+    let (anims, parts) = (0..33)
         .map(|n| match n {
             0 => None,
             _ => clip(&anim_name(n).unwrap_or_else(|| idle.clone())),
         })
-        .collect();
+        .map(|c| c.map(|(c, p)| (Some(c), Some(p))).unwrap_or_default())
+        .unzip();
     Some(Arc::new(crate::cod4_viewmodel::ViewDef {
         guns,
         hide_tags,
@@ -1149,6 +1152,8 @@ fn view_def(
         knife,
         rocket,
         anims,
+        parts,
+        ads_down: anim_name(32).is_some(),
         clip_name: def.strings.get("clipName").cloned().unwrap_or_default(),
         numbers: crate::cod4_viewmodel::ViewNumbers::from_raw(&def.raw),
         note_sounds: note_sounds(a, &def.raw),

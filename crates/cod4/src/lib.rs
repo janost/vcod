@@ -35,4 +35,5 @@ pub mod testing;
 pub mod walk;
 pub mod weapon_file;
 pub mod xanimcalc;
+pub mod xanimtree;
 pub mod zone;
