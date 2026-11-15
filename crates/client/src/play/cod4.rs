@@ -4203,7 +4203,7 @@ pub(crate) mod tests {
     #[test]
     fn a_drawn_bodys_control_bones_turn_as_the_servers() {
         use crate::play::cod4_players::Cod4Players;
-        use vcod_cod4::skel::{player_mats, worlds_of};
+        use vcod_cod4::skel::{player_mats_sampled, worlds_of};
         use vcod_common::playerpose::Cod4Arith;
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
@@ -4231,21 +4231,33 @@ pub(crate) mod tests {
             out = players.posed(&src, &weapons, &[(2, &v)], &[], t + k * 16, snap);
         }
         let (_, rig, drawn) = &out[0];
-        let (posed_rig, pose, controls) =
-            players.body_pose(&src, 2, &v.frame, t + 59 * 16).unwrap();
-        assert!(std::rc::Rc::ptr_eq(rig, &posed_rig));
+        let bp = players.body_pose(&src, 2, &v.frame, t + 59 * 16).unwrap();
+        let controls = bp.controls;
+        assert!(std::rc::Rc::ptr_eq(rig, &bp.rig));
         assert!(controls.origin[1].abs() > 20.0, "{controls:?}");
         assert!(controls.back_low[0].abs() > 5.0, "{controls:?}");
-        let server = worlds_of(&player_mats(
+        let server = worlds_of(&player_mats_sampled(
             &rig.skeleton,
-            &pose,
+            &bp.pose,
+            &bp.sampled,
             Some(&controls),
             Cod4Arith::Server,
         ));
+        // The drawn body takes `iw3mp.exe`'s sampler's locals (cod4-player-anims.md
+        // 11) on every bone a clip reaches, word for word.
+        assert!(bp.sampled.iter().filter(|l| l.is_some()).count() > 40);
+        let client = worlds_of(&player_mats_sampled(
+            &rig.skeleton,
+            &bp.pose,
+            &bp.sampled,
+            Some(&controls),
+            Cod4Arith::Client,
+        ));
+        assert_eq!(drawn.models[0].1, rig.skeleton.skin_matrices(&client, 0));
         let body = &rig.models[0].1;
         let at = |skins: &[glam::Mat4], b: usize| skins[b].transform_point3(body.bones[b].pos);
         let theirs = rig.skeleton.skin_matrices(&server, 0);
-        let cod1 = pose.skin_matrices(&rig.skeleton, 0);
+        let cod1 = bp.shared.skin_matrices(&rig.skeleton, 0);
         let worst = (0..body.bones.len())
             .map(|b| at(&drawn.models[0].1, b).distance(at(&theirs, b)))
             .fold(0.0f32, f32::max);

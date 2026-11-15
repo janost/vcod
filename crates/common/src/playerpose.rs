@@ -1658,8 +1658,9 @@ pub struct Leaf {
 }
 
 /// The tree [`pose_player`] blends, unsampled: `main`'s legs and torso
-/// nodes, each its weight and its leaves in anim index order. `None` for a
-/// gunner's or a rider's legs, whose rows this does not carry.
+/// nodes, each its weight and its leaves in anim index order, a leaf at its
+/// node time under [`PoseInputs::node_time`], else off its seconds. `None`
+/// for a gunner's or a rider's legs, whose rows this does not carry.
 pub fn player_leaves(
     inputs: &PoseInputs,
     mut clip: impl FnMut(&str) -> Option<Rc<XAnim>>,
@@ -1675,7 +1676,7 @@ pub fn player_leaves(
             .filter_map(|l| {
                 let name = clip_name(inputs.anims, l.index, inputs.group_pitch, 0.0)?;
                 let anim = clip(name)?;
-                let time = match l.time {
+                let time = match l.time.filter(|_| inputs.node_time) {
                     Some(t) => t,
                     None => {
                         let frames = anim.frame_count.saturating_sub(1).max(1) as f32;
