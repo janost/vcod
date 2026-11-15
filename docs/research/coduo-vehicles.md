@@ -911,6 +911,22 @@ the seat's view stood up to 0.84° off retail's on the change's snapshot.
 - The engine never sends a tank's driver to anyone (`coduo_lnxded`
   0x8096b97, test at 0x8096d7a: a player in a vehicle whose `surfType` is
   2 and whose own `surfType & 7` is 1) (VERIFIED decompile).
+- The skip's operands, read off the disassembly (2026-11-16): `eType` 1
+  (`es+0x4`, 0x8096d6e), `eFlags & 0x100000` (`es+0x8`, 0x8096d7a), the
+  entity `r.ownerNum` names (`+0x154`, 0x8096d86, the vehicle) with
+  `surfType` (`es+0x88`) exactly 2 (0x8096da0), and his own `surfType & 7`
+  1 (0x8096db3). VERIFIED (the compared offsets and constants). A match
+  jumps to the loop's next entity (0x8096db8 to 0x8096f1f). INFERRED
+  (control flow).
+- The skip comes after the builder's other per-entity tests: `svFlags` 1,
+  the single-client bits 0x800 and 0x2000, the viewer's own number, then
+  `svFlags & 0x18` and a live `r.broadcastTime` (0x8096ce3..0x8096d4b),
+  which add the entity with no cull. So a driver a `playSound` or
+  `playLoopSound` stamped goes to everyone while the stamp lasts. INFERRED
+  (control flow). vcod drops the driver from the frame's culled set after
+  the broadcast split (`build_world_frame`);
+  `a_tank_driver_is_sent_only_while_broadcast` pins the order. Before
+  2026-11-16 it dropped him ahead of the broadcast test.
 - A rider's legs come off the animscript.
   `BG_AnimUpdatePlayerStateConditions` (0x1c973) sets `mounted` to the
   seat (`vehDriver`, `vehGunner`, `vehPassenger1`..), `vehicle` to the kind

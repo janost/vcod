@@ -6789,11 +6789,6 @@ impl Server {
                 // A spectator, an intermission camera and a dead player are
                 // each unlinked or `SVF_NOCLIENT`, so nobody is sent an
                 // entity for one ([`crate::spectate::ClientSim::linked`]).
-                // A tank's driver is never sent to anyone (the engine's
-                // snapshot build, coduo_lnxded 0x8096b97).
-                let hidden = sim
-                    .seat
-                    .is_some_and(|s| crate::game::vehicle::seat::hidden_rider(s.kind, s.pos));
                 // The state this frame's own end frame copied, which a
                 // higher slot's turret round after it changes only in the
                 // playerstate: its knockback, and a death, which still goes
@@ -6804,9 +6799,7 @@ impl Server {
                     .as_ref()
                     .filter(|(t, _)| *t == self.core.sv_time_ms)
                     .map(|(_, e)| e.clone());
-                if hidden {
-                    None
-                } else if sim.linked() {
+                if sim.linked() {
                     let mut e = copied.unwrap_or_else(|| {
                         sim.to_entity(self.game.proto, i, c.as_ref().unwrap().last_processed_st)
                     });
@@ -6890,6 +6883,16 @@ impl Server {
                 if let Some(e) = culled.remove(&n) {
                     broadcast.insert(n, e);
                 }
+            }
+        }
+        // A tank's driver is sent to no one unless the broadcast tests
+        // ahead of the skip took him (coduo_lnxded 0x8096d6b..0x8096db8:
+        // `eType` 1, `eFlags` 0x100000, his `r.ownerNum`'s `surfType` 2,
+        // his own `surfType & 7` 1; coduo-diff.md 9).
+        for (slot, c) in self.core.clients.iter().enumerate() {
+            let seat = c.as_ref().and_then(|c| c.sim.as_ref()).and_then(|s| s.seat);
+            if seat.is_some_and(|s| crate::game::vehicle::seat::hidden_rider(s.kind, s.pos)) {
+                culled.remove(&(slot as u32));
             }
         }
         crate::archive::WorldFrame {
@@ -9491,6 +9494,51 @@ mod tests {
                 "every slot held: {every_slot_held}"
             );
         }
+    }
+
+    /// A tank driver goes to no one, but the broadcast tests run ahead of
+    /// that skip, so a sound on him sends him to everyone while it lasts
+    /// (coduo_lnxded 0x8096d0a..0x8096db8, coduo-diff.md 9).
+    #[test]
+    fn a_tank_driver_is_sent_only_while_broadcast() {
+        use crate::game::script::{CALLBACK_SETUP, ScriptRuntime};
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        install_script(
+            &mut sv,
+            ScriptRuntime::for_test_at(
+                CALLBACK_SETUP,
+                "main() {}\n\
+                 CodeCallback_PlayerConnect() { self waittill(\"begin\"); \
+                   self.sessionstate = \"playing\"; \
+                   self spawn((0, 0, 64), (0, 0, 0)); }\n",
+            ),
+        );
+        begun(&mut sv, now);
+        for ms in (0..=200).step_by(50) {
+            sv.tick(now + Duration::from_millis(ms));
+        }
+        let sent = |sv: &mut Server| {
+            let f = sv.build_world_frame();
+            (f.culled.contains_key(&0), f.broadcast.contains_key(&0))
+        };
+        assert_eq!(sent(&mut sv), (true, false), "on foot");
+        let sim = sv.core.clients[0].as_mut().unwrap().sim.as_mut().unwrap();
+        sim.seat = Some(crate::spectate::Seat {
+            vehicle: 100,
+            pos: 1,
+            kind: crate::game::vehicle::info::KIND_TANK,
+            motion: 1,
+            angles: [0.0; 3],
+            hull_view: false,
+            overheated: false,
+            link_offset: [0.0; 3],
+        });
+        assert_eq!(sent(&mut sv), (false, false), "driving");
+        let rt = sv.game.module.script.as_mut().unwrap();
+        let id = rt.host.ents.handle(0).unwrap();
+        rt.host.ents.get_mut(id).unwrap().broadcast_time = -1;
+        assert_eq!(sent(&mut sv), (false, true), "driving under a loop sound");
     }
 
     /// The disconnect callback's commands to the leaver alone go into its
