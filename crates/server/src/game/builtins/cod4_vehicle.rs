@@ -56,12 +56,15 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("physicslaunch", physics_launch),
     ("physicsexplosionsphere", physics_explosion_sphere),
     ("physicsexplosioncylinder", physics_explosion_cylinder),
+    ("physicsjitter", physics_jitter),
 ];
 
 /// `EV_PHYS_EXPLOSION_SPHERE`: 1.7's 57 (`vcod_cod4::net::events`).
 const EV_PHYS_EXPLOSION_SPHERE: i32 = 57;
 /// `EV_PHYS_EXPLOSION_CYLINDER`: 58.
 const EV_PHYS_EXPLOSION_CYLINDER: i32 = 58;
+/// `EV_PHYS_JITTER`: 60.
+const EV_PHYS_JITTER: i32 = 60;
 /// `TR_PHYSICS`.
 pub const TR_PHYSICS: u32 = 8;
 
@@ -803,6 +806,62 @@ fn physics_explosion_cylinder(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     physics_explosion(host, cx, a, EV_PHYS_EXPLOSION_CYLINDER)
+}
+
+/// `physicsJitter(origin, outer, inner, min, max)` (`Scr_PhysicsJitter`,
+/// 0x80bce34): an `EV_PHYS_JITTER` temp entity, the outer radius its parm
+/// (an int), the inner radius and the two pushes in `lerp.u` words 0 to
+/// 2, riding `origin2` here as [`physics_explosion_sphere`]'s do. Five
+/// arguments, an inner radius neither negative nor past the outer, and a
+/// minimum at most the maximum, or the script errors (0x80bce45,
+/// 0x80bceff, 0x80bcef1, 0x80bcedf). Each client lifts its own props
+/// with it (cod4-world.md 13.8).
+fn physics_jitter(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _: Option<Target>,
+    a: &[Value],
+) -> Result<Value, ErrorKind> {
+    if a.len() != 5 {
+        return Err(ErrorKind::Custom("Incorrect number of parameters".into()));
+    }
+    let origin = vec(a.first(), "physicsJitter takes an origin")?;
+    let outer = num(a.get(1), "physicsJitter takes a radius")? as i32;
+    let inner = num(a.get(2), "physicsJitter takes a radius")?;
+    if inner < 0.0 {
+        return Err(ErrorKind::Custom("Radius is negative".into()));
+    }
+    // An unsigned compare (`fild qword`, 0x80bcea9).
+    if f64::from(inner) > f64::from(outer as u32) {
+        return Err(ErrorKind::Custom(
+            "Inner radius is outside the outer radius".into(),
+        ));
+    }
+    let min = num(a.get(3), "physicsJitter takes a displacement")?;
+    let max = num(a.get(4), "physicsJitter takes a displacement")?;
+    if min > max {
+        return Err(ErrorKind::Custom(
+            "Maximum jitter is less than minimum jitter".into(),
+        ));
+    }
+    host.add_temp_entity(
+        cx,
+        TempEntity {
+            event: EV_PHYS_JITTER,
+            parm: outer,
+            surf_type: 0,
+            other: 0,
+            attacker: 0,
+            weapon: 0,
+            client_num: 0,
+            scale: 0,
+            origin: origin.to_array(),
+            scope: Scope::Broadcast,
+            quake: None,
+            origin2: Some([inner, min, max]),
+        },
+    );
+    Ok(Value::Undefined)
 }
 
 fn physics_explosion(

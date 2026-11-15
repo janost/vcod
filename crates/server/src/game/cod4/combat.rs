@@ -1697,14 +1697,21 @@ impl Cod4Level {
                     set("lerp.u.anonymous.data[1]", q.radius.to_bits());
                     set("lerp.u.anonymous.data[2]", q.duration_ms as u32);
                 }
-                // `EV_PHYS_EXPLOSION_SPHERE` (57) and `_CYLINDER` (58): `physicsExplosion*`'s inner radius and magnitude
-                // (`builtins::cod4_vehicle`), else `playFx`'s angles
+                // `EV_PHYS_EXPLOSION_SPHERE` (57) and `_CYLINDER` (58): `physicsExplosion*`'s inner radius and magnitude;
+                // `EV_PHYS_JITTER` (60): `physicsJitter`'s inner radius and
+                // pushes (`builtins::cod4_vehicle`); else `playFx`'s angles
                 // (`builtins::cod4_script::play_fx`).
                 if (event == 57 || event == 58)
                     && let Some([inner, magnitude, _]) = te.origin2
                 {
                     set("lerp.u.anonymous.data[0]", inner.to_bits());
                     set("lerp.u.anonymous.data[1]", magnitude.to_bits());
+                } else if event == 60
+                    && let Some(words) = te.origin2
+                {
+                    for (k, v) in words.iter().enumerate() {
+                        set(&format!("lerp.u.anonymous.data[{k}]"), v.to_bits());
+                    }
                 } else {
                     for (k, v) in te.origin2.iter().flatten().enumerate() {
                         set(&format!("lerp.apos.trBase[{k}]"), v.to_bits());
