@@ -13,8 +13,8 @@ use vcod_common::mapworld::{LeafLists, MapWorld};
 pub use vcod_common::clipmap::*;
 
 use crate::d3dbsp::{
-    BRUSH_CONTENTS_MASK, Brush, BrushBox, BrushSide, CollEdge, CollVert, Leaf, Material, Node,
-    Plane, partition_brushes,
+    BRUSH_CONTENTS_MASK, Brush, BrushBox, BrushSide, CollEdge, CollVert, Leaf, Material, Model,
+    Node, Plane, partition_brushes,
 };
 
 /// What [`build`] reads: the collision lumps as the map loader
@@ -38,6 +38,14 @@ pub struct ClipLumps<'a> {
 }
 /// `CM_LoadMapFromBsp`'s collision half: the [`ClipMap`] of `b`.
 pub fn build(b: &ClipLumps) -> Result<ClipMap> {
+    Ok(build_with_submodels(b, &[])?.0)
+}
+
+/// [`build`], and each inline model's leaf as `CMod_LoadSubmodelBrushNodes`
+/// builds it (inline in Mac `CM_LoadMapFromBsp` 0x78638), index-aligned with
+/// `models` for [`ClipMap::trace_in_leaf`]. Model 0's is empty: the world
+/// traces through its tree.
+pub fn build_with_submodels(b: &ClipLumps, models: &[Model]) -> Result<(ClipMap, Vec<CLeaf>)> {
     let planes = b
         .planes
         .iter()
@@ -92,44 +100,55 @@ pub fn build(b: &ClipLumps) -> Result<ClipMap> {
     }];
     let mut leafs = Vec::with_capacity(b.leafs.len());
     for (i, l) in b.leafs.iter().enumerate() {
-        let (first, count) = (l.first_leaf_brush as usize, l.leaf_brush_count as usize);
-        let mut leaf = CLeaf {
-            first_aabb: l.first_coll_aabb as u16,
-            aabb_count: l.coll_aabb_count as u16,
-            brush_contents: 0,
-            terrain_contents: 0,
-            mins: Vec3::ZERO,
-            maxs: Vec3::ZERO,
-            brush_node: 0,
-        };
-        for t in &b.coll_aabb_trees[first_run(l.first_coll_aabb, l.coll_aabb_count)] {
-            leaf.terrain_contents |= materials[t.material as usize].1;
-        }
-        if count > 0 {
-            let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(-f32::MAX));
-            for &br in &leaf_brush_list[first..first + count] {
-                let bx = &brushes[br as usize];
-                leaf.brush_contents |= bx.contents;
-                for k in 0..3 {
-                    if bx.mins[k] < lo[k] {
-                        lo[k] = bx.mins[k];
-                    }
-                    if hi[k] < bx.maxs[k] {
-                        hi[k] = bx.maxs[k];
-                    }
-                }
-            }
-            leaf.mins = lo - Vec3::splat(0.125);
-            leaf.maxs = hi + Vec3::splat(0.125);
-            let tree = partition_brushes(boxes, &mut leaf_brush_list, first, count)
-                .map_err(|e| e.context(format!("leaf {i}")))?;
-            leaf.brush_node = brush_nodes.len() as u32;
-            brush_nodes.extend(tree.nodes);
-        }
+        let run = (l.first_leaf_brush as usize, l.leaf_brush_count as usize);
+        let aabbs = (l.first_coll_aabb, l.coll_aabb_count);
+        let leaf = leaf_of(
+            b,
+            &brushes,
+            &materials,
+            &mut leaf_brush_list,
+            &mut brush_nodes,
+            run,
+            aabbs,
+        )
+        .map_err(|e| e.context(format!("leaf {i}")))?;
         leafs.push(leaf);
     }
+    // A submodel's brushes are its own run `first_brush..`, not lump 27's;
+    // each gets a copy past the world's, padded as the world's list is.
+    let mut submodels = Vec::with_capacity(models.len());
+    for (i, m) in models.iter().enumerate() {
+        if i == 0 {
+            submodels.push(leaf_of(
+                b,
+                &brushes,
+                &materials,
+                &mut leaf_brush_list,
+                &mut brush_nodes,
+                (0, 0),
+                (0, 0),
+            )?);
+            continue;
+        }
+        let first = leaf_brush_list.len();
+        leaf_brush_list.extend((m.first_brush..m.first_brush + m.brush_count).map(|n| n as u16));
+        leaf_brush_list.push(0);
+        let run = (first, m.brush_count as usize);
+        let aabbs = (m.first_coll_aabb, m.coll_aabb_count);
+        let leaf = leaf_of(
+            b,
+            &brushes,
+            &materials,
+            &mut leaf_brush_list,
+            &mut brush_nodes,
+            run,
+            aabbs,
+        )
+        .map_err(|e| e.context(format!("submodel {i}")))?;
+        submodels.push(leaf);
+    }
 
-    Ok(ClipMap {
+    let clip = ClipMap {
         planes,
         nodes: b
             .nodes
@@ -164,7 +183,56 @@ pub fn build(b: &ClipLumps) -> Result<ClipMap> {
         aabbs: b.coll_aabb_trees.to_vec(),
         indexed: None,
         reach: Default::default(),
-    })
+    };
+    Ok((clip, submodels))
+}
+
+/// One runtime leaf over the brushes `leaf_brush_list[run]` and the AABB
+/// trees `aabbs` (`(first, count)`): their contents, the brushes' union
+/// widened by 0.125 and their tree (`CMod_PartionLeafBrushes`), which
+/// rewrites the run in place.
+fn leaf_of(
+    b: &ClipLumps,
+    brushes: &[CBrush],
+    materials: &[(u32, u32)],
+    leaf_brush_list: &mut [u16],
+    brush_nodes: &mut Vec<BrushNode>,
+    (first, count): (usize, usize),
+    (first_aabb, aabb_count): (i32, i32),
+) -> Result<CLeaf> {
+    let mut leaf = CLeaf {
+        first_aabb: first_aabb as u16,
+        aabb_count: aabb_count as u16,
+        brush_contents: 0,
+        terrain_contents: 0,
+        mins: Vec3::ZERO,
+        maxs: Vec3::ZERO,
+        brush_node: 0,
+    };
+    for t in &b.coll_aabb_trees[first_run(first_aabb, aabb_count)] {
+        leaf.terrain_contents |= materials[t.material as usize].1;
+    }
+    if count > 0 {
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(-f32::MAX));
+        for &br in &leaf_brush_list[first..first + count] {
+            let bx = &brushes[br as usize];
+            leaf.brush_contents |= bx.contents;
+            for k in 0..3 {
+                if bx.mins[k] < lo[k] {
+                    lo[k] = bx.mins[k];
+                }
+                if hi[k] < bx.maxs[k] {
+                    hi[k] = bx.maxs[k];
+                }
+            }
+        }
+        leaf.mins = lo - Vec3::splat(0.125);
+        leaf.maxs = hi + Vec3::splat(0.125);
+        let tree = partition_brushes(&b.brush_boxes, leaf_brush_list, first, count)?;
+        leaf.brush_node = brush_nodes.len() as u32;
+        brush_nodes.extend(tree.nodes);
+    }
+    Ok(leaf)
 }
 
 /// The engine's [`CollisionWorld`] for a CoD2 map: the world through
