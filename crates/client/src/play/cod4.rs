@@ -13349,8 +13349,16 @@ pub(crate) mod tests {
         vcod_cod4::ragdoll::State,
         Vec<(Vec3, Vec3, glam::Quat)>,
     );
-    /// Per corpse (number, client, teleport bit), its ragdoll each step.
-    type RagFrames = BTreeMap<(u32, i32, i32), Vec<RagStep>>;
+    /// One corpse's ragdoll: each frame its steps moved it, the last
+    /// frame it was seen asleep, and every step's fastest point.
+    #[derive(Default)]
+    struct RagRun {
+        steps: Vec<RagStep>,
+        asleep: Option<RagStep>,
+        speeds: Vec<(f32, f32)>,
+    }
+    /// Per corpse (number, client, teleport bit), its ragdoll.
+    type RagFrames = BTreeMap<(u32, i32, i32), RagRun>;
 
     /// [`cod4_live_corpses_ragdoll_onto_the_floor`]'s scene (six held bots
     /// killed on open floor, 3 s apart, posed by a spectator through
@@ -13431,8 +13439,11 @@ pub(crate) mod tests {
                     let key = (*n, v.frame.client_num, v.frame.eflags & 2);
                     if let Some(r) = players.ragdoll_of(*n) {
                         let e = out.entry(key).or_default();
-                        if e.last().is_none_or(|l| l.0 != r.msec()) {
-                            e.push((r.msec(), r.state, r.frames().collect()));
+                        if e.steps.last().is_none_or(|l| l.0 != r.msec()) {
+                            e.steps.push((r.msec(), r.state, r.frames().collect()));
+                            e.speeds = r.step_speeds().to_vec();
+                        } else if r.state == vcod_cod4::ragdoll::State::Idle {
+                            e.asleep = Some((r.msec(), r.state, r.frames().collect()));
                         }
                     }
                 }
@@ -13473,13 +13484,9 @@ pub(crate) mod tests {
         2f32.to_degrees() * q.xyz().length().atan2(q.w.abs())
     }
 
-    /// What a corpse's ragdoll did, from its steps: the neck bone's
-    /// widest twist about itself in the upper spine's frame, against the
-    /// shortest turn of its axis from its first step, degrees; and over
-    /// its last 900 ms (`phys_autoDisableTime`, the time it lay still
-    /// before it slept) the farthest a bone's end moved and the most the
-    /// pelvis and spine bones turned, degrees.
-    fn ragdoll_spin(steps: &[RagStep]) -> (f32, f32, f32) {
+    /// How far a corpse's neck twisted against its upper spine over the
+    /// shortest turn of its axis from its first step, degrees.
+    fn ragdoll_twist(steps: &[RagStep]) -> f32 {
         // ragdoll.cfg's def 1: bones 0..2 the pelvis and spine, 3 the neck.
         let (spine, neck) = (2, 3);
         let in_spine = |f: &[(Vec3, Vec3, glam::Quat)]| {
@@ -13490,70 +13497,83 @@ pub(crate) mod tests {
             )
         };
         let (d0, rel0) = in_spine(&steps[0].2);
-        let twist = steps
+        steps
             .iter()
             .map(|s| {
                 let (d, rel) = in_spine(&s.2);
                 turn_deg((glam::Quat::from_rotation_arc(d0, d) * rel0).inverse() * rel)
             })
-            .fold(0.0, f32::max);
-        let last = steps.last().unwrap();
-        let k = steps
-            .iter()
-            .position(|s| s.0 >= last.0 - 900.0)
-            .unwrap_or(0);
-        let ends = steps[k].2.iter().zip(&last.2);
-        let moved = ends
-            .clone()
-            .map(|(x, y)| x.0.distance(y.0).max(x.1.distance(y.1)))
-            .fold(0.0, f32::max);
-        let turned = ends
-            .take(3)
-            .map(|(x, y)| turn_deg(x.2.inverse() * y.2))
-            .fold(0.0, f32::max);
-        (twist, moved, turned)
+            .fold(0.0, f32::max)
     }
 
     /// The corpses of [`live_ragdoll_frames`] at 250 and at 10 frames a
-    /// second: none twists its neck past `ragdoll.cfg`'s 30 degrees (its
-    /// limit 2's x, which 1.7 holds in an angular motor), and each that
-    /// went to sleep before `ragdoll_max_life` lay still over the 900 ms
-    /// before it did, no bone end moving a unit and the pelvis and spine
-    /// turning under 5 degrees (cod4-player-anims.md 10.2). Prints each
-    /// corpse's numbers. Returns at once without an install.
+    /// second, held to what 1.7's sleep rule promises
+    /// (cod4-player-anims.md 10.2): each is asleep by `ragdoll_max_life`,
+    /// at 4 ms frames every one before it and at 100 ms at least half (the
+    /// rest freeze at it, which the rule allows); over the 900 ms before a
+    /// body sleeps (`phys_autoDisableTime`) every step's fastest point
+    /// stays under `phys_autoDisableLinear`; once asleep no point moves. How far a body
+    /// slides as it slows through that speed the rule does not bound. None
+    /// twists its neck past `ragdoll.cfg`'s 30 degrees (its limit 2's x,
+    /// which 1.7 holds in an angular motor). Prints each corpse's numbers.
+    /// Returns at once without an install.
     #[test]
     fn cod4_live_ragdolls_hold_still_once_down() {
+        use vcod_cod4::ragdoll::{Dvars, State};
+        let d = Dvars::default();
         for frame_ms in [4, 100] {
-            let Some(frames) = live_ragdoll_frames(frame_ms) else {
+            let Some(runs) = live_ragdoll_frames(frame_ms) else {
                 return;
             };
-            assert!(
-                frames.len() >= 4,
-                "{frame_ms} ms: {} ragdolls",
-                frames.len()
-            );
-            let mut slept = 0;
-            let mut problems = Vec::new();
-            for (key, steps) in &frames {
-                let (twist, moved, turned) = ragdoll_spin(steps);
-                let &(ms, state, _) = steps.last().unwrap();
+            assert!(runs.len() >= 4, "{frame_ms} ms: {} ragdolls", runs.len());
+            let (mut problems, mut frozen) = (Vec::new(), 0);
+            for (key, run) in &runs {
+                let twist = ragdoll_twist(&run.steps);
+                let &(ms, state, ref at_sleep) = run.steps.last().unwrap();
+                let window: Vec<f32> = run
+                    .speeds
+                    .iter()
+                    .filter(|s| s.0 > ms - d.sleep_ms)
+                    .map(|s| s.1)
+                    .collect();
+                let fastest = window.iter().copied().fold(0.0f32, f32::max);
+                let after = run.asleep.as_ref().map(|a| {
+                    a.2.iter()
+                        .zip(at_sleep)
+                        .map(|(x, y)| x.0.distance(y.0).max(x.1.distance(y.1)))
+                        .fold(0.0f32, f32::max)
+                });
                 println!(
-                    "{frame_ms} ms {key:?}: {state:?} at {ms:.0} ms; neck twist {twist:.1} deg; last 900 ms moved {moved:.2}, pelvis and spine turned {turned:.1} deg"
+                    "{frame_ms} ms {key:?}: {state:?} at {ms:.0} ms; neck twist {twist:.1} deg; fastest point over its last {} steps {fastest:.1}/s; moved {after:?} asleep",
+                    window.len()
                 );
                 if twist > 30.0 {
                     problems.push(format!("{frame_ms} ms {key:?}: neck twist {twist}"));
                 }
-                if state == vcod_cod4::ragdoll::State::Idle && ms < 4500.0 {
-                    slept += 1;
-                    if moved > 1.0 || turned > 5.0 {
-                        problems.push(format!(
-                            "{frame_ms} ms {key:?}: moved {moved}, turned {turned}"
-                        ));
-                    }
+                if state != State::Idle {
+                    problems.push(format!("{frame_ms} ms {key:?}: {state:?} at {ms} ms"));
+                    continue;
+                }
+                if after != Some(0.0) {
+                    problems.push(format!("{frame_ms} ms {key:?}: moved {after:?} asleep"));
+                }
+                if ms > d.max_life_ms as f32 {
+                    frozen += 1;
+                    continue;
+                }
+                if window.is_empty() || fastest >= d.sleep_speed {
+                    problems.push(format!(
+                        "{frame_ms} ms {key:?}: slept with a point at {fastest}/s in its last {} steps",
+                        window.len()
+                    ));
                 }
             }
-            assert!(slept * 2 >= frames.len(), "{frame_ms} ms: {slept} slept");
             assert!(problems.is_empty(), "{problems:#?}");
+            assert!(
+                frozen * 2 <= runs.len() && (frame_ms > 4 || frozen == 0),
+                "{frame_ms} ms: {frozen} of {} froze at max life",
+                runs.len()
+            );
         }
     }
 

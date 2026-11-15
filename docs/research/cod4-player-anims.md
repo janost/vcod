@@ -614,7 +614,8 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   After: neck twist 0 at 4 ms and at most 13 degrees at 100 ms (that
   number measured from the first step, whose 50 ms swing the measure
   itself turns); every corpse that slept moved under a unit and turned
-  its pelvis and spine under 4 degrees in its last 900 ms; seven of
+  its pelvis and spine under 4 degrees in its last 900 ms (a run's
+  measure, not a bound: see below); seven of
   eight slept in `cod4_live_corpses_ragdoll_onto_the_floor` and none
   froze at max life. VERIFIED (the tests, ours).
 - Not taken: ODE's angular sleep test. This solver's resting points
@@ -641,6 +642,14 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   awake to `ragdoll_max_life`; averaged over six steps it lets corpse 67
   sleep at 1751 ms having moved 0.60, while corpse 64 at 100 ms frames
   then moves 1.35. VERIFIED (the runs, ours). Neither is taken.
+- So `cod4_live_ragdolls_hold_still_once_down` no longer bounds that
+  slide at a unit: the bound held only by how a bounce fell. It holds the
+  corpses to what the rule promises, at 4 ms and 100 ms frames: asleep by
+  `ragdoll_max_life` (at 4 ms every one before it; at 100 ms, with 50 ms
+  steps, two of six freeze at it on either sampler), every step's
+  fastest point under 20 units a second over the 900 ms before a body
+  sleeps (`Ragdoll::step_speeds`), no point moving once asleep, and the
+  neck under 30 degrees. VERIFIED (the test, ours).
 - The skins a frame reuses between steps (cod4-client-perf.md 38, item
   4) are keyed on the ragdoll's version, which every step bumps, and on
   the corpse's transform: they are the step's pose, never one between.
