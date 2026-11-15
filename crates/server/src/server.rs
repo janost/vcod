@@ -1884,6 +1884,7 @@ impl Server {
             last_spawn_tick: None,
             fatal: None,
             test_client_counter: 0,
+            udp_slots: 0,
             archive: Default::default(),
             dedicated: 1,
             rcon_password: String::new(),
@@ -2533,6 +2534,7 @@ impl Server {
         log::info!("client {slot} {:?} connected from {from}", client.name);
         let name = client.name.clone();
         self.core.clients[slot] = Some(client);
+        self.game.udp_slots |= 1 << slot;
         if let Some(rt) = self.game.module.script.as_mut() {
             rt.push_client_event(ClientEvent::Connect { slot, name });
         }
@@ -6679,6 +6681,7 @@ impl Server {
                 configstrings: &self.core.configstrings,
                 archive: &mut self.game.archive,
                 test_client_counter: &mut self.game.test_client_counter,
+                udp_slots: self.game.udp_slots,
             },
         )
     }
@@ -9443,6 +9446,50 @@ mod tests {
             let ticking = field(&mut sv, "ticks") != ticks;
             assert_eq!(ticking, held, "{v}: the old player's thread");
             assert_eq!(sv.client_count(), 1);
+        }
+    }
+
+    /// `addTestClient`'s first bot (port 0) inside the first 3 s is refused
+    /// while a slot no client ever took is left, and taken once a UDP client
+    /// has held every slot: an IP address never matches a bot's in
+    /// `SV_DirectConnect`'s reconnect check (cod_lnxded 0x8080e60, object
+    /// model doc 25).
+    #[test]
+    fn the_first_test_client_is_refused_only_beside_a_never_used_slot() {
+        use crate::game::script::{CALLBACK_SETUP, ScriptRuntime};
+        for every_slot_held in [false, true] {
+            let now = Instant::now();
+            let mut c = cfg();
+            c.max_clients = 2;
+            let mut sv = Server::new(c, now);
+            install_script(
+                &mut sv,
+                ScriptRuntime::for_test_at(
+                    CALLBACK_SETUP,
+                    "main() { level.bot = -1; thread add(); }\n\
+                     add() { wait 2.5; level.bot = isdefined(addtestclient()); }\n\
+                     CodeCallback_PlayerConnect() {}\n\
+                     CodeCallback_PlayerDisconnect() {}\n",
+                ),
+            );
+            connected(&mut sv, addr(5), now);
+            if every_slot_held {
+                let challenge = challenge_for(&mut sv, addr(6), now);
+                let v = sv.game.proto.transport.version;
+                sv.handle_packet(addr(6), &connect_pkt(challenge, QPORT + 1, v), now);
+                assert_eq!(reply_text(&mut sv).0, "connectResponse");
+                sv.drop_client(1, "EXE_DISCONNECTED");
+            }
+            for ms in (0..=2800).step_by(50) {
+                sv.tick(now + Duration::from_millis(ms));
+            }
+            assert!(sv.svs_time_ms() < 3000);
+            let bot = sv.game.module.script.as_mut().unwrap().level_field("bot");
+            assert_eq!(
+                bot,
+                vcod_gsc::Value::Int(every_slot_held as i32),
+                "every slot held: {every_slot_held}"
+            );
         }
     }
 

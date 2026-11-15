@@ -24,6 +24,7 @@ impl Cod1Module {
             stuck_rand,
             archive,
             test_client_counter,
+            udp_slots,
             ..
         } = eng;
         let mut timeout_written = false;
@@ -49,6 +50,7 @@ impl Cod1Module {
             let counter = (*test_client_counter).max(rt.host.test_clients.counter);
             rt.host.test_clients.counter = counter;
             rt.set_network_time(svs_now);
+            rt.host.test_clients.udp_slots = udp_slots;
             for (slot, port, name) in std::mem::take(&mut rt.host.test_clients.added) {
                 Server::install_test_client(clients, slot, port, name, proto, sv_time_ms);
             }
