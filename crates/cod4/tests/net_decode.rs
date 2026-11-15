@@ -559,3 +559,34 @@ fn a_demo_gamestate_parses_back_to_the_live_one() {
     assert_eq!(b.server_command_sequence, gs.server_command_sequence);
     assert_eq!(b.map_center, gs.map_center);
 }
+
+/// 1.7 writes a `-87` view row only when it differs from the server's
+/// base, even where it must consider the row (`MSG_WriteDeltaPlayerstate`'s
+/// field writer, 0x813e268; cod4-netfields.md 7): the kcent shooter's
+/// `setviewpos` frame sends its yaw alone, its pitch and roll staying 0.
+#[test]
+fn a_teleport_sends_only_the_view_rows_that_changed() {
+    use vcod_cod4::net::delta::Change;
+    let w = walk("play-1.7-kcent-shooter.txt");
+    let s = w
+        .client
+        .snapshots
+        .iter()
+        .find(|s| s.server_time == 42100)
+        .unwrap();
+    let rows: Vec<(&str, Change)> = vcod_cod4::net::fields::PLAYER_STATE
+        .iter()
+        .zip(&s.wire.ps.fields.0)
+        .filter(|(f, _)| f.bits == -87)
+        .map(|(f, c)| (f.name, *c))
+        .collect();
+    assert_eq!(s.ps.get("eFlags").unwrap() & 2, 2);
+    assert_eq!(
+        rows,
+        [
+            ("viewangles[1]", Change::Sent),
+            ("viewangles[0]", Change::Kept),
+            ("viewangles[2]", Change::Kept),
+        ]
+    );
+}

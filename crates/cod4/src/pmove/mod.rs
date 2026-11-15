@@ -1088,7 +1088,7 @@ pub(crate) fn pmove_single(pm: &mut Pmove) {
     }
     stance::update_view_angles(pm, pml.msec as f32);
     [pml.forward, pml.right, pml.up] =
-        vcod_common::x87::angle_vectors(Vec3::from_array(pm.ps.view_angles));
+        vcod_common::x87::angle_vectors_libm(Vec3::from_array(pm.ps.view_angles));
     // `Mantle_ClearHint` (0x8050d80), every frame before the arms.
     pm.ps.mantle.flags &= !mantle::flag::HINT;
 

@@ -406,7 +406,7 @@ fn body_lie(pm: &Pmove, q: &ProneCheck) -> Result<Lie, Misfit> {
     let rise = (d(q.height) - d(PROBE)) as f32;
     let reach = (d(q.feet_dist) - d(PROBE)) as f32;
     let heading = Vec3::new(0.0, (d(q.yaw) - 180.0) as f32, 0.0);
-    let mut back = vcod_common::x87::angle_vectors(heading)[0];
+    let mut back = vcod_common::x87::angle_vectors_libm(heading)[0];
     let legs = legs_run(&probes, q, rise, reach, &mut back)?;
 
     // 18 back at the probes' height, `(18 back.z + o.z) + rise` kept

@@ -138,7 +138,7 @@ pub fn run(
 /// item's old forward (`left = n x f` kept on the stack, `forward = left x
 /// n` stored), then `AxisToAngles` (0x81951fe).
 pub fn rest_angles(angles: Vec3, normal: Vec3) -> Vec3 {
-    let f = vcod_common::x87::angle_vectors(angles)[0].as_dvec3();
+    let f = vcod_common::x87::angle_vectors_libm(angles)[0].as_dvec3();
     let n = normal.as_dvec3();
     let left = DVec3::new(
         n.y * f.z - n.z * f.y,
