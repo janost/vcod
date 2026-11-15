@@ -1,9 +1,10 @@
 //! Votes against the retail captures in `fixtures/votes/`: three clients
 //! (axis, allies, spectator) send the captures' `callvote` and `vote`
 //! commands at the same seconds, and each must get the same `e` lines, `n`s
-//! and configstring 15..18 changes in the same order
+//! and vote configstring changes (15..18, UO's 16..19) in the same order
 //! (docs/research/cod11-votes.md). The 1.1d run needs `COD_DIR` at a 1.1
-//! install, the 1.5b run at a 1.5 one; each returns early otherwise.
+//! install, the 1.5b run at a 1.5 one, the UO run at a UO one; each
+//! returns early otherwise.
 
 use crate::common;
 
@@ -11,7 +12,7 @@ use common::{ADDR, ADDR_B, ADDR_C, ClientEnd, Join, Queues};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, Protocol};
+use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
 use vcod_common::net::{NetClient, NetEvent, NetState, Userinfo};
 
 const NAMES: [&str; 3] = ["Able", "Baker", "Charlie"];
@@ -82,7 +83,12 @@ fn retail(fixture: &str) -> Retail {
 /// `order` is the connect order, which fixes the slots: retail's 1.5b run
 /// put the spectator in slot 0.
 fn run(fixture: &str, proto: &'static Protocol, cvars: &[(&str, &str)], order: [usize; 3]) {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let fs = if proto.transport.version == PROTOCOL_V22.transport.version {
+        vcod_common::testing::uo_fs()
+    } else {
+        vcod_common::testing::game_fs()
+    };
+    let Some(fs) = fs else {
         return;
     };
     if vcod_server::server::install_protocol(&fs).transport.version != proto.transport.version {
@@ -118,6 +124,7 @@ fn run(fixture: &str, proto: &'static Protocol, cvars: &[(&str, &str)], order: [
     let mut got: [Vec<String>; 3] = Default::default();
     let mut joined = None;
     let mut says = retail.says.iter().peekable();
+    let vote = proto.cs.vote;
     for frame in 0..2400 {
         now += Duration::from_millis(common::FRAME_MS as u64);
         // Join in `order`, one client a frame, so each takes its slot.
@@ -174,9 +181,11 @@ fn run(fixture: &str, proto: &'static Protocol, cvars: &[(&str, &str)], order: [
                             _ => {}
                         }
                     }
-                    NetEvent::ConfigstringChanged(cs @ 15..=18) if joined.is_some() => {
+                    NetEvent::ConfigstringChanged(cs)
+                        if joined.is_some() && (vote..vote + 4).contains(&cs) =>
+                    {
                         let mut v = cl[i].configstring(cs).to_string();
-                        if cs == 15
+                        if cs == vote
                             && proto.transport.version == PROTOCOL_V1.transport.version
                             && !v.is_empty()
                         {
@@ -226,5 +235,22 @@ fn votes_run_as_15b_ran_them() {
             ("g_allowVoteTempBanClient", "1"),
         ],
         [2, 0, 1],
+    );
+}
+
+/// UO 1.51b: 1.5b's vote kinds and lines, in its own vote slots.
+#[test]
+fn votes_run_as_uo_ran_them() {
+    run(
+        "mp_carentan-tdm-votes-uo.txt",
+        &PROTOCOL_V22,
+        &[
+            ("g_allowVoteKick", "1"),
+            ("g_allowVoteKillCam", "1"),
+            ("g_allowVoteFriendlyFire", "1"),
+            ("g_allowVoteDrawFriend", "1"),
+            ("g_allowVoteTempBanClient", "1"),
+        ],
+        [0, 1, 2],
     );
 }
