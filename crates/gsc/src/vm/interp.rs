@@ -941,6 +941,11 @@ impl Vm {
                             let c = (b as char).to_string();
                             Value::String(self.interner.intern_exact(&c))
                         }
+                        // `level["k"]`, `self["k"]` on `level`, `anim["k"]`
+                        // compile and fail here on 1.1d and UO; 1.5b reads
+                        // undefined (`probe_level_bracket_read`).
+                        Value::Struct(_) if self.struct_index_reads_undefined => Value::Undefined,
+                        Value::Struct(_) => fail!(ErrorKind::BadType("struct is not an array")),
                         _ => fail!(ErrorKind::BadType("indexing needs an array")),
                     };
                     push!(v);
@@ -1114,11 +1119,9 @@ impl Vm {
                 // `game` is array-typed on retail, measured
                 // tests/fixtures/semantics/retail-captures.txt `# probe_game`.
                 Op::LoadGame => push!(Value::Array(self.game)),
-                // No stock MP script reads a bare `anim` back (every use is
-                // inside a `/# #/` developer block, which the lexer drops
-                // whole); `level` is the only preallocated struct (`game`
-                // preallocates too, but as an array, not a struct).
-                Op::LoadAnim => push!(Value::Undefined),
+                // A struct of its own: `anim.k = 1` reads back 1 on all
+                // three servers (`probe_anim_dot`).
+                Op::LoadAnim => push!(Value::Struct(self.anim)),
                 Op::NewArray => {
                     let id = self.heap.new_array();
                     push!(Value::Array(id));

@@ -1,5 +1,6 @@
 //! The crate's integration tests as one binary: linked once, not once per file.
 
+mod area_census;
 mod cod2_iwd_iwi;
 mod cod2_wavelet;
 mod evidence_labels;

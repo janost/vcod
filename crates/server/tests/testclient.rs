@@ -154,3 +154,74 @@ fn a_test_client_rejoins_after_a_map_restart_as_on_retail() {
     }
     assert_eq!(lines, retail);
 }
+
+/// `probe_tcmapchange` on mp_pavlov against retail 1.1d (2026-11-15): the
+/// same test client across `exitLevel(false)` into mp_carentan. Its
+/// `ClientConnect` runs again 300 ms into the new level, as after a
+/// restart, but its `begin` never comes: the load puts every client back to
+/// connected and a test client sends nothing to enter the world again
+/// (docs/research/cod11-gsc-object-model.md 25).
+#[test]
+fn a_test_client_reconnects_but_never_begins_after_a_map_change_as_on_retail() {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        return;
+    };
+    let retail = [
+        "PROBE level  map mp_pavlov t 0",
+        "PROBE connect 0 bot0 state spectator t 5050",
+        "PROBE added num 0 name bot0",
+        "PROBE begin 0 t 5050",
+        "PROBE exit",
+        "PROBE level 1 map mp_carentan t 6050",
+        "PROBE players 0",
+        "PROBE connect 0 bot0 state spectator t 6350",
+        "PROBE connect 1 bot1 state spectator t 11150",
+        "PROBE added2 num 1 name bot1",
+        "PROBE done",
+        "PROBE begin 1 t 11150",
+    ];
+    let mut now = Instant::now();
+    let bsp_path = fs
+        .resolve_map("mp_pavlov")
+        .expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut sv = vcod_server::Server::new(common::cfg("mp_pavlov", "probe_tcmapchange"), now);
+    sv.overlay_script(
+        "maps/mp/gametypes/probe_tcmapchange",
+        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_tcmapchange.gsc"),
+    );
+    sv.set_cvar(
+        "sv_mapRotation",
+        "gametype probe_tcmapchange map mp_carentan",
+    );
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    // A map change starts a new script log, so the lines are kept per level.
+    let mut lines: Vec<String> = Vec::new();
+    let mut seen = 0;
+    let mut id = sv.server_id();
+    let mut begun_at = None;
+    for i in 0..400 {
+        common::run_alone(&mut sv, &mut now, 50);
+        if sv.server_id() != id {
+            id = sv.server_id();
+            seen = 0;
+        }
+        let log = sv.script_log();
+        lines.extend(
+            log[seen.min(log.len())..]
+                .iter()
+                .filter(|l| l.starts_with("PROBE "))
+                .cloned(),
+        );
+        seen = log.len();
+        // Five seconds past the second begin for a late `begin 0`.
+        if begun_at.is_none() && lines.iter().any(|l| l.starts_with("PROBE begin 1")) {
+            begun_at = Some(i);
+        }
+        if begun_at.is_some_and(|at| i >= at + 100) {
+            break;
+        }
+    }
+    assert_eq!(lines, retail);
+}

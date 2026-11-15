@@ -495,8 +495,17 @@ per one-second phase (VERIFIED):
 
 `setContents` returned the previous contents each phase (0x401c4008,
 0x4000, 0x400000, 0, 0x40000000; VERIFIED, same run). The mount fires
-once per cmd, not per frame: the probe sends about 60 cmds a second
-against 20 server frames (INFERRED, from the counts). The two fires under
+once per cmd, not per frame (the probe sends about 60 cmds a second
+against 20 server frames). VERIFIED,
+`probe_uofoot`'s crouched script mount under `probe_fires 1` (one
+`"trigger"` line each) beside a `--save-slope --probe-uofoot 90
+--probe-cmd-ms 8` client (2026-11-15,
+`mp_foy-dm-slope-8ms-uofoot-mount-fires.txt` and its server half
+`mp_foy-uofoot-mount-fires-uo.txt`): in each of the 885 frames the
+waiters ran on the frame's own `getTime()` as many times as the cmds the
+snapshot's `commandTime` moved past, 5092 of the 5110 cmds sent. The 18
+short frames each held a cmd stamped at or before the one before it,
+which `SV_UserMove` never runs, so it touches nothing. The two fires under
 a contents the mask misses are notifies queued by cmds before the
 `setContents`, delivered after the counting thread started (INFERRED).
 vcod-server's touch pass (`game::trigger::touched`) queries the area tree
@@ -510,7 +519,10 @@ retail's, each within three snapshots of retail's length. One state one
 snapshot long is dropped on both sides: the first cmd off the bipod still
 reads ducked, since `PmoveSingle` checks the stance before the sight flag,
 and retail's snapshot there held five release cmds where ours may hold
-one.
+one. Its `a_script_mount_fires_once_per_cmd_as_on_uo` replays the
+`-mount-fires` capture's cmds and counts ours' `"trigger"` lines: one per
+cmd ours ran, 2700 over the 2711 cmds up to the frag switch, as retail ran
+(VERIFIED, 2026-11-15).
 
 ## 12. The grenade cook
 

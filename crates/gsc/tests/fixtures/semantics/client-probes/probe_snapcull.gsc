@@ -7,7 +7,8 @@
 //	solid leaf, no cluster) for three seconds, puts him back, then sounds
 //	him. Then it moves him into slot 0's PVS 1300 units off, sets a
 //	1000-unit cull fog, sounds him inside it and clears it with exponential
-//	fog. Logs:
+//	fog. Under probe_fresh 1 the first sound is skipped, so the subject
+//	reaches the fog never sounded. Logs:
 //
 //		PROBE begin <num>
 //		PROBE step <name> <time>
@@ -88,7 +89,8 @@ script()
 	self setOrigin(spot(1));
 	wait 3;
 	step("sound");
-	self playSound("MP_bomb_plant");
+	if (getcvar("probe_fresh") != "1")
+		self playSound("MP_bomb_plant");
 	wait 3;
 	step("near");
 	self setOrigin((1120, 432, 0));
