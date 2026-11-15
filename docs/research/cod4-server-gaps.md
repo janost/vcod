@@ -145,9 +145,13 @@ Open, by how much a player notices.
    (cod4-handshake.md 15).
 2. Closed: the helicopter's flight and its gun match retail word for word
    (Fixed above; `hardpoint_ab` `GAPS` gone).
-3. What the five capture gates (`cod4::capture_ab`, cod4-combat.md 15)
-   still tolerate: the second rocket's entity number and a killcam's
-   archived view (both measured, cause open). Closed: the
+3. Closed: the five capture gates (`cod4::capture_ab`, cod4-combat.md 15)
+   tolerate nothing. The second rocket's number was a battle chatter
+   temp entity off `reload_start`, which `ClientEvents` notifies on
+   `EV_RELOAD_START_NOTIFY`; the wobble's `trDelta` and the free
+   spectator's turn were glibc's `sinf` and `cosf` in 1.7's
+   `AngleVectors`; the killcam's view was the view rows going out only
+   when they differ from the server's base. Closed: the
    thrown back frag's bounce off the shooter's head: the torso pitch's
    swing folds in floats, the control bones take 1.7's control arm and
    controller, and the hit poses sample their clips through 1.7's

@@ -20,3 +20,6 @@ log.workspace = true
 [[test]]
 name = "cod4"
 path = "tests/main.rs"
+
+[lints]
+workspace = true

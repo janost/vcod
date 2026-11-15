@@ -640,7 +640,9 @@ impl Cod4Level {
                 wev::FIRE_WEAPON | wev::FIRE_WEAPON_LASTSHOT => self.fire_weapon(slot, t),
                 wev::FIRE_MELEE => self.fire_melee(slot, t),
                 wev::USE_OFFHAND => self.use_offhand(slot),
-                wev::PREP_OFFHAND => self.grenade_pullback(slot, parm),
+                wev::PREP_OFFHAND | wev::PULLBACK_WEAPON => self.grenade_pullback(slot, parm),
+                wev::RELOAD_START_NOTIFY => self.notify_player(slot, "reload_start"),
+                wev::RELOAD_ADDAMMO => self.notify_player(slot, "reload"),
                 wev::GRENADE_SUICIDE => self.grenade_suicide(slot, parm),
                 wev::SWITCH_OFFHAND => self.attempt_live_grenade_pickup(slot, parm),
                 _ => {}
@@ -722,7 +724,7 @@ impl Cod4Level {
     /// 3.2).
     pub(super) fn muzzle_axis(&self, slot: usize, ps: &vcod_cod4::pmove::PlayerState) -> [Vec3; 3] {
         let [pitch, yaw] = self.combat.gun_angles[slot];
-        vcod_common::x87::angle_vectors(Vec3::new(pitch, yaw, ps.view_angles[2]))
+        vcod_common::x87::angle_vectors_libm(Vec3::new(pitch, yaw, ps.view_angles[2]))
     }
 
     /// A bullet's `G_DamageClient` at the shot's time.
@@ -831,7 +833,7 @@ impl Cod4Level {
             return;
         };
         let eye = view_origin(&ps, self.level_time());
-        let view = vcod_common::x87::angle_vectors(Vec3::from(ps.view_angles));
+        let view = vcod_common::x87::angle_vectors_libm(Vec3::from(ps.view_angles));
         let bodies = self.rewound(game_time);
         let Some((contact, at)) = self.melee_contact(slot, eye, view, &bodies) else {
             return;
@@ -917,8 +919,17 @@ impl Cod4Level {
         None
     }
 
-    /// The pullback notify on `EV_PREP_OFFHAND`: `grenade_pullback`
-    /// with the weapon's name on the thrower.
+    /// A bare notify on the player off its event: `reload_start` on
+    /// `EV_RELOAD_START_NOTIFY`, `reload` on `EV_RELOAD_ADDAMMO`
+    /// (cod4-combat.md 15).
+    fn notify_player(&mut self, slot: usize, event: &'static str) {
+        if let Some(id) = self.rt.client_entity(slot) {
+            self.rt.host.engine_notifies.push((id, event, Vec::new()));
+        }
+    }
+
+    /// The pullback notify on `EV_PREP_OFFHAND` and `EV_PULLBACK_WEAPON`:
+    /// `grenade_pullback` with the weapon's name on the thrower.
     pub(super) fn grenade_pullback(&mut self, slot: usize, weapon: u32) {
         let Some(id) = self.rt.client_entity(slot) else {
             return;
@@ -1697,14 +1708,21 @@ impl Cod4Level {
                     set("lerp.u.anonymous.data[1]", q.radius.to_bits());
                     set("lerp.u.anonymous.data[2]", q.duration_ms as u32);
                 }
-                // `EV_PHYS_EXPLOSION_SPHERE` (57) and `_CYLINDER` (58): `physicsExplosion*`'s inner radius and magnitude
-                // (`builtins::cod4_vehicle`), else `playFx`'s angles
+                // `EV_PHYS_EXPLOSION_SPHERE` (57) and `_CYLINDER` (58): `physicsExplosion*`'s inner radius and magnitude;
+                // `EV_PHYS_JITTER` (60): `physicsJitter`'s inner radius and
+                // pushes (`builtins::cod4_vehicle`); else `playFx`'s angles
                 // (`builtins::cod4_script::play_fx`).
                 if (event == 57 || event == 58)
                     && let Some([inner, magnitude, _]) = te.origin2
                 {
                     set("lerp.u.anonymous.data[0]", inner.to_bits());
                     set("lerp.u.anonymous.data[1]", magnitude.to_bits());
+                } else if event == 60
+                    && let Some(words) = te.origin2
+                {
+                    for (k, v) in words.iter().enumerate() {
+                        set(&format!("lerp.u.anonymous.data[{k}]"), v.to_bits());
+                    }
                 } else {
                     for (k, v) in te.origin2.iter().flatten().enumerate() {
                         set(&format!("lerp.apos.trBase[{k}]"), v.to_bits());

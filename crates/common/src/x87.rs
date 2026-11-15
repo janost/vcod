@@ -116,9 +116,25 @@ pub fn radians(deg: f32) -> f32 {
 /// about once in 10^8, more often where the two terms nearly cancel
 /// (`the_kept_sums_round_at_64_bits`).
 pub fn angle_vectors_of_radians(rad: Vec3) -> [Vec3; 3] {
-    let sin_cos = |r: f32| {
+    angle_vectors_by(rad, |r| {
         let r = f64::from(r);
-        (f64::from(r.sin() as f32), f64::from(r.cos() as f32))
+        (r.sin() as f32, r.cos() as f32)
+    })
+}
+
+/// CoD4 1.7's `AngleVectors` (`cod4_lnxded` 0x818ea3a): [`angle_vectors`]'
+/// radians and stack, each sine and cosine glibc's `sinf` and `cosf`
+/// ([`crate::libm`]) where the 1.x servers' `fsincos` rounds correctly
+/// (cod4-gsc.md 3.2, "Missiles under 1.7").
+pub fn angle_vectors_libm(angles: Vec3) -> [Vec3; 3] {
+    let rad = Vec3::new(radians(angles.x), radians(angles.y), radians(angles.z));
+    angle_vectors_by(rad, |r| (crate::libm::sinf(r), crate::libm::cosf(r)))
+}
+
+fn angle_vectors_by(rad: Vec3, trig: impl Fn(f32) -> (f32, f32)) -> [Vec3; 3] {
+    let sin_cos = |r: f32| {
+        let (s, c) = trig(r);
+        (f64::from(s), f64::from(c))
     };
     let (sp, cp) = sin_cos(rad.x);
     let (sy, cy) = sin_cos(rad.y);

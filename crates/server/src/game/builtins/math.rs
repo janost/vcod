@@ -124,6 +124,48 @@ pub fn vectoangles(v: [f32; 3]) -> [f32; 3] {
     [pitch, yaw, 0.0]
 }
 
+/// 1.7's `vectoangles` (0x8191a72), the missiles' and `vectorToAngles`'
+/// (0x80be762): each `atan2` times 180 (the pitch's -180) over the double
+/// pi on the stack, stored as a float, 360 added to a negative one before
+/// its one store. The pitch's flat length stays unrounded into its `atan2`
+/// (`fstpl`, 0x8191afc), where CoD1's [`vectoangles`] stores a float
+/// (cod4-gsc.md 3.2, "Missiles under 1.7").
+pub fn vectoangles_1_7(v: [f32; 3]) -> [f32; 3] {
+    use vcod_common::x87::F80;
+    if v[0] == 0.0 && v[1] == 0.0 {
+        return [if v[2] > 0.0 { 270.0 } else { 90.0 }, 0.0, 0.0];
+    }
+    let pi = F80::from_f64(std::f64::consts::PI);
+    let degrees = |atan: f64, k: f32| {
+        let a = (F80::from_f64(atan) * F80::from_f32(k) / pi).to_f32();
+        if a < 0.0 {
+            (F80::from_f32(a) + F80::from_f32(360.0)).to_f32()
+        } else {
+            a
+        }
+    };
+    let (x, y) = (F80::from_f32(v[0]), F80::from_f32(v[1]));
+    let flat = (x * x + y * y).sqrt().to_f64();
+    [
+        degrees(f64::from(v[2]).atan2(flat), -180.0),
+        degrees(f64::from(v[1]).atan2(f64::from(v[0])), 180.0),
+        0.0,
+    ]
+}
+
+/// CoD4's `vectorToAngles(v)`: [`vectoangles_1_7`].
+pub fn vector_to_angles_1_7(
+    _host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let Some(Value::Vector(v)) = args.first() else {
+        return Err(ErrorKind::BadType("vectorToAngles takes a vector"));
+    };
+    Ok(Value::Vector(vectoangles_1_7(*v)))
+}
+
 /// `vectoyaw` (1.1d 0x3dccc): the atan in double, stored as a float, and
 /// 360 added on the stack when it is negative, so a caller that truncates
 /// it reads the sum unrounded. 0 for a vector with no horizontal part.
@@ -379,6 +421,20 @@ pub fn atan(
 mod tests {
     use super::*;
     use crate::game::testing::fixture;
+
+    /// 1.7's `vectoangles` keeps the flat length a double: at (1.74,
+    /// -899.78, -143.4) its pitch is 9.055189 (0x4110e20e, the float of
+    /// the exact angle), where CoD1's float length gives 0x4110e20d. The
+    /// yaw agrees.
+    #[test]
+    fn cod4_vectoangles_keeps_the_flat_length_a_double() {
+        let v = [0x3fde_b852, 0xc460_f1ec, 0xc30f_6666].map(f32::from_bits);
+        let (cod1, cod4) = (vectoangles(v), vectoangles_1_7(v));
+        assert_eq!(cod4[0].to_bits(), 0x4110_e20e);
+        assert_eq!(cod1[0].to_bits(), 0x4110_e20d);
+        assert_eq!(cod4[1], cod1[1]);
+        assert_eq!(vectoangles_1_7([0.0, 0.0, 1.0]), [270.0, 0.0, 0.0]);
+    }
 
     /// Retail's math builtins, checked against values the retail captures
     /// pin where they exist and against the definition where they do not.
