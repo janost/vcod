@@ -2174,10 +2174,26 @@ VERIFIED (the registrations at 0x48c1e0 and 0x490e00, the floats at
   and its weapon's `damage` (`WeaponDef` +0x34c, 0x455b9e) from the
   client-side round's walk (0x455bbe, 0x456183), from 0x4587f9 (in
   0x458790, under `sv_clientSideBullets` 0, 0x4587de) and from 0x458db2
-  (in 0x458cf0); the melee swipe (0x48e3a0, from `CG_EntityEvent`
-  0x4367a9) tries five rays through it. VERIFIED (the calls). That
-  0x458790 and 0x458cf0 play the server's bullet hit events is INFERRED
-  (the dvar test).
+  (in 0x458cf0, under `sv_clientSideBullets` 0 too, 0x458d93); the
+  melee swipe (0x48e3a0, from `CG_EntityEvent` 0x4367a9) tries five rays
+  through it (13.9). VERIFIED (the calls and the tests). That 0x458790
+  and 0x458cf0 play the server's bullet hit events is INFERRED (the
+  dvar test; 13.10).
+- The walk's legs: the first only when `BulletTrace` (0x4558e0) met
+  something (0x455ae5; a miss draws its tracer and returns, 0x455b19),
+  from the leg's start (`BulletFireParams` +0x1c) to the contact (the
+  walk's hit point, frame +0x78); a weapon whose `weapType` (`WeaponDef`
+  +0x12c) is set skips it (0x455b6d). Then, in the penetration loop,
+  each entry contact the walk plays: right after that entry's hit event
+  (0x456154), from the leg's start (past the surface it left) to the
+  entry (0x456183). The loop's paths that play no entry (a contact
+  within `bullet_penetrationMinFxDist`, 0x455ec1 and 0x456094; no next
+  contact, 0x455e77 and 0x456104) skip both. VERIFIED (the branches).
+  The hit event returns at once on a player under
+  `sv_clientSideBullets` (cod4-effects.md 12.2); the dynent call after
+  it still runs, so a leg that ends on a player pushes what it passed.
+  VERIFIED (the order). A round into the open sky pushes nothing it
+  passed. VERIFIED (0x455ae5).
 - It traces the dynents alone (0x48d6c0 under 0x802013): a live one
   whose cube's sphere the ray meets (0x4f6e70) is traced in its frame
   (0x490020) through its model's collision surfaces (0x58c5b0, nothing
@@ -2237,8 +2253,118 @@ nothing. VERIFIED (13.1's census).
   contents but solid its def's centre of mass lies in: 9 of mp_crash's
   516 pass some, and no centre lies in solid. vcod's. VERIFIED
   (`dynent_census`, ours).
-- Left out: the melee swipe, the server's bullet events (vcod's client
-  runs its rounds itself), list 1
-  (no stock map holds one), pieces (none stock), `physicsJitter`
-  (`EV_PHYS_JITTER`, 0x48eb50) and the `j` command. Only the first leg of
-  a round that pierces is traced.
+- Ported since: the walk's legs as 13.4 gives them (the first only on a
+  contact, then each entry the walk plays, `cod4_fx::BulletHit::dyn_legs`),
+  the swing (13.9, `DynEnts::melee`) and `physicsJitter` (13.8,
+  `DynEnts::jitter`, `physics::Body`'s contact pushes) on the client and
+  its builtin on vcod-server. VERIFIED (the code against 13.4, 13.8 and
+  13.9; `dynent::tests`, `cod4_fx::tests::the_penetration_walk_holds_on_mp_crash`,
+  `hardpoint_tests::physics_launch_and_the_explosion_sphere_go_out`).
+  The work per round stays bounded: six legs at most, each the
+  dynent trace already run per round. vcod's. Frame time is not
+  measured here (no Vulkan on the machine that ported it).
+- Left out: list 1 (no stock map holds one), pieces (none stock), the
+  `j` command (no server sends it, 13.6), and `sv_clientSideBullets` 0
+  as a whole (13.10).
+
+### 13.8 `physicsJitter`
+
+- `Scr_PhysicsJitter` (`cod4_lnxded` 0x80bce34): five arguments
+  ("Incorrect number of parameters", 0x80bce45); a temp entity
+  `EV_PHYS_JITTER` (60) at the origin (0x80bce6f); `eventParm` the outer
+  radius (`Scr_GetInt`, 0x80bce82); `lerp.u` word 0 (+0x54) the inner
+  radius, "Radius is negative" below 0 (0x80bceff) and "Inner radius is
+  outside the outer radius" past the parm read unsigned (0x80bcea9,
+  0x80bcef1); words 1 and 2 (+0x58, +0x5c) the least and the most push,
+  "Maximum jitter is less than minimum jitter" when the first is larger
+  (0x80bcedf). VERIFIED (the code and the strings). No stock MP script
+  calls it: of every zone's rawfiles only `airplane.gsc` (SP) does,
+  `physicsJitter(level.player.origin, 5000, 2500, .45, .9)`. VERIFIED
+  (`rawfile_dump` over `zone/english`).
+- The client (0x48eb50, from `CG_EntityEvent`'s case 60 at 0x4373ab,
+  the jump table at 0x43740c): nothing under `dynEnt_active` 0 or an
+  outer radius of 0 (0x48ebb4). For each list the live entities whose
+  contents meet 0x802013 and whose cube meets the box `origin +- outer
+  sqrt 2` (the double at 0x70ae78), unbounded in z (0x70af5c,
+  0x70af58), through 0x48db30; past `dynEnt_explodeMaxEnts` the nearest
+  that many by the level distance (0x48fe80, the sort at 0x48ef40). Each
+  whose type pushes and has no body gets one at rest (0x5a4fb0 in world
+  0, 0x490240), else "DynEntCl_CreatePhysObj: Unable to create physic
+  object." (0x6d3c90). No push and no damage there. Then 0x5a7730 with
+  the origin, the inner and outer radii and the two pushes. VERIFIED
+  (the code).
+- 0x5a7730 keeps up to five regions per world (count 0xcc54494, 0x24
+  bytes each from 0xcc5449c; a sixth overwrites the fifth, 0x5a773d):
+  the origin, both radii squared and plain, the two pushes; and wakes
+  every body of world 0 whose position lies within the outer radius,
+  level (0x5a77ec). VERIFIED (the stores). The step zeroes the count
+  right after the call at 0x5a66f0 (0x5a66ff), so a region lasts one
+  step. INFERRED (0x5b7270 read as ODE's world step).
+- The push, in the contact callback (0x5a23e0, called per contact at
+  0x5a2918): for a body against the world whose contact normal z is at
+  least 0.7 (0x70b0e8), per region whose outer radius squared exceeds the
+  contact's level distance squared: the falloff 1 within the inner
+  radius, else `(outer - d) / (outer - inner)`; a draw `u = rand() /
+  32768` (0x670622, the double at 0x70af90); the mass `m'` the body's
+  (`dxBody` +0x20) capped at `phys_jitterMaxMass` (0xcc7815c, default
+  200, 0.1..FLT_MAX, registered at 0x5a41f3); then `Phys_ObjAddForce`
+  (0x5a25a1) at the contact of `(0, 0, (min + u (max - min)) falloff
+  m' (1 - (m' / 200)^3) 1000 / msecStep)`. `Phys_ObjAddForce` scales by
+  `1000 / msecStep` again for its one step (0x5a5900), so the impulse
+  keeps one such factor. VERIFIED (the code; the x and y the double 0 at
+  0x70adf0 times it). The SP call above lifts a light prop 26 to 53
+  units/s per contact at 17 ms. INFERRED (the formula).
+- vcod: `DynEnts::jitter` makes the bodies and hands each body the region
+  for its next step; `physics::Body` pushes on each of its touching
+  points with a normal z of 0.7 or more, by the formula, its random draws
+  off a seed of vcod's. Retail's contacts are ODE's through the game's
+  collider; vcod's are the body's points (nine on a box's flat face),
+  so a prop flat on the floor takes more pushes than on 1.7. vcod's.
+  `physicsJitter` on vcod-server sends retail's words. VERIFIED (the
+  tests above).
+
+### 13.9 The knife's swing
+
+- `EV_FIRE_MELEE` (31; the jump table's entry at 0x437484) calls
+  0x48e3a0 with the event's entity (0x4367a5). Nothing under
+  `dynEnt_active` 0 or with the swinger's weapon 0 (`centity_t` +0x190,
+  0x48e3ff). The eye: the drawn view's (the struct 0x4584c0 returns,
+  +0x492e0) when 0x4584c0 finds the swinger is the snapshot's client
+  with bits 6 of its word +0x20 set, else the entity's origin
+  (`centity_t` +0xe4) raised 11 prone (`eFlags` 8), 40 crouched (4) or
+  60 (the doubles at 0x70b370, 0x70b380, 0x70b2f8) for a client number
+  under 64 (0x458550). The axis: `AngleVectors` (0x563460) of the view's
+  angles (+0x46244) or the client's (0x4584f0). VERIFIED (the code).
+  That the first is our own view, or the one we follow, is INFERRED
+  (the word read as `otherFlags`).
+- Five rays from the eye to `eye + forward player_meleeRange + right
+  (a player_meleeWidth) + up (b player_meleeHeight)` for `(a, b)` the
+  pairs at 0x6d3cc8, (0, 0), (1, 1), (-1, 1), (1, -1), (-1, -1), each
+  through 0x48e0f0 with the weapon's `meleeDamage` (`WeaponDef` +0x354,
+  0x48e40e) and the melee flag, until one meets a dynamic entity
+  (0x48e521). The dvars are at 0x7323ec, 0x734b28 and 0x7322a0, 64, 10
+  and 10 (registered at 0x40b801..0x40b8ca). VERIFIED (the code and the
+  floats).
+- With the melee flag 0x48e0f0 plays `melee_knife_hit_other` (the handle
+  at 0x84db74, registered at 0x43e5dd) at the contact on the world
+  (0x48e2c8) in place of 0x48dd00's impact, then pushes and damages as
+  for a round (13.4). VERIFIED (the code).
+- vcod: `DynEnts::melee` with the drawn view's eye and angles for our own
+  swing, another's `lerp.pos.trBase` raised by his stance and his
+  `apos.trBase` pitch and yaw (the snapshot's, where 1.7 reads its drawn
+  origin and its client angles); the cue plays at the contact.
+  VERIFIED (`a_swing_tries_its_five_rays_until_one_meets_a_prop`, ours).
+
+### 13.10 The server's bullet events
+
+- Both callers that play the server's bullet hit events (0x4587f9 in
+  0x458790, 0x458db2 in 0x458cf0) reach 0x48e0f0 only under
+  `sv_clientSideBullets` 0 (0x4587de, 0x458d93); so does the launched
+  part's push in 0x48e060, through 0x48e0f0's own test (0x48e142).
+  VERIFIED (the tests). Under 1 the client's own walk pushes, and only it
+  (13.4). Both retail's stock server and vcod-server send 1 in the
+  systeminfo (cod4-handshake.md), so the event paths push nothing in a
+  stock match. VERIFIED (the capture's key).
+- Under 0 `DrawBulletImpacts` (0x456620) does not run at all (0x457cec),
+  and the server's events carry every round. vcod's client reads no
+  `sv_clientSideBullets` and runs its rounds as under 1. vcod's.

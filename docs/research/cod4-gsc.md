@@ -505,6 +505,12 @@ On ours (`game::cod4::vehicle`):
   The event table sends both words (`lerp.u.anonymous.data[0]`, `[1]`,
   `vcod_cod4::net::fields`), and vcod's event carries both (same test).
   VERIFIED (the test, ours).
+- `physicsJitter(origin, outer, inner, min, max)` (0x80bce34): an
+  `EV_PHYS_JITTER` (60) temp entity, outer radius the parm, the inner and
+  the two pushes in `lerp.u` words 0 to 2, and its three errors
+  (cod4-world.md 13.8). VERIFIED (the disassembly). vcod sends the same
+  words (same test). VERIFIED (the test, ours). `physicsJolt` has no
+  handler on vcod-server.
 - A client-less CoD4 entity owns `pers` and `maxhealth`
   (`chopper.pers["team"]`, `chopper.maxhealth` failed on ours as client
   fields). VERIFIED (the error). 1.7 reaches client fields only through
@@ -1280,9 +1286,21 @@ VERIFIED (the registrations). Then:
   0x48e060). VERIFIED (the code). So a blast does not push a launched
   part, and a round does: after its launch's push it meets gravity, the
   world and the rounds this client draws, and the server sends nothing
-  more (3.2). INFERRED (the callers above). vcod's rounds do not push a
-  part. The dynamic entities themselves: cod4-world.md 13. That the jitter's event is `EV_PHYS_JITTER` is INFERRED (the
-  case after the jolt's, the event order).
+  more (3.2). INFERRED (the callers above). The dynamic entities
+  themselves: cod4-world.md 13. The jitter's event is `EV_PHYS_JITTER`
+  (60): the jump table at 0x43740c sends 60 to 0x437374, whose call is
+  0x4373ab. VERIFIED (the table). Its push: cod4-world.md 13.8.
+- 0x48df10's push (from 0x455b92, the first leg only, after
+  `BulletTrace` met something): a hit of type 1 under `dynEnt_active`
+  on an entity whose `centity_t` +0x18 holds a body (neither 0 nor -1);
+  the round's impact once more at the contact (0x48dd00, or the melee
+  sound with the melee flag); then `Phys_ObjBulletImpact` at the contact
+  along the round, normalized (0x48dfb7), at `dynEnt_bulletForce`
+  (0x11015fc) and the preset of the DObj's first model's
+  `bulletForceScale` (`XModel` +0xd4, +0x14). VERIFIED (the code). The
+  world it passes, 0, picks only the `msecStep` `Phys_ObjAddForce`
+  spreads the impulse over (0x5a5900) while world 1 steps the body.
+  INFERRED (the two reads of 0x71e798).
 
 vcod (`vcod_cod4::physics`, `play::cod4_physics`):
 
@@ -1291,8 +1309,12 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   else the bounds box), the mass centre, the push with its up bias, spin scale and
   formula, gravity, the clock (two steps at most, the lerp), the drag,
   the per-body sleep on the squared speeds, the contact friction and
-  bounce, the world-only collision under 0x2806c91, and no push from a
-  blast. VERIFIED (the code against the above).
+  bounce, the world-only collision under 0x2806c91, no push from a
+  blast, and a round's push (`Cod4Physics::shoot`, off the first
+  contact's entity, `cod4_fx::BulletHit::entity`) at `dynEnt_bulletForce`
+  and the part's `bulletForceScale`, with the impact played again there.
+  VERIFIED (the code against the above). Both worlds step at 17 ms here,
+  so the world 0 in the call changes nothing. vcod's.
 - In place of ODE: one impulse solver per body. Each box's (and an
   axial brush's) 8 corners, 12 edge midpoints and 6 face centres, a
   brush with sides' corners (where three of its planes meet), and 16
@@ -1327,7 +1349,11 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   launched parts (both mirrors, both bumpers, both right doors, two wheels
   and the hood) flew 14 to 154 units off their spots and went to sleep
   within 1.6 to 2.1 s (92 to 120 steps), every point clear of the world
-  and resting on it, the same on three runs. VERIFIED (the tests, ours). How a part looks in flight and at rest is
+  and resting on it, the same on three runs; at 22 s a round slanting
+  down onto the first resting part the client's round trace meets
+  (`cod4_fx::first_contact` through `shot_solids`, the left mirror)
+  pushes it 4.6 units on (one run), and it sleeps again. VERIFIED (the tests,
+  ours). How a part looks in flight and at rest is
   pending a human's look.
 - The ragdoll (`cod4-player-anims.md` 10) keeps its point solver. This
   body could carry it once the bones are rigid capsules held by joint
