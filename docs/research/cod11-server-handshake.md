@@ -1480,6 +1480,17 @@ UO. INFERRED (the match).
   `killserver` `EXE_SERVERKILLED`. INFERRED.
 - `rcon quit`: the probe read `e "EXE_SERVERQUIT"`, `w`, and dropped, reading
   nothing more, so the second pass is unseen. VERIFIED (capture).
+- The second pass, 2026-11-16 on 1.1d mp_carentan: a spectator probe joined
+  through `tools/udp_relay.py`, which logged every datagram, all inside one
+  `unshare -rn`; `rcon quit` 12 s in. Two messages left in the same
+  millisecond on consecutive sequences, 47 then 73 bytes, and nothing after.
+  VERIFIED (capture). INFERRED: the second carries the first pass's `e` and
+  `w` again beside its own, unacked, which is its 26 more bytes.
+- vcod (`Server::final_message`) under the same run: two messages in the
+  same millisecond, 43 then 70 bytes, each 4 under retail's. VERIFIED
+  (capture). The bytes are not decoded. Open: whether the 4 are the fresh
+  snapshot retail builds (`nextSnapshotTime = -1`) against the last frame
+  vcod resends.
 - `killserver` (0x8084d3c) calls `0x806dc68`: `SV_Shutdown` between the hunk
   calls, then return; no exit. `SV_Frame` does the same on `sv_killserver` and
   resets it. With `sv_running` (0x833efc0) 0 the event loop skips
