@@ -626,6 +626,21 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   step: vcod's damping takes 1.6 to 7% of each point's speed every
   sixtieth of a second, linear and angular together, already more.
   VERIFIED (the runs, ours).
+- The linear rule does not bound how far a body moves in the 900 ms
+  before it sleeps: the timer starts the step every point drops under 20
+  units a second, and a body decaying from there covers more than a
+  unit. With the drawn bodies on 1.7's sampler (11), `mp_crash`'s corpse
+  67 at 4 ms frames fell the same way to its floor contact at 357 ms,
+  then took a different bounce off a start pose 1e-5 units off the old
+  one: under 20 units a second from 630 ms, 18 at 663, 14 at 714 to 816,
+  asleep at 1547, 1.70 units from where its window began. The old
+  sampler's run had slowed to 13 by 561 ms and moved 0.72. VERIFIED (the
+  runs, ours). Measured per step from the start of the step, the
+  resting bodies' turns average 0.2 to 0.5 rad/s and peak at 1.35: an
+  angular test at `phys_autoDisableAngular`'s 1 rad/s keeps every corpse
+  awake to `ragdoll_max_life`; averaged over six steps it lets corpse 67
+  sleep at 1751 ms having moved 0.60, while corpse 64 at 100 ms frames
+  then moves 1.35. VERIFIED (the runs, ours). Neither is taken.
 - The skins a frame reuses between steps (cod4-client-perf.md 38, item
   4) are keyed on the ragdoll's version, which every step bumps, and on
   the corpse's transform: they are the step's pose, never one between.
