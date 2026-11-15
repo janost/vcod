@@ -30,3 +30,6 @@ libc = "0.2"
 [[test]]
 name = "server"
 path = "tests/main.rs"
+
+[lints]
+workspace = true

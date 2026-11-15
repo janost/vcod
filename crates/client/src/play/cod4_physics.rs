@@ -18,12 +18,13 @@ pub const TR_PHYSICS: u32 = 8;
 /// client that sees the launch later draws the part where it stood.
 const LATE_MS: i32 = 1000;
 
-/// One launched entity: its launch time and model, and its body, `None`
-/// when it was seen too late or its model has no preset.
+/// One launched entity: its launch time and model, and its body and the
+/// preset's `bulletForceScale`, `None` when it was seen too late or its
+/// model has no preset.
 struct Part {
     launched: i32,
     model: String,
-    body: Option<Body>,
+    body: Option<(Body, f32)>,
 }
 
 /// Every launched part a session has seen, by entity number.
@@ -70,7 +71,7 @@ impl Cod4Physics {
                 .parts
                 .get(&model.to_ascii_lowercase())
                 .filter(|_| time.wrapping_sub(launched) <= LATE_MS)
-                .map(|m| self.make(e, m, time));
+                .map(|m| (self.make(e, m, time), m.preset.bullet_force_scale));
             self.parts.insert(
                 n,
                 Part {
@@ -80,7 +81,7 @@ impl Cod4Physics {
                 },
             );
         }
-        let body = self.parts.get_mut(&n)?.body.as_mut()?;
+        let (body, _) = self.parts.get_mut(&n)?.body.as_mut()?;
         let mut trace = clip_trace(&world.clip);
         body.advance(time, &mut trace, &self.dvars);
         Some(body.pose(time))
@@ -104,6 +105,21 @@ impl Cod4Physics {
         b
     }
 
+    /// A client-side round's first contact `at` on entity `n`, along
+    /// `dir`: a part that flies takes `Phys_ObjBulletImpact` at `force`
+    /// (`dynEnt_bulletForce`) and its preset's `bulletForceScale`
+    /// (0x48df10, from the round's walk at 0x455b92). Retail passes world
+    /// 0 for the part's world 1 (0x48e043), which only picks the
+    /// `msecStep` the impulse is spread over; both are vcod's 17 ms.
+    /// Whether one took it.
+    pub fn shoot(&mut self, n: u32, at: Vec3, dir: Vec3, force: f32) -> bool {
+        let Some((body, scale)) = self.parts.get_mut(&n).and_then(|p| p.body.as_mut()) else {
+            return false;
+        };
+        body.launch(at, dir * force, *scale, &self.dvars);
+        true
+    }
+
     /// Drops the parts whose entities `keep` refuses.
     pub fn retain(&mut self, keep: impl Fn(u32) -> bool) {
         self.parts.retain(|n, _| keep(*n));
@@ -112,7 +128,7 @@ impl Cod4Physics {
     /// Part `n`'s body, once one flies.
     #[cfg(test)]
     pub fn body(&self, n: u32) -> Option<&Body> {
-        self.parts.get(&n)?.body.as_ref()
+        self.parts.get(&n)?.body.as_ref().map(|(b, _)| b)
     }
 
     /// How many parts are seen, and how many of them fly.

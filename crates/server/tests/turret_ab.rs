@@ -2602,8 +2602,10 @@ fn hitgrid_rows<'a>(
 }
 
 /// Every `probe_gungrid` line on a frame retail's gunner was mounted
-/// (`eFlags & 0xc000`) against ours, cell by cell along its ray: the
-/// gunner's own pose, his fire leaves included (`cod11-turrets.md` 13.9).
+/// (`eFlags & 0xc000`), and with `probe_gungrid_tail` every other line it
+/// logged, against ours, cell by cell along its ray: the gunner's own pose,
+/// his fire leaves and the dismount's blend out included
+/// (`cod11-turrets.md` 13.9).
 /// A row reads `[gungrid] <phase> t=<time> ...`; a cell past
 /// [`GUNGRID_NEAR`] or met by one side only is a row.
 fn gungrid_rows<'a>(
@@ -2625,12 +2627,14 @@ fn gungrid_rows<'a>(
             .collect()
     };
     let (theirs, mine) = (lines(&mut { theirs }), lines(&mut { mine }));
+    // A recipe with `probe_gungrid_tail` logs the dismount's blend out too.
+    let tail = cap.cvars.iter().any(|(k, _)| *k == "probe_gungrid_tail");
     let mut rows = Vec::new();
     for (t, cells) in &theirs {
         let Some((phase, _)) = cap
             .traces
             .iter()
-            .find(|(_, s)| s.t == *t && s.e_flags & 0xc000 != 0)
+            .find(|(_, s)| s.t == *t && (tail || s.e_flags & 0xc000 != 0))
         else {
             continue;
         };
@@ -2685,6 +2689,32 @@ fn gungrid_gate(
         )
     };
     let script = read(&path("-script"));
+    // A capture that logs the gunner's attachments (`PROBE models` for the
+    // allied placement) puts them on ours' gunner: his gear is a random
+    // draw, and its packs stand in the grid (cod11-turrets.md 13.9).
+    let gunner_num = script
+        .lines()
+        .filter_map(|l| l.split_once("PROBE place ").map(|(_, r)| r))
+        .find(|r| r.split_whitespace().nth(1) == Some("allies"))
+        .and_then(|r| r.split_whitespace().next());
+    let pinned = gunner_num.and_then(|n| {
+        script
+            .lines()
+            .find_map(|l| l.split_once(&format!("PROBE models {n} ")).map(|(_, r)| r))
+    });
+    let cvars: &'static [(&'static str, &'static str)] = match pinned {
+        Some(models) => {
+            let mut v: Vec<(&'static str, &'static str)> = cvars.to_vec();
+            for (i, m) in models.split_whitespace().enumerate() {
+                v.push((
+                    Box::leak(format!("probe_gunner_model{i}").into_boxed_str()),
+                    Box::leak(m.to_string().into_boxed_str()),
+                ));
+            }
+            Box::leak(v.into_boxed_slice())
+        }
+        None => cvars,
+    };
     let cap = Capture {
         target_cmds: target_cmds(&read(&path("-target"))),
         cvars,
@@ -2765,7 +2795,8 @@ const GUNGRID_UO: &[(&str, &str)] = &[
 const GUNGRID_11: &[(&str, &str)] = &[
     ("probe_hitgrid", "1"),
     ("probe_gungrid", "1"),
-    ("probe_head", "basehead_axis_b_04"),
+    ("probe_gungrid_tail", "1000"),
+    ("probe_head", "basehead_axis_b_07"),
 ];
 const GUNGRID_15: &[(&str, &str)] = &[
     ("probe_hitgrid", "1"),
@@ -2787,12 +2818,12 @@ fn the_gunner_grid_capture_matches_uo_on_mp_carentan() {
     );
 }
 
-/// The same on 1.1d (cod11-turrets.md 13.9). Open: the capture logs
-/// none of the gunner's attachments, a random draw, and a still gunner
-/// already reads three cells of the grid's left column off ours
-/// (13.10, "Open").
+/// The same on 1.1d, the gunner in the attachments retail drew him and
+/// the grid logged through the dismount's blend out (cod11-turrets.md
+/// 13.9). Open: the mount's blend in, its first five frames standing and
+/// the crouched mount's first.
 #[test]
-#[ignore = "open: the 1.1d gunner grid, cod11-turrets.md 13.10"]
+#[ignore = "open: the 1.1d gunner's mount blend in, cod11-turrets.md 13.9"]
 fn the_gunner_grid_capture_matches_retail_on_mp_carentan() {
     gungrid_gate(
         "gungrid",

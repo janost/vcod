@@ -21,6 +21,25 @@ const RING: usize = 8;
 const BOUNCE_VEL: f32 = 0.1;
 /// Contact solver passes per step (vcod's).
 const ITERATIONS: usize = 10;
+/// `phys_jitterMaxMass`'s default (registered at 0x5a41f3..0x5a42a0: 200,
+/// 0.1..FLT_MAX): a jitter falls off with the body's mass up to it.
+pub const JITTER_MAX_MASS: f32 = 200.0;
+/// The least contact normal z a jitter lifts at (the float at 0x70b0e8,
+/// read at 0x5a23f3).
+const JITTER_MIN_NORMAL_Z: f32 = 0.7;
+
+/// A `physicsJitter` region (`EV_PHYS_JITTER`, held by 0x5a7730 in its
+/// world's list of five until the world's next step): each contact of a
+/// body on ground within `outer` of `origin` (level) takes an upward
+/// push of `min..max` (cod4-world.md 13.8).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Jitter {
+    pub origin: Vec3,
+    pub inner: f32,
+    pub outer: f32,
+    pub min: f32,
+    pub max: f32,
+}
 
 /// What a part's `PhysPreset` gives the body: `mass` (+8), `bounce`
 /// (+12), `friction` (+16) and `bulletForceScale` (+20).
@@ -325,6 +344,10 @@ pub struct Body {
     from: (Vec3, Quat),
     /// Steps taken.
     pub steps: u32,
+    /// The jitter regions its next step's contacts take, and the random
+    /// state their pushes draw from (`rand`, 0x5a2536).
+    pub jitter: Vec<Jitter>,
+    pub jitter_rand: u32,
 }
 
 impl Body {
@@ -358,6 +381,8 @@ impl Body {
             from_ms: now,
             from: (pos, rot),
             steps: 0,
+            jitter: Vec::new(),
+            jitter_rand: 0,
         }
     }
 
@@ -467,6 +492,7 @@ impl Body {
     /// the drag, the sleep test.
     pub fn step(&mut self, dt: f32, trace: &mut Trace, d: &Dvars) {
         if self.asleep {
+            self.jitter.clear();
             return;
         }
         self.steps += 1;
@@ -478,6 +504,9 @@ impl Body {
             let found = self.gather(dt, trace, d, v0, w0, &mut touched);
             if found.is_empty() && pass > 0 {
                 break;
+            }
+            if pass == 0 {
+                self.shake(&found, d);
             }
             contacts.extend(found);
             self.solve(&mut contacts, d);
@@ -512,6 +541,50 @@ impl Body {
             }
         } else {
             self.idle = 0.0;
+        }
+    }
+
+    /// The jitter's pushes in the contact callback (0x5a23e0, from
+    /// 0x5a2918), then the regions dropped (0x5a66ff): each contact whose
+    /// normal z is at least 0.7, at a level distance `r` under a region's
+    /// outer radius, takes `(min + u (max - min)) f m' (1 - (m' / 200)^3)`
+    /// straight up through `Phys_ObjAddForce` (0x5a25a1), `u` a `rand()`
+    /// over 32768, `f` 1 within the inner radius and
+    /// `(outer - r) / (outer - inner)` past it, `m'` the mass capped at
+    /// `phys_jitterMaxMass`.
+    /// The value is times `1000 / msecStep` before `Phys_ObjAddForce`
+    /// scales it again for its one step, so the impulse keeps that factor.
+    /// Retail's contacts are ODE's; these are the body's touching points.
+    fn shake(&mut self, contacts: &[Contact], d: &Dvars) {
+        if self.jitter.is_empty() {
+            return;
+        }
+        let m = self.mass.min(JITTER_MAX_MASS);
+        let q = m / JITTER_MAX_MASS;
+        let weight = m * (1.0 - q * q * q);
+        let per_step = 1000.0 / d.step_ms as f32;
+        let regions = std::mem::take(&mut self.jitter);
+        for c in contacts.iter().filter(|c| c.n.z >= JITTER_MIN_NORMAL_Z) {
+            let at = self.pos + c.r;
+            for j in &regions {
+                let dist_sq = (at.x - j.origin.x).powi(2) + (at.y - j.origin.y).powi(2);
+                if dist_sq >= j.outer * j.outer {
+                    continue;
+                }
+                let dist = dist_sq.sqrt();
+                let falloff = if j.inner < dist {
+                    (j.outer - dist) / (j.outer - j.inner)
+                } else {
+                    1.0
+                };
+                self.jitter_rand = self
+                    .jitter_rand
+                    .wrapping_mul(0x343fd)
+                    .wrapping_add(0x269ec3);
+                let u = (self.jitter_rand >> 16 & 0x7fff) as f32 / 32768.0;
+                let lift = (j.min + u * (j.max - j.min)) * falloff * weight * per_step;
+                self.impulse(c.r, Vec3::Z * lift);
+            }
         }
     }
 

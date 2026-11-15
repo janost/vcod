@@ -10,6 +10,11 @@ repository = "https://github.com/janost/vcod"
 readme = "README.md"
 rust-version = "1.90"
 
+# rustc 1.100's clippy widened this lint to loops that index several arrays
+# or walk a bit mask by position, the shape the retail ports keep on purpose.
+[workspace.lints.clippy]
+needless_range_loop = "allow"
+
 [workspace.dependencies]
 anyhow = "1"
 jiff = "0.2"

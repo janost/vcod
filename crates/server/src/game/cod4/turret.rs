@@ -494,7 +494,7 @@ impl Cod4Level {
         spread: f32,
         view: [f32; 3],
     ) {
-        let [forward, right, up] = vcod_common::x87::angle_vectors(Vec3::from(view));
+        let [forward, right, up] = vcod_common::x87::angle_vectors_libm(Vec3::from(view));
         if let Some(tags) = tags {
             let start = Vec3::from(crate::game::turret::muzzle(
                 &tags,

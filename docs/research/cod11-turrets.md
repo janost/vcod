@@ -2370,25 +2370,44 @@ vcod measurement, `gunduel_ab` on 1.1d with the tree: victim 0 reads
 retail's points and cells within `NEAR_15` (its `POSE_GAPS_11` entry
 dropped); victim 1 unchanged (13.10, "Open").
 
-VERIFIED live, `mp_carentan-dm-turret-gungrid.txt` (1.1d, 2026-11-14,
-`-script.txt` and `-target.txt` beside it): the 13.9 recipe on 1.1d.
+VERIFIED live, `mp_carentan-dm-turret-gungrid.txt` (1.1d, 2026-11-15,
+`-script.txt` and `-target.txt` beside it): the 13.9 recipe on 1.1d with
+`probe_gungrid_tail 1000`, which logs the grid for a second past each
+return to the spot, and the gunner's attachments logged at his placement
+(`PROBE models 1`, `probe_turret.gsc` `pin_models`).
 `the_gunner_grid_capture_matches_retail_on_mp_carentan` replays it
-(`#[ignore]`d, open). vcod measurement (`GUNGRID_DUMP=<path>`): with the
-tree, 2622 cells past `GUNGRID_NEAR` over 260 mounted frames, 4552
-without. The yaw sweep's first frames at the gun's centre read every cell
-to 0.0005; frames at either arc edge hold 5 to 15 cells off, and every
-still frame of the crouch phases three cells of the left column (5, 10,
-15: one side only or 1.2 off). Not determined. INFERRED: the gunner's
-attachments, a random draw the probe logs only for the target (`PROBE
-models 0`); a recapture logging and pinning his would settle it.
+(`#[ignore]`d, open below).
 
-The dismount: the
-probe's grid stops once the gunner is back within 4 units of his spot, so
-the capture holds one frame past the release (33400, `legsAnim` 544,
-`eFlags` 24), too few to read the blend out. vcod clears both groups at
-the release (`set_gunner_blend(None)`), so a fading `standMG42_aim` layer
-poses through `layer_clips`; INFERRED, off the weight step and the strict
-clear above: retail's group keeps its carried rows while it fades. Open.
+- **The gear.** The 2026-11-14 capture's 2622 cells off were the gunner's
+  gear. His character is a random draw of nine
+  (`mptype/american_airborne.gsc`, `randomint(9)`), each a pack
+  (`gear_US_load1` to `load3`) and a front piece (`bandolier`,
+  `frntgnrc`, `frntknklknfe`) behind `ammobelt`, and the head a draw of
+  `xmodelalias/head_allied` (VERIFIED, 1.1's paks). The packs sit in the
+  grid through his back. VERIFIED, the recapture: retail drew `basehead_06`,
+  `USAirborneHelmet`, `gear_US_load2`, `gear_US_frntknklknfe`,
+  `gear_US_ammobelt`. `gungrid_gate` puts a capture's `PROBE models` list on
+  ours' gunner (`probe_gunner_model0..`). With it every mounted frame past
+  the mount's first five reads every cell within `GUNGRID_NEAR` (VERIFIED,
+  the gate). vcod measurement on the 2026-11-14 capture: of the nine draws,
+  `load3` with `frntgnrc` leaves 102 cells (the mount's frames), every other
+  835 to 2994. The head moves no cell.
+- **The dismount.** Retail's release frame (33250, `eFlags` 24, `legsAnim`
+  still 544) and the next (122, the idle, set) read ours' grid exactly. vcod
+  used to drop the turret group at the release, so the fading
+  `standMG42` layer posed through `layer_clips`, descending the aim tree
+  by the view pitch: the four frames after read up to 11.6 units off. The
+  release now keeps the group as the one left (`gunner_left`), and the
+  body's pose inputs pass it off the gun too, so the fading layer poses on
+  its carried rows. Every tail frame then reads within `GUNGRID_NEAR`
+  (VERIFIED, the gate). That the DObj keeps the rows past the release is
+  INFERRED, off the weight step and the strict clear above.
+- **Open: the mount's blend in.** The standing mount's first five frames
+  (19250 to 19450) read 0.01 to 1.4 units off, falling each frame, and
+  2.9 for a cell that grazes; the crouched mount's first frame (32750) up
+  to 11.3, then exact. UO and 1.5b read their mounts exactly. Not run down:
+  the clip under the mount, its blend time and the group's first frame are
+  the candidates.
 
 ### 13.10 Two gunners in each other's arc
 

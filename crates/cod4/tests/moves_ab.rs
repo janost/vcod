@@ -111,9 +111,6 @@ const GAPS: &[(&str, &str, usize, &str)] = &[
         1,
         "cod4-combat.md 10.1, the server's fuse",
     ),
-    // The free spectator's velocity an ulp off in a turn (row 244).
-    ("fly", "velocity[0]", 1, "13.2 the spectator's turn"),
-    ("fly", "velocity[1]", 1, "13.2 the spectator's turn"),
     // The charge swing's hit: the server's `EV_MELEE_BLOOD` (37) on the
     // attacker, and the lunge carries him over the victim's dropped rifle,
     // whose ammo the server's touch hands him (`EV_AMMO_PICKUP`, 9).

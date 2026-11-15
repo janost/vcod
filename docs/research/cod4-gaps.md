@@ -21,13 +21,14 @@ Ranked by how much a player notices.
 - Rigid-body physics is vcod's solver, not ODE: a launched part's 26
   box points (corners, edge midpoints, face centres) meet the world as
   points, so a world edge between them can poke in, and `msecStep`
-  stays 17 ms (cod4-gsc.md 3.6). A blast does not push a part on 1.7
-  either, but a round does (0x48df10), and vcod's do not. The ragdoll is
-  a position-based solver (cod4-player-anims.md 10). M.
-- A map's dynamic entities miss a few of 1.7's pushes: the knife's swing
-  (0x48e3a0), `physicsJitter` (0x48eb50) and the server's bullet events
-  (vcod's client runs its rounds itself), and a piercing round pushes
-  only what its first leg passes (cod4-world.md 13.7). S.
+  stays 17 ms (cod4-gsc.md 3.6). A jitter's pushes land on the body's
+  touching points, not ODE's contacts, so a flat prop takes more of them
+  (cod4-world.md 13.8). The ragdoll is a position-based solver
+  (cod4-player-anims.md 10). M.
+- `sv_clientSideBullets` 0 is not read: under it 1.7 draws no rounds of
+  its own and plays the server's bullet events, which then push the
+  props; vcod's client runs its rounds as under 1, which every stock
+  server sends (cod4-world.md 13.10). S.
 - Multichannel output: kira mixes stereo, so a 5.1 or 7.1 device gets
   the stereo mix on its front pair (cod4-sound.md 4.2, 5). The 139 alias
   rows whose curve no walked zone holds fall off straight. L.
@@ -52,6 +53,15 @@ Ranked by how much a player notices.
   `iw3mp.exe` runs it, its stores included, the server's own tree
   matching 280 gdb trees word for word through the same function
   (cod4-player-anims.md 11).
+- A round did not push a flying car part, and the props missed the
+  knife's swing, `physicsJitter`, and every leg of a piercing round past
+  the first; a round into the open sky pushed what it passed. vcod now
+  pushes the part off the round's first contact (0x48df10), runs the
+  swing's five rays (0x48e3a0) and the jitter (0x48eb50), and hands the
+  props the legs 1.7's walk does (cod4-gsc.md 3.6, cod4-world.md
+  13.4, 13.8, 13.9). The server's bullet events push nothing under
+  `sv_clientSideBullets` 1, on 1.7 too (13.10).
+
 - A map's dynamic entities (mp_crash holds 516) were neither drawn nor
   simulated. vcod now draws them, pushes them with blasts and rounds on
   its rigid-body solver, breaks the destructible ones into their effect,

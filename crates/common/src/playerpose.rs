@@ -1562,17 +1562,26 @@ fn pose_player_onto(
     // under the turret group.
     let mut legs: Vec<(Rc<XAnim>, f64, f32)> = Vec::new();
     let mut shape: Vec<LegsShape> = Vec::new();
-    match inputs.turret_leaves {
-        Some(current) => {
+    let groups = [inputs.turret_leaves, inputs.turret_left];
+    // Off the gun, a group left behind counts while its layer fades.
+    let fading_left = inputs.turret_left.is_some_and(|(n, _)| {
+        inputs
+            .legs_layers
+            .iter()
+            .any(|l| inputs.anims.index.node_id(l.index) == Some(n))
+    });
+    match inputs.turret_leaves.is_some() || fading_left {
+        true => {
             // The turret anim's group poses by the rows its placement
-            // weighted, and a turret group still blending out by the rows
-            // its own placement left (`turret_left`); any other clip, the
-            // one the mount blends out of included, poses as itself. Every
-            // leaf takes its group's time (UO 0x80bd7e4).
+            // weighted, and a turret group still blending out, past a
+            // dismount too, by the rows its own placement left
+            // (`turret_left`); any other clip, the one the mount blends out
+            // of included, poses as itself. Every leaf takes its group's
+            // time (UO 0x80bd7e4).
             let layers = &inputs.legs_layers;
             for l in layers {
                 let node = inputs.anims.index.node_id(l.index);
-                let group = [Some(current), inputs.turret_left]
+                let group = groups
                     .into_iter()
                     .flatten()
                     .find(|(n, _)| Some(*n) == node)
@@ -1604,7 +1613,7 @@ fn pose_player_onto(
                 shape.push(LegsShape::Group(l.weight, group_rows));
             }
         }
-        None => {
+        false => {
             for c in layer_clips(inputs, &inputs.legs_layers, &mut clip) {
                 shape.push(LegsShape::Clip(legs.len()));
                 legs.push(c);

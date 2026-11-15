@@ -567,20 +567,7 @@ fn pair_ab(gate: &str, pair: &Pair, gaps: &[(&str, &str)]) {
     check(gate, &pair_diffs(&run, pair), &run.aborts, gaps);
 }
 
-/// What the rocket run still differs in.
-const ROCKET_GAPS: &[(&str, &str)] = &[
-    (
-        "* entity *:4 lerp.pos.trDelta",
-        "the wobble's velocity, the facing times the speed, a unit in the last \
-         place off; the path's points match (cod4-gsc.md 3.2)",
-    ),
-    (
-        "* entity 316",
-        "the second rocket takes 316 on ours, 317 on retail; nothing either client \
-         saw took 316 (cod4-gsc.md 3.2)",
-    ),
-    ("* entity 317", "the second rocket's number, as above"),
-];
+const ROCKET_GAPS: &[(&str, &str)] = &[];
 
 /// The RPG's two rockets fly, wobble and burst as retail's (cod4-gsc.md
 /// 3.2, "Missiles under 1.7").
@@ -606,12 +593,7 @@ fn cod4_prone_death_ab() {
     pair_ab("cod4_prone_death_ab", &PRONE, PRONE_GAPS);
 }
 
-const KCENT_GAPS: &[(&str, &str)] = &[(
-    "target ps viewangles[1]",
-    "the killcam's archived view: retail's archive holds the shooter's \
-         `setviewpos` yaw 0 where its cmds sum to ours's 90; why is open \
-         (cod4-combat.md 15)",
-)];
+const KCENT_GAPS: &[(&str, &str)] = &[];
 
 /// A killcam with a `killcamentity`: the follower's playerstate names the
 /// script's inflictor, and that entity rides the archived frames with its
@@ -636,11 +618,7 @@ const TOUCH: Pair = Pair {
     cvars: &[("scr_game_spectatetype", "2")],
 };
 
-const TOUCH_GAPS: &[(&str, &str)] = &[(
-    "flyer ps velocity[1]",
-    "the free spectator's velocity a bit off in its turn: pmove's float model \
-         (cod4-pmove.md 13.2)",
-)];
+const TOUCH_GAPS: &[(&str, &str)] = &[];
 
 /// `ClientImpacts` after each cmd's move: the walker's body meets the
 /// target's, and the gsc's count of the `touch` notifies each is sent,

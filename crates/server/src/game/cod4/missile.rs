@@ -349,9 +349,9 @@ pub struct Burst4 {
     pub smoke_until: Option<i32>,
 }
 
-/// `vectoangles`.
+/// 1.7's `vectoangles` ([`crate::game::builtins::math::vectoangles_1_7`]).
 fn vectoangles(v: Vec3) -> Vec3 {
-    Vec3::from(crate::game::builtins::math::vectoangles(v.to_array()))
+    Vec3::from(crate::game::builtins::math::vectoangles_1_7(v.to_array()))
 }
 
 /// `AngleNormalize360` (0x8190540): `x = a * 0.0027777778f` on the stack,
@@ -935,7 +935,7 @@ impl Cod4Level {
         }
         let ramp = f64::from(d.time_to_accelerate);
         if ramp > 0.0 {
-            let [facing, _, _] = vcod_common::x87::angle_vectors(m.angles);
+            let [facing, _, _] = vcod_common::x87::angle_vectors_libm(m.angles);
             let top = f64::from(d.projectile_speed);
             let along = dot64(facing, m.pos.delta);
             // A frame's share of the speed, the last step landing on it.
@@ -1010,7 +1010,7 @@ impl Cod4Level {
         let turned = mad(m.apos.base, FRAME_S, m.curve);
         m.set_angle(turned);
         m.apos.tr_type = TR_INTERPOLATE;
-        let [ahead, _, _] = vcod_common::x87::angle_vectors(turned);
+        let [ahead, _, _] = vcod_common::x87::angle_vectors_libm(turned);
         m.pos.tr_type = TR_INTERPOLATE;
         m.pos.base = m.origin;
         m.pos.delta = ahead * d.projectile_speed as f32;
@@ -1376,7 +1376,7 @@ impl Cod4Level {
         self.rt.host.engine_notifies.push((id, "explode", point));
         self.raise_burst(at, weapon, &d, now);
         if let Some(owner) = owner.filter(|_| d.explosion_inner_damage != 0) {
-            let [ahead, _, _] = vcod_common::x87::angle_vectors(facing);
+            let [ahead, _, _] = vcod_common::x87::angle_vectors_libm(facing);
             let (cone, splash) = (cone_cos(&d), "MOD_GRENADE_SPLASH");
             self.radius_damage(at, id, owner, &d, cone, ahead, None, splash);
             self.radius_damage_helis(at, owner, &d, None, splash);
@@ -1449,7 +1449,7 @@ impl Cod4Level {
             } else {
                 1.0 - (dist - full) / (reach - full)
             };
-            let [view, _, _] = vcod_common::x87::angle_vectors(Vec3::from(ps.view_angles));
+            let [view, _, _] = vcod_common::x87::angle_vectors_libm(Vec3::from(ps.view_angles));
             let eye = ps.origin + Vec3::Z * ps.view_height_current;
             let facing = (view.dot((at - eye).normalize_or_zero()) + 1.0) * 0.5;
             let team = self
@@ -1897,12 +1897,16 @@ fn spread_disc(rand: &mut GlibcRand, radius: f32) -> (f32, f32) {
 /// the angle's radians kept until stored, and each axis's sideways term
 /// stored before the upward one joins it.
 fn draw_curvature(rand: &mut GlibcRand, facing: Vec3, curvature: f32) -> Vec3 {
-    let [_, right, up] = vcod_common::x87::angle_vectors(facing);
+    let [_, right, up] = vcod_common::x87::angle_vectors_libm(facing);
     let turn = g_random(rand) as f32;
     let size = f64::from((f64::from(g_random(rand) as f32) * f64::from(curvature)) as f32);
     let radians = (f64::from(turn) * 360.0 * std::f64::consts::PI / 180.0) as f32;
-    let across = scale_stored(right, f64::from(radians.cos()) * size);
-    mad(across, f64::from(radians.sin()) * size, up)
+    let across = scale_stored(right, f64::from(vcod_common::libm::cosf(radians)) * size);
+    mad(
+        across,
+        f64::from(vcod_common::libm::sinf(radians)) * size,
+        up,
+    )
 }
 
 /// `v s` per axis, each product stored as a float.

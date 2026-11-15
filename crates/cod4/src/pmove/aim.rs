@@ -293,7 +293,7 @@ pub fn view_origin(ps: &PlayerState, time: i32) -> Vec3 {
     let speed = get_speed(ps, time);
     o.z = (vertical_bob(ps, cycle, speed, BOB_MAX) + d(o.z)) as f32;
     let h = horizontal_bob(ps, cycle, speed, BOB_MAX) as f32;
-    let right = vcod_common::x87::angle_vectors(Vec3::from(ps.view_angles))[1];
+    let right = vcod_common::x87::angle_vectors_libm(Vec3::from(ps.view_angles))[1];
     o = Vec3::new(
         (d(right.x) * d(h) + d(o.x)) as f32,
         (d(right.y) * d(h) + d(o.y)) as f32,
@@ -302,7 +302,7 @@ pub fn view_origin(ps: &PlayerState, time: i32) -> Vec3 {
     if ps.leanf != 0.0 {
         let f = lean_fraction(ps.leanf) as f32;
         let ang = Vec3::new(0.0, ps.view_angles[1], 16.0 * f);
-        let right = vcod_common::x87::angle_vectors(ang)[1];
+        let right = vcod_common::x87::angle_vectors_libm(ang)[1];
         let s = f * 20.0;
         o = Vec3::new(
             (d(right.x) * d(s) + d(o.x)) as f32,
@@ -784,7 +784,7 @@ mod tests {
         let mid = s.fire_angles(&ps, &k, &k, 1280, 16)[0];
         assert!(-5.0 < mid && mid < 3.0, "{mid}");
         assert_eq!(s.fire_angles(&ps, &k, &k, 1480, 16), [3.0, 40.0]);
-        let right = vcod_common::x87::angle_vectors(Vec3::from(ps.view_angles))[1];
+        let right = vcod_common::x87::angle_vectors_libm(Vec3::from(ps.view_angles))[1];
         let kick = DamageKick::feedback(40, Some(right), ps.view_angles, 1000);
         assert!(
             kick.pitch.abs() < 1e-5 && (kick.roll - 8.0).abs() < 1e-5,

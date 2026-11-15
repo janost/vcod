@@ -344,8 +344,8 @@ mod tests {
         set(&mut w, "viewHeightLerpDown", i32::from(ps.view_lerp_down));
         set(&mut w, "viewHeightLerpTime", pred.view_lerp_start);
         setf(&mut w, "proneDirection", ps.prone_direction);
-        for i in 0..3 {
-            set(&mut w, &format!("delta_angles[{i}]"), pred.delta_angles[i]);
+        for (i, &d) in pred.delta_angles.iter().enumerate() {
+            set(&mut w, &format!("delta_angles[{i}]"), d);
         }
         w
     }

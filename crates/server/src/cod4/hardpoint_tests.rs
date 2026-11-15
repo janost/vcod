@@ -790,14 +790,16 @@ fn call_builtin(level: &mut Cod4Level, name: &str, recv: Option<EntId>, args: Ve
     });
 }
 
-/// `physicsLaunch`, `physicsExplosionSphere` and `..Cylinder` on the running level: a
+/// `physicsLaunch`, `physicsExplosionSphere`, `..Cylinder` and `physicsJitter` on the running level: a
 /// solid, damageable script model of the map launched with a contact
 /// point and a force goes out with both trajectories `TR_PHYSICS` (8),
 /// the launch time, the contact in `pos.trDelta` and the force in
 /// `apos.trDelta`, and stops clipping and taking damage; the sphere's
 /// event entity (`EV_PHYS_EXPLOSION_SPHERE`, 57) carries the outer radius
 /// as its parm and the inner radius and the magnitude in `lerp.u` words 0
-/// and 1 (cod4-gsc.md 3.2).
+/// and 1 (cod4-gsc.md 3.2); `physicsJitter`'s (60) its outer radius
+/// and its inner radius and two pushes in words 0 to 2 (cod4-world.md
+/// 13.8).
 #[test]
 fn physics_launch_and_the_explosion_sphere_go_out() {
     let mut launched = None;
@@ -857,6 +859,18 @@ fn physics_launch_and_the_explosion_sphere_go_out() {
                 Value::Float(1.5),
             ],
         );
+        call_builtin(
+            level,
+            "physicsjitter",
+            None,
+            vec![
+                Value::Vector(at.to_array()),
+                Value::Int(120),
+                Value::Int(30),
+                Value::Float(0.5),
+                Value::Float(2.0),
+            ],
+        );
         launched = Some((id, level.level_time()));
     };
     let Some(seen) = run(CALL_MS + 4000, &[], &|_, _, _| {}, &mut each) else {
@@ -907,4 +921,16 @@ fn physics_launch_and_the_explosion_sphere_go_out() {
         f32::from_bits(word(&cylinder, "lerp.u.anonymous.data[1]")),
         1.5
     );
+    let jitter = seen
+        .snaps
+        .iter()
+        .flat_map(|f| f.entities.iter())
+        .find(|e| e.etype() == 17 + 60)
+        .copied()
+        .expect("the jitter's event reaches the target");
+    assert_eq!(word(&jitter, "eventParm"), 120);
+    let words: Vec<f32> = (0..3)
+        .map(|k| f32::from_bits(word(&jitter, &format!("lerp.u.anonymous.data[{k}]"))))
+        .collect();
+    assert_eq!(words, [30.0, 0.5, 2.0]);
 }

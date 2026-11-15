@@ -791,7 +791,9 @@ fn crush(clients: &mut [Option<Client>], rt: &mut script::ScriptRuntime) {
         else {
             continue;
         };
-        if sim.seat.is_some() || sim.dead {
+        // A strike that killed him made him a corpse (`CONTENTS_CORPSE`),
+        // out of the later probes' mask (0x2000000).
+        if sim.seat.is_some() || sim.dead || rt.client_vitals(slot).health < 1 {
             continue;
         }
         let Some(push) = crate::game::vehicle::physics::player_push(

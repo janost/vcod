@@ -1038,22 +1038,29 @@ impl PsWire {
     /// `MSG_WriteDeltaPlayerstate`'s (0x813f586) choice of rows for a
     /// live snapshot (cod4-netfields.md 7; gates: `cod4::wire_ab`'s join
     /// and walk). A row goes out when it differs, except the `-87` view
-    /// angles, sent only by [`view_goes_out`], and the predicted rows
-    /// (hint 3), sent exactly when `to.origin_sent`. A hint 2 row below
-    /// the last one that goes out is written whatever it holds.
+    /// angles, which count toward the last row only by [`view_goes_out`]
+    /// (0x813fa87, unread) and then go out when they differ (0x813e268),
+    /// and the predicted rows (hint 3), sent exactly when `to.origin_sent`.
+    /// A hint 2 row below the last one that goes out is written whatever it
+    /// holds.
     pub fn natural(from: &PlayerState, to: &PlayerState) -> PsWire {
         let view = view_goes_out(from, to);
         let table = &fields::PLAYER_STATE;
         let pair = |f: &Field| (from.words[f.word()], to.words[f.word()]);
-        let wanted = |f: &Field| match (f.bits, f.hint) {
+        let differs = |f: &Field| {
+            let (a, b) = pair(f);
+            !values_equal(f.bits, a, b)
+        };
+        let counted = |f: &Field| match (f.bits, f.hint) {
             (-87, _) => view,
             (_, 3) => to.origin_sent,
-            _ => {
-                let (a, b) = pair(f);
-                !values_equal(f.bits, a, b)
-            }
+            _ => differs(f),
         };
-        let count = table.iter().rposition(wanted).map_or(0, |last| last + 1);
+        let wanted = |f: &Field| match (f.bits, f.hint) {
+            (-87, _) => view && differs(f),
+            _ => counted(f),
+        };
+        let count = table.iter().rposition(counted).map_or(0, |last| last + 1);
         let rows = table[..count]
             .iter()
             .map(|f| match pair(f) {
@@ -1512,8 +1519,9 @@ mod tests {
     }
 
     /// The playerstate rows, stats, objectives and HUD blocks a server
-    /// picks between two states. Pinned before the rewrite; `wire_ab`
-    /// checks the same choices against retail's snapshots.
+    /// picks between two states: a view row it must consider still goes
+    /// out only changed (`net_decode::a_teleport_sends_only_the_view_rows_that_changed`).
+    /// `wire_ab` checks the same choices against retail's snapshots.
     #[test]
     fn a_playerstate_delta_picks_its_rows_as_pinned() {
         let mut base = PlayerState::default();
@@ -1556,10 +1564,10 @@ mod tests {
         let expected = [
             " stats=0x0 obj=None hud=None",
             " stats=0x0 obj=None hud=None",
-            "kssskkkkkkkkkkkkkkkkkkkkkkkkkks stats=0x0 obj=None hud=None",
-            "kssskkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkks stats=0x0 obj=None hud=None",
-            "kssskkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkskkkksss stats=0x0 obj=None hud=None",
-            "kssskkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkks stats=0x0 obj=None hud=None",
+            "kskkkkkkkkkkkkkkkkkkkkkkkkkkkks stats=0x0 obj=None hud=None",
+            "kskkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkks stats=0x0 obj=None hud=None",
+            "kskkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkskkkksss stats=0x0 obj=None hud=None",
+            "kskkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkks stats=0x0 obj=None hud=None",
             "kkkksssssskkskkkkkks stats=0x0 obj=None hud=None",
             "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkskkkksss stats=0xa obj=Some(\"-,-,-,-,-,skkkkk,-,-,-,-,-,-,-,-,-,-\") hud=Some(\"|kkkkskkkkkkkkkkks,kkkks\")",
         ];

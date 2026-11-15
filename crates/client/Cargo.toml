@@ -36,3 +36,6 @@ wgpu.workspace = true
 vcod-server = { path = "../server" }
 tempfile.workspace = true
 zip.workspace = true
+
+[lints]
+workspace = true
