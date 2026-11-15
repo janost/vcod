@@ -946,9 +946,26 @@ Map commands:
 - `fast_restart` answered an empty `print\n`. VERIFIED.
 - vcod prints the block as one string before the script load
   (`restart_game_banner` in `server.rs`, with 1.5's and UO's name and date),
-  team count 0 (no stock MP map has a `team` key). Retail's reply to a fresh
-  `map` load is the engine's server and filesystem init around the same block;
-  vcod prints nothing.
+  team count 0 (no stock MP map has a `team` key).
+- `map mp_harbor` over rcon from mp_carentan, 2026-11-16 on 1.1d: one
+  2248-byte packet, `print\n` then `==== ShutdownGame ====`, `------ Server
+  Initialization ------`, `Server: mp_harbor`, `Hunk_Clear: reset the hunk
+  ok`, `----- FS_Startup -----`, `Current search path:`, each search
+  directory after its paks highest first (the homepath's `main`, then the
+  install's), every `localized_*` pak after all of them, each pak as `<path>
+  (<n> files)`; a blank line, `File Handles:`, a line of 22 dashes, `<total>
+  files in pk3 files`; three `Sys_LoadDll` lines for `game.mp.i386.so`; then
+  the `G_InitGame` block above without `RestartGame`. VERIFIED (capture).
+  The counts are the zip's entries, directories included: 12828 for the
+  stock 1.1 `pak0.pk3`, whose directory holds 6443 directory entries.
+  VERIFIED (the pak).
+- vcod prints the same lines off its own search path, a pak's count from
+  the end of central directory record (`pak_checksum::entry_count`), with no
+  `Hunk_Clear` or `Sys_LoadDll` line: it has no hunk and loads no module
+  (`spawn_server_banner` in `server.rs`;
+  `a_map_change_over_rcon_prints_the_spawn_and_the_search_path`). Against
+  the same install its search path lines matched retail's install half line
+  for line. VERIFIED (capture).
 - `quit` gets no reply: `Com_Quit_f` exits inside the redirect. VERIFIED (no
   packet).
 

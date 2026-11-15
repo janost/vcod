@@ -1479,19 +1479,61 @@ pub enum LoadFailure {
 /// module's name and date being 1.1's or 1.5b's (its startup log). The team
 /// count is `G_FindTeams` over `team` keys, which no stock map carries.
 fn restart_game_banner(p: &Protocol) -> String {
+    format!("==== RestartGame ====\n{}", game_init_banner(p))
+}
+
+/// `G_InitGame`'s lines, ahead of the scripts.
+fn game_init_banner(p: &Protocol) -> String {
     let (name, date) = match p.transport.version {
         6 => ("Call of Duty", "Nov 15 2004"),
         22 => ("CoD:United Offensive", "Feb 10 2005"),
         _ => ("main", "Nov 13 2003"),
     };
     format!(
-        "==== RestartGame ====\n\
-         ------- Game Initialization -------\n\
+        "------- Game Initialization -------\n\
          gamename: {name}\n\
          gamedate: {date}\n\
          0 teams with 0 entities\n\
          -----------------------------------\n"
     )
+}
+
+/// What a `map` load prints after the outgoing game's `==== ShutdownGame
+/// ====`: `SV_SpawnServer`'s two lines and `FS_Startup`'s search path, each
+/// directory after its paks, highest first, the `localized_*` paks last
+/// (handshake doc, "Console commands over rcon"). vcod has no hunk and
+/// loads no module, so retail's `Hunk_Clear` and `Sys_LoadDll` lines have
+/// no counterpart.
+fn spawn_server_banner(map: &str, fs: &vcod_common::pk3::Pk3Fs) -> String {
+    let paks: Vec<_> = fs.paks().collect();
+    let mut total = 0;
+    let mut line = |pak: &vcod_common::pk3::PakInfo| {
+        let n = vcod_common::pak_checksum::entry_count(&pak.path).unwrap_or(0);
+        total += n;
+        format!("{} ({n} files)\n", pak.path.display())
+    };
+    let mut out = format!(
+        "------ Server Initialization ------\nServer: {map}\n\
+         ----- FS_Startup -----\nCurrent search path:\n"
+    );
+    let in_dir = |pak: &&&vcod_common::pk3::PakInfo, dir: &std::path::Path, loc: bool| {
+        pak.localized == loc && pak.path.parent() == Some(dir)
+    };
+    for dir in fs.dirs().iter().rev() {
+        for pak in paks.iter().filter(|p| in_dir(p, dir, false)) {
+            out.push_str(&line(pak));
+        }
+        out.push_str(&format!("{}\n", dir.display()));
+    }
+    for dir in fs.dirs().iter().rev() {
+        for pak in paks.iter().filter(|p| in_dir(p, dir, true)) {
+            out.push_str(&line(pak));
+        }
+    }
+    out.push_str(&format!(
+        "\nFile Handles:\n----------------------\n{total} files in pk3 files\n"
+    ));
+    out
 }
 
 /// The CoD1 server (1.1, 1.5 and UO): the engine over [`Cod1Game`].
@@ -5261,6 +5303,9 @@ impl Server {
         // Step 5: the game module is unloaded, its object table with it, and
         // step 8's `memset(&sv, 0, ...)` takes everything the level queued.
         self.shutdown_game_log();
+        if self.game.module.script.is_some() {
+            self.print("==== ShutdownGame ====\n");
+        }
         self.game.module.script = None;
         self.game.module.pending_explosions.clear();
         self.game.module.weapon_changes.clear();
@@ -5285,6 +5330,8 @@ impl Server {
             self.game.proto,
         );
         self.core.configstrings[CS_SERVERINFO] = self.serverinfo().to_string();
+        self.print(&spawn_server_banner(map, &fs));
+        self.print(&game_init_banner(self.game.proto));
         // Step 19. Past the teardown: a failure here leaves no level.
         self.load_scripts_with(fs, false, carry, save_persist)
             .map_err(LoadFailure::Fatal)?;
@@ -13977,6 +14024,46 @@ mod tests {
             sv.tick(at);
             sv.take_outgoing();
         }
+    }
+
+    /// `map` of another map answers with the outgoing game's shutdown, the
+    /// spawn's two lines, the search path with each pak's file count and
+    /// their total, then the incoming game's banner, as retail 1.1d's did
+    /// over rcon (handshake doc, "Console commands over rcon").
+    #[test]
+    fn a_map_change_over_rcon_prints_the_spawn_and_the_search_path() {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let t = Instant::now();
+        let mut sv = Server::new(cfg(), t);
+        sv.set_cvar("rconpassword", "pw");
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        let reply = rcon(&mut sv, "pw map mp_harbor", t + Duration::from_millis(500)).concat();
+        let head = "print\n==== ShutdownGame ====\n------ Server Initialization ------\n\
+                    Server: mp_harbor\n----- FS_Startup -----\nCurrent search path:\n";
+        let rest = reply.strip_prefix(head).expect(&reply);
+        let (path, tail) = rest.split_once("\n\nFile Handles:\n").expect(&reply);
+        let counts: Vec<usize> = path
+            .lines()
+            .filter_map(|l| {
+                l.strip_suffix(" files)")?
+                    .rsplit_once(".pk3 (")?
+                    .1
+                    .parse()
+                    .ok()
+            })
+            .collect();
+        assert!(counts.len() >= 2, "{path}");
+        let total: usize = counts.iter().sum();
+        let game = "------- Game Initialization -------\ngamename: main\n\
+                    gamedate: Nov 13 2003\n0 teams with 0 entities\n\
+                    -----------------------------------\n";
+        assert_eq!(
+            tail,
+            format!("----------------------\n{total} files in pk3 files\n{game}")
+        );
     }
 
     /// `SV_CalcPings`: the round trip each acked message took, on the
