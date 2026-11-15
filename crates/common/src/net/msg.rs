@@ -580,14 +580,14 @@ pub fn write_delta_playerstate(
         .map_or(0, |i| i + 1);
     debug_assert!(lc <= 255);
     w.write_byte(lc as u8);
-    for i in 0..lc {
+    for (i, field) in p.player_fields.iter().enumerate().take(lc) {
         let v = wire(to, i);
         if wire(from, i) == v {
             w.write_bits(0, 1);
             continue;
         }
         w.write_bits(1, 1);
-        write_ps_value(w, v, p.player_fields[i].bits);
+        write_ps_value(w, v, field.bits);
     }
     write_ps_arrays(w, p, &from.arrays, &to.arrays);
 }
