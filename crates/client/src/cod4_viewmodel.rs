@@ -1,9 +1,10 @@
 //! The CoD4 view weapon, renderer-free: the hands and gun the drawn
-//! playerstate holds, their clips picked off `weapAnim` as the 1.7 cgame's
-//! `WeaponRunXModelAnims` picks them, the sight layer off
-//! `fWeaponPosFrac`, and the gun's place off the view (lean, the move
-//! offsets, idle drift, bob and sway) as `CG_AddViewWeapon` computes it.
-//! docs/research/cod4-client-view.md 4.
+//! playerstate holds, their tree's goal weights set off `weapAnim` and
+//! `fWeaponPosFrac` as the 1.7 cgame's `WeaponRunXModelAnims` sets them,
+//! the tree sampled and the skeleton composed as `iw3mp.exe` does
+//! (cod4-player-anims.md 12), and the gun's place off the view (lean, the
+//! move offsets, idle drift, bob and sway) as `CG_AddViewWeapon` computes
+//! it. docs/research/cod4-client-view.md 4.
 //!
 //! [`ViewDef`] is what a zone gives a weapon (built at load, the zones
 //! dropped after); [`Cod4View`] holds the rigs and the state the frames
@@ -17,7 +18,10 @@
 use glam::{Quat, Vec3};
 use std::collections::HashMap;
 use std::sync::Arc;
+use vcod_cod4::xanimcalc::Parts;
+use vcod_cod4::xanimtree::{Clock, FlatTree};
 use vcod_common::model::Model;
+use vcod_common::playerpose::Cod4Arith;
 use vcod_common::{skeleton, xanim::XAnim};
 
 use crate::cod2_viewmodel::ViewFrame;
@@ -47,8 +51,10 @@ const WEAPON_NV_WEAR: u32 = 25;
 const WEAPON_NV_REMOVE: u32 = 26;
 /// `weapAnim`'s restart toggle.
 const ANIM_TOGGLEBIT: u32 = 0x200;
-/// The view tree's nodes: the main clips 1..=30, the sight's two.
+/// The view tree's nodes under its root (0): the main clips 1..=30, the
+/// sight's two (`CG_CreateWeaponViewModelXAnim`, iw3mp.exe 0x4541d0).
 const NODES: usize = 33;
+const MAIN: std::ops::RangeInclusive<usize> = 1..=30;
 const IDLE: usize = 1;
 const EMPTY_IDLE: usize = 2;
 const ADS_UP: usize = 31;
@@ -330,6 +336,11 @@ pub struct ViewDef {
     /// Node `n`'s clip; an empty view anim plays idle's
     /// (`CG_CreateWeaponViewModelXAnim`). `None` where no zone holds it.
     pub anims: Vec<Option<Arc<XAnim>>>,
+    /// The same clips as 1.7's sampler reads them.
+    pub parts: Vec<Option<Arc<Parts>>>,
+    /// The weapon names an ADS down anim (`WeaponDef` +0xd0), which a
+    /// weapon with no sight still holds at its end.
+    pub ads_down: bool,
     pub clip_name: String,
     pub numbers: ViewNumbers,
     /// `notetrackSoundMap` (`WeaponDef` +232 keys, +264 values, 16 script
@@ -358,7 +369,9 @@ struct Rig {
     models: ViewModels,
     skeleton: skeleton::Skeleton,
     clips: Vec<Option<(Arc<XAnim>, skeleton::AnimBinding)>>,
-    rates: Vec<f32>,
+    /// Each node's clip bone to the skeleton's.
+    remaps: Vec<Option<Vec<Option<usize>>>>,
+    bind: skeleton::PoseBuffer,
     def: Arc<ViewDef>,
 }
 
@@ -381,21 +394,15 @@ impl Rig {
             .iter()
             .map(|c| c.clone().map(|c| (c.clone(), skeleton.bind(&c))))
             .collect();
-        // The anim rate: the clip's length over its time, 0 for a
-        // time of 0, 1 for a node with no time (before the perks,
-        // [`perk_divisor`]).
-        let rates = (0..NODES)
-            .map(|n| {
-                match (
-                    def.numbers.anim_ms.get(n).copied().flatten(),
-                    clips.get(n).and_then(|c| c.as_ref()),
-                ) {
-                    (Some(0), _) => 0.0,
-                    (Some(ms), Some((c, _))) => c.duration() * 1000.0 / ms as f32,
-                    _ => 1.0,
-                }
+        let remaps = def
+            .parts
+            .iter()
+            .map(|p| {
+                let p = p.as_ref()?;
+                Some(p.bones.iter().map(|n| skeleton.bone_index(n)).collect())
             })
             .collect();
+        let bind = skeleton::PoseBuffer::drawn(&skeleton);
         Rig {
             models: parts
                 .iter()
@@ -404,7 +411,8 @@ impl Rig {
                 .into(),
             skeleton,
             clips,
-            rates,
+            remaps,
+            bind,
             def,
         }
     }
@@ -413,10 +421,61 @@ impl Rig {
         self.clips.get(n)?.as_ref()
     }
 
-    /// `XAnimHasFinished`: a looping clip never does.
-    fn finished(&self, n: usize, t: f32) -> bool {
-        self.clip(n)
-            .is_none_or(|(c, _)| !c.looping && t >= c.duration())
+    /// The locals `DObjCalcAnim` (iw3mp.exe 0x5875f0) leaves off `tree`,
+    /// composed (`DObjCalcSkel`) into the bones' places and turns, all in
+    /// the client's arithmetic. A bone no leaf reaches keeps its bind
+    /// local.
+    fn worlds(&self, tree: &FlatTree) -> Vec<(Vec3, Quat)> {
+        let root = tree.tree(|n| {
+            let parts = self.def.parts.get(n)?.as_deref()?;
+            let remap = self.remaps.get(n)?.as_deref()?;
+            Some((parts, remap))
+        });
+        let (mats, reached) =
+            vcod_cod4::xanimcalc::calc(&root, self.skeleton.bones().len(), Cod4Arith::Client);
+        let sampled: Vec<_> = mats
+            .into_iter()
+            .zip(reached)
+            .map(|(m, r)| r.then_some(m))
+            .collect();
+        vcod_cod4::skel::worlds_of(&vcod_cod4::skel::player_mats_sampled(
+            &self.skeleton,
+            &self.bind,
+            &sampled,
+            None,
+            Cod4Arith::Client,
+        ))
+    }
+}
+
+impl ViewDef {
+    /// Node `n`'s rate before the perks (`iw3mp.exe` 0x4539d0): the clip's
+    /// length in whole ms over its `g_animRateOffsets` time, 0 for a time of
+    /// 0, 1 for a node with no time.
+    fn rate(&self, n: usize) -> f32 {
+        match self.numbers.anim_ms.get(n).copied().flatten() {
+            None => 1.0,
+            Some(0) => 0.0,
+            Some(ms) => {
+                let Some(p) = self.parts.get(n).and_then(|p| p.as_ref()) else {
+                    return 1.0;
+                };
+                let length = (f64::from(p.num_frames) / f64::from(p.framerate)) as f32;
+                let clip_ms = (f64::from(length) * 1000.0) as i32;
+                (f64::from(clip_ms) / f64::from(ms)) as f32
+            }
+        }
+    }
+
+    /// Node `n`'s clock for the tree's step.
+    fn clock(&self, n: usize) -> Clock {
+        self.parts.get(n).and_then(|p| p.as_deref()).map_or(
+            Clock {
+                frequency: 0.0,
+                looped: false,
+            },
+            Clock::of,
+        )
     }
 }
 
@@ -458,18 +517,15 @@ pub fn anim_node(weap_anim: u32) -> Option<usize> {
     })
 }
 
-/// The main node and its clock as `WeaponRunXModelAnims` moves them.
+/// The main node last started and its clock, for the replay gate.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ViewAnim {
     pub node: usize,
-    /// Seconds into the node's clip (rate applied).
+    /// Seconds into the node's clip, its loops included.
     pub t: f32,
-    /// The last anim: the `weapAnim` last acted on, `None` (-1) while a 0
-    /// waits for the running clip.
-    prev: Option<u32>,
-    /// How many times a node started, for the replay gate.
+    /// How many times a node started.
     pub starts: usize,
-    /// What the node's rate is divided by, fixed when it started
+    /// What the node's rate was divided by when it started
     /// ([`perk_divisor`]).
     pub divisor: f32,
 }
@@ -479,7 +535,6 @@ impl Default for ViewAnim {
         ViewAnim {
             node: IDLE,
             t: 0.0,
-            prev: None,
             starts: 0,
             divisor: 1.0,
         }
@@ -508,41 +563,132 @@ fn perk_divisor(ps: &ViewPs) -> f32 {
     }
 }
 
-impl ViewAnim {
-    fn start(&mut self, node: usize, ps: &ViewPs) {
-        *self = ViewAnim {
+/// One weapon's view tree as the cgame keeps it in the weapon's info
+/// (`iw3mp.exe` 0x748658): its leaves' clocks and weights, the `weapAnim`
+/// last acted on (info +0x28, `None` for the -1 a wait leaves), the main
+/// node last started.
+struct ViewTree {
+    def: Arc<ViewDef>,
+    tree: FlatTree,
+    prev: Option<u32>,
+    anim: ViewAnim,
+}
+
+impl ViewTree {
+    /// `CG_RegisterWeapon`'s tree (0x4543ce..0x454498): idle at weight 1
+    /// and rate 1, ADS down at weight 1 held at its end when the weapon
+    /// names one; `prev` zeroed with the info.
+    fn new(def: Arc<ViewDef>) -> ViewTree {
+        let mut tree = FlatTree::default();
+        tree.set_goal_weight(IDLE, 1.0, 0.0, 1.0, false);
+        if def.ads_down {
+            tree.set_goal_weight(ADS_DOWN, 1.0, 0.0, 0.0, false);
+            tree.set_time(ADS_DOWN, 1.0);
+        }
+        ViewTree {
+            def,
+            tree,
+            prev: Some(0),
+            anim: ViewAnim::default(),
+        }
+    }
+
+    /// The view node start (0x453a40): `node` toward weight 1 over
+    /// `crossfade` seconds at its rate over the perks', restarted; every
+    /// other main node toward 0 at rate 1.
+    fn start(&mut self, node: usize, crossfade: f32, ps: &ViewPs) {
+        let divisor = perk_divisor(ps);
+        let mut rate = self.def.rate(node);
+        if divisor != 1.0 {
+            rate = (f64::from(rate) / f64::from(divisor)) as f32;
+        }
+        for n in MAIN {
+            match n == node {
+                true => self.tree.set_goal_weight(n, 1.0, crossfade, rate, true),
+                false => self.tree.set_goal_weight(n, 0.0, crossfade, 1.0, false),
+            }
+        }
+        self.anim = ViewAnim {
             node,
             t: 0.0,
-            prev: Some(ps.weap_anim),
-            starts: self.starts + 1,
-            divisor: perk_divisor(ps),
+            starts: self.anim.starts + 1,
+            divisor,
         };
     }
 
-    /// Steps `dt` seconds under `ps.weapAnim`; a changed value starts its
-    /// node, a 0 or 1 waits for the running clip (a 1 cuts it) and then
-    /// plays idle, or empty idle with the clip empty. Returns the node's
-    /// time before the step (0 for a node it started).
-    fn step(&mut self, rig: &Rig, ps: &ViewPs, clip_empty: bool, dt: f32) -> f32 {
-        let weap_anim = ps.weap_anim;
-        if self.prev != Some(weap_anim) {
-            match anim_node(weap_anim) {
-                Some(n) => self.start(n, ps),
-                None => {
-                    let running =
-                        (1..ADS_UP).contains(&self.node) && !rig.finished(self.node, self.t);
-                    if running && weap_anim & 1 == 0 {
+    /// `PlayADSAnim` (0x453b30): ADS up (`up`) or down toward weight 1 over
+    /// 0.1 s and the other toward 0, neither running on its own; up held at
+    /// `frac`, down at `1 - frac`.
+    fn play_ads(&mut self, frac: f32, up: bool) {
+        let w = |on: bool| if on { 1.0 } else { 0.0 };
+        self.tree.set_goal_weight(ADS_UP, w(up), 0.1, 0.0, false);
+        self.tree.set_goal_weight(ADS_DOWN, w(!up), 0.1, 0.0, false);
+        self.tree.set_time(ADS_UP, frac);
+        self.tree.set_time(ADS_DOWN, (1.0 - f64::from(frac)) as f32);
+    }
+
+    /// `WeaponRunXModelAnims` (0x453c70) for `weapon`, `last` the weapon it
+    /// last ran for (0x79e6b0): the sight's weights, then, once `weapAnim`
+    /// or the weapon changed, the node its switch names. A 0 or 1 waits
+    /// while any main node has not finished, a 1 cutting in over 0.5 s, then
+    /// starts idle, or empty idle with the clip at 0. Returns whether it
+    /// acted (and `last` moves).
+    fn run(&mut self, ps: &ViewPs, clip_empty: bool, weapon: u32, last: Option<u32>) -> bool {
+        let n = &self.def.numbers;
+        if n.aim_down_sight {
+            let reloading = ps.weaponstate == WEAPON_RELOADING
+                && ps.weapon_time - n.position_reload_trans_time > 0;
+            let up = !reloading && ps.pm_flags & PMF_SIGHT != 0 && ps.weap_flags & WF_OFFHAND == 0;
+            self.play_ads(ps.pos_frac, up);
+        } else if self.def.ads_down {
+            self.play_ads(0.0, false);
+        }
+        if self.prev == Some(ps.weap_anim) && last == Some(weapon) {
+            return false;
+        }
+        match anim_node(ps.weap_anim) {
+            Some(node) => self.start(node, 0.0, ps),
+            None => {
+                let mut crossfade = 0.0;
+                for node in MAIN {
+                    if !self.tree.finished(node) {
                         self.prev = None;
-                    } else {
-                        self.start(if clip_empty { EMPTY_IDLE } else { IDLE }, ps);
+                        if ps.weap_anim & 1 == 0 {
+                            return false;
+                        }
+                        crossfade = 0.5;
                     }
                 }
+                self.start(if clip_empty { EMPTY_IDLE } else { IDLE }, crossfade, ps);
             }
         }
-        let from = self.t;
-        let rate = rig.rates.get(self.node).copied().unwrap_or(1.0);
-        self.t += dt * (rate / self.divisor);
-        from
+        self.prev = Some(ps.weap_anim);
+        true
+    }
+
+    /// The frame's step (0x583bf0, `dt` the frame's ms times the float
+    /// 0.001): the main node's seconds before and after it.
+    fn step(&mut self, frame_ms: i32) -> (f32, f32) {
+        let dt = (f64::from(frame_ms) * f64::from(0.001f32)) as f32;
+        let def = self.def.clone();
+        let seconds = |tree: &FlatTree, node: usize, old: bool| {
+            let (Some(s), Some(c)) = (
+                tree.state(node),
+                def.anims.get(node).and_then(|c| c.as_ref()),
+            ) else {
+                return 0.0;
+            };
+            let (cycle, time) = match old {
+                true => (s.old_cycle, s.old_time),
+                false => (s.cycle, s.time),
+            };
+            (f32::from(cycle) + time) * c.duration()
+        };
+        self.tree.update(dt, |n| def.clock(n));
+        let node = self.anim.node;
+        let to = seconds(&self.tree, node, false);
+        self.anim.t = to;
+        (seconds(&self.tree, node, true), to)
     }
 }
 
@@ -568,32 +714,6 @@ pub(crate) fn notes_crossed(clip: &XAnim, from: f32, to: f32) -> Vec<&str> {
         }
     }
     out
-}
-
-/// The sight layer's weights, ADS up and ADS down, as `PlayADSAnim` sets
-/// their goals (1 for the wanted one, 0 for the other) over 0.1 s each
-/// frame. Registering starts ADS down at 1 (`CG_RegisterWeapon`).
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct AdsBlend([f32; 2]);
-
-impl Default for AdsBlend {
-    fn default() -> Self {
-        AdsBlend([0.0, 1.0])
-    }
-}
-
-impl AdsBlend {
-    fn step(&mut self, up: bool, dt: f32) {
-        let goals = if up { [1.0, 0.0] } else { [0.0, 1.0] };
-        for (w, g) in self.0.iter_mut().zip(goals) {
-            let step = dt / 0.1;
-            *w = if *w < g {
-                (*w + step).min(g)
-            } else {
-                (*w - step).max(g)
-            };
-        }
-    }
 }
 
 /// The gun's place off the view as the frames carry it: the eased move
@@ -986,7 +1106,11 @@ pub struct Cod4ViewFrame {
 #[derive(Default)]
 pub struct Cod4View {
     rigs: HashMap<RigKey, Option<Arc<Rig>>>,
-    current: Option<(RigKey, skeleton::PoseBuffer, ViewAnim, AdsBlend)>,
+    current: Option<RigKey>,
+    /// Each weapon's tree by its index, kept while another is out.
+    trees: HashMap<u32, ViewTree>,
+    /// The weapon `WeaponRunXModelAnims` last acted for (0x79e6b0).
+    last_weapon: Option<u32>,
     gun: GunState,
     last_ms: Option<i32>,
     /// The weapon list the clip slots were built for, and the slots.
@@ -1000,14 +1124,16 @@ impl Cod4View {
     /// The drawn main node and its clock, for the replay gate.
     #[cfg(test)]
     pub fn anim(&self) -> Option<(&str, ViewAnim)> {
-        self.current
-            .as_ref()
-            .map(|(k, _, a, _)| (k.weapon.as_str(), *a))
+        let k = self.current.as_ref()?;
+        let w = self.last_weapon?;
+        Some((k.weapon.as_str(), self.trees.get(&w)?.anim))
     }
 
-    /// Drops the drawn rig (a free spectator, a new map).
+    /// Drops the drawn rig and the trees (a free spectator, a new map).
     pub fn clear(&mut self) {
         self.current = None;
+        self.trees.clear();
+        self.last_weapon = None;
     }
 
     fn rig(
@@ -1077,22 +1203,10 @@ impl Cod4View {
             sounds: Vec::new(),
             gun_dir: None,
         };
-        if !ps.draws_gun() || ps.pm_type >= PM_DEAD {
+        let dead = ps.pm_type >= PM_DEAD;
+        if !ps.draws_gun() || dead {
             self.current = None;
-            return out;
         }
-        let (Some(name), Some(def)) = (name, def) else {
-            self.current = None;
-            return out;
-        };
-        // `CG_UpdateHandViewmodels`: the playerstate's hands over the file's.
-        let hands = match hands_cs.filter(|h| models.contains_key(*h)) {
-            Some(h) => h.to_string(),
-            None => match &def.hands {
-                Some(h) => h.clone(),
-                None => return out,
-            },
-        };
         if self.clip_slots.0 != list {
             let defs = list
                 .iter()
@@ -1110,12 +1224,46 @@ impl Cod4View {
                 .collect();
             let slots = vcod_cod4::hud::ammo_slots(list, &defs);
             self.clip_slots = (list.to_vec(), slots.iter().map(|s| s.1).collect());
+            self.trees.clear();
+            self.last_weapon = None;
         }
         let clip = |w: u32| {
             let s = self.clip_slots.1.get((w as usize).checked_sub(1)?)?;
             ps.ammoclip.get(*s).copied()
         };
-        let clip_empty = clip(ps.view_weapon()) == Some(0);
+        // From `PM_DEAD` on every weapon's tree goes back to idle
+        // (0x454100), none stepping (0x456f69).
+        if dead {
+            for (w, t) in &mut self.trees {
+                t.start(
+                    if clip(*w) == Some(0) {
+                        EMPTY_IDLE
+                    } else {
+                        IDLE
+                    },
+                    0.0,
+                    ps,
+                );
+            }
+            return out;
+        }
+        if !ps.draws_gun() {
+            return out;
+        }
+        let (Some(name), Some(def)) = (name, def) else {
+            self.current = None;
+            return out;
+        };
+        // `CG_UpdateHandViewmodels`: the playerstate's hands over the file's.
+        let hands = match hands_cs.filter(|h| models.contains_key(*h)) {
+            Some(h) => h.to_string(),
+            None => match &def.hands {
+                Some(h) => h.clone(),
+                None => return out,
+            },
+        };
+        let weapon = ps.view_weapon();
+        let clip_empty = clip(weapon) == Some(0);
         let key = RigKey {
             weapon: name.to_string(),
             hands,
@@ -1129,27 +1277,23 @@ impl Cod4View {
             return out;
         };
         let mut new_models = None;
-        if self.current.as_ref().is_none_or(|(k, ..)| *k != key) {
-            let mut p = skeleton::PoseBuffer::new(&rig.skeleton);
-            let (c, b) = rig.clip(IDLE).expect("a rig holds idle");
-            p.apply(c, b, 0.0);
-            // A camo, the rocket or the knife coming or going keeps the
-            // running clip and sight (the DObj keeps its tree, 0x4547ae).
-            let (anim, ads) = match self.current.take() {
-                Some((k, _, anim, ads)) if (&k.weapon, &k.hands) == (&key.weapon, &key.hands) => {
-                    (anim, ads)
-                }
-                _ => (ViewAnim::default(), AdsBlend::default()),
-            };
-            self.current = Some((key, p, anim, ads));
+        // A camo, the rocket or the knife coming or going rebuilds the
+        // DObj over the same tree (0x4547ae).
+        if self.current.as_ref() != Some(&key) {
+            self.current = Some(key);
             new_models = Some(rig.models.clone());
         }
         let n = &rig.def.numbers;
-        let dt = frame_ms as f32 / 1000.0;
-        let (_, pose, anim, ads) = self.current.as_mut().expect("set above");
-        let from = anim.step(&rig, ps, clip_empty, dt);
-        if let Some((c, _)) = rig.clip(anim.node) {
-            for note in notes_crossed(c, from, anim.t) {
+        let tree = self
+            .trees
+            .entry(weapon)
+            .or_insert_with(|| ViewTree::new(rig.def.clone()));
+        if tree.run(ps, clip_empty, weapon, self.last_weapon) {
+            self.last_weapon = Some(weapon);
+        }
+        let (from, to) = tree.step(frame_ms);
+        if let Some((c, _)) = rig.clip(tree.anim.node) {
+            for note in notes_crossed(c, from, to) {
                 out.sounds.extend(
                     (rig.def.note_sounds.iter())
                         .filter(|(k, _)| k.eq_ignore_ascii_case(note))
@@ -1157,40 +1301,8 @@ impl Cod4View {
                 );
             }
         }
-        // `WeaponRunXModelAnims`' sight: up while `pm_flags` 8 and the off
-        // hand is not out, unless a reload's time is still past
-        // `adsReloadTransTime`.
+        let worlds = rig.worlds(&tree.tree);
         let frac = ps.pos_frac.clamp(0.0, 1.0);
-        let layer = if n.aim_down_sight {
-            let reloading = ps.weaponstate == WEAPON_RELOADING
-                && ps.weapon_time - n.position_reload_trans_time > 0;
-            let up = !reloading && ps.pm_flags & PMF_SIGHT != 0 && ps.weap_flags & WF_OFFHAND == 0;
-            ads.step(up, dt);
-            Some((frac, ads.0))
-        } else {
-            rig.clip(ADS_DOWN).map(|_| (0.0, [0.0, 1.0]))
-        };
-        if let Some((frac, w)) = layer {
-            let layers: Vec<skeleton::ClipAt> = [(ADS_UP, frac), (ADS_DOWN, 1.0 - frac)]
-                .into_iter()
-                .zip(w)
-                .filter(|&(_, w)| w > 0.0)
-                .filter_map(|((node, t), w)| {
-                    let (c, b) = rig.clip(node)?;
-                    Some((&**c, b, f64::from(c.frame_pos(t * c.duration(), false)), w))
-                })
-                .collect();
-            match layers.as_slice() {
-                [] => {}
-                [(c, b, t, _)] => pose.apply(c, b, *t as f32),
-                _ => pose.blend(&layers),
-            }
-        }
-        let (c, b) = rig
-            .clip(anim.node)
-            .or_else(|| rig.clip(IDLE))
-            .expect("a rig holds idle");
-        pose.apply(c, b, c.frame_pos(anim.t, c.looping));
         // `CG_AddViewWeapon` (`iw3mp.exe` 0x457010): no gun while the
         // sight's overlay is in (`CG_GetWeapReticleZoom`, 0x430120, called
         // at 0x45707b before the lerp's direction updates); the pose, the
@@ -1213,7 +1325,7 @@ impl Cod4View {
             crate::play::view::gun_transform(crate::play::view::view_from_ful(offset), angles);
         let tag = |name: &str| {
             let b = rig.skeleton.bone_index(name)?;
-            let (p, q) = pose.bone_world(&rig.skeleton, b);
+            let (p, q) = *worlds.get(b)?;
             let (_, turn, _) = transform.to_scale_rotation_translation();
             Some((transform.transform_point3(p), turn * q))
         };
@@ -1229,7 +1341,7 @@ impl Cod4View {
         }
         let pending = self.pending_models.take();
         let bone_sets = (0..rig.models.len())
-            .map(|m| pose.skin_matrices(&rig.skeleton, m))
+            .map(|m| rig.skeleton.skin_matrices(&worlds, m))
             .collect();
         out.frame = Some(ViewFrame {
             models: new_models.or(pending),
@@ -1505,6 +1617,79 @@ mod tests {
         assert!(!mp5.iter().any(|m| m.contains("acog")), "{mp5:?}");
     }
 
+    /// The M16's tree as the cgame steps it (cod4-player-anims.md 12): at
+    /// the hip idle and ADS down both at weight 1, ADS down held at its end,
+    /// and the drawn bones the walk over both; the sight going up eases
+    /// ADS up in over 0.1 s as ADS down eases out, each held at the sight's
+    /// fraction. Vacuous without `COD4_DIR`.
+    #[test]
+    fn the_m16s_tree_blends_its_main_clip_and_its_sight() {
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let list: Vec<String> = vec!["m16_mp".into()];
+        let ents = crate::cod4_fly::EntityAssets {
+            models: Vec::new(),
+            weapons: list.clone(),
+        };
+        let (models, weapons, _) =
+            crate::cod4_fly::load_bodies(install.root(), "mp_crash", &ents).unwrap();
+        let mut view = Cod4View::default();
+        let mut ps = ViewPs {
+            pm_type: 0,
+            weapon: 1,
+            ammoclip: [30; 128],
+            ..Default::default()
+        };
+        let f = view.frame(&ps, &list, None, &weapons, &models, 0);
+        let rig = view.rigs[view.current.as_ref().unwrap()].clone().unwrap();
+        let tree = &view.trees[&1].tree;
+        let w = |tree: &FlatTree, n: usize| tree.state(n).map(|s| (s.weight, s.time));
+        assert_eq!(w(tree, IDLE).map(|s| s.0), Some(1.0));
+        assert_eq!(w(tree, ADS_DOWN), Some((1.0, 1.0)));
+        assert_eq!(w(tree, ADS_UP), None);
+        let both = rig.worlds(tree);
+        let bones = f.frame.unwrap().draw.bone_sets;
+        assert_eq!(bones[0], rig.skeleton.skin_matrices(&both, 0));
+        // The sight's clips key `tag_ads` alone, which no main clip keys, so
+        // the root's divide leaves each bone its own clip's: at the hip ADS
+        // down's end holds `tag_ads` at rest, up its end carries the rig
+        // about 5 units.
+        let def = &rig.def;
+        let keys = |n: usize| &def.parts[n].as_ref().unwrap().bones;
+        assert_eq!(keys(ADS_UP), &["tag_ads"]);
+        assert_eq!(keys(ADS_DOWN), &["tag_ads"]);
+        assert!(!keys(IDLE).iter().any(|b| b == "tag_ads"));
+        let off = |a: &[(Vec3, Quat)], b: &[(Vec3, Quat)]| {
+            a.iter()
+                .zip(b)
+                .map(|(a, b)| a.0.distance(b.0))
+                .fold(0.0f32, f32::max)
+        };
+        let mut idle = tree.clone();
+        idle.set_goal_weight(ADS_DOWN, 0.0, 0.0, 0.0, false);
+        let alone = rig.worlds(&idle);
+        assert!(off(&both, &alone) < 1e-6, "{}", off(&both, &alone));
+        let mut up = idle.clone();
+        up.set_goal_weight(ADS_UP, 1.0, 0.0, 0.0, false);
+        up.set_time(ADS_UP, 1.0);
+        let raised = off(&rig.worlds(&up), &alone);
+        assert!((4.9..5.0).contains(&raised), "{raised}");
+        ps.pm_flags = PMF_SIGHT;
+        ps.pos_frac = 0.25;
+        view.frame(&ps, &list, None, &weapons, &models, 50);
+        let tree = &view.trees[&1].tree;
+        let (up, t) = w(tree, ADS_UP).unwrap();
+        assert!((up - 0.5005).abs() < 1e-6, "{up}");
+        assert_eq!(t, 0.25);
+        assert_eq!(w(tree, ADS_DOWN), Some((0.5, 0.75)));
+        ps.pos_frac = 1.0;
+        view.frame(&ps, &list, None, &weapons, &models, 150);
+        let tree = &view.trees[&1].tree;
+        assert_eq!(w(tree, ADS_UP), Some((1.0, 1.0)));
+        assert_eq!(w(tree, ADS_DOWN), None);
+    }
+
     /// The RPG draws `viewmodel_rpg7_rocket` at the gun's `tag_clip` with
     /// a round in its clip, none once fired, and again a reload's
     /// `reloadShowRocketTime` (100 ms) in. Vacuous without `COD4_DIR`.
@@ -1662,10 +1847,15 @@ mod tests {
         assert_eq!(drawn(&mut view, &ps, 100), None, "the same rig");
         ps.weap_anim = 0;
         assert_eq!(drawn(&mut view, &ps, 150), Some(2), "the knife goes");
-        // The swing's clip keeps running until it ends.
+        // The swing's clip keeps running until it ends: a step past its end
+        // holds it just short of 1, the next at 1, and the frame after
+        // that reads it finished and plays idle (the switch runs before
+        // the step, 0x456fd2).
         assert_eq!(view.anim().unwrap().1.node, 7);
         assert_eq!(drawn(&mut view, &ps, 1000), None);
         assert_eq!(drawn(&mut view, &ps, 1016), None);
+        assert_eq!(view.anim().unwrap().1.node, 7);
+        assert_eq!(drawn(&mut view, &ps, 1032), None);
         assert_eq!(view.anim().unwrap().1.node, IDLE);
     }
 

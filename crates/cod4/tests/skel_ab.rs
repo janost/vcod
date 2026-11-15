@@ -105,7 +105,7 @@ const PLAYER_DUMP: &str = include_str!("fixtures/skel/player-mp_crash-gdb.txt");
 /// A player body's control bones as 1.7 composed them: each one the dump
 /// shows its controller set rebuilt off retail's own bone 0, parent and
 /// angles through [`compose_controlled`], word for word; `iw3mp.exe`'s
-/// arithmetic off the same inputs within a millionth.
+/// arithmetic off the same inputs within 1e-7.
 #[test]
 fn a_players_control_bones_match_retails_word_for_word() {
     use vcod_common::playerpose::Cod4Arith;
@@ -117,6 +117,7 @@ fn a_players_control_bones_match_retails_word_for_word() {
     let mut off = Vec::new();
     let (mut calcs, mut checked) = (0, 0);
     let mut client_off = 0.0f32;
+    let mut client_words = 0;
     let mut lines = PLAYER_DUMP
         .lines()
         .filter(|l| !l.starts_with('#'))
@@ -162,7 +163,8 @@ fn a_players_control_bones_match_retails_word_for_word() {
                 .unwrap_or_else(|| panic!("bone {b}'s parent {p} not dumped"));
             let m = compose_controlled(&mats[&0], parent, &local, skel.trans[b - skel.roots]);
             checked += 1;
-            // `iw3mp.exe`'s arm, every result a float, off the same inputs.
+            // `iw3mp.exe`'s arm at double precision with its own stores, off
+            // the same inputs.
             let client = compose_controlled_in(
                 &mats[&0],
                 parent,
@@ -175,6 +177,8 @@ fn a_players_control_bones_match_retails_word_for_word() {
             );
             let q = (0..4).map(|k| (client.quat[k] - m.quat[k]).abs());
             let t = (0..3).map(|k| (client.trans[k] - m.trans[k]).abs());
+            client_words += (0..4).filter(|&k| client.quat[k] != m.quat[k]).count()
+                + (0..3).filter(|&k| client.trans[k] != m.trans[k]).count();
             client_off = q.chain(t).fold(client_off, f32::max);
             if m != mats[&b] {
                 off.push(format!(
@@ -185,7 +189,8 @@ fn a_players_control_bones_match_retails_word_for_word() {
         }
     }
     assert_eq!((calcs, checked), (200, 804));
-    assert!(client_off < 1e-6, "the client's arm off by {client_off}");
+    println!("the client's arm off by {client_off:e}, {client_words} words");
+    assert!(client_off < 1e-7, "the client's arm off by {client_off}");
     assert!(
         off.is_empty(),
         "{} of {checked} off:\n{}",
