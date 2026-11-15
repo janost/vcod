@@ -1216,8 +1216,10 @@ impl Cod4Client {
     fn sound_and_fx(&mut self, cx: &mut Cod2Frame, fired: &[Fired], now_ms: i32) {
         // Out of the session while its gamestate is read.
         let mut dynents = self.session.dynents.take();
-        self.sound_and_fx_with(cx, fired, now_ms, &mut dynents);
+        let mut physics = std::mem::take(&mut self.session.physics);
+        self.sound_and_fx_with(cx, fired, now_ms, &mut dynents, &mut physics);
         self.session.dynents = dynents;
+        self.session.physics = physics;
     }
 
     fn sound_and_fx_with(
@@ -1226,6 +1228,7 @@ impl Cod4Client {
         fired: &[Fired],
         now_ms: i32,
         dynents: &mut Option<vcod_cod4::dynent::DynEnts>,
+        physics: &mut crate::play::cod4_physics::Cod4Physics,
     ) {
         let tags = self.weapon_tags();
         let Some(gs) = self.session.gamestate() else {
@@ -1294,11 +1297,16 @@ impl Cod4Client {
                 .collect(),
             _ => Vec::new(),
         };
-        // The blasts and the rounds on the map's dynamic entities.
+        // The blasts, swings, jitters and the rounds' legs on the map's
+        // dynamic entities.
         if let (Some(d), Some(w)) = (dynents.as_mut(), self.session.world()) {
             let rounds: Vec<_> = hits
                 .iter()
-                .map(|h| h.iter().map(|h| (h.start, h.end)).collect())
+                .map(|h| {
+                    h.iter()
+                        .flat_map(|h| h.dyn_legs.into_iter().flatten())
+                        .collect()
+                })
                 .collect();
             done = crate::play::cod4_dynents::on_fired(
                 d,
@@ -1306,8 +1314,27 @@ impl Cod4Client {
                 fired,
                 &weapons,
                 &rounds,
+                own.as_ref(),
                 self.render_time,
             );
+        }
+        // A round's first contact on a flying launched part pushes it, and
+        // plays the impact there once more (0x48df10's 0x48dd00).
+        let bullet_force = dynents
+            .as_ref()
+            .filter(|d| d.dvars.active)
+            .map(|d| d.dvars.bullet_force);
+        let mut parts_struck = Vec::new();
+        for (i, hit) in hits.iter().enumerate() {
+            for h in hit {
+                let (Some(n), Some(force)) = (h.entity, bullet_force) else {
+                    continue;
+                };
+                let dir = (h.end - h.start).normalize_or_zero();
+                if physics.shoot(n, h.end, dir, force) {
+                    parts_struck.push((i, *h));
+                }
+            }
         }
         // A struck one's impact plays as the world's would there.
         let dyn_hits: Vec<(usize, cod4_fx::BulletHit)> = done
@@ -1324,9 +1351,22 @@ impl Cod4Client {
                     own: false,
                     body: None,
                     pierced: [None; cod4_fx::PIERCE_MAX],
+                    entity: None,
+                    dyn_legs: [None; cod4_fx::DYN_LEGS],
                 };
                 (*i, hit)
             })
+            .chain(parts_struck.into_iter().map(|(i, h)| {
+                let hit = cod4_fx::BulletHit {
+                    start: h.end,
+                    muzzle: h.end,
+                    pierced: [None; cod4_fx::PIERCE_MAX],
+                    dyn_legs: [None; cod4_fx::DYN_LEGS],
+                    own: false,
+                    ..h
+                };
+                (i, hit)
+            }))
             .collect();
         if let Some(s) = &mut self.sounds {
             let eye = self.view.map(|(eye, _)| eye);
@@ -1334,6 +1374,9 @@ impl Cod4Client {
                 for c in s.bullet_cues(&fired[*i], &weapons, hit, eye) {
                     cx.audio.play(cx.fs, c);
                 }
+            }
+            for &at in &done.swung {
+                cx.audio.play(cx.fs, cod4_audio::swing_cue(at));
             }
             for (f, hit) in fired.iter().zip(&hits) {
                 for c in hit.iter().flat_map(|h| s.bullet_cues(f, &weapons, h, eye)) {

@@ -1373,7 +1373,18 @@ pub struct BulletHit {
     /// The contacts past the first a penetrating round made, in order
     /// ([`Pierce`]).
     pub pierced: [Option<Pierce>; PIERCE_MAX],
+    /// The entity the first contact is, a player's included: a launched
+    /// part it meets takes the round's push (0x48df10, called at
+    /// 0x455b92).
+    pub entity: Option<u32>,
+    /// The legs the map's dynamic entities see, in order: the first when
+    /// it met something (0x455bbe), then each penetration leg to an entry
+    /// contact it plays, a player's included (0x456183). A miss sees none.
+    pub dyn_legs: [Option<(Vec3, Vec3)>; DYN_LEGS],
 }
+
+/// The first leg and five penetrations.
+pub const DYN_LEGS: usize = 6;
 
 /// A contact of a round past its first surface (the penetration walk,
 /// `iw3mp.exe` 0x455a20..0x4561a6): the far side of what it passed (an
@@ -1554,6 +1565,20 @@ fn leg(w: ShotWorld, bp: &Params, last: usize) -> Leg {
     }
 }
 
+/// A round's first leg from `start` to `end`: where it stopped and the
+/// entity it met.
+#[cfg(test)]
+pub(crate) fn first_contact(w: ShotWorld, start: Vec3, end: Vec3) -> (Vec3, Option<u32>) {
+    let bp = Params {
+        ignore: None,
+        start,
+        end,
+        dir: (end - start).normalize_or_zero(),
+    };
+    let l = leg(w, &bp, 0);
+    (l.pos, l.entity)
+}
+
 /// The flesh surface a body's contact reads (`BulletTrace`).
 const SURF_FLESH: u32 = 0x70_0000;
 
@@ -1633,14 +1658,27 @@ fn far_side(w: ShotWorld, round: &Params, entry: &Leg, next: &Leg) -> Option<Far
     })
 }
 
-/// The contacts a walk plays, a player's left out.
+/// The contacts a walk plays, a player's left out, and the legs to each
+/// entry it plays, a player's kept.
 #[derive(Default)]
 struct Played {
     list: [Option<Pierce>; PIERCE_MAX],
     len: usize,
+    legs: [Option<(Vec3, Vec3)>; DYN_LEGS - 1],
+    legs_len: usize,
 }
 
 impl Played {
+    /// An entry `next` the leg from `from` met: the dynamic entities see
+    /// that leg (0x456183, after the entry's hit event).
+    fn entry(&mut self, from: Vec3, next: &Leg) {
+        if self.legs_len < self.legs.len() {
+            self.legs[self.legs_len] = Some((from, next.pos));
+            self.legs_len += 1;
+        }
+        self.add(next, next.pos, next.normal, false);
+    }
+
     fn add(&mut self, l: &Leg, at: Vec3, normal: Vec3, exit: bool) {
         if l.player || self.len == PIERCE_MAX {
             return;
@@ -1656,6 +1694,12 @@ impl Played {
     }
 }
 
+/// What [`penetrate`] played, and the legs to the entries it played.
+type Walk = (
+    [Option<Pierce>; PIERCE_MAX],
+    [Option<(Vec3, Vec3)>; DYN_LEGS - 1],
+);
+
 /// The penetration walk past a round's first contact `first`
 /// (iw3mp.exe 0x455a20..0x4561a6, cod4-effects.md 12.1): up to five
 /// surfaces, each passed only while its depth (and its far side's, both
@@ -1663,17 +1707,11 @@ impl Played {
 /// thickness over the lesser depth spent off that share. A contact
 /// within 30 units of the last plays nothing; an exit into the sky
 /// neither. INFERRED for the shape; the 1.7 reads cited on the
-/// constants.
-fn penetrate(
-    w: ShotWorld,
-    wav: &WeaponAv,
-    perks: u32,
-    first: Leg,
-    mut round: Params,
-) -> [Option<Pierce>; PIERCE_MAX] {
+/// constants. Also the legs to the entries it plays ([`Played::entry`]).
+fn penetrate(w: ShotWorld, wav: &WeaponAv, perks: u32, first: Leg, mut round: Params) -> Walk {
     let mut played = Played::default();
     if first.startsolid || !first.hit {
-        return played.list;
+        return (played.list, played.legs);
     }
     let perk = match perks & PERK_BULLET_PENETRATION {
         0 => 1.0,
@@ -1714,14 +1752,14 @@ fn penetrate(
                         played.add(&side.far, side.far.pos, round.dir, true);
                     }
                     if next.hit {
-                        played.add(&next, next.pos, next.normal, false);
+                        played.entry(round.start, &next);
                     }
                 }
             }
             None => {
                 let spaced = entry.pos.distance_squared(next.pos) > near;
                 if next.hit && !next.allsolid && spaced {
-                    played.add(&next, next.pos, next.normal, false);
+                    played.entry(round.start, &next);
                 }
             }
         }
@@ -1730,7 +1768,7 @@ fn penetrate(
         }
         entry = next;
     }
-    played.list
+    (played.list, played.legs)
 }
 
 /// The drawn view for [`client_bullets`]: its client, its eye and angles
@@ -1932,6 +1970,12 @@ pub fn client_bullets(
                 dir: (end - start).normalize_or_zero(),
             };
             let first = leg(world, &bp, 0);
+            let (pierced, legs) = penetrate(world, w, f.perks, first, bp);
+            let mut dyn_legs = [None; DYN_LEGS];
+            if first.hit {
+                dyn_legs[0] = Some((start, first.pos));
+                dyn_legs[1..].copy_from_slice(&legs);
+            }
             BulletHit {
                 start,
                 muzzle,
@@ -1941,7 +1985,9 @@ pub fn client_bullets(
                 hit: first.hit,
                 own: mine.is_some(),
                 body: first.entity.filter(|_| first.player),
-                pierced: penetrate(world, w, f.perks, first, bp),
+                pierced,
+                entity: first.entity,
+                dyn_legs,
             }
         })
         .collect()
@@ -2151,7 +2197,7 @@ mod tests {
                 hash = (hash ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
             }
         };
-        let (mut dump, mut contacts) = (String::new(), 0);
+        let (mut dump, mut contacts, mut entry_legs) = (String::new(), 0, 0);
         let eyes = [
             Vec3::new(207.0, 2250.0, 356.0),
             Vec3::new(207.0, 2380.0, 356.0),
@@ -2172,7 +2218,13 @@ mod tests {
                             dir: (end - eye).normalize_or_zero(),
                         };
                         let first = leg(w, &bp, 0);
-                        let walk = penetrate(w, &wav, perks, first, bp);
+                        let (walk, legs) = penetrate(w, &wav, perks, first, bp);
+                        // Each entry played has its leg, ending on it.
+                        let ends: Vec<Vec3> = legs.iter().flatten().map(|l| l.1).collect();
+                        for p in walk.iter().flatten().filter(|p| !p.exit) {
+                            assert!(ends.contains(&p.at), "{eye} {yaw} {pitch}: {p:?}");
+                        }
+                        entry_legs += ends.len();
                         for p in walk.iter().flatten() {
                             contacts += 1;
                             dump += &format!("{eye} {yaw} {pitch} {perks} {p:?}\n");
@@ -2195,6 +2247,8 @@ mod tests {
             (301, 0x3608_2852_1786_fd79),
             "{contacts} {hash:#x}"
         );
+        println!("{entry_legs} penetration legs the dynamic entities see");
+        assert!(entry_legs > 0);
     }
     use vcod_cod4::walk::{WalkOptions, walk};
     use vcod_cod4::zone::Zone;
@@ -2216,6 +2270,8 @@ mod tests {
             own: true,
             body: None,
             pierced: [None; PIERCE_MAX],
+            entity: None,
+            dyn_legs: [None; DYN_LEGS],
         };
         let pellets = [round; 8];
         let drawn: Vec<usize> = (0..20)
