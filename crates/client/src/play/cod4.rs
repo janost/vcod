@@ -4199,7 +4199,8 @@ pub(crate) mod tests {
     /// `tag_origin` yaws off the view. For the same pose and controls every
     /// bone of the drawn body sits within a thousandth of a unit of
     /// `cod4_lnxded`'s arithmetic, where CoD1's model-frame turn moves the
-    /// head by more than a unit.
+    /// head by more than a unit. The drawn body's locals are 1.7's
+    /// sampler's (cod4-player-anims.md 11), word for word.
     #[test]
     fn a_drawn_bodys_control_bones_turn_as_the_servers() {
         use crate::play::cod4_players::Cod4Players;
