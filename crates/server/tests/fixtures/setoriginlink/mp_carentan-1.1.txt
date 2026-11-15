@@ -1,0 +1,11 @@
+# client-probes/probe_setoriginlink on retail 1.1d, mp_carentan, 2026-11-15: one --probe-uo-weapon direct axis client (recipe in the client probes' README). Two runs read the same lines but the cmd case's fall; this is the first.
+PROBE sky 932:0:0,-376:0:0,2303:875:0 932:0:0,-376:0:0,2368:125:0
+PROBE case set 932:750:0,-376:750:0,2224:250:0 972:0:0,-376:0:0,2372:125:0
+PROBE edge set 596:0:0 0
+PROBE edge set 597:546:875000 10
+PROBE verdict set unsnapped
+PROBE fell 932:750:0,-376:750:0,2220:784:179688
+PROBE edge cmd 612:0:0 0
+PROBE edge cmd 618:843:750000 10
+PROBE verdict cmd snapped
+PROBE done

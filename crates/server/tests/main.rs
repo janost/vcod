@@ -81,6 +81,7 @@ mod script_configstrings;
 mod scriptmodel_ab;
 mod sd_plant_ab;
 mod semantics_ents;
+mod setoriginlink_ab;
 mod shellshock_ab;
 mod sine_ab;
 mod spawnbody_ab;
