@@ -1061,7 +1061,9 @@ disassembly) offsets:
   test, ours). A retail capture of an RPG's two flights gates the rest,
   word for word: the wobble's `AngleVectors` takes glibc's `sinf` and
   `cosf` and `vectoangles` keeps its flat length a double (cod4-combat.md
-  15). VERIFIED (the gate).
+  15). VERIFIED (the gate). The `vectorToAngles` builtin (0x80be762)
+  calls the same `vectoangles` (0x80be79d), so vcod's CoD4 builtin takes
+  that path too (`math::vectoangles_1_7`). VERIFIED (the instructions).
 
 ### 3.3 The script traces
 

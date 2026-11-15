@@ -47,6 +47,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("damageconetrace", damage_cone_trace),
     ("sightconetrace", sight_cone_trace),
     ("detonate", detonate),
+    ("vectortoangles", super::math::vector_to_angles_1_7),
     ("playsound", play_sound),
     ("playfx", play_fx),
     ("playsoundtoteam", play_sound_to_team),

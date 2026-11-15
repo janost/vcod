@@ -349,32 +349,9 @@ pub struct Burst4 {
     pub smoke_until: Option<i32>,
 }
 
-/// 1.7's `vectoangles` (0x8191a72): each `atan2` times 180 (the pitch's
-/// -180) over the double pi on the stack, stored as a float, 360 added to
-/// a negative one before its one store. The pitch's flat length stays
-/// unrounded into its `atan2` (`fstpl`, 0x8191afc), where CoD1's stores a
-/// float (cod4-gsc.md 3.2, "Missiles under 1.7").
+/// 1.7's `vectoangles` ([`crate::game::builtins::math::vectoangles_1_7`]).
 fn vectoangles(v: Vec3) -> Vec3 {
-    use vcod_common::x87::F80;
-    if v.x == 0.0 && v.y == 0.0 {
-        return Vec3::new(if v.z > 0.0 { 270.0 } else { 90.0 }, 0.0, 0.0);
-    }
-    let pi = F80::from_f64(std::f64::consts::PI);
-    let degrees = |atan: f64, k: f32| {
-        let a = (F80::from_f64(atan) * F80::from_f32(k) / pi).to_f32();
-        if a < 0.0 {
-            (F80::from_f32(a) + F80::from_f32(360.0)).to_f32()
-        } else {
-            a
-        }
-    };
-    let (x, y) = (F80::from_f32(v.x), F80::from_f32(v.y));
-    let flat = (x * x + y * y).sqrt().to_f64();
-    Vec3::new(
-        degrees(f64::from(v.z).atan2(flat), -180.0),
-        degrees(f64::from(v.y).atan2(f64::from(v.x)), 180.0),
-        0.0,
-    )
+    Vec3::from(crate::game::builtins::math::vectoangles_1_7(v.to_array()))
 }
 
 /// `AngleNormalize360` (0x8190540): `x = a * 0.0027777778f` on the stack,
