@@ -681,3 +681,62 @@ fn two_geom_pictures_wedged_between_two_walls_are_never_pinched() {
         .collect();
     assert!(problems.is_empty(), "{problems:#?}");
 }
+
+/// mp_crash's plastic crate come to rest flat on its open floor, then
+/// woken under one `physicsJitter` region over it whose least and most
+/// push are the same, so each contact the pass keeps with a normal z of
+/// 0.7 or more lifts it by the same `v1` (cod4-world.md 13.8): the step's
+/// lift over `v1` counts them. The box meets the four floor brushes under
+/// it in 16 contacts, each brush's top clipped to its face as 0x59a610
+/// clips it; 0x5a2320 keeps three of them, all of the face's corners but
+/// the one at its most x and least y, and vcod's points, nine on the
+/// face, take none. The lift is read against the same step with no
+/// region. Pushed on the points, as vcod had it, it read 8.9 pushes; on
+/// all 16 contacts, uncut, 12.3 (the crate thrown into the room's top).
+#[test]
+fn a_crate_flat_on_the_floor_takes_a_jitter_at_three_corners() {
+    let (Some(install), Some(common)) = (cod4_install(), zone("common_mp")) else {
+        return;
+    };
+    let (m, crash) = Map::load(&install, "english", "mp_crash").unwrap();
+    let clip = ClipMap::from_assets(&crash.assets).unwrap();
+    let defs = vcod_cod4::dynent::defs(&crash.assets, &[&common]);
+    let d = Dvars::default();
+    let spot = open_floor(&m, &clip);
+    let def = defs
+        .iter()
+        .find(|x| x.model == "me_plastic_crate1")
+        .unwrap();
+    let (shape, preset) = def.body.as_ref().unwrap();
+    let bx = shape.boxes[0];
+    let origin = spot + Vec3::Z * (bx.half.z + 0.5) - bx.centre;
+    let mut b = Body::at(origin, Quat::IDENTITY, shape, preset, 0);
+    let (mut trace, mut solids) = (clip_trace(&clip), clip_solids(&clip));
+    let mut t = 0;
+    while t < 10_000 && !b.asleep {
+        t += 17;
+        b.advance_in(t, &mut trace, &mut solids, &d);
+    }
+    assert!(b.asleep, "{t}");
+    // `(min + u (max - min)) f m' (1 - (m' / 200)^3) 1000 / msecStep`
+    // over the mass, `f` 1 within the inner radius.
+    let push = 4.0;
+    let m = preset.mass.min(200.0);
+    let v1 = push * m * (1.0 - (m / 200.0).powi(3)) * 1000.0 / d.step_ms as f32 / preset.mass;
+    b.asleep = false;
+    // The same step with no jitter, against which the lift is read.
+    let mut still = b.clone();
+    still.advance_in(t + 17, &mut trace, &mut solids, &d);
+    b.jitter.push(vcod_cod4::physics::Jitter {
+        origin: b.origin(),
+        inner: 100.0,
+        outer: 200.0,
+        min: push,
+        max: push,
+    });
+    b.advance_in(t + 17, &mut trace, &mut solids, &d);
+    let lift = b.vel.z - still.vel.z;
+    let count = lift / v1;
+    println!("lift {lift} over {v1}: {count}");
+    assert_eq!(count.round(), 3.0, "{count}");
+}
