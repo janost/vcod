@@ -805,6 +805,34 @@ The 1.5b overlap capture `-bump-overlap-spectator-15-walker.txt` and
 `-script.txt` is probe_bump's spectator-slot recipe on `COD_VERSION=1.5`,
 the walker tagged `overlap-spectator-15`.
 
+## probe_dmgmove
+
+A player a damage callback moves into another player, and the cmds behind
+it (`docs/research/cod11-player-clip.md` 13.6). probe_spawnbody's two
+`--probe-uo-weapon direct` clients, the host first; the second falls 300
+behind the host and his landing's `MOD_FALLING` callback `setOrigin`s him
+into the host or the host into him. Server and both probes inside one
+`unshare -rn`, the server under `showpackets` so the fixture can carry the
+receive order:
+
+```
+COD_VERSION=<1.1|1.5|uo> COD_DIR=<install> PORT=<p> PROBE_SECS=75 \
+  tools/run_probe.sh client-probes/probe_dmgmove mp_carentan +set showpackets 1
+# 8 s later:
+vcod --game-dir <install> --net-probe 127.0.0.1:<p> \
+  --probe-uo-weapon direct --probe-team allies --probe-secs 64
+# 4 s after that:
+vcod --game-dir <install> --net-probe 127.0.0.1:<p> \
+  --probe-uo-weapon direct --probe-team allies --probe-secs 60
+tools/recv_order.sh <homepath>/<game dir>/console_mp_server.log
+```
+
+(`--mod-dir uo` on the clients for UO.) The server's `PROBE` lines, each
+client's `CMDS` and `SPAWNED` lines prefixed `host` and `faller`, then the
+`RECV` lines, are
+`crates/server/tests/fixtures/playerstate/mp_carentan-dm-dmgmove-<1.1|1.5|uo>.txt`,
+which `dmgmove_ab.rs` replays.
+
 ## probe_blastteleport
 
 Where `G_FreeTurret`'s `TeleportPlayer` files a released gunner in the area
