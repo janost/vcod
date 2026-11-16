@@ -1140,9 +1140,10 @@ impl Cod2Level {
                 self.rt.host.configstrings.set(5, axis.to_string());
                 self.rt.host.configstrings.set(6, allies.to_string());
             }
-            // The cmd angles are the client's; the spawn's yaw goes into
-            // `delta_angles` so the view starts on it (`SetClientViewAngle`).
-            set_view_angles(&mut ps, &p.oldcmd, [0.0, s.yaw_deg, 0.0]);
+            // The cmd angles are the client's; the spawn's angles go into
+            // `delta_angles` so the view starts on them (`SetClientViewAngle`,
+            // 0x80f940e, pitch included).
+            set_view_angles(&mut ps, &p.oldcmd, s.angles);
             // `ClientSpawn`'s memset takes the event ring with the rest
             // (`eventSequence` reads 0, cod2-killcam.md 5).
             ps.e_flags = spawn_e_flags(p.ps.e_flags);
@@ -1223,6 +1224,15 @@ impl Cod2Level {
                     }
                 }
             }
+            // `ClientSpawn` then runs `ClientEndFrame` (0x80f947b), whose
+            // `BG_PlayerAnimation` steps the swings off the spawn's view
+            // (cod2-combat.md 9.4).
+            if p.ps.pm_type == pm_type::NORMAL {
+                self.animate_body(s.slot, self.frametime_ms);
+            }
+            let Some(p) = self.players.get_mut(s.slot).and_then(Option::as_mut) else {
+                continue;
+            };
             let origin = p.ps.origin.to_array();
             self.rt.host.cod2_mut().clients[s.slot].death_anim = 0;
             self.rt.set_client_origin(s.slot, origin);
@@ -1520,8 +1530,21 @@ impl Cod2Level {
             }
             self.rt.host.cod2_mut().clients[slot].body = (p.ps.pm_type < pm_type::SPECTATOR)
                 .then(|| crate::game::cod2_blast::BlastBody::of(&p.ps));
+            // `Player_UpdateLookAtEntity` (0x812200a, from 0x80f7803) runs
+            // inside each client's end frame before its anims step: a
+            // lower slot's trace meets a higher one's body as its last end
+            // frame left it (cod2-combat.md 9.7). The dead run it too, which
+            // clears a flag left from life.
+            if !matches!(p.ps.pm_type, pm_type::SPECTATOR | pm_type::INTERMISSION) {
+                let _p = crate::tick_profile::phase("end frames/look at");
+                self.look_at_flags(slot);
+            }
+            let Some(p) = self.players[slot].as_mut() else {
+                continue;
+            };
             if p.ps.pm_type < pm_type::SPECTATOR || p.ps.pm_type >= pm_type::DEAD {
                 let _p = crate::tick_profile::phase("end frames/animate");
+                self.combat.mark_dobj(slot);
                 self.animate_body(slot, self.frametime_ms);
             }
             // After the entity copy, a client with health that overlaps
@@ -1543,16 +1566,6 @@ impl Cod2Level {
             if let Some(p) = self.players[slot].as_mut() {
                 p.latched_buttons = 0;
                 self.mirror_buttons(slot);
-            }
-        }
-        // The dead run it too, which clears a flag left from life.
-        for slot in 0..self.players.len() {
-            let in_world = self.players[slot].as_ref().is_some_and(|p| {
-                !matches!(p.ps.pm_type, pm_type::SPECTATOR | pm_type::INTERMISSION)
-            });
-            if in_world {
-                let _p = crate::tick_profile::phase("end frames/look at");
-                self.look_at_flags(slot);
             }
         }
         let _p = crate::tick_profile::phase("end frames/entity states");

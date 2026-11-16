@@ -427,6 +427,10 @@ impl PlayerBody {
             tr_base: f.origin,
             eflags: flags,
         };
+        if self.cod4_lean.is_none() {
+            self.legs.store_steps();
+            self.torso.store_steps();
+        }
         update_body(
             (&mut self.legs, &mut self.torso),
             anims,

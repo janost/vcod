@@ -304,6 +304,9 @@ pub struct SpawnRequest {
     pub slot: usize,
     pub origin: [f32; 3],
     pub yaw_deg: f32,
+    /// The whole `angles`: CoD2's `ClientSpawn` (lnxded 0x80f910e) sets
+    /// the view to them (`SetClientViewAngle`, 0x80f940e).
+    pub angles: [f32; 3],
     pub mode: SpawnMode,
 }
 

@@ -2,7 +2,8 @@
 # skeleton build under G_DObjCalcPose (0x811e3c0), the format
 # crates/cod2/tests/fixtures/skel/ heads with. Load with
 # `gdb -batch -x tools/re/cod2_skel_gdb.py --args cod2_lnxded ...`;
-# CODSKEL_OUT names the output file, CODSKEL_EVERY keeps every n-th build.
+# CODSKEL_OUT names the output file, CODSKEL_EVERY keeps every n-th build,
+# CODSKEL_BT=1 heads each build with its callers' return addresses.
 import os
 import struct
 
@@ -10,6 +11,8 @@ import gdb
 
 OUT = open(os.environ.get("CODSKEL_OUT", "cod2-skel-gdb.txt"), "w")
 EVERY = int(os.environ.get("CODSKEL_EVERY", "1"))
+BT = os.environ.get("CODSKEL_BT") == "1"
+LEVEL_TIME = 0x0864C56C
 inf = None
 state = {"on": False, "n": 0, "keep": False, "dobj": 0, "ent": 0}
 
@@ -79,6 +82,15 @@ def pose_start():
     state["ent"] = u32(ent)
     state["n"] += 1
     state["keep"] = state["n"] % EVERY == 0
+    if BT:
+        # The ebp chain: each frame's saved ebp, then its return address.
+        rets, ebp = [], reg("ebp")
+        for _ in range(14):
+            if not ebp:
+                break
+            rets.append("%08x" % u32(ebp + 4))
+            ebp = u32(ebp)
+        w("bt %s" % " ".join(rets))
 
 
 def calc_anim():
@@ -93,7 +105,10 @@ def calc_anim():
         if state["n"] == 1:
             OUT.write("# xmodel %d %s\n" % (m, mem(xm, 0x40).hex()))
         models.append("%d:%d" % (u16(parts), u16(parts + 2)))
-    w("calc %d ent %d bones %d models %s" % (state["n"], state["ent"], u8(dobj + 0x19), ",".join(models)))
+    w(
+        "calc %d ent %d bones %d models %s time %d"
+        % (state["n"], state["ent"], u8(dobj + 0x19), ",".join(models), u32(LEVEL_TIME))
+    )
 
 
 def walk():
