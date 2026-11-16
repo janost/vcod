@@ -3378,3 +3378,44 @@ ramp arms; `Ramp::check` the argument errors. VERIFIED, vcod measurement
 own end, `rotatevelocity` scaled to `v * T`, durations rounded, overrunning
 ramps trimmed); on the port every row of the three captures matches.
 
+
+## 25. Team slaves
+
+`G_FindTeams` (cod11-server-handshake.md, "Console commands over rcon")
+marks every later member of a `teamname` a slave, `flags & 4` (1.1d
+`+0x17c`, 1.5b `+0x184`, UO `+0x18c`).
+
+- VERIFIED, `objdump` of all three: each script verb, `ScriptEntCmd_MoveTo`,
+  `ScriptEntCmd_GravityMove`, `ScriptEnt_MoveAxis`, `ScriptEntCmd_RotateTo`,
+  `ScriptEnt_RotateAxis` and `ScriptEntCmd_RotateVelocity`, tests the bit
+  after its classname gate and returns when it is set (1.1d `MoveTo`
+  0x6041c, `RotateVelocity` 0x60dec; 1.5b `MoveTo` 0x64746; UO `MoveTo`
+  0x70865), before it reads an argument.
+- VERIFIED, `G_RunMover` (1.1d 0x5760c): past the link arm, a slave
+  unlinks itself when it is linked (`+0xf0`) and its classname is
+  `func_tramcar` or `func_rotating` (`scr_const+0x3a`, `+0x38`), then
+  returns (0x57630..0x57664), with neither `G_MoverTeam` nor `G_RunThink`.
+  `SP_script_brushmodel`, `SP_script_model` and `SP_script_origin` call
+  `InitScriptMover` (0x60fcf, 0x6100b, 0x61042), which writes `eType` 8, so
+  every `script_*` entity takes this arm.
+- VERIFIED, `G_MoverTeam` (0x55684) walks the chain from the master,
+  evaluating and pushing each part, and on a block puts them all back; then
+  calls each part's `reached` whose trajectory has ended.
+- VERIFIED, `client-probes/probe_teams` on 1.1d, 1.5b and UO
+  (`crates/server/tests/fixtures/teams/mp_carentan-dm-teams*.txt`), the
+  `script_origin`s `m1a` (master) and `m1b` (slave) of team `m1`: `m1b
+  moveTo((0, 0, 200), 0.5)` at 1000 left it at (0 0 100) through 3000 with
+  no `movedone`, while `m1a`'s own `moveTo` at 2100 ran to its end and
+  notified at 2600. `m1b delete()` at 3000 left it defined through 3300.
+- INFERRED: a slave never moves by script, and a deleted one is never
+  freed: its free is a think its runner never reaches. INFERRED: a moving
+  master's `G_MoverTeam` moves a slave only by the slave's own
+  trajectory, which script cannot set, so its part is a zero move; only a
+  `func_door` team (`MatchTeam`, `Think_MatchTeam`) gives slaves one.
+
+vcod: the verbs return on a slave after their class gate
+(`builtins::mover::slave`), and the entity pass skips a slave `script_*`
+entity or mover, its think included (`game::teams::idle_slave`).
+`game::teams_ab` holds both to the three captures. Not modelled: the
+tramcar and `func_rotating` unlink (vcod builds neither as a mover) and the
+team push of a `func_door` chain (no `func_door` is built).

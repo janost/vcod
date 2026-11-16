@@ -58,6 +58,9 @@ pub mod scoreboard;
 pub mod script;
 pub mod spawn;
 pub mod stuck;
+pub mod teams;
+#[cfg(test)]
+mod teams_ab;
 pub mod temp_entity;
 pub mod timeout;
 pub mod trigger;

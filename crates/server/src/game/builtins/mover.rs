@@ -71,6 +71,17 @@ fn call(
     first: usize,
     what: &'static str,
 ) -> Result<(EntId, Ramp), ErrorKind> {
+    let id = movable(host, cx, recv)?;
+    let Some(secs) = number(args.get(first)) else {
+        return Err(ErrorKind::BadType(what));
+    };
+    let accel = number(args.get(first + 1)).unwrap_or(0.0);
+    let decel = number(args.get(first + 2)).unwrap_or(0.0);
+    Ok((id, Ramp::new(secs, accel, decel)))
+}
+
+/// The receiver past retail's class gate.
+fn movable(host: &mut GameHost, cx: &mut Cx, recv: Option<Target>) -> Result<EntId, ErrorKind> {
     let id = entity_receiver(recv)?;
     let classname = {
         let atom = cx.intern_folded("classname");
@@ -84,12 +95,15 @@ fn call(
             "not a script_brushmodel, script_model, or script_origin",
         ));
     }
-    let Some(secs) = number(args.get(first)) else {
-        return Err(ErrorKind::BadType(what));
-    };
-    let accel = number(args.get(first + 1)).unwrap_or(0.0);
-    let decel = number(args.get(first + 2)).unwrap_or(0.0);
-    Ok((id, Ramp::new(secs, accel, decel)))
+    Ok(id)
+}
+
+/// Whether the verb is a no-op: each verb returns right after the class
+/// gate on a team slave (`flags & 4`; 1.1d `ScriptEntCmd_MoveTo` 0x6041c,
+/// 1.5b 0x64746, UO 0x70865), arguments unread (cod11-movers.md 25).
+fn slave(host: &mut GameHost, cx: &mut Cx, recv: Option<Target>) -> Result<bool, ErrorKind> {
+    let id = movable(host, cx, recv)?;
+    Ok(host.ents.get(id).is_some_and(|e| e.team.slave))
 }
 
 /// [`call`] for a verb that checks its time and ramps ([`Ramp::check`]).
@@ -137,6 +151,9 @@ pub fn move_to(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
+    if slave(host, cx, recv)? {
+        return Ok(Value::Undefined);
+    }
     let (id, m) = ramped(host, cx, recv, args, 1, "moveTo takes a point and a time")?;
     let Some(dest) = vector(args.first()) else {
         return Err(ErrorKind::BadType("moveTo takes a point and a time"));
@@ -159,6 +176,9 @@ fn move_axis(
     axis: usize,
     what: &'static str,
 ) -> Result<Value, ErrorKind> {
+    if slave(host, cx, recv)? {
+        return Ok(Value::Undefined);
+    }
     let (id, m) = ramped(host, cx, recv, args, 1, what)?;
     let Some(d) = number(args.first()) else {
         return Err(ErrorKind::BadType(what));
@@ -209,6 +229,9 @@ pub fn move_gravity(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
+    if slave(host, cx, recv)? {
+        return Ok(Value::Undefined);
+    }
     let what = "moveGravity takes a velocity and a time";
     let (id, m) = call(host, cx, recv, args, 1, what)?;
     let Some(v) = vector(args.first()) else {
@@ -229,6 +252,9 @@ pub fn rotate_to(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
+    if slave(host, cx, recv)? {
+        return Ok(Value::Undefined);
+    }
     let what = "rotateTo takes angles and a time";
     let (id, m) = ramped(host, cx, recv, args, 1, what)?;
     let Some(dest) = vector(args.first()) else {
@@ -269,6 +295,9 @@ fn rotate_axis(
     axis: usize,
     what: &'static str,
 ) -> Result<Value, ErrorKind> {
+    if slave(host, cx, recv)? {
+        return Ok(Value::Undefined);
+    }
     let (id, m) = ramped(host, cx, recv, args, 1, what)?;
     let Some(d) = number(args.first()) else {
         return Err(ErrorKind::BadType(what));
@@ -321,6 +350,9 @@ pub fn rotate_velocity(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
+    if slave(host, cx, recv)? {
+        return Ok(Value::Undefined);
+    }
     let what = "rotateVelocity takes a velocity and a time";
     let (id, m) = ramped(host, cx, recv, args, 1, what)?;
     let Some(v) = vector(args.first()) else {

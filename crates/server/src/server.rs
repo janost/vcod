@@ -1490,16 +1490,16 @@ pub enum LoadFailure {
     Fatal(anyhow::Error),
 }
 
-/// What `G_ShutdownGame(1)` and `G_InitGame` print on a restart, ahead of
-/// the scripts (handshake doc, "Console commands over rcon"), the game
-/// module's name and date being 1.1's or 1.5b's (its startup log). The team
-/// count is `G_FindTeams` over `team` keys, which no stock map carries.
+/// What `G_ShutdownGame(1)` and `G_InitGame` print on a restart ahead of
+/// the spawn (handshake doc, "Console commands over rcon"); the rest is
+/// [`game_init_tail`].
 fn restart_game_banner(p: &Protocol) -> String {
-    format!("==== RestartGame ====\n{}", game_init_banner(p))
+    format!("==== RestartGame ====\n{}", game_init_head(p))
 }
 
-/// `G_InitGame`'s lines, ahead of the scripts.
-fn game_init_banner(p: &Protocol) -> String {
+/// `G_InitGame`'s lines ahead of the spawn, the game module's name and
+/// date being 1.1's, 1.5b's or UO's (their startup logs).
+fn game_init_head(p: &Protocol) -> String {
     let (name, date) = match p.transport.version {
         6 => ("Call of Duty", "Nov 15 2004"),
         22 => ("CoD:United Offensive", "Feb 10 2005"),
@@ -1508,8 +1508,15 @@ fn game_init_banner(p: &Protocol) -> String {
     format!(
         "------- Game Initialization -------\n\
          gamename: {name}\n\
-         gamedate: {date}\n\
-         0 teams with 0 entities\n\
+         gamedate: {date}\n"
+    )
+}
+
+/// `G_FindTeams`' line after the spawn (0x4faff), then `G_InitGame`'s
+/// closing dashes ahead of the scripts (0x4fe40).
+fn game_init_tail((teams, members): (u32, u32)) -> String {
+    format!(
+        "{teams} teams with {members} entities\n\
          -----------------------------------\n"
     )
 }
@@ -3479,6 +3486,21 @@ impl Server {
         }
     }
 
+    /// The running level's game host, for a gate that reads entity state.
+    #[cfg(test)]
+    pub(crate) fn game_host(&self) -> Option<&crate::game::host::GameHost> {
+        self.game.module.script.as_ref().map(|rt| &rt.host)
+    }
+
+    /// `G_FindTeams`' counts for the level loaded last, `(0, 0)` with none.
+    fn team_counts(&self) -> (u32, u32) {
+        self.game
+            .module
+            .script
+            .as_ref()
+            .map_or((0, 0), |rt| rt.host.team_counts)
+    }
+
     /// Test-facing: the missile pool's next draws, a retail capture's
     /// tumble rates and bounce factors (`Missiles::pin_draws`).
     pub fn pin_missile_draws(&mut self, draws: Vec<f64>) {
@@ -5321,10 +5343,11 @@ impl Server {
         );
         self.core.configstrings[CS_SERVERINFO] = self.serverinfo().to_string();
         self.print(&spawn_server_banner(map, &fs));
-        self.print(&game_init_banner(self.game.proto));
+        self.print(&game_init_head(self.game.proto));
         // Step 19. Past the teardown: a failure here leaves no level.
         self.load_scripts_with(fs, false, carry, save_persist)
             .map_err(LoadFailure::Fatal)?;
+        self.print(&game_init_tail(self.team_counts()));
         // Step 20. Every client here is `CS_CONNECTED` and pulls the whole
         // table in the gamestate it asks for, so the diff has nothing to say
         // about a level boundary (the restart path re-syncs the same way).
@@ -5473,6 +5496,7 @@ impl Server {
         self.load_scripts_with(fs, true, carry, save_persist)
             .map_err(LoadFailure::Fatal)?;
         drop(p);
+        self.print(&game_init_tail(self.team_counts()));
         // Step 8. The incoming level's whole table goes into the diff's copy
         // in one go: what a client learns of it is the burst below, measured
         // against `held` (doc 4.5).
