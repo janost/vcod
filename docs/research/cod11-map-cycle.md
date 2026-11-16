@@ -1478,6 +1478,31 @@ where the `dm` run's does. INFERRED, from the two against section 1's
 its `Callback_PlayerConnect` skips the `openMenu` that a `dm` client, whose
 `pers` was freed, takes.
 
+The script waits on the server clock. A restart's `d 3` carries the incoming
+level's start time as the ambient's `t`, a trace its snapshot's
+`serverTime`; `tests/mapchange_ab.rs` and `tests/roundrestart_ab.rs`
+compare these frame for frame, with no tolerance.
+
+- VERIFIED, the `dm` run: the first intermission snapshot is 60050 and the
+  restart's `d 3` reads `t\70050`, `dm.gsc`'s `wait 10` to the frame. The
+  restarted level starts on the frame whose script queued the restart, as
+  4.7's `Cbuf_Execute` after that frame reads.
+- VERIFIED, the `dm` run: the second intermission snapshot is 130100. Every
+  trace of the ten seconds after it, counted forward by the probe's receive
+  clock, puts the `loadingnewmap` line 7 to 20 ms after snapshot 140100's
+  arrival and before 140150's. INFERRED, from that against 4.7's order: the
+  queued `map_rotate` runs in the `Cbuf_Execute` right after frame 140100,
+  ten seconds on, as the restart did.
+- VERIFIED, the `dm` run: each spawn's spectator snapshot is 100 ms ahead
+  of its first live one (70450 to 70550, 141950 to 142050), one frame per
+  menu the probe answered. INFERRED: a menu answered on the snapshot that
+  opened it is read on the next frame.
+- VERIFIED, the `sd` run: both eliminations are 5000 ms from the death's
+  first snapshot to the restarted level's start (48350 to 53350, 139000 to
+  144000), and the round the timer ended runs 65050 ms between two level
+  starts (53350 to 118400). The probe's receive clock read 5177 ms and
+  64619 / 64624 ms for the same spans.
+
 ### 8.2 What differs
 
 Each bullet was a defect in vcod the runs found. One is still open, the

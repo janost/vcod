@@ -1604,6 +1604,11 @@ pub struct NetchanEvent {
     /// Retail's is the probe's own clock, ours the frame grid; both count
     /// from the first line of their run.
     pub ms: i64,
+    /// The server's own frame clock: a trace's snapshot `serverTime`; on one
+    /// of our out-of-band lines, the newest snapshot the client held when it
+    /// arrived. `None` on every other line, and on every retail line but a
+    /// trace: the fixture writes no clock on them.
+    pub server_time: Option<i32>,
     pub kind: NetchanKind,
 }
 
@@ -1681,6 +1686,7 @@ pub fn parse_netchan_fixture(text: &str) -> Vec<NetchanEvent> {
             let m = kv(rest);
             out.push(NetchanEvent {
                 ms: ms(rest),
+                server_time: None,
                 kind: NetchanKind::Gamestate {
                     server_id: m["serverId"].parse().unwrap(),
                     mapname: m["mapname"].to_string(),
@@ -1689,11 +1695,13 @@ pub fn parse_netchan_fixture(text: &str) -> Vec<NetchanEvent> {
         } else if let Some(rest) = line.strip_prefix("!cmd ") {
             out.push(NetchanEvent {
                 ms: ms(rest),
+                server_time: None,
                 kind: NetchanKind::Cmd(tail(rest, "text=")),
             });
         } else if let Some(rest) = line.strip_prefix("!oob ") {
             out.push(NetchanEvent {
                 ms: ms(rest),
+                server_time: None,
                 kind: NetchanKind::Oob(tail(rest, "text=")),
             });
         } else if let Some(rest) = line.strip_prefix("!trace ") {
@@ -1701,6 +1709,7 @@ pub fn parse_netchan_fixture(text: &str) -> Vec<NetchanEvent> {
             let i = |k: &str| m[k].parse::<i32>().unwrap();
             out.push(NetchanEvent {
                 ms: ms(rest),
+                server_time: Some(i("serverTime")),
                 kind: NetchanKind::Trace {
                     pm_type: i("pm_type"),
                     eflags: i("eFlags"),
@@ -1727,25 +1736,37 @@ pub fn record_netchan(
     now_ms: i64,
     out: &mut Vec<NetchanEvent>,
 ) {
-    let mut push = |kind| out.push(NetchanEvent { ms: now_ms, kind });
+    let mut push = |kind, server_time| {
+        out.push(NetchanEvent {
+            ms: now_ms,
+            server_time,
+            kind,
+        })
+    };
     for e in events {
         if *e == NetEvent::GamestateReady {
-            push(NetchanKind::Gamestate {
-                server_id: cl.server_id(),
-                mapname: vcod_common::net::info_value_for_key(cl.configstring(0), "mapname")
-                    .unwrap_or_default()
-                    .to_string(),
-            });
+            push(
+                NetchanKind::Gamestate {
+                    server_id: cl.server_id(),
+                    mapname: vcod_common::net::info_value_for_key(cl.configstring(0), "mapname")
+                        .unwrap_or_default()
+                        .to_string(),
+                },
+                None,
+            );
         }
     }
     // Verbatim, off the reliable ring: `d` and `n` never reach `NetEvent`,
     // and `d` is what carries the restart's new `sv_serverid`.
     for text in cl.take_server_commands() {
-        push(NetchanKind::Cmd(text));
+        push(NetchanKind::Cmd(text), None);
     }
     for e in events {
         if let NetEvent::OutOfBand(text) = e {
-            push(NetchanKind::Oob(text.replace('\n', "\\n")));
+            push(
+                NetchanKind::Oob(text.replace('\n', "\\n")),
+                cl.snapshots().newest().map(|s| s.server_time),
+            );
         }
     }
     if let Some(s) = cl.snapshots().newest() {
@@ -1754,17 +1775,20 @@ pub fn record_netchan(
             .filter(|&i| s.ps.clip(i) != 0)
             .map(|i| format!("{i}:{}", s.ps.clip(i)))
             .collect();
-        push(NetchanKind::Trace {
-            pm_type: s.ps.field_i32(p, "pm_type"),
-            eflags: s.ps.field_i32(p, "eFlags"),
-            health: s.ps.health(),
-            weapon: s.ps.field_i32(p, "weapon"),
-            ammoclip: if clips.is_empty() {
-                "-".to_string()
-            } else {
-                clips.join(",")
+        push(
+            NetchanKind::Trace {
+                pm_type: s.ps.field_i32(p, "pm_type"),
+                eflags: s.ps.field_i32(p, "eFlags"),
+                health: s.ps.health(),
+                weapon: s.ps.field_i32(p, "weapon"),
+                ammoclip: if clips.is_empty() {
+                    "-".to_string()
+                } else {
+                    clips.join(",")
+                },
             },
-        });
+            Some(s.server_time),
+        );
     }
 }
 
