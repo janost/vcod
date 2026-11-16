@@ -161,7 +161,10 @@ send_in(player, buttons)
 //	The player's body and attachments, drawn at random by his character
 //	script, logged at the mount; with `probe_model_<entity number>` set
 //	(and `_0`, `_1`... for the attachments) the player wears those
-//	instead, which is how a replay puts on what retail drew.
+//	instead, which is how a replay puts on what retail drew. With
+//	`<key>_ic` 1 each goes on with ignoreCollision, as 1.5's and UO's stock
+//	character scripts attach every one (cod15-protocol-diff.md,
+//	`getAttachIgnoreCollision`).
 models()
 {
 	key = "probe_model_" + self getEntityNumber();
@@ -170,7 +173,12 @@ models()
 		self setmodel(getcvar(key));
 		self detachall();
 		for (i = 0; getcvar(key + "_" + i) != ""; i++)
-			self attach(getcvar(key + "_" + i));
+		{
+			if (getcvarint(key + "_ic"))
+				self attach(getcvar(key + "_" + i), "", true);
+			else
+				self attach(getcvar(key + "_" + i));
+		}
 	}
 	line = "PROBE models " + self getEntityNumber() + " " + self.model;
 	n = self getattachsize();

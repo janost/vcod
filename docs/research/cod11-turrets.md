@@ -2482,8 +2482,8 @@ chest; `turn_a` swaps the roles; `duel` has both fire at each other and,
 0.5 s in, every hit kill. Every hit logs its point and direction to the
 float's last bit and a 5 by 5 `bulletTrace` grid round the point (the pose
 the round met); every frame logs each gunner's origin. Captures (recipe in
-each header), 2026-11-14 (the 1.1d one retaken under gdb on 2026-11-16
-with each gunner's `PROBE models`), each with both clients' `CMDS` lines and the
+each header), all retaken on 2026-11-16 with each gunner's `PROBE models`
+(the 1.1d one under gdb), each with both clients' `CMDS` lines and the
 server's receive order (`RECV`, docs/dev/retail.md "Receive order"):
 `crates/server/tests/fixtures/gunduel/mp_carentan-gunduel.txt` (1.1d),
 `-gunduel-1.5.txt` (1.5b), `-gunduel-uo.txt` (UO 1.51b). `gunduel_ab`
@@ -2596,6 +2596,20 @@ included. VERIFIED, the retake's dump: gunner B's rows read 0.5599617,
 ours' 0.5599617; his leaves 0.7000003 and 0.2999997, ours' 0.6999998
 and 0.3000002, which the gate's bounds take. The retake replaced the
 2026-11-14 1.1d capture, which logged no models.
+
+The 1.5b and UO retakes (2026-11-16, no gdb, recipe in each header) log
+the models the same way, so a draw of ours cannot move a round. 1.5's and
+UO's stock character scripts attach every model with ignoreCollision
+(`pak8.pk3`'s `character/mp_*` and `_utility_mp::attachFromArray`)
+(VERIFIED, the paks). INFERRED: UO runs them from `main/`, which holds
+its only `character/mp_*`, whose gear the UO retake's models carry. The
+replay puts the logged models on with the flag (`probe_model_<num>_ic`). vcod
+measurement: without it, UO's re-attach rebuilds the DObj on bits 0 and
+B's rounds hit A's head on seven `turn_a` frames retail's missed. With
+it, both retakes read retail's within `NEAR_15`. A first 1.5b retake read
+one cell 0.006 off (26250, victim 0, the duel's first frame), the
+run-to-run spread the 1.1d rerun below describes; the second, committed,
+reads within the bound.
 
 What a 1.1d rerun of the duel holds (2026-11-16, `probe_gunduel` under gdb,
 both gunners' anim info records at the first `DObjCalcSkel` on each in the

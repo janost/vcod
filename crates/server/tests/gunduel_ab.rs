@@ -71,7 +71,12 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, c: &Case) -> Vec<String> {
     sv.overlay_script("maps/mp/gametypes/probe_gunduel", SCRIPT);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     // The bodies and gear retail's character scripts drew (`PROBE
-    // models`), which the probe puts on ours' players.
+    // models`), which the probe puts on ours' players. 1.5's and UO's
+    // scripts attach every one with ignoreCollision (`pak8.pk3`'s
+    // `character/mp_*` and `_utility_mp::attachFromArray`, which UO loads
+    // from `main/` too).
+    let flagged =
+        proto.transport.version != vcod_common::net::protocol::PROTOCOL_V1.transport.version;
     for l in c
         .fixture
         .lines()
@@ -81,6 +86,9 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, c: &Case) -> Vec<String> {
         let num = t.next().expect("an entity number");
         let key = format!("probe_model_{num}");
         sv.set_cvar(&key, t.next().expect("a body"));
+        if flagged {
+            sv.set_cvar(&format!("{key}_ic"), "1");
+        }
         for (i, m) in t.enumerate() {
             sv.set_cvar(&format!("{key}_{i}"), m);
         }
@@ -507,8 +515,8 @@ fn two_gunners_in_each_others_arc_match_15b() {
     };
     let c = Case {
         fixture: include_str!("fixtures/gunduel/mp_carentan-gunduel-1.5.txt"),
-        join_ms: 7100,
-        late_ms: 3300,
+        join_ms: 7800,
+        late_ms: 3100,
     };
     check(fs, &c, NEAR_15, &[]);
 }
@@ -520,8 +528,8 @@ fn two_gunners_in_each_others_arc_match_uo() {
     };
     let c = Case {
         fixture: include_str!("fixtures/gunduel/mp_carentan-gunduel-uo.txt"),
-        join_ms: 7550,
-        late_ms: 3250,
+        join_ms: 8700,
+        late_ms: 3100,
     };
     check(fs, &c, NEAR_15, &[]);
 }
