@@ -1479,19 +1479,61 @@ pub enum LoadFailure {
 /// module's name and date being 1.1's or 1.5b's (its startup log). The team
 /// count is `G_FindTeams` over `team` keys, which no stock map carries.
 fn restart_game_banner(p: &Protocol) -> String {
+    format!("==== RestartGame ====\n{}", game_init_banner(p))
+}
+
+/// `G_InitGame`'s lines, ahead of the scripts.
+fn game_init_banner(p: &Protocol) -> String {
     let (name, date) = match p.transport.version {
         6 => ("Call of Duty", "Nov 15 2004"),
         22 => ("CoD:United Offensive", "Feb 10 2005"),
         _ => ("main", "Nov 13 2003"),
     };
     format!(
-        "==== RestartGame ====\n\
-         ------- Game Initialization -------\n\
+        "------- Game Initialization -------\n\
          gamename: {name}\n\
          gamedate: {date}\n\
          0 teams with 0 entities\n\
          -----------------------------------\n"
     )
+}
+
+/// What a `map` load prints after the outgoing game's `==== ShutdownGame
+/// ====`: `SV_SpawnServer`'s two lines and `FS_Startup`'s search path, each
+/// directory after its paks, highest first, the `localized_*` paks last
+/// (handshake doc, "Console commands over rcon"). vcod has no hunk and
+/// loads no module, so retail's `Hunk_Clear` and `Sys_LoadDll` lines have
+/// no counterpart.
+fn spawn_server_banner(map: &str, fs: &vcod_common::pk3::Pk3Fs) -> String {
+    let paks: Vec<_> = fs.paks().collect();
+    let mut total = 0;
+    let mut line = |pak: &vcod_common::pk3::PakInfo| {
+        let n = vcod_common::pak_checksum::entry_count(&pak.path).unwrap_or(0);
+        total += n;
+        format!("{} ({n} files)\n", pak.path.display())
+    };
+    let mut out = format!(
+        "------ Server Initialization ------\nServer: {map}\n\
+         ----- FS_Startup -----\nCurrent search path:\n"
+    );
+    let in_dir = |pak: &&&vcod_common::pk3::PakInfo, dir: &std::path::Path, loc: bool| {
+        pak.localized == loc && pak.path.parent() == Some(dir)
+    };
+    for dir in fs.dirs().iter().rev() {
+        for pak in paks.iter().filter(|p| in_dir(p, dir, false)) {
+            out.push_str(&line(pak));
+        }
+        out.push_str(&format!("{}\n", dir.display()));
+    }
+    for dir in fs.dirs().iter().rev() {
+        for pak in paks.iter().filter(|p| in_dir(p, dir, true)) {
+            out.push_str(&line(pak));
+        }
+    }
+    out.push_str(&format!(
+        "\nFile Handles:\n----------------------\n{total} files in pk3 files\n"
+    ));
+    out
 }
 
 /// The CoD1 server (1.1, 1.5 and UO): the engine over [`Cod1Game`].
@@ -1884,6 +1926,7 @@ impl Server {
             last_spawn_tick: None,
             fatal: None,
             test_client_counter: 0,
+            udp_slots: 0,
             archive: Default::default(),
             dedicated: 1,
             rcon_password: String::new(),
@@ -2533,6 +2576,7 @@ impl Server {
         log::info!("client {slot} {:?} connected from {from}", client.name);
         let name = client.name.clone();
         self.core.clients[slot] = Some(client);
+        self.game.udp_slots |= 1 << slot;
         if let Some(rt) = self.game.module.script.as_mut() {
             rt.push_client_event(ClientEvent::Connect { slot, name });
         }
@@ -5259,6 +5303,9 @@ impl Server {
         // Step 5: the game module is unloaded, its object table with it, and
         // step 8's `memset(&sv, 0, ...)` takes everything the level queued.
         self.shutdown_game_log();
+        if self.game.module.script.is_some() {
+            self.print("==== ShutdownGame ====\n");
+        }
         self.game.module.script = None;
         self.game.module.pending_explosions.clear();
         self.game.module.weapon_changes.clear();
@@ -5283,6 +5330,8 @@ impl Server {
             self.game.proto,
         );
         self.core.configstrings[CS_SERVERINFO] = self.serverinfo().to_string();
+        self.print(&spawn_server_banner(map, &fs));
+        self.print(&game_init_banner(self.game.proto));
         // Step 19. Past the teardown: a failure here leaves no level.
         self.load_scripts_with(fs, false, carry, save_persist)
             .map_err(LoadFailure::Fatal)?;
@@ -6679,6 +6728,7 @@ impl Server {
                 configstrings: &self.core.configstrings,
                 archive: &mut self.game.archive,
                 test_client_counter: &mut self.game.test_client_counter,
+                udp_slots: self.game.udp_slots,
             },
         )
     }
@@ -6786,11 +6836,6 @@ impl Server {
                 // A spectator, an intermission camera and a dead player are
                 // each unlinked or `SVF_NOCLIENT`, so nobody is sent an
                 // entity for one ([`crate::spectate::ClientSim::linked`]).
-                // A tank's driver is never sent to anyone (the engine's
-                // snapshot build, coduo_lnxded 0x8096b97).
-                let hidden = sim
-                    .seat
-                    .is_some_and(|s| crate::game::vehicle::seat::hidden_rider(s.kind, s.pos));
                 // The state this frame's own end frame copied, which a
                 // higher slot's turret round after it changes only in the
                 // playerstate: its knockback, and a death, which still goes
@@ -6801,9 +6846,7 @@ impl Server {
                     .as_ref()
                     .filter(|(t, _)| *t == self.core.sv_time_ms)
                     .map(|(_, e)| e.clone());
-                if hidden {
-                    None
-                } else if sim.linked() {
+                if sim.linked() {
                     let mut e = copied.unwrap_or_else(|| {
                         sim.to_entity(self.game.proto, i, c.as_ref().unwrap().last_processed_st)
                     });
@@ -6887,6 +6930,16 @@ impl Server {
                 if let Some(e) = culled.remove(&n) {
                     broadcast.insert(n, e);
                 }
+            }
+        }
+        // A tank's driver is sent to no one unless the broadcast tests
+        // ahead of the skip took him (coduo_lnxded 0x8096d6b..0x8096db8:
+        // `eType` 1, `eFlags` 0x100000, his `r.ownerNum`'s `surfType` 2,
+        // his own `surfType & 7` 1; coduo-diff.md 9).
+        for (slot, c) in self.core.clients.iter().enumerate() {
+            let seat = c.as_ref().and_then(|c| c.sim.as_ref()).and_then(|s| s.seat);
+            if seat.is_some_and(|s| crate::game::vehicle::seat::hidden_rider(s.kind, s.pos)) {
+                culled.remove(&(slot as u32));
             }
         }
         crate::archive::WorldFrame {
@@ -9444,6 +9497,95 @@ mod tests {
             assert_eq!(ticking, held, "{v}: the old player's thread");
             assert_eq!(sv.client_count(), 1);
         }
+    }
+
+    /// `addTestClient`'s first bot (port 0) inside the first 3 s is refused
+    /// while a slot no client ever took is left, and taken once a UDP client
+    /// has held every slot: an IP address never matches a bot's in
+    /// `SV_DirectConnect`'s reconnect check (cod_lnxded 0x8080e60, object
+    /// model doc 25).
+    #[test]
+    fn the_first_test_client_is_refused_only_beside_a_never_used_slot() {
+        use crate::game::script::{CALLBACK_SETUP, ScriptRuntime};
+        for every_slot_held in [false, true] {
+            let now = Instant::now();
+            let mut c = cfg();
+            c.max_clients = 2;
+            let mut sv = Server::new(c, now);
+            install_script(
+                &mut sv,
+                ScriptRuntime::for_test_at(
+                    CALLBACK_SETUP,
+                    "main() { level.bot = -1; thread add(); }\n\
+                     add() { wait 2.5; level.bot = isdefined(addtestclient()); }\n\
+                     CodeCallback_PlayerConnect() {}\n\
+                     CodeCallback_PlayerDisconnect() {}\n",
+                ),
+            );
+            connected(&mut sv, addr(5), now);
+            if every_slot_held {
+                let challenge = challenge_for(&mut sv, addr(6), now);
+                let v = sv.game.proto.transport.version;
+                sv.handle_packet(addr(6), &connect_pkt(challenge, QPORT + 1, v), now);
+                assert_eq!(reply_text(&mut sv).0, "connectResponse");
+                sv.drop_client(1, "EXE_DISCONNECTED");
+            }
+            for ms in (0..=2800).step_by(50) {
+                sv.tick(now + Duration::from_millis(ms));
+            }
+            assert!(sv.svs_time_ms() < 3000);
+            let bot = sv.game.module.script.as_mut().unwrap().level_field("bot");
+            assert_eq!(
+                bot,
+                vcod_gsc::Value::Int(every_slot_held as i32),
+                "every slot held: {every_slot_held}"
+            );
+        }
+    }
+
+    /// A tank driver goes to no one, but the broadcast tests run ahead of
+    /// that skip, so a sound on him sends him to everyone while it lasts
+    /// (coduo_lnxded 0x8096d0a..0x8096db8, coduo-diff.md 9).
+    #[test]
+    fn a_tank_driver_is_sent_only_while_broadcast() {
+        use crate::game::script::{CALLBACK_SETUP, ScriptRuntime};
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        install_script(
+            &mut sv,
+            ScriptRuntime::for_test_at(
+                CALLBACK_SETUP,
+                "main() {}\n\
+                 CodeCallback_PlayerConnect() { self waittill(\"begin\"); \
+                   self.sessionstate = \"playing\"; \
+                   self spawn((0, 0, 64), (0, 0, 0)); }\n",
+            ),
+        );
+        begun(&mut sv, now);
+        for ms in (0..=200).step_by(50) {
+            sv.tick(now + Duration::from_millis(ms));
+        }
+        let sent = |sv: &mut Server| {
+            let f = sv.build_world_frame();
+            (f.culled.contains_key(&0), f.broadcast.contains_key(&0))
+        };
+        assert_eq!(sent(&mut sv), (true, false), "on foot");
+        let sim = sv.core.clients[0].as_mut().unwrap().sim.as_mut().unwrap();
+        sim.seat = Some(crate::spectate::Seat {
+            vehicle: 100,
+            pos: 1,
+            kind: crate::game::vehicle::info::KIND_TANK,
+            motion: 1,
+            angles: [0.0; 3],
+            hull_view: false,
+            overheated: false,
+            link_offset: [0.0; 3],
+        });
+        assert_eq!(sent(&mut sv), (false, false), "driving");
+        let rt = sv.game.module.script.as_mut().unwrap();
+        let id = rt.host.ents.handle(0).unwrap();
+        rt.host.ents.get_mut(id).unwrap().broadcast_time = -1;
+        assert_eq!(sent(&mut sv), (false, true), "driving under a loop sound");
     }
 
     /// The disconnect callback's commands to the leaver alone go into its
@@ -13882,6 +14024,46 @@ mod tests {
             sv.tick(at);
             sv.take_outgoing();
         }
+    }
+
+    /// `map` of another map answers with the outgoing game's shutdown, the
+    /// spawn's two lines, the search path with each pak's file count and
+    /// their total, then the incoming game's banner, as retail 1.1d's did
+    /// over rcon (handshake doc, "Console commands over rcon").
+    #[test]
+    fn a_map_change_over_rcon_prints_the_spawn_and_the_search_path() {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let t = Instant::now();
+        let mut sv = Server::new(cfg(), t);
+        sv.set_cvar("rconpassword", "pw");
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        let reply = rcon(&mut sv, "pw map mp_harbor", t + Duration::from_millis(500)).concat();
+        let head = "print\n==== ShutdownGame ====\n------ Server Initialization ------\n\
+                    Server: mp_harbor\n----- FS_Startup -----\nCurrent search path:\n";
+        let rest = reply.strip_prefix(head).expect(&reply);
+        let (path, tail) = rest.split_once("\n\nFile Handles:\n").expect(&reply);
+        let counts: Vec<usize> = path
+            .lines()
+            .filter_map(|l| {
+                l.strip_suffix(" files)")?
+                    .rsplit_once(".pk3 (")?
+                    .1
+                    .parse()
+                    .ok()
+            })
+            .collect();
+        assert!(counts.len() >= 2, "{path}");
+        let total: usize = counts.iter().sum();
+        let game = "------- Game Initialization -------\ngamename: main\n\
+                    gamedate: Nov 13 2003\n0 teams with 0 entities\n\
+                    -----------------------------------\n";
+        assert_eq!(
+            tail,
+            format!("----------------------\n{total} files in pk3 files\n{game}")
+        );
     }
 
     /// `SV_CalcPings`: the round trip each acked message took, on the

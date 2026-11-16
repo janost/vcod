@@ -137,6 +137,9 @@ pub struct AudioSystem {
     /// Lowercased alias name -> last picked row index, for the no-repeat
     /// rule (research doc, section 1e).
     last_pick: HashMap<String, usize>,
+    /// Lowercased alias name -> each row's pick counter, United Offensive's
+    /// no-repeat state, which its `lod` pick reads per admitted row.
+    pick_counts: HashMap<String, Vec<u32>>,
     /// Per 1-based CS7 index, filled lazily; `None` = load failed.
     pub(crate) weapon_sounds: HashMap<i32, Option<WeaponSounds>>,
     rng: Rng,
@@ -359,6 +362,7 @@ impl AudioSystem {
             listener: Listener::default(),
             ps_entity: u32::MAX,
             last_pick: HashMap::new(),
+            pick_counts: HashMap::new(),
             weapon_sounds: HashMap::new(),
             rng: Rng::new(0x5eed_a11a5),
             master_volume: opts.volume.clamp(0.0, 1.0),
@@ -484,6 +488,7 @@ impl AudioSystem {
         self.table.clear();
         self.stop_all();
         self.last_pick.clear();
+        self.pick_counts.clear();
         self.weapon_sounds.clear();
         log::info!("audio: {} aliases apply on {map}", self.aliases.len());
     }
@@ -1074,6 +1079,7 @@ impl AudioSystem {
         let roll = self.rng.next_f32();
         let key = cue.alias.to_ascii_lowercase();
         let last = self.last_pick.get(&key).copied();
+        let dist = self.lod_distance(cue.source);
         let set = if menu {
             &self.menu_aliases
         } else {
@@ -1082,7 +1088,10 @@ impl AudioSystem {
         // United Offensive's pick weighs only the rows whose `lod` admits
         // the emitter's distance (syscall 0xc4).
         let (pick, index) = match self.uo && !menu {
-            true => set.pick_lod(&cue.alias, roll, last, self.lod_distance(cue.source)),
+            true => {
+                let counts = self.pick_counts.entry(key.clone()).or_default();
+                (set.pick_lod(&cue.alias, roll, counts, dist), None)
+            }
             false => set.pick(&cue.alias, roll, last),
         };
         let row = match pick {
