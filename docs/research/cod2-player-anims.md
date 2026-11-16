@@ -124,6 +124,28 @@ INFERRED (control flow):
 - `BG_SwingAngles` (0x80da7dc, Mac 0x182170) sets a swing past its clamp to
   `dest ∓ clamp`, where 1.1 leaves it a degree inside.
 
+The updater's stance tests read the `MOVETYPE` condition (condition 3,
+`ci+0x474`) through 0x80d98a4 (0x80daa7a, 0x80dab05): `& 0xc0000` swings
+all three angles, `& 6` clear sets the legs and torso swinging.
+VERIFIED (the instructions). Two writers fill it: pmove's anim script at
+each cmd (`BG_AnimScriptAnimation`, 0x80d958f, the movetype's bit) and
+the end frame's conditions after the updater (0x80db296, the legs
+record's movetype mask when it differs). VERIFIED (the calls). So a
+server's updater reads the movetype the frame's cmds picked, not the one
+the last end frame wrote. VERIFIED (gdb, `tools/re/cod2_skel_gdb.py` on
+the `antilag-slow` run: at 9700 the strafing target's legs go to
+`pb_stand_alert` with `movementDir` still -14, the condition reads 2
+going in, and the legs stay at the view's yaw, not swinging). vcod's
+updater had read the strafe's 1024 the end frame before wrote and swung
+the legs 7 degrees there, the round's 51 bones up to 2.6 units off.
+VERIFIED, the gate. vcod's server
+writes the condition off the end frame's legs record ahead of the step
+(`PlayerBody::script_movetype`); the record's mask stands in for the
+movetype's one bit, which the wire does not carry. INFERRED (the two
+agree on every test the updater makes while no anim plays under both an
+idle and a moving movetype). The cgame runs no pmove for other bodies,
+so a drawn body keeps the end frame's order. INFERRED.
+
 ## 6. The controllers
 
 `BG_Player_DoControllers` (0x80dbc70, Mac 0x182b82; its target half
@@ -216,11 +238,41 @@ time off 0.001 gave 0.41725 and 0.8335. VERIFIED (gdb, the antilag recipe
 under `tools/re/cod2_skel_gdb.py`: every leaf weight of the target's
 builds from 9000 to 17150 matches vcod's word for word, the stand to run
 and run to stand fades included). vcod's channel clock runs this setter
-and step on CoD2 bodies (`Ramp::cod2`). The same dump's node times part
-from vcod's at 12100, the frame after a run clip set at 12000 off the
-other run clip's time: retail's step from 12050 is 0.0083 where vcod's is
-near 0.1, so the rate the lerp frame hands that clip differs in the
-frames after a strafe's turn. VERIFIED (the dump); why is not known.
+and step on CoD2 bodies (`Ramp::cod2`).
+
+The rate (0x80da42a): the distance from the lerp frame's `pos` (+0x1c) to
+the entity's `pos.trBase` (0x80a40ea: the difference stored, its squares
+summed on the stack and stored, libm `sqrt` stored), divided on the stack
+by `ms * 0.001` (the float at 0x81531e8, the product never stored),
+stored, then by the float `moveSpeed` (anim +0x44), stored at +0x28; the
+clamps compare the float `moveSpeed` with 150 and 20 and the cap is `3 -
+(moveSpeed - 20) / 130` on the stack, stored. VERIFIED (the
+instructions). A clock that took the seconds as a stored float (`0.05`
+is `0x3d4ccccd`, `50 * 0.001f` on the stack is above it) left the rate a
+word off now and then, and the node time from then on: on a fresh
+antilag run the run clip's time parted by a word at 10700 after the rate
+`0x3ea8907f` came out `0x3ea89080`. VERIFIED (gdb: `tools/re/cod2_gdb_all.py`
+runs `cod2_trace_gdb.py`, `cod2_anim_gdb.py` and `cod2_skel_gdb.py` in one
+session; the lerp frame's +0x1c, +0x28 and +0x2c at each build). vcod
+runs it so on CoD2 bodies (`animclock::rate_cod2`); on three fresh runs
+every leaf's node time and weight at every build of the target matches
+vcod's word for word (209, 209 and 206 builds). VERIFIED (the dumps
+against the replays). The drawn body takes the same rate; the cgame's
+(`CoD2MP_s.exe`) is not read. INFERRED.
+
+A frame the server runs with no packet before it measures nothing:
+`SV_Frame` runs every frame due back to back and sends one snapshot after
+the last, so a run slowed by gdb's breakpoints holds the snapshot's
+`pos` at each frame in between, the first of them measuring the whole
+move (rate 2, the cap) and the rest none (0.1). VERIFIED (gdb on the
+`antilag-slow` run: from 10100 to 11250 its target's lerp frame holds
+each next snapshot's snapped origin at the frames with no snapshot,
+10150 and 10200 that of 10250). That is the 0.0083 step against vcod's
+near 0.1 an earlier dump showed at 12100: the gates had skipped each
+frame with no snapshot, so vcod's clock measured the move over the gap.
+INFERRED (that dump is gone; the slowed run shows the same steps at each
+such frame). The antilag and hit pose gates now run such a frame on the
+next snapshot's playerstate (`Side::ran_at`).
 
 ## 8. What vcod carries over
 
@@ -240,9 +292,7 @@ frames after a strafe's turn. VERIFIED (the dump); why is not known.
   `moveSpeed` is `animtree::AnimMotion::move_speed_f`, which the rate
   divides by once `PlayerAnims::float_move_speed` is set
   (`PlayerAnimSet::load` sets it).
-- Not modelled: the blend table's exact 1.5 differences in section 7, and
-  the float `moveSpeed` in the rate clamps' bands (they read the truncated
-  one).
+- Not modelled: the blend table's exact 1.5 differences in section 7.
 - The drawn body's light origin (`BodyFrame::light_origin`) is the one
   `CG_Player` (Mac 0x1e6834) and `CG_Corpse` (0x1e78ea) build, the same
   as 1.1's (VERIFIED, the stores; cod2-materials.md 9.2).
