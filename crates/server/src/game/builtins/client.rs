@@ -317,6 +317,7 @@ pub fn set_player_origin(
     let playing = !host.client_vitals[slot].dead;
     host.link_client(slot, origin, host.client_box(slot), contents, playing);
     host.client_link_origin[slot] = origin;
+    host.move_client_body(slot, Some(origin));
     host.client_sim_ops
         .push((slot, SimOp::SetOrigin { origin }));
     Ok(Value::Undefined)

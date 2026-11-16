@@ -1734,6 +1734,24 @@ impl GameHost {
         out
     }
 
+    /// A script's move of a client to `origin` (`setOrigin`, `spawn`), which
+    /// relinks him there at once: the bodies a later spawn's think and a
+    /// scripted blast meet in the same frame move with it
+    /// (docs/research/cod11-player-clip.md 13.5). `None` takes the body out.
+    pub fn move_client_body(&mut self, slot: usize, origin: Option<[f32; 3]>) {
+        let Some(b) = self.client_bodies.get_mut(slot) else {
+            return;
+        };
+        match origin {
+            Some(o) => {
+                if let Some(b) = b.as_mut() {
+                    b.origin = o.into();
+                }
+            }
+            None => *b = None,
+        }
+    }
+
     /// The other live players as a `Pmove` meets them, off
     /// [`Self::client_bodies`]: what the spawn's think moves among. A body
     /// `StuckInClient` marked a corpse still reads as one here.
