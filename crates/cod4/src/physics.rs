@@ -1,7 +1,8 @@
 //! A `physicsLaunch`ed part on the client: the rigid body iw3mp.exe's
 //! `CG_CreatePhysicsObject` (0x434c70) hands ODE's fx world, stood in by a
-//! small impulse solver that sweeps the body's corners through the clip
-//! map. Retail's model and where this one differs: cod4-gsc.md 3.6.
+//! small impulse solver that sweeps the body's points through the clip
+//! map and meets the world's brushes and triangles with its boxes.
+//! Retail's model and where this one differs: cod4-gsc.md 3.6.
 
 use crate::assets::Assets;
 use crate::assets::model::{PhysBrush, PhysGeomList, XModel};
@@ -111,12 +112,22 @@ impl Default for Dvars {
 }
 
 /// A part's collision and mass in its model's frame: the points that meet
-/// the world, the centre of mass and the inertia per unit of mass about it.
+/// the world, the boxes among its geoms, the centre of mass and the inertia
+/// per unit of mass about it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shape {
     pub points: Vec<Vec3>,
+    pub boxes: Vec<ShapeBox>,
     pub com: Vec3,
     pub inertia: Mat3,
+}
+
+/// A box geom: its centre, its axes (the columns) and half sizes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShapeBox {
+    pub centre: Vec3,
+    pub axes: Mat3,
+    pub half: Vec3,
 }
 
 impl Shape {
@@ -141,6 +152,7 @@ impl Shape {
         let (c, h) = ((mins + maxs) * 0.5, (maxs - mins) * 0.5);
         Shape {
             points: corners(c, Mat3::IDENTITY, h),
+            boxes: vec![ShapeBox::new(c, Mat3::IDENTITY, h)],
             com: c,
             inertia: box_inertia(h),
         }
@@ -158,6 +170,7 @@ impl Shape {
         let h = (maxs - mins) * 0.5;
         Shape {
             points: corners(c, Mat3::IDENTITY, h),
+            boxes: vec![ShapeBox::new(c, Mat3::IDENTITY, h)],
             com: c,
             inertia: box_inertia(h),
         }
@@ -167,13 +180,24 @@ impl Shape {
     /// list's `PhysMass`; `None` when the list gives no point.
     fn of_geoms(list: &PhysGeomList) -> Option<Shape> {
         let mut points = Vec::new();
+        let mut boxes = Vec::new();
         for g in &list.geoms {
             if let Some(b) = &g.brush {
-                if b.planes.is_empty() {
-                    let (lo, hi) = (Vec3::from(b.mins), Vec3::from(b.maxs));
-                    points.extend(corners((lo + hi) * 0.5, Mat3::IDENTITY, (hi - lo) * 0.5));
-                } else {
-                    points.extend(brush_corners(b));
+                let (lo, hi) = (Vec3::from(b.mins), Vec3::from(b.maxs));
+                let (c, h) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
+                // A brush no side cuts is its bounds' box.
+                let cut = (!b.planes.is_empty())
+                    .then(|| brush_corners(b))
+                    .filter(|cut| {
+                        let at_bounds = |p: &Vec3| ((*p - c).abs() - h).abs().max_element() < 0.01;
+                        !(cut.len() == 8 && cut.iter().all(at_bounds))
+                    });
+                match cut {
+                    Some(cut) => points.extend(cut),
+                    None => {
+                        points.extend(corners(c, Mat3::IDENTITY, h));
+                        boxes.push(ShapeBox::new(c, Mat3::IDENTITY, h));
+                    }
                 }
                 continue;
             }
@@ -185,7 +209,10 @@ impl Shape {
             let at = Vec3::from(g.offset);
             let h = Vec3::from(g.half_lengths);
             match g.kind {
-                GEOM_BOX => points.extend(corners(at, axis, h)),
+                GEOM_BOX => {
+                    points.extend(corners(at, axis, h));
+                    boxes.push(ShapeBox::new(at, axis, h));
+                }
                 // The axis is the first row, `halfLengths` the half height
                 // and the radius.
                 GEOM_CYLINDER => {
@@ -207,6 +234,7 @@ impl Shape {
         let p = list.products;
         Some(Shape {
             points,
+            boxes,
             com: list.center_of_mass.into(),
             inertia: Mat3::from_cols(
                 Vec3::new(m[0], p[0], p[1]),
@@ -256,6 +284,12 @@ pub fn part_models(zones: &[&Assets]) -> HashMap<String, Arc<PartModel>> {
     out
 }
 
+impl ShapeBox {
+    fn new(centre: Vec3, axes: Mat3, half: Vec3) -> ShapeBox {
+        ShapeBox { centre, axes, half }
+    }
+}
+
 /// A box's points: its eight corners, then its edges' midpoints and its
 /// faces' centres, so a world edge poking in between two corners meets
 /// one; centre `at`, axes the columns of `axis`.
@@ -275,6 +309,12 @@ fn brush_corners(b: &PhysBrush) -> Vec<Vec3> {
         .flat_map(|k| [(-Vec3::AXES[k], -lo[k]), (Vec3::AXES[k], hi[k])])
         .collect();
     planes.extend(b.planes.iter().map(|p| (Vec3::new(p[0], p[1], p[2]), p[3])));
+    plane_corners(&planes)
+}
+
+/// Where three of `planes` (`n . p <= d` inside) meet inside all of them,
+/// each corner once.
+fn plane_corners(planes: &[(Vec3, f32)]) -> Vec<Vec3> {
     const EPS: f32 = 0.01;
     let mut out: Vec<Vec3> = Vec::new();
     for i in 0..planes.len() {
@@ -300,6 +340,208 @@ fn brush_corners(b: &PhysBrush) -> Vec<Vec3> {
 fn box_inertia(h: Vec3) -> Mat3 {
     let s = h * h / 3.0;
     Mat3::from_diagonal(Vec3::new(s.y + s.z, s.x + s.z, s.x + s.y))
+}
+
+/// A convex piece of the world a box geom meets: a brush, or a triangle
+/// (`open`, solid only behind its one face).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Solid {
+    /// Each face's plane, `n . p <= d` inside, and its corners in order
+    /// round `n`.
+    pub faces: Vec<(Vec3, f32, Vec<Vec3>)>,
+    pub verts: Vec<Vec3>,
+    pub open: bool,
+}
+
+/// The world's solids round a box, `lo..hi`.
+pub type Solids<'a> = dyn FnMut(Vec3, Vec3) -> Vec<Solid> + 'a;
+
+impl Solid {
+    /// A brush of `planes`; `None` when they bound nothing.
+    pub fn brush(planes: &[(Vec3, f32)]) -> Option<Solid> {
+        const EPS: f32 = 0.01;
+        let verts = plane_corners(planes);
+        let mut faces = Vec::new();
+        for &(n, d) in planes {
+            let mut on: Vec<Vec3> = verts
+                .iter()
+                .copied()
+                .filter(|v| (n.dot(*v) - d).abs() < EPS)
+                .collect();
+            if on.len() < 3 {
+                continue;
+            }
+            let c = on.iter().copied().sum::<Vec3>() / on.len() as f32;
+            let t0 = n.any_orthonormal_vector();
+            let t1 = n.cross(t0);
+            let angle = |v: &Vec3| (*v - c).dot(t1).atan2((*v - c).dot(t0));
+            on.sort_by(|a, b| angle(a).total_cmp(&angle(b)));
+            faces.push((n, d, on));
+        }
+        (faces.len() >= 4).then_some(Solid {
+            faces,
+            verts,
+            open: false,
+        })
+    }
+
+    /// A triangle, its front `(c - a) x (b - a)` as the point trace's
+    /// (`CM_TracePointThroughTriangle`); `None` when degenerate.
+    pub fn triangle(t: [Vec3; 3]) -> Option<Solid> {
+        let n = (t[2] - t[0]).cross(t[1] - t[0]).try_normalize()?;
+        Some(Solid {
+            // Corners in order round the front.
+            faces: vec![(n, n.dot(t[0]), vec![t[0], t[2], t[1]])],
+            verts: t.to_vec(),
+            open: true,
+        })
+    }
+}
+
+/// `poly` clipped to the side of each plane `(n, d)` where `n . p >= d`.
+fn clip_polygon(mut poly: Vec<Vec3>, planes: impl IntoIterator<Item = (Vec3, f32)>) -> Vec<Vec3> {
+    for (n, d) in planes {
+        if poly.is_empty() {
+            break;
+        }
+        let mut out = Vec::with_capacity(poly.len() + 2);
+        for i in 0..poly.len() {
+            let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+            let (da, db) = (n.dot(a) - d, n.dot(b) - d);
+            if da >= 0.0 {
+                out.push(a);
+            }
+            if (da >= 0.0) != (db >= 0.0) {
+                out.push(a + (b - a) * (da / (da - db)));
+            }
+        }
+        poly = out;
+    }
+    poly
+}
+
+/// A box (centre `c`, axes the columns of `a`, half sizes `h`, world)
+/// against `s`, as the fx world's box-against-brush collider does it
+/// (iw3mp.exe 0x59a610, cod4-gsc.md 3.6.1): the least deep of the box's
+/// faces and the solid's is the reference, the face of the other most
+/// against it is clipped to it, and each clipped point under `margin`
+/// off it is a contact. Pushes `(point on the box, normal out of the
+/// solid, separation)`, the separation below 0 inside. A triangle is
+/// only ever the reference, and is met from its front.
+fn box_contacts(
+    c: Vec3,
+    a: Mat3,
+    h: Vec3,
+    s: &Solid,
+    margin: f32,
+    out: &mut Vec<(Vec3, Vec3, f32)>,
+) {
+    let axes = [a.x_axis, a.y_axis, a.z_axis];
+    let box_verts: Vec<Vec3> = (0..8)
+        .map(|i| {
+            let sign = |bit: u32| if i >> bit & 1 == 1 { 1.0 } else { -1.0 };
+            c + axes[0] * (h.x * sign(0)) + axes[1] * (h.y * sign(1)) + axes[2] * (h.z * sign(2))
+        })
+        .collect();
+    // The solid's faces: how far the box's deepest corner lies off each.
+    let mut face = (f32::NEG_INFINITY, 0);
+    for (i, (n, d, _)) in s.faces.iter().enumerate() {
+        if s.open && n.dot(c) < *d {
+            // Past the triangle's face by more than half: its back.
+            return;
+        }
+        let sep = box_verts
+            .iter()
+            .map(|v| n.dot(*v))
+            .fold(f32::INFINITY, f32::min)
+            - d;
+        if sep > margin {
+            return;
+        }
+        if sep > face.0 {
+            face = (sep, i);
+        }
+    }
+    // The box's faces: its intervals against the solid's along its axes.
+    let mut side = (f32::NEG_INFINITY, 0, 1.0);
+    for (k, ax) in axes.iter().enumerate() {
+        let (lo, hi) = s
+            .verts
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| {
+                let x = ax.dot(*v);
+                (lo.min(x), hi.max(x))
+            });
+        let mid = ax.dot(c);
+        let (above, below) = (lo - (mid + h[k]), (mid - h[k]) - hi);
+        let (sep, sign) = if above >= below {
+            (above, 1.0)
+        } else {
+            (below, -1.0)
+        };
+        if sep > margin {
+            return;
+        }
+        if sep > side.0 {
+            side = (sep, k, sign);
+        }
+    }
+    if s.open || face.0 >= side.0 {
+        // The solid's face is the reference: the box's face most against
+        // it, clipped to the inside of the face's edges.
+        let (n, d, poly) = &s.faces[face.1];
+        let (k, sign) = (0..3)
+            .flat_map(|k| [(k, 1.0f32), (k, -1.0)])
+            .min_by(|x, y| {
+                (axes[x.0] * x.1)
+                    .dot(*n)
+                    .total_cmp(&(axes[y.0] * y.1).dot(*n))
+            })
+            .unwrap();
+        let (u, v) = (axes[(k + 1) % 3], axes[(k + 2) % 3]);
+        let (hu, hv) = (h[(k + 1) % 3], h[(k + 2) % 3]);
+        let fc = c + axes[k] * (h[k] * sign);
+        let quad = vec![
+            fc + u * hu + v * hv,
+            fc - u * hu + v * hv,
+            fc - u * hu - v * hv,
+            fc + u * hu - v * hv,
+        ];
+        let edges = (0..poly.len()).map(|i| {
+            let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
+            let inward = n.cross(q - p);
+            (inward, inward.dot(p))
+        });
+        for p in clip_polygon(quad, edges) {
+            let sep = n.dot(p) - d;
+            if sep <= margin {
+                out.push((p, *n, sep));
+            }
+        }
+    } else {
+        // The box's face is the reference: the solid's face most against
+        // it, clipped to the face's rectangle.
+        let (k, sign) = (side.1, side.2);
+        let nb = axes[k] * sign;
+        let plane = nb.dot(c) + h[k];
+        let Some((_, _, poly)) = s
+            .faces
+            .iter()
+            .min_by(|x, y| x.0.dot(nb).total_cmp(&y.0.dot(nb)))
+        else {
+            return;
+        };
+        let rect = [(k + 1) % 3, (k + 2) % 3].into_iter().flat_map(|j| {
+            let m = axes[j].dot(c);
+            [(axes[j], m - h[j]), (-axes[j], -m - h[j])]
+        });
+        for p in clip_polygon(poly.clone(), rect) {
+            let sep = nb.dot(p) - plane;
+            if sep <= margin {
+                out.push((p - nb * sep, -nb, sep));
+            }
+        }
+    }
 }
 
 /// One corner's contact with the world in a step.
@@ -329,9 +571,11 @@ pub struct Body {
     /// Inertia and its inverse about the centre of mass, body axes.
     inertia: Mat3,
     inv_inertia: Mat3,
-    /// The centre of mass in the model's frame, and the points off it.
+    /// The centre of mass in the model's frame, and the points and boxes
+    /// off it.
     com: Vec3,
     points: Vec<Vec3>,
+    boxes: Vec<ShapeBox>,
     bounce: f32,
     friction: f32,
     /// Seconds below both sleep speeds.
@@ -373,6 +617,11 @@ impl Body {
             inv_inertia: inertia.inverse(),
             com: shape.com,
             points: shape.points.iter().map(|p| *p - shape.com).collect(),
+            boxes: shape
+                .boxes
+                .iter()
+                .map(|b| ShapeBox::new(b.centre - shape.com, b.axes, b.half))
+                .collect(),
             bounce: preset.bounce.min(1.0),
             friction: preset.friction,
             idle: 0.0,
@@ -443,6 +692,11 @@ impl Body {
     /// steps of at least `step_ms`, each at least half what is left, so
     /// the body runs up to a step ahead and [`Self::pose`] lerps.
     pub fn advance(&mut self, time: i32, trace: &mut Trace, d: &Dvars) {
+        self.advance_in(time, trace, &mut |_, _| Vec::new(), d);
+    }
+
+    /// [`Self::advance`] with the body's boxes meeting `solids` as well.
+    pub fn advance_in(&mut self, time: i32, trace: &mut Trace, solids: &mut Solids, d: &Dvars) {
         if time.wrapping_sub(self.sim_ms) <= 0 {
             return;
         }
@@ -452,7 +706,7 @@ impl Body {
         while time.wrapping_sub(self.sim_ms) > 0 {
             let step = (time.wrapping_sub(self.sim_ms) / left).max(d.step_ms);
             left = (left - 1).max(1);
-            self.step(step as f32 / 1000.0, trace, d);
+            self.step_in(step as f32 / 1000.0, trace, solids, d);
             self.sim_ms = self.sim_ms.wrapping_add(step);
         }
     }
@@ -487,10 +741,24 @@ impl Body {
         self.points.iter().map(|p| self.pos + self.rot * *p)
     }
 
+    /// Every box geom in world space.
+    pub fn world_boxes(&self) -> impl Iterator<Item = ShapeBox> + '_ {
+        let r = Mat3::from_quat(self.rot);
+        self.boxes
+            .iter()
+            .map(move |b| ShapeBox::new(self.pos + self.rot * b.centre, r * b.axes, b.half))
+    }
+
     /// One step of `dt` seconds: gravity, the corners' contacts solved as
     /// impulses with Coulomb friction and the preset's bounce, the move,
     /// the drag, the sleep test.
     pub fn step(&mut self, dt: f32, trace: &mut Trace, d: &Dvars) {
+        self.step_in(dt, trace, &mut |_, _| Vec::new(), d);
+    }
+
+    /// [`Self::step`] with the boxes' contacts with `solids` among the
+    /// points'.
+    pub fn step_in(&mut self, dt: f32, trace: &mut Trace, solids: &mut Solids, d: &Dvars) {
         if self.asleep {
             self.jitter.clear();
             return;
@@ -507,6 +775,7 @@ impl Body {
             }
             if pass == 0 {
                 self.shake(&found, d);
+                contacts.extend(self.box_contacts(dt, solids, d, v0, w0));
             }
             contacts.extend(found);
             self.solve(&mut contacts, d);
@@ -624,32 +893,85 @@ impl Body {
                 continue;
             };
             touched[i] = true;
-            let approach = (v0 + w0.cross(r)).dot(n);
-            let target = if sep < 0.0 {
-                (d.erp * -sep / dt).min(d.max_correcting)
-            } else if approach < -BOUNCE_VEL && -approach * dt >= sep {
-                -self.bounce * approach
-            } else {
-                -sep / dt
-            };
-            let k = |dir: Vec3| {
-                let rn = r.cross(dir);
-                1.0 / self.mass + rn.dot(inv_iw * rn)
-            };
-            let t0 = n.any_orthonormal_vector();
-            let t = [t0, n.cross(t0)];
-            out.push(Contact {
-                r,
-                n,
-                target,
-                k_n: k(n),
-                t,
-                k_t: [k(t[0]), k(t[1])],
-                lambda: 0.0,
-                lambda_t: [0.0; 2],
-            });
+            out.push(self.contact(r, n, sep, dt, d, v0, w0, &inv_iw));
         }
         out
+    }
+
+    /// The contacts of the boxes with the solids round them: every point
+    /// [`box_contacts`] finds within the step's reach, the reach the most
+    /// any corner travels in the step and the trace's skin.
+    fn box_contacts(
+        &self,
+        dt: f32,
+        solids: &mut Solids,
+        d: &Dvars,
+        v0: Vec3,
+        w0: Vec3,
+    ) -> Vec<Contact> {
+        let inv_iw = self.inv_inertia_world();
+        let mut out = Vec::new();
+        let mut found = Vec::new();
+        for b in &self.boxes {
+            let axes = Mat3::from_quat(self.rot) * b.axes;
+            let c = self.pos + self.rot * b.centre;
+            let ext = axes.x_axis.abs() * b.half.x
+                + axes.y_axis.abs() * b.half.y
+                + axes.z_axis.abs() * b.half.z;
+            let reach =
+                (v0.length() + w0.length() * (b.centre.length() + b.half.length())) * dt + SKIN;
+            found.clear();
+            for s in solids(c - ext - Vec3::splat(reach), c + ext + Vec3::splat(reach)) {
+                box_contacts(c, axes, b.half, &s, reach, &mut found);
+            }
+            for &(p, n, sep) in &found {
+                out.push(self.contact(p - self.pos, n, sep, dt, d, v0, w0, &inv_iw));
+            }
+        }
+        out
+    }
+
+    /// A contact at `r` off the centre, normal `n`, `sep` off the surface
+    /// (below 0 inside): its normal speed held at a bounce by the preset
+    /// when it closes fast enough to meet the surface this step, at what
+    /// closes the gap otherwise, and inside pushed out at
+    /// `phys_contact_erp` up to `phys_mcv`.
+    #[allow(clippy::too_many_arguments)]
+    fn contact(
+        &self,
+        r: Vec3,
+        n: Vec3,
+        sep: f32,
+        dt: f32,
+        d: &Dvars,
+        v0: Vec3,
+        w0: Vec3,
+        inv_iw: &Mat3,
+    ) -> Contact {
+        let approach = (v0 + w0.cross(r)).dot(n);
+        let target = if sep < 0.0 {
+            (d.erp * -sep / dt).min(d.max_correcting)
+        } else if approach < -BOUNCE_VEL && -approach * dt >= sep {
+            -self.bounce * approach
+        } else {
+            -sep / dt
+        };
+        let k = |dir: Vec3| {
+            let rn = r.cross(dir);
+            1.0 / self.mass + rn.dot(*inv_iw * rn)
+        };
+        let t0 = n.any_orthonormal_vector();
+        let t = [t0, n.cross(t0)];
+        Contact {
+            r,
+            n,
+            target,
+            k_n: k(n),
+            t,
+            k_t: [k(t[0]), k(t[1])],
+            lambda: 0.0,
+            lambda_t: [0.0; 2],
+        }
     }
 
     /// Sequential impulses: each contact's normal speed held at or over its
@@ -679,6 +1001,22 @@ impl Body {
     }
 }
 
+/// The skin the clip map's kernels keep off a surface (`SURFACE_CLIP_EPSILON`).
+const SKIN: f32 = 0.125;
+
+/// The solids of `clip` round a box under the fx world's mask
+/// (`0x2806c91`), as its world collider (0x5a8110) gathers them.
+pub fn clip_solids(clip: &crate::collision::ClipMap) -> impl FnMut(Vec3, Vec3) -> Vec<Solid> + '_ {
+    move |lo: Vec3, hi: Vec3| {
+        let w = clip.world_solids(lo, hi, crate::ragdoll::CLIP_MASK);
+        w.brushes
+            .iter()
+            .filter_map(|p| Solid::brush(p))
+            .chain(w.tris.into_iter().filter_map(Solid::triangle))
+            .collect()
+    }
+}
+
 /// A point trace through `clip` under the world mask the fx world's
 /// bodies meet (`0x2806c91`, iw3mp.exe 0x5a6acf).
 pub fn clip_trace(clip: &crate::collision::ClipMap) -> impl FnMut(Vec3, Vec3, f32) -> Sweep + '_ {
@@ -705,9 +1043,6 @@ pub fn clip_trace_masked(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The CoD trace's 0.125 skin off a surface.
-    const SKIN: f32 = 0.125;
 
     /// A world of half-spaces `n . p <= dist` that are solid, traced as
     /// points with the kernels' skin.
@@ -1095,5 +1430,53 @@ mod tests {
         let mut b = Body::new(Vec3::new(0.0, 3.0, 26.0), Vec3::ZERO, &shape, &preset, 0);
         run(&mut b, 10000, &mut trace, &d);
         assert!(b.asleep, "pos {} vel {} avel {}", b.pos, b.vel, b.avel);
+    }
+
+    #[test]
+    fn a_box_across_a_kerbs_edge_rests_on_the_edge() {
+        // A floor and a kerb 10 high from x = 0, as brushes, and a sedan
+        // hood's box on its 8 corners alone, dropped flat across the
+        // kerb's edge: the edge between the corners meets its face.
+        let slab = |lo: Vec3, hi: Vec3| {
+            (0..3)
+                .flat_map(|k| [(Vec3::AXES[k], hi[k]), (-Vec3::AXES[k], -lo[k])])
+                .collect::<Vec<_>>()
+        };
+        let world = [
+            slab(
+                Vec3::new(-200.0, -200.0, -50.0),
+                Vec3::new(200.0, 200.0, 0.0),
+            ),
+            slab(Vec3::new(0.0, -200.0, -50.0), Vec3::new(200.0, 200.0, 10.0)),
+        ];
+        let solid: Vec<Solid> = world.iter().filter_map(|p| Solid::brush(p)).collect();
+        assert_eq!(solid[1].faces.len(), 6);
+        let mut trace = brushes(&world);
+        let mut solids = |_: Vec3, _: Vec3| solid.clone();
+        let mut shape = Shape::of_bounds(Vec3::new(-22.5, -24.0, -4.0), Vec3::new(22.5, 24.0, 4.0));
+        shape.points.truncate(8);
+        let preset = Preset {
+            mass: 15.0,
+            bounce: 0.1,
+            friction: 0.5,
+            bullet_force_scale: 0.6,
+        };
+        let d = Dvars::default();
+        let mut b = Body::new(Vec3::new(-6.0, 0.0, 30.0), Vec3::ZERO, &shape, &preset, 0);
+        let mut t = 0;
+        while t < 10_000 && !b.asleep {
+            t += 16;
+            b.advance_in(t, &mut trace, &mut solids, &d);
+        }
+        assert!(b.asleep, "{b:?}");
+        // No point of the kerb's edge under the box lies in it.
+        let w = b.world_boxes().next().unwrap();
+        let tipped = w.axes.z_axis.z < 0.999;
+        for i in -20..=20 {
+            let local = w.axes.transpose() * (Vec3::new(0.0, i as f32, 10.0) - w.centre);
+            let inside = (w.half - local.abs()).min_element();
+            assert!(inside < 0.01, "{} inside at y {i}: {inside}", local);
+        }
+        assert!(tipped, "{:?}", w.axes);
     }
 }

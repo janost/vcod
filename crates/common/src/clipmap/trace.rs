@@ -845,7 +845,7 @@ fn box_on_plane_side(lo: Vec3, hi: Vec3, p: &super::CPlane) -> u8 {
 
 /// `CM_BoxLeafnums_r` (0x08058cc2): the leaves the box touches, front
 /// child first, at most [`MAX_LEAFS`].
-fn box_leafnums(map: &ClipMap, lo: Vec3, hi: Vec3, mut num: i32, out: &mut Vec<usize>) {
+pub(super) fn box_leafnums(map: &ClipMap, lo: Vec3, hi: Vec3, mut num: i32, out: &mut Vec<usize>) {
     while num >= 0 {
         let node = map.nodes[num as usize];
         match box_on_plane_side(lo, hi, &map.planes[node.plane as usize]) {

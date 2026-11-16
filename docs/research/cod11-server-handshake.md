@@ -726,6 +726,14 @@ each slot's state; zombies and unentered clients get no pass of their own.
     thread waiting on the player wakes with `[-1] [disconnect]` on the next
     frame's `getTime()`, after the callback; a `wait 0.05` the callback starts
     runs a frame later.
+- The follower pass, 2026-11-16 on 1.1d and 1.5b mp_carentan and UO
+  mp_cassino, tdm: two playing probes in slots 0 and 1 and a `--probe-follow`
+  spectator in slot 2, whose first attack followed slot 1; that probe sent
+  `disconnect` a second later. 1.1d moved the spectator onto slot 0 (pm_type
+  0, pm_flags 0x10000); 1.5b and UO put it back on its own view (clientNum 2,
+  pm_type 4, pm_flags 0), with slot 0 still followable (the next attack
+  followed it). VERIFIED (capture). vcod's server gave the same three
+  sequences under the same run. VERIFIED (capture).
 - vcod: `Server::drop_client` runs `ScriptRuntime::client_disconnect` inside
   the drop (after the notice on 1.1, before on 1.5/UO) with the slot already
   out of `clients`, sending its commands and configstrings at once; waiters
@@ -773,6 +781,15 @@ A connect from a held slot's address and qport (or port), past
     final drop.
   - 1.5b and UO run the disconnect then the connect callback on one
     `getTime()`; the second finds neither field nor `pers`.
+- The client's own HUD elements, 2026-11-16, the same probe and recipe, the
+  connect callback handing each connect a `newClientHudElem` at x 100 + its
+  generation once it begins. VERIFIED (capture): after the reconnect 1.1d
+  sent the client both elements (x 100 and 101), the first connect's never
+  freed; 1.5b and UO sent only x 101, `ClientDisconnect`'s
+  `HudElem_ClientDisconnect` having freed the first. vcod's server sent the
+  same on all three (`free_client_hud_elems` runs only in the
+  disconnect). VERIFIED (capture). A turret the held player was on is not
+  measured.
 - vcod: the reconnect arm runs `Server::client_disconnect` inside the connect
   on 1.5/UO; on 1.1 none, and `ObjectTable::spawn_client` keeps the held
   player's script object (threads, script fields) with fresh engine fields and
@@ -1501,13 +1518,27 @@ UO. INFERRED (the match).
   through `tools/udp_relay.py`, which logged every datagram, all inside one
   `unshare -rn`; `rcon quit` 12 s in. Two messages left in the same
   millisecond on consecutive sequences, 47 then 73 bytes, and nothing after.
-  VERIFIED (capture). INFERRED: the second carries the first pass's `e` and
-  `w` again beside its own, unacked, which is its 26 more bytes.
-- vcod (`Server::final_message`) under the same run: two messages in the
-  same millisecond, 43 then 70 bytes, each 4 under retail's. VERIFIED
-  (capture). The bytes are not decoded. Open: whether the 4 are the fresh
-  snapshot retail builds (`nextSnapshotTime = -1`) against the last frame
-  vcod resends.
+  VERIFIED (capture).
+- The two decoded, 2026-11-16, same run (the probe's netchan, Huffman block
+  and snapshot parser; a probe's last frame at serverTime 18400, `ps`
+  commandTime 18383). The first: server commands 6 `e "EXE_SERVERQUIT"` and
+  7 `w`, then a snapshot at serverTime 18400 again, delta 1 (the last frame),
+  flags 4, whose playerstate changes only commandTime, now 18400, and no
+  entity. The second: commands 6 to 9 (both passes' `e` and `w`; the first
+  is unacked), then the same snapshot with delta 2. VERIFIED (capture).
+- So `SV_SendClientSnapshot` builds the final frames fresh: `sv.time` has
+  not moved, and the playerstate carries the cmds `SV_UserMove` thought on
+  arrival (the probe's two packets after the frame) before the `rcon quit`
+  was read. INFERRED (the capture against the Q3 order of a packet's think).
+- vcod (`Server::final_message`) runs the cmds it still holds for the next
+  tick (`replay_moves`, protocol-1.1.md "Clients' cmds run at the tick"),
+  then builds both passes' frames as the snapshot pass does. Before that it
+  repeated the last frame unchanged, which made each message 4 bytes short
+  (43 and 70: no commandTime long). Under the same run it now sends 47 and
+  74 bytes with retail's ops, bit for bit but the clock values. Our
+  plaintext with retail's times in it compresses to retail's 65-byte block,
+  so the one byte is the Huffman codes of the times. VERIFIED (capture and
+  `Huffman::compress_block`).
 - `killserver` (0x8084d3c) calls `0x806dc68`: `SV_Shutdown` between the hunk
   calls, then return; no exit. `SV_Frame` does the same on `sv_killserver` and
   resets it. With `sv_running` (0x833efc0) 0 the event loop skips

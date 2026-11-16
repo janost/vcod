@@ -18,10 +18,12 @@ Ranked by how much a player notices.
   challenge and hides them in the browser (cod4-handshake.md 13). L.
 - Retail's `mpdata` is never read: a retail rank does not carry over.
   By choice.
-- Rigid-body physics is vcod's solver, not ODE: a launched part's 26
-  box points (corners, edge midpoints, face centres) meet the world as
-  points, so a world edge between them can poke in, and `msecStep`
-  stays 17 ms (cod4-gsc.md 3.6). A jitter's pushes land on the body's
+- Rigid-body physics is vcod's solver, not ODE: a launched part's boxes
+  meet the world's brushes and triangles by face clipping, not by 1.7's
+  colliders (no narrow-box pass, a cylinder still as 16 points), and
+  `msecStep` stays 17 ms (cod4-gsc.md 3.6, 3.6.1). A dynamic entity
+  still meets the world on its 26 box points, so a world edge between
+  them can poke in. A jitter's pushes land on the body's
   touching points, not ODE's contacts, so a flat prop takes more of them
   (cod4-world.md 13.8). The ragdoll is a position-based solver
   (cod4-player-anims.md 10). M.
@@ -42,6 +44,12 @@ Ranked by how much a player notices.
 
 ## Fixed
 
+- A launched part met the world on its 26 box points, so a world edge
+  between two of them poked into it: on mp_backlot's steps 30 of 36
+  dropped hoods and doors slept with world solid inside the box. Its
+  boxes now meet the brushes and triangles round them, gathered as
+  `iw3mp.exe`'s world collider (0x5a8110) gathers them, and none does
+  (cod4-gsc.md 3.6.1).
 - The view weapon's anims summed through CoD1's layered sampler, the sight
   laid under the main clip. It now runs 1.7's tree, root over 32 leaves,
   with `iw3mp.exe`'s goal weights, blends, restarts and clock, sampled
