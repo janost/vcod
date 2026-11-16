@@ -232,6 +232,10 @@ struct ServerBody {
     /// What its last end frame read (`ClientEndFrame` copies it into the
     /// `clientInfo_t`), which the controller hook eases toward.
     frame: Option<BodyFrame>,
+    /// Whether its DObj exists: from its first `G_RunFrame` end frame
+    /// after the connect (`G_DObjUpdate`, lnxded 0x80f7a5c). The spawn's
+    /// own end frame runs before the script gives the body its model.
+    dobj: bool,
     built: Option<Built>,
 }
 
@@ -446,6 +450,11 @@ impl Combat {
             };
             self.weapons.push(params);
         }
+    }
+
+    /// The end frame's `G_DObjUpdate`: `slot`'s body has its DObj.
+    pub fn mark_dobj(&mut self, slot: usize) {
+        self.bodies[slot].dobj = true;
     }
 
     /// `ClientConnect`'s memset of the client's body.
@@ -759,13 +768,18 @@ impl Cod2Level {
     /// 0x811e3c0): the build runs the controller hook (`G_PlayerController`,
     /// 0x80f729a), which eases the controls one `level.frametime` on, and
     /// samples each clip at its node time, in `cod2_lnxded`'s arithmetic
-    /// (`PlayerBody::dobj_mats`, cod2-player-anims.md 11).
+    /// (`PlayerBody::dobj_mats`, cod2-player-anims.md 11). The hook reads
+    /// the `clientInfo_t` the body's last end frame filled, not a view a
+    /// later cmd or a lower slot's end frame moved (cod2-combat.md 9.7).
     fn body_pose(
         &mut self,
         slot: usize,
         origin: Vec3,
     ) -> Option<(Rc<PlayerRig>, Rc<Vec<Mat>>, BodyFrame)> {
-        let f = self.body_frame(slot, origin)?;
+        let f = match self.combat.bodies[slot].frame {
+            Some(f) => BodyFrame { origin, ..f },
+            None => self.body_frame(slot, origin)?,
+        };
         self.body_pose_at(slot, f, false)
     }
 
@@ -1125,6 +1139,33 @@ impl Cod2Level {
                 Some(Rewind::Nowhere) => continue,
                 None => ps.origin,
             };
+            // A body with no DObj yet (none until its first end frame's
+            // `G_DObjUpdate`, lnxded 0x80f7a5c) is clipped as its temp box
+            // model, the capsule of `r.mins` and `r.maxs`, with no part and
+            // no build (`SV_ClipMoveToEntity` 0x809cfbb; cod2-combat.md 9.7).
+            if !self.combat.bodies[slot].dobj {
+                let body = vcod_common::movetrace::Body {
+                    entity: slot as u32,
+                    origin,
+                    mins: ps.mins,
+                    maxs: ps.maxs,
+                    contents: CONTENTS_BODY,
+                };
+                let t =
+                    vcod_common::movetrace::body_trace(start, end, Vec3::ZERO, Vec3::ZERO, &body);
+                if t.fraction < best.fraction {
+                    best = Contact {
+                        fraction: t.fraction,
+                        normal: t.normal,
+                        surface_flags: 0,
+                        contents: CONTENTS_BODY,
+                        client: Some(slot),
+                        entity: None,
+                        hit_location: 0,
+                    };
+                }
+                continue;
+            }
             // A trace under a priority map culls a body by the actor box
             // about `r.currentOrigin`, not its bounds, and builds the
             // skeleton past the cull (cod2-combat.md 9.5).

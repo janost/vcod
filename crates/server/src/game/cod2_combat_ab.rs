@@ -4,7 +4,7 @@
 //! `GT=combat SECOND=still`, the recipe in each file's header) replayed on
 //! `Cod2Level` under the same `probe_combat.gsc` and the capture's cvars.
 //!
-//! Each client begins the frame before its first snapshot as a player and
+//! Each client begins in the frame of its first snapshot as a player and
 //! takes that snapshot's playerstate, and again at the first snapshot the
 //! two share; from its first on each frame runs, per client, the cmds
 //! retail had run by that snapshot (its `commandTime`), then `G_RunFrame`.
@@ -74,26 +74,12 @@ const CAPTURES: &[&str] = &[
 
 /// What the replay still gets wrong: (capture, check, count, why). The
 /// counts are exact. Each reason names its section of cod2-combat.md.
-const GAPS: &[(&str, &str, usize, &str)] = &[
-    (
-        "hit-throw",
-        "missile pos.trDelta[2]",
-        3,
-        "9.4 the bounce off the target's body: last bits",
-    ),
-    (
-        "hit-rocket-rand",
-        "probe point",
-        2,
-        "9.7 the melee's contact depth on a still body",
-    ),
-    (
-        "hit-melee",
-        "target pm_flags",
-        2,
-        "9.7 the look-at flag on a turned body",
-    ),
-];
+const GAPS: &[(&str, &str, usize, &str)] = &[(
+    "hit-throw",
+    "missile pos.trDelta[2]",
+    3,
+    "9.4 the bounce off the target's body: last bits",
+)];
 
 /// The glibc seed each capture's server drew from (`G_InitGame`'s
 /// `srand(Sys_MillisecondsRaw())`, which `Rand_Init` seeds `holdrand`
@@ -613,10 +599,12 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str, report: bool) -> Found {
         .find(|s| target.side.at(s.time).is_some_and(playing))
         .map(|s| s.time)
         .expect("no snapshot time both share");
-    // Each client begins the frame before its first snapshot as a player,
-    // takes that snapshot's playerstate, then runs its own cmds: the
-    // target plays two seconds before the shooter spawns, and its legs
-    // clip started then (cod2-combat.md 9.5, "The struck body").
+    // Each client begins in the frame of its first snapshot as a player
+    // (retail's `begin` runs between frames and the script spawns in the
+    // next, so that snapshot's `commandTime` is its own time), takes that
+    // snapshot's playerstate, then runs its own cmds: the target plays two
+    // seconds before the shooter spawns, and its legs clip started then
+    // (cod2-combat.md 9.5, "The struck body"; 9.7).
     let sides = [&target.side, &shooter.side];
     let first = |side: &Side| {
         side.snaps
@@ -668,7 +656,7 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str, report: bool) -> Found {
     while t < start {
         t += 50;
         for (slot, &f) in firsts.iter().enumerate() {
-            if t == f - 50 {
+            if t == f {
                 level.begin(slot);
             }
         }

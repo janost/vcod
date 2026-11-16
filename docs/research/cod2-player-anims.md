@@ -181,7 +181,15 @@ on a tdm kill run: the infos at `0x85bc900 + 0x28 * index`, +0xc the time,
 +0x10 the time before the step, +0x18 the blend's seconds left, +0x1c the
 goal, +0x20 the weight, +0x24 the rate). vcod's channel clock
 (`animclock::Play`) runs the same rule: time 0 at the end frame that sets
-the clip, a step a frame after. INFERRED (the code against the dump). A
+the clip, a step a frame after. INFERRED (the code against the dump).
+The step stores its increment as a float before the sum: `pb_stand_alert`'s
+node time on a retake of `hit-throw`'s recipe (239 frames, two wraps)
+is `float(t + float(0.05 * frequency))` at every frame, the wrap taken
+after the store, where a sum with the increment kept on the stack leaves
+it at the 17th step (0x3e83e0f9 against 0x3e83e0f8). VERIFIED (gdb,
+`cod2_anim_gdb.py`). vcod's CoD2 bodies step so
+(`ChannelClock::store_steps`); off it the struck body's bones sat a few
+ulps off retail's (cod2-combat.md 9.4). A
 spawn's own end frame (the spawn calls it, at the level time the begin
 ran) carries `legsAnim` 0 and sets no clip; the idle is set at the next
 end frame, after the first cmd's pmove picks it (the melee target: begun
