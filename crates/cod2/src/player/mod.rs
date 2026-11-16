@@ -246,6 +246,8 @@ pub struct PlayerRig {
     /// ([`dobj::Mat::base`]): `None` a root, else its model's quat shorts
     /// times 1/32767 (the first model holding the bone).
     pub base: Vec<Option<[f32; 4]>>,
+    /// The bones a trace reads: each with a hit box, and its parents.
+    pub traced: Vec<bool>,
 }
 
 impl PlayerRig {
@@ -328,11 +330,21 @@ impl PlayerRig {
             .collect();
         let skeleton = Skeleton::build_grafted(&refs);
         let base = base_quats(fs, &models, &skeleton);
+        let bones = skeleton.bones();
+        let mut traced = vec![false; bones.len()];
+        for (i, _) in bones.iter().enumerate().filter(|(_, b)| b.has_hit_box()) {
+            let mut j = i as i32;
+            while let Ok(p) = usize::try_from(j) {
+                traced[p] = true;
+                j = bones[p].parent;
+            }
+        }
         Ok(PlayerRig {
             models,
             skeleton,
             binds: Default::default(),
             base,
+            traced,
         })
     }
 }
@@ -551,8 +563,10 @@ impl PlayerBody {
     /// The body's bones at `now_ms` as `cod2_lnxded` builds them for its
     /// traces and tags (`G_DObjCalcPose`, lnxded 0x811e3c0; [`dobj`]): the
     /// tree's clips at their node times walked into locals, the controls
-    /// set over them as the controller hook sets them, then composed. `None`
-    /// where a clip is missing.
+    /// set over them as the controller hook sets them, then composed. With
+    /// `traced`, only [`PlayerRig::traced`]'s bones, the rest zero: retail
+    /// builds them all, but a bone's words do not depend on the ones it
+    /// does not descend from. `None` where a clip is missing.
     pub fn dobj_mats(
         &self,
         rig: &PlayerRig,
@@ -560,18 +574,16 @@ impl PlayerBody {
         fs: &dyn AssetSource,
         f: &BodyFrame,
         now_ms: i32,
+        traced: bool,
     ) -> Option<Vec<dobj::Mat>> {
+        let need = traced.then_some(rig.traced.as_slice());
         let channels = self.leaves(set, fs, f, now_ms, true)?;
         let skel = &rig.skeleton;
         let mut held = Vec::new();
         for (_, leaves) in &channels {
             for l in leaves {
                 let clip = load_clip(&mut set.clips, fs, &l.clip)?;
-                let remap: Vec<Option<usize>> = clip
-                    .tracks
-                    .iter()
-                    .map(|t| skel.bone_index(&t.bone))
-                    .collect();
+                let remap = rig.binds.bind(skel, &clip);
                 held.push((clip, remap));
             }
         }
@@ -585,7 +597,7 @@ impl PlayerBody {
                     .zip(held.by_ref())
                     .map(|(l, (clip, remap))| dobj::Tree::Leaf {
                         clip,
-                        remap,
+                        remap: remap.slots(),
                         time: l.time,
                         weight: l.weight,
                     })
@@ -600,7 +612,7 @@ impl PlayerBody {
             }],
         };
         let n = skel.bones().len();
-        let (mats, reached) = dobj::calc(&root, n);
+        let (mats, reached) = dobj::calc(&root, n, need);
         let mut locals: Vec<dobj::Mat> = mats
             .into_iter()
             .zip(reached)
@@ -628,7 +640,7 @@ impl PlayerBody {
         if let Some(b) = skel.bone_index("tag_origin") {
             locals[b] = dobj::tag(c.origin, c.origin_trans.to_array());
         }
-        Some(dobj::build(skel, &locals, &control))
+        Some(dobj::build(skel, &locals, &control, need))
     }
 
     /// [`Self::pose_in`]; a `drawn` pose skips the engine records

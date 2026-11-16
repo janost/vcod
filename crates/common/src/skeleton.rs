@@ -53,6 +53,13 @@ pub struct Skeleton {
 /// Track index -> skeleton bone index; `None` for bones the skeleton lacks.
 pub struct AnimBinding(pub(crate) Vec<Option<usize>>);
 
+impl AnimBinding {
+    /// Each track's bone, `None` a bone the skeleton lacks.
+    pub fn slots(&self) -> &[Option<usize>] {
+        &self.0
+    }
+}
+
 /// One skeleton's [`Skeleton::bind`]s, made once per clip: a body poses
 /// every frame off the same few clips. Kept beside the skeleton it binds
 /// for; each clip is held, so its address stays its own.

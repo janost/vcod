@@ -172,6 +172,17 @@ VERIFIED, the paks), so it reads crouched, and a standing idle that
 stumbles opens the 400 ms window: the idle fades out over 400 ms, not 120.
 VERIFIED, `combat/hit-tags` (cod2-combat.md 9.3, "The knocked body").
 
+The server's end frame sets a new legs clip at node time 0 with its goal
+weight 1 and its weight `goal * 0.001` (0x3a83126f), the old one going to
+goal 0, both over the blend's seconds; the next `G_RunFrame` steps it
+`0.05 * frequency` (0.0151515 for `pb_stand_alert` at 16100 after a set
+at 16050), and every frame after. VERIFIED (gdb, `tools/re/cod2_anim_gdb.py`
+on a tdm kill run: the infos at `0x85bc900 + 0x28 * index`, +0xc the time,
++0x10 the time before the step, +0x18 the blend's seconds left, +0x1c the
+goal, +0x20 the weight, +0x24 the rate). vcod's channel clock
+(`animclock::Play`) runs the same rule: time 0 at the end frame that sets
+the clip, a step a frame after. INFERRED (the code against the dump).
+
 ## 8. What vcod carries over
 
 - `vcod_cod2::player` runs 1.1's `animtree`, `animclock` (1.5's windowed
@@ -468,6 +479,25 @@ leaves it (vcod_common's `F80`). VERIFIED (the disassembly).
   build off retail's locals every bone it left (701920 words); an `f64` for
   the stack left one word of the build `1.4e-17` where retail's is 0.
   VERIFIED (`skel_ab`, all 820 calls; the fixture keeps 25 of them).
+- Its cost on vcod-server, the 60-bot mp_toujane `dm` match (`bot_match`
+  seed 1, 600 ticks, `taskset -c 0-7`, the dev profile), in the ticking
+  thread's user instructions (`tick_profile::instructions`) around each
+  build: the shared sampler before (b781bfb93) 87.8 M a tick, the pose
+  4.8 M of it (5.4%, 172 k a build); the port on `F80`s alone 172.7 M,
+  the pose 87.3 M (50.6%, 3.14 M a build); now 93.6 M, the pose 9.8 M
+  (10.5%, 351 k a build), 16676 builds on each and the match's `DIGEST`
+  the same on the last two. VERIFIED (the runs). What moved it: the
+  stack runs as an `f64` with a running bound on how far it and the
+  64-bit stack can sit from the exact value (0 where Knuth's two-sum, a
+  product of two floats or a fused multiply-add's error shows it exact),
+  and a store whose bound straddles a float's rounding reruns the pass on
+  `F80`s, so every word is the 64-bit stack's (2 reruns in the 820
+  dumped calls); each parent's rows are built once for its children; a
+  trace builds only the bones with a hit box and their parents
+  (`PlayerRig::traced`), a tag the whole body, the controls eased once a
+  stamp either way. INFERRED, the code; the dump, the masked build's
+  words (`a_masked_pose_keeps_the_words_of_the_bones_it_builds`) and the
+  digest VERIFIED.
 - The server's poses off this (`body_pose`, `world_tag`): the sd kill run's
   two drops start where retail's do and match to the bit; on a fresh tdm
   kill capture under gdb, `G_DObjGetWorldTagMatrix`'s place (0x811e542;
