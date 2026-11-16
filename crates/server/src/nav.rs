@@ -1287,13 +1287,24 @@ impl NavGraph {
 
     /// The node nearest node `n` (by [`Self::nearest`]'s score) within
     /// [`CLEAR_STEPS`] grid steps across that is in none of `blocked`
-    /// (sorted) and passes `ok`.
+    /// (sorted) and passes `ok`, else within [`CLEAR_STEPS_FAR`].
     pub fn clear_near(&self, n: u32, blocked: &[u32], ok: impl Fn(u32) -> bool) -> Option<u32> {
+        self.clear_within(n, blocked, &ok, CLEAR_STEPS)
+            .or_else(|| self.clear_within(n, blocked, &ok, CLEAR_STEPS_FAR))
+    }
+
+    fn clear_within(
+        &self,
+        n: u32,
+        blocked: &[u32],
+        ok: &impl Fn(u32) -> bool,
+        steps: i32,
+    ) -> Option<u32> {
         let at = self.nodes[n as usize];
         let (cx, cy) = self.column(at);
         let mut best: Option<(f32, u32)> = None;
-        for dy in -CLEAR_STEPS..=CLEAR_STEPS {
-            for dx in -CLEAR_STEPS..=CLEAR_STEPS {
+        for dy in -steps..=steps {
+            for dx in -steps..=steps {
                 let Some(col) = self.columns.get(&(cx + dx, cy + dy)) else {
                     continue;
                 };
@@ -1990,6 +2001,9 @@ const PEN_NODES: usize = 64;
 /// How many grid steps across [`NavGraph::clear_near`] looks: past a
 /// parked tank's reach (`server::bot_vehicles::PARK_REACH`).
 const CLEAR_STEPS: i32 = 6;
+/// Where none is clear within [`CLEAR_STEPS`]: past a burning hull's nodes
+/// (`server::bot_vehicles`, `bots::WRECK_REACH`) at the finest spacing.
+const CLEAR_STEPS_FAR: i32 = 13;
 /// A waypoint further than this many grid steps away means the bot has left
 /// its path (knocked back, fell off a ledge): plan again.
 const OFF_PATH_STEPS: f32 = 4.0;

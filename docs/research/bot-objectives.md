@@ -1988,10 +1988,58 @@ that client's noise (`GameHost::blast_noises`), which he does not hear
 (`builtins::combat::tests::a_uo_radiusdamage_is_its_attacking_clients_noise`).
 VERIFIED (measured, release, UO): `bot_vehicles::` 5 of 5 pass.
 
-Left: any other bot still walks to a burning hull's first blast and can
-die in its second; a bot has no rule to keep off a burning vehicle.
+Left: any other bot still walked to a burning hull's first blast and
+could die in its second; a bot had no rule to keep off a burning vehicle.
 INFERRED (the second blast is nobody's and goes off where the first
-did).
+did). Closed in 10.10.
+
+### 10.10 Bots keep out of a burning hull, 2026-11-17
+
+Retail has no bots; this section is measured on vcod-server only, except
+the stock script lines, read out of `pakuo01.pk3`.
+
+- A hull's `death` starts `_tankeffects_gmi.gsc`'s `tank_death` (line
+  161), which on `allow_explode` waits 0.5 s, clears the hull's contents
+  and runs `radiusDamage(origin + (0, 0, 25), 300, 150, 10, self)` (line
+  193), then deletes the hull. `allow_explode` comes from
+  `_tankdrive_gmi.gsc`'s `tank_respawn` after `wait self.delay` (line 146;
+  10 s, coduo-vehicles.md 15.2). `_jeepeffects_gmi.gsc` does the same
+  with `radiusDamage(origin + (0, 0, 25), 300, 80, 0)` (line 170).
+  VERIFIED (the stock files).
+- Between the two the hull stays in the vehicle pool, dead: its health
+  is under 1 and `vehicle_damage` raised its `death`
+  (`game::vehicle::Vehicle::dead`). `Server::park_vehicles` records each
+  such hull once, where it stands, with the graph's nodes within
+  `bots::WRECK_REACH` (360) across and up or down of its origin, until
+  the delete takes it out of the pool. 360 is the blast's 300 met by a
+  body's 15-unit half width, plus 45 for the walk's slack. INFERRED (the
+  radius is the script's; the slack is vcod's).
+- A bot on foot sees every burning hull (`BotView::wrecks`). Inside one's
+  reach its goal is away from the hull, ahead of every goal but a plant
+  or defuse under way, a give-way and a live frag, and its keys keep to the graph's way out through a fight, as for
+  a `bas` charge about to go (`clearing`). Its follower plans round the
+  hull's nodes more than 48 units nearer the hull than its feet, so the
+  way out does not run past the hull. Outside every reach the follower
+  plans round all of their nodes, and a point goal inside a reach (the
+  first blast's noise, 180 over the hull) reads as a hold. A destination
+  on a blocked node takes the nearest clear one within 6 grid steps, else
+  13 (`nav::CLEAR_STEPS_FAR`), past the 360 at the finest 32-unit pitch.
+- Measured, release, UO mp_cassino `tdm`
+  (`tests/bot_vehicles.rs` `a_bot_keeps_out_of_a_burning_hull`): a lone
+  bot set down 600 behind the first Panzer IV as the test wrecks it hears
+  the first blast and walks toward it. Before this change he came within
+  87 units of the hull's origin and the second blast, 212 ticks on, took
+  him from 100 health to 2. Now he comes no nearer than 379, and is
+  unhurt. VERIFIED (the runs).
+- In matches (`examples/bot_vehicles`, `ON_ONLY=1`, seeds 1 to 13 odd,
+  six shooting bots, mp_cassino `tdm`, 3 min each), the damage lines whose
+  attacker is the world, the hull's own blasts: before this change 9 hits
+  and 2 kills over 9 wrecks, after 2 hits and no kill over 7. Kills 187
+  before, 184 after, within the run-to-run spread of 10.6. VERIFIED (the
+  runs).
+- 1.1 and 1.5 have no script vehicles, so no wrecks: their bots read an
+  empty `wrecks`. INFERRED (the vehicle pool is filled only by a
+  `script_vehicle` spawn with the vehicle files loaded, `game/spawn.rs`).
 
 ## 11. CoD2's `sd`, `ctf` and `hq`
 

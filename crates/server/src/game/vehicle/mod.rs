@@ -193,6 +193,10 @@ pub struct Vehicle {
     /// `nextthink`, and whether `Scr_Vehicle_Init` has run.
     pub next_think: i32,
     pub initialized: bool,
+    /// Its health ran out and its `death` went to the script: the hull
+    /// burns until `_tankeffects_gmi`'s second blast deletes it
+    /// (coduo-vehicles.md 15.2), what bots keep clear of.
+    pub dead: bool,
 }
 
 /// The level's vehicles: the files, the pool and each live vehicle.
@@ -534,6 +538,7 @@ pub fn spawn(
             barrel_blocked: false,
             next_think: host.level_time_ms + THINK_MS,
             initialized: false,
+            dead: false,
         },
     );
     if !loading {
@@ -583,6 +588,7 @@ impl Vehicle {
             jolts: Vec::new(),
             next_think: 0,
             initialized: false,
+            dead: false,
         }
     }
 }
@@ -1130,6 +1136,9 @@ pub fn vehicle_damage(
     if left < 1 {
         notifies.push(("death", vec![Value::Entity(attacker)]));
         host.vehicles.deaths.push(die::Death { id, attacker, dir });
+        if let Some(v) = host.vehicles.live.get_mut(&id) {
+            v.dead = true;
+        }
     } else {
         // `Scr_Vehicle_Pain` (0x8d1ca): the attacker holding a grenade or a
         // launcher, `MOD_EXPLOSIVE`, or anything over 200 but a collision
