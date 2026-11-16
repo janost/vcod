@@ -781,6 +781,15 @@ A connect from a held slot's address and qport (or port), past
     final drop.
   - 1.5b and UO run the disconnect then the connect callback on one
     `getTime()`; the second finds neither field nor `pers`.
+- The client's own HUD elements, 2026-11-16, the same probe and recipe, the
+  connect callback handing each connect a `newClientHudElem` at x 100 + its
+  generation once it begins. VERIFIED (capture): after the reconnect 1.1d
+  sent the client both elements (x 100 and 101), the first connect's never
+  freed; 1.5b and UO sent only x 101, `ClientDisconnect`'s
+  `HudElem_ClientDisconnect` having freed the first. vcod's server sent the
+  same on all three (`free_client_hud_elems` runs only in the
+  disconnect). VERIFIED (capture). A turret the held player was on is not
+  measured.
 - vcod: the reconnect arm runs `Server::client_disconnect` inside the connect
   on 1.5/UO; on 1.1 none, and `ObjectTable::spawn_client` keeps the held
   player's script object (threads, script fields) with fresh engine fields and

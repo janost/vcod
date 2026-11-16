@@ -35,6 +35,10 @@ Callback_PlayerConnect()
 	self.pers["probe"] = gen;
 	self thread alive(num, gen);
 	self waittill("begin");
+	hud = newClientHudElem(self);
+	hud.x = 100 + gen;
+	hud.y = 200;
+	hud setValue(gen);
 	logPrint("PROBE begin " + num + " gen " + gen + " t " + getTime() + "\n");
 }
 

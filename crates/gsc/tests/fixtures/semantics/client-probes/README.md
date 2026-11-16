@@ -1334,6 +1334,11 @@ and ours, 2026-10-18, print the same `PROBE` lines (clocks aside); ours
 takes the reconnect a few seconds later, since it refuses a connect with a
 new challenge into a slot heard from in the last 3 s.
 
+Each connect also gets a `newClientHudElem` at x 100 + its generation once
+it begins; the reconnecting probe's `EDGE snap` lines list the elements it
+is sent (`hud_x=`). Only that probe is needed for them (2026-11-16, all
+three and ours).
+
 ## probe_uostates
 
 The wire round trip's state changes on United Offensive: a placed allied
