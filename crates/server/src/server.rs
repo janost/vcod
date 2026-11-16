@@ -1402,6 +1402,29 @@ fn run_rider_link(
     link_client(rt, slot, sim);
 }
 
+/// A moving team master's turn (`G_MoverTeam` over the chain): as
+/// [`push_mover`], every part in turn.
+fn push_team(
+    clients: &mut [Option<Client>],
+    rt: &mut script::ScriptRuntime,
+    master: vcod_gsc::EntId,
+    step: Option<crate::game::mover::Step>,
+    collision: &vcod_common::collision::CollisionWorld,
+) {
+    let mut sims: Vec<(usize, &mut ClientSim)> = clients
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(i, c)| Some((i, c.as_mut()?.sim.as_mut()?)))
+        .collect();
+    let before: Vec<glam::Vec3> = sims.iter().map(|(_, s)| s.ps.origin).collect();
+    rt.team_move(master, step, &mut sims, collision);
+    for ((slot, sim), was) in sims.iter().zip(before) {
+        if sim.ps.origin != was {
+            rt.set_client_origin(*slot, sim.origin());
+        }
+    }
+}
+
 /// A brush model mover's push on its turn in the entity pass: it carries its
 /// riders and shoves the bodies and items in its way, or holds a frame when
 /// a body fits nowhere (`G_MoverTeam`; movers doc, section 12).

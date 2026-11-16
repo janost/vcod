@@ -105,8 +105,13 @@ fn set_links(host: &mut GameHost, n: u32, f: impl FnOnce(&mut TeamLinks)) {
     }
 }
 
-/// `trap_UnlinkEntity` on a tramcar slave (0x4facd): out of the area tree
+/// `trap_UnlinkEntity` on a tramcar slave (0x4facd), a `func_rotating`
+/// slave on its turn, or one spawned with spawnflags 2: out of the area tree
 /// and, with a `*N`, its brushes out of the traces.
+pub fn unlink_entity(host: &mut GameHost, id: EntId) {
+    unlink(host, id);
+}
+
 fn unlink(host: &mut GameHost, id: EntId) {
     host.area.unlink(id.0);
     let model = host.ents.get(id).and_then(|e| e.brush_model);
@@ -118,14 +123,21 @@ fn unlink(host: &mut GameHost, id: EntId) {
 /// `G_RunMover`'s slave arm (1.1d 0x57630..0x57664): an `eType` 5 or 8
 /// entity (`InitMover`'s, or a `script_*` one's, `InitScriptMover`) that
 /// is a team slave runs neither `G_MoverTeam` nor `G_RunThink`, so a
-/// `delete()`'s free never comes (cod11-movers.md 25). The arm's unlink of
-/// a linked `func_tramcar` or `func_rotating` slave is not modelled: vcod
-/// builds neither as a mover.
+/// `delete()`'s free never comes (cod11-movers.md 25). A linked
+/// `func_rotating` slave unlinks first, so its master's push links it and
+/// its own turn takes it out again (movers doc 26); a `func_tramcar` has no
+/// spawn function and never gets here.
 pub fn idle_slave(host: &mut GameHost, cx: &mut Cx, id: EntId) -> bool {
     if !host.ents.get(id).is_some_and(|e| e.team.slave) {
         return false;
     }
     if crate::game::mover::is_mover(host, id) {
+        let class = cx.intern_folded("classname");
+        let rotating = matches!(host.get_field(cx, id, class),
+            Value::String(c) if matches!(cx.resolve(c), "func_rotating" | TRAMCAR));
+        if rotating && host.area.last_link(id.0).is_some() {
+            unlink(host, id);
+        }
         return true;
     }
     let class = cx.intern_folded("classname");

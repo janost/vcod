@@ -148,6 +148,7 @@ fn use_by(
         }
     } else if !crate::game::trigger::use_multi(host, id)
         && !crate::game::damage_trigger::use_trigger(host, cx, id, user)
+        && !crate::game::mover::door::use_binary(host, cx, id, Some(user))
         && !crate::game::mover::toggle_static(host, cx, id)
         && !crate::game::mover::use_binary(host, cx, id)
         && !crate::game::turret::use_by(host, cx, id, user)

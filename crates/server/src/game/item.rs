@@ -918,6 +918,9 @@ pub enum Activate {
     /// A United Offensive vehicle the player can board
     /// (docs/research/coduo-vehicles.md 1).
     Vehicle(EntId),
+    /// A `func_door` or `func_door_rotating`, whose contents -1 put it on
+    /// the list (cod11-movers.md 26).
+    Door(EntId),
 }
 
 /// `G_GetActivateEnt`'s query box about the muzzle (`.rodata` 0x7544c,
@@ -996,6 +999,8 @@ pub fn activate_ent(
             .is_some_and(|t| t.kind == crate::game::trigger::TriggerKind::Use)
         {
             Activate::Trigger(id)
+        } else if crate::game::mover::door::binary_state(host, id).is_some() {
+            Activate::Door(id)
         } else {
             continue;
         };

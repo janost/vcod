@@ -3450,31 +3450,199 @@ vcod: the verbs return on a slave after their class gate
 entity or mover, its think included (`game::teams::idle_slave`).
 `game::teams_ab` holds both to the three captures.
 
-Not modelled, and why:
+The slave unlink of `G_RunMover`'s arm and the door family are section
+26's.
 
-- The slave unlink of `G_RunMover`'s arm. A `func_tramcar` has no `SP_`
-  function and so no mover `eType`: it never reaches `G_RunMover`, and
-  `G_FindTeams` already unlinked a tramcar slave (vcod does too). A
-  `func_rotating` (`SP_func_rotating` 0x582fc, `InitMover`) is a mover, but
-  vcod builds none, and the teams lump has no submodel to give one: no
-  stock mp_carentan `*N` is free to share. INFERRED: what it would show is
-  a linked slave's brushes leaving the traces on its first frame.
-- `func_door` and `func_door_rotating` (both in the MP `spawns` table, on
-  no stock MP map). A port needs: `SP_func_door` (0x56bd4) and
-  `SP_func_door_rotating` (0x57124) with their keys (`speed`, `wait`,
-  `lip`, `dmg`, `angle`, spawnflags) and `InitMover`/`InitMoverRotate`
-  (0x56454, 0x5674c) for `pos1`/`pos2` and the leg times;
-  `finishSpawningKeyedMover` (0x57e68) and `Think_SpawnNewDoorTrigger`/
-  `Think_SpawnNewAutoDoorTrigger` (0x57d8c, 0x57da4), the trigger box over
-  the team's bounds with `Touch_DoorTrigger` (0x57d48); `Use_BinaryMover`,
-  `Reached_BinaryMover`, `SetMoverState`, `IsBinaryMoverBlocked`
-  (0x560ec, 0x55c9c, 0x55904, 0x55f54) for every state, not only a sine
-  mover's two (section 18); `MatchTeam`, `MatchTeamReverseAngleOnSlaves`
-  and `Think_MatchTeam` (0x577fc, 0x57ad0, 0x57e08), which give the slaves
-  the master's trajectories; `G_MoverTeam` over the whole chain, each part
-  pushed and all put back on a block (vcod runs one part a turn);
-  `Blocked_Door`/`Blocked_DoorRotate` (0x578a0, 0x56934); the use key's
-  `G_TryDoor` (0x57718), called from `Cmd_Activate_f` (0x4851e), and
-  `G_Activate` (0x57690), which calls `Use_BinaryMover` (0x576d1); and `DoorSetSounds`/
-  `Door_reverse_sounds` (0x57f7c, 0x57ef4). Gates need a lump with a door
-  team on a free submodel and a client to touch and use it.
+## 26. Doors and `func_rotating`
+
+`func_door`, `func_door_rotating` and `func_rotating` are in the MP
+`spawns` table and on no stock MP map. Read in the 1.1d, 1.5b and UO game
+modules (`tools/re/annotate_func.py`) and measured on all three with
+`client-probes/probe_doors.gsc` on mp_carentan, the stock blocks of `*4`,
+`*5`, `*6`, `*7`, `*8` and `*10` replaced by
+`crates/server/tests/fixtures/doors/mp_carentan-doors.ent`
+(`tools/bsp_append_entities.py --replace`): `door_a` on `*5` with a touch
+trigger, `door_b` on `*6` mastering `door_b4` on `*4` (team `d2`, `dmg` 5),
+`door_r` on `*8` on the defaults, and `rot1` on `*7` mastering `rot2` on
+`*10` (team `r1`). One `--probe-uo-weapon direct` client stands in
+`door_a`'s trigger, stands on `door_b` and presses use, stands under it as
+it shuts, then `useBy`s `door_r` from two spots
+(`crates/server/tests/fixtures/doors/mp_carentan-dm-doors*.txt`, recipes in
+their headers).
+
+### 26.1 Offsets and states
+
+1.1d, 1.5b, UO (VERIFIED, the three modules): `active` byte `+0x172`,
+`+0x176`, `+0x17e`; `moverState` byte `+0x174`, `+0x178`, `+0x180`; `flags`
+`+0x17c`, `+0x184`, `+0x18c` (4 slave, 0x80 toggle, 0x100 quiet); `pos1`
+`+0x1a4`, `+0x1ac`, `+0x1b4`; `pos2` 12 on; `angle` (the `degrees` field)
+`+0x1d0`, `+0x1d8`, `+0x1e0`; `gDuration` and `gDurationBack` `+0x1f4`,
+`+0x1fc`, `+0x204` and 4 on; `nextthink` `+0x1fc`, `+0x204`, `+0x20c`;
+`rotate` `+0x280`, `+0x288`, `+0x290`; the lock `+0x2a8`, `+0x2b0`,
+`+0x2b8`. The sound alias bytes are `+0x162..+0x16d` on 1.1d (1.5b 4 on, UO
+12 on).
+
+INFERRED, off the jump table at 0x75c1c (11 slots) and RTCW's order: the
+states are 0 `POS1`, 1 `POS2`, 2 `POS3`, 3 `1TO2`, 4 `2TO1`, 5 `2TO3`, 6
+`3TO2`, 7 `POS1ROTATE`, 8 `POS2ROTATE`, 9 `1TO2ROTATE`, 10 `2TO1ROTATE`.
+
+VERIFIED: 1.5b and UO run every function below instruction for
+instruction as 1.1d once offsets are normalized; they round `1000 /
+trDuration` to a float in `SetMoverState` (1.5b 0x56dea) where 1.1d keeps
+it on the stack. The pop event is 0xc6 on 1.1d and 1.5b, 0xcd on UO; the
+crush means of death 0x13 and 0x10.
+
+### 26.2 The spawn functions
+
+- VERIFIED, `SP_func_door` (0x56bd4): the 11 `G_SoundAliasIndex` calls
+  (`door_opening`, `door_open_end`, `door_closing`, `door_close_end`,
+  `door_open_loop`, `door_close_loop`, `door_locked`, then the four
+  `_quiet` ones, from 0x56be1; no key), `blocked` `Blocked_Door`, a zero
+  `speed` made 400 (0x75d9c), a zero `wait` made 2 (0x75da0), then `wait`
+  times 1000 (0x75da4); any `key` key sets the lock (`G_SpawnInt`'s return,
+  0x56d38); `lip` default `"8"`, `dmg` default `"2"`; `pos1` is
+  `r.currentOrigin` (0x56d7d); `trap_SetBrushModel`, `G_SetMovedir` on
+  `r.currentAngles` (`(0, -1, 0)` up, `(0, -2, 0)` down, else
+  `AngleVectors`; the angles cleared, 0x6780b); `pos2 = pos1 + movedir *
+  (|movedir| . (r.maxs - r.mins) - lip)`. Spawnflags 1 swaps `pos1` and
+  `pos2`, `speed` and a non-zero `closespeed`, and the sound pairs;
+  spawnflags 2 sets the toggle. Then `InitMover`, a `health` key's
+  `takedamage` on a non-slave, `nextthink` 100 on, `think`
+  `finishSpawningKeyedMover` (0x56fbe).
+- VERIFIED, `InitMover` (0x56454), section 18's, past what that read: a
+  `func_rotating` takes `Use_Func_Rotate` and no `reached` (0x565b6); the
+  leg time is the `pos1`..`pos2` distance times 1000 over `speed`,
+  truncated, at least 1, into `pos.trDuration`, `gDuration` and
+  `gDurationBack`; a non-zero `closespeed` gives `gDurationBack` its own.
+- VERIFIED, `SP_func_door_rotating` (0x57124): spawnflags 1 adds 2 and
+  0x40 is cleared (0x57134..0x57140); the same sounds; `speed` 0 made 1000
+  (0x75e60), `degrees` 0 made 90 (0x75e64), negated under spawnflags 0x10;
+  the toggle under 2; the lock; `rotate` yaw, roll under 4, pitch under 8,
+  yaw under both (0x572e8..0x57321); `wait` 0 made 2, times 1000; then
+  `InitMoverRotate` (0x5674c): `moverState` 7, `eType` 5, a link,
+  `pos.trBase = r.currentOrigin`, and `(int)speed`, at least 1, as
+  `apos.trDuration` and both leg times: a rotating door's `speed` is its
+  turn in milliseconds. `dmg` is not defaulted; `blocked`
+  `Blocked_DoorRotate`.
+- VERIFIED, `SP_func_rotating` (0x582fc): `speed` 0 made 100,
+  `apos.trType` 2 (`TR_LINEAR`), under spawnflags 1 the speed into yaw
+  (roll under 4, pitch under 8), `dmg` 0 made 2, `InitMover`, and spawnflags
+  2 sets the slave bit and unlinks.
+- VERIFIED, the runs: no `pos1` is written for a `func_rotating`, so
+  `InitMover` puts it at the world origin whatever its `origin` key, as a
+  sine mover (section 18); a `func_door_rotating` keeps its `origin`
+  (`door_r` turns about its own). The `angle` key is no field: only the
+  `angles` vector moves a door off `+x`.
+- VERIFIED, `finishSpawningKeyedMover` (0x57e68): `nextthink` 100 on; a
+  slave stops there; otherwise `takedamage` takes `Think_MatchTeam`, a
+  `func_door_rotating` `Think_SpawnNewAutoDoorTrigger`, spawnflags 8
+  `Think_SpawnNewDoorTrigger`, anything else `Think_MatchTeam`; the
+  master's lock goes to every part. No `targetname` test.
+- VERIFIED, `Think_SpawnNewDoorTrigger` (0x57d8c, body 0x56a14): the team
+  takes damage; the box over every part's `absmin`/`absmax` grows 120
+  (0x75ccc) both ways on its thinnest axis (ties to the lower index); a
+  `G_Spawn`ed entity takes it as `r.mins`/`r.maxs`, contents 0x40000000,
+  `parent` the door, `touch` `Touch_DoorTrigger`, a link; then
+  `MatchTeam` at the door's state. `Think_SpawnNewAutoDoorTrigger`
+  (0x57da4) spawns nothing: under spawnflags 1 it turns the yaw by `angle`,
+  takes `ReturnToPos1Rotate` with no `nextthink` and sets state 8.
+
+### 26.3 The states and their uses
+
+- VERIFIED, `SetMoverState` (0x55904): both `trTime`s take the time; 0 and 1
+  stationary at `pos1`/`pos2` (0 clears `active`); 3 from `pos1` at
+  `(pos2 - pos1) * 1000 / gDuration`, `TR_LINEAR_STOP`, `gDuration` long; 4
+  from `pos2` over `gDurationBack` under a `closespeed`, the difference
+  rounded to a float first (0x55ad5); 7 and 8 `apos` stationary at
+  `r.currentAngles`; 9 `apos` from 0 at `rotate * angle * 1000 /
+  gDuration`; 10 from `rotate * angle` back, clearing `active`. Then
+  `r.currentOrigin` off `pos` at the level time and a link, `apos` not
+  evaluated.
+- VERIFIED, `Reached_BinaryMover` (0x55c9c): 3 settles at 1, 9 at 8, each
+  arming `ReturnToPos1`/`ReturnToPos1Rotate` `(int)wait` on unless the
+  `wait` is -1000 (a toggle clears `active` and arms nothing); 4 settles at
+  0, 10 at 7 (its sound only with "player" in its PVS); anything else is the
+  `G_Error` of section 18. No `G_UseTargets`.
+- VERIFIED, `Use_BinaryMover` (0x560ec): a slave passes the use to its
+  master; at 0 or 7, `IsBinaryMoverBlocked` (0x55f54) reverses the team's
+  `angle` and turns it open 50 ms on (state 9); else 0 opens the team 50 ms
+  on (3), 7 turns it (9), 1 and 8 put `nextthink` `wait` on (a toggle 50),
+  and a door moving either way turns back through `Blocked_Door` or
+  `Blocked_DoorRotate` with no obstacle. No sound plays for the first 4000
+  ms of the level.
+- VERIFIED, `IsBinaryMoverBlocked`: only a `func_door_rotating` without
+  spawnflags 0x20; the forward of `vectoangles(centre - r.currentOrigin)`
+  turned by `angle` on the rotate axis, dotted with the activator's
+  direction from the centre; 0 or more reverses. VERIFIED, the runs: both
+  of `door_r`'s `useBy`s turned it to yaw -90, the first by the reversal.
+- VERIFIED, `Touch_DoorTrigger` (0x57d48): an unlocked parent in state 0, 7
+  or 10 is used by the toucher; a sliding door shutting (4) is not
+  reopened. VERIFIED, the runs: `door_a` started 50 ms after its toucher's
+  first frame in the trigger, shut after its `wait` with him still inside,
+  and started again 50 ms after it was down.
+- VERIFIED, `G_TryDoor` (0x57718), `Cmd_Activate_f`'s classname arm
+  (0x484f6, call 0x4851e) ahead of its trigger, item and turret arms: a door
+  at rest and not `active` notifies `"trigger"` with the player, takes
+  `active` (its master does when it has a `teamname` and one) and is used;
+  a locked one plays `door_locked`. The cursor hint's door arm
+  (`G_CheckForCursorHints` 0x4f7d0) gives 4, or 5 locked, on a shut door or
+  an open toggle, so a moving door takes no use. `G_Activate` (0x57690) has
+  no caller. VERIFIED, the runs: the press standing on `door_b` notified at
+  the next frame and the door rose 50 ms later with him on it.
+
+### 26.4 A team, a block and a turning slave
+
+- VERIFIED, `G_MoverTeam` (0x55684): one pushed list for the whole chain;
+  each part's `move` and `amove` off its own trajectories and `G_MoverPush`;
+  on a block every pushed entity goes back, every part's `trTime`s move a
+  frame on and re-evaluate, each part links, then the master's `blocked`
+  with the player `G_MoverPush` stopped on (0x55621); else each part's
+  `reached` for `pos` then `apos`. Then `G_RunThink` on the master only
+  (`G_RunMover` 0x5760c).
+- VERIFIED, `Blocked_Door` (0x578a0): a non-client obstacle is popped and
+  freed; else `G_Damage(other, door, door, 0, 0, dmg, 0, MOD_CRUSH)`; under
+  spawnflags 4 nothing more, else each part turns back at
+  `level.time - (trDuration - (level.time - trTime))` and links.
+  `Blocked_DoorRotate` (0x56934) first deals a dead player 99999 and never
+  stops under spawnflags 4. VERIFIED, the runs: the shutting `door_b`
+  dealt its 5 `MOD_CRUSH`, named a `func_door` attacker, reopened with
+  `door_b4`, and dealt them again on its next close.
+- VERIFIED, the runs: `rot2`, a slave, turns at its own 90 degrees a second
+  from the load while its master `rot1` turns at 45: `G_MoverTeam` evaluates
+  each part's own trajectory. VERIFIED, `G_RunMover` (0x57630..0x57664): a
+  linked `func_rotating` or `func_tramcar` slave unlinks on its own turn.
+  INFERRED: the master's `G_MoverPush` links `rot2` again every frame, so
+  it is in the tree between its master's turn and its own; no capture shows
+  the link.
+
+### 26.5 The `angles` key
+
+VERIFIED, the runs: `door_b`, keyed `"angles" "0 -1 0"`, turned its rider
+from (1782, 2046) to (1817.44, 2014.59) on its first moving frame: a yaw of
+-1 about the world origin, the door's own. INFERRED: the spawn leaves the
+key in `apos.trBase` as well as `r.currentAngles`; `G_SetMovedir` clears
+only the second, so the first `G_MoverTeam`'s `amove` is the key. A door
+keyed by `angles` turns by it once.
+
+### 26.6 vcod
+
+`game::mover::door` is the three spawn functions, the states, the thinks,
+the trigger (`TriggerKind::Door`), `G_TryDoor` and the cursor hint's arm, on
+a mover row; `mover::run_turn` hands a moving team master back as
+`Turn::Team`, and `ScriptRuntime::team_move` pushes every part under one
+list (`push::push_with`), stalls the team on a block (`mover::stall_team`)
+and runs the door's `blocked`. `teams::idle_slave` unlinks a `func_rotating`
+slave. `doors_ab` replays the three captures to the last `PROBE` line.
+
+Not modelled:
+
+- `G_PlaySoundAlias` on a door reaches the wire as `EV_SOUND_ALIAS`, which
+  no capture here reads; `ReturnToPos1Rotate`'s and the 10-state's PVS
+  test is not made (vcod always plays it). `loopSound` follows the RE, not
+  a capture.
+- `light`/`color` keys (`constantLight`) and area portals
+  (`trap_AdjustAreaPortalState`).
+- A door's `takedamage`: `G_Damage`'s `eType` 5 arm (cod11-combat.md 5.9)
+  calls a door's `use`; vcod gives it only to `func_static`.
+- A script `spawn` of the three classnames builds no door.
+- The `nextTrain` hack in `Use_BinaryMover` (no `func_train` in MP).

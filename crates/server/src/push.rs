@@ -20,8 +20,9 @@ const JITTER_INC: f32 = 4.0;
 use vcod_common::pmove::cmd::ANGLE2SHORT;
 
 /// One push to undo if a later entity blocks the mover: `G_MoverTeam` puts
-/// every record back and relinks it (0x55744..0x557ef).
-enum Pushed {
+/// every record back and relinks it (0x55744..0x557ef). A team keeps one
+/// list over all its parts ([`push_with`]).
+pub enum Pushed {
     Client {
         slot: usize,
         origin: Vec3,
@@ -57,6 +58,20 @@ pub fn push(
     sims: &mut [(usize, &mut ClientSim)],
     world: &CollisionWorld,
 ) -> Option<Vec<usize>> {
+    push_with(host, cx, step, sims, world, &mut Vec::new()).ok()
+}
+
+/// [`push`] onto a team's `pushed` list: a block puts back everything on it,
+/// the team's earlier parts' pushes too, and names the player who could not
+/// be placed, `G_MoverPush`'s obstacle (0x55621).
+pub fn push_with(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    step: &Step,
+    sims: &mut [(usize, &mut ClientSim)],
+    world: &CollisionWorld,
+    pushed: &mut Vec<Pushed>,
+) -> Result<Vec<usize>, usize> {
     let amove = step.to.1 - step.from.1;
     let yaw_short = (amove.y * ANGLE2SHORT) as i32 & 0xffff;
     let seats: Vec<(u32, u32)> = sims
@@ -104,7 +119,6 @@ pub fn push(
         })
         .collect();
 
-    let mut pushed: Vec<Pushed> = Vec::new();
     let mut crushed = Vec::new();
     for k in &kept {
         match k {
@@ -136,8 +150,8 @@ pub fn push(
                         crushed.push(sims[i].0);
                         continue;
                     }
-                    undo(host, cx, sims, &pushed);
-                    return None;
+                    undo(host, cx, sims, pushed);
+                    return Err(sims[i].0);
                 };
                 let (slot, sim) = &mut sims[i];
                 match fit {
@@ -166,7 +180,7 @@ pub fn push(
             Kept::Item(id, _) => host.link_entity(cx, *id),
         }
     }
-    Some(crushed)
+    Ok(crushed)
 }
 
 /// `G_TryPushingEntity`'s `trap_LinkEntity` of a pushed player, at

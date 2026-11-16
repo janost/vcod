@@ -310,6 +310,10 @@ Game:
   blasts), script movers that carry and shove players and items, and
   `linkTo` on script models, brush models, items, turrets, player tags and
   `attach`ed models' tags.
+- A map's `func_door`, `func_door_rotating` and `func_rotating` (on no
+  stock map, a mod's): their touch trigger, the use key, teams that move
+  as one, the crush and the turn back. 1.1d, 1.5b and UO captures replay
+  against ours ([cod11-movers.md](../research/cod11-movers.md) 26).
 - Intermission, `map_restart` and `sv_mapRotation` as retail runs them, a
   rotation a script `setCvar`s included. Spectator follow and the killcam,
   replayed from a ring of archived frames.

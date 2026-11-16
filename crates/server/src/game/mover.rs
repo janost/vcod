@@ -35,6 +35,8 @@ use vcod_common::x87;
 use vcod_gsc::EntId;
 use vcod_gsc::Host;
 
+pub mod door;
+
 /// `"movedone"`, what the four linear families and `movegravity` raise
 /// (movers doc, section 7).
 pub const MOVEDONE: &str = "movedone";
@@ -475,6 +477,8 @@ struct Mover {
     /// push that went through (0x558a0..0x558e9), so a blocked push on the
     /// last frame of a move puts them back and the move runs on.
     unreached: Option<(Plan, Plan, Vec<&'static str>)>,
+    /// A `func_door`, `func_door_rotating` or `func_rotating` ([`door`]).
+    door: Option<door::Door>,
 }
 
 /// `SetMoverState`'s four door states (`MOVER_POS1`, `POS2`, `1TO2`,
@@ -646,6 +650,66 @@ impl Movers {
 /// `AngleNormalize360`/`180` once it ends, while the wire keeps the
 /// trajectory (movers doc 8, and 12 "The residual yaw").
 pub fn run_one(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec<Done>, Option<Step>) {
+    match run_turn(host, cx, id) {
+        (done, Turn::Push(step)) => (done, Some(step)),
+        (done, Turn::Team(step)) => (done, step),
+        (done, Turn::Done) => (done, None),
+    }
+}
+
+/// What a mover's turn in the entity pass leaves for the server.
+pub enum Turn {
+    /// Nothing to push; `reached` and the think have run.
+    Done,
+    /// One brush model's push ([`run_one`]).
+    Push(Step),
+    /// A moving team master's `G_MoverTeam` (0x55684): its own push, if
+    /// any, then each part's in chain order, all put back on a block
+    /// (`crate::game::script::ScriptRuntime::team_move`).
+    Team(Option<Step>),
+}
+
+/// [`run_one`] that hands a moving team master's turn back whole.
+pub fn run_turn(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec<Done>, Turn) {
+    let team = is_moving(host, id)
+        && host
+            .ents
+            .get(id)
+            .is_some_and(|e| !e.team.slave && e.team.chain.is_some());
+    let (done, step) = evaluate(host, cx, id);
+    if team {
+        return (done, Turn::Team(step));
+    }
+    match step {
+        Some(step) => (done, Turn::Push(step)),
+        None => {
+            reached(host, cx, id);
+            (done, Turn::Done)
+        }
+    }
+}
+
+/// Whether either group's trajectory is moving, `G_RunMover`'s gate on
+/// `G_MoverTeam` (0x57666..0x57670).
+fn is_moving(host: &GameHost, id: EntId) -> bool {
+    host.movers.rows.get(&id).is_some_and(|m| {
+        [&m.pos, &m.apos]
+            .iter()
+            .any(|p| p.started && p.current.tr_type != TR_STATIONARY)
+    })
+}
+
+/// One part's evaluation inside `G_MoverTeam`: [`run_one`] with no
+/// `reached`, which the team's walk calls once every part has pushed.
+pub fn evaluate_part(
+    host: &mut GameHost,
+    cx: &mut vcod_gsc::Cx,
+    id: EntId,
+) -> (Vec<Done>, Option<Step>) {
+    evaluate(host, cx, id)
+}
+
+fn evaluate(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec<Done>, Option<Step>) {
     let level_ms = host.level_time_ms;
     let link_snap = host.profile.link_snap;
     let mut done = Vec::new();
@@ -764,11 +828,8 @@ pub fn run_one(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec<Do
         }
     }
     host.movers.rows.insert(id, m);
-    // A push runs first and a blocked one never reaches this
+    // A push runs first and a blocked one never reaches `reached`
     // (`crate::game::script::ScriptRuntime::push_mover`).
-    if step.is_none() {
-        reached(host, cx, id);
-    }
     (done, step)
 }
 
@@ -797,13 +858,25 @@ pub fn verb_linked(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) {
 /// linked, once per group whose segment ended: the entity keeps its place
 /// in the area tree, but each link runs the node's push-down.
 pub fn reached(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) {
+    reached_part(host, cx, id);
+    run_think(host, cx, id);
+}
+
+/// [`reached`] for one part of a team, with no think: `G_MoverTeam`'s
+/// tail runs every part's `reached`, `G_RunMover` the master's think.
+pub fn reached_part(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) {
     let links = host.movers.rows.get(&id).map_or(0, |m| m.reach_links);
     for _ in 0..links {
         if let Some(link) = host.area.last_link(id.0) {
             host.area.link(id.0, &link);
         }
     }
-    if !host.movers.rows.get(&id).is_some_and(|m| m.sine) {
+    let binary = host
+        .movers
+        .rows
+        .get(&id)
+        .is_some_and(|m| m.sine || m.door.is_some());
+    if !binary {
         return;
     }
     let t = host.level_time_ms;
@@ -816,10 +889,19 @@ pub fn reached(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) {
             && t >= p.current.tr_time + p.current.tr_duration
             && host.game_error.is_none()
         {
-            reached_binary(host, cx, id);
+            if m.door.is_some() {
+                door::reached(host, cx, id);
+            } else {
+                reached_binary(host, cx, id);
+            }
         }
     }
-    // `G_RunThink` (`nextthink` of 0 or less never runs).
+}
+
+/// `G_RunThink` on a mover's turn (`nextthink` of 0 or less never runs).
+pub fn run_think(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) {
+    door::run_think(host, cx, id);
+    let t = host.level_time_ms;
     if let Some(m) = host.movers.rows.get_mut(&id)
         && m.return_at.is_some_and(|at| at > 0 && at <= t)
     {
@@ -1128,6 +1210,7 @@ pub fn spawn_sine(
             binary: Binary::Pos1,
             return_at: None,
             unreached: None,
+            door: None,
         },
     );
     true
@@ -1225,6 +1308,7 @@ fn spawn_static(
             binary: Binary::Pos1,
             return_at: None,
             unreached: None,
+            door: None,
         },
     );
     true
@@ -1272,7 +1356,7 @@ pub fn toggle_static(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> b
         .movers
         .rows
         .get(&id)
-        .is_some_and(|m| m.init_mover && !m.sine)
+        .is_some_and(|m| m.init_mover && !m.sine && m.door.is_none())
     {
         return false;
     }
@@ -1353,6 +1437,35 @@ pub fn stall(host: &mut GameHost, cx: &mut vcod_gsc::Cx, step: &Step) {
     }
     let (origin, angles) = pose(host, cx, step.ent);
     host.link_entity_at(cx, step.ent, Some((origin.into(), angles.into())));
+}
+
+/// `G_MoverTeam`'s blocked arm over a whole team (0x557f4..0x5585d): every
+/// part from the master runs a frame later, re-evaluated and linked. A part
+/// that moved this frame (`steps`) goes back to where it was as [`stall`]
+/// puts it; one the walk never reached is shifted where it stands.
+pub fn stall_team(host: &mut GameHost, cx: &mut vcod_gsc::Cx, parts: &[EntId], steps: &[Step]) {
+    for &part in parts {
+        if let Some(step) = steps.iter().find(|s| s.ent == part) {
+            stall(host, cx, step);
+            continue;
+        }
+        let level = host.level_time_ms;
+        let link_snap = host.profile.link_snap;
+        let Some(m) = host.movers.rows.get_mut(&part) else {
+            continue;
+        };
+        m.pos.stall();
+        m.apos.stall();
+        let origin = m.pos.started.then(|| m.pos.at(level));
+        let angles = m.apos.started.then(|| link_snap(m.apos.at(level)));
+        for (name, v) in [("origin", origin), ("angles", angles)] {
+            if let Some(v) = v {
+                let atom = cx.intern_folded(name);
+                let _ = host.write_field(cx, part, atom, vcod_gsc::Value::Vector(v.into()));
+            }
+        }
+        host.link_entity(cx, part);
+    }
 }
 
 /// `G_MoverPush`'s `trap_EntitiesInBox` mask (0x5531d): a live player's
