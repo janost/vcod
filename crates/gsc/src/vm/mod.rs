@@ -214,15 +214,15 @@ impl ErrorKind {
 }
 
 /// One live thread for `Vm::thread_usage`: `(file order, file, line)` per
-/// frame, innermost first, the defined locals across its frames and its
-/// endons. The file order is the file's place in install order, so the
-/// derived order follows retail's sort by code address (cod_lnxded
-/// 0x80a2218) as far as vcod's compile order matches retail's.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+/// frame, innermost first, and its var and endon usage as retail counts
+/// them (cod_lnxded 0x80a0d4c). The file order is the file's place in
+/// install order, so sorting by `stack` follows retail's sort by code
+/// address (0x80a2218) as far as vcod's compile order matches retail's.
+#[derive(Clone, PartialEq, Debug)]
 pub struct ThreadUsage {
     pub stack: Vec<(u32, String, u32)>,
-    pub vars: usize,
-    pub endons: usize,
+    pub vars: f32,
+    pub endons: f32,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -764,6 +764,34 @@ impl Vm {
     /// (cod_lnxded 0x809d2d0): its call stack innermost first, the locals
     /// it holds and the endons it registered.
     pub fn thread_usage(&self) -> Vec<ThreadUsage> {
+        let mut holders = self.heap.array_holders();
+        for v in self
+            .threads
+            .iter()
+            .flat_map(|t| &t.frames)
+            .flat_map(|f| &f.locals)
+        {
+            if let Value::Array(a) = v {
+                *holders.entry(a.0).or_insert(0) += 1;
+            }
+        }
+        // `Scr_GetObjectUsage` (0x80a0c4c): one for the object, one per
+        // defined variable, and an array's own usage over its holders.
+        fn usage(heap: &Heap, holders: &crate::fxhash::FxHashMap<u32, u32>, vars: &[Value]) -> f64 {
+            1.0 + vars
+                .iter()
+                .filter(|v| !matches!(v, Value::Undefined))
+                .map(|v| match v {
+                    Value::Array(a) => {
+                        let elems: Vec<Value> =
+                            heap.array_entries(*a).into_iter().map(|(_, v)| v).collect();
+                        let n = holders.get(&a.0).copied().unwrap_or(1).max(1);
+                        1.0 + usage(heap, holders, &elems) / f64::from(n)
+                    }
+                    _ => 1.0,
+                })
+                .sum::<f64>()
+        }
         self.threads
             .iter()
             .map(|t| ThreadUsage {
@@ -780,17 +808,17 @@ impl Vm {
                         (order, self.interner.resolve(file).to_string(), line)
                     })
                     .collect(),
-                vars: t
-                    .frames
-                    .iter()
-                    .map(|f| {
-                        f.locals
-                            .iter()
-                            .filter(|v| !matches!(v, Value::Undefined))
-                            .count()
-                    })
-                    .sum(),
-                endons: t.endons.len(),
+                // The thread's own one, then each frame's local object
+                // (1.1d `probe_usage`: a thread waiting with no locals is 2).
+                vars: t.frames.iter().fold(1.0f32, |sum, f| {
+                    sum + usage(&self.heap, &holders, &f.locals) as f32
+                }),
+                // The usage of the thread's endon object (0x80a0b50): none
+                // without an endon, else one plus one per endon.
+                endons: match t.endons.len() {
+                    0 => 0.0,
+                    n => (n + 1) as f32,
+                },
             })
             .collect()
     }

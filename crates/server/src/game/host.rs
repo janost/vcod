@@ -1495,6 +1495,12 @@ impl GameHost {
             world
                 .collision
                 .set_model_pose(n as usize, origin.into(), angles.into());
+            // What a round reads as the contents of a hit on its brushes.
+            if matches!(shape.kind, LinkKind::Brush | LinkKind::ScriptBrush) {
+                world
+                    .collision
+                    .set_model_contents(n as usize, shape.contents);
+            }
         }
         if let Some(world) = self.world_copy_of(id) {
             let pose = (

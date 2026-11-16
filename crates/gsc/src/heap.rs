@@ -299,6 +299,25 @@ impl Heap {
             .unwrap_or_default()
     }
 
+    /// How many struct fields and array elements hold each array, by id:
+    /// the heap's share of retail's `refCount` plus one, which
+    /// `scriptUsage` divides an array's usage by (`Vm::thread_usage`).
+    /// Garbage the heap never frees counts too.
+    pub fn array_holders(&self) -> FxHashMap<u32, u32> {
+        let mut n = FxHashMap::default();
+        let values = self
+            .structs
+            .iter()
+            .flat_map(|f| f.values().copied())
+            .chain(self.arrays.iter().flat_map(|e| e.iter().map(|(_, v)| v)));
+        for v in values {
+            if let Value::Array(a) = v {
+                *n.entry(a.0).or_insert(0) += 1;
+            }
+        }
+        n
+    }
+
     /// Every field name and value on a struct. The order is the `HashMap`'s,
     /// so a caller that needs a stable one sorts; nothing reads a struct back
     /// in script order.
