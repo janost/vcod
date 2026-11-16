@@ -758,6 +758,9 @@ impl Cod2Level {
             snapshot_ms: now,
         };
         self.combat.bodies[slot].frame = Some(f);
+        self.combat.bodies[slot]
+            .body
+            .script_movetype(&set.anims, &f);
         self.combat.bodies[slot].body.animate(
             &set.anims,
             &f,

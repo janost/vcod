@@ -113,7 +113,7 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str) -> Vec<Round> {
     let mut t = start - 50;
     while t < end {
         t += 50;
-        let Some(snap) = target.side.at(t) else {
+        let Some(snap) = target.side.ran_at(t) else {
             continue;
         };
         let mut done = {
@@ -134,7 +134,7 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str) -> Vec<Round> {
         level.run_frame(t);
         // The shooter's look-at, which the replay leaves out of the level,
         // builds the target once a frame (cod2-combat.md 9.5).
-        if let Some(s) = shooter.side.at(t) {
+        if let Some(s) = shooter.side.ran_at(t) {
             level.look_trace_from(&PlayerState::from_wire(&s.ps));
         }
         if std::env::var("HITPOSE_BONES").is_ok_and(|v| v == t.to_string()) {
@@ -342,7 +342,7 @@ fn retail_bones_follow_a_knocked_body() {
     let mut t = start - 50;
     while t < end {
         t += 50;
-        let Some(snap) = target.side.at(t) else {
+        let Some(snap) = target.side.ran_at(t) else {
             continue;
         };
         let origin = {

@@ -1711,9 +1711,12 @@ bones.
 `game::cod2_antilag_ab`'s second capture, `antilag-gdb` (its header the
 recipe: `antilag`'s under `GDB_PY`), is that fresh run, its traces in
 `crates/cod2/tests/fixtures/trace/antilag-gdb.txt`. All 42 rounds take
-retail's rewound origin and bone, and outside its `BONE_GAPS` every
-round's traced bones sit within 2e-5 units and 1e-6 of a quat component
-of the ones retail's `DObjTraceline` read. VERIFIED, the gate. The eight
+retail's rewound origin and bone, and every round's traced bones are the
+ones retail's `DObjTraceline` read, word for word (2142 bones). VERIFIED,
+the gate. Its third, `antilag-slow`, is the recipe under
+`tools/re/cod2_gdb_all.py`, whose breakpoints slow the server into frames
+with no snapshot between (cod2-player-anims.md 7): its 26 rounds alike,
+word for word (1326 bones). VERIFIED, the gate. The eight
 rounds a frame or two after the target's `legsAnim` changes (9150 and
 9200 after 9100's, 9800, 10350, 11600, 12200, 13350, 14250) had every
 bone from `j_mainroot` down up to 7e-3 units off, the look-at's build of
@@ -1721,14 +1724,16 @@ those frames alike, and back within the bound two to four frames on.
 VERIFIED, the gate and the dump. That was the cross-fade's weights: CoD2's
 setter takes the goal time off the raised weight (cod2-player-anims.md 7).
 With it all eight match, the first three word for word. VERIFIED, the
-gate. The four left in `BONE_GAPS` (13150, 13550, 13700, 13800) sit up to
-3e-5 off in one bone (retail's index 21) once each anim time step is
-stored as a float, with or without the setter's goal time; before the
-stored step they sat within the bound. VERIFIED, the gate. From 10100 on most rounds' bones are a few ulps off
-retail's, as the node times part after a strafe's turn (cod2-player-anims.md
-7). INFERRED. The hit pose gate's 18050 moved from 0.014 to -0.002 along its
-line with these, its 13400 and the antilag 16950 not at all. VERIFIED, the
-gates.
+gate. The four rows the gate then held (13150, 13550, 13700, 13800, up to 3e-5
+off in one bone, retail's index 21) and the few ulps most rounds sat off
+from 10100 on were the rate: a word off now and then, as vcod took the
+measure's seconds as a stored float (cod2-player-anims.md 7). With
+retail's arithmetic every bone matches and the gate holds no tolerance.
+VERIFIED, the gate. The hit pose gate's 18050 moved from 0.014 to -0.002
+along its line with the setter's goal time, its 13400 and the antilag
+16950 not at all; with the rate, the movetype condition and the frames
+with no snapshot none of the three moved, nor `cod2_combat_ab`'s
+`hit-throw`. VERIFIED, the gates.
 
 ### 9.6 The aim block and the game's `rand()`
 

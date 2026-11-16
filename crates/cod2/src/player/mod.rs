@@ -453,6 +453,18 @@ impl PlayerBody {
         self.angles.update_conditions(&input);
     }
 
+    /// The `MOVETYPE` condition pmove's anim script writes at each cmd
+    /// (`BG_AnimScriptAnimation`, lnxded 0x80d958f), which the server's
+    /// end frame finds ahead of its angle updater (0x80daa7a, 0x80dab05)
+    /// and its own write (0x80db296): taken off `f`'s legs record, as that
+    /// write takes it (cod2-player-anims.md 5).
+    pub fn script_movetype(&mut self, anims: &PlayerAnims, f: &BodyFrame) {
+        let legs = anims.record(f.legs_anim);
+        if legs.movetypes != 0 {
+            self.angles.movetype = legs.movetypes;
+        }
+    }
+
     /// `BG_Player_DoControllers` (lnxded 0x80dbc70): the controls eased
     /// `frametime_ms` toward the targets the swung angles and `f` give.
     pub fn ease_controls(&mut self, anims: &PlayerAnims, f: &BodyFrame, frametime_ms: i32) {
