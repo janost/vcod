@@ -5899,7 +5899,19 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        assert_eq!(check_leaf_fixture(&fs, "leafgate.txt"), 23);
+        assert_eq!(check_leaf_fixture(&fs, Some("dm"), "leafgate.txt"), 23);
+    }
+
+    /// mp_arnhem's dom props are submodels whose clip is terrain alone: a
+    /// retail UO bulletTrace stops on their tops
+    /// (`tests/fixtures/patch/domprops-uo.txt`, bsp-ibsp59-format.md "The
+    /// leaf walk").
+    #[test]
+    fn a_submodel_of_terrain_clips_at_its_entity() {
+        let Some(fs) = crate::testing::uo_fs() else {
+            return;
+        };
+        assert_eq!(check_leaf_fixture(&fs, None, "domprops-uo.txt"), 4);
     }
 
     /// Retail UO's `bulletTrace` and a falling weapon item straight down
@@ -5912,7 +5924,10 @@ mod tests {
         let Some(fs) = crate::testing::uo_fs() else {
             return;
         };
-        assert_eq!(check_leaf_fixture(&fs, "terrainleaf-uo.txt"), 12);
+        assert_eq!(
+            check_leaf_fixture(&fs, Some("dm"), "terrainleaf-uo.txt"),
+            12
+        );
     }
 
     /// A terrain partition the leaves list clips only a trace whose walk
@@ -5926,7 +5941,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs_11() else {
             return;
         };
-        assert_eq!(check_leaf_fixture(&fs, "outterrain.txt"), 12);
+        assert_eq!(check_leaf_fixture(&fs, Some("dm"), "outterrain.txt"), 12);
     }
 
     /// A patch facet stops a trace only from in front of its surface:
@@ -5977,7 +5992,10 @@ mod tests {
         if fs.read("maps/mp/mp_neuville.bsp").is_none() {
             return;
         }
-        assert_eq!(check_leaf_fixture(&fs, "neuvilleleaf-15.txt"), 6);
+        assert_eq!(
+            check_leaf_fixture(&fs, Some("dm"), "neuvilleleaf-15.txt"),
+            6
+        );
     }
 
     /// 1.5's mp_neuville: `placeSpawnpoint`'s ceiling check over entity 90
@@ -6051,7 +6069,9 @@ mod tests {
 
     /// Replays a `tests/fixtures/patch/` file of retail point and item
     /// traces straight down on ours; the number of lines checked.
-    fn check_leaf_fixture(fs: &crate::pk3::Pk3Fs, file: &str) -> usize {
+    /// `gametype` names the `_gameobjects` pass the run had (`None`: none,
+    /// every brush model linked).
+    fn check_leaf_fixture(fs: &crate::pk3::Pk3Fs, gametype: Option<&str>, file: &str) -> usize {
         let text = std::fs::read_to_string(format!(
             "{}/tests/fixtures/patch/{file}",
             env!("CARGO_MANIFEST_DIR")
@@ -6066,7 +6086,9 @@ mod tests {
                 let bsp = crate::bsp::parse(&data).unwrap();
                 let world =
                     CollisionWorld::build(&bsp, &crate::props::collision_tris(fs, &bsp.entities));
-                world.unlink_script_brushes(&bsp.entities, "dm");
+                if let Some(g) = gametype {
+                    world.unlink_script_brushes(&bsp.entities, g);
+                }
                 // mp_ship.gsc deletes the docks outside `re`.
                 for block in crate::bsp::entity_blocks(&bsp.entities) {
                     if block.get("targetname").is_some_and(|t| t == "dock")

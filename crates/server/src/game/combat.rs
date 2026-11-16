@@ -1404,13 +1404,18 @@ pub struct BodyPose {
 }
 
 /// What [`BodyPose::es`] holds: whether the entity rides (`eFlags`
-/// 0x100000) with its vehicle's kind and seat (`s+0x88`), and its `weapon`
-/// (`s+0xcc`).
+/// 0x100000) with its vehicle's kind and seat (`s+0x88`), its `weapon`
+/// (`s+0xcc`) and its `eFlags`.
 #[derive(Clone, Copy, Default, Debug, PartialEq)]
 pub struct HookEs {
     /// `(kind, seat)`, `None` on foot.
     pub seat: Option<(i32, i32)>,
     pub weapon: i32,
+    /// `s.eFlags`, which 1.1d's hook tests for the mount (0xc000), the
+    /// crouch, prone and death bits (`BG_Player_DoControllers` 0x2b804,
+    /// 0x2b92d, 0x2b9f5, 0x2ba2d); `None` until a cmd or the end frame
+    /// writes it, when the end frame's copy in `input` stands.
+    pub eflags: Option<i32>,
 }
 
 impl BodyPose {
@@ -1463,9 +1468,11 @@ impl BodyPose {
     /// else's off the swings; `None` for a mounted one under 1.1. A dead body
     /// runs them too, its `tag_origin` turned by the legs' world yaw on top
     /// of the body's frame (combat doc 16.4, "The dying body"). Whether he
-    /// rides, where and armed or not come off the entity as his last cmd
-    /// left it, the angles off the record as the end frame wrote it
-    /// (coduo-vehicles.md 13, "The weapon-swap frame").
+    /// rides, where and armed or not, and the `eFlags` the hook tests (a
+    /// turret's use frame reads him mounted), come off the entity as his
+    /// last cmd left it, the angles off the record as the end frame wrote it
+    /// (coduo-vehicles.md 13, "The weapon-swap frame"; cod11-turrets.md
+    /// 13.9, "The mount's blend in").
     pub fn target_controllers(&self) -> Option<vcod_common::playerpose::Controllers> {
         use vcod_common::playerpose::{BodySeat, Controllers};
         match self.es.seat {
@@ -1475,7 +1482,13 @@ impl BodyPose {
                     BodySeat::new(self.ci_seat_angles, kind, pos, steer).armed(self.es.weapon);
                 Some(Controllers::rider(&self.input, &seat, &self.slope))
             }
-            None => Controllers::target(self.rules, &self.angles, &self.input, &self.slope),
+            None => {
+                let input = vcod_common::playerpose::BodyInput {
+                    eflags: self.es.eflags.unwrap_or(self.input.eflags),
+                    ..self.input
+                };
+                Controllers::target(self.rules, &self.angles, &input, &self.slope)
+            }
         }
     }
 }

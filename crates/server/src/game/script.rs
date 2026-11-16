@@ -1452,6 +1452,8 @@ impl ScriptRuntime {
         )>,
     ) -> Option<TurretShot> {
         use crate::game::turret::{AimRule, aim, fire_tick, loop_tick, muzzle};
+        // `ClientEndFrame` calls it only on the mounted bits (0x41494).
+        sim.mounted_on?;
         let id = *self
             .host
             .turrets
@@ -3230,14 +3232,15 @@ impl ScriptRuntime {
 
     /// The entities `playSound` made `SVF_BROADCAST`, which every snapshot
     /// carries past the cull, and on 1.5 and UO those whose
-    /// `r.broadcastTime` the network clock `svs_time` has not passed.
-    pub fn broadcast_entities(&self, svs_time: i32) -> impl Iterator<Item = u32> + '_ {
+    /// `r.broadcastTime` the clock `now` has not passed (on 1.5 and UO the
+    /// game clock, cod15-protocol-diff.md 15).
+    pub fn broadcast_entities(&self, now: i32) -> impl Iterator<Item = u32> + '_ {
         self.host
             .ents
             .iter_inuse()
             .filter(move |(_, e)| {
                 let t = e.broadcast_time;
-                e.broadcast || t < 0 || (t != 0 && t.wrapping_sub(svs_time) >= 0)
+                e.broadcast || t < 0 || (t != 0 && t.wrapping_sub(now) >= 0)
             })
             .map(|(id, _)| id.0)
     }
@@ -3245,9 +3248,9 @@ impl ScriptRuntime {
     /// The snapshot builder's clear of a passed `r.broadcastTime`
     /// (coduo_lnxded 0x8096d53, 1.5b 0x8095dc6), which is what
     /// `SV_inSnapshot` reads until then ([`Self::in_snapshot_broadcast`]).
-    pub fn expire_broadcast_times(&mut self, svs_time: i32) {
+    pub fn expire_broadcast_times(&mut self, now: i32) {
         for e in self.host.ents.iter_inuse_mut() {
-            if e.broadcast_time > 0 && e.broadcast_time.wrapping_sub(svs_time) < 0 {
+            if e.broadcast_time > 0 && e.broadcast_time.wrapping_sub(now) < 0 {
                 e.broadcast_time = 0;
             }
         }
@@ -6615,6 +6618,27 @@ mod tests {
         });
         assert_eq!(origin, Value::Vector([10.0, 20.0, 1.0]));
         assert_eq!(rt.host.client_link_origin[0], [10.0, 20.0, 1.0]);
+    }
+
+    /// A gun whose record names a slot whose playerstate is not mounted, as
+    /// a 1.1 reconnect leaves it (`ClientConnect`'s memset), gets no think
+    /// and no release: `ClientEndFrame` tests the mounted bits first
+    /// (0x41494), so the gun stays owned (cod11-server-handshake.md, "A
+    /// reconnect into a held slot").
+    #[test]
+    fn an_unmounted_owner_leaves_the_gun_owned() {
+        let (mut rt, gun) = turret_rig();
+        let rec = rt.host.turrets.get_mut(&gun).unwrap();
+        rec.owner = Some(0);
+        rec.busy = 1;
+        let angles = vcod_common::net::msg::NULL_USERCMD.angles;
+        let mut sim = crate::spectate::ClientSim::spectator([0.0, 0.0, 8.0], 0.0, angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, angles);
+        assert!(rt.turret_think_client(0, &mut sim, true, None).is_none());
+        assert_eq!(rt.host.turrets[&gun].owner, Some(0));
+        assert_eq!(rt.host.turrets[&gun].busy, 1);
+        assert_eq!(rt.host.turrets[&gun].angles2, [0.0; 3], "no aim");
+        assert_eq!(sim.viewlocked, 0);
     }
 
     /// The server drains each cmd's mount before the next cmd's pass, so the

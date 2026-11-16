@@ -33,6 +33,9 @@ CoD1 (1.1d, 1.5b, UO):
   32-bit ELF. `netfield_diff.py` diffs two by field name.
 - `dump_field_table.py`: one netField table out of a dedicated-server ELF.
 - `xref.py`: raw 4-byte immediates equal to a VA in a PE.
+- `gdb_gunner_tree.py`: a gdb script for 1.1d's `cod_lnxded` that logs one
+  player's anim info records, playerstate and first traced skeleton each
+  frame (its header has the recipe; cod11-turrets.md 13.9).
 - `annotate_func.py`: one function of a PIC ELF with its relocations
   resolved. Run it first: a plain `objdump` of `game.mp.i386.so` hides every
   call and cvar behind PIC relocations.

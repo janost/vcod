@@ -1,8 +1,8 @@
 //! `--net-probe ADDR --probe-edge MODE`: the server's edge cases a joined
 //! client never sees, measured from a spectator that keeps decoding where a
 //! real client would stop. Every snapshot prints an `EDGE snap` line with its
-//! arrival time, `serverTime`, `snapFlags`, `deltaNum` and the x of each
-//! HUD element its playerstate carries, every server
+//! arrival time, `serverTime`, `snapFlags`, `deltaNum`, the x of each
+//! HUD element its playerstate carries and its mount fields, every server
 //! command an `EDGE cmd` line, every OOB packet an `EDGE oob` line. Writes no
 //! fixture; docs/research/cod11-server-handshake.md ("Zombie slots") and
 //! docs/protocol-1.1.md ("Spectator") hold what it measured.
@@ -113,7 +113,8 @@ pub fn run(addr: &str, mode: EdgeMode, secs: u64, cmd_ms: u64) -> anyhow::Result
                 let f = |n: &str| f32::from_bits(s.ps.field_i32(p, n) as u32);
                 println!(
                     "EDGE snap t={} msg={} serverTime={} flags={} delta={} ct={} \
-                     origin_z={:.3} vel_z={} vel_z_bits={:08x} ents={} hud_x={}",
+                     origin_z={:.3} vel_z={} vel_z_bits={:08x} ents={} hud_x={} \
+                     eflags={:#x} viewlocked={} viewlocked_ent={}",
                     ms(now),
                     s.message_num,
                     s.server_time,
@@ -125,6 +126,9 @@ pub fn run(addr: &str, mode: EdgeMode, secs: u64, cmd_ms: u64) -> anyhow::Result
                     s.ps.field_i32(p, "velocity[2]") as u32,
                     s.entities.len(),
                     hud_xs(&s.ps.arrays),
+                    s.ps.field_i32(p, "eFlags"),
+                    s.ps.field_i32(p, "viewlocked"),
+                    s.ps.field_i32(p, "viewlocked_entNum"),
                 );
                 if mode == EdgeMode::SpecFly {
                     println!(

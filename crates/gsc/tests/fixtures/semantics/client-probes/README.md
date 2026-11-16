@@ -1339,6 +1339,24 @@ it begins; the reconnecting probe's `EDGE snap` lines list the elements it
 is sent (`hud_x=`). Only that probe is needed for them (2026-11-16, all
 three and ours).
 
+## probe_reconnectgun
+
+The reconnect into a held slot with the player on a gun: each connect is
+spawned behind mp_carentan's gun at (1712 1830 8) and mounted through
+`useby` a second after it begins. `cod11-server-handshake.md`, "A reconnect
+into a held slot".
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PORT=<p> PROBE_SECS=32 tools/run_probe.sh client-probes/probe_reconnectgun mp_carentan
+# 8 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:<p> --probe-edge reconnect --probe-secs 20
+```
+
+`COD_VERSION=1.5` and `COD_VERSION=uo` (map `mp_uo_carentan`, `--mod-dir
+uo`) take the same recipe; ours runs it with `--gametype-script` and `--set
+sv_pure=0`. The `EDGE snap` lines' `eflags=`, `viewlocked=` and
+`viewlocked_ent=` are the measurement (2026-11-16, all three and ours).
+
 ## probe_uostates
 
 The wire round trip's state changes on United Offensive: a placed allied
@@ -2460,6 +2478,22 @@ servers (`COD_VERSION=1.5`, `COD_VERSION=uo` on mp_uo_carentan with
 `--mod-dir uo`): Able `--probe-secs 10`, then a second apart Baker and
 Charlie `--probe-secs 25 --probe-say "13.0:vote yes" --probe-say "15.0:vote
 no"`, so Able leaves with both windows open (cod11-votes.md 3.1).
+
+## probe_domprops
+
+United Offensive's mp_arnhem dom props (`flag4stuff_*`, `flag2stuff_*`),
+whose clip is lump-24 terrain alone: a `bulletTrace` straight down over
+their tops as loaded, hidden, `notsolid` and restored, every brush model
+linked (no `_gameobjects` pass). No client. `bsp-ibsp59-format.md`, "The
+leaf walk".
+
+```
+COD_VERSION=uo COD_DIR=<UO install> COD_LNXDED_HOME=<absolute, no '+'> SECS=14 tools/run_probe.sh client-probes/probe_domprops mp_arnhem
+```
+
+Against ours: `vcod-server mp_arnhem --mod-dir uo --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_domprops.gsc`.
+Retail and ours, 2026-11-16, print the same lines.
 
 ## probe_patchshot and probe_patchseams
 
