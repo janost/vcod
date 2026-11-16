@@ -1822,7 +1822,15 @@ first push left the pair rides each client's cmd clock (retail's walker
 sent 60 Hz cmds, ours one a frame, and the target's cmds are not logged),
 so that gate holds the later pushes to the jitter band only.
 
-Not modelled: an entity's own touch function from `ClientImpacts` (none on a
-player); a body `StuckInClient` marked CORPSE still reads as a body to the
+Not modelled: an entity's own touch function from `ClientImpacts`. VERIFIED,
+1.1d `game.mp.i386.so`, every store to the touch pointer (`gentity+0x20c`,
+the one `ClientImpacts` calls at 0x3f844 and 0x3f85a) with its relocation
+read: `Touch_Item_Auto` (`LaunchItem` 0x4dcca, `G_SpawnItem` 0x4e782),
+`Touch_DoorTrigger` (0x56b68), `Touch_Multi` (`SP_trigger_multiple`
+0x64cdd, `SP_trigger_once` 0x65c22) and `hurt_touch` (`SP_trigger_hurt`
+0x64fe2, `hurt_use` 0x65bb2); `ClientConnect` (0x42559) and the trigger
+thinks store null. INFERRED: all four sit on items and triggers, whose
+contents the player clip mask does not take, so no stock entity reaches
+`pm->touchents` with a touch function and the call never runs; a body `StuckInClient` marked CORPSE still reads as a body to the
 spawn's think (`move_bodies`), and that think sees the other players where
 the tick's moves left them, not where a script moved them since.

@@ -802,6 +802,17 @@ The 1.5b overlap capture `-bump-overlap-spectator-15-walker.txt` and
 `-script.txt` is probe_bump's spectator-slot recipe on `COD_VERSION=1.5`,
 the walker tagged `overlap-spectator-15`.
 
+## probe_blastteleport
+
+Where `G_FreeTurret`'s `TeleportPlayer` files a released gunner in the area
+tree, for `docs/research/cod11-combat.md` 14.7: probe_blastorder's four
+players and blast, then slot 1 mounted on mp_carentan's gun through `useby`,
+a blast, the gun deleted and a last blast. probe_bomb's four-client recipe,
+75 s on the server and `--probe-secs 62` on the clients. Against ours the
+server half is `vcod-server mp_carentan --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_blastteleport.gsc
+--set sv_pure=0`. Retail and ours, 2026-11-16, print the same `cb` order.
+
 ## probe_bomb and probe_blastbody
 
 Who a scripted blast reaches, for `docs/research/cod11-combat.md` 14.4. Both
@@ -1623,7 +1634,9 @@ cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-compass --probe-secs 60
 ```
 
 The `PROBE step` lines carry slot 1's origin; slot 0's `COMPASS` lines carry
-what it was sent. Against ours: `vcod-server mp_harbor --gametype-script
+what it was sent. `+set probe_wander_slot0 1` (ours: `--set
+probe_wander_slot0=1`) swaps the roles, slot 0 wandering, for the
+end-frame order (2026-11-16). Against ours: `vcod-server mp_harbor --gametype-script
 crates/gsc/tests/fixtures/semantics/client-probes/probe_compass.gsc`.
 
 ## probe_suicide

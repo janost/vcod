@@ -706,6 +706,8 @@ impl Cod1Module {
                     proto,
                 );
                 let sim = clients[slot].as_mut().unwrap().sim.as_mut().unwrap();
+                sim.compass_candidate = sessions[slot] == Some(follow::SessionState::Playing)
+                    && sim.pm_type == PmType::Normal;
                 if let Some(found) = found {
                     sim.compass_friend = found.map_or(0, |(info, _, _)| info);
                     match found {
