@@ -98,13 +98,15 @@ fn main() -> Result<()> {
                         let get = |f: &str| word(et, f).map_or(0, |w| e.0[w]);
                         if et >= ET_EVENTS {
                             println!(
-                                "{} t={} entity {n} event {} parm {} other {} attacker {} at {:?}",
+                                "{} t={} entity {n} event {} parm {} other {} attacker {} surf {} un1 {} at {:?}",
                                 l.ms,
                                 s.server_time,
                                 name(et - ET_EVENTS),
                                 get("eventParm"),
                                 get("otherEntityNum"),
                                 get("attackerEntityNum"),
+                                get("surfType"),
+                                get("un1"),
                                 e.origin()
                             );
                         } else if matches!(et, 1 | 2) {

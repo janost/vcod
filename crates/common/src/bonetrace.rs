@@ -99,6 +99,37 @@ pub fn bone_trace_worlds(
     priority: &PriorityMap,
     limit: f32,
 ) -> Option<BoneHit> {
+    trace_worlds(skel, worlds, start, end, priority, limit, false)
+}
+
+/// [`bone_trace_worlds`] under CoD4 1.7's `DObjTraceline` (`cod4_lnxded`
+/// 0x81acb18): a box of higher priority than the best so far is clipped to
+/// the trace's own `limit`, not the best's fraction (0x81ad293..0x81ad2a5),
+/// and takes the hit wherever along it; an equal one only nearer
+/// (0x81ad8a1..0x81ad907). So the highest priority crossed wins in any bone
+/// order (cod4-combat.md 5.3).
+pub fn bone_trace_worlds_cod4(
+    skel: &Skeleton,
+    worlds: &[(Vec3, Quat)],
+    start: Vec3,
+    end: Vec3,
+    priority: &PriorityMap,
+    limit: f32,
+) -> Option<BoneHit> {
+    trace_worlds(skel, worlds, start, end, priority, limit, true)
+}
+
+/// The walk of both rules: `higher_to_limit` clips a higher priority to
+/// `limit` (1.7), else every box to the best fraction so far (1.1d, UO).
+fn trace_worlds(
+    skel: &Skeleton,
+    worlds: &[(Vec3, Quat)],
+    start: Vec3,
+    end: Vec3,
+    priority: &PriorityMap,
+    limit: f32,
+    higher_to_limit: bool,
+) -> Option<BoneHit> {
     let mut best: Option<BoneHit> = None;
     let mut best_priority = MIN_PRIORITY;
     for (bi, b) in skel.bones().iter().enumerate() {
@@ -129,7 +160,10 @@ pub fn bone_trace_worlds(
                 normal: Vec3::ZERO,
             });
         }
-        let bound = best.map_or(limit, |h| h.fraction);
+        let bound = match best {
+            Some(h) if !(higher_to_limit && prio > best_priority) => h.fraction,
+            _ => limit,
+        };
         if t > bound || (prio == best_priority && best.is_some() && t >= bound) {
             continue;
         }

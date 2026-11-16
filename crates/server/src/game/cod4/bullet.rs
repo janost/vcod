@@ -221,6 +221,28 @@ impl Cod4Level {
                 found = true;
             }
         }
+        // The fresh corpses, by their hit boxes as their anims pose them,
+        // flesh as a body is (0x808a04c); none takes damage.
+        for c in self.shot_corpses() {
+            if Some(c.number) == bp.ignore {
+                continue;
+            }
+            if let Some(h) = self.corpse_trace(&c, start, end, priority, fraction)
+                && h.fraction < fraction
+            {
+                fraction = h.fraction;
+                hit = Hit {
+                    normal: h.normal,
+                    surface_flags: SURF_FLESH,
+                    contents: super::combat::CONTENTS_CORPSE_FRESH,
+                    startsolid: t.startsolid || h.startsolid,
+                    number: Some(c.number),
+                    hitloc: h.hitloc,
+                    ..Default::default()
+                };
+                found = true;
+            }
+        }
         // The script models, open to damage or not, by their models'
         // collision surfaces (`DObjGeomTraceline` on the bind pose), and
         // the brush entities (`CM_TransformedBoxTrace`), each with its
@@ -520,14 +542,14 @@ impl Cod4Level {
                             return;
                         }
                         let spaced = exit.hit.pos.distance_squared(next_pos) > near;
-                        // The exit's impact, `un1` 4, along the far face
-                        // (0x808ad0e..0x808ad38), unless the round goes on
-                        // into the sky (0x808acba).
+                        // The exit's impact, `un1` 4, along the round's own
+                        // direction (`ebp-0x2c`, 0x808a7b0, 0x808ad29),
+                        // unless the round goes on into the sky (0x808acba).
                         let into_sky = beyond
                             .as_ref()
                             .is_some_and(|n| n.surface_flags & SURF_SKY != 0);
                         if !exit.solid && spaced && !into_sky {
-                            self.impact_event(slot, d, &exit.hit, exit.hit.normal, 4);
+                            self.impact_event(slot, d, &exit.hit, bp.dir, 4);
                         }
                         (!exit.solid, spaced)
                     }

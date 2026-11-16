@@ -28,7 +28,16 @@ pub fn launch(
     max_velocity: f32,
     p: &Protocol,
 ) {
-    super::corpse::launch(body, origin, velocity, now_ms, max_velocity, KINDS.fall, p);
+    super::corpse::launch(
+        body,
+        origin,
+        velocity,
+        now_ms,
+        max_velocity,
+        KINDS.fall,
+        MAXS,
+        p,
+    );
 }
 
 /// CoD2's trace for the clone: `allsolid` reads it stuck, `startsolid`
@@ -41,8 +50,8 @@ impl CorpseWorld for CollisionWorld {
         KINDS
     }
 
-    fn sweep(&self, from: Vec3, to: Vec3, fall: bool) -> super::corpse::Sweep {
-        let tr = self.move_trace(from, to, MINS, MAXS, CLIPMASK);
+    fn sweep(&self, from: Vec3, to: Vec3, maxs: Vec3, fall: bool) -> super::corpse::Sweep {
+        let tr = self.move_trace(from, to, MINS, maxs, CLIPMASK);
         super::corpse::Sweep {
             fraction: if tr.allsolid { 0.0 } else { tr.fraction },
             end: if fall {
@@ -57,8 +66,8 @@ impl CorpseWorld for CollisionWorld {
     }
 
     /// `SV_TracePassed` (lnxded 0x810a57e).
-    fn clear(&self, from: Vec3, to: Vec3) -> bool {
-        let tr = self.move_trace(from, to, MINS, MAXS, CLIPMASK);
+    fn clear(&self, from: Vec3, to: Vec3, maxs: Vec3) -> bool {
+        let tr = self.move_trace(from, to, MINS, maxs, CLIPMASK);
         tr.fraction >= 1.0 && !tr.startsolid
     }
 

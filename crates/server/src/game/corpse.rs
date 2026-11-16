@@ -16,7 +16,8 @@ use super::bodies::{Body, Cod2Corpse};
 /// The clone's `clipmask`: CoD2's `ent+0x184`, 1.7's +0x190 (0x80ad1ce).
 /// VERIFIED.
 pub const CLIPMASK: u32 = 0x1_0001;
-/// The dying player's box, its top lowered to 30 by `player_die`.
+/// The clone's box: CoD2's dying player's, its top lowered to 30 by
+/// `player_die`. A 1.7 clone keeps the live box's top (`launch`'s `maxs`).
 pub const MINS: Vec3 = Vec3::new(-15.0, -15.0, 0.0);
 pub const MAXS: Vec3 = Vec3::new(15.0, 15.0, 30.0);
 /// `g_clonePlayerMaxVelocity`'s default in both games. VERIFIED.
@@ -68,11 +69,16 @@ pub struct Kinds {
 pub trait CorpseWorld {
     /// The rest and fall types for a clone whose `pos.trType` is `now`.
     fn kinds(&self, now: i32) -> Kinds;
-    /// The box swept under [`CLIPMASK`]; `fall` for the trajectory's sweep,
-    /// as against the root motion's drag.
-    fn sweep(&self, from: Vec3, to: Vec3, fall: bool) -> Sweep;
+    /// The box ([`MINS`] to `maxs`) swept under [`CLIPMASK`]; `fall` for
+    /// the trajectory's sweep, as against the root motion's drag.
+    fn sweep(&self, from: Vec3, to: Vec3, maxs: Vec3, fall: bool) -> Sweep;
     /// Whether the box swept from `from` to `to` meets nothing.
-    fn clear(&self, from: Vec3, to: Vec3) -> bool;
+    fn clear(&self, from: Vec3, to: Vec3, maxs: Vec3) -> bool;
+    /// A fall stopped in solid all along, from `at` toward `to`: the
+    /// game's second sweep, or `None` where the clone rests where it is.
+    fn unstick(&self, _at: Vec3, _to: Vec3, _maxs: Vec3) -> Option<Sweep> {
+        None
+    }
     /// Whether `at` is in `CONTENTS_NODROP`.
     fn no_drop(&self, at: Vec3) -> bool;
 }
@@ -87,7 +93,9 @@ pub fn lerp(from: Vec3, to: Vec3, fraction: f32) -> Vec3 {
 /// `PlayerCmd_ClonePlayer`'s trajectory: `fall` from `origin` at `now_ms`
 /// at the player's velocity, its x and y capped above (not below) at
 /// `max_velocity`, no ground, no death anim yet (CoD2 cod2-combat.md 6.2;
-/// 1.7's stores 0x80ad004..0x80ad082). VERIFIED.
+/// 1.7's stores 0x80ad004..0x80ad082). VERIFIED. `maxs` is the box's top
+/// corner the clone sweeps.
+#[allow(clippy::too_many_arguments)]
 pub fn launch(
     body: &mut Body,
     origin: Vec3,
@@ -95,6 +103,7 @@ pub fn launch(
     now_ms: i32,
     max_velocity: f32,
     fall: i32,
+    maxs: Vec3,
     p: &Protocol,
 ) {
     let capped = Vec3::new(
@@ -108,7 +117,11 @@ pub fn launch(
     put_vec(e, p, "pos.trBase", origin);
     put_vec(e, p, "pos.trDelta", capped);
     put(e, p, "groundEntityNum", 1023);
-    body.cod2 = Some(Cod2Corpse { origin, anim: None });
+    body.cod2 = Some(Cod2Corpse {
+        origin,
+        maxs,
+        anim: None,
+    });
 }
 
 /// Where this frame takes the clone, and at what pace a drag that leaves
@@ -121,11 +134,12 @@ enum Goal {
 /// One frame of the clone's move at `now_ms`, `root` its death anim's
 /// root motion since the last (`XAnimCalcDelta`).
 ///
-/// A falling clone sweeps to its gravity point. Stopped on ground (a
-/// normal with z above 0) or embedded, it rests there with the ground's
-/// entity, its angles turned onto the surface unless embedded; stopped on
-/// a wall, it is nudged a unit off along the normal and falls again from
-/// there. A resting clone moves only when the root moved more than a unit
+/// A falling clone sweeps to its gravity point. Embedded, the game's
+/// [`CorpseWorld::unstick`] may sweep again and stand in for the first.
+/// Stopped on ground (a normal with z above 0) or embedded, it rests there
+/// with the ground's entity, its angles turned onto the surface unless
+/// embedded; stopped on a wall, it is nudged a unit off along the normal
+/// and falls again from there, its `trTime` now. A resting clone moves only when the root moved more than a unit
 /// (`Vec3LengthSq > 1`, 1.7 0x80b9c3c): it sweeps to `pos.trBase` plus that
 /// motion along its forward and left, rests at the end of a clear sweep,
 /// and drops at the motion's pace when nothing is a unit below
@@ -165,7 +179,8 @@ pub fn step(
     let to = match goal {
         Goal::Fall(to) | Goal::Drag { to, .. } => to,
     };
-    let sweep = world.sweep(corpse.origin, to, matches!(goal, Goal::Fall(_)));
+    let maxs = corpse.maxs;
+    let sweep = world.sweep(corpse.origin, to, maxs, matches!(goal, Goal::Fall(_)));
     corpse.origin = sweep.end;
     if sweep.fraction < 1.0 {
         if world.no_drop(corpse.origin) {
@@ -173,6 +188,17 @@ pub fn step(
             return Moved::Freed;
         }
         if let Goal::Fall(_) = goal {
+            let again = sweep
+                .embedded
+                .then(|| world.unstick(corpse.origin, to, maxs))
+                .flatten();
+            let sweep = match again {
+                Some(s) => {
+                    corpse.origin = s.end;
+                    s
+                }
+                None => sweep,
+            };
             put_vec(e, p, "pos.trDelta", Vec3::ZERO);
             if sweep.embedded || sweep.normal.z > 0.0 {
                 settle(e, p, kinds.rest, corpse.origin);
@@ -190,7 +216,7 @@ pub fn step(
         }
     } else if let Goal::Drag { pace, .. } = goal {
         settle(e, p, kinds.rest, corpse.origin);
-        if world.clear(corpse.origin, to - Vec3::Z) {
+        if world.clear(corpse.origin, to - Vec3::Z, maxs) {
             put(e, p, "pos.trType", kinds.fall);
             put_vec(e, p, "pos.trDelta", pace);
             put(e, p, "pos.trTime", now_ms);

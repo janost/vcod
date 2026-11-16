@@ -23,7 +23,7 @@ use vcod_cod4::net::delta::{EntityState, PlayerState};
 use vcod_cod4::pmove::weapon::{WEAPTYPE_GRENADE, WeaponDef, ev as wev};
 use vcod_cod4::skel::worlds_of;
 use vcod_common::animclock::Times;
-use vcod_common::bonetrace::{PriorityMap, bone_trace_worlds};
+use vcod_common::bonetrace::{PriorityMap, bone_trace_worlds_cod4};
 use vcod_common::playerpose::{Cod4Arith, Controllers};
 use vcod_gsc::{EntId, Value};
 
@@ -231,7 +231,7 @@ impl PosedBody4 {
         let skel = &self.rig.skeleton;
         let mats = skel_mats(skel, &self.pose, Some(&self.controls));
         let worlds = worlds_of(&mats);
-        let mut h = bone_trace_worlds(skel, &worlds, ls, le, priority, limit)?;
+        let mut h = bone_trace_worlds_cod4(skel, &worlds, ls, le, priority, limit)?;
         h.normal = struck_normal(&mats, &worlds, &h);
         Some((h, entity_normal(self.yaw, h.normal)))
     }
@@ -328,7 +328,13 @@ fn struck_normal(
 /// summed over `AnglesToAxis` of the body's yaw (0x818e910) on the stack,
 /// one store a component.
 pub(super) fn entity_normal(yaw: f32, n: Vec3) -> Vec3 {
-    let axis = vcod_common::x87::angles_to_axis(Vec3::new(0.0, yaw, 0.0));
+    entity_normal_at(Vec3::new(0.0, yaw, 0.0), n)
+}
+
+/// [`entity_normal`] for an entity at `angles`, a corpse's on its ground
+/// among them.
+fn entity_normal_at(angles: Vec3, n: Vec3) -> Vec3 {
+    let axis = vcod_common::x87::angles_to_axis(angles);
     let at = |c: usize| {
         (f64::from(n.x) * f64::from(axis[0][c])
             + f64::from(n.y) * f64::from(axis[1][c])
@@ -355,6 +361,8 @@ pub struct Combat4 {
     anims: Option<Option<PlayerAnimSet>>,
     rigs: HashMap<Character, Option<Rc<PlayerRig>>>,
     bodies: Vec<PlayerBody>,
+    /// Each body queue corpse's anims by entity number ([`CorpseBody4`]).
+    corpses: HashMap<u32, CorpseBody4>,
     /// The level time each body's controls last eased: 1.7 runs the
     /// controller only when the frame's skeleton is not yet built
     /// (0x80ca75b, 0x80ca9c7), so once a frame however many traces meet it.
@@ -397,6 +405,22 @@ pub struct Combat4 {
     /// `info/bullet_penetration_mp`, read at the level's first shot
     /// (`None` inside when the zones carry none).
     pub(super) penetration: Option<Option<Rc<super::bullet::PenTable>>>,
+}
+
+/// A corpse's own anims (`corpseInfo`): the client's body as
+/// `clonePlayer`'s copy took it (0x80ad0c0..0x80ad0f6, 0x4cc bytes of
+/// its `clientInfo_t`), which `G_RunCorpseAnimate` steps each frame
+/// (0x80ba1c3, 0x80ba1e5), and the client's character for its models;
+/// `born_ms` tells a reused body queue slot's new corpse from the old.
+/// Its handler row names no controller (`.data` 0x826d104), so its
+/// skeleton is the anims alone (cod4-combat.md 5.3).
+#[derive(Clone)]
+struct CorpseBody4 {
+    born_ms: i32,
+    character: Character,
+    body: PlayerBody,
+    /// Whether its anim update has run: its DObj's birth.
+    animated: bool,
 }
 
 /// A body under 1.7's angle updater and controllers (cod4-player-anims.md
@@ -1239,7 +1263,7 @@ impl Cod4Level {
         let controls = *b.controls();
         let mats = skel_mats(skel, &pose, Some(&controls));
         let worlds = worlds_of(&mats);
-        let hit = bone_trace_worlds(skel, &worlds, ls, le, priority, limit).map(|mut h| {
+        let hit = bone_trace_worlds_cod4(skel, &worlds, ls, le, priority, limit).map(|mut h| {
             h.normal = struck_normal(&mats, &worlds, &h);
             h
         });
@@ -1920,3 +1944,170 @@ mod tests {
         assert!(!segment_meets_box(a, b, lo, hi, 0.4));
     }
 }
+
+impl Cod4Level {
+    /// Corpse `number`'s anims, born at `born_ms` off client `slot`: the
+    /// client's body and character as they stand when it is first asked
+    /// for, which is the death's frame (nothing steps a dead client's
+    /// body); a corpse a reused slot replaced starts again.
+    fn corpse_body(&mut self, number: u32, born_ms: i32, slot: usize) -> Option<&mut CorpseBody4> {
+        let fresh = self
+            .combat
+            .corpses
+            .get(&number)
+            .is_none_or(|c| c.born_ms != born_ms);
+        if fresh {
+            // `G_RunCorpseAnimate` builds the DObj with no attachment
+            // left out of the traces (`BG_UpdatePlayerDObj`'s mask 0,
+            // 0x80ba1a8): the head the live body's `attach` keeps out
+            // takes rounds on the corpse.
+            let character = Character {
+                ignore_collision: 0,
+                ..self.character(slot)?
+            };
+            let body = self.combat.bodies.get(slot)?.clone();
+            self.combat.corpses.insert(
+                number,
+                CorpseBody4 {
+                    born_ms,
+                    character,
+                    body,
+                    animated: false,
+                },
+            );
+        }
+        self.combat.corpses.get_mut(&number)
+    }
+
+    /// `G_RunCorpseAnimate`'s `BG_PlayerAnimation` for corpse `number`
+    /// off its entity (`f`): its lerp frames a frame on, as a client's
+    /// end frame steps a live body's.
+    pub(super) fn animate_corpse(&mut self, number: u32, born_ms: i32, f: &BodyFrame) {
+        let now = self.level_time();
+        let dt = self.frame_time();
+        if self.combat.anims().is_none() {
+            return;
+        }
+        let slot = f.client_num as usize;
+        if self.corpse_body(number, born_ms, slot).is_none() {
+            return;
+        }
+        let Combat4 { anims, corpses, .. } = &mut self.combat;
+        let (Some(Some(set)), Some(c)) = (anims.as_mut(), corpses.get_mut(&number)) else {
+            return;
+        };
+        let at = Times {
+            clock_ms: now,
+            snapshot_ms: now,
+        };
+        c.body.animate(
+            &set.anims,
+            f,
+            at,
+            dt,
+            vcod_common::playerpose::BG_SWING_SPEED,
+        );
+        c.animated = true;
+    }
+
+    /// `G_LocationalTrace`'s test of corpse `c`, nearer than `limit`.
+    /// Until its first anim update builds its DObj (`BG_UpdatePlayerDObj`,
+    /// 0x80ba1c3) `SV_ClipMoveToEntity` finds none (0x817dea3) and sweeps
+    /// its box's temp capsule (`CM_TempBoxModel`, 0x817e0dc), which reads
+    /// a start inside as a contact at 0; from then on its hit boxes posed by
+    /// its anims alone, placed at `r.currentOrigin` and its angles (the
+    /// `svFlags` 2 arm, 0x817e169). The struck face's normal is the world's.
+    pub(super) fn corpse_trace(
+        &mut self,
+        c: &super::corpse::ShotCorpse,
+        start: Vec3,
+        end: Vec3,
+        priority: &PriorityMap,
+        limit: f32,
+    ) -> Option<CorpseHit> {
+        let f = &c.frame;
+        let slot = f.client_num as usize;
+        let posed = self
+            .corpse_body(c.number, c.born_ms, slot)
+            .is_some_and(|b| b.animated);
+        if !posed {
+            let body = vcod_common::movetrace::Body {
+                entity: c.number,
+                origin: f.origin,
+                mins: crate::game::corpse::MINS,
+                maxs: c.maxs,
+                contents: CONTENTS_CORPSE_FRESH,
+            };
+            let mut t = vcod_common::collision::Trace::clear(end);
+            t.fraction = limit;
+            vcod_common::movetrace::clip_body_kept(
+                &mut t,
+                start,
+                end,
+                Vec3::ZERO,
+                Vec3::ZERO,
+                &body,
+            );
+            return (t.hit.is_some() && t.fraction < limit).then_some(CorpseHit {
+                fraction: t.fraction,
+                normal: t.normal,
+                startsolid: t.startsolid,
+                hitloc: 0,
+            });
+        }
+        let lo = f.origin + HIT_BROAD_MINS;
+        let hi = f.origin + HIT_BROAD_MAXS;
+        if !segment_meets_box(start, end, lo, hi, limit) {
+            return None;
+        }
+        let now = self.level_time();
+        let src = self.combat.src.clone()?;
+        self.combat.anims()?;
+        let character = self.combat.corpses.get(&c.number)?.character.clone();
+        let rig = self.combat.rig(&character)?;
+        let Combat4 { anims, corpses, .. } = &mut self.combat;
+        let set = anims.as_mut()?.as_mut()?;
+        let body = corpses.get(&c.number)?;
+        let pose = pose4(&body.body, &rig, set, &src, f, now);
+        let angles = Vec3::from(f.angles);
+        let placed = if angles.x == 0.0 && angles.z == 0.0 {
+            BodyFrame {
+                origin: f.origin,
+                angles: [0.0, angles.y, 0.0],
+                ..Default::default()
+            }
+            .transform()
+        } else {
+            glam::Mat4::from_rotation_translation(
+                vcod_common::turretpose::angles_quat(f.angles),
+                f.origin,
+            )
+        };
+        let inv = placed.inverse();
+        let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
+        let skel = &rig.skeleton;
+        let mats = skel_mats(skel, &pose, None);
+        let worlds = worlds_of(&mats);
+        let mut h = bone_trace_worlds_cod4(skel, &worlds, ls, le, priority, limit)?;
+        h.normal = struck_normal(&mats, &worlds, &h);
+        Some(CorpseHit {
+            fraction: h.fraction,
+            normal: entity_normal_at(angles, h.normal),
+            startsolid: h.start_solid,
+            hitloc: h.hit_location,
+        })
+    }
+}
+
+/// A round's contact with a corpse ([`Cod4Level::corpse_trace`]): how far
+/// along, the face's normal in the world, whether it started inside and
+/// the hit location (none on the capsule).
+pub(super) struct CorpseHit {
+    pub fraction: f32,
+    pub normal: Vec3,
+    pub startsolid: bool,
+    pub hitloc: u8,
+}
+
+/// A fresh corpse's contents (`clonePlayer`, 0x80ad1d8).
+pub(super) const CONTENTS_CORPSE_FRESH: u32 = 0x400_4000;
