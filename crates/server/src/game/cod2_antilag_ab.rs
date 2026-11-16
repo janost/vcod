@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use glam::Vec3;
+use vcod_cod2::player::dobj::Mat;
 use vcod_cod2::pmove::PlayerState;
 
 use super::cod2_combat_ab::{parse, weapon_from_wire, word};
@@ -37,7 +38,8 @@ const GAPS: &[(i32, &str)] = &[(
 )];
 
 /// One round: (time, the target's live origin, retail's rewound origin,
-/// ours, retail's hit location, ours).
+/// ours, retail's hit location, ours, the body's bones the trace built, in
+/// the body model's order).
 struct Round {
     time: i32,
     live: Vec3,
@@ -45,6 +47,7 @@ struct Round {
     ours: Option<Vec3>,
     retail_loc: String,
     ours_loc: String,
+    bones: Vec<Mat>,
 }
 
 /// The vectors in a log line, in order.
@@ -64,10 +67,11 @@ fn vectors(line: &str) -> Vec<Vec3> {
         .collect()
 }
 
-fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>) -> Vec<Round> {
+/// The capture `name` (and `<name>-b`, the target's) replayed.
+fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str) -> Vec<Round> {
     let read = |n: &str| std::fs::read_to_string(format!("{FIXTURES}/{n}.txt")).unwrap();
-    let shooter = parse(&read("antilag"));
-    let target = parse(&read("antilag-b"));
+    let shooter = parse(&read(name));
+    let target = parse(&read(&format!("{name}-b")));
     let gsc = std::fs::read_to_string(format!("{FIXTURES}/probe_antilag.gsc")).unwrap();
     let mut cvars = crate::cvars::Cvars::new();
     cvars.set("developer", "1");
@@ -155,6 +159,11 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>) -> Vec<Round> {
             p.ps.command_time
         };
         level.run_frame(t);
+        // The shooter's look-at, which the replay leaves out of the level,
+        // builds the target once a frame (cod2-combat.md 9.5).
+        if let Some(s) = shooter.side.at(t) {
+            level.look_trace_from(&PlayerState::from_wire(&s.ps));
+        }
         archive(&mut level, t);
         for (_, retail, point, dir, loc, lag) in rounds.iter().filter(|r| r.0 == t) {
             let ours = level.rewound_origin(0, *lag).and_then(|r| r.at());
@@ -178,23 +187,18 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>) -> Vec<Round> {
                 ours,
                 retail_loc: loc.clone(),
                 ours_loc,
+                bones: level.built_body_mats(0).unwrap_or_default(),
             });
         }
     }
     out
 }
 
-#[test]
-fn retail_rewinds_match_vcods() {
-    let Some(fs) = vcod_common::testing::cod2_fs() else {
-        return;
-    };
-    let fs = Rc::new(fs);
+/// Every round of `rounds` off retail's, but those `gaps` names.
+fn rounds_off(rounds: &[Round], gaps: &[(i32, &str)]) -> Vec<String> {
     let report = std::env::var_os("ANTILAG_REPORT").is_some();
-    let rounds = replay(&fs);
     let mut wrong = Vec::new();
-    let mut moved = 0;
-    for r in &rounds {
+    for r in rounds {
         let line = format!(
             "{}: live {} retail {} {} ours {} {}",
             r.time,
@@ -210,12 +214,26 @@ fn retail_rewinds_match_vcods() {
         let origin_off = r
             .ours
             .is_none_or(|o| (o - r.retail).abs().max_element() > ORIGIN_TOLERANCE);
-        let gap = GAPS.iter().any(|g| g.0 == r.time);
+        let gap = gaps.iter().any(|g| g.0 == r.time);
         if origin_off || (r.ours_loc != r.retail_loc) != gap {
             wrong.push(line);
         }
-        moved += usize::from(r.live.distance(r.retail) > 1.0);
     }
+    wrong
+}
+
+#[test]
+fn retail_rewinds_match_vcods() {
+    let Some(fs) = vcod_common::testing::cod2_fs() else {
+        return;
+    };
+    let fs = Rc::new(fs);
+    let rounds = replay(&fs, "antilag");
+    let wrong = rounds_off(&rounds, GAPS);
+    let moved = rounds
+        .iter()
+        .filter(|r| r.live.distance(r.retail) > 1.0)
+        .count();
     eprintln!(
         "{} of {} rounds wrong, {moved} rewound off the live origin",
         wrong.len(),
@@ -227,4 +245,130 @@ fn retail_rewinds_match_vcods() {
         "rounds off retail's:\n{}",
         wrong.join("\n")
     );
+}
+
+/// How far a traced bone may sit from retail's dumped one, in units and in
+/// quat components: the few ulps the replay's pose still leaves.
+const BONE_TOLERANCE: (f32, f32) = (2e-5, 1e-6);
+
+/// The gdb capture's rounds whose bones the replay still poses off
+/// retail's, by frame time, each with its section of cod2-combat.md.
+const BONE_GAPS: &[(i32, &str)] = &[
+    (
+        9150,
+        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
+    ),
+    (
+        9200,
+        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
+    ),
+    (
+        9800,
+        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
+    ),
+    (
+        10350,
+        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
+    ),
+    (
+        11600,
+        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
+    ),
+    (
+        12200,
+        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
+    ),
+    (
+        13350,
+        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
+    ),
+    (
+        14250,
+        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
+    ),
+];
+
+/// Retail's bones at each struck trace of the target (entity 0) in a
+/// `tools/re/cod2_trace_gdb.py` dump, by level time, the last one of a
+/// frame: the round's, after the shooter's look-at.
+fn dumped_bones(dump: &str) -> HashMap<i32, HashMap<usize, [f32; 8]>> {
+    let bits = |s: &str| f32::from_bits(u32::from_str_radix(s, 16).unwrap());
+    let mut out = HashMap::new();
+    let mut cur: Option<(i32, i32, HashMap<usize, [f32; 8]>)> = None;
+    for line in dump.lines().filter(|l| !l.starts_with('#')) {
+        let t: Vec<&str> = line.split_whitespace().collect();
+        match t[0] {
+            "trace" => cur = Some((t[3].parse().unwrap(), t[7].parse().unwrap(), HashMap::new())),
+            "mat" => {
+                let m: [f32; 8] = std::array::from_fn(|i| bits(t[2 + i]));
+                cur.as_mut().unwrap().2.insert(t[1].parse().unwrap(), m);
+            }
+            "result" => {
+                let (time, ent, mats) = cur.take().unwrap();
+                if ent == 0 && !t[7].ends_with("0000") {
+                    out.insert(time, mats);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// A capture taken under gdb (`GDB_PY=tools/re/cod2_trace_gdb.py`, the
+/// fixture's header): every round strikes retail's bone, and the body each
+/// round's trace built sits where retail's `DObjTraceline` read it
+/// (`crates/cod2/tests/fixtures/trace/antilag-gdb.txt`), bone for bone.
+#[test]
+fn retail_rewinds_and_bones_match_vcods_under_gdb() {
+    let Some(fs) = vcod_common::testing::cod2_fs() else {
+        return;
+    };
+    let fs = Rc::new(fs);
+    let rounds = replay(&fs, "antilag-gdb");
+    let mut wrong = rounds_off(&rounds, &[]);
+    let dump = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../cod2/tests/fixtures/trace/antilag-gdb.txt"
+    ))
+    .unwrap();
+    let retail = dumped_bones(&dump);
+    let (mut bones, mut worst) = (0, (0.0f32, 0.0f32));
+    for r in &rounds {
+        let Some(mats) = retail.get(&r.time) else {
+            wrong.push(format!("{}: no dumped trace", r.time));
+            continue;
+        };
+        let mut off = None;
+        for (&i, m) in mats {
+            // The trace builds only the bones with a box and their parents.
+            let Some(&ours) = r.bones.get(i).filter(|b| **b != Mat::ZERO) else {
+                continue;
+            };
+            let dt = (0..3)
+                .map(|c| (ours.trans[c] - m[4 + c]).abs())
+                .fold(0.0, f32::max);
+            let dq = (0..4)
+                .map(|c| (ours.quat[c] - m[c]).abs())
+                .fold(0.0, f32::max);
+            bones += 1;
+            if dt > BONE_TOLERANCE.0 || dq > BONE_TOLERANCE.1 {
+                off.get_or_insert(format!("{}: bone {i} off {dt:e} {dq:e}", r.time));
+            }
+            if !BONE_GAPS.iter().any(|g| g.0 == r.time) {
+                worst = (worst.0.max(dt), worst.1.max(dq));
+            }
+        }
+        if off.is_some() != BONE_GAPS.iter().any(|g| g.0 == r.time) {
+            wrong.push(off.unwrap_or(format!("{}: bones now match", r.time)));
+        }
+    }
+    eprintln!(
+        "{} rounds, {bones} bones, worst {:e} units {:e} quat outside the gaps",
+        rounds.len(),
+        worst.0,
+        worst.1
+    );
+    assert!(rounds.len() >= 30 && bones > 1000);
+    assert!(wrong.is_empty(), "off retail's:\n{}", wrong.join("\n"));
 }

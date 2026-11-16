@@ -5,6 +5,7 @@ mod collision_maps;
 mod cookie_census;
 mod d3dbsp_maps;
 mod demo;
+mod dobj_trace_ab;
 mod efx_stock;
 mod feather_census;
 mod fonts;

@@ -531,6 +531,28 @@ pub fn rotation_matrix(angles: Vec3) -> [Vec3; 3] {
     [f, -r, u]
 }
 
+/// `p` into the frame whose axes are `rows`, at `origin`, as CoD2's
+/// `MatrixTransformVector43`'s inverse (lnxded 0x80a74f8) and the bone
+/// frame's (0x80bb1f0) run it: each `p - origin` stored, each dot product
+/// on the stack ([`F80`]), stored.
+pub fn into_frame_x87(p: Vec3, rows: &[Vec3; 3], origin: Vec3) -> Vec3 {
+    let f = F80::from_f32;
+    let d: [F80; 3] = std::array::from_fn(|i| f((f(p[i]) - f(origin[i])).to_f32()));
+    let dot = |r: Vec3| ((d[0] * f(r.x) + d[1] * f(r.y)) + d[2] * f(r.z)).to_f32();
+    Vec3::new(dot(rows[0]), dot(rows[1]), dot(rows[2]))
+}
+
+/// `v` turned out of the frame whose axes are `rows` (CoD2 lnxded
+/// 0x80a71b6): each component `((v.x r0 + v.y r1) + v.z r2)` on the stack,
+/// stored.
+pub fn out_of_frame_x87(v: Vec3, rows: &[Vec3; 3]) -> Vec3 {
+    let f = F80::from_f32;
+    let c = |i: usize| {
+        ((f(v.x) * f(rows[0][i]) + f(v.y) * f(rows[1][i])) + f(v.z) * f(rows[2][i])).to_f32()
+    };
+    Vec3::new(c(0), c(1), c(2))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

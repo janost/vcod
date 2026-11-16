@@ -83,12 +83,6 @@ const GAPS: &[(&str, &str, usize, &str)] = &[
     ),
     (
         "hit-throw",
-        "missile pos.trBase[2]",
-        3,
-        "9.4 the bounce off the target's body: last bits",
-    ),
-    (
-        "hit-throw",
         "missile pos.trDelta[0]",
         6,
         "9.4 the bounce off the target's body: last bits",
@@ -102,7 +96,7 @@ const GAPS: &[(&str, &str, usize, &str)] = &[
     (
         "hit-throw",
         "missile pos.trDelta[2]",
-        3,
+        6,
         "9.4 the bounce off the target's body: last bits",
     ),
     (

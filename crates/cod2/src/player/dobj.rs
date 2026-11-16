@@ -93,6 +93,10 @@ trait Ar:
     fn of(v: f64) -> Self;
     /// A store to a float.
     fn st(self) -> f32;
+    /// `fsqrt`.
+    fn sqrt(self) -> Self;
+    /// `self > o`, as `fucompp` tells it.
+    fn gt(self, o: Self) -> bool;
 }
 
 impl Ar for F80 {
@@ -102,6 +106,14 @@ impl Ar for F80 {
 
     fn st(self) -> f32 {
         self.to_f32()
+    }
+
+    fn sqrt(self) -> F80 {
+        F80::sqrt(self)
+    }
+
+    fn gt(self, o: F80) -> bool {
+        self > o
     }
 }
 
@@ -235,6 +247,32 @@ impl Ar for Bounded {
             }
         }
         mid
+    }
+
+    #[inline(always)]
+    fn sqrt(self) -> Bounded {
+        let Bounded(a, ea) = self;
+        let v = a.sqrt();
+        if ea == 0.0 {
+            let err = (-v).mul_add(v, a);
+            return Bounded(v, if err == 0.0 { 0.0 } else { v * U });
+        }
+        if ea * 4.0 >= a {
+            DOUBT.set(true);
+            return Bounded(v, 0.0);
+        }
+        // sqrt(a + e) - sqrt(a) is under e / sqrt(a) for e under a / 4.
+        Bounded(v, ea / v * (1.0 + 4.0 * U) + v * U)
+    }
+
+    /// A difference inside both bounds leaves the order in doubt.
+    #[inline(always)]
+    fn gt(self, o: Bounded) -> bool {
+        let (Bounded(a, ea), Bounded(b, eb)) = (self, o);
+        if (ea != 0.0 || eb != 0.0) && (a - b).abs() <= 2.0 * (ea + eb) + (a.abs() + b.abs()) * U {
+            DOUBT.set(true);
+        }
+        a > b
     }
 }
 
@@ -666,4 +704,216 @@ pub fn tag(angles: [f32; 3], trans: [f32; 3]) -> Mat {
         trans,
         weight: 0.0,
     }
+}
+
+/// What [`traceline`] struck.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LineHit {
+    /// Along `start..end`; 0 on a start-solid.
+    pub fraction: f32,
+    pub bone: usize,
+    pub hit_location: u8,
+    /// The segment lies inside the bone's box end to end.
+    pub start_solid: bool,
+    /// In the body's frame, as `DObjTraceline` leaves it (see [`traceline`]).
+    pub normal: [f32; 3],
+}
+
+/// `DObjTraceline` (0x80bb27e): the segment `start..end`, in the body's
+/// frame, against the hit boxes of the bones `mats` posed, under `priority`
+/// (one byte per hit location), clipped to `limit`. Each bone's box sphere
+/// (centre `(mins + maxs) * 0.5`, radius squared `|maxs - centre|^2`, both
+/// stored at load, 0x80c7322) culls first, then the slab test in the
+/// bone's frame. A higher priority takes the hit at any fraction up to
+/// `limit`; an equal one only nearer. cod2-player-anims.md 12.
+pub fn traceline(
+    skel: &Skeleton,
+    mats: &[Mat],
+    start: [f32; 3],
+    end: [f32; 3],
+    priority: &[u8; 19],
+    limit: f32,
+) -> Option<LineHit> {
+    exactly(
+        || traceline_in::<Bounded>(skel, mats, start, end, priority, limit),
+        || traceline_in::<F80>(skel, mats, start, end, priority, limit),
+    )
+}
+
+/// `a > b` on the stack; a pass that cannot tell is in doubt.
+fn gt<T: Ar>(a: T, b: T) -> bool {
+    a.gt(b)
+}
+
+/// A 3-vector's components each `a - b` stored (0x80bc178).
+fn sub3<T: Ar>(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|i| st(d::<T>(a[i]) - d::<T>(b[i])))
+}
+
+/// `((a.x b.x + a.y b.y) + a.z b.z)` on the stack (0x80bc248, 0x80bc27c).
+fn dot3<T: Ar>(a: [f32; 3], b: [f32; 3]) -> T {
+    let d = d::<T>;
+    (d(a[0]) * d(b[0]) + d(a[1]) * d(b[1])) + d(a[2]) * d(b[2])
+}
+
+fn traceline_in<T: Ar>(
+    skel: &Skeleton,
+    mats: &[Mat],
+    start: [f32; 3],
+    end: [f32; 3],
+    priority: &[u8; 19],
+    limit: f32,
+) -> Option<LineHit> {
+    let d = d::<T>;
+    let dir = sub3::<T>(end, start);
+    let len2 = st(dot3::<T>(dir, dir));
+    if len2 == 0.0 {
+        return None;
+    }
+    let inv = st(ext::<T>(1.0) / d(len2));
+    let mut best_priority = 2u8;
+    let mut fraction = limit;
+    let mut hit: Option<(usize, u8, usize)> = None;
+    // The last face any bone's entry took, axis and sign: the sign is read
+    // at the end whichever bone set it last (0x80bb89d, 0x80bbb02).
+    let mut face_axis = 0usize;
+    let mut face_sign = 0.0f32;
+    for (bi, b) in skel.bones().iter().enumerate() {
+        let (lo, hi) = (b.hit_mins.to_array(), b.hit_maxs.to_array());
+        let centre: [f32; 3] = std::array::from_fn(|i| st((d(lo[i]) + d(hi[i])) * ext::<T>(0.5)));
+        let r2 = st(dot3::<T>(sub3::<T>(hi, centre), sub3::<T>(hi, centre)));
+        if r2 == 0.0 {
+            continue;
+        }
+        let prio = priority.get(b.hit_location as usize).copied().unwrap_or(0);
+        if prio < best_priority {
+            continue;
+        }
+        let m = mats[bi];
+        let rows = m.axis_in::<T>();
+        // The sphere: the nearest point of the line to its centre.
+        let c = m.place_by::<T>(&rows, centre);
+        let v = sub3::<T>(start, c);
+        let t = st(-dot3::<T>(v, dir) * d(inv));
+        let dist2 = if gt(ext::<T>(1.0), d(t)) {
+            if gt(d(t), ext::<T>(0.0)) {
+                let p: [f32; 3] = std::array::from_fn(|i| st(d(t) * d(dir[i]) + d(v[i])));
+                st(dot3::<T>(p, p))
+            } else {
+                st(dot3::<T>(v, v))
+            }
+        } else {
+            let w = sub3::<T>(end, c);
+            st(dot3::<T>(w, w))
+        };
+        let gap = st(d(r2) - d(dist2));
+        if !gt(d(gap), ext::<T>(0.0)) {
+            continue;
+        }
+        if prio == best_priority {
+            let s = st(d(st(d(gap) * d(inv))).sqrt());
+            if !gt(d(fraction), d(t) - d(s)) {
+                continue;
+            }
+        }
+        // Into the bone's frame (0x80bb1f0).
+        let into = |p: [f32; 3]| -> [f32; 3] {
+            let q = sub3::<T>(p, m.trans);
+            std::array::from_fn(|i| st(dot3::<T>(q, rows[i])))
+        };
+        let (ls, le) = (into(start), into(end));
+        let mut enter = 0.0f32;
+        let mut exit = if prio == best_priority {
+            fraction
+        } else {
+            limit
+        };
+        let (mut starts_in, mut ends_in) = (true, true);
+        let mut axis_here = None;
+        let mut missed = false;
+        'planes: for (sign, planes) in [(-1.0f32, lo), (1.0, hi)] {
+            for a in 0..3 {
+                let d1 = st((d(ls[a]) - d(planes[a])) * d(sign));
+                let d2 = st((d(le[a]) - d(planes[a])) * d(sign));
+                if d1 > 0.0 {
+                    if d2 > 0.0 {
+                        missed = true;
+                        break 'planes;
+                    }
+                    starts_in = false;
+                    let den = st(d(d1) - d(d2));
+                    if gt(d(d1), d(enter) * d(den)) {
+                        enter = st(d(d1) / d(den));
+                        if enter >= exit {
+                            missed = true;
+                            break 'planes;
+                        }
+                        face_sign = sign;
+                        axis_here = Some(a);
+                    }
+                } else if d2 > 0.0 {
+                    ends_in = false;
+                    let den = st(d(d1) - d(d2));
+                    if gt(d(d1), d(exit) * d(den)) {
+                        exit = st(d(d1) / d(den));
+                        if enter >= exit {
+                            missed = true;
+                            break 'planes;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(a) = axis_here {
+            face_axis = a;
+        }
+        if missed {
+            continue;
+        }
+        if starts_in {
+            if !ends_in
+                || gt(
+                    d(dir[0]) * d(start[0]) + d(dir[1]) * d(start[1]),
+                    ext::<T>(0.0),
+                )
+            {
+                continue;
+            }
+            // Out from the body's axis toward the start, or along the
+            // line's z (0x80bb9d0).
+            let normal = if dir[0] != 0.0 || dir[1] != 0.0 {
+                let len = st(d(st(d(start[0]) * d(start[0]) + d(start[1]) * d(start[1]))).sqrt());
+                if len == 0.0 {
+                    [start[0], start[1], 0.0]
+                } else {
+                    let r = st(ext::<T>(1.0) / d(len));
+                    [st(d(start[0]) * d(r)), st(d(start[1]) * d(r)), 0.0]
+                }
+            } else {
+                [0.0, 0.0, if dir[2] >= 0.0 { -1.0 } else { 1.0 }]
+            };
+            return Some(LineHit {
+                fraction: 0.0,
+                bone: bi,
+                hit_location: b.hit_location,
+                start_solid: true,
+                normal,
+            });
+        }
+        if prio == best_priority && enter >= fraction {
+            continue;
+        }
+        best_priority = prio;
+        fraction = enter;
+        hit = Some((bi, b.hit_location, face_axis));
+    }
+    let (bone, hit_location, axis) = hit?;
+    let rows = mats[bone].axis_in::<T>();
+    Some(LineHit {
+        fraction,
+        bone,
+        hit_location,
+        start_solid: false,
+        normal: rows[axis].map(|r| st(d(r) * d(face_sign))),
+    })
 }
