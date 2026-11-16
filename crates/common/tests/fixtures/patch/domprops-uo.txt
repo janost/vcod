@@ -1,0 +1,14 @@
+# Retail UO 1.51b, 2026-11-16: straight down 400 units from spots over
+# mp_arnhem's dom props, the flag4stuff and flag2stuff script_brushmodels
+# whose clip is lump-24 terrain alone (*17, *18, *121, *122; no brushes),
+# a bulletTrace (hitCharacters false: map, spot, `point`, fraction, end z),
+# every brush model linked (no `_gameobjects` pass). The same traces read
+# the same after every prop is hidden (`hide` leaves the clip alone), and
+# after `notsolid` the first and third fall to another prop's top at
+# 204.12. vcod-server running the probe printed every line alike.
+# Recipe (no client):
+#   COD_VERSION=uo COD_DIR=<UO install> tools/run_probe.sh client-probes/probe_domprops mp_arnhem
+mp_arnhem 1262 2802 260 point 0.0896875 224.12
+mp_arnhem 1200 2776 240 point 0.0896875 204.12
+mp_arnhem 1266 2804 240 point 0.0396875 224.12
+mp_arnhem -1940 126 120 point 0.0496875 100.12

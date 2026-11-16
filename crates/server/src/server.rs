@@ -6887,7 +6887,7 @@ impl Server {
                     .collect()
             });
         if let Some(rt) = self.game.module.script.as_ref() {
-            for n in rt.broadcast_entities(self.svs_time_ms()) {
+            for n in rt.broadcast_entities(self.core.sv_time_ms) {
                 if let Some(e) = culled.remove(&n) {
                     broadcast.insert(n, e);
                 }
@@ -6930,9 +6930,11 @@ impl Server {
         wall: (Option<f32>, u32),
     ) -> Cod1Snapshots {
         let live = self.build_world_frame();
-        let svs_ms = self.svs_time_ms();
+        // The game clock: what 1.5b and UO compare `r.broadcastTime` with
+        // (cod15-protocol-diff.md 15), which a match timeout stands still.
+        let now = self.core.sv_time_ms;
         if let Some(rt) = self.game.module.script.as_mut() {
-            rt.expire_broadcast_times(svs_ms);
+            rt.expire_broadcast_times(now);
         }
         let teams: Vec<i32> = (0..self.core.clients.len())
             .map(|slot| {
@@ -9547,6 +9549,42 @@ mod tests {
         let id = rt.host.ents.handle(0).unwrap();
         rt.host.ents.get_mut(id).unwrap().broadcast_time = -1;
         assert_eq!(sent(&mut sv), (false, true), "driving under a loop sound");
+    }
+
+    /// `r.broadcastTime` is held to the game clock, not `svs.time`: through
+    /// a 1.5 match timeout, the game clock standing, a sound's 300 ms
+    /// never pass (1.5b 0x8095d98, UO 0x8096d25; cod15-protocol-diff.md 15).
+    #[test]
+    fn a_broadcast_time_waits_on_the_game_clock() {
+        use crate::game::script::{CALLBACK_SETUP, ScriptRuntime};
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.set_protocol(&PROTOCOL_V6);
+        install_script(
+            &mut sv,
+            ScriptRuntime::for_test_at(
+                CALLBACK_SETUP,
+                "main() {}\n\
+                 CodeCallback_PlayerConnect() { self waittill(\"begin\"); \
+                   self.sessionstate = \"playing\"; \
+                   self spawn((0, 0, 64), (0, 0, 0)); }\n",
+            ),
+        );
+        begun(&mut sv, now);
+        for ms in (0..=200).step_by(50) {
+            sv.tick(now + Duration::from_millis(ms));
+        }
+        let stamp = sv.core.sv_time_ms + 300;
+        let rt = sv.game.module.script.as_mut().unwrap();
+        let id = rt.host.ents.handle(0).unwrap();
+        rt.host.ents.get_mut(id).unwrap().broadcast_time = stamp;
+        // A second of timeout: the network clock ran on, the game's stood.
+        sv.game.paused_ms += 1000;
+        let f = sv.build_world_frame();
+        assert!(f.broadcast.contains_key(&0), "still broadcast");
+        sv.snapshots_begin(Vec::new(), (None, 0));
+        let rt = sv.game.module.script.as_ref().unwrap();
+        assert_eq!(rt.host.ents.get(id).unwrap().broadcast_time, stamp);
     }
 
     /// The disconnect callback's commands to the leaver alone go into its
