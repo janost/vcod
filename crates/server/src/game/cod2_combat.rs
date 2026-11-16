@@ -232,8 +232,12 @@ struct ServerBody {
     /// What its last end frame read (`ClientEndFrame` copies it into the
     /// `clientInfo_t`), which the controller hook eases toward.
     frame: Option<BodyFrame>,
-    built: Option<(u32, Rc<PlayerRig>, Rc<Vec<Mat>>)>,
+    built: Option<Built>,
 }
+
+/// The stamp, rig and bones a body was last built under, and whether every
+/// bone was (else only the traced ones).
+type Built = (u32, Rc<PlayerRig>, Rc<Vec<Mat>>, bool);
 
 /// Each built bone's place and turn in the model's frame, for the box walk.
 fn mat_worlds(mats: &[Mat]) -> Vec<(Vec3, glam::Quat)> {
@@ -776,7 +780,7 @@ impl Cod2Level {
         origin: Vec3,
     ) -> Option<(Rc<PlayerRig>, Rc<Vec<Mat>>, BodyFrame)> {
         let f = self.body_frame(slot, origin)?;
-        self.body_pose_at(slot, f)
+        self.body_pose_at(slot, f, false)
     }
 
     /// [`Self::body_pose`] with the controls eased toward `f`.
@@ -784,6 +788,7 @@ impl Cod2Level {
         &mut self,
         slot: usize,
         f: BodyFrame,
+        all: bool,
     ) -> Option<(Rc<PlayerRig>, Rc<Vec<Mat>>, BodyFrame)> {
         let fs = self.rt.host.fs.clone()?;
         let character = self.character(slot)?;
@@ -794,15 +799,21 @@ impl Cod2Level {
         let Combat { anims, bodies, .. } = &mut self.combat;
         let set = anims.as_mut()?;
         let b = &mut bodies[slot];
-        if let Some((s, r, pose)) = &b.built
-            && *s == stamp
-            && Rc::ptr_eq(r, &rig)
-        {
-            return Some((rig, pose.clone(), f));
+        // The controls ease once a stamp; a whole build after a traced one
+        // in the same stamp builds off the same controls.
+        let same = b
+            .built
+            .as_ref()
+            .filter(|(s, r, ..)| *s == stamp && Rc::ptr_eq(r, &rig));
+        if let Some((_, _, pose, whole)) = same {
+            if *whole || !all {
+                return Some((rig, pose.clone(), f));
+            }
+        } else {
+            b.body.ease_controls(&set.anims, &f, frametime);
         }
-        b.body.ease_controls(&set.anims, &f, frametime);
-        let pose = Rc::new(b.body.dobj_mats(&rig, set, &*fs, &f, now)?);
-        b.built = Some((stamp, rig.clone(), pose.clone()));
+        let pose = Rc::new(b.body.dobj_mats(&rig, set, &*fs, &f, now, !all)?);
+        b.built = Some((stamp, rig.clone(), pose.clone(), all));
         Some((rig, pose, f))
     }
 
@@ -815,8 +826,11 @@ impl Cod2Level {
         // The controller hook reads the `clientInfo_t` its last end frame
         // filled, not the playerstate the death since rewrote.
         let (rig, pose, _) = match self.combat.bodies[slot].frame {
-            Some(f) => self.body_pose_at(slot, BodyFrame { origin, ..f })?,
-            None => self.body_pose(slot, origin)?,
+            Some(f) => self.body_pose_at(slot, BodyFrame { origin, ..f }, true)?,
+            None => {
+                let f = self.body_frame(slot, origin)?;
+                self.body_pose_at(slot, f, true)?
+            }
         };
         let bone = rig.skeleton.bone_index(tag)?;
         let [lx, ly, lz] = pose.get(bone)?.trans.map(F80::from_f32);
@@ -937,7 +951,7 @@ impl Cod2Level {
         let set = anims.as_mut().unwrap();
         let body = &mut bodies[slot].body;
         body.ease_controls(&set.anims, &f, frametime);
-        let pose = body.dobj_mats(&rig, set, &*fs, &f, now_ms).unwrap();
+        let pose = body.dobj_mats(&rig, set, &*fs, &f, now_ms, false).unwrap();
         let placed = BodyFrame {
             origin,
             angles: [0.0, yaw, 0.0],
@@ -964,7 +978,10 @@ impl Cod2Level {
     #[cfg(test)]
     pub(super) fn body_bones(&mut self, slot: usize) -> Vec<(String, Vec3, Vec3)> {
         let origin = self.players[slot].as_ref().unwrap().ps.origin;
-        let Some((rig, pose, _)) = self.body_pose(slot, origin) else {
+        let Some(f) = self.body_frame(slot, origin) else {
+            return Vec::new();
+        };
+        let Some((rig, pose, _)) = self.body_pose_at(slot, f, true) else {
             return Vec::new();
         };
         let bind = vcod_common::skeleton::PoseBuffer::new(&rig.skeleton);
