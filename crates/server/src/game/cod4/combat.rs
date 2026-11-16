@@ -483,19 +483,6 @@ pub(super) struct Contact {
     pub(super) startsolid: bool,
 }
 
-/// The stance's idle anim where the playerstate carries none (the anim
-/// script is not ported, cod4-player-anims.md 3).
-fn idle_anim(pm_flags: u32) -> &'static str {
-    use vcod_cod4::pmove::pmf;
-    if pm_flags & pmf::PRONE != 0 {
-        "pb_prone_aim"
-    } else if pm_flags & pmf::DUCKED != 0 {
-        "pb_crouch_alert"
-    } else {
-        "pb_stand_alert"
-    }
-}
-
 /// Does `start..end` meet the box `lo..hi` before `limit`?
 pub(super) fn segment_meets_box(start: Vec3, end: Vec3, lo: Vec3, hi: Vec3, limit: f32) -> bool {
     let d = end - start;
@@ -1130,17 +1117,14 @@ impl Cod4Level {
     }
 
     /// The frame `slot`'s body poses from at `origin`: the playerstate's
-    /// anims (the stance's idle where it carries none), the view and the
-    /// stance bits.
+    /// anims, the view and the stance bits.
     fn body_frame(&mut self, slot: usize, origin: Vec3) -> Option<BodyFrame> {
         let ps = vcod_cod4::pmove::PlayerState::from_wire(&self.players.get(slot)?.as_ref()?.ps);
         let w = &self.players[slot].as_ref()?.ps;
         let (legs, torso) = (w.word("legsAnim") as i32, w.word("torsoAnim") as i32);
-        let set = self.combat.anims()?;
-        let legs = match legs {
-            0 => set.anims.wire_of(idle_anim(ps.pm_flags)).unwrap_or(0),
-            l => l,
-        };
+        // A spawn's own end frame reads `legsAnim` 0 and sets no clip
+        // (cod4-player-anims.md 3); the idle comes with the first think's.
+        self.combat.anims()?;
         let mut eflags = ps.e_flags as i32;
         if ps.pm_flags & vcod_cod4::pmove::pmf::SIGHT != 0 {
             eflags |= vcod_cod2::player::eflags::ADS;

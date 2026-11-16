@@ -84,6 +84,29 @@ not yet confirmed on 1.7.
 - `eFlags` keep CoD2's bits for the body (4 crouch, 8 prone, 0x40 firing,
   0x300 turret, 0x20000 dead, 0x40000 ADS, 0x80000 fresh corpse) but the
   mantle, 0x8000. INFERRED (`BG_PlayerAnimation`'s tests).
+- `ClientSpawn` runs `ClientEndFrame` (the call at 0x80a7e66) before
+  `ClientThink_real` (0x80a7e75), after its memset of the client
+  (0x80a7cc9), so the spawn's own end frame reads `legsAnim` 0; the think
+  picks the idle and the level's end frame at the same time carries it:
+  the spawn snapshot reads `legsAnim` 0x2b9 (185, `pb_stand_alert`, with
+  the toggle). VERIFIED (the calls; a live capture on mp_crash `war`, the
+  spawn at 37850). That the end frame on 0 sets no clip is INFERRED: the
+  update runs CoD2's (`BG_PlayerAnimation` 0x804c636, from 0x80a6f52),
+  whose 0 sets none (cod2-player-anims.md 7), and no tag read can tell
+  the two apart, the same level time's end frame setting 185 before any
+  script runs. vcod's server poses a body carrying 0 in no clip, where
+  it had posed the stance's idle; no gate moved. VERIFIED (the gates).
+  The same capture shows the head tag posed at the spawn's next frame
+  (37900, 56.6443 over the origin, then 56.5362, 56.428, 56.3196): a
+  script reads the clips the last end frames set, at their frame's node
+  time. VERIFIED (a probe gsc logging `getTagOrigin("j_head")` each frame).
+  vcod-server had posed the bodies the scripts read ahead of the end
+  frames, so a new clip reached them a frame late: the bind pose (63.521)
+  at the spawn's next frame with or without the stance's idle, then the
+  same phase. It now poses them after the end frames, and its heads read
+  retail's 56.6443, 56.5362, 56.428, 56.3196 from the spawn's next frame
+  (the horizontal offset follows each spawn's own yaw). VERIFIED (the
+  probe on both servers).
 - `lerp.u.player.movementDir` is a signed byte of degrees, clamped to
   +-90. INFERRED (`PM_SetMovementDir`,
   `BG_PlayerStateToEntityState`).
