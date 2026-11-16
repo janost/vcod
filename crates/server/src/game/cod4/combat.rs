@@ -652,6 +652,7 @@ impl Cod4Level {
         let axis = self.muzzle_axis(slot, &ps);
         let start = view_origin(&ps, self.level_time());
         let origins = self.rewound(game_time);
+        self.rt.host.cod4_mut().antilag = origins.clone();
         let (shots, range) = shots_and_range(&d);
         for shot in 0..shots {
             let end = bullet_end(game_time + shot, spread, start, &axis, range);
@@ -680,6 +681,7 @@ impl Cod4Level {
             }
             self.bullet_fire_round(slot, slot as u32, &d, start, end, game_time, &origins);
         }
+        self.rt.host.cod4_mut().antilag.clear();
     }
 
     /// `CalcMuzzlePoints`' axis (inlined at 0x80a2b81 and 0x80a30a7):

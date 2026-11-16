@@ -693,19 +693,7 @@ const CSB0_DRAG: Pair = Pair {
     cvars: &[("sv_clientSideBullets", "0")],
 };
 
-const CSB0_DRAG_GAPS: &[(&str, &str)] = &[
-    (
-        "target entity 321:3",
-        "the dropped rifle starts at the dying body's `tag_weapon_right`, \\
-         which ours poses a hundredth of a unit off retail's, and its \\
-         snapped start crosses a whole unit in x and y (cod4-combat.md \\
-         6.1)",
-    ),
-    (
-        "shooter entity 321:3",
-        "the same dropped rifle in the shooter's snapshots",
-    ),
-];
+const CSB0_DRAG_GAPS: &[(&str, &str)] = &[];
 
 /// Under `sv_clientSideBullets` 0 a kill on the open floor: the rounds
 /// into the corpse as its death anim drags it raise its flesh's entry and
