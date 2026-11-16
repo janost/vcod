@@ -762,7 +762,13 @@ fn cylinder_contacts(
         return;
     };
     cylinder_polygon(cy, com, &s.faces[reference], margin, out);
-    cylinder_edge_contacts(cy, s, reference, out);
+    // Only for a brush 0x5a0f70's gate lets meet the cylinder: a stock
+    // car wheel launched with its centre on its car's clip's floor face
+    // took that clip's edges, inside it, as contacts.
+    let (n, d, _) = &s.faces[reference];
+    if n.dot(cy.centre) > *d || n.dot(com) > *d {
+        cylinder_edge_contacts(cy, s, reference, out);
+    }
     if !narrow {
         return;
     }

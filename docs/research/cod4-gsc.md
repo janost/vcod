@@ -1362,7 +1362,10 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   and resting on it, the same on three runs; at 22 s a round slanting
   down onto the first resting part the client's round trace meets
   (`cod4_fx::first_contact` through `shot_solids`, the left mirror)
-  pushes it 4.6 units on (one run), and it sleeps again. VERIFIED (the tests,
+  pushes it 4.6 units on (one run), and it sleeps again. With the wheels
+  as cylinders and the post-step sweep, the parts flew 13 to 167 units
+  and slept within 1.3 to 2.2 s (79 to 127 steps), and the round pushed
+  the left mirror 7.4 units on (one run). VERIFIED (the tests,
   ours). How a part looks in flight and at rest is
   pending a human's look.
 - The ragdoll (`cod4-player-anims.md` 10) keeps its point solver. This
@@ -1598,8 +1601,11 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`,
   face's that run more than the skin into the cylinder push it out along
   its cap or side nearest the point, as the box's edge pass does: a stock
   junk tire tipped onto one of mp_crash's steps slept with the step's
-  edge a unit into its cap without it. The 16 points round each cylinder
-  still sweep as the box's do.
+  edge a unit into its cap without it. The pass runs only on a brush
+  whose reference face 0x5a0f70's gate passes: the live gate's wheels
+  start with their centres on their car clip's floor face, inside the
+  clip, and took its edges as contacts that ate their launch. The 16
+  points round each cylinder still sweep as the box's do.
 - The sweep after the step is 0x5a6930's (`Body::sweep`), in place of
   the centre guard vcod had (3.6): its size off the body's last geom
   (`Shape::sweep_half`), its gate on a move or the state, its point or
