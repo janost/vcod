@@ -628,3 +628,27 @@ const TOUCH_GAPS: &[(&str, &str)] = &[];
 fn cod4_touch_and_flight_ab() {
     pair_ab("cod4_touch_and_flight_ab", &TOUCH, TOUCH_GAPS);
 }
+
+const CSB0: Pair = Pair {
+    // `+set sv_clientSideBullets 0`; target `--goto "207 2380 296"` outside
+    // the room's metal plate, shooter `--script shoot --goto "207 2250
+    // 296" --aim-z 75` inside (`--qport 4021`, `4022`), aiming over the
+    // target's head so he lives: every round through the plate
+    // raises the server's impacts (cod4-effects.md 12.4).
+    name: "csb0",
+    seed: 3_831_770_694,
+    gsc: None,
+    until: None,
+    probes: TWO,
+    cvars: &[("sv_clientSideBullets", "0")],
+};
+
+const CSB0_GAPS: &[(&str, &str)] = &[];
+
+/// Under `sv_clientSideBullets` 0 the server's `EV_BULLET_HIT`s for the
+/// world: the plate's entry and exit (`un1` 4) and the asphalt past the
+/// target, beside the flesh hits (cod4-effects.md 12.4).
+#[test]
+fn cod4_server_side_bullets_ab() {
+    pair_ab("cod4_server_side_bullets_ab", &CSB0, CSB0_GAPS);
+}

@@ -179,11 +179,16 @@ Open, by how much a player notices.
    off as 1.7's (Fixed above).
 5. Closed: an empty `sv_master1` heartbeats `master.cod.pm:20810` at
    `dedicated 2`, as CoD1's and CoD2's servers do (`Cod4Server::heartbeat`).
-6. `--set sv_clientSideBullets=0` reaches the systeminfo, but vcod-server
-   still sends no `EV_BULLET_HIT` for a round that stops on the world or
-   a non-client entity, nor the penetration's exits (`un1` 4), as
-   `cod4_lnxded` does under 0 (0x808a05c, 0x808ad38; cod4-effects.md
-   12.4). A 1.7 client, and vcod's, then draws no impact off a body. M.
+6. Closed: under `sv_clientSideBullets` 0 vcod-server raises the world's
+   and the exits' `EV_BULLET_HIT`s as `cod4_lnxded` does (0x808a05c),
+   gated word for word on a retail capture (cod4-effects.md 12.4).
+7. A round into a corpse: in a retail run under 0 the rounds into the
+   target's corpse raised flesh impacts and stopped there, and the
+   corpse read `pos.trType` 5 with no ground from the death on, its
+   `trTime` the latest hit's; ours lets rounds through a corpse and lands
+   it at once (`trType` 1, the world). Not yet read off `cod4_lnxded`;
+   that run's knockback also left the target's `velocity[1]` an ulp off
+   once (cod4-combat.md 5.2, cod4-effects.md 12.4). M.
 
 ## The retail run
 

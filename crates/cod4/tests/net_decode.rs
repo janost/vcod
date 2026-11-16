@@ -618,18 +618,23 @@ fn bullet_hits(w: &Walk) -> Vec<(u32, u32, [u32; 3])> {
 
 /// Retail under `+set sv_clientSideBullets 0` (cod4-effects.md 12.4):
 /// the systeminfo carries the 0, and the server's `EV_BULLET_HIT`s carry
-/// every round, the metal plate's entry (`un1` 0) and exit (`un1` 4) and
-/// the asphalt past the target besides the flesh hits; none sets
-/// `lerp.u`. Under 1 the shooter sees only the flesh hits.
+/// every contact of the shooter's 90 rounds over the target's head: the
+/// metal plate's entry (`un1` 0) and exit (`un1` 4) and the cloth beyond,
+/// one each a round; none sets `lerp.u`. Under 1 the shooter sees only the
+/// flesh hits.
 #[test]
 fn server_side_bullets_send_every_contact() {
     let w = walk("play-1.7-csb0-shooter.txt");
     let gs = w.client.gamestate.as_ref().unwrap();
     assert_eq!(gs.systeminfo("sv_clientSideBullets").as_deref(), Some("0"));
     let hits = bullet_hits(&w);
-    let surf = |s: u32, un1: u32| hits.iter().filter(|h| (h.0, h.1) == (s, un1)).count();
-    // Metal (13), asphalt (5), flesh (7).
-    assert!(surf(13, 0) > 0 && surf(13, 4) > 0 && surf(5, 0) > 0 && surf(7, 0) > 0);
+    let mut kinds = std::collections::BTreeMap::new();
+    for h in &hits {
+        *kinds.entry((h.0, h.1)).or_insert(0) += 1;
+    }
+    // Metal (13) in and out, cloth (4).
+    let want = std::collections::BTreeMap::from([((4, 0), 90), ((13, 0), 90), ((13, 4), 90)]);
+    assert_eq!(kinds, want);
     assert!(hits.iter().all(|h| h.2 == [0; 3]), "{hits:?}");
     let w = walk("play-1.7-kill-shooter.txt");
     let gs = w.client.gamestate.as_ref().unwrap();

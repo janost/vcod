@@ -826,45 +826,64 @@ Addresses are `iw3mp.exe` 1.7.
   The stores are VERIFIED (the code). The penetration walk calls it for an exit with the
   flags or 4 (0x808ad18..0x808ad38). VERIFIED (the call). The flesh hits are `finishPlayerDamage`'s
   whatever the dvar (0x80acb07..0x80acbaa, 12.2). VERIFIED (the code).
-- Live (`play-1.7-csb0-shooter.txt`, `-target`, `-spec`; recipe
-  below): the systeminfo carries `sv_clientSideBullets\0`, and the
-  server's events carry the metal plate's entry (`surfType` 13, `un1`
-  0), its exit (13, `un1` 4), the flesh hit (7) and the asphalt past the
-  target (5); not one sets `lerp.u`. Under 1 the kill capture's shooter
-  sees only flesh hits. VERIFIED (the gate
-  `net_decode::server_side_bullets_send_every_contact`).
+- Live (`play-1.7-csb0-target.txt`, `-shooter.txt`; recipe below): the
+  systeminfo carries `sv_clientSideBullets\0`, and the server's events
+  carry each of the shooter's 90 rounds over the target's head three
+  times: the metal plate's entry (`surfType` 13, `un1` 0, `eventParm`
+  104, `(0, -1, 0)`), its exit (13, `un1` 4, `eventParm` 32, `(0, 1, 0)`:
+  the far face's own normal) and the cloth far beyond (4). Not one sets
+  `lerp.u`. Under 1 the kill capture's shooter sees only flesh hits.
+  VERIFIED (the gate `net_decode::server_side_bullets_send_every_contact`).
+  In an earlier run whose shooter killed the target, the rounds into
+  his corpse raised flesh impacts, entry and exit, and no others reached
+  past it. VERIFIED live (that run, not kept: its corpse's fall diverges
+  on ours, cod4-server-gaps.md).
 - So under 0 a round's push on the map's dynamic entities runs from the
   world's origin to the contact. INFERRED (the zeros at +0x54, read as
-  they came). On mp_crash an asphalt round's leg meets a prop at (113,
-  1480, 127), 1200 units short of the round's end. VERIFIED (ours: the
-  gate below).
-- vcod: `cod4_fx::client_side_bullets` reads the systeminfo;
+  they came).
+- vcod's server: `Cod4Level::impact_event` is 0x808a05c, called from
+  `bullet_process` (0x808a136) before the damage on each leg of
+  `Bullet_FireExtended` and on a penetrating round's first contact; past
+  a surface `fire_penetrate` raises the exit along the back trace's
+  normal with `un1` 4 when the next contact (or the round's end) lies
+  over `bullet_penetrationMinFxDist` from it and the round does not go
+  on into the sky, and the next contact's impact under the same spacing;
+  with no exit found, the next contact's when it lies that far from the
+  entry. INFERRED (the branches 0x808ac5a..0x808ae35, which the client's
+  walk of 12.1 mirrors). The gate `cod4::capture_ab::cod4_server_side_bullets_ab`
+  replays both probes on ours and matches every playerstate word and
+  every entity, each of the 270 impacts included, with no `GAPS`; with
+  `impact_event` off 3300 rows differ. VERIFIED (the gate). A mounted
+  gun's rounds name its gunner as the shooter, as the flesh hits do.
+  INFERRED (no turret capture under 0).
+- vcod's client: `cod4_fx::client_side_bullets` reads the systeminfo;
   `cod4_fx::frame_rounds` runs no client-side round under 0, and
   `cod4_fx::server_round` gives every bullet hit event its muzzle, end
   and, under 0 and short of an exit, its leg from `lerp.u`;
   `Cod4Client::sound_and_fx_with` rolls its tracer
   (`Cod4Effects::server_tracer`), plays its whizby and hands the leg to
-  the dynamic entities and the launched parts. The gate
-  `play::cod4::tests::server_side_bullets_carry_every_round` replays the
-  three captures with the shooter posed: no client-side round, 272 to
-  285 server rounds a client, about a third of them exits with no leg,
-  every leg out of the origin, the target hearing each round that went
-  on through him to the asphalt and none that stopped short or came
-  while his view followed the shooter, and the one prop struck; under 1
-  the kill target runs the rounds and no event pushes. VERIFIED (the
-  gate, ours). The tracer test and whizby run under 1 too, on the
-  server's flesh hits. Left out: the muzzle off `lerp.pos.trBase` for a
-  posed body with no `tag_flash`, and under 1 the exit arm's own run of
+  the dynamic entities and the launched parts. A posed shooter without a
+  `tag_flash` gives his state's origin, a client's raised 11 prone, 40
+  crouched, else 60 (`muzzle_of`; `server_rounds_leave_the_shooters_muzzle`).
+  The gate `play::cod4::tests::server_side_bullets_carry_every_round`
+  replays both captures with the shooter posed: no client-side round,
+  270 server rounds a client, 90 of them exits with no leg, every leg out
+  of the origin, no prop struck, the target hearing each of the 90 that
+  went on past him and none that stopped short, the shooter none of his
+  own; under 1 the kill target runs the rounds and no event pushes.
+  VERIFIED (the gates, ours). The tracer test and whizby run under 1 too,
+  on the server's flesh hits. Left out: under 1 the exit arm's own run of
   0x458790 when the entity `groundEntityNum` names is a player; the
   server leaves it 0, so that is entity 0 (VERIFIED, the captures'
   zeros).
 - Recipe: in `unshare -rnm` with the hosts file and tmpfs of
   cod4-handshake.md 7, `cod4_lnxded +set sv_clientSideBullets 0 +set
-  g_gametype war +set scr_war_timelimit 0 +devmap mp_crash` on a loopback
-  port; 35 s later three `cod4_probe`s for 30 s: `--team allies --class
-  assault_mp,0 --script idle --goto "207 2380 296"` (with `--auth
-  127.0.0.2`), then `--team axis --class assault_mp,0 --script shoot
-  --goto "207 2250 296"`, then `--team spectator --script follow`.
+  g_gametype war +set sv_pure 0 +devmap mp_crash` on a loopback port; 35
+  s later `cod4_probe --name target --qport 4021 --secs 25 --team allies
+  --script idle --goto "207 2380 296"` (with `--auth 127.0.0.2`), a
+  second later `--name shooter --qport 4022 --secs 25 --team axis
+  --script shoot --aim-z 75 --goto "207 2250 296"`. The run's seed came
+  off the two challenges (`wire_ab::recover_game_seed`).
 
 ## 13. The effect and weapon sets' colour
 

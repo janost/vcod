@@ -1292,6 +1292,11 @@ impl Cod4Client {
                     solids: &self.session.shot_solids,
                 },
                 client_side,
+                self.session
+                    .client()
+                    .snapshots
+                    .last()
+                    .map_or(&[][..], |sn| &sn.entities),
             ),
             _ => (vec![Vec::new(); fired.len()], vec![None; fired.len()]),
         };
