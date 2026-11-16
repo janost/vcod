@@ -725,7 +725,13 @@ impl EntityScene {
         let d = self.drawn.get(&num)?.clone();
         let (lp, lr) = match &d.rig {
             Rig::Player => {
-                let st = self.states.get(&num)?;
+                let st = self.states.get_mut(&num)?;
+                if let Some(held) = st.held.take()
+                    && let Some(Some(anims)) = &self.anims
+                {
+                    let _bodies = crate::frame_prof::span(crate::frame_prof::Stage::Bodies);
+                    st.pose = held.pose(anims, &mut self.clips, fs);
+                }
                 st.pose
                     .bone_world(&st.skeleton, bone_named(&st.skeleton, name)?)
             }
@@ -888,6 +894,59 @@ struct EntityAnim {
     /// The render time of the last frame the entity was in the snapshot;
     /// its clips hold still while it is not (cgame 0x3001bd00).
     present_ms: i32,
+    /// This frame's inputs while `pose` is not yet taken from them.
+    held: Option<HeldPose>,
+}
+
+/// One frame's pose inputs for a body, owned, so the pose can wait until
+/// something reads it: the body the camera is inside is drawn by no one and
+/// posed only for a tag (`EntityScene::tag_pose`).
+struct HeldPose {
+    assembly: Rc<Assembly>,
+    legs: i32,
+    torso: i32,
+    legs_layers: Vec<vcod_common::animclock::Layer>,
+    torso_layers: Vec<vcod_common::animclock::Layer>,
+    nodes: vcod_common::animclock::NodeWeights,
+    group_pitch: f32,
+    turret_leaves: Option<(usize, Vec<vcod_common::turretpose::TurretRow>)>,
+    seat_leaves: Vec<(usize, Vec<(usize, f32)>)>,
+    controllers: Option<Controllers>,
+}
+
+impl HeldPose {
+    /// The server's pose: the legs and torso clocks' clips blended as the
+    /// tree walk blends its nodes, then the controllers.
+    fn pose(
+        self,
+        anims: &PlayerAnims,
+        clips: &mut HashMap<String, Option<Rc<XAnim>>>,
+        fs: &dyn AssetSource,
+    ) -> PoseBuffer {
+        let inputs = PoseInputs {
+            anims,
+            legs: self.legs,
+            torso: self.torso,
+            legs_layers: self.legs_layers,
+            torso_layers: self.torso_layers,
+            nodes: self.nodes,
+            group_pitch: self.group_pitch,
+            turret_leaves: self
+                .turret_leaves
+                .as_ref()
+                .map(|(n, rows)| (*n, rows.as_slice())),
+            turret_left: None,
+            seat_leaves: self.seat_leaves,
+            controllers: self.controllers,
+            leaf_times: Vec::new(),
+            node_time: false,
+            arith: vcod_common::patch::Arith::Stored,
+            binds: Some(&self.assembly.binds),
+        };
+        pose_player_drawn(&self.assembly.skeleton, &inputs, |n| {
+            load_clip(clips, fs, n)
+        })
+    }
 }
 
 /// The cgame's two channel updates (0x30004e40's clears and 0x30003be0;
@@ -1031,6 +1090,7 @@ impl EntityAnim {
             stance_window_ms: 0,
             seat: SeatLeaves::default(),
             present_ms: now_ms,
+            held: None,
         }
     }
 }
@@ -1318,10 +1378,47 @@ pub fn constant_light(cl: u32, origin: Vec3) -> Option<SceneLight> {
 /// Entity numbers below this are clients (`MAX_CLIENTS`).
 const MAX_CLIENTS: u32 = vcod_common::net::protocol::MAX_CLIENTS as u32;
 
+/// A snapshot as the frame draws it: its entities plus, borrowed rather
+/// than inserted into a copy, the body `cg.predictedPlayerEntity` adds
+/// (`play::seat::adds_view_body`), which stands in for any entity of its
+/// number.
+#[derive(Clone, Copy)]
+pub struct SnapView<'a> {
+    pub snap: &'a Snapshot,
+    pub own: Option<&'a EntityState>,
+}
+
+impl<'a> SnapView<'a> {
+    fn entity(&self, num: u32) -> Option<&'a EntityState> {
+        match self.own {
+            Some(e) if e.number == num => Some(e),
+            _ => self.snap.entities.get(&num),
+        }
+    }
+
+    /// Every entity in number order, `own` in its place.
+    fn entities(&self) -> impl Iterator<Item = (u32, &'a EntityState)> + use<'a> {
+        use std::ops::Bound::{Excluded, Unbounded};
+        let ents = &self.snap.entities;
+        let own = self.own;
+        let below = match own {
+            Some(e) => ents.range(..e.number),
+            None => ents.range(..),
+        };
+        let above = own
+            .into_iter()
+            .flat_map(move |e| ents.range((Excluded(e.number), Unbounded)));
+        below
+            .chain(own.map(|e| (&e.number, e)))
+            .chain(above)
+            .map(|(&n, e)| (n, e))
+    }
+}
+
 /// The older snapshot of the pair an entity is drawn between, with its
 /// movers, which is what retail's `cg.snap` holds.
 struct LerpFrom<'a> {
-    snap: &'a Snapshot,
+    snap: SnapView<'a>,
     movers: SnapshotMovers,
 }
 
@@ -1365,7 +1462,7 @@ fn lerp_pos_angles(
     render_time: i32,
     p: &Protocol,
 ) -> (Vec3, Vec3) {
-    let prev = from.snap.entities.get(&num);
+    let prev = from.snap.entity(num);
     let cur = prev.unwrap_or(ent);
     let pos_tr = Trajectory::read(cur, p, "pos");
     let interpolates =
@@ -1374,7 +1471,7 @@ fn lerp_pos_angles(
         let pos = from.movers.carry(
             pos_tr.evaluate(render_time),
             cur.field_i32(p, "groundEntityNum"),
-            from.snap.server_time,
+            from.snap.snap.server_time,
             render_time,
         );
         return (pos, Trajectory::read(cur, p, "apos").evaluate(render_time));
@@ -1480,7 +1577,7 @@ fn trace_down(world: MoveWorld, gunner: u32, mut at: Vec3, gun_z: f32) -> Vec3 {
 #[allow(clippy::too_many_arguments)]
 pub fn build_instances(
     scene: &mut EntityScene,
-    (a, b, f): (&Snapshot, &Snapshot, f32),
+    (a, b, f): (SnapView, SnapView, f32),
     render_time: i32,
     latest_snapshot_ms: i32,
     skip_num: i32,
@@ -1544,7 +1641,7 @@ pub fn build_instances(
     let mut submodels = Vec::new();
     let mut scene_lights = Vec::new();
     let mut shadow_casters = Vec::new();
-    let ps_int = |name: &str| b.ps.field_i32(p, name);
+    let ps_int = |name: &str| b.snap.ps.field_i32(p, name);
     let uo = p.is_uo();
     let rules = MoveRules::for_protocol(p);
     let ridden = turret::ridden(
@@ -1555,21 +1652,21 @@ pub fn build_instances(
     );
     let from = LerpFrom {
         snap: a,
-        movers: SnapshotMovers::from_entities(p, &a.entities),
+        movers: SnapshotMovers::from_entities(p, &a.snap.entities),
     };
     // The guns first: a gunner's body is placed off its gun, whose number is
     // always above the gunner's.
     let mut guns: HashMap<u32, GunFrame> = HashMap::new();
-    for (&num, ent) in &b.entities {
+    for (num, ent) in b.entities() {
         let EntityVisual::Turret { model, weapon } =
-            resolve_visual(ent, &b.clients, configstrings, p)
+            resolve_visual(ent, &b.snap.clients, configstrings, p)
         else {
             continue;
         };
         let Some(rig) = resolve_turret_rig(turret_rigs, parts, renderer, fs, &model) else {
             continue;
         };
-        let prev = a.entities.get(&num);
+        let prev = a.entity(num);
         let (pos, angles) = lerp_pos_angles(num, ent, &from, f, render_time, p);
         let a2 =
             |e: &EntityState| ["angles2[0]", "angles2[1]", "angles2[2]"].map(|n| e.field_f32(p, n));
@@ -1607,8 +1704,9 @@ pub fn build_instances(
     let mut vehicles: HashMap<u32, VehicleFrame> = HashMap::new();
     let mut vehicle_angles = HashMap::new();
     let mut vehicle_wheels = Vec::new();
-    for (&num, ent) in &b.entities {
-        let EntityVisual::Vehicle(model) = resolve_visual(ent, &b.clients, configstrings, p) else {
+    for (num, ent) in b.entities() {
+        let EntityVisual::Vehicle(model) = resolve_visual(ent, &b.snap.clients, configstrings, p)
+        else {
             continue;
         };
         let Some(rig) = resolve_vehicle_rig(vehicle_rigs, parts, renderer, fs, &model) else {
@@ -1620,18 +1718,15 @@ pub fn build_instances(
         }
         vehicle_angles.insert(num, angles.to_array());
         let next = VehicleFields::read(ent, p);
-        let cur = a
-            .entities
-            .get(&num)
-            .map_or(next, |e| VehicleFields::read(e, p));
+        let cur = a.entity(num).map_or(next, |e| VehicleFields::read(e, p));
         let v = VehicleFrame::posed(
             &rig.skeleton,
             model,
             (pos, angles),
             (&cur, &next, f),
             |pose| {
-                pose.steering_ratio = steering_ratio(&a.ps, num, p);
-                if let Some(v) = view.filter(|_| own_gunner(&a.ps, num, p)) {
+                pose.steering_ratio = steering_ratio(&a.snap.ps, num, p);
+                if let Some(v) = view.filter(|_| own_gunner(&a.snap.ps, num, p)) {
                     vehiclepose::own_gunner(pose, v, angles.to_array(), cur.gunner_spans);
                 }
             },
@@ -1650,7 +1745,7 @@ pub fn build_instances(
         });
         vehicles.insert(num, v);
     }
-    for (&num, ent) in &b.entities {
+    for (num, ent) in b.entities() {
         // The body the camera is inside is posed, for the tags `playFxOnTag`
         // reads, and never drawn (cgame 0x30028210's `renderfx` 2).
         let hidden = num as i32 == skip_num;
@@ -1658,7 +1753,7 @@ pub fn build_instances(
         if hidden && etype != ET_PLAYER {
             continue;
         }
-        let mut visual = resolve_visual(ent, &b.clients, configstrings, p);
+        let mut visual = resolve_visual(ent, &b.snap.clients, configstrings, p);
         // A corpse carries no model of its own; it resolves through the dead
         // client's roster entry, which clears when they enter limbo. Fall back
         // to the visual cached while the corpse (or the player it copies) was
@@ -1682,7 +1777,7 @@ pub fn build_instances(
             continue;
         }
 
-        let prev = a.entities.get(&num);
+        let prev = a.entity(num);
         if !pos.is_finite() || !angles.is_finite() {
             continue; // never feed a NaN transform to the GPU
         }
@@ -1837,6 +1932,7 @@ pub fn build_instances(
                         stance_window_ms: st.stance_window_ms,
                         seat: st.seat.clone(),
                         present_ms: st.present_ms,
+                        held: None,
                     };
                 }
                 st.visual = roster_visual;
@@ -1845,6 +1941,7 @@ pub fn build_instances(
                 stats.anim_restarts += u64::from(legs_wire != st.legs.anim())
                     + u64::from(torso_wire != st.torso.anim());
 
+                st.held = None;
                 if let Some(anims) = anims {
                     let lerp_field = |name: &str| {
                         let vb = ent.field_f32(p, name);
@@ -1936,25 +2033,26 @@ pub fn build_instances(
                     let goal = rider
                         .as_ref()
                         .and_then(|seat| seat_inputs(anims, legs_wire, seat));
-                    let inputs = PoseInputs {
-                        anims,
+                    let held = HeldPose {
+                        assembly: assembly.clone(),
                         legs: legs_wire,
                         torso: torso_wire,
                         legs_layers: st.legs.layers(render_time),
                         torso_layers: st.torso.layers(render_time),
                         nodes: st.torso.node_weights(render_time),
                         group_pitch: pitch,
-                        turret_leaves: placed.as_ref().map(|g| (g.node, g.rows.as_slice())),
-                        turret_left: None,
+                        turret_leaves: placed.map(|g| (g.node, g.rows)),
                         seat_leaves: st.seat.next(goal),
                         controllers,
-                        leaf_times: Vec::new(),
-                        node_time: false,
-                        arith: vcod_common::patch::Arith::Stored,
-                        binds: Some(&assembly.binds),
                     };
-                    st.pose =
-                        pose_player_drawn(&assembly.skeleton, &inputs, |n| load_clip(clips, fs, n));
+                    // The body the camera is inside is posed only when a
+                    // tag on it is read (`EntityScene::tag_pose`).
+                    if hidden {
+                        st.held = Some(held);
+                    } else {
+                        st.held = None;
+                        st.pose = held.pose(anims, clips, fs);
+                    }
                 }
 
                 drawn.insert(
@@ -2284,10 +2382,8 @@ pub fn build_instances(
                 {
                     // `cg.snap` fires and the gun is not overheated.
                     let fires = crate::play::seat::gunner_shakes(
-                        a.ps.field_i32(p, "eFlags"),
-                        a.entities
-                            .get(&num)
-                            .map_or(0, |e| e.field_i32(p, "animMovetype")),
+                        a.snap.ps.field_i32(p, "eFlags"),
+                        a.entity(num).map_or(0, |e| e.field_i32(p, "animMovetype")),
                     );
                     let view = view.unwrap_or([base[0], base[1], 0.0]);
                     turret_eye = Some(turret::uo_eye(
@@ -2340,7 +2436,7 @@ pub fn build_instances(
     }
     // `b.ps`'s owner is always `skip_num`, so its weapon never reaches the
     // insert in the `Player` arm above.
-    let ps_weapon = b.ps.field_i32(p, "weapon");
+    let ps_weapon = b.snap.ps.field_i32(p, "weapon");
     if let Some(path) = resolve_weapon_flash(weapon_cache, fs, &weapon_names, ps_weapon) {
         weapon_flash
             .entry(ps_weapon)
@@ -2535,6 +2631,127 @@ mod tests {
         assert_eq!(scene.tag_pose(&fs, 71, "tag_flash"), None);
     }
 
+    /// The own body a frame adds stands in its number's place among the
+    /// snapshot's entities, replacing one of that number, without a copy of
+    /// the snapshot.
+    #[test]
+    fn a_snap_view_puts_the_own_body_in_its_place() {
+        let p = &PROTOCOL_V1;
+        let ent = |num: u32, etype: i32| {
+            let mut e = EntityState::null(p);
+            e.number = num;
+            e.fields[EntityState::field_index(p, "eType").unwrap()] = etype;
+            e
+        };
+        let snap = Snapshot {
+            entities: [1, 5, 9].map(|n| (n, ent(n, 2))).into_iter().collect(),
+            ..Snapshot::default()
+        };
+        let order = |v: SnapView| {
+            v.entities()
+                .map(|(n, e)| (n, e.field_i32(p, "eType")))
+                .collect::<Vec<_>>()
+        };
+        let plain = SnapView {
+            snap: &snap,
+            own: None,
+        };
+        assert_eq!(order(plain), [(1, 2), (5, 2), (9, 2)]);
+        let own = ent(5, ET_PLAYER);
+        let over = SnapView {
+            snap: &snap,
+            own: Some(&own),
+        };
+        assert_eq!(order(over), [(1, 2), (5, ET_PLAYER), (9, 2)]);
+        assert_eq!(
+            over.entity(5).map(|e| e.field_i32(p, "eType")),
+            Some(ET_PLAYER)
+        );
+        let own = ent(3, ET_PLAYER);
+        let added = SnapView {
+            snap: &snap,
+            own: Some(&own),
+        };
+        assert_eq!(order(added), [(1, 2), (3, ET_PLAYER), (5, 2), (9, 2)]);
+        assert!(
+            added.entity(3).is_some() && added.entity(9).is_some() && added.entity(4).is_none()
+        );
+    }
+
+    /// The body the camera is inside keeps its frame's inputs unposed; a
+    /// tag read off it poses it then, as the drawn bodies are posed.
+    #[test]
+    fn the_hidden_body_is_posed_when_a_tag_is_read() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let p = &PROTOCOL_V1;
+        let anims = PlayerAnims::load(&fs).unwrap();
+        let body = model::load(&fs, "playerbody_american_airborne").unwrap();
+        let skel = Rc::new(Skeleton::build(&[&body]));
+        let assembly = Rc::new(Assembly {
+            handles: Vec::new(),
+            skeleton: skel.clone(),
+            binds: Default::default(),
+            model_count: 0,
+        });
+        let wire = anims.wire_of("pb_stand_alert").unwrap();
+        let mut e = EntityState::null(p);
+        e.fields[EntityState::field_index(p, "eType").unwrap()] = ET_PLAYER;
+        let (mut legs, mut torso, mut window, mut present) = Default::default();
+        for t in (1000..1500).step_by(16) {
+            let at = Times {
+                clock_ms: t,
+                snapshot_ms: 1000,
+            };
+            let clocks = (&mut legs, &mut torso, &mut window, &mut present);
+            step_clocks(
+                clocks,
+                &anims,
+                MoveRules::V1_1,
+                (wire, wire),
+                &seen(&e, p),
+                at,
+                16,
+            );
+        }
+        let held = || HeldPose {
+            assembly: assembly.clone(),
+            legs: wire,
+            torso: wire,
+            legs_layers: legs.layers(1500),
+            torso_layers: torso.layers(1500),
+            nodes: torso.node_weights(1500),
+            group_pitch: 0.0,
+            turret_leaves: None,
+            seat_leaves: Vec::new(),
+            controllers: Some(Controllers::default()),
+        };
+        let bi = skel.bone_index("tag_weapon_right").unwrap();
+        let want = held()
+            .pose(&anims, &mut HashMap::new(), &fs)
+            .bone_world(&skel, bi);
+        let bind = PoseBuffer::drawn(&skel).bone_world(&skel, bi);
+        assert!(want.0.distance(bind.0) > 1.0, "{want:?} {bind:?}");
+
+        let mut scene = EntityScene::new();
+        scene.anims = Some(Some(anims));
+        let mut st = EntityAnim::new(Vec::new(), &skel, 1000);
+        st.held = Some(held());
+        scene.states.insert(0, st);
+        scene.drawn.insert(
+            0,
+            Drawn {
+                pos: Vec3::ZERO,
+                rot: Quat::IDENTITY,
+                rig: Rig::Player,
+            },
+        );
+        let tag = scene.tag_pose(&fs, 0, "tag_weapon_right").unwrap();
+        assert!(tag.origin.abs_diff_eq(want.0, 1e-4), "{tag:?} {want:?}");
+        assert!(scene.states[&0].held.is_none());
+    }
+
     /// An item resting on a moving brush model is drawn at its own
     /// stationary `trBase` from the older snapshot, carried by what the mover
     /// does from that snapshot's time to the drawn time; one on no mover
@@ -2587,7 +2804,10 @@ mod tests {
             ],
         );
         let from = LerpFrom {
-            snap: &a,
+            snap: SnapView {
+                snap: &a,
+                own: None,
+            },
             movers: SnapshotMovers::from_entities(p, &a.entities),
         };
         let at = |n: u32| lerp_pos_angles(n, &b.entities[&n], &from, 0.5, 2025, p).0.z;

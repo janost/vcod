@@ -6726,23 +6726,25 @@ impl ApplicationHandler for App {
                                                     play::seat::own_body_drawn(seat, *seat_frac)
                                                 },
                                             );
-                                        let with_own = |s: &net::snapshot::Snapshot| {
-                                            let mut s = s.clone();
-                                            let e = play::seat::own_body(p, &s.ps);
-                                            s.entities.insert(e.number, e);
-                                            s
-                                        };
                                         let own_pair = play::seat::adds_view_body(
                                             b.ps.field_i32(p, "pm_flags"),
                                             seat_body,
                                             following,
                                         )
-                                        .then(|| (with_own(a), with_own(b)));
-                                        let (a, b) =
-                                            own_pair.as_ref().map_or((a, b), |(a, b)| (a, b));
+                                        .then(|| {
+                                            (
+                                                play::seat::own_body(p, &a.ps),
+                                                play::seat::own_body(p, &b.ps),
+                                            )
+                                        });
+                                        let view = |s, own| entities::SnapView { snap: s, own };
                                         let built = entities::build_instances(
                                             scene,
-                                            (a, b, f),
+                                            (
+                                                view(a, own_pair.as_ref().map(|o| &o.0)),
+                                                view(b, own_pair.as_ref().map(|o| &o.1)),
+                                                f,
+                                            ),
                                             render_time,
                                             net.snapshots()
                                                 .newest()
