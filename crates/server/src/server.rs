@@ -8810,7 +8810,7 @@ mod tests {
         );
         sv.overlay_script(
             "maps/mp/gametypes/probe_usage",
-            include_str!("../../gsc/tests/fixtures/semantics/probe_usage.gsc"),
+            include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_usage.gsc"),
         );
         sv.load_scripts(Rc::new(fs)).expect("load the scripts");
         for _ in 0..40 {

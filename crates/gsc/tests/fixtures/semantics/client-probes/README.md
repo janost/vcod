@@ -3018,3 +3018,12 @@ COD_LNXDED=<wrapper> PORT=29010 PROBE_SECS=120 \
 
 The logs are `crates/common/tests/fixtures/patch/pointarm-1.1.txt` and
 `-1.5.txt`, whose headers give the line format.
+
+## probe_usage
+
+`scriptUsage` over threads whose locals, arrays, endons and frames are
+known, under stock tdm on mp_brecourt (`docs/research/cod11-server-handshake.md`,
+"Console commands over rcon"). No client needed; the capture is the rcon
+reply 4 s after the load, `crates/server/tests/fixtures/usage/mp_brecourt-probe_usage.txt`
+(recipe in its header). `crates/server/src/server.rs`'s
+`script_usage_counts_as_retail` replays it on ours.

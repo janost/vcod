@@ -1,5 +1,5 @@
 # Retail CoD 1.1d dedicated server, 2026-11-17, inside `unshare -rn` (lo up): scriptUsage over rcon 4 s after the load of
-#   COD_DIR=<1.1 install> PORT=28975 SECS=10 PRE_MAP_ARGS="+set developer 1 +set rconpassword pw" tools/run_probe.sh probe_usage mp_brecourt
+#   COD_DIR=<1.1 install> PORT=28975 SECS=10 PRE_MAP_ARGS="+set developer 1 +set rconpassword pw" tools/run_probe.sh client-probes/probe_usage mp_brecourt
 # (the reply verbatim below this header; developer 0 prints `@ <offset>` for each position instead, offsets 184..562 in probe_usage, 7803 and 9302 in tdm, 44377 in _minefields).
 ********************************
 count: 1, var usage: 2, endon usage: 0
