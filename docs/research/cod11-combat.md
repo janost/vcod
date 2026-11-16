@@ -8436,7 +8436,16 @@ The other walks and links:
   off those branches: a turret's release, from `turret_think_client` in the gunner's end frame
   or from `G_FreeTurret`, files him at the mount spot, at the head of his
   node's list, ahead of his next cmd's link. vcod links there
-  (`ScriptRuntime::teleport_link`). VERIFIED, `game.mp.i386.so`:
+  (`ScriptRuntime::teleport_link`).
+  VERIFIED, live (retail 1.1d mp_carentan sd, 2026-11-16,
+  `client-probes/probe_blastteleport`): probe_blastorder's four players
+  walk `1 0 3 2`, then `0 1 3 2` once slot 0 is set down within the node;
+  slot 1, mounted through `useby` from (-260, 2480), sits at the gun
+  (1715.42, 1877.25) and the blast walks `0 3 2`; the gun's `delete`
+  puts him back at (-260, 2480) and the next blast walks `1 0 3 2`, him
+  first. vcod's server under the same probe walked every blast in the same
+  order (only the settled z of the set-down players differed, by their
+  live cmds). VERIFIED, `game.mp.i386.so`:
   `G_FreeTurret` (0x5297c) calls `TeleportPlayer` itself (0x52a0f), after
   the gunner's stance event (`G_AddEvent`, 0x529f1). So a `G_FreeTurret`
   release links in the freeing thread (`GameHost::free_entity`, since 2026-11-13; it used to
