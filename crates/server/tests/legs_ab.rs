@@ -34,6 +34,11 @@
 //! idle is set on a snapshot the capture shows (cod11-movers.md 15, "The
 //! spawn idle on 1.5 and UO").
 //!
+//! `-legs-client-torso-1.5.txt` and `-torso-uo.txt` are the torso walk's
+//! client half on 1.5b and UO, compared for the anim selection alone: there
+//! `PM_Footsteps` runs ahead of `PM_Weapon` (player-model-anim-system.md,
+//! "the main arm calls `PM_Footsteps`, then `PM_Weapon`").
+//!
 //! `LEGS_REPORT=1` prints every compared frame; `LEGS_IDLE_MS` sweeps the
 //! 1.5 and UO join.
 //!
@@ -57,6 +62,8 @@ const SERVER: &str = "tests/fixtures/movers/mp_carentan-dm-legs.txt";
 const CLIENT: &str = "tests/fixtures/movers/mp_carentan-dm-legs-client.txt";
 const TORSO_SERVER: &str = "tests/fixtures/movers/mp_carentan-dm-torso.txt";
 const TORSO_CLIENT: &str = "tests/fixtures/movers/mp_carentan-dm-legs-client-torso.txt";
+const TORSO_CLIENT_15: &str = "tests/fixtures/movers/mp_carentan-dm-legs-client-torso-1.5.txt";
+const TORSO_CLIENT_UO: &str = "tests/fixtures/movers/mp_carentan-dm-legs-client-torso-uo.txt";
 const SERVER_15: &str = "tests/fixtures/movers/mp_carentan-dm-legs-1.5.txt";
 const CLIENT_15: &str = "tests/fixtures/movers/mp_carentan-dm-legs-client-1.5.txt";
 const SERVER_UO: &str = "tests/fixtures/movers/mp_carentan-dm-legs-uo.txt";
@@ -953,6 +960,70 @@ fn a_drawn_body_off_the_arrivals_stays_within_a_frame_of_clip() {
 /// blend-outs included: ours reads 0.04 and 0.13 at worst.
 const TORSO_TOL: f32 = 0.05;
 const TORSO_TURN: f32 = 0.2;
+
+/// The torso walk's anim selection on 1.5b or UO, snapshot by snapshot:
+/// the legs, the movement direction and the torso, each without its
+/// toggle bit. Returns how many snapshots ours sent of retail's.
+fn check_torso_selection(fs: vcod_common::pk3::Pk3Fs, client: &str) -> usize {
+    let walk = walk(&std::fs::read_to_string(client).unwrap());
+    let idle_ms = retail_idle_ms(&walk, SPAWN_MSG);
+    let run = run_ours(
+        fs,
+        "probe_torso",
+        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_torso.gsc"),
+        client,
+        idle_ms,
+        None,
+    )
+    .unwrap();
+    let mut bad = Vec::new();
+    let mut compared = 0;
+    for s in &walk.snaps {
+        let r = (s.legs, s.dir, s.torso);
+        let Some(o) = run.legs.get(&s.t) else {
+            continue;
+        };
+        compared += 1;
+        if o.0 & 511 != r.0 & 511 || o.1 != r.1 || o.2 & 511 != r.2 & 511 {
+            bad.push(format!(
+                "{} {} legs, dir, torso: retail {r:?} ours {o:?}",
+                s.t, s.step
+            ));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "{} of {compared}:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+    compared
+}
+
+/// The first shot of a moving step on 1.5b writes no fire anim: the
+/// footsteps ran first, so the event reads the moving movetype, whose
+/// clauses are empty (1.5b 0x28889, 0x2888e).
+#[test]
+fn a_body_firing_on_the_move_selects_retails_anims_on_15() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
+        return;
+    }
+    assert!(check_torso_selection(fs, TORSO_CLIENT_15) > 500);
+}
+
+/// [`a_body_firing_on_the_move_selects_retails_anims_on_15`] on UO
+/// (0x2e04e, 0x2e053).
+#[test]
+fn a_body_firing_on_the_move_selects_retails_anims_on_uo() {
+    let Some(fs) = vcod_common::testing::uo_fs() else {
+        return;
+    };
+    assert!(check_torso_selection(fs, TORSO_CLIENT_UO) > 500);
+}
 
 /// Fire, reload and aim on the move: the anim selection on every snapshot
 /// and fourteen bones from the pelvis to the weapon tag on every frame
