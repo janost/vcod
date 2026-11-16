@@ -2617,14 +2617,24 @@ and not replayed):
   later), retail places the fire group once more at the `rest` view while
   the legs still play it: its goals jump to level 0.56, 15down 0.44, leaves
   0.5 and 0.5, and once the fire node is out the step lands every row on
-  them (0x80bb130's arm for a node with neither weight nor goal). Ours'
-  slot 0 reads the `rest` view a frame later (its end frame 23100 still
-  carries the sweep's `aim_at`), so its fire group keeps the sweep's last
-  rows (level 0.6506, leaves 0.117 and 0.883). INFERRED: this moves only
-  the duel's first frame, where the fire node weighs 0.001: the strict
-  clear keeps the stale rows (the node is weighted by then) and the next
-  step lands them on the placement's goals. Why ours' view lags there is
-  not determined.
+  them (0x80bb130's arm for a node with neither weight nor goal).
+  INFERRED: the stale rows move only the duel's first frame, where the
+  fire node weighs 0.001: the strict clear keeps them (the node is
+  weighted by then) and the next step lands them on the placement's
+  goals.
+- VERIFIED, a third 1.1d run under gdb (2026-11-16, `GDB_MODE=grid` on
+  the allied gunner, his `ps.viewangles` at `ps+0xc0` at each weight
+  step): no view lags. His view reads the sweep's `aim_at` through the
+  thread pass of 23100 (yaw 223.255661) and `rest` from 23150 (229),
+  as ours reads it; his legs leave the fire anim at the end frame of
+  23150 there (`standMG42_aim` at 0.001 at the next step), and
+  `ClientEndFrame` runs `BG_PlayerAnimation` (game.mp.i386.so 0x41486)
+  before `turret_think_client` (0x414b1). INFERRED: the fire group placed
+  at the `rest` aim in the first run is that run's trigger release
+  reaching the legs a frame later than the view, which varies from run
+  to run with the client's packets; ours' slot 0 leaves fire at its own
+  replay's frame, and the retaken capture's gate reads retail's with no
+  gap.
 
 ## 14. The client
 
