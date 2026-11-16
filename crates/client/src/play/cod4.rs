@@ -2081,6 +2081,10 @@ impl Cod4Session {
         }
         let weapons = weapon_list(gs);
         let render_time = time;
+        // World 1 steps to the drawn time before the parts are placed.
+        if let Some(w) = &self.world {
+            self.physics.advance(w, render_time);
+        }
         let mut entities = Vec::new();
         for e in &new.entities {
             let Some(visual) = visual(gs, new, &weapons, e) else {

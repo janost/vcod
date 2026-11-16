@@ -2099,7 +2099,10 @@ with `objdump`; `vcod_cod4::dynent` is vcod's.
   `cg.time`. VERIFIED (the calls). That the bit is ODE's disabled body
   and 0x5a6d50 runs the world to the time is INFERRED (3.6's names).
   World 0's `msecStep` lies between 17 and 67 ms as world 1's
-  (the tables at 0x71e7a4 and 0x71e7b0, index 0). VERIFIED.
+  (the tables at 0x71e7a4 and 0x71e7b0, index 0), picked off its bodies
+  awake after each step by the same rule (cod4-gsc.md 3.6). VERIFIED.
+  vcod's `DynEnts::advance_in` steps world 0's bodies together on its
+  clock (`physics::WorldClock`).
 
 vcod: `dynent::defs` reads list 0 through the map zone and `common_mp`;
 `Cod4World::dynents` holds them; `Cod4Session::dynents` is the state,
@@ -2318,13 +2321,14 @@ nothing. VERIFIED (13.1's census).
   0x70adf0 times it). The SP call above lifts a light prop 26 to 53
   units/s per contact at 17 ms. INFERRED (the formula).
 - vcod: `DynEnts::jitter` makes the bodies and hands each body the region
-  for its next step; `physics::Body` pushes on each of its touching
-  points with a normal z of 0.7 or more, by the formula, its random draws
-  off a seed of vcod's. Retail's contacts are ODE's through the game's
-  collider; vcod's are the body's points (nine on a box's flat face),
-  so a prop flat on the floor takes more pushes than on 1.7. vcod's.
-  `physicsJitter` on vcod-server sends retail's words. VERIFIED (the
-  tests above).
+  for its next step; `physics::Body` pushes in its contact pass, on each
+  contact a geom keeps (after 0x5a2320's cut on five or more) with a
+  normal z of 0.7 or more, by the formula, its random draws off a seed of
+  vcod's, `msecStep` the world's (cod4-gsc.md 3.6, 3.6.1). The contacts
+  are those vcod's box and cylinder colliders give, ODE's through the
+  game's collider on 1.7; a brush with sides, which has no collider in
+  vcod, pushes on its points. vcod's. `physicsJitter` on vcod-server
+  sends retail's words. VERIFIED (the tests above).
 
 ### 13.9 The knife's swing
 
