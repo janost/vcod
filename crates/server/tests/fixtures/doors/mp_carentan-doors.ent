@@ -6,6 +6,8 @@
 "speed" "100"
 "wait" "1"
 "spawnflags" "8"
+"light" "300"
+"color" "1 0.5 0.25"
 }
 {
 "classname" "func_door"
@@ -16,6 +18,7 @@
 "speed" "200"
 "lip" "16"
 "dmg" "5"
+"health" "100"
 }
 {
 "classname" "func_door"
@@ -26,12 +29,14 @@
 "angles" "0 -1 0"
 "speed" "200"
 "lip" "16"
+"color" "0.2 0.4 0.6"
 }
 {
 "classname" "func_door_rotating"
 "targetname" "door_r"
 "model" "*8"
 "origin" "395 2137 245"
+"health" "100"
 }
 {
 "classname" "func_rotating"
@@ -41,6 +46,7 @@
 "origin" "372 -1052 60"
 "spawnflags" "1"
 "speed" "45"
+"light" "1200"
 }
 {
 "classname" "func_rotating"
@@ -50,4 +56,14 @@
 "origin" "372 -1073 52"
 "spawnflags" "1"
 "speed" "90"
+}
+{
+"classname" "func_door"
+"targetname" "door_h"
+"model" "*9"
+"origin" "1051 1613 80"
+"speed" "100"
+"wait" "1"
+"lip" "0"
+"health" "100"
 }

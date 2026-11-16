@@ -2437,17 +2437,67 @@ pub fn direct_replay(
     weapon: &str,
     text: &str,
 ) -> Vec<String> {
+    direct_replay_run(fs, proto, map, probe, weapon, text, false).0
+}
+
+/// Every snapshot the client took, by server time: its entities.
+pub type SnapEntities = Vec<(
+    i32,
+    std::collections::BTreeMap<u32, vcod_common::net::msg::EntityState>,
+)>;
+
+/// [`direct_replay`] with the client spawned on the map's spawn point
+/// nearest the capture's `SPAWNED` origin, in place of the gametype's
+/// random pick, and every snapshot the client took: what it is sent
+/// between its spawn and the script's first placing is the spawn point's.
+pub fn direct_replay_frames(
+    fs: fn() -> Option<vcod_common::pk3::Pk3Fs>,
+    proto: &'static vcod_common::net::protocol::Protocol,
+    map: &str,
+    probe: &str,
+    weapon: &str,
+    text: &str,
+) -> (Vec<String>, SnapEntities) {
+    direct_replay_run(fs, proto, map, probe, weapon, text, true)
+}
+
+fn direct_replay_run(
+    fs: fn() -> Option<vcod_common::pk3::Pk3Fs>,
+    proto: &'static vcod_common::net::protocol::Protocol,
+    map: &str,
+    probe: &str,
+    weapon: &str,
+    text: &str,
+    pin: bool,
+) -> (Vec<String>, SnapEntities) {
     let first = cmds_ran(text, "")[0].0;
-    let run = |late_ms| direct_replay_once(fs().unwrap(), proto, map, probe, weapon, text, late_ms);
-    let (lines, snap) = run(0);
+    let run =
+        |late_ms| direct_replay_once(fs().unwrap(), proto, map, probe, weapon, text, late_ms, pin);
+    let (lines, snap, frames) = run(0);
     match snap.filter(|&t| t != first) {
-        Some(t) => run((t - first) as i64).0,
-        None => lines,
+        Some(t) => {
+            let (lines, _, frames) = run((t - first) as i64);
+            (lines, frames)
+        }
+        None => (lines, frames),
     }
 }
 
+/// The origin on a capture's `SPAWNED` line.
+fn spawned_origin(text: &str) -> [f32; 3] {
+    let o = text
+        .lines()
+        .filter(|l| l.starts_with("SPAWNED "))
+        .flat_map(str::split_whitespace)
+        .find_map(|t| t.strip_prefix("origin="))
+        .expect("the capture's SPAWNED line");
+    let v: Vec<f32> = o.split(',').map(|x| x.parse().unwrap()).collect();
+    [v[0], v[1], v[2]]
+}
+
 /// One run of [`direct_replay`], the client joined `late_ms` earlier:
-/// the `PROBE` lines and the client's first snapshot time.
+/// the `PROBE` lines, the client's first snapshot time and its snapshots.
+#[allow(clippy::too_many_arguments)]
 fn direct_replay_once(
     fs: vcod_common::pk3::Pk3Fs,
     proto: &'static vcod_common::net::protocol::Protocol,
@@ -2456,7 +2506,8 @@ fn direct_replay_once(
     weapon: &str,
     text: &str,
     late_ms: i64,
-) -> (Vec<String>, Option<i32>) {
+    pin: bool,
+) -> (Vec<String>, Option<i32>, SnapEntities) {
     let fs = Rc::new(fs);
     let bsp_path = fs.resolve_map(map).unwrap();
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
@@ -2469,7 +2520,18 @@ fn direct_replay_once(
     .expect("the probe");
     sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), &src);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    let spawn = pin.then(|| {
+        let at = spawned_origin(text);
+        let d = |p: &[f32; 3]| (0..3).map(|i| (p[i] - at[i]).powi(2)).sum::<f32>();
+        spawn_points(&fs, map)
+            .into_iter()
+            .min_by(|a, b| d(&a.0).total_cmp(&d(&b.0)))
+            .expect("a spawn point")
+    });
     sv.load_scripts(fs).expect("load the scripts");
+    if let Some(at) = spawn {
+        pin_spawns_at(&mut sv, &[&[at]]);
+    }
     let mut hold = ProbeHold {
         aim: true,
         framed: true,
@@ -2489,6 +2551,7 @@ fn direct_replay_once(
     let mut join = Join::new("axis", weapon);
     let (mut buttons, mut selected) = (0u8, None::<u8>);
     let mut first_snap = None;
+    let mut frames = SnapEntities::new();
     for _ in 0..3000 {
         if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
             break;
@@ -2527,6 +2590,9 @@ fn direct_replay_once(
         }
         if let Some(s) = cl.snapshots().newest() {
             first_snap.get_or_insert(s.server_time);
+            if frames.last().is_none_or(|(t, _)| *t != s.server_time) {
+                frames.push((s.server_time, s.entities.clone()));
+            }
         }
     }
     let lines = sv
@@ -2535,5 +2601,5 @@ fn direct_replay_once(
         .map(|l| l.trim().to_string())
         .filter(|l| l.starts_with("PROBE"))
         .collect();
-    (lines, first_snap)
+    (lines, first_snap, frames)
 }

@@ -3461,14 +3461,20 @@ modules (`tools/re/annotate_func.py`) and measured on all three with
 `client-probes/probe_doors.gsc` on mp_carentan, the stock blocks of `*4`,
 `*5`, `*6`, `*7`, `*8` and `*10` replaced by
 `crates/server/tests/fixtures/doors/mp_carentan-doors.ent`
-(`tools/bsp_append_entities.py --replace`): `door_a` on `*5` with a touch
-trigger, `door_b` on `*6` mastering `door_b4` on `*4` (team `d2`, `dmg` 5),
-`door_r` on `*8` on the defaults, and `rot1` on `*7` mastering `rot2` on
-`*10` (team `r1`). One `--probe-uo-weapon direct` client stands in
-`door_a`'s trigger, stands on `door_b` and presses use, stands under it as
-it shuts, then `useBy`s `door_r` from two spots
+(`tools/bsp_append_entities.py --replace`), and `*9` too: `door_a` on `*5`
+with a touch trigger, `light` 300 and `color` "1 0.5 0.25", `door_b` on `*6`
+with `health` mastering `door_b4` on `*4` (team `d2`, `dmg` 5, `color`
+only), `door_r` on `*8` on the defaults with `health`, `rot1` on `*7` with
+`light` 1200 mastering `rot2` on `*10` (team `r1`), and `door_h` on `*9`, a
+`func_door` with `health` and no `angles`. One `--probe-uo-weapon direct`
+client stands in `door_a`'s trigger, stands on `door_b` and presses use,
+stands under it as it shuts, `useBy`s `door_r` from two spots, then twice
+more with a teleport to the far south spawn and back while it turns shut;
+the script then `radiusDamage`s `door_r`, `door_b` and `door_h`, and
+`door_h` again 100 ms later, and spawns one of each classname
 (`crates/server/tests/fixtures/doors/mp_carentan-dm-doors*.txt`, recipes in
-their headers).
+their headers). The client wrote its snapshots as the
+`crates/common/tests/fixtures/net/*-doors-11.bin`, `-15` and `-uo` pairs.
 
 ### 26.1 Offsets and states
 
@@ -3611,9 +3617,12 @@ crush means of death 0x13 and 0x10.
   from the load while its master `rot1` turns at 45: `G_MoverTeam` evaluates
   each part's own trajectory. VERIFIED, `G_RunMover` (0x57630..0x57664): a
   linked `func_rotating` or `func_tramcar` slave unlinks on its own turn.
-  INFERRED: the master's `G_MoverPush` links `rot2` again every frame, so
-  it is in the tree between its master's turn and its own; no capture shows
-  the link.
+  VERIFIED, the wire on all three: `rot2` is in no snapshot from the load
+  on, while `rot1` is in every one the client's spot sees; the snapshot
+  builder skips an entity not linked, and `rot2`'s turn comes after its
+  master's in the entity pass. INFERRED: the master's `G_MoverPush` links
+  `rot2` again every frame, so it is in the tree between its master's turn
+  and its own; no capture shows that link.
 
 ### 26.5 The `angles` key
 
@@ -3624,6 +3633,19 @@ key in `apos.trBase` as well as `r.currentAngles`; `G_SetMovedir` clears
 only the second, so the first `G_MoverTeam`'s `amove` is the key. A door
 keyed by `angles` turns by it once.
 
+VERIFIED, `tools/re/gdb_radius_damage.py` on 1.1d (47.8 s on): `door_a`'s
+and `door_b`'s links are `r.absmin`/`r.absmax` of (-2622.5) and (-2907.9)
+to their negatives on every axis, `SV_LinkEntity`'s box of the model's
+farthest corner about a turned brush, here about the world origin.
+VERIFIED, the wire on all three: `door_a`, not yet moved, left the snapshot
+when the client spawned at (280, 1304, 160.125) and came back when he was
+placed at its trigger; `apos.trBase` went out as (0, -1, 0) all along.
+INFERRED: until its first move a keyed door is linked with
+`r.currentAngles` 0 (the spawn's link after `G_SetMovedir`), its own
+model's box, which the cluster test hides from the spawn; the radius box
+would have been sent from there by the overflow scan of
+`SV_AddEntitiesVisibleFromPoint` (the cluster test vcod runs).
+
 ### 26.6 vcod
 
 `game::mover::door` is the three spawn functions, the states, the thinks,
@@ -3632,17 +3654,100 @@ a mover row; `mover::run_turn` hands a moving team master back as
 `Turn::Team`, and `ScriptRuntime::team_move` pushes every part under one
 list (`push::push_with`), stalls the team on a block (`mover::stall_team`)
 and runs the door's `blocked`. `teams::idle_slave` unlinks a `func_rotating`
-slave. `doors_ab` replays the three captures to the last `PROBE` line.
+slave, and the wire sends no door the area tree does not hold. The snapshot
+cull reads a door's last link box (`archive::WorldFrame::links`), not one
+rebuilt from its `apos`. `mover::constant_light` packs 26.7's word,
+`door::player_in_pvs` is 26.8's test, `door::damaged` 26.9's arm, and a
+script `spawn` runs `door::spawn` with no keys (26.10). `doors_ab` replays
+the three captures to the last `PROBE` line, and matches every mover's
+entry to and exit from the snapshot, its sound events, `loopSound` and
+`constantLight` against the capture pairs, the client spawned on the
+capture's spawn point.
 
 Not modelled:
 
-- `G_PlaySoundAlias` on a door reaches the wire as `EV_SOUND_ALIAS`, which
-  no capture here reads; `ReturnToPos1Rotate`'s and the 10-state's PVS
-  test is not made (vcod always plays it). `loopSound` follows the RE, not
-  a capture.
-- `light`/`color` keys (`constantLight`) and area portals
-  (`trap_AdjustAreaPortalState`).
-- A door's `takedamage`: `G_Damage`'s `eType` 5 arm (cod11-combat.md 5.9)
-  calls a door's `use`; vcod gives it only to `func_static`.
-- A script `spawn` of the three classnames builds no door.
+- Area portals (`trap_AdjustAreaPortalState` in `Use_BinaryMover` and
+  `Reached_BinaryMover`): no stock MP map has one, and mp_carentan's lump
+  is one area, so nothing here measures them.
+- A round's `G_Damage` on a door: only blasts and missile impacts reach
+  `door::damaged`; unmeasured.
+- The first 4000 ms without door sounds is ported off the RE; no capture
+  uses a door that early.
 - The `nextTrain` hack in `Use_BinaryMover` (no `func_train` in MP).
+
+### 26.7 `constantLight`
+
+VERIFIED, `InitMover` (1.1d 0x56495..0x565a0, 1.5b 0x58351..0x58449, UO
+0x62e95..0x62f8d) and `InitMoverRotate` (1.1d 0x56769..0x56863, 1.5b
+0x586a8..0x587a0, UO 0x631ec..0x632e4): `G_SpawnFloat("light", "100")` and
+`G_SpawnVector("color", "1 1 1")`; with either key in the block, each
+colour component times 255.0 (0x75cb0) and the light times 0.25 (0x75cb4),
+each truncated and capped at 255, go to `s.constantLight` as `r | g << 8 |
+b << 16 | i << 24`. Without both keys the word stays 0. `func_static`,
+`func_bobbing` and `func_pendulum` run `InitMover` too.
+
+VERIFIED, the wire on all three: `door_a` sends 0x4b3f7fff, `door_b4`
+(`color` alone) 0x19996633, `rot1` (`light` alone, 1200) 0xffffffff, every
+other mover 0, from the first snapshot on. VERIFIED, a census of the stock
+1.1, 1.5 and UO paks: no MP map gives a `func_door`, `func_door_rotating`,
+`func_rotating`, `func_static`, `func_bobbing` or `func_pendulum` a `light`
+or `color` key.
+
+### 26.8 The sounds on the wire, and the PVS test
+
+VERIFIED, the wire on all three: each `G_PlaySoundAlias` of 26.3 rides the
+door's own ring as `EV_SOUND_ALIAS` with the alias index as its parm
+(`door_opening` 4, `door_open_end` 5, `door_closing` 6, `door_close_end` 7
+in this level's table), and `s.loopSound` holds `door_open_loop` (8) from
+the use and `door_close_loop` (9) from `ReturnToPos1` to the
+`Reached_BinaryMover` that clears it (0x55ca8). Only the master plays the
+use's and the return's sound and loop; every part plays its own reached
+sound (`door_b4`'s open and close ends).
+
+VERIFIED, `ReturnToPos1Rotate` (1.1d 0x57cbc..0x57cfc, 1.5b 0x575d8 and
+0x575fd, UO 0x6211c and 0x62141) and `Reached_BinaryMover`'s 10-to-7 arm
+(1.1d 0x55eb1..0x55eeb, 1.5b 0x579fd and 0x57a22, UO 0x62541 and 0x62566):
+`G_Find(NULL, classname, "player")`, the first player in entity order, then
+`trap_InPVS` from his `r.currentOrigin` to the door's; the closing or
+close-end sound plays only when it returns non-zero, and no player means no
+sound. The close loop is set either way (0x57d31). VERIFIED, cod_lnxded:
+`trap_InPVS` is syscall 45 (0x80883e0): each point's leaf, the second's
+cluster in the first's PVS row, then `CM_AreasConnected` (0x8053f44) of
+their areas.
+
+VERIFIED, the wire on all three, the pvs phase: `door_r` left the snapshot
+after its closing and came back with an `eventSequence` 2 past it, where a
+close end, an opening and an open end fell between, the player at spot `d`
+when it shut: the close end did not play. Its next closing and close end,
+with him at the far spawn, did. A vcod that plays both sounds
+unconditionally sends `door_r` back into the pvs phase (37.35 s on 1.1d)
+with a sequence of 10 where retail's is 6, the rotate phase's turns
+included.
+
+### 26.9 Damage
+
+VERIFIED, `SP_func_door` (0x56f92..0x56fb7): a non-zero `health` key sets
+`takedamage` on a non-slave; `SP_func_door_rotating` does the same;
+`Think_SpawnNewDoorTrigger` sets it on every part (26.2). VERIFIED,
+`G_Damage`'s `eType` 5 arm (1.1d 0x49e93..0x49ee1, 1.5b 0x472c6 and
+0x472df, UO 0x50004 and 0x5001d): with a `use` and `moverState` 0 a
+`"trigger"` notify with the attacker, then the `use` with the attacker as
+activator; at any other state nothing. No `health` comes off.
+
+VERIFIED, `tools/re/gdb_radius_damage.py` on 1.1d and the `PROBE` lines on
+all three, the damage phase: the blast at `door_r` met it with `CanDamage`
+1 and its `G_Damage` found state 7: a rotating door never opens to damage.
+The blast at `door_b` met `door_a` and `door_b` with `CanDamage` 0 (26.5's
+boxes, their midpoints at the world origin). The blast at `door_h` at rest
+called `G_Damage` at state 0: `"trigger"` in that frame and the door moved
+50 ms on; the blast 100 ms later found state 3 and did nothing.
+
+### 26.10 A script spawn
+
+VERIFIED, the runs on all three: `spawn("func_door", (0, 0, 0))`,
+`"func_door_rotating"` and `"func_rotating"` read `origin` and `angles` 0,
+`speed` 400, 1000 and 100 and `dmg` 2, 0 and 2, and never move; each is
+sent from that frame (`eType` 5, `constantLight` 0). INFERRED, off those
+and `G_CallSpawnEntity` (0x617d4), which calls the classname's spawn
+function as the map load does: the spawn reads no key (`G_ParseSpawnVars`
+cleared them, section 18) and the entity keeps model 0, the world's.

@@ -7895,8 +7895,9 @@ gives a turret 100 `health` when its key left 0. The same probe against
 with `takedamage` is listed too, measured by brush-model distance
 (`r.bmodel`), and takes `G_Damage`'s `eType` 5 arm, a `"trigger"` notify and
 `Use_Static`, never `health` (`cod11-movers.md` 21). A `trigger_damage` is
-listed too, measured off its brush model's box (14.8). Not modelled:
-doors, whose spawn vcod does not run.
+listed too, measured off its brush model's box (14.8). A door with
+`takedamage` is listed off its link's box and opens at `moverState` 0
+(`cod11-movers.md` 26.9).
 
 A bullet never reaches a turret. VERIFIED: `G_SpawnTurret` writes
 `r.contents` `0x200004` and is the only writer of that value in the module;

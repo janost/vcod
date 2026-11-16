@@ -5,12 +5,20 @@
 //! on 1.1d, 1.5b and UO (`fixtures/doors/mp_carentan-dm-doors*.txt`,
 //! recipes in their headers). Every frame's door origins and angles, the
 //! client's origin, the use key's `"trigger"`, the crush damage and the
-//! rotating slave's turn must be retail's (cod11-movers.md 26).
+//! rotating slave's turn must be retail's, and so must what the client is
+//! sent of each mover off the capture pair `net/*-doors-<v>.bin`: when it
+//! enters and leaves the snapshot, its sound events, `loopSound` and
+//! `constantLight` (cod11-movers.md 26). The replay spawns the client on
+//! the capture's spawn point.
 //!
+//! `DOORS_REPORT=1` prints the differing `PROBE` lines, `DOORS_WIRE=1` the
+//! differing wire lines, `DOORS_DUMP=<dir>` writes both sides of each.
 //! Needs `COD_DIR` at the capture's install; without it the test returns
 //! early.
 
 use crate::common;
+use std::collections::BTreeMap;
+use vcod_common::net::msg::EntityState;
 use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
 use vcod_common::pk3::Pk3Fs;
 
@@ -53,7 +61,7 @@ fn to_done(mut lines: Vec<String>) -> Vec<String> {
     lines
 }
 
-fn check(fs: fn() -> Option<Pk3Fs>, proto: &'static Protocol, fixture: &str) {
+fn check(fs: fn() -> Option<Pk3Fs>, proto: &'static Protocol, fixture: &str, tag: &str) {
     if fs().is_none() {
         eprintln!("COD_DIR unset or not the capture's install: skipping");
         return;
@@ -65,25 +73,48 @@ fn check(fs: fn() -> Option<Pk3Fs>, proto: &'static Protocol, fixture: &str) {
             .map(str::to_string)
             .collect(),
     );
-    let ours = to_done(common::direct_replay(
-        fs,
-        proto,
-        MAP,
-        "probe_doors",
-        "kar98k_mp",
-        &text,
-    ));
-    if std::env::var("DOORS_REPORT").is_ok_and(|v| v == "1") {
-        for (i, (a, b)) in retail.iter().zip(&ours).enumerate() {
+    let (lines, frames) =
+        common::direct_replay_frames(fs, proto, MAP, "probe_doors", "kar98k_mp", &text);
+    let ours = to_done(lines);
+    diff(fixture, &retail, &ours, "DOORS_REPORT");
+    // The wire up to the last frame both ran.
+    let retail_wire = retail_wire(proto, tag);
+    let end = frames.last().map_or(0, |f| f.0);
+    let retail_wire: Vec<String> = retail_wire
+        .into_iter()
+        .filter(|l| time_of(l) <= end)
+        .collect();
+    let ours_wire = wire_lines(proto, frames.iter().map(|(t, e)| (*t, e)));
+    diff(tag, &retail_wire, &ours_wire, "DOORS_WIRE");
+}
+
+fn time_of(line: &str) -> i32 {
+    line.split(' ')
+        .nth(1)
+        .and_then(|t| t.parse().ok())
+        .unwrap_or(0)
+}
+
+fn diff(what: &str, retail: &[String], ours: &[String], env: &str) {
+    if let Some(dir) = std::env::var_os("DOORS_DUMP") {
+        let dir = std::path::Path::new(&dir);
+        std::fs::write(dir.join(format!("{env}-retail.txt")), retail.join("\n")).unwrap();
+        std::fs::write(dir.join(format!("{env}-ours.txt")), ours.join("\n")).unwrap();
+    }
+    if std::env::var(env).is_ok_and(|v| v == "1") {
+        for (i, (a, b)) in retail.iter().zip(ours).enumerate() {
             if a != b {
                 eprintln!("{i}\n retail {a}\n ours   {b}");
             }
         }
+        if retail.len() != ours.len() {
+            eprintln!("lengths: retail {} ours {}", retail.len(), ours.len());
+        }
     }
-    let first = retail.iter().zip(&ours).position(|(a, b)| a != b);
+    let first = retail.iter().zip(ours).position(|(a, b)| a != b);
     assert!(
         first.is_none() && retail.len() == ours.len(),
-        "{fixture}: first difference at line {first:?} of {} / {}: retail {:?} ours {:?}",
+        "{what}: first difference at line {first:?} of {} / {}: retail {:?} ours {:?}",
         retail.len(),
         ours.len(),
         first.map(|i| &retail[i]),
@@ -97,6 +128,7 @@ fn doors_run_as_on_retail_11() {
         fs_11,
         &PROTOCOL_V1,
         "tests/fixtures/doors/mp_carentan-dm-doors.txt",
+        "doors-11",
     );
 }
 
@@ -106,6 +138,7 @@ fn doors_run_as_on_retail_15() {
         fs_15,
         &PROTOCOL_V6,
         "tests/fixtures/doors/mp_carentan-dm-doors-1.5.txt",
+        "doors-15",
     );
 }
 
@@ -115,5 +148,72 @@ fn doors_run_as_on_retail_uo() {
         fs_uo,
         &PROTOCOL_V22,
         "tests/fixtures/doors/mp_carentan-dm-doors-uo.txt",
+        "doors-uo",
     );
+}
+
+/// What the client is sent of each mover past the clients, one line per
+/// change: `W <time> <number> in <eventSequence> <loopSound>
+/// <constantLight>` when it enters the snapshot, `out` when it leaves,
+/// `ev <event> <parm>` for each event its ring took while sent, and
+/// `loop` and `light` when they change.
+pub fn wire_lines<'a>(
+    p: &Protocol,
+    frames: impl IntoIterator<Item = (i32, &'a BTreeMap<u32, EntityState>)>,
+) -> Vec<String> {
+    let mover = vcod_common::net::cod1::flags::ET_MOVER;
+    let mut out = Vec::new();
+    let mut prev: BTreeMap<u32, [i32; 3]> = BTreeMap::new();
+    for (t, ents) in frames {
+        let mut now = BTreeMap::new();
+        for (&n, e) in ents {
+            if n < 64 || e.field_i32(p, "eType") != mover {
+                continue;
+            }
+            let f = |name: &str| e.field_i32(p, name);
+            let cur = [f("eventSequence"), f("loopSound"), f("constantLight")];
+            match prev.get(&n) {
+                None => out.push(format!("W {t} {n} in {} {} {:#x}", cur[0], cur[1], cur[2])),
+                Some(last) => {
+                    let mut s = last[0];
+                    while s & 0xff != cur[0] & 0xff {
+                        let k = s & 3;
+                        out.push(format!(
+                            "W {t} {n} ev {} {}",
+                            f(&format!("events[{k}]")),
+                            f(&format!("eventParms[{k}]"))
+                        ));
+                        s += 1;
+                    }
+                    if cur[1] != last[1] {
+                        out.push(format!("W {t} {n} loop {}", cur[1]));
+                    }
+                    if cur[2] != last[2] {
+                        out.push(format!("W {t} {n} light {:#x}", cur[2]));
+                    }
+                }
+            }
+            now.insert(n, cur);
+        }
+        for n in prev.keys().filter(|n| !now.contains_key(n)) {
+            out.push(format!("W {t} {n} out"));
+        }
+        prev = now;
+    }
+    out
+}
+
+/// [`wire_lines`] off a committed capture pair `net/*-<tag>.bin`.
+fn retail_wire(p: &Protocol, tag: &str) -> Vec<String> {
+    let frames = vcod_common::testing::fixture_frames(
+        p,
+        &format!("net/gamestate-{tag}.bin"),
+        &format!("net/snapshots-{tag}.bin"),
+    );
+    wire_lines(
+        p,
+        frames
+            .iter()
+            .map(|f| (f.snapshot.server_time, &f.snapshot.entities)),
+    )
 }

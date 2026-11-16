@@ -1066,6 +1066,40 @@ fn reached_angles(a: Vec3) -> Vec3 {
     )
 }
 
+/// `InitMover`'s and `InitMoverRotate`'s `light` and `color` keys (1.1d
+/// 0x56495..0x565a0 and 0x56769..0x56863): with either key in the block,
+/// each `color` component times 255 and the `light` (default 100) times
+/// 0.25, each truncated and capped at 255, go to `s.constantLight` as
+/// `r | g << 8 | b << 16 | i << 24`. A script spawn reads no key
+/// (docs/research/cod11-movers.md 26.7).
+pub fn constant_light(keys: Option<&[(String, String)]>) -> i32 {
+    use crate::game::builtins::cvar::atof;
+    let key = |name: &str| keys.and_then(|b| vcod_common::bsp::spawn_string(b, name));
+    let (light, color) = (key("light"), key("color"));
+    if light.is_none() && color.is_none() {
+        return 0;
+    }
+    let light = atof(light.unwrap_or("100"));
+    // `G_SpawnVector`'s `sscanf("%f %f %f")`.
+    let mut c = [0.0f32; 3];
+    for (slot, tok) in c
+        .iter_mut()
+        .zip(color.unwrap_or("1 1 1").split_whitespace())
+    {
+        *slot = atof(tok);
+    }
+    let q = |v: f32, k: f32| ((f64::from(v) * f64::from(k)) as i32).min(255);
+    q(c[0], 255.0) | q(c[1], 255.0) << 8 | q(c[2], 255.0) << 16 | q(light, 0.25) << 24
+}
+
+/// [`constant_light`] onto the entity.
+pub fn set_constant_light(host: &mut GameHost, id: EntId, keys: Option<&[(String, String)]>) {
+    let light = constant_light(keys);
+    if let Some(e) = host.ents.get_mut(id) {
+        e.constant_light = light;
+    }
+}
+
 /// `SP_func_bobbing` (0x583d0) and `SP_func_pendulum` (0x56fe0), from a map
 /// block's keys or, for a script `spawn`, none (`G_SpawnFloat` reads the
 /// spawn vars the last map block left, which `G_ParseSpawnVars` clears).
@@ -1149,6 +1183,7 @@ pub fn spawn_sine(
         mins,
         maxs,
     };
+    set_constant_light(host, id, keys);
     host.link_shaped(cx, id, shape);
     let angles = vector(host, cx, "angles");
     let (pos, apos) = if bobbing {
@@ -1247,6 +1282,7 @@ fn spawn_static(
         mins,
         maxs,
     };
+    set_constant_light(host, id, keys);
     host.link_shaped(cx, id, shape);
     let spawnflags = match keys {
         Some(b) => vcod_common::bsp::field_value(b, "spawnflags")
