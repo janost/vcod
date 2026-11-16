@@ -638,7 +638,11 @@ VERIFIED:
   of `iw_11`'s stock files reads back field for field as `common_mp`
   compiled it, `defaultweapon_mp`'s default sounds included, but a
   millisecond field whose float product rounds up to a whole number:
-  `m16_mp`'s `fireTime` 0.065 is 64 in the zone and 65 off the file.
+  `m16_mp`'s `fireTime` 0.065 is 64 in the zone and 65 off the file. The
+  test computes both off each file's seconds, the zone's as the product
+  truncated unstored and the file's as the runtime's, and each matches
+  exactly; 810 fields of the stock files read one over, the inverse sight
+  times following each side's ms. VERIFIED (the test).
   The live server under a mod holds 65 (and 64 without one), read
   under gdb at weapon 24's def (the array at 0x828d0c0, `fireTime` at
   +0x36c). VERIFIED (gdb). So the zone's compiler kept the product
