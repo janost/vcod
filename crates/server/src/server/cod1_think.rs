@@ -126,6 +126,7 @@ impl Cod1Module {
                     PacketCommand::Kill => {
                         self.close_round(eng, slot, &mut rounds[slot]);
                         self.run_kill(eng, slot, &weapons);
+                        self.land_queued_ops(eng, &mut bodies, &weapons);
                     }
                     PacketCommand::CycleSeat { back } => self.cycle_seat(eng, slot, back),
                     PacketCommand::MenuResponse(menu, response) => {
@@ -495,25 +496,31 @@ impl Cod1Module {
             if let Some(rt) = self.script.as_mut() {
                 // The link sits between `ClientEvents`, whose shots traced
                 // against the last links, and `G_TouchTriggers` (0x40595).
+                // `ps.origin` as a callback in `ClientEvents` left it: a
+                // `setOrigin` there moved him (player-clip doc 13.6).
+                let mut origin = t.origin;
                 if let Some(sim) = eng.clients[t.slot].as_ref().and_then(|c| c.sim.as_ref()) {
                     link_client(rt, t.slot, sim);
+                    origin = sim.origin();
                 }
+                let shift = glam::Vec3::from(origin) - glam::Vec3::from(t.origin);
+                let eye = (glam::Vec3::from(t.eye) + shift).to_array();
                 mirror_roster(eng.clients, rt);
-                rt.touch_triggers_at(t.slot, now_ms, t.origin);
+                rt.touch_triggers_at(t.slot, now_ms, origin);
                 // `ps.origin` back into `r.currentOrigin` past the touch
                 // (0x405c7), ahead of the use key's `Cmd_Activate_f`. The
                 // item half reads `ps.origin` either way.
-                rt.set_client_origin(t.slot, t.origin);
+                rt.set_client_origin(t.slot, origin);
                 // `ClientImpacts` (0x40614), between the two.
                 rt.client_impacts(t.slot, &t.impacts);
-                rt.item_pass(t.slot, t.buttons, t.eye, t.view);
+                rt.item_pass(t.slot, t.buttons, eye, t.view);
                 // A vehicle's seat changes land inside the use cmd too.
                 apply_seat_ops(eng.clients, rt);
                 // The mount lands inside the use cmd (turrets doc 12.1), so
                 // it reaches the sim before the next cmd's pass runs.
                 let rule = crate::game::turret::AimRule::of(rt.host.defs.proto);
                 for (turret, stance, view) in
-                    rt.take_turret_mounts(t.slot, t.origin, t.stance, t.view)
+                    rt.take_turret_mounts(t.slot, origin, t.stance, t.view)
                 {
                     if let Some(sim) = eng.clients[t.slot].as_mut().and_then(|c| c.sim.as_mut()) {
                         crate::game::turret::mount_sim(sim, rule, turret, stance, view);
@@ -539,6 +546,7 @@ impl Cod1Module {
             let st = eng.clients[slot]
                 .as_ref()
                 .map_or(0, |c| c.last_processed_st);
+            let mut landed = died;
             if let (Some(rt), Some(sim)) = (
                 self.script.as_mut(),
                 eng.clients[slot].as_mut().and_then(|c| c.sim.as_mut()),
@@ -553,10 +561,17 @@ impl Cod1Module {
                     eng.rng,
                     (now_ms, st),
                 );
+                landed = true;
             }
-            if died {
+            if landed {
                 relink(&mut bodies, eng.clients, slot);
             }
+            self.land_queued_ops(eng, &mut bodies, &weapons);
+        }
+        // A test's stand-in for this frame's script `setOrigin`, queued
+        // past the moves ([`Server::test_script_set_origin`]).
+        if let Some(rt) = self.script.as_mut() {
+            rt.host.client_sim_ops.append(&mut self.test_sim_ops);
         }
         for (slot, round) in rounds.iter_mut().enumerate() {
             self.close_round(eng, slot, round);
@@ -666,6 +681,42 @@ impl Cod1Module {
             eng.rng,
             (now_ms, st),
         );
+    }
+
+    /// What a callback inside a cmd queued for any other client, on that
+    /// client's sim and body before the next cmd runs: retail's builtins
+    /// write the playerstate there and then, so a player a callback moved
+    /// meets the cmds behind it where it now stands (player-clip doc 13.6).
+    fn land_queued_ops(
+        &mut self,
+        eng: &mut Lend<'_>,
+        bodies: &mut Vec<vcod_common::movetrace::Body>,
+        weapons: &crate::weapons::WeaponTable,
+    ) {
+        let now_ms = eng.sv_time_ms;
+        let Some(rt) = self.script.as_mut() else {
+            return;
+        };
+        for slot in 0..eng.clients.len() {
+            if !rt.has_ops_of(slot) {
+                continue;
+            }
+            let Some(c) = eng.clients[slot].as_mut() else {
+                continue;
+            };
+            let st = c.last_processed_st;
+            let Some(sim) = c.sim.as_mut() else { continue };
+            apply_callback_ops(
+                rt,
+                sim,
+                slot,
+                self.anims.as_deref(),
+                weapons,
+                eng.rng,
+                (now_ms, st),
+            );
+            relink(bodies, eng.clients, slot);
+        }
     }
 
     /// `FireWeapon`'s grenade arm: `fire_grenade` from the muzzle this cmd
@@ -870,7 +921,7 @@ impl Cod1Module {
         let level_ms = now_ms.wrapping_sub(FRAME_MS);
         sim.debounce_pain(level_ms.wrapping_add(FALL_PAIN_DEBOUNCE_MS));
         let damage = crate::game::combat::located_damage(
-            fall_damage(percent, sim.max_health),
+            fall_damage(percent, sim.max_health, sim.ps.rules.v15()),
             self.hitlocs.multiplier("none"),
         );
         mirror_for_callback(rt, sim, proto, slot, st);
@@ -885,6 +936,7 @@ impl Cod1Module {
             (now_ms, st),
         );
         relink(bodies, eng.clients, slot);
+        self.land_queued_ops(eng, bodies, weapons);
     }
 
     /// The damage `ClientThink_real` deals a body inside a vehicle ahead of
@@ -958,6 +1010,7 @@ impl Cod1Module {
             (now_ms, st),
         );
         relink(bodies, eng.clients, slot);
+        self.land_queued_ops(eng, bodies, weapons);
     }
 
     /// `FireWeapon` inside the cmd that raised it: the trace against the
@@ -992,6 +1045,7 @@ impl Cod1Module {
             Attack::Suicide { slot } => {
                 self.run_kill(eng, slot, weapons);
                 relink(bodies, eng.clients, slot);
+                self.land_queued_ops(eng, bodies, weapons);
                 return;
             }
             Attack::Strike(shot) => {
@@ -1159,6 +1213,7 @@ impl Cod1Module {
                 (now_ms, st),
             );
             relink(bodies, eng.clients, victim);
+            self.land_queued_ops(eng, bodies, weapons);
         }
     }
 }

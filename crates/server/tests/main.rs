@@ -20,6 +20,7 @@ mod configstrings_uo_ab;
 mod connect;
 mod cull15_ab;
 mod demos;
+mod dmgmove_ab;
 mod dmgtrig_ab;
 mod dyingpose_ab;
 mod entities_ab;
