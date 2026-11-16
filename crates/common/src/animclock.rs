@@ -220,6 +220,9 @@ struct Ramp {
     /// 1.5's and UO's step, which stores each frame's weight
     /// ([`Ramp::stepped`]); off, the line itself.
     stored: bool,
+    /// `cod2_lnxded` 1.3's goal time in seconds, as its setter stores it
+    /// ([`Ramp::cod2`]); `None` on the other engines.
+    cod2: Option<f32>,
 }
 
 impl Ramp {
@@ -230,7 +233,70 @@ impl Ramp {
             start_ms,
             ms,
             stored: false,
+            cod2: None,
         }
+    }
+
+    /// `cod2_lnxded` 1.3's `XAnimSetGoalWeight` (0x80c20de) on a node at
+    /// `weight` whose goal was `old_goal`, to `to` over `ms`: a node at 0
+    /// starts at `0.001 * to`, and the goal time is the part of `ms` the
+    /// distance from that weight takes, `(to - w) * time / to` up or `(w -
+    /// to) * time / w` down, each on the stack and stored; to 0 it is the
+    /// whole time when the old goal was not 0, else the sooner of the two.
+    /// cod2-player-anims.md 7.
+    fn cod2(weight: f32, old_goal: f32, to: f32, start_ms: i32, ms: f32, gt: f32) -> Ramp {
+        let time = (f64::from(ms) * f64::from(0.001f32)) as f32;
+        let w = if ms == 0.0 {
+            to
+        } else if weight == 0.0 {
+            (f64::from(to) * f64::from(0.001f32)) as f32
+        } else {
+            weight
+        };
+        let (w64, to64, t64) = (f64::from(w), f64::from(to), f64::from(time));
+        let gt = if to != 0.0 {
+            if to >= w {
+                ((to64 - w64) * t64 / to64) as f32
+            } else {
+                ((w64 - to64) * t64 / w64) as f32
+            }
+        } else if old_goal != 0.0 || gt > time {
+            time
+        } else {
+            gt
+        };
+        Ramp {
+            cod2: Some(gt),
+            ..Ramp::new(w, to, start_ms, gt * 1000.0)
+        }
+    }
+
+    /// The goal time a [`Ramp::cod2`] ramp has left at `now_ms`.
+    fn cod2_left(&self, now_ms: i32) -> f32 {
+        let since = now_ms.wrapping_sub(self.start_ms).max(0);
+        self.cod2_stepped(since / STEP_MS).1
+    }
+
+    /// The weight and goal time after `steps` frames of `cod2_lnxded`
+    /// 1.3's step (0x80bf112): the goal once the frame's `dt` reaches the
+    /// goal time, else `(goal - w) * dt / gt + w` on the stack, stored (one
+    /// under 1e-6 raised to `0.001 * goal`), the goal time less `dt`,
+    /// stored.
+    fn cod2_stepped(&self, steps: i32) -> (f32, f32) {
+        let dt = STEP_MS as f32 * 0.001;
+        let (mut w, mut gt) = (self.from, self.cod2.unwrap_or(0.0));
+        for _ in 0..steps {
+            if dt >= gt {
+                return (self.to, 0.0);
+            }
+            let d = (f64::from(self.to) - f64::from(w)) * f64::from(dt) / f64::from(gt);
+            w = (d + f64::from(w)) as f32;
+            if 1e-6f32 > w {
+                w = (f64::from(self.to) * f64::from(0.001f32)) as f32;
+            }
+            gt = (f64::from(gt) - f64::from(dt)) as f32;
+        }
+        (w, gt)
     }
 
     /// The setter's ramp from a weight of `from` over `ms`: a node at 0 with
@@ -282,10 +348,13 @@ impl Ramp {
     }
 
     fn at(&self, now_ms: i32) -> f32 {
+        let since = now_ms.wrapping_sub(self.start_ms);
+        if self.cod2.is_some() && since >= 0 && since % STEP_MS == 0 {
+            return self.cod2_stepped(since / STEP_MS).0;
+        }
         if self.ms <= 0.0 {
             return self.to;
         }
-        let since = now_ms.wrapping_sub(self.start_ms);
         if self.stored && since >= 0 && since % STEP_MS == 0 {
             return self.stepped(since / STEP_MS);
         }
@@ -672,7 +741,17 @@ impl ChannelClock {
             .copied()
             .chain(std::iter::once((
                 self.current,
-                Ramp::new(old_weight, 0.0, now_ms, blend).stored_on(windowed),
+                match self.stored {
+                    true => Ramp::cod2(
+                        old_weight,
+                        self.weight.to,
+                        0.0,
+                        now_ms,
+                        blend,
+                        self.weight.cod2_left(now_ms),
+                    ),
+                    false => Ramp::new(old_weight, 0.0, now_ms, blend).stored_on(windowed),
+                },
             )))
             .filter(|(p, w)| p.index != 0 && w.at(now_ms) > 0.0)
             .collect();
@@ -736,7 +815,10 @@ impl ChannelClock {
                 stored: self.stored,
             },
         };
-        self.weight = Ramp::raised(from, 1.0, now_ms, (1.0 - from) * blend).stored_on(windowed);
+        self.weight = match self.stored {
+            true => Ramp::cod2(from, 0.0, 1.0, now_ms, blend, 0.0),
+            false => Ramp::raised(from, 1.0, now_ms, (1.0 - from) * blend).stored_on(windowed),
+        };
         if !legs {
             let (torso, legs) = if new_index == 0 {
                 (0.0, 1.0)
@@ -744,8 +826,8 @@ impl ChannelClock {
                 (1.0, LEGS_UNDER_TORSO)
             };
             self.nodes = Nodes {
-                torso: goal(self.nodes.torso, torso, now_ms, blend),
-                legs: goal(self.nodes.legs, legs, now_ms, blend),
+                torso: goal(self.nodes.torso, torso, now_ms, blend, self.stored),
+                legs: goal(self.nodes.legs, legs, now_ms, blend, self.stored),
             };
         }
         Touches {
@@ -819,10 +901,16 @@ impl ChannelClock {
         {
             // `XAnimClearGoalWeight` 0x080bf53c: to 0 over the whole time,
             // or the sooner of the two when it was already going there.
-            let ramp = Ramp::new(self.weight.at(now_ms), 0.0, now_ms, blend);
-            let end = |r: &Ramp| r.start_ms as f32 + r.ms;
-            if self.weight.to != 0.0 || end(&ramp) < end(&self.weight) {
-                self.weight = ramp;
+            let w = self.weight.at(now_ms);
+            if self.stored {
+                let left = self.weight.cod2_left(now_ms);
+                self.weight = Ramp::cod2(w, self.weight.to, 0.0, now_ms, blend, left);
+            } else {
+                let ramp = Ramp::new(w, 0.0, now_ms, blend);
+                let end = |r: &Ramp| r.start_ms as f32 + r.ms;
+                if self.weight.to != 0.0 || end(&ramp) < end(&self.weight) {
+                    self.weight = ramp;
+                }
             }
         }
         if let Some((raised, ramp)) = t.raised
@@ -956,8 +1044,11 @@ fn parent(anims: &PlayerAnims, id: usize) -> Option<usize> {
 
 /// `XAnimSetGoalWeight` (0x080bd674) on a node: from wherever `ramp` stands
 /// to `to` over `|to - weight| * blend_ms`.
-fn goal(ramp: Ramp, to: f32, now_ms: i32, blend_ms: f32) -> Ramp {
+fn goal(ramp: Ramp, to: f32, now_ms: i32, blend_ms: f32, cod2: bool) -> Ramp {
     let from = ramp.at(now_ms);
+    if cod2 {
+        return Ramp::cod2(from, ramp.to, to, now_ms, blend_ms, ramp.cod2_left(now_ms));
+    }
     Ramp::raised(from, to, now_ms, (to - from).abs() * blend_ms)
 }
 
@@ -1103,6 +1194,36 @@ mod tests {
         assert_eq!((p.time_ms, p.time(2999)), (2950, at));
         p.looping = false;
         assert_eq!(p.time(9000), 1.0);
+    }
+
+    #[test]
+    fn a_cod2_node_set_from_0_takes_the_goal_time_off_its_raised_weight() {
+        // The weights `cod2_lnxded` stepped after a strafe's clip set at
+        // 10200 (120 ms) and an idle set out of a run at 10450 (250 ms),
+        // read under gdb (cod2-player-anims.md 7).
+        let words = |blend: f32, n: i32| -> Vec<u32> {
+            let r = Ramp::cod2(0.0, 0.0, 1.0, 0, blend, 0.0);
+            (0..n).map(|i| r.at(i * STEP_MS).to_bits()).collect()
+        };
+        assert_eq!(
+            words(120.0, 4),
+            [0x3a83_126f, 0x3ed5_d867, 0x3f55_96de, 0x3f80_0000]
+        );
+        assert_eq!(
+            words(250.0, 6),
+            [
+                0x3a83_126f,
+                0x3e4d_d2f2,
+                0x3ecd_4fdf,
+                0x3f19_db23,
+                0x3f4d_0e56,
+                0x3f80_0000
+            ]
+        );
+        // Out to 0 from a full weight: the whole time.
+        let out = Ramp::cod2(1.0, 1.0, 0.0, 0, 120.0, 0.0);
+        let w: Vec<u32> = (0..4).map(|i| out.at(i * STEP_MS).to_bits()).collect();
+        assert_eq!(w, [0x3f80_0000, 0x3f15_5556, 0x3e2a_aaae, 0]);
     }
 
     #[test]

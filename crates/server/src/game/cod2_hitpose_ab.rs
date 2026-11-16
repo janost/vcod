@@ -132,6 +132,11 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str) -> Vec<Round> {
             p.ps.command_time
         };
         level.run_frame(t);
+        // The shooter's look-at, which the replay leaves out of the level,
+        // builds the target once a frame (cod2-combat.md 9.5).
+        if let Some(s) = shooter.side.at(t) {
+            level.look_trace_from(&PlayerState::from_wire(&s.ps));
+        }
         if std::env::var("HITPOSE_BONES").is_ok_and(|v| v == t.to_string()) {
             for (n, w, b) in level.body_bones(0) {
                 eprintln!(

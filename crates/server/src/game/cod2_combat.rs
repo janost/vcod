@@ -243,7 +243,8 @@ struct ServerBody {
 /// bone was (else only the traced ones).
 type Built = (u32, Rc<PlayerRig>, Rc<Vec<Mat>>, bool);
 
-/// Each built bone's place and turn in the model's frame, for the box walk.
+/// Each built bone's place and turn in the model's frame, for the tests' tags.
+#[cfg(test)]
 fn mat_worlds(mats: &[Mat]) -> Vec<(Vec3, glam::Quat)> {
     mats.iter()
         .map(|m| {
@@ -909,28 +910,27 @@ impl Cod2Level {
         let (rig, pose, _) = self.body_pose(slot, origin)?;
         drop(p);
         let _p = crate::tick_profile::phase("bodies/bones");
-        // The DObj sits at `r.currentAngles`, the unsnapped view's yaw.
+        // The DObj sits at `r.currentAngles`, the unsnapped view's yaw;
+        // `SV_PointTraceToEntity` (lnxded 0x809d0b1) moves the line into
+        // its frame (0x80a74f8) and turns the normal back out (0x80a71b6).
         let yaw = self.players[slot].as_ref()?.ps.view_angles[1];
-        let placed = BodyFrame {
-            origin,
-            angles: [0.0, yaw, 0.0],
-            ..Default::default()
-        }
-        .transform();
-        // Into the model's frame: the transform's inverse.
-        let inv = placed.inverse();
-        let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
-        let worlds = mat_worlds(&pose);
-        let mut hit = vcod_common::bonetrace::bone_trace_worlds(
+        let axis = vcod_common::x87::angles_to_axis(Vec3::new(0.0, yaw, 0.0));
+        let into = |p: Vec3| vcod_common::x87::into_frame_x87(p, &axis, origin).to_array();
+        let h = vcod_cod2::player::dobj::traceline(
             &rig.skeleton,
-            &worlds,
-            ls,
-            le,
+            &pose,
+            into(start),
+            into(end),
             priority,
             limit,
         )?;
-        hit.normal = placed.transform_vector3(hit.normal);
-        Some(hit)
+        Some(vcod_common::bonetrace::BoneHit {
+            fraction: h.fraction,
+            hit_location: h.hit_location,
+            bone: h.bone,
+            start_solid: h.start_solid,
+            normal: vcod_common::x87::out_of_frame_x87(Vec3::from(h.normal), &axis),
+        })
     }
 
     /// Where `names` sit in the world on a skeleton built at `now_ms` from
@@ -970,6 +970,34 @@ impl Cod2Level {
                 placed.transform_point3(worlds[i].0)
             })
             .collect()
+    }
+
+    /// The look-at trace (`Player_UpdateLookAtEntity`, as
+    /// [`Self::look_at_flags`] runs it) of a shooter the gate keeps out of
+    /// the level, off its playerstate `ps`: a body whose actor box the view
+    /// meets builds its skeleton under the frame's stamp, so its controls
+    /// ease once a frame (cod2-combat.md 9.5).
+    #[cfg(test)]
+    pub(super) fn look_trace_from(&mut self, ps: &PlayerState) {
+        let eye = Self::player_view_origin(ps, self.level_time());
+        let forward = angle_vectors(Vec3::from_array(ps.view_angles))[0];
+        let end = eye + forward * 15000.0;
+        self.locational_trace(
+            eye,
+            end,
+            None,
+            0x2280_2801,
+            &BULLET_PRIORITY,
+            &HashMap::new(),
+        );
+    }
+
+    /// `slot`'s last built skeleton, by the body model's bone order: what
+    /// a gate sets beside retail's dumped `DObjAnimMat`s.
+    #[cfg(test)]
+    pub(super) fn built_body_mats(&self, slot: usize) -> Option<Vec<Mat>> {
+        let (_, rig, pose, _) = self.combat.bodies[slot].built.as_ref()?;
+        Some(rig.skeleton.model_map(0).iter().map(|&i| pose[i]).collect())
     }
 
     /// `slot`'s bones as [`Self::body_pose`] poses them, in the model's

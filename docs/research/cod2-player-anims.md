@@ -201,6 +201,27 @@ onto that clip rather than starting it; it now sets none, and the
 `hit-melee` contacts land on retail's digits (cod2-combat.md 9.7).
 VERIFIED, the gate.
 
+`cod2_lnxded`'s setter (0x80c20de) differs from 1.1's and 1.5's in the
+goal time: a node at weight 0 is raised to `0.001 * goal` first, and the
+goal time is then the part of the given time that distance from the
+raised weight takes, `(goal - w) * time / goal` going up and `(w - goal)
+* time / w` going down, stored at info +0x18; going to 0 it is the whole
+time when the old goal (+0x1c) was not 0, else the sooner of the two.
+VERIFIED (the instructions). The step (0x80bf112) lands on the goal once
+the frame's `dt` reaches the goal time, else stores `(goal - w) * dt / gt
++ w` (one under 1e-6 raised to `0.001 * goal`) and takes `dt` off the
+goal time. VERIFIED (the instructions). So a fresh clip in a 120 ms
+cross-fade reads 0.001, 0.417667 and 0.834333 before 1, where the whole
+time off 0.001 gave 0.41725 and 0.8335. VERIFIED (gdb, the antilag recipe
+under `tools/re/cod2_skel_gdb.py`: every leaf weight of the target's
+builds from 9000 to 17150 matches vcod's word for word, the stand to run
+and run to stand fades included). vcod's channel clock runs this setter
+and step on CoD2 bodies (`Ramp::cod2`). The same dump's node times part
+from vcod's at 12100, the frame after a run clip set at 12000 off the
+other run clip's time: retail's step from 12050 is 0.0083 where vcod's is
+near 0.1, so the rate the lerp frame hands that clip differs in the
+frames after a strafe's turn. VERIFIED (the dump); why is not known.
+
 ## 8. What vcod carries over
 
 - `vcod_cod2::player` runs 1.1's `animtree`, `animclock` (1.5's windowed
@@ -522,3 +543,72 @@ leaves it (vcod_common's `F80`). VERIFIED (the disassembly).
   0x80a7436's sums on the stack) of `tag_weapon_right` matches retail's
   word for word once the legs clip's node time is retail's (cod2-protocol.md
   15.7). VERIFIED (gdb, the gate).
+
+## 12. The trace through the boxes
+
+How `cod2_lnxded` 1.3 traces a line through a posed body's hit boxes.
+`vcod_cod2::player::dobj::traceline` is its port; `body_trace` in
+`game::cod2_combat` runs it for the server. Addresses lnxded; the build is
+the unoptimized one of section 11 (each float variable a store, the stack
+at 64-bit precision).
+
+- `SV_PointTraceToEntity` (0x809d0b1) builds the body (`G_DObjCalcPose`,
+  0x809d11b), takes `AnglesToAxis(r.currentAngles)` (0x80a94aa: forward,
+  `vec3_origin - right`, up) and moves the clip's start and end into the
+  body's frame through 0x80a74f8: each `p - origin` stored, each dot with a
+  row `((d.x r.x + d.y r.y) + d.z r.z)` on the stack, stored. It then calls
+  `DObjTraceline` (0x80bb27e) with the priority map and the clip's fraction
+  as the limit; a nearer result takes the fraction and turns the normal
+  out through 0x80a71b6 (each component's three products summed on the
+  stack, stored). An entity with 0x4 in its +0xf2 byte takes 0x80bbb32
+  instead.
+  VERIFIED (the instructions).
+- `DObjTraceline`: `dir = end - start` stored, its squared length stored
+  (0 returns), `1 / len2` stored. The walk runs every model's bones in
+  order with the global bone index, skips a model whose bit is set in the
+  DObj's +0x1a, resolves each bone's location (one whose priority is 1
+  takes its original's on a duplicate, else its parent's, a root's the
+  bone it attaches to) and skips a bone whose `radiusSquared` (bone info +0x24) is
+  0 or whose priority is under the best so far (2 at the start). VERIFIED
+  (the instructions).
+- The sphere: the box centre (bone info +0x18) placed by the bone's rows
+  as 0x80bc39e places a translation (0x80ab3f8); `v = start - c` stored;
+  `t = -(v . dir) * (1 / len2)` on the stack, stored; the squared distance
+  of the nearest point (`v + t dir` stored when `0 < t < 1`, else `v` or
+  `end - c`) stored; `r2 - dist2` stored, a bone with `0 >= gap` skipped.
+  At the best priority, `t - sqrtf(gap / len2)` (libm `sqrtf`, the
+  difference on the stack) at or past the result's fraction skips it too.
+  VERIFIED (the instructions). Both tests only cull boxes the slab test
+  would not take nearer. INFERRED. The loader stores the centre `(mins +
+  maxs) * 0.5` and `|maxs - centre|^2` (0x80c7322, 0x80c7344, 0x80c736c).
+  VERIFIED (the instructions).
+- The slab, in the bone's frame (0x80bb1f0: `p - trans` stored, each dot
+  with a row of 0x80ab4a0's matrix on the stack, stored): the mins with
+  sign -1, then the maxs with +1, each axis `d1 = (ls - plane) * sign` and
+  `d2` alike stored. `d1 > 0` and `d2 > 0` skip the bone; `d1 > 0` clears
+  the starts-inside flag and, when `d1 > enter * den` (`den = d1 - d2`
+  stored), stores `enter = d1 / den`, skips the bone once `enter >= exit`,
+  else records the plane's axis and sign; `d2 > 0` alone clears the
+  ends-inside flag and moves `exit` down alike. `enter` starts at 0; `exit`
+  at the result's fraction when the bone's priority is the best so far,
+  else at the call's limit, so a higher priority takes a box behind a
+  nearer hit. VERIFIED (the instructions).
+- A segment inside a box end to end returns at once with fraction 0 unless
+  `dir.xy . start.xy > 0` (on the stack), which skips the bone; its normal
+  is `start.xy` normalized (0x80a44c2) or, with no `dir.xy`, z `-1` for a
+  `dir.z` at or over 0 and `+1` under it. One that starts inside and leaves
+  is skipped. VERIFIED (the instructions).
+- Otherwise a bone at the best priority whose `enter` is at or past the
+  result's fraction is skipped; one that is not takes the fraction, the
+  location and the best priority. The normal is built once at the end:
+  the struck bone's row of the recorded axis times the recorded sign,
+  stored. The sign (ebp-0x118) is whichever bone's entry last recorded
+  one, a later bone the walk skipped included; the axis (ebp-0x11c) is
+  copied at the hit. VERIFIED (the instructions).
+- `tools/re/cod2_trace_gdb.py` dumped every call on the antilag recipe
+  (`crates/cod2/tests/fixtures/trace/antilag-gdb.txt`, 84 of 406 kept):
+  the port off each dumped line, map, limit and bones gives retail's
+  fraction, hit location and normal word for word, and the caller's
+  move of the line into the body word for word. VERIFIED
+  (`dobj_trace_ab`, 84 traces, 406 on the whole dump). The port costs
+  about 8 us a trace in the dev profile. VERIFIED (a timing run).

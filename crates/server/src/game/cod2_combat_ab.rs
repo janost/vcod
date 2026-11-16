@@ -74,32 +74,12 @@ const CAPTURES: &[&str] = &[
 
 /// What the replay still gets wrong: (capture, check, count, why). The
 /// counts are exact. Each reason names its section of cod2-combat.md.
-const GAPS: &[(&str, &str, usize, &str)] = &[
-    (
-        "hit-throw",
-        "missile pos.trBase[1]",
-        58,
-        "9.4 the bounce off the target's body: last bits",
-    ),
-    (
-        "hit-throw",
-        "missile pos.trBase[2]",
-        3,
-        "9.4 the bounce off the target's body: last bits",
-    ),
-    (
-        "hit-throw",
-        "missile pos.trDelta[0]",
-        6,
-        "9.4 the bounce off the target's body: last bits",
-    ),
-    (
-        "hit-throw",
-        "missile pos.trDelta[2]",
-        3,
-        "9.4 the bounce off the target's body: last bits",
-    ),
-];
+const GAPS: &[(&str, &str, usize, &str)] = &[(
+    "hit-throw",
+    "missile pos.trDelta[2]",
+    3,
+    "9.4 the bounce off the target's body: last bits",
+)];
 
 /// The glibc seed each capture's server drew from (`G_InitGame`'s
 /// `srand(Sys_MillisecondsRaw())`, which `Rand_Init` seeds `holdrand`
