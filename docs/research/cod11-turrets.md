@@ -2566,6 +2566,35 @@ Open, held as `gunduel_ab` gaps:
   own pose in the thread pass is retail's; the bone trace is not ported
   store for store (13.5).
 
+What a 1.1d rerun of the duel holds (2026-11-16, `probe_gunduel` under gdb,
+both gunners' anim info records at the first `DObjCalcSkel` on each in the
+entity and end-frame passes, as `tools/re/gdb_gunner_tree.py` reads them;
+the rerun's hits sit up to 0.02 off the fixture's, so it is read on its own
+and not replayed):
+
+- VERIFIED: on the duel's first frame (26250) slot 0, placed this frame,
+  holds `standMG42_aim` at 1 (goal 0, goal time 0.17) and `standMG42_fire`
+  at 0.001; slot 1, not yet placed, the aim group alone. On the second
+  both read aim 0.7059 and fire 0.2948 with the fire node's time at 0.3,
+  then 0.6: the sync node steps `6 * 0.05` a frame from 0 and copies the
+  time to its rows and leaves. vcod measurement: ours' victims carry the
+  same weights, node times and rows on those frames (the replay's aims
+  differ by the run), so on 1.1d the firing gunner's tree is not what the
+  duel misses.
+- VERIFIED: on the frame a turn phase ends (the script's `rest` at 23100
+  and 25700; the trigger's release reaches the client a frame or more
+  later), retail places the fire group once more at the `rest` view while
+  the legs still play it: its goals jump to level 0.56, 15down 0.44, leaves
+  0.5 and 0.5, and once the fire node is out the step lands every row on
+  them (0x80bb130's arm for a node with neither weight nor goal). Ours'
+  slot 0 reads the `rest` view a frame later (its end frame 23100 still
+  carries the sweep's `aim_at`), so its fire group keeps the sweep's last
+  rows (level 0.6506, leaves 0.117 and 0.883). INFERRED: this moves only
+  the duel's first frame, where the fire node weighs 0.001: the strict
+  clear keeps the stale rows (the node is weighted by then) and the next
+  step lands them on the placement's goals. Why ours' view lags there is
+  not determined.
+
 ## 14. The client
 
 How `cgame_mp_x86.dll` (1.1, image base 0x30000000) draws a turret, puts a
