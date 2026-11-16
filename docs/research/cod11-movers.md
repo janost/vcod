@@ -1040,10 +1040,42 @@ code at `0x30035b0a..0x30035b67`: `commandTime` test against the copy
 angle out and moves only entities 1 to `0x3fd` of `eType` 5 or 8, as 1.1's
 `0x3001baa0`.
 
+The time the turn runs to is last frame's `cg.time`:
+
+- VERIFIED, cgame 1.1 `CG_DrawActiveFrame` (`0x30033980`): unless its
+  second argument is 2 (`cmp $0x2,%ebp`, Q3's `STEREO_RIGHT`), it copies
+  `0x30207148` into `0x3020714c` (`0x300339a1..0x300339a7`), then stores its
+  first argument into `0x30207148` (`0x300339c4`), the difference into
+  `0x30207144` (`0x300339e6`), and on a negative difference 0 there and the
+  new time into `0x3020714c` (`0x300339ee..0x300339f6`). The first argument
+  is `cl.serverTime`: `CoDMP.exe` `0x404bc0` passes `[0x1434a64]` to
+  `vmMain(3, ...)`, and vmMain's case 3 (`0x300203cf..0x300203e2`) hands it
+  on as the first argument.
+- VERIFIED: 1.5's cgame does the same at `0x300351a9..0x300351fe` with
+  `cg.time` at `0x3020af00` and `cg.oldTime` at `0x3020af04`, the to time
+  its prediction passes at `0x3002aa7d`; UO's at `0x30042185..0x300421da`
+  with `0x304831b0` and `0x304831b4`, the to time of `0x30035b0a`.
+- VERIFIED, 1.1 `0x3003032c..0x3003033f` (in `0x300302c0`, which opens
+  with trap `0x50`) and `0x3002fa49..0x3002fa53` (`0x3002fa40`, called at
+  `0x300303d8`): each stores a snapshot into `0x301e2160` and its
+  `serverTime` (`+0x8`) into both `0x30207148` and `0x3020714c`. INFERRED,
+  off Q3's `CG_ProcessSnapshots` shape and the null test on `0x301e2160`
+  at `0x30030304`: taking the first snapshot sets `cg.time` and
+  `cg.oldTime` to its time; that frame has no prediction before it, so
+  nothing turns.
+
+INFERRED: `cg.oldTime` is the time last frame drew at, not the predicted
+view's: the turn runs to the newest cmd of last frame, which retail stamps
+with `cl.serverTime`.
+
 vcod (`play::predict::Predictor::predict`, `Replay::run`) runs the same add
 inside the replay, before the first cmd past last frame's `commandTime`,
-reached exactly, with the ground at that point and last frame's render clock
-as `cg.oldTime`. vcod keeps its replay across frames and runs only new cmds,
+reached exactly, with the ground at that point, turned to last frame's
+`cg.time` (`Predictor::set_time`, fed the client's server time every frame;
+test `a_turning_mover_turns_the_predicted_yaw`). Until 2026-11-16 it turned
+to the clock its predicted origin is sampled at, which runs up to two cmds
+(16 ms) behind the newest cmd, so the turn came short by up to 16 ms of the
+mover's angular speed. vcod keeps its replay across frames and runs only new cmds,
 which on a turning ground would keep each cmd's own frame's turn; so a frame
 with a new cmd whose cached state holds or would take a turn replays from the
 snapshot, as retail does every frame. A frame with no new cmd keeps last

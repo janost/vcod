@@ -67,7 +67,7 @@ struct Replay {
     turned: bool,
 }
 
-/// Last frame's `commandTime` and render clock: where retail's replay
+/// Last frame's `commandTime` and `cg.oldTime`: where retail's replay
 /// turns the yaw with the ground mover, and the time it turns to.
 type TurnAt = Option<(i32, i32)>;
 
@@ -228,6 +228,8 @@ pub struct Predictor {
     /// replays every cmd every frame, and this is exact only while the clip
     /// is static.
     replay: Option<Replay>,
+    /// `cg.oldTime` and `cg.time`, as [`Predictor::set_time`] last set them.
+    cg_time: Option<(i32, i32)>,
     /// The render clock in cmd-time ms: advanced by local frame time only,
     /// so a snapshot or the server clock's re-anchor never moves it, and
     /// held within two cmds behind the newest. With the local ms it was
@@ -331,10 +333,22 @@ impl Predictor {
         })
     }
 
-    /// Last frame's `commandTime` and render clock, while there was a last
+    /// The frame's `cg.time`, the client's server time it draws at, set
+    /// every frame before [`Self::predict`]. `CG_DrawActiveFrame` (cgame 1.1
+    /// 0x300339a1..0x300339f6) moves last frame's into `cg.oldTime` first
+    /// and, when the time ran back, sets `cg.oldTime` to it as well.
+    pub fn set_time(&mut self, time: i32) {
+        let old = match self.cg_time {
+            Some((_, last)) if time >= last => last,
+            _ => time,
+        };
+        self.cg_time = Some((old, time));
+    }
+
+    /// Last frame's `commandTime` and `cg.oldTime`, while there was a last
     /// frame.
     fn turn_at(&self) -> TurnAt {
-        Some((self.last?.0, self.drawn?.0 as i32))
+        Some((self.last?.0, self.cg_time?.0))
     }
 
     /// A new snapshot or moved bodies: rebuild from the snapshot, replay every
@@ -786,9 +800,9 @@ mod tests {
 
     /// On a brush model turning 90 degrees a second, the second frame's
     /// new cmd runs with the yaw turned by what the mover turned from the
-    /// snapshot to the first frame's time, after a replay from the
-    /// snapshot; the first frame, with no frame before it, does not turn
-    /// (cgame 0x3002972d).
+    /// snapshot to `cg.oldTime`, the first frame's `cg.time`, after a replay
+    /// from the snapshot; the first frame, with no frame before it, does not
+    /// turn (cgame 0x3002972d).
     #[test]
     fn a_turning_mover_turns_the_predicted_yaw() {
         let world = vcod_common::collision::submodel_test_world(
@@ -814,29 +828,46 @@ mod tests {
         set(&mut snap, "groundEntityNum", 177);
         let mut pr = Predictor::default();
         let r = ring((1008..=1048).step_by(8), false);
+        pr.set_time(1050);
         let first = pr
             .predict(P, &snap, &r, &world, &[], &movers, &[], 0.0)
             .unwrap();
         let base = first.delta_angles;
-        let (old_t, _) = pr.drawn.unwrap();
+        // The drawn origin's clock sits behind the newest cmd; the turn does
+        // not run to it.
+        assert!(pr.drawn.unwrap().0 < 1048.0);
         // The new cmd replays every cmd from the snapshot, the newest turned
-        // by what the wheel turned up to last frame's render clock.
+        // by what the wheel turned up to last frame's `cg.time`.
         let runs = pr.cmds_run;
         let r = ring((1008..=1056).step_by(8), false);
+        pr.set_time(1058);
         let next = pr
             .predict(P, &snap, &r, &world, &[], &movers, &[], 8.0)
             .unwrap();
-        let turned = angle_to_short(90.0 * (old_t as i32 - 1000) as f32 / 1000.0);
-        assert!(turned > 0);
+        let turned = angle_to_short(90.0 * 50.0 / 1000.0);
         assert_eq!(next.delta_angles[1], base[1].wrapping_add(turned));
         assert_eq!(pr.cmds_run - runs, 7);
         // No new cmd: nothing runs and the turn stays.
         let runs = pr.cmds_run;
+        pr.set_time(1062);
         let same = pr
             .predict(P, &snap, &r, &world, &[], &movers, &[], 12.0)
             .unwrap();
         assert_eq!(same.delta_angles, next.delta_angles);
         assert_eq!(pr.cmds_run, runs);
+    }
+
+    /// `cg.oldTime` is last frame's `cg.time`, or this frame's when the time
+    /// ran back (cgame 1.1 0x300339a1..0x300339f6).
+    #[test]
+    fn old_time_is_last_frames_time() {
+        let mut pr = Predictor::default();
+        pr.set_time(1000);
+        assert_eq!(pr.cg_time, Some((1000, 1000)));
+        pr.set_time(1016);
+        assert_eq!(pr.cg_time, Some((1000, 1016)));
+        pr.set_time(1010);
+        assert_eq!(pr.cg_time, Some((1010, 1010)));
     }
 
     /// A free-flying spectator is predicted as retail's cgame predicts one:

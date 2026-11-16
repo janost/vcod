@@ -6825,6 +6825,9 @@ impl ApplicationHandler for App {
                                             join.cvars.get(c, net.configstrings(), &self.shell)
                                         })
                                     };
+                                    if let Some(t) = render_time {
+                                        predictor.set_time(t);
+                                    }
                                     let predicted = if ps_client == client_num && !demo {
                                         net.snapshots().newest().and_then(|s| {
                                             let bodies = play::predict::solid_bodies(
