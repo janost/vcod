@@ -1536,6 +1536,27 @@ the target's bones and logs where they stand every frame from 8500 to
   but `trDelta[2]` go right in every row, and its 3 are the 10200 bounce
   by a last bit. VERIFIED, the gate. So what is left is the bounce's own
   arithmetic, the bones and the walk matching. INFERRED.
+- `G_BounceMissile` is lnxded 0x810d1a8. The hit time is
+  `level.previousTime + (int)((level.time - level.previousTime) * fraction)`,
+  the product on the stack and truncated under the control word or-ed with
+  0xc00. VERIFIED, the instructions. The velocity comes off
+  `BG_EvaluateTrajectoryDelta` (0x80df948): its `TR_GRAVITY` arm stores
+  the seconds `(time - trTime) * 0.001f` (rodata 0x8154dbc) as a float,
+  copies `trDelta`, and takes `t * 800` (rodata 0x8154dc0) off the copy's
+  z on the stack, one store. VERIFIED, the instructions.
+- The bounce's arithmetic, each float variable a store: `DotProduct`
+  (0x810ecf2) sums on the stack; the reflection is `VectorMA(velocity,
+  dot * -2, normal)` (rodata 0x815ae28; 0x810ec9e, each component `s n + v`
+  on the stack, stored); `VectorLength` (0x810ed26) stores the square sum
+  before libm `sqrt` and the root after (0x810ed64); the factor is
+  `(perpendicular - parallel) * square + parallel` on the stack, `square`
+  the stored `dot / -speed`, and `VectorScale` (0x810ec66) stores each
+  product; the lift is `VectorScale(normal, 0.1f)`. VERIFIED, the
+  instructions. vcod rounded `800 * t` to a float before the subtraction:
+  that put the 10200 bounce's `trDelta[2]` a last bit off (43.12476
+  against 43.124756), and with the z taken in one store `hit-throw`'s
+  missile matches in every row; the bounce's own stores move no row.
+  VERIFIED, the gate.
 - `BG_EvaluateTrajectory` (lnxded 0x80df5d4) stores the seconds as a
   float, then runs `VectorMA` (0x80e11b8) on the stack with one store
   per component; `TR_GRAVITY` then takes `t * 400 * t` off the stored z
