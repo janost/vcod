@@ -3015,6 +3015,7 @@ mod tests {
                         es: vcod_server::game::combat::HookEs {
                             seat: Some((v.pose.kind, seat)),
                             weapon,
+                            eflags: None,
                         },
                         ci_seat_angles: served.angles,
                         ..Default::default()
