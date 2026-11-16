@@ -746,8 +746,9 @@ a giType compare against 1 at 0x4e808; an add of 90 (0x74e40) to the roll
 (`ent+0x148`, 0x4e814); then `G_SetAngle`, `G_SetOrigin` and
 `trap_LinkEntity` (0x4e82b..0x4e847). VERIFIED: only
 `G_SpawnEntitiesFromString` writes `level.spawning` (0x622e4, 0x62326).
-INFERRED, then VERIFIED by section 14.9's captures: during the map load an item waits 200 ms for `FinishSpawningItem`;
-outside it (a script `spawn`) the item is linked in place and, unless
+VERIFIED, section 14.9's captures: during the map load an item waits 200
+ms for `FinishSpawningItem`. INFERRED: outside it (a script `spawn`) the
+item is linked in place and, unless
 `spawnflags & 1`, gets `groundEntityNum` 0x3ff and, for a weapon, the +90
 roll. INFERRED: a script spawn with `spawnflags & 1` skips both, since the
 `jne` at 0x4e7ff passes over the 0x3ff store and the roll add. VERIFIED,
