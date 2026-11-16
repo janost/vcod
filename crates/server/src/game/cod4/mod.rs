@@ -660,6 +660,10 @@ pub struct Cod4HostState {
     /// Each slot's body as its last end frame left it, what `clonePlayer`
     /// and `dropItem` read.
     pub corpse_source: Vec<Option<crate::game::builtins::cod4_combat::CorpseSource>>,
+    /// The clients a bullet's antilag moved (`G_AntiLagRewindClientPos`
+    /// at 0x808a71c) at their rewound `r.currentOrigin`, until its restore
+    /// (0x808a99a): what a `dropItem` inside the round's damage reads.
+    pub antilag: HashMap<usize, glam::Vec3>,
     /// Each slot's `death` event commands as its last end frame would play
     /// them; `player_die` draws one (`vcod_cod4::pmove::anim::event_choices`).
     pub death_anims: Vec<Vec<vcod_cod4::pmove::anim::EventAnim>>,
@@ -965,6 +969,7 @@ impl Default for Cod4HostState {
             bursts: Vec::new(),
             free_next: Vec::new(),
             corpse_source: vec![None; MAX_CLIENTS],
+            antilag: HashMap::new(),
             death_anims: vec![Vec::new(); MAX_CLIENTS],
             pm_flags: vec![0; MAX_CLIENTS],
             view_angles: vec![[0.0; 3]; MAX_CLIENTS],
