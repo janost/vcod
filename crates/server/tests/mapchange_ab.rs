@@ -11,7 +11,8 @@
 //! What is compared is an ordered subsequence of markers -- the intermission
 //! frame, the restart's three reliable commands, the respawn, the second
 //! intermission, the out-of-band notice, the gamestate and the respawn on the
-//! second map -- and the interval between named pairs of them, plus the
+//! second map -- and the interval between named pairs of them, the script
+//! waits and the respawns frame for frame on the server clock, plus the
 //! presence of each command in [`BURST_CMDS`] and [`INTERMISSION_CMDS`] on
 //! both sides. The restart's configstring burst is compared slot for slot
 //! ([`burst_slots`]); the rest is not a command-for-command diff.
@@ -40,15 +41,8 @@ const ORDER_TOL_MS: i64 = 100;
 /// goes out fragmented").
 const GAMESTATE_FRAGMENT_MS: i64 = 5 * 50;
 
-/// The `wait 10` in `dm.gsc`'s `endMap`, which both sides count off the same
-/// script clock. Five frames of slack for the frame each side happens to land
-/// on plus the probe's pump: retail's two are 10133 and 10017 ms.
-const WAIT_TOL_MS: i64 = 250;
-
-/// A respawn waits on the client answering the weapon menu, which is a client
-/// round trip and not a server property, so those two rows are bounded rather
-/// than compared: ten frames, well inside which both sides land.
-const MENU_TOL_MS: i64 = 500;
+/// A server frame: the grid both servers' snapshot `serverTime`s sit on.
+const FRAME_MS: i32 = 50;
 
 /// How often the probe asks for the scoreboard, and this replay with it.
 const SCORE_PERIOD_MS: i64 = 2000;
@@ -146,6 +140,48 @@ impl<'a> Marks<'a> {
     fn gap(&self, from: &str, to: &str) -> i64 {
         self.ms(to) - self.ms(from)
     }
+
+    /// A trace marker's snapshot `serverTime`.
+    fn server_time(&self, name: &str) -> i32 {
+        self.event(name)
+            .server_time
+            .unwrap_or_else(|| panic!("{}: {name:?} is not a trace", self.who))
+    }
+}
+
+/// The level start time a restart's `d 3 n\ambient_<map>\t\<start>` carries:
+/// `level.startTime` on the server's clock (map-cycle doc 4.5).
+fn level_start(cmd: &str) -> Option<i32> {
+    let info = cmd.strip_prefix("d 3 ")?;
+    vcod_common::net::info_value_for_key(info, "t")?
+        .parse()
+        .ok()
+}
+
+/// The server frame an untimed line went out after: the `serverTime` of the
+/// last snapshot the server built before it. A connectionless packet carries
+/// no clock, so each trace from `from_ms` up to the line counts whole frames
+/// off its own snapshot by the receive clock, and every one of them has to
+/// name the same frame: a line the traces put on two frames is a capture this
+/// cannot read, never one it rounds.
+fn frame_before(who: &str, events: &[NetchanEvent], from_ms: i64, line: &NetchanEvent) -> i32 {
+    let frames: Vec<i32> = events
+        .iter()
+        .filter(|e| e.ms >= from_ms && e.ms <= line.ms)
+        .filter_map(|e| {
+            let st = e.server_time?;
+            Some(st + (line.ms - e.ms) as i32 / FRAME_MS * FRAME_MS)
+        })
+        .collect();
+    let first = *frames
+        .first()
+        .unwrap_or_else(|| panic!("{who}: no trace between {from_ms} ms and the line"));
+    assert!(
+        frames.iter().all(|f| *f == first),
+        "{who}: the traces put the line at {} ms on frames {frames:?}",
+        line.ms
+    );
+    first
 }
 
 /// Every command within `window` ms either side of `at`, which is how a
@@ -231,16 +267,46 @@ fn a_dm_map_end_and_rotation_match_retail() {
     let r = Marks::scan("retail", &retail);
     let o = Marks::scan("ours", &ours);
 
-    // --- the two script waits, the one interval both sides really count ---
+    // --- the two script `wait 10`s, frame for frame on the server clock ---
+    // The first runs from the intermission's snapshot to the restarted
+    // level's start, the second to the frame `loadingnewmap` goes out after.
+    let waits = |m: &Marks, events: &[NetchanEvent]| {
+        let restart = level_start(m.event("restart d 3").cmd().unwrap())
+            .unwrap_or_else(|| panic!("{}: the restart's `d 3` carries no `t`", m.who));
+        // Ours carries the newest snapshot it followed; retail's line has
+        // to be put on the frame grid off its traces.
+        let line = m.event("loadingnewmap");
+        let notice = line
+            .server_time
+            .unwrap_or_else(|| frame_before(m.who, events, m.ms("second intermission"), line));
+        [
+            restart - m.server_time("intermission"),
+            notice - m.server_time("second intermission"),
+        ]
+    };
+    let (rw, ow) = (waits(&r, &retail), waits(&o, &ours));
+    assert_eq!(
+        rw, ow,
+        "the intermission -> restart and second intermission -> loadingnewmap waits, \
+         in server ms: retail {rw:?}, ours {ow:?}"
+    );
+
+    // --- the respawn, frame for frame ---
+    // Each menu answer costs the probe a frame on retail: the answer to the
+    // snapshot that offered it is read on the next frame. The replay's
+    // client answers on the frame it reads a menu too, so the spawn lands on
+    // the same frame of the server clock.
     for (from, to) in [
-        ("intermission", "restart d 3"),
-        ("second intermission", "loadingnewmap"),
+        ("restart spectator", "restart playing"),
+        ("map spectator", "map playing"),
     ] {
-        let (rg, og) = (r.gap(from, to), o.gap(from, to));
-        assert!(
-            (rg - og).abs() <= WAIT_TOL_MS,
-            "{from} -> {to}: retail {rg} ms, ours {og} ms, over the {WAIT_TOL_MS} ms \
-             `wait 10` tolerance"
+        let gap = |m: &Marks| m.server_time(to) - m.server_time(from);
+        assert_eq!(
+            gap(&r),
+            gap(&o),
+            "{from} -> {to}: retail {} server ms, ours {}",
+            gap(&r),
+            gap(&o)
         );
     }
 
@@ -266,19 +332,6 @@ fn a_dm_map_end_and_rotation_match_retail() {
             m.who,
             m.gap("gamestate", "map spectator")
         );
-        // Bounded rather than compared: the respawn waits on the client's own
-        // answer to the weapon menu.
-        for (from, to) in [
-            ("restart spectator", "restart playing"),
-            ("map spectator", "map playing"),
-        ] {
-            assert!(
-                (0..=MENU_TOL_MS).contains(&m.gap(from, to)),
-                "{}: {from} -> {to} is {} ms, past the {MENU_TOL_MS} ms menu round trip",
-                m.who,
-                m.gap(from, to)
-            );
-        }
     }
 
     // --- `EF_TELEPORT_BIT`, spawn for spawn ---
