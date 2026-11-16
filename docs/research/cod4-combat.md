@@ -868,6 +868,16 @@ prone and killcam runs. VERIFIED (the gates).
   (185.978, 2278.777, 246.538) in the prone run, where retail's item starts
   at (210, 2311, 286) and (186, 2279, 246). VERIFIED (the gates' captures,
   ours's pose). INFERRED that the tag is `tag_weapon_right`.
+- `Drop_Weapon`'s sweep (0x80918ed..0x80919f7): from the box's middle,
+  `(mins + maxs) / 2` plus `r.currentOrigin`, to the tag's origin with
+  the item's box, passing the dropper, under the item's mask; the start
+  is the sweep's lerp. The killed callback drops before `player_die`
+  lowers the box, so `maxs[2]` reads 70 for a standing body. VERIFIED
+  (gdb at 0x80918ed and 0x80919d2: the floor run's sweep clear, the
+  start the tag). Ours sweeps from the live box (`CorpseSource::height`).
+  In that run ours's tag sits 0.002, 0.006 and 0.01 off retail's
+  (204.43567, 2276.8933, 282.76166). VERIFIED (gdb, ours's pose). The
+  pose's cause is not read; it is cod4-server-gaps.md's Ranked 8.
 - `LaunchItem` (0x80910ec): angles (0, the body's yaw plus the offset,
   0); `G_Spawn`; `eType` 3, `index` the item, mins -1 and maxs 1 on every
   axis (0x809141b..0x8091453), +0x120 0x407c0108, `clientNum` the dropper;
@@ -991,6 +1001,15 @@ reads the field into the killcam frame
 - The kill capture's target at 50000 reads the shooter's spawn frame of
   46900 with `deltaTime` 3100 where 4500 was asked. VERIFIED live. Ours
   matches.
+- The archived playerstate has been through the delta codec once: a gdb
+  run (a break at `ClientEndFrame` 0x80a68b8 on each client's view word,
+  client+0x108) read the shooter's live pitch -1.0382 (cmd -189 shorts)
+  and the killcam follower's copy -1.03271, -188 shorts. VERIFIED live.
+  So a view of -354 shorts archives as -353 and goes out as -352, which
+  the plate capture's killcam reads. VERIFIED live. That the archive is
+  `SV_ArchiveSnapshot`'s `MSG_WriteDeltaPlayerstate` read back is
+  INFERRED (the quantization's shape). Ours sends the archive's angles
+  once (`PlayerState::sent_angles`) as it records it.
 - The follower gets the entities of the snapshot round `archivetime`
   back (each round's kept 200 frames, the playerstates' look-back; 7.1):
   retail's killcam frames carry the victim's living body (entity 0,

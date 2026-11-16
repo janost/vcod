@@ -700,8 +700,10 @@ const CSB0_DRAG: Pair = Pair {
 const CSB0_DRAG_GAPS: &[(&str, &str)] = &[
     (
         "target entity 321:3",
-        "the dropped rifle leaves the dying body's hand a unit off \\
-         retail's, x and y, and its fall follows (cod4-combat.md 6.1)",
+        "the dropped rifle starts at the dying body's `tag_weapon_right`, \\
+         which ours poses a hundredth of a unit off retail's, and its \\
+         snapped start crosses a whole unit in x and y (cod4-combat.md \\
+         6.1)",
     ),
     (
         "shooter entity 321:3",
