@@ -1339,6 +1339,24 @@ it begins; the reconnecting probe's `EDGE snap` lines list the elements it
 is sent (`hud_x=`). Only that probe is needed for them (2026-11-16, all
 three and ours).
 
+## probe_reconnectgun
+
+The reconnect into a held slot with the player on a gun: each connect is
+spawned behind mp_carentan's gun at (1712 1830 8) and mounted through
+`useby` a second after it begins. `cod11-server-handshake.md`, "A reconnect
+into a held slot".
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PORT=<p> PROBE_SECS=32 tools/run_probe.sh client-probes/probe_reconnectgun mp_carentan
+# 8 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:<p> --probe-edge reconnect --probe-secs 20
+```
+
+`COD_VERSION=1.5` and `COD_VERSION=uo` (map `mp_uo_carentan`, `--mod-dir
+uo`) take the same recipe; ours runs it with `--gametype-script` and `--set
+sv_pure=0`. The `EDGE snap` lines' `eflags=`, `viewlocked=` and
+`viewlocked_ent=` are the measurement (2026-11-16, all three and ours).
+
 ## probe_uostates
 
 The wire round trip's state changes on United Offensive: a placed allied

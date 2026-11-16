@@ -112,7 +112,13 @@ impl Cod1Module {
                 // A gun deleted this frame queued its release for here; the
                 // spawn comes after it, as `G_FreeTurret` ran first in retail.
                 rt.apply_turret_releases(s.slot, sim);
-                let temps = rt.release_turret(s.slot, sim).unwrap_or_default();
+                // Only off a mounted playerstate (0x426c4..0x426e2): a 1.1
+                // reconnect's zeroed one leaves the gun owned
+                // (cod11-server-handshake.md, "A reconnect into a held slot").
+                let temps = match sim.mounted_on {
+                    Some(_) => rt.release_turret(s.slot, sim).unwrap_or_default(),
+                    None => Vec::new(),
+                };
                 // And a vehicle seat (`ClientSpawn` 0x44df4).
                 if sim.seat.is_some() {
                     rt.with_host(|host, cx| {
