@@ -14,10 +14,17 @@ pub struct PakChecksums {
     pub pure: i32,
 }
 
-/// The central directory's CRC-32 of every entry whose uncompressed size is
-/// not 0, in directory order: what `FS_LoadZipFile` feeds the checksum.
-pub fn entry_crcs(mut f: impl Read + Seek) -> Result<Vec<u32>> {
-    // End of central directory: 22 bytes plus a comment of at most 64 KiB.
+/// The end-of-central-directory record's entry count, directories
+/// included: `FS_LoadZipFile`'s `numfiles`, which `FS_Startup` prints
+/// beside each pak.
+pub fn entry_count(path: &Path) -> Result<usize> {
+    let (buf, eocd, _) = end_record(&mut std::fs::File::open(path)?)?;
+    Ok(u16::from_le_bytes([buf[eocd + 10], buf[eocd + 11]]) as usize)
+}
+
+/// The file's tail holding the end of central directory (22 bytes plus a
+/// comment of at most 64 KiB), the record's offset in it, the file's length.
+fn end_record(f: &mut (impl Read + Seek)) -> Result<(Vec<u8>, usize, u64)> {
     let len = f.seek(SeekFrom::End(0))?;
     let tail = len.min(22 + 0xffff);
     f.seek(SeekFrom::Start(len - tail))?;
@@ -27,6 +34,13 @@ pub fn entry_crcs(mut f: impl Read + Seek) -> Result<Vec<u32>> {
         .rev()
         .find(|&i| buf[i..i + 4] == *b"PK\x05\x06")
         .context("no end of central directory record")?;
+    Ok((buf, eocd, len))
+}
+
+/// The central directory's CRC-32 of every entry whose uncompressed size is
+/// not 0, in directory order: what `FS_LoadZipFile` feeds the checksum.
+pub fn entry_crcs(mut f: impl Read + Seek) -> Result<Vec<u32>> {
+    let (buf, eocd, len) = end_record(&mut f)?;
     let u16_at = |b: &[u8], o: usize| u16::from_le_bytes([b[o], b[o + 1]]) as usize;
     let u32_at = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
     let count = u16_at(&buf, eocd + 10);

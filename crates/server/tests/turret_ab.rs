@@ -986,18 +986,6 @@ fn a_round_meets_the_torso_easing_after_a_pitch_flip() {
         let retail = retail_ease_rows(run);
         for pitch in [85.0, 0.0] {
             for k in 0..EASE_FRAMES {
-                // GAP: a body posed at (or within a step of) the full
-                // 0.6 * 85 is mostly missed by the round retail still lands
-                // on the back of the torso: the flip-frame row back to 0 in
-                // the higher slot, the last row to 85 in the lower.
-                let full = if run == "slot1" {
-                    pitch == 0.0 && k == 0
-                } else {
-                    pitch == 85.0 && k == 5
-                };
-                if full {
-                    continue;
-                }
                 let column = |rows: &[EaseRow]| -> Vec<f32> {
                     rows.iter()
                         .filter(|(p, _)| *p == pitch)

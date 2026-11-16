@@ -309,13 +309,15 @@ pub struct SpawnRequest {
 
 /// `SV_AddTestClient`'s state (cod_lnxded 0x808753c). `counter` is the
 /// process-wide `bot%d` number, also the bot address's port, and `svs_time_ms`
-/// the network clock `Server` mirrors in before the script runs; `added` are
-/// the slots the builtin connected, with each one's port and name, for
-/// `Server` to give a `Client`.
+/// the network clock `Server` mirrors in before the script runs; `udp_slots`
+/// the slots a UDP client ever connected into (a bit each, CoD1 only);
+/// `added` are the slots the builtin connected, with each one's port and
+/// name, for `Server` to give a `Client`.
 #[derive(Default)]
 pub struct TestClients {
     pub counter: u32,
     pub svs_time_ms: i32,
+    pub udp_slots: u64,
     pub added: Vec<(usize, u16, String)>,
 }
 
