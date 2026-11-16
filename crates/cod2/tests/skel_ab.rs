@@ -237,7 +237,7 @@ fn locals_off(rig: &Rig, clips: &mut Clips, call: &Call) -> (usize, Vec<String>)
     for n in &names {
         clips.load(n);
     }
-    let (mats, reached) = dobj::calc(&clips.tree(tree), rig.skel.bones().len());
+    let (mats, reached) = dobj::calc(&clips.tree(tree), rig.skel.bones().len(), None);
     let mut seen = vec![false; rig.skel.bones().len()];
     let (mut n, mut out) = (0, Vec::new());
     for (i, &si) in rig.map.iter().enumerate() {
@@ -272,7 +272,7 @@ fn build_off(rig: &Rig, call: &Call) -> (usize, Vec<String>) {
             control[si] = call.control(i);
         }
     }
-    let built = dobj::build(&rig.skel, &locals, &control);
+    let built = dobj::build(&rig.skel, &locals, &control, None);
     let mut out = Vec::new();
     for (i, &si) in rig.map.iter().enumerate() {
         off(rig, i, &built[si], &call.post[i], &mut out);
@@ -333,4 +333,89 @@ fn the_skeleton_matches_retail_word_for_word() {
         all.extend(off.into_iter().map(|o| format!("call {ci}: {o}")));
     }
     report("skeleton", n, &all);
+}
+
+/// `SKEL_BENCH=1`: the walk and the build's time a call over the dump.
+#[test]
+fn bench_the_pose() {
+    let (Some(fs), true) = (
+        vcod_common::testing::cod2_fs(),
+        std::env::var_os("SKEL_BENCH").is_some(),
+    ) else {
+        return;
+    };
+    let rig = rig(&fs);
+    let mut clips = Clips {
+        fs: &fs,
+        skel: &rig.skel,
+        held: HashMap::new(),
+    };
+    let calls = calls(&dump());
+    for c in &calls {
+        locals_off(&rig, &mut clips, c);
+    }
+    let n = rig.skel.bones().len();
+    let reps = 20;
+    let (mut walk, mut skel) = (0.0, 0.0);
+    for _ in 0..reps {
+        for c in &calls {
+            let t = std::time::Instant::now();
+            let (m, _) = dobj::calc(&clips.tree(c.tree.as_ref().unwrap()), n, None);
+            walk += t.elapsed().as_secs_f64();
+            let t = std::time::Instant::now();
+            std::hint::black_box(dobj::build(&rig.skel, &m, &vec![false; n], None));
+            skel += t.elapsed().as_secs_f64();
+        }
+    }
+    let per = |s: f64| s * 1e6 / (reps * calls.len()) as f64;
+    eprintln!(
+        "pose: the walk {:.1} us, the build {:.1} us a call, {} reruns",
+        per(walk),
+        per(skel),
+        dobj::reruns()
+    );
+}
+
+/// A pose built for the box bones alone leaves each of them, and its
+/// parents, the words the whole build gives.
+#[test]
+fn a_masked_pose_keeps_the_words_of_the_bones_it_builds() {
+    let Some(fs) = vcod_common::testing::cod2_fs() else {
+        return;
+    };
+    let rig = rig(&fs);
+    let mut clips = Clips {
+        fs: &fs,
+        skel: &rig.skel,
+        held: HashMap::new(),
+    };
+    let bones = rig.skel.bones();
+    let mut need = vec![false; bones.len()];
+    for (i, b) in bones.iter().enumerate() {
+        let mut j = i as i32;
+        while b.has_hit_box() && j >= 0 {
+            need[j as usize] = true;
+            j = bones[j as usize].parent;
+        }
+    }
+    assert!(need.iter().any(|n| !n));
+    let control = vec![false; bones.len()];
+    for c in &calls(&dump()) {
+        locals_off(&rig, &mut clips, c);
+        let tree = clips.tree(c.tree.as_ref().unwrap());
+        let (all, _) = dobj::calc(&tree, bones.len(), None);
+        let (some, _) = dobj::calc(&tree, bones.len(), Some(&need));
+        let (all, some) = (
+            dobj::build(&rig.skel, &all, &control, None),
+            dobj::build(&rig.skel, &some, &control, Some(&need)),
+        );
+        for (i, &n) in need.iter().enumerate() {
+            if n {
+                assert_eq!(
+                    words(&all[i]).map(f32::to_bits),
+                    words(&some[i]).map(f32::to_bits)
+                );
+            }
+        }
+    }
 }

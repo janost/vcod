@@ -788,8 +788,26 @@ A connect from a held slot's address and qport (or port), past
   freed; 1.5b and UO sent only x 101, `ClientDisconnect`'s
   `HudElem_ClientDisconnect` having freed the first. vcod's server sent the
   same on all three (`free_client_hud_elems` runs only in the
-  disconnect). VERIFIED (capture). A turret the held player was on is not
-  measured.
+  disconnect). VERIFIED (capture).
+- A gun the held player was on, 2026-11-16, `client-probes/probe_reconnectgun`
+  on mp_carentan: each connect is spawned behind the gun at (1712 1830 8)
+  and mounted through `useby` a second after it begins, the reconnect 5 s
+  in; the edge probe's `EDGE snap` lines carry `eFlags` and the view lock.
+  VERIFIED (capture): on all three the first connect read `eFlags` 0x18
+  spawned and 0xc018 mounted (`viewlocked` 1, entity 298; UO 0 and 304),
+  and after the reconnect the second read the same two, so its spawn flipped
+  the teleport bit from a zeroed playerstate and nothing else flipped it.
+- So on 1.1d nothing lets the gun go: `ClientSpawn`'s release
+  (0x426c4..0x426e2) and `ClientEndFrame`'s call to `turret_think_client`
+  (0x41494) both test the playerstate's mounted bits, which `ClientConnect`'s
+  memset cleared; the gun keeps its `r.ownerNum` and busy byte until a
+  `useby` mounts it again. INFERRED (control flow; the release's
+  `TeleportPlayer` flip, which the capture would show, never came).
+- vcod released by the gun record's owner slot instead, so its spawn
+  teleported the new player off the gun and his `eFlags` read 0x10 and
+  0xc010. It now releases on a spawn only off a mounted sim and runs the
+  turret think only for one, and reads retail's sequence on all three
+  (`an_unmounted_owner_leaves_the_gun_owned`). VERIFIED (capture).
 - vcod: the reconnect arm runs `Server::client_disconnect` inside the connect
   on 1.5/UO; on 1.1 none, and `ObjectTable::spawn_client` keeps the held
   player's script object (threads, script fields) with fresh engine fields and

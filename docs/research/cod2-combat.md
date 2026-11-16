@@ -1938,7 +1938,11 @@ Left in the gate's `GAPS`:
   What puts retail 100 ms ahead is not known. The tdm kill run's drops
   read the same idle a step behind vcod's instead, its pose otherwise
   retail's to the bit (cod2-protocol.md 15.7), so the two starts differ
-  in opposite senses. VERIFIED (gdb, the gates). `BG_RunLerpFrameRate` (Mac
+  in opposite senses. VERIFIED (gdb, the gates). There the cause is the
+  replayed joiner's spawn a frame early; retail's clip starts by the
+  rule vcod's clock runs (cod2-player-anims.md 7). VERIFIED (gdb). So
+  this target's start is likely its own spawn or begin frame against
+  retail's, not the clip's rule. INFERRED. `BG_RunLerpFrameRate` (Mac
   0x183492) gives a new legs clip a start time (`XAnimSetTime`, the
   spread) only when it loops, has a non-zero `moveSpeed` (+0x44) and its
   node's weight reads 0; the idle's `moveSpeed` is 0, so its set takes no
