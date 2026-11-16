@@ -500,8 +500,7 @@ vcod: `Cod2Level::antilag_move` writes the answer into the blast body's
 origin and the script's `origin` and keeps `BlastBody::ps_origin`, which
 `cloneplayer` reads. `antilag_restore` writes the saved pair back under
 `g_antilag`. `cod2_antilag_ab` replays the capture: all 34 rewound origins
-within 0.011 of retail's, 29 hit locations alike, the other five the hit
-pose's (9.5, its `GAPS`).
+within 0.011 of retail's and all 34 hit locations alike (9.5).
 `a_shot_moves_its_victim_back_until_the_rounds_are_done`
 (`game::cod2_gaps`) pins the move and the restore.
 
@@ -1536,6 +1535,27 @@ the target's bones and logs where they stand every frame from 8500 to
   but `trDelta[2]` go right in every row, and its 3 are the 10200 bounce
   by a last bit. VERIFIED, the gate. So what is left is the bounce's own
   arithmetic, the bones and the walk matching. INFERRED.
+- `G_BounceMissile` is lnxded 0x810d1a8. The hit time is
+  `level.previousTime + (int)((level.time - level.previousTime) * fraction)`,
+  the product on the stack and truncated under the control word or-ed with
+  0xc00. VERIFIED, the instructions. The velocity comes off
+  `BG_EvaluateTrajectoryDelta` (0x80df948): its `TR_GRAVITY` arm stores
+  the seconds `(time - trTime) * 0.001f` (rodata 0x8154dbc) as a float,
+  copies `trDelta`, and takes `t * 800` (rodata 0x8154dc0) off the copy's
+  z on the stack, one store. VERIFIED, the instructions.
+- The bounce's arithmetic, each float variable a store: `DotProduct`
+  (0x810ecf2) sums on the stack; the reflection is `VectorMA(velocity,
+  dot * -2, normal)` (rodata 0x815ae28; 0x810ec9e, each component `s n + v`
+  on the stack, stored); `VectorLength` (0x810ed26) stores the square sum
+  before libm `sqrt` and the root after (0x810ed64); the factor is
+  `(perpendicular - parallel) * square + parallel` on the stack, `square`
+  the stored `dot / -speed`, and `VectorScale` (0x810ec66) stores each
+  product; the lift is `VectorScale(normal, 0.1f)`. VERIFIED, the
+  instructions. vcod rounded `800 * t` to a float before the subtraction:
+  that put the 10200 bounce's `trDelta[2]` a last bit off (43.12476
+  against 43.124756), and with the z taken in one store `hit-throw`'s
+  missile matches in every row; the bounce's own stores move no row.
+  VERIFIED, the gate.
 - `BG_EvaluateTrajectory` (lnxded 0x80df5d4) stores the seconds as a
   float, then runs `VectorMA` (0x80e11b8) on the stack with one store
   per component; `TR_GRAVITY` then takes `t * 400 * t` off the stored z
@@ -1626,14 +1646,25 @@ moves the second round of `hit-head` and `hit-legs` to another bone.
   that cannot be struck nearer. INFERRED. The walk's arithmetic on lnxded:
   cod2-player-anims.md 12.
 
-`game::cod2_hitpose_ab` replays the capture's 67 rounds on the posed
-body: all strike retail's bone, 66 within 0.02 along their line.
-VERIFIED, the gate. The gate runs the target's cmds in whole packets,
-those its log sends by the shooter's packet carrying the shot's cmd (by
-the newest cmd each packet carries, the target's first on a tie). Running
-them up to the shot's cmd time instead split a packet and put the strafe's
-four rounds 0.08 to 0.26 off (20500, 20850, 21000, 21100); by packets they
-sit within 0.009. VERIFIED, the gate.
+`game::cod2_hitpose_ab`'s capture is a retake of the recipe under
+`tools/re/cod2_trace_gdb.py` (2026-11-16), its traces in
+`crates/cod2/tests/fixtures/trace/poses.txt`. The gate traces each round
+along the line retail's `SV_PointTraceToEntity` took (of the frame's
+struck traces, the one whose contact sits nearest the logged point): all
+72 rounds strike retail's bone at retail's fraction, word for word, and
+their 3672 traced bones are retail's words. VERIFIED, the gate. The gate
+runs the target's cmds in whole packets, those its log sends by the
+shooter's packet carrying the shot's cmd (by the newest cmd each packet
+carries, the target's first on a tie). On the capture before it, running
+them up to the shot's cmd time instead split a packet and put the
+strafe's four rounds 0.08 to 0.26 off (20500, 20850, 21000, 21100); by
+packets they sat within 0.009. VERIFIED, the gate. That order is the
+harness's guess at the arrival, the two clients' cmd times being no one
+clock: in two of six retakes a strafing round on its dumped line met the
+body where it stood before a target packet retail had run first (the
+dump's origin for the round is the later one), 5 and 22 units along; the
+other four, the gate's capture among them, have no such round. VERIFIED,
+the dumps.
 
 Posed in retail's arithmetic (cod2-player-anims.md 11) no round moved
 bone and both rows below stay. VERIFIED, the gates. So what is left is
@@ -1641,24 +1672,33 @@ the pose's inputs (the clips' node times, 15.7 of cod2-protocol.md, and
 the controls) or the box walk's own floats, not the walk and the build.
 INFERRED.
 
-Left in its `GAPS`: 13400, crouched and still, 0.0204 along the line. The
-round meets the left thigh's box on a grazing face (normal against the
-line -0.195). The log prints the point to 0.01 in x and y, which moves a
-hit on that face by up to 0.0248 along the line, so the round is inside
-the log's own precision. INFERRED, the arithmetic. The fixed 0.02 cannot
-tell it from a pose error; a tolerance off each round's face would, but
-18050 sits at twice such a bound (0.014 against 0.0069), so the pose is
-not exact either. INFERRED, the arithmetic. Neither moves with the phase rule (9.3's variants). A
-legs node that faded to 0 restarts; one that kept its node time instead
-put 18 of the 67 rounds off. VERIFIED, the gate.
+The capture before the retake left 13400 in the gate's `GAPS`, crouched
+and still, 0.0204 along the line, which the gate drew along the logged
+direction through the logged point. The round met the left thigh's box on
+a grazing face (normal against the line -0.195), where the log's 0.01 in
+x and y moves a hit by up to 0.0248 along the line. INFERRED, the
+arithmetic. Drawn from the shooter's eye through the point (below) it sat
+at -0.020 still. VERIFIED, the gate. So it rested on the log's rounding,
+which a dumped line has none of. INFERRED. On the old capture neither row
+moved with the phase rule (9.3's variants). A legs node that faded to 0
+restarts; one that kept its node time instead put 18 of its 67 rounds
+off. VERIFIED, the gate.
 
-`game::cod2_antilag_ab`'s one row, 16950: the target stands still 3 s
-after a strafe and retail's round strikes `torso_lower` at the point
-vcod's torso box gives (0.50001 of the line). vcod's line first clips a
-corner of `j_thumb_ri_2`'s box, a 0.4-unit chord 4.7 units before the
-torso; `j_wrist_ri` misses by 1.8. VERIFIED, the gate. So retail's right
-thumb sits off vcod's by at least a few tenths of a unit; why is not
-known. The replay's packet order does not move it.
+`game::cod2_antilag_ab`'s row 16950, now closed: the target stands still
+3 s after a strafe and retail's round strikes `torso_lower`. The gate's
+line, along the logged direction through the logged point, first clipped
+a corner of `j_thumb_ri_2`'s box, a 0.4-unit chord 4.7 units before the
+torso. VERIFIED, the gate. The same line 0.02 units across clears it.
+VERIFIED, a run of the gate. The logged direction is not the round's:
+`G_Damage` takes the view's forward (2.4), and `Bullet_Endpos` turns the
+round off it by the spread (2.3). On the hit pose retake's dump the round
+at 11200 runs (-0.0497, -0.9523, -0.3011) from the eye (1937, 1888,
+124.125) where its log prints (-0.0473, -0.9523, -0.3015), the forward
+the look-at's line of that frame takes. VERIFIED, the dump. The antilag
+gate now draws each round from the shooter's eye
+(`Cod2Level::player_view_origin` on his snapshot of the frame) through
+the logged point, and 16950 strikes `torso_lower`; no other round of the
+three antilag captures moved. VERIFIED, the gate.
 
 The box walk is retail's word for word now (cod2-player-anims.md 12):
 neither row moved with it, and no other round moved by more than 0.001
@@ -1679,13 +1719,16 @@ the fresh run it moved the one round off retail's bone (13350, a miss for
 a few ulps. VERIFIED, the gate. On the two old captures no row moved.
 VERIFIED, the gates.
 
-16950 is not the log's rounding: each of 363 lines through points within
-the log's last digit of the round's (x and y in steps of 0.001 over
-0.005 each way, z 0.0005 each way) still clips the thumb first. VERIFIED,
-a run of the gate. The idle sways every bone about 0.025 a frame there,
-and the torso's entry sits on retail's point, so the hand alone is off.
-INFERRED. Why stays unknown; the old capture has no dump of retail's
-bones.
+16950 was not the log's rounding: each of 363 lines through points
+within the log's last digit of the round's (x and y in steps of 0.001
+over 0.005 each way, z 0.0005 each way) still clipped the thumb first.
+VERIFIED, a run of the gate. Each ran along the logged direction, the
+error above. Nine fresh antilag runs under `tools/re/cod2_trace_gdb.py`,
+replayed on the anim rate of cod2-player-anims.md 7, pose every traced
+bone of their 320 rounds to retail's word, the still body 3 s after the
+strafe included; one has the old capture's legs anims to a frame (the
+idle blip at 13150, the idle from 13950). VERIFIED, the dumps. So the
+hand was not off. INFERRED.
 
 `game::cod2_antilag_ab`'s second capture, `antilag-gdb` (its header the
 recipe: `antilag`'s under `GDB_PY`), is that fresh run, its traces in
@@ -1712,7 +1755,8 @@ VERIFIED, the gate. The hit pose gate's 18050 moved from 0.014 to -0.002
 along its line with the setter's goal time, its 13400 and the antilag
 16950 not at all; with the rate, the movetype condition and the frames
 with no snapshot none of the three moved, nor `cod2_combat_ab`'s
-`hit-throw`. VERIFIED, the gates.
+`hit-throw`. VERIFIED, the gates. The two rows closed on their lines
+(above), `hit-throw` on the gravity velocity's store (9.4).
 
 ### 9.6 The aim block and the game's `rand()`
 

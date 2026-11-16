@@ -1014,9 +1014,35 @@ Map commands:
   `spawns` table) into one mover and items into one respawn pick. No stock
   MP lump has a `team` key or a `func_door` (object-model doc 8), so none
   of it runs on a stock map.
-- vcod keeps no chains and prints 0, right for every stock map; a mod map
-  with `team` keys would read other counts, and its team doors would move
-  apart.
+- The key is `teamname`: `+0x1d8` is the entity field table's `teamname`
+  (`crates/server/src/game/fields.rs`, offset 472), which `G_ParseField`
+  matches (object-model doc 7). VERIFIED: only a tramcar master's
+  `teammaster` is written (0x4fa47); a plain master's stays null.
+  VERIFIED, `RespawnItem` (0x4ec7c): an item with a `teamname` and a null
+  `teammaster` calls `G_Error` with `RespawnItem: bad teammaster` (0x4ec92,
+  string 0x74bf4); otherwise it counts the chain from `teammaster` and walks
+  `rand() % count` links down it (0x4ecb3..0x4ece7) before the respawn.
+  INFERRED: a teamed map item that respawns as its team's master takes the
+  level down, and one that respawns as a slave brings back a random member,
+  a `rand()` draw.
+- 1.5b and UO: `scr_const+0x3a` is `func_tramcar` too, VERIFIED
+  (`GScr_LoadConsts` 0x5aa6c from the string at 0x7b6a9; UO 0x655b0 from
+  0xa1d15); `G_FindTeams` is 1.5b 0x4e88a and UO 0x57e4f.
+- Measured, 2026-11-16, retail 1.1d, 1.5b and UO: mp_carentan with eleven
+  entities appended to its entity lump (a `zzz_` pk3 in the homepath, the
+  lump grown at the end of the file as `tools/bsp_worldspawn_key.py` does):
+  three `script_origin`s `t1`; a `func_tramcar` then a `script_origin`,
+  `t2`; a `func_tramcar` with spawnflags 8, a `func_tramcar` and a
+  `script_origin`, `t3`; a `func_group` and a `script_origin`, `t4`; one
+  `script_origin` `T1`. Each server's `G_InitGame` printed `5 teams with 9
+  entities` (VERIFIED). INFERRED: the freed `func_group` is out, the first
+  `t2` tramcar leads nothing and is no one's slave, and the string compare
+  is case-sensitive, as the disassembly reads.
+- vcod keeps no chains and its banner (`game_init_banner` in `server.rs`)
+  holds a constant `0 teams with 0 entities`, right for every stock map and
+  not for the measured one; it prints the banner before it spawns the
+  entities. Not modelled either: `RespawnItem`'s team pick and its error,
+  and the `func_door` team movers (vcod moves no `func_door`).
 - `map mp_harbor` over rcon from mp_carentan, 2026-11-16 on 1.1d: one
   2248-byte packet, `print\n` then `==== ShutdownGame ====`, `------ Server
   Initialization ------`, `Server: mp_harbor`, `Hunk_Clear: reset the hunk

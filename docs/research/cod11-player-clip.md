@@ -811,6 +811,18 @@ frame's `EV_PAIN` for 200 ms, so a fall raises only its landing pain. A
 landing in a cmd whose ring already holds four newer events is dropped with
 them, as any event is (`cod11-combat.md` 16).
 
+1.5 and UO store each step as a float. VERIFIED, 1.5b `game.mp.i386.so`
+`ClientEvents` (0x38e6e): `fild parm` times the 0.01 at .rodata 0x77aa4,
+`fstp` to a float local (0x38f2a), `fild ps.stats[2]` times that local,
+`fstp` again (0x38f54), then `fistp` under control word 0xc00 (0x38fb3).
+VERIFIED, UO `game.mp.uo.i386.so` `ClientEvents`: the same two stores
+(0x4091c, 0x40946) and the `fistp` (0x409a5). INFERRED: the two float
+roundings lift a share that sits just under a whole number back onto it, so
+21 percent of 100 does 21 on 1.5 and UO where 1.1 does 20; 40 percent still
+does 39. VERIFIED, `mp_carentan-dm-dmgmove-1.5.txt` and `-uo.txt` (13.6):
+damage callbacks of 21 and 22 where vcod's 1.1 rule gave 20 and 21. vcod:
+`fall_damage`'s `stored` arm (`crates/server/src/server.rs`).
+
 INFERRED, from 4.2 and 4.4 of `cod11-combat.md`: the four null pointers
 reach `CodeCallback_PlayerDamage` as undefined `eInflictor`, `eAttacker`,
 `vPoint` and `vDir`, weapon 0 as `"none"` and hit location 0 as `"none"`, at
@@ -1850,7 +1862,52 @@ spawned earlier in the same frame out of a dead or spectating state has no
 body copy until the end frame, so a later spawn's think does not meet him
 on vcod; unmeasured on retail.
 
-Open: a cmd that starts in a body after a damage callback moved a player.
-vcod's cmd loop builds its bodies off the sims (`cod1_think.rs`), and a
-callback's `setOrigin` reaches the moved player's sim as a queued op.
-Unmeasured on retail.
+A cmd that starts in a body after a damage callback moved a player: 13.6.
+
+### 13.6 A callback's move inside a cmd
+
+`client-probes/probe_dmgmove` on mp_carentan's open floor at (60 1600),
+fixtures `crates/server/tests/fixtures/playerstate/mp_carentan-dm-dmgmove-1.1.txt`,
+`-1.5.txt` and `-uo.txt` (2026-11-16, each client's `CMDS` lines and the
+server's `RECV` order with them): the faller drops 300 onto a point 100
+behind the host and his landing's `MOD_FALLING` callback, inside his own cmd (combat
+doc 5.5), `setOrigin`s him 8 in front of the host (`self_*`) or the host 8
+behind him (`other_*`), his forward key held or not, twice each.
+
+VERIFIED, all three, every trial: the faller's window holds three cmds and
+he lands on the second, so one of his cmds and one or two of the host's run
+after the callback in the frame it ran in (`ct=` and `RECV`).
+
+- VERIFIED, 1.1d: the moved player reads the moved origin to the float on
+  the next frame, z one unit up included, whichever of the two moved, and
+  no `"touch"` carries the landing's frame or the next one. INFERRED: a 1.1 cmd that starts inside a body moves nobody (no
+  `PM_trace`, 13.1).
+- VERIFIED, 1.5b and UO: a host the faller's callback moved reads z
+  0.8976 or 0.0096 on the next frame where the move left 1.0, by how many
+  of his cmds ran after the faller's, a moved faller has moved off the
+  spot, and every trial logs one pair of `"touch"` lines on the next
+  frame's time. INFERRED: the cmds behind the callback start where the `setOrigin`
+  put the player, inside the other body, and `PM_trace` lets them out.
+- VERIFIED: no `"touch"` line in any of the 24 trials carries the
+  landing's time. INFERRED: the touches the landing window's cmds raise
+  print on the next frame's script time, as vcod's engine notifies run.
+
+INFERRED: `SetClientOrigin` writes `ps.origin` of any player there and
+then, so the move reaches the moved player's next cmd and every other
+player's trace in the same frame, and `ClientThink_real`'s `G_TouchTriggers`
+and its write back to `r.currentOrigin` (combat doc 5.5) read the moved
+origin.
+
+vcod: a callback inside a cmd (a fall, a shot's or a swing's hit, a `kill`,
+the touch pass) lands what it queued for every client on that client's sim
+and body at once (`Cod1Module::land_queued_ops`); before that only the
+victim's or the mover's own ops landed, and another client's waited for the
+script frame. What was queued before the tick's cmds still waits for the
+script frame's pass. The touch pass, its write back and the mount read the sim's
+origin after the callbacks. `dmgmove_ab.rs` replays each capture's cmds in
+retail's order and holds every line from each drop to the frame after the
+landing exactly. vcod measurement: without the landing for other clients
+four 1.5 trials read the host at the moved z 1.0 or short of retail's fall;
+without the touch pass's read the second 1.1 `self_out` read the faller at
+his landing spot. Frames after that ride the end frame's push, a `rand()`
+draw (6.4), and are not held.

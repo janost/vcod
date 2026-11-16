@@ -296,15 +296,26 @@ const FALL_PAIN_DEBOUNCE_MS: i32 = 200;
 
 /// `ClientEvents`' fall damage before `G_Damage`'s location multiplier: the
 /// landing pain's percent of `max_health` (`ps.stats[2]`), 1.1 past 99,
-/// truncated (player-clip doc 8.8). The x87 product is exact in `f64`, which
-/// is what keeps 25 percent of 100 at 24.
-fn fall_damage(percent: i32, max_health: i32) -> i32 {
+/// truncated (player-clip doc 8.8). 1.1's x87 product is exact in `f64`,
+/// which is what keeps 25 percent of 100 at 24; 1.5 and UO store the share
+/// and the product as floats first (`stored`), which puts 21 percent at 21.
+fn fall_damage(percent: i32, max_health: i32, stored: bool) -> i32 {
     let share = if percent > 99 {
         f64::from(1.1f32)
     } else {
         f64::from(percent) * f64::from(0.01f32)
     };
-    (f64::from(max_health) * share) as i32
+    let damage = f64::from(max_health)
+        * if stored {
+            f64::from(share as f32)
+        } else {
+            share
+        };
+    if stored {
+        damage as f32 as i32
+    } else {
+        damage as i32
+    }
 }
 
 /// What each client holds, from the host onto its sim, and the sim's origin
@@ -3276,14 +3287,13 @@ impl Server {
     /// frame. Test-facing: the stuck gate overlaps two players the way
     /// `probe_bump.gsc` did on retail.
     pub fn test_script_set_origin(&mut self, slot: usize, origin: [f32; 3]) {
-        let rt = self
-            .game
+        assert!(
+            self.game.module.script.is_some(),
+            "a script runtime to queue the setorigin on"
+        );
+        self.game
             .module
-            .script
-            .as_mut()
-            .expect("a script runtime to queue the setorigin on");
-        rt.host
-            .client_sim_ops
+            .test_sim_ops
             .push((slot, crate::game::host::SimOp::SetOrigin { origin }));
     }
 
@@ -7724,7 +7734,23 @@ mod tests {
             (18, 200, 35),
             (41, 100, 40),
         ] {
-            assert_eq!(fall_damage(percent, max), damage, "{percent}% of {max}");
+            assert_eq!(
+                fall_damage(percent, max, false),
+                damage,
+                "{percent}% of {max}"
+            );
+        }
+    }
+
+    /// 1.5b `ClientEvents` 0x38f2a and 0x38f54 store each step as a float.
+    #[test]
+    fn fall_damage_on_15_rounds_each_step_to_a_float() {
+        for (percent, max, damage) in [(21, 100, 21), (25, 100, 25), (66, 100, 66), (40, 100, 39)] {
+            assert_eq!(
+                fall_damage(percent, max, true),
+                damage,
+                "{percent}% of {max}"
+            );
         }
     }
 

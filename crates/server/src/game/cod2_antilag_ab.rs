@@ -7,8 +7,9 @@
 //! `G_AntiLagRewindClientPos` put him for the shot. The gate puts the
 //! target's playerstate where retail's snapshot of each frame has it,
 //! archives the frame, and at each round asks vcod's rewind for the
-//! target at the round's lag time; then it traces the round's line through
-//! the body standing there. Compared: the rewound origin and the hit
+//! target at the round's lag time; then it traces the round's line, from
+//! the shooter's eye through the logged point, through the body standing
+//! there. Compared: the rewound origin and the hit
 //! location. Needs `COD2_DIR`. `ANTILAG_REPORT=1` prints every round.
 
 use std::collections::HashMap;
@@ -32,10 +33,7 @@ const ORIGIN_TOLERANCE: f32 = 0.011;
 
 /// The rounds whose hit location the replay still gets wrong, by frame
 /// time, each with its section of cod2-combat.md.
-const GAPS: &[(i32, &str)] = &[(
-    16950,
-    "9.5 the hit pose: still, a 0.4-unit corner of the right thumb's box for the torso",
-)];
+const GAPS: &[(i32, &str)] = &[];
 
 /// One round: (time, the target's live origin, retail's rewound origin,
 /// ours, retail's hit location, ours, the body's bones the trace built, in
@@ -165,7 +163,7 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str) -> Vec<Round> {
             level.look_trace_from(&PlayerState::from_wire(&s.ps));
         }
         archive(&mut level, t);
-        for (_, retail, point, dir, loc, lag) in rounds.iter().filter(|r| r.0 == t) {
+        for (_, retail, point, _, loc, lag) in rounds.iter().filter(|r| r.0 == t) {
             let ours = level.rewound_origin(0, *lag).and_then(|r| r.at());
             // The target's packets sent by the one carrying the shot's
             // cmd, whole, then the shooter's: each resets the skeleton
@@ -174,7 +172,7 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str) -> Vec<Round> {
             super::cod2_hitpose_ab::run_packets(&mut level, &target.side, &mut done, sent);
             level.packet();
             let origins: HashMap<usize, Vec3> = ours.map(|o| (0, o)).into_iter().collect();
-            let (a, b) = (*point - *dir * 64.0, *point + *dir * 64.0);
+            let (a, b) = round_line(shooter_eye(&shooter.side, t), *point);
             let (_, client, hl) = level.round_trace(a, b, &origins);
             let ours_loc = match client {
                 Some(_) => vcod_cod2::xmodel::HIT_LOCATIONS[usize::from(hl)].to_string(),
@@ -192,6 +190,22 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str) -> Vec<Round> {
         }
     }
     out
+}
+
+/// A round's line, 64 units each way of its logged `point`, from the
+/// shooter's `eye` through it. The log's direction is the view's forward
+/// (`G_Damage`'s `dir`, cod2-combat.md 2.4), which the spread turns the
+/// round off (2.3), so a line along it meets other boxes than the round's.
+fn round_line(eye: Vec3, point: Vec3) -> (Vec3, Vec3) {
+    let u = (point.as_dvec3() - eye.as_dvec3()).normalize().as_vec3();
+    (point - u * 64.0, point + u * 64.0)
+}
+
+/// Where the shooter's rounds of the frame at `t` leave from: his eye on
+/// the playerstate retail's snapshot of that frame has.
+fn shooter_eye(side: &super::cod2_combat_ab::Side, t: i32) -> Vec3 {
+    let s = side.ran_at(t).expect("the shooter's snapshot");
+    Cod2Level::player_view_origin(&PlayerState::from_wire(&s.ps), t)
 }
 
 /// Every round of `rounds` off retail's, but those `gaps` names.
@@ -251,12 +265,66 @@ fn retail_rewinds_match_vcods() {
 /// `tools/re/cod2_trace_gdb.py` dump, by level time, the last one of a
 /// frame: the round's, after the shooter's look-at.
 fn dumped_bones(dump: &str) -> HashMap<i32, HashMap<usize, [f32; 8]>> {
+    dumped_traces(dump)
+        .into_iter()
+        .filter_map(|(t, mut d)| Some((t, d.pop()?.mats)))
+        .collect()
+}
+
+/// How many of `ours` a trace's dumped `mats` name, and each whose quat or
+/// translation is off theirs by a word. The trace builds only the bones
+/// with a box and their parents.
+pub(super) fn bones_off(ours: &[Mat], mats: &HashMap<usize, [f32; 8]>) -> (usize, Vec<String>) {
+    let (mut n, mut off) = (0, Vec::new());
+    for (&i, m) in mats {
+        let Some(&o) = ours.get(i).filter(|b| **b != Mat::ZERO) else {
+            continue;
+        };
+        n += 1;
+        let words = o.quat.iter().chain(&o.trans).map(|c| c.to_bits());
+        if !words.eq(m[..7].iter().map(|c| c.to_bits())) {
+            let d = (0..7)
+                .map(|c| {
+                    let x = if c < 4 { o.quat[c] } else { o.trans[c - 4] };
+                    (x - m[c]).abs()
+                })
+                .fold(0.0, f32::max);
+            off.push(format!("bone {i} off {d:e}"));
+        }
+    }
+    (n, off)
+}
+
+/// A struck trace of the target in a dump: `SV_PointTraceToEntity`'s
+/// world line, the fraction `DObjTraceline` returned along it and the
+/// bones it read.
+pub(super) struct DumpedTrace {
+    pub start: Vec3,
+    pub end: Vec3,
+    pub fraction: f32,
+    pub mats: HashMap<usize, [f32; 8]>,
+}
+
+impl DumpedTrace {
+    /// How far its contact sits from `p`.
+    pub fn near(&self, p: Vec3) -> f32 {
+        (self.start + (self.end - self.start) * self.fraction).distance(p)
+    }
+}
+
+/// The struck traces of the target (entity 0) at each level time of a
+/// `tools/re/cod2_trace_gdb.py` dump, in order: the shooter's look-at
+/// first, the rounds after.
+pub(super) fn dumped_traces(dump: &str) -> HashMap<i32, Vec<DumpedTrace>> {
     let bits = |s: &str| f32::from_bits(u32::from_str_radix(s, 16).unwrap());
+    let vec = |t: &[&str]| Vec3::new(bits(t[0]), bits(t[1]), bits(t[2]));
     let mut out = HashMap::new();
+    let mut line = (Vec3::ZERO, Vec3::ZERO);
     let mut cur: Option<(i32, i32, HashMap<usize, [f32; 8]>)> = None;
-    for line in dump.lines().filter(|l| !l.starts_with('#')) {
-        let t: Vec<&str> = line.split_whitespace().collect();
+    for l in dump.lines().filter(|l| !l.starts_with('#')) {
+        let t: Vec<&str> = l.split_whitespace().collect();
         match t[0] {
+            "point" => line = (vec(&t[5..8]), vec(&t[8..11])),
             "trace" => cur = Some((t[3].parse().unwrap(), t[7].parse().unwrap(), HashMap::new())),
             "mat" => {
                 let m: [f32; 8] = std::array::from_fn(|i| bits(t[2 + i]));
@@ -265,7 +333,15 @@ fn dumped_bones(dump: &str) -> HashMap<i32, HashMap<usize, [f32; 8]>> {
             "result" => {
                 let (time, ent, mats) = cur.take().unwrap();
                 if ent == 0 && !t[7].ends_with("0000") {
-                    out.insert(time, mats);
+                    let (start, end) = line;
+                    let fraction = bits(t[2]);
+                    let d = DumpedTrace {
+                        start,
+                        end,
+                        fraction,
+                        mats,
+                    };
+                    out.entry(time).or_insert_with(Vec::new).push(d);
                 }
             }
             _ => {}
@@ -306,27 +382,9 @@ fn retail_rewinds_and_bones_match_vcods_under_gdb() {
                 wrong.push(format!("{}: no dumped trace", r.time));
                 continue;
             };
-            for (&i, m) in mats {
-                // The trace builds only the bones with a box and their parents.
-                let Some(&ours) = r.bones.get(i).filter(|b| **b != Mat::ZERO) else {
-                    continue;
-                };
-                bones += 1;
-                let words = ours.quat.iter().chain(&ours.trans).map(|c| c.to_bits());
-                if !words.eq(m[..7].iter().map(|c| c.to_bits())) {
-                    let d = (0..7)
-                        .map(|c| {
-                            let o = if c < 4 {
-                                ours.quat[c]
-                            } else {
-                                ours.trans[c - 4]
-                            };
-                            (o - m[c]).abs()
-                        })
-                        .fold(0.0, f32::max);
-                    wrong.push(format!("{}: bone {i} off {d:e}", r.time));
-                }
-            }
+            let (n, off) = bones_off(&r.bones, mats);
+            bones += n;
+            wrong.extend(off.into_iter().map(|o| format!("{}: {o}", r.time)));
         }
         eprintln!("{name}: {} rounds, {bones} bones", rounds.len());
         assert!(rounds.len() >= 25 && bones > 1000, "{name}");
