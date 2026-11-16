@@ -161,11 +161,15 @@ impl Missile {
         }
     }
 
+    /// `BG_EvaluateTrajectoryDelta` (lnxded 0x80df948): the seconds stored
+    /// as a float, `TR_GRAVITY`'s z `trDelta[2] - t * 800` on the stack,
+    /// stored once (cod2-combat.md 9.4).
     fn velocity(&self, at: i32) -> Vec3 {
         match self.tr_type {
             vcod_cod2::trajectory::TR_GRAVITY => {
                 let t = (at - self.tr_time) as f32 * 0.001;
-                self.delta - Vec3::Z * (800.0 * t)
+                let z = F80::from_f32(self.delta.z) - F80::from_f32(t) * F80::from_f32(800.0);
+                Vec3::new(self.delta.x, self.delta.y, z.to_f32())
             }
             vcod_cod2::trajectory::TR_LINEAR => self.delta,
             _ => Vec3::ZERO,
@@ -2163,8 +2167,10 @@ impl Cod2Level {
             self.rocket_impact(i, &tr, hit);
             return true;
         }
+        // `(int)((level.time - level.previousTime) * fraction)` on the
+        // stack, truncated (lnxded 0x810d1f0).
         let prev = now - 50;
-        let at = prev + ((now - prev) as f32 * tr.fraction) as i32;
+        let at = prev + (f64::from(now - prev) * f64::from(tr.fraction)) as i32;
         if self.bounce_missile(i, &tr, at) {
             self.combat.missiles[i].add_event(ev::GRENADE_BOUNCE, surf);
         }
@@ -2258,11 +2264,13 @@ impl Cod2Level {
         );
     }
 
-    /// `G_BounceMissile` (Mac 0x1c9db0): the velocity at the contact
-    /// reflected, scaled by the weapon's `parallel`/`perpendicular` bounce
-    /// for the surface by how square it struck; one slower than 20 on a
-    /// floor (normal z over 0.7) comes to rest. Returns whether the bounce
+    /// `G_BounceMissile` (lnxded 0x810d1a8, Mac 0x1c9db0): the velocity at
+    /// the contact reflected, scaled by the weapon's `parallel`/`perpendicular`
+    /// bounce for the surface by how square it struck; one slower than 20 on
+    /// a floor (normal z over 0.7) comes to rest. Returns whether the bounce
     /// raises its event: not in water and the velocity changed by over 100.
+    /// Each float the build stores is rounded where it stores it
+    /// (cod2-combat.md 9.4).
     fn bounce_missile(&mut self, i: usize, tr: &Contact, at: i32) -> bool {
         let now = self.level_time();
         let surf = ((tr.surface_flags & 0x1f0_0000) >> 20) as usize;
@@ -2278,14 +2286,26 @@ impl Cod2Level {
             .clip
             .as_ref()
             .is_some_and(|c| c.point_contents(self.combat.missiles[i].origin) & 0x20 != 0);
+        let f = F80::from_f32;
+        // `DotProduct` (0x810ecf2) and `VectorLength` (0x810ed26) sum on
+        // the stack; the length's square is stored before libm `sqrt` and
+        // the root stored again (0x810ed64). `VectorMA` (0x810ec9e) and
+        // `VectorScale` (0x810ec66) store each component.
+        let dot3 = |a: Vec3, b: Vec3| (f(a.x) * f(b.x) + f(a.y) * f(b.y)) + f(a.z) * f(b.z);
+        let length = |v: Vec3| (f64::from(dot3(v, v).to_f32())).sqrt() as f32;
+        let scale =
+            |v: Vec3, s: f32| Vec3::from_array(v.to_array().map(|c| (f(s) * f(c)).to_f32()));
+        let n = tr.normal;
         let m = &mut self.combat.missiles[i];
         let vel = m.velocity(at);
-        let dot = vel.dot(tr.normal);
-        let mut delta = vel + tr.normal * (-2.0 * dot);
-        if tr.normal.z > 0.7 {
+        let dot = dot3(vel, n).to_f32();
+        let s = (f(dot) * F80::from_f64(-2.0)).to_f32();
+        let ma = |v: f32, n: f32| (f(s) * f(n) + f(v)).to_f32();
+        let mut delta = Vec3::new(ma(vel.x, n.x), ma(vel.y, n.y), ma(vel.z, n.z));
+        if n.z > 0.7 {
             m.ground = tr.client.map_or(1022, |c| c as i32);
         }
-        let speed = vel.length();
+        let speed = length(vel);
         if speed > 0.0 && dot <= 0.0 {
             let (par, perp) = w.as_ref().map_or((0.5, 0.5), |w| {
                 (
@@ -2293,10 +2313,10 @@ impl Cod2Level {
                     w.perpendicular_bounce[surf.min(22)],
                 )
             });
-            let f = (dot / -speed) * (perp - par) + par;
-            delta *= f;
+            let square = (f(dot) / -f(speed)).to_f32();
+            delta = scale(delta, ((f(perp) - f(par)) * f(square) + f(par)).to_f32());
         }
-        if tr.normal.z > 0.7 && delta.length() < 20.0 {
+        if n.z > 0.7 && length(delta) < 20.0 {
             m.tr_type = vcod_cod2::trajectory::TR_STATIONARY;
             m.base = m.origin;
             m.delta = Vec3::ZERO;
@@ -2304,13 +2324,13 @@ impl Cod2Level {
             m.apos_delta = Vec3::ZERO;
             return false;
         }
-        let mut lift = tr.normal * 0.1;
+        let mut lift = scale(n, 0.1);
         lift.z = lift.z.min(0.0);
         m.origin += lift;
         m.base = m.origin;
         m.delta = delta;
         m.tr_time = now;
-        !water && (delta - vel).length() > 100.0
+        !water && length(delta - vel) > 100.0
     }
 
     /// `G_ExplodeMissile` (Mac 0x1c94f4) at the trajectory's point, its
