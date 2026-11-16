@@ -2,8 +2,11 @@
 //! 1.7 loader's field table (`vcod_cod4::weapon_file`) against the
 //! `common_mp` zone's compiled weapon of the same name: every number,
 //! string, sound alias and model the struct carries must match, which
-//! proves the table, the name tables and the post-load steps. Passes
-//! vacuously without `$COD4_DIR`.
+//! proves the table, the name tables and the post-load steps. A
+//! millisecond field (type 7) may read one over the zone's: the runtime
+//! stores the product as a float before it truncates, the compiler did not
+//! (cod4-fastfile.md, "Weapon files"). Passes vacuously without
+//! `$COD4_DIR`.
 
 use std::collections::BTreeMap;
 use vcod_cod4::source::Cod4Source;
@@ -22,22 +25,37 @@ fn stock_weapon_files_read_as_the_zone_compiled_them() {
     let a = &zone.assets;
     let source = Cod4Source::open(&install).unwrap();
     // Numeric fields: everything the table writes but pointers.
-    let numeric: Vec<(&str, usize)> = FIELDS
+    let numeric: Vec<(&str, usize, u8)> = FIELDS
         .iter()
         .filter(|&&(_, _, ty)| !matches!(ty, 0 | 8..=11 | 23 | 33 | 34))
-        .map(|&(n, o, _)| (n, usize::from(o)))
-        .chain([("fOOPosAnimLength0", 2040), ("fOOPosAnimLength1", 2044)])
+        .map(|&(n, o, ty)| (n, usize::from(o), ty))
+        .chain([
+            ("fOOPosAnimLength0", 2040, 6),
+            ("fOOPosAnimLength1", 2044, 6),
+        ])
         .collect();
     let mut misses: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut checked = 0;
+    let mut rounded_up = 0;
     for w in &a.weapons {
         let Some(t) = weapon_file::load(&source, &w.name) else {
             continue;
         };
         let t = t.unwrap_or_else(|e| panic!("{}: {e:#}", w.name));
         checked += 1;
-        for &(key, at) in &numeric {
+        let int = |b: &[u8]| i32::from_le_bytes(b.try_into().unwrap());
+        let up = |at: usize| int(&t.weapon.raw[at..at + 4]) == int(&w.raw[at..at + 4]) + 1;
+        for &(key, at, ty) in &numeric {
             let (z, f) = (&w.raw[at..at + 4], &t.weapon.raw[at..at + 4]);
+            if ty == 7 && up(at) {
+                rounded_up += 1;
+                continue;
+            }
+            // The inverse sight times off `adsTransInTime` and
+            // `adsTransOutTime` (1156, 1160) follow them.
+            if (at == 2040 && up(1156)) || (at == 2044 && up(1160)) {
+                continue;
+            }
             if z != f {
                 misses.entry(key.into()).or_default().push(format!(
                     "{} zone {:?} file {:?}",
@@ -102,5 +120,11 @@ fn stock_weapon_files_read_as_the_zone_compiled_them() {
         eprintln!("{k}: {} weapons, e.g. {:?}", v.len(), &v[..v.len().min(3)]);
     }
     assert!(checked > 100, "{checked} weapon files checked");
+    // `m16_mp`'s `fireTime` 0.065 among them: 65 off the file, 64 in the
+    // zone, and 65 on the live server under a mod (gdb).
+    assert!(
+        rounded_up > 0,
+        "no millisecond field read one over the zone's"
+    );
     assert!(misses.is_empty(), "{} fields differ", misses.len());
 }
