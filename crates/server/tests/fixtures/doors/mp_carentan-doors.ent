@@ -1,0 +1,53 @@
+{
+"classname" "func_door"
+"targetname" "door_a"
+"model" "*5"
+"angles" "0 -1 0"
+"speed" "100"
+"wait" "1"
+"spawnflags" "8"
+}
+{
+"classname" "func_door"
+"targetname" "door_b"
+"teamname" "d2"
+"model" "*6"
+"angles" "0 -1 0"
+"speed" "200"
+"lip" "16"
+"dmg" "5"
+}
+{
+"classname" "func_door"
+"targetname" "door_b4"
+"teamname" "d2"
+"model" "*4"
+"origin" "-146 2490 16"
+"angles" "0 -1 0"
+"speed" "200"
+"lip" "16"
+}
+{
+"classname" "func_door_rotating"
+"targetname" "door_r"
+"model" "*8"
+"origin" "395 2137 245"
+}
+{
+"classname" "func_rotating"
+"targetname" "rot1"
+"teamname" "r1"
+"model" "*7"
+"origin" "372 -1052 60"
+"spawnflags" "1"
+"speed" "45"
+}
+{
+"classname" "func_rotating"
+"targetname" "rot2"
+"teamname" "r1"
+"model" "*10"
+"origin" "372 -1073 52"
+"spawnflags" "1"
+"speed" "90"
+}

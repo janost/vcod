@@ -1050,10 +1050,10 @@ Map commands:
 - vcod: `game::teams::find_teams` chains the lump's entities after the
   spawn pass on all three (`SpawnRules::find_teams`) and the banner prints
   its counts; `game::teams_ab` holds the line to the three captures.
-  `func_door` and `func_door_rotating` stay unbuilt, so no team mover
-  (`Think_MatchTeam`, `G_MoverTeam` over a chain with trajectories of its
-  own) runs. A startsolid item is freed after the count, as retail's is
-  (cod11-items.md 14.9).
+  `func_door`, `func_door_rotating` and `func_rotating` are built and a
+  door team moves as one (`Think_MatchTeam`, `G_MoverTeam` over the chain,
+  cod11-movers.md 26). A startsolid item is freed after the count, as
+  retail's is (cod11-items.md 14.9).
 - `map mp_harbor` over rcon from mp_carentan, 2026-11-16 on 1.1d: one
   2248-byte packet, `print\n` then `==== ShutdownGame ====`, `------ Server
   Initialization ------`, `Server: mp_harbor`, `Hunk_Clear: reset the hunk

@@ -26,6 +26,8 @@ them on vcod.
   -m32`) and appends every `srand()` and `rand()` the server made to the
   capture: the seed and the draws a replay pins (`cod2-combat.md` 9.6).
 - Run the retail CoD2 and CoD4 Linux servers only inside `unshare -rn`.
+  A new namespace's loopback is down: run `ip link set lo up` inside it
+  before a probe client joins `127.0.0.1`.
 - `tools/run_probe.sh <probe> [map] [+set ...]` boots retail with a
   `crates/gsc/tests/fixtures/semantics/probe_*.gsc` (or
   `client-probes/probe_*`) installed as the gametype and prints its `PROBE`

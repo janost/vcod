@@ -346,6 +346,14 @@ impl Cod1Module {
                         }
                         continue;
                     }
+                    script::PassStop::Team(master, step) => {
+                        drop(sims);
+                        crate::tick_trace::step!("G_MoverTeam team");
+                        if let Some(world) = world.as_ref() {
+                            push_team(clients, rt, master, step, &world.collision);
+                        }
+                        continue;
+                    }
                     script::PassStop::Client(slot) => {
                         drop(sims);
                         crate::tick_trace::step!("G_RunClient link slot {slot}");

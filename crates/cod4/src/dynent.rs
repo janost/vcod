@@ -403,9 +403,11 @@ impl DynEnts {
             if pushes && self.make_body(i, now) {
                 let r = Vec3::new(self.next_rand(), self.next_rand(), self.next_rand());
                 let spin = self.dvars.explode_spin_scale;
+                let msec = self.clock.step_ms;
                 let b = self.ents[i].body.as_mut().unwrap();
                 let at = b.pos + r * spin;
-                b.push(at, dir * force);
+                // World 0's `msecStep` (`esi` 0 into 0x5a5900 at 0x48eaa1).
+                b.push(at, dir * force, msec);
             }
             if breaks {
                 let dmg = ((damage[0] - damage[1]) as f32 * scale + damage[1] as f32) as i32;
@@ -486,8 +488,10 @@ impl DynEnts {
                 .map_or(0.0, |b| b.1.bullet_force_scale);
             let dir = (end - start).normalize_or_zero();
             let (force, phys) = (self.dvars.bullet_force, self.phys);
+            let msec = self.clock.step_ms;
             let b = self.ents[i].body.as_mut().unwrap();
-            b.launch(s.at, dir * force, scale, &phys);
+            // World 0 (the `push 0` into 0x5a5a20 at 0x48e34f).
+            b.launch(s.at, dir * force, scale, msec, &phys);
         }
         let mut broken = Vec::new();
         if breaks && damage != 0 {
@@ -695,14 +699,20 @@ mod tests {
         d.dvars.explode_spin_scale = 0.0;
         assert!(d.explode(&blast(200.0, 0.0), [0, 0], 0).is_empty());
         assert_eq!(d.awake(), 1, "the far can woke");
-        let v = d.ents[0].body.as_ref().unwrap().vel;
+        // Each push spent over a step of world 0's 17, whole.
+        let spent = |d: &DynEnts| {
+            let mut b = d.ents[0].body.clone().unwrap();
+            b.spend_force(0.017);
+            b.vel
+        };
+        let v = spent(&d);
         let want = Vec3::new(1.0, 0.0, 0.5).normalize() * (125.0 * 150.0 / 200.0);
         assert!(v.distance(want) < 1e-3, "{v} {want}");
         // Inside the inner radius the whole force.
         let mut d = DynEnts::new(Arc::new(vec![can(Vec3::X * 52.0)]));
         d.dvars.explode_spin_scale = 0.0;
         d.explode(&blast(200.0, 100.0), [0, 0], 0);
-        let v = d.ents[0].body.as_ref().unwrap().vel;
+        let v = spent(&d);
         assert!((v.length() - 125.0).abs() < 1e-3, "{v}");
     }
 
@@ -820,8 +830,8 @@ mod tests {
         let (s, _) = d.melee(Vec3::ZERO, view, 50, 0);
         assert!(s.is_some());
         assert_eq!(d.ents[0].health, 50);
-        let v = d.ents[0].body.as_ref().unwrap().vel;
-        assert!(v.x > 0.0, "{v}");
+        let f = d.ents[0].body.as_ref().unwrap().force();
+        assert!(f.x > 0.0, "{f}");
     }
 
     #[test]

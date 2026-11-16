@@ -271,6 +271,9 @@ otherwise.
 
 ### Movement and collision
 
+- A `func_door` keyed `angles` turns by them on its first move (the key
+  stays in `apos.trBase`), and the `angle` key is no field at all
+  (cod11-movers.md 26.2, 26.5).
 - Movement constants come from retail rodata. Retail 1.1 MP has no mantling,
   no swimming and no water jump.
 - One cmd step for every caller: `crates/common/src/pmove/cmd.rs` (`chop`,

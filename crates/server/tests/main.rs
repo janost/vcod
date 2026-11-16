@@ -22,6 +22,7 @@ mod cull15_ab;
 mod demos;
 mod dmgmove_ab;
 mod dmgtrig_ab;
+mod doors_ab;
 mod dyingpose_ab;
 mod entities_ab;
 mod entity_vis_ab;

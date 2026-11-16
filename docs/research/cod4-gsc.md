@@ -1221,6 +1221,32 @@ The body:
   0x5a5aab); `J dir` goes on at the moved point as a force times `1000 /
   msecStep` for one step (0x5a5900, `dBodyAddForceAtPos` 0x5b7000), which
   wakes the body. VERIFIED (disassembly).
+- The force (`Phys_ObjAddForce`, 0x5a5900): `1000 / msecStep` of the
+  world in `esi` (`fild [esi*4+0x71e798]`, `fdivr` the double 1000.0 at
+  0x70af28, stored as a float) times the push, then
+  `dBodyAddForceAtPos`, which adds it to the body's force (+0x98..+0xa0)
+  and `(p - x) x F` to its torque (+0xa8..+0xb0), `x` the body's position
+  then (+0xe0) (0x5b7000..0x5b70b7); then the disabled bit (+0x18 & 4)
+  cleared and the idle time and steps (+0xd8, +0xdc) reset from +0xd0 and
+  +0xd4 (0x5a5968..0x5a5981). VERIFIED (disassembly). `Phys_ObjBulletImpact`
+  takes its world as its first argument and passes it in `esi`
+  (0x5a5d73); the worlds named: 1 for the launch (`push 0x1` at
+  0x434dd8), 0 for a round on a launched part (0x48e043) and on a dynamic
+  entity (0x48e349), 0 for a blast on a dynamic entity (`xor esi,esi` at
+  0x48ea84). The jitter (0x5a23e0) names the world its contact pass was
+  handed, for both factors (0x5a2424, 0x5a2496, 0x5a2550). VERIFIED (the
+  arguments).
+- The world step adds `force * h * invMass` (body +0x94) to the linear
+  velocity (+0x130) and the body's world inverse inertia times
+  `torque * h` to the angular (+0x140) (0x5b9187..0x5b9290, `h` the step
+  at `[ebp+0x1c]`); 0x5a6640, after each step, zeroes both on each body
+  not disabled (0x5a666b..0x5a6689). VERIFIED (disassembly). That ODE's
+  quickstep solves the contacts with that force on, as with gravity, is
+  INFERRED (ODE's `dxQuickStepper`). So a push lands as the impulse
+  `J` times the length of its body's next step over the named world's
+  `msecStep`: whole when the two are one, 25 / 17 of it on a 50 ms frame's
+  two 25 ms steps, 28 / 17 for a round naming world 0 on a part stepped at
+  world 1's 28. INFERRED (the arithmetic).
 
 The world (registrations 0x5a2d00..0x5a4420; a dvar's default the
 immediate or float it is registered with):
@@ -1330,9 +1356,12 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   together on one clock (`WorldClock`: world 1's in
   `play::cod4_physics::Cod4Physics::advance`, world 0's in
   `DynEnts::advance_in`) at the `msecStep` the count awake after each step
-  picks (`physics::msec_step`). vcod's impulse is whole, where retail's
-  is a force times `1000 / msecStep` of the world it names over the
-  step's length (0x5a5900), and a round on a part names world 0. vcod's.
+  picks (`physics::msec_step`). A push (`Body::push`) is a force at the
+  named world's `msecStep`, spent with gravity in the body's next step
+  and zeroed: the launch at world 1's, a round on a part
+  (`Cod4Physics::shoot`) and a round or a blast on a dynamic entity at
+  world 0's (`DynEnts::clock`), a jitter over the step it is collided in.
+  VERIFIED (the code against the above).
 - In place of ODE: one impulse solver per body. Each box's (and an
   axial brush's) 8 corners, 12 edge midpoints and 6 face centres, a
   brush with sides' corners (where three of its planes meet), and 16
@@ -1368,7 +1397,8 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   cylinder on a floor on its side and upright and against a kerb's edge,
   the post-step sweep and its once a frame, a pinched body's facing
   contacts and its drop of those it leaves, 0x5a2320's cut, the contact
-  pass per geom, `msecStep` and the world clock),
+  pass per geom and its walk's order, `msecStep` and the world clock, a
+  push as a force over its body's next step),
   `cod4::part_edges` (3.6.1) and the live
   `cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest`: vcod-server's
   `war` on mp_backlot, a held bot's frags bursting on the first
@@ -1388,8 +1418,11 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   run). With the pass per geom, 0x5a2320's cut, the world's `msecStep`
   and the sweep once a frame they flew 14 to 164 units and slept within
   84 to 170 steps (the shot left mirror's 173 count those after the
-  round), and the round pushed it 7.4 units on (one run). VERIFIED (the
-  tests, ours). How a part looks in flight and at rest is pending a
+  round), and the round pushed it 7.4 units on (one run). With each push
+  a force over the body's next step at its named world's `msecStep` they
+  flew 14 to 175 units and slept within 84 to 122 steps (the shot left
+  mirror's 178 count those after the round), and the round pushed it 4.0
+  units on (one run). VERIFIED (the tests, ours). How a part looks in flight and at rest is pending a
   human's look.
 - The ragdoll (`cod4-player-anims.md` 10) keeps its point solver. This
   body could carry it once the bones are rigid capsules held by joint
@@ -1570,7 +1603,8 @@ What 1.7 collides a part against:
 - Which body is which: `dSpaceCollide2`'s stand-in 0x5aa100 walks the
   space's geoms and calls the near callback 0x5a5f20 with a body's geom
   as `o1` and the world geom as `o2` (pushes at 0x5aa129..0x5aa12b),
-  skipping a geom whose body is disabled (body +0x18 bit 4). 0x5a5f20
+  skipping a geom whose body is disabled (body +0x18 bit 4) or whose
+  enabled flag (geom +8 & 8) is clear. 0x5a5f20
   reads each geom's body (+0x10), so `b1` is the part's and `b2` none,
   and the contact joint is attached `(b1, b2)` (0x5a2add, 0x5b72e0).
   VERIFIED (disassembly). That each normal points out of the world into
@@ -1740,9 +1774,8 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`,
   position), the walk's skip of the moved-in contact, and 0x5a2760's
   drop of each contact whose point leaves it, the velocity the one
   before the step's gravity, a still point's taken as (1, 0, 0); then
-  the jitter on each contact kept. The geoms go last first, as ODE's
-  space lists a geom it is given at its head. INFERRED (ODE's
-  `dxSpace::add`; 0x5aa100's walk order not read). vcod's: a geom's
+  the jitter on each contact kept. The geoms go in 0x5aa100's order,
+  below. vcod's: a geom's
   contacts here are those its box or cylinder collider gives in the
   0.125 skin or inside, ODE's overlaps, or, for a brush with sides,
   which has no collider here, its points'. A box's or cylinder's points
@@ -1751,6 +1784,39 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`,
   drops in `cod4::part_edges` below failed, most with a point left in
   the world. VERIFIED (the run, ours). The points found in the solver's
   second pass take the drop alone.
+- The walk's order. 0x5aa100 walks the space's list from its head (space
+  +0x50) along each geom's +0x20 (0x5aa10f..0x5aa139). A geom is built
+  by 0x5a9790 (each `physGeoms` entry in its order, 0x5a5710's loop to
+  0x5a57bb, through 0x5a4ab0's creators, e.g. 0x5a8d50, into 0x5a9970),
+  which adds it to the world's space (0xcc546e8 by world, 0x5a4bbc) at
+  the head (0x5a9f00, the space's add) and to the body's list at its
+  head (body +0x1c, the next at geom +0x14, 0x5a982e..0x5a9839). The
+  space's `dirty` (0x5a9f80, the space vtable 0x6f8200's seventh slot)
+  moves a geom to the head; `dGeomMoved` (0x5a9cc0, and inlined) calls it
+  on a geom whose dirty flag (geom +8 & 1) is clear and sets it. Each
+  step's space collide (0x5aa070, called at 0x5a65d8) first runs
+  `cleanGeoms` (0x5aa010), which clears the flag from the head on. After
+  each step 0x5a6640 walks each body not disabled and, through the
+  body's list, moves each of its geoms (0x5a668f..0x5a66d7). ODE's own
+  body step (0x5b8380) moves none. VERIFIED (disassembly). So on a body's
+  first step the walk meets its geoms last made first, as they went in,
+  and on every step after first made first, the body's list walked last
+  made first and each put at the head in turn; a body asleep is not
+  moved and keeps that order. INFERRED (the code above; nothing found
+  cleaning the flags between a body's making and its first step).
+  `Body::contact_pass` walks them so; a walk by the steps taken. vcod's.
+  `the_contact_pass_pinches_on_one_geoms_facing_contacts_only`: of a
+  geom pinched between two walls and a geom on a floor the body rises
+  off, the floor's contact stays on the first step and is dropped on a
+  later one. VERIFIED (the test, ours).
+- The push as a force: `a_push_is_a_force_over_the_next_step_of_its_body_world`
+  (a push at 17 spent 25 / 17 over a 25 ms step and not again; one at 28
+  spun 17 / 28 over a 17 ms step), and in `cod4::part_edges`
+  `a_round_on_a_flying_part_is_a_force_at_world_zeros_msec_step`: the 36
+  parts below in flight, world 1 at 28 ms, a round on the hood naming
+  world 0's 17 moves it 1.647 times what the same round naming world 1
+  does (28 / 17). As one whole impulse each moved it the same. VERIFIED
+  (the runs, ours).
 - The sleep is ODE's rule above on the step's end speeds, `idle` the
   time under both; ten idle steps take 170 ms, under
   `phys_autoDisableTime`. vcod's: idle on a speed strictly under the

@@ -23,8 +23,7 @@ Ranked by how much a player notices.
   contacts, its cylinders by 1.7's separating axes with vcod's points per
   feature, not ODE's own box colliders; a brush with sides meets the
   world on its points alone, and every geom keeps vcod's points beside
-  its collider; a push is a whole impulse, not a force over the step at
-  `1000 / msecStep` of the world it names (cod4-gsc.md 3.6, 3.6.1). The
+  its collider (cod4-gsc.md 3.6, 3.6.1). The
   ragdoll is a position-based solver (cod4-player-anims.md 10). M.
 - Multichannel output: kira mixes stereo, so a 5.1 or 7.1 device gets
   the stereo mix on its front pair (cod4-sound.md 4.2, 5). The 139 alias
