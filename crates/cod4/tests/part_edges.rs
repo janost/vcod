@@ -1,17 +1,21 @@
 //! Launched car parts against mp_backlot's steps and dynamic entities
 //! against mp_crash's and the cylinder props' maps' (`vcod_cod4::physics`,
 //! cod4-gsc.md 3.6.1): each dropped edge-first across a step's edge comes
-//! to rest with no world solid inside its box or cylinder.
+//! to rest with no world solid inside its box or cylinder; picture frames
+//! wedged between two walls on mp_crash's floor rest as a pinched body's
+//! contact filter lets them.
 //! `COD4_DIR` unset passes vacuously.
 
-use glam::Vec3;
+use glam::{Mat3, Quat, Vec3};
 use vcod_cod4::assets::Assets;
 use vcod_cod4::collision::ClipMap;
 use vcod_cod4::map::Map;
 use vcod_cod4::physics::{
-    Body, Dvars, Preset, Shape, ShapeBox, ShapeCylinder, clip_solids, clip_trace, part_models,
+    Body, Dvars, Preset, Shape, ShapeBox, ShapeCylinder, Solid, clip_solids, clip_trace,
+    part_models,
 };
 use vcod_cod4::ragdoll::CLIP_MASK;
+use vcod_cod4::ragdoll::Sweep;
 use vcod_cod4::testing::cod4_install;
 use vcod_cod4::walk::{WalkOptions, walk};
 use vcod_cod4::zone::Zone;
@@ -171,13 +175,12 @@ fn body_depth(clip: &ClipMap, b: &Body) -> f32 {
 
 /// `shape` with `preset` dropped from 24 units over the first six of
 /// `edges`, across them, along them and at 45 degrees, tipped 30 degrees
-/// so an edge leads, stepped as `advance` steps it to 30 s: a line per
+/// so an edge leads, stepped as `advance` steps it to 60 s: a line per
 /// drop that does not sleep, ends with a point in the world, or with world
-/// solid a quarter unit or more inside its box or cylinder. A cylinder
-/// still rolling down a slope at the end passes: a bottle's spin takes
-/// past 10 s to fall under `phys_autoDisableAngular` through
-/// `phys_dragAngular`, and a slope keeps it up. A shape with no box drops
-/// its first cylinder's centre there.
+/// solid a quarter unit or more inside its box or cylinder. A bottle
+/// rolling off a step keeps its spin over `phys_autoDisableAngular`
+/// through `phys_dragAngular` past 30 s (cod4-gsc.md 3.6.1). A shape with
+/// no box drops its first cylinder's centre there.
 fn drop_on_steps(
     clip: &ClipMap,
     edges: &[(Vec3, Vec3)],
@@ -202,7 +205,7 @@ fn drop_on_steps(
             let clear = body_depth(clip, &b) == 0.0;
             assert!(clear, "{name} at {at} turn {turn}: starts in the world");
             let mut t = 0;
-            while t < 30_000 && !b.asleep {
+            while t < 60_000 && !b.asleep {
                 t += 16;
                 advance(&mut b, t);
             }
@@ -212,21 +215,13 @@ fn drop_on_steps(
                 .world_points()
                 .filter(|&p| clip.trace(p, p, z, z, CLIP_MASK).startsolid)
                 .count();
-            // Still rolling down a slope: its speed its spin about its
-            // axis times its radius.
-            let rolling = !b.asleep
-                && b.world_cylinders().next().is_some_and(|c| {
-                    let spin = b.avel.dot(c.axis).abs() * c.radius;
-                    let v = b.vel.length();
-                    v > 0.0 && (v - spin).abs() < 0.25 * v
-                });
             let line = format!(
-                "{name} at {at} turn {turn} roll {roll}: asleep {} rolling {rolling} after {t} ms, {} away, solid {depth} deep, {points_in} points in",
+                "{name} at {at} turn {turn} roll {roll}: asleep {} after {t} ms, {} away, solid {depth} deep, {points_in} points in",
                 b.asleep,
                 b.origin().distance(origin)
             );
             println!("{line}");
-            if !(b.asleep || rolling) || depth > 0.0 || points_in > 0 {
+            if !b.asleep || depth > 0.0 || points_in > 0 {
                 problems.push(line);
             }
         }
@@ -375,5 +370,239 @@ fn cylinder_props_dropped_edge_first_rest_clear_of_steps() {
         ));
     }
     println!("{} models, {} problems", seen.len(), problems.len());
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// An axial slab `lo..hi` of solid.
+struct Slab {
+    lo: Vec3,
+    hi: Vec3,
+}
+
+impl Slab {
+    fn planes(&self) -> Vec<(Vec3, f32)> {
+        (0..3)
+            .flat_map(|k| [(Vec3::AXES[k], self.hi[k]), (-Vec3::AXES[k], -self.lo[k])])
+            .collect()
+    }
+
+    /// A box of half size `ext` swept `a..b` against it as the clip map's
+    /// kernels sweep one: the slab grown by `ext`, the skin kept off it.
+    fn trace(&self, a: Vec3, b: Vec3, ext: f32) -> Sweep {
+        let (lo, hi) = (self.lo - Vec3::splat(ext), self.hi + Vec3::splat(ext));
+        let miss = Sweep {
+            fraction: 1.0,
+            normal: Vec3::ZERO,
+            startsolid: false,
+        };
+        let (mut enter, mut leave, mut normal, mut out) = (-1.0f32, 1.0f32, Vec3::ZERO, false);
+        for k in 0..3 {
+            for (n, d) in [(Vec3::AXES[k], hi[k]), (-Vec3::AXES[k], -lo[k])] {
+                let (d1, d2) = (n.dot(a) - d, n.dot(b) - d);
+                out |= d1 > 0.0;
+                if d1 > 0.0 && (d2 >= SKIN || d2 >= d1) {
+                    return miss;
+                }
+                if d1 <= 0.0 && d2 <= 0.0 {
+                    continue;
+                }
+                if d1 > d2 {
+                    let f = ((d1 - SKIN) / (d1 - d2)).max(0.0);
+                    if f > enter {
+                        (enter, normal) = (f, n);
+                    }
+                } else {
+                    leave = leave.min(((d1 + SKIN) / (d1 - d2)).min(1.0));
+                }
+            }
+        }
+        if !out {
+            Sweep {
+                fraction: 0.0,
+                normal: Vec3::Z,
+                startsolid: true,
+            }
+        } else if enter > -1.0 && enter < leave {
+            Sweep {
+                fraction: enter,
+                normal,
+                startsolid: false,
+            }
+        } else {
+            miss
+        }
+    }
+
+    /// How far `p` lies inside it, 0 outside.
+    fn depth(&self, p: Vec3) -> f32 {
+        (p - self.lo).min(self.hi - p).min_element().max(0.0)
+    }
+}
+
+/// `SURFACE_CLIP_EPSILON`, the skin the clip map's kernels keep.
+const SKIN: f32 = 0.125;
+
+/// `clip` with `slabs` added, as the body's trace and its solids round a
+/// box.
+#[allow(clippy::type_complexity)]
+fn with_slabs<'a>(
+    clip: &'a ClipMap,
+    slabs: &'a [Slab],
+) -> (
+    impl FnMut(Vec3, Vec3, f32) -> Sweep + 'a,
+    impl FnMut(Vec3, Vec3) -> Vec<Solid> + 'a,
+) {
+    let mut t = clip_trace(clip);
+    let mut s = clip_solids(clip);
+    let trace = move |a: Vec3, b: Vec3, ext: f32| {
+        let mut best = t(a, b, ext);
+        for slab in slabs {
+            let w = slab.trace(a, b, ext);
+            if w.startsolid || (!best.startsolid && w.fraction < best.fraction) {
+                best = w;
+            }
+        }
+        best
+    };
+    let solids = move |lo: Vec3, hi: Vec3| {
+        let mut out = s(lo, hi);
+        for slab in slabs {
+            if slab.lo.cmple(hi).all() && slab.hi.cmpge(lo).all() {
+                out.extend(Solid::brush(&slab.planes()));
+            }
+        }
+        out
+    };
+    (trace, solids)
+}
+
+/// The first `mp_tdm_spawn`'s floor with a level 64 by 64 by 96 room
+/// over it.
+fn open_floor(m: &Map, clip: &ClipMap) -> Vec3 {
+    let mut spawns: Vec<Vec3> = m
+        .entities
+        .iter()
+        .filter(|e| {
+            e.iter()
+                .any(|(k, v)| k == "classname" && v == "mp_tdm_spawn")
+        })
+        .filter_map(|e| {
+            let (_, o) = e.iter().find(|(k, _)| k == "origin")?;
+            let v: Vec<f32> = o
+                .split_whitespace()
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            (v.len() == 3).then(|| Vec3::new(v[0], v[1], v[2]))
+        })
+        .collect();
+    spawns.sort_by(|a, b| a.to_array().partial_cmp(&b.to_array()).unwrap());
+    spawns
+        .into_iter()
+        .find_map(|s| {
+            let (z, n) = floor(clip, s.x, s.y, s.z + 48.0)?;
+            let level = [(-30.0, -30.0), (30.0, -30.0), (-30.0, 30.0), (30.0, 30.0)]
+                .iter()
+                .all(|&(dx, dy)| {
+                    floor(clip, s.x + dx, s.y + dy, s.z + 48.0)
+                        .is_some_and(|(fz, fnm)| fnm.z > 0.99 && (fz - z).abs() < 0.01)
+                });
+            let at = Vec3::new(s.x, s.y, z);
+            let room = Vec3::new(32.0, 32.0, 48.0);
+            let over = at + Vec3::Z * (room.z + 1.0);
+            (n.z > 0.99 && level && !clip.trace(over, over, -room, room, CLIP_MASK).startsolid)
+                .then_some(at)
+        })
+        .unwrap()
+}
+
+/// mp_crash's picture frames wedged between two facing walls (cod4-gsc.md
+/// 3.6.1): two slabs stood on the map's floor a tenth closer than the
+/// frame is long, the frame laid flat across them 40 over the floor,
+/// tipped about the walls' line until it fits with a unit to spare and
+/// turning at 2, 4 or 8 rad/s to lie flatter, so its ends meet both walls
+/// and it leans between them. Pinched, it keeps the first wall's contacts
+/// and loses the other's and those its points leave (0x5a2760), so it
+/// comes to rest with its end inside that far wall, but under a quarter
+/// unit, the floor and the kept wall under a quarter too. Without the
+/// filter all 18 rest with no point in either wall.
+#[test]
+fn pictures_wedged_between_two_walls_lose_one_walls_contacts() {
+    let (Some(install), Some(common)) = (cod4_install(), zone("common_mp")) else {
+        return;
+    };
+    let (m, crash) = Map::load(&install, "english", "mp_crash").unwrap();
+    let clip = ClipMap::from_assets(&crash.assets).unwrap();
+    let defs = vcod_cod4::dynent::defs(&crash.assets, &[&common]);
+    let d = Dvars::default();
+    let spot = open_floor(&m, &clip);
+    let mut problems = Vec::new();
+    for model in [4, 5, 6, 7, 8, 10].map(|n| format!("me_picture{n}")) {
+        let def = defs.iter().find(|x| x.model == model).unwrap();
+        let (shape, preset) = def.body.as_ref().unwrap();
+        let bx = shape.boxes[0];
+        // Its longest side across the walls (x), its thinnest up.
+        let dims = bx.half * 2.0;
+        let mut idx = [0usize, 1, 2];
+        idx.sort_by(|&p, &q| dims[q].total_cmp(&dims[p]));
+        let (len, thin) = (dims[idx[0]], dims[idx[2]]);
+        let mut cols = [Vec3::X, Vec3::Y, Vec3::Z];
+        (cols[idx[0]], cols[idx[1]], cols[idx[2]]) = (Vec3::X, Vec3::Y, Vec3::Z);
+        if Mat3::from_cols(cols[0], cols[1], cols[2]).determinant() < 0.0 {
+            cols[idx[2]] = -cols[idx[2]];
+        }
+        let w = 0.9 * len;
+        let mut tip = 0.0f32;
+        while len * tip.cos() + thin * tip.sin() > w - 1.0 {
+            tip += 0.005;
+        }
+        let rot = Quat::from_axis_angle(Vec3::Y, tip)
+            * Quat::from_mat3(&Mat3::from_cols(cols[0], cols[1], cols[2]));
+        let wall = |x0: f32, x1: f32| Slab {
+            lo: spot + Vec3::new(x0, -24.0, -8.0),
+            hi: spot + Vec3::new(x1, 24.0, 96.0),
+        };
+        let walls = [
+            wall(-w * 0.5 - 16.0, -w * 0.5),
+            wall(w * 0.5, w * 0.5 + 16.0),
+        ];
+        for spin in [2.0, 4.0, 8.0] {
+            let origin = spot + Vec3::Z * 40.0 - rot * bx.centre;
+            let mut b = Body::at(origin, rot, shape, preset, 0);
+            b.avel = -Vec3::Y * spin;
+            let (mut trace, mut solids) = with_slabs(&clip, &walls);
+            assert!(
+                b.world_points().all(|p| !trace(p, p, 0.0).startsolid)
+                    && body_depth(&clip, &b) == 0.0
+            );
+            let mut t = 0;
+            while t < 60_000 && !b.asleep {
+                t += 16;
+                b.advance_in(t, &mut trace, &mut solids, &d);
+            }
+            let into = |s: &Slab| b.world_points().map(|p| s.depth(p)).fold(0.0f32, f32::max);
+            let (near, far) = {
+                let (a, c) = (into(&walls[0]), into(&walls[1]));
+                (a.min(c), a.max(c))
+            };
+            let floor_in = b
+                .world_points()
+                .map(|p| spot.z - p.z)
+                .fold(body_depth(&clip, &b), f32::max);
+            let line = format!(
+                "{model} spin {spin}: asleep {} after {t} ms, pinched {} of {} steps, walls {near} and {far} in, floor {floor_in}",
+                b.asleep, b.pinched, b.steps
+            );
+            println!("{line}");
+            if !b.asleep
+                || b.pinched == 0
+                || far <= 0.0
+                || far >= 0.25
+                || near >= 0.25
+                || floor_in >= 0.25
+            {
+                problems.push(line);
+            }
+        }
+    }
     assert!(problems.is_empty(), "{problems:#?}");
 }
