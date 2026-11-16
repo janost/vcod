@@ -326,15 +326,11 @@ fn mirror_weapons_of(sim: &mut ClientSim, rt: &mut script::ScriptRuntime, slot: 
     sim.viewmodel_index = rt.client_viewmodel(slot);
     sim.shellshock = rt.client_shellshock(slot);
     // The body, head and helmet the character script dressed the
-    // client in: what a shot at it is traced against. 1.5's and UO's
-    // ignoreCollision bits are taken only with a change of models: the
-    // player's DObj is rebuilt then and not for the bits alone
-    // (cod15-protocol-diff.md, `getAttachIgnoreCollision`).
-    if let Some(a) = rt.client_assembly(slot) {
-        let a = sim.assembly.next(a);
-        if a != sim.assembly {
-            sim.assembly = a;
-        }
+    // client in: what a shot at it is traced against.
+    if let Some(a) = rt.client_assembly(slot)
+        && a != sim.assembly
+    {
+        sim.assembly = a;
     }
     // And back the other way: the sim owns where a player is, so the
     // script's copy is written from it every frame.
