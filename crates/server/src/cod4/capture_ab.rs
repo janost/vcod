@@ -668,11 +668,7 @@ const CSB0_CORPSE: Pair = Pair {
     cvars: &[("sv_clientSideBullets", "0")],
 };
 
-const CSB0_CORPSE_GAPS: &[(&str, &str)] = &[(
-    "target entity 348",
-    "the killcam's archived plate impact of 45100, which retail's \
-         replay keeps four frames from 48350 and ours leaves out",
-)];
+const CSB0_CORPSE_GAPS: &[(&str, &str)] = &[];
 
 /// Under `sv_clientSideBullets` 0 a kill through the plate: the corpse's
 /// fall in solid sweeps again and stays up, `trTime` the frame's, and the

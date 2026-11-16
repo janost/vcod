@@ -363,9 +363,25 @@ impl crate::engine::GameModule for Cod4Game {
         }
         let (roster, world) = snaps.as_ref().unwrap();
         let (roster, mut world) = (roster.clone(), world.clone());
-        // A killcam's follower sees the world as it was at the look back.
-        if let Some(old) = e.game.level.as_ref().and_then(|l| l.killcam_entities(slot)) {
-            world = old;
+        if let Some(l) = e.game.level.as_ref() {
+            match l.killcam_entities(slot) {
+                // A killcam's follower sees the world as it was at the look
+                // back, each temp entity by the mask it was archived with
+                // (0x817a5b3), never a live one's.
+                Some(old) => world = old,
+                // The temp entities a single-client scope keeps from the
+                // client the playerstate views as (`r.clientMask`,
+                // cod4-combat.md 4).
+                None => {
+                    let viewer = l
+                        .playerstate(slot)
+                        .and_then(|p| p.get("clientNum"))
+                        .unwrap_or(slot as u32);
+                    for n in l.hidden_from(viewer as usize) {
+                        world.remove(&n);
+                    }
+                }
+            }
         }
         e.send_message(slot, &roster, &world);
         e.send_voice(slot);
@@ -1570,17 +1586,6 @@ impl Cod4Server {
             .as_ref()
             .and_then(|l| l.playerstate(slot))
             .cloned();
-        // The temp entities a single-client scope keeps from the client
-        // the playerstate views as (`r.clientMask`, cod4-combat.md 4).
-        let viewer_num = level_ps
-            .as_ref()
-            .and_then(|p| p.get("clientNum"))
-            .unwrap_or(slot as u32);
-        let hidden = self
-            .game
-            .level
-            .as_ref()
-            .map_or_else(Vec::new, |l| l.hidden_from(viewer_num as usize));
         let Some(c) = self.core.clients[slot].as_mut() else {
             return;
         };
@@ -1601,7 +1606,7 @@ impl Cod4Server {
                 ps,
                 entities: world
                     .values()
-                    .filter(|e| e.number() != viewer && !hidden.contains(&e.number()))
+                    .filter(|e| e.number() != viewer)
                     .copied()
                     .collect(),
                 clients: roster.to_vec(),
