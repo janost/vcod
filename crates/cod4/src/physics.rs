@@ -497,6 +497,8 @@ fn box_contacts(
         }
     }
     let on_face = s.open || face.0 >= side.0;
+    // The face the reference pair took from the solid.
+    let mut taken = face.1;
     if on_face {
         face_reference(c, &axes, h, &s.faces[face.1], margin, out);
     } else {
@@ -505,13 +507,15 @@ fn box_contacts(
         let (k, sign) = (side.1, side.2);
         let nb = axes[k] * sign;
         let plane = nb.dot(c) + h[k];
-        let Some((_, _, poly)) = s
+        let Some((i, (_, _, poly))) = s
             .faces
             .iter()
-            .min_by(|x, y| x.0.dot(nb).total_cmp(&y.0.dot(nb)))
+            .enumerate()
+            .min_by(|x, y| x.1.0.dot(nb).total_cmp(&y.1.0.dot(nb)))
         else {
             return;
         };
+        taken = i;
         let rect = [(k + 1) % 3, (k + 2) % 3].into_iter().flat_map(|j| {
             let m = axes[j].dot(c);
             [(axes[j], m - h[j]), (-axes[j], -m - h[j])]
@@ -524,7 +528,7 @@ fn box_contacts(
         }
     }
     if !s.open {
-        edge_contacts(c, &axes, h, s, out);
+        edge_contacts(c, &axes, h, s, taken, out);
     }
     if !narrow || s.open {
         return;
@@ -549,11 +553,25 @@ fn box_contacts(
 
 /// The solid's edges where they run inside the box: each clipped edge's
 /// ends and middle deeper than the skin in it push the box out along its
-/// face nearest the point. Neither face is then the right reference: a
+/// face nearest the point, but for face `taken`'s, which the reference
+/// clip has already met. Neither face is then the right reference: a
 /// kerb's or a ledge's edge across a box's face. vcod's.
-fn edge_contacts(c: Vec3, axes: &[Vec3; 3], h: Vec3, s: &Solid, out: &mut Vec<(Vec3, Vec3, f32)>) {
+fn edge_contacts(
+    c: Vec3,
+    axes: &[Vec3; 3],
+    h: Vec3,
+    s: &Solid,
+    taken: usize,
+    out: &mut Vec<(Vec3, Vec3, f32)>,
+) {
     let local = |p: Vec3| Vec3::new(axes[0].dot(p - c), axes[1].dot(p - c), axes[2].dot(p - c));
-    for (_, _, poly) in &s.faces {
+    for (_, _, poly) in s
+        .faces
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != taken)
+        .map(|(_, f)| f)
+    {
         for i in 0..poly.len() {
             let (a, b) = (local(poly[i]), local(poly[(i + 1) % poly.len()]));
             // The segment clipped to the box, as fractions along it.

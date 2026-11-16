@@ -1457,7 +1457,9 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`):
   (above). `a_narrow_box_over_a_brushs_edge_takes_its_other_faces`.
 - Past 1.7's colliders: each brush edge that runs more than the skin
   into the box pushes it out along the box face nearest the point, at
-  the clipped edge's ends and middle. Neither face reference holds a
+  the clipped edge's ends and middle, but for the edges of the face the
+  reference pair took, which its clip already meets (with them a resting
+  sedan bumper in the live gate below slept with a point in the floor). Neither face reference holds a
   ledge's edge across a box's face: mp_crash's red toolbox slept on a
   ledge's edge half a unit into it without this. vcod's.
 - A triangle is always the reference and is met from its front. It is
