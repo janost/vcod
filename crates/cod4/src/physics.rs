@@ -90,9 +90,12 @@ pub struct Dvars {
     pub max_correcting: f32,
     /// `msecStep`'s floor for the fx world (17 ms).
     pub step_ms: i32,
-    /// `phys_narrowObjMaxLength` (4): a box with a side shorter takes
-    /// the narrow pass ([`box_contacts`]).
+    /// `phys_narrowObjMaxLength` (4): a box with a side shorter, or a
+    /// cylinder thinner, takes the narrow pass ([`box_contacts`]).
     pub narrow_max_length: f32,
+    /// `phys_csl` (1): the post-step sweep goes as a point for a body
+    /// whose sweep size is under twice it ([`Body::sweep`]).
+    pub csl: f32,
 }
 
 impl Default for Dvars {
@@ -111,19 +114,33 @@ impl Default for Dvars {
             max_correcting: 20.0,
             step_ms: 17,
             narrow_max_length: 4.0,
+            csl: 1.0,
         }
     }
 }
 
 /// A part's collision and mass in its model's frame: the points that meet
-/// the world, the boxes among its geoms, the centre of mass and the inertia
-/// per unit of mass about it.
+/// the world, the boxes and cylinders among its geoms, the centre of mass,
+/// the inertia per unit of mass about it, and the half size its post-step
+/// sweep reads ([`Body::sweep`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shape {
     pub points: Vec<Vec3>,
     pub boxes: Vec<ShapeBox>,
+    pub cylinders: Vec<ShapeCylinder>,
     pub com: Vec3,
     pub inertia: Mat3,
+    pub sweep_half: f32,
+}
+
+/// A cylinder geom: its centre, its axis (unit), its radius and half
+/// height.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShapeCylinder {
+    pub centre: Vec3,
+    pub axis: Vec3,
+    pub radius: f32,
+    pub half: f32,
 }
 
 /// A box geom: its centre, its axes (the columns) and half sizes.
@@ -157,8 +174,10 @@ impl Shape {
         Shape {
             points: corners(c, Mat3::IDENTITY, h),
             boxes: vec![ShapeBox::new(c, Mat3::IDENTITY, h)],
+            cylinders: Vec::new(),
             com: c,
             inertia: box_inertia(h),
+            sweep_half: h.min_element(),
         }
     }
 
@@ -175,20 +194,27 @@ impl Shape {
         Shape {
             points: corners(c, Mat3::IDENTITY, h),
             boxes: vec![ShapeBox::new(c, Mat3::IDENTITY, h)],
+            cylinders: Vec::new(),
             com: c,
             inertia: box_inertia(h),
+            sweep_half: h.min_element(),
         }
     }
 
     /// The brushes' and boxes' corners and the cylinders' rims, with the
-    /// list's `PhysMass`; `None` when the list gives no point.
+    /// list's `PhysMass`; `None` when the list gives no point. The sweep's
+    /// half size is the last geom's: ODE puts each geom it gives a body at
+    /// the head of the body's list, which 0x5a6930 reads.
     fn of_geoms(list: &PhysGeomList) -> Option<Shape> {
         let mut points = Vec::new();
         let mut boxes = Vec::new();
+        let mut cylinders = Vec::new();
+        let mut sweep_half = 0.0;
         for g in &list.geoms {
             if let Some(b) = &g.brush {
                 let (lo, hi) = (Vec3::from(b.mins), Vec3::from(b.maxs));
                 let (c, h) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
+                sweep_half = brush_sweep_half(lo, hi);
                 // A brush no side cuts is its bounds' box.
                 let cut = (!b.planes.is_empty())
                     .then(|| brush_corners(b))
@@ -216,9 +242,11 @@ impl Shape {
                 GEOM_BOX => {
                     points.extend(corners(at, axis, h));
                     boxes.push(ShapeBox::new(at, axis, h));
+                    sweep_half = h.min_element();
                 }
-                // The axis is the first row, `halfLengths` the half height
-                // and the radius.
+                // The axis is the first row (0x5a55f0 gives the geom axis
+                // 1, the rotation's first column), `halfLengths` the half
+                // height and the radius.
                 GEOM_CYLINDER => {
                     for end in [-h.x, h.x] {
                         for i in 0..RING {
@@ -227,6 +255,15 @@ impl Shape {
                             points.push(at + axis * local);
                         }
                     }
+                    cylinders.push(ShapeCylinder {
+                        centre: at,
+                        axis: axis.x_axis.normalize_or(Vec3::X),
+                        radius: h.y,
+                        half: h.x,
+                    });
+                    // 0x5a688b: the radius over root 2, or the half
+                    // height when less.
+                    sweep_half = (h.y * std::f32::consts::FRAC_1_SQRT_2).min(h.x);
                 }
                 _ => {}
             }
@@ -239,13 +276,29 @@ impl Shape {
         Some(Shape {
             points,
             boxes,
+            cylinders,
             com: list.center_of_mass.into(),
             inertia: Mat3::from_cols(
                 Vec3::new(m[0], p[0], p[1]),
                 Vec3::new(p[0], m[1], p[2]),
                 Vec3::new(p[1], p[2], m[2]),
             ),
+            sweep_half,
         })
+    }
+}
+
+/// A brush geom's sweep half size (0x5a684f, 0x561910): its bounds times
+/// 0.01, x and y cut down to z's size about their middles where longer,
+/// and the top x. Every stock brush gives well under twice `phys_csl`, so
+/// its sweep goes as a point.
+fn brush_sweep_half(mins: Vec3, maxs: Vec3) -> f32 {
+    let (lo, hi) = (mins * 0.01, maxs * 0.01);
+    let s = hi - lo;
+    if s.z < s.x {
+        hi.x - (s.x - s.z) * 0.5
+    } else {
+        hi.x
     }
 }
 
@@ -527,9 +580,8 @@ fn box_contacts(
             }
         }
     }
-    if !s.open {
-        edge_contacts(c, &axes, h, s, taken, out);
-    }
+    // A triangle's own edges too: its face's clip meets none of them.
+    edge_contacts(c, &axes, h, s, if s.open { usize::MAX } else { taken }, out);
     if !narrow || s.open {
         return;
     }
@@ -555,7 +607,8 @@ fn box_contacts(
 /// ends and middle deeper than the skin in it push the box out along its
 /// face nearest the point, but for face `taken`'s, which the reference
 /// clip has already met. Neither face is then the right reference: a
-/// kerb's or a ledge's edge across a box's face. vcod's.
+/// kerb's or a ledge's edge across a box's face, or a mesh stair's nosing
+/// through a picture frame. vcod's.
 fn edge_contacts(
     c: Vec3,
     axes: &[Vec3; 3],
@@ -662,6 +715,405 @@ fn face_reference(
     }
 }
 
+/// A cylinder's reach along `l` from its centre (0x5a11f0, 0x59f5d0): its
+/// half height times `|a . l|` and its radius times the sine.
+fn cylinder_reach(cy: &ShapeCylinder, l: Vec3) -> f32 {
+    let c = cy.axis.dot(l).abs().min(1.0);
+    cy.half * c + cy.radius * (1.0 - c * c).sqrt()
+}
+
+/// A cylinder against `s`, as the fx world's cylinder colliders do it
+/// (iw3mp.exe 0x5a1330 against a brush, 0x5a17c0 against a partition's
+/// triangles, cod4-gsc.md 3.6.1). A brush: each face's depth is the
+/// cylinder's centre off its plane less the cylinder's reach along it, or
+/// none when the centre and the body's centre `com` both lie behind it;
+/// a face the cylinder clears by `margin` keeps it out; the least deep of
+/// the rest is the reference, and a `narrow` cylinder also takes every
+/// other face its centre lies in front of. A triangle is its own
+/// reference. Each reference goes to [`cylinder_polygon`]. Pushes
+/// `(point on the cylinder, normal out of the solid, separation)`.
+fn cylinder_contacts(
+    cy: &ShapeCylinder,
+    com: Vec3,
+    s: &Solid,
+    margin: f32,
+    narrow: bool,
+    out: &mut Vec<(Vec3, Vec3, f32)>,
+) {
+    if s.open {
+        cylinder_polygon(cy, com, &s.faces[0], margin, out);
+        return;
+    }
+    let mut best: Option<(f32, usize)> = None;
+    for (i, (n, d, _)) in s.faces.iter().enumerate() {
+        let off = n.dot(cy.centre) - d;
+        if off < 0.0 && n.dot(com) - d < 0.0 {
+            continue;
+        }
+        let depth = off - cylinder_reach(cy, *n);
+        if depth >= margin {
+            return;
+        }
+        if best.is_none_or(|(b, _)| depth > b) {
+            best = Some((depth, i));
+        }
+    }
+    let Some((_, reference)) = best else {
+        return;
+    };
+    cylinder_polygon(cy, com, &s.faces[reference], margin, out);
+    // Only for a brush 0x5a0f70's gate lets meet the cylinder: a stock
+    // car wheel launched with its centre on its car's clip's floor face
+    // took that clip's edges, inside it, as contacts.
+    let (n, d, _) = &s.faces[reference];
+    if n.dot(cy.centre) > *d || n.dot(com) > *d {
+        cylinder_edge_contacts(cy, s, reference, out);
+    }
+    if !narrow {
+        return;
+    }
+    for (i, f) in s.faces.iter().enumerate() {
+        if i != reference && f.0.dot(cy.centre) > f.1 {
+            cylinder_polygon(cy, com, f, margin, out);
+        }
+    }
+}
+
+/// [`edge_contacts`] for a cylinder against a brush: each edge of its
+/// faces but the reference's where it runs more than the skin inside the cylinder
+/// pushes it out at the inside part's ends and middle, along the cap or
+/// the side nearest the point. A stock junk tire tipped onto a step's
+/// edge slept with the edge a unit into its cap without it. vcod's.
+fn cylinder_edge_contacts(
+    cy: &ShapeCylinder,
+    s: &Solid,
+    taken: usize,
+    out: &mut Vec<(Vec3, Vec3, f32)>,
+) {
+    let (c, a, r, hh) = (cy.centre, cy.axis, cy.radius, cy.half);
+    // Height along the axis and the part across it.
+    let split = |p: Vec3| {
+        let w = p - c;
+        let h = w.dot(a);
+        (h, w - a * h)
+    };
+    for (_, _, poly) in s
+        .faces
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != taken)
+        .map(|(_, f)| f)
+    {
+        for i in 0..poly.len() {
+            let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
+            let ((hp, fp), (hq, fq)) = (split(p), split(q));
+            // The segment within the caps' slab, as fractions along it.
+            let (mut t0, mut t1) = (0.0f32, 1.0f32);
+            let dh = hq - hp;
+            if dh.abs() < 1e-6 {
+                if hp.abs() > hh {
+                    continue;
+                }
+            } else {
+                let (u, v) = ((-hh - hp) / dh, (hh - hp) / dh);
+                t0 = t0.max(u.min(v));
+                t1 = t1.min(u.max(v));
+            }
+            // And within the radius.
+            let fd = fq - fp;
+            let (qa, qb, qc) = (fd.dot(fd), 2.0 * fp.dot(fd), fp.dot(fp) - r * r);
+            if qa < 1e-12 {
+                if qc > 0.0 {
+                    continue;
+                }
+            } else {
+                let disc = qb * qb - 4.0 * qa * qc;
+                if disc < 0.0 {
+                    continue;
+                }
+                let root = disc.sqrt();
+                t0 = t0.max((-qb - root) / (2.0 * qa));
+                t1 = t1.min((-qb + root) / (2.0 * qa));
+            }
+            if t0 >= t1 {
+                continue;
+            }
+            for t in [t0, (t0 + t1) * 0.5, t1] {
+                let x = p + (q - p) * t;
+                let (h, f) = split(x);
+                let (side, cap) = (r - f.length(), hh - h.abs());
+                let (n_cyl, depth) = if cap <= side {
+                    (a * h.signum(), cap)
+                } else {
+                    (f.normalize_or(a.any_orthonormal_vector()), side)
+                };
+                if depth <= SKIN {
+                    continue;
+                }
+                out.push((x + n_cyl * depth, -n_cyl, -depth));
+            }
+        }
+    }
+}
+
+/// What [`cylinder_polygon`]'s separating axis test found: the least
+/// overlap, its feature (iw3mp.exe 0x59fc90's codes) and its axis, from
+/// the cylinder into the solid.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Feature {
+    Face,
+    Axis,
+    Edge(usize),
+    Vertex(usize),
+    Cap(usize),
+}
+
+/// A cylinder against one face `(n, d, poly)` of a solid (iw3mp.exe
+/// 0x5a0f70): nothing unless the cylinder's centre or the body's centre
+/// lies in front of the plane; then the separating axes of 0x59fc90, each
+/// turned to point into the solid (`l . n <= 0`), the overlap along each
+/// the cylinder's reach less the polygon's nearest corner: the face's
+/// normal, the cylinder's axis, each edge across the axis (unless the axis
+/// lies within 0.02 of the plane), the line from the axis to each corner,
+/// and the line from each cap's rim to each corner, which must overlap by
+/// a unit less to win (0x59f9f0's bias of 1). An axis the polygon clears
+/// by `margin` keeps it out. The contacts come off the least overlap's
+/// feature. vcod's, past the axes: which edge axes may win, and each
+/// feature's points ([`cylinder_feature`]).
+fn cylinder_polygon(
+    cy: &ShapeCylinder,
+    com: Vec3,
+    face: &(Vec3, f32, Vec<Vec3>),
+    margin: f32,
+    out: &mut Vec<(Vec3, Vec3, f32)>,
+) {
+    let (n, d, poly) = (face.0, face.1, &face.2);
+    if poly.len() < 3 || (n.dot(cy.centre) <= d && n.dot(com) <= d) {
+        return;
+    }
+    let (c, a) = (cy.centre, cy.axis);
+    let mut best: Option<(f32, Feature, Vec3)> = None;
+    // false when the polygon clears the cylinder along `l`.
+    let mut test = |l: Vec3, feature: Feature, bias: f32, record: bool| -> bool {
+        let Some(l) = l.try_normalize() else {
+            return true;
+        };
+        let l = if l.dot(n) > 0.0 { -l } else { l };
+        let reach = cylinder_reach(cy, l);
+        let (lo, hi) = poly
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| {
+                let x = (*v - c).dot(l);
+                (lo.min(x), hi.max(x))
+            });
+        if lo > reach + margin || hi < -reach - margin {
+            return false;
+        }
+        let overlap = reach - lo;
+        if record && best.is_none_or(|(b, _, _)| overlap + bias < b) {
+            best = Some((overlap, feature, l));
+        }
+        true
+    };
+    if !test(-n, Feature::Face, 0.0, true) || !test(a, Feature::Axis, 0.0, true) {
+        return;
+    }
+    let edges = (0..poly.len()).map(|i| (poly[i], poly[(i + 1) % poly.len()]));
+    if a.dot(n).abs() > 0.02 {
+        for (i, (p, q)) in edges.clone().enumerate() {
+            // An edge's axis wins only with the centre outside its edge
+            // (vcod's reading of 0x59fc90's sign test).
+            let outside = (q - p).cross(n).dot(c - p) > 0.0;
+            if !test(a.cross(q - p), Feature::Edge(i), 0.0, outside) {
+                return;
+            }
+        }
+    }
+    for (i, v) in poly.iter().enumerate() {
+        let w = *v - c;
+        if !test(w - a * w.dot(a), Feature::Vertex(i), 0.0, true) {
+            return;
+        }
+    }
+    for (i, v) in poly.iter().enumerate() {
+        for end in [cy.half, -cy.half] {
+            let cap = c + a * end;
+            let w = *v - cap;
+            let Some(out) = (w - a * w.dot(a)).try_normalize() else {
+                continue;
+            };
+            if !test(*v - (cap + out * cy.radius), Feature::Cap(i), 1.0, true) {
+                return;
+            }
+        }
+    }
+    if let Some((overlap, feature, l)) = best {
+        cylinder_feature(cy, face, feature, overlap, l, margin, out);
+    }
+}
+
+/// The contacts off [`cylinder_polygon`]'s feature, normal `-l`, each
+/// point on the cylinder (iw3mp.exe 0x5a0f70's arms):
+/// - the face, the axis more than 0.9 off the normal (0x5a02b0): the
+///   cylinder's side line nearest the face, clipped to its edges, each end
+///   within `margin` of the plane;
+/// - the face, the axis within it (0x5a09a0): the cap facing the face's
+///   rim, as [`RING`] points, clipped to its edges, each within `margin`;
+/// - the axis (0x59f460): the polygon clipped to the cylinder's circle
+///   (0x59f170), each point the facing cap reaches;
+/// - an edge (0x5a0ef0): its point nearest the axis;
+/// - a corner or a cap's rim against a corner (0x5973e0, 0x5a0740): the
+///   corner.
+///
+/// The arms' choice is 0x5a0f70's; the rim's points and the cap's
+/// corner as one contact are vcod's.
+fn cylinder_feature(
+    cy: &ShapeCylinder,
+    (n, d, poly): &(Vec3, f32, Vec<Vec3>),
+    feature: Feature,
+    overlap: f32,
+    l: Vec3,
+    margin: f32,
+    out: &mut Vec<(Vec3, Vec3, f32)>,
+) {
+    let (c, a, r, hh) = (cy.centre, cy.axis, cy.radius, cy.half);
+    let normal = -l;
+    let inward = |p: Vec3, q: Vec3| {
+        let i = n.cross(q - p);
+        (i, i.dot(p))
+    };
+    let edges = (0..poly.len()).map(|i| inward(poly[i], poly[(i + 1) % poly.len()]));
+    let on_plane = |p: Vec3, out: &mut Vec<(Vec3, Vec3, f32)>| {
+        let sep = n.dot(p) - d;
+        if sep <= margin {
+            out.push((p, *n, sep));
+        }
+    };
+    match feature {
+        Feature::Face if a.dot(*n).abs() < 0.9 => {
+            let Some(u) = (l - a * l.dot(a)).try_normalize() else {
+                return;
+            };
+            let side = c + u * r;
+            let ends = edges.fold(vec![side + a * hh, side - a * hh], |s, e| {
+                clip_segment(&s, e)
+            });
+            for p in ends {
+                on_plane(p, out);
+            }
+        }
+        Feature::Face => {
+            let cap = if a.dot(*n) > 0.0 {
+                c - a * hh
+            } else {
+                c + a * hh
+            };
+            let t0 = a.any_orthonormal_vector();
+            let t1 = a.cross(t0);
+            let ring: Vec<Vec3> = (0..RING)
+                .map(|i| {
+                    let t = i as f32 * std::f32::consts::TAU / RING as f32;
+                    cap + (t0 * t.cos() + t1 * t.sin()) * r
+                })
+                .collect();
+            for p in clip_polygon(ring, edges) {
+                on_plane(p, out);
+            }
+        }
+        Feature::Axis => {
+            // The cap the polygon lies past.
+            let up = if l.dot(a) > 0.0 { 1.0 } else { -1.0 };
+            for p in clip_to_circle(poly, c, a, r) {
+                let h = (p - c).dot(a) * up;
+                let depth = hh - h;
+                if -depth <= margin {
+                    out.push((p + normal * -depth, normal, -depth));
+                }
+            }
+        }
+        Feature::Edge(i) => {
+            let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
+            let at = segment_nearest(p, q, c - a * hh, c + a * hh);
+            out.push((at + normal * -overlap, normal, -overlap));
+        }
+        Feature::Vertex(i) | Feature::Cap(i) => {
+            out.push((poly[i] + normal * -overlap, normal, -overlap));
+        }
+    }
+}
+
+/// The segment `ends` (two points, or none) clipped to the side of `(n,
+/// d)` where `n . p >= d`.
+fn clip_segment(ends: &[Vec3], (n, d): (Vec3, f32)) -> Vec<Vec3> {
+    let [a, b] = ends else {
+        return Vec::new();
+    };
+    let (da, db) = (n.dot(*a) - d, n.dot(*b) - d);
+    match (da >= 0.0, db >= 0.0) {
+        (true, true) => vec![*a, *b],
+        (false, false) => Vec::new(),
+        (true, false) => vec![*a, *a + (*b - *a) * (da / (da - db))],
+        (false, true) => vec![*a + (*b - *a) * (da / (da - db)), *b],
+    }
+}
+
+/// `poly` cut to the inside of the infinite cylinder round `c` along `a`
+/// of radius `r` (0x59f170): its corners inside, and where its edges
+/// cross the surface.
+fn clip_to_circle(poly: &[Vec3], c: Vec3, a: Vec3, r: f32) -> Vec<Vec3> {
+    let flat = |p: Vec3| {
+        let w = p - c;
+        w - a * w.dot(a)
+    };
+    let inside = |p: Vec3| flat(p).length_squared() <= r * r;
+    let mut out = Vec::new();
+    for i in 0..poly.len() {
+        let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
+        if inside(p) {
+            out.push(p);
+        }
+        // |fp + t (fq - fp)| = r.
+        let (fp, fd) = (flat(p), flat(q) - flat(p));
+        let (qa, qb, qc) = (fd.dot(fd), 2.0 * fp.dot(fd), fp.dot(fp) - r * r);
+        let disc = qb * qb - 4.0 * qa * qc;
+        if qa < 1e-12 || disc < 0.0 {
+            continue;
+        }
+        let root = disc.sqrt();
+        let mut ts = [(-qb - root) / (2.0 * qa), (-qb + root) / (2.0 * qa)];
+        ts.sort_by(f32::total_cmp);
+        for t in ts {
+            if t > 0.0 && t < 1.0 {
+                out.push(p + (q - p) * t);
+            }
+        }
+    }
+    out
+}
+
+/// The point of segment `p..q` nearest segment `s..e`.
+fn segment_nearest(p: Vec3, q: Vec3, s: Vec3, e: Vec3) -> Vec3 {
+    let (d1, d2, w) = (q - p, e - s, p - s);
+    let (a, b, c) = (d1.dot(d1), d1.dot(d2), d2.dot(d2));
+    let (dd, ee) = (d1.dot(w), d2.dot(w));
+    let den = a * c - b * b;
+    let mut t = if den > 1e-9 {
+        ((b * ee - c * dd) / den).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    // The nearest point of `s..e` to that, then back onto `p..q`.
+    let u = if c > 1e-9 {
+        ((b * t + ee) / c).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    if a > 1e-9 {
+        t = ((u * b - dd) / a).clamp(0.0, 1.0);
+    }
+    p + d1 * t
+}
+
 /// One corner's contact with the world in a step.
 struct Contact {
     /// The corner off the centre of mass, world axes.
@@ -689,11 +1141,16 @@ pub struct Body {
     /// Inertia and its inverse about the centre of mass, body axes.
     inertia: Mat3,
     inv_inertia: Mat3,
-    /// The centre of mass in the model's frame, and the points and boxes
-    /// off it.
+    /// The centre of mass in the model's frame, and the points, boxes and
+    /// cylinders off it.
     com: Vec3,
     points: Vec<Vec3>,
     boxes: Vec<ShapeBox>,
+    cylinders: Vec<ShapeCylinder>,
+    sweep_half: f32,
+    /// The state at body +0x4c the post-step sweep reads (cod4-gsc.md
+    /// 3.6.1): 0 new, 1 started solid or pinched, 2 neither.
+    state: u8,
     bounce: f32,
     friction: f32,
     /// Seconds below both sleep speeds.
@@ -740,6 +1197,16 @@ impl Body {
                 .iter()
                 .map(|b| ShapeBox::new(b.centre - shape.com, b.axes, b.half))
                 .collect(),
+            cylinders: shape
+                .cylinders
+                .iter()
+                .map(|c| ShapeCylinder {
+                    centre: c.centre - shape.com,
+                    ..*c
+                })
+                .collect(),
+            sweep_half: shape.sweep_half,
+            state: 0,
             bounce: preset.bounce.min(1.0),
             friction: preset.friction,
             idle: 0.0,
@@ -867,9 +1334,18 @@ impl Body {
             .map(move |b| ShapeBox::new(self.pos + self.rot * b.centre, r * b.axes, b.half))
     }
 
+    /// Every cylinder geom in world space.
+    pub fn world_cylinders(&self) -> impl Iterator<Item = ShapeCylinder> + '_ {
+        self.cylinders.iter().map(|c| ShapeCylinder {
+            centre: self.pos + self.rot * c.centre,
+            axis: self.rot * c.axis,
+            ..*c
+        })
+    }
+
     /// One step of `dt` seconds: gravity, the corners' contacts solved as
     /// impulses with Coulomb friction and the preset's bounce, the move,
-    /// the drag, the sleep test.
+    /// the post-step sweep, the drag, the sleep test.
     pub fn step(&mut self, dt: f32, trace: &mut Trace, d: &Dvars) {
         self.step_in(dt, trace, &mut |_, _| Vec::new(), d);
     }
@@ -894,6 +1370,7 @@ impl Body {
             if pass == 0 {
                 self.shake(&found, d);
                 contacts.extend(self.box_contacts(dt, solids, d, v0, w0));
+                self.pinch(&contacts, &found);
             }
             contacts.extend(found);
             self.solve(&mut contacts, d);
@@ -903,18 +1380,7 @@ impl Body {
         let w = self.avel;
         let dq = Quat::from_xyzw(w.x, w.y, w.z, 0.0) * self.rot;
         self.rot = (self.rot + dq * (0.5 * dt)).normalize();
-        // The centre itself never crosses a surface in one step, and keeps
-        // only the speed it moved with: a world edge poking in between the
-        // corners would otherwise hold it with a speed it never loses.
-        let s = trace(old, self.pos, 0.0);
-        if !s.startsolid && s.fraction < 1.0 {
-            self.pos = old + (self.pos - old) * s.fraction;
-            self.vel *= s.fraction;
-            let into = self.vel.dot(s.normal);
-            if into < 0.0 {
-                self.vel -= s.normal * into;
-            }
-        }
+        self.sweep(old, trace, d);
         self.vel *= (1.0 - d.drag_linear * dt).max(0.0);
         self.avel *= (1.0 - d.drag_angular * dt).max(0.0);
         if self.vel.length_squared() < d.sleep_linear * d.sleep_linear
@@ -928,6 +1394,59 @@ impl Body {
             }
         } else {
             self.idle = 0.0;
+        }
+    }
+
+    /// The contact pass's writes to the state (0x5a5f20, 0x5a2280): 2
+    /// when the world gives no contact, 1 when two of its contacts face
+    /// each other (normals' dot under -0.99, the double at 0x70b268).
+    /// Retail's contacts are ODE's; these are the boxes' and cylinders'
+    /// and the touching points'.
+    fn pinch(&mut self, geoms: &[Contact], points: &[Contact]) {
+        let all: Vec<Vec3> = geoms.iter().chain(points).map(|c| c.n).collect();
+        if all.is_empty() {
+            self.state = 2;
+        } else if (0..all.len()).any(|i| (i + 1..all.len()).any(|j| all[i].dot(all[j]) < -0.99)) {
+            self.state = 1;
+        }
+    }
+
+    /// The post-step sweep (0x5a6930, from 0x5a6c10 after each step): when
+    /// the centre moved, or the state is 0 or 1, the centre is traced from
+    /// where the step started to where it ended, as a point (corners at
+    /// 0.001) when the sweep half size `m` is under twice `phys_csl`, else
+    /// as a box of 0.2 `m`, or of `m - 2 phys_csl` (at least 0.001) when
+    /// 0.8 `m` is under it. The state becomes 1 for a start in solid, else
+    /// 2; a hit not started solid puts the centre where the trace stopped,
+    /// a point's fraction first backed off by `m / 2` over the move's
+    /// length, and a fraction under 0.001 zeroes both velocities. Nothing
+    /// else touches the speed (cod4-gsc.md 3.6.1).
+    fn sweep(&mut self, old: Vec3, trace: &mut Trace, d: &Dvars) {
+        if self.pos == old && self.state == 2 {
+            return;
+        }
+        let (m, twice) = (self.sweep_half, 2.0 * d.csl);
+        let point = m < twice;
+        let ext = if point {
+            0.001
+        } else if m - 0.2 * m < twice {
+            (m - twice).max(0.001)
+        } else {
+            0.2 * m
+        };
+        let s = trace(old, self.pos, ext);
+        self.state = if s.startsolid { 1 } else { 2 };
+        if s.startsolid || s.fraction >= 1.0 {
+            return;
+        }
+        let mut f = s.fraction;
+        if point {
+            f = (f - 0.5 * m / (self.pos - old).length()).max(0.0);
+        }
+        self.pos = old + (self.pos - old) * f;
+        if f < 0.001 {
+            self.vel = Vec3::ZERO;
+            self.avel = Vec3::ZERO;
         }
     }
 
@@ -1016,9 +1535,10 @@ impl Body {
         out
     }
 
-    /// The contacts of the boxes with the solids round them: every point
-    /// [`box_contacts`] finds within the step's reach, the reach the most
-    /// any corner travels in the step and the trace's skin.
+    /// The contacts of the boxes and cylinders with the solids round them:
+    /// every point [`box_contacts`] and [`cylinder_contacts`] find within
+    /// the step's reach, the reach the most any of the geom's points
+    /// travels in the step and the trace's skin.
     fn box_contacts(
         &self,
         dt: f32,
@@ -1042,6 +1562,23 @@ impl Body {
             for s in solids(c - ext - Vec3::splat(reach), c + ext + Vec3::splat(reach)) {
                 let narrow = b.half.min_element() * 2.0 < d.narrow_max_length;
                 box_contacts(c, axes, b.half, &s, reach, narrow, &mut found);
+            }
+            for &(p, n, sep) in &found {
+                out.push(self.contact(p - self.pos, n, sep, dt, d, v0, w0, &inv_iw));
+            }
+        }
+        for cy in self.world_cylinders() {
+            let (a, r, hh) = (cy.axis, cy.radius, cy.half);
+            let ext = a.abs() * hh + (Vec3::ONE - a * a).max(Vec3::ZERO).powf(0.5) * r;
+            let lever = (cy.centre - self.pos).length() + hh.hypot(r);
+            let reach = (v0.length() + w0.length() * lever) * dt + SKIN;
+            // 0x5a8110's cylinder arm: narrow when its diameter is under
+            // `phys_narrowObjMaxLength`.
+            let narrow = 2.0 * r < d.narrow_max_length;
+            found.clear();
+            let pad = ext + Vec3::splat(reach);
+            for s in solids(cy.centre - pad, cy.centre + pad) {
+                cylinder_contacts(&cy, self.pos, &s, reach, narrow, &mut found);
             }
             for &(p, n, sep) in &found {
                 out.push(self.contact(p - self.pos, n, sep, dt, d, v0, w0, &inv_iw));
@@ -1533,7 +2070,8 @@ mod tests {
     fn a_box_held_on_its_centre_by_a_ridge_comes_to_rest() {
         // A floor, and a ridge 20 high whose top pokes between a sedan
         // hood's eight corners (no other point) and holds the box on its
-        // centre: the centre's guard leaves it no speed to keep.
+        // centre: the post-step sweep stopping it short of the ridge, under
+        // a fraction of 0.001, leaves it no speed to keep.
         let side = |s: f32| {
             (
                 Vec3::new(0.0, s * 1.5, 1.0).normalize(),
@@ -1605,6 +2143,104 @@ mod tests {
             assert!(inside < 0.01, "{} inside at y {i}: {inside}", local);
         }
         assert!(tipped, "{:?}", w.axes);
+    }
+
+    #[test]
+    fn a_cylinder_meets_a_floor_on_its_side_line_and_a_kerb_by_its_edge() {
+        let slab = |lo: Vec3, hi: Vec3| {
+            (0..3)
+                .flat_map(|k| [(Vec3::AXES[k], hi[k]), (-Vec3::AXES[k], -lo[k])])
+                .collect::<Vec<_>>()
+        };
+        let floor = Solid::brush(&slab(Vec3::splat(-100.0), Vec3::new(100.0, 100.0, 0.0))).unwrap();
+        // A can of radius 3 and half height 5 on its side along x, 0.1
+        // into the floor: the side line's two ends, normal up.
+        let cy = ShapeCylinder {
+            centre: Vec3::new(0.0, 0.0, 2.9),
+            axis: Vec3::X,
+            radius: 3.0,
+            half: 5.0,
+        };
+        let mut out = Vec::new();
+        cylinder_contacts(&cy, cy.centre, &floor, 0.5, false, &mut out);
+        assert_eq!(out.len(), 2, "{out:?}");
+        for (p, n, sep) in &out {
+            assert!(
+                n.distance(Vec3::Z) < 1e-5 && (sep + 0.1).abs() < 1e-4,
+                "{p} {n} {sep}"
+            );
+            assert!((p.x.abs() - 5.0).abs() < 1e-4 && p.z.abs() < 0.11);
+        }
+        // Upright, the bottom cap's rim, all of it on the floor.
+        let up = ShapeCylinder {
+            axis: Vec3::Z,
+            centre: Vec3::new(0.0, 0.0, 4.9),
+            ..cy
+        };
+        out.clear();
+        cylinder_contacts(&up, up.centre, &floor, 0.5, false, &mut out);
+        assert_eq!(out.len(), RING, "{out:?}");
+        assert!(
+            out.iter()
+                .all(|(p, _, sep)| (p.z + 0.1).abs() < 1e-4 && (sep + 0.1).abs() < 1e-4)
+        );
+        // A kerb 10 high from x = 0 and the can upright beside it, its rim
+        // a unit into the kerb's side: the kerb's top edge pokes into the
+        // rim, and the contacts push it back off the kerb.
+        let kerb = Solid::brush(&slab(
+            Vec3::new(0.0, -100.0, -100.0),
+            Vec3::new(100.0, 100.0, 10.0),
+        ))
+        .unwrap();
+        let by = ShapeCylinder {
+            centre: Vec3::new(-2.0, 0.0, 9.0),
+            ..up
+        };
+        out.clear();
+        cylinder_contacts(&by, by.centre, &kerb, 0.5, false, &mut out);
+        assert!(!out.is_empty());
+        assert!(
+            out.iter().all(|(_, n, sep)| n.x < -0.5 && *sep < 0.0),
+            "{out:?}"
+        );
+    }
+
+    #[test]
+    fn the_post_step_sweep_stops_the_centre_and_keeps_its_speed() {
+        // A wall at x = 10; a can (sweep half size 2.12, a box sweep of
+        // 0.42) moving 30 units a step at it stops on the wall with its
+        // speed; a bottle's point sweep backs off by half its size.
+        let wall = [(-Vec3::X, -10.0)];
+        let mut trace = planes(&wall);
+        let d = Dvars::default();
+        let preset = Preset {
+            mass: 0.1,
+            bounce: 0.1,
+            friction: 0.5,
+            bullet_force_scale: 1.0,
+        };
+        let mut shape = Shape::of_bounds(Vec3::splat(-3.0), Vec3::splat(3.0));
+        shape.sweep_half = 2.12;
+        let mut b = Body::new(Vec3::ZERO, Vec3::ZERO, &shape, &preset, 0);
+        b.vel = Vec3::X * 1800.0;
+        b.pos = Vec3::X * 30.0;
+        b.sweep(Vec3::ZERO, &mut trace, &d);
+        assert!((b.pos.x - (10.0 - SKIN)).abs() < 0.01, "{}", b.pos);
+        assert_eq!((b.vel, b.state), (Vec3::X * 1800.0, 2));
+        shape.sweep_half = 1.5;
+        let mut b = Body::new(Vec3::ZERO, Vec3::ZERO, &shape, &preset, 0);
+        b.pos = Vec3::X * 30.0;
+        b.vel = Vec3::X * 1800.0;
+        b.sweep(Vec3::ZERO, &mut trace, &d);
+        assert!((b.pos.x - (10.0 - SKIN - 0.75)).abs() < 0.01, "{}", b.pos);
+        // From there 0.9 on: the back-off eats the whole fraction, under
+        // 0.001, and no speed is left.
+        let old = b.pos;
+        b.pos = old + Vec3::X * 0.9;
+        b.avel = Vec3::Z;
+        b.sweep(old, &mut trace, &d);
+        assert!(b.pos.distance(old) < 0.001, "{}", b.pos);
+        assert_eq!((b.vel, b.avel), (Vec3::ZERO, Vec3::ZERO));
     }
 
     #[test]

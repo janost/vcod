@@ -20,8 +20,10 @@ Ranked by how much a player notices.
   By choice.
 - Rigid-body physics is vcod's solver, not ODE: a body's boxes meet the
   world's brushes and triangles by face clipping and vcod's edge
-  contacts, not by 1.7's colliders (no post-step sweep, a cylinder still
-  as 16 points), and `msecStep` stays 17 ms (cod4-gsc.md 3.6, 3.6.1).
+  contacts, its cylinders by 1.7's separating axes with vcod's points per
+  feature, not ODE's own box colliders; a pinched body's contact filter
+  (0x5a2760) is not ported, and `msecStep` stays 17 ms (cod4-gsc.md 3.6,
+  3.6.1).
   A jitter's pushes land on the body's
   touching points, not ODE's contacts, so a flat prop takes more of them
   (cod4-world.md 13.8). The ragdoll is a position-based solver
@@ -43,6 +45,14 @@ Ranked by how much a player notices.
 
 ## Fixed
 
+- A cylinder geom (stock bottles, cans, pails, tires, hub caps) met the
+  world on 16 points round its rims: dropped on mp_crash's steps, 480 of
+  540 slept with world solid inside the cylinder. It now meets brushes
+  and triangles through `iw3mp.exe`'s cylinder colliders (0x5a1330,
+  0x5a17c0, 0x5a0f70) and none does. vcod's centre guard, which cut a
+  body's speed on a hit, gave way to 1.7's post-step sweep (0x5a6930),
+  which keeps it but on a stop under a fraction of 0.001 (cod4-gsc.md
+  3.6.1).
 - A launched part met the world on its 26 box points, so a world edge
   between two of them poked into it: on mp_backlot's steps 30 of 36
   dropped hoods and doors slept with world solid inside the box. Its
