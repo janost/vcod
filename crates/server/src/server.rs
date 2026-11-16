@@ -13714,7 +13714,7 @@ mod tests {
         let p = &PROTOCOL_V1;
         let mut nc = begun(&mut sv, t);
         let mut ring = SnapshotRing::new();
-        let mut send_cmd = |sv: &mut Server, nc: &mut Netchan, server_time: i32, at: Instant| {
+        let send_cmd = |sv: &mut Server, nc: &mut Netchan, server_time: i32, at: Instant| {
             let ack = nc.incoming_sequence as i32;
             let cmd = UserCmd {
                 server_time,
