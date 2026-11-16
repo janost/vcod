@@ -480,8 +480,9 @@ impl Cod4Level {
     /// `Fire_Lead`: `Turret_FillWeaponParms`' muzzle (the gunner's eye at
     /// the gun's `tag_player`, the round leaving that far along the view as
     /// `tag_flash` is from it), `Bullet_Fire` with the gun's `playerSpread`
-    /// at `level.time` (no antilag), then `EV_FIRE_WEAPON_MG42` on the gun
-    /// with the gunner's number.
+    /// at `level.time` (no antilag), its impacts naming the gun as their
+    /// shooter (cod4-effects.md 12.4), then `EV_FIRE_WEAPON_MG42` on the
+    /// gun with the gunner's number.
     #[allow(clippy::too_many_arguments)]
     fn fire_lead(
         &mut self,
@@ -512,7 +513,7 @@ impl Cod4Level {
                 .shots
                 .push((slot, now, start, start + forward * range, end));
             let origins = self.rewound(now);
-            self.bullet_fire_round(slot, d, start, end, now, &origins);
+            self.bullet_fire_round(slot, id.0, d, start, end, now, &origins);
         }
         let ev = self.gun_events.entry(id).or_default();
         ev.add(EV_FIRE_WEAPON_MG42, slot as u32);

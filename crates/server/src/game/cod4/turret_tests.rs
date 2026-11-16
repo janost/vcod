@@ -431,3 +431,43 @@ fn a_bomb_zone_and_a_drop_under_one_player() {
     assert_eq!(zone, 118);
     assert_eq!(seen, [(2, (2, 0, zone)), (1, (w + 4, u32::MAX, drop))]);
 }
+
+/// Under `sv_clientSideBullets` 0 a mounted gun's world impacts name the
+/// gun as their shooter, not its gunner: the retail SAW capture's 75
+/// read `otherEntityNum` 393 (cod4-effects.md 12.4).
+#[test]
+fn a_mounted_guns_impacts_name_the_gun() {
+    let Some(mut run) = Run::backlot(1) else {
+        return;
+    };
+    run.sv.set_cvar("sv_clientSideBullets", "0");
+    let slot = run.slots[0];
+    run.level().set_view_pos(slot, BEHIND, [0.0; 3]);
+    run.tick();
+    run.tick();
+    let view = [-40.0, 70.0];
+    for _ in 0..10 {
+        run.think(slot, view, 0x8);
+        run.tick();
+        if run.level().manned_gun(slot).is_some() {
+            break;
+        }
+    }
+    run.think(slot, view, 0);
+    run.tick();
+    let mut shooters = Vec::new();
+    for _ in 0..3 {
+        run.think(slot, view, 1);
+        run.tick();
+        let level = run.level();
+        shooters.extend(
+            level
+                .rt
+                .temp_entities()
+                .filter(|(_, te)| te.event == super::combat::ev::BULLET_HIT)
+                .map(|(_, te)| te.other),
+        );
+    }
+    assert!(!shooters.is_empty());
+    assert!(shooters.iter().all(|&s| s == GUN), "{shooters:?}");
+}

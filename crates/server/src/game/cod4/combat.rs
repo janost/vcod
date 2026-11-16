@@ -678,7 +678,7 @@ impl Cod4Level {
                 self.damage_heli(h.id, Some(slot), &d, damage, dflags, mod_, dir, hit);
                 continue;
             }
-            self.bullet_fire_round(slot, &d, start, end, game_time, &origins);
+            self.bullet_fire_round(slot, slot as u32, &d, start, end, game_time, &origins);
         }
     }
 

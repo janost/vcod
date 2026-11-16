@@ -857,8 +857,16 @@ Addresses are `iw3mp.exe` 1.7.
   replays both probes on ours and matches every playerstate word and
   every entity, each of the 270 impacts included, with no `GAPS`; with
   `impact_event` off 3300 rows differ. VERIFIED (the gate). A mounted
-  gun's rounds name its gunner as the shooter, as the flesh hits do.
-  INFERRED (no turret capture under 0).
+  gun's world impacts name the gun as the shooter: 0x808a05c's
+  `otherEntityNum` is the number of the entity the round leaves from
+  (0x808a127..0x808a12c). INFERRED (the store's source). In a retail run
+  under 0
+  (`cod4_probe --script saw --face 0 --goto "-770 68 320 0"` on
+  mp_backlot's SAW 393, a spectator beside it, uncommitted like
+  `play-1.7-saw.txt`) all 75 of the gunner's impacts read 393. VERIFIED
+  live. Ours passes `Fire_Lead`'s gun to `bullet_fire_round`;
+  `turret_tests::a_mounted_guns_impacts_name_the_gun` holds it. VERIFIED
+  (the test, ours).
 - vcod's client: `cod4_fx::client_side_bullets` reads the systeminfo;
   `cod4_fx::frame_rounds` runs no client-side round under 0, and
   `cod4_fx::server_round` gives every bullet hit event its muzzle, end
