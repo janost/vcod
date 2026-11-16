@@ -24,6 +24,17 @@ pub struct Assembly {
 }
 
 impl Assembly {
+    /// What the hit walk reads once the script's models are `now`: the
+    /// ignoreCollision bits change only with the models, as the player's
+    /// DObj is rebuilt then and not for the bits alone (1.5b and UO,
+    /// cod15-protocol-diff.md, `getAttachIgnoreCollision`).
+    pub fn next(&self, mut now: Assembly) -> Assembly {
+        if now.body == self.body && now.attachments == self.attachments {
+            now.ignore_collision = self.ignore_collision;
+        }
+        now
+    }
+
     /// Cache key; `name@tag` per attachment, in slot order.
     fn key(&self) -> String {
         let mut k = self.body.clone();
@@ -168,6 +179,21 @@ fn build(fs: &dyn AssetSource, assembly: &Assembly) -> Option<Rc<Skeleton>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Retail 1.5b and UO (`client-probes/probe_ignorecoll`): re-attaching
+    /// the same head and helmet with other bits keeps the old bits; a new
+    /// model list takes the new ones.
+    #[test]
+    fn ignore_bits_change_only_with_the_models() {
+        let head = |h: &str, bits| Assembly {
+            body: "b".into(),
+            attachments: vec![(h.into(), None), ("hat".into(), None)],
+            ignore_collision: bits,
+        };
+        assert_eq!(head("h1", 0).next(head("h2", 3)).ignore_collision, 3);
+        assert_eq!(head("h2", 3).next(head("h2", 0)).ignore_collision, 3);
+        assert_eq!(head("h2", 3).next(head("h1", 0)).ignore_collision, 0);
+    }
 
     #[test]
     fn the_key_separates_tags_and_slot_order() {

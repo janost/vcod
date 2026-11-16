@@ -1357,6 +1357,24 @@ uo`) take the same recipe; ours runs it with `--gametype-script` and `--set
 sv_pure=0`. The `EDGE snap` lines' `eflags=`, `viewlocked=` and
 `viewlocked_ent=` are the measurement (2026-11-16, all three and ours).
 
+## probe_ignorecoll
+
+`attach`'s ignoreCollision on 1.5b and UO: one plain probe is spawned in the
+airborne body, and six phases re-attach a head and the helmet with the bit
+off and on, each a grid of level `bulletTrace`s with hitCharacters across
+the head. `cod15-protocol-diff.md`, `getAttachIgnoreCollision`.
+
+```
+COD_VERSION=1.5 COD_DIR=<stock 1.5 + UO> PORT=<p> PROBE_SECS=26 tools/run_probe.sh client-probes/probe_ignorecoll mp_carentan
+# 6 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:<p> --probe-secs 16
+```
+
+UO: `COD_VERSION=uo`, map `mp_uo_carentan`, the client with `--mod-dir uo`.
+Ours: `vcod-server <map> --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_ignorecoll.gsc --set
+sv_pure=0`. Retail and ours, 2026-11-16, print the same lines.
+
 ## probe_uostates
 
 The wire round trip's state changes on United Offensive: a placed allied
