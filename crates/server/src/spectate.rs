@@ -2306,6 +2306,7 @@ impl ClientSim {
         self.hook_es = crate::game::combat::HookEs {
             seat: self.seat.map(|s| (s.kind, s.pos)),
             weapon: self.ps.weapon.into(),
+            eflags: Some(self.entity_eflags()),
         };
     }
 

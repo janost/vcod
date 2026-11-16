@@ -2394,8 +2394,7 @@ VERIFIED live, `mp_carentan-dm-turret-gungrid.txt` (1.1d, 2026-11-15,
 `probe_gungrid_tail 1000`, which logs the grid for a second past each
 return to the spot, and the gunner's attachments logged at his placement
 (`PROBE models 1`, `probe_turret.gsc` `pin_models`).
-`the_gunner_grid_capture_matches_retail_on_mp_carentan` replays it
-(`#[ignore]`d, open below).
+`the_gunner_grid_capture_matches_retail_on_mp_carentan` replays it.
 
 - **The gear.** The 2026-11-14 capture's 2622 cells off were the gunner's
   gear. His character is a random draw of nine
@@ -2421,39 +2420,53 @@ return to the spot, and the gunner's attachments logged at his placement
   its carried rows. Every tail frame then reads within `GUNGRID_NEAR`
   (VERIFIED, the gate). That the DObj keeps the rows past the release is
   INFERRED, off the weight step and the strict clear above.
-- **Open: the mount's blend in.** The standing mount's first five frames
-  (19250 to 19450) read 0.01 to 1.4 units off, falling each frame, and
-  2.9 for a cell that grazes; the crouched mount's first frame (32750) up
-  to 11.3, then exact. UO and 1.5b read their mounts exactly. Not run
-  down; ruled out (2026-11-16):
-  - The origin. vcod measurement: ours' placement on every frame from
-    the mount (19150 to 19650, 32750 to 32950) reads the capture's
-    `exact=` origin in x and y to the float, z within 1e-5.
-  - The idle's blend time. VERIFIED, 1.1d `game.mp.i386.so` 0x2a600 (the
-    setter): with no `+0x40` blend of its own (VERIFIED,
-    `mp/playeranim.script` gives the turret anims none) a legs change
-    whose crouched (`+0x54 & 0xc4`, 0x2a740) or prone (`+0x54 & 0x308`,
-    0x2a7ad) class differs takes 250 ms (0x2a817) when the new anim has no
-    `moveSpeed` (`+0x44`) and no turn bits (`+0x55 & 0xc0`), 200 otherwise
-    (0x2a80a); one in the same class takes 120 into a moving anim
-    (0x2a82a), else 170 (0x2a835), or 250 out of a moving one (0x2a849).
-    INFERRED: the standing mount (`pb_stand_alert` to `standMG42_aim`,
-    which the script plays under `idle` and `idlecr`) blends over 250 ms
-    and the crouched one over 170, as ours does (`animclock::blend_ms`).
-    vcod measurement: with the turret anims' blend forced to 170, 200,
-    300, 350 or 400 ms, or the blend's start moved 25 or 50 ms later, the
-    standing mount's window stays or widens; at 170 ours' idle is out by
-    19400 and 19450 reads off as it does at 250, so the last frames' miss
-    is not the idle's weight.
-  - The order of the legs layers. vcod measurement: walking the idle and
-    the group in anim index order instead of the clock's moves no cell.
-  - The first pass's goal times. VERIFIED, 0x517f7..0x51812: the row's
-    goal 1.0 at time 1.0 and rate 1.0, as on UO.
+- **The mount's blend in.** The standing mount's first five frames
+  (19250 to 19450) used to read 0.01 to 1.4 units off, falling each frame,
+  and the crouched mount's use frame (32750) up to 11.3. Two causes, both
+  outside the gunner's own pose, which matches retail's to the bit:
+  - VERIFIED, a live 1.1d server under gdb (the recipe above, two reruns
+    on 2026-11-16, `tools/re/gdb_gunner_tree.py`): the gunner's anim info
+    records (`0x82f59a0 + 0x44 * info`, the weight at `+0x3c`, the goal at
+    `+0x38`, the goal time at `+0x34`, the node time at `+0x28`; each
+    node's info index at `tree + 8 + 2 * node`) at the entry of his weight
+    step (`cod_lnxded` 0x80bef88, reached from syscall 0x6d at 0x8088e5a,
+    the entity's DObj `0x8113c80 + 0x58 * s16[0x812a600 + 2 * num]`,
+    0x806e498), and his records at `DObjCalcSkel`'s entry (0x80c337c) on
+    the first grid trace of each frame. The mount frame holds
+    `standMG42_aim` at 0.001 (goal 1, goal time 0.25; 0.17 crouched), its
+    three rows at 0.001 and the idle at 1, then 0.2008 and 0.8 and so on,
+    as ours carries them. vcod measurement: ours' walk over each dumped
+    frame's weights and node times (the mount, its blend, the crouched
+    mount) gives every record of retail's dump to the bit.
+  - The idle's phase. VERIFIED, the same dumps: `probe_turret`'s
+    `setorigin` puts the gunner 32 units over the ground (`z` 8 on a floor
+    at -23.875; his `ps+0x1c` reads 8.555 one cmd later), he falls at
+    once, lands 350 ms after the placement with `ps.legsTimer` 134 and
+    `pb_standjump_land` set (at 0.001, goal time 0.05), and the idle
+    restarts 100 ms after that. VERIFIED, his `commandTime` (`ps+0`) at
+    each frame reads 16 to 35 ms under the frame's time, a cmd every 16 or
+    17 ms (the probe's 60 fps). vcod's replay sent the late gunner one cmd
+    a frame on the frame's own clock: he stood two frames on the stale
+    ground, landed a frame early at under 220 a second, played no land
+    anim and ran his idle from the placement, 0.07 of its cycle ahead of
+    retail's at the mount. With a 60 fps cadence trailing the frame by 17
+    ms (`common::probe_cadence`) he lands in retail's frame with the land
+    anim, and the five frames read retail's cells.
+  - The use frame's controllers. VERIFIED, the dumps: the cmd that mounts
+    the gun sets `eFlags` 0xc000 and clears the crouch bit (0x30 to
+    0xc010) in that frame's `ClientThink`, the thread pass after it traces
+    a skeleton with no control bones (`skel+0x10` all 0; 84 00 08 02 82
+    before), and the legs anim changes only at the end frame. VERIFIED,
+    `BG_Player_DoControllers` (game.mp.i386.so 0x2b7f8) reads the entity's
+    `s.eFlags` (`+0x8`) at the trace: 0xc000 at 0x2b804, 0x20 at 0x2b92d,
+    1 at 0x2b9f5, 0x40 at 0x2ba2d. vcod read the end frame's copy, so the
+    use frame posed the crouched gunner with his spine controllers on.
+    Ours' hook now reads the `eFlags` his last cmd wrote
+    (`combat::HookEs::eflags`), and the frame reads retail's cells.
 
-  Left: the group's own pose while its node ramps in on 1.1d (its rows
-  and leaves as the tree carries them through the blend), and the
-  crouched mount's first frame, where ours reads the crouch idle at
-  weight 1 and the group at 0.001.
+  `the_gunner_grid_capture_matches_retail_on_mp_carentan` holds every
+  mounted and tail frame within `GUNGRID_NEAR`, no gap. vcod measurement:
+  the rerun's capture replays the same way.
 
 ### 13.10 Two gunners in each other's arc
 
@@ -2549,8 +2562,9 @@ Open, held as `gunduel_ab` gaps:
   to 1.10). Not determined. Ruled out by vcod measurement: the
   DObj's frame (standing it in the placement's angles past the cmd and
   `setPlayerAngles` puts slot 1's rounds up to 2.8 off). 1.1d's gunner
-  grid (13.9, "1.1d's placement") is open too, and its bone trace is not
-  ported store for store (13.5).
+  grid (13.9, "1.1d's placement") reads retail's since 2026-11-16, so his
+  own pose in the thread pass is retail's; the bone trace is not ported
+  store for store (13.5).
 
 ## 14. The client
 

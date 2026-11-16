@@ -2807,11 +2807,9 @@ fn the_gunner_grid_capture_matches_uo_on_mp_carentan() {
 }
 
 /// The same on 1.1d, the gunner in the attachments retail drew him and
-/// the grid logged through the dismount's blend out (cod11-turrets.md
-/// 13.9). Open: the mount's blend in, its first five frames standing and
-/// the crouched mount's first.
+/// the grid logged through the mount's blend in and the dismount's blend
+/// out (cod11-turrets.md 13.9).
 #[test]
-#[ignore = "open: the 1.1d gunner's mount blend in, cod11-turrets.md 13.9"]
 fn the_gunner_grid_capture_matches_retail_on_mp_carentan() {
     gungrid_gate(
         "gungrid",
