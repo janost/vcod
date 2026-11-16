@@ -515,31 +515,38 @@ fn open_floor(m: &Map, clip: &ClipMap) -> Vec3 {
         .unwrap()
 }
 
-/// mp_crash's picture frames wedged between two facing walls (cod4-gsc.md
-/// 3.6.1): two slabs stood on the map's floor a tenth closer than the
-/// frame is long, the frame laid flat across them 40 over the floor,
-/// tipped about the walls' line until it fits with a unit to spare and
-/// turning at 2, 4 or 8 rad/s to lie flatter, so its ends meet both walls
-/// and it leans between them. Pinched, it keeps the first wall's contacts
-/// and loses the other's and those its points leave (0x5a2760), so it
-/// comes to rest with its end inside that far wall, but under a quarter
-/// unit, the floor and the kept wall under a quarter too. Without the
-/// filter all 18 rest with no point in either wall.
-#[test]
-fn pictures_wedged_between_two_walls_lose_one_walls_contacts() {
+/// A wedged frame's end: asleep, how many of its steps were pinched, how
+/// deep its points went into the nearer and the farther wall and the floor.
+struct Wedged {
+    line: String,
+    asleep: bool,
+    pinched: u32,
+    near: f32,
+    far: f32,
+    floor: f32,
+}
+
+/// mp_crash's picture frames, each `split` into its geoms, wedged between
+/// two facing walls: two slabs stood on the map's floor at its first open
+/// `mp_tdm_spawn` a tenth closer than the frame is long, the frame laid
+/// flat across them 40 over the floor, tipped about the walls' line until
+/// it fits with a unit to spare and turning at 2, 4 or 8 rad/s to lie
+/// flatter, so its ends meet both walls and it leans between them.
+fn wedge_pictures(split: &dyn Fn(&Shape) -> Shape) -> Vec<Wedged> {
     let (Some(install), Some(common)) = (cod4_install(), zone("common_mp")) else {
-        return;
+        return Vec::new();
     };
     let (m, crash) = Map::load(&install, "english", "mp_crash").unwrap();
     let clip = ClipMap::from_assets(&crash.assets).unwrap();
     let defs = vcod_cod4::dynent::defs(&crash.assets, &[&common]);
     let d = Dvars::default();
     let spot = open_floor(&m, &clip);
-    let mut problems = Vec::new();
+    let mut out = Vec::new();
     for model in [4, 5, 6, 7, 8, 10].map(|n| format!("me_picture{n}")) {
         let def = defs.iter().find(|x| x.model == model).unwrap();
         let (shape, preset) = def.body.as_ref().unwrap();
         let bx = shape.boxes[0];
+        let shape = split(shape);
         // Its longest side across the walls (x), its thinnest up.
         let dims = bx.half * 2.0;
         let mut idx = [0usize, 1, 2];
@@ -567,7 +574,7 @@ fn pictures_wedged_between_two_walls_lose_one_walls_contacts() {
         ];
         for spin in [2.0, 4.0, 8.0] {
             let origin = spot + Vec3::Z * 40.0 - rot * bx.centre;
-            let mut b = Body::at(origin, rot, shape, preset, 0);
+            let mut b = Body::at(origin, rot, &shape, preset, 0);
             b.avel = -Vec3::Y * spin;
             let (mut trace, mut solids) = with_slabs(&clip, &walls);
             assert!(
@@ -584,25 +591,93 @@ fn pictures_wedged_between_two_walls_lose_one_walls_contacts() {
                 let (a, c) = (into(&walls[0]), into(&walls[1]));
                 (a.min(c), a.max(c))
             };
-            let floor_in = b
+            let floor = b
                 .world_points()
                 .map(|p| spot.z - p.z)
                 .fold(body_depth(&clip, &b), f32::max);
             let line = format!(
-                "{model} spin {spin}: asleep {} after {t} ms, pinched {} of {} steps, walls {near} and {far} in, floor {floor_in}",
+                "{model} spin {spin}: asleep {} after {t} ms, pinched {} of {} steps, walls {near} and {far} in, floor {floor}",
                 b.asleep, b.pinched, b.steps
             );
             println!("{line}");
-            if !b.asleep
-                || b.pinched == 0
-                || far <= 0.0
-                || far >= 0.25
-                || near >= 0.25
-                || floor_in >= 0.25
-            {
-                problems.push(line);
-            }
+            out.push(Wedged {
+                line,
+                asleep: b.asleep,
+                pinched: b.pinched,
+                near,
+                far,
+                floor,
+            });
         }
     }
+    out
+}
+
+/// [`wedge_pictures`] on the frames as they are, one box geom (cod4-gsc.md
+/// 3.6.1). Pinched, it keeps the first wall's contacts and loses the
+/// other's and those its points leave (0x5a2760), so it comes to rest with
+/// its end inside that far wall, but under a quarter unit, the floor and
+/// the kept wall under a quarter too. Without the filter all 18 rest with
+/// no point in either wall.
+#[test]
+fn pictures_wedged_between_two_walls_lose_one_walls_contacts() {
+    let problems: Vec<String> = wedge_pictures(&|s| s.clone())
+        .into_iter()
+        .filter(|w| {
+            !w.asleep
+                || w.pinched == 0
+                || w.far <= 0.0
+                || w.far >= 0.25
+                || w.near >= 0.25
+                || w.floor >= 0.25
+        })
+        .map(|w| w.line)
+        .collect();
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// The frame cut across its length into two box geoms, the halves'
+/// points each the geom's, its mass as it was.
+fn halves(s: &Shape) -> Shape {
+    let b = s.boxes[0];
+    let long = (0..3)
+        .max_by(|&p, &q| b.half[p].total_cmp(&b.half[q]))
+        .unwrap();
+    let axis = b.axes.col(long) * b.half[long] * 0.5;
+    let half = b.half - Vec3::AXES[long] * b.half[long] * 0.5;
+    let mut out = Shape {
+        points: Vec::new(),
+        boxes: Vec::new(),
+        cylinders: Vec::new(),
+        point_geoms: Vec::new(),
+        box_geoms: Vec::new(),
+        cylinder_geoms: Vec::new(),
+        ..s.clone()
+    };
+    for (g, c) in [b.centre - axis, b.centre + axis].into_iter().enumerate() {
+        let part = Shape::of_bounds(c - b.axes * half, c + b.axes * half);
+        out.point_geoms.extend(part.points.iter().map(|_| g));
+        out.points.extend(part.points);
+        out.boxes.push(ShapeBox {
+            axes: b.axes,
+            ..part.boxes[0]
+        });
+        out.box_geoms.push(g);
+    }
+    out
+}
+
+/// [`wedge_pictures`] on each frame as two box geoms, one at each wall:
+/// 0x5a5f20 runs the contact pass per geom, and neither geom's contacts
+/// face each other, so no step is pinched and each comes to rest with no
+/// more than a quarter unit in either wall or the floor. Run as one body's
+/// pass, as vcod had it, every frame was pinched and slipped into a wall.
+#[test]
+fn two_geom_pictures_wedged_between_two_walls_are_never_pinched() {
+    let problems: Vec<String> = wedge_pictures(&halves)
+        .into_iter()
+        .filter(|w| !w.asleep || w.pinched > 0 || w.far >= 0.25 || w.floor >= 0.25)
+        .map(|w| w.line)
+        .collect();
     assert!(problems.is_empty(), "{problems:#?}");
 }

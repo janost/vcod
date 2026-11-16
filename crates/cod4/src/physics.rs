@@ -136,6 +136,11 @@ pub struct Shape {
     pub points: Vec<Vec3>,
     pub boxes: Vec<ShapeBox>,
     pub cylinders: Vec<ShapeCylinder>,
+    /// Which of the model's geoms each point, box and cylinder is, in the
+    /// order 0x5a5710 adds them: the contact pass runs per geom.
+    pub point_geoms: Vec<usize>,
+    pub box_geoms: Vec<usize>,
+    pub cylinder_geoms: Vec<usize>,
     pub com: Vec3,
     pub inertia: Mat3,
     pub sweep_half: f32,
@@ -180,6 +185,9 @@ impl Shape {
         let (mins, maxs) = (Vec3::from(model.mins), Vec3::from(model.maxs));
         let (c, h) = ((mins + maxs) * 0.5, (maxs - mins) * 0.5);
         Shape {
+            point_geoms: vec![0; corners(c, Mat3::IDENTITY, h).len()],
+            box_geoms: vec![0],
+            cylinder_geoms: Vec::new(),
             points: corners(c, Mat3::IDENTITY, h),
             boxes: vec![ShapeBox::new(c, Mat3::IDENTITY, h)],
             cylinders: Vec::new(),
@@ -200,6 +208,9 @@ impl Shape {
         let c = (mins + maxs) * 0.5;
         let h = (maxs - mins) * 0.5;
         Shape {
+            point_geoms: vec![0; corners(c, Mat3::IDENTITY, h).len()],
+            box_geoms: vec![0],
+            cylinder_geoms: Vec::new(),
             points: corners(c, Mat3::IDENTITY, h),
             boxes: vec![ShapeBox::new(c, Mat3::IDENTITY, h)],
             cylinders: Vec::new(),
@@ -217,64 +228,72 @@ impl Shape {
         let mut points = Vec::new();
         let mut boxes = Vec::new();
         let mut cylinders = Vec::new();
+        let (mut point_geoms, mut box_geoms, mut cylinder_geoms) =
+            (Vec::new(), Vec::new(), Vec::new());
         let mut sweep_half = 0.0;
-        for g in &list.geoms {
-            if let Some(b) = &g.brush {
-                let (lo, hi) = (Vec3::from(b.mins), Vec3::from(b.maxs));
-                let (c, h) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
-                sweep_half = brush_sweep_half(lo, hi);
-                // A brush no side cuts is its bounds' box.
-                let cut = (!b.planes.is_empty())
-                    .then(|| brush_corners(b))
-                    .filter(|cut| {
-                        let at_bounds = |p: &Vec3| ((*p - c).abs() - h).abs().max_element() < 0.01;
-                        !(cut.len() == 8 && cut.iter().all(at_bounds))
-                    });
-                match cut {
-                    Some(cut) => points.extend(cut),
-                    None => {
-                        points.extend(corners(c, Mat3::IDENTITY, h));
-                        boxes.push(ShapeBox::new(c, Mat3::IDENTITY, h));
-                    }
-                }
-                continue;
-            }
-            let axis = Mat3::from_cols(
-                g.orientation[0].into(),
-                g.orientation[1].into(),
-                g.orientation[2].into(),
-            );
-            let at = Vec3::from(g.offset);
-            let h = Vec3::from(g.half_lengths);
-            match g.kind {
-                GEOM_BOX => {
-                    points.extend(corners(at, axis, h));
-                    boxes.push(ShapeBox::new(at, axis, h));
-                    sweep_half = h.min_element();
-                }
-                // The axis is the first row (0x5a55f0 gives the geom axis
-                // 1, the rotation's first column), `halfLengths` the half
-                // height and the radius.
-                GEOM_CYLINDER => {
-                    for end in [-h.x, h.x] {
-                        for i in 0..RING {
-                            let a = i as f32 * std::f32::consts::TAU / RING as f32;
-                            let local = Vec3::new(end, h.y * a.cos(), h.y * a.sin());
-                            points.push(at + axis * local);
+        for (gi, g) in list.geoms.iter().enumerate() {
+            'geom: {
+                if let Some(b) = &g.brush {
+                    let (lo, hi) = (Vec3::from(b.mins), Vec3::from(b.maxs));
+                    let (c, h) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
+                    sweep_half = brush_sweep_half(lo, hi);
+                    // A brush no side cuts is its bounds' box.
+                    let cut = (!b.planes.is_empty())
+                        .then(|| brush_corners(b))
+                        .filter(|cut| {
+                            let at_bounds =
+                                |p: &Vec3| ((*p - c).abs() - h).abs().max_element() < 0.01;
+                            !(cut.len() == 8 && cut.iter().all(at_bounds))
+                        });
+                    match cut {
+                        Some(cut) => points.extend(cut),
+                        None => {
+                            points.extend(corners(c, Mat3::IDENTITY, h));
+                            boxes.push(ShapeBox::new(c, Mat3::IDENTITY, h));
                         }
                     }
-                    cylinders.push(ShapeCylinder {
-                        centre: at,
-                        axis: axis.x_axis.normalize_or(Vec3::X),
-                        radius: h.y,
-                        half: h.x,
-                    });
-                    // 0x5a688b: the radius over root 2, or the half
-                    // height when less.
-                    sweep_half = (h.y * std::f32::consts::FRAC_1_SQRT_2).min(h.x);
+                    break 'geom;
                 }
-                _ => {}
+                let axis = Mat3::from_cols(
+                    g.orientation[0].into(),
+                    g.orientation[1].into(),
+                    g.orientation[2].into(),
+                );
+                let at = Vec3::from(g.offset);
+                let h = Vec3::from(g.half_lengths);
+                match g.kind {
+                    GEOM_BOX => {
+                        points.extend(corners(at, axis, h));
+                        boxes.push(ShapeBox::new(at, axis, h));
+                        sweep_half = h.min_element();
+                    }
+                    // The axis is the first row (0x5a55f0 gives the geom axis
+                    // 1, the rotation's first column), `halfLengths` the half
+                    // height and the radius.
+                    GEOM_CYLINDER => {
+                        for end in [-h.x, h.x] {
+                            for i in 0..RING {
+                                let a = i as f32 * std::f32::consts::TAU / RING as f32;
+                                let local = Vec3::new(end, h.y * a.cos(), h.y * a.sin());
+                                points.push(at + axis * local);
+                            }
+                        }
+                        cylinders.push(ShapeCylinder {
+                            centre: at,
+                            axis: axis.x_axis.normalize_or(Vec3::X),
+                            radius: h.y,
+                            half: h.x,
+                        });
+                        // 0x5a688b: the radius over root 2, or the half
+                        // height when less.
+                        sweep_half = (h.y * std::f32::consts::FRAC_1_SQRT_2).min(h.x);
+                    }
+                    _ => {}
+                }
             }
+            point_geoms.resize(points.len(), gi);
+            box_geoms.resize(boxes.len(), gi);
+            cylinder_geoms.resize(cylinders.len(), gi);
         }
         if points.is_empty() {
             return None;
@@ -285,6 +304,9 @@ impl Shape {
             points,
             boxes,
             cylinders,
+            point_geoms,
+            box_geoms,
+            cylinder_geoms,
             com: list.center_of_mass.into(),
             inertia: Mat3::from_cols(
                 Vec3::new(m[0], p[0], p[1]),
@@ -1123,6 +1145,7 @@ fn segment_nearest(p: Vec3, q: Vec3, s: Vec3, e: Vec3) -> Vec3 {
 }
 
 /// One corner's contact with the world in a step.
+#[derive(Clone)]
 struct Contact {
     /// The corner off the centre of mass, world axes.
     r: Vec3,
@@ -1137,8 +1160,10 @@ struct Contact {
     lambda_t: [f32; 2],
     /// How far off the surface it starts (below 0 inside).
     sep: f32,
-    /// One of the body's points' (`Body::gather`), not a geom's.
+    /// One of the body's points' (`Body::gather`), not a geom collider's.
     point: bool,
+    /// The geom it is the body's contact for (`Shape::point_geoms`).
+    geom: usize,
 }
 
 /// One launched part.
@@ -1159,6 +1184,9 @@ pub struct Body {
     points: Vec<Vec3>,
     boxes: Vec<ShapeBox>,
     cylinders: Vec<ShapeCylinder>,
+    point_geoms: Vec<usize>,
+    box_geoms: Vec<usize>,
+    cylinder_geoms: Vec<usize>,
     sweep_half: f32,
     /// The state at body +0x4c the post-step sweep reads (cod4-gsc.md
     /// 3.6.1): 0 new, 1 started solid or pinched, 2 neither.
@@ -1220,6 +1248,9 @@ impl Body {
                     ..*c
                 })
                 .collect(),
+            point_geoms: shape.point_geoms.clone(),
+            box_geoms: shape.box_geoms.clone(),
+            cylinder_geoms: shape.cylinder_geoms.clone(),
             sweep_half: shape.sweep_half,
             state: 0,
             bounce: preset.bounce.min(1.0),
@@ -1386,13 +1417,8 @@ impl Body {
             if pass == 0 {
                 let mut all = self.box_contacts(dt, solids, d, v0, w0);
                 all.append(&mut found);
-                self.pinch(&all);
-                if self.state == 1 {
-                    self.pinched += 1;
-                    unwedge(&mut all, v0, w0);
-                }
-                self.shake(&all, d);
-                contacts.append(&mut all);
+                let all = self.contact_pass(all, d, v0, w0);
+                contacts.extend(all);
             } else {
                 if self.state == 1 {
                     drop_separating(&mut found, v0, w0);
@@ -1423,23 +1449,57 @@ impl Body {
         }
     }
 
-    /// The contact pass's writes to the state (0x5a5f20, 0x5a2280): 2
-    /// when the world gives no contact, 1 when two of its contacts face
-    /// each other ([`FACING`]). Retail's contacts are ODE's overlaps, run
-    /// through it per geom; vcod's are the step's first ones in the skin
-    /// ([`touching`]), all at once: the boxes', the cylinders' and the
-    /// points'.
-    fn pinch(&mut self, contacts: &[Contact]) {
-        let n: Vec<Vec3> = contacts
+    /// The near callback's contact pass (0x5a5f20) on each geom against
+    /// the world, last geom first (ODE's space lists each geom it is given
+    /// at its head): a geom with no contact sets the state 2; five or more
+    /// go through [`reduce`] first (0x5a2320); then 0x5a2760: [`pinch`],
+    /// on a body in state 1 [`unwedge`], and the jitter on each contact
+    /// kept ([`Self::shake`]). Retail's contacts are ODE's overlaps; vcod's
+    /// stand-ins are the geom's in the skin or inside ([`touching`]): its
+    /// box's or cylinder's, or a brush with sides' points. The rest are
+    /// vcod's, a box's or cylinder's points and the contacts met further on
+    /// within the step's travel, and pass through after the geom's.
+    fn contact_pass(&mut self, all: Vec<Contact>, d: &Dvars, v0: Vec3, w0: Vec3) -> Vec<Contact> {
+        let geoms = [&self.point_geoms, &self.box_geoms, &self.cylinder_geoms]
             .iter()
-            .filter(|c| touching(c))
-            .map(|c| c.n)
-            .collect();
-        if n.is_empty() {
-            self.state = 2;
-        } else if (0..n.len()).any(|i| (i + 1..n.len()).any(|j| n[i].dot(n[j]) < FACING)) {
-            self.state = 1;
+            .flat_map(|g| g.iter().copied())
+            .max()
+            .map_or(1, |g| g + 1);
+        let regions = std::mem::take(&mut self.jitter);
+        let mut pinched = false;
+        let mut out = Vec::with_capacity(all.len());
+        for g in (0..geoms).rev() {
+            // A geom with a box or cylinder collider: its points are vcod's.
+            let collider = self.box_geoms.contains(&g) || self.cylinder_geoms.contains(&g);
+            let (mut touch, ahead): (Vec<Contact>, Vec<Contact>) = all
+                .iter()
+                .filter(|c| c.geom == g)
+                .cloned()
+                .partition(|c| touching(c) && !(collider && c.point));
+            if touch.is_empty() {
+                self.state = 2;
+            } else {
+                if touch.len() >= 5 {
+                    let geoms: Vec<_> = touch.iter().map(|c| (c.r, c.n, -c.sep)).collect();
+                    let keep = reduce(&geoms);
+                    touch = keep.into_iter().map(|i| touch[i].clone()).collect();
+                }
+                if pinch(&touch) {
+                    self.state = 1;
+                }
+                if self.state == 1 {
+                    pinched = true;
+                    unwedge(&mut touch, v0, w0);
+                }
+                self.shake(&touch, &regions, d);
+            }
+            out.extend(touch);
+            out.extend(ahead);
         }
+        if pinched {
+            self.pinched += 1;
+        }
+        out
     }
 
     /// The post-step sweep (0x5a6930, from 0x5a6c10 after each step): when
@@ -1491,23 +1551,18 @@ impl Body {
     /// `phys_jitterMaxMass`.
     /// The value is times `1000 / msecStep` before `Phys_ObjAddForce`
     /// scales it again for its one step, so the impulse keeps that factor.
-    /// Retail's contacts are ODE's; these are the body's touching points
-    /// that [`unwedge`] kept.
-    fn shake(&mut self, contacts: &[Contact], d: &Dvars) {
-        if self.jitter.is_empty() {
+    /// It runs on each geom's contacts the contact pass keeps.
+    fn shake(&mut self, contacts: &[Contact], regions: &[Jitter], d: &Dvars) {
+        if regions.is_empty() {
             return;
         }
         let m = self.mass.min(JITTER_MAX_MASS);
         let q = m / JITTER_MAX_MASS;
         let weight = m * (1.0 - q * q * q);
         let per_step = 1000.0 / d.step_ms as f32;
-        let regions = std::mem::take(&mut self.jitter);
-        for c in contacts
-            .iter()
-            .filter(|c| c.point && c.n.z >= JITTER_MIN_NORMAL_Z)
-        {
+        for c in contacts.iter().filter(|c| c.n.z >= JITTER_MIN_NORMAL_Z) {
             let at = self.pos + c.r;
-            for j in &regions {
+            for j in regions {
                 let dist_sq = (at.x - j.origin.x).powi(2) + (at.y - j.origin.y).powi(2);
                 if dist_sq >= j.outer * j.outer {
                     continue;
@@ -1567,6 +1622,7 @@ impl Body {
             touched[i] = true;
             out.push(Contact {
                 point: true,
+                geom: self.point_geoms[i],
                 ..self.contact(r, n, sep, dt, d, v0, w0, &inv_iw)
             });
         }
@@ -1588,7 +1644,7 @@ impl Body {
         let inv_iw = self.inv_inertia_world();
         let mut out = Vec::new();
         let mut found = Vec::new();
-        for b in &self.boxes {
+        for (b, &geom) in self.boxes.iter().zip(&self.box_geoms) {
             let axes = Mat3::from_quat(self.rot) * b.axes;
             let c = self.pos + self.rot * b.centre;
             let ext = axes.x_axis.abs() * b.half.x
@@ -1602,10 +1658,13 @@ impl Body {
                 box_contacts(c, axes, b.half, &s, reach, narrow, &mut found);
             }
             for &(p, n, sep) in &found {
-                out.push(self.contact(p - self.pos, n, sep, dt, d, v0, w0, &inv_iw));
+                out.push(Contact {
+                    geom,
+                    ..self.contact(p - self.pos, n, sep, dt, d, v0, w0, &inv_iw)
+                });
             }
         }
-        for cy in self.world_cylinders() {
+        for (cy, &geom) in self.world_cylinders().zip(&self.cylinder_geoms) {
             let (a, r, hh) = (cy.axis, cy.radius, cy.half);
             let ext = a.abs() * hh + (Vec3::ONE - a * a).max(Vec3::ZERO).powf(0.5) * r;
             let lever = (cy.centre - self.pos).length() + hh.hypot(r);
@@ -1619,7 +1678,10 @@ impl Body {
                 cylinder_contacts(&cy, self.pos, &s, reach, narrow, &mut found);
             }
             for &(p, n, sep) in &found {
-                out.push(self.contact(p - self.pos, n, sep, dt, d, v0, w0, &inv_iw));
+                out.push(Contact {
+                    geom,
+                    ..self.contact(p - self.pos, n, sep, dt, d, v0, w0, &inv_iw)
+                });
             }
         }
         out
@@ -1667,6 +1729,7 @@ impl Body {
             lambda_t: [0.0; 2],
             sep,
             point: false,
+            geom: 0,
         }
     }
 
@@ -1706,16 +1769,19 @@ fn touching(c: &Contact) -> bool {
     c.sep <= SKIN
 }
 
-/// A pinched body's contacts (0x5a2760, the state 1): of two that face
-/// each other ([`FACING`]) the first stays when the centre lies on its
-/// plane or in front of it, else the second takes its slot, and the
+/// 0x5a2280: whether two of a geom's contacts face each other
+/// ([`FACING`]), which sets the body's state 1.
+fn pinch(c: &[Contact]) -> bool {
+    (0..c.len()).any(|i| (i + 1..c.len()).any(|j| c[i].n.dot(c[j].n) < FACING))
+}
+
+/// A pinched body's contacts with one geom (0x5a2760, the state 1): of two
+/// that face each other ([`FACING`]) the first stays when the centre lies
+/// on its plane or in front of it, else the second takes its slot, and the
 /// second's slot takes the last contact, which the walk then passes over
 /// (0x5a25d0, its point the body's position, as the world's byte at
-/// 0xcc54498 is never set); then [`drop_separating`]. Retail runs it on
-/// each geom's collide; vcod on the step's first [`touching`] contacts at
-/// once.
-fn unwedge(contacts: &mut Vec<Contact>, v0: Vec3, w0: Vec3) {
-    let (mut c, ahead): (Vec<Contact>, Vec<Contact>) = contacts.drain(..).partition(touching);
+/// 0xcc54498 is never set); then [`drop_separating`].
+fn unwedge(c: &mut Vec<Contact>, v0: Vec3, w0: Vec3) {
     let mut i = 0;
     while i + 1 < c.len() {
         let mut j = i + 1;
@@ -1731,9 +1797,132 @@ fn unwedge(contacts: &mut Vec<Contact>, v0: Vec3, w0: Vec3) {
         }
         i += 1;
     }
-    drop_separating(&mut c, v0, w0);
-    contacts.extend(c);
-    contacts.extend(ahead);
+    drop_separating(c, v0, w0);
+}
+
+/// The contacts 0x5a2320 keeps of a geom's five or more (0x5a5f20 at
+/// 0x5a6078), by index into `c` (each its position, normal and depth), in
+/// the order it copies them out (cod4-gsc.md 3.6.1): three seeds by normal
+/// (0x5a18e0), five k-means rounds over the normals (0x5a1aa0), clusters
+/// whose means dot over 0.999 merged (0x5a1cc0), and of each cluster the
+/// least and most along two tangents and the deepest, a contact within
+/// 0.1 of an earlier one passed over (0x5a1e40).
+fn reduce(c: &[(Vec3, Vec3, f32)]) -> Vec<usize> {
+    let n = c.len();
+    let mut tags = vec![usize::MAX; n];
+    if n == 0 {
+        return Vec::new();
+    }
+    // 0x5a18e0: the seed 104729 mod the count, the contact whose normal is
+    // most against it, then the one most against both.
+    let k0 = 104_729 % n;
+    let least = |f: &dyn Fn(Vec3) -> f32| {
+        let (mut best, mut at) = (f32::MAX, None);
+        for (i, &(_, nm, _)) in c.iter().enumerate() {
+            let d = f(nm);
+            if best > d {
+                (best, at) = (d, Some(i));
+            }
+        }
+        at
+    };
+    let n0 = c[k0].1;
+    let k1 = least(&|nm| nm.dot(n0));
+    tags[k0] = 0;
+    if let Some(k1) = k1 {
+        tags[k1] = 1;
+        let n1 = c[k1].1;
+        if let Some(k2) = least(&|nm| nm.dot(n0).max(nm.dot(n1))) {
+            tags[k2] = 2;
+        }
+    }
+    // 0x5a1aa0: each cluster's mean normal (zero stays zero, 0x4076d0),
+    // then each contact to the cluster it dots most with, five times over.
+    let means = |tags: &[usize]| {
+        let mut m = [Vec3::ZERO; 3];
+        for (i, &t) in tags.iter().enumerate() {
+            if t < 3 {
+                m[t] += c[i].1;
+            }
+        }
+        m.map(|v| v.normalize_or_zero())
+    };
+    let mut m = means(&tags);
+    for _ in 0..5 {
+        for (i, t) in tags.iter_mut().enumerate() {
+            let (mut best, mut at) = (-f32::MAX, usize::MAX);
+            for (k, mk) in m.iter().enumerate() {
+                let d = mk.dot(c[i].1);
+                if best - d < 0.0 {
+                    (best, at) = (d, k);
+                }
+            }
+            *t = at;
+        }
+        m = means(&tags);
+    }
+    // 0x5a1cc0: a later cluster whose mean dots over 0.999 (the double at
+    // 0x70b270) with an earlier one's joins it, off the means as they were.
+    for i in 0..2 {
+        for j in i + 1..3 {
+            if m[i].dot(m[j]) > 0.999 {
+                tags.iter_mut().filter(|t| **t == j).for_each(|t| *t = i);
+            }
+        }
+    }
+    // 0x5a1e40: the clusters' normal sums, each normalized and given two
+    // tangents off z, or off y when |z| is 0.5 or more (0x5a1d80).
+    let mut sums = [Vec3::ZERO; 3];
+    for (i, &t) in tags.iter().enumerate() {
+        if t < 3 {
+            sums[t] += c[i].1;
+        }
+    }
+    let mut out = Vec::new();
+    for (k, sum) in sums.iter().enumerate() {
+        let nm = sum.normalize_or_zero();
+        let u = if nm.z.abs() < 0.5 { Vec3::Z } else { Vec3::Y };
+        let t1 = nm.cross(u).normalize_or_zero();
+        let t = [t1, nm.cross(t1).normalize_or_zero()];
+        let (mut lo, mut hi) = ([f32::MAX; 2], [-f32::MAX; 2]);
+        let (mut lo_at, mut hi_at) = ([usize::MAX; 2], [usize::MAX; 2]);
+        let (mut deepest, mut deep_at) = (-f32::MAX, usize::MAX);
+        let mut members = 0;
+        for i in 0..n {
+            if tags[i] != k {
+                continue;
+            }
+            // The float at 0x70b87c, 0.01, on the squared distance.
+            for j in i + 1..n {
+                if tags[j] == k && (c[j].0 - c[i].0).length_squared() < 0.01 {
+                    tags[j] = usize::MAX;
+                }
+            }
+            members += 1;
+            for a in 0..2 {
+                let p = t[a].dot(c[i].0);
+                if lo[a] > p {
+                    (lo[a], lo_at[a]) = (p, i);
+                }
+                if hi[a] < p {
+                    (hi[a], hi_at[a]) = (p, i);
+                }
+            }
+            if deepest < c[i].2 {
+                (deepest, deep_at) = (c[i].2, i);
+            }
+        }
+        if members == 0 {
+            continue;
+        }
+        let start = out.len();
+        for i in [lo_at[0], lo_at[1], hi_at[0], hi_at[1], deep_at] {
+            if i < n && !out[start..].contains(&i) {
+                out.push(i);
+            }
+        }
+    }
+    out
 }
 
 /// 0x5a2760's second filter on a pinched body: each [`touching`] contact
@@ -2375,6 +2564,7 @@ mod tests {
             lambda_t: [0.0; 2],
             sep: 0.0,
             point: false,
+            geom: 0,
         }
     }
 
@@ -2407,19 +2597,87 @@ mod tests {
         ];
         unwedge(&mut c, falling, Vec3::ZERO);
         assert_eq!(normals(&c), [Vec3::X, -Vec3::X]);
-        // One the step's travel meets past the skin is not ODE's and
-        // stays, after the touching ones.
-        let mut c = vec![
-            Contact {
-                sep: 1.0,
-                ..touch(Vec3::new(5.0, 0.0, 0.0), -Vec3::X)
-            },
-            touch(Vec3::new(-5.0, 0.0, 0.0), Vec3::X),
-            touch(Vec3::new(5.0, 0.0, 0.0), -Vec3::X),
+    }
+
+    #[test]
+    fn five_or_more_contacts_keep_each_clusters_extremes_and_deepest() {
+        let at = |x: f32, y: f32, z: f32, n: Vec3, depth: f32| (Vec3::new(x, y, z), n, depth);
+        // A floor (one corner deepest, one a near twin of another), a wall
+        // facing +x and one facing +y. The seed is contact 104729 % 10 = 9
+        // (+y), then the floor's first (most against it), then the +x
+        // wall's first (most against both).
+        let c = [
+            at(0.0, 0.0, 0.0, Vec3::Z, 0.1),
+            at(0.05, 0.0, 0.0, Vec3::Z, 0.1),
+            at(10.0, 0.0, 0.0, Vec3::Z, 0.1),
+            at(10.0, 10.0, 0.0, Vec3::Z, 0.3),
+            at(0.0, 10.0, 0.0, Vec3::Z, 0.1),
+            at(0.0, 2.0, 1.0, Vec3::X, 0.1),
+            at(0.0, 5.0, 4.0, Vec3::X, 0.1),
+            at(0.0, 8.0, 2.0, Vec3::X, 0.1),
+            at(3.0, 0.0, 2.0, Vec3::Y, 0.1),
+            at(6.0, 0.0, 5.0, Vec3::Y, 0.1),
         ];
-        unwedge(&mut c, falling, Vec3::ZERO);
-        assert_eq!(normals(&c), [Vec3::X, -Vec3::X]);
-        assert_eq!(c[1].sep, 1.0);
+        // The +y wall's tangents are x and -z, the floor's -x and -y, the
+        // +x wall's -y and -z: of each the least along both, the most along
+        // both and the deepest, each once. The floor's twin and its corner
+        // at (0, 10) go.
+        assert_eq!(reduce(&c), [8, 9, 2, 3, 0, 7, 6, 5]);
+        // A normal within 0.999 of another's mean joins its cluster: the
+        // floor's tipped corner is one of its extremes, not a cluster.
+        let tipped = Vec3::new(0.0, 0.01, 1.0).normalize();
+        let floor = [
+            at(0.0, 0.0, 0.0, Vec3::Z, 0.1),
+            at(10.0, 0.0, 0.0, Vec3::Z, 0.1),
+            at(10.0, 10.0, 0.0, tipped, 0.1),
+            at(0.0, 10.0, 0.0, Vec3::Z, 0.1),
+            at(5.0, 5.0, 0.0, Vec3::Z, 0.1),
+        ];
+        assert_eq!(reduce(&floor), [1, 2, 0]);
+    }
+
+    #[test]
+    fn the_contact_pass_pinches_on_one_geoms_facing_contacts_only() {
+        let (shape, preset) = door();
+        let mut b = Body::new(Vec3::ZERO, Vec3::ZERO, &shape, &preset, 0);
+        b.box_geoms = vec![0, 1];
+        let wall = |g: usize, x: f32, n: Vec3| Contact {
+            geom: g,
+            ..touch(Vec3::new(x, 0.0, 0.0), n)
+        };
+        // Falling, so the drop of the contacts a pinched body leaves keeps
+        // the walls'.
+        let (d, still, falling) = (Dvars::default(), Vec3::ZERO, -Vec3::Z * 10.0);
+        // Each end of a two-geom body against its own wall: neither geom's
+        // contacts face each other, and both stay.
+        let out = b.contact_pass(
+            vec![wall(0, -5.0, Vec3::X), wall(1, 5.0, -Vec3::X)],
+            &d,
+            falling,
+            still,
+        );
+        assert_eq!((out.len(), b.state, b.pinched), (2, 0, 0));
+        // One geom against both: pinched, and the one its centre is behind
+        // goes. Its other geom, with nothing, sets the state 2 first.
+        let out = b.contact_pass(
+            vec![wall(0, -5.0, Vec3::X), wall(0, 5.0, -Vec3::X)],
+            &d,
+            falling,
+            still,
+        );
+        assert_eq!((out.len(), b.state, b.pinched), (1, 1, 1));
+        // A point of a geom with a box is vcod's: it neither pinches nor
+        // goes, and comes after the box's contacts.
+        let mut b = Body::new(Vec3::ZERO, Vec3::ZERO, &shape, &preset, 0);
+        let point = Contact {
+            point: true,
+            ..wall(0, 5.0, -Vec3::X)
+        };
+        let out = b.contact_pass(vec![point, wall(0, -5.0, Vec3::X)], &d, falling, still);
+        assert_eq!(
+            (out.iter().map(|c| c.point).collect::<Vec<_>>(), b.pinched),
+            (vec![false, true], 0)
+        );
     }
 
     #[test]
