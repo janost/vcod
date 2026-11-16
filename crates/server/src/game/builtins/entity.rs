@@ -401,6 +401,7 @@ fn client_spawn(
         slot,
         origin,
         yaw_deg: angles[1],
+        angles,
         mode,
     });
     Ok(Value::Undefined)

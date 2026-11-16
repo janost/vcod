@@ -97,6 +97,9 @@ struct Play {
     /// 1.1d's step, which wraps a looping clip on the stack before its one
     /// store ([`Play::step`]).
     kept: bool,
+    /// `cod2_lnxded`'s step, which stores its increment before the sum as
+    /// a sync node's does ([`ChannelClock::store_steps`]).
+    stored: bool,
 }
 
 /// The server frame the engine steps a node time by: `level.frametime`
@@ -126,7 +129,7 @@ impl Play {
     fn step(&self, t: f32) -> f32 {
         let dt = f64::from(STEP_MS as f32 * 0.001);
         let inc = dt * f64::from(self.rate) * f64::from(self.frequency);
-        let inc = if self.sync {
+        let inc = if self.sync || self.stored {
             f64::from(inc as f32)
         } else {
             inc
@@ -360,6 +363,8 @@ pub struct ChannelClock {
     weight: Ramp,
     /// Earlier clips still blending out.
     fading: [Option<(Play, Ramp)>; FADES],
+    /// Every clip's step stores its increment first ([`Self::store_steps`]).
+    stored: bool,
     /// 1.5's and UO's sync groups (a gunner's turret anims) a blend took
     /// to weight 0, at the node time their last weighted step left: the
     /// group's rows keep their weights, so its record lives on and a later
@@ -410,6 +415,18 @@ impl ChannelClock {
         self.current.frequency = frequency;
         self.current.looping = looping;
         self.current.sync = true;
+    }
+
+    /// Each clip's step stores `dtime * rate * frequency` as a float
+    /// before the sum, as `cod2_lnxded` 1.3 steps a node time (a
+    /// gdb-read series, cod2-player-anims.md 7); 1.5's and UO's keep it on
+    /// the stack.
+    pub fn store_steps(&mut self) {
+        self.stored = true;
+        self.current.stored = true;
+        for (p, _) in self.fading.iter_mut().flatten() {
+            p.stored = true;
+        }
     }
 
     /// The wire value last set, toggle included (`lf+0x10`).
@@ -514,6 +531,9 @@ impl ChannelClock {
         } else {
             Touches::default()
         };
+        if self.stored {
+            self.store_steps();
+        }
         if index == 0 {
             return touches;
         }
@@ -606,6 +626,7 @@ impl ChannelClock {
                 looping: n.looping,
                 sync: false,
                 kept,
+                stored: self.stored,
             };
             self.weight = Ramp::new(1.0, 1.0, now_ms, 0.0);
             self.fading = [None; FADES];
@@ -712,6 +733,7 @@ impl ChannelClock {
                 looping: new.is_some_and(|n| n.looping),
                 sync: false,
                 kept,
+                stored: self.stored,
             },
         };
         self.weight = Ramp::raised(from, 1.0, now_ms, (1.0 - from) * blend).stored_on(windowed);
@@ -1081,6 +1103,25 @@ mod tests {
         assert_eq!((p.time_ms, p.time(2999)), (2950, at));
         p.looping = false;
         assert_eq!(p.time(9000), 1.0);
+    }
+
+    #[test]
+    fn a_cod2_step_stores_its_increment() {
+        // `pb_stand_alert` (100 frames at 30 fps): retail's 17th step,
+        // read under gdb (cod2-player-anims.md 7), against the stack sum's.
+        let play = |stored| Play {
+            rate: 1.0,
+            frequency: 30.0 / 99.0,
+            looping: true,
+            stored,
+            ..Play::default()
+        };
+        let (mut a, mut b) = (0.0f32, 0.0f32);
+        for _ in 0..17 {
+            a = play(true).step(a);
+            b = play(false).step(b);
+        }
+        assert_eq!((a.to_bits(), b.to_bits()), (0x3e83_e0f8, 0x3e83_e0f9));
     }
 
     #[test]
