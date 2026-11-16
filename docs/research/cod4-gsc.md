@@ -1366,8 +1366,10 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   pushes it 4.6 units on (one run), and it sleeps again. With the wheels
   as cylinders and the post-step sweep, the parts flew 13 to 167 units
   and slept within 1.3 to 2.2 s (79 to 127 steps), and the round pushed
-  the left mirror 7.4 units on (one run). VERIFIED (the tests,
-  ours). How a part looks in flight and at rest is
+  the left mirror 7.4 units on (one run). With the pinched body's
+  contact pass (3.6.1) they flew 17 to 167 units and slept within 85 to
+  126 steps, and the round pushed the left mirror 7.4 units on (one
+  run). VERIFIED (the tests, ours). How a part looks in flight and at rest is
   pending a human's look.
 - The ragdoll (`cod4-player-anims.md` 10) keeps its point solver. This
   body could carry it once the bones are rigid capsules held by joint
