@@ -2461,6 +2461,22 @@ servers (`COD_VERSION=1.5`, `COD_VERSION=uo` on mp_uo_carentan with
 Charlie `--probe-secs 25 --probe-say "13.0:vote yes" --probe-say "15.0:vote
 no"`, so Able leaves with both windows open (cod11-votes.md 3.1).
 
+## probe_domprops
+
+United Offensive's mp_arnhem dom props (`flag4stuff_*`, `flag2stuff_*`),
+whose clip is lump-24 terrain alone: a `bulletTrace` straight down over
+their tops as loaded, hidden, `notsolid` and restored, every brush model
+linked (no `_gameobjects` pass). No client. `bsp-ibsp59-format.md`, "The
+leaf walk".
+
+```
+COD_VERSION=uo COD_DIR=<UO install> COD_LNXDED_HOME=<absolute, no '+'> SECS=14 tools/run_probe.sh client-probes/probe_domprops mp_arnhem
+```
+
+Against ours: `vcod-server mp_arnhem --mod-dir uo --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_domprops.gsc`.
+Retail and ours, 2026-11-16, print the same lines.
+
 ## probe_patchshot and probe_patchseams
 
 Server-only probes: `bulletTrace(from, to, ...)` along fixed segments on
