@@ -661,8 +661,16 @@ fn angle_set(host: &mut GameHost, id: EntId) {
 /// parent's new models have no such bone, or there is no model at all. A child on the entity's own frame keeps its link.
 /// A bone the new model has is looked up again on every pass, so a kept
 /// link needs nothing more here.
+///
+/// On a client 1.1d's and 1.5b's return; UO's runs `G_UpdateClientInfo`
+/// (0x87df9), which `GameHost::dobj_updates` queues for the sim.
 pub fn model_changed(host: &mut GameHost, cx: &mut Cx, parent: EntId) {
-    if client_slot(host, parent).is_some() {
+    if let Some(slot) = client_slot(host, parent) {
+        if host.defs.proto.is_uo()
+            && let Some(now) = crate::game::script::wear(host, cx, parent)
+        {
+            host.dobj_updates.push((slot, now));
+        }
         return;
     }
     let model = model_of(host, cx, parent);

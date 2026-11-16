@@ -42,6 +42,54 @@ impl Assembly {
     }
 }
 
+/// A player's DObj across `G_UpdateClientInfo`s: the models and the
+/// ignoreCollision bits it was built with, which hold until a rebuild
+/// (1.5b `BG_UpdatePlayerDObj` 0x1afc9, UO 0x1f556;
+/// cod15-protocol-diff.md, `getAttachIgnoreCollision`).
+#[derive(Clone, Default, Debug)]
+pub struct PlayerDObj {
+    /// The client info's model and tag names, copied off the entity at each
+    /// update; an empty slot clears its names without counting as a change.
+    names: Assembly,
+    /// What the DObj was built from: the hit walk's assembly.
+    built: Assembly,
+    /// The weapon it was built with, 0 for a rider without one.
+    weapon: i32,
+    /// The client info's rebuild flag (1.5b `+0x3f8`, UO `+0x404`).
+    rebuild: bool,
+    /// The torso lerp frame's anim, toggle bit and all.
+    torso: i32,
+}
+
+impl PlayerDObj {
+    /// One `G_UpdateClientInfo` (the end frame's, and on UO every
+    /// `G_DObjUpdate`'s): `now` is what the entity wears, `weapon` its
+    /// weapon for the DObj, `torso` its `torsoAnim`. A changed name frees
+    /// the DObj; a free one, a weapon other than the built one or a set flag
+    /// rebuilds it, reading the bits as they are. Then `BG_PlayerAnimation`:
+    /// a new torso anim other than 0, toggle bit aside, sets the flag for the
+    /// next update (`BG_SetNewAnimation`, 1.5b 0x1908f, UO 0x1d201).
+    pub fn update(&mut self, now: &Assembly, weapon: i32, torso: i32) -> &Assembly {
+        let changed = now.body != self.names.body
+            || now
+                .attachments
+                .iter()
+                .enumerate()
+                .any(|(i, a)| self.names.attachments.get(i) != Some(a));
+        self.names = now.clone();
+        if changed || weapon != self.weapon || self.rebuild {
+            self.built = now.clone();
+            self.weapon = weapon;
+            self.rebuild = false;
+        }
+        if torso != self.torso {
+            self.torso = torso;
+            self.rebuild |= torso & !0x200 != 0;
+        }
+        &self.built
+    }
+}
+
 /// A client's model name as script wrote it, minus the `xmodel/` prefix
 /// `setModel` and `attach` are given.
 pub fn model_name(raw: &str) -> String {
@@ -188,6 +236,53 @@ mod tests {
         let mut d = a.clone();
         d.ignore_collision = 1;
         assert_ne!(a.key(), d.key());
+    }
+
+    /// Retail 1.5b (`client-probes/probe_ignorecoll`): the same models
+    /// with other bits keep the built bits until a weapon change or a new
+    /// torso anim; a changed model takes them at once.
+    #[test]
+    fn a_player_dobj_keeps_its_bits_until_a_rebuild() {
+        let wear = |h: &str, bits| Assembly {
+            body: "b".into(),
+            attachments: vec![(h.into(), None), ("hat".into(), None)],
+            ignore_collision: bits,
+        };
+        let mut d = PlayerDObj::default();
+        let mut bits = |a: Assembly, weapon, torso| d.update(&a, weapon, torso).ignore_collision;
+        assert_eq!(bits(wear("h1", 3), 0, 0), 3);
+        assert_eq!(bits(wear("h1", 0), 0, 0), 3);
+        assert_eq!(bits(wear("h2", 0), 0, 0), 0);
+        assert_eq!(bits(wear("h2", 1), 0, 0), 0);
+        assert_eq!(bits(wear("h2", 1), 5, 0), 1);
+        // The toggle bit alone flags nothing.
+        assert_eq!(bits(wear("h2", 2), 5, 0x200), 1);
+        assert_eq!(bits(wear("h2", 2), 5, 0x200), 1);
+        // A new torso anim rebuilds at the update after its own.
+        assert_eq!(bits(wear("h2", 2), 5, 7), 1);
+        assert_eq!(bits(wear("h2", 2), 5, 7), 2);
+    }
+
+    /// An emptied slot clears its names without a rebuild: the detached
+    /// model stays in the DObj until one. UO's detachAll and attach each
+    /// update, so a re-attach of the same models rebuilds there.
+    #[test]
+    fn a_detach_alone_keeps_the_built_models() {
+        let mut d = PlayerDObj::default();
+        let both = Assembly {
+            body: "b".into(),
+            attachments: vec![("head".into(), None), ("hat".into(), None)],
+            ignore_collision: 0,
+        };
+        let mut head = both.clone();
+        head.attachments.pop();
+        d.update(&both, 0, 0);
+        assert_eq!(d.update(&head, 0, 0), &both);
+        let mut flagged = both.clone();
+        flagged.ignore_collision = 2;
+        assert_eq!(d.update(&flagged, 0, 0), &flagged);
+        d.update(&head, 0, 0);
+        assert_eq!(d.update(&head, 4, 0), &head);
     }
 
     #[test]
