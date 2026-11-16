@@ -457,10 +457,15 @@ fn bullet_traces_meet_posed_bodies_and_the_helicopter() {
                 // `getTagOrigin("j_head")` on the posed body sits by the head
                 // box, not at the bind pose's.
                 let t_id = level.rt.client_entity(0).unwrap();
-                let (tag, _) =
-                    crate::game::builtins::cod4_script::posed_tag(host, t_id, "j_head").unwrap();
+                let (tag, _) = crate::game::builtins::cod4_script::posed_tag(
+                    &mut level.rt.host,
+                    t_id,
+                    "j_head",
+                )
+                .unwrap();
                 assert!(tag.distance(head) < 12.0, "{tag:?} {head:?}");
                 // Passing the target, the same segment misses it.
+                let host = &level.rt.host;
                 let t = locational4(host, a, b, target, 0x280_6831).unwrap();
                 assert_ne!(t.entity_num, target, "{t:?}");
                 // Wide: 14 out at the capsule's straight part, across the

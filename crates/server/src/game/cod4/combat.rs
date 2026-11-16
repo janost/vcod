@@ -208,6 +208,11 @@ pub struct PosedBody4 {
     /// The controls the pose took, which its skeleton sets as 1.7's
     /// controller does ([`skel_worlds`]).
     pub controls: Controllers,
+    /// The controls the next frame's first pose eases them to, what a
+    /// script's tag read takes when nothing posed the body that frame yet.
+    pub eased_controls: Controllers,
+    /// The level time a trace or a tag read last built the skeleton at.
+    pub built_at: Option<i32>,
 }
 
 impl PosedBody4 {
@@ -624,6 +629,12 @@ impl Cod4Level {
             return;
         };
         let ps = vcod_cod4::pmove::PlayerState::from_wire(&p.ps);
+        // `FireWeapon` (0x80a3030) notifies `weapon_fired` first, every
+        // weapon type, unless the body is on a turret (`eFlags` 0x300 and
+        // the entity's byte at +0x16c, 0x80a3045..0x80a3074).
+        if ps.e_flags & 0x300 == 0 {
+            self.notify_player(slot, "weapon_fired");
+        }
         let Some(d) = self.combat.defs.get(ps.weapon as usize).cloned() else {
             return;
         };
@@ -887,7 +898,7 @@ impl Cod4Level {
 
     /// A bare notify on the player off its event: `reload_start` on
     /// `EV_RELOAD_START_NOTIFY`, `reload` on `EV_RELOAD_ADDAMMO`
-    /// (cod4-combat.md 15).
+    /// (cod4-combat.md 15), `weapon_fired` on a fire.
     fn notify_player(&mut self, slot: usize, event: &'static str) {
         if let Some(id) = self.rt.client_entity(slot) {
             self.rt.host.engine_notifies.push((id, event, Vec::new()));
@@ -1232,6 +1243,7 @@ impl Cod4Level {
         limit: f32,
         ease: bool,
     ) -> Option<vcod_common::bonetrace::BoneHit> {
+        self.take_script_poses();
         let character = self.character(slot)?;
         let f = self.body_frame(slot, origin)?;
         let rig = self.combat.rig(&character)?;
@@ -1283,6 +1295,7 @@ impl Cod4Level {
             {
                 p.pose = Rc::new(pose);
                 p.controls = controls;
+                p.built_at = Some(now);
             }
         }
         hit
@@ -1292,7 +1305,9 @@ impl Cod4Level {
     /// the script's locational traces (`bulletTrace`) to read through the
     /// next frame's threads.
     pub(super) fn posed_bodies(&mut self) -> Vec<PosedBody4> {
+        self.take_script_poses();
         let now = self.level_time();
+        let dt = self.frame_time();
         let mut out = Vec::new();
         for slot in 0..self.players.len() {
             if !self.playing(slot) {
@@ -1316,11 +1331,23 @@ impl Cod4Level {
             let Some(src) = self.combat.src.clone() else {
                 continue;
             };
-            let Combat4 { anims, bodies, .. } = &mut self.combat;
+            let Combat4 {
+                anims,
+                bodies,
+                end_frame,
+                ..
+            } = &mut self.combat;
             let Some(Some(set)) = anims.as_mut() else {
                 continue;
             };
-            let pose = pose4(&bodies[slot], &rig, set, &src, &f, now);
+            // The next frame's reads find each goal weight a step on
+            // from where this end frame set it, the node times where they
+            // stand (cod4-player-anims.md 3); a cmd's trace before that
+            // frame reads the weights unstepped (`body_trace_eased`).
+            let mut next = bodies[slot].clone();
+            next.set_weight_lead(dt);
+            let pose = pose4(&next, &rig, set, &src, &f, now);
+            next.ease_controls(&set.anims, &controller_frame(&f, end_frame[slot]), dt);
             let placed = BodyFrame {
                 origin: ps.origin,
                 angles: [0.0, f.angles[1], 0.0],
@@ -1335,14 +1362,30 @@ impl Cod4Level {
                 placed,
                 yaw: f.angles[1],
                 controls: *bodies[slot].controls(),
+                eased_controls: *next.controls(),
+                built_at: None,
             });
         }
         out
     }
 
+    /// The bodies a script's tag read posed since the level last looked
+    /// ([`Cod4HostState::script_poses`]): their controls as that read's ease
+    /// left them, eased for the frame.
+    fn take_script_poses(&mut self) {
+        let poses = std::mem::take(&mut self.rt.host.cod4_mut().script_poses);
+        for (slot, at, controls) in poses {
+            if self.combat.eased[slot] != Some(at) {
+                self.combat.eased[slot] = Some(at);
+                self.combat.bodies[slot].set_controls(controls);
+            }
+        }
+    }
+
     /// The world centre of the first hit box of `slot`'s posed body whose
     /// location is `hitloc` (2 the head), as a shot this frame meets it.
     pub fn hit_box_center(&mut self, slot: usize, hitloc: u8) -> Option<Vec3> {
+        self.take_script_poses();
         let ps = self.pm_state(slot)?;
         let character = self.character(slot)?;
         let f = self.body_frame(slot, ps.origin)?;

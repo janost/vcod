@@ -721,14 +721,24 @@ fn clone_player(
     Ok(Value::Entity(id))
 }
 
+/// `r.currentOrigin` and the yaw of `r.currentAngles` of the client in
+/// `slot` at the call: where its last cmd left it, or where a round's
+/// antilag holds it through the damage (cod4-combat.md 6.1).
+pub(crate) fn current_place(host: &GameHost, slot: usize, c: &CorpseSource) -> (glam::Vec3, f32) {
+    let origin = host.cod4().antilag.get(&slot).copied();
+    (origin.unwrap_or(glam::Vec3::from(c.origin)), c.yaw)
+}
+
 /// What `clonePlayer` reads of a client: its body as the death left it.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CorpseSource {
+    /// `r.currentOrigin`, the origin the last cmd left.
     pub origin: [f32; 3],
     /// `ps.velocity`, the clone's launch.
     pub velocity: [f32; 3],
     /// `r.maxs[2]` as the last cmd linked the body: the clone's box.
     pub height: f32,
+    /// `r.currentAngles[1]`: the view yaw the last cmd left.
     pub yaw: f32,
     pub e_flags: u32,
     pub legs_anim: u32,
@@ -812,14 +822,7 @@ pub(crate) fn launch_weapon(
     let (mins, mut maxs) = host.client_box(slot);
     maxs[2] = c.height;
     let (mins, maxs) = (glam::Vec3::from(mins), glam::Vec3::from(maxs));
-    // `r.currentOrigin`: where the body's last cmd left it, or where a
-    // round's antilag holds it through the damage (cod4-combat.md 6.1).
-    let origin = host
-        .cod4()
-        .antilag
-        .get(&slot)
-        .copied()
-        .unwrap_or(glam::Vec3::from(c.origin));
+    let (origin, _) = current_place(host, slot, &c);
     let mut base = origin;
     base.z = (f64::from(maxs.z - mins.z) * 0.5 + f64::from(origin.z)) as f32;
     let cvar = |host: &GameHost, name: &str, default: f32| match host.cvars.get(name) {
@@ -842,9 +845,8 @@ pub(crate) fn launch_weapon(
     delta.z = (crandom() * f64::from(up_rand) + f64::from(up_base) + f64::from(delta.z)) as f32;
     delta.x = (crandom() * f64::from(horz) + f64::from(delta.x)) as f32;
     delta.y = (crandom() * f64::from(horz) + f64::from(delta.y)) as f32;
-    let hand = tag.and_then(|t| {
-        super::cod4_script::posed_body_tag(host, slot as u32, t, Some(origin)).map(|(at, _)| at)
-    });
+    let hand = tag
+        .and_then(|t| super::cod4_script::posed_body_tag(host, slot as u32, t).map(|(at, _)| at));
     if let (Some(at), Some(clip)) = (hand, host.cod4().clip.as_deref()) {
         let mid = ((mins.as_dvec3() + maxs.as_dvec3()) * 0.5 + origin.as_dvec3()).as_vec3();
         let world = crate::game::cod4::clip::Cod4Clip {

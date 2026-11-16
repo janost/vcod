@@ -107,6 +107,21 @@ not yet confirmed on 1.7.
   retail's 56.6443, 56.5362, 56.428, 56.3196 from the spawn's next frame
   (the horizontal offset follows each spawn's own yaw). VERIFIED (the
   probe on both servers).
+- A new goal weight reads a step on the frame after the end frame that
+  set it, its clip's node time still 0: the gdb trees read
+  `pb_standjump_takeoff` at node time 0 and weight 0.5005 (from 0.001,
+  one 50 ms step into its 100 ms blend), `pb_crouch_alert` at 0 and 0.12587,
+  `pt_flinch_forward` at 0 and 0.14371 (`fixtures/skel/player-anim-gdb.txt`).
+  VERIFIED (gdb). That `G_RunFrame`'s step over the DObjs (0x80920d0)
+  moves the weights and leaves a node set since the last step at time 0
+  is INFERRED. vcod's end frame poses the bodies the next frame's threads
+  read with every weight `level.frametime` ahead of the node times
+  (`PlayerBody::set_weight_lead`); a cmd's trace before that frame reads
+  them unstepped. Before it, `cod4_tag_read_ab` read the walk's, the
+  sight's and the reload's blends a frame late: 107 rows; after, 35, then
+  17 with the controls eased (cod4-combat.md 6.1). Moving the lead onto
+  the traces too put 879 rows into `cod4_corpse_drag_ab`. VERIFIED (the
+  gates).
 - `lerp.u.player.movementDir` is a signed byte of degrees, clamped to
   +-90. INFERRED (`PM_SetMovementDir`,
   `BG_PlayerStateToEntityState`).
