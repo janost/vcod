@@ -66,7 +66,8 @@ impl Cod4Physics {
         let mut trace = clip_trace(&world.clip);
         let mut solids = clip_solids(&world.clip);
         let parts = &mut self.parts;
-        self.clock
+        let stepped = self
+            .clock
             .advance(time, &self.dvars, |ms, until, first, d| {
                 let mut awake = 0;
                 for (b, _) in parts.values_mut().filter_map(|p| p.body.as_mut()) {
@@ -78,6 +79,11 @@ impl Cod4Physics {
                 }
                 awake
             });
+        if stepped {
+            for (b, _) in self.parts.values_mut().filter_map(|p| p.body.as_mut()) {
+                b.end_frame(&mut trace, &self.dvars);
+            }
+        }
     }
 
     /// Where launched part `e`, drawn as `model`, is at `time`: its body

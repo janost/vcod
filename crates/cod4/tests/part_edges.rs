@@ -304,7 +304,7 @@ fn parts_dropped_together_step_at_world_ones_msec_step() {
     let mut t = 0;
     while t < 60_000 && bodies.iter().any(|(_, _, b)| !b.asleep) {
         t += 16;
-        clock.advance(t, &d, |ms, until, first, dv| {
+        let stepped = clock.advance(t, &d, |ms, until, first, dv| {
             assert_eq!(
                 dv.step_ms,
                 steps.last().map_or(17, |&(_, n)| msec_step(1, n))
@@ -320,6 +320,11 @@ fn parts_dropped_together_step_at_world_ones_msec_step() {
             steps.push((ms, awake));
             awake
         });
+        if stepped {
+            for (_, _, b) in bodies.iter_mut() {
+                b.end_frame(&mut trace, &d);
+            }
+        }
     }
     let longest = steps.iter().map(|s| s.0).max().unwrap();
     println!(

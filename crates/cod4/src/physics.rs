@@ -1189,16 +1189,18 @@ impl WorldClock {
     /// The world to `time`. `step(ms, until, first, dvars)` steps each
     /// body `ms` to `until` ([`Body::step_world`]), its frame begun when
     /// `first` ([`Body::begin_frame`]), under `d` with this world's
-    /// `msecStep`, and returns how many are awake after it.
+    /// `msecStep`, and returns how many are awake after it. Whether it
+    /// stepped: then each body's frame ends ([`Body::end_frame`]).
     pub fn advance(
         &mut self,
         time: i32,
         d: &Dvars,
         mut step: impl FnMut(i32, i32, bool, &Dvars) -> usize,
-    ) {
+    ) -> bool {
         let Some(mut sim) = self.sim_ms else {
-            return;
+            return false;
         };
+        let stepped = time.wrapping_sub(sim) > 0;
         let mut left = 2;
         let mut first = true;
         while time.wrapping_sub(sim) > 0 {
@@ -1214,6 +1216,7 @@ impl WorldClock {
             self.step_ms = msec_step(self.world, awake);
         }
         self.sim_ms = Some(sim);
+        stepped
     }
 }
 
@@ -1405,22 +1408,32 @@ impl Body {
         if time.wrapping_sub(self.sim_ms) <= 0 {
             return;
         }
-        self.from_ms = self.sim_ms;
-        self.from = (self.pos, self.rot);
+        self.begin_frame();
         let mut left = 2;
         while time.wrapping_sub(self.sim_ms) > 0 {
             let step = (time.wrapping_sub(self.sim_ms) / left).max(d.step_ms);
             left = (left - 1).max(1);
-            self.step_in(step as f32 / 1000.0, trace, solids, d);
+            self.integrate(step as f32 / 1000.0, trace, solids, d);
             self.sim_ms = self.sim_ms.wrapping_add(step);
         }
+        self.end_frame(trace, d);
     }
 
     /// A world's frame begins ([`WorldClock::advance`]): the drawn pose
-    /// lerps from here.
+    /// lerps from here, and the post-step sweep starts here (the copy at
+    /// 0x5a6da0, once a frame before its steps).
     pub fn begin_frame(&mut self) {
         self.from_ms = self.sim_ms;
         self.from = (self.pos, self.rot);
+    }
+
+    /// A world's frame ends: a body awake takes the post-step sweep from
+    /// where the frame began ([`Self::sweep`]; 0x5a6c10 on each body after
+    /// `Phys_RunToTime`'s steps, 0x5a6e77).
+    pub fn end_frame(&mut self, trace: &mut Trace, d: &Dvars) {
+        if !self.asleep {
+            self.sweep(self.from.0, trace, d);
+        }
     }
 
     /// One step of its world, `ms` long, to `until`.
@@ -1432,7 +1445,7 @@ impl Body {
         solids: &mut Solids,
         d: &Dvars,
     ) {
-        self.step_in(ms as f32 / 1000.0, trace, solids, d);
+        self.integrate(ms as f32 / 1000.0, trace, solids, d);
         self.sim_ms = until;
     }
 
@@ -1483,9 +1496,9 @@ impl Body {
         })
     }
 
-    /// One step of `dt` seconds: gravity, the corners' contacts solved as
-    /// impulses with Coulomb friction and the preset's bounce, the move,
-    /// the post-step sweep, the drag, the sleep test.
+    /// A frame of one step of `dt` seconds: gravity, the corners' contacts
+    /// solved as impulses with Coulomb friction and the preset's bounce,
+    /// the move, the drag, the sleep test, then the post-step sweep.
     pub fn step(&mut self, dt: f32, trace: &mut Trace, d: &Dvars) {
         self.step_in(dt, trace, &mut |_, _| Vec::new(), d);
     }
@@ -1493,6 +1506,15 @@ impl Body {
     /// [`Self::step`] with the boxes' contacts with `solids` among the
     /// points'.
     pub fn step_in(&mut self, dt: f32, trace: &mut Trace, solids: &mut Solids, d: &Dvars) {
+        let old = self.pos;
+        self.integrate(dt, trace, solids, d);
+        if !self.asleep {
+            self.sweep(old, trace, d);
+        }
+    }
+
+    /// One step of its world, the sweep left for the frame's end.
+    fn integrate(&mut self, dt: f32, trace: &mut Trace, solids: &mut Solids, d: &Dvars) {
         if self.asleep {
             self.jitter.clear();
             return;
@@ -1520,12 +1542,10 @@ impl Body {
             }
             self.solve(&mut contacts, d);
         }
-        let old = self.pos;
         self.pos += self.vel * dt;
         let w = self.avel;
         let dq = Quat::from_xyzw(w.x, w.y, w.z, 0.0) * self.rot;
         self.rot = (self.rot + dq * (0.5 * dt)).normalize();
-        self.sweep(old, trace, d);
         self.vel *= (1.0 - d.drag_linear * dt).max(0.0);
         self.avel *= (1.0 - d.drag_angular * dt).max(0.0);
         if self.vel.length_squared() < d.sleep_linear * d.sleep_linear
@@ -1595,7 +1615,7 @@ impl Body {
         out
     }
 
-    /// The post-step sweep (0x5a6930, from 0x5a6c10 after each step): when
+    /// The post-step sweep (0x5a6930, from 0x5a6c10 after a frame's steps): when
     /// the centre moved, or the state is 0 or 1, the centre is traced from
     /// where the step started to where it ended, as a point (corners at
     /// 0.001) when the sweep half size `m` is under twice `phys_csl`, else
@@ -2690,6 +2710,50 @@ mod tests {
         ];
         unwedge(&mut c, falling, Vec3::ZERO);
         assert_eq!(normals(&c), [Vec3::X, -Vec3::X]);
+    }
+
+    #[test]
+    fn the_post_step_sweep_runs_once_a_frame() {
+        // A centre alone (no points, no geoms) of sweep half size 1.9, a
+        // point sweep backing off 0.95, at 100 units/s at a wall at x = 10:
+        // its first 17 ms step ends at 8.925, where the sweep stops it.
+        let wall = [(-Vec3::X, -10.0)];
+        let mut trace = planes(&wall);
+        let d = Dvars {
+            gravity: 0.0,
+            ..Dvars::default()
+        };
+        let preset = Preset {
+            mass: 1.0,
+            bounce: 0.1,
+            friction: 0.5,
+            bullet_force_scale: 1.0,
+        };
+        let shape = Shape {
+            points: Vec::new(),
+            boxes: Vec::new(),
+            cylinders: Vec::new(),
+            point_geoms: Vec::new(),
+            box_geoms: Vec::new(),
+            cylinder_geoms: Vec::new(),
+            com: Vec3::ZERO,
+            inertia: Mat3::IDENTITY,
+            sweep_half: 1.9,
+        };
+        let start = Vec3::X * 7.225;
+        let mut b = Body::new(start, Vec3::ZERO, &shape, &preset, 0);
+        b.vel = Vec3::X * 100.0;
+        let mut per_step = b.clone();
+        // One frame of two steps sweeps once, from 7.225 to 10.625: it
+        // stops at 8.925 half way, its speed kept.
+        b.advance(34, &mut trace, &d);
+        assert!((b.pos.x - 8.925).abs() < 0.01, "{}", b.pos);
+        assert!(b.vel.x > 99.0, "{}", b.vel);
+        // Swept each step, the second starts at the stop and loses it all.
+        per_step.step(0.017, &mut trace, &d);
+        per_step.step(0.017, &mut trace, &d);
+        assert!((per_step.pos.x - 8.925).abs() < 0.01, "{}", per_step.pos);
+        assert_eq!(per_step.vel, Vec3::ZERO);
     }
 
     #[test]

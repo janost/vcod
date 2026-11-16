@@ -599,7 +599,7 @@ impl DynEnts {
     /// same mask as its points (cod4-gsc.md 3.6.1).
     pub fn advance_in(&mut self, time: i32, trace: &mut MaskedTrace, solids: &mut MaskedSolids) {
         let ents = &mut self.ents;
-        self.clock.advance(time, &self.phys, |ms, until, first, d| {
+        let stepped = self.clock.advance(time, &self.phys, |ms, until, first, d| {
             let mut awake = 0;
             for e in ents.iter_mut() {
                 let Some(b) = &mut e.body else { continue };
@@ -616,6 +616,13 @@ impl DynEnts {
         });
         for e in &mut self.ents {
             let Some(b) = &mut e.body else { continue };
+            if stepped {
+                let mask = crate::ragdoll::CLIP_MASK & !e.pass;
+                b.end_frame(
+                    &mut |a: Vec3, b: Vec3, r: f32| trace(a, b, r, mask),
+                    &self.phys,
+                );
+            }
             (e.origin, e.rot) = b.pose_quat(time);
             if b.asleep {
                 e.body = None;
