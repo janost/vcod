@@ -345,6 +345,9 @@ pub enum PassStop {
     /// A brush model mover moved on its turn (`G_MoverTeam`): push what it
     /// listed ([`ScriptRuntime::push_mover`]).
     Push(crate::game::mover::Step),
+    /// A moving team master's turn: its push, if it has one, then its
+    /// parts' ([`ScriptRuntime::team_move`]).
+    Team(EntId, Option<crate::game::mover::Step>),
     /// `G_RunClient` (0x40660) for a linked client, its parent already run:
     /// re-anchor it.
     Client(usize),
@@ -1281,6 +1284,15 @@ impl ScriptRuntime {
                     .with_cx(|cx| crate::game::item::touch(host, cx, id, slot, true));
                 continue;
             }
+            if let Some(crate::game::trigger::TriggerKind::Door { parent }) =
+                self.host.triggers.get(id).map(|t| t.kind)
+            {
+                let host = &mut self.host;
+                self.vm.with_cx(|cx| {
+                    crate::game::mover::door::touch_trigger(host, cx, parent, client)
+                });
+                continue;
+            }
             // `Touch_Multi` skips its wait arm on a trigger whose think is
             // `enableLinkTo`'s `Think_GeneralLink` (0x65aa2).
             let linked = self.host.links.is_enabled(id);
@@ -1427,6 +1439,22 @@ impl ScriptRuntime {
                 Some(Activate::Trigger(id)) => {
                     host.engine_notifies
                         .push((id, "trigger", vec![Value::Entity(client)]))
+                }
+                // `Cmd_Activate_f`'s classname arm (0x484f6), past the hint's
+                // door arm (`G_CheckForCursorHints` 0x4f7d0), which gives a
+                // door no hint unless it is shut or a toggle sits open.
+                Some(Activate::Door(id)) => {
+                    use crate::game::mover::door::{Class, POS1, POS1_ROTATE, POS2, POS2_ROTATE};
+                    let usable = match crate::game::mover::door::binary_state(host, id) {
+                        Some((Class::Slide, s, toggle, _)) => s == POS1 || (s == POS2 && toggle),
+                        Some((Class::Rotate, s, toggle, _)) => {
+                            s == POS1_ROTATE || (s == POS2_ROTATE && toggle)
+                        }
+                        _ => false,
+                    };
+                    if usable {
+                        crate::game::mover::door::try_door(host, cx, id, client);
+                    }
                 }
                 Some(Activate::Vehicle(veh)) => {
                     let on_ground = host.client_on_ground.get(slot).copied().unwrap_or(false);
@@ -1831,12 +1859,16 @@ impl ScriptRuntime {
         let host = &mut self.host;
         let crushed = self
             .vm
-            .with_cx(|cx| crate::push::push(host, cx, step, sims, world));
-        let Some(crushed) = crushed else {
-            let host = &mut self.host;
-            self.vm
-                .with_cx(|cx| crate::game::mover::stall(host, cx, step));
-            return;
+            .with_cx(|cx| crate::push::push_with(host, cx, step, sims, world, &mut Vec::new()));
+        let crushed = match crushed {
+            Ok(crushed) => crushed,
+            Err(obstacle) => {
+                let host = &mut self.host;
+                self.vm
+                    .with_cx(|cx| crate::game::mover::stall(host, cx, step));
+                self.door_blocked(step.ent, obstacle);
+                return;
+            }
         };
         for slot in crushed {
             self.deliver_world_hit(slot, step.ent, CRUSH_DAMAGE, 0, "MOD_CRUSH");
@@ -1844,6 +1876,86 @@ impl ScriptRuntime {
         let host = &mut self.host;
         self.vm
             .with_cx(|cx| crate::game::mover::reached(host, cx, step.ent));
+    }
+
+    /// `G_MoverTeam` (0x55684) for a moving team master: `first`, its own
+    /// push, then each part evaluated and pushed in chain order, all under one
+    /// pushed list. A block puts back every entity pushed so far, holds every
+    /// part a frame (`mover::stall_team`) and calls the master's `blocked`
+    /// with the player who stopped it; otherwise every part's `reached`
+    /// runs, then the master's think.
+    pub fn team_move(
+        &mut self,
+        master: EntId,
+        first: Option<crate::game::mover::Step>,
+        sims: &mut [(usize, &mut crate::spectate::ClientSim)],
+        world: &vcod_common::collision::CollisionWorld,
+    ) {
+        use crate::game::mover::{self, door};
+        let parts = door::chain(&self.host, master);
+        let mut pushed = Vec::new();
+        let mut steps: Vec<mover::Step> = Vec::new();
+        for (i, &part) in parts.iter().enumerate() {
+            let step = if i == 0 {
+                first.clone()
+            } else {
+                let host = &mut self.host;
+                let (done, step) = self.vm.with_cx(|cx| mover::evaluate_part(host, cx, part));
+                for d in done {
+                    self.host.engine_notifies.push((d.ent, d.event, Vec::new()));
+                }
+                step
+            };
+            let Some(step) = step else {
+                continue;
+            };
+            let host = &mut self.host;
+            let result = self
+                .vm
+                .with_cx(|cx| crate::push::push_with(host, cx, &step, sims, world, &mut pushed));
+            steps.push(step.clone());
+            match result {
+                Ok(crushed) => {
+                    for slot in crushed {
+                        self.deliver_world_hit(slot, part, CRUSH_DAMAGE, 0, "MOD_CRUSH");
+                    }
+                }
+                Err(obstacle) => {
+                    let host = &mut self.host;
+                    self.vm
+                        .with_cx(|cx| mover::stall_team(host, cx, &parts, &steps));
+                    self.door_blocked(master, obstacle);
+                    return;
+                }
+            }
+        }
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            for &part in &parts {
+                mover::reached_part(host, cx, part);
+            }
+            mover::run_think(host, cx, master);
+        });
+    }
+
+    /// `ent->blocked(ent, obstacle)` for a door team stopped by the player in
+    /// `slot`: `Blocked_Door`'s or `Blocked_DoorRotate`'s damage, then the
+    /// team turns back.
+    fn door_blocked(&mut self, master: EntId, slot: usize) {
+        use crate::game::mover::door;
+        if !door::has_blocked(&self.host, master) {
+            return;
+        }
+        let dead = self
+            .host
+            .client_vitals
+            .get(slot)
+            .is_some_and(|v| v.health <= 0);
+        for dmg in door::blocked_damage(&self.host, master, dead) {
+            self.deliver_world_hit(slot, master, dmg, 0, "MOD_CRUSH");
+        }
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| door::reverse(host, cx, master));
     }
 
     /// Where a link parent is this frame, origin and angles, `None` once it
@@ -2192,6 +2304,24 @@ impl ScriptRuntime {
                 return found(t.cursor_hint, t.hint_string);
             }
             Some(Activate::Item(id)) => id,
+            // The door arm (0x4f7d0): 4, or 5 locked, on a shut door or an
+            // open toggle; any other state is no hint.
+            Some(Activate::Door(id)) => {
+                use crate::game::mover::door::{Class, POS1, POS1_ROTATE, POS2, POS2_ROTATE};
+                return match crate::game::mover::door::binary_state(&self.host, id) {
+                    Some((Class::Slide, s, toggle, locked))
+                        if s == POS1 || (s == POS2 && toggle) =>
+                    {
+                        found(if locked { 5 } else { 4 }, -1)
+                    }
+                    Some((Class::Rotate, s, toggle, locked))
+                        if s == POS1_ROTATE || (s == POS2_ROTATE && toggle) =>
+                    {
+                        found(if locked { 5 } else { 4 }, -1)
+                    }
+                    _ => miss,
+                };
+            }
             // `hintActivate` with the vehicle file's `useHintString`.
             Some(Activate::Vehicle(id)) => {
                 let string = self
@@ -3695,6 +3825,11 @@ impl ScriptRuntime {
                         self.push_mover(&step, &mut [], c);
                     }
                 }
+                PassStop::Team(master, step) => {
+                    if let Some(c) = collision {
+                        self.team_move(master, step, &mut [], c);
+                    }
+                }
                 PassStop::Blast(_) => self.spawn_concussive(),
                 PassStop::Client(_) => {}
             }
@@ -3998,8 +4133,14 @@ impl ScriptRuntime {
                 return (Vec::new(), None, false);
             }
             if crate::game::mover::is_mover(host, id) {
-                let (done, step) = crate::game::mover::run_one(host, cx, id);
-                return (done, step, true);
+                use crate::game::mover::Turn;
+                let (done, turn) = crate::game::mover::run_turn(host, cx, id);
+                let stop = match turn {
+                    Turn::Done => None,
+                    Turn::Push(step) => Some(PassStop::Push(step)),
+                    Turn::Team(step) => Some(PassStop::Team(id, step)),
+                };
+                return (done, stop, true);
             }
             crate::game::item::run_item(host, cx, id, now_ms);
             (Vec::new(), None, true)
@@ -4014,7 +4155,7 @@ impl ScriptRuntime {
         for d in done {
             host.engine_notifies.push((d.ent, d.event, Vec::new()));
         }
-        step.map(PassStop::Push)
+        step
     }
 
     /// What the bots read off stock `sd.gsc` this frame

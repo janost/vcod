@@ -121,6 +121,44 @@ pub fn bsp_with_entities(bsp: &[u8], blocks: &str) -> Vec<u8> {
     out
 }
 
+/// [`bsp_with_entities`] after dropping every stock block whose `"model"
+/// "*N"` one of `blocks` also names, as `tools/bsp_append_entities.py
+/// --replace` builds it: a stock submodel under a new classname.
+pub fn bsp_replacing_models(bsp: &[u8], blocks: &str) -> Vec<u8> {
+    let models = |text: &str| -> Vec<String> {
+        crate::bsp::entity_block_pairs(text)
+            .iter()
+            .filter_map(|b| crate::bsp::field_value(b, "model").map(str::to_string))
+            .filter(|m| m.starts_with('*'))
+            .collect()
+    };
+    let taken = models(blocks);
+    let dir = 8 + 29 * 8;
+    let word = |o: usize| u32::from_le_bytes(bsp[o..o + 4].try_into().unwrap()) as usize;
+    let (len, off) = (word(dir), word(dir + 4));
+    let ents = String::from_utf8_lossy(&bsp[off..off + len]);
+    let ents = ents.trim_end_matches('\0');
+    // The tool's `\{[^{}]*\}\s*`: a block and the whitespace after it.
+    let mut kept = String::new();
+    let mut rest = ents;
+    while let Some(open) = rest.find('{') {
+        let Some(close) = rest[open..].find('}').map(|c| open + c + 1) else {
+            break;
+        };
+        let end = close + (rest[close..].len() - rest[close..].trim_start().len());
+        kept.push_str(&rest[..open]);
+        if !models(&rest[open..close]).iter().any(|m| taken.contains(m)) {
+            kept.push_str(&rest[open..end]);
+        }
+        rest = &rest[end..];
+    }
+    kept.push_str(rest);
+    // An empty stock lump, so `bsp_with_entities` writes exactly `kept`.
+    let mut out = bsp.to_vec();
+    out[dir..dir + 4].copy_from_slice(&0u32.to_le_bytes());
+    bsp_with_entities(&out, &(kept + blocks))
+}
+
 /// A committed capture under this crate's `tests/fixtures/`, by relative path.
 pub fn fixture(rel: &str) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

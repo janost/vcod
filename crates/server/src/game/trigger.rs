@@ -24,6 +24,12 @@ pub enum TriggerKind {
     Mount {
         crouch: bool,
     },
+    /// `Think_SpawnNewDoorTrigger`'s box over a door team (cod11-movers.md
+    /// 26): its touch is `Touch_DoorTrigger` on the door `parent`, and it
+    /// raises no `"trigger"`.
+    Door {
+        parent: u32,
+    },
 }
 
 /// What a trigger occupies: the submodel's own box, and the model whose
@@ -341,7 +347,8 @@ impl Triggers {
             TriggerKind::LookAt
             | TriggerKind::Use
             | TriggerKind::Damage
-            | TriggerKind::Mount { .. } => Fire::Fired,
+            | TriggerKind::Mount { .. }
+            | TriggerKind::Door { .. } => Fire::Fired,
         }
     }
 }
@@ -815,6 +822,7 @@ pub fn link(host: &mut GameHost, cx: &mut Cx, id: EntId, spawnflags: i32) {
         TriggerKind::Hurt => (CONTENTS_TOUCH_MASK, false),
         TriggerKind::Use => (CONTENTS_USE, false),
         TriggerKind::Mount { crouch } => (mount_contents(crouch, t.shape.model.is_some()), true),
+        TriggerKind::Door { .. } => (0x4000_0000, false),
     };
     if links {
         host.link_shaped(cx, id, shape(contents));

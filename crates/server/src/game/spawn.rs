@@ -15,7 +15,9 @@ use vcod_gsc::{Cx, EntId, ErrorKind, Host, Value};
 ///
 /// Of the `SP_` functions, vcod reproduces whether one frees the entity it
 /// was handed (`SPAWN_FREES`), the trigger, script entity, item and turret
-/// ones, and `func_bobbing`/`func_pendulum` (`crate::game::mover::spawn_sine`).
+/// ones, `func_bobbing`/`func_pendulum` (`crate::game::mover::spawn_sine`)
+/// and `func_door`, `func_door_rotating`, `func_rotating`
+/// (`crate::game::mover::door::spawn`).
 pub const SPAWN_CLASSNAMES: &[&str] = &[
     "info_null",
     "info_notnull",
@@ -184,6 +186,7 @@ pub fn spawn_entities_from_string(
         // `misc_spawner` (cod2-gsc-diff.md 2.4).
         if host.profile.spawn.sine_movers_and_spawner {
             crate::game::mover::spawn_sine(host, cx, id, &classname, Some(&pairs));
+            crate::game::mover::door::spawn(host, cx, id, &classname, &pairs);
             crate::game::item::spawn_misc_spawner(host, cx, id, &classname);
         }
         if let (Some(register), Some(weapon)) = (
