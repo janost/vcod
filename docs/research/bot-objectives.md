@@ -796,6 +796,29 @@ first everywhere.
   units of the defender's spot). Trap: running home to defuse from anywhere,
   it was back for every plant (about 38 s of a 60 s fuse on mp_foy), and the
   round looped on defuses (seeds 17 and 19, 64 to 68 in 29 min).
+- **bas, a held room.** A bot making for a charge to plant or defuse
+  whose room (300 units of the charge) a teammate died in within the last
+  2 min (`BotView::fallen`, dealt with the posts) throws one frag at the
+  charge before it goes in, once a life (`Bot::room_frag`): 250 to 800
+  units out, with a lob found (`lob_probe`), it stops for at most 20
+  ticks for the throw, then goes in without. Asked for by the 2026-10-18
+  basmaps trace (mp_kursk shoot-on seeds 3 and 5, attackers arriving one
+  at a time dying to a defender set in the room); no run since has
+  reached such a room. VERIFIED (measured, ours, release, UO, on
+  415c5f50a, `bot_match UO=1 GAMETYPE=bas BOTS=4 TICKS=38000
+  SET=scr_bas_basehealth=24500`, mp_kursk and mp_foy seeds 1 to 8, with a
+  throwaway switch turning this rule and the LMG torso read below off):
+  no throw of the rule on either map (grenades thrown 18 both arms on
+  mp_foy, 20 on mp_kursk). Traced on mp_kursk seeds 4 and 7 (a throwaway
+  print each tick the rule wanted a frag): 191 bot-ticks in range, a lob
+  found on 1; a stock charge room lies under a floor, down a stair, and
+  `lob_probe` finds no arc into it from 250 out. A first form that
+  stopped in range without a lob stood 20 ticks for nothing and slowed
+  mp_kursk seed 7 from 22620 to 25200; with the lob required mp_kursk's
+  8 runs end on the tick of the rule off. INFERRED: a frag into those
+  rooms has to go from the stair head, a point the rule would need off
+  the room's entrance, which the view does not carry.
+  (`bots::tests::a_bas_planter_lobs_a_frag_into_a_held_charge_room`.)
 - A standing base is breached with rockets and tank shells (below).
 
 The breach:
@@ -1003,13 +1026,36 @@ Out of rounds:
   minute and more.
 - A launcher or gun the body has come no 32 units nearer to in 20 s (a node
   over it, or a tap that takes nothing) is passed over for a minute.
+- mp_rhinevalley's panzerschreck at (1938, -2254, 2054) (`spawnflags 9`,
+  suspended: `FinishSpawningItem` keeps its origin, cod11-items.md 14.9)
+  lies in a corridor running along x, floor 2016 at x 1938 to 2038, 2000
+  at 1874 and stairs down to 1940 by 1700. The 2026-10-20 run below logged
+  three taps at it that took nothing, with the item dropped to (1938,
+  -2254, 2017) as vcod then placed it. Rechecked 2026-11-17 on 415c5f50a
+  with a lone allied `bas` bot holding its rifle and an empty bazooka (the
+  swap case, `Bot::swap_out`), set down at (2002, -2254, 2017), (1874,
+  -2254, 2001) and (1700, -2254, 1940): it had the panzerschreck in hand
+  after 21, 28 and 292 ticks, and with the old drop to 2017 forced back
+  (a throwaway switch) after the same taps. VERIFIED (measured, ours,
+  release, UO; `bots::a_bas_bot_taps_mp_rhinevalleys_corridor_launcher`).
+  INFERRED (not rerun at a5c81855): the refusals were the bot's own read
+  of that day, the first launcher held, which 6df179540 replaced the same
+  morning (the trap under "The breach"): the panzerschreck taken beside
+  its empty bazooka read as no rocket, so the bot came back for the item
+  respawned (`spawnflags & 8`, cod11-items.md 7), which a full
+  panzerschreck cannot take.
 - An LMG bot whose target's pitch lies past 45 degrees does not deploy, or
   breaks the bipod down, as for a target past the yaw cap, and draws the
   pistol when it has a round
   (`bots::tests::an_lmg_target_past_the_pitch_clamp_breaks_the_bipod_down`). A
   deployed LMG's view stops 45 degrees from level (`PM_UpdateViewAngles`,
-  coduo-movement.md 7). A prone deploy measures the clamp from the torso's
-  pitch, which the brain does not read; it uses level. VERIFIED (measured,
+  coduo-movement.md 7). The clamp measures from `proneTorsoPitch`
+  (`cap_prone_pitch`), and so does the brain once the body is deployed or
+  prone (`BotView::lmg_pitch_from`); standing and not deployed it measures
+  from level, the deploy's prone torso not yet laid on the ground (2026-11-17,
+  `bots::tests::an_lmg_pitch_clamp_measures_from_the_prone_torso`: prone with
+  the torso 20 up a target 53 up is fired at, with it 20 down one 35 up
+  breaks the bipod down). VERIFIED (measured,
   ours, master 447d904f, mp_foy seed 21, `BAS_TRACE=1 BAS_TRACE_EVERY=20`):
   before it, a planter in the charge room at (3530, -4832, -169) and a
   defender in the bunker over it (3611 to 3642, -4705, 14), 170 to 260 apart
@@ -1158,6 +1204,17 @@ bots, shoot off; `four_uo_bots_end_a_bas_round_without_shooting`;
   - 2026-10-18, the gun fetch at 800: mp_foy shooting seeds 1 to 23 odd 9899
     to 17779, mean 12972 (master 13517), seed 23 14979; on master 35198659 two
     of 36 runs moved. VERIFIED (measured).
+  - 2026-11-17, the rule's leftovers (backlog: mp_kursk seed 5's midfield
+    endgame, mp_foy 7, 15 and 5 and mp_italy 1 slowed): the slowed seeds
+    were traced on 2026-10-19 (the next line: each parts at the first round
+    one run fires and the other does not, the rule acting as written), and
+    mp_kursk seed 5's stretch is the open-field fight below, not a held
+    room. Bot choices draw off each bot's own generator since (section 8).
+    With the torso read (above) against level, the stock-health
+    `bot_match` (the held-room line's set and switch) moves mp_foy seeds 2
+    (19100 to 17980) and 3 (20240 to 16600) and no other of 16; mp_foy's
+    mean 20900 to 20305, deaths 49 to 43, mp_kursk unchanged at 17138.
+    VERIFIED (measured).
   - 2026-10-19, the LMG pitch rule against master 447d904f: 27 of 36 runs on
     the same tick, mean 12452 to 12176. The four slower runs, traced with the
     rule's clamp toggled to 90 degrees, part at the first round one run fires

@@ -585,6 +585,18 @@ fn deal_posts<W: BotWorld>(
         .filter(|(s, (t, _))| teams.get(**s) == Some(t) && !on_side.iter().any(|c| c.0 == **s))
         .map(|(_, x)| *x)
         .collect();
+    kept.fallen
+        .retain(|f| now.wrapping_sub(f.2) < posts::FALLEN_MS);
+    kept.fallen.extend(died.iter().map(|&(t, p)| (t, p, now)));
+    for (slot, v) in views.iter_mut() {
+        let team = teams.get(*slot);
+        v.fallen = kept
+            .fallen
+            .iter()
+            .filter(|f| Some(&f.0) == team)
+            .map(|f| f.1)
+            .collect();
+    }
     for ((team, key), guards) in &groups {
         let Some((_, survey, a)) = surveys.iter().find(|(k, _, _)| k == key) else {
             continue;
