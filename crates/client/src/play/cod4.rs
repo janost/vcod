@@ -4959,6 +4959,184 @@ pub(crate) mod tests {
         assert_eq!(whizby, 0);
     }
 
+    /// What a capture's frames give [`crate::cod4_fx::frame_rounds`], the
+    /// rounds the client's frame plays.
+    struct Replayed {
+        /// `sv_clientSideBullets` off the systeminfo.
+        client_side: bool,
+        /// The shots that ran client-side rounds.
+        shots: usize,
+        /// Each server bullet hit event's round, whether the drawn eye
+        /// hears its whizby and whether its shooter is the drawn view's
+        /// client.
+        server: Vec<(crate::cod4_fx::ServerRound, bool, bool)>,
+        /// The dynamic entities the server rounds' legs struck: the leg
+        /// and where.
+        struck: Vec<((Vec3, Vec3), Vec3)>,
+    }
+
+    /// [`Replayed`] of a capture, the shooters posed as the client poses
+    /// them.
+    fn replay_rounds(name: &str) -> Option<Replayed> {
+        use crate::play::cod4_players::Cod4Players;
+        let install = vcod_cod4::testing::cod4_install()?;
+        let world = crash_world()?;
+        let text = std::fs::read_to_string(format!("{FIXTURES}/{name}")).unwrap();
+        let mut s = Cod4Session::open_capture(&text).unwrap();
+        s.set_world(world.clone());
+        let si = s
+            .gamestate()
+            .and_then(|g| g.systeminfo("sv_clientSideBullets"));
+        let client_side = crate::cod4_fx::client_side_bullets(si.as_deref());
+        let (_, models, src) =
+            crate::cod4_fly::load_bodies(install.root(), "mp_crash", &s.entity_assets()).unwrap();
+        let ((sounds, _), _) = crate::cod4_fly::load_av(install.root(), "mp_crash").unwrap();
+        let mut players = Cod4Players::default();
+        let (mut shots, mut server, mut struck) = (0, Vec::new(), Vec::new());
+        let mut ms = 0.0;
+        while !s.finished() {
+            ms += 1000.0 / 60.0;
+            s.step(ms).unwrap();
+            let fired = s.take_fired();
+            let Some(scene) = s.scene() else { continue };
+            let weapons = weapon_list(s.gamestate().unwrap());
+            let own = crate::cod4_fx::OwnView {
+                client: Some(scene.view.client_num),
+                eye: scene.eye,
+                angles: scene.angles,
+                flash: None,
+                third_person: false,
+            };
+            let w = crate::cod4_fx::ShotWorld {
+                clip: &world.clip,
+                solids: &s.shot_solids,
+            };
+            let (hits, rounds) = crate::cod4_fx::frame_rounds(
+                &fired,
+                &weapons,
+                &sounds.weapons,
+                &players.tags,
+                Some(&own),
+                w,
+                client_side,
+            );
+            shots += hits.iter().filter(|h| !h.is_empty()).count();
+            // The legs on the map's dynamic entities, as the frame hands
+            // them on.
+            let legs: Vec<Vec<_>> = rounds
+                .iter()
+                .map(|r| r.and_then(|r| r.leg).into_iter().collect())
+                .collect();
+            if let Some(d) = s.dynents.as_mut() {
+                let now = scene.render_time;
+                let done = crate::play::cod4_dynents::on_fired(
+                    d, &world, &fired, &weapons, &legs, None, now,
+                );
+                struck.extend(done.struck.iter().map(|(i, st)| (legs[*i][0], st.at)));
+            }
+            for r in rounds.into_iter().flatten() {
+                let heard = crate::cod4_audio::whizby_cue(r.muzzle, r.end, scene.eye).is_some();
+                server.push((r, heard, scene.view.client_num == r.shooter));
+            }
+            let views: Vec<(u32, &BodyView)> = scene
+                .entities
+                .iter()
+                .filter_map(|d| Some((d.number, d.body.as_ref()?)))
+                .collect();
+            players.posed(
+                &src,
+                &models,
+                &views,
+                &[],
+                scene.render_time,
+                scene.server_time,
+            );
+        }
+        Some(Replayed {
+            client_side,
+            shots,
+            server,
+            struck,
+        })
+    }
+
+    /// Retail under `+set sv_clientSideBullets 0` (`play-1.7-csb0-*`, the
+    /// wall shot of cod4-combat.md 3.1: a target outside mp_crash's metal
+    /// plate, a shooter inside, a spectator following): no client runs a
+    /// round of its own, and the server's events carry each, the plate's
+    /// entry, its exit (`un1` 4), the flesh hit and the asphalt beyond.
+    /// Each entry's leg runs from the world's origin, the server leaving
+    /// the events' `lerp.u` at 0; an exit's pushes nothing. The target
+    /// hears every round that went on through him to the asphalt, none
+    /// that stopped short, and none while his view follows the shooter
+    /// after a death: the shooter's own rounds leave from the drawn eye
+    /// (cod4-effects.md 12.4).
+    #[test]
+    fn server_side_bullets_carry_every_round() {
+        for name in [
+            "play-1.7-csb0-target.txt",
+            "play-1.7-csb0-shooter.txt",
+            "play-1.7-csb0-spec.txt",
+        ] {
+            let Some(Replayed {
+                client_side,
+                shots,
+                server,
+                struck,
+            }) = replay_rounds(name)
+            else {
+                return;
+            };
+            assert!(!client_side, "{name}");
+            assert_eq!(shots, 0, "{name}: client-side shots");
+            let n = server.len();
+            let exits = server.iter().filter(|(r, ..)| r.leg.is_none()).count();
+            assert!(
+                n > 30 && exits > 0 && exits < n,
+                "{name}: {exits} exits of {n}"
+            );
+            for (r, ..) in &server {
+                assert_eq!(r.shooter, 1, "{name}");
+                if let Some(leg) = r.leg {
+                    assert_eq!(leg, (Vec3::ZERO, r.end), "{name}");
+                }
+            }
+            // The rounds that went on through the target to the asphalt,
+            // 300 units and more past him (y 2380).
+            let past = |own: bool| {
+                let p = server
+                    .iter()
+                    .filter(|(r, _, o)| r.end.y > 2600.0 && *o == own);
+                p.fold((0, 0), |(n, h), (_, w, _)| (n + 1, h + *w as usize))
+            };
+            let ((theirs, heard), (own, own_heard)) = (past(false), past(true));
+            let short = server
+                .iter()
+                .filter(|(r, w, _)| r.end.y < 2600.0 && *w)
+                .count();
+            println!(
+                "{name}: {n} rounds, {exits} exits; past: {heard} of {theirs} heard, \
+                 {own_heard} of {own} with the shooter's view"
+            );
+            assert_eq!((short, own_heard), (0, 0), "{name}");
+            if name.contains("target") {
+                assert!(theirs > 0 && heard == theirs, "{name}");
+            }
+            // A leg out of the world's origin meets a prop 1200 units short
+            // of the asphalt round's end, under the ground there.
+            println!("{name}: struck {struck:?}");
+            assert_eq!(struck.len(), 1, "{name}");
+            let ((start, end), at) = struck[0];
+            assert_eq!((start, end.y), (Vec3::ZERO, 2688.0), "{name}");
+            assert!(at.distance(end) > 1000.0, "{name}: {at}");
+        }
+        // Under 1 the shots run here and the events push nothing.
+        let r = replay_rounds("play-1.7-kill-target.txt").unwrap();
+        assert!(r.client_side && r.shots > 0);
+        assert!(!r.server.is_empty() && r.server.iter().all(|(r, ..)| r.leg.is_none()));
+        assert!(r.struck.is_empty());
+    }
+
     /// Retail's footstep and landing parms against the ground our clip map
     /// gives under the stepping body (cod4-sound.md 4): every step of
     /// each capture names the surface type a trace down from its origin

@@ -258,7 +258,9 @@ CoD2 effect path:
   muzzle (others') with the server's seeded spread, stopping on players'
   boxes and script models, piercing the world with exit impacts (Deep
   Impact deepens it), with impact sounds, holes, `whizby` and 1.7's
-  corkscrew tracers (12).
+  corkscrew tracers (12). On a server set to `sv_clientSideBullets 0`
+  the server's impact events carry every round instead, with their
+  tracers, whizbys and prop pushes (12.4).
 
 **Voice chat** ([cod4-voice.md](../research/cod4-voice.md)). `+talk` (Z)
 sends the microphone through the system's libspeex (narrowband, 8000 Hz,
@@ -488,7 +490,9 @@ Ranked by how much a player notices. The research-side lists are
 7. **Server-side differences.** vcod-server never asks the authorize
    server, so it answers an off-LAN challenge at once where 1.7 waits on
    the authorize server (cod4-handshake.md 15). No PunkBuster (a stock
-   dedicated server runs none either).
+   dedicated server runs none either). Set to `sv_clientSideBullets 0`,
+   it sends no impact for a round into the world, which a 1.7 server
+   does ([cod4-server-gaps.md](../research/cod4-server-gaps.md), Ranked 6).
 
 Pending human checks: pixel and by-ear comparisons with retail.
 

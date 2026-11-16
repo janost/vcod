@@ -26,10 +26,6 @@ Ranked by how much a player notices.
   its collider; a push is a whole impulse, not a force over the step at
   `1000 / msecStep` of the world it names (cod4-gsc.md 3.6, 3.6.1). The
   ragdoll is a position-based solver (cod4-player-anims.md 10). M.
-- `sv_clientSideBullets` 0 is not read: under it 1.7 draws no rounds of
-  its own and plays the server's bullet events, which then push the
-  props; vcod's client runs its rounds as under 1, which every stock
-  server sends (cod4-world.md 13.10). S.
 - Multichannel output: kira mixes stereo, so a 5.1 or 7.1 device gets
   the stereo mix on its front pair (cod4-sound.md 4.2, 5). The 139 alias
   rows whose curve no walked zone holds fall off straight. L.
@@ -43,6 +39,13 @@ Ranked by how much a player notices.
 
 ## Fixed
 
+- `sv_clientSideBullets` 0 was not read: vcod's client ran its own
+  rounds whatever the server said. vcod now reads it off the systeminfo
+  and under 0 runs no round of its own, and every server bullet hit event
+  rolls its tracer, plays its whizby and pushes the props and launched
+  parts along its leg from the event's `lerp.u`, the world's origin on
+  1.7, as 1.7 does; the tracer and whizby run on the server's flesh hits
+  under 1 too (cod4-effects.md 12.4). Gated on a retail capture under 0.
 - A launched part's or dynamic entity's contact pass ran once a step on
   all of its contacts and never cut five or more; its world stepped at
   17 ms whatever the count awake, and the post-step sweep ran after each

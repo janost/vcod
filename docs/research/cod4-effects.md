@@ -768,6 +768,104 @@ Addresses are `iw3mp.exe` 1.7.
   the eye within 15 degrees of its way. VERIFIED (the gate
   `play::cod4::tests::own_shots_strike_mark_and_trace`).
 
+### 12.4 The server's rounds (`sv_clientSideBullets` 0)
+
+- The dvar registers in `iw3mp.exe` as a bool of default 1 (the byte 1
+  stored at 0x5300d7) with flags 8 (0x530102), the systeminfo's, and its
+  handle lands at 0x185c434 (0x53011b). VERIFIED (the code). So the
+  systeminfo sets it, and a systeminfo without it leaves 1. INFERRED
+  (the flag). `cod4_lnxded` registers it the same, 1 with flags 8
+  (0x817313f..0x8173163). VERIFIED (the code).
+- The only call of `DrawBulletImpacts` (0x457d08, in `CG_FireWeapon`
+  0x457c60) sits behind `cmp byte [dvar+0xc], 0; je` (0x457cec..0x457cf9).
+  VERIFIED (the code). So under 0 no shot runs a round on the client,
+  ours included. INFERRED (the branch).
+- `CG_EntityEvent`'s jump table (0x43740c, indexed by the event less 1,
+  0x435f58) sends `EV_BULLET_HIT` (41) to 0x436a0f, which calls
+  `CG_BulletHitEvent` (0x458c40), and `EV_BULLET_HIT_CLIENT_SMALL` and
+  `_LARGE` (42, 43) to 0x436a62, which calls 0x458cf0. VERIFIED (the
+  table's words). Both pass the event entity's state (`cent` + 0xcc):
+  `otherEntityNum` (+0x74) as the shooter, the address of `lerp.u` words
+  0 to 2 (+0x54) as the round's start, the event's position
+  (`cent` + 0x1c) as its end, the weapon's `damage` (`WeaponDef` +0x34c);
+  `EV_BULLET_HIT` also `groundEntityNum` (+0x7c) as the struck entity,
+  `eventParm` (+0x9c, through `ByteToDir` 0x55f490), `surfType` (+0x84)
+  and `un1` (+0xd4) as the impact flags. VERIFIED (the loads).
+- `CG_BulletHitEvent` adds the exit at a player target (12.2) only
+  under 1 (0x458c50..0x458c59), then 0x458a90 plays the impact and
+  calls 0x458790 whatever the impact was. INFERRED (the branches).
+- 0x458790, and 0x458cf0 after its surface sound: the muzzle (0x4585f0)
+  is a field of the predicted client (`cg` + 0x492e0) for our own
+  playing or followed client (0x4584c0), else the shooter's `tag_flash`
+  (0x434200) off his DObj; a shooter with no DObj (0x45864e) gives
+  none, and the call returns with nothing drawn or pushed (0x4587ac,
+  0x458d6b); a DObj without the tag gives his `lerp.pos.trBase` raised,
+  for a client, 11 prone, 40 crouched or 60 standing (0x4586c6..0x458704).
+  Then the tracer test (0x458720: `cg_tracerchance` above 0, not our own
+  client, not the gun we man (0x459040, `viewlocked_entNum` 0x794a10),
+  `rand()` under the chance times 32768.0 (0x70b2c8)) and its draw
+  (0x458110) from the muzzle to the end, the whizby test (0x457f40,
+  12), and under 0 `DynEntCl_EntityImpactEvent` (0x48e0f0) from the
+  start to the end with the weapon's damage, unless the impact flags
+  carry 4, the exit's (0x4587d7; 0x458cf0 tests no flag). INFERRED (the
+  branches). The constants and call targets are VERIFIED (the code).
+  That `cg` + 0x492e0 is the view's origin is INFERRED (its 52 readers);
+  our own rounds draw no tracer there and hear no whizby either way.
+- Under 0 0x48e0f0 first traces the start to the end past the shooter
+  under 0x2806831 (0x45a1a0, from 0x48e060) and hands an entity it meets
+  to 0x48df10 at the contact, the launched part's push
+  (cod4-gsc.md 3.6). INFERRED (the calls' order and the hit test).
+- `cod4_lnxded`'s only reader of the dvar (0x808a0ba) guards the event
+  0x808a05c makes under 0: `EV_BULLET_HIT` (0x29) at the contact,
+  truncated to whole units (`G_TempEntity` 0x80cbd96), for a trace that
+  stopped short (fraction under 1), not on sky (`surfaceFlags` & 4) and
+  not on a client's entity (`gentity` +0x15c), its weapon, `eventParm`
+  `DirToByte(normal)`, `un1` the impact flags, `surfType` and
+  `otherEntityNum` the shooter; it writes no `lerp.u` and no
+  `groundEntityNum`. INFERRED (the branches of 0x808a05c..0x808a131).
+  The stores are VERIFIED (the code). The penetration walk calls it for an exit with the
+  flags or 4 (0x808ad18..0x808ad38). VERIFIED (the call). The flesh hits are `finishPlayerDamage`'s
+  whatever the dvar (0x80acb07..0x80acbaa, 12.2). VERIFIED (the code).
+- Live (`play-1.7-csb0-shooter.txt`, `-target`, `-spec`; recipe
+  below): the systeminfo carries `sv_clientSideBullets\0`, and the
+  server's events carry the metal plate's entry (`surfType` 13, `un1`
+  0), its exit (13, `un1` 4), the flesh hit (7) and the asphalt past the
+  target (5); not one sets `lerp.u`. Under 1 the kill capture's shooter
+  sees only flesh hits. VERIFIED (the gate
+  `net_decode::server_side_bullets_send_every_contact`).
+- So under 0 a round's push on the map's dynamic entities runs from the
+  world's origin to the contact. INFERRED (the zeros at +0x54, read as
+  they came). On mp_crash an asphalt round's leg meets a prop at (113,
+  1480, 127), 1200 units short of the round's end. VERIFIED (ours: the
+  gate below).
+- vcod: `cod4_fx::client_side_bullets` reads the systeminfo;
+  `cod4_fx::frame_rounds` runs no client-side round under 0, and
+  `cod4_fx::server_round` gives every bullet hit event its muzzle, end
+  and, under 0 and short of an exit, its leg from `lerp.u`;
+  `Cod4Client::sound_and_fx_with` rolls its tracer
+  (`Cod4Effects::server_tracer`), plays its whizby and hands the leg to
+  the dynamic entities and the launched parts. The gate
+  `play::cod4::tests::server_side_bullets_carry_every_round` replays the
+  three captures with the shooter posed: no client-side round, 272 to
+  285 server rounds a client, about a third of them exits with no leg,
+  every leg out of the origin, the target hearing each round that went
+  on through him to the asphalt and none that stopped short or came
+  while his view followed the shooter, and the one prop struck; under 1
+  the kill target runs the rounds and no event pushes. VERIFIED (the
+  gate, ours). The tracer test and whizby run under 1 too, on the
+  server's flesh hits. Left out: the muzzle off `lerp.pos.trBase` for a
+  posed body with no `tag_flash`, and under 1 the exit arm's own run of
+  0x458790 when the entity `groundEntityNum` names is a player; the
+  server leaves it 0, so that is entity 0 (VERIFIED, the captures'
+  zeros).
+- Recipe: in `unshare -rnm` with the hosts file and tmpfs of
+  cod4-handshake.md 7, `cod4_lnxded +set sv_clientSideBullets 0 +set
+  g_gametype war +set scr_war_timelimit 0 +devmap mp_crash` on a loopback
+  port; 35 s later three `cod4_probe`s for 30 s: `--team allies --class
+  assault_mp,0 --script idle --goto "207 2380 296"` (with `--auth
+  127.0.0.2`), then `--team axis --class assault_mp,0 --script shoot
+  --goto "207 2250 296"`, then `--team spectator --script follow`.
+
 ## 13. The effect and weapon sets' colour
 
 Which pixel shaders write their colour times their alpha, read off the

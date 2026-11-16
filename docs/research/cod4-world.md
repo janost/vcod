@@ -2373,5 +2373,9 @@ nothing. VERIFIED (13.1's census).
   systeminfo (cod4-handshake.md), so the event paths push nothing in a
   stock match. VERIFIED (the capture's key).
 - Under 0 `DrawBulletImpacts` (0x456620) does not run at all (0x457cec),
-  and the server's events carry every round. vcod's client reads no
-  `sv_clientSideBullets` and runs its rounds as under 1. vcod's.
+  and the server's events carry every round. VERIFIED (the test; the
+  events, cod4-effects.md 12.4). Their leg runs from the event's
+  `lerp.u` words 0 to 2, which 1.7's server leaves 0, so it starts at the
+  world's origin. INFERRED (cod4-effects.md 12.4). vcod's client reads
+  the dvar off the systeminfo and runs the events' legs so
+  (`cod4_fx::server_round`). vcod's.
