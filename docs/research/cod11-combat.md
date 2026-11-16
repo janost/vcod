@@ -1992,8 +1992,11 @@ windows is single-player `maps/_window.gsc` (`pak4.pk3`), which waits on
 carries a `window` targetname or a classname naming `glass` or `damage`.
 INFERRED: a pane passes rounds and stays.
 
-vcod follows step 3: `CollisionWorld::hit_contents` reads the contents word
-off the prim a trace stopped on, glass brushes (contents 0x10 without SOLID)
+The contents word of a hit on a brush entity is the entity's `r.contents`,
+-1 for a door: a round passes every door (cod11-movers.md 26.9).
+
+vcod follows step 3: `CollisionWorld::shot_contents` reads the contents word
+off the prim a trace stopped on (a submodel's off its entity's link), glass brushes (contents 0x10 without SOLID)
 enter the clip, and `fire_round` goes on past one from the nudged point.
 VERIFIED, the same probe against ours: the target took 180 at `head` and 107
 at `torso_upper` through the pane, the pane's 173 numbered below the flesh

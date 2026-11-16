@@ -23,6 +23,11 @@ use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protoco
 use vcod_common::pk3::Pk3Fs;
 
 const MAP: &str = "mp_carentan";
+const BULLET_HITS: [i32; 3] = [
+    vcod_common::net::event_ids::EV_BULLET_HIT_SMALL,
+    vcod_common::net::event_ids::EV_BULLET_HIT_LARGE,
+    vcod_common::net::event_ids::EV_UO_BULLET_HIT,
+];
 const BLOCKS: &str = include_str!("fixtures/doors/mp_carentan-doors.ent");
 
 /// `fs` with the doors lump in place of mp_carentan's.
@@ -156,7 +161,9 @@ fn doors_run_as_on_retail_uo() {
 /// change: `W <time> <number> in <eventSequence> <loopSound>
 /// <constantLight>` when it enters the snapshot, `out` when it leaves,
 /// `ev <event> <parm>` for each event its ring took while sent, and
-/// `loop` and `light` when they change.
+/// `loop` and `light` when they change; and `W <time> hit <event>
+/// <surfType>` for each bullet impact's temp entity as it first comes
+/// (the round on door_h: one on the door, one on the wall behind it).
 pub fn wire_lines<'a>(
     p: &Protocol,
     frames: impl IntoIterator<Item = (i32, &'a BTreeMap<u32, EntityState>)>,
@@ -164,10 +171,20 @@ pub fn wire_lines<'a>(
     let mover = vcod_common::net::cod1::flags::ET_MOVER;
     let mut out = Vec::new();
     let mut prev: BTreeMap<u32, [i32; 3]> = BTreeMap::new();
+    let mut prev_hits: BTreeMap<u32, ()> = BTreeMap::new();
     for (t, ents) in frames {
         let mut now = BTreeMap::new();
+        let mut hits = BTreeMap::new();
         for (&n, e) in ents {
-            if n < 64 || e.field_i32(p, "eType") != mover {
+            let etype = e.field_i32(p, "eType");
+            if let Some(ev) = p.event_of(etype).filter(|ev| BULLET_HITS.contains(ev)) {
+                if !prev_hits.contains_key(&n) {
+                    out.push(format!("W {t} hit {ev} {}", e.field_i32(p, "surfType")));
+                }
+                hits.insert(n, ());
+                continue;
+            }
+            if n < 64 || etype != mover {
                 continue;
             }
             let f = |name: &str| e.field_i32(p, name);
@@ -199,6 +216,7 @@ pub fn wire_lines<'a>(
             out.push(format!("W {t} {n} out"));
         }
         prev = now;
+        prev_hits = hits;
     }
     out
 }
