@@ -6,7 +6,7 @@ use glam::Vec3;
 use vcod_cod4::assets::Assets;
 use vcod_cod4::collision::ClipMap;
 use vcod_cod4::dynent::{DESTRUCT, DynEnts, defs};
-use vcod_cod4::physics::clip_trace_masked;
+use vcod_cod4::physics::{clip_solids_masked, clip_trace_masked};
 use vcod_cod4::ragdoll::{CLIP_MASK, Explosion};
 use vcod_cod4::testing::cod4_install;
 use vcod_cod4::walk::{WalkOptions, walk};
@@ -86,11 +86,12 @@ fn a_blast_flings_mp_crashs_clutter_and_it_settles() {
     assert!((1..=20).contains(&awake), "{awake} woken");
     let start: Vec<Vec3> = d.ents.iter().map(|e| e.origin).collect();
     let mut trace = clip_trace_masked(&clip);
+    let mut solids = clip_solids_masked(&clip);
     let clock = std::time::Instant::now();
     let mut t = 0;
     while t < 10_000 && d.awake() > 0 {
         t += 16;
-        d.advance(t, &mut trace);
+        d.advance_in(t, &mut trace, &mut solids);
     }
     let took = clock.elapsed();
     let moved = d

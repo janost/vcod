@@ -13,12 +13,16 @@ use vcod_common::clipmap::ClipTrace;
 
 use crate::assets::Assets;
 use crate::assets::model::{XModel, XModelCollSurf};
-use crate::physics::{Body, Dvars as PhysDvars, Jitter, Preset, Shape};
+use crate::physics::{Body, Dvars as PhysDvars, Jitter, Preset, Shape, Solid};
 use crate::ragdoll::{Explosion, Sweep};
 
 /// A sweep of a sphere of the given radius from the first point to the
 /// second through the world under the given mask.
 pub type MaskedTrace<'a> = dyn FnMut(Vec3, Vec3, f32, u32) -> Sweep + 'a;
+
+/// The world's solids round a box under the given mask
+/// ([`crate::physics::clip_solids_masked`]).
+pub type MaskedSolids<'a> = dyn FnMut(Vec3, Vec3, u32) -> Vec<Solid> + 'a;
 
 /// `DynEntityType`s (the table at 0x6bdb70): `clutter` and `destruct`.
 pub const CLUTTER: u32 = 1;
@@ -584,11 +588,18 @@ impl DynEnts {
     /// entity posed where it is drawn, and one asleep dropped where it
     /// lies.
     pub fn advance(&mut self, time: i32, trace: &mut MaskedTrace) {
+        self.advance_in(time, trace, &mut |_, _, _| Vec::new());
+    }
+
+    /// [`Self::advance`] with each body's boxes meeting `solids` under the
+    /// same mask as its points (cod4-gsc.md 3.6.1).
+    pub fn advance_in(&mut self, time: i32, trace: &mut MaskedTrace, solids: &mut MaskedSolids) {
         for e in &mut self.ents {
             let Some(b) = &mut e.body else { continue };
             let mask = crate::ragdoll::CLIP_MASK & !e.pass;
             let mut t = |a: Vec3, b: Vec3, r: f32| trace(a, b, r, mask);
-            b.advance(time, &mut t, &self.phys);
+            let mut s = |lo: Vec3, hi: Vec3| solids(lo, hi, mask);
+            b.advance_in(time, &mut t, &mut s, &self.phys);
             (e.origin, e.rot) = b.pose_quat(time);
             if b.asleep {
                 e.body = None;

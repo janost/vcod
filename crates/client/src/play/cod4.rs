@@ -2532,7 +2532,8 @@ impl Cod4Session {
         let mut dynents = Vec::new();
         if let (Some(d), Some(w)) = (&mut self.dynents, &self.world) {
             let mut trace = vcod_cod4::physics::clip_trace_masked(&w.clip);
-            d.advance(render_time, &mut trace);
+            let mut solids = vcod_cod4::physics::clip_solids_masked(&w.clip);
+            d.advance_in(render_time, &mut trace, &mut solids);
             dynents.extend(
                 d.ents
                     .iter()

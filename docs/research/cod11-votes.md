@@ -142,7 +142,9 @@ The retail run: 1.1d, `tools/run_probe.sh client-probes/probe_complaint mp_caren
 | three windows, each answered `vote yes` | the offender got `GAME_COMPLAINTFILEDAGAINST` with 2, then 1, and was dropped on the third with `EXE_SERVERDISCONNECTREASON\x14GAME_KICKEDFROMCOMPLAINTS`; the voter got `m -1` each time, after the `e "\x15Able^7 \x14GAME_KICKEDFROMCOMPLAINTS"` drop notice on the third |
 | the offender leaves with a window open on it | the voter got `m -2`; its next `vote yes` was a plain vote |
 
-vcod runs the same arm (`GameHost::cast_vote`, `allow_complaint`, `complaints_about_gone` in `crates/server/src/game/vote.rs`). VERIFIED: the same recipe against `vcod-server --gametype-script` printed the same lines in both clients. `m -3` and `m -4` never go, as vcod has no listen server. vcod's disconnect pass runs on the game's next frame; retail's runs inside `SV_DropClient`.
+vcod runs the same arm (`GameHost::cast_vote`, `allow_complaint`, `complaints_about_gone` in `crates/server/src/game/vote.rs`). VERIFIED: the same recipe against `vcod-server --gametype-script` printed the same lines in both clients. `m -3` and `m -4` never go, as vcod has no listen server. vcod's disconnect pass runs inside the drop, as retail's does inside `SV_DropClient` (`ScriptRuntime::client_disconnect`, handshake doc "When the game hears a drop").
+
+Two windows on the leaver, 2026-11-16, on 1.1d and 1.5b mp_carentan and UO mp_uo_carentan: the same probe with `+set probe_players 3`, offender Able in slot 0, Baker in slot 1 and Charlie in slot 2, both handed a window on Able; Able left with both open (recipe in the probes' `README.md`). VERIFIED (capture), alike on all three: Baker got `m -2` and his later `vote yes` and `vote no` each `e "GAME_NOVOTEINPROGRESS"`; Charlie got nothing, and his `vote yes` and `vote no` got no answer, the open window naming a client no longer connected (step 1). vcod's server under the same recipe sent the same lines on all three. VERIFIED (capture).
 
 ## 4. `CheckVote`
 

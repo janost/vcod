@@ -1334,6 +1334,11 @@ and ours, 2026-10-18, print the same `PROBE` lines (clocks aside); ours
 takes the reconnect a few seconds later, since it refuses a connect with a
 new challenge into a slot heard from in the last 3 s.
 
+Each connect also gets a `newClientHudElem` at x 100 + its generation once
+it begins; the reconnecting probe's `EDGE snap` lines list the elements it
+is sent (`hud_x=`). Only that probe is needed for them (2026-11-16, all
+three and ours).
+
 ## probe_uostates
 
 The wire round trip's state changes on United Offensive: a placed allied
@@ -2448,6 +2453,13 @@ and `18.0:vote yes`, so Able leaves with a window open on it. Against ours:
 `vcod-server mp_carentan --gametype-script
 crates/gsc/tests/fixtures/semantics/client-probes/probe_complaint.gsc`.
 Retail and ours, 2026-10-14, print the same lines in both probes.
+
+With `+set probe_players 3` (ours: `--set probe_players=3`) a third probe,
+slot 2, gets a window beside slot 1's. The 2026-11-16 run on all three
+servers (`COD_VERSION=1.5`, `COD_VERSION=uo` on mp_uo_carentan with
+`--mod-dir uo`): Able `--probe-secs 10`, then a second apart Baker and
+Charlie `--probe-secs 25 --probe-say "13.0:vote yes" --probe-say "15.0:vote
+no"`, so Able leaves with both windows open (cod11-votes.md 3.1).
 
 ## probe_patchshot and probe_patchseams
 
