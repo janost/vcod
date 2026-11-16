@@ -1,7 +1,8 @@
 //! One CoD4 1.7 round after its end is drawn: `Bullet_FirePenetrate`
 //! through walls and bodies by `info/bullet_penetration_mp`'s depths, or
 //! `Bullet_FireExtended` with penetration off
-//! (docs/research/cod4-combat.md 3.1). 1.7's calls are at
+//! (docs/research/cod4-combat.md 3.1), and under `sv_clientSideBullets` 0
+//! the impacts it raises (cod4-effects.md 12.4). 1.7's calls are at
 //! `cod4_lnxded` 0x808a9aa..0x808aefa.
 
 use std::collections::HashMap;
@@ -26,6 +27,10 @@ const CONTENTS_BODY: u32 = 0x200_0000;
 const SURF_FLESH: u32 = 0x70_0000;
 /// `SURF_NOPENETRATE`: such a surface stops a round.
 const SURF_NOPENETRATE: u32 = 0x100;
+/// `SURF_SKY`: a round into it raises no impact.
+const SURF_SKY: u32 = 0x4;
+/// `bullet_penetrationMinFxDist`'s default.
+const PENETRATION_MIN_FX_DIST: f32 = 30.0;
 /// Glass's contents bit: an extended round shoots on through it
 /// (`cod4_lnxded` 0x808a8f4, cod4-combat.md 13.2).
 const CONTENTS_GLASS: u32 = 0x10;
@@ -103,6 +108,8 @@ struct Hit {
     names: [String; 3],
     hitloc: u8,
     depth_surface: usize,
+    /// How far along the leg it stopped.
+    fraction: f32,
 }
 
 impl Cod4Level {
@@ -273,6 +280,7 @@ impl Cod4Level {
             return None;
         }
         hit.pos = start.lerp(end, fraction);
+        hit.fraction = fraction;
         hit.depth_surface = if hit.surface_flags & SURF_NOPENETRATE != 0 {
             0
         } else {
@@ -284,10 +292,12 @@ impl Cod4Level {
         Some(hit)
     }
 
-    /// `Bullet_Process` without the effect (`sv_clientSideBullets` 1, the
-    /// client draws its own impacts): a body hit takes `Bullet_GetDamage`
-    /// (the range falloff off the round's first start) times what is left
-    /// of the round, truncated; the shooter's own body takes nothing.
+    /// `Bullet_Process` (0x808a136): the impact when `impact` asks for it
+    /// ([`Self::impact_event`], before the damage), then a body hit takes
+    /// `Bullet_GetDamage` (the range falloff off the round's first start)
+    /// times what is left of the round, truncated; the shooter's own body
+    /// takes nothing.
+    #[allow(clippy::too_many_arguments)]
     fn bullet_process(
         &mut self,
         slot: usize,
@@ -296,7 +306,11 @@ impl Cod4Level {
         h: &Hit,
         dflags: i32,
         game_time: i32,
+        impact: bool,
     ) {
+        if impact {
+            self.impact_event(slot, d, h, h.normal, 0);
+        }
         if let Some(id) = h.entity {
             let damage = bullet_damage(d, h.pos.distance(bp.orig_start));
             let damage = (f64::from(damage) * f64::from(bp.mult)) as i32;
@@ -327,6 +341,48 @@ impl Cod4Level {
         self.damage_client(
             slot, victim, d, damage, dflags, bp.dir, h.pos, h.hitloc, game_time,
         );
+    }
+
+    /// `EV_BULLET_HIT` at `h` under `sv_clientSideBullets` 0 (0x808a05c):
+    /// for a leg that stopped short, not on the sky and not on a client,
+    /// its position truncated, `dir`'s byte as the parm, `flags` in
+    /// `un1`, the surface's type, the shooter and his weapon
+    /// (cod4-effects.md 12.4). Under 1 nothing: the clients draw their own.
+    fn impact_event(&mut self, slot: usize, d: &WeaponDef, h: &Hit, dir: Vec3, flags: i32) {
+        let client_side =
+            crate::game::builtins::cvar::atoi(self.rt.host.cvars.get("sv_clientSideBullets")) != 0;
+        if client_side || h.fraction >= 1.0 || h.surface_flags & SURF_SKY != 0 || h.client.is_some()
+        {
+            return;
+        }
+        let weapon = self.combat.defs.iter().position(|w| w.name == d.name);
+        let event = crate::game::temp_entity::TempEntity {
+            event: super::combat::ev::BULLET_HIT,
+            parm: vcod_common::net::events::dir_to_byte(dir.to_array()),
+            surf_type: surface_type(h.surface_flags) as i32,
+            other: slot as u32,
+            attacker: 0,
+            weapon: weapon.map_or(0, |w| w as i32),
+            client_num: 0,
+            scale: flags,
+            origin: h.pos.to_array(),
+            scope: crate::game::temp_entity::Scope::Broadcast,
+            quake: None,
+            origin2: None,
+        };
+        self.rt.with_host(|h, cx| h.add_temp_entity(cx, event));
+    }
+
+    /// `bullet_penetrationMinFxDist` squared: a contact this close to the
+    /// last raises no impact (0x808ac86, 0x808adb4).
+    fn min_fx_dist_sq(&self) -> f32 {
+        let v = self.rt.host.cvars.get("bullet_penetrationMinFxDist");
+        let d = if v.is_empty() {
+            PENETRATION_MIN_FX_DIST
+        } else {
+            crate::game::builtins::cvar::atof(v)
+        };
+        d * d
     }
 
     /// One round from `start` toward `end`: `Bullet_FirePenetrate` while
@@ -375,7 +431,7 @@ impl Cod4Level {
             let Some(hit) = self.bullet_trace(bp, d, 0, origins, leg == 0) else {
                 break;
             };
-            self.bullet_process(slot, d, bp, &hit, 0, game_time);
+            self.bullet_process(slot, d, bp, &hit, 0, game_time, true);
             let goes_on = if hit.contents & CONTENTS_GLASS != 0 {
                 advance(bp, &hit, PAST_SURFACE)
             } else {
@@ -432,7 +488,8 @@ impl Cod4Level {
         let Some(mut entry) = self.bullet_trace(bp, d, 0, origins, true) else {
             return;
         };
-        self.bullet_process(slot, d, bp, &entry, 0, game_time);
+        self.bullet_process(slot, d, bp, &entry, 0, game_time, true);
+        let near = self.min_fx_dist_sq();
         for _ in 0..SURFACES_PAST_FIRST {
             let entry_depth = self.pen_depth(slot, d, entry.depth_surface);
             if entry_depth <= 0.0 {
@@ -443,27 +500,43 @@ impl Cod4Level {
                 return;
             }
             let beyond = self.bullet_trace(bp, d, entry.depth_surface, origins, false);
+            // Where the leg ended: the next contact, or the round's end.
+            let next_pos = beyond.as_ref().map_or(bp.end, |n| n.pos);
             // Through the wall when no exit is found, else only if the
             // round is left with something and the wall was not all solid.
-            let reaches_beyond = match self.find_exit(bp, d, entered_at, beyond.as_ref(), origins) {
-                None => true,
-                Some(exit) => {
-                    let depth = entry_depth.min(self.pen_depth(slot, d, exit.surface));
-                    if depth <= 0.0 {
-                        return;
+            // Each impact past the first needs `near` between it and the
+            // last one played: the next contact from the exit (0x808ac86),
+            // or with no exit from the entry (0x808adb4).
+            let (reaches_beyond, spaced) =
+                match self.find_exit(bp, d, entered_at, beyond.as_ref(), origins) {
+                    None => (true, entered_at.distance_squared(next_pos) > near),
+                    Some(exit) => {
+                        let depth = entry_depth.min(self.pen_depth(slot, d, exit.surface));
+                        if depth <= 0.0 {
+                            return;
+                        }
+                        bp.mult -= exit.thickness / depth;
+                        if bp.mult <= 0.0 {
+                            return;
+                        }
+                        let spaced = exit.hit.pos.distance_squared(next_pos) > near;
+                        // The exit's impact, `un1` 4, along the far face
+                        // (0x808ad0e..0x808ad38), unless the round goes on
+                        // into the sky (0x808acba).
+                        let into_sky = beyond
+                            .as_ref()
+                            .is_some_and(|n| n.surface_flags & SURF_SKY != 0);
+                        if !exit.solid && spaced && !into_sky {
+                            self.impact_event(slot, d, &exit.hit, exit.hit.normal, 4);
+                        }
+                        (!exit.solid, spaced)
                     }
-                    bp.mult -= exit.thickness / depth;
-                    if bp.mult <= 0.0 {
-                        return;
-                    }
-                    !exit.solid
-                }
-            };
+                };
             let Some(next) = beyond else {
                 return;
             };
             if reaches_beyond {
-                self.bullet_process(slot, d, bp, &next, DFLAG_PENETRATION, game_time);
+                self.bullet_process(slot, d, bp, &next, DFLAG_PENETRATION, game_time, spaced);
             }
             entry = next;
         }
@@ -505,6 +578,7 @@ impl Cod4Level {
             thickness: thickness.max(1.0),
             surface: hit.depth_surface,
             solid,
+            hit,
         })
     }
 }
@@ -517,6 +591,8 @@ struct Exit {
     thickness: f32,
     surface: usize,
     solid: bool,
+    /// The trace back's contact: the far face.
+    hit: Hit,
 }
 
 #[cfg(test)]

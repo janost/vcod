@@ -1996,7 +1996,7 @@ pub fn client_bullets(
 /// One frame's rounds, by fired event: its client-side rounds
 /// ([`client_bullets`]), none under `sv_clientSideBullets` 0, where
 /// `CG_FireWeapon` skips `DrawBulletImpacts` (0x457cec); and its
-/// [`ServerRound`].
+/// [`ServerRound`], its shooter looked up in `entities`, the snapshot's.
 #[allow(clippy::too_many_arguments)]
 pub fn frame_rounds(
     fired: &[Fired],
@@ -2006,6 +2006,7 @@ pub fn frame_rounds(
     own: Option<&OwnView>,
     world: ShotWorld,
     client_side: bool,
+    entities: &[vcod_cod4::net::delta::EntityState],
 ) -> (Vec<Vec<BulletHit>>, Vec<Option<ServerRound>>) {
     fired
         .iter()
@@ -2015,7 +2016,8 @@ pub fn frame_rounds(
             } else {
                 Vec::new()
             };
-            (hits, server_round(f, tags, own, client_side))
+            let shooter = |n: u32| entities.iter().find(|e| e.number() == n);
+            (hits, server_round(f, tags, own, client_side, &shooter))
         })
         .unzip()
 }
@@ -2049,13 +2051,15 @@ pub struct ServerRound {
 
 /// `fired`'s [`ServerRound`], if it is a bullet hit event whose shooter
 /// gives a muzzle: our own client off the drawn eye, another off his
-/// posed `tag_flash`. A shooter with no posed body (no DObj, 0x45864e)
-/// gets nothing, the tracer, whizby and pushes included (0x4587ac).
-pub fn server_round(
+/// posed `tag_flash`, or with no such tag off his state ([`muzzle_of`]).
+/// A shooter with no posed body (no DObj, 0x45864e) gets nothing, the
+/// tracer, whizby and pushes included (0x4587ac).
+pub fn server_round<'a>(
     f: &Fired,
     tags: &HashMap<u32, WeaponTags>,
     own: Option<&OwnView>,
     client_side: bool,
+    shooter_state: &dyn Fn(u32) -> Option<&'a vcod_cod4::net::delta::EntityState>,
 ) -> Option<ServerRound> {
     let exit_flag = match f.name {
         "EV_BULLET_HIT" => 4,
@@ -2066,7 +2070,10 @@ pub fn server_round(
     let shooter = ent_u32(e, "otherEntityNum");
     let muzzle = match own.filter(|v| v.client == Some(shooter)) {
         Some(v) => v.eye,
-        None => tags.get(&shooter)?.flash?.0,
+        None => match tags.get(&shooter)?.flash {
+            Some((at, _)) => at,
+            None => muzzle_of(shooter, shooter_state(shooter)?),
+        },
     };
     let word = |k: usize| ent_f32(e, &format!("lerp.u.anonymous.data[{k}]"));
     let start = Vec3::new(word(0), word(1), word(2));
@@ -2077,6 +2084,26 @@ pub fn server_round(
         end: f.origin,
         leg,
     })
+}
+
+/// A posed shooter's muzzle without a `tag_flash` (0x45867f..0x458704):
+/// his state's `lerp.pos.trBase`, a client's raised by his `eFlags`'
+/// stance, 11 prone, 40 crouched, else 60 (the doubles at 0x70b370,
+/// 0x70b380, 0x70b2f8).
+fn muzzle_of(n: u32, e: &vcod_cod4::net::delta::EntityState) -> Vec3 {
+    let at = crate::play::cod4::origin_of(e);
+    if n >= 64 {
+        return at;
+    }
+    let flags = ent_u32(e, "lerp.eFlags");
+    let up = if flags & 0x8 != 0 {
+        11.0
+    } else if flags & 0x4 != 0 {
+        40.0
+    } else {
+        60.0
+    };
+    Vec3::new(at.x, at.y, (f64::from(at.z) + up) as f32)
 }
 
 /// The entity a server round's leg meets first (0x48e060: a trace from
@@ -2729,6 +2756,78 @@ mod tests {
             "{:?}",
             c.matrix
         );
+    }
+
+    /// A server round's muzzle: the drawn eye for our own client, the
+    /// posed `tag_flash`, and for a posed body without the tag his
+    /// state's origin raised by his stance (0x45867f..0x458704); no posed
+    /// body, no round.
+    #[test]
+    fn server_rounds_leave_the_shooters_muzzle() {
+        let f = |shooter: u32| Fired {
+            id: 41,
+            name: "EV_BULLET_HIT",
+            entity: Some(300),
+            server_time: 0,
+            parm: 0,
+            origin: Vec3::new(0.0, 500.0, 50.0),
+            state: Some(ent(17 + 41, 300, &[("otherEntityNum", shooter)])),
+            weapon: 0,
+            perks: 0,
+            aim: None,
+        };
+        let z = |v: f32| v.to_bits();
+        let bodies = [
+            ent(
+                1,
+                3,
+                &[("lerp.pos.trBase[2]", z(100.0)), ("lerp.eFlags", 0x4)],
+            ),
+            ent(1, 4, &[("lerp.pos.trBase[2]", z(100.0))]),
+            ent(6, 70, &[("lerp.pos.trBase[2]", z(100.0))]),
+        ];
+        let state = |n: u32| bodies.iter().find(|e| e.number() == n);
+        let flash = (Vec3::new(1.0, 2.0, 3.0), glam::Quat::IDENTITY);
+        let tags = HashMap::from([
+            (
+                2,
+                WeaponTags {
+                    flash: Some(flash),
+                    brass: None,
+                },
+            ),
+            (3, WeaponTags::default()),
+            (4, WeaponTags::default()),
+            (70, WeaponTags::default()),
+        ]);
+        let own = OwnView {
+            client: Some(1),
+            eye: Vec3::new(9.0, 9.0, 9.0),
+            angles: Vec3::ZERO,
+            flash: None,
+            third_person: false,
+        };
+        let muzzle = |n| server_round(&f(n), &tags, Some(&own), true, &state).map(|r| r.muzzle);
+        assert_eq!(muzzle(1), Some(own.eye));
+        assert_eq!(muzzle(2), Some(flash.0));
+        assert_eq!(muzzle(3), Some(Vec3::new(0.0, 0.0, 140.0)));
+        assert_eq!(muzzle(4), Some(Vec3::new(0.0, 0.0, 160.0)));
+        assert_eq!(muzzle(70), Some(Vec3::new(0.0, 0.0, 100.0)));
+        assert_eq!(muzzle(5), None);
+        // Under 1 no leg; under 0 the leg from `lerp.u`, none for an exit.
+        let leg = |un1: u32, client_side: bool| {
+            let mut e = f(2);
+            e.state = Some(ent(17 + 41, 300, &[("otherEntityNum", 2), ("un1", un1)]));
+            server_round(&e, &tags, None, client_side, &state)
+                .unwrap()
+                .leg
+        };
+        assert_eq!(leg(0, true), None);
+        assert_eq!(
+            leg(0, false),
+            Some((Vec3::ZERO, Vec3::new(0.0, 500.0, 50.0)))
+        );
+        assert_eq!(leg(4, false), None);
     }
 
     /// An entity state of `etype` numbered `num`, the named fields set.

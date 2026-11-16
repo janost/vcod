@@ -5015,6 +5015,7 @@ pub(crate) mod tests {
                 Some(&own),
                 w,
                 client_side,
+                &s.client().snapshots.last().unwrap().entities,
             );
             shots += hits.iter().filter(|h| !h.is_empty()).count();
             // The legs on the map's dynamic entities, as the frame hands
@@ -5058,22 +5059,17 @@ pub(crate) mod tests {
 
     /// Retail under `+set sv_clientSideBullets 0` (`play-1.7-csb0-*`, the
     /// wall shot of cod4-combat.md 3.1: a target outside mp_crash's metal
-    /// plate, a shooter inside, a spectator following): no client runs a
+    /// plate, a shooter inside aiming over his head): no client runs a
     /// round of its own, and the server's events carry each, the plate's
-    /// entry, its exit (`un1` 4), the flesh hit and the asphalt beyond.
-    /// Each entry's leg runs from the world's origin, the server leaving
-    /// the events' `lerp.u` at 0; an exit's pushes nothing. The target
-    /// hears every round that went on through him to the asphalt, none
-    /// that stopped short, and none while his view follows the shooter
-    /// after a death: the shooter's own rounds leave from the drawn eye
+    /// entry, its exit (`un1` 4) and the cloth far beyond. Each entry's leg
+    /// runs from the world's origin, the server leaving the events'
+    /// `lerp.u` at 0; an exit's pushes nothing. The target hears every
+    /// round that went on past him, none that stopped short; the shooter,
+    /// his own rounds leaving from the drawn eye, hears none
     /// (cod4-effects.md 12.4).
     #[test]
     fn server_side_bullets_carry_every_round() {
-        for name in [
-            "play-1.7-csb0-target.txt",
-            "play-1.7-csb0-shooter.txt",
-            "play-1.7-csb0-spec.txt",
-        ] {
+        for name in ["play-1.7-csb0-target.txt", "play-1.7-csb0-shooter.txt"] {
             let Some(Replayed {
                 client_side,
                 shots,
@@ -5097,8 +5093,8 @@ pub(crate) mod tests {
                     assert_eq!(leg, (Vec3::ZERO, r.end), "{name}");
                 }
             }
-            // The rounds that went on through the target to the asphalt,
-            // 300 units and more past him (y 2380).
+            // The rounds that went on past the target to the cloth, 300
+            // units and more past him (y 2380).
             let past = |own: bool| {
                 let p = server
                     .iter()
@@ -5114,17 +5110,14 @@ pub(crate) mod tests {
                 "{name}: {n} rounds, {exits} exits; past: {heard} of {theirs} heard, \
                  {own_heard} of {own} with the shooter's view"
             );
+
             assert_eq!((short, own_heard), (0, 0), "{name}");
             if name.contains("target") {
                 assert!(theirs > 0 && heard == theirs, "{name}");
             }
-            // A leg out of the world's origin meets a prop 1200 units short
-            // of the asphalt round's end, under the ground there.
-            println!("{name}: struck {struck:?}");
-            assert_eq!(struck.len(), 1, "{name}");
-            let ((start, end), at) = struck[0];
-            assert_eq!((start, end.y), (Vec3::ZERO, 2688.0), "{name}");
-            assert!(at.distance(end) > 1000.0, "{name}: {at}");
+            // No prop lies on the lines from the world's origin to these
+            // contacts.
+            assert!(struck.is_empty(), "{name}: {struck:?}");
         }
         // Under 1 the shots run here and the events push nothing.
         let r = replay_rounds("play-1.7-kill-target.txt").unwrap();
