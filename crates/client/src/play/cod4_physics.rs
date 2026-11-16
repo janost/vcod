@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use glam::Vec3;
 use vcod_cod4::net::delta::EntityState;
-use vcod_cod4::physics::{Body, Dvars, PartModel, clip_trace};
+use vcod_cod4::physics::{Body, Dvars, PartModel, clip_solids, clip_trace};
 
 use super::cod4::{ent_f32, ent_u32};
 use super::cod4_predict::Cod4World;
@@ -83,7 +83,8 @@ impl Cod4Physics {
         }
         let (body, _) = self.parts.get_mut(&n)?.body.as_mut()?;
         let mut trace = clip_trace(&world.clip);
-        body.advance(time, &mut trace, &self.dvars);
+        let mut solids = clip_solids(&world.clip);
+        body.advance_in(time, &mut trace, &mut solids, &self.dvars);
         Some(body.pose(time))
     }
 
