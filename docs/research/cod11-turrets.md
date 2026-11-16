@@ -2542,17 +2542,46 @@ reads his rows a frame early on ours. INFERRED, unmeasured.
 The origins: VERIFIED, vcod measurement, every `PROBE at` row of the three
 captures reads retail's to one float step (2^-13 at 1024..2048).
 
-Open, held as `gunduel_ab` gaps:
+The fire group's time on 1.5b and UO (the duel, `DUEL_GAPS` until
+2026-11-16). A round on a firing gunner read 0.01 to 0.37 off from the
+second frame both fire, cells to 7.8, on both victims. Two causes:
 
-- The duel on 1.5b and UO (`DUEL_GAPS`): a round on a firing gunner reads
-  0.01 to 0.37 off along the ray from the second frame both fire, cells up
-  to 7.8, on both victims; the first frame reads retail's points and cells
-  to 0.0013. Not determined. Ruled out: the frame order above (both
-  victims are off, the one placed this frame too) and the aim group (the
-  turn phases' victims hold the aim leaves and match). INFERRED: the fire
-  group's node time or its blend out of the aim group, which no earlier
-  capture traced in the end-frame pass (13.9's grids run in the thread
-  pass).
+- VERIFIED, retail 1.5b and UO under gdb (`probe_gunduel`, both gunners'
+  anim info records at the first skeleton build on each in the end-frame
+  pass, `tools/re/gdb_gunner_tree.py` with `GDB_MODE=duel`; UO's info
+  table at 0x8434140, 1.5b's at 0x830b000, a node's info index at
+  `tree + 0xc + 2 * node`): the fire group's node (`standMG42_fire`, UO
+  node 96, 1.5b 33) keeps its info record after its blend out, since its
+  rows keep their weights, and its time stands where its last weighted
+  step left it (UO, one gunner: 0.8 after the step at weight 0.1176, the
+  next step landing the weight on 0 and moving no time). When the duel
+  sets the fire anim again, the node plays on from that time (0.8, then
+  0.1 a frame later) where 1.1d's restarts it at 0 (1.1d's dump, 13.10
+  above). VERIFIED, 1.5b's dump: the same. INFERRED, off the 1.5b and UO
+  setter's phase rule (cod11-combat.md 3.1, "The setter on a weighted
+  node"): a non-moving anim gets no `trap_XAnimSetTime`, so the node's own
+  record decides; a plain clip's record is freed at weight 0 and starts
+  again at 0. vcod: `animclock::ChannelClock` holds each sync group the
+  windowed (1.5 and UO) setter's blends took to 0 (`held`), its time
+  frozen at the last frame its weight read above 0, and a set of that
+  group plays on from there; a fading clip's time stops stepping at its
+  blend's end (`Ramp::last_weighted`).
+- VERIFIED, UO's dump: the weights a blend steps through are the
+  step's stores (UO 0x80bcc1e, 1.5b 0x80c788a), not the line: the aim
+  group fading from 1 over 170 ms reads 0x3f34b4b5, 0x3ed2d2d3,
+  0x3df0f0f5, the fire group rising from 0.001 0x3e96f31c, 0x3f16b193,
+  0x3f61e997, each `w + (goal - w) * dt / goalTime` on the x87 stack and
+  stored, `goalTime` taken `dt` off and stored; the line `1 - 150 / 170`
+  reads 0x3df0f0f0. vcod measurement: that ulp moved the UO duel's frame
+  at 0.12 and 0.88 (26400) 0.0017 off in its cells. vcod: a 1.5 or UO
+  ramp the windowed setter starts reads those stores on frame times
+  (`Ramp::stepped`).
+
+vcod measurement: `gunduel_ab` holds both 1.5b's and UO's duels with no
+gap.
+
+Open, held as a `gunduel_ab` gap:
+
 - 1.1d (`POSE_GAPS_11`, victim 1 since 2026-11-14's carried rows, 13.9
   "1.1d's placement"): points 0.0004 to 0.011 off on a gunner his own end
   frame placed, cells to 0.06; on one not yet placed, retail's points to
@@ -2561,7 +2590,16 @@ Open, held as `gunduel_ab` gaps:
   0.1 to 0.3 throughout (vcod measurement, 2026-11-14: victim 1's grid rows
   to 1.10). Not determined. Ruled out by vcod measurement: the
   DObj's frame (standing it in the placement's angles past the cmd and
-  `setPlayerAngles` puts slot 1's rounds up to 2.8 off). 1.1d's gunner
+  `setPlayerAngles` puts slot 1's rounds up to 2.8 off), and the 1.5b and
+  UO causes above (1.1d restarts the fire node at 0, and its gates read
+  the line's weights). VERIFIED, a 1.1d rerun under gdb (2026-11-16, the
+  gunners' entities at `G_RunFrame`'s entry): gun B at z 1.90734863e-06,
+  as ours places it, but the axis gunner at z -31.8749943 where the
+  fixture's `PROBE at` reads -31.898199097, and his rows at 0.5599651
+  where ours, on the fixture, reads 0.5629. A rerun's gunner B does not
+  stand where the fixture's did, so its tree is no reference for ours'
+  replay: the next step is a capture taken under gdb that `gunduel_ab`
+  replays itself. 1.1d's gunner
   grid (13.9, "1.1d's placement") reads retail's since 2026-11-16, so his
   own pose in the thread pass is retail's; the bone trace is not ported
   store for store (13.5).

@@ -65,6 +65,9 @@ pub struct Seen {
 /// most once an end frame and the longest blend is 250 ms, so a sixth one is
 /// at weight 0 by the time it would be pushed out.
 const FADES: usize = 5;
+/// The sync groups a clock remembers past their blend out: the aim and
+/// fire groups of one stance and the other's.
+const HELD: usize = 4;
 
 /// One clip on a channel: the clip's time in seconds at level time `t` is
 /// `base_s + (t - base_ms) * rate / 1000`. The engine advances a node by
@@ -211,6 +214,9 @@ struct Ramp {
     to: f32,
     start_ms: i32,
     ms: f32,
+    /// 1.5's and UO's step, which stores each frame's weight
+    /// ([`Ramp::stepped`]); off, the line itself.
+    stored: bool,
 }
 
 impl Ramp {
@@ -220,6 +226,7 @@ impl Ramp {
             to,
             start_ms,
             ms,
+            stored: false,
         }
     }
 
@@ -236,9 +243,48 @@ impl Ramp {
         Ramp::new(start, to, start_ms, ms)
     }
 
+    /// The last frame from the ramp's start at which it reads above 0, or
+    /// `i32::MAX` for one that never reaches 0.
+    fn last_weighted(&self) -> i32 {
+        if self.to > 0.0 {
+            return i32::MAX;
+        }
+        let mut last = self.start_ms;
+        while self.at(last + STEP_MS) > 0.0 {
+            last += STEP_MS;
+        }
+        last
+    }
+
+    fn stored_on(self, stored: bool) -> Ramp {
+        Ramp { stored, ..self }
+    }
+
+    /// The weight after `steps` frames of 1.5b's 0x80c788a (UO 0x80bcc1e):
+    /// it lands on the goal once the goal time is under the step plus
+    /// 0.001, else takes `(goal - weight) * dt / goalTime` on the x87
+    /// stack, stores the sum, and takes `dt` off the stored goal time.
+    fn stepped(&self, steps: i32) -> f32 {
+        let dt = STEP_MS as f32 * 0.001;
+        let (mut w, mut gt) = (self.from, self.ms * 0.001);
+        for _ in 0..steps {
+            if f64::from(gt) < f64::from(dt) + f64::from(0.001f32) {
+                return self.to;
+            }
+            let d = f64::from(self.to - w) * f64::from(dt) / f64::from(gt);
+            w = (d + f64::from(w)) as f32;
+            gt -= dt;
+        }
+        w
+    }
+
     fn at(&self, now_ms: i32) -> f32 {
         if self.ms <= 0.0 {
             return self.to;
+        }
+        let since = now_ms.wrapping_sub(self.start_ms);
+        if self.stored && since >= 0 && since % STEP_MS == 0 {
+            return self.stepped(since / STEP_MS);
         }
         let s = (now_ms.wrapping_sub(self.start_ms) as f32 / self.ms).max(0.0);
         if s >= 1.0 {
@@ -314,6 +360,12 @@ pub struct ChannelClock {
     weight: Ramp,
     /// Earlier clips still blending out.
     fading: [Option<(Play, Ramp)>; FADES],
+    /// 1.5's and UO's sync groups (a gunner's turret anims) a blend took
+    /// to weight 0, at the node time their last weighted step left: the
+    /// group's rows keep their weights, so its record lives on and a later
+    /// set plays on from that time (cod11-turrets.md 13.10, "The fire
+    /// group's time").
+    held: [Option<Play>; HELD],
     /// `lf+0x2c` and `lf+0x1c`: the snapshot time and `pos.trBase` the rate
     /// was last measured from; 0 is unset, as the zeroed lerp frame reads.
     old_ms: i32,
@@ -451,9 +503,10 @@ impl ChannelClock {
         let kept = window.is_none();
         self.current.kept = kept;
         self.current.settle(at.clock_ms);
-        for (p, _) in self.fading.iter_mut().flatten() {
+        for (p, w) in self.fading.iter_mut().flatten() {
             p.kept = kept;
-            p.settle(at.clock_ms);
+            // The step moves no time on a node its blend has taken to 0.
+            p.settle(at.clock_ms.min(w.last_weighted()));
         }
         let index = wire & !TOGGLE;
         let touches = if wire != self.anim {
@@ -598,10 +651,13 @@ impl ChannelClock {
             .copied()
             .chain(std::iter::once((
                 self.current,
-                Ramp::new(old_weight, 0.0, now_ms, blend),
+                Ramp::new(old_weight, 0.0, now_ms, blend).stored_on(windowed),
             )))
             .filter(|(p, w)| p.index != 0 && w.at(now_ms) > 0.0)
             .collect();
+        if windowed {
+            self.hold_faded(now_ms);
+        }
         // A node already blending out comes back from the weight it had, in
         // the part of the blend time that distance takes.
         let back = fading
@@ -626,11 +682,22 @@ impl ChannelClock {
         } else {
             (phase, phase_t)
         };
+        let held = match keeps && back.is_none() {
+            true => self.take_held(new_index),
+            false => None,
+        };
         self.current = match back {
             Some((p, _)) if keeps && (legs || new.is_some_and(|n| n.death)) => Play {
                 base_ms: now_ms,
                 base_s: p.seconds(now_ms),
                 rate: 1.0,
+                ..p
+            },
+            None if let Some(p) = held => Play {
+                base_ms: now_ms,
+                base_s: 0.0,
+                rate: 1.0,
+                time_ms: now_ms,
                 ..p
             },
             _ => Play {
@@ -647,7 +714,7 @@ impl ChannelClock {
                 kept,
             },
         };
-        self.weight = Ramp::raised(from, 1.0, now_ms, (1.0 - from) * blend);
+        self.weight = Ramp::raised(from, 1.0, now_ms, (1.0 - from) * blend).stored_on(windowed);
         if !legs {
             let (torso, legs) = if new_index == 0 {
                 (0.0, 1.0)
@@ -664,6 +731,43 @@ impl ChannelClock {
             raised: (new_index != 0).then_some((new_index, self.weight)),
             knob_all: None,
         }
+    }
+
+    /// Keeps each sync group the blends have taken to 0 by `now_ms` in
+    /// [`Self::held`], its time frozen at the last frame its weight read
+    /// above 0: the step moves a node's time only while it has weight
+    /// (UO 0x80bd884, 1.5b 0x80c84f0).
+    fn hold_faded(&mut self, now_ms: i32) {
+        for (p, w) in self.fading.iter().flatten().copied() {
+            if !p.sync || p.index == 0 || w.at(now_ms) > 0.0 {
+                continue;
+            }
+            let last = w.last_weighted();
+            let frozen = Play {
+                time_t: p.time(last),
+                time_ms: last,
+                ..p
+            };
+            match self
+                .held
+                .iter_mut()
+                .find(|h| h.is_some_and(|h| h.index == p.index))
+            {
+                Some(slot) => *slot = Some(frozen),
+                None => match self.held.iter_mut().find(|h| h.is_none()) {
+                    Some(slot) => *slot = Some(frozen),
+                    None => self.held[0] = Some(frozen),
+                },
+            }
+        }
+    }
+
+    /// The held sync group on `index`, taken out of [`Self::held`].
+    fn take_held(&mut self, index: i32) -> Option<Play> {
+        self.held
+            .iter_mut()
+            .find(|h| h.is_some_and(|h| h.index == index))
+            .and_then(Option::take)
     }
 
     /// 0x30003e50 (1.5 0x300040b0, UO 0x300042c0; the server's

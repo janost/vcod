@@ -466,24 +466,6 @@ const NEAR_15: Near = Near {
     cell: 0.0011,
 };
 
-/// The rounds on a firing gunner (the duel), from the first frame both
-/// fire: cells to 0.0013 on it, points 0.01 to 0.37 and cells to 7.8
-/// from the second on both victims (cod11-turrets.md 13.10, "Open").
-const DUEL_GAPS: &[Gap] = &[
-    Gap {
-        victim: 0,
-        from: 26250,
-        to: 26700,
-        why: "turrets doc 13.10, a firing gunner",
-    },
-    Gap {
-        victim: 1,
-        from: 26250,
-        to: 26700,
-        why: "turrets doc 13.10, a firing gunner",
-    },
-];
-
 /// 1.1d: victim 1's points and cells (cod11-turrets.md 13.10, "Open"):
 /// 0.0004 to 0.011 on a body his own end frame placed, 0.08 to 0.2 in
 /// the arc's middle on one it has not, and cells to 0.06 and 0.3.
@@ -523,7 +505,7 @@ fn two_gunners_in_each_others_arc_match_15b() {
         join_ms: 7100,
         late_ms: 3300,
     };
-    check(fs, &c, NEAR_15, DUEL_GAPS);
+    check(fs, &c, NEAR_15, &[]);
 }
 
 #[test]
@@ -536,5 +518,5 @@ fn two_gunners_in_each_others_arc_match_uo() {
         join_ms: 7550,
         late_ms: 3250,
     };
-    check(fs, &c, NEAR_15, DUEL_GAPS);
+    check(fs, &c, NEAR_15, &[]);
 }
