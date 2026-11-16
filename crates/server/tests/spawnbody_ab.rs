@@ -28,6 +28,10 @@ const SCRIPT: &str =
 const RETAIL_11: &str = include_str!("fixtures/playerstate/mp_carentan-dm-spawnbody-1.1.txt");
 const RETAIL_15: &str = include_str!("fixtures/playerstate/mp_carentan-dm-spawnbody-1.5.txt");
 const RETAIL_UO: &str = include_str!("fixtures/playerstate/mp_carentan-dm-spawnbody-uo.txt");
+/// The `probe_moved 1` runs: four more `outside_in` spawns with the host
+/// moved by `setOrigin` in the spawn's frame.
+const MOVED_15: &str = include_str!("fixtures/playerstate/mp_carentan-dm-spawnbody-moved-1.5.txt");
+const MOVED_UO: &str = include_str!("fixtures/playerstate/mp_carentan-dm-spawnbody-moved-uo.txt");
 
 /// The spawner joined this long after the host.
 const LATE_MS: i64 = 4000;
@@ -50,7 +54,7 @@ fn direct_input(tokens: &[String]) -> Option<[i32; 5]> {
 }
 
 /// The script's log under ours, `PROBE` lines only.
-fn ours(fs: vcod_common::pk3::Pk3Fs) -> Vec<String> {
+fn ours(fs: vcod_common::pk3::Pk3Fs, moved: bool) -> Vec<String> {
     let proto = vcod_server::server::install_protocol(&fs);
     let map = "mp_carentan";
     let bsp_path = fs.resolve_map(map).expect("map in the paks");
@@ -60,6 +64,9 @@ fn ours(fs: vcod_common::pk3::Pk3Fs) -> Vec<String> {
     sv.set_protocol(proto);
     sv.overlay_script("maps/mp/gametypes/probe_spawnbody", SCRIPT);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    if moved {
+        sv.set_cvar("probe_moved", "1");
+    }
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let qs = [
@@ -203,6 +210,7 @@ fn rows(log: &[String]) -> Vec<Row> {
     out
 }
 
+/// `fixture` against ours; a `probe_moved` capture's header names the cvar.
 fn check(fs: Option<vcod_common::pk3::Pk3Fs>, fixture: &str) {
     let Some(fs) = fs else {
         return;
@@ -212,12 +220,21 @@ fn check(fs: Option<vcod_common::pk3::Pk3Fs>, fixture: &str) {
         .filter(|l| l.starts_with("PROBE "))
         .map(str::to_string)
         .collect();
-    let log = ours(fs);
+    let moved = fixture
+        .lines()
+        .take_while(|l| l.starts_with('#'))
+        .any(|l| l.contains("probe_moved 1"));
+    let log = ours(fs, moved);
     if std::env::var_os("SPAWNBODY_REPORT").is_some() {
         println!("retail:\n{}\nours:\n{}", retail.join("\n"), log.join("\n"));
     }
     let (theirs, mine) = (rows(&retail), rows(&log));
-    assert_eq!(theirs.len(), 10, "the capture's eight spawns and two walks");
+    let spawns = if moved { 12 } else { 8 };
+    assert_eq!(
+        theirs.len(),
+        spawns + 2,
+        "the capture's {spawns} spawns and two walks"
+    );
     assert_eq!(mine.len(), theirs.len(), "ours ran every trial: {mine:#?}");
     let mut bad = Vec::new();
     for (k, (want, got)) in theirs.iter().zip(&mine).enumerate() {
@@ -251,4 +268,20 @@ fn a_spawn_into_a_player_walks_out_of_him_as_on_15() {
 #[test]
 fn a_spawn_into_a_player_walks_out_of_him_as_on_uo() {
     check(vcod_common::testing::uo_fs(), RETAIL_UO);
+}
+
+/// A host `setOrigin` moved in the spawn's frame stops the think where he
+/// now stands and no longer where he was (player-clip doc 13.5).
+#[test]
+fn a_spawns_think_meets_a_player_where_the_script_just_moved_him_on_15() {
+    let fs = vcod_common::testing::game_fs().filter(|fs| {
+        vcod_server::server::install_protocol(fs).transport.version
+            == vcod_common::net::protocol::PROTOCOL_V6.transport.version
+    });
+    check(fs, MOVED_15);
+}
+
+#[test]
+fn a_spawns_think_meets_a_player_where_the_script_just_moved_him_on_uo() {
+    check(vcod_common::testing::uo_fs(), MOVED_UO);
 }

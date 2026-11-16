@@ -315,10 +315,15 @@ fn mirror_weapons(clients: &mut [Option<Client>], rt: &mut script::ScriptRuntime
             mirror_weapons_of(sim, rt, slot);
         }
     }
+    rt.clear_dobj_updates();
 }
 
 /// [`mirror_weapons`] for one client.
 fn mirror_weapons_of(sim: &mut ClientSim, rt: &mut script::ScriptRuntime, slot: usize) {
+    // UO's script-time DObj updates, on the weapon the entity had then.
+    for a in rt.take_dobj_updates_of(slot) {
+        sim.update_dobj(&a);
+    }
     let w = rt.client_weapons(slot);
     sim.ps.weapons_held = w.held;
     sim.ps.weapon_slots = w.slots;

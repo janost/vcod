@@ -230,6 +230,9 @@ pub struct ClientSim {
     /// mirrored the same way: the locational trace poses the grafted rig they
     /// make (`crate::game::hitrig`).
     pub assembly: crate::game::hitrig::Assembly,
+    /// The DObj those models were last built into, whose ignoreCollision
+    /// bits the hit walk reads until a rebuild.
+    dobj: crate::game::hitrig::PlayerDObj,
     /// The pose [`Self::commit_pose`] took at the last end frame, which every
     /// locational trace until the next one meets.
     pose: crate::game::combat::BodyPose,
@@ -725,6 +728,7 @@ impl ClientSim {
             hud_cleared: false,
             respawned: false,
             dobj_ahead: false,
+            dobj: Default::default(),
             spread_frac: 0.0,
             stance_window_ms: 0,
             max_speed: pmove::SPEED_RUN as i32,
@@ -2401,6 +2405,26 @@ impl ClientSim {
         }
     }
 
+    /// One `G_UpdateClientInfo` on the models `now`: the end frame's, and on
+    /// UO each `G_DObjUpdate`'s (0x87df9) a script's `setModel`, `attach`
+    /// or `detach` ran. Its weapon is the entity's, 0 for a rider barred
+    /// from one: 1.5b `eFlags & 0xc000` (0x1afc9), UO `& 0x106000` off
+    /// `BG_AllowPlayerWeaponAtVehiclePos` (0x1f556).
+    pub fn update_dobj(
+        &mut self,
+        now: &crate::game::hitrig::Assembly,
+    ) -> &crate::game::hitrig::Assembly {
+        use vcod_common::net::flags::{EF_IN_VEHICLE_V22, EF_MOUNTED};
+        let rides = self.entity_eflags() & (EF_MOUNTED | EF_IN_VEHICLE_V22) != 0;
+        let armed_seat = self.seat.is_some_and(|s| s.kind == 1 && s.pos == 3);
+        let weapon = if rides && !armed_seat {
+            0
+        } else {
+            i32::from(self.ps.weapon)
+        };
+        self.dobj.update(now, weapon, self.anim.torso())
+    }
+
     /// The controls the last skeleton build eased to, which the record
     /// keeps for the next build's ease (coduo-vehicles.md 13).
     pub fn keep_eased(&mut self, c: vcod_common::playerpose::Controllers) {
@@ -2484,8 +2508,9 @@ impl ClientSim {
         angles.step(&input, frametime_ms, swing_speed);
         angles.update_conditions(&input);
         let (eased, mut seat_ramp) = (self.pose.eased, self.pose.seat_ramp.clone());
+        let assembly = self.update_dobj(&self.assembly.clone()).clone();
         self.pose = crate::game::combat::BodyPose {
-            assembly: self.assembly.clone(),
+            assembly,
             legs,
             torso,
             legs_clock,

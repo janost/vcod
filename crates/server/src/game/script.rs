@@ -238,6 +238,38 @@ fn render(cx: &vcod_gsc::Cx, v: Value) -> String {
 /// (`docs/research/clientstate-wire-format.md`).
 pub const ATTACH_SLOTS: usize = 6;
 
+/// What a client entity wears, by name: `.model` and the attachments with
+/// their ignoreCollision bits. `None` without a model.
+pub(crate) fn wear(
+    host: &mut GameHost,
+    cx: &mut vcod_gsc::Cx,
+    ent: EntId,
+) -> Option<crate::game::hitrig::Assembly> {
+    use crate::game::hitrig::{Assembly, model_name};
+    use vcod_gsc::Host;
+    let atom = cx.intern_folded("model");
+    let v = host.get_field(cx, ent, atom);
+    let body = model_name(&render(cx, v));
+    if body.is_empty() {
+        return None;
+    }
+    let e = host.ents.get(ent)?;
+    let attachments = e
+        .attachments
+        .iter()
+        .take(ATTACH_SLOTS)
+        .map(|(m, t)| {
+            let tag = cx.resolve(*t).to_string();
+            (model_name(cx.resolve(*m)), (!tag.is_empty()).then_some(tag))
+        })
+        .collect();
+    Some(Assembly {
+        body,
+        attachments,
+        ignore_collision: e.attach_ignore_collision,
+    })
+}
+
 /// `clientState.team`, the roster's 2-bit team field. The four values are
 /// what retail's `sessionteam` setter writes for the four names script may
 /// assign it (`docs/research/clientstate-wire-format.md`).
@@ -2517,6 +2549,21 @@ impl ScriptRuntime {
         std::mem::take(&mut self.host.client_weapon_ops)
     }
 
+    /// What UO's `G_DObjUpdate`s saw `slot` wear since the last call, in
+    /// order (`GameHost::dobj_updates`).
+    pub fn take_dobj_updates_of(&mut self, slot: usize) -> Vec<crate::game::hitrig::Assembly> {
+        let (mine, rest) = std::mem::take(&mut self.host.dobj_updates)
+            .into_iter()
+            .partition(|(s, _)| *s == slot);
+        self.host.dobj_updates = rest;
+        mine.into_iter().map(|(_, a)| a).collect::<Vec<_>>()
+    }
+
+    /// Drops the queue's entries for clients without a sim.
+    pub fn clear_dobj_updates(&mut self) {
+        self.host.dobj_updates.clear();
+    }
+
     /// Whether [`Self::take_ops_of`] would hand anything back for `slot`.
     pub fn has_ops_of(&self, slot: usize) -> bool {
         self.host.client_weapon_ops.iter().any(|(s, _)| *s == slot)
@@ -2918,28 +2965,9 @@ impl ScriptRuntime {
     /// helmet are attachments, the same pair `client_model_index` and
     /// `client_attachments` put on the roster.
     pub fn client_assembly(&mut self, slot: usize) -> Option<crate::game::hitrig::Assembly> {
-        use crate::game::hitrig::{Assembly, model_name};
-        let body = model_name(&self.client_field(slot, "model")?);
-        if body.is_empty() {
-            return None;
-        }
         let ent = self.client_entity(slot)?;
-        let e = self.host.ents.get(ent)?;
-        let attachments = self.vm.with_cx(|cx| {
-            e.attachments
-                .iter()
-                .take(ATTACH_SLOTS)
-                .map(|(m, t)| {
-                    let tag = cx.resolve(*t).to_string();
-                    (model_name(cx.resolve(*m)), (!tag.is_empty()).then_some(tag))
-                })
-                .collect()
-        });
-        Some(Assembly {
-            body,
-            attachments,
-            ignore_collision: e.attach_ignore_collision,
-        })
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| wear(host, cx, ent))
     }
 
     /// A client entity's `.origin` as the scripts read it.

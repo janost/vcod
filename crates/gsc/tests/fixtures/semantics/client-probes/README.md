@@ -796,7 +796,10 @@ cargo run -p vcod -- --game-dir <install> --net-probe 127.0.0.1:<p> \
 
 (`--mod-dir uo` on both clients for UO.) The server's `PROBE` lines are
 `crates/server/tests/fixtures/playerstate/mp_carentan-dm-spawnbody-<1.1|1.5|uo>.txt`,
-which `spawnbody_ab.rs` replays.
+which `spawnbody_ab.rs` replays. With `+set probe_moved 1` (and
+`PROBE_SECS=105`, the clients' `--probe-secs` 94 and 90) four more
+`outside_in` spawns follow, the host moved by `setOrigin` in the spawn's
+frame: `-spawnbody-moved-<1.5|uo>.txt`.
 
 The 1.5b overlap capture `-bump-overlap-spectator-15-walker.txt` and
 `-script.txt` is probe_bump's spectator-slot recipe on `COD_VERSION=1.5`,
@@ -1384,9 +1387,10 @@ cargo run -p vcod -- --net-probe 127.0.0.1:<p> --probe-secs 16
 UO: `COD_VERSION=uo`, map `mp_uo_carentan`, the client with `--mod-dir uo`.
 Ours: `vcod-server <map> --gametype-script
 crates/gsc/tests/fixtures/semantics/client-probes/probe_ignorecoll.gsc --set
-sv_pure=0`. Retail and ours, 2026-11-16, print the same lines but in
-`unflagged`, which repeats `both`'s models with the bits cleared
-(cod15-protocol-diff.md, the open item there).
+sv_pure=0`. Retail and ours, 2026-11-16, print the same lines on both
+servers; `unflagged`, which repeats `both`'s models with the bits cleared,
+keeps the bits on 1.5b and takes the cleared ones on UO
+(cod15-protocol-diff.md, `getAttachIgnoreCollision`).
 
 ## probe_uostates
 

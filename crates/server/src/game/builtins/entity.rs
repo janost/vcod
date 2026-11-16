@@ -397,6 +397,7 @@ fn client_spawn(
     // copies pmove's box over it (gsc object model doc 22.3).
     host.client_height[slot] = height;
     host.link_client(slot, moved, host.client_box(slot), contents, playing);
+    host.move_client_body(slot, playing.then_some(moved));
     host.client_spawns.push(SpawnRequest {
         slot,
         origin,

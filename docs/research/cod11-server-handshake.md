@@ -991,9 +991,32 @@ Map commands:
   string is chained behind it (`teamchain` `+0x260`, `teammaster` `+0x264`),
   marked a slave, and unlinked when its classname is that same constant
   (0x4facd). The line counts the masters and the masters plus slaves.
-  Open: which classname the constant names (the `scr_const` table's order),
-  and what reads the chain in MP. vcod keeps no chains and prints 0, right
-  for every stock map; a mod map with `team` keys would read other counts.
+- The constant at `scr_const+0x3a` is `func_tramcar`: `GScr_LoadConsts`
+  (1.1d 0x58550) stores `Scr_AllocString`'s result for each string it
+  pushes in turn, and the store to `+0x3a` (0x58718) follows the push of
+  `func_tramcar` (VERIFIED, the disassembly with its relocations; `+0x38`
+  is `func_rotating`, `+0x3c` `goal`). `func_tramcar` is in neither the
+  `spawns` table nor `bg_itemlist` (cod11-gsc-object-model.md 8)
+  (VERIFIED). INFERRED: only a map entity of that classname, spawned with
+  no `SP_` function, takes the leader rule, so stock MP chains are plain
+  Q3 ones.
+- The readers of `teamchain` (`+0x260`) and `teammaster` (`+0x264`) in 1.1d
+  `game.mp.i386.so`, every instruction with either displacement outside
+  `PM_AdjustAimSpreadScale`'s playerstate (VERIFIED, `objdump -d`):
+  `RespawnItem` (0x4ec7c) and `Use_Item` (0x4efc8); the mover family
+  `G_MoverTeam` (0x55684), `Reached_BinaryMover`, `Use_BinaryMover`,
+  `Blocked_Door`, `Blocked_DoorRotate`, `MatchTeam`,
+  `MatchTeamReverseAngleOnSlaves`, `Think_MatchTeam`, `ReturnToPos1`,
+  `ReturnToPos2`, `GotoPos3`, `ReturnToPos1Rotate`,
+  `Think_SpawnNewAutoDoorTrigger`, `finishSpawningKeyedMover`, `G_TryDoor`;
+  and `G_Activate` (0x57690). INFERRED, off the Q3 shape those names carry:
+  a `team` key ties `func_door`s and `func_door_rotating`s (both in the MP
+  `spawns` table) into one mover and items into one respawn pick. No stock
+  MP lump has a `team` key or a `func_door` (object-model doc 8), so none
+  of it runs on a stock map.
+- vcod keeps no chains and prints 0, right for every stock map; a mod map
+  with `team` keys would read other counts, and its team doors would move
+  apart.
 - `map mp_harbor` over rcon from mp_carentan, 2026-11-16 on 1.1d: one
   2248-byte packet, `print\n` then `==== ShutdownGame ====`, `------ Server
   Initialization ------`, `Server: mp_harbor`, `Hunk_Clear: reset the hunk

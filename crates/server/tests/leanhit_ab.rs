@@ -62,6 +62,11 @@ struct Case {
 /// Draws variant 0 (`load1`) and head `a_01`, the set a `probe_pin`
 /// capture puts on the target anyway.
 const SEED_LOAD1_A01: u32 = 1;
+/// Draws a set other than the pin's (`load3`, head `a_01`), as retail's
+/// clock seed all but surely did: the pin's changed gear slot rebuilds
+/// 1.5b's DObj, which takes the pin's cleared ignoreCollision bits
+/// (cod15-protocol-diff.md, `getAttachIgnoreCollision`).
+const SEED_NOT_PINNED: u32 = 12;
 
 /// The join times of the `probe_bones` captures.
 const JOIN_11: i64 = 8550;
@@ -625,7 +630,7 @@ fn cmds_case(fixture: &'static str, join_ms: i64, late_ms: i64) -> Case {
         fixture,
         join_ms,
         late_ms,
-        script_seed: SEED_LOAD1_A01,
+        script_seed: SEED_NOT_PINNED,
     }
 }
 

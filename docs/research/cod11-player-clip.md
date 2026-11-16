@@ -1832,5 +1832,25 @@ read: `Touch_Item_Auto` (`LaunchItem` 0x4dcca, `G_SpawnItem` 0x4e782),
 thinks store null. INFERRED: all four sit on items and triggers, whose
 contents the player clip mask does not take, so no stock entity reaches
 `pm->touchents` with a touch function and the call never runs; a body `StuckInClient` marked CORPSE still reads as a body to the
-spawn's think (`move_bodies`), and that think sees the other players where
-the tick's moves left them, not where a script moved them since.
+spawn's think (`move_bodies`).
+
+A script's move ahead of a spawn. VERIFIED, retail 1.5b and UO,
+`client-probes/probe_spawnbody` with `probe_moved 1` (2026-11-16, fixtures
+`mp_carentan-dm-spawnbody-moved-1.5.txt` and `-uo.txt`): `outside_in`'s
+spawn 31 off the spot, with the host parked 200 ahead and `setOrigin`ed
+onto the spot in the spawn's frame ahead of the `spawn`, stops at x
+1101.873047 with a `"touch"` each way (`moved_in`); with the host
+`setOrigin`ed off the spot to 200 ahead it walks on to 1113.549072 and
+touches nothing (`moved_out`), twice each. INFERRED: `SetClientOrigin`
+relinks the player at once, so the think meets him where the script just
+put him. vcod: `setOrigin` and `spawn` move the body copy `move_bodies`
+reads (`GameHost::move_client_body`); `spawnbody_ab` holds both captures.
+vcod measurement: without the move both read the other way. A client
+spawned earlier in the same frame out of a dead or spectating state has no
+body copy until the end frame, so a later spawn's think does not meet him
+on vcod; unmeasured on retail.
+
+Open: a cmd that starts in a body after a damage callback moved a player.
+vcod's cmd loop builds its bodies off the sims (`cod1_think.rs`), and a
+callback's `setOrigin` reaches the moved player's sim as a queued op.
+Unmeasured on retail.

@@ -29,6 +29,11 @@
 //
 //	`touch` logs every `"touch"` notify a player gets from another player
 //	(`ClientImpacts`).
+//
+//	`probe_moved 1` then runs `outside_in` twice more each way with the
+//	host moved by `setOrigin` in the spawn's frame, ahead of the `spawn`:
+//	`moved_in` from 200 ahead onto the spot, `moved_out` off it to 200
+//	ahead.
 
 main()
 {
@@ -82,7 +87,38 @@ watch()
 	trial(host, spawner, "outside_in", -31, 0, 127);
 	walk(host, spawner);
 	walk(host, spawner);
+	if (getcvarint("probe_moved"))
+	{
+		s = spot();
+		moved(host, spawner, "moved_in", s + (200, 0, 0), s);
+		moved(host, spawner, "moved_out", s, s + (200, 0, 0));
+		moved(host, spawner, "moved_in", s + (200, 0, 0), s);
+		moved(host, spawner, "moved_out", s, s + (200, 0, 0));
+	}
 	logPrint("PROBE done " + getTime() + "\n");
+}
+
+//	`probe_moved 1`: `outside_in`'s spawn with the host waiting at `park`
+//	and set to `at` in the spawn's own frame, ahead of the `spawn`, so the
+//	think meets him where the script just put him or not at all.
+moved(host, spawner, name, park, at)
+{
+	s = spot();
+	spawner iprintln("PROBE_IN 0 0 0 0 0");
+	host setorigin(park);
+	host setplayerangles((0, 0, 0));
+	spawner setorigin(s + (-120, 0, 0));
+	spawner setplayerangles((0, 180, 0));
+	wait 1;
+	spawner setorigin(s + (-120, 0, 0));
+	spawner iprintln("PROBE_IN 0 0 0 127 0");
+	wait 0.4;
+	host setorigin(at);
+	logPrint("PROBE host " + getTime() + " " + host getEntityNumber() + " " + exact3(host.origin) + "\n");
+	spawner spawn(s + (-31, 0, 0), (0, 0, 0));
+	logPrint("PROBE spawned " + getTime() + " " + spawner getEntityNumber() + " " + name + " -31 0 127 " + exact3(spawner.origin) + "\n");
+	spawner iprintln("PROBE_IN 0 0 0 0 0");
+	wait 2;
 }
 
 trial(host, spawner, name, dx, yaw, forward)
