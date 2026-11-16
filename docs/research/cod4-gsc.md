@@ -1243,10 +1243,20 @@ VERIFIED (the registrations). Then:
 - `Phys_RunFrame`'s clock (0x5a6e02..0x5a6e87): at most two steps a frame,
   each the larger of `msecStep` and half what is left, so the world runs
   up to a step ahead; the drawn state lerps from the frame's start to the
-  last step. World 1's `msecStep` lies between 17 and 67 ms (the tables
-  at 0x71e7a4 and 0x71e7b0), set each step off how many of its bodies are
-  awake (0x5a6738..0x5a67bb). VERIFIED (disassembly). Its curve, the
-  count less 32 over 18, is INFERRED: a handful of parts steps at 17.
+  last step (the fraction at the world block's +8, 0x5a6ea4). VERIFIED
+  (disassembly).
+- `msecStep` per world (0x71e798, 17 for each at start) is picked after
+  each step: 0x5a6640, which 0x5a6d50 calls after each step's 0x5a6440
+  (0x5a6e4e, 0x5a6e5e), counts the world's bodies 0x5a62f0 passes, those
+  whose `+0x18 & 4` is clear, ODE's disabled flag (0x5a62f0..0x5a62fd;
+  it applies the drag to them), and sets `msecStep = min + ftol(clamp((count - 32) /
+  18, 0, 1) * (max - min))` (0x5a6738..0x5a67bb: the double 18 at
+  0x70b330, the clamp against 1.0 at 0x70ad08 and 0, `_ftol2` 0x68b360,
+  which truncates). `min` and `max` are the tables at 0x71e7a4 (17, 17,
+  17) and 0x71e7b0 (67, 67, 34), by world. VERIFIED (disassembly, the
+  tables). So up to 32 bodies awake a world steps at 17 ms, at 41 at 42
+  ms, from 50 at 67 (34 for the ragdolls' world 2). INFERRED (the
+  formula).
 - A contact (0x5a5f20): friction the two bodies' sum (the world adds 0)
   times `phys_frictionScale`, bounce the smaller of 1 and each body's
   (0x409400), `bounce_vel` 0.1 (0x6b72dc), the contact `erp` and `cfm`,
@@ -1316,8 +1326,13 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   blast, and a round's push (`Cod4Physics::shoot`, off the first
   contact's entity, `cod4_fx::BulletHit::entity`) at `dynEnt_bulletForce`
   and the part's `bulletForceScale`, with the impact played again there.
-  VERIFIED (the code against the above). Both worlds step at 17 ms here,
-  so the world 0 in the call changes nothing. vcod's.
+  VERIFIED (the code against the above). Each world steps its bodies
+  together on one clock (`WorldClock`: world 1's in
+  `play::cod4_physics::Cod4Physics::advance`, world 0's in
+  `DynEnts::advance_in`) at the `msecStep` the count awake after each step
+  picks (`physics::msec_step`). vcod's impulse is whole, where retail's
+  is a force times `1000 / msecStep` of the world it names over the
+  step's length (0x5a5900), and a round on a part names world 0. vcod's.
 - In place of ODE: one impulse solver per body. Each box's (and an
   axial brush's) 8 corners, 12 edge midpoints and 6 face centres, a
   brush with sides' corners (where three of its planes meet), and 16
@@ -1327,11 +1342,11 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   out at `phys_contact_erp` up to `phys_mcv`; an approach faster than 0.1
   bounces by the preset, from the corner where the step found it; ten
   passes of sequential impulses with Coulomb friction (the preset's times
-  `phys_frictionScale`); after the move the centre takes 1.7's post-step
-  sweep (3.6.1). Each box geom also meets the brushes and triangles round
+  `phys_frictionScale`); after a frame's steps the centre takes 1.7's
+  post-step sweep (3.6.1). Each box geom also meets the brushes and triangles round
   it as a box, by face clipping, and each cylinder geom as a cylinder, by
   1.7's separating axes (3.6.1), so a world edge between its points meets
-  its face. `msecStep` stays 17 ms. vcod's.
+  its face. vcod's.
 - Why the 26 points and the cut speed: with the hood's brush in place
   of its bounds box, the hood in the live gate below came down with its
   low corners on two floors 18 units apart and a 39-degree clip map
@@ -1351,8 +1366,9 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   flat, the clock, a model's geoms and brushes, a box held on its
   centre by a ridge, a box across a kerb's edge on its corners alone, a
   cylinder on a floor on its side and upright and against a kerb's edge,
-  the post-step sweep, a pinched body's facing contacts and its drop of
-  those it leaves),
+  the post-step sweep and its once a frame, a pinched body's facing
+  contacts and its drop of those it leaves, 0x5a2320's cut, the contact
+  pass per geom, `msecStep` and the world clock),
   `cod4::part_edges` (3.6.1) and the live
   `cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest`: vcod-server's
   `war` on mp_backlot, a held bot's frags bursting on the first
@@ -1369,8 +1385,12 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   the left mirror 7.4 units on (one run). With the pinched body's
   contact pass (3.6.1) they flew 17 to 167 units and slept within 85 to
   126 steps, and the round pushed the left mirror 7.4 units on (one
-  run). VERIFIED (the tests, ours). How a part looks in flight and at rest is
-  pending a human's look.
+  run). With the pass per geom, 0x5a2320's cut, the world's `msecStep`
+  and the sweep once a frame they flew 14 to 164 units and slept within
+  84 to 170 steps (the shot left mirror's 173 count those after the
+  round), and the round pushed it 7.4 units on (one run). VERIFIED (the
+  tests, ours). How a part looks in flight and at rest is pending a
+  human's look.
 - The ragdoll (`cod4-player-anims.md` 10) keeps its point solver. This
   body could carry it once the bones are rigid capsules held by joint
   constraints, which it lacks. INFERRED (vcod's design).
@@ -1501,12 +1521,17 @@ What 1.7 collides a part against:
   Every contact carries the best axis and its overlap. VERIFIED (the
   calls); what 0x5989f0 and 0x560050 compute inside is INFERRED (their
   arguments).
-- Before each step `Phys_RunToTime`'s loop (0x5a6d50) copies each
-  body's position (body +0xe0) to its userdata (body +0xc) +0x10 and its
-  rotation to +0x1c (0x5a6da0..0x5a6deb); after it, 0x5a6c10 runs 0x5a6930
-  on each body not disabled (body +0x18 bit 4), then sets that bit on one
-  whose position falls outside a box it reads (0x5a6c43..0x5a6cb9).
-  VERIFIED (disassembly).
+- `Phys_RunToTime` (0x5a6d50) does nothing unless the time is past the
+  world's (block +4, 0x5a6d7d). Then it stores the world's time as the
+  frame's start (block +0, 0x5a6d90), copies each body's position (body
+  +0xe0) to its userdata (body +0xc) +0x10 and its rotation to +0x1c
+  (0x5a6da0..0x5a6deb), once, before the frame's steps; after the last
+  step 0x5a6c10 runs on each body of the world (0x5a6e6d..0x5a6e85), which
+  runs 0x5a6930 on one not disabled (body +0x18 bit 4) and then sets that
+  bit on one whose position falls outside a box it reads
+  (0x5a6c43..0x5a6cb9). VERIFIED (disassembly). So the sweep below runs
+  once a frame, from where the frame began to where its last step ended.
+  INFERRED (the order).
 - 0x5a6930 reads a size `m` off the body's first geom (body +0x1c, the
   last ODE gave the body) through 0x5a9a20: a box (class 1) half its
   least side; a brush (class 12, 0x5a684f) its bounds times the double at
@@ -1551,11 +1576,46 @@ What 1.7 collides a part against:
   VERIFIED (disassembly). That each normal points out of the world into
   the part is INFERRED (ODE's convention for `dCollide(o1, o2)` and the
   joint pushing `b1` along it).
-- The collide gives up to 0x80 contacts. With 5 or more, 0x5a5f20 first
-  hands them to 0x5a2320 (0x5a6078, `cmp ebp,5`), which runs 0x5a18e0,
-  0x5a1aa0, 0x5a1cc0 and 0x5a1e40 on them before the contact pass reads
-  the result. VERIFIED (the branch and the calls). That this cuts the
-  list down is INFERRED (its name not known, its insides not read).
+- The collide gives up to 0x80 contacts into a list whose count follows
+  them (+0x1800). With none 0x5a5f20 stores the state 2 (below); with 1
+  to 4 the contact pass takes them as they are; with 5 or more 0x5a2320
+  (0x5a6078, `cmp ebp,5`, call at 0x5a60da) copies a cut of them into a
+  second list (`esp+0x1854`) that the pass takes instead (0x5a60f3).
+  VERIFIED (the branch and the calls).
+- 0x5a2320 runs four helpers on the contacts and a tag per contact
+  (0x5a2375..0x5a23d0; between them, under the byte 0xcc5ff20, 0x5a1bf0
+  and 0x5a1c40 print, and under the dvar at 0xcc54404 0x5a21d0 draws
+  each contact first). VERIFIED (the calls).
+  - 0x5a18e0 seeds three clusters by normal: every tag -1, then contact
+    `k0 = 104729 mod count` (the immediate 0x19919, `idiv`) tag 0; the
+    first contact whose normal's dot with `k0`'s is least (each taken
+    when the best so far is over it, from FLT_MAX at 0x70af58) tag 1;
+    the first whose larger dot with the two is least tag 2. VERIFIED
+    (disassembly).
+  - 0x5a1aa0 sums the normals of each tag's contacts into three means,
+    normalizes them (0x4076d0, which leaves a zero vector zero), and
+    five times over gives each contact the tag of the mean it dots most
+    with (from -FLT_MAX at 0x70af5c, a later mean only when strictly
+    larger) and takes the means again (the counter against 5 at
+    0x5a1b2f). VERIFIED (disassembly).
+  - 0x5a1cc0: for each pair `i < j` of the three, a mean dot over the
+    double 0.999 (0x70b270) gives every contact tagged `j` the tag `i`,
+    the means as they were. VERIFIED (disassembly).
+  - 0x5a1e40 empties the output, sums each tag's normals again, and per
+    tag 0 to 2: the sum normalized (0x55f6e0) is `N`; two tangents,
+    `T1 = N x u` normalized with `u` (0, 0, 1) when `|N.z|` is under 0.5
+    (0x6be648) and (0, 1, 0) otherwise, and `T2 = N x T1` normalized
+    (0x5a1d80). Walking the tag's contacts in order, each later one of
+    the tag within a squared distance under 0.01 (0x70b87c) of it loses
+    its tag; each one walked counts, and keeps the least and the most
+    of `T1 . x` and `T2 . x` (a later one only when strictly past) and
+    the deepest (`+0x20`, strictly). A tag with any is copied out as its
+    least along `T1`, its least along `T2`, its most along `T1`, its
+    most along `T2` and its deepest, each skipped when it is one already
+    copied for the tag (0x5a206d..0x5a218b). VERIFIED (disassembly).
+  So the pass sees at most 15 contacts, at most five per cluster of
+  normals: the cluster's extremes along two tangents and its deepest.
+  INFERRED (the code above).
 - The contact pass 0x5a2760 (contacts, `b1`, `b2`, the surface, the
   world), each contact ODE's 0x30-byte `dContactGeom` (position +0,
   normal +0x10, depth +0x20): 0x5a2280 first; then for each body a flag,
@@ -1663,28 +1723,39 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`,
   start with their centres on their car clip's floor face, inside the
   clip, and took its edges as contacts that ate their launch. The 16
   points round each cylinder still sweep as the box's do.
-- The sweep after the step is 0x5a6930's (`Body::sweep`), in place of
-  the centre guard vcod had (3.6): its size off the body's last geom
+- The sweep after a frame's steps is 0x5a6930's (`Body::sweep`, from
+  `Body::end_frame`), in place of the centre guard vcod had (3.6): from
+  where the frame began, its size off the body's last geom
   (`Shape::sweep_half`), its gate on a move or the state, its point or
   box, the point's back-off, the stop and the zeroing under 0.001, the
-  state it writes. vcod's.
-- The contact pass (`Body::pinch`, `physics::unwedge`): its 2 and 1, and
-  on a body in state 1 0x5a25d0's pick between facing contacts (its
-  point the body's position), the walk's skip of the moved-in contact,
-  and 0x5a2760's drop of each contact whose point leaves it, the
-  velocity the one before the step's gravity, a still point's taken as
-  (1, 0, 0). vcod's: it runs once a step on the body's first contacts
-  together (the boxes', the cylinders', the points'), not per geom, and
-  reads only those in the 0.125 skin or inside, ODE's overlaps; the
-  contacts met further on within the step's travel stay out of it and
-  are kept. The points found in the solver's second pass take the drop
-  alone. Not ported: 0x5a2320 on five or more contacts.
+  state it writes. vcod's. `the_post_step_sweep_runs_once_a_frame`: a
+  centre at 100 units/s whose first of two 17 ms steps ends where the
+  sweep stops it keeps its speed when swept once over the frame, and
+  loses it all when swept each step, as vcod had it.
+- The contact pass (`Body::contact_pass`, `physics::pinch`,
+  `physics::unwedge`, `physics::reduce`) runs per geom, as the near
+  callback does: a geom with no contact stores 2; five or more go
+  through 0x5a2320's cut as above; then 0x5a2280's 1, and on a body in
+  state 1 0x5a25d0's pick between facing contacts (its point the body's
+  position), the walk's skip of the moved-in contact, and 0x5a2760's
+  drop of each contact whose point leaves it, the velocity the one
+  before the step's gravity, a still point's taken as (1, 0, 0); then
+  the jitter on each contact kept. The geoms go last first, as ODE's
+  space lists a geom it is given at its head. INFERRED (ODE's
+  `dxSpace::add`; 0x5aa100's walk order not read). vcod's: a geom's
+  contacts here are those its box or cylinder collider gives in the
+  0.125 skin or inside, ODE's overlaps, or, for a brush with sides,
+  which has no collider here, its points'. A box's or cylinder's points
+  and the contacts met further on within the step's travel stay out of
+  the pass and are kept: with a box's points in the cut, 78 of the edge
+  drops in `cod4::part_edges` below failed, most with a point left in
+  the world. VERIFIED (the run, ours). The points found in the solver's
+  second pass take the drop alone.
 - The sleep is ODE's rule above on the step's end speeds, `idle` the
   time under both; ten idle steps take 170 ms, under
   `phys_autoDisableTime`. vcod's: idle on a speed strictly under the
   threshold where ODE takes at most it.
-- The contacts go into the impulse solver with the points'; the jitter
-  (cod4-world.md 13.8) takes the points' only. vcod's.
+- The contacts go into the impulse solver with the points'. vcod's.
 - Measured: `cod4::part_edges` drops mp_backlot's sedan hood (its brush
   geom, a box) and left front door (its bounds box) from 24 units over
   six steps' edges (two level floors 8 apart, 6 to 18 high, with room
@@ -1725,10 +1796,40 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`,
   keeps the first wall's contacts and loses the other's, and all 18 slept
   (within 1.2 to 11.3 s) with that end 0.02 to 0.20 units into the far
   wall and none into the near one, the floor at most 0.17 in. Without the
-  filter all 18 slept within 1.3 s with no point in either wall.
+  filter all 18 slept within 1.3 s with no point in either wall. With the
+  pass per geom and 0x5a2320's cut (below) they are pinched on 45 to 51
+  of 71 to 75 steps and slept within 1.2 to 1.3 s, 0.15 to 0.18 into the
+  far wall, none into the near one, the floor at most 0.05 in.
   VERIFIED (the runs, ours). That a wedged body on 1.7 slips into the far
   wall the same way is INFERRED (the rule above; no retail client runs
   here). How it looks is pending a human's look.
+- The contact pass per geom: `two_geom_pictures_wedged_between_two_walls_are_never_pinched`
+  cuts each of those frames across its length into two box geoms, one
+  at each wall, its mass as it was. Neither geom's contacts face each
+  other, so none of the 18 is pinched, and each slept within 1.3 s with
+  no point in either wall and the floor at most 0.07 in. Run as one
+  body's pass, as vcod had it, the frames were pinched on 20 to 51 of
+  their steps and slid 0.15 to 0.18 into the far wall (the first eight
+  runs read). VERIFIED (the runs, ours).
+- The cut and the jitter on its contacts:
+  `a_crate_flat_on_the_floor_takes_a_jitter_at_three_corners` lays
+  mp_crash's `me_plastic_crate1` to rest on that floor and wakes it
+  under one region whose least and most push are equal, so each kept
+  contact with a normal z of 0.7 or more lifts it by the same speed. The
+  box meets the four floor brushes under it in 16 contacts; 0x5a2320's
+  cut keeps three, the face's corners but the one at its most x and
+  least y, and the lift, read against the same step with no region,
+  comes to 3.1 pushes. On the box's points, as vcod had it, it read 8.9;
+  on all 16, uncut, 12.3. VERIFIED (the runs, ours). That retail's
+  colliders give that floor's four brushes the same 16 is INFERRED
+  (0x59a610's clips above).
+- `msecStep`: `parts_dropped_together_step_at_world_ones_msec_step`
+  drops the 36 parts of the first row at once in one world 1 at 16 ms
+  frames: its first step is 17 ms, then 28 (36 awake) until they sleep,
+  and all 36 slept within 2.4 s (115 steps) clear of the steps. With
+  the pass per geom, the cut and the sweep once a frame, the three edge
+  rows still pass: the parts slept within 2.3 s, and all 828 prop drops
+  within the 60 s. VERIFIED (the runs, ours).
 
 ## 4. The load
 
