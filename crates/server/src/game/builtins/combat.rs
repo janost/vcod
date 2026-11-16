@@ -542,7 +542,8 @@ pub fn radius_damage(
         (entity(args.get(4)), entity(args.get(5)))
     };
     let candidates = blast_candidates(host, cx, &blast);
-    host.blast_noises.push(*origin);
+    let by = attacker.filter(|&e| host.ents.get(e).is_some_and(|e| e.client.is_some()));
+    host.blast_noises.push((*origin, by.map(|e| e.0 as usize)));
     host.radius_ignore_active = host.ignore_radius_damage;
     host.blasts.push(ScriptBlast {
         blast,
@@ -1363,9 +1364,34 @@ mod tests {
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
         assert_eq!(
             rt.take_blast_noises(),
-            [[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]]
+            [([10.0, 20.0, 30.0], None), ([40.0, 50.0, 60.0], None)]
         );
         assert!(rt.take_blast_noises().is_empty(), "heard twice");
+    }
+
+    /// A UO `radiusDamage` naming a client its attacker is that client's
+    /// noise, which he does not hear (a tank's death blast is its
+    /// killer's); one naming another entity is nobody's.
+    #[test]
+    fn a_uo_radiusdamage_is_its_attacking_clients_noise() {
+        const SCRIPT: &str = r#"
+            main() {
+                wait 1;
+                players = getentarray("noclass", "classname");
+                radiusDamage((10, 20, 30), 300, 2000, 50, players[0]);
+                radiusDamage((40, 50, 60), 300, 2000, 50, spawn("script_origin", (6000, 0, 0)));
+            }
+            CodeCallback_PlayerConnect() {}
+        "#;
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
+        rt.host.set_profile(&crate::game::profile::COD1_UO);
+        rt.spawn_client_for_test(3, [5000.0, 0.0, 0.0]);
+        rt.run_frame(1100);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(
+            rt.take_blast_noises(),
+            [([10.0, 20.0, 30.0], Some(3)), ([40.0, 50.0, 60.0], None)]
+        );
     }
 
     /// `radiusDamage` runs `CodeCallback_PlayerDamage` on every live client
