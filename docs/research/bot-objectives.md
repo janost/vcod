@@ -1003,13 +1003,36 @@ Out of rounds:
   minute and more.
 - A launcher or gun the body has come no 32 units nearer to in 20 s (a node
   over it, or a tap that takes nothing) is passed over for a minute.
+- mp_rhinevalley's panzerschreck at (1938, -2254, 2054) (`spawnflags 9`,
+  suspended: `FinishSpawningItem` keeps its origin, cod11-items.md 14.9)
+  lies in a corridor running along x, floor 2016 at x 1938 to 2038, 2000
+  at 1874 and stairs down to 1940 by 1700. The 2026-10-20 run below logged
+  three taps at it that took nothing, with the item dropped to (1938,
+  -2254, 2017) as vcod then placed it. Rechecked 2026-11-17 on 415c5f50a
+  with a lone allied `bas` bot holding its rifle and an empty bazooka (the
+  swap case, `Bot::swap_out`), set down at (2002, -2254, 2017), (1874,
+  -2254, 2001) and (1700, -2254, 1940): it had the panzerschreck in hand
+  after 21, 28 and 292 ticks, and with the old drop to 2017 forced back
+  (a throwaway switch) after the same taps. VERIFIED (measured, ours,
+  release, UO; `bots::a_bas_bot_taps_mp_rhinevalleys_corridor_launcher`).
+  INFERRED (not rerun at a5c81855): the refusals were the bot's own read
+  of that day, the first launcher held, which 6df179540 replaced the same
+  morning (the trap under "The breach"): the panzerschreck taken beside
+  its empty bazooka read as no rocket, so the bot came back for the item
+  respawned (`spawnflags & 8`, cod11-items.md 7), which a full
+  panzerschreck cannot take.
 - An LMG bot whose target's pitch lies past 45 degrees does not deploy, or
   breaks the bipod down, as for a target past the yaw cap, and draws the
   pistol when it has a round
   (`bots::tests::an_lmg_target_past_the_pitch_clamp_breaks_the_bipod_down`). A
   deployed LMG's view stops 45 degrees from level (`PM_UpdateViewAngles`,
-  coduo-movement.md 7). A prone deploy measures the clamp from the torso's
-  pitch, which the brain does not read; it uses level. VERIFIED (measured,
+  coduo-movement.md 7). The clamp measures from `proneTorsoPitch`
+  (`cap_prone_pitch`), and so does the brain once the body is deployed or
+  prone (`BotView::lmg_pitch_from`); standing and not deployed it measures
+  from level, the deploy's prone torso not yet laid on the ground (2026-11-17,
+  `bots::tests::an_lmg_pitch_clamp_measures_from_the_prone_torso`: prone with
+  the torso 20 up a target 53 up is fired at, with it 20 down one 35 up
+  breaks the bipod down). VERIFIED (measured,
   ours, master 447d904f, mp_foy seed 21, `BAS_TRACE=1 BAS_TRACE_EVERY=20`):
   before it, a planter in the charge room at (3530, -4832, -169) and a
   defender in the bunker over it (3611 to 3642, -4705, 14), 170 to 260 apart
