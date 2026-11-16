@@ -2253,6 +2253,9 @@ nothing. VERIFIED (13.1's census).
   contents but solid its def's centre of mass lies in: 9 of mp_crash's
   516 pass some, and no centre lies in solid. vcod's. VERIFIED
   (`dynent_census`, ours).
+- A body's boxes meet the world's brushes and triangles as a launched
+  part's do (cod4-gsc.md 3.6.1), under the same mask as its points
+  (`DynEnts::advance_in`). vcod's.
 - Ported since: the walk's legs as 13.4 gives them (the first only on a
   contact, then each entry the walk plays, `cod4_fx::BulletHit::dyn_legs`),
   the swing (13.9, `DynEnts::melee`) and `physicsJitter` (13.8,

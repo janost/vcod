@@ -1441,17 +1441,45 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`):
   reach touches (`box_leafs`), their brushes and AABB tree triangles
   under the mask, each once. vcod's reach: the most any of the box's
   corners travels in the step, plus the 0.125 skin.
-- Each box geom of a part (`Shape::boxes`: the bounds box, a `physGeoms`
-  box, a brush no side cuts) meets each brush as 0x59a610 does: the
-  least deep of the brush's faces and the box's three axes is the
-  reference, and the other's face most against it is clipped to it; each
-  clipped point within the reach is a contact. A triangle is always the
-  reference and met only from its front, skipped once the box's centre is
-  behind it: a box face as reference would catch the seams between a
-  mesh's triangles. Not ported: the narrow pass, 0x5b1620's own tests,
-  the sweep after the step (the centre guard of 3.6 stands in). vcod's.
+- Each box geom of a part or a dynamic entity (`Shape::boxes`: the
+  bounds box, a `physGeoms` box, a brush no side cuts) meets each brush
+  as 0x59a610 does: the least deep of the brush's faces and the box's
+  three axes is the reference, and the other's face most against it is
+  clipped to it; each clipped point within the reach is a contact. The
+  box's face clipped to a brush face is the one whose normal is most
+  against it. vcod's.
+- The narrow pass: a box with a side under `phys_narrowObjMaxLength`
+  (`Dvars::narrow_max_length`, 4) also takes as references the brush's
+  other faces its centre lies in front of whose windings its six faces
+  leave something of, as 0x59aabe..0x59ac8a's loop picks them (the
+  axial sides by the centre against the brush's bounds, the others by
+  the plane). VERIFIED (the compares); the reference's clip is vcod's
+  (above). `a_narrow_box_over_a_brushs_edge_takes_its_other_faces`.
+- Past 1.7's colliders: each brush edge that runs more than the skin
+  into the box pushes it out along the box face nearest the point, at
+  the clipped edge's ends and middle. Neither face reference holds a
+  ledge's edge across a box's face: mp_crash's red toolbox slept on a
+  ledge's edge half a unit into it without this. vcod's.
+- A triangle is always the reference and is met from its front. It is
+  skipped once the box's centre is behind it, unless it is a floor's
+  (normal z at least 0.7) and the centre lies off its edges, as over a
+  step's corner: a picture frame tipped across a mesh stair's tread
+  slept 4 units into the step without it. A box face as reference would
+  catch the seams between a mesh's triangles, and a back triangle that
+  is not a floor's would push a box onto a handrail's tube (a sedan door
+  on mp_backlot did). vcod's. Not ported: 0x5b1620's own tests.
+- The sweep after the step (0x5a6930) is not ported; the centre guard of
+  3.6 stands in. It runs only while the body's state (body +0x4c) is 0
+  or 1: the sweep writes 1 when it starts solid and 2 when not
+  (0x5a6af1..0x5a6b02), 0x5a5f20 writes 2 when the world collide finds
+  no contact (0x5a612d) and the contact pass at 0x5a22f6, 0x5a2308
+  writes 1. VERIFIED (the stores). What sets 1 in that pass, and so
+  when 1.7 sweeps, is not read, and the retail sweep cuts no speed: the
+  guard's cut is what lets a box held on its centre sleep (3.6). INFERRED
+  (the stores' readers not all found).
 - The contacts go into the impulse solver with the points'; the jitter
-  (cod4-world.md 13.8) takes the points' only. vcod's.
+  (cod4-world.md 13.8) takes the points' only. A cylinder still meets the
+  world on its 16 points. vcod's.
 - Measured: `cod4::part_edges` drops mp_backlot's sedan hood (its brush
   geom, a box) and left front door (its bounds box) from 24 units over
   six steps' edges (two level floors 8 apart, 6 to 18 high, with room
@@ -1459,8 +1487,11 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`):
   tipped 30 degrees: on the points alone 30 of the 36 drops slept with
   world solid at least a quarter unit inside the box (most of them 4
   units, through the hood's middle); with the boxes none, each asleep
-  within 3.5 s. VERIFIED (the runs, ours). The dynamic entities (world
-  0, cod4-world.md 13) still meet the world on their points.
+  within 3.5 s. Its second row drops one def of each of mp_crash's 16
+  dynamic entity models with a box on six of mp_crash's steps the same
+  way: on the points alone 167 of the 288 drops slept with world solid
+  inside the box, the picture frames and crates mostly 4 units; with the
+  boxes none. VERIFIED (the runs, ours).
 
 ## 4. The load
 

@@ -90,6 +90,9 @@ pub struct Dvars {
     pub max_correcting: f32,
     /// `msecStep`'s floor for the fx world (17 ms).
     pub step_ms: i32,
+    /// `phys_narrowObjMaxLength` (4): a box with a side shorter takes
+    /// the narrow pass ([`box_contacts`]).
+    pub narrow_max_length: f32,
 }
 
 impl Default for Dvars {
@@ -107,6 +110,7 @@ impl Default for Dvars {
             erp: 0.8,
             max_correcting: 20.0,
             step_ms: 17,
+            narrow_max_length: 4.0,
         }
     }
 }
@@ -425,15 +429,18 @@ fn clip_polygon(mut poly: Vec<Vec3>, planes: impl IntoIterator<Item = (Vec3, f32
 /// (iw3mp.exe 0x59a610, cod4-gsc.md 3.6.1): the least deep of the box's
 /// faces and the solid's is the reference, the face of the other most
 /// against it is clipped to it, and each clipped point under `margin`
-/// off it is a contact. Pushes `(point on the box, normal out of the
-/// solid, separation)`, the separation below 0 inside. A triangle is
-/// only ever the reference, and is met from its front.
+/// off it is a contact. A `narrow` box then also takes each other face of
+/// a brush its centre lies in front of and its box meets as a reference
+/// (0x59aabe). Pushes `(point on the box, normal out of the solid,
+/// separation)`, the separation below 0 inside. A triangle is only ever
+/// the reference, and is met from its front.
 fn box_contacts(
     c: Vec3,
     a: Mat3,
     h: Vec3,
     s: &Solid,
     margin: f32,
+    narrow: bool,
     out: &mut Vec<(Vec3, Vec3, f32)>,
 ) {
     let axes = [a.x_axis, a.y_axis, a.z_axis];
@@ -445,9 +452,12 @@ fn box_contacts(
         .collect();
     // The solid's faces: how far the box's deepest corner lies off each.
     let mut face = (f32::NEG_INFINITY, 0);
-    for (i, (n, d, _)) in s.faces.iter().enumerate() {
-        if s.open && n.dot(c) < *d {
-            // Past the triangle's face by more than half: its back.
+    for (i, (n, d, poly)) in s.faces.iter().enumerate() {
+        // The centre behind the triangle: its back, but for a floor's
+        // triangle off whose edge the centre lies, as over a step's
+        // corner.
+        let floor_edge = n.z >= FLOOR_NORMAL_Z && !inside_edges(c, *n, poly);
+        if s.open && n.dot(c) < *d && !floor_edge {
             return;
         }
         let sep = box_verts
@@ -486,38 +496,9 @@ fn box_contacts(
             side = (sep, k, sign);
         }
     }
-    if s.open || face.0 >= side.0 {
-        // The solid's face is the reference: the box's face most against
-        // it, clipped to the inside of the face's edges.
-        let (n, d, poly) = &s.faces[face.1];
-        let (k, sign) = (0..3)
-            .flat_map(|k| [(k, 1.0f32), (k, -1.0)])
-            .min_by(|x, y| {
-                (axes[x.0] * x.1)
-                    .dot(*n)
-                    .total_cmp(&(axes[y.0] * y.1).dot(*n))
-            })
-            .unwrap();
-        let (u, v) = (axes[(k + 1) % 3], axes[(k + 2) % 3]);
-        let (hu, hv) = (h[(k + 1) % 3], h[(k + 2) % 3]);
-        let fc = c + axes[k] * (h[k] * sign);
-        let quad = vec![
-            fc + u * hu + v * hv,
-            fc - u * hu + v * hv,
-            fc - u * hu - v * hv,
-            fc + u * hu - v * hv,
-        ];
-        let edges = (0..poly.len()).map(|i| {
-            let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
-            let inward = n.cross(q - p);
-            (inward, inward.dot(p))
-        });
-        for p in clip_polygon(quad, edges) {
-            let sep = n.dot(p) - d;
-            if sep <= margin {
-                out.push((p, *n, sep));
-            }
-        }
+    let on_face = s.open || face.0 >= side.0;
+    if on_face {
+        face_reference(c, &axes, h, &s.faces[face.1], margin, out);
     } else {
         // The box's face is the reference: the solid's face most against
         // it, clipped to the face's rectangle.
@@ -540,6 +521,125 @@ fn box_contacts(
             if sep <= margin {
                 out.push((p - nb * sep, -nb, sep));
             }
+        }
+    }
+    if !s.open {
+        edge_contacts(c, &axes, h, s, out);
+    }
+    if !narrow || s.open {
+        return;
+    }
+    // The narrow pass: every other face the centre is in front of whose
+    // winding the box's six faces leave something of.
+    let slabs: Vec<(Vec3, f32)> = (0..3)
+        .flat_map(|k| {
+            let m = axes[k].dot(c);
+            [(axes[k], m - h[k]), (-axes[k], -m - h[k])]
+        })
+        .collect();
+    for (i, f) in s.faces.iter().enumerate() {
+        if on_face && i == face.1 || f.0.dot(c) <= f.1 {
+            continue;
+        }
+        if !clip_polygon(f.2.clone(), slabs.iter().copied()).is_empty() {
+            face_reference(c, &axes, h, f, margin, out);
+        }
+    }
+}
+
+/// The solid's edges where they run inside the box: each clipped edge's
+/// ends and middle deeper than the skin in it push the box out along its
+/// face nearest the point. Neither face is then the right reference: a
+/// kerb's or a ledge's edge across a box's face. vcod's.
+fn edge_contacts(c: Vec3, axes: &[Vec3; 3], h: Vec3, s: &Solid, out: &mut Vec<(Vec3, Vec3, f32)>) {
+    let local = |p: Vec3| Vec3::new(axes[0].dot(p - c), axes[1].dot(p - c), axes[2].dot(p - c));
+    for (_, _, poly) in &s.faces {
+        for i in 0..poly.len() {
+            let (a, b) = (local(poly[i]), local(poly[(i + 1) % poly.len()]));
+            // The segment clipped to the box, as fractions along it.
+            let (mut t0, mut t1) = (0.0f32, 1.0f32);
+            let d = b - a;
+            for k in 0..3 {
+                if d[k].abs() < 1e-6 {
+                    if a[k].abs() > h[k] {
+                        t1 = -1.0;
+                    }
+                    continue;
+                }
+                let (u, v) = ((-h[k] - a[k]) / d[k], (h[k] - a[k]) / d[k]);
+                t0 = t0.max(u.min(v));
+                t1 = t1.min(u.max(v));
+            }
+            if t0 >= t1 {
+                continue;
+            }
+            for t in [t0, (t0 + t1) * 0.5, t1] {
+                let q = a + d * t;
+                let (k, depth) = (0..3)
+                    .map(|k| (k, h[k] - q[k].abs()))
+                    .min_by(|x, y| x.1.total_cmp(&y.1))
+                    .unwrap();
+                if depth <= SKIN {
+                    continue;
+                }
+                let n_box = axes[k] * q[k].signum();
+                let p = c + axes[0] * q.x + axes[1] * q.y + axes[2] * q.z;
+                out.push((p + n_box * depth, -n_box, -depth));
+            }
+        }
+    }
+}
+
+/// The least normal z of a triangle [`box_contacts`] meets from behind
+/// when the box's centre lies off its edges (vcod's).
+const FLOOR_NORMAL_Z: f32 = 0.7;
+
+/// Whether `p` lies within the edges of `poly` (in order round `n`),
+/// seen along `n`.
+fn inside_edges(p: Vec3, n: Vec3, poly: &[Vec3]) -> bool {
+    (0..poly.len()).all(|i| {
+        let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+        n.cross(b - a).dot(p - a) >= 0.0
+    })
+}
+
+/// A solid's face `(n, d, poly)` as the reference (0x59a2b0): the box's
+/// face most against it, clipped to the inside of the face's edges, each
+/// point within `margin` of the face a contact.
+fn face_reference(
+    c: Vec3,
+    axes: &[Vec3; 3],
+    h: Vec3,
+    (n, d, poly): &(Vec3, f32, Vec<Vec3>),
+    margin: f32,
+    out: &mut Vec<(Vec3, Vec3, f32)>,
+) {
+    let (k, sign) = (0..3)
+        .flat_map(|k| [(k, 1.0f32), (k, -1.0)])
+        .min_by(|x, y| {
+            (axes[x.0] * x.1)
+                .dot(*n)
+                .total_cmp(&(axes[y.0] * y.1).dot(*n))
+        })
+        .unwrap();
+    let (u, v) = (axes[(k + 1) % 3], axes[(k + 2) % 3]);
+    let (hu, hv) = (h[(k + 1) % 3], h[(k + 2) % 3]);
+    let fc = c + axes[k] * (h[k] * sign);
+    let quad = vec![
+        fc + u * hu + v * hv,
+        fc - u * hu + v * hv,
+        fc - u * hu - v * hv,
+        fc + u * hu - v * hv,
+    ];
+    let edges = (0..poly.len()).map(|i| {
+        let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
+        let inward = n.cross(q - p);
+        (inward, inward.dot(p))
+    });
+    for p in clip_polygon(quad, edges) {
+        let sep = n.dot(p) - d;
+        if sep <= margin {
+            out.push((p, *n, sep));
         }
     }
 }
@@ -922,7 +1022,8 @@ impl Body {
                 (v0.length() + w0.length() * (b.centre.length() + b.half.length())) * dt + SKIN;
             found.clear();
             for s in solids(c - ext - Vec3::splat(reach), c + ext + Vec3::splat(reach)) {
-                box_contacts(c, axes, b.half, &s, reach, &mut found);
+                let narrow = b.half.min_element() * 2.0 < d.narrow_max_length;
+                box_contacts(c, axes, b.half, &s, reach, narrow, &mut found);
             }
             for &(p, n, sep) in &found {
                 out.push(self.contact(p - self.pos, n, sep, dt, d, v0, w0, &inv_iw));
@@ -1007,8 +1108,16 @@ const SKIN: f32 = 0.125;
 /// The solids of `clip` round a box under the fx world's mask
 /// (`0x2806c91`), as its world collider (0x5a8110) gathers them.
 pub fn clip_solids(clip: &crate::collision::ClipMap) -> impl FnMut(Vec3, Vec3) -> Vec<Solid> + '_ {
-    move |lo: Vec3, hi: Vec3| {
-        let w = clip.world_solids(lo, hi, crate::ragdoll::CLIP_MASK);
+    let mut t = clip_solids_masked(clip);
+    move |lo: Vec3, hi: Vec3| t(lo, hi, crate::ragdoll::CLIP_MASK)
+}
+
+/// [`clip_solids`] under a given mask.
+pub fn clip_solids_masked(
+    clip: &crate::collision::ClipMap,
+) -> impl FnMut(Vec3, Vec3, u32) -> Vec<Solid> + '_ {
+    move |lo: Vec3, hi: Vec3, mask: u32| {
+        let w = clip.world_solids(lo, hi, mask);
         w.brushes
             .iter()
             .filter_map(|p| Solid::brush(p))
@@ -1478,5 +1587,30 @@ mod tests {
             assert!(inside < 0.01, "{} inside at y {i}: {inside}", local);
         }
         assert!(tipped, "{:?}", w.axes);
+    }
+
+    #[test]
+    fn a_narrow_box_over_a_brushs_edge_takes_its_other_faces() {
+        // A cube, and a plate 1 thick across its top +x edge, tipped 30
+        // degrees about y, the edge a quarter unit into it. The box's
+        // underside is the reference; only the narrow pass adds the cube's
+        // top, which the plate's centre lies over.
+        let cube: Vec<(Vec3, f32)> = (0..3)
+            .flat_map(|k| [(Vec3::AXES[k], 10.0), (-Vec3::AXES[k], 0.0)])
+            .collect();
+        let s = Solid::brush(&cube).unwrap();
+        let a = Mat3::from_rotation_y(30f32.to_radians());
+        let (c, h) = (Vec3::new(10.2, 5.0, 10.2), Vec3::new(6.0, 4.0, 0.5));
+        let tops = |narrow: bool| {
+            let mut out = Vec::new();
+            box_contacts(c, a, h, &s, 1.0, narrow, &mut out);
+            out.iter()
+                .filter(|&&(_, n, _)| n.distance(Vec3::Z) < 1e-4)
+                .count()
+        };
+        assert_eq!(tops(false), 0);
+        assert!(tops(true) > 0);
+        // The plate is narrow under `phys_narrowObjMaxLength`.
+        assert!(h.min_element() * 2.0 < Dvars::default().narrow_max_length);
     }
 }
