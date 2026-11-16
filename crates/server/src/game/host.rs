@@ -1105,9 +1105,10 @@ pub struct GameHost {
     /// The `radiusDamage` walks under way, innermost last: a damage callback
     /// can call the builtin again before its first `wait`.
     pub blasts: Vec<crate::game::builtins::combat::ScriptBlast>,
-    /// Where each `radiusDamage` since the server last asked went off, for
-    /// the bots' hearing.
-    pub blast_noises: Vec<[f32; 3]>,
+    /// Where each `radiusDamage` since the server last asked went off, and
+    /// the client its attacker argument named (UO, CoD4), for the bots'
+    /// hearing.
+    pub blast_noises: Vec<([f32; 3], Option<usize>)>,
     /// The value retail's `vmMain` case 16 returns
     /// (docs/research/cod11-map-cycle.md section 1): whether the outgoing
     /// level asked to keep its script `pers` and `game` variable across the
@@ -1171,8 +1172,12 @@ pub struct GameHost {
     /// capture's, taken in place of the drawn ones (`Server::pin_tracer_rolls`).
     pub tracer_pins: std::collections::VecDeque<bool>,
     /// Test-facing: the next `rand()` values the item draws (launch climb,
-    /// spin, respawn, lift) take, a retail capture's (`Server::pin_item_draws`).
+    /// spin, respawn, team pick, lift) take, a retail capture's
+    /// (`Server::pin_item_draws`).
     pub item_draw_pins: std::collections::VecDeque<i32>,
+    /// `G_FindTeams`' line at the load: the teams and their entities
+    /// (`crate::game::teams::find_teams`).
+    pub team_counts: (u32, u32),
     /// Test-facing: the points the next barrage incomings land on in turn
     /// over the drawn ones, the draws still made. A gate replays a retail
     /// capture's strike with them: its yaw and spread draw off clock-seeded
@@ -2359,6 +2364,7 @@ impl GameHost {
             test_item_lift: None,
             tracer_pins: Default::default(),
             item_draw_pins: Default::default(),
+            team_counts: (0, 0),
             barrage_pins: Default::default(),
         }
     }

@@ -1,0 +1,170 @@
+# Retail 1.5b Linux dedicated server, 2026-11-16, no client, under gdb:
+#   tools/bsp_append_entities.py mp_carentan.bsp out.bsp \
+#       crates/server/tests/fixtures/teams/mp_carentan-teams.ent
+#   (out.bsp as maps/mp/mp_carentan.bsp in a zzz_teams.pk3 in the
+#   homepath's main/), then with COD_LNXDED a wrapper that execs
+#   GDB_GAME=15 GDB_OUT=<file> gdb -q -batch -ex 'source tools/re/gdb_teams.py' \
+#       -ex run --args <server> "$@"
+#   COD_DIR=<stock 1.5 main/ + uo/> COD_VERSION=1.5 PORT=28974 SECS=25 unshare -rn \
+#       tools/run_probe.sh client-probes/probe_teams mp_carentan
+# probe: crates/gsc/tests/fixtures/semantics/client-probes/probe_teams.gsc
+# PROBE lines: games_mp.log; PROBE_ERROR: the console's ERROR line; GDB
+# lines: gdb_teams.py's; CONSOLE: G_FindTeams' line off the console.
+# crates/server/src/game/teams_ab.rs replays it; cod11-items.md 14.8 and
+# cod11-movers.md 25 read it.
+PROBE mover 1050 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1100 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1150 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1200 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1250 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1300 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1350 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1400 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1450 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1500 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1550 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1600 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1650 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1700 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1750 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1800 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1850 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1900 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 1950 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 2000 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 2050 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 2100 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
+PROBE mover 2150 (0.00, 0.00, 5.00) (0.00, 0.00, 100.00)
+PROBE mover 2200 (0.00, 0.00, 10.00) (0.00, 0.00, 100.00)
+PROBE mover 2250 (0.00, 0.00, 15.00) (0.00, 0.00, 100.00)
+PROBE mover 2300 (0.00, 0.00, 20.00) (0.00, 0.00, 100.00)
+PROBE mover 2350 (0.00, 0.00, 25.00) (0.00, 0.00, 100.00)
+PROBE mover 2400 (0.00, 0.00, 30.00) (0.00, 0.00, 100.00)
+PROBE mover 2450 (0.00, 0.00, 35.00) (0.00, 0.00, 100.00)
+PROBE mover 2500 (0.00, 0.00, 40.00) (0.00, 0.00, 100.00)
+PROBE mover 2550 (0.00, 0.00, 45.00) (0.00, 0.00, 100.00)
+PROBE movedone m1a 2600
+PROBE mover 2600 (0.00, 0.00, 50.00) (0.00, 0.00, 100.00)
+PROBE mover 2650 (0.00, 0.00, 50.00) (0.00, 0.00, 100.00)
+PROBE mover 2700 (0.00, 0.00, 50.00) (0.00, 0.00, 100.00)
+PROBE mover 2750 (0.00, 0.00, 50.00) (0.00, 0.00, 100.00)
+PROBE mover 2800 (0.00, 0.00, 50.00) (0.00, 0.00, 100.00)
+PROBE mover 2850 (0.00, 0.00, 50.00) (0.00, 0.00, 100.00)
+PROBE mover 2900 (0.00, 0.00, 50.00) (0.00, 0.00, 100.00)
+PROBE mover 2950 (0.00, 0.00, 50.00) (0.00, 0.00, 100.00)
+PROBE mover 3000 (0.00, 0.00, 50.00) (0.00, 0.00, 100.00)
+PROBE deleted 3050 1
+PROBE deleted 3100 1
+PROBE deleted 3150 1
+PROBE deleted 3200 1
+PROBE deleted 3250 1
+PROBE deleted 3300 1
+PROBE user 170
+PROBE ent w1a 309
+PROBE ent w1b 310
+PROBE ent w1c 311
+PROBE ent w2m 312
+PROBE ent w2d 313
+PROBE ent w2e 314
+PROBE ent w3t 315
+PROBE ent w3f 316
+PROBE ent solo 317
+PROBE use w1b 3350
+PROBE use w1b 3400
+PROBE use w1b 3450
+PROBE use w1b 3500
+PROBE use w1b 3550
+PROBE use w1b 3600
+PROBE use w2d 3650
+PROBE use w2d 3700
+PROBE use w2d 3750
+PROBE use w2d 3800
+PROBE use w2d 3850
+PROBE use w2d 3900
+PROBE use w3f 3950
+PROBE use w3f 4000
+PROBE use w3f 4050
+PROBE use w3f 4100
+PROBE use w3f 4150
+PROBE use w3f 4200
+PROBE use solo 4250
+PROBE master 4800
+PROBE_ERROR RespawnItem: bad teammaster
+GDB use 310
+GDB respawn 310
+GDB draw 953610966
+GDB pick 309
+GDB use 310
+GDB respawn 310
+GDB draw 1027922006
+GDB pick 310
+GDB use 310
+GDB respawn 310
+GDB draw 1902318623
+GDB pick 310
+GDB use 310
+GDB respawn 310
+GDB draw 997949803
+GDB pick 311
+GDB use 310
+GDB respawn 310
+GDB draw 2065555900
+GDB pick 311
+GDB use 310
+GDB respawn 310
+GDB draw 776739626
+GDB pick 310
+GDB use 313
+GDB respawn 313
+GDB draw 1249617356
+GDB pick 313
+GDB use 313
+GDB respawn 313
+GDB draw 190408564
+GDB pick 314
+GDB use 313
+GDB respawn 313
+GDB draw 594285618
+GDB pick 312
+GDB use 313
+GDB respawn 313
+GDB draw 1523372658
+GDB pick 312
+GDB use 313
+GDB respawn 313
+GDB draw 405967194
+GDB pick 312
+GDB use 313
+GDB respawn 313
+GDB draw 1762844680
+GDB pick 314
+GDB use 316
+GDB respawn 316
+GDB draw 164312163
+GDB pick 316
+GDB use 316
+GDB respawn 316
+GDB draw 1481174339
+GDB pick 316
+GDB use 316
+GDB respawn 316
+GDB draw 1374457758
+GDB pick 315
+GDB use 316
+GDB respawn 316
+GDB draw 973067339
+GDB pick 316
+GDB use 316
+GDB respawn 316
+GDB draw 1791592294
+GDB pick 315
+GDB use 316
+GDB respawn 316
+GDB draw 1442945093
+GDB pick 316
+GDB use 317
+GDB respawn 317
+GDB pick 317
+GDB use 309
+GDB respawn 309
+CONSOLE 9 teams with 19 entities

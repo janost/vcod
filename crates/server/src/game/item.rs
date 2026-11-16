@@ -396,20 +396,58 @@ pub fn run_item(host: &mut GameHost, cx: &mut Cx, id: EntId, now_ms: i32) -> boo
         });
         if let Some(e) = host.ents.get_mut(id) {
             if respawn {
-                // `RespawnItem` (0x4ec7c): unhidden, relinked, the event on
-                // the item itself, and no further think.
-                st.taken = false;
-                e.events.add(EV_ITEM_RESPAWN, 0);
+                // `G_RunThink` clears the think before it runs it.
                 e.think = None;
                 e.nextthink = 0;
             }
             e.item = Some(st);
         }
         if respawn {
-            link(host, cx, id, CONTENTS_RESPAWNED);
+            respawn_item(host, cx, id);
         }
     }
     true
+}
+
+/// `RespawnItem` (1.1d 0x4ec7c), the think a taken item comes back on, and
+/// `Use_Item` (0x4efc8; 1.5b's and UO's call `RespawnItem`), every placed
+/// item's `use`: the team pick (`teams::respawn_pick`), then on what it
+/// picked `r.contents` 0x407c0008, the hide and `SVF_NOCLIENT` cleared, a
+/// link, `EV_ITEM_RESPAWN` and `nextthink` 0. A pick that is no item gets
+/// the hide, the event and the think cleared, not the link (items doc
+/// 14.8). The team branch's `G_Error` lands in `game_error`; returns false
+/// then.
+pub fn respawn_item(host: &mut GameHost, cx: &mut Cx, id: EntId) -> bool {
+    use crate::game::teams::{BAD_TEAMMASTER, Pick, respawn_pick};
+    let target = match respawn_pick(host, cx, id) {
+        Pick::Ent(t) => t,
+        Pick::Freed => return true,
+        Pick::BadTeammaster => {
+            host.game_error = Some(BAD_TEAMMASTER.to_string());
+            return false;
+        }
+    };
+    if let Some(e) = host.ents.get_mut(target) {
+        if let Some(i) = e.item.as_mut() {
+            i.taken = false;
+        }
+        e.hidden = false;
+        e.events.add(EV_ITEM_RESPAWN, 0);
+        e.nextthink = 0;
+    }
+    link(host, cx, target, CONTENTS_RESPAWNED);
+    true
+}
+
+/// `Use_Item`, the `use` `G_SpawnItem` installs (1.1d 0x4e7af) on a placed
+/// or script-spawned item; a dropped one has none. `None` for an entity
+/// with no such `use`, else whether it ran without a `G_Error`.
+pub fn use_item(host: &mut GameHost, cx: &mut Cx, id: EntId) -> Option<bool> {
+    host.ents
+        .get(id)
+        .and_then(|e| e.item)
+        .filter(|i| !i.dropped)?;
+    Some(respawn_item(host, cx, id))
 }
 
 /// A listed item as `crate::push::push` sees it, `None` for an entity that

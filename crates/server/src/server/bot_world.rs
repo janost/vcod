@@ -1205,14 +1205,17 @@ impl crate::bots::driver::BotWorld for Server {
 
     fn take_noises(&mut self) -> Vec<crate::bots::Noise> {
         let mut noises = std::mem::take(&mut self.game.module.driver.noises);
-        // A script's `radiusDamage` (the S&D bomb, an exploder) is nobody's.
+        // A script's `radiusDamage` (the S&D bomb, an exploder) is nobody's,
+        // unless it names a client its attacker: a UO tank's death blast is
+        // the rocket's shooter's, who hunted it into the wreck's second
+        // blast otherwise (bot-objectives.md 10.9).
         if let Some(rt) = self.game.module.script.as_mut() {
             noises.extend(
                 rt.take_blast_noises()
                     .into_iter()
-                    .map(|at| crate::bots::Noise {
+                    .map(|(at, by)| crate::bots::Noise {
                         at: [at[0], at[1], at[2] + 40.0],
-                        source: usize::MAX,
+                        source: by.unwrap_or(usize::MAX),
                         radius: crate::bots::HEAR_BLAST,
                     }),
             );

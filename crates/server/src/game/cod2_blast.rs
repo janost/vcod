@@ -310,7 +310,7 @@ pub fn radius_damage(
     min_damage: f32,
 ) {
     let ignore = host.ignore_radius_damage;
-    host.blast_noises.push(at.to_array());
+    host.blast_noises.push((at.to_array(), None));
     let none_mult = hitloc_none(host);
     let mut clients = Vec::new();
     {

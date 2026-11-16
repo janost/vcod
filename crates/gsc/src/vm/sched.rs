@@ -789,6 +789,13 @@ impl Vm {
             self.threads[idx].state = ThreadState::Runnable;
             self.step_thread(host, tid, &mut errors);
             steps += 1;
+            // `G_Error` longjmps out of the frame.
+            if errors
+                .last()
+                .is_some_and(|e| matches!(e.kind, ErrorKind::GameError(_)))
+            {
+                return errors;
+            }
         }
         // Was silent before: a frame past the cap just stopped simulating the
         // rest with nothing in the log to say why.
