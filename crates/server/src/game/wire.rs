@@ -516,6 +516,9 @@ fn build(
     if let Some(idx) = host.ents.get(id).map(|e| e.loop_sound) {
         seti(&mut e, "loopSound", idx);
     }
+    if let Some(light) = host.ents.get(id).map(|e| e.constant_light) {
+        seti(&mut e, "constantLight", light);
+    }
 
     // An item overwrites it with its own below.
     if let Some(g) = host.ents.get(id).map(|e| e.ground) {
@@ -734,6 +737,12 @@ fn kind_of(host: &mut GameHost, cx: &mut Cx, id: EntId, classname: &str) -> Opti
     if crate::game::mover::is_init_mover(host, id) {
         let e = host.ents.get(id)?;
         if e.think == Some(crate::game::entity::ThinkFn::Free) {
+            return None;
+        }
+        // `SV_AddEntitiesVisibleFromPoint` skips an entity `r.linked` is
+        // clear on: a `func_rotating` slave its own `G_RunMover` turn
+        // unlinked after its master's push linked it (movers doc 26.4).
+        if crate::game::mover::door::is_door(host, id) && host.area.last_link(id.0).is_none() {
             return None;
         }
         return Some(Kind::Mover(e.brush_model.unwrap_or(0) as i32));

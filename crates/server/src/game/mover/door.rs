@@ -262,8 +262,10 @@ fn leg_ms(dist: f32, speed: f32) -> i32 {
     ms.max(1)
 }
 
-/// The map's spawn of `classname` on `id` from its block's `keys`: false
-/// for a classname not one of the three.
+/// The spawn of `classname` on `id` from its map block's `keys`, or a
+/// script `spawn`'s, which reads none (`G_ParseSpawnVars` cleared them) and
+/// keeps model 0, the world's (movers doc 26.10): false for a classname not
+/// one of the three.
 pub fn spawn(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -279,7 +281,12 @@ pub fn spawn(
     };
     use crate::game::builtins::cvar::{atof, atoi};
     let key = |name: &str| vcod_common::bsp::spawn_string(keys, name);
-    let spawnflags = vcod_common::bsp::field_value(keys, "spawnflags").map_or(0, atoi);
+    // A script `spawn`'s third argument is the field; a map block's key
+    // reaches it through the field pass too.
+    let spawnflags = match vcod_common::bsp::field_value(keys, "spawnflags") {
+        Some(v) => atoi(v),
+        None => float_field(host, cx, id, "spawnflags") as i32,
+    };
     let mut d = Door::blank(class, spawnflags);
     let stored = host.movers.stored;
     let mut pos = stationary(Vec3::ZERO);
@@ -377,6 +384,7 @@ pub fn spawn(
             link_brush(host, cx, id);
             // `InitMoverRotate` (0x5674c).
             d.state = POS1_ROTATE;
+            super::set_constant_light(host, id, Some(keys));
             link_brush(host, cx, id);
             pos.base = vec_field(host, cx, id, "origin");
             if speed == 0.0 {
@@ -479,6 +487,7 @@ fn init_mover(
             e.loop_sound = alias;
         }
     }
+    super::set_constant_light(host, id, Some(keys));
     set_field(host, cx, id, "origin", Value::Vector(d.pos1.to_array()));
     d.state = POS1;
     host.link_entity(cx, id);
@@ -643,7 +652,9 @@ pub fn reached(host: &mut GameHost, cx: &mut Cx, id: EntId) {
                 POS1_ROTATE
             };
             set_state(host, cx, id, closed, level);
-            play(host, id, CLOSE_END);
+            if state == TWO_TO_ONE || player_in_pvs(host, cx, id) {
+                play(host, id, CLOSE_END);
+            }
         }
         _ => {
             if host.game_error.is_none() {
@@ -682,12 +693,37 @@ pub fn run_think(host: &mut GameHost, cx: &mut Cx, id: EntId) {
         }
         Think::ReturnToPos1Rotate => {
             match_team(host, cx, id, TWO_TO_ONE_ROTATE, level);
-            // Played when "player" is in its PVS (0x57cd0), which vcod
-            // does not test.
-            play(host, id, CLOSING);
+            if player_in_pvs(host, cx, id) {
+                play(host, id, CLOSING);
+            }
             set_loop(host, id, Some(CLOSE_LOOP));
         }
     }
+}
+
+/// The test `ReturnToPos1Rotate` (0x57cc7..0x57cf2) and the 2-to-1 turn's
+/// end in `Reached_BinaryMover` (0x55eb1..0x55ee4) put on their sound:
+/// `G_Find(NULL, classname, "player")`, the first in-use player in entity
+/// order, then `trap_InPVS` from his `r.currentOrigin` to the door's.
+/// No player, no sound (docs/research/cod11-movers.md 26.8).
+fn player_in_pvs(host: &mut GameHost, cx: &mut Cx, id: EntId) -> bool {
+    let classname = cx.intern_folded("classname");
+    let ids: Vec<EntId> = host.ents.iter_inuse().map(|(e, _)| e).collect();
+    let Some(player) = ids.into_iter().find(|&e| {
+        matches!(host.get_field(cx, e, classname), Value::String(a) if cx.resolve(a) == "player")
+    }) else {
+        return false;
+    };
+    let from = vec_field(host, cx, player, "origin").to_array();
+    let to = vec_field(host, cx, id, "origin").to_array();
+    host.world.as_ref().is_none_or(|w| in_pvs(&w.vis, from, to))
+}
+
+/// `SV_inPVS` (cod_lnxded, the game's syscall 45 at 0x80883e0): `p2`'s
+/// cluster through `p1`'s PVS row, then both leafs' areas connected.
+pub fn in_pvs(vis: &vcod_common::mapworld::Visibility, p1: [f32; 3], p2: [f32; 3]) -> bool {
+    vis.visible(vis.cluster_at(p1), vis.cluster_at(p2))
+        && vcod_common::mapworld::areas_connected(vis.area_at(p1), vis.area_at(p2))
 }
 
 /// `finishSpawningKeyedMover` (0x57e68): another 100 ms, then a think by
@@ -1010,6 +1046,57 @@ fn use_func_rotate(host: &mut GameHost, cx: &mut Cx, id: EntId) {
         e.team.slave = false;
     }
     host.link_entity(cx, id);
+}
+
+/// Every linked door with `takedamage` (a `health` key, or a part of a
+/// team `Think_SpawnNewDoorTrigger` ran on), by entity number: what a
+/// blast or a round can reach.
+pub fn damageable(host: &GameHost) -> Vec<EntId> {
+    let mut ids: Vec<EntId> = host
+        .movers
+        .rows
+        .iter()
+        .filter(|(id, m)| {
+            m.door.as_ref().is_some_and(|d| d.takedamage) && host.area.last_link(id.0).is_some()
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    ids.sort_by_key(|id| id.0);
+    ids
+}
+
+/// `G_Damage`'s `eType` 5 arm (0x49e93..0x49ee1) on a door with
+/// `takedamage`: at `moverState` 0 the `"trigger"` notify with the
+/// attacker, then its `use` with the attacker as activator; at any other
+/// state nothing, so a rotating door (7 at rest) never opens to damage. No
+/// `health` comes off. `None` for anything not a door with `takedamage`;
+/// the notifies are the caller's to raise.
+pub fn damaged(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    id: EntId,
+    attacker: EntId,
+) -> Option<Vec<(&'static str, Vec<Value>)>> {
+    let d = door(host, id).filter(|d| d.takedamage)?;
+    if d.state != POS1 {
+        return Some(Vec::new());
+    }
+    use_binary(host, cx, id, Some(attacker));
+    Some(vec![("trigger", vec![Value::Entity(attacker)])])
+}
+
+/// Every linked door's last link box, by entity number, which the snapshot
+/// cull reads (`crate::archive::WorldFrame::links`).
+pub fn links(host: &GameHost) -> std::collections::BTreeMap<u32, ([f32; 3], [f32; 3])> {
+    host.movers
+        .rows
+        .iter()
+        .filter(|(_, m)| m.door.is_some())
+        .filter_map(|(id, _)| {
+            let l = host.area.last_link(id.0)?;
+            Some((id.0, (l.absmin, l.absmax)))
+        })
+        .collect()
 }
 
 /// The damage `Blocked_Door` (0x578a0) or `Blocked_DoorRotate` (0x56934)

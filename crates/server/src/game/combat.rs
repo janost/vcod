@@ -2147,8 +2147,7 @@ pub fn can_damage(
 
 /// A blast candidate with no client: a turret, a `func_static` spawned
 /// with spawnflags 2 or 4 (combat doc 14.6, movers doc 21) or a
-/// `trigger_damage` (14.8). Retail's door spawn stores `takedamage` too,
-/// but vcod runs none.
+/// `trigger_damage` (14.8), or a door with `takedamage` (movers doc 26.9).
 #[derive(Clone)]
 pub struct EntityVictim {
     pub id: EntId,

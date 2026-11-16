@@ -121,6 +121,20 @@ pub fn entity_seen(
         && fog.is_none_or(|d| box_dist_sq(lo, hi, v.eye) <= d)
 }
 
+/// [`entity_seen`] for an entity culled off the box of its last link,
+/// `r.absmin`..`r.absmax`, in place of one rebuilt from its state.
+pub fn box_seen(
+    vis: &mapworld::Visibility,
+    v: &Viewer,
+    (lo, hi): ([f32; 3], [f32; 3]),
+    fog: Option<f32>,
+) -> bool {
+    let link = vis.link_clusters(lo, hi);
+    link.in_area(v.area)
+        && vis.link_visible(v.cluster, &link)
+        && fog.is_none_or(|d| box_dist_sq(lo, hi, v.eye) <= d)
+}
+
 /// What 1.5's and United Offensive's snapshot builders cull past
 /// (`vmMain` 0x17, `level.fogOpaqueDistSqrd`, game.mp.uo 0x56ac0 and
 /// game.mp 1.5 0x4d888): `G_setfog` reads the fog configstring with

@@ -1638,6 +1638,30 @@ impl GameHost {
                 })
             })
             .collect();
+        // A door, measured off its link's `r.absmin`/`r.absmax`: a turned
+        // one links a box of its farthest corner's radius about its origin
+        // (movers doc 26.9).
+        for id in crate::game::mover::door::damageable(self) {
+            let (Value::Vector(at), Some(link)) =
+                (self.get_field(cx, id, origin), self.area.last_link(id.0))
+            else {
+                continue;
+            };
+            let at = glam::Vec3::from(at);
+            let model = self.ents.get(id).and_then(|e| e.brush_model).unwrap_or(0) as usize;
+            victims.push(crate::game::combat::EntityVictim {
+                id,
+                origin: at,
+                mins: glam::Vec3::from(link.absmin) + glam::Vec3::ONE - at,
+                maxs: glam::Vec3::from(link.absmax) - glam::Vec3::ONE - at,
+                brush: Some(if model == 0 {
+                    vcod_common::collision::Pusher::Copy(id.0)
+                } else {
+                    vcod_common::collision::Pusher::Model(model)
+                }),
+                vehicle_link: None,
+            });
+        }
         // A `trigger_damage`, measured off its brush model's box
         // (combat doc 14.8).
         let damage_triggers: Vec<(EntId, crate::game::trigger::Trigger)> = self
@@ -1706,8 +1730,9 @@ impl GameHost {
         victims
     }
 
-    /// `G_Damage` on an entity with no client: a `func_static`'s `use` arm
-    /// ([`crate::game::mover::use_static`]), its `"trigger"` notify with the
+    /// `G_Damage` on an entity with no client: a `func_static`'s or a door's
+    /// `use` arm ([`crate::game::mover::use_static`],
+    /// [`crate::game::mover::door::damaged`]), its `"trigger"` notify with the
     /// attacker, or else [`Self::damage_entity`]. The notifies are returned
     /// for the caller to raise, in order.
     pub fn damage_nonclient(
@@ -1723,6 +1748,9 @@ impl GameHost {
         }
         if crate::game::mover::use_static(self, cx, id) {
             return vec![("trigger", vec![Value::Entity(attacker)])];
+        }
+        if let Some(out) = crate::game::mover::door::damaged(self, cx, id, attacker) {
+            return out;
         }
         if self.script_takedamage.contains(&id) && self.is_script_mover(cx, id) {
             // UO's `eType` 8 arm (`G_Damage`, game.mp.uo 0x4fedb): the notify and
@@ -1824,13 +1852,14 @@ impl GameHost {
     }
 
     /// Whether an entity with no client has `takedamage` (+0x171, UO
-    /// +0x17d): a turret, a UO vehicle, an entity `setTakeDamage` opened, or
-    /// a linked damageable `func_static`.
+    /// +0x17d): a turret, a UO vehicle, an entity `setTakeDamage` opened, a
+    /// linked damageable `func_static` or door.
     pub fn entity_takes_damage(&self, id: EntId) -> bool {
         self.turrets.contains_key(&id)
             || self.vehicles.live.contains_key(&id)
             || self.script_takedamage.contains(&id)
             || crate::game::mover::damageable_statics(self).contains(&id)
+            || crate::game::mover::door::damageable(self).contains(&id)
             || self.is_damage_trigger(id)
     }
 

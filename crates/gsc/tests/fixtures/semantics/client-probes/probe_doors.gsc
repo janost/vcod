@@ -3,20 +3,24 @@
 //	crates/server/tests/fixtures/doors/mp_carentan-doors.ent (the fixture
 //	header has the recipe; docs/research/cod11-movers.md 26):
 //
-//	door_a  *5   a func_door with a touch trigger (spawnflags 8)
-//	door_b  *6   a func_door, master of team d2, dmg 5
-//	door_b4 *4   a func_door, slave of d2
-//	door_r  *8   a func_door_rotating on the defaults
-//	rot1    *7   a func_rotating, master of team r1
+//	door_a  *5   a func_door with a touch trigger (spawnflags 8), light and color
+//	door_b  *6   a func_door, master of team d2, dmg 5, health
+//	door_b4 *4   a func_door, slave of d2, color
+//	door_r  *8   a func_door_rotating on the defaults, health
+//	rot1    *7   a func_rotating, master of team r1, light
 //	rot2    *10  a func_rotating, slave of r1
+//	door_h  *9   a func_door with health and no angles
 //
 //	One `--probe-uo-weapon direct` axis client; the script holds his keys
 //	through `iPrintLn("PROBE_IN <buttons> 0 0")` and takes no damage.
 //	He stands in door_a's trigger, under none of its brushes, 5 s, stands on door_b and presses use,
 //	stands under door_b while it closes, then useBys door_r from two
-//	spots. Every frame from 1000 logs each mover and the player:
+//	spots. Then door_r twice more, the player taken far off while it shuts
+//	(the PVS test of its sounds), radiusDamage on door_r, door_b, door_h
+//	shut and door_h moving, and a script spawn of each classname at the world
+//	origin. Every frame from 1000 logs each mover and the player:
 //
-//	PROBE f <time> <a> <b> <b4> <r angles> <rot1 angles> <rot2 angles> <player>
+//	PROBE f <time> <a> <b> <b4> <h> <r angles> <rot1 angles> <rot2 angles> <player>
 //
 //	The player's origin is "none" until his first placing: dm's spawn
 //	point is a random pick.
@@ -24,6 +28,8 @@
 //	PROBE phase <name> <time>
 //	PROBE trigger <name> <time>
 //	PROBE dmg <time> <damage> <mod> <attacker classname>
+//	PROBE spawned <classname> <origin> <angles> <speed> <dmg>
+//	PROBE s <time> <door origin> <door_rotating angles> <rotating angles>
 //	PROBE done
 
 main()
@@ -75,6 +81,7 @@ log_frames()
 	a = ent("door_a");
 	b = ent("door_b");
 	b4 = ent("door_b4");
+	h = ent("door_h");
 	r = ent("door_r");
 	r1 = ent("rot1");
 	r2 = ent("rot2");
@@ -83,7 +90,7 @@ log_frames()
 		p = "none";
 		if (isdefined(level.probe_placed))
 			p = level.probe_player.origin;
-		logPrint("PROBE f " + gettime() + " " + a.origin + " " + b.origin + " " + b4.origin + " " + r.angles + " " + r1.angles + " " + r2.angles + " " + p + "\n");
+		logPrint("PROBE f " + gettime() + " " + a.origin + " " + b.origin + " " + b4.origin + " " + h.origin + " " + r.angles + " " + r1.angles + " " + r2.angles + " " + p + "\n");
 		wait 0.05;
 	}
 }
@@ -108,11 +115,13 @@ run()
 	thread watch_trigger("door_a");
 	thread watch_trigger("door_b");
 	thread watch_trigger("door_r");
+	thread watch_trigger("door_h");
 	spot_a = ground_at((-60, 2320, 0), "a");
 	spot_side = ground_at((1950, 2046, 150), "side");
 	spot_under = ground_at((1782, 2046, -10), "under");
 	spot_d = ground_at((595, 2137, 400), "d");
 	spot_e = ground_at((195, 2137, 400), "e");
+	spot_far = ground_at((296, -1280, 100), "far");
 	for (;;)
 	{
 		pl = getentarray("player", "classname");
@@ -156,5 +165,46 @@ run()
 	wait 0.1;
 	ent("door_r") useBy(level.probe_player);
 	wait 4.5;
+
+	logPrint("PROBE phase pvs " + gettime() + "\n");
+	place(spot_d, (0, 180, 0));
+	wait 0.1;
+	ent("door_r") useBy(level.probe_player);
+	wait 2.5;
+	place(spot_far, (0, 0, 0));
+	wait 0.9;
+	place(spot_d, (0, 180, 0));
+	wait 3;
+	ent("door_r") useBy(level.probe_player);
+	wait 2.5;
+	place(spot_far, (0, 0, 0));
+	wait 3;
+	place(spot_d, (0, 180, 0));
+	wait 1;
+
+	logPrint("PROBE phase damage " + gettime() + "\n");
+	place(spot_far, (0, 0, 0));
+	wait 0.5;
+	radiusDamage((397, 2135, 262), 200, 50, 50);
+	wait 0.5;
+	radiusDamage((1782, 2046, 30), 200, 50, 50);
+	wait 0.5;
+	radiusDamage((1053, 1611, 82), 100, 50, 50);
+	wait 0.1;
+	radiusDamage((1053, 1611, 82), 100, 50, 50);
+	wait 3;
+
+	logPrint("PROBE phase spawn " + gettime() + "\n");
+	s1 = spawn("func_door", (0, 0, 0));
+	s2 = spawn("func_door_rotating", (0, 0, 0));
+	s3 = spawn("func_rotating", (0, 0, 0));
+	logPrint("PROBE spawned " + s1.classname + " " + s1.origin + " " + s1.angles + " " + s1.speed + " " + s1.dmg + "\n");
+	logPrint("PROBE spawned " + s2.classname + " " + s2.origin + " " + s2.angles + " " + s2.speed + " " + s2.dmg + "\n");
+	logPrint("PROBE spawned " + s3.classname + " " + s3.origin + " " + s3.angles + " " + s3.speed + " " + s3.dmg + "\n");
+	for (i = 0; i < 10; i++)
+	{
+		logPrint("PROBE s " + gettime() + " " + s1.origin + " " + s2.angles + " " + s3.angles + "\n");
+		wait 0.05;
+	}
 	logPrint("PROBE done\n");
 }

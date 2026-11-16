@@ -6990,6 +6990,13 @@ impl Server {
             roster: Rc::new(roster),
             time: self.core.sv_time_ms,
             fog: self.fog_cull(),
+            links: self
+                .game
+                .module
+                .script
+                .as_ref()
+                .map(|rt| crate::game::mover::door::links(&rt.host))
+                .unwrap_or_default(),
         }
     }
 

@@ -37,6 +37,9 @@ CoD1 (1.1d, 1.5b, UO):
   that logs a player's anim info records and first traced skeleton each
   frame, or both gunners' at the end-frame traces (its header has the
   recipe; cod11-turrets.md 13.9, 13.10).
+- `gdb_radius_damage.py`: a gdb script for the 1.1d server that logs each
+  `G_RadiusDamage` candidate, its link box and `CanDamage`'s result, and
+  every `G_Damage` (cod11-movers.md 26.9).
 - `annotate_func.py`: one function of a PIC ELF with its relocations
   resolved. Run it first: a plain `objdump` of `game.mp.i386.so` hides every
   call and cvar behind PIC relocations.

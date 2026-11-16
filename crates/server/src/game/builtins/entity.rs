@@ -573,7 +573,7 @@ fn spawn_entity(host: &mut GameHost, cx: &mut Cx, args: &[Value]) -> Result<Valu
     ) = crate::game::trigger::kind_of(&name)
     {
         crate::game::trigger::spawn_scripted_multi(host, cx, id, kind, flags);
-    } else {
+    } else if !crate::game::mover::door::spawn(host, cx, id, &name, &[]) {
         crate::game::mover::spawn_sine(host, cx, id, &name, None);
     }
     Ok(Value::Entity(id))

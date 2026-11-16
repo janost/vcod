@@ -86,6 +86,10 @@ pub struct GEntity {
     /// (`crate::spectate`) and does not carry this; no stock script calls
     /// `playLoopSound` on a player.
     pub loop_sound: i32,
+    /// `es.constantLight` (offset 128, 32 bits), what `InitMover` and
+    /// `InitMoverRotate` pack off a `light` or `color` key
+    /// (docs/research/cod11-movers.md 26.7); 0 for everything else.
+    pub constant_light: i32,
     /// `r.svFlags & SVF_BROADCAST`, which `playSound` sets and clears
     /// `SVF_NOCLIENT` with (game.mp 0x5d957): from then on every snapshot
     /// carries the entity unculled, a `script_origin` or trigger included.
@@ -491,6 +495,7 @@ impl ObjectTable {
             nextthink: 0,
             events: EventRing::default(),
             loop_sound: 0,
+            constant_light: 0,
             broadcast: false,
             broadcast_time: 0,
             apos_base: None,
@@ -546,6 +551,7 @@ impl ObjectTable {
                 nextthink: 0,
                 events: EventRing::default(),
                 loop_sound: 0,
+                constant_light: 0,
                 broadcast: false,
                 broadcast_time: 0,
                 apos_base: None,
@@ -656,6 +662,7 @@ impl ObjectTable {
             nextthink: 0,
             events: EventRing::default(),
             loop_sound: 0,
+            constant_light: 0,
             broadcast: false,
             broadcast_time: 0,
             apos_base: None,
@@ -737,6 +744,7 @@ impl ObjectTable {
             nextthink: 0,
             events: EventRing::default(),
             loop_sound: 0,
+            constant_light: 0,
             broadcast: false,
             broadcast_time: 0,
             apos_base: None,

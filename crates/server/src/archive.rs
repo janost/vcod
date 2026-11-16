@@ -34,6 +34,10 @@ pub struct WorldFrame {
     pub time: i32,
     /// 1.5's and UO's fog cull, squared (`crate::world::fog_cull`).
     pub fog: Option<f32>,
+    /// The doors, culled off their last link's `r.absmin`/`r.absmax`: a
+    /// door keyed by `angles` sends them in `apos` before its first move
+    /// turns it, and links unturned till then (movers doc 26.5).
+    pub links: BTreeMap<u32, ([f32; 3], [f32; 3])>,
 }
 
 impl WorldFrame {
@@ -56,7 +60,10 @@ impl WorldFrame {
             return BTreeMap::new();
         }
         let culled_seen = |e: &msg::EntityState| match (vis, &viewer) {
-            (Some(v), Some(from)) => crate::world::entity_seen(v, from, e, self.time, p, self.fog),
+            (Some(v), Some(from)) => match self.links.get(&e.number) {
+                Some(&b) => crate::world::box_seen(v, from, b, self.fog),
+                None => crate::world::entity_seen(v, from, e, self.time, p, self.fog),
+            },
             _ => true,
         };
         // A UO sound blend goes wherever its vehicle would.
