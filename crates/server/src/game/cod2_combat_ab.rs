@@ -113,18 +113,6 @@ const GAPS: &[(&str, &str, usize, &str)] = &[
     ),
     (
         "hit-melee",
-        "probe point",
-        4,
-        "9.7 the melee's contact depth on a still body",
-    ),
-    (
-        "hit-melee",
-        "event eventParm",
-        1,
-        "9.7 the melee's contact depth on a still body",
-    ),
-    (
-        "hit-melee",
         "target pm_flags",
         2,
         "9.7 the look-at flag on a turned body",
