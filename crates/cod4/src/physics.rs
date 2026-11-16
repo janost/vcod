@@ -28,6 +28,14 @@ pub const JITTER_MAX_MASS: f32 = 200.0;
 /// The least contact normal z a jitter lifts at (the float at 0x70b0e8,
 /// read at 0x5a23f3).
 const JITTER_MIN_NORMAL_Z: f32 = 0.7;
+/// Two contacts face each other under this dot of their normals (the
+/// double at 0x70b268, -0.99 as a float): 0x5a2280 pinches the body on
+/// it and 0x5a25d0 keeps one of the two.
+const FACING: f32 = -0.99;
+/// A pinched body drops a contact whose point moves along its normal by
+/// more than this, the dot of the normal with the point's velocity
+/// normalized (the float at 0x6df494, read at 0x5a2894 and 0x5a28f9).
+const SEPARATING: f32 = 0.01;
 
 /// A `physicsJitter` region (`EV_PHYS_JITTER`, held by 0x5a7730 in its
 /// world's list of five until the world's next step): each contact of a
@@ -1127,6 +1135,10 @@ struct Contact {
     /// The accumulated normal and friction impulses.
     lambda: f32,
     lambda_t: [f32; 2],
+    /// How far off the surface it starts (below 0 inside).
+    sep: f32,
+    /// One of the body's points' (`Body::gather`), not a geom's.
+    point: bool,
 }
 
 /// One launched part.
@@ -1163,6 +1175,9 @@ pub struct Body {
     from: (Vec3, Quat),
     /// Steps taken.
     pub steps: u32,
+    /// Of them, those whose contact pass met the body in state 1, pinched
+    /// or started solid ([`unwedge`]).
+    pub pinched: u32,
     /// The jitter regions its next step's contacts take, and the random
     /// state their pushes draw from (`rand`, 0x5a2536).
     pub jitter: Vec<Jitter>,
@@ -1215,6 +1230,7 @@ impl Body {
             from_ms: now,
             from: (pos, rot),
             steps: 0,
+            pinched: 0,
             jitter: Vec::new(),
             jitter_rand: 0,
         }
@@ -1363,16 +1379,26 @@ impl Body {
         let mut contacts: Vec<Contact> = Vec::new();
         let mut touched = vec![false; self.points.len()];
         for pass in 0..2 {
-            let found = self.gather(dt, trace, d, v0, w0, &mut touched);
+            let mut found = self.gather(dt, trace, d, v0, w0, &mut touched);
             if found.is_empty() && pass > 0 {
                 break;
             }
             if pass == 0 {
-                self.shake(&found, d);
-                contacts.extend(self.box_contacts(dt, solids, d, v0, w0));
-                self.pinch(&contacts, &found);
+                let mut all = self.box_contacts(dt, solids, d, v0, w0);
+                all.append(&mut found);
+                self.pinch(&all);
+                if self.state == 1 {
+                    self.pinched += 1;
+                    unwedge(&mut all, v0, w0);
+                }
+                self.shake(&all, d);
+                contacts.append(&mut all);
+            } else {
+                if self.state == 1 {
+                    drop_separating(&mut found, v0, w0);
+                }
+                contacts.append(&mut found);
             }
-            contacts.extend(found);
             self.solve(&mut contacts, d);
         }
         let old = self.pos;
@@ -1399,14 +1425,19 @@ impl Body {
 
     /// The contact pass's writes to the state (0x5a5f20, 0x5a2280): 2
     /// when the world gives no contact, 1 when two of its contacts face
-    /// each other (normals' dot under -0.99, the double at 0x70b268).
-    /// Retail's contacts are ODE's; these are the boxes' and cylinders'
-    /// and the touching points'.
-    fn pinch(&mut self, geoms: &[Contact], points: &[Contact]) {
-        let all: Vec<Vec3> = geoms.iter().chain(points).map(|c| c.n).collect();
-        if all.is_empty() {
+    /// each other ([`FACING`]). Retail's contacts are ODE's overlaps, run
+    /// through it per geom; vcod's are the step's first ones in the skin
+    /// ([`touching`]), all at once: the boxes', the cylinders' and the
+    /// points'.
+    fn pinch(&mut self, contacts: &[Contact]) {
+        let n: Vec<Vec3> = contacts
+            .iter()
+            .filter(|c| touching(c))
+            .map(|c| c.n)
+            .collect();
+        if n.is_empty() {
             self.state = 2;
-        } else if (0..all.len()).any(|i| (i + 1..all.len()).any(|j| all[i].dot(all[j]) < -0.99)) {
+        } else if (0..n.len()).any(|i| (i + 1..n.len()).any(|j| n[i].dot(n[j]) < FACING)) {
             self.state = 1;
         }
     }
@@ -1460,7 +1491,8 @@ impl Body {
     /// `phys_jitterMaxMass`.
     /// The value is times `1000 / msecStep` before `Phys_ObjAddForce`
     /// scales it again for its one step, so the impulse keeps that factor.
-    /// Retail's contacts are ODE's; these are the body's touching points.
+    /// Retail's contacts are ODE's; these are the body's touching points
+    /// that [`unwedge`] kept.
     fn shake(&mut self, contacts: &[Contact], d: &Dvars) {
         if self.jitter.is_empty() {
             return;
@@ -1470,7 +1502,10 @@ impl Body {
         let weight = m * (1.0 - q * q * q);
         let per_step = 1000.0 / d.step_ms as f32;
         let regions = std::mem::take(&mut self.jitter);
-        for c in contacts.iter().filter(|c| c.n.z >= JITTER_MIN_NORMAL_Z) {
+        for c in contacts
+            .iter()
+            .filter(|c| c.point && c.n.z >= JITTER_MIN_NORMAL_Z)
+        {
             let at = self.pos + c.r;
             for j in &regions {
                 let dist_sq = (at.x - j.origin.x).powi(2) + (at.y - j.origin.y).powi(2);
@@ -1530,7 +1565,10 @@ impl Body {
                 continue;
             };
             touched[i] = true;
-            out.push(self.contact(r, n, sep, dt, d, v0, w0, &inv_iw));
+            out.push(Contact {
+                point: true,
+                ..self.contact(r, n, sep, dt, d, v0, w0, &inv_iw)
+            });
         }
         out
     }
@@ -1627,6 +1665,8 @@ impl Body {
             k_t: [k(t[0]), k(t[1])],
             lambda: 0.0,
             lambda_t: [0.0; 2],
+            sep,
+            point: false,
         }
     }
 
@@ -1659,6 +1699,60 @@ impl Body {
 
 /// The skin the clip map's kernels keep off a surface (`SURFACE_CLIP_EPSILON`).
 const SKIN: f32 = 0.125;
+
+/// Whether a contact stands for one of ODE's: in the skin the kernels
+/// keep, or inside. The rest are vcod's, met within the step's travel.
+fn touching(c: &Contact) -> bool {
+    c.sep <= SKIN
+}
+
+/// A pinched body's contacts (0x5a2760, the state 1): of two that face
+/// each other ([`FACING`]) the first stays when the centre lies on its
+/// plane or in front of it, else the second takes its slot, and the
+/// second's slot takes the last contact, which the walk then passes over
+/// (0x5a25d0, its point the body's position, as the world's byte at
+/// 0xcc54498 is never set); then [`drop_separating`]. Retail runs it on
+/// each geom's collide; vcod on the step's first [`touching`] contacts at
+/// once.
+fn unwedge(contacts: &mut Vec<Contact>, v0: Vec3, w0: Vec3) {
+    let (mut c, ahead): (Vec<Contact>, Vec<Contact>) = contacts.drain(..).partition(touching);
+    let mut i = 0;
+    while i + 1 < c.len() {
+        let mut j = i + 1;
+        while j < c.len() {
+            if c[i].n.dot(c[j].n) < FACING {
+                // The centre is `-r` off the contact.
+                if c[i].n.dot(-c[i].r) < 0.0 {
+                    c.swap(i, j);
+                }
+                c.swap_remove(j);
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    drop_separating(&mut c, v0, w0);
+    contacts.extend(c);
+    contacts.extend(ahead);
+}
+
+/// 0x5a2760's second filter on a pinched body: each [`touching`] contact
+/// whose point's velocity at the collide (`dBodyGetPointVel`, 0x5b70d0),
+/// normalized, dots with its normal over [`SEPARATING`] goes. ODE's
+/// normalize (0x5b7460) makes a still point's velocity (1, 0, 0).
+fn drop_separating(contacts: &mut Vec<Contact>, v0: Vec3, w0: Vec3) {
+    contacts.retain(|c| {
+        let v = v0 + w0.cross(c.r);
+        let dir = if v == Vec3::ZERO {
+            Vec3::X
+        } else {
+            v.normalize()
+        };
+        // A NaN keeps it, as the compare's unordered flags do.
+        let along = c.n.dot(dir);
+        !touching(c) || along <= SEPARATING || along.is_nan()
+    });
+}
 
 /// The solids of `clip` round a box under the fx world's mask
 /// (`0x2806c91`), as its world collider (0x5a8110) gathers them.
@@ -2266,5 +2360,93 @@ mod tests {
         assert!(tops(true) > 0);
         // The plate is narrow under `phys_narrowObjMaxLength`.
         assert!(h.min_element() * 2.0 < Dvars::default().narrow_max_length);
+    }
+
+    /// A contact `r` off the centre with normal `n`, the rest unused.
+    fn touch(r: Vec3, n: Vec3) -> Contact {
+        Contact {
+            r,
+            n,
+            target: 0.0,
+            k_n: 1.0,
+            t: [Vec3::X, Vec3::Y],
+            k_t: [1.0; 2],
+            lambda: 0.0,
+            lambda_t: [0.0; 2],
+            sep: 0.0,
+            point: false,
+        }
+    }
+
+    #[test]
+    fn a_pinched_bodys_facing_contacts_keep_the_one_its_centre_is_in_front_of() {
+        let falling = Vec3::new(0.0, 0.0, -10.0);
+        let normals = |c: &[Contact]| c.iter().map(|c| c.n).collect::<Vec<_>>();
+        // Walls either side of the centre, a floor under it: the first
+        // wall stays, the second's slot takes the floor.
+        let mut c = vec![
+            touch(Vec3::new(-5.0, 0.0, 0.0), Vec3::X),
+            touch(Vec3::new(5.0, 0.0, 0.0), -Vec3::X),
+            touch(Vec3::new(0.0, 0.0, -3.0), Vec3::Z),
+        ];
+        unwedge(&mut c, falling, Vec3::ZERO);
+        assert_eq!(normals(&c), [Vec3::X, Vec3::Z]);
+        // The centre behind the first: the second takes its slot.
+        let mut c = vec![
+            touch(Vec3::new(5.0, 0.0, 0.0), Vec3::X),
+            touch(Vec3::new(-5.0, 0.0, 0.0), -Vec3::X),
+        ];
+        unwedge(&mut c, falling, Vec3::ZERO);
+        assert_eq!((normals(&c), c[0].r.x), (vec![-Vec3::X], -5.0));
+        // The last contact moved into a dropped one's slot is passed over:
+        // the third faces the first too and stays.
+        let mut c = vec![
+            touch(Vec3::new(-5.0, 0.0, 0.0), Vec3::X),
+            touch(Vec3::new(5.0, 0.0, 0.0), -Vec3::X),
+            touch(Vec3::new(5.0, 0.0, 1.0), -Vec3::X),
+        ];
+        unwedge(&mut c, falling, Vec3::ZERO);
+        assert_eq!(normals(&c), [Vec3::X, -Vec3::X]);
+        // One the step's travel meets past the skin is not ODE's and
+        // stays, after the touching ones.
+        let mut c = vec![
+            Contact {
+                sep: 1.0,
+                ..touch(Vec3::new(5.0, 0.0, 0.0), -Vec3::X)
+            },
+            touch(Vec3::new(-5.0, 0.0, 0.0), Vec3::X),
+            touch(Vec3::new(5.0, 0.0, 0.0), -Vec3::X),
+        ];
+        unwedge(&mut c, falling, Vec3::ZERO);
+        assert_eq!(normals(&c), [Vec3::X, -Vec3::X]);
+        assert_eq!(c[1].sep, 1.0);
+    }
+
+    #[test]
+    fn a_pinched_body_drops_the_contacts_its_points_leave() {
+        let floor = |r: Vec3| touch(r, Vec3::Z);
+        // Rising at 10: the floor's contacts go, a ceiling's stays.
+        let mut c = vec![floor(Vec3::ZERO), touch(Vec3::Z, -Vec3::Z)];
+        drop_separating(&mut c, Vec3::Z * 10.0, Vec3::ZERO);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].n, -Vec3::Z);
+        // Turning about x: the end at +y rises off the floor, the end at
+        // -y comes down into it.
+        let mut c = vec![floor(Vec3::Y * 10.0), floor(-Vec3::Y * 10.0)];
+        drop_separating(&mut c, Vec3::ZERO, Vec3::X);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].r, -Vec3::Y * 10.0);
+        // A still point's velocity normalizes to +x: a contact facing +x
+        // goes, one facing -x or up stays.
+        let mut c = vec![
+            touch(Vec3::ZERO, Vec3::X),
+            touch(Vec3::ZERO, -Vec3::X),
+            floor(Vec3::ZERO),
+        ];
+        drop_separating(&mut c, Vec3::ZERO, Vec3::ZERO);
+        assert_eq!(
+            c.iter().map(|c| c.n).collect::<Vec<_>>(),
+            [-Vec3::X, Vec3::Z]
+        );
     }
 }

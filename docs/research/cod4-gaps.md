@@ -21,8 +21,9 @@ Ranked by how much a player notices.
 - Rigid-body physics is vcod's solver, not ODE: a body's boxes meet the
   world's brushes and triangles by face clipping and vcod's edge
   contacts, its cylinders by 1.7's separating axes with vcod's points per
-  feature, not ODE's own box colliders; a pinched body's contact filter
-  (0x5a2760) is not ported, and `msecStep` stays 17 ms (cod4-gsc.md 3.6,
+  feature, not ODE's own box colliders; the contact pass runs once a
+  step on all of a body's contacts, not per geom, without 0x5a2320's
+  pass over five or more, and `msecStep` stays 17 ms (cod4-gsc.md 3.6,
   3.6.1).
   A jitter's pushes land on the body's
   touching points, not ODE's contacts, so a flat prop takes more of them
@@ -45,6 +46,12 @@ Ranked by how much a player notices.
 
 ## Fixed
 
+- A body pinched between two facing surfaces kept both sides' contacts.
+  It now takes `iw3mp.exe`'s contact pass (0x5a2760, 0x5a25d0): of two
+  facing contacts the one whose plane the centre lies in front of stays,
+  and each contact the body's point is leaving goes. Picture frames
+  wedged between two walls on mp_crash's floor now rest with an end just
+  inside the far wall, as the rule lets them (cod4-gsc.md 3.6.1).
 - A cylinder geom (stock bottles, cans, pails, tires, hub caps) met the
   world on 16 points round its rims: dropped on mp_crash's steps, 480 of
   540 slept with world solid inside the cylinder. It now meets brushes
