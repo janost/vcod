@@ -375,7 +375,9 @@ switches and every number it prints. Results go in that doc and
   breaches as in [research/bot-objectives.md](research/bot-objectives.md)
   sections 4 to 7.
 - `bas`: a bot making for a charge room where a teammate died in the
-  last 30 s throws a frag into it before going in, once a life.
+  last 2 min stops and throws a frag into it before going in, once a
+  life, when it finds a lob in; the stock bunkers' rooms under a floor
+  rarely give one.
 - UO grenades are cooked; 1.1 has no cook.
 - UO sprint: a bot sprints only on a level, straight run with no jump or
   drop.

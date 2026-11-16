@@ -796,6 +796,29 @@ first everywhere.
   units of the defender's spot). Trap: running home to defuse from anywhere,
   it was back for every plant (about 38 s of a 60 s fuse on mp_foy), and the
   round looped on defuses (seeds 17 and 19, 64 to 68 in 29 min).
+- **bas, a held room.** A bot making for a charge to plant or defuse
+  whose room (300 units of the charge) a teammate died in within the last
+  2 min (`BotView::fallen`, dealt with the posts) throws one frag at the
+  charge before it goes in, once a life (`Bot::room_frag`): 250 to 800
+  units out, with a lob found (`lob_probe`), it stops for at most 20
+  ticks for the throw, then goes in without. Asked for by the 2026-10-18
+  basmaps trace (mp_kursk shoot-on seeds 3 and 5, attackers arriving one
+  at a time dying to a defender set in the room); no run since has
+  reached such a room. VERIFIED (measured, ours, release, UO, on
+  415c5f50a, `bot_match UO=1 GAMETYPE=bas BOTS=4 TICKS=38000
+  SET=scr_bas_basehealth=24500`, mp_kursk and mp_foy seeds 1 to 8, with a
+  throwaway switch turning this rule and the LMG torso read below off):
+  no throw of the rule on either map (grenades thrown 18 both arms on
+  mp_foy, 20 on mp_kursk). Traced on mp_kursk seeds 4 and 7 (a throwaway
+  print each tick the rule wanted a frag): 191 bot-ticks in range, a lob
+  found on 1; a stock charge room lies under a floor, down a stair, and
+  `lob_probe` finds no arc into it from 250 out. A first form that
+  stopped in range without a lob stood 20 ticks for nothing and slowed
+  mp_kursk seed 7 from 22620 to 25200; with the lob required mp_kursk's
+  8 runs end on the tick of the rule off. INFERRED: a frag into those
+  rooms has to go from the stair head, a point the rule would need off
+  the room's entrance, which the view does not carry.
+  (`bots::tests::a_bas_planter_lobs_a_frag_into_a_held_charge_room`.)
 - A standing base is breached with rockets and tank shells (below).
 
 The breach:
@@ -1181,6 +1204,17 @@ bots, shoot off; `four_uo_bots_end_a_bas_round_without_shooting`;
   - 2026-10-18, the gun fetch at 800: mp_foy shooting seeds 1 to 23 odd 9899
     to 17779, mean 12972 (master 13517), seed 23 14979; on master 35198659 two
     of 36 runs moved. VERIFIED (measured).
+  - 2026-11-17, the rule's leftovers (backlog: mp_kursk seed 5's midfield
+    endgame, mp_foy 7, 15 and 5 and mp_italy 1 slowed): the slowed seeds
+    were traced on 2026-10-19 (the next line: each parts at the first round
+    one run fires and the other does not, the rule acting as written), and
+    mp_kursk seed 5's stretch is the open-field fight below, not a held
+    room. Bot choices draw off each bot's own generator since (section 8).
+    With the torso read (above) against level, the stock-health
+    `bot_match` (the held-room line's set and switch) moves mp_foy seeds 2
+    (19100 to 17980) and 3 (20240 to 16600) and no other of 16; mp_foy's
+    mean 20900 to 20305, deaths 49 to 43, mp_kursk unchanged at 17138.
+    VERIFIED (measured).
   - 2026-10-19, the LMG pitch rule against master 447d904f: 27 of 36 runs on
     the same tick, mean 12452 to 12176. The four slower runs, traced with the
     rule's clamp toggled to 90 degrees, part at the first round one run fires
