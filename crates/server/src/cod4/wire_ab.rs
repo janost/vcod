@@ -545,6 +545,10 @@ pub(super) fn ours(
         ),
     ];
     probes[2].replay = replay_schedule(&retail("walk"), WALKER_SPAWN_MS);
+    // Before its spawn the walker sends its twin's cmd angles: 1.7 keeps a
+    // follower's cmds (`ClientThink`), and the spawn's view goes off the
+    // last.
+    probes[2].pre_angles = cmd_angles(&retail("walk"));
     let mut now = Instant::now();
     while sv.core.sv_time_ms < RUN_MS {
         let svs = sv.core.sv_time_ms;
@@ -576,7 +580,9 @@ pub(super) fn ours(
 /// retail snapshot whose `commandTime` reaches the packet's last cmd, so
 /// each lands in the snapshot it landed in on retail (the capture logs a
 /// packet in the order its client sent it, which is not always before the
-/// next frame).
+/// next frame). A packet sent after its client read snapshot N reached the
+/// server after frame N: a spawn's own think sets N's `commandTime` past a
+/// cmd the server never ran before it.
 pub(super) fn replay_schedule(lines: &[Line], from: i32) -> VecDeque<(i32, Vec<UserCmd>)> {
     replay_schedule_timed(lines, from)
         .into_iter()
@@ -595,7 +601,12 @@ pub(super) fn replay_schedule_timed(lines: &[Line], from: i32) -> Vec<(i32, u64,
             Ok(Some(Item::Client { msg, .. })) => {
                 for op in &msg.ops {
                     if let ClOp::Move { cmds, .. } = op {
-                        packets.push((l.ms, cmds.iter().map(|(c, _)| *c).collect::<Vec<_>>()));
+                        let seen = snaps.last().map_or(i32::MIN, |&(t, _)| t);
+                        packets.push((
+                            l.ms,
+                            seen,
+                            cmds.iter().map(|(c, _)| *c).collect::<Vec<_>>(),
+                        ));
                     }
                 }
             }
@@ -613,10 +624,12 @@ pub(super) fn replay_schedule_timed(lines: &[Line], from: i32) -> Vec<(i32, u64,
     }
     packets
         .into_iter()
-        .filter(|(_, p)| p.last().is_some_and(|c| c.server_time > from))
-        .filter_map(|(ms, p)| {
+        .filter(|(_, _, p)| p.last().is_some_and(|c| c.server_time > from))
+        .filter_map(|(ms, seen, p)| {
             let last = p.last()?.server_time;
-            let (t, _) = snaps.iter().find(|&&(t, ct)| t > from && ct >= last)?;
+            let (t, _) = snaps
+                .iter()
+                .find(|&&(t, ct)| t > from && t > seen && ct >= last)?;
             Some((t - FRAME_MS, ms, p))
         })
         .collect()

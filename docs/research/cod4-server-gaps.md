@@ -133,6 +133,11 @@ more.
 - A mantle plays its clips' movetypes and, over a wall, the jump event at
   its end, so others see the mantle; the mantle capture's `legsAnim`,
   `torsoAnim` and both timers replay exactly (cod4-pmove.md 17.5).
+- A dropped weapon starts at the hand placed at the body's
+  `r.currentOrigin` as the drop reads it, past the dying body's own cmds
+  and inside a round's antilag (cod4-combat.md 6.1).
+- A killcam follower's archived temp entities pass by the mask they were
+  archived with alone (cod4-combat.md 7).
 
 ## Ranked
 
@@ -193,13 +198,18 @@ Open, by how much a player notices.
    `Bullet_Endpos` does; an exit's impact carries that direction
    (cod4-effects.md 12.4). `cod4_corpse_rounds_ab` and
    `cod4_corpse_drag_ab` match every corpse word and impact.
-8. The two corpse captures' `GAPS`, none of them the corpse's: the
-   target's killcam replays the shooter's first frames after his spawn
-   with the pitch a short under retail's; the target's second spawn keeps
-   the first life's `delta_angles`, and its entity's angles follow; on
-   the open floor the dropped rifle leaves the hand a unit off retail's
-   in x and y, its fall following (cod4-combat.md 5.3, 6.1). Not yet
-   read. M.
+8. Closed: the two corpse captures' `GAPS`. The killcam's pitch: the
+   follow and killcam copies read a playerstate `SV_ArchiveSnapshot` sent
+   through the delta codec once already (cod4-combat.md 7). The second
+   spawn's `delta_angles`: 1.7 keeps a follower's and a killcam's cmds for
+   the next spawn's view, and the gates' replay now sends a twin's own cmd
+   angles before its spawn and a packet after the frame its client had
+   already read (cod4-gsc.md 7). The floor run's dropped rifle: the hand's
+   tag is placed at `r.currentOrigin` when the killed callback reads it,
+   which the target's own cmd had carried 1.8 units past the last end
+   frame's (cod4-combat.md 6.1). The plate run's killcam impact 348: the
+   killcam's archived entities pass by their archived mask alone, never a
+   live temp entity's (cod4-combat.md 7).
 
 ## The retail run
 

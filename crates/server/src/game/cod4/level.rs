@@ -675,13 +675,6 @@ impl Cod4Level {
         if let Some(l) = &loadout {
             loadout_into(&mut p.ps, l);
         }
-        // A follower's cmds are not kept: the spawn after a follow takes
-        // the view off the last cmd before it (the walk capture's spawn
-        // `delta_angles` 110.00061 is its 45 less the -65 the walker sent
-        // before it followed its teammate, VERIFIED live).
-        if p.ps.word("otherFlags") & POF_FOLLOW != 0 {
-            return;
-        }
         // `SV_UserMove`: a weapon byte or offhand the client does
         // not hold reads as the playerstate's own (a probe echoing a
         // weapon 0 from before its spawn keeps the rifle, VERIFIED live:
@@ -698,7 +691,14 @@ impl Cod4Level {
             cmd.offhand = p.ps.word("offHandIndex") as u8;
         }
         let cmd = &cmd;
+        // `ClientThink` (0x80a6810) takes every cmd into `sess.cmd`
+        // (client+0x2f90, `SV_GetUsercmd` at 0x80a686e), a follower's and
+        // a killcam's too, which the next spawn's view is put off
+        // (cod4-gsc.md 7); a follower moves nothing.
         p.cmd = *cmd;
+        if p.ps.word("otherFlags") & POF_FOLLOW != 0 {
+            return;
+        }
         let selected = cmd.selected_location;
         let mut buttons = 0u8;
         if cmd.buttons & 0x28 != 0 {
@@ -1237,8 +1237,17 @@ impl Cod4Level {
         crate::tick_trace::step!("CheckVote");
         self.rt.check_vote(now_ms);
         self.sync_voted();
+        // `SV_ArchiveSnapshot` writes each playerstate through the delta
+        // codec and the follow and killcam copies read it back, so an
+        // angle there has been sent once already: a view of -354 shorts
+        // archives as -353 and goes out as -352 (gdb at 0x80a68b8,
+        // cod4-combat.md 7).
         for (a, p) in self.archive.iter_mut().zip(&self.players) {
-            *a = p.as_ref().map(|p| p.ps.clone());
+            *a = p.as_ref().map(|p| {
+                let mut ps = p.ps.clone();
+                ps.sent_angles();
+                ps
+            });
         }
         self.history.push_front((now_ms, self.archive.clone()));
         self.history.truncate(self.history_frames());

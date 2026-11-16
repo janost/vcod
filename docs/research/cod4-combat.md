@@ -816,9 +816,8 @@ client's 0x94.
   `Cod4Level::shot_corpses`, the clone's `PlayerBody` copied from the
   client's at its first trace or frame and stepped in `run_corpses`.
   `cod4::capture_ab::cod4_corpse_rounds_ab` and `cod4_corpse_drag_ab`
-  match every corpse word and every impact; their `GAPS` hold the
-  killcam's pitch, the second spawn and, on the floor, the dropped rifle,
-  none of them the corpse's. VERIFIED (the gates).
+  match every corpse word, every impact and the dropped rifle with no
+  `GAPS`. VERIFIED (the gates).
 - The knockback pushes along `Bullet_Endpos`'s direction (0x808a654..
   0x808a6c1): the end less the start, stored, times one over the length
   the stack keeps. glam's float normalize put all three of the floor
@@ -868,6 +867,45 @@ prone and killcam runs. VERIFIED (the gates).
   (185.978, 2278.777, 246.538) in the prone run, where retail's item starts
   at (210, 2311, 286) and (186, 2279, 246). VERIFIED (the gates' captures,
   ours's pose). INFERRED that the tag is `tag_weapon_right`.
+- `Drop_Weapon`'s sweep (0x80918ed..0x80919f7): from the box's middle,
+  `(mins + maxs) / 2` plus `r.currentOrigin`, to the tag's origin with
+  the item's box, passing the dropper, under the item's mask; the start
+  is the sweep's lerp. The killed callback drops before `player_die`
+  lowers the box, so `maxs[2]` reads 70 for a standing body. VERIFIED
+  (gdb at 0x80918ed and 0x80919d2: the floor run's sweep clear, the
+  start the tag). Ours sweeps from the live box (`CorpseSource::height`).
+- The tag's read, `G_DObjGetWorldTagMatrix` (0x80cc7ba): the tag's index
+  (0x817c2f8), the pose (0x80ca732), the skeleton (0x817c2aa), the
+  tag's `DObjAnimMat` at 32 bytes a bone, then `AnglesToAxis` of
+  `r.currentAngles` (entity +0x148, 0x80cc810) and `r.currentOrigin`
+  (+0x13c, 0x80cc815..0x80cc82d) read at the call. VERIFIED (the
+  instructions). In a gdb run on the floor (target facing -90) the dying
+  body's `tag_weapon_right` in the body's frame read (20.40226,
+  -3.4929945, 50.28386), ours's to the digits, and the placement its
+  origin (207.97768, 2293.0752, 236.125) and yaw -89.99451. VERIFIED
+  (gdb at 0x80cc7f6, ours's pose).
+- So the hand sits where `r.currentOrigin` stands when the killed
+  callback drops: after the dying body's own cmds of that level time, and
+  inside a round's antilag where the round rewound it. INFERRED (the read
+  above, the two runs below). `G_AntiLagRewindClientPos` (0x80a2a0c, called at 0x808a71c) runs before
+  the round's traces and the restore (0x80a297a, called at 0x808a99a)
+  after them. VERIFIED (the call order). That the damage, and with it the
+  killed callback, runs between the two is INFERRED (the calls between).
+  In a gdb run whose round was thought ahead of the target's cmds the tag
+  read the origin (208.5629, 2294.3694), 0.36 of the way from the
+  origin the 43150 snapshot carried to the 43200 one's. VERIFIED (gdb at
+  0x80cc7f6, the capture). That this is the antilag's rewound origin is
+  INFERRED. In the floor capture the target's cmd at 43800 ran ahead of
+  the killing round and carried the knockback's 1.8 units on, from
+  (208.287, 2293.768) to (209.053, 2295.434); ours had placed the posed
+  body at its last end frame's origin, so the rifle started at (202, 2314,
+  286) where retail's starts at (203, 2315, 286). VERIFIED (the
+  captures, ours). vcod places the drop's tag at the dropper's
+  `CorpseSource` origin, which each cmd updates, or at the round's
+  rewound origin (`Cod4Host::antilag`), and sweeps from the same origin;
+  `cod4_corpse_drag_ab` matches the rifle's every word. VERIFIED (the
+  gate). Open: `getTagOrigin` on a player still places at the last end
+  frame's origin.
 - `LaunchItem` (0x80910ec): angles (0, the body's yaw plus the offset,
   0); `G_Spawn`; `eType` 3, `index` the item, mins -1 and maxs 1 on every
   axis (0x809141b..0x8091453), +0x120 0x407c0108, `clientNum` the dropper;
@@ -991,12 +1029,34 @@ reads the field into the killcam frame
 - The kill capture's target at 50000 reads the shooter's spawn frame of
   46900 with `deltaTime` 3100 where 4500 was asked. VERIFIED live. Ours
   matches.
+- The archived playerstate has been through the delta codec once: a gdb
+  run (a break at `ClientEndFrame` 0x80a68b8 on each client's view word,
+  client+0x108) read the shooter's live pitch -1.0382 (cmd -189 shorts)
+  and the killcam follower's copy -1.03271, -188 shorts. VERIFIED live.
+  So a view of -354 shorts archives as -353 and goes out as -352, which
+  the plate capture's killcam reads. VERIFIED live. That the archive is
+  `SV_ArchiveSnapshot`'s `MSG_WriteDeltaPlayerstate` read back is
+  INFERRED (the quantization's shape). Ours sends the archive's angles
+  once (`PlayerState::sent_angles`) as it records it.
 - The follower gets the entities of the snapshot round `archivetime`
   back (each round's kept 200 frames, the playerstates' look-back; 7.1):
   retail's killcam frames carry the victim's living body (entity 0,
   `eType` 1) where the live world holds only the corpse. VERIFIED live.
   Without the archive 22 of the gate's killcam rows fail, with it none.
   VERIFIED (the gate).
+- `SV_BuildClientSnapshot`'s archived pass skips an entity whose archived
+  `clientMask` (+0xf8) holds the bit of the followed client's number
+  (the archived playerstate's +0xdc, read at 0x817a3f5; the test at
+  0x817a5ad..0x817a5c5) and the followed client's own entity
+  (0x817a5cd), and sends one with `svFlags` 0x18 (+0xf4, 0x817a5d5)
+  unculled; nothing in it reads a live entity.
+  VERIFIED (the instructions). Ours had also left out every archived
+  entity whose number a live single-client temp entity held: the plate
+  run's archived impact 348 of 45100 went missing from the killcam's
+  48350..48500 while a live sound for the target held 348. Ours now
+  filters the live temps from the live world only;
+  `cod4_corpse_rounds_ab` matches every killcam entity. VERIFIED (the
+  gate).
 
 The archived playerstate's clocks move up by the look back: the first
 killcam frame at 50000 reads `commandTime` 50000, the shooter's 46900 plus

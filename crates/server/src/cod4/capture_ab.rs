@@ -668,27 +668,7 @@ const CSB0_CORPSE: Pair = Pair {
     cvars: &[("sv_clientSideBullets", "0")],
 };
 
-const CSB0_CORPSE_GAPS: &[(&str, &str)] = &[
-    (
-        "target ps viewangles[0]",
-        "the target's killcam, 45700..46100, replays the shooter's first \
-         frames after his spawn with his pitch a short under retail's",
-    ),
-    (
-        "target entity 348",
-        "the killcam's archived plate impact of 45100, which retail's \
-         replay keeps four frames from 48350 and ours leaves out",
-    ),
-    (
-        "target ps delta_angles",
-        "the target's second spawn at 50100 keeps the first life's \
-         `delta_angles` on ours",
-    ),
-    (
-        "shooter entity 0:1 lerp.apos.trBase",
-        "the target's second life's angles, off the same spawn",
-    ),
-];
+const CSB0_CORPSE_GAPS: &[(&str, &str)] = &[];
 
 /// Under `sv_clientSideBullets` 0 a kill through the plate: the corpse's
 /// fall in solid sweeps again and stays up, `trTime` the frame's, and the
@@ -713,31 +693,7 @@ const CSB0_DRAG: Pair = Pair {
     cvars: &[("sv_clientSideBullets", "0")],
 };
 
-const CSB0_DRAG_GAPS: &[(&str, &str)] = &[
-    (
-        "target entity 321:3",
-        "the dropped rifle leaves the dying body's hand a unit off \\
-         retail's, x and y, and its fall follows (cod4-combat.md 6.1)",
-    ),
-    (
-        "shooter entity 321:3",
-        "the same dropped rifle in the shooter's snapshots",
-    ),
-    (
-        "target ps viewangles[0]",
-        "the target's killcam, 45950..46350, replays the shooter's first \\
-         frames after his spawn with his pitch a short under retail's",
-    ),
-    (
-        "target ps delta_angles",
-        "the target's second spawn keeps the first life's `delta_angles` \\
-         on ours",
-    ),
-    (
-        "shooter entity 0:1 lerp.apos.trBase",
-        "the target's second life's angles, off the same spawn",
-    ),
-];
+const CSB0_DRAG_GAPS: &[(&str, &str)] = &[];
 
 /// Under `sv_clientSideBullets` 0 a kill on the open floor: the rounds
 /// into the corpse as its death anim drags it raise its flesh's entry and

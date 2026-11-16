@@ -927,14 +927,19 @@ pub(crate) fn posed_tag(host: &GameHost, id: EntId, name: &str) -> Option<(Vec3,
         let m = Mat3::from_quat(turn);
         return Some((at, [m.x_axis, m.y_axis, m.z_axis]));
     }
-    posed_body_tag(host, id.0, name)
+    posed_body_tag(host, id.0, name, None)
 }
 
-/// [`posed_tag`] of the playing body `entity` the last frame posed.
+/// [`posed_tag`] of the playing body `entity` the last frame posed, placed
+/// at `origin` when given, else where that frame posed it.
+/// `G_DObjGetWorldTagMatrix` reads `r.currentOrigin` at the call
+/// (0x80cc815), so a tag read after the body's own cmd moved it sits that
+/// much further on (cod4-combat.md 6.1).
 pub(crate) fn posed_body_tag(
     host: &GameHost,
     entity: u32,
     name: &str,
+    origin: Option<Vec3>,
 ) -> Option<(Vec3, [Vec3; 3])> {
     let p = host
         .cod4()
@@ -947,12 +952,13 @@ pub(crate) fn posed_body_tag(
         .iter()
         .position(|b| b.name.eq_ignore_ascii_case(name))?;
     let (pos, rot) = crate::game::cod4::combat::skel_worlds(skel, &p.pose, Some(&p.controls))[i];
-    let (_, turn, _) = p.placed.to_scale_rotation_translation();
+    let mut placed = p.placed;
+    if let Some(o) = origin {
+        placed.w_axis = o.extend(1.0);
+    }
+    let (_, turn, _) = placed.to_scale_rotation_translation();
     let m = Mat3::from_quat(turn * rot);
-    Some((
-        p.placed.transform_point3(pos),
-        [m.x_axis, m.y_axis, m.z_axis],
-    ))
+    Some((placed.transform_point3(pos), [m.x_axis, m.y_axis, m.z_axis]))
 }
 
 /// The receiver's tag `name`: a playing body's or a helicopter's posed

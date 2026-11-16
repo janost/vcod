@@ -807,9 +807,19 @@ pub(crate) fn launch_weapon(
     let _ = vcod_gsc::Host::set_field(host, cx, id, classname, class);
     let yaw = c.yaw;
     let fwd = glam::Vec3::new(yaw.to_radians().cos(), yaw.to_radians().sin(), 0.0);
-    let (mins, maxs) = host.client_box(slot);
+    // The live box: the killed callback drops before `player_die` lowers
+    // `r.maxs[2]` to 30 (gdb at 0x80918ed read 70, cod4-combat.md 6.1).
+    let (mins, mut maxs) = host.client_box(slot);
+    maxs[2] = c.height;
     let (mins, maxs) = (glam::Vec3::from(mins), glam::Vec3::from(maxs));
-    let origin = glam::Vec3::from(c.origin);
+    // `r.currentOrigin`: where the body's last cmd left it, or where a
+    // round's antilag holds it through the damage (cod4-combat.md 6.1).
+    let origin = host
+        .cod4()
+        .antilag
+        .get(&slot)
+        .copied()
+        .unwrap_or(glam::Vec3::from(c.origin));
     let mut base = origin;
     base.z = (f64::from(maxs.z - mins.z) * 0.5 + f64::from(origin.z)) as f32;
     let cvar = |host: &GameHost, name: &str, default: f32| match host.cvars.get(name) {
@@ -832,8 +842,9 @@ pub(crate) fn launch_weapon(
     delta.z = (crandom() * f64::from(up_rand) + f64::from(up_base) + f64::from(delta.z)) as f32;
     delta.x = (crandom() * f64::from(horz) + f64::from(delta.x)) as f32;
     delta.y = (crandom() * f64::from(horz) + f64::from(delta.y)) as f32;
-    let hand = tag
-        .and_then(|t| super::cod4_script::posed_body_tag(host, slot as u32, t).map(|(at, _)| at));
+    let hand = tag.and_then(|t| {
+        super::cod4_script::posed_body_tag(host, slot as u32, t, Some(origin)).map(|(at, _)| at)
+    });
     if let (Some(at), Some(clip)) = (hand, host.cod4().clip.as_deref()) {
         let mid = ((mins.as_dvec3() + maxs.as_dvec3()) * 0.5 + origin.as_dvec3()).as_vec3();
         let world = crate::game::cod4::clip::Cod4Clip {

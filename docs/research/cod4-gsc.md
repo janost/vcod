@@ -2293,11 +2293,20 @@ The custom class tests build `custom1` off the stats `cac_getdata` reads
   0x80a7c24..0x80a7c5a), view height 60 and 60.0, blurs 6 and 1.8, the two
   1023s (0x80a7d2b..0x80a7dbc). VERIFIED (the instructions). What it leaves
   is the spawn frame above.
-- A follower's cmds are not kept: the spawn's `delta_angles` 110.00061 is
-  the spot's 45 less the -65 the walker sent before it followed its
-  teammate. VERIFIED live. `cod4_probe`'s cmds while following are its
-  held view less the copied `delta_angles` (-69.99), +70, which the spawn
-  did not take. INFERRED (the probe's code).
+- A follower's cmds are kept: `ClientThink` (0x80a6810) copies the last
+  cmd to the old (0x80a6857) and takes each new one into `sess.cmd`
+  (client+0x2f90, `SV_GetUsercmd` 0x80a686e) before `ClientThink_real`,
+  following or not, and `SetClientViewAngle` puts the spawn's view off
+  its angles (+0x2f98, 0x80a7841). VERIFIED (the instructions). The walk
+  capture's spawn `delta_angles` 110.00061 is the spot's 45 less the -65
+  the walker sent before and all through its follow (53703 from 45210 to
+  47886). VERIFIED live. The plate capture's target spawned off its
+  killcam's last cmd (yaw 4973: `delta_angles` 96.68518). VERIFIED live.
+  That capture's cmd of yaw 64319, sent after its client read the
+  50100 snapshot, reached the server after the 50100 frame's spawn.
+  VERIFIED live (the line order). The gates (`wire_ab`, `capture_ab`)
+  send a twin's own cmd angles before its spawn and put a packet after
+  the frame its client had already read.
 - `SpectatorClientEndFrame`: a client on a team with no class may not fly
   free (`allowSpectateTeam("freelook", false)`), so it follows the first
   playing teammate (`Cmd_FollowCycle_f`, INFERRED). The walker's
