@@ -140,7 +140,7 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str) -> Vec<Round> {
     let mut t = start - 50;
     while t < end {
         t += 50;
-        let Some(snap) = target.side.at(t) else {
+        let Some(snap) = target.side.ran_at(t) else {
             continue;
         };
         let mut done = {
@@ -161,7 +161,7 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str) -> Vec<Round> {
         level.run_frame(t);
         // The shooter's look-at, which the replay leaves out of the level,
         // builds the target once a frame (cod2-combat.md 9.5).
-        if let Some(s) = shooter.side.at(t) {
+        if let Some(s) = shooter.side.ran_at(t) {
             level.look_trace_from(&PlayerState::from_wire(&s.ps));
         }
         archive(&mut level, t);
@@ -247,31 +247,6 @@ fn retail_rewinds_match_vcods() {
     );
 }
 
-/// How far a traced bone may sit from retail's dumped one, in units and in
-/// quat components: the few ulps the replay's pose still leaves.
-const BONE_TOLERANCE: (f32, f32) = (2e-5, 1e-6);
-
-/// The gdb capture's rounds whose bones the replay still poses off
-/// retail's, by frame time, each with its section of cod2-combat.md.
-const BONE_GAPS: &[(i32, &str)] = &[
-    (
-        13150,
-        "9.5 the run clip's node time a few ulps off, up to 3e-5",
-    ),
-    (
-        13550,
-        "9.5 the run clip's node time a few ulps off, up to 3e-5",
-    ),
-    (
-        13700,
-        "9.5 the run clip's node time a few ulps off, up to 3e-5",
-    ),
-    (
-        13800,
-        "9.5 the run clip's node time a few ulps off, up to 3e-5",
-    ),
-];
-
 /// Retail's bones at each struck trace of the target (entity 0) in a
 /// `tools/re/cod2_trace_gdb.py` dump, by level time, the last one of a
 /// frame: the round's, after the shooter's look-at.
@@ -299,60 +274,66 @@ fn dumped_bones(dump: &str) -> HashMap<i32, HashMap<usize, [f32; 8]>> {
     out
 }
 
-/// A capture taken under gdb (`GDB_PY=tools/re/cod2_trace_gdb.py`, the
-/// fixture's header): every round strikes retail's bone, and the body each
-/// round's trace built sits where retail's `DObjTraceline` read it
-/// (`crates/cod2/tests/fixtures/trace/antilag-gdb.txt`), bone for bone.
+/// The captures taken under gdb, each with its trace dump
+/// (`crates/cod2/tests/fixtures/trace/`, the headers the recipes):
+/// `antilag-gdb` under `tools/re/cod2_trace_gdb.py`, `antilag-slow` under
+/// `tools/re/cod2_gdb_all.py`, whose breakpoints slow the server enough
+/// that it runs frames back to back with no snapshot between
+/// (cod2-player-anims.md 7).
+const GDB_CAPTURES: [&str; 2] = ["antilag-gdb", "antilag-slow"];
+
+/// Each capture taken under gdb: every round strikes retail's bone, and the
+/// body each round's trace built is the one retail's `DObjTraceline` read,
+/// bone for bone, word for word.
 #[test]
 fn retail_rewinds_and_bones_match_vcods_under_gdb() {
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
     };
     let fs = Rc::new(fs);
-    let rounds = replay(&fs, "antilag-gdb");
-    let mut wrong = rounds_off(&rounds, &[]);
-    let dump = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../cod2/tests/fixtures/trace/antilag-gdb.txt"
-    ))
-    .unwrap();
-    let retail = dumped_bones(&dump);
-    let (mut bones, mut worst) = (0, (0.0f32, 0.0f32));
-    for r in &rounds {
-        let Some(mats) = retail.get(&r.time) else {
-            wrong.push(format!("{}: no dumped trace", r.time));
-            continue;
-        };
-        let mut off = None;
-        for (&i, m) in mats {
-            // The trace builds only the bones with a box and their parents.
-            let Some(&ours) = r.bones.get(i).filter(|b| **b != Mat::ZERO) else {
+    for name in GDB_CAPTURES {
+        let rounds = replay(&fs, name);
+        let mut wrong = rounds_off(&rounds, &[]);
+        let dump = std::fs::read_to_string(format!(
+            "{}/../cod2/tests/fixtures/trace/{name}.txt",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let retail = dumped_bones(&dump);
+        let mut bones = 0;
+        for r in &rounds {
+            let Some(mats) = retail.get(&r.time) else {
+                wrong.push(format!("{}: no dumped trace", r.time));
                 continue;
             };
-            let dt = (0..3)
-                .map(|c| (ours.trans[c] - m[4 + c]).abs())
-                .fold(0.0, f32::max);
-            let dq = (0..4)
-                .map(|c| (ours.quat[c] - m[c]).abs())
-                .fold(0.0, f32::max);
-            bones += 1;
-            if dt > BONE_TOLERANCE.0 || dq > BONE_TOLERANCE.1 {
-                off.get_or_insert(format!("{}: bone {i} off {dt:e} {dq:e}", r.time));
-            }
-            if !BONE_GAPS.iter().any(|g| g.0 == r.time) {
-                worst = (worst.0.max(dt), worst.1.max(dq));
+            for (&i, m) in mats {
+                // The trace builds only the bones with a box and their parents.
+                let Some(&ours) = r.bones.get(i).filter(|b| **b != Mat::ZERO) else {
+                    continue;
+                };
+                bones += 1;
+                let words = ours.quat.iter().chain(&ours.trans).map(|c| c.to_bits());
+                if !words.eq(m[..7].iter().map(|c| c.to_bits())) {
+                    let d = (0..7)
+                        .map(|c| {
+                            let o = if c < 4 {
+                                ours.quat[c]
+                            } else {
+                                ours.trans[c - 4]
+                            };
+                            (o - m[c]).abs()
+                        })
+                        .fold(0.0, f32::max);
+                    wrong.push(format!("{}: bone {i} off {d:e}", r.time));
+                }
             }
         }
-        if off.is_some() != BONE_GAPS.iter().any(|g| g.0 == r.time) {
-            wrong.push(off.unwrap_or(format!("{}: bones now match", r.time)));
-        }
+        eprintln!("{name}: {} rounds, {bones} bones", rounds.len());
+        assert!(rounds.len() >= 25 && bones > 1000, "{name}");
+        assert!(
+            wrong.is_empty(),
+            "{name} off retail's:\n{}",
+            wrong.join("\n")
+        );
     }
-    eprintln!(
-        "{} rounds, {bones} bones, worst {:e} units {:e} quat outside the gaps",
-        rounds.len(),
-        worst.0,
-        worst.1
-    );
-    assert!(rounds.len() >= 30 && bones > 1000);
-    assert!(wrong.is_empty(), "off retail's:\n{}", wrong.join("\n"));
 }

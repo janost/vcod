@@ -214,6 +214,18 @@ impl Side {
         self.snaps.iter().find(|s| s.time == time)
     }
 
+    /// The playerstate the end frame at `time` ran with: its snapshot's,
+    /// or for a frame with none the next one's. `SV_Frame` runs every frame
+    /// due back to back and sends one snapshot after the last, so a frame
+    /// whose snapshot is missing read no packet before the next
+    /// (cod2-player-anims.md 7). `None` before the first snapshot.
+    pub(super) fn ran_at(&self, time: i32) -> Option<&Snap> {
+        if self.snaps.first()?.time > time {
+            return None;
+        }
+        self.snaps.iter().find(|s| s.time >= time)
+    }
+
     /// The send time of the packet that first carried the cmd at `time`.
     pub(super) fn sent_at(&self, time: i32) -> i32 {
         self.cmds
