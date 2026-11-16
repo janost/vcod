@@ -8788,6 +8788,55 @@ mod tests {
         );
     }
 
+    /// `scriptUsage` under `probe_usage` on retail 1.1d, mp_brecourt
+    /// (`tests/fixtures/usage/`, handshake doc, "Console commands over
+    /// rcon"): every group's count, var usage, endon usage and positions
+    /// line for line. Not compared: the source line and caret retail prints
+    /// under each position at `developer 1`, and the entities' var usage.
+    #[test]
+    fn script_usage_counts_as_retail() {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let now = Instant::now();
+        let mut sv = Server::new(
+            ServerConfig {
+                map: "mp_brecourt".into(),
+                gametype: "probe_usage".into(),
+                ..cfg()
+            },
+            now,
+        );
+        sv.overlay_script(
+            "maps/mp/gametypes/probe_usage",
+            include_str!("../../gsc/tests/fixtures/semantics/probe_usage.gsc"),
+        );
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        for _ in 0..40 {
+            sv.tick(now);
+        }
+        assert!(sv.script_log().iter().any(|l| l.trim() == "PROBE ready"));
+        let keep = |l: &&str| {
+            ["count", "(file", "called from:", "****"]
+                .iter()
+                .any(|p| l.starts_with(p))
+        };
+        let entity = |l: &str| {
+            l.starts_with("ent type")
+                .then(|| l.split(", var").next().unwrap().to_string())
+        };
+        let retail = include_str!("../tests/fixtures/usage/mp_brecourt-probe_usage.txt");
+        let ours = sv.game.module.script.as_mut().unwrap().script_usage();
+        let pick = |t: &str| -> Vec<String> {
+            t.lines()
+                .filter(|l| !l.starts_with('#'))
+                .filter_map(|l| entity(l).or_else(|| keep(&l).then(|| l.to_string())))
+                .collect()
+        };
+        assert_eq!(pick(&ours), pick(retail), "{ours}");
+    }
+
     /// `probe_startclock` on retail: the script clock starts on the load's
     /// `level.time`, the settle frames walk it 100 ms at a time, and a thread
     /// due at a frame's `level.time` runs the frame after

@@ -12,16 +12,17 @@ const BUCKETS: usize = 0xffff;
 
 /// Threads grouped by their whole call stack, sorted as retail's qsort
 /// orders code addresses (file install order, then line; a shorter stack
-/// first on a shared prefix), each group's count and summed
-/// locals and endons over the innermost position and its callers, then
-/// `(class, count, fields)` for every object class that has any.
+/// first on a shared prefix), each group's count and its var and endon
+/// usage summed as floats and truncated (0x809d556..0x809d5b3) over the
+/// innermost position and its callers, then `(class, count, fields)` for
+/// every object class that has any.
 pub fn script_usage(threads: &[ThreadUsage], classes: &[(&str, usize, usize)]) -> String {
     let mut threads = threads.to_vec();
-    threads.sort();
+    threads.sort_by(|a, b| a.stack.cmp(&b.stack));
     let mut out = String::from(RULE);
     for group in threads.chunk_by(|a, b| a.stack == b.stack) {
-        let vars: usize = group.iter().map(|t| t.vars).sum();
-        let endons: usize = group.iter().map(|t| t.endons).sum();
+        let vars = group.iter().fold(0.0f32, |s, t| s + t.vars) as i32;
+        let endons = group.iter().fold(0.0f32, |s, t| s + t.endons) as i32;
         out.push_str(&format!(
             "count: {}, var usage: {vars}, endon usage: {endons}\n",
             group.len()
@@ -80,7 +81,7 @@ pub fn string_usage(lengths: &[usize]) -> String {
 mod tests {
     use super::*;
 
-    fn thread(stack: &[(u32, &str, u32)], vars: usize, endons: usize) -> ThreadUsage {
+    fn thread(stack: &[(u32, &str, u32)], vars: f32, endons: f32) -> ThreadUsage {
         ThreadUsage {
             stack: stack
                 .iter()
@@ -101,9 +102,9 @@ mod tests {
         ];
         let text = script_usage(
             &[
-                thread(&a, 3, 1),
-                thread(&[(0, "maps/mp/_load", 7)], 2, 0),
-                thread(&a, 4, 1),
+                thread(&a, 3.0, 1.0),
+                thread(&[(0, "maps/mp/_load", 7)], 2.0, 0.0),
+                thread(&a, 4.0, 1.0),
             ],
             &[("entity", 211, 431), ("hudelem", 1, 1), ("pathnode", 0, 0)],
         );
@@ -131,9 +132,9 @@ mod tests {
     fn script_usage_orders_groups_by_install_order() {
         let tdm = "maps/mp/gametypes/tdm";
         let mines = [(7, "maps/mp/_minefields", 19)];
-        let mut threads = vec![thread(&mines, 2, 0); 32];
-        threads.push(thread(&[(0, tdm, 1184)], 6, 0));
-        threads.push(thread(&[(0, tdm, 992)], 2, 0));
+        let mut threads = vec![thread(&mines, 2.0, 0.0); 32];
+        threads.push(thread(&[(0, tdm, 1184)], 6.0, 0.0));
+        threads.push(thread(&[(0, tdm, 992)], 2.0, 0.0));
         let text = script_usage(&threads, &[]);
         let blocks: Vec<&str> = text.lines().filter(|l| l.starts_with("(file")).collect();
         assert_eq!(
