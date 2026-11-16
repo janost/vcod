@@ -1,13 +1,16 @@
-//! Launched car parts against mp_backlot's steps (`vcod_cod4::physics`,
-//! cod4-gsc.md 3.6.1): a sedan's hood and door dropped edge-first across
-//! a step's edge come to rest with no world solid inside their boxes.
+//! Launched car parts against mp_backlot's steps and dynamic entities
+//! against mp_crash's (`vcod_cod4::physics`, cod4-gsc.md 3.6.1): each
+//! dropped edge-first across a step's edge comes to rest with no world
+//! solid inside its box.
 //! `COD4_DIR` unset passes vacuously.
 
 use glam::Vec3;
 use vcod_cod4::assets::Assets;
 use vcod_cod4::collision::ClipMap;
 use vcod_cod4::map::Map;
-use vcod_cod4::physics::{Body, Dvars, ShapeBox, clip_solids, clip_trace, part_models};
+use vcod_cod4::physics::{
+    Body, Dvars, Preset, Shape, ShapeBox, clip_solids, clip_trace, part_models,
+};
 use vcod_cod4::ragdoll::CLIP_MASK;
 use vcod_cod4::testing::cod4_install;
 use vcod_cod4::walk::{WalkOptions, walk};
@@ -116,11 +119,60 @@ fn solid_inside(clip: &ClipMap, b: &ShapeBox) -> f32 {
     deepest
 }
 
+/// `shape` with `preset` dropped from 24 units over the first six of
+/// `edges`, across them, along them and at 45 degrees, tipped 30 degrees
+/// so an edge leads, stepped as `advance` steps it to 10 s: a line per
+/// drop that does not sleep, ends with a point in the world, or with
+/// world solid a quarter unit or more inside its box.
+fn drop_on_steps(
+    clip: &ClipMap,
+    edges: &[(Vec3, Vec3)],
+    name: &str,
+    shape: &Shape,
+    preset: &Preset,
+    advance: &mut dyn FnMut(&mut Body, i32),
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    for &(at, up) in &edges[..6] {
+        let yaw = up.y.atan2(up.x).to_degrees();
+        for (turn, roll) in [(0.0, 30.0), (90.0, 30.0), (45.0, -30.0)] {
+            let angles = Vec3::new(0.0, yaw + turn, roll);
+            // The box's centre 24 units over the edge.
+            let rot = vcod_common::turretpose::angles_quat(angles.to_array());
+            let origin = at + Vec3::Z * 24.0 - rot * shape.boxes[0].centre;
+            let mut b = Body::new(origin, angles, shape, preset, 0);
+            let clear = b.world_boxes().all(|w| solid_inside(clip, &w) == 0.0);
+            assert!(clear, "{name} at {at} turn {turn}: starts in the world");
+            let mut t = 0;
+            while t < 10_000 && !b.asleep {
+                t += 16;
+                advance(&mut b, t);
+            }
+            let depth = b
+                .world_boxes()
+                .map(|w| solid_inside(clip, &w))
+                .fold(0.0f32, f32::max);
+            let z = Vec3::ZERO;
+            let points_in = b
+                .world_points()
+                .filter(|&p| clip.trace(p, p, z, z, CLIP_MASK).startsolid)
+                .count();
+            let line = format!(
+                "{name} at {at} turn {turn} roll {roll}: asleep {} after {t} ms, {} away, solid {depth} deep, {points_in} points in",
+                b.asleep,
+                b.origin().distance(origin)
+            );
+            println!("{line}");
+            if !b.asleep || depth > 0.0 || points_in > 0 {
+                problems.push(line);
+            }
+        }
+    }
+    problems
+}
+
 /// mp_backlot's sedan hood (a brush geom) and left front door (its bounds
-/// box), each dropped from 24 units over six steps' edges, across them
-/// and along them, tipped 30 degrees so an edge leads: every drop goes
-/// to sleep within 10 s, its points out of the world, and no world solid
-/// a quarter unit or more inside its box.
+/// box) through [`drop_on_steps`] on the client's launched-part path.
 #[test]
 fn parts_dropped_edge_first_on_backlots_steps_rest_clear_of_them() {
     let (Some(install), Some(common)) = (cod4_install(), zone("common_mp")) else {
@@ -138,49 +190,63 @@ fn parts_dropped_edge_first_on_backlots_steps_rest_clear_of_them() {
         "vehicle_80s_sedan1_green_hood",
         "vehicle_80s_sedan1_green_door_lf",
     ] {
-        let part = parts.get(name).unwrap_or_else(|| {
-            let mut k: Vec<_> = parts.keys().filter(|k| k.contains("sedan")).collect();
-            k.sort();
-            panic!("no {name}: {k:?}")
-        });
+        let part = &parts[name];
         assert_eq!(part.shape.boxes.len(), 1, "{name}");
-        for &(at, up) in &edges[..6] {
-            let yaw = up.y.atan2(up.x).to_degrees();
-            for (turn, roll) in [(0.0, 30.0), (90.0, 30.0), (45.0, -30.0)] {
-                let angles = Vec3::new(0.0, yaw + turn, roll);
-                // The box's centre 24 units over the edge.
-                let rot = vcod_common::turretpose::angles_quat(angles.to_array());
-                let origin = at + Vec3::Z * 24.0 - rot * part.shape.boxes[0].centre;
-                let mut b = Body::new(origin, angles, &part.shape, &part.preset, 0);
-                let clear = b.world_boxes().all(|w| solid_inside(&clip, &w) == 0.0);
-                assert!(clear, "{name} at {at} turn {turn}: starts in the world");
-                let mut trace = clip_trace(&clip);
-                let mut solids = clip_solids(&clip);
-                let mut t = 0;
-                while t < 10_000 && !b.asleep {
-                    t += 16;
-                    b.advance_in(t, &mut trace, &mut solids, &d);
-                }
-                let depth = b
-                    .world_boxes()
-                    .map(|w| solid_inside(&clip, &w))
-                    .fold(0.0f32, f32::max);
-                let z = Vec3::ZERO;
-                let points_in = b
-                    .world_points()
-                    .filter(|&p| clip.trace(p, p, z, z, CLIP_MASK).startsolid)
-                    .count();
-                let line = format!(
-                    "{name} at {at} turn {turn} roll {roll} : asleep {} after {t} ms, {} away, solid {depth} deep, {points_in} points in",
-                    b.asleep,
-                    b.origin().distance(origin)
-                );
-                println!("{line}");
-                if !b.asleep || depth > 0.0 || points_in > 0 {
-                    problems.push(line);
-                }
-            }
-        }
+        let mut trace = clip_trace(&clip);
+        let mut solids = clip_solids(&clip);
+        problems.extend(drop_on_steps(
+            &clip,
+            &edges,
+            name,
+            &part.shape,
+            &part.preset,
+            &mut |b, t| b.advance_in(t, &mut trace, &mut solids, &d),
+        ));
+    }
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// mp_crash's dynamic entities, one def of each model whose shape has a
+/// box (16 models; the cylinders' are left out), through
+/// [`drop_on_steps`] on mp_crash's steps under the mask
+/// `DynEnts::advance_in` gives a body that starts in no clip (cod4-world.md
+/// 13).
+#[test]
+fn dynents_dropped_edge_first_on_crashs_steps_rest_clear_of_them() {
+    let (Some(install), Some(common)) = (cod4_install(), zone("common_mp")) else {
+        return;
+    };
+    let (m, walked) = Map::load(&install, "english", "mp_crash").unwrap();
+    let clip = ClipMap::from_assets(&walked.assets).unwrap();
+    let defs = vcod_cod4::dynent::defs(&walked.assets, &[&common]);
+    let edges = steps(&m, &clip);
+    println!("{} steps", edges.len());
+    assert!(edges.len() >= 6, "{edges:?}");
+    let mut seen = std::collections::BTreeMap::new();
+    for d in &defs {
+        let Some((shape, preset)) = &d.body else {
+            continue;
+        };
+        let Some(b) = shape.boxes.first() else {
+            continue;
+        };
+        println!("{} {:?} mass {}", d.model, b.half * 2.0, preset.mass);
+        seen.entry(d.model.clone())
+            .or_insert(((**shape).clone(), *preset));
+    }
+    let d = Dvars::default();
+    let mut problems = Vec::new();
+    for (name, (shape, preset)) in &seen {
+        let mut trace = clip_trace(&clip);
+        let mut solids = clip_solids(&clip);
+        problems.extend(drop_on_steps(
+            &clip,
+            &edges,
+            name,
+            shape,
+            preset,
+            &mut |b, t| b.advance_in(t, &mut trace, &mut solids, &d),
+        ));
     }
     assert!(problems.is_empty(), "{problems:#?}");
 }
