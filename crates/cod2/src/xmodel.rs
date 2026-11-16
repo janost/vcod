@@ -133,13 +133,17 @@ pub struct PartBone {
 }
 
 /// The quaternion's `w` short the engine derives from x, y, z (Linux
-/// 0x080c613c): 0 once `x^2 + y^2 + z^2` reaches 32767^2.
+/// 0x080c613c, and an xanim key's at 0x80c3cf4 and 0x80c3dd6): `32767^2`
+/// less the squares, converted to a float, its root through libm stored
+/// as a float (0x80c77cc, 0x80c522a), plus 0.5, floored; 0 once the
+/// squares reach 32767^2.
 pub fn quat_w(x: i16, y: i16, z: i16) -> i16 {
     let rest = 0x3fff_0001i64 - [x, y, z].iter().map(|&c| c as i64 * c as i64).sum::<i64>();
     if rest < 1 {
         0
     } else {
-        ((rest as f64).sqrt() + 0.5).floor() as i16
+        let root = f64::from((rest as f32 as f64).sqrt() as f32);
+        (root + 0.5).floor() as i16
     }
 }
 

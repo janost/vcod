@@ -66,8 +66,9 @@ second client running on `cod2_lnxded`).
   a helmet's root is `j_head`. VERIFIED (`head_german_afrca_christoph`,
   `helmet_german_africa`). An untagged attach grafts by the root's name,
   and the head's `j_neck`/`j_head` share the body's, as 1.1's heads share
-  `bip01 neck`/`bip01 head`. INFERRED (1.1's rule, `skeleton.rs`); every
-  stock character grafts to one root this way (`tests/player_rigs.rs`).
+  `bip01 neck`/`bip01 head`. VERIFIED (gdb: retail's DObj builds the
+  head's three as copies of the body's, section 11). Every stock character
+  grafts to one root this way (`tests/player_rigs.rs`).
 
 ## 3. The anim array
 
@@ -181,7 +182,8 @@ VERIFIED, `combat/hit-tags` (cod2-combat.md 9.3, "The knocked body").
   the connect and animated in `ClientEndFrame`; its controls ease only
   when a trace builds the skeleton, and its clips play at node time
   (cod2-combat.md 9.5). `PlayerBody::animate`, `ease_controls` and
-  `pose_in` are that split of `advance` and `pose`.
+  `dobj_mats` are that split of `advance` and `pose`; `dobj_mats` builds
+  the bones in retail's arithmetic (section 11).
 - The record's second word is `animscript::AnimRecord::movetypes_hi`
   (movetypes 32 and up by CoD2's names, clear for a CoD1 script), which
   `animclock`'s windowed setter reads for the crouched stumbles; the float
@@ -367,3 +369,108 @@ corpse's CoD2 `eFlags` on the wire and takes the fresh bit out at
 `deathAnimDuration`. The corpse falls under `TR_GRAVITY` until it rests and moves by its
 death anim's root motion each frame (`game::cod2_corpse::run`,
 `vcod_cod2::rootdelta::rel_delta`; cod2-combat.md 6.2).
+
+## 11. The server's DObj pose
+
+How `cod2_lnxded` 1.3 builds a body's bones for its traces and tags.
+`vcod_cod2::player::dobj` is its port; `PlayerBody::dobj_mats` runs it for
+the server (`game::cod2_combat`). Addresses lnxded. Every function below is
+an unoptimized gcc build: each float variable and each float argument is a
+store, each expression runs on the x87 stack at the 64-bit precision Linux
+leaves it (vcod_common's `F80`). VERIFIED (the disassembly).
+
+- `G_DObjCalcPose` (0x811e3c0, all 128 part bits) and `G_DObjCalcBone`
+  (0x811e454, the bone's hierarchy bits) return at once when the skeleton
+  exists under the stamp (0x8092002, 0x8091f7a); else `DObjCalcAnim`
+  (0x80c1260 through 0x8092134), the entity type's controller off the
+  table at 0x8187d1c by the byte at entity +0x166, then `DObjCalcSkel`
+  (0x80b9dfa through 0x809215e). VERIFIED (the calls).
+- `DObjCalcAnim` walks the tree from node 0 at weight 1 with the clear flag
+  (0x80bfc04), then gives every asked bone no leaf reached its model's
+  local: a root the identity, any other bone its four `XModel` quat shorts
+  times the float 1/32767 (0x38000100) stored (0x80c3b90), no translation,
+  the weight word untouched. VERIFIED (the instructions; gdb reads 0 there
+  on a fresh skeleton).
+- The walk is 1.7's (cod4-player-anims.md 11): a node skips each child of
+  weight 0 (the info's +0x20); one live child takes the node's weight and
+  flags; with two or more, the first runs with the clear flag, the rest
+  without, each at its own weight and nested, into the bones when the node
+  clears, else into scratch (0x200 bones at most). Then the fold, by the
+  node's flags: not nested, each bone of non-zero weight times `1 /
+  weight` passed as a float; nested and clearing, the quat times `rsqrt *
+  w` and the shift times `w / weight`, both passed as floats, the weight
+  `w`; nested alone, those added out of scratch, `w` added to the weight.
+  VERIFIED (the instructions). `rsqrt` (0x80c34fe) is the `0x5f3759df`
+  step off the stored `((x^2 + y^2) + z^2) + w^2` (0x80c38e6) with one
+  Newton step, 0.5 (0x815042c) and 1.5 (0x8150428), its half and its result
+  stored; a zero quat is left. VERIFIED (the instructions).
+- A leaf (`numframes` at parts +0): at node time 1 or with no frames every
+  part reads its last key (0x80bd20e); under 256 frames 0x80c2ffa, else
+  0x80c336e. Each takes the frame `t * numframes` stored and truncated
+  (0x80bd0a6) and `k = w * 1/32767` stored. A part keyed on every frame
+  takes the truncated frame as its key and `frame - key` stored as the
+  fraction; one with a key list searches it off the truncated frame and
+  stores `(frame - key) / (next - key)` (0x80bd638, 0x80bd4c4; 0x80bda1c,
+  0x80bd876 past 256 frames). VERIFIED (the instructions).
+- The sums per bone, each stored once: a full quat's four shorts or a half
+  quat's `z` and `w` (parts +0x14 the bit per bone) as `s0 + (s1 - s0) *
+  frac` on the stack (0x80c3cb0), times `k`, added (0x80c39fe, 0x80c3986);
+  a held key `s * k` added (0x80c3b20, 0x80c3aea); a bone with the half bit
+  and no data adds `w` to the quat's `w`. A keyed translation `((v1 - v0) *
+  frac + v0) * w` (0x80c3ce2), a held one `v * w`, added (0x80c3be4,
+  0x80c37a0); every bone the leaf reaches adds `w` to its weight. VERIFIED
+  (the instructions).
+- The loaders rebuild a quat's `w` short alike, the xmodel's (0x80c613c)
+  and an xanim key's (0x80c3cf4, `z` only 0x80c3dd6): `32767^2` less the
+  squares, converted to a float, its root through libm `sqrt` stored as a
+  float (0x80c77cc, 0x80c522a), plus 0.5 (0x81505e0, 0x8150440), floored,
+  truncated; 0 once the squares reach `32767^2`. VERIFIED (the
+  instructions). An exact integer root, as CoD1's loaders take, put the
+  `w` of two keyed bones (`j_thumb_ri_3`, `j_eye_lid_top_ri`) off retail's
+  in 32 of the dumped calls. VERIFIED (`skel_ab`).
+- The controller (`G_PlayerController` 0x80f729a, `BG_Player_DoControllers`
+  0x80dbc70) sets `back_low`, `back_mid`, `back_up`, `neck`, `head` and
+  `pelvis` (the table at 0x8184ca8) through `DObjSetControlTagAngles`
+  (0x80bbea4), then `tag_origin` through `DObjSetLocalTag` (0x80bbf22), a
+  bone outside the call's part bits skipped (0x80babee, 0x80bab64). Both
+  land in 0x80bbd20: the local's quat off the angles, the translation given
+  (`vec3_origin` 0x814cfc8 for a control), weight 0; a control also sets
+  its bit at skeleton +0x10. VERIFIED (the calls and the stores). So a
+  control bone keeps no anim of its own. VERIFIED (gdb).
+- 0x80bbd20's quat: each angle times the double pi / 360 (0x814ff70)
+  stored, its libm `sin` and `cos` stored (0x80bc046); `t0 = -ps * ys`,
+  `t1 = ps * yc`, `t2 = pc * ys`, `t3 = pc * yc` stored; `x = rs t3 + rc
+  t0`, `y = rc t1 + rs t2`, `z = -rs t1 + rc t2`, `w = rc t3 - rs t0`, each
+  stored. VERIFIED (the instructions).
+- `DObjCalcSkel`: a bone a later model shares by name with an earlier one
+  is a copy of the earlier's built bone (`DObjCreateDuplicateParts`); every
+  shared name, not only the root's: the head's `j_spine4`, `j_neck` and
+  `j_head` copy the body's, the helmet's `j_head`, `j_head_end` and
+  `j_helmet` the head's. VERIFIED (gdb: the copies' words equal).
+  vcod's skeleton merges only an attachment's root (section 2), so its
+  helmet's two other bones sit at their bind under `j_head`; nothing
+  traces or tags them. A root of model 0 keeps its local and takes the
+  weight (0x80bc34e): `2 / s` with `s` the stored square sum, a zero quat
+  becoming `w` 1, weight 2. Any other bone: the quat its local's times its
+  parent's, a control bone's its parent's times its local's (0x80bc452,
+  0x80bc58a: `x = ((ax bw + aw bx) + az by) - ay bz` and its kin on the
+  stack, each stored), then its weight; its translation the local's plus
+  the model's bind offset, stored (0x80bc134), moved out through the
+  parent (0x80bc39e): the parent's rows (0x80ab4a0: `quat.xyz * weight`
+  stored, each product with the quat stored, `1 - (yy + zz)` and the rest
+  rounded once), each component `((t.x r0 + t.y r1) + t.z r2) + trans`
+  stored. VERIFIED (the instructions).
+- gdb on retail under the hit pose probe (`tools/re/cod2_skel_gdb.py`,
+  `crates/cod2/tests/fixtures/skel/hitpose-gdb.txt`) dumped 820 builds of
+  both bodies: one, two and three leaves, standing, crouched, prone and
+  reloading. Rebuilt off each dumped tree's clips, node times and weights,
+  every local the walk left matches word for word (616640 words), and the
+  build off retail's locals every bone it left (701920 words); an `f64` for
+  the stack left one word of the build `1.4e-17` where retail's is 0.
+  VERIFIED (`skel_ab`, all 820 calls; the fixture keeps 25 of them).
+- The server's poses off this (`body_pose`, `world_tag`): the sd kill run's
+  two drops start where retail's do and match to the bit; on a fresh tdm
+  kill capture under gdb, `G_DObjGetWorldTagMatrix`'s place (0x811e542;
+  0x80a7436's sums on the stack) of `tag_weapon_right` matches retail's
+  word for word once the legs clip's node time is retail's (cod2-protocol.md
+  15.7). VERIFIED (gdb, the gate).
