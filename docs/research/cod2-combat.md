@@ -1510,7 +1510,11 @@ the target's bones and logs where they stand every frame from 8500 to
   after it match. The flight after the body is off only in the last bits
   of `trBase` (81.89673 against 81.896774 at 10050) and `trDelta` (6e-5
   at most; `GAPS`). VERIFIED, `hit-throw`'s frames
-  (`COMBAT_MISSILES=hit-throw`). This needs the target's idle clip on
+  (`COMBAT_MISSILES=hit-throw`). Posed in retail's arithmetic
+  (cod2-player-anims.md 11), `trDelta[2]` goes wrong in 3 rows where it
+  went in 6, the rest as they were. VERIFIED, the gate. The body's trace
+  still walks its boxes in floats off unit quats, not `DObjTraceline`'s
+  stores. INFERRED, the code. This needs the target's idle clip on
   retail's clock (9.3); off it the flight was 0.01 to 0.9 off with the
   strike 0.19 along the throw's path. VERIFIED, the gate.
 - `BG_EvaluateTrajectory` (lnxded 0x80df5d4) stores the seconds as a
@@ -1572,7 +1576,8 @@ or flinches the body. Addresses lnxded unless named Mac.
 
 vcod: `Combat`'s `ServerBody` per client (reset in `Cod2Level::connect`),
 `PlayerBody::animate` in `end_frame`, `PlayerBody::ease_controls` and
-`PlayerBody::pose_in(.., node_time)` once per stamp in `body_pose`,
+`PlayerBody::dobj_mats` (retail's anim calc and skeleton build word for
+word, cod2-player-anims.md 11) once per stamp in `body_pose`,
 `Cod2Level::packet` before each packet's cmds, and
 `Character::ignore_collision` stripping the boxes in
 `PlayerRig::assemble`. Trap: a fresh body posed per trace (legs 18
@@ -1609,6 +1614,12 @@ the newest cmd each packet carries, the target's first on a tie). Running
 them up to the shot's cmd time instead split a packet and put the strafe's
 four rounds 0.08 to 0.26 off (20500, 20850, 21000, 21100); by packets they
 sit within 0.009. VERIFIED, the gate.
+
+Posed in retail's arithmetic (cod2-player-anims.md 11) no round moved
+bone and both rows below stay. VERIFIED, the gates. So what is left is
+the pose's inputs (the clips' node times, 15.7 of cod2-protocol.md, and
+the controls) or the box walk's own floats, not the walk and the build.
+INFERRED.
 
 Left in its `GAPS`: 13400, crouched and still, 0.0204 along the line. The
 round meets the left thigh's box on a grazing face (normal against the
@@ -1924,7 +1935,10 @@ Left in the gate's `GAPS`:
   idle starts at its begin frame (6150, node time 0) and plays on when the
   landing sets 153 again at 6250 (`legsAnim` 0x299); retail's reads as
   started at 6050, 200 ms into the loop at 6250. INFERRED, the arithmetic.
-  What puts retail 100 ms ahead is not known. `BG_RunLerpFrameRate` (Mac
+  What puts retail 100 ms ahead is not known. The tdm kill run's drops
+  read the same idle a step behind vcod's instead, its pose otherwise
+  retail's to the bit (cod2-protocol.md 15.7), so the two starts differ
+  in opposite senses. VERIFIED (gdb, the gates). `BG_RunLerpFrameRate` (Mac
   0x183492) gives a new legs clip a start time (`XAnimSetTime`, the
   spread) only when it loops, has a non-zero `moveSpeed` (+0x44) and its
   node's weight reads 0; the idle's `moveSpeed` is 0, so its set takes no
