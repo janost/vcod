@@ -1912,6 +1912,31 @@ Left in the gate's `GAPS`:
   farther, which reads as the target's upper body pitched a few tenths of
   a degree further toward the shooter. INFERRED, the signs. The actor box
   cull (9.5) and whole-packet cmds do not move them. VERIFIED, the gate.
+  The cause in `hit-melee` is the struck body's idle phase, not its
+  skeleton. With the target's `pb_stand_alert` (legs 153, 100 frames at
+  30 fps, a 3.3 s loop) sampled 3 frames (100 ms) further on, all six of
+  its body contacts print retail's digits, where they sat +0.157, +0.035,
+  +0.056 and -0.092 along the line (10250, 13250, 16250, 19250); 2.75 and
+  3.5 frames leave up to 0.007 and 0.014. VERIFIED, the gate with a
+  test-only shift of every node frame. The same shift on every capture
+  breaks `hit-torso`, `hit-legs`, `hit-smg` and others, so it is this
+  target's start and not the sampler. VERIFIED, the gate. The replay's
+  idle starts at its begin frame (6150, node time 0) and plays on when the
+  landing sets 153 again at 6250 (`legsAnim` 0x299); retail's reads as
+  started at 6050, 200 ms into the loop at 6250. INFERRED, the arithmetic.
+  What puts retail 100 ms ahead is not known. `BG_RunLerpFrameRate` (Mac
+  0x183492) gives a new legs clip a start time (`XAnimSetTime`, the
+  spread) only when it loops, has a non-zero `moveSpeed` (+0x44) and its
+  node's weight reads 0; the idle's `moveSpeed` is 0, so its set takes no
+  time of its own. VERIFIED, the decompile. The target's spawn snapshot
+  (6200) carries only the spawn think's 100 ms fall from `probe_vz` 1, so
+  the spawn is not earlier. INFERRED, the fall. That snapshot is the
+  target's sixth message, where the other captures' targets play from
+  their second or third (`move_probe.rs` records from the first snapshot
+  with `pm_type` 0 and a weapon), which points at the time between the
+  client's begin and its spawn. INFERRED. `hit-rocket-rand`'s two contacts
+  (19650, 26550, -0.035 and -0.032) do not move with the shift. VERIFIED,
+  the gate.
 - "9.7 the look-at flag on a turned body": in `hit-melee` the target's
   `pm_flags` 0x200000 (its look-at trace meeting the shooter, 9.2) is
   set one snapshot where retail's is clear and clear one where retail's
