@@ -70,6 +70,21 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, c: &Case) -> Vec<String> {
     sv.set_protocol(proto);
     sv.overlay_script("maps/mp/gametypes/probe_gunduel", SCRIPT);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    // The bodies and gear retail's character scripts drew (`PROBE
+    // models`), which the probe puts on ours' players.
+    for l in c
+        .fixture
+        .lines()
+        .filter_map(|l| l.strip_prefix("PROBE models "))
+    {
+        let mut t = l.split(' ');
+        let num = t.next().expect("an entity number");
+        let key = format!("probe_model_{num}");
+        sv.set_cvar(&key, t.next().expect("a body"));
+        for (i, m) in t.enumerate() {
+            sv.set_cvar(&format!("{key}_{i}"), m);
+        }
+    }
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let pin = |num: usize| spawn_at(c.fixture, num).map(Some).into_iter().collect();
     sv.pin_spawns(vec![pin(0), pin(1)]);
@@ -466,16 +481,6 @@ const NEAR_15: Near = Near {
     cell: 0.0011,
 };
 
-/// 1.1d: victim 1's points and cells (cod11-turrets.md 13.10, "Open"):
-/// 0.0004 to 0.011 on a body his own end frame placed, 0.08 to 0.2 in
-/// the arc's middle on one it has not, and cells to 0.06 and 0.3.
-const POSE_GAPS_11: &[Gap] = &[Gap {
-    victim: 1,
-    from: 0,
-    to: i32::MAX,
-    why: "turrets doc 13.10, the 1.1d gunner pose",
-}];
-
 #[test]
 fn two_gunners_in_each_others_arc_match_retail() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
@@ -483,10 +488,10 @@ fn two_gunners_in_each_others_arc_match_retail() {
     };
     let c = Case {
         fixture: include_str!("fixtures/gunduel/mp_carentan-gunduel.txt"),
-        join_ms: 7950,
-        late_ms: 3100,
+        join_ms: 8500,
+        late_ms: 3050,
     };
-    check(fs, &c, NEAR_15, POSE_GAPS_11);
+    check(fs, &c, NEAR_15, &[]);
 }
 
 fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {

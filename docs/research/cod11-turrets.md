@@ -2387,7 +2387,8 @@ and `ClientEndFrame` (0x50abd). So 1.1d carries the rows across frames as
 1.5b and UO do; vcod ran its own placement's rows on 1.1 until 2026-11-14.
 vcod measurement, `gunduel_ab` on 1.1d with the tree: victim 0 reads
 retail's points and cells within `NEAR_15` (its `POSE_GAPS_11` entry
-dropped); victim 1 unchanged (13.10, "Open").
+dropped); victim 1 since the 2026-11-16 retake with the gunners' gear
+(13.10, "The 1.1d victim's pose").
 
 VERIFIED live, `mp_carentan-dm-turret-gungrid.txt` (1.1d, 2026-11-15,
 `-script.txt` and `-target.txt` beside it): the 13.9 recipe on 1.1d with
@@ -2481,7 +2482,8 @@ chest; `turn_a` swaps the roles; `duel` has both fire at each other and,
 0.5 s in, every hit kill. Every hit logs its point and direction to the
 float's last bit and a 5 by 5 `bulletTrace` grid round the point (the pose
 the round met); every frame logs each gunner's origin. Captures (recipe in
-each header), all 2026-11-14, each with both clients' `CMDS` lines and the
+each header), 2026-11-14 (the 1.1d one retaken under gdb on 2026-11-16
+with each gunner's `PROBE models`), each with both clients' `CMDS` lines and the
 server's receive order (`RECV`, docs/dev/retail.md "Receive order"):
 `crates/server/tests/fixtures/gunduel/mp_carentan-gunduel.txt` (1.1d),
 `-gunduel-1.5.txt` (1.5b), `-gunduel-uo.txt` (UO 1.51b). `gunduel_ab`
@@ -2580,34 +2582,25 @@ second frame both fire, cells to 7.8, on both victims. Two causes:
 vcod measurement: `gunduel_ab` holds both 1.5b's and UO's duels with no
 gap.
 
-Open, held as a `gunduel_ab` gap:
-
-- 1.1d (`POSE_GAPS_11`, victim 1 since 2026-11-14's carried rows, 13.9
-  "1.1d's placement"): points 0.0004 to 0.011 off on a gunner his own end
-  frame placed, cells to 0.06; on one not yet placed, retail's points to
-  the float step where his blend has no `forward` leaf and 0.08 to 0.2 off
-  where it has one (the sweep's middle, `s` -12 to 24, and the duel), cells
-  0.1 to 0.3 throughout (vcod measurement, 2026-11-14: victim 1's grid rows
-  to 1.10). Not determined. Ruled out by vcod measurement: the
-  DObj's frame (standing it in the placement's angles past the cmd and
-  `setPlayerAngles` puts slot 1's rounds up to 2.8 off), and the 1.5b and
-  UO causes above (1.1d restarts the fire node at 0, and its gates read
-  the line's weights). VERIFIED, a 1.1d rerun under gdb (2026-11-16, the
-  gunners' entities at `G_RunFrame`'s entry): gun B at z 1.90734863e-06,
-  as ours places it, but the axis gunner at z -31.8749943 where the
-  fixture's `PROBE at` reads -31.898199097, and his rows at 0.5599651
-  where ours, on the fixture, reads 0.5629. A rerun's gunner B does not
-  stand where the fixture's did, so its tree is no reference for ours'
-  replay: the next step is a capture taken under gdb that `gunduel_ab`
-  replays itself. 1.1d's gunner
-  grid (13.9, "1.1d's placement") reads retail's since 2026-11-16, so his
-  own pose in the thread pass is retail's; the bone trace is not ported
-  store for store (13.5).
+The 1.1d victim's pose (`POSE_GAPS_11` until 2026-11-16, victim 1 on
+every frame: points 0.0004 to 0.2 off, cells to 0.3). The cause was the
+gunners' gear, as in the gunner grid (13.9, "The gear"): every character
+script draws a head and gear at random (`randomint`, `xmodelalias`), the
+head is what the duel's rounds hit, and ours drew its own. VERIFIED, a
+1.1d retake under gdb (2026-11-16, recipe in the fixture's header; every
+hitch warning came before the first client connected): with the probe's
+`PROBE models` line (each gunner's body and attachments, logged at the
+mount) and ours' players wearing them (`probe_model_<num>`), every hit
+and grid row of the retake reads retail's within `NEAR_15`, victim 1
+included. VERIFIED, the retake's dump: gunner B's rows read 0.5599617,
+ours' 0.5599617; his leaves 0.7000003 and 0.2999997, ours' 0.6999998
+and 0.3000002, which the gate's bounds take. The retake replaced the
+2026-11-14 1.1d capture, which logged no models.
 
 What a 1.1d rerun of the duel holds (2026-11-16, `probe_gunduel` under gdb,
 both gunners' anim info records at the first `DObjCalcSkel` on each in the
 entity and end-frame passes, as `tools/re/gdb_gunner_tree.py` reads them;
-the rerun's hits sit up to 0.02 off the fixture's, so it is read on its own
+the rerun's hits sit up to 0.02 off the 2026-11-14 capture's, so it is read on its own
 and not replayed):
 
 - VERIFIED: on the duel's first frame (26250) slot 0, placed this frame,
@@ -2624,14 +2617,24 @@ and not replayed):
   later), retail places the fire group once more at the `rest` view while
   the legs still play it: its goals jump to level 0.56, 15down 0.44, leaves
   0.5 and 0.5, and once the fire node is out the step lands every row on
-  them (0x80bb130's arm for a node with neither weight nor goal). Ours'
-  slot 0 reads the `rest` view a frame later (its end frame 23100 still
-  carries the sweep's `aim_at`), so its fire group keeps the sweep's last
-  rows (level 0.6506, leaves 0.117 and 0.883). INFERRED: this moves only
-  the duel's first frame, where the fire node weighs 0.001: the strict
-  clear keeps the stale rows (the node is weighted by then) and the next
-  step lands them on the placement's goals. Why ours' view lags there is
-  not determined.
+  them (0x80bb130's arm for a node with neither weight nor goal).
+  INFERRED: the stale rows move only the duel's first frame, where the
+  fire node weighs 0.001: the strict clear keeps them (the node is
+  weighted by then) and the next step lands them on the placement's
+  goals.
+- VERIFIED, a third 1.1d run under gdb (2026-11-16, `GDB_MODE=grid` on
+  the allied gunner, his `ps.viewangles` at `ps+0xc0` at each weight
+  step): no view lags. His view reads the sweep's `aim_at` through the
+  thread pass of 23100 (yaw 223.255661) and `rest` from 23150 (229),
+  as ours reads it; his legs leave the fire anim at the end frame of
+  23150 there (`standMG42_aim` at 0.001 at the next step), and
+  `ClientEndFrame` runs `BG_PlayerAnimation` (game.mp.i386.so 0x41486)
+  before `turret_think_client` (0x414b1). INFERRED: the fire group placed
+  at the `rest` aim in the first run is that run's trigger release
+  reaching the legs a frame later than the view, which varies from run
+  to run with the client's packets; ours' slot 0 leaves fire at its own
+  replay's frame, and the retaken capture's gate reads retail's with no
+  gap.
 
 ## 14. The client
 

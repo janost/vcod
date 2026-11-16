@@ -556,16 +556,6 @@ impl GameRand {
     }
 }
 
-/// The idle clip a body at `stance` is posed in for the hit boxes when no
-/// legs anim rides its playerstate. INFERRED stand-in.
-fn idle_anim(stance: Stance) -> &'static str {
-    match stance {
-        Stance::Stand => "pb_stand_alert",
-        Stance::Crouch => "pb_crouch_alert",
-        Stance::Prone => "pb_prone_aim",
-    }
-}
-
 /// `ByteToDir`'s inverse over a direction.
 fn dir_byte(v: Vec3) -> i32 {
     dir_to_byte(v.to_array())
@@ -697,16 +687,11 @@ impl Cod2Level {
     /// anims, stance, view and lean.
     fn body_frame(&self, slot: usize, origin: Vec3) -> Option<BodyFrame> {
         let ps = &self.players.get(slot)?.as_ref()?.ps;
-        let set = self.combat.anims.as_ref()?;
-        // The anims pmove picked; the stance's idle where none rode the
-        // playerstate (no paks for the script).
-        let legs = match ps.legs_anim {
-            0 => set
-                .anims
-                .wire_of(idle_anim(ps.effective_stance()))
-                .unwrap_or(0),
-            l => l,
-        };
+        self.combat.anims.as_ref()?;
+        // The anims pmove picked. A spawn's own end frame carries none (0),
+        // and the end frame sets no clip off it: the idle starts a frame
+        // later, when the first cmd's pmove picks it (cod2-player-anims.md 7).
+        let legs = ps.legs_anim;
         // The entity's words as `BG_PlayerStateToEntityState` (0x80dfcc2)
         // writes them: `eFlags` with 0x20000 dead and 0x40000 sighted,
         // `angles2[1]` the move's direction, the prone pitches.

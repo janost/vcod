@@ -181,7 +181,17 @@ on a tdm kill run: the infos at `0x85bc900 + 0x28 * index`, +0xc the time,
 +0x10 the time before the step, +0x18 the blend's seconds left, +0x1c the
 goal, +0x20 the weight, +0x24 the rate). vcod's channel clock
 (`animclock::Play`) runs the same rule: time 0 at the end frame that sets
-the clip, a step a frame after. INFERRED (the code against the dump).
+the clip, a step a frame after. INFERRED (the code against the dump). A
+spawn's own end frame (the spawn calls it, at the level time the begin
+ran) carries `legsAnim` 0 and sets no clip; the idle is set at the next
+end frame, after the first cmd's pmove picks it (the melee target: begun
+and spawned at 5150, `legsAnim` 0, 153 set at node time 0 at 5200, 0.01515
+at 5250). VERIFIED (gdb on the `hit-melee` recipe). vcod's server had posed
+a body carrying no legs anim in the stance's idle, which set the idle at
+the spawn's end frame, and the first cmd's 153 with the toggle then came
+onto that clip rather than starting it; it now sets none, and the
+`hit-melee` contacts land on retail's digits (cod2-combat.md 9.7).
+VERIFIED, the gate.
 
 ## 8. What vcod carries over
 
