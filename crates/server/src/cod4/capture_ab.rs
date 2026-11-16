@@ -679,15 +679,6 @@ const CSB0_CORPSE_GAPS: &[(&str, &str)] = &[
         "the killcam's archived plate impact of 45100, which retail's \
          replay keeps four frames from 48350 and ours leaves out",
     ),
-    (
-        "target ps delta_angles",
-        "the target's second spawn at 50100 keeps the first life's \
-         `delta_angles` on ours",
-    ),
-    (
-        "shooter entity 0:1 lerp.apos.trBase",
-        "the target's second life's angles, off the same spawn",
-    ),
 ];
 
 /// Under `sv_clientSideBullets` 0 a kill through the plate: the corpse's
@@ -727,15 +718,6 @@ const CSB0_DRAG_GAPS: &[(&str, &str)] = &[
         "target ps viewangles[0]",
         "the target's killcam, 45950..46350, replays the shooter's first \\
          frames after his spawn with his pitch a short under retail's",
-    ),
-    (
-        "target ps delta_angles",
-        "the target's second spawn keeps the first life's `delta_angles` \\
-         on ours",
-    ),
-    (
-        "shooter entity 0:1 lerp.apos.trBase",
-        "the target's second life's angles, off the same spawn",
     ),
 ];
 
