@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use glam::Vec3;
 use vcod_cod4::net::delta::EntityState;
-use vcod_cod4::physics::{Body, Dvars, PartModel, clip_solids, clip_trace};
+use vcod_cod4::physics::{Body, Dvars, PartModel, WorldClock, clip_solids, clip_trace};
 
 use super::cod4::{ent_f32, ent_u32};
 use super::cod4_predict::Cod4World;
@@ -27,11 +27,22 @@ struct Part {
     body: Option<(Body, f32)>,
 }
 
-/// Every launched part a session has seen, by entity number.
-#[derive(Default)]
+/// Every launched part a session has seen, by entity number, and
+/// physics world 1, which steps their bodies.
 pub struct Cod4Physics {
     parts: HashMap<u32, Part>,
     pub dvars: Dvars,
+    pub clock: WorldClock,
+}
+
+impl Default for Cod4Physics {
+    fn default() -> Self {
+        Cod4Physics {
+            parts: HashMap::new(),
+            dvars: Dvars::default(),
+            clock: WorldClock::new(1),
+        }
+    }
 }
 
 fn vec3(e: &EntityState, name: &str) -> Vec3 {
@@ -48,11 +59,32 @@ pub fn launched(e: &EntityState) -> bool {
 }
 
 impl Cod4Physics {
+    /// World 1 to `time`: every flying part's body stepped together
+    /// ([`WorldClock::advance`]). Run once a frame before the parts are
+    /// placed.
+    pub fn advance(&mut self, world: &Cod4World, time: i32) {
+        let mut trace = clip_trace(&world.clip);
+        let mut solids = clip_solids(&world.clip);
+        let parts = &mut self.parts;
+        self.clock
+            .advance(time, &self.dvars, |ms, until, first, d| {
+                let mut awake = 0;
+                for (b, _) in parts.values_mut().filter_map(|p| p.body.as_mut()) {
+                    if first {
+                        b.begin_frame();
+                    }
+                    b.step_world(ms, until, &mut trace, &mut solids, d);
+                    awake += usize::from(!b.asleep);
+                }
+                awake
+            });
+    }
+
     /// Where launched part `e`, drawn as `model`, is at `time`: its body
     /// made on the first frame within [`LATE_MS`] of the launch and pushed
     /// by `Phys_ObjBulletImpact` off `pos.trDelta` (the contact) and
-    /// `apos.trDelta` (the force), stepped to `time`. `None` draws the
-    /// part at its `trBase`s.
+    /// `apos.trDelta` (the force), as world 1 last stepped it
+    /// ([`Self::advance`]). `None` draws the part at its `trBase`s.
     pub fn place(
         &mut self,
         e: &EntityState,
@@ -81,14 +113,12 @@ impl Cod4Physics {
                 },
             );
         }
-        let (body, _) = self.parts.get_mut(&n)?.body.as_mut()?;
-        let mut trace = clip_trace(&world.clip);
-        let mut solids = clip_solids(&world.clip);
-        body.advance_in(time, &mut trace, &mut solids, &self.dvars);
+        let (body, _) = self.parts.get(&n)?.body.as_ref()?;
         Some(body.pose(time))
     }
 
-    fn make(&self, e: &EntityState, m: &PartModel, time: i32) -> Body {
+    fn make(&mut self, e: &EntityState, m: &PartModel, time: i32) -> Body {
+        self.clock.start(time);
         let mut b = Body::new(
             vec3(e, "lerp.pos.trBase"),
             vec3(e, "lerp.apos.trBase"),
@@ -111,7 +141,7 @@ impl Cod4Physics {
     /// (`dynEnt_bulletForce`) and its preset's `bulletForceScale`
     /// (0x48df10, from the round's walk at 0x455b92). Retail passes world
     /// 0 for the part's world 1 (0x48e043), which only picks the
-    /// `msecStep` the impulse is spread over; both are vcod's 17 ms.
+    /// `msecStep` the impulse is spread over; vcod's impulse is whole.
     /// Whether one took it.
     pub fn shoot(&mut self, n: u32, at: Vec3, dir: Vec3, force: f32) -> bool {
         let Some((body, scale)) = self.parts.get_mut(&n).and_then(|p| p.body.as_mut()) else {

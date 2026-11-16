@@ -11,8 +11,8 @@ use vcod_cod4::assets::Assets;
 use vcod_cod4::collision::ClipMap;
 use vcod_cod4::map::Map;
 use vcod_cod4::physics::{
-    Body, Dvars, Preset, Shape, ShapeBox, ShapeCylinder, Solid, clip_solids, clip_trace,
-    part_models,
+    Body, Dvars, Preset, Shape, ShapeBox, ShapeCylinder, Solid, WorldClock, clip_solids,
+    clip_trace, msec_step, part_models,
 };
 use vcod_cod4::ragdoll::CLIP_MASK;
 use vcod_cod4::ragdoll::Sweep;
@@ -260,6 +260,91 @@ fn parts_dropped_edge_first_on_backlots_steps_rest_clear_of_them() {
             &part.preset,
             &mut |b, t| b.advance_in(t, &mut trace, &mut solids, &d),
         ));
+    }
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// The row of [`parts_dropped_edge_first_on_backlots_steps_rest_clear_of_them`]
+/// dropped all at once, its 36 bodies in one physics world 1 at 16 ms
+/// frames: the world's `msecStep` off the count awake after each step
+/// (`msec_step`, 0x5a6738) is 28 ms while all 36 fly and comes down to 17
+/// as they sleep, and each still rests clear of the steps.
+#[test]
+fn parts_dropped_together_step_at_world_ones_msec_step() {
+    let (Some(install), Some(common)) = (cod4_install(), zone("common_mp")) else {
+        return;
+    };
+    let (m, walked) = Map::load(&install, "english", "mp_backlot").unwrap();
+    let clip = ClipMap::from_assets(&walked.assets).unwrap();
+    let parts = part_models(&[&walked.assets, &common]);
+    let edges = steps(&m, &clip);
+    let d = Dvars::default();
+    let mut bodies = Vec::new();
+    for name in [
+        "vehicle_80s_sedan1_green_hood",
+        "vehicle_80s_sedan1_green_door_lf",
+    ] {
+        let part = &parts[name];
+        for &(at, up) in &edges[..6] {
+            let yaw = up.y.atan2(up.x).to_degrees();
+            for (turn, roll) in [(0.0, 30.0), (90.0, 30.0), (45.0, -30.0)] {
+                let angles = Vec3::new(0.0, yaw + turn, roll);
+                let rot = vcod_common::turretpose::angles_quat(angles.to_array());
+                let origin = at + Vec3::Z * 24.0 - rot * part.shape.boxes[0].centre;
+                let b = Body::new(origin, angles, &part.shape, &part.preset, 0);
+                bodies.push((format!("{name} at {at} turn {turn}"), origin, b));
+            }
+        }
+    }
+    assert_eq!(bodies.len(), 36);
+    let mut clock = WorldClock::new(1);
+    clock.start(0);
+    let (mut trace, mut solids) = (clip_trace(&clip), clip_solids(&clip));
+    let mut steps: Vec<(i32, usize)> = Vec::new();
+    let mut t = 0;
+    while t < 60_000 && bodies.iter().any(|(_, _, b)| !b.asleep) {
+        t += 16;
+        clock.advance(t, &d, |ms, until, first, dv| {
+            assert_eq!(
+                dv.step_ms,
+                steps.last().map_or(17, |&(_, n)| msec_step(1, n))
+            );
+            let mut awake = 0;
+            for (_, _, b) in bodies.iter_mut() {
+                if first {
+                    b.begin_frame();
+                }
+                b.step_world(ms, until, &mut trace, &mut solids, dv);
+                awake += usize::from(!b.asleep);
+            }
+            steps.push((ms, awake));
+            awake
+        });
+    }
+    let longest = steps.iter().map(|s| s.0).max().unwrap();
+    println!(
+        "{} steps to {t} ms, the longest {longest} ms, the first {:?}",
+        steps.len(),
+        &steps[..4]
+    );
+    assert_eq!(steps[1], (28, 36));
+    let mut problems = Vec::new();
+    for (name, origin, b) in &bodies {
+        let depth = body_depth(&clip, b);
+        let z = Vec3::ZERO;
+        let points_in = b
+            .world_points()
+            .filter(|&p| clip.trace(p, p, z, z, CLIP_MASK).startsolid)
+            .count();
+        let line = format!(
+            "{name}: asleep {}, {} away, solid {depth} deep, {points_in} points in",
+            b.asleep,
+            b.origin().distance(*origin)
+        );
+        println!("{line}");
+        if !b.asleep || depth > 0.0 || points_in > 0 {
+            problems.push(line);
+        }
     }
     assert!(problems.is_empty(), "{problems:#?}");
 }
@@ -692,7 +777,7 @@ fn two_geom_pictures_wedged_between_two_walls_are_never_pinched() {
 /// the one at its most x and least y, and vcod's points, nine on the
 /// face, take none. The lift is read against the same step with no
 /// region. Pushed on the points, as vcod had it, it read 8.9 pushes; on
-/// all 16 contacts, uncut, 12.3 (the crate thrown into the room's top).
+/// all 16 contacts, uncut, 12.3.
 #[test]
 fn a_crate_flat_on_the_floor_takes_a_jitter_at_three_corners() {
     let (Some(install), Some(common)) = (cod4_install(), zone("common_mp")) else {

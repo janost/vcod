@@ -96,7 +96,9 @@ pub struct Dvars {
     /// the world is pushed out.
     pub erp: f32,
     pub max_correcting: f32,
-    /// `msecStep`'s floor for the fx world (17 ms).
+    /// `msecStep` (17 ms, the table at 0x71e798): a lone body's step, and
+    /// what a jitter's push is spread over. A [`WorldClock`] sets it per
+    /// step ([`msec_step`]).
     pub step_ms: i32,
     /// `phys_narrowObjMaxLength` (4): a box with a side shorter, or a
     /// cylinder thinner, takes the narrow pass ([`box_contacts`]).
@@ -1143,6 +1145,78 @@ fn segment_nearest(p: Vec3, q: Vec3, s: Vec3, e: Vec3) -> Vec3 {
     p + d1 * t
 }
 
+/// `msecStep`'s least and most per world (the tables at 0x71e7a4 and
+/// 0x71e7b0): dynamic entities' (0), launched parts' and pieces' (1),
+/// ragdolls' (2).
+const MSEC_STEP: [(i32, i32); 3] = [(17, 67), (17, 67), (17, 34)];
+
+/// The `msecStep` world `world` takes after a step that leaves `awake` of
+/// its bodies awake (0x5a6640, which counts them through 0x5a62f0 after
+/// the step, 0x5a6738..0x5a67bb): the least up to 32, then the span times
+/// the count past 32 over 18, at most 1, truncated (`_ftol2`, 0x68b360).
+pub fn msec_step(world: usize, awake: usize) -> i32 {
+    let (lo, hi) = MSEC_STEP[world];
+    let f = ((awake as f32 - 32.0) / 18.0).clamp(0.0, 1.0);
+    lo + (f * (hi - lo) as f32) as i32
+}
+
+/// One physics world's clock, which steps all its bodies together
+/// (`Phys_RunFrame`, 0x5a6e02): up to a frame's time in at most two
+/// steps, each the larger of `msecStep` and half what is left, `msecStep`
+/// picked after each step off the bodies awake ([`msec_step`]).
+#[derive(Clone, Copy, Debug)]
+pub struct WorldClock {
+    world: usize,
+    /// The time simulated to; `None` until the first body ([`Self::start`]).
+    sim_ms: Option<i32>,
+    pub step_ms: i32,
+}
+
+impl WorldClock {
+    pub fn new(world: usize) -> WorldClock {
+        WorldClock {
+            world,
+            sim_ms: None,
+            step_ms: MSEC_STEP[world].0,
+        }
+    }
+
+    /// A body is made at `now`: a clock not yet running starts there.
+    pub fn start(&mut self, now: i32) {
+        self.sim_ms.get_or_insert(now);
+    }
+
+    /// The world to `time`. `step(ms, until, first, dvars)` steps each
+    /// body `ms` to `until` ([`Body::step_world`]), its frame begun when
+    /// `first` ([`Body::begin_frame`]), under `d` with this world's
+    /// `msecStep`, and returns how many are awake after it.
+    pub fn advance(
+        &mut self,
+        time: i32,
+        d: &Dvars,
+        mut step: impl FnMut(i32, i32, bool, &Dvars) -> usize,
+    ) {
+        let Some(mut sim) = self.sim_ms else {
+            return;
+        };
+        let mut left = 2;
+        let mut first = true;
+        while time.wrapping_sub(sim) > 0 {
+            let ms = (time.wrapping_sub(sim) / left).max(self.step_ms);
+            left = (left - 1).max(1);
+            sim = sim.wrapping_add(ms);
+            let dv = Dvars {
+                step_ms: self.step_ms,
+                ..*d
+            };
+            let awake = step(ms, sim, first, &dv);
+            first = false;
+            self.step_ms = msec_step(self.world, awake);
+        }
+        self.sim_ms = Some(sim);
+    }
+}
+
 /// One corner's contact with the world in a step.
 #[derive(Clone)]
 struct Contact {
@@ -1340,6 +1414,26 @@ impl Body {
             self.step_in(step as f32 / 1000.0, trace, solids, d);
             self.sim_ms = self.sim_ms.wrapping_add(step);
         }
+    }
+
+    /// A world's frame begins ([`WorldClock::advance`]): the drawn pose
+    /// lerps from here.
+    pub fn begin_frame(&mut self) {
+        self.from_ms = self.sim_ms;
+        self.from = (self.pos, self.rot);
+    }
+
+    /// One step of its world, `ms` long, to `until`.
+    pub fn step_world(
+        &mut self,
+        ms: i32,
+        until: i32,
+        trace: &mut Trace,
+        solids: &mut Solids,
+        d: &Dvars,
+    ) {
+        self.step_in(ms as f32 / 1000.0, trace, solids, d);
+        self.sim_ms = until;
     }
 
     /// The drawn origin and angles at `time`: the frame's start state
@@ -2596,6 +2690,42 @@ mod tests {
         ];
         unwedge(&mut c, falling, Vec3::ZERO);
         assert_eq!(normals(&c), [Vec3::X, -Vec3::X]);
+    }
+
+    #[test]
+    fn msec_step_follows_the_bodies_awake() {
+        let w1: Vec<i32> = [0, 32, 33, 41, 49, 50, 200].map(|n| msec_step(1, n)).into();
+        assert_eq!(w1, [17, 17, 19, 42, 64, 67, 67]);
+        assert_eq!((msec_step(2, 41), msec_step(2, 50)), (25, 34));
+        // Two steps at most a frame, each at least `msecStep`, which the
+        // count after each step picks for the next.
+        let mut clock = WorldClock::new(1);
+        let mut awake = 41;
+        let mut seen = Vec::new();
+        let mut frame = |clock: &mut WorldClock, time: i32| {
+            clock.advance(time, &Dvars::default(), |ms, until, first, d| {
+                seen.push((ms, until, first, d.step_ms));
+                awake -= 9;
+                awake + 9
+            });
+        };
+        frame(&mut clock, 100);
+        clock.start(0);
+        // 17, the least: one step reaches 16, and its 41 awake pick 42.
+        frame(&mut clock, 16);
+        // 183 left: 91 at 42, whose 32 awake pick 17, then the other 92.
+        frame(&mut clock, 200);
+        assert_eq!(
+            (seen, clock.step_ms),
+            (
+                vec![
+                    (17, 17, true, 17),
+                    (91, 108, true, 42),
+                    (92, 200, false, 17)
+                ],
+                17
+            )
+        );
     }
 
     #[test]
