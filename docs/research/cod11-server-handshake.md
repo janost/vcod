@@ -1126,11 +1126,33 @@ probe in the game, a socket on 127.0.0.1:20510 as the master.
   7903\ncount: 1, var usage: 2, endon usage: 0\n@ 6334\ncount: 1, var usage:
   5, endon usage: 0\n@ 7442\n`, then `ent type 'entity'... count: 211, var
   usage: 431`, `ent type 'hudelem'... count: 1, var usage: 1`. VERIFIED.
-- vcod's counts are its VM's (`game::usage`): var usage the defined locals
-  across frames, endon usage the endons held, positions always `(file '...',
-  line N)`; an entity's var usage its script struct's fields, without the map
-  keys retail keeps as variables (210 entities, 4 vars, mp_carentan, no
-  client).
+- VERIFIED, the disassembly: a thread's var usage is 0x80a0d4c's float,
+  `Scr_GetObjectUsage` (0x80a0c4c) of the thread's local object plus that of
+  each caller's (each type-6 stack entry) plus each array on its stack
+  (type 7 to an object of type 15) over its `refCount + 1`; its endon usage
+  0x80a0b50's, the usage of the thread's endon object (0 without one).
+  `Scr_GetObjectUsage` is 1 plus, per child, 1, and for an array child
+  (type 7 to type 15) its own usage over `refCount + 1` (`fild`, `fadd 1`,
+  `fdivrp`). A group sums its threads' floats and prints each sum truncated
+  (`fistp` under control word 0xc00, 0x809d556..0x809d5b3).
+- VERIFIED, `probe_usage` on 1.1d, mp_brecourt, over rcon 4 s in
+  (`crates/server/tests/fixtures/usage/mp_brecourt-probe_usage.txt`): a
+  thread waiting with no local is 2; one defined local 3; a local only
+  declared in a branch not taken, a local set to `undefined` and an unpassed
+  parameter add nothing; `a = [1, 2]` is 6, `a = [1]` held by two locals 6,
+  `[[1, 2]]` 8; two frames with two locals each 7; a vector, a string and a
+  float 1 each; three endons on `level` are endon usage 4. INFERRED, off
+  those: a thread is 1 plus each frame's 1 plus its defined locals, an array
+  local 1 plus its usage over its holders, and an endon object 1 plus one
+  per endon.
+- vcod (`Vm::thread_usage`, `game::usage`) counts the same over its frames:
+  a frame's defined locals, an array's holders counted over every frame,
+  struct field and array element (garbage the heap keeps too), and `1 + n`
+  for `n` endons; `script_usage_counts_as_retail` matches the capture's
+  every group line. An entity's var usage is its script struct's fields,
+  without the map keys retail keeps as variables (retail 619 over 210
+  entities on mp_brecourt, vcod fewer). Positions print `(file '...', line
+  N)` with no source line or caret under them, and never `@ <offset>`.
 - Order: a thread's record is its code positions innermost first (current,
   then callers from the stack's type-6 entries); `qsort` with 0x80a2218
   compares them pointer by pointer, a shorter record first on a shared prefix;
@@ -1141,6 +1163,14 @@ probe in the game, a socket on 127.0.0.1:20510 as the master.
 - At `developer 1` and `developer_script 1` a position prints as `(file
   'maps\mp\gametypes\tdm.gsc', line 992)\n`, the source line verbatim (`\r\n`
   kept) and spaces ending in `*` under the column. VERIFIED.
+- VERIFIED, `probe_usage`: `developer 1` alone prints the source lines
+  (`developer_script` 0 gave the same reply byte for byte), each tab of the
+  line printed as one space; the `*` sits under the `w` of `wait`, under
+  the called function's name (`inner(3);`) and under a method's name, not
+  its receiver (`self waittill` under `waittill`). At `developer 0` each
+  position is `@ <offset>`: the gametype's own file first (184 to 562),
+  then `tdm` (7803, 9302), then `_minefields` (44377), the order its
+  groups print in.
 - mp_brecourt: each gametype listed its groups in line order, then
   `_minefields`' (`count: 32`, line 19) though `_minefields` sorts first by
   name: `tdm` 992, 1184; `sd` 1246, 1291, 1691, 1822; `re` 1379, 1424, 1824,
