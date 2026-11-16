@@ -2,7 +2,8 @@
 //	docs/research/cod11-votes.md section 3. Two plain `--net-probe` clients,
 //	both axis: slot 0 is the offender, slot 1 the victim, whose window on
 //	slot 0 the script opens every five seconds; see this directory's
-//	README.md, "probe_complaint".
+//	README.md, "probe_complaint". `probe_players 3` adds a second victim,
+//	slot 2, whose window opens beside slot 1's.
 
 main()
 {
@@ -35,13 +36,16 @@ Callback_PlayerConnect()
 	logPrint("PROBE begin " + n + "\n");
 	level.players[n] = self;
 	level.joined++;
-	if(n == 1)
+	if(n >= 1)
 		self thread complain();
 }
 
 complain()
 {
-	while(level.joined < 2)
+	want = getCvarInt("probe_players");
+	if(want < 2)
+		want = 2;
+	while(level.joined < want)
 		wait 0.5;
 	wait 2;
 	self allowComplaint(self);
