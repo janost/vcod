@@ -1327,11 +1327,11 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   out at `phys_contact_erp` up to `phys_mcv`; an approach faster than 0.1
   bounces by the preset, from the corner where the step found it; ten
   passes of sequential impulses with Coulomb friction (the preset's times
-  `phys_frictionScale`); the centre itself is never moved through a
-  surface, and when its move is cut short its speed is cut with it.
-  Each box geom also meets the brushes and triangles round it as a box,
-  by face clipping (3.6.1), so a world edge between its points meets its
-  face. `msecStep` stays 17 ms. vcod's.
+  `phys_frictionScale`); after the move the centre takes 1.7's post-step
+  sweep (3.6.1). Each box geom also meets the brushes and triangles round
+  it as a box, by face clipping, and each cylinder geom as a cylinder, by
+  1.7's separating axes (3.6.1), so a world edge between its points meets
+  its face. `msecStep` stays 17 ms. vcod's.
 - Why the 26 points and the cut speed: with the hood's brush in place
   of its bounds box, the hood in the live gate below came down with its
   low corners on two floors 18 units apart and a 39-degree clip map
@@ -1339,14 +1339,19 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   centre. Each step the centre's move was cut to nothing
   while its speed (about 55 units/s along the ramp) stayed, so it never
   slept (1739 steps in 30 s). With the edge and face points the box
-  meets the ramp, and the cut speed lets a centre held that way sleep
+  meets the ramp. vcod then cut the centre's speed with its move; that
+  guard is gone for 1.7's post-step sweep (3.6.1), which leaves the speed
+  but zeroes both speeds on a stop under a fraction of 0.001, and a
+  centre held that way sleeps under it
   (`a_box_held_on_its_centre_by_a_ridge_comes_to_rest`, on the box's 8
-  corners alone, fails without the cut). VERIFIED (the runs, ours).
+  corners alone). VERIFIED (the runs, ours).
 - Tests: `physics::tests` (free fall at `phys_gravity`, the push formula,
   a 0.8 bounce, a launched door that lands and sleeps, a fast part thrown
   into a corner staying out of all three planes, a tilted box settling
   flat, the clock, a model's geoms and brushes, a box held on its
-  centre by a ridge, a box across a kerb's edge on its corners alone),
+  centre by a ridge, a box across a kerb's edge on its corners alone, a
+  cylinder on a floor on its side and upright and against a kerb's edge,
+  the post-step sweep),
   `cod4::part_edges` (3.6.1) and the live
   `cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest`: vcod-server's
   `war` on mp_backlot, a held bot's frags bursting on the first
@@ -1385,7 +1390,19 @@ What 1.7 collides a part against:
   wrapper at +0x4c) kind 3, class 13 (radius +0x50, half height +0x54)
   kind 4, class 14 kind 5; classes 2 to 10 take the default arm
   (0x5a8370), which sets no kind. VERIFIED (the tables, the reads). That 13 is the cylinder
-  is INFERRED (3.6's geom types).
+  is INFERRED (3.6's geom types, and its collider's depth below, a
+  cylinder's reach).
+- The cylinder's arm (0x5a86ad..0x5a871c): its radius (+0x50) twice
+  over and its half height (+0x54) go to the collide context's half sizes
+  (context +0x8c, +0x90, +0x94), its +0x4c to context +4, and its world
+  box is a cube of `max(radius, half height)` (0x4093c0) times the double
+  at 0x70ba88 (1.414214); it is narrow when twice its radius is under
+  `phys_narrowObjMaxLength`. The colliders read context +4 less 1 as the
+  column of the geom's rotation (context +0x44, stride 12) that is the
+  axis (0x5a11f0). VERIFIED (disassembly). That a `physGeoms` cylinder
+  gets axis 1, its rotation's first column, is INFERRED (0x5a55f0 sets a
+  1 into the block it hands 0x5a4ab0, at 0x5a5613; the field not traced
+  through).
 - A box with a side under `phys_narrowObjMaxLength` (0xcc54428,
   registered at 0x5a4408: 4, 0 to FLT_MAX, "If a geom has a dimension
   less than this, then extra work will be done to prevent it from falling
@@ -1424,18 +1441,109 @@ What 1.7 collides a part against:
   0x5b1620 with the box's centre (+0x38), rotation (+0x44) and half sizes
   (+0x8c). VERIFIED (the call). That 0x5b1620, among ODE's own code, is
   ODE's box against a triangle list is INFERRED.
-- After the world steps, 0x5a6930 sweeps each body's geom from its last
-  position to its new one under 0x2806c91 (0x4f4d30, called at
-  0x5a6aea): a point (corners at -0.001 and 0.001, 0x70b460, 0x70b278)
-  when the geom's least size (0x5a9a20) is under twice `phys_csl`
-  (0xcc54474), else a box off its extent times 0.2 (0x70b3e8). A hit not
-  started solid puts the body where the sweep stopped (0x432700,
-  0x5b6e40), and one under a fraction of 0.001 zeroes its linear and
-  angular velocity (0x5a6bd0..0x5a6bf0). VERIFIED (disassembly); the
-  box's size off the extent is INFERRED (the branch at 0x5a69b9 not read
-  through).
+- A cylinder against a brush (0x5a1330): each of the brush's six axial
+  planes (built by 0x596ae0 off its bounds) and then each side's plane
+  gets a depth from 0x5a11f0: the float at 0x70af5c (-FLT_MAX) when both
+  the geom's centre (context +0x38) and the body's position (context
+  +0x98, body +0xe0) lie behind it, else the centre's distance off it less
+  `h |n . a| + r sqrt(1 - (n . a)^2)`, `h` the half height, `r` the
+  radius, `a` the axis. A depth at or over 0 ends the collide with no
+  contact. Of the faces with edges (the brush's `edgeCount` bytes at
+  +0x40 for the axial ones, a side's byte +10), the largest depth is the
+  reference; its winding (0x5998e0) goes to 0x5a0f70. With the narrow
+  flag (context +0xa4), each other axial face whose side of the bounds
+  the centre lies past, and each other side whose plane the centre lies
+  in front of, goes to 0x5a0f70 too (0x5a152e..0x5a17a6). VERIFIED (the
+  decompiled control flow and the compares).
+- A cylinder against triangles (0x5a17c0): each triangle of the
+  partition that 0x596c70 does not cull against the centre and the
+  context's +0x30 goes to 0x5a0f70. VERIFIED (the calls). That +0x30 is
+  the length 0x5616f0 and 0x401050 give at 0x5a88cf, the geom's half
+  diagonal, is INFERRED.
+- 0x5a0f70 takes one polygon, its plane `(n, d)`: nothing unless the
+  centre or the body's position lies in front of it; then 0x59fc90 runs
+  a separating axis test, each axis through 0x59f5d0: the axis turned so
+  its dot with a reference vector is not positive, the cylinder's reach
+  along it `r sqrt(1 - c^2) + h c` (`c` the axis's dot with it, absolute),
+  the polygon's corners projected off the centre; apart (no contact) when
+  the reach is under the nearest or the farthest is under minus the
+  reach, else the overlap `reach - nearest` replaces the best when, plus a
+  bias, it is under it (the best starting at 0x70af58, FLT_MAX). The axes
+  in order and their codes: the plane's normal negated (1), the cylinder's
+  axis (2), each edge crossed with the axis (3 on), skipped when the
+  axis's dot with the normal is at most the float at 0x70b880 (0.02), and
+  some only tested, never recorded, by the sign of the edge's in-plane
+  normal against the axis; the line from the axis to each corner; then
+  for each corner and each cap centre `c +- h a`, 0x59f9f0's axis from the
+  cap's rim to it with a bias of 1.0 (the float 0x3f800000 it passes).
+  An axis shorter than the float at 0x70b234 (1e-5) is skipped. VERIFIED
+  (the decompiled code and the constants). Which vector the axes are
+  turned against is INFERRED (`eax` into 0x59f5d0 not traced; the
+  overlap's sense says the plane's normal).
+- 0x5a0f70's arms by the best code: the normal with the axis's dot under
+  the double at 0x70af08 (0.9), 0x5a02b0, the cylinder's side line toward
+  the plane (its axis's ends at `c + r u +- h a`, `u` the best axis less
+  its part along `a`, normalized, at least the double 1e-5 at 0x70b720)
+  clipped to the polygon (0x597f30), each end behind the plane a contact
+  (0x59ee60, `d - n . p` at least 0); the normal otherwise, 0x5a09a0, the
+  cap facing the plane against the polygon (0x5989f0); the axis,
+  0x59f460, the polygon cut to the cylinder's circle (0x59f170, up to
+  256 points), each point within the facing cap a contact of that depth;
+  an edge, 0x5a0ef0, the nearest points of the edge and the axis
+  (0x560050); a corner, 0x5973e0, one contact; a cap's rim against a
+  corner, 0x5a0740, the cap's circle cut by a plane (0x5a0440's chord).
+  Every contact carries the best axis and its overlap. VERIFIED (the
+  calls); what 0x5989f0 and 0x560050 compute inside is INFERRED (their
+  arguments).
+- Before each step `Phys_RunToTime`'s loop (0x5a6d50) copies each
+  body's position (body +0xe0) to its userdata (body +0xc) +0x10 and its
+  rotation to +0x1c (0x5a6da0..0x5a6deb); after it, 0x5a6c10 runs 0x5a6930
+  on each body not disabled (body +0x18 bit 4), then sets that bit on one
+  whose position falls outside a box it reads (0x5a6c43..0x5a6cb9).
+  VERIFIED (disassembly).
+- 0x5a6930 reads a size `m` off the body's first geom (body +0x1c, the
+  last ODE gave the body) through 0x5a9a20: a box (class 1) half its
+  least side; a brush (class 12, 0x5a684f) its bounds times the double at
+  0x70afb8 (0.01), x and y cut to z's size about their middles where
+  longer (0x561910), then the top x; a cylinder (class 13, 0x5a688b) its
+  radius times 0.7071 (0x70ae70), or its half height when that is less.
+  It sweeps when the position moved since the copy, or the state
+  (userdata +0x4c) is 0 or 1 (0x5a6a79..0x5a6ab2), from the copy to the
+  new position under 0x2806c91 (0x4f4d30, called at 0x5a6aea): with `m`
+  under twice `phys_csl` (0xcc54474) a point (corners at -0.001 and
+  0.001, 0x70b460, 0x70b278), else a box of `0.2 m` (the double at
+  0x70b3e8), or of `max(m - 2 phys_csl, 0.001)` when `0.8 m` is under
+  twice `phys_csl`. The state becomes 1 when the trace started solid,
+  else 2 (0x5a6af1..0x5a6b02). A hit not started solid puts the body
+  where the trace stopped (0x432700, `dBodySetPosition` 0x5b6e40), a
+  point's fraction first less `0.5 m` times the move's inverse length
+  (0x4032e0, 0x403a90, the fast inverse root, floored at 0 by 0x4093c0);
+  a fraction then under 0.001 zeroes the linear and angular velocity
+  (body +0x130, +0x140, 0x5a6bd0..0x5a6bf0). No other speed changes.
+  VERIFIED (disassembly).
+- The state's other writers: `Phys_ObjCreate`'s helper stores its
+  block's +0x60 (0x5a4f8d), and `Phys_ObjCreate` writes 0 there
+  (0x5a4fbe), INFERRED (the block's passing not traced); the near
+  callback 0x5a5f20 stores 2
+  when the collide gives no contact (0x5a612d); 0x5a2280, run first in
+  the contact pass 0x5a2760, stores 1 on both bodies when two of the
+  pair's contacts' normals dot under the double at 0x70b268 (-0.99,
+  0x5a22f6, 0x5a2308). VERIFIED (disassembly). Of the other stores at
+  +0x4c in 0x5a0000..0x5b0000, 0x5a2d75's goes through the worlds' table
+  at 0xcc54478 and the rest (0x5a4d38, 0x5a8db9, 0x5a8df2, 0x5a8e32,
+  0x5a9d46, 0x5aeb76) are not traced to their base. INFERRED (the base
+  registers). So the sweep runs
+  every step a body moves, and on an unmoved one only while it is new,
+  started solid or pinched between facing contacts. INFERRED (the gate
+  above). A pinched body's (state 1) contacts in 0x5a2760: when the
+  world's byte at 0xcc54498 is set it reads the userdata's +0x50 in place
+  of the body's position, hands that to 0x5a25d0, and drops each contact
+  whose normal dots with what that gives over the float at 0x6df494
+  (0.01). VERIFIED (the decompiled flow); what 0x5a25d0 computes is not
+  read.
 
-vcod (`ClipMap::world_solids`, `physics::box_contacts`):
+vcod (`ClipMap::world_solids`, `physics::box_contacts`,
+`physics::cylinder_contacts`, `Body::sweep`):
 
 - The gathering is 0x5a8110's: the leaves the box grown by the step's
   reach touches (`box_leafs`), their brushes and AABB tree triangles
@@ -1461,7 +1569,12 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`):
   reference pair took, which its clip already meets (with them a resting
   sedan bumper in the live gate below slept with a point in the floor). Neither face reference holds a
   ledge's edge across a box's face: mp_crash's red toolbox slept on a
-  ledge's edge half a unit into it without this. vcod's.
+  ledge's edge half a unit into it without this. A triangle's three
+  edges take the same pass: with the post-step sweep, mp_crash's
+  `me_picture4` and `me_picture7` dropped turned 90 degrees onto a mesh
+  stair at (135, 2383, 236) took its nosing through the frame in the step
+  they met it, and the sweep's stop under 0.001 froze them 4 units in.
+  vcod's.
 - A triangle is always the reference and is met from its front. It is
   skipped once the box's centre is behind it, unless it is a floor's
   (normal z at least 0.7) and the centre lies off its edges, as over a
@@ -1470,18 +1583,32 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`):
   catch the seams between a mesh's triangles, and a back triangle that
   is not a floor's would push a box onto a handrail's tube (a sedan door
   on mp_backlot did). vcod's. Not ported: 0x5b1620's own tests.
-- The sweep after the step (0x5a6930) is not ported; the centre guard of
-  3.6 stands in. It runs only while the body's state (body +0x4c) is 0
-  or 1: the sweep writes 1 when it starts solid and 2 when not
-  (0x5a6af1..0x5a6b02), 0x5a5f20 writes 2 when the world collide finds
-  no contact (0x5a612d) and the contact pass at 0x5a22f6, 0x5a2308
-  writes 1. VERIFIED (the stores). What sets 1 in that pass, and so
-  when 1.7 sweeps, is not read, and the retail sweep cuts no speed: the
-  guard's cut is what lets a box held on its centre sleep (3.6). INFERRED
-  (the stores' readers not all found).
+- Each cylinder geom of a part or a dynamic entity (`Shape::cylinders`,
+  a `physGeoms` type 4, its axis the orientation's first row) meets each
+  brush as 0x5a1330 and each triangle as 0x5a17c0 do
+  (`physics::cylinder_contacts`): the faces' depths, the reference, the
+  narrow pass, and on each polygon 0x5a0f70's gate and 0x59fc90's axes in
+  order with their 0.02, 1e-5 and 1.0 and the 0.9 between its two face
+  arms, the overlap and the separation within the step's reach. vcod's:
+  the axes turned against the plane's normal; an edge's axis recorded
+  only with the centre outside that edge; the upright cap as 8 points
+  round its rim clipped to the polygon; a rim-against-corner axis's
+  contact at the corner, as a corner's; each contact's point on the
+  cylinder. Past 1.7's colliders, a brush's edges but the reference
+  face's that run more than the skin into the cylinder push it out along
+  its cap or side nearest the point, as the box's edge pass does: a stock
+  junk tire tipped onto one of mp_crash's steps slept with the step's
+  edge a unit into its cap without it. The 16 points round each cylinder
+  still sweep as the box's do.
+- The sweep after the step is 0x5a6930's (`Body::sweep`), in place of
+  the centre guard vcod had (3.6): its size off the body's last geom
+  (`Shape::sweep_half`), its gate on a move or the state, its point or
+  box, the point's back-off, the stop and the zeroing under 0.001, the
+  state it writes; the contact pass's 2 and 1 come off vcod's contacts
+  (the boxes', the cylinders' and the touching points'). Not ported: the
+  pinched body's contact filter (0x5a2760, 0x5a25d0). vcod's.
 - The contacts go into the impulse solver with the points'; the jitter
-  (cod4-world.md 13.8) takes the points' only. A cylinder still meets the
-  world on its 16 points. vcod's.
+  (cod4-world.md 13.8) takes the points' only. vcod's.
 - Measured: `cod4::part_edges` drops mp_backlot's sedan hood (its brush
   geom, a box) and left front door (its bounds box) from 24 units over
   six steps' edges (two level floors 8 apart, 6 to 18 high, with room
@@ -1489,11 +1616,19 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`):
   tipped 30 degrees: on the points alone 30 of the 36 drops slept with
   world solid at least a quarter unit inside the box (most of them 4
   units, through the hood's middle); with the boxes none, each asleep
-  within 3.5 s. Its second row drops one def of each of mp_crash's 16
-  dynamic entity models with a box on six of mp_crash's steps the same
-  way: on the points alone 167 of the 288 drops slept with world solid
-  inside the box, the picture frames and crates mostly 4 units; with the
-  boxes none. VERIFIED (the runs, ours).
+  within 3.5 s (4.6 s with the post-step sweep). Its second row drops one
+  def of each of mp_crash's 16 dynamic entity models with a box on six of
+  mp_crash's steps the same way: on the points alone 167 of the 288 drops
+  slept with world solid inside the box, the picture frames and crates
+  mostly 4 units; with the boxes none (each asleep within 4.7 s with the
+  sweep). Its third row drops one def of each of the 30 dynamic entity
+  models of every `mp_` zone whose shape has a cylinder (bottles, cans,
+  pails, pots, pans, plates, tires, hub caps, fruit, a propane tank, a
+  hookah) on mp_crash's six steps, out to 30 s: on the 16 points alone
+  480 of the 540 drops slept with world solid inside the cylinder, 361 of
+  them 4 units; with the cylinders none, 537 asleep (533 within 10 s) and
+  3 still rolling down a slope at 30 s, their speed their spin times
+  their radius. VERIFIED (the runs, ours).
 
 ## 4. The load
 
