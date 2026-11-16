@@ -279,7 +279,9 @@ pub fn join_pair_stamped(
 /// `b` connects `b_after_ms` after `a` (a frame at a time), as a retail
 /// client started later does; until then `a` joins and plays alone. A late
 /// `b` is handed back a second after its spawn, not [`SPAWN_SETTLE`], so a
-/// capture that starts soon after it can still be met.
+/// capture that starts soon after it can still be met. In the game a late
+/// `b` sends a 60 fps probe's cmds ([`probe_cadence`]), so a fall off the
+/// gsc's placement lands, and plays its land anim, when retail's did.
 #[allow(clippy::too_many_arguments)]
 pub fn join_pair_staggered(
     sv: &mut Server,
@@ -323,6 +325,7 @@ pub fn join_pair_staggered(
         }
     }
     let mut cb = NetClient::start_with_qport(ClientEnd(qb.clone()), *now, 0x2002);
+    let mut last_b = i32::MIN;
     for _ in 0..600 {
         *now += Duration::from_millis(50);
         match ca.snapshots().newest().filter(|_| !stamps_a.is_empty()) {
@@ -338,7 +341,20 @@ pub fn join_pair_staggered(
                 ca.send_frame(&holding(&ca));
             }
         }
-        cb.send_frame(&holding(&cb));
+        match cb.snapshots().newest().filter(|_| b_after_ms > 0) {
+            Some(snap) if cb.state() == NetState::Active => {
+                let end = snap.server_time + FRAME_MS as i32 - PROBE_CMD_LAG_MS;
+                let stamps = probe_cadence(last_b.max(snap.server_time - FRAME_MS as i32), end);
+                let cmds = stamped(&cb, &holding(&cb), &stamps, last_b, end);
+                if let Some(c) = cmds.last() {
+                    last_b = c.server_time;
+                }
+                cb.send_cmds(&cmds);
+            }
+            _ => {
+                cb.send_frame(&holding(&cb));
+            }
+        }
         let (ea, eb, _) = step_pair_joining(sv, (qa, &mut ca), (qb, &mut cb), *now);
         for (events, join, cl) in [(ea, &mut ja, &mut ca), (eb, &mut jb, &mut cb)] {
             for e in events {
@@ -359,6 +375,28 @@ pub fn join_pair_staggered(
         }
     }
     (ca, cb, ja, jb)
+}
+
+/// How far a probe client's newest cmd trails the frame that runs it: a
+/// retail 1.1d gunner's `commandTime` read 16 to 35 ms under each frame's
+/// time (cod11-turrets.md 13.9, "The mount's blend in").
+const PROBE_CMD_LAG_MS: i32 = 17;
+
+/// The stamps a probe client running at 60 fps sends from `after` (its
+/// last) up to `end`: steps of 16, 17 and 17 ms, as the captures' `CMDS`
+/// lines read.
+fn probe_cadence(after: i32, end: i32) -> Vec<i32> {
+    let mut out = Vec::new();
+    let mut t = after;
+    let mut i = 0;
+    loop {
+        t += [16, 17, 17][i % 3];
+        i += 1;
+        if t >= end {
+            return out;
+        }
+        out.push(t);
+    }
 }
 
 /// `cmd` once for every stamp in `stamps` past `after` and before `end`, in
