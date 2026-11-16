@@ -1924,27 +1924,6 @@ pub(super) fn bullet_damage(d: &WeaponDef, dist: f32) -> i32 {
         as f32 as i32
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_disc_draw_stays_in_the_unit_disc() {
-        for t in [1, 47950, 48000, 123_456] {
-            let (x, y) = random_dir(t);
-            assert!(x * x + y * y <= 1.0, "{t}: {x} {y}");
-        }
-    }
-
-    #[test]
-    fn a_segment_meets_a_box_only_inside_its_limit() {
-        let (lo, hi) = (Vec3::splat(-1.0), Vec3::splat(1.0));
-        let (a, b) = (Vec3::new(-10.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0));
-        assert!(segment_meets_box(a, b, lo, hi, 1.0));
-        assert!(!segment_meets_box(a, b, lo, hi, 0.4));
-    }
-}
-
 impl Cod4Level {
     /// Corpse `number`'s anims, born at `born_ms` off client `slot`: the
     /// client's body and character as they stand when it is first asked
@@ -2111,3 +2090,24 @@ pub(super) struct CorpseHit {
 
 /// A fresh corpse's contents (`clonePlayer`, 0x80ad1d8).
 pub(super) const CONTENTS_CORPSE_FRESH: u32 = 0x400_4000;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_disc_draw_stays_in_the_unit_disc() {
+        for t in [1, 47950, 48000, 123_456] {
+            let (x, y) = random_dir(t);
+            assert!(x * x + y * y <= 1.0, "{t}: {x} {y}");
+        }
+    }
+
+    #[test]
+    fn a_segment_meets_a_box_only_inside_its_limit() {
+        let (lo, hi) = (Vec3::splat(-1.0), Vec3::splat(1.0));
+        let (a, b) = (Vec3::new(-10.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0));
+        assert!(segment_meets_box(a, b, lo, hi, 1.0));
+        assert!(!segment_meets_box(a, b, lo, hi, 0.4));
+    }
+}
