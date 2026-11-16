@@ -1250,6 +1250,10 @@ pub struct Body {
     pub rot: Quat,
     pub vel: Vec3,
     pub avel: Vec3,
+    /// The force and torque the pushes since the last step left (ODE's
+    /// accumulators at body +0x98 and +0xa8), spent over the next step.
+    force: Vec3,
+    torque: Vec3,
     mass: f32,
     /// Inertia and its inverse about the centre of mass, body axes.
     inertia: Mat3,
@@ -1306,6 +1310,8 @@ impl Body {
             rot,
             vel: Vec3::ZERO,
             avel: Vec3::ZERO,
+            force: Vec3::ZERO,
+            torque: Vec3::ZERO,
             mass,
             inertia,
             inv_inertia: inertia.inverse(),
@@ -1347,8 +1353,9 @@ impl Body {
     /// it with the launch: `force`'s direction tipped up by
     /// `phys_bulletUpBias`, its length the speed, at `contact` moved out
     /// from the centre `phys_bulletSpinScale` times as far again, scaled by
-    /// the preset's `bulletForceScale`.
-    pub fn launch(&mut self, contact: Vec3, force: Vec3, scale: f32, d: &Dvars) {
+    /// the preset's `bulletForceScale`, pushed ([`Self::push`]) at the
+    /// `msecStep` of the world the caller names.
+    pub fn launch(&mut self, contact: Vec3, force: Vec3, scale: f32, msec: i32, d: &Dvars) {
         let speed = force.length();
         let dir = (force.normalize_or_zero() + Vec3::Z * d.bullet_up_bias).normalize_or_zero();
         let at = contact + (contact - self.pos) * d.bullet_spin_scale;
@@ -1369,15 +1376,37 @@ impl Body {
             denom += 0.5 * self.mass * arm * arm / u.dot(self.inertia * u);
         }
         let j = closing * self.mass * scale / denom;
-        self.impulse(r, dir * j);
+        self.push(at, dir * j, msec);
+    }
+
+    /// `Phys_ObjAddForce` (0x5a5900): `p` times `1000 / msec`, `msec` the
+    /// `msecStep` of the world the caller names (0x71e798), onto the
+    /// body's force at world point `at` (`dBodyAddForceAtPos` 0x5b7000, its
+    /// torque taken off the centre now), and the body woken. The next step
+    /// of the body's own world spends it ([`Self::integrate`]), so the
+    /// impulse is `p` times that step's length over `msec`.
+    pub fn push(&mut self, at: Vec3, p: Vec3, msec: i32) {
+        let f = p * (1000.0 / f64::from(msec)) as f32;
+        self.force += f;
+        self.torque += (at - self.pos).cross(f);
         self.wake();
     }
 
-    /// `Phys_ObjAddForce` (0x5a5900): impulse `p` at world point `at`,
-    /// spent in one step, and the body woken.
-    pub fn push(&mut self, at: Vec3, p: Vec3) {
-        self.impulse(at - self.pos, p);
-        self.wake();
+    /// The pushes' force over a step of `dt` seconds, which goes on with
+    /// gravity ahead of the solve (ODE's quickstep, 0x5b9187), then zeroed
+    /// (0x5a666b, after the step).
+    pub(crate) fn spend_force(&mut self, dt: f32) {
+        if self.force != Vec3::ZERO || self.torque != Vec3::ZERO {
+            self.vel += self.force * (dt / self.mass);
+            self.avel += self.inv_inertia_world() * (self.torque * dt);
+            (self.force, self.torque) = (Vec3::ZERO, Vec3::ZERO);
+        }
+    }
+
+    /// The force the pushes since the last step left, which the next step
+    /// spends.
+    pub fn force(&self) -> Vec3 {
+        self.force
     }
 
     fn wake(&mut self) {
@@ -1522,6 +1551,7 @@ impl Body {
         self.steps += 1;
         let (v0, w0) = (self.vel, self.avel);
         self.vel.z += d.gravity * dt;
+        self.spend_force(dt);
         let mut contacts: Vec<Contact> = Vec::new();
         let mut touched = vec![false; self.points.len()];
         for pass in 0..2 {
@@ -1532,7 +1562,7 @@ impl Body {
             if pass == 0 {
                 let mut all = self.box_contacts(dt, solids, d, v0, w0);
                 all.append(&mut found);
-                let all = self.contact_pass(all, d, v0, w0);
+                let all = self.contact_pass(all, d, v0, w0, dt);
                 contacts.extend(all);
             } else {
                 if self.state == 1 {
@@ -1563,16 +1593,28 @@ impl Body {
     }
 
     /// The near callback's contact pass (0x5a5f20) on each geom against
-    /// the world, last geom first (ODE's space lists each geom it is given
-    /// at its head): a geom with no contact sets the state 2; five or more
+    /// the world in the order 0x5aa100 walks the world's space: on the
+    /// body's first step the last geom first, as each geom made goes in at
+    /// the space's head (0x5a9f00), and on every later step the first geom
+    /// first, as 0x5a6640 moves each geom of the body's list (the last made
+    /// first) to the head after each step (0x5a9f80). A geom with no
+    /// contact sets the state 2; five or more
     /// go through [`reduce`] first (0x5a2320); then 0x5a2760: [`pinch`],
     /// on a body in state 1 [`unwedge`], and the jitter on each contact
     /// kept ([`Self::shake`]). Retail's contacts are ODE's overlaps; vcod's
     /// stand-ins are the geom's in the skin or inside ([`touching`]): its
     /// box's or cylinder's, or a brush with sides' points. The rest are
     /// vcod's, a box's or cylinder's points and the contacts met further on
-    /// within the step's travel, and pass through after the geom's.
-    fn contact_pass(&mut self, all: Vec<Contact>, d: &Dvars, v0: Vec3, w0: Vec3) -> Vec<Contact> {
+    /// within the step's travel, and pass through after the geom's. `dt` is
+    /// the step's length, over which the jitter's force goes on.
+    fn contact_pass(
+        &mut self,
+        all: Vec<Contact>,
+        d: &Dvars,
+        v0: Vec3,
+        w0: Vec3,
+        dt: f32,
+    ) -> Vec<Contact> {
         let geoms = [&self.point_geoms, &self.box_geoms, &self.cylinder_geoms]
             .iter()
             .flat_map(|g| g.iter().copied())
@@ -1581,7 +1623,13 @@ impl Body {
         let regions = std::mem::take(&mut self.jitter);
         let mut pinched = false;
         let mut out = Vec::with_capacity(all.len());
-        for g in (0..geoms).rev() {
+        let first = self.steps <= 1;
+        let order: Vec<usize> = if first {
+            (0..geoms).rev().collect()
+        } else {
+            (0..geoms).collect()
+        };
+        for g in order {
             // A geom with a box or cylinder collider: its points are vcod's.
             let collider = self.box_geoms.contains(&g) || self.cylinder_geoms.contains(&g);
             let (mut touch, ahead): (Vec<Contact>, Vec<Contact>) = all
@@ -1604,7 +1652,7 @@ impl Body {
                     pinched = true;
                     unwedge(&mut touch, v0, w0);
                 }
-                self.shake(&touch, &regions, d);
+                self.shake(&touch, &regions, d, dt);
             }
             out.extend(touch);
             out.extend(ahead);
@@ -1663,16 +1711,18 @@ impl Body {
     /// `(outer - r) / (outer - inner)` past it, `m'` the mass capped at
     /// `phys_jitterMaxMass`.
     /// The value is times `1000 / msecStep` before `Phys_ObjAddForce`
-    /// scales it again for its one step, so the impulse keeps that factor.
-    /// It runs on each geom's contacts the contact pass keeps.
-    fn shake(&mut self, contacts: &[Contact], regions: &[Jitter], d: &Dvars) {
+    /// scales it again, and the force goes on over the step being collided
+    /// (its length `dt`), so the impulse is the value times `dt` over
+    /// `msecStep`'s seconds. It runs on each geom's contacts the contact
+    /// pass keeps.
+    fn shake(&mut self, contacts: &[Contact], regions: &[Jitter], d: &Dvars, dt: f32) {
         if regions.is_empty() {
             return;
         }
         let m = self.mass.min(JITTER_MAX_MASS);
         let q = m / JITTER_MAX_MASS;
         let weight = m * (1.0 - q * q * q);
-        let per_step = 1000.0 / d.step_ms as f32;
+        let per_step = (1000.0 / f64::from(d.step_ms)) as f32;
         for c in contacts.iter().filter(|c| c.n.z >= JITTER_MIN_NORMAL_Z) {
             let at = self.pos + c.r;
             for j in regions {
@@ -1692,7 +1742,7 @@ impl Body {
                     .wrapping_add(0x269ec3);
                 let u = (self.jitter_rand >> 16 & 0x7fff) as f32 / 32768.0;
                 let lift = (j.min + u * (j.max - j.min)) * falloff * weight * per_step;
-                self.impulse(c.r, Vec3::Z * lift);
+                self.impulse(c.r, Vec3::Z * (lift * per_step * dt));
             }
         }
     }
@@ -2198,21 +2248,65 @@ mod tests {
         let mut b = Body::new(Vec3::ZERO, Vec3::ZERO, &shape, &preset, 0);
         // At the centre no arm: J = speed * m * scale / (m + 0.5), along
         // the force tipped up by 0.5.
-        b.launch(Vec3::ZERO, Vec3::X * 1000.0, 0.6, &Dvars::default());
+        // Each pushed at world 1's 17 and spent over a 17 ms step, whole.
+        b.launch(Vec3::ZERO, Vec3::X * 1000.0, 0.6, 17, &Dvars::default());
+        b.spend_force(0.017);
         let dir = Vec3::new(1.0, 0.0, 0.5).normalize();
         let want = dir * (1000.0 * 0.6 / 15.5);
         assert!(b.vel.distance(want) < 1e-3, "{} {want}", b.vel);
         assert_eq!(b.avel, Vec3::ZERO);
         // Off the centre it spins and flies slower.
         let mut s = Body::new(Vec3::ZERO, Vec3::ZERO, &shape, &preset, 0);
-        s.launch(Vec3::Y * 4.0, Vec3::X * 1000.0, 0.6, &Dvars::default());
+        s.launch(Vec3::Y * 4.0, Vec3::X * 1000.0, 0.6, 17, &Dvars::default());
+        s.spend_force(0.017);
         assert!(s.vel.length() < b.vel.length());
         assert!(s.avel.z < -1.0, "{}", s.avel);
         // A body already flying faster along the push takes nothing.
         let mut f = b.clone();
         f.vel = dir * 2000.0;
-        f.launch(Vec3::ZERO, Vec3::X * 1000.0, 0.6, &Dvars::default());
+        f.launch(Vec3::ZERO, Vec3::X * 1000.0, 0.6, 17, &Dvars::default());
+        f.spend_force(0.017);
         assert_eq!(f.vel, dir * 2000.0);
+    }
+
+    #[test]
+    fn a_push_is_a_force_over_the_next_step_of_its_body_world() {
+        // Out of the world, the free body steps as gravity and the drag
+        // leave it, x and the spin untouched by gravity.
+        let mut none = planes(&[]);
+        let d = Dvars::default();
+        let (shape, preset) = door();
+        let m = preset.mass;
+        let step = |b: &mut Body, ms: i32, none: &mut Trace| {
+            let until = b.sim_ms + ms;
+            b.step_world(ms, until, none, &mut |_, _| Vec::new(), &d);
+        };
+        // Pushed at the centre at the 17 of the world named, then two 25 ms
+        // steps (a 50 ms frame): the first spends 25 / 17 of the push, the
+        // second nothing more.
+        let mut b = Body::new(Vec3::Z * 100.0, Vec3::ZERO, &shape, &preset, 0);
+        b.push(b.pos, Vec3::X * 100.0, 17);
+        assert_eq!(b.vel, Vec3::ZERO);
+        step(&mut b, 25, &mut none);
+        let drag = 1.0 - d.drag_linear * 0.025;
+        let want = 100.0 / m * 25.0 / 17.0 * drag;
+        assert!((b.vel.x - want).abs() < want * 1e-5, "{} {want}", b.vel.x);
+        step(&mut b, 25, &mut none);
+        assert!((b.vel.x - want * drag).abs() < want * 1e-5, "{}", b.vel.x);
+        // Off the centre at a world's 28, spent over a 17 ms step: 17 / 28
+        // of the spin.
+        let mut s = Body::new(Vec3::Z * 100.0, Vec3::ZERO, &shape, &preset, 0);
+        let p = Vec3::X * 100.0;
+        let r = Vec3::Y * 4.0;
+        s.push(s.pos + r, p, 28);
+        let whole = s.inv_inertia_world() * r.cross(p);
+        step(&mut s, 17, &mut none);
+        let want = whole * (17.0 / 28.0) * (1.0 - d.drag_angular * 0.017);
+        assert!(
+            s.avel.distance(want) < want.length() * 1e-4,
+            "{} {want}",
+            s.avel
+        );
     }
 
     #[test]
@@ -2262,9 +2356,11 @@ mod tests {
         // `_destructible.gsc`'s blast: 4500 x 1.0 off the explosion, at the
         // door's own origin (its hinge), which the spin scale throws out to
         // four times its arm: the door spins more than it flies.
-        b.launch(b.origin(), Vec3::new(1.0, 0.3, 0.2) * 4500.0, 0.6, &d);
-        assert!((30.0..200.0).contains(&b.vel.length()), "{}", b.vel);
-        assert!(b.avel.length() > 10.0, "{}", b.avel);
+        b.launch(b.origin(), Vec3::new(1.0, 0.3, 0.2) * 4500.0, 0.6, 17, &d);
+        let mut spent = b.clone();
+        spent.spend_force(0.017);
+        assert!((30.0..200.0).contains(&spent.vel.length()), "{}", spent.vel);
+        assert!(spent.avel.length() > 10.0, "{}", spent.avel);
         run(&mut b, 10_000, &mut trace, &d);
         assert!(b.asleep, "{b:?}");
         for p in b.world_points() {
@@ -2848,6 +2944,7 @@ mod tests {
             &d,
             falling,
             still,
+            0.017,
         );
         assert_eq!((out.len(), b.state, b.pinched), (2, 0, 0));
         // One geom against both: pinched, and the one its centre is behind
@@ -2857,8 +2954,38 @@ mod tests {
             &d,
             falling,
             still,
+            0.017,
         );
         assert_eq!((out.len(), b.state, b.pinched), (1, 1, 1));
+        // On a later step the first geom goes first: its pinch, then the
+        // other's state 2.
+        b.steps = 2;
+        let out = b.contact_pass(
+            vec![wall(0, -5.0, Vec3::X), wall(0, 5.0, -Vec3::X)],
+            &d,
+            falling,
+            still,
+            0.017,
+        );
+        assert_eq!((out.len(), b.state, b.pinched), (1, 2, 2));
+        // The walk's order decides whose contacts a pinch drops: geom 0
+        // pinched between two walls, geom 1 on a floor it rises off. Last
+        // geom first (the first step) the floor's contact is taken before
+        // the pinch and stays; first geom first the pinched body drops it.
+        let rising = Vec3::Z * 10.0;
+        let walk = |steps: u32| {
+            let mut b = Body::new(Vec3::ZERO, Vec3::ZERO, &shape, &preset, 0);
+            b.box_geoms = vec![0, 1];
+            b.steps = steps;
+            let floor = Contact {
+                geom: 1,
+                ..touch(Vec3::new(0.0, 0.0, -3.0), Vec3::Z)
+            };
+            let all = vec![wall(0, -5.0, Vec3::X), wall(0, 5.0, -Vec3::X), floor];
+            let out = b.contact_pass(all, &d, rising, still, 0.017);
+            out.iter().filter(|c| c.geom == 1).count()
+        };
+        assert_eq!((walk(1), walk(2)), (1, 0));
         // A point of a geom with a box is vcod's: it neither pinches nor
         // goes, and comes after the box's contacts.
         let mut b = Body::new(Vec3::ZERO, Vec3::ZERO, &shape, &preset, 0);
@@ -2866,7 +2993,13 @@ mod tests {
             point: true,
             ..wall(0, 5.0, -Vec3::X)
         };
-        let out = b.contact_pass(vec![point, wall(0, -5.0, Vec3::X)], &d, falling, still);
+        let out = b.contact_pass(
+            vec![point, wall(0, -5.0, Vec3::X)],
+            &d,
+            falling,
+            still,
+            0.017,
+        );
         assert_eq!(
             (out.iter().map(|c| c.point).collect::<Vec<_>>(), b.pinched),
             (vec![false, true], 0)

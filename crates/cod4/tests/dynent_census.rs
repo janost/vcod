@@ -140,8 +140,11 @@ fn rounds_throw_mp_crashs_clutter_and_break_a_plate() {
     assert_eq!(s.index, can);
     assert!(broken.is_empty());
     assert!(s.at.z > defs[can].origin.z && s.at.z < top.z, "{}", s.at);
+    // Its push, spent over a step of world 0's 17 ms.
     let b = d.ents[can].body.as_ref().unwrap();
-    assert!(b.vel.z < -10.0, "{}", b.vel);
+    let mass = defs[can].body.as_ref().unwrap().1.mass.max(0.001);
+    let v = b.force() * 0.017 / mass;
+    assert!(v.z < -10.0, "{v}");
     assert_eq!(d.awake(), 1);
     let plate = defs.iter().position(|d| d.kind == DESTRUCT).unwrap();
     let p = defs[plate].origin;

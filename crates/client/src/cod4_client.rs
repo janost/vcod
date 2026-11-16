@@ -1328,22 +1328,22 @@ impl Cod4Client {
         let bullet_force = dynents
             .as_ref()
             .filter(|d| d.dvars.active)
-            .map(|d| d.dvars.bullet_force);
+            .map(|d| (d.dvars.bullet_force, d.clock.step_ms));
         let mut parts_struck = Vec::new();
         for (i, hit) in hits.iter().enumerate() {
             for h in hit {
-                let (Some(n), Some(force)) = (h.entity, bullet_force) else {
+                let (Some(n), Some((force, msec0))) = (h.entity, bullet_force) else {
                     continue;
                 };
                 let dir = (h.end - h.start).normalize_or_zero();
-                if physics.shoot(n, h.end, dir, force) {
+                if physics.shoot(n, h.end, dir, force, msec0) {
                     parts_struck.push((i, *h));
                 }
             }
         }
         // A server round's leg on one under `sv_clientSideBullets` 0
         // (0x48e060).
-        if let (Some(w), Some(force)) = (self.session.world(), bullet_force) {
+        if let (Some(w), Some((force, msec0))) = (self.session.world(), bullet_force) {
             let world = cod4_fx::ShotWorld {
                 clip: &w.clip,
                 solids: &self.session.shot_solids,
@@ -1353,7 +1353,7 @@ impl Cod4Client {
                     continue;
                 };
                 let dir = (h.end - h.start).normalize_or_zero();
-                if physics.shoot(n, h.end, dir, force) {
+                if physics.shoot(n, h.end, dir, force, msec0) {
                     parts_struck.push((i, h));
                 }
             }
