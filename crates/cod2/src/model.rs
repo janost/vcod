@@ -105,6 +105,13 @@ fn read(fs: &dyn AssetSource, path: &str) -> Result<Vec<u8>> {
     fs.read(path).ok_or_else(|| anyhow!("{path} not found"))
 }
 
+/// `xmodel/<name>`'s LOD 0 parts: the bones' quats as the engine scales
+/// its shorts, which `DObjCalcAnim` gives a bone no clip reaches
+/// (`player::dobj`).
+pub fn parts(fs: &dyn AssetSource, name: &str) -> Result<Parts> {
+    Ok(read_rig(fs, &read(fs, &format!("xmodel/{name}"))?)?.1)
+}
+
 /// The descriptor and LOD 0's parts, which size its trailing hit boxes.
 fn read_rig(fs: &dyn AssetSource, descriptor: &[u8]) -> Result<(Descriptor, Parts)> {
     let mut parts = None;

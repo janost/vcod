@@ -22,14 +22,15 @@ use glam::Vec3;
 use vcod_cod2::collision::{
     CONTENTS_BODY, CONTENTS_GLASS, ClipMap, MASK_BLAST, MASK_SHOT, SURF_NOIMPACT,
 };
+use vcod_cod2::player::dobj::Mat;
 use vcod_cod2::player::{BodyFrame, Character, PlayerAnimSet, PlayerBody, PlayerRig};
 use vcod_cod2::pmove::weapon::WeaponParams;
 use vcod_cod2::pmove::{PlayerState, Stance, pm_type};
 use vcod_common::animclock::Times;
-use vcod_common::bonetrace::{PriorityMap, bone_trace};
+use vcod_common::bonetrace::PriorityMap;
 use vcod_common::net::events::dir_to_byte;
 use vcod_common::pk3::Pk3Fs;
-use vcod_common::x87::angle_vectors;
+use vcod_common::x87::{F80, angle_vectors};
 use vcod_gsc::{EntId, Value};
 
 use super::cod2::Cod2Level;
@@ -231,7 +232,22 @@ struct ServerBody {
     /// What its last end frame read (`ClientEndFrame` copies it into the
     /// `clientInfo_t`), which the controller hook eases toward.
     frame: Option<BodyFrame>,
-    built: Option<(u32, Rc<PlayerRig>, Rc<vcod_common::skeleton::PoseBuffer>)>,
+    built: Option<(u32, Rc<PlayerRig>, Rc<Vec<Mat>>)>,
+}
+
+/// Each built bone's place and turn in the model's frame, for the box walk.
+fn mat_worlds(mats: &[Mat]) -> Vec<(Vec3, glam::Quat)> {
+    mats.iter()
+        .map(|m| {
+            let q = glam::Quat::from_array(m.quat);
+            let q = if q.length_squared() == 0.0 {
+                glam::Quat::IDENTITY
+            } else {
+                q.normalize()
+            };
+            (Vec3::from(m.trans), q)
+        })
+        .collect()
 }
 
 /// `info/mp_lochit_dmgtable`: `LOCDMGTABLE` then an info string of
@@ -752,16 +768,13 @@ impl Cod2Level {
     /// The skeleton is built once a stamp (`G_DObjCalcPose`, lnxded
     /// 0x811e3c0): the build runs the controller hook (`G_PlayerController`,
     /// 0x80f729a), which eases the controls one `level.frametime` on, and
-    /// samples each clip at its node time.
+    /// samples each clip at its node time, in `cod2_lnxded`'s arithmetic
+    /// (`PlayerBody::dobj_mats`, cod2-player-anims.md 11).
     fn body_pose(
         &mut self,
         slot: usize,
         origin: Vec3,
-    ) -> Option<(
-        Rc<PlayerRig>,
-        Rc<vcod_common::skeleton::PoseBuffer>,
-        BodyFrame,
-    )> {
+    ) -> Option<(Rc<PlayerRig>, Rc<Vec<Mat>>, BodyFrame)> {
         let f = self.body_frame(slot, origin)?;
         self.body_pose_at(slot, f)
     }
@@ -771,11 +784,7 @@ impl Cod2Level {
         &mut self,
         slot: usize,
         f: BodyFrame,
-    ) -> Option<(
-        Rc<PlayerRig>,
-        Rc<vcod_common::skeleton::PoseBuffer>,
-        BodyFrame,
-    )> {
+    ) -> Option<(Rc<PlayerRig>, Rc<Vec<Mat>>, BodyFrame)> {
         let fs = self.rt.host.fs.clone()?;
         let character = self.character(slot)?;
         let rig = self.combat.rig(&fs, &character)?;
@@ -792,7 +801,7 @@ impl Cod2Level {
             return Some((rig, pose.clone(), f));
         }
         b.body.ease_controls(&set.anims, &f, frametime);
-        let pose = Rc::new(b.body.pose_in(&rig, set, &*fs, &f, now, true, None));
+        let pose = Rc::new(b.body.dobj_mats(&rig, set, &*fs, &f, now)?);
         b.built = Some((stamp, rig.clone(), pose.clone()));
         Some((rig, pose, f))
     }
@@ -800,8 +809,8 @@ impl Cod2Level {
     /// `G_DObjGetWorldTagMatrix`'s origin (lnxded 0x811e542) for `slot`'s
     /// `tag`: the tag's posed place ([`Self::body_pose`]) turned by
     /// `AnglesToAxis(r.currentAngles)`, (0, the view's yaw, 0), and moved
-    /// to `origin` (`MatrixTransformVector43`, each component on the
-    /// stack). `None` without the paks or the tag.
+    /// to `origin` (`MatrixTransformVector43` 0x80a7436, each component's
+    /// sum on the stack, stored). `None` without the paks or the tag.
     fn world_tag(&mut self, slot: usize, origin: Vec3, tag: &str) -> Option<Vec3> {
         // The controller hook reads the `clientInfo_t` its last end frame
         // filled, not the playerstate the death since rewrote.
@@ -810,11 +819,14 @@ impl Cod2Level {
             None => self.body_pose(slot, origin)?,
         };
         let bone = rig.skeleton.bone_index(tag)?;
-        let local = pose.bone_world(&rig.skeleton, bone).0.as_dvec3();
+        let [lx, ly, lz] = pose.get(bone)?.trans.map(F80::from_f32);
         let yaw = self.players[slot].as_ref()?.ps.view_angles[1];
         let axis = vcod_common::x87::angles_to_axis(Vec3::new(0.0, yaw, 0.0));
-        let [x, y, z] = axis.map(|a| a.as_dvec3());
-        Some((x * local.x + y * local.y + z * local.z + origin.as_dvec3()).as_vec3())
+        let at = |c: usize| {
+            let r = |i: usize| F80::from_f32(axis[i][c]);
+            (((lx * r(0) + ly * r(1)) + lz * r(2)) + F80::from_f32(origin[c])).to_f32()
+        };
+        Some(Vec3::new(at(0), at(1), at(2)))
     }
 
     /// `Drop_Weapon`'s start from a tag (lnxded 0x81064de) for every weapon
@@ -895,7 +907,15 @@ impl Cod2Level {
         // Into the model's frame: the transform's inverse.
         let inv = placed.inverse();
         let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
-        let mut hit = bone_trace(&rig.skeleton, &pose, ls, le, priority, limit)?;
+        let worlds = mat_worlds(&pose);
+        let mut hit = vcod_common::bonetrace::bone_trace_worlds(
+            &rig.skeleton,
+            &worlds,
+            ls,
+            le,
+            priority,
+            limit,
+        )?;
         hit.normal = placed.transform_vector3(hit.normal);
         Some(hit)
     }
@@ -917,14 +937,14 @@ impl Cod2Level {
         let set = anims.as_mut().unwrap();
         let body = &mut bodies[slot].body;
         body.ease_controls(&set.anims, &f, frametime);
-        let pose = body.pose_in(&rig, set, &*fs, &f, now_ms, true, None);
+        let pose = body.dobj_mats(&rig, set, &*fs, &f, now_ms).unwrap();
         let placed = BodyFrame {
             origin,
             angles: [0.0, yaw, 0.0],
             ..Default::default()
         }
         .transform();
-        let worlds = pose.bone_worlds(&rig.skeleton);
+        let worlds = mat_worlds(&pose);
         names
             .iter()
             .map(|n| {
@@ -948,10 +968,7 @@ impl Cod2Level {
             return Vec::new();
         };
         let bind = vcod_common::skeleton::PoseBuffer::new(&rig.skeleton);
-        let (w, b) = (
-            pose.bone_worlds(&rig.skeleton),
-            bind.bone_worlds(&rig.skeleton),
-        );
+        let (w, b) = (mat_worlds(&pose), bind.bone_worlds(&rig.skeleton));
         rig.skeleton
             .bones()
             .iter()

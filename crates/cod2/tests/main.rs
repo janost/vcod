@@ -17,6 +17,7 @@ mod player_rigs;
 mod pmove_walk;
 mod pure;
 mod replay;
+mod skel_ab;
 mod trace_ab;
 mod view;
 mod view_rigs;

@@ -477,8 +477,6 @@ const GAPS: &[(&str, &str, &str)] = &[
     ("mp_toujane tdm-kill", "spec ent 74 pos.trBase[1]", "15.7"),
     ("mp_toujane tdm-kill", "spec ent 74 pos.trBase[0]", "15.7"),
     ("mp_toujane tdm-kill", "spec ent 74 pos.trBase[2]", "15.7"),
-    ("mp_toujane sd-kill", "spec ent 73 pos.trBase[0]", "15.7"),
-    ("mp_toujane sd-kill", "spec ent 74 pos.trBase[0]", "15.7"),
 ];
 
 /// `WIRE_REPORT=1`: each difference's two values, and both clients'
