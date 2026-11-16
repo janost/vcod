@@ -199,6 +199,9 @@ pub enum ErrorKind {
     /// A `wait` or `waittill` reached inside `call_now`.
     SuspendedInImmediateCall,
     Custom(String),
+    /// The host's `G_Error` inside a builtin: the thread dies, the pass
+    /// ends there, and the host drops the level.
+    GameError(&'static str),
 }
 
 impl ErrorKind {

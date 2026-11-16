@@ -798,9 +798,8 @@ drop.
 
 What vcod leaves out, with the retail reading each skips:
 
-- `RespawnItem`'s team branch (`ent+0x1d8`, a random pick through the
-  teammaster chain at `ent+0x264`, section 14.3); no stock BSP gives an item
-  a `team` key.
+- `RespawnItem`'s team pick landing on a slot freed since the load
+  (section 14.8): retail runs the body on the freed slot, vcod on nothing.
 - The `wait == -1` arm of `Touch_Item` (section 7): vcod hides the item for
   good and sets neither `eFlags` 0x100 nor `unlinkAfterEvent`. Script cannot
   write `wait` (a keyword), and no stock BSP item carries one.
@@ -1617,3 +1616,53 @@ rests and the hand sways (13.4, 14.1), up to 0.19 for 1.1d's and UO's health
 drops, whose dropper ours rests that much lower after the probe's
 `setorigin`. Against the dropper's origin each start is within 0.2 of
 retail's.
+
+### 14.8 The team pick
+
+The capture is `client-probes/probe_teams` on mp_carentan with
+`crates/server/tests/fixtures/teams/mp_carentan-teams.ent` appended to its
+entity lump, under `tools/re/gdb_teams.py`, on retail 1.1d, 1.5b and UO
+1.51b (`crates/server/tests/fixtures/teams/mp_carentan-dm-teams*.txt`,
+recipes in their headers). Three teams of items, `teamname` `w1` (items
+309, 310, 311), `w2` (a `script_origin` 312, items 313, 314) and `w3` (a
+`func_tramcar` 315 with spawnflags 8, item 316), and one item, 317, with
+none. The script `useBy`s 310, 313 and 316 six times each, 317 once, then
+309.
+
+- VERIFIED, `RespawnItem` (1.1d 0x4ec7c, 1.5b 0x4b3fb, UO 0x545db): an
+  item with a `teamname` (`+0x1d8`; 1.5b `+0x1e0`, UO `+0x1e8`) and a null
+  `teammaster` (`+0x264`; 1.5b `+0x26c`, UO `+0x274`) calls `G_Error` with
+  `RespawnItem: bad teammaster` (string 0x74bf4); otherwise it counts the
+  links from `teammaster` down `teamchain` (`+0x260`), takes one `rand()`,
+  and walks `rand() % count` links from `teammaster` (0x4ecb3..0x4ece7)
+  before the body (section 7) runs on what it reached. 1.1d's `Use_Item`
+  (0x4efc8) is the same code (0x4efd4..0x4f06d); 1.5b's (0x4c79c) and UO's
+  (0x559af) call `RespawnItem`. `G_SpawnItem` installs `Use_Item` as every
+  item's `use` (1.1d 0x4e7af), the only relocation to `Use_Item` in 1.1d,
+  so a dropped item has none.
+- VERIFIED, the gdb lines on all three: each `useBy` of a teamed item made
+  one draw, and the pick was link `draw % count` of the chain master, last,
+  ..., first (`G_FindTeams`, cod11-server-handshake.md, "Console commands
+  over rcon"): 309, 311, 310 for `w1`; 312, 314, 313 for `w2`; 315, 316
+  for `w3`. The unteamed item made no draw and picked itself. The use of
+  309, `w1`'s master, ended the level with `ERROR: RespawnItem: bad
+  teammaster` and its next script line never ran.
+- VERIFIED, an earlier run of the same probe with `w1`'s third item
+  startsolid (`FinishSpawningItem: item_health startsolid at (1024 -744
+  16)`, freed on its think after the load): the chain from 309 counted 2,
+  309 and the freed slot, and a pick of link 1 reached the freed slot (its
+  `s.number` read 0). INFERRED: a freed member cuts the chain at itself,
+  `G_FreeEntity`'s clear having zeroed its `teamchain`, and the body links
+  a freed slot.
+- INFERRED: a stock map gives no item a `teamname`, so stock play never
+  reaches the branch.
+
+vcod: `game::teams::respawn_pick` is the branch, its draw a pinned one first
+(`Server::pin_item_draws`); `game::item::respawn_item` the body on the pick,
+both for the respawn think and for `useBy` (`game::item::use_item`, an item
+that was not dropped). A pick that is no item takes the hide cleared, the
+event and `nextthink` 0, not the link; a pick of a freed slot does nothing.
+`G_Error` here ends the thread pass (`ErrorKind::GameError`) and the frame
+drops the level. VERIFIED, `game::teams_ab` with retail's draws pinned:
+every `PROBE` line and every pick of the three captures is retail's.
+

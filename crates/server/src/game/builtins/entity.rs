@@ -142,6 +142,10 @@ fn use_by(
             let first = now + crate::game::entity::HURT_LIFE_FIRST_THINK_MS;
             host.ents.schedule(id, ThinkFn::HurtLife(end), first);
         }
+    } else if let Some(ok) = crate::game::item::use_item(host, cx, id) {
+        if !ok {
+            return Err(ErrorKind::GameError(crate::game::teams::BAD_TEAMMASTER));
+        }
     } else if !crate::game::trigger::use_multi(host, id)
         && !crate::game::damage_trigger::use_trigger(host, cx, id, user)
         && !crate::game::mover::toggle_static(host, cx, id)

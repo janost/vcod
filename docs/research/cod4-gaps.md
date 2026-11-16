@@ -21,14 +21,11 @@ Ranked by how much a player notices.
 - Rigid-body physics is vcod's solver, not ODE: a body's boxes meet the
   world's brushes and triangles by face clipping and vcod's edge
   contacts, its cylinders by 1.7's separating axes with vcod's points per
-  feature, not ODE's own box colliders; the contact pass runs once a
-  step on all of a body's contacts, not per geom, without 0x5a2320's
-  pass over five or more, and `msecStep` stays 17 ms (cod4-gsc.md 3.6,
-  3.6.1).
-  A jitter's pushes land on the body's
-  touching points, not ODE's contacts, so a flat prop takes more of them
-  (cod4-world.md 13.8). The ragdoll is a position-based solver
-  (cod4-player-anims.md 10). M.
+  feature, not ODE's own box colliders; a brush with sides meets the
+  world on its points alone, and every geom keeps vcod's points beside
+  its collider; a push is a whole impulse, not a force over the step at
+  `1000 / msecStep` of the world it names (cod4-gsc.md 3.6, 3.6.1). The
+  ragdoll is a position-based solver (cod4-player-anims.md 10). M.
 - Multichannel output: kira mixes stereo, so a 5.1 or 7.1 device gets
   the stereo mix on its front pair (cod4-sound.md 4.2, 5). The 139 alias
   rows whose curve no walked zone holds fall off straight. L.
@@ -49,6 +46,14 @@ Ranked by how much a player notices.
   parts along its leg from the event's `lerp.u`, the world's origin on
   1.7, as 1.7 does; the tracer and whizby run on the server's flesh hits
   under 1 too (cod4-effects.md 12.4). Gated on a retail capture under 0.
+- A launched part's or dynamic entity's contact pass ran once a step on
+  all of its contacts and never cut five or more; its world stepped at
+  17 ms whatever the count awake, and the post-step sweep ran after each
+  step. It now runs per geom with 0x5a2320's cut, a jitter pushes on the
+  contacts the pass keeps, each world steps its bodies together at the
+  `msecStep` its count awake picks (0x5a6738), and the sweep runs once a
+  frame (cod4-gsc.md 3.6, 3.6.1; cod4-world.md 13.8).
+
 - A body pinched between two facing surfaces kept both sides' contacts.
   It now takes `iw3mp.exe`'s contact pass (0x5a2760, 0x5a25d0): of two
   facing contacts the one whose plane the centre lies in front of stays,
