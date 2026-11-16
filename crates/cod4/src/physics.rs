@@ -96,7 +96,9 @@ pub struct Dvars {
     /// the world is pushed out.
     pub erp: f32,
     pub max_correcting: f32,
-    /// `msecStep`'s floor for the fx world (17 ms).
+    /// `msecStep` (17 ms, the table at 0x71e798): a lone body's step, and
+    /// what a jitter's push is spread over. A [`WorldClock`] sets it per
+    /// step ([`msec_step`]).
     pub step_ms: i32,
     /// `phys_narrowObjMaxLength` (4): a box with a side shorter, or a
     /// cylinder thinner, takes the narrow pass ([`box_contacts`]).
@@ -136,6 +138,11 @@ pub struct Shape {
     pub points: Vec<Vec3>,
     pub boxes: Vec<ShapeBox>,
     pub cylinders: Vec<ShapeCylinder>,
+    /// Which of the model's geoms each point, box and cylinder is, in the
+    /// order 0x5a5710 adds them: the contact pass runs per geom.
+    pub point_geoms: Vec<usize>,
+    pub box_geoms: Vec<usize>,
+    pub cylinder_geoms: Vec<usize>,
     pub com: Vec3,
     pub inertia: Mat3,
     pub sweep_half: f32,
@@ -180,6 +187,9 @@ impl Shape {
         let (mins, maxs) = (Vec3::from(model.mins), Vec3::from(model.maxs));
         let (c, h) = ((mins + maxs) * 0.5, (maxs - mins) * 0.5);
         Shape {
+            point_geoms: vec![0; corners(c, Mat3::IDENTITY, h).len()],
+            box_geoms: vec![0],
+            cylinder_geoms: Vec::new(),
             points: corners(c, Mat3::IDENTITY, h),
             boxes: vec![ShapeBox::new(c, Mat3::IDENTITY, h)],
             cylinders: Vec::new(),
@@ -200,6 +210,9 @@ impl Shape {
         let c = (mins + maxs) * 0.5;
         let h = (maxs - mins) * 0.5;
         Shape {
+            point_geoms: vec![0; corners(c, Mat3::IDENTITY, h).len()],
+            box_geoms: vec![0],
+            cylinder_geoms: Vec::new(),
             points: corners(c, Mat3::IDENTITY, h),
             boxes: vec![ShapeBox::new(c, Mat3::IDENTITY, h)],
             cylinders: Vec::new(),
@@ -217,8 +230,10 @@ impl Shape {
         let mut points = Vec::new();
         let mut boxes = Vec::new();
         let mut cylinders = Vec::new();
+        let (mut point_geoms, mut box_geoms, mut cylinder_geoms) =
+            (Vec::new(), Vec::new(), Vec::new());
         let mut sweep_half = 0.0;
-        for g in &list.geoms {
+        for (gi, g) in list.geoms.iter().enumerate() {
             if let Some(b) = &g.brush {
                 let (lo, hi) = (Vec3::from(b.mins), Vec3::from(b.maxs));
                 let (c, h) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
@@ -237,6 +252,8 @@ impl Shape {
                         boxes.push(ShapeBox::new(c, Mat3::IDENTITY, h));
                     }
                 }
+                point_geoms.resize(points.len(), gi);
+                box_geoms.resize(boxes.len(), gi);
                 continue;
             }
             let axis = Mat3::from_cols(
@@ -275,6 +292,9 @@ impl Shape {
                 }
                 _ => {}
             }
+            point_geoms.resize(points.len(), gi);
+            box_geoms.resize(boxes.len(), gi);
+            cylinder_geoms.resize(cylinders.len(), gi);
         }
         if points.is_empty() {
             return None;
@@ -285,6 +305,9 @@ impl Shape {
             points,
             boxes,
             cylinders,
+            point_geoms,
+            box_geoms,
+            cylinder_geoms,
             com: list.center_of_mass.into(),
             inertia: Mat3::from_cols(
                 Vec3::new(m[0], p[0], p[1]),
@@ -1122,7 +1145,83 @@ fn segment_nearest(p: Vec3, q: Vec3, s: Vec3, e: Vec3) -> Vec3 {
     p + d1 * t
 }
 
+/// `msecStep`'s least and most per world (the tables at 0x71e7a4 and
+/// 0x71e7b0): dynamic entities' (0), launched parts' and pieces' (1),
+/// ragdolls' (2).
+const MSEC_STEP: [(i32, i32); 3] = [(17, 67), (17, 67), (17, 34)];
+
+/// The `msecStep` world `world` takes after a step that leaves `awake` of
+/// its bodies awake (0x5a6640, which counts them through 0x5a62f0 after
+/// the step, 0x5a6738..0x5a67bb): the least up to 32, then the span times
+/// the count past 32 over 18, at most 1, truncated (`_ftol2`, 0x68b360).
+pub fn msec_step(world: usize, awake: usize) -> i32 {
+    let (lo, hi) = MSEC_STEP[world];
+    let f = ((awake as f32 - 32.0) / 18.0).clamp(0.0, 1.0);
+    lo + (f * (hi - lo) as f32) as i32
+}
+
+/// One physics world's clock, which steps all its bodies together
+/// (`Phys_RunFrame`, 0x5a6e02): up to a frame's time in at most two
+/// steps, each the larger of `msecStep` and half what is left, `msecStep`
+/// picked after each step off the bodies awake ([`msec_step`]).
+#[derive(Clone, Copy, Debug)]
+pub struct WorldClock {
+    world: usize,
+    /// The time simulated to; `None` until the first body ([`Self::start`]).
+    sim_ms: Option<i32>,
+    pub step_ms: i32,
+}
+
+impl WorldClock {
+    pub fn new(world: usize) -> WorldClock {
+        WorldClock {
+            world,
+            sim_ms: None,
+            step_ms: MSEC_STEP[world].0,
+        }
+    }
+
+    /// A body is made at `now`: a clock not yet running starts there.
+    pub fn start(&mut self, now: i32) {
+        self.sim_ms.get_or_insert(now);
+    }
+
+    /// The world to `time`. `step(ms, until, first, dvars)` steps each
+    /// body `ms` to `until` ([`Body::step_world`]), its frame begun when
+    /// `first` ([`Body::begin_frame`]), under `d` with this world's
+    /// `msecStep`, and returns how many are awake after it. Whether it
+    /// stepped: then each body's frame ends ([`Body::end_frame`]).
+    pub fn advance(
+        &mut self,
+        time: i32,
+        d: &Dvars,
+        mut step: impl FnMut(i32, i32, bool, &Dvars) -> usize,
+    ) -> bool {
+        let Some(mut sim) = self.sim_ms else {
+            return false;
+        };
+        let stepped = time.wrapping_sub(sim) > 0;
+        let mut left = 2;
+        let mut first = true;
+        while time.wrapping_sub(sim) > 0 {
+            let ms = (time.wrapping_sub(sim) / left).max(self.step_ms);
+            left = (left - 1).max(1);
+            sim = sim.wrapping_add(ms);
+            let dv = Dvars {
+                step_ms: self.step_ms,
+                ..*d
+            };
+            let awake = step(ms, sim, first, &dv);
+            first = false;
+            self.step_ms = msec_step(self.world, awake);
+        }
+        self.sim_ms = Some(sim);
+        stepped
+    }
+}
+
 /// One corner's contact with the world in a step.
+#[derive(Clone)]
 struct Contact {
     /// The corner off the centre of mass, world axes.
     r: Vec3,
@@ -1137,8 +1236,10 @@ struct Contact {
     lambda_t: [f32; 2],
     /// How far off the surface it starts (below 0 inside).
     sep: f32,
-    /// One of the body's points' (`Body::gather`), not a geom's.
+    /// One of the body's points' (`Body::gather`), not a geom collider's.
     point: bool,
+    /// The geom it is the body's contact for (`Shape::point_geoms`).
+    geom: usize,
 }
 
 /// One launched part.
@@ -1159,6 +1260,9 @@ pub struct Body {
     points: Vec<Vec3>,
     boxes: Vec<ShapeBox>,
     cylinders: Vec<ShapeCylinder>,
+    point_geoms: Vec<usize>,
+    box_geoms: Vec<usize>,
+    cylinder_geoms: Vec<usize>,
     sweep_half: f32,
     /// The state at body +0x4c the post-step sweep reads (cod4-gsc.md
     /// 3.6.1): 0 new, 1 started solid or pinched, 2 neither.
@@ -1220,6 +1324,9 @@ impl Body {
                     ..*c
                 })
                 .collect(),
+            point_geoms: shape.point_geoms.clone(),
+            box_geoms: shape.box_geoms.clone(),
+            cylinder_geoms: shape.cylinder_geoms.clone(),
             sweep_half: shape.sweep_half,
             state: 0,
             bounce: preset.bounce.min(1.0),
@@ -1301,15 +1408,45 @@ impl Body {
         if time.wrapping_sub(self.sim_ms) <= 0 {
             return;
         }
-        self.from_ms = self.sim_ms;
-        self.from = (self.pos, self.rot);
+        self.begin_frame();
         let mut left = 2;
         while time.wrapping_sub(self.sim_ms) > 0 {
             let step = (time.wrapping_sub(self.sim_ms) / left).max(d.step_ms);
             left = (left - 1).max(1);
-            self.step_in(step as f32 / 1000.0, trace, solids, d);
+            self.integrate(step as f32 / 1000.0, trace, solids, d);
             self.sim_ms = self.sim_ms.wrapping_add(step);
         }
+        self.end_frame(trace, d);
+    }
+
+    /// A world's frame begins ([`WorldClock::advance`]): the drawn pose
+    /// lerps from here, and the post-step sweep starts here (the copy at
+    /// 0x5a6da0, once a frame before its steps).
+    pub fn begin_frame(&mut self) {
+        self.from_ms = self.sim_ms;
+        self.from = (self.pos, self.rot);
+    }
+
+    /// A world's frame ends: a body awake takes the post-step sweep from
+    /// where the frame began ([`Self::sweep`]; 0x5a6c10 on each body after
+    /// `Phys_RunToTime`'s steps, 0x5a6e77).
+    pub fn end_frame(&mut self, trace: &mut Trace, d: &Dvars) {
+        if !self.asleep {
+            self.sweep(self.from.0, trace, d);
+        }
+    }
+
+    /// One step of its world, `ms` long, to `until`.
+    pub fn step_world(
+        &mut self,
+        ms: i32,
+        until: i32,
+        trace: &mut Trace,
+        solids: &mut Solids,
+        d: &Dvars,
+    ) {
+        self.integrate(ms as f32 / 1000.0, trace, solids, d);
+        self.sim_ms = until;
     }
 
     /// The drawn origin and angles at `time`: the frame's start state
@@ -1359,9 +1496,9 @@ impl Body {
         })
     }
 
-    /// One step of `dt` seconds: gravity, the corners' contacts solved as
-    /// impulses with Coulomb friction and the preset's bounce, the move,
-    /// the post-step sweep, the drag, the sleep test.
+    /// A frame of one step of `dt` seconds: gravity, the corners' contacts
+    /// solved as impulses with Coulomb friction and the preset's bounce,
+    /// the move, the drag, the sleep test, then the post-step sweep.
     pub fn step(&mut self, dt: f32, trace: &mut Trace, d: &Dvars) {
         self.step_in(dt, trace, &mut |_, _| Vec::new(), d);
     }
@@ -1369,6 +1506,15 @@ impl Body {
     /// [`Self::step`] with the boxes' contacts with `solids` among the
     /// points'.
     pub fn step_in(&mut self, dt: f32, trace: &mut Trace, solids: &mut Solids, d: &Dvars) {
+        let old = self.pos;
+        self.integrate(dt, trace, solids, d);
+        if !self.asleep {
+            self.sweep(old, trace, d);
+        }
+    }
+
+    /// One step of its world, the sweep left for the frame's end.
+    fn integrate(&mut self, dt: f32, trace: &mut Trace, solids: &mut Solids, d: &Dvars) {
         if self.asleep {
             self.jitter.clear();
             return;
@@ -1386,13 +1532,8 @@ impl Body {
             if pass == 0 {
                 let mut all = self.box_contacts(dt, solids, d, v0, w0);
                 all.append(&mut found);
-                self.pinch(&all);
-                if self.state == 1 {
-                    self.pinched += 1;
-                    unwedge(&mut all, v0, w0);
-                }
-                self.shake(&all, d);
-                contacts.append(&mut all);
+                let all = self.contact_pass(all, d, v0, w0);
+                contacts.extend(all);
             } else {
                 if self.state == 1 {
                     drop_separating(&mut found, v0, w0);
@@ -1401,12 +1542,10 @@ impl Body {
             }
             self.solve(&mut contacts, d);
         }
-        let old = self.pos;
         self.pos += self.vel * dt;
         let w = self.avel;
         let dq = Quat::from_xyzw(w.x, w.y, w.z, 0.0) * self.rot;
         self.rot = (self.rot + dq * (0.5 * dt)).normalize();
-        self.sweep(old, trace, d);
         self.vel *= (1.0 - d.drag_linear * dt).max(0.0);
         self.avel *= (1.0 - d.drag_angular * dt).max(0.0);
         if self.vel.length_squared() < d.sleep_linear * d.sleep_linear
@@ -1423,26 +1562,60 @@ impl Body {
         }
     }
 
-    /// The contact pass's writes to the state (0x5a5f20, 0x5a2280): 2
-    /// when the world gives no contact, 1 when two of its contacts face
-    /// each other ([`FACING`]). Retail's contacts are ODE's overlaps, run
-    /// through it per geom; vcod's are the step's first ones in the skin
-    /// ([`touching`]), all at once: the boxes', the cylinders' and the
-    /// points'.
-    fn pinch(&mut self, contacts: &[Contact]) {
-        let n: Vec<Vec3> = contacts
+    /// The near callback's contact pass (0x5a5f20) on each geom against
+    /// the world, last geom first (ODE's space lists each geom it is given
+    /// at its head): a geom with no contact sets the state 2; five or more
+    /// go through [`reduce`] first (0x5a2320); then 0x5a2760: [`pinch`],
+    /// on a body in state 1 [`unwedge`], and the jitter on each contact
+    /// kept ([`Self::shake`]). Retail's contacts are ODE's overlaps; vcod's
+    /// stand-ins are the geom's in the skin or inside ([`touching`]): its
+    /// box's or cylinder's, or a brush with sides' points. The rest are
+    /// vcod's, a box's or cylinder's points and the contacts met further on
+    /// within the step's travel, and pass through after the geom's.
+    fn contact_pass(&mut self, all: Vec<Contact>, d: &Dvars, v0: Vec3, w0: Vec3) -> Vec<Contact> {
+        let geoms = [&self.point_geoms, &self.box_geoms, &self.cylinder_geoms]
             .iter()
-            .filter(|c| touching(c))
-            .map(|c| c.n)
-            .collect();
-        if n.is_empty() {
-            self.state = 2;
-        } else if (0..n.len()).any(|i| (i + 1..n.len()).any(|j| n[i].dot(n[j]) < FACING)) {
-            self.state = 1;
+            .flat_map(|g| g.iter().copied())
+            .max()
+            .map_or(1, |g| g + 1);
+        let regions = std::mem::take(&mut self.jitter);
+        let mut pinched = false;
+        let mut out = Vec::with_capacity(all.len());
+        for g in (0..geoms).rev() {
+            // A geom with a box or cylinder collider: its points are vcod's.
+            let collider = self.box_geoms.contains(&g) || self.cylinder_geoms.contains(&g);
+            let (mut touch, ahead): (Vec<Contact>, Vec<Contact>) = all
+                .iter()
+                .filter(|c| c.geom == g)
+                .cloned()
+                .partition(|c| touching(c) && !(collider && c.point));
+            if touch.is_empty() {
+                self.state = 2;
+            } else {
+                if touch.len() >= 5 {
+                    let geoms: Vec<_> = touch.iter().map(|c| (c.r, c.n, -c.sep)).collect();
+                    let keep = reduce(&geoms);
+                    touch = keep.into_iter().map(|i| touch[i].clone()).collect();
+                }
+                if pinch(&touch) {
+                    self.state = 1;
+                }
+                if self.state == 1 {
+                    pinched = true;
+                    unwedge(&mut touch, v0, w0);
+                }
+                self.shake(&touch, &regions, d);
+            }
+            out.extend(touch);
+            out.extend(ahead);
         }
+        if pinched {
+            self.pinched += 1;
+        }
+        out
     }
 
-    /// The post-step sweep (0x5a6930, from 0x5a6c10 after each step): when
+    /// The post-step sweep (0x5a6930, from 0x5a6c10 after a frame's steps): when
     /// the centre moved, or the state is 0 or 1, the centre is traced from
     /// where the step started to where it ended, as a point (corners at
     /// 0.001) when the sweep half size `m` is under twice `phys_csl`, else
@@ -1491,23 +1664,18 @@ impl Body {
     /// `phys_jitterMaxMass`.
     /// The value is times `1000 / msecStep` before `Phys_ObjAddForce`
     /// scales it again for its one step, so the impulse keeps that factor.
-    /// Retail's contacts are ODE's; these are the body's touching points
-    /// that [`unwedge`] kept.
-    fn shake(&mut self, contacts: &[Contact], d: &Dvars) {
-        if self.jitter.is_empty() {
+    /// It runs on each geom's contacts the contact pass keeps.
+    fn shake(&mut self, contacts: &[Contact], regions: &[Jitter], d: &Dvars) {
+        if regions.is_empty() {
             return;
         }
         let m = self.mass.min(JITTER_MAX_MASS);
         let q = m / JITTER_MAX_MASS;
         let weight = m * (1.0 - q * q * q);
         let per_step = 1000.0 / d.step_ms as f32;
-        let regions = std::mem::take(&mut self.jitter);
-        for c in contacts
-            .iter()
-            .filter(|c| c.point && c.n.z >= JITTER_MIN_NORMAL_Z)
-        {
+        for c in contacts.iter().filter(|c| c.n.z >= JITTER_MIN_NORMAL_Z) {
             let at = self.pos + c.r;
-            for j in &regions {
+            for j in regions {
                 let dist_sq = (at.x - j.origin.x).powi(2) + (at.y - j.origin.y).powi(2);
                 if dist_sq >= j.outer * j.outer {
                     continue;
@@ -1567,6 +1735,7 @@ impl Body {
             touched[i] = true;
             out.push(Contact {
                 point: true,
+                geom: self.point_geoms[i],
                 ..self.contact(r, n, sep, dt, d, v0, w0, &inv_iw)
             });
         }
@@ -1588,7 +1757,7 @@ impl Body {
         let inv_iw = self.inv_inertia_world();
         let mut out = Vec::new();
         let mut found = Vec::new();
-        for b in &self.boxes {
+        for (b, &geom) in self.boxes.iter().zip(&self.box_geoms) {
             let axes = Mat3::from_quat(self.rot) * b.axes;
             let c = self.pos + self.rot * b.centre;
             let ext = axes.x_axis.abs() * b.half.x
@@ -1602,10 +1771,13 @@ impl Body {
                 box_contacts(c, axes, b.half, &s, reach, narrow, &mut found);
             }
             for &(p, n, sep) in &found {
-                out.push(self.contact(p - self.pos, n, sep, dt, d, v0, w0, &inv_iw));
+                out.push(Contact {
+                    geom,
+                    ..self.contact(p - self.pos, n, sep, dt, d, v0, w0, &inv_iw)
+                });
             }
         }
-        for cy in self.world_cylinders() {
+        for (cy, &geom) in self.world_cylinders().zip(&self.cylinder_geoms) {
             let (a, r, hh) = (cy.axis, cy.radius, cy.half);
             let ext = a.abs() * hh + (Vec3::ONE - a * a).max(Vec3::ZERO).powf(0.5) * r;
             let lever = (cy.centre - self.pos).length() + hh.hypot(r);
@@ -1619,7 +1791,10 @@ impl Body {
                 cylinder_contacts(&cy, self.pos, &s, reach, narrow, &mut found);
             }
             for &(p, n, sep) in &found {
-                out.push(self.contact(p - self.pos, n, sep, dt, d, v0, w0, &inv_iw));
+                out.push(Contact {
+                    geom,
+                    ..self.contact(p - self.pos, n, sep, dt, d, v0, w0, &inv_iw)
+                });
             }
         }
         out
@@ -1667,6 +1842,7 @@ impl Body {
             lambda_t: [0.0; 2],
             sep,
             point: false,
+            geom: 0,
         }
     }
 
@@ -1706,16 +1882,19 @@ fn touching(c: &Contact) -> bool {
     c.sep <= SKIN
 }
 
-/// A pinched body's contacts (0x5a2760, the state 1): of two that face
-/// each other ([`FACING`]) the first stays when the centre lies on its
-/// plane or in front of it, else the second takes its slot, and the
+/// 0x5a2280: whether two of a geom's contacts face each other
+/// ([`FACING`]), which sets the body's state 1.
+fn pinch(c: &[Contact]) -> bool {
+    (0..c.len()).any(|i| (i + 1..c.len()).any(|j| c[i].n.dot(c[j].n) < FACING))
+}
+
+/// A pinched body's contacts with one geom (0x5a2760, the state 1): of two
+/// that face each other ([`FACING`]) the first stays when the centre lies
+/// on its plane or in front of it, else the second takes its slot, and the
 /// second's slot takes the last contact, which the walk then passes over
 /// (0x5a25d0, its point the body's position, as the world's byte at
-/// 0xcc54498 is never set); then [`drop_separating`]. Retail runs it on
-/// each geom's collide; vcod on the step's first [`touching`] contacts at
-/// once.
-fn unwedge(contacts: &mut Vec<Contact>, v0: Vec3, w0: Vec3) {
-    let (mut c, ahead): (Vec<Contact>, Vec<Contact>) = contacts.drain(..).partition(touching);
+/// 0xcc54498 is never set); then [`drop_separating`].
+fn unwedge(c: &mut Vec<Contact>, v0: Vec3, w0: Vec3) {
     let mut i = 0;
     while i + 1 < c.len() {
         let mut j = i + 1;
@@ -1731,9 +1910,132 @@ fn unwedge(contacts: &mut Vec<Contact>, v0: Vec3, w0: Vec3) {
         }
         i += 1;
     }
-    drop_separating(&mut c, v0, w0);
-    contacts.extend(c);
-    contacts.extend(ahead);
+    drop_separating(c, v0, w0);
+}
+
+/// The contacts 0x5a2320 keeps of a geom's five or more (0x5a5f20 at
+/// 0x5a6078), by index into `c` (each its position, normal and depth), in
+/// the order it copies them out (cod4-gsc.md 3.6.1): three seeds by normal
+/// (0x5a18e0), five k-means rounds over the normals (0x5a1aa0), clusters
+/// whose means dot over 0.999 merged (0x5a1cc0), and of each cluster the
+/// least and most along two tangents and the deepest, a contact within
+/// 0.1 of an earlier one passed over (0x5a1e40).
+fn reduce(c: &[(Vec3, Vec3, f32)]) -> Vec<usize> {
+    let n = c.len();
+    let mut tags = vec![usize::MAX; n];
+    if n == 0 {
+        return Vec::new();
+    }
+    // 0x5a18e0: the seed 104729 mod the count, the contact whose normal is
+    // most against it, then the one most against both.
+    let k0 = 104_729 % n;
+    let least = |f: &dyn Fn(Vec3) -> f32| {
+        let (mut best, mut at) = (f32::MAX, None);
+        for (i, &(_, nm, _)) in c.iter().enumerate() {
+            let d = f(nm);
+            if best > d {
+                (best, at) = (d, Some(i));
+            }
+        }
+        at
+    };
+    let n0 = c[k0].1;
+    let k1 = least(&|nm| nm.dot(n0));
+    tags[k0] = 0;
+    if let Some(k1) = k1 {
+        tags[k1] = 1;
+        let n1 = c[k1].1;
+        if let Some(k2) = least(&|nm| nm.dot(n0).max(nm.dot(n1))) {
+            tags[k2] = 2;
+        }
+    }
+    // 0x5a1aa0: each cluster's mean normal (zero stays zero, 0x4076d0),
+    // then each contact to the cluster it dots most with, five times over.
+    let means = |tags: &[usize]| {
+        let mut m = [Vec3::ZERO; 3];
+        for (i, &t) in tags.iter().enumerate() {
+            if t < 3 {
+                m[t] += c[i].1;
+            }
+        }
+        m.map(|v| v.normalize_or_zero())
+    };
+    let mut m = means(&tags);
+    for _ in 0..5 {
+        for (i, t) in tags.iter_mut().enumerate() {
+            let (mut best, mut at) = (-f32::MAX, usize::MAX);
+            for (k, mk) in m.iter().enumerate() {
+                let d = mk.dot(c[i].1);
+                if best - d < 0.0 {
+                    (best, at) = (d, k);
+                }
+            }
+            *t = at;
+        }
+        m = means(&tags);
+    }
+    // 0x5a1cc0: a later cluster whose mean dots over 0.999 (the double at
+    // 0x70b270) with an earlier one's joins it, off the means as they were.
+    for i in 0..2 {
+        for j in i + 1..3 {
+            if m[i].dot(m[j]) > 0.999 {
+                tags.iter_mut().filter(|t| **t == j).for_each(|t| *t = i);
+            }
+        }
+    }
+    // 0x5a1e40: the clusters' normal sums, each normalized and given two
+    // tangents off z, or off y when |z| is 0.5 or more (0x5a1d80).
+    let mut sums = [Vec3::ZERO; 3];
+    for (i, &t) in tags.iter().enumerate() {
+        if t < 3 {
+            sums[t] += c[i].1;
+        }
+    }
+    let mut out = Vec::new();
+    for (k, sum) in sums.iter().enumerate() {
+        let nm = sum.normalize_or_zero();
+        let u = if nm.z.abs() < 0.5 { Vec3::Z } else { Vec3::Y };
+        let t1 = nm.cross(u).normalize_or_zero();
+        let t = [t1, nm.cross(t1).normalize_or_zero()];
+        let (mut lo, mut hi) = ([f32::MAX; 2], [-f32::MAX; 2]);
+        let (mut lo_at, mut hi_at) = ([usize::MAX; 2], [usize::MAX; 2]);
+        let (mut deepest, mut deep_at) = (-f32::MAX, usize::MAX);
+        let mut members = 0;
+        for i in 0..n {
+            if tags[i] != k {
+                continue;
+            }
+            // The float at 0x70b87c, 0.01, on the squared distance.
+            for j in i + 1..n {
+                if tags[j] == k && (c[j].0 - c[i].0).length_squared() < 0.01 {
+                    tags[j] = usize::MAX;
+                }
+            }
+            members += 1;
+            for a in 0..2 {
+                let p = t[a].dot(c[i].0);
+                if lo[a] > p {
+                    (lo[a], lo_at[a]) = (p, i);
+                }
+                if hi[a] < p {
+                    (hi[a], hi_at[a]) = (p, i);
+                }
+            }
+            if deepest < c[i].2 {
+                (deepest, deep_at) = (c[i].2, i);
+            }
+        }
+        if members == 0 {
+            continue;
+        }
+        let start = out.len();
+        for i in [lo_at[0], lo_at[1], hi_at[0], hi_at[1], deep_at] {
+            if i < n && !out[start..].contains(&i) {
+                out.push(i);
+            }
+        }
+    }
+    out
 }
 
 /// 0x5a2760's second filter on a pinched body: each [`touching`] contact
@@ -2375,6 +2677,7 @@ mod tests {
             lambda_t: [0.0; 2],
             sep: 0.0,
             point: false,
+            geom: 0,
         }
     }
 
@@ -2407,19 +2710,167 @@ mod tests {
         ];
         unwedge(&mut c, falling, Vec3::ZERO);
         assert_eq!(normals(&c), [Vec3::X, -Vec3::X]);
-        // One the step's travel meets past the skin is not ODE's and
-        // stays, after the touching ones.
-        let mut c = vec![
-            Contact {
-                sep: 1.0,
-                ..touch(Vec3::new(5.0, 0.0, 0.0), -Vec3::X)
-            },
-            touch(Vec3::new(-5.0, 0.0, 0.0), Vec3::X),
-            touch(Vec3::new(5.0, 0.0, 0.0), -Vec3::X),
+    }
+
+    #[test]
+    fn the_post_step_sweep_runs_once_a_frame() {
+        // A centre alone (no points, no geoms) of sweep half size 1.9, a
+        // point sweep backing off 0.95, at 100 units/s at a wall at x = 10:
+        // its first 17 ms step ends at 8.925, where the sweep stops it.
+        let wall = [(-Vec3::X, -10.0)];
+        let mut trace = planes(&wall);
+        let d = Dvars {
+            gravity: 0.0,
+            ..Dvars::default()
+        };
+        let preset = Preset {
+            mass: 1.0,
+            bounce: 0.1,
+            friction: 0.5,
+            bullet_force_scale: 1.0,
+        };
+        let shape = Shape {
+            points: Vec::new(),
+            boxes: Vec::new(),
+            cylinders: Vec::new(),
+            point_geoms: Vec::new(),
+            box_geoms: Vec::new(),
+            cylinder_geoms: Vec::new(),
+            com: Vec3::ZERO,
+            inertia: Mat3::IDENTITY,
+            sweep_half: 1.9,
+        };
+        let start = Vec3::X * 7.225;
+        let mut b = Body::new(start, Vec3::ZERO, &shape, &preset, 0);
+        b.vel = Vec3::X * 100.0;
+        let mut per_step = b.clone();
+        // One frame of two steps sweeps once, from 7.225 to 10.625: it
+        // stops at 8.925 half way, its speed kept.
+        b.advance(34, &mut trace, &d);
+        assert!((b.pos.x - 8.925).abs() < 0.01, "{}", b.pos);
+        assert!(b.vel.x > 99.0, "{}", b.vel);
+        // Swept each step, the second starts at the stop and loses it all.
+        per_step.step(0.017, &mut trace, &d);
+        per_step.step(0.017, &mut trace, &d);
+        assert!((per_step.pos.x - 8.925).abs() < 0.01, "{}", per_step.pos);
+        assert_eq!(per_step.vel, Vec3::ZERO);
+    }
+
+    #[test]
+    fn msec_step_follows_the_bodies_awake() {
+        let w1: Vec<i32> = [0, 32, 33, 41, 49, 50, 200].map(|n| msec_step(1, n)).into();
+        assert_eq!(w1, [17, 17, 19, 42, 64, 67, 67]);
+        assert_eq!((msec_step(2, 41), msec_step(2, 50)), (25, 34));
+        // Two steps at most a frame, each at least `msecStep`, which the
+        // count after each step picks for the next.
+        let mut clock = WorldClock::new(1);
+        let mut awake = 41;
+        let mut seen = Vec::new();
+        let mut frame = |clock: &mut WorldClock, time: i32| {
+            clock.advance(time, &Dvars::default(), |ms, until, first, d| {
+                seen.push((ms, until, first, d.step_ms));
+                awake -= 9;
+                awake + 9
+            });
+        };
+        frame(&mut clock, 100);
+        clock.start(0);
+        // 17, the least: one step reaches 16, and its 41 awake pick 42.
+        frame(&mut clock, 16);
+        // 183 left: 91 at 42, whose 32 awake pick 17, then the other 92.
+        frame(&mut clock, 200);
+        assert_eq!(
+            (seen, clock.step_ms),
+            (
+                vec![
+                    (17, 17, true, 17),
+                    (91, 108, true, 42),
+                    (92, 200, false, 17)
+                ],
+                17
+            )
+        );
+    }
+
+    #[test]
+    fn five_or_more_contacts_keep_each_clusters_extremes_and_deepest() {
+        let at = |x: f32, y: f32, z: f32, n: Vec3, depth: f32| (Vec3::new(x, y, z), n, depth);
+        // A floor (one corner deepest, one a near twin of another), a wall
+        // facing +x and one facing +y. The seed is contact 104729 % 10 = 9
+        // (+y), then the floor's first (most against it), then the +x
+        // wall's first (most against both).
+        let c = [
+            at(0.0, 0.0, 0.0, Vec3::Z, 0.1),
+            at(0.05, 0.0, 0.0, Vec3::Z, 0.1),
+            at(10.0, 0.0, 0.0, Vec3::Z, 0.1),
+            at(10.0, 10.0, 0.0, Vec3::Z, 0.3),
+            at(0.0, 10.0, 0.0, Vec3::Z, 0.1),
+            at(0.0, 2.0, 1.0, Vec3::X, 0.1),
+            at(0.0, 5.0, 4.0, Vec3::X, 0.1),
+            at(0.0, 8.0, 2.0, Vec3::X, 0.1),
+            at(3.0, 0.0, 2.0, Vec3::Y, 0.1),
+            at(6.0, 0.0, 5.0, Vec3::Y, 0.1),
         ];
-        unwedge(&mut c, falling, Vec3::ZERO);
-        assert_eq!(normals(&c), [Vec3::X, -Vec3::X]);
-        assert_eq!(c[1].sep, 1.0);
+        // The +y wall's tangents are x and -z, the floor's -x and -y, the
+        // +x wall's -y and -z: of each the least along both, the most along
+        // both and the deepest, each once. The floor's twin and its corner
+        // at (0, 10) go.
+        assert_eq!(reduce(&c), [8, 9, 2, 3, 0, 7, 6, 5]);
+        // A normal within 0.999 of another's mean joins its cluster: the
+        // floor's tipped corner is one of its extremes, not a cluster.
+        let tipped = Vec3::new(0.0, 0.01, 1.0).normalize();
+        let floor = [
+            at(0.0, 0.0, 0.0, Vec3::Z, 0.1),
+            at(10.0, 0.0, 0.0, Vec3::Z, 0.1),
+            at(10.0, 10.0, 0.0, tipped, 0.1),
+            at(0.0, 10.0, 0.0, Vec3::Z, 0.1),
+            at(5.0, 5.0, 0.0, Vec3::Z, 0.1),
+        ];
+        assert_eq!(reduce(&floor), [1, 2, 0]);
+    }
+
+    #[test]
+    fn the_contact_pass_pinches_on_one_geoms_facing_contacts_only() {
+        let (shape, preset) = door();
+        let mut b = Body::new(Vec3::ZERO, Vec3::ZERO, &shape, &preset, 0);
+        b.box_geoms = vec![0, 1];
+        let wall = |g: usize, x: f32, n: Vec3| Contact {
+            geom: g,
+            ..touch(Vec3::new(x, 0.0, 0.0), n)
+        };
+        // Falling, so the drop of the contacts a pinched body leaves keeps
+        // the walls'.
+        let (d, still, falling) = (Dvars::default(), Vec3::ZERO, -Vec3::Z * 10.0);
+        // Each end of a two-geom body against its own wall: neither geom's
+        // contacts face each other, and both stay.
+        let out = b.contact_pass(
+            vec![wall(0, -5.0, Vec3::X), wall(1, 5.0, -Vec3::X)],
+            &d,
+            falling,
+            still,
+        );
+        assert_eq!((out.len(), b.state, b.pinched), (2, 0, 0));
+        // One geom against both: pinched, and the one its centre is behind
+        // goes. Its other geom, with nothing, sets the state 2 first.
+        let out = b.contact_pass(
+            vec![wall(0, -5.0, Vec3::X), wall(0, 5.0, -Vec3::X)],
+            &d,
+            falling,
+            still,
+        );
+        assert_eq!((out.len(), b.state, b.pinched), (1, 1, 1));
+        // A point of a geom with a box is vcod's: it neither pinches nor
+        // goes, and comes after the box's contacts.
+        let mut b = Body::new(Vec3::ZERO, Vec3::ZERO, &shape, &preset, 0);
+        let point = Contact {
+            point: true,
+            ..wall(0, 5.0, -Vec3::X)
+        };
+        let out = b.contact_pass(vec![point, wall(0, -5.0, Vec3::X)], &d, falling, still);
+        assert_eq!(
+            (out.iter().map(|c| c.point).collect::<Vec<_>>(), b.pinched),
+            (vec![false, true], 0)
+        );
     }
 
     #[test]

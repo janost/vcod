@@ -13,7 +13,7 @@ use vcod_common::clipmap::ClipTrace;
 
 use crate::assets::Assets;
 use crate::assets::model::{XModel, XModelCollSurf};
-use crate::physics::{Body, Dvars as PhysDvars, Jitter, Preset, Shape, Solid};
+use crate::physics::{Body, Dvars as PhysDvars, Jitter, Preset, Shape, Solid, WorldClock};
 use crate::ragdoll::{Explosion, Sweep};
 
 /// A sweep of a sphere of the given radius from the first point to the
@@ -277,6 +277,8 @@ pub struct DynEnts {
     /// The blast walk's random state (0x7209a8), which retail shares with
     /// other callers.
     pub rand: u32,
+    /// Physics world 0's clock.
+    pub clock: WorldClock,
 }
 
 impl DynEnts {
@@ -300,6 +302,7 @@ impl DynEnts {
             ents,
             dvars: Dvars::default(),
             phys: PhysDvars::default(),
+            clock: WorldClock::new(0),
             rand: 0,
         }
     }
@@ -326,6 +329,7 @@ impl DynEnts {
         };
         let e = &mut self.ents[i];
         e.body = Some(Body::at(e.origin, e.rot, shape, preset, now));
+        self.clock.start(now);
         true
     }
 
@@ -594,12 +598,31 @@ impl DynEnts {
     /// [`Self::advance`] with each body's boxes meeting `solids` under the
     /// same mask as its points (cod4-gsc.md 3.6.1).
     pub fn advance_in(&mut self, time: i32, trace: &mut MaskedTrace, solids: &mut MaskedSolids) {
+        let ents = &mut self.ents;
+        let stepped = self.clock.advance(time, &self.phys, |ms, until, first, d| {
+            let mut awake = 0;
+            for e in ents.iter_mut() {
+                let Some(b) = &mut e.body else { continue };
+                let mask = crate::ragdoll::CLIP_MASK & !e.pass;
+                let mut t = |a: Vec3, b: Vec3, r: f32| trace(a, b, r, mask);
+                let mut s = |lo: Vec3, hi: Vec3| solids(lo, hi, mask);
+                if first {
+                    b.begin_frame();
+                }
+                b.step_world(ms, until, &mut t, &mut s, d);
+                awake += usize::from(!b.asleep);
+            }
+            awake
+        });
         for e in &mut self.ents {
             let Some(b) = &mut e.body else { continue };
-            let mask = crate::ragdoll::CLIP_MASK & !e.pass;
-            let mut t = |a: Vec3, b: Vec3, r: f32| trace(a, b, r, mask);
-            let mut s = |lo: Vec3, hi: Vec3| solids(lo, hi, mask);
-            b.advance_in(time, &mut t, &mut s, &self.phys);
+            if stepped {
+                let mask = crate::ragdoll::CLIP_MASK & !e.pass;
+                b.end_frame(
+                    &mut |a: Vec3, b: Vec3, r: f32| trace(a, b, r, mask),
+                    &self.phys,
+                );
+            }
             (e.origin, e.rot) = b.pose_quat(time);
             if b.asleep {
                 e.body = None;
@@ -803,8 +826,9 @@ mod tests {
 
     #[test]
     fn a_jitter_lifts_the_props_on_the_ground_in_its_radius() {
-        let near = can(Vec3::new(10.0, 0.0, 2.2));
-        let far = can(Vec3::new(500.0, 0.0, 2.2));
+        // On the floor, its bottom within the kernels' skin of it.
+        let near = can(Vec3::new(10.0, 0.0, 2.05));
+        let far = can(Vec3::new(500.0, 0.0, 2.05));
         let mut d = DynEnts::new(Arc::new(vec![near, far]));
         let j = Jitter {
             origin: Vec3::ZERO,
@@ -813,10 +837,21 @@ mod tests {
             min: 1.0,
             max: 1.0,
         };
+        // The floor as a brush too, which the can's box meets: the jitter
+        // pushes on the box's contacts (cod4-world.md 13.8).
+        let slab = [
+            (Vec3::Z, 0.0),
+            (-Vec3::Z, 16.0),
+            (Vec3::X, 1000.0),
+            (-Vec3::X, 1000.0),
+            (Vec3::Y, 1000.0),
+            (-Vec3::Y, 1000.0),
+        ];
+        let mut ground = |_: Vec3, _: Vec3, _: u32| vec![Solid::brush(&slab).unwrap()];
         d.jitter(j, 0);
         assert!(d.ents[0].body.is_some(), "a body for the near can");
         assert!(d.ents[1].body.is_none(), "none past the box");
-        d.advance(17, &mut floor);
+        d.advance_in(17, &mut floor, &mut ground);
         // Each contact of a 1-unit mass under the region takes about
         // (1 - 1/200^3) * 1000 / 17 straight up, the falloff 0.9 at 10 of
         // 100: the can leaves the floor.
@@ -830,7 +865,7 @@ mod tests {
         // Without the region the can only settles.
         let mut d = DynEnts::new(Arc::new(vec![can(Vec3::new(10.0, 0.0, 2.2))]));
         d.make_body(0, 0);
-        d.advance(17, &mut floor);
+        d.advance_in(17, &mut floor, &mut ground);
         assert!(d.ents[0].body.as_ref().unwrap().vel.z <= 0.0);
     }
 
