@@ -114,6 +114,7 @@ impl<'a> Client<'a> {
         let ps_client = newest.ps.field_i32(p, "clientNum");
         let pm_type = newest.ps.field_i32(p, "pm_type");
         let own = ps_client == self.client_num;
+        self.predictor.set_time(now_ms as i32);
         let predicted = match prediction.filter(|_| own) {
             Some((ring, world)) => {
                 let bodies =

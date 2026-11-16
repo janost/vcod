@@ -2,7 +2,7 @@
 
 How the vcod client spends a frame on a CoD1 1.1 or United Offensive
 server, measured with `tools/cod4_perf.sh` (`GAME=cod1` / `GAME=uo`), and
-what was cut. Sections 1 to 3 measure vcod's own code on one machine; the
+what was cut. Sections 1 to 3 and 7 measure vcod's own code; the
 retail facts in sections 4 to 6 carry addresses and labels. Unless a row
 says "real card", numbers come from a lavapipe (llvmpipe) adapter, so the
 GPU columns are CPU rasterization: they rank the GPU work and are not a
@@ -442,3 +442,42 @@ Retail at a 16:9 view would answer the per-pixel question; it offers
 `SESSION=1 SIZE=1024x768 GAME=cod1 COD_DIR=<1.1 install> tools/cod4_perf.sh /tmp/p29 mp_carentan 30`
 against retail at 1024 x 768 (a 4:3 window needs no `vc_widescreen`).
 Pending.
+
+## 7. The own body (backlog #52)
+
+A live client's frame adds the body `cg.predictedPlayerEntity` stands for
+(`play::seat::adds_view_body`, the own view's `pm_flags` 0x40000) to the
+pair it draws, so `playFxOnTag` finds its tags
+(`cod11-events-and-fx.md`, `playFxOnTag`). Until 2026-11-16 that cost two
+things every frame:
+
+1. Both snapshots of the drawn pair were cloned (every entity and client
+   state) to insert the body. `entities::SnapView` now hands
+   `build_instances` the snapshot by reference with the body beside it, in
+   its number's place.
+2. The body was posed (`pose_player_drawn`) though nothing draws it. Its
+   anim clocks, swings and controllers still step every frame (they carry
+   state); the pose's inputs are kept (`HeldPose`) and the pose is taken
+   only when `EntityScene::tag_pose` reads a tag off it.
+
+Measured 2026-11-16 off the drawn path, release build, on a shared VM
+with no Vulkan adapter (so no `VCOD_FRAME_PROFILE` run): the clones plus
+insert against the two `own_body` builds that remain, on the committed
+fixtures' fullest frame, and the pose of one stock body (103-110 bones,
+one stand clip, controllers on), two runs each:
+
+| Install | Snapshot | Clones + insert, before | After | Pose, before | After |
+|---|---|---|---|---|---|
+| 1.1 (`snapshots-follow-1.1.bin`) | 20 entities, 3 clients | 3.3, 5.4 us | 2.8 us (`own_body` x2) | 2.2-3.3 us | 0 unless a tag is read |
+| UO (`snapshots-uo-overheat.bin`) | 49 entities, 2 clients | 6.4, 5.5 us | 2.9-3.0 us | 2.5-2.8 us | 0 unless a tag is read |
+
+About 3-6 us a frame against section 2's 1.3-2.7 ms CPU frame, 0.2-0.4%,
+under the run-to-run spread of a live A/B; the clone grows with the
+snapshot's entities. `own_body` itself (1.4 us each) looks its fields up
+by name; left as is.
+
+Pending on a machine with a GPU: the frame-profile A/B as a player, base
+against this branch, each run twice alternately:
+`GAME=cod1 COD_DIR=<1.1 install> tools/cod4_perf.sh <out> mp_carentan 30 --team allies --weapon m1garand_mp`
+and `GAME=uo COD_DIR=<UO install> GAMETYPE=tdm tools/cod4_perf.sh <out> mp_cassino 30 --team allies --weapon m1garand_mp`,
+reading `pose` and `bodies`.

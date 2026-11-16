@@ -190,7 +190,10 @@ fn drawn(fs: Pk3Fs, name: &str, cvars: &[(&str, &str)]) -> Vec<Drawn> {
         let weapon_names =
             split_weapon_list(configstrings.get(7).map(String::as_str).unwrap_or(""));
         let from = LerpFrom {
-            snap: &a,
+            snap: SnapView {
+                snap: &a,
+                own: None,
+            },
             movers: SnapshotMovers::from_entities(p, &a.entities),
         };
         // `build_instances`' gun pass at f = 1.
