@@ -830,22 +830,25 @@ Addresses are `iw3mp.exe` 1.7.
   systeminfo carries `sv_clientSideBullets\0`, and the server's events
   carry each of the shooter's 90 rounds over the target's head three
   times: the metal plate's entry (`surfType` 13, `un1` 0, `eventParm`
-  104, `(0, -1, 0)`), its exit (13, `un1` 4, `eventParm` 32, `(0, 1, 0)`:
-  the far face's own normal) and the cloth far beyond (4). Not one sets
+  104, `(0, -1, 0)`), its exit (13, `un1` 4, `eventParm` 32, `(0, 1, 0)`)
+  and the cloth far beyond (4). Not one sets
   `lerp.u`. Under 1 the kill capture's shooter sees only flesh hits.
   VERIFIED (the gate `net_decode::server_side_bullets_send_every_contact`).
-  In an earlier run whose shooter killed the target, the rounds into
-  his corpse raised flesh impacts, entry and exit, and no others reached
-  past it. VERIFIED live (that run, not kept: its corpse's fall diverges
-  on ours, cod4-server-gaps.md).
+  The exit's `eventParm` is the round's own direction, not the far
+  face's normal: 0x808ad29 hands 0x808a05c `ebp-0x2c`, the direction
+  `Bullet_Endpos` wrote (0x808a7b0, 0x808a7d1). VERIFIED (the code). The
+  level rounds above give both 32; the plate capture's rounds down at a
+  corpse give 30 at the plate's and the flesh's exits. VERIFIED
+  (`cod4_corpse_rounds_ab`). The rounds into a corpse: cod4-combat.md
+  5.3.
 - So under 0 a round's push on the map's dynamic entities runs from the
   world's origin to the contact. INFERRED (the zeros at +0x54, read as
   they came).
 - vcod's server: `Cod4Level::impact_event` is 0x808a05c, called from
   `bullet_process` (0x808a136) before the damage on each leg of
   `Bullet_FireExtended` and on a penetrating round's first contact; past
-  a surface `fire_penetrate` raises the exit along the back trace's
-  normal with `un1` 4 when the next contact (or the round's end) lies
+  a surface `fire_penetrate` raises the exit along the round's
+  direction with `un1` 4 when the next contact (or the round's end) lies
   over `bullet_penetrationMinFxDist` from it and the round does not go
   on into the sky, and the next contact's impact under the same spacing;
   with no exit found, the next contact's when it lies that far from the

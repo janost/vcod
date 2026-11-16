@@ -366,6 +366,10 @@ against a retail kill capture, entity numbers included:
 - Under `sv_clientSideBullets 0` the rounds' impacts on the world, the
   exits included, go out as 1.7's server sends them
   ([cod4-effects.md](../research/cod4-effects.md) 12.4).
+- Rounds meet a corpse until its death anim ends, by its hit boxes as
+  the anim poses it, and raise its flesh impacts; a corpse stuck in a
+  clip brush stays up as on retail
+  ([cod4-combat.md](../research/cod4-combat.md) 5.2, 5.3).
 - Destructible cars and barrels break under rounds and blasts (13).
 - The stock damage and killed callbacks, the obituary, the corpse (death
   anim, set down on the ground, `startRagdoll` at retail's moment), the
@@ -493,9 +497,7 @@ Ranked by how much a player notices. The research-side lists are
 7. **Server-side differences.** vcod-server never asks the authorize
    server, so it answers an off-LAN challenge at once where 1.7 waits on
    the authorize server (cod4-handshake.md 15). No PunkBuster (a stock
-   dedicated server runs none either). A round into a corpse passes
-   through it, where 1.7 stops it there
-   ([cod4-server-gaps.md](../research/cod4-server-gaps.md), Ranked 7).
+   dedicated server runs none either).
 
 Pending human checks: pixel and by-ear comparisons with retail.
 

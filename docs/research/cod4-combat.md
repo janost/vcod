@@ -165,9 +165,20 @@ its `partClassification` byte. INFERRED. `body_mp_usmc_assault`'s boxes
 sit on the hit bones (head class 2 on `head`, torso 4 on `j_clavicle_*`,
 `pelvis` 5, limbs 6..17), none on a tag. VERIFIED (`cargo run -p
 vcod-cod4 --example bone_dump -- mp_crash.ff body_mp_usmc_assault`). The
-trace walks them as CoD2's under `bulletPriorityMap` or
+trace walks them under `bulletPriorityMap` or
 `riflePriorityMap` by `rifleBullet`: `.data` 0x826ce60 and 0x826ce73,
 loaded at 0x8089f4c and 0x8089f3f. VERIFIED (the bytes and the loads).
+Unlike CoD1's walk, `DObjTraceline` (0x81acb18) clips a box of higher
+priority than the best so far to the trace's own fraction on entry
+(`ebp-0x224`, 0x81acc57, read at 0x81ad293), not the best's (taken
+only for an equal priority, 0x81ad7f6), and takes it on any contact
+(0x81ad8a1..0x81ad8f1); an equal priority takes it only nearer
+(0x81ad8fc..0x81ad907). VERIFIED (the instructions). So the highest
+priority crossed wins in any bone order: a corpse round that crossed a
+`back_mid` (torso lower, 7 under the rifle map) before the nearer
+`j_clavicle_le` (torso upper, 8) scored the clavicle's face, word for
+word. VERIFIED (`cod4_corpse_rounds_ab`, 5.3). Ours:
+`vcod_common::bonetrace::bone_trace_worlds_cod4`.
 Each body is posed off the player animtree by `vcod_cod2::player`'s body
 (cod4-player-anims.md) at the playerstate's `legsAnim` / `torsoAnim`
 (the anim script's), the stance's idle when `legsAnim` is 0. INFERRED
@@ -719,17 +730,43 @@ client's 0x94.
   11 after `startRagdoll`, else 1, 0x80b9a74..0x80b9a96) and, with nothing
   a unit under it (0x80b9b4c), drops it at the motion's pace (10 or 5,
   0x80b9b66). VERIFIED (the instructions).
-- A fall stopped on ground rests there with the hit as its ground and its
-  angles on the surface; one stopped on a wall is nudged off along the
-  normal and dropped again; one stopped in contents 0x80000000 is freed.
-  INFERRED (`G_BounceCorpse`; CoD2's measured shape, cod2-combat.md 6.2).
+- The clone's box is the live body's: `clonePlayer` copies `r.mins`,
+  `r.maxs` and the abs box (0x80ad121..0x80ad1b0) from inside the killed
+  callback (`Scr_PlayerKilled`, 0x80b1c75), before `player_die` sets
+  `r.maxs[2]` to 30 (0x80b1da0). VERIFIED (the instructions). A standing
+  clone swept `(-15, -15, 0)..(15, 15, 70)`. VERIFIED (gdb at 0x80b9988).
+  The sweep is `G_Trace` (0x80b408a, entities included) passing
+  `r.ownerNum - 1`, none for a clone (0x80b990e). INFERRED (the call).
+- A sweep that stopped short: the origin lerped by the raw fraction
+  (0x80b9983..0x80b99fd), the fraction then read 0 for `startsolid`
+  (0x80b9a05); a stop in contents 0x80000000 frees the clone
+  (0x80b9dd8..0x80b9df8, 0x80ba0fd); a drag stops there (0x80b9e04). A
+  fall `allsolid` all along sweeps again from 32 over the origin
+  (0x821b094, 0x80b9e31) to the same point with playerclip (0x10000) out
+  of the mask (0x80b9e55) and, unless that one is all solid too, sets the
+  origin from its start toward the old origin by its fraction
+  (0x80b9ea3..0x80b9efe). Then, on whichever sweep is left: all solid or
+  a normal with z above 0, the clone rests there (`trType` 1, or 11 after
+  `startRagdoll`, no time, no velocity), its ground the sweep's entity,
+  that entity's flags 0x100000 (0x80ba008), its angles on the surface
+  unless all solid (0x80b9f83..0x80ba0f6); else the origin moves by the
+  normal and the clone falls again from there with `trTime` now
+  (0x80b9f2e..0x80b9f7b). VERIFIED (the instructions).
+- The plate capture (5.3): the target dies at (207, 2380, 237) beside a
+  playerclip brush its 70-high box meets all along (contents 0x8030200);
+  the second sweep is clear (fraction 1, normal 0), so the clone stays
+  where it is and falls again each frame: `pos.trType` 5 (10 after
+  `startRagdoll`), no ground, `trBase` the death's origin, `trTime` the
+  frame's. VERIFIED (gdb at 0x80b9988 and 0x80b9e9d, the capture).
+  `cod4_corpse_rounds_ab` holds the corpse's every word.
 - Kill capture: the corpse (64) at 48000 reads (208, 2294, 236), `trType`
   1, landed in its first frame; drags to (214, 2310, 236) by 48650 and
   holds (the death anim's later frames move its root under a unit a frame,
   which the length test drops). The killcam replays the path from 51100.
   VERIFIED (the capture, the wire's rounded origins).
-- vcod: `game::cod4::corpse` (`launch` in `clonePlayer`, `run_corpses`;
-  the move is `game::corpse::step`, CoD2's frame with 1.7's trace and
+- vcod: `game::cod4::corpse` (`launch` in `clonePlayer` with the live
+  box's height, `run_corpses`; the move is `game::corpse::step`, CoD2's
+  frame with 1.7's trace, second sweep (`CorpseWorld::unstick`) and
   types; ahead of the body queue's thinks): node time stepped by `0.001 *
   level.frametime` at rate 1, motion off the clip's root tracks
   (`vcod_cod4::rootmotion::RootClip`, the mantle's translation sample and
@@ -739,6 +776,54 @@ client's 0x94.
   holds the rounded `pos.trBase` path to retail's, live and in the killcam
   (a clone set down where a box trace under it meets the floor never
   moves).
+
+### 5.3 Rounds into a corpse
+
+- A clone's contents are 0x4004000 (0x80ad1d8) until `BodyEnd` leaves
+  0x4000000 (0x80a8630), and the shot mask 0x2806831 carries 0x4000, so
+  a round meets a corpse until its fresh bit goes. VERIFIED (the stores
+  and the mask). `SV_ClipMoveToEntity`'s locational arm (0x817de77)
+  takes the clone (`svFlags` 2, 0x80ad11a) by its DObj; with none yet it
+  sweeps the box's `CM_TempBoxModel` (0x817e0dc), a capsule. VERIFIED
+  (gdb at 0x817de9f: no DObj in the kill's frame, one from the next).
+  `G_RunCorpseAnimate` builds it: `BG_UpdatePlayerDObj` (0x80ba1c3) off
+  the clone's own `clientInfo_t` copy (0x80ad0c0..0x80ad0f6), with an
+  ignore-collision mask of 0 (0x80ba1a8, read at 0x804b168), so the head
+  the live body's `attach` leaves out of the traces takes rounds on the
+  corpse; then `BG_PlayerAnimation` (0x80ba1e5). VERIFIED (the
+  instructions). The clone's handler row names no controller (`.data`
+  0x826d104), so its skeleton is the anims alone (`G_DObjCalcPose`
+  0x80ca9c9). VERIFIED (the bytes). Its handler row has no pain or die
+  and `G_Damage` (0x80b16c0) leaves an entity without `takedamage`
+  (+0x16b), which `clonePlayer` never sets, so a corpse takes no damage
+  and no knockback. VERIFIED (the code).
+- `Bullet_Trace` (0x8089f14) reads a struck player or corpse (`eType` 1
+  or 2) with no surface as flesh, 0x700000 (0x808a04c). VERIFIED (the
+  code). Not a client, a corpse gets 0x808a05c's `EV_BULLET_HIT`, flesh,
+  at its entry and at its exit (`un1` 4) under the penetration walk's
+  30-unit spacing (cod4-effects.md 12.4). VERIFIED (the captures).
+- The kill's own round: past the dying body the next leg meets the
+  fresh clone's capsule from inside (fraction 0, the normal off the
+  axis), finds its far side 15 out, and the two bodies' flesh spends the
+  round, so nothing past the kill raises an impact. VERIFIED (gdb at
+  0x8089f83, the capture).
+- Captures (cod4-effects.md 12.4's recipe, `--corpse-z 10` on the
+  shooter's `cod4_probe`): `play-1.7-csb0corpse-*` (target at 207 2380
+  296 behind the metal plate, the gdb run of the two breakpoints above)
+  and `play-1.7-csb0drag-*` (207 2291 296 on the open floor, shooter at
+  123 2110 300, its corpse dragged by its death anim). vcod's server:
+  `Cod4Level::corpse_trace` (`game::cod4::combat`) over
+  `Cod4Level::shot_corpses`, the clone's `PlayerBody` copied from the
+  client's at its first trace or frame and stepped in `run_corpses`.
+  `cod4::capture_ab::cod4_corpse_rounds_ab` and `cod4_corpse_drag_ab`
+  match every corpse word and every impact; their `GAPS` hold the
+  killcam's pitch, the second spawn and, on the floor, the dropped rifle,
+  none of them the corpse's. VERIFIED (the gates).
+- The knockback pushes along `Bullet_Endpos`'s direction (0x808a654..
+  0x808a6c1): the end less the start, stored, times one over the length
+  the stack keeps. glam's float normalize put all three of the floor
+  target's `velocity` words an ulp off; `bullet::round_dir` matches them.
+  VERIFIED (`cod4_corpse_drag_ab`).
 
 ## 6. The dropped weapon
 
@@ -1708,6 +1793,12 @@ VERIFIED (the gates).
   12 s, then kills the target through the damage callback with it as the
   inflictor and `cobra_20mm_mp` as the weapon. The killcam frames read
   `killCamEntity` 315, the model's number, and carry it. VERIFIED live.
+- The corpse runs (`play-1.7-csb0corpse-*`, `-csb0drag-*`, 5.3) under
+  `sv_clientSideBullets 0`: `cod4_corpse_rounds_ab` and
+  `cod4_corpse_drag_ab` match every corpse word and every impact; their
+  `GAPS` hold the killcam's pitch, the target's second spawn and the
+  floor run's dropped rifle (cod4-server-gaps.md, Ranked 8). VERIFIED
+  (the gates).
 
 What the captures fixed on ours:
 
