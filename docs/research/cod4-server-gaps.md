@@ -136,6 +136,11 @@ more.
 - A dropped weapon starts at the hand placed at the body's
   `r.currentOrigin` as the drop reads it, past the dying body's own cmds
   and inside a round's antilag (cod4-combat.md 6.1).
+- A script's tag read on a player places the pose where the body's cmds
+  left it, eases its controls once a frame and reads the end frame's new
+  blend weights a step on; `FireWeapon` notifies `weapon_fired`; a
+  weapon file's milliseconds round as 1.7's parser stores them
+  (`cod4_tag_read_ab`, cod4-combat.md 6.1).
 - A killcam follower's archived temp entities pass by the mask they were
   archived with alone (cod4-combat.md 7).
 
@@ -210,6 +215,12 @@ Open, by how much a player notices.
    frame's (cod4-combat.md 6.1). The plate run's killcam impact 348: the
    killcam's archived entities pass by their archived mask alone, never a
    live temp entity's (cod4-combat.md 7).
+9. `cod4_tag_read_ab`'s 17 `GAPS` frames: a strafing body's head up to
+   2.8 units off retail's while its legs' yaw swings, a fresh spawn's
+   first four frames up to 0.4, five a tenth off across the truncation.
+   The strafe's rows hit traces on a strafing body too. Unread: the legs'
+   swing and the controls' ease on a strafe under gdb (cod4-combat.md
+   6.1).
 
 ## The retail run
 

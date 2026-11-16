@@ -1104,7 +1104,9 @@ mod tests {
 
 /// The weapon files under a mod (`COD4_DIR` with `mods/ModWarfare`; passes
 /// vacuously without): every stock weapon is read off `main/`'s iwds in
-/// place of the zone's struct, and reads as the zone compiled it.
+/// place of the zone's struct, a millisecond field as the runtime parses
+/// it, which may read one over the zone's (cod4-fastfile.md, "Weapon
+/// files").
 #[cfg(test)]
 #[test]
 fn cod4_weapon_files_replace_the_zone_defs_under_a_mod() {
@@ -1120,7 +1122,10 @@ fn cod4_weapon_files_replace_the_zone_defs_under_a_mod() {
     let fs = crate::cod4_fly::open_fs(install.root(), g, Some("mp_crash")).unwrap();
     let n = world.overlay_weapon_files(&fs);
     assert!(n >= zone.len(), "{n} of {} weapons", zone.len());
-    for name in ["m16_mp", "ak47_mp", "frag_grenade_mp"] {
-        assert_eq!(world.defs.get(name), zone.get(name), "{name}");
-    }
+    // 0.065 s: 64 in the zone, 65 off the file and on retail under a mod.
+    let fire = |defs: &HashMap<String, (WeaponDef, [String; 3])>| {
+        defs.get("m16_mp").map(|(d, _)| d.fire_time)
+    };
+    assert_eq!(fire(&zone), Some(64));
+    assert_eq!(fire(&world.defs), Some(65));
 }

@@ -3471,7 +3471,9 @@ client stands in `door_a`'s trigger, stands on `door_b` and presses use,
 stands under it as it shuts, `useBy`s `door_r` from two spots, then twice
 more with a teleport to the far south spawn and back while it turns shut;
 the script then `radiusDamage`s `door_r`, `door_b` and `door_h`, and
-`door_h` again 100 ms later, and spawns one of each classname
+`door_h` again 100 ms later, spawns one of each classname, and has the
+client fire one kar98k round at `door_h` from 80 units south. Before the
+client is in, `door_h` takes a `radiusDamage` at 550 and another at 4000
 (`crates/server/tests/fixtures/doors/mp_carentan-dm-doors*.txt`, recipes in
 their headers). The client wrote its snapshots as the
 `crates/common/tests/fixtures/net/*-doors-11.bin`, `-15` and `-uo` pairs.
@@ -3574,8 +3576,14 @@ crush means of death 0x13 and 0x10.
   `angle` and turns it open 50 ms on (state 9); else 0 opens the team 50 ms
   on (3), 7 turns it (9), 1 and 8 put `nextthink` `wait` on (a toggle 50),
   and a door moving either way turns back through `Blocked_Door` or
-  `Blocked_DoorRotate` with no obstacle. No sound plays for the first 4000
-  ms of the level.
+  `Blocked_DoorRotate` with no obstacle. VERIFIED (0x560fd..0x5611b):
+  `level.time <= 4000` (`cmp 0xfa0`, `setle`) keeps the use's own sound and
+  loop off; `ReturnToPos1` and `Reached_BinaryMover` read no such test.
+- VERIFIED, the wire on all three, the early blasts: `door_h`, used at 550
+  and at 4000, entered the client's first snapshot (6.1 s on 1.1d, 6.55 s
+  on 1.5b, 6.9 s on UO) at `eventSequence` 6 with `loopSound` 0: the two
+  cycles' open ends, closings and close ends, and neither use's opening.
+  The use at 4000 is silent, so the bound is inclusive.
 - VERIFIED, `IsBinaryMoverBlocked`: only a `func_door_rotating` without
   spawnflags 0x20; the forward of `vectoangles(centre - r.currentOrigin)`
   turned by `angle` on the rotate axis, dotted with the activator's
@@ -3657,22 +3665,26 @@ and runs the door's `blocked`. `teams::idle_slave` unlinks a `func_rotating`
 slave, and the wire sends no door the area tree does not hold. The snapshot
 cull reads a door's last link box (`archive::WorldFrame::links`), not one
 rebuilt from its `apos`. `mover::constant_light` packs 26.7's word,
-`door::player_in_pvs` is 26.8's test, `door::damaged` 26.9's arm, and a
-script `spawn` runs `door::spawn` with no keys (26.10). `doors_ab` replays
+`door::player_in_pvs` is 26.8's test, `door::damaged` 26.9's arm, a
+round reads a brush entity's link contents (`CollisionWorld::shot_contents`,
+26.9), and a script `spawn` runs `door::spawn` with no keys (26.10). `doors_ab` replays
 the three captures to the last `PROBE` line, and matches every mover's
 entry to and exit from the snapshot, its sound events, `loopSound` and
-`constantLight` against the capture pairs, the client spawned on the
-capture's spawn point.
+`constantLight` against the capture pairs, and every bullet impact's
+event and `surfType`, the client spawned on the capture's spawn point.
 
 Not modelled:
 
 - Area portals (`trap_AdjustAreaPortalState` in `Use_BinaryMover` and
   `Reached_BinaryMover`): no stock MP map has one, and mp_carentan's lump
   is one area, so nothing here measures them.
-- A round's `G_Damage` on a door: only blasts and missile impacts reach
-  `door::damaged`; unmeasured.
-- The first 4000 ms without door sounds is ported off the RE; no capture
-  uses a door that early.
+- A knife's `G_Damage` on a door: the melee trace has no glass test
+  (cod11-combat.md 2.5), so a swing at a door at rest would open it;
+  vcod's melee names the world on any brush hit and deals no damage.
+  Unmeasured.
+- A round through a `func_static`, `func_bobbing` or `func_pendulum`,
+  also linked at -1 (26.9's rule): ported with the doors, measured only on
+  a door.
 - The `nextTrain` hack in `Use_BinaryMover` (no `func_train` in MP).
 
 ### 26.7 `constantLight`
@@ -3741,6 +3753,22 @@ The blast at `door_b` met `door_a` and `door_b` with `CanDamage` 0 (26.5's
 boxes, their midpoints at the world origin). The blast at `door_h` at rest
 called `G_Damage` at state 0: `"trigger"` in that frame and the door moved
 50 ms on; the blast 100 ms later found state 3 and did nothing.
+
+A round never reaches that arm. VERIFIED, `tools/re/gdb_bullet.py` on 1.1d
+at `Bullet_Fire_Extended`'s glass test (0x68b08), the shoot phase: the
+round's first leg stopped on `door_h` (entity 298, `eType` 5,
+`takedamage` 1) at (1053.37, 1602.88, 80.09) with the trace's contents
+0xffffffff, the door's `r.contents` (`trap_SetBrushModel`'s -1, section
+12); the brushes' own material (`textures/common/trigger`) has contents
+0x28000001. VERIFIED, the same log: the next leg started past the door
+and stopped on the world at (1053.49, 1627.88, 89.51), contents 1, and no
+`G_Damage` ran. INFERRED, off combat doc 2.4's step 3: -1 carries the glass
+bit 0x10, so every round goes on past a door, a `func_static` or any other
+entity linked at -1 as past a pane, after its impact, and skips step 4's
+`G_Damage`. A `script_brushmodel` (contents 1) still stops one. VERIFIED,
+the wire on all three: two impacts in the shot's snapshot, `surfType` 0 on
+the door's face and 5 on the wall behind it; `door_h` never moved and no
+`"trigger"` came.
 
 ### 26.10 A script spawn
 

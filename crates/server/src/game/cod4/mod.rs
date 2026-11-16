@@ -664,6 +664,11 @@ pub struct Cod4HostState {
     /// at 0x808a71c) at their rewound `r.currentOrigin`, until its restore
     /// (0x808a99a): what a `dropItem` inside the round's damage reads.
     pub antilag: HashMap<usize, glam::Vec3>,
+    /// The bodies a script's tag read posed first in a frame (slot, level
+    /// time, the eased controls), for the level to take before its next
+    /// pose: 1.7 eases the controls once in a frame, at the first pose,
+    /// whoever asks (cod4-combat.md 3.3).
+    pub script_poses: Vec<(usize, i32, vcod_common::playerpose::Controllers)>,
     /// Each slot's `death` event commands as its last end frame would play
     /// them; `player_die` draws one (`vcod_cod4::pmove::anim::event_choices`).
     pub death_anims: Vec<Vec<vcod_cod4::pmove::anim::EventAnim>>,
@@ -970,6 +975,7 @@ impl Default for Cod4HostState {
             free_next: Vec::new(),
             corpse_source: vec![None; MAX_CLIENTS],
             antilag: HashMap::new(),
+            script_poses: Vec::new(),
             death_anims: vec![Vec::new(); MAX_CLIENTS],
             pm_flags: vec![0; MAX_CLIENTS],
             view_angles: vec![[0.0; 3]; MAX_CLIENTS],

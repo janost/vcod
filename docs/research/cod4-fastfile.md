@@ -621,7 +621,9 @@ VERIFIED:
   0x826a160, 502 rows of name, offset, type; `tools/re/cod4_weapon_fields.py`)
   writes each key's first value into the 0x878-byte struct the zone
   carries: type 4 `atoi`, 5 `atoi != 0`, 6 `(float)atof`, 7 seconds to
-  truncated milliseconds, 0 and 8..11 strings, effects, models,
+  milliseconds (the `(float)strtod` times the float 1000 at 0x8209664,
+  stored as a float, then `cvttss2si`, 0x81aa9fa..0x81aaa24, VERIFIED
+  the instructions), 0 and 8..11 strings, effects, models,
   materials and sound aliases, 12..32 a name looked up in a table
   (0x826b8e8..0x826ba38: weapon types, classes, reticles, penetration,
   impacts, stances, projectile explosions, offhand classes, active
@@ -634,7 +636,19 @@ VERIFIED:
   ranges' 999999 defaults, the five default sound aliases) are
   VERIFIED on 1.7 by `crates/cod4/tests/weapon_files.rs`: each
   of `iw_11`'s stock files reads back field for field as `common_mp`
-  compiled it, `defaultweapon_mp`'s default sounds included.
+  compiled it, `defaultweapon_mp`'s default sounds included, but a
+  millisecond field whose float product rounds up to a whole number:
+  `m16_mp`'s `fireTime` 0.065 is 64 in the zone and 65 off the file. The
+  test computes both off each file's seconds, the zone's as the product
+  truncated unstored and the file's as the runtime's, and each matches
+  exactly; 810 fields of the stock files read one over, the inverse sight
+  times following each side's ms. VERIFIED (the test).
+  The live server under a mod holds 65 (and 64 without one), read
+  under gdb at weapon 24's def (the array at 0x828d0c0, `fireTime` at
+  +0x36c). VERIFIED (gdb). So the zone's compiler kept the product
+  unstored. INFERRED. vcod read the files CoD1's way, 64, until
+  `cod4_tag_read_ab`'s burst fire put every `weaponTime` a ms under
+  retail's. VERIFIED (the gate).
   `vcod_cod4::weapon_file` is the reader.
 - Usermaps. `FS_Startup` adds `usermaps/<map>/` between `main/` and the
   `fs_game` directory, each over the last, only when `fs_game` is set;

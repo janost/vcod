@@ -1,0 +1,72 @@
+# Retail CoD 1.1d dedicated server, 2026-11-17, inside `unshare -rn` (lo up): scriptUsage over rcon 4 s after the load of
+#   COD_DIR=<1.1 install> PORT=28975 SECS=10 PRE_MAP_ARGS="+set developer 1 +set rconpassword pw" tools/run_probe.sh client-probes/probe_usage mp_brecourt
+# (the reply verbatim below this header; developer 0 prints `@ <offset>` for each position instead, offsets 184..562 in probe_usage, 7803 and 9302 in tdm, 44377 in _minefields).
+********************************
+count: 1, var usage: 2, endon usage: 0
+(file 'maps\mp\gametypes\probe_usage.gsc', line 33)
+ wait 1000;
+ *
+count: 1, var usage: 3, endon usage: 0
+(file 'maps\mp\gametypes\probe_usage.gsc', line 39)
+ wait 1000;
+ *
+count: 1, var usage: 3, endon usage: 0
+(file 'maps\mp\gametypes\probe_usage.gsc', line 47)
+ wait 1000;
+ *
+count: 1, var usage: 3, endon usage: 0
+(file 'maps\mp\gametypes\probe_usage.gsc', line 54)
+ wait 1000;
+ *
+count: 1, var usage: 3, endon usage: 0
+(file 'maps\mp\gametypes\probe_usage.gsc', line 59)
+ wait 1000;
+ *
+count: 1, var usage: 6, endon usage: 0
+(file 'maps\mp\gametypes\probe_usage.gsc', line 67)
+ wait 1000;
+ *
+count: 1, var usage: 6, endon usage: 0
+(file 'maps\mp\gametypes\probe_usage.gsc', line 75)
+ wait 1000;
+ *
+count: 1, var usage: 8, endon usage: 0
+(file 'maps\mp\gametypes\probe_usage.gsc', line 84)
+ wait 1000;
+ *
+count: 1, var usage: 2, endon usage: 4
+(file 'maps\mp\gametypes\probe_usage.gsc', line 92)
+ wait 1000;
+ *
+count: 1, var usage: 7, endon usage: 0
+(file 'maps\mp\gametypes\probe_usage.gsc', line 105)
+ wait 1000;
+ *
+called from:
+(file 'maps\mp\gametypes\probe_usage.gsc', line 99)
+ inner(3);
+ *
+count: 2, var usage: 6, endon usage: 0
+(file 'maps\mp\gametypes\probe_usage.gsc', line 111)
+ wait 1000;
+ *
+count: 1, var usage: 5, endon usage: 0
+(file 'maps\mp\gametypes\probe_usage.gsc', line 119)
+ wait 1000;
+ *
+count: 1, var usage: 2, endon usage: 0
+(file 'maps\mp\gametypes\tdm.gsc', line 992)
+  wait 1;
+  *
+count: 1, var usage: 6, endon usage: 0
+(file 'maps\mp\gametypes\tdm.gsc', line 1184)
+  wait 1;
+  *
+count: 32, var usage: 64, endon usage: 0
+(file 'maps\mp\_minefields.gsc', line 19)
+  self waittill ("trigger",other);
+       *
+********************************
+ent type 'entity'... count: 210, var usage: 619
+ent type 'hudelem'... count: 1, var usage: 1
+********************************

@@ -11,8 +11,9 @@
 //!
 //! Compared per half: every restart's three reliable commands and their order,
 //! the serverId the `d 1` carries, the absence of a gamestate, the respawn on
-//! the restart's own frame, and the length of the round that ran its timer
-//! out, plus the vitals either side of the respawn. Not a command-for-command
+//! the restart's own frame, the length of the round that ran its timer out
+//! and the wait from the death that ended the other round to its restart
+//! (both frame for frame on the server clock), plus the vitals either side of the respawn. Not a command-for-command
 //! diff -- the burst carries slots ours pins to constants
 //! (`mapchange_ab::CMD_GAPS`) -- but the *set* of configstring slots each
 //! half is sent an update for is compared whole: a restart keeps the
@@ -55,22 +56,10 @@ const SCORE_PERIOD_MS: i64 = 2000;
 /// a server frame is 50 ms and the probe's own pump adds part of one.
 const ORDER_TOL_MS: i64 = 100;
 
-/// The round timer, which both sides count off the same `scr_sd_roundlength`
-/// minute of script clock. Five frames of slack: retail's timer round is
-/// 64619 ms on one half and 64624 on the other.
-const TIMER_TOL_MS: i64 = 250;
-
 /// A round shorter than this ended by elimination, not by the clock. The
 /// limit is one minute, so anything past it is the timer's round plus the
 /// end-of-round wait.
-const TIMER_ROUND_FLOOR_MS: i64 = 60_000;
-
-/// The death that emptied a team, to the restart it ends the round with.
-/// `sd.gsc` gets there through a chain of script `wait`s, each of which lands
-/// on the next server frame rather than on the millisecond it asked for, and
-/// the death itself lands on whichever frame the `kill` was read on: a frame
-/// per link is not enough and a second covers the chain. Retail's is 5177 ms.
-const ELIMINATION_TOL_MS: i64 = ORDER_TOL_MS + 1000;
+const TIMER_ROUND_FLOOR_MS: i32 = 60_000;
 
 /// Fields of the respawn this server still gets wrong across a round restart,
 /// each with why. An entry *suppresses* the comparison against retail below
@@ -112,6 +101,9 @@ struct Respawn {
 
 /// One `map_restart` as a client saw it.
 struct Restart {
+    /// The restarted level's start time, the server clock the `d 3`'s
+    /// ambient `t` carries.
+    start: i32,
     cs3: i64,
     n: i64,
     cs1: i64,
@@ -197,6 +189,9 @@ fn restarts(who: &str, events: &[NetchanEvent]) -> Vec<Restart> {
             e.ms
         );
         out.push(Restart {
+            start: level_start(cs3.cmd().unwrap()).unwrap_or_else(|| {
+                panic!("{who}: the `d 3` at {} ms carries no ambient `t`", cs3.ms)
+            }),
             cs3: cs3.ms,
             n: e.ms,
             cs1: cs1.ms,
@@ -241,23 +236,37 @@ fn one_gamestate(who: &str, events: &[NetchanEvent], from_ms: i64) {
     assert_eq!(late, 0, "{who}: a round restart pushed a gamestate");
 }
 
-/// The first round that ran its timer out, as the gap between two restarts.
-fn timer_round(who: &str, rs: &[Restart]) -> i64 {
+/// The level start time a restart's `d 3 n\ambient_<map>\t\<start>` carries:
+/// `level.startTime`, on the server's own clock (map-cycle doc 4.5).
+fn level_start(cmd: &str) -> Option<i32> {
+    let info = cmd.strip_prefix("d 3 ")?;
+    vcod_common::net::info_value_for_key(info, "t")?
+        .parse()
+        .ok()
+}
+
+/// The first round that ran its timer out, as the gap between two restarts'
+/// level starts on the server clock.
+fn timer_round(who: &str, rs: &[Restart]) -> i32 {
     rs.windows(2)
-        .map(|w| w[1].n - w[0].n)
+        .map(|w| w[1].start - w[0].start)
         .find(|g| *g >= TIMER_ROUND_FLOOR_MS)
         .unwrap_or_else(|| {
             panic!(
                 "{who}: no round ran the {TIMER_ROUND_FLOOR_MS} ms timer out; the gaps were {:?}",
-                rs.windows(2).map(|w| w[1].n - w[0].n).collect::<Vec<_>>()
+                rs.windows(2)
+                    .map(|w| w[1].start - w[0].start)
+                    .collect::<Vec<_>>()
             )
         })
 }
 
-/// From the death that emptied a team to the `n` of the restart it ends the
-/// round with. The death is the first trace reading `pm_type` 6 with no health
-/// left; retail's target dies at 23430 ms and the round restarts at 28607.
-fn elimination_wait(who: &str, events: &[NetchanEvent]) -> i64 {
+/// From the death that emptied a team to the restart it ends the round with,
+/// on the server clock: the death's first snapshot to the restarted level's
+/// start. The death is the first trace reading `pm_type` 6 with no health
+/// left; retail's target dies in snapshot 48350 and the level restarts at
+/// 53350.
+fn elimination_wait(who: &str, events: &[NetchanEvent]) -> i32 {
     let died = events
         .iter()
         .find(|e| {
@@ -268,9 +277,10 @@ fn elimination_wait(who: &str, events: &[NetchanEvent]) -> i64 {
         .unwrap_or_else(|| panic!("{who}: this half never died, so no round ended on it"));
     let restart = events
         .iter()
-        .find(|e| e.ms > died.ms && e.cmd() == Some("n"))
+        .filter(|e| e.ms > died.ms)
+        .find_map(|e| e.cmd().and_then(level_start))
         .unwrap_or_else(|| panic!("{who}: no restart after the death at {} ms", died.ms));
-    restart.ms - died.ms
+    restart - died.server_time.expect("a trace carries its serverTime")
 }
 
 #[test]
@@ -447,10 +457,9 @@ fn an_sd_round_restart_matches_retail() {
 
         // --- the round that ran its timer out, the one interval both count ---
         let (rg, og) = (timer_round(&r_who, &r), timer_round(&o_who, &o));
-        assert!(
-            (rg - og).abs() <= TIMER_TOL_MS,
-            "{half}: the timer round is {rg} ms on retail and {og} ms here, over the \
-             {TIMER_TOL_MS} ms tolerance"
+        assert_eq!(
+            rg, og,
+            "{half}: the timer round is {rg} ms of server clock on retail and {og} ms here"
         );
 
         // --- the respawn itself, on the restart of a client that was alive ---
@@ -495,10 +504,10 @@ fn an_sd_round_restart_matches_retail() {
                 elimination_wait(&r_who, retail),
                 elimination_wait(&o_who, ours),
             );
-            assert!(
-                (rw - ow).abs() <= ELIMINATION_TOL_MS,
-                "{half}: the death that ended the round is {rw} ms before the restart on \
-                 retail and {ow} ms here, over the {ELIMINATION_TOL_MS} ms tolerance"
+            assert_eq!(
+                rw, ow,
+                "{half}: the death that ended the round is {rw} ms of server clock before \
+                 the restart on retail and {ow} ms here"
             );
         }
     }

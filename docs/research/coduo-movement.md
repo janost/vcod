@@ -267,9 +267,39 @@ runs its prone block for a prone body and for a deployed LMG.
 - The cap and pitch clamp then run as in 1.5.
 
 In the capture the deployed view swung 70 degrees off `proneDirection` was
-held at 55 by `delta_angles[1]` pushes (VERIFIED, ct 53450 on). The pitch
-clamp of a standing or crouched deploy measures from `proneTorsoPitch`,
-which only prone writes (INFERRED).
+held at 55 by `delta_angles[1]` pushes (VERIFIED, ct 53450 on).
+
+The pitch clamp of a standing deploy measures from `proneTorsoPitch`,
+whatever the last prone left there. VERIFIED, live, retail UO 1.51b
+(`playerstate/mp_carentan-dm-slope-8ms-pronemove-deploy-uo.txt`,
+`--probe-pronemove deploy` on `client-probes/probe_uofoot`'s mound spot,
+a standing `spawnTriggerMount` ahead):
+
+- Prone facing up the mound set `proneTorsoPitch` 340.76572 (-19.23); it
+  read the same through the stand-up and the whole standing deploy, and the
+  view pitched up and down stopped at -64.23 and 25.76, that value -/+ 45.
+- Prone facing down it set 19.234282; the next standing deploy stopped the
+  view at -25.76, 19.23 - 45.
+- The pull back from past the clamp goes through `delta_angles[0]`, as the
+  yaw cap's does.
+
+- Crouched, on a crouched script mount (`-deploy-crouch-uo.txt`,
+  `--probe-pronemove deploy-crouch`, `probe_spot moundcrouch`): the same
+  stale values and the same stops, -64.23 and 25.76, then -25.76 and
+  64.23.
+
+INFERRED, from the stand-ups: nothing but prone writes the field.
+`moves_ab`'s `the_predictor_replays_uo_prone_moves` replays both
+captures; a clamp centred on 0 off prone misses `delta_angles[0]` on 120
+snapshots of the standing one. The crouched one's view and
+`delta_angles` match on every snapshot. It misses one snapshot of each
+deploy (ct 23490, 39491) on the stance and eye fields, section 11's
+script-mount gap, and at the second deploy `aimSpreadScale` with them
+(VERIFIED, replay): the cone was decaying from a turn, and the stood body
+decays it at the standing rate (`PM_AdjustAimSpreadScale` reads the
+`eFlags` stance). Read as a crouched mount, the crouched capture replays
+with no miss and the standing one misses the same fields mirrored, so the
+hint cannot tell them apart (`PRONEMOVE_GAPS`).
 
 A client reads a deploy off the wire as: `pm_flags` 0x20 with an LMG in
 hand, the stance in `pm_flags` 3, `weaponstate` 12 or 13 through the
@@ -406,7 +436,12 @@ on those two snapshots, as the retail cgame's identical code would
 (INFERRED); the next snapshot corrects it. `moves_ab`'s
 `the_predictor_replays_uo_mounts_and_cook` replays all three under UO's
 rules: every compared field right except those two snapshots
-(`UOFOOT_GAPS`). The stand and mount captures were retaken 2026-10-17
+(`UOFOOT_GAPS`). The crouched deploy capture of section 7
+(`-pronemove-deploy-crouch-uo.txt`, `PRONEMOVE_GAPS`) misses the same
+way, and reading its hint as a crouched mount makes the standing capture
+miss instead (VERIFIED, replay): hint 7 value 0 reads the same over a
+standing and a crouched script mount, and the trigger reaches no client,
+so no client-side replay closes it. The stand and mount captures were retaken 2026-10-17
 (VERIFIED, same recipe) with the cmds sent before the first logged
 snapshot in the file: those stamped past its `commandTime` run in the
 first pair, and without them that pair's `aimSpreadScale` read one turn

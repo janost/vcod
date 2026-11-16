@@ -1106,8 +1106,9 @@ checks keys and both arms. VERIFIED (the test). vcod, INFERRED (the code):
   helicopter its model collision (3.2).
 - Sight, cone traces and `physicsTrace` meet a body as its link box.
 - `getTagOrigin` / `getTagAngles` on a playing body read its posed bone,
-  attachments included (`G_DObjGetWorldTagPos`); anything else the
-  model's bind pose.
+  attachments included (`G_DObjGetWorldTagPos`), placed at the body's
+  origin and yaw at the call and its controls eased once a frame
+  (cod4-combat.md 6.1); anything else the model's bind pose.
 - The level writes bodies, poses and brushes after its entity pass
   (`trace_bodies`, `posed_bodies`, `trace_brushes`): threads read the last
   frame's.

@@ -18,7 +18,10 @@
 //	spots. Then door_r twice more, the player taken far off while it shuts
 //	(the PVS test of its sounds), radiusDamage on door_r, door_b, door_h
 //	shut and door_h moving, and a script spawn of each classname at the world
-//	origin. Every frame from 1000 logs each mover and the player:
+//	origin. Then he shoots door_h at rest from 80 units south (a round's
+//	G_Damage; door_b's brushes stop no bulletTrace). Ahead of all that, door_h takes a radiusDamage at 550 and
+//	another at 4000, inside the level's first 4000 ms of silent door uses.
+//	Every frame from 1000 logs each mover and the player:
 //
 //	PROBE f <time> <a> <b> <b4> <h> <r angles> <rot1 angles> <rot2 angles> <player>
 //
@@ -30,6 +33,8 @@
 //	PROBE dmg <time> <damage> <mod> <attacker classname>
 //	PROBE spawned <classname> <origin> <angles> <speed> <dmg>
 //	PROBE s <time> <door origin> <door_rotating angles> <rotating angles>
+//	PROBE early <time>
+//	PROBE aim <name> <eye> <target> <what the eye's bulletTrace meets> <where>
 //	PROBE done
 
 main()
@@ -59,6 +64,38 @@ ground_at(p, name)
 	at = tr["position"];
 	logPrint("PROBE spot " + name + " " + at + "\n");
 	return at;
+}
+
+// door_h opened by blasts before the client is in: the first at 550, the
+// second at 4000, the last level time Use_BinaryMover keeps silent.
+early()
+{
+	wait 0.5;
+	logPrint("PROBE early " + gettime() + "\n");
+	radiusDamage((1053, 1611, 82), 100, 50, 50);
+	wait 3.45;
+	logPrint("PROBE early " + gettime() + "\n");
+	radiusDamage((1053, 1611, 82), 100, 50, 50);
+}
+
+// Stands the player at `spot` looking at `target` and fires one round.
+shoot(spot, target, name)
+{
+	eye = spot + (0, 0, 60);
+	place(spot, vectortoangles(target - eye));
+	tr = bullettrace(eye, target, false, level.probe_player);
+	what = "world";
+	if (isdefined(tr["entity"]))
+	{
+		what = tr["entity"].classname;
+		if (isdefined(tr["entity"].targetname))
+			what = tr["entity"].targetname;
+	}
+	logPrint("PROBE aim " + name + " " + eye + " " + target + " " + what + " " + tr["position"] + "\n");
+	wait 0.5;
+	in(1);
+	wait 0.1;
+	in(0);
 }
 
 ent(name)
@@ -110,6 +147,7 @@ run()
 		return;
 	}
 	level.probe_dmg = 0;
+	thread early();
 	wait 1;
 	thread log_frames();
 	thread watch_trigger("door_a");
@@ -122,6 +160,7 @@ run()
 	spot_d = ground_at((595, 2137, 400), "d");
 	spot_e = ground_at((195, 2137, 400), "e");
 	spot_far = ground_at((296, -1280, 100), "far");
+	spot_h = ground_at((1053, 1531, 120), "h");
 	for (;;)
 	{
 		pl = getentarray("player", "classname");
@@ -206,5 +245,9 @@ run()
 		logPrint("PROBE s " + gettime() + " " + s1.origin + " " + s2.angles + " " + s3.angles + "\n");
 		wait 0.05;
 	}
+
+	logPrint("PROBE phase shoot " + gettime() + "\n");
+	shoot(spot_h, (1053, 1611, 82), "h");
+	wait 3;
 	logPrint("PROBE done\n");
 }

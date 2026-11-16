@@ -703,3 +703,60 @@ const CSB0_DRAG_GAPS: &[(&str, &str)] = &[];
 fn cod4_corpse_drag_ab() {
     pair_ab("cod4_corpse_drag_ab", &CSB0_DRAG, CSB0_DRAG_GAPS);
 }
+
+const TAG_READ: Pair = Pair {
+    // `+set fs_game mods/vcodtag`, the `tag_read` gsc in the mod's iwd.
+    // Target `--script push --face 90`, shooter `--script shoot --aim-z
+    // 75`, which aims over the target's head so he lives: the gsc prints
+    // each player's `j_head` every frame and the shooter's
+    // `tag_weapon_right` the frame after each `weapon_fired`
+    // (cod4-combat.md 6.1).
+    name: "tagread",
+    seed: 3_862_047_845,
+    gsc: Some("tag_read"),
+    // The target's probe left before the last frame's print reached it.
+    until: Some(63650),
+    probes: TWO,
+    // The weapon defs come off the weapon files under a mod: the M16's
+    // `fireTime` reads 65 (cod4-fastfile.md, "Weapon files").
+    cvars: &[("fs_game", "mods/vcodtag")],
+};
+
+/// The shooter's `j_head` the first four frames after its spawn, up to
+/// 0.4 units off retail's (cod4-combat.md 6.1).
+const SPAWN: &str = "the spawn's first frames' head";
+/// The target's strafe (`movementDir` -89 from 47350) and its stop: the
+/// head up to 2.8 units off retail's while the legs' yaw swings
+/// (cod4-combat.md 6.1).
+const STRAFE: &str = "the strafe's swing";
+/// A coordinate's tenth one off, the head under 0.1 units from retail's
+/// across the truncation (cod4-combat.md 6.1).
+const TENTH: &str = "a tenth across the truncation";
+
+const TAG_READ_GAPS: &[(&str, &str)] = &[
+    ("* command * ours Some((42250,", SPAWN),
+    ("* command * ours Some((42300,", SPAWN),
+    ("* command * ours Some((42350,", SPAWN),
+    ("* command * ours Some((42400,", SPAWN),
+    ("* command * ours Some((47350,", STRAFE),
+    ("* command * ours Some((47400,", STRAFE),
+    ("* command * ours Some((47450,", STRAFE),
+    ("* command * ours Some((47500,", STRAFE),
+    ("* command * ours Some((47550,", STRAFE),
+    ("* command * ours Some((47600,", STRAFE),
+    ("* command * ours Some((47650,", STRAFE),
+    ("* command * ours Some((47700,", STRAFE),
+    ("* command * ours Some((48350,", TENTH),
+    ("* command * ours Some((48550,", TENTH),
+    ("* command * ours Some((48850,", TENTH),
+    ("* command * ours Some((48900,", TENTH),
+    ("* command * ours Some((49850,", TENTH),
+];
+
+/// A thread's `getTagOrigin` and `getTagAngles` on a player place the
+/// frame's pose where the cmds since the last end frame moved and turned
+/// the body, and `FireWeapon` notifies `weapon_fired` (cod4-combat.md 6.1).
+#[test]
+fn cod4_tag_read_ab() {
+    pair_ab("cod4_tag_read_ab", &TAG_READ, TAG_READ_GAPS);
+}

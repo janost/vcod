@@ -462,6 +462,10 @@ gates).
   floats, the controllers read the last end frame's view, and the struck
   face's normal comes off the bone's weighted matrix (15.1). VERIFIED
   (the instructions).
+- A script's `getTagOrigin` on a player poses it too (0x80cc7e6), so a
+  probe reading every player's tag each frame eases every body's controls
+  each frame. vcod eases a body at its first tag read of a frame as at its
+  first trace (6.1). VERIFIED (`cod4_tag_read_ab`).
 
 ## 4. Damage
 
@@ -887,10 +891,19 @@ prone and killcam runs. VERIFIED (the gates).
 - So the hand sits where `r.currentOrigin` stands when the killed
   callback drops: after the dying body's own cmds of that level time, and
   inside a round's antilag where the round rewound it. INFERRED (the read
-  above, the two runs below). `G_AntiLagRewindClientPos` (0x80a2a0c, called at 0x808a71c) runs before
-  the round's traces and the restore (0x80a297a, called at 0x808a99a)
-  after them. VERIFIED (the call order). That the damage, and with it the
-  killed callback, runs between the two is INFERRED (the calls between).
+  above, the two runs below). `G_AntiLagRewindClientPos` (0x80a2a0c,
+  called at 0x808a71c) runs before the round's traces and the restore
+  (0x80a297a, called at 0x808a99a) after them. VERIFIED (the call order).
+  The rewind moves only `r.currentOrigin` (+0x13c), saved and relinked,
+  for each client whose `sess.connected` (+0x2f8c) is 2 and
+  `sessionState` (+0x2f64) 0, when the shot's time is 51..400 ms behind
+  `level.time` (0x80a2a43..0x80a2b35); the angles stay. VERIFIED (the
+  instructions). The damage and the killed callback run between the two:
+  a gdb run (breaks at 0x808a71c, 0x80b16c0, 0x80b1aa0, 0x80cc7ba,
+  0x80918ed and 0x808a99a) logged, at the kill of 43550, the rewind, then
+  `G_Damage`, `player_die`, `dropItem`'s tag read (called from 0x80918ca),
+  the drop's sweep, then the restore, all inside one `FireWeapon`; the
+  round before it the same order without the death. VERIFIED (gdb).
   In a gdb run whose round was thought ahead of the target's cmds the tag
   read the origin (208.5629, 2294.3694), 0.36 of the way from the
   origin the 43150 snapshot carried to the 43200 one's. VERIFIED (gdb at
@@ -904,8 +917,44 @@ prone and killcam runs. VERIFIED (the gates).
   `CorpseSource` origin, which each cmd updates, or at the round's
   rewound origin (`Cod4Host::antilag`), and sweeps from the same origin;
   `cod4_corpse_drag_ab` matches the rifle's every word. VERIFIED (the
-  gate). Open: `getTagOrigin` on a player still places at the last end
-  frame's origin.
+  gate).
+- A script's tag read on a player places the pose the same way. In the
+  gdb run above every `getTagOrigin` / `getTagAngles` on a player (615
+  calls of `G_DObjGetWorldTagMatrix` returning to 0x80c0053) read
+  `r.currentOrigin` equal to `ps.origin` and `r.currentAngles` equal to
+  (0, the view's yaw, 0) as the client's last cmd left them; 37 of them
+  read an origin and 52 a yaw some cmd had moved since that client's
+  `ClientEndFrame`. VERIFIED (gdb). vcod: `cod4_script::posed_body_tag`
+  places at `cod4_combat::current_place` (the cmd's origin and view yaw,
+  or the antilag's origin). The read also builds the frame's skeleton, so
+  it eases the controls once a frame as a trace does (3.3): ours takes the
+  controls the end frame eased a copy of the body to
+  (`PosedBody4::eased_controls`) and hands them to the level
+  (`Cod4HostState::script_poses`). INFERRED (3.3). Without the ease the
+  sighted shooter's `tag_weapon_right` read 4.3 degrees of pitch off
+  retail's in the gate below. VERIFIED (the gate).
+- `FireWeapon` (0x80a3030) notifies `weapon_fired` on the player first,
+  every weapon type, unless `eFlags` has 0x300 and the entity's byte at
+  +0x16c is set (0x80a3045..0x80a3074, `weapon_fired` at 0x8217922 into
+  the const at 0x836f16a). VERIFIED (the instructions). That the byte is
+  the one the turret code sets (0x80b8c11) is INFERRED. vcod raises it off each fire
+  event (`Cod4Level::fire_weapon`); its waiters run in the next frame's
+  threads.
+- `cod4::capture_ab::cod4_tag_read_ab` gates both on a retail run of the
+  `tag_read` gsc (`play-1.7-tagread-*`): the target walks (`--script push
+  --face 90`) and the sighted shooter fires over his head; every frame
+  prints each living player's `j_head` and, the frame after each
+  `weapon_fired`, the shooter's `tag_weapon_right` and its angles, in
+  tenths. The reads also find each goal weight the last end frame set a
+  step on (cod4-player-anims.md 3). Ours matches every frame but 17.
+  VERIFIED (the gate). Its
+  `GAPS` hold the other 17: the shooter's head the first four frames
+  after its spawn (up to 0.4 units), the target's head through a strafe
+  and its stop (47350..47700, `movementDir` -89, up to 2.8 units), and
+  five frames a coordinate's tenth off across the truncation (under 0.1
+  units). The strafe's rows fit the legs' yaw swing or the controls'
+  ease toward it, which no gate has read on a strafing body. INFERRED.
+  Open.
 - `LaunchItem` (0x80910ec): angles (0, the body's yaw plus the offset,
   0); `G_Spawn`; `eType` 3, `index` the item, mins -1 and maxs 1 on every
   axis (0x809141b..0x8091453), +0x120 0x407c0108, `clientNum` the dropper;

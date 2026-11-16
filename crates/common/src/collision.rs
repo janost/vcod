@@ -12,7 +12,7 @@ use crate::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use crate::patch::{Arith, PatchCollide, Sweep};
 use crate::terrain::{CapsuleSweep, Terrain};
 use glam::Vec3;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 /// Shared with the xmodel collision surfaces, which use the same bits.
@@ -77,6 +77,9 @@ const CLIP_BRUSH: u32 =
 pub const CONTENTS_VEHICLE_CLIP: u32 = 0x200;
 const TRACE_MASK_MOVE: u32 = MASK_PLAYERSOLID;
 const TRACE_MASK_SHOT: u32 = MASK_SHOT;
+
+/// [`CollisionWorld`]'s `model_contents` for a model no entity linked.
+const NO_ENTITY_CONTENTS: u64 = u64::MAX;
 
 /// A brush as clip planes: point p is inside iff n·p <= d for every plane.
 #[derive(Clone)]
@@ -1006,6 +1009,10 @@ pub struct CollisionWorld {
     /// reports: the world's for model 0 and for any submodel the server has
     /// not named an entity for.
     model_entity: Vec<AtomicU32>,
+    /// Per lump-27 model, the `r.contents` its entity linked with, or
+    /// [`NO_ENTITY_CONTENTS`]: what a round's trace reads as the contents
+    /// of a hit on its brushes ([`Self::shot_contents`]).
+    model_contents: Vec<AtomicU64>,
     /// Per lump-27 model, its brushes' run in `brushes`, the entity origin
     /// the stored planes are offset by, and the run's bounds about that
     /// origin: what a [`ModelPose`] moves.
@@ -1126,6 +1133,11 @@ impl Clone for CollisionWorld {
                 .model_entity
                 .iter()
                 .map(|e| AtomicU32::new(e.load(Ordering::Relaxed)))
+                .collect(),
+            model_contents: self
+                .model_contents
+                .iter()
+                .map(|e| AtomicU64::new(e.load(Ordering::Relaxed)))
                 .collect(),
             model_span: self.model_span.clone(),
             model_posed: bools(&self.model_posed),
@@ -1699,6 +1711,11 @@ impl CollisionWorld {
                 .iter()
                 .map(|_| AtomicU32::new(ENTITYNUM_WORLD))
                 .collect(),
+            model_contents: bsp
+                .models
+                .iter()
+                .map(|_| AtomicU64::new(NO_ENTITY_CONTENTS))
+                .collect(),
             model_posed: bsp.models.iter().map(|_| AtomicBool::new(false)).collect(),
             model_span,
             poses: RwLock::new(Vec::new()),
@@ -2237,6 +2254,33 @@ impl CollisionWorld {
     pub fn set_model_entity(&self, model: usize, entity: u32) {
         if let Some(m) = self.model_entity.get(model) {
             m.store(entity, Ordering::Relaxed);
+        }
+    }
+
+    /// The `r.contents` model `model`'s entity linked with: -1 for any
+    /// `trap_SetBrushModel` entity no script gave other contents.
+    pub fn set_model_contents(&self, model: usize, contents: i32) {
+        if let Some(m) = self.model_contents.get(model) {
+            m.store(u64::from(contents as u32), Ordering::Relaxed);
+        }
+    }
+
+    /// The contents a round's trace (`trap_LocationalTrace`) reports for
+    /// what it stopped on: a submodel's brushes report their entity's
+    /// `r.contents` (-1 for a door, so the round goes on past it as past
+    /// glass, cod11-combat.md 2.4, step 3); anything else
+    /// [`Self::hit_contents`].
+    pub fn shot_contents(&self, trace: &Trace) -> u32 {
+        let model = match trace.hit {
+            Some(Prim::Brush(b)) if trace.copy.is_none() => self.brushes[b as usize].model,
+            Some(Prim::Patch(p)) if trace.copy.is_none() => self.patches[p as usize].model,
+            _ => 0,
+        };
+        match self.model_contents.get(model as usize) {
+            Some(c) if model != 0 && c.load(Ordering::Relaxed) != NO_ENTITY_CONTENTS => {
+                c.load(Ordering::Relaxed) as u32
+            }
+            _ => self.hit_contents(trace),
         }
     }
 

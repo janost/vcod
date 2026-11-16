@@ -9,6 +9,7 @@ mod shader_corpus;
 mod skel11_ab;
 mod slope_seams;
 mod sun_census;
+mod trbase_census;
 
 /// A test file left out of the list above would never build or run.
 #[test]

@@ -173,11 +173,7 @@ pub fn parse(name: &str, text: &[u8], anim_types: &[&str]) -> Result<TextWeapon>
             4 => put(&mut raw, at, atoi(v) as u32),
             5 => put(&mut raw, at, u32::from(atoi(v) != 0)),
             6 => put(&mut raw, at, (atof(v) as f32).to_bits()),
-            7 => put(
-                &mut raw,
-                at,
-                vcod_common::weapon::stored_ms(atof(v) as f32) as u32,
-            ),
+            7 => put(&mut raw, at, stored_ms(atof(v) as f32) as u32),
             20 => {
                 let i = lookup(anim_types.iter().copied(), v)
                     .ok_or_else(|| anyhow!("unknown weapon player anim type {v} in {name}"))?;
@@ -293,6 +289,15 @@ fn info_pairs(s: &str) -> Vec<(&str, &str)> {
 
 fn atof(s: &str) -> f64 {
     crate::menuexp::atof(s)
+}
+
+/// Field type 7, seconds to milliseconds as 1.7's parser stores them
+/// (0x81aa9fa..0x81aaa24): the `(float)strtod`, times the float 1000
+/// (0x8209664), stored as a float, then truncated (`cvttss2si`). So 0.065
+/// reads 65 where CoD1's unstored product, and the zone's compiled
+/// `m16_mp`, give 64.
+pub fn stored_ms(seconds: f32) -> i32 {
+    (f64::from(seconds) * 1000.0) as f32 as i32
 }
 
 /// `weaponDefFields`: name, offset into `WeaponDef`, `cspFieldType`, in

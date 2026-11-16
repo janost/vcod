@@ -1200,11 +1200,13 @@ fn fire_round(
                     out.effects
                         .push(impact(t.endpos, t.normal, t.surface_flags, start));
                 }
-                if world.is_none_or(|w| w.hit_contents(&t) & CONTENTS_GLASS == 0) {
+                if world.is_none_or(|w| w.shot_contents(&t) & CONTENTS_GLASS == 0) {
                     break;
                 }
                 // Glass (2.4, step 3): on at full damage past the pane, with
-                // no nudge at a grazing angle.
+                // no nudge at a grazing angle. A brush entity's contents are
+                // its `r.contents`, -1 for a door, so a round goes on past one
+                // and never reaches its `G_Damage` (movers doc 26.9).
                 let dir = (end - start).normalize();
                 let d = -t.normal.dot(dir);
                 let nudge = if d >= GLASS_MIN_COS {
