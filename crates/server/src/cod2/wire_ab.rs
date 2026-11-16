@@ -70,6 +70,8 @@ struct Probe {
     seen: usize,
     /// The level time its `--secs` ran out and it sent `disconnect`.
     end: i32,
+    /// Its retail twin's first snapshot's `serverTime`.
+    first: i32,
     gone: bool,
     commands: Vec<String>,
     snaps: Vec<Snapshot2>,
@@ -234,6 +236,7 @@ fn ours(
                 asked_team: false,
                 seen: 0,
                 end: end_at(starts[i]),
+                first: starts[i],
                 gone: false,
                 commands: Vec::new(),
                 snaps: Vec::new(),
@@ -250,10 +253,13 @@ fn ours(
                 continue;
             }
             // A primed client gets no snapshot until it moves
-            // (cod2-protocol.md 17.2): cmds go out once the gamestate is in.
+            // (cod2-protocol.md 17.2): its first cmd goes out the frame
+            // before its twin's first snapshot, once the gamestate is in,
+            // so it begins and reads that snapshot when its twin did.
             let base = match p.cl.parser.snapshot() {
                 Some(s) => Some(s.server_time),
-                None => p.cl.parser.gamestate.is_some().then(|| sv.time_ms()),
+                None => (p.cl.parser.gamestate.is_some() && sv.time_ms() + FRAME_MS >= p.first)
+                    .then(|| sv.time_ms()),
             };
             let pkt = match base {
                 Some(t) => {
@@ -452,10 +458,10 @@ fn diffs(r_spec: &Side, r_join: &Side, o_spec: &Side, o_join: &Side) -> Vec<Stri
         }
     }
 
-    // The spectator's last snapshot: every entity (a live body's clock and
-    // anim aside; its spawn is pinned to retail's) and its playerstate.
+    // The spectator's last snapshot: every entity (a live body's
+    // `pos.trTime` aside, its last cmd's time) and its playerstate.
     let (rs, os) = (r_spec.snaps.last().unwrap(), o_spec.snaps.last().unwrap());
-    let moving = |n: u32, f: &str| n < 64 && (placed(f) || f == "pos.trTime");
+    let moving = |n: u32, f: &str| n < 64 && f == "pos.trTime";
     entity_diffs("spec ent", &rs.entities, &os.entities, &moving, &mut out);
     ps_diffs("spec ps", &rs.ps, &os.ps, &mut out);
     // The joined player's last playerstate.
@@ -466,18 +472,7 @@ fn diffs(r_spec: &Side, r_join: &Side, o_spec: &Side, o_join: &Side) -> Vec<Stri
 
 /// What still differs, on which capture (`<map>` or `<map> <gametype>`,
 /// "" for every one), and why (cod2-protocol.md section).
-const GAPS: &[(&str, &str, &str)] = &[
-    // The two weapons its death dropped start at the posed body's tag
-    // (`G_DObjGetWorldTagMatrix`), whose pose is not retail's to the bit:
-    // 0.01 off on tdm's turned body, two ulps of x on sd's (15.7). Their
-    // flight, spin and rest match once the start is retail's.
-    ("mp_toujane tdm-kill", "spec ent 73 pos.trBase[1]", "15.7"),
-    ("mp_toujane tdm-kill", "spec ent 73 pos.trBase[0]", "15.7"),
-    ("mp_toujane tdm-kill", "spec ent 73 pos.trBase[2]", "15.7"),
-    ("mp_toujane tdm-kill", "spec ent 74 pos.trBase[1]", "15.7"),
-    ("mp_toujane tdm-kill", "spec ent 74 pos.trBase[0]", "15.7"),
-    ("mp_toujane tdm-kill", "spec ent 74 pos.trBase[2]", "15.7"),
-];
+const GAPS: &[(&str, &str, &str)] = &[];
 
 /// `WIRE_REPORT=1`: each difference's two values, and both clients'
 /// server commands where they part.

@@ -1942,7 +1942,14 @@ Left in the gate's `GAPS`:
   replayed joiner's spawn a frame early; retail's clip starts by the
   rule vcod's clock runs (cod2-player-anims.md 7). VERIFIED (gdb). So
   this target's start is likely its own spawn or begin frame against
-  retail's, not the clip's rule. INFERRED. `BG_RunLerpFrameRate` (Mac
+  retail's, not the clip's rule. INFERRED. The cause was the server's: it
+  posed a body whose playerstate carried no legs anim in the stance's
+  idle, so the target's idle was set at its spawn's own end frame, where
+  retail sets none and starts the idle at the next end frame
+  (cod2-player-anims.md 7). Posing no clip there, `hit-melee`'s four
+  contacts and its `eventParm` match retail's; the entry holds only
+  `hit-rocket-rand`'s two contacts (19650, 26550), which never moved with
+  the target's phase. VERIFIED (gdb, the gate). `BG_RunLerpFrameRate` (Mac
   0x183492) gives a new legs clip a start time (`XAnimSetTime`, the
   spread) only when it loops, has a non-zero `moveSpeed` (+0x44) and its
   node's weight reads 0; the idle's `moveSpeed` is 0, so its set takes no
