@@ -1516,8 +1516,12 @@ the target's bones and logs where they stand every frame from 8500 to
   trace in `DObjTraceline`'s arithmetic (cod2-player-anims.md 12, word for
   word on retail's dumped traces) `trBase[2]` goes right in every row and
   `trDelta[2]` wrong in 6 again, the rest as they were. VERIFIED, the
-  gate. So what is left of the bounce is the struck body's pose, not the
-  walk. INFERRED. This needs the target's idle clip on
+  gate. With each anim time step stored as a float and the cross-fade's
+  goal time as `cod2_lnxded` sets it (cod2-player-anims.md 7) `trBase` and
+  `trDelta[0]` and `[1]` go right in every row, and `trDelta[2]` is off
+  in 3, one bounce's (10200 to 10300) by a last bit: 43.12476 against
+  43.124756. VERIFIED, the gate. So what is left of the bounce is the
+  struck body's pose, not the walk. INFERRED. This needs the target's idle clip on
   retail's clock (9.3); off it the flight was 0.01 to 0.9 off with the
   strike 0.19 along the throw's path. VERIFIED, the gate.
 - `BG_EvaluateTrajectory` (lnxded 0x80df5d4) stores the seconds as a
@@ -1677,13 +1681,21 @@ recipe: `antilag`'s under `GDB_PY`), is that fresh run, its traces in
 retail's rewound origin and bone, and outside its `BONE_GAPS` every
 round's traced bones sit within 2e-5 units and 1e-6 of a quat component
 of the ones retail's `DObjTraceline` read. VERIFIED, the gate. The eight
-gaps are rounds a frame or two after the target's `legsAnim` changes
-(9150 and 9200 after 9100's, 9800, 10350, 11600, 12200, 13350, 14250):
-every bone from `j_mainroot` down sits up to 7e-3 units off, the
-look-at's build of those frames alike, and back within the bound two to
-four frames on. VERIFIED, the gate and the dump. So the legs' cross-fade
-(cod2-player-anims.md 7) still parts from retail's for its first frames,
-in a weight or a node time. INFERRED.
+rounds a frame or two after the target's `legsAnim` changes (9150 and
+9200 after 9100's, 9800, 10350, 11600, 12200, 13350, 14250) had every
+bone from `j_mainroot` down up to 7e-3 units off, the look-at's build of
+those frames alike, and back within the bound two to four frames on.
+VERIFIED, the gate and the dump. That was the cross-fade's weights: CoD2's
+setter takes the goal time off the raised weight (cod2-player-anims.md 7).
+With it all eight match, the first three word for word. VERIFIED, the
+gate. The four left in `BONE_GAPS` (13150, 13550, 13700, 13800) sit up to
+3e-5 off in one bone (retail's index 21) once each anim time step is
+stored as a float, with or without the setter's goal time; before the
+stored step they sat within the bound. VERIFIED, the gate. From 10100 on most rounds' bones are a few ulps off
+retail's, as the node times part after a strafe's turn (cod2-player-anims.md
+7). INFERRED. The hit pose gate's 18050 moved from 0.014 to 0.002 along its
+line with these, its 13400 and the antilag 16950 not at all. VERIFIED, the
+gates.
 
 ### 9.6 The aim block and the game's `rand()`
 

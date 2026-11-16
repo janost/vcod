@@ -77,26 +77,8 @@ const CAPTURES: &[&str] = &[
 const GAPS: &[(&str, &str, usize, &str)] = &[
     (
         "hit-throw",
-        "missile pos.trBase[1]",
-        58,
-        "9.4 the bounce off the target's body: last bits",
-    ),
-    (
-        "hit-throw",
-        "missile pos.trDelta[0]",
-        6,
-        "9.4 the bounce off the target's body: last bits",
-    ),
-    (
-        "hit-throw",
-        "missile pos.trDelta[1]",
-        6,
-        "9.4 the bounce off the target's body: last bits",
-    ),
-    (
-        "hit-throw",
         "missile pos.trDelta[2]",
-        6,
+        3,
         "9.4 the bounce off the target's body: last bits",
     ),
     (

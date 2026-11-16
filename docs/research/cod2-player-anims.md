@@ -193,6 +193,27 @@ onto that clip rather than starting it; it now sets none, and the
 `hit-melee` contacts land on retail's digits (cod2-combat.md 9.7).
 VERIFIED, the gate.
 
+`cod2_lnxded`'s setter (0x80c20de) differs from 1.1's and 1.5's in the
+goal time: a node at weight 0 is raised to `0.001 * goal` first, and the
+goal time is then the part of the given time that distance from the
+raised weight takes, `(goal - w) * time / goal` going up and `(w - goal)
+* time / w` going down, stored at info +0x18; going to 0 it is the whole
+time when the old goal (+0x1c) was not 0, else the sooner of the two.
+VERIFIED (the instructions). The step (0x80bf112) lands on the goal once
+the frame's `dt` reaches the goal time, else stores `(goal - w) * dt / gt
++ w` (one under 1e-6 raised to `0.001 * goal`) and takes `dt` off the
+goal time. VERIFIED (the instructions). So a fresh clip in a 120 ms
+cross-fade reads 0.001, 0.417667 and 0.834333 before 1, where the whole
+time off 0.001 gave 0.41725 and 0.8335. VERIFIED (gdb, the antilag recipe
+under `tools/re/cod2_skel_gdb.py`: every leaf weight of the target's
+builds from 9000 to 17150 matches vcod's word for word, the stand to run
+and run to stand fades included). vcod's channel clock runs this setter
+and step on CoD2 bodies (`Ramp::cod2`). The same dump's node times part
+from vcod's at 12100, the frame after a run clip set at 12000 off the
+other run clip's time: retail's step from 12050 is 0.0083 where vcod's is
+near 0.1, so the rate the lerp frame hands that clip differs in the
+frames after a strafe's turn. VERIFIED (the dump); why is not known.
+
 ## 8. What vcod carries over
 
 - `vcod_cod2::player` runs 1.1's `animtree`, `animclock` (1.5's windowed

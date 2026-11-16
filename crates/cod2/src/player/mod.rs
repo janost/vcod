@@ -427,6 +427,10 @@ impl PlayerBody {
             tr_base: f.origin,
             eflags: flags,
         };
+        if self.cod4_lean.is_none() {
+            self.legs.store_steps();
+            self.torso.store_steps();
+        }
         update_body(
             (&mut self.legs, &mut self.torso),
             anims,
@@ -579,12 +583,6 @@ impl PlayerBody {
         let need = traced.then_some(rig.traced.as_slice());
         let channels = self.leaves(set, fs, f, now_ms, true)?;
         let skel = &rig.skeleton;
-        if std::env::var_os("DBG_LEAVES").is_some() && f.client_num == 0 {
-            for (w, ls) in &channels {
-                let l: Vec<String> = ls.iter().map(|l| format!("{} {:08x} {:08x}", l.clip, l.time.to_bits(), l.weight.to_bits())).collect();
-                eprintln!("leaves {now_ms} {:08x} {}", w.to_bits(), l.join(" | "));
-            }
-        }
         let mut held = Vec::new();
         for (_, leaves) in &channels {
             for l in leaves {

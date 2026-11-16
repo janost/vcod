@@ -255,36 +255,20 @@ const BONE_TOLERANCE: (f32, f32) = (2e-5, 1e-6);
 /// retail's, by frame time, each with its section of cod2-combat.md.
 const BONE_GAPS: &[(i32, &str)] = &[
     (
-        9150,
-        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
+        13150,
+        "9.5 the run clip's node time a few ulps off, up to 3e-5",
     ),
     (
-        9200,
-        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
+        13550,
+        "9.5 the run clip's node time a few ulps off, up to 3e-5",
     ),
     (
-        9800,
-        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
+        13700,
+        "9.5 the run clip's node time a few ulps off, up to 3e-5",
     ),
     (
-        10350,
-        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
-    ),
-    (
-        11600,
-        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
-    ),
-    (
-        12200,
-        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
-    ),
-    (
-        13350,
-        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
-    ),
-    (
-        14250,
-        "9.5 the legs' cross-fade after a new legsAnim, up to 7e-3",
+        13800,
+        "9.5 the run clip's node time a few ulps off, up to 3e-5",
     ),
 ];
 
