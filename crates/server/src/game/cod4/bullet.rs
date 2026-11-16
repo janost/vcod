@@ -424,7 +424,7 @@ impl Cod4Level {
             orig_start: start,
             start,
             end,
-            dir: (end - start).normalize_or_zero(),
+            dir: round_dir(start, end),
             mult: 1.0,
         };
         let enabled = self.rt.host.cvars.get("bullet_penetrationEnabled") != "0";
@@ -652,6 +652,18 @@ impl Cod4Level {
         }
         t
     }
+}
+
+/// `Bullet_Endpos`'s direction (`cod4_lnxded` 0x808a654..0x808a6c1): the
+/// end less the start, each stored, scaled by one over the length the
+/// x87 stack keeps unstored; a zero length leaves it. 1.7 takes the x
+/// difference off the end it still holds unstored, which `end` no longer
+/// carries.
+fn round_dir(start: Vec3, end: Vec3) -> Vec3 {
+    let d = (end.as_dvec3() - start.as_dvec3()).as_vec3();
+    let len = (end.as_dvec3() - start.as_dvec3()).length();
+    let inv = if len > 0.0 { 1.0 / len } else { 1.0 };
+    (d.as_dvec3() * inv).as_vec3()
 }
 
 /// `BG_AdvanceTrace` (`cod4_lnxded` 0x8060e44): the next leg passes
