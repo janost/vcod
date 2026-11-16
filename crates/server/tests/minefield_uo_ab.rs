@@ -1,9 +1,10 @@
 //! A United Offensive minefield kill on ours against retail's capture of it
 //! (`crates/common/tests/fixtures/net/*-uo-mine.bin`: the watcher of
-//! `client-probes/probe_minefield` with `probe_field 1` on mp_pavlov, the
-//! victim a second plain net probe; recipe in docs/protocol-1.1.md, "A
-//! player's `pos.trBase` is whole units"). Ours runs the same probe with
-//! the same two clients, the watcher first.
+//! `client-probes/probe_minefield` with `probe_field 1` on mp_pavlov; the
+//! victim a second net probe under `--probe-fall`, whose cmds are
+//! `fixtures/triggers/mp_pavlov-uo-mine-victim.txt`, recipe in its header).
+//! Ours runs the same probe with the same two clients, the watcher first,
+//! the victim sending retail's cmds.
 //!
 //! `MINE_REPORT=1` prints both sides' rows. Needs `COD_DIR` at a UO
 //! install; without one it returns early.
@@ -23,6 +24,9 @@ use vcod_common::net::snapshot::Snapshot;
 
 const MAP: &str = "mp_pavlov";
 const PROBE: &str = "probe_minefield";
+/// The victim's `--probe-fall` log of the same run: its `SPAWNED` line and
+/// the `CMDS` it sent.
+const VICTIM_LOG: &str = include_str!("fixtures/triggers/mp_pavlov-uo-mine-victim.txt");
 /// The victim's slot: the watcher joins first.
 const VICTIM: u32 = 1;
 
@@ -97,6 +101,15 @@ fn ours() -> Seen {
     let qb = Rc::new(RefCell::new(Queues::default()));
     let mut watcher = NetClient::start_with_qport(ClientEnd(qa.clone()), now, 0x2001);
     let mut victim = None;
+    // The victim's cmds are retail's, moved onto ours' clock by the gap
+    // between the two first playing snapshots.
+    let spawned: i32 = VICTIM_LOG
+        .lines()
+        .find_map(|l| l.strip_prefix("SPAWNED t="))
+        .and_then(|l| l.split_whitespace().next()?.parse().ok())
+        .expect("the victim's SPAWNED line");
+    let mut hold: Option<common::ProbeHold> = None;
+    let mut last_sent = i32::MIN;
     let mut seen = Seen::default();
     let mut tracker = EventTracker::new();
     let mut last = None;
@@ -112,7 +125,38 @@ fn ours() -> Seen {
         }
         watcher.send_frame(&UserCmd::default());
         if let Some(v) = victim.as_mut() {
-            v.send_frame(&UserCmd::default());
+            let live = v
+                .snapshots()
+                .newest()
+                .filter(|s| s.ps.field_i32(&PROTOCOL_V22, "pm_type") == 0);
+            if let (None, Some(s)) = (&hold, live) {
+                let shift = spawned - s.server_time;
+                hold = Some(common::ProbeHold {
+                    aim: true,
+                    framed: true,
+                    last: last_sent,
+                    times: common::cmds_times(VICTIM_LOG, "")
+                        .into_iter()
+                        .map(|t| t - shift)
+                        .collect(),
+                    ran: common::cmds_ran(VICTIM_LOG, "")
+                        .into_iter()
+                        .map(|(t, ct)| (t - shift, ct - shift))
+                        .collect(),
+                    ..Default::default()
+                });
+            }
+            match hold.as_mut() {
+                Some(h) => {
+                    let cmds = h.cmds(v, 0);
+                    v.send_cmds(&cmds);
+                }
+                None => {
+                    if let Some(c) = v.send_frame(&UserCmd::default()) {
+                        last_sent = c.server_time;
+                    }
+                }
+            }
         }
         for (addr, q) in [(ADDR, &qa), (ADDR_B, &qb)] {
             let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
@@ -153,8 +197,12 @@ fn report(side: &str, seen: &Seen) {
 /// origin truncated toward zero, the `setOrigin` frame's included. The
 /// `explo_mine` model, spawned at his unsnapped `origin` where he landed,
 /// keeps the fraction on both (docs/protocol-1.1.md, "A player's
-/// `pos.trBase` is whole units"). The fall's later rows ride each client's
-/// cmd clock, which the in-process client does not replay.
+/// `pos.trBase` is whole units"). Ours runs the victim on retail's cmds,
+/// so every row retail sent, the spawn's drop and the fall into the field
+/// included, is ours to the unit on the same frame. The rows end at the
+/// death, which `minefield_kill`'s `wait(randomFloat(.5))` draws: ours dies
+/// on a later frame, and its rows past retail's last, and the sound's
+/// origin, ride that draw.
 #[test]
 fn the_minefield_victim_goes_out_in_whole_units() {
     if vcod_common::testing::uo_fs().is_none() {
@@ -173,6 +221,16 @@ fn the_minefield_victim_goes_out_in_whole_units() {
         assert!(sound[2].fract() != 0.0, "{side}: {sound:?}");
     }
     assert_eq!(o.in_field()[0].1, r.in_field()[0].1);
+    let shift = r.victim[0].0 - o.victim[0].0;
+    let ours_at: std::collections::BTreeMap<i32, [f32; 3]> = o.victim.iter().copied().collect();
+    for (t, b) in &r.victim {
+        assert_eq!(
+            ours_at.get(&(t - shift)),
+            Some(b),
+            "retail t {t} (ours {}): the victim's trBase",
+            t - shift
+        );
+    }
     let (rs, os) = (r.sound.unwrap(), o.sound.unwrap());
     assert!(
         (0..3).all(|i| (os[i] - rs[i]).abs() < 0.1),
