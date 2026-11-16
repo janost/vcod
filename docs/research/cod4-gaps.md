@@ -21,14 +21,11 @@ Ranked by how much a player notices.
 - Rigid-body physics is vcod's solver, not ODE: a body's boxes meet the
   world's brushes and triangles by face clipping and vcod's edge
   contacts, its cylinders by 1.7's separating axes with vcod's points per
-  feature, not ODE's own box colliders; the contact pass runs once a
-  step on all of a body's contacts, not per geom, without 0x5a2320's
-  pass over five or more, and `msecStep` stays 17 ms (cod4-gsc.md 3.6,
-  3.6.1).
-  A jitter's pushes land on the body's
-  touching points, not ODE's contacts, so a flat prop takes more of them
-  (cod4-world.md 13.8). The ragdoll is a position-based solver
-  (cod4-player-anims.md 10). M.
+  feature, not ODE's own box colliders; a brush with sides meets the
+  world on its points alone, and every geom keeps vcod's points beside
+  its collider; a push is a whole impulse, not a force over the step at
+  `1000 / msecStep` of the world it names (cod4-gsc.md 3.6, 3.6.1). The
+  ragdoll is a position-based solver (cod4-player-anims.md 10). M.
 - `sv_clientSideBullets` 0 is not read: under it 1.7 draws no rounds of
   its own and plays the server's bullet events, which then push the
   props; vcod's client runs its rounds as under 1, which every stock
@@ -45,6 +42,14 @@ Ranked by how much a player notices.
   S.
 
 ## Fixed
+
+- A launched part's or dynamic entity's contact pass ran once a step on
+  all of its contacts and never cut five or more; its world stepped at
+  17 ms whatever the count awake, and the post-step sweep ran after each
+  step. It now runs per geom with 0x5a2320's cut, a jitter pushes on the
+  contacts the pass keeps, each world steps its bodies together at the
+  `msecStep` its count awake picks (0x5a6738), and the sweep runs once a
+  frame (cod4-gsc.md 3.6, 3.6.1; cod4-world.md 13.8).
 
 - A body pinched between two facing surfaces kept both sides' contacts.
   It now takes `iw3mp.exe`'s contact pass (0x5a2760, 0x5a25d0): of two
