@@ -197,9 +197,23 @@ pub fn spawn_entities_from_string(
             match item.row {
                 Some(row) => {
                     crate::game::item::attach(host, id, row);
-                    crate::game::item::link(host, cx, id, crate::game::item::CONTENTS_ITEM);
-                    let _p = crate::tick_profile::phase("spawn/item drop");
-                    drop_item_to_floor(host, cx, id, is_weapon_row(host.defs, row));
+                    if host.profile.game == vcod_common::game::Game::Cod1 {
+                        // `G_SpawnItem` during the load links nothing and
+                        // leaves the rest to the think (0x4e7c3..0x4e7f6).
+                        if let Some(e) = host.ents.get_mut(id) {
+                            e.unlinked = true;
+                        }
+                        let at = host.level_time_ms + FINISH_SPAWNING_MS;
+                        host.ents.schedule(
+                            id,
+                            crate::game::entity::ThinkFn::FinishSpawningItem,
+                            at,
+                        );
+                    } else {
+                        crate::game::item::link(host, cx, id, crate::game::item::CONTENTS_ITEM);
+                        let _p = crate::tick_profile::phase("spawn/item drop");
+                        drop_item_to_floor(host, cx, id, is_weapon_row(host.defs, row));
+                    }
                 }
                 None => {
                     let _p = crate::tick_profile::phase("spawn/turret");
@@ -660,8 +674,9 @@ const RADIANT_NAMES: &[(&str, &str)] = &[
 /// load, where we return `None` and spawn the entity without an item. No
 /// stock map has one, so the two differ only on a broken BSP, which ours
 /// loads and retail does not.
-/// `FinishSpawningItem` (0x4e284) traces the item straight down from where
-/// Radiant put it and sets its origin to where that trace ends, so a placed
+/// CoD2's and CoD4's placement, at the spawn (CoD1's is
+/// [`finish_spawning_item`]). `FinishSpawningItem` (0x4e284) traces the
+/// item straight down from where Radiant put it and sets its origin to where that trace ends, so a placed
 /// weapon rests on the floor rather than at the mapper's z. VERIFIED from the
 /// module: the trace box is (-1, -1, -1) to (1, 1, 1) (rodata `0x74dac`), the
 /// drop is 4096 units (`0x74db4`), and the endpoint is passed to `G_SetOrigin`
@@ -711,6 +726,90 @@ pub fn drop_item_to_floor(host: &mut GameHost, cx: &mut Cx, id: EntId, weapon: b
     let aligned = align_to_surface(radiant, tr.normal.into(), weapon);
     let _ = host.set_field(cx, id, angles, Value::Vector(aligned));
 }
+
+/// How far `FinishSpawningItem`'s second trace starts below the item
+/// (rodata 0x74db8).
+const RETRY_DROP: f32 = 15.0;
+
+/// What `FinishSpawningItem` waits after `G_SpawnItem` at the load
+/// (`level.time + 200`, 0x4e7dc).
+pub const FINISH_SPAWNING_MS: i32 = 200;
+
+/// CoD1's `FinishSpawningItem` (1.1d 0x4e284), a map item's think: a
+/// `spawnflags & 1` item stays where Radiant put it, `groundEntityNum` 0;
+/// any other traces its own box ([`crate::game::item::bounds`]) as a
+/// capsule 4096 down under mask 0x411, again from 15 lower when that starts
+/// solid, and rests at the end of the first that does not, grounded on
+/// what it hit, a weapon rolled 90. Then the link. One that starts solid
+/// twice is printed and freed instead (cod11-items.md 14.9).
+pub fn finish_spawning_item(host: &mut GameHost, cx: &mut Cx, id: EntId) {
+    const DROP: f32 = 4096.0;
+    let Some(index) = host.ents.get(id).and_then(|e| e.item).map(|i| i.index) else {
+        return;
+    };
+    let weapon = is_weapon_row(host.defs, index as usize);
+    let flags = cx.intern_folded("spawnflags");
+    let spawnflags = match host.get_field(cx, id, flags) {
+        Value::Int(f) => f,
+        _ => 0,
+    };
+    let origin = cx.intern_folded("origin");
+    let Value::Vector(from) = host.get_field(cx, id, origin) else {
+        return;
+    };
+    let placed = if spawnflags & 1 != 0 {
+        Some((0, None))
+    } else if let Some(world) = host.world.clone() {
+        let (mins, maxs) = crate::game::item::bounds(weapon);
+        let from = glam::Vec3::from(from);
+        let to = from - glam::Vec3::Z * DROP;
+        let trace = |start| {
+            world
+                .collision
+                .item_trace(start, to, mins, maxs, crate::game::item::TAG_CLIPMASK)
+        };
+        let mut tr = trace(from);
+        if tr.startsolid {
+            tr = trace(from - glam::Vec3::Z * RETRY_DROP);
+        }
+        (!tr.startsolid).then(|| (world.collision.entity_num(&tr) as i32, Some(tr)))
+    } else {
+        Some((ENTITYNUM_WORLD_I32, None))
+    };
+    let Some((ground, tr)) = placed else {
+        let class = cx.intern_folded("classname");
+        let classname = match host.get_field(cx, id, class) {
+            Value::String(c) => cx.resolve(c).to_string(),
+            _ => String::new(),
+        };
+        // `vtos`: each component as `%i`.
+        let [x, y, z] = from.map(|c| c as i32);
+        log::info!("FinishSpawningItem: {classname} startsolid at ({x} {y} {z})");
+        host.free_entity(id);
+        return;
+    };
+    if let Some(e) = host.ents.get_mut(id) {
+        e.unlinked = false;
+        if let Some(i) = e.item.as_mut() {
+            i.ground = ground;
+        }
+    }
+    if let Some(tr) = tr {
+        let end: [f32; 3] = tr.endpos.into();
+        let _ = host.set_field(cx, id, origin, Value::Vector(end));
+        if tr.fraction < 1.0 {
+            let angles = cx.intern_folded("angles");
+            if let Value::Vector(radiant) = host.get_field(cx, id, angles) {
+                let aligned = align_to_surface(radiant, tr.normal.into(), weapon);
+                let _ = host.set_field(cx, id, angles, Value::Vector(aligned));
+            }
+        }
+    }
+    crate::game::item::link(host, cx, id, crate::game::item::CONTENTS_ITEM);
+}
+
+/// `ENTITYNUM_WORLD`, the ground of an item placed with no map loaded.
+const ENTITYNUM_WORLD_I32: i32 = 1022;
 
 /// Whether a `bg_itemlist` row is a weapon's, `giType` 1.
 pub(crate) fn is_weapon_row(defs: &crate::defs::Defs, row: usize) -> bool {

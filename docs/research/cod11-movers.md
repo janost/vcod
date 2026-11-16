@@ -3416,6 +3416,33 @@ marks every later member of a `teamname` a slave, `flags & 4` (1.1d
 vcod: the verbs return on a slave after their class gate
 (`builtins::mover::slave`), and the entity pass skips a slave `script_*`
 entity or mover, its think included (`game::teams::idle_slave`).
-`game::teams_ab` holds both to the three captures. Not modelled: the
-tramcar and `func_rotating` unlink (vcod builds neither as a mover) and the
-team push of a `func_door` chain (no `func_door` is built).
+`game::teams_ab` holds both to the three captures.
+
+Not modelled, and why:
+
+- The slave unlink of `G_RunMover`'s arm. A `func_tramcar` has no `SP_`
+  function and so no mover `eType`: it never reaches `G_RunMover`, and
+  `G_FindTeams` already unlinked a tramcar slave (vcod does too). A
+  `func_rotating` (`SP_func_rotating` 0x582fc, `InitMover`) is a mover, but
+  vcod builds none, and the teams lump has no submodel to give one: no
+  stock mp_carentan `*N` is free to share. INFERRED: what it would show is
+  a linked slave's brushes leaving the traces on its first frame.
+- `func_door` and `func_door_rotating` (both in the MP `spawns` table, on
+  no stock MP map). A port needs: `SP_func_door` (0x56bd4) and
+  `SP_func_door_rotating` (0x57124) with their keys (`speed`, `wait`,
+  `lip`, `dmg`, `angle`, spawnflags) and `InitMover`/`InitMoverRotate`
+  (0x56454, 0x5674c) for `pos1`/`pos2` and the leg times;
+  `finishSpawningKeyedMover` (0x57e68) and `Think_SpawnNewDoorTrigger`/
+  `Think_SpawnNewAutoDoorTrigger` (0x57d8c, 0x57da4), the trigger box over
+  the team's bounds with `Touch_DoorTrigger` (0x57d48); `Use_BinaryMover`,
+  `Reached_BinaryMover`, `SetMoverState`, `IsBinaryMoverBlocked`
+  (0x560ec, 0x55c9c, 0x55904, 0x55f54) for every state, not only a sine
+  mover's two (section 18); `MatchTeam`, `MatchTeamReverseAngleOnSlaves`
+  and `Think_MatchTeam` (0x577fc, 0x57ad0, 0x57e08), which give the slaves
+  the master's trajectories; `G_MoverTeam` over the whole chain, each part
+  pushed and all put back on a block (vcod runs one part a turn);
+  `Blocked_Door`/`Blocked_DoorRotate` (0x578a0, 0x56934); the use key's
+  `G_TryDoor` (0x57718), called from `Cmd_Activate_f` (0x4851e), and
+  `G_Activate` (0x57690), which calls `Use_BinaryMover` (0x576d1); and `DoorSetSounds`/
+  `Door_reverse_sounds` (0x57f7c, 0x57ef4). Gates need a lump with a door
+  team on a free submodel and a client to touch and use it.

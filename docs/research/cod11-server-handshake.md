@@ -1052,8 +1052,8 @@ Map commands:
   its counts; `game::teams_ab` holds the line to the three captures.
   `func_door` and `func_door_rotating` stay unbuilt, so no team mover
   (`Think_MatchTeam`, `G_MoverTeam` over a chain with trajectories of its
-  own) runs; vcod frees no startsolid item (`spawn::drop_item_to_floor`
-  keeps it), so on such a map its chains keep a member retail's lose.
+  own) runs. A startsolid item is freed after the count, as retail's is
+  (cod11-items.md 14.9).
 - `map mp_harbor` over rcon from mp_carentan, 2026-11-16 on 1.1d: one
   2248-byte packet, `print\n` then `==== ShutdownGame ====`, `------ Server
   Initialization ------`, `Server: mp_harbor`, `Hunk_Clear: reset the hunk

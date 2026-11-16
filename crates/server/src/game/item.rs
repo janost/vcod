@@ -391,11 +391,15 @@ pub fn run_item(host: &mut GameHost, cx: &mut Cx, id: EntId, now_ms: i32) -> boo
                 }
             }
         }
-        let respawn = host.ents.get(id).is_some_and(|e| {
-            e.think == Some(ThinkFn::RespawnItem) && e.nextthink != 0 && e.nextthink <= now_ms
-        });
+        let due = |think| {
+            host.ents.get(id).is_some_and(|e| {
+                e.think == Some(think) && e.nextthink != 0 && e.nextthink <= now_ms
+            })
+        };
+        let respawn = due(ThinkFn::RespawnItem);
+        let finish = due(ThinkFn::FinishSpawningItem);
         if let Some(e) = host.ents.get_mut(id) {
-            if respawn {
+            if respawn || finish {
                 // `G_RunThink` clears the think before it runs it.
                 e.think = None;
                 e.nextthink = 0;
@@ -404,6 +408,9 @@ pub fn run_item(host: &mut GameHost, cx: &mut Cx, id: EntId, now_ms: i32) -> boo
         }
         if respawn {
             respawn_item(host, cx, id);
+        }
+        if finish {
+            crate::game::spawn::finish_spawning_item(host, cx, id);
         }
     }
     true

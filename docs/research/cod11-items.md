@@ -746,8 +746,9 @@ a giType compare against 1 at 0x4e808; an add of 90 (0x74e40) to the roll
 (`ent+0x148`, 0x4e814); then `G_SetAngle`, `G_SetOrigin` and
 `trap_LinkEntity` (0x4e82b..0x4e847). VERIFIED: only
 `G_SpawnEntitiesFromString` writes `level.spawning` (0x622e4, 0x62326).
-INFERRED: during the map load an item waits 200 ms for `FinishSpawningItem`;
-outside it (a script `spawn`) the item is linked in place and, unless
+VERIFIED, section 14.9's captures: during the map load an item waits 200
+ms for `FinishSpawningItem`. INFERRED: outside it (a script `spawn`) the
+item is linked in place and, unless
 `spawnflags & 1`, gets `groundEntityNum` 0x3ff and, for a weapon, the +90
 roll. INFERRED: a script spawn with `spawnflags & 1` skips both, since the
 `jne` at 0x4e7ff passes over the 0x3ff store and the roll add. VERIFIED,
@@ -1046,7 +1047,7 @@ taken or freed ends or parks without an error.
 | the 32-slot ring | `item::DropRing` |
 | `G_RunItem`, `G_BounceItem` | `item::run_items`, `run_flight` |
 | script `spawn` of a `bg_itemlist` classname | `item::spawn_in_place`, which leaves it to fall as section 14 measures |
-| `FinishSpawningItem` | `spawn::drop_item_to_floor`, inline in `spawn_entities_from_string` at map load |
+| `FinishSpawningItem` | CoD1: `spawn::finish_spawning_item`, the item's think 200 ms after the load (14.9); CoD2 and CoD4: `spawn::drop_item_to_floor`, inline in `spawn_entities_from_string` |
 
 A swap's drop is placed exactly where the replaced item lay
 (`DropAt::Exactly`), never landing, so its `groundEntityNum` reads 0 rather
@@ -1626,8 +1627,9 @@ entity lump, under `tools/re/gdb_teams.py`, on retail 1.1d, 1.5b and UO
 recipes in their headers). Three teams of items, `teamname` `w1` (items
 309, 310, 311), `w2` (a `script_origin` 312, items 313, 314) and `w3` (a
 `func_tramcar` 315 with spawnflags 8, item 316), and one item, 317, with
-none. The script `useBy`s 310, 313 and 316 six times each, 317 once, then
-309.
+none. `w1`'s third item, 311, starts solid and `FinishSpawningItem` frees
+it (section 14.9). The script `useBy`s 310, 313 and 316 six times each, 317
+once, then 309.
 
 - VERIFIED, `RespawnItem` (1.1d 0x4ec7c, 1.5b 0x4b3fb, UO 0x545db): an
   item with a `teamname` (`+0x1d8`; 1.5b `+0x1e0`, UO `+0x1e8`) and a null
@@ -1643,17 +1645,14 @@ none. The script `useBy`s 310, 313 and 316 six times each, 317 once, then
 - VERIFIED, the gdb lines on all three: each `useBy` of a teamed item made
   one draw, and the pick was link `draw % count` of the chain master, last,
   ..., first (`G_FindTeams`, cod11-server-handshake.md, "Console commands
-  over rcon"): 309, 311, 310 for `w1`; 312, 314, 313 for `w2`; 315, 316
-  for `w3`. The unteamed item made no draw and picked itself. The use of
-  309, `w1`'s master, ended the level with `ERROR: RespawnItem: bad
-  teammaster` and its next script line never ran.
-- VERIFIED, an earlier run of the same probe with `w1`'s third item
-  startsolid (`FinishSpawningItem: item_health startsolid at (1024 -744
-  16)`, freed on its think after the load): the chain from 309 counted 2,
-  309 and the freed slot, and a pick of link 1 reached the freed slot (its
-  `s.number` read 0). INFERRED: a freed member cuts the chain at itself,
-  `G_FreeEntity`'s clear having zeroed its `teamchain`, and the body links
-  a freed slot.
+  over rcon"): 312, 314, 313 for `w2`; 315, 316 for `w3`. `w1`'s chain
+  from 309 counted 2, 309 and 311's freed slot, and a pick of link 1
+  reached the freed slot (its `s.number` read 0): 310 was never picked.
+  The unteamed item made no draw and picked itself. The use of 309, `w1`'s
+  master, ended the level with `ERROR: RespawnItem: bad teammaster` and its
+  next script line never ran.
+- INFERRED: a freed member cuts the chain at itself, `G_FreeEntity`'s clear
+  having zeroed its `teamchain`, and the body links a freed slot.
 - INFERRED: a stock map gives no item a `teamname`, so stock play never
   reaches the branch.
 
@@ -1665,4 +1664,59 @@ event and `nextthink` 0, not the link; a pick of a freed slot does nothing.
 `G_Error` here ends the thread pass (`ErrorKind::GameError`) and the frame
 drops the level. VERIFIED, `game::teams_ab` with retail's draws pinned:
 every `PROBE` line and every pick of the three captures is retail's.
+
+### 14.9 `FinishSpawningItem`
+
+VERIFIED, `FinishSpawningItem` (1.1d 0x4e284), the think `G_SpawnItem`
+arms at `level.time + 200` for a map item (section 9), which it neither
+places nor links:
+
+- `spawnflags & 1` (0x4e293): `G_SetOrigin` where it stands and the link;
+  `groundEntityNum` stays the 0 `G_Spawn` left.
+- Otherwise its box, (-1 -1 -1)..(1 1 1) for a weapon (`giType` 1,
+  0x4e2bc) and (-1 -1 0)..(1 1 2) for any other (rodata 0x74dac -1.0,
+  0x74db0 2.0), with `eFlags` 0x10 (a capsule) and `svFlags` 0x200 set
+  (0x4e324, 0x4e32b), traced from the origin 4096 down (0x74db4) under
+  mask 0x411 (0x4e350).
+- When that starts solid (`trace+0x2f`, 0x4e379), the same trace from 15
+  lower (0x74db8) to the same end (0x4e3c3..0x4e3d9).
+- When that starts solid too, `G_Printf("FinishSpawningItem: %s startsolid
+  at %s\n")` (0x74d80) with the classname and `vtos(origin)`, then
+  `G_FreeEntity` (0x4e425).
+- Otherwise `groundEntityNum` is the trace's entity (0x4e437), the origin
+  its end (0x4e442); a trace that hit something (fraction under 1,
+  0x4e44c) sets the angles off its normal, a weapon's roll plus 90
+  (0x4e4cf); then the link (0x4e4f2).
+
+The census, vcod's clip world with retail's two traces, of every item
+without `spawnflags & 1` on the stock MP maps (VERIFIED, a sweep over the
+1.1, 1.5 and UO paks): none starts solid on 1.1 or 1.5. On UO,
+mp_kursk's `mpweapon_panzerschreck` at (-1144 -860 377) starts solid on
+both traces, and mp_rhinevalley's two `mpweapon_satchelcharge`s at
+(-3976 -10192 1664) and (-3976 -10224 1664) on the first only. 1.1's
+mp_railyard, mp_rocket and mp_ship carry the eight `spawnflags 1`
+panzerfausts (section 7).
+
+The captures are `client-probes/probe_startsolid` on retail 1.1d, 1.5b and
+UO 1.51b (`crates/server/tests/fixtures/items/*-finish*.txt`, recipes in
+their headers), each logging one classname's items a frame at a time from
+the gametype's first frame:
+
+- VERIFIED, all: every placed item that drops reads Radiant's origin
+  through the frames at 200 and drops on the next. The teams lump's `item_health`s
+  rest at z -9.42 (992 -744), -8.62 (1008 -744), -8.67 (976 -728) and
+  -6.22 (960 -736); 311, at (1024 -744 16), reads undefined from that
+  frame, and the console printed `FinishSpawningItem: item_health
+  startsolid at (1024 -744 16)`.
+- VERIFIED, 1.1d mp_railyard: the eight panzerfausts keep Radiant's origin.
+- VERIFIED, UO mp_kursk: the panzerschreck (entity 102) is freed on that
+  frame; mp_rhinevalley's satchels drop off the second trace to z 1513.12.
+
+vcod: CoD1's `G_SpawnItem` at the load attaches the item, unlinked and off
+the wire, with `ThinkFn::FinishSpawningItem` 200 ms on;
+`spawn::finish_spawning_item` is the think, run in the item's `G_RunItem`
+as `RespawnItem` is. The free on two solid starts keeps the slot counted by
+`G_FindTeams`, which ran at the load, so the chain loses the member as
+retail's does (14.8). VERIFIED, `game::teams_ab`: every `PROBE` line of the
+six captures is retail's. CoD2 and CoD4 keep the inline drop.
 

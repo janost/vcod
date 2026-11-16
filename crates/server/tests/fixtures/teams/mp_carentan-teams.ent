@@ -59,7 +59,7 @@
 "classname" "item_health"
 "teamname" "w1"
 "targetname" "w1c"
-"origin" "976 -744 16"
+"origin" "1024 -744 16"
 }
 {
 "classname" "script_origin"

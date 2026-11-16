@@ -2713,6 +2713,7 @@ impl GameHost {
             ThinkFn::Free => self.free_entity(id),
             ThinkFn::ClearOwner
             | ThinkFn::RespawnItem
+            | ThinkFn::FinishSpawningItem
             | ThinkFn::Concussive(_)
             | ThinkFn::HurtLife(_)
             | ThinkFn::MultiWait

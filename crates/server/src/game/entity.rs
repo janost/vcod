@@ -299,6 +299,10 @@ pub enum ThinkFn {
     /// `crate::game::item::run_items` inside the item's own `G_RunItem`, not
     /// by [`ObjectTable::run_thinks`] (docs/research/cod11-items.md 14).
     RespawnItem,
+    /// CoD1's `FinishSpawningItem` (1.1d 0x4e284), a map item's think 200
+    /// ms after the load spawned it: run, as `RespawnItem` is, inside the
+    /// item's `G_RunItem` (`crate::game::spawn::finish_spawning_item`).
+    FinishSpawningItem,
     /// `Concussive_think` (0x54808): re-arms 100 ms on until `level.time`
     /// passes the stored end, then swaps itself for `G_FreeEntity` 100 ms
     /// on (combat doc 13.2). It does nothing else.
@@ -314,6 +318,14 @@ pub enum ThinkFn {
     /// `spawnitem`, which needs the script context, so the entity pass runs
     /// it (`crate::game::item::misc_spawner_think`).
     MiscSpawner,
+}
+
+impl ThinkFn {
+    /// Run inside the item's `G_RunItem` (`crate::game::item::run_item`),
+    /// not by the think pass.
+    pub fn item_pass(self) -> bool {
+        matches!(self, ThinkFn::RespawnItem | ThinkFn::FinishSpawningItem)
+    }
 }
 
 /// `misc_spawner_use`'s `nextthink`, `level.time + 100` (1.1d 0x53468).
@@ -825,22 +837,25 @@ impl ObjectTable {
     /// Returns the think the table cannot run itself: `ThinkFn::Free`, so
     /// the caller can route it through `GameHost::free_entity`, which is the
     /// only place the host's own per-entity tables (the trigger row) are
-    /// dropped. A `ThinkFn::RespawnItem` is left armed for the item pass.
+    /// dropped. An [`ThinkFn::item_pass`] think is left armed for the item pass.
     #[must_use]
     pub fn run_think(&mut self, id: EntId, now_ms: i32) -> Option<ThinkFn> {
         // Retail's `nextthink` of 0 is "no think", not "due now". An entity
         // with none due is not reached mutably, so `edits` holds.
         let e = self.get(id)?;
-        e.think.filter(|t| *t != ThinkFn::RespawnItem)?;
+        e.think.filter(|t| !t.item_pass())?;
         if e.nextthink == 0 || e.nextthink > now_ms {
             return None;
         }
         let e = self.get_mut(id)?;
-        let think = e.think.filter(|t| *t != ThinkFn::RespawnItem)?;
+        let think = e.think.filter(|t| !t.item_pass())?;
         e.think = None;
         e.nextthink = 0;
         match think {
-            ThinkFn::Free | ThinkFn::RespawnItem | ThinkFn::MiscSpawner => Some(think),
+            ThinkFn::Free
+            | ThinkFn::RespawnItem
+            | ThinkFn::FinishSpawningItem
+            | ThinkFn::MiscSpawner => Some(think),
             ThinkFn::MultiWait => None,
             ThinkFn::ClearOwner => {
                 if let Some(item) = e.item.as_mut() {

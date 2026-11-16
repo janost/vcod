@@ -9,9 +9,9 @@
 #       tools/run_probe.sh client-probes/probe_teams mp_carentan
 # probe: crates/gsc/tests/fixtures/semantics/client-probes/probe_teams.gsc
 # PROBE lines: games_mp.log; PROBE_ERROR: the console's ERROR line; GDB
-# lines: gdb_teams.py's; CONSOLE: G_FindTeams' line off the console.
-# crates/server/src/game/teams_ab.rs replays it; cod11-items.md 14.8 and
-# cod11-movers.md 25 read it.
+# lines: gdb_teams.py's; CONSOLE: the console's G_FindTeams and
+# FinishSpawningItem lines. crates/server/src/game/teams_ab.rs replays it;
+# cod11-items.md 14.8, 14.9 and cod11-movers.md 25 read it.
 PROBE mover 1050 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
 PROBE mover 1100 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
 PROBE mover 1150 (0.00, 0.00, 0.00) (0.00, 0.00, 100.00)
@@ -60,15 +60,15 @@ PROBE deleted 3200 1
 PROBE deleted 3250 1
 PROBE deleted 3300 1
 PROBE user 170
-PROBE ent w1a 309
-PROBE ent w1b 310
-PROBE ent w1c 311
-PROBE ent w2m 312
-PROBE ent w2d 313
-PROBE ent w2e 314
-PROBE ent w3t 315
-PROBE ent w3f 316
-PROBE ent solo 317
+PROBE ent w1a 309 (992.00, -744.00, -9.42)
+PROBE ent w1b 310 (1008.00, -744.00, -8.62)
+PROBE ent w1c none
+PROBE ent w2m 312 (0.00, 0.00, 0.00)
+PROBE ent w2d 313 (992.00, -728.00, -9.42)
+PROBE ent w2e 314 (1008.00, -728.00, -8.62)
+PROBE ent w3t 315 (0.00, 0.00, 0.00)
+PROBE ent w3f 316 (976.00, -728.00, -8.67)
+PROBE ent solo 317 (960.00, -736.00, -6.22)
 PROBE use w1b 3350
 PROBE use w1b 3400
 PROBE use w1b 3450
@@ -92,75 +92,75 @@ PROBE master 4800
 PROBE_ERROR RespawnItem: bad teammaster
 GDB use 310
 GDB respawn 310
-GDB draw 953610966
+GDB draw 1621878656
 GDB pick 309
 GDB use 310
 GDB respawn 310
-GDB draw 1027922006
-GDB pick 310
+GDB draw 556855092
+GDB pick 309
 GDB use 310
 GDB respawn 310
-GDB draw 1902318623
-GDB pick 310
+GDB draw 1540388454
+GDB pick 309
 GDB use 310
 GDB respawn 310
-GDB draw 997949803
-GDB pick 311
+GDB draw 117798390
+GDB pick 309
 GDB use 310
 GDB respawn 310
-GDB draw 2065555900
-GDB pick 311
+GDB draw 1295639347
+GDB pick 0
 GDB use 310
 GDB respawn 310
-GDB draw 776739626
-GDB pick 310
+GDB draw 1764676133
+GDB pick 0
 GDB use 313
 GDB respawn 313
-GDB draw 1249617356
+GDB draw 42241203
+GDB pick 312
+GDB use 313
+GDB respawn 313
+GDB draw 2009789579
 GDB pick 313
 GDB use 313
 GDB respawn 313
-GDB draw 190408564
-GDB pick 314
-GDB use 313
-GDB respawn 313
-GDB draw 594285618
+GDB draw 1471117383
 GDB pick 312
 GDB use 313
 GDB respawn 313
-GDB draw 1523372658
+GDB draw 1414346424
 GDB pick 312
 GDB use 313
 GDB respawn 313
-GDB draw 405967194
+GDB draw 727407360
 GDB pick 312
 GDB use 313
 GDB respawn 313
-GDB draw 1762844680
-GDB pick 314
+GDB draw 836083575
+GDB pick 312
 GDB use 316
 GDB respawn 316
-GDB draw 164312163
+GDB draw 1703176143
 GDB pick 316
 GDB use 316
 GDB respawn 316
-GDB draw 1481174339
+GDB draw 316787175
 GDB pick 316
 GDB use 316
 GDB respawn 316
-GDB draw 1374457758
+GDB draw 1826946650
 GDB pick 315
 GDB use 316
 GDB respawn 316
-GDB draw 973067339
-GDB pick 316
-GDB use 316
-GDB respawn 316
-GDB draw 1791592294
+GDB draw 783207836
 GDB pick 315
 GDB use 316
 GDB respawn 316
-GDB draw 1442945093
+GDB draw 420235947
+GDB pick 316
+GDB use 316
+GDB respawn 316
+GDB draw 1305154315
 GDB pick 316
 GDB use 317
 GDB respawn 317
@@ -168,3 +168,4 @@ GDB pick 317
 GDB use 309
 GDB respawn 309
 CONSOLE 9 teams with 19 entities
+CONSOLE FinishSpawningItem: item_health startsolid at (1024 -744 16)
