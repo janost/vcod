@@ -982,6 +982,18 @@ Map commands:
 - vcod prints the block as one string before the script load
   (`restart_game_banner` in `server.rs`, with 1.5's and UO's name and date),
   team count 0 (no stock MP map has a `team` key).
+- `G_FindTeams` (1.1d 0x4f9c4), Q3's: VERIFIED, the disassembly. Over
+  entities 1 up to `level.num_entities` it takes one in use (`+0x160`), with
+  a `team` key (`+0x1d8`, a string index) and not yet a slave (`+0x17c` bit
+  4) as a master: one whose classname (`+0x176`) is the `scr_const` at
+  `+0x3a` is skipped unless its `spawnflags` (`+0x178`) has 8, and is then
+  its own `teammaster` (`+0x264`). Every later entity with the same `team`
+  string is chained behind it (`teamchain` `+0x260`, `teammaster` `+0x264`),
+  marked a slave, and unlinked when its classname is that same constant
+  (0x4facd). The line counts the masters and the masters plus slaves.
+  Open: which classname the constant names (the `scr_const` table's order),
+  and what reads the chain in MP. vcod keeps no chains and prints 0, right
+  for every stock map; a mod map with `team` keys would read other counts.
 - `map mp_harbor` over rcon from mp_carentan, 2026-11-16 on 1.1d: one
   2248-byte packet, `print\n` then `==== ShutdownGame ====`, `------ Server
   Initialization ------`, `Server: mp_harbor`, `Hunk_Clear: reset the hunk
