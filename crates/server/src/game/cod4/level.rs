@@ -1237,8 +1237,17 @@ impl Cod4Level {
         crate::tick_trace::step!("CheckVote");
         self.rt.check_vote(now_ms);
         self.sync_voted();
+        // `SV_ArchiveSnapshot` writes each playerstate through the delta
+        // codec and the follow and killcam copies read it back, so an
+        // angle there has been sent once already: a view of -354 shorts
+        // archives as -353 and goes out as -352 (gdb at 0x80a68b8,
+        // cod4-combat.md 7).
         for (a, p) in self.archive.iter_mut().zip(&self.players) {
-            *a = p.as_ref().map(|p| p.ps.clone());
+            *a = p.as_ref().map(|p| {
+                let mut ps = p.ps.clone();
+                ps.sent_angles();
+                ps
+            });
         }
         self.history.push_front((now_ms, self.archive.clone()));
         self.history.truncate(self.history_frames());
