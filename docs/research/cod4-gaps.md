@@ -29,10 +29,6 @@ Ranked by how much a player notices.
   touching points, not ODE's contacts, so a flat prop takes more of them
   (cod4-world.md 13.8). The ragdoll is a position-based solver
   (cod4-player-anims.md 10). M.
-- `sv_clientSideBullets` 0 is not read: under it 1.7 draws no rounds of
-  its own and plays the server's bullet events, which then push the
-  props; vcod's client runs its rounds as under 1, which every stock
-  server sends (cod4-world.md 13.10). S.
 - Multichannel output: kira mixes stereo, so a 5.1 or 7.1 device gets
   the stereo mix on its front pair (cod4-sound.md 4.2, 5). The 139 alias
   rows whose curve no walked zone holds fall off straight. L.
@@ -46,6 +42,13 @@ Ranked by how much a player notices.
 
 ## Fixed
 
+- `sv_clientSideBullets` 0 was not read: vcod's client ran its own
+  rounds whatever the server said. vcod now reads it off the systeminfo
+  and under 0 runs no round of its own, and every server bullet hit event
+  rolls its tracer, plays its whizby and pushes the props and launched
+  parts along its leg from the event's `lerp.u`, the world's origin on
+  1.7, as 1.7 does; the tracer and whizby run on the server's flesh hits
+  under 1 too (cod4-effects.md 12.4). Gated on a retail capture under 0.
 - A body pinched between two facing surfaces kept both sides' contacts.
   It now takes `iw3mp.exe`'s contact pass (0x5a2760, 0x5a25d0): of two
   facing contacts the one whose plane the centre lies in front of stays,

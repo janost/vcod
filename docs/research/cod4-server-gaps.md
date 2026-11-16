@@ -179,6 +179,11 @@ Open, by how much a player notices.
    off as 1.7's (Fixed above).
 5. Closed: an empty `sv_master1` heartbeats `master.cod.pm:20810` at
    `dedicated 2`, as CoD1's and CoD2's servers do (`Cod4Server::heartbeat`).
+6. `--set sv_clientSideBullets=0` reaches the systeminfo, but vcod-server
+   still sends no `EV_BULLET_HIT` for a round that stops on the world or
+   a non-client entity, nor the penetration's exits (`un1` 4), as
+   `cod4_lnxded` does under 0 (0x808a05c, 0x808ad38; cod4-effects.md
+   12.4). A 1.7 client, and vcod's, then draws no impact off a body. M.
 
 ## The retail run
 
