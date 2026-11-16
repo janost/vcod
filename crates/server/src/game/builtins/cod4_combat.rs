@@ -665,8 +665,8 @@ fn obituary(
 /// (`eType` 2) in the body queue from 64 (the kill
 /// capture's entity 64, VERIFIED live), the client's body where it
 /// stands: its `eFlags` with `EF_DEAD`, its anims, the view's yaw, the
-/// client number, the death anim `player_die` drew. The fall to rest and
-/// the death anim's root motion are left out (cod4-combat.md 5).
+/// client number, the death anim `player_die` drew, falling in the live
+/// body's box (`game::cod4::corpse`, cod4-combat.md 5, 5.2).
 fn clone_player(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -711,6 +711,7 @@ fn clone_player(
             b,
             glam::Vec3::from(c.origin),
             glam::Vec3::from(c.velocity),
+            c.height,
             now,
             p,
         );
@@ -726,6 +727,8 @@ pub struct CorpseSource {
     pub origin: [f32; 3],
     /// `ps.velocity`, the clone's launch.
     pub velocity: [f32; 3],
+    /// `r.maxs[2]` as the last cmd linked the body: the clone's box.
+    pub height: f32,
     pub yaw: f32,
     pub e_flags: u32,
     pub legs_anim: u32,

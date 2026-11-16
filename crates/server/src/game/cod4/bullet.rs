@@ -85,6 +85,9 @@ struct Params {
     end: Vec3,
     dir: Vec3,
     mult: f32,
+    /// The entity the server's impacts name as the shooter: the client's,
+    /// or the turret it mans (0x808a127..0x808a12c).
+    shooter: u32,
 }
 
 /// What a leg's trace met.
@@ -221,6 +224,28 @@ impl Cod4Level {
                 found = true;
             }
         }
+        // The fresh corpses, by their hit boxes as their anims pose them,
+        // flesh as a body is (0x808a04c); none takes damage.
+        for c in self.shot_corpses() {
+            if Some(c.number) == bp.ignore {
+                continue;
+            }
+            if let Some(h) = self.corpse_trace(&c, start, end, priority, fraction)
+                && h.fraction < fraction
+            {
+                fraction = h.fraction;
+                hit = Hit {
+                    normal: h.normal,
+                    surface_flags: SURF_FLESH,
+                    contents: super::combat::CONTENTS_CORPSE_FRESH,
+                    startsolid: t.startsolid || h.startsolid,
+                    number: Some(c.number),
+                    hitloc: h.hitloc,
+                    ..Default::default()
+                };
+                found = true;
+            }
+        }
         // The script models, open to damage or not, by their models'
         // collision surfaces (`DObjGeomTraceline` on the bind pose), and
         // the brush entities (`CM_TransformedBoxTrace`), each with its
@@ -309,7 +334,7 @@ impl Cod4Level {
         impact: bool,
     ) {
         if impact {
-            self.impact_event(slot, d, h, h.normal, 0);
+            self.impact_event(bp.shooter, d, h, h.normal, 0);
         }
         if let Some(id) = h.entity {
             let damage = bullet_damage(d, h.pos.distance(bp.orig_start));
@@ -348,7 +373,8 @@ impl Cod4Level {
     /// its position truncated, `dir`'s byte as the parm, `flags` in
     /// `un1`, the surface's type, the shooter and his weapon
     /// (cod4-effects.md 12.4). Under 1 nothing: the clients draw their own.
-    fn impact_event(&mut self, slot: usize, d: &WeaponDef, h: &Hit, dir: Vec3, flags: i32) {
+    /// `shooter` is the round's entity: the client's, or a turret's.
+    fn impact_event(&mut self, shooter: u32, d: &WeaponDef, h: &Hit, dir: Vec3, flags: i32) {
         let client_side =
             crate::game::builtins::cvar::atoi(self.rt.host.cvars.get("sv_clientSideBullets")) != 0;
         if client_side || h.fraction >= 1.0 || h.surface_flags & SURF_SKY != 0 || h.client.is_some()
@@ -360,7 +386,7 @@ impl Cod4Level {
             event: super::combat::ev::BULLET_HIT,
             parm: vcod_common::net::events::dir_to_byte(dir.to_array()),
             surf_type: surface_type(h.surface_flags) as i32,
-            other: slot as u32,
+            other: shooter,
             attacker: 0,
             weapon: weapon.map_or(0, |w| w as i32),
             client_num: 0,
@@ -387,10 +413,13 @@ impl Cod4Level {
 
     /// One round from `start` toward `end`: `Bullet_FirePenetrate` while
     /// `bullet_penetrationEnabled` and the weapon has a `penetrateType`,
-    /// else `Bullet_FireExtended`.
+    /// else `Bullet_FireExtended`. `shooter` is the entity it leaves from:
+    /// `slot`'s own, or the turret `slot` mans.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn bullet_fire_round(
         &mut self,
         slot: usize,
+        shooter: u32,
         d: &WeaponDef,
         start: Vec3,
         end: Vec3,
@@ -402,8 +431,9 @@ impl Cod4Level {
             orig_start: start,
             start,
             end,
-            dir: (end - start).normalize_or_zero(),
+            dir: round_dir(start, end),
             mult: 1.0,
+            shooter,
         };
         let enabled = self.rt.host.cvars.get("bullet_penetrationEnabled") != "0";
         if enabled && d.penetrate_type != 0 {
@@ -520,14 +550,14 @@ impl Cod4Level {
                             return;
                         }
                         let spaced = exit.hit.pos.distance_squared(next_pos) > near;
-                        // The exit's impact, `un1` 4, along the far face
-                        // (0x808ad0e..0x808ad38), unless the round goes on
-                        // into the sky (0x808acba).
+                        // The exit's impact, `un1` 4, along the round's own
+                        // direction (`ebp-0x2c`, 0x808a7b0, 0x808ad29),
+                        // unless the round goes on into the sky (0x808acba).
                         let into_sky = beyond
                             .as_ref()
                             .is_some_and(|n| n.surface_flags & SURF_SKY != 0);
                         if !exit.solid && spaced && !into_sky {
-                            self.impact_event(slot, d, &exit.hit, exit.hit.normal, 4);
+                            self.impact_event(bp.shooter, d, &exit.hit, bp.dir, 4);
                         }
                         (!exit.solid, spaced)
                     }
@@ -610,7 +640,7 @@ impl Cod4Level {
             .cloned()
             .unwrap_or_else(|| panic!("no weapon {weapon}"));
         let now = self.level_time();
-        self.bullet_fire_round(slot, &d, start, end, now, &HashMap::new());
+        self.bullet_fire_round(slot, slot as u32, &d, start, end, now, &HashMap::new());
     }
 }
 
@@ -630,6 +660,18 @@ impl Cod4Level {
         }
         t
     }
+}
+
+/// `Bullet_Endpos`'s direction (`cod4_lnxded` 0x808a654..0x808a6c1): the
+/// end less the start, each stored, scaled by one over the length the
+/// x87 stack keeps unstored; a zero length leaves it. 1.7 takes the x
+/// difference off the end it still holds unstored, which `end` no longer
+/// carries.
+fn round_dir(start: Vec3, end: Vec3) -> Vec3 {
+    let d = (end.as_dvec3() - start.as_dvec3()).as_vec3();
+    let len = (end.as_dvec3() - start.as_dvec3()).length();
+    let inv = if len > 0.0 { 1.0 / len } else { 1.0 };
+    (d.as_dvec3() * inv).as_vec3()
 }
 
 /// `BG_AdvanceTrace` (`cod4_lnxded` 0x8060e44): the next leg passes
@@ -682,6 +724,7 @@ mod tests {
             end: Vec3::X * 100.0,
             dir: Vec3::X,
             mult: 1.0,
+            shooter: 0,
         };
         let h = Hit {
             pos: Vec3::X * 10.0,

@@ -182,13 +182,24 @@ Open, by how much a player notices.
 6. Closed: under `sv_clientSideBullets` 0 vcod-server raises the world's
    and the exits' `EV_BULLET_HIT`s as `cod4_lnxded` does (0x808a05c),
    gated word for word on a retail capture (cod4-effects.md 12.4).
-7. A round into a corpse: in a retail run under 0 the rounds into the
-   target's corpse raised flesh impacts and stopped there, and the
-   corpse read `pos.trType` 5 with no ground from the death on, its
-   `trTime` the latest hit's; ours lets rounds through a corpse and lands
-   it at once (`trType` 1, the world). Not yet read off `cod4_lnxded`;
-   that run's knockback also left the target's `velocity[1]` an ulp off
-   once (cod4-combat.md 5.2, cod4-effects.md 12.4). M.
+7. Closed: a round meets a fresh corpse, its capsule before its first
+   anim update and then its hit boxes as its anims alone pose them, the
+   head included, and raises its flesh's entry and exit; the highest
+   priority box crossed takes the hit in any bone order. The clone keeps
+   the live body's box, and a fall stuck in solid sweeps again from 32 up
+   without playerclip: the plate run's corpse falls again in place every
+   frame, `trTime` the frame's (cod4-combat.md 3, 5.2, 5.3). The
+   knockback's ulp was the round's direction, now normalized as
+   `Bullet_Endpos` does; an exit's impact carries that direction
+   (cod4-effects.md 12.4). `cod4_corpse_rounds_ab` and
+   `cod4_corpse_drag_ab` match every corpse word and impact.
+8. The two corpse captures' `GAPS`, none of them the corpse's: the
+   target's killcam replays the shooter's first frames after his spawn
+   with the pitch a short under retail's; the target's second spawn keeps
+   the first life's `delta_angles`, and its entity's angles follow; on
+   the open floor the dropped rifle leaves the hand a unit off retail's
+   in x and y, its fall following (cod4-combat.md 5.3, 6.1). Not yet
+   read. M.
 
 ## The retail run
 

@@ -652,3 +652,98 @@ const CSB0_GAPS: &[(&str, &str)] = &[];
 fn cod4_server_side_bullets_ab() {
     pair_ab("cod4_server_side_bullets_ab", &CSB0, CSB0_GAPS);
 }
+
+const CSB0_CORPSE: Pair = Pair {
+    // `+set sv_clientSideBullets 0`; target `--goto "207 2380 296"`
+    // outside the metal plate, shooter `--script shoot --goto "207 2250
+    // 296" --corpse-z 10` inside (`--qport 4021`, `4022`): the rounds
+    // through the plate kill the target, and the shooter fires on into his
+    // corpse, which the playerclip there holds up (cod4-combat.md 5.2,
+    // 5.3).
+    name: "csb0corpse",
+    seed: 3_840_989_199,
+    gsc: None,
+    until: None,
+    probes: TWO,
+    cvars: &[("sv_clientSideBullets", "0")],
+};
+
+const CSB0_CORPSE_GAPS: &[(&str, &str)] = &[
+    (
+        "target ps viewangles[0]",
+        "the target's killcam, 45700..46100, replays the shooter's first \
+         frames after his spawn with his pitch a short under retail's",
+    ),
+    (
+        "target entity 348",
+        "the killcam's archived plate impact of 45100, which retail's \
+         replay keeps four frames from 48350 and ours leaves out",
+    ),
+    (
+        "target ps delta_angles",
+        "the target's second spawn at 50100 keeps the first life's \
+         `delta_angles` on ours",
+    ),
+    (
+        "shooter entity 0:1 lerp.apos.trBase",
+        "the target's second life's angles, off the same spawn",
+    ),
+];
+
+/// Under `sv_clientSideBullets` 0 a kill through the plate: the corpse's
+/// fall in solid sweeps again and stays up, `trTime` the frame's, and the
+/// rounds into it raise its flesh's entry and exit and go on
+/// (cod4-combat.md 5.2, 5.3).
+#[test]
+fn cod4_corpse_rounds_ab() {
+    pair_ab("cod4_corpse_rounds_ab", &CSB0_CORPSE, CSB0_CORPSE_GAPS);
+}
+
+const CSB0_DRAG: Pair = Pair {
+    // `+set sv_clientSideBullets 0`; target `--goto "207 2291 296"` on the
+    // open floor, shooter `--script shoot --goto "123 2110 300"
+    // --corpse-z 10` (`--qport 4021`, `4022`): the target dies standing
+    // and the rounds go on into his corpse while its death anim drags it
+    // (cod4-combat.md 5.3).
+    name: "csb0drag",
+    seed: 3_839_658_776,
+    gsc: None,
+    until: None,
+    probes: TWO,
+    cvars: &[("sv_clientSideBullets", "0")],
+};
+
+const CSB0_DRAG_GAPS: &[(&str, &str)] = &[
+    (
+        "target entity 321:3",
+        "the dropped rifle leaves the dying body's hand a unit off \\
+         retail's, x and y, and its fall follows (cod4-combat.md 6.1)",
+    ),
+    (
+        "shooter entity 321:3",
+        "the same dropped rifle in the shooter's snapshots",
+    ),
+    (
+        "target ps viewangles[0]",
+        "the target's killcam, 45950..46350, replays the shooter's first \\
+         frames after his spawn with his pitch a short under retail's",
+    ),
+    (
+        "target ps delta_angles",
+        "the target's second spawn keeps the first life's `delta_angles` \\
+         on ours",
+    ),
+    (
+        "shooter entity 0:1 lerp.apos.trBase",
+        "the target's second life's angles, off the same spawn",
+    ),
+];
+
+/// Under `sv_clientSideBullets` 0 a kill on the open floor: the rounds
+/// into the corpse as its death anim drags it raise its flesh's entry and
+/// exit, and the knockback pushes the body along 1.7's own round
+/// direction (cod4-combat.md 5.3).
+#[test]
+fn cod4_corpse_drag_ab() {
+    pair_ab("cod4_corpse_drag_ab", &CSB0_DRAG, CSB0_DRAG_GAPS);
+}

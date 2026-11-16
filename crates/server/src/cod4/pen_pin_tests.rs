@@ -305,7 +305,7 @@ fn rounds_through_the_plate_and_two_bodies() {
 
 const ROUNDS: &str = "\
 m16 chest: lost [31, 17, 0] hits [(2, 0, 5), (2, 1, 5)]
-m16 head: lost [31, 26, 0] hits [(2, 0, 3), (2, 1, 2)]
+m16 head: lost [31, 33, 0] hits [(2, 0, 3), (2, 1, 2)]
 m16 deep: lost [35, 28, 0] hits [(2, 0, 5), (2, 1, 5)]
 m40a3: lost [60, 35, 0] hits [(2, 0, 5), (2, 1, 5)]
 m40a3 deep: lost [68, 56, 0] hits [(2, 0, 5), (2, 1, 5)]

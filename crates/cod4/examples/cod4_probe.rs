@@ -55,7 +55,9 @@
 //! `--respawn` restarts the script's clock and `--goto` on every spawn;
 //! `--fire-after SECS` holds attack back until another player has been
 //! within 400 units for SECS; `--aim-z Z` aims Z over the nearest
-//! player's origin in place of its stance's 40, 28 or 6.
+//! player's origin in place of its stance's 40, 28 or 6; `--corpse-z Z`
+//! counts corpses (eType 2) among the players viewed, aiming Z over their
+//! origin (the corpse capture, cod4-combat.md 5.3).
 //! `--goto`
 //! sends `setviewpos X Y Z` half a second after the first spawn (the server
 //! must run `devmap` for cheats). `--scores` sends `score` every 2 s from
@@ -463,7 +465,12 @@ fn nearest_dist(ps: &PlayerState, ents: &[EntityState]) -> Option<f32> {
 
 /// The view (pitch, yaw) from our eye to the chest of the nearest other
 /// player in the snapshot.
-fn aim_at(ps: &PlayerState, ents: &[EntityState], aim_z: Option<f32>) -> Option<[f32; 2]> {
+fn aim_at(
+    ps: &PlayerState,
+    ents: &[EntityState],
+    aim_z: Option<f32>,
+    corpse_z: Option<f32>,
+) -> Option<[f32; 2]> {
     let me = ps_u32(ps, "clientNum");
     let eye = [
         ps_f32(ps, "origin[0]"),
@@ -472,9 +479,13 @@ fn aim_at(ps: &PlayerState, ents: &[EntityState], aim_z: Option<f32>) -> Option<
     ];
     let d = ents
         .iter()
-        .filter(|e| e.etype() == 1 && e.number() != me)
+        .filter(|e| (e.etype() == 1 || (e.etype() == 2 && corpse_z.is_some())) && e.number() != me)
         .map(|e| {
             let o = e.origin();
+            if e.etype() == 2 {
+                let z = corpse_z.unwrap_or(0.0);
+                return [o[0] - eye[0], o[1] - eye[1], o[2] + z - eye[2]];
+            }
             // `EF_CROUCHING` 0x4, `EF_PRONE` 0x8.
             let flags = EntityState::table(e.etype())
                 .iter()
@@ -673,6 +684,7 @@ fn main() -> Result<()> {
     let goto = opt("--goto").cloned();
     let respawn = args.iter().any(|a| a == "--respawn");
     let aim_z: Option<f32> = opt("--aim-z").map(|s| s.parse()).transpose()?;
+    let corpse_z: Option<f32> = opt("--corpse-z").map(|s| s.parse()).transpose()?;
     let fire_after: Option<f32> = opt("--fire-after").map(|s| s.parse()).transpose()?;
     let aim = Aim {
         face: opt("--face").map_or(Ok(0.0), |s| s.parse())?,
@@ -810,7 +822,7 @@ fn main() -> Result<()> {
                 s.server_time + last_snap_at.elapsed().as_millis() as i32
             });
             let spawn_s = spawned.map(|s| s.elapsed().as_secs_f32());
-            let target = snap.and_then(|s| aim_at(&s.ps, &s.entities, aim_z));
+            let target = snap.and_then(|s| aim_at(&s.ps, &s.entities, aim_z, corpse_z));
             let mut last_time = conn.last_cmd().server_time;
             for k in [2, 1, 0] {
                 let t = now_time - 16 * k;

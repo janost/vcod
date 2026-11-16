@@ -1011,6 +1011,7 @@ impl Cod4Level {
         if let Some(c) = self.rt.host.cod4_mut().corpse_source[slot].as_mut() {
             c.origin = ps.origin.to_array();
             c.velocity = ps.velocity.to_array();
+            c.height = body_height(ps.pm_flags);
         }
         self.relink(slot, &ps);
         // `player_die` draws its death anim off the live playerstate, so a
@@ -1550,6 +1551,7 @@ impl Cod4Level {
         let source = crate::game::builtins::cod4_combat::CorpseSource {
             origin: [0, 1, 2].map(|k| f32::from_bits(ps.word(&format!("origin[{k}]")))),
             velocity: [0, 1, 2].map(|k| f32::from_bits(ps.word(&format!("velocity[{k}]")))),
+            height: body_height(ps.word("pm_flags")),
             yaw: f32::from_bits(ps.word("viewangles[1]")),
             e_flags: ps.word("eFlags"),
             legs_anim: ps.word("legsAnim"),

@@ -84,11 +84,13 @@ pub struct Body {
 }
 
 /// What a CoD2 corpse carries beyond its entity state: `r.currentOrigin`,
-/// which its fall and its death anim move, and the death anim's node time
-/// once its own anim update set it (`game::corpse`).
+/// which its fall and its death anim move, `r.maxs` as the clone took it,
+/// and the death anim's node time once its own anim update set it
+/// (`game::corpse`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Cod2Corpse {
     pub origin: Vec3,
+    pub maxs: Vec3,
     pub anim: Option<crate::game::corpse::CorpseAnim>,
 }
 
