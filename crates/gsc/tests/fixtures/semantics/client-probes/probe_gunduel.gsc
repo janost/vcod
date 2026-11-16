@@ -20,6 +20,7 @@
 //	PROBE player <entity number> <team>
 //	PROBE spawnat <entity number> <x> <y> <z> <pitch> <yaw> <roll>
 //	PROBE phase <time> <name>
+//	PROBE models <entity number> <body> <attachment>...
 //
 //	`spawnat` is the tdm spawn point nearest the player at his first
 //	`setOrigin`, which a replay pins. Before the lethal step a hit takes no
@@ -157,6 +158,27 @@ send_in(player, buttons)
 		player iprintln("PROBE_IN " + buttons + " 0 0");
 }
 
+//	The player's body and attachments, drawn at random by his character
+//	script, logged at the mount; with `probe_model_<entity number>` set
+//	(and `_0`, `_1`... for the attachments) the player wears those
+//	instead, which is how a replay puts on what retail drew.
+models()
+{
+	key = "probe_model_" + self getEntityNumber();
+	if (getcvar(key) != "")
+	{
+		self setmodel(getcvar(key));
+		self detachall();
+		for (i = 0; getcvar(key + "_" + i) != ""; i++)
+			self attach(getcvar(key + "_" + i));
+	}
+	line = "PROBE models " + self getEntityNumber() + " " + self.model;
+	n = self getattachsize();
+	for (i = 0; i < n; i++)
+		line = line + " " + self getattachmodelname(i);
+	logPrint(line + "\n");
+}
+
 //	The view from `from`'s gun at `to`'s chest.
 aim_at(from, gun, to)
 {
@@ -276,6 +298,8 @@ run()
 		wait 0.05;
 	a = team_player("allies");
 	b = team_player("axis");
+	a models();
+	b models();
 	ga useby(a);
 	gb useby(b);
 	level.probe_mounted = 1;
