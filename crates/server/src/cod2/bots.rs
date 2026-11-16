@@ -425,7 +425,7 @@ impl BotWorld for Cod2Server {
     }
 
     /// No vehicles on CoD2 to park on the graph.
-    fn blocked_nodes(&self) -> Arc<[u32]> {
+    fn blocked_nodes(&self, _: usize) -> Arc<[u32]> {
         Arc::default()
     }
 

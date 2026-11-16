@@ -955,6 +955,7 @@ impl Cod4Bots {
             // (`GRENADE_THROW`, 0x8064b81).
             grenade_ready: ps.weapon_state == weap::state::GRENADE_HELD,
             frag_near,
+            wrecks: Vec::new(),
             post: None,
             give_way: None,
             guard_post: None,

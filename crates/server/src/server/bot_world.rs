@@ -567,6 +567,11 @@ impl Server {
                     .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
                     .map(Into::into)
             }),
+            wrecks: if sim.seat.is_none() {
+                self.game.module.bot_parked.wrecks()
+            } else {
+                Vec::new()
+            },
             post: None,
             give_way: None,
             guard_post: None,
@@ -1630,8 +1635,9 @@ impl crate::bots::driver::BotWorld for Server {
             })
     }
 
-    fn blocked_nodes(&self) -> std::sync::Arc<[u32]> {
-        self.game.module.bot_parked.blocked.clone()
+    fn blocked_nodes(&self, slot: usize) -> std::sync::Arc<[u32]> {
+        let at = self.body(slot).map(|b| b.origin.into());
+        self.game.module.bot_parked.blocked_at(at)
     }
 
     fn cmd(&mut self, _: usize, cmd: UserCmd, _: &crate::bots::BotView) -> Option<UserCmd> {

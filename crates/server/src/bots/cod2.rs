@@ -1461,6 +1461,7 @@ impl Cod2Bots {
             grenade_cooks: grenade.and_then(def).is_some_and(|d| d.cook_off_hold),
             grenade_ready: ws.state == vcod_cod2::pmove::weapon::state::OFFHAND_HOLD,
             frag_near: frag_near(level, slot),
+            wrecks: Vec::new(),
             post: None,
             give_way: None,
             guard_post: None,
