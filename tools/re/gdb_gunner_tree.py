@@ -11,7 +11,7 @@
 #
 # `grid` (the default): entity GDB_ENT once a frame,
 #   step t=<level time> dobj=<addr>   at his weight step
-#    ps ...                           his playerstate (1.1d only)
+#    ps ...                           his playerstate, view at ps+0xc0 (1.1d only)
 #    n <node> <info> <0x44 info bytes>   each node with an info record
 #   skel t= dobj= nb= ctrl= built=    at the first skeleton build in the
 #    r <bone> <32 record bytes>          frame's first thread pass
@@ -118,14 +118,15 @@ class Step(gdb.Breakpoint):
         OUT.write('step t=%d dobj=%x\n' % (level_time(), d))
         if 'client' in G:
             ent = state['base'] + G['ents'] + G['ent_size'] * ENT
-            ps = rd(u32(ent + G['client']), 0x80)
+            ps = rd(u32(ent + G['client']), 0xd0)
             o = struct.unpack_from('<3f', ps, 0x14)
             v = struct.unpack_from('<3f', ps, 0x20)
             i32 = lambda off: struct.unpack_from('<i', ps, off)[0]
+            view = struct.unpack_from('<3f', ps, 0xc0)
             OUT.write(' ps ct=%d pmf=%x pmt=%d origin=%.6f,%.6f,%.6f vel=%.3f,%.3f,%.3f'
-                      ' ground=%d legsTimer=%d es=%s\n' % (
+                      ' ground=%d legsTimer=%d view=%.6f,%.6f,%.6f es=%s\n' % (
                           i32(0), i32(0xc), i32(0x10), *o, *v, i32(0x54), i32(0x6c),
-                          rd(ent, 0x30).hex()))
+                          *view, rd(ent, 0x30).hex()))
         write_tree(d)
         return False
 
