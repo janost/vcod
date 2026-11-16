@@ -1329,8 +1329,9 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   passes of sequential impulses with Coulomb friction (the preset's times
   `phys_frictionScale`); the centre itself is never moved through a
   surface, and when its move is cut short its speed is cut with it.
-  `msecStep` stays 17 ms, and a world edge between two of a box's 26
-  points can still poke into it. vcod's.
+  Each box geom also meets the brushes and triangles round it as a box,
+  by face clipping (3.6.1), so a world edge between its points meets its
+  face. `msecStep` stays 17 ms. vcod's.
 - Why the 26 points and the cut speed: with the hood's brush in place
   of its bounds box, the hood in the live gate below came down with its
   low corners on two floors 18 units apart and a 39-degree clip map
@@ -1345,7 +1346,8 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   a 0.8 bounce, a launched door that lands and sleeps, a fast part thrown
   into a corner staying out of all three planes, a tilted box settling
   flat, the clock, a model's geoms and brushes, a box held on its
-  centre by a ridge) and the live
+  centre by a ridge, a box across a kerb's edge on its corners alone),
+  `cod4::part_edges` (3.6.1) and the live
   `cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest`: vcod-server's
   `war` on mp_backlot, a held bot's frags bursting on the first
   destructible until `_destructible.gsc` blows the sedan up; its 9
@@ -1361,6 +1363,104 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
 - The ragdoll (`cod4-player-anims.md` 10) keeps its point solver. This
   body could carry it once the bones are rigid capsules held by joint
   constraints, which it lacks. INFERRED (vcod's design).
+
+### 3.6.1 The world collider
+
+Addresses in this section are `iw3mp.exe`'s (3.6), read with `objdump`.
+
+What 1.7 collides a part against:
+
+- The world is one geom of a class the game registers: 0x5a89d0 hands
+  0x5a9bc0 a class whose collider getter is 0x5a89c0 and whose bounds
+  function is 0x5b2930, and keeps the geom at 0xcc5ff28 (0x5a8a18).
+  0x5a89c0 returns 0x5a8110 for any class it meets. Each world step
+  collides that geom against the world's space (0x5a6609..0x5a6615 into
+  0x5aa100), whose near callback 0x5a5f20 calls 0x5a95a0 with room for
+  0x80 contacts. VERIFIED (disassembly). That 0x5a9bc0 is ODE's
+  `dCreateGeomClass` and 0x5a95a0 its `dCollide` is INFERRED (their
+  arguments).
+- 0x5a8110 switches on the body geom's class (`geom` +4, the byte table
+  at 0x5a89b0, the jumps at 0x5a8998): class 1 (a box, its sides at
+  +0x4c..+0x54) is kind 1, class 11 kind 2, class 12 (a brush, its
+  wrapper at +0x4c) kind 3, class 13 (radius +0x50, half height +0x54)
+  kind 4, class 14 kind 5; classes 2 to 10 take the default arm
+  (0x5a8370), which sets no kind. VERIFIED (the tables, the reads). That 13 is the cylinder
+  is INFERRED (3.6's geom types).
+- A box with a side under `phys_narrowObjMaxLength` (0xcc54428,
+  registered at 0x5a4408: 4, 0 to FLT_MAX, "If a geom has a dimension
+  less than this, then extra work will be done to prevent it from falling
+  into cracks (like between the wall and the floor)") is marked narrow
+  (0x5a8447). VERIFIED (the registration, the compares).
+- The geom's world box grown by 1 (0x5a8370..0x5a8425) goes to 0x4f2c60
+  for up to 0x400 leaves. Of each leaf (stride 0x2c at 0x14098fc) whose
+  brush contents meet 0x2806c91, 0x5a7bc0 walks the brush tree (0x5a7a60,
+  each brush of `cm.brushes` (stride 0x50) whose bounds meet the box and
+  whose contents the mask) into the kind's brush collider through
+  0x5a79b0; of each whose terrain contents meet it, 0x5a7ea0 walks its
+  AABB trees (0x5a7d20, nodes culled against the box at 0x5a7c40, each
+  partition once by a check count at 0x5a7d8e) into the kind's triangle
+  collider (0x5a7dd7). Under `phys_collUseEntities` (0xcc5444c) 0x5a7ef0
+  adds the entities. VERIFIED (disassembly). That 0x4f2c60 is
+  `CM_BoxLeafnums` is INFERRED (its arguments and use).
+- The colliders by kind 1 to 5: against a brush 0x59a610, 0x59bc90,
+  0x59b370, 0x5a1330, 0x59ea10 (the jumps at 0x5a7a40); against a
+  partition's triangles 0x59c500, 0x59c460, 0x59c300, 0x5a17c0, 0x59ed10
+  (at 0x5a7e88). VERIFIED (the tables).
+- A box against a brush (0x59a610): 0x599da0 builds the windings of the
+  brush's 6 + `numsides` sides and returns the least deep of its sides
+  against the box; 0x5998e0 hands each side's winding points, which are
+  taken into the box's frame (its centre at +0x38, rotation +0x68..+0x88,
+  half sizes +0x8c) and give the least deep of the box's six faces
+  (0x59a700..0x59a8ac). 0x59a98f..0x59a9a9 compares the two: one way a
+  brush side goes to 0x59a2b0 with the box, the other a box face takes the
+  brush's windings through 0x598d60 and 0x597fd0. A narrow box then also
+  takes each side's winding clipped by its six faces (0x59a500, through
+  0x597800, from 0x59aabe). VERIFIED (the calls and loops). That the less
+  deep is the reference, that these are polygon clips and that no axis
+  between two edges is tried is INFERRED (the compare's sense not traced
+  to its signs; 0x597800's plane arguments; no cross product among the
+  tests).
+- A box against triangles (0x59c500) hands the partition's triangles to
+  0x5b1620 with the box's centre (+0x38), rotation (+0x44) and half sizes
+  (+0x8c). VERIFIED (the call). That 0x5b1620, among ODE's own code, is
+  ODE's box against a triangle list is INFERRED.
+- After the world steps, 0x5a6930 sweeps each body's geom from its last
+  position to its new one under 0x2806c91 (0x4f4d30, called at
+  0x5a6aea): a point (corners at -0.001 and 0.001, 0x70b460, 0x70b278)
+  when the geom's least size (0x5a9a20) is under twice `phys_csl`
+  (0xcc54474), else a box off its extent times 0.2 (0x70b3e8). A hit not
+  started solid puts the body where the sweep stopped (0x432700,
+  0x5b6e40), and one under a fraction of 0.001 zeroes its linear and
+  angular velocity (0x5a6bd0..0x5a6bf0). VERIFIED (disassembly); the
+  box's size off the extent is INFERRED (the branch at 0x5a69b9 not read
+  through).
+
+vcod (`ClipMap::world_solids`, `physics::box_contacts`):
+
+- The gathering is 0x5a8110's: the leaves the box grown by the step's
+  reach touches (`box_leafs`), their brushes and AABB tree triangles
+  under the mask, each once. vcod's reach: the most any of the box's
+  corners travels in the step, plus the 0.125 skin.
+- Each box geom of a part (`Shape::boxes`: the bounds box, a `physGeoms`
+  box, a brush no side cuts) meets each brush as 0x59a610 does: the
+  least deep of the brush's faces and the box's three axes is the
+  reference, and the other's face most against it is clipped to it; each
+  clipped point within the reach is a contact. A triangle is always the
+  reference and met only from its front, skipped once the box's centre is
+  behind it: a box face as reference would catch the seams between a
+  mesh's triangles. Not ported: the narrow pass, 0x5b1620's own tests,
+  the sweep after the step (the centre guard of 3.6 stands in). vcod's.
+- The contacts go into the impulse solver with the points'; the jitter
+  (cod4-world.md 13.8) takes the points' only. vcod's.
+- Measured: `cod4::part_edges` drops mp_backlot's sedan hood (its brush
+  geom, a box) and left front door (its bounds box) from 24 units over
+  six steps' edges (two level floors 8 apart, 6 to 18 high, with room
+  over them, near the `mp_tdm_spawn`s), across, along and at 45 degrees,
+  tipped 30 degrees: on the points alone 30 of the 36 drops slept with
+  world solid at least a quarter unit inside the box (most of them 4
+  units, through the hood's middle); with the boxes none, each asleep
+  within 3.5 s. VERIFIED (the runs, ours). The dynamic entities (world
+  0, cod4-world.md 13) still meet the world on their points.
 
 ## 4. The load
 

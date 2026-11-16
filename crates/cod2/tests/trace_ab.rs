@@ -3,12 +3,12 @@
 //! `placeSpawnPoint` over a fixed set of segments and spots
 //! (`examples/trace_probe.rs`), every float as its bits: mp_toujane and
 //! mp_carentan the full set, the other stock maps their spawn points. Each
-//! is replayed through [`ClipMap::trace`] with the builtin's mask and
-//! diffed bit for bit (`docs/research/cod2-d3dbsp-format.md`, "The trace
+//! is replayed through [`ClipMap::trace`] and the solid brush models'
+//! leafs with the builtin's mask and diffed bit for bit (`docs/research/cod2-d3dbsp-format.md`, "The trace
 //! A/B"). Needs `COD2_DIR`. `TRACE_AB_REPORT=1` prints every divergence.
 
 use glam::Vec3;
-use vcod_cod2::collision::{ClipMap, MASK_PLAYERSOLID};
+use vcod_cod2::collision::{CLeaf, ClipMap, ClipTrace, MASK_PLAYERSOLID};
 use vcod_cod2::d3dbsp::D3dBsp;
 use vcod_cod2::xmodel;
 use vcod_common::testing;
@@ -31,14 +31,7 @@ const SURFACE_NAMES: [&str; 23] = [
 
 /// Records the gate tolerates, each with the doc section that explains it:
 /// `(map, kind, tag, id, why)`.
-const GAPS: &[(&str, char, &str, u32, &str)] = &[(
-    "mp_toujane",
-    's',
-    "near",
-    105,
-    "placed on the script_model panzer at (1047, 2751, 44): an entity's clip \
-     (cod2-d3dbsp-format.md, \"The trace A/B\")",
-)];
+const GAPS: &[(&str, char, &str, u32, &str)] = &[];
 
 fn bits(t: &str) -> f32 {
     let (neg, digits) = t.strip_prefix('-').map_or((false, t), |d| (true, d));
@@ -69,15 +62,81 @@ fn lerp(a: Vec3, b: Vec3, f: f32) -> Vec3 {
 /// `GScr_PlaceSpawnPoint` (0x081167ae): up 128 from the origin, then down
 /// 262144 onto the floor, then a position test. The placed origin and
 /// whether that test started solid.
-fn place(clip: &ClipMap, o: Vec3) -> (Vec3, bool) {
+fn place(w: &World, o: Vec3) -> (Vec3, bool) {
     let top = Vec3::new(o.x, o.y, o.z + 128.0);
-    let up = clip.trace(o, top, PLAYER_MINS, PLAYER_MAXS, MASK_PLAYERSOLID);
+    let up = w.trace(o, top, PLAYER_MINS, PLAYER_MAXS, MASK_PLAYERSOLID);
     let from = lerp(o, top, up.fraction);
     let to = Vec3::new(from.x, from.y, from.z - 262_144.0);
-    let down = clip.trace(from, to, PLAYER_MINS, PLAYER_MAXS, MASK_PLAYERSOLID);
+    let down = w.trace(from, to, PLAYER_MINS, PLAYER_MAXS, MASK_PLAYERSOLID);
     let p = lerp(from, to, down.fraction);
-    let t = clip.trace(p, p, PLAYER_MINS, PLAYER_MAXS, MASK_PLAYERSOLID);
+    let t = w.trace(p, p, PLAYER_MINS, PLAYER_MAXS, MASK_PLAYERSOLID);
     (p, t.startsolid)
+}
+
+/// The clip map and the solid `script_brushmodel`s over it, each its
+/// inline model's leaf and origin.
+struct World {
+    clip: ClipMap,
+    brush_models: Vec<(CLeaf, Vec3)>,
+}
+
+impl World {
+    /// `SV_Trace` without static models: the world (`CM_BoxTrace`), then
+    /// each brush model whose contents (1, `SP_script_brushmodel`) meet the
+    /// mask through `CM_TransformedBoxTrace` at its origin; a nearer hit
+    /// takes the trace, a start in solid anywhere marks it.
+    fn trace(&self, s: Vec3, e: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> ClipTrace {
+        let mut t = self.clip.trace(s, e, mins, maxs, mask);
+        if mask & 1 == 0 {
+            return t;
+        }
+        for (leaf, o) in &self.brush_models {
+            let u = self
+                .clip
+                .trace_in_leaf(leaf, s - *o, e - *o, mins, maxs, mask);
+            let (start, all) = (t.startsolid | u.startsolid, t.allsolid | u.allsolid);
+            if u.fraction < t.fraction {
+                t = u;
+            }
+            (t.startsolid, t.allsolid) = (start, all);
+        }
+        t
+    }
+}
+
+/// Each `script_brushmodel` the probe's map leaves solid: `_load.gsc`
+/// makes one with a `script_exploder` and the `targetname` `exploder` or
+/// `exploderchunk` `notsolid()`, and the probe deletes none. One at an
+/// angle would need the transformed trace's rotation: none stock has one.
+fn brush_models(entities: &str, submodels: &[CLeaf]) -> Vec<(CLeaf, Vec3)> {
+    let mut out = Vec::new();
+    for e in vcod_common::bsp::entity_blocks(entities) {
+        if e.get("classname").map(String::as_str) != Some("script_brushmodel") {
+            continue;
+        }
+        let hidden = e.contains_key("script_exploder")
+            && matches!(
+                e.get("targetname").map(String::as_str),
+                Some("exploder" | "exploderchunk")
+            );
+        let Some(n) = e.get("model").and_then(|m| m.strip_prefix('*')) else {
+            continue;
+        };
+        if hidden {
+            continue;
+        }
+        assert!(
+            e.get("angles")
+                .is_none_or(|a| a.split_whitespace().all(|v| v.parse() == Ok(0.0))),
+            "a turned script_brushmodel: {e:?}"
+        );
+        let origin = e
+            .get("origin")
+            .and_then(|o| vcod_common::bsp::parse_vec3(o))
+            .map_or(Vec3::ZERO, Vec3::from_array);
+        out.push((submodels[n.parse::<usize>().unwrap()], origin));
+    }
+    out
 }
 
 /// Each `misc_model` whose xmodel has collision, as a sphere about its
@@ -136,7 +195,7 @@ struct Tally {
     off: Vec<String>,
 }
 
-fn replay(map: &str, clip: &ClipMap, statics: &[(Vec3, f32)], fixture: &str) -> Tally {
+fn replay(map: &str, world: &World, statics: &[(Vec3, f32)], fixture: &str) -> Tally {
     let mut t = Tally::default();
     // The last bulletTrace's segment and whether it met an entity: the
     // physicsTrace record after it traces the same segment.
@@ -159,7 +218,7 @@ fn replay(map: &str, clip: &ClipMap, statics: &[(Vec3, f32)], fixture: &str) -> 
                     t.entity += 1;
                     continue;
                 }
-                let ours = clip.trace(s, e, Vec3::ZERO, Vec3::ZERO, MASK_BULLETTRACE);
+                let ours = world.trace(s, e, Vec3::ZERO, Vec3::ZERO, MASK_BULLETTRACE);
                 let our_surf = if ours.fraction < 1.0 {
                     SURFACE_NAMES
                         .get((ours.surface_flags >> 20 & 0x1f) as usize)
@@ -196,7 +255,7 @@ fn replay(map: &str, clip: &ClipMap, statics: &[(Vec3, f32)], fixture: &str) -> 
                     continue;
                 }
                 let pos = vec(&w[3..6]);
-                let ours = clip.trace(s, e, Vec3::ZERO, Vec3::ZERO, MASK_PHYSICSTRACE);
+                let ours = world.trace(s, e, Vec3::ZERO, Vec3::ZERO, MASK_PHYSICSTRACE);
                 let at = lerp(s, e, ours.fraction);
                 (!same_v(at, pos)).then(|| {
                     format!(
@@ -208,7 +267,7 @@ fn replay(map: &str, clip: &ClipMap, statics: &[(Vec3, f32)], fixture: &str) -> 
             's' => {
                 let (o, p) = (vec(&w[4..7]), vec(&w[7..10]));
                 let solid = w[10] == "1";
-                let (ours, our_solid) = place(clip, o);
+                let (ours, our_solid) = place(world, o);
                 (!(same_v(ours, p) && our_solid == solid)).then(|| {
                     format!("placed {p} solid {solid} vs ours {ours} solid {our_solid} (from {o})")
                 })
@@ -249,9 +308,15 @@ fn clip_map_traces_match_retail() {
         let fixture = std::fs::read_to_string(&path).unwrap();
         let data = fs.read(&format!("maps/mp/{map}.d3dbsp")).unwrap();
         let bsp = D3dBsp::parse(&data).unwrap();
-        let clip = vcod_cod2::map::clip_map(&bsp).unwrap();
+        let (clip, submodels) = vcod_cod2::collision::build_with_submodels(
+            &vcod_cod2::map::clip_lumps(&bsp),
+            &bsp.models,
+        )
+        .unwrap();
+        let brush_models = brush_models(&bsp.entities, &submodels);
+        let world = World { clip, brush_models };
         let statics = static_models(&fs, &bsp.entities);
-        let t = replay(map, &clip, &statics, &fixture);
+        let t = replay(map, &world, &statics, &fixture);
         eprintln!(
             "{map}: {} records, {} match, {} entity and {} static model hits skipped, \
              {} known gaps, {} off",

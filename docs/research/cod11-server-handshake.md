@@ -946,9 +946,26 @@ Map commands:
 - `fast_restart` answered an empty `print\n`. VERIFIED.
 - vcod prints the block as one string before the script load
   (`restart_game_banner` in `server.rs`, with 1.5's and UO's name and date),
-  team count 0 (no stock MP map has a `team` key). Retail's reply to a fresh
-  `map` load is the engine's server and filesystem init around the same block;
-  vcod prints nothing.
+  team count 0 (no stock MP map has a `team` key).
+- `map mp_harbor` over rcon from mp_carentan, 2026-11-16 on 1.1d: one
+  2248-byte packet, `print\n` then `==== ShutdownGame ====`, `------ Server
+  Initialization ------`, `Server: mp_harbor`, `Hunk_Clear: reset the hunk
+  ok`, `----- FS_Startup -----`, `Current search path:`, each search
+  directory after its paks highest first (the homepath's `main`, then the
+  install's), every `localized_*` pak after all of them, each pak as `<path>
+  (<n> files)`; a blank line, `File Handles:`, a line of 22 dashes, `<total>
+  files in pk3 files`; three `Sys_LoadDll` lines for `game.mp.i386.so`; then
+  the `G_InitGame` block above without `RestartGame`. VERIFIED (capture).
+  The counts are the zip's entries, directories included: 12828 for the
+  stock 1.1 `pak0.pk3`, whose directory holds 6443 directory entries.
+  VERIFIED (the pak).
+- vcod prints the same lines off its own search path, a pak's count from
+  the end of central directory record (`pak_checksum::entry_count`), with no
+  `Hunk_Clear` or `Sys_LoadDll` line: it has no hunk and loads no module
+  (`spawn_server_banner` in `server.rs`;
+  `a_map_change_over_rcon_prints_the_spawn_and_the_search_path`). Against
+  the same install its search path lines matched retail's install half line
+  for line. VERIFIED (capture).
 - `quit` gets no reply: `Com_Quit_f` exits inside the redirect. VERIFIED (no
   packet).
 
@@ -1480,6 +1497,17 @@ UO. INFERRED (the match).
   `killserver` `EXE_SERVERKILLED`. INFERRED.
 - `rcon quit`: the probe read `e "EXE_SERVERQUIT"`, `w`, and dropped, reading
   nothing more, so the second pass is unseen. VERIFIED (capture).
+- The second pass, 2026-11-16 on 1.1d mp_carentan: a spectator probe joined
+  through `tools/udp_relay.py`, which logged every datagram, all inside one
+  `unshare -rn`; `rcon quit` 12 s in. Two messages left in the same
+  millisecond on consecutive sequences, 47 then 73 bytes, and nothing after.
+  VERIFIED (capture). INFERRED: the second carries the first pass's `e` and
+  `w` again beside its own, unacked, which is its 26 more bytes.
+- vcod (`Server::final_message`) under the same run: two messages in the
+  same millisecond, 43 then 70 bytes, each 4 under retail's. VERIFIED
+  (capture). The bytes are not decoded. Open: whether the 4 are the fresh
+  snapshot retail builds (`nextSnapshotTime = -1`) against the last frame
+  vcod resends.
 - `killserver` (0x8084d3c) calls `0x806dc68`: `SV_Shutdown` between the hunk
   calls, then return; no exit. `SV_Frame` does the same on `sv_killserver` and
   resets it. With `sv_running` (0x833efc0) 0 the event loop skips

@@ -3,9 +3,9 @@
 //! controller sets (0x81b00de), and `DObjCalcSkel`'s composition of them
 //! into model-space bones (0x81af4f8, 0x81ae164), each float rounded where
 //! the binary stores it. docs/research/cod4-gsc.md 3.2, "The skeleton".
-//! `iw3mp.exe`'s `DObjCalcSkel` runs the same sums in the same order,
-//! here with every result a float ([`Cod4Arith::Client`],
-//! cod4-player-anims.md 8).
+//! `iw3mp.exe`'s `DObjCalcSkel` runs the same quat sums, its x87 at double
+//! precision, with its own stores and its own translation's order
+//! ([`Cod4Arith::Client`], cod4-player-anims.md 8).
 
 use crate::assets::model::XModel;
 use std::ops::{Add, Mul, Neg, Sub};
@@ -83,49 +83,31 @@ fn f(x: f64) -> f32 {
     x as f32
 }
 
-/// A value on the x87 stack: `cod4_lnxded` keeps its 64-bit mantissa (an
-/// `f64` here), `iw3mp.exe` a double (cod4-player-anims.md 11). `single`
-/// rounds every result to a float, as the client's composition still
-/// assumes.
+/// A value on the x87 stack between stores: `cod4_lnxded` keeps its 64-bit
+/// mantissa, `iw3mp.exe` a double (cod4-player-anims.md 11); an `f64` here
+/// for both.
 #[derive(Clone, Copy)]
 pub(crate) struct X {
     pub(crate) v: f64,
-    single: bool,
 }
 
 impl X {
-    pub(crate) fn of(v: f32, a: Cod4Arith) -> X {
-        X {
-            v: d(v),
-            single: a == Cod4Arith::Client,
-        }
-    }
-
-    /// `v` on a stack that keeps its precision between stores.
+    /// `v` loaded onto the stack.
     pub(crate) fn kept(v: f32) -> X {
-        X {
-            v: d(v),
-            single: false,
-        }
+        X { v: d(v) }
     }
 
-    fn quat(q: [f32; 4], a: Cod4Arith) -> [X; 4] {
-        q.map(|v| X::of(v, a))
+    fn quat(q: [f32; 4]) -> [X; 4] {
+        q.map(X::kept)
     }
 
     pub(crate) fn with(self, v: f64) -> X {
-        X {
-            v: if self.single { d(f(v)) } else { v },
-            single: self.single,
-        }
+        X { v }
     }
 
     /// The value stored to a float and loaded back.
     pub(crate) fn st(self) -> X {
-        X {
-            v: d(f(self.v)),
-            single: self.single,
-        }
+        X { v: d(f(self.v)) }
     }
 
     pub(crate) fn f(self) -> f32 {
@@ -211,24 +193,30 @@ pub fn angles_to_quat(angles: [f32; 3]) -> [f32; 4] {
 }
 
 /// [`angles_to_quat`] in `a`'s arithmetic: `iw3mp.exe`'s (0x580a40) takes
-/// its half angles off a float `M_PI / 360` through `fsincos` and stores
-/// the four products before the sums.
+/// its half angles off a float `M_PI / 360` through `fsincos` at double
+/// precision, stores each sine and cosine and the four products, and keeps
+/// the sums.
 pub fn angles_to_quat_in(angles: [f32; 3], a: Cod4Arith) -> [f32; 4] {
+    let client = a == Cod4Arith::Client;
     let k = match a {
         Cod4Arith::Server => HALF_DEG2RAD,
         Cod4Arith::Client => HALF_DEG2RAD_CLIENT,
     };
     let sc = |deg: f32| {
         let r = f(k * d(deg));
-        (X::of(r.sin(), a), X::of(r.cos(), a))
+        match client {
+            true => (X::kept(f(d(r).sin())), X::kept(f(d(r).cos()))),
+            false => (X::kept(r.sin()), X::kept(r.cos())),
+        }
     };
+    let product = |p: X| if client { p.st() } else { p };
     let (sy, cy) = sc(angles[1]);
     let (sp, cp) = sc(angles[0]);
     let (sr, cr) = sc(angles[2]);
-    let nspsy = -sp * sy;
-    let cysp = cy * sp;
-    let sycp = sy * cp;
-    let cycp = cy * cp;
+    let nspsy = product(-sp * sy);
+    let cysp = product(cy * sp);
+    let sycp = product(sy * cp);
+    let cycp = product(cy * cp);
     [
         (sr * cycp + cr * nspsy).f(),
         (cr * cysp + sr * sycp).f(),
@@ -492,8 +480,11 @@ fn root_weight(q: &mut [f32; 4]) -> f32 {
 /// [`root_weight`] in `a`'s arithmetic (`iw3mp.exe` 0x57f5e0..0x57f62e,
 /// the sum stored before its test).
 fn root_weight_in(q: &mut [f32; 4], a: Cod4Arith) -> f32 {
-    let [x, y, z, w] = X::quat(*q, a);
-    let s = ((x * x + y * y) + z * z) + w * w;
+    let [x, y, z, w] = X::quat(*q);
+    let mut s = ((x * x + y * y) + z * z) + w * w;
+    if a == Cod4Arith::Client {
+        s = s.st();
+    }
     if s.v == 0.0 {
         q[3] = 1.0;
         2.0
@@ -509,20 +500,26 @@ pub fn compose(parent: &AnimMat, local: &AnimMat, trans: [f32; 3]) -> AnimMat {
     compose_in(parent, local, trans, Cod4Arith::Server)
 }
 
-/// [`compose`] in `a`'s arithmetic (`iw3mp.exe` 0x57fbd0's first arm, the
-/// same sums in the same order).
+/// [`compose`] in `a`'s arithmetic. `iw3mp.exe`'s first arm
+/// (0x57fcb9..0x57fd49) sums in the same order and stores each component;
+/// [`client_weighted`] and [`place_client`] follow.
 fn compose_in(parent: &AnimMat, local: &AnimMat, trans: [f32; 3], a: Cod4Arith) -> AnimMat {
-    let [px, py, pz, pw] = X::quat(parent.quat, a);
-    let [cx, cy, cz, cw] = X::quat(local.quat, a);
+    let [px, py, pz, pw] = X::quat(parent.quat);
+    let [cx, cy, cz, cw] = X::quat(local.quat);
     let w = ((pw * cw - cx * px) - py * cy) - pz * cz;
     let x = ((cx * pw + cw * px) + py * cz) - pz * cy;
     let y = ((pw * cy - px * cz) + cw * py) + cx * pz;
     let z = ((cz * pw + px * cy) - cx * py) + cw * pz;
-    let (quat, trans_weight) = weighted([x, y, z, w]);
-    AnimMat {
-        quat,
-        trans: place(parent, local, trans, a),
-        trans_weight,
+    match a {
+        Cod4Arith::Server => {
+            let (quat, trans_weight) = weighted([x, y, z, w]);
+            AnimMat {
+                quat,
+                trans: place(parent, local, trans),
+                trans_weight,
+            }
+        }
+        Cod4Arith::Client => client_bone(parent, local, trans, [x, y, z, w]),
     }
 }
 
@@ -542,7 +539,8 @@ pub fn compose_controlled(
 
 /// [`compose_controlled`] in `a`'s arithmetic. `iw3mp.exe`'s arm
 /// (0x57fd4e..0x57ff15, the bit tested at 0x57fcb0) sums in the server's
-/// order and stores each of the three quats whole.
+/// order, keeps every partial sum and stores each component of the three
+/// quats once.
 pub fn compose_controlled_in(
     root: &AnimMat,
     parent: &AnimMat,
@@ -550,15 +548,33 @@ pub fn compose_controlled_in(
     trans: [f32; 3],
     ar: Cod4Arith,
 ) -> AnimMat {
-    let [px, py, pz, pw] = X::quat(parent.quat, ar);
-    let [rx, ry, rz, rw] = X::quat(root.quat, ar);
+    let [px, py, pz, pw] = X::quat(parent.quat);
+    let [rx, ry, rz, rw] = X::quat(root.quat);
+    let [lx, ly, lz, lw] = X::quat(local.quat);
+    if ar == Cod4Arith::Client {
+        // `r^-1 * p` (0x57fd4e..0x57fdd3).
+        let a = (((px * rw - pw * rx) - pz * ry) + rz * py).st();
+        let b = (((pz * rx + rw * py) - pw * ry) - rz * px).st();
+        let c = (((pz * rw - rx * py) + px * ry) - pw * rz).st();
+        let dw = (((px * rx + pw * rw) + ry * py) + pz * rz).st();
+        // `l * m` (0x57fdda..0x57fe88).
+        let tx = (((a * lw + dw * lx) + c * ly) - b * lz).st();
+        let ty = (((lw * b - lx * c) + ly * dw) + a * lz).st();
+        let tz = (((lx * b + lw * c) - ly * a) + dw * lz).st();
+        let tw = (((dw * lw - a * lx) - b * ly) - c * lz).st();
+        // `r * t` (0x57fe8b..0x57ff01).
+        let x = ((rw * tx + tw * rx) + ry * tz) - rz * ty;
+        let y = ((rw * ty - tz * rx) + tw * ry) + rz * tx;
+        let z = ((rw * tz + ty * rx) - ry * tx) + tw * rz;
+        let w = ((tw * rw - rx * tx) - ry * ty) - rz * tz;
+        return client_bone(parent, local, trans, [x, y, z, w]);
+    }
     // `r^-1 * p`, each partial sum stored (0x81ae5da..0x81ae67f).
     let a = (((px * rw - pw * rx).st() - pz * ry).st() + py * rz).st();
     let b = (((((rw * py).st() + rx * pz).st()) - pw * ry).st() - px * rz).st();
     let c = (((pz * rw - rx * py).st() + px * ry).st() - pw * rz).st();
     let dw = (((rw * pw + px * rx) + ry * py) + pz * rz).st();
     // `l * m` (0x81ae682..0x81ae763): w and y stored, x and z kept.
-    let [lx, ly, lz, lw] = X::quat(local.quat, ar);
     let e = ((((c * lw).st() + b * lx).st()) - a * ly).st();
     let tw = (dw * lw).st();
     let tw = (tw - a * lx).st();
@@ -575,7 +591,7 @@ pub fn compose_controlled_in(
     let (quat, trans_weight) = weighted([x, y, z, w]);
     AnimMat {
         quat,
-        trans: place(parent, local, trans, ar),
+        trans: place(parent, local, trans),
         trans_weight,
     }
 }
@@ -591,18 +607,41 @@ fn weighted([x, y, z, w]: [X; 4]) -> ([f32; 4], f32) {
     }
 }
 
+/// `iw3mp.exe`'s bone after either arm: the quat `q` stored, its weight
+/// ([`client_weighted`]) and its translation ([`place_client`]).
+fn client_bone(parent: &AnimMat, local: &AnimMat, trans: [f32; 3], q: [X; 4]) -> AnimMat {
+    let (quat, trans_weight) = client_weighted(q.map(X::f));
+    AnimMat {
+        quat,
+        trans: place_client(parent, local, trans),
+        trans_weight,
+    }
+}
+
+/// `iw3mp.exe`'s weight (0x57ff18..0x57ff63): `2 / |q|^2` off the stored
+/// quat, the sum `((x^2 + y^2) + z^2) + w^2` stored before the divide; a
+/// zero quat becomes `w` 1, weight 2.
+fn client_weighted(q: [f32; 4]) -> ([f32; 4], f32) {
+    let [x, y, z, w] = X::quat(q);
+    let s = (((x * x + y * y) + z * z) + w * w).st();
+    match s.v == 0.0 {
+        true => ([q[0], q[1], q[2], 1.0], 2.0),
+        false => (q, f(2.0 / s.v)),
+    }
+}
+
 /// A bone's translation (0x81ae3de..0x81ae54d): the local's plus `trans`
 /// (x and y stored, z kept) turned by the parent's weighted matrix and
 /// added to the parent's, each row's partial sums stored as the binary
 /// stores them.
-fn place(parent: &AnimMat, local: &AnimMat, trans: [f32; 3], ar: Cod4Arith) -> [f32; 3] {
-    let [px, py, pz, pw] = X::quat(parent.quat, ar);
-    let [ltx, lty, ltz] = local.trans.map(|v| X::of(v, ar));
-    let [mtx, mty, mtz] = trans.map(|v| X::of(v, ar));
+fn place(parent: &AnimMat, local: &AnimMat, trans: [f32; 3]) -> [f32; 3] {
+    let [px, py, pz, pw] = X::quat(parent.quat);
+    let [ltx, lty, ltz] = local.trans.map(X::kept);
+    let [mtx, mty, mtz] = trans.map(X::kept);
     let lx = (ltx + mtx).st();
     let ly = (lty + mty).st();
     let lz = ltz + mtz;
-    let t = X::of(parent.trans_weight, ar);
+    let t = X::kept(parent.trans_weight);
     // `t * px` kept on the stack for `xx`, stored for the rest.
     let a_kept = t * px;
     let a = a_kept.st();
@@ -617,7 +656,7 @@ fn place(parent: &AnimMat, local: &AnimMat, trans: [f32; 3], ar: Cod4Arith) -> [
     let yw = (twpy * pw).st();
     let zz = b * pz;
     let zw = (pw * b).st();
-    let [tx, ty, tz] = parent.trans.map(|v| X::of(v, ar));
+    let [tx, ty, tz] = parent.trans.map(X::kept);
 
     let x1 = ((1.0 - (yy + zz)) * lx).st();
     let x2 = (x1 + (xy - zw) * ly).st();
@@ -630,6 +669,35 @@ fn place(parent: &AnimMat, local: &AnimMat, trans: [f32; 3], ar: Cod4Arith) -> [
     let nz = ((z1 + (1.0 - (xx + yy)) * lz) + tz).f();
 
     [nx, ny, nz]
+}
+
+/// `iw3mp.exe`'s translation (0x57ff70..0x58014c): the local's plus `trans`,
+/// each stored; the parent's weighted matrix with every product and entry
+/// stored; each row summed `y`, `x`, `z` and the parent's added on the stack,
+/// then stored.
+fn place_client(parent: &AnimMat, local: &AnimMat, trans: [f32; 3]) -> [f32; 3] {
+    let [px, py, pz, pw] = X::quat(parent.quat);
+    let l = [0, 1, 2].map(|k| (X::kept(local.trans[k]) + X::kept(trans[k])).st());
+    let t = X::kept(parent.trans_weight);
+    let (a, b, c) = ((px * t).st(), (py * t).st(), (pz * t).st());
+    let xx = (a * px).st();
+    let xy = (a * py).st();
+    let xz = (pz * a).st();
+    let xw = (a * pw).st();
+    let yy = (b * py).st();
+    let yz = (pz * b).st();
+    let yw = (b * pw).st();
+    let zz = (c * pz).st();
+    let zw = (c * pw).st();
+    // Rows by the local's axis: `m[k]` turns the local's `k` component.
+    let m = [
+        [(1.0 - (zz + yy)).st(), (zw + xy).st(), (xz - yw).st()],
+        [(xy - zw).st(), (1.0 - (zz + xx)).st(), (yz + xw).st()],
+        [(xz + yw).st(), (yz - xw).st(), (1.0 - (xx + yy)).st()],
+    ];
+    [0, 1, 2].map(|k| {
+        (((l[1] * m[1][k] + l[0] * m[0][k]) + l[2] * m[2][k]) + X::kept(parent.trans[k])).f()
+    })
 }
 
 #[cfg(test)]

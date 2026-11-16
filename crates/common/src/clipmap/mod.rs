@@ -383,6 +383,16 @@ impl ClipMap {
         tr
     }
 
+    /// `CM_BoxLeafnums` on model 0: the leaves the box `lo..hi` touches,
+    /// front child first, at most 0x400.
+    pub fn box_leafs(&self, lo: Vec3, hi: Vec3) -> Vec<usize> {
+        let mut out = Vec::new();
+        if !self.nodes.is_empty() {
+            trace::box_leafnums(self, lo, hi, 0, &mut out);
+        }
+        out
+    }
+
     /// `CM_PointContents` on model 0: the OR of the contents of every brush
     /// of the point's leaf that holds it. Triangles add nothing.
     pub fn point_contents(&self, p: Vec3) -> u32 {

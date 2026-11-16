@@ -2764,6 +2764,12 @@ tags at `+0x2f2` (script string ids, shorts).
   `model: '%s', tag: '%s'` line per slot, then raises `failed to detach model
   '%s' from tag '%s'`. VERIFIED, 0x59c33..0x59cb4 and the strings at 0x76b01,
   0x76b17, 0x76b40; VERIFIED live, `probe_detach_missing`.
+- The list goes to the console ahead of the error block. VERIFIED live,
+  `probe_detach_missing` on 1.1d (2026-11-16, `console_mp_server.log`):
+  `Current attachments:`, `model: 'xmodel/crate_misc2a', tag: 'tag_a'`, a
+  blank line, then `******* script runtime error *******`. vcod prints the
+  same two lines through its log, which is its console (`Server::print`'s
+  path), ahead of the error.
 - `getAttachModelName`, `getAttachTagName` (and UO's
   `getAttachIgnoreCollision`) take an index below 6 whose slot holds a model;
   anything else is `Scr_ParamError(0, "bad index")`. VERIFIED, UO 0x67e71 and
@@ -2850,9 +2856,25 @@ the 24 s the run went on). INFERRED, from the restart's `begin` at 6400:
 `map_restart` enters a test client into the world itself, a map load puts
 it back to connected and nothing it sends would enter it, since it sends
 nothing. The next `addTestClient` is still `bot1` in slot 1.
-Not run: a slot a UDP client once held (address no longer zero, so
-retail's port-0 bot is not refused there; it needs a connect and a drop
-inside the server's first 3 s).
+A slot a UDP client once held, by a binary read (2026-11-16):
+
+- VERIFIED, 1.1d `NET_CompareBaseAdr` (0x8080e60): two addresses of
+  different types never match (0x8080e6b); type 0 compares the ports
+  (0x8080e7d), type 4 (IP) the four address bytes (0x8080e95), type 2
+  (loopback) always matches. 1.5b's (0x8083d1a) and UO's (0x8084802)
+  `NET_CompareBaseAdrSigned` test the types in the same order.
+- VERIFIED, 1.5b 0x8089f93..0x808a0c5 and UO 0x808ad97..0x808aece: their reconnect
+  checks walk every slot to `sv_maxclients` with no state test either,
+  then the qport or the port, then `svs.time - lastConnectTime` against
+  `sv_reconnectlimit * 1000`, as 1.1d's.
+- INFERRED, from the two: a freed slot keeps its client's IP address, so
+  the port-0 bot matches only a slot no client ever took. With every slot
+  held once by a UDP client (one may still be in it), the first bot is
+  taken inside the first 3 s too.
+
+vcod: `Cod1Game::udp_slots` marks each slot a UDP connect took, which
+`addTestClient` reads; `the_first_test_client_is_refused_only_beside_a_never_used_slot`
+(`server.rs`) runs both cases on a two-slot server.
 
 ## Open, and worth a probe
 

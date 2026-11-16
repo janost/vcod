@@ -23,6 +23,9 @@
 #                 the player behind the turret nearest x y z)
 #   PROBE_ARGS    extra move_probe arguments for the first script's client
 #                 (`--lag 100` holds its cmd clock 100 ms back)
+#   PORT          the server's port (default 28970)
+#   GDB_PY        a gdb python script the server runs under
+#                 (tools/re/cod2_skel_gdb.py dumps the posed skeletons)
 #   RAND_TRACE    1 loads tools/re/cod2_rand_trace.c (built into the
 #                 homepath, gcc -m32) into the server, which appends every
 #                 srand() and rand() it made to <out> as `# srand` and
@@ -61,10 +64,14 @@ if [ "${RAND_TRACE:-}" = 1 ]; then
   rm -f "$HOMEP/rand.log"
 fi
 export PRELOAD
+export PORT="${PORT:-28970}"
+export GDB_PY="${GDB_PY:+$(realpath "$GDB_PY")}"
 unshare -rn bash -c '
 ip link set lo up
-LD_LIBRARY_PATH="$LIB" LD_PRELOAD="$PRELOAD" RAND_TRACE_OUT="$HOMEP/rand.log" "$COD2_LNXDED" +set fs_basepath "$COD2_DIR" +set fs_homepath "$HOMEP" \
-  +set net_ip 127.0.0.1 +set net_port 28970 +set dedicated 1 +set sv_punkbuster 0 \
+RUN=()
+[ -n "$GDB_PY" ] && RUN=(gdb -batch -x "$GDB_PY" --args)
+LD_LIBRARY_PATH="$LIB" LD_PRELOAD="$PRELOAD" RAND_TRACE_OUT="$HOMEP/rand.log" "${RUN[@]}" "$COD2_LNXDED" +set fs_basepath "$COD2_DIR" +set fs_homepath "$HOMEP" \
+  +set net_ip 127.0.0.1 +set net_port $PORT +set dedicated 1 +set sv_punkbuster 0 \
   +set developer 1 +set logfile 1 +set g_log games_mp.log +set g_logSync 1 +set sv_maxclients 4 \
   +set probe_x "$X" +set probe_y "$Y" +set probe_z "$Z" +set probe_yaw "$YAW" \
   +set g_gametype $GTNAME $SRV +map "$MAP" > "$LOG" 2>&1 &
@@ -76,11 +83,11 @@ done
 sleep 3
 status=0
 if [ -n "$SECOND" ]; then
-  "$PROBE" 127.0.0.1:28970 --script "$SECOND" --name target --out "${OUT%.txt}-b.txt" --game-dir "$COD2_DIR" &
+  "$PROBE" 127.0.0.1:$PORT --script "$SECOND" --name target --out "${OUT%.txt}-b.txt" --game-dir "$COD2_DIR" &
   B=$!
   sleep 2
 fi
-"$PROBE" 127.0.0.1:28970 --script "$SCRIPT" --out "$OUT" --game-dir "$COD2_DIR" $PROBE_ARGS || status=$?
+"$PROBE" 127.0.0.1:$PORT --script "$SCRIPT" --out "$OUT" --game-dir "$COD2_DIR" $PROBE_ARGS || status=$?
 [ -n "$SECOND" ] && { wait $B || status=$?; }
 sleep 0.5
 kill $SERVER 2>/dev/null; sleep 1; kill -9 $SERVER 2>/dev/null || true

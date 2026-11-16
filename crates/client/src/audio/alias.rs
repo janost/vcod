@@ -410,64 +410,75 @@ impl AliasTable {
     /// section 1e). The returned index is into the full group, `Silent`
     /// included, so it feeds back as `last`.
     pub fn pick(&self, name: &str, roll: f32, last: Option<usize>) -> (Pick<'_>, Option<usize>) {
-        self.pick_where(name, roll, last, |_| true)
-    }
-
-    /// [`Self::pick`] over the rows whose `lod` admits a listener `dist`
-    /// away, United Offensive's pick (syscall 0xc4, `CoDUOMP.exe`
-    /// 0x438300). `dist` is -1 for an emitter at the origin, as retail
-    /// passes it.
-    pub fn pick_lod(
-        &self,
-        name: &str,
-        roll: f32,
-        last: Option<usize>,
-        dist: f32,
-    ) -> (Pick<'_>, Option<usize>) {
-        self.pick_where(name, roll, last, |r| lod_admits(r.lod, dist))
-    }
-
-    fn pick_where(
-        &self,
-        name: &str,
-        roll: f32,
-        last: Option<usize>,
-        admit: impl Fn(&AliasRow) -> bool,
-    ) -> (Pick<'_>, Option<usize>) {
         let Some(rows) = self.get(name) else {
             return (Pick::Unknown, None);
         };
         let exclude = last.filter(|&i| rows.len() >= 3 && i < rows.len());
-        let open = |i: usize, r: &AliasRow| Some(i) != exclude && admit(r);
-        let total: u32 = rows
-            .iter()
-            .enumerate()
-            .filter(|&(i, r)| open(i, r))
-            .map(|(_, r)| r.probability)
-            .sum();
-        if total == 0 {
-            // No row admits the distance: retail's pick comes back empty
-            // and nothing plays (0x436710). Unreachable without lods while
-            // `probability` parses to at least 1.
-            return (Pick::Silent, None);
-        }
-        let mut target = (roll.clamp(0.0, 0.999_999) * total as f32) as u32;
-        for (i, r) in rows.iter().enumerate() {
-            if !open(i, r) {
-                continue;
-            }
-            if target < r.probability {
-                let pick = if is_null_file(&r.file) {
-                    Pick::Silent
-                } else {
-                    Pick::Row(r)
-                };
-                return (pick, Some(i));
-            }
-            target -= r.probability;
-        }
-        (Pick::Unknown, None)
+        draw(rows, roll, |i| Some(i) != exclude)
     }
+
+    /// United Offensive's pick (syscall 0xc4, `CoDUOMP.exe` 0x438300):
+    /// [`Self::pick`]'s rule over only the rows whose `lod` admits a
+    /// listener `dist` away (-1 for an emitter at the origin). `counts` are
+    /// the group's pick counters (the record's +0x10), which it advances.
+    /// Only admitted rows count: with three or more of them, the ones whose
+    /// counter is their highest are left out while any other remains
+    /// (coduo-diff.md, "Lod pick").
+    pub fn pick_lod(&self, name: &str, roll: f32, counts: &mut Vec<u32>, dist: f32) -> Pick<'_> {
+        let Some(rows) = self.get(name) else {
+            return Pick::Unknown;
+        };
+        counts.resize(rows.len(), 0);
+        let admitted: Vec<usize> = (0..rows.len())
+            .filter(|&i| lod_admits(rows[i].lod, dist))
+            .collect();
+        let Some(max) = admitted.iter().map(|&i| counts[i]).max() else {
+            // No row admits the distance: the lookup (0x436710) comes back
+            // empty and nothing plays.
+            return Pick::Silent;
+        };
+        let fresh = |i: usize| counts[i] != max;
+        let skip_max = admitted.len() > 2 && admitted.iter().any(|&i| fresh(i));
+        let open = |i: usize| admitted.contains(&i) && (!skip_max || fresh(i));
+        let (pick, index) = draw(rows, roll, open);
+        if let Some(i) = index {
+            counts[i] = max + 1;
+        }
+        pick
+    }
+}
+
+/// A `probability`-weighted row of `rows` among those `open` lets in, off
+/// `roll` uniform in `[0, 1)`, with its index.
+fn draw(rows: &[AliasRow], roll: f32, open: impl Fn(usize) -> bool) -> (Pick<'_>, Option<usize>) {
+    let total: u32 = rows
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| open(i))
+        .map(|(_, r)| r.probability)
+        .sum();
+    if total == 0 {
+        // No row admits the distance: retail's pick comes back empty
+        // and nothing plays (0x436710). Unreachable without lods while
+        // `probability` parses to at least 1.
+        return (Pick::Silent, None);
+    }
+    let mut target = (roll.clamp(0.0, 0.999_999) * total as f32) as u32;
+    for (i, r) in rows.iter().enumerate() {
+        if !open(i) {
+            continue;
+        }
+        if target < r.probability {
+            let pick = if is_null_file(&r.file) {
+                Pick::Silent
+            } else {
+                Pick::Row(r)
+            };
+            return (pick, Some(i));
+        }
+        target -= r.probability;
+    }
+    (Pick::Unknown, None)
 }
 
 /// `CoDUOMP.exe` 0x4366b0: a negative `lod_min` admits every distance;
@@ -537,6 +548,36 @@ mod tests {
 
     /// `weap_mg42_loop`'s two rows in UO's `gmi_mp_vehicles_ge.csv`: the
     /// near file inside 1800 units, the distant one past it.
+    /// UO's no-repeat rule counts only the admitted rows (0x438300): two
+    /// near rows of a four-row group may repeat, three may not, and a far
+    /// pick between leaves the near rows' counters alone.
+    #[test]
+    fn a_lod_pick_repeats_by_the_admitted_rows_alone() {
+        let csv = |near: usize| {
+            let mut t = String::from("name,file,lod_min,lod_max\n");
+            for i in 0..near {
+                t += &format!("s,n{i}.wav,0,1000\n");
+            }
+            t + "s,f0.wav,1000,9000\ns,f1.wav,1000,9000\n"
+        };
+        let file = |t: &AliasTable, counts: &mut Vec<u32>, dist: f32| match t
+            .pick_lod("s", 0.0, counts, dist)
+        {
+            Pick::Row(r) => r.file.clone(),
+            _ => String::new(),
+        };
+        let two = AliasTable::parse_csv(&csv(2), "test");
+        let mut counts = Vec::new();
+        assert_eq!(file(&two, &mut counts, 10.0), "n0.wav");
+        assert_eq!(file(&two, &mut counts, 10.0), "n0.wav");
+        let three = AliasTable::parse_csv(&csv(3), "test");
+        let mut counts = Vec::new();
+        assert_eq!(file(&three, &mut counts, 10.0), "n0.wav");
+        assert_eq!(file(&three, &mut counts, 10.0), "n1.wav");
+        assert_eq!(file(&three, &mut counts, 5000.0), "f0.wav");
+        assert_eq!(file(&three, &mut counts, 10.0), "n0.wav");
+    }
+
     #[test]
     fn a_lod_pick_takes_the_row_for_the_distance() {
         let text = "name,sequence,file,vol_min,vol_max,pitch_min,pitch_max,dist_min,dist_max,lod_min,lod_max,channel,type,probability,loop\n\
@@ -544,7 +585,7 @@ mod tests {
             weap_mg42_loop,2,weapons/mg42/mg42_loop.wav,1,1.2,1,1.07,10,8500,1800,8500,weapon,,,looping\n\
             panzeriv_idle_low,,vehicles/tank_02_idle.wav,0,,1,,300,3500,,,,,,looping\n";
         let t = AliasTable::parse_csv(text, "test");
-        let file = |dist: f32| match t.pick_lod("weap_mg42_loop", 0.99, None, dist).0 {
+        let file = |dist: f32| match t.pick_lod("weap_mg42_loop", 0.99, &mut Vec::new(), dist) {
             Pick::Row(r) => r.file.clone(),
             _ => String::new(),
         };
@@ -553,7 +594,7 @@ mod tests {
         assert_eq!(file(1800.0), "weapons/mg42/mg42_loop.wav");
         assert_eq!(file(-1.0), "weapons/mg42/mg42_loop02.wav");
         assert!(matches!(
-            t.pick_lod("weap_mg42_loop", 0.5, None, 9000.0).0,
+            t.pick_lod("weap_mg42_loop", 0.5, &mut Vec::new(), 9000.0),
             Pick::Silent
         ));
         let idle = &t.get("panzeriv_idle_low").unwrap()[0];

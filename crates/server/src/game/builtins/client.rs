@@ -68,8 +68,10 @@ pub const NAMES: &[(&str, Builtin)] = &[
 /// runs inside the call and its `begin` notify lands once the calling
 /// thread's step returns (docs/research/cod11-gsc-object-model.md,
 /// "addTestClient"). `undefined` with no free slot, and for the counter's
-/// first bot inside `sv_reconnectlimit` of the start: its address, port 0,
-/// matches every never-used slot's in `SV_DirectConnect`'s reconnect check.
+/// first bot inside `sv_reconnectlimit` of the start while a slot no UDP
+/// client ever took is left: its address, port 0, matches a never-used
+/// slot's zero address in `SV_DirectConnect`'s reconnect check, and never a
+/// UDP client's.
 /// On 1.1 the client sends no cmds, so nothing ever thinks for it; CoD2's
 /// thinks on a random cmd each frame (`Cod2Level::test_client_cmd`).
 pub fn add_test_client(
@@ -93,7 +95,9 @@ pub fn add_test_client(
     let port = host.test_clients.counter;
     host.test_clients.counter += 1;
     // `sv_reconnectlimit`'s 3 s default, against `lastConnectTime` 0.
-    if port == 0 && host.test_clients.svs_time_ms < 3000 {
+    let udp = host.test_clients.udp_slots;
+    let never_used = (0..host.client_roster.len()).any(|s| udp & (1 << s) == 0);
+    if port == 0 && host.test_clients.svs_time_ms < 3000 && never_used {
         return Ok(Value::Undefined);
     }
     let name = format!("bot{port}");

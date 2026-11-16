@@ -5,9 +5,9 @@
 //! without normalizing them, and each node of two or more live children
 //! folding their sums. The locals it leaves are what `DObjCalcSkel`
 //! composes ([`crate::skel`]). Both binaries run the same sums in the same
-//! order; `cod4_lnxded`'s x87 stack is an `f64` here, one rounding to `f32`
-//! where the binary stores, and `iw3mp.exe`'s every result a float
-//! ([`Cod4Arith`]).
+//! order; either binary's x87 stack is an `f64` here, one rounding to `f32`
+//! where the binary stores, `iw3mp.exe` storing a few values `cod4_lnxded`
+//! keeps ([`Cod4Arith`]).
 
 use anyhow::{Result, ensure};
 
@@ -65,6 +65,12 @@ pub struct Parts {
     pub name: String,
     /// `numframes` (+0xe): the last key frame.
     pub num_frames: u16,
+    /// +0x10.
+    pub looped: bool,
+    /// +0x28: frames a second.
+    pub framerate: f32,
+    /// +0x2c: node time a second.
+    pub frequency: f32,
     pub bones: Vec<String>,
     /// By the clip's bone.
     pub rot: Vec<Rot>,
@@ -155,6 +161,9 @@ impl Parts {
         Ok(Parts {
             name: x.name.clone(),
             num_frames: x.num_frames,
+            looped: x.looped,
+            framerate: x.framerate,
+            frequency: x.frequency,
             bones,
             rot,
             trans,
