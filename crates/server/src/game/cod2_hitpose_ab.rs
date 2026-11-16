@@ -2,18 +2,23 @@
 //! vcod's. The capture in `crates/cod2/tests/fixtures/hitpose/` (recipe in
 //! its header) is a shooter holding a ppsh's trigger while
 //! `probe_hitpose.gsc` sweeps his view over a target that stands, crouches,
-//! lies prone and strafes. Each `PROBE damage` line gives a round's point,
-//! direction and hit location at a frame's time; the gate puts the target's
-//! playerstate where retail's snapshot of that frame has it, runs the frame,
-//! and traces the same line through vcod's posed body. Compared: the hit
-//! location and the point along the line. Needs `COD2_DIR`.
-//! `HITPOSE_REPORT=1` prints every round.
+//! lies prone and strafes, taken under gdb: each round's
+//! `SV_PointTraceToEntity` line, `DObjTraceline` fraction and bones are in
+//! `crates/cod2/tests/fixtures/trace/poses.txt`. Each `PROBE damage` line
+//! gives a round's point and hit location at a frame's time; the gate puts
+//! the target's playerstate where retail's snapshot of that frame has it,
+//! runs the frame, and traces the round's dumped line through vcod's posed
+//! body. Compared: the hit location, the fraction and the bones, word for
+//! word. Needs `COD2_DIR`. `HITPOSE_REPORT=1` prints every round.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use glam::Vec3;
+use vcod_cod2::player::dobj::Mat;
 use vcod_cod2::pmove::PlayerState;
 
+use super::cod2_antilag_ab::{DumpedTrace, bones_off, dumped_traces};
 use super::cod2_combat_ab::{parse, weapon_from_wire, word};
 use crate::game::cod2::Cod2Level;
 
@@ -22,28 +27,28 @@ const FIXTURES: &str = concat!(
     "/../cod2/tests/fixtures/hitpose"
 );
 
-/// How far along its line a round's point may sit from retail's: the log's
-/// six digits on a coordinate near 2000.
-const POINT_TOLERANCE: f32 = 0.02;
-
 /// The rounds the replay still places off retail's, by frame time, each
 /// with its section of cod2-combat.md.
-const GAPS: &[(i32, &str)] = &[(
-    13400,
-    "9.5 the hit pose: 0.0204 along a grazing face, inside the log's rounding",
-)];
+const GAPS: &[(i32, &str)] = &[];
 
 /// What one round found: (time, retail hit location, ours, how far along
-/// the line ours sits past retail's, the target's `eFlags`).
+/// the line ours sits past retail's, the target's `eFlags`, the bones the
+/// trace built, retail's).
 struct Round {
     time: i32,
     retail: String,
     ours: String,
     along: Option<f32>,
     eflags: u32,
+    bones: Vec<Mat>,
+    retail_bones: HashMap<usize, [f32; 8]>,
 }
 
-fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str) -> Vec<Round> {
+fn replay(
+    fs: &Rc<vcod_common::pk3::Pk3Fs>,
+    name: &str,
+    dump: &HashMap<i32, Vec<DumpedTrace>>,
+) -> Vec<Round> {
     let read = |n: &str| std::fs::read_to_string(format!("{FIXTURES}/{n}.txt")).unwrap();
     let shooter = parse(&read(name));
     let target = parse(&read(&format!("{name}-b")));
@@ -145,7 +150,7 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str) -> Vec<Round> {
                 );
             }
         }
-        for (_, point, dir, loc, shot) in rounds.iter().filter(|r| r.0 == t) {
+        for (_, point, _, loc, shot) in rounds.iter().filter(|r| r.0 == t) {
             // The target's packets sent by the one carrying the shot's cmd,
             // whole, then the shooter's: each resets the skeleton cache.
             run_packets(
@@ -155,7 +160,16 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str) -> Vec<Round> {
                 shooter.side.sent_at(*shot),
             );
             level.packet();
-            let (a, b) = (*point - *dir * 64.0, *point + *dir * 64.0);
+            // The round's own line: of the frame's struck traces, the one
+            // whose contact sits nearest the logged point.
+            let d = dump
+                .get(&t)
+                .and_then(|ds| {
+                    ds.iter()
+                        .min_by(|x, y| x.near(*point).total_cmp(&y.near(*point)))
+                })
+                .expect("a dumped trace at the round's frame");
+            let (a, b) = (d.start, d.end);
             let (f, client, hl) = level.round_trace(a, b, &Default::default());
             let ours = match client {
                 Some(_) => vcod_cod2::xmodel::HIT_LOCATIONS[usize::from(hl)].to_string(),
@@ -165,8 +179,10 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str) -> Vec<Round> {
                 time: t,
                 retail: loc.clone(),
                 ours,
-                along: client.map(|_| (f - 0.5) * 128.0),
+                along: client.map(|_| (f - d.fraction) * a.distance(b)),
                 eflags: word(&snap.ps, "eFlags"),
+                bones: level.built_body_mats(0).unwrap_or_default(),
+                retail_bones: d.mats.clone(),
             });
         }
     }
@@ -201,8 +217,13 @@ fn retail_rounds_strike_vcods_posed_body() {
     };
     let fs = Rc::new(fs);
     let report = std::env::var_os("HITPOSE_REPORT").is_some();
-    let rounds = replay(&fs, "poses");
-    let mut wrong = Vec::new();
+    let dump = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../cod2/tests/fixtures/trace/poses.txt"
+    ))
+    .unwrap();
+    let rounds = replay(&fs, "poses", &dumped_traces(&dump));
+    let (mut wrong, mut bones) = (Vec::new(), 0);
     for r in &rounds {
         let line = format!(
             "{} eFlags {:#x}: retail {} ours {} along {}",
@@ -210,12 +231,16 @@ fn retail_rounds_strike_vcods_posed_body() {
             r.eflags,
             r.retail,
             r.ours,
-            r.along.map_or("-".to_string(), |a| format!("{a:.3}"))
+            r.along.map_or("-".to_string(), |a| format!("{a:e}"))
         );
         if report {
             eprintln!("{line}");
         }
-        let off = r.ours != r.retail || r.along.is_none_or(|a| a.abs() > POINT_TOLERANCE);
+        let (n, off_bones) = bones_off(&r.bones, &r.retail_bones);
+        bones += n;
+        wrong.extend(off_bones.into_iter().map(|o| format!("{}: {o}", r.time)));
+        // The round's fraction on its own line, word for word.
+        let off = r.ours != r.retail || r.along != Some(0.0);
         let gap = GAPS.iter().any(|g| g.0 == r.time);
         if off != gap {
             wrong.push(if gap {
@@ -225,8 +250,12 @@ fn retail_rounds_strike_vcods_posed_body() {
             });
         }
     }
-    eprintln!("{} of {} rounds wrong", wrong.len(), rounds.len());
-    assert!(!rounds.is_empty());
+    eprintln!(
+        "{} rounds, {bones} bones, {} wrong",
+        rounds.len(),
+        wrong.len()
+    );
+    assert!(rounds.len() > 60 && bones > 2000);
     assert!(
         wrong.is_empty(),
         "rounds off retail's:\n{}",
