@@ -614,6 +614,11 @@ impl ChannelClock {
             self.rate = 1.0;
             self.old_ms = now_ms;
             self.old_pos = tr_base;
+        } else if self.old_ms != now_ms && self.stored {
+            let ms = now_ms.wrapping_sub(self.old_ms);
+            self.rate = rate_cod2(&motion, self.old_pos, tr_base, ms);
+            self.old_ms = now_ms;
+            self.old_pos = tr_base;
         } else if self.old_ms != now_ms {
             // 0x2ac58..0x2ac9d: distance over seconds over `moveSpeed`.
             let dist = if motion.vertical {
@@ -983,6 +988,47 @@ impl ChannelClock {
     }
 }
 
+/// `cod2_lnxded` 1.3's rate (0x80da52f..0x80da6ec), from `old` to `new`
+/// over `ms`: the distance (0x80a40ea: the difference stored, its squares
+/// summed on the stack and stored, libm `sqrt` stored), over `ms * 0.001`
+/// on the stack, stored, over the float `moveSpeed`, stored; the clamps
+/// read the float `moveSpeed`, the cap `3 - (moveSpeed - 20) / 130` on the
+/// stack, stored. cod2-player-anims.md 7.
+fn rate_cod2(motion: &AnimMotion, old: Vec3, new: Vec3, ms: i32) -> f32 {
+    use crate::x87::F80;
+    let x = F80::from_f32;
+    let dist = if motion.vertical {
+        (old.z - new.z).abs()
+    } else {
+        let d = new - old;
+        let len2 = (x(d.x) * x(d.x) + x(d.y) * x(d.y) + x(d.z) * x(d.z)).to_f32();
+        f64::from(len2).sqrt() as f32
+    };
+    let secs = F80::from_f64(f64::from(ms)) * x(0.001);
+    let speed = motion.move_speed_f;
+    let rate = (x((x(dist) / secs).to_f32()) / x(speed)).to_f32();
+    if rate < 0.1 {
+        return if rate < 0.01 && motion.vertical {
+            0.0
+        } else {
+            0.1
+        };
+    }
+    if rate <= 2.0 {
+        return rate;
+    }
+    let cap = if motion.vertical {
+        4.0
+    } else if speed > 150.0 {
+        2.0
+    } else if speed < 20.0 {
+        3.0
+    } else {
+        (x(3.0) - (x(speed) - x(20.0)) / x(130.0)).to_f32()
+    };
+    rate.min(cap)
+}
+
 /// What a setter did to nodes the other channel's lerp frame may hold.
 #[derive(Clone, Copy, Debug, Default)]
 struct Touches {
@@ -1169,6 +1215,28 @@ fn spread_phase_15(now_ms: i32, client_num: i32, period: i32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `cod2_lnxded`'s rates for `pb_combatrun_left_loop` (`moveSpeed`
+    /// 0x43363ead) off three snapped steps of 50 ms, read under gdb at the
+    /// legs lerp frame's +0x28 (cod2-player-anims.md 7). The seconds kept
+    /// on the stack move the first and the last a word from a stored
+    /// `0.05`'s.
+    #[test]
+    fn a_cod2_rate_divides_by_the_seconds_on_the_stack() {
+        let motion = AnimMotion {
+            move_speed_f: f32::from_bits(0x4336_3ead),
+            ..AnimMotion::default()
+        };
+        let at = |x: f32, y: f32| Vec3::new(x, y, 64.0);
+        let steps = [
+            (at(1940.0, 1771.0), at(1937.0, 1771.0), 0x3ea8_907f),
+            (at(1937.0, 1771.0), at(1933.0, 1771.0), 0x3ee0_c0ab),
+            (at(1933.0, 1771.0), at(1922.0, 1772.0), 0x3f9b_2793),
+        ];
+        for (old, new, rate) in steps {
+            assert_eq!(rate_cod2(&motion, old, new, 50).to_bits(), rate);
+        }
+    }
 
     #[test]
     fn the_node_time_sums_float_frame_steps_and_wraps() {
