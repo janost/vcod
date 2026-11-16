@@ -389,6 +389,9 @@ switches and every number it prints. Results go in that doc and
   launcher fires it at an enemy-crewed vehicle in sight. Bots get out
   when they arrive, where the hull can get no nearer, when stuck, or
   after 90 s (bot-objectives.md sections 10 and 14.10).
+- A bot on foot keeps out of a burning hull's reach until its second
+  blast, fight or no fight: inside it walks out, and outside it plans
+  round it and waits rather than walk into it (bot-objectives.md 10.10).
 
 Cannot:
 
