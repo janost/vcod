@@ -550,6 +550,9 @@ const PRONEMOVE_LMG_UO: &str = "mp_carentan-dm-slope-8ms-pronemove-lmg-uo.txt";
 /// clamp: centred on the stale `proneTorsoPitch` each prone left
 /// (coduo-movement.md 7).
 const PRONEMOVE_DEPLOY_UO: &str = "mp_carentan-dm-slope-8ms-pronemove-deploy-uo.txt";
+/// The same crouched on a crouched script mount (`--probe-pronemove
+/// deploy-crouch`, `probe_spot moundcrouch`).
+const PRONEMOVE_DEPLOY_CROUCH_UO: &str = "mp_carentan-dm-slope-8ms-pronemove-deploy-crouch-uo.txt";
 
 /// Fields a capture's replay may miss, with how many snapshots and why.
 /// The 1.5 captures replay under 1.5b's stored arithmetic
@@ -691,12 +694,18 @@ fn the_talk_captures_fail_under_the_other_rules() {
 
 /// United Offensive's prone move key (`PRONEMOVE_UO`, `PRONEMOVE_LMG_UO`):
 /// UO keeps a rechamber and drops a bipod's or the binoculars' raise and
-/// lowering; and a standing deploy's pitch clamp (`PRONEMOVE_DEPLOY_UO`).
+/// lowering; and a standing and a crouched deploy's pitch clamp
+/// (`PRONEMOVE_DEPLOY_UO`, `PRONEMOVE_DEPLOY_CROUCH_UO`).
 /// Needs `COD_DIR` at a UO install.
 #[test]
 fn the_predictor_replays_uo_prone_moves() {
     let mut failures = Vec::new();
-    for file in [PRONEMOVE_UO, PRONEMOVE_LMG_UO, PRONEMOVE_DEPLOY_UO] {
+    for file in [
+        PRONEMOVE_UO,
+        PRONEMOVE_LMG_UO,
+        PRONEMOVE_DEPLOY_UO,
+        PRONEMOVE_DEPLOY_CROUCH_UO,
+    ] {
         let text = std::fs::read_to_string(format!("{FIXTURE_DIR}/{file}")).unwrap();
         let Some((world, weapons)) = uo_setup(&text, "mp_carentan") else {
             return;
@@ -710,10 +719,36 @@ fn the_predictor_replays_uo_prone_moves() {
         );
         print(file, &r);
         assert!(r.compared > 400, "{file}: only {} snapshots", r.compared);
-        failures.extend(over(&r, &[]).into_iter().map(|f| format!("{file}: {f}")));
+        let gaps: Vec<(&str, usize)> = PRONEMOVE_GAPS
+            .iter()
+            .filter(|(f, _, _)| *f == file)
+            .map(|&(_, name, n)| (name, n))
+            .collect();
+        failures.extend(over(&r, &gaps).into_iter().map(|f| format!("{file}: {f}")));
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+/// Fields the prone move captures' replays may miss, per capture.
+/// - The crouched script mount's two deploys (ct 23490 and 39491): the
+///   `UOFOOT_GAPS` `mount` gap. The server's own point contents meet the
+///   trigger's 0x400000 and deploy crouched, and its hint 7 goes out with
+///   `serverCursorHintVal` 0, which a standing script mount sends too; the
+///   trigger reaches no client (`r.svFlags` 1), so the predictor, as the
+///   retail cgame by the same code, stands the body up for one snapshot
+///   (coduo-movement.md 11). Read as crouched, this capture replays with no
+///   miss and the standing one misses the mirror image. The second deploy
+///   comes as a turn's cone decays, and the stood body decays it at the
+///   standing rate: `aimSpreadScale` off with the stance.
+const PRONEMOVE_GAPS: &[(&str, &str, usize)] = &[
+    (PRONEMOVE_DEPLOY_CROUCH_UO, "ducked", 2),
+    (PRONEMOVE_DEPLOY_CROUCH_UO, "stance", 2),
+    (PRONEMOVE_DEPLOY_CROUCH_UO, "viewHeightCurrent", 2),
+    (PRONEMOVE_DEPLOY_CROUCH_UO, "viewHeightLerpTarget", 2),
+    (PRONEMOVE_DEPLOY_CROUCH_UO, "viewHeightLerpTime", 2),
+    (PRONEMOVE_DEPLOY_CROUCH_UO, "viewHeightTarget", 2),
+    (PRONEMOVE_DEPLOY_CROUCH_UO, "aimSpreadScale", 1),
+];
 
 /// United Offensive's talk mask (`TALK_UO`), which keeps the sight as
 /// 1.5's does. Needs `COD_DIR` at a UO install.
