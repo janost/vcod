@@ -6,8 +6,11 @@
 //	crouch the hmgcrouching ones at (-1080 -3313), and mount open ground
 //	in front of a script trigger_mount spawned crouched
 //	(spawnTriggerMount), which the client sees only as serverCursorHint 7.
-//	probe_fires 1 logs each of its "trigger" notifies.
-//	docs/research/coduo-movement.md, section 11.
+//	probe_fires 1 logs each of its "trigger" notifies. probe_spot mound
+//	(mp_carentan) is probe_prone's ~19 degree mound at (-224 60) facing
+//	uphill, a standing spawnTriggerMount 15 ahead of it, for the deploy
+//	pitch clamp (--probe-pronemove deploy).
+//	docs/research/coduo-movement.md, sections 7 and 11.
 
 main()
 {
@@ -19,12 +22,22 @@ watch_teleports()
 {
 	if (getcvar("probe_teleport") != "1")
 		return;
-	if (getcvar("mapname") != "mp_foy")
+	want = "mp_foy";
+	if (getcvar("probe_spot") == "mound")
+		want = "mp_carentan";
+	if (getcvar("mapname") != want)
 	{
 		logPrint("PROBE teleport unsupported " + getcvar("mapname") + "\n");
 		return;
 	}
 	wait 1;
+	if (getcvar("probe_spot") == "mound")
+	{
+		//	Round the point 15 ahead of the spot along yaw 270, the
+		//	ground's height there and above.
+		spawnTriggerMount((-244, 30, -20), (-204, 52, 120), 0);
+		logPrint("PROBE mount spawned\n");
+	}
 	if (getcvar("probe_spot") == "mount")
 	{
 		//	15 ahead of the spot and 1 up is inside it (G_CheckForCursorHints).
@@ -80,6 +93,12 @@ try_place()
 	{
 		origin = (-1094, -3293, 8);
 		yaw = 0;
+	}
+	else if (spot == "mound")
+	{
+		//	probe_prone's mound spot, a few units above the ground.
+		origin = (-224, 60, 45);
+		yaw = 270;
 	}
 	else if (spot == "mount")
 	{

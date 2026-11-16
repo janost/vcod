@@ -7652,13 +7652,14 @@ fn write_slope_fixture(
             _ => "",
         };
         let name = part.name();
-        let binoculars = match part {
-            ProneMove::Lmg => " +set probe_binoculars 1",
-            ProneMove::Rifle => "",
+        let (probe, spot) = match part {
+            ProneMove::Lmg => ("probe_prone", "street +set probe_binoculars 1"),
+            ProneMove::Rifle => ("probe_prone", "street"),
+            ProneMove::Deploy => ("probe_uofoot", "mound"),
         };
         out.push_str(&format!(
-            "# Captured with {env}tools/run_probe.sh client-probes/probe_prone {map} +set probe_teleport 1\n\
-             # +set probe_spot street{binoculars} and --net-probe --save-slope --probe-pronemove {name} --probe-cmd-ms {cmd_ms}:\n\
+            "# Captured with {env}tools/run_probe.sh client-probes/{probe} {map} +set probe_teleport 1\n\
+             # +set probe_spot {spot} and --net-probe --save-slope --probe-pronemove {name} --probe-cmd-ms {cmd_ms}:\n\
              # pronemove_script({name}) from the placement, facing world yaw 0. !cmd is a\n"
         ));
     } else if walk == SlopeWalk::PatchWalk {
@@ -8264,6 +8265,12 @@ pub enum ProneMove {
     /// press, raised prone with a move key pressed through the raise, and
     /// lowered prone with the stand pressed through the lowering.
     Lmg,
+    /// United Offensive, with an LMG (`--probe-weapon mg30cal_mp`), from
+    /// `client-probes/probe_uofoot`'s mound placement (`+set probe_spot
+    /// mound`, a standing script mount ahead): prone facing up the grade,
+    /// stood up, the bipod deployed standing and the view pitched past both
+    /// clamps; then the same from a prone facing down it.
+    Deploy,
 }
 
 impl ProneMove {
@@ -8271,12 +8278,13 @@ impl ProneMove {
         match self {
             ProneMove::Rifle => "rifle",
             ProneMove::Lmg => "lmg",
+            ProneMove::Deploy => "deploy",
         }
     }
 
     fn switches(self) -> &'static [(u64, &'static str)] {
         match self {
-            ProneMove::Rifle => &[],
+            ProneMove::Rifle | ProneMove::Deploy => &[],
             ProneMove::Lmg => &[(10000, "binoculars_mp")],
         }
     }
@@ -8286,6 +8294,8 @@ impl ProneMove {
 /// `PM_InteruptWeaponWithProneMove`'s cases, each a move key pressed on a
 /// prone body (cod11-combat.md 1.13), and the anim timers they leave
 /// (player-model-anim-system.md, "The takeoff and the landing").
+/// `deploy` is the standing bipod's pitch clamp off a stale
+/// `proneTorsoPitch` (coduo-movement.md 7).
 fn pronemove_script(part: ProneMove) -> Vec<ProneStep> {
     use net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_MELEE, WBUTTON_CROUCH, WBUTTON_PRONE};
     const P: u8 = WBUTTON_PRONE;
@@ -8366,6 +8376,39 @@ fn pronemove_script(part: ProneMove) -> Vec<ProneStep> {
             step(23700, 0, 0, 0, 0),
             step(26000, 0, 0, 0, 0),
         ],
+        // World yaws: 270 faces up the mound and the mount, 90 down it.
+        // Each step's view eases in from the step before.
+        ProneMove::Deploy => {
+            let aim = |at_ms, buttons, wbuttons, yaw, pitch| ProneStep {
+                yaw,
+                pitch,
+                ..step(at_ms, buttons, wbuttons, 0, 0)
+            };
+            vec![
+                aim(0, 0, 0, 270.0, 0.0),
+                // Prone up the grade, then up.
+                aim(1000, 0, P, 270.0, 0.0),
+                aim(4000, 0, 0, 270.0, 0.0),
+                // Deployed standing, pitched up past the clamp, down past
+                // it, level, broken down.
+                aim(6000, S, 0, 270.0, 0.0),
+                aim(8500, S, 0, 270.0, -85.0),
+                aim(10500, S, 0, 270.0, 85.0),
+                aim(12500, S, 0, 270.0, 0.0),
+                aim(13500, 0, 0, 270.0, 0.0),
+                // Prone down the grade, up, and back to the mount.
+                aim(15500, 0, 0, 90.0, 0.0),
+                aim(16500, 0, P, 90.0, 0.0),
+                aim(19500, 0, 0, 90.0, 0.0),
+                aim(21000, 0, 0, 270.0, 0.0),
+                aim(22000, S, 0, 270.0, 0.0),
+                aim(24500, S, 0, 270.0, -85.0),
+                aim(26500, S, 0, 270.0, 85.0),
+                aim(28500, S, 0, 270.0, 0.0),
+                aim(29500, 0, 0, 270.0, 0.0),
+                aim(31500, 0, 0, 270.0, 0.0),
+            ]
+        }
     }
 }
 

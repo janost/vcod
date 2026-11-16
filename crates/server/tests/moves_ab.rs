@@ -544,6 +544,12 @@ const PRONEMOVE_UO: &str = "mp_carentan-dm-slope-8ms-pronemove-rifle-uo.txt";
 /// The same on UO's bipod and binoculars (`--probe-pronemove lmg`,
 /// mg30cal_mp).
 const PRONEMOVE_LMG_UO: &str = "mp_carentan-dm-slope-8ms-pronemove-lmg-uo.txt";
+/// The bipod deployed standing on a script mount after a prone up the
+/// mound and one down it (`--probe-pronemove deploy`, mg30cal_mp,
+/// `client-probes/probe_uofoot` at `probe_spot mound`), pitched past the
+/// clamp: centred on the stale `proneTorsoPitch` each prone left
+/// (coduo-movement.md 7).
+const PRONEMOVE_DEPLOY_UO: &str = "mp_carentan-dm-slope-8ms-pronemove-deploy-uo.txt";
 
 /// Fields a capture's replay may miss, with how many snapshots and why.
 /// The 1.5 captures replay under 1.5b's stored arithmetic
@@ -685,11 +691,12 @@ fn the_talk_captures_fail_under_the_other_rules() {
 
 /// United Offensive's prone move key (`PRONEMOVE_UO`, `PRONEMOVE_LMG_UO`):
 /// UO keeps a rechamber and drops a bipod's or the binoculars' raise and
-/// lowering. Needs `COD_DIR` at a UO install.
+/// lowering; and a standing deploy's pitch clamp (`PRONEMOVE_DEPLOY_UO`).
+/// Needs `COD_DIR` at a UO install.
 #[test]
 fn the_predictor_replays_uo_prone_moves() {
     let mut failures = Vec::new();
-    for file in [PRONEMOVE_UO, PRONEMOVE_LMG_UO] {
+    for file in [PRONEMOVE_UO, PRONEMOVE_LMG_UO, PRONEMOVE_DEPLOY_UO] {
         let text = std::fs::read_to_string(format!("{FIXTURE_DIR}/{file}")).unwrap();
         let Some((world, weapons)) = uo_setup(&text, "mp_carentan") else {
             return;
