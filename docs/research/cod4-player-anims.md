@@ -619,9 +619,9 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   `phys_autoDisableAngular` for `phys_autoDisableTime`: `Phys_RunFrame`
   stores the squares of the first two and the time into the world each
   frame (iw3mp.exe 0x5a6505..0x5a6533, `[esi+0x3c]`, `[esi+0x40]`,
-  `[esi+0x44]`). VERIFIED (disassembly). That the test is per body and
-  on the squared speeds is INFERRED (ODE's
-  `dBodySetAutoDisableLinearThreshold`).
+  `[esi+0x44]`). VERIFIED (disassembly). The test is per body, on the
+  squared speeds, over ten idle steps as well (0x5b9b70, cod4-gsc.md
+  3.6.1). VERIFIED (disassembly).
 - Two traps, measured live on the earlier solver
   (`cod4_live_ragdolls_hold_still_once_down`: six held bots on mp_crash
   killed on open floor, a spectator posing them through `Cod4Players`,
