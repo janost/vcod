@@ -2449,6 +2449,13 @@ and `18.0:vote yes`, so Able leaves with a window open on it. Against ours:
 crates/gsc/tests/fixtures/semantics/client-probes/probe_complaint.gsc`.
 Retail and ours, 2026-10-14, print the same lines in both probes.
 
+With `+set probe_players 3` (ours: `--set probe_players=3`) a third probe,
+slot 2, gets a window beside slot 1's. The 2026-11-16 run on all three
+servers (`COD_VERSION=1.5`, `COD_VERSION=uo` on mp_uo_carentan with
+`--mod-dir uo`): Able `--probe-secs 10`, then a second apart Baker and
+Charlie `--probe-secs 25 --probe-say "13.0:vote yes" --probe-say "15.0:vote
+no"`, so Able leaves with both windows open (cod11-votes.md 3.1).
+
 ## probe_patchshot and probe_patchseams
 
 Server-only probes: `bulletTrace(from, to, ...)` along fixed segments on
