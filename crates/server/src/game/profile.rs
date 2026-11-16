@@ -175,6 +175,9 @@ pub struct SpawnRules {
     /// `G_SpawnTurret` takes the weapon's index first and indexes the
     /// player fire sounds too (CoD2, cod2-turrets.md 2).
     pub turret_weapon_and_player_sounds: bool,
+    /// `G_FindTeams` chains the map's `teamname`s after the spawn pass
+    /// (`crate::game::teams`); CoD2's and CoD4's are not measured.
+    pub find_teams: bool,
 }
 
 /// How a weapon name gets its 1-based wire index.
@@ -221,6 +224,7 @@ const fn cod1(defs: &'static Defs, builtins: fn() -> &'static BuiltinSet, v1: bo
             hurt_sound: true,
             round_triggers: false,
             turret_weapon_and_player_sounds: false,
+            find_teams: true,
         },
         items: ItemRules {
             negative_unit_draw: v1,
@@ -288,6 +292,7 @@ pub static COD2: HostProfile = HostProfile {
         hurt_sound: false,
         round_triggers: true,
         turret_weapon_and_player_sounds: true,
+        find_teams: false,
     },
     items: ItemRules {
         negative_unit_draw: false,
@@ -348,6 +353,7 @@ pub static COD4: HostProfile = HostProfile {
         hurt_sound: false,
         round_triggers: true,
         turret_weapon_and_player_sounds: true,
+        find_teams: false,
     },
     items: ItemRules {
         negative_unit_draw: false,

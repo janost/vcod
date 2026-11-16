@@ -804,6 +804,9 @@ impl ScriptRuntime {
         vm.with_cx(|cx| spawn_entities_from_string(&mut host, cx, &level_map.entities))
             .map_err(|e| anyhow::anyhow!("spawning {map}'s entities: {e:?}"))?;
         drop(spawn);
+        if profile.spawn.find_teams {
+            vm.with_cx(|cx| crate::game::teams::find_teams(&mut host, cx));
+        }
         if profile.script_structs {
             crate::game::cod2::create_structs(&mut vm, &mut host);
         }
@@ -3986,18 +3989,22 @@ impl ScriptRuntime {
         }
         // A parent that has not had its turn is where script left it.
         let fresh = host.links.get(id).is_some_and(|l| ran.contains(&l.parent));
-        let (done, step) = self.vm.with_cx(|cx| {
+        let (done, step, think) = self.vm.with_cx(|cx| {
             if crate::game::link::run_linked(host, cx, id, fresh) {
-                return (Vec::new(), None);
+                return (Vec::new(), None, true);
+            }
+            if crate::game::teams::idle_slave(host, cx, id) {
+                return (Vec::new(), None, false);
             }
             if crate::game::mover::is_mover(host, id) {
-                return crate::game::mover::run_one(host, cx, id);
+                let (done, step) = crate::game::mover::run_one(host, cx, id);
+                return (done, step, true);
             }
             crate::game::item::run_item(host, cx, id, now_ms);
-            (Vec::new(), None)
+            (Vec::new(), None, true)
         });
         // `G_RunThink`, which every arm past the missile's ends on.
-        if host.run_entity_think(id, now_ms).is_some() {
+        if think && host.run_entity_think(id, now_ms).is_some() {
             self.vm
                 .with_cx(|cx| crate::game::item::misc_spawner_think(host, cx, id));
         }

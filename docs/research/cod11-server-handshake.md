@@ -979,9 +979,10 @@ Map commands:
   `G_SpawnEntitiesFromString`, before `Scr_InitSystem` and the gametype load.
   VERIFIED.
 - `fast_restart` answered an empty `print\n`. VERIFIED.
-- vcod prints the block as one string before the script load
-  (`restart_game_banner` in `server.rs`, with 1.5's and UO's name and date),
-  team count 0 (no stock MP map has a `team` key).
+- vcod prints the head of the block before the script load
+  (`restart_game_banner`, `game_init_head` in `server.rs`, with 1.5's and
+  UO's name and date) and `G_FindTeams`' line and the dashes after the
+  spawn (`game_init_tail`, off `game::teams::find_teams`).
 - `G_FindTeams` (1.1d 0x4f9c4), Q3's: VERIFIED, the disassembly. Over
   entities 1 up to `level.num_entities` it takes one in use (`+0x160`), with
   a `team` key (`+0x1d8`, a string index) and not yet a slave (`+0x17c` bit
@@ -1038,11 +1039,21 @@ Map commands:
   entities` (VERIFIED). INFERRED: the freed `func_group` is out, the first
   `t2` tramcar leads nothing and is no one's slave, and the string compare
   is case-sensitive, as the disassembly reads.
-- vcod keeps no chains and its banner (`game_init_banner` in `server.rs`)
-  holds a constant `0 teams with 0 entities`, right for every stock map and
-  not for the measured one; it prints the banner before it spawns the
-  entities. Not modelled either: `RespawnItem`'s team pick and its error,
-  and the `func_door` team movers (vcod moves no `func_door`).
+- Measured, 2026-11-16, retail 1.1d, 1.5b and UO, the lump of
+  `crates/server/tests/fixtures/teams/mp_carentan-teams.ent` (the eleven
+  above, then three item teams, an unteamed item and a `script_origin` team
+  of two, cod11-items.md 14.8, cod11-movers.md 25): each server printed `9
+  teams with 19 entities` (VERIFIED, the fixtures' `CONSOLE` lines). The
+  count is taken before `FinishSpawningItem`'s think frees a startsolid
+  item, which a run with one such item showed: it still counted (VERIFIED,
+  the console, `startsolid` printed after the block).
+- vcod: `game::teams::find_teams` chains the lump's entities after the
+  spawn pass on all three (`SpawnRules::find_teams`) and the banner prints
+  its counts; `game::teams_ab` holds the line to the three captures.
+  `func_door` and `func_door_rotating` stay unbuilt, so no team mover
+  (`Think_MatchTeam`, `G_MoverTeam` over a chain with trajectories of its
+  own) runs; vcod frees no startsolid item (`spawn::drop_item_to_floor`
+  keeps it), so on such a map its chains keep a member retail's lose.
 - `map mp_harbor` over rcon from mp_carentan, 2026-11-16 on 1.1d: one
   2248-byte packet, `print\n` then `==== ShutdownGame ====`, `------ Server
   Initialization ------`, `Server: mp_harbor`, `Hunk_Clear: reset the hunk

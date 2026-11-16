@@ -101,6 +101,26 @@ pub fn bsp_with_worldspawn_key(bsp: &[u8], key: &str, value: &str) -> Vec<u8> {
     out
 }
 
+/// An IBSP59 map with `blocks` appended to its entity lump, as
+/// `tools/bsp_append_entities.py` builds it for a retail run: the grown
+/// lump (29) goes at the end of the file and the directory points there.
+pub fn bsp_with_entities(bsp: &[u8], blocks: &str) -> Vec<u8> {
+    let dir = 8 + 29 * 8;
+    let word = |o: usize| u32::from_le_bytes(bsp[o..o + 4].try_into().unwrap()) as usize;
+    let (len, off) = (word(dir), word(dir + 4));
+    let ents = &bsp[off..off + len];
+    let mut lump = ents[..ents.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1)].to_vec();
+    lump.extend(blocks.bytes());
+    lump.push(0);
+    let mut out = bsp.to_vec();
+    out.resize(out.len().next_multiple_of(4), 0);
+    let start = out.len();
+    out.extend(&lump);
+    out[dir..dir + 4].copy_from_slice(&(lump.len() as u32).to_le_bytes());
+    out[dir + 4..dir + 8].copy_from_slice(&(start as u32).to_le_bytes());
+    out
+}
+
 /// A committed capture under this crate's `tests/fixtures/`, by relative path.
 pub fn fixture(rel: &str) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

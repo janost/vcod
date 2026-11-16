@@ -125,6 +125,8 @@ pub struct GEntity {
     /// model, a turret, a brush model): `G_Spawn`'s zeroed 0 until
     /// `G_FreeEntity` frees entity 0 (`GameHost::free_ground_refs`).
     pub ground: i32,
+    /// `G_FindTeams`' links (`crate::game::teams`).
+    pub team: crate::game::teams::TeamLinks,
 }
 
 /// The `gentity` fields `SV_LinkEntity` reads off an entity with no client
@@ -485,6 +487,7 @@ impl ObjectTable {
             link: None,
             unlinked: false,
             ground: 0,
+            team: Default::default(),
         });
         id
     }
@@ -539,6 +542,7 @@ impl ObjectTable {
                 link: None,
                 unlinked: false,
                 ground: 0,
+                team: Default::default(),
             });
         }
         EntId(ENTITYNUM_WORLD, 0)
@@ -648,6 +652,7 @@ impl ObjectTable {
             link: None,
             unlinked: false,
             ground: 0,
+            team: Default::default(),
         });
         Ok(EntId(slot as u32, self.ent_gens[slot]))
     }
@@ -728,6 +733,7 @@ impl ObjectTable {
             link: None,
             unlinked: false,
             ground: 0,
+            team: Default::default(),
         });
         Ok(EntId(FIRST_HUD_ELEM + i as u32, self.hud_gens[i]))
     }
