@@ -1800,39 +1800,6 @@ fn zombie_message(
         .transmit(c.link.last_client_command, &w.into_ops(), huff)
 }
 
-/// One message off a client the snapshot pass does not build for: its
-/// unacked server commands and its last frame repeated under the new
-/// sequence. The packets come back for the caller to address.
-fn resend_last_frame(
-    c: &mut Client,
-    sv_time_ms: i32,
-    proto: &'static Protocol,
-    huff: &Huffman,
-    baselines: &HashMap<u32, msg::EntityState>,
-) -> Vec<Vec<u8>> {
-    let mut w = MsgWriter::new(huff);
-    write_pending_commands(&mut w, &c.link.netchan, c.link.reliable_ack);
-    c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;
-    let message_num = c.link.netchan.outgoing_sequence;
-    if let Some(last) = c.sent_frame(message_num.wrapping_sub(1)) {
-        let frame = snapshot::Snapshot {
-            server_time: sv_time_ms,
-            message_num,
-            delta_num: -1,
-            ..last.clone()
-        };
-        let base = c
-            .sent_frame(c.message_ack.max(0) as u32)
-            .filter(|b| (1..=255).contains(&message_num.saturating_sub(b.message_num)));
-        proto.write_snapshot(&mut w, base, &frame, frame.head(base), baselines);
-        c.record_frame(frame);
-    }
-    c.link.unsent.clear();
-    c.link
-        .netchan
-        .transmit(c.link.last_client_command, &w.into_ops(), huff)
-}
-
 impl Server {
     /// A server whose generator starts from a fixed seed, so a test run
     /// replays the same bot picks, script `randomInt`s and spawn choices.
@@ -4045,10 +4012,16 @@ impl Server {
 
     /// `SV_FinalMessage` (0x808ad8c), which `SV_Shutdown` runs before the
     /// process exits: twice over, every client past `CS_ZOMBIE` is queued
-    /// `e "<message>"` and a bare `w` and sent a snapshot carrying them.
+    /// `e "<message>"` and a bare `w` and sent a snapshot carrying them,
+    /// built fresh as `SV_SendClientSnapshot` builds every one: the clock
+    /// has not moved, the playerstate has (handshake doc, Shutdown).
+    /// Retail thought every cmd it parsed before the shutdown on arrival,
+    /// so the ones vcod still holds for the next tick run first.
     /// The `e` is dropped for a client not yet active.
     fn final_message(&mut self, message: &str) {
         let notice = format!("e \"{message}\"");
+        let moved = self.replay_moves();
+        let snaps = self.snapshots_begin(moved, (None, 0));
         for _ in 0..2 {
             for slot in 0..self.core.clients.len() {
                 if self.core.clients[slot].as_ref().is_none_or(|c| c.is_bot) {
@@ -4056,19 +4029,7 @@ impl Server {
                 }
                 self.send_server_command(slot, &notice);
                 self.send_server_command(slot, "w");
-                let Some(c) = self.core.clients[slot].as_mut() else {
-                    continue;
-                };
-                let sent = resend_last_frame(
-                    c,
-                    self.core.sv_time_ms,
-                    self.game.proto,
-                    &self.core.huff,
-                    &self.game.baselines,
-                );
-                self.core
-                    .outbox
-                    .extend(sent.into_iter().map(|p| (c.link.addr, p)));
+                self.send_client_snapshot(slot, &snaps);
             }
         }
     }
@@ -13730,6 +13691,67 @@ mod tests {
         );
         sv.tick(t);
         assert!(sv.take_outgoing().is_empty());
+    }
+
+    /// `SV_FinalMessage`'s snapshots are built fresh off a clock that has
+    /// not moved: a cmd parsed after the last frame shows in their
+    /// `commandTime`, as on 1.1d (handshake doc, Shutdown).
+    #[test]
+    fn the_final_snapshots_carry_the_cmds_parsed_since_the_frame() {
+        let t = Instant::now();
+        let mut sv = Server::new(cfg(), t);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+            spawn_points: Vec::new(),
+            hazards: Vec::new(),
+            rubble: Vec::new(),
+            nav_cover: Vec::new(),
+        });
+        sv.set_cvar("rconpassword", "pw");
+        let huff = Huffman::new();
+        let p = &PROTOCOL_V1;
+        let mut nc = begun(&mut sv, t);
+        let mut ring = SnapshotRing::new();
+        let mut send_cmd = |sv: &mut Server, nc: &mut Netchan, server_time: i32, at: Instant| {
+            let ack = nc.incoming_sequence as i32;
+            let cmd = UserCmd {
+                server_time,
+                ..Default::default()
+            };
+            let ops = move_ops(sv.core.checksum_feed, ack, cmd);
+            sv.handle_packet(
+                addr(5),
+                &nc.build_out(0x10, ack, 0, &ops, &huff).unwrap(),
+                at,
+            );
+        };
+        let at = t + Duration::from_millis(50);
+        send_cmd(&mut sv, &mut nc, 40, at);
+        let last = latest_snapshot(&mut sv, &mut nc, &mut ring, at);
+        assert_eq!(last.ps.field_i32(p, "commandTime"), 40);
+        send_cmd(&mut sv, &mut nc, 45, at);
+        sv.handle_packet(addr(9), &oob("rcon pw quit"), at);
+        let out = sv.take_outgoing();
+        assert_eq!(out.len(), 2);
+        for (_, pkt) in out {
+            let msgbytes = nc.process_in(&pkt, &huff).unwrap().unwrap();
+            let mut r = MsgReader::new(&msgbytes[4..], &huff);
+            loop {
+                match r.read_byte() {
+                    msg::SVC_SERVER_COMMAND => {
+                        r.read_long();
+                        r.read_big_string();
+                    }
+                    SVC_SNAPSHOT => break,
+                    op => panic!("op {op} before the snapshot"),
+                }
+            }
+            let s = ring.parse_into(&mut r, p, nc.incoming_sequence).unwrap();
+            assert_eq!(s.server_time, last.server_time);
+            assert_eq!(s.ps.field_i32(p, "commandTime"), 45);
+        }
     }
 
     /// A stdin line reaches the game's cvars and `quit` ends the server,
