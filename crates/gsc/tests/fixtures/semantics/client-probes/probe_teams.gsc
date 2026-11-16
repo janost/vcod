@@ -11,7 +11,8 @@
 //	seconds, and each movedone as it comes.
 //
 //	Then a script_origin is the user. Each teamed item is used six
-//	times 50 ms apart: w1b (a slave of the item w1a), w2d (a slave of the
+//	times 50 ms apart: w1b (a slave of the item w1a, whose third member w1c
+//	starts solid and is freed by FinishSpawningItem), w2d (a slave of the
 //	script_origin w2m) and w3f (a slave of the func_tramcar w3t, its own
 //	teammaster); then the unteamed item solo once; then w1a, the master of
 //	w1, whose null teammaster is `G_Error`'s. The pick and the draw behind
@@ -20,7 +21,7 @@
 //	PROBE mover <time> <m1a origin> <m1b origin>
 //	PROBE movedone <name> <time>
 //	PROBE user <num>
-//	PROBE ent <targetname> <num>
+//	PROBE ent <targetname> <num> <origin>   none for a freed one
 //	PROBE use <targetname> <time>
 //	PROBE master <time>
 //	PROBE survived                 not reached on retail
@@ -57,7 +58,7 @@ run()
 	{
 		e = getent(names[i], "targetname");
 		if (isdefined(e))
-			logPrint("PROBE ent " + names[i] + " " + e getEntityNumber() + "\n");
+			logPrint("PROBE ent " + names[i] + " " + e getEntityNumber() + " " + e.origin + "\n");
 		else
 			logPrint("PROBE ent " + names[i] + " none\n");
 	}
