@@ -1197,10 +1197,8 @@ impl Cod4Level {
         // What the next frame's script traces cut.
         _p = crate::tick_profile::phase("frame/trace bodies");
         let bodies = self.bodies(usize::MAX);
-        let posed = self.posed_bodies();
         let c4 = self.rt.host.cod4_mut();
         c4.trace_bodies = bodies;
-        c4.posed_bodies = posed;
         c4.trace_brushes = self.brushes.clone();
         _p = crate::tick_profile::phase("frame/mantle and hud");
         self.run_mantle_blocks();
@@ -1218,6 +1216,11 @@ impl Cod4Level {
                 self.client_end_frame(slot);
             }
         }
+        // The next frame's scripts read the bodies with the clips these end
+        // frames set, at this frame's node time: a spawned body's idle is
+        // there a frame after its spawn, as retail's (cod4-player-anims.md 3).
+        let posed = self.posed_bodies();
+        self.rt.host.cod4_mut().posed_bodies = posed;
         self.record_positions();
         // `CheckTeamStatus`'s `TeamplayInfoMessage`: `stats[3]`
         // -1 for every client not following; the wire's 6 bits read 63

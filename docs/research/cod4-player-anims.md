@@ -97,11 +97,16 @@ not yet confirmed on 1.7.
   script runs. vcod's server poses a body carrying 0 in no clip, where
   it had posed the stance's idle; no gate moved. VERIFIED (the gates).
   The same capture shows the head tag posed at the spawn's next frame
-  (37900, 56.6443 over the origin) where vcod-server's still reads the
-  bind pose (63.521) and poses it a frame later, on the same phase from
-  there (56.5362, 56.428, 56.3196 on both). VERIFIED (a probe gsc logging
-  `getTagOrigin("j_head")` each frame on both servers). Why ours is a
-  frame late there is open.
+  (37900, 56.6443 over the origin, then 56.5362, 56.428, 56.3196): a
+  script reads the clips the last end frames set, at their frame's node
+  time. VERIFIED (a probe gsc logging `getTagOrigin("j_head")` each frame).
+  vcod-server had posed the bodies the scripts read ahead of the end
+  frames, so a new clip reached them a frame late: the bind pose (63.521)
+  at the spawn's next frame with or without the stance's idle, then the
+  same phase. It now poses them after the end frames, and its heads read
+  retail's 56.6443, 56.5362, 56.428, 56.3196 from the spawn's next frame
+  (the horizontal offset follows each spawn's own yaw). VERIFIED (the
+  probe on both servers).
 - `lerp.u.player.movementDir` is a signed byte of degrees, clamped to
   +-90. INFERRED (`PM_SetMovementDir`,
   `BG_PlayerStateToEntityState`).
