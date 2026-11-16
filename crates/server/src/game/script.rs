@@ -4444,14 +4444,19 @@ pub type Bounds = ([f32; 3], [f32; 3]);
 impl ScriptRuntime {
     /// A client's `sessionteam`, as a test sets it (`Server::test_set_client_team`).
     pub fn set_client_team_for_test(&mut self, slot: usize, team: &str) {
+        self.set_client_string_for_test(slot, "sessionteam", team);
+    }
+
+    /// Writes one string field of a client's entity, as a script would.
+    pub fn set_client_string_for_test(&mut self, slot: usize, name: &str, value: &str) {
         use vcod_gsc::Host;
         let Some(ent) = self.client_entity(slot) else {
             return;
         };
         let host = &mut self.host;
         self.vm.with_cx(|cx| {
-            let field = cx.intern_folded("sessionteam");
-            let v = Value::String(cx.intern_exact(team));
+            let field = cx.intern_folded(name);
+            let v = Value::String(cx.intern_exact(value));
             host.set_field(cx, ent, field, v).unwrap();
         });
     }

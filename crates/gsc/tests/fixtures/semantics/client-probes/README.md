@@ -1634,7 +1634,9 @@ cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-compass --probe-secs 60
 ```
 
 The `PROBE step` lines carry slot 1's origin; slot 0's `COMPASS` lines carry
-what it was sent. Against ours: `vcod-server mp_harbor --gametype-script
+what it was sent. `+set probe_wander_slot0 1` (ours: `--set
+probe_wander_slot0=1`) swaps the roles, slot 0 wandering, for the
+end-frame order (2026-11-16). Against ours: `vcod-server mp_harbor --gametype-script
 crates/gsc/tests/fixtures/semantics/client-probes/probe_compass.gsc`.
 
 ## probe_suicide

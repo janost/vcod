@@ -437,6 +437,10 @@ pub struct ClientSim {
     /// `ps.eFlags` 0x100000: that teammate's `pingPlayer` bit, which the
     /// compass flashes on.
     pub friend_ping: bool,
+    /// Whether this client's entity read as a compass candidate when its
+    /// last end frame wrote it (`s.eType` 1, no `s.eFlags` 2): what a lower
+    /// slot's compass reads of it, its own end frame not yet run.
+    pub compass_candidate: bool,
     /// The last cmd's angles, retail's `pers.cmd.angles`, which
     /// `set_view_angle` rewrites `delta_angles` against.
     last_cmd_angles: [i32; 3],
@@ -710,6 +714,7 @@ impl ClientSim {
             compass_friend: 0,
             last_friend: 0,
             friend_ping: false,
+            compass_candidate: false,
             last_cmd_angles: cmd_angles,
             contents: 0,
             linked_solid: 0,

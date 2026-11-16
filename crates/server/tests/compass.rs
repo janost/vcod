@@ -88,3 +88,65 @@ fn an_out_of_view_teammate_is_packed_as_retail_packs_it() {
     // In view: nothing.
     assert_eq!(after(&mut sv, Some([-6784.0, -7416.0, 0.125])).0, 0);
 }
+
+/// Each slot's end frame packs its compass in slot order, reading a higher
+/// slot's entity as its last end frame left it: a lower viewer loses a
+/// teammate who left `playing` a frame late, a higher viewer at once
+/// (retail 1.1d, `client-probes/probe_compass` either way round,
+/// cod11-hud-protocol.md, "Compass friendlies").
+#[test]
+fn a_lower_slot_reads_a_higher_ones_end_frame_a_frame_late() {
+    for dies_high in [true, false] {
+        let mut now = Instant::now();
+        let Some(mut sv) = server(now) else {
+            return;
+        };
+        let qa = Rc::new(RefCell::new(Queues::default()));
+        let qb = Rc::new(RefCell::new(Queues::default()));
+        let (mut ca, mut cb) = common::join_pair(
+            &mut sv,
+            &qa,
+            &qb,
+            &mut now,
+            ("allies", "mosin_nagant_mp"),
+            ("allies", "mosin_nagant_mp"),
+        );
+        let p = &PROTOCOL_V1;
+        let num = |c: &vcod_common::net::NetClient<common::ClientEnd>| {
+            c.snapshots().newest().unwrap().ps.field_i32(p, "clientNum") as usize
+        };
+        let (na, nb) = (num(&ca), num(&cb));
+        assert!(na < nb);
+        sv.place_client(na, [-7352.0, -7976.0, 0.125], 0.0);
+        sv.place_client(nb, [-8136.0, -7712.0, 0.125], 0.0);
+        let mut step = |sv: &mut vcod_server::Server, frames: usize| {
+            for _ in 0..frames {
+                now += Duration::from_millis(50);
+                ca.send_frame(&NULL_USERCMD);
+                cb.send_frame(&NULL_USERCMD);
+                common::step_pair(sv, (&qa, &mut ca), (&qb, &mut cb), now);
+            }
+            let info = |c: &vcod_common::net::NetClient<common::ClientEnd>| {
+                c.snapshots()
+                    .newest()
+                    .unwrap()
+                    .ps
+                    .field_i32(p, "iCompassFriendInfo")
+            };
+            (info(&ca), info(&cb))
+        };
+        let (a, b) = step(&mut sv, 3);
+        assert!(a != 0 && b != 0, "both out of view: {a:#x} {b:#x}");
+        sv.test_set_client_session(if dies_high { nb } else { na }, "dead");
+        let (a, b) = step(&mut sv, 1);
+        if dies_high {
+            assert_ne!(a, 0, "the lower viewer still reads the higher slot");
+        } else {
+            assert_eq!(b, 0, "the higher viewer reads the lower slot's end frame");
+        }
+        let (a, _) = step(&mut sv, 1);
+        if dies_high {
+            assert_eq!(a, 0, "a frame later");
+        }
+    }
+}

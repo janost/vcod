@@ -1700,7 +1700,14 @@ fn compass_friend(
     let found = compass::next_friend(sim.last_friend, [eye[0], eye[1]], |n| {
         let c = clients.get(n)?.as_ref()?;
         let other = c.sim.as_ref()?;
-        if sessions[n] != Some(Playing) || other.pm_type != PmType::Normal || teams[n] != team {
+        // A higher slot's entity is as its last end frame wrote it: its own
+        // has not run yet (cod11-hud-protocol.md, "Compass friendlies").
+        let live = if n < slot {
+            sessions[n] == Some(Playing) && other.pm_type == PmType::Normal
+        } else {
+            other.compass_candidate
+        };
+        if !live || teams[n] != team {
             return None;
         }
         // No map: nothing to cull against, so everything is in view.
@@ -3218,6 +3225,13 @@ impl Server {
     pub fn test_set_client_team(&mut self, slot: usize, team: &str) {
         if let Some(rt) = self.game.module.script.as_mut() {
             rt.set_client_team_for_test(slot, team);
+        }
+    }
+
+    /// Writes a client's `sessionstate` as a script would. Test-facing.
+    pub fn test_set_client_session(&mut self, slot: usize, state: &str) {
+        if let Some(rt) = self.game.module.script.as_mut() {
+            rt.set_client_string_for_test(slot, "sessionstate", state);
         }
     }
 

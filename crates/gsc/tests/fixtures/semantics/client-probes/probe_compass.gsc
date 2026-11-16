@@ -2,7 +2,8 @@
 //	two `--net-probe --probe-compass` clients: slot 0 stands at a spawn as
 //	the viewer, slot 1 is its allied teammate and is moved about. Each
 //	`PROBE step` line says where slot 1 is and what it is; the viewer's
-//	`COMPASS` lines are the measurement. See this directory's README.md,
+//	`COMPASS` lines are the measurement (`probe_wander_slot0 1` swaps the
+//	two). See this directory's README.md,
 //	"probe_compass".
 
 main()
@@ -34,7 +35,11 @@ Callback_PlayerConnect()
 	self spawn(sp.origin, sp.angles);
 	logPrint("PROBE begin " + n + " at " + sp.origin + " yaw " + sp.angles[1] + "\n");
 	level.joined++;
-	if(n == 1)
+	//	`probe_wander_slot0 1` swaps the roles: slot 0 wanders, slot 1 views.
+	wanderer = 1;
+	if(getcvarint("probe_wander_slot0"))
+		wanderer = 0;
+	if(n == wanderer)
 		self thread wander();
 }
 

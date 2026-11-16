@@ -2339,9 +2339,27 @@ snapshot's yaw, and the packed one, with the compass turned by the view yaw
 from each playing or dead client's end frame (`crate::compass`,
 `compass_friend` in `server.rs`). Its candidates are the clients whose
 `sessionstate` is `playing` and whose sim is a live player, what the probe
-saw retail answer for. It reads every teammate's state as of this frame,
-where retail reads a higher slot's as its last end frame left it, and skips
-the area check, which stock maps never fail.
+saw retail answer for. It skips the area check, which stock maps never
+fail.
+
+VERIFIED, `ClientThink_real` (1.1d 0x405c4..0x40606): every cmd writes the
+player's `r.currentOrigin` from `ps.origin` and `r.currentAngles` as (0,
+`ps.viewangles[YAW]`, 0), so the offsets and the yaw the packing reads are
+the teammate's latest cmd's. INFERRED: only `s.eType` and `s.eFlags`, which
+`ClientEndFrame` copies out of the playerstate, lag for a slot whose end
+frame has not yet run.
+
+VERIFIED live, 2026-11-16, retail 1.1d mp_harbor, `probe_compass` as above
+and again with `+set probe_wander_slot0 1` (slot 0 wanders, slot 1 views):
+with slot 1 wandering, his `pm_type` read 6 on 36300 (the dead session) and
+slot 0's field went to 0 on 36350, his `pingPlayer` bit 0x80000 rose on
+28300 and slot 0's 0x100000 on 28350; with slot 0 wandering, both reached
+slot 1 on the same snapshot (37200, 29200). vcod now reads a higher slot's
+candidacy (`playing`, `pm_type` normal) as that slot's last end frame left
+it (`ClientSim::compass_candidate`) and a lower one's as this frame's, as
+it already did the ping bit, and printed the same two sequences under the
+same runs (it lost the teammate on the same snapshot before). Gated by
+`compass::a_lower_slot_reads_a_higher_ones_end_frame_a_frame_late`.
 
 ### Cursor hint
 
