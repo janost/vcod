@@ -232,64 +232,63 @@ impl Shape {
             (Vec::new(), Vec::new(), Vec::new());
         let mut sweep_half = 0.0;
         for (gi, g) in list.geoms.iter().enumerate() {
-            'geom: {
-                if let Some(b) = &g.brush {
-                    let (lo, hi) = (Vec3::from(b.mins), Vec3::from(b.maxs));
-                    let (c, h) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
-                    sweep_half = brush_sweep_half(lo, hi);
-                    // A brush no side cuts is its bounds' box.
-                    let cut = (!b.planes.is_empty())
-                        .then(|| brush_corners(b))
-                        .filter(|cut| {
-                            let at_bounds =
-                                |p: &Vec3| ((*p - c).abs() - h).abs().max_element() < 0.01;
-                            !(cut.len() == 8 && cut.iter().all(at_bounds))
-                        });
-                    match cut {
-                        Some(cut) => points.extend(cut),
-                        None => {
-                            points.extend(corners(c, Mat3::IDENTITY, h));
-                            boxes.push(ShapeBox::new(c, Mat3::IDENTITY, h));
+            if let Some(b) = &g.brush {
+                let (lo, hi) = (Vec3::from(b.mins), Vec3::from(b.maxs));
+                let (c, h) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
+                sweep_half = brush_sweep_half(lo, hi);
+                // A brush no side cuts is its bounds' box.
+                let cut = (!b.planes.is_empty())
+                    .then(|| brush_corners(b))
+                    .filter(|cut| {
+                        let at_bounds = |p: &Vec3| ((*p - c).abs() - h).abs().max_element() < 0.01;
+                        !(cut.len() == 8 && cut.iter().all(at_bounds))
+                    });
+                match cut {
+                    Some(cut) => points.extend(cut),
+                    None => {
+                        points.extend(corners(c, Mat3::IDENTITY, h));
+                        boxes.push(ShapeBox::new(c, Mat3::IDENTITY, h));
+                    }
+                }
+                point_geoms.resize(points.len(), gi);
+                box_geoms.resize(boxes.len(), gi);
+                continue;
+            }
+            let axis = Mat3::from_cols(
+                g.orientation[0].into(),
+                g.orientation[1].into(),
+                g.orientation[2].into(),
+            );
+            let at = Vec3::from(g.offset);
+            let h = Vec3::from(g.half_lengths);
+            match g.kind {
+                GEOM_BOX => {
+                    points.extend(corners(at, axis, h));
+                    boxes.push(ShapeBox::new(at, axis, h));
+                    sweep_half = h.min_element();
+                }
+                // The axis is the first row (0x5a55f0 gives the geom axis
+                // 1, the rotation's first column), `halfLengths` the half
+                // height and the radius.
+                GEOM_CYLINDER => {
+                    for end in [-h.x, h.x] {
+                        for i in 0..RING {
+                            let a = i as f32 * std::f32::consts::TAU / RING as f32;
+                            let local = Vec3::new(end, h.y * a.cos(), h.y * a.sin());
+                            points.push(at + axis * local);
                         }
                     }
-                    break 'geom;
+                    cylinders.push(ShapeCylinder {
+                        centre: at,
+                        axis: axis.x_axis.normalize_or(Vec3::X),
+                        radius: h.y,
+                        half: h.x,
+                    });
+                    // 0x5a688b: the radius over root 2, or the half
+                    // height when less.
+                    sweep_half = (h.y * std::f32::consts::FRAC_1_SQRT_2).min(h.x);
                 }
-                let axis = Mat3::from_cols(
-                    g.orientation[0].into(),
-                    g.orientation[1].into(),
-                    g.orientation[2].into(),
-                );
-                let at = Vec3::from(g.offset);
-                let h = Vec3::from(g.half_lengths);
-                match g.kind {
-                    GEOM_BOX => {
-                        points.extend(corners(at, axis, h));
-                        boxes.push(ShapeBox::new(at, axis, h));
-                        sweep_half = h.min_element();
-                    }
-                    // The axis is the first row (0x5a55f0 gives the geom axis
-                    // 1, the rotation's first column), `halfLengths` the half
-                    // height and the radius.
-                    GEOM_CYLINDER => {
-                        for end in [-h.x, h.x] {
-                            for i in 0..RING {
-                                let a = i as f32 * std::f32::consts::TAU / RING as f32;
-                                let local = Vec3::new(end, h.y * a.cos(), h.y * a.sin());
-                                points.push(at + axis * local);
-                            }
-                        }
-                        cylinders.push(ShapeCylinder {
-                            centre: at,
-                            axis: axis.x_axis.normalize_or(Vec3::X),
-                            radius: h.y,
-                            half: h.x,
-                        });
-                        // 0x5a688b: the radius over root 2, or the half
-                        // height when less.
-                        sweep_half = (h.y * std::f32::consts::FRAC_1_SQRT_2).min(h.x);
-                    }
-                    _ => {}
-                }
+                _ => {}
             }
             point_geoms.resize(points.len(), gi);
             box_geoms.resize(boxes.len(), gi);
