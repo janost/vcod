@@ -773,7 +773,8 @@ Not determined:
   clip's time (`place_gunner_at`, `ClientSim::legs_seconds`), all 362 match
   (VERIFIED, `ownline_ab`). INFERRED, the match: the delta reads each leaf's
   root at the group's own time. The other leaves carry one key, so the
-  time moves nothing there.
+  time moves nothing there. The client's placement reads the same time off
+  its own legs clock (14.7).
 - The body's yaw. VERIFIED, 7.1: `BG_PlayerStateToEntityState` is called at a
   lower address than the `AxisToAngles` store. INFERRED: the entity state is
   built before the store, so the yaw never reaches the wire. vcod blends the
@@ -2423,9 +2424,36 @@ return to the spot, and the gunner's attachments logged at his placement
 - **Open: the mount's blend in.** The standing mount's first five frames
   (19250 to 19450) read 0.01 to 1.4 units off, falling each frame, and
   2.9 for a cell that grazes; the crouched mount's first frame (32750) up
-  to 11.3, then exact. UO and 1.5b read their mounts exactly. Not run down:
-  the clip under the mount, its blend time and the group's first frame are
-  the candidates.
+  to 11.3, then exact. UO and 1.5b read their mounts exactly. Not run
+  down; ruled out (2026-11-16):
+  - The origin. vcod measurement: ours' placement on every frame from
+    the mount (19150 to 19650, 32750 to 32950) reads the capture's
+    `exact=` origin in x and y to the float, z within 1e-5.
+  - The idle's blend time. VERIFIED, 1.1d `game.mp.i386.so` 0x2a600 (the
+    setter): with no `+0x40` blend of its own (VERIFIED,
+    `mp/playeranim.script` gives the turret anims none) a legs change
+    whose crouched (`+0x54 & 0xc4`, 0x2a740) or prone (`+0x54 & 0x308`,
+    0x2a7ad) class differs takes 250 ms (0x2a817) when the new anim has no
+    `moveSpeed` (`+0x44`) and no turn bits (`+0x55 & 0xc0`), 200 otherwise
+    (0x2a80a); one in the same class takes 120 into a moving anim
+    (0x2a82a), else 170 (0x2a835), or 250 out of a moving one (0x2a849).
+    INFERRED: the standing mount (`pb_stand_alert` to `standMG42_aim`,
+    which the script plays under `idle` and `idlecr`) blends over 250 ms
+    and the crouched one over 170, as ours does (`animclock::blend_ms`).
+    vcod measurement: with the turret anims' blend forced to 170, 200,
+    300, 350 or 400 ms, or the blend's start moved 25 or 50 ms later, the
+    standing mount's window stays or widens; at 170 ours' idle is out by
+    19400 and 19450 reads off as it does at 250, so the last frames' miss
+    is not the idle's weight.
+  - The order of the legs layers. vcod measurement: walking the idle and
+    the group in anim index order instead of the clock's moves no cell.
+  - The first pass's goal times. VERIFIED, 0x517f7..0x51812: the row's
+    goal 1.0 at time 1.0 and rate 1.0, as on UO.
+
+  Left: the group's own pose while its node ramps in on 1.1d (its rows
+  and leaves as the tree carries them through the blend), and the
+  crouched mount's first frame, where ours reads the crouch idle at
+  weight 1 and the group at 0.001.
 
 ### 13.10 Two gunners in each other's arc
 
@@ -2979,6 +3007,24 @@ INFERRED: the leaves' root yaw cancels the barrel's, so the body stays
 square to the gun and the column blend swings the arms after the barrel;
 the server's view yaw, which follows the barrel, would turn the whole body
 instead.
+
+VERIFIED, `cgame_mp_x86.dll` (1.1): `CG_Player` calls the clip step
+0x30004e40 at 0x300282b4 and, on an `eFlags & 0xc000` test, the placement
+0x300279b0 at 0x300282c5. INFERRED: the placement's `XAnimCalcAbsDelta`
+reads the legs clips as this frame's step left them, so a firing gunner's
+`fire_30left` leaves give their root at the clip's time, as on the server
+(7.2). vcod: `entities::place_body` takes the legs clip's seconds after
+this frame's step (`gunner_legs_seconds`, the step run on a copy of the
+clocks ahead of the pose's own). VERIFIED, vcod measurement
+(`entities::gunner_ab`, the client's tests): vcod-server runs the ownline
+sweep with the trigger held (7.2) and a spectator over the gun; drawn at
+each snapshot's time and fed the server's own origin, the client places
+the gunner where the server does on all 361 mounted frames to 2.5e-4;
+read at frame 0, 97 sit off. The drawn body starts from the entity's
+snapped `pos.trBase` instead, 0.875 units over the server's z on
+mp_carentan's floor, which moves the row blend: the drawn spot sits about
+0.09 units off the server's horizontally. INFERRED: a retail client draws
+off the same snapped origin, the only one the cgame gets.
 
 ### 14.8 The 1.5 and UO replay
 

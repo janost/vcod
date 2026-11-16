@@ -2258,13 +2258,7 @@ impl ClientSim {
     /// The clip time, in seconds, of the legs anim now playing at level
     /// time `now_ms`; 0 when its clock has none.
     pub fn legs_seconds(&self, now_ms: i32) -> f32 {
-        let legs = self.anim.legs() & !0x200;
-        self.pose
-            .legs_clock
-            .layers(now_ms)
-            .iter()
-            .find(|l| l.index == legs)
-            .map_or(0.0, |l| l.seconds)
+        self.pose.legs_clock.seconds_of(self.anim.legs(), now_ms)
     }
 
     /// The wire `legsAnim`, restart bit included.

@@ -90,6 +90,11 @@ pub struct Cod1Game {
     /// `SV_AddTestClient`'s process-wide `bot%d` counter (cod_lnxded
     /// 0x80e2f9c), which `addTestClient` advances through the host's copy.
     pub(super) test_client_counter: u32,
+    /// The slots a UDP client's connect ever took, bit per slot: their
+    /// `netchan.remoteAddress` is an IP for good, which
+    /// `SV_DirectConnect`'s reconnect check never matches against a test
+    /// client's (cod11-gsc-object-model.md 25).
+    pub(super) udp_slots: u64,
     /// The frames the killcam replays, kept while script has `setarchive`
     /// on and cleared by every level load (`crate::archive`).
     pub(super) archive: crate::archive::Archive,
@@ -247,6 +252,8 @@ pub(super) struct Lend<'a> {
     pub(super) archive: &'a mut crate::archive::Archive,
     /// `SV_AddTestClient`'s `bot%d` counter.
     pub(super) test_client_counter: &'a mut u32,
+    /// [`Cod1Game::udp_slots`].
+    pub(super) udp_slots: u64,
 }
 
 /// What a game frame hands the engine to send.
