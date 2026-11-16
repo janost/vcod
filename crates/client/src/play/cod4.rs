@@ -13355,7 +13355,8 @@ pub(crate) mod tests {
                         (met == Some(n)).then_some((n, o, at, (end - start).normalize()))
                     });
                     if let Some((n, o, at, dir)) = hit {
-                        assert!(s.physics.shoot(n, at, dir, 1000.0));
+                        let msec0 = s.dynents.as_ref().map_or(17, |d| d.clock.step_ms);
+                        assert!(s.physics.shoot(n, at, dir, 1000.0, msec0));
                         shot = Some((n, o, false, o));
                     }
                 }

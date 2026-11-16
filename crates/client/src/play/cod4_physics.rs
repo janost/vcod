@@ -133,10 +133,12 @@ impl Cod4Physics {
             time,
         );
         let force = vec3(e, "lerp.apos.trDelta");
+        // World 1's `msecStep` (the `push 0x1` into 0x5a5a20 at 0x434dda).
         b.launch(
             vec3(e, "lerp.pos.trDelta"),
             force,
             m.preset.bullet_force_scale,
+            self.clock.step_ms,
             &self.dvars,
         );
         b
@@ -145,15 +147,15 @@ impl Cod4Physics {
     /// A client-side round's first contact `at` on entity `n`, along
     /// `dir`: a part that flies takes `Phys_ObjBulletImpact` at `force`
     /// (`dynEnt_bulletForce`) and its preset's `bulletForceScale`
-    /// (0x48df10, from the round's walk at 0x455b92). Retail passes world
-    /// 0 for the part's world 1 (0x48e043), which only picks the
-    /// `msecStep` the impulse is spread over; vcod's impulse is whole.
-    /// Whether one took it.
-    pub fn shoot(&mut self, n: u32, at: Vec3, dir: Vec3, force: f32) -> bool {
+    /// (0x48df10, from the round's walk at 0x455b92). Retail names world
+    /// 0 for the part's world 1 (0x48e043): the push is a force at world
+    /// 0's `msecStep`, `msec0` (the dynamic entities' clock), spent over
+    /// world 1's next step. Whether one took it.
+    pub fn shoot(&mut self, n: u32, at: Vec3, dir: Vec3, force: f32, msec0: i32) -> bool {
         let Some((body, scale)) = self.parts.get_mut(&n).and_then(|p| p.body.as_mut()) else {
             return false;
         };
-        body.launch(at, dir * force, *scale, &self.dvars);
+        body.launch(at, dir * force, *scale, msec0, &self.dvars);
         true
     }
 

@@ -264,21 +264,13 @@ fn parts_dropped_edge_first_on_backlots_steps_rest_clear_of_them() {
     assert!(problems.is_empty(), "{problems:#?}");
 }
 
-/// The row of [`parts_dropped_edge_first_on_backlots_steps_rest_clear_of_them`]
-/// dropped all at once, its 36 bodies in one physics world 1 at 16 ms
-/// frames: the world's `msecStep` off the count awake after each step
-/// (`msec_step`, 0x5a6738) is 28 ms while all 36 fly and comes down to 17
-/// as they sleep, and each still rests clear of the steps.
-#[test]
-fn parts_dropped_together_step_at_world_ones_msec_step() {
-    let (Some(install), Some(common)) = (cod4_install(), zone("common_mp")) else {
-        return;
-    };
-    let (m, walked) = Map::load(&install, "english", "mp_backlot").unwrap();
-    let clip = ClipMap::from_assets(&walked.assets).unwrap();
-    let parts = part_models(&[&walked.assets, &common]);
-    let edges = steps(&m, &clip);
-    let d = Dvars::default();
+/// The first row's 36 drops as bodies made at time 0: the sedan hood and
+/// left front door 24 units over each of the first six step edges, across,
+/// along and at 45 degrees, tipped 30. Each with its name and origin.
+fn dropped_together(
+    parts: &std::collections::HashMap<String, std::sync::Arc<vcod_cod4::physics::PartModel>>,
+    edges: &[(Vec3, Vec3)],
+) -> Vec<(String, Vec3, Body)> {
     let mut bodies = Vec::new();
     for name in [
         "vehicle_80s_sedan1_green_hood",
@@ -297,6 +289,25 @@ fn parts_dropped_together_step_at_world_ones_msec_step() {
         }
     }
     assert_eq!(bodies.len(), 36);
+    bodies
+}
+
+/// The row of [`parts_dropped_edge_first_on_backlots_steps_rest_clear_of_them`]
+/// dropped all at once, its 36 bodies in one physics world 1 at 16 ms
+/// frames: the world's `msecStep` off the count awake after each step
+/// (`msec_step`, 0x5a6738) is 28 ms while all 36 fly and comes down to 17
+/// as they sleep, and each still rests clear of the steps.
+#[test]
+fn parts_dropped_together_step_at_world_ones_msec_step() {
+    let (Some(install), Some(common)) = (cod4_install(), zone("common_mp")) else {
+        return;
+    };
+    let (m, walked) = Map::load(&install, "english", "mp_backlot").unwrap();
+    let clip = ClipMap::from_assets(&walked.assets).unwrap();
+    let parts = part_models(&[&walked.assets, &common]);
+    let edges = steps(&m, &clip);
+    let d = Dvars::default();
+    let mut bodies = dropped_together(&parts, &edges);
     let mut clock = WorldClock::new(1);
     clock.start(0);
     let (mut trace, mut solids) = (clip_trace(&clip), clip_solids(&clip));
@@ -352,6 +363,65 @@ fn parts_dropped_together_step_at_world_ones_msec_step() {
         }
     }
     assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// A round on a launched part names world 0 (0x48e043) while world 1 steps
+/// the part: `Phys_ObjAddForce` (0x5a5900) puts its push on as a force at
+/// world 0's `msecStep`, and world 1's next step spends it. With the 36
+/// parts of [`parts_dropped_together_step_at_world_ones_msec_step`] in
+/// flight world 1 steps 28 ms, so a round at world 0's 17 moves a part 28
+/// / 17 times what the same round at world 1's own 28 does; as one whole
+/// impulse each moved it the same.
+#[test]
+fn a_round_on_a_flying_part_is_a_force_at_world_zeros_msec_step() {
+    let (Some(install), Some(common)) = (cod4_install(), zone("common_mp")) else {
+        return;
+    };
+    let (m, walked) = Map::load(&install, "english", "mp_backlot").unwrap();
+    let clip = ClipMap::from_assets(&walked.assets).unwrap();
+    let parts = part_models(&[&walked.assets, &common]);
+    let edges = steps(&m, &clip);
+    let d = Dvars::default();
+    let mut bodies = dropped_together(&parts, &edges);
+    let mut clock = WorldClock::new(1);
+    clock.start(0);
+    let (mut trace, mut solids) = (clip_trace(&clip), clip_solids(&clip));
+    let mut t = 0;
+    while clock.step_ms != 28 {
+        t += 16;
+        clock.advance(t, &d, |ms, until, first, dv| {
+            for (_, _, b) in bodies.iter_mut() {
+                if first {
+                    b.begin_frame();
+                }
+                b.step_world(ms, until, &mut trace, &mut solids, dv);
+            }
+            bodies.iter().filter(|(_, _, b)| !b.asleep).count()
+        });
+    }
+    let (name, _, b) = &bodies[0];
+    let scale = parts["vehicle_80s_sedan1_green_hood"]
+        .preset
+        .bullet_force_scale;
+    // A round slanting down at the part's centre along +x, at
+    // `dynEnt_bulletForce`'s 1000.
+    let dir = Vec3::new(1.0, 0.0, -0.3).normalize();
+    let mut moved = |msec: i32| {
+        let (mut shot, mut still) = (b.clone(), b.clone());
+        shot.launch(b.pos, dir * 1000.0, scale, msec, &d);
+        let dv = Dvars {
+            step_ms: clock.step_ms,
+            ..d
+        };
+        for x in [&mut shot, &mut still] {
+            x.step_world(28, t + 28, &mut trace, &mut solids, &dv);
+        }
+        shot.vel - still.vel
+    };
+    let (world0, world1) = (moved(17), moved(28));
+    let ratio = world0.length() / world1.length();
+    println!("{name}: {world0} at world 0, {world1} at world 1, {ratio}");
+    assert!((ratio - 28.0 / 17.0).abs() < 1e-3, "{ratio}");
 }
 
 /// mp_crash's dynamic entities, one def of each model whose shape has a

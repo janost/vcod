@@ -2316,15 +2316,17 @@ nothing. VERIFIED (13.1's census).
   200, 0.1..FLT_MAX, registered at 0x5a41f3); then `Phys_ObjAddForce`
   (0x5a25a1) at the contact of `(0, 0, (min + u (max - min)) falloff
   m' (1 - (m' / 200)^3) 1000 / msecStep)`. `Phys_ObjAddForce` scales by
-  `1000 / msecStep` again for its one step (0x5a5900), so the impulse
-  keeps one such factor. VERIFIED (the code; the x and y the double 0 at
-  0x70adf0 times it). The SP call above lifts a light prop 26 to 53
+  `1000 / msecStep` again (0x5a5900), and the step being collided spends
+  the force over its length (cod4-gsc.md 3.6), so the impulse keeps one
+  such factor when the step is `msecStep` long. VERIFIED (the code; the x
+  and y the double 0 at 0x70adf0 times it). The SP call above lifts a light prop 26 to 53
   units/s per contact at 17 ms. INFERRED (the formula).
 - vcod: `DynEnts::jitter` makes the bodies and hands each body the region
   for its next step; `physics::Body` pushes in its contact pass, on each
   contact a geom keeps (after 0x5a2320's cut on five or more) with a
   normal z of 0.7 or more, by the formula, its random draws off a seed of
-  vcod's, `msecStep` the world's (cod4-gsc.md 3.6, 3.6.1). The contacts
+  vcod's, `msecStep` the world's, the force spent over the step it is
+  collided in (cod4-gsc.md 3.6, 3.6.1). The contacts
   are those vcod's box and cylinder colliders give, ODE's through the
   game's collider on 1.7; a brush with sides, which has no collider in
   vcod, pushes on its points. vcod's. `physicsJitter` on vcod-server
