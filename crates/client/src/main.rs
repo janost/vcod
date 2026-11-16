@@ -730,7 +730,8 @@ struct Args {
     /// breakdown, and with the binoculars; `deploy` (United Offensive,
     /// --probe-weapon mg30cal_mp, `client-probes/probe_uofoot` with `+set
     /// probe_spot mound`) deployed standing after a prone up and a prone
-    /// down the mound, pitched past the clamp. Tag the fixture
+    /// down the mound, pitched past the clamp; `deploy-crouch` the same
+    /// crouched (`probe_spot moundcrouch`). Tag the fixture
     /// `pronemove-<part>-<version>`; moves_ab.rs and animtimers_ab.rs
     /// replay it.
     #[arg(long, value_enum, value_name = "PART")]

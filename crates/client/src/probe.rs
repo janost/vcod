@@ -7656,6 +7656,7 @@ fn write_slope_fixture(
             ProneMove::Lmg => ("probe_prone", "street +set probe_binoculars 1"),
             ProneMove::Rifle => ("probe_prone", "street"),
             ProneMove::Deploy => ("probe_uofoot", "mound"),
+            ProneMove::DeployCrouch => ("probe_uofoot", "moundcrouch"),
         };
         out.push_str(&format!(
             "# Captured with {env}tools/run_probe.sh client-probes/{probe} {map} +set probe_teleport 1\n\
@@ -8271,6 +8272,9 @@ pub enum ProneMove {
     /// stood up, the bipod deployed standing and the view pitched past both
     /// clamps; then the same from a prone facing down it.
     Deploy,
+    /// [`ProneMove::Deploy`] crouched from each stand-up on, on the
+    /// crouched mount of `+set probe_spot moundcrouch`.
+    DeployCrouch,
 }
 
 impl ProneMove {
@@ -8279,12 +8283,13 @@ impl ProneMove {
             ProneMove::Rifle => "rifle",
             ProneMove::Lmg => "lmg",
             ProneMove::Deploy => "deploy",
+            ProneMove::DeployCrouch => "deploy-crouch",
         }
     }
 
     fn switches(self) -> &'static [(u64, &'static str)] {
         match self {
-            ProneMove::Rifle | ProneMove::Deploy => &[],
+            ProneMove::Rifle | ProneMove::Deploy | ProneMove::DeployCrouch => &[],
             ProneMove::Lmg => &[(10000, "binoculars_mp")],
         }
     }
@@ -8378,11 +8383,23 @@ fn pronemove_script(part: ProneMove) -> Vec<ProneStep> {
         ],
         // World yaws: 270 faces up the mound and the mount, 90 down it.
         // Each step's view eases in from the step before.
-        ProneMove::Deploy => {
-            let aim = |at_ms, buttons, wbuttons, yaw, pitch| ProneStep {
+        ProneMove::Deploy | ProneMove::DeployCrouch => {
+            // Crouched from each stand-up on, under `DeployCrouch`.
+            let c = if part == ProneMove::DeployCrouch {
+                C
+            } else {
+                0
+            };
+            let aim = |at_ms, buttons, wbuttons: u8, yaw, pitch| ProneStep {
                 yaw,
                 pitch,
-                ..step(at_ms, buttons, wbuttons, 0, 0)
+                ..step(
+                    at_ms,
+                    buttons,
+                    if wbuttons == 0 { c } else { wbuttons },
+                    0,
+                    0,
+                )
             };
             vec![
                 aim(0, 0, 0, 270.0, 0.0),

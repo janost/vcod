@@ -9,7 +9,8 @@
 //	probe_fires 1 logs each of its "trigger" notifies. probe_spot mound
 //	(mp_carentan) is probe_prone's ~19 degree mound at (-224 60) facing
 //	uphill, a standing spawnTriggerMount 15 ahead of it, for the deploy
-//	pitch clamp (--probe-pronemove deploy).
+//	pitch clamp (--probe-pronemove deploy); moundcrouch the same with a
+//	crouched one (--probe-pronemove deploy-crouch).
 //	docs/research/coduo-movement.md, sections 7 and 11.
 
 main()
@@ -23,7 +24,7 @@ watch_teleports()
 	if (getcvar("probe_teleport") != "1")
 		return;
 	want = "mp_foy";
-	if (getcvar("probe_spot") == "mound")
+	if (getcvar("probe_spot") == "mound" || getcvar("probe_spot") == "moundcrouch")
 		want = "mp_carentan";
 	if (getcvar("mapname") != want)
 	{
@@ -37,6 +38,11 @@ watch_teleports()
 		//	ground's height there and above.
 		spawnTriggerMount((-244, 30, -20), (-204, 52, 120), 0);
 		logPrint("PROBE mount spawned\n");
+	}
+	if (getcvar("probe_spot") == "moundcrouch")
+	{
+		spawnTriggerMount((-244, 30, -20), (-204, 52, 120), 1);
+		logPrint("PROBE mount spawned crouched\n");
 	}
 	if (getcvar("probe_spot") == "mount")
 	{
@@ -94,7 +100,7 @@ try_place()
 		origin = (-1094, -3293, 8);
 		yaw = 0;
 	}
-	else if (spot == "mound")
+	else if (spot == "mound" || spot == "moundcrouch")
 	{
 		//	probe_prone's mound spot, a few units above the ground.
 		origin = (-224, 60, 45);
