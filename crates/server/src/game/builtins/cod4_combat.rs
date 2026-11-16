@@ -807,7 +807,10 @@ pub(crate) fn launch_weapon(
     let _ = vcod_gsc::Host::set_field(host, cx, id, classname, class);
     let yaw = c.yaw;
     let fwd = glam::Vec3::new(yaw.to_radians().cos(), yaw.to_radians().sin(), 0.0);
-    let (mins, maxs) = host.client_box(slot);
+    // The live box: the killed callback drops before `player_die` lowers
+    // `r.maxs[2]` to 30 (gdb at 0x80918ed read 70, cod4-combat.md 6.1).
+    let (mins, mut maxs) = host.client_box(slot);
+    maxs[2] = c.height;
     let (mins, maxs) = (glam::Vec3::from(mins), glam::Vec3::from(maxs));
     let origin = glam::Vec3::from(c.origin);
     let mut base = origin;

@@ -193,13 +193,19 @@ Open, by how much a player notices.
    `Bullet_Endpos` does; an exit's impact carries that direction
    (cod4-effects.md 12.4). `cod4_corpse_rounds_ab` and
    `cod4_corpse_drag_ab` match every corpse word and impact.
-8. The two corpse captures' `GAPS`, none of them the corpse's: the
-   target's killcam replays the shooter's first frames after his spawn
-   with the pitch a short under retail's; the target's second spawn keeps
-   the first life's `delta_angles`, and its entity's angles follow; on
-   the open floor the dropped rifle leaves the hand a unit off retail's
-   in x and y, its fall following (cod4-combat.md 5.3, 6.1). Not yet
-   read. M.
+8. Two of the two corpse captures' `GAPS` closed. The killcam's pitch:
+   the follow and killcam copies read a playerstate `SV_ArchiveSnapshot`
+   sent through the delta codec once already (cod4-combat.md 7). The
+   second spawn's `delta_angles`: 1.7 keeps a follower's and a killcam's
+   cmds for the next spawn's view, and the gates' replay now sends a
+   twin's own cmd angles before its spawn and a packet after the frame
+   its client had already read (cod4-gsc.md 7). Open: the floor run's
+   dropped rifle starts at the dying body's `tag_weapon_right`, which
+   ours poses 0.002 to 0.01 off retail's in a gdb run (0x80918ed), so
+   the snapped start crossed a unit in that capture; the pose's cause is
+   not read. The plate run's killcam keeps an archived plate impact
+   (entity 348) four frames from 48350 that ours leaves out; not read
+   (cod4-combat.md 5.3, 6.1). M.
 
 ## The retail run
 

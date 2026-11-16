@@ -8,7 +8,8 @@
 //!
 //! `--ent N` prints entity N's non-zero fields in every snapshot carrying it.
 //! `--times` prints every snapshot's `serverTime` (the `sv_fps` captures,
-//! cod4-server-frame.md 8).
+//! cod4-server-frame.md 8). `--moves` prints each usercmd's time, angles
+//! and buttons.
 
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
@@ -38,6 +39,7 @@ fn main() -> Result<()> {
     let show_ps = args.iter().any(|a| a == "--ps");
     let show_hud = args.iter().any(|a| a == "--hud");
     let times = args.iter().any(|a| a == "--times");
+    let moves = args.iter().any(|a| a == "--moves");
     let mut last_hud: Vec<vcod_cod4::hud::HudElem> = Vec::new();
     // `--full N`: every non-zero playerstate field of message N.
     let full: Option<u32> = args
@@ -74,6 +76,16 @@ fn main() -> Result<()> {
                             l.ms,
                             String::from_utf8_lossy(text)
                         );
+                    }
+                    if let ClOp::Move { cmds, .. } = op
+                        && moves
+                    {
+                        for (c, _) in cmds {
+                            println!(
+                                "{} c2s move t {} angles {:?} buttons {:#x}",
+                                l.ms, c.server_time, c.angles, c.buttons
+                            );
+                        }
                     }
                 }
             }
