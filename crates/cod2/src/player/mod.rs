@@ -507,6 +507,18 @@ impl PlayerBody {
         &self.controls
     }
 
+    /// Reads both channels' weights `ms` ahead of their node times
+    /// ([`ChannelClock::set_weight_lead`]): 1.7's server bodies.
+    pub fn set_weight_lead(&mut self, ms: i32) {
+        self.legs.set_weight_lead(ms);
+        self.torso.set_weight_lead(ms);
+    }
+
+    /// Takes the controls an ease of a copy of this body left.
+    pub fn set_controls(&mut self, controls: Controllers) {
+        self.controls = controls;
+    }
+
     /// The pose at `now_ms`: the legs and torso clips blended as the tree
     /// walk blends `main`'s two nodes, the controls over them.
     ///

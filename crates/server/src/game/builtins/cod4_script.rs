@@ -921,41 +921,53 @@ fn play_looped_fx(
 /// attachments' bones included, or a helicopter's as its controller poses
 /// it (`vehicle::heli_tag`): (origin, axis rows). `None` for an entity no
 /// frame posed or a bone it lacks.
-pub(crate) fn posed_tag(host: &GameHost, id: EntId, name: &str) -> Option<(Vec3, [Vec3; 3])> {
+pub(crate) fn posed_tag(host: &mut GameHost, id: EntId, name: &str) -> Option<(Vec3, [Vec3; 3])> {
     if let Some(h) = host.cod4().helis.iter().find(|h| h.id == id) {
         let (at, turn) = crate::game::cod4::vehicle::heli_tag(host.cod4(), h, name)?;
         let m = Mat3::from_quat(turn);
         return Some((at, [m.x_axis, m.y_axis, m.z_axis]));
     }
-    posed_body_tag(host, id.0, name, None)
+    posed_body_tag(host, id.0, name)
 }
 
-/// [`posed_tag`] of the playing body `entity` the last frame posed, placed
-/// at `origin` when given, else where that frame posed it.
-/// `G_DObjGetWorldTagMatrix` reads `r.currentOrigin` at the call
-/// (0x80cc815), so a tag read after the body's own cmd moved it sits that
-/// much further on (cod4-combat.md 6.1).
+/// [`posed_tag`] of the playing body `entity`: the pose the last frame
+/// built, its controls eased for this frame unless a trace eased them
+/// already (the read builds the frame's skeleton, cod4-combat.md 3.3),
+/// placed where the body stands at the call. `G_DObjGetWorldTagMatrix`
+/// (0x80cc7ba) reads `r.currentOrigin` and `r.currentAngles` then
+/// (0x80cc810, 0x80cc815), so a tag read after the body's own cmds moved
+/// or turned it follows them (cod4-combat.md 6.1).
 pub(crate) fn posed_body_tag(
-    host: &GameHost,
+    host: &mut GameHost,
     entity: u32,
     name: &str,
-    origin: Option<Vec3>,
 ) -> Option<(Vec3, [Vec3; 3])> {
-    let p = host
-        .cod4()
-        .posed_bodies
-        .iter()
-        .find(|p| p.entity == entity)?;
+    let slot = entity as usize;
+    let now = host.level_time_ms;
+    let c4 = host.cod4_mut();
+    let p = c4.posed_bodies.iter_mut().find(|p| p.entity == entity)?;
     let skel = &p.rig.skeleton;
     let i = skel
         .bones()
         .iter()
         .position(|b| b.name.eq_ignore_ascii_case(name))?;
-    let (pos, rot) = crate::game::cod4::combat::skel_worlds(skel, &p.pose, Some(&p.controls))[i];
-    let mut placed = p.placed;
-    if let Some(o) = origin {
-        placed.w_axis = o.extend(1.0);
+    if p.built_at != Some(now) {
+        p.built_at = Some(now);
+        p.controls = p.eased_controls;
+        c4.script_poses.push((slot, now, p.controls));
     }
+    let (pos, rot) = crate::game::cod4::combat::skel_worlds(skel, &p.pose, Some(&p.controls))[i];
+    let (body_origin, body_yaw) = (p.origin, p.yaw);
+    let (origin, yaw) = match host.cod4().corpse_source.get(slot).copied().flatten() {
+        Some(c) => super::cod4_combat::current_place(host, slot, &c),
+        None => (body_origin, body_yaw),
+    };
+    let placed = vcod_cod2::player::BodyFrame {
+        origin,
+        angles: [0.0, yaw, 0.0],
+        ..Default::default()
+    }
+    .transform();
     let (_, turn, _) = placed.to_scale_rotation_translation();
     let m = Mat3::from_quat(turn * rot);
     Some((placed.transform_point3(pos), [m.x_axis, m.y_axis, m.z_axis]))

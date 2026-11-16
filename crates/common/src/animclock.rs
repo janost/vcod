@@ -223,6 +223,9 @@ struct Ramp {
     /// `cod2_lnxded` 1.3's goal time in seconds, as its setter stores it
     /// ([`Ramp::cod2`]); `None` on the other engines.
     cod2: Option<f32>,
+    /// How far ahead of the node times the weight reads
+    /// ([`ChannelClock::set_weight_lead`]); 0 but on 1.7's server.
+    lead_ms: i32,
 }
 
 impl Ramp {
@@ -234,6 +237,7 @@ impl Ramp {
             ms,
             stored: false,
             cod2: None,
+            lead_ms: 0,
         }
     }
 
@@ -348,6 +352,7 @@ impl Ramp {
     }
 
     fn at(&self, now_ms: i32) -> f32 {
+        let now_ms = now_ms.wrapping_add(self.lead_ms);
         let since = now_ms.wrapping_sub(self.start_ms);
         if self.cod2.is_some() && since >= 0 && since % STEP_MS == 0 {
             return self.cod2_stepped(since / STEP_MS).0;
@@ -449,9 +454,32 @@ pub struct ChannelClock {
     rate: f32,
     /// The torso channel's: the two nodes its setter weights.
     nodes: Nodes,
+    /// How far ahead of the node times every weight reads
+    /// ([`Self::set_weight_lead`]).
+    lead_ms: i32,
 }
 
 impl ChannelClock {
+    /// Reads every weight `ms` ahead of the node times: the frame after an
+    /// end frame sets a goal, 1.7's server reads its weight a step on and
+    /// its new clip at node time 0 (0.5005 into a 100 ms blend,
+    /// cod4-player-anims.md 3), so `ms` is `level.frametime`.
+    pub fn set_weight_lead(&mut self, ms: i32) {
+        self.lead_ms = ms;
+        self.stamp_lead();
+    }
+
+    /// Gives every ramp the clock holds its lead.
+    fn stamp_lead(&mut self) {
+        let lead = self.lead_ms;
+        self.weight.lead_ms = lead;
+        for (_, w) in self.fading.iter_mut().flatten() {
+            w.lead_ms = lead;
+        }
+        self.nodes.torso.lead_ms = lead;
+        self.nodes.legs.lead_ms = lead;
+    }
+
     /// A clock already on `anim` at full weight, started at `start_ms` and
     /// playing at rate 1: what a channel reads with no movement anim on it.
     pub fn started(anim: i32, start_ms: i32) -> ChannelClock {
@@ -1067,6 +1095,8 @@ pub fn update_body(
     if let Some(death) = t.knob_all {
         torso.knob_nodes(anims, death, now_ms);
     }
+    legs.stamp_lead();
+    torso.stamp_lead();
 }
 
 /// The tree nodes from `wire`'s up to the root, its own first.

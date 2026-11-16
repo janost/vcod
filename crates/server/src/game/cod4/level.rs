@@ -1010,6 +1010,7 @@ impl Cod4Level {
         // `clonePlayer` reads the body as this cmd left it (0x80acfeb).
         if let Some(c) = self.rt.host.cod4_mut().corpse_source[slot].as_mut() {
             c.origin = ps.origin.to_array();
+            c.yaw = ps.view_angles[1];
             c.velocity = ps.velocity.to_array();
             c.height = body_height(ps.pm_flags);
         }
