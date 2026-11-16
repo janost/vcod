@@ -122,8 +122,9 @@ pub fn bsp_with_entities(bsp: &[u8], blocks: &str) -> Vec<u8> {
 }
 
 /// [`bsp_with_entities`] after dropping every stock block whose `"model"
-/// "*N"` one of `blocks` also names, as `tools/bsp_append_entities.py
-/// --replace` builds it: a stock submodel under a new classname.
+/// "*N"` one of `blocks` also names, the blocks
+/// `tools/bsp_append_entities.py --replace` keeps: a stock submodel under a
+/// new classname.
 pub fn bsp_replacing_models(bsp: &[u8], blocks: &str) -> Vec<u8> {
     let models = |text: &str| -> Vec<String> {
         crate::bsp::entity_block_pairs(text)
