@@ -370,6 +370,17 @@ impl ChannelClock {
         self.current.seconds(now_ms)
     }
 
+    /// The time in seconds at `now_ms` of the layer playing `wire` (toggle
+    /// ignored), 0 when none does: the time a gunner's placement reads his
+    /// turret group's leaves at (cod11-turrets.md 7.2).
+    pub fn seconds_of(&self, wire: i32, now_ms: i32) -> f32 {
+        let index = wire & !TOGGLE;
+        self.layers(now_ms)
+            .iter()
+            .find(|l| l.index == index)
+            .map_or(0.0, |l| l.seconds)
+    }
+
     /// The rate the current clip plays at.
     pub fn rate(&self) -> f32 {
         self.current.rate

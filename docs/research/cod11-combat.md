@@ -9636,9 +9636,9 @@ ours from the same view and flips (a dash is a miss):
 | target slot | | k0 | k+1 | k+2 | k+3 | k+4 | k+5 |
 |---|---|---|---|---|---|---|---|
 | 1 | retail, 6 flips | -0.08..0.02 | -1.75..1.73 | -4.37..-1.32 | -5.41..-3.09 | -5.87..-4.03 | -6.41..-4.63 |
-| 1 | ours | 0.00 | -2.10 | -4.70 | -5.67 | -6.08 | -6.32 |
+| 1 | ours | -0.03 | -1.45 | -4.26 | -5.46 | -6.01 | -6.36 |
 | 0 | retail, 8 flips | -2.11..1.23 | -4.68..-1.87 | -5.69..-3.50 | -6.31..-4.30 | -6.76..-4.88 | -7.59..-5.41 |
-| 0 | ours | -2.12 | -4.69 | -5.66 | -6.07 | -6.30 | - |
+| 0 | ours | -1.52 | -4.35 | -5.51 | -6.05 | -6.39 | -7.30 |
 
 INFERRED: the higher slot's flip-frame round meets the old pose (16.1) and
 then the point follows the swing's steps, the lower slot one frame ahead;
@@ -9652,10 +9652,14 @@ per end frame) and by the client
 per drawn player per rendered frame, off the `apos` pitch the server now
 sends whole and truncated. `a_round_meets_the_torso_easing_after_a_pitch_flip`
 (`crates/server/tests/turret_ab.rs`) replays the capture's view and flips
-and holds ours inside retail's per-frame spread, within 0.6 units. GAP: a
-body at or a step short of the full `0.6 * 85` is mostly missed by the round
-that retail lands about 1 unit further back on the torso; the gate skips the
-two frames posed there.
+and holds ours inside retail's per-frame spread, within 0.6 units, on every
+frame of both directions and both slots. vcod measurement (2026-11-16): the
+two frames the gate used to skip, a body at or a step short of the full
+`0.6 * 85` (the higher slot's flip-frame row back to 0, the lower slot's last
+row to 85), which ours' round had mostly missed, now take 3 and 4 hits a
+column at -7.40 and -7.30, inside retail's -7.80..9.16 and -8.19..-4.81 with
+the slack. Which change since moved them is not run down. The table's ours
+rows are that run's means.
 
 ### 16.4 The yaw and lean halves, and `tag_origin`
 
