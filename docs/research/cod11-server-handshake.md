@@ -726,6 +726,14 @@ each slot's state; zombies and unentered clients get no pass of their own.
     thread waiting on the player wakes with `[-1] [disconnect]` on the next
     frame's `getTime()`, after the callback; a `wait 0.05` the callback starts
     runs a frame later.
+- The follower pass, 2026-11-16 on 1.1d and 1.5b mp_carentan and UO
+  mp_cassino, tdm: two playing probes in slots 0 and 1 and a `--probe-follow`
+  spectator in slot 2, whose first attack followed slot 1; that probe sent
+  `disconnect` a second later. 1.1d moved the spectator onto slot 0 (pm_type
+  0, pm_flags 0x10000); 1.5b and UO put it back on its own view (clientNum 2,
+  pm_type 4, pm_flags 0), with slot 0 still followable (the next attack
+  followed it). VERIFIED (capture). vcod's server gave the same three
+  sequences under the same run. VERIFIED (capture).
 - vcod: `Server::drop_client` runs `ScriptRuntime::client_disconnect` inside
   the drop (after the notice on 1.1, before on 1.5/UO) with the slot already
   out of `clients`, sending its commands and configstrings at once; waiters
