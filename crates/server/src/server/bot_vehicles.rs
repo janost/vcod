@@ -274,6 +274,28 @@ impl Server {
             .map_or(0, |rt| rt.host.vehicles.stuck_kills)
     }
 
+    /// Test-facing: a blast of `damage` on vehicle `num` from itself, as
+    /// the stock self-destruct's `doDamage` (`_tankdrive_gmi.gsc`); false
+    /// when `num` is no live vehicle.
+    pub fn test_damage_vehicle(&mut self, num: u32, damage: i32) -> bool {
+        let Some(rt) = self.game.module.script.as_mut() else {
+            return false;
+        };
+        let Some((&id, v)) = rt.host.vehicles.live.iter().find(|(id, _)| id.0 == num) else {
+            return false;
+        };
+        let o = v.pose.origin;
+        rt.damage_vehicle(
+            id,
+            damage,
+            num as usize,
+            id,
+            [o[0], o[1], o[2] + 1.0],
+            "MOD_EXPLOSIVE",
+        );
+        true
+    }
+
     /// Test-facing: each live vehicle in pool order, as a bot would see it.
     pub fn test_vehicles(&self) -> Vec<VehicleSpot> {
         let Some(rt) = self.game.module.script.as_ref() else {
@@ -825,16 +847,70 @@ struct Parked {
     still: u32,
     at: [f32; 3],
     nodes: Vec<u32>,
+    /// Once it burns ([`crate::game::vehicle::Vehicle::dead`]).
+    wreck: Option<Wreck>,
+}
+
+/// A burning hull where it died, and the graph's nodes inside
+/// [`crate::bots::WRECK_REACH`] of it with their distance across.
+struct Wreck {
+    at: [f32; 3],
+    nodes: Vec<(u32, f32)>,
 }
 
 /// Each live vehicle's [`Parked`]; the union of their nodes, sorted, is
 /// what the followers plan round (`nav::Follower::blocked`,
-/// bot-navigation.md "Parked vehicles").
+/// bot-navigation.md "Parked vehicles"), with the burning hulls' added
+/// ([`Self::blocked_at`], bot-objectives.md 10.10).
 #[derive(Default)]
 pub(super) struct ParkedVehicles {
     graph: usize,
     each: HashMap<vcod_gsc::EntId, Parked>,
     pub(super) blocked: std::sync::Arc<[u32]>,
+    /// [`Self::blocked`] and every burning hull's nodes, sorted.
+    round_wrecks: std::sync::Arc<[u32]>,
+}
+
+/// A bot inside a burning hull's reach plans round the hull's nodes this
+/// much nearer it than his own feet, one grid pitch at its coarsest: the
+/// way out never turns in past the hull.
+const WRECK_DEEPER: f32 = 48.0;
+
+impl ParkedVehicles {
+    /// The burning hulls, in entity order (`bots::BotView::wrecks`).
+    pub(super) fn wrecks(&self) -> Vec<[f32; 3]> {
+        let mut w: Vec<_> = (self.each.iter())
+            .filter_map(|(id, p)| Some((id.0, p.wreck.as_ref()?.at)))
+            .collect();
+        w.sort_unstable_by_key(|w| w.0);
+        w.into_iter().map(|w| w.1).collect()
+    }
+
+    /// What the follower of a bot at `at` plans round: the parked
+    /// vehicles' nodes and the burning hulls'; of a hull whose reach he
+    /// stands in, only those [`WRECK_DEEPER`] nearer it than he is.
+    pub(super) fn blocked_at(&self, at: Option<[f32; 3]>) -> std::sync::Arc<[u32]> {
+        let reach = crate::bots::WRECK_REACH;
+        let inside = |w: &[f32; 3], a: [f32; 3]| {
+            let d = (w[0] - a[0]).hypot(w[1] - a[1]);
+            (d < reach && (w[2] - a[2]).abs() < reach).then_some(d)
+        };
+        let Some(a) = at else {
+            return self.blocked.clone();
+        };
+        let wrecks = || self.each.values().filter_map(|p| p.wreck.as_ref());
+        if wrecks().all(|w| inside(&w.at, a).is_none()) {
+            return self.round_wrecks.clone();
+        }
+        let mut all = self.blocked.to_vec();
+        for w in wrecks() {
+            let keep = inside(&w.at, a).map_or(f32::MAX, |d| d - WRECK_DEEPER);
+            all.extend(w.nodes.iter().filter(|n| n.1 < keep).map(|n| n.0));
+        }
+        all.sort_unstable();
+        all.dedup();
+        all.into()
+    }
 }
 
 impl Server {
@@ -863,7 +939,7 @@ impl Server {
         let mut changed = false;
         parked.each.retain(|id, p| {
             let keep = live.contains_key(id);
-            changed |= !keep && !p.nodes.is_empty();
+            changed |= !keep && (!p.nodes.is_empty() || p.wreck.is_some());
             keep
         });
         for (id, v) in live {
@@ -872,7 +948,24 @@ impl Server {
                 still: 0,
                 at: v.pose.origin,
                 nodes: Vec::new(),
+                wreck: None,
             });
+            // A hull burns where it died until its second blast deletes it.
+            if p.wreck.is_none() && v.dead && rt.host.ents.get(*id).is_some_and(|e| !e.unlinked) {
+                let at = v.pose.origin;
+                let reach = crate::bots::WRECK_REACH;
+                let nodes = g
+                    .nodes_in_box(at.into(), reach, reach)
+                    .into_iter()
+                    .map(|n| {
+                        let d = g.nodes[n as usize] - glam::Vec3::from(at);
+                        (n, d.truncate().length())
+                    })
+                    .filter(|n| n.1 < reach)
+                    .collect();
+                p.wreck = Some(Wreck { at, nodes });
+                changed = true;
+            }
             let near = |a: [f32; 3], b: [f32; 3], d: f32| (0..3).all(|i| (a[i] - b[i]).abs() <= d);
             if !(near(p.pose.origin, v.pose.origin, PARK_SLACK)
                 && near(p.pose.angles, v.pose.angles, PARK_SLACK))
@@ -899,7 +992,14 @@ impl Server {
                 .collect();
             all.sort_unstable();
             all.dedup();
+            let mut round = all.clone();
+            for w in parked.each.values().filter_map(|p| p.wreck.as_ref()) {
+                round.extend(w.nodes.iter().map(|n| n.0));
+            }
+            round.sort_unstable();
+            round.dedup();
             parked.blocked = all.into();
+            parked.round_wrecks = round.into();
         }
     }
 }

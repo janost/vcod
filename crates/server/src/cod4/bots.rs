@@ -512,7 +512,7 @@ impl BotWorld for Cod4Server {
         None
     }
 
-    fn blocked_nodes(&self) -> Arc<[u32]> {
+    fn blocked_nodes(&self, _: usize) -> Arc<[u32]> {
         Arc::default()
     }
 

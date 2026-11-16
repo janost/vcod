@@ -315,8 +315,8 @@ pub(crate) trait BotWorld {
     /// The fall that kills the body in `slot` now
     /// ([`crate::nav::fall_that_kills`]).
     fn fall_kills(&self, slot: usize) -> Option<f32>;
-    /// The graph nodes the followers keep off.
-    fn blocked_nodes(&self) -> Arc<[u32]>;
+    /// The graph nodes the follower of the bot in `slot` keeps off.
+    fn blocked_nodes(&self, slot: usize) -> Arc<[u32]>;
     /// The weapon table the edge probes step pmove with.
     fn weapon_defs(&self) -> &[Option<vcod_common::weapon::WeaponDef>];
     /// The driver's seat's waypoint toward `goal`; marks
@@ -1881,7 +1881,7 @@ fn route_in<W: BotWorld>(w: &mut W, slot: usize) -> RouteIn {
         ctf_route: bot.is_some_and(|b| b.ctf_route && b.team_play),
         stuck,
         rng: bot.map_or(1, |b| b.rng),
-        blocked: W::YIELDS.then(|| w.blocked_nodes()),
+        blocked: W::YIELDS.then(|| w.blocked_nodes(slot)),
         body: w.body(slot),
         ps: w.move_ps(slot),
         fall_kills: w.fall_kills(slot),
@@ -2310,7 +2310,7 @@ fn plan<W: BotWorld>(
         .map_or(0, |s| s + 1)
         .max(shared.teams.len());
     let bodies: Vec<Option<Body>> = (0..slots).map(|s| w.body(s)).collect();
-    let (sid, blocked) = (w.server_id(), W::YIELDS.then(|| w.blocked_nodes()));
+    let sid = w.server_id();
     let ins: Vec<(usize, &BotView, Option<&CoverStep>, RouteIn)> = views
         .iter()
         .enumerate()
@@ -2324,7 +2324,7 @@ fn plan<W: BotWorld>(
                 ctf_route: bot.is_some_and(|b| b.ctf_route && b.team_play),
                 stuck: bot.is_some_and(|b| b.stuck),
                 rng: bot.map_or(1, |b| b.rng),
-                blocked: blocked.clone(),
+                blocked: W::YIELDS.then(|| w.blocked_nodes(*slot)),
                 body: bodies[*slot],
                 ps: w.move_ps(*slot),
                 fall_kills: w.fall_kills(*slot),

@@ -57,6 +57,22 @@ pub(crate) const LOB_BODY_GROW: f32 = 24.0;
 /// frag rolled back to, took its own blast (bot-objectives.md 6).
 pub(crate) const FLEE_REACH: f32 = 400.0;
 pub(crate) const FLEE_HEIGHT: f32 = 160.0;
+/// A burning UO hull is kept this far off, across and up or down, until
+/// its second blast: `tank_death`'s `radiusDamage` of 300 from 25 over its
+/// origin meets a body's box 315 off, and 45 more is the walk's slack
+/// (bot-objectives.md 10.10).
+pub(crate) const WRECK_REACH: f32 = 360.0;
+
+/// The nearest of `wrecks` ([`BotView::wrecks`]) with `p` inside its
+/// [`WRECK_REACH`].
+pub(crate) fn wreck_near(wrecks: &[[f32; 3]], p: [f32; 3]) -> Option<[f32; 3]> {
+    let across = |w: &[f32; 3]| (w[0] - p[0]).hypot(w[1] - p[1]);
+    wrecks
+        .iter()
+        .filter(|w| across(w) < WRECK_REACH && (w[2] - p[2]).abs() < WRECK_REACH)
+        .min_by(|a, b| across(a).total_cmp(&across(b)))
+        .copied()
+}
 /// Another's frag is run from only once noticed ([`notices_frag`]): in a
 /// clear line and within this of the view's yaw either way, or this near.
 const FRAG_SEEN_DEG: f32 = 60.0;
@@ -330,6 +346,11 @@ pub struct BotView {
     /// [`FLEE_REACH`] across and [`FLEE_HEIGHT`] up or down, anyone's own
     /// included: the bot runs from it.
     pub frag_near: Option<[f32; 3]>,
+    /// The burning UO hulls still to go off a second time, for a bot on
+    /// foot: inside one's [`WRECK_REACH`] it walks the graph out, fight or
+    /// no fight, and a point goal inside one waits (bot-objectives.md
+    /// 10.10).
+    pub wrecks: Vec<[f32; 3]>,
     /// A post the game sends the bot to, walked to over the graph ahead
     /// of a chase: CoD4's mounted gun a bot is making for
     /// (`bots::cod4::gun`). Never set on CoD1 or CoD2.
@@ -1940,6 +1961,15 @@ impl Bot {
     /// [`Bot::think`], which then follows the waypoint the server planned
     /// toward it.
     pub fn goal(&self, view: &BotView) -> Goal {
+        match self.goal_any(view) {
+            // A burning hull's second blast went off where the bot's noise
+            // walk led (bot-objectives.md 10.9): no walk into one.
+            Goal::To(p) if wreck_near(&view.wrecks, p).is_some() => Goal::Hold,
+            g => g,
+        }
+    }
+
+    fn goal_any(&self, view: &BotView) -> Goal {
         if view.dead || !view.playing || !matches!(self.stage, Stage::Wander) {
             return Goal::Hold;
         }
@@ -1956,7 +1986,7 @@ impl Bot {
         if let Some(f) = view.frag_near {
             return Goal::Away(f);
         }
-        if let Some(c) = Self::blast_near(view) {
+        if let Some(c) = Self::blast_near(view).or_else(|| wreck_near(&view.wrecks, view.origin)) {
             return Goal::Away(c);
         }
         if self.start_held(view) {
@@ -4087,8 +4117,10 @@ impl Bot {
         // out whatever the fight wants, and no bipod goes down. A planter
         // and a defender fighting in the charge room both stood in the
         // blast to the end (seed 5). A retrieval carrier runs on the same
-        // way (`team`'s `carrying`).
-        let clearing = Self::blast_near(view).is_some() || self.carrying(view);
+        // way (`team`'s `carrying`), and so does a bot by a burning hull.
+        let clearing = Self::blast_near(view).is_some()
+            || wreck_near(&view.wrecks, view.origin).is_some()
+            || self.carrying(view);
         let path = ((cmd.forward, cmd.right, cmd.up, cmd.wbuttons), yaw);
         if self.shoot {
             self.track(view);
@@ -5506,6 +5538,7 @@ mod tests {
             grenade_cooks: false,
             grenade_ready: true,
             frag_near: None,
+            wrecks: Vec::new(),
             post: None,
             give_way: None,
             guard_post: None,
@@ -9107,6 +9140,21 @@ mod tests {
         bot.stage = Stage::BackToRifle { weapon: 10 };
         let cmd = bot.think(&v);
         assert!(cmd.forward < -100, "{}", cmd.forward);
+    }
+
+    /// A burning hull: inside its reach the goal is away from it, fight or
+    /// no fight; outside, a point goal inside its reach waits and one past
+    /// it stands.
+    #[test]
+    fn a_bot_keeps_out_of_a_burning_hull() {
+        let (mut bot, mut v) = engaged(3);
+        v.wrecks = vec![[200.0, 0.0, 64.0]];
+        assert_eq!(bot.goal(&v), Goal::Away([200.0, 0.0, 64.0]));
+        v.wrecks = vec![[1000.0, 0.0, 64.0]];
+        bot.force_goal(Some([900.0, 0.0, 64.0]));
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        bot.force_goal(Some([500.0, 0.0, 64.0]));
+        assert_eq!(bot.goal(&v), Goal::To([500.0, 0.0, 64.0]));
     }
 
     /// No clear lob at the enemy (a wall, a ceiling or a body in the way):

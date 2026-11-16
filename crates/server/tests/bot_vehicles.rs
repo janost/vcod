@@ -336,3 +336,66 @@ fn a_bot_fires_rockets_at_an_enemy_tank() {
     assert!(wrecked.is_some(), "the tank outlived the rocket");
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
 }
+
+/// A lone bot set down 600 units behind a tank as it is wrecked hears the
+/// hull's first blast and walks to it, and stays out of the second one
+/// `tank_death` sets off ten seconds on (bot-objectives.md 10.10): no
+/// damage, never inside the blast's reach while the hull burns.
+#[test]
+#[ignore = "builds mp_cassino's UO graph and runs a bot 16 s of game time, ~10 s in release; run with --ignored"]
+fn a_bot_keeps_out_of_a_burning_hull() {
+    // The second blast's 300 from the origin's 25 up, met by the box.
+    const BLAST: f32 = 315.0;
+    let Some((mut sv, mut now)) = uo_server(1, true) else {
+        eprintln!("COD_DIR has no uo/: skipping");
+        return;
+    };
+    run(&mut sv, &mut now, 100);
+    let slot = sv.bot_slots()[0];
+    let tank = sv.test_vehicles()[0];
+    let (s, c) = tank.yaw.to_radians().sin_cos();
+    let behind = [
+        tank.origin[0] - c * 600.0,
+        tank.origin[1] - s * 600.0,
+        tank.origin[2] + 64.0,
+    ];
+    let p = sv
+        .test_ground_under(behind)
+        .expect("ground behind the tank");
+    sv.place_client(slot, [p[0], p[1], p[2] + 0.125], tank.yaw);
+    run(&mut sv, &mut now, 1);
+    assert!(sv.test_damage_vehicle(tank.num, 10000));
+    let health = sv.bot_body(slot).unwrap().health;
+    let mut nearest = f32::MAX;
+    let mut gone = None;
+    for tick in 0..320 {
+        run(&mut sv, &mut now, 1);
+        let b = sv.bot_body(slot).unwrap();
+        let burning = sv.test_vehicles().iter().any(|v| v.num == tank.num);
+        if burning {
+            nearest =
+                nearest.min((b.origin[0] - tank.origin[0]).hypot(b.origin[1] - tank.origin[1]));
+        } else if gone.is_none() {
+            gone = Some(tick);
+        }
+        if std::env::var("VEH_REPORT").is_ok() && tick % 10 == 0 {
+            eprintln!(
+                "{tick} {:?} health {} burning {burning}",
+                b.origin, b.health
+            );
+        }
+    }
+    let b = sv.bot_body(slot).unwrap();
+    eprintln!(
+        "hull at {:?} gone at {gone:?}, nearest {nearest:.0}, health {health} -> {}",
+        tank.origin, b.health
+    );
+    assert!(gone.is_some(), "the hull never went off a second time");
+    assert!(
+        nearest > BLAST,
+        "the bot came {nearest:.0} from the burning hull"
+    );
+    assert_eq!(b.health, health, "the bot took a blast");
+    assert!(!b.dead);
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+}
