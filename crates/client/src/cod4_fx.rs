@@ -1993,6 +1993,120 @@ pub fn client_bullets(
         .collect()
 }
 
+/// One frame's rounds, by fired event: its client-side rounds
+/// ([`client_bullets`]), none under `sv_clientSideBullets` 0, where
+/// `CG_FireWeapon` skips `DrawBulletImpacts` (0x457cec); and its
+/// [`ServerRound`].
+#[allow(clippy::too_many_arguments)]
+pub fn frame_rounds(
+    fired: &[Fired],
+    weapons: &[String],
+    defs: &HashMap<String, WeaponAv>,
+    tags: &HashMap<u32, WeaponTags>,
+    own: Option<&OwnView>,
+    world: ShotWorld,
+    client_side: bool,
+) -> (Vec<Vec<BulletHit>>, Vec<Option<ServerRound>>) {
+    fired
+        .iter()
+        .map(|f| {
+            let hits = if client_side {
+                client_bullets(f, weapons, defs, tags, own, world)
+            } else {
+                Vec::new()
+            };
+            (hits, server_round(f, tags, own, client_side))
+        })
+        .unzip()
+}
+
+/// `sv_clientSideBullets` as the systeminfo sets it: `iw3mp.exe`
+/// registers it 1 with the systeminfo flag (0x5300d7, 0x530102), so a
+/// systeminfo without it reads 1 (cod4-effects.md 12.4).
+pub fn client_side_bullets(systeminfo: Option<&str>) -> bool {
+    systeminfo.is_none_or(|v| vcod_common::text::atoi(v) != 0)
+}
+
+/// The round a server's bullet hit event carries (`EV_BULLET_HIT`, its
+/// arm 0x436a0f; `EV_BULLET_HIT_CLIENT_SMALL` and `_LARGE`, 0x436a62):
+/// the trajectory arm both reach (0x458790, 0x458cf0), whatever
+/// `sv_clientSideBullets` says (cod4-effects.md 12.4).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ServerRound {
+    /// `otherEntityNum`.
+    pub shooter: u32,
+    /// Where its tracer and whizby line start (0x4585f0): the shooter's
+    /// `tag_flash`, the drawn eye for the drawn view's own client.
+    pub muzzle: Vec3,
+    /// The event's origin.
+    pub end: Vec3,
+    /// What the map's dynamic entities and a launched part see under
+    /// `sv_clientSideBullets` 0 (0x4587de, 0x458d93): from `lerp.u` words
+    /// 0 to 2, which 1.7's server never sets, to the origin. `None` under
+    /// 1 and for an exit (`un1` bit 4, 0x4587d7).
+    pub leg: Option<(Vec3, Vec3)>,
+}
+
+/// `fired`'s [`ServerRound`], if it is a bullet hit event whose shooter
+/// gives a muzzle: our own client off the drawn eye, another off his
+/// posed `tag_flash`. A shooter with no posed body (no DObj, 0x45864e)
+/// gets nothing, the tracer, whizby and pushes included (0x4587ac).
+pub fn server_round(
+    f: &Fired,
+    tags: &HashMap<u32, WeaponTags>,
+    own: Option<&OwnView>,
+    client_side: bool,
+) -> Option<ServerRound> {
+    let exit_flag = match f.name {
+        "EV_BULLET_HIT" => 4,
+        "EV_BULLET_HIT_CLIENT_SMALL" | "EV_BULLET_HIT_CLIENT_LARGE" => 0,
+        _ => return None,
+    };
+    let e = f.state.as_ref()?;
+    let shooter = ent_u32(e, "otherEntityNum");
+    let muzzle = match own.filter(|v| v.client == Some(shooter)) {
+        Some(v) => v.eye,
+        None => tags.get(&shooter)?.flash?.0,
+    };
+    let word = |k: usize| ent_f32(e, &format!("lerp.u.anonymous.data[{k}]"));
+    let start = Vec3::new(word(0), word(1), word(2));
+    let leg = (!client_side && ent_u32(e, "un1") & exit_flag == 0).then_some((start, f.origin));
+    Some(ServerRound {
+        shooter,
+        muzzle,
+        end: f.origin,
+        leg,
+    })
+}
+
+/// The entity a server round's leg meets first (0x48e060: a trace from
+/// the leg's start to its end past the shooter, under the bullet mask) and
+/// the contact: a launched part there takes the push (0x48df10).
+pub fn server_round_entity(world: ShotWorld, r: &ServerRound) -> Option<(u32, BulletHit)> {
+    let (start, end) = r.leg?;
+    let bp = Params {
+        ignore: Some(r.shooter),
+        start,
+        end,
+        dir: (end - start).normalize_or_zero(),
+    };
+    let l = leg(world, &bp, 0);
+    let hit = BulletHit {
+        start,
+        muzzle: start,
+        end: l.pos,
+        normal: l.normal,
+        surf: surface_type(l.flags),
+        hit: l.hit,
+        own: false,
+        body: None,
+        pierced: [None; PIERCE_MAX],
+        entity: l.entity,
+        dyn_legs: [None; DYN_LEGS],
+    };
+    Some((l.entity?, hit))
+}
+
 /// Where the own shot's tracer starts (`DrawBulletImpacts`,
 /// 0x456743..0x4567eb): the view weapon's `tag_flash`, or in third person
 /// 30 (the double at 0x70b438) along the rounds' way from the eye
@@ -2068,6 +2182,31 @@ impl Cod4Effects {
         }
         self.tracers += spawned;
         spawned
+    }
+
+    /// A server round's tracer (the tracer test, 0x458720): none for the
+    /// drawn view's own client (0x45873b..0x458747) or the gun we man (the
+    /// caller's, 0x458749..0x458758), else `cg_tracerchance`'s roll, from
+    /// the muzzle to the event, back-dated as [`Self::tracers`]' are
+    /// (0x458110).
+    pub(crate) fn server_tracer(
+        &mut self,
+        fx: &mut FxSystem,
+        r: &ServerRound,
+        own: bool,
+        now: f32,
+        frame_ms: i32,
+    ) {
+        if own || self.roll() >= TRACER_CHANCE {
+            return;
+        }
+        let back = if frame_ms > 0 {
+            (self.next_rand() % frame_ms as u32) as i32 / 2
+        } else {
+            0
+        };
+        fx.spawn_cod4_tracer(r.muzzle, r.end, now, back);
+        self.tracers += 1;
     }
 
     fn next_rand(&mut self) -> u32 {

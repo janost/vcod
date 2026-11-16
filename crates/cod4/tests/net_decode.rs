@@ -590,3 +590,50 @@ fn a_teleport_sends_only_the_view_rows_that_changed() {
         ]
     );
 }
+
+/// The bullet hit events (`EV_BULLET_HIT` and the victim's
+/// `EV_BULLET_HIT_CLIENT_*`) of a capture: per event its `surfType`, `un1`
+/// and `lerp.u` words 0 to 2.
+fn bullet_hits(w: &Walk) -> Vec<(u32, u32, [u32; 3])> {
+    let mut out = Vec::new();
+    let mut last = std::collections::BTreeSet::new();
+    for s in &w.client.snapshots {
+        let now: std::collections::BTreeSet<_> =
+            s.entities.iter().map(|e| (e.number(), e.etype())).collect();
+        for e in &s.entities {
+            let t = e.etype();
+            // An event entity plays once, in the first snapshot it is in.
+            if !(17 + 41..=17 + 43).contains(&t) || last.contains(&(e.number(), t)) {
+                continue;
+            }
+            let table = vcod_cod4::net::delta::EntityState::table(t);
+            let f = |n: &str| e.0[table.iter().find(|f| f.name == n).unwrap().word()];
+            let u = |k: usize| f(&format!("lerp.u.anonymous.data[{k}]"));
+            out.push((f("surfType"), f("un1"), [u(0), u(1), u(2)]));
+        }
+        last = now;
+    }
+    out
+}
+
+/// Retail under `+set sv_clientSideBullets 0` (cod4-effects.md 12.4):
+/// the systeminfo carries the 0, and the server's `EV_BULLET_HIT`s carry
+/// every round, the metal plate's entry (`un1` 0) and exit (`un1` 4) and
+/// the asphalt past the target besides the flesh hits; none sets
+/// `lerp.u`. Under 1 the shooter sees only the flesh hits.
+#[test]
+fn server_side_bullets_send_every_contact() {
+    let w = walk("play-1.7-csb0-shooter.txt");
+    let gs = w.client.gamestate.as_ref().unwrap();
+    assert_eq!(gs.systeminfo("sv_clientSideBullets").as_deref(), Some("0"));
+    let hits = bullet_hits(&w);
+    let surf = |s: u32, un1: u32| hits.iter().filter(|h| (h.0, h.1) == (s, un1)).count();
+    // Metal (13), asphalt (5), flesh (7).
+    assert!(surf(13, 0) > 0 && surf(13, 4) > 0 && surf(5, 0) > 0 && surf(7, 0) > 0);
+    assert!(hits.iter().all(|h| h.2 == [0; 3]), "{hits:?}");
+    let w = walk("play-1.7-kill-shooter.txt");
+    let gs = w.client.gamestate.as_ref().unwrap();
+    assert_eq!(gs.systeminfo("sv_clientSideBullets").as_deref(), Some("1"));
+    let hits = bullet_hits(&w);
+    assert!(!hits.is_empty() && hits.iter().all(|h| h.0 == 7 && h.2 == [0; 3]));
+}

@@ -1278,33 +1278,33 @@ impl Cod4Client {
                 .map(|f| f.0),
             third_person: self.third_person,
         });
-        let hits: Vec<_> = match (self.session.world(), &self.sounds) {
-            (Some(w), Some(s)) => fired
-                .iter()
-                .map(|f| {
-                    cod4_fx::client_bullets(
-                        f,
-                        &weapons,
-                        &s.weapons,
-                        &tags,
-                        own.as_ref(),
-                        cod4_fx::ShotWorld {
-                            clip: &w.clip,
-                            solids: &self.session.shot_solids,
-                        },
-                    )
-                })
-                .collect(),
-            _ => Vec::new(),
+        let client_side =
+            cod4_fx::client_side_bullets(gs.systeminfo("sv_clientSideBullets").as_deref());
+        let (hits, server) = match (self.session.world(), &self.sounds) {
+            (Some(w), Some(s)) => cod4_fx::frame_rounds(
+                fired,
+                &weapons,
+                &s.weapons,
+                &tags,
+                own.as_ref(),
+                cod4_fx::ShotWorld {
+                    clip: &w.clip,
+                    solids: &self.session.shot_solids,
+                },
+                client_side,
+            ),
+            _ => (vec![Vec::new(); fired.len()], vec![None; fired.len()]),
         };
         // The blasts, swings, jitters and the rounds' legs on the map's
         // dynamic entities.
         if let (Some(d), Some(w)) = (dynents.as_mut(), self.session.world()) {
             let rounds: Vec<_> = hits
                 .iter()
-                .map(|h| {
+                .zip(&server)
+                .map(|(h, r)| {
                     h.iter()
                         .flat_map(|h| h.dyn_legs.into_iter().flatten())
+                        .chain(r.and_then(|r| r.leg))
                         .collect()
                 })
                 .collect();
@@ -1333,6 +1333,23 @@ impl Cod4Client {
                 let dir = (h.end - h.start).normalize_or_zero();
                 if physics.shoot(n, h.end, dir, force) {
                     parts_struck.push((i, *h));
+                }
+            }
+        }
+        // A server round's leg on one under `sv_clientSideBullets` 0
+        // (0x48e060).
+        if let (Some(w), Some(force)) = (self.session.world(), bullet_force) {
+            let world = cod4_fx::ShotWorld {
+                clip: &w.clip,
+                solids: &self.session.shot_solids,
+            };
+            for (i, r) in server.iter().enumerate() {
+                let Some((n, h)) = r.and_then(|r| cod4_fx::server_round_entity(world, &r)) else {
+                    continue;
+                };
+                let dir = (h.end - h.start).normalize_or_zero();
+                if physics.shoot(n, h.end, dir, force) {
+                    parts_struck.push((i, h));
                 }
             }
         }
@@ -1380,6 +1397,12 @@ impl Cod4Client {
             }
             for (f, hit) in fired.iter().zip(&hits) {
                 for c in hit.iter().flat_map(|h| s.bullet_cues(f, &weapons, h, eye)) {
+                    cx.audio.play(cx.fs, c);
+                }
+            }
+            // A server round's `whizby` (0x457f40).
+            for r in server.iter().flatten() {
+                if let Some(c) = eye.and_then(|eye| cod4_audio::whizby_cue(r.muzzle, r.end, eye)) {
                     cx.audio.play(cx.fs, c);
                 }
             }
@@ -1483,6 +1506,11 @@ impl Cod4Client {
                     let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
                     cx.audio.play_fx(cx.fs, sounds);
                 }
+            }
+            for r in server.iter().flatten() {
+                let own = own.as_ref().is_some_and(|v| v.client == Some(r.shooter))
+                    || own_gun == Some(r.shooter);
+                e.server_tracer(cx.fx, r, own, cx.time, (cx.dt * 1000.0) as i32);
             }
         }
         for f in fired {

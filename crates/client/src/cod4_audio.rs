@@ -518,6 +518,19 @@ pub fn bullet_cues(
     out
 }
 
+/// `whizby` where a round from `muzzle` to `end` passes `eye`
+/// ([`whizby_at`]), on the world.
+pub fn whizby_cue(muzzle: Vec3, end: Vec3, eye: Vec3) -> Option<Cue> {
+    whizby_at(muzzle, end, eye).map(|pos| Cue {
+        alias: "whizby".into(),
+        source: Source::Entity {
+            num: ENTITYNUM_WORLD,
+            pos,
+        },
+        delay_s: 0.0,
+    })
+}
+
 /// Where a round from `muzzle` to `end` is heard passing `eye`
 /// (`iw3mp.exe` 0x457f40, cod4-effects.md 12): `eye` at least 64 units
 /// down the shot and at least 64 short of its end (0x457fe4..0x458011,
