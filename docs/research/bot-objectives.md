@@ -1951,6 +1951,48 @@ Left: a drive route that ends short of a goal the hull cannot reach
 still holds the driver `IDLE_TICKS` (5 s) before it gets out. INFERRED
 (the seed 19 trace, read off `Bot::drive`). Closed in 14.10.
 
+### 10.9 A rocket's shooter hunted his own tank kill, 2026-11-16
+
+Retail has no bots; this section is measured on vcod-server only, except
+the stock script lines, read out of `pakuo01.pk3`.
+
+`tests/bot_vehicles.rs` `a_bot_fires_rockets_at_an_enemy_tank` went red
+at 0f73e6378 (bisected over master's merges from 5e1b4fccb, release, UO):
+the tank died and its driver with it, and then the shooter died too,
+killed by the world, so stock `tdm.gsc`'s `Callback_PlayerKilled` read
+the unset `level.teamkill_penalty` (line 815, coduo-vehicles.md 11.6) and
+dropped the `bazooka_mp` the test hands him outside `giveWeapon` (line
+836, an item past initialization, cod11-gsc-object-model.md M4).
+
+- `_tankdrive_gmi.gsc`'s damage thread ends a hull with
+  `radiusDamage(origin + (0, 0, 180), 300, 150, 10, attacker, inflictor)`
+  (line 625), and `_tankeffects_gmi.gsc`'s `tank_death` sets off a second,
+  `radiusDamage(origin + (0, 0, 25), 300, 150, 10, self)`, once the burn
+  ends (line 193), then deletes the hull. VERIFIED (the stock files).
+- vcod recorded every script `radiusDamage` as nobody's noise
+  (`Server::take_noises`), so the shooter heard the first blast, the one
+  his rocket set off, 220 units over the hull. His recall walked him to
+  it and he stood under it, 90 to 130 units from the hull's centre, until
+  the second blast killed him 214 ticks after his rocket. VERIFIED (trace:
+  the shooter's recall, origin and health every 10 ticks).
+- Before 0f73e6378 the same recall led nowhere: a goal that far off the
+  graph read as moved every tick (bot-navigation.md "The ship's
+  leftovers"), the plan was parked each tick, and the shooter turned in
+  place out of the second blast's reach. INFERRED (the fix that made the
+  walk reach it is that commit's `nav.rs` change; 5e1b4fccb's trace not
+  taken).
+
+A blast whose attacker argument (UO's fifth, CoD4's) is a client is now
+that client's noise (`GameHost::blast_noises`), which he does not hear
+(`bots::loudest`); a hull's own death blast stays nobody's
+(`builtins::combat::tests::a_uo_radiusdamage_is_its_attacking_clients_noise`).
+VERIFIED (measured, release, UO): `bot_vehicles::` 5 of 5 pass.
+
+Left: any other bot still walks to a burning hull's first blast and can
+die in its second; a bot has no rule to keep off a burning vehicle.
+INFERRED (the second blast is nobody's and goes off where the first
+did).
+
 ## 11. CoD2's `sd`, `ctf` and `hq`
 
 CoD2 bots (`crates/server/src/bots/cod2.rs`) play the three with the

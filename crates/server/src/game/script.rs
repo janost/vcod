@@ -1331,8 +1331,9 @@ impl ScriptRuntime {
         }
     }
 
-    /// Where the `radiusDamage` calls since the last ask went off.
-    pub fn take_blast_noises(&mut self) -> Vec<[f32; 3]> {
+    /// Where the `radiusDamage` calls since the last ask went off, and the
+    /// client each named as its attacker.
+    pub fn take_blast_noises(&mut self) -> Vec<([f32; 3], Option<usize>)> {
         std::mem::take(&mut self.host.blast_noises)
     }
 

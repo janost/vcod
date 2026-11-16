@@ -47,10 +47,14 @@ picks through `Server::pin_spawns`, as `gametypes_ab` does.
 
 | Touching | Run | Cost |
 |---|---|---|
-| pmove, collision or nav | `cargo test --release -p vcod-server --test server -- --ignored nav_census::` | ~8 s, 65 s CPU at 1.1; 20-60 s, 340 s CPU at UO |
-| bots | `cargo test --release -p vcod-server --test server -- --ignored bots::` | ~5 s at 1.1; ~7 min at UO |
+| pmove, collision or nav | `cargo test --release -p vcod-server --test server -- --ignored nav_census::` | ~20 s at 1.1; ~80 s at UO |
+| bots | `cargo test --release -p vcod-server --test server -- --ignored bots::` | ~10 s at 1.1; ~8 min at UO |
 | the bots' driver or its threads | `cargo test --release -p vcod-server --test server -- bot_threads::` (not ignored; each install it finds; `tdm` and `sd`, UO `ctf`) | ~15 s a game |
-| UO bot vehicles | `-- --ignored bot_vehicles::` at a UO install | ~30 s |
+| UO bot vehicles | `-- --ignored bot_vehicles::` at a UO install | ~12 s |
+| CoD4 bots | `cargo test --release -p vcod-server --lib -- --ignored cod4::bots::` (`COD4_DIR`) | ~4 s |
+| CoD4 hit boxes per map | `--lib -- --ignored cod4_every_map_poses_both_teams` (`COD4_DIR`) | ~25 s |
+| CoD2 gametypes | `--lib -- --ignored cod2_gametype_census` (`COD2_DIR`) | ~18 s |
+| 1.5 stuck seed | `--lib -- --ignored the_15_overlap_spectator_seed_is_the_only_fit` | ~2 s |
 | shaders or render layouts | `renderer::pipeline_check` (lavapipe env below) | |
 | CoD2 maps, CoD2 load path | `cod2_map_census`, `cod2_load_profile` | |
 | CoD4 maps, gametypes | `cod4_map_sweep` | 6-8 min and ~3 GB a map |
@@ -70,6 +74,13 @@ What each holds:
 - `tests/bot_vehicles.rs` at UO: bots boarding, driving and firing
   mp_cassino's tanks, rockets at one, and mp_kharkov's jeep. With a 1.1
   install it returns at once, as the UO files of the other two do.
+- By-hand tools, not gates: `playerstate_slope_ab`'s
+  `the_mover_replays_the_fixture_named_by_slope_fixture` (panics without
+  `SLOPE_FIXTURE`), and the seed searches `recover_game_seed` (CoD4),
+  `recover_spread_seed` and `recover_rocket_seed` (CoD2), each driven by
+  its env vars (their doc comments).
+
+Times are release wall on a 30-thread box, the binary built.
 
 ## Headless render: pipeline_check
 
