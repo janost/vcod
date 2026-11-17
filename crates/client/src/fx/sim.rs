@@ -491,6 +491,10 @@ fn spawn_sound_cues(rng: &mut Rng, em: &Emitter, at: SpawnAt) -> Vec<FxSound> {
 struct PendingMark {
     due: f32,
     req: MarkRequest,
+    /// The tag a delayed `Decal` of an effect on a tag waits on: `req`'s
+    /// origin and direction are in its frame, posed when it falls due
+    /// (0x493f40).
+    repose: Option<Bolt>,
 }
 
 /// Where one spawn's elements land.
@@ -541,6 +545,10 @@ struct SpawnCx {
     now: f32,
     /// The camera, for `cullrange`.
     view: Option<Vec3>,
+    /// The origin `PlayEffect` was handed, which `cullrange` measures from
+    /// (0x4939e5) where a tag's pose replaces it for the spawn; `None` is
+    /// the spawn's own origin.
+    cull_from: Option<Vec3>,
     /// The camera's frustum, for `frustumCull` (CoD4 only).
     frustum: Option<Frustum>,
     depth: u8,
@@ -623,7 +631,7 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
     // 0x493a1f, grammar doc R9).
     if em.cullrange > 0.0
         && let Some(view) = cx.view
-        && (spawn_pos(at) - view).length() > em.cullrange
+        && (cx.cull_from.unwrap_or(spawn_pos(at)) - view).length() > em.cullrange
     {
         return;
     }
@@ -698,9 +706,16 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
         }
         let life = sample_r1(rng, em.life) / 1000.0;
         if behavior == Behavior::Decal {
+            let mut req = decal_request(rng, em, at, life);
+            let repose = posed.filter(|_| spawn > now);
+            if let Some((_, f)) = repose {
+                req.origin = f.unrotate(req.origin - f.origin);
+                req.dir = f.unrotate(req.dir);
+            }
             out.marks.push(PendingMark {
                 due: spawn,
-                req: decal_request(rng, em, at, life),
+                req,
+                repose: repose.map(|(id, _)| id),
             });
             continue;
         }
@@ -1525,6 +1540,10 @@ pub struct FxSystem {
     chains: Vec<Chain>,
     /// The camera, for `cullrange`.
     view: Option<Vec3>,
+    /// CoD1's 0x305430c0: the view weapon's `tag_brass` the last frame it
+    /// drew one, zero in a fresh cgame, which every case's `cullrange`
+    /// measures from (`Resolved::Spawn::brass`).
+    view_brass: Vec3,
     /// The camera's frustum, for `frustumCull`; see [`Self::set_frustum`].
     frustum: Option<Frustum>,
     /// This frame's tags effects are played on, see [`Self::set_bolts`]
@@ -1584,6 +1603,7 @@ impl FxSystem {
             marks: Vec::new(),
             chains: Vec::new(),
             view: None,
+            view_brass: Vec3::ZERO,
             frustum: None,
             bolts: HashMap::new(),
             rng: Rng::new(0x9E3779B97F4A7C15),
@@ -1763,6 +1783,24 @@ impl FxSystem {
     }
 
     /// A new map: world-space particles and marks are meaningless there.
+    /// A freshly loaded cgame: [`Self::clear`], and the view weapon's
+    /// `tag_brass` back to its zeroed start.
+    pub fn restart_cgame(&mut self) {
+        self.clear();
+        self.view_brass = Vec3::ZERO;
+    }
+
+    /// The view weapon's `tag_brass` this frame, which retail keeps past
+    /// the frames it draws none (cgame 0x30037151).
+    pub fn set_view_brass(&mut self, at: Vec3) {
+        self.view_brass = at;
+    }
+
+    /// Where brass `cullrange` is measured from ([`Self::set_view_brass`]).
+    pub fn view_brass(&self) -> Vec3 {
+        self.view_brass
+    }
+
     pub fn clear(&mut self) {
         self.particles.clear();
         self.marks.clear();
@@ -1820,6 +1858,7 @@ impl FxSystem {
     pub fn tag_bolts(&self) -> HashSet<TagBolt> {
         let particles = self.particles.iter().filter_map(|p| p.bolt);
         let chains = self.chains.iter().filter_map(|c| c.bolt);
+        let marks = self.marks.iter().filter_map(|m| m.repose);
         let trails = self
             .trails
             .iter()
@@ -1827,6 +1866,7 @@ impl FxSystem {
             .map(|(b, _)| *b);
         particles
             .chain(chains)
+            .chain(marks)
             .chain(trails)
             .filter_map(|b| match b {
                 Bolt::Tag(t) => Some(t),
@@ -1846,6 +1886,22 @@ impl FxSystem {
         pose: TagPose,
         now: f32,
     ) -> Vec<FxSound> {
+        self.spawn_on_tag_from(fs, path, tag, pose, now, None)
+    }
+
+    /// [`Self::spawn_on_tag`] with `cullrange` measured from `cull_from`,
+    /// the origin CoD1's cgame hands syscall 0xe5 (the entity's
+    /// `lerpOrigin`, `CG_PlayFxOnTag` 0x3001db80), where the tag's pose
+    /// replaces it for the spawn (`PlayEffect` 0x493870).
+    pub fn spawn_on_tag_from(
+        &mut self,
+        fs: &dyn AssetSource,
+        path: &str,
+        tag: TagBolt,
+        pose: TagPose,
+        now: f32,
+        cull_from: Option<Vec3>,
+    ) -> Vec<FxSound> {
         crate::frame_digest::effect(path, pose.origin);
         self.bolts.insert(Bolt::Tag(tag), BoltFrame::tag(pose));
         let at = SpawnAt::Oriented {
@@ -1853,7 +1909,8 @@ impl FxSystem {
             axis: pose.axis,
         };
         let first_chain = self.chains.len();
-        let mut sounds = self.spawn_effect(fs, path, at, now, 0, Some(Bolt::Tag(tag)));
+        let bolt = Some(Bolt::Tag(tag));
+        let mut sounds = self.spawn_effect(fs, path, at, now, 0, bolt, cull_from);
         sounds.extend(self.drain_chains(fs, now, first_chain));
         sounds
     }
@@ -1883,10 +1940,29 @@ impl FxSystem {
         now: f32,
         marks: bool,
     ) -> Vec<FxSound> {
+        self.spawn_marked_from(fs, path, at, bolt, now, marks, None)
+    }
+
+    /// [`Self::spawn_marked`] with `cullrange` measured from `cull_from`:
+    /// CoD1's muzzle flash hands syscall 0xe5 the shooter's `lerpOrigin`
+    /// or the view weapon's origin (cgame 0x30036cf0), its brass the view
+    /// weapon's last `tag_brass` (0x30038a30).
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_marked_from(
+        &mut self,
+        fs: &dyn AssetSource,
+        path: &str,
+        at: SpawnAt,
+        bolt: Option<u32>,
+        now: f32,
+        marks: bool,
+        cull_from: Option<Vec3>,
+    ) -> Vec<FxSound> {
         crate::frame_digest::effect(path, spawn_pos(at));
         let first_mark = self.marks.len();
         let first_chain = self.chains.len();
-        let mut sounds = self.spawn_effect(fs, path, at, now, 0, bolt.map(Bolt::Muzzle));
+        let bolt = bolt.map(Bolt::Muzzle);
+        let mut sounds = self.spawn_effect(fs, path, at, now, 0, bolt, cull_from);
         // An `FxRunner` without a delay plays inside PlayEffect (0x493870).
         sounds.extend(self.drain_chains(fs, now, first_chain));
         if !marks {
@@ -1895,6 +1971,7 @@ impl FxSystem {
         sounds
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_effect(
         &mut self,
         fs: &dyn AssetSource,
@@ -1903,6 +1980,7 @@ impl FxSystem {
         now: f32,
         depth: u8,
         bolt: Option<Bolt>,
+        cull_from: Option<Vec3>,
     ) -> Vec<FxSound> {
         if depth > MAX_CHAIN_DEPTH {
             return Vec::new();
@@ -1912,6 +1990,7 @@ impl FxSystem {
             at,
             now,
             view: self.view,
+            cull_from,
             frustum: self.frustum,
             depth,
             bolt: bolt.map(|id| (id, self.bolts.get(&id).copied())),
@@ -1934,9 +2013,9 @@ impl FxSystem {
                 if em.kind == "CameraShake" {
                     let origin = spawn_pos(at);
                     let culled = em.cullrange > 0.0
-                        && self
-                            .view
-                            .is_some_and(|v| (origin - v).length() > em.cullrange);
+                        && self.view.is_some_and(|v| {
+                            (cull_from.unwrap_or(origin) - v).length() > em.cullrange
+                        });
                     if !culled && let Some(strength) = em.intensity.or(em.bounce) {
                         self.shakes.push(Shake {
                             scale: sample_r1(&mut self.rng, strength) * 0.05,
@@ -1972,7 +2051,7 @@ impl FxSystem {
                 };
                 c.at = f.carry(c.at, true);
             }
-            sounds.extend(self.spawn_effect(fs, &c.path, c.at, now, c.depth, c.bolt));
+            sounds.extend(self.spawn_effect(fs, &c.path, c.at, now, c.depth, c.bolt, None));
         }
         sounds
     }
@@ -2071,6 +2150,7 @@ impl FxSystem {
             at,
             now,
             view: self.view,
+            cull_from: None,
             frustum: self.frustum,
             depth: 0,
             bolt: None,
@@ -2255,14 +2335,25 @@ impl FxSystem {
     }
 
     /// The `Decal` elements due by `now`. Their `cullrange` was tested
-    /// at spawn.
+    /// at spawn. One delayed on a tag is posed on the tag as it stands now;
+    /// with the tag gone it places nothing, as a delayed particle spawns
+    /// nothing.
     pub fn take_marks(&mut self, now: f32) -> Vec<MarkRequest> {
         let mut out = Vec::new();
+        let bolts = &self.bolts;
         self.marks.retain(|m| {
             if m.due > now {
                 return true;
             }
-            out.push(m.req.clone());
+            let mut req = m.req.clone();
+            if let Some(id) = m.repose {
+                let Some(f) = bolts.get(&id) else {
+                    return false;
+                };
+                req.origin = f.origin + f.rotate(req.origin);
+                req.dir = f.rotate(req.dir);
+            }
+            out.push(req);
             false
         });
         out
@@ -3802,6 +3893,71 @@ mod tests {
         s.set_tag_bolts(&HashMap::new());
         s.step(0.2, 0.2, None);
         assert_eq!(s.counts().0, 0);
+    }
+
+    /// A delayed `Decal` of an effect on a tag is posed on the tag as it
+    /// stands when it falls due, as every element 0x493f40 hands the
+    /// spawner after posing the bolt; with the tag gone it places nothing.
+    #[test]
+    fn a_delayed_decal_on_a_tag_lands_where_the_tag_is_when_due() {
+        let mut decal = simple_emitter();
+        decal.kind = "Decal".into();
+        decal.delay = R1 { a: 100.0, b: 100.0 };
+        let mut s = sys_with_files(&[("fx/late.efx", vec![decal.clone()])]);
+        let tag = TagBolt {
+            entity: 70,
+            slot: 1,
+        };
+        let play = TagPose {
+            origin: Vec3::new(10.0, 0.0, 0.0),
+            axis: [Vec3::X, Vec3::Y, Vec3::Z],
+        };
+        s.spawn_on_tag(&Pk3Fs::empty(), "fx/late.efx", tag, play, 0.0);
+        assert!(s.take_marks(0.05).is_empty());
+        assert_eq!(s.tag_bolts(), HashSet::from([tag]));
+        let due = TagPose {
+            origin: Vec3::new(0.0, 100.0, 0.0),
+            axis: [Vec3::Y, -Vec3::X, Vec3::Z],
+        };
+        s.set_tag_bolts(&HashMap::from([(tag, due)]));
+        let m = s.take_marks(0.11);
+        assert_eq!(m.len(), 1);
+        assert!(
+            (m[0].origin - due.origin).length() < 1e-4,
+            "{:?}",
+            m[0].origin
+        );
+        assert!((m[0].dir - Vec3::Y).length() < 1e-4, "{:?}", m[0].dir);
+
+        let mut s = sys_with_files(&[("fx/late.efx", vec![decal])]);
+        s.spawn_on_tag(&Pk3Fs::empty(), "fx/late.efx", tag, play, 0.0);
+        s.set_tag_bolts(&HashMap::new());
+        assert!(s.take_marks(0.2).is_empty());
+    }
+
+    /// `PlayEffect` measures `cullrange` from the origin it was handed
+    /// (0x4939e5), the entity's `lerpOrigin` for `playFxOnTag`, not from
+    /// the tag's pose the elements spawn at.
+    #[test]
+    fn cullrange_on_a_tag_measures_from_the_origin_handed_in() {
+        let mut e = still_particle();
+        e.cullrange = 100.0;
+        let tag = TagBolt {
+            entity: 70,
+            slot: 1,
+        };
+        let pose = TagPose {
+            origin: Vec3::new(0.0, 0.0, 60.0),
+            axis: [Vec3::X, Vec3::Y, Vec3::Z],
+        };
+        let fs = Pk3Fs::empty();
+        let mut s = sys_with_files(&[("fx/tag.efx", vec![e])]);
+        // The tag is 90 from the view, the entity's origin 150.
+        s.set_view(Vec3::new(0.0, 0.0, 150.0));
+        s.spawn_on_tag_from(&fs, "fx/tag.efx", tag, pose, 0.0, Some(Vec3::ZERO));
+        assert_eq!(s.counts().0, 0);
+        s.spawn_on_tag(&fs, "fx/tag.efx", tag, pose, 0.0);
+        assert_eq!(s.counts().0, 1);
     }
 
     #[test]
