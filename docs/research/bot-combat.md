@@ -32,6 +32,7 @@ Knobs:
 | `GAMETYPE=` | tdm | |
 | `BOTS=` | 6 | |
 | `TICKS=`, `JOBS=` | 12000, 4 | |
+| `LEVELS=` | 1 | the `exitLevel`s a match runs through: past each the script's `map_rotate` loads the next level (the same map with no `sv_mapRotation`), the team scores add up over the levels, and `ended` means every level ended; the match line prints `levels` |
 | `SET=name=value,...` | | any cvar, e.g. `scr_tdm_timelimit=5` |
 | `UO=1` | | a United Offensive server (`COD_DIR` at a UO install) |
 | `VERBOSE=1` | | every kill line |
@@ -256,6 +257,16 @@ than a fight lasts; the gap shows head to head against normal (3 : 1
 kills at hard, 3.4 : 1 at expert). Nothing here is tuned against a human;
 how a level feels to play against is pending a hand check.
 
+The levels set numbers only: what the bot chooses (cover, a retreat, a
+frag, an objective's route) is the same at every level. INFERRED
+(sections 4.5 and 5): cover and the retreat each move a side's deaths by
+less than the seed spread at one level, so a level that took them less
+often would not show in `bot_match` either; no decision rule is tied to
+the level yet. `bot_match`'s `LEVELS=` (section 1) runs a match past its
+first `exitLevel`, for a level's play over a rotation (2026-11-17,
+mp_carentan `tdm`, 4 bots, `scr_tdm_timelimit 1`, `LEVELS=2`: two levels,
+one `W;` each, the scores of both summed). VERIFIED (measured).
+
 ## 4. Cover and lean
 
 The brain is `crates/server/src/bots/cover.rs`; the server fills
@@ -409,7 +420,14 @@ On by default; `RETREAT=` in `bot_match`.
   to a site, a guard, an `re` defender chasing, a `bas` breacher, both
   `bel` sides. On a ladder or with an LMG's bipod down nothing starts.
 - `BotBody::retreating` reads 1 (hurt), 2 (dry), 3 (at the cover) or 0;
-  `Server::test_bot_retreat` turns it off per bot.
+  `Server::test_bot_retreat` turns it off per bot, and the cvar
+  `vc_bot_retreat 0` (`Bot::allow_retreat`, applied every bot pass, half
+  a second, on all four games) for every bot, with the health detour;
+  a retreat under way ends.
+- Health items are picked by straight-line distance (`nearest_pack`,
+  1200 across and 200 up or down), not by the graph's way to them; one
+  the plan reaches no nearer is passed over (bot-objectives.md 14.8).
+  Open.
 
 ### Measured (2026-10-20)
 
@@ -431,6 +449,7 @@ one side retreating. VERIFIED (measured):
 - 1150 to 1440 hurt and 40 to 100 dry starts in 64 matches with one side
   on; 28 to 32% reach the cover. The rest die on the way, or the retreat
   ends first (a dry clip refilled, or no cover left from a moved threat).
+  Not split by cause yet; open (2026-11-17).
 
 ## 6. One table on `bot_match` (2026-10-21)
 

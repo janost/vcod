@@ -275,14 +275,33 @@ teammate was not told it carried and stood outside the goal.
 - Attacker with a teammate carrying: escorts him, holding within 250
   units and closing again when he moves on. Its compass always shows him.
 - Attacker with nothing to pick up and no carrier on its compass, and the
-  first defender by rank with one carried: a ring round its goal from just
-  clear of the trigger to 150 units past.
+  defender nearest its goal with one carried (`ReView::holds_goal`, dealt
+  per carried objective over the playing defenders; the first by rank
+  with team play off): a ring round its goal from just clear of the
+  trigger to 150 units past. Until 2026-11-17 the holder was the first
+  by rank wherever it stood, and the defender standing by the goal went
+  back down the carrier's way.
 - Other defenders with one carried: at the carrier while the compass shows
   him (`scr_re_showcarrier` set). Under the default they walk to where the
   objective last lay, once per carry: the carrier set out from there for
   the goal, so the walk runs his likely way backwards. Then the goal ring.
 - Defender with nothing carried: guards an objective by rank, within 250
   units of its trigger. A dropped objective counts as lying there.
+- A dropped objective's clock (2026-11-17). VERIFIED (`re.gsc` 1965-1969:
+  `startorigin` is the trigger's spot once the round has placed it; 2422-2432:
+  60 s after a drop it goes back there unless taken). The server reads it
+  as lying away from the trigger's `startorigin` (`ReObjective::dropped`)
+  and counts the 60 s from the first frame it sees it so
+  (`Server::bot_re`, `ReObjView::returns`). When a straight run at 190
+  units/s to it would outlast the clock, the bot waits where it comes
+  back instead: an attacker when it is the only one lying, a defender
+  guarding it (`Bot::returns_first`, `outruns`;
+  `bots::tests::a_dropped_objective_out_of_reach_of_its_clock_is_awaited_at_its_start`).
+  `bot_objectives::a_dropped_retrieval_objective_is_picked_up_again`:
+  four bots, shoot off, seed 7, mp_carentan; the first carrier is killed
+  through `kill`, the objective drops, the clock reads 60 s less the
+  frames since, and the other attacker takes it off the floor 39 ticks
+  later. VERIFIED (measured).
 
 VERIFIED (measured, `crates/server/tests/bot_objectives.rs`, 2 bots, shoot
 off, seed 7, `mp_carentan`): the attacker picks up at tick 483 and delivers
@@ -308,6 +327,25 @@ later; the two leaps before it that walked off the step are gone.
 
 With 6 shooting bots, `mp_carentan` delivered and `mp_harbor` picked up
 twice in 150 s and delivered neither.
+
+The goal holder by distance and the clock, against master b8105567d.
+VERIFIED (measured, ours, release, 1.1, `bot_match GAMETYPE=re BOTS=10
+TICKS=6000`, mp_brecourt, mp_carentan, mp_chateau, mp_dawnville, mp_pavlov
+and mp_rocket, seeds 1 to 8, 48 matches): attackers' rounds 134 of 218
+(61.5%) before, 122 of 222 (55.0%) after; captures 117 and 104; carrier
+deaths 148 and 167; pickups 358 and 351; kills 1666 and 1691; stalled
+47 and 1592. The holder alone gives the same seeds 1 to 4 bit for bit
+(the clock fired on none there) and on seeds 5 to 8 one round less to
+the attackers and 21 stalled against 10. 1518 of the stalled are one
+match, mp_carentan seed 2: from tick 4121 the carrier, at 39 health,
+walked between nodes round (446, 1799, 160), upstairs 2800 units from
+the goal at (315, -1024, 15), to the end, with 50 edges given up on a
+body against 7 on the other seeds (temporary print of the stall, the
+bot's team and the goals). INFERRED: the defenders sent back down his
+way meet him on the stair. Kept: the holder is the defender who can
+reach the goal first, and the carriers it costs the attackers are the
+defence working (the attackers still take 55% of rounds); the
+carentan wedge is a follow-up.
 
 VERIFIED (measured, ours, 2026-10-08, release, 6 shooting bots, seeds 3
 to 6, 200 s per run, the carrier read off the compass record and the
@@ -380,6 +418,19 @@ to 4, 150 s, `mp_brecourt` and `mp_carentan`): with the flight from the
 bot's own marker the allied side earned 160 `bel_alive_tick`s over the
 eight runs, against 163 without it. The flight changes how the hunted
 move, not measurably how long they live.
+
+A marker off the graph (2026-11-17). INFERRED (`bel.gsc` 1588-1603, the
+mean of the marker and the player): a marker between a player on a
+ledge and where he stood below hangs in the air, and one between two
+sides of a wall sits in it; `arrived` (64 across, 96 up or down) never
+holds there, so the hunter walked at it until it moved. A marker counts
+as stood at once the follower walked out the plan to it
+(`Bot::walked_to`, every game) and the body came no 16 units nearer in
+60 ticks (`Bot::marker_short`;
+`bots::tests::a_hunter_gives_up_a_marker_off_the_graph`). VERIFIED
+(measured, ours, release, 1.1, `bot_match GAMETYPE=bel BOTS=8
+TICKS=6000`, mp_brecourt, mp_carentan and mp_harbor, seeds 1 to 4): every
+count and every match line the same as before; the rule fired on none.
 
 ## 6. United Offensive
 
@@ -1324,7 +1375,20 @@ view.
   is the team shuffled by the level's `sv_serverid` (`team::round_rank`),
   which every `map_restart` moves on, so a bot that guarded A last round
   may guard B this one. Until 2026-10-20 it was the bot's place by slot,
-  and the same bot went to the same site every round of a map.
+  and the same bot went to the same site every round of a map. United
+  Offensive's `ctf`, `dom`, `hq` and `bas` still deal by slot (`UoView`'s
+  rank: odd ranks defend in `ctf`, the flag picks in `dom`, the bases in
+  `bas`). The shuffle there, tried 2026-11-17 and not kept: VERIFIED
+  (`pakuo01.pk3` `ctf.gsc`, `dom.gsc`, `bas.gsc`: each restarts its rounds
+  with `map_restart`; `hq.gsc` has none). VERIFIED (measured, ours,
+  release, UO, 10 bots, 6000 ticks, mp_arnhem, mp_berlin, mp_cassino and
+  mp_sicily): `ctf` seeds 1 to 8 took 56 flags before and 41 after,
+  captured 9 and 11, stalled 195 and 381; `dom` seeds 1 to 4 captured
+  243 flags and 212, ended 7 levels and 4, stalled 1436 and 665. INFERRED:
+  the shuffle only redeals which bot plays which part, so both sides'
+  counts falling together is either the seed spread or a rule elsewhere
+  that reads the slot order (the `ctf` posts and escorts deal by slot);
+  not traced.
 - S&D attackers go together. Every attacker goes for one site, picked per
   round (`team::round_shift`, `team::site_rank`); the defenders still
   split over both. A failed plant moves the bot on to the other site as
@@ -1456,6 +1520,19 @@ group (a flanker still drew its hold from 0.5 to 2 s). VERIFIED
   standard error on the share is about 2 points, about 3 on a difference
   of two rows, so only the parts' and the start hold's drops pass two of
   them. Spacing buys spread alone. None of the four is dropped.
+- Parts outside S&D, tried 2026-11-17 and not kept: `re` attackers dealt
+  the same parts (`driver::deal_squads` on `ReView::role`, a carrier
+  kept in the main group). VERIFIED (measured, ours, release, 1.1,
+  `bot_match GAMETYPE=re BOTS=10 TICKS=6000`, mp_brecourt, mp_carentan,
+  mp_chateau, mp_dawnville, mp_pavlov and mp_rocket, seeds 1 to 8, 48
+  matches, against the build with 4.2's goal holder): attackers' rounds
+  123 of 222 (55.4%) to 118 of 209 (56.5%), captures 104 to 108,
+  carrier deaths 168 to 151, stalled 1603 to 517. The holder build's
+  1518 are one match (4.2); the parts' 479 are mp_rocket seeds 5 and 6,
+  bots of both sides near (9900, 5800, 160), off any fight, against 11
+  there without them. Not traced further; dropped by the stall rule
+  (`docs/bots.md`, "How a change is judged"). UO's `ctf`, `dom` and
+  `bas` attackers got none.
 - VERIFIED (the table): the defenders, already split over two sites,
   barely move (51% to 50% packed).
 
