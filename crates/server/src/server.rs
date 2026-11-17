@@ -4511,6 +4511,14 @@ impl Server {
             .unwrap_or_default()
     }
 
+    /// Test-facing: each `re` objective's return clock while it lies
+    /// dropped (`ReObjView::returns`); empty on any other level.
+    pub fn re_returns(&mut self) -> Vec<Option<([f32; 3], f32)>> {
+        self.bot_re()
+            .map(|(_, _, o)| o.iter().map(|(v, _, _)| v.returns).collect())
+            .unwrap_or_default()
+    }
+
     /// Test-facing: a bot's current waypoint node and the next, as points.
     pub fn bot_waypoints(&self, slot: usize) -> (Option<[f32; 3]>, Option<[f32; 3]>) {
         let (Some(g), Some(f)) = (
