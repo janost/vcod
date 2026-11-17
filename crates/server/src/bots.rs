@@ -9643,9 +9643,25 @@ mod tests {
             traverse,
             capturing: false,
             short: false,
+            off: false,
         });
         v.waypoint = Some([1000.0, 0.0, 0.0]);
         v
+    }
+
+    /// `vc_bot_vehicles 0` gets a seated bot out: the keys go, and use
+    /// lands on the seat's own exit frame (bot-objectives.md 10.4).
+    #[test]
+    fn vehicles_off_gets_a_seated_bot_out() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = shelling(true);
+        assert_eq!(bot.think(&v).buttons & BUTTON_USE, 0, "rides on");
+        if let Some(seat) = v.seat.as_mut() {
+            seat.off = true;
+        }
+        let cmd = bot.think(&v);
+        assert_eq!((cmd.forward, cmd.right), (0, 0), "the keys go");
+        assert_ne!(cmd.buttons & BUTTON_USE, 0, "presses use on frame 0");
     }
 
     /// A tank's driver drives at the other side's standing base, and with a
@@ -10292,6 +10308,7 @@ mod tests {
             traverse: true,
             capturing: false,
             short: false,
+            off: false,
         });
         v
     }

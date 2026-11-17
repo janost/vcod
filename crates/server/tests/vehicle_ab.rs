@@ -844,6 +844,52 @@ fn the_jeep_drive_replays_on_ours() {
     tally(&lines, &ours).assert_within(&[]);
 }
 
+const JEEP_CLOSESPEED: &str =
+    "tests/fixtures/playerstate/mp_peaks-tdm-slope-8ms-jeep-closespeed-uo.txt";
+
+/// The jeep drive with the script's `closespeed` 0.5 on every vehicle
+/// (`probe_closespeed`): the step's speed cap halves, and the first 119
+/// snapshots match retail's field for field (coduo-vehicles.md 17).
+#[test]
+fn the_jeep_drive_under_closespeed_replays_on_ours() {
+    let text = std::fs::read_to_string(JEEP_CLOSESPEED).unwrap();
+    let lines = parse(&text);
+    let cvars = [
+        ("probe_side", "75"),
+        ("probe_pitch", "15"),
+        ("probe_closespeed", "0.5"),
+    ];
+    let Some(ours) = ours("mp_peaks", "willyjeep_mp", &cvars, &lines) else {
+        return;
+    };
+    tally(&lines, &ours).assert_within(&[Gap {
+        field: "",
+        snaps: 120..=usize::MAX,
+        why: "coduo-vehicles.md 17: retail's front-left probe meets a face ours clears at 18500",
+    }]);
+}
+
+const TANK_CLOSESPEED: &str =
+    "tests/fixtures/playerstate/mp_cassino-tdm-slope-8ms-tank-closespeed-uo.txt";
+
+/// The tank drive under `closespeed` 0.5 and `harc` 10 (`probe_harc`):
+/// half the cap, and the turret held 10 degrees off the hull
+/// (coduo-vehicles.md 17).
+#[test]
+fn the_tank_drive_under_closespeed_and_harc_replays_on_ours() {
+    let text = std::fs::read_to_string(TANK_CLOSESPEED).unwrap();
+    let lines = parse(&text);
+    let cvars = [("probe_closespeed", "0.5"), ("probe_harc", "10")];
+    let Some(ours) = ours("mp_cassino", "panzeriv_mp", &cvars, &lines) else {
+        return;
+    };
+    tally(&lines, &ours).assert_within(&[Gap {
+        field: "",
+        snaps: 284..=usize::MAX,
+        why: "coduo-vehicles.md 17: the track clock parts at 27200, unread",
+    }]);
+}
+
 const JEEP_DIE: &str = "tests/fixtures/playerstate/mp_peaks-tdm-slope-8ms-jeep-die-uo.txt";
 
 /// The jeep's driver killed in his seat 3.5 s into retail's drive

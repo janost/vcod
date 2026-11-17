@@ -1692,7 +1692,7 @@ through the keys a client sends from a seat (coduo-vehicles.md 1 and 2),
 nothing else. The brain is `crates/server/src/bots/vehicle.rs`; the
 server half, the seat and the vehicles near each bot, and the driver's
 route, is `crates/server/src/server/bot_vehicles.rs`. `vc_bot_vehicles 0`
-stops boarding.
+stops boarding and gets a seated bot out (`SeatView::off`, 10.4).
 
 ### 10.1 What the server tells the brain
 
@@ -1825,8 +1825,8 @@ stops boarding.
   while shelling a base), 10 s shelling a base with the gun's line never
   on it, four
   stalls or 8 s of driving under 300 units, the same 8 s for a rider
-  with nobody to shoot, 2 s idle in a vehicle nobody drives, or 5 s of
-  the hull's unbroken contact (10.3). Seed 45's gunner, without the
+  with nobody to shoot, 2 s idle in a vehicle nobody drives, 5 s of
+  the hull's unbroken contact (10.3), or `vc_bot_vehicles` set to 0. Seed 45's gunner, without the
   rider's own headway window, sat out the driver's 8 s and then the
   undriven seat's 2 s and walked off past the 12 s gate. The bot taps
   use until the server lets it out, on one frame in four, its seat's

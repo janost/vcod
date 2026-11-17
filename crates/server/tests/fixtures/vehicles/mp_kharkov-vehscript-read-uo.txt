@@ -1,0 +1,151 @@
+# Retail CoD UO 1.51b dedicated server, 2026-11-17: the PROBE lines of
+# client-probes/probe_vehscript on mp_kharkov, +set probe_case read.
+# COD_VERSION=uo PORT=28977 PROBE_SECS=12 tools/run_probe.sh client-probes/probe_vehscript
+#   mp_kharkov +set probe_case read
+PROBE veh 152 gaz67b_mp 0 0 0 0
+PROBE wheel 152 front_left default
+PROBE wheel 152 front_right default
+PROBE wheel 152 back_left default
+PROBE wheel 152 back_right default
+PROBE veh 157 horch_mp 0 0 0 0
+PROBE wheel 157 front_left default
+PROBE wheel 157 front_right default
+PROBE wheel 157 back_left default
+PROBE wheel 157 back_right default
+PROBE veh 162 panzeriv_mp 0 0 0 0
+PROBE wheel 162 front_left default
+PROBE wheel 162 front_right default
+PROBE wheel 162 back_left default
+PROBE wheel 162 back_right default
+PROBE wheel 162 middle_left default
+PROBE wheel 162 middle_right default
+PROBE veh 167 t34_mp 0 0 0 0
+PROBE wheel 167 front_left default
+PROBE wheel 167 front_right default
+PROBE wheel 167 back_left default
+PROBE wheel 167 back_right default
+PROBE wheel 167 middle_left default
+PROBE wheel 167 middle_right default
+PROBE veh 172 elefant_mp 0 0 0 0
+PROBE wheel 172 front_left default
+PROBE wheel 172 front_right default
+PROBE wheel 172 back_left default
+PROBE wheel 172 back_right default
+PROBE wheel 172 middle_left default
+PROBE wheel 172 middle_right default
+PROBE veh 177 su152_mp 0 0 0 0
+PROBE wheel 177 front_left default
+PROBE wheel 177 front_right default
+PROBE wheel 177 back_left default
+PROBE wheel 177 back_right default
+PROBE wheel 177 middle_left default
+PROBE wheel 177 middle_right default
+PROBE veh 182 horch_mp 0 0 0 0
+PROBE wheel 182 front_left default
+PROBE wheel 182 front_right default
+PROBE wheel 182 back_left default
+PROBE wheel 182 back_right default
+PROBE veh 187 panzeriv_mp 0 0 0 0
+PROBE wheel 187 front_left default
+PROBE wheel 187 front_right default
+PROBE wheel 187 back_left default
+PROBE wheel 187 back_right default
+PROBE wheel 187 middle_left default
+PROBE wheel 187 middle_right default
+PROBE veh 192 elefant_mp 0 0 0 0
+PROBE wheel 192 front_left default
+PROBE wheel 192 front_right default
+PROBE wheel 192 back_left default
+PROBE wheel 192 back_right default
+PROBE wheel 192 middle_left default
+PROBE wheel 192 middle_right default
+PROBE veh 197 gaz67b_mp 0 0 0 0
+PROBE wheel 197 front_left default
+PROBE wheel 197 front_right default
+PROBE wheel 197 back_left default
+PROBE wheel 197 back_right default
+PROBE veh 202 t34_mp 0 0 0 0
+PROBE wheel 202 front_left default
+PROBE wheel 202 front_right default
+PROBE wheel 202 back_left default
+PROBE wheel 202 back_right default
+PROBE wheel 202 middle_left default
+PROBE wheel 202 middle_right default
+PROBE veh 207 su152_mp 0 0 0 0
+PROBE wheel 207 front_left default
+PROBE wheel 207 front_right default
+PROBE wheel 207 back_left default
+PROBE wheel 207 back_right default
+PROBE wheel 207 middle_left default
+PROBE wheel 207 middle_right default
+PROBE veh 212 panzeriv_mp 0 0 0 0
+PROBE wheel 212 front_left default
+PROBE wheel 212 front_right default
+PROBE wheel 212 back_left default
+PROBE wheel 212 back_right default
+PROBE wheel 212 middle_left default
+PROBE wheel 212 middle_right default
+PROBE veh 217 t34_mp 0 0 0 0
+PROBE wheel 217 front_left default
+PROBE wheel 217 front_right default
+PROBE wheel 217 back_left default
+PROBE wheel 217 back_right default
+PROBE wheel 217 middle_left default
+PROBE wheel 217 middle_right default
+PROBE veh 222 elefant_mp 0 0 0 0
+PROBE wheel 222 front_left default
+PROBE wheel 222 front_right default
+PROBE wheel 222 back_left default
+PROBE wheel 222 back_right default
+PROBE wheel 222 middle_left default
+PROBE wheel 222 middle_right default
+PROBE veh 227 horch_mp 0 0 0 0
+PROBE wheel 227 front_left default
+PROBE wheel 227 front_right default
+PROBE wheel 227 back_left default
+PROBE wheel 227 back_right default
+PROBE veh 232 panzeriv_mp 0 0 0 0
+PROBE wheel 232 front_left default
+PROBE wheel 232 front_right default
+PROBE wheel 232 back_left default
+PROBE wheel 232 back_right default
+PROBE wheel 232 middle_left default
+PROBE wheel 232 middle_right default
+PROBE veh 237 gaz67b_mp 0 0 0 0
+PROBE wheel 237 front_left default
+PROBE wheel 237 front_right default
+PROBE wheel 237 back_left default
+PROBE wheel 237 back_right default
+PROBE veh 242 t34_mp 0 0 24.3591 1.38404
+PROBE wheel 242 front_left default
+PROBE wheel 242 front_right default
+PROBE wheel 242 back_left default
+PROBE wheel 242 back_right default
+PROBE wheel 242 middle_left default
+PROBE wheel 242 middle_right default
+PROBE veh 247 su152_mp 0 0 0 0
+PROBE wheel 247 front_left default
+PROBE wheel 247 front_right default
+PROBE wheel 247 back_left default
+PROBE wheel 247 back_right default
+PROBE wheel 247 middle_left default
+PROBE wheel 247 middle_right default
+PROBE veh 252 panzeriv_mp 0 0 0 0
+PROBE wheel 252 front_left default
+PROBE wheel 252 front_right default
+PROBE wheel 252 back_left default
+PROBE wheel 252 back_right default
+PROBE wheel 252 middle_left default
+PROBE wheel 252 middle_right default
+PROBE veh 257 t34_mp 0 0 0 0
+PROBE wheel 257 front_left default
+PROBE wheel 257 front_right default
+PROBE wheel 257 back_left default
+PROBE wheel 257 back_right default
+PROBE wheel 257 middle_left default
+PROBE wheel 257 middle_right default
+PROBE set 152 0.5 10
+PROBE after setters
+PROBE speed 152 0 0
+PROBE speed 152 176 10
+PROBE speed 152 0 0

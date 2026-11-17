@@ -169,6 +169,8 @@ pub struct SeatView {
     /// The driver's route ran out at the node nearest a goal the hull
     /// cannot reach: nothing more to drive to (`Server::drive_waypoint`).
     pub short: bool,
+    /// `vc_bot_vehicles 0`: bots keep out of vehicles, so this one gets out.
+    pub off: bool,
 }
 
 /// A tank's main gun as it stands this tick (`vehicle::fire::main_gun_sight`).
@@ -644,7 +646,8 @@ impl Bot {
             || self.rider.idle > IDLE_TICKS
             || wedged
             || abandoned
-            || headless;
+            || headless
+            || seat.off;
         if done || self.rider.leaving {
             self.rider.leaving = true;
             cmd.forward = 0;

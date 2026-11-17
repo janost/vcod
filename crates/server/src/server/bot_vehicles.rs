@@ -6,7 +6,8 @@ use super::*;
 use crate::bots::{ArmorView, Crowd, GunSight, SeatView, VehicleSpot};
 use crate::game::vehicle::info::KIND_TANK;
 
-/// `vc_bot_vehicles`: 0 stops bots boarding; one seated rides on.
+/// `vc_bot_vehicles`: 0 keeps bots out of vehicles: none boards, and one
+/// seated gets out.
 pub(crate) const VEHICLES_CVAR: &str = "vc_bot_vehicles";
 
 impl Server {
@@ -53,6 +54,9 @@ impl Server {
                     continue;
                 }
                 view.seat = seat_view(host, *slot, &targets);
+                if let Some(seat) = view.seat.as_mut() {
+                    seat.off = !on;
+                }
                 if let Some(seat) = view.seat.as_mut().filter(|s| s.seat == 1) {
                     let mine = teams.get(*slot).copied().unwrap_or(0);
                     seat.crowd = crowd(host, *slot, mine, &walkers);
@@ -367,6 +371,7 @@ fn seat_view(
         traverse: info.turret.horiz_left != 0.0 || info.turret.horiz_right != 0.0,
         short: false,
         capturing: false,
+        off: false,
     })
 }
 

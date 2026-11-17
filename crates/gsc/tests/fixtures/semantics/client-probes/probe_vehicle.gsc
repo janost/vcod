@@ -27,6 +27,10 @@
 //
 //	PROBE bone <time> <client> <seat> <tag> <origin>
 //
+//	With `probe_closespeed` or `probe_harc` set, every vehicle's field of
+//	that name takes the value as the vehicles are logged
+//	(coduo-vehicles.md 17).
+//
 //	Clients 0 and 1 log where the spawn left them as they are placed:
 //
 //	PROBE spawned <time> <entity number> <origin> <angles>
@@ -45,6 +49,10 @@ log_vehicles()
 	vehs = getentarray("script_vehicle", "classname");
 	for (i = 0; i < vehs.size; i++)
 	{
+		if (getcvar("probe_closespeed") != "")
+			vehs[i].closespeed = getcvarfloat("probe_closespeed");
+		if (getcvar("probe_harc") != "")
+			vehs[i].harc = getcvarfloat("probe_harc");
 		logPrint("PROBE vehicle " + vehs[i] getEntityNumber() + " " + vehs[i].vehicletype + " " + vehs[i].origin + " " + vehs[i].angles + "\n");
 		vehs[i] thread log_seats();
 		vehs[i] log_clearance();

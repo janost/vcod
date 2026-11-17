@@ -205,6 +205,9 @@ pub struct Vehicles {
     pub infos: VehicleInfos,
     pub slots: [Option<EntId>; MAX_VEHICLES],
     pub live: HashMap<EntId, Vehicle>,
+    /// `freeVehicle`'s corpses by their new handle: the record as the free
+    /// left it, for the wire and the collmap (section 17).
+    pub corpses: HashMap<EntId, Vehicle>,
     /// `fireTurret`, `fireAltTurret` and `fireGunner` calls on a bullet gun
     /// this frame, for the server to trace (it holds the bodies); a shell
     /// gun fires inside the call (`fire::launch_shell`).
@@ -246,6 +249,7 @@ impl Default for Vehicles {
             infos: VehicleInfos::default(),
             slots: [None; MAX_VEHICLES],
             live: HashMap::new(),
+            corpses: HashMap::new(),
             fire_ops: Vec::new(),
             deaths: Vec::new(),
             dying: Vec::new(),
@@ -757,31 +761,90 @@ pub fn pair_collmap(host: &mut GameHost, cx: &mut Cx, id: EntId) {
 /// `G_FreeVehicle` (0x8ad7d) ahead of the vehicle's own `G_FreeEntity`:
 /// the blend entities go first, in order, then the slot.
 pub fn free(host: &mut GameHost, id: EntId) {
-    let Some(v) = host.vehicles.live.remove(&id) else {
-        return;
+    let v = match host.vehicles.corpses.remove(&id) {
+        Some(v) => v,
+        None => match free_record(host, id) {
+            Some(v) => v,
+            None => return,
+        },
     };
-    host.vehicles.slots[v.slot] = None;
     if let (Some(n), Some(w)) = (v.collmap, host.world.as_ref()) {
         w.collision.set_model_instance(id.0, n as usize, None);
     }
+}
+
+/// `G_FreeVehicle`'s record half: the pool slot and the sound blends go.
+fn free_record(host: &mut GameHost, id: EntId) -> Option<Vehicle> {
+    let v = host.vehicles.live.remove(&id)?;
+    host.vehicles.slots[v.slot] = None;
     for b in v.blends.into_iter().flatten() {
         host.free_entity(b);
     }
+    Some(v)
+}
+
+/// `freeVehicle` (0x8e72f, section 17): `G_FreeVehicle` (health 0, the
+/// blends freed, think and `speed` cleared, `eFlags` and both trTypes 0),
+/// `eType` 13 and classname `script_vehicle_corpse`, `death` with no
+/// argument, then `Scr_FreeEntityNum`: every handle out goes dead, the
+/// threads whose `self` it was with it, and the entity stays where it
+/// stands with its collmap, under a new handle.
+pub fn free_to_corpse(host: &mut GameHost, cx: &mut Cx, id: EntId) {
+    set_field(host, cx, id, "health", Value::Int(0));
+    let Some(mut v) = free_record(host, id) else {
+        return;
+    };
+    set_field(host, cx, id, "speed", Value::Float(0.0));
+    v.wire.driven_flag = false;
+    v.wire.loop_sound = 0;
+    if let (Some(e), crate::game::fields::Route::Engine { slot, .. }) = (
+        host.ents.get_mut(id),
+        crate::game::fields::route_entity("classname"),
+    ) {
+        e.engine[slot] = Value::String(cx.intern_exact("script_vehicle_corpse"));
+    }
+    let death = cx.intern_folded("death");
+    cx.notify(vcod_gsc::Target::Entity(id), death, Vec::new());
+    // UO's own entity fields (`vehicletype` +0x314, `capturing` +0x318,
+    // `vehicle_owner` +0x31c) are gentity storage there and outlive the
+    // object; vcod keeps them with the script's.
+    let kept: Vec<(vcod_gsc::Atom, Value)> = ["vehicletype", "capturing", "vehicle_owner"]
+        .iter()
+        .map(|n| {
+            let a = cx.intern_folded(n);
+            (a, host.get_field(cx, id, a))
+        })
+        .collect();
+    let Some(new) = host.ents.reissue(cx, id) else {
+        return;
+    };
+    for (a, value) in kept {
+        if value != Value::Undefined {
+            let _ = host.set_field(cx, new, a, value);
+        }
+    }
+    host.vehicles.corpses.insert(new, v);
 }
 
 /// The vehicle entity's own fields on the wire (0x7c935, the think's
 /// writes; docs/research/coduo-vehicles.md 12). Its pose rides `pos` and
 /// `apos` at `TR_INTERPOLATE`.
 pub fn write_wire(host: &GameHost, id: EntId, model: i32, set: &mut dyn FnMut(&str, i32)) {
-    let Some(v) = host.vehicles.live.get(&id) else {
-        return;
+    let (v, corpse) = match host.vehicles.live.get(&id) {
+        Some(v) => (v, false),
+        None => match host.vehicles.corpses.get(&id) {
+            Some(v) => (v, true),
+            None => return,
+        },
     };
     let info = host.vehicles.info_of(v);
     let f = |x: f32| x.to_bits() as i32;
-    set(
-        "eType",
-        crate::game::wire::ET_RAW | vcod_common::net::flags::ET_VEHICLE_V22,
-    );
+    let et = if corpse {
+        vcod_common::net::flags::ET_VEHICLE_CORPSE_V22
+    } else {
+        vcod_common::net::flags::ET_VEHICLE_V22
+    };
+    set("eType", crate::game::wire::ET_RAW | et);
     set(
         "eFlags",
         if v.wire.driven_flag {
@@ -790,8 +853,11 @@ pub fn write_wire(host: &GameHost, id: EntId, model: i32, set: &mut dyn FnMut(&s
             0
         },
     );
-    set("pos.trType", TR_INTERPOLATE);
-    set("apos.trType", TR_INTERPOLATE);
+    // A corpse stands still: `G_FreeVehicle` zeroes both trTypes.
+    if !corpse {
+        set("pos.trType", TR_INTERPOLATE);
+        set("apos.trType", TR_INTERPOLATE);
+    }
     set("xmodel", model);
     if let Some(n) = v.collmap {
         set("index", n as i32);
