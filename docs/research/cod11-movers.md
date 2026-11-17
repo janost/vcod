@@ -1817,7 +1817,11 @@ sets `torso`'s goal again with its time off the weight the clear kept, so the
 node then fades over the torso's blend. vcod: `ChannelClock::knob_nodes` and
 `touched` give the nodes and clips beside the path
 `Ramp::cleared_next_step`, which reads the old weight at the set's time and 0
-after it, and the death channel's own old clips the same.
+after it, and the death channel's own old clips the same. CoD2's and CoD4's
+bodies (`vcod_cod2::player`, `ChannelClock::cod2_tree`) keep the clear at
+once and no shared node: their gates match retail that way
+(`cod2_combat_ab`'s hit-turret kill moves off retail's with CoD1's rule) and
+`cod2_lnxded`'s clear was not read.
 
 VERIFIED, vcod measurement, `crates/server/tests/legs_ab.rs`
 (`a_drawn_body_runs_the_end_frame_clips_a_snapshot_early`): retail's snapshots

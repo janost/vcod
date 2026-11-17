@@ -470,6 +470,11 @@ pub struct ChannelClock {
     /// How far ahead of the node times every weight reads
     /// ([`Self::set_weight_lead`]).
     lead_ms: i32,
+    /// A CoD2 or CoD4 body (`vcod_cod2::player`): a KnobAll clear lands
+    /// at once and a setter never takes the other lerp frame's clip, as
+    /// those gates measured; the next-step clear and the shared node are
+    /// CoD1's engine reads ([`Self::cod2_tree`]).
+    cod2_tree: bool,
 }
 
 impl ChannelClock {
@@ -543,6 +548,24 @@ impl ChannelClock {
     /// the windowed setter, where the server's stores the sum.
     pub fn cgame_spread(&mut self) {
         self.cgame = true;
+    }
+
+    /// Keeps CoD2's and CoD4's tree handling: a KnobAll clears beside the
+    /// death's path at once, and a setter starting a node the other lerp
+    /// frame holds starts its own (cod2-player-anims.md 7 and 12 hold those
+    /// weights against gdb dumps). CoD1's engine keeps a cleared node's
+    /// weight until the next step (cod11-movers.md 15), unread on CoD2.
+    pub fn cod2_tree(&mut self) {
+        self.cod2_tree = true;
+    }
+
+    /// The ramp a KnobAll leaves on a node beside the death's path that
+    /// read `w` at `now_ms`.
+    fn knob_cleared(&self, w: f32, now_ms: i32) -> Ramp {
+        match self.cod2_tree {
+            true => Ramp::new(0.0, 0.0, now_ms, 0.0),
+            false => Ramp::cleared_next_step(w, now_ms),
+        }
     }
 
     /// The wire value last set, toggle included (`lf+0x10`).
@@ -747,6 +770,7 @@ impl ChannelClock {
                 .copied()
                 .chain(std::iter::once((self.current, self.weight)))
                 .filter(|(p, w)| p.index != 0 && p.index != new_index && w.at(now_ms) > 0.0)
+                .filter(|_| !self.cod2_tree)
                 .map(|(p, w)| (p, Ramp::cleared_next_step(w.at(now_ms), now_ms)))
                 .collect();
             self.fading = [None; FADES];
@@ -1003,7 +1027,14 @@ impl ChannelClock {
                 })
             };
             if cut(index) {
-                self.weight = Ramp::cleared_next_step(self.weight.at(now_ms), now_ms);
+                self.weight = self.knob_cleared(self.weight.at(now_ms), now_ms);
+            }
+            if self.cod2_tree {
+                for f in self.fading.iter_mut() {
+                    if f.is_some_and(|(p, _)| cut(p.index)) {
+                        *f = None;
+                    }
+                }
             }
             for (p, w) in self.fading.iter_mut().flatten() {
                 if cut(p.index) {
@@ -1030,7 +1061,7 @@ impl ChannelClock {
     /// is the node the setter raises, from its weight there.
     fn shared(own: &Self, other: &Self, wire: i32, now_ms: i32) -> Option<(Play, Ramp)> {
         let index = wire & !TOGGLE;
-        if wire == own.anim || index == 0 || own.holding(index, now_ms).is_some() {
+        if own.cod2_tree || wire == own.anim || index == 0 || own.holding(index, now_ms).is_some() {
             return None;
         }
         other.holding(index, now_ms)
@@ -1058,7 +1089,7 @@ impl ChannelClock {
             if path.contains(&n) {
                 Ramp::new(1.0, 1.0, now_ms, 0.0)
             } else if parent(anims, n).is_some_and(|p| path.contains(&p)) {
-                Ramp::cleared_next_step(ramp.at(now_ms), now_ms)
+                self.knob_cleared(ramp.at(now_ms), now_ms)
             } else {
                 ramp
             }

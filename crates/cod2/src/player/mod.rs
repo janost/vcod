@@ -431,6 +431,8 @@ impl PlayerBody {
             self.legs.store_steps();
             self.torso.store_steps();
         }
+        self.legs.cod2_tree();
+        self.torso.cod2_tree();
         update_body(
             (&mut self.legs, &mut self.torso),
             anims,
