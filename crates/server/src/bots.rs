@@ -575,6 +575,9 @@ pub struct ReView {
     pub objectives: Vec<ReObjView>,
     /// As [`SdView::rank`]: defenders spread over the objectives by it.
     pub rank: usize,
+    /// With one carried, this defender holds its goal: the one nearest
+    /// that goal ([`Bot::retrieval_target`]); the rest go after the carrier.
+    pub holds_goal: bool,
     /// One of the attackers nearest the teammate carrying an objective
     /// ([`team::escorts`]): it keeps by him, and the rest hold his goal.
     pub escort: bool,
@@ -1256,6 +1259,9 @@ pub struct Bot {
     /// The driver's follower walked out the plan to the health item this
     /// tick: the body heads straight at it (`Bot::track_heal`).
     pub(crate) heal_walked: bool,
+    /// The point goal whose plan the driver's follower walked out this
+    /// tick, in every game (`bel`'s markers, [`Bot::marker_short`]).
+    pub(crate) walked_to: Option<[f32; 3]>,
     /// The health item headed straight at, the nearest the body came to
     /// it and the ticks since it last came [`SHORT_GAIN`] nearer.
     heal_short: Option<([f32; 3], f32, u32)>,
@@ -1407,6 +1413,9 @@ pub struct Bot {
     /// `scr_bel_positiontime` seconds, and the hunt looks round from it
     /// rather than standing on it.
     marker_reached: Option<[f32; 3]>,
+    /// A marker walked out to: it, the nearest the body came, and the
+    /// ticks since it came [`SHORT_GAIN`] nearer ([`Bot::marker_short`]).
+    marker_near: Option<([f32; 3], f32, u32)>,
     /// The last reliable server command the bot consumed.
     pub(crate) last_seen_seq: i32,
     /// The client-command sequence the bot's own replies use.
@@ -1774,6 +1783,7 @@ impl Bot {
             arrived_goal: None,
             heal_at: None,
             heal_walked: false,
+            walked_to: None,
             heal_short: None,
             view_owned: false,
             rungs_ago: u32::MAX,
@@ -1840,6 +1850,7 @@ impl Bot {
             seen_speed: 0.0,
             held_over: 0,
             marker_reached: None,
+            marker_near: None,
             last_seen_seq: 0,
             next_command_seq: 1,
             rider: Default::default(),
@@ -2089,6 +2100,26 @@ impl Bot {
         }
     }
 
+    /// A marker no body reaches counts as stood at: the follower walked
+    /// out the plan to it (`walked`) and the body came no [`SHORT_GAIN`]
+    /// nearer in [`SHORT_TICKS`]. The marker is the mean of where it was
+    /// and where its player stands (`bel.gsc` 1588-1603), so it can hang
+    /// over a drop or sit in a wall, off the graph; the hunter walked at
+    /// it until it moved again (bot-objectives.md 5.2).
+    fn marker_short(&mut self, view: &BotView, m: [f32; 3], walked: Option<[f32; 3]>) -> bool {
+        if walked != Some(m) {
+            self.marker_near = None;
+            return false;
+        }
+        let d = dist_sq(view.origin, m).sqrt();
+        let (best, ticks) = match self.marker_near {
+            Some((at, best, t)) if at == m && d > best - SHORT_GAIN => (best, t + 1),
+            _ => (d, 0),
+        };
+        self.marker_near = Some((m, best, ticks));
+        ticks >= SHORT_TICKS
+    }
+
     /// The nearest marker other than the one last stood at.
     fn next_marker(&self, view: &BotView, bel: &BelView) -> Option<[f32; 3]> {
         bel.markers
@@ -2240,7 +2271,7 @@ impl Bot {
     /// Attackers: deliver what they carry, else go for the nearest objective
     /// lying there, else escort a teammate carrying one, else stand by the
     /// goal it goes to. Defenders: each guards an objective lying there by
-    /// rank. Once one is carried the first by rank holds its goal and the
+    /// rank. Once one is carried the one nearest its goal holds it and the
     /// rest go after the carrier: at him while the compass shows him, else
     /// back along his likely way once, then to the goal.
     fn retrieval_target(&self, view: &BotView, re: &ReView) -> Option<ObjTarget> {
@@ -2280,7 +2311,7 @@ impl Bot {
             }
             ObjRole::Defend => {
                 if let Some(g) = Self::goal_guard(view, o) {
-                    if re.rank == 0 {
+                    if re.holds_goal {
                         return Some(g);
                     }
                     if let Some(at) = Self::carrier(view, o) {
@@ -3629,11 +3660,13 @@ impl Bot {
             }
             None => self.quiet_ticks.saturating_add(1),
         };
+        let walked = self.walked_to.take();
         if let Some(bel) = view.bel.as_ref()
             && let Some(m) = self.next_marker(view, bel)
-            && arrived(view.origin, m)
+            && (arrived(view.origin, m) || self.marker_short(view, m, walked))
         {
             self.marker_reached = Some(m);
+            self.marker_near = None;
         }
         // A switch the weapon machine sits idle on never lands: the rungs
         // hold the hands empty (`ps.weapon` 0) for as long as the body is on
@@ -6104,6 +6137,7 @@ mod tests {
         v.re = Some(ReView {
             role,
             rank: 0,
+            holds_goal: true,
             escort: true,
             objectives: vec![ReObjView {
                 pickup: Some([30.0, 0.0, 72.0]),
@@ -6175,7 +6209,7 @@ mod tests {
         assert_eq!(bot.goal(&v), Goal::Roam);
     }
 
-    /// Past the first by rank, a defender goes after a carried objective:
+    /// A defender not holding the goal goes after a carried objective:
     /// back to where it was taken while the compass hides the carrier,
     /// then to the goal; straight at him once the compass shows him.
     #[test]
@@ -6184,7 +6218,7 @@ mod tests {
         let mut v = re_view(ObjRole::Defend);
         v.origin = [2500.0, 0.0, 64.0];
         let re = v.re.as_mut().unwrap();
-        re.rank = 1;
+        re.holds_goal = false;
         let o = &mut re.objectives[0];
         (o.pickup, o.carried) = (None, true);
         assert_eq!(bot.goal(&v), Goal::To([30.0, 0.0, 64.0]));
@@ -6347,6 +6381,31 @@ mod tests {
         assert_eq!(bot.goal(&v), Goal::To([1500.0, 300.0, 64.0]));
         v.noise = Some([0.0, 900.0, 104.0]);
         assert_eq!(bot.goal(&v), Goal::To([0.0, 900.0, 104.0]), "a noise first");
+    }
+
+    /// A marker hanging 150 units over the floor (the mean of a spot on a
+    /// ledge and one below it): once the plan to it is walked out and the
+    /// body comes no nearer for [`SHORT_TICKS`], the hunter moves on.
+    #[test]
+    fn a_hunter_gives_up_a_marker_off_the_graph() {
+        let mut bot = Bot::new("axis", true, 1);
+        let high = [800.0, 0.0, 214.0];
+        let mut v = bel_view(false, vec![high, [2000.0, 0.0, 64.0]]);
+        v.origin = [780.0, 0.0, 64.0];
+        for _ in 0..SHORT_TICKS {
+            bot.walked_to = Some(high);
+            bot.think(&v);
+            assert_eq!(bot.goal(&v), Goal::To(high), "still walking at it");
+        }
+        // A plan not walked out (a way round still ahead) keeps the marker.
+        let mut other = Bot::new("axis", true, 1);
+        for _ in 0..=SHORT_TICKS {
+            other.think(&v);
+        }
+        assert_eq!(other.goal(&v), Goal::To(high));
+        bot.walked_to = Some(high);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::To([2000.0, 0.0, 64.0]), "given up");
     }
 
     /// The hunted run from what they last saw or heard, else from their own

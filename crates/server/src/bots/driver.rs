@@ -1984,6 +1984,10 @@ fn route<W: BotWorld>(
         b.rng = rng;
         b.heal_walked = matches!(goal, Goal::To(p)
             if follower.walked_out() && view.survive.heal == Some(p));
+        b.walked_to = match goal {
+            Goal::To(p) if follower.walked_out() => Some(p),
+            _ => None,
+        };
         if W::GIVES_UP_GOALS {
             b.arrived_goal = match goal {
                 Goal::To(p) if follower.walked_out() => Some(p),
