@@ -1645,7 +1645,10 @@ angles, so the gsc lays the pair out along +x):
         --probe-team allies --probe-flame --probe-secs 55   # 3 s after the shooter
 
 Start the probes once the server answers (its boot takes some 15 s); discard
-the shooter's `--probe-weapsel` fixture. The same pair on vcod-server
+the shooter's `--probe-weapsel` fixture. The victim poses each firing body's
+`tag_flash` through the client's scene build on a windowless renderer, which
+needs a Vulkan adapter with BC textures; without one its `FLAME:` line says
+so and the nozzle sits 16 units ahead of the eye. The same pair on vcod-server
 (`--gametype-script` the probe) burns the victim the same way, 8 with
 `MOD_FLAME` a frame while the bit rides, and no bullet hit (section 21).
 

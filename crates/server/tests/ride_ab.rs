@@ -935,3 +935,190 @@ fn mover_reads(
     );
     assert_eq!(retail.len(), ours.len(), "row count");
 }
+
+const CULL: &str = "tests/fixtures/movers/mp_carentan-dm-cull.txt";
+
+/// `probe_cull`'s server half: each phase's start, every `PROBE f` row
+/// (phase, level time, the slab's origin) and the run's end.
+struct CullLog {
+    starts: BTreeMap<String, i32>,
+    frames: Vec<(String, i32, [f32; 3])>,
+    done: Option<i32>,
+}
+
+impl CullLog {
+    fn parse<'a>(lines: impl Iterator<Item = &'a str>) -> CullLog {
+        let mut log = CullLog {
+            starts: BTreeMap::new(),
+            frames: Vec::new(),
+            done: None,
+        };
+        for l in lines.filter(|l| !l.starts_with('#')) {
+            let Some(l) = l.find("PROBE ").map(|i| &l[i..]) else {
+                continue;
+            };
+            match l.split_whitespace().collect::<Vec<_>>().as_slice() {
+                ["PROBE", "at", phase, t] => {
+                    log.starts.insert(phase.to_string(), t.parse().unwrap());
+                }
+                ["PROBE", "f", phase, t, ..] => {
+                    log.frames
+                        .push((phase.to_string(), t.parse().unwrap(), vectors(l)[0]));
+                }
+                ["PROBE", "done", t] => log.done = Some(t.parse().unwrap()),
+                _ => {}
+            }
+        }
+        log
+    }
+
+    /// Each phase's rows as (offset from the phase's start, origin).
+    fn by_phase(&self) -> BTreeMap<&str, Vec<(i32, [f32; 3])>> {
+        let mut out: BTreeMap<&str, Vec<(i32, [f32; 3])>> = BTreeMap::new();
+        for (phase, t, o) in &self.frames {
+            out.entry(phase.as_str())
+                .or_default()
+                .push((t - self.starts[phase], *o));
+        }
+        out
+    }
+}
+
+/// The slab's presence changes in a cull run's snapshots as (serverTime,
+/// present), the first snapshot's state included.
+fn presence_changes(snaps: &BTreeMap<i32, bool>) -> Vec<(i32, bool)> {
+    let mut out: Vec<(i32, bool)> = Vec::new();
+    for (&t, &here) in snaps {
+        if out.last().is_none_or(|&(_, h)| h != here) {
+            out.push((t, here));
+        }
+    }
+    out
+}
+
+/// A `script_brushmodel` lifted 20000 units over 8 s and lowered back
+/// leaves the snapshot on the frame its trajectory at the level time
+/// clears the viewer's PVS and comes back on the frame it re-enters it,
+/// 950 ms into the lift and 7100 ms into the descent on retail; a cull at
+/// `trBase` would keep it the whole lift and drop it the whole descent
+/// (movers doc 14, the fourth capture). Ours runs `probe_cull` with one
+/// allied client standing on the attackers' spawn and holds both the
+/// slab's every scripted origin and its leave and return offsets to
+/// retail's.
+#[test]
+fn a_lifted_brush_model_leaves_and_reenters_the_snapshot_like_retail() {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let text = std::fs::read_to_string(CULL).unwrap();
+    let retail = CullLog::parse(text.lines());
+    // The client's lines: every entity the first snapshot carried, then
+    // each change of the slab's.
+    let bm = text
+        .lines()
+        .find_map(|l| l.strip_prefix("PROBE bm "))
+        .expect("the slab's entity number");
+    let mut retail_snaps: Vec<(i32, bool)> = Vec::new();
+    for l in text.lines() {
+        let t = |l: &str| -> i32 {
+            l.split_whitespace()
+                .find_map(|t| t.strip_prefix("t="))
+                .unwrap()
+                .parse()
+                .unwrap()
+        };
+        if l.starts_with("RIDE_ENT ") && l.contains(&format!(" index={SLAB_MODEL} ")) {
+            retail_snaps.push((t(l), true));
+        } else if l.starts_with("RIDE_GONE ") && l.ends_with(&format!(" num={bm}")) {
+            retail_snaps.push((t(l), false));
+        }
+    }
+    assert_eq!(retail_snaps.len(), 3, "{retail_snaps:?}");
+
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_cull"), now);
+    sv.overlay_script(
+        "maps/mp/gametypes/probe_cull",
+        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_cull.gsc"),
+    );
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
+    let p = &PROTOCOL_V1;
+    let mut snaps = BTreeMap::new();
+    for _ in 0..2000 {
+        now += Duration::from_millis(FRAME_MS as u64);
+        cl.send_frame(&holding(&cl));
+        common::step(&mut sv, &q, &mut cl, now);
+        if let Some(s) = cl.snapshots().newest() {
+            let here = s
+                .entities
+                .values()
+                .any(|e| e.field_i32(p, "eType") == 8 && e.field_i32(p, "index") == SLAB_MODEL);
+            snaps.insert(s.server_time, here);
+        }
+        if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
+            break;
+        }
+    }
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+    let ours = CullLog::parse(sv.script_log().iter().map(String::as_str));
+    assert!(ours.done.is_some(), "the probe never finished on ours");
+    assert_eq!(
+        ours.starts.keys().collect::<Vec<_>>(),
+        retail.starts.keys().collect::<Vec<_>>()
+    );
+
+    // The slab's scripted origin, frame by frame from each phase's start.
+    let (r_rows, o_rows) = (retail.by_phase(), ours.by_phase());
+    let mut bad = Vec::new();
+    for (phase, r) in &r_rows {
+        let o = &o_rows[phase];
+        assert_eq!(r.len(), o.len(), "{phase}: sample count");
+        for ((rt, rv), (ot, ov)) in r.iter().zip(o) {
+            if rt != ot || diff(*rv, *ov) > TOL {
+                bad.push(format!("{phase}: retail +{rt} {rv:?}, ours +{ot} {ov:?}"));
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "{} rows differ:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+
+    // Where it left and came back, from each phase's start.
+    let offsets = |changes: &[(i32, bool)], starts: &BTreeMap<String, i32>| {
+        let gone = changes
+            .iter()
+            .find(|&&(t, h)| !h && t > starts["cull_up"])
+            .map(|&(t, _)| t - starts["cull_up"]);
+        let back = changes
+            .iter()
+            .find(|&&(t, h)| h && t > starts["cull_down"])
+            .map(|&(t, _)| t - starts["cull_down"]);
+        (gone, back)
+    };
+    let ours_changes = presence_changes(&snaps);
+    if report() {
+        println!("retail {retail_snaps:?} ours {ours_changes:?}");
+    }
+    let want = offsets(&retail_snaps, &retail.starts);
+    assert_eq!(want, (Some(950), Some(7100)), "the fixture's own reading");
+    assert_eq!(
+        offsets(&ours_changes, &ours.starts),
+        want,
+        "ours' slab left and came back (ms into each phase): {ours_changes:?}"
+    );
+    // Gone once, back once, and nothing between.
+    let between: Vec<_> = ours_changes
+        .iter()
+        .filter(|&&(t, _)| t > ours.starts["cull_up"])
+        .collect();
+    assert_eq!(between.len(), 2, "{between:?}");
+}

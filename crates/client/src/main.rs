@@ -8976,10 +8976,6 @@ mod tests {
         quick_chat: quick_chat::QuickChat,
     }
 
-    /// `reopen_fs` rewrites the process-wide impact table
-    /// (`fx::registry::init`), so the tests that reopen take turns.
-    static REOPEN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     impl Reopened {
         fn load(fs: &Pk3Fs) -> Reopened {
             let mut audio = audio::AudioSystem::new(
@@ -9039,9 +9035,6 @@ mod tests {
     /// lacked; a miss cached against the old search path must not outlive it.
     #[test]
     fn reopen_reads_menus_and_strings_off_the_new_paks() {
-        let _table = REOPEN_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempfile::tempdir().unwrap();
         make_pk3(dir.path(), "pak0.pk3", &[("readme.txt", b"")]);
         let mut fs = Pk3Fs::open(dir.path()).unwrap();
@@ -9079,9 +9072,6 @@ mod tests {
     /// it either.
     #[test]
     fn reopen_reads_fonts_aliases_and_effects_off_the_new_paks() {
-        let _table = REOPEN_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         use audio::cues::{Cue, Source};
         let dir = tempfile::tempdir().unwrap();
         make_pk3(dir.path(), "pak0.pk3", &[("readme.txt", b"")]);

@@ -73,6 +73,7 @@ mod shader_ops;
 pub use fx_cloud::OutdoorSource;
 #[cfg(test)]
 mod fx_feather;
+pub(crate) mod headless;
 #[cfg(test)]
 mod hud_shot;
 mod mark_pass;
@@ -3541,10 +3542,9 @@ fn build_sun_sprite(
 }
 
 /// Where a frame lands: the window's swapchain, or a texture for a
-/// headless renderer (tests).
+/// headless renderer (tests, probes).
 enum Target {
     Surface(wgpu::Surface<'static>),
-    #[cfg_attr(not(test), allow(dead_code))]
     Offscreen(wgpu::Texture),
 }
 
