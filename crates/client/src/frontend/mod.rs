@@ -536,9 +536,14 @@ impl Ui {
         self
     }
 
-    /// Favourites live in `path` (`servercache.dat`, beside `CoDMP.exe`).
-    pub fn with_server_cache(mut self, path: PathBuf) -> Ui {
-        self.set_browser(Browser::with_cache(path));
+    /// Favourites live in `path`, a server cache of `layout` beside the
+    /// game's executable (`servercache.dat`, UO's `uoservercache.dat`).
+    pub fn with_server_cache(
+        mut self,
+        path: PathBuf,
+        layout: vcod_common::net::server_cache::Layout,
+    ) -> Ui {
+        self.set_browser(Browser::with_cache(path, layout));
         self
     }
 
@@ -4780,8 +4785,10 @@ mod tests {
                 feeder 2 visible 1
                 columns 9 2 20 20  22 14 14  41 40 40  306 40 20  420 5 10
                           484 20 10  528 14 14  548 20 10  568 20 20 } } }"#;
-        let mut ui =
-            ui_with_menu(menu).with_server_cache(PathBuf::from("/nonexistent/servercache.dat"));
+        let mut ui = ui_with_menu(menu).with_server_cache(
+            PathBuf::from("/nonexistent/servercache.dat"),
+            vcod_common::net::server_cache::Layout::Cod11,
+        );
         assert_eq!(ui.browser.columns, &browser::COLUMNS_V5[..]);
         ui.set_browser(Browser::default());
         assert_eq!(ui.browser.columns, &browser::COLUMNS_V5[..]);
@@ -5164,7 +5171,10 @@ mod tests {
     fn a_new_favourite_is_typed_in_and_listed() {
         let Some(ui) = ui() else { return };
         let dir = tempfile::tempdir().unwrap();
-        let mut ui = ui.with_server_cache(dir.path().join("servercache.dat"));
+        let mut ui = ui.with_server_cache(
+            dir.path().join("servercache.dat"),
+            vcod_common::net::server_cache::Layout::Cod11,
+        );
         ui.browser.lan_targets.clear();
         let mut shell = Shell::new();
         ui.frame(Instant::now(), &shell);

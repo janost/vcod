@@ -2787,8 +2787,21 @@ fn couldnt_load(map: &str) -> String {
 /// The front end off `fs`, with the favourites file and the Mods menu's
 /// directory listing under `game_dir`.
 fn new_ui(fs: &Pk3Fs, game_dir: &std::path::Path, mod_dir: &str, language: &str) -> frontend::Ui {
-    let mut ui =
-        frontend::Ui::new(fs, language).with_server_cache(game_dir.join("servercache.dat"));
+    use vcod_common::net::server_cache::Layout;
+    // Each game's own cache file and shape (cod11-front-end.md 8).
+    let layout = match fs.game() {
+        vcod_common::game::Game::Cod2 => Layout::Cod2,
+        _ => match vcod_common::net::protocol::install_protocol(fs)
+            .transport
+            .version
+        {
+            6 => Layout::Cod15,
+            22 => Layout::Uo,
+            _ => Layout::Cod11,
+        },
+    };
+    let mut ui = frontend::Ui::new(fs, language)
+        .with_server_cache(game_dir.join(layout.file_name()), layout);
     if fs.game() == vcod_common::game::Game::Cod2 {
         ui.set_profiles_dir(game_dir.join(mod_dir).join("players"));
     }
