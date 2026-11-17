@@ -19,13 +19,13 @@ use std::collections::{BTreeMap, HashMap};
 use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::events::{EventTracker, GameEvent};
-use vcod_common::net::msg::{self, NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::patch::Arith;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::pmove::predict;
+use vcod_common::testing::{SlopeLine, parse_slope};
 use vcod_common::weapon::{WeaponDef, WeaponSounds};
 
 use super::cmds::CmdRing;
@@ -232,86 +232,6 @@ fn dispatch(t: &mut Tally, ev: &GameEvent, ctx: &ResolveCtx, cue_ctx: &CueCtx) {
     t.doubled += usize::from(flashes > 1 || sounds > calls);
 }
 
-/// A `--save-slope` capture line.
-enum Line {
-    Cmd(UserCmd),
-    /// The snapshot, and the `(event, parm)` pairs it brought in 1.1's ids.
-    Snap(Box<Snapshot>, Vec<(i32, i32)>),
-}
-
-fn parse(p: &Cod1Wire, text: &str) -> Vec<Line> {
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let Some((kind, rest)) = line.split_once(' ') else {
-            continue;
-        };
-        let kv: BTreeMap<&str, &str> = rest
-            .split_whitespace()
-            .filter_map(|kv| kv.split_once('='))
-            .collect();
-        let int = |k: &str| -> i32 { kv[k].parse().unwrap_or_else(|_| panic!("{k} in {line}")) };
-        let pairs = |k: &str| -> Vec<(&str, i32)> {
-            kv.get(k)
-                .into_iter()
-                .flat_map(|v| v.split(','))
-                .filter(|s| !s.is_empty())
-                .map(|s| {
-                    let (a, b) = s.rsplit_once(':').expect("name:value");
-                    (a, b.parse().expect("an int"))
-                })
-                .collect()
-        };
-        match kind {
-            "!cmd" => {
-                let a: Vec<i32> = kv["angles"]
-                    .split(',')
-                    .map(|x| x.parse().unwrap())
-                    .collect();
-                out.push(Line::Cmd(UserCmd {
-                    server_time: int("st"),
-                    buttons: int("buttons") as u8,
-                    wbuttons: int("wbuttons") as u8,
-                    weapon: int("weapon") as u8,
-                    angles: [a[0], a[1], a[2]],
-                    forward: int("forward") as i8,
-                    right: int("right") as i8,
-                    up: int("up") as i8,
-                    ..NULL_USERCMD
-                }));
-            }
-            "!snap" => {
-                let mut ps = msg::PlayerState::null(p);
-                for (name, v) in pairs("wire") {
-                    ps.fields[msg::PlayerState::field_index(p, name).expect(name)] = v;
-                }
-                for (k, v) in pairs("ammo") {
-                    ps.arrays.ammo[k.parse::<usize>().unwrap()] = v as i16;
-                }
-                for (k, v) in pairs("clip") {
-                    ps.arrays.ammoclip[k.parse::<usize>().unwrap()] = v as i16;
-                }
-                let ev = pairs("ev")
-                    .into_iter()
-                    .map(|(e, parm)| (e.parse().expect("an event id"), parm))
-                    .collect();
-                let snap = Snapshot {
-                    server_time: int("t"),
-                    message_num: int("msg") as u32,
-                    delta_num: -1,
-                    snap_flags: 0,
-                    ps,
-                    entities: BTreeMap::new(),
-                    clients: BTreeMap::new(),
-                    valid: true,
-                };
-                out.push(Line::Snap(Box::new(snap), ev));
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
 /// The capture's map world as the client loads it.
 fn load_world(fs: &Pk3Fs, map: &str) -> CollisionWorld {
     let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
@@ -360,18 +280,27 @@ fn replay_own_as(
     let mut ring = CmdRing::default();
     let mut newest: Option<Snapshot> = None;
     let mut brought = BTreeMap::new();
-    for line in parse(p, &text) {
+    for line in parse_slope(p, &text) {
         match line {
-            Line::Snap(s, ev) => {
+            SlopeLine::Snap(s) => {
                 // The first drain only marks the ring.
                 if newest.is_some() {
-                    for (e, _) in ev {
+                    for &(e, _) in &s.events {
                         *brought.entry(e).or_default() += 1;
                     }
                 }
-                newest = Some(*s);
+                newest = Some(Snapshot {
+                    server_time: s.server_time,
+                    message_num: s.message_num,
+                    delta_num: -1,
+                    snap_flags: 0,
+                    ps: s.ps,
+                    entities: BTreeMap::new(),
+                    clients: BTreeMap::new(),
+                    valid: true,
+                });
             }
-            Line::Cmd(c) => {
+            SlopeLine::Cmd(c) => {
                 ring.push(c);
                 if let Some(s) = &newest {
                     client.frame(s, Some((&ring, &world)), f64::from(c.server_time));

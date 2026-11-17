@@ -47,6 +47,7 @@ use vcod_common::net::trajectory::Trajectory;
 use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::pmove::predict::{self, Predicted};
 use vcod_common::pmove::{self as pm, weapon::WEAPON_READY};
+use vcod_common::testing::SlopeLine;
 use vcod_common::weapon::WeaponDef;
 use vcod_server::spectate::ClientSim;
 
@@ -778,70 +779,16 @@ enum CaptureLine {
     Snap(Box<msg::PlayerState>, Option<[f32; 3]>),
 }
 
-/// A slope capture's cmds and decoded playerstates (`moves_ab.rs`' parser,
-/// less what this gate does not read).
+/// A slope capture's cmds and decoded playerstates, less what this gate
+/// does not read.
 fn parse_capture(p: &Protocol, text: &str) -> Vec<CaptureLine> {
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let Some((kind, rest)) = line.split_once(' ') else {
-            continue;
-        };
-        let kv: BTreeMap<&str, &str> = rest
-            .split_whitespace()
-            .filter_map(|kv| kv.split_once('='))
-            .collect();
-        let int = |k: &str| -> i32 { kv[k].parse().unwrap_or_else(|_| panic!("{k} in {line}")) };
-        let pairs = |k: &str| -> Vec<(&str, i32)> {
-            kv.get(k)
-                .into_iter()
-                .flat_map(|v| v.split(','))
-                .filter(|s| !s.is_empty())
-                .map(|s| {
-                    let (a, b) = s.rsplit_once(':').expect("name:value");
-                    (a, b.parse().expect("an int"))
-                })
-                .collect()
-        };
-        match kind {
-            "!cmd" => {
-                let a: Vec<i32> = kv["angles"]
-                    .split(',')
-                    .map(|x| x.parse().unwrap())
-                    .collect();
-                out.push(CaptureLine::Cmd(UserCmd {
-                    server_time: int("st"),
-                    buttons: int("buttons") as u8,
-                    wbuttons: int("wbuttons") as u8,
-                    weapon: int("weapon") as u8,
-                    angles: [a[0], a[1], a[2]],
-                    forward: int("forward") as i8,
-                    right: int("right") as i8,
-                    up: int("up") as i8,
-                    ..NULL_USERCMD
-                }));
-            }
-            "!snap" => {
-                let mut w = msg::PlayerState::null(p);
-                for (name, v) in pairs("wire") {
-                    let i = msg::PlayerState::field_index(p, name).expect(name);
-                    w.fields[i] = v;
-                }
-                for (k, v) in pairs("ammo") {
-                    w.arrays.ammo[k.parse::<usize>().unwrap()] = v as i16;
-                }
-                for (k, v) in pairs("clip") {
-                    w.arrays.ammoclip[k.parse::<usize>().unwrap()] = v as i16;
-                }
-                let vang = kv.get("vang").map(|v| {
-                    let a: Vec<f32> = v.split(',').map(|x| x.parse().unwrap()).collect();
-                    [a[0], a[1], a[2]]
-                });
-                out.push(CaptureLine::Snap(Box::new(w), vang));
-            }
-            _ => {}
-        }
-    }
-    out
+    vcod_common::testing::parse_slope(p, text)
+        .into_iter()
+        .map(|l| match l {
+            SlopeLine::Cmd(c) => CaptureLine::Cmd(c),
+            SlopeLine::Snap(s) => CaptureLine::Snap(Box::new(s.ps), s.vang),
+        })
+        .collect()
 }
 
 /// Retail's seat at a seated capture's snapshot, put on the sim the way the

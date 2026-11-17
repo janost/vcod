@@ -238,6 +238,102 @@ pub struct Frame {
     pub snapshot: crate::net::snapshot::Snapshot,
 }
 
+/// One line of a `--save-slope` capture (the client probe's writer): a
+/// usercmd as it went on the wire, or the playerstate a snapshot carried.
+pub enum SlopeLine {
+    Cmd(crate::net::msg::UserCmd),
+    Snap(Box<SlopeSnap>),
+}
+
+/// A `--save-slope` `!snap` line.
+pub struct SlopeSnap {
+    /// `t`, the snapshot's serverTime.
+    pub server_time: i32,
+    /// `msg`, its message number.
+    pub message_num: u32,
+    /// `wire`, `ammo` and `clip` over a null playerstate.
+    pub ps: crate::net::msg::PlayerState,
+    /// `vang`, the seat's vehicle's angles, on a seated UO capture.
+    pub vang: Option<[f32; 3]>,
+    /// `ev`, the `(event, parm)` pairs the snapshot brought, in 1.1's ids.
+    pub events: Vec<(i32, i32)>,
+}
+
+/// Every `!cmd` and `!snap` line of a `--save-slope` capture, in order.
+pub fn parse_slope(p: &crate::net::protocol::Protocol, text: &str) -> Vec<SlopeLine> {
+    use crate::net::msg::{NULL_USERCMD, PlayerState, UserCmd};
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let Some((kind, rest)) = line.split_once(' ') else {
+            continue;
+        };
+        let kv: std::collections::BTreeMap<&str, &str> = rest
+            .split_whitespace()
+            .filter_map(|kv| kv.split_once('='))
+            .collect();
+        let int = |k: &str| -> i32 { kv[k].parse().unwrap_or_else(|_| panic!("{k} in {line}")) };
+        let pairs = |k: &str| -> Vec<(&str, i32)> {
+            kv.get(k)
+                .into_iter()
+                .flat_map(|v| v.split(','))
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    let (a, b) = s.rsplit_once(':').expect("name:value");
+                    (a, b.parse().expect("an int"))
+                })
+                .collect()
+        };
+        match kind {
+            "!cmd" => {
+                let a: Vec<i32> = kv["angles"]
+                    .split(',')
+                    .map(|x| x.parse().unwrap())
+                    .collect();
+                out.push(SlopeLine::Cmd(UserCmd {
+                    server_time: int("st"),
+                    buttons: int("buttons") as u8,
+                    wbuttons: int("wbuttons") as u8,
+                    weapon: int("weapon") as u8,
+                    angles: [a[0], a[1], a[2]],
+                    forward: int("forward") as i8,
+                    right: int("right") as i8,
+                    up: int("up") as i8,
+                    ..NULL_USERCMD
+                }));
+            }
+            "!snap" => {
+                let mut ps = PlayerState::null(p);
+                for (name, v) in pairs("wire") {
+                    ps.fields[PlayerState::field_index(p, name).expect(name)] = v;
+                }
+                for (k, v) in pairs("ammo") {
+                    ps.arrays.ammo[k.parse::<usize>().unwrap()] = v as i16;
+                }
+                for (k, v) in pairs("clip") {
+                    ps.arrays.ammoclip[k.parse::<usize>().unwrap()] = v as i16;
+                }
+                let vang = kv.get("vang").map(|v| {
+                    let a: Vec<f32> = v.split(',').map(|x| x.parse().unwrap()).collect();
+                    [a[0], a[1], a[2]]
+                });
+                let events = pairs("ev")
+                    .into_iter()
+                    .map(|(e, parm)| (e.parse().expect("an event id"), parm))
+                    .collect();
+                out.push(SlopeLine::Snap(Box::new(SlopeSnap {
+                    server_time: int("t"),
+                    message_num: int("msg") as u32,
+                    ps,
+                    vang,
+                    events,
+                })));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// A one-entry stored pk3 (`maps/mp/foo.bsp`), for tests that need a
 /// transfer to pass validation.
 pub fn pk3_bytes() -> Vec<u8> {
