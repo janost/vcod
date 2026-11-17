@@ -6277,6 +6277,21 @@ mod tests {
         assert_eq!(bot.goal(&v), Goal::Roam);
     }
 
+    /// An escort holds inside its ring round the carrier, but within
+    /// `ESCORT_CLEAR` of him it walks off: standing on his next node on a
+    /// stair it held mp_carentan's carrier for 75 s.
+    #[test]
+    fn an_escort_steps_off_a_carrier_it_stands_on() {
+        let bot = Bot::new("allies", true, 1);
+        let mut v = re_view(ObjRole::Attack);
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried, o.carrier_at) = (None, true, Some([500.0, 0.0, 64.0]));
+        v.origin = [350.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        v.origin = [470.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Away([500.0, 0.0, 64.0]));
+    }
+
     /// A dropped objective 1000 units off: with 10 s left on its clock
     /// an attacker goes for it and a defender guards it; with 3 s left
     /// (570 units of run) both wait where it goes back to.

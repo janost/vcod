@@ -334,18 +334,39 @@ TICKS=6000`, mp_brecourt, mp_carentan, mp_chateau, mp_dawnville, mp_pavlov
 and mp_rocket, seeds 1 to 8, 48 matches): attackers' rounds 134 of 218
 (61.5%) before, 122 of 222 (55.0%) after; captures 117 and 104; carrier
 deaths 148 and 167; pickups 358 and 351; kills 1666 and 1691; stalled
-47 and 1592. The holder alone gives the same seeds 1 to 4 bit for bit
-(the clock fired on none there) and on seeds 5 to 8 one round less to
-the attackers and 21 stalled against 10. 1518 of the stalled are one
-match, mp_carentan seed 2: from tick 4121 the carrier, at 39 health,
-walked between nodes round (446, 1799, 160), upstairs 2800 units from
-the goal at (315, -1024, 15), to the end, with 50 edges given up on a
-body against 7 on the other seeds (temporary print of the stall, the
-bot's team and the goals). INFERRED: the defenders sent back down his
-way meet him on the stair. Kept: the holder is the defender who can
-reach the goal first, and the carriers it costs the attackers are the
-defence working (the attackers still take 55% of rounds); the
-carentan wedge is a follow-up.
+47 and 1592. The clock fired on none of seeds 1 to 4 (the holder alone
+plays them bit for bit). 1518 of the stalled are one match, mp_carentan
+seed 2. VERIFIED (trace, a temporary print every 25 ticks of the
+carrier's spot and waypoints and every body within 600 units): from tick
+4121 the carrier (slot 4, 39 health) paced between nodes round (446,
+1799, 160), upstairs, his next node (480, 1798, 160); his own side's
+escort (slot 6, `ObjTarget::Escort`, inside its 250-unit ring and so
+holding) stood still at (475, 1805, 160) on it, 30 units off, to the
+match's end; no defender came within 600 units. So the holder rule did
+not wedge him; it changed the game to one that put the escort on the
+stair. The carrier's plans round the escort found no way past (the
+followers gave up 22 edges in those 550 ticks, 15 with a body near).
+
+The fix: an escort within 80 units of the carrier it keeps by walks off
+(`ESCORT_CLEAR`, `Goal::Away` from him) instead of holding. VERIFIED
+(measured, same set, on master 0ec5e3343, whose run matches b8105567d's
+count for count):
+
+| Build | att W | def W | captures | carrier deaths | pickups | kills | stalled |
+|---|---|---|---|---|---|---|---|
+| master | 134 | 84 | 117 | 148 | 358 | 1666 | 47 |
+| holder and clock | 122 | 100 | 104 | 167 | 351 | 1691 | 1592 |
+| escort step-off alone | 134 | 80 | 131 | 124 | 334 | 1628 | 72 |
+| holder, clock and step-off | 137 | 79 | 121 | 142 | 347 | 1657 | 140 |
+
+- mp_carentan seed 2 with the step-off: the round the carrier was held
+  in ends at tick 4331, 0 stalled.
+- The last row's stalled are three matches: mp_rocket seeds 3 (64) and
+  6 (73) and mp_chateau seed 7 (3). Both mp_rocket ones are bots round
+  the objective's room, (9700 to 10240, 5700 to 6100, 160), where the
+  step-off alone stalls 39 (seed 5), the holder alone 11 (seed 6) and the
+  flank parts of 9.1 479; master's eight seeds never stall there. Not
+  traced (bot-navigation.md, "Open stalls, 2026-11-17").
 
 VERIFIED (measured, ours, 2026-10-08, release, 6 shooting bots, seeds 3
 to 6, 200 s per run, the carrier read off the compass record and the

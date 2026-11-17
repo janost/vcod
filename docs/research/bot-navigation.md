@@ -3067,6 +3067,25 @@ odd 0 / 3 / 0, 384 given up (all three falls off the pit's rim at
   `a_bot_backing_onto_a_climber_climbs_back_onto_the_crows_nest`, which
   fails with the hold off). VERIFIED (measured).
 
+### Open stalls, 2026-11-17
+
+Stalls found by the behaviour pass (fix/bots-behaviour-leftovers) and left
+for a nav pass:
+
+- `tests/bots.rs` `uo_bots_fight_and_sprint_in_tdm` (mp_cassino, UO
+  `tdm`, six shooting bots, 1800 ticks) fails its 12 s stall check on
+  three of seeds 1 to 63 odd, on master 0ec5e3343: `SEED=41` bot 1 on
+  foot at (964.9, -1599.6, 28.2), tick 1342; `SEED=45` bot 1 on foot at
+  (1546.3, -1623.0, 74.0), tick 752; `SEED=61` bot 5 seated (entity 186,
+  seat 1) at (1374.0, -1323.4, 108.3), tick 1510. The gate's default seed
+  1 passes. VERIFIED (measured, release). Not traced.
+- `re` with S&D's flank parts given to the attackers (tried, not kept,
+  bot-objectives.md 9.1): bots of both sides held near (9900, 5800, 160)
+  on mp_rocket, seeds 5 and 6, 479 stalled bot-ticks, 11 without the
+  parts. VERIFIED (measured). Not traced.
+- mp_carentan `re` seed 2's carrier held upstairs at (446, 1799, 160) was
+  no nav fault: an escort stood on his next node (bot-objectives.md 4.2).
+
 ## 4. Memory and hearing
 
 Two goals sit between a visible enemy and `Roam`, both kept by the brain
