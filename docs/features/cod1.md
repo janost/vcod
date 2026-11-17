@@ -26,6 +26,10 @@ Front end:
   in the stock error popup.
 - In a game, Esc opens the script menu; its Main Menu tab opens the stock
   in-game menu (Back to Game, Disconnect).
+- With no game up the main menu is always open, under the console too, as
+  retail reopens it each frame; Esc reaches it there.
+- Menu files run retail's precompiler: `#include`, `#define` with and
+  without parameters (`#`, `##`), `#undef` and the `#if` family.
 - The stock Mods menu lists the mod directories beside `main/` and
   switches to one, in a game too (not while a server you started with
   Dedicated No runs, as retail refuses). Menus load from the mod's
@@ -125,7 +129,8 @@ HUD and menus:
   teammate typing or in a menu, the disconnected icon, the killcam marker.
 - A spectator following someone sees their HUD, weapon and scope.
 - On 1.5, `^8` and `^9` draw in the server's `g_TeamColor_Allies` and
-  `g_TeamColor_Axis`, as 1.5's team chat uses them.
+  `g_TeamColor_Axis`, as 1.5's team chat uses them, and keep the last
+  server's colours in the front end.
 - The server's script menus (team, weapon, view map, call vote, quick
   messages) from their stock `.menu` files, driven by mouse and keys, or
   answered straight from `--team` and `--weapon`.

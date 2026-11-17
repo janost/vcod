@@ -5,8 +5,6 @@
 //! [`crate::menu`], which keeps only what a script menu needs, this keeps the
 //! layout: rects, colours, styles, text placement and the item scripts.
 
-use std::collections::HashMap;
-
 use crate::asset_source::{Asset, AssetKind, AssetSource};
 use crate::game::Game;
 use crate::menu::{CvarGate, block, tokenize};
@@ -216,69 +214,11 @@ pub struct UiMenu {
     pub blur_world: f32,
 }
 
-/// Inlines `#include "path"` (read through `include`) and collects
-/// `#define NAME value`; every other `#` line is dropped. Includes nest up
-/// to a fixed depth, so a cycle stops instead of recursing forever.
-fn preprocess(
-    text: &str,
-    include: &dyn Fn(&str) -> Option<String>,
-    defines: &mut HashMap<String, Vec<String>>,
-    depth: u32,
-) -> String {
-    let mut out = String::with_capacity(text.len());
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("#include") {
-            let path = rest.trim().trim_matches('"');
-            match include(path) {
-                Some(inc) if depth < 8 => {
-                    out.push_str(&preprocess(&inc, include, defines, depth + 1));
-                }
-                _ => log::warn!("ui: cannot include {path}"),
-            }
-        } else if let Some(rest) = trimmed.strip_prefix("#define") {
-            // Tokenized like the file, so a quoted body is one token.
-            let mut words = tokenize(rest).into_iter();
-            if let Some(name) = words.next() {
-                defines.insert(name, words.collect());
-            }
-        } else if !trimmed.starts_with('#') {
-            out.push_str(line);
-        }
-        out.push('\n');
-    }
-    out
-}
-
-/// `text` as tokens after the preprocessor: `#include`s inlined through
-/// `include`, and every token a `#define` names replaced by its body.
+/// `text` as tokens after the precompiler (`crate::menu_precomp`):
+/// `#include`s inlined through `include`, conditionals resolved, every
+/// macro expanded.
 pub(crate) fn expand(text: &str, include: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
-    let mut defines = HashMap::new();
-    let text = preprocess(text, include, &mut defines, 0);
-    let mut out = Vec::new();
-    for t in tokenize(&text) {
-        substitute(t, &defines, 0, &mut out);
-    }
-    out
-}
-
-/// `t` with its `#define` body pushed in its place, and that body's own
-/// names in turn (CoD2's `HORIZONTAL_ALIGN_DEFAULT` names
-/// `HORIZONTAL_ALIGN_SUBLEFT`), to a fixed depth so a cycle ends.
-fn substitute(
-    t: String,
-    defines: &HashMap<String, Vec<String>>,
-    depth: u32,
-    out: &mut Vec<String>,
-) {
-    match defines.get(&t) {
-        Some(body) if depth < 8 => {
-            for b in body {
-                substitute(b.clone(), defines, depth + 1, out);
-            }
-        }
-        _ => out.push(t),
-    }
+    tokenize(&crate::menu_precomp::run(text, include))
 }
 
 /// Every `menuDef` in `text`. `include` reads an `#include`d file.

@@ -717,6 +717,17 @@ the console bit back in. VERIFIED. So the menu opens under the console,
 which stays down and keeps the keys (bit 1 is tested before bit 2 for other
 keys at `0x40dfd2`). INFERRED.
 
+VERIFIED, `CL_Frame` (0x4112b7..0x4112e9): in state 0 (disconnected) with
+the UI catcher bit clear and `sv_running` 0, the client calls 0x44fa40 with
+0 (its sounds stop) and `UI_SetActiveMenu` 1 every frame. So with no game
+up a menu is always open: Esc with the console down reaches the UI (step
+3), whose `main` runs its `onEsc` (closes `mods_menu` and
+`options_multi`; `ingameclose main` does nothing out of a game), and the
+console stays down over it. A menu closed some other way comes back the
+next frame. vcod: `App::cod1_front_end` routes Esc and reopens `main`
+(`Ui::set_active_main`) on a CoD1 install with no game up; a CoD2 or CoD4
+front end keeps its own.
+
 `cl_ingame` is set to `1` at `0x411220` in state 6, else `0` (VERIFIED, two
 `Cvar_Set` calls). The UI's `ingameclose` and `ingameopen` (`0x40010930`,
 `0x40010900`) act only when the display context's `+0xa8` call returns
@@ -744,9 +755,38 @@ So Esc in a live game opens the gametype's script menu, not `main`. The
 stock scripts keep it in `g_scriptMainMenu` through `setClientCvar`
 (`tdm.gsc` sets the team menu on connect, a weapon menu once a team is
 picked). Case 2 does not write `cl_paused` (`0x4002e9b4`); case 0 sets it
-to `0` (VERIFIED, push at `0x4000d878`). Other code sets it to `1` (pushes
-at `0x4000ae43`, `0x4000d1ad`). What pauses a client on a remote server, if
-anything, is not measured. The server's game runs on either way. An empty
+to `0` (VERIFIED, push at `0x4000d878`).
+
+VERIFIED, every `cl_paused` writer (registered `0`, flag 0x40, next to
+`sv_paused` and `sv_running` in 0x4375c0):
+
+| Module | Address | Writes | In |
+|---|---|---|---|
+| `CoDMP.exe` | 0x40fbe0 | `0` | `vid_restart`, before the renderer restarts |
+| `CoDMP.exe` | 0x40ffb0 | `1` | the load after the downloads, state 4, before `CL_InitCGame` |
+| `CoDMP.exe` | 0x411920 | `0` | the renderer's start, after the refexport copy |
+| `CoDMP.exe` | 0x416050 | `0` | the gamestate parse, after the downloads start |
+| UI | 0x4000d878 | `0` | `UI_SetActiveMenu` 0 |
+| UI | 0x4000d772 | `0` | `_UI_KeyEvent` with no focused menu |
+| UI | 0x4000b2a4 | `0` | `uiScript orders`, after its commands, with the UI catcher cleared |
+| UI | 0x4000ae43 | `1` | `uiScript Controls` (with the UI catcher, closing every menu, opening `setup_menu2`) |
+| UI | 0x4000d1ad | `1` | `UI_Pause(1)`, `0` at 0x4000d1db for `UI_Pause(0)` |
+
+`UI_Pause` (0x4000d1a0) sits in the display context at 0x401c3da4 and no
+code calls through that slot (no `+0xc4` call in the module). VERIFIED
+(asm). No stock menu runs `uiScript Controls`. INFERRED: the snapshot that
+puts the UI to `UIMENU_NONE` (`UI_SetActiveMenu` 0, `CoDMP.exe` 0x407b95)
+clears the load's `1`.
+
+VERIFIED, the readers: `CL_SendCmd` (0x40bf30) and the cgame time
+(0x404d60) skip while `sv_running`, `sv_paused` and `cl_paused` are all
+set; `CL_CheckTimeout` (0x411130) does not time out while `cl_paused` and
+`sv_paused` are; `CL_CheckUserinfo` (0x4111c0) holds a changed userinfo
+while `cl_paused` is not 0; the sound system pauses its channels while it
+is not 0 (0x44da00, 0x44f920); `SV_CheckPaused` (0x45af70). INFERRED: on a
+remote server only the userinfo hold and the sound pause act, and only
+while the load's `1` stands. vcod has no listen server and keeps no
+`cl_paused`. The server's game runs on either way. An empty
 or unknown `g_scriptMainMenu` opens nothing: `0x400134b0` looks the name up
 (`0x40010560`) and returns when missing. VERIFIED.
 
@@ -1686,9 +1726,9 @@ spectator for 10-25 s each.
 - A server's `fs_game` rebuilds the front end off the new search path at
   the gamestate, so Esc in that game opens the mod's menus, and the mod's
   `ui_mp/menus.txt` decides which files load.
-- Script menus run the front end's preprocessor (`#include` off the search
-  path, object-like `#define`s), so `visible MENU_TRUE` and `#define`d
-  responses resolve. Function-like macros are not expanded.
+- Script menus run the front end's precompiler (section 24: `#include` off
+  the search path, `#define`s with or without parameters, conditionals),
+  so `visible MENU_TRUE` and `#define`d responses resolve.
 
 ## 17. The Mods menu
 
@@ -2899,3 +2939,45 @@ Tests: `the_team_menu_shows_scr_motd_on_1_1` and
   `ui_mp/cdkey.menu` (`iw_06.iwd`) runs through the same code: its exe
   holds the same loop (`CoD2MP_s.exe` file offset 0xb3b44, VERIFIED
   bytes; INFERRED the same function) and vcod writes no registry.
+
+## 24. The menu precompiler
+
+VERIFIED, the strings: `CoDMP.exe` 1.1 holds Q3's botlib precompiler
+(`l_precomp`) whole: `unknown precompiler directive %s`, `#ifdef without
+name`, `misplaced #else`, `define parameters not terminated`, `two the same
+define parameters`, `define with misplaced ##`, `stringizing operator
+without define parameter`, `recursive define (removed recursion)`,
+`define %s missing parms`, `define %s has too many parms`, the `#if/#elif`
+evaluator's errors and the `__LINE__`, `__FILE__`, `__DATE__`, `__TIME__`
+names, in that file's order. The UI module reads every menu file through it
+(Q3's `PC_*` traps), so a menu file gets `#include`, object-like and
+function-like `#define`, `#`, `##`, `#undef`, `#if`, `#ifdef`, `#ifndef`,
+`#elif`, `#else` and `#endif`, with defines kept per file and its includes.
+
+INFERRED, off botlib's source shape behind those strings:
+
+- A define takes parameters only when its `(` touches the name; `#define G
+  (a) b` is an object-like `G` whose body starts with `(`.
+- A body loses every token naming its own define ("removed recursion"),
+  and a second define of a name replaces the first.
+- A call reads its arguments past whitespace and newlines to the `(`,
+  splits them at commas outside nested parentheses, and a call with no `(`
+  is an error that leaves the name. `#param` is the argument's tokens joined
+  with nothing between them, quoted; `a ## b` joins the two tokens. The
+  expansion is read again, so the defines it names expand.
+- Comments are whitespace to the lexer, so a define's body ends before a
+  trailing `//` or `/* */`. A line ending in `\` carries the directive on.
+- A `#` token anywhere outside a string or comment starts a directive.
+
+Neither the stock 1.1, 1.5 and UO menus nor the third-party pk3s on hand use
+a function-like define or a conditional (a census of every `.menu`, `.txt`
+and `.h` under `ui`, 2026-11-17); CoD2's `ui/menudefinition.h` ends its
+defines with `//` comments. Every stock `.menu` of 1.1, UO and CoD2 (191 with 1.1, 199 with UO) gives the same tokens through `menu_precomp` as through the object-define expander it replaced (a one-off census, 2026-11-17).
+
+vcod: `vcod_common::menu_precomp` expands the text before
+`menu::tokenize`. Unlike botlib it does not split punctuation into tokens,
+so the menu grammar still reads whitespace-separated words; `$evalint`,
+`$evalfloat`, `#pragma` and the `__LINE__` family are not read. Retail
+stops the file at an error (`#error`, a call with the wrong argument
+count); vcod warns and goes on.
+
