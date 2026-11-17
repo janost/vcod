@@ -1598,6 +1598,10 @@ const DEFUSE_CLOSE: f32 = 16.0;
 /// goes ahead whatever it takes.
 const DEFUSE_CLOSE_TICKS: u32 = 100;
 const GUARD_RADIUS: f32 = 250.0;
+/// An escort this near the carrier it keeps by steps off: standing at his
+/// next node on a stair it held mp_carentan's carrier upstairs for 75 s
+/// (bot-objectives.md 4.2).
+const ESCORT_CLEAR: f32 = 80.0;
 /// Ticks a bot that walked out its plan to an objective's point may go
 /// without coming [`SHORT_GAIN`] nearer it before it gives the point up
 /// ([`Bot::track_reach`]).
@@ -2714,7 +2718,10 @@ impl Bot {
                 let outer = GUARD_RADIUS.max(inner + GUARD_BAND);
                 d < outer * outer && d >= inner * inner
             }
-            ObjTarget::Escort(at) => dist_sq(o, *at) < GUARD_RADIUS * GUARD_RADIUS,
+            ObjTarget::Escort(at) => {
+                let d = dist_sq(o, *at);
+                d < GUARD_RADIUS * GUARD_RADIUS && d >= ESCORT_CLEAR * ESCORT_CLEAR
+            }
             ObjTarget::Defuse { bomb, reach, .. } => dist_sq(o, bomb.origin) < reach * reach,
             ObjTarget::Occupy(s) => inside_site(o, s),
             ObjTarget::Radio {
@@ -2767,6 +2774,9 @@ impl Bot {
             }
             ObjTarget::Guard { at, inner, .. } if dist_sq(view.origin, at) < inner * inner => {
                 Goal::Roam
+            }
+            ObjTarget::Escort(at) if dist_sq(view.origin, at) < ESCORT_CLEAR * ESCORT_CLEAR => {
+                Goal::Away(at)
             }
             ObjTarget::Guard { at, .. } | ObjTarget::Escort(at) => Goal::To(at),
             ObjTarget::Defuse { bomb, .. } => Goal::To(bomb.origin),
