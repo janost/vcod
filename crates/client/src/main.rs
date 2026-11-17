@@ -2666,7 +2666,7 @@ fn start_loading(
     hud::font::set_team_colours(net.protocol().team_colour_codes, &|_| None);
     audio.set_protocol(net.protocol());
     audio.on_gamestate(&map);
-    fx.clear();
+    fx.restart_cgame();
     *title = format!("{} — loading {map}", version_tag());
     if let Some(window) = window {
         window.set_title(title);
@@ -2914,7 +2914,7 @@ fn fresh_cgame(
     if let Some(hud) = hud {
         hud.restart_cgame();
     }
-    fx.clear();
+    fx.restart_cgame();
 }
 
 /// What `CG_Init` (cgame 0x30022f90) does with the gamestate besides the
@@ -7450,6 +7450,7 @@ impl ApplicationHandler for App {
                                     if let Some(tag) =
                                         view.brass(cam.pos, (cam_forward, cam_right, cam_up))
                                     {
+                                        self.fx.set_view_brass(tag.0);
                                         brass.insert(u32::MAX, tag);
                                         if let Ok(num) = u32::try_from(skip_num) {
                                             brass.insert(num, tag);
@@ -7839,10 +7840,22 @@ impl ApplicationHandler for App {
                                                         at,
                                                         nomarks,
                                                         bolt,
+                                                        brass,
                                                     } => {
-                                                        let sounds = self.fx.spawn_marked(
+                                                        // `cullrange` from the origin the
+                                                        // cgame hands syscall 0xe5: the
+                                                        // view weapon's last `tag_brass`
+                                                        // for a case, the shooter's
+                                                        // `lerpOrigin` for a flash.
+                                                        let cull_from = if brass {
+                                                            Some(self.fx.view_brass())
+                                                        } else {
+                                                            bolt.filter(|&n| n != u32::MAX)
+                                                                .and_then(|n| scene.drawn_origin(n))
+                                                        };
+                                                        let sounds = self.fx.spawn_marked_from(
                                                             &self.fs, &path, at, bolt, time,
-                                                            !nomarks,
+                                                            !nomarks, cull_from,
                                                         );
                                                         self.audio.play_fx(&self.fs, sounds);
                                                     }
@@ -7859,13 +7872,17 @@ impl ApplicationHandler for App {
                                                             u32::MAX => ps_client as u32,
                                                             n => n,
                                                         };
+                                                        // `cullrange` from its `lerpOrigin`
+                                                        // (cgame 0x3001db80).
+                                                        let origin = scene.drawn_origin(entity);
                                                         if let Some(pose) =
                                                             scene.tag_pose(&self.fs, entity, &tag)
                                                         {
                                                             let bolt =
                                                                 fx::sim::TagBolt { entity, slot };
-                                                            let sounds = self.fx.spawn_on_tag(
+                                                            let sounds = self.fx.spawn_on_tag_from(
                                                                 &self.fs, &path, bolt, pose, time,
+                                                                origin,
                                                             );
                                                             self.audio.play_fx(&self.fs, sounds);
                                                         }

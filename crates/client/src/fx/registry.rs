@@ -242,6 +242,11 @@ pub enum Resolved {
         /// The `ctx.muzzles` key of the tag it plays on, which its
         /// `relative` elements ride (`CG_MuzzleFlash`, syscall 0xe5).
         bolt: Option<u32>,
+        /// Ejected brass, whose `cullrange` retail measures from the view
+        /// weapon's last `tag_brass`: `CG_EjectBrass` hands syscall 0xe5
+        /// 0x305430c0 (cgame 0x30038ae9), which only the view weapon's
+        /// draw in `CG_AddPlayerWeapon` writes (0x30037151).
+        brass: bool,
     },
     /// `EV_PLAY_FX_ON_TAG`: `path` on `entity`'s `tag`, which the caller
     /// poses ([`crate::fx::sim::FxSystem::spawn_on_tag`]). `entity` is
@@ -401,6 +406,7 @@ fn eject_brass(ev: &GameEvent, ctx: &ResolveCtx) -> Option<Resolved> {
         at: SpawnAt::Directed { pos, dir },
         nomarks: false,
         bolt: None,
+        brass: true,
     })
 }
 
@@ -660,6 +666,7 @@ fn fire_flash(ev: &GameEvent, ctx: &ResolveCtx) -> Vec<Resolved> {
                     at: SpawnAt::Directed { pos, dir },
                     nomarks: false,
                     bolt: Some(ev.entity_num),
+                    brass: false,
                 }],
                 None => Vec::new(),
             }
@@ -717,6 +724,7 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
                     },
                     nomarks: false,
                     bolt: None,
+                    brass: false,
                 });
             }
             // Every surface type, flesh included (doc section 6). Not
@@ -777,6 +785,7 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
                     },
                     nomarks: ev.event == EV_ROCKET_EXPLODE_NOMARKS,
                     bolt: None,
+                    brass: false,
                 });
             }
             known_or(out)
@@ -802,6 +811,7 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
                 at,
                 nomarks: false,
                 bolt: None,
+                brass: false,
             }]
         }
 
@@ -869,6 +879,7 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
                             },
                             nomarks: false,
                             bolt: None,
+                            brass: false,
                         });
                     }
                 }
@@ -922,6 +933,7 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
                         at,
                         nomarks,
                         bolt: None,
+                        brass: false,
                     });
                 }
             }
@@ -933,6 +945,7 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
                     at,
                     nomarks,
                     bolt: None,
+                    brass: false,
                 });
             }
             known_or(out)
@@ -2850,6 +2863,7 @@ mod uo_capture_gates {
                     at,
                     nomarks,
                     bolt,
+                    ..
                 } = r
                 {
                     spawned += 1;

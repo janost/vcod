@@ -724,6 +724,13 @@ impl EntityScene {
     /// what `PlayEffect`'s bolt reads (CoDMP.exe 0x49e8d0,
     /// docs/research/efx-grammar.md R10). `None` for an entity not drawn
     /// with an xmodel this frame or a model without the tag.
+    /// Entity `num`'s drawn origin this frame, the `lerpOrigin` CoD1's
+    /// `CG_PlayFxOnTag` hands syscall 0xe5 beside the bolt (cgame
+    /// 0x3001db80), which `cullrange` measures from.
+    pub fn drawn_origin(&self, num: u32) -> Option<Vec3> {
+        self.drawn.get(&num).map(|d| d.pos)
+    }
+
     pub fn tag_pose(&mut self, fs: &dyn AssetSource, num: u32, name: &str) -> Option<TagPose> {
         let d = self.drawn.get(&num)?.clone();
         let (lp, lr) = match &d.rig {
@@ -901,6 +908,18 @@ struct EntityAnim {
     present_ms: i32,
     /// This frame's inputs while `pose` is not yet taken from them.
     held: Option<HeldPose>,
+    /// Where a round of this player's starts the last frame his body was
+    /// drawn, which `CG_CalcMuzzlePoint` reads off his DObj on frames it is
+    /// not ([`stale_shot_points`]).
+    shot: Option<ShotPoint>,
+}
+
+/// A drawn body's round start: its `tag_flash` in the body's frame, or
+/// none (the stance point), and the world point that frame gave.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShotPoint {
+    tag: Option<Vec3>,
+    world: Vec3,
 }
 
 /// One frame's pose inputs for a body, owned, so the pose can wait until
@@ -1099,6 +1118,7 @@ impl EntityAnim {
             seat: SeatLeaves::default(),
             present_ms: now_ms,
             held: None,
+            shot: None,
         }
     }
 }
@@ -1381,6 +1401,68 @@ pub fn constant_light(cl: u32, origin: Vec3) -> Option<SceneLight> {
         ) / 255.0,
         intensity: ((cl >> 24) * 4) as f32,
     })
+}
+
+/// `CG_CalcMuzzlePoint`'s stance point for a player body without a
+/// `tag_flash` ([`crate::fx::registry::muzzle_fallback`]).
+fn stance_point(ent: &EntityState, p: &Protocol) -> Vec3 {
+    let tr_base = Vec3::new(
+        ent.field_f32(p, "pos.trBase[0]"),
+        ent.field_f32(p, "pos.trBase[1]"),
+        ent.field_f32(p, "pos.trBase[2]"),
+    );
+    crate::fx::registry::muzzle_fallback(tr_base, ent.field_i32(p, "eFlags"))
+}
+
+/// What [`stale_shot_points`] reads of the frame.
+struct StaleShots<'a, 'b> {
+    snap: SnapView<'a>,
+    p: &'b Protocol,
+    skip_num: i32,
+    entity_pos: &'b HashMap<u32, Vec3>,
+    entity_angles: &'b HashMap<u32, Vec3>,
+}
+
+/// `CG_CalcMuzzlePoint` (1.1 0x30039440, 1.5 0x3003ab90) asks only that
+/// the shooter has a DObj, which a client keeps from his first snapshot
+/// until his client info drops (0x3002fc80, 0x3002faf0), drawn or not: a
+/// player whose body this frame did not draw (dead, `EF_NODRAW`, a seat
+/// that hides him, out of the snapshot) starts his rounds at his
+/// `tag_flash` on the skeleton he last drew with, in his current frame, or
+/// at his stance point. UO's (0x30048b60) also asks that he is in the
+/// snapshot. Each such shooter's point joins `fallbacks`; the view's own
+/// body takes the playerstate's point instead, which no tracer draws from.
+fn stale_shot_points(
+    states: &HashMap<u32, EntityAnim>,
+    f: StaleShots,
+    muzzles: &HashMap<u32, (Vec3, Vec3)>,
+    fallbacks: &mut HashMap<u32, Vec3>,
+) {
+    for (&num, st) in states {
+        let Some(shot) = st.shot else {
+            continue;
+        };
+        if num >= MAX_CLIENTS
+            || num as i32 == f.skip_num
+            || muzzles.contains_key(&num)
+            || fallbacks.contains_key(&num)
+        {
+            continue;
+        }
+        let at = match f.snap.entity(num) {
+            None if f.p.is_uo() => continue,
+            None => shot.world,
+            Some(ent) => match (shot.tag, f.entity_pos.get(&num)) {
+                (Some(local), Some(&pos)) => {
+                    let yaw = f.entity_angles.get(&num).map_or(0.0, |a| a.y);
+                    pos + Quat::from_rotation_z(yaw.to_radians()) * local
+                }
+                (Some(_), None) => shot.world,
+                (None, _) => stance_point(ent, f.p),
+            },
+        };
+        fallbacks.insert(num, at);
+    }
 }
 
 /// Entity numbers below this are clients (`MAX_CLIENTS`).
@@ -1850,6 +1932,9 @@ pub fn build_instances(
         }
         // A seated player draws at its seat as its vehicle is posed this
         // frame, turned with the seat (cgame 0x30032fe0), or not at all.
+        // A seat that hides the body returns before it moves `lerpOrigin`,
+        // and `CG_Player` (0x300343e0) has stepped its anims already, so
+        // the body is posed undrawn where it stands, for its tags.
         let mut seat_hidden = false;
         // The seat the controllers and the seat blend read (0x30033a77
         // writes the tag's angles into the client info's `+0x3f4`).
@@ -1861,12 +1946,17 @@ pub fn build_instances(
             && let Some(rig) = vehicle_rigs.get(&v.model).and_then(Option::as_ref)
         {
             let surf_type = ent.field_i32(p, "surfType");
-            seat_hidden = !vehiclepose::seat_drawn(v.pose.kind, vehiclepose::rider_seat(surf_type));
+            // The view's own body comes here only when its seat hides it
+            // (`play::seat::own_body_drawn`).
+            seat_hidden =
+                hidden || !vehiclepose::seat_drawn(v.pose.kind, vehiclepose::rider_seat(surf_type));
             if let Some((at, r, seat)) =
                 rider_frame(&rig.skeleton, v, surf_type, ent.field_i32(p, "weapon"))
             {
-                pos = at;
-                rot = r;
+                if !seat_hidden {
+                    pos = at;
+                    rot = r;
+                }
                 rider = Some(seat);
             }
         }
@@ -1874,9 +1964,8 @@ pub fn build_instances(
             entity_pos.insert(num, pos);
             entity_angles.insert(num, angles);
         }
-        if seat_hidden {
-            continue;
-        }
+        // Posed for its tags and never drawn.
+        let hidden = hidden || seat_hidden;
         // `CG_Player` (0x30028210) draws no player with `EF_NODRAW` or
         // `EF_DEAD`: what a death leaves lying is the corpse `cloneplayer`
         // makes. Its events still sound from where it stands.
@@ -1968,6 +2057,7 @@ pub fn build_instances(
                         seat: st.seat.clone(),
                         present_ms: st.present_ms,
                         held: None,
+                        shot: st.shot,
                     };
                 }
                 st.visual = roster_visual;
@@ -2124,20 +2214,20 @@ pub fn build_instances(
                         let world_pos = transform.transform_point3(local_pos);
                         let world_dir = transform.transform_vector3(local_rot * Vec3::X);
                         muzzles.insert(num, (world_pos, world_dir));
+                        if etype == ET_PLAYER && num < MAX_CLIENTS {
+                            st.shot = Some(ShotPoint {
+                                tag: Some(local_pos),
+                                world: world_pos,
+                            });
+                        }
                     }
                     None if etype == ET_PLAYER && num < MAX_CLIENTS => {
-                        let tr_base = Vec3::new(
-                            ent.field_f32(p, "pos.trBase[0]"),
-                            ent.field_f32(p, "pos.trBase[1]"),
-                            ent.field_f32(p, "pos.trBase[2]"),
-                        );
-                        shot_fallbacks.insert(
-                            num,
-                            crate::fx::registry::muzzle_fallback(
-                                tr_base,
-                                ent.field_i32(p, "eFlags"),
-                            ),
-                        );
+                        let at = stance_point(ent, p);
+                        shot_fallbacks.insert(num, at);
+                        st.shot = Some(ShotPoint {
+                            tag: None,
+                            world: at,
+                        });
                     }
                     None => {}
                 }
@@ -2469,6 +2559,18 @@ pub fn build_instances(
             EntityVisual::None => unreachable!("skipped above"),
         }
     }
+    stale_shot_points(
+        states,
+        StaleShots {
+            snap: b,
+            p,
+            skip_num,
+            entity_pos: &entity_pos,
+            entity_angles: &entity_angles,
+        },
+        &muzzles,
+        &mut shot_fallbacks,
+    );
     // `b.ps`'s owner is always `skip_num`, so its weapon never reaches the
     // insert in the `Player` arm above.
     let ps_weapon = b.snap.ps.field_i32(p, "weapon");
@@ -2700,6 +2802,83 @@ mod tests {
         }
         assert_eq!(scene.tag_pose(&fs, 70, "tag_nonesuch"), None);
         assert_eq!(scene.tag_pose(&fs, 71, "tag_flash"), None);
+    }
+
+    /// `CG_CalcMuzzlePoint` asks only for the shooter's DObj: one the frame
+    /// did not draw starts his rounds at his last tag in his current frame,
+    /// at his stance point without one, or, out of the snapshot, where his
+    /// body last put them; UO's also asks for him in the snapshot, and the
+    /// view's own body takes the playerstate's point.
+    #[test]
+    fn an_undrawn_shooter_starts_his_rounds_where_his_body_last_did() {
+        use vcod_common::net::protocol::PROTOCOL_V22;
+        let skel = Rc::new(Skeleton::build(&[]));
+        let anim = |shot| {
+            let mut st = EntityAnim::new(Vec::new(), &skel, 0);
+            st.shot = shot;
+            st
+        };
+        let tag = |world| {
+            Some(ShotPoint {
+                tag: Some(Vec3::new(10.0, 0.0, 50.0)),
+                world,
+            })
+        };
+        let mut states = HashMap::new();
+        states.insert(3, anim(tag(Vec3::new(1.0, 2.0, 3.0))));
+        states.insert(
+            4,
+            anim(Some(ShotPoint {
+                tag: None,
+                world: Vec3::new(4.0, 5.0, 6.0),
+            })),
+        );
+        states.insert(5, anim(tag(Vec3::new(7.0, 8.0, 9.0))));
+        states.insert(6, anim(None));
+        states.insert(7, anim(tag(Vec3::ZERO)));
+        let run = |p: &'static Protocol| {
+            let ent = |num: u32| {
+                let mut e = EntityState::null(p);
+                e.number = num;
+                e.fields[EntityState::field_index(p, "eType").unwrap()] = ET_PLAYER;
+                let x = EntityState::field_index(p, "pos.trBase[0]").unwrap();
+                e.fields[x] = 100.0f32.to_bits() as i32;
+                e
+            };
+            let snap = Snapshot {
+                entities: [3, 4, 7].map(|n| (n, ent(n))).into_iter().collect(),
+                ..Snapshot::default()
+            };
+            let pos = HashMap::from([(3, Vec3::new(100.0, 0.0, 0.0))]);
+            let angles = HashMap::from([(3, Vec3::new(0.0, 90.0, 0.0))]);
+            let mut fallbacks = HashMap::new();
+            stale_shot_points(
+                &states,
+                StaleShots {
+                    snap: SnapView {
+                        snap: &snap,
+                        own: None,
+                    },
+                    p,
+                    skip_num: 7,
+                    entity_pos: &pos,
+                    entity_angles: &angles,
+                },
+                &HashMap::new(),
+                &mut fallbacks,
+            );
+            fallbacks
+        };
+        let f = run(&PROTOCOL_V1);
+        assert!(
+            (f[&3] - Vec3::new(100.0, 10.0, 50.0)).length() < 1e-4,
+            "{f:?}"
+        );
+        assert_eq!(f[&4], Vec3::new(100.0, 0.0, 60.0));
+        assert_eq!(f[&5], Vec3::new(7.0, 8.0, 9.0));
+        assert_eq!(f.len(), 3);
+        let f = run(&PROTOCOL_V22);
+        assert!(!f.contains_key(&5) && f.len() == 2, "{f:?}");
     }
 
     /// The own body a frame adds stands in its number's place among the

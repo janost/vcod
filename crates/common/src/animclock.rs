@@ -329,6 +329,16 @@ impl Ramp {
         last
     }
 
+    /// A goal of 0 at goal time 0 on a node that still has weight: the
+    /// clear writes the goal and its time but not the weight (`cod_lnxded`
+    /// 0x080bd35c, the weight kept when 0x080bd0ec reads the node weighted),
+    /// so the weight reads `from` until the next frame's step lands it
+    /// (0x080bb130). The goal setter's time 0 writes the weight itself
+    /// (0x080bd674), so a raised node's time-0 ramp is [`Ramp::new`]'s.
+    fn cleared_next_step(from: f32, start_ms: i32) -> Ramp {
+        Ramp::new(from, 0.0, start_ms, f32::MIN_POSITIVE)
+    }
+
     fn stored_on(self, stored: bool) -> Ramp {
         Ramp { stored, ..self }
     }
@@ -460,6 +470,11 @@ pub struct ChannelClock {
     /// How far ahead of the node times every weight reads
     /// ([`Self::set_weight_lead`]).
     lead_ms: i32,
+    /// A CoD2 or CoD4 body (`vcod_cod2::player`): a KnobAll clear lands
+    /// at once and a setter never takes the other lerp frame's clip, as
+    /// those gates measured; the next-step clear and the shared node are
+    /// CoD1's engine reads ([`Self::cod2_tree`]).
+    cod2_tree: bool,
 }
 
 impl ChannelClock {
@@ -535,6 +550,24 @@ impl ChannelClock {
         self.cgame = true;
     }
 
+    /// Keeps CoD2's and CoD4's tree handling: a KnobAll clears beside the
+    /// death's path at once, and a setter starting a node the other lerp
+    /// frame holds starts its own (cod2-player-anims.md 7 and 12 hold those
+    /// weights against gdb dumps). CoD1's engine keeps a cleared node's
+    /// weight until the next step (cod11-movers.md 15), unread on CoD2.
+    pub fn cod2_tree(&mut self) {
+        self.cod2_tree = true;
+    }
+
+    /// The ramp a KnobAll leaves on a node beside the death's path that
+    /// read `w` at `now_ms`.
+    fn knob_cleared(&self, w: f32, now_ms: i32) -> Ramp {
+        match self.cod2_tree {
+            true => Ramp::new(0.0, 0.0, now_ms, 0.0),
+            false => Ramp::cleared_next_step(w, now_ms),
+        }
+    }
+
     /// The wire value last set, toggle included (`lf+0x10`).
     pub fn anim(&self) -> i32 {
         self.anim
@@ -594,7 +627,7 @@ impl ChannelClock {
     /// snapped origin, moved since the last measurement. `legs` picks the
     /// legs lerp frame, whose setter blends by stance (0x2a6ff).
     pub fn update(&mut self, anims: &PlayerAnims, legs: bool, wire: i32, seen: &Seen, at: Times) {
-        self.update_in(anims, legs, wire, seen, at, None);
+        self.update_in(anims, legs, wire, seen, at, None, None);
     }
 
     /// [`Self::update`] under 1.5's and UO's setter, whose blends a crouch
@@ -610,9 +643,10 @@ impl ChannelClock {
         at: Times,
         window: &mut i32,
     ) {
-        self.update_in(anims, legs, wire, seen, at, Some(window));
+        self.update_in(anims, legs, wire, seen, at, Some(window), None);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn update_in(
         &mut self,
         anims: &PlayerAnims,
@@ -621,6 +655,7 @@ impl ChannelClock {
         seen: &Seen,
         at: Times,
         window: Option<&mut i32>,
+        shared: Option<(Play, Ramp)>,
     ) -> Touches {
         // 1.1's setter (no window) is 1.1d's, whose step keeps its wrap.
         let kept = window.is_none();
@@ -633,7 +668,7 @@ impl ChannelClock {
         }
         let index = wire & !TOGGLE;
         let touches = if wire != self.anim {
-            self.set(anims, wire, legs, seen, at.clock_ms, window)
+            self.set(anims, wire, legs, seen, at.clock_ms, window, shared)
         } else {
             Touches::default()
         };
@@ -710,6 +745,7 @@ impl ChannelClock {
     /// `trap_XAnimSetTime` 0x2aa5a; 1.5's and UO's [`spread_phase_15`]). A death anim on a body not freshly
     /// cloned goes straight to its last frame at full weight, every other
     /// clip on the channel dropped (0x2a97b..0x2aa5a, cgame 0x3000395d..0x300039f5).
+    #[allow(clippy::too_many_arguments)]
     fn set(
         &mut self,
         anims: &PlayerAnims,
@@ -718,12 +754,29 @@ impl ChannelClock {
         seen: &Seen,
         now_ms: i32,
         window: Option<&mut i32>,
+        shared: Option<(Play, Ramp)>,
     ) -> Touches {
         let kept = window.is_none();
         let motion = |i: i32| anims.motion(i).filter(|_| i != 0);
         let (old_index, new_index) = (self.anim & !TOGGLE, wire & !TOGGLE);
         let (old, new) = (motion(old_index), motion(new_index));
         if let Some(n) = new.filter(|n| n.death && seen.eflags & EF_FRESH_CORPSE == 0) {
+            // KnobAll clears every clip beside the death's path at goal time
+            // 0, which the next frame's step lands ([`Ramp::cleared_next_step`]).
+            let old: Vec<(Play, Ramp)> = self
+                .fading
+                .iter()
+                .flatten()
+                .copied()
+                .chain(std::iter::once((self.current, self.weight)))
+                .filter(|(p, w)| p.index != 0 && p.index != new_index && w.at(now_ms) > 0.0)
+                .filter(|_| !self.cod2_tree)
+                .map(|(p, w)| (p, Ramp::cleared_next_step(w.at(now_ms), now_ms)))
+                .collect();
+            self.fading = [None; FADES];
+            for (slot, f) in self.fading.iter_mut().zip(old) {
+                *slot = Some(f);
+            }
             self.anim = wire;
             // The death arm's `trap_XAnimSetTime(.., 1.0)`.
             self.current = Play {
@@ -740,7 +793,6 @@ impl ChannelClock {
                 stored: self.stored,
             };
             self.weight = Ramp::new(1.0, 1.0, now_ms, 0.0);
-            self.fading = [None; FADES];
             return Touches {
                 knob_all: Some(new_index),
                 ..Touches::default()
@@ -806,11 +858,13 @@ impl ChannelClock {
             self.hold_faded(now_ms);
         }
         // A node already blending out comes back from the weight it had, in
-        // the part of the blend time that distance takes.
+        // the part of the blend time that distance takes; one the other lerp
+        // frame holds is the same node, at its weight there.
         let back = fading
             .iter()
             .position(|(p, _)| p.index == new_index)
-            .map(|i| fading.remove(i));
+            .map(|i| fading.remove(i))
+            .or(shared.filter(|(p, w)| p.index == new_index && w.at(now_ms) > 0.0));
         let from = back.map_or(0.0, |(_, w)| w.at(now_ms));
         fading.sort_by(|a, b| b.1.at(now_ms).total_cmp(&a.1.at(now_ms)));
         fading.truncate(FADES);
@@ -940,7 +994,7 @@ impl ChannelClock {
     /// both channels' anims live in one tree, so a `both` line's node is
     /// one node under the two lerp frames, and a death's
     /// `XAnimSetCompleteGoalWeightKnobAll` under `root` zeroes every node
-    /// beside its path at once.
+    /// beside its path at the next frame's step.
     fn touched(&mut self, anims: &PlayerAnims, t: &Touches, now_ms: i32) {
         let index = self.current.index;
         if let Some((cleared, blend)) = t.cleared
@@ -973,18 +1027,59 @@ impl ChannelClock {
                 })
             };
             if cut(index) {
-                self.weight = Ramp::new(0.0, 0.0, now_ms, 0.0);
+                self.weight = self.knob_cleared(self.weight.at(now_ms), now_ms);
             }
-            for f in self.fading.iter_mut() {
-                if f.is_some_and(|(p, _)| cut(p.index)) {
-                    *f = None;
+            if self.cod2_tree {
+                for f in self.fading.iter_mut() {
+                    if f.is_some_and(|(p, _)| cut(p.index)) {
+                        *f = None;
+                    }
+                }
+            }
+            for (p, w) in self.fading.iter_mut().flatten() {
+                if cut(p.index) {
+                    *w = Ramp::cleared_next_step(w.at(now_ms), now_ms);
                 }
             }
         }
     }
 
+    /// The clip and weight of `index` while it has weight here, current or
+    /// blending out.
+    fn holding(&self, index: i32, now_ms: i32) -> Option<(Play, Ramp)> {
+        self.fading
+            .iter()
+            .flatten()
+            .copied()
+            .chain(std::iter::once((self.current, self.weight)))
+            .find(|(p, w)| p.index == index && w.at(now_ms) > 0.0)
+    }
+
+    /// What `own`'s setter finds of `wire`'s node in `other`'s lerp frame
+    /// when it starts it: both channels' anims live in one tree, so a
+    /// `both` line's node the other channel holds, or still blends out,
+    /// is the node the setter raises, from its weight there.
+    fn shared(own: &Self, other: &Self, wire: i32, now_ms: i32) -> Option<(Play, Ramp)> {
+        let index = wire & !TOGGLE;
+        if own.cod2_tree || wire == own.anim || index == 0 || own.holding(index, now_ms).is_some() {
+            return None;
+        }
+        other.holding(index, now_ms)
+    }
+
+    /// Drops this lerp frame's blending-out entry of `index`: the other
+    /// channel raised that node, which its own clock now carries.
+    fn release(&mut self, index: i32) {
+        for f in self.fading.iter_mut() {
+            if f.is_some_and(|(p, _)| p.index == index) {
+                *f = None;
+            }
+        }
+    }
+
     /// The torso clock's `main` children after a KnobAll under `root` on
-    /// `death`: a node on its path at 1, one beside it at 0, both at once.
+    /// `death`: a node on its path at 1 at once, one beside it at 0 from the
+    /// next frame's step ([`Ramp::cleared_next_step`]).
     fn knob_nodes(&mut self, anims: &PlayerAnims, death: i32, now_ms: i32) {
         let path = ancestry(anims, death);
         let at = |name: &str, ramp: Ramp| {
@@ -994,7 +1089,7 @@ impl ChannelClock {
             if path.contains(&n) {
                 Ramp::new(1.0, 1.0, now_ms, 0.0)
             } else if parent(anims, n).is_some_and(|p| path.contains(&p)) {
-                Ramp::new(0.0, 0.0, now_ms, 0.0)
+                self.knob_cleared(ramp.at(now_ms), now_ms)
             } else {
                 ramp
             }
@@ -1099,12 +1194,28 @@ pub fn update_body(
     let now_ms = at.clock_ms;
     legs.clear_unweighted(now_ms);
     torso.clear_unweighted(now_ms);
-    let t = legs.update_in(anims, true, legs_wire, seen, at, window.as_deref_mut());
+    let shared = ChannelClock::shared(legs, torso, legs_wire, now_ms);
+    let t = legs.update_in(
+        anims,
+        true,
+        legs_wire,
+        seen,
+        at,
+        window.as_deref_mut(),
+        shared,
+    );
+    if shared.is_some() {
+        torso.release(legs_wire & !TOGGLE);
+    }
     torso.touched(anims, &t, now_ms);
     if let Some(death) = t.knob_all {
         torso.knob_nodes(anims, death, now_ms);
     }
-    let t = torso.update_in(anims, false, torso_wire, seen, at, window);
+    let shared = ChannelClock::shared(torso, legs, torso_wire, now_ms);
+    let t = torso.update_in(anims, false, torso_wire, seen, at, window, shared);
+    if shared.is_some() {
+        legs.release(torso_wire & !TOGGLE);
+    }
     legs.touched(anims, &t, now_ms);
     if let Some(death) = t.knob_all {
         torso.knob_nodes(anims, death, now_ms);
@@ -1720,12 +1831,15 @@ mod tests {
         assert_eq!(blend_ms(&anims, 0, fire, false), 30);
     }
 
-    /// A death shown at its last frame loads under `root` with `KnobAll`:
-    /// the torso node a fire anim held drops to 0 at once and the legs node
-    /// comes back to 1, where the torso's own clear would have taken its
-    /// whole blend (cgame 0x300039e1, `cod_lnxded` 0x080bf8ac).
+    /// A death shown at its last frame loads under `root` with `KnobAll`
+    /// (cgame 0x300039e1, `cod_lnxded` 0x080bf8ac): the legs node comes
+    /// back to 1 at once, and the clear of the torso node beside it at goal
+    /// time 0 keeps its weight (0x080bd35c) until the next frame's step.
+    /// A torso setter in the same update sets the node's goal again, its
+    /// time off that kept weight (0x080bd674), so a torso going to no anim
+    /// with the death fades the node over its blend.
     #[test]
-    fn a_shown_death_zeroes_the_torso_node_at_once() {
+    fn a_shown_death_clears_the_torso_node_at_the_next_step() {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
@@ -1735,7 +1849,6 @@ mod tests {
             event_anim(&anims, "fireweapon", true),
         );
         let death = event_anim(&anims, "death", false);
-        let (mut legs, mut torso) = (ChannelClock::default(), ChannelClock::default());
         let step = |l: &mut ChannelClock, t: &mut ChannelClock, w, eflags, ms| {
             update_body(
                 (l, t),
@@ -1746,22 +1859,27 @@ mod tests {
                 None,
             )
         };
-        step(&mut legs, &mut torso, (idle, fire), 0, 1000);
-        assert_eq!(torso.node_weights(1100).torso, 1.0);
-        step(&mut legs, &mut torso, (death, TOGGLE), 0, 2000);
-        assert_eq!(torso.node_weights(2000), NodeWeights::default());
-        assert_eq!(torso.node_weights(2050), NodeWeights::default());
-        // A fresh body blends its torso out as before.
+        // The torso keeps its fire anim: the clear lands at the next step.
         let (mut legs, mut torso) = (ChannelClock::default(), ChannelClock::default());
         step(&mut legs, &mut torso, (idle, fire), 0, 1000);
-        step(
-            &mut legs,
-            &mut torso,
-            (death, TOGGLE),
-            EF_FRESH_CORPSE,
-            2000,
-        );
-        assert!(torso.node_weights(2050).torso > 0.0);
+        assert_eq!(torso.node_weights(1100).torso, 1.0);
+        step(&mut legs, &mut torso, (death, fire), 0, 2000);
+        let set = torso.node_weights(2000);
+        assert_eq!((set.torso, set.legs), (1.0, 1.0));
+        // The idle beside the death still reads its weight in the set's frame.
+        assert!(legs.layers(2000).iter().any(|l| l.index == idle & !TOGGLE));
+        assert_eq!(torso.node_weights(2001), NodeWeights::default());
+        let after: Vec<i32> = legs.layers(2050).iter().map(|l| l.index).collect();
+        assert_eq!(after, [death & !TOGGLE]);
+        // The torso drops its anim with the death: its own blend.
+        let (mut legs, mut torso) = (ChannelClock::default(), ChannelClock::default());
+        step(&mut legs, &mut torso, (idle, fire), 0, 1000);
+        step(&mut legs, &mut torso, (death, TOGGLE), 0, 2000);
+        let blend = blend_ms(&anims, fire, 0, false);
+        let mid = torso.node_weights(2000 + blend / 2);
+        assert!((mid.torso - 0.5).abs() < 1e-3, "{mid:?}");
+        assert_eq!(mid.legs, 1.0);
+        assert_eq!(torso.node_weights(2000 + blend), NodeWeights::default());
     }
 
     /// A `both` line puts one node under the two lerp frames. The torso
@@ -1799,6 +1917,40 @@ mod tests {
         let (l, secs) = step((throw, 0), 1100 + blend + 10);
         assert_eq!(secs, 0.0);
         assert_eq!(l.last().unwrap().weight, 1.0);
+    }
+
+    /// A node the legs still blend out is the node a `both` line's torso
+    /// raises: the torso's setter takes it from its weight there, not from
+    /// 0, and the legs lerp frame no longer carries it.
+    #[test]
+    fn a_node_the_other_channel_fades_is_raised_from_its_weight() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let anims = PlayerAnims::load(&fs).unwrap();
+        let throw = anims.wire_of("pb_stand_grenade_throw").unwrap();
+        let idle = anims.wire_of("pb_stand_alert").unwrap();
+        let (mut legs, mut torso) = (ChannelClock::default(), ChannelClock::default());
+        let mut step = |w, ms| {
+            update_body(
+                (&mut legs, &mut torso),
+                &anims,
+                w,
+                &seen(0.0, 0),
+                Times::end_frame(ms),
+                None,
+            );
+            (legs.layers(ms), torso.layers(ms))
+        };
+        step((throw, 0), 1000);
+        step((idle, 0), 1100);
+        let blend = blend_ms(&anims, throw, idle, true);
+        let mid = 1100 + blend / 2;
+        let (l, t) = step((idle, throw), mid);
+        let fading = 1.0 - (blend / 2) as f32 / blend as f32;
+        let raised = t.iter().find(|x| x.index == throw).unwrap().weight;
+        assert!((raised - fading).abs() < 1e-3, "{t:?}");
+        assert!(l.iter().all(|x| x.index != throw), "{l:?}");
     }
 
     /// A paused clock's clips and ramps stand still for the pause.

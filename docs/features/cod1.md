@@ -152,7 +152,8 @@ Spectating:
   `playFxOnTag`) come off the events retail reads.
 - Tracers and another body's fire sound start at the shooter's posed
   muzzle tag (a mounted gun's own, a gunner's stance point) and turn with
-  it; your own start at the viewmodel's muzzle. On 1.5 every body's spine
+  it, or, for a shooter not drawn this frame, where his body last put it;
+  your own start at the viewmodel's muzzle. On 1.5 every body's spine
   and lean ease toward the view as 1.5's do.
 
 Rendering and sound:
