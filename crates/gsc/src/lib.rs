@@ -20,6 +20,7 @@ pub mod parse;
 pub mod value;
 pub mod vm;
 
+pub use ast::Pos;
 pub use atom::{Atom, Interner};
 pub use compile::CompileOptions;
 pub use heap::ArrayKey;
@@ -31,7 +32,7 @@ pub use vm::profile::VmProfile;
 pub use vm::sched::ThreadId;
 pub use vm::{
     ArrayCarry, Cx, ErrorKind, GameCarry, Host, InstallError, Program, ScriptError, Target,
-    ThreadUsage, Vm,
+    ThreadUsage, UsagePos, Vm,
 };
 
 /// Which game's compiler a script goes through. The VM runs both; only the
