@@ -1702,9 +1702,10 @@ the client rebuilds the kick from the feedback bytes, scaling by
 `damageCount` where the server's own kick scales by `aimSpreadScale`
 (`cod11-combat.md` 6), and reads a byte as `/ 255` where the server wrote
 it as `* 256 / 360`. vcod does the same in `Hud::feed_damage` ("Damage
-direction", "When the feed runs"), stamping the kick with the sway's clock
-at the frame the new `damageEvent` is first seen, where retail stamps the
-snapshot's `serverTime`.
+direction", "When the feed runs"), stamping the kick with `cg.snap`'s
+`serverTime` (the older of the drawn pair) and reading it against the
+render clock, the view's kick and the gun's alike
+(`DamageIndicators::kick_on` moves the stamp onto the gun's clock).
 
 INFERRED, off `0x30015fe0`'s calls to `0x300310f0` (a wrapper of the
 stretch-pic trap `0x49`: x, y, w, h, s1, t1, s2, t2, material): with `w`
@@ -2528,9 +2529,15 @@ feeds that player's last hit. VERIFIED, `0x300287f0`: the kick's dots read
 transition runs before `CG_CalcViewValues` rebuilds the axis, so a hit
 splits along the view drawn the frame before, kick, quake and turret
 included. vcod feeds it from `Hud::feed_damage` every frame before the
-snapshot's events, on the newest snapshot's playerstate, along the last
-drawn view (`Hud::drawn_view`; the playerstate's view before the first
-frame); the first playerstate seen is the only baseline.
+snapshot's events, along the last drawn view (`Hud::drawn_view`; the
+playerstate's view before the first frame): on the newest snapshot's
+playerstate when it predicts, a followed player's `cg.snap`; the first
+playerstate seen is the only baseline. VERIFIED, `CG_ProcessSnapshots`'s
+loop (0x300303d8..0x300303e6) calls the transition 0x3002fc80, whose
+respawn reset is at 0x300300cd, before 0x3002faa0, whose tail feeds a
+followed hit; the prediction's feed runs later in the frame. So the reset
+runs ahead of either feed, as vcod's `track_spawn` does ahead of
+`feed_damage`, and a hit on the respawn snapshot keeps its kick.
 
 INFERRED, off `0x300172f0`: each slot younger than `cg_hudDamageIconTime`
 draws `hudHitDirection` over `(-64, 32)` to `(64, 96)` about the screen

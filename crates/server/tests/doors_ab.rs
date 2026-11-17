@@ -28,6 +28,10 @@ const BULLET_HITS: [i32; 3] = [
     vcod_common::net::event_ids::EV_BULLET_HIT_LARGE,
     vcod_common::net::event_ids::EV_UO_BULLET_HIT,
 ];
+const MELEE: [i32; 2] = [
+    vcod_common::net::event_ids::EV_MELEE_HIT,
+    vcod_common::net::event_ids::EV_MELEE_MISS,
+];
 const BLOCKS: &str = include_str!("fixtures/doors/mp_carentan-doors.ent");
 
 /// `fs` with the doors lump in place of mp_carentan's.
@@ -180,6 +184,19 @@ pub fn wire_lines<'a>(
             if let Some(ev) = p.event_of(etype).filter(|ev| BULLET_HITS.contains(ev)) {
                 if !prev_hits.contains_key(&n) {
                     out.push(format!("W {t} hit {ev} {}", e.field_i32(p, "surfType")));
+                }
+                hits.insert(n, ());
+                continue;
+            }
+            if let Some(ev) = p.event_of(etype).filter(|ev| MELEE.contains(ev)) {
+                if !prev_hits.contains_key(&n) {
+                    let f = |name: &str| e.field_i32(p, name);
+                    out.push(format!(
+                        "W {t} melee {ev} {} {} {}",
+                        f("otherEntityNum"),
+                        f("eventParm"),
+                        f("surfType")
+                    ));
                 }
                 hits.insert(n, ());
                 continue;

@@ -318,7 +318,27 @@ In `game.mp.i386.so`:
   `iHeadIconTeam` `+152` (0x98), so both setters write the wire fields
   directly.
 
-INFERRED, off the fall-through at 0x41cfe: any other team string stores 3.
+VERIFIED, `client-probes/probe_noclass` on all three servers
+(`fixtures/noclass/mp_carentan*.txt`, 2026-11-17): after `none`, `allies`
+and `axis` the getter reads each name back. On 1.1d and 1.5b `"foo"`,
+`"Axis"`, `""` and `"ALLIES"` each read back `spectator`, so the
+fall-through at 0x41cfe stores 3 for any other string, case and all
+(`scr_const` compares canonical string ids). 1.1d's `"spectator"` raised
+the error above and the server died (`run_probe.sh`'s `developer 1`).
+VERIFIED, 1.5b's setter (0x3bb58) runs 1.1d's compares in the same order
+with the same `scr_const` slots (`GScr_LoadConsts` 0x5a78e stores
+`allies` at `+0x4`, `axis` `+0x8`, `spectator` `+0x7c`, `none` `+0xf8`),
+yet its `"spectator"` run went on to the next `logPrint`, read
+`spectator` (the 3 the last write left), and the console then printed
+`WARNING: Server should have crashed here!` and dropped the client.
+VERIFIED, UO's setter (0x43e4c): `none` (`scr_const+0x124`) 0, `allies`
+2, `axis` 1, `spectator` (`+0x98`) 3, at `es+0x9c`; anything else
+branches to the same `Scr_Error` (0x43f3d, string 0x9e000). VERIFIED,
+the UO run: the first write past the three names, `"foo"`, aborted the
+server with nothing logged after `axis`. vcod: `host::head_icon_team`
+takes UO's set on protocol 22 and 1.1d's otherwise; `noclass_ab` runs
+1.1d and UO at `developer 1` and 1.5b at 0, where ours runs on past the
+error as 1.5b did.
 
 VERIFIED, `GScr_GetHeadIconIndex`: `""` answers 0. Otherwise configstrings
 `0x1d..0x2b` are compared with `Q_stricmp` and the first match answers its
@@ -445,6 +465,24 @@ coordinates to the unit. VERIFIED, two retail runs that set the player
 down 32 units up (not committed): one settled 22 units off in y, the next
 0.03. The fall does not repeat on retail itself, so the probe sets the
 player down on the ground.
+
+### 7.6 Configstring slots and the order of `d`
+
+`gametypes_ab` compares, besides the names, every `s`/`S` alias index,
+every `t` menu index and every `d` into the alias or menu block by number
+(its `slots` view). VERIFIED, the re attacker's capture
+(`mp_brecourt-re-attacker.txt`): `d 528 american_move_in`, `s 4`, `d 529
+german_move_in`: the axis team's alias is allocated after the allied
+team's `s` went out, and its `d` follows that `s`. The UO ctf captures
+read the same pattern (`d 735`, `s 74`, `d 736`). INFERRED, off
+`SV_SetConfigstring`'s per-client loop (1.1d 0x8089c6c..0x8089d0f, the
+`d` at 0x8089d0f) and `SV_GameSendServerCommand`: each `d` is queued at
+its write and each command at its call, so the two interleave in the
+game's call order. vcod sent every `d` of a frame ahead of the frame's
+commands; `Server::send_frame_writes` now sends a write made after the
+frame's first command between the commands it fell between (each write
+and command stamped by `configstrings::next_write_seq`). The slot numbers
+themselves already matched on re, bel and the fourteen UO runs.
 
 ## 8. Behind Enemy Lines: the team swap
 

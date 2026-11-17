@@ -1,6 +1,7 @@
 //	What a script reads off a client entity between its connect and its
 //	first spawn (cod11-gametypes-re-bel.md 8.3): the fields at the connect
-//	callback, three seconds on with no spawn, and right after the spawn.
+//	callback, three seconds on with no spawn, and right after the spawn;
+//	then what `.headiconteam` reads after each of eight strings (7.3).
 //	Run: tools/run_probe.sh client-probes/probe_noclass mp_carentan, and
 //	vcod --net-probe <server> --probe-secs 10 once it is up.
 
@@ -72,4 +73,22 @@ Callback_PlayerConnect()
 	self.sessionstate = "playing";
 	self spawn(spawns[0].origin, spawns[0].angles);
 	fields("spawned");
+	// `.headiconteam`'s setter on strings past its four names, read back
+	// through the getter (gametypes doc 7.3). The first illegal one is a
+	// script error that ends the run: on 1.1 and 1.5 "spectator", on UO
+	// any string but the four.
+	team("none");
+	team("allies");
+	team("axis");
+	team("foo");
+	team("Axis");
+	team("");
+	team("ALLIES");
+	team("spectator");
+}
+
+team(s)
+{
+	self.headiconteam = s;
+	logPrint("PROBE team '" + s + "' " + self.headiconteam + "\n");
 }

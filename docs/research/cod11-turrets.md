@@ -2860,6 +2860,13 @@ damage kick on top (`TurretEye::kicks`), the jitter on `viewlocked` 2 off
 the gun's `vertViewJitter`/`horizViewJitter`, and the held or jittered
 view handed to the cmd (`TurretEye::snap`). vcod-server sends the arcs on
 protocol 6 and 22 from a gun's first aim (`TurretRecord::aimed`).
+VERIFIED, disassembly 1.5 0x3001c2b0..0x3001c55c: the controller reads
+`eFlags` (0x3020af94), `viewlocked_entNum` (0x3020b28c) and 0x3020af10
+twice each and never `viewlocked` (0x3020b288). vcod's entity pass picks
+the ridden gun on 1.5 without the `viewlocked` test too
+(`turret::ridden`'s `any_lock`), so a mounted frame with `viewlocked` 0
+turns the gun by the unheld view's clamp, where the eye (0x300348c0) is
+not the gun's.
 
 UO's manned aim is the same clamp. VERIFIED decompile, `game.mp.uo.i386.so`
 0x6b950 (called first from the fire tick 0x6bb49, which

@@ -8,9 +8,9 @@
 //! game with `cl_ingame` 1 (docs/research/cod11-front-end.md).
 //! The Mods menu lists the mod directories and switches `fs_game`, which
 //! rebuilds the UI off the new search path. Start New Server launches a
-//! `vcod-server` and joins it ([`create`]). Menus vcod cannot run yet (CD
-//! key, single player) are refused with a console line instead of drawing
-//! screens whose controls do nothing.
+//! `vcod-server` and joins it ([`create`]). Menus vcod cannot run yet
+//! (single player, the language and record restarts) are refused with a
+//! console line instead of drawing screens whose controls do nothing.
 
 pub mod browser;
 pub mod cod2;
@@ -128,10 +128,8 @@ fn item_states(menus: &[UiMenu]) -> Vec<Vec<ItemState>> {
 /// The stock menus vcod cannot run yet; `open` refuses them with a console
 /// line instead of drawing controls that do nothing. Any other menu the
 /// list loads, a mod's included, opens.
-const UNSUPPORTED: [&str; 9] = [
+const UNSUPPORTED: [&str; 7] = [
     "single_popmenu",
-    "options_driverinfo",
-    "options_credits",
     "language_restart_popmenu",
     "rec_restart_popmenu",
     "multi_menu",
@@ -162,6 +160,7 @@ const UI_NETMAPPREVIEW: i32 = 221;
 const UI_NETMAPCINEMATIC: i32 = 246;
 const UI_STARTMAPCINEMATIC: i32 = 255;
 const UI_SERVERREFRESHDATE: i32 = 247;
+const UI_GLINFO: i32 = 249;
 const UI_JOINGAMETYPE: i32 = 253;
 /// `ui_mp/menudef.h`'s `UI_SHOW_FAVORITESERVERS` and
 /// `UI_SHOW_NOTFAVORITESERVERS`: shown only while the source is, or is not,
@@ -537,9 +536,14 @@ impl Ui {
         self
     }
 
-    /// Favourites live in `path` (`servercache.dat`, beside `CoDMP.exe`).
-    pub fn with_server_cache(mut self, path: PathBuf) -> Ui {
-        self.set_browser(Browser::with_cache(path));
+    /// Favourites live in `path`, a server cache of `layout` beside the
+    /// game's executable (`servercache.dat`, UO's `uoservercache.dat`).
+    pub fn with_server_cache(
+        mut self,
+        path: PathBuf,
+        layout: vcod_common::net::server_cache::Layout,
+    ) -> Ui {
+        self.set_browser(Browser::with_cache(path, layout));
         self
     }
 
@@ -886,6 +890,7 @@ impl Ui {
             self.selected = None;
             self.list_top = 0;
         }
+        self.browser.max_ping = shell.cvar_f32("cl_maxPing") as u32;
         self.browser.poll(now);
         if let Some(q) = &mut self.status {
             q.poll(now);
@@ -2307,6 +2312,12 @@ impl Ui {
                     p.quad(r, [1.0; 4], &self.map_preview(), &mut out);
                     continue;
                 }
+                if item.ownerdraw == UI_GLINFO {
+                    let [x, y, w, h] = item.rect;
+                    let r = [x + item.text_align_x, y + item.text_align_y, w, h];
+                    gl_info(&p, r, item.text_scale, color, &mut out);
+                    continue;
+                }
                 if item.ownerdraw == UI_STARTMAPCINEMATIC {
                     let [x, y, w, h] = item.rect;
                     let r = [x + item.text_align_x, y + item.text_align_y, w, h];
@@ -2590,8 +2601,7 @@ impl Ui {
 impl Ui {
     /// The cvars a menu reads: `cl_ingame` is whether the menus are up over
     /// a game, `shortversion` is vcod's, `com_errorMessage` the last error,
-    /// `ui_multiplayer` 1 (this is the MP UI), `cl_languagesavailable` 1
-    /// (vcod reads English only), `ui_mousePitch` on when `m_pitch` is
+    /// `ui_multiplayer` 1 (this is the MP UI), `ui_mousePitch` on when `m_pitch` is
     /// negative (as the UI sets it at load), anything this input set, then
     /// the console's.
     fn cvar(&self, name: &str, shell: &Shell) -> Option<String> {
@@ -2603,7 +2613,7 @@ impl Ui {
             "com_errormessage" => Some(self.error.clone()),
             "ui_favorite_message" => Some(self.fav_message.clone()),
             "shortversion" => Some(crate::version_tag()),
-            "ui_multiplayer" | "cl_languagesavailable" => Some("1".into()),
+            "ui_multiplayer" => Some("1".into()),
             "ui_mousepitch" => Some(
                 if shell.cvar_f32("m_pitch") < 0.0 {
                     "1"
@@ -2690,6 +2700,69 @@ fn refresh_date(t: jiff::civil::DateTime, loc: &Localized) -> String {
         t.hour(),
         t.minute()
     )
+}
+
+/// What the driver info page prints: vcod's GPU in the GL strings'
+/// places, set once the renderer has its adapter.
+#[derive(Clone, Debug, Default)]
+pub struct GpuInfo {
+    /// The driver's name, in `GL_VENDOR`'s place.
+    pub vendor: String,
+    /// The driver's version, in `GL_VERSION`'s.
+    pub version: String,
+    /// The adapter's name, in `GL_RENDERER`'s.
+    pub renderer: String,
+    pub color_bits: u32,
+    pub depth_bits: u32,
+    pub stencil_bits: u32,
+    /// The adapter's features, space separated, in `GL_EXTENSIONS`' place.
+    pub extensions: String,
+}
+
+pub static GPU_INFO: std::sync::OnceLock<GpuInfo> = std::sync::OnceLock::new();
+
+/// `UI_DrawGLInfo` (ui_mp_x86.dll 0x400091c0) over `r`, the owner draw's
+/// rect moved by its text offsets: three lines 15 apart cut at 80
+/// characters, then the extensions three to a row 10 apart at thirds of
+/// the width, cut at 36, while a row's baseline stays within 11 of the
+/// bottom; at most 256 (front-end doc 14, "Driver Info"). Each line with
+/// its baseline.
+fn gl_info_lines(info: &GpuInfo, r: [f32; 4]) -> Vec<(String, f32, f32)> {
+    let cut = |s: &str, n: usize| s.chars().take(n).collect::<String>();
+    let [x, y, w, h] = r;
+    let head = [
+        format!("VENDOR: {}", info.vendor),
+        format!("VERSION: {}: {}", info.version, info.renderer),
+        format!(
+            "PIXELFORMAT: color({}-bits) Z({}-bits) stencil({}-bits)",
+            info.color_bits, info.depth_bits, info.stencil_bits
+        ),
+    ];
+    let mut out: Vec<_> = (head.iter().enumerate())
+        .map(|(i, l)| (cut(l, 80), x + 2.0, y + 15.0 * i as f32))
+        .collect();
+    let words: Vec<&str> = (info.extensions.split(' '))
+        .filter(|e| !e.is_empty())
+        .take(256)
+        .collect();
+    let mut row_y = y + 45.0;
+    for row in words.chunks(3) {
+        if row_y > y + h - 11.0 {
+            break;
+        }
+        for (col, e) in row.iter().enumerate() {
+            out.push((cut(e, 36), x + 2.0 + w * col as f32 / 3.0, row_y));
+        }
+        row_y += 10.0;
+    }
+    out
+}
+
+fn gl_info(p: &Painter, r: [f32; 4], scale: f32, color: [f32; 4], out: &mut Vec<HudQuad>) {
+    let info = GPU_INFO.get().cloned().unwrap_or_default();
+    for (line, x, y) in gl_info_lines(&info, r) {
+        p.text(&line, x, y, scale, color, out);
+    }
 }
 
 fn fill(fmt: &str, args: &[&str]) -> String {
@@ -3279,6 +3352,49 @@ mod tests {
         assert_eq!(ui.cvar("cl_ingame", &shell).as_deref(), Some("0"));
         ui.key(KeyCode::Escape, &shell);
         assert!(ui.active());
+    }
+
+    /// The driver info page's `UI_GLINFO` over its stock rect: the three
+    /// lines, then 35 rows of three extensions down to y 465.
+    #[test]
+    fn the_driver_info_lays_out_as_ui_draw_gl_info() {
+        let info = GpuInfo {
+            vendor: "radv".into(),
+            renderer: "gpu".into(),
+            version: "v".repeat(100),
+            extensions: (0..300)
+                .map(|i| format!("EXT_{i:040}"))
+                .collect::<Vec<_>>()
+                .join(" "),
+            ..GpuInfo::default()
+        };
+        let lines = gl_info_lines(&info, [10.0, 80.0, 545.0, 400.0]);
+        assert_eq!(lines[0], ("VENDOR: radv".into(), 12.0, 80.0));
+        assert_eq!(lines[1].0.chars().count(), 80);
+        assert_eq!((lines[1].2, lines[2].2), (95.0, 110.0));
+        assert_eq!(lines.len(), 3 + 105);
+        assert_eq!((lines[3].1, lines[3].2), (12.0, 125.0));
+        assert_eq!(lines[3].0.chars().count(), 36);
+        assert_eq!(lines[4].1, 12.0 + 545.0 / 3.0);
+        assert_eq!(lines.last().unwrap().2, 465.0);
+    }
+
+    /// The driver info and credits pages open (a mod or the console can
+    /// reach credits; the stock button is commented out).
+    #[test]
+    fn the_driver_info_and_credits_pages_open() {
+        let Some(mut ui) = ui() else { return };
+        let shell = Shell::new();
+        let mut out = Vec::new();
+        ui.open_main(&shell, &mut out);
+        for name in ["options_credits", "options_driverinfo"] {
+            ui.open_menu(name, &shell, &mut out);
+            assert!(ui.open.iter().any(|&m| ui.menus[m].name == name), "{name}");
+        }
+        assert!(
+            !ui.build(640.0, 480.0, &Localized::default(), &shell)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -4731,8 +4847,10 @@ mod tests {
                 feeder 2 visible 1
                 columns 9 2 20 20  22 14 14  41 40 40  306 40 20  420 5 10
                           484 20 10  528 14 14  548 20 10  568 20 20 } } }"#;
-        let mut ui =
-            ui_with_menu(menu).with_server_cache(PathBuf::from("/nonexistent/servercache.dat"));
+        let mut ui = ui_with_menu(menu).with_server_cache(
+            PathBuf::from("/nonexistent/servercache.dat"),
+            vcod_common::net::server_cache::Layout::Cod11,
+        );
         assert_eq!(ui.browser.columns, &browser::COLUMNS_V5[..]);
         ui.set_browser(Browser::default());
         assert_eq!(ui.browser.columns, &browser::COLUMNS_V5[..]);
@@ -5115,7 +5233,10 @@ mod tests {
     fn a_new_favourite_is_typed_in_and_listed() {
         let Some(ui) = ui() else { return };
         let dir = tempfile::tempdir().unwrap();
-        let mut ui = ui.with_server_cache(dir.path().join("servercache.dat"));
+        let mut ui = ui.with_server_cache(
+            dir.path().join("servercache.dat"),
+            vcod_common::net::server_cache::Layout::Cod11,
+        );
         ui.browser.lan_targets.clear();
         let mut shell = Shell::new();
         ui.frame(Instant::now(), &shell);

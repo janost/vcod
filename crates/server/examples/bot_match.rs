@@ -32,7 +32,8 @@
 //! a fight broken off with both alive.
 //! Run: COD_DIR=<install> cargo run --release -p vcod-server --example bot_match [seed...]
 //! `MAPS=` a comma list (`MAP=` alias; mp_carentan), `GAMETYPE=` (tdm),
-//! `BOTS=` (6), `TICKS=` (12000, ten minutes), `JOBS=` (4, matches run in
+//! `BOTS=` (6), `TICKS=` (12000, ten minutes), `LEVELS=` (1, the
+//! `exitLevel`s a match runs through), `JOBS=` (4, matches run in
 //! parallel), `SET=name=value,...` cvars, `UO=1` a United Offensive
 //! server. `AXIS_SKILL=` / `ALLIES_SKILL=` add the bots per side at those
 //! `vc_bot_skill` levels, half each (dm: `SKILLS=a,b,...`, one bot per
@@ -339,6 +340,8 @@ struct Opts {
     gametype: String,
     bots: usize,
     ticks: usize,
+    /// `LEVELS=`: the `exitLevel`s a match runs through before it stops.
+    levels: u32,
     uo: bool,
     set: Vec<(String, String)>,
     /// Console lines run once the level is up (the per-side `addbot`s).
@@ -1171,8 +1174,11 @@ struct Match {
     map: String,
     seed: u64,
     ticks: usize,
-    /// Whether the map ended inside `TICKS`.
+    /// Whether the map ended inside `TICKS`: with `LEVELS`, every level.
     ended: bool,
+    /// The `exitLevel`s run, and the team scores each zeroed.
+    levels: u32,
+    banked: [i32; 2],
     /// `W;` lines by winning team (or, in `dm`, player name).
     wins: BTreeMap<String, u32>,
     /// The tick of each `W;` line: when each round ended (`bas` logs it
@@ -1236,6 +1242,7 @@ fn main() {
         gametype,
         bots,
         ticks: env("TICKS", "12000").parse().expect("TICKS"),
+        levels: env("LEVELS", "1").parse::<u32>().expect("LEVELS").max(1),
         uo,
         set: env("SET", "")
             .split(',')
@@ -1313,15 +1320,16 @@ fn main() {
             a
         });
         println!(
-            "{} seed {}: ticks {} ended {} wins {:?} at {:?} score axis {} allies {} stalled {} held {} edges {} by a body {} {} actions {:?} to objective {}",
+            "{} seed {}: ticks {} ended {} levels {} wins {:?} at {:?} score axis {} allies {} stalled {} held {} edges {} by a body {} {} actions {:?} to objective {}",
             m.map,
             m.seed,
             m.ticks,
             m.ended,
+            m.levels,
             m.wins,
             m.win_ticks,
-            m.scores[0],
-            m.scores[1],
+            m.scores[0] + m.banked[0],
+            m.scores[1] + m.banked[1],
             m.stalled,
             m.held,
             m.edges[0],
@@ -1402,8 +1410,8 @@ fn summarize(what: &str, results: &[&Match]) {
         edges[0] += m.edges[0];
         edges[1] += m.edges[1];
         to_obj.extend(&m.to_objective);
-        scores[0] += i64::from(m.scores[0]);
-        scores[1] += i64::from(m.scores[1]);
+        scores[0] += i64::from(m.scores[0] + m.banked[0]);
+        scores[1] += i64::from(m.scores[1] + m.banked[1]);
     }
     println!("{what} over {} matches:", results.len());
     let rows = |kind: &str, map: &BTreeMap<String, Tally>| {
@@ -1936,7 +1944,19 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                     (round_start, acted) = (tick, false);
                 }
                 // `exitLevel`'s own line; it has zeroed the team scores.
-                "ExitLevel: executed" => m.ended = true,
+                // Under `LEVELS` the script's `map_rotate` loads the next
+                // level (the same map with no `sv_mapRotation`).
+                "ExitLevel: executed" => {
+                    m.levels += 1;
+                    if m.levels >= o.levels {
+                        m.ended = true;
+                    } else {
+                        for (b, s) in m.banked.iter_mut().zip(m.scores) {
+                            *b += s;
+                        }
+                        m.scores = [0; 2];
+                    }
+                }
                 _ => {}
             }
         }

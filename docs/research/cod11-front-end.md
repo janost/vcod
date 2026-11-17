@@ -78,10 +78,32 @@ front end; 13 Esc in a game; 14 options screens; 15 error popup text;
   new directory and leaves none open. While `sv_running` is set the command
   refuses with `Listen server cannot video restart.` VERIFIED (the test
   before the print).
-- 0x4a9b10 rewrites `cl_language` (forced, `Cvar_Set2` with 1) to the first
-  language with localized assets when the chosen one has none (the table's
-  second dwords at `0x571b34`). VERIFIED that it writes. INFERRED what the
-  availability test reads.
+- The language check 0x4a9b10 sets each language's flag (the table's
+  second dwords at `0x571b34`) itself: 1 when a search path entry is
+  localized (`+0xc` non-zero) for that language (`+0x10` its index), else
+  0, counting the hits (`0x4a9b4c`..`0x4a9b7f`, `0x4a9c76`). VERIFIED. The
+  pk3 scan (`0x42bd30`) makes such an entry for a file starting
+  `localized_`, the language parsed off the name (`0x42bb40`) and matched
+  against the table (`0x44aa90`); a missing or unknown name warns
+  (`0x5642c8`, `0x564230`, then `Supported languages are:` once).
+  VERIFIED. `0x42c250` makes them for directories. VERIFIED.
+- The check then, VERIFIED (asm): with no hit it prints `^1ERROR: No
+  languages available because no localized assets were found` (`0x5590a0`);
+  it sets `cl_languagesavailable` to the count; it loads the current
+  `cl_language`'s strings (`0x4a9d00`, `localizedstrings` for that
+  language, flag not read); if that fails it walks the flagged languages in
+  table order, forcing `cl_language` to each (`0x439650` with force 1) and
+  loading again, stopping at the first that loads; if none does it forces
+  `"0"` without loading. Each set refreshes the Asian flag `0xca26c0`
+  (languages 8 to 12). `0x4a9d00`'s failures print only with
+  `fs_ignoreLozalized` (`0x16318a4`) 0 and `cl_languagewarnings` on:
+  `^3WARNING:` lines, or `Com_Error(7, ...)` (`No language string
+  information available for %s`, `Could not load localization strings for
+  %s: %s`) under `cl_languagewarningsaserrors`. Its callers:
+  `FS_InitFilesystem` (`0x42d1c0`), `FS_Restart` (`0x42d2b0`), `Com_Init`
+  (`0x437778`) and `CL_Vid_Restart_f` (`0x40fd6e`). VERIFIED (calls).
+  That a table "loads" when `localizedstrings/<language>/` holds a `.str`
+  is INFERRED from the message.
 - A script menu (`ui_mp/scriptmenus/<name>.menu`, 0x40008330) takes the same
   two tries (`0x400083d6..0x4000844d`). VERIFIED (asm).
 - `UI_LoadMenus`' second argument, when non-zero, zeroes the menu count
@@ -239,7 +261,16 @@ password, hardware, server, map, players, type, mod, ping. VERIFIED off the
 asset. That this is its feeder's order is INFERRED off the header.
 `paka.pk3` (1.5) keeps the eight-column block commented out above its nine.
 vcod lays out only six and nine (`columns_for`), so an eight-column list
-draws in 1.1's order.
+draws in 1.1's order with its last two columns empty, as 1.1's feeder
+does: its jump table takes columns 0 to 5 and any other returns `""`
+(`cmp esi,5; ja 0x4000cb3d` at `0x4000c8a4`, the empty string
+`0x4002dfb9`). VERIFIED. 1.5's takes 0 to 8 (`cmp esi,8` at `0x4000cf09`).
+VERIFIED. The eight-column file loads only under a 1.2-1.4 UI module,
+which no supported install has: on 1.5 `paka.pk3`'s `joinserver.menu`
+replaces `pak8.pk3`'s by name (both ship in 1.5's `main/`). VERIFIED (the
+paks). The cells follow the UI module, not the menu's column count, on
+retail; vcod picks by the count, which differs only for a mod's nine-column
+list on 1.1 or six on 1.5. INFERRED.
 
 vcod keeps the layout on the browser (`Browser::columns`) and derives it
 from the loaded list box whenever the UI takes a browser
@@ -389,6 +420,17 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   ahead of pak5's five, which are alphabetical in the zip (`unzip -l`).
   VERIFIED. `UI_LoadArenas`' `.arena` files list the same way. vcod reads
   both off `Pk3Fs::file_list` and has no loose files.
+- 1.1 `CoDMP.exe` calls `FS_ListFilteredFiles` from four places:
+  `FS_GetFileList` (`0x42b750`, which hands `$modlist` to `FS_GetModList`
+  `0x43b030`), the sound alias loader (`0x4028e0`, `soundaliases`/`csv`),
+  and `0x4afb10` (two calls). VERIFIED (decompile, the calls). Of the lists vcod takes, only the game types, the arenas,
+  UO's `vehicles/` (`coduo-vehicles.md` 10.1) and the alias csvs read
+  `Pk3Fs::file_list`; the order of the csvs settles only rows tied on name
+  and sequence (`cod11-sound-system.md` 1a, 1e). Script menus, levelshots
+  and effects load by name on retail, so vcod's sorted listings of them
+  change nothing. INFERRED (no list call reaches them). vcod still reads
+  no loose files, so an unpure path's loose game types, arenas or csvs are
+  missing from its lists.
 - The UI also runs the loader from `UI_Load` (`0x4000871d`) and the
   `loadGameInfo` menu script (`0x4002eb40`, call at `0x4000aa25`). VERIFIED
   (the calls).
@@ -487,11 +529,47 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   The retail one, run with `g_password secret`, sent `pswrd\1`. VERIFIED by
   capture (`lan_scan_live` in `crates/client/src/frontend/browser.rs`
   reruns it on vcod's scan).
+- An answer no ping slot waits on, while the last ping source is Local,
+  goes into the Local list with ping -1 and empty fields; past 128 it
+  prints `MAX_OTHER_SERVERS` (1.5 stores `0xffff` at `0x414580`).
+  VERIFIED. The next `CL_UpdateVisiblePings` sends it a `getinfo` of its
+  own, whose answer brings the info and the ping. INFERRED (the ping -1
+  is what that loop picks).
 - vcod: a Local refresh broadcasts the eight packets and lists every
-  address that answers within 1000 ms (cap 128), with the time from the
-  broadcast as its ping. Retail adds broadcast answers in
-  `CL_ServerInfoPacket` and pings them afterwards; vcod's ping is a
-  simplification.
+  address that answers (cap 128) with no info, pings each with its own
+  `getinfo` and lists it on that answer, as retail does. It waits while
+  nobody answered, as `UI_DoServerRefresh` does.
+
+### Pings
+
+- 16 ping slots at `0x15ca660`, `0x41c` bytes each (address, its port at
+  `+0x12` marking the slot used, start `+0x14`, time `+0x18`, info
+  `+0x1c`): the bounds `0xf`/`0x10` and the 2 x 8 loops in `0x413b60` and
+  `0x413de0`. VERIFIED. 1.5 has 16 too (`0x1895720`). VERIFIED.
+- `CL_UpdateVisiblePings` (`0x413de0`, UI trap `0x53`): with fewer than 16
+  waiting it fills free slots with the source's visible entries whose ping
+  is -1 and that no slot holds, start `cls.realtime` (`0x155f3e0`), and
+  sends each `getinfo xxx` (`0x413fcb`). Then it runs `CL_GetPing` on every
+  used slot and frees the ones with a time. It returns true when anything
+  waited, went out or finished. VERIFIED.
+- `CL_GetPing` times a slot out past `cl_maxPing` (registered at
+  `0x41228d`, default `"800"`, archived; floor 100 at `0x413a7d`): the
+  entry takes the slot's stored time, 0, and the slot's info buffer, which
+  nothing clears at send time (`0x413a8d`, `0x413fac`). VERIFIED. A ping
+  of 0 hides it and nothing pings it again. INFERRED.
+- A reply's ping is `cls.realtime - start + 1` (near `0x412d4a`); 1.1 drops
+  a reply whose `protocol` is not 1. VERIFIED. 1.5 times it off
+  `timeGetTime()` less a base (`0x41582e`, `0x41524b`, `inc` at
+  `0x41445f`). VERIFIED.
+- `UI_DoServerRefresh` (`0x4000ea00`, every UI frame from `0x40001970`)
+  waits on Local while the list is empty and on Internet while its count
+  is negative; Favorites never waits. Before the refresh time it returns
+  only while waiting; otherwise trap `0x53` true sets the refresh time a
+  second on, false with no wait rebuilds the list and stops the refresh
+  (`0x4000e9b0`). VERIFIED. So no time limit ends a refresh: a Local one
+  nobody answers or an Internet one whose master never answers runs until
+  Esc, and a Local answer that lands after the stop stays hidden.
+  INFERRED.
 
 ## 8. Favourites (`servercache.dat`)
 
@@ -511,9 +589,21 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
 
   The file is 16 + `0x64c00` = 412688 bytes. A 1.1 install's copy beside
   `CoDMP.exe` is that size with all counts 0. VERIFIED (the file). The
-  Local list is never cached. VERIFIED (not among the fields). That the
-  third block is the master's address list (2048 of six bytes) is INFERRED
-  from its size.
+  Local list is never cached. VERIFIED (not among the fields). The third
+  block is the master's overflow: `CL_ServersResponsePacket` (`0x4107b0`)
+  fills the 2048 Internet entries, then keeps up to `0x800` more six-byte
+  addresses there (`0x410944`..), and `CL_UpdateVisiblePings` takes them
+  back from its end for an Internet entry whose ping is 0 (`0x410750`,
+  `0x4140a7`). VERIFIED.
+- Load copies the blocks raw and save writes the entries as they stand:
+  last hostname, map, counts and ping; nothing resets a ping or the
+  visible flag. VERIFIED. Opening the browser on Internet starts no
+  refresh (`UpdateFilter`), and `BuildServerDisplayList(1)` marks every
+  entry visible (trap `0x52` with -1, 1 at `0x4000b8f5`). VERIFIED. So the
+  last run's Internet list shows with its saved pings, unpinged, until a
+  refresh. INFERRED. `RefreshFilter` (Quick Refresh) runs `0x4000ea90(0)`
+  (the push at `0x4000aa7c`). VERIFIED. That runs `LAN_ResetPings` (trap
+  `0x54`, ping -1 on all 2048), then pings the cached list. INFERRED.
 - An entry is `0xb8` bytes. `LAN_GetServerInfo` (`0x417a10`) reads it into
   an info string with keys `hostname`, `mapname`, `clients`,
   `sv_maxclients`, `ping`, `minping`, `maxping`, `game`, `gametype`,
@@ -564,6 +654,56 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   loopback) is kept as read. A reply's hostname, map, counts and ping go
   into the entry, as `CL_SetServerInfo` updates every list holding the
   address (INFERRED from Q3).
+
+### The other games' caches
+
+- 1.5 (`CoDMP.exe` load `0x4190d0`, parse `0x419000`, save `0x419140`),
+  UO (`CoDUOMP.exe` `0x41a5b0`, `0x41a4e0`, `0x41a620`) and CoD2 1.3
+  (`CoD2MP_s.exe` `0x4b56e0`, `0x4b5610`, `0x4b5750`) share a shape 1.1
+  has not. VERIFIED (asm). In file order: an int that must be 1, the
+  Internet count (below `0x4e20`), the favourites count (below `0x80`),
+  the blocks' size (`0x2d7480` on 1.5 and CoD2, `0x2eaf00` on UO), the
+  Internet list (20000 entries: `0x2d2a80`, UO `0x2e6300` bytes), then
+  the favourites (128: `0x4a00`, UO `0x4c00`). Any short read or failed
+  test zeroes both counts. No Local list and no overflow block. VERIFIED.
+  UO names its file `uoservercache.dat` (`0x5956d8`); 1.5 and CoD2 read
+  `servercache.dat`, as 1.1 does. VERIFIED (the pushes). A retail UO
+  install's empty file is 3059472 bytes, version 1, counts 0. VERIFIED
+  (the file).
+- Entries are `0x94` bytes on 1.5 and CoD2, `0x98` on UO, read off 1.5's
+  `LAN_GetServerInfo` (`0x4196d0`) and UO's (`0x41ac2c`..): the 20-byte
+  `netadr_t` at 0 (type 2 loopback, 4 IP, `0x44bf30`), then bytes
+  `nettype` `+0x14`, `clients` `+0x15`, `sv_maxclients` `+0x16`, the
+  visible flag `+0x17` (`LAN_AddServer` `0x4193eb`, UO `0x41a8dc`),
+  `sv_allowAnonymous` `+0x18`, `pswrd` `+0x19`, `pure` `+0x1a`, `ff`
+  `+0x1b`, `kc` `+0x1c`, `con_disabled` `+0x1d`, `hw` `+0x1e`, `mod`
+  `+0x1f`, `pb` `+0x20`, shorts `minping` `+0x22`, `maxping` `+0x24`,
+  `ping` `+0x26`, `timeoutsallowed` `+0x28`; then on 1.5 `hostname`
+  `+0x2a`, `mapname` `+0x4a` (32 each), `game` `+0x6a` (24), `gametype`
+  `+0x82` (16); UO adds shorts `jps` `+0x2a`, `tnk` `+0x2c` and moves the
+  four strings 4 on (`+0x2e`, `+0x4e`, `+0x6e`, `+0x86`). VERIFIED (asm).
+  `LAN_AddServer` copies the address, `Q_strncpyz`s the name into
+  `hostname` (31 bytes) and sets the visible byte; favourites cap at
+  `0x80` (`0x4192bb`, the favourites arm `0x4192cc`). VERIFIED. So a 128th favourite saves a file the
+  loader then drops whole. INFERRED (the `jae` against the `LAN_AddServer`
+  cap). CoD2's entry is `0x94` with the address at 0, `hostname` `+0x2a`,
+  `mapname` `+0x4a`, `game` `+0x6a`, `gametype` `+0x82` and the visible
+  byte `+0x17` (its server-slot reset at `0x4b3bd4`..`0x4b3c03`, and
+  `CL_SetServerInfo`'s stores from `0x4b332d`). VERIFIED. Its shorts at
+  `+0x24`..`+0x28` hold other fields than 1.5's (the reset writes -1 to
+  `+0x28`). INFERRED.
+- vcod (`net::server_cache::Layout`) reads and writes each game's own
+  file and shape, beside the install's executables. It reads a file only
+  when it passes that game's loader, and writes only over one it read:
+  a file of another shape or one it cannot read stays untouched and the
+  favourites stay in memory. A new file goes in whole (written aside,
+  then renamed). The later games' favourites are written back as read,
+  a new one with `LAN_AddServer`'s fields only, at most 127 so the
+  loader takes the file. A 1.1-shaped `servercache.dat` on 1.5 or CoD2
+  (vcod wrote 1.1's shape for every game before) gives its favourites to
+  a file of the game's own shape. Before this, UO's favourites went into
+  that `servercache.dat`, 1.5's name, not `uoservercache.dat`; they stay
+  there.
 
 ## 9. Password popup
 
@@ -638,7 +778,12 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
 - Language: every menu file and script menu is tried under `cl_language`'s
   directory first. The cvar is registered `"0"`, archived and latched: a
   set prints retail's line, the config gets the pending value, startup or
-  `vid_restart` applies it. vcod has no language-availability fallback.
+  `vid_restart` applies it. Then the language check runs as retail's
+  (section 1, `ui_menu::check_language`): `cl_languagesavailable` counts
+  the `localized_<language>_*` paks, and a `cl_language` whose
+  `localizedstrings/<language>/` holds no `.str` is forced to the first
+  language with a pak whose strings do, else `0`. vcod has no loose files,
+  so `0x42c250`'s directory entries never count.
 - Restarts: every `vid_restart` restarts the UI closed and rebuilds the
   script menu cache (section 1). With no game up the main menu comes back.
   The server lists carry over, as retail's survive in `servercache.dat`.
@@ -650,14 +795,19 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   browser and its popups (sections 6-11), the options set (section 14), the
   quit and error popups, the main menu over a game (section 13), the Mods
   menu (section 17) and Start New Server with its game type pages (section
-  18). Stock menus it cannot run (single player, the credits and
-  driver info pages, the language and record restarts, `multi_menu`,
+  18), the credits page and the driver info page (section 14, "Driver
+  Info"). Stock menus it cannot run (single player, the language and
+  record restarts, `multi_menu`,
   `Connect`, `auconfirm`; `frontend::UNSUPPORTED`) are refused with a
   console line. Any other menu the list loaded opens, a mod's included. A
   button whose script would close its own menu and open a refused or
   unknown one is refused whole, so the main menu stays up.
-- Ping pacing (32 `getinfo`s in flight, 1.5 s timeout, 5 s for the master)
-  is vcod's own. Retail's numbers were not measured.
+- Ping pacing is retail's (section 7, "Pings"): 16 `getinfo`s in flight,
+  a reply's ping the round trip plus one, an unanswered one past
+  `cl_maxPing` (registered `"800"`, archived, floor 100) left with no ping
+  and off the list, the refresh over once a frame finds nothing to send or
+  wait on. Local waits while nobody answered. The master's 5 s is vcod's
+  own: retail waits as long as the refresh runs.
 - The Internet source asks `master.cod.pm` (its operator allowed it), not
   Activision's host: `getservers <protocol> full empty` with the install's
   protocol alone (1 on 1.1, 6 on 1.5, both port 20510; 22 on UO, port
@@ -678,8 +828,9 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   `ui_lastServerRefresh_<n>` cvar. A right click acts as a left click and
   steps the game type and source owner draws back (section 19). A missing
   `menu/art/unknownmap` draws nothing.
-- Not done: the Internet list's cache in
-  `servercache.dat`, `focusColor`'s pulse (section 20). The server, map
+- Not done: the Internet list's cache in `servercache.dat` (section 8;
+  vcod's Internet list lives for one run), `focusColor`'s pulse (section
+  20). The server, map
   and Mods lists draw retail's scroll bar (section 19).
 
 ## 13. Esc in a game
@@ -1558,6 +1709,39 @@ file).
   `vid_restart` and picks the menu files' language directory (section 1),
   but a stock install ships only the English localized paks.
 
+### Driver Info
+
+- `options_driverinfo` (`ui/options_driverinfo.menu`) is a popup whose
+  Driver Info button on `options_menu` shows only under `developer 1`
+  (`cvartest "developer"`, `showCvar { "1" }`); its `UI_GLINFO` owner draw
+  (249) sits at `10 80 545 400`, `textscale .2`, white. VERIFIED (the
+  files). `options_credits` is a page of `autowrapped` text items whose
+  only opener in `options.menu` is commented out. VERIFIED.
+- `UI_OwnerDraw` sends 249 (index byte 10 at `0x40009771`, table entry
+  `0x400096b4`) to `UI_DrawGLInfo` (`0x400091c0`) over the rect moved by
+  the text offsets (`0x400094a0`). VERIFIED. It draws through the text
+  syscall `0x45` (wrapper `0x400190c0`) with the owner draw's font, scale,
+  colour and style, adjust 0. VERIFIED. That those are the item's
+  `textfont`, `textscale` and `forecolor` is INFERRED. The strings come
+  off the glconfig at `0x401e2010` (`trap_GetGlconfig`, syscall `0x34`,
+  called once at `0x4000d331`): renderer `+0`, vendor `+4`, version `+8`,
+  extensions `+0xc`, colour, depth and stencil bits `+0x20`, `+0x24`,
+  `+0x28`. VERIFIED.
+- Lines, limit 80 characters each, VERIFIED: `VENDOR: %s` (`0x4002ef94`)
+  at `(x + 2, y)`; `VERSION: %s: %s` (`0x4002ef84`), version then
+  renderer, at `y + 15`; `PIXELFORMAT: color(%d-bits) Z(%d-bits)
+  stencil(%d-bits)` (`0x4002ef4c`) at `y + 30`. The extension string is
+  copied into a 4096-byte buffer and split on spaces, at most 256
+  (`0x40009325`); from `y + 45` they draw three to a row at `x + 2`,
+  `x + w / 3` and `x + 2w / 3` (the third at `0x4002ff88`), limit 36, the
+  row 10 lower each time, stopping once the row passes `y + h - 11`.
+  VERIFIED. On the stock rect that is 35 rows, 105 names. INFERRED.
+- vcod draws the same lines (`frontend::gl_info_lines`) off its GPU:
+  the driver's name as the vendor, its version string and the adapter's
+  name as version and renderer, the surface format's and the depth
+  format's bits, stencil 0, and the adapter's wgpu features as the
+  extensions. The credits page opens as any menu.
+
 ## 15. The error popup's text
 
 `error_popmenu` prints cvar `com_errorMessage`. How a drop reason gets
@@ -1809,6 +1993,30 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   its own `maps/mp/<map>.bsp` replaces the stock geometry and collision.
   INFERRED (the two together).
 
+### A mod switch during a download
+
+- `CL_Vid_Restart_f` holds no download test. With no listen server it
+  stops the sound, shuts the cgame, UI and renderer down, sends `vdr`
+  (the server's `0x454d60` only zeroes the client's `+0x528ac`), clears
+  the pak references (`0x42d170`) and the hunk, runs `FS_Restart` when
+  `fs_game` (`0x16318a8`) was modified or the checksum feed moved, then
+  the language check, `cl_paused 0`, `CL_InitRef` (`0x411920`) and
+  `CL_StartHunkUsers`. VERIFIED (calls). `CL_InitCGame` and
+  `CL_SendPureChecksums` need the state above 3 and not 7 or 8. VERIFIED
+  (asm). A download runs in state 3 (`CL_DownloadsComplete` sets 4).
+  INFERRED.
+- `FS_Shutdown` (`0x42ccd0`) closes a handle only when its `+0x10` is
+  set, which `FS_SV_FOpenFileWrite` (`0x43a7e0`) never sets, and only
+  `0x40efe0`, `0x416486` and `0x41652f` write `clc.download`
+  (`0x15ee9a8`). VERIFIED. So a Mods pick mid-download restarts the search
+  path and the menus, starts no cgame, and the file keeps downloading,
+  blocks written (`FS_Write` `0x42a560`) and acked with `nextdl`; at its
+  end (`0x416516`, close and rename) `CL_DownloadsComplete` runs a second
+  `FS_Restart` on whatever `fs_game` holds then. INFERRED.
+- vcod: a pick in a game keeps the connection and its download, reopens
+  the search path and the front end, and starts no cgame half before the
+  game is live ("vcod" below), as retail.
+
 ### The cgame restart
 
 - `CL_Vid_Restart_f` (`0x40fbe0`), while a cgame runs (`0x1617348`), calls
@@ -1894,6 +2102,17 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   (`0x432090`), `0x460420` and `CL_StartHunkUsers` (`0x4115c0`). VERIFIED
   (calls). So leaving a server unloads the cgame and its chat ring, as a
   map change does. INFERRED (the module unload).
+- `0x4358a0` is shared: the error handler `0x435910` reaches it for codes
+  1 to 5. VERIFIED. 1.5's is `0x437cf0` (handler `0x437d60`): `0x40fc80(1)`,
+  `0x401b70`, `0x41ad20`, the renderer's `[0x148baa0](0)`, two flags
+  cleared (`0x15b8bb4`, `0x15b8bac`), `0x45ddd0`, `0x401b70`, `0x41ad20`,
+  `0x45bef0`, `0x4054a0`, `0x434270`, `0x465710`, then `0x412ac0`. UO's is
+  `0x439da0` (handler `0x439e10`): `0x4109f0(1)`, `0x401b70`, `0x41c230`,
+  `[0x49580a0](0)`, `0x4ad3e74`, `0x4ad3e6c`, `0x4609a0`, `0x401b70`,
+  `0x41c230`, `0x45ea60`, `0x405d10`, `0x435c70`, `0x4687f0`, then
+  `0x413c30`. The handlers' branches for each code match 1.1's. VERIFIED
+  (calls). That each call is 1.1's counterpart in the same place is
+  INFERRED.
 
 ### `snd_restart` with no game up
 
@@ -1907,6 +2126,15 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   `S_StopAllSounds(0)` (`0x44fa40`, which closes every stream), then UI
   export 7 with 1, `UI_SetActiveMenu(UIMENU_MAIN)`. VERIFIED (decompile).
   This is Q3's `CL_Frame` check. INFERRED.
+- 1.5's `CL_Frame` (`0x412710`, check at `0x412767`) and UO's (`0x413870`,
+  at `0x4138c4`) make the same check: a pending flag (`0x15b8aa8`,
+  `0x4ad3d68`) clears and sends UI export 7 with 3, else state 0
+  (`0x15b8aa0`, `0x4ad3d60`), no `KEYCATCH_UI` and `com_sv_running` 0
+  (`0x191191c`, `0x4927ed4`) stop the sound (`0x452c50`, `0x454dd0`) and
+  send export 7 with 1 (`VM_Call` `0x465770`, `0x468890`). VERIFIED. Both
+  run two steps ahead of it that 1.1 has not: in state 6 a non-empty
+  `cl_executeString` runs and is set to `""`, then the team colour update
+  (1.5 `0x405440`, reading `g_TeamColor_Allies` and `_Axis`). VERIFIED.
 - So from the main menu the restored streams live until the next frame,
   which stops them and opens the main menu, whose `onOpen` restarts its
   music from the top. INFERRED (the order of the two; no code read between
@@ -2676,6 +2904,20 @@ it. VERIFIED (asm).
   with 1 it sets `cl_paused` 1 and the catcher to 2. VERIFIED (asm). So a
   click that closes the last visible menu through `outOfBoundsClick` hands
   the keys and the mouse back to the game. INFERRED (the combination).
+- `Key_ClearStates` (`0x40e260`, UI syscall `0x2f` at `0x41871a`; the
+  other caller `0x466b25` is INFERRED to be the window's activate handler)
+  zeroes `anykeydown` (`0x142f75c`), and for each of the 256 keys
+  (`0x142f780`, `0xc` bytes: down, repeats, binding) that is down calls
+  `CL_KeyEvent` (`0x40dc30`) with down 0 and time 0, then zeroes down and
+  repeats. VERIFIED. That key up offers the key to a loaded cgame first
+  (`VM_Call(6, key, 0)` at `0x40dec4`, returning when it takes it), then
+  runs a `+` bind's `-%s %i %i` (`0x567854`) and, under `KEYCATCH_UI`, the
+  UI's key event with down 0. VERIFIED. This is Q3's. vcod's
+  `App::clear_held_keys` (grab release, focus loss, the console, a
+  menu taking the mouse, the quick menu's stray key) resets the game's
+  held buttons and runs the release of every bound key still down, in
+  key number order, so a `+` alias's `-` half runs; the cgame's turn is
+  not modelled.
 
 ### vcod
 

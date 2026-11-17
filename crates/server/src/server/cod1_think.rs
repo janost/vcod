@@ -1097,6 +1097,10 @@ impl Cod1Module {
             }
             _ => Vec::new(),
         };
+        let damageable = match (&attack, self.script.as_ref()) {
+            (Attack::Swing { .. }, Some(rt)) => rt.host.damageable_brushes(),
+            _ => Vec::new(),
+        };
         // The bodies are posed off the last end frame (combat doc, 16.1).
         let result = {
             let sims: Vec<(usize, &crate::spectate::ClientSim)> = eng
@@ -1143,6 +1147,7 @@ impl Cod1Module {
                     aim,
                     &sims,
                     &targets,
+                    &damageable,
                     collision,
                     &models,
                     &self.hitlocs,

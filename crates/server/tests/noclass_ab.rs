@@ -1,6 +1,7 @@
 //! A client between its connect and its first spawn, ours against retail's.
 //! `client-probes/probe_noclass` logs the client's fields at the connect
-//! callback, 3 s later and straight after a `spawn`; the fixtures are its
+//! callback, 3 s later and straight after a `spawn`, then what
+//! `.headiconteam` reads after each of eight writes; the fixtures are its
 //! `games_mp.log` and the probe client's snapshot origins on 1.1d, 1.5b and
 //! UO 1.51b (cod11-gametypes-re-bel.md 8.3).
 //!
@@ -28,7 +29,11 @@ fn probe_lines<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<String> {
         .collect()
 }
 
-fn check(fs: vcod_common::pk3::Pk3Fs, fixture: &str) {
+/// `developer` for the run. Each fixture ends on `.headiconteam`'s first
+/// illegal string: retail 1.1d and UO died there (`run_probe.sh`'s
+/// `developer 1`), while 1.5b ran on to the next line and dropped the
+/// client after (gametypes doc 7.3), as ours runs on below 1.
+fn check(fs: vcod_common::pk3::Pk3Fs, fixture: &str, developer: &str) {
     let proto = vcod_server::server::install_protocol(&fs);
     let map = "mp_carentan";
     let bsp_path = fs.resolve_map(map).expect("map in the paks");
@@ -36,6 +41,7 @@ fn check(fs: vcod_common::pk3::Pk3Fs, fixture: &str) {
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(common::cfg(map, "probe_noclass"), now);
     sv.set_protocol(proto);
+    sv.set_cvar("developer", developer);
     sv.overlay_script("maps/mp/gametypes/probe_noclass", SCRIPT);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
@@ -78,7 +84,7 @@ fn a_connected_client_reads_as_retail_11() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
         return;
     };
-    check(fs, include_str!("fixtures/noclass/mp_carentan.txt"));
+    check(fs, include_str!("fixtures/noclass/mp_carentan.txt"), "1");
 }
 
 #[test]
@@ -90,7 +96,11 @@ fn a_connected_client_reads_as_retail_15() {
     {
         return;
     }
-    check(fs, include_str!("fixtures/noclass/mp_carentan-1.5.txt"));
+    check(
+        fs,
+        include_str!("fixtures/noclass/mp_carentan-1.5.txt"),
+        "0",
+    );
 }
 
 #[test]
@@ -98,5 +108,5 @@ fn a_connected_client_reads_as_retail_uo() {
     let Some(fs) = vcod_common::testing::uo_fs() else {
         return;
     };
-    check(fs, include_str!("fixtures/noclass/mp_carentan-uo.txt"));
+    check(fs, include_str!("fixtures/noclass/mp_carentan-uo.txt"), "1");
 }
