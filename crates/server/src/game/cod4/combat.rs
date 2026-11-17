@@ -297,7 +297,7 @@ pub(crate) fn skel_worlds(
 /// The `DObjAnimMat`s [`skel_worlds`] reads: `DObjCalcSkel`'s bones, the
 /// controls' bones set as 1.7's controller sets them, in `cod4_lnxded`'s
 /// arithmetic (`vcod_cod4::skel::player_mats_sampled`).
-fn skel_mats(
+pub(crate) fn skel_mats(
     skel: &vcod_common::skeleton::Skeleton,
     pose: &Pose4,
     controls: Option<&Controllers>,

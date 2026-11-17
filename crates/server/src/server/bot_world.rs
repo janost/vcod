@@ -640,6 +640,8 @@ impl Server {
             mate_ahead: false,
             squad: Default::default(),
             run_off: false,
+            back_drop: false,
+            rungs_hold: false,
             mantle: false,
             move_scale: def
                 .map(|d| d.move_speed_scale)

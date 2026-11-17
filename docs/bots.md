@@ -266,7 +266,8 @@ bot does with the same keys. If one kills you, it earned it. The view holds:
   is planned round once it has held the bot up for a fifth of a second,
   or walked through when no way goes round. Of two meeting head-on with
   no way round, one stands aside on a node off the line until the other
-  has passed.
+  has passed. On a ladder the one backing down climbs back to the top,
+  and the climber under it holds still on the rungs until it is clear.
 
 ### Objectives
 

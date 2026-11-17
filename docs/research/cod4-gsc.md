@@ -1075,8 +1075,8 @@ disassembly) offsets:
 
 `builtins/cod4_trace.rs`: `bulletTrace`, `bulletTracePassed`,
 `sightTracePassed` trace the clip map, its static models (point trace),
-linked brush entities and, with `hitCharacters`, the bodies the last frame
-linked, passing the ignored entity. INFERRED (the code). 1.7's handlers,
+linked brush entities and, with `hitCharacters`, the bodies where their
+last cmds linked them, passing the ignored entity. INFERRED (the code). 1.7's handlers,
 VERIFIED (the instructions):
 
 - All three read `start`, `end` (vectors), `hitCharacters` (int),
@@ -1097,23 +1097,51 @@ VERIFIED (the instructions):
 
 Surface names: `vcod_cod4::sound::SURFACES`;
 `cod4_trace::tests::bullet_trace_fills_its_array_for_a_miss_and_a_hit`
-checks keys and both arms. VERIFIED (the test). vcod, INFERRED (the code):
+checks keys and both arms. VERIFIED (the test).
 
-- Both bullet traces are `G_LocationalTrace`s under `bulletPriorityMap`
-  (1.7 passes a null map; its effect in the hit-box walk is unread). A
-  playing body scores its hit boxes as the last frame posed them
-  (`combat::PosedBody4`, the shots' bone trace) and reads flesh; a
-  helicopter its model collision (3.2).
+- `SV_ClipMoveToEntity`'s locational arm (0x817de77) takes the DObj
+  path for an entity with `svFlags` 2 (a player's, set by
+  `ClientEndFrame` 0x80a6c41) only under a priority map (`clip+0x30`,
+  0x817de8a..0x817de8f); else the plain entity clip. VERIFIED (the
+  instructions). So the script's bullet traces meet a player as its
+  capsule and pose no body: in a gdb run of the `trace_read` probe below,
+  1677 entity poses (0x80ca99e) fired, all on entity 93 (handler 5), none
+  on a player, and no controller ran. VERIFIED (gdb). An entity with
+  `svFlags` 4 (a helicopter) still takes its model collision (3.2).
+- The capsule is `CM_Trace`'s temp box arm (0x811d29c,
+  cod4-pmove.md 15) where the trace's start z picks the primitives as
+  1.5b's dispatcher does: a point trace from above the top sphere's
+  centre meets that sphere alone, though it crosses the cylinder's band
+  first. VERIFIED (the instructions 0x811d484..0x811d49c,
+  0x811db38..0x811dce4; the gate below).
+- A player's capsule stands where its last cmd linked it
+  (`SV_LinkEntity` in the think), not where the last frame did: the
+  gate's normals read a frame late without it. VERIFIED (the gate).
+- `cod4::capture_ab::cod4_trace_read_ab` gates them on a retail run of
+  the `trace_read` gsc (`play-1.7-traceread-*`): the target sways
+  (`--script sway --aim-z 150`), and every frame three `bulletTrace`s
+  from the idle shooter's eye run past the target's origin at 64, 56 and
+  44 up, printing the entity, the point in tenths and the normal in
+  thousandths. Ours matches every print. VERIFIED (the gate). Its `GAPS`
+  hold eleven frames of the target's `aimSpreadScale` an ulp off. Open.
+
+vcod, INFERRED (the code):
+
+- Both bullet traces run `trace4` (the clip map, static models, brush
+  entities and the players' capsules) and the helicopters' model
+  collision (`cod4_trace::locational4`). A player's capsule reads surface
+  flags 0, `default`; the surface 1.7's capsule arm copies from its trace
+  work (0x811bbda, 0x811deea) is unread, and the probe prints none.
 - Sight, cone traces and `physicsTrace` meet a body as its link box.
 - `getTagOrigin` / `getTagAngles` on a playing body read its posed bone,
   attachments included (`G_DObjGetWorldTagPos`), placed at the body's
   origin and yaw at the call and its controls eased once a frame
   (cod4-combat.md 6.1); anything else the model's bind pose.
 - The level writes bodies, poses and brushes after its entity pass
-  (`trace_bodies`, `posed_bodies`, `trace_brushes`): threads read the last
-  frame's.
+  (`trace_bodies`, `posed_bodies`, `trace_brushes`), and each cmd's
+  relink moves its client's body in `trace_bodies`.
 
-Tests: `cod4::hardpoint_tests::bullet_traces_meet_posed_bodies_and_the_helicopter`,
+Tests: `cod4::hardpoint_tests::bullet_traces_meet_bodies_and_the_helicopter`,
 `cod4_trace::tests::a_body_cuts_a_trace_that_hits_characters`.
 
 ### 3.4 `linkTo` on a model's tag

@@ -603,6 +603,35 @@ impl NavGraph {
         with_rules(self.rules, || with_step(self.step.clone(), f))
     }
 
+    /// The plain edges down more than a step and no more than 64 whose
+    /// forward walk node to node does not arrive, so a back down or a creep
+    /// proved them: (from, to, within [`LADDER_NEAR`] of a ladder)
+    /// (`nav_build`'s `BACKED=1`, bot-navigation.md section 3).
+    pub fn census_backed(&self, world: &CollisionWorld) -> Vec<(Vec3, Vec3, bool)> {
+        let mut out = Vec::new();
+        self.moving(|| {
+            for (a, bs) in self.edges.iter().enumerate() {
+                for &b in bs {
+                    let e = (a as u32, b);
+                    if self.jumps.contains(&e) || self.mantles.contains(&e) {
+                        continue;
+                    }
+                    let (p, q) = (self.nodes[a], self.nodes[b as usize]);
+                    let dz = p.z - q.z;
+                    if dz <= vcod_common::pmove::STEPSIZE || dz > 64.0 {
+                        continue;
+                    }
+                    let fw = walk_as(world, p, q.truncate(), Some(q.z), Gait::Forward);
+                    if matches!(fw, Walked::Arrived(_, false)) {
+                        continue;
+                    }
+                    out.push((p, q, ladder_near(&self.ladder_boxes, p)));
+                }
+            }
+        });
+        out
+    }
+
     /// The census's main-component count, and the spawns that do not reach
     /// that component: each spawn's index with its node, `None` for one
     /// with no node at all (`nav_build`'s `LOST=1`).
@@ -2317,6 +2346,9 @@ pub struct Follower {
     /// Ticks held still for a climber rising under the body
     /// ([`Self::rising_hold`]).
     rising_ticks: u32,
+    /// Ticks held still on the rungs under a body over it
+    /// ([`Self::under_hold`]).
+    under_ticks: u32,
     /// Ticks the body has been held up by a teammate standing still at
     /// its side, and the nodes it plans round for the ticks left after
     /// (`bots::driver`'s `mates_in_way`).
@@ -3573,15 +3605,54 @@ impl Follower {
         if foot.z > head.z - self.deadly_fall().max(JUMP_HEIGHT) {
             return None;
         }
+        // A climber holding still under the body counts too: it holds for
+        // this body to climb back ([`Self::under_hold`]).
         climbers
             .iter()
             .any(|&(c, v)| {
-                v.z > 1.0
+                (v.z > 1.0 || v.length() < 1.0)
                     && c.z < at.z
                     && at.z - c.z < HEAD_ON
                     && (c - at).truncate().length() < 2.0 * HALF_WIDTH + 2.0
             })
             .then_some(head)
+    }
+
+    /// Whether the body, climbing toward a ladder's head on the rungs, holds
+    /// still under another body over it on them: within [`HEAD_ON`] above,
+    /// two half-widths flat, and not rising. A bot climbing back to the head
+    /// off a climber ([`Self::head_on_yield`]) can bob under the lip and fall
+    /// back; the climber rising under it stood it on his head and the two
+    /// boxes pushed apart (`game::stuck::stuck_in_client`): up mp_ship's
+    /// crow's nest the climber was pushed off the rungs at (4964, 86, 1141)
+    /// and fell to 568 (bot-navigation.md section 3). At most
+    /// [`RISING_TICKS`]: a body that stands still over the rungs holds no
+    /// one for good. `others` are every other player, on the rungs or off.
+    pub fn under_hold(
+        &mut self,
+        g: &NavGraph,
+        at: Vec3,
+        body: Footing,
+        others: &[(Vec3, Vec3)],
+    ) -> bool {
+        use vcod_common::pmove::HALF_WIDTH;
+        let over = body.on_ladder
+            && self.climbing(g)
+            && others.iter().any(|&(c, v)| {
+                let dz = c.z - at.z;
+                v.z < 1.0
+                    && dz > 1.0
+                    && dz < HEAD_ON
+                    && (c - at).truncate().length() < 2.0 * HALF_WIDTH + 2.0
+            });
+        if !over || self.under_ticks >= RISING_TICKS {
+            if !over {
+                self.under_ticks = 0;
+            }
+            return false;
+        }
+        self.under_ticks += 1;
+        true
     }
 
     /// Where to stand instead of heading for `waypoint`: the body is on the
@@ -4270,6 +4341,22 @@ impl Follower {
         };
         let (from, to) = (g.nodes[a as usize], g.nodes[b as usize]);
         to.z < at.z - deep && self.runs_off(world, (a, b), from, to)
+    }
+
+    /// Whether the way to the current waypoint is a drop more than a jump
+    /// under `at` that a run off misses: the graph's walk backed down it
+    /// ([`Self::runs_off`]), and the bot backs down it too.
+    pub fn backs_off(&mut self, g: &NavGraph, world: Option<&CollisionWorld>, at: Vec3) -> bool {
+        let (Some(world), Some(i)) = (world, self.next.checked_sub(1)) else {
+            return false;
+        };
+        let (Some(&a), Some(&b)) = (self.path.get(i), self.path.get(self.next)) else {
+            return false;
+        };
+        let (from, to) = (g.nodes[a as usize], g.nodes[b as usize]);
+        to.z < at.z - vcod_common::pmove::JUMP_HEIGHT
+            && !g.jumps.contains(&(a, b))
+            && !self.runs_off(world, (a, b), from, to)
     }
 
     /// Whether a run that misses the drop `edge` onto `to` can fall far
@@ -9482,6 +9569,83 @@ mod tests {
         );
     }
 
+    /// A walk's body holds weapon 0 built from the bot's `moveSpeedScale`
+    /// alone ([`Sim::scaled`]). Off the sight button, the attack and the
+    /// sprint the move reads no other field of the held weapon's def (the
+    /// weapon's scale in `walk_move`; the rest goes through the sight
+    /// flag, a grenade's cook or an LMG's deploy). Every stock weapon held
+    /// at its own index runs over mp_depot's roof peak and jumps on the
+    /// far slope tick for tick as the scaled body does, under 1.1's
+    /// rules and UO's (bot-navigation.md section 3).
+    #[test]
+    fn a_walk_at_a_weapons_scale_moves_as_the_weapon_held() {
+        let installs = [
+            (
+                vcod_common::testing::game_fs_11(),
+                &crate::defs::V1,
+                MoveRules::V1_1,
+            ),
+            (
+                vcod_common::testing::uo_fs(),
+                &crate::defs::UO,
+                MoveRules::Uo,
+            ),
+        ];
+        for (fs, list, rules) in installs {
+            let Some(fs) = fs else {
+                continue;
+            };
+            let bsp =
+                vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_depot").unwrap()).unwrap())
+                    .unwrap();
+            let world = crate::world::World::from_bsp(&bsp, Some(&fs));
+            let w = &world.collision;
+            let table = crate::weapons::WeaponTable::load(&fs, list);
+            let defs: Arc<[Option<vcod_common::weapon::WeaponDef>]> = table.defs().into();
+            let mut walked = 0;
+            for (i, def) in defs.iter().enumerate() {
+                let Some(def) = def else {
+                    continue;
+                };
+                let run = |sim: &mut Sim, weapon: usize| {
+                    let mut ps = body(Vec3::new(-2663.9, -1216.1, 552.125), 0.0);
+                    ps.rules = rules;
+                    ps.weapon = weapon as _;
+                    if weapon > 0 {
+                        vcod_common::pmove::weapon::give(&mut ps, weapon as _, 0);
+                        ps.ammoclip[def.clip_index] = def.clip_size as _;
+                    }
+                    ps.velocity = Vec3::new(220.0, 0.0, 0.0);
+                    (0..60)
+                        .map(|tick| {
+                            let cmd = UserCmd {
+                                forward: 127,
+                                up: if tick == 30 { 127 } else { 0 },
+                                weapon: weapon as _,
+                                ..NULL_USERCMD
+                            };
+                            sim.tick(w, &mut ps, &cmd);
+                            (ps.origin, ps.velocity, ps.on_ground)
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let mut held = Sim {
+                    weapons: Some(defs.clone()),
+                    ..Sim::default()
+                };
+                let scaled = with_rules(rules, || run(&mut Sim::scaled(def.move_speed_scale), 0));
+                let own = with_rules(rules, || run(&mut held, i));
+                assert_eq!(
+                    own, scaled,
+                    "{rules:?} weapon {i} at {}",
+                    def.move_speed_scale
+                );
+                walked += 1;
+            }
+            assert!(walked > 10, "{rules:?}: {walked} weapons");
+        }
+    }
+
     /// mp_depot's roof peak (-2660, -1216, 552): a run east over it flies
     /// off the crest and lands 67 units on at 190 units/s, on the narrow
     /// flat at 508 inside the roof's edge at x -2570. Seed 45's bot held a
@@ -10850,6 +11014,12 @@ mod tests {
         let up = |z: f32| [(Vec3::new(-4.0, 2.0, z), Vec3::new(0.0, 0.0, 100.0))];
         assert_eq!(f.head_on_yield(&g, at, rungs, &up(1054.0)), Some(head));
         assert_eq!(f.head_on_yield(&g, at, rungs, &up(900.0)), None, "far down");
+        let held = [(Vec3::new(-4.0, 2.0, 1054.0), Vec3::ZERO)];
+        assert_eq!(
+            f.head_on_yield(&g, at, rungs, &held),
+            Some(head),
+            "a climber holding still for it"
+        );
         let down = [(Vec3::new(-4.0, 2.0, 1054.0), Vec3::new(0.0, 0.0, -100.0))];
         assert_eq!(
             f.head_on_yield(&g, at, rungs, &down),
@@ -10877,6 +11047,57 @@ mod tests {
             vec![vec![1], vec![]],
         );
         assert_eq!(f.head_on_yield(&short, at, rungs, &up(1054.0)), None);
+    }
+
+    /// Climbing toward a head with a body over it on the rungs that is not
+    /// rising, a climber holds still: one that kept climbing under a bot
+    /// that bobbed under mp_ship's crow's nest plate was stood on and
+    /// pushed off the rungs. Not for one rising, one far above or aside,
+    /// one below, and not past [`RISING_TICKS`].
+    #[test]
+    fn a_climber_holds_under_a_body_over_it_that_is_not_rising() {
+        let foot = Vec3::new(-4.0, 0.0, 692.0);
+        let head = Vec3::new(0.0, 0.0, 1219.0);
+        let g = NavGraph::from_parts(vec![foot, head], vec![vec![1], vec![]]);
+        let mut f = Follower {
+            path: vec![0, 1],
+            next: 1,
+            ..Default::default()
+        };
+        let rungs = Footing {
+            still: false,
+            on_ground: false,
+            on_ladder: true,
+            velocity: Vec3::new(0.0, 0.0, 95.0),
+        };
+        let at = Vec3::new(-4.0, 0.0, 1105.0);
+        let over = |p: Vec3, vz: f32| [(p, Vec3::new(0.0, 0.0, vz))];
+        let above = Vec3::new(-4.0, -3.0, 1197.0);
+        assert!(
+            f.under_hold(&g, at, rungs, &over(above, -150.0)),
+            "falling back"
+        );
+        assert!(f.under_hold(&g, at, rungs, &over(above, 0.0)), "still");
+        assert!(!f.under_hold(&g, at, rungs, &over(above, 95.0)), "rising");
+        let far = Vec3::new(-4.0, 0.0, 1105.0 + HEAD_ON + 1.0);
+        assert!(!f.under_hold(&g, at, rungs, &over(far, 0.0)), "far above");
+        let aside = Vec3::new(-4.0, 40.0, 1197.0);
+        assert!(!f.under_hold(&g, at, rungs, &over(aside, 0.0)), "aside");
+        let below = Vec3::new(-4.0, 0.0, 1040.0);
+        assert!(!f.under_hold(&g, at, rungs, &over(below, 0.0)), "below");
+        let ground = Footing {
+            on_ladder: false,
+            on_ground: true,
+            ..rungs
+        };
+        assert!(
+            !f.under_hold(&g, at, ground, &over(above, 0.0)),
+            "off the rungs"
+        );
+        let held = (0..2 * RISING_TICKS)
+            .filter(|_| f.under_hold(&g, at, rungs, &over(above, 0.0)))
+            .count();
+        assert_eq!(held as u32, RISING_TICKS, "at most RISING_TICKS on end");
     }
 
     /// At the head of a ladder a fall off kills, a bot about to back down
