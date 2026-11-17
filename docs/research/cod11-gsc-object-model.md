@@ -383,6 +383,13 @@ search covers only radiant fields or every registered field (client and HUD
 names included) is not visible here. vcod assumes the narrow reading; a probe
 settles it if a map ever depends on the wide one.
 
+VERIFIED (`probe_usage_keys` against `probe_usage_ents`, 1.1d, mp_brecourt;
+handshake doc, "Console commands over rcon"): a radiant key's value lands on
+the entity only when a compiled script names the key; unnamed, `scriptUsage`
+counts no variable for it, and an entity no script reaches gets no object.
+vcod stores every radiant key and `scriptUsage` counts only the named ones; no
+script can read an unnamed one, so nothing else tells them apart.
+
 ### The order of a block's keys
 
 - `G_ParseSpawnVars` (0x61a8c) reads a block's tokens pairwise and appends each

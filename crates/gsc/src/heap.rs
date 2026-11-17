@@ -244,6 +244,20 @@ impl Heap {
         }
     }
 
+    /// `f` as an undefined field unless `s` has one (`Cx::touch_field`).
+    pub fn touch_field(&mut self, s: StructId, f: Atom) {
+        if let Some(fields) = self.structs.get_mut(s.0 as usize) {
+            fields.entry(f).or_insert(Value::Undefined);
+        }
+    }
+
+    /// Removes `f` from `s` (`Cx::clear_field`).
+    pub fn clear_field(&mut self, s: StructId, f: Atom) {
+        if let Some(fields) = self.structs.get_mut(s.0 as usize) {
+            fields.remove(&f);
+        }
+    }
+
     /// Reading an unset key, or an array id out of range, yields `Undefined`.
     pub fn get_index(&self, a: ArrayId, k: ArrayKey) -> Value {
         self.arrays

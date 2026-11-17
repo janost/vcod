@@ -48,6 +48,25 @@ enum CarryKey {
     Str(String),
 }
 
+/// `Scr_GetObjectUsage` (0x80a0c4c) over an object's variables: one for
+/// the object, one per defined variable, and an array's own usage over its
+/// holders.
+fn object_usage(heap: &Heap, holders: &crate::fxhash::FxHashMap<u32, u32>, vars: &[Value]) -> f64 {
+    1.0 + vars
+        .iter()
+        .filter(|v| !matches!(v, Value::Undefined))
+        .map(|v| match v {
+            Value::Array(a) => {
+                let elems: Vec<Value> =
+                    heap.array_entries(*a).into_iter().map(|(_, v)| v).collect();
+                let n = holders.get(&a.0).copied().unwrap_or(1).max(1);
+                1.0 + object_usage(heap, holders, &elems) / f64::from(n)
+            }
+            _ => 1.0,
+        })
+        .sum::<f64>()
+}
+
 /// One value lifted out of a `Vm`'s heap in a form the next one can rebuild:
 /// every atom carried as text and every nested array or struct by contents,
 /// because both the interner and the heap ids die with the old `Vm`.
@@ -213,16 +232,39 @@ impl ErrorKind {
     }
 }
 
-/// One live thread for `Vm::thread_usage`: `(file order, file, line)` per
-/// frame, innermost first, and its var and endon usage as retail counts
-/// them (cod_lnxded 0x80a0d4c). The file order is the file's place in
-/// install order, so sorting by `stack` follows retail's sort by code
-/// address (0x80a2218) as far as vcod's compile order matches retail's.
+/// One live thread for `Vm::thread_usage`: each frame's position,
+/// innermost first, and its var and endon usage as retail counts them
+/// (cod_lnxded 0x80a0d4c).
 #[derive(Clone, PartialEq, Debug)]
 pub struct ThreadUsage {
-    pub stack: Vec<(u32, String, u32)>,
+    pub stack: Vec<UsagePos>,
     pub vars: f32,
     pub endons: f32,
+}
+
+/// Where a frame sits, for `Vm::thread_usage`. Ordered by the file's place
+/// in install order, then the source position, so sorting stacks follows
+/// retail's sort by code address (0x80a2218) as far as vcod's compile order
+/// matches retail's.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct UsagePos {
+    pub order: u32,
+    /// The canonical path, `maps/mp/_load`.
+    pub file: String,
+    pub at: crate::ast::Pos,
+    /// The instruction's offset in vcod's code, every installed function's
+    /// ops counted in install order: what `@ <offset>` prints, vcod's
+    /// numbering, not retail's bytes.
+    pub offset: u32,
+}
+
+/// Where installed code sits: each file's place in install order and each
+/// function's first op in one running count, for `Vm::thread_usage`.
+#[derive(Clone, Default)]
+struct CodeLayout {
+    files: FxHashMap<Atom, u32>,
+    funcs: FxHashMap<FuncRef, u32>,
+    len: u32,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -328,6 +370,19 @@ impl Cx<'_> {
 
     pub fn set_field(&mut self, s: StructId, f: Atom, v: Value) {
         self.heap.set_field(s, f, v);
+    }
+
+    /// Gives `s` an undefined `f` if it has none: what reading an unset
+    /// field of an entity leaves on retail's object, which `scriptUsage`
+    /// counts (1.1d `probe_usage_ents`, `read`).
+    pub fn touch_field(&mut self, s: StructId, f: Atom) {
+        self.heap.touch_field(s, f);
+    }
+
+    /// Drops `f` from `s`: an entity field assigned undefined, which
+    /// retail removes (`probe_usage_ents`, `unset`).
+    pub fn clear_field(&mut self, s: StructId, f: Atom) {
+        self.heap.clear_field(s, f);
     }
 
     pub fn get_index(&self, a: ArrayId, k: ArrayKey) -> Value {
@@ -515,15 +570,24 @@ impl From<StructId> for Target {
 pub struct Program {
     interner: Interner,
     functions: FxHashMap<FuncRef, Rc<Function>>,
-    file_order: FxHashMap<Atom, u32>,
+    layout: CodeLayout,
+}
+
+impl Program {
+    /// How many atoms the compile interned: an atom below it names
+    /// something the scripts or their loader spelled, as retail's
+    /// canonical strings do (`scriptUsage`'s radiant keys).
+    pub fn atom_count(&self) -> u32 {
+        self.interner.texts().count() as u32
+    }
 }
 
 pub struct Vm {
     interner: Interner,
     heap: Heap,
     functions: FxHashMap<FuncRef, Rc<Function>>,
-    /// Each file's place in install order, for `thread_usage`.
-    file_order: FxHashMap<Atom, u32>,
+    /// Where installed code sits, for `thread_usage`.
+    layout: CodeLayout,
     level: StructId,
     game: ArrayId,
     /// The bare `anim`, a struct of its own like `level`
@@ -622,7 +686,7 @@ impl Vm {
         Self::from_program(&Program {
             interner: Interner::default(),
             functions: FxHashMap::default(),
-            file_order: FxHashMap::default(),
+            layout: CodeLayout::default(),
         })
     }
 
@@ -639,7 +703,7 @@ impl Vm {
             interner,
             heap,
             functions: program.functions.clone(),
-            file_order: program.file_order.clone(),
+            layout: program.layout.clone(),
             level,
             game,
             anim,
@@ -764,6 +828,56 @@ impl Vm {
     /// (cod_lnxded 0x809d2d0): its call stack innermost first, the locals
     /// it holds and the endons it registered.
     pub fn thread_usage(&self) -> Vec<ThreadUsage> {
+        let holders = self.array_holders();
+        let usage = |vars: &[Value]| object_usage(&self.heap, &holders, vars);
+        self.threads
+            .iter()
+            .map(|t| ThreadUsage {
+                stack: t
+                    .frames
+                    .iter()
+                    .rev()
+                    .map(|f| {
+                        // `ip` is past the call or wait the frame sits on.
+                        let i = (f.ip as usize).saturating_sub(1);
+                        let func = &f.func_rc;
+                        let base = self.layout.funcs.get(&FuncRef {
+                            file: func.file,
+                            name: func.name,
+                        });
+                        UsagePos {
+                            order: self
+                                .layout
+                                .files
+                                .get(&func.file)
+                                .copied()
+                                .unwrap_or(u32::MAX),
+                            file: self.interner.resolve(func.file).to_string(),
+                            at: func.at.get(i).copied().unwrap_or_default(),
+                            offset: base.map_or(0, |b| b + i as u32),
+                        }
+                    })
+                    .collect(),
+                // The thread's own one, then each frame's local object
+                // (1.1d `probe_usage`: a thread waiting with no locals is 2).
+                vars: t
+                    .frames
+                    .iter()
+                    .fold(1.0f32, |sum, f| sum + usage(&f.locals) as f32),
+                // The usage of the thread's endon object (0x80a0b50): none
+                // without an endon, else one plus one per endon.
+                endons: match t.endons.len() {
+                    0 => 0.0,
+                    n => (n + 1) as f32,
+                },
+            })
+            .collect()
+    }
+
+    /// How many struct fields, array elements and frame locals hold each
+    /// array: `refCount + 1`, which `scriptUsage` divides an array's usage
+    /// by.
+    fn array_holders(&self) -> crate::fxhash::FxHashMap<u32, u32> {
         let mut holders = self.heap.array_holders();
         for v in self
             .threads
@@ -775,52 +889,56 @@ impl Vm {
                 *holders.entry(a.0).or_insert(0) += 1;
             }
         }
-        // `Scr_GetObjectUsage` (0x80a0c4c): one for the object, one per
-        // defined variable, and an array's own usage over its holders.
-        fn usage(heap: &Heap, holders: &crate::fxhash::FxHashMap<u32, u32>, vars: &[Value]) -> f64 {
-            1.0 + vars
-                .iter()
-                .filter(|v| !matches!(v, Value::Undefined))
-                .map(|v| match v {
-                    Value::Array(a) => {
-                        let elems: Vec<Value> =
-                            heap.array_entries(*a).into_iter().map(|(_, v)| v).collect();
-                        let n = holders.get(&a.0).copied().unwrap_or(1).max(1);
-                        1.0 + usage(heap, holders, &elems) / f64::from(n)
-                    }
-                    _ => 1.0,
-                })
-                .sum::<f64>()
+        holders
+    }
+
+    /// `scriptUsage`'s var usage summed over `objects` (an entity's or HUD
+    /// element's struct and the target its notifies go to), as 0x809d6ec
+    /// adds `Scr_GetObjectUsage` per object: one for the object, one per
+    /// field `named` passes (an array its own usage over its holders), and
+    /// with any `waittill` or `endon` on it, two plus per event name two
+    /// plus one per registration (1.1d `probe_usage_ents`).
+    pub fn objects_usage(
+        &self,
+        objects: impl Iterator<Item = (StructId, Target)>,
+        named: impl Fn(Atom) -> bool,
+    ) -> f32 {
+        let holders = self.array_holders();
+        let mut notifies: crate::fxhash::FxHashMap<Target, crate::fxhash::FxHashMap<Atom, u32>> =
+            Default::default();
+        for t in &self.threads {
+            let waits = match &t.state {
+                sched::ThreadState::WaitingNotify { target, event, .. } => Some((*target, *event)),
+                _ => None,
+            };
+            for (target, event) in waits.into_iter().chain(t.endons.iter().map(|e| (e.0, e.1))) {
+                *notifies
+                    .entry(target)
+                    .or_default()
+                    .entry(self.interner.fold_atom(event))
+                    .or_insert(0) += 1;
+            }
         }
-        self.threads
-            .iter()
-            .map(|t| ThreadUsage {
-                stack: t
-                    .frames
-                    .iter()
-                    .rev()
-                    .map(|f| {
-                        // `ip` is past the call or wait the frame sits on.
-                        let at = (f.ip as usize).saturating_sub(1);
-                        let line = f.func_rc.lines.get(at).copied().unwrap_or(0);
-                        let file = f.func_rc.file;
-                        let order = self.file_order.get(&file).copied().unwrap_or(u32::MAX);
-                        (order, self.interner.resolve(file).to_string(), line)
-                    })
-                    .collect(),
-                // The thread's own one, then each frame's local object
-                // (1.1d `probe_usage`: a thread waiting with no locals is 2).
-                vars: t.frames.iter().fold(1.0f32, |sum, f| {
-                    sum + usage(&self.heap, &holders, &f.locals) as f32
-                }),
-                // The usage of the thread's endon object (0x80a0b50): none
-                // without an endon, else one plus one per endon.
-                endons: match t.endons.len() {
-                    0 => 0.0,
-                    n => (n + 1) as f32,
-                },
-            })
-            .collect()
+        objects.fold(0.0f32, |sum, (s, target)| {
+            let fields: Vec<Value> = self
+                .heap
+                .struct_fields(s)
+                .into_iter()
+                .filter(|(k, _)| named(*k))
+                .map(|(_, v)| v)
+                .collect();
+            // An undefined field is one a read of it made (`Cx::touch_field`),
+            // which `object_usage` skips as it skips an unset local.
+            let touched = fields
+                .iter()
+                .filter(|v| matches!(v, Value::Undefined))
+                .count();
+            let list = notifies
+                .get(&target)
+                .map_or(0, |names| 2 + names.values().map(|n| 2 + n).sum::<u32>());
+            sum + (object_usage(&self.heap, &holders, &fields) + touched as f64 + f64::from(list))
+                as f32
+        })
     }
 
     /// The length of every string the VM holds, for the `stringUsage`
@@ -995,7 +1113,7 @@ impl Vm {
         Program {
             interner: self.interner.clone(),
             functions: self.functions.clone(),
-            file_order: self.file_order.clone(),
+            layout: self.layout.clone(),
         }
     }
 
@@ -1044,8 +1162,10 @@ impl Vm {
                 name: f.name,
             };
             f.prepared = prepared;
-            let next = self.file_order.len() as u32;
-            self.file_order.entry(f.file).or_insert(next);
+            let next = self.layout.files.len() as u32;
+            self.layout.files.entry(f.file).or_insert(next);
+            self.layout.funcs.insert(key, self.layout.len);
+            self.layout.len += f.code.len() as u32;
             self.functions.insert(key, Rc::new(f));
         }
         Ok(())
@@ -1645,6 +1765,7 @@ pub(crate) mod tests {
             prepared: Default::default(),
             consts: Vec::new(),
             lines: vec![1, 1],
+            at: vec![Default::default(); 2],
         };
         assert!(vm.install(vec![bad]).is_err());
     }
@@ -1666,6 +1787,7 @@ pub(crate) mod tests {
             prepared: Default::default(),
             consts: Vec::new(),
             lines: vec![1],
+            at: vec![Default::default()],
         };
         let first = f(&mut vm, "main");
         vm.install(vec![first]).unwrap();
