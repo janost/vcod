@@ -871,7 +871,8 @@ impl Default for EntityScene {
 }
 
 /// One player's or corpse's playback state, kept per entity number for the
-/// cgame's life as retail's `clientInfo` lerp frames are.
+/// cgame's life as retail's `clientInfo` lerp frames are, a player's until
+/// his client leaves the snapshot ([`drop_departed`]).
 struct EntityAnim {
     /// Assembly this pose was sized for; a change rebuilds against the new skeleton.
     key: Vec<String>,

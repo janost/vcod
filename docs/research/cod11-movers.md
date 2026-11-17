@@ -1816,7 +1816,16 @@ number and updates it each drawn frame with `Times { clock_ms: render_time,
 snapshot_ms: newest snapshot }`, the newer snapshot's `pos.trBase` and
 `eFlags`. INFERRED: the `ci` lerp frames sit in the cgame's static client and
 body queue arrays and nothing on the draw path clears them, so they outlive any
-unseen stretch; vcod keeps the pair for the cgame's life too.
+unseen stretch; vcod keeps the pair for the cgame's life too, but for a client's
+departure (below). INFERRED, off
+0x3001bd00 stepping only the newest snapshot's entities and the per-`ci` XAnim
+tree (0x30005180 allocates one per client and body queue slot with syscall
+0x83; the DObj create at 0x30004eb0 hands it the slot's tree): a body's clips
+and weights stand still while its entity is out of the snapshot and go on from
+there when it returns; the rate, on snapshot times, measures across the gap.
+vcod: `EntityAnim::present_ms` notes the last frame the entity was in the
+snapshot, and the first frame back shifts both clocks by the frames between
+(`ChannelClock::pause`). 1.5's and UO's advance was not read.
 
 VERIFIED, `CG_TransitionSnapshot`'s client pass (0x3002faf0..0x3002fb68)
 walks the clients the old `cg.snap` lists (`snap+0x20e0` count,
@@ -1837,17 +1846,9 @@ lerp frames `+0x380`, `+0x3b0` at 0x3000530d) and UO (0x3003ca80, stride
 build skips a client whose state is 1 (`CS_ZOMBIE`) or below. INFERRED: a
 player who leaves is out of the list from his zombie frame on, so a
 different player in the slot finds the lerp frames zeroed. vcod:
-`entities::drop_departed` removes the departed clients' pair when the drawn
+`entities::drop_departed` drops the departed clients' pair when the drawn
 pair's older snapshot moves on; a jump over several snapshots checks only
-the two it lands between. INFERRED, off
-0x3001bd00 stepping only the newest snapshot's entities and the per-`ci` XAnim
-tree (0x30005180 allocates one per client and body queue slot with syscall
-0x83; the DObj create at 0x30004eb0 hands it the slot's tree): a body's clips
-and weights stand still while its entity is out of the snapshot and go on from
-there when it returns; the rate, on snapshot times, measures across the gap.
-vcod: `EntityAnim::present_ms` notes the last frame the entity was in the
-snapshot, and the first frame back shifts both clocks by the frames between
-(`ChannelClock::pause`). 1.5's and UO's advance was not read.
+the two it lands between.
 
 ### A bone asked for before the anim update
 
