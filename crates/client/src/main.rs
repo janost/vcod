@@ -2917,6 +2917,26 @@ fn fresh_cgame(
     fx.restart_cgame();
 }
 
+/// What `CG_Init` (cgame 0x30022f90) does with the gamestate besides the
+/// live phase: the 140/204 mirror written into the console's cvars
+/// (0x30023106) and the shellshocks registered (0x30021a3a), where a file
+/// that fails is a `CG_Error` that drops the game. `Err` is its text.
+fn cgame_init(
+    view: &mut play::view::OnlineView,
+    join: &mut play::join::Join,
+    shell: &mut console::shell::Shell,
+    fs: &Pk3Fs,
+    net: &mut net::NetClient<net::UdpTransport>,
+    config_path: &std::path::Path,
+) -> Result<(), String> {
+    let out = join.cvars.apply_mirror(net.configstrings(), shell);
+    cvar_effects(shell, net, config_path, out);
+    let p = net.protocol();
+    let names = (1..).map_while(|i| p.cs.slot(net::protocol::CsRange::ShellShock, i));
+    let names = names.map(|i| net.configstring(i));
+    view.shock.register(fs, names)
+}
+
 /// The HUD between servers. Retail's disconnect (`Com_Error`'s
 /// `ERR_DISCONNECT` arm, CoDMP.exe 0x4358a0) shuts the cgame down after
 /// `CL_Disconnect`, so the chat ring goes with the game, not at the next
@@ -4783,6 +4803,7 @@ impl App {
             input,
             predictor,
             phase,
+            join,
             ..
         } = &mut self.mode
         else {
@@ -4816,6 +4837,16 @@ impl App {
         }
         let feed = net.gamestate().map_or(0, |g| g.checksum_feed);
         net.send_reliable(&self.fs.pure_command(feed, net.protocol().pure_dlls));
+        if let Err(e) = cgame_init(
+            view,
+            join,
+            &mut self.shell,
+            &self.fs,
+            net,
+            &self.config_path,
+        ) {
+            self.disconnect(Some(e));
+        }
     }
 
     /// A CoD2 session's level change, before the frame: a server drop ends
@@ -6029,6 +6060,17 @@ impl ApplicationHandler for App {
                                 {
                                     prewarm_viewmodels(view, r, &self.fs, net.configstrings());
                                 }
+                                // A mirror slot writes every pair into the
+                                // console again (cgame 0x3002c72a).
+                                net::NetEvent::ConfigstringChanged(i)
+                                    if matches!(phase, Phase::Live(_))
+                                        && join.cvars.in_mirror(*i) =>
+                                {
+                                    let out = join
+                                        .cvars
+                                        .apply_mirror(net.configstrings(), &mut self.shell);
+                                    cvar_effects(&self.shell, net, &self.config_path, out);
+                                }
                                 // `j/k/l` is quick chat; `s <idx>` is the announcer.
                                 net::NetEvent::ServerCommand(tokens) => {
                                     // `CG_MapRestart` (cgame 0x3002ca60) frees
@@ -6540,6 +6582,16 @@ impl ApplicationHandler for App {
                                                     self.hud.as_mut(),
                                                     &mut self.fx,
                                                 );
+                                                if let Err(e) = cgame_init(
+                                                    view,
+                                                    join,
+                                                    &mut self.shell,
+                                                    &self.fs,
+                                                    net,
+                                                    &self.config_path,
+                                                ) {
+                                                    fatal = Some(anyhow!(e));
+                                                }
                                                 let t_menus = Instant::now();
                                                 if let Err(e) = load_script_menus(
                                                     &mut self.ui,

@@ -504,6 +504,9 @@ pub struct EntityScene {
     /// anims their pk3s lack).
     clips: HashMap<String, Option<Rc<XAnim>>>,
     states: HashMap<u32, EntityAnim>,
+    /// The last `cg.snap` the pass drew from: its message number and the
+    /// clients it listed ([`drop_departed`]).
+    cg_snap: Option<(u32, Vec<u32>)>,
     /// Turret models by xmodel name. `None` is a failed load, warned once.
     turret_rigs: HashMap<String, Option<TurretRig>>,
     /// Per turret entity: which of its two anims plays, and since when.
@@ -852,6 +855,7 @@ impl EntityScene {
             anims: None,
             clips: HashMap::new(),
             states: HashMap::new(),
+            cg_snap: None,
             turret_rigs: HashMap::new(),
             turret_anims: HashMap::new(),
             shake: MsvcRand::default(),
@@ -874,7 +878,8 @@ impl Default for EntityScene {
 }
 
 /// One player's or corpse's playback state, kept per entity number for the
-/// cgame's life as retail's `clientInfo` lerp frames are.
+/// cgame's life as retail's `clientInfo` lerp frames are, a player's until
+/// his client leaves the snapshot ([`drop_departed`]).
 struct EntityAnim {
     /// Assembly this pose was sized for; a change rebuilds against the new skeleton.
     key: Vec<String>,
@@ -970,7 +975,8 @@ impl HeldPose {
 
 /// The cgame's two channel updates (0x30004e40's clears and 0x30003be0;
 /// 1.5 0x30003870 and UO 0x30003a90 under the stance window,
-/// coduo-vehicles.md 13), through `animclock::update_body`.
+/// coduo-vehicles.md 13), through `animclock::update_body`, with the
+/// cgames' spread phase.
 fn update_channels(
     (legs, torso, window): (&mut ChannelClock, &mut ChannelClock, &mut i32),
     anims: &PlayerAnims,
@@ -980,6 +986,8 @@ fn update_channels(
     at: Times,
 ) {
     let window = (rules != MoveRules::V1_1).then_some(window);
+    legs.cgame_spread();
+    torso.cgame_spread();
     let wires = (legs_wire, torso_wire);
     vcod_common::animclock::update_body((legs, torso), anims, wires, seen, at, window);
 }
@@ -1497,6 +1505,31 @@ impl<'a> SnapView<'a> {
     }
 }
 
+/// `CG_TransitionSnapshot`'s client pass (cgame 0x3002faf0..0x3002fb68,
+/// 1.5 0x300311f0, UO 0x3003ca80): a client the old `cg.snap` listed and
+/// the new one does not has its client info zeroed but for its DObj tree,
+/// both lerp frames with it, so whoever takes the slot next starts fresh
+/// (cod11-movers.md 15). `snap` is
+/// this pass's `cg.snap`, `prev` the last one's number and clients.
+fn drop_departed<V>(
+    states: &mut HashMap<u32, V>,
+    prev: &mut Option<(u32, Vec<u32>)>,
+    snap: &Snapshot,
+) {
+    if prev
+        .as_ref()
+        .is_some_and(|(num, _)| *num == snap.message_num)
+    {
+        return;
+    }
+    if let Some((_, old)) = prev.take() {
+        for c in old.into_iter().filter(|c| !snap.clients.contains_key(c)) {
+            states.remove(&c);
+        }
+    }
+    *prev = Some((snap.message_num, snap.clients.keys().copied().collect()));
+}
+
 /// The older snapshot of the pair an entity is drawn between, with its
 /// movers, which is what retail's `cg.snap` holds.
 struct LerpFrom<'a> {
@@ -1679,6 +1712,7 @@ pub fn build_instances(
         anims,
         clips,
         states,
+        cg_snap,
         turret_rigs,
         turret_anims,
         shake,
@@ -1693,6 +1727,7 @@ pub fn build_instances(
     } = scene;
     drawn.clear();
     vehicle_worlds.clear();
+    drop_departed(states, cg_snap, a.snap);
     let frametime_ms = last_render_ms.map_or(0, |t| (render_time - t).max(0));
     *last_render_ms = Some(render_time);
     let anims = anims
@@ -2574,6 +2609,42 @@ mod gunner_ab;
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    /// A client the new `cg.snap` no longer lists loses his lerp frames;
+    /// one still listed keeps them while his entity is out of view, and a
+    /// corpse's own are left alone.
+    #[test]
+    fn a_client_leaving_the_snapshot_loses_his_lerp_frames() {
+        let snap = |num: u32, clients: &[u32]| Snapshot {
+            message_num: num,
+            clients: clients
+                .iter()
+                .map(|&c| {
+                    (
+                        c,
+                        ClientState::null(&vcod_common::net::protocol::PROTOCOL_V1),
+                    )
+                })
+                .collect(),
+            ..Snapshot::default()
+        };
+        let mut states: HashMap<u32, &str> =
+            [(2, "a"), (5, "b"), (70, "corpse")].into_iter().collect();
+        let mut prev = None;
+        drop_departed(&mut states, &mut prev, &snap(10, &[2, 5]));
+        assert_eq!(states.len(), 3);
+        // Slot 5 empties; the same `cg.snap` drawn again changes nothing.
+        drop_departed(&mut states, &mut prev, &snap(11, &[2]));
+        drop_departed(&mut states, &mut prev, &snap(11, &[2]));
+        assert_eq!(
+            states.keys().copied().collect::<HashSet<_>>(),
+            [2, 70].into()
+        );
+        // A new player in slot 5 starts from nothing.
+        states.insert(5, "new");
+        drop_departed(&mut states, &mut prev, &snap(12, &[2, 5]));
+        assert_eq!(states.get(&5), Some(&"new"));
+    }
 
     /// Every ammo and health row's model loads under the name the item
     /// draw passes; the table's `xmodel/` prefix once made it look up
