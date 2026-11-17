@@ -268,8 +268,9 @@ pub(super) struct FrameOut {
     pub(super) timeout_written: bool,
     /// `trap_SendConsoleCommand`'s `EXEC_APPEND` lines.
     pub(super) console_lines: Vec<String>,
-    /// Server commands for single clients, by slot.
-    pub(super) client_commands: Vec<(usize, String)>,
+    /// Server commands for single clients, by slot, each with its write
+    /// stamp (`configstrings::next_write_seq`).
+    pub(super) client_commands: Vec<(u64, usize, String)>,
     /// A score moved: the scoreboard goes to every client in intermission.
     pub(super) ranks_dirty: bool,
 }

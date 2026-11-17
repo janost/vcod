@@ -3406,7 +3406,7 @@ impl GameHost {
                     return Ok(());
                 }
                 "headiconteam" => {
-                    let n = head_icon_team(cx, value)?;
+                    let n = head_icon_team(cx, value, self.defs.proto.is_uo())?;
                     c[fields::client_index("headiconteam")] = Value::Int(n);
                     return Ok(());
                 }
@@ -3563,20 +3563,25 @@ fn squad_of(cx: &mut Cx, value: Value) -> Result<u8, ErrorKind> {
 /// `.headiconteam`'s setter (0x41c84): `none`, `axis` and `allies` store
 /// 0, 1 and 2; `spectator` is the error; any other string stores 3, which
 /// the getter reads back as `spectator`.
-fn head_icon_team(cx: &mut Cx, value: Value) -> Result<i32, ErrorKind> {
+/// `.headiconteam`'s setter: 1.1d (0x41c84) and 1.5b (0x3bb58) store 3 for
+/// any string but the four names and refuse "spectator"; UO's (0x43e4c)
+/// stores 3 for "spectator" and refuses the rest (gametypes doc 7.3). The
+/// names compare case and all.
+fn head_icon_team(cx: &mut Cx, value: Value, uo: bool) -> Result<i32, ErrorKind> {
     let Value::String(a) = value else {
         return Err(ErrorKind::BadType("headiconteam takes a string"));
     };
-    Ok(match cx.resolve(a) {
+    let s = cx.resolve(a);
+    Ok(match s {
         "none" => 0,
         "axis" => 1,
         "allies" => 2,
-        "spectator" => {
-            return Err(ErrorKind::Custom(
-                "'spectator' is an illegal head icon team string. Must be none, allies, axis, \
-                 or spectator."
-                    .to_string(),
-            ));
+        "spectator" if uo => 3,
+        _ if uo || s == "spectator" => {
+            return Err(ErrorKind::Custom(format!(
+                "'{s}' is an illegal head icon team string. Must be none, allies, axis, or \
+                 spectator."
+            )));
         }
         _ => 3,
     })

@@ -5716,18 +5716,30 @@ impl Server {
     /// (`ConfigStrings::writes`), as retail queues each `d` at its write;
     /// the rest (the cvar mirror) after them, in slot order.
     fn broadcast_configstring_changes(&mut self) {
+        let order: Vec<usize> = self
+            .game
+            .module
+            .script
+            .as_ref()
+            .map(|rt| {
+                rt.host
+                    .configstrings
+                    .writes()
+                    .iter()
+                    .map(|(i, _)| *i)
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.broadcast_changes_in(&order);
+    }
+
+    /// [`Self::broadcast_configstring_changes`] with the game's write order
+    /// given: each changed slot at its last place in `order`, the rest after.
+    fn broadcast_changes_in(&mut self, order: &[usize]) {
         let mut changed: Vec<usize> = (0..self.core.configstrings.len())
             .filter(|&i| self.core.sent_configstrings.get(i) != self.core.configstrings.get(i))
             .collect();
-        if let Some(rt) = self.game.module.script.as_ref() {
-            let writes = rt.host.configstrings.writes();
-            changed.sort_by_key(|&i| {
-                writes
-                    .iter()
-                    .rposition(|(w, _)| *w == i)
-                    .unwrap_or(usize::MAX)
-            });
-        }
+        changed.sort_by_key(|&i| order.iter().rposition(|w| *w == i).unwrap_or(usize::MAX));
         if changed.is_empty() {
             return;
         }
@@ -5741,6 +5753,83 @@ impl Server {
             }
             for &i in &changed {
                 self.send_configstring_update(slot, i);
+            }
+        }
+    }
+
+    /// A frame's game writes and server commands in their write order
+    /// (both stamped by `configstrings::next_write_seq`). The writes ahead
+    /// of the first command go with the engine's own changes through
+    /// [`Self::broadcast_configstring_changes`] as before; each later write
+    /// goes out with its own value between the commands it fell between.
+    /// `setClientCvar` and `openMenu` queue rather than send, and this is
+    /// where the queue reaches the netchan.
+    fn send_frame_writes(
+        &mut self,
+        writes: Vec<(u64, usize, String)>,
+        commands: Vec<(u64, usize, String)>,
+    ) {
+        let first = commands.first().map_or(u64::MAX, |c| c.0);
+        let split = writes.partition_point(|w| w.0 < first);
+        let (early, late) = writes.split_at(split);
+        // Each late slot held at what the early writes (or the last frame)
+        // left it, for the diff; its final value goes back after.
+        let mut finals = Vec::new();
+        for &(_, i, _) in late {
+            if finals.iter().any(|(j, _)| *j == i) || i >= self.core.configstrings.len() {
+                continue;
+            }
+            let before = early
+                .iter()
+                .rev()
+                .find(|w| w.1 == i)
+                .map(|w| w.2.clone())
+                .or_else(|| self.core.sent_configstrings.get(i).cloned())
+                .unwrap_or_default();
+            finals.push((
+                i,
+                std::mem::replace(&mut self.core.configstrings[i], before),
+            ));
+        }
+        let order: Vec<usize> = early.iter().map(|w| w.1).collect();
+        self.broadcast_changes_in(&order);
+        for (i, v) in finals {
+            self.core.configstrings[i] = v;
+        }
+        let mut late = late.iter().peekable();
+        for (seq, slot, cmd) in commands {
+            while let Some((_, i, v)) = late.next_if(|w| w.0 < seq) {
+                self.send_game_write(*i, v);
+            }
+            crate::tick_trace::step!("SV_GameSendServerCommand slot {slot}");
+            self.send_server_command(slot, &cmd);
+        }
+        for (_, i, v) in late {
+            self.send_game_write(*i, v);
+        }
+    }
+
+    /// One game write's `d` to every client with a table, as
+    /// `SV_SetConfigstring` sends it at the write.
+    fn send_game_write(&mut self, i: usize, v: &str) {
+        if i < 2 || i >= self.core.configstrings.len() {
+            return;
+        }
+        if self.core.sent_configstrings.get(i).is_some_and(|s| s == v) {
+            return;
+        }
+        if let Some(s) = self.core.sent_configstrings.get_mut(i) {
+            v.clone_into(s);
+        }
+        let cmds = vcod_common::net::configstring_commands(i, v);
+        for slot in 0..self.core.clients.len() {
+            if self.core.clients[slot]
+                .as_ref()
+                .is_some_and(|c| c.state != ClientState::Connected)
+            {
+                for cmd in &cmds {
+                    self.send_server_command(slot, cmd);
+                }
             }
         }
     }
@@ -6708,19 +6797,19 @@ impl Server {
         // `trap_SendConsoleCommand`'s `EXEC_APPEND`: what a builtin queued
         // this frame runs at the top of the next tick, never mid-frame.
         self.core.console.extend(console_lines);
-        // Ahead of the frame's client commands, so a slot the script just
-        // allocated is named before anything points at it.
+        // Retail sends each `d` at its `SV_SetConfigstring` and each command
+        // at its `SV_GameSendServerCommand`, so a slot the script allocated
+        // is named before anything points at it, and one allocated after a
+        // command goes out after it (gametypes doc 7.6).
         crate::tick_trace::step!("SV_SetConfigstring broadcast");
-        self.broadcast_configstring_changes();
-        if let Some(rt) = self.game.module.script.as_mut() {
-            rt.host.configstrings.take_writes();
-        }
-        // Outside the borrow: `setClientCvar` and `openMenu` queue rather
-        // than send, and this is where the queue reaches the netchan.
-        for (slot, cmd) in client_commands {
-            crate::tick_trace::step!("SV_GameSendServerCommand slot {slot}");
-            self.send_server_command(slot, &cmd);
-        }
+        let writes = self
+            .game
+            .module
+            .script
+            .as_mut()
+            .map(|rt| rt.host.configstrings.take_writes_stamped())
+            .unwrap_or_default();
+        self.send_frame_writes(writes, client_commands);
         // `G_RunFrame`'s inlined drain (map-cycle doc, 6.3): a frame that
         // moved a score pushes the scoreboard to every client in
         // intermission, and no frame pushes one otherwise. The map-change
