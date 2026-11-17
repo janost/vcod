@@ -96,8 +96,17 @@ flags (cod11-console.md 5). INFERRED that UO's engine does the same (no
 CoDUOMP.exe trap table read). INFERRED, off Q3's `cvar_modifiedFlags`: a `v`
 of a userinfo cvar sends a userinfo change, one of an archived cvar rewrites
 the config. The 140/204 mirror's writer (`0x3002bc60`, section 5) is a trap
-9 too. vcod keeps the mirror apart (`play::cvars::ClientCvars`) and lets a
-name the server set with `v` this connection win over it.
+9 too. VERIFIED: `CG_Init` calls it at 0x30023106, and
+`CG_ConfigStringModified` jumps to it for an index in 140..267
+(0x3002c72a..0x3002c73b), so every mirror slot change sets all pairs again;
+1.5's writer is 0x3002d0f0 (called at 0x300244a6, jumped to at 0x3002dbcb
+for 140..267) and UO's 0x30038430 (called at 0x3002e0a6 and at 0x30038f45
+for 149..404). INFERRED, off the test at 0x3002bc65: the writer returns at
+once while `sv_running` (0x301d1fd8) is set. INFERRED: one store holds a cvar's `v`, mirror and
+console writes, the last one standing. vcod: `ClientCvars::apply_mirror`
+forces the pairs into the console at the cgame's start (`cgame_init` in
+`main.rs`) and on a mirror slot's change; vcod has no listen server, so the
+`sv_running` skip never applies.
 
 ### 0.1 The script menu handshake
 

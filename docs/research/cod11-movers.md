@@ -1440,9 +1440,15 @@ UO's (0x1ce5f), the same instructions:
 VERIFIED, 1.5's cgame (`cgame_mp15.dll` 0x30003a82..0x30003af6): the same
 period and sum, but MSVC keeps the sum unstored and truncates through `_ftol`
 (0x3005cf7c), so the client's phase is the unrounded sum's fraction rounded
-once; vcod's client takes the server's (under 1e-6 apart). vcod:
-`animclock::spread_phase_15`, used by the windowed setter
-(`ChannelClock::update_windowed`), with `AnimMotion::length_ms`.
+once. VERIFIED, UO's cgame (`uo_cgame_mp_x86.dll` 0x30003c84..0x30003cf8):
+the same instructions, the period from syscall 0xb7 + 200 (0xb6 the clip
+test) or 1000, 0.36f at 0x3007c06c, `_ftol` at 0x3006be3c. vcod:
+`animclock::spread_phase_15` (the server's) and `spread_phase_15_cgame` (the
+cgames', which the client's drawn bodies take through
+`ChannelClock::cgame_spread`), used by the windowed setter
+(`ChannelClock::update_windowed`), with `AnimMotion::length_ms`. The two
+forms part by an ulp of the sum once it passes 1 (client 3 at 12345 ms:
+`0x3ed9999c` against `0x3ed9999b`).
 
 VERIFIED, live (retail 1.5b and UO 1.51b, 2026-10-20, `probe_legs` with a
 `--save-legs` client, fixtures `mp_carentan-dm-legs-{1.5,uo}.txt` and their
@@ -1810,7 +1816,30 @@ number and updates it each drawn frame with `Times { clock_ms: render_time,
 snapshot_ms: newest snapshot }`, the newer snapshot's `pos.trBase` and
 `eFlags`. INFERRED: the `ci` lerp frames sit in the cgame's static client and
 body queue arrays and nothing on the draw path clears them, so they outlive any
-unseen stretch; vcod keeps the pair for the cgame's life too. INFERRED, off
+unseen stretch; vcod keeps the pair for the cgame's life too.
+
+VERIFIED, `CG_TransitionSnapshot`'s client pass (0x3002faf0..0x3002fb68)
+walks the clients the old `cg.snap` lists (`snap+0x20e0` count,
+`clientState`s at `+0x110e4`, stride 0x5c) and zeroes a client info's 0x448
+bytes with `rep stos` (0x3002fb17), `ci+0x440`, the DObj tree, saved and
+put back; then syscall 0xa5 with the client and 1, and two per-client words
+at 0x302095fc and 0x3020a5f8 cleared. INFERRED, off the branch at
+0x3002fb06: that runs for a client whose `ci+0x4` reads 0, and one that
+reads 1 only has it cleared. VERIFIED, `CG_SetNextSnap` (0x3002fc80) sets
+`ci+0x0` and `ci+0x4` to 1 for every client the new snapshot lists. VERIFIED,
+the lerp frames are `ci+0x37c` (legs) and `ci+0x3ac` (torso), the two
+0x30004e40 clears at 0x30004e5d and 0x30004e69. INFERRED: a client the new
+snapshot drops loses both lerp frames. VERIFIED, the same pass on 1.5
+(0x300311f0, `ci` stride 0x4b0 at 0x3018dc8c, tree `+0x4a8`, syscall 0xa6;
+lerp frames `+0x380`, `+0x3b0` at 0x3000530d) and UO (0x3003ca80, stride
+0x4d0 at 0x305e1f34, tree `+0x4c4`, syscall 0xa8; lerp frames `+0x380`,
+`+0x3b0` at 0x3000587d). VERIFIED, `cod_lnxded` 0x808f3e0: the snapshot
+build skips a client whose state is 1 (`CS_ZOMBIE`) or below. INFERRED: a
+player who leaves is out of the list from his zombie frame on, so a
+different player in the slot finds the lerp frames zeroed. vcod:
+`entities::drop_departed` removes the departed clients' pair when the drawn
+pair's older snapshot moves on; a jump over several snapshots checks only
+the two it lands between. INFERRED, off
 0x3001bd00 stepping only the newest snapshot's entities and the per-`ci` XAnim
 tree (0x30005180 allocates one per client and body queue slot with syscall
 0x83; the DObj create at 0x30004eb0 hands it the slot's tree): a body's clips

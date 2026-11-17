@@ -439,6 +439,9 @@ pub struct ChannelClock {
     fading: [Option<(Play, Ramp)>; FADES],
     /// Every clip's step stores its increment first ([`Self::store_steps`]).
     stored: bool,
+    /// The 1.5 and UO setter's spread phase as the cgames round it
+    /// ([`Self::cgame_spread`]).
+    cgame: bool,
     /// 1.5's and UO's sync groups (a gunner's turret anims) a blend took
     /// to weight 0, at the node time their last weighted step left: the
     /// group's rows keep their weights, so its record lives on and a later
@@ -524,6 +527,12 @@ impl ChannelClock {
         for (p, _) in self.fading.iter_mut().flatten() {
             p.stored = true;
         }
+    }
+
+    /// The 1.5 and UO cgames' spread phase ([`spread_phase_15_cgame`]) for
+    /// the windowed setter, where the server's stores the sum.
+    pub fn cgame_spread(&mut self) {
+        self.cgame = true;
     }
 
     /// The wire value last set, toggle included (`lf+0x10`).
@@ -739,9 +748,14 @@ impl ChannelClock {
         }
         let client_num = seen.client_num;
         // The windowed setter is 1.5's and UO's, whose spread differs.
-        let spread = |now_ms, client_num| match window.is_some() {
-            false => spread_phase(now_ms, client_num),
-            true => spread_phase_15(now_ms, client_num, old.map_or(1000, |o| o.length_ms + 200)),
+        let cgame = self.cgame;
+        let spread = |now_ms, client_num| {
+            let period = old.map_or(1000, |o| o.length_ms + 200);
+            match (window.is_some(), cgame) {
+                (false, _) => spread_phase(now_ms, client_num),
+                (true, false) => spread_phase_15(now_ms, client_num, period),
+                (true, true) => spread_phase_15_cgame(now_ms, client_num, period),
+            }
         };
         // The phase in seconds' terms and as the old node's float time
         // (`trap_XAnimGetTime`).
@@ -1242,6 +1256,15 @@ fn spread_phase_15(now_ms: i32, client_num: i32, period: i32) -> f32 {
     x - x.trunc()
 }
 
+/// The same spread in the 1.5 and UO cgames (1.5 0x30003acc..0x30003af6,
+/// UO 0x30003cce..0x30003cf8): the sum stays on the x87 stack, `_ftol`
+/// takes its integer part there, and only the fraction is stored, so it
+/// rounds to a float once where the server's rounds the sum first.
+fn spread_phase_15_cgame(now_ms: i32, client_num: i32, period: i32) -> f32 {
+    let x = (now_ms % period) as f64 / period as f64 + client_num as f64 * 0.36f32 as f64;
+    (x - x.trunc()) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1385,6 +1408,26 @@ mod tests {
             let p = spread_phase_15(now, client, period);
             assert_eq!(p.to_bits(), bits, "{now} {client} {period}: {p}");
         }
+    }
+
+    /// The cgames' fraction rounds once: past the first client the sum's
+    /// own float rounding is gone, so the two forms part by an ulp of the
+    /// sum while agreeing where the sum is below 1.
+    #[test]
+    fn the_cgame_spread_rounds_the_fraction_once() {
+        assert_eq!(
+            spread_phase_15_cgame(12_345, 0, 1000).to_bits(),
+            spread_phase_15(12_345, 0, 1000).to_bits()
+        );
+        let (server, cgame) = (
+            spread_phase_15(25_050, 5, 1466),
+            spread_phase_15_cgame(25_050, 5, 1466),
+        );
+        let exact = (25_050 % 1466) as f64 / 1466.0 + 5.0 * 0.36f32 as f64;
+        let exact = exact - exact.trunc();
+        assert_ne!(server.to_bits(), cgame.to_bits());
+        assert_eq!(cgame, exact as f32);
+        assert!((f64::from(server) - exact).abs() < 1e-6);
     }
 
     #[test]
