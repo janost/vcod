@@ -1168,7 +1168,7 @@ pub fn probe(
             if let Some(fdc) = client
                 .snapshots()
                 .newest()
-                .and_then(|s| flame.frame(now, p, s, flood))
+                .and_then(|s| flame.frame(now, p, s, flood, (fs, client.configstrings())))
             {
                 client.send_reliable(&fdc);
             }

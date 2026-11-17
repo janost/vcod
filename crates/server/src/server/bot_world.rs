@@ -1805,3 +1805,113 @@ impl crate::bots::driver::BotWorld for Server {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bots::LOB_MISS;
+
+    /// Two bots on 1.1's mp_carentan tdm, spawned.
+    fn tdm_pair() -> Option<Server> {
+        let fs = vcod_common::testing::game_fs_11()?;
+        let bsp_path = fs.resolve_map("mp_carentan").expect("the map in the paks");
+        let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+        let cfg = ServerConfig {
+            map: "mp_carentan".into(),
+            hostname: "vcod test".into(),
+            max_clients: 8,
+            gametype: "tdm".into(),
+            test_entities: 0,
+            trace: false,
+            bots: 2,
+            bots_shoot: false,
+        };
+        let mut now = Instant::now();
+        let mut sv = Server::new(cfg, now);
+        sv.set_cvar("sv_pure", "0");
+        sv.load_world(crate::world::World::from_bsp(&bsp, Some(&fs)));
+        sv.load_scripts(std::rc::Rc::new(fs))
+            .expect("load the scripts");
+        for _ in 0..100 {
+            now += std::time::Duration::from_millis(50);
+            sv.tick(now);
+        }
+        Some(sv)
+    }
+
+    /// Where a throw along `aim` goes off: the same flight the probe flies.
+    fn burst(sv: &Server, slot: usize, weapon: u8, aim: [f32; 2]) -> glam::Vec3 {
+        let sim = sv.core.clients[slot]
+            .as_ref()
+            .unwrap()
+            .sim
+            .as_ref()
+            .unwrap();
+        let def = sv.game.module.weapon_table.get(weapon as usize).unwrap();
+        let (origin, velocity) = crate::game::missile::throw_velocity(&sim.ps, aim, def);
+        let fuse = vcod_common::weapon::stored_ms(def.fuse_time);
+        let flight = sv
+            .game
+            .module
+            .script
+            .as_ref()
+            .unwrap()
+            .missiles()
+            .predict_flight(
+                &sv.game.world.as_ref().unwrap().collision,
+                weapon,
+                origin,
+                velocity,
+                sim.ps.velocity,
+                fuse,
+            );
+        flight[(fuse / FRAME_MS) as usize - 1]
+    }
+
+    /// A lob at an enemy on open ground 500 units off goes off within
+    /// `LOB_MISS` of him; with friendly fire on, a teammate 100 to his side,
+    /// inside the frag's radius, holds it, and with it off it flies again.
+    #[test]
+    fn a_lob_goes_off_by_its_target_and_spares_a_teammate_beside_it() {
+        let Some(mut sv) = tdm_pair() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let slots: Vec<usize> = sv.game.module.driver.bots.keys().copied().collect();
+        let (slot, mate) = (slots[0], slots[1]);
+        let origin = sv.core.clients[slot]
+            .as_ref()
+            .and_then(|c| c.sim.as_ref())
+            .expect("a spawned bot")
+            .ps
+            .origin;
+        let frag = crate::configstrings::weapon_index("fraggrenade_mp").unwrap() as u8;
+        let (yaw, target) = (0..16)
+            .find_map(|i| {
+                let yaw = i as f32 * 22.5;
+                let dir = glam::Vec3::new(yaw.to_radians().cos(), yaw.to_radians().sin(), 0.0);
+                let at = origin + dir * 500.0;
+                let ground = sv.test_ground_under([at.x, at.y, at.z + 64.0])?;
+                ((ground[2] - origin.z).abs() < 32.0
+                    && sv.test_clear_line(origin.into(), yaw, 500.0))
+                .then_some((yaw, glam::Vec3::from(ground)))
+            })
+            .expect("open ground 500 units off the spawn");
+        let mut teams = vec![0; 8];
+        teams[slot] = script::TEAM_ALLIES;
+        teams[mate] = script::TEAM_ALLIES;
+        sv.set_cvar("scr_friendlyfire", "0");
+        let aim = sv
+            .lob_probe(slot, frag, target.into(), &teams)
+            .expect("a lob at open ground");
+        let miss = burst(&sv, slot, frag, aim).distance(target);
+        assert!(miss < LOB_MISS, "the lob went off {miss} from its target");
+
+        let side = glam::Vec3::new(-yaw.to_radians().sin(), yaw.to_radians().cos(), 0.0);
+        sv.place_client(mate, (target + side * 100.0).into(), 0.0);
+        sv.set_cvar("scr_friendlyfire", "1");
+        assert_eq!(sv.lob_probe(slot, frag, target.into(), &teams), None);
+        sv.set_cvar("scr_friendlyfire", "0");
+        assert!(sv.lob_probe(slot, frag, target.into(), &teams).is_some());
+    }
+}

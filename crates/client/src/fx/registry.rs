@@ -4,7 +4,9 @@
 use crate::fx::sim::SpawnAt;
 use glam::Vec3;
 use std::collections::HashMap;
-use std::sync::{LazyLock, PoisonError, RwLock};
+use std::sync::LazyLock;
+#[cfg(not(test))]
+use std::sync::{PoisonError, RwLock};
 use vcod_common::asset_source::{Asset, AssetKind, AssetSource};
 use vcod_common::net::events::{GameEvent, byte_to_dir};
 use vcod_common::net::flags::{EF_CROUCH, EF_IN_VEHICLE_V22, EF_PRONE, ET_TURRET, ET_VEHICLE_V22};
@@ -194,12 +196,37 @@ fn load(fs: &dyn AssetSource) -> ImpactTable {
     ImpactTable::find(fs, "").unwrap_or_default()
 }
 
+#[cfg(not(test))]
 static TABLE: LazyLock<RwLock<ImpactTable>> = LazyLock::new(RwLock::default);
+
+// Tests run side by side on threads of their own: one's `init` swapped the
+// table under another's `resolve` (the reopen test's flake), so each test
+// thread holds its own.
+#[cfg(test)]
+thread_local! {
+    static TABLE: std::cell::RefCell<ImpactTable> = std::cell::RefCell::default();
+}
+
+#[cfg(not(test))]
+fn with_table<R>(f: impl FnOnce(&ImpactTable) -> R) -> R {
+    f(&TABLE.read().unwrap_or_else(PoisonError::into_inner))
+}
+
+#[cfg(test)]
+fn with_table<R>(f: impl FnOnce(&ImpactTable) -> R) -> R {
+    TABLE.with(|t| f(&t.borrow()))
+}
 
 /// Loads the table off `fs`: at startup, and again whenever a download
 /// reopens the search path. `resolve()` reads an empty table before the first.
 pub fn init(fs: &dyn AssetSource) {
-    *TABLE.write().unwrap_or_else(PoisonError::into_inner) = load(fs);
+    let table = load(fs);
+    #[cfg(not(test))]
+    {
+        *TABLE.write().unwrap_or_else(PoisonError::into_inner) = table;
+    }
+    #[cfg(test)]
+    TABLE.with(|t| *t.borrow_mut() = table);
 }
 
 /// `Known` is a recognized event with nothing to draw. `Unknown` is an id this
@@ -287,13 +314,7 @@ pub fn level_effects(
     weapons: &[Option<WeaponDef>],
     uo: bool,
 ) -> Vec<String> {
-    let mut out: Vec<String> = TABLE
-        .read()
-        .unwrap_or_else(PoisonError::into_inner)
-        .map
-        .values()
-        .cloned()
-        .collect();
+    let mut out: Vec<String> = with_table(|t| t.map.values().cloned().collect());
     out.push(FLESH_NOBLOOD.into());
     out.push(flash_effect_path(EV_FIRE_WEAPON_MG42).into());
     out.push(flash_effect_path(0).into());
@@ -648,7 +669,7 @@ fn fire_flash(ev: &GameEvent, ctx: &ResolveCtx) -> Vec<Resolved> {
 }
 
 /// [`resolve`] against `fs`'s impact table rather than the one [`init`]
-/// loaded, which tests running beside each other would race on.
+/// loaded.
 #[cfg(test)]
 pub(crate) fn resolve_in(fs: &dyn AssetSource, ev: &GameEvent, ctx: &ResolveCtx) -> Vec<Resolved> {
     resolve_with(ev, &load(fs), ctx)
@@ -657,8 +678,7 @@ pub(crate) fn resolve_in(fs: &dyn AssetSource, ev: &GameEvent, ctx: &ResolveCtx)
 /// Resolve one drained [`GameEvent`] against the cached table and this
 /// frame's muzzles.
 pub fn resolve(ev: &GameEvent, ctx: &ResolveCtx) -> Vec<Resolved> {
-    let table = TABLE.read().unwrap_or_else(PoisonError::into_inner);
-    resolve_with(ev, &table, ctx)
+    with_table(|table| resolve_with(ev, table, ctx))
 }
 
 fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Resolved> {

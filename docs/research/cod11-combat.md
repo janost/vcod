@@ -2001,8 +2001,13 @@ enter the clip, and `fire_round` goes on past one from the nudged point.
 VERIFIED, the same probe against ours: the target took 180 at `head` and 107
 at `torso_upper` through the pane, the pane's 173 numbered below the flesh
 one. Traces report the struck side's surface flags (a brush-material read
-gives the pane `surfType` 9 where retail's caulk face reads 0; not rerun
-against this probe since). One difference remains: a round meeting glass at
+gives the pane `surfType` 9 where retail's caulk face reads 0). VERIFIED,
+vcod, the probe rerun in process after the per-side change
+(`tests/combat.rs`, `a_round_through_the_depot_pane_hits_like_retail`):
+eight level taps from the shooter's spot each put a 173 on the pane's face
+at x -763 with `surfType` 0; the three that reached the target hit `head`
+for 180, `iDFlags` 0, `MOD_PISTOL_BULLET`, as retail's log reads, the flesh
+173 numbered above the pane's in the same snapshot. One difference remains: a round meeting glass at
 under 0.125 of its normal is not nudged, so each later leg starts where the
 last stopped and meets the pane again at fraction 0 until the depth runs out:
 13 impacts on the pane and nothing behind it. INFERRED from step 3 and Q3's
