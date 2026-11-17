@@ -518,6 +518,13 @@ impl Server {
                 && def.is_some_and(|d| d.is_lmg()),
             deployed: sim.ps.deployed(),
             deploy_yaw: sim.ps.prone_direction,
+            lmg_pitch_from: if sim.ps.deployed()
+                || sim.ps.stance == vcod_common::pmove::Stance::Prone
+            {
+                sim.ps.prone_torso_pitch
+            } else {
+                0.0
+            },
             ads_frac: sim.ps.weapon_pos_frac,
             spread_scale: sim.ps.aim_spread_scale,
             speed: sim.ps.velocity.truncate().length(),
@@ -572,6 +579,8 @@ impl Server {
             } else {
                 Vec::new()
             },
+            // Dealt with the posts (`driver::deal_posts`).
+            fallen: Vec::new(),
             post: None,
             give_way: None,
             guard_post: None,
