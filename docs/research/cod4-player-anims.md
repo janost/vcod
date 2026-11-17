@@ -356,6 +356,27 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   neck and head turn back by it. Trap: CoD2's 0.6 factor here, with no
   `back_up`, shows only 0.3 of the aim on the spine (looking straight up
   reads as a slight upward aim).
+- 1.7's `BG_PlayerAngles` aims the torso at the view plus `movementDir`
+  times `player_move_factor_on_torso` (dvar at 0x827afec, 0x804cbd8..
+  0x804cbe9), registered with default 0 in 0..1 (0x80544a3..0x80544c7);
+  the legs start their swing past `bg_legYawTolerance` (0x827afa4,
+  0x804cc49), default 20 in 0..180 (0x80540dd..0x8054109); both swing at
+  `bg_swingSpeed` 0.2 (0x827afa0). VERIFIED (the instructions, the dvar
+  names at 0x820af0f and 0x820ad8c). `iw3mp.exe` registers the same two
+  with 0 (0x40a6d2) and 20 (0x40a05b, the float at 0x6df498). VERIFIED
+  (the instructions). A prone body's legs take the view's yaw, the move
+  left out (0x804c72b..0x804c738). VERIFIED (the instructions). CoD2's
+  0.3 and 40 had swung a strafing body's torso 27 degrees off the view
+  and its head 2.8 units off retail's (`cod4_tag_read_ab`). VERIFIED (the
+  gate).
+- `ClientSpawn`'s own `ClientEndFrame` (0x80a7e66) runs
+  `BG_PlayerAngles` at `legsAnim` 0, and the level's end frame runs it
+  again at the same level time, each a `level.frametime` step: a gdb run
+  read the shooter's legs and torso at 45 then 67.5 degrees off a fresh
+  client's 0 toward the view's 90 in its spawn frame (breaks at 0x804c636
+  and 0x80a6f57). VERIFIED (gdb). vcod's spawn swings the body once more
+  (`Cod4Level::client_spawn`); without it the spawned head read up to
+  0.4 units off retail's for four frames. VERIFIED (`cod4_tag_read_ab`).
 - 1.7's `BG_SwingAngles` (0x804b3ba) and `AngleNormalize360` (0x8190540)
   fold in floats (`x - floor(x)` of the turns, times 360), not CoD1's
   shorts, and the controllers' `AnglesSubtract` (0x819397a) the same way,
