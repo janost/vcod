@@ -3502,7 +3502,8 @@ stands under it as it shuts, `useBy`s `door_r` from two spots, then twice
 more with a teleport to the far south spawn and back while it turns shut;
 the script then `radiusDamage`s `door_r`, `door_b` and `door_h`, and
 `door_h` again 100 ms later, spawns one of each classname, and has the
-client fire one kar98k round at `door_h` from 80 units south. Before the
+client fire one kar98k round at `door_h` from 80 units south and swing
+at it from 50. Before the
 client is in, `door_h` takes a `radiusDamage` at 550 and another at 4000
 (`crates/server/tests/fixtures/doors/mp_carentan-dm-doors*.txt`, recipes in
 their headers). The client wrote its snapshots as the
@@ -3708,10 +3709,6 @@ Not modelled:
 - Area portals (`trap_AdjustAreaPortalState` in `Use_BinaryMover` and
   `Reached_BinaryMover`): no stock MP map has one, and mp_carentan's lump
   is one area, so nothing here measures them.
-- A knife's `G_Damage` on a door: the melee trace has no glass test
-  (cod11-combat.md 2.5), so a swing at a door at rest would open it;
-  vcod's melee names the world on any brush hit and deals no damage.
-  Unmeasured.
 - A round through a `func_static`, `func_bobbing` or `func_pendulum`,
   also linked at -1 (26.9's rule): ported with the doors, measured only on
   a door.
@@ -3799,6 +3796,19 @@ entity linked at -1 as past a pane, after its impact, and skips step 4's
 the wire on all three: two impacts in the shot's snapshot, `surfType` 0 on
 the door's face and 5 on the wall behind it; `door_h` never moved and no
 `"trigger"` came.
+
+VERIFIED, the runs on all three, knife phase (2026-11-17 captures): a
+kar98k swing at `door_h` at rest from (1053, 1561), the eye's
+`bulletTrace` meeting the door's face at (1053, 1604.10, 77.88), raised
+one `EV_MELEE_MISS` (167) naming entity 298, `door_h`, with `surfType` 0
+and parm 104 on 1.1d, 84 on 1.5b and UO; the door's `"trigger"` came in
+the event's frame (56.4 s on 1.1d, 57.35 s on 1.5b, 57.6 s on UO) and its
+origin first read moved 100 ms on. INFERRED, off `Weapon_Melee`'s tests (cod11-combat.md
+2.5): the swing has no glass test, so the door's -1 contents stop it, and
+its `G_Damage` reaches 26.9's `eType` 5 arm. vcod: `combat::melee_fire`
+names the brush entity `CollisionWorld::entity_num` reports and deals
+its `G_Damage` to one in `GameHost::damageable_brushes`; `doors_ab`
+compares the swing's event (`W <time> melee`) and the door's frames.
 
 ### 26.10 A script spawn
 

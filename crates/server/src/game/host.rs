@@ -1869,6 +1869,15 @@ impl GameHost {
             || self.is_damage_trigger(id)
     }
 
+    /// The brush entities with `takedamage` a swing's trace can stop on: the
+    /// damageable doors and `func_static`s, and what `setTakeDamage` opened.
+    pub fn damageable_brushes(&self) -> Vec<EntId> {
+        let mut ids = crate::game::mover::damageable_statics(self);
+        ids.extend(crate::game::mover::door::damageable(self));
+        ids.extend(self.script_takedamage.iter().copied());
+        ids
+    }
+
     /// A `trigger_damage`, `takedamage` from its spawn on.
     pub fn is_damage_trigger(&self, id: EntId) -> bool {
         self.triggers
