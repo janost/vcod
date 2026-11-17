@@ -2718,10 +2718,8 @@ impl Bot {
                 let outer = GUARD_RADIUS.max(inner + GUARD_BAND);
                 d < outer * outer && d >= inner * inner
             }
-            ObjTarget::Escort(at) => {
-                let d = dist_sq(o, *at);
-                d < GUARD_RADIUS * GUARD_RADIUS && d >= ESCORT_CLEAR * ESCORT_CLEAR
-            }
+            ObjTarget::Escort(at) => (ESCORT_CLEAR * ESCORT_CLEAR..GUARD_RADIUS * GUARD_RADIUS)
+                .contains(&dist_sq(o, *at)),
             ObjTarget::Defuse { bomb, reach, .. } => dist_sq(o, bomb.origin) < reach * reach,
             ObjTarget::Occupy(s) => inside_site(o, s),
             ObjTarget::Radio {
