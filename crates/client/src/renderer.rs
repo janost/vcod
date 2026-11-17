@@ -327,6 +327,17 @@ fn fx_stage_draws<'a>(shader: Option<&'a Material>, name: &'a str, t: f32) -> Ve
         .collect()
 }
 
+/// An fx quad's material: the map's script, or retail's `<default>` for
+/// an element with no `shaders` (`fx::sim`'s quads name it).
+fn fx_material<'a>(lib: &'a MaterialLib, name: &str) -> Option<&'a Material> {
+    static DEFAULT: std::sync::LazyLock<Material> =
+        std::sync::LazyLock::new(vcod_common::shader::default_material);
+    match name {
+        vcod_common::shader::DEFAULT_SHADER => Some(&DEFAULT),
+        _ => lib.get(name),
+    }
+}
+
 /// Every image [`fx_stage_draws`] can name for a material at any time
 /// (each anim frame), and whether a script stage names it.
 fn fx_stage_images<'a>(shader: Option<&'a Material>, name: &'a str) -> Vec<(&'a str, bool)> {
@@ -1886,6 +1897,22 @@ pub const DEFORM_FLAP_T: u32 = 3;
 pub const DEFORM_NORMAL: u32 = 4;
 pub const DEFORM_BULGE: u32 = 6;
 pub const DEFORM_MOVE: u32 = 7;
+/// A wave's or flap's form in its kind's bits from here up ([`deform_form`]).
+pub const DEFORM_FORM_SHIFT: u32 = 8;
+
+/// deform.wgsl's table code for a wave form: sin 0, then square, triangle,
+/// sawtooth, inverse sawtooth and noise (retail's genfuncs 1..6 less one).
+fn deform_form(form: &WaveForm) -> u32 {
+    let code = match form {
+        WaveForm::Sin => 0,
+        WaveForm::Square => 1,
+        WaveForm::Triangle => 2,
+        WaveForm::Sawtooth => 3,
+        WaveForm::InverseSawtooth => 4,
+        WaveForm::Noise => 5,
+    };
+    code << DEFORM_FORM_SHIFT
+}
 /// `StageParams::deform_kinds[3]`, past the three deform slots: a CoD2
 /// `lprobe_flag*` stage, whose vertices `dynamic_model.wgsl` waves
 /// (cod2-materials.md 9.7).
@@ -2129,19 +2156,24 @@ pub(crate) fn stage_params(shader: &Material, idx: usize, t: f32) -> Option<Stag
             [p.vec1_s, p.vec1_t] = env_axes(shader);
         }
     }
-    // a wave of rate 0 is one phase for every vertex (0x513570, 0x5136e0)
+    // a wave of rate 0 is one phase for every vertex (0x513570, 0x5136e0);
+    // the phase goes up as its fraction, which indexes the 1024-entry
+    // table as the whole would, keeping the f32 add on the GPU small
     let wave = |w: &Wave, spread: f32| {
         let spread = if w.freq == 0.0 { 0.0 } else { spread };
-        [w.base, w.amp, w.phase + t * w.freq, spread]
+        let phase = (f64::from(w.phase) + f64::from(t) * f64::from(w.freq)).rem_euclid(1.0);
+        [w.base, w.amp, phase as f32, spread]
     };
     let records = shader.deforms.iter().filter_map(|d| match d {
-        Deform::Wave { wave: w, spread } => Some((DEFORM_WAVE, wave(w, *spread))),
+        Deform::Wave { wave: w, spread } => {
+            Some((DEFORM_WAVE | deform_form(&w.form), wave(w, *spread)))
+        }
         Deform::Flap(f) => Some((
             if f.along_t {
                 DEFORM_FLAP_T
             } else {
                 DEFORM_FLAP_S
-            },
+            } | deform_form(&f.wave.form),
             wave(&f.wave, f.spread),
         )),
         Deform::Bulge(b) => Some((DEFORM_BULGE, [b.width, b.height, t * b.speed, 0.0])),
@@ -5848,7 +5880,7 @@ impl Renderer {
         shaders: impl IntoIterator<Item = &'a str>,
     ) {
         for name in shaders {
-            let sh = self.shader_lib.get(name);
+            let sh = fx_material(&self.shader_lib, name);
             for (image, scripted) in fx_stage_images(sh, name) {
                 if !self.fx.textures.contains_key(image) {
                     let bg = self.fx_texture(fs, sh, image, scripted);
@@ -5891,9 +5923,7 @@ impl Renderer {
                 Some((name, sort)) if name == &*quad.shader => sort,
                 _ => {
                     let sort = *sorts.entry(&*quad.shader).or_insert_with(|| {
-                        self.shader_lib
-                            .get(&quad.shader)
-                            .map_or(SORT_BLEND, |sh| sh.sort)
+                        fx_material(&self.shader_lib, &quad.shader).map_or(SORT_BLEND, |sh| sh.sort)
                     });
                     last = Some((&*quad.shader, sort));
                     sort
@@ -5910,7 +5940,7 @@ impl Renderer {
             let len = rest.iter().take_while(|(_, q)| &*q.shader == name).count();
             let (group, tail) = rest.split_at(len);
             rest = tail;
-            let sh = self.shader_lib.get(name);
+            let sh = fx_material(&self.shader_lib, name);
             for draw in fx_stage_draws(sh, name, time) {
                 if verts.len() / 4 + group.len() > MAX_FX_DRAWN {
                     log::warn!("fx: stage draws exceed the {MAX_FX_DRAWN} quad cap, truncating");
@@ -10901,11 +10931,16 @@ fn resolve_fx_texture(
     name: &str,
     how: FxImage,
 ) -> Option<wgpu::BindGroup> {
-    let Some(path) = resolve_fx_path(shader_images, fs, name) else {
-        log::warn!("fx shader {name:?}: no texture found for it, dropping its quads");
-        return None;
+    let (path, mut img) = if name == vcod_common::shader::DEFAULT_IMAGE {
+        (name.to_string(), assets::default_image())
+    } else {
+        let Some(path) = resolve_fx_path(shader_images, fs, name) else {
+            log::warn!("fx shader {name:?}: no texture found for it, dropping its quads");
+            return None;
+        };
+        let img = assets::load_path_image(fs, &path);
+        (path, img)
     };
-    let mut img = assets::load_path_image(fs, &path);
     let load = texture_settings::path_levels(fs);
     let mips = if how.mipmap {
         texture_settings::Mips::chain(&path, &load)
@@ -13372,12 +13407,34 @@ mod tests {
             ("DEFORM_NORMAL", DEFORM_NORMAL),
             ("DEFORM_BULGE", DEFORM_BULGE),
             ("DEFORM_MOVE", DEFORM_MOVE),
+            ("DEFORM_FORM_SHIFT", DEFORM_FORM_SHIFT),
+            (
+                "FORM_SQUARE",
+                deform_form(&WaveForm::Square) >> DEFORM_FORM_SHIFT,
+            ),
+            (
+                "FORM_TRIANGLE",
+                deform_form(&WaveForm::Triangle) >> DEFORM_FORM_SHIFT,
+            ),
+            (
+                "FORM_SAWTOOTH",
+                deform_form(&WaveForm::Sawtooth) >> DEFORM_FORM_SHIFT,
+            ),
+            (
+                "FORM_INVERSE_SAWTOOTH",
+                deform_form(&WaveForm::InverseSawtooth) >> DEFORM_FORM_SHIFT,
+            ),
+            (
+                "FORM_NOISE",
+                deform_form(&WaveForm::Noise) >> DEFORM_FORM_SHIFT,
+            ),
         ] {
             assert!(
                 src.contains(&format!("const {name}: u32 = {code}u;")),
                 "{name}"
             );
         }
+        assert_eq!(deform_form(&WaveForm::Sin), 0, "table_entry's fallthrough");
     }
 
     /// cod2_model.wgsl's stage flags are the ones `stage_params` writes.
@@ -13817,7 +13874,13 @@ mod tests {
         let flag = parse("f { cull none deformVertexes flap s 32 sin 4 8 0 .75 { map a.tga } }");
         let p = stage_params(&flag, 0, 2.0).expect("one stage");
         assert_eq!(p.deform_kinds, [DEFORM_FLAP_S, 0, 0, 0]);
-        assert_eq!(p.deform[0], [4.0, 8.0, 1.5, 1.0 / 32.0]);
+        // the phase 0 + 2 * 0.75 goes up as its fraction: one table turn
+        assert_eq!(p.deform[0], [4.0, 8.0, 0.5, 1.0 / 32.0]);
+        // a square wave names its table in the kind's upper bits
+        let square = parse("f { deformVertexes wave 100 square 1 2 0.25 3 { map a.tga } }");
+        let p = stage_params(&square, 0, 1.0).expect("one stage");
+        assert_eq!(p.deform_kinds[0], DEFORM_WAVE | 1 << DEFORM_FORM_SHIFT);
+        assert_eq!(p.deform[0], [1.0, 2.0, 0.25, 0.01]);
         assert!(stage_animated(&flag, 0));
         // a rate of 0 drops the spread (one phase for every vertex)
         let still = parse("f { deformVertexes flap t 32 sin 4 8 .5 0 { map a.tga } }");

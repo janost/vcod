@@ -1428,12 +1428,22 @@ fn push_quads(
     out: &mut Vec<FxQuad>,
 ) {
     for p in pool {
-        // An element with no `shaders` list draws retail's shader handle 0,
-        // `<default>`, at its size; every stock one is zero-sized, so it
-        // draws nothing (grammar doc R4, "An element with no shaders").
-        if p.is_light || p.debris.is_some() || p.shader.is_empty() || !live(p, now) || is_cloud(p) {
+        if p.is_light || p.debris.is_some() || !live(p, now) || is_cloud(p) {
             continue;
         }
+        // An element with no `shaders` list draws retail's shader handle 0,
+        // `<default>`, at its size; every stock one is zero-sized (grammar
+        // doc R4, "An element with no shaders"). A CoD2 element without a
+        // material draws nothing.
+        let default;
+        let shader = match (&*p.shader, &p.cod2) {
+            ("", Some(_)) => continue,
+            ("", None) => {
+                default = Arc::from(vcod_common::shader::DEFAULT_SHADER);
+                &default
+            }
+            _ => &p.shader,
+        };
         let Some((pos, vel)) = world_state(p, bolts) else {
             continue;
         };
@@ -1463,20 +1473,13 @@ fn push_quads(
             let axis = (head - tail) * 0.5;
             let view_dir = (cam_pos - mid).normalize_or_zero();
             let side = stretch_side_dir(axis, view_dir, cam_up, cam_right) * half;
-            push(make_quad(mid, axis, side, rgb, alpha, &p.shader));
+            push(make_quad(mid, axis, side, rgb, alpha, shader));
         } else {
             // `size` across the view, `size2` up it, both turned by the
             // rotation (0x5101d0).
             let height = shape.height;
             let (rx, ry) = rotate2(cam_right, cam_up, rad);
-            push(make_quad(
-                pos,
-                rx * half,
-                ry * height,
-                rgb,
-                alpha,
-                &p.shader,
-            ));
+            push(make_quad(pos, rx * half, ry * height, rgb, alpha, shader));
         }
     }
 }
@@ -2469,13 +2472,15 @@ mod tests {
     }
 
     #[test]
-    fn a_particle_without_shaders_lives_but_draws_no_quad() {
+    fn a_particle_without_shaders_draws_the_default_shader() {
         let mut e = simple_emitter();
         e.shaders.clear();
         let mut s = sys_with(e, SpawnAt::Point { pos: Vec3::ZERO });
         s.step(0.1, 0.1, None);
         assert_eq!(s.counts().0, 1);
-        assert!(s.build_quads(Vec3::ZERO, Vec3::X, Vec3::Z, 0.1).is_empty());
+        let quads = s.build_quads(Vec3::ZERO, Vec3::X, Vec3::Z, 0.1);
+        assert_eq!(quads.len(), 1);
+        assert_eq!(&*quads[0].shader, vcod_common::shader::DEFAULT_SHADER);
     }
 
     #[test]

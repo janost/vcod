@@ -394,13 +394,17 @@ pub fn default_material() -> Material {
     Material::from_shader(&default_shader())
 }
 
+/// [`default_shader`]'s name, shader handle 0: what an effect element with
+/// no `shaders` list draws (0x492780 picks 0 off an empty list).
+pub const DEFAULT_SHADER: &str = "<default>";
+
 /// Retail's `<default>` shader (CoDMP.exe 0x4fd780): one opaque stage of
 /// `*default` that writes depth, its rgbGen left 0, which 0x4ffa60's default
 /// case fills with identityLight. `R_FindShader` returns it for a skin it
 /// cannot build (shader doc 8, "Model skin scripts").
 pub fn default_shader() -> Shader {
     Shader {
-        name: "<default>".to_string(),
+        name: DEFAULT_SHADER.to_string(),
         stages: vec![Stage {
             bundles: vec![Bundle {
                 image: ImageRef::Path(DEFAULT_IMAGE.to_string()),
