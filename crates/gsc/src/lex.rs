@@ -79,6 +79,9 @@ pub enum Tok {
 pub struct Spanned {
     pub tok: Tok,
     pub line: u32,
+    /// The token's first byte, counted from its line's start: where
+    /// `scriptUsage` puts its caret (cod11-server-handshake.md, scriptUsage).
+    pub col: u32,
 }
 
 #[derive(Debug)]
@@ -381,6 +384,15 @@ impl<'a> Lexer<'a> {
         Ok(Tok::UsingAnimtree(name))
     }
 
+    /// Bytes from the current line's start to the cursor.
+    fn col(&self) -> u32 {
+        let start = self.b[..self.i]
+            .iter()
+            .rposition(|&c| c == b'\n')
+            .map_or(0, |n| n + 1);
+        (self.i - start) as u32
+    }
+
     fn two_char_op(&mut self) -> Option<Tok> {
         let tok = match (self.peek()?, self.peek_at(1)) {
             (b'<', Some(b'<')) if self.dialect == Dialect::Cod4 => Tok::Shl,
@@ -440,6 +452,7 @@ impl<'a> Lexer<'a> {
         loop {
             self.skip_trivia()?;
             let line = self.line;
+            let col = self.col();
             let Some(c) = self.peek() else { break };
 
             let tok = if c == b'#' {
@@ -485,11 +498,12 @@ impl<'a> Lexer<'a> {
             } else {
                 return Err(self.err(line, format!("unexpected byte {c:#04x}")));
             };
-            out.push(Spanned { tok, line });
+            out.push(Spanned { tok, line, col });
         }
         out.push(Spanned {
             tok: Tok::Eof,
             line: self.line,
+            col: self.col(),
         });
         Ok(out)
     }

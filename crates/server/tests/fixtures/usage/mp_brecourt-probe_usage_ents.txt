@@ -1,0 +1,24 @@
+# Retail CoD 1.1d dedicated server, 2026-11-17, inside `unshare -rn` (lo up): scriptUsage over rcon 5 s after the load of
+#   COD_DIR=<1.1 install> PORT=28975 SECS=9 PRE_MAP_ARGS="+set developer 1 +set rconpassword pw +set probe_mode base" tools/run_probe.sh client-probes/probe_usage_ents mp_brecourt
+# (the reply verbatim below this header). The entity line under each probe_mode, and under probe_usage_keys, is in the handshake doc.
+********************************
+count: 1, var usage: 5, endon usage: 0
+(file 'maps\mp\gametypes\probe_usage_ents.gsc', line 107)
+ wait 1000;
+ *
+called from:
+(file 'maps\mp\gametypes\probe_usage_ents.gsc', line 102)
+ self [[ptr]]();
+        *
+called from:
+(file 'maps\mp\gametypes\probe_usage_ents.gsc', line 96)
+ maps\mp\gametypes\probe_usage_ents::pathed();
+ *
+count: 32, var usage: 64, endon usage: 0
+(file 'maps\mp\_minefields.gsc', line 19)
+  self waittill ("trigger",other);
+       *
+********************************
+ent type 'entity'... count: 62, var usage: 283
+ent type 'hudelem'... count: 0, var usage: 0
+********************************
