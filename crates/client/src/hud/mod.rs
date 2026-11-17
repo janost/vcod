@@ -425,7 +425,7 @@ impl Hud {
             return None;
         }
         let (gun_ps, gun_ms) = gun_clock(p, ps, predicted, server_time, self.bob);
-        let kick = self.player.damage.kick();
+        let kick = self.player.damage.kick_on(gun_ms - server_time);
         let gun = &mut self.player.gun;
         gun.gun_kick = gun_kick;
         let def = weapons
@@ -801,18 +801,19 @@ impl Hud {
     /// adds a hit icon. Runs every frame ahead of the view, mounted, dead
     /// or HUD hidden alike; the kick splits along last frame's
     /// [`Self::drawn_view`] (the refdef's axis), the playerstate's view
-    /// before the first. `predicted` is the replay when it is ours.
+    /// before the first. `server_time` is the render clock (`cg.time`),
+    /// `snap_time` `cg.snap`'s `serverTime`, which stamps the kick
+    /// (`0x30028a58`).
     pub fn feed_damage(
         &mut self,
         p: &Protocol,
         ps: &PlayerState,
-        predicted: Option<&Predicted>,
         server_time: i32,
+        snap_time: i32,
     ) {
         let view = self.drawn_view.unwrap_or_else(|| ps.viewangles(p));
-        let kick_ms = predicted.map_or(server_time, |pred| pred.command_time);
         let fb = DamageFeedback::from_ps(p, ps);
-        let _ = self.player.damage.feed(fb, view, server_time, kick_ms);
+        let _ = self.player.damage.feed(fb, view, server_time, snap_time);
     }
 
     /// The damage kick and the sight's walk bob on the drawn view, wire
@@ -832,7 +833,7 @@ impl Hud {
             return [0.0; 3];
         }
         let (gun_ps, gun_ms) = gun_clock(p, ps, predicted, server_time, self.bob);
-        let kick = self.player.damage.kick();
+        let kick = self.player.damage.kick_on(gun_ms - server_time);
         let def = weapons
             .get(usize::from(gun_ps.weapon))
             .and_then(Option::as_ref);
@@ -1554,17 +1555,20 @@ mod tests {
             set("damageCount", 100);
             ps
         };
-        hud.feed_damage(p, &ps(1), None, 1_000);
+        hud.feed_damage(p, &ps(1), 1_000, 1_000);
         assert_eq!(hud.player.damage.kick(), Default::default(), "baseline");
         hud.player.hidden();
-        hud.feed_damage(p, &ps(2), None, 1_050);
-        assert_eq!(hud.player.damage.kick().time_ms, 1_050);
+        // Stamped with `cg.snap`'s time, not the render clock's.
+        hud.feed_damage(p, &ps(2), 1_050, 1_000);
+        assert_eq!(hud.player.damage.kick().time_ms, 1_000);
+        // A gun clock 8 ms past the render clock reads the kick 8 ms later.
+        assert_eq!(hud.player.damage.kick_on(8).time_ms, 1_008);
         assert!((hud.player.damage.kick().pitch - 20.0).abs() < 1e-4);
         assert!(hud.player.damage.flash_alpha(1_100).is_some());
 
         // The drawn view looks down +y: the same hit comes from the side.
         hud.drawn_view = Some([0.0, 90.0, 0.0]);
-        hud.feed_damage(p, &ps(3), None, 2_000);
+        hud.feed_damage(p, &ps(3), 2_000, 2_000);
         let k = hud.player.damage.kick();
         assert!(
             k.pitch.abs() < 1e-4 && (k.side.abs() - 20.0).abs() < 1e-4,

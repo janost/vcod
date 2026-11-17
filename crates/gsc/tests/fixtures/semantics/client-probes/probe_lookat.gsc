@@ -8,7 +8,36 @@ main()
 	thread watch_lookats();
 	thread watch_teleports();
 	thread watch_bomb_defenders();
+	thread watch_far();
 	maps\mp\gametypes\sd::main();
+}
+
+//	With `probe_far 1` every spectator is held, once per level, at a spot on
+//	mp_carentan whose cluster neither sees nor is seen from the zone, the
+//	charge or either teleport spot, so its snapshots show what of the plant
+//	and the defuse reaches a client that cannot see them.
+watch_far()
+{
+	if (getcvar("probe_far") != "1")
+		return;
+	if (getcvar("mapname") != "mp_carentan")
+		return;
+	level.probe_far = [];
+	for (;;)
+	{
+		players = getentarray("player", "classname");
+		for (i = 0; i < players.size; i++)
+		{
+			num = players[i] getEntityNumber();
+			if (players[i].sessionstate == "spectator" && !isdefined(level.probe_far[num]))
+			{
+				players[i] spawn((2000, 1200, 0), (0, 90, 0));
+				level.probe_far[num] = 1;
+				logPrint("PROBE far " + num + " " + getTime() + " " + players[i].origin + "\n");
+			}
+		}
+		wait 1;
+	}
 }
 
 watch_lookats()

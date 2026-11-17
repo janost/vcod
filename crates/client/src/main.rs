@@ -7042,16 +7042,24 @@ impl ApplicationHandler for App {
                                     }
                                     // `CG_TransitionPlayerState` feeds a hit ahead of
                                     // the snapshot's events and the view, mounted
-                                    // or not (hud doc "Damage direction").
-                                    if let (Some(hud), Some(s)) =
+                                    // or not (hud doc "Damage direction"): off the
+                                    // prediction's newest playerstate, or a followed
+                                    // player's at `cg.snap`'s transition, stamped
+                                    // with `cg.snap`'s time either way.
+                                    if let (Some(hud), Some(newest)) =
                                         (&mut self.hud, net.snapshots().newest())
                                     {
-                                        let own = pmove::predict::on_foot(pm_type);
+                                        let own =
+                                            pmove::predict::on_foot(pm_type) && predicted.is_some();
+                                        let cg_snap = render_time
+                                            .and_then(|t| net.snapshots().two_for_time(t))
+                                            .map_or(newest, |(a, _)| a);
+                                        let fed = if own { newest } else { cg_snap };
                                         hud.feed_damage(
                                             p,
-                                            &s.ps,
-                                            predicted.as_ref().filter(|_| own).map(|v| &v.pred),
+                                            &fed.ps,
                                             render_time.unwrap_or(0),
+                                            cg_snap.server_time,
                                         );
                                     }
                                     // Retail runs a snapshot's events in

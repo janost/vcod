@@ -947,6 +947,26 @@ plant's first frame until the round's `map_restart`, alive or not.
 vcod-server gives the same list on the same frames
 (`a_sounded_player_rides_every_snapshot_until_the_restart`).
 
+VERIFIED live, end to end (2026-11-17): stock `sd.gsc` under
+`client-probes/probe_lookat` on 1.1d with `+set probe_teleport 1 +set
+probe_far 1`, the `--probe-defuse` and `--probe-plant` pair and a third
+client, a spectator the probe holds at (2000, 1200, 0), a cluster that
+neither sees nor is seen from bombzone_A, the charge or either teleport
+spot (vcod's `in_pvs` both ways). Its snapshots
+(`crates/common/tests/fixtures/net/*-sd-far.bin`, `--probe-team spectator
+--save-snapshots --capture-tag sd-far`) carry neither player until the
+planter's first `MP_bomb_plant` (the aborted hold, 30.35 s), then the
+planter (entity 1, `eType` 1) on every snapshot, also after the probe sends
+him back to the attackers' spawn; the bomb model (179, `eType` 8) from the
+plant's `playSound("Explo_plant_no_tick")` (38.4 s); the defender (0) from
+his `MP_bomb_defuse` (61.15 s); all three to the round's `map_restart`
+(76.55 s), and none after it. The same run against vcod-server (port
+28984, `--gametype-script` the same probe) gave the same entries on the
+same steps of the run, 8.05 s from the first plant sound to the bomb and
+10 s from the defuse sound to the defuse on both. Not compared: the
+players' `eventSequence` (ours 2 past retail's at the plant), which rides
+each run's own walk.
+
 1.5 and United Offensive differ. Their `playSound` writes
 `r.broadcastTime` = level time + 300 and leaves `svFlags` alone,
 `playLoopSound` writes -1 (for as long as it loops) and `stopLoopSound`

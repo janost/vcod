@@ -1,4 +1,4 @@
-# client-probes/probe_noclass on the retail United Offensive 1.51b dedicated server, mp_carentan, 2026-10-16.
+# client-probes/probe_noclass on the retail United Offensive 1.51b dedicated server, mp_carentan, 2026-11-17 (recaptured with the head icon team writes, the last of which is a script error that ends the run).
 # Server: COD_VERSION=uo tools/run_probe.sh client-probes/probe_noclass mp_carentan
 # Client, once it is up: vcod --game-dir <UO install> --mod-dir uo --net-probe <server> --probe-secs 8
 # PROBE lines: games_mp.log. SNAP lines: the probe client's per-second
@@ -66,10 +66,13 @@ PROBE spawned isplayer 1
 PROBE spawned num 0
 PROBE spawned byplayer 1
 PROBE spawned bynoclass 0
-SNAP 1 t=11200 ps.origin=[0,0,0]
-SNAP 2 t=12200 ps.origin=[0,0,0]
-SNAP 3 t=13200 ps.origin=[0,0,0]
-SNAP 4 t=14250 ps.origin=[992,-744,-9]
-SNAP 5 t=15250 ps.origin=[992,-744,-9]
-SNAP 6 t=16250 ps.origin=[1009,-744,-9]
-SNAP 7 t=17250 ps.origin=[1009,-744,-9]
+PROBE team 'none' none
+PROBE team 'allies' allies
+PROBE team 'axis' axis
+SNAP 1 t=7950 ps.origin=[0,0,0]
+SNAP 2 t=8950 ps.origin=[0,0,0]
+SNAP 3 t=9950 ps.origin=[0,0,0]
+SNAP 4 t=10000 ps.origin=[0,0,0]
+SNAP 5 t=10000 ps.origin=[0,0,0]
+SNAP 6 t=10000 ps.origin=[0,0,0]
+SNAP 7 t=10000 ps.origin=[0,0,0]

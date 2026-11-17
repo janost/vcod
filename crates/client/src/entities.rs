@@ -1761,11 +1761,13 @@ pub fn build_instances(
     let ps_int = |name: &str| b.snap.ps.field_i32(p, name);
     let uo = p.is_uo();
     let rules = MoveRules::for_protocol(p);
+    // 1.5's turret controller (0x3001c2b0) tests `eFlags` and
+    // `viewlocked_entNum` but not `viewlocked`, as UO's does.
     let ridden = turret::ridden(
         ps_int("eFlags"),
         ps_int("viewlocked"),
         ps_int("viewlocked_entNum"),
-        uo,
+        !p.is_v1(),
     );
     let from = LerpFrom {
         snap: a,

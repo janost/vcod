@@ -41,9 +41,13 @@ pub fn gun_anim(ridden: bool, eflags: i32, anim_movetype: i32) -> GunAnim {
 
 /// The turret a playerstate rides, by the fields 0x30033220 tests. UO's
 /// cgame never reads `viewlocked` (0x30041550, 0x3001e9f0, the reticle's
-/// 0x30019ba0 caller), which its server leaves 0 on a gunner.
-pub fn ridden(eflags: i32, viewlocked: i32, viewlocked_ent: i32, uo: bool) -> Option<u32> {
-    if eflags & EF_MOUNTED == 0 || (viewlocked == 0 && !uo) || viewlocked_ent == ENTITYNUM_NONE {
+/// 0x30019ba0 caller), which its server leaves 0 on a gunner, and 1.5's
+/// gun controller (0x3001c2b0) does not either: `any_lock` skips the test.
+pub fn ridden(eflags: i32, viewlocked: i32, viewlocked_ent: i32, any_lock: bool) -> Option<u32> {
+    if eflags & EF_MOUNTED == 0
+        || (viewlocked == 0 && !any_lock)
+        || viewlocked_ent == ENTITYNUM_NONE
+    {
         return None;
     }
     u32::try_from(viewlocked_ent).ok()
