@@ -581,9 +581,6 @@ pub struct ReView {
     pub objectives: Vec<ReObjView>,
     /// As [`SdView::rank`]: defenders spread over the objectives by it.
     pub rank: usize,
-    /// With one carried, this defender holds its goal: the one nearest
-    /// that goal ([`Bot::retrieval_target`]); the rest go after the carrier.
-    pub holds_goal: bool,
     /// One of the attackers nearest the teammate carrying an objective
     /// ([`team::escorts`]): it keeps by him, and the rest hold his goal.
     pub escort: bool,
@@ -2288,7 +2285,7 @@ impl Bot {
     /// Attackers: deliver what they carry, else go for the nearest objective
     /// lying there, else escort a teammate carrying one, else stand by the
     /// goal it goes to. Defenders: each guards an objective lying there by
-    /// rank. Once one is carried the one nearest its goal holds it and the
+    /// rank. Once one is carried the first by rank holds its goal and the
     /// rest go after the carrier: at him while the compass shows him, else
     /// back along his likely way once, then to the goal.
     fn retrieval_target(&self, view: &BotView, re: &ReView) -> Option<ObjTarget> {
@@ -2337,7 +2334,7 @@ impl Bot {
             }
             ObjRole::Defend => {
                 if let Some(g) = Self::goal_guard(view, o) {
-                    if re.holds_goal {
+                    if re.rank == 0 {
                         return Some(g);
                     }
                     if let Some(at) = Self::carrier(view, o) {
@@ -6202,7 +6199,6 @@ mod tests {
         v.re = Some(ReView {
             role,
             rank: 0,
-            holds_goal: true,
             escort: true,
             objectives: vec![ReObjView {
                 pickup: Some([30.0, 0.0, 72.0]),
@@ -6308,7 +6304,7 @@ mod tests {
         }
     }
 
-    /// A defender not holding the goal goes after a carried objective:
+    /// Past the first by rank, a defender goes after a carried objective:
     /// back to where it was taken while the compass hides the carrier,
     /// then to the goal; straight at him once the compass shows him.
     #[test]
@@ -6317,7 +6313,7 @@ mod tests {
         let mut v = re_view(ObjRole::Defend);
         v.origin = [2500.0, 0.0, 64.0];
         let re = v.re.as_mut().unwrap();
-        re.holds_goal = false;
+        re.rank = 1;
         let o = &mut re.objectives[0];
         (o.pickup, o.carried) = (None, true);
         assert_eq!(bot.goal(&v), Goal::To([30.0, 0.0, 64.0]));

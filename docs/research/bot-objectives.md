@@ -275,12 +275,13 @@ teammate was not told it carried and stood outside the goal.
 - Attacker with a teammate carrying: escorts him, holding within 250
   units and closing again when he moves on. Its compass always shows him.
 - Attacker with nothing to pick up and no carrier on its compass, and the
-  defender nearest its goal with one carried (`ReView::holds_goal`, dealt
-  per carried objective over the playing defenders; the first by rank
-  with team play off): a ring round its goal from just clear of the
-  trigger to 150 units past. Until 2026-11-17 the holder was the first
-  by rank wherever it stood, and the defender standing by the goal went
-  back down the carrier's way.
+  first defender by rank with one carried: a ring round its goal from just
+  clear of the trigger to 150 units past. The defender nearest the goal as
+  the holder was tried 2026-11-17 and not kept (below).
+- An escort within 80 units of the carrier it keeps by walks away from
+  him instead of holding (`ESCORT_CLEAR`, `Goal::Away`;
+  `bots::tests::an_escort_steps_off_a_carrier_it_stands_on`), so it does
+  not stand on his next node (below).
 - Other defenders with one carried: at the carrier while the compass shows
   him (`scr_re_showcarrier` set). Under the default they walk to where the
   objective last lay, once per carry: the carrier set out from there for
@@ -328,7 +329,8 @@ later; the two leaps before it that walked off the step are gone.
 With 6 shooting bots, `mp_carentan` delivered and `mp_harbor` picked up
 twice in 150 s and delivered neither.
 
-The goal holder by distance and the clock, against master b8105567d.
+The goal holder by distance (tried, not kept) and the clock, against
+master b8105567d.
 VERIFIED (measured, ours, release, 1.1, `bot_match GAMETYPE=re BOTS=10
 TICKS=6000`, mp_brecourt, mp_carentan, mp_chateau, mp_dawnville, mp_pavlov
 and mp_rocket, seeds 1 to 8, 48 matches): attackers' rounds 134 of 218
@@ -358,6 +360,7 @@ count for count):
 | holder and clock | 122 | 100 | 104 | 167 | 351 | 1691 | 1592 |
 | escort step-off alone | 134 | 80 | 131 | 124 | 334 | 1628 | 72 |
 | holder, clock and step-off | 137 | 79 | 121 | 142 | 347 | 1657 | 140 |
+| clock and step-off (shipped) | 134 | 80 | 131 | 124 | 334 | 1628 | 72 |
 
 - mp_carentan seed 2 with the step-off: the round the carrier was held
   in ends at tick 4331, 0 stalled.
@@ -367,6 +370,14 @@ count for count):
   step-off alone stalls 39 (seed 5), the holder alone 11 (seed 6) and the
   flank parts of 9.1 479; master's eight seeds never stall there. Not
   traced (bot-navigation.md, "Open stalls, 2026-11-17").
+- Shipped: the step-off and the clock, without the holder by distance.
+  The holder adds 68 stalled bot-ticks over the step-off alone (140
+  against 72) for no clear gain (rounds 137-79 against 134-80, captures
+  121 against 131, carrier deaths 142 against 124): it was reverted.
+  The shipped row plays the step-off alone's matches bit for bit (the
+  clock fired on none of the 48); its stalled are mp_rocket seed 5 (39,
+  the room above), mp_brecourt seeds 7 (17) and 3 (2), mp_carentan seed 5
+  (7) and mp_pavlov seed 7 (7).
 
 VERIFIED (measured, ours, 2026-10-08, release, 6 shooting bots, seeds 3
 to 6, 200 s per run, the carrier read off the compass record and the

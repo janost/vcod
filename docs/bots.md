@@ -373,8 +373,8 @@ switches and every number it prints. Results go in that doc and
 - Gametypes: every stock one, `dm`, `tdm`, `sd`, `re` and `bel`, and UO's
   `ctf`, `dom`, `hq` and `bas`.
 - Objectives: S&D plants and defuses; in Retrieval the team escorts the
-  carrier and holds the goal ahead of him, the defender nearest the goal
-  holds it while the rest go after the carrier, and a dropped objective
+  carrier and holds the goal ahead of him, an escort steps off a carrier
+  it stands on, and a dropped objective
   its clock sends home before a bot could run to it is awaited where it
   comes back; UO's flags, radio and base
   breaches as in [research/bot-objectives.md](research/bot-objectives.md)
