@@ -602,8 +602,8 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   entry visible (trap `0x52` with -1, 1 at `0x4000b8f5`). VERIFIED. So the
   last run's Internet list shows with its saved pings, unpinged, until a
   refresh. INFERRED. `RefreshFilter` (Quick Refresh) runs `0x4000ea90(0)`
-  (`0x4000aa7c`): `LAN_ResetPings` (trap `0x54`, ping -1 on all 2048),
-  then pings the cached list. VERIFIED (the push), INFERRED (the flow).
+  (the push at `0x4000aa7c`). VERIFIED. That runs `LAN_ResetPings` (trap
+  `0x54`, ping -1 on all 2048), then pings the cached list. INFERRED.
 - An entry is `0xb8` bytes. `LAN_GetServerInfo` (`0x417a10`) reads it into
   an info string with keys `hostname`, `mapname`, `clients`,
   `sv_maxclients`, `ping`, `minping`, `maxping`, `game`, `gametype`,
@@ -1629,8 +1629,8 @@ file).
   `0x400096b4`) to `UI_DrawGLInfo` (`0x400091c0`) over the rect moved by
   the text offsets (`0x400094a0`). VERIFIED. It draws through the text
   syscall `0x45` (wrapper `0x400190c0`) with the owner draw's font, scale,
-  colour and style, adjust 0. VERIFIED (that those are the item's
-  `textfont`, `textscale` and `forecolor` is INFERRED). The strings come
+  colour and style, adjust 0. VERIFIED. That those are the item's
+  `textfont`, `textscale` and `forecolor` is INFERRED. The strings come
   off the glconfig at `0x401e2010` (`trap_GetGlconfig`, syscall `0x34`,
   called once at `0x4000d331`): renderer `+0`, vendor `+4`, version `+8`,
   extensions `+0xc`, colour, depth and stencil bits `+0x20`, `+0x24`,
