@@ -101,9 +101,12 @@ pub struct AliasRow {
     pub secondary: Option<String>,
     /// CoD2's `startdelay`, ms.
     pub start_delay_ms: u32,
-    /// The csv a CoD2 row came from, which settles a duplicate sequence;
-    /// empty for CoD 1.
+    /// The csv a row came from, as the file list names it, which settles a
+    /// duplicate sequence; empty for CoD4.
     pub csv: String,
+    /// CoD 1: the row's place in load order, csvs in `FS_GetFileList`'s
+    /// order and rows in file order ([`AliasTable::for_map`]).
+    pub order: u32,
     /// CoD2's `subtitle`: a `subtitle.str` key the cgame prints when the
     /// row starts (docs/research/cod2-sound.md 7.11).
     pub subtitle: Option<String>,
@@ -127,6 +130,9 @@ pub struct AliasTable {
     /// CoD2's table: `for_map` applies CoD2's loadspec rule and drops
     /// duplicate sequences ([`crate::audio::cod2`]).
     pub(crate) cod2: bool,
+    /// CoD 1's table (`parse_csv`): `for_map` sorts as the 1.1, 1.5 and UO
+    /// loaders do ([`sort_cod1`]).
+    pub(crate) cod1: bool,
     /// What CoD2's loader would print as `^1ERROR` lines, one per message.
     pub errors: Vec<String>,
 }
@@ -204,22 +210,61 @@ pub(super) fn split_csv(line: &str) -> Vec<String> {
     out
 }
 
-/// (`sequence`, `file` case-insensitive), the engine's merge-sort order
-/// (research doc, section 1e); `pick`'s no-repeat index refers to it.
+/// By `sequence`, load order on a tie: the unfiltered table's order.
+/// [`AliasTable::for_map`] sorts what a level loads as the engine does.
 fn sort_group(rows: &mut [AliasRow]) {
-    rows.sort_by(|a, b| {
-        a.sequence.cmp(&b.sequence).then_with(|| {
-            a.file
-                .to_ascii_lowercase()
-                .cmp(&b.file.to_ascii_lowercase())
-        })
-    });
+    rows.sort_by_key(|r| (r.sequence, r.order));
+}
+
+/// `Q_stricmpn` with no limit: ASCII case folded, the sign only.
+fn stricmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let fold = |s: &str| s.bytes().map(|c| c.to_ascii_lowercase()).collect::<Vec<u8>>();
+    fold(a).cmp(&fold(b))
+}
+
+/// The CoD 1 loaders' merge sort (1.1 CoDMP.exe 0x433750, 1.5 0x435970, UO
+/// CoDUOMP.exe 0x4375d0) over the rows a level loads, in the engine's list
+/// order (each row pushed on the front, so the last row loaded leads). Rows
+/// sort by name, then `sequence`; two of one name and sequence from two
+/// csvs drop the one whose csv name sorts first, from one csv keep both,
+/// the right half's first (research doc, section 1e).
+fn sort_cod1(mut rows: Vec<AliasRow>) -> Vec<AliasRow> {
+    use std::cmp::Ordering::*;
+    if rows.len() <= 1 {
+        return rows;
+    }
+    let right = sort_cod1(rows.split_off(rows.len() / 2));
+    let left = sort_cod1(rows);
+    let mut out = Vec::with_capacity(left.len() + right.len());
+    let (mut l, mut r) = (left.into_iter().peekable(), right.into_iter().peekable());
+    while let (Some(a), Some(b)) = (l.peek(), r.peek()) {
+        let by_key = stricmp(&a.name, &b.name)
+            .then((a.sequence as i32).wrapping_sub(b.sequence as i32).cmp(&0));
+        match (by_key, stricmp(&a.csv, &b.csv)) {
+            (Less, _) => out.extend(l.next()),
+            (Greater, _) => out.extend(r.next()),
+            (Equal, Less) => drop(l.next()),
+            (Equal, Greater) => drop(r.next()),
+            (Equal, Equal) => {
+                log::debug!("sound alias file {}: duplicate alias '{}'", a.csv, a.name);
+                out.extend(r.next());
+            }
+        }
+    }
+    out.extend(l);
+    out.extend(r);
+    out
 }
 
 impl AliasTable {
-    /// `source` labels warnings.
+    /// `source` labels warnings and names the rows' csv.
     pub fn parse_csv(text: &str, source: &str) -> AliasTable {
-        let mut table = AliasTable::default();
+        let mut table = AliasTable {
+            cod1: true,
+            ..AliasTable::default()
+        };
+        let csv = source.rsplit('/').next().unwrap_or(source);
+        let mut order = 0;
         let mut cols: Option<HashMap<String, usize>> = None;
         let mut warned_channel = false;
         for raw in text.lines() {
@@ -321,10 +366,12 @@ impl AliasTable {
                 curve: None,
                 secondary: None,
                 start_delay_ms: 0,
-                csv: String::new(),
+                csv: csv.to_string(),
+                order,
                 subtitle: None,
                 no_wet: false,
             };
+            order += 1;
             table.rows.entry(name).or_default().push(row);
         }
         for rows in table.rows.values_mut() {
@@ -333,22 +380,30 @@ impl AliasTable {
         table
     }
 
+    /// Appends `other`'s rows after this table's in load order.
     pub fn merge(&mut self, other: AliasTable) {
+        let base = self.rows.values().map(Vec::len).sum::<usize>() as u32;
+        self.cod1 |= other.cod1;
         for (name, rows) in other.rows {
             let entry = self.rows.entry(name).or_default();
-            entry.extend(rows);
+            entry.extend(rows.into_iter().map(|r| AliasRow {
+                order: base + r.order,
+                ..r
+            }));
             sort_group(entry);
         }
         self.skipped += other.skipped;
         self.errors.extend(other.errors);
     }
 
-    /// Every `soundaliases/*.csv`. The listing dedups paths with the later
-    /// pak winning; a duplicate name across files adds rows to the group
-    /// (research doc, section 1a).
+    /// Every `soundaliases/*.csv` in `FS_GetFileList`'s order, a name in
+    /// two paks read from the later one (research doc, section 1a).
     pub fn load(fs: &(impl AssetSource + ?Sized)) -> AliasTable {
-        let mut table = AliasTable::default();
-        for path in fs.list("soundaliases", ".csv") {
+        let mut table = AliasTable {
+            cod1: true,
+            ..AliasTable::default()
+        };
+        for path in fs.file_list("soundaliases", ".csv") {
             match fs.read(&path) {
                 Some(bytes) => {
                     let t = AliasTable::parse_csv(&String::from_utf8_lossy(&bytes), &path);
@@ -392,6 +447,20 @@ impl AliasTable {
             skipped: self.skipped,
             ..AliasTable::default()
         };
+        if self.cod1 {
+            let mut loaded: Vec<AliasRow> = self
+                .rows
+                .values()
+                .flatten()
+                .filter(|r| loadspec_admits(&r.loadspec, &map))
+                .cloned()
+                .collect();
+            loaded.sort_by_key(|r| std::cmp::Reverse(r.order));
+            for r in sort_cod1(loaded) {
+                out.rows.entry(r.name.clone()).or_default().push(r);
+            }
+            return out;
+        }
         for (name, rows) in &self.rows {
             let kept: Vec<AliasRow> = rows
                 .iter()
@@ -676,6 +745,30 @@ mod tests {
         let rows = a.get("n").unwrap();
         assert_eq!(rows[0].sequence, 1);
         assert_eq!(rows[1].sequence, 2);
+    }
+
+    /// 1.1's merge sort (CoDMP.exe 0x433750): a name and sequence in two
+    /// csvs keeps the later-sorting csv's rows only, case folded; rows tied
+    /// within one csv stay in file order.
+    #[test]
+    fn a_level_keeps_one_csvs_rows_for_a_name_and_sequence() {
+        let mut t = AliasTable::parse_csv(
+            &format!("{HEADER}\nfire,,a1.wav,,,,,,,,,,,,,\nfire,1,a3.wav,,,,,,,,,,,,,\n"),
+            "soundaliases/Zed.csv",
+        );
+        t.merge(AliasTable::parse_csv(
+            &format!("{HEADER}\nfire,,b1.wav,,,,,,,,,,,,,\nfire,,b2.wav,,,,,,,,,,,,,\nfire,,b3.wav,,,,,,,,,,,,,\n"),
+            "soundaliases/zoo.csv",
+        ));
+        t.merge(AliasTable::parse_csv(
+            &format!("{HEADER}\nfire,,c1.wav,,,,,,,,,,,,,\nfire,1,c3.wav,,,,,,,,,,,,,\n"),
+            "soundaliases/a_mod.csv",
+        ));
+        let files: Vec<_> = t.for_map("mp_carentan").get("fire").unwrap()
+            .iter()
+            .map(|r| r.file.clone())
+            .collect();
+        assert_eq!(files, ["b1.wav", "b2.wav", "b3.wav", "a3.wav"]);
     }
 
     #[test]

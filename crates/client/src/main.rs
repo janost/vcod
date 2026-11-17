@@ -2077,6 +2077,8 @@ fn main() -> Result<()> {
         shell,
         config_path,
         grab_before_console: false,
+        keys_down: Vec::new(),
+        key_releases: Vec::new(),
         mode,
         viewmodel,
         input: InputState::default(),
@@ -3163,6 +3165,12 @@ struct App {
     /// Whether the mouse was captured when the console opened; closing it
     /// captures it again.
     grab_before_console: bool,
+    /// Bound keys whose press reached the binds and that are still down:
+    /// what `Key_ClearStates` lets go ([`Self::clear_held_keys`]).
+    keys_down: Vec<String>,
+    /// The release commands a [`Self::clear_held_keys`] ran, applied at
+    /// the next `about_to_wait`.
+    key_releases: Vec<console::shell::Effect>,
     mode: Mode,
     viewmodel: Arc<[model::Model]>,
     /// Fly-mode keys; walk keeps its own in `Mode::Walk`.
@@ -3451,6 +3459,15 @@ impl App {
             hud.scoreboard.hide();
         }
         self.session.hide_scoreboard();
+        // `Key_ClearStates` (CoDMP.exe 0x40e260): each held key's release
+        // goes through `CL_KeyEvent` in key number order, so a `+` bind's
+        // `-` half runs.
+        let mut down = std::mem::take(&mut self.keys_down);
+        down.sort_by_key(|k| console::keys::number(k));
+        for key in down {
+            let effects = self.shell.key_event(&key, false);
+            self.key_releases.extend(effects);
+        }
     }
 
     /// The chat field's keys while it is open, online only. Enter sends
@@ -3764,6 +3781,10 @@ impl App {
                 }
                 _ => {}
             }
+        }
+        self.keys_down.retain(|k| k != key);
+        if pressed {
+            self.keys_down.push(key.to_string());
         }
         let effects = self.shell.key_event(key, pressed);
         self.apply(event_loop, effects);
@@ -5295,6 +5316,8 @@ impl ApplicationHandler for App {
         }
         let pending = std::mem::take(&mut self.ui_pending);
         self.ui_effects(event_loop, pending);
+        let releases = std::mem::take(&mut self.key_releases);
+        self.apply(event_loop, releases);
         self.sync_menu_mouse();
         self.sync_capture();
     }

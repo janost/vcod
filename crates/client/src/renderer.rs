@@ -3900,6 +3900,20 @@ impl Renderer {
             caps.formats
         );
         surface.configure(&device, &config);
+        let _ = crate::frontend::GPU_INFO.set(crate::frontend::GpuInfo {
+            vendor: info.driver.clone(),
+            version: info.driver_info.clone(),
+            renderer: info.name.clone(),
+            color_bits: config.format.block_copy_size(None).unwrap_or(4) * 8,
+            depth_bits: DEPTH_FORMAT.block_copy_size(None).unwrap_or(4) * 8,
+            stencil_bits: 0,
+            extensions: adapter
+                .features()
+                .iter_names()
+                .map(|(n, _)| n)
+                .collect::<Vec<_>>()
+                .join(" "),
+        });
         Ok(Self::build(
             device,
             queue,

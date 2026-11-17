@@ -19,15 +19,15 @@ use vcod_common::net::master::{
 use vcod_common::net::server_cache::{self, Entry, MAX_FAVORITES};
 use vcod_common::net::wire::Transport;
 
-/// Pings in flight at once, and how long one waits for its reply. vcod's
-/// numbers, not measured.
-const MAX_IN_FLIGHT: usize = 32;
-const PING_TIMEOUT: Duration = Duration::from_millis(1500);
-/// How long the master gets before the refresh gives up on it.
+/// `MAX_PINGREQUESTS`: the ping slots (CoDMP.exe 0x15ca660, 16 of
+/// `0x41c` bytes).
+const MAX_IN_FLIGHT: usize = 16;
+/// `cl_maxPing`'s default and floor (CoDMP.exe 0x41228d, 0x413a7d), ms.
+pub const MAX_PING_DEFAULT: u32 = 800;
+const MAX_PING_FLOOR: u32 = 100;
+/// How long the master gets before a refresh gives up on it. vcod's own:
+/// retail waits for as long as the refresh runs.
 const MASTER_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long a Local refresh listens for broadcast answers: the UI's refresh
-/// time for source 0 (ui_mp_x86.dll 0x4000eb5b).
-const LAN_WINDOW: Duration = Duration::from_millis(1000);
 /// `MAX_OTHER_SERVERS`, the Local list's cap.
 const MAX_LOCAL: usize = 0x80;
 
@@ -196,6 +196,8 @@ pub struct Browser {
     /// When each source's last refresh started, local time
     /// (`ui_lastServerRefresh_<source>`).
     pub last_refresh: [Option<jiff::civil::DateTime>; 3],
+    /// `cl_maxPing`, ms: how long a ping waits for its reply.
+    pub max_ping: u32,
 }
 
 impl Default for Browser {
@@ -222,6 +224,7 @@ impl Default for Browser {
             cache: None,
             foreign: Vec::new(),
             last_refresh: [None; 3],
+            max_ping: MAX_PING_DEFAULT,
         }
     }
 }
@@ -458,24 +461,30 @@ impl Browser {
                         self.list_mut().retain(|s| s.addr != from4);
                         continue;
                     }
-                    let started = self.started;
                     let local = self.source == Source::Local;
                     let list = self.list_mut();
-                    // A broadcast's answers are new servers, timed from the
-                    // broadcast (`CL_ServerInfoPacket` adds them to the
-                    // Local list).
-                    if local && !list.iter().any(|s| s.addr == from4) && list.len() < MAX_LOCAL {
-                        let mut s = Server::new(from4);
-                        s.sent = started;
-                        list.push(s);
+                    // An answer no ping waits on is a broadcast's: on Local,
+                    // `CL_ServerInfoPacket` adds its address unanswered, to
+                    // be pinged as any other (CoDMP.exe, front-end doc 7).
+                    let pinged = list
+                        .iter()
+                        .any(|s| s.addr == from4 && s.sent.is_some() && s.info.is_none());
+                    if local && !pinged {
+                        if !list.iter().any(|s| s.addr == from4) && list.len() < MAX_LOCAL {
+                            list.push(Server::new(from4));
+                        }
+                        continue;
                     }
+                    // The round trip plus one, as `CL_ServerInfoPacket`
+                    // stores it (0x412d4a).
                     if let Some(s) = list.iter_mut().find(|s| s.addr == from4)
                         && let Some(sent) = s.sent
                         && s.info.is_none()
+                        && !s.timed_out
                     {
                         s.name.clone_from(&info.hostname);
                         s.info = Some(info);
-                        s.ping = Some((now - sent).as_millis().max(1) as u32);
+                        s.ping = Some((now - sent).as_millis() as u32 + 1);
                     }
                 }
                 _ => {}
@@ -492,31 +501,34 @@ impl Browser {
         if self.status != Status::Pinging {
             return;
         }
+        // `CL_UpdateVisiblePings` (0x413de0), once a frame: unpinged
+        // servers into the free slots, then each slot's reply or timeout
+        // (`CL_GetPing`: past `cl_maxPing` the server keeps ping 0 and
+        // stays hidden, 0x413a8d). It ends the refresh once a call finds
+        // nothing to do; Local waits while its list is empty
+        // (`UI_DoServerRefresh` 0x4000ea00).
         let socket = self.socket.take().unwrap();
-        let mut in_flight = 0;
-        for s in self.list_mut().iter_mut() {
-            if let Some(sent) = s.sent
-                && s.info.is_none()
-                && !s.timed_out
-            {
-                if now - sent > PING_TIMEOUT {
-                    s.timed_out = true;
-                } else {
-                    in_flight += 1;
-                }
-            }
-        }
+        let waiting = |s: &Server| s.sent.is_some() && s.info.is_none() && !s.timed_out;
+        let mut busy = self.list().iter().filter(|s| waiting(s)).count();
+        let mut acted = busy > 0;
         for s in self.list_mut().iter_mut().filter(|s| s.sent.is_none()) {
-            if in_flight >= MAX_IN_FLIGHT {
+            if busy >= MAX_IN_FLIGHT {
                 break;
             }
             let _ = socket.send_to(&build_oob(GETINFO), s.addr);
             s.sent = Some(now);
-            in_flight += 1;
+            busy += 1;
+            acted = true;
+        }
+        let max_ping = Duration::from_millis(self.max_ping.max(MAX_PING_FLOOR).into());
+        for s in self.list_mut().iter_mut().filter(|s| waiting(s)) {
+            if now - s.sent.unwrap() >= max_ping {
+                s.timed_out = true;
+            }
         }
         self.socket = Some(socket);
-        let listening = self.source == Source::Local && since < LAN_WINDOW;
-        if in_flight == 0 && !listening {
+        let wait = self.source == Source::Local && self.list().is_empty();
+        if !acted && !wait {
             self.finish();
         }
     }
@@ -545,8 +557,13 @@ impl Browser {
                     Column::Players => ib.clients.cmp(&ia.clients),
                     Column::GameType => strip(&ia.gametype).cmp(&strip(&ib.gametype)),
                     Column::Ping => a.ping.cmp(&b.ping),
-                    // 1.5's `LAN_CompareServers` (CoDMP.exe 0x419c00) keys 1, 6, 7.
-                    Column::Hardware | Column::Hardware2 => ia.hardware.cmp(&ib.hardware),
+                    // 1.5's `LAN_CompareServers` (CoDMP.exe 0x419c00) keys 1, 6, 7;
+                    // an unknown `hw` (0) after every known one (0x419c4d).
+                    Column::Hardware => {
+                        let (ha, hb) = (ia.hardware as u8, ib.hardware as u8);
+                        (ha == 0).cmp(&(hb == 0)).then(ha.cmp(&hb))
+                    }
+                    Column::Hardware2 => ia.hardware.cmp(&ib.hardware),
                     Column::PunkBuster | Column::PunkBusterText => {
                         ia.punkbuster.cmp(&ib.punkbuster)
                     }
@@ -903,7 +920,6 @@ mod tests {
         };
         b.lists[0].push(Server::new(addr));
         let t0 = Instant::now();
-        b.started = Some(t0 - LAN_WINDOW);
         b.poll(t0);
         answer(
             &server_sock,
@@ -912,7 +928,8 @@ mod tests {
         poll_until_done(&mut b, t0 + Duration::from_millis(30));
         assert_eq!(b.status, Status::Done);
         assert_eq!(b.rows().len(), 1);
-        assert_eq!(b.list()[0].ping, Some(30));
+        // The round trip plus one.
+        assert_eq!(b.list()[0].ping, Some(31));
         assert_eq!(column_text(&b.list()[0], 3), "2 (8)");
     }
 
@@ -929,19 +946,58 @@ mod tests {
             ..Browser::default()
         };
         b.refresh();
-        // Two rounds to each port.
-        answer(&a, "\\hostname\\alpha\\clients\\1\\sv_maxclients\\8");
-        answer(&b_sock, "\\hostname\\beta\\clients\\0\\sv_maxclients\\8");
+        let t0 = b.started.unwrap();
+        // With nobody answering yet the refresh waits, however long.
+        b.poll(t0 + Duration::from_secs(10));
+        assert_eq!(b.status, Status::Pinging);
+        // Two rounds to each port; a broadcast's answer only lists the
+        // address.
+        answer(&a, "\\hostname\\stale\\clients\\1\\sv_maxclients\\8");
+        answer(&b_sock, "\\hostname\\stale\\clients\\0\\sv_maxclients\\8");
         let mut buf = [0u8; 64];
         assert!(a.recv_from(&mut buf).is_ok() && b_sock.recv_from(&mut buf).is_ok());
-        let t0 = b.started.unwrap();
-        b.poll(t0 + Duration::from_millis(100));
         std::thread::sleep(Duration::from_millis(20));
-        b.poll(t0 + Duration::from_millis(100));
-        assert_eq!(b.status, Status::Pinging, "still listening");
-        poll_until_done(&mut b, t0 + LAN_WINDOW);
+        let t1 = t0 + Duration::from_millis(100);
+        b.poll(t1);
+        assert_eq!(b.list().len(), 2);
+        assert!(b.rows().is_empty());
+        // Then each is pinged on its own, which brings its info and ping.
+        answer(&a, "\\hostname\\alpha\\clients\\1\\sv_maxclients\\8");
+        answer(&b_sock, "\\hostname\\beta\\clients\\0\\sv_maxclients\\8");
+        poll_until_done(&mut b, t1 + Duration::from_millis(40));
+        assert_eq!(b.status, Status::Done);
         b.sort = Some(1);
         assert_eq!(names(&b), ["alpha", "beta"]);
+        assert!(b.list().iter().all(|s| s.ping == Some(41)));
+    }
+
+    /// Sixteen pings at once; one unanswered past `cl_maxPing` keeps no
+    /// ping and stays off the list, and the refresh ends.
+    #[test]
+    fn sixteen_pings_fly_at_once_and_a_silent_server_times_out() {
+        let mut b = Browser {
+            socket: open_socket(),
+            status: Status::Pinging,
+            source: Source::Favorites,
+            ..Browser::default()
+        };
+        for i in 0..20u16 {
+            b.lists[2].push(Server::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 9 + i)));
+        }
+        let t0 = Instant::now();
+        b.poll(t0);
+        assert_eq!(b.lists[2].iter().filter(|s| s.sent.is_some()).count(), 16);
+        b.poll(t0 + Duration::from_millis(799));
+        assert_eq!(b.lists[2].iter().filter(|s| s.timed_out).count(), 0);
+        b.poll(t0 + Duration::from_millis(800));
+        assert_eq!(b.lists[2].iter().filter(|s| s.timed_out).count(), 16);
+        let t1 = t0 + Duration::from_millis(801);
+        b.poll(t1);
+        assert_eq!(b.lists[2].iter().filter(|s| s.sent.is_some()).count(), 20);
+        b.poll(t1 + Duration::from_millis(800));
+        b.poll(t1 + Duration::from_millis(801));
+        assert_eq!(b.status, Status::Done);
+        assert!(b.lists[2].iter().all(|s| s.ping.is_none()));
     }
 
     #[test]
@@ -1083,6 +1139,12 @@ mod tests {
         br.sort = Some(2);
         assert_eq!(names(&br), ["a", "b"]);
         br.sort = Some(8);
+        assert_eq!(names(&br), ["b", "a"]);
+        // `ServerSort 1`: an unknown `hw` after every known one.
+        for (s, hw) in br.lists[0].iter_mut().zip([0, 3]) {
+            s.info.as_mut().unwrap().hardware = hw;
+        }
+        br.sort = Some(1);
         assert_eq!(names(&br), ["b", "a"]);
     }
 }

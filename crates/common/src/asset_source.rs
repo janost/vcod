@@ -87,6 +87,16 @@ pub trait AssetSource: Send + Sync {
     /// A `dir` of `""` lists the whole source.
     fn list(&self, dir: &str, ext: &str) -> Vec<String>;
 
+    /// `FS_GetFileList(dir, ext)`: the files directly under `dir/` ending in
+    /// `ext`, in the engine's search order where the order matters (a list
+    /// whose ties it settles); [`Self::list`]'s order elsewhere.
+    fn file_list(&self, dir: &str, ext: &str) -> Vec<String> {
+        self.list(dir, ext)
+            .into_iter()
+            .filter(|p| !p[dir.trim_end_matches('/').len()..].trim_start_matches('/').contains('/'))
+            .collect()
+    }
+
     /// Where [`load`] keeps what it loaded.
     fn cache(&self) -> &AssetCache;
 
@@ -214,6 +224,10 @@ impl AssetSource for Pk3Fs {
         let mut names = self.list_prefix(&prefix);
         names.retain(|n| n.ends_with(&ext));
         names
+    }
+
+    fn file_list(&self, dir: &str, ext: &str) -> Vec<String> {
+        Pk3Fs::file_list(self, dir, ext)
     }
 
     fn cache(&self) -> &AssetCache {

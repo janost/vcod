@@ -663,6 +663,8 @@ impl Shell {
         // nudge (docs/protocol-1.1.md, "The client's clock").
         s.register("cl_maxpackets", "30", ARCHIVE);
         s.register("cl_packetdup", "1", ARCHIVE);
+        // How long a browser ping waits (CoDMP.exe 0x41228d).
+        s.register("cl_maxPing", "800", ARCHIVE);
         s.register("cl_timeNudge", "0", 0);
         // 1.5's and UO's cgame records on the server's `C` and stops on its
         // `D` while this is 1; their cvar table rows are "0", archived.
@@ -2193,6 +2195,7 @@ mod tests {
                 "cl_freelook",
                 "cl_freezeDemo",
                 "cl_language",
+                "cl_maxPing",
                 "cl_maxpackets",
                 "cl_mouseAccel",
                 "cl_packetdup",
