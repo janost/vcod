@@ -936,6 +936,23 @@ impl Server {
             "allies" => script::TEAM_ALLIES,
             _ => -1,
         };
+        // `objective_timeout`'s wait (`re.gsc` 2425), from the first frame
+        // an objective lies away from its start.
+        const RE_TIMEOUT_S: f32 = 60.0;
+        let now = self.core.sv_time_ms;
+        let mut drops = std::mem::take(&mut self.game.module.bot_re_drops);
+        drops.retain(|(start, _)| {
+            o.objectives
+                .iter()
+                .any(|r| r.dropped.is_some_and(|d| d.0 == *start))
+        });
+        for r in &o.objectives {
+            if let Some((start, _)) = r.dropped
+                && !drops.iter().any(|d| d.0 == start)
+            {
+                drops.push((start, now));
+            }
+        }
         let objectives = o
             .objectives
             .iter()
@@ -943,6 +960,16 @@ impl Server {
                 let mid = |(lo, hi): ([f32; 3], [f32; 3])| -> [f32; 3] {
                     std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5)
                 };
+                // The trigger's middle back at its start.
+                let returns = r.pickup.zip(r.dropped).and_then(|(b, (start, at))| {
+                    let since = drops.iter().find(|d| d.0 == start)?.1;
+                    let m = mid(b);
+                    let left = RE_TIMEOUT_S - now.wrapping_sub(since) as f32 / 1000.0;
+                    Some((
+                        std::array::from_fn(|i| start[i] + m[i] - at[i]),
+                        left.max(0.0),
+                    ))
+                });
                 let (lo, hi) = r.goal;
                 let goal = self.site_stand(lo, hi);
                 // The farthest corner, flat, and a body's half width past it.
@@ -963,10 +990,12 @@ impl Server {
                     mine: false,
                     carrier_at,
                     laid: r.laid,
+                    returns,
                 };
                 (view, r.carrier, r.shown_to)
             })
             .collect();
+        self.game.module.bot_re_drops = drops;
         Some((team(&o.attackers), team(&o.defenders), objectives))
     }
 

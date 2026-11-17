@@ -1850,6 +1850,8 @@ pub const MELEE_RANGE: f32 = 64.0;
 /// player a `MOD_MELEE` hit for `meleeDamage + rand()%5`. The hit-location
 /// multiplier is `G_Damage`'s, the same one a bullet goes through (4.2):
 /// retail's melee capture read 81 and 79 off a 50-damage swing at `head`.
+/// `damageable` are the brush entities with `takedamage`, whose brushes a
+/// swing stops on with no glass test (a door's, movers doc 26.9).
 #[allow(clippy::too_many_arguments)]
 pub fn melee_fire(
     attacker: usize,
@@ -1859,6 +1861,7 @@ pub fn melee_fire(
     aim: [f32; 2],
     sims: &[(usize, &ClientSim)],
     targets: &[ShotTarget],
+    damageable: &[EntId],
     world: Option<&CollisionWorld>,
     models: &[PlacedModel],
     hitlocs: &HitLocTable,
@@ -2002,9 +2005,25 @@ pub fn melee_fire(
                 effects: vec![miss(normal, 0, id.0, muzzle + (end - muzzle) * fraction)],
                 struck: vec![id],
             },
+            // A brush entity's face names it, and `G_Damage` runs on one with
+            // `takedamage`: a door at rest opens (movers doc 26.6).
             Traced::World(t) if t.surface_flags & crate::game::missile::SURF_NOIMPACT == 0 => {
+                let other = world.map_or(ENTITYNUM_WORLD, |w| w.entity_num(&t));
+                let mut effects = vec![miss(t.normal, t.surface_flags, other, t.endpos)];
+                if let Some(&target) = damageable.iter().find(|id| id.0 == other) {
+                    effects.push(Effect::EntityHit(EntityHit {
+                        target,
+                        attacker,
+                        inflictor: None,
+                        damage: def.melee_damage + (vcod_common::rng::xorshift(rng) % 5) as i32,
+                        dflags: 0,
+                        mod_: "MOD_MELEE",
+                        point: t.endpos.into(),
+                        dir: forward.into(),
+                    }));
+                }
                 ShotResult {
-                    effects: vec![miss(t.normal, t.surface_flags, ENTITYNUM_WORLD, t.endpos)],
+                    effects,
                     struck: Vec::new(),
                 }
             }
@@ -3444,6 +3463,7 @@ mod tests {
             [0.0, 0.0],
             &sims[..1],
             &[],
+            &[],
             Some(&world),
             std::slice::from_ref(&model),
             &table,
@@ -3803,6 +3823,7 @@ mod tests {
                 sims[0].1.aim_angles(),
                 sims,
                 &[],
+                &[],
                 Some(&world),
                 &[],
                 &table,
@@ -3879,6 +3900,7 @@ mod tests {
                 a.aim_angles(),
                 &[(0, &a)],
                 targets,
+                &[],
                 Some(&world),
                 models,
                 &table,
@@ -3939,6 +3961,7 @@ mod tests {
             12,
             a.aim_angles(),
             &[(0, &a), (1, &near)],
+            &[],
             &[],
             Some(&world),
             &[],

@@ -29,8 +29,10 @@ the console or a message field holds the keys.
 INFERRED: while that bit is set the key handler routes keys to the console
 field instead of the binds, which stops game input. Escape with the console
 up does not close it: in game the handler opens the menu under it and the
-console stays down (`cod11-front-end.md` section 13). vcod matches in a
-game; with no game up its Escape closes the console.
+console stays down (`cod11-front-end.md` section 13). With no game up the
+main menu is always open under it, and Esc reaches that (the same
+section). vcod matches both on CoD1; a CoD2 or CoD4 install with no game up
+closes the console on Escape.
 
 ## 2. Entering a line
 
@@ -66,8 +68,10 @@ prints which is INFERRED from Q3.
 `0x155f2c0` is 0 and the key catcher has neither bit 2 nor bit 8 set, and
 with the sliding fraction `0x142ef60` otherwise (VERIFIED, the `0x3f800000`
 argument and the two state compares). INFERRED: state 0 is disconnected,
-so with no menu up a disconnected client shows a full-screen console. vcod
-shows it full-screen whenever there is neither a map nor a server.
+so with no menu up a disconnected client shows a full-screen console, which
+on 1.1 lasts no frame: `CL_Frame` reopens `main` (`cod11-front-end.md`
+section 13). vcod shows it full-screen whenever there is neither a map nor
+a server and no menu, which on CoD1 means no UI loaded.
 
 The slide, at `0x40a260` (VERIFIED, the arithmetic): the target is 0.5 while
 key-catcher bit 1 is set and 0 otherwise, and the fraction moves toward it

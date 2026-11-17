@@ -150,6 +150,9 @@ pub mod cvar {
     /// The skill level new and unpinned bots play at
     /// (`crate::bots::Skill::level`).
     pub const SKILL: &str = "vc_bot_skill";
+    /// Whether bots break contact when hurt or dry and detour to health
+    /// items (`crate::bots::Bot::allow_retreat`).
+    pub const RETREAT: &str = "vc_bot_retreat";
 }
 
 /// What the cvars ask for, read once a pass.
@@ -161,6 +164,7 @@ pub struct Settings {
     pub names: bool,
     /// Clamped to `crate::bots::MAX_LEVEL`.
     pub skill: u8,
+    pub retreat: bool,
 }
 
 /// One side of a team game, or neither.

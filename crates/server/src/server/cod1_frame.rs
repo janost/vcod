@@ -1006,7 +1006,7 @@ impl Cod1Module {
             vote_lines = rt.check_vote(svs_ms).0;
             timeout_written = rt.host.patch_1_5 && rt.host.check_match_timeout(svs_ms);
             console_lines = rt.take_console();
-            client_commands = rt.take_client_commands();
+            client_commands = rt.take_client_commands_stamped();
             ranks_dirty = rt.take_ranks_dirty();
         }
         Ok(FrameOut {

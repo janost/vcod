@@ -169,7 +169,7 @@ VERIFIED, the cvars, all flags 1 (archived):
 
 VERIFIED, 0x3002c920's head: a `cg_chatHeight` or `cg_chatTime` integer below 1 zeroes the ring's head and tail and adds nothing. The draw (0x300150b0) returns at once on a height below 1.
 
-INFERRED, the ring:
+INFERRED, the ring's text:
 
 - At most `min(cg_chatHeight, 8)` lines of 0x10f bytes, each with an arrival time.
 - A line wraps once it holds 90 characters (`> 0x59`, colour codes not counted), back at its last space. The text after that space is read again onto the next line, which opens with `^` and the last colour read.
@@ -177,7 +177,11 @@ INFERRED, the ring:
 
 VERIFIED, 1.5's `CG_AddToTeamChat` (cgame 0x3002de50): the same 0x10f ring and `> 0x59` wrap, taking `^0`..`^9` as codes; UO's (0x30039390, ring at 0x3044ade8) likewise. VERIFIED, UO's continuation line opens with two codes: `^` and the first colour the line read, then `^` and the last one. The first starts as byte 0xff, which the renderer does not read as a code. VERIFIED: that first code is the message's, set on the first code read and never reset at a wrap. 1.5's continuation opens with the last code only, as 1.1's. vcod: `hud::chat::wrap` under `Rules::uo`.
 
-vcod reads `cg_chatHeight`, `cg_chatTime` and `cg_teamChatsOnly` off its console cvars each frame (`hud::chat::Rules`, `hud::chat::takes`). With the height lowered under the lines held, vcod draws the newest ones only; retail's ring then indexes modulo the new height, which vcod does not model.
+vcod reads `cg_chatHeight`, `cg_chatTime` and `cg_teamChatsOnly` off its console cvars each frame (`hud::chat::Rules`, `hud::chat::takes`).
+
+VERIFIED, the ring's counters (0x3002c920, 0x300150b0, both disassembled): the head 0x301d5a58 (the next line's number) and the tail 0x301d5a5c (the oldest held) only count up. Each call takes `h = min(cg_chatHeight, 8)` afresh and reads or writes line `n` in slot `n % h` of the text ring 0x301d51c0 and the time ring 0x301d5a38. A push writes each wrapped part at `head % h`, stamps it and steps the head; after the message, a head more than `h` past the tail pulls the tail to `head - h`. The draw does nothing on `h < 1` or an empty ring; else it steps the tail once when `cg_chatTime`'s integer (0x30297cac) is under the time since the tail's slot was stamped, then walks `n` from `head - 1` down to the tail. So lowering `cg_chatHeight` under the lines held reads 8 lines out of 3 slots: 8 lines then height 3 draws slots 1, 0, 2, 1, 0, 2, 1, 0 newest first, until the next push moves the tail. vcod: `hud::chat::Chat` keeps the same counters and modulus.
+
+VERIFIED, the draw's widths: trap 0x34 is `R_TextWidth` (`CoDMP.exe` 0x402c00, refexport `+0xcc`, 0x4df310), which returns an int, so the strip is the int width plus 24 and the white part starts at the name's int width plus 8 (`hud::font::trap_width`). INFERRED, off the trap's arguments: the name's width and draw take its byte length as their character limit, and both count glyphs only, so a name holding colour codes measures and draws as many characters past its `^7` as it held code bytes. vcod splits at the `^7`. VERIFIED: every row tests a word of the drawn client's client info (0x3018bc0c + 0x448 times the client number) and draws nothing while it is 0, the tail still stepping. INFERRED: the word is `infoValid`.
 
 INFERRED, the draw, newest first, row `k` = -1, -2, ...:
 
@@ -222,7 +226,11 @@ Both archived (flags 1) on all three. A width of 0, or one over the console's li
 - A space at column 0 after any wrap is dropped (0x40909b). Any other character is written. The line ends when the column reaches the width, or reaches the soft width on a space (0x4090d8..0x4090eb), the space kept at the line's end.
 - What is left ends a line at the end (0x40913f).
 
-Each ended line takes a ring slot (0x408d00, 0x408be0) like a whole message. VERIFIED: 1.5's 0x409760 and UO's 0x409dc0 have the same shape but take `^0`..`^9` as colour pairs. INFERRED, not read: the window draw ignores the blanks after a line's text, so vcod measures a bold line without its trailing space.
+Each ended line takes a ring slot (0x408d00, 0x408be0) like a whole message. VERIFIED: 1.5's 0x409760 and UO's 0x409dc0 have the same shape but take `^0`..`^9` as colour pairs.
+
+VERIFIED, the bold line's centring (0x409920, 0x409870): each line is the console's cell row (0x140ef44 plus the slot's line times the console width 0x142ef54), measured by refexport `+0xd8` (0x4df920) over that many cells at font 4, scale 1/3, and drawn at `x - width / 2` (the int width, `cdq; sub; sar`) by `+0xdc` (0x4dfa60). Both read the row through 0x4df5b0, which copies a run of cells to text and cuts the spaces it ends on (0x4df6c2..0x4df6d6, the cut at 0x4df70d), so the padding and a trailing space count nothing; spaces before an icon cell stay. vcod measures the stored line, whose trailing blanks `messages::wrap` drops.
+
+VERIFIED, the third window (0x142f0d4): its record (0x408e78..0x408eb6) is the other two's, 8 slots, 3, 250, 250, 500. `CL_ConsolePrint` (0x409190, window in `ebx`) gives window 3 a life of 5000 ms (0x409263) where 0 is the minicon (`con_minicon`, `con_minicontime`), 1 the game window and 2 the bold one. Trap 0x1d (case at 0x402561, 0x409f10) draws it, and the cgame calls that at x 135, y 425, alpha `cg_hudAlpha`, mode 2 while `cg_subtitles` (default 1, archived; vmCvar 0x301daa00, table row 0x30075090) is set (0x30017a80). VERIFIED (decompile): 1.5's and UO's cgames make the same trap 0x1d call at 135, 425. Its only writer is `Com_PrintMessage` (0x435620) on print channel 3, and none of that function's six callers passes 3: `Com_Printf` passes 0 (0x4357f1), 0x439650 passes 4 (which no window takes), 0x43a3c0 its own argument, which its two callers set to 0 and 4. So on 1.1 MP the subtitle window stays empty. INFERRED for 1.5 and UO: the same record and draw; 1.5's added `Com_PrintMessage` callers are the `print` packet (channel 0, `edi` cleared at 0x411b17) and a script print taking its channel from a register, not traced. vcod keeps no third window.
 
 vcod: `messages::wrap`, with `^0`..`^9` on 1.5 and UO (`hud::font::is_colour_code`, cod11-hud-protocol.md 7). The client registers both width cvars with the cgame's defaults and flags and reads them each frame (`messages::line_width` holds the clamp).
 

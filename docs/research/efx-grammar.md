@@ -544,9 +544,9 @@ Offsets on a template are the 0x25c template's (R1); on an instance, the primiti
 - `deathfx` plays on expiry and on a lost tag, never on an `impactKills` hit.
 - Chains stop at `MAX_CHAIN_DEPTH` (8); retail's only limit is its pool.
 - `relative`: `Resolved::Spawn::bolt` names the shooter's `ctx.muzzles` key for a muzzle flash, `FxSystem::set_bolts` takes the muzzles each frame, and a relative element keeps its origin, velocity and acceleration in the frame `tangent_basis` builds on the muzzle's forward (the frame a `Directed` spawn uses), so its roll is not the tag's. It dies when its key leaves the map. A bolted particle does not trace. Brass passes no bolt; its two stock effects have no `relative` element. An `EV_PLAY_FX_ON_TAG` effect is bolted to its tag's full axis instead (`FxSystem::spawn_on_tag`, `set_tag_bolts`, `cod11-events-and-fx.md` 2, "playFxOnTag").
-- A delayed element on a bolt spawns at the pose of the play's frame; retail poses the bolt again when it falls due (0x493f40).
+- A delayed element on a tag waits in the tag's frame and is posed on the tag as it stands the frame it falls due, as retail poses the bolt again then (0x493f40): particles, `Emitter` models (their angles off the due pose's forward, case 5's `vectoangles` at 0x4964b9), `FxRunner` chains and `Decal` marks (`PendingMark::repose`). With the tag gone it spawns nothing (INFERRED; retail's due branch does not test the pose's result, `cod11-events-and-fx.md` 2, "playFxOnTag").
 - `useBBox` is not implemented; nothing in the paks reaches it.
-- `cullrange` is tested once, at spawn, for every element, sprites and decals included (R9).
+- `cullrange` is tested once, at spawn, for every element, sprites and decals included (R9), from the origin `PlayEffect` was handed (0x4939c3): `FxSystem::spawn_on_tag_from` and `spawn_marked_from` take CoD1's (the entity's `lerpOrigin` for `playFxOnTag` and a flash, the view weapon's last `tag_brass` for a case, `FxSystem::view_brass`); a view weapon's own flash measures from its tag, which sits as near the eye as the view weapon's origin for every stock `cullrange`.
 
 ## R11. The axis an effect plays on: syscalls `0xe3` and `0xe4`
 

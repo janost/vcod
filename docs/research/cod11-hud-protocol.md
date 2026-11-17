@@ -352,7 +352,10 @@ of 1.5 `CoDMP.exe` and UO `CoDUOMP.exe`.
 - VERIFIED: 1.5 `CoDMP.exe` has the same case (`0x4022b5` writes the
   `0x1100` cell, the line ends through `0x4094e0` with `edx` 1). UO
   `CoDUOMP.exe`'s case 4 writes the `0x1100` cell at 0x4022e3 and ends the
-  line through 0x409b40 with `edx` 1 (0x402337), the game window. UO's
+  line through 0x409b40 with `edx` 1 (0x402337), the game window: UO's
+  window switch (0x409ad0, table 0x409b2c) sends 1 to the record at
+  0x4e3ccac, which trap 0x1a draws (case 0x40267c, table 0x404ae8, through
+  0x40aee0). UO's
   `CG_Obituary` calls trap 4 with the same nine arguments and adds a MOD
   `0x1a` row, `gfx/icons/hud@bino_owned`.
 - VERIFIED, the draw (refexport slot `0xdc`, `0x4dfa60`; the refexport is
@@ -1109,6 +1112,25 @@ within a pixel of the tallest glyph: the line box height in design units.
 UNVERIFIED: the second float's real name. Its use (newline advance, scaled
 like `glyphScale`) is settled; nothing needs the name.
 
+VERIFIED, the loader keeps both floats where the file has them: 0x4dee00
+writes file `+0x5000` to dword 0x1400 and `+0x5004` to 0x1401 of the
+`fontInfo_t`. The text traps read them:
+
+- `R_TextHeight` (refexport `+0xd0`, 0x4df540; UI syscall 0x44 at
+  `CoDMP.exe` 0x418990): `scale * fontInfo[+0x5004]`, truncated by the
+  CRT's `_ftol` (0x538be0). Font 16 at scale 0.4 is 18.
+- `R_TextWidth` (refexport `+0xcc`, 0x4df310; UI syscall 0x43 at 0x418970,
+  cgame trap 0x34 at 0x402c00): per character the glyph's advance
+  (`+0x10`; a 0 advance takes `.`'s, 0x4dec50) summed as a float, a `\n`
+  starting the next line, `^` with `'0'..'7'` skipped and `^^` read as a
+  glyph; the widest line times `scale * glyphScale`, truncated. A positive
+  character limit counts glyphs only. The Asian code pages (0xca26c0) scale
+  a double-byte glyph by 0x4decd0 instead.
+
+vcod: `hud::font::trap_width` and `trap_height`, which the UI's `Painter`
+measures with on CoD1 (`frontend::Painter::width`, `height`); its draw
+still places a line's top the tallest glyph above the baseline.
+
 ---
 
 ## 7. The `^N` colour palette
@@ -1170,9 +1192,16 @@ caller: the client frame calls 0x405440 at 0x412762 (UO 0x405cb0 at
 
 INFERRED, off that caller and the renderer: the codes belong to the exe,
 not the server, so a 1.5 or UO front end takes `^8`/`^9` before any game,
-white while neither cvar exists. Whether a mirrored value outlives the
-disconnect is not measured. vcod draws the front end's `^8`/`^9` white on a
-1.5 or UO install and literal on 1.1 (`hud::font::set_front_end_colours`).
+white while neither cvar exists. VERIFIED: each name's only reference in
+the exe is that refresh (1.5 0x405442 and 0x405451, UO 0x405cb2 and
+0x405cc1, `tools/re/xref.py`), so nothing resets them by name. INFERRED,
+off Q3's `Cvar_Set2`, whose forced create keeps a cvar until
+`cvar_restart`: a mirrored value outlives the disconnect, and the front end
+draws `^8`/`^9` in the last server's colours. vcod reads the client's
+cvars at the front end's entry (`hud::font::set_front_end_colours`), so a
+game's mirror shows there; a 1.1 install keeps the codes literal. A
+console `set` of either cvar in the front end shows at the next menu entry,
+not the next frame.
 
 VERIFIED, the cvars' source: no cgame registers them (1.1, 1.5 and UO only
 read them, `trap_Cvar_VariableStringBuffer` at cgame 0x3002a85d, 1.5
@@ -1673,9 +1702,10 @@ the client rebuilds the kick from the feedback bytes, scaling by
 `damageCount` where the server's own kick scales by `aimSpreadScale`
 (`cod11-combat.md` 6), and reads a byte as `/ 255` where the server wrote
 it as `* 256 / 360`. vcod does the same in `Hud::feed_damage` ("Damage
-direction", "When the feed runs"), stamping the kick with the sway's clock
-at the frame the new `damageEvent` is first seen, where retail stamps the
-snapshot's `serverTime`.
+direction", "When the feed runs"), stamping the kick with `cg.snap`'s
+`serverTime` (the older of the drawn pair) and reading it against the
+render clock, the view's kick and the gun's alike
+(`DamageIndicators::kick_on` moves the stamp onto the gun's clock).
 
 INFERRED, off `0x30015fe0`'s calls to `0x300310f0` (a wrapper of the
 stretch-pic trap `0x49`: x, y, w, h, s1, t1, s2, t2, material): with `w`
@@ -2499,9 +2529,15 @@ feeds that player's last hit. VERIFIED, `0x300287f0`: the kick's dots read
 transition runs before `CG_CalcViewValues` rebuilds the axis, so a hit
 splits along the view drawn the frame before, kick, quake and turret
 included. vcod feeds it from `Hud::feed_damage` every frame before the
-snapshot's events, on the newest snapshot's playerstate, along the last
-drawn view (`Hud::drawn_view`; the playerstate's view before the first
-frame); the first playerstate seen is the only baseline.
+snapshot's events, along the last drawn view (`Hud::drawn_view`; the
+playerstate's view before the first frame): on the newest snapshot's
+playerstate when it predicts, a followed player's `cg.snap`; the first
+playerstate seen is the only baseline. VERIFIED, `CG_ProcessSnapshots`'s
+loop (0x300303d8..0x300303e6) calls the transition 0x3002fc80, whose
+respawn reset is at 0x300300cd, before 0x3002faa0, whose tail feeds a
+followed hit; the prediction's feed runs later in the frame. So the reset
+runs ahead of either feed, as vcod's `track_spawn` does ahead of
+`feed_damage`, and a hit on the respawn snapshot keeps its kick.
 
 INFERRED, off `0x300172f0`: each slot younger than `cg_hudDamageIconTime`
 draws `hudHitDirection` over `(-64, 32)` to `(64, 96)` about the screen

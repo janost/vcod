@@ -85,6 +85,7 @@ A change applies within half a second.
 | `vc_bot_shoot` | 1 | 0 stops bots firing. `--bots` without `--bots-shoot` sets it to 0. |
 | `vc_bot_names` | 1 | 0 names bots that join from then on `bot<slot>`; bots already in keep their names. |
 | `vc_bot_skill` | 1 | The [skill level](#skill), 0 to 3, of every bot `addbot ... skill N` didn't set. |
+| `vc_bot_retreat` | 1 | 0 stops bots breaking off a fight when hurt or dry and walking to health items; a retreat under way ends. |
 | `vc_bot_vehicles` | 1 | United Offensive: 0 keeps bots out of vehicles: none gets in, and a bot already in one gets out. |
 
 ## Skill
@@ -372,7 +373,10 @@ switches and every number it prints. Results go in that doc and
 - Gametypes: every stock one, `dm`, `tdm`, `sd`, `re` and `bel`, and UO's
   `ctf`, `dom`, `hq` and `bas`.
 - Objectives: S&D plants and defuses; in Retrieval the team escorts the
-  carrier and holds the goal ahead of him; UO's flags, radio and base
+  carrier and holds the goal ahead of him, an escort steps off a carrier
+  it stands on, and a dropped objective
+  its clock sends home before a bot could run to it is awaited where it
+  comes back; UO's flags, radio and base
   breaches as in [research/bot-objectives.md](research/bot-objectives.md)
   sections 4 to 7.
 - `bas`: a bot making for a charge room where a teammate died in the

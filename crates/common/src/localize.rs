@@ -280,6 +280,16 @@ mod tests {
                 "Server is a different version:\n1.1",
             ),
             ("server timed out", "server timed out"),
+            // `CL_ParseDownload`'s refusals (CoDMP.exe 0x416394,
+            // cod11-server-handshake.md, downloads).
+            (
+                "EXE_AUTODL_FILENOTONSERVER\u{15}main/z.pk3",
+                "File main/z.pk3 not found on server for autodownloading.",
+            ),
+            (
+                "EXE_CANTAUTODLGAMEPAK\u{15}main/pak0.pk3",
+                "Can not auto-download game pk3 file main/pak0.pk3.",
+            ),
         ];
         for (wire, text) in cases {
             assert_eq!(l.message(wire), text, "{wire:?}");

@@ -300,12 +300,13 @@ pub fn set_team_colours(team_codes: bool, cvar: &dyn Fn(&str) -> Option<String>)
 }
 
 /// The front end's codes, before any game and after one: the install's
-/// exe decides, so a 1.5 or UO install takes `^8`/`^9` (white, no game's
-/// cvars) and a 1.1 one leaves them literal whatever the last game spoke
-/// (cod11-hud-protocol.md 7).
-pub fn set_front_end_colours(fs: &Pk3Fs) {
+/// exe decides, so a 1.5 or UO install takes `^8`/`^9` and a 1.1 one
+/// leaves them literal whatever the last game spoke. Their colours read
+/// the client's cvars, which a game's mirror leaves behind, white before
+/// any (cod11-hud-protocol.md 7).
+pub fn set_front_end_colours(fs: &Pk3Fs, cvar: &dyn Fn(&str) -> Option<String>) {
     let install = vcod_common::net::protocol::install_protocol(fs);
-    set_team_colours(install.team_colour_codes, &|_| None);
+    set_team_colours(install.team_colour_codes, cvar);
 }
 
 /// Whether `^d` is a colour code: `0`..`7`, and on 1.5 and UO `8` and `9`
@@ -383,6 +384,34 @@ pub fn measure(font: &Font, text: &str, scale: f32) -> f32 {
         .chars()
         .map(|c| font.glyphs[glyph_index(c)].advance * s)
         .sum()
+}
+
+/// `R_TextWidth` (CoDMP.exe 0x4df310), the int the UI's (syscall 0x43)
+/// and the cgame's (trap 0x34) width traps return: the widest
+/// `\n`-separated line's advances, summed as floats, times `scale` and the
+/// font's glyph scale, truncated (0x538be0). Colour codes count nothing,
+/// and a glyph with no advance measures as `.` (0x4dec50). `scale` is the
+/// trap's (cod11-hud-protocol.md 6).
+pub fn trap_width(font: &Font, text: &str, scale: f32) -> f32 {
+    let dot = font.glyphs[b'.' as usize].advance;
+    let widest = strip_color_codes(text)
+        .split('\n')
+        .map(|line| {
+            line.chars().fold(0.0f32, |x, c| {
+                let a = font.glyphs[glyph_index(c)].advance;
+                x + if a == 0.0 { dot } else { a }
+            })
+        })
+        .fold(0.0f32, f32::max);
+    let use_scale = scale * font.glyph_scale;
+    (f64::from(widest) * f64::from(use_scale)).trunc() as f32
+}
+
+/// `R_TextHeight` (CoDMP.exe 0x4df540), what the UI's syscall 0x44
+/// returns: `scale` times the font's second header float (`+0x5004`,
+/// [`Font::line_advance`]), truncated.
+pub fn trap_height(font: &Font, scale: f32) -> f32 {
+    (f64::from(scale) * f64::from(font.line_advance)).trunc() as f32
 }
 
 /// Names decode as latin-1 (`ClientState::name`), so every byte has its own
@@ -585,12 +614,20 @@ mod tests {
     fn the_front_end_takes_the_installs_codes() {
         set_team_colours(true, &|_| None);
         assert!(is_colour_code('8'));
-        set_front_end_colours(&Pk3Fs::empty());
+        set_front_end_colours(&Pk3Fs::empty(), &|_| None);
         assert!(!is_colour_code('8'));
         if let Some(fs) = vcod_common::testing::uo_fs() {
-            set_front_end_colours(&fs);
+            set_front_end_colours(&fs, &|_| None);
             assert!(is_colour_code('9'));
             assert_eq!(split_color_codes("^9a", [1.0; 4])[0].1, [1.0; 4]);
+            // A game's mirrored colour outlives it.
+            set_front_end_colours(&fs, &|n: &str| {
+                (n == "g_TeamColor_Axis").then(|| "1 0.5 0.5".to_string())
+            });
+            assert_eq!(
+                split_color_codes("^9a", [1.0; 4])[0].1,
+                [1.0, 0.5, 0.5, 1.0]
+            );
             set_team_colours(false, &|_| None);
         }
     }

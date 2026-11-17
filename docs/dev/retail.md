@@ -145,6 +145,7 @@ captures in `crates/common/tests/fixtures/net/`.
 | `*-uo-turret.bin` | a spectator following a `--save-turret` gunner on `client-probes/probe_turret` (`coduo-diff.md` 19) |
 | `*-uo-wreck.bin` | a spawned probe watching `client-probes/probe_vehwreck` kill a tank (`coduo-vehicles.md` 15) |
 | `*-panzer.bin`, `*-panzer-wall.bin` | a spectator following a `--probe-weapsel` panzerfaust shooter on 1.1d under `client-probes/probe_panzer` (`cod11-combat.md` 13.6) |
+| `*-sd-far.bin` | a spectator `client-probes/probe_lookat` holds out of bombzone_A's PVS (`probe_far 1`) while the `--probe-defuse` / `--probe-plant` pair plays the S&D round on 1.1d (`cod11-sound-system.md`, the playSound broadcast) |
 | `*-15-turret.bin` | a spectator following a `--save-turret` gunner on 1.5b under `client-probes/probe_turret` (`cod11-turrets.md` 14.3) |
 | `*-turret-hit.bin` | a 1.1d `--save-turret` gunner's own snapshots while a `--save-hit` probe shoots him off the gun (same section) |
 | `*-follow-1.1.bin` | a 1.1d spectator following a `--save-hit` shooter under `client-probes/probe_passthru` (`cod11-spectator-follow.md` 11.1) |
