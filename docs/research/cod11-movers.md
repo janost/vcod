@@ -911,7 +911,10 @@ mover was last linked with, at its trajectory at the level time.
 vcod evaluates an `eType` 8 entity's `pos` and `apos` at the frame's level
 time for the cull (`crate::world::entity_visible`). VERIFIED, vcod
 measurement, same probe and client against ours: the slab left the snapshot
-950 ms into the lift and came back 7100 ms into the descent, as on retail.
+950 ms into the lift and came back 7100 ms into the descent, as on retail; `ride_ab.rs`'s
+`a_lifted_brush_model_leaves_and_reenters_the_snapshot_like_retail` replays
+the probe with one allied client and holds both offsets and every `PROBE f`
+origin to the capture's.
 
 ### The client
 

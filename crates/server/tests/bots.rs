@@ -202,14 +202,21 @@ fn a_bot_with_shoot_off_never_presses_the_trigger() {
     };
     run(&mut sv, &mut now, 100);
     let slots = sv.bot_slots();
-    let a = sv.bot_body(slots[0]).unwrap().origin;
-    sv.place_client(slots[0], a, 0.0);
-    sv.place_client(slots[1], [a[0] + 100.0, a[1], a[2]], 180.0);
+    let pair = [slots[0], slots[1]];
+    // Eye to eye with a clear line, so a silent run is the switch and not a
+    // wall between them.
+    let spot = fight_spot(&sv, sv.bot_body(slots[0]).unwrap().origin);
+    face_off(&mut sv, pair, spot);
     let (ha, hb) = (
         sv.bot_body(slots[0]).unwrap().health,
         sv.bot_body(slots[1]).unwrap().health,
     );
-    run(&mut sv, &mut now, 200);
+    for tick in 0..200 {
+        run(&mut sv, &mut now, 1);
+        if tick % 50 == 49 {
+            face_off(&mut sv, pair, spot);
+        }
+    }
     let (ha2, hb2) = (
         sv.bot_body(slots[0]).unwrap().health,
         sv.bot_body(slots[1]).unwrap().health,

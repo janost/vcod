@@ -1,9 +1,11 @@
 //! `--probe-flame`: a United Offensive flamethrower victim. Runs the play
 //! client's flame chunks and report (`fx::flame`) off every snapshot, with
-//! each firing body's nozzle at its eye along its view in place of the
-//! posed `tag_flash`, holds `wbuttons` 0x1 while the report does and sends
-//! the `fdc` it names. Prints every `fdc`, every flag change and every
-//! health change; pairs with `client-probes/probe_flame` (recipe in
+//! each firing body's nozzle at its held weapon's posed `tag_flash`, which
+//! the draw path's scene build poses on a windowless renderer as the play
+//! client's frame does (its eye along its view when no adapter is there),
+//! holds `wbuttons` 0x1 while the report does and sends the `fdc` it names.
+//! Prints every `fdc`, every flag change and every health change; pairs
+//! with `client-probes/probe_flame` (recipe in
 //! docs/research/coduo-diff.md 19, "The flame report"). Writes no fixture.
 
 use std::collections::HashMap;
@@ -16,11 +18,14 @@ use vcod_common::net::protocol::Protocol;
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::weapon::WeaponDef;
 
+use crate::entities::{EntityScene, SnapView, build_instances};
 use crate::fx::flame::{ChunkWorld, FlameSystem, Victim, nozzles};
+use crate::renderer::Renderer;
 
-/// A standing body's view height, where the nozzle is put.
+/// A standing body's view height: the victim's eye, and with no renderer the
+/// firing body's nozzle.
 const EYE: f32 = 60.0;
-/// How far ahead of the eye the nozzle sits.
+/// With no renderer, how far ahead of the eye the nozzle sits.
 const NOZZLE: f32 = 16.0;
 
 #[derive(Default)]
@@ -35,6 +40,8 @@ pub struct FlameProbe {
     fdcs: u32,
     /// `sv_maxclients`, which the chunks' residue test reads.
     max_clients: u32,
+    /// The draw path's scene build, which poses the bodies' `tag_flash`.
+    scene: Option<(Renderer, EntityScene)>,
 }
 
 impl FlameProbe {
@@ -48,14 +55,23 @@ impl FlameProbe {
             return;
         };
         self.weapons = vcod_common::weapon_table::from_configstring(fs, cs7);
+        if self.scene.is_none() {
+            self.scene = Renderer::headless_sized(fs, false, 1, (64, 64))
+                .map(|(r, _)| (r, EntityScene::new()));
+        }
         if let Ok(bsp) = vcod_common::mapworld::find(fs, map) {
             let tris = vcod_common::props::collision_tris(fs, &bsp.entities);
             self.world = Some(Box::new(CollisionWorld::build(&bsp, &tris)));
         }
         println!(
-            "FLAME: {} weapons, collision {}",
+            "FLAME: {} weapons, collision {}, nozzles {}",
             self.weapons.len(),
-            self.world.is_some()
+            self.world.is_some(),
+            if self.scene.is_some() {
+                "at the posed tag_flash"
+            } else {
+                "at the eye (no adapter)"
+            }
         );
     }
 
@@ -67,6 +83,7 @@ impl FlameProbe {
         p: &Protocol,
         snap: &Snapshot,
         flood_open: bool,
+        (fs, configstrings): (Option<&vcod_common::pk3::Pk3Fs>, &[String]),
     ) -> Option<String> {
         let ms = now
             .duration_since(*self.t0.get_or_insert(now))
@@ -75,17 +92,26 @@ impl FlameProbe {
         let dt = (ms - self.last_ms).max(0.0);
         self.last_ms = ms;
         let own = snap.ps.field_i32(p, "clientNum");
-        let mut muzzles = HashMap::new();
-        for (&num, ent) in &snap.entities {
-            let [pitch, yaw, _] = ent.angles(p).map(f32::to_radians);
-            let dir = Vec3::new(
-                pitch.cos() * yaw.cos(),
-                pitch.cos() * yaw.sin(),
-                -pitch.sin(),
-            );
-            let eye = Vec3::from(ent.origin(p)) + Vec3::Z * EYE;
-            muzzles.insert(num, (eye + dir * NOZZLE, dir));
-        }
+        let muzzles = match (&mut self.scene, fs) {
+            (Some((r, scene)), Some(fs)) => {
+                let view = || SnapView { snap, own: None };
+                let t = snap.server_time;
+                let built = build_instances(
+                    scene,
+                    (view(), view(), 1.0),
+                    t,
+                    t,
+                    own,
+                    configstrings,
+                    fs,
+                    None,
+                    r,
+                    p,
+                );
+                built.muzzles
+            }
+            _ => eye_muzzles(p, snap),
+        };
         let firing = nozzles(p, snap, own, &self.weapons, &muzzles);
         let origin = Vec3::from(snap.ps.origin(p));
         let world = self.world.as_deref();
@@ -167,4 +193,21 @@ impl FlameProbe {
         }
         cmd
     }
+}
+
+/// Every entity's nozzle at its eye along its view, for a run with no
+/// adapter to pose `tag_flash` on.
+fn eye_muzzles(p: &Protocol, snap: &Snapshot) -> HashMap<u32, (Vec3, Vec3)> {
+    let mut muzzles = HashMap::new();
+    for (&num, ent) in &snap.entities {
+        let [pitch, yaw, _] = ent.angles(p).map(f32::to_radians);
+        let dir = Vec3::new(
+            pitch.cos() * yaw.cos(),
+            pitch.cos() * yaw.sin(),
+            -pitch.sin(),
+        );
+        let eye = Vec3::from(ent.origin(p)) + Vec3::Z * EYE;
+        muzzles.insert(num, (eye + dir * NOZZLE, dir));
+    }
+    muzzles
 }

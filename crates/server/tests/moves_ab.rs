@@ -33,6 +33,7 @@ use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protoco
 use vcod_common::patch::Arith;
 use vcod_common::pmove::predict::{self, Predicted};
 use vcod_common::pmove::{MoveRules, Stance};
+use vcod_common::testing::SlopeLine;
 use vcod_common::weapon::WeaponDef;
 
 const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/playerstate");
@@ -53,6 +54,7 @@ fn load_world(fs: &vcod_common::pk3::Pk3Fs, map: &str) -> (CollisionWorld, Strin
     (world, bsp.entities.clone())
 }
 
+/// A `--save-slope` line, less what these gates do not read.
 enum Line {
     Cmd(UserCmd),
     /// The playerstate, and in a UO seat its vehicle's angles (`vang`).
@@ -60,67 +62,13 @@ enum Line {
 }
 
 fn parse(p: &Protocol, text: &str) -> Vec<Line> {
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let Some((kind, rest)) = line.split_once(' ') else {
-            continue;
-        };
-        let kv: BTreeMap<&str, &str> = rest
-            .split_whitespace()
-            .filter_map(|kv| kv.split_once('='))
-            .collect();
-        let int = |k: &str| -> i32 { kv[k].parse().unwrap_or_else(|_| panic!("{k} in {line}")) };
-        let pairs = |k: &str| -> Vec<(&str, i32)> {
-            kv.get(k)
-                .into_iter()
-                .flat_map(|v| v.split(','))
-                .filter(|s| !s.is_empty())
-                .map(|s| {
-                    let (a, b) = s.rsplit_once(':').expect("name:value");
-                    (a, b.parse().expect("an int"))
-                })
-                .collect()
-        };
-        match kind {
-            "!cmd" => {
-                let a: Vec<i32> = kv["angles"]
-                    .split(',')
-                    .map(|x| x.parse().unwrap())
-                    .collect();
-                out.push(Line::Cmd(UserCmd {
-                    server_time: int("st"),
-                    buttons: int("buttons") as u8,
-                    wbuttons: int("wbuttons") as u8,
-                    weapon: int("weapon") as u8,
-                    angles: [a[0], a[1], a[2]],
-                    forward: int("forward") as i8,
-                    right: int("right") as i8,
-                    up: int("up") as i8,
-                    ..NULL_USERCMD
-                }));
-            }
-            "!snap" => {
-                let mut w = msg::PlayerState::null(p);
-                for (name, v) in pairs("wire") {
-                    let i = msg::PlayerState::field_index(p, name).expect(name);
-                    w.fields[i] = v;
-                }
-                for (k, v) in pairs("ammo") {
-                    w.arrays.ammo[k.parse::<usize>().unwrap()] = v as i16;
-                }
-                for (k, v) in pairs("clip") {
-                    w.arrays.ammoclip[k.parse::<usize>().unwrap()] = v as i16;
-                }
-                let vang = kv.get("vang").map(|v| {
-                    let a: Vec<f32> = v.split(',').map(|x| x.parse().unwrap()).collect();
-                    [a[0], a[1], a[2]]
-                });
-                out.push(Line::Snap(Box::new(w), vang));
-            }
-            _ => {}
-        }
-    }
-    out
+    vcod_common::testing::parse_slope(p, text)
+        .into_iter()
+        .map(|l| match l {
+            SlopeLine::Cmd(c) => Line::Cmd(c),
+            SlopeLine::Snap(s) => Line::Snap(Box::new(s.ps), s.vang),
+        })
+        .collect()
 }
 
 /// One compared field: its name and its value on each side, printed.
