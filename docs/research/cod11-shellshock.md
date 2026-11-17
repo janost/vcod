@@ -34,6 +34,9 @@ given. Syscall numbers are cases of `CL_CgameSystemCalls` (`CoDMP.exe
   loads `scripts/<name>.shock` (`0x3002ea70`) and builds that slot's record
   (`0x3002eb30`); a load that fails is `CG_Error("couldn't register shell
   shock '%s' -- see console\n")` (`0x30020750`), which drops the client.
+- VERIFIED, the same loop and error string on 1.5 (`0x30022d00`, from
+  configstring 0x44d, the error at `0x30022d33`) and UO (`0x3002c7c0`, from
+  0x4e6, the error at `0x3002c7f3`), each slot 1..15.
 - VERIFIED, the configstring-change handler `0x3002c6b0`: an index in
   1100..1115 with a non-empty name loads and builds the same way, and a
   failure there returns quietly. The server's indexer starts at 1101, so
@@ -343,6 +346,10 @@ units on the origin.
   the HUD.
 - `AudioSystem::set_shellshock`: per-channel volumes in `VoiceTable`, the
   loop and the end cue on entity 1023.
+- `ShellShock::register` loads the gamestate's names at the cgame's start
+  (`cgame_init` in `main.rs`, a map load or `vid_restart`); a file that
+  fails drops the game with retail's text. A name a later configstring
+  brings loads when a playerstate first names it and fails quietly.
 
 Divergences:
 
@@ -351,8 +358,6 @@ Divergences:
   it at the wet level, the dry path kept at 1.
 - `shellshock_end_abort` stops the end cue directly: vcod plays nothing for
   a `null.wav` row, so its replacement would not happen.
-- A `.shock` file that fails to load is a warning and no effect, not
-  `CG_Error`.
 - `CL_MouseMove` clamps a frame's summed motion; vcod spends the motion
   once a frame too (`App::mouse_frame`), under the cap the frame before
   set.

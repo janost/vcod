@@ -830,6 +830,8 @@ pub const STAGGER_MS: i32 = 1000;
 pub const STAGGER_DRAW_MS: u64 = 600;
 /// A guard pulled back is back within this of the objective.
 pub const BACK_NEAR: f32 = 300.0;
+/// How long a client's death stays in [`Posts::fallen`], ms.
+pub const FALLEN_MS: i32 = 120_000;
 
 /// A side's cues as `bot_match` counts them: collapses started, those a
 /// guard came back from, and the ms from cue to the first back.
@@ -873,6 +875,8 @@ pub struct Posts {
     pub falling: BTreeMap<(usize, Key), Falling>,
     /// Every playing client on a side last tick, by slot: who died since.
     pub alive: BTreeMap<usize, (i32, [f32; 3])>,
+    /// The deaths of the last [`FALLEN_MS`]: team, where, `level.time`.
+    pub fallen: Vec<(i32, [f32; 3], i32)>,
     /// Per side, `bot_match`'s cue counts.
     pub tally: [CueTally; 2],
     /// Per side, where a teammate last saw the enemy carrying its `ctf`

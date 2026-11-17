@@ -636,9 +636,25 @@ VERIFIED, symbols and calls in `game.mp.i386.so` (file addresses):
   the intermission arm (`pm_type` 5) copies the view and skips
   `CG_OffsetFirstPersonView`.
 
+- The view's two arguments. VERIFIED, cgame_mp_x86.dll: the call at
+  0x30032dda takes the refdef yaw (0x302095d0, read at 0x30032dc3) and the
+  predicted playerstate's leanf (`ps+0x40`, 0x3020719c). VERIFIED:
+  `CG_OffsetFirstPersonView`'s one write to 0x302095d0 is at 0x30032b8c, the
+  yaw plus the damage kick (0x30012cb0) and sight bob (0x30012dc0) offsets
+  summed. VERIFIED: the earthquake and shellshock turn's add to the refdef
+  angles (0x30018025..0x30018057) belongs to 0x30017f00, which
+  `CG_DrawActiveFrame` calls at 0x30033da9; it calls `CG_CalcViewValues`
+  (0x300333b0) at 0x30033d9b. INFERRED, off that order: the lean moves the
+  eye along the kicked and bobbed yaw, never the shaken one.
+
 vcod: `pmove::update_lean` is the function above, `pmove::aim::add_lean`
 is `AddLeanToPosition` with 16 and 20 in each build's rounding
 (`cod11-movers.md` 22, "pmove's turns"), and `PlayerState::view`,
 `combat::muzzle_point`, `ClientSim::eye_origin` and the playing client's
-camera all apply it, and none rolls the view. The viewmodel's own lean
+camera all apply it, and none rolls the view. The camera passes the
+predicted lean and its yaw after the damage kick and sight bob
+(`Hud::view_kick`), before the quake (`crates/client/src/main.rs`). Its
+cmds tick at 8 ms where retail builds one a frame (`play::cmds::CMD_MS`),
+so a frame between two cmds draws the mouse's newer yaw over the last
+cmd's lean. The viewmodel's own lean
 offset and roll are `cod11-combat.md` 17.3.

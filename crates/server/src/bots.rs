@@ -298,6 +298,11 @@ pub struct BotView {
     /// `bg_lmg_yawcap` of.
     pub deployed: bool,
     pub deploy_yaw: f32,
+    /// The pitch a deployed LMG's view is clamped round, wire degrees
+    /// (positive down): `proneTorsoPitch` once deployed or prone, which the
+    /// clamp measures from (coduo-movement.md 7), else level, the deploy's
+    /// prone torso not yet laid on the ground.
+    pub lmg_pitch_from: f32,
     /// `ps.fWeaponPosFrac`: 1 once the sights are fully up.
     pub ads_frac: f32,
     /// `ps.aimSpreadScale`, 0 to 255: what the cone has opened past the
@@ -351,6 +356,10 @@ pub struct BotView {
     /// no fight, and a point goal inside one waits (bot-objectives.md
     /// 10.10).
     pub wrecks: Vec<[f32; 3]>,
+    /// Where a client of the bot's side died within the last
+    /// [`posts::FALLEN_MS`]: a `bas` charge room one died in is held, and
+    /// takes a frag before the bot goes in ([`Bot::room_frag`]).
+    pub fallen: Vec<[f32; 3]>,
     /// A post the game sends the bot to, walked to over the graph ahead
     /// of a chase: CoD4's mounted gun a bot is making for
     /// (`bots::cod4::gun`). Never set on CoD1 or CoD2.
@@ -1309,6 +1318,10 @@ pub struct Bot {
     /// The `bas` launcher walked to, the nearest the body has come to it
     /// and the ticks since it last came nearer.
     fetch: Option<([f32; 3], f32, u32)>,
+    /// The held charge room this life has thrown its frag into, or gave
+    /// up on, and the ticks it has stood for the throw.
+    room_thrown: Option<[f32; 3]>,
+    room_wait: u32,
     /// Lives lost: a `bas` attacker goes for the next of the other side's
     /// bases after each, off the defender that killed it.
     deaths: u32,
@@ -1656,6 +1669,11 @@ pub const BREACH_RANGE: f32 = 1500.0;
 /// lie in its bunker, this near its origin, behind the walls a breach
 /// deletes (about 145 units on mp_foy).
 const BAS_BUNKER: f32 = 300.0;
+/// A death this near a charge was in its room or the bunker over it: the
+/// room is held ([`Bot::room_frag`]).
+const BAS_ROOM: f32 = 300.0;
+/// Ticks a bot stands for a held room's frag before it goes in without.
+const ROOM_WAIT_TICKS: u32 = 20;
 /// Dry this long, a bot uses `kill` (`Bot::think`).
 const DRY_TICKS: u32 = 200;
 /// A dry `bas` bot fetches a weapon lying this near instead.
@@ -1783,6 +1801,8 @@ impl Bot {
             shunned: Vec::new(),
             tapped: None,
             fetch: None,
+            room_thrown: None,
+            room_wait: 0,
             stage: Stage::Wander,
             switch_idle: 0,
             rifle: 0,
@@ -3301,17 +3321,39 @@ impl Bot {
     fn throw_spot(&self, view: &BotView) -> Option<[f32; 3]> {
         let at = match view.enemy {
             Some(e) => (self.futile >= COVER_THROW_TICKS).then_some(e.origin)?,
-            None if self.seen_speed < LOST_STILL => {
-                let r = self.recall.filter(|r| r.seen)?;
-                let lost = self.skill.memory_ticks.saturating_sub(r.ticks);
-                (LOST_THROW_MIN..=LOST_THROW_TICKS)
-                    .contains(&lost)
-                    .then_some(r.at)?
-            }
-            None => return None,
+            None => self
+                .recall
+                .filter(|r| r.seen && self.seen_speed < LOST_STILL)
+                .filter(|r| {
+                    let lost = self.skill.memory_ticks.saturating_sub(r.ticks);
+                    (LOST_THROW_MIN..=LOST_THROW_TICKS).contains(&lost)
+                })
+                .map(|r| r.at)
+                .or_else(|| self.room_frag(view))?,
         };
         let d = dist_sq(view.origin, at);
         (d > GRENADE_MIN * GRENADE_MIN && d < GRENADE_RANGE * GRENADE_RANGE).then_some(at)
+    }
+
+    /// The charge a `bas` bot makes for to plant or defuse, when a
+    /// teammate died in its room of late ([`BotView::fallen`]) and this
+    /// life has thrown no frag into it yet: a defender set in the room
+    /// killed attackers arriving one at a time (mp_kursk, bot-objectives.md
+    /// 7.2), so the frag goes in before the bot does.
+    fn room_frag(&self, view: &BotView) -> Option<[f32; 3]> {
+        if !matches!(view.uo, Some(UoView::Bas(_))) {
+            return None;
+        }
+        let Some(ObjTarget::Defuse { bomb, .. }) = self.objective_target(view) else {
+            return None;
+        };
+        let at = bomb.origin;
+        (self.room_thrown != Some(at)
+            && view
+                .fallen
+                .iter()
+                .any(|f| dist_sq(*f, at) < BAS_ROOM * BAS_ROOM))
+        .then_some(at)
     }
 
     /// The `kill` [`Bot::think`] asked for, once.
@@ -3346,6 +3388,8 @@ impl Bot {
         self.hurt_at = i32::MAX;
         self.dry_had = false;
         self.prior = None;
+        self.room_thrown = None;
+        self.room_wait = 0;
         self.cover.end_life();
     }
 
@@ -3683,6 +3727,9 @@ impl Bot {
             self.grenade_cooldown = GRENADE_COOLDOWN_TICKS;
             self.rifle = view.weapon;
             self.stage = Stage::ToGrenade;
+            if self.room_frag(view) == Some(at) {
+                self.room_thrown = Some(at);
+            }
             // The start tick aims as the stages do: a cmd left at null
             // angles turned the view onto `delta_angles`, off the enemy,
             // and a target never recorded left the release no lob
@@ -3693,6 +3740,26 @@ impl Bot {
                 .map_or(ThrowFor::Spot, |e| ThrowFor::Enemy(e.slot));
             cmd.angles = self.lob_angles(view);
             cmd.weapon = g;
+            return cmd;
+        }
+        // A held room's frag waits on a body at rest: with a lob found the
+        // bot stops in range for at most [`ROOM_WAIT_TICKS`], then goes in
+        // without it.
+        if self.shoot
+            && self.grenade_cooldown == 0
+            && self.switch_to.is_none()
+            && view.grenade.is_some()
+            && view.lob.is_some()
+            && !view.on_ladder
+            && let Some(at) = self.room_frag(view)
+            && dist_sq(view.origin, at) < GRENADE_RANGE * GRENADE_RANGE
+            && dist_sq(view.origin, at) > GRENADE_MIN * GRENADE_MIN
+        {
+            self.room_wait += 1;
+            if self.room_wait > ROOM_WAIT_TICKS {
+                self.room_thrown = Some(at);
+            }
+            cmd.angles = self.lob_angles(view);
             return cmd;
         }
 
@@ -4662,7 +4729,7 @@ impl Bot {
         if self.lmg_rest > 0 || self.switch_to.is_some() {
             return false;
         }
-        if want[0].abs() > LMG_PITCH_DEG
+        if yaw_diff(want[0], view.lmg_pitch_from).abs() > LMG_PITCH_DEG
             || (view.deployed && yaw_diff(want[1], view.deploy_yaw).abs() > LMG_ARC_DEG)
         {
             self.lmg_rest = LMG_REST_TICKS;
@@ -5267,9 +5334,9 @@ const LMG_REST_TICKS: u32 = 40;
 const LMG_LINGER_TICKS: u32 = 60;
 const LMG_READY_FRAC: f32 = 0.99;
 const LMG_ARC_DEG: f32 = 50.0;
-/// The pitch clamp of a deployed LMG's view, either way of level
-/// (`PM_UpdateViewAngles`, coduo-movement.md 7). A prone deploy measures it
-/// from the torso's pitch, which the brain does not read.
+/// The pitch clamp of a deployed LMG's view, either way of
+/// `proneTorsoPitch` (`PM_UpdateViewAngles`, coduo-movement.md 7;
+/// [`BotView::lmg_pitch_from`]).
 const LMG_PITCH_DEG: f32 = 45.0;
 /// Ticks between one throw's start and the next's.
 const GRENADE_COOLDOWN_TICKS: u32 = 200;
@@ -5534,6 +5601,7 @@ mod tests {
             lmg: false,
             deployed: false,
             deploy_yaw: 0.0,
+            lmg_pitch_from: 0.0,
             ads_frac: 0.0,
             spread_scale: 0.0,
             speed: 0.0,
@@ -5552,6 +5620,7 @@ mod tests {
             grenade_ready: true,
             frag_near: None,
             wrecks: Vec::new(),
+            fallen: Vec::new(),
             post: None,
             give_way: None,
             guard_post: None,
@@ -5944,6 +6013,49 @@ mod tests {
         let (tp, ty) = aim_angles(&v, aim);
         v.view = [tp, ty, 0.0];
         assert!((0..4).any(|_| bot.think(&v).buttons & BUTTON_USE != 0));
+    }
+
+    /// A charge room a teammate died in of late is held: the planter
+    /// making for it stops in range and lobs one frag at the charge from
+    /// outside the room before it goes in, and none into a room nobody
+    /// died in.
+    #[test]
+    fn a_bas_planter_lobs_a_frag_into_a_held_charge_room() {
+        let throws = |fallen: Vec<[f32; 3]>, held: bool| {
+            let mut bot = Bot::new("allies", true, 1);
+            let mut v = bas_view();
+            let b = their_base(&mut v);
+            b.breached = true;
+            b.charge = Some(BombView {
+                origin: [2000.0, 0.0, -176.0],
+                aim: [2000.0, 0.0, -160.0],
+            });
+            v.origin = [1500.0, 0.0, -176.0];
+            v.lob = Some([-12.0, 0.0]);
+            v.fallen = fallen;
+            let mut starts = 0;
+            for tick in 0..600 {
+                // On the run as the first throw's cooldown ends: it stops
+                // for the throw.
+                v.speed = if tick < 210 { 190.0 } else { 0.0 };
+                let cmd = bot.think(&v);
+                if (201..210).contains(&tick) && held {
+                    assert_eq!((cmd.forward, cmd.right), (0, 0), "tick {tick}");
+                }
+                if cmd.weapon == 6 && v.weapon != 6 {
+                    starts += 1;
+                }
+                v.weapon = cmd.weapon;
+            }
+            starts
+        };
+        assert_eq!(throws(vec![[1950.0, 40.0, -176.0]], true), 1);
+        assert_eq!(throws(Vec::new(), false), 0);
+        assert_eq!(
+            throws(vec![[1500.0, 0.0, -176.0]], false),
+            0,
+            "died outside the room"
+        );
     }
 
     #[test]
@@ -7809,6 +7921,33 @@ mod tests {
             let a = cmd.angles.map(|a| a as f32 / ANGLE2SHORT);
             v.view = [a[0].max(-45.0), a[1], 0.0];
         }
+    }
+
+    /// The clamp measures from `proneTorsoPitch`, not level: prone on a
+    /// slope rising toward him, a target 53 degrees up lies 33 off the
+    /// torso and is fired at; laid down a slope, one 35 up lies 55 off and
+    /// breaks the bipod down (coduo-movement.md 7).
+    #[test]
+    fn an_lmg_pitch_clamp_measures_from_the_prone_torso() {
+        let fire = |torso: f32, z: f32| {
+            let (mut bot, mut v) = engaged(3);
+            v.lmg = true;
+            v.automatic = true;
+            v.deployed = true;
+            v.ads_frac = 1.0;
+            v.lmg_pitch_from = torso;
+            v.enemy.as_mut().unwrap().origin = [150.0, 0.0, z];
+            (0..20).any(|_| {
+                let cmd = bot.think(&v);
+                let a = cmd.angles.map(|a| a as f32 / ANGLE2SHORT);
+                v.view = [a[0].clamp(torso - 45.0, torso + 45.0), a[1], 0.0];
+                cmd.buttons & BUTTON_ATTACK != 0
+            })
+        };
+        assert!(fire(-20.0, 324.0));
+        assert!(!fire(0.0, 324.0));
+        assert!(!fire(20.0, 229.0));
+        assert!(fire(0.0, 229.0));
     }
 
     #[test]

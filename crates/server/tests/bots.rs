@@ -1635,3 +1635,57 @@ fn a_fighting_uo_bot_yells_a_stock_quick_message() {
     };
     a_fighting_bot_yells_on(fs, &vcod_common::net::protocol::PROTOCOL_V22, "mp_cassino");
 }
+
+/// mp_rhinevalley's suspended panzerschreck at (1938, -2254, 2054)
+/// (`spawnflags 9`) is tapped from either side of its corridor and from
+/// the stairs below, by a lone `bas` bot holding its rifle and an empty
+/// bazooka, so the pickup has to swap. A run on a5c81855 once logged three
+/// taps there that took nothing (bot-objectives.md 7.2). Needs `COD_DIR`
+/// at a UO install.
+#[test]
+#[ignore = "builds mp_rhinevalley's UO graph and runs a bot from three starts, ~1 min in release; run with --ignored"]
+fn a_bas_bot_taps_mp_rhinevalleys_corridor_launcher() {
+    if vcod_common::testing::uo_fs().is_none() {
+        eprintln!("COD_DIR has no uo/: skipping");
+        return;
+    }
+    for start in [
+        [2002.0, -2254.0, 2017.0],
+        [1874.0, -2254.0, 2001.0],
+        [1700.0, -2254.0, 1940.0],
+    ] {
+        let fs = vcod_common::testing::uo_fs().unwrap();
+        let bsp =
+            vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_rhinevalley").unwrap()).unwrap())
+                .expect("parse the bsp");
+        let mut now = Instant::now();
+        let mut c = cfg(1, false, "bas");
+        c.map = "mp_rhinevalley".into();
+        let mut sv = vcod_server::Server::new(c, now);
+        sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
+        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        let schreck = sv
+            .defs()
+            .weapon_index("panzerschreck_mp")
+            .expect("the panzerschreck") as u8;
+        // Set down on its first tick in play, before it walks to the
+        // launcher by its spawn.
+        let slot = loop {
+            run(&mut sv, &mut now, 1);
+            if let Some(&s) = sv.bot_slots().first()
+                && sv.bot_body(s).is_some_and(|b| b.playing)
+            {
+                break s;
+            }
+        };
+        sv.place_client(slot, start, 0.0);
+        assert!(sv.test_give_weapon(slot, "bazooka_mp"));
+        let took = (0..600).find(|_| {
+            run(&mut sv, &mut now, 1);
+            sv.bot_body(slot).is_some_and(|b| b.weapon == schreck)
+        });
+        eprintln!("from {start:?}: the panzerschreck in hand at tick {took:?}");
+        assert!(took.is_some(), "from {start:?}: no panzerschreck in 30 s");
+    }
+}
