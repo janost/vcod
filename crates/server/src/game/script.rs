@@ -118,6 +118,8 @@ pub struct CompiledScripts {
     program: vcod_gsc::Program,
     /// The `#using_animtree` names the closure declares.
     animtrees: Vec<String>,
+    /// Every file the closure read, for `scriptUsage`'s source lines.
+    sources: vcod_gsc::LoaderState,
     /// The compile as it stood after the gametype's closure, which the
     /// next map's load starts from (`Carry::gametype`).
     gametype: Rc<GametypeScripts>,
@@ -367,6 +369,9 @@ pub struct ScriptRuntime {
     /// (cod2-protocol.md 15.8). 0 on CoD1, whose `Scr_SetTime` follows
     /// `level.time`.
     pub(crate) script_lag_ms: i32,
+    /// `developer` at the load, as `Scr_Init` took it: whether
+    /// `scriptUsage` prints source lines or offsets.
+    developer: bool,
 }
 
 impl ScriptRuntime {
@@ -670,6 +675,7 @@ impl ScriptRuntime {
                     entry: entry.clone(),
                     program: vm.program(),
                     animtrees: loader.animtrees().map(str::to_string).collect(),
+                    sources: loader.state(),
                     gametype,
                 });
                 (vm, scripts)
@@ -692,15 +698,16 @@ impl ScriptRuntime {
             vm.set_frame_ms(crate::game::cod4::frame_ms(&host.cvars));
         }
         // `Scr_Init` takes `developer` at the load (coduo_lnxded 0x80714f1):
-        // below 1 a runtime error does not end its thread.
-        vm.set_recover_errors(
-            host.cvars
-                .get("developer")
-                .trim()
-                .parse::<i32>()
-                .unwrap_or(0)
-                == 0,
-        );
+        // below 1 a runtime error does not end its thread, and
+        // `scriptUsage` has no sources (cod_lnxded 0x81613b0).
+        let developer = host
+            .cvars
+            .get("developer")
+            .trim()
+            .parse::<i32>()
+            .unwrap_or(0)
+            != 0;
+        vm.set_recover_errors(!developer);
         host.patch_1_5 = matches!(host.cvars.get("protocol"), "6" | "22");
         host.missiles.uo = proto.is_uo();
         host.missiles.falls = !host.speaks_1_1();
@@ -826,6 +833,7 @@ impl ScriptRuntime {
             map: Some(level_map),
             scripts: Some(scripts),
             script_lag_ms: 0,
+            developer,
         };
         // `G_InitGame` hands `Scr_InitSystem` the level's own `level.time`
         // (docs/research/cod11-gsc-language.md, "The script clock").
@@ -3738,26 +3746,42 @@ impl ScriptRuntime {
     }
 
     /// The `scriptUsage` console command's report (`crate::game::usage`):
-    /// the live threads, then the entities and HUD elements with the fields
-    /// script holds on each.
+    /// the live threads, then the entities and HUD elements with what
+    /// script holds on each (`Vm::objects_usage`).
     pub fn script_usage(&mut self) -> String {
         let threads = self.vm.thread_usage();
         let ents = &self.host.ents;
-        let (entity, hudelem) = self.vm.with_cx(|cx| {
-            let tally = |it: &mut dyn Iterator<Item = vcod_gsc::StructId>| {
-                it.fold((0, 0), |(n, v), s| (n + 1, v + cx.field_count(s)))
-            };
+        // A radiant key is a variable only when the scripts name it
+        // (`Scr_FindField`); every name a script sets or reads they do.
+        let named = self
+            .scripts
+            .as_ref()
+            .map_or(u32::MAX, |s| s.program.atom_count());
+        let named = |a: vcod_gsc::Atom| a.0 < named;
+        let objects = |it: &mut dyn Iterator<Item = (vcod_gsc::EntId, vcod_gsc::StructId)>| {
+            let all: Vec<_> = it
+                .map(|(id, s)| (s, vcod_gsc::Target::Entity(id)))
+                .collect();
             (
-                tally(&mut ents.iter_inuse().map(|(_, e)| e.script)),
-                tally(&mut ents.iter_hud_elems().map(|(_, e)| e.script)),
+                all.len(),
+                self.vm.objects_usage(all.into_iter(), named) as usize,
             )
-        });
+        };
+        let entity = objects(&mut ents.iter_inuse().map(|(id, e)| (id, e.script)));
+        let hudelem = objects(&mut ents.iter_hud_elems().map(|(id, e)| (id, e.script)));
+        let sources = self.scripts.as_ref().map(|s| &s.sources);
+        let source = |file: &str| sources.and_then(|s| s.text(file));
+        let positions = match self.developer {
+            true => crate::game::usage::Positions::Lines(&source),
+            false => crate::game::usage::Positions::Offsets,
+        };
         crate::game::usage::script_usage(
             &threads,
             &[
                 ("entity", entity.0, entity.1),
                 ("hudelem", hudelem.0, hudelem.1),
             ],
+            &positions,
         )
     }
 
@@ -4755,6 +4779,7 @@ impl ScriptRuntime {
             map: None,
             scripts: None,
             script_lag_ms: 0,
+            developer: false,
         };
         let main = rt.vm.func_ref(&rt.entry, "main");
         rt.vm.start_thread(&mut rt.host, main, None, vec![]);

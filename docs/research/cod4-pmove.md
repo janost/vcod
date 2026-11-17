@@ -707,10 +707,20 @@ cod4-server-frame.md 2). What the server adds around the step:
   the side, stopped 15.4 short of its centre in y, on its round side,
   where a box would have stopped it 30.1 short. VERIFIED live. vcod clips a client with
   `movetrace::clip_body_kept`, 1.1d's capsule arithmetic; its plain-float
-  twin gives the same rows. VERIFIED (the gate, 15.3). The script's plain
-  traces and the missiles go through the same `Cod4Clip`, so they meet the
-  capsule too, as `SV_Trace` would reach the same arm. INFERRED; no
-  capture holds such a trace. mp_crash's script
+  twin gives the same rows. VERIFIED (the gate, 15.3). The arm picks its
+  primitives off the trace's start z as 1.5b's dispatcher does
+  (cod11-player-clip.md 2.5): a start above the body's top sphere centre
+  tries that sphere alone and goes on to the cylinder only on a miss
+  moving down, one below the bottom sphere the same upward, and the
+  cylinder's miss tries the sphere the end reaches (0x811d484..0x811d49c,
+  0x811d52b..0x811d573, 0x811db38..0x811dce4). VERIFIED (the
+  instructions). 1.1d tries all three, so a point trace from above meets
+  the cylinder 15 out where 1.7 meets the sphere deeper; vcod's
+  `clip_body_kept` takes 1.7's dispatch over 1.1d's arithmetic. The
+  script's bullet traces meet the capsule so, word for word
+  (`cod4_trace_read_ab`, cod4-gsc.md 3.3). VERIFIED (the gate). The
+  missiles go through the same `Cod4Clip`. INFERRED; no capture holds
+  such a hit. mp_crash's script
   movers carry `solid` 0 (VERIFIED, the walk capture's entities); no
   capture walks into a brush entity yet.
 - `ClientImpacts` (`cod4_lnxded` 0x80a501a) runs after the link, per cmd:

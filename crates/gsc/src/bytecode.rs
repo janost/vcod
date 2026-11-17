@@ -225,6 +225,9 @@ pub struct Function {
     pub consts: Vec<Value>,
     /// Source line per instruction, for error attribution.
     pub lines: Vec<u32>,
+    /// Source position per instruction (the compiler's `Pos` rule):
+    /// `scriptUsage`'s file, line and caret.
+    pub at: Vec<crate::ast::Pos>,
 }
 
 /// (pops, pushes) for one instruction, independent of the values involved.
@@ -636,6 +639,7 @@ mod tests {
 
     fn func(code: Vec<Op>) -> Function {
         let lines = vec![1; code.len()];
+        let at = vec![Default::default(); code.len()];
         Function {
             file: Atom(0),
             name: Atom(0),
@@ -645,6 +649,7 @@ mod tests {
             prepared: Default::default(),
             consts: Vec::new(),
             lines,
+            at,
         }
     }
 

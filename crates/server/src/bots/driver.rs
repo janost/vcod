@@ -2182,6 +2182,13 @@ fn route_core<W: BotWorld>(
             view.waypoint = Some(p.into());
             view.stop = true;
         }
+        if W::YIELDS && body.on_ladder && view.waypoint.is_some() {
+            let all: Vec<(Vec3, Vec3)> = others.iter().chain(&aground).copied().collect();
+            if follower.under_hold(g, at.into(), body, &all) {
+                view.rungs_hold = true;
+                view.stop = true;
+            }
+        }
         if W::YIELDS
             && let Some(w) = view.waypoint
             && let Some(p) = follower.pressed_yield(at.into(), w.into(), body, &aground)
@@ -2203,6 +2210,10 @@ fn route_core<W: BotWorld>(
         view.run_off = !body.on_ladder
             && ((follower.mantle_rests && view.mantle)
                 || follower.running_off(g, collision, at.into(), super::BACK_DOWN_HEIGHT));
+        view.back_drop = W::PMOVE_PROBES
+            && !body.on_ladder
+            && !view.run_off
+            && follower.backs_off(g, collision, at.into());
         view.crouch_jump = view.jump && follower.crouch_jumping(g);
         if W::PMOVE_PROBES {
             view.lip = view.jump

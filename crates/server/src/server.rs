@@ -8849,6 +8849,7 @@ mod tests {
             },
             now,
         );
+        sv.set_cvar("developer", "1");
         sv.load_scripts(Rc::new(fs)).expect("load the scripts");
         for _ in 0..10 {
             sv.tick(now);
@@ -8877,53 +8878,160 @@ mod tests {
         );
     }
 
-    /// `scriptUsage` under `probe_usage` on retail 1.1d, mp_brecourt
-    /// (`tests/fixtures/usage/`, handshake doc, "Console commands over
-    /// rcon"): every group's count, var usage, endon usage and positions
-    /// line for line. Not compared: the source line and caret retail prints
-    /// under each position at `developer 1`, and the entities' var usage.
-    #[test]
-    fn script_usage_counts_as_retail() {
-        let Some(fs) = vcod_common::testing::game_fs_11() else {
-            eprintln!("COD_DIR unset or has no main/: skipping");
-            return;
-        };
+    /// `scriptUsage` 40 frames into `probe` (a `client-probes` gametype,
+    /// its text `src`) on mp_brecourt at `developer`, with `probe_mode`
+    /// and its two keys set as the retail runs set them.
+    fn usage_under(probe: &str, src: &str, developer: &str, mode: [&str; 3]) -> Option<String> {
+        let fs = vcod_common::testing::game_fs_11()?;
         let now = Instant::now();
         let mut sv = Server::new(
             ServerConfig {
                 map: "mp_brecourt".into(),
-                gametype: "probe_usage".into(),
+                gametype: probe.into(),
                 ..cfg()
             },
             now,
         );
-        sv.overlay_script(
-            "maps/mp/gametypes/probe_usage",
-            include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_usage.gsc"),
-        );
+        sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), src);
+        sv.set_cvar("developer", developer);
+        for (k, v) in ["probe_mode", "probe_value", "probe_key"].iter().zip(mode) {
+            sv.set_cvar(k, v);
+        }
         sv.load_scripts(Rc::new(fs)).expect("load the scripts");
         for _ in 0..40 {
             sv.tick(now);
         }
         assert!(sv.script_log().iter().any(|l| l.trim() == "PROBE ready"));
-        let keep = |l: &&str| {
-            ["count", "(file", "called from:", "****"]
-                .iter()
-                .any(|p| l.starts_with(p))
-        };
-        let entity = |l: &str| {
-            l.starts_with("ent type")
-                .then(|| l.split(", var").next().unwrap().to_string())
+        Some(sv.game.module.script.as_mut().unwrap().script_usage())
+    }
+
+    /// A capture's reply, its `#` header dropped.
+    fn usage_reply(capture: &str) -> String {
+        // `split_inclusive` keeps the `\r` a CRLF source line prints.
+        capture
+            .split_inclusive('\n')
+            .filter(|l| !l.starts_with('#'))
+            .collect()
+    }
+
+    const PROBE_USAGE: &str =
+        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_usage.gsc");
+
+    /// `scriptUsage` under `probe_usage` on retail 1.1d, mp_brecourt, at
+    /// `developer 1` (`tests/fixtures/usage/`, handshake doc, "Console
+    /// commands over rcon"), byte for byte: every group's counts, each
+    /// position's file, line, source line and caret, the entity and HUD
+    /// element lines.
+    #[test]
+    fn script_usage_counts_as_retail() {
+        let Some(ours) = usage_under("probe_usage", PROBE_USAGE, "1", ["", "", ""]) else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
         };
         let retail = include_str!("../tests/fixtures/usage/mp_brecourt-probe_usage.txt");
-        let ours = sv.game.module.script.as_mut().unwrap().script_usage();
-        let pick = |t: &str| -> Vec<String> {
+        assert_eq!(ours, usage_reply(retail));
+    }
+
+    /// The same at `developer 0`: each position is `@ <offset>`. vcod's
+    /// offsets count its own instructions, so only their order is
+    /// retail's.
+    #[test]
+    fn script_usage_prints_offsets_at_developer_0() {
+        let Some(ours) = usage_under("probe_usage", PROBE_USAGE, "0", ["", "", ""]) else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let retail = usage_reply(include_str!(
+            "../tests/fixtures/usage/mp_brecourt-probe_usage-dev0.txt"
+        ));
+        let offsets = |t: &str| -> Vec<u32> {
             t.lines()
-                .filter(|l| !l.starts_with('#'))
-                .filter_map(|l| entity(l).or_else(|| keep(&l).then(|| l.to_string())))
+                .filter_map(|l| l.strip_prefix("@ ")?.parse().ok())
                 .collect()
         };
-        assert_eq!(pick(&ours), pick(retail), "{ours}");
+        let mask = |t: &str| -> Vec<String> {
+            t.lines()
+                .map(|l| match l.starts_with("@ ") {
+                    true => "@".to_string(),
+                    false => l.to_string(),
+                })
+                .collect()
+        };
+        assert_eq!(mask(&ours), mask(&retail), "{ours}");
+        let (a, b) = (offsets(&ours), offsets(&retail));
+        for i in 0..a.len() {
+            for j in 0..a.len() {
+                assert_eq!(a[i] < a[j], b[i] < b[j], "{a:?} against {b:?}");
+            }
+        }
+    }
+
+    /// `probe_usage_ents` on retail 1.1d, mp_brecourt (handshake doc,
+    /// "Console commands over rcon"): the caret under a path call and a
+    /// method call through a pointer, and the entity line under each
+    /// `probe_mode`. vcod gives every in-use entity an object where retail
+    /// makes one when script first reaches the entity, so the count differs
+    /// off stock gametypes; what the objects hold (`var usage` less
+    /// `count`) is compared.
+    #[test]
+    fn script_usage_entities_as_retail() {
+        const SRC: &str =
+            include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_usage_ents.gsc");
+        let Some(base) = usage_under("probe_usage_ents", SRC, "1", ["base", "x", "classname"])
+        else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let retail = usage_reply(include_str!(
+            "../tests/fixtures/usage/mp_brecourt-probe_usage_ents.txt"
+        ));
+        let threads = |t: &str| t.split("ent type").next().unwrap().to_string();
+        assert_eq!(threads(&base), threads(&retail));
+        // `var usage` less `count` on the entity line.
+        let held = |t: &str| -> i64 {
+            let l = t
+                .lines()
+                .find(|l| l.starts_with("ent type 'entity'"))
+                .unwrap();
+            let n: Vec<i64> = l
+                .split(|c: char| !c.is_ascii_digit())
+                .filter_map(|w| w.parse().ok())
+                .collect();
+            n[1] - n[0]
+        };
+        // Retail's entity line per mode (count, var usage), captured.
+        let modes: [([&str; 3], i64, i64); 19] = [
+            (["base", "x", "classname"], 62, 283),
+            (["ref", "x", "classname"], 94, 315),
+            (["field", "x", "classname"], 94, 318),
+            (["w1", "x", "classname"], 94, 320),
+            (["w2", "x", "classname"], 94, 321),
+            (["w2n", "x", "classname"], 94, 323),
+            (["we", "x", "classname"], 94, 321),
+            (["e1", "x", "classname"], 94, 320),
+            (["arr", "x", "classname"], 94, 320),
+            (["read", "x", "classname"], 94, 316),
+            (["isdef", "x", "classname"], 94, 316),
+            (["unset", "x", "classname"], 94, 315),
+            (["read2", "x", "classname"], 94, 317),
+            (["del", "script_model", "classname"], 38, 235),
+            (["del", "minefield", "targetname"], 30, 59),
+            (["del", "trigger_use", "classname"], 61, 281),
+            (["del", "trigger_hurt", "classname"], 61, 281),
+            (["del", "misc_mg42", "classname"], 61, 282),
+            (["del", "trigger_multiple", "classname"], 27, 53),
+        ];
+        for (mode, count, usage) in modes {
+            let ours = usage_under("probe_usage_ents", SRC, "1", mode).unwrap();
+            assert_eq!(held(&ours), usage - count, "{mode:?}: {ours}");
+        }
+        // Naming three radiant keys stores them: `export` once,
+        // `script_noteworthy` twice, `script_gameobjectname` 27 times
+        // (retail 63, 314, one more object for the trigger_lookat).
+        const KEYS: &str =
+            include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_usage_keys.gsc");
+        let keys = usage_under("probe_usage_keys", KEYS, "1", ["", "", ""]).unwrap();
+        assert_eq!(held(&keys), 314 - 63);
     }
 
     /// `probe_startclock` on retail: the script clock starts on the load's

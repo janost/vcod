@@ -54,6 +54,15 @@ pub struct LoaderState {
 }
 
 impl LoaderState {
+    /// The text the source answered for `canonical`, if it was read and
+    /// found: what `scriptUsage` prints a position's line from.
+    pub fn text(&self, canonical: &str) -> Option<&str> {
+        self.files
+            .get(canonical)?
+            .as_deref()
+            .map(|f| f.text.as_str())
+    }
+
     /// Whether `source` still answers every path this state read with the
     /// same text (a missing file still missing): if so, loading again from
     /// `source` repeats exactly what built this state. Reads every one.

@@ -53,6 +53,15 @@ impl<'a> Parser<'a> {
     fn line(&self) -> u32 {
         self.t[self.i].line
     }
+    fn col(&self) -> u32 {
+        self.t[self.i].col
+    }
+    fn pos(&self) -> Pos {
+        Pos {
+            line: self.line(),
+            col: self.col(),
+        }
+    }
     fn bump(&mut self) -> Tok {
         let t = self.t[self.i].tok.clone();
         self.i += 1;
@@ -204,8 +213,8 @@ impl<'a> Parser<'a> {
                 // dereferenced pointer (`self [[anim.SetPoseMovement]](...)`),
                 // not indexing; a single `[` is `Expr::Index` as usual.
                 Tok::LBracket if self.t.get(self.i + 1).map(|s| &s.tok) == Some(&Tok::LBracket) => {
-                    let target = self.call_target()?;
-                    base = self.finish_call(Some(Box::new(base)), target, false)?;
+                    let (target, at) = self.call_target()?;
+                    base = self.finish_call(Some(Box::new(base)), target, false, at)?;
                 }
                 Tok::LBracket => {
                     self.bump();
@@ -215,13 +224,14 @@ impl<'a> Parser<'a> {
                 }
                 Tok::Thread => {
                     self.bump();
-                    let target = self.call_target()?;
-                    base = self.finish_call(Some(Box::new(base)), target, true)?;
+                    let (target, at) = self.call_target()?;
+                    base = self.finish_call(Some(Box::new(base)), target, true, at)?;
                 }
                 Tok::Ident(name) => {
+                    let at = self.pos();
                     self.bump();
                     let target = self.call_target_from(name)?;
-                    base = self.finish_call(Some(Box::new(base)), target, false)?;
+                    base = self.finish_call(Some(Box::new(base)), target, false, at)?;
                 }
                 _ => break,
             }
@@ -260,19 +270,38 @@ impl<'a> Parser<'a> {
     // dereferenced function pointer, e.g. `thread [[shoot]](turret);`) or
     // an identifier, optionally namespaced via `call_target_from`. Used
     // wherever a bare callee is expected, not attached to a `.`/`[]` chain.
-    fn call_target(&mut self) -> Result<CallTarget, ParseError> {
+    fn call_target(&mut self) -> Result<(CallTarget, Pos), ParseError> {
         if *self.peek() == Tok::LBracket
             && self.t.get(self.i + 1).map(|s| &s.tok) == Some(&Tok::LBracket)
         {
             self.bump(); // first `[`
             self.bump(); // second `[`
-            let inner = self.expr()?;
-            self.expect(&Tok::RBracket)?;
-            self.expect(&Tok::RBracket)?;
-            return Ok(CallTarget::Deref(Box::new(inner)));
+            let (inner, at) = self.deref_inner()?;
+            return Ok((CallTarget::Deref(Box::new(inner)), at));
         }
+        let at = self.pos();
         let name = self.ident_name()?;
-        self.call_target_from(name)
+        Ok((self.call_target_from(name)?, at))
+    }
+
+    /// The pointer expression of a `[[ ]]` call, its closing `]]` eaten,
+    /// and the call's position: the name ending the expression
+    /// (`[[ptr]]` at `ptr`, `[[level.callback]]` at `callback`, both
+    /// captured on 1.1d), else its first token.
+    fn deref_inner(&mut self) -> Result<(Expr, Pos), ParseError> {
+        let first = self.pos();
+        let inner = self.expr()?;
+        let last = &self.t[self.i - 1];
+        let at = match last.tok {
+            Tok::Ident(_) => Pos {
+                line: last.line,
+                col: last.col,
+            },
+            _ => first,
+        };
+        self.expect(&Tok::RBracket)?;
+        self.expect(&Tok::RBracket)?;
+        Ok((inner, at))
     }
 
     // `expect(LParen)`, then `args_list()`, then the `Expr::Call` node.
@@ -282,6 +311,7 @@ impl<'a> Parser<'a> {
         recv: Option<Box<Expr>>,
         target: CallTarget,
         threaded: bool,
+        at: Pos,
     ) -> Result<Expr, ParseError> {
         self.expect(&Tok::LParen)?;
         let args = self.args_list()?;
@@ -290,6 +320,7 @@ impl<'a> Parser<'a> {
             target,
             args,
             threaded,
+            at,
         })
     }
 
@@ -342,8 +373,9 @@ impl<'a> Parser<'a> {
             Tok::LBracket => self.bracket_primary(),
             Tok::LParen => self.paren_primary(),
             Tok::Ident(name) => {
+                let at = self.pos();
                 self.bump();
-                self.ident_primary(name)
+                self.ident_primary(name, at)
             }
             // A bare local function pointer, e.g. `::Callback_StartGameType`:
             // no file segment, unlike the `path\path::name` form in
@@ -370,11 +402,9 @@ impl<'a> Parser<'a> {
             return Ok(Expr::EmptyArray);
         }
         self.expect(&Tok::LBracket)?;
-        let inner = self.expr()?;
-        self.expect(&Tok::RBracket)?;
-        self.expect(&Tok::RBracket)?;
+        let (inner, at) = self.deref_inner()?;
         if *self.peek() == Tok::LParen {
-            return self.finish_call(None, CallTarget::Deref(Box::new(inner)), false);
+            return self.finish_call(None, CallTarget::Deref(Box::new(inner)), false, at);
         }
         // The corpus never leaves a deref uncalled; fall back to the
         // referenced value itself rather than invent an AST node for it.
@@ -404,7 +434,7 @@ impl<'a> Parser<'a> {
     // `first` is already consumed. Either a reference keyword, a backslash
     // path closed by `::name` (called or a bare `Expr::FuncRef`), or a
     // plain identifier: a call when `(` follows, a local variable otherwise.
-    fn ident_primary(&mut self, first: String) -> Result<Expr, ParseError> {
+    fn ident_primary(&mut self, first: String, at: Pos) -> Result<Expr, ParseError> {
         match first.to_ascii_lowercase().as_str() {
             "self" => return Ok(Expr::SelfRef),
             "level" => return Ok(Expr::LevelRef),
@@ -426,7 +456,7 @@ impl<'a> Parser<'a> {
             let name = self.ident_name()?;
             let file = path.join("/").to_ascii_lowercase();
             if *self.peek() == Tok::LParen {
-                return self.finish_call(None, CallTarget::Path { file, name }, false);
+                return self.finish_call(None, CallTarget::Path { file, name }, false, at);
             }
             return Ok(Expr::FuncRef { file, name });
         }
@@ -439,7 +469,7 @@ impl<'a> Parser<'a> {
         }
 
         if *self.peek() == Tok::LParen {
-            return self.finish_call(None, CallTarget::Name(first), false);
+            return self.finish_call(None, CallTarget::Name(first), false, at);
         }
         Ok(Expr::Local(first))
     }
@@ -529,11 +559,12 @@ impl<'a> Parser<'a> {
             Tok::For => Ok(vec![self.for_stmt()?]),
             Tok::Switch => Ok(vec![self.switch_stmt()?]),
             Tok::Return => {
-                let line = self.line();
+                let (line, col) = (self.line(), self.col());
                 self.bump();
                 if self.eat(&Tok::Semi) {
                     Ok(vec![Stmt {
                         line,
+                        col,
                         kind: StmtKind::Return(None),
                     }])
                 } else {
@@ -541,44 +572,49 @@ impl<'a> Parser<'a> {
                     self.expect(&Tok::Semi)?;
                     Ok(vec![Stmt {
                         line,
+                        col,
                         kind: StmtKind::Return(Some(e)),
                     }])
                 }
             }
             Tok::Break => {
-                let line = self.line();
+                let (line, col) = (self.line(), self.col());
                 self.bump();
                 self.expect(&Tok::Semi)?;
                 Ok(vec![Stmt {
                     line,
+                    col,
                     kind: StmtKind::Break,
                 }])
             }
             Tok::Continue => {
-                let line = self.line();
+                let (line, col) = (self.line(), self.col());
                 self.bump();
                 self.expect(&Tok::Semi)?;
                 Ok(vec![Stmt {
                     line,
+                    col,
                     kind: StmtKind::Continue,
                 }])
             }
             Tok::WaitTillFrameEnd => {
-                let line = self.line();
+                let (line, col) = (self.line(), self.col());
                 self.bump();
                 self.expect(&Tok::Semi)?;
                 Ok(vec![Stmt {
                     line,
+                    col,
                     kind: StmtKind::WaitTillFrameEnd,
                 }])
             }
             Tok::Wait => {
-                let line = self.line();
+                let (line, col) = (self.line(), self.col());
                 self.bump();
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;
                 Ok(vec![Stmt {
                     line,
+                    col,
                     kind: StmtKind::Wait(e),
                 }])
             }
@@ -588,13 +624,14 @@ impl<'a> Parser<'a> {
             // so this is the one place that consumes the keyword itself.
             // The target may itself be a deref, e.g. `thread [[shoot]]();`.
             Tok::Thread => {
-                let line = self.line();
+                let (line, col) = (self.line(), self.col());
                 self.bump();
-                let target = self.call_target()?;
-                let call = self.finish_call(None, target, true)?;
+                let (target, at) = self.call_target()?;
+                let call = self.finish_call(None, target, true, at)?;
                 self.expect(&Tok::Semi)?;
                 Ok(vec![Stmt {
                     line,
+                    col,
                     kind: StmtKind::Expr(call),
                 }])
             }
@@ -607,7 +644,7 @@ impl<'a> Parser<'a> {
     }
 
     fn if_stmt(&mut self) -> Result<Stmt, ParseError> {
-        let line = self.line();
+        let (line, col) = (self.line(), self.col());
         self.bump(); // `if`
         self.expect(&Tok::LParen)?;
         let cond = self.expr()?;
@@ -620,6 +657,7 @@ impl<'a> Parser<'a> {
         };
         Ok(Stmt {
             line,
+            col,
             kind: StmtKind::If {
                 cond,
                 then,
@@ -629,7 +667,7 @@ impl<'a> Parser<'a> {
     }
 
     fn while_stmt(&mut self) -> Result<Stmt, ParseError> {
-        let line = self.line();
+        let (line, col) = (self.line(), self.col());
         self.bump(); // `while`
         self.expect(&Tok::LParen)?;
         let cond = self.expr()?;
@@ -637,6 +675,7 @@ impl<'a> Parser<'a> {
         let body = self.body()?;
         Ok(Stmt {
             line,
+            col,
             kind: StmtKind::While { cond, body },
         })
     }
@@ -644,7 +683,7 @@ impl<'a> Parser<'a> {
     // The body runs before the condition is first tested, which is the
     // whole difference from `while`.
     fn do_while_stmt(&mut self) -> Result<Stmt, ParseError> {
-        let line = self.line();
+        let (line, col) = (self.line(), self.col());
         self.bump(); // `do`
         let body = self.body()?;
         self.expect(&Tok::While)?;
@@ -654,12 +693,13 @@ impl<'a> Parser<'a> {
         self.expect(&Tok::Semi)?;
         Ok(Stmt {
             line,
+            col,
             kind: StmtKind::DoWhile { body, cond },
         })
     }
 
     fn for_stmt(&mut self) -> Result<Stmt, ParseError> {
-        let line = self.line();
+        let (line, col) = (self.line(), self.col());
         self.bump(); // `for`
         self.expect(&Tok::LParen)?;
         let init = if *self.peek() == Tok::Semi {
@@ -683,6 +723,7 @@ impl<'a> Parser<'a> {
         let body = self.body()?;
         Ok(Stmt {
             line,
+            col,
             kind: StmtKind::For {
                 init,
                 cond,
@@ -698,7 +739,7 @@ impl<'a> Parser<'a> {
     // `default` becomes an arm like any other case, in source position,
     // since where it sits among the cases is semantically load-bearing.
     fn switch_stmt(&mut self) -> Result<Stmt, ParseError> {
-        let line = self.line();
+        let (line, col) = (self.line(), self.col());
         self.bump(); // `switch`
         self.expect(&Tok::LParen)?;
         let subject = self.expr()?;
@@ -738,6 +779,7 @@ impl<'a> Parser<'a> {
         self.bump(); // `}`
         Ok(Stmt {
             line,
+            col,
             kind: StmtKind::Switch { subject, arms },
         })
     }
@@ -746,7 +788,7 @@ impl<'a> Parser<'a> {
     // assignment and increment/decrement into `Assign`, without consuming a
     // trailing `;` — a `for` clause needs none, everywhere else adds one.
     fn simple_stmt(&mut self) -> Result<Stmt, ParseError> {
-        let line = self.line();
+        let (line, col) = (self.line(), self.col());
         let target = self.expr()?;
         let kind = match self.peek().clone() {
             Tok::Assign => {
@@ -756,8 +798,8 @@ impl<'a> Parser<'a> {
                 // (cod2-gsc-diff.md 3.5); 1.1 has no such form.
                 let value = if self.dialect.cod2_family() && *self.peek() == Tok::Thread {
                     self.bump();
-                    let target = self.call_target()?;
-                    self.finish_call(None, target, true)?
+                    let (target, at) = self.call_target()?;
+                    self.finish_call(None, target, true, at)?
                 } else {
                     self.expr()?
                 };
@@ -778,7 +820,7 @@ impl<'a> Parser<'a> {
             }
             _ => StmtKind::Expr(target),
         };
-        Ok(Stmt { line, kind })
+        Ok(Stmt { line, col, kind })
     }
 
     fn compound_assign(&mut self, target: Expr, op: BinOp) -> Result<StmtKind, ParseError> {
@@ -966,6 +1008,7 @@ mod tests {
             target: CallTarget::Deref(inner),
             args,
             threaded: false,
+            at,
         } = e
         else {
             panic!("{e:?}")
@@ -973,6 +1016,8 @@ mod tests {
         assert!(matches!(*recv, Expr::SelfRef));
         assert!(matches!(*inner, Expr::Field(_, _)));
         assert_eq!(args.len(), 2);
+        // The caret goes under the pointer's field name.
+        assert_eq!(at, Pos { line: 1, col: 12 });
     }
 
     #[test]

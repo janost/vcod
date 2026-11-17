@@ -233,7 +233,7 @@ impl<'a> MoveWorld<'a> {
                 continue;
             }
             match self.world.arith() {
-                Arith::Kept => kept::clip_capsule(&mut t, start, end, mins, maxs, b),
+                Arith::Kept => kept::clip_capsule(&mut t, start, end, mins, maxs, b, false),
                 Arith::Stored => stored::clip_capsule(&mut t, start, end, mins, maxs, b),
                 Arith::Msvc => clip_capsule(&mut t, start, end, mover, (maxs - mins).z * 0.5, b),
             }
@@ -294,10 +294,13 @@ pub fn body_trace(start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, body: &Body) -
 
 /// A capsule sweep from `start` to `end` with the box `mins..maxs` against
 /// `body`'s temp capsule model, clipped into `t` as `SV_ClipMoveToEntities`
-/// does, in [`MoveWorld::box_trace`]'s kept arm's float model. CoD4 1.7's
-/// server traces another client this way (docs/research/cod4-pmove.md 15).
+/// does, in [`MoveWorld::box_trace`]'s kept arm's float model under 1.5b's
+/// dispatch: a start wholly above the body's top sphere or below its bottom
+/// tries that sphere first. CoD4 1.7's server traces another client this
+/// way (`CM_Trace`'s temp box arm, `cod4_lnxded` 0x811d29c,
+/// docs/research/cod4-pmove.md 15).
 pub fn clip_body_kept(t: &mut Trace, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, body: &Body) {
-    kept::clip_capsule(t, start, end, mins, maxs, body);
+    kept::clip_capsule(t, start, end, mins, maxs, body, true);
 }
 
 /// The mover's centre swept through the Minkowski sum of the two capsules (docs/research/cod11-player-clip.md 2.2).
@@ -408,6 +411,8 @@ mod kept {
     use crate::x87;
     use glam::{DVec3, Vec3};
 
+    /// `dispatch` picks the primitives off the z relation as 1.5b's and
+    /// CoD4's dispatchers do ([`super::stored`]); 1.1d tries all three.
     pub(super) fn clip_capsule(
         t: &mut Trace,
         start: Vec3,
@@ -415,6 +420,7 @@ mod kept {
         mins: Vec3,
         maxs: Vec3,
         b: &Body,
+        dispatch: bool,
     ) {
         // The mover's box made symmetric about its centre, its points
         // shifted there and then into the body's frame, each step stored.
@@ -446,10 +452,31 @@ mod kept {
             r_m,
             hh_m,
         };
-        cylinder(&mut tw, s, e, c, h_b, r_b);
-        // Each mover sphere meets the body's opposite one.
-        sphere(&mut tw, lo(s), lo(e), top, r_b);
-        sphere(&mut tw, hi(s), hi(e), bottom, r_b);
+        if dispatch {
+            // `cod4_lnxded` 0x811d29c..0x811dc95, as 1.5b's 0x805a181.
+            let (sb, eb, st, et) = (lo(s), lo(e), hi(s), hi(e));
+            let go_on = if sb.z > top.z {
+                sphere(&mut tw, sb, eb, top, r_b) && tw.delta.z < 0.0
+            } else if bottom.z > st.z {
+                sphere(&mut tw, st, et, bottom, r_b) && 0.0 < tw.delta.z
+            } else {
+                true
+            };
+            if go_on && cylinder(&mut tw, s, e, c, h_b, r_b) {
+                if eb.z > top.z {
+                    if top.z >= sb.z {
+                        sphere(&mut tw, sb, eb, top, r_b);
+                    }
+                } else if bottom.z > et.z && st.z >= bottom.z {
+                    sphere(&mut tw, st, et, bottom, r_b);
+                }
+            }
+        } else {
+            cylinder(&mut tw, s, e, c, h_b, r_b);
+            // Each mover sphere meets the body's opposite one.
+            sphere(&mut tw, lo(s), lo(e), top, r_b);
+            sphere(&mut tw, hi(s), hi(e), bottom, r_b);
+        }
 
         let Some(hit) = tw.hit else {
             return;
@@ -520,7 +547,7 @@ mod kept {
 
     /// 0x8055794: the sweep of the mover's sphere from `s` against the
     /// body's sphere at `o`, the summed radius squared and stored.
-    fn sphere(tw: &mut Work, s: Vec3, e: Vec3, o: Vec3, r: f32) {
+    fn sphere(tw: &mut Work, s: Vec3, e: Vec3, o: Vec3, r: f32) -> bool {
         let rel = s.as_dvec3() - o.as_dvec3();
         let rel_f = rel.as_vec3();
         let rr = ((f64::from(r) + f64::from(tw.r_m)).powi(2)) as f32;
@@ -529,28 +556,30 @@ mod kept {
             let d = e.as_dvec3() - o.as_dvec3();
             let inside = (d.x * d.x + d.y * d.y) + d.z * d.z <= f64::from(rr);
             start_solid(tw, rel_f, inside);
-            return;
+            return false;
         }
         let dl = tw.delta.as_dvec3();
         let b = rel.z * dl.z + (rel.x * dl.x + rel.y * dl.y);
         if b >= 0.0 {
-            return;
+            return true;
         }
         let a = f64::from(tw.a);
         let disc = b * b - a * c;
         if disc < 0.0 {
-            return;
+            return true;
         }
-        if let Some((f, _)) = root(tw, rel_f, b, disc, a) {
-            store(tw, f, rel_f);
-        }
+        let Some((f, _)) = root(tw, rel_f, b, disc, a) else {
+            return true;
+        };
+        store(tw, f, rel_f);
+        false
     }
 
     /// 0x8055980: the sweep of the mover's centre against the body's
     /// upright cylinder about `o`, half height `h` plus the mover's half
     /// height less its radius, in the plane; the squared summed radius and
     /// the squared delta stay on the stack.
-    fn cylinder(tw: &mut Work, s: Vec3, e: Vec3, o: Vec3, h: f32, r: f32) {
+    fn cylinder(tw: &mut Work, s: Vec3, e: Vec3, o: Vec3, h: f32, r: f32) -> bool {
         let rel = s.as_dvec3() - o.as_dvec3();
         let rel_f = rel.as_vec3();
         let big_r = f64::from(r) + f64::from(tw.r_m);
@@ -559,31 +588,32 @@ mod kept {
         let flat = Vec3::new(rel_f.x, rel_f.y, 0.0);
         if c <= 0.0 {
             if span < rel.z || -span > rel.z {
-                return;
+                return true;
             }
             let ez = f64::from(e.z) - f64::from(o.z);
             let inside = ez <= span && ez >= f64::from(-span as f32);
             start_solid(tw, flat, inside);
-            return;
+            return false;
         }
         let dl = DVec3::new(f64::from(tw.delta.x), f64::from(tw.delta.y), 0.0);
         let b = rel.y * dl.y + rel.x * dl.x;
         if b >= 0.0 {
-            return;
+            return true;
         }
         let a = dl.y * dl.y + dl.x * dl.x;
         let disc = b * b - a * c;
         if disc < 0.0 {
-            return;
+            return true;
         }
         let Some((f, back)) = root(tw, flat, b, disc, a) else {
-            return;
+            return true;
         };
         let z = f64::from(s.z) + (f - back) * f64::from(tw.delta.z) - f64::from(o.z);
         if z > span || -span > z {
-            return;
+            return true;
         }
         store(tw, f, flat);
+        false
     }
 }
 
