@@ -85,7 +85,7 @@ A change applies within half a second.
 | `vc_bot_shoot` | 1 | 0 stops bots firing. `--bots` without `--bots-shoot` sets it to 0. |
 | `vc_bot_names` | 1 | 0 names bots that join from then on `bot<slot>`; bots already in keep their names. |
 | `vc_bot_skill` | 1 | The [skill level](#skill), 0 to 3, of every bot `addbot ... skill N` didn't set. |
-| `vc_bot_vehicles` | 1 | United Offensive: 0 stops bots getting into vehicles; a bot already in one rides on until it gets out. |
+| `vc_bot_vehicles` | 1 | United Offensive: 0 keeps bots out of vehicles: none gets in, and a bot already in one gets out. |
 
 ## Skill
 
