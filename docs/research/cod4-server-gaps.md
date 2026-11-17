@@ -143,6 +143,14 @@ more.
   (`cod4_tag_read_ab`, cod4-combat.md 6.1).
 - A killcam follower's archived temp entities pass by the mask they were
   archived with alone (cod4-combat.md 7).
+- A body's torso faces the view while it moves and its legs swing past 20
+  degrees, 1.7's `player_move_factor_on_torso` and `bg_legYawTolerance`;
+  a prone body's legs lie along the view; the spawn swings the angles
+  twice; a tag read places the bone through 1.7's `AnglesToAxis` on the
+  x87 stack (cod4-player-anims.md 8, cod4-combat.md 6.1).
+- A script's `bulletTrace` meets a player as its capsule where its last
+  cmd linked it, under 1.7's capsule dispatch, and poses no body
+  (`cod4_trace_read_ab`, cod4-gsc.md 3.3).
 
 ## Ranked
 
@@ -215,9 +223,10 @@ Open, by how much a player notices.
    frame's (cod4-combat.md 6.1). The plate run's killcam impact 348: the
    killcam's archived entities pass by their archived mask alone, never a
    live temp entity's (cod4-combat.md 7).
-9. `cod4_tag_read_ab`'s 17 `GAPS` frames: a strafing body's head up to
-   2.8 units off retail's while its legs' yaw swings, a fresh spawn's
-   first four frames up to 0.4, five a tenth off across the truncation.
+9. `cod4_tag_read_ab`'s 2 `GAPS` frames, the target's head a tenth off
+   across the truncation, which fit the skeleton's few ulps off retail's
+   in a gdb run (cod4-combat.md 6.1); `cod4_trace_read_ab`'s 11, the
+   swaying target's `aimSpreadScale` an ulp off (cod4-gsc.md 3.3).
    The strafe's rows hit traces on a strafing body too. Unread: the legs'
    swing and the controls' ease on a strafe under gdb (cod4-combat.md
    6.1).

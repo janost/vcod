@@ -422,14 +422,14 @@ fn a_helicopter_shot_down_crashes() {
     assert!(last + 10_000 < end, "still there at {last} of {end}");
 }
 
-/// `bulletTrace` scores the posed hit boxes: a segment through the middle
-/// of the target's head box names the target (not when it passes him),
-/// and his posed `j_head` sits by that box; a segment
-/// across the target's capsule wide of the body (a plain trace would meet
-/// it) passes; a segment through the helicopter's middle
-/// names the helicopter.
+/// `bulletTrace` meets a player as its capsule (cod4-gsc.md 3.3): a
+/// segment through the middle of the target's head box names the target
+/// (not when it passes him), and his posed `j_head` sits by that box; a
+/// segment across the target's capsule wide of the body names him as a
+/// plain trace does; a segment through the helicopter's middle names the
+/// helicopter.
 #[test]
-fn bullet_traces_meet_posed_bodies_and_the_helicopter() {
+fn bullet_traces_meet_bodies_and_the_helicopter() {
     let mut checked = (false, false);
     let Some(seen) = run(
         60_000,
@@ -477,8 +477,8 @@ fn bullet_traces_meet_posed_bodies_and_the_helicopter() {
                 );
                 let boxed = trace4(host, a, b, Vec3::ZERO, Vec3::ZERO, 1023, 0x280_6831).unwrap();
                 assert_eq!(boxed.entity_num, target, "{boxed:?}");
-                let posed = locational4(host, a, b, 1023, 0x280_6831).unwrap();
-                assert_ne!(posed.entity_num, target, "{posed:?}");
+                let bullet = locational4(host, a, b, 1023, 0x280_6831).unwrap();
+                assert_eq!(bullet.entity_num, target, "{bullet:?}");
                 checked.0 = true;
             }
             if !checked.1

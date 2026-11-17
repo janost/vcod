@@ -1,12 +1,11 @@
 //! CoD4 1.7's script traces through the level's whole world: the clip map
 //! and its static models, then the brush entities and (with
-//! `CONTENTS_BODY` in the mask) the bodies the last frame linked, as
-//! `G_LocationalTrace` and `G_SightTrace` walk them (docs/research/
-//! cod4-gsc.md 3.3). The masks are the immediates 1.7's handlers load
-//! (`cod4_lnxded` 0x80c6640, 0x80beed8, 0x80c01de). The
-//! bullet traces are locational: a body is its hit boxes as the last frame
-//! posed them under `bulletPriorityMap`, a helicopter its model's
-//! collision; the sight trace meets a body's linked box.
+//! `CONTENTS_BODY` in the mask) the bodies where their last cmds linked
+//! them, as `G_LocationalTrace` and `G_SightTrace` walk them
+//! (docs/research/cod4-gsc.md 3.3). The masks are the immediates 1.7's
+//! handlers load (`cod4_lnxded` 0x80c6640, 0x80beed8, 0x80c01de). The
+//! bullet traces pass no priority map, so a player is its capsule there as
+//! in the sight trace, and a helicopter its model's collision.
 
 use glam::Vec3;
 use vcod_cod4::pmove::{CONTENTS_BODY, PmWorld, Tr};
@@ -51,10 +50,12 @@ pub(crate) fn trace4(
     trace4_with(host, start, end, mins, maxs, pass, mask, bodies)
 }
 
-/// `G_LocationalTrace` for a point: [`trace4`] with each posed
-/// body (`Cod4HostState::posed_bodies`) scored on its hit boxes under
-/// `bulletPriorityMap` in place of its box, and the helicopters' model
-/// collision under 0x2080. A struck body reads the flesh surface (7).
+/// `G_LocationalTrace` (0x80b4020) for a point as the script's bullet
+/// traces run it, with no priority map (0x80c6660): [`trace4`], and the
+/// helicopters' model collision under 0x2080. `SV_ClipMoveToEntity` poses
+/// a body (`svFlags` 2) and walks its hit boxes only under a priority map
+/// (0x817de86..0x817de8f), so a player meets the trace as its capsule and
+/// eases no controls (cod4-combat.md 3.3).
 pub(crate) fn locational4(
     host: &GameHost,
     start: Vec3,
@@ -62,34 +63,8 @@ pub(crate) fn locational4(
     pass: u32,
     mask: u32,
 ) -> Option<Tr> {
-    let c4 = host.cod4();
-    let posed = if mask & CONTENTS_BODY != 0 {
-        &c4.posed_bodies[..]
-    } else {
-        &[]
-    };
-    let boxes: Vec<_> = c4
-        .trace_bodies
-        .iter()
-        .filter(|b| mask & b.contents != 0 && !posed.iter().any(|p| p.entity == b.entity))
-        .copied()
-        .collect();
-    let mut t = trace4_with(host, start, end, Vec3::ZERO, Vec3::ZERO, pass, mask, &boxes)?;
-    let mut limit = if t.startsolid { 0.0 } else { t.fraction };
-    for p in posed.iter().filter(|p| p.entity != pass) {
-        let priority = &crate::game::cod4::combat::BULLET_PRIORITY;
-        if let Some((h, n)) = p.trace(start, end, priority, limit)
-            && h.fraction < limit
-        {
-            limit = h.fraction;
-            t.fraction = h.fraction;
-            t.normal = n;
-            t.surface_flags = 7 << 20;
-            t.contents = CONTENTS_BODY;
-            t.entity_num = p.entity;
-            t.startsolid = h.start_solid;
-        }
-    }
+    let mut t = trace4(host, start, end, Vec3::ZERO, Vec3::ZERO, pass, mask)?;
+    let limit = if t.startsolid { 0.0 } else { t.fraction };
     let skip = (pass < WORLD).then(|| host.ents.handle(pass)).flatten();
     if let Some(h) = crate::game::cod4::vehicle::heli_trace(host, start, end, limit, skip, mask) {
         t.fraction = h.fraction;
