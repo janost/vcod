@@ -87,9 +87,19 @@ KB saved by string sharing\n"`), and their files opened by `FUN_00433c20` @
 `DAT_008931d8`.
 
 So a map's alias table is the union of every `soundaliases/*.csv` in every
-pak, filtered by `loadspec` against the lowercased map name, then sorted. No
-pak overrides another; a duplicate name across files adds rows to that name's
-group (section 1e).
+pak, filtered by `loadspec` against the lowercased map name, then sorted.
+The list is `FS_GetFileList("soundaliases", "csv")` (strings `0x563358`,
+`0x563368`, pushed at `0x4028d6`, `0x4028db`), whose order and dedup are
+`cod11-front-end.md` 6, "The game type filter": a csv name in two paks is
+read once, from the later pak, so a mod's copy of `iw_sound.csv` replaces the
+stock file whole. VERIFIED (the pushes; the list's rules there). None found
+prints `WARNING: can't find any sound alias files (soundaliases/*.csv)`
+(`0x563318`). VERIFIED. Each row parsed goes on the front of the row list
+(`FUN_004332f0` @ `0x4332f0`: a `0x1100`-byte copy whose `+0x10fc` takes the
+old head `0x893df0`), so the list runs from the last row loaded. VERIFIED
+(decompile). A row's `+0x00` holds the csv's listed name (`FUN_00432ad0`
+copies `0x8931d0`, the list entry the loop at `0x402918` stores). VERIFIED.
+Rows that share a name across csvs meet in the sort (section 1e).
 
 ### 1b. Columns
 
@@ -196,10 +206,23 @@ map set.
 
 ### 1e. Multiple rows per name, `sequence`, the pick
 
-`VERIFIED`. `FUN_00433750` @ `0x433750` merge-sorts the row list by
-(`name` via `stricmp`, then `sequence` numerically, then `file` via
-`stricmp`); three-way ties warn `"sound alias file %s: duplicate alias '%s'\n"`
-(`0x5634cc`). `sequence` is **not stored in the runtime record**
+`FUN_00433750` @ `0x433750` merge-sorts the row list, the first `n / 2`
+rows as the left half. Each step compares the two heads: `name` (`+0x40`)
+by `Q_stricmpn` (`0x44aa90`, limit 99999), then `sequence` (`+0x1080`) as
+the left's less the right's, the smaller first. On equal name and sequence
+it compares the csv names (`+0x00`): when they differ the head from the
+csv that sorts first is dropped, never linked (`0x43385e`..`0x433884`);
+when they match it warns `"\x15sound alias file %s: duplicate alias
+'%s'\n"` (`0x5634cc`, at level 1) and links the right head first. VERIFIED
+(asm). So for one name and sequence a level keeps the rows of the csv whose
+name sorts last, case folded: a mod's `zz_mod.csv` replaces stock rows, an
+`a_mod.csv` loses to `iw_sound.csv`. Rows tied inside one csv (blank
+`sequence` reads 0: `iw_sound.csv` has 492 such groups) keep both, and as
+the list runs backwards and the tie takes the right head, they end in file
+order. INFERRED (the two rules together). 1.5's `0x435970` and UO's
+`0x4375d0` hold the same compares (`0x435a1a`..`0x435aa4`; UO's link field
+is `+0x1104`). VERIFIED (asm). vcod sorts each level's rows this way
+(`alias::sort_cod1`). `sequence` is **not stored in the runtime record**
 (`FUN_00433320` @ `0x433320` copies every field except `+0x1080`); it only
 orders rows within a name group and catches duplicates, as the csv legend
 says. During packing, `FUN_00433900` shares one name string between

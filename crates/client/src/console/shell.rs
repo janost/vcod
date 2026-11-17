@@ -663,6 +663,8 @@ impl Shell {
         // nudge (docs/protocol-1.1.md, "The client's clock").
         s.register("cl_maxpackets", "30", ARCHIVE);
         s.register("cl_packetdup", "1", ARCHIVE);
+        // How long a browser ping waits (CoDMP.exe 0x41228d).
+        s.register("cl_maxPing", "800", ARCHIVE);
         s.register("cl_timeNudge", "0", 0);
         // 1.5's and UO's cgame records on the server's `C` and stops on its
         // `D` while this is 1; their cvar table rows are "0", archived.
@@ -716,6 +718,8 @@ impl Shell {
         // `vid_restart`. The UI reads it when it loads a menu file
         // (docs/research/cod11-front-end.md, 1).
         s.register("cl_language", "0", ARCHIVE | LATCH);
+        // Set by the language check (CoDMP.exe 0x4a9b10).
+        s.register("cl_languagesavailable", "1", 0);
         for name in [
             "ui_browserShowFull",
             "ui_browserShowEmpty",
@@ -967,6 +971,15 @@ impl Shell {
         }
         if let Some(kept) = kept {
             self.run_only.insert(key, kept);
+        }
+    }
+
+    /// `Cvar_Set2` with `force`: the value now, past a latch, any pending
+    /// one dropped.
+    pub fn force_set(&mut self, name: &str, value: &str) {
+        if let Some(c) = self.cvars.get_mut(&name.to_ascii_lowercase()) {
+            c.value = value.to_string();
+            c.latched = None;
         }
     }
 
@@ -2193,6 +2206,8 @@ mod tests {
                 "cl_freelook",
                 "cl_freezeDemo",
                 "cl_language",
+                "cl_languagesavailable",
+                "cl_maxPing",
                 "cl_maxpackets",
                 "cl_mouseAccel",
                 "cl_packetdup",

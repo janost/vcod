@@ -403,6 +403,62 @@ const LANGUAGES: [&str; 14] = [
 /// through `atoi`, else none. English is 0, so stock installs never try it
 /// (docs/research/cod11-front-end.md, section 1).
 pub fn localized_menu_path(path: &str, cl_language: &str) -> Option<String> {
+    let index = language_index(cl_language);
+    if index == 0 {
+        return None;
+    }
+    let language = language_name(index);
+    let split = path.rfind('/').map_or(0, |i| i + 1);
+    let (dir, file) = path.split_at(split);
+    Some(format!("{dir}{language}/{file}"))
+}
+
+/// The language `cl_language`'s index names: [`LANGUAGES`], English past
+/// the table.
+fn language_name(index: i32) -> &'static str {
+    usize::try_from(index)
+        .ok()
+        .and_then(|i| LANGUAGES.get(i))
+        .unwrap_or(&LANGUAGES[0])
+}
+
+/// The language check (CoDMP.exe 0x4a9b10, run at start-up, `FS_Restart`
+/// and `vid_restart`): how many languages a `localized_<language>_*` pak
+/// carries, and the `cl_language` it forces when the chosen language's
+/// strings do not load: the first such language in table order whose do,
+/// else English (`"0"`). `None` keeps the value. A table loads when
+/// `localizedstrings/<language>/` holds a `.str` (0x4a9d00; front-end doc
+/// 1).
+pub fn check_language(fs: &crate::pk3::Pk3Fs, cl_language: &str) -> (usize, Option<String>) {
+    let flagged: Vec<usize> = (0..LANGUAGES.len())
+        .filter(|&i| {
+            fs.paks().any(|p| {
+                p.localized
+                    && p.name.len() > "localized_".len()
+                    && p.name["localized_".len()..]
+                        .split('_')
+                        .next()
+                        .is_some_and(|l| l.eq_ignore_ascii_case(LANGUAGES[i]))
+            })
+        })
+        .collect();
+    let loads = |name: &str| {
+        !fs.file_list(&format!("localizedstrings/{name}"), ".str")
+            .is_empty()
+    };
+    if loads(language_name(language_index(cl_language))) {
+        return (flagged.len(), None);
+    }
+    let pick = flagged
+        .iter()
+        .find(|&&i| loads(LANGUAGES[i]))
+        .copied()
+        .unwrap_or(0);
+    (flagged.len(), Some(pick.to_string()))
+}
+
+/// `atoi` of `cl_language`.
+fn language_index(cl_language: &str) -> i32 {
     let t = cl_language.trim_start();
     let (neg, digits) = match t.as_bytes().first() {
         Some(b'-') => (true, &t[1..]),
@@ -415,17 +471,7 @@ pub fn localized_menu_path(path: &str, cl_language: &str) -> Option<String> {
         .fold(0i32, |n, d| {
             n.wrapping_mul(10).wrapping_add(i32::from(d - b'0'))
         });
-    let index = if neg { n.wrapping_neg() } else { n };
-    if index == 0 {
-        return None;
-    }
-    let language = usize::try_from(index)
-        .ok()
-        .and_then(|i| LANGUAGES.get(i))
-        .unwrap_or(&LANGUAGES[0]);
-    let split = path.rfind('/').map_or(0, |i| i + 1);
-    let (dir, file) = path.split_at(split);
-    Some(format!("{dir}{language}/{file}"))
+    if neg { n.wrapping_neg() } else { n }
 }
 
 /// Q3's `atof`/`atoi` plus the `0x` hex `menudef.h` uses for flags.
@@ -1346,6 +1392,18 @@ mod tests {
             localized_menu_path("main.menu", "99"),
             Some("english/main.menu".into())
         );
+    }
+
+    /// An English install: one language, and a `cl_language` naming one
+    /// with no strings falls back to English.
+    #[test]
+    fn the_language_check_falls_back_to_a_language_with_strings() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        assert_eq!(check_language(&fs, "0"), (1, None));
+        assert_eq!(check_language(&fs, "2"), (1, Some("0".into())));
+        assert_eq!(check_language(&fs, "99"), (1, None));
     }
 
     #[test]

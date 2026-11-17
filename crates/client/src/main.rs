@@ -108,6 +108,26 @@ const TITLE: &str = concat!("vcod ", env!("VCOD_VERSION"));
 /// The GPU backend the renderer picked, once it has one.
 static BACKEND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+/// The language check (CoDMP.exe 0x4a9b10) at start-up and each
+/// `vid_restart`: `cl_languagesavailable`, and a `cl_language` whose strings
+/// load (front-end doc 1). CoD 1 only.
+fn check_language(shell: &mut console::shell::Shell, fs: &Pk3Fs) {
+    if fs.game() != vcod_common::game::Game::Cod1 {
+        return;
+    }
+    let chosen = shell.cvar("cl_language").unwrap_or("").to_string();
+    let (count, set) = vcod_common::ui_menu::check_language(fs, &chosen);
+    if count == 0 {
+        console::log::print(
+            "^1ERROR: No languages available because no localized assets were found",
+        );
+    }
+    shell.force_set("cl_languagesavailable", &count.to_string());
+    if let Some(v) = set {
+        shell.force_set("cl_language", &v);
+    }
+}
+
 /// [`TITLE`] with the GPU backend, for the window title and the main menu.
 fn version_tag() -> String {
     match BACKEND.get() {
@@ -1734,6 +1754,7 @@ fn main() -> Result<()> {
     }
     // `cl_language` registers after the config ran, taking its value.
     shell.apply_latched();
+    check_language(&mut shell, &fs);
     // vcod's old defaults a config still holds go (cod11-console.md 8).
     let (reset, upgraded) = shell.upgrade_config(game);
     for name in &reset {
@@ -2078,6 +2099,8 @@ fn main() -> Result<()> {
         shell,
         config_path,
         grab_before_console: false,
+        keys_down: Vec::new(),
+        key_releases: Vec::new(),
         mode,
         viewmodel,
         input: InputState::default(),
@@ -3164,6 +3187,12 @@ struct App {
     /// Whether the mouse was captured when the console opened; closing it
     /// captures it again.
     grab_before_console: bool,
+    /// Bound keys whose press reached the binds and that are still down:
+    /// what `Key_ClearStates` lets go ([`Self::clear_held_keys`]).
+    keys_down: Vec<String>,
+    /// The release commands a [`Self::clear_held_keys`] ran, applied at
+    /// the next `about_to_wait`.
+    key_releases: Vec<console::shell::Effect>,
     mode: Mode,
     viewmodel: Arc<[model::Model]>,
     /// Fly-mode keys; walk keeps its own in `Mode::Walk`.
@@ -3452,6 +3481,15 @@ impl App {
             hud.scoreboard.hide();
         }
         self.session.hide_scoreboard();
+        // `Key_ClearStates` (CoDMP.exe 0x40e260): each held key's release
+        // goes through `CL_KeyEvent` in key number order, so a `+` bind's
+        // `-` half runs.
+        let mut down = std::mem::take(&mut self.keys_down);
+        down.sort_by_key(|k| console::keys::number(k));
+        for key in down {
+            let effects = self.shell.key_event(&key, false);
+            self.key_releases.extend(effects);
+        }
     }
 
     /// The chat field's keys while it is open, online only. Enter sends
@@ -3767,6 +3805,10 @@ impl App {
                 _ => {}
             }
         }
+        self.keys_down.retain(|k| k != key);
+        if pressed {
+            self.keys_down.push(key.to_string());
+        }
         let effects = self.shell.key_event(key, pressed);
         self.apply(event_loop, effects);
     }
@@ -4081,6 +4123,7 @@ impl App {
         if !matches!(self.mode, Mode::Online { .. }) {
             self.switch_fs_game(self.fs_game_cvar());
         }
+        check_language(&mut self.shell, &self.fs);
         self.vid_restart_ui();
         self.ignore_hw_gamma = ignore_hw_gamma(&self.shell);
         // Retail's `vid_restart` reloads every image; vcod rebuilds
@@ -5320,6 +5363,8 @@ impl ApplicationHandler for App {
         }
         let pending = std::mem::take(&mut self.ui_pending);
         self.ui_effects(event_loop, pending);
+        let releases = std::mem::take(&mut self.key_releases);
+        self.apply(event_loop, releases);
         self.sync_menu_mouse();
         self.sync_capture();
     }
