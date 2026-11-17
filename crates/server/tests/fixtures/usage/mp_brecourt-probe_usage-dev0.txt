@@ -1,0 +1,40 @@
+# Retail CoD 1.1d dedicated server, 2026-11-17, inside `unshare -rn` (lo up): scriptUsage over rcon 5 s after the load of
+#   COD_DIR=<1.1 install> PORT=28975 SECS=9 PRE_MAP_ARGS="+set developer 0 +set rconpassword pw" tools/run_probe.sh client-probes/probe_usage mp_brecourt
+# (the reply verbatim below this header: at developer 0 each position is its code offset).
+********************************
+count: 1, var usage: 2, endon usage: 0
+@ 184
+count: 1, var usage: 3, endon usage: 0
+@ 201
+count: 1, var usage: 3, endon usage: 0
+@ 246
+count: 1, var usage: 3, endon usage: 0
+@ 266
+count: 1, var usage: 3, endon usage: 0
+@ 280
+count: 1, var usage: 6, endon usage: 0
+@ 323
+count: 1, var usage: 6, endon usage: 0
+@ 358
+count: 1, var usage: 8, endon usage: 0
+@ 424
+count: 1, var usage: 2, endon usage: 4
+@ 447
+count: 1, var usage: 7, endon usage: 0
+@ 503
+called from:
+@ 482
+count: 2, var usage: 6, endon usage: 0
+@ 518
+count: 1, var usage: 5, endon usage: 0
+@ 562
+count: 1, var usage: 2, endon usage: 0
+@ 7803
+count: 1, var usage: 6, endon usage: 0
+@ 9302
+count: 32, var usage: 64, endon usage: 0
+@ 44377
+********************************
+ent type 'entity'... count: 210, var usage: 619
+ent type 'hudelem'... count: 1, var usage: 1
+********************************

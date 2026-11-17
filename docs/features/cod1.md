@@ -398,8 +398,11 @@ Server:
   `systeminfo`, `say`, `set`, `seta`, `cvarlist`, cvar queries,
   `heartbeat`, `killserver` and `quit`; on 1.5 also `tempBanUser`,
   `tempBanClient`, `unbanUser`, `setdrawfriend`, `setfriendlyfire` and
-  `setkillcam`. `scriptUsage` and `stringUsage` print retail's report with
-  vcod's VM numbers.
+  `setkillcam`. `scriptUsage` prints retail's report: at `developer 1` each
+  position's source line and caret, at `developer 0` an offset in vcod's
+  own code; its entity line counts every in-use entity, where retail counts
+  those script has reached. `stringUsage` prints retail's report with vcod's
+  VM numbers.
 - Bans: no authorize server. Bans live in 1.5's `ban.txt` (`--ban-file`
   keeps it), keyed on the guid an off-LAN address stands in for; retail
   1.1 hands them to Activision's authorize server. On 1.1 a ban refuses

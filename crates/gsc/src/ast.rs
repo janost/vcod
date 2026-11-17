@@ -38,6 +38,13 @@ pub enum Cast {
     Vector,
 }
 
+/// A token's place in its file: 1-based line, 0-based byte column.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub struct Pos {
+    pub line: u32,
+    pub col: u32,
+}
+
 /// What a call names. `Name` is resolved at compile time against the file's
 /// own functions first, then the builtin table, which is the engine's rule.
 #[derive(Clone, PartialEq, Debug)]
@@ -80,6 +87,10 @@ pub enum Expr {
         target: CallTarget,
         args: Vec<Expr>,
         threaded: bool,
+        /// Where retail's caret goes for a frame sitting in this call: the
+        /// function's name, a path's first segment, a method's name after
+        /// its receiver, or a `[[ ]]` pointer's closing name.
+        at: Pos,
     },
     Bin(BinOp, Box<Expr>, Box<Expr>),
     Un(UnOp, Box<Expr>),
@@ -108,6 +119,8 @@ pub struct SwitchArm {
 #[derive(Clone, PartialEq, Debug)]
 pub struct Stmt {
     pub line: u32,
+    /// The first token's column (a `wait`'s caret).
+    pub col: u32,
     pub kind: StmtKind,
 }
 

@@ -3022,7 +3022,23 @@ fn read_route(
             None if matches!(ext, HostExt::Cod4(_)) => cx.get_field(e.script, field),
             None => Value::Undefined,
         },
-        Route::Script => cx.get_field(e.script, field),
+        Route::Script => {
+            let v = cx.get_field(e.script, field);
+            if v == Value::Undefined {
+                cx.touch_field(e.script, field);
+            }
+            v
+        }
+    }
+}
+
+/// A script field's write: undefined removes the variable, as retail's
+/// does (the read leaves one, `read_route`; `scriptUsage` counts both,
+/// cod11-server-handshake.md "Console commands over rcon").
+fn store_script(cx: &mut Cx, s: vcod_gsc::StructId, field: Atom, value: Value) {
+    match value {
+        Value::Undefined => cx.clear_field(s, field),
+        v => cx.set_field(s, field, v),
     }
 }
 
@@ -3317,7 +3333,7 @@ impl GameHost {
             let Some(e) = self.ents.get(ent) else {
                 return Err(ErrorKind::BadType("no such entity"));
             };
-            cx.set_field(e.script, field, value);
+            store_script(cx, e.script, field, value);
             return Ok(());
         }
         let max_speed = !self.speaks_1_1() && cx.resolve_folded(field) == "maxspeed";
@@ -3456,7 +3472,7 @@ impl GameHost {
             }
             Route::Script => {
                 let s = e.script;
-                cx.set_field(s, field, value);
+                store_script(cx, s, field, value);
                 Ok(())
             }
         }
