@@ -994,6 +994,8 @@ impl Cod4Bots {
             mate_ahead: false,
             squad: Default::default(),
             run_off: false,
+            back_drop: false,
+            rungs_hold: false,
             mantle: false,
             // `ClientThink` steps pmove at the held weapon's scale; the
             // keys are whole (the wire carries only their sign).
