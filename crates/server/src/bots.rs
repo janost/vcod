@@ -603,6 +603,10 @@ pub struct ReObjView {
     /// Where its compass marker last lay; a carry leaves it there, so it
     /// is where the carrier set out from.
     pub laid: Option<[f32; 3]>,
+    /// Dropped and lying: where its pickup trigger's middle goes back to
+    /// and the seconds left before `objective_timeout` sends it there
+    /// (`re.gsc` 2422-2432, 60 s from the drop).
+    pub returns: Option<([f32; 3], f32)>,
 }
 
 /// Which side of the S&D objective the bot's team plays this map.
@@ -2289,6 +2293,15 @@ impl Bot {
                 if let Some(m) = o.iter().find(|m| m.mine) {
                     return Some(ObjTarget::Deliver(m.goal));
                 }
+                // A dropped one the run cannot reach before it goes back:
+                // wait where it comes back.
+                if let Some(at) = Self::returns_first(view, o) {
+                    return Some(ObjTarget::Guard {
+                        at,
+                        inner: 0.0,
+                        hold: GuardHold::Near,
+                    });
+                }
                 if let Some(aim) = nearest(|m| m.pickup) {
                     // Each tap that took nothing tries the next side: the
                     // use key's pick traces from the eye to the trigger's
@@ -2326,7 +2339,15 @@ impl Bot {
                         _ => g,
                     });
                 }
-                let lying: Vec<[f32; 3]> = o.iter().filter_map(|m| m.pickup).collect();
+                // A dropped one guarded where it comes back once the walk
+                // to it would outlast its clock.
+                let lying: Vec<[f32; 3]> = o
+                    .iter()
+                    .filter_map(|m| match m.returns {
+                        Some((home, left)) if Self::outruns(view, m.pickup?, left) => Some(home),
+                        _ => m.pickup,
+                    })
+                    .collect();
                 (!lying.is_empty()).then(|| ObjTarget::Guard {
                     at: lying[re.rank % lying.len()],
                     inner: 0.0,
@@ -2645,6 +2666,24 @@ impl Bot {
             .filter(|m| !m.mine)
             .filter_map(|m| m.carrier_at)
             .min_by(|a, b| dist_sq(view.origin, *a).total_cmp(&dist_sq(view.origin, *b)))
+    }
+
+    /// The spot a dropped objective goes back to, when no other lies
+    /// there to take and the run to where it lies would outlast its clock.
+    fn returns_first(view: &BotView, o: &[ReObjView]) -> Option<[f32; 3]> {
+        let mut lying = o.iter().filter(|m| m.pickup.is_some());
+        let m = lying.next()?;
+        if lying.next().is_some() {
+            return None;
+        }
+        let (home, left) = m.returns?;
+        Self::outruns(view, m.pickup?, left).then_some(home)
+    }
+
+    /// A straight run at [`RUN_SPEED`] to `at` takes longer than `left`
+    /// seconds.
+    fn outruns(view: &BotView, at: [f32; 3], left: f32) -> bool {
+        dist_sq(view.origin, at).sqrt() > left * RUN_SPEED
     }
 
     /// A ring round the nearest goal an objective is being carried to, just
@@ -6150,6 +6189,7 @@ mod tests {
                 mine: false,
                 carrier_at: None,
                 laid: Some([30.0, 0.0, 64.0]),
+                returns: None,
             }],
         });
         v
@@ -6210,6 +6250,24 @@ mod tests {
         assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 64.0]));
         v.origin = [2900.0, 0.0, 64.0];
         assert_eq!(bot.goal(&v), Goal::Roam);
+    }
+
+    /// A dropped objective 1000 units off: with 10 s left on its clock
+    /// an attacker goes for it and a defender guards it; with 3 s left
+    /// (570 units of run) both wait where it goes back to.
+    #[test]
+    fn a_dropped_objective_out_of_reach_of_its_clock_is_awaited_at_its_start() {
+        let home = [-2000.0, 0.0, 72.0];
+        for role in [ObjRole::Attack, ObjRole::Defend] {
+            let bot = Bot::new("allies", true, 1);
+            let mut v = re_view(role);
+            v.origin = [1030.0, 0.0, 64.0];
+            let o = &mut v.re.as_mut().unwrap().objectives[0];
+            o.returns = Some((home, 10.0));
+            assert_eq!(bot.goal(&v), Goal::To([30.0, 0.0, 72.0]), "{role:?}");
+            v.re.as_mut().unwrap().objectives[0].returns = Some((home, 3.0));
+            assert_eq!(bot.goal(&v), Goal::To(home), "{role:?}");
+        }
     }
 
     /// A defender not holding the goal goes after a carried objective:
