@@ -1264,8 +1264,14 @@ registered in 0x3002b560 (VERIFIED, strings).
   - The engine's pak lookup reads a backslash as a slash: `FS_HashFileName`
     (coduo_lnxded 0x806077a, `cmpl $0x5c` then `movl $0x2f`) and
     `FS_FilenameCompare` (0x806161e, `\` and `:` to `/`) (VERIFIED,
-    disassembly of the dedicated server). The client's filesystem is the
-    same qcommon code (INFERRED).
+    disassembly of the dedicated server). The client reads one the same
+    way (VERIFIED, `CoDUOMP.exe` disassembly): `FS_FOpenFileRead`
+    (0x42d760) hashes the name at 0x42d7dd with 0x42c990, which lowers
+    each byte (0x56d1fd), stops at `.`, reads `\` (`cmp $0x5c`) as `/`,
+    sums `c * (i + 119)` and folds `h ^ h >> 10 ^ h >> 20` under the table
+    size, and compares the chain's names at 0x42d805 with 0x42d440, which
+    upper-cases `a`..`z` and reads `\` and `:` as `/`. A `:` takes another
+    hash than a `/`, so only the backslash finds the file. INFERRED.
   - vcod's `Pk3Fs` keys a lookup the same way. Without it every UO explode
     row misses its file, and a tank shell, artillery or mortar round or frag
     draws only the weapon's own `projExplosionEffect`

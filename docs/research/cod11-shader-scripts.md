@@ -1119,6 +1119,23 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   shader named `@` plus the type's directory (`model/` for a skin,
   `world/` and `2d/` beside it at 0x546c00) and the type (0x4fbe80); on
   a miss it loads the `.stype` (0x4fbf20) and returns 0 when that fails.
+- VERIFIED, 0x4fbf20 (asm and decompile): a type name past the buffer
+  warns `shader type '%s' too long` and a missing file `could not shader
+  file '%s'`, each returning 0, so the skin draws the default shader. A
+  file that opens goes to `ParseShader` (0x4fa950); when that fails
+  0x4fbf20 frees the file and calls the renderer's `ri.Error` (0x16d8924,
+  `Com_Error` 0x435ad0 in the import table `CL_InitRef` fills at
+  0x41196b) with 1 and `ERROR: invalid shader type in file '%s'`
+  (0x546c48). Code 1 is the drop: `Com_Error` longjmps (0x435ad0's tail)
+  rather than quit. `ParseShader` fails on its closing brace when no stage
+  was parsed and the shader has no sky (0x4fb071: the stage count at
+  `esp+0x18`, zeroed at 0x4fa983 and bumped at 0x4faae9 per stage, then
+  bit 8 of the flags at 0x11e67c4), as well as on a missing brace
+  (`expecting '{'`, `no concluding '}'`) or a bad stage. So a `.stype`
+  with no stage drops the game where a missing one draws the default
+  shader. INFERRED, off the two paths. A sky `.stype` with no stage
+  parses, and `FinishShader` (0x4fba30) gives a shader of no stage sort 9
+  and the count 0 at `+0x150`, which 0x4fc0c0's image loop skips.
   It then loads the skin's image (0x4eed80, by the cut name) for every
   bundle whose image slot holds the `$texturename` marker (`+0x50 ==
   10`), and returns 0 with "WARNING: shadertype '%s' couldn't load image
@@ -1134,7 +1151,11 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   `entity_material::load` draws `shader::default_shader` (the
   `*default` image under `identityLighting`) for a typed skin whose
   template is missing, has no stage, or names `$texturename` without the
-  skin's image, and so does a static prop (`prop_skin_draw`). VERIFIED,
+  skin's image, and so does a static prop (`prop_skin_draw`). For the
+  stageless template that departs from retail, which drops the game.
+  VERIFIED, census 2026-11-17 of every `shadertypes/**/*.stype` in the
+  stock paks (129 files in 1.1's `pak*.pk3`, 159 in 1.5's and UO's): each
+  has a stage, so only a mod's template can take that path. VERIFIED,
   census (`a_typed_skin_retail_cannot_build_draws_the_default_shader`):
   the 5171 typed skin slots of the 1012 stock 1.1 xmodels all build, so
   no stock model draws it. Drawing the implicit skin there would be

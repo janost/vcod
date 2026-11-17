@@ -959,6 +959,11 @@ key, mouse buttons included, reaches the binds. INFERRED (the combination).
   in `Cmd_MenuResponse_f` (`parse_menu_response`, gsc language doc 6). `u`
   is an Esc to the UI when the last open came from a `t`
   (`Ui::close_script_popup`).
+- A map restart closes the menus as `CG_MapRestart` does
+  (`Ui::map_restart`; `cod11-events-and-fx.md` 9.8): the popup twice with
+  its responses held back, then three Escs, skipped on 1.1 while the
+  active type is `UIMENU_MAIN` and on 1.5 and UO while a fullscreen menu
+  is up.
 - `scriptMenuResponse` is `UiEffect::ScriptMenuResponse`. The app sends
   `mr <sv_serverid> <index> <response>` with the index looked up by name
   (`play::join::script_menu_response`), so `open` and `close` go out as on

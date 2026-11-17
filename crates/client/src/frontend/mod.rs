@@ -801,6 +801,39 @@ impl Ui {
         self.key(KeyCode::Escape, shell).1
     }
 
+    /// `CG_MapRestart`'s menu closes (events doc 9.8): the script popup
+    /// twice as `u` closes it, its `scriptMenuResponse`s dropped as
+    /// `ui_scriptMenuAllowResponse` 0 drops them (ui_mp_x86.dll
+    /// 0x40011110); then each Escape syscall's three down Escs straight to
+    /// the UI, skipped while the active menu type is `UIMENU_MAIN` (1.1,
+    /// UI `vmMain` 8) or a fullscreen menu is up (1.5 and UO, `vmMain` 6).
+    pub fn map_restart(
+        &mut self,
+        closes: crate::play::join::RestartCloses,
+        shell: &Shell,
+    ) -> Vec<UiEffect> {
+        let mut out = Vec::new();
+        if closes.popups {
+            for _ in 0..2 {
+                out.extend(self.close_script_popup(shell));
+            }
+            out.retain(|e| !matches!(e, UiEffect::ScriptMenuResponse { .. }));
+        }
+        for _ in 0..closes.escapes {
+            let skip = if closes.skip_on_main {
+                self.active_type == UIMENU_MAIN
+            } else {
+                self.fullscreen()
+            };
+            if !skip {
+                for _ in 0..3 {
+                    out.extend(self.key(KeyCode::Escape, shell).1);
+                }
+            }
+        }
+        out
+    }
+
     /// CoD2's `K` (`closeInGameMenu`): `CL_CloseInGameMenu` (Mac
     /// 0x17afbe) runs `UI_CloseFocusedMenu` (0x1518ae) when the menu Esc
     /// opened is up, which closes every menu unless a fullscreen one is
@@ -4839,6 +4872,42 @@ mod tests {
         // `u` is an Esc; a script menu is no fullscreen menu, so every menu
         // closes through its `onClose`, not its `onEsc`.
         assert_eq!(ui.close_script_popup(&shell), [response("team_x", "close")]);
+        assert!(!ui.active());
+    }
+
+    #[test]
+    fn a_map_restart_closes_the_menus_as_each_build_does() {
+        use crate::play::join::RestartCloses;
+        let shell = Shell::new();
+        let restart = |cmd: &str, v1, uo| RestartCloses::for_command(&[cmd.to_string()], v1, uo);
+        // the popup's `close` stays home under `ui_scriptMenuAllowResponse` 0
+        let mut ui = ui_with_team_menu();
+        ui.open_script_popup("team_x", false, &shell, &mut Vec::new());
+        assert!(ui.map_restart(restart("n", true, false), &shell).is_empty());
+        assert!(!ui.active());
+        // a menu Esc opened: 1.5's `n` leaves it, 1.1's Escs close it, and
+        // its `close` goes out, the cvar back at 1
+        ui.open_script_main("team_x", &shell, &mut Vec::new());
+        assert!(
+            ui.map_restart(restart("n", false, false), &shell)
+                .is_empty()
+        );
+        assert!(ui.active());
+        assert_eq!(
+            ui.map_restart(restart("n", true, false), &shell),
+            [response("team_x", "close")]
+        );
+        assert!(!ui.active());
+        // 1.1 sends no Esc while the main menu's type is active
+        ui.open_script_main("team_x", &shell, &mut Vec::new());
+        ui.active_type = UIMENU_MAIN;
+        assert!(ui.map_restart(restart("n", true, false), &shell).is_empty());
+        assert!(ui.active());
+        // UO's `n` sends its one set whatever the type
+        assert_eq!(
+            ui.map_restart(restart("n", false, true), &shell),
+            [response("team_x", "close")]
+        );
         assert!(!ui.active());
     }
 

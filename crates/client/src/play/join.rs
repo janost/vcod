@@ -120,6 +120,43 @@ pub fn is_map_restart(tokens: &[String]) -> bool {
     tokens.first().is_some_and(|t| t == "n" || t == "B")
 }
 
+/// The menus `CG_MapRestart` closes for one restart command (events doc
+/// 9.8): the script popup twice, its responses held back, then sets of
+/// three Escs to the UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RestartCloses {
+    /// The two `u` closes (1.1 cgame 0x3002de60) under
+    /// `ui_scriptMenuAllowResponse` 0.
+    pub popups: bool,
+    /// Escape syscalls, each three down Escs (1.1 0x7c, CoDMP.exe
+    /// 0x40362c; 1.5 0x7d; UO 0x7e).
+    pub escapes: u32,
+    /// 1.1's syscall sends none while the UI's active menu type is
+    /// `UIMENU_MAIN`; 1.5's and UO's none while a fullscreen menu is up.
+    pub skip_on_main: bool,
+}
+
+impl RestartCloses {
+    /// 1.1's `n`: everything once. 1.5: `B` (`CG_MapRestart(0)`) everything
+    /// once, `n` nothing. UO: `B` the popups and two sets of Escs, `n` one
+    /// set.
+    pub fn for_command(tokens: &[String], v1: bool, uo: bool) -> Self {
+        let full = tokens.first().is_some_and(|t| t == "B");
+        let (popups, escapes) = match (v1, uo, full) {
+            (true, _, _) => (true, 1),
+            (_, true, true) => (true, 2),
+            (_, true, false) => (false, 1),
+            (_, _, true) => (true, 1),
+            _ => (false, 0),
+        };
+        RestartCloses {
+            popups,
+            escapes,
+            skip_on_main: v1,
+        }
+    }
+}
+
 impl Join {
     pub fn new(team: Option<String>, weapon: Option<String>) -> Self {
         Self {
@@ -442,6 +479,19 @@ mod tests {
         assert!(is_map_restart(&toks("B")));
         assert!(!is_map_restart(&toks("b 0 0")));
         assert!(!is_map_restart(&[]));
+    }
+
+    #[test]
+    fn restart_closes_follow_each_build() {
+        let c = |cmd: &str, v1, uo| {
+            let r = RestartCloses::for_command(&toks(cmd), v1, uo);
+            (r.popups, r.escapes, r.skip_on_main)
+        };
+        assert_eq!(c("n", true, false), (true, 1, true));
+        assert_eq!(c("B", false, false), (true, 1, false));
+        assert_eq!(c("n", false, false), (false, 0, false));
+        assert_eq!(c("B", false, true), (true, 2, false));
+        assert_eq!(c("n", false, true), (false, 1, false));
     }
 
     #[test]
