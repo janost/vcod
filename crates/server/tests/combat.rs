@@ -2923,3 +2923,130 @@ fn an_automatic_held_through_a_swing_fires_as_on_retail() {
     );
     assert_eq!(ours, retail);
 }
+
+/// `client-probes/probe_glass` on ours (combat doc 2.4, "Glass, measured on
+/// retail"): a shooter 16 units in front of mp_depot's window pane (lump 4
+/// brush 434, x -772..-764) and a target 76 behind it. Each tap's round
+/// goes on through the pane at full damage, and the shooter is sent the
+/// pane's impact on its +x face, x -763, with the caulk side's `surfType`
+/// 0, numbered below the flesh impact behind, in the same snapshot. Retail's
+/// taps did 180, 107, 72, 60 and 48 (`iDFlags` 0, `MOD_PISTOL_BULLET`), each
+/// the location's own share of 120, none halved.
+#[test]
+fn a_round_through_the_depot_pane_hits_like_retail() {
+    use vcod_common::net::event_ids::{EV_BULLET_HIT_LARGE, EV_BULLET_HIT_SMALL};
+    use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD, UserCmd};
+
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let map = "mp_depot";
+    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_glass"), now);
+    sv.overlay_script(
+        "maps/mp/gametypes/probe_glass",
+        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_glass.gsc"),
+    );
+    sv.set_cvar("probe_teleport", "1");
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "enfield_mp"),
+        ("axis", "kar98k_mp"),
+    );
+    let p = &PROTOCOL_V1;
+    let sight = UserCmd {
+        buttons: BUTTON_ADS,
+        angles: [0, 32768, 0],
+        ..NULL_USERCMD
+    };
+    let fire = UserCmd {
+        buttons: BUTTON_ADS | BUTTON_ATTACK,
+        ..sight
+    };
+    // A dead target respawns on the use button, after dm's two-second
+    // wait, and the probe stands it back behind the pane.
+    let mut step = |sv: &mut vcod_server::Server, a: UserCmd| {
+        let dead = cb
+            .snapshots()
+            .newest()
+            .is_some_and(|s| s.ps.field_i32(p, "pm_type") != 0);
+        let b = UserCmd {
+            buttons: if dead {
+                vcod_common::net::msg::BUTTON_USE
+            } else {
+                0
+            },
+            ..NULL_USERCMD
+        };
+        ca.send_frame(&crate::common::echo_weapon(&ca, &a));
+        cb.send_frame(&crate::common::echo_weapon(&cb, &b));
+        now += Duration::from_millis(50);
+        common::step_pair(sv, (&qa, &mut ca), (&qb, &mut cb), now);
+        ca.snapshots().newest().unwrap().clone()
+    };
+    for _ in 0..40 {
+        step(&mut sv, sight);
+    }
+    assert_eq!(
+        sv.script_log()
+            .iter()
+            .filter(|l| l.starts_with("PROBE place "))
+            .count(),
+        2,
+        "both players stand at the pane: {:?}",
+        sv.script_log()
+    );
+    let mut taps = 0;
+    for seed in 1..=8 {
+        sv.test_seed_rng(seed);
+        let s = step(&mut sv, fire);
+        let impacts: Vec<(u32, [f32; 3], i32)> = s
+            .entities
+            .iter()
+            .filter(|(_, e)| {
+                [EV_BULLET_HIT_SMALL, EV_BULLET_HIT_LARGE].contains(&(e.field_i32(p, "eType") - 12))
+            })
+            .map(|(n, e)| (*n, e.origin(p), e.field_i32(p, "surfType")))
+            .collect();
+        let pane = impacts
+            .iter()
+            .find(|(_, o, _)| (o[0] + 763.0).abs() < 0.5)
+            .unwrap_or_else(|| panic!("seed {seed}: no impact on the pane's face: {impacts:?}"));
+        assert_eq!(pane.2, 0, "seed {seed}: the caulk side's surfType");
+        if let Some(flesh) = impacts.iter().find(|(_, _, st)| *st == 7) {
+            assert!(flesh.1[0] < -800.0, "seed {seed}: {flesh:?}");
+            assert!(pane.0 < flesh.0, "seed {seed}: the pane's numbers below");
+            taps += 1;
+        }
+        for _ in 0..80 {
+            step(&mut sv, sight);
+        }
+    }
+    let damage: Vec<String> = sv
+        .script_log()
+        .iter()
+        .filter(|l| l.starts_with("PROBE damage "))
+        .map(|l| l.trim_end().to_string())
+        .collect();
+    assert_eq!(damage.len(), taps, "{damage:?}");
+    assert!(taps > 1, "{taps} rounds reached the target");
+    for l in &damage {
+        let t: Vec<&str> = l.split_whitespace().collect();
+        assert!(
+            ["180", "107", "72", "60", "48"].contains(&t[4])
+                && t[5] == "0"
+                && t[6] == "MOD_PISTOL_BULLET",
+            "a full-damage hit with no flags, as retail's: {l}"
+        );
+    }
+}
