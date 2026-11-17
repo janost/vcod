@@ -1198,8 +1198,8 @@ impl DamageIndicators {
     /// follow switch is not (`0x3002fc37`-`0x3002fc5e` test no
     /// `clientNum`). `view` is the refdef's (pitch, yaw, roll) the kick is
     /// split along, wire degrees: last frame's drawn view. `now` is the
-    /// HUD's clock, `kick_ms` the clock the gun's sway runs on.
-    /// Whether it was a hit.
+    /// HUD's clock (`cg.time`), `kick_ms` the kick's stamp, `cg.snap`'s
+    /// `serverTime` (`0x30028a58`). Whether it was a hit.
     pub fn feed(&mut self, fb: DamageFeedback, view: [f32; 3], now: i32, kick_ms: i32) -> bool {
         let last = self.last.replace(fb);
         if last.is_none_or(|l| l.event == fb.event) || fb.count == 0 {
@@ -1233,9 +1233,22 @@ impl DamageIndicators {
         }
     }
 
-    /// The last hit's kick, which the view and the gun read.
+    /// The last hit's kick on `cg.time`, for tests.
+    #[cfg(test)]
     pub fn kick(&self) -> DamageKick {
         self.kick
+    }
+
+    /// The kick on a clock `shift` ms ahead of `cg.time`. Retail reads the
+    /// stamp against `cg.time` for the view and the gun alike (combat doc
+    /// 17.1, hud doc "Scope overlay"); vcod's gun aim runs on the
+    /// prediction's clock, so the stamp moves with it.
+    pub fn kick_on(&self, shift: i32) -> DamageKick {
+        let mut k = self.kick;
+        if k.time_ms != 0 {
+            k.time_ms += shift;
+        }
+        k
     }
 
     /// A feed on one clock, for tests.

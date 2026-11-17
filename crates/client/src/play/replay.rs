@@ -139,13 +139,8 @@ impl<'a> Client<'a> {
         // `main.rs`'s `Hud::feed_damage`, the playerstate's view standing in
         // for the drawn one.
         let fb = DamageFeedback::from_ps(p, &newest.ps);
-        let kick_ms = predicted
-            .as_ref()
-            .map_or(newest.server_time, |v| v.pred.command_time);
-        if self
-            .damage
-            .feed(fb, newest.ps.viewangles(p), newest.server_time, kick_ms)
-        {
+        let t = newest.server_time;
+        if self.damage.feed(fb, newest.ps.viewangles(p), t, t) {
             self.tally.hits += 1;
             self.tally.mounted_hits +=
                 usize::from(newest.ps.field_i32(p, "eFlags") & crate::turret::EF_MOUNTED != 0);
