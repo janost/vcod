@@ -946,8 +946,9 @@ pub(crate) fn posed_body_tag(
     let now = host.level_time_ms;
     let c4 = host.cod4_mut();
     let p = c4.posed_bodies.iter_mut().find(|p| p.entity == entity)?;
-    let skel = &p.rig.skeleton;
-    let i = skel
+    let i = p
+        .rig
+        .skeleton
         .bones()
         .iter()
         .position(|b| b.name.eq_ignore_ascii_case(name))?;
@@ -956,21 +957,39 @@ pub(crate) fn posed_body_tag(
         p.controls = p.eased_controls;
         c4.script_poses.push((slot, now, p.controls));
     }
-    let (pos, rot) = crate::game::cod4::combat::skel_worlds(skel, &p.pose, Some(&p.controls))[i];
+    let mat = crate::game::cod4::combat::skel_mats(&p.rig.skeleton, &p.pose, Some(&p.controls))[i];
     let (body_origin, body_yaw) = (p.origin, p.yaw);
     let (origin, yaw) = match host.cod4().corpse_source.get(slot).copied().flatten() {
         Some(c) => super::cod4_combat::current_place(host, slot, &c),
         None => (body_origin, body_yaw),
     };
-    let placed = vcod_cod2::player::BodyFrame {
-        origin,
-        angles: [0.0, yaw, 0.0],
-        ..Default::default()
-    }
-    .transform();
-    let (_, turn, _) = placed.to_scale_rotation_translation();
-    let m = Mat3::from_quat(turn * rot);
-    Some((placed.transform_point3(pos), [m.x_axis, m.y_axis, m.z_axis]))
+    Some(world_tag(&mat, origin, yaw))
+}
+
+/// `G_DObjGetWorldTagMatrix` (0x80cc7ba) of a body standing at `origin`
+/// turned `yaw`: `AnglesToAxis` (0x818e910, glibc's `sinf` and `cosf`) of
+/// (0, yaw, 0), the bone's weighted rows ([`AnimMat::axis`]) through it
+/// (`MatrixMultiply` 0x818effc) and its `trans` through it plus the origin
+/// (`MatrixTransformVector43` 0x819016e), each sum on the x87 stack and
+/// stored once: (origin, axis rows).
+///
+/// [`AnimMat::axis`]: vcod_cod4::skel::AnimMat::axis
+fn world_tag(mat: &vcod_cod4::skel::AnimMat, origin: Vec3, yaw: f32) -> (Vec3, [Vec3; 3]) {
+    use vcod_common::x87::F80;
+    let r = vcod_common::x87::radians(yaw);
+    let (sy, cy) = (vcod_common::libm::sinf(r), vcod_common::libm::cosf(r));
+    // Pitch and roll 0: every product but the yaw's sine and cosine is
+    // by 0 or 1, so the rows are exact.
+    let axis = [[cy, sy, 0.0], [-sy, cy, 0.0], [0.0, 0.0, 1.0]];
+    let f = F80::from_f32;
+    let turned = |v: [f32; 3], k: usize| {
+        (f(v[0]) * f(axis[0][k]) + f(v[1]) * f(axis[1][k])) + f(v[2]) * f(axis[2][k])
+    };
+    let rows = mat
+        .axis()
+        .map(|m| Vec3::from_array([0, 1, 2].map(|k| turned(m, k).to_f32())));
+    let at = Vec3::from_array([0, 1, 2].map(|k| (turned(mat.trans, k) + f(origin[k])).to_f32()));
+    (at, rows)
 }
 
 /// The receiver's tag `name`: a playing body's or a helicopter's posed

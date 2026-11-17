@@ -295,6 +295,14 @@ impl BodyAngles {
             // `fadd %st(0),%st` at 0x804cefe.
             Updater::Cod4 { mantle, .. } => (mantle, 0.0, 2.0),
         };
+        // 1.7 reads the torso's share of the move and the legs' tolerance off
+        // `player_move_factor_on_torso` (default 0) and `bg_legYawTolerance`
+        // (20), and lays a prone body's legs along the view
+        // (cod4-player-anims.md 8).
+        let (torso_factor, legs_tolerance, prone_legs) = match updater {
+            Updater::Cod4 { .. } => (0.0, 20.0, yaw),
+            _ => (0.3, 40.0, m + yaw),
+        };
         let swing_angles =
             |dest, tolerance, clamp: f32, speed, ft, angle: &mut f32, on: &mut bool| match arith {
                 Some(Cod4Arith::Server) => {
@@ -336,7 +344,7 @@ impl BodyAngles {
         } else if input.eflags & EF_ADS != 0 {
             (yaw, 90.0)
         } else {
-            (yaw + m * 0.3, 90.0)
+            (yaw + m * torso_factor, 90.0)
         };
         swing_angles(
             torso_dest,
@@ -368,14 +376,14 @@ impl BodyAngles {
             legs(seat.unwrap_or(yaw), 0.0, self);
         } else if input.prone() {
             self.legs_yawing = false;
-            self.legs_yaw = m + yaw;
+            self.legs_yaw = prone_legs;
         } else if input.legs.strafe {
             self.legs_yawing = false;
             legs(yaw, 0.0, self);
         } else if self.legs_yawing {
             legs(seat.unwrap_or(legs_dest), 0.0, self);
         } else {
-            legs(seat.unwrap_or(legs_dest), 40.0, self);
+            legs(seat.unwrap_or(legs_dest), legs_tolerance, self);
         }
         if input.rides() {
             self.torso_yaw = yaw;

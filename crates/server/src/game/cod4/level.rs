@@ -1118,6 +1118,18 @@ impl Cod4Level {
         self.rt
             .set_client_angles(slot, [0.0, ps.view_angles[1], 0.0]);
         let host = &mut self.rt.host;
+        // The script's traces meet the body where this cmd linked it
+        // (`SV_LinkEntity`), not where the last frame left it.
+        let c4 = host.cod4_mut();
+        if let Some(i) = c4.trace_bodies.iter().position(|b| b.entity == slot as u32) {
+            if playing {
+                let b = &mut c4.trace_bodies[i];
+                b.origin = ps.origin;
+                b.maxs.z = body_height(ps.pm_flags);
+            } else {
+                c4.trace_bodies.remove(i);
+            }
+        }
         if playing {
             let h = body_height(ps.pm_flags);
             host.client_height[slot] = h;
@@ -1368,6 +1380,12 @@ impl Cod4Level {
         self.combat.aim[slot] = Default::default();
         self.combat.gun_angles[slot] = [0.0; 2];
         self.combat.clear_blood(slot);
+        // The spawn's own `ClientEndFrame` (0x80a7e66) swings the body's
+        // angles a frame at `legsAnim` 0, and the level's end frame swings
+        // them again at the same time (cod4-player-anims.md 8).
+        if mode == SpawnMode::Player {
+            self.animate_body(slot);
+        }
         if mode != SpawnMode::Intermission
             && let Some((_, _, touched)) = self.think(slot, think)
         {

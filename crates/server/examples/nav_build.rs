@@ -10,8 +10,10 @@
 //! `GAMETYPE=tdm` unlinks the other gametypes' script brushes as the
 //! census does, in place of the `bas` rubble. `LOST=1` lists the spawns
 //! that do not reach the census's main component, with their nodes, and
-//! `CROUCH=1` every crouched jump edge, `JUMPS=x,y,r` the jump edges out
-//! of nodes within `r` across of `(x, y)`, with the aim a bot steers at.
+//! `CROUCH=1` every crouched jump edge, `BACKED=1` the plain drops more
+//! than a step and no more than 64 down that a forward walk misses,
+//! `JUMPS=x,y,r` the jump edges out of nodes within `r` across of
+//! `(x, y)`, with the aim a bot steers at.
 //! `UNLINK=n,...` builds with those submodels out, as a script's
 //! `delete` leaves them. The `digest` is an FNV-1a hash over the nodes,
 //! the edges and the jump, leap, risky and perch sets: two builds that
@@ -112,6 +114,14 @@ fn main() {
                     g.nodes[a as usize].round(),
                     g.nodes[b as usize].round()
                 );
+            }
+        }
+        if std::env::var("BACKED").is_ok_and(|v| v == "1") {
+            let b = g.census_backed(&world.collision);
+            let near = b.iter().filter(|x| x.2).count();
+            println!("  backed drops {} (near a ladder {near})", b.len());
+            for (p, q, l) in b {
+                println!("    backed {:?} -> {:?} near {l}", p.round(), q.round());
             }
         }
         if std::env::var("LOST").is_ok_and(|v| v == "1") {

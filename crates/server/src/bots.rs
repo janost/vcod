@@ -460,6 +460,12 @@ pub struct BotView {
     /// [`Self::waypoint`] lies more than [`BACK_DOWN_HEIGHT`] down a drop
     /// a run off arrives at (`nav::Follower::running_off`): run, don't back.
     pub run_off: bool,
+    /// [`Self::waypoint`] lies more than a jump down a drop a run off
+    /// misses (`nav::Follower::backs_off`): the graph backed down it.
+    pub back_drop: bool,
+    /// Hold still on the rungs: another body over the bot on them is not
+    /// rising (`nav::Follower::under_hold`).
+    pub rungs_hold: bool,
     /// The edge under way is a CoD2 mantle (`nav::Follower::mantling`):
     /// pmove offers the climb only to a view on the wall
     /// (bot-combat.md 17.1), so no look turns it away.
@@ -3849,8 +3855,13 @@ impl Bot {
             }
             Some(w) if self.unstick_ticks == 0 => {
                 let (pitch, yaw, forward, right) = self.steer(view, w);
-                cmd.right = right;
-                (pitch, yaw, forward)
+                if view.rungs_hold && view.on_ladder {
+                    // No key: the rungs hold the body where it is.
+                    (pitch, yaw, 0)
+                } else {
+                    cmd.right = right;
+                    (pitch, yaw, forward)
+                }
             }
             // On a ladder with no way to steer, or pinned on it: down.
             // The heading is nothing to a body on a ladder, and the level
@@ -4420,8 +4431,10 @@ impl Bot {
         // A jump edge was proved by a forward run whatever its drop: backed
         // off mp_ship's stair at (5402, 321, 344) for the floor 140 under
         // it, a bot jumped backwards onto the stair and slid down it
-        // (seed 1275, bot-navigation.md section 3).
-        let backs = dz < -BACK_DOWN_HEIGHT && !view.run_off && !view.jump;
+        // (seed 1275, bot-navigation.md section 3). A drop deeper than a
+        // jump that the graph's run misses was backed down, and is backed
+        // here too (`BotView::back_drop`).
+        let backs = (dz < -BACK_DOWN_HEIGHT || view.back_drop) && !view.run_off && !view.jump;
         if backs || (view.on_ladder && dz < 0.0 && !over_top) {
             let flat = (to[0] - from[0]).hypot(to[1] - from[1]);
             let forward = crate::nav::back_move(flat, view.on_ladder);
@@ -5637,6 +5650,8 @@ mod tests {
             mate_ahead: false,
             squad: Default::default(),
             run_off: false,
+            back_drop: false,
+            rungs_hold: false,
             mantle: false,
             move_scale: 1.0,
             fatigue: None,
@@ -7191,6 +7206,30 @@ mod tests {
             (past.forward, past.angles[1]),
             (first.forward, first.angles[1])
         );
+    }
+
+    /// A waypoint 50 under the feet is run at, unless the graph's run off
+    /// that drop missed: then it is backed toward, as the graph proved it
+    /// (`BotView::back_drop`). A body on the rungs told to hold presses no
+    /// key (`BotView::rungs_hold`).
+    #[test]
+    fn a_drop_the_graph_backed_down_is_backed_and_a_held_climber_presses_nothing() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        // 50 under the feet at 64.
+        v.waypoint = Some([20.0, 0.0, 14.0]);
+        assert!(bot.think(&v).forward > 0, "run at");
+        v.back_drop = true;
+        assert!(bot.think(&v).forward < 0, "backed toward");
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.on_ladder = true;
+        v.waypoint = Some([0.0, 0.0, 200.0]);
+        assert_ne!(bot.think(&v).forward, 0, "climbs");
+        v.rungs_hold = true;
+        v.stop = true;
+        let cmd = bot.think(&v);
+        assert_eq!((cmd.forward, cmd.right), (0, 0), "holds");
     }
 
     /// mp_ship's crow's nest: backed toward the foot from a few units off
