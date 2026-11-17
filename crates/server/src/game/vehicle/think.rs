@@ -144,6 +144,10 @@ fn think(host: &mut GameHost, cx: &mut Cx, id: EntId, inputs: &[Option<RiderInpu
     };
     let health = crate::game::builtins::vehicle::health_of(host, cx, id);
     let capturing = script_int(host, cx, id, "capturing") != 0;
+    // The entity's own `closespeed` (+0x1f4) and `harc` (+0x2bc), which
+    // nothing stock writes (coduo-vehicles.md 17).
+    let closespeed = script_float(host, cx, id, "closespeed");
+    let harc = script_float(host, cx, id, "harc");
     let world = host.world.clone();
     let tex_scroll = crate::game::builtins::cvar::atof(host.cvars.get("g_vehicleTexScrollScale"));
     let horns = host.cvars.get("g_vehicleHorns") != "0";
@@ -202,8 +206,8 @@ fn think(host: &mut GameHost, cx: &mut Cx, id: EntId, inputs: &[Option<RiderInpu
         driven: v.driven,
         health,
         capturing,
-        closespeed: 0.0,
-        harc: 0.0,
+        closespeed,
+        harc,
         bmodel,
         bounds_maxs,
         max_clients: crate::server::MAX_CLIENTS as u32,
@@ -609,6 +613,16 @@ fn script_int(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> i32 {
         vcod_gsc::Value::Int(i) => i,
         vcod_gsc::Value::Float(f) => f as i32,
         _ => 0,
+    }
+}
+
+fn script_float(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> f32 {
+    use vcod_gsc::Host;
+    let atom = cx.intern_folded(name);
+    match host.get_field(cx, id, atom) {
+        vcod_gsc::Value::Float(f) => f,
+        vcod_gsc::Value::Int(i) => i as f32,
+        _ => 0.0,
     }
 }
 

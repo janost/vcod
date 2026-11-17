@@ -22,6 +22,11 @@ use vcod_server::game::vehicle::physics::{
 
 const TANK: &str = "mp_cassino-tdm-slope-8ms-tank-drive-uo.txt";
 const JEEP: &str = "mp_peaks-tdm-slope-8ms-jeep-drive-uo.txt";
+/// The same drive under the script's `closespeed` 0.5 (`probe_closespeed`,
+/// coduo-vehicles.md 17).
+const JEEP_CLOSESPEED: &str = "mp_peaks-tdm-slope-8ms-jeep-closespeed-uo.txt";
+/// The tank drive under `closespeed` 0.5 and `harc` 10 (`probe_harc`).
+const TANK_CLOSESPEED: &str = "mp_cassino-tdm-slope-8ms-tank-closespeed-uo.txt";
 
 /// Wire fields the gate compares, with the tolerance a row passes within.
 const FIELDS: [(&str, f32); 12] = [
@@ -138,6 +143,13 @@ impl Snap {
     }
 }
 
+/// A 16-bit wire angle as the snapshot carries it (`write_angle_field`):
+/// a turret `harc` stops on its float limit, which the wire truncates.
+fn wire_angle(deg: f32) -> f32 {
+    let units = (f64::from(deg) * f64::from(65536.0f32 / 360.0)) as i64 as u16 as i16;
+    f32::from(units) * (360.0 / 65536.0)
+}
+
 /// Our step's fields under the wire's names.
 fn ours(p: &Physics, k: &str) -> f32 {
     match k {
@@ -147,8 +159,8 @@ fn ours(p: &Physics, k: &str) -> f32 {
         "apos.trBase[0]" => p.s.angles.x,
         "apos.trBase[1]" => p.s.angles.y,
         "apos.trBase[2]" => p.s.angles.z,
-        "angles2[0]" => p.angles2[0],
-        "angles2[1]" => p.angles2[1],
+        "angles2[0]" => wire_angle(p.angles2[0]),
+        "angles2[1]" => wire_angle(p.angles2[1]),
         "origin2[0]" => p.sway_packed[0] as f32,
         "origin2[2]" => p.sway_packed[1] as f32,
         "time" => (p.time & 0xffff) as f32,
@@ -185,6 +197,9 @@ struct Case {
     bsp_pose: (Vec3, Vec3),
     snaps: Vec<Snap>,
     cmds: Vec<Cmd>,
+    /// The entity's `closespeed` and `harc`, 0 for unset.
+    closespeed: f32,
+    harc: f32,
 }
 
 /// The map's collision world with every collmap's brush model unlinked:
@@ -252,6 +267,8 @@ fn load(fixture: &str, map: &str, vehicletype: &str, near: Vec3) -> Option<Case>
         bsp_pose: pose,
         snaps,
         cmds,
+        closespeed: 0.0,
+        harc: 0.0,
     })
 }
 
@@ -296,6 +313,8 @@ impl Case {
             health: 1000,
             bounds_maxs: self.bounds_maxs,
             max_clients: 8,
+            closespeed: self.closespeed,
+            harc: self.harc,
             ..StepInput::default()
         }
     }
@@ -485,6 +504,29 @@ fn jeep() -> Option<Case> {
     )
 }
 
+fn jeep_closespeed() -> Option<Case> {
+    let mut case = load(
+        JEEP_CLOSESPEED,
+        "mp_peaks",
+        "willyjeep_mp",
+        Vec3::new(-4160.0, 162.0, -110.0),
+    )?;
+    case.closespeed = 0.5;
+    Some(case)
+}
+
+fn tank_closespeed() -> Option<Case> {
+    let mut case = load(
+        TANK_CLOSESPEED,
+        "mp_cassino",
+        "panzerIV_mp",
+        Vec3::new(4676.0, -1979.0, 0.0),
+    )?;
+    case.closespeed = 0.5;
+    case.harc = 10.0;
+    Some(case)
+}
+
 /// `Scr_Vehicle_Init`'s settle puts the Panzer from the BSP's z 4 on its
 /// wheels at -7.875, level, as every snapshot of it carries; and the think
 /// writes `time2` 7000, which the 6-bit wire field keeps as 24.
@@ -572,4 +614,66 @@ fn jeep_drive_free_run() {
     let tally = free_run(&case);
     tally.report("jeep free run");
     tally.assert_gaps("jeep free run", &[], &EXACT);
+}
+
+#[test]
+fn jeep_closespeed_drive_anchored() {
+    let Some(case) = jeep_closespeed() else {
+        return;
+    };
+    assert_frames(&case, case.driven_len());
+    let tally = anchored(&case);
+    tally.report("jeep closespeed anchored");
+    tally.assert_gaps(
+        "jeep closespeed anchored",
+        &[(
+            18500,
+            i32::MAX,
+            "coduo-vehicles.md 17: retail's front-left probe meets a face ours clears",
+        )],
+        &EXACT,
+    );
+}
+
+/// Under `closespeed` 0.5 the Willys runs at half the cap through the
+/// same route (coduo-vehicles.md 17).
+#[test]
+fn jeep_closespeed_drive_free_run() {
+    let Some(case) = jeep_closespeed() else {
+        return;
+    };
+    let tally = free_run(&case);
+    tally.report("jeep closespeed free run");
+    tally.assert_gaps(
+        "jeep closespeed free run",
+        &[(
+            18500,
+            i32::MAX,
+            "coduo-vehicles.md 17: retail's front-left probe meets a face ours clears",
+        )],
+        &EXACT,
+    );
+}
+
+/// Under `closespeed` 0.5 and `harc` 10 the Panzer IV runs at half the cap
+/// and its turret stops 10 degrees off the hull (coduo-vehicles.md 17).
+/// Free run only: the turret holds the float 10 where the wire carries
+/// 9.9976, so an anchored step started from the wire turns from the
+/// wrong angle.
+#[test]
+fn tank_closespeed_harc_drive_free_run() {
+    let Some(case) = tank_closespeed() else {
+        return;
+    };
+    let tally = free_run(&case);
+    tally.report("tank closespeed free run");
+    tally.assert_gaps(
+        "tank closespeed free run",
+        &[(
+            27200,
+            i32::MAX,
+            "coduo-vehicles.md 17: the track clock parts at 27200, unread",
+        )],
+        &EXACT,
+    );
 }

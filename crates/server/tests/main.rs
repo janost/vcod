@@ -116,6 +116,7 @@ mod vehicle_ram_ab;
 mod vehicle_runover_ab;
 mod vehicle_shell_ab;
 mod vehicle_wreck_ab;
+mod vehscript_uo_ab;
 mod votes_ab;
 mod weapsel_ab;
 mod worldcopy_ab;

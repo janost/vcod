@@ -2,9 +2,9 @@
 //! (game.mp.uo 0x8df6e) adds at 0xaec80, `precacheVehicle` and
 //! `getNumVehicles`, and the entity methods the stock vehicle scripts call
 //! (`spawnDuplicate`, `verifyPosition`, `doDamage`, ...)
-//! (docs/research/coduo-vehicles.md 13). The path methods
-//! (`attachPath` .. `resumeSpeed`) are left out: no stock MP script uses a
-//! vehicle path.
+//! (docs/research/coduo-vehicles.md 13). UO MP hands a script no vehicle
+//! node, so the path methods (`attachPath` .. `resumeSpeed`) only check
+//! their arguments and raise their errors (17).
 
 use super::entity::entity_receiver;
 use crate::game::host::GameHost;
@@ -14,6 +14,14 @@ use vcod_gsc::{Cx, EntId, ErrorKind, Host, Target, Value};
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
 
 pub const NAMES: &[(&str, Builtin)] = &[
+    ("attachpath", attach_path),
+    ("startpath", start_path),
+    ("setswitchnode", set_switch_node),
+    ("setwaitnode", set_wait_node),
+    ("setwaitspeed", set_wait_speed),
+    ("setspeed", set_speed),
+    ("resumespeed", resume_speed),
+    ("freevehicle", free_vehicle),
     ("precachevehicle", precache_vehicle),
     ("getnumvehicles", get_num_vehicles),
     ("joltbody", jolt_body),
@@ -144,16 +152,59 @@ fn jolt_body(
     Ok(Value::Undefined)
 }
 
-/// `getWheelSurface(name)` (0x8e7c1): the surface under a wheel, `""` on
-/// none. vcod does not keep wheel surfaces yet and answers `""`.
+/// The wheel names `getWheelSurface` takes, in `tag_wheel_*` order
+/// (scr_const 0x88..0x92).
+const WHEELS: [&str; 6] = [
+    "front_left",
+    "front_right",
+    "back_left",
+    "back_right",
+    "middle_left",
+    "middle_right",
+];
+
+/// `getWheelSurface(name)` (0x8e7c1): the surface type the wheel's last
+/// suspension trace stored (`rec+0x158`), `"none"` for 0. A dedicated
+/// server's `trap_SurfaceTypeToName` answers `"default"` for any other
+/// (coduo-vehicles.md 17).
 fn get_wheel_surface(
     host: &mut GameHost,
     cx: &mut Cx,
     recv: Option<Target>,
-    _args: &[Value],
+    args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    vehicle(host, recv)?;
-    Ok(Value::String(cx.intern_exact("")))
+    let id = vehicle(host, recv)?;
+    // `Scr_GetConstString(0)` reads the name ahead of the kind test; a
+    // number reads as its text and names no wheel.
+    let name = match args.first() {
+        Some(Value::String(s)) => Some(cx.resolve(*s).to_string()),
+        Some(Value::Int(_) | Value::Float(_)) => None,
+        _ => return Err(ErrorKind::BadType("getWheelSurface takes a wheel name")),
+    };
+    let v = &host.vehicles.live[&id];
+    let info = host.vehicles.info_of(v);
+    let four = info.kind == crate::game::vehicle::info::KIND_FOUR_WHEEL;
+    if !four && info.kind != crate::game::vehicle::info::KIND_TANK {
+        return Err(ErrorKind::Custom(format!(
+            "Vehicle type [{}] has no wheels",
+            info.name
+        )));
+    }
+    let Some(i) = name.and_then(|n| WHEELS.iter().position(|w| *w == n)) else {
+        return Err(ErrorKind::Custom(
+            "Valid wheel names are: [front_left, front_right, back_left, back_right, middle_left, middle_right]"
+                .into(),
+        ));
+    };
+    if four && i > 3 {
+        return Err(ErrorKind::Custom("Vehicle has no middle wheels".into()));
+    }
+    let surface = if v.phys.s.wheel_surface[i] == 0.0 {
+        "none"
+    } else {
+        "default"
+    };
+    Ok(Value::String(cx.intern_exact(surface)))
 }
 
 /// `getSpeedMPH()` (0x8e97f): `speed` over 17.6.
@@ -538,5 +589,154 @@ fn clear_vehicle_position(
     for e in crate::game::vehicle::clutter_in_box(host, cx, id) {
         crate::game::builtins::entity::delete(host, cx, Some(Target::Entity(e)), &[])?;
     }
+    Ok(Value::Undefined)
+}
+
+/// `GScr_GetVehicleNodeIndex` (0x9836c): a node is a class-2 object, and
+/// only `getVehicleNode`, `getVehicleNodeArray` and `getAllVehicleNodes`
+/// (0x984d2..0x98726) make one. UO MP registers none of the three, so an
+/// entity is never a node and anything else is not an entity
+/// (coduo-vehicles.md 17).
+fn vehicle_node(args: &[Value], i: usize) -> ErrorKind {
+    match args.get(i) {
+        Some(Value::Entity(_)) => ErrorKind::Custom("Not a vehicle node".into()),
+        _ => ErrorKind::BadType("not an entity"),
+    }
+}
+
+/// `ent+0x17e == 2` (`CMD_VEH_*`'s shared test): a player has driven it.
+fn path_usable(host: &GameHost, id: EntId) -> Result<(), ErrorKind> {
+    if host.vehicles.live[&id].driven {
+        return Err(ErrorKind::Custom(
+            "Vehicle is invalid on path after it's been used".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn mph_arg(args: &[Value], i: usize) -> Result<f32, ErrorKind> {
+    number(args.get(i))
+        .map(|x| x * crate::game::vehicle::info::MPH)
+        .ok_or(ErrorKind::BadType("vehicle speeds take a number"))
+}
+
+/// `attachPath(node)` (0x8dfe9): the node is read ahead of the use test.
+fn attach_path(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    vehicle(host, recv)?;
+    Err(vehicle_node(args, 0))
+}
+
+/// `startPath()` (0x8e21c): no node was ever attached.
+fn start_path(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = vehicle(host, recv)?;
+    path_usable(host, id)?;
+    Err(ErrorKind::Custom(
+        "Can't start path on a vehicle that hasn't been attached".into(),
+    ))
+}
+
+/// `setSwitchNode(from, to)` (0x8e299): both nodes ahead of the use test.
+fn set_switch_node(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    vehicle(host, recv)?;
+    Err(vehicle_node(args, 0))
+}
+
+/// `setWaitNode(node)` (0x8e328): the use test, then the node.
+fn set_wait_node(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = vehicle(host, recv)?;
+    path_usable(host, id)?;
+    Err(vehicle_node(args, 0))
+}
+
+/// `setWaitSpeed(mph)` (0x8e394): stores `rec+0x23c`, which only the path
+/// think (0x88561) reads.
+fn set_wait_speed(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = vehicle(host, recv)?;
+    path_usable(host, id)?;
+    if mph_arg(args, 0)? < 0.0 {
+        return Err(ErrorKind::Custom(
+            "Cannot have a negative wait speed on a vehicle".into(),
+        ));
+    }
+    Ok(Value::Undefined)
+}
+
+/// `setSpeed(mph, accel)` (0x8e435): stores `rec+0x274..0x27c` for the
+/// path think alone, both read ahead of either test.
+fn set_speed(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = vehicle(host, recv)?;
+    path_usable(host, id)?;
+    let (speed, accel) = (mph_arg(args, 0)?, mph_arg(args, 1)?);
+    if speed < 0.0 {
+        return Err(ErrorKind::Custom(
+            "Cannot set negative speed on vehicle".into(),
+        ));
+    }
+    if accel < 0.0 {
+        return Err(ErrorKind::Custom(
+            "Cannot set negative acceleration on vehicle".into(),
+        ));
+    }
+    Ok(Value::Undefined)
+}
+
+/// `resumeSpeed(accel)` (0x8e52e): as `setSpeed`'s second half.
+fn resume_speed(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = vehicle(host, recv)?;
+    path_usable(host, id)?;
+    if mph_arg(args, 0)? < 0.0 {
+        return Err(ErrorKind::Custom(
+            "Cannot set negative acceleration on vehicle".into(),
+        ));
+    }
+    Ok(Value::Undefined)
+}
+
+/// `freeVehicle()` (0x8e72f): `G_FreeVehicle`, then the entity stays as
+/// `eType` 13 `script_vehicle_corpse`, notified `death` and handed a new
+/// script object (coduo-vehicles.md 17).
+fn free_vehicle(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = vehicle(host, recv)?;
+    crate::game::vehicle::free_to_corpse(host, cx, id);
     Ok(Value::Undefined)
 }

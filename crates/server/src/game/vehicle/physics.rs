@@ -694,12 +694,15 @@ impl Physics {
             0.0
         };
         tv.z = lv.z;
-        let pf = if s.angles.x < 0.0 {
-            1.0 - s.angles.x / -90.0
+        // The pitch factor stays on the x87 stack into the product, rounded
+        // to a float once (0x7da19..0x7da63).
+        let ax = f64::from(s.angles.x);
+        let pf = if ax < 0.0 {
+            1.0 - ax / -90.0
         } else {
-            1.0 + s.angles.x / 90.0
+            1.0 + ax / 90.0
         };
-        vmax *= pf;
+        vmax = (f64::from(vmax) * pf) as f32;
         if vmax != 0.0 {
             let l = len(tv);
             if l != 0.0 && vmax < l {

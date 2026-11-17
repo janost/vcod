@@ -1,0 +1,12 @@
+# Retail CoD UO 1.51b dedicated server, 2026-11-17: the PROBE lines of
+# client-probes/probe_vehscript on mp_kharkov, +set probe_case free.
+# COD_VERSION=uo PORT=28977 PROBE_SECS=10 tools/run_probe.sh client-probes/probe_vehscript
+#   mp_kharkov +set probe_case free
+PROBE free 152 gaz67b_mp 2900 (2659.00, -6713.00, -33.34) 22
+PROBE after 1050 0
+PROBE death level 1050
+PROBE after 1100 0
+PROBE corpses 1
+PROBE corpse 152 script_vehicle_corpse 0 1 0 0 (2659.00, -6713.00, -33.34)
+PROBE vehicles 21
+PROBE done 2100

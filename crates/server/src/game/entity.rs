@@ -782,6 +782,21 @@ impl ObjectTable {
         }
     }
 
+    /// `Scr_FreeEntityNum` on an entity that stays (UO's `freeVehicle`,
+    /// coduo-vehicles.md 17): every handle out goes dead and the script
+    /// fields go with the object; the slot, its number, its link and its
+    /// engine fields stay. The new handle, `None` for no such entity.
+    pub fn reissue(&mut self, cx: &mut Cx, id: EntId) -> Option<EntId> {
+        if self.get(id).is_none() || id.0 >= FIRST_HUD_ELEM || id.0 == ENTITYNUM_WORLD {
+            return None;
+        }
+        let n = id.0 as usize;
+        self.edits += 1;
+        self.ent_gens[n] = self.ent_gens[n].wrapping_add(1);
+        self.ents[n].as_mut()?.script = cx.new_struct();
+        Some(EntId(id.0, self.ent_gens[n]))
+    }
+
     /// CoD4's `delete()`: `G_FreeEntity` runs inside the call, so the
     /// number joins the free list's tail now, stamped now; the entity
     /// itself goes with the deferred free (cod4-combat.md 14).

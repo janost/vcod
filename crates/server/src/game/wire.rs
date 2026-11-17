@@ -678,7 +678,8 @@ enum Kind {
     /// model number, 0 for a script-spawned one (docs/research/cod11-movers.md
     /// 18 and 20).
     Mover(i32),
-    /// A United Offensive vehicle, by its model configstring index.
+    /// A United Offensive vehicle or a `freeVehicle` corpse, by its model
+    /// configstring index.
     Vehicle(i32),
     /// One of its sound-blend entities (`SP_sound_blend` 0x5a5e7,
     /// `G_SetSoundBlend` 0x5a6a9): the vehicle and the two aliases with
@@ -704,7 +705,7 @@ fn kind_of(host: &mut GameHost, cx: &mut Cx, id: EntId, classname: &str) -> Opti
         }
         return Some(Kind::Item(item));
     }
-    if host.vehicles.live.contains_key(&id) {
+    if host.vehicles.live.contains_key(&id) || host.vehicles.corpses.contains_key(&id) {
         return Some(Kind::Vehicle(model_index(host, cx, id).unwrap_or(0)));
     }
     if let Some((veh, state)) = crate::game::vehicle::sound_blend(host, id) {
