@@ -1224,8 +1224,8 @@ the yaw word of the client's last cmd, so the words that follow depend on
 the word in flight at the teleport. The yaw words were not what differed
 between the two runs.
 
-vcod, `fall_ab`: before the first drop ours stands still on the yaw word
-retail sent last before its own (8192 in both fixtures), so the teleport sets
+vcod, `fall_ab`: before the first drop ours stands still on retail's yaw
+words (its last before the drop is 8192 in both fixtures), so the teleport sets
 retail's `delta_angles`, and the first drop's replay ends in retail's rest at
 the wall. The trap: walking at an absolute 315 until the first drop, on our
 own spawn's `delta_angles`, sets a `delta_angles` 8192 off retail's at the
@@ -1531,21 +1531,31 @@ The gates:
 - `crates/server/tests/predict_ab.rs`'s
   `server_and_predictor_agree_beside_a_body` steps the server's sim and the
   predictor side by side beside a standing body;
-- `crates/server/tests/fall_ab.rs` runs `probe_fall` on ours at both bounds
-  and, from the first drop on, sends retail's own cmds (the fixture's `CMDS`
-  timeline, shifted onto our clock), each ahead of the frame whose retail
-  snapshot first counted it. It holds ours to every retail `FALL` line from
-  the second drop on exactly (origin to the printed thousandth, 8.9,
+- `crates/server/tests/fall_ab.rs` runs `probe_fall` on ours at both bounds.
+  A first run to ours' first drop measures its time against retail's; the
+  second sends retail's own cmds (the fixture's `CMDS` timeline, shifted onto
+  our clock) from a second before that drop, each ahead of the frame whose
+  retail snapshot first counted it. It holds ours to every retail `FALL` line
+  from the first drop on exactly (origin to the printed thousandth, 8.9,
   velocity, ground, `pm_flags`, `pm_time`, health, event ring), to the
-  probe's lines with only their times masked (and the resting origin of
-  the first drop), to the same landing parms, to each damage against the
-  share of its own parm, no `EV_PAIN`, and the systeminfo bounds.
-  `FALL_REPORT=1` prints both sides' parms, `FALL_DUMP=<path>` every row
-  beside ours. The walk capture (8.5) is replayed the same way with each
-  cmd's yaw word and forward held, and held on every row from the second
-  drop to the fatal one, the event ring aside (its footsteps count from the
-  first drop's own cadence), and on every `after` line. The second walk run
-  (8.12, 8.13) is held the same way, its corpse rows included.
+  probe's lines with only their times masked, to the same landing parms, to
+  each damage against the share of its own parm, no `EV_PAIN`, and the
+  systeminfo bounds. `FALL_REPORT=1` prints both sides' parms,
+  `FALL_DUMP=<path>` every row beside ours. The walk capture (8.5) is
+  replayed the same way with each cmd's yaw word, forward held from the
+  drop on, and held on every row from the first drop to the fatal one, the
+  event ring aside (its footsteps count from each side's own spawn), and on
+  every `after` line. The second walk run (8.12, 8.13) is held the same way,
+  its corpse rows included, and `probe_slide`'s capture from its first trial.
+  VERIFIED, vcod: on our own 16/17 ms cadence up to the drop, the stock
+  run's first drop fell 0.53 short on its first frame (62.561 against
+  62.030) with `commandTime` matching, since the cmd in flight at the
+  teleport split the frame differently, and came to rest 0.01 off retail's
+  `after` origin; on retail's cadence every row matches. The first walk run's
+  drop snapshot reads `vel=-19,0,-19`, which the teleport kept from retail's
+  jitter in a corner by its own spawn (381, -1328.875), a walk ours never
+  makes from its spawn: the gate hands ours that velocity on the drop frame
+  (`test_set_client_velocity`), and every row matches from there.
 
 ## 12. Divergences and not modelled
 

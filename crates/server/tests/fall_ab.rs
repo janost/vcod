@@ -8,14 +8,15 @@
 //! A fall's impact speed moves with the cmd lengths, since the velocity snap
 //! keeps a different share of each cmd's gravity, so ours replays the cmd
 //! timeline retail ran (the `CMDS` lines, shifted by the gap between the two
-//! runs' first drops) on the real server, each cmd delivered ahead of the
-//! frame whose snapshot first reported it. Ours is held to:
+//! runs' first drops, which a first run of ours to its first drop measures)
+//! on the real server from a second before the first drop, each cmd
+//! delivered ahead of the frame whose snapshot first reported it. Ours is
+//! held to:
 //!
-//! - every retail `FALL` line from the second drop on (the walk capture's
+//! - every retail `FALL` line from the first drop on (the walk capture's
 //!   with its server stall replayed), `t` and `ct` shifted: origin to the printed
 //!   thousandth, velocity, ground, `pm_flags`, `pm_time`, health and the
-//!   event ring, so each landing's parm, stun and damage, exactly. The first
-//!   drop runs on our own cadence until its line names the shift;
+//!   event ring, so each landing's parm, stun and damage, exactly;
 //! - the probe's lines, timestamps aside: the damage callback's arguments
 //!   (undefined entities and vectors, `MOD_FALLING`, weapon and hit location
 //!   `none`, the damage and health), the killed callback's (the world twice,
@@ -253,28 +254,18 @@ fn drop_time(probe: &[String], n: usize) -> Option<i32> {
         .map(|l| l.split_whitespace().nth(2).unwrap().parse().unwrap())
 }
 
-/// A probe line with its timestamp masked, and, on an `after` line, where
-/// the player came to rest when that is not a pmove question: the first drop
-/// ran on our own cadence.
-fn shape(line: &str, first_after: bool) -> String {
+/// A probe line with its timestamp masked.
+fn shape(line: &str) -> String {
     let mut out: Vec<&str> = line.split_whitespace().collect();
     if out.len() > 2 {
         out[2] = "<t>";
-    }
-    if out[1] == "after" && first_after {
-        out.truncate(6);
     }
     out.join(" ")
 }
 
 /// Every probe line shaped by [`shape`].
 fn shapes(lines: &[String]) -> Vec<String> {
-    let first = lines.iter().position(|l| l.starts_with("PROBE after "));
-    lines
-        .iter()
-        .enumerate()
-        .map(|(i, l)| shape(l, first == Some(i)))
-        .collect()
+    lines.iter().map(|l| shape(l)).collect()
 }
 
 /// The number after `key` in a probe line.
@@ -378,9 +369,6 @@ struct Ours {
     systeminfo: String,
 }
 
-/// The probe on our server, `sets` as `+set`s, until it logs `done`. Until
-/// the first drop the client sends 16 and 17 ms cmds of its own, walking at
-/// `walk` if given; from then on, retail's, shifted onto our clock.
 /// `surfaceparm slick` (0x2) ORed into every lump-0 material's surface
 /// flags: the map the slick capture's server loaded.
 fn slicken(mut bsp: Vec<u8>) -> Vec<u8> {
@@ -394,6 +382,19 @@ fn slicken(mut bsp: Vec<u8>) -> Vec<u8> {
     bsp
 }
 
+/// How long before the first drop ours takes up retail's cmd timeline: the
+/// drop lands mid-cmd, and the cmd lengths around it set where the fall's
+/// first frames come down.
+const RETAIL_CMDS_BEFORE_DROP_MS: i32 = 1000;
+
+/// The probe on our server, `sets` as `+set`s. The client sends 16 and 17 ms
+/// cmds of its own, standing on retail's last yaw word before the first drop
+/// if `walk` is given, until [`RETAIL_CMDS_BEFORE_DROP_MS`] before the first
+/// drop at `known` (our first drop's time less retail's); from then on,
+/// retail's, shifted onto our clock, held still up to the drop. With `known`
+/// unset it returns at the first drop, which names it: the script drops off
+/// the spawn's clock, which the cmds never move, so the run that knows the
+/// shift drops on the same frame.
 #[allow(clippy::too_many_arguments)]
 fn run_ours(
     gametype: &str,
@@ -403,6 +404,7 @@ fn run_ours(
     hitch: Option<Hitch>,
     retail: &Retail,
     slick: bool,
+    known: Option<i32>,
 ) -> Ours {
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{gametype}.gsc");
     let probe = std::fs::read_to_string(src).expect("read the probe");
@@ -427,6 +429,12 @@ fn run_ours(
     // Retail's snapshot times and what each had run, so each cmd reaches
     // ours ahead of the same frame it reached retail's.
     let retail_ct: BTreeMap<i32, i32> = retail.falls.iter().map(|l| (l.t, l.ct)).collect();
+    // The last cmd retail's first drop frame ran ahead of the drop; with no
+    // snapshot logged there, every cmd stamped before the frame (below).
+    let drop_ct = retail_ct
+        .get(&retail_first)
+        .copied()
+        .unwrap_or(retail_first - 1);
     let mut shift = None;
     // Retail's yaw word on its last cmd before the first drop.
     let first_word = retail
@@ -440,6 +448,8 @@ fn run_ours(
     // a client whose clock stepped back sent a stale cmd, which the server
     // drops, between two live ones.
     let mut next_cmd = 0;
+    // Whether ours has taken up retail's timeline.
+    let mut on_retail = false;
     let mut falls = BTreeMap::new();
     // 100 s of server time at most; the probe is done in about 60.
     for _ in 0..2000 {
@@ -455,7 +465,19 @@ fn run_ours(
             .snapshots()
             .newest()
             .map_or(0, |s| s.ps.field_i32(p, "delta_angles[1]"));
-        match shift {
+        let timeline =
+            shift.or(known.filter(|s| next - s >= retail_first - RETAIL_CMDS_BEFORE_DROP_MS));
+        if let Some(s) = timeline
+            && !on_retail
+        {
+            on_retail = true;
+            next_cmd = retail
+                .cmds
+                .iter()
+                .position(|&(st, _)| st + s > last_sent)
+                .unwrap_or(retail.cmds.len());
+        }
+        match timeline {
             None => {
                 for ms in [16, 17, 17] {
                     now += Duration::from_millis(ms);
@@ -511,8 +533,10 @@ fn run_ours(
                         weapon,
                         ..NULL_USERCMD
                     };
+                    // Ahead of the drop ours stands where retail walked
+                    // into a corner (cod11-player-clip.md 8.13).
                     if let Some(yaw) = yaw {
-                        cmd.forward = 127;
+                        cmd.forward = if st > drop_ct { 127 } else { 0 };
                         cmd.angles[1] = yaw;
                     }
                     cmds.push(cmd);
@@ -532,12 +556,28 @@ fn run_ours(
             let log: Vec<String> = sv.script_log().iter().map(|l| l.to_string()).collect();
             if let Some(ours) = drop_time(&log, 0) {
                 let s = ours - retail_first;
+                if known.is_none() {
+                    shift = Some(s);
+                    break;
+                }
+                assert_eq!(Some(s), known, "ours' first drop moved on retail's cmds");
+                assert!(on_retail, "ours dropped before it took up retail's cmds");
                 shift = Some(s);
-                next_cmd = retail
-                    .cmds
-                    .iter()
-                    .position(|&(st, _)| st + s > last_sent)
-                    .unwrap_or(retail.cmds.len());
+                // The teleport keeps the velocity (8.13). Where retail's
+                // drop snapshot carries one, its walk before the drop ran
+                // from retail's own spawn, not ours: ours takes it.
+                if let Some(r) = retail.falls.iter().find(|l| l.t == retail_first) {
+                    let v: Vec<f32> = tail_field(&r.rest, "vel=")
+                        .split(',')
+                        .map(|x| x.parse().unwrap())
+                        .collect();
+                    let slot = cl
+                        .snapshots()
+                        .newest()
+                        .map(|s| s.ps.field_i32(p, "clientNum"))
+                        .expect("a snapshot");
+                    sv.test_set_client_velocity(slot as usize, [v[0], v[1], v[2]]);
+                }
             }
         }
         // Past the probe's end too, as far as retail's client logged.
@@ -566,14 +606,38 @@ fn run_ours(
     }
 }
 
-/// Every retail `FALL` line past `second` and before `until` against ours
+/// [`run_ours`] twice: once to the first drop for the shift, then the whole
+/// probe on retail's cmds from just before it.
+fn run_aligned(
+    gametype: &str,
+    sets: &[(&str, &str)],
+    walk: Option<f32>,
+    hitch: Option<Hitch>,
+    retail: &Retail,
+    slick: bool,
+) -> Ours {
+    let fs = || vcod_common::testing::game_fs_11().expect("the paks");
+    let first = run_ours(gametype, fs(), sets, walk, hitch, retail, slick, None);
+    run_ours(
+        gametype,
+        fs(),
+        sets,
+        walk,
+        hitch,
+        retail,
+        slick,
+        Some(first.shift),
+    )
+}
+
+/// Every retail `FALL` line past `from` and before `until` against ours
 /// at the same time shifted onto our clock, exactly: `commandTime` and the
 /// tail, origin to the printed thousandth included, and the event ring
 /// unless `ring` is off.
 fn compare_rows(
     retail: &Retail,
     ours: &Ours,
-    second: i32,
+    from: i32,
     until: i32,
     ring: bool,
 ) -> (usize, Vec<String>) {
@@ -586,7 +650,7 @@ fn compare_rows(
     };
     let mut diffs = Vec::new();
     let mut lines = 0;
-    for r in retail.falls.iter().filter(|l| l.t > second && l.t < until) {
+    for r in retail.falls.iter().filter(|l| l.t > from && l.t < until) {
         lines += 1;
         let o = ours.falls.get(&(r.t + ours.shift));
         if !o.is_some_and(|o| o.ct == r.ct + ours.shift && tail(&o.rest) == tail(&r.rest)) {
@@ -609,7 +673,7 @@ fn tail_field<'a>(rest: &'a str, key: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no {key} in {rest}"))
 }
 
-/// The walk capture from the second drop on, row by row ([`compare_rows`])
+/// The walk capture from the first drop on, row by row ([`compare_rows`])
 /// but for the event ring, whose footsteps count from the first drop's own
 /// cadence: each stun walks the player obliquely into the street's south
 /// wall, and each walk ends jittering against a pillar (cod11-player-clip.md
@@ -617,17 +681,17 @@ fn tail_field<'a>(rest: &'a str, key: &str) -> &'a str {
 /// lands inside [`WALK_HITCH`], whose cmds walk the dead player on until the
 /// end frame (8.12). Retail must have pressed into the wall under the stun:
 /// rows before the fatal drop on its plane with a velocity into it.
-fn compare_walk_rows(retail: &Retail, ours: &Ours, second: i32) -> Vec<String> {
+fn compare_walk_rows(retail: &Retail, ours: &Ours, from: i32) -> Vec<String> {
     let fatal = (0..)
         .map_while(|n| drop_time(&retail.probe, n))
         .last()
         .expect("a fatal drop");
-    let (lines, diffs) = compare_rows(retail, ours, second, i32::MAX, false);
-    assert!(lines > 200, "only {lines} walk lines past the second drop");
+    let (lines, diffs) = compare_rows(retail, ours, from, i32::MAX, false);
+    assert!(lines > 200, "only {lines} walk lines past the first drop");
     let pressed = retail
         .falls
         .iter()
-        .filter(|r| r.t > second && r.t < fatal)
+        .filter(|r| r.t > from && r.t < fatal)
         .filter(|r| {
             let flags = i32::from_str_radix(tail_field(&r.rest, "pm_flags=0x"), 16).unwrap();
             let y: f32 = tail_field(&r.rest, "origin=")
@@ -666,9 +730,9 @@ fn gate_on(
     hitch: Option<Hitch>,
     slick: bool,
 ) {
-    let Some(fs) = vcod_common::testing::game_fs_11() else {
+    if vcod_common::testing::game_fs_11().is_none() {
         return;
-    };
+    }
     let text = std::fs::read_to_string(fixture).unwrap_or_else(|e| panic!("read {fixture}: {e}"));
     let retail = parse_retail(&text);
     assert!(
@@ -676,7 +740,7 @@ fn gate_on(
         "{fixture} has no finished run"
     );
     let retail_events = ring_events(retail.falls.iter());
-    let ours = run_ours(FALL_PROBE, fs, sets, walk, hitch, &retail, slick);
+    let ours = run_aligned(FALL_PROBE, sets, walk, hitch, &retail, slick);
     if let Some(path) = std::env::var_os("FALL_DUMP") {
         let mut out = String::new();
         for r in &retail.falls {
@@ -712,7 +776,7 @@ fn gate_on(
         }
     }
 
-    let second = drop_time(&retail.probe, 1).expect("a second retail drop");
+    let first = drop_time(&retail.probe, 0).expect("a retail drop");
     if slick {
         // No landing stuns on slick ground: no row reads `pm_flags` 0x100,
         // and every row matches, footsteps aside.
@@ -724,14 +788,14 @@ fn gate_on(
             })
             .count();
         assert_eq!(stunned, 0, "retail stunned on slick ground");
-        let (lines, rows) = compare_rows(&retail, &ours, second, i32::MAX, false);
-        assert!(lines > 100, "only {lines} FALL lines past the second drop");
+        let (lines, rows) = compare_rows(&retail, &ours, first, i32::MAX, false);
+        assert!(lines > 100, "only {lines} FALL lines past the first drop");
         diffs.extend(rows);
     } else if walk.is_some() {
-        diffs.extend(compare_walk_rows(&retail, &ours, second));
+        diffs.extend(compare_walk_rows(&retail, &ours, first));
     } else {
-        let (lines, rows) = compare_rows(&retail, &ours, second, i32::MAX, true);
-        assert!(lines > 100, "only {lines} FALL lines past the second drop");
+        let (lines, rows) = compare_rows(&retail, &ours, first, i32::MAX, true);
+        assert!(lines > 100, "only {lines} FALL lines past the first drop");
         diffs.extend(rows);
     }
 
@@ -827,14 +891,14 @@ fn a_corpse_on_flat_terrain_sinks_as_retail_does() {
 /// The hit-timer capture ([`SLIDE_HIT`], `client-probes/probe_slide`): each
 /// trial sets the walker down beside the street's south wall and a
 /// `radiusDamage` starts the 0x200 timer while it slides east along it. From
-/// the second trial on, every retail row against ours ([`compare_rows`],
+/// the first trial on, every retail row against ours ([`compare_rows`],
 /// the event ring aside, as in the walk) and the probe lines, timestamps
 /// aside. Retail must have pressed into the wall under the timer: rows on the
 /// wall's plane with 0x200 set and a velocity into it.
 fn slide_gate(fixture: &str) {
-    let Some(fs) = vcod_common::testing::game_fs_11() else {
+    if vcod_common::testing::game_fs_11().is_none() {
         return;
-    };
+    }
     let text = std::fs::read_to_string(fixture).unwrap_or_else(|e| panic!("read {fixture}: {e}"));
     let retail = parse_retail(&text);
     assert!(
@@ -865,7 +929,7 @@ fn slide_gate(fixture: &str) {
         pressed >= 10,
         "retail pressed into the wall under a hit's timer on only {pressed} rows"
     );
-    let ours = run_ours(SLIDE_PROBE, fs, &[], Some(WALK_YAW), None, &retail, false);
+    let ours = run_aligned(SLIDE_PROBE, &[], Some(WALK_YAW), None, &retail, false);
     if let Some(path) = std::env::var_os("FALL_DUMP") {
         let mut out = String::new();
         for r in &retail.falls {
@@ -884,23 +948,13 @@ fn slide_gate(fixture: &str) {
         }
         std::fs::write(path, out).unwrap();
     }
-    let second = drop_time(&retail.probe, 1).expect("a second retail drop");
+    let first = drop_time(&retail.probe, 0).expect("a retail drop");
     // The client's last partial `CMDS` line never printed, so rows past the
     // last logged cmd have nothing to replay.
     let last_cmd = retail.cmds.last().expect("retail cmds").0;
-    let (lines, mut diffs) = compare_rows(&retail, &ours, second, last_cmd, false);
-    assert!(lines > 100, "only {lines} slide lines past the second drop");
-    // The first trial starts from the velocity each side walked in with.
-    let from_second = |probe: &[String]| -> Vec<String> {
-        let at = probe
-            .iter()
-            .filter(|l| l.starts_with("PROBE drop "))
-            .nth(1)
-            .and_then(|d| probe.iter().position(|l| l == d))
-            .expect("a second drop");
-        probe[at..].iter().map(|l| shape(l, false)).collect()
-    };
-    let (rs, os) = (from_second(&retail.probe), from_second(&ours.probe));
+    let (lines, mut diffs) = compare_rows(&retail, &ours, first, last_cmd, false);
+    assert!(lines > 100, "only {lines} slide lines past the first drop");
+    let (rs, os) = (shapes(&retail.probe), shapes(&ours.probe));
     if rs != os {
         diffs.push(format!(
             "the probe lines differ\nretail:\n  {}\nours:\n  {}",
