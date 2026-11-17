@@ -356,10 +356,14 @@ impl Run<'_> {
             s.jump_penalty.to_string(),
             p.jump_penalty.to_string(),
         );
-        // Unread under 1.1's rules, and by a dead body's step: a corpse's
-        // goes out as `deadViewHeight` from its second snapshot on, as
-        // retail's does.
-        if s.rules.v15() && self.sim.wire_pm_type() != vcod_common::net::flags::PM_DEAD {
+        // Unread under 1.1's rules, and by a dead body's step, linked or
+        // not: a corpse's goes out as `deadViewHeight` from its second
+        // snapshot on, as retail's does (`probe_deadlink`'s 7s too).
+        let dead = matches!(
+            self.sim.wire_pm_type(),
+            vcod_common::net::flags::PM_DEAD | vcod_common::net::flags::PM_DEAD_LINKED
+        );
+        if s.rules.v15() && !dead {
             check("view_target", fbits(s.view_target), fbits(p.view_target));
         }
         check(
@@ -925,12 +929,14 @@ fn follow_turret(sim: &mut ClientSim, p: &Protocol, w: &msg::PlayerState) -> boo
 /// script put it there (`client-probes/probe_uostates`, `probe_states`): a
 /// death, a `spawnPlayer`, `spawnSpectator` or `spawnIntermission` reseeded
 /// from retail's playerstate,
-/// a `linkTo` held at retail's origin, the mover being the script's. The
+/// a `linkTo` held at retail's origin, the mover being the script's, and a
+/// death under that link (`probe_deadlink`'s corpse, `pm_type` 7). The
 /// seat captures' links are `follow_seat`'s. Whether the snapshot's body
 /// was dead, spectating or linked off a seat.
 fn follow_state(run: &mut Run<'_>, w: &msg::PlayerState) -> bool {
     use vcod_common::net::flags::{
-        EF_IN_VEHICLE_V22, PM_DEAD, PM_INTERMISSION, PM_NORMAL, PM_NORMAL_LINKED, PM_SPECTATOR,
+        EF_IN_VEHICLE_V22, PM_DEAD, PM_DEAD_LINKED, PM_INTERMISSION, PM_NORMAL, PM_NORMAL_LINKED,
+        PM_SPECTATOR,
     };
     let p = run.p;
     let pm = w.field_i32(p, "pm_type");
@@ -938,11 +944,29 @@ fn follow_state(run: &mut Run<'_>, w: &msg::PlayerState) -> bool {
     let origin = w.origin(p);
     let yaw = w.viewangles(p)[1];
     let angles = run.last_cmd.angles;
+    let seated = w.field_i32(p, "eFlags") & EF_IN_VEHICLE_V22 != 0;
     let reseed = |run: &mut Run<'_>| {
         run.sim.ps = predict::from_wire(p, w, Some(&run.last_cmd)).ps;
     };
+    // The script's mover, held at retail's origin (`probe_deadlink` links
+    // to a `script_origin` where the player stands).
+    let hold_link = |run: &mut Run<'_>| {
+        run.sim.link_to.get_or_insert(vcod_server::spectate::Link {
+            parent: vcod_gsc::EntId(1, 0),
+            offset: [0.0; 3],
+            velocity: [0.0; 3],
+        });
+        run.sim.ps.origin = Vec3::from(origin);
+    };
     match pm {
         PM_DEAD if ours != PM_DEAD => {
+            run.sim.die();
+            run.sim.end_frame(run.st);
+        }
+        // A death under the link: the corpse stays linked until the respawn
+        // unlinks it (`ClientSpawn`), and its end frame writes 7.
+        PM_DEAD_LINKED if ours != PM_DEAD_LINKED && !seated => {
+            hold_link(run);
             run.sim.die();
             run.sim.end_frame(run.st);
         }
@@ -954,18 +978,11 @@ fn follow_state(run: &mut Run<'_>, w: &msg::PlayerState) -> bool {
             run.sim.become_intermission(origin, yaw, angles, run.st);
             reseed(run);
         }
-        PM_NORMAL if matches!(ours, PM_DEAD | PM_SPECTATOR) => {
+        PM_NORMAL if matches!(ours, PM_DEAD | PM_DEAD_LINKED | PM_SPECTATOR) => {
             run.sim.become_player(origin, yaw, angles);
             reseed(run);
         }
-        PM_NORMAL_LINKED if w.field_i32(p, "eFlags") & EF_IN_VEHICLE_V22 == 0 => {
-            run.sim.link_to.get_or_insert(vcod_server::spectate::Link {
-                parent: vcod_gsc::EntId(1, 0),
-                offset: [0.0; 3],
-                velocity: [0.0; 3],
-            });
-            run.sim.ps.origin = Vec3::from(origin);
-        }
+        PM_NORMAL_LINKED if !seated => hold_link(run),
         PM_NORMAL if run.sim.link_to.is_some() && run.sim.seat.is_none() => {
             run.sim.link_to = None;
         }
@@ -974,7 +991,7 @@ fn follow_state(run: &mut Run<'_>, w: &msg::PlayerState) -> bool {
     pm == PM_DEAD
         || pm == PM_SPECTATOR
         || pm == PM_INTERMISSION
-        || (pm == PM_NORMAL_LINKED && w.field_i32(p, "eFlags") & EF_IN_VEHICLE_V22 == 0)
+        || (matches!(pm, PM_NORMAL_LINKED | PM_DEAD_LINKED) && !seated)
 }
 
 /// One capture's cmds run on a server sim speaking `p` and on a predictor

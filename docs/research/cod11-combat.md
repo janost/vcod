@@ -9272,8 +9272,13 @@ the open check.
 the fire draw and the RNG, and steps the spring
 (`vcod_common::pmove::aim::GunKick`) once per drawn frame from
 `OnlineView::frame`; `PlayInput::cmd_angles` adds the kick to the cmd and
-the drawn view, truncating the kick's units on their own (at most one unit
-off retail's single truncation). The gun kick turns the viewmodel about the
+the drawn view. VERIFIED, `CL_FinishMove` (CoDMP.exe 0x40b6b7..0x40b711):
+per axis two floats summed on the x87 stack (0x143a9a0..0x143a9a8 and
+0x143a994..0x143a99c), times 65536/360 (0x568f68), one `_ftol` (0x538be0)
+and `& 0xffff`. INFERRED, off `CL_CreateCmd` saving 0x143a9a0 and 0x143a9a4
+before `CL_AdjustAngles` (0x40b723..0x40b738): the first block is
+`cl.viewangles`, the second the kick. vcod truncates the view's units, the
+mouse's rest and the kick's units summed, once. The gun kick turns the viewmodel about the
 eye and reaches the scope through `AimInput::gun_kick`; a 1.1 server
 passes zero, a 1.5 or UO one its own spring (`cod15-movement.md` 6). The drawn view takes its roll from the cmd angles plus
 `delta_angles` (`own_view` in `crates/client/src/main.rs`), as the

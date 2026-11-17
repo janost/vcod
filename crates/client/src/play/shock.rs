@@ -515,6 +515,26 @@ impl ShellShock {
         self.loaded.get(name).and_then(Option::as_ref)
     }
 
+    /// The gamestate's registration (cgame 0x30021a3a..0x30021a77, 1.5
+    /// 0x30022d00, UO 0x3002c7c0): the block's names from its first slot
+    /// up to the first empty one, each file loaded in turn. `Err` is the
+    /// `CG_Error` a file that fails raises, which drops the game; a name a
+    /// later configstring brings fails quietly ([`Self::frame`]).
+    pub fn register<'a>(
+        &mut self,
+        fs: &Pk3Fs,
+        names: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), String> {
+        for name in names.into_iter().take_while(|n| !n.is_empty()) {
+            if self.params(fs, name).is_none() {
+                return Err(format!(
+                    "couldn't register shell shock '{name}' -- see console"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// `cg_shellshock <duration> [file]` (`0x30013e70`) at `now`, the
     /// shock slot 0 plays while the playerstate names none. `Err` is the
     /// console's reply.
@@ -734,6 +754,25 @@ mod tests {
         assert!(p.mouse);
         assert_eq!((p.max_pitch, p.max_yaw, p.sensitivity), (90.0, 90.0, 0.5));
         assert_eq!(p.mouse_fade_ms, 2000);
+    }
+
+    /// The gamestate's registration stops at the first empty slot and fails
+    /// on the first file that does not load, naming it.
+    #[test]
+    fn a_shock_that_fails_at_the_gamestate_drops_the_game() {
+        fn load(_: &Pk3Fs, name: &str) -> Option<ShockParams> {
+            (name != "missing").then(default_shock)
+        }
+        let fs = Pk3Fs::empty();
+        let mut s = ShellShock::with_loader(load, ShockParams::defaults);
+        assert_eq!(s.register(&fs, ["default", "", "missing"]), Ok(()));
+        assert_eq!(
+            s.register(&fs, ["default", "missing", "pain"]),
+            Err("couldn't register shell shock 'missing' -- see console".into())
+        );
+        // A later configstring's failure plays nothing and drops nothing.
+        let names = |_| Some("missing");
+        assert_eq!(s.frame(&fs, names, (1, 1000, 2000), 1500).left_ms, 0);
     }
 
     /// The parser skips comment lines and refuses a file that leaves a cvar

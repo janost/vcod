@@ -1,6 +1,6 @@
-//! Client cvars the server sets with `v` and `CG_MapRestart`, which live
-//! in the console's cvar store, plus the 140/204 configstring mirror
-//! those same names may fall back to
+//! Client cvars the server sets with `v`, `CG_MapRestart` and the 140/204
+//! configstring mirror, all of which the cgame writes into the console's
+//! cvar store, where the last write wins
 //! (docs/research/cod11-hud-protocol.md, section 0; `crates/server/src/cvars.rs`,
 //! the "140/204 mirror").
 
@@ -10,8 +10,8 @@ use crate::console::shell::{Effect, Shell};
 use vcod_common::net::protocol::{CS_LAYOUT_V1, CsLayout};
 
 /// The names the server set this connection, keyed lowercase; their
-/// values are the console's. A server-set name wins over the 140/204
-/// mirror `get` also checks.
+/// values are the console's. A name not yet written reads the 140/204
+/// mirror, which CoD2's menus look through.
 pub struct ClientCvars {
     set: HashSet<String>,
     /// Where the mirror sits: configstrings 140..=203 name the cvars and
@@ -82,6 +82,32 @@ impl ClientCvars {
         out
     }
 
+    /// The cgame's mirror writer (1.1 0x3002bc60, 1.5 0x3002d0f0, UO
+    /// 0x30038430): every pair set into the console's store through trap 9,
+    /// as a `v` is. `CG_Init` runs it (1.1 0x30023106, 1.5 0x300244a6, UO
+    /// 0x3002e0a6), and so does every change to a slot of either block
+    /// ([`Self::in_mirror`]), all pairs again. A console `set` between two
+    /// writes holds until the next.
+    pub fn apply_mirror(&mut self, configstrings: &[String], shell: &mut Shell) -> Vec<Effect> {
+        let pairs: Vec<(String, String)> = self
+            .mirrored(configstrings)
+            .map(|(n, v)| (n.to_owned(), v.to_owned()))
+            .collect();
+        let mut out = Vec::new();
+        for (name, value) in pairs {
+            out.extend(self.server_set(shell, &name, &value));
+        }
+        out
+    }
+
+    /// Whether configstring `index` is a mirror name or value slot, whose
+    /// change reruns the writer (1.1 and 1.5 140..=267, cgame 0x3002c72a;
+    /// UO 149..=404, 0x30038f35).
+    pub fn in_mirror(&self, index: usize) -> bool {
+        let (names, offset) = self.mirror();
+        (*names.start()..=*names.end() + offset).contains(&index)
+    }
+
     /// The mirror's `(name, value)` pairs as the cgame sets them (1.1
     /// 0x3002bc60, UO 0x30038430): in slot order, stopping at the first
     /// empty name, so a name past a hole is never set.
@@ -100,7 +126,8 @@ impl ClientCvars {
     }
 
     /// A server-set cvar's console value, else the 140/204 mirror entry
-    /// under a case-insensitive name match, else the console's.
+    /// under a case-insensitive name match, else the console's. Once
+    /// [`Self::apply_mirror`] ran every mirrored name is server-set.
     pub fn get(&self, name: &str, configstrings: &[String], shell: &Shell) -> Option<String> {
         let key = name.to_lowercase();
         if !self.set.contains(&key)
@@ -224,6 +251,28 @@ mod tests {
             c.get("scr_allow_m1carbine", &cs, &shell).as_deref(),
             Some("1")
         );
+    }
+
+    /// The mirror goes into the console's store, where the last write
+    /// wins: a console `set` after it, a mirror change after a `v`.
+    #[test]
+    fn the_mirror_and_the_console_share_one_store() {
+        let mut cs = vec![String::new(); 300];
+        cs[140] = "scr_friendlyfire".into();
+        cs[204] = "1".into();
+        let mut shell = Shell::new();
+        let mut c = ClientCvars::default();
+        c.apply_mirror(&cs, &mut shell);
+        assert_eq!(shell.cvar("scr_friendlyfire"), Some("1"));
+        shell.execute("set scr_friendlyfire 2");
+        assert_eq!(c.get("scr_friendlyfire", &cs, &shell).as_deref(), Some("2"));
+        c.on_server_command(&toks("v scr_friendlyfire 3"), &mut shell);
+        cs[204] = "0".into();
+        assert!(c.in_mirror(204) && c.in_mirror(140) && c.in_mirror(267));
+        assert!(!c.in_mirror(139) && !c.in_mirror(268));
+        c.apply_mirror(&cs, &mut shell);
+        assert_eq!(c.get("scr_friendlyfire", &cs, &shell).as_deref(), Some("0"));
+        assert_eq!(c.all(&cs, &shell)["scr_friendlyfire"], "0");
     }
 
     /// The cgame stops at the first empty name: a name past a hole is
