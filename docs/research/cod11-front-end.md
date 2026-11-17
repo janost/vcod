@@ -655,6 +655,56 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   into the entry, as `CL_SetServerInfo` updates every list holding the
   address (INFERRED from Q3).
 
+### The other games' caches
+
+- 1.5 (`CoDMP.exe` load `0x4190d0`, parse `0x419000`, save `0x419140`),
+  UO (`CoDUOMP.exe` `0x41a5b0`, `0x41a4e0`, `0x41a620`) and CoD2 1.3
+  (`CoD2MP_s.exe` `0x4b56e0`, `0x4b5610`, `0x4b5750`) share a shape 1.1
+  has not. VERIFIED (asm). In file order: an int that must be 1, the
+  Internet count (below `0x4e20`), the favourites count (below `0x80`),
+  the blocks' size (`0x2d7480` on 1.5 and CoD2, `0x2eaf00` on UO), the
+  Internet list (20000 entries: `0x2d2a80`, UO `0x2e6300` bytes), then
+  the favourites (128: `0x4a00`, UO `0x4c00`). Any short read or failed
+  test zeroes both counts. No Local list and no overflow block. VERIFIED.
+  UO names its file `uoservercache.dat` (`0x5956d8`); 1.5 and CoD2 read
+  `servercache.dat`, as 1.1 does. VERIFIED (the pushes). A retail UO
+  install's empty file is 3059472 bytes, version 1, counts 0. VERIFIED
+  (the file).
+- Entries are `0x94` bytes on 1.5 and CoD2, `0x98` on UO, read off 1.5's
+  `LAN_GetServerInfo` (`0x4196d0`) and UO's (`0x41ac2c`..): the 20-byte
+  `netadr_t` at 0 (type 2 loopback, 4 IP, `0x44bf30`), then bytes
+  `nettype` `+0x14`, `clients` `+0x15`, `sv_maxclients` `+0x16`, the
+  visible flag `+0x17` (`LAN_AddServer` `0x4193eb`, UO `0x41a8dc`),
+  `sv_allowAnonymous` `+0x18`, `pswrd` `+0x19`, `pure` `+0x1a`, `ff`
+  `+0x1b`, `kc` `+0x1c`, `con_disabled` `+0x1d`, `hw` `+0x1e`, `mod`
+  `+0x1f`, `pb` `+0x20`, shorts `minping` `+0x22`, `maxping` `+0x24`,
+  `ping` `+0x26`, `timeoutsallowed` `+0x28`; then on 1.5 `hostname`
+  `+0x2a`, `mapname` `+0x4a` (32 each), `game` `+0x6a` (24), `gametype`
+  `+0x82` (16); UO adds shorts `jps` `+0x2a`, `tnk` `+0x2c` and moves the
+  four strings 4 on (`+0x2e`, `+0x4e`, `+0x6e`, `+0x86`). VERIFIED (asm).
+  `LAN_AddServer` copies the address, `Q_strncpyz`s the name into
+  `hostname` (31 bytes) and sets the visible byte; favourites cap at
+  `0x80` (`0x4192bb`, the favourites arm `0x4192cc`). VERIFIED. So a 128th favourite saves a file the
+  loader then drops whole. INFERRED (the `jae` against the `LAN_AddServer`
+  cap). CoD2's entry is `0x94` with the address at 0, `hostname` `+0x2a`,
+  `mapname` `+0x4a`, `game` `+0x6a`, `gametype` `+0x82` and the visible
+  byte `+0x17` (its server-slot reset at `0x4b3bd4`..`0x4b3c03`, and
+  `CL_SetServerInfo`'s stores from `0x4b332d`). VERIFIED. Its shorts at
+  `+0x24`..`+0x28` hold other fields than 1.5's (the reset writes -1 to
+  `+0x28`). INFERRED.
+- vcod (`net::server_cache::Layout`) reads and writes each game's own
+  file and shape, beside the install's executables. It reads a file only
+  when it passes that game's loader, and writes only over one it read:
+  a file of another shape or one it cannot read stays untouched and the
+  favourites stay in memory. A new file goes in whole (written aside,
+  then renamed). The later games' favourites are written back as read,
+  a new one with `LAN_AddServer`'s fields only, at most 127 so the
+  loader takes the file. A 1.1-shaped `servercache.dat` on 1.5 or CoD2
+  (vcod wrote 1.1's shape for every game before) gives its favourites to
+  a file of the game's own shape. Before this, UO's favourites went into
+  that `servercache.dat`, 1.5's name, not `uoservercache.dat`; they stay
+  there.
+
 ## 9. Password popup
 
 - `password_popmenu`: an `ITEM_TYPE_EDITFIELD` on `password`, `maxchars

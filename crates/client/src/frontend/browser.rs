@@ -16,7 +16,7 @@ use vcod_common::net::master::{
     GETINFO, LAN_PORTS, LAN_ROUNDS, Master, ServerInfo, getservers, master_send_allowed,
     parse_address, parse_servers_response,
 };
-use vcod_common::net::server_cache::{self, Entry, MAX_FAVORITES};
+use vcod_common::net::server_cache::{self, Entry, Layout};
 use vcod_common::net::wire::Transport;
 
 /// `MAX_PINGREQUESTS`: the ping slots (CoDMP.exe 0x15ca660, 16 of
@@ -189,8 +189,12 @@ pub struct Browser {
     pub filter: Filter,
     /// Where a Local refresh sends its broadcasts; tests empty it.
     pub(super) lan_targets: Vec<SocketAddrV4>,
-    /// `servercache.dat`; `None` keeps favourites in memory only.
-    cache: Option<PathBuf>,
+    /// The game's server cache and its layout; `None` keeps favourites in
+    /// memory only, as does a file that is not a cache of that layout.
+    cache: Option<(PathBuf, Layout)>,
+    /// The cached favourites as read, by address: a save writes their
+    /// bytes back with what this run learnt.
+    cached: std::collections::HashMap<SocketAddrV4, Entry>,
     /// Favourites vcod cannot address (IPX, loopback), written back as read.
     foreign: Vec<Entry>,
     /// When each source's last refresh started, local time
@@ -222,6 +226,7 @@ impl Default for Browser {
                 .map(|&p| SocketAddrV4::new(Ipv4Addr::BROADCAST, p))
                 .collect(),
             cache: None,
+            cached: Default::default(),
             foreign: Vec::new(),
             last_refresh: [None; 3],
             max_ping: MAX_PING_DEFAULT,
@@ -241,23 +246,44 @@ fn open_socket() -> Option<UdpSocket> {
 }
 
 impl Browser {
-    /// A browser whose favourites live in `cache`, read now as
-    /// `LAN_LoadCachedServers` reads it at UI start.
-    pub fn with_cache(cache: PathBuf) -> Browser {
+    /// A browser whose favourites live in `cache`, a server cache of
+    /// `layout`, read now as `LAN_LoadCachedServers` reads it at UI start.
+    /// A file that is not one, or that cannot be read, is never written.
+    pub fn with_cache(cache: PathBuf, layout: Layout) -> Browser {
         let mut b = Browser::default();
-        if let Ok(bytes) = std::fs::read(&cache) {
-            for e in server_cache::read_favorites(&bytes) {
-                match e.addr() {
-                    Some(addr) => b.lists[Source::Favorites as usize].push(Server {
+        let entries = match std::fs::read(&cache) {
+            Ok(bytes) => server_cache::read_favorites(layout, &bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
+            Err(_) => None,
+        };
+        let Some(entries) = entries else {
+            log::warn!(
+                "browser: {} is not a {layout:?} server cache; favourites stay in memory",
+                cache.display()
+            );
+            return b;
+        };
+        for e in entries {
+            match e.addr() {
+                Some(addr) => {
+                    b.lists[Source::Favorites as usize].push(Server {
                         name: e.hostname(),
                         ..Server::new(addr)
-                    }),
-                    None => b.foreign.push(e),
+                    });
+                    b.cached.insert(addr, e);
                 }
+                None => b.foreign.push(e),
             }
         }
-        b.cache = Some(cache);
+        b.cache = Some((cache, layout));
         b
+    }
+
+    /// How many favourites the cache can hold and still load.
+    fn max_favorites(&self) -> usize {
+        self.cache
+            .as_ref()
+            .map_or(server_cache::MAX_FAVORITES, |(_, l)| l.max_favorites())
     }
 
     fn list(&self) -> &Vec<Server> {
@@ -587,8 +613,9 @@ impl Browser {
     /// `LAN_AddServer(AS_FAVORITES, name, address)`: the cap, then the
     /// address, then a duplicate. The cache is written at once.
     pub fn add_favorite(&mut self, name: &str, address: &str) -> AddFavorite {
+        let max = self.max_favorites();
         let favs = &mut self.lists[Source::Favorites as usize];
-        if favs.len() + self.foreign.len() >= MAX_FAVORITES {
+        if favs.len() + self.foreign.len() >= max {
             return AddFavorite::Full;
         }
         let Some(addr) = parse_address(address) else {
@@ -601,6 +628,7 @@ impl Browser {
             name: name.chars().take(31).collect(),
             ..Server::new(addr)
         });
+        self.cached.remove(&addr);
         self.save();
         AddFavorite::Added
     }
@@ -615,14 +643,20 @@ impl Browser {
         }
     }
 
-    /// Writes the favourites into `servercache.dat`, keeping the rest of
-    /// the file.
+    /// Writes the favourites into the server cache, keeping the rest of
+    /// the file. A file that changed into something not a cache, or cannot
+    /// be read, is left alone; the new one goes in whole or not at all.
     fn save(&self) {
-        let Some(path) = &self.cache else { return };
+        let Some((path, layout)) = &self.cache else {
+            return;
+        };
         let mut entries: Vec<Entry> = self.lists[Source::Favorites as usize]
             .iter()
             .map(|s| {
-                let mut e = Entry::new(s.addr, &s.name);
+                let mut e = match self.cached.get(&s.addr) {
+                    Some(e) => e.clone(),
+                    None => Entry::new(*layout, s.addr, &s.name),
+                };
                 if let Some(info) = &s.info {
                     e.set_info(info, s.ping.map_or(-1, |p| p as i32));
                 }
@@ -630,10 +664,28 @@ impl Browser {
             })
             .collect();
         entries.extend(self.foreign.iter().cloned());
-        let old = std::fs::read(path).ok();
-        let bytes = server_cache::write_favorites(old.as_deref(), &entries);
-        if let Err(e) = std::fs::write(path, bytes) {
+        let old = match std::fs::read(path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                log::warn!(
+                    "browser: cannot read {}: {e}; not writing it",
+                    path.display()
+                );
+                return;
+            }
+        };
+        let Some(bytes) = server_cache::write_favorites(*layout, old.as_deref(), &entries) else {
+            log::warn!(
+                "browser: {} is no longer a {layout:?} server cache; not writing it",
+                path.display()
+            );
+            return;
+        };
+        let tmp = path.with_extension("dat.tmp");
+        if let Err(e) = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path)) {
             log::warn!("browser: cannot write {}: {e}", path.display());
+            let _ = std::fs::remove_file(&tmp);
         }
     }
 }
@@ -1004,7 +1056,7 @@ mod tests {
     fn favourites_persist_in_the_server_cache() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("servercache.dat");
-        let mut b = Browser::with_cache(path.clone());
+        let mut b = Browser::with_cache(path.clone(), Layout::Cod11);
         assert_eq!(b.add_favorite("Home", "10.0.0.1"), AddFavorite::Added);
         assert_eq!(
             b.add_favorite("Again", "10.0.0.1:28960"),
@@ -1020,18 +1072,51 @@ mod tests {
         );
         assert_eq!(
             std::fs::metadata(&path).unwrap().len() as usize,
-            server_cache::FILE_LEN
+            Layout::Cod11.file_len()
         );
-        let mut b = Browser::with_cache(path.clone());
+        let mut b = Browser::with_cache(path.clone(), Layout::Cod11);
         b.source = Source::Favorites;
         // Unanswered favourites still list, by address.
         let rows: Vec<String> = b.rows().iter().map(|s| column_text(s, 1)).collect();
         assert_eq!(rows, ["10.0.0.1:28960", "10.0.0.2:29661"]);
         assert_eq!(b.list()[0].name, "Home");
         b.remove_favorite("10.0.0.1:28960".parse().unwrap());
-        let b = Browser::with_cache(path);
+        let b = Browser::with_cache(path, Layout::Cod11);
         assert_eq!(b.lists[2].len(), 1);
         assert_eq!(b.lists[2][0].name, "Other");
+    }
+
+    /// Each game's own cache: 1.5's and UO's keep a favourite in their
+    /// shape and name, and a file that is not that game's cache is never
+    /// touched.
+    #[test]
+    fn favourites_keep_each_games_cache_and_spare_a_foreign_file() {
+        let dir = tempfile::tempdir().unwrap();
+        for layout in [Layout::Cod15, Layout::Uo, Layout::Cod2] {
+            let path = dir.path().join(layout.file_name());
+            let _ = std::fs::remove_file(&path);
+            let mut b = Browser::with_cache(path.clone(), layout);
+            assert_eq!(b.add_favorite("Home", "10.0.0.1"), AddFavorite::Added);
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().len() as usize,
+                layout.file_len()
+            );
+            let b = Browser::with_cache(path.clone(), layout);
+            assert_eq!(b.lists[2][0].name, "Home");
+        }
+        // UO's file read as 1.5's: not a 1.5 cache, so left as it was.
+        let uo = std::fs::read(dir.path().join(Layout::Uo.file_name())).unwrap();
+        let path = dir.path().join("other.dat");
+        std::fs::write(&path, &uo).unwrap();
+        let mut b = Browser::with_cache(path.clone(), Layout::Cod15);
+        assert!(b.lists[2].is_empty());
+        assert_eq!(b.add_favorite("Away", "10.0.0.2"), AddFavorite::Added);
+        assert_eq!(std::fs::read(&path).unwrap(), uo);
+        // Nor is a short file truncated or replaced.
+        std::fs::write(&path, b"not a cache").unwrap();
+        let mut b = Browser::with_cache(path.clone(), Layout::Cod11);
+        assert_eq!(b.add_favorite("Away", "10.0.0.2"), AddFavorite::Added);
+        assert_eq!(std::fs::read(&path).unwrap(), b"not a cache");
     }
 
     /// With no master an Internet refresh asks nobody and ends at once.
