@@ -166,8 +166,10 @@ pub fn lit_stages(m: &Material) -> Material {
 /// A `<type>@<image>` skin's `shadertypes/model/<type>.stype`, its
 /// `$texturename` still unbound. `None`, for which retail draws its default
 /// shader (0x4fc0c0 returns 0), without an `@`, with a slash after it,
-/// without the file or a stage, or when a `$texturename` stage's image is
-/// missing ("shadertype '%s' couldn't load image for '%s'").
+/// without the file, or when a `$texturename` stage's image is missing
+/// ("shadertype '%s' couldn't load image for '%s'"). A file with no stage
+/// is `None` too, where retail drops the game (shader doc, "Model skin
+/// scripts"); no stock template has none.
 pub fn template(fs: &dyn AssetSource, skin: &str, warns: &mut WarnSet) -> Option<Shader> {
     let sh = skin_type(skin)
         .and_then(|kind| {

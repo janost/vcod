@@ -972,6 +972,7 @@ Retail draws everything, and stamps every usercmd, at one time: `cl.serverTime`.
 - A frame whose `realtime + delta` reaches the newest snapshot's serverTime minus 5 sets `cl.extrapolatedSnapshot` (`0x1434a74`). VERIFIED.
 - When snapshots arrived since the last frame, `CL_AdjustTimeDelta` (`0x404bf0`) compares the delta with the newest snapshot's (`snap.serverTime - realtime`). More than 500 ms apart resets the delta to it and the time to the snapshot's (printing `<RESET> ` under `cl_showTimeDelta`). More than 100 averages the two (`<FAST> `). Anything closer moves it 2 ms back when the flag is set, clearing it, else 1 ms forward. VERIFIED, the thresholds 0x1f5 and 0x65 and the +1/-2. The slow path runs only at `com_timescale` 0 or 1. VERIFIED.
 - `CL_FirstSnapshot` (`0x404d00`) seeds the delta from the first snapshot, and runs again when a snapshot's time goes below the last frame's (`0x1434a6c`) outside a demo. VERIFIED.
+- `CG_MapRestart` runs it once more through cgame syscall 0xf1 (`0x4041b6`, only while `cls.state` is 6), so a `map_restart` re-pegs the delta to the newest snapshot (1.5: syscall 0xf3, UO: 0xf8). VERIFIED (asm; `cod11-events-and-fx.md` 9.8). vcod: `ServerClock::map_restart`.
 
 All of it is Q3's `cl_cgame.c` with the RESET and FAST constants unchanged.
 

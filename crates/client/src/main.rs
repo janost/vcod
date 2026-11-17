@@ -6181,7 +6181,8 @@ impl ApplicationHandler for App {
                                     // `CG_MapRestart` (cgame 0x3002ca60) frees
                                     // the local entities, the marks and every
                                     // effect, stops all sounds, restarts the
-                                    // ambient and stands the player up running
+                                    // ambient, stands the player up running,
+                                    // closes the menus and re-pegs the clock
                                     // (events doc 9.8).
                                     if play::join::is_map_restart(tokens) {
                                         join.on_restart();
@@ -6200,6 +6201,23 @@ impl ApplicationHandler for App {
                                             net::info_value_for_key(net.configstring(3), "n"),
                                         );
                                         input.force_stance(play::input::Stance::Stand);
+                                        let closes = play::join::RestartCloses::for_command(
+                                            tokens,
+                                            net.protocol().is_v1(),
+                                            net.protocol().is_uo(),
+                                        );
+                                        let out = self.ui.map_restart(closes, &self.shell);
+                                        self.ui_pending.extend(out);
+                                        // the last syscall re-pegs the clock,
+                                        // unless the snapshot is `SNAPFLAG_NOT_ACTIVE`
+                                        if let Phase::Live(live) = &mut *phase
+                                            && net
+                                                .snapshots()
+                                                .newest()
+                                                .is_some_and(|s| s.snap_flags & 2 == 0)
+                                        {
+                                            live.clock.map_restart();
+                                        }
                                     }
                                     // UO's `F <ms>`, `rewindFx` (uo cgame
                                     // 0x3003ac90, trap 0xf0).

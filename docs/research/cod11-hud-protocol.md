@@ -92,8 +92,11 @@ calls `0x3003d570`, also trap 9. VERIFIED: CoDMP.exe's cgame trap
 dispatcher (`0x401e22`, table `0x4041f0`) sends trap 9 to `0x402331`, which
 calls `Cvar_Set2` (`0x439650`) with `eax` 1, the `force` path: no
 read-only, cheat or latch check, and an unregistered name is made with no
-flags (cod11-console.md 5). INFERRED that UO's engine does the same (no
-CoDUOMP.exe trap table read). INFERRED, off Q3's `cvar_modifiedFlags`: a `v`
+flags (cod11-console.md 5). VERIFIED, asm: UO's engine does the same.
+CoDUOMP.exe's cgame syscall switch (`0x401f5f`, table `0x404ae8`, bound
+`0xfa`) sends trap 9 to `0x4023fe`, which calls `0x43df50`, and that calls
+`Cvar_Set2` (`0x43dc50`, the function holding `%s is read only.` and `%s is
+write protected.`) with a force argument of 1. INFERRED, off Q3's `cvar_modifiedFlags`: a `v`
 of a userinfo cvar sends a userinfo change, one of an archived cvar rewrites
 the config. The 140/204 mirror's writer (`0x3002bc60`, section 5) is a trap
 9 too. VERIFIED: `CG_Init` calls it at 0x30023106 and
@@ -1767,6 +1770,29 @@ icons are skipped unless `cg_hudDamageIconInScope` (`0x301e0acc`, default
 (`0x3001f980`). So the menu HUD and the hudelems paint over the overlay's
 black bands. vcod draws the overlay first, under them, as retail.
 
+The four between the crosshair and the hudelems, by what each reads:
+
+- `0x30016f70` draws the crosshair name (Q3's `CG_DrawCrosshairNames`).
+  VERIFIED, decompile: it returns on `cg_drawCrosshair` below 0
+  (`0x301d902c`), `cg_drawCrosshairNames` 0 (`0x301e0bec`) or
+  `0x30207158` set, runs the crosshair scan `0x30016e50`, fades off
+  `0x30019a30`, takes the client under the crosshair (`0x3020c8c8`, below
+  64) only when both client infos are valid (`0x3018bc0c`, stride `0x448`)
+  and the teams (`0x3018bc38`) match unless the viewer's is 3, and prints
+  the name (`0x3018bc18`) at (345, 217), scale 0.25. vcod leaves it out
+  (the table in "What vcod does not draw").
+- `0x30037790` is the weapon-slot strip ("The weapon-slot strip").
+- `0x300150b0` is the chat ring's draw (`cod11-chat.md` 3.2).
+- `0x30017470` is Q3 Team Arena's `CG_DrawTimedMenus`. VERIFIED, asm: once
+  `0x3020c904` is set and `cg.time` runs more than 2500 ms past it, it
+  closes the menu named `voiceMenu` (`0x300652f8`, found by `0x300419b0`,
+  closed by `0x30041a40`), sets `cl_conXOffset` to `0` and zeroes the
+  word. The one store of a time there is `0x3002726f` in `0x30027240`
+  (`CG_ShowResponseHead`: opens `voiceMenu`, sets `cl_conXOffset` to
+  `72`), and nothing calls `0x30027240` or holds its address (objdump,
+  `tools/re/xref.py`). INFERRED: so the word stays 0 and `0x30017470`
+  never acts. vcod has no counterpart.
+
 INFERRED, with "Which views draw it": a follower's playerstate carries its
 target's `pm_type` and `fWeaponPosFrac`, so a spectator following a scoped
 player gets the overlay and the zoom. vcod draws a followed player's view
@@ -1876,8 +1902,19 @@ name one, `hud@weaponmode_full.tga` on `bar_mp`, `fg42_mp`, `mp44_mp`,
 VERIFIED: `0x30037790` has one caller, `0x30018896` in the 2D pass
 `0x30018810`, after the crosshair (`0x30016760`) and `0x30016f70` and before
 `0x300150b0`, taken when the snapshot's `pm_type` is below 4. The pass
-returns early on `cg_draw2D` 0 and three unidentified flags (`0x301e214c`,
-`0x301e2150`, `0x3020cbdc`). `cg_drawStatus` does not gate it. VERIFIED,
+returns early on `cg_draw2D` 0 and three flags none of which is ever set
+in a multiplayer game. VERIFIED, objdump of every reference: `0x301e214c`
+has one, the pass's load at `0x30018811`, and sits in `.data`'s
+zero-filled tail (raw data ends at `0x30078000`); `0x301e2150` is stored
+only by `CG_DrawActiveFrame` (`0x300339ce`) from its fourth argument, which
+`CL_CGameRendering` (`CoDMP.exe` `0x404bc0`, the only caller of `vmMain` 3,
+from `0x416ee7` and `0x416f14`) pushes as 0; `0x3020cbdc` is stored only by
+the respawn reset (`0x30028abc`), with the `edx` it zeroed at `0x30028a70`.
+INFERRED: `0x3020cbdc` is RTCW's `cg.cameraMode`, off its reader
+`0x300333dc` in `0x300333b0`, which prints `Cinimatic Cameras are not
+available in the MP exe.` when it is set, and its other readers drop the
+player's own body flag (`0x30028318`) and the view weapon (`0x30036d57`).
+vcod reads none of the three. `cg_drawStatus` does not gate it. VERIFIED,
 inside: `dt` is `cg.time` less `0x3020c944`, which takes `cg.time` each
 call; it returns when the predicted `pm_type` (`0x30207160`) is 6 or more,
 and when `0x30019a30(1800, 0x3020c920)` returns null, so it shares the

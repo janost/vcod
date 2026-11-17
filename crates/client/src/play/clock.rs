@@ -64,6 +64,9 @@ pub struct ServerClock {
     extrapolated: bool,
     /// `clc.timeDemoBaseTime` (0x15ef01c): the first snapshot's time.
     demo_base: i32,
+    /// A map restart's `CL_FirstSnapshot`, run at the end of the next frame
+    /// ([`Self::map_restart`]).
+    restart: bool,
     server_time: i32,
     pub stats: ClockStats,
 }
@@ -130,7 +133,24 @@ impl ServerClock {
         if new_snapshot {
             self.adjust_delta(realtime, snap);
         }
+        self.end_frame(realtime, snap);
         self.server_time
+    }
+
+    /// `CG_MapRestart`'s last syscall (1.1 cgame 0xf1, 1.5 0xf3, UO 0xf8)
+    /// runs `CL_FirstSnapshot` again while `cls.state` is 6 (CoDMP.exe
+    /// 0x4041b6): the delta re-pegs to the newest snapshot. The cgame makes
+    /// it after the frame's time is set, so it lands at the end of the next
+    /// [`Self::frame`], off that frame's local time and snapshot (events doc
+    /// 9.8).
+    pub fn map_restart(&mut self) {
+        self.restart = true;
+    }
+
+    fn end_frame(&mut self, realtime: i32, snap: i32) {
+        if std::mem::take(&mut self.restart) {
+            self.first_snapshot(realtime, snap);
+        }
     }
 
     /// [`Self::frame`], telling a new snapshot by its message number, as
@@ -153,6 +173,7 @@ impl ServerClock {
                 self.first_snapshot(realtime, snap);
             }
             self.old_frame_snap = snap;
+            self.end_frame(realtime, snap);
         } else {
             self.frame(realtime, snap, false, nudge);
         }
@@ -293,6 +314,26 @@ mod tests {
         assert_eq!(c.frame(1000, 50_000, true, 0), 50_000);
         assert_eq!(c.delta(), Some(49_000));
         assert_eq!(c.frame(1016, 50_000, false, 0), 50_016);
+    }
+
+    #[test]
+    fn a_map_restart_repegs_the_delta_after_the_frame() {
+        let mut c = ServerClock::default();
+        c.frame(1000, 50_000, true, 0);
+        // settled 30 ms behind the newest snapshot
+        c.delta = Some(48_970);
+        c.map_restart();
+        // this frame's time and adjust stand; the delta re-pegs after them
+        assert_eq!(c.frame(1100, 50_100, true, 0), 50_070);
+        assert_eq!(c.delta(), Some(49_000));
+        assert_eq!(c.frame(1116, 50_100, false, 0), 50_116);
+        // once only
+        assert_eq!(c.frame(1132, 50_150, true, 0), 50_132);
+        assert_eq!(
+            c.delta(),
+            Some(48_998),
+            "an extrapolated frame steps back 2"
+        );
     }
 
     #[test]

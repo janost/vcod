@@ -1486,7 +1486,25 @@ table).
   then `cg_thirdPerson` 0, `cl_stance` 0, `cl_run` 1 and, for an argument
   of 0 only, the script menus; `cg_objectiveText` empties last. `B` calls
   it with 0, `n` with 1 (0x3003ac90; `coduo-diff.md`, "`map_restart`'s
-  letter"). INFERRED: none of those callees touches the flamethrower's
+  letter").
+- VERIFIED, asm: UO's Escape syscall is 0x7e, made at 0x3003964d for an
+  argument of 0 only and again at 0x30039658 for both; `CoDUOMP.exe`'s
+  switch (0x401f5f, table 0x404ae8, bound 0xfa) takes it to 0x403bad,
+  which returns when UI `vmMain` 6 answers non-zero and else sends three
+  down Escs (`vmMain` 3, `0x1b`, 1). UO's `uo_ui_mp_x86.dll` `vmMain` 6
+  (table 0x40008698, 0x40008606 into 0x40010410) is `UI_IsFullscreen`, as
+  1.1's 0x40016ab0: a visible (`+0x48` & 4) menu with `+0xbc` set on the
+  stack. Its shared weapon block syscalls are 0xcb and 0xcc (0x404700 and
+  0x404726, owner 2; 0xcc with 1 at 0x30039523), and the last call is a tail jump
+  to syscall 0xf8 (0x300396d3), 0x404a7f: `CL_FirstSnapshot` (0x4056a0,
+  the `activeAction` string at 0x58e740) while `cls.state` (0x4ad3d60) is 6.
+- VERIFIED, asm, 1.5 (`cgame_mp_x86.dll` 0x3002df90, `CoDMP.exe` table
+  0x4042cc, bound 0xf5): the shared block release is syscall 0xc9 with 1
+  (0x404012), the Escape syscall 0x7d (0x3002e0c1) for an argument of 0
+  only (the `jne` at 0x3002e091), 0x4036d4 with the same `vmMain` 6 guard
+  (1.5's `ui_mp_x86.dll` 0x40017750) and three Escs, and the tail jump to
+  syscall 0xf3 (0x3002e0fa) reaches 0x404284: `CL_FirstSnapshot`
+  (0x404e40) while `cls.state` (0x15b8aa0) is 6. INFERRED: none of those callees touches the flamethrower's
   chunk pool, so a burning flame outlives a UO restart.
 
 The words `CG_MapRestart` writes, 1.1 cgame (VERIFIED, decompile, each
@@ -1500,15 +1518,55 @@ address's other references read for what it is):
 | 0x301d64d0, 0x301d64d4 | -1, 0 | the teamkill complaint's client and end (`cod11-votes.md`) |
 | 0x301d21c0 | 0 | `cgs.voteTime`, read from the vote configstring at 0x30022f10; the vote draw (0x30018120) shows nothing at 0 |
 | 0x30207154 | 1 | `cg.mapRestart`: the snapshot transition (0x3002fc80, 0x3002ffda..0x300300b8) runs the respawn reset 0x30028a70 when it is set whatever the spawn count, and 0x30028a70 clears it |
-| 0x3020d098 | 0 | its only reference in the module; not identified |
+| 0x3020d098 | 0 | write-only: no other instruction in the module names it, as a load or as a displacement (objdump) |
 | 0x3020c9e0 | 0 | the red damage flash's end (`cod11-hud-protocol.md`, "Damage direction") |
 | 0x3020c948.. | 0x18 dwords | the eight hit direction icons, three dwords each (0x300287f0) |
 | 0x3020c92c.., 0x3020c944 | 6 dwords, 0 | the weapon strip's slot scales and its last draw time (`cod11-hud-protocol.md`) |
 | 0x3020c030, 0x3020c038 | 0, `cg.time` | a held scoreboard lets go and fades (`cod11-hud-protocol.md`) |
 
-Not identified: trap 200 with 1 and 0x3000ef10, taken only when
-`sv_running` read non-zero at init (0x301d1fd8, 0x300205e0); trap 0x7c;
-trap 0xf1 last.
+The three syscalls the list above leaves out, each read off `CoDMP.exe`'s
+cgame syscall switch (0x401e22, jump table 0x4041f0, bound 0xf1):
+
+- Syscall 200 with 1, then 0x3000ef10, only while `sv_running` read
+  non-zero at init (0x301d1fd8, 0x300205e0). VERIFIED: 0x3000ef10 parses
+  configstring 7's weapon files (`Parsing weapon file`, `WEAPONFILE`) into
+  a 64-pointer block (0x300eef3c) that syscall 199 (0x403f42) hands it:
+  0x438dc0 with owner 2 in `edi` allocates 0x100 bytes once (0x432280,
+  0x1407414) and records the owner (0x1407418), or returns the block with
+  the last owner in `*out`, taking it when that owner is 0. Syscall 200
+  (0x403f6b) is 0x438e10 with owner 2: when the cgame holds the block it
+  lets go, and with 0 it also forgets the block. The game module's own
+  syscalls reach the same two functions with owner 1 (0x4575ed,
+  0x457600), and `Com_Error` (0x435ad0) clears an owner of 1 or 2. When
+  0x3000ef10 gets 0 back it parses the files into the block; otherwise it
+  only counts the block's pointers (VERIFIED, decompile). INFERRED: on a
+  listen server the game and the cgame share one weapon def array, and
+  after a restart reparses the game's weapons the cgame takes the block
+  back and reparses into it. `vmMain` 1 (0x300233f0, Q3's `CG_SHUTDOWN`)
+  calls syscall 200 with 0 (VERIFIED, decompile). vcod has no listen
+  server: the client parses its own defs, so nothing here applies.
+- Syscall 0x7c (0x40362c): it returns when UI `vmMain` 8, the active menu
+  type `UI_SetActiveMenu` last recorded (`cod11-front-end.md`, "When a `t`
+  opens its menu"), answers 1 (`UIMENU_MAIN`), else sends the UI three down
+  Escs (`vmMain` 3, `0x1b`, 1; 0x403644, 0x403654, 0x40366a). VERIFIED
+  (asm). After the two script popup closes it shuts whatever menu is left,
+  the one Esc opened over the game included: with no fullscreen menu up the
+  first Esc runs `Menus_CloseAll` (`_UI_KeyEvent`, `cod11-front-end.md`,
+  "Esc and the fullscreen menus"). INFERRED. `ui_scriptMenuAllowResponse`
+  is 0 across the two popup closes only: the UI's `scriptMenuResponse`
+  (`ui_mp_x86.dll` 0x40011110) sends nothing while
+  `Cvar_VariableValue("ui_scriptMenuAllowResponse")` (0x4001111b, string
+  0x4002f63c) is 0 (VERIFIED, asm), so the popups close without their
+  `close` response and the Escs' closes send theirs.
+- Syscall 0xf1 last (0x4041b6): while `cls.state` (0x155f2c0) is 6 it runs
+  `CL_FirstSnapshot` (0x404d00) again (VERIFIED, asm): unless the newest
+  snapshot carries `SNAPFLAG_NOT_ACTIVE` (0x1432968 & 2) the time delta
+  (0x1434a70) re-pegs to that snapshot's time less `cls.realtime`, and the
+  floor (0x1434a68) and `clc.timeDemoBaseTime` (0x15ef01c) take its time
+  (`protocol-1.1.md`, "The client's clock"). The cgame makes the call
+  while drawing, after `CL_SetCGameTime` set the frame's time (INFERRED,
+  Q3's `CL_Frame` order), so the next frame draws at the newest
+  snapshot's time and the delta slews back from there.
 
 **The respawn reset.** VERIFIED, 0x30028a70, run from the two first
 snapshot setups (0x3002fa8f, 0x3003037f) and from the snapshot
@@ -1518,7 +1576,8 @@ ammo"): it clears `cg.mapRestart`, copies the snapshot's playerstate to
 the predicted one (0x3020715c, 0x834 dwords), takes the weapon file
 pointer (0x30209484), stamps the weapon name (0x3020c920), and zeroes
 the cursor hint (0x3020c8e4, 0x3020c8e8), 0x3020cbdc (one of the 2D
-pass's three skip flags, hud doc "The weapon-slot strip"), the view
+pass's three skip flags, hud doc "The weapon-slot strip"; this store of
+`edx`, zeroed at 0x30028a70, is the flag's only write), the view
 weapon's sway, tilt, idle factor and movement position
 (0x302095d8..0x302095f8, 0x30209454..0x30209480, 0x3020c9f0; combat doc
 17.4), the recoil (0x3020cb2c..0x3020cb40), the damage kick
@@ -1542,7 +1601,18 @@ the HUD forget the spawn count (`OnlineView::map_restart`,
 respawn reset, as `cg.mapRestart` does on retail. vcod has no local
 entities and no third person view; `fx::flame` keeps its chunks, as UO's
 does. The cursor hint draws straight off the playerstate in vcod, with
-no fade to clear.
+no fade to clear. The menus close as each build's `CG_MapRestart` closes
+them (`play::join::RestartCloses`, `Ui::map_restart`): 1.1's `n` closes
+the script popup twice with its responses dropped, then sends three Escs
+unless the UI's active type is `UIMENU_MAIN`; 1.5's `B` does the same with
+a fullscreen menu as the guard, and its `n` closes nothing; UO's `B` sends
+two sets of Escs, its `n` one. The clock re-pegs at the end of the next
+frame (`ServerClock::map_restart`) unless the newest snapshot is
+`SNAPFLAG_NOT_ACTIVE`. vcod runs a server command when its packet
+arrives, which is up to a snapshot sooner than the cgame reaches it, so
+the re-peg lands on a snapshot one interval older than retail's might.
+INFERRED (vcod's own command timing; the restart's other effects share
+it).
 
 vcod's respawn reset runs on a new `(clientNum, stats[5])`, the first
 snapshot of a gamestate and the first after a restart: the selection,
