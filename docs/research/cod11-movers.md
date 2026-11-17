@@ -1786,7 +1786,14 @@ movement clip at the spread phase), or a node beside a shown death's path
 frames as this routine and the server's do: the two clears, then the legs and
 torso updates, each setter's clear, goal weight and `KnobAll` handed to the
 other lerp frame (`ChannelClock::touched`). The server's end frame and the
-client's draw both step through it.
+client's draw both step through it. A setter starting a node the other lerp
+frame holds or still blends out raises that one node: vcod hands it the other
+clock's clip and weight (`ChannelClock::shared`), its goal time off that
+weight (0x080bd674 reads the node's weight, VERIFIED), and the other clock
+drops its blend-out entry (`ChannelClock::release`). Where both clocks hold
+the node as their current clip, each draws it under its own channel node, the
+per-channel model's limit; on 1.1, whose setter always sets the node's time,
+the other clock keeps its own.
 
 VERIFIED, `cod_lnxded` 0x080bf8ac, whose arguments (DObj, anim, root, weight,
 time, rate) match syscall 0x8a's as the setter passes them (cgame 0x300039e1
@@ -1795,16 +1802,29 @@ of every sibling of the node (0x080bd35c, goal time the largest weight change
 times `time`, under 0.001 snapped to 0), sets the node's own, then walks up to
 the given root, clearing each ancestor's siblings and raising the ancestor to
 1. VERIFIED: the setter's root is `0x3018bbfc`, looked up from the name at
-0x30068f64, `root` (0x30005090). INFERRED: a death shown at its last frame on
-the legs takes `torso` (a sibling of `legs` under `main`) and `turning` to 0
-and `legs` to 1 at the next step, and every legs clip beside it with them; the
-torso's own leaves keep their weights under a node at 0. vcod:
-`ChannelClock::knob_nodes` sets the torso clock's two node weights at once and
-`touched` drops the other lerp frame's clips beside the path. Trap: dropping
-only the death channel's own fades lets a torso holding a fire anim fade over
-the torso's own blend. No stock death shows it on the client (a corpse's torso
-carries no anim, combat doc 8, so its torso node already stands at 0); the
-server's dying player, whose torso can still be firing, does.
+0x30068f64, `root` (0x30005090). VERIFIED, decompile: the sibling clear
+0x080bd35c writes a goal of 0 and the goal time (the largest weight change
+times `time`, 0 for a death) but leaves the weight of a node 0x080bd0ec reads
+as weighted under weighted ancestors (it zeroes weight, goal and time of any
+other); the goal setter 0x080bd674 writes the weight itself when its time is
+under 0.001; the step 0x080bb130 lands a node on its goal once the goal time
+is under the frame's `dt` plus 0.001. VERIFIED, decompile: UO's clear
+(`coduo_lnxded` 0x080bfe3e, per node 0x080bfc22) keeps a weighted node's
+weight the same way; 1.5b's was not read. INFERRED: a death shown at its last
+frame on the legs takes `legs` to 1 at once and `torso` (a sibling of `legs`
+under `main`) and `turning`, with every legs clip beside the death, to 0 at
+the next frame's step, so the frame of the set still draws them; the torso's
+own leaves keep their weights under a node at 0. A torso setter in the same
+update (a `both` death line takes the torso to no anim, 0x2aa62..0x2ab5b)
+sets `torso`'s goal again with its time off the weight the clear kept, so the
+node then fades over the torso's blend. vcod: `ChannelClock::knob_nodes` and
+`touched` give the nodes and clips beside the path
+`Ramp::cleared_next_step`, which reads the old weight at the set's time and 0
+after it, and the death channel's own old clips the same. CoD2's and CoD4's
+bodies (`vcod_cod2::player`, `ChannelClock::cod2_tree`) keep the clear at
+once and no shared node: their gates match retail that way
+(`cod2_combat_ab`'s hit-turret kill moves off retail's with CoD1's rule) and
+`cod2_lnxded`'s clear was not read.
 
 VERIFIED, vcod measurement, `crates/server/tests/legs_ab.rs`
 (`a_drawn_body_runs_the_end_frame_clips_a_snapshot_early`): retail's snapshots
@@ -1828,7 +1848,11 @@ and weights stand still while its entity is out of the snapshot and go on from
 there when it returns; the rate, on snapshot times, measures across the gap.
 vcod: `EntityAnim::present_ms` notes the last frame the entity was in the
 snapshot, and the first frame back shifts both clocks by the frames between
-(`ChannelClock::pause`). 1.5's and UO's advance was not read.
+(`ChannelClock::pause`). VERIFIED, decompile and the float at each
+scale's address: 1.5's 0x3001cf80 and UO's 0x3001f810 are the same loop
+over `cg.snap`'s entities (syscall 0xa3, UO 0xa5, for the DObj; 0x96, UO
+0x98, to advance it by `cg.frametime` times 0.001, 0x3006b62c and
+0x3007bd94), so the pause holds on every protocol.
 
 VERIFIED, `CG_TransitionSnapshot`'s client pass (0x3002faf0..0x3002fb68)
 walks the clients the old `cg.snap` lists (`snap+0x20e0` count,

@@ -324,7 +324,12 @@ keeps `cg_fov`.
   four-wheel seat while the predicted `fWeaponPosFrac` is 0, and a tank's
   seat 2. So the jeep driver and passengers 4..6 see their own body with
   the sight up (when the view leaves for the chase camera), and an
-  artillery crew always (INFERRED from the branches).
+  artillery crew always (INFERRED from the branches). VERIFIED decompile:
+  `CG_Player` runs the anim routine (0x30005860) before 0x30032fe0, whose
+  refusals return before it writes `lerpOrigin` (`cent+0x208`), so a
+  hidden body's DObj is stepped where the entity pass left it; vcod poses
+  it there undrawn for its tags (`cod11-events-and-fx.md` 2,
+  "playFxOnTag").
 
 ## 7. Prediction against the capture
 

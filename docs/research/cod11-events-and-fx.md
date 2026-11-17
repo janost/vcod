@@ -555,7 +555,30 @@ arguments, not an entity method:
   effect played on a tag spawns at the tag's pose of its own frame, each
   delayed element at the pose of the frame it falls due, and only its
   `relative` elements follow the tag after that, dying when it can no
-  longer be posed.
+  longer be posed. VERIFIED, disassembly 0x493fa3..0x493fda: the due
+  branch hands the spawner the pose 0x49e8d0 wrote and does not test that
+  call's result (`al` is not read before the spawner's call).
+- VERIFIED, the spawner's `Emitter` case (0x494050 case 5): the model's
+  angles are the sampled `angle` plus `vectoangles` (0x42e470, roll 0) of
+  the spawn axis's forward (`ESI` at 0x4964b5 is the axis copied at
+  0x494091 from the spawner's axis argument). INFERRED, with the due
+  branch above: a delayed `Emitter` on a tag turns its model by the
+  forward of the tag's pose the frame it falls due; a delayed `Decal`
+  lands at that pose too.
+- VERIFIED, `PlayEffect` 0x4939c3..0x493a1f: an element's `cullrange`
+  compares the view origin (0x140751c) with the origin `PlayEffect` was
+  handed (`[edi]`, its third argument), not with the bolt's pose the
+  elements spawn at (written by the call to 0x49e8d0 at 0x49392a). For
+  `playFxOnTag` that is the entity's `lerpOrigin` (above); for a muzzle
+  flash, `CG_AddPlayerWeapon` (0x30036cf0) hands `CG_MuzzleFlash` the
+  shooter's `lerpOrigin` (`cent+0x1f8`) or, for the view weapon, its
+  origin (0x3020cbac); for a case, `CG_EjectBrass` hands 0x305430c0
+  (0x30038ae9, 0x30038b4b), which only the view weapon's draw writes,
+  with the view weapon's `tag_brass` (0x30037151). INFERRED: every case's
+  `cullrange` (100 on both stock shell ejects) is measured from the view
+  weapon's last `tag_brass`, zero in a fresh cgame (the cgame's `.bss`),
+  so a spectator who never drew a view weapon sees cases only within 100
+  units of the world origin.
 
 vcod plays it through `fx::registry::Resolved::OnTag`:
 `entities::EntityScene::tag_pose` reads the tag off the entity as it was
@@ -569,7 +592,6 @@ is posed on the tag as it stands the frame it falls due (`Particle::repose`,
 
 - A plain model (`script_model`, item, missile) is posed in its bind
   pose, which is how vcod draws it.
-- `cullrange` is measured from the tag, not from `lerpOrigin`.
 - An effect on the body the view rides (the playerState ring, or the
   followed player) plays on its tag:
   - INFERRED, off the branch in cgame 0x3001bd00: under `pm_flags`
@@ -587,9 +609,20 @@ is posed on the tag as it stands the frame it falls due (`Particle::repose`,
   - vcod builds that body from the playerstate (`play::seat::own_body`,
     under `play::seat::adds_view_body`), poses it in `build_instances`
     and keeps it out of the draw list, the muzzles, the shadows and the
-    entity positions. A free spectator's frame carries neither bit, and a
-    UO rider whose seat hides the body poses none, so an effect on either
-    plays nothing.
+    entity positions. A free spectator's frame carries neither bit, so an
+    effect on it plays nothing.
+  - VERIFIED, UO `CG_Player` (0x300343e0): the per-frame anim routine
+    (0x30005860) runs before the seat placement (0x30032fe0), and a seat
+    that hides the body returns 0 from it before it writes `lerpOrigin`
+    (`cent+0x208`), so `CG_Player` returns undrawn (after
+    `CG_AddPlayerWeapon` 0x30045ca0, which draws nothing for a rider but a
+    jeep's seat 3) with the body's anims stepped and its `lerpOrigin`
+    where the entity pass put it (`coduo-vehicles.md` 6). INFERRED, with
+    0x49e8d0's frame above: an effect on such a rider's tag plays on that
+    pose. vcod poses the body undrawn at its lerped origin
+    (`entities::build_instances`, `seat_hidden`); the seat's yaw the anim
+    routine reads (`ci+0x3f4`, which 0x30033a77 writes past the hidden
+    test) is this frame's in vcod.
 
 ### On the wire, measured
 
@@ -1038,11 +1071,35 @@ VERIFIED, 1.5 `cgame_mp_x86.dll` 0x3003ab90 (called from `CG_Tracer`
 0x300859f0, 0x300859e0), with one more step for the ridden body: when
 the held weapon's `weaponClass` is 3 (`lmg`) and `pm_flags & 0x20` (the
 bipod), the point moves along a vector 0x3004a200 builds, scaled by the
-float at 0x3007c190, before the lean. INFERRED: that is the server's
-19-unit bipod offset (`cod11-combat.md` 2.1); the vector and the constant
-were not read. None of the three adds the walk bob or the 8-unit floor
-the 1.5 and UO servers' `CalcMuzzlePoint` add (`cod11-combat.md` 2.1), so
-the server's muzzle has no client counterpart.
+float at 0x3007c190, before the lean. VERIFIED, disassembly 0x30048bdc..
+0x30048c34: 0x3004a200 is `AngleVectors` (cos and sin of each angle times
+0.017453292 at 0x3007bd70; forward in `ESI`, right in `EDI`, up in
+`EBX`), called with right and up null and angles (0, `cg.snap+0x5b0`, 0),
+and 0x3007c190 is 19.0; each axis adds forward times 19 on the stack and
+stores. `cg.snap+0x5b0` is `ps+0x5a4` (the playerstate starts at
+`cg.snap+0xc`, where `pm_flags` reads `cg.snap+0x18`), `proneDirection`
+(VERIFIED, the netfield table, `coduo-movement.md` 7). So the client's
+point is the eye pushed 19 forward along `proneDirection` with no trace,
+where the server's box trace can stop it short (`coduo-movement.md` 7).
+None of the three adds the walk bob or the 8-unit floor the 1.5 and UO
+servers' `CalcMuzzlePoint` add (`cod11-combat.md` 2.1), so the server's
+muzzle has no client counterpart.
+
+VERIFIED, the DObj test: 1.1 and 1.5 ask only for the shooter's DObj
+(syscall 0xa2 at 0x300394cc, 0xa3 on 1.5); UO first tests `cent+0x1e8`
+(0x30048c76) and returns 0 when it is clear. VERIFIED, decompile: UO's
+0x3003ca30 clears that word for the old snapshot's entities and sets it
+for the new one's, as 1.1's `CG_TransitionSnapshot` (0x3002faa0) does
+`cent+0x1e0` (0x3002fac8), so it is `currentValid`. VERIFIED, 1.1 `CG_SetNextSnap` (0x3002fc80): each client
+in the next snapshot's client list whose entity is valid gets its DObj
+through 0x30004eb0, which makes it, or makes it again on a weapon change,
+and frees it only once the client info is invalid; `CG_Player` makes
+none. INFERRED: a client's DObj stands from his first snapshot until his
+client info drops, drawn or not, so on 1.1 and 1.5 a shooter who is dead,
+`EF_NODRAW`, or out of the snapshot still starts his rounds at his
+`tag_flash` on the skeleton his DObj last built (`cent`'s frame, stale
+while he is out of the snapshot) or at his stance point; UO plays nothing
+for one out of the snapshot.
 
 The rest of the shot's client side is tags in all three: the flash on
 `tag_flash` of the viewmodel or the world weapon (5b), the case on
@@ -1059,11 +1116,15 @@ vcod: `fx::registry::shot_origin` starts the tracer and the whizby at the
 shooter's posed `tag_flash` (`entities::BuiltScene::muzzles`, the gun's
 own for a turret), else at `fx::registry::muzzle_fallback` for a drawn
 player body without one (`BuiltScene::shot_fallbacks`); a body without
-the tag plays no flash. For the ridden body vcod keys the viewmodel's
+the tag plays no flash. A player the frame did not draw but whose body
+vcod has posed before (his `EntityAnim`, kept as long as retail's DObj)
+gets `entities::stale_shot_points`: his last drawn `tag_flash` in his
+current frame, his stance point without one, or the last world point
+while he is out of the snapshot, which UO skips. For the ridden body vcod keys the viewmodel's
 `tag_flash` instead of the eye-and-lean point: the whizby needs the
 listener 64 units past the start along the shot (`cues::WHIZBY_MARGIN`),
 and the listener is the view itself, so neither point ever whizzes
-(INFERRED, off the margin test). The fire sound plays on the entity,
+(INFERRED, off the margin test), UO's bipod step included. The fire sound plays on the entity,
 not the tag (not modelled).
 
 ---
