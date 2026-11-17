@@ -466,6 +466,17 @@ gates).
   probe reading every player's tag each frame eases every body's controls
   each frame. vcod eases a body at its first tag read of a frame as at its
   first trace (6.1). VERIFIED (`cod4_tag_read_ab`).
+- A script's `bulletTrace` does not: it passes no priority map, and the
+  locational arm poses a player only under one, so the trace meets the
+  player's capsule (cod4-gsc.md 3.3). VERIFIED (the instructions, gdb,
+  `cod4_trace_read_ab`).
+- The skeleton is built once a skeleton time stamp (`0x13ed7ac4`, checked
+  at 0x817cc3a, the DObj's at +0x44) for the bones asked: a later read
+  asking for bones the first did not build runs the controller again
+  (0x81afaaa). VERIFIED (the instructions). In the gdb run of 6.1 the
+  shooter's controller ran twice at 47200, the frame its fire read
+  `tag_weapon_right` after `j_head`. VERIFIED (gdb). With the controls at
+  their targets the second ease moves nothing. INFERRED.
 
 ## 4. Damage
 
@@ -946,15 +957,24 @@ prone and killcam runs. VERIFIED (the gates).
   prints each living player's `j_head` and, the frame after each
   `weapon_fired`, the shooter's `tag_weapon_right` and its angles, in
   tenths. The reads also find each goal weight the last end frame set a
-  step on (cod4-player-anims.md 3). Ours matches every frame but 17.
-  VERIFIED (the gate). Its
-  `GAPS` hold the other 17: the shooter's head the first four frames
-  after its spawn (up to 0.4 units), the target's head through a strafe
-  and its stop (47350..47700, `movementDir` -89, up to 2.8 units), and
-  five frames a coordinate's tenth off across the truncation (under 0.1
-  units). The strafe's rows fit the legs' yaw swing or the controls'
-  ease toward it, which no gate has read on a strafing body. INFERRED.
-  Open.
+  step on (cod4-player-anims.md 3). Ours matches every frame but 2.
+  VERIFIED (the gate). The strafe's eight rows were the torso's share of
+  the move, 0 on 1.7 (`player_move_factor_on_torso`), which closed three
+  of the five tenth rows too, and the spawn's four the spawn's own end
+  frame swinging the angles once more (cod4-player-anims.md 8). VERIFIED
+  (gdb, the gate). `G_DObjGetWorldTagMatrix` turns the bone's `trans` and
+  weighted rows through `AnglesToAxis` of the body's angles (glibc's
+  `sinf` and `cosf`) on the x87 stack, and adds the origin last
+  (0x80cc810..0x80cc8f4). VERIFIED (the instructions). Ours had placed
+  them through a quaternion; it now follows (`cod4_script::world_tag`).
+  A gdb run of the recipe (breaks at 0x804c636, 0x80a6f57, 0x804cf90,
+  0x80a484d and the tag read's return 0x80c0053) replayed on ours then
+  matched 932 of 940 `j_head` origins and 906 axes word for word, where
+  the quaternion had matched 918 origins and no axis; the rest sit a few
+  ulps off where the skeleton is. VERIFIED (gdb, ours). The
+  gate's `GAPS` hold the other two tenth rows (48350, 49850, the target's
+  head under 0.1 units off), which fit those ulps across the truncation.
+  INFERRED. Open.
 - `LaunchItem` (0x80910ec): angles (0, the body's yaw plus the offset,
   0); `G_Spawn`; `eType` 3, `index` the item, mins -1 and maxs 1 on every
   axis (0x809141b..0x8091453), +0x120 0x407c0108, `clientNum` the dropper;
