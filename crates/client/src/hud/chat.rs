@@ -3,7 +3,7 @@
 //! and timing are in docs/research/cod11-chat.md.
 
 use super::HudQuad;
-use super::font::{Slot, UiFonts};
+use super::font::{Slot, UiFonts, trap_width};
 use super::hudelem::Virtual;
 use super::player::{menu_text_rgba, text_width};
 
@@ -57,12 +57,11 @@ impl Rules {
         }
     }
 
-    /// Lines the ring holds: `min(cg_chatHeight, 8)`, 0 while it is off.
-    fn lines(&self) -> usize {
-        if self.time_ms < 1 {
-            return 0;
-        }
-        self.height.clamp(0, CHAT_LINES as i32) as usize
+    /// The ring's modulus, `min(cg_chatHeight, 8)`, `None` below 1: what
+    /// both `CG_AddToTeamChat` and the draw index slots by, read afresh
+    /// each call.
+    fn height(&self) -> Option<i32> {
+        (self.height >= 1).then(|| self.height.min(CHAT_LINES as i32))
     }
 }
 
@@ -73,10 +72,18 @@ pub fn takes(team: bool, team_chats_only: Option<&str>) -> bool {
     team || team_chats_only.is_none_or(|v| vcod_common::text::atoi_msvc(v) == 0)
 }
 
-/// The chat ring, newest last, each line with the ms it arrived.
+/// The chat ring as the cgame keeps it: 8 slots of 0x10f bytes
+/// (0x301d51c0), each with the ms its line arrived (0x301d5a38), and two
+/// counters that only count up, `head` the next line's (0x301d5a58) and
+/// `tail` the oldest held (0x301d5a5c). A line `n` sits in slot
+/// `n % min(cg_chatHeight, 8)`, the height read at each push and draw, so
+/// lowering it under the lines held reads them back out of order
+/// (cod11-chat.md 3.2).
 #[derive(Default)]
 pub struct Chat {
-    lines: Vec<(String, i32)>,
+    slots: [(String, i32); CHAT_LINES],
+    head: i32,
+    tail: i32,
     rules: Rules,
 }
 
@@ -92,14 +99,14 @@ impl Chat {
 
     /// One localized chat line: cut to 149 bytes, the `\x19`s out, wrapped
     /// at 90 visible characters on the last space, each continuation opened
-    /// with the colour the line had reached. With the chat off the ring
-    /// empties instead (CG_AddToTeamChat's early return).
+    /// with the colour the line had reached. A height or time below 1
+    /// zeroes both counters and keeps nothing (CG_AddToTeamChat's head).
     pub fn push(&mut self, text: &str, now_ms: i32) {
-        let cap = self.rules.lines();
-        if cap == 0 {
-            self.lines.clear();
+        let Some(h) = self.rules.height().filter(|_| self.rules.time_ms >= 1) else {
+            self.head = 0;
+            self.tail = 0;
             return;
-        }
+        };
         let mut text: String = text.chars().filter(|&c| c != '\u{19}').collect();
         if text.len() > MAX_LINE {
             let mut end = MAX_LINE;
@@ -109,16 +116,54 @@ impl Chat {
             text.truncate(end);
         }
         for line in wrap(&text, self.rules.uo) {
-            self.lines.push((line, now_ms));
+            self.slots[self.head.rem_euclid(h) as usize] = (line, now_ms);
+            self.head += 1;
         }
-        let excess = self.lines.len().saturating_sub(cap);
-        self.lines.drain(..excess);
+        if self.head - self.tail > h {
+            self.tail = self.head - h;
+        }
     }
 
     /// Test hook; production reads go through [`Self::build`].
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
-        self.lines.is_empty()
+        self.head == self.tail
+    }
+
+    /// The draw's walk (0x300150b0): the tail steps past one line older
+    /// than `cg_chatTime` a frame, then every line from the newest down to
+    /// the tail as (row, text, arrival), row -1 the newest. A slot is read
+    /// at this frame's height, whatever height wrote it.
+    fn walk(&mut self, now_ms: i32) -> Vec<(i32, String, i32)> {
+        let Some(h) = self.rules.height() else {
+            return Vec::new();
+        };
+        if self.tail == self.head {
+            return Vec::new();
+        }
+        let slot = |n: i32| n.rem_euclid(h) as usize;
+        if self.rules.time_ms < now_ms - self.slots[slot(self.tail)].1 {
+            self.tail += 1;
+        }
+        (self.tail..self.head)
+            .rev()
+            .map(|n| {
+                let (line, t) = &self.slots[slot(n)];
+                (n - self.head, line.clone(), *t)
+            })
+            .collect()
+    }
+
+    /// A line's alpha: 1, or `(cg_chatTime - age) * 0.005` inside its last
+    /// 200 ms; `None` at 0 or less, which the draw skips.
+    fn alpha(&self, now_ms: i32, t: i32) -> Option<f32> {
+        let left = self.rules.time_ms as f32 - (now_ms - t) as f32;
+        let alpha = if left > FADE_MS as f32 {
+            1.0
+        } else {
+            left * (1.0 / FADE_MS as f32)
+        };
+        (alpha > 0.0).then_some(alpha)
     }
 
     /// Each live line from the newest up, 10 units apart with the newest's
@@ -133,29 +178,15 @@ impl Chat {
         v: &Virtual,
         out: &mut Vec<HudQuad>,
     ) {
-        let time = self.rules.time_ms;
-        let cap = self.rules.lines();
-        if cap == 0 {
-            return;
-        }
-        // Retail drops one expired line a frame, oldest first.
-        if self.lines.first().is_some_and(|&(_, t)| now_ms - t > time) {
-            self.lines.remove(0);
-        }
         let font = fonts.pick(Slot::Default, SCALE, 480.0 * v.scale);
-        for (k, (line, t)) in self.lines.iter().rev().take(cap).enumerate() {
-            let left = time - (now_ms - t);
-            let alpha = if left > FADE_MS {
-                1.0
-            } else {
-                left as f32 / FADE_MS as f32
-            };
-            if alpha <= 0.0 {
+        for (row, line, t) in self.walk(now_ms) {
+            let Some(alpha) = self.alpha(now_ms, t) else {
                 continue;
-            }
-            let row = -(k as f32) - 1.0;
+            };
+            let row = row as f32;
             let [r, g, b] = team_rgb;
-            let width = text_width(font, line, SCALE);
+            // Trap 0x34 returns an int (R_TextWidth, CoDMP.exe 0x4df310).
+            let width = trap_width(font, &line, SCALE);
             out.push(v.quad(
                 0.0,
                 row * 10.0 + 84.0,
@@ -173,7 +204,7 @@ impl Chat {
             if !name.is_empty() {
                 let rgba = [r, g, b, alpha];
                 menu_text_rgba(font, name, (x, baseline), SCALE, rgba, v, out);
-                x += text_width(font, name, SCALE);
+                x += trap_width(font, name, SCALE);
             }
             menu_text_rgba(
                 font,
@@ -205,28 +236,15 @@ impl Chat {
     ) {
         let x0 = pos[0].trunc();
         let y0 = pos[1].trunc();
-        let time = self.rules.time_ms;
-        let cap = self.rules.lines();
-        if cap == 0 {
-            return;
-        }
-        if self.lines.first().is_some_and(|&(_, t)| now_ms - t > time) {
-            self.lines.remove(0);
-        }
         let screen_h = sp.real_size[1];
         let font = fonts.pick(Slot::Default, SCALE, screen_h);
         let k = sp.virtual_to_real[1];
-        for (n, (line, t)) in self.lines.iter().rev().take(cap).enumerate() {
-            let left = time - (now_ms - t);
-            let alpha = if left > FADE_MS {
-                1.0
-            } else {
-                left as f32 / FADE_MS as f32
-            };
-            if alpha <= 0.0 {
+        for (row, line, t) in self.walk(now_ms) {
+            let Some(alpha) = self.alpha(now_ms, t) else {
                 continue;
-            }
-            let top = y0 - 10.0 * (n as f32 + 1.0);
+            };
+            let line = line.as_str();
+            let top = y0 + 10.0 * row as f32;
             let lead = line
                 .strip_prefix('^')
                 .and_then(|r| r.chars().next())
@@ -416,14 +434,13 @@ mod tests {
         for i in 0..5 {
             c.push(&format!("m{i}"), 0);
         }
-        assert_eq!(c.lines.len(), 3);
-        assert_eq!(c.lines[0].0, "m2");
+        assert_eq!(texts(&mut c), ["m4", "m3", "m2"]);
         // Above 8 the ring still holds 8.
         c.set_rules(Rules::read(cvars("20", "12000"), false));
         for i in 0..10 {
             c.push(&format!("m{i}"), 0);
         }
-        assert_eq!(c.lines.len(), CHAT_LINES);
+        assert_eq!(texts(&mut c).len(), CHAT_LINES);
         // Off: the next line empties the ring and is not kept.
         c.set_rules(Rules::read(cvars("8", "0"), false));
         c.push("gone", 0);
@@ -460,8 +477,55 @@ mod tests {
         for i in 0..10 {
             c.push(&format!("m{i}\u{19}"), 0);
         }
-        assert_eq!(c.lines.len(), CHAT_LINES);
-        assert_eq!(c.lines[0].0, "m2");
+        let held = texts(&mut c);
+        assert_eq!(held.len(), CHAT_LINES);
+        assert_eq!(held[0], "m9");
+        assert_eq!(held[7], "m2");
+    }
+
+    /// The draw's lines, newest first, at time 0.
+    fn texts(c: &mut Chat) -> Vec<String> {
+        c.walk(0).into_iter().map(|(_, l, _)| l).collect()
+    }
+
+    /// Lowering `cg_chatHeight` under the lines held reads the ring at the
+    /// new modulus: retail's walk goes from the newest down to the tail it
+    /// kept, slot `n % 3`, so lines repeat in a garbled order; the next
+    /// push moves the tail up to the new height.
+    #[test]
+    fn a_lowered_height_reads_the_ring_at_its_new_modulus() {
+        let mut c = Chat::new();
+        for i in 0..8 {
+            c.push(&format!("m{i}"), 0);
+        }
+        c.set_rules(Rules {
+            height: 3,
+            ..Rules::default()
+        });
+        let rows: Vec<(i32, String)> = c.walk(0).into_iter().map(|(r, l, _)| (r, l)).collect();
+        let want = ["m1", "m0", "m2", "m1", "m0", "m2", "m1", "m0"];
+        assert_eq!(rows.len(), 8);
+        for (k, (row, line)) in rows.iter().enumerate() {
+            assert_eq!(*row, -(k as i32) - 1);
+            assert_eq!(line, want[k]);
+        }
+        // m8 lands in slot 8 % 3 = 2 and the tail moves to 9 - 3.
+        c.push("m8", 0);
+        assert_eq!(texts(&mut c), ["m8", "m1", "m0"]);
+    }
+
+    /// The tail steps past one expired line a frame, read at the slot the
+    /// current height gives it.
+    #[test]
+    fn the_draw_drops_one_expired_line_a_frame() {
+        let mut c = Chat::new();
+        c.push("a", 0);
+        c.push("b", 0);
+        c.push("c", 5000);
+        let t = CHAT_TIME_MS + 1;
+        assert_eq!(c.walk(t).len(), 2);
+        assert_eq!(c.walk(t).len(), 1);
+        assert_eq!(c.walk(t).len(), 1);
     }
 
     #[test]

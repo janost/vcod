@@ -599,6 +599,17 @@ impl Ui {
         self.open_menu("main", shell, out);
     }
 
+    /// `UI_SetActiveMenu` 1 (ui_mp_x86.dll 0x4000d8a9): the UI's key
+    /// catcher up and `main` opened, then `error_popmenu` while
+    /// `com_errorMessage` holds anything but `;` (0x4000d8ef). Nothing
+    /// closes first.
+    pub fn set_active_main(&mut self, shell: &Shell, out: &mut Vec<UiEffect>) {
+        self.open_main(shell, out);
+        if !self.error.is_empty() && !self.error.eq_ignore_ascii_case(";") {
+            self.open_menu("error_popmenu", shell, out);
+        }
+    }
+
     /// The main menu over a game: `cl_ingame` 1 swaps Join a Game and Start
     /// New Server for Back to Game and Disconnect, and its Esc closes it.
     pub fn open_ingame(&mut self, shell: &Shell, out: &mut Vec<UiEffect>) {
@@ -2848,7 +2859,8 @@ pub(crate) struct Painter<'a> {
     pub(crate) v: Virtual,
     pub(crate) fonts: Option<&'a UiFonts>,
     /// CoD2: every rect maps straight through `v`, none stretched to the
-    /// window, as its rects were already placed ([`cod2`]).
+    /// window, as its rects were already placed ([`cod2`]); text measures
+    /// unrounded. False on CoD1, whose text traps return ints.
     pub(crate) exact: bool,
 }
 
@@ -2981,17 +2993,24 @@ impl Painter<'_> {
             .map(|f| f.pick(Slot::Default, scale, 480.0 * self.v.scale))
     }
 
-    /// Width on the 640 grid.
+    /// Width on the 640 grid: on CoD1 the DC's `textWidth`, syscall 0x43's
+    /// int ([`font::trap_width`]); CoD2's unrounded.
     pub(crate) fn width(&self, text: &str, scale: f32) -> f32 {
-        self.font(scale)
-            .map_or(0.0, |f| font::measure(f, text, scale / f.unit_scale()))
+        self.font(scale).map_or(0.0, |f| match self.exact {
+            false => font::trap_width(f, text, scale),
+            true => font::measure(f, text, scale / f.unit_scale()),
+        })
     }
 
-    /// The text height on the 640 grid: the font's tallest glyph at
-    /// `scale`, as far above the baseline as [`Self::text`] puts the top.
+    /// The text height on the 640 grid: on CoD1 the DC's `textHeight`,
+    /// syscall 0x44's int ([`font::trap_height`]); on CoD2 the font's
+    /// tallest glyph at `scale`, as far above the baseline as
+    /// [`Self::text`] puts the top.
     pub(crate) fn height(&self, scale: f32) -> f32 {
-        self.font(scale)
-            .map_or(0.0, |f| f.max_height as f32 * f.glyph_scale * scale)
+        self.font(scale).map_or(0.0, |f| match self.exact {
+            false => font::trap_height(f, scale),
+            true => f.max_height as f32 * f.glyph_scale * scale,
+        })
     }
 
     /// `text` with its baseline at grid `(x, y)`.
@@ -3176,6 +3195,49 @@ mod tests {
         );
         let (_, _) = ui.key(KeyCode::Escape, &shell);
         assert_eq!(ui.menus[*ui.open.last().unwrap()].name, "main");
+    }
+
+    /// `UI_SetActiveMenu` 1, which the disconnected frame and Esc run:
+    /// main, the error popup over it while an error other than `;` waits.
+    #[test]
+    fn set_active_main_reopens_main_and_a_waiting_error() {
+        let Some(mut ui) = ui() else { return };
+        let shell = Shell::new();
+        let names = |ui: &Ui| -> Vec<String> {
+            ui.open.iter().map(|&m| ui.menus[m].name.clone()).collect()
+        };
+        ui.set_active_main(&shell, &mut Vec::new());
+        assert_eq!(names(&ui), ["main"]);
+        ui.close_all();
+        ui.error = "Server timed out".into();
+        ui.set_active_main(&shell, &mut Vec::new());
+        assert_eq!(names(&ui), ["main", "error_popmenu"]);
+        ui.close_all();
+        ui.error = ";".into();
+        ui.set_active_main(&shell, &mut Vec::new());
+        assert_eq!(names(&ui), ["main"]);
+    }
+
+    /// The UI's `textWidth` and `textHeight` traps return ints: R_TextWidth
+    /// truncates the widest line, R_TextHeight `scale` times the font's
+    /// second header float (CoDMP.exe 0x4df310, 0x4df540).
+    #[test]
+    fn the_ui_text_traps_return_ints() {
+        let Some(ui) = ui() else { return };
+        let p = Painter {
+            v: Virtual::new((640.0, 480.0)),
+            fonts: ui.fonts.as_ref(),
+            exact: false,
+        };
+        let f = p.font(0.4).unwrap();
+        assert_eq!(
+            p.height(0.4),
+            (0.4f64 * f64::from(f.line_advance)).trunc() as f32
+        );
+        let w = p.width("Join Game", 0.4);
+        assert_eq!(w, w.trunc());
+        assert_eq!(p.width("Join Game\nab", 0.4), w);
+        assert_eq!(p.width("^1Join ^7Game", 0.4), w);
     }
 
     #[test]

@@ -1021,7 +1021,8 @@ impl LivePhase {
 
 enum Mode {
     /// No map and no server: the main menu, or the full-screen console when
-    /// no menu is up, as retail's is when disconnected.
+    /// no menu is up, as retail's is when disconnected. A CoD1 install
+    /// reopens main each frame none is up (`App::cod1_front_end`).
     Idle,
     /// `vcod <map>`: a free camera over a CoD1 or CoD2 map, no server.
     Fly(FlyCamera),
@@ -3558,7 +3559,8 @@ impl App {
             return;
         }
         self.audio.on_gamestate("menu");
-        hud::font::set_front_end_colours(&self.fs);
+        let shell = &self.shell;
+        hud::font::set_front_end_colours(&self.fs, &|n| shell.cvar(n).map(str::to_string));
         let mut out = Vec::new();
         match error {
             Some(e) => self.ui.show_error(e, &self.shell, &mut out),
@@ -5074,6 +5076,22 @@ impl App {
         self.sync_menu_mouse();
     }
 
+    /// No game up on a CoD1 install, whose key handler and frame follow
+    /// CoDMP.exe's with no game: the main menu, or the console over it.
+    fn cod1_front_end(&self) -> bool {
+        matches!(self.mode, Mode::Idle)
+            && self.game == vcod_common::game::Game::Cod1
+            && self.cod4_loading.is_none()
+    }
+
+    /// `UI_SetActiveMenu` 1 with no game up: the main menu, and the error
+    /// popup over it while `com_errorMessage` holds one.
+    fn reopen_main(&mut self) {
+        let mut out = Vec::new();
+        self.ui.set_active_main(&self.shell, &mut out);
+        self.ui_pending.extend(out);
+    }
+
     /// Esc in a CoD2 game with no menu up: `UI_SetActiveMenu` case 2
     /// (Mac 0x15118e) opens the menu `g_scriptMainMenu` names, else the
     /// main menu over the game.
@@ -5293,6 +5311,13 @@ impl ApplicationHandler for App {
         for line in self.session.take_menu_console() {
             self.ui_pending.push(frontend::UiEffect::Command(line));
         }
+        // `CL_Frame` (CoDMP.exe 0x4112c0..0x4112e9): disconnected, with
+        // the UI's key catcher down and no server running, the client
+        // stops its sounds and reopens the main menu every frame.
+        if self.cod1_front_end() && !self.ui.active() && self.ui.has_menu("main") {
+            self.audio.stop_all();
+            self.reopen_main();
+        }
         let pending = std::mem::take(&mut self.ui_pending);
         self.ui_effects(event_loop, pending);
         self.sync_menu_mouse();
@@ -5362,6 +5387,18 @@ impl ApplicationHandler for App {
                                 self.ui_effects(event_loop, effects);
                             } else {
                                 self.escape();
+                            }
+                        }
+                        // With no game up a CoD1 Esc reaches the menus
+                        // under the console too, and the console stays
+                        // down; with none up it opens the main menu
+                        // (CoDMP.exe 0x40ddca, `UI_SetActiveMenu` 1).
+                        KeyCode::Escape if self.console.open && self.cod1_front_end() => {
+                            if self.ui.active() {
+                                let (_, effects) = self.ui.key(code, &self.shell);
+                                self.ui_effects(event_loop, effects);
+                            } else {
+                                self.reopen_main();
                             }
                         }
                         KeyCode::Escape if self.console.open => self.toggle_console(),
