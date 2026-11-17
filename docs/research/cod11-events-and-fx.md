@@ -1419,10 +1419,15 @@ field it maps to.
   places a mark (0x300276d8). Retail's default draws no blob.
 - VERIFIED, 0x3002764c..0x3002768f: a point trace through syscall 0x26
   from the entity's `lerpOrigin` (`cent+0x1f8`) to 64 units below it
-  (0x300695a0 is 64.0), mins and maxs null, mask 0x2810011. INFERRED,
-  `CoDMP.exe` 0x40266d: syscall 0x26 is `CM_BoxTrace` (0x424b50) with the
-  cgame's model argument 0, so it hits the world's brushes only, no
-  entity.
+  (0x300695a0 is 64.0), mins and maxs null, model 0, mask 0x2810011.
+- VERIFIED, `CoDMP.exe` 0x40266d: syscall 0x26 hands its arguments to
+  0x424b50, which passes them on to the trace 0x424530.
+- VERIFIED, 0x424958..0x4249b8: model 0 walks the world's tree (0x422d30);
+  the box model 0x1fe and any other inline model take their own paths
+  (0x422920 or 0x422bb0, 0x4227f0 on the model's leaf at `+0x18`).
+- INFERRED, Q3 lineage: the world's tree holds model 0's brushes, terrain
+  and patches alone, so the trace hits no door, mover, vehicle or other
+  inline model, and no entity.
 - VERIFIED, 0x30027695..0x300276bc: a fraction of exactly 1.0 or 0.0
   places nothing. The shadow plane written back to the caller is the
   hit's z plus 1 (0x30069304).
@@ -1447,9 +1452,10 @@ field it maps to.
   grey level darkens the ground by the image times that level.
 
 vcod: `crates/client/src/blob_shadow.rs` runs the trace and the fade per
-drawn player (`entities::BuiltScene::shadow_casters`), with
-`CollisionWorld::point_trace` without props standing in for the world
-trace. The marks go into the frame's mark list ahead of the pooled marks.
+drawn player (`entities::BuiltScene::shadow_casters`) through
+`CollisionWorld::world_point_trace`, inline model 0 alone: no submodel,
+world copy, model instance or static model, so a player on a door or a
+vehicle casts his blob on the ground under it. The marks go into the frame's mark list ahead of the pooled marks.
 INFERRED from `CG_DrawActiveFrame`'s Q3 order: the packet entities, and so
 the shadows, are added before `CG_AddMarks`.
 
