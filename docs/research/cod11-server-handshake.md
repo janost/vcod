@@ -1148,11 +1148,8 @@ probe in the game, a socket on 127.0.0.1:20510 as the master.
 - vcod (`Vm::thread_usage`, `game::usage`) counts the same over its frames:
   a frame's defined locals, an array's holders counted over every frame,
   struct field and array element (garbage the heap keeps too), and `1 + n`
-  for `n` endons; `script_usage_counts_as_retail` matches the capture's
-  every group line. An entity's var usage is its script struct's fields,
-  without the map keys retail keeps as variables (retail 619 over 210
-  entities on mp_brecourt, vcod fewer). Positions print `(file '...', line
-  N)` with no source line or caret under them, and never `@ <offset>`.
+  for `n` endons; `script_usage_counts_as_retail` matches the capture byte
+  for byte, the entity and HUD element lines included.
 - Order: a thread's record is its code positions innermost first (current,
   then callers from the stack's type-6 entries); `qsort` with 0x80a2218
   compares them pointer by pointer, a shorter record first on a shared prefix;
@@ -1163,6 +1160,18 @@ probe in the game, a socket on 127.0.0.1:20510 as the master.
 - At `developer 1` and `developer_script 1` a position prints as `(file
   'maps\mp\gametypes\tdm.gsc', line 992)\n`, the source line verbatim (`\r\n`
   kept) and spaces ending in `*` under the column. VERIFIED.
+- VERIFIED, `cod_lnxded`: 0x809b9b0 prints `@ %d\n` (0x80d7309) of the
+  position less the code buffer's start (0x80e3124) when the flag at
+  0x81613b0 is 0. 0x80a90e4 stores that flag and 0x81613b4 from its two
+  arguments, the integers of the cvars at 0x833df08 and 0x833efc8, which
+  0x806c937 and 0x806c956 registered as `developer` (0x80cf6d4) and
+  `developer_script` (0x80cf783); its callers are 0x806cc69 and 0x806dcdd.
+  INFERRED, off those calls: the mode is `developer` as the level's script
+  init read it, as `Scr_Init` reads it (cod11-gsc-language.md, "Runtime
+  errors below developer 1").
+- VERIFIED, 0x809b89c: the source is kept with each line's `\n` a NUL; the
+  line is copied with each tab (9) a space, printed `%s\n` (0x80d7305),
+  then `memset` of the column's spaces, `*`, NUL, printed the same.
 - VERIFIED, `probe_usage`: `developer 1` alone prints the source lines
   (`developer_script` 0 gave the same reply byte for byte), each tab of the
   line printed as one space; the `*` sits under the `w` of `wait`, under
@@ -1176,10 +1185,78 @@ probe in the game, a socket on 127.0.0.1:20510 as the master.
   name: `tdm` 992, 1184; `sd` 1246, 1291, 1691, 1822; `re` 1379, 1424, 1824,
   1905, 1988; `bel` 1076, 1265. VERIFIED.
 - vcod sorts by the file's install order (`Vm::thread_usage`; the gametype's
-  closure, then the level's, each file before those it calls), then line,
-  matching every capture (`script_usage_orders_files_as_retail`). Where
-  install or line order departs from retail's code order the groups differ. No
-  source line or caret.
+  closure, then the level's, each file before those it calls), then line
+  and column, matching every capture (`script_usage_orders_files_as_retail`).
+  Where install or line order departs from retail's code order the groups
+  differ.
+- VERIFIED, `probe_usage_ents` (`client-probes/`, 1.1d, mp_brecourt,
+  `tests/fixtures/usage/mp_brecourt-probe_usage_ents.txt`) and the runtime
+  error `_callbacksetup.gsc` line 15 printed on the same server: the caret
+  of a path call (`maps\mp\gametypes\probe_usage_ents::pathed();`) sits
+  under the path's first segment; of a method call through a pointer
+  (`self [[ptr]]();`) under `ptr`; of a call through `[[level.callbackStartGameType]]`
+  under `callbackStartGameType`.
+- vcod's compiler keeps a position per instruction (`Function::at`, the
+  lexer's `Spanned::col`): a statement's first token, and for every
+  instruction a call emits the call's name, a path's first segment, a
+  method's name after its receiver, or the last name inside `[[ ]]` (the
+  first token when the pointer expression ends in no name, INFERRED). The
+  VM runs as before; `scriptUsage` reads the line and column. At
+  `developer` 1 at the load (`ScriptRuntime::developer`) each position
+  prints its source line and caret from the loader's text
+  (`CompiledScripts::sources`); at 0 `@ <offset>`, the offset vcod's own:
+  every installed function's instructions counted in install order
+  (`UsagePos::offset`), not retail's bytes. `script_usage_prints_offsets_at_developer_0`
+  checks the shape and that the offsets order as retail's
+  (`tests/fixtures/usage/mp_brecourt-probe_usage-dev0.txt`: `probe_usage`
+  184 to 562, `tdm` 7803 and 9302, `_minefields` 44377).
+
+The entity line:
+
+- VERIFIED, 0x809d666..: for each class below the count at 0x82f17c4, the
+  class's object array (0x80e3162, 0x80a2aa4), each child of it
+  (0x80a3210, 0x80a3028) counted and `Scr_GetObjectUsage` (0x80a0c4c) of
+  its object (the value at 0x81f17c0 plus 12 times the variable) added to
+  a float.
+- VERIFIED, `probe_usage_ents` on 1.1d, mp_brecourt, the entity line per
+  `probe_mode` (count, var usage): `base` 62, 283; `ref` 94, 315 (the 32
+  `mp_teamdeathmatch_spawn`s held by `level`); over `ref`, `field` (three
+  fields on two) 318, `w1` (one thread in `waittill` on one) 320, `w2`
+  (two on one name) 321, `w2n` (one on each of two names) 323, `e1` (one
+  `endon`) 320, `we` (a `waittill` and an `endon` on one name) 321, `arr`
+  (one array of two held by a field on each of two) 320, `read` (reading
+  an unset field) 316, `isdef` (`isdefined` of one) 316, `read2` (one
+  unset field read twice, another once) 317, `unset` (a field set, then
+  set to `undefined`) 315. Deleting from `base` (`del`): the 24
+  `script_model`s 38, 235; the 32 minefield triggers 30, 59; the
+  `trigger_use` 61, 281; the `trigger_hurt` 61, 281; the `misc_mg42` 61,
+  282; the 35 `trigger_multiple`s 27, 53.
+- VERIFIED, `probe_usage_keys` (`base` with a never-called function naming
+  `e.export`, `e.script_noteworthy` and `e.script_gameobjectname`): 63, 314.
+- INFERRED, off those: an entity is counted once it has an object, which
+  script reaching it makes (`getentarray`, a thread's `self`), and so does
+  storing a radiant key at the spawn; the `misc_mg42` has one with no
+  script near it, cause unread. Its usage is 1, plus per field 1 (an array
+  1 plus its usage over its holders), plus 1 per field read while unset,
+  which stays until set to `undefined`, plus, with any `waittill` or
+  `endon` on it, 2 and per event name 2 plus one per registration. A
+  radiant key is stored only when a compiled script names it: `export`
+  adds 1 (one key on the map), `script_noteworthy` 2,
+  `script_gameobjectname` 28 (27 keys, and the `trigger_lookat` no script
+  reaches gains its object). On `base` the `script_model`s and triggers
+  are 2 each (1 and `_load.gsc`'s read of `script_exploder`), a minefield
+  trigger 7 (with its `waittill`).
+- vcod (`Vm::objects_usage`, `GameHost`'s `read_route` and `store_script`):
+  a read of an unset script field leaves an undefined field
+  (`Cx::touch_field`), a write of `undefined` removes the field, a field
+  counts when its name was interned by the compile (`Program::atom_count`,
+  standing for retail's canonical strings), and each thread's `waittill`
+  and `endon` on the entity are counted as above. vcod counts every in-use
+  entity and HUD element, not those script reached: off a stock gametype
+  the count is higher (on stock `tdm`, whose scripts reach every entity on
+  mp_brecourt, both say 210, 619). `script_usage_entities_as_retail` checks
+  var usage less count under every `probe_mode` above and
+  `probe_usage_keys`.
 
 `stringUsage` (0x8084d74 -> 0x809a780, ported in shape):
 

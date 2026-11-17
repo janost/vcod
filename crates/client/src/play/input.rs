@@ -17,6 +17,9 @@ pub use vcod_common::net::flags::{EF_CROUCH, EF_PRONE};
 
 /// ANGLE2SHORT units per degree.
 const SHORT_PER_DEG: f32 = 65536.0 / 360.0;
+/// UO's `MAX_WEAPONS`, the most weapon bits a playerstate carries (1.1's and
+/// 1.5's 64 read their upper words 0; coduo-diff.md 12).
+const MAX_HELD: usize = 128;
 
 /// Degrees of view per mouse count, `CL_MouseMove` (CoDMP.exe 0x40b240;
 /// docs/research/cod11-console.md, section 5), and where the motion goes:
@@ -345,11 +348,13 @@ pub struct Held {
     pub weapon: u8,
     pub slots: [u8; 8],
     pub stance: Stance,
-    /// `ps.weapons`: bit `n` while weapon `n` is carried.
-    pub owned: u64,
+    /// `ps.weapons`: bit `n` while weapon `n` is carried, two words on 1.1
+    /// and 1.5 and four on UO, whose `BG_PlayerHasWeapon` (uo cgame
+    /// 0x30047370) tests bit `n & 31` of word `n >> 5` for up to 128.
+    pub owned: u128,
     /// Bit `n` while weapon `n` has a round in its clip or reserve,
     /// `ammo[ammoIndex] + ammoclip[clipIndex] != 0` (cgame 0x300381b0).
-    pub loaded: u64,
+    pub loaded: u128,
     /// Configstring 7's `altWeapon` links, index = weapon number, 0 none
     /// (the def's `+0x2fc`). Its length less one is the weapon count.
     pub alt: Vec<u8>,
@@ -394,12 +399,14 @@ impl Held {
         let mut slots = [0u8; 8];
         slots[..4].copy_from_slice(&lo);
         slots[4..].copy_from_slice(&hi);
-        let owned = u64::from(ps.field_i32(p, "weapons[0]") as u32)
-            | u64::from(ps.field_i32(p, "weapons[1]") as u32) << 32;
+        // A protocol without the upper words reads them 0.
+        let owned = (0..4).fold(0u128, |m, i| {
+            m | u128::from(ps.field_i32(p, &format!("weapons[{i}]")) as u32) << (32 * i)
+        });
         let count = |a: &[i16; 64], i: usize| a.get(i).copied().map_or(0, i32::from);
         let mut loaded = 0;
         let mut alt = vec![0u8; weapons.len()];
-        for (n, def) in weapons.iter().enumerate().take(64) {
+        for (n, def) in weapons.iter().enumerate().take(MAX_HELD) {
             let Some(def) = def else { continue };
             if count(&ps.arrays.ammo, def.ammo_index) + count(&ps.arrays.ammoclip, def.clip_index)
                 != 0
@@ -437,7 +444,9 @@ impl Held {
 
     /// The weapon, slots, carried and loaded bits off the predicted
     /// playerstate, which the out-of-ammo switch reads (cgame 0x300381b0
-    /// reads `0x3020715c`, the predicted ps, not the snapshot's).
+    /// reads `0x3020715c`, the predicted ps, not the snapshot's). pmove
+    /// carries 64 weapon bits; UO's upper two words stay the snapshot's,
+    /// which no move changes.
     pub fn predicted(
         &mut self,
         ps: &vcod_common::pmove::PlayerState,
@@ -445,9 +454,9 @@ impl Held {
     ) {
         self.weapon = ps.weapon;
         self.slots = ps.weapon_slots;
-        self.owned = ps.weapons_held;
+        self.owned = self.owned & !u128::from(u64::MAX) | u128::from(ps.weapons_held);
         self.loaded = 0;
-        for (n, def) in weapons.iter().enumerate().take(64) {
+        for (n, def) in weapons.iter().enumerate().take(MAX_HELD) {
             let Some(def) = def else { continue };
             let count = |a: &[i16; 64], i: usize| a.get(i).copied().map_or(0, i32::from);
             if count(&ps.ammo, def.ammo_index) + count(&ps.ammoclip, def.clip_index) != 0 {
@@ -467,11 +476,11 @@ impl Held {
     }
 
     pub fn owns(&self, w: u8) -> bool {
-        w < 64 && self.owned & 1 << w != 0
+        usize::from(w) < MAX_HELD && self.owned >> w & 1 != 0
     }
 
     fn usable(&self, w: u8, need_ammo: bool) -> bool {
-        !need_ammo || (w < 64 && self.loaded & 1 << w != 0)
+        !need_ammo || (usize::from(w) < MAX_HELD && self.loaded >> w & 1 != 0)
     }
 
     fn alt_of(&self, w: u8) -> u8 {
@@ -918,11 +927,16 @@ impl PlayInput {
     }
 
     /// The angles a cmd carries: `CL_FinishMove` (CoDMP.exe `0x40b6b7`)
-    /// sends `ANGLE2SHORT(cl.viewangles + kick)` truncated, so the server
-    /// aims the shot where the kicked view points (combat doc, 15.7). The
-    /// kick is truncated on its own here, a unit off retail's at most.
+    /// sends `ANGLE2SHORT(cl.viewangles + kick)`, the sum times 65536/360
+    /// on the x87 stack and truncated once (`_ftol`), so the server aims the
+    /// shot where the kicked view points (combat doc, 15.7). The view here
+    /// is the whole units plus the mouse's rest.
     pub fn cmd_angles(&self) -> [i32; 3] {
-        std::array::from_fn(|i| self.raw_angles[i] + (self.kick[i] * SHORT_PER_DEG) as i32)
+        std::array::from_fn(|i| {
+            let rest = self.mouse_rest.get(i).copied().unwrap_or(0.0);
+            let units = f64::from(self.raw_angles[i]) + f64::from(rest);
+            (units + f64::from(self.kick[i]) * f64::from(SHORT_PER_DEG)).trunc() as i32
+        })
     }
 
     pub fn build(&mut self, server_time: i32, held: &Held) -> UserCmd {
@@ -1125,7 +1139,7 @@ mod tests {
         let mut alt = vec![0; 33];
         alt[10] = 11;
         alt[11] = 10;
-        let owned = [3, 6, 10, 11].iter().fold(0, |m, w| m | 1u64 << w);
+        let owned = [3, 6, 10, 11].iter().fold(0, |m, w| m | 1u128 << w);
         Held {
             weapon,
             slots: [0, 10, 0, 3, 6, 0, 0, 0],
@@ -1273,7 +1287,9 @@ mod tests {
     fn uo_has_seven_slots() {
         let five = Held {
             slots: [0, 10, 0, 3, 6, 7, 9, 8],
-            owned: [3, 6, 7, 8, 9, 10, 11].iter().fold(0, |m, w| m | 1u64 << w),
+            owned: [3, 6, 7, 8, 9, 10, 11]
+                .iter()
+                .fold(0, |m, w| m | 1u128 << w),
             ..held(10)
         };
         let five = Held {
@@ -1548,7 +1564,7 @@ mod tests {
         let mut i = synced(10);
         let mut ps = vcod_common::pmove::PlayerState::spawn(glam::Vec3::ZERO, 0.0);
         ps.weapon = 10;
-        ps.weapons_held = i.held.owned;
+        ps.weapons_held = i.held.owned as u64;
         ps.weapon_slots = i.held.slots;
         // The snapshot still reads slot 1 loaded; the prediction has it dry
         // and the pistol empty, so the frag in slot 4 is the first with a
@@ -1891,6 +1907,20 @@ mod tests {
         assert_eq!(i.build(200, &held(10)).angles, base);
     }
 
+    /// A kick under half a unit against a view half a unit the other way:
+    /// retail truncates the sum once, a unit below the view's own units.
+    #[test]
+    fn the_kick_truncates_with_the_view() {
+        let mut i = PlayInput::default();
+        i.mouse([0.0, 5.5 / SHORT_PER_DEG]);
+        assert_eq!(i.raw_angles[1], 5);
+        i.kick = [0.0, -0.75 / SHORT_PER_DEG, 0.0];
+        // 5.5 - 0.75 = 4.75: 4, where the kick truncated alone (0) left 5.
+        assert_eq!(i.cmd_angles()[1], 4);
+        i.kick = [0.0; 3];
+        assert_eq!(i.cmd_angles()[1], 5);
+    }
+
     #[test]
     fn slow_mouse_motion_accumulates() {
         // 0.01 counts is a third of a short unit, which truncated per event
@@ -2199,6 +2229,33 @@ mod tests {
         assert_eq!((h.alt_of(10), h.count()), (3, 10));
         assert!(h.own_view);
         assert_eq!(h.spawn, Some((2, 7)));
+    }
+
+    /// UO's four weapon words: a mod's weapon 100 is carried, loaded and
+    /// selectable by number, and a prediction keeps it.
+    #[test]
+    fn uo_carries_weapons_past_64() {
+        let p = &vcod_common::net::protocol::PROTOCOL_V22;
+        let mut ps = PlayerState::null(p);
+        let mut set = |name: &str, v: i32| {
+            ps.fields[PlayerState::field_index(p, name).unwrap()] = v;
+        };
+        set("weapons[0]", 1 << 3);
+        set("weapons[3]", 1 << 4);
+        ps.arrays.ammoclip[2] = 1;
+        let mut weapons = vec![None; 101];
+        weapons[100] = Some(WeaponDef {
+            clip_index: 2,
+            ..Default::default()
+        });
+        let mut h = Held::from_ps(&ps, p, &weapons);
+        assert!(h.owns(3) && h.owns(100) && !h.owns(99));
+        assert!(h.usable(100, true));
+        let mut pred = vcod_common::pmove::PlayerState::spawn(glam::Vec3::ZERO, 0.0);
+        pred.weapons_held = 1 << 3;
+        pred.ammoclip[2] = 1;
+        h.predicted(&pred, &weapons);
+        assert!(h.owns(100) && h.usable(100, true));
     }
 
     #[test]

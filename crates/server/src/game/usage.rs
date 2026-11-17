@@ -3,20 +3,35 @@
 //! threads, objects and strings are not retail's variable and memory trees.
 //! docs/research/cod11-server-handshake.md, "Console commands over rcon".
 
-use vcod_gsc::ThreadUsage;
+use vcod_gsc::{ThreadUsage, UsagePos};
 
 const RULE: &str = "********************************\n";
 
 /// `MT_InitBits`' tree: 65536 eight-byte buckets, bucket 0 never handed out.
 const BUCKETS: usize = 0xffff;
 
+/// How positions print. Retail keeps the sources only at `developer` 1 at
+/// the level's script init (cod_lnxded 0x81613b0, stored by 0x80a90e4);
+/// without them a position is its code offset.
+pub enum Positions<'a> {
+    /// `@ <offset>`, vcod's own (`UsagePos::offset`).
+    Offsets,
+    /// `(file '...', line N)` and, where `source` answers the file's text,
+    /// the line and a caret under the position's column.
+    Lines(&'a dyn Fn(&str) -> Option<&'a str>),
+}
+
 /// Threads grouped by their whole call stack, sorted as retail's qsort
-/// orders code addresses (file install order, then line; a shorter stack
-/// first on a shared prefix), each group's count and its var and endon
-/// usage summed as floats and truncated (0x809d556..0x809d5b3) over the
-/// innermost position and its callers, then `(class, count, fields)` for
+/// orders code addresses (file install order, then position; a shorter
+/// stack first on a shared prefix), each group's count and its var and
+/// endon usage summed as floats and truncated (0x809d556..0x809d5b3) over
+/// the innermost position and its callers, then `(class, count, usage)` for
 /// every object class that has any.
-pub fn script_usage(threads: &[ThreadUsage], classes: &[(&str, usize, usize)]) -> String {
+pub fn script_usage(
+    threads: &[ThreadUsage],
+    classes: &[(&str, usize, usize)],
+    positions: &Positions,
+) -> String {
     let mut threads = threads.to_vec();
     threads.sort_by(|a, b| a.stack.cmp(&b.stack));
     let mut out = String::from(RULE);
@@ -27,14 +42,11 @@ pub fn script_usage(threads: &[ThreadUsage], classes: &[(&str, usize, usize)]) -
             "count: {}, var usage: {vars}, endon usage: {endons}\n",
             group.len()
         ));
-        for (i, (_, file, line)) in group[0].stack.iter().enumerate() {
+        for (i, pos) in group[0].stack.iter().enumerate() {
             if i > 0 {
                 out.push_str("called from:\n");
             }
-            out.push_str(&format!(
-                "(file '{}.gsc', line {line})\n",
-                file.replace('/', "\\")
-            ));
+            position(&mut out, pos, positions);
         }
     }
     out.push_str(RULE);
@@ -45,6 +57,33 @@ pub fn script_usage(threads: &[ThreadUsage], classes: &[(&str, usize, usize)]) -
     }
     out.push_str(RULE);
     out
+}
+
+/// One position as 0x809b9b0 prints it: `@ %d` without sources, else
+/// `(file '%s'%s, line %d)` and 0x809b89c's source line (each tab one
+/// space, a `\r` kept) over spaces ending in `*` at the column.
+fn position(out: &mut String, pos: &UsagePos, positions: &Positions) {
+    let source = match positions {
+        Positions::Offsets => {
+            out.push_str(&format!("@ {}\n", pos.offset));
+            return;
+        }
+        Positions::Lines(source) => source,
+    };
+    out.push_str(&format!(
+        "(file '{}.gsc', line {})\n",
+        pos.file.replace('/', "\\"),
+        pos.at.line
+    ));
+    let Some(line) = source(&pos.file)
+        .and_then(|text| text.split('\n').nth(pos.at.line.saturating_sub(1) as usize))
+    else {
+        return;
+    };
+    out.push_str(&line.replace('\t', " "));
+    out.push('\n');
+    out.push_str(&" ".repeat(pos.at.col as usize));
+    out.push_str("*\n");
 }
 
 /// Each string as `SL_GetString` would size it in the tree: a four-byte
@@ -85,7 +124,12 @@ mod tests {
         ThreadUsage {
             stack: stack
                 .iter()
-                .map(|(o, f, l)| (*o, f.to_string(), *l))
+                .map(|(o, f, l)| UsagePos {
+                    order: *o,
+                    file: f.to_string(),
+                    at: vcod_gsc::Pos { line: *l, col: 0 },
+                    offset: 0,
+                })
                 .collect(),
             vars,
             endons,
@@ -107,6 +151,7 @@ mod tests {
                 thread(&a, 4.0, 1.0),
             ],
             &[("entity", 211, 431), ("hudelem", 1, 1), ("pathnode", 0, 0)],
+            &Positions::Lines(&|_| None),
         );
         assert_eq!(
             text,
@@ -135,7 +180,7 @@ mod tests {
         let mut threads = vec![thread(&mines, 2.0, 0.0); 32];
         threads.push(thread(&[(0, tdm, 1184)], 6.0, 0.0));
         threads.push(thread(&[(0, tdm, 992)], 2.0, 0.0));
-        let text = script_usage(&threads, &[]);
+        let text = script_usage(&threads, &[], &Positions::Lines(&|_| None));
         let blocks: Vec<&str> = text.lines().filter(|l| l.starts_with("(file")).collect();
         assert_eq!(
             blocks,
@@ -146,6 +191,23 @@ mod tests {
             ]
         );
         assert!(text.contains("count: 32, var usage: 64, endon usage: 0\n"));
+    }
+
+    /// 1.1d's `probe_usage` at `developer` 1: the line with each tab one
+    /// space and its `\r`, the caret under the column; at 0 the offset.
+    #[test]
+    fn script_usage_prints_the_line_and_caret_or_the_offset() {
+        let mut t = thread(&[(0, "maps/mp/_minefields", 3)], 2.0, 0.0);
+        t.stack[0].at.col = 7;
+        t.stack[0].offset = 44;
+        let text = "a()\r\n{\r\n\t\tself waittill (\"trigger\",other);\r\n}\r\n";
+        let source = |f: &str| (f == "maps/mp/_minefields").then_some(text);
+        let lines = script_usage(&[t.clone()], &[], &Positions::Lines(&source));
+        assert!(lines.contains(
+            "(file 'maps\\mp\\_minefields.gsc', line 3)\n  self waittill (\"trigger\",other);\r\n       *\n"
+        ));
+        let offsets = script_usage(&[t], &[], &Positions::Offsets);
+        assert!(offsets.contains("count: 1, var usage: 2, endon usage: 0\n@ 44\n"));
     }
 
     #[test]

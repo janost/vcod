@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::Dialect;
 use crate::ast::{
-    self, ArmLabel, BinOp, CallTarget, Cast, Expr, FuncDef, Stmt, StmtKind, SwitchArm, UnOp,
+    self, ArmLabel, BinOp, CallTarget, Cast, Expr, FuncDef, Pos, Stmt, StmtKind, SwitchArm, UnOp,
 };
 use crate::atom::{Atom, Interner};
 use crate::bytecode::{Function, Op};
@@ -100,6 +100,11 @@ pub fn compile_file_with(
             code: Vec::new(),
             consts: Vec::new(),
             lines: Vec::new(),
+            at: Vec::new(),
+            cur_at: Pos {
+                line: f.line,
+                col: 0,
+            },
             // Seeded from the function's declaration line; compile_stmt
             // overwrites it with each statement's own line before that
             // statement emits anything.
@@ -169,6 +174,9 @@ struct Compiler<'a> {
     consts: Vec<Value>,
     lines: Vec<u32>,
     cur_line: u32,
+    /// Each instruction's source position, and the one `emit` records.
+    at: Vec<Pos>,
+    cur_at: Pos,
     /// Patch sites (indices into `code`) for `break`, one frame per
     /// enclosing loop or switch.
     break_stack: Vec<Vec<usize>>,
@@ -193,6 +201,7 @@ impl<'a> Compiler<'a> {
     fn emit(&mut self, op: Op) -> usize {
         self.code.push(op);
         self.lines.push(self.cur_line);
+        self.at.push(self.cur_at);
         self.code.len() - 1
     }
 
@@ -288,6 +297,7 @@ impl<'a> Compiler<'a> {
             prepared: Default::default(),
             consts: self.consts,
             lines: self.lines,
+            at: self.at,
         })
     }
 
@@ -302,6 +312,10 @@ impl<'a> Compiler<'a> {
         // The AST attributes a line to the statement, not the instruction;
         // every op and error this statement produces is attributed to it.
         self.cur_line = s.line;
+        self.cur_at = Pos {
+            line: s.line,
+            col: s.col,
+        };
         match &s.kind {
             StmtKind::Expr(e) => {
                 self.compile_expr(e)?;
@@ -755,7 +769,15 @@ impl<'a> Compiler<'a> {
                 target,
                 args,
                 threaded,
-            } => self.compile_call(recv, target, args, *threaded)?,
+                at,
+            } => {
+                // The call's instructions sit at its name, a nested call's
+                // at its own: where a frame waiting in it points.
+                let outer = std::mem::replace(&mut self.cur_at, *at);
+                let r = self.compile_call(recv, target, args, *threaded);
+                self.cur_at = outer;
+                r?
+            }
             Expr::Bin(BinOp::And, l, r) => self.compile_and(l, r)?,
             Expr::Bin(BinOp::Or, l, r) => self.compile_or(l, r)?,
             Expr::Bin(op, l, r) => {
