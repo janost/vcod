@@ -673,7 +673,7 @@ section 15.2 for what that does to a wreck's duplicate).
 `G_FreeEntity` runs `G_FreeVehicle` (0x8ad7d) first: B1..B4 join the free
 list, then the vehicle (VERIFIED decompile). `freeVehicle` turns a vehicle
 into `eType` 13 `script_vehicle_corpse`; no stock MP script calls it
-(VERIFIED grep).
+(VERIFIED grep). Section 17.4 has the measurement.
 
 ## 11. Seats on the server
 
@@ -2550,8 +2550,8 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
 ## 14. What vcod-server does, and what it measured
 
 - **Code.** `crate::game::vehicle` (`info`, `physics`, `seat`, `think`,
-  `fire`, `die`) and `game::builtins::vehicle` (the 31 methods but the five
-  path ones, `precacheVehicle`, `getNumVehicles`, `doDamage`,
+  `fire`, `die`) and `game::builtins::vehicle` (the 31 methods,
+  `precacheVehicle`, `getNumVehicles`, `doDamage`,
   `doDamageMod`, `spawnDuplicate`, `linkIntoWorld`, `unlinkFromWorld`,
   `verifyPosition`, `clearVehiclePosition`). A tank shell is a
   `crate::game::missile` shell with the vehicle as its inflictor.
@@ -2644,9 +2644,8 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
 - **Hulls, shells, pushes.** Section 13's hull (`vehicle_hits_ab`,
   `vehicle_armor_ab` with the probe client's cmd stream), shell
   (`vehicle_shell_ab`) and section 12's push (`vehicle_ram_ab`).
-- **Not done.** The path methods (`attachPath` .. `resumeSpeed`; no stock
-  MP script uses them); the script fields `closespeed` and `harc` read 0
-  (the physics honours them when set, but nothing sets them).
+- **The rest of the script surface.** `closespeed`, `harc`,
+  `getWheelSurface`, the path methods and `freeVehicle`: section 17.
 - **The seat blend's ramp.** `G_PlayerVehiclePositionAndBlend` (0x9048f)
   clears the legs anim's tree with `trap_XAnimClearTreeGoalWeightsStrict`
   and blend time 0, then sets each goal weight at the rate `1 / (10
@@ -2976,3 +2975,140 @@ server aborts), so the probe drops. vcod: `clutter_in_box` walks the area
 tree over `VEH_GetMinsMaxs`'s box with retail's mask and count; it tested
 each item's origin against the file's box before, which missed the
 capture's item.
+
+## 17. The script surface no stock MP script uses
+
+The vehicle methods and fields the stock MP scripts never touch:
+`closespeed`, `harc`, `getWheelSurface`, the seven path methods and
+`freeVehicle`. Addresses are `game.mp.uo.i386.so`'s. The captures are
+`client-probes/probe_vehscript.gsc` on mp_kharkov (one `probe_case` per
+run, fixtures `vehicles/mp_kharkov-vehscript-{read,free}-uo.txt`) and two
+drives under the fields (`playerstate/mp_peaks-tdm-slope-8ms-jeep-closespeed-uo.txt`,
+`playerstate/mp_cassino-tdm-slope-8ms-tank-closespeed-uo.txt`), all on
+2026-11-17. Gates: `vehscript_uo_ab`, `vehicle_ab`, `vehicle_drive_ab`.
+
+### 17.1 The fields
+
+- `speed`, `closespeed` and `harc` are the entity's +0x1f0, +0x1f4 and
+  +0x2bc, float fields (VERIFIED, `dump_script_fields.py`).
+- `closespeed` scales the drive's top speed where it is not 0: the
+  target speed `0.8 maxSpeed` (0x7d7db..0x7d803, VERIFIED disassembly)
+  and the velocity cap of 0x827ab's hit response (`param_1[0x7d]`,
+  VERIFIED decompile). `harc` replaces the turret's
+  file arcs with `[-harc, harc]` in yaw where it is not 0 (0x85b32,
+  `param_1[0xaf]`) (VERIFIED decompile). Nothing else in the module reads
+  either (VERIFIED decompile, every `+0x1f4`/`+0x2bc` and
+  `[0x7d]`/`[0xaf]` use).
+- A map's vehicles read 0 in both, and a script's write reads back
+  (`PROBE set 152 0.5 10`). `speed` is the think's own: 176 written reads
+  0 a frame on, and one T-34 on mp_kharkov reads 24.3591 (VERIFIED,
+  capture).
+- The step's pitch factor `1 ± angles[0] / 90` stays on the x87 stack into
+  its product with the target speed, rounded to a float once
+  (0x7da19..0x7da63) (VERIFIED disassembly). Under `closespeed` 0.5 the
+  jeep reaches the target speed's clamp, and a factor rounded first put
+  its z an ulp off retail's from 14800.
+- A turret held on `harc` 10 sends 9.997559: the float limit, truncated
+  to the wire's 16 bits (VERIFIED, capture).
+- vcod: the think passes the entity's two fields to the step
+  (`vehicle::think`). The jeep drive matches retail field for field for
+  119 snapshots and the tank's for 283 (VERIFIED, replay). Then each parts:
+  - at 18500 retail's jeep strikes a face with probe 0 (front left) at
+    (-3678.94, 804.65, 56.01) and kicks its yaw; ours clears that probe,
+    strikes with probe 1 at (-3679.07, 826.90, 51.47), where the hit
+    point lies dead ahead and the yaw takes no kick (VERIFIED, gdb at
+    0x8499f on a rerun of the drive, the same hit 5150 ms later). The
+    swept box against that face is the open question. The UO server
+    prints `Box collision on terrain currently being faked with capsule
+    collision` at load (VERIFIED, console), which vcod's clip does not
+    do. INFERRED: the face is terrain.
+  - at 27200 the tank's track clock parts by 78, then its pose; not read.
+  `vehicle_ab` and `vehicle_drive_ab` name both tails as gaps.
+
+### 17.2 `getWheelSurface(name)`
+
+- 0x8e7c1 reads the name with `Scr_GetConstString(0)` first (an int
+  reads as its text), then refuses a vehicle whose type is neither
+  four-wheel (1) nor tank (2) with `Scr_Error("Vehicle type [%s] has no
+  wheels\n")`. The names are scr_const 0x88..0x92, `front_left`,
+  `front_right`, `back_left`, `back_right`, `middle_left`,
+  `middle_right`, the `tag_wheel_*` order (VERIFIED decompile,
+  `GScr_LoadConsts` 0x652d2). Any other name is `Scr_ParamError(0, "Valid wheel
+  names are: [front_left, ...]\n")`, a four-wheel's middle pair
+  `Scr_ParamError(0, "Vehicle has no middle wheels\n")` (VERIFIED, gdb on
+  `Scr_ParamError`).
+- The answer is the wheel's `rec+0x158 + 4i`: the suspension trace's
+  `(surfaceFlags & 0x1f00000) >> 20`, an integer store at 0x815e1..0x815ec,
+  0 for a miss (VERIFIED disassembly). 0 answers `"none"` (0xa78c2);
+  anything else goes to `trap_SurfaceTypeToName`. `coduo_lnxded`'s
+  0x8072dd4 returns `"default"` (VERIFIED decompile). INFERRED: the trap
+  lands there, as 1.1's does (`cod11-combat.md` 2.7).
+- Every wheel of mp_kharkov's 22 vehicles reads `default` (VERIFIED,
+  capture). vcod: `builtins::vehicle::get_wheel_surface` off the step's
+  `wheel_surface`.
+
+### 17.3 The path methods
+
+- `attachPath`, `startPath`, `setSwitchNode`, `setWaitNode`,
+  `setWaitSpeed`, `setSpeed` and `resumeSpeed` (0x8dfe9..0x8e52e) drive a
+  vehicle along `info_vehicle_node`s, which `G_CallSpawn` (0x719a6) takes
+  from the map into a pool of its own, outside the entities (VERIFIED
+  decompile). A node reaches script only as a class-2 object, and only
+  `GScr_GetVehicleNode`, `GScr_GetVehicleNodeArray` and
+  `GScr_GetAllVehicleNodes` (0x984d2..0x98726) make one; none of the three
+  is in UO MP's `functions` table, and nothing calls them (VERIFIED,
+  `dump_builtins.py`, decompile). So an MP script holds no node:
+  - `attachPath(n)`, `setSwitchNode(a, b)` and `setWaitNode(n)` fail in
+    `GScr_GetVehicleNodeIndex` (0x9836c) with `Scr_ParamError(0, "Not a
+    vehicle node")` for an entity (VERIFIED, gdb). A value that is no
+    entity aborts with no module error (VERIFIED, capture); INFERRED: the
+    engine's `Scr_GetEntityNum` raises it.
+    `attachPath` and `setSwitchNode` read the node ahead of the use test
+    below, `setWaitNode` after it.
+  - `startPath()` raises `Can't start path on a vehicle that hasn't been
+    attached` (VERIFIED, gdb).
+  - `setWaitSpeed(mph)`, `setSpeed(mph, accel)` and `resumeSpeed(accel)`
+    store `rec+0x23c`, `+0x274..0x27c` times 17.6, which only the path
+    think (0x88561) reads, and raise `Cannot have a negative wait speed on
+    a vehicle`, `Cannot set negative speed on vehicle` (param 0) and
+    `Cannot set negative acceleration on vehicle` (param 1 for `setSpeed`,
+    0 for `resumeSpeed`) on a negative value (VERIFIED, gdb).
+    `setSpeed(5)` aborts with no module error (VERIFIED, capture);
+    INFERRED: the engine's `Scr_GetFloat(1)` raises it.
+  - Each but `attachPath` and `setSwitchNode` first raises `Vehicle is
+    invalid on path after it's been used` while `ent+0x17e` is 2, a
+    driven vehicle (VERIFIED decompile; not captured).
+- A builtin's error on UO throws past the module's frames and aborts the
+  process before the console prints it, at `developer` 1 as at 0
+  (VERIFIED: every erroring case above ends `Aborted`, and
+  `attachPath`'s backtrace shows `__cxa_throw` under `std::terminate`). The messages above were read at
+  `Scr_Error` and `Scr_ParamError` under gdb.
+- vcod: `builtins::vehicle` checks the arguments in retail's order and
+  raises the same messages; the stores are dropped, since nothing reads
+  them without a node.
+
+### 17.4 `freeVehicle()`
+
+- 0x8e72f runs `G_FreeVehicle` (0x8ad7d: health 0, the sound blends
+  freed, the think and `speed` cleared, `eFlags`, `pos.trType` and
+  `apos.trType` 0, the record pointer cleared), sets `eType` 13 and
+  classname `script_vehicle_corpse` (scr_const 0x84), notifies `death`
+  with no argument and runs `Scr_FreeEntityNum` on the entity (VERIFIED
+  decompile). It does not unlink the entity or let its riders go.
+- Measured on a Gaz (`PROBE free 152 gaz67b_mp 2900 ...`): the handle
+  reads undefined on the calling thread's next line; a `level` thread
+  waiting on its `death` wakes after the call, and the vehicle's own
+  threads (`self` the vehicle: a `death` waiter, an `endon("death")`
+  waiter, a `wait 0.05`) never run again. `getEntArray("script_vehicle_corpse",
+  "classname")` finds the same number at the same origin under a new
+  handle, `speed` and `health` 0, a script field written before the call
+  gone, `vehicletype` kept (an entity field); the vehicle count drops by
+  one. A second `freeVehicle` on the old handle is `dead entity is not an
+  entity` (VERIFIED, capture).
+- vcod: `vehicle::free_to_corpse` frees the record and the blends, leaves
+  the entity linked with its collmap, renumbers its handle
+  (`Entities::reissue`) with a fresh script object, carries UO's own
+  entity fields (`vehicletype`, `capturing`, `vehicle_owner`, script
+  fields in vcod) across, and sends it as `eType` 13 standing still
+  (`Vehicles::corpses`). Riders are not measured: retail leaves them on a
+  freed record, vcod's seats go with the record.
