@@ -218,7 +218,11 @@ fn sort_group(rows: &mut [AliasRow]) {
 
 /// `Q_stricmpn` with no limit: ASCII case folded, the sign only.
 fn stricmp(a: &str, b: &str) -> std::cmp::Ordering {
-    let fold = |s: &str| s.bytes().map(|c| c.to_ascii_lowercase()).collect::<Vec<u8>>();
+    let fold = |s: &str| {
+        s.bytes()
+            .map(|c| c.to_ascii_lowercase())
+            .collect::<Vec<u8>>()
+    };
     fold(a).cmp(&fold(b))
 }
 
@@ -764,7 +768,10 @@ mod tests {
             &format!("{HEADER}\nfire,,c1.wav,,,,,,,,,,,,,\nfire,1,c3.wav,,,,,,,,,,,,,\n"),
             "soundaliases/a_mod.csv",
         ));
-        let files: Vec<_> = t.for_map("mp_carentan").get("fire").unwrap()
+        let files: Vec<_> = t
+            .for_map("mp_carentan")
+            .get("fire")
+            .unwrap()
             .iter()
             .map(|r| r.file.clone())
             .collect();

@@ -108,6 +108,26 @@ const TITLE: &str = concat!("vcod ", env!("VCOD_VERSION"));
 /// The GPU backend the renderer picked, once it has one.
 static BACKEND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+/// The language check (CoDMP.exe 0x4a9b10) at start-up and each
+/// `vid_restart`: `cl_languagesavailable`, and a `cl_language` whose strings
+/// load (front-end doc 1). CoD 1 only.
+fn check_language(shell: &mut console::shell::Shell, fs: &Pk3Fs) {
+    if fs.game() != vcod_common::game::Game::Cod1 {
+        return;
+    }
+    let chosen = shell.cvar("cl_language").unwrap_or("").to_string();
+    let (count, set) = vcod_common::ui_menu::check_language(fs, &chosen);
+    if count == 0 {
+        console::log::print(
+            "^1ERROR: No languages available because no localized assets were found",
+        );
+    }
+    shell.force_set("cl_languagesavailable", &count.to_string());
+    if let Some(v) = set {
+        shell.force_set("cl_language", &v);
+    }
+}
+
 /// [`TITLE`] with the GPU backend, for the window title and the main menu.
 fn version_tag() -> String {
     match BACKEND.get() {
@@ -1733,6 +1753,7 @@ fn main() -> Result<()> {
     }
     // `cl_language` registers after the config ran, taking its value.
     shell.apply_latched();
+    check_language(&mut shell, &fs);
     // vcod's old defaults a config still holds go (cod11-console.md 8).
     let (reset, upgraded) = shell.upgrade_config(game);
     for name in &reset {
@@ -4100,6 +4121,7 @@ impl App {
         if !matches!(self.mode, Mode::Online { .. }) {
             self.switch_fs_game(self.fs_game_cvar());
         }
+        check_language(&mut self.shell, &self.fs);
         self.vid_restart_ui();
         self.ignore_hw_gamma = ignore_hw_gamma(&self.shell);
         // Retail's `vid_restart` reloads every image; vcod rebuilds

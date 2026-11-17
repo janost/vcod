@@ -2585,8 +2585,7 @@ impl Ui {
 impl Ui {
     /// The cvars a menu reads: `cl_ingame` is whether the menus are up over
     /// a game, `shortversion` is vcod's, `com_errorMessage` the last error,
-    /// `ui_multiplayer` 1 (this is the MP UI), `cl_languagesavailable` 1
-    /// (vcod reads English only), `ui_mousePitch` on when `m_pitch` is
+    /// `ui_multiplayer` 1 (this is the MP UI), `ui_mousePitch` on when `m_pitch` is
     /// negative (as the UI sets it at load), anything this input set, then
     /// the console's.
     fn cvar(&self, name: &str, shell: &Shell) -> Option<String> {
@@ -2598,7 +2597,7 @@ impl Ui {
             "com_errormessage" => Some(self.error.clone()),
             "ui_favorite_message" => Some(self.fav_message.clone()),
             "shortversion" => Some(crate::version_tag()),
-            "ui_multiplayer" | "cl_languagesavailable" => Some("1".into()),
+            "ui_multiplayer" => Some("1".into()),
             "ui_mousepitch" => Some(
                 if shell.cvar_f32("m_pitch") < 0.0 {
                     "1"
@@ -3296,7 +3295,10 @@ mod tests {
             vendor: "radv".into(),
             renderer: "gpu".into(),
             version: "v".repeat(100),
-            extensions: (0..300).map(|i| format!("EXT_{i:040}")).collect::<Vec<_>>().join(" "),
+            extensions: (0..300)
+                .map(|i| format!("EXT_{i:040}"))
+                .collect::<Vec<_>>()
+                .join(" "),
             ..GpuInfo::default()
         };
         let lines = gl_info_lines(&info, [10.0, 80.0, 545.0, 400.0]);
@@ -3322,7 +3324,10 @@ mod tests {
             ui.open_menu(name, &shell, &mut out);
             assert!(ui.open.iter().any(|&m| ui.menus[m].name == name), "{name}");
         }
-        assert!(!ui.build(640.0, 480.0, &Localized::default(), &shell).is_empty());
+        assert!(
+            !ui.build(640.0, 480.0, &Localized::default(), &shell)
+                .is_empty()
+        );
     }
 
     #[test]

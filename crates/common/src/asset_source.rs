@@ -93,7 +93,11 @@ pub trait AssetSource: Send + Sync {
     fn file_list(&self, dir: &str, ext: &str) -> Vec<String> {
         self.list(dir, ext)
             .into_iter()
-            .filter(|p| !p[dir.trim_end_matches('/').len()..].trim_start_matches('/').contains('/'))
+            .filter(|p| {
+                !p[dir.trim_end_matches('/').len()..]
+                    .trim_start_matches('/')
+                    .contains('/')
+            })
             .collect()
     }
 
