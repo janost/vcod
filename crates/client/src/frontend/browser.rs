@@ -509,17 +509,17 @@ impl Browser {
         // (`UI_DoServerRefresh` 0x4000ea00).
         let socket = self.socket.take().unwrap();
         let waiting = |s: &Server| s.sent.is_some() && s.info.is_none() && !s.timed_out;
-        let mut busy = self.list().iter().filter(|s| waiting(s)).count();
-        let mut acted = busy > 0;
-        for s in self.list_mut().iter_mut().filter(|s| s.sent.is_none()) {
-            if busy >= MAX_IN_FLIGHT {
-                break;
-            }
-            let _ = socket.send_to(&build_oob(GETINFO), s.addr);
-            s.sent = Some(now);
-            busy += 1;
-            acted = true;
-        }
+        let busy = self.list().iter().filter(|s| waiting(s)).count();
+        let free = MAX_IN_FLIGHT.saturating_sub(busy);
+        let sent = (self.list_mut().iter_mut())
+            .filter(|s| s.sent.is_none())
+            .take(free)
+            .map(|s| {
+                let _ = socket.send_to(&build_oob(GETINFO), s.addr);
+                s.sent = Some(now);
+            })
+            .count();
+        let acted = busy + sent > 0;
         let max_ping = Duration::from_millis(self.max_ping.max(MAX_PING_FLOOR).into());
         for s in self.list_mut().iter_mut().filter(|s| waiting(s)) {
             if now - s.sent.unwrap() >= max_ping {
