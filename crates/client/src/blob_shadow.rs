@@ -20,9 +20,11 @@ const SHADOW_RADIUS: f32 = 16.0;
 /// seen from `viewer` (`cg.snap->ps.origin`), or none: nothing within 64
 /// units below, a start in solid, or a viewer 250 units away or closer or
 /// over 1024. Its grey level fades in from 250 to 512 units and out again
-/// to 1024, times the height left under the trace.
+/// to 1024, times the height left under the trace. The trace is trap 0x26,
+/// `CM_BoxTrace` on model 0 (0x3002768f): the world alone, so a blob falls
+/// through a door, a mover or a vehicle to the ground under it.
 pub fn player_shadow(world: &CollisionWorld, viewer: Vec3, origin: Vec3) -> Option<MarkRequest> {
-    let tr = world.point_trace(origin, origin - Vec3::Z * SHADOW_DEPTH, SHADOW_MASK, false);
+    let tr = world.world_point_trace(origin, origin - Vec3::Z * SHADOW_DEPTH, SHADOW_MASK);
     if tr.fraction == 1.0 || tr.fraction == 0.0 {
         return None;
     }
@@ -68,6 +70,31 @@ mod tests {
         assert!((distance_fade(768.0).unwrap() - 0.5).abs() < 1e-6);
         assert_eq!(distance_fade(1024.0), Some(0.0));
         assert_eq!(distance_fade(1024.5), None);
+    }
+
+    /// A player standing on a submodel (a mover's roof 48 up) casts his
+    /// blob through it onto the world's floor, or none when the floor is
+    /// past 64 units; the world's own brush still takes it.
+    #[test]
+    fn the_shadow_trace_passes_submodels_to_the_world_under_them() {
+        let world = vcod_common::collision::submodel_test_world(
+            "{\n\"classname\" \"script_brushmodel\"\n\"model\" \"*1\"\n}",
+            &[([-32.0, -32.0, 0.0], [32.0, 32.0, 48.0])],
+        );
+        let viewer = Vec3::new(512.0, 0.0, 48.0);
+        // the full trace meets the roof; the shadow's does not
+        let roof = world.point_trace(Vec3::Z * 56.0, Vec3::Z * -8.0, SHADOW_MASK, false);
+        assert!((roof.endpos.z - 48.0).abs() < 0.2, "{:?}", roof.endpos);
+        let on_roof = player_shadow(&world, viewer, Vec3::Z * 49.0);
+        let blob = on_roof.expect("the floor is 48 under the roof");
+        assert!(blob.origin.z.abs() < 0.2, "{:?}", blob.origin);
+        assert!(player_shadow(&world, viewer, Vec3::Z * 70.0).is_none());
+        let feet = Vec3::new(200.0, 0.0, 1.0);
+        let floor = player_shadow(&world, feet + Vec3::X * 512.0, feet).unwrap();
+        assert!(
+            floor.origin.z.abs() < 0.2 && floor.rgba[0] > 0.95,
+            "{floor:?}"
+        );
     }
 
     #[test]

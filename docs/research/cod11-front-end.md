@@ -1664,9 +1664,11 @@ file).
     retail. A compressed image's picmip stops while a side is 4 or less
     (the sheet path's rule): wgpu needs whole 4x4 blocks in level 0, where
     retail's plain path would go down to `width >> picmip`.
-  - A `#N` level of the wrong size falls back to the box as UO's does
-    (logged at debug, since stock UO skins hit it). 1.1 and 1.5 fail the
-    image there; vcod does not port that, and no stock 1.1 or 1.5 image
+  - A `#N` level of the wrong size falls back to the box on UO (logged at
+    debug, since stock UO skins hit it). On a 1.1 or 1.5 install
+    (`TextureSettings::refuse_bad_levels`) it prints retail's `custom
+    mipmap image ... refusing to load` warning and the image goes up as
+    `*default`, as a missing image draws; no stock 1.1 or 1.5 image
     reaches it.
   - `r_simpleMipMaps 0` and `r_weightMipMaps` in (0, 1] swap the box for
     the kernel and the weighted step, latched to `vid_restart`.

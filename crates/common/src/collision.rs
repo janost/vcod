@@ -2671,6 +2671,40 @@ impl CollisionWorld {
         self.trace_with_mask(start, end, Vec3::ZERO, Vec3::ZERO, mask, statics, None)
     }
 
+    /// A point segment against inline model 0 alone (brushes, terrain and
+    /// patches; no submodel, world copy, model instance or static model):
+    /// `CM_BoxTrace` with model 0, which walks the world's tree from node 0
+    /// (CoDMP.exe 0x424961) where any other model walks its own leaf.
+    pub fn world_point_trace(&self, start: Vec3, end: Vec3, mask: u32) -> Trace {
+        let mut trace = Trace::clear(end);
+        self.trace_world_clip(start, end, Vec3::ZERO, Vec3::ZERO, mask, &mut trace);
+        self.walk_tree(
+            TraceInput {
+                start,
+                end,
+                mins: Vec3::ZERO,
+                maxs: Vec3::ZERO,
+                capsule: Capsule::of(Vec3::ZERO, Vec3::ZERO),
+                mask,
+                statics: false,
+                skip: None,
+                world_only: true,
+                boxed: false,
+                sphere: Capsule::of(Vec3::ZERO, Vec3::ZERO).offset,
+            },
+            &mut trace,
+        );
+        trace.endpos = cm_endpos(
+            start,
+            end,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            trace.fraction,
+            self.arith(),
+        );
+        trace
+    }
+
     /// [`Self::point_trace`] passing through `skip`'s clip: a trace whose
     /// pass entity is a brush model.
     pub fn point_trace_except(

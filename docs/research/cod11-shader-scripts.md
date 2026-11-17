@@ -780,6 +780,26 @@ Entity surfaces sort by material sort, then the material's load order
 after the world's), then instance order; each surface draws its stages
 back to back.
 
+The images numbered before the map. VERIFIED, 0x4f057e..0x4f06ea (the
+builtin images, after 0x4f057e calls `R_CreateDefaultImage` 0x4f0380):
+`*default` (0x54b57c), then `*white` (0x54ba3c), `*identityLight`
+(0x54b564), `*gray` (0x54ba34) and the `*scratch` images (0x54b558), each
+through the image create 0x4ec310, so they take the first numbers.
+INFERRED: the UI's and the console's images follow before any map
+image. Not ported, and what it would take:
+
+- the builtins: vcod numbers `$white` first and nothing before it, which
+  orders the world's images alike; a world shader that falls back to
+  `<default>` (an image that is missing) would sort first among the
+  opaque shaders on retail, which registered it at start-up.
+- the entity materials: one registration list over the world's batches,
+  the prop scripts and each `EntityMaterials` skin as it loads, numbered
+  through one `ImageNumbers`, with `sorted_places` giving every draw its
+  place, `EntSkin::order` and the world's keys read from it and
+  `merge_by_sort` breaking a tie on the place instead of putting the
+  world first. A skin that reuses a world image would then sort among
+  the world's shaders, as R_SortNewShader puts it.
+
 The viewmodel. VERIFIED, cgame `0x30036cf0` builds the gun's refEntity
 with `reType` 1 and `renderfx` 0x8c (`0x30036e27`, `0x30036e2f`) and
 adds it through syscall `0x3d`; `0x300371f0` is called at `0x30033e04`,
@@ -1262,6 +1282,39 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   viewmodel shaders run a block's wave, flap, bulge, move and normal
   deforms ("Vertex deforms" above); an autosprite there draws undeformed
   (no stock MP entity carries one).
+
+##### A model registered after the precache
+
+- VERIFIED, 0x502bf0 opens on the flag at 0x16c4e64, which only the
+  refexport 0x503540 (slot 0xca26e4, stored at 0x4b4ac4) sets, before it
+  calls 0x4fcf70. While it is 0, the model takes the next number of the
+  counter 0x16c4e74 into 0x16c4e68, which the image create (0x4ec7a8)
+  copies into each new image's `+0x6c`.
+- VERIFIED, once it is set: with `r_errorOnConflicts` (0x16c3874, default
+  `"1"`, registered at 0x4b411f) non-zero and the counter 0x16c4e60 at 0,
+  0x502c40 raises `model '%s' not precached` (0x54b740) through the
+  refimport error call 0x16d8924 with code 1. 0x16c4e60 is the count the
+  refexport 0x503570 (slot 0xca26e8) moves up for a non-zero argument and
+  down for 0.
+- VERIFIED, 0x4fcf70 (the texture sheets): it takes every shader flagged
+  0x800 (`+0x4c`), clears the flag, groups them by their image's model
+  number (`+0x184`, then `+0x68`) and hands each group to 0x4fcdf0, which
+  builds one `*sheet%03i` shader (0x54b5f0, through 0x4fb850), prints
+  `merging %i shader(s):` and `-> %s` under `r_debugOptTex` (0x16c3a08,
+  registered at 0x4b4420), and sets 0x1000 in each merged shader's `+0x4c`
+  with the sheet shader at `+0x180` (0x4fceb8, 0x4fcebe).
+- VERIFIED, 0x502d81..0x502d9e: a skin whose `R_FindShader` result has
+  0x1000 set warns `WARNING: model '%s' not precached, bad texturing will
+  result on some surfaces` (0x546648, print level 2) and takes the sheet
+  shader at `+0x180`; a result flagged 1 (`+0x4c`) stores handle 0, any
+  other its index at `+0x44`.
+- INFERRED: so only a model registered after the precache whose skin's
+  shader went into a sheet draws the sheet with its own unremapped
+  texture coordinates; which shaders take 0x800 (`r_optimizeTextures`,
+  0x16c3854, default `"2"`, read at 0x4f0d46) is not traced.
+- vcod builds no texture sheets (the `0x80` sheet path is not ported), so
+  no shader carries 0x1000 and the remap has nothing to act on; the
+  `not precached` error is not ported either.
 
 ### World shader types
 

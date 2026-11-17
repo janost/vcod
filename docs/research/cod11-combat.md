@@ -10151,9 +10151,22 @@ the snapshot's and the prediction's events before it builds the view and
 starts each quake there, at the render clock and the event body's drawn
 origin; `Quakes` keeps the last shake's eye and each slot's stored
 strength for `start`. The camera adds the shake after the turret override.
-Difference: the phase's `rand()` is an msvcrt-shaped LCG with its own
-seed. The server's `earthquake` builtin is
-`game::builtins::fx::earthquake`.
+The server's `earthquake` builtin is `game::builtins::fx::earthquake`.
+
+VERIFIED, the phase's `rand()`: `0x3004b189` is the cgame's own statically
+linked msvcrt `rand`, `holdrand * 214013 + 2531011` (`0x343fd`, `0x269ec3`)
+kept at `+0x14` of the thread's CRT data (`_getptd`, `0x3004d711`), 15 bits
+out. Its `srand` (`0x3004b17c`) has no caller and no pointer to it in the
+module, and `_getptd` creates the thread's data with `+0x14` = 1
+(`0x3004d759`). 34 call sites draw from it (the phase at `0x30017f95`).
+INFERRED: each map load and `vid_restart` frees and reloads the DLL, so a
+cgame starts at `holdrand` 1.
+
+vcod: `Quakes::default` starts the LCG at 1 and `OnlineView::restart_cgame`
+builds a new one. Difference: the cgame's other 33 `rand()` callers
+(effects, brass and the rest) draw from the same state on retail, so the
+phase after the first frame follows everything the cgame drew; vcod's
+LCG serves the phase alone.
 
 ### 17.3 The lean in the viewmodel
 
