@@ -1805,6 +1805,13 @@ built a ready weapon, the sight rose where the prone move holds it down, and
 the crawl slowed to the sighted speed. The replay now carries its own weapon
 state across a rebase, as it carries the eye's leg.
 
+VERIFIED, vcod measurement 2026-11-17 (`playerstate_slope_ab.rs`, the 8 ms
+route, `mp_carentan-dm-slope-8ms.txt`): the 151 snapshots the route spends
+airborne and wedged against a `clip_nosight` brush near (882, 553, 9), from
+`commandTime` 496743 on, replay to the bit free and rebased, and so does
+the walk after them (max dz and dxy 0.000 over 1232 rows). The wedge no
+longer splits the free run from retail's, so the route stays as taken.
+
 ### Static models are clipped as a segment
 
 The 18.5 row of the 25 ms capture: at `commandTime` 1195225 retail stands

@@ -20,6 +20,7 @@ pub mod localize;
 pub mod mapworld;
 pub mod material;
 pub mod menu;
+mod menu_precomp;
 pub mod mesh;
 pub mod model;
 pub mod movetrace;

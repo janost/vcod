@@ -1035,7 +1035,8 @@ fn uo_tdm_game(seed: u64, vehicles: bool) {
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let mut hist: [std::collections::VecDeque<[f32; 3]>; 8] = Default::default();
-    let (mut sprints, mut legs) = (0, 0);
+    // Bot-ticks on foot out of a fight: what a sprint leg is a share of.
+    let (mut sprints, mut legs, mut foot) = (0, 0, 0);
     for tick in 0..1800 {
         run(&mut sv, &mut now, 1);
         for slot in sv.bot_slots() {
@@ -1051,6 +1052,7 @@ fn uo_tdm_game(seed: u64, vehicles: bool) {
             if b.engaged || b.crew_wait {
                 continue;
             }
+            foot += usize::from(b.seat.is_none());
             let h = &mut hist[slot];
             h.push_back(b.origin);
             if h.len() > 240 {
@@ -1081,7 +1083,7 @@ fn uo_tdm_game(seed: u64, vehicles: bool) {
         .map(|k| k.split(';').map(str::to_string).collect())
         .collect();
     eprintln!(
-        "{} kills, {sprints} sprinting bot-ticks, {legs} on sprint legs",
+        "{} kills, {sprints} sprinting bot-ticks, {legs} on sprint legs of {foot} on foot",
         kills.len()
     );
     assert!(kills.len() >= 5, "only {} kills in 90 s", kills.len());
@@ -1097,10 +1099,16 @@ fn uo_tdm_game(seed: u64, vehicles: bool) {
             "a bot's own frag killed it ({mod_}): {k:?}"
         );
     }
-    // How many straight legs a game routes over rides the seed (243 to 1242
-    // bot-ticks over seeds 1-23 odd); of those, a bot sprints the ones it
-    // has the breath for (82 to 99 per cent).
-    assert!(legs > 100, "only {legs} bot-ticks on sprint legs");
+    // How many straight legs a game routes over rides the seed: 110 to 773
+    // bot-ticks over seeds 1-63 odd, 2.1% to 13.9% of the bot-ticks on
+    // foot out of a fight (4311 to 7122), seed 39 the low one; of those, a
+    // bot sprints the ones it has the breath for (77 to 100 per cent). The
+    // floor is a share, under the low seed, so a game that routes no leg
+    // at all fails and a short-legged seed does not.
+    assert!(
+        legs * 100 >= foot,
+        "only {legs} bot-ticks on sprint legs of {foot} on foot"
+    );
     assert!(
         sprints * 2 >= legs,
         "{sprints} sprinting bot-ticks of {legs} on sprint legs"

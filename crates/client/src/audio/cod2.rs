@@ -474,6 +474,7 @@ fn parse_row(cells: &[String], cols: &[usize], source: &str, ctx: &Ctx) -> Row {
         secondary,
         start_delay_ms,
         csv: source.to_string(),
+        order: 0,
         subtitle,
         no_wet,
     })

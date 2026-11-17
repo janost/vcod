@@ -87,9 +87,19 @@ KB saved by string sharing\n"`), and their files opened by `FUN_00433c20` @
 `DAT_008931d8`.
 
 So a map's alias table is the union of every `soundaliases/*.csv` in every
-pak, filtered by `loadspec` against the lowercased map name, then sorted. No
-pak overrides another; a duplicate name across files adds rows to that name's
-group (section 1e).
+pak, filtered by `loadspec` against the lowercased map name, then sorted.
+The list is `FS_GetFileList("soundaliases", "csv")` (strings `0x563358`,
+`0x563368`, pushed at `0x4028d6`, `0x4028db`), whose order and dedup are
+`cod11-front-end.md` 6, "The game type filter": a csv name in two paks is
+read once, from the later pak, so a mod's copy of `iw_sound.csv` replaces the
+stock file whole. VERIFIED (the pushes; the list's rules there). None found
+prints `WARNING: can't find any sound alias files (soundaliases/*.csv)`
+(`0x563318`). VERIFIED. Each row parsed goes on the front of the row list
+(`FUN_004332f0` @ `0x4332f0`: a `0x1100`-byte copy whose `+0x10fc` takes the
+old head `0x893df0`), so the list runs from the last row loaded. VERIFIED
+(decompile). A row's `+0x00` holds the csv's listed name (`FUN_00432ad0`
+copies `0x8931d0`, the list entry the loop at `0x402918` stores). VERIFIED.
+Rows that share a name across csvs meet in the sort (section 1e).
 
 ### 1b. Columns
 
@@ -196,10 +206,23 @@ map set.
 
 ### 1e. Multiple rows per name, `sequence`, the pick
 
-`VERIFIED`. `FUN_00433750` @ `0x433750` merge-sorts the row list by
-(`name` via `stricmp`, then `sequence` numerically, then `file` via
-`stricmp`); three-way ties warn `"sound alias file %s: duplicate alias '%s'\n"`
-(`0x5634cc`). `sequence` is **not stored in the runtime record**
+`FUN_00433750` @ `0x433750` merge-sorts the row list, the first `n / 2`
+rows as the left half. Each step compares the two heads: `name` (`+0x40`)
+by `Q_stricmpn` (`0x44aa90`, limit 99999), then `sequence` (`+0x1080`) as
+the left's less the right's, the smaller first. On equal name and sequence
+it compares the csv names (`+0x00`): when they differ the head from the
+csv that sorts first is dropped, never linked (`0x43385e`..`0x433884`);
+when they match it warns `"\x15sound alias file %s: duplicate alias
+'%s'\n"` (`0x5634cc`, at level 1) and links the right head first. VERIFIED
+(asm). So for one name and sequence a level keeps the rows of the csv whose
+name sorts last, case folded: a mod's `zz_mod.csv` replaces stock rows, an
+`a_mod.csv` loses to `iw_sound.csv`. Rows tied inside one csv (blank
+`sequence` reads 0: `iw_sound.csv` has 492 such groups) keep both, and as
+the list runs backwards and the tie takes the right head, they end in file
+order. INFERRED (the two rules together). 1.5's `0x435970` and UO's
+`0x4375d0` hold the same compares (`0x435a1a`..`0x435aa4`; UO's link field
+is `+0x1104`). VERIFIED (asm). vcod sorts each level's rows this way
+(`alias::sort_cod1`). `sequence` is **not stored in the runtime record**
 (`FUN_00433320` @ `0x433320` copies every field except `+0x1080`); it only
 orders rows within a name group and catches duplicates, as the csv legend
 says. During packing, `FUN_00433900` shares one name string between
@@ -923,6 +946,26 @@ word (0x4258f). So an S&D planter rides every client's snapshot from the
 plant's first frame until the round's `map_restart`, alive or not.
 vcod-server gives the same list on the same frames
 (`a_sounded_player_rides_every_snapshot_until_the_restart`).
+
+VERIFIED live, end to end (2026-11-17): stock `sd.gsc` under
+`client-probes/probe_lookat` on 1.1d with `+set probe_teleport 1 +set
+probe_far 1`, the `--probe-defuse` and `--probe-plant` pair and a third
+client, a spectator the probe holds at (2000, 1200, 0), a cluster that
+neither sees nor is seen from bombzone_A, the charge or either teleport
+spot (vcod's `in_pvs` both ways). Its snapshots
+(`crates/common/tests/fixtures/net/*-sd-far.bin`, `--probe-team spectator
+--save-snapshots --capture-tag sd-far`) carry neither player until the
+planter's first `MP_bomb_plant` (the aborted hold, 30.35 s), then the
+planter (entity 1, `eType` 1) on every snapshot, also after the probe sends
+him back to the attackers' spawn; the bomb model (179, `eType` 8) from the
+plant's `playSound("Explo_plant_no_tick")` (38.4 s); the defender (0) from
+his `MP_bomb_defuse` (61.15 s); all three to the round's `map_restart`
+(76.55 s), and none after it. The same run against vcod-server (port
+28984, `--gametype-script` the same probe) gave the same entries on the
+same steps of the run, 8.05 s from the first plant sound to the bomb and
+10 s from the defuse sound to the defuse on both. Not compared: the
+players' `eventSequence` (ours 2 past retail's at the plant), which rides
+each run's own walk.
 
 1.5 and United Offensive differ. Their `playSound` writes
 `r.broadcastTime` = level time + 300 and leaves `svFlags` alone,

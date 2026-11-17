@@ -198,6 +198,9 @@ pub struct Cod1Module {
     /// Each `bas` base's origin and the graph's spots a rocket fired from
     /// bursts at it (`breach_stands`), for the life of the nav graph.
     pub(super) bot_breach_stands: Vec<([f32; 3], Vec<[f32; 3]>)>,
+    /// Each dropped `re` objective's start and the level time it was first
+    /// seen lying away from it (`crate::bots::ReObjView::returns`).
+    pub(super) bot_re_drops: Vec<([f32; 3], i32)>,
     /// [`Server::test_script_set_origin`]'s ops, queued once the tick's
     /// moves have run.
     pub(super) test_sim_ops: Vec<(usize, crate::game::host::SimOp)>,
@@ -229,6 +232,7 @@ impl Cod1Module {
             bot_drives: Default::default(),
             bot_parked: Default::default(),
             bot_breach_stands: Vec::new(),
+            bot_re_drops: Vec::new(),
             test_sim_ops: Vec::new(),
         }
     }
@@ -268,8 +272,9 @@ pub(super) struct FrameOut {
     pub(super) timeout_written: bool,
     /// `trap_SendConsoleCommand`'s `EXEC_APPEND` lines.
     pub(super) console_lines: Vec<String>,
-    /// Server commands for single clients, by slot.
-    pub(super) client_commands: Vec<(usize, String)>,
+    /// Server commands for single clients, by slot, each with its write
+    /// stamp (`configstrings::next_write_seq`).
+    pub(super) client_commands: Vec<(u64, usize, String)>,
     /// A score moved: the scoreboard goes to every client in intermission.
     pub(super) ranks_dirty: bool,
 }

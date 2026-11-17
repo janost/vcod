@@ -4216,8 +4216,15 @@ impl ScriptRuntime {
             };
             let attackers = team("re_attackers");
             let defenders = team("re_defenders");
-            let [list, trigger, goal, objnum] =
-                ["retrieval_objective", "trigger", "goal", "objnum"].map(|f| cx.intern_folded(f));
+            let [list, trigger, goal, objnum, origin, startorigin] = [
+                "retrieval_objective",
+                "trigger",
+                "goal",
+                "objnum",
+                "origin",
+                "startorigin",
+            ]
+            .map(|f| cx.intern_folded(f));
             let Value::Array(list) = cx.get_field(level, list) else {
                 return ReObjectives {
                     attackers,
@@ -4240,6 +4247,22 @@ impl ScriptRuntime {
                     continue;
                 };
                 let pickup = Some(entity_abs_bounds(host, cx, t)).filter(|b| b.1[2] > -5000.0);
+                // Lying away from where the round put it: dropped, and
+                // `objective_timeout` sends it back (`re.gsc` 2422-2432).
+                let start = match host.get_field(cx, t, startorigin) {
+                    Value::Vector(v) => Some(v),
+                    _ => None,
+                };
+                let at = match host.get_field(cx, t, origin) {
+                    Value::Vector(v) => Some(v),
+                    _ => None,
+                };
+                let dropped = match (pickup, start, at) {
+                    (Some(_), Some(s), Some(a)) => {
+                        (0..3).any(|i| (s[i] - a[i]).abs() > 1.0).then_some((s, a))
+                    }
+                    _ => None,
+                };
                 let goal = entity_abs_bounds(host, cx, g);
                 // The compass record follows its carrier (`objective_onEntity`,
                 // `re.gsc` 2062) until a drop pins it again (`retrieval_think`,
@@ -4261,6 +4284,7 @@ impl ScriptRuntime {
                     carrier,
                     shown_to: record.map_or(0, |o| o.team_num),
                     laid: record.map(|o| o.origin_f32()),
+                    dropped,
                 });
             }
             ReObjectives {
@@ -4629,6 +4653,9 @@ pub struct ReObjective {
     /// The record's origin: where it last lay, which a carry leaves in
     /// place.
     pub laid: Option<[f32; 3]>,
+    /// Lying dropped away from its start: the trigger's `startorigin`,
+    /// where the 60 s timeout puts it back, and its `origin`.
+    pub dropped: Option<([f32; 3], [f32; 3])>,
 }
 
 /// [`ScriptRuntime::sd_objectives`]: the S&D state a bot plays to.

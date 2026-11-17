@@ -236,6 +236,7 @@ fn row(a: &Alias, channels: &[ChannelDef]) -> AliasRow {
         secondary: a.secondary.clone(),
         start_delay_ms: a.start_delay_ms.max(0) as u32,
         csv: String::new(),
+        order: 0,
         subtitle: None,
         no_wet: a.flags & vcod_cod4::sound::FLAG_NO_WET != 0,
     }

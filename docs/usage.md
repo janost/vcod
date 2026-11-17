@@ -212,7 +212,7 @@ or `rcon login <pw>` on CoD2 and CoD4) or a retail one.
 `--bots <n> [--bots-shoot]`, rcon's `addbot`, `removebot` and
 `listbots`, and the `vc_bot_*` cvars (`vc_bot_minplayers`,
 `vc_bot_autobalance`, `vc_bot_shoot`, `vc_bot_names`, `vc_bot_skill`,
-`vc_bot_vehicles`, UO only) work alike on all four games. The guide is
+`vc_bot_retreat`, `vc_bot_vehicles`, UO only) work alike on all four games. The guide is
 [bots.md](bots.md).
 
 ### Other cvars

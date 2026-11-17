@@ -99,7 +99,8 @@ pub(crate) trait AdminHost {
     /// The ledger, made if the server had none yet.
     fn ledger_or_new(&mut self) -> &mut Ledger;
     fn bot_settings(&self) -> Settings;
-    /// Applies a changed `vc_bot_shoot` and `vc_bot_skill` to the bots.
+    /// Applies a changed `vc_bot_shoot` and `vc_bot_skill`, and
+    /// `vc_bot_retreat`, to the bots.
     fn apply_settings(&mut self, s: Settings);
     /// Whether the running gametype has two sides to balance.
     fn bot_teamed(&self) -> bool;
@@ -318,7 +319,7 @@ pub(crate) fn list_bots<H: AdminHost>(h: &mut H, out: &mut H::Out) {
         .count();
     let manual = h.ledger().map_or(0, |l| l.manual);
     text.push_str(&format!(
-        "{} bot(s), {humans} human player(s); manual {manual}, {} {}, {} {}, {} {}, {} {}\n",
+        "{} bot(s), {humans} human player(s); manual {manual}, {} {}, {} {}, {} {}, {} {}, {} {}\n",
         roster.iter().filter(|m| m.bot).count(),
         cvar::MIN_PLAYERS,
         s.min_players,
@@ -328,6 +329,8 @@ pub(crate) fn list_bots<H: AdminHost>(h: &mut H, out: &mut H::Out) {
         u8::from(s.shoot),
         cvar::SKILL,
         s.skill,
+        cvar::RETREAT,
+        u8::from(s.retreat),
     ));
     h.say(out, &text);
 }
@@ -454,6 +457,7 @@ impl AdminHost for Server {
             autobalance: on(cvar::AUTOBALANCE, "1"),
             shoot: on(cvar::SHOOT, "1"),
             names: on(cvar::NAMES, "1"),
+            retreat: on(cvar::RETREAT, "1"),
             skill: self
                 .live_int_cvar(cvar::SKILL)
                 .clamp(0, i32::from(crate::bots::MAX_LEVEL)) as u8,
@@ -471,6 +475,10 @@ impl AdminHost for Server {
         }
         let admin = &mut self.game.module.bot_admin;
         let bots = &mut self.game.module.driver.bots;
+        // Every pass, so a bot joined since takes it too.
+        for b in bots.values_mut() {
+            b.allow_retreat(s.retreat);
+        }
         admin
             .ledger
             .skills

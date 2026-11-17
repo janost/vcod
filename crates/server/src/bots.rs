@@ -606,6 +606,10 @@ pub struct ReObjView {
     /// Where its compass marker last lay; a carry leaves it there, so it
     /// is where the carrier set out from.
     pub laid: Option<[f32; 3]>,
+    /// Dropped and lying: where its pickup trigger's middle goes back to
+    /// and the seconds left before `objective_timeout` sends it there
+    /// (`re.gsc` 2422-2432, 60 s from the drop).
+    pub returns: Option<([f32; 3], f32)>,
 }
 
 /// Which side of the S&D objective the bot's team plays this map.
@@ -1262,6 +1266,9 @@ pub struct Bot {
     /// The driver's follower walked out the plan to the health item this
     /// tick: the body heads straight at it (`Bot::track_heal`).
     pub(crate) heal_walked: bool,
+    /// The point goal whose plan the driver's follower walked out this
+    /// tick, in every game (`bel`'s markers, [`Bot::marker_short`]).
+    pub(crate) walked_to: Option<[f32; 3]>,
     /// The health item headed straight at, the nearest the body came to
     /// it and the ticks since it last came [`SHORT_GAIN`] nearer.
     heal_short: Option<([f32; 3], f32, u32)>,
@@ -1413,6 +1420,9 @@ pub struct Bot {
     /// `scr_bel_positiontime` seconds, and the hunt looks round from it
     /// rather than standing on it.
     marker_reached: Option<[f32; 3]>,
+    /// A marker walked out to: it, the nearest the body came, and the
+    /// ticks since it came [`SHORT_GAIN`] nearer ([`Bot::marker_short`]).
+    marker_near: Option<([f32; 3], f32, u32)>,
     /// The last reliable server command the bot consumed.
     pub(crate) last_seen_seq: i32,
     /// The client-command sequence the bot's own replies use.
@@ -1421,6 +1431,8 @@ pub struct Bot {
     /// the one under way, the health the last hurt one started at, and
     /// whether this dry clip already had its retreat.
     retreat_on: bool,
+    /// `vc_bot_retreat`, applied by the bot pass ([`Bot::allow_retreat`]).
+    retreat_cvar: bool,
     retreat: Option<retreat::Retreat>,
     hurt_at: i32,
     dry_had: bool,
@@ -1583,6 +1595,10 @@ const DEFUSE_CLOSE: f32 = 16.0;
 /// goes ahead whatever it takes.
 const DEFUSE_CLOSE_TICKS: u32 = 100;
 const GUARD_RADIUS: f32 = 250.0;
+/// An escort this near the carrier it keeps by steps off: standing at his
+/// next node on a stair it held mp_carentan's carrier upstairs for 75 s
+/// (bot-objectives.md 4.2).
+const ESCORT_CLEAR: f32 = 80.0;
 /// Ticks a bot that walked out its plan to an objective's point may go
 /// without coming [`SHORT_GAIN`] nearer it before it gives the point up
 /// ([`Bot::track_reach`]).
@@ -1780,6 +1796,7 @@ impl Bot {
             arrived_goal: None,
             heal_at: None,
             heal_walked: false,
+            walked_to: None,
             heal_short: None,
             view_owned: false,
             rungs_ago: u32::MAX,
@@ -1846,6 +1863,7 @@ impl Bot {
             seen_speed: 0.0,
             held_over: 0,
             marker_reached: None,
+            marker_near: None,
             last_seen_seq: 0,
             next_command_seq: 1,
             rider: Default::default(),
@@ -1854,6 +1872,7 @@ impl Bot {
             team: team.to_string(),
             rng: seed | 1,
             retreat_on: true,
+            retreat_cvar: true,
             retreat: None,
             hurt_at: i32::MAX,
             dry_had: false,
@@ -2095,6 +2114,26 @@ impl Bot {
         }
     }
 
+    /// A marker no body reaches counts as stood at: the follower walked
+    /// out the plan to it (`walked`) and the body came no [`SHORT_GAIN`]
+    /// nearer in [`SHORT_TICKS`]. The marker is the mean of where it was
+    /// and where its player stands (`bel.gsc` 1588-1603), so it can hang
+    /// over a drop or sit in a wall, off the graph; the hunter walked at
+    /// it until it moved again (bot-objectives.md 5.2).
+    fn marker_short(&mut self, view: &BotView, m: [f32; 3], walked: Option<[f32; 3]>) -> bool {
+        if walked != Some(m) {
+            self.marker_near = None;
+            return false;
+        }
+        let d = dist_sq(view.origin, m).sqrt();
+        let (best, ticks) = match self.marker_near {
+            Some((at, best, t)) if at == m && d > best - SHORT_GAIN => (best, t + 1),
+            _ => (d, 0),
+        };
+        self.marker_near = Some((m, best, ticks));
+        ticks >= SHORT_TICKS
+    }
+
     /// The nearest marker other than the one last stood at.
     fn next_marker(&self, view: &BotView, bel: &BelView) -> Option<[f32; 3]> {
         bel.markers
@@ -2261,6 +2300,15 @@ impl Bot {
                 if let Some(m) = o.iter().find(|m| m.mine) {
                     return Some(ObjTarget::Deliver(m.goal));
                 }
+                // A dropped one the run cannot reach before it goes back:
+                // wait where it comes back.
+                if let Some(at) = Self::returns_first(view, o) {
+                    return Some(ObjTarget::Guard {
+                        at,
+                        inner: 0.0,
+                        hold: GuardHold::Near,
+                    });
+                }
                 if let Some(aim) = nearest(|m| m.pickup) {
                     // Each tap that took nothing tries the next side: the
                     // use key's pick traces from the eye to the trigger's
@@ -2298,7 +2346,15 @@ impl Bot {
                         _ => g,
                     });
                 }
-                let lying: Vec<[f32; 3]> = o.iter().filter_map(|m| m.pickup).collect();
+                // A dropped one guarded where it comes back once the walk
+                // to it would outlast its clock.
+                let lying: Vec<[f32; 3]> = o
+                    .iter()
+                    .filter_map(|m| match m.returns {
+                        Some((home, left)) if Self::outruns(view, m.pickup?, left) => Some(home),
+                        _ => m.pickup,
+                    })
+                    .collect();
                 (!lying.is_empty()).then(|| ObjTarget::Guard {
                     at: lying[re.rank % lying.len()],
                     inner: 0.0,
@@ -2619,6 +2675,24 @@ impl Bot {
             .min_by(|a, b| dist_sq(view.origin, *a).total_cmp(&dist_sq(view.origin, *b)))
     }
 
+    /// The spot a dropped objective goes back to, when no other lies
+    /// there to take and the run to where it lies would outlast its clock.
+    fn returns_first(view: &BotView, o: &[ReObjView]) -> Option<[f32; 3]> {
+        let mut lying = o.iter().filter(|m| m.pickup.is_some());
+        let m = lying.next()?;
+        if lying.next().is_some() {
+            return None;
+        }
+        let (home, left) = m.returns?;
+        Self::outruns(view, m.pickup?, left).then_some(home)
+    }
+
+    /// A straight run at [`RUN_SPEED`] to `at` takes longer than `left`
+    /// seconds.
+    fn outruns(view: &BotView, at: [f32; 3], left: f32) -> bool {
+        dist_sq(view.origin, at).sqrt() > left * RUN_SPEED
+    }
+
     /// A ring round the nearest goal an objective is being carried to, just
     /// outside its trigger.
     fn goal_guard(view: &BotView, o: &[ReObjView]) -> Option<ObjTarget> {
@@ -2641,7 +2715,8 @@ impl Bot {
                 let outer = GUARD_RADIUS.max(inner + GUARD_BAND);
                 d < outer * outer && d >= inner * inner
             }
-            ObjTarget::Escort(at) => dist_sq(o, *at) < GUARD_RADIUS * GUARD_RADIUS,
+            ObjTarget::Escort(at) => (ESCORT_CLEAR * ESCORT_CLEAR..GUARD_RADIUS * GUARD_RADIUS)
+                .contains(&dist_sq(o, *at)),
             ObjTarget::Defuse { bomb, reach, .. } => dist_sq(o, bomb.origin) < reach * reach,
             ObjTarget::Occupy(s) => inside_site(o, s),
             ObjTarget::Radio {
@@ -2694,6 +2769,9 @@ impl Bot {
             }
             ObjTarget::Guard { at, inner, .. } if dist_sq(view.origin, at) < inner * inner => {
                 Goal::Roam
+            }
+            ObjTarget::Escort(at) if dist_sq(view.origin, at) < ESCORT_CLEAR * ESCORT_CLEAR => {
+                Goal::Away(at)
             }
             ObjTarget::Guard { at, .. } | ObjTarget::Escort(at) => Goal::To(at),
             ObjTarget::Defuse { bomb, .. } => Goal::To(bomb.origin),
@@ -3635,11 +3713,13 @@ impl Bot {
             }
             None => self.quiet_ticks.saturating_add(1),
         };
+        let walked = self.walked_to.take();
         if let Some(bel) = view.bel.as_ref()
             && let Some(m) = self.next_marker(view, bel)
-            && arrived(view.origin, m)
+            && (arrived(view.origin, m) || self.marker_short(view, m, walked))
         {
             self.marker_reached = Some(m);
+            self.marker_near = None;
         }
         // A switch the weapon machine sits idle on never lands: the rungs
         // hold the hands empty (`ps.weapon` 0) for as long as the body is on
@@ -6128,6 +6208,7 @@ mod tests {
                 mine: false,
                 carrier_at: None,
                 laid: Some([30.0, 0.0, 64.0]),
+                returns: None,
             }],
         });
         v
@@ -6188,6 +6269,39 @@ mod tests {
         assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 64.0]));
         v.origin = [2900.0, 0.0, 64.0];
         assert_eq!(bot.goal(&v), Goal::Roam);
+    }
+
+    /// An escort holds inside its ring round the carrier, but within
+    /// `ESCORT_CLEAR` of him it walks off: standing on his next node on a
+    /// stair it held mp_carentan's carrier for 75 s.
+    #[test]
+    fn an_escort_steps_off_a_carrier_it_stands_on() {
+        let bot = Bot::new("allies", true, 1);
+        let mut v = re_view(ObjRole::Attack);
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried, o.carrier_at) = (None, true, Some([500.0, 0.0, 64.0]));
+        v.origin = [350.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        v.origin = [470.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Away([500.0, 0.0, 64.0]));
+    }
+
+    /// A dropped objective 1000 units off: with 10 s left on its clock
+    /// an attacker goes for it and a defender guards it; with 3 s left
+    /// (570 units of run) both wait where it goes back to.
+    #[test]
+    fn a_dropped_objective_out_of_reach_of_its_clock_is_awaited_at_its_start() {
+        let home = [-2000.0, 0.0, 72.0];
+        for role in [ObjRole::Attack, ObjRole::Defend] {
+            let bot = Bot::new("allies", true, 1);
+            let mut v = re_view(role);
+            v.origin = [1030.0, 0.0, 64.0];
+            let o = &mut v.re.as_mut().unwrap().objectives[0];
+            o.returns = Some((home, 10.0));
+            assert_eq!(bot.goal(&v), Goal::To([30.0, 0.0, 72.0]), "{role:?}");
+            v.re.as_mut().unwrap().objectives[0].returns = Some((home, 3.0));
+            assert_eq!(bot.goal(&v), Goal::To(home), "{role:?}");
+        }
     }
 
     /// Past the first by rank, a defender goes after a carried objective:
@@ -6362,6 +6476,31 @@ mod tests {
         assert_eq!(bot.goal(&v), Goal::To([1500.0, 300.0, 64.0]));
         v.noise = Some([0.0, 900.0, 104.0]);
         assert_eq!(bot.goal(&v), Goal::To([0.0, 900.0, 104.0]), "a noise first");
+    }
+
+    /// A marker hanging 150 units over the floor (the mean of a spot on a
+    /// ledge and one below it): once the plan to it is walked out and the
+    /// body comes no nearer for [`SHORT_TICKS`], the hunter moves on.
+    #[test]
+    fn a_hunter_gives_up_a_marker_off_the_graph() {
+        let mut bot = Bot::new("axis", true, 1);
+        let high = [800.0, 0.0, 214.0];
+        let mut v = bel_view(false, vec![high, [2000.0, 0.0, 64.0]]);
+        v.origin = [780.0, 0.0, 64.0];
+        for _ in 0..SHORT_TICKS {
+            bot.walked_to = Some(high);
+            bot.think(&v);
+            assert_eq!(bot.goal(&v), Goal::To(high), "still walking at it");
+        }
+        // A plan not walked out (a way round still ahead) keeps the marker.
+        let mut other = Bot::new("axis", true, 1);
+        for _ in 0..=SHORT_TICKS {
+            other.think(&v);
+        }
+        assert_eq!(other.goal(&v), Goal::To(high));
+        bot.walked_to = Some(high);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::To([2000.0, 0.0, 64.0]), "given up");
     }
 
     /// The hunted run from what they last saw or heard, else from their own

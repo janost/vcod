@@ -1,4 +1,4 @@
-# client-probes/probe_noclass on the retail 1.5b dedicated server, mp_carentan, 2026-10-16.
+# client-probes/probe_noclass on the retail 1.5b dedicated server, mp_carentan, 2026-11-17 (recaptured with the head icon team writes, the last of which is a script error that ends the run).
 # Server: COD_VERSION=1.5 tools/run_probe.sh client-probes/probe_noclass mp_carentan
 # Client, once it is up: vcod --game-dir <1.5 install> --net-probe <server> --probe-secs 8
 # PROBE lines: games_mp.log. SNAP lines: the probe client's per-second
@@ -66,10 +66,18 @@ PROBE spawned isplayer 1
 PROBE spawned num 0
 PROBE spawned byplayer 1
 PROBE spawned bynoclass 0
-SNAP 1 t=8950 ps.origin=[0,0,0]
-SNAP 2 t=9950 ps.origin=[0,0,0]
-SNAP 3 t=10950 ps.origin=[0,0,0]
-SNAP 4 t=11950 ps.origin=[992,-744,-9]
-SNAP 5 t=12950 ps.origin=[992,-744,-9]
-SNAP 6 t=14000 ps.origin=[1009,-744,-9]
-SNAP 7 t=15000 ps.origin=[1009,-744,-9]
+PROBE team 'none' none
+PROBE team 'allies' allies
+PROBE team 'axis' axis
+PROBE team 'foo' spectator
+PROBE team 'Axis' spectator
+PROBE team '' spectator
+PROBE team 'ALLIES' spectator
+PROBE team 'spectator' spectator
+SNAP 1 t=7850 ps.origin=[0,0,0]
+SNAP 2 t=8850 ps.origin=[0,0,0]
+SNAP 3 t=9850 ps.origin=[0,0,0]
+SNAP 4 t=10850 ps.origin=[992,-744,-9]
+SNAP 5 t=11850 ps.origin=[992,-744,-9]
+SNAP 6 t=12850 ps.origin=[1009,-744,-9]
+SNAP 7 t=13850 ps.origin=[1009,-744,-9]
