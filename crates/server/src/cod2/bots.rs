@@ -580,6 +580,7 @@ impl AdminHost for Cod2Server {
             shoot: on(cvar::SHOOT),
             names: on(cvar::NAMES),
             skill: self.skill_cvar(),
+            retreat: on(cvar::RETREAT),
         }
     }
 
@@ -588,6 +589,9 @@ impl AdminHost for Cod2Server {
         let Some(b) = self.game.bots.as_mut() else {
             return;
         };
+        for bot in b.bots_mut().values_mut() {
+            bot.allow_retreat(s.retreat);
+        }
         match b.applied {
             None => b.applied = Some((s.shoot, s.skill)),
             Some((shoot, skill)) => {

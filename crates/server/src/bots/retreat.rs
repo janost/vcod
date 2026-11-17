@@ -144,6 +144,15 @@ impl Bot {
         }
     }
 
+    /// `vc_bot_retreat`: 0 stops every retreat and health detour. Kept
+    /// apart from [`Self::set_retreat`], `bot_match`'s per-bot arm.
+    pub fn allow_retreat(&mut self, on: bool) {
+        self.retreat_cvar = on;
+        if !on {
+            self.retreat = None;
+        }
+    }
+
     /// Breaking contact ([`BotBody::retreating`]).
     pub fn retreating(&self) -> u8 {
         match self.retreat {
@@ -221,7 +230,7 @@ impl Bot {
     /// A hurt fighting bot with nothing in sight and no duty walks to a
     /// health item lying near ([`Vitals::heal`]).
     pub(super) fn heal_goal(&self, view: &BotView) -> Option<Goal> {
-        if !self.retreat_on
+        if !(self.retreat_on && self.retreat_cvar)
             || !self.shoot
             || self.retreat.is_some()
             || view.enemy.is_some()
@@ -334,7 +343,8 @@ impl Bot {
     /// Starts, carries on or ends the retreat, at the end of the tick's
     /// think: the sidearm has had its say on a dry clip by then.
     pub(super) fn retreat_update(&mut self, view: &BotView) {
-        if !self.retreat_on || !self.shoot || view.on_ladder || view.deployed {
+        if !(self.retreat_on && self.retreat_cvar) || !self.shoot || view.on_ladder || view.deployed
+        {
             self.retreat = None;
             return;
         }
@@ -739,5 +749,23 @@ mod tests {
         bot.set_retreat(false);
         bot.think(&v);
         assert_eq!(bot.retreating(), 0);
+    }
+
+    /// `vc_bot_retreat 0` ends a retreat under way and stops the health
+    /// detour; 1 again lets the next wound retreat.
+    #[test]
+    fn vc_bot_retreat_off_stops_retreats_and_detours() {
+        let (mut bot, mut v) = hurt(1);
+        bot.think(&v);
+        assert_ne!(bot.retreating(), 0);
+        bot.allow_retreat(false);
+        assert_eq!(bot.retreating(), 0);
+        bot.think(&v);
+        assert_eq!(bot.retreating(), 0);
+        let pack = [400.0, 300.0, 64.0];
+        (v.enemy, v.survive.heal) = (None, Some(pack));
+        assert_ne!(bot.goal(&v), Goal::To(pack));
+        bot.allow_retreat(true);
+        assert_eq!(bot.goal(&v), Goal::To(pack));
     }
 }

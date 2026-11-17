@@ -1424,6 +1424,8 @@ pub struct Bot {
     /// the one under way, the health the last hurt one started at, and
     /// whether this dry clip already had its retreat.
     retreat_on: bool,
+    /// `vc_bot_retreat`, applied by the bot pass ([`Bot::allow_retreat`]).
+    retreat_cvar: bool,
     retreat: Option<retreat::Retreat>,
     hurt_at: i32,
     dry_had: bool,
@@ -1859,6 +1861,7 @@ impl Bot {
             team: team.to_string(),
             rng: seed | 1,
             retreat_on: true,
+            retreat_cvar: true,
             retreat: None,
             hurt_at: i32::MAX,
             dry_had: false,
