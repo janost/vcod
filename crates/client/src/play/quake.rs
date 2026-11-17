@@ -81,7 +81,6 @@ pub fn from_event(
 }
 
 /// `0x3020cff4`, the four slots, and `0x3020d084`, the phase.
-#[derive(Default)]
 pub struct Quakes {
     slots: [Quake; 4],
     /// Each slot's strength (`+0x1c`) as `0x30017d40` last stored it: on
@@ -91,8 +90,26 @@ pub struct Quakes {
     /// view, so a new quake measures its distance from last frame's eye.
     eye: Vec3,
     phase: f32,
-    /// msvcrt `rand()`'s state, for the phase.
+    /// The cgame's own `rand()` state (`_holdrand`, per-thread data
+    /// `+0x14`), for the phase. The other 33 `rand()` calls of the cgame
+    /// draw from it too; vcod's draws are the phase's alone.
     seed: u32,
+}
+
+impl Default for Quakes {
+    /// A cgame start: the DLL never calls `srand` (0x3004b17c has no
+    /// caller) and its CRT creates the thread's data with `_holdrand` 1
+    /// (0x3004d759), so the first phase is the LCG's first draw from 1
+    /// (combat doc 17.2).
+    fn default() -> Self {
+        Quakes {
+            slots: Default::default(),
+            stored: Default::default(),
+            eye: Vec3::ZERO,
+            phase: 0.0,
+            seed: 1,
+        }
+    }
 }
 
 impl Quakes {
@@ -227,6 +244,18 @@ mod tests {
         }
         assert_eq!(qs.shake(4000, Vec3::ZERO), [0.0; 3]);
         assert_eq!(qs.shake(1100, Vec3::new(900.0, 0.0, 0.0)), [0.0; 3]);
+    }
+
+    /// A fresh cgame's first frame without a quake draws the phase off
+    /// `_holdrand` 1: msvcrt's first `rand()` is 41.
+    #[test]
+    fn a_fresh_cgame_draws_its_first_phase_from_holdrand_one() {
+        let mut qs = Quakes::default();
+        qs.shake(0, Vec3::ZERO);
+        let want = (41.0f32 * (1.0 / 32768.0) * 2.0 - 1.0) * std::f32::consts::PI;
+        assert_eq!(qs.phase, want);
+        // the second draw is 18467, as msvcrt's sequence from 1 goes
+        assert_eq!(qs.rand(), 18467);
     }
 
     /// With every slot live, a new quake replaces the weakest one weaker

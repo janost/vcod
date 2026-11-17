@@ -4086,7 +4086,7 @@ impl App {
         // Retail's `vid_restart` reloads every image; vcod rebuilds
         // only when the format, the MSAA or an image setting moved.
         self.shell.cod4_set_picmip();
-        let textures = texture_cvars(&self.shell, self.textures.filter);
+        let textures = self.texture_settings();
         let samples = renderer::aa_samples(self.shell.cvar_f32("r_aaSamples"));
         if self.renderer.as_ref().is_some_and(|r| {
             r.hdr() != hdr_cvar(&self.shell)
@@ -4130,7 +4130,7 @@ impl App {
             return;
         }
         self.shell.cod4_set_picmip();
-        let textures = texture_cvars(&self.shell, self.textures.filter);
+        let textures = self.texture_settings();
         if self.renderer.is_some() && textures != self.textures {
             self.rebuild_renderer(event_loop);
         }
@@ -4156,8 +4156,18 @@ impl App {
         r
     }
 
+    /// [`texture_cvars`] with the install's custom mip rule: 1.1's and
+    /// 1.5's client refuses an image over a `#N` level of the wrong size,
+    /// UO's filters the level.
+    fn texture_settings(&self) -> texture_settings::TextureSettings {
+        let mut t = texture_cvars(&self.shell, self.textures.filter);
+        t.refuse_bad_levels = self.game == vcod_common::game::Game::Cod1
+            && !net::protocol::install_protocol(&self.fs).is_uo();
+        t
+    }
+
     fn build_renderer_now(&mut self, window: Arc<Window>) -> Result<Renderer> {
-        self.textures = texture_cvars(&self.shell, self.textures.filter);
+        self.textures = self.texture_settings();
         self.texture_mode_seen = texture_mode_key(&self.shell);
         let samples = renderer::aa_samples(self.shell.cvar_f32("r_aaSamples"));
         let mut r = Renderer::new(

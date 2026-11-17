@@ -23,6 +23,10 @@ pub struct TextureSettings {
     /// normal and a specular map ([`iwi_picmip`]); 0 off CoD4.
     pub picmip_bump: u32,
     pub picmip_spec: u32,
+    /// 1.1's and 1.5's client (CoDMP.exe 0x4eb1d0, 1.5 0x50ba60): a `#N`
+    /// level of the wrong size refuses the whole image; UO's (CoDUOMP.exe
+    /// 0x505520) and vcod's default filter that level instead.
+    pub refuse_bad_levels: bool,
 }
 
 impl Default for TextureSettings {
@@ -37,6 +41,7 @@ impl Default for TextureSettings {
             filter: TextureFilter::by_name("GL_LINEAR_MIPMAP_NEAREST").unwrap(),
             picmip_bump: 0,
             picmip_spec: 0,
+            refuse_bad_levels: false,
         }
     }
 }
@@ -59,6 +64,7 @@ impl TextureSettings {
             filter: TextureFilter::by_name(texture_mode).unwrap_or(prev),
             picmip_bump: 0,
             picmip_spec: 0,
+            refuse_bad_levels: false,
         }
     }
 
@@ -77,6 +83,7 @@ impl TextureSettings {
         Store {
             bits: self.bits,
             mip_filter: self.mip_filter,
+            refuse_bad_levels: self.refuse_bad_levels,
         }
     }
 
@@ -122,11 +129,13 @@ impl MipFilter {
     }
 }
 
-/// How [`prepare`] stores an image: `r_texturebits` and the mip filter.
+/// How [`prepare`] stores an image: `r_texturebits`, the mip filter and
+/// [`TextureSettings::refuse_bad_levels`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Store {
     pub bits: u32,
     pub mip_filter: MipFilter,
+    pub refuse_bad_levels: bool,
 }
 
 /// `0x4ea380`: the cvar's integer clamped to 0..=3.
@@ -376,6 +385,8 @@ pub fn iwi_picmip(data: &[u8], picmip: u32) -> u32 {
 /// `chain`; uncompressed ones are halved to `size >> picmip` and stored at
 /// 16 bits a texel with `r_texturebits 16` (0x4ebe30). Returns an
 /// uncompressed image's levels below level 0 (empty without `chain`).
+/// Under `store.refuse_bad_levels` a `#N` level of the wrong size swaps
+/// the image for `*default`, as a missing image draws.
 pub fn prepare(
     img: &mut Image,
     picmip: u32,
@@ -388,6 +399,8 @@ pub fn prepare(
         name: mips.custom.map(|(n, _)| n.to_string()),
         load: mips.custom.map(|(_, l)| l),
         filter: store.mip_filter,
+        refuse: store.refuse_bad_levels,
+        refused: false,
     };
     let size = (img.width, img.height);
     drop_levels(img, picmip, &mut down);
@@ -423,6 +436,16 @@ pub fn prepare(
             quantize_16(l, opaque);
         }
     }
+    if down.refused {
+        // 0x4ebf20 returns 0 and the image is freed (0x4ec730); the stage
+        // that asked draws the default image (cod11-front-end.md 14)
+        *img = assets::default_image();
+        let mips = Mips {
+            chain: mips.chain,
+            custom: None,
+        };
+        return prepare(img, 0, gamma, store, mips);
+    }
     levels
 }
 
@@ -432,6 +455,9 @@ struct Down<'a> {
     name: Option<String>,
     load: Option<LoadLevel<'a>>,
     filter: MipFilter,
+    /// [`Store::refuse_bad_levels`], and whether a level was refused.
+    refuse: bool,
+    refused: bool,
 }
 
 impl Down<'_> {
@@ -442,7 +468,9 @@ impl Down<'_> {
         if next.is_some() {
             self.name.clone_from(&next);
         }
-        if let (Some(next), Some(load)) = (next, self.load)
+        // a refused image loads no more levels
+        let load = self.load.filter(|_| !self.refused);
+        if let (Some(next), Some(load)) = (next, load)
             && let Some(img) = load(&next)
         {
             // retail's (w + 1) >> 1; the GPU's chain halves down, so an odd
@@ -452,6 +480,17 @@ impl Down<'_> {
             match img.data {
                 ImageData::Rgba8(level) if fits && (img.width, img.height) == want => {
                     return (want.0, want.1, level);
+                }
+                _ if self.refuse && (img.width, img.height) != want => {
+                    log::warn!(
+                        "WARNING: custom mipmap image '{next}' should have dimensions {} x {} \
+                         instead of {} x {}, refusing to load",
+                        want.0,
+                        want.1,
+                        img.width,
+                        img.height
+                    );
+                    self.refused = true;
                 }
                 // UO warns and filters; 1.1 and 1.5 refuse the whole image
                 // (cod11-front-end.md 14, "Custom mip levels"). Stock UO
@@ -896,6 +935,36 @@ mod tests {
             Mips::chain("a#0.tga", &wrong),
         );
         assert_eq!(levels[0], vec![0; 16]);
+    }
+
+    /// 1.1 and 1.5 refuse the whole image over a `#N` level of the wrong
+    /// size: it goes up as `*default` with its own chain. Through picmip
+    /// too, and a fitting level or none passes as before.
+    #[test]
+    fn a_wrong_sized_custom_level_refuses_the_image_on_1_1() {
+        let refuse = Store {
+            refuse_bad_levels: true,
+            ..Store::default()
+        };
+        let wrong = |_: &str| Some(rgba(4, 4, vec![7; 64]));
+        let px = |img: &Image| match &img.data {
+            ImageData::Rgba8(px) => px.clone(),
+            ImageData::Bc { .. } => unreachable!(),
+        };
+        let default = assets::default_image();
+        let mut img = rgba(4, 4, vec![0; 64]);
+        let levels = prepare(&mut img, 0, None, refuse, Mips::chain("a#0.tga", &wrong));
+        assert_eq!((img.width, img.height), (default.width, default.height));
+        assert_eq!(px(&img), px(&default));
+        assert_eq!(levels.len(), 4, "16x16 down to 1x1");
+        let mut img = rgba(4, 4, vec![0; 64]);
+        prepare(&mut img, 1, None, refuse, Mips::single("a#0.tga", &wrong));
+        assert_eq!(px(&img), px(&default));
+        // a fitting level goes up as UO's would
+        let fits = |name: &str| (name == "a#1.tga").then(|| rgba(2, 2, vec![200; 16]));
+        let mut img = rgba(4, 4, vec![0; 64]);
+        let levels = prepare(&mut img, 0, None, refuse, Mips::chain("a#0.tga", &fits));
+        assert_eq!((img.width, levels[0].clone()), (4, vec![200; 16]));
     }
 
     #[test]
