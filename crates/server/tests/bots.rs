@@ -650,6 +650,81 @@ fn bots_meeting_head_on_at_a_ladder_take_turns() {
     );
 }
 
+/// mp_ship's crow's nest ladder (rungs on the face at x 4975, y 59 to 69,
+/// from the deck at 692 to the head (4963.9, 64, 1219.1) on the plate in
+/// the hatch). A bot backing down the rungs onto a climber within 140
+/// under climbs back to the head (`nav::Follower::head_on_yield`). That
+/// climb can bob under the plate and fall back; the climber holds still
+/// under it (`nav::Follower::under_hold`). From each start across the
+/// rungs the bot gets back onto the head, the climber gets up after it,
+/// and neither dies.
+#[test]
+#[ignore = "builds mp_ship's graph and runs two bots on its crow's nest ladder from 5 starts; run with --ignored"]
+fn a_bot_backing_onto_a_climber_climbs_back_onto_the_crows_nest() {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let fs = Rc::new(fs);
+    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_ship").unwrap()).unwrap())
+        .expect("parse the bsp");
+    let (head, foot) = ([4963.9, 64.0, 1219.2], [4959.0, 64.0, 692.2]);
+    for y in [56.0, 59.0, 64.0, 68.0, 71.0] {
+        let mut now = Instant::now();
+        let mut cfg = cfg(2, false, "dm");
+        cfg.map = "mp_ship".into();
+        let mut sv = vcod_server::Server::new(cfg, now);
+        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+        sv.load_scripts(fs.clone()).expect("load the scripts");
+        let slots = (0..600)
+            .find_map(|_| {
+                run(&mut sv, &mut now, 1);
+                let s = sv.bot_slots();
+                (s.len() == 2
+                    && s.iter().all(|&s| sv.bot_body(s).is_some_and(|b| b.playing))
+                    && sv.test_nav_route(head, foot).is_some())
+                .then_some(s)
+            })
+            .expect("both bots play on a built graph");
+        let (up, down) = (slots[0], slots[1]);
+        sv.place_client(down, [5021.0, 35.0, 1254.2], 0.0);
+        sv.test_bot_goal(down, Some([5021.0, 35.0, 1254.1]));
+        sv.place_client(up, [4959.0, 64.0, 692.2], 0.0);
+        sv.test_bot_goal(up, Some(head));
+        let high = (0..400).any(|_| {
+            run(&mut sv, &mut now, 1);
+            sv.bot_body(up)
+                .is_some_and(|b| b.on_ladder && b.origin[2] > 960.0)
+        });
+        assert!(
+            high,
+            "never climbed: {:?}",
+            sv.bot_body(up).map(|b| b.origin)
+        );
+        // On the rungs under the head, backing down for the deck.
+        sv.place_client(down, [4959.0, y, 1150.0], 0.0);
+        sv.test_bot_goal(down, Some(foot));
+        let (mut back, mut topped, mut died) = (None, None, false);
+        for tick in 0..400 {
+            run(&mut sv, &mut now, 1);
+            let (u, d) = (sv.bot_body(up).unwrap(), sv.bot_body(down).unwrap());
+            died |= u.dead || d.dead;
+            if back.is_none() && d.on_ground && !d.on_ladder && d.origin[2] > 1210.0 {
+                back = Some(tick);
+            }
+            if topped.is_none() && u.on_ground && !u.on_ladder && u.origin[2] > 1210.0 {
+                topped = Some(tick);
+            }
+        }
+        // Without the hold (c65001bfe): from y 71 the climb back bobbed, fell back onto
+        // the climber's head and pushed him off the rungs to his death.
+        assert!(
+            back.is_some_and(|t| t < 60) && topped.is_some_and(|t| t < 200) && !died,
+            "from y {y}: back on the head at {back:?}, the climber up at {topped:?}, a death {died}"
+        );
+    }
+}
+
 /// mp_ship's hold ladder, rungs on the face at y -78 from the floor at 56
 /// to 615, its head (4332, -87, 615) on the lip across the face. On the
 /// rungs past the head's height, master ce5fdb33 backed off the face, and
