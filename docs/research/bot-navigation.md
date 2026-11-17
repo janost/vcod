@@ -672,6 +672,17 @@ UO, master / now (G): `mp_cassino` 52.0 / 52.0, `mp_peaks` 81.3 / 81.2,
 the leaf walk round (best of three, load 23-25): 127 (`mp_harbor`) to 614
 (`mp_ship`). VERIFIED (measured).
 
+Build ms after the jump cue's re-proof (`NavGraph::reprove_jumps`), master
+c65001bfe, one pass of the twelve 1.1 maps with no other build on the
+machine (`pgrep -x cargo` empty every second of the run, the CPU 99% idle
+before it, the load average 9 and falling from earlier builds; 30 threads,
+2026-11-17): `mp_harbor` 190, `mp_powcamp` 241, `mp_chateau` 292,
+`mp_dawnville` 322, `mp_carentan` 352, `mp_railyard` 393, `mp_depot` 658,
+`mp_pavlov` 687, `mp_brecourt` 691, `mp_rocket` 711, `mp_ship` 1181,
+`mp_hurtgen` 1232. VERIFIED (measured, release `nav_build`). The second and
+third passes and UO's nineteen maps ran while other builds started, so no
+idle best of three and no idle UO row exist.
+
 How it got there, one line a round (VERIFIED, measured):
 
 - Early single-threaded `mp_carentan`, before the diagonal shortcut and
@@ -765,7 +776,15 @@ The server:
   through `mp_ship`'s 2.8 s build and `mp_carentan`'s 1.3 s the slowest
   tick was 9-11 ms and the worst lag under 8 ms; the tick that takes the
   finished graph and plans every bot's first path ran 33 ms once on
-  `mp_ship`.
+  `mp_ship`. On master c65001bfe that second's slowest tick holds with
+  the build's others: 1.1 `mp_ship`, 12 bots, 4.3 to 12.6 ms over four
+  runs (4.5 to 5.9 with `VCOD_BOT_THREADS=1`), 4 bots 4.6 and 6.9;
+  `mp_carentan`, 4 bots, 6.4 and 7.7; UO `mp_cassino` and `mp_peaks`, 12
+  bots, 10.5 to 19.9, where the build's other seconds ran 8.2 to 25.0.
+  VERIFIED (measured, release `vcod-server --trace` in `unshare -rn`, load
+  17 to 39 from other builds, 2026-11-17). Every bot still plans on that
+  tick; each search stops at `PLAN_SLICE` (section 3, "The pass on
+  threads").
 
 Spawn gaps, explained:
 
@@ -2186,7 +2205,8 @@ merge, the same detector; ship seeds in three blocks of 768):
   (4964, 64, 1219): stalls in ten seeds of 1535 that the room-tested
   walk on has in none (205, 423, 463, 625, 965, 1369 at the head, 57,
   381, 929, 1003 on the stair above). VERIFIED (measured, the same seeds
-  each way).
+  each way). Measured again on 2026-11-17 and kept out ("The leftovers,
+  2026-11-17", below).
 - A bot's jump right under a top waits for a tick that rose under a
   unit (`nav::jump_under`; the bot and the re-proof's `as_a_bot` walks,
   not the flood's). With the re-proof above, `nav_census` at United
@@ -2956,6 +2976,96 @@ machine whose other jobs ran at idle priority, 2026-11-14).
   `bots/probes` keeps 0.26 ms (the lob probe and `pre_think` stay
   serial). VERIFIED
   (measured, the runs above).
+
+### The leftovers, 2026-11-17
+
+Retail has no bots; everything here is measured on vcod-server. The
+detector is `ship_stalls` (`dm`, 6 bots, 4000 ticks, shoot off, release,
+1.1, `VCOD_BOT_THREADS=1`); a row is stalled bot-ticks / falls / deaths,
+then the edges the followers gave up on (40 ticks without closing, or an
+unstick spell). On master c65001bfe: `mp_ship` seeds 1-1535 odd 178 / 2 / 1,
+2 142 given up (seed 113's 178 in the hull crease at (2189, -289, -48),
+the death at the hold ladder's foot (4317, -148, 56)); `mp_depot` 1-767
+odd 0 / 3 / 0, 384 given up (all three falls off the pit's rim at
+(-1251, 2095, 227)). VERIFIED (measured).
+
+- The walk on along a jump edge (`Follower::edge_holds`) keeps the
+  walk's room test. Run with the bot's own jump (`as_a_bot`: the bob, no
+  room test) for a third time: `mp_ship` 0 / 2 / 0 but 4 026 edges given
+  up, `mp_depot` 0 / 3 / 0 (the same three seeds) and 403. No crow's nest
+  stall either way, so the 2026-10-21 regression ("The jump cue and the
+  re-proof", above) is gone, but the bot's jump in the walk on gave up on
+  nearly twice the edges for one hull stall less. VERIFIED (measured,
+  the seeds above each way).
+- Drops a forward run misses. The flood proves a drop by a forward run,
+  else a back down at a run, else (near a ladder) a creep (`walk_to`). A
+  bot backs toward a waypoint only more than 64 under it
+  (`bots::BACK_DOWN_HEIGHT`), and the follower takes a drop the run misses
+  as backed (`edge_holds`, `backs_short`). `nav_build BACKED=1` lists the
+  plain edges more than a step and no more than 64 down whose forward walk
+  node to node does not arrive: `mp_ship` 134 (100 no deeper than a jump,
+  22 of them within 96 of a ladder; 34 deeper, 19 of them near one),
+  `mp_depot` 64 (56; 8, none near one), `mp_carentan` 19 (17; 2),
+  `mp_hurtgen` 53 (43; 10), `mp_rocket` 25 (23; 2). VERIFIED (measured).
+  Down no more than a jump, `edge_holds` walks the edge on forward from
+  the body and plans round it on a miss. Deeper, the bot ran them unless
+  they were more than 64 down; it now backs them as well
+  (`Follower::backs_off`, `BotView::back_drop`), the gait that proved them
+  and the one the follower already took them by. With that alone:
+  `mp_ship` 178 / 2 / 0, 2 154 given up (658 of the 768 seeds ran
+  otherwise; seed 489's death is gone), `mp_depot` 0 / 3 / 0, 387 (18
+  seeds ran otherwise). VERIFIED (measured, the seeds above). No change
+  either way past what reseeding moves: the rule is kept for agreeing
+  with the graph. Those no deeper than a jump stay proved by a back down
+  no bot runs: the bot plans round one whose walk on misses, and dropping
+  them from the graph was not measured.
+  With the climber's hold too (the branch tip): `mp_ship` 178 / 2 / 1,
+  2 130 given up; `mp_depot` 0 / 3 / 0, 394. The stall is seed 113's
+  crease again; the falls are seed 195 and seed 59's (3813, 66, 515) to
+  367; the death, seed 1519's at (3263, -13, 480) on the deck under the
+  mast, is a new seed where master's 489 was, not traced. VERIFIED
+  (measured, the same seeds).
+- `mp_streets`' room at (450..710, -3420..-3078, -24): the crouched jump
+  (2026-10-17, section 2, "Other rules") took its 5 spawns out. `nav_build
+  UO=1 GAMETYPE=tdm LOST=1` lists no lost spawn on the map (226 of 226
+  reach the main component, in `tdm`, `sd` and `dm`), and `CROUCH=1` ten
+  crouched jump edges from the room's floor at -24 through the south
+  window onto the floor at 0, (480, -3392, -24) -> (537, -3444, 0) among
+  them. VERIFIED (measured). `bots.rs`'s
+  `uo_bots_leave_their_walled_in_spawns` places a bot at (580, -3250, -8).
+- The tick that takes a finished graph: section 2, "Build times".
+- A walk's body holds weapon 0 with a def built from `moveSpeedScale`
+  alone (`Sim::scaled`). Off the sight button, the attack and the sprint,
+  which no walk presses, the move reads no other field of the held
+  weapon's def: the scale in `walk_move`; the rest goes through the sight
+  flag, a grenade's cook or an LMG's deploy. INFERRED (`pmove::pmove`'s
+  reads of the def). `nav::tests::a_walk_at_a_weapons_scale_moves_as_the_weapon_held`
+  runs every stock weapon held at its own index (owned, its clip full)
+  and the scaled body over `mp_depot`'s roof peak at 220 units/s, down
+  the far slope and a jump: 32 weapons under 1.1's rules and 63 under
+  UO's walk tick for tick alike. VERIFIED (measured). Held at an index
+  the body does not own, the run goes on at 190 from its second tick, so
+  the test gives the weapon first.
+- The climb back to a ladder's head off a climber
+  (`Follower::head_on_yield`) bobs under `mp_ship`'s crow's nest plate on
+  some starts: off the rungs 8 under the top at (4959.9, 64.5, 1213.5),
+  up to 1217.6 short of the head at 1219.1, and back onto the rungs at
+  1205, about 6 ticks. VERIFIED (measured: a bot placed on the rungs at
+  (4959, y, 1150) backing for the deck, a climber rising from 960; it
+  bobbed from y 56 and 71 of the starts at y 56, 59, 64, 68 and 71). The climber kept rising: from y 71
+  the bot fell back onto his head at 1197 (`ground` on him), the boxes
+  pushed apart and the climber went off the rungs at (4964, 86, 1141) to
+  his death at 568. Now a body climbing toward a head holds still on the
+  rungs (no key) while another body within 140 above, two half-widths
+  flat, is not rising, for at most 60 ticks (`Follower::under_hold`,
+  `BotView::rungs_hold`). The climber still under the bot then counts
+  for the climb back as a rising one does: before, the bot backed down
+  again onto the held climber and slid off him down the hatch (y 56).
+  From all five starts the bot is back on the head in 27 to 39 ticks,
+  the climber up after it in 95 to 107, and neither dies
+  (`tests/bots.rs`
+  `a_bot_backing_onto_a_climber_climbs_back_onto_the_crows_nest`, which
+  fails with the hold off). VERIFIED (measured).
 
 ## 4. Memory and hearing
 
