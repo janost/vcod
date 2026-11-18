@@ -937,9 +937,8 @@ pub fn is_alive(
 }
 
 /// `isDefined(x)`: false for a missing argument, `undefined` itself, and a
-/// handle whose slot is free. A reused slot reads live again, where retail's
-/// entity generation counter would not; the S&D gate hit the HUD element case
-/// at `sd.gsc:1850`/`2019` (gsc-language doc, section 10).
+/// handle whose slot is free or reused, as on retail (gsc-language doc,
+/// section 9).
 pub fn is_defined(
     host: &mut GameHost,
     _cx: &mut Cx,

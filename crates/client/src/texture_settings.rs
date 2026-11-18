@@ -2,7 +2,8 @@
 //! `r_picmip`, `r_picmip2`, `r_texturebits`, `r_simpleMipMaps` and
 //! `r_weightMipMaps` at image load (latched, so a change waits for
 //! `vid_restart`) and `r_textureMode` on the samplers
-//! (docs/research/cod11-front-end.md, section 14, "Texture settings").
+//! (docs/research/cod11-front-end.md, section 14, "How retail applies the
+//! Graphics, Performance and Sound pages").
 
 use vcod_common::asset_source::AssetSource;
 use vcod_common::assets::{self, Image, ImageData};
