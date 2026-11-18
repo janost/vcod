@@ -1,3 +1,7 @@
+# handshake-1.7.txt: tools/cod4_handshake_probe.py's full walk (getinfo, getstatus,
+# a refused connect, challenge, connect, the stats packets, the gamestate) against
+# retail cod4_lnxded 1.7 on mp_crash, by the recipe in the namespace of docs/research/cod4-handshake.md 7:
+#   python3 -I tools/cod4_handshake_probe.py 127.0.0.1:28960 out.txt --auth 127.0.0.2
 0 c2s 127.0.0.1:28960 ffffffff676574696e666f20787878
 1 s2c 127.0.0.1:28960 ffffffff696e666f526573706f6e73650a5c6368616c6c656e67655c7878785c70726f746f636f6c5c365c686f73746e616d655c436f4434486f73745c6d61706e616d655c6d705f63726173685c73765f6d6178636c69656e74735c385c67616d65747970655c7761725c707572655c315c6b635c315c68775c315c6d6f645c305c766f6963655c305c70625c30
 1 c2s 127.0.0.1:28960 ffffffff67657473746174757320787878
