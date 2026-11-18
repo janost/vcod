@@ -225,7 +225,7 @@ At the default 180 the angle test always passes, so Eavesdrop is a
   (`Shell::register_cod4_options`); the voice page's record level slider
   sets `winvoice_mic_reclevel`, and the capture applies the level and the
   scaler as CoD2's does (section 4, `voice::mic_gain`).
-- Not done: the compass's voice fade for a talking friendly
-  (`beginVoiceFadeTime`), `winvoice_mic_mute` (the mixer's playback mute,
+- The compass pings a talking friendly (`cod4_radar`, cod4-hud.md 15.9).
+- Not done: `winvoice_mic_mute` (the mixer's playback mute,
   registered and unread), `winvoice_save_voice` (`voice.wav`), and the
   options page's record level meter.

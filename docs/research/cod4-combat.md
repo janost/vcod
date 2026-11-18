@@ -1693,10 +1693,9 @@ those anims.
 ## 12. Open
 
 - A rocket's flight, the live grenade's throw back, a prone death's torso
-  and a `killcamentity` killcam are gated against retail captures (15);
-  what those gates still tolerate is 15's open list: the dropped weapon's
-  start on a prone body, a grenade's strike on a body, the second rocket's
-  number and a killcam's archived view.
+  and a `killcamentity` killcam are gated against retail captures (15),
+  which tolerate nothing: their `GAPS` are empty. The tag and trace read
+  gates' few rows are cod4-server-gaps.md's Open list.
 - The use key's weapon swap is gated live on ours (cod4-gsc.md 9.1); its
   retail capture is uncommitted, so no A/B gate.
 - The terrain triangle normal's last bit.
@@ -1924,10 +1923,10 @@ VERIFIED (the gates).
   `killCamEntity` 315, the model's number, and carry it. VERIFIED live.
 - The corpse runs (`play-1.7-csb0corpse-*`, `-csb0drag-*`, 5.3) under
   `sv_clientSideBullets 0`: `cod4_corpse_rounds_ab` and
-  `cod4_corpse_drag_ab` match every corpse word and every impact; their
-  `GAPS` hold the killcam's pitch, the target's second spawn and the
-  floor run's dropped rifle (cod4-server-gaps.md, Ranked 8). VERIFIED
-  (the gates).
+  `cod4_corpse_drag_ab` match every corpse word and every impact, with
+  empty `GAPS`. VERIFIED (the gates). What closed the killcam's pitch,
+  the target's second spawn and the floor run's dropped rifle:
+  cod4-server-gaps.md, Closed.
 
 What the captures fixed on ours:
 
