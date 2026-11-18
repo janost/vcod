@@ -292,9 +292,9 @@ impl ScriptMenus {
                 for i in 1..=5 {
                     self.set_dvar(&format!("cdkey{i}"), "");
                 }
-                if key.len() == 16 {
-                    for i in 0..4 {
-                        self.set_dvar(&format!("cdkey{}", i + 1), &key[i * 4..][..4]);
+                if let Some(quarters) = key_quarters(&key) {
+                    for (i, q) in quarters.iter().enumerate() {
+                        self.set_dvar(&format!("cdkey{}", i + 1), q);
                     }
                 }
                 if check.len() == 4 {
@@ -606,5 +606,28 @@ mod tests {
         m.set_dvar("ui_playerProfileSelected", "alpha");
         m.front_script("loadPlayerProfile", &[], &gs, &mut out, 0);
         assert_eq!(m.front.requests, [Request::LoadProfile("Alpha".into())]);
+    }
+}
+
+/// A 16-byte key's four 4-byte fields, as `CL_GetCDKey` copies them: by
+/// bytes, so a key a menu verified with a multi-byte character splits
+/// where retail's does instead of off a character boundary.
+fn key_quarters(key: &str) -> Option<[String; 4]> {
+    let b = key.as_bytes();
+    (b.len() == 16).then(|| {
+        std::array::from_fn(|i| String::from_utf8_lossy(&b[i * 4..i * 4 + 4]).into_owned())
+    })
+}
+
+#[cfg(test)]
+mod key_tests {
+    /// A 16-byte key holding a two-byte character splits by bytes without
+    /// a panic (BUG-087).
+    #[test]
+    fn a_key_with_a_two_byte_character_splits_by_bytes() {
+        let q = super::key_quarters("ABC\u{e9}DEFGHIJKLMN").unwrap();
+        assert_eq!(q[0], "ABC\u{fffd}");
+        assert_eq!(q[3], "KLMN");
+        assert_eq!(super::key_quarters("ABCD").map(|_| ()), None);
     }
 }
