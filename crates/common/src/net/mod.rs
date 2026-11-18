@@ -873,7 +873,8 @@ impl<T: Transport> NetClient<T> {
         }
         self.netchan.reliable_sequence += 1;
         let slot = self.netchan.reliable_sequence as usize & (self.netchan.reliable.len() - 1);
-        self.netchan.reliable[slot] = cmd.to_string();
+        // The copy the server reads, which keys its scramble of our messages.
+        self.netchan.reliable[slot] = codec::wire_string(cmd).into_owned();
         if !["team ", "score ", "mr "]
             .iter()
             .any(|x| cmd.starts_with(x))

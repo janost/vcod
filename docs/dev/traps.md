@@ -216,6 +216,10 @@ otherwise.
 - The netchan scramble keeps `%`. The server reads client commands with the
   server-side string reader. The client reader's `%` mapping garbles every
   later message after a chat line containing one.
+- Both reliable rings hold the peer's copy, not the text queued: the
+  server's as the client reads it (`%` and high bytes as `.`), the client's
+  as `write_string` sent it. A raw `%` in the server's ring mis-keys the
+  client's moves until the next command is acked (cod11-chat.md 2.2).
 - A move message's ack is stamped with the newest frame already sent when
   the packet arrived, not the tick time, or loopback ping reads 21-50 ms.
 - On a 1.5 server `sv_time_ms` is the game clock (`level.time`, the

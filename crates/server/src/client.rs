@@ -6,6 +6,7 @@ use crate::spectate::ClientSim;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::time::Instant;
+use vcod_common::net::codec::client_read_string;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::netchan::{ClientMessage, MAX_RELIABLE_COMMANDS, ServerNetchan};
 use vcod_common::net::snapshot::Snapshot;
@@ -295,6 +296,8 @@ impl Client {
     /// queue").
     pub fn queue_server_command(&mut self, cmd: &str) -> Queued {
         const RING: i32 = MAX_RELIABLE_COMMANDS as i32;
+        // The ring keys the client's messages, so it holds the client's copy.
+        let cmd: &str = &client_read_string(cmd);
         let kind = CmdKind::of(cmd);
         if self.is_bot && kind == CmdKind::CanIgnore {
             return Queued::Dropped;

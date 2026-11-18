@@ -19,8 +19,37 @@
 //! with. Nothing here knows a game's numbering.
 
 use super::huffman::{Huffman, add_bit, get_bit};
+use std::borrow::Cow;
 
 const MAX_STRING_CHARS: usize = 1024;
+
+/// What [`MsgWriter::write_string`] puts on the wire for `s`, the NUL
+/// aside: the first 1023 bytes, each over 127 as `.` ("get rid of 0xff
+/// chars, because old clients don't like them"). A netchan ring keeps this
+/// copy so its key walks the bytes the peer read.
+pub fn wire_string(s: &str) -> Cow<'_, str> {
+    let s = &s.as_bytes()[..s.len().min(MAX_STRING_CHARS - 1)];
+    match std::str::from_utf8(s) {
+        Ok(t) if t.is_ascii() => Cow::Borrowed(t),
+        _ => Cow::Owned(
+            s.iter()
+                .map(|&b| if b > 127 { '.' } else { b as char })
+                .collect(),
+        ),
+    }
+}
+
+/// What a CoD1 client's `MSG_ReadBigString` returns for
+/// [`MsgWriter::write_string`] of `cmd`: [`wire_string`] with `%` read as
+/// `.` (CoDMP.exe 0x444e00, docs/protocol-1.1.md divergence 14). The server
+/// rings a server command in this form, so the usercmd key and the client
+/// op scramble hash what the client hashes.
+pub fn client_read_string(cmd: &str) -> Cow<'_, str> {
+    match wire_string(cmd) {
+        Cow::Borrowed(t) if !t.contains('%') => Cow::Borrowed(t),
+        t => Cow::Owned(t.replace('%', ".")),
+    }
+}
 pub(crate) const BIG_INFO_STRING: usize = 8192;
 /// A float that is integral and inside this range goes out truncated.
 pub(crate) const FLOAT_INT_BITS: i32 = 13;
@@ -652,9 +681,8 @@ impl<'a> MsgWriter<'a> {
     }
 
     pub fn write_string(&mut self, s: &str) {
-        for &b in s.as_bytes().iter().take(MAX_STRING_CHARS - 1) {
-            // "get rid of 0xff chars, because old clients don't like them"
-            self.write_byte(if b > 127 { b'.' } else { b });
+        for b in wire_string(s).bytes() {
+            self.write_byte(b);
         }
         self.write_byte(0);
     }

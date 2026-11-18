@@ -3823,7 +3823,8 @@ impl Server {
         // ring cannot drop a client twice.
         c.link.netchan.reliable_sequence += 1;
         let at = c.link.netchan.reliable_sequence as usize & (MAX_RELIABLE_COMMANDS - 1);
-        c.link.netchan.reliable[at] = format!("w \"{reason}\"");
+        c.link.netchan.reliable[at] =
+            vcod_common::net::codec::client_read_string(&format!("w \"{reason}\"")).into_owned();
         c.reliable_kind[at] = CmdKind::Reliable;
         if !c.is_bot {
             c.zombie = true;

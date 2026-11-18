@@ -430,6 +430,80 @@ fn a_client_that_never_sends_begin_enters_the_world_on_its_first_usercmd() {
     );
 }
 
+/// Steps until the client is in the world and holding snapshots.
+fn enter(
+    sv: &mut Server,
+    q: &Rc<RefCell<Queues>>,
+    cl: &mut NetClient<ClientEnd>,
+    now: &mut Instant,
+) {
+    for _ in 0..8 {
+        *now += Duration::from_millis(50);
+        cl.send_frame(&NULL_USERCMD);
+        step(sv, q, cl, *now);
+    }
+    assert!(cl.snapshots().newest().is_some());
+}
+
+/// Whether the client parsed a valid frame out of the last message it took.
+fn last_frame_valid(cl: &NetClient<ClientEnd>) -> bool {
+    cl.snapshots().get(cl.incoming_sequence()).is_some()
+}
+
+/// A client reads a server command's `%` as `.` (protocol-1.1.md,
+/// divergence 14) and keys its moves on that copy, so the server's ring
+/// keys on the same: the yaw a move carries after the ack lands.
+#[test]
+fn a_move_after_a_percent_server_command_decodes() {
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut sv = server();
+    let mut now = Instant::now();
+    let mut cl = connect(&mut sv, &q, &mut now);
+    enter(&mut sv, &q, &mut cl, &mut now);
+    sv.push_console("say a%b");
+    let mut cmd = NULL_USERCMD;
+    let mut acked_at = None;
+    for i in 0..12 {
+        now += Duration::from_millis(50);
+        if acked_at.is_some_and(|at| i > at + 1) {
+            cmd.angles[1] = 0x4000; // 90 degrees
+        }
+        cl.send_frame(&cmd);
+        let events = step(&mut sv, &q, &mut cl, now);
+        if events
+            .iter()
+            .any(|e| matches!(e, NetEvent::Chat { text, .. } if text.ends_with("a.b")))
+        {
+            acked_at = Some(i);
+        }
+    }
+    assert!(acked_at.is_some_and(|at| at < 6), "the say never came");
+    let s = cl.snapshots().newest().expect("a frame");
+    assert!(last_frame_valid(&cl));
+    assert!((s.ps.viewangles(&PROTOCOL_V1)[1] - 90.0).abs() < 0.1);
+}
+
+/// A reliable command keeps the byte the wire carried: a 0x92 inside a
+/// UTF-8 char goes out as `.`, which is what the server keys its messages
+/// on, so the client decodes them on `.` too.
+#[test]
+fn messages_after_a_command_with_byte_0x92_decode() {
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut sv = server();
+    let mut now = Instant::now();
+    let mut cl = connect(&mut sv, &q, &mut now);
+    enter(&mut sv, &q, &mut cl, &mut now);
+    // U+0412 is D0 92 in UTF-8.
+    cl.send_reliable("say \u{412}");
+    for _ in 0..6 {
+        now += Duration::from_millis(50);
+        cl.send_frame(&NULL_USERCMD);
+        let events = step(&mut sv, &q, &mut cl, now);
+        assert!(!events.iter().any(|e| matches!(e, NetEvent::Dropped(_))));
+        assert!(last_frame_valid(&cl), "message {}", cl.incoming_sequence());
+    }
+}
+
 /// `client-probes/<probe>` on ours, mp_carentan, the install's protocol.
 /// `None` without paks.
 fn probe_server(probe: &str) -> Option<Server> {
