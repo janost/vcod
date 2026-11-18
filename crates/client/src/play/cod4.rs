@@ -6932,7 +6932,10 @@ pub(crate) mod tests {
         let base = Scratch::new("base");
         let home = Scratch::new("home");
         for d in ["main", "zone"] {
+            #[cfg(unix)]
             std::os::unix::fs::symlink(install.root().join(d), base.0.join(d)).unwrap();
+            #[cfg(windows)]
+            std::os::windows::fs::symlink_dir(install.root().join(d), base.0.join(d)).unwrap();
         }
         let game = base.0.join("mods/test");
         std::fs::create_dir_all(&game).unwrap();

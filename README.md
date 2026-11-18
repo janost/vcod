@@ -74,8 +74,10 @@ copied on purpose.
    [nightly release](https://github.com/janost/vcod/releases/tag/nightly)
    (or [build it](#building-from-source)) and put `vcod` and `vcod-server`
    in the game's directory. The Linux build needs glibc 2.35 or newer
-   (Ubuntu 22.04, Fedora 36). Each binary tells the games apart by the
-   install. Elsewhere, point `COD_DIR` or `--game-dir` at it.
+   (Ubuntu 22.04, Fedora 36). The nightly is rebuilt from master once CI
+   passes; `SHA256SUMS` beside the archives holds their checksums. Each
+   binary tells the games apart by the install. Elsewhere, point `COD_DIR`
+   or `--game-dir` at it.
 3. **Play against bots**:
 
    | Game | Server |
