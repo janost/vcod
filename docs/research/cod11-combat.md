@@ -3099,6 +3099,8 @@ playerstate's `viewangles`, which the server echoes a snapshot late at
 times, so a height is good to one table step (1 to 4 units at these ranges)
 plus the 1.5 degree hip cone. VERIFIED, the labels and the numbers;
 INFERRED, the pairing of each hit with a tap.
+`tools/pair_sweep.py <shooter.log> <target.log> <labels.txt>` does the
+pairing and prints each crossing height.
 
 The first hit of each life, the victim idle in `legsAnim` 634 and not yet
 knocked back:

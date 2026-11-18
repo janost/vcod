@@ -1074,7 +1074,8 @@ fn a_player_killed_earlier_in_the_frame_stops_no_later_round() {
 /// hit-location table. The retail melee capture is the numbers: two swings
 /// killed a 100-health player at `head` for 81 and 79, and the kill's
 /// obituary carried parm 135, `0x80 | MOD_MELEE`
-/// (`mp_carentan-tdm-melee-shooter.txt`).
+/// (`mp_carentan-tdm-melee-shooter.txt`; the other probe's trace of the same
+/// run is `mp_carentan-tdm-melee-target.txt`).
 #[test]
 fn a_melee_swing_hits_and_the_kill_shows_the_melee_icon() {
     use vcod_common::net::msg::{BUTTON_MELEE, NULL_USERCMD, UserCmd};
@@ -2056,7 +2057,8 @@ fn a_throw_s_first_frame_matches_retail_s_capture() {
 /// `pos=5,1405500,1216.9,1296.0,32.1,-423.0,-214.0,-99.0` -- the +40 on z, a
 /// delta inside those ranges, and an explode 3950 ms later. The `kill` runs
 /// outside every cmd, so `r.currentOrigin` is the unsnapped `ps.origin`:
-/// 1216.9 and 32.1 where a snap would read 1216 and 33 (5.5).
+/// 1216.9 and 32.1 where a snap would read 1216 and 33 (5.5). The other
+/// probe's side of the run is `mp_carentan-tdm-grenade-death-target.txt`.
 #[test]
 fn a_player_killed_mid_cook_drops_a_live_grenade() {
     use vcod_common::net::msg::{BUTTON_ATTACK, NULL_USERCMD, UserCmd};

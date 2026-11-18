@@ -34,6 +34,8 @@ which resolves the sort (section 5), the polygon offset, the dlight draw
 (section 3) and the sorting stage's images, and keeps the stages as parsed.
 `renderer/material_keys.rs` pins what the renderer derives from every stock
 block and `.stype` template.
+`cargo run -p vcod-common --example dump_shader -- <shader>...` prints the
+parsed stages of named blocks from the install `COD_DIR` names.
 
 ## 2. Census
 
