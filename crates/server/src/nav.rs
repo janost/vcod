@@ -2457,19 +2457,13 @@ impl Follower {
     /// Where a body on the ground with no waypoint this tick comes to rest
     /// while the next plan is searched for: the last waypoint, when it
     /// stands within [`WAIT_REACH`] on the body's floor, for up to
-    /// [`WAIT_TICKS`]. Wandering on at a run, bots left the crow's nest's
-    /// top for its hatch and mp_ship's shelf at (5403, -160, 396) for a
-    /// slope they never came off (bot-navigation.md section 3). Not while
-    /// the follower rests on purpose: a body stuck before its first node
-    /// is left to its own unstick. Round a body in the way, where it
-    /// stands.
+    /// [`WAIT_TICKS`] (bot-navigation.md section 3). Not while the follower
+    /// rests on purpose: a body stuck before its first node is left to its
+    /// own unstick. Round a body in the way, where it stands.
     pub fn rest_point(&self, at: [f32; 3], body: Footing) -> Option<[f32; 3]> {
         // The plan round a body in the way ([`Self::bodies_in_way`]) is
-        // waited for where the body stands: on mp_ship's spar at (4676,
-        // 64, 1172), 69 from its last waypoint, a bot met head-on ran a
-        // random heading for the 7 ticks the search took and fell off it
-        // to its death (seed 1381, bot-navigation.md, "The ship's
-        // leftovers").
+        // waited for where the body stands (bot-navigation.md, "The ship's
+        // leftovers", seed 1381).
         if self.rest == 0
             && !self.shun.is_empty()
             && self.path.is_empty()
@@ -2541,18 +2535,11 @@ impl Follower {
             }
             Goal::To(p) => {
                 // A destination within reach of the point but a floor off the
-                // node a plan to it ends at is no longer the point's: a hurt
-                // bot whose fight had planned to mp_ship's hold floor kept
-                // that node for the health item on the ledge 116 over it
-                // and paced under it while the item lay (bot-navigation.md,
-                // "The ship's leftovers").
-                // A point farther off the graph than `RETARGET`, a noise
-                // in the air over a floor 220 under it, moves only with the
-                // node it maps to: read off the point itself it moved every
-                // tick, each tick parked the plan and took up the last one,
-                // and a bot at mp_cassino's roof jump at (4870, -1313, 256)
-                // turned between its foot and its top for 12 s (seed 43,
-                // bot-navigation.md "The ship's leftovers").
+                // node a plan to it ends at is no longer the point's
+                // (bot-navigation.md, "The ship's leftovers"). A point
+                // farther off the graph than `RETARGET` moves only with the
+                // node it maps to (bot-navigation.md, "A goal far off the
+                // graph, the ladders again, 2026-11-14").
                 let target = g.goal_node(p).map(|t| g.nodes[t as usize]);
                 let off = |d: u32| {
                     let n = g.nodes[d as usize];
@@ -2836,18 +2823,9 @@ impl Follower {
                 // The walk on was proved from the node, and fails from here:
                 // close in on the node first, and from on it, round the edge.
                 // A drop more than a step down whose walk on from rest on
-                // the node arrives is taken from rest there, as a fling is
-                // (not a run off a rim that needs its running start: bots
-                // stopped at each of mp_depot's pit drops at 212 in turn and
-                // paced the rim, seed 149). Avoided at the pace a bot came
-                // onto mp_ship's crow's nest rim at (4929, 61, 1254), the
-                // spar at 1212 that it walks onto from rest was left, the
-                // roam picked anew down the ladder and met the next bot up
-                // (seed 307). Not a level or rising edge: brought to rest
-                // on the hull rib at (2214, -325, -48), a bot took the next
-                // plan's jump edge from rest, where the graph proved it with
-                // a running start, and slid into the crease beside it (seed
-                // 603, bot-navigation.md section 3).
+                // the node arrives is taken from rest there, as a fling is;
+                // any other edge, a level or rising one included, is avoided
+                // and planned round (bot-navigation.md section 3).
                 let edge = (self.path[self.next], self.path[self.next + 1]);
                 if (flat(w) < ON_NODE || held) && here.z < w.z + ARRIVE {
                     let drop = g.nodes[edge.1 as usize].z < w.z - vcod_common::pmove::STEPSIZE;
@@ -2952,17 +2930,10 @@ impl Follower {
         }
         // Down a drop onto a floor partway, the waypoint more than a jump
         // under the feet and within reach flat, the edge's top more than a
-        // jump over them: a run off mp_ship's slot at (5403, -160, 396)
-        // for the floor at 204 landed on the ledge at 336 over its
-        // waypoint, turned on the spot until an unstick spell took it off
-        // (bot-navigation.md section 3). Plan again from where it landed,
-        // the edge not avoided here: round it, the plan went back up to the
-        // shelf and on by a jump edge the bot bounced under (a landing off
-        // the fall itself plans round it, above). Within a jump
-        // of the top the body may still stand on the drop's own slope: one
-        // backing off mp_ship's dome at (3648, -317, 618) stood on its 45
-        // degree face 23 under the node, planned again from there and
-        // walked off the dome's south side into the hold (seed 2245).
+        // jump over them: plan again from where it landed, the edge not
+        // avoided here (a landing off the fall itself plans round it,
+        // above). Within a jump of the top the body may still stand on the
+        // drop's own slope (bot-navigation.md section 3, seed 2245).
         if body.on_ground
             && !body.on_ladder
             && self.next > 0
@@ -2977,14 +2948,9 @@ impl Follower {
         }
         // Run off a drop and brought to a stop short of the lip on the
         // edge's top, where the run on from rest no longer lands: plan
-        // round the edge. A bot that ran along the wall at y -400 on
-        // mp_ship's hold floor at 56 for the drop to (3264, -378, -64)
-        // bumped a bot dropping ahead of it, then pressed at its waypoint
-        // behind the wall until an unstick spell ran it off the floor's
-        // south side (seed 2195, bot-navigation.md section 3). Once: a
-        // plan with no way round takes the edge again from rest, and on
-        // mp_depot's roof at 212 a run off from rest misses every drop, so
-        // the bot planned round and back for good.
+        // round the edge, once per edge, or a plan with no way round takes
+        // it again from rest (bot-navigation.md section 3, the hold floor's
+        // drop).
         if let Some(world) = world
             && body.on_ground
             && !body.on_ladder
@@ -3238,13 +3204,9 @@ impl Follower {
     /// steeper than a jump is taken as proved (a ladder, a back down), and
     /// so is a walk from the rungs under the node's floor (`on_rungs`, a
     /// body on a ladder under its head) or without a world. From over it,
-    /// or from up a slope under it, the walk has to arrive:
-    /// mp_ship's lip at (5424, -187, 344) stands 24 over a stair node,
-    /// within reach of it flat, and the walk on from there pins under a
-    /// shelf. Off a jump edge the walk has to arrive
-    /// without one: the bot jumps only on the graph's jump edges, and a
-    /// body a few units aside of a hull beam's end pins on it where the
-    /// walk from the node slides past (bot-navigation.md section 3).
+    /// or from up a slope under it, the walk has to arrive. Off a jump edge
+    /// the walk has to arrive without one: the bot jumps only on the
+    /// graph's jump edges (bot-navigation.md section 3).
     fn edge_holds(
         &mut self,
         world: Option<&CollisionWorld>,
@@ -3510,10 +3472,9 @@ impl Follower {
     /// Where to wait instead of following the path: the bot is at one end
     /// of the ladder its path takes next, off the rungs, and another player
     /// on those rungs is about to step off there or hangs there. Two players
-    /// meeting head-on at a ladder pin each other: the climber cannot step
-    /// off where the other stands (mp_ship's ladder at (3354, -380),
-    /// bot-navigation.md section 3). The bot steps to the neighbour of its
-    /// end farthest from the ladder until the rungs clear, at most
+    /// meeting head-on at a ladder pin each other (bot-navigation.md
+    /// section 3, "the head-on ladder"). The bot steps to the neighbour of
+    /// its end farthest from the ladder until the rungs clear, at most
     /// [`YIELD_TICKS`] ([`YIELD_HUNG`] of them with the climber still).
     /// `climbers` are the other players on a ladder, as (origin, velocity);
     /// `off_rungs` the others off one, as the same.
