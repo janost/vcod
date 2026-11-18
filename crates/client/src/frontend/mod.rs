@@ -662,6 +662,8 @@ impl Ui {
         self.cursor_item.clear();
         self.focus.clear();
         self.options.clear();
+        self.thumb_drag = None;
+        self.arrow_hold = None;
         if let Some(name) = focused {
             self.open_menu(&name, shell, out);
         }
@@ -709,6 +711,8 @@ impl Ui {
         self.hidden.retain(|&(m, _)| m < base);
         self.focus_menu = self.focus_menu.filter(|&m| m < base);
         self.hover = self.hover.filter(|&(m, _)| m < base);
+        self.thumb_drag = self.thumb_drag.filter(|&(m, _)| m < base);
+        self.arrow_hold = self.arrow_hold.filter(|&((m, _), ..)| m < base);
         self.over.retain(|&(m, _)| m < base);
         self.cursor_item.retain(|&m, _| m < base);
         self.focus.retain(|&m, _| m < base);
@@ -1412,8 +1416,10 @@ impl Ui {
         let mut out = Vec::new();
         self.options.new_input();
         self.drag_to(shell, &mut out);
-        if let Some((m, i)) = self.thumb_drag {
-            let item = &self.menus[m].items[i];
+        if let Some(item) = self
+            .thumb_drag
+            .and_then(|(m, i)| self.menus.get(m)?.items.get(i))
+        {
             if let Some((len, _)) = self.list_scroll(item) {
                 let top = listbox::drag(item, len, self.cursor[1]);
                 let feeder = item.feeder;
@@ -5208,6 +5214,23 @@ mod tests {
         let mut out = Vec::new();
         assert!(ui.open_script_popup("team_x", false, &shell, &mut out));
         assert!(out.is_empty());
+    }
+
+    /// A scroll thumb held on a script menu lets go when the script menus
+    /// are reloaded: a mouse move after it indexes nothing gone (BUG-081).
+    #[test]
+    fn a_held_thumb_lets_go_when_the_script_menus_reload() {
+        let Some(fs) = vcod_common::testing::stock_fs_11() else {
+            return;
+        };
+        let mut ui = Ui::new(&fs, "0");
+        let names = ["team_americangerman".into(), "weapon_american".into()];
+        assert!(ui.load_script_menus(&fs, &names, "0").is_empty());
+        let m = ui.find("weapon_american").unwrap();
+        ui.thumb_drag = Some((m, 0));
+        assert!(ui.load_script_menus(&fs, &[], "0").is_empty());
+        assert_eq!(ui.thumb_drag, None);
+        ui.mouse_move(10.0, 10.0, 640.0, 480.0, &Shell::new());
     }
 
     #[test]
