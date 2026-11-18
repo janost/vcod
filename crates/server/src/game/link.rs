@@ -722,37 +722,38 @@ pub fn has_link_bit(host: &GameHost, id: EntId, classname: &str) -> bool {
         )
 }
 
-/// `G_RunFrame`'s entity loop, the link half: every linked entity re-anchored
-/// off its parent, ascending by entity number, each one's parent run first
-/// (0x50939..0x50955). A parent's parent is not, so a chain whose parents
-/// sit above their children in number lags a frame per level. Runs after
-/// the threads, like retail's pass; the result is what script reads on the
-/// next frame and what this frame's snapshot carries.
+/// Whether `id`'s parent has had its turn in the entity pass under way,
+/// `ran` holding every entity that has: the `fresh` of [`run_linked`]. The
+/// pass runs a child's parent first but not the parent's parent, so a chain
+/// whose parents number above their children lags a frame per level
+/// (0x50939..0x50955; movers doc 15).
+pub fn fresh(host: &GameHost, ran: &HashSet<EntId>, id: EntId) -> bool {
+    host.links.get(id).is_some_and(|l| ran.contains(&l.parent))
+}
+
+/// The entity pass's link arm alone, for tests with no `ScriptRuntime`:
+/// the same walk as `ScriptRuntime::run_entities` (ascending by number,
+/// each child's parent first), each turn through [`run_linked`] and
+/// [`fresh`].
+#[cfg(test)]
 pub fn run(host: &mut GameHost, cx: &mut Cx) {
     prune(host);
-    let level_ms = host.level_time_ms;
-    let links = std::mem::take(&mut host.links);
-    let children: Vec<EntId> = links.rows.keys().copied().collect();
-    // Every entity the loop has run this frame, below `child.0` or not.
     let mut ran: HashSet<EntId> = HashSet::new();
-    for child in children {
-        let Some(parent) = links.rows.get(&child).map(|l| l.parent) else {
+    for n in 0..host.ents.num_entities() {
+        let Some(id) = host.ents.handle(n) else {
             continue;
         };
-        // The parent first. Its own parent is current only if the loop
-        // has already passed it.
-        let current = |g: EntId, ran: &HashSet<EntId>| g.0 < child.0 || ran.contains(&g);
-        if links.contains(parent) && !ran.contains(&parent) {
-            let grand = links.rows[&parent].parent;
-            let fresh = current(grand, &ran);
-            run_one(host, cx, &links, parent, fresh, level_ms);
+        if let Some(parent) = host.links.get(id).map(|l| l.parent)
+            && ran.insert(parent)
+        {
+            let f = fresh(host, &ran, parent);
+            run_linked(host, cx, parent, f);
         }
-        ran.insert(parent);
-        if ran.insert(child) {
-            run_one(host, cx, &links, child, true, level_ms);
+        if ran.insert(id) {
+            let f = fresh(host, &ran, id);
+            run_linked(host, cx, id, f);
         }
     }
-    host.links = links;
 }
 
 /// Drops the rows of freed children, and unlinks where they stand the

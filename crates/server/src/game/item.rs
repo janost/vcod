@@ -298,11 +298,13 @@ fn stationary(at: Vec3) -> Trajectory {
     }
 }
 
-/// The `G_RunEntity` pass over every item (0x502bc): the hide mirrored into
+/// For tests with no entity pass: [`run_item`] over every item, as the
+/// `G_RunEntity` pass runs it (0x502bc): the hide mirrored into
 /// `eFlags`, `G_RunItem`'s flight, then the respawn think. Runs after the
 /// frame's script threads, as retail's entity loop does: a thread that reads
 /// a flying item's `origin` reads the last frame's, and an item a thread
 /// spawns starts falling on the frame it was spawned in (section 14).
+#[cfg(test)]
 pub fn run_items(host: &mut GameHost, cx: &mut Cx, now_ms: i32) {
     let ids: Vec<EntId> = host
         .ents
