@@ -139,7 +139,7 @@ the shot's start (`PM_Weapon_StartFiring`, inlined at 0x80640af).
   under round-down, truncating `fistp` (0x80645c8..0x80645ed,
   0x80636f0..0x806372b). VERIFIED (the disassembly). A multiplier of 0
   steps by the larger timer (0x806394f). INFERRED (the branch). vcod:
-  `pmove::weapon::time_adjust`, `perk_msec`.
+  `pmove::weapon::run_clocks`, `clock_step`, `perk_msec`.
 - A timer stepped to 0 or below is set to 0 (`weaponTime` 0x8064592,
   `weaponDelay` 0x80645b5): the overshoot is dropped, never carried.
   INFERRED (the branches into both stores).
