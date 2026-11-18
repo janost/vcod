@@ -10,13 +10,71 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// A read that waits longer than this fails the transfer.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// Location hops followed before giving up.
 const MAX_REDIRECTS: usize = 5;
+/// The most a response's status line and headers may take, and how long.
+const MAX_HEAD: u64 = 64 * 1024;
+const HEAD_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A socket whose reads fail once `cancel` is set or, while reading the
+/// head, once `deadline` passes: a host dripping bytes no longer holds the
+/// thread past the read timeout's reach.
+pub struct Guarded<'a> {
+    pub sock: TcpStream,
+    pub deadline: Option<Instant>,
+    pub cancel: &'a AtomicBool,
+}
+
+impl Read for Guarded<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.cancel.load(Ordering::Relaxed) {
+            return Err(std::io::Error::other("cancelled"));
+        }
+        if self.deadline.is_some_and(|d| Instant::now() > d) {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        self.sock.read(buf)
+    }
+}
+
+impl<'a> Guarded<'a> {
+    /// `sock` with the head's deadline from now.
+    pub fn head(sock: TcpStream, cancel: &'a AtomicBool) -> Self {
+        Guarded {
+            sock,
+            deadline: Some(Instant::now() + HEAD_TIMEOUT),
+            cancel,
+        }
+    }
+}
+
+/// The status line and the header lines up to the blank one, line ends
+/// trimmed; at most [`MAX_HEAD`] bytes of them.
+pub fn read_head(r: &mut impl BufRead) -> anyhow::Result<Vec<String>> {
+    let mut left = MAX_HEAD;
+    let mut lines = Vec::new();
+    loop {
+        let mut line = String::new();
+        let n = Read::take(&mut *r, left).read_line(&mut line)?;
+        left -= n as u64;
+        if !line.ends_with('\n') {
+            if left == 0 {
+                bail!("HTTP head over {MAX_HEAD} bytes");
+            }
+            bail!("connection closed inside the HTTP head");
+        }
+        let l = line.trim_end();
+        if l.is_empty() && !lines.is_empty() {
+            return Ok(lines);
+        }
+        lines.push(l.to_string());
+    }
+}
 
 /// `http://host[:port]/path` split into its parts.
 #[derive(Debug, PartialEq, Eq)]
@@ -143,25 +201,17 @@ fn get(
             url.path
         );
         sock.write_all(req.as_bytes())?;
-        let mut r = BufReader::new(sock);
-        let mut line = String::new();
-        r.read_line(&mut line)?;
-        let status: u16 = line
+        let mut r = BufReader::new(Guarded::head(sock, cancel));
+        let head = read_head(&mut r)?;
+        r.get_mut().deadline = None;
+        let status: u16 = head[0]
             .split_whitespace()
             .nth(1)
             .and_then(|s| s.parse().ok())
-            .with_context(|| format!("bad HTTP status line {:?}", line.trim_end()))?;
+            .with_context(|| format!("bad HTTP status line {:?}", head[0]))?;
         let mut length = None;
         let mut location = None;
-        loop {
-            line.clear();
-            if r.read_line(&mut line)? == 0 {
-                bail!("connection closed inside the HTTP headers");
-            }
-            let h = line.trim_end();
-            if h.is_empty() {
-                break;
-            }
+        for h in &head[1..] {
             if let Some((k, v)) = h.split_once(':') {
                 let v = v.trim();
                 if k.eq_ignore_ascii_case("content-length") {
@@ -261,7 +311,7 @@ mod tests {
                 }
                 seen.push(req);
                 let mut s = s;
-                s.write_all(&resp).unwrap();
+                let _ = s.write_all(&resp);
             }
             seen
         });
@@ -313,5 +363,24 @@ mod tests {
         let (port, _h) = serve(vec![b"HTTP/1.0 200 OK\r\n\r\nabcdef".to_vec()]);
         let (res, _) = run(&format!("http://127.0.0.1:{port}/x"), 4);
         assert!(res.is_err());
+    }
+
+    /// A head that never ends its line, or never ends at all, fails once it
+    /// passes 64 KiB instead of growing with what the host sends.
+    #[test]
+    fn an_endless_head_fails_bounded() {
+        let endless_line = [b"HTTP/1.0 200 OK\r\nX: ".as_slice(), &[b'a'; 1 << 20]].concat();
+        let endless_head = [
+            b"HTTP/1.0 200 OK\r\n".as_slice(),
+            &b"X: a\r\n".repeat(1 << 17),
+        ]
+        .concat();
+        for resp in [vec![b'a'; 1 << 20], endless_line, endless_head] {
+            let (port, _h) = serve(vec![resp]);
+            let (res, body) = run(&format!("http://127.0.0.1:{port}/x"), 100);
+            let e = res.unwrap_err().to_string();
+            assert!(e.contains("over 65536"), "{e}");
+            assert!(body.is_empty());
+        }
     }
 }
