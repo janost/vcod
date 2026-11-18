@@ -559,8 +559,10 @@ impl Cod2Session {
         cancel: Option<&AtomicBool>,
     ) -> anyhow::Result<Self> {
         let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
+        let to = vcod_common::net::master::parse_address(addr)
+            .with_context(|| format!("cannot resolve {addr}"))?;
         let sock = UdpSocket::bind("0.0.0.0:0")?;
-        sock.connect(addr)
+        sock.connect(to)
             .with_context(|| format!("cannot reach {addr}"))?;
         sock.set_read_timeout(Some(Duration::from_millis(5)))?;
         let key = KeyAuth {

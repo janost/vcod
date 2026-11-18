@@ -42,7 +42,7 @@ load a third-party map and refuses `--set fs_game`.
 | Command | Does |
 |---|---|
 | `vcod` | Main menu and server browser, in the install's game. |
-| `vcod --connect <ip:port>` | Join through the server's menus. |
+| `vcod --connect <host[:port]>` | Join through the server's menus. The port is 28960 when left out. |
 | `vcod <map>` | Fly around a map offline. Map names are case-insensitive. |
 | `vcod --list` | CoD1: every `.bsp` in the search path. |
 
@@ -297,7 +297,7 @@ commands.
 
 | Command | Does |
 |---|---|
-| `connect <ip:port>`, `disconnect`, `reconnect`, `quit` | What they say |
+| `connect <host[:port]>` (port 28960 when left out), `disconnect`, `reconnect`, `quit` | What they say |
 | `say`, `say_team` | Chat |
 | `cmd <text>` | Send a raw client command |
 | `rcon <command>` | CoD1, UO: run a server command with `rconPassword`, on the connected server, else on `rconAddress` (`ip[:port]`, port 28960 by default). The reply prints in the console |

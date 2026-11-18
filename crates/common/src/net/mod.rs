@@ -90,9 +90,13 @@ pub struct UdpTransport {
 }
 
 impl UdpTransport {
+    /// `addr` is `host[:port]`, the port 28960 when left out, as the
+    /// browser's and `rcon`'s ([`master::parse_address`]).
     pub fn connect(addr: &str) -> anyhow::Result<Self> {
+        let to =
+            master::parse_address(addr).ok_or_else(|| anyhow::anyhow!("cannot resolve {addr}"))?;
         let sock = UdpSocket::bind("0.0.0.0:0")?;
-        sock.connect(addr)?;
+        sock.connect(to)?;
         Self::from_socket(sock)
     }
 
@@ -3045,6 +3049,16 @@ mod tests {
             }
         }
         panic!("never dropped");
+    }
+
+    /// `connect 127.0.0.1` goes to the default port instead of failing as
+    /// an invalid socket address.
+    #[test]
+    fn connect_without_a_port_uses_28960() {
+        let t = UdpTransport::connect("127.0.0.1").unwrap();
+        let peer = t.sock.as_ref().unwrap().peer_addr().unwrap();
+        assert_eq!(peer.to_string(), "127.0.0.1:28960");
+        assert!(UdpTransport::connect("127.0.0.1:x").is_err());
     }
 
     /// Over real UDP on loopback, a server that checks no key answers the
