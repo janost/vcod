@@ -216,9 +216,15 @@ fn stdin_console(tty: bool) -> vcod_server::stdin_console::StdinConsole {
 fn cod1_server(args: Args, sets_after_map: &[bool]) -> Result<(Server, Net)> {
     if args.test_entities > vcod_server::world::MAX_TEST_ENTITIES {
         bail!(
-            "--test-entities {} exceeds {}, the most that fits below ENTITYNUM_WORLD",
+            "--test-entities {} exceeds {}, the most that fits below the map's entities",
             args.test_entities,
             vcod_server::world::MAX_TEST_ENTITIES
+        );
+    }
+    let first_test = vcod_server::world::FIRST_TEST_ENT as usize;
+    if args.test_entities > 0 && args.max_clients > first_test {
+        bail!(
+            "--test-entities needs --max-clients {first_test} or fewer: its entities start at {first_test}"
         );
     }
     if args.bots > args.max_clients {
