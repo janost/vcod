@@ -152,8 +152,9 @@ pub struct Cod2Hud {
     /// Sound alias subtitles (`CL_SubtitlePrint`, cod2-sound.md 7.11).
     pub subtitles: Window,
     pub center: CenterPrint,
-    /// `killIcon`, `wideKillIcon` and `flipKillIcon` by weapon index.
-    kill_icons: std::collections::HashMap<i32, Option<(String, bool, bool)>>,
+    /// `killIcon`, `wideKillIcon` and `flipKillIcon` by weapon name: an
+    /// index means another weapon once configstring 7 changes.
+    kill_icons: std::collections::HashMap<String, Option<(String, bool, bool)>>,
     /// Configstrings 15..18 as `CG_ConfigStringModified` keeps them.
     pub vote: crate::hud::vote::Vote,
     /// `cg_objectiveText`, which `CG_SetClientDvarFromServer` keeps for the
@@ -371,6 +372,28 @@ pub struct Obit {
 /// the attacker has none, as retail returns. `kill_icon` gives a weapon
 /// index's `killIcon`, `wideKillIcon` and `flipKillIcon`; `team_rgb` a
 /// team's colour (`CG_DrawScoreboard_GetTeamColor`).
+/// Weapon `index`'s kill icon, wide and flip flags off configstring 7,
+/// each weapon file read once.
+fn kill_icon(
+    icons: &mut std::collections::HashMap<String, Option<(String, bool, bool)>>,
+    cs: &vcod_cod2::net::ConfigStrings,
+    index: i32,
+    fs: &dyn AssetSource,
+) -> Option<(String, bool, bool)> {
+    let name = cs.weapon_name(index)?;
+    icons
+        .entry(name.to_ascii_lowercase())
+        .or_insert_with(|| {
+            let def = vcod_cod2::weapon::load(fs, name).ok()?.def;
+            Some((
+                def.str("killIcon").to_string(),
+                def.int("wideKillIcon") != 0,
+                def.int("flipKillIcon") != 0,
+            ))
+        })
+        .clone()
+}
+
 pub fn obituary(
     victim: i32,
     attacker: i32,
@@ -519,20 +542,7 @@ impl Cod2Hud {
             ev.parm,
             own,
             &frame.snap.clients,
-            |weapon| {
-                icons
-                    .entry(weapon)
-                    .or_insert_with(|| {
-                        let name = frame.configstrings.weapon_name(weapon)?;
-                        let def = vcod_cod2::weapon::load(fs, name).ok()?.def;
-                        Some((
-                            def.str("killIcon").to_string(),
-                            def.int("wideKillIcon") != 0,
-                            def.int("flipKillIcon") != 0,
-                        ))
-                    })
-                    .clone()
-            },
+            |weapon| kill_icon(icons, &frame.configstrings, weapon, fs),
             |team| team_rgb(cs, team),
         )
     }
@@ -873,6 +883,30 @@ mod tests {
 
     /// A weapon's `flipKillIcon` mirrors its icon; a means of death's icon
     /// never flips. Names take the mirror's team colours.
+    /// Configstring 7 is per level: after a map change an index names the
+    /// new list's weapon, and so does its kill icon.
+    #[test]
+    fn a_kill_icon_follows_the_weapon_list() {
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let cs = |list: &str| {
+            vcod_cod2::net::ConfigStrings::from_gamestate(&vcod_cod2::net::Gamestate2 {
+                server_command_sequence: 0,
+                configstrings: [(7, list.to_string())].into(),
+                baselines: Default::default(),
+                client_num: 0,
+                checksum_feed: 0,
+            })
+        };
+        let mut icons = Default::default();
+        let first = kill_icon(&mut icons, &cs("kar98k_mp mp44_mp"), 1, &fs).unwrap();
+        let second = kill_icon(&mut icons, &cs("mp44_mp kar98k_mp"), 1, &fs).unwrap();
+        let mp44 = kill_icon(&mut icons, &cs("kar98k_mp mp44_mp"), 2, &fs).unwrap();
+        assert_ne!(first.0, second.0);
+        assert_eq!(second, mp44);
+    }
+
     #[test]
     fn an_obituary_flips_the_weapon_icon() {
         let clients = [client(0, "a", 1), client(1, "b", 2)];
