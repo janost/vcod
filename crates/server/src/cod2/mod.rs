@@ -53,13 +53,13 @@ use vcod_cod2::net::fields::{CLIENT_STATE_FIELDS, PLAYER_STATE_FIELDS};
 use vcod_cod2::net::ops::{CLC_BITS, Clc, ENTITYNUM_NONE, MAX_RELIABLE_COMMANDS, Svc};
 use vcod_cod2::net::usercmd::{MAX_PACKET_USERCMDS, default_usercmd, read_delta_usercmd};
 use vcod_cod2::net::write::{Frame2, latin1_bytes, write_server_command};
-use vcod_cod2::net::{Gamestate2, latin1};
+use vcod_cod2::net::{Gamestate2, UserCmd2, latin1};
 use vcod_cod2::pmove::{PlayerState, pm_type};
 use vcod_common::mapworld::MapWorld;
 use vcod_common::net::codec::{MsgReader, MsgWriter};
 use vcod_common::net::com_hash_key_bytes;
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::netchan::{NetchanParams, ServerNetchan};
+use vcod_common::net::netchan::{ClientMessage, NetchanParams, ServerNetchan};
 use vcod_common::net::protocol::{SnapshotHead, WireGame};
 use vcod_common::pk3::Pk3Fs;
 
@@ -692,6 +692,16 @@ impl Cod2Server {
             conn::Incoming::Dropped => return,
         };
         let svs = self.core.sv_time_ms;
+        let ops = self.core.huff.decompress_block(&m.ops);
+        let id = i32::from(m.server_id);
+        let c = self.core.clients[slot].as_ref().unwrap();
+        // A downloading client's messages are read whatever their serverId
+        // (`SV_ExecuteClientMessage` 0x809114e).
+        let stale = id != self.game.server_id && c.extra.download.name.is_empty();
+        if c.state != State::Zombie && !stale && !self.reads_to_end(slot, &m, &ops) {
+            log::debug!("cod2: client {slot}: message from {from} does not read");
+            return;
+        }
         let c = self.core.clients[slot].as_mut().unwrap();
         conn::commit(c, from, &m);
         // A zombie's packets go through the netchan and nothing else: its
@@ -702,11 +712,7 @@ impl Cod2Server {
         }
         c.extra.last_heard = now;
         c.link.last_packet_ms = svs;
-        let ops = self.core.huff.decompress_block(&m.ops);
-        let id = i32::from(m.server_id);
-        // A downloading client's messages are read whatever their serverId
-        // (`SV_ExecuteClientMessage` 0x809114e).
-        if id != self.game.server_id && c.extra.download.name.is_empty() {
+        if stale {
             // `SV_ExecuteClientMessage` (0x809114e): an id of this spawn
             // from before a `fast_restart` only lets a primed client in;
             // any other stale id gets the gamestate again once the client
@@ -756,6 +762,65 @@ impl Cod2Server {
                 }
             }
         }
+    }
+
+    /// Whether a message of the running level reads to its end: its
+    /// commands, then `clc_EOF`, or a move whose cmds all read. Retail
+    /// runs each op as it reads it; vcod reads the whole block before the
+    /// netchan takes the message, as CoD1's server does, so a forged or
+    /// garbled one runs nothing. A move's cmds read the same off any base
+    /// (the key alone steers the bits), so the commands ahead of it, which
+    /// may move the playerstate, need not run first.
+    fn reads_to_end(&self, slot: usize, m: &ClientMessage, ops: &[u8]) -> bool {
+        let mut r = MsgReader::from_plain(ops.to_vec());
+        loop {
+            let op = r.read_bits(CLC_BITS);
+            if r.is_overflowed() {
+                return false;
+            }
+            match op {
+                x if x == Clc::ClientCommand as i32 => {
+                    r.read_long();
+                    r.read_string_bytes();
+                }
+                x if x == Clc::Eof as i32 => return true,
+                x if x == Clc::Move as i32 || x == Clc::MoveNoDelta as i32 => {
+                    let count = usize::from(r.read_byte());
+                    if count == 0 || count > MAX_PACKET_USERCMDS {
+                        return false;
+                    }
+                    let key = self.move_key(slot, m.message_ack, m.reliable_ack);
+                    let mut from = self.move_base(slot);
+                    for _ in 0..count {
+                        from = read_delta_usercmd(&mut r, key, &from);
+                    }
+                    return !r.is_overflowed();
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// The key a move's cmds are read with: the feed, the message it
+    /// acknowledges and the server command it last saw.
+    fn move_key(&self, slot: usize, message_ack: i32, reliable_ack: i32) -> u32 {
+        let c = self.core.clients[slot].as_ref().unwrap();
+        let key_cmd = latin1_bytes(
+            &c.link.netchan.reliable[reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)],
+        );
+        (self.core.checksum_feed ^ message_ack ^ com_hash_key_bytes(&key_cmd, 32)) as u32
+    }
+
+    /// The cmd a move's first one is a delta from, off the playerstate.
+    fn move_base(&self, slot: usize) -> UserCmd2 {
+        let c = self.core.clients[slot].as_ref().unwrap();
+        let base = match self.game.level.as_ref() {
+            Some(level) => level
+                .wire_playerstate(slot, 0)
+                .unwrap_or_else(|| spectator_wire(&c.extra.ps, slot)),
+            None => spectator_wire(&c.extra.ps, slot),
+        };
+        default_usercmd(&base)
     }
 
     /// One `clc_clientCommand`. False when the client was dropped.
@@ -857,10 +922,13 @@ impl Cod2Server {
                 }
                 c.extra.download.close();
             }
+            // One gamestate a message turn, however many `donedl`s ask.
+            "donedl" if conn::gamestate_last(c) => {}
             "donedl" => self.send_gamestate(slot),
             "retransdl" => c.extra.download.retransmit(atoi(arg(1))),
             "wwwdl" => match c.extra.download.wwwdl(arg(1)) {
                 house::Www::None => {}
+                house::Www::Gamestate if conn::gamestate_last(c) => {}
                 house::Www::Gamestate => self.send_gamestate(slot),
                 house::Www::Drop(why) => self.drop_client(slot, why),
             },
@@ -977,17 +1045,9 @@ impl Cod2Server {
         if count == 0 || count > MAX_PACKET_USERCMDS {
             return;
         }
-        let key_cmd = latin1_bytes(
-            &c.link.netchan.reliable[c.link.reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)],
-        );
-        let key = (self.core.checksum_feed ^ message_ack ^ com_hash_key_bytes(&key_cmd, 32)) as u32;
-        let base = match self.game.level.as_ref() {
-            Some(level) => level
-                .wire_playerstate(slot, 0)
-                .unwrap_or_else(|| spectator_wire(&c.extra.ps, slot)),
-            None => spectator_wire(&c.extra.ps, slot),
-        };
-        let mut from = default_usercmd(&base);
+        let reliable_ack = c.link.reliable_ack;
+        let key = self.move_key(slot, message_ack, reliable_ack);
+        let mut from = self.move_base(slot);
         let mut cmds = Vec::with_capacity(count);
         for _ in 0..count {
             let cmd = read_delta_usercmd(r, key, &from);

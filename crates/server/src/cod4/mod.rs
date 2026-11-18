@@ -867,6 +867,33 @@ impl Cod4Server {
             return;
         };
         let svs = self.core.sv_time_ms;
+        let stale = i32::from(m.server_id) != self.game.server_id & 0xff;
+        let c = self.core.clients[slot].as_ref().unwrap();
+        // A message of the running level reads to its `clc_EOF` before the
+        // netchan takes it (`engine::conn::incoming`): a forged or garbled
+        // one runs nothing and moves neither the sequence nor the address.
+        let ops = if c.state > State::Connected && !stale {
+            let key = clmsg::usercmd_key(
+                self.core.checksum_feed,
+                m.message_ack,
+                c.link.netchan.reliable[m.reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)]
+                    .as_bytes(),
+            );
+            let plain = self.game.huff.decompress(&m.ops);
+            match clmsg::read_ops(plain, key, &UserCmd::default()) {
+                Ok(ops) if matches!(ops.last(), Some(ClOp::Eof)) => ops,
+                Ok(_) => {
+                    log::debug!("cod4: client {slot}: message short of clc_EOF");
+                    return;
+                }
+                Err(e) => {
+                    log::debug!("cod4: client {slot}: {e:#}");
+                    return;
+                }
+            }
+        } else {
+            Vec::new()
+        };
         let c = self.core.clients[slot].as_mut().unwrap();
         conn::commit(c, from, &m);
         if c.state == State::Zombie {
@@ -883,7 +910,6 @@ impl Cod4Server {
             }
             return;
         }
-        let stale = i32::from(m.server_id) != self.game.server_id & 0xff;
         if stale && i32::from(m.server_id) & 0xf0 == self.game.server_id & 0xf0 {
             // A message from before a `fast_restart` (0x816c466 kept the
             // high nibble): nothing read, a loading client into the world
@@ -893,12 +919,12 @@ impl Cod4Server {
             }
             return;
         }
-        let plain = self.game.huff.decompress(&m.ops);
         if stale {
             // Another level's message: only its commands, which run as from
             // the old server (its usercmds are keyed to the last feed), then
             // the gamestate again once the client has acknowledged past the
             // last one (VERIFIED live).
+            let plain = self.game.huff.decompress(&m.ops);
             for op in clmsg::read_commands(plain) {
                 if let ClOp::Command { sequence, text } = op
                     && !self.client_command(slot, sequence, &text, true)
@@ -912,19 +938,6 @@ impl Cod4Server {
             }
             return;
         }
-        let key = clmsg::usercmd_key(
-            self.core.checksum_feed,
-            m.message_ack,
-            c.link.netchan.reliable[m.reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)]
-                .as_bytes(),
-        );
-        let ops = match clmsg::read_ops(plain, key, &UserCmd::default()) {
-            Ok(ops) => ops,
-            Err(e) => {
-                log::debug!("cod4: client {slot}: {e:#}");
-                return;
-            }
-        };
         for op in ops {
             match op {
                 ClOp::Command { sequence, text } => {
@@ -1033,11 +1046,15 @@ impl Cod4Server {
             "donedl" => {
                 log::info!("clientDownload: {slot} Done");
                 c.extra.download.close();
-                self.send_gamestate(slot);
+                // One gamestate a message turn, however many `donedl`s ask.
+                if !conn::gamestate_last(c) {
+                    self.send_gamestate(slot);
+                }
             }
             "retransdl" => c.extra.download.retransmit(atoi(arg)),
             _ => match c.extra.download.wwwdl(arg) {
                 download::Www::None => {}
+                download::Www::Gamestate if conn::gamestate_last(c) => {}
                 download::Www::Gamestate => self.send_gamestate(slot),
                 download::Www::Drop(reason) => {
                     self.drop_client(slot, reason);
@@ -1828,6 +1845,8 @@ mod blast_tests;
 mod capture_ab;
 #[cfg(test)]
 mod combat_ab;
+#[cfg(test)]
+mod conn_tests;
 #[cfg(test)]
 mod console_tests;
 #[cfg(test)]

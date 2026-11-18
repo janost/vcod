@@ -77,9 +77,12 @@ pub fn slot_of<F, X>(core: &EngineCore<Conn<F, X>>, from: SocketAddr, qport: u16
 
 /// `SV_PacketEvent`'s slot by address and qport and `Netchan_Process`,
 /// the acknowledges checked: a negative `messageAcknowledge` is dropped
-/// (cod2-protocol.md 2.2), and so is a `reliableAcknowledge` past what was
-/// sent or so far behind that its key is gone, which only a forgery or
-/// garbage carries. Nothing is committed yet ([`commit`]).
+/// (cod2-protocol.md 2.2). So is one of a message never sent, and a
+/// `reliableAcknowledge` past what was sent or so far behind that its key
+/// is gone, which only a forgery or garbage carries (vcod's, as CoD1's
+/// `handle_client_packet`). Nothing is committed yet: a message of the
+/// running level is read to its end first ([`commit`]), so a forged one
+/// moves neither the sequence nor the address.
 pub fn incoming<F, X>(core: &EngineCore<Conn<F, X>>, from: SocketAddr, pkt: &[u8]) -> Incoming {
     if pkt.len() < 6 {
         return Incoming::Dropped;
@@ -92,7 +95,11 @@ pub fn incoming<F, X>(core: &EngineCore<Conn<F, X>>, from: SocketAddr, pkt: &[u8
     let Some(m) = c.link.netchan.process_in(pkt) else {
         return Incoming::Dropped;
     };
-    if m.message_ack < 0 || !c.link.reliable_ack_in_window(m.reliable_ack) {
+    let sent = i64::from(c.link.netchan.outgoing_sequence);
+    if m.message_ack < 0
+        || i64::from(m.message_ack) >= sent
+        || !c.link.reliable_ack_in_window(m.reliable_ack)
+    {
         return Incoming::Dropped;
     }
     Incoming::Message(slot, m)
@@ -105,6 +112,15 @@ pub fn commit<F, X>(c: &mut Conn<F, X>, from: SocketAddr, m: &ClientMessage) {
     c.link.netchan.accept(m);
     c.link.addr = from;
     c.link.reliable_ack = m.reliable_ack;
+}
+
+/// Whether the last message sent a slot is its gamestate: a `donedl` that
+/// asks for another before any message went out between is a flood, each
+/// one a whole gamestate built (vcod's limit, retail sends one a
+/// `donedl`).
+pub fn gamestate_last<F, X>(c: &Conn<F, X>) -> bool {
+    c.gamestate_message >= 0
+        && i64::from(c.gamestate_message) == i64::from(c.link.netchan.outgoing_sequence) - 1
 }
 
 /// What [`Engine::take_client_command`] made of a `clc_clientCommand`'s

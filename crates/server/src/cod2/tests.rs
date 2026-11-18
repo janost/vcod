@@ -233,6 +233,84 @@ fn a_cod2_message_with_an_acknowledge_near_i32_min_is_ignored() {
     assert_eq!(sv.core.clients[0].as_ref().unwrap().delta_message, good_ack);
 }
 
+/// A message that does not read to its end (a move of no cmds), and one
+/// acknowledging a message the server never sent, are dropped before the
+/// netchan takes them: from another port of the client's address under
+/// its qport they move neither the sequence nor the address, and the
+/// client's own next move is taken.
+#[test]
+fn a_cod2_message_that_does_not_read_leaves_the_client_untouched() {
+    use vcod_common::net::huffman::Huffman;
+    let now = Instant::now();
+    let mut sv = Cod2Server::new(cfg("mp_toujane"), 7, now);
+    sv.load(None).unwrap();
+    let mut cl = connect(&mut sv, now);
+    run(&mut sv, &mut cl, None, 2);
+    let state = |sv: &Cod2Server| {
+        let c = sv.core.clients[0].as_ref().unwrap();
+        let l = &c.link;
+        (l.netchan.incoming_sequence, l.reliable_ack, l.addr)
+    };
+    let before = state(&sv);
+    let good_ack = cl.netchan.incoming_sequence as i32;
+    let rel_ack = cl.parser.server_command_sequence;
+    let forger = SocketAddr::from(([127, 0, 0, 1], 40000));
+
+    let huff = Huffman::new();
+    let mut w = MsgWriter::new(&huff);
+    w.write_bits(Clc::Move as i32, CLC_BITS);
+    w.write_byte(0);
+    let ops = w.into_ops();
+    let server_cmd = cl.parser.server_command(rel_ack).to_vec();
+    let seq = cl.netchan.outgoing_sequence;
+    cl.netchan.outgoing_sequence = 1_000_000;
+    let pkt = cl
+        .netchan
+        .build_out_keyed(sv.server_id(), good_ack, rel_ack, &server_cmd, &ops, &huff)
+        .unwrap();
+    cl.netchan.outgoing_sequence = seq;
+    sv.handle_packet(forger, &pkt, now);
+    assert_eq!(state(&sv), before, "a move of no cmds");
+
+    let never = sv.core.clients[0]
+        .as_ref()
+        .unwrap()
+        .link
+        .netchan
+        .outgoing_sequence as i32;
+    let pkt = move_packet(&mut cl, &sv, never, rel_ack);
+    sv.handle_packet(forger, &pkt, now);
+    assert_eq!(state(&sv), before, "an acknowledge of message {never}");
+
+    let pkt = move_packet(&mut cl, &sv, good_ack, rel_ack);
+    sv.handle_packet(addr(), &pkt, now);
+    let c = sv.core.clients[0].as_ref().unwrap();
+    assert_eq!((c.delta_message, c.link.addr), (good_ack, addr()));
+}
+
+/// Fifty `donedl`s in one message build one gamestate, not fifty: another
+/// waits until a message went out after it.
+#[test]
+fn a_cod2_donedl_flood_sends_one_gamestate() {
+    let now = Instant::now();
+    let mut sv = Cod2Server::new(cfg("mp_toujane"), 7, now);
+    sv.load(None).unwrap();
+    let mut cl = connect(&mut sv, now);
+    run(&mut sv, &mut cl, None, 2);
+    let sent = |sv: &Cod2Server| {
+        let c = sv.core.clients[0].as_ref().unwrap();
+        c.link.netchan.outgoing_sequence
+    };
+    let before = sent(&sv);
+    for _ in 0..50 {
+        cl.add_reliable("donedl");
+    }
+    sv.handle_packet(addr(), &cl.build_packet(&[]).unwrap(), now);
+    assert_eq!(sent(&sv), before + 1);
+    let c = sv.core.clients[0].as_ref().unwrap();
+    assert_eq!(c.gamestate_message, before as i32);
+}
+
 /// `heartbeat COD-2` to cod.pm's CoD2 port at `dedicated 2` only, every
 /// three minutes, and the flatline on `quit`; a loopback fake stands in
 /// for the master.
