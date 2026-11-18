@@ -120,7 +120,10 @@ table (VERIFIED, `CoDUOMP.exe` `0x40fb80`); 1.5's is 1.1's (VERIFIED,
 vcod builds it with `gamestate::write` and the trailing `svc_EOF`. Its ops
 are byte for byte the retail server's gamestate past that message's
 leading empty `svc_serverCommand` (VERIFIED, the committed
-`gamestate.bin` in `demo.rs`'s test).
+`gamestate.bin` in `demo.rs`'s test). The client holds a baseline's
+`eFlags` in 1.1's layout, so `gamestate_message` maps it back through the
+protocol's `eflags_from_v1` first: UO's `hide()` bit goes out as 0x80, as
+the server sent it (`demo.rs`'s `a_uo_demo_writes_baseline_eflags_in_uo_layout`).
 
 ## 4. Waiting for a full frame
 

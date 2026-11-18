@@ -71,6 +71,13 @@ pub fn gamestate_message(
         ..*gs
     };
     gs_now.baselines.remove(&0);
+    // The client holds eFlags in 1.1's layout (`read_delta_entity`); the
+    // file carries the protocol's own, as the server sent it.
+    if let Some(i) = super::msg::EntityState::field_index(p, "eFlags") {
+        for es in gs_now.baselines.values_mut() {
+            es.fields[i] = (p.eflags_from_v1)(es.fields[i]);
+        }
+    }
     let mut w = MsgWriter::new(huff);
     gamestate::write(&mut w, p, &gs_now);
     w.write_byte(SVC_EOF);
@@ -230,6 +237,36 @@ mod tests {
         assert_eq!(extension_of("plain"), None);
         assert_eq!(auto_name(|n| n < "demo0002"), "demo0002");
         assert_eq!(auto_name(|_| true), "demo9999");
+    }
+
+    /// A UO baseline's eFlags, held in 1.1's layout, goes into the file in
+    /// protocol 22's: 1.1's 0x100 (`hide()`) is UO's 0x80 on the wire.
+    #[test]
+    fn a_uo_demo_writes_baseline_eflags_in_uo_layout() {
+        let p = &PROTOCOL_V22;
+        let i = crate::net::msg::EntityState::field_index(p, "eFlags").unwrap();
+        let mut es = crate::net::msg::EntityState::null(p);
+        es.number = 5;
+        es.fields[i] = 0x100;
+        let gs = Gamestate {
+            configstrings: Vec::new(),
+            baselines: [(5, es)].into_iter().collect(),
+            client_num: 0,
+            checksum_feed: 0,
+            server_command_sequence: 0,
+        };
+        let h = Huffman::new();
+        let msg = gamestate_message(p, &h, 0, &gs);
+        let read = |p: &Protocol| {
+            let mut r = MsgReader::new(&msg[4..], &h);
+            gamestate::parse(&mut r, p).unwrap().baselines[&5].fields[i]
+        };
+        let raw = Protocol {
+            eflags_to_v1: |f| f,
+            ..PROTOCOL_V22
+        };
+        assert_eq!(read(&raw), 0x80);
+        assert_eq!(read(p), 0x100);
     }
 
     #[test]
