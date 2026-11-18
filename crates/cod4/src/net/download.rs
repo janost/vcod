@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use vcod_common::net::codec::{MsgReader, MsgWriter};
+use vcod_common::net::http::Fetch;
 use vcod_common::net::info_value_for_key;
 use vcod_common::text::latin1_bytes;
 
@@ -147,6 +148,9 @@ const STOCK_DIRS: [&str; 8] = [
     "video",
     "docs",
 ];
+
+/// libwww's event timeout for an `http` URL, 30000 ms (iw3mp.exe 0x500b61).
+const WWW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The most bytes one download takes, on either transport: vcod's cap,
 /// past any mod's iwd or fastfile.
@@ -331,14 +335,14 @@ struct Current {
     size: u64,
     got: u64,
     /// The HTTP fetch after a redirect (the client's www download flag, 0xc5b6a4).
-    www: Option<super::http::HttpFetch>,
+    www: Option<Fetch>,
 }
 
 /// The client's queue after a gamestate (`CL_InitDownloads`, `CL_NextDownload`,
 /// `CL_ParseDownload` at iw3mp.exe 0x474440): one file at a time into
 /// `root` at its referenced path, `donedl` once the queue is empty, which
 /// has the server send the gamestate again (VERIFIED live, section 11).
-/// A www redirect is fetched over HTTP ([`super::http::HttpFetch`]),
+/// A www redirect is fetched over HTTP ([`Fetch`], with libwww's 30 s),
 /// driven by [`Downloads::poll`]; `wwwdl fail` falls back to UDP on the
 /// gamestate it brings ([`Downloads::on_gamestate`]).
 pub struct Downloads {
@@ -391,7 +395,7 @@ impl Downloads {
         let c = self.current.as_ref()?;
         Some(DownloadProgress {
             file: c.wanted.remote.clone(),
-            bytes: c.www.as_ref().map_or(c.got, |f| f.bytes()),
+            bytes: c.www.as_ref().map_or(c.got, Fetch::received),
             total: c.size,
         })
     }
@@ -419,9 +423,9 @@ impl Downloads {
             return Vec::new();
         };
         let mut cur = self.current.take().unwrap();
-        cur.www = None;
+        let got = cur.www.take().map_or(0, |f| f.received());
         match done {
-            Ok(got) => {
+            Ok(()) => {
                 cur.got = got;
                 let mut out = Vec::new();
                 if !self.disconnected {
@@ -640,9 +644,14 @@ impl Downloads {
         log::info!("cod4: Server redirected download: {url}");
         let mut out = vec![DownloadEvent::Command("wwwdl ack".into())];
         let fetch = if self.www {
-            super::http::HttpFetch::start(url, &cur.tmp, cur.limit())
+            // libwww sends a space in the path as `%20`.
+            let url = url.replace(' ', "%20");
+            cur.file
+                .try_clone()
+                .map_err(anyhow::Error::from)
+                .and_then(|f| Fetch::spawn_timed(&url, f, cur.limit(), WWW_TIMEOUT))
         } else {
-            Err("cl_wwwDownload is off".into())
+            Err(anyhow::anyhow!("cl_wwwDownload is off"))
         };
         match fetch {
             Ok(f) => {
