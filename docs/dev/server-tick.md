@@ -85,6 +85,39 @@ A silent client goes on its sixth stale frame. A zombie is freed in
 CoD2's order is in `cod2-protocol.md` 14.1. CoD4's is in
 `cod4-server-frame.md`.
 
+## Panics
+
+`vcod-server` contains a panic at the boundary where one input owns the
+work (`engine::contain`), so a bug costs that input and not every
+player's game. `serve` turns the boundaries on for its thread once the
+level is up; an in-process server (the client's) and the tests leave them
+off and see a panic unwind as before.
+
+| Panic in | Costs |
+|---|---|
+| a connectionless packet's handler | the packet; one log line a second at most |
+| a client's netchan packet (`client_packet`) | the client: `GameModule::drop_sender` drops the slot holding the packet's address and qport with the reason `server error` |
+| a script builtin | the script thread that called it, as `ErrorKind::Panic` (the VM's other terminal errors end a thread the same way); the frame runs on |
+| the frame (`tick_frames`), the loop's console drain (`exec_console`), or a panicking client's drop | the level: the loop queues `map <mapname>` (CS 0's), the console's own map change. On CoD1 that is a `map_restart` (cod11-map-cycle.md 4.2) |
+
+- The fourth level panic inside 60 s, or one with no map named, ends the
+  process through `Engine::fatal`, as the failed level load does: a panic
+  the load itself repeats then stops instead of looping.
+- Retail's `Com_Error(ERR_DROP)` path is not recorded for these servers;
+  loading the map again is vcod's choice. Exiting would end every player's
+  game for one bad input, and the reload replaces the level's state, the
+  part a panic leaves unknown.
+- What a caught handler had changed stays. The drop and the reload
+  replace the client's slot and the level; a connectionless handler holds
+  little, though a `connect` that panics after taking a slot leaves that
+  slot to its timeout. A builtin's partial work on the script heap stays.
+- The binary's panic hook logs a caught panic with its location and
+  leaves the tty console alone; an uncaught one restores the tty and
+  unwinds as before. A bots' worker counts as caught: its pool re-raises
+  on the ticking thread (`bots::driver::par`).
+- A test arms a panic at a boundary through `contain::inject` (`cfg(test)`
+  only).
+
 ## Engine state
 
 `EngineCore` is the engine state every game drives: transport, slot table,
