@@ -336,7 +336,7 @@ impl Record {
             (0x89, 16, &i.gametype),
         ] {
             let s = field(s, len);
-            let bytes: Vec<u8> = s.chars().map(|c| c as u32 as u8).collect();
+            let bytes = vcod_common::text::latin1_bytes(&s);
             b[at..at + bytes.len()].copy_from_slice(&bytes);
         }
         b

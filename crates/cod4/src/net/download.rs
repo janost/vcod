@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use vcod_common::net::codec::{MsgReader, MsgWriter};
 use vcod_common::net::info_value_for_key;
+use vcod_common::text::latin1_bytes;
 
 pub const SVC_DOWNLOAD: u8 = 5;
 
@@ -36,9 +37,6 @@ fn latin1(b: &[u8]) -> String {
     b.iter().map(|&c| c as char).collect()
 }
 
-fn latin1_bytes(s: &str) -> Vec<u8> {
-    s.chars().map(|c| c as u32 as u8).collect()
-}
 
 impl DownloadMsg {
     /// Reads one as `CL_ParseDownload` does: the block as a long, -1 a
