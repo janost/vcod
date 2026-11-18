@@ -1159,6 +1159,9 @@ impl Cod2Server {
         if pure && c.pure.is_none() {
             return self.drop_client(slot, "EXE_CANNOTVALIDATEPURECLIENT");
         }
+        // `SV_ClientThink` (0x8090dac) stores the cmd and runs `ClientThink`
+        // only for an active client (cod2-protocol.md 14.1).
+        let active = c.state == State::Active;
         // A cmd past the packet's newest or at or before the last thought
         // is skipped.
         let newest = cmds.last().map_or(0, |c| c.server_time);
@@ -1170,6 +1173,9 @@ impl Cod2Server {
                 continue;
             }
             c.last_cmd_time = cmd.server_time;
+            if !active {
+                continue;
+            }
             match self.game.level.as_mut() {
                 Some(level) => level.client_think(slot, &cmd),
                 // A bare server: the cmds advance the clock and nothing else.
