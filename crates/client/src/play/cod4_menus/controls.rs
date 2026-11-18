@@ -1155,13 +1155,18 @@ impl ScriptMenus {
 /// How many rows a list box of height `h` draws (`Item_ListBox_Paint`:
 /// `h - 2` less a row each until a row no longer fits).
 pub fn list_rows(lb: &ListBox, h: f32) -> usize {
-    if lb.element_height <= 0.0 {
+    // A hostile fastfile's NaN, infinite or tiny height would never end the loop.
+    const MAX_ROWS: usize = 1024;
+    if !(lb.element_height > 0.0) || !h.is_finite() {
         return 0;
     }
     let mut size = h - 2.0;
     let mut n = 0;
     loop {
         n += 1;
+        if n == MAX_ROWS {
+            return n;
+        }
         size -= lb.element_height;
         if lb.element_height > size {
             return n;
@@ -1224,6 +1229,19 @@ mod tests {
         // 268 units: rows while one still fits after it.
         assert_eq!(list_rows(&lb, 270.0), 11);
         assert_eq!(list_rows(&lb, 300.0), 12);
+    }
+
+    /// Heights out of a hostile fastfile end: NaN, infinite and tiny.
+    #[test]
+    fn a_list_box_with_a_broken_height_ends() {
+        let lb = |element_height| ListBox {
+            element_height,
+            ..ListBox::default()
+        };
+        assert_eq!(list_rows(&lb(f32::NAN), 300.0), 0);
+        assert_eq!(list_rows(&lb(24.0), f32::NAN), 0);
+        assert_eq!(list_rows(&lb(24.0), f32::INFINITY), 0);
+        assert_eq!(list_rows(&lb(1e-30), 300.0), 1024);
     }
 
     /// A held thumb's centre picks the first row by its share of the
