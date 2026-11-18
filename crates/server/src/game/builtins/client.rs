@@ -1136,8 +1136,8 @@ pub fn set_weapon_slot_clip_ammo(
 }
 
 /// The two setters' shared clamp: never below 0, never above `cap`.
-fn clamp_rounds(rounds: i16, cap: u32) -> i16 {
-    rounds.max(0).min(cap.min(i16::MAX as u32) as i16)
+fn clamp_rounds(rounds: i32, cap: u32) -> i16 {
+    rounds.max(0).min(cap.min(i16::MAX as u32) as i32) as i16
 }
 
 /// The receiver, slot and round count the two setters share.
@@ -1146,12 +1146,13 @@ fn slot_and_rounds(
     cx: &Cx,
     recv: Option<Target>,
     args: &[Value],
-) -> Result<(usize, usize, i16), ErrorKind> {
+) -> Result<(usize, usize, i32), ErrorKind> {
     let client = client_receiver(host, recv)?;
     let slot = slot_argument(cx, args)?;
+    // Clamped as the int it is (0x444d7, 0x444ed), not cut to 16 bits first.
     let rounds = match args.get(1) {
-        Some(Value::Int(n)) => *n as i16,
-        Some(Value::Float(f)) => *f as i16,
+        Some(Value::Int(n)) => *n,
+        Some(Value::Float(f)) => *f as i32,
         _ => return Err(ErrorKind::BadType("that builtin takes a round count")),
     };
     Ok((client, slot, rounds))
@@ -1335,6 +1336,17 @@ pub fn get_view_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The slot setters clamp the script's int as an int: 40000 is the
+    /// cap, not a 16-bit -25536 floored to 0 (BUG-113).
+    #[test]
+    fn a_round_count_past_i16_clamps_to_the_cap() {
+        assert_eq!(clamp_rounds(40000, 999), 999);
+        assert_eq!(clamp_rounds(66535, 999), 999);
+        assert_eq!(clamp_rounds(-5, 999), 0);
+        assert_eq!(clamp_rounds(50, 999), 50);
+        assert_eq!(clamp_rounds(i32::MAX, u32::MAX), i16::MAX);
+    }
     use crate::configstrings::CsRange;
     use crate::defs::V1;
     use crate::game::entity::ThinkFn;

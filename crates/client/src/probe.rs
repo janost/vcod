@@ -717,10 +717,10 @@ pub fn probe(
         weapsel: probe_weapsel,
         capture: save_ladder.is_some().then(Vec::new),
         script: match save_ladder.as_deref() {
-            Some("climb") => LADDER_CLIMB_SCRIPT,
-            Some("turn") => LADDER_TURN_SCRIPT,
-            Some("grab") => LADDER_GRAB_SCRIPT,
-            _ => LADDER_SCRIPT,
+            Some("climb") => LadderScript::Climb,
+            Some("turn") => LadderScript::Turn,
+            Some("grab") => LadderScript::Grab,
+            _ => LadderScript::Full,
         },
         ..Default::default()
     };
@@ -1941,6 +1941,9 @@ pub fn probe(
                 overwrite,
             )?;
         }
+    }
+    if probe_fall || probe_ride || probe_items || vehicle.is_some() {
+        fall.flush();
     }
     if (save_plant || save_defuse) && !wrote_sd {
         println!(
@@ -3369,8 +3372,8 @@ fn weapon_cs_index(configstrings: &[String], name: &str) -> Option<(u8, String)>
 
 /// `weaponstate` the capture keys off: the weapon is ready to take an input,
 /// and it is firing (`docs/research/cod11-combat.md` 1.1).
-const WEAPONSTATE_READY: i32 = 0;
-const WEAPONSTATE_FIRING: i32 = 3;
+const WEAPONSTATE_READY: i32 = vcod_common::pmove::weapon::WEAPON_READY as i32;
+const WEAPONSTATE_FIRING: i32 = vcod_common::pmove::weapon::WEAPON_FIRING as i32;
 
 /// A key a step taps rather than holds. The stock rifle is semi-automatic, so
 /// a held fire bit fires once and then nothing: every shot needs its own
@@ -4317,8 +4320,16 @@ impl CombatProbe {
                 return;
             }
         };
-        let dur = Duration::from_secs_f32(def.reload_time) + RELOAD_MARGIN;
-        let period = (Duration::from_secs_f32(def.fire_time) + PULSE_MARGIN).max(PULSE_PERIOD);
+        let (Some(reload), Some(fire)) = (data_secs(def.reload_time), data_secs(def.fire_time))
+        else {
+            println!(
+                "COMBAT: {name} reloadTime {} fireTime {} are no times; reload holds the fallback",
+                def.reload_time, def.fire_time
+            );
+            return;
+        };
+        let dur = reload + RELOAD_MARGIN;
+        let period = (fire + PULSE_MARGIN).max(PULSE_PERIOD);
         for step in &mut self.steps {
             if step.from_reload_time {
                 step.dur = dur;
@@ -4515,7 +4526,7 @@ viewHeightCurrent={} leanf={} viewangles={},{},{} eFlags={}\n",
         // spent so far bought nothing, so the step starts over rather than
         // recording a reload under a firing label.
         if fires
-            && weaponstate == WEAPONSTATE_RELOADING
+            && reloading(weaponstate)
             && !self.retried.contains(&label)
             && !self
                 .trace
@@ -4623,11 +4634,20 @@ const READY_STABLE: Duration = Duration::from_millis(500);
 /// whole run.
 const READY_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// Meant as `weaponstate` while reloading, but 2 is `WEAPON_DROPPING`; the
-/// reload is 5 (`docs/research/cod11-combat.md` 1.1). A fire step that meets it
-/// before it has seen a shot restarts once: the weapon went busy under it, and
-/// the taps it has already spent bought nothing.
-const WEAPONSTATE_RELOADING: i32 = 2;
+/// A weapon file's seconds as a `Duration`; `None` for a negative or
+/// non-finite one, which a mod's file can hold.
+fn data_secs(s: f32) -> Option<Duration> {
+    Duration::try_from_secs_f32(s).ok()
+}
+
+/// A `weaponstate` of the reload's (5 reloading to 9 the reload's end,
+/// `docs/research/cod11-combat.md` 1.1). A fire step that meets one before
+/// it has seen a shot restarts once: the weapon went busy under it, and the
+/// taps it has already spent bought nothing.
+fn reloading(weaponstate: i32) -> bool {
+    use vcod_common::pmove::weapon::{WEAPON_RELOAD_END, WEAPON_RELOADING};
+    (i32::from(WEAPON_RELOADING)..=i32::from(WEAPON_RELOAD_END)).contains(&weaponstate)
+}
 
 /// Ground covered below this inside [`STALL_WINDOW`] while walking forward
 /// means the probe is standing against geometry. Retail's run speed is
@@ -6146,7 +6166,10 @@ impl HitProbe {
         let Some(def) = fs.and_then(|fs| vcod_common::weapon::load(fs, name).ok()) else {
             return;
         };
-        self.period = (Duration::from_secs_f32(def.fire_time) + PULSE_MARGIN).max(PULSE_PERIOD);
+        let Some(fire) = data_secs(def.fire_time) else {
+            return;
+        };
+        self.period = (fire + PULSE_MARGIN).max(PULSE_PERIOD);
         println!(
             "HIT: {name} fireTime {:.3}s, taps every {:?}",
             def.fire_time, self.period
@@ -12088,51 +12111,70 @@ impl FallProbe {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_micros() as u64),
         );
-        if self.cmds.len() >= FALL_CMDS_PER_LINE {
-            let steps: Vec<String> = self
-                .cmds
-                .windows(2)
-                .map(|w| (w[1].0 - w[0].0).to_string())
-                .collect();
-            let yaws: Vec<String> = self
-                .cmds
-                .iter()
-                .filter_map(|c| c.1.map(|y| y.to_string()))
-                .collect();
-            let yaws = if yaws.is_empty() {
-                String::new()
-            } else {
-                format!(" yaw={}", yaws.join(","))
-            };
-            let mut tail = String::new();
-            for (key, list) in [
-                ("in", &mut self.inputs),
-                ("snap", &mut self.snaps),
-                ("ct", &mut self.ran),
-            ] {
-                if !list.is_empty() {
-                    tail += &format!(" {key}={}", list.join(","));
-                    list.clear();
-                }
+        if self.cmds.len() >= FALL_CMDS_PER_LINE
+            && let Some(line) = self.take_line()
+        {
+            println!("{line}");
+        }
+    }
+
+    /// The `CMDS` line of the cmds recorded since the last one, cleared;
+    /// `None` with none.
+    fn take_line(&mut self) -> Option<String> {
+        if self.cmds.is_empty() {
+            return None;
+        }
+        let steps: Vec<String> = self
+            .cmds
+            .windows(2)
+            .map(|w| (w[1].0 - w[0].0).to_string())
+            .collect();
+        let yaws: Vec<String> = self
+            .cmds
+            .iter()
+            .filter_map(|c| c.1.map(|y| y.to_string()))
+            .collect();
+        let yaws = if yaws.is_empty() {
+            String::new()
+        } else {
+            format!(" yaw={}", yaws.join(","))
+        };
+        let mut tail = String::new();
+        for (key, list) in [
+            ("in", &mut self.inputs),
+            ("snap", &mut self.snaps),
+            ("ct", &mut self.ran),
+        ] {
+            if !list.is_empty() {
+                tail += &format!(" {key}={}", list.join(","));
+                list.clear();
             }
-            let walls: Vec<String> = std::iter::once(self.walls[0])
-                .chain(self.walls.windows(2).map(|w| w[1].saturating_sub(w[0])))
-                .map(|w| w.to_string())
-                .collect();
-            let seqs: Vec<String> = std::iter::once(self.seqs[0])
-                .chain(self.seqs.windows(2).map(|w| w[1].wrapping_sub(w[0])))
-                .map(|q| q.to_string())
-                .collect();
-            println!(
-                "CMDS st={} d={}{yaws}{tail} w={} q={}",
-                self.cmds[0].0,
-                steps.join(","),
-                walls.join(","),
-                seqs.join(",")
-            );
-            self.cmds.clear();
-            self.walls.clear();
-            self.seqs.clear();
+        }
+        let walls: Vec<String> = std::iter::once(self.walls[0])
+            .chain(self.walls.windows(2).map(|w| w[1].saturating_sub(w[0])))
+            .map(|w| w.to_string())
+            .collect();
+        let seqs: Vec<String> = std::iter::once(self.seqs[0])
+            .chain(self.seqs.windows(2).map(|w| w[1].wrapping_sub(w[0])))
+            .map(|q| q.to_string())
+            .collect();
+        let line = format!(
+            "CMDS st={} d={}{yaws}{tail} w={} q={}",
+            self.cmds[0].0,
+            steps.join(","),
+            walls.join(","),
+            seqs.join(",")
+        );
+        self.cmds.clear();
+        self.walls.clear();
+        self.seqs.clear();
+        Some(line)
+    }
+
+    /// The last block, under [`FALL_CMDS_PER_LINE`] cmds, at the run's end.
+    fn flush(&mut self) {
+        if let Some(line) = self.take_line() {
+            println!("{line}");
         }
     }
 
@@ -12242,14 +12284,45 @@ struct LadderProbe {
     /// `delta_angles[1]` at the placement: the turn script's yaw goes on the
     /// wire rebased on it, as a mouse's would.
     placed_delta: i32,
-    /// `--save-ladder`'s phases.
-    script: &'static [LadderPhase],
+    /// `--save-ladder`'s script.
+    script: LadderScript,
     /// The weapon-select fixture's `!cmd`, `!server` and `!trace` rows, each
     /// timed from the first cmd.
     rows: Vec<String>,
     t0: Option<Instant>,
     /// The last snapshot a `!trace` was written for.
     traced: Option<i32>,
+}
+
+/// Which of the four `--save-ladder` scripts runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum LadderScript {
+    #[default]
+    Full,
+    Climb,
+    Turn,
+    Grab,
+}
+
+impl LadderScript {
+    fn phases(self) -> &'static [LadderPhase] {
+        match self {
+            LadderScript::Full => LADDER_SCRIPT,
+            LadderScript::Climb => LADDER_CLIMB_SCRIPT,
+            LadderScript::Turn => LADDER_TURN_SCRIPT,
+            LadderScript::Grab => LADDER_GRAB_SCRIPT,
+        }
+    }
+
+    /// The fixture header's name for it.
+    fn name(self) -> &'static str {
+        match self {
+            LadderScript::Full => "full",
+            LadderScript::Climb => "climb",
+            LadderScript::Turn => "turn",
+            LadderScript::Grab => "grab",
+        }
+    }
 }
 
 /// How long the climb holds forward: the hold ladder is 560 units.
@@ -12444,7 +12517,7 @@ impl LadderProbe {
         let p = wire();
         // Set down at the foot, the body takes the rungs before any key.
         // The grab script starts off the rungs, at the first live snapshot.
-        let grab = std::ptr::eq(self.script, LADDER_GRAB_SCRIPT);
+        let grab = self.script == LadderScript::Grab;
         if self.placed.is_none()
             && let Some(s) = snap
             && s.ps.field_i32(p, "pm_type") == PM_NORMAL
@@ -12467,15 +12540,16 @@ impl LadderProbe {
             return cmd;
         };
         let mut end = 0;
-        let Some(i) = self.script.iter().position(|&(_, ms, ..)| {
+        let Some(i) = self.script.phases().iter().position(|&(_, ms, ..)| {
             end += ms;
             t.as_millis() < u128::from(end)
         }) else {
-            self.phase = Some(self.script.len());
+            self.phase = Some(self.script.phases().len());
             return cmd;
         };
-        let (name, ms, forward, right, pitch, to) = self.script[i];
-        let from = i.checked_sub(1).map_or(0.0, |j| self.script[j].5);
+        let phases = self.script.phases();
+        let (name, ms, forward, right, pitch, to) = phases[i];
+        let from = i.checked_sub(1).map_or(0.0, |j| phases[j].5);
         if from != 0.0 || to != 0.0 {
             // `send_frame` takes the newest snapshot's `delta_angles` off;
             // put back what retail pushed since the placement.
@@ -12503,7 +12577,7 @@ impl LadderProbe {
 
     /// The script ran to its end.
     fn captured(&self) -> bool {
-        self.phase == Some(self.script.len())
+        self.phase == Some(self.script.phases().len())
     }
 
     /// A sent cmd, once the script has started.
@@ -12719,15 +12793,7 @@ fn write_ladder_fixture(
     let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
     let map = net::info_value_for_key(serverinfo, "mapname").unwrap_or("?");
     let mut out = String::new();
-    let script = if std::ptr::eq(lp.script, LADDER_CLIMB_SCRIPT) {
-        "climb"
-    } else if std::ptr::eq(lp.script, LADDER_TURN_SCRIPT) {
-        "turn"
-    } else if std::ptr::eq(lp.script, LADDER_GRAB_SCRIPT) {
-        "grab"
-    } else {
-        "full"
-    };
+    let script = lp.script.name();
     out.push_str(&format!(
         "# Retail CoD {} dedicated server: one player on a ladder.\n",
         retail_build()
@@ -12750,7 +12816,7 @@ fn write_ladder_fixture(
         "# ladder foot={},{},{} yaw={yaw}\n",
         lp.foot[0], lp.foot[1], lp.foot[2]
     ));
-    for (name, ms, f, r, pitch, yaw) in lp.script {
+    for (name, ms, f, r, pitch, yaw) in lp.script.phases() {
         out.push_str(&format!("#   {name} {ms} {f} {r} {pitch} {yaw}\n"));
     }
     out.push_str("# !cmd is a usercmd as it went on the wire (angles rebased on delta_angles);\n");
@@ -12775,9 +12841,6 @@ fn write_ladder_fixture(
     println!("ladder: {} lines -> {path}", lines.len());
     Ok(())
 }
-
-/// Where `--probe-weapsel` writes its capture.
-const WEAPSEL_FIXTURE_DIR: &str = "crates/server/tests/fixtures/playerstate";
 
 /// The `--probe-weapsel` capture: every cmd the play client's input built,
 /// every server command, the `weapalt`/`weapon` presses and one `!trace`
@@ -12827,9 +12890,9 @@ fn write_weapsel_fixture(
         out.push_str(r);
         out.push('\n');
     }
-    std::fs::create_dir_all(WEAPSEL_FIXTURE_DIR)?;
+    std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
     let path = fixture_path(
-        WEAPSEL_FIXTURE_DIR,
+        PLAYERSTATE_FIXTURE_DIR,
         &format!("{map}-dm-weapsel{}.txt", tag_suffix(tag)),
     )?;
     write_capture(&path, &out, overwrite)?;
@@ -14462,6 +14525,54 @@ fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A run's last partial block of cmds is printed too: 61 cmds make two
+    /// `CMDS` lines (BUG-091).
+    #[test]
+    fn the_last_partial_block_of_cmds_is_kept() {
+        let ring = vcod_common::net::snapshot::SnapshotRing::default();
+        let mut fall = FallProbe::default();
+        for i in 0..61 {
+            fall.record_cmd(1000 + 8 * i, None, (0, 0, 0), i as u32, &ring);
+        }
+        let line = fall.take_line().expect("the 61st cmd's line");
+        assert!(line.starts_with("CMDS st=1480 d= "), "{line}");
+        assert_eq!(fall.take_line(), None);
+    }
+
+    /// Each `--save-ladder` script is told apart by its value, not by a
+    /// const slice's address, and names itself in the fixture (BUG-092).
+    #[test]
+    fn each_ladder_script_runs_and_names_its_own_phases() {
+        for (s, name, phases) in [
+            (LadderScript::Full, "full", LADDER_SCRIPT),
+            (LadderScript::Climb, "climb", LADDER_CLIMB_SCRIPT),
+            (LadderScript::Turn, "turn", LADDER_TURN_SCRIPT),
+            (LadderScript::Grab, "grab", LADDER_GRAB_SCRIPT),
+        ] {
+            assert_eq!(s.name(), name);
+            assert_eq!(s.phases().len(), phases.len(), "{name}");
+            assert_eq!(s.phases()[0].0, phases[0].0, "{name}");
+        }
+    }
+
+    /// A weapon file's negative or non-finite time is no duration, not a
+    /// panic (BUG-089).
+    #[test]
+    fn a_weapon_time_that_is_no_duration_is_refused() {
+        for bad in [-1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(data_secs(bad), None);
+        }
+        assert_eq!(data_secs(0.5), Some(Duration::from_millis(500)));
+    }
+
+    /// The reload the fire step restarts on is weaponstate 5 to 9; 2 is
+    /// the drop (combat doc 1.1; BUG-088).
+    #[test]
+    fn a_fire_step_restarts_on_the_reload_states() {
+        assert!((5..=9).all(reloading));
+        assert!(![0, 1, 2, 3, 4, 10].into_iter().any(reloading));
+    }
 
     /// `--vanilla` holds across the download reopen: a pak an earlier run
     /// left in the scratch directory stays off the search path `cp` reads.

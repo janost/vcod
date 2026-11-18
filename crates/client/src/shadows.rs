@@ -576,6 +576,9 @@ struct Timer {
     readback: wgpu::Buffer,
     /// A readback is in flight; set again by its callback when mapped.
     pending: bool,
+    /// `map_async` was asked for and its callback has not run yet: a
+    /// second call on a buffer whose map is pending is wgpu's error.
+    mapping: bool,
     mapped: Arc<AtomicBool>,
     period_ns: f32,
     /// The in-flight frame's static redraw: its pieces and triangles, and
@@ -611,6 +614,7 @@ impl Timer {
                 mapped_at_creation: false,
             }),
             pending: false,
+            mapping: false,
             mapped: Arc::new(AtomicBool::new(false)),
             period_ns: queue.get_timestamp_period(),
             static_ran: None,
@@ -1762,9 +1766,10 @@ impl ShadowPass {
         let Some(t) = self.timer.as_mut().filter(|t| t.pending) else {
             return;
         };
-        if t.mapped.load(Ordering::Acquire) {
+        if t.mapped.load(Ordering::Acquire) || t.mapping {
             return;
         }
+        t.mapping = true;
         let flag = t.mapped.clone();
         t.readback.map_async(wgpu::MapMode::Read, .., move |r| {
             if r.is_ok() {
@@ -1787,6 +1792,7 @@ impl ShadowPass {
         t.readback.unmap();
         t.mapped.store(false, Ordering::Release);
         t.pending = false;
+        t.mapping = false;
         let ms = |i: usize| ticks[i + 1].wrapping_sub(ticks[i]) as f32 * t.period_ns / 1e6;
         let smooth = |old: &mut f32, new: f32| {
             *old = if *old == 0.0 {

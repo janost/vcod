@@ -72,9 +72,15 @@ impl BanFile {
 
     fn read(&self) -> Option<String> {
         match &self.path {
-            Some(p) => std::fs::read(p)
-                .ok()
-                .map(|b| b.iter().map(|&c| char::from(c)).collect()),
+            Some(p) => match std::fs::read(p) {
+                Ok(b) => Some(b.iter().map(|&c| char::from(c)).collect()),
+                Err(e) => {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        log::warn!("reading {}: {e}", p.display());
+                    }
+                    None
+                }
+            },
             None => self.text.clone(),
         }
     }
@@ -141,9 +147,24 @@ impl BanFile {
     /// The append with the GUID as text: CoD4 1.7's `%s %s\r\n`
     /// (0x823137f).
     pub fn append_line(&mut self, guid: &str, name: &str) {
-        let mut text = self.read().unwrap_or_default();
-        text.push_str(&format!("{guid} {name}\r\n"));
-        self.write(text);
+        let line = format!("{guid} {name}\r\n");
+        match &self.path {
+            // Onto the end, as retail's append does: the lines already there
+            // are never read back or rewritten.
+            Some(p) => {
+                use std::io::Write;
+                let bytes: Vec<u8> = line.chars().map(|c| c as u32 as u8).collect();
+                let wrote = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(p)
+                    .and_then(|mut f| f.write_all(&bytes));
+                if let Err(e) = wrote {
+                    log::error!("appending to {}: {e}", p.display());
+                }
+            }
+            None => self.text.get_or_insert_default().push_str(&line),
+        }
     }
 
     /// `SV_UnbanClient` (0x808d886): each line whose text past the guid and
@@ -282,6 +303,23 @@ impl TempBans {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An append goes on the end of the file as retail's does: a file
+    /// this process cannot read keeps its lines (BUG-155).
+    #[cfg(unix)]
+    #[test]
+    fn an_append_keeps_lines_it_could_not_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let p = std::env::temp_dir().join(format!("vcod-bans-append-{}", std::process::id()));
+        std::fs::write(&p, "111 Old\r\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o200)).unwrap();
+        let mut f = BanFile::at(p.clone());
+        f.append(222, "New");
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(text, "111 Old\r\n222 New\r\n");
+    }
 
     #[test]
     fn the_file_holds_guids_and_unbans_by_name() {

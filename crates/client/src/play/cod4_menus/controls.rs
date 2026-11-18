@@ -1138,16 +1138,27 @@ impl ScriptMenus {
 
     /// Whether a chat line is a muted player's: its speaker, the text
     /// before the first `": "` with the colour codes and the message
-    /// bytes out, ends with a muted player's cleaned name. vcod's own
-    /// rule: retail's mute holds the voice back only.
+    /// bytes out, is a muted player's whole cleaned name, after any team or
+    /// dead prefix (a blank, `)` or `]` before it). A speaker that is
+    /// another player's whole name is that player's. vcod's own rule:
+    /// retail's mute holds the voice back only.
     pub fn chat_muted(&self, line: &str) -> bool {
         let line = clean(line);
         let Some((speaker, _)) = line.split_once(": ") else {
             return false;
         };
-        self.host.players.iter().any(|(n, name)| {
-            let name = clean(name);
-            self.muted.contains(n) && !name.is_empty() && speaker.ends_with(&name)
+        let names: Vec<(u32, String)> = (self.host.players.iter())
+            .map(|(n, name)| (*n, clean(name)))
+            .collect();
+        if let Some((n, _)) = names.iter().find(|(_, name)| name == speaker) {
+            return self.muted.contains(n);
+        }
+        names.iter().any(|(n, name)| {
+            self.muted.contains(n)
+                && !name.is_empty()
+                && speaker
+                    .strip_suffix(name.as_str())
+                    .is_some_and(|before| before.ends_with([' ', ')', ']']))
         })
     }
 }
@@ -1218,6 +1229,21 @@ mod tests {
         assert_eq!(format_g(15.5), "15.5");
         assert_eq!(format_g(65535.0), "65535");
         assert_eq!(clean("\u{15}\u{15}^9walker^7: ^7hi"), "walker: hi");
+    }
+
+    /// A mute matches the speaker's whole name, with or without the
+    /// server's team or dead prefix: muting `a` keeps Anna's lines (BUG-120).
+    #[test]
+    fn a_mute_matches_the_whole_name() {
+        let mut m = crate::play::cod4_menus::ScriptMenus::default();
+        m.host.players = vec![(0, "a".into()), (1, "Anna".into()), (2, "^1b^7a".into())];
+        m.muted.insert(0);
+        assert!(m.chat_muted("a: hi"));
+        assert!(m.chat_muted("\u{15}\u{15}^9a^7: ^7hi"));
+        assert!(m.chat_muted("(Team) a: hi"));
+        assert!(m.chat_muted("[DEAD] a: hi"));
+        assert!(!m.chat_muted("Anna: hi"));
+        assert!(!m.chat_muted("^1b^7a: hi"), "another player's whole name");
     }
 
     #[test]

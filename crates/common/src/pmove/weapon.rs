@@ -394,7 +394,7 @@ impl SpreadStance {
             dive: ps.prone_dive,
             into_leg_ms: ps
                 .view_lerp_ms
-                .map(|_| time - ps.view_lerp_stamp(command_time)),
+                .map(|_| time.wrapping_sub(ps.view_lerp_stamp(command_time))),
         }
     }
 }

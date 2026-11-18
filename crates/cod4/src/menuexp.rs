@@ -641,7 +641,7 @@ fn call_value(env: &dyn Env, call: i32, args: &[Value]) -> Value {
         ACTION_SLOT_USABLE => {
             let slot = arg().int();
             let usable = game.is_some_and(|g| {
-                usize::try_from(slot - 1)
+                usize::try_from(slot.wrapping_sub(1))
                     .ok()
                     .and_then(|i| g.action_slots.get(i))
                     .copied()
@@ -1113,6 +1113,8 @@ mod tests {
         assert_eq!(call(0x4b, s("+actionslot 1")), Some(Value::Str("N".into())));
         assert_eq!(call(0x4c, I(1)), Some(Value::Int(1)));
         assert_eq!(call(0x4c, I(5)), Some(Value::Int(0)));
+        // A slot of i32::MIN is no slot, not an overflow (BUG-150).
+        assert_eq!(call(0x4c, I(i32::MIN)), Some(Value::Int(0)));
         assert_eq!(call(0x4d, s("weapon")), Some(Value::Float(0.5)));
         assert_eq!(
             eval(&[Op(16), Op(0x3e), Op(1)], &g),

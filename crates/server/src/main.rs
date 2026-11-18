@@ -165,6 +165,8 @@ fn main() -> Result<()> {
         default_panic(info);
     }));
     let trace = args.trace;
+    // Ahead of the console, which may put the terminal in raw mode.
+    let interrupt = Interrupt::install()?;
     let console = (!args.no_console).then(|| {
         if args.quit_on_eof {
             vcod_server::stdin_console::StdinConsole::spawn_child(std::io::BufReader::new(
@@ -176,14 +178,40 @@ fn main() -> Result<()> {
     });
     if game == Game::Cod2 {
         let (mut server, net) = cod2_server(args, sock)?;
-        return serve(&mut server, net, console, trace);
+        return serve(&mut server, net, console, trace, interrupt);
     }
     if game == Game::Cod4 {
         let (mut server, net) = cod4_server(args, sock)?;
-        return serve(&mut server, net, console, trace);
+        return serve(&mut server, net, console, trace, interrupt);
     }
     let (mut server, net) = cod1_server(args, sock, &sets_after_map)?;
-    serve(&mut server, net, console, trace)
+    serve(&mut server, net, console, trace, interrupt)
+}
+
+/// Ctrl-C and SIGTERM. Before the frame loop runs one restores the
+/// terminal and exits; in the loop the first runs `quit`, so the masters
+/// get their flatline, and a second exits at once.
+struct Interrupt {
+    hit: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    serving: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Interrupt {
+    fn install() -> Result<Self> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let hit = std::sync::Arc::new(AtomicBool::new(false));
+        let serving = std::sync::Arc::new(AtomicBool::new(false));
+        let (h, s) = (hit.clone(), serving.clone());
+        ctrlc::set_handler(move || {
+            if !s.load(Ordering::Relaxed) || h.swap(true, Ordering::Relaxed) {
+                #[cfg(unix)]
+                vcod_server::tty_console::restore();
+                std::process::exit(130);
+            }
+        })
+        .context("installing the Ctrl-C handler")?;
+        Ok(Interrupt { hit, serving })
+    }
 }
 
 /// Whether `id` was given on the command line rather than defaulted.
@@ -623,19 +651,12 @@ fn serve<G: GameModule>(
     (sock, packets): Net,
     console: Option<vcod_server::stdin_console::StdinConsole>,
     trace: bool,
+    interrupt: Interrupt,
 ) -> Result<()> {
-    // Ctrl-C runs `quit`, so the masters get their flatline; a second one
-    // exits at once.
-    let interrupted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    {
-        let flag = interrupted.clone();
-        ctrlc::set_handler(move || {
-            if flag.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                std::process::exit(130);
-            }
-        })
-        .context("installing the Ctrl-C handler")?;
-    }
+    interrupt
+        .serving
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let interrupted = interrupt.hit;
     // `VCOD_TICK_TRACE=<path>`: the tick's step log (`tick_trace`); the
     // loop runs on this thread.
     if let Some(path) = std::env::var_os("VCOD_TICK_TRACE") {

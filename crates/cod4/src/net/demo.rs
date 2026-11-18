@@ -209,7 +209,14 @@ impl DemoReader {
 
     /// The next record, or why there is none.
     pub fn next_record(&mut self) -> Result<Record, DemoEnd> {
-        let kind = self.take(1).ok_or(DemoEnd::Completed)?[0];
+        // Any other byte reads nothing and stops nothing (the switch at
+        // 0x4690f0 falls out); retail reads the next byte on the next call.
+        let kind = loop {
+            let k = self.take(1).ok_or(DemoEnd::Completed)?[0];
+            if matches!(k, REC_ARCHIVE | REC_MESSAGE) {
+                break k;
+            }
+        };
         match kind {
             REC_ARCHIVE => {
                 let index = self.long().ok_or(DemoEnd::Completed)? as u32 as usize;
@@ -252,10 +259,7 @@ impl DemoReader {
                 };
                 Ok(Record::Message(seq as u32, msg))
             }
-            // Any other byte reads nothing and stops nothing (the switch at
-            // 0x4690f0 falls out); retail reads the next byte on the next
-            // call.
-            _ => self.next_record(),
+            _ => unreachable!("only the two record kinds leave the loop"),
         }
     }
 }
@@ -377,6 +381,13 @@ mod tests {
         assert_eq!(big_string(b"it\x92s"), b"it's");
         assert_eq!(big_string(&[b'a'; 0x1fff]).len(), 0x1fff);
         assert!(big_string(&[b'a'; 0x2000]).is_empty());
+    }
+
+    /// Unknown record bytes are skipped in a loop, not one call deep each.
+    #[test]
+    fn a_long_run_of_unknown_record_bytes_ends_the_demo() {
+        let mut rd = DemoReader::new(vec![0x02; 8 << 20]);
+        assert_eq!(rd.next_record(), Err(DemoEnd::Completed));
     }
 
     #[test]

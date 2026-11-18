@@ -433,9 +433,8 @@ fn not_of(v: Value, interner: &Interner) -> Result<bool, ErrorKind> {
 /// otherwise the cast fails (`# probe_cast_string`,
 /// tests/fixtures/semantics/retail-captures.txt).
 fn string_int(text: &str) -> Option<i32> {
-    let (len, neg) = numeric_prefix(text, false);
-    let digits = text[..len].trim_start_matches(|c: char| c.is_ascii_whitespace());
-    let digits = digits.trim_start_matches(['+', '-']);
+    let (start, len, neg) = numeric_prefix(text, false);
+    let digits = text[start..len].trim_start_matches(['+', '-']);
     // strtol saturates at a 32-bit long.
     let n = digits.bytes().fold(0i64, |n, d| {
         (n * 10 + i64::from(d - b'0')).min(i64::from(i32::MAX) + 1)
@@ -447,14 +446,15 @@ fn string_int(text: &str) -> Option<i32> {
 
 /// [`string_int`]'s `strtod` arm.
 fn string_float(text: &str) -> Option<f32> {
-    let (len, _) = numeric_prefix(text, true);
-    let f = text[..len].trim_start().parse::<f64>().unwrap_or(0.0) as f32;
+    let (start, len, _) = numeric_prefix(text, true);
+    let f = text[start..len].parse::<f64>().unwrap_or(0.0) as f32;
     (f != 0.0 || zero_spelled(text)).then_some(f)
 }
 
-/// The byte length of `text`'s blanks plus its longest decimal number (an
-/// integer, or with `float` a fraction and an exponent too), and its sign.
-fn numeric_prefix(text: &str, float: bool) -> (usize, bool) {
+/// Where `text`'s longest decimal number (an integer, or with `float` a
+/// fraction and an exponent too) starts past the `isspace` blanks and
+/// ends, and its sign; an empty run when there is none.
+fn numeric_prefix(text: &str, float: bool) -> (usize, usize, bool) {
     let b = text.as_bytes();
     let mut i = 0;
     while i < b.len() && (b[i] == b' ' || (b'\t'..=b'\r').contains(&b[i])) {
@@ -491,7 +491,11 @@ fn numeric_prefix(text: &str, float: bool) -> (usize, bool) {
             }
         }
     }
-    if any { (i, neg) } else { (start, false) }
+    if any {
+        (start, i, neg)
+    } else {
+        (start, start, false)
+    }
 }
 
 /// The engine's test that a cast's 0 was meant: the first character past

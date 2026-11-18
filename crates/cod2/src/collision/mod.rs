@@ -201,6 +201,8 @@ fn leaf_of(
     (first, count): (usize, usize),
     (first_aabb, aabb_count): (i32, i32),
 ) -> Result<CLeaf> {
+    // A leaf's run fits `u16` (validate's `CMod_LoadLeafs` errors); a
+    // submodel's is stored as `u16` unchecked, as `CMod_LoadSubmodels` does.
     let mut leaf = CLeaf {
         first_aabb: first_aabb as u16,
         aabb_count: aabb_count as u16,

@@ -1075,6 +1075,7 @@ impl Cod4Client {
         // `CG_AddViewWeapon` draws nothing in third person (0x45704e): the
         // own shots flash and leave from the body's gun.
         if scene.third_person.is_some() {
+            self.view_weapon.undrawn(out);
             return;
         }
         // `CG_PlayClientSoundAliasByName`: the clip's mapped notetracks.

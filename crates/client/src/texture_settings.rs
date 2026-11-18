@@ -515,12 +515,18 @@ impl Down<'_> {
 }
 
 /// `a#3.tga` -> `a#4.tga`: the digits after the first `#` plus one, the
-/// rest kept (0x4eb1d0, `"%i%s"` at 0x54bf78). `None` without a `#`.
+/// rest kept (0x4eb1d0, `"%i%s"` at 0x54bf78). `None` without a `#`, or
+/// past the last level an i64 holds.
 fn next_custom_level(name: &str) -> Option<String> {
     let at = name.find('#')? + 1;
     let digits = name[at..].bytes().take_while(u8::is_ascii_digit).count();
     let n: i64 = name[at..at + digits].parse().unwrap_or(0);
-    Some(format!("{}{}{}", &name[..at], n + 1, &name[at + digits..]))
+    Some(format!(
+        "{}{}{}",
+        &name[..at],
+        n.checked_add(1)?,
+        &name[at + digits..]
+    ))
 }
 
 fn drop_levels(img: &mut Image, picmip: u32, down: &mut Down) {
@@ -691,6 +697,14 @@ mod tests {
             height: h,
             data: ImageData::Rgba8(px),
         }
+    }
+
+    /// A `#N` level at i64::MAX ends the custom chain instead of
+    /// overflowing (BUG-086).
+    #[test]
+    fn the_last_custom_level_ends_the_chain() {
+        assert_eq!(next_custom_level("a#3.tga").as_deref(), Some("a#4.tga"));
+        assert_eq!(next_custom_level("x#9223372036854775807.tga"), None);
     }
 
     #[test]

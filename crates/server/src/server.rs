@@ -878,6 +878,18 @@ fn place_rider(rt: &mut script::ScriptRuntime, slot: usize, sim: &mut ClientSim)
     rt.set_client_origin(slot, at.0.to_array());
 }
 
+/// An archived follow copy's velocity and teleport bit, read in the field
+/// table the archive was written in.
+fn archived_motion(ps: &msg::PlayerState, p: &Cod1Wire) -> ([f32; 3], bool) {
+    let velocity = [
+        ps.field_f32(p, "velocity[0]"),
+        ps.field_f32(p, "velocity[1]"),
+        ps.field_f32(p, "velocity[2]"),
+    ];
+    let teleport = ps.field_i32(p, "eFlags") & crate::spectate::EF_TELEPORT_BIT != 0;
+    (velocity, teleport)
+}
+
 /// `ClientEndFrame`'s follow half for one slot, in slot order: a playing or
 /// dead client takes the own-view bit a follow copies, or is spawned where a
 /// copy still in its playerstate left it, and a spectator runs
@@ -888,6 +900,7 @@ fn place_rider(rt: &mut script::ScriptRuntime, slot: usize, sim: &mut ClientSim)
 /// that finds nothing to copy, which is `StopFollowing`.
 fn follow_end_frame(
     clients: &mut [Option<Client>],
+    proto: &Cod1Wire,
     slot: usize,
     rt: &mut script::ScriptRuntime,
     archive: &crate::archive::Archive,
@@ -999,18 +1012,17 @@ fn follow_end_frame(
                 frame: None,
             })
         }
-        (Some(_), Source::Archived { frame, view }) => Some(follow::Copied {
-            eye: view.eye,
-            angles: view.angles,
-            origin: view.origin,
-            velocity: std::array::from_fn(|i| {
-                view.ps.field_f32(&PROTOCOL_V1, &format!("velocity[{i}]"))
-            }),
-            teleport_bit: view.ps.field_i32(&PROTOCOL_V1, "eFlags")
-                & crate::spectate::EF_TELEPORT_BIT
-                != 0,
-            frame: Some(frame),
-        }),
+        (Some(_), Source::Archived { frame, view }) => {
+            let (velocity, teleport_bit) = archived_motion(&view.ps, proto);
+            Some(follow::Copied {
+                eye: view.eye,
+                angles: view.angles,
+                origin: view.origin,
+                velocity,
+                teleport_bit,
+                frame: Some(frame),
+            })
+        }
         _ => None,
     };
     let can = |team| follow::can_spectate(mask, team);
@@ -1151,6 +1163,7 @@ fn mirror_vitals(clients: &mut [Option<Client>], rt: &script::ScriptRuntime) {
 fn mirror_vitals_of(sim: &mut ClientSim, rt: &script::ScriptRuntime, slot: usize) {
     sim.max_speed = rt.host.client_speed(slot);
     sim.gravity = rt.host.client_gravity();
+    sim.knockback = crate::game::builtins::cvar::atof(rt.host.cvars.get("g_knockback"));
     sim.ps.bg = rt.host.bg_cvars();
     // Health onto a playing sim only. Neither `ClientEndFrame`'s intermission
     // arm nor `SpectatorClientEndFrame` copies `ent->health` into the
@@ -2430,8 +2443,10 @@ impl Server {
             return;
         };
         let qport = qport as u16;
+        // A bot's loopback port and qport are made up; no socket owns them.
         let same_peer = |c: &Client| {
-            c.link.addr.ip() == from.ip()
+            !c.is_bot
+                && c.link.addr.ip() == from.ip()
                 && (c.link.netchan.qport == qport || c.link.addr.port() == from.port())
         };
         if self
@@ -2581,8 +2596,9 @@ impl Server {
         }
         let qport = u16::from_le_bytes([pkt[4], pkt[5]]);
         let peer = |c: &Option<Client>| {
-            c.as_ref()
-                .is_some_and(|c| c.link.addr.ip() == from.ip() && c.link.netchan.qport == qport)
+            c.as_ref().is_some_and(|c| {
+                !c.is_bot && c.link.addr.ip() == from.ip() && c.link.netchan.qport == qport
+            })
         };
         let Some(slot) = self.core.clients.iter().position(peer) else {
             match self.game.zombies.iter().position(peer) {
@@ -9735,6 +9751,47 @@ mod tests {
         assert_eq!(to, addr(5));
         assert_eq!(cmd, "connectResponse");
         assert_eq!(sv.client_count(), 1);
+    }
+
+    /// An archived follow copy is read in the field table it was written
+    /// in: on UO `velocity[2]` is not `proneDirection`'s index (BUG-136).
+    #[test]
+    fn an_archived_copy_reads_its_own_protocols_fields() {
+        use vcod_common::net::protocol::{PROTOCOL_V6, PROTOCOL_V22};
+        for p in [&PROTOCOL_V1, &PROTOCOL_V6, &PROTOCOL_V22] {
+            let mut ps = msg::PlayerState::null(p);
+            let mut set = |name: &str, v: i32| {
+                ps.fields[msg::PlayerState::field_index(p, name).unwrap()] = v;
+            };
+            set("velocity[0]", 1.0f32.to_bits() as i32);
+            set("velocity[1]", 2.0f32.to_bits() as i32);
+            set("velocity[2]", 3.0f32.to_bits() as i32);
+            set("proneDirection", 90.0f32.to_bits() as i32);
+            set("eFlags", crate::spectate::EF_TELEPORT_BIT);
+            let (v, teleport) = archived_motion(&ps, p);
+            assert_eq!(v, [1.0, 2.0, 3.0], "{}", p.transport.version);
+            assert!(teleport);
+        }
+    }
+
+    /// Bots sit at loopback ports and qports a real client can share; a
+    /// connect from one never takes a bot's slot (BUG-109).
+    #[test]
+    fn a_loopback_connect_at_a_bots_qport_takes_its_own_slot() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let mut bot = Client::new(addr(65535), 0x7000, 1, "\\name\\bot".into(), now);
+        bot.is_bot = true;
+        sv.core.clients[0] = Some(bot);
+        let later = now + Duration::from_secs(10);
+        let challenge = challenge_for(&mut sv, addr(65535), later);
+        sv.handle_packet(
+            addr(65535),
+            &connect_pkt(challenge, 0x7000, PROTOCOL_V1.transport.version),
+            later,
+        );
+        assert_eq!(sv.client_count(), 2);
+        assert!(sv.core.clients[0].as_ref().is_some_and(|c| c.is_bot));
     }
 
     /// A reconnect overwrites a slot the server may still believe is live

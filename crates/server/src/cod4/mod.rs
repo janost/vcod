@@ -1234,6 +1234,11 @@ impl Cod4Server {
         let now = self.core.sv_time_ms;
         let c = self.core.clients[slot].as_mut().unwrap();
         c.delta_message = if delta { message_ack } else { -1 };
+        // `cmdCount < 1` (0x81725bd) and `cmdCount > MAX_PACKET_USERCMDS`
+        // (0x81725c3) print and return before a cmd is read.
+        if cmds.is_empty() || cmds.len() > clmsg::MAX_PACKET_USERCMDS {
+            return;
+        }
         if message_ack >= 0 {
             c.link.ping_ring[message_ack as usize % PACKET_BACKUP].1 = now;
         }

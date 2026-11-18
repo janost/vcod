@@ -170,7 +170,10 @@ impl ShockProbe {
             out.push_str(l);
             out.push('\n');
         }
-        let dir = "crates/server/tests/fixtures/shellshock";
+        let dir = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../server/tests/fixtures/shellshock"
+        );
         std::fs::create_dir_all(dir)?;
         let path = crate::probe::fixture_path(
             dir,

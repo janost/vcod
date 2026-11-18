@@ -15,7 +15,7 @@ use vcod_common::{bsp, mesh};
 
 use crate::camera::FlyCamera;
 use crate::play::cod2::{Cod2Session, ConnectOpts, Join, ServerError};
-use crate::{App, Mode, World, cod2_scene, version_tag};
+use crate::{App, Mode, World, version_tag};
 
 /// How long a front-end connect waits for the gamestate, as `--connect`.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -119,9 +119,8 @@ impl App {
         if let Some(r) = &mut self.renderer {
             r.reopen(&self.fs);
         }
-        // what the draw parsed came off the old search path
         if let Some(c) = self.session.cod2_mut() {
-            c.draw = cod2_scene::Cod2Draw::new();
+            c.search_path_reopened();
         }
         Ok(())
     }

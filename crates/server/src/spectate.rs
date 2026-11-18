@@ -107,12 +107,12 @@ pub struct Seat {
 /// One `EV_PAIN` per 700 ms (combat doc, section 6, step 9).
 const PAIN_DEBOUNCE_MS: i32 = 700;
 /// `finishPlayerDamage`'s knockback (combat doc, 4.5): the stance scales,
-/// the cap, and `g_knockback / 250` at the cvar's stock 1000.
+/// the cap, and `g_knockback / 250` ([`ClientSim::knockback`]).
 const KNOCKBACK_STAND: f32 = 0.3;
 const KNOCKBACK_DUCKED: f32 = 0.15;
 const KNOCKBACK_PRONE: f32 = 0.02;
 const KNOCKBACK_MAX: i32 = 60;
-const KNOCKBACK_UNITS: f32 = 1000.0 / 250.0;
+const KNOCKBACK_MASS: f32 = 250.0;
 
 /// `finishPlayerDamage`'s per-frame accumulator (combat doc, 4.5): what the
 /// frame's hits added up to and where the last one came from, which
@@ -489,6 +489,10 @@ pub struct ClientSim {
     /// `(int)g_gravity`, mirrored off the host every frame
     /// (cod15-movement.md, "ps.gravity").
     pub gravity: i32,
+    /// `g_knockback.value`, mirrored off the host every frame: the
+    /// knockback's velocity is `knockback * g_knockback / 250`
+    /// (cod11-combat.md 4.5).
+    pub knockback: f32,
     /// The last frame a follow sent this spectator, the copy with its flags
     /// patched: the playerstate `StopFollowing` writes over.
     pub follow_wire: Option<msg::PlayerState>,
@@ -730,6 +734,7 @@ impl ClientSim {
             stance_window_ms: 0,
             max_speed: pmove::SPEED_RUN as i32,
             gravity: pmove::GRAVITY as i32,
+            knockback: 1000.0,
             follow_wire: None,
             residue: None,
             end_frame_wire: None,
@@ -2115,14 +2120,15 @@ impl ClientSim {
             };
             let kb = ((damage as f32 * scale) as i32).min(KNOCKBACK_MAX);
             if kb > 0 && has_dir {
-                let kvel = dir * (kb as f32 * KNOCKBACK_UNITS);
+                let units = self.knockback * kb as f32 / KNOCKBACK_MASS;
+                let kvel = dir * units;
                 let x = self.ps.velocity.x;
                 self.ps.velocity += kvel;
                 // 1.1d keeps x's product on the stack into its add
                 // (0x439e7..0x439fb); 1.5b and UO store it (cod11-combat.md
                 // 4.5).
                 if self.ps.rules == pmove::MoveRules::V1_1 {
-                    let s = f64::from(kb as f32 * KNOCKBACK_UNITS);
+                    let s = f64::from(units);
                     self.ps.velocity.x = (f64::from(x) + f64::from(dir.x) * s) as f32;
                 }
             }
@@ -4310,6 +4316,22 @@ mod tests {
         let w = sim.to_wire(p, 0, 0);
         assert_eq!(w.field_i32(p, "damageYaw"), 128);
         assert_eq!(w.field_i32(p, "damagePitch"), 249);
+    }
+
+    /// `g_knockback` scales the push: 0 leaves the velocity alone, the
+    /// stock 1000 is the measured push, 2000 doubles it (BUG-143).
+    #[test]
+    fn g_knockback_scales_the_push() {
+        let push = |g: f32| {
+            let mut sim = target();
+            sim.knockback = g;
+            sim.take_damage(&hit_op(40, false), None, &mut 1, (1000, 1000));
+            sim.ps.velocity
+        };
+        assert_eq!(push(0.0), Vec3::ZERO);
+        let stock = push(1000.0);
+        assert_ne!(stock, Vec3::ZERO);
+        assert!((push(2000.0) - stock * 2.0).length() < 1e-3);
     }
 
     /// One surviving hit writes the four feedback fields, the pain event

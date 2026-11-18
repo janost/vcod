@@ -619,6 +619,11 @@ pub(crate) fn launch(
             .to_string()
     };
     let classname = cx.intern_exact(&classname);
+    // CoD2's weapons are registered by `precacheItem` (`register_weapon`).
+    // Registered before the spawn, so a refusal leaves no entity behind.
+    if host.profile.weapons == crate::game::profile::WeaponNumbering::Fixed {
+        host.register_item(&name)?;
+    }
     let id = host.ents.spawn(cx)?;
     for (field, value) in [
         ("classname", Value::String(classname)),
@@ -627,10 +632,6 @@ pub(crate) fn launch(
     ] {
         let atom = cx.intern_folded(field);
         host.set_field(cx, id, atom, value)?;
-    }
-    // CoD2's weapons are registered by `precacheItem` (`register_weapon`).
-    if host.profile.weapons == crate::game::profile::WeaponNumbering::Fixed {
-        host.register_item(&name)?;
     }
     let now = host.level_time_ms;
     if let Some(e) = host.ents.get_mut(id) {
@@ -1183,8 +1184,13 @@ pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: 
             .schedule(id, ThinkFn::Free, now + FREE_AFTER_PICKUP_MS);
     } else if let Some(secs) = respawn {
         host.ents
-            .schedule(id, ThinkFn::RespawnItem, now + secs * 1000);
+            .schedule(id, ThinkFn::RespawnItem, respawn_at(now, secs));
     }
+}
+
+/// The respawn think's deadline `secs` after `now`.
+fn respawn_at(now: i32, secs: i32) -> i32 {
+    now.saturating_add(secs.saturating_mul(1000))
 }
 
 /// `Touch_Item`'s respawn (section 7): the pickup function's value, which is
@@ -1246,6 +1252,28 @@ mod tests {
                 assert!(l > lo - 1e-6 && l <= hi, "{l} outside ({lo}, {hi}]");
             }
         }
+    }
+
+    /// A launch of an item nobody registered past level init is the
+    /// script error, and leaves no entity behind (BUG-112).
+    #[test]
+    fn an_unregistered_launch_leaves_no_entity() {
+        let (mut vm, mut host) = fixture();
+        host.initializing = false;
+        let index = crate::items::classname_index(host.defs, "item_health").unwrap();
+        let before = host.ents.iter_inuse().count();
+        let r = vm.with_cx(|cx| launch(&mut host, cx, index, Vec3::ZERO, Vec3::ZERO, None));
+        assert!(r.is_err());
+        assert_eq!(host.ents.iter_inuse().count(), before);
+    }
+
+    /// A map's `wait` past i32 milliseconds neither overflows nor comes
+    /// due at once (BUG-137).
+    #[test]
+    fn a_huge_respawn_wait_is_far_off() {
+        assert_eq!(respawn_at(5000, 20), 25_000);
+        assert!(respawn_at(5000, 3_000_000) > 5000 + 1_000_000);
+        assert!(respawn_at(i32::MAX - 10, 1) > 0);
     }
 
     /// The use key's sort: scores under 1.0 apart compare equal and the

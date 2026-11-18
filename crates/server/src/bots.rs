@@ -1913,7 +1913,10 @@ impl Bot {
                 // selects `n` and its cmds ask for it (combat doc 9.8), so the
                 // bot's byte does too; the pickup half reads only the byte.
                 ["a", w] => {
-                    if let Ok(w) = w.parse::<u8>() {
+                    // The held mask is 64 bits: a weapon past it is never held.
+                    if let Ok(w) = w.parse::<u8>()
+                        && w < 64
+                    {
                         self.switch_to = Some(w);
                     }
                 }
@@ -1981,6 +1984,8 @@ impl Bot {
     /// indices the last one used; without the clear the bot never spawns
     /// again (the same rejoin the probes learned).
     pub fn rearm(&mut self) {
+        self.stage = Stage::Wander;
+        self.end_throw();
         self.main_menu.clear();
         self.answered.clear();
         self.round_start = true;
@@ -3673,8 +3678,11 @@ impl Bot {
             return cmd;
         }
         if !view.playing {
-            // Spectator or intermission camera: nothing to press.
+            // Spectator or intermission camera: nothing to press, and no
+            // throw carries into the next level or round.
             self.respawn_ticks = 0;
+            self.stage = Stage::Wander;
+            self.end_throw();
             self.disengage();
             self.recall = None;
             self.end_life();
@@ -4322,7 +4330,11 @@ impl Bot {
         // or swapped at a pickup) and the byte would read as a holster for
         // good.
         if let Some(w) = self.switch_to
-            && (view.weapon == w || view.weapons_held >> w & 1 == 0)
+            && (view.weapon == w
+                || view
+                    .weapons_held
+                    .checked_shr(u32::from(w))
+                    .is_none_or(|m| m & 1 == 0))
         {
             self.switch_to = None;
         }
@@ -5661,6 +5673,34 @@ mod tests {
             velocity: [0.0; 3],
         });
         (bot, v)
+    }
+
+    /// A switch to a weapon past the 64-bit held mask (a modded level's
+    /// `a <n>`) ends as a weapon not held, with no shift overflow
+    /// (BUG-156).
+    #[test]
+    fn a_switch_past_the_held_mask_ends() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = view();
+        v.playing = true;
+        bot.switch_to = Some(70);
+        bot.think(&v);
+        assert_eq!(bot.switch_to, None);
+    }
+
+    /// An intermission or a spectator spell drops a throw under way, as a
+    /// death does: the next level does not start on last level's frag
+    /// (BUG-135).
+    #[test]
+    fn a_throw_under_way_ends_when_the_bot_stops_playing() {
+        let mut bot = Bot::new("allies", true, 1);
+        bot.stage = Stage::Cook { left: 5, spoon: 2 };
+        bot.throw_at = Some([100.0, 0.0, 0.0]);
+        let mut v = view();
+        v.playing = false;
+        bot.think(&v);
+        assert!(matches!(bot.stage, Stage::Wander));
+        assert_eq!(bot.throw_at, None);
     }
 
     pub(super) fn view() -> BotView {

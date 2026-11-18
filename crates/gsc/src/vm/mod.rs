@@ -1602,6 +1602,21 @@ pub(crate) mod tests {
         }
     }
 
+    /// A vertical tab is a `strtol` blank like the other `isspace` bytes
+    /// (BUG-101).
+    #[test]
+    fn a_vertical_tab_before_a_cast_number_is_a_blank() {
+        for (src, want) in [
+            ("(int)\"\u{b}7\"", Value::Int(7)),
+            ("(int)\"\u{b}-7\"", Value::Int(-7)),
+            ("(float)\"\u{b}2.5\"", Value::Float(2.5)),
+            ("!\"\u{b}7\"", Value::Int(0)),
+        ] {
+            let (v, _, _) = run(&format!("main() {{ return {src}; }}"));
+            assert_eq!(v, want, "{src:?}");
+        }
+    }
+
     /// `i32::MIN` is not spellable: the magnitude saturates at `i32::MAX`
     /// before the unary minus applies, so `-2147483648` is `-2147483647`
     /// both directly and through `(int)`. Measured on retail

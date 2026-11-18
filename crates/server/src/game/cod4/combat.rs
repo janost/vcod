@@ -93,8 +93,9 @@ const SURF_MELEE_PASS: u32 = 0x10;
 /// The melee's mask (0x2806891, pushed at 0x80a2417 and 0x80a25a0).
 const MASK_MELEE: u32 = 0x280_6891;
 
-/// `EV_AMMO_PICKUP` (cod4-netfields.md 9).
-const EV_AMMO_PICKUP: u32 = 9;
+/// `EV_ITEM_PICKUP` (cod4-netfields.md 9), what retail sends for the touch
+/// of a dropped weapon already held (cod4-combat.md 6).
+const EV_ITEM_PICKUP: u32 = 9;
 
 /// `Bullet_Trace`'s mask (0x2806831).
 pub const MASK_SHOT: u32 = 0x280_6831;
@@ -1632,7 +1633,7 @@ impl Cod4Level {
     /// `Touch_Item` for the weapons at rest: a living player whose box
     /// meets the item's and who holds the same weapon takes its stock and
     /// clip into the reserve (`WeaponPickup_Touch`, `Add_Ammo`, capped at
-    /// `maxAmmo`); one that took any gets `EV_AMMO_PICKUP` and the item
+    /// `maxAmmo`); one that took any gets `EV_ITEM_PICKUP` and the item
     /// goes. Picking up a weapon not held is the use key's swap, not run
     /// (cod4-combat.md 6).
     pub(super) fn touch_items(&mut self) {
@@ -1662,7 +1663,7 @@ impl Cod4Level {
                     continue;
                 }
                 ps.ammo[d.ammo_index] = after;
-                ps.add_event(EV_AMMO_PICKUP, it.weapon);
+                ps.add_event(EV_ITEM_PICKUP, it.weapon);
                 let p = self.players[slot].as_mut().unwrap();
                 p.ps = ps.to_wire(&p.ps);
                 let l = &mut self.rt.host.cod4_mut().clients[slot].loadout;

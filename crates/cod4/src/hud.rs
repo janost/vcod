@@ -945,8 +945,9 @@ impl HudAssets {
                 },
             );
             let cell = |r: u32, c: u32| {
-                t.values
-                    .get((r * t.columns + c) as usize)
+                usize::try_from(u64::from(r) * u64::from(t.columns) + u64::from(c))
+                    .ok()
+                    .and_then(|i| t.values.get(i))
                     .cloned()
                     .flatten()
                     .unwrap_or_default()
@@ -1035,9 +1036,12 @@ impl HudAssets {
             self.script_menus.insert(sm.name.to_ascii_lowercase(), sm);
             let menu_name = menu.window.name.as_deref();
             let compass = menu_name == Some(COMPASS_MENU);
-            // A later zone's menu replaces an earlier's.
-            if menu_name == Some(KILLCAM_MENU) {
-                self.killcam.clear();
+            // A later zone's menu replaces an earlier's whole.
+            match menu_name {
+                Some(KILLCAM_MENU) => self.killcam.clear(),
+                Some(COMPASS_MENU) => self.compass.clear(),
+                Some(WEAPON_INFO_MENU) => self.weapon_info.clear(),
+                _ => {}
             }
             for item in menu.items.iter().flatten() {
                 let r = &item.raw;
@@ -1107,6 +1111,92 @@ pub fn colour_image(a: &Assets, m: &Material) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn menu(name: &str, items: &[&str]) -> crate::assets::ui::Menu {
+        use crate::assets::ui::{Item, ItemExps, ItemScripts, Menu, TypeData, Window};
+        let window = |n: &str| Window {
+            name: Some(n.to_string()),
+            group: None,
+            background: None,
+        };
+        Menu {
+            window: window(name),
+            font: None,
+            on_open: None,
+            on_close: None,
+            on_esc: None,
+            on_key: Vec::new(),
+            visible_exp: Vec::new(),
+            sound_name: None,
+            items: items
+                .iter()
+                .map(|n| {
+                    Some(Item {
+                        window: window(n),
+                        kind: 0,
+                        text: None,
+                        text_exp: Vec::new(),
+                        action: None,
+                        dvar: None,
+                        scripts: ItemScripts::default(),
+                        dvar_test: None,
+                        enable_dvar: None,
+                        on_key: Vec::new(),
+                        exps: ItemExps::default(),
+                        type_data: TypeData::None,
+                        raw: vec![0; 0x174],
+                    })
+                })
+                .collect(),
+            raw: vec![0; 0x11c],
+        }
+    }
+
+    /// A string table whose rows times columns pass u32 reads its cells
+    /// without an overflow (BUG-150).
+    #[test]
+    fn a_huge_string_table_reads_without_an_overflow() {
+        let a = Assets {
+            string_tables: vec![crate::assets::misc::StringTable {
+                name: "mp/rankIconTable.csv".into(),
+                columns: 0x8000_0000,
+                rows: 3,
+                values: Vec::new(),
+            }],
+            ..Assets::default()
+        };
+        HudAssets::default().add(&a);
+    }
+
+    /// A later zone's weaponinfo or compass_old menu replaces the earlier
+    /// one whole: an item only the stock menu has is gone (BUG-129).
+    #[test]
+    fn a_later_zones_hud_menu_replaces_the_earlier_ones_items() {
+        let mut hud = HudAssets::default();
+        let stock = Assets {
+            menus: vec![
+                menu(WEAPON_INFO_MENU, &["ammoStock", "weapname"]),
+                menu(COMPASS_MENU, &["minimapBG", "mini_map"]),
+            ],
+            ..Assets::default()
+        };
+        hud.add(&stock);
+        let modded = Assets {
+            menus: vec![
+                menu(WEAPON_INFO_MENU, &["weapname"]),
+                menu(COMPASS_MENU, &["mini_map"]),
+            ],
+            ..Assets::default()
+        };
+        hud.add(&modded);
+        assert!(hud.weapon_info.contains_key("weapname"));
+        assert!(!hud.weapon_info.contains_key("ammoStock"));
+        assert!(hud.compass.contains_key("mini_map"));
+        assert!(!hud.compass.contains_key("minimapBG"));
+        // A zone without the menu keeps what the earlier one gave.
+        hud.add(&Assets::default());
+        assert!(hud.weapon_info.contains_key("weapname"));
+    }
 
     /// A ragged last row (cells not a multiple of the columns) reads "".
     #[test]

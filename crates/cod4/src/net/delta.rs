@@ -869,7 +869,11 @@ pub fn read_delta_entity(
 ) -> Result<(Option<EntityState>, Wire)> {
     let lc = match read_wire_head(r, min_bits(ENTITY_LC_FIELDS)) {
         Err(Wire::Removed) => return Ok((None, Wire::Removed)),
-        Err(wire) => return Ok((Some(*from), wire)),
+        Err(wire) => {
+            let mut to = *from;
+            to.0[0] = number;
+            return Ok((Some(to), wire));
+        }
         Ok(lc) => lc,
     };
     let mut to = *from;
@@ -947,7 +951,11 @@ pub fn read_delta_client(
     let table = &fields::CLIENT_STATE;
     let lc = match read_wire_head(r, min_bits(table.len() as u32)) {
         Err(Wire::Removed) => return Ok((None, Wire::Removed)),
-        Err(wire) => return Ok((Some(*from), wire)),
+        Err(wire) => {
+            let mut to = *from;
+            to.0[0] = number;
+            return Ok((Some(to), wire));
+        }
         Ok(lc) => lc,
     };
     ensure!(
@@ -1354,6 +1362,38 @@ pub fn write_delta_playerstate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An entity or client sent unchanged against the zero state still
+    /// carries its own number (BUG-096).
+    #[test]
+    fn an_unchanged_delta_keeps_its_own_number() {
+        let ctx = Ctx {
+            time: 0,
+            map_center: [0.0; 3],
+        };
+        let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
+        write_delta_entity(
+            &mut w,
+            &ctx,
+            &EntityState::default(),
+            &EntityState::default(),
+            &Wire::Unchanged,
+        );
+        write_delta_client(
+            &mut w,
+            &ctx,
+            &ClientState::default(),
+            &ClientState::default(),
+            &Wire::Unchanged,
+        );
+        let mut r = MsgReader::from_plain(w.into_ops());
+        let (e, wire) = read_delta_entity(&mut r, &ctx, &EntityState::default(), 37).unwrap();
+        assert!(matches!(wire, Wire::Unchanged));
+        assert_eq!(e.unwrap().number(), 37);
+        let (c, wire) = read_delta_client(&mut r, &ctx, &ClientState::default(), 5).unwrap();
+        assert!(matches!(wire, Wire::Unchanged));
+        assert_eq!(c.unwrap().0[0], 5);
+    }
 
     #[test]
     fn min_bits_matches_the_table_widths() {

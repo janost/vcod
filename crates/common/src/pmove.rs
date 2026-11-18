@@ -1095,7 +1095,8 @@ impl PlayerState {
     /// `viewHeightLerpTime` for a playerstate whose `commandTime` is
     /// `server_time`: the time the running leg began, or 0.
     pub fn view_lerp_stamp(&self, server_time: i32) -> i32 {
-        self.view_lerp_ms.map_or(0, |ms| server_time - ms)
+        self.view_lerp_ms
+            .map_or(0, |ms| server_time.wrapping_sub(ms))
     }
 
     /// The stance `ps.eFlags` carries (0x20 crouch, 0x40 prone): the stance
@@ -1243,6 +1244,22 @@ fn drop_knockback(ps: &mut PlayerState, dt: f32) {
     }
 }
 
+/// The per-move outputs `PmoveSingle` clears at its top whatever the
+/// pm_type (`pm_flags` 0x8000 at 0x33e5a): every move arm calls it first.
+fn begin_move(ps: &mut PlayerState) {
+    ps.view_yaw_correction = 0.0;
+    ps.view_pitch_correction = 0.0;
+    ps.view_yaw_shorts = None;
+    ps.view_capped = [None; 2];
+    ps.prone_blocked = false;
+    ps.jumped = false;
+    ps.land_anim = false;
+    ps.takeoff = None;
+    ps.breakdown_continue = false;
+    ps.prone_flip = false;
+    ps.prone_flip_clears_torso = false;
+}
+
 /// `dt` in seconds, clamped to `MAX_FRAME_MS`. Returns the frame's events
 /// (movement, stance and weapon) in wire `EV_*` numbering.
 pub fn pmove(
@@ -1253,11 +1270,7 @@ pub fn pmove(
     weapons: &[Option<WeaponDef>],
 ) -> Vec<PmEvent> {
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
-    ps.view_yaw_correction = 0.0;
-    ps.view_pitch_correction = 0.0;
-    ps.view_yaw_shorts = None;
-    ps.view_capped = [None; 2];
-    ps.prone_blocked = false;
+    begin_move(ps);
     ps.since_jump_ms += msec(dt);
     if ps.rules == MoveRules::Uo {
         uo_prologue(ps, weapons);
@@ -1285,12 +1298,6 @@ pub fn pmove(
     );
     let weapon_def = weapons.get(ps.weapon as usize).and_then(Option::as_ref);
     let mut events = Vec::new();
-    ps.jumped = false;
-    ps.land_anim = false;
-    ps.takeoff = None;
-    ps.breakdown_continue = false;
-    ps.prone_flip = false;
-    ps.prone_flip_clears_torso = false;
     let was_on_ground = ps.on_ground;
     // retail's `pml.previous_origin` and `previous_velocity`, taken at the
     // top of PmoveSingle
@@ -1716,7 +1723,7 @@ fn update_fatigue(ps: &mut PlayerState, input: &PmInput, dt: f32, events: &mut V
 /// (`EV_FATIGUE_LAST_SOUND` again) once `iFatigueSoundTime` is more than
 /// 1700 ms old, stamping it; a rested one clears a stamp that old.
 fn fatigue_sound(ps: &mut PlayerState, server_time: i32, events: &mut Vec<PmEvent>) {
-    let stale = ps.fatigue_sound_time + FATIGUE_SOUND_MS < server_time;
+    let stale = ps.fatigue_sound_time.wrapping_add(FATIGUE_SOUND_MS) < server_time;
     if !ps.winded {
         if ps.fatigue_sound_time > 0 && stale {
             ps.fatigue_sound_time = 0;
@@ -1830,7 +1837,7 @@ pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) -> Vec<PmEven
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
     let idle = PmInput::default();
     let mut events = Vec::new();
-    ps.jumped = false;
+    begin_move(ps);
     ps.move_start = ps.origin;
     let start_vz = ps.velocity.z;
     // `PM_ClearAimDownSightFlag` (`game.mp.i386.so` 0x3abd4), which
@@ -1893,7 +1900,7 @@ fn dead_eye(ps: &mut PlayerState, dt: f32) {
 /// `cmd::dead_step`'s (cod11-player-clip.md 1.1).
 pub fn dead_linked_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
-    ps.jumped = false;
+    begin_move(ps);
     ps.move_start = ps.origin;
     ps.ads_active = false;
     update_lean(ps, &PmInput::default(), false, world, dt);
@@ -2238,6 +2245,7 @@ pub fn spectator_move(
     dt: f32,
 ) -> Vec<PmEvent> {
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
+    begin_move(ps);
     ps.on_ground = false;
     let arith = world.map_or(crate::patch::Arith::Kept, |w| w.world.arith());
     if ps.rules.v15() {
@@ -2523,7 +2531,7 @@ fn update_stance(
     // duration` read before this cmd's adjust (0x308cc, 0 with no leg).
     ps.prone_box_crouch = ps.stance == Stance::Prone && ps.view_height_cur != VIEW_PRONE && {
         let frac = ps.view_lerp_ms.map_or(0.0, |ms| {
-            (f64::from(ms + msec) / f64::from(view_lerp_duration(ps))).clamp(0.0, 1.0)
+            (f64::from(ms.wrapping_add(msec)) / f64::from(view_lerp_duration(ps))).clamp(0.0, 1.0)
         });
         frac <= 0.5
     };
@@ -2582,8 +2590,8 @@ fn prone_flip(ps: &mut PlayerState) {
 /// The target never moves mid-leg, so 1.1's turn back never happens.
 fn view_height_adjust_v15(ps: &mut PlayerState, msec: i32) {
     if let Some(ms) = ps.view_lerp_ms.as_mut() {
-        *ms += msec;
-        let pct = (*ms * 100 / view_lerp_duration(ps)).clamp(0, 100);
+        *ms = ms.wrapping_add(msec);
+        let pct = (ms.wrapping_mul(100) / view_lerp_duration(ps)).clamp(0, 100);
         if pct == 100 {
             ps.view_height_cur = ps.view_lerp_target;
             ps.view_lerp_ms = None;
@@ -2612,8 +2620,8 @@ fn view_height_adjust(ps: &mut PlayerState, msec: i32) {
     let target = ps.stance.view_height();
     let mut pct = 0;
     if let Some(ms) = ps.view_lerp_ms.as_mut() {
-        *ms += msec;
-        pct = (*ms * 100 / view_lerp_duration(ps)).clamp(0, 100);
+        *ms = ms.wrapping_add(msec);
+        pct = (ms.wrapping_mul(100) / view_lerp_duration(ps)).clamp(0, 100);
         if pct == 100 {
             ps.view_height_cur = ps.view_lerp_target;
             ps.view_lerp_ms = None;
@@ -5830,6 +5838,27 @@ mod tests {
             &[],
         );
         assert_eq!(ps.knockback_ms, 0.0);
+    }
+
+    /// `PmoveSingle` clears `pm_flags` 0x8000 at its top whatever the
+    /// pm_type (0x33e5a): a dead, a dead linked and a spectator move each
+    /// end with the refused prone press gone (BUG-132).
+    #[test]
+    fn every_move_arm_clears_the_prone_blocked_flag() {
+        let w = flat();
+        let w = MoveWorld::bare(&w);
+        for arm in 0..3 {
+            let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+            ps.prone_blocked = true;
+            ps.prone_flip = true;
+            match arm {
+                0 => drop(dead_move(&mut ps, &w, 0.05)),
+                1 => dead_linked_move(&mut ps, &w, 0.05),
+                _ => drop(spectator_move(&mut ps, Some(&w), 0.0, 0.0, 0.0, 0, 0.05)),
+            }
+            assert!(!ps.prone_blocked, "arm {arm}");
+            assert!(!ps.prone_flip, "arm {arm}");
+        }
     }
 
     /// A death takes the sight down: `PmoveSingle`'s dead arm calls

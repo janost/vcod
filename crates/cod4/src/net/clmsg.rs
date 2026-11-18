@@ -18,6 +18,8 @@ pub const MAX_CLIENT_COMMAND: usize = 1023;
 use anyhow::{Result, bail};
 use vcod_common::net::codec::{MsgReader, MsgWriter};
 
+/// The most usercmds a move message may carry (`SV_UserMove` 0x81725c3).
+pub const MAX_PACKET_USERCMDS: usize = 32;
 pub const CLC_MOVE: u32 = 0;
 pub const CLC_MOVE_NO_DELTA: u32 = 1;
 pub const CLC_CLIENT_COMMAND: u32 = 2;

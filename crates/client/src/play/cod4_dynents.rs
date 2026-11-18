@@ -72,7 +72,7 @@ pub fn on_fired(
     let broken = &mut done.broken;
     for (i, f) in fired.iter().enumerate() {
         let def = weapon_name(weapons, f.weapon)
-            .and_then(|w| world.defs.get(w))
+            .and_then(|w| world.def(w))
             .map(|d| &d.0);
         let radius = def.map(|w| w.explosion_radius as f32);
         if let Some(e) = super::cod4_players::explosion_at(f, radius) {
