@@ -1306,6 +1306,17 @@ impl GameHost {
         if let Some(m) = self.client_no_spectate.get_mut(slot) {
             *m = 0;
         }
+        // The engine's mirrors of the last occupant's moves and ammo.
+        if slot < self.client_buttons.len() {
+            self.client_buttons[slot] = 0;
+            self.client_last_cmd[slot] = vcod_common::net::msg::NULL_USERCMD;
+            self.client_pm_type[slot] = 0;
+            self.client_on_ground[slot] = false;
+            self.client_stance[slot] = vcod_common::pmove::Stance::Stand;
+            self.client_ammo[slot] = AmmoArrays::default();
+            self.client_aim[slot] = ([0.0; 3], [0.0; 2], false);
+            self.client_grenade_ms[slot] = 0;
+        }
         self.reset_client_objectives(slot);
         // The carried `pers`, if the boundary this client crossed kept one;
         // taken, so a later reconnect starts empty as retail's does.
@@ -2964,7 +2975,14 @@ fn hud_color_word(e: &crate::game::entity::GEntity, route: Route) -> u32 {
 /// to match. A free function so the bullet spread (`crate::game::combat`)
 /// draws from `Server`'s state the same way.
 pub fn rand_unit(state: &mut u64) -> f32 {
-    u64_to_f32(vcod_common::rng::xorshift(state)) / u64::MAX as f32
+    unit_of(vcod_common::rng::xorshift(state))
+}
+
+/// [`rand_unit`] off one generator word.
+fn unit_of(x: u64) -> f32 {
+    // The top 2^39 words round to 2^64 as f32: held under 1, which leaves
+    // every other draw as it was.
+    (u64_to_f32(x) / u64::MAX as f32).min(f32::from_bits(0x3f7f_ffff))
 }
 
 /// `x as f32` without a `u64` to `f32` cast: LLVM 23's instruction selection
@@ -3740,6 +3758,48 @@ mod tests {
         for x in edges.into_iter().chain(draws) {
             assert_eq!(u64_to_f32(x).to_bits(), (x as f32).to_bits(), "{x:#x}");
         }
+    }
+
+    /// A connect into a used slot starts from a clean `gclient_t`: none of
+    /// the last occupant's engine mirrors carry over (BUG-141).
+    #[test]
+    fn a_connect_starts_the_slots_mirrors_clean() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut host = GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]);
+        vm.with_cx(|cx| {
+            host.connect_client(cx, 2, "a");
+        });
+        host.client_buttons[2] = 7;
+        host.client_last_cmd[2].server_time = 1234;
+        host.client_pm_type[2] = 4;
+        host.client_on_ground[2] = true;
+        host.client_stance[2] = vcod_common::pmove::Stance::Prone;
+        host.client_ammo[2].ammo[1] = 30;
+        host.client_aim[2].2 = true;
+        host.client_grenade_ms[2] = 500;
+        host.ents.free_client(2);
+        vm.with_cx(|cx| {
+            host.connect_client(cx, 2, "b");
+        });
+        assert_eq!(host.client_buttons[2], 0);
+        assert_eq!(host.client_last_cmd[2], vcod_common::net::msg::NULL_USERCMD);
+        assert_eq!(host.client_pm_type[2], 0);
+        assert!(!host.client_on_ground[2]);
+        assert_eq!(host.client_stance[2], vcod_common::pmove::Stance::Stand);
+        assert_eq!(host.client_ammo[2], AmmoArrays::default());
+        assert!(!host.client_aim[2].2);
+        assert_eq!(host.client_grenade_ms[2], 0);
+    }
+
+    /// The top 2^39 words round to 2^64 as f32; the draw still stays under
+    /// 1, so CoD4's `randomInt(n)` stays under `n` (BUG-140).
+    #[test]
+    fn the_top_generator_words_stay_under_one() {
+        for x in [u64::MAX, u64::MAX - (1 << 38), 1 << 63] {
+            assert!(unit_of(x) < 1.0, "{x:#x}");
+            assert!(((unit_of(x) * 10.0) as i32) < 10);
+        }
+        assert_eq!(unit_of(0), 0.0);
     }
 
     /// `mp_pavlov.gsc` opens with exactly these two calls, and they are the
