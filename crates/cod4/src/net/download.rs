@@ -37,7 +37,6 @@ fn latin1(b: &[u8]) -> String {
     b.iter().map(|&c| c as char).collect()
 }
 
-
 impl DownloadMsg {
     /// Reads one as `CL_ParseDownload` does: the block as a long, -1 a
     /// redirect, 0 the file's size as a long (negative: a refusal string),

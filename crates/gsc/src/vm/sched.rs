@@ -764,7 +764,10 @@ impl Vm {
         let start = self.spent;
         loop {
             let cap = if steps >= Self::MAX_THREADS_PER_FRAME {
-                Some(("MAX_THREADS_PER_FRAME", u64::from(Self::MAX_THREADS_PER_FRAME)))
+                Some((
+                    "MAX_THREADS_PER_FRAME",
+                    u64::from(Self::MAX_THREADS_PER_FRAME),
+                ))
             } else if self.spent - start >= Self::MAX_PASS_INSTRUCTIONS {
                 Some(("MAX_PASS_INSTRUCTIONS", Self::MAX_PASS_INSTRUCTIONS))
             } else {
