@@ -10,7 +10,7 @@ use glam::Vec3;
 use vcod_common::net::protocol::ENTITYNUM_WORLD;
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("bullettrace", bullet_trace),
@@ -463,10 +463,6 @@ fn notify_death(cx: &mut Cx, victim: Option<Target>, attacker: Value) {
         let death = cx.intern_folded("death");
         cx.notify(victim, death, vec![attacker]);
     }
-}
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
 }
 
 fn as_f32(v: &Value) -> Result<f32, ErrorKind> {

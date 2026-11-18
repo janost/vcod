@@ -22,7 +22,7 @@ use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 /// (docs/research/cod11-combat.md 14.7, "The pass runs after the threads").
 const DELETE_DEFER_MS: i32 = 100;
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("getent", get_ent),
@@ -50,10 +50,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("sethintstring", set_hint_string),
     ("useby", use_by),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// `getEntArray`'s equality. String atoms are interned exactly
 /// (`Cx::intern_exact`), so two spellings of one text are two different

@@ -4735,24 +4735,23 @@ impl Bot {
         let off = yaw_diff(view.view[0] + g[0], tp).hypot(yaw_diff(view.view[1] + g[1], ty));
         let cone = (HIT_RADIUS / dist).atan().to_degrees();
 
-        if std::env::var_os("PONYRI_DBG").is_some() {
-            eprintln!(
-                "BOT org={:?} e={} dist={:.0} off={:.3} cone={:.3} err={:.1} cd={} busy={} ads_frac={} fil={} clip={} view={:?} aim={:?}",
-                view.origin,
-                e.slot,
-                dist,
-                off,
-                cone,
-                self.target.as_ref().map_or(0.0, |t| t.error),
-                self.fire_cooldown,
-                view.busy_ms,
-                view.ads_frac,
-                view.friend_in_line,
-                view.clip,
-                view.view,
-                aim
-            );
-        }
+        log::trace!(
+        target: "vcod_server::bots::engage",
+        "BOT org={:?} e={} dist={:.0} off={:.3} cone={:.3} err={:.1} cd={} busy={} ads_frac={} fil={} clip={} view={:?} aim={:?}",
+            view.origin,
+            e.slot,
+            dist,
+            off,
+            cone,
+            self.target.as_ref().map_or(0.0, |t| t.error),
+            self.fire_cooldown,
+            view.busy_ms,
+            view.ads_frac,
+            view.friend_in_line,
+            view.clip,
+            view.view,
+            aim
+        );
         if view.lmg {
             let ready = self.bipod(view, [tp - g[0], ty], cmd);
             self.trigger(view, dist, off, cone, ready, cmd);

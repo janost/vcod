@@ -770,7 +770,7 @@ fn the_kill_commands_death_frame_is_retails() {
         ("allies", "m1carbine_mp"),
     );
     let p = &PROTOCOL_V1;
-    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+    let carbine = vcod_server::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
     // The byte a retail client sends: the weapon it holds.
     let holding = vcod_common::net::msg::UserCmd {
         weapon: carbine,
@@ -894,7 +894,7 @@ fn a_bullet_deaths_frame_is_retails() {
         ("allies", "m1carbine_mp"),
     );
     let p = &PROTOCOL_V1;
-    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+    let carbine = vcod_server::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
     let num = |c: &vcod_common::net::NetClient<common::ClientEnd>| {
         c.snapshots().newest().unwrap().ps.field_i32(p, "clientNum") as usize
     };
@@ -1014,8 +1014,8 @@ fn a_player_killed_earlier_in_the_frame_stops_no_later_round() {
     sv.place_client(na, spot, 0.0);
     sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
     sv.place_client(nc, [spot[0] + 80.0, spot[1], spot[2]], 180.0);
-    let thompson = vcod_server::configstrings::weapon_index("thompson_mp").unwrap() as u8;
-    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+    let thompson = vcod_server::defs::V1.weapon_index("thompson_mp").unwrap() as u8;
+    let carbine = vcod_server::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
     let a_sight = UserCmd {
         buttons: BUTTON_ADS,
         weapon: thompson,
@@ -1394,7 +1394,9 @@ fn two_placed_under(
 }
 
 fn frag_index() -> u8 {
-    vcod_server::configstrings::weapon_index("fraggrenade_mp").expect("the frag in CS 7") as u8
+    vcod_server::defs::V1
+        .weapon_index("fraggrenade_mp")
+        .expect("the frag in CS 7") as u8
 }
 
 /// `G_RadiusDamage` end to end (combat doc, 14.1): a frag thrown at the
@@ -2615,7 +2617,9 @@ fn fire_panzerfaust(
 ) -> RocketSeen {
     use vcod_common::net::msg::{BUTTON_ATTACK, NULL_USERCMD, UserCmd};
     let p = &PROTOCOL_V1;
-    let pf = vcod_server::configstrings::weapon_index("panzerfaust_mp").expect("CS 7") as u8;
+    let pf = vcod_server::defs::V1
+        .weapon_index("panzerfaust_mp")
+        .expect("CS 7") as u8;
     let aimed = UserCmd {
         angles: [angle_short(aim.1), angle_short(aim.0), 0],
         weapon: pf,

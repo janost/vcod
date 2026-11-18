@@ -88,7 +88,7 @@ pub type Sends = Vec<(Option<usize>, String)>;
 /// `Cmd_Vote_f`'s yes test, which reads the second character for two of
 /// its three cases: `y` first, or `Y` or `1` second. `vote Yes` and
 /// `vote 1` count as no on both servers (measured).
-fn is_yes(arg: &str) -> bool {
+pub(crate) fn is_yes(arg: &str) -> bool {
     let b = arg.as_bytes();
     b.first() == Some(&b'y') || matches!(b.get(1), Some(b'Y' | b'1'))
 }

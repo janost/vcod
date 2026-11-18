@@ -13,7 +13,7 @@ use crate::game::builtins::entity::entity_receiver;
 use crate::game::host::{GameHost, SimOp};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("playsound", play_sound),
@@ -24,10 +24,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("musicstop", music_stop),
     ("soundfade", sound_fade),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// The alias's configstring slot, allocated on first use the way retail's
 /// `G_SoundAliasIndex` allocates it.

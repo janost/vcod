@@ -46,8 +46,8 @@ pub(super) const MASK_RADIUS_LOS: u32 = 0x80_2011;
 /// The flashbang's `CanDamage` mask (the flashbang blast).
 const MASK_FLASH_LOS: u32 = 0x801;
 const MASK_EXPLODE_DOWN: u32 = 0x811;
-/// `SURF_NOIMPACT`: a missile meeting it is freed without a burst.
-const SURF_NOIMPACT: u32 = 4;
+/// A missile meeting the sky bit (0x4) is freed without a burst.
+use vcod_common::clipmap::SURF_SKY;
 /// `g_minGrenadeDamageSpeed`.
 const MIN_GRENADE_DAMAGE_SPEED: f32 = 400.0;
 /// The `nextthink` `G_ExplodeMissile` gives a smoke grenade still in the
@@ -853,7 +853,7 @@ impl Cod4Level {
             return self.store_missile(m);
         }
         self.store_missile(m);
-        if hit.surface_flags & SURF_NOIMPACT != 0 {
+        if hit.surface_flags & SURF_SKY != 0 {
             self.free_missile(id);
         } else {
             let heading = (goal - start).normalize_or_zero();

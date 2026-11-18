@@ -27,8 +27,8 @@ const CONTENTS_BODY: u32 = 0x200_0000;
 const SURF_FLESH: u32 = 0x70_0000;
 /// `SURF_NOPENETRATE`: such a surface stops a round.
 const SURF_NOPENETRATE: u32 = 0x100;
-/// `SURF_SKY`: a round into it raises no impact.
-const SURF_SKY: u32 = 0x4;
+/// A round into the sky raises no impact.
+use vcod_common::clipmap::SURF_SKY;
 /// `bullet_penetrationMinFxDist`'s default.
 const PENETRATION_MIN_FX_DIST: f32 = 30.0;
 /// Glass's contents bit: an extended round shoots on through it

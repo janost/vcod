@@ -454,8 +454,9 @@ use vcod_common::net::event_ids::EV_BULLET_HIT_LARGE;
 use vcod_common::net::event_ids::EV_BULLET_HIT_SMALL;
 /// The flesh `surfType` `finishPlayerDamage` hardcodes (combat doc, 4.5).
 const SURF_FLESH: i32 = 7;
-/// The surface flag that suppresses the impact effect (combat doc, 2.3).
-const SURF_NO_IMPACT: u32 = 0x4;
+/// A bullet raises no impact on the sky bit (combat doc, 2.3); melee tests
+/// `SURF_NOIMPACT`.
+use vcod_common::clipmap::{SURF_NOIMPACT, SURF_SKY};
 /// How far a bullet travels on 1.1 and 1.5: `muzzle + forward * 8192`
 /// (combat doc, 2.2).
 pub const BULLET_RANGE: f32 = 8192.0;
@@ -1167,10 +1168,10 @@ fn fire_round(
                 takes_damage,
             } => {
                 let point = start + (end - start) * fraction;
-                if surface_flags & SURF_NO_IMPACT != 0 && from_shooter {
+                if surface_flags & SURF_SKY != 0 && from_shooter {
                     out.effects.extend(tracer(start, point));
                 }
-                if surface_flags & SURF_NO_IMPACT == 0 && draws_impact(&pass) {
+                if surface_flags & SURF_SKY == 0 && draws_impact(&pass) {
                     out.effects
                         .push(impact(point, normal, surface_flags, start));
                 }
@@ -1193,10 +1194,10 @@ fn fire_round(
                 break;
             }
             Traced::World(t) => {
-                if t.surface_flags & SURF_NO_IMPACT != 0 && from_shooter {
+                if t.surface_flags & SURF_SKY != 0 && from_shooter {
                     out.effects.extend(tracer(start, t.endpos));
                 }
-                if t.surface_flags & SURF_NO_IMPACT == 0 && draws_impact(&pass) {
+                if t.surface_flags & SURF_SKY == 0 && draws_impact(&pass) {
                     out.effects
                         .push(impact(t.endpos, t.normal, t.surface_flags, start));
                 }
@@ -1601,9 +1602,6 @@ fn box_normal(p: Vec3, lo: Vec3, hi: Vec3) -> Vec3 {
     best.1
 }
 
-/// `SURF_SKY`, which a strike's trace refunds on.
-const SURF_SKY: u32 = 0x4;
-
 /// `Weapon_ArtilleryStrike_Fire`'s locational trace (game.mp.uo 0x7b758,
 /// mask 0x2802031 with `bulletPriorityMap`): where the aim from `muzzle` to
 /// `end` stops, on the world, a live body or a shootable grenade, and
@@ -2007,7 +2005,7 @@ pub fn melee_fire(
             },
             // A brush entity's face names it, and `G_Damage` runs on one with
             // `takedamage`: a door at rest opens (movers doc 26.6).
-            Traced::World(t) if t.surface_flags & crate::game::missile::SURF_NOIMPACT == 0 => {
+            Traced::World(t) if t.surface_flags & SURF_NOIMPACT == 0 => {
                 let other = world.map_or(ENTITYNUM_WORLD, |w| w.entity_num(&t));
                 let mut effects = vec![miss(t.normal, t.surface_flags, other, t.endpos)];
                 if let Some(&target) = damageable.iter().find(|id| id.0 == other) {

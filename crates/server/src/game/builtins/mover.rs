@@ -19,7 +19,7 @@ use crate::game::mover::Ramp;
 use glam::Vec3;
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("moveto", move_to),
@@ -33,10 +33,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("rotateroll", rotate_roll),
     ("rotatevelocity", rotate_velocity),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// The classnames retail's own handlers accept. Anything else is the fatal
 /// `entity N is not a script_brushmodel, script_model, or script_origin`

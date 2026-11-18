@@ -1859,7 +1859,7 @@ mod tests {
             .expect("a spawned bot")
             .ps
             .origin;
-        let frag = crate::configstrings::weapon_index("fraggrenade_mp").unwrap() as u8;
+        let frag = crate::defs::V1.weapon_index("fraggrenade_mp").unwrap() as u8;
         let (yaw, target) = (0..16)
             .find_map(|i| {
                 let yaw = i as f32 * 22.5;

@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use vcod_common::asset_source::{AssetSource, RawFile};
 
+use crate::game::builtins::attach::ATTACH_SLOTS;
 use crate::game::builtins::set::BuiltinSet;
 use crate::game::host::{ClientEvent, GameHost, SpawnRequest};
 use crate::game::item::Activate;
@@ -222,24 +223,6 @@ fn render(cx: &vcod_gsc::Cx, v: Value) -> String {
     cx.format_number(v).unwrap_or_else(|| format!("{v:?}"))
 }
 
-/// Owns one map's loaded script closure, the `Vm` it lives in, and the
-/// `GameHost` the object table and configstrings live in. The host has to
-/// outlive map load: a thread can spawn an entity in one frame and read it
-/// back in the next, so a host that died at the end of `load` would throw
-/// the object table away under it.
-///
-/// Always a fresh `Vm`/`GameHost` per map, never a reload into a live one:
-/// `Vm::install` rejects a duplicate `FuncRef` rather than silently
-/// overwriting, so re-loading a shared gametype script into a `Vm` that
-/// already has it would fail loudly. Every stock gametype references the
-/// same shared scripts, so a map change that reused one long-lived `Vm`
-/// would hit this on the first shared file. A map change therefore builds
-/// a new `ScriptRuntime` and drops the old one; the heap goes with it,
-/// which is also what the VM's no-garbage-collection design assumes.
-/// `clientState` carries six attachment pairs
-/// (`docs/research/clientstate-wire-format.md`).
-pub const ATTACH_SLOTS: usize = 6;
-
 /// What a client entity wears, by name: `.model` and the attachments with
 /// their ignoreCollision bits. `None` without a model.
 pub(crate) fn wear(
@@ -355,6 +338,20 @@ pub enum PassStop {
     Client(usize),
 }
 
+/// Owns one map's loaded script closure, the `Vm` it lives in, and the
+/// `GameHost` the object table and configstrings live in. The host has to
+/// outlive map load: a thread can spawn an entity in one frame and read it
+/// back in the next, so a host that died at the end of `load` would throw
+/// the object table away under it.
+///
+/// Always a fresh `Vm`/`GameHost` per map, never a reload into a live one:
+/// `Vm::install` rejects a duplicate `FuncRef` rather than silently
+/// overwriting, so re-loading a shared gametype script into a `Vm` that
+/// already has it would fail loudly. Every stock gametype references the
+/// same shared scripts, so a map change that reused one long-lived `Vm`
+/// would hit this on the first shared file. A map change therefore builds
+/// a new `ScriptRuntime` and drops the old one; the heap goes with it,
+/// which is also what the VM's no-garbage-collection design assumes.
 pub struct ScriptRuntime {
     vm: Vm,
     pub(crate) host: GameHost,
@@ -1876,7 +1873,7 @@ impl ScriptRuntime {
     }
 
     /// `G_MoverPush` over the players in `sims` and the items `step`
-    /// listed (`crate::push::push`); a blocked push holds the mover a frame.
+    /// listed (`crate::push::push_with`); a blocked push holds the mover a frame.
     /// A player a sine mover crushes takes `G_Damage(player, mover, mover,
     /// NULL, NULL, 99999, 0, MOD_CRUSH)` (game.mp 0x55617) before the
     /// mover's end-of-period test.
@@ -2658,8 +2655,7 @@ impl ScriptRuntime {
         }
         let arg = |i: usize| argv.get(i).map_or("", String::as_str);
         if argv[0].eq_ignore_ascii_case("vote") {
-            let b = arg(1).as_bytes();
-            let yes = b.first() == Some(&b'y') || matches!(b.get(1), Some(b'Y' | b'1'));
+            let yes = crate::game::vote::is_yes(arg(1));
             self.notify_client(slot, "vote", &[if yes { "yes" } else { "no" }]);
             return Some(Vec::new());
         }
@@ -6671,7 +6667,7 @@ mod tests {
         };
         for (name, s) in [("m1carbine_mp", 1), ("colt_mp", 3), ("fraggrenade_mp", 4)] {
             rt.host.precache_items_for_test(&[name]);
-            let w = crate::configstrings::weapon_index(name).unwrap();
+            let w = crate::defs::V1.weapon_index(name).unwrap();
             let d = rt.host.weapons.get(w).unwrap().clone();
             rt.host.client_weapons[0].give(w, s);
             rt.host.client_ammo[0].clip[d.clip_index] = d.clip_size as i16;
@@ -6680,7 +6676,7 @@ mod tests {
             }
         }
         rt.host.client_weapons[0].current =
-            crate::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+            crate::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
         rt.set_client_origin(0, [0.0; 3]);
         rt
     }
@@ -6812,7 +6808,7 @@ mod tests {
     #[test]
     fn two_items_in_reach_on_one_cmd_see_each_others_ammo() {
         let mut rt = pickup_rig();
-        let fg = crate::configstrings::weapon_index("fg42_mp").unwrap();
+        let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap();
         let d = rt.host.weapons.get(fg).unwrap().clone();
         rt.host.client_weapons[0].give(fg, 2);
         rt.host.client_ammo[0].clip[d.clip_index] = 20;
@@ -6859,7 +6855,7 @@ mod tests {
     #[test]
     fn the_use_key_swaps_and_the_trigger_notify_names_the_drop() {
         let mut rt = pickup_rig();
-        let fg = crate::configstrings::weapon_index("fg42_mp").unwrap();
+        let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap();
         rt.host.client_weapons[0].give(fg, 2);
         let pf = rt.place_item("mpweapon_panzerfaust", [40.0, 0.0, 30.0], 0);
         cmd(&mut rt, 0, 0, [0.0, 0.0, 60.0], [36.0, 0.0, 0.0]);
@@ -6871,7 +6867,7 @@ mod tests {
             [36.0, 0.0, 0.0],
         );
         assert!(rt.host.ents.get(pf).unwrap().item.unwrap().taken);
-        let carbine = crate::configstrings::weapon_index("m1carbine_mp").unwrap();
+        let carbine = crate::defs::V1.weapon_index("m1carbine_mp").unwrap();
         let (drop, state) = rt
             .host
             .ents
@@ -6901,7 +6897,7 @@ mod tests {
                 .iter()
                 .any(|(id, ev, _)| *id == client && *ev == "touch")
         );
-        let panzerfaust = crate::configstrings::weapon_index("panzerfaust_mp").unwrap();
+        let panzerfaust = crate::defs::V1.weapon_index("panzerfaust_mp").unwrap();
         assert!(
             rt.take_client_commands()
                 .contains(&(0, format!("a {panzerfaust}")))
@@ -7190,7 +7186,7 @@ mod tests {
     #[test]
     fn an_owned_weapon_hints_73_past_its_index_until_taken() {
         let mut rt = pickup_rig();
-        let fg = crate::configstrings::weapon_index("fg42_mp").unwrap();
+        let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap();
         let d = rt.host.weapons.get(fg).unwrap().clone();
         rt.host.client_weapons[0].give(fg, 2);
         rt.host.client_ammo[0].ammo[d.ammo_index] = 100;
@@ -7205,12 +7201,12 @@ mod tests {
     #[test]
     fn an_owner_locked_drop_hints_nothing_until_its_lock_clears() {
         let mut rt = pickup_rig();
-        let fg = crate::configstrings::weapon_index("fg42_mp").unwrap();
+        let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap();
         rt.host.client_weapons[0].give(fg, 2);
         rt.place_item("mpweapon_panzerfaust", [40.0, 0.0, 30.0], 0);
         assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 32);
         cmd(&mut rt, 0, vcod_common::net::msg::BUTTON_USE, EYE, AT_ITEM);
-        let carbine = crate::configstrings::weapon_index("m1carbine_mp").unwrap();
+        let carbine = crate::defs::V1.weapon_index("m1carbine_mp").unwrap();
         let drop = rt
             .host
             .ents

@@ -8,7 +8,7 @@ use super::entity::entity_receiver;
 use crate::game::host::{GameHost, SimOp};
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("getfullclipammo", get_full_clip_ammo),
@@ -31,10 +31,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("dodamagemod", do_damage_mod),
     ("spawntriggermount", spawn_trigger_mount),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// `getFullClipAmmo(weapon)` (0x6782e): the weapon file's `clipSize`.
 pub fn get_full_clip_ammo(

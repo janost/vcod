@@ -549,7 +549,7 @@ pub fn cursor_hint(proto: &Protocol, kind: ItemKind, owned: bool) -> i32 {
 /// real table is, so the arithmetic runs without paks.
 #[cfg(test)]
 pub(crate) fn tests_table() -> WeaponTable {
-    use crate::configstrings::weapon_index;
+    use crate::defs::V1;
     fn def(keys: &[(&str, &str)]) -> WeaponDef {
         let map = keys
             .iter()
@@ -559,7 +559,7 @@ pub(crate) fn tests_table() -> WeaponTable {
     }
     let mut defs = vec![None; crate::defs::V1.num_items()];
     let mut put = |name: &str, keys: &[(&str, &str)]| {
-        defs[weapon_index(name).unwrap()] = Some(def(keys));
+        defs[V1.weapon_index(name).unwrap()] = Some(def(keys));
     };
     put(
         "colt_mp",
@@ -655,14 +655,14 @@ pub(crate) fn tests_table() -> WeaponTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::configstrings::weapon_index;
+    use crate::defs::V1;
 
     fn table() -> WeaponTable {
         tests_table()
     }
 
     fn idx(name: &str) -> u8 {
-        weapon_index(name).unwrap() as u8
+        V1.weapon_index(name).unwrap() as u8
     }
 
     /// The americans' spawn: carbine in primary, colt in pistol, frag in

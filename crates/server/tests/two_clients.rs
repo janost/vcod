@@ -776,8 +776,8 @@ fn a_weapon_switch_off_the_usercmd_byte_happens_once() {
     let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
 
     let p = &PROTOCOL_V1;
-    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as i32;
-    let colt = vcod_server::configstrings::weapon_index("colt_mp").unwrap() as u8;
+    let carbine = vcod_server::defs::V1.weapon_index("m1carbine_mp").unwrap() as i32;
+    let colt = vcod_server::defs::V1.weapon_index("colt_mp").unwrap() as u8;
     assert_eq!(
         cl.snapshots().newest().unwrap().ps.field_i32(p, "weapon"),
         carbine,
@@ -872,8 +872,10 @@ fn a_client_out_of_grenades_gets_its_rifle_back() {
     let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
 
     let p = &PROTOCOL_V1;
-    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
-    let frag = vcod_server::configstrings::weapon_index("fraggrenade_mp").unwrap() as u8;
+    let carbine = vcod_server::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
+    let frag = vcod_server::defs::V1
+        .weapon_index("fraggrenade_mp")
+        .unwrap() as u8;
     let run = |sv: &mut vcod_server::Server,
                cl: &mut vcod_common::net::NetClient<common::ClientEnd>,
                now: &mut Instant,

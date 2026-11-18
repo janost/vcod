@@ -8,6 +8,12 @@
 use crate::spectate::ClientSim;
 use glam::Vec3;
 use vcod_common::fguard;
+// The stance events: `cod11-events-and-fx.md`. ENTITYNUM_NONE is
+// `viewlocked_entNum` after a release (turrets doc 12.7).
+use vcod_common::net::event_ids::{
+    EV_STANCE_FORCE_CROUCH, EV_STANCE_FORCE_PRONE, EV_STANCE_FORCE_STAND,
+};
+use vcod_common::net::protocol::ENTITYNUM_NONE;
 use vcod_common::net::protocol::{CsLayout, PROTOCOL_V1, Protocol};
 use vcod_common::pmove::Stance;
 use vcod_common::pmove::aim::{angle_normalize_180, angle_subtract};
@@ -619,13 +625,6 @@ pub fn lift_onto_floor(
     }
     at
 }
-
-use vcod_common::net::event_ids::EV_STANCE_FORCE_CROUCH;
-use vcod_common::net::event_ids::EV_STANCE_FORCE_PRONE;
-/// `EV_STANCE_FORCE_STAND`/`_CROUCH`/`_PRONE` (`cod11-events-and-fx.md`).
-use vcod_common::net::event_ids::EV_STANCE_FORCE_STAND;
-/// `viewlocked_entNum` after a release (turrets doc 12.7).
-use vcod_common::net::protocol::ENTITYNUM_NONE;
 
 /// The record half of `G_ClientStopUsingTurret` (0x53054, turrets doc 8):
 /// the gun is free and its loop timer spent. Returns the gunner's slot and

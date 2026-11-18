@@ -6,7 +6,7 @@
 use crate::game::host::{GameHost, LevelLatch};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("getcvar", get_cvar),
@@ -21,10 +21,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("map_restart", map_restart),
     ("setclientnamemode", set_client_name_mode),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// C `atoi` as the Linux servers read it (`strtol`).
 pub(crate) use vcod_common::text::atoi;

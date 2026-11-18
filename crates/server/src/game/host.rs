@@ -47,7 +47,7 @@ pub fn empty_objective() -> Objective {
 /// The builtins `GameHost` answers itself: the env and io names, which have
 /// no family module of their own. `builtins::set::implementations` lists
 /// them with the families.
-pub const INLINE: &[(&str, builtins::score::Builtin)] = &[
+pub const INLINE: &[(&str, builtins::Builtin)] = &[
     ("setcullfog", set_cull_fog),
     ("setexpfog", set_exp_fog),
     ("ambientplay", ambient_play),
@@ -645,7 +645,7 @@ struct AtomMemo {
     profile: usize,
     entity: Vec<Option<Route>>,
     hud: Vec<Option<Route>>,
-    builtins: Vec<Option<Option<builtins::score::Builtin>>>,
+    builtins: Vec<Option<Option<builtins::Builtin>>>,
     plain: Vec<Option<bool>>,
     /// [`AtomMemo::read`]'s answers, an entity's and a hudelem's.
     reads: Vec<Option<(Except, Route)>>,
@@ -758,7 +758,7 @@ impl AtomMemo {
         profile: &'static crate::game::profile::HostProfile,
         cx: &Cx,
         name: Atom,
-    ) -> Option<builtins::score::Builtin> {
+    ) -> Option<builtins::Builtin> {
         self.check(profile, cx);
         let i = name.0 as usize;
         if self.builtins.len() <= i {

@@ -9025,7 +9025,7 @@ mod tests {
         let w = &world.collision;
         let target = glam::Vec2::new(-1856.1, -538.4);
         let mut ps = PlayerState::spawn(Vec3::new(-1779.3, -607.2, 116.125), 0.0);
-        ps.weapon = crate::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+        ps.weapon = crate::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
         let mw = MoveWorld::bare(w);
         let mut last = None;
         for tick in 1..20 {

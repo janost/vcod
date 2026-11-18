@@ -591,9 +591,9 @@ pub struct BrushHull {
 }
 
 /// Every lump-27 submodel's brushes as clip planes, indexed by model number,
-/// for the exact stage of the touch pass. Model 0 is the world and is left
-/// empty: no trigger uses it and its brushes are the map's whole solid
-/// geometry.
+/// for the exact stage of the touch pass. Model 0's list is empty: its
+/// brushes are the map's whole solid geometry, and a scripted trigger on
+/// model 0 goes through the world copy instead.
 ///
 /// Trigger brushes are not in `CollisionWorld` -- it drops them on purpose,
 /// since retail leaves a trigger hollow to movement -- so they are decoded
@@ -822,7 +822,7 @@ pub fn link(host: &mut GameHost, cx: &mut Cx, id: EntId, spawnflags: i32) {
         TriggerKind::Hurt => (CONTENTS_TOUCH_MASK, false),
         TriggerKind::Use => (CONTENTS_USE, false),
         TriggerKind::Mount { crouch } => (mount_contents(crouch, t.shape.model.is_some()), true),
-        TriggerKind::Door { .. } => (0x4000_0000, false),
+        TriggerKind::Door { .. } => (CONTENTS_TRIGGER, false),
     };
     if links {
         host.link_shaped(cx, id, shape(contents));

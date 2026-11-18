@@ -14,16 +14,6 @@ use vcod_gsc::ErrorKind;
 /// `BG_SetupWeaponInfo`'s list, configstring 7, 1-based on the wire.
 pub const WEAPON_LIST: &str = "bar_mp bar_slow_mp bren_mp colt_mp enfield_mp fg42_mp fg42_semi_mp fraggrenade_mp kar98k_mp kar98k_sniper_mp luger_mp m1carbine_mp m1garand_mp mg42_bipod_duck_mp mg42_bipod_prone_mp mg42_bipod_stand_mp mk1britishfrag_mp mosin_nagant_mp mosin_nagant_sniper_mp mp40_mp mp44_mp mp44_semi_mp panzerfaust_mp ppsh_mp ppsh_semi_mp ptrs41_antitank_rifle_mp rgd-33russianfrag_mp springfield_mp sten_mp stielhandgranate_mp thompson_mp thompson_semi_mp";
 
-/// A weapon's 1-based position in [`WEAPON_LIST`], which is what every
-/// weapon-shaped index on the wire and in the item table means. The lookup is
-/// case-sensitive, matching retail's `strcmp` (`BG_FindItem` 0x2e214).
-pub fn weapon_index(name: &str) -> Option<usize> {
-    WEAPON_LIST
-        .split(' ')
-        .position(|w| w == name)
-        .map(|i| i + 1)
-}
-
 /// Map-independent configstrings the engine itself sets. Everything else
 /// this table used to carry is script output and is earned back at load:
 /// 21/22 from `precacheStatusIcon`, 29 from `precacheHeadIcon`,
@@ -399,6 +389,7 @@ pub struct Allocators {
 /// the constants rule stores names from here on lowercased.
 const CASE_INSENSITIVE_FROM: usize = 821;
 
+#[cfg(test)]
 impl Default for Allocators {
     fn default() -> Self {
         Allocators::new(&PROTOCOL_V1.cs)
@@ -510,6 +501,22 @@ impl Allocators {
             .map(|&(s, _)| s as usize)
             .or_else(|| (lo..=hi).find(|&i| empty(i) && !is_constant(i)))
             .or_else(|| (lo..=hi).find(|&i| empty(i)))
+    }
+
+    fn next(&self, range: CsRange) -> usize {
+        match range {
+            CsRange::StatusIcon => self.status_icon,
+            CsRange::HeadIcon => self.head_icon,
+            CsRange::Tag => self.tag,
+            CsRange::Model => self.model,
+            CsRange::SoundAlias => self.sound_alias,
+            CsRange::Effect => self.effect,
+            CsRange::FxTag => self.fx_tag,
+            CsRange::ShellShock => self.shell_shock,
+            CsRange::Menu => self.menu,
+            CsRange::Localized => self.localized,
+            CsRange::Shader => self.shader,
+        }
     }
 
     fn next_mut(&mut self, range: CsRange) -> &mut usize {
@@ -647,17 +654,12 @@ impl Allocators {
     }
 
     /// A filled slot of `range` holding `name` under `strcasecmp`.
-    pub(crate) fn find_folded(
-        &mut self,
-        cs: &[String],
-        range: CsRange,
-        name: &str,
-    ) -> Option<usize> {
+    pub(crate) fn find_folded(&self, cs: &[String], range: CsRange, name: &str) -> Option<usize> {
         let (lo, hi) = self.layout.bounds(range);
         let end = if self.constants.is_some() {
             hi + 1
         } else {
-            *self.next_mut(range)
+            self.next(range)
         };
         (lo..end).find(|&s| cs[s].eq_ignore_ascii_case(name))
     }

@@ -270,8 +270,9 @@ fn a_thrown_grenade_flies_bounces_and_explodes_like_retail() {
     let header = common::grenade_header(&text).expect("the capture's `# grenade` header line");
     let weapon = common::header_value(&text, "weapon", &path).to_string();
     let team = common::header_value(&text, "joined", &path).to_string();
-    let held =
-        vcod_server::configstrings::weapon_index(&weapon).expect("the joined weapon in CS 7");
+    let held = vcod_server::defs::V1
+        .weapon_index(&weapon)
+        .expect("the joined weapon in CS 7");
     let steps = parse_fixture(&text, held as u8);
 
     let origin = common::header_vec3(&header, "origin");

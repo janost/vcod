@@ -11,7 +11,7 @@ use glam::Vec3;
 use vcod_cod4::pmove::{CONTENTS_BODY, PmWorld, Tr};
 use vcod_gsc::{ArrayKey, Cx, ErrorKind, Target, Value};
 
-use super::score::Builtin;
+use super::Builtin;
 use crate::game::cod4::clip::Cod4Clip;
 use crate::game::host::GameHost;
 

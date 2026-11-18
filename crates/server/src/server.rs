@@ -8439,7 +8439,9 @@ mod tests {
             ("thompson_mp", "smg"),
             ("m1carbine_mp", "rifle"),
         ] {
-            let index = crate::configstrings::weapon_index(weapon).expect("in WEAPON_LIST");
+            let index = crate::defs::V1
+                .weapon_index(weapon)
+                .expect("in WEAPON_LIST");
             assert_eq!(
                 sv.game.module.weapon_table.class(index),
                 class,
@@ -11112,7 +11114,7 @@ mod tests {
         let _nc = begun(&mut sv, now);
         sv.tick(now);
         sv.place_client(0, [0.0, 0.0, 64.0], 0.0);
-        let frag = crate::configstrings::weapon_index("fraggrenade_mp").unwrap();
+        let frag = crate::defs::V1.weapon_index("fraggrenade_mp").unwrap();
         let def = sv.game.module.weapon_table.get(frag).unwrap().clone();
         let mut held = crate::weapons::PlayerWeapons::default();
         held.give(frag, sv.game.module.weapon_table.slot(frag));
@@ -11470,7 +11472,7 @@ mod tests {
         let _nc = begun(&mut sv, now);
         sv.tick(now);
         sv.place_client(0, [0.0, 0.0, 1.0], 0.0);
-        let index = |n| crate::configstrings::weapon_index(n).unwrap();
+        let index = |n| crate::defs::V1.weapon_index(n).unwrap();
         let (carbine, thompson, colt) = (
             index("m1carbine_mp"),
             index("thompson_mp"),
@@ -11723,7 +11725,7 @@ mod tests {
         let _nc = begun(&mut sv, now);
         sv.tick(now);
         sv.place_client(0, [0.0, 0.0, 1.0], 0.0);
-        let carbine = crate::configstrings::weapon_index("m1carbine_mp").unwrap();
+        let carbine = crate::defs::V1.weapon_index("m1carbine_mp").unwrap();
         let def = sv.game.module.weapon_table.get(carbine).unwrap().clone();
         let mut held = crate::weapons::PlayerWeapons::default();
         held.give(carbine, sv.game.module.weapon_table.slot(carbine));

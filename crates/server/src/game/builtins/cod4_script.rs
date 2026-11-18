@@ -8,9 +8,9 @@
 use glam::{Mat3, Vec3};
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 
+use super::Builtin;
 use super::client::client_receiver;
 use super::entity::entity_receiver;
-use super::score::Builtin;
 use crate::game::cod4::Fx4;
 use crate::game::host::GameHost;
 use crate::game::temp_entity::{Scope, TempEntity};

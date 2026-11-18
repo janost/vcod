@@ -64,8 +64,7 @@ const BOUNCE_NUDGE: f32 = 0.1;
 /// 0x5432f, 1.5b 0x550e4); UO's skips that test and the impact on 0x4 and
 /// pushes the contact 2 units into the sky (0x5f247, 0x5f533), combat doc
 /// 12.3.
-const SURF_SKY: u32 = 0x4;
-pub(crate) const SURF_NOIMPACT: u32 = 0x10;
+use vcod_common::clipmap::{SURF_NOIMPACT, SURF_SKY};
 /// UO's push along `-normal` (`.rodata 0xa180c`, -2.0).
 const UO_SKY_PUSH: f32 = 2.0;
 /// The sky brushes' contents bit: UO's `G_MissileTrace` (0x5edf4) reads a

@@ -17,7 +17,7 @@ use crate::game::host::GameHost;
 use crate::game::script::{TEAM_ALLIES, TEAM_AXIS, TEAM_SPECTATOR};
 use vcod_gsc::{Cx, EntId, ErrorKind, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("newhudelem", new_hud_elem),
@@ -37,10 +37,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("fadeovertime", fade_over_time),
     ("moveovertime", move_over_time),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// The `hudelem_t` type codes: the tag on the union its payload fields make
 /// up, each the immediate its method stores at `+0x0`. 0 is a free record,

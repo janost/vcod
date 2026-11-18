@@ -1047,44 +1047,6 @@ pub(crate) fn axis_to_angles(axis: [[f32; 3]; 3]) -> [f32; 3] {
     [pitch, yaw, roll]
 }
 
-#[cfg(test)]
-mod align_tests {
-    use super::align_to_surface;
-
-    /// A flat floor keeps the mapper's yaw, flattens the pitch, and leaves the
-    /// weapon's 90 degrees of roll. The mapper's own roll (180 here) is
-    /// dropped, because only `AngleVectors`' forward feeds the alignment and
-    /// forward does not depend on roll.
-    #[test]
-    fn a_flat_floor_keeps_the_yaw_and_adds_the_weapon_roll() {
-        let out = align_to_surface([0.0, 90.0, 180.0], [0.0, 0.0, 1.0], true);
-        assert!(out[0].abs() < 1e-3, "pitch {}", out[0]);
-        assert!((out[1] - 90.0).abs() < 1e-3, "yaw {}", out[1]);
-        assert!((out[2] - 90.0).abs() < 1e-3, "roll {}", out[2]);
-    }
-
-    /// A floor tilted about x tips the item into it. The retail capture this
-    /// was measured against carries pitch 359.09 and roll 89.65 for a
-    /// panzerfaust on carentan's sloped floor, so a roll that wrapped to 449
-    /// would be wrong by a whole turn: the roll is signed, unlike yaw and
-    /// pitch.
-    #[test]
-    fn a_tilted_floor_tips_the_item_and_leaves_the_roll_inside_one_turn() {
-        let tilt = 2f32.to_radians();
-        let out = align_to_surface([0.0, 90.0, 180.0], [0.0, -tilt.sin(), tilt.cos()], true);
-        assert!(
-            out[2] > 0.0 && out[2] < 180.0,
-            "roll {} left its turn",
-            out[2]
-        );
-        assert!(
-            (out[0] - 358.0).abs() < 1.0,
-            "pitch {} is not the tilt",
-            out[0]
-        );
-    }
-}
-
 /// The Radiant classname that places a weapon, the reverse of
 /// [`radiant_weapon`]. A dropped weapon's entity carries it as its
 /// classname, which is what script reads off a retail drop
@@ -1212,8 +1174,97 @@ pub(crate) fn convert(cx: &mut Cx, ty: FieldType, raw: &str) -> Option<Value> {
     })
 }
 
+/// `G_SpawnTurret` on `id` for the turret weapon `weaponinfo`: the map
+/// load's `SP_turret` with the entity's spawn keys, or CoD2's
+/// `spawnTurret` builtin (lnxded 0x811138c) with none, whose spawn vars are
+/// not valid there (cod2-turrets.md 2).
+pub(crate) fn spawn_turret(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    id: EntId,
+    weaponinfo: &str,
+    keys: &crate::game::turret::TurretKeys,
+) -> Result<(), ErrorKind> {
+    let cod2_rules = host.profile.spawn.turret_weapon_and_player_sounds;
+    // CoD2's `G_SpawnTurret` takes the weapon's index first
+    // (lnxded 0x810c6b2, cod2-turrets.md 2).
+    if cod2_rules {
+        // CoD4 numbers its weapons in registration order too
+        // (`G_GetWeaponIndexForName`, cod4-gsc.md 9.2).
+        if matches!(host.ext, crate::game::host::HostExt::Cod4(_)) {
+            crate::game::builtins::cod4::register_weapon(host, weaponinfo)?;
+        } else {
+            host.weapon_index(weaponinfo);
+        }
+    }
+    for alias in turret_sound_aliases(host.fs.as_deref(), weaponinfo, cod2_rules) {
+        register_sound_alias(host, alias);
+    }
+    let bones = turret_bones(host, cx, id);
+    let rest = settle_turret_pitch(host, cx, id, bones.as_deref());
+    let Some(def) = turret_def(host.fs.as_deref(), weaponinfo) else {
+        return Ok(());
+    };
+    if host.turrets.len() >= MAX_TURRETS {
+        // Retail's `Com_Error` here is fatal
+        // (`docs/research/cod11-turrets.md`'s turret record table); we log
+        // and spawn no record.
+        log::error!("G_SpawnTurret: max number of turrets ({MAX_TURRETS}) exceeded");
+        return Ok(());
+    }
+    let mut rec = crate::game::turret::TurretRecord::new(weaponinfo, def, *keys, rest);
+    // `G_SpawnTurret` zeroes `angles2` and thinks `turret_think_init` 100 ms
+    // on (0x52fd2).
+    rec.angles2 = [0.0; 3];
+    rec.init_at = Some(host.level_time_ms + 100);
+    rec.tags = bones
+        .as_deref()
+        .and_then(crate::game::turret::TurretTags::from_bones);
+    rec.gun = bones
+        .as_deref()
+        .and_then(crate::game::turret::GunRig::from_bones);
+    host.turrets.insert(id, rec);
+    host.link_turret(cx, id);
+    let health = cx.intern_folded("health");
+    if matches!(
+        host.get_field(cx, id, health),
+        Value::Int(0) | Value::Undefined
+    ) {
+        let full = Value::Int(crate::game::turret::TURRET_HEALTH);
+        host.set_field(cx, id, health, full)?;
+    }
+    Ok(())
+}
+
+/// A turret's tags once a `setModel` gave it a model (`G_DObjUpdate`): a
+/// `spawnTurret` gun has none until then.
+pub(crate) fn turret_model_changed(host: &mut GameHost, cx: &mut Cx, id: EntId) {
+    if !host.turrets.contains_key(&id) {
+        return;
+    }
+    let bones = turret_bones(host, cx, id);
+    // `turret_think_init` sweeps the rest pitch off the DObj a frame after
+    // the spawn, so a model set before then still settles it.
+    let pending = host.turrets.get(&id).is_some_and(|r| r.init_at.is_some());
+    let rest = pending.then(|| settle_turret_pitch(host, cx, id, bones.as_deref()));
+    let tags = bones
+        .as_deref()
+        .and_then(crate::game::turret::TurretTags::from_bones);
+    let gun = bones
+        .as_deref()
+        .and_then(crate::game::turret::GunRig::from_bones);
+    if let Some(rec) = host.turrets.get_mut(&id) {
+        rec.tags = tags;
+        rec.gun = gun;
+        if let Some(rest) = rest {
+            rec.rest_pitch = rest;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::align_to_surface;
     use crate::game::testing::fixture;
     use crate::items::Items;
     use vcod_gsc::{EntId, Host, Value};
@@ -2034,92 +2085,37 @@ mod tests {
             assert!(tags.flash.x > tags.player.x, "{tags:?}");
         }
     }
-}
 
-/// `G_SpawnTurret` on `id` for the turret weapon `weaponinfo`: the map
-/// load's `SP_turret` with the entity's spawn keys, or CoD2's
-/// `spawnTurret` builtin (lnxded 0x811138c) with none, whose spawn vars are
-/// not valid there (cod2-turrets.md 2).
-pub(crate) fn spawn_turret(
-    host: &mut GameHost,
-    cx: &mut Cx,
-    id: EntId,
-    weaponinfo: &str,
-    keys: &crate::game::turret::TurretKeys,
-) -> Result<(), ErrorKind> {
-    let cod2_rules = host.profile.spawn.turret_weapon_and_player_sounds;
-    // CoD2's `G_SpawnTurret` takes the weapon's index first
-    // (lnxded 0x810c6b2, cod2-turrets.md 2).
-    if cod2_rules {
-        // CoD4 numbers its weapons in registration order too
-        // (`G_GetWeaponIndexForName`, cod4-gsc.md 9.2).
-        if matches!(host.ext, crate::game::host::HostExt::Cod4(_)) {
-            crate::game::builtins::cod4::register_weapon(host, weaponinfo)?;
-        } else {
-            host.weapon_index(weaponinfo);
-        }
+    /// A flat floor keeps the mapper's yaw, flattens the pitch, and leaves the
+    /// weapon's 90 degrees of roll. The mapper's own roll (180 here) is
+    /// dropped, because only `AngleVectors`' forward feeds the alignment and
+    /// forward does not depend on roll.
+    #[test]
+    fn a_flat_floor_keeps_the_yaw_and_adds_the_weapon_roll() {
+        let out = align_to_surface([0.0, 90.0, 180.0], [0.0, 0.0, 1.0], true);
+        assert!(out[0].abs() < 1e-3, "pitch {}", out[0]);
+        assert!((out[1] - 90.0).abs() < 1e-3, "yaw {}", out[1]);
+        assert!((out[2] - 90.0).abs() < 1e-3, "roll {}", out[2]);
     }
-    for alias in turret_sound_aliases(host.fs.as_deref(), weaponinfo, cod2_rules) {
-        register_sound_alias(host, alias);
-    }
-    let bones = turret_bones(host, cx, id);
-    let rest = settle_turret_pitch(host, cx, id, bones.as_deref());
-    let Some(def) = turret_def(host.fs.as_deref(), weaponinfo) else {
-        return Ok(());
-    };
-    if host.turrets.len() >= MAX_TURRETS {
-        // Retail's `Com_Error` here is fatal
-        // (`docs/research/cod11-turrets.md`'s turret record table); we log
-        // and spawn no record.
-        log::error!("G_SpawnTurret: max number of turrets ({MAX_TURRETS}) exceeded");
-        return Ok(());
-    }
-    let mut rec = crate::game::turret::TurretRecord::new(weaponinfo, def, *keys, rest);
-    // `G_SpawnTurret` zeroes `angles2` and thinks `turret_think_init` 100 ms
-    // on (0x52fd2).
-    rec.angles2 = [0.0; 3];
-    rec.init_at = Some(host.level_time_ms + 100);
-    rec.tags = bones
-        .as_deref()
-        .and_then(crate::game::turret::TurretTags::from_bones);
-    rec.gun = bones
-        .as_deref()
-        .and_then(crate::game::turret::GunRig::from_bones);
-    host.turrets.insert(id, rec);
-    host.link_turret(cx, id);
-    let health = cx.intern_folded("health");
-    if matches!(
-        host.get_field(cx, id, health),
-        Value::Int(0) | Value::Undefined
-    ) {
-        let full = Value::Int(crate::game::turret::TURRET_HEALTH);
-        host.set_field(cx, id, health, full)?;
-    }
-    Ok(())
-}
 
-/// A turret's tags once a `setModel` gave it a model (`G_DObjUpdate`): a
-/// `spawnTurret` gun has none until then.
-pub(crate) fn turret_model_changed(host: &mut GameHost, cx: &mut Cx, id: EntId) {
-    if !host.turrets.contains_key(&id) {
-        return;
-    }
-    let bones = turret_bones(host, cx, id);
-    // `turret_think_init` sweeps the rest pitch off the DObj a frame after
-    // the spawn, so a model set before then still settles it.
-    let pending = host.turrets.get(&id).is_some_and(|r| r.init_at.is_some());
-    let rest = pending.then(|| settle_turret_pitch(host, cx, id, bones.as_deref()));
-    let tags = bones
-        .as_deref()
-        .and_then(crate::game::turret::TurretTags::from_bones);
-    let gun = bones
-        .as_deref()
-        .and_then(crate::game::turret::GunRig::from_bones);
-    if let Some(rec) = host.turrets.get_mut(&id) {
-        rec.tags = tags;
-        rec.gun = gun;
-        if let Some(rest) = rest {
-            rec.rest_pitch = rest;
-        }
+    /// A floor tilted about x tips the item into it. The retail capture this
+    /// was measured against carries pitch 359.09 and roll 89.65 for a
+    /// panzerfaust on carentan's sloped floor, so a roll that wrapped to 449
+    /// would be wrong by a whole turn: the roll is signed, unlike yaw and
+    /// pitch.
+    #[test]
+    fn a_tilted_floor_tips_the_item_and_leaves_the_roll_inside_one_turn() {
+        let tilt = 2f32.to_radians();
+        let out = align_to_surface([0.0, 90.0, 180.0], [0.0, -tilt.sin(), tilt.cos()], true);
+        assert!(
+            out[2] > 0.0 && out[2] < 180.0,
+            "roll {} left its turn",
+            out[2]
+        );
+        assert!(
+            (out[0] - 358.0).abs() < 1.0,
+            "pitch {} is not the tilt",
+            out[0]
+        );
     }
 }

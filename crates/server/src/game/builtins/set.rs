@@ -19,7 +19,7 @@ use vcod_common::net::protocol::Protocol;
 use vcod_gsc::Vm;
 use vcod_gsc::bytecode::Op;
 
-use super::score::Builtin;
+use super::Builtin;
 
 /// One version's builtins by folded name: whether retail lists it as a free
 /// function, as a method (any of the per-class tables), and vcod's handler.

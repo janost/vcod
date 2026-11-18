@@ -18,7 +18,7 @@ use crate::game::say::SayMode;
 use vcod_common::pmove;
 use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("setclientcvar", set_client_cvar),
@@ -602,10 +602,6 @@ pub fn freeze_controls(
     };
     v.as_bool()?;
     Ok(Value::Undefined)
-}
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
 }
 
 /// The model configstring slot `ps.viewmodelIndex` counts from. `G_ModelIndex`
@@ -1337,7 +1333,8 @@ pub fn get_view_model(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::configstrings::{CsRange, weapon_index};
+    use crate::configstrings::CsRange;
+    use crate::defs::V1;
     use crate::game::entity::ThinkFn;
     use crate::game::testing::fixture;
     use vcod_gsc::EntId;
@@ -1782,7 +1779,7 @@ mod tests {
                     v => panic!("{v:?}"),
                 };
             assert_eq!(name(&mut host, cx), "none");
-            host.client_weapons[0].current = weapon_index("m1carbine_mp").unwrap() as u8;
+            host.client_weapons[0].current = V1.weapon_index("m1carbine_mp").unwrap() as u8;
             assert_eq!(name(&mut host, cx), "m1carbine_mp");
         });
     }
@@ -1811,7 +1808,7 @@ mod tests {
         let (mut vm, mut host) = fixture();
         host.weapons = std::rc::Rc::new(crate::game::pickup::tests_table());
         host.level_time_ms = 5_000;
-        let carbine = weapon_index("m1carbine_mp").unwrap();
+        let carbine = V1.weapon_index("m1carbine_mp").unwrap();
         let (clip_index, ammo_index) = {
             let d = host.weapons.get(carbine).unwrap();
             (d.clip_index, d.ammo_index)
@@ -1859,7 +1856,7 @@ mod tests {
     fn dropitem_of_a_weapon_not_held_drops_nothing() {
         let (mut vm, mut host) = fixture();
         host.weapons = std::rc::Rc::new(crate::game::pickup::tests_table());
-        let carbine = weapon_index("m1carbine_mp").unwrap();
+        let carbine = V1.weapon_index("m1carbine_mp").unwrap();
         host.client_weapons[0].give(carbine, 1);
         let held = host.client_weapons[0];
         vm.with_cx(|cx| {
@@ -2063,7 +2060,7 @@ mod tests {
                         .into()
                 ))
             );
-            assert!(!host.client_weapons[0].holds(weapon_index("mp40_mp").unwrap()));
+            assert!(!host.client_weapons[0].holds(V1.weapon_index("mp40_mp").unwrap()));
         });
     }
 
@@ -2075,7 +2072,7 @@ mod tests {
         let Some((mut vm, mut host)) = armed_fixture() else {
             return;
         };
-        let mg = weapon_index("mg42_bipod_stand_mp").unwrap();
+        let mg = V1.weapon_index("mg42_bipod_stand_mp").unwrap();
         assert_eq!(host.weapons.get(mg).unwrap().weapon_class, "turret");
         host.initializing = false;
         vm.with_cx(|cx| {
@@ -2124,7 +2121,7 @@ mod tests {
         let Some((mut vm, mut host)) = armed_fixture() else {
             return;
         };
-        let carbine = weapon_index("m1carbine_mp").unwrap();
+        let carbine = V1.weapon_index("m1carbine_mp").unwrap();
         let (ammo_index, clip_index) = {
             let def = host.weapons.get(carbine).expect("the carbine");
             (def.ammo_index, def.clip_index)
@@ -2188,7 +2185,7 @@ mod tests {
         let Some((mut vm, mut host)) = armed_fixture() else {
             return;
         };
-        let thompson = weapon_index("thompson_mp").unwrap();
+        let thompson = V1.weapon_index("thompson_mp").unwrap();
         vm.with_cx(|cx| {
             let e = loadout(&mut host, cx);
             let t = Some(Target::Entity(e));
@@ -2207,7 +2204,7 @@ mod tests {
             }
             assert!(host.client_weapons[0].holds(thompson));
             // `BG_GivePlayerWeapon` holds the select-fire mode beside it.
-            let semi = weapon_index("thompson_semi_mp").unwrap();
+            let semi = V1.weapon_index("thompson_semi_mp").unwrap();
             assert!(host.client_weapons[0].holds(semi));
             assert!(!host.client_weapons[0].slots.contains(&(semi as u8)));
             switch_to_weapon(&mut host, cx, t, &[name]).unwrap();
@@ -2231,7 +2228,7 @@ mod tests {
         let Some((mut vm, mut host)) = armed_fixture() else {
             return;
         };
-        let thompson = weapon_index("thompson_mp").unwrap();
+        let thompson = V1.weapon_index("thompson_mp").unwrap();
         vm.with_cx(|cx| {
             let e = loadout(&mut host, cx);
             let t = Some(Target::Entity(e));
@@ -2295,8 +2292,8 @@ mod tests {
             return;
         };
         let (carbine, colt) = (
-            weapon_index("m1carbine_mp").unwrap(),
-            weapon_index("colt_mp").unwrap(),
+            V1.weapon_index("m1carbine_mp").unwrap(),
+            V1.weapon_index("colt_mp").unwrap(),
         );
         vm.with_cx(|cx| {
             let e = loadout(&mut host, cx);
