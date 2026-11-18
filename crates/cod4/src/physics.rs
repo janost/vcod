@@ -1336,7 +1336,7 @@ impl Body {
             sweep_half: shape.sweep_half,
             state: 0,
             bounce: preset.bounce.min(1.0),
-            friction: preset.friction,
+            friction: vcod_common::fguard::finite(preset.friction).max(0.0),
             idle: 0.0,
             asleep: false,
             sim_ms: now,
@@ -1913,7 +1913,7 @@ impl Body {
                 for k in 0..2 {
                     let vt = vrel(self).dot(c.t[k]);
                     let cap = mu * c.lambda;
-                    let next = (c.lambda_t[k] - vt / c.k_t[k]).clamp(-cap, cap);
+                    let next = vcod_common::fguard::clamp(c.lambda_t[k] - vt / c.k_t[k], -cap, cap);
                     let dl = next - c.lambda_t[k];
                     c.lambda_t[k] = next;
                     self.impulse(r, c.t[k] * dl);
@@ -2371,6 +2371,22 @@ mod tests {
         assert!(low < 1.0, "{low}");
         let (o, _) = b.pose(b.sim_ms);
         assert!(o.distance(b.origin()) < 1e-3);
+    }
+
+    /// A preset's negative, NaN or infinite friction lands a body on the
+    /// floor without a panic in the friction clamp (SEC-029).
+    #[test]
+    fn a_hostile_friction_lands_on_the_floor() {
+        let (shape, preset) = door();
+        let floor = [(Vec3::Z, 0.0)];
+        let d = Dvars::default();
+        for friction in [-1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let preset = Preset { friction, ..preset };
+            let mut trace = planes(&floor);
+            let mut b = Body::new(Vec3::Z * 30.0, Vec3::ZERO, &shape, &preset, 0);
+            b.vel = Vec3::new(100.0, 0.0, 0.0);
+            run(&mut b, 2000, &mut trace, &d);
+        }
     }
 
     #[test]

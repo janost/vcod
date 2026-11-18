@@ -7,6 +7,7 @@
 
 use crate::spectate::ClientSim;
 use glam::Vec3;
+use vcod_common::fguard;
 use vcod_common::net::protocol::{CsLayout, PROTOCOL_V1, Protocol};
 use vcod_common::pmove::Stance;
 use vcod_common::pmove::aim::{angle_normalize_180, angle_subtract};
@@ -200,10 +201,12 @@ impl TurretRecord {
     /// range is widened to include 0 rather than clamped to it, so a
     /// negative arc still leaves the rest position inside range.
     pub fn new(weapon: &str, def: TurretDef, keys: TurretKeys, rest_pitch: f32) -> TurretRecord {
-        let left = keys.left.unwrap_or(def.left_arc);
-        let right = keys.right.unwrap_or(def.right_arc);
-        let top = keys.top.unwrap_or(def.top_arc);
-        let bottom = keys.bottom.unwrap_or(def.bottom_arc);
+        // `parse::<f32>` takes `inf` and `nan`, no arc a retail map holds.
+        let arc = |key: Option<f32>, file: f32| fguard::finite(key.unwrap_or(file));
+        let left = arc(keys.left, def.left_arc);
+        let right = arc(keys.right, def.right_arc);
+        let top = arc(keys.top, def.top_arc);
+        let bottom = arc(keys.bottom, def.bottom_arc);
         TurretRecord {
             weapon: weapon.to_string(),
             pitch_range: [(-top).min(0.0), bottom.max(0.0)],
@@ -795,6 +798,40 @@ mod tests {
         assert_eq!(r.pitch_range, [0.0, 40.0]);
         assert_eq!(r.dmg, 80);
         assert_eq!(r.angles2, [-63.0, 0.0, 0.0]);
+    }
+
+    /// A map's arc of 1e30, an infinity or a NaN, and a gun or view angle
+    /// as large, build a record a player uses and mounts at once (SEC-080).
+    #[test]
+    fn hostile_arcs_and_angles_mount() {
+        for bad in [1e30f32, -1e30, f32::INFINITY, f32::NAN] {
+            let keys = TurretKeys {
+                left: Some(bad),
+                right: Some(bad),
+                top: Some(bad),
+                bottom: Some(bad),
+                ..Default::default()
+            };
+            let mut r = TurretRecord::new("mg", TurretDef::parse(STAND).unwrap(), keys, 0.0);
+            assert!(
+                r.yaw_range
+                    .iter()
+                    .chain(&r.pitch_range)
+                    .all(|a| a.is_finite())
+            );
+            usable(&r, [0.0; 3], bad, [-40.0, 0.0, 0.0], 0, true);
+            mount(
+                &mut r,
+                0,
+                [0.0; 3],
+                Stance::Stand,
+                [bad, bad, 0.0],
+                [bad, bad, 0.0],
+            );
+            for [lo, hi] in [r.pitch_range, r.yaw_range] {
+                assert!(angle_subtract(hi + bad, lo).abs() <= 180.0);
+            }
+        }
     }
 
     fn rec() -> TurretRecord {

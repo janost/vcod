@@ -130,6 +130,11 @@ impl Clip {
         }
         // 0x80bd0a6: the frame position stored, its whole part truncated.
         let pos = (d(t) * f64::from(n)) as f32;
+        // A negative timer off the wire is no retail state; its frame would
+        // index the keys at -1.
+        if pos.is_nan() || pos < 0.0 {
+            return self.keys[0];
+        }
         let whole = pos as i32;
         let count = self.keys.len() - 1;
         let (i, frac) = if count < usize::from(n) {
@@ -508,7 +513,7 @@ pub(crate) fn mantle_move(pm: &mut Pmove, pml: &Pml) {
     let (up, over) = anims.lengths(&ps.mantle);
     let total = up + over;
     let old = ps.mantle.timer;
-    ps.mantle.timer = (old + pml.msec).min(total);
+    ps.mantle.timer = old.wrapping_add(pml.msec).min(total);
     let now = ps.mantle.timer;
     let d0 = anims.delta(&ps.mantle, old);
     let d1 = anims.delta(&ps.mantle, now);
@@ -519,7 +524,7 @@ pub(crate) fn mantle_move(pm: &mut Pmove, pml: &Pml) {
     let ps = &mut *pm.ps;
     let step = sub(d1, d0);
     ps.origin = add(step, ps.origin);
-    let per_sec = (1.0 / (d(MSEC_TO_SEC) * f64::from((now - old) as f32))) as f32;
+    let per_sec = (1.0 / (d(MSEC_TO_SEC) * f64::from(now.wrapping_sub(old) as f32))) as f32;
     ps.velocity = fpu::scale(step, per_sec);
     if now == total {
         ps.pm_flags &= !pmf::MANTLE;
@@ -584,6 +589,70 @@ mod tests {
         assert_eq!(c.abs_delta(1.0), Vec3::new(10.0, 0.0, 8.0));
         let dense = clip(2, &[0, 1, 2], &[[0.0; 3], [1.0, 0.0, 0.0], [3.0, 0.0, 0.0]]);
         assert_eq!(dense.abs_delta(0.75), Vec3::new(2.0, 0.0, 0.0));
+    }
+
+    /// A wire playerstate mid-mantle with a timer at either end of i32 and a
+    /// huge mantle yaw steps without a panic or a hang (SEC-027, SEC-043).
+    #[test]
+    fn a_hostile_mantle_state_steps() {
+        use crate::net::PlayerState2;
+        use crate::net::usercmd::UserCmd2;
+        use vcod_common::movetrace::MoveWorld;
+        let mut c = clip(25, &(0..=25).collect::<Vec<_>>(), &[[1.0, 0.0, 2.0]; 26]);
+        c.length_ms = 833;
+        let anims: &'static MantleAnims = Box::leak(Box::new(MantleAnims {
+            clips: vec![c; ANIM_NAMES.len()],
+        }));
+        let rules = super::super::Rules {
+            mantle_anims: Some(anims),
+            ..Default::default()
+        };
+        let world = vcod_common::collision::test_world(&[]);
+        for (timer, yaw) in [
+            (i32::MIN, 0.0),
+            (-40, 1e30),
+            (i32::MAX, -1e30),
+            (100, f32::INFINITY),
+        ] {
+            let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.125), 0.0, 1000);
+            ps.pm_flags |= pmf::MANTLE;
+            ps.mantle.timer = timer;
+            ps.mantle.yaw = yaw;
+            ps.view_angles[1] = 1e30;
+            let mut ps = PlayerState::from_wire(&ps.to_wire(&PlayerState2::default()));
+            let mut old = UserCmd2 {
+                server_time: 1000,
+                ..Default::default()
+            };
+            for t in [1050, 1100] {
+                let cmd = UserCmd2 {
+                    server_time: t,
+                    ..Default::default()
+                };
+                super::super::player_step(
+                    &mut ps,
+                    &cmd,
+                    &mut old,
+                    MoveWorld::bare(&world),
+                    rules,
+                    0.0,
+                );
+            }
+        }
+    }
+
+    /// A negative or NaN fraction (a wire timer under 0) takes the first
+    /// key, never key -1 (SEC-027).
+    #[test]
+    fn a_negative_fraction_takes_the_first_key() {
+        let dense = clip(
+            2,
+            &[0, 1, 2],
+            &[[5.0, 0.0, 0.0], [1.0, 0.0, 0.0], [3.0, 0.0, 0.0]],
+        );
+        for t in [-0.6, -0.4, -1e9, f32::NEG_INFINITY, f32::NAN] {
+            assert_eq!(dense.abs_delta(t), Vec3::new(5.0, 0.0, 0.0), "{t}");
+        }
     }
 
     /// `Mantle_CreateAnims`' load check (0x80ddaa4): every up anim ends

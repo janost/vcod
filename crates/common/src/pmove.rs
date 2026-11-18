@@ -3015,7 +3015,7 @@ fn vectopitch(v: Vec3) -> f32 {
 
 /// `AngleSubtract`: `a - b` folded into -180..180.
 fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut d = a - b;
+    let mut d = crate::fguard::turns(a - b);
     while d > 180.0 {
         d -= 360.0;
     }
@@ -3051,7 +3051,8 @@ fn short_normalize360(deg: f64) -> f32 {
 /// `AngleNormalize180Accurate` (1.5 0x36b75): whole turns added while the
 /// angle is at or under -180 and taken away while it is over 180, each sum
 /// stored, so an angle already in range comes back as it went in.
-fn normalize180_accurate(mut deg: f32) -> f32 {
+fn normalize180_accurate(deg: f32) -> f32 {
+    let mut deg = crate::fguard::turns(deg);
     while deg <= -180.0 {
         deg += 360.0;
     }
@@ -3362,7 +3363,8 @@ impl ProneCone {
 
 /// `AngleNormalize360Accurate` (1.5 0x36ae0): whole turns added or taken
 /// away until the angle is in 0..360.
-pub(crate) fn normalize360_accurate(mut deg: f32) -> f32 {
+pub(crate) fn normalize360_accurate(deg: f32) -> f32 {
+    let mut deg = crate::fguard::turns(deg);
     while deg < 0.0 {
         deg += 360.0;
     }

@@ -7,6 +7,7 @@
 //! stores it.
 
 use glam::Vec3;
+use vcod_common::fguard::turns;
 
 #[inline]
 pub(crate) fn d(x: f32) -> f64 {
@@ -120,7 +121,8 @@ pub(crate) fn angle_delta(a: f32, b: f32) -> f32 {
 
 /// `AngleNormalize360Accurate` (0x80a84b8): whole turns added or taken
 /// away, each sum stored.
-pub(crate) fn normalize360_accurate(mut a: f32) -> f32 {
+pub(crate) fn normalize360_accurate(a: f32) -> f32 {
+    let mut a = turns(a);
     while a < 0.0 {
         a += 360.0;
     }
@@ -131,7 +133,8 @@ pub(crate) fn normalize360_accurate(mut a: f32) -> f32 {
 }
 
 /// `AngleNormalize180Accurate` (0x80a8536).
-pub(crate) fn normalize180_accurate(mut a: f32) -> f32 {
+pub(crate) fn normalize180_accurate(a: f32) -> f32 {
+    let mut a = turns(a);
     while a <= -180.0 {
         a += 360.0;
     }
@@ -173,7 +176,7 @@ pub(crate) fn vectoyaw(v: Vec3) -> f32 {
 
 /// `AngleSubtract`: the difference wrapped by whole turns.
 pub(crate) fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut x = a - b;
+    let mut x = turns(a - b);
     while x > 180.0 {
         x -= 360.0;
     }

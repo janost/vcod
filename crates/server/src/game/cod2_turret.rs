@@ -550,7 +550,8 @@ fn aim_barrel(rec: &mut TurretRecord, ps: &PlayerState, angles: [f32; 3]) {
 }
 
 /// `AngleNormalize360Accurate`.
-fn normalize360(mut a: f32) -> f32 {
+fn normalize360(a: f32) -> f32 {
+    let mut a = vcod_common::fguard::turns(a);
     while a < 0.0 {
         a += 360.0;
     }
@@ -563,6 +564,15 @@ fn normalize360(mut a: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A gun angle of 1e30 or an infinity folds at once (SEC-080).
+    #[test]
+    fn a_hostile_angle_folds_at_once() {
+        for a in [1e30f32, -1e30, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!((0.0..360.0).contains(&normalize360(a)), "{a}");
+        }
+        assert_eq!(normalize360(-90.0), 270.0);
+    }
 
     #[test]
     fn the_hint_strings_take_the_first_free_slots_in_order() {

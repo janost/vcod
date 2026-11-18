@@ -88,7 +88,7 @@ impl Default for ClientBullets {
 
 /// `AngleSubtract` (0x3004bd70): `a - b` into (-180, 180].
 fn angle_sub(a: f32, b: f32) -> f32 {
-    let mut d = a - b;
+    let mut d = vcod_common::fguard::turns(a - b);
     while d > 180.0 {
         d -= 360.0;
     }

@@ -680,3 +680,36 @@ fn a_prone_move_leaves_the_sight_unless_the_weapon_is_busy() {
     assert_eq!(evs, [wev::RESET_ADS, wev::BINOCULAR_EXIT, wev::RESET_ADS]);
     assert_eq!((ps.weapon_state, ps.weapon_interrupt), (state::READY, true));
 }
+
+/// A server's playerstate with a turret clamp base, a prone heading or a
+/// view of 1e30 (or a NaN or infinity, which the wire read zeroes) steps
+/// without spinning in the 360-degree folds (SEC-043).
+#[test]
+fn hostile_playerstate_angles_step() {
+    let w = world(&[]);
+    for bad in [1e30f32, -1e30, 1e10, f32::INFINITY, f32::NAN] {
+        let base = standing(&w);
+        let mut turret = base.clone();
+        turret.e_flags |= 0x300;
+        turret.view_angle_clamp_base = [bad, bad];
+        turret.view_angle_clamp_range = [0.0, 0.0];
+        let mut prone = base.clone();
+        prone.pm_flags |= pmf::PRONE;
+        prone.prone_direction = bad;
+        prone.prone_direction_pitch = bad;
+        prone.prone_torso_pitch = bad;
+        let mut view = base;
+        view.view_angles = [bad, bad, bad];
+        for ps in [turret, prone, view] {
+            let mut ps = PlayerState::from_wire(&ps.to_wire(&crate::net::PlayerState2::default()));
+            run(&mut ps, &w, 2, 0, 0);
+            run(&mut ps, &w, 2, 0, 127);
+            // The raw state, as a caller that builds it without the wire would.
+        }
+        let mut raw = standing(&w);
+        raw.pm_flags |= pmf::PRONE;
+        raw.prone_direction = bad;
+        raw.view_angles[1] = bad;
+        run(&mut raw, &w, 2, 0, 0);
+    }
+}

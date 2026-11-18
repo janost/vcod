@@ -62,8 +62,9 @@ fn int(w: &delta::PlayerState, i: usize) -> i32 {
     word(w, i) as i32
 }
 
+/// A NaN or infinite float is no retail state: 0.
 fn float(w: &delta::PlayerState, i: usize) -> f32 {
-    f32::from_bits(word(w, i))
+    vcod_common::fguard::finite(f32::from_bits(word(w, i)))
 }
 
 fn vec3(w: &delta::PlayerState, i: [usize; 3]) -> Vec3 {
@@ -114,7 +115,7 @@ impl PlayerState {
             client_num: word(w, ix!("clientNum")),
             weapon: word(w, ix!("weapon")),
             weapon_state: int(w, ix!("weaponstate")),
-            weapon_pos_frac: float(w, ix!("fWeaponPosFrac")),
+            weapon_pos_frac: float(w, ix!("fWeaponPosFrac")).clamp(0.0, 1.0),
             view_angles: ix!(3 "viewangles").map(|i| float(w, i)),
             view_height_target: int(w, ix!("viewHeightTarget")),
             view_height_current: float(w, ix!("viewHeightCurrent")),
@@ -182,7 +183,7 @@ impl PlayerState {
             ammo: w.ammo,
             ammoclip: w.ammoclip,
             mantle: super::mantle::MantleState {
-                yaw: float(w, ix!("mantleState.yaw")),
+                yaw: vcod_common::fguard::turns(float(w, ix!("mantleState.yaw"))),
                 timer: int(w, ix!("mantleState.timer")),
                 trans_index: int(w, ix!("mantleState.transIndex")),
                 flags: word(w, ix!("mantleState.flags")),
