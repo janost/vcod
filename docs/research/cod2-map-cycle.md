@@ -10,7 +10,8 @@ behaviour is checked against retail captures. CoD1's counterpart is
 
 ### 1.1 `SV_SpawnServer` (0x8093520)
 
-On a running server, for every client past `CS_PRIMED` (state above 2) it
+On a running server, for every client past `CS_CONNECTED` (state above 2:
+`CS_PRIMED` and `CS_ACTIVE`) it
 sends the OOB `loadingnewmap\n<map>\n<g_gametype>` and then sleeps 250 ms
 (`NET_Sleep(0xfa)`). VERIFIED (the format string, the `2 <` test, the
 constant). It reads `G_GetSavePersist()` before `SV_ShutdownGameProgs` and

@@ -109,11 +109,11 @@ Voice rides out of band. The client sends `FF FF FF FF`, the string `v` with its
 
 ### 1.9 `fast_restart`
 
-`fast_restart` is `SV_MapRestart(1)`. VERIFIED (`Cmd_AddCommand` with the two wrappers). Its in-place arm runs when the server is not loading, `g_gametype` is unchanged and the argument is set; anything else falls back to `SV_SpawnServer`. INFERRED (the branch). The arm:
+`fast_restart` is `SV_MapRestart(1)`. VERIFIED (`Cmd_AddCommand` with the two wrappers). Its in-place arm runs when the argument is set, `g_gametype` is unchanged and `sv_maxclients` is unmodified (0x808be92..0x808beb8); anything else falls back to `SV_SpawnServer`. INFERRED (the branches). VERIFIED: the string `Server is not running.` (0x814940b) is printed at 0x808be56. INFERRED (the branch at 0x808be49): a server that is not running prints it and returns before either. The arm's steps in full: cod2-map-cycle.md 1.2. The arm:
 
 - adds 1 to the low nibble of `sv_serverid` only (`(id + 1 & 0xf) + (id & 0xf0)`);
 - runs three 100 ms frames;
-- for every client past `CS_CONNECTED`, queues `B` when `G_GetSavePersist()` is 0 and `n` when 1, calls `ClientConnect` and, for an active client, `SV_ClientEnterWorld`.
+- for every client past `CS_ZOMBIE` (state above 1, the `cmpl $0x1` at 0x808bfd4), queues `B` when `G_GetSavePersist()` is 0 and `n` when 1, calls `ClientConnect` and, for an active client, `SV_ClientEnterWorld`.
 
 VERIFIED for the stores, the `0x42` / `0x6e` and the calls; their order is INFERRED. No gamestate goes out: the new id reaches the client as a `d 1` systeminfo update, which it must echo in its headers. VERIFIED live (10: 32 to 33 on dm; 16 to 17, 18, 19 over three sd rounds). The script's `map_restart(<persist>)` (`GScr_MapRestart`, 0x8116a3c) stores the persist flag and runs `fast_restart`. VERIFIED. An sd round restart arrived as `n` and an rcon `fast_restart` on dm as `B`. VERIFIED live.
 
@@ -859,15 +859,27 @@ VERIFIED: `CG_ProcessEntity` (Mac 0x164bd4) switches on `eType` 0..9 and `Com_Er
 | 8 | inline | a looping effect, no model |
 | 9 | inline | the xmodel at `index`, posed by `CG_mg42_DoControllers`, lit 32 units above its origin |
 
-VERIFIED for the handlers, the model fields and the turret's `+ 32.0` (Mac 0x3263e8). The `eType` 9 = turret label is INFERRED: its tree comes from `CG_GetMG42Anims` (`CG_PreProcess_GetDObj`, Mac 0x163f12). Every model handler but the turret's skips the entity when `eFlags & 0x20` is set; the turret arm checks the same bit. VERIFIED. The model range is `G_ModelIndex`'s, 334 + `index` (section 6). VERIFIED live: on the fixture's mp_toujane the three `eType` 9 entities read `index` 39, `xmodel/weapon_mg42`, the two xmodel script movers 51, `xmodel/german_artillery_flak88_destroy`, and the three brush movers inline models 1, 16 and 18.
+VERIFIED for the handlers, the model fields and the turret's `+ 32.0` (Mac 0x3263e8). 9 is the turret: `G_SpawnTurret` (Mac 0x1bc84a) stores it (below), and its tree comes from `CG_GetMG42Anims` (`CG_PreProcess_GetDObj`, Mac 0x163f12). Every model handler but the turret's skips the entity when `eFlags & 0x20` is set; the turret arm checks the same bit. VERIFIED. The model range is `G_ModelIndex`'s, 334 + `index` (section 6). VERIFIED live: on the fixture's mp_toujane the three `eType` 9 entities read `index` 39, `xmodel/weapon_mg42`, the two xmodel script movers 51, `xmodel/german_artillery_flak88_destroy`, and the three brush movers inline models 1, 16 and 18.
 
 `bg_itemlist` rows 1 to 128 are the weapons by their CS 7 index: `BG_FindItemForWeapon` (Mac 0x69cd2) returns row `weapon`, and `BG_GetWeaponIndexForName` (Mac 0x7ede0) fills that row from the weapon def it loads, its model word included. VERIFIED. `G_FindItem` (Mac 0x69cea) searches the other items from row 0x81. VERIFIED. `bg_numItems` is 131 (`cod2_lnxded` rodata 0x8154ed8), and `bg_itemlist` (.data 0x81850c0, rows of 0x2c bytes: classname, pickup sound, two world models, icon, pickup name, quantity, `giType`, `giTag`) holds two rows past the weapons: 129 `item_health_small` (`xmodel/health_small`, `icons/iconh_small`, quantity 10) and 130 `item_health_large` (`xmodel/health_large`, quantity 50), both `giType` 3. VERIFIED. `CG_Item` `Com_Error`s on an `index` at or past `bg_numItems` and draws `cg_items[index]`'s first model, which `CG_RegisterItemVisuals` (Mac 0x1d9580) registers off the row's world model word. VERIFIED. vcod draws rows 129 and 130 as their two xmodels and anything past them as nothing.
+
+The names and the event entities (once section 13's "Entity types"):
+
+`CG_ProcessEntity` (Mac 0x164bd4) switches on `eType` 0..9 and errors `Bad entity type` past them. VERIFIED. 0..6 are named by the strings of the entity list printer just before `AddIP` (Mac 0x1cb286): `ET_GENERAL`, `ET_PLAYER`, 2 (`CG_Corpse`), `ET_ITEM`, `ET_MISSILE`, `ET_INVISIBLE`, `ET_SCRIPTMOVER`. VERIFIED. 7 calls `CG_SoundBlend`, 8 replays the effect configstring at `centity + 0x1c8` on a timer through `FX_PlayEffect`, and 9 is what `G_SpawnTurret` (Mac 0x1bc84a) stores, posed by `CG_mg42_DoControllers`. VERIFIED for the arms and the store; vcod's names for them (`ET_SOUND_BLEND`, `ET_FX`, `ET_TURRET`) are its own. 1.1 numbers these differently (`ET_MOVER` 5, `ET_PORTAL` 6, `ET_SCRIPTMOVER` 8, `ET_TURRET` 11).
+
+`ET_EVENTS` is 10: `G_TempEntity` (Mac 0x1b7052) stores `event + 10` as the `eType`, and `CG_CheckEvents` (Mac 0x1e614a) takes `10 < eType` as an event entity carrying `eType - 10`. VERIFIED. 1.1's is 12.
 
 ### 12.2 `trType`
 
 VERIFIED: `BG_EvaluateTrajectory` (Mac 0x6b262) has nine arms, 0..8: stationary, interpolate and 6 return `trBase`; 2 linear; 3 linear stopping at `trTime + trDuration`, never before `trTime`; 4 `sin(2 pi (t - trTime) / trDuration)` (the double pi at Mac 0x340c08); 5 gravity, `z - 400 t^2` (Mac 0x326290); 7 accelerate and 8 decelerate along `trDelta` at `|trDelta| / trDuration` (the 0.5 and -0.5 at Mac 0x326190 and 0x3261f4). 1.1's `TR_GRAVITY_LOW` and `TR_GRAVITY_FLOAT` are gone, so the accelerations moved down two. Naming 6 `TR_GRAVITY_PAUSED` is INFERRED from its place in 1.1's list.
 
 `CG_CalcEntityLerpPositions` (Mac 0x163c40) lerps an entity between the two snapshots when its older state's `pos.trType` is 1, or 3 with a number under 64 (`CG_InterpolateEntityPosition`, Mac 0x1636d2: each state evaluated at its own snapshot's time, angles through `LerpAngle`). Anything else evaluates the older state's `pos` and `apos` at the render time, then `CG_AdjustPositionForMover` (Mac 0x163b00) adds what an `eType` 6 entity numbered 1..1021 in `groundEntityNum` moved between the older snapshot's time and the render time. VERIFIED.
+
+The server binary's copy (once section 13's "Trajectories"):
+
+`BG_EvaluateTrajectory` (0x80df5d4) has nine arms: 0, 1 and 6 hold `trBase`, 2 linear, 3 linear to `trTime + trDuration`, 4 sine, 5 gravity with `400 * t * t` off `z` (the float at 0x8154d38), 7 and 8 accelerate and decelerate with the 0.5 at 0x8154d3c. VERIFIED. 1.1's extra gravity arms are gone, and the accelerations moved from 9 and 10 to 7 and 8.
+
+Which entities the cgame lerps: above, and 18.5. A live player entity's `pos.trType` reads 3 (the fixture of 10). VERIFIED live.
 
 ### 12.3 Teleports and entities entering
 
@@ -893,9 +905,7 @@ So an unmanned gun tips back on its stand until its butt meets the world, barrel
 
 ### Entity types
 
-`CG_ProcessEntity` (Mac 0x164bd4) switches on `eType` 0..9 and errors `Bad entity type` past them. VERIFIED. 0..6 are named by the strings of the entity list printer just before `AddIP` (Mac 0x1cb286): `ET_GENERAL`, `ET_PLAYER`, 2 (`CG_Corpse`), `ET_ITEM`, `ET_MISSILE`, `ET_INVISIBLE`, `ET_SCRIPTMOVER`. VERIFIED. 7 calls `CG_SoundBlend`, 8 replays the effect configstring at `centity + 0x1c8` on a timer through `FX_PlayEffect`, and 9 is what `G_SpawnTurret` (Mac 0x1bc84a) stores, posed by `CG_mg42_DoControllers`. VERIFIED for the arms and the store; vcod's names for them (`ET_SOUND_BLEND`, `ET_FX`, `ET_TURRET`) are its own. 1.1 numbers these differently (`ET_MOVER` 5, `ET_PORTAL` 6, `ET_SCRIPTMOVER` 8, `ET_TURRET` 11).
-
-`ET_EVENTS` is 10: `G_TempEntity` (Mac 0x1b7052) stores `event + 10` as the `eType`, and `CG_CheckEvents` (Mac 0x1e614a) takes `10 < eType` as an event entity carrying `eType - 10`. VERIFIED. 1.1's is 12.
+Folded into 12.1.
 
 ### Events
 
@@ -903,13 +913,12 @@ The 199 `EV_*` names are the pointer table at `.data` 0x8184da0 in `cod2_lnxded`
 
 ### Trajectories
 
-`BG_EvaluateTrajectory` (0x80df5d4) has nine arms: 0, 1 and 6 hold `trBase`, 2 linear, 3 linear to `trTime + trDuration`, 4 sine, 5 gravity with `400 * t * t` off `z` (the float at 0x8154d38), 7 and 8 accelerate and decelerate with the 0.5 at 0x8154d3c. VERIFIED. 1.1's extra gravity arms are gone, and the accelerations moved from 9 and 10 to 7 and 8.
-
-Which entities the cgame lerps is 12.2 and 18.5. A live player entity's `pos.trType` reads 3 (the fixture of 10). VERIFIED live.
+Folded into 12.2.
 
 ### `map_restart`
 
-`SV_MapRestart` (0x808be3e) queues `B` to each client when `G_GetSavePersist` is 0 and `n` otherwise, 1.5's choice. VERIFIED.
+`SV_MapRestart` (0x808be3e) queues `B` to each client when `G_GetSavePersist` is 0 and `n` otherwise, 1.5's choice. VERIFIED. The server side of both restarts is
+cod2-map-cycle.md 1.1 and 1.2.
 
 ### vcod's `Cod2Wire` descriptor
 
