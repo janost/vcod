@@ -1021,6 +1021,8 @@ has only one with a goal weight). Test `a_corpse_falls_and_rests`
   `TR_GRAVITY`, a think at +1000. It is kept in a ring of
   `g_maxDroppedWeapons` (16, 1..32) that evicts the slot farthest from
   every playing client.
+- On `cod2_lnxded` the launch is at 0x81063d4. INFERRED (carried over
+  from vcod's port, `game::cod2_items::launch_off`, not re-read).
 - `crandom` is `2 * rand() / 2^31 - 1` (Mac 0x2cf1a). VERIFIED.
 - `Touch_Item` (Mac 0x1b1bea) is 1.1's (`cod11-items.md` 7) on CoD2's item
   rows (a weapon's row is its index). VERIFIED:

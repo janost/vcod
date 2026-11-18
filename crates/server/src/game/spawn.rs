@@ -342,14 +342,9 @@ fn worldspawn_ambient(world: &[(String, String)]) -> String {
     }
 }
 
-/// `SP_worldspawn` (0x61cec): `G_SpawnString("northyaw", "", &out)` then, if
-/// the result is empty, the literal `"0"` in its place: a raw copy of the
-/// BSP text, never a rendered number, which is why this does not go through
-/// `Cx::format_number`. `mp_carentan`'s own worldspawn block carries no
-/// `northyaw` key at all (checked against the shipped BSP), so its capture's
-/// `"0"` is that literal, not a formatted zero; `mp_pavlov`'s `"90"` is the
-/// key's value verbatim. INFERRED FROM DECOMPILATION for the mechanism,
-/// cross-checked against both captures for the outcome.
+/// `SP_worldspawn` (0x61cec): the `northyaw` key's raw text, or the literal
+/// `"0"` when it is absent or empty; never a formatted number, so not
+/// `Cx::format_number` (cod11-gsc-object-model.md 19).
 fn worldspawn_northyaw(world: &[(String, String)]) -> String {
     match spawn_string(world, "northyaw") {
         Some(v) if !v.is_empty() => v.to_string(),
@@ -357,19 +352,10 @@ fn worldspawn_northyaw(world: &[(String, String)]) -> String {
     }
 }
 
-/// `SP_trigger_hurt` (0x64ef8): `G_SpawnString("sound", "world_hurt_me",
-/// &out)`, unconditionally, before any of the entity's other fields are
-/// touched (INFERRED FROM DECOMPILATION, reading control flow only). Both
-/// gate maps place exactly one `trigger_hurt` with no `sound` key (VERIFIED,
-/// read straight from the shipped BSPs), so the default is what lands in
-/// configstring 525 on both.
-///
-/// Unlike `worldspawn_northyaw`, this only falls back when the key is
-/// absent, not when it is present-but-empty: nothing in `SP_trigger_hurt`'s
-/// disassembly showed the post-`G_SpawnString` empty check `SP_worldspawn`
-/// has, and neither gate map's `trigger_hurt` carries an empty `sound`
-/// value, so that branch is deliberate but unmeasured, not proven either
-/// way.
+/// `SP_trigger_hurt` (0x64ef8): the `sound` key, `world_hurt_me` when it is
+/// absent (cod11-gsc-object-model.md 19). An empty key is kept, unlike
+/// `northyaw`'s: no empty check was seen and no stock map has one, so that
+/// branch is unmeasured.
 fn trigger_hurt_sound(block: &[(String, String)]) -> String {
     spawn_string(block, "sound")
         .unwrap_or("world_hurt_me")
@@ -489,17 +475,9 @@ fn round_trigger(
     Ok(Some((shape, crate::game::trigger::Round { radius: r })))
 }
 
-/// `G_SpawnTurret` (0x52c84), reached from `SP_turret` for `misc_mg42` and
-/// `misc_turret`: right after `RegisterItem(weaponinfo)`, it reads two
-/// string fields off the weapon info struct `BG_GetInfoForWeapon` returns
-/// for that same weapon and calls `G_SoundAliasIndex` on each (INFERRED FROM
-/// DECOMPILATION, reading control flow only). VERIFIED which two fields,
-/// from the shipped `weapons/mp/mg42_bipod_stand_mp`: its `loopFireSound`
-/// and `stopFireSound` keys are `weap_mg42_loop` and `weap_mg42_cooldown`,
-/// exactly `mp_carentan`'s captured 526/527. So the alias names come from
-/// the weapon file, keyed by the entity's own `weaponinfo` value: the same
-/// string `spawn_item_name` already resolved for `RegisterItem`, reused here
-/// rather than re-read.
+/// `G_SpawnTurret` (0x52c84): the `loopFireSound` and `stopFireSound`
+/// aliases of the `weaponinfo` weapon file, the name `spawn_item_name`
+/// resolved (cod11-gsc-object-model.md 19).
 ///
 /// CoD2's `G_SpawnTurret` (0x810c6b2) indexes four, the weapon def's words
 /// at 0xb0..0xbc: `loopFireSound`, `loopFireSoundPlayer`, `stopFireSound`,
@@ -555,8 +533,8 @@ fn turret_def(
 /// key name: `G_SpawnString` (1.1d 0x61390, CoD2 0x80f415e) `strcmp`s the
 /// pairs in lump order and takes the first. None of the five reaches
 /// script: neither `fields::ENTITY_FIELDS` nor `fields::RADIANT_KEYS` names
-/// any of them (the AGENTS.md gotcha on Radiant keys), so they are read
-/// here rather than through `host.get_field`.
+/// any of them (docs/dev/traps.md, "Script", "A BSP key reaches script"),
+/// so they are read here rather than through `host.get_field`.
 fn turret_keys(pairs: &[(String, String)]) -> crate::game::turret::TurretKeys {
     let f = |key: &str| -> Option<f32> { spawn_string(pairs, key).map(atof) };
     crate::game::turret::TurretKeys {
@@ -577,30 +555,10 @@ fn register_sound_alias(host: &mut GameHost, name: String) {
     }
 }
 
-/// A placed weapon's `bg_itemlist` classname is its weapon file's
-/// `radiantName`, not its own file name, and not always that name with an
-/// `mpweapon_` prefix stripped, either. VERIFIED: read straight from every
-/// `weapons/mp/*_mp` file in the shipped paks. 23 of `WEAPON_LIST`'s 32
-/// weapons carry a non-empty `radiantName`; this table is all 23, so a
-/// classname not in it is not a placeable weapon, not a transcription gap.
-///
-/// Three names are a compound losing its underscore
-/// (`mosin_nagant_mp`/`mpweapon_mosinnagant`,
-/// `mosin_nagant_sniper_mp`/`mpweapon_mosinnagantsniper`,
-/// `kar98k_sniper_mp`/`mpweapon_kar98k_scoped`), and a fourth is not a
-/// transform of the file's own name at all
-/// (`rgd-33russianfrag_mp`/`mpweapon_russiangrenade`), which is why this is
-/// a table and not a prefix-and-suffix rule.
-///
-/// The other nine `WEAPON_LIST` weapons carry no usable `radiantName` and
-/// are deliberately absent: five alt-fire files (`bar_slow_mp`,
-/// `fg42_semi_mp`, `mp44_semi_mp`, `ppsh_semi_mp`, `thompson_semi_mp`) carry
-/// an empty `radiantName`, since they are never placed directly and reach
-/// `Items::register` only through the alt-fire link (`WeaponTable::alt_chain`);
-/// the three `mg42_bipod_*` files carry no `radiantName` key at all, since
-/// a mounted mg42 is placed as `misc_mg42` with its item named by the
-/// `weaponinfo` key instead (see `spawn_item_name`); `ptrs41_antitank_rifle_mp`
-/// has no weapon file under that name in the stock paks.
+/// A placed weapon's `bg_itemlist` classname (its weapon file's
+/// `radiantName`) and the weapon it names. 1.1's rows are all 23 weapons with
+/// a non-empty `radiantName`; a table, since four are no transform of the
+/// file name (cod11-gsc-object-model.md 17).
 ///
 /// United Offensive's own weapons follow, read the same way from UO's
 /// `weapons/mp/` (pakuo*): a name 1.1's `Defs` lacks finds no item there.
@@ -645,31 +603,6 @@ const RADIANT_NAMES: &[(&str, &str)] = &[
     ("mpweapon_webley", "webley_mp"),
 ];
 
-/// The item a spawned entity registers, if any: `G_CallSpawn`'s second
-/// case, before `spawns` (section 17 of the object model doc): a classname
-/// matched against `bg_itemlist` calls `G_SpawnItem` -> `RegisterItem`
-/// straight after the entity is built, before any script runs, and neither
-/// function frees the entity, so a later script `delete()` still finds it.
-///
-/// An item's classname goes through `items::classname_index`: a placed
-/// weapon's is looked up in `RADIANT_NAMES`, the five compiled-in rows
-/// (`item_health` and its siblings) match by name. Both gate
-/// maps place `mpweapon_fg42`/`mpweapon_panzerfaust` entities that
-/// `_teams.gsc`'s `restrictPlacedWeapons` later deletes by that same
-/// classname (VERIFIED, read from the shipped BSPs and script).
-///
-/// `misc_mg42`/`misc_turret` reach `RegisterItem` too, through their own
-/// `SP_turret` (0x533b0, section 8) rather than `bg_itemlist`: the item
-/// name is their `weaponinfo` key's value directly, no lookup needed
-/// (VERIFIED: mp_carentan's two mounted mg42s carry
-/// `"weaponinfo" "mg42_bipod_stand_mp"` in the shipped BSP).
-///
-/// One divergence, on section 17's reading of `SP_turret`'s branches: a
-/// `misc_mg42`/`misc_turret` with no `weaponinfo` key takes retail's
-/// `Com_Error` ("no weaponinfo specified for turret") and fails the map
-/// load, where we return `None` and spawn the entity without an item. No
-/// stock map has one, so the two differ only on a broken BSP, which ours
-/// loads and retail does not.
 /// CoD2's and CoD4's placement, at the spawn (CoD1's is
 /// [`finish_spawning_item`]). `FinishSpawningItem` (0x4e284) traces the
 /// item straight down from where Radiant put it and sets its origin to where that trace ends, so a placed
@@ -1062,6 +995,31 @@ pub fn radiant_weapon(classname: &str) -> Option<&'static str> {
         .map(|(_, weapon)| *weapon)
 }
 
+/// The item a spawned entity registers, if any: `G_CallSpawn`'s second
+/// case, before `spawns` (section 17 of the object model doc): a classname
+/// matched against `bg_itemlist` calls `G_SpawnItem` -> `RegisterItem`
+/// straight after the entity is built, before any script runs, and neither
+/// function frees the entity, so a later script `delete()` still finds it.
+///
+/// An item's classname goes through `items::classname_index`: a placed
+/// weapon's is looked up in `RADIANT_NAMES`, the five compiled-in rows
+/// (`item_health` and its siblings) match by name. Both gate
+/// maps place `mpweapon_fg42`/`mpweapon_panzerfaust` entities that
+/// `_teams.gsc`'s `restrictPlacedWeapons` later deletes by that same
+/// classname (VERIFIED, read from the shipped BSPs and script).
+///
+/// `misc_mg42`/`misc_turret` reach `RegisterItem` too, through their own
+/// `SP_turret` (0x533b0, section 8) rather than `bg_itemlist`: the item
+/// name is their `weaponinfo` key's value directly, no lookup needed
+/// (VERIFIED: mp_carentan's two mounted mg42s carry
+/// `"weaponinfo" "mg42_bipod_stand_mp"` in the shipped BSP).
+///
+/// One divergence, on section 17's reading of `SP_turret`'s branches: a
+/// `misc_mg42`/`misc_turret` with no `weaponinfo` key takes retail's
+/// `Com_Error` ("no weaponinfo specified for turret") and fails the map
+/// load, where we return `None` and spawn the entity without an item. No
+/// stock map has one, so the two differ only on a broken BSP, which ours
+/// loads and retail does not.
 fn spawn_item_name(
     host: &GameHost,
     pairs: &[(String, String)],

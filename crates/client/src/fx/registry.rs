@@ -766,8 +766,8 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
         // eventParm is the surface normal here too (doc section 2). `_NOMARKS`
         // only suppresses the decal, so both rocket ids read the same csv row.
         // `grenade_bounce` is blank in stock data and resolves to `Known`.
-        // The weapon's own `projExplosionEffect` is not spawned; `weapon.rs`
-        // does not parse that key.
+        // The weapon's own `projExplosionEffect` is left out here, though
+        // 1.1's cgame adds it (cod11-events-and-fx.md 5a); the UO arm spawns it.
         EV_GRENADE_BOUNCE | EV_GRENADE_EXPLODE | EV_ROCKET_EXPLODE | EV_ROCKET_EXPLODE_NOMARKS => {
             let kind = match ev.event {
                 EV_GRENADE_BOUNCE => ImpactKind::GrenadeBounce,

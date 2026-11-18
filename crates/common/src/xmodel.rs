@@ -300,8 +300,6 @@ fn decode_tri_strip(r: &mut Reader, triangle_count: usize) -> Result<Vec<u16>> {
     Ok(tris)
 }
 
-/// Bakes every vertex into model space through its primary bone; `bones`
-/// must hold composed world binds.
 /// One vertex as stored: every weight carries its own bone-local position.
 struct RawVert {
     normal: [f32; 3],
@@ -421,7 +419,8 @@ fn recover_viewhands_bind(bones: &mut [Bone], surfaces: &[RawSurface]) {
     }
 }
 
-/// Bakes each vertex into model space through its primary bone's bind.
+/// Bakes each vertex into model space through its primary bone's bind;
+/// `bones` must hold composed world binds.
 fn bake_surfs(raw: Vec<RawSurface>, bones: &[Bone]) -> Result<Vec<Surface>> {
     let mut surfaces = Vec::with_capacity(raw.len());
     for (si, rs) in raw.into_iter().enumerate() {

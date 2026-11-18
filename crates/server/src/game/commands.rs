@@ -6,7 +6,8 @@
 
 /// The slot a command to every client goes to (`SV_GameSendServerCommand(-1,
 /// ..)`): the engine fans it out to every client past `CS_CONNECTED`.
-/// Only CoD2's builtins queue it; vcod's CoD1 server never sees one.
+/// CoD2's and CoD4's builtins and votes queue it; vcod's CoD1 server never
+/// sees one.
 pub const ALL_CLIENTS: usize = usize::MAX;
 
 #[derive(Clone, Debug, Default, PartialEq)]

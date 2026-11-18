@@ -292,7 +292,8 @@ impl crate::engine::GameModule for Cod4Game {
         e.run_level_frame();
         true
     }
-    /// No killcam without a level: nothing reads the archive yet.
+    /// Empty: the killcam's entity rounds are archived as each frame's
+    /// snapshot world is built (`send_client_snapshot`, `archive_entities`).
     fn archive(_e: &mut Cod4Server) {}
     fn check_timeouts(e: &mut Cod4Server) {
         e.check_timeouts();
@@ -1613,12 +1614,6 @@ impl Cod4Server {
     }
 }
 
-/// A config file out of the iwds with each `exec <name>` line replaced by
-/// that file's text, as `Cbuf` runs it; a file no iwd holds reads as
-/// empty. `server_map.cfg` (in `iw_00.iwd`) sets `sv_mapRotation`. `iw_00.iwd` holds two
-/// `default_mp_gamesettings.cfg`, and retail reads the later one: no
-/// `scr_game_playerwaittime` line, so the prematch waits the script's 15 s
-/// (VERIFIED live, rcon and the game end time 619800).
 /// `Dvar_InfoString(0x404)` over `cvars`: configstring 0, `getstatus`'s
 /// info and the log's `InitGame` line, case-folded order.
 fn serverinfo_of(cvars: &crate::cvars::Cvars) -> String {
@@ -1629,6 +1624,12 @@ fn serverinfo_of(cvars: &crate::cvars::Cvars) -> String {
     )
 }
 
+/// A config file out of the iwds with each `exec <name>` line replaced by
+/// that file's text, as `Cbuf` runs it; a file no iwd holds reads as
+/// empty. `server_map.cfg` (in `iw_00.iwd`) sets `sv_mapRotation`. `iw_00.iwd` holds two
+/// `default_mp_gamesettings.cfg`, and retail reads the later one: no
+/// `scr_game_playerwaittime` line, so the prematch waits the script's 15 s
+/// (VERIFIED live, rcon and the game end time 619800).
 fn iwd_cfg(fs: &vcod_common::pk3::Pk3Fs, name: &str, depth: u32) -> String {
     let Some(raw) = fs.read(name) else {
         return String::new();

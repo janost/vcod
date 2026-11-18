@@ -1950,8 +1950,6 @@ fn clip_rounds(kind: i32, size: i32, base: [f32; 2]) -> Vec<[f32; 4]> {
         .collect()
 }
 
-/// `cg.inKillCam`: the drawn playerstate is an archived one
-/// (`ps.deltaTime` set, `CG_TransitionKillcam`).
 /// The action slots' menu and the night vision slot's icon
 /// (`cgMedia.hudIconNVG`).
 const DPAD_MENU: &str = "dpad";
@@ -2174,6 +2172,8 @@ fn held_ammo(l: &Loaded, s: &Cod4Session, snap: &Snapshot) -> Option<HeldAmmo> {
     })
 }
 
+/// `cg.inKillCam`: the drawn playerstate is an archived one
+/// (`ps.deltaTime` set, `CG_TransitionKillcam`).
 fn in_killcam(snap: &Snapshot) -> bool {
     snap.ps.get("deltaTime").unwrap_or(0) != 0
 }
@@ -3040,8 +3040,6 @@ impl Cod4Hud {
     }
 }
 
-/// [`font::layout`] with its shadow faded with the text: the shared
-/// layout draws every shadow at 0.8 alpha.
 /// `CG_DrawDisconnect` (`iw3mp.exe` 0x42f930): `CGAME_CONNECTIONINTERUPTED`
 /// at scale 0.5 centred on the 640 grid, its baseline at y 100 (0x6f9e58),
 /// white in style 3, and unless `cg.time & 0x200` the `net_disconnect`
@@ -3069,6 +3067,8 @@ fn draw_interrupted(l: &Loaded, sp: &ScreenPlacement, now: i32, out: &mut Vec<Hu
     }
 }
 
+/// [`font::layout`] with its shadow faded with the text: the shared
+/// layout draws every shadow at 0.8 alpha.
 pub(crate) fn text(
     f: &Font,
     s: &str,
@@ -3666,9 +3666,9 @@ fn world_to_compass(rect: [f32; 4], up: [f32; 2], eye: glam::Vec3, at: glam::Vec
     screen.map(|v| v * fit)
 }
 
-/// `materialIndex`'s or a kill icon's image as a HUD texture path.
-/// A material's colour map as the HUD's texture name; `white`, whose
-/// image is the engine's `$white`, as the HUD's own white.
+/// A material's colour map (`materialIndex`'s or a kill icon's) as the
+/// HUD's texture name; `white`, whose image is the engine's `$white`, as
+/// the HUD's own white.
 fn image_of(l: &Loaded, material: &str) -> Option<String> {
     if material.eq_ignore_ascii_case("white") {
         return Some("white".into());

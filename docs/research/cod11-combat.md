@@ -326,8 +326,8 @@ INFERRED: that is the whole semi-automatic edge. Nothing latches the button in
 `weaponTime == 0` while the trigger stays down, and the fire path is gated on
 `weaponTime` having reached 0. INFERRED: releasing the trigger lets the next
 frame take the `else` and store 0, after which the weapon can fire again. The
-net probe taps the bit for that reason (`Pulse`, AGENTS.md "The probe
-client").
+net probe taps the bit for that reason (`Pulse`, `docs/dev/retail.md`, "The
+probe client").
 
 VERIFIED, same block (`.so` 0x38842-0x388c4): after the store of 1 it
 compares `weaponstate` against 4, then against 3, 4, 10 and 11. Both arms
@@ -3287,7 +3287,7 @@ the lean:
 - The clock the grid poses at. VERIFIED, `game.mp.i386.so`: `G_RunFrame`'s
   first `Scr_RunCurrentThreads` (0x50653) runs before
   `trap_DObjInitServerTime` and `G_DObjUpdateServerTime` (0x5069f,
-  0x506ed; cod11-movers.md 15, "A bone asked for before anim update").
+  0x506ed; cod11-movers.md 15, "A bone asked for before the anim update").
   VERIFIED, `cod_lnxded`: the time step 0x080bbab0 adds `dtime * rate *
   frequency` to a node's old time (`+0x2c`, copied from the time by the
   weight step 0x080bb130 first) for every node whose weight is not 0,
@@ -4169,7 +4169,8 @@ cmd-path death's comes due after 200. Ours matches on all three
 
 INFERRED: nothing frees a clone on a timer. It lives until the eighth
 subsequent death reuses its slot, which is the eight-body behaviour the
-project already observed live (`AGENTS.md`, "Netcode debugging").
+project already observed live (`docs/dev/traps.md`, "Combat and items", "The
+body queue is eight entities").
 
 **As implemented** (`crates/server/src/game/bodies.rs` and the `cloneplayer`
 builtin in `crates/server/src/game/builtins/client.rs`). The clone is written
@@ -7889,7 +7890,7 @@ the turret's waiters:
 
 INFERRED: the notifies wake their waiters after the builtin's caller has
 moved on, and the later notify's waiter runs first, the newest-first resume
-order of AGENTS.md's script notes. Where the turret falls in the walk
+order (`cod11-gsc-language.md` 9). Where the turret falls in the walk
 relative to slot 1 is not visible here, since its notifies are deferred.
 
 **As implemented.** `GameHost::blast_entities` lists the turrets with
@@ -9314,7 +9315,7 @@ calls `Com_EventLoop` in the loop at 0x806cfe0..0x806d001 and then
 never inside one. `Com_EventLoop` hands each received datagram to
 `SV_PacketEvent` as it takes it off the queue, and its only callers are
 `Com_Frame`'s loop and, on a non-dedicated process only, a second call after
-`SV_Frame` (cod11-server-handshake.md, "The read schedule"). INFERRED: so
+`SV_Frame` (cod11-server-handshake.md, "Pings", "The read schedule"). INFERRED: so
 within a server frame every client's cmds, and the shots in them, run in
 packet arrival order, and `G_RunFrame`'s `ClientEndFrame` pass runs after all
 of them.

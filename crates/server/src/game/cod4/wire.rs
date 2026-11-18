@@ -1,10 +1,9 @@
-//! The shared host's entities as CoD4 1.7 sends them (`Ent4`, design
-//! decision D4 a): the host builds an entity in CoD2's field names
+//! The shared host's entities as CoD4 1.7 sends them: the host builds an entity in CoD2's field names
 //! ([`super::COD4_HOST_PROTO`]), and [`ent4`] moves each field into the
 //! word of CoD4's `entityState_t` of the same meaning (`lerp.` before the
 //! trajectories and `eFlags`, `leanf` in the player union). The types 1.7
-//! shares with CoD2's numbering (0 general .. 9 loop fx) go through; any
-//! other is left out until its own stage builds it.
+//! shares with CoD2's numbering (0 general .. 9 loop fx) go through; the
+//! level builds its other types' entities itself.
 
 use vcod_cod4::net::delta::{EntityState, HudElem, MAX_HUDELEMS};
 use vcod_cod4::net::fields::HUDELEM;

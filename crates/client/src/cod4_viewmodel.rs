@@ -719,7 +719,9 @@ pub(crate) fn notes_crossed(clip: &XAnim, from: f32, to: f32) -> Vec<&str> {
 
 /// The gun's place off the view as the frames carry it: the eased move
 /// offset and turn, the idle drift's scale and clock, the sway
-/// (cod4-client-view.md 4.3).
+/// (cod4-client-view.md 4.3). The routine names on the placement code below
+/// are 4.3's INFERRED ones with no iw3mp.exe address; only the bob's
+/// constants are pinned (0x41b0d0), the others are unverified against it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct GunState {
     /// Forward, left, up.
@@ -744,7 +746,8 @@ struct Sway {
 }
 
 /// The fastest the move offset and the move turn ease, per ms: 0.1 a
-/// second for the offset, a hair under it for the turn.
+/// second for the offset, a hair under it for the turn. Unverified against
+/// iw3mp.exe.
 const OFFSET_MIN_PER_MS: f32 = 0.1 * 0.001;
 const TURN_MIN_PER_MS: f32 = 0.0001;
 
@@ -769,7 +772,8 @@ fn approach(cur: f32, goal: f32, step: f32) -> f32 {
 }
 
 /// `DiffTrack`: `cur` closes `rate` of the gap a second, landing on
-/// `goal` within 0.001 or when the step would overshoot.
+/// `goal` within 0.001 or when the step would overshoot. No address; the
+/// 0.001 is unverified against iw3mp.exe.
 fn track(goal: f32, cur: f32, rate: f32, dt: f32) -> f32 {
     let gap = goal - cur;
     let step = rate * gap * dt;
@@ -794,7 +798,8 @@ fn track_angle(goal: f32, cur: f32, rate: f32, dt: f32) -> f32 {
 }
 
 /// How much of the move offset and turn shows: all on the hip, fading
-/// out over the sight's first half.
+/// out over the sight's first half (the half is unverified against
+/// iw3mp.exe).
 fn hip_share(frac: f32) -> f32 {
     if frac == 0.0 {
         1.0
@@ -882,7 +887,8 @@ fn bob_turn(ps: &ViewPs, n: &ViewNumbers) -> [f32; 3] {
 impl Sway {
     /// `BG_CalculateWeaponPosition_Sway`: the view's turn since the last
     /// frame, per 60th of a second and capped, tracked into the lag and
-    /// the tilt. Frozen under a scope's overlay and on a 0 ms frame.
+    /// the tilt. Frozen under a scope's overlay and on a 0 ms frame. No
+    /// address; the per-60th scale is unverified against iw3mp.exe.
     fn step(&mut self, ps: &ViewPs, n: &ViewNumbers, frame_ms: i32) {
         let frac = ps.pos_frac;
         let scoped = n.aim_down_sight && n.overlay_reticle && frac > 0.0;
@@ -914,7 +920,8 @@ impl Sway {
 impl GunState {
     /// One frame of the gun's place off the eye: the offset (forward,
     /// left, up) and the angles (pitch, yaw, roll), cod4-client-view.md
-    /// 4.3 (the weapon position step, `BG_CalculateWeaponAngles`).
+    /// 4.3 (the weapon position step, `BG_CalculateWeaponAngles`, INFERRED,
+    /// no address). The lean roll's -2 is unverified against iw3mp.exe.
     fn place(&mut self, ps: &ViewPs, n: &ViewNumbers, frame_ms: i32) -> (Vec3, [f32; 3]) {
         self.sway.step(ps, n, frame_ms);
         let slot = stance_slot(ps);
@@ -990,7 +997,9 @@ impl GunState {
     /// `BG_CalculateWeaponPosition_IdleAngles`: the slow drift as (pitch,
     /// yaw, roll), its size the hip's or lerped to the sight's, its scale
     /// easing to the stance's factor at 0.5 a second (held under a
-    /// scope's overlay), its clock running at the idle speed.
+    /// scope's overlay), its clock running at the idle speed. No address;
+    /// the default size 80 and the three waves are unverified against
+    /// iw3mp.exe.
     fn idle_drift(&mut self, ps: &ViewPs, n: &ViewNumbers, slot: usize, frame_ms: i32) -> [f32; 3] {
         let frac = ps.pos_frac;
         let [ads_amount, hip_amount] = n.idle_amount;
@@ -1028,7 +1037,7 @@ fn ease3(cur: &mut [f32; 3], goal: [f32; 3], rate: f32, min_per_ms: f32, frame_m
 }
 
 /// The lean's shift: along the rolled view's right, gone as the sight
-/// comes up.
+/// comes up (cod4-client-view.md 4.3, INFERRED, the 1.6 included).
 fn lean_offset(ps: &ViewPs) -> [f32; 3] {
     if ps.leanf == 0.0 || ps.pos_frac >= 1.0 {
         return [0.0; 3];
@@ -1050,7 +1059,8 @@ fn landing_dip(ps: &ViewPs) -> [f32; 3] {
 /// `CG_GetViewFov`: `cg_fov`, the
 /// sight's zoom eased in over the last `adsZoomInFrac` of the raise
 /// (out over `adsZoomOutFrac` of the drop), 90 at the intermission, 55
-/// on a turret, times `cg_fovScale`, at least `cg_fovMin`.
+/// on a turret, times `cg_fovScale`, at least `cg_fovMin`
+/// (cod4-client-view.md 4.3, INFERRED, no address).
 pub fn view_fov(ps: &ViewPs, n: Option<&ViewNumbers>, to_ads: bool) -> f32 {
     let mut fov = CG_FOV;
     if ps.pm_type == PM_INTERMISSION {

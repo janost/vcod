@@ -98,8 +98,9 @@ pub fn model_name(raw: &str) -> String {
         .to_string()
 }
 
-/// Grafted skeletons and anim clips, loaded on first use and kept for the
-/// map. A shot is rare next to a frame, so nothing here is warmed up front.
+/// Grafted skeletons and anim clips, loaded on first use and kept while the
+/// owner lives (the CoD1 server's for the whole process). A shot is rare
+/// next to a frame, so nothing here is warmed up front.
 #[derive(Default)]
 pub struct HitRigs {
     rigs: HashMap<String, Option<Rc<Skeleton>>>,

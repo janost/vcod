@@ -871,9 +871,6 @@ fn render_world(a: &Assets, g: &GfxWorld) -> Result<Map> {
     })
 }
 
-/// An xmodel's first LOD's surfaces, each with its material added to the
-/// map's through `add`. A surface whose geometry the walk did not keep is
-/// left out.
 /// `x`'s `lodInfo[].dist`, its `numLods` of them.
 fn lod_dists(x: &crate::assets::model::XModel) -> Vec<f32> {
     x.lods
@@ -883,7 +880,9 @@ fn lod_dists(x: &crate::assets::model::XModel) -> Vec<f32> {
         .collect()
 }
 
-/// LOD `lod`'s surfaces of `x` in model space.
+/// LOD `lod`'s surfaces of `x` in model space, each with its material
+/// added to the map's through `add`. A surface whose geometry the walk did
+/// not keep is left out.
 fn model_surfaces(
     x: &crate::assets::model::XModel,
     lod: usize,

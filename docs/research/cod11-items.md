@@ -1218,7 +1218,7 @@ VERIFIED, found by this run and not by the gate, none of it item pickup:
   retail's `PROBE time0` after the same `wait 1` from `main` also reads 1050.
   Ruling: closed. VERIFIED, the gate: ours logs every census line as retail
   does, `getTime()` 1050 and origin included (the script clock's `wait` from
-  `Callback_StartGameType`, AGENTS.md), and the gate compares the whole line.
+  `Callback_StartGameType`, `docs/dev/traps.md`, "Script"), and the gate compares the whole line.
 - Retail's log carries `PROBE other 0 noclass 23650`, the probe's own slot
   seen before its first spawn (12.6); ours had none. Ruling: closed. VERIFIED,
   `crates/server/src/game/entity.rs`: ours gives a client `classname` "player" from

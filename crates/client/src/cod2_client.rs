@@ -1,7 +1,7 @@
 //! A CoD2 session's client state, `App`'s `Session::Cod2`: the session
 //! (or its load-time pump), the connect in flight, and what is drawn or
 //! read off it, with the frame's steps over them. Field order is drop
-//! order and matches the fields' old order in `App`.
+//! order.
 
 use anyhow::{Result, bail};
 use glam::{Mat4, Vec3};

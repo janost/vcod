@@ -108,8 +108,6 @@ impl Cod2Server {
             .clamp(0, i32::from(crate::bots::MAX_LEVEL)) as u8
     }
 
-    /// The level and the bots, for the in-process measuring runs
-    /// (`examples/bot_match.rs`'s CoD2 mode).
     /// The bots' pass (lnxded 0x8096952) for `addTestClient`'s clients:
     /// each in slot order draws its random cmd and, active, thinks on it
     /// (`SV_ClientThink` 0x8090dac).
@@ -130,6 +128,8 @@ impl Cod2Server {
         }
     }
 
+    /// The bots, for the in-process measuring runs (`examples/bot_match.rs`'s
+    /// CoD2 mode); [`Self::level`] and [`Self::level_mut`] lend the level.
     pub fn bots_mut(&mut self) -> Option<&mut Cod2Bots> {
         self.game.bots.as_mut()
     }

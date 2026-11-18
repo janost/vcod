@@ -1,6 +1,6 @@
 //! The usercmd clock and the outgoing ring
-//! (docs/protocol-1.1.md, "How long a cmd is simulated for"; AGENTS.md, "66
-//! ms is a pmove chop").
+//! (docs/protocol-1.1.md, "How long a cmd is simulated for"; docs/dev/traps.md,
+//! "Movement and collision", "One cmd step for every caller").
 
 use std::collections::VecDeque;
 use vcod_common::net::MAX_MOVE_CMDS;

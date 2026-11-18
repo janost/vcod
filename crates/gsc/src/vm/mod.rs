@@ -322,8 +322,9 @@ fn plant_value(interner: &mut Interner, v: &CarryValue, ids: &[Value]) -> Value 
 #[derive(Clone, PartialEq, Debug)]
 pub enum ErrorKind {
     /// The host has no such builtin. Kills the thread that reached it and
-    /// nothing else. `Loader::missing_builtins` lists the statically
-    /// visible ones at load time so this is not the first place a host gap
+    /// nothing else. The server's `BuiltinSet::unknown_calls` (and, for
+    /// tests, `Loader::missing_builtins`) lists the statically visible ones
+    /// at load time so this is not the first place a host gap
     /// shows up, but it is still reachable for every one of them.
     MissingBuiltin(Atom),
     BadType(&'static str),
@@ -923,12 +924,6 @@ impl Vm {
         self.recover_errors = on;
     }
 
-    /// CoD2's notify wake order: the waiter whose `waittill` parked last
-    /// resumes first. Live on mp_toujane, the stock gametypes' `connecting`
-    /// waiters (`_teams`, `_weapons`, `_grenadeindicators`, parked in that
-    /// order at init) answered the first connect newest first and the
-    /// second, after each had parked again in that wake order, oldest
-    /// first (cod2-protocol.md 15.5).
     /// CoD2's `x = thread f()`: the value `f` returned when it ran to its end
     /// without suspending, else undefined. VERIFIED live on retail 1.3
     /// (cod2-protocol.md 15.7); CoD1's reads undefined (not measured).
@@ -944,6 +939,12 @@ impl Vm {
         self.struct_index_reads_undefined = on;
     }
 
+    /// CoD2's notify wake order: the waiter whose `waittill` parked last
+    /// resumes first. Live on mp_toujane, the stock gametypes' `connecting`
+    /// waiters (`_teams`, `_weapons`, `_grenadeindicators`, parked in that
+    /// order at init) answered the first connect newest first and the
+    /// second, after each had parked again in that wake order, oldest
+    /// first (cod2-protocol.md 15.5).
     pub fn set_newest_waiter_first(&mut self, on: bool) {
         self.newest_waiter_first = on;
     }
@@ -1272,12 +1273,9 @@ impl Vm {
     }
 
     /// `level`'s struct id. `level()` returns a `Target` for notify and call
-    /// receivers; this is for the host's own heap reads.
-    ///
-    /// Unused outside this file's tests, and it will stay that way until
-    /// `Cx` grows the same pair: a host reading `level.<field>` from inside
-    /// a builtin holds a `Cx`, not a `Vm`. Reachable today only from a host
-    /// that owns the `Vm` between frames.
+    /// receivers; this is for the host's own heap reads between frames (the
+    /// server's script host). A builtin holds a `Cx`, which has no such
+    /// pair.
     pub fn level_id(&self) -> StructId {
         self.level
     }

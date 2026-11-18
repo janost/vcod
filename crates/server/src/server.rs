@@ -75,7 +75,6 @@ const FLOOD_WINDOW_MS: i32 = 800;
 /// How long the script's brush links hold still before the bots' graph
 /// is rebuilt over them (`Server::relink_nav`).
 const NAV_RELINK_MS: i32 = 2000;
-/// A retrieval objective as the bots see it, with its carrier's slot.
 /// A retrieval objective as [`Server::bot_re`] reads it: the view with the
 /// carrier's feet in `carrier_at` for every team, the carrier's slot, and
 /// the compass record's `teamNum`.
@@ -108,7 +107,7 @@ pub struct ServerConfig {
     /// Log one line per snapshot per client with the numbers that drive a
     /// client's prediction. Off by default; a busy server would flood.
     pub trace: bool,
-    /// Debug bots in play. Each takes a real slot; 0 is off.
+    /// Bots added at start (docs/bots.md). Each takes a real slot; 0 is off.
     pub bots: usize,
     /// Whether the bots fight. Without it they only roam.
     pub bots_shoot: bool,
@@ -452,10 +451,6 @@ fn deliver_turret_rounds(
     }
 }
 
-/// The host's health onto each playing sim. Neither `ClientEndFrame`'s
-/// intermission arm nor `SpectatorClientEndFrame` copies `ent->health` into
-/// the playerstate, so both keep the zero their own spawn left (map-cycle
-/// doc, 6.2; `spectate.rs`, `become_spectator`).
 /// What the follow reads for `slot`: the script's fields when the slot has
 /// a client entity, the sim's own mode when it has none.
 fn session_of(
@@ -477,14 +472,6 @@ fn followable(clients: &[Option<Client>], slot: usize) -> bool {
         .is_some_and(|s| s.own_view)
 }
 
-/// `ClientEndFrame`'s follow half for one slot, in slot order: a playing or
-/// dead client takes the own-view bit a follow copies, or is spawned where a
-/// copy still in its playerstate left it, and a spectator runs
-/// `SpectatorClientEndFrame` (0x40760). A forced follow's copy is taken
-/// `archivetime` back, retried 50 ms younger each time it fails down to a
-/// live one, and the age it settled on is written back; a forced follow that
-/// finds nothing writes -1 back into `spectatorclient`, and so does a follow
-/// that finds nothing to copy, which is `StopFollowing`.
 /// The seat changes the host made this cmd, onto the riders' sims
 /// (`crate::game::vehicle::seat::SeatOp`), and the script's copy of where
 /// each one now stands.
@@ -545,11 +532,6 @@ struct VehicleFireCtx<'a> {
     now_ms: i32,
 }
 
-/// The rounds `fireTurret`, `fireAltTurret` and `fireGunner` asked for
-/// (`crate::game::vehicle::fire`): aimed off the posed vehicle, traced from
-/// its muzzle against the bodies, charged to the rider with the vehicle as
-/// the inflictor. A vehicle round leaves no impact of its own: the client
-/// traces it (event parm bit 7).
 /// `GameHost::dobj_posed`, which an engine trace stamps its bodies in
 /// (`combat::DobjStamps`); empty on a host with no script.
 fn dobj_stamps(
@@ -561,6 +543,11 @@ fn dobj_stamps(
     }
 }
 
+/// The rounds `fireTurret`, `fireAltTurret` and `fireGunner` asked for
+/// (`crate::game::vehicle::fire`): aimed off the posed vehicle, traced from
+/// its muzzle against the bodies, charged to the rider with the vehicle as
+/// the inflictor. A vehicle round leaves no impact of its own: the client
+/// traces it (event parm bit 7).
 fn vehicle_fire(
     clients: &mut [Option<Client>],
     rt: &mut script::ScriptRuntime,
@@ -903,6 +890,14 @@ fn archived_motion(ps: &msg::PlayerState, p: &Cod1Wire) -> ([f32; 3], bool) {
     (velocity, teleport)
 }
 
+/// `ClientEndFrame`'s follow half for one slot, in slot order: a playing or
+/// dead client takes the own-view bit a follow copies, or is spawned where a
+/// copy still in its playerstate left it, and a spectator runs
+/// `SpectatorClientEndFrame` (0x40760). A forced follow's copy is taken
+/// `archivetime` back, retried 50 ms younger each time it fails down to a
+/// live one, and the age it settled on is written back; a forced follow that
+/// finds nothing writes -1 back into `spectatorclient`, and so does a follow
+/// that finds nothing to copy, which is `StopFollowing`.
 fn follow_end_frame(
     clients: &mut [Option<Client>],
     proto: &Cod1Wire,
@@ -1170,6 +1165,10 @@ fn mirror_vitals_of(sim: &mut ClientSim, rt: &script::ScriptRuntime, slot: usize
     sim.gravity = rt.host.client_gravity();
     sim.knockback = crate::game::builtins::cvar::atof(rt.host.cvars.get("g_knockback"));
     sim.ps.bg = rt.host.bg_cvars();
+    // Health onto a playing sim only. Neither `ClientEndFrame`'s intermission
+    // arm nor `SpectatorClientEndFrame` copies `ent->health` into the
+    // playerstate, so both keep the zero their own spawn left (map-cycle doc,
+    // 6.2; `spectate.rs`, `become_spectator`).
     if sim.pm_type != crate::spectate::PmType::Normal {
         return;
     }
@@ -1460,8 +1459,8 @@ pub enum LoadFailure {
     /// untouched and the console line was a no-op.
     KeptLevel(anyhow::Error),
     /// Failed with the level already gone: no script to call `exitLevel`, no
-    /// table for a client to pull. Retail ends the process on this
-    /// (`Com_Error`) and so does vcod.
+    /// table for a client to pull. vcod ends the process; retail's path is
+    /// unverified (see `Server::take_fatal`).
     Fatal(anyhow::Error),
 }
 
@@ -2984,12 +2983,6 @@ impl Server {
                     c.queue_command(packet, PacketCommand::Kill);
                 }
             }
-            // `Cmd_MenuResponse_f`: the client answering a menu `openMenu`
-            // opened, or giving one up (`noop`, `bad`). Unlike the entry
-            // notify this fires straight through: nothing is armed by it,
-            // and a notify no thread is parked on is simply lost, which is
-            // what retail does too. It runs in the move pass, in packet
-            // order with `kill` (`client-probes/probe_threadorder`).
             // 1.5's `ClientCommand` (0x46341) runs both past its
             // intermission test (cod15-protocol-diff.md, section 12).
             "matchtimeout" | "matchtimein" if self.v15() => {
@@ -3020,6 +3013,12 @@ impl Server {
                     None => log::debug!("client {slot}: bad fdc {args:?}"),
                 }
             }
+            // `Cmd_MenuResponse_f`: the client answering a menu `openMenu`
+            // opened, or giving one up (`noop`, `bad`). Unlike the entry
+            // notify this fires straight through: nothing is armed by it,
+            // and a notify no thread is parked on is simply lost, which is
+            // what retail does too. It runs in the move pass, in packet
+            // order with `kill` (`client-probes/probe_threadorder`).
             "mr" => {
                 if let Some((menu, response)) =
                     parse_menu_response(trimmed, i32::from(self.game.server_id))
@@ -3439,9 +3438,6 @@ impl Server {
         }
     }
 
-    /// `G_Say`: retail's `trap_SendServerCommand` queues the line from
-    /// inside `ClientCommand`, and so does this. Nothing without a script, which is
-    /// where the teams and session states live.
     /// `Cmd_Tell_f`'s log line ahead of its two `G_Say`s: 1.1's `tell: %s
     /// to %s: %s` (0x47210), 1.5's and UO's `tell;%d;%d;%s;%d;%d;%s;%s`
     /// (each side's GUID, 0 with no authorize, slot and name), the names
@@ -3467,6 +3463,9 @@ impl Server {
         rt.host.log_printf(line);
     }
 
+    /// `G_Say`: retail's `trap_SendServerCommand` queues the line from
+    /// inside `ClientCommand`, and so does this. Nothing without a script, which is
+    /// where the teams and session states live.
     fn say(&mut self, slot: usize, target: Option<usize>, mode: SayMode, text: &str) {
         let Some(rt) = self.game.module.script.as_mut() else {
             return;
@@ -4727,15 +4726,9 @@ impl Server {
     /// them are flagged into the 140/204 mirror; only `makeCvarServerInfo`
     /// does that.
     ///
-    /// `default_mp.cfg` is where the stock `scr_*` values come from: the
-    /// engine execs it at startup, it ships in `localized_english_pak0.pk3`,
-    /// and it sets 45 cvars, 38 of them the `scr_*` the stock gametype
-    /// scripts read. All but one are invisible in a configstring capture,
-    /// because the file's value and the script's own
-    /// `makeCvarServerInfo` default agree; `scr_allow_fg42` is the one that
-    /// does not, `0` in the file against the script's `"1"`, and
-    /// `makeCvarServerInfo` keeps the value already there. It is not
-    /// cosmetic: `!getCvar("scr_allow_fg42")` is what makes
+    /// `default_mp.cfg` is where the stock `scr_*` values come from, and
+    /// its `scr_allow_fg42 0` is the one the scripts' defaults disagree with
+    /// (cod11-gsc-object-model.md 17). It is not cosmetic: it makes
     /// `_teams::restrictPlacedWeapons` `delete()` the map's placed fg42s, so
     /// the value moves entity numbering as well as the mirror.
     ///
@@ -5903,9 +5896,11 @@ impl Server {
     }
 
     /// The load failure that left the server with no level, taken. The binary
-    /// polls it after every tick and ends the process on it, which is what
-    /// retail's `Com_Error` does: nothing can call `exitLevel` any more and
-    /// every client would pull an empty gamestate.
+    /// polls it after every tick and ends the process on it: nothing can call
+    /// `exitLevel` any more and every client would pull an empty gamestate.
+    /// vcod's choice, unverified against retail: 1.1's `Com_Error(ERR_DROP)`
+    /// drops the level and leaves the process idle (cod11-movers.md 18, "The
+    /// drop"), and which error a failed script load raises is unread.
     pub fn take_fatal(&mut self) -> Option<anyhow::Error> {
         self.game.fatal.take()
     }
@@ -10411,10 +10406,9 @@ mod tests {
         assert_eq!(pure_server_after(reset).client_count(), 0);
     }
 
-    /// `sv_pure` is retail's 1 on the binary's server
-    /// (cod11-server-handshake.md, "Defaults and order"), 0 on the test
-    /// constructor, and a set holds past the first level, as the carried
-    /// table keeps it.
+    /// `sv_pure` is retail's 1 on the binary's server (cod11-server-handshake.md,
+    /// "The four cvars", "Defaults and order"), 0 on the test constructor, and
+    /// a set holds past the first level, as the carried table keeps it.
     #[test]
     fn sv_pure_defaults_to_retails_and_a_set_outlives_the_level() {
         let fs = vcod_common::pk3::Pk3Fs::empty();
@@ -12360,7 +12354,8 @@ mod tests {
     /// announcing them, so the server must decode them against the cmd it
     /// last stored for this client, not `NULL_USERCMD`: decoding against
     /// the null base resets the move basis to yaw 0 for a frame (the
-    /// "spectator flash" bug, AGENTS.md's gotchas). `ps.yaw` steers
+    /// "spectator flash" bug; protocol doc, "The base cmd is built from the
+    /// playerstate"). `ps.yaw` steers
     /// `pmove::spectator_move`'s wishdir directly, so a burst of `forward`
     /// cmds sent right after the omission is a direct probe of which base
     /// the server used: yaw -45 accelerates the spectator diagonally
@@ -12371,7 +12366,7 @@ mod tests {
     /// gives the (correct or wrongly-reset) wishdir time to dominate, which
     /// I confirmed empirically (`vy` -283 with the real base, -20 with the
     /// bug forced, at this burst length). `viewangles` no longer carries
-    /// this (it stays unwritten, docs/protocol-1.1.md "Spectator view
+    /// this (it stays unwritten, docs/protocol-1.1.md "Spectator", "View
     /// angles"), so this checks the property directly instead of through
     /// that field.
     #[test]

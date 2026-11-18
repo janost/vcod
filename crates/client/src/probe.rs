@@ -82,7 +82,8 @@ pub(crate) fn fixture_path(dir: &str, name: &str) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow::anyhow!("fixture name \"{}\" leaves {dir}", escape_ctl(name)))
 }
 
-/// The retail build behind the connection, as a fixture header names it.
+/// The build a fixture header names, picked from the wire's protocol version
+/// alone: a vcod-server on the same protocol gets the same "Retail" label.
 pub(crate) fn retail_build() -> &'static str {
     match wire().transport.version {
         6 => "1.5b",
@@ -142,39 +143,6 @@ fn nearest_v1(event: i32) -> i32 {
     }
 }
 
-/// Connects, drives the client to `Active`, prints a summary per second and
-/// nudges forward now and then to prove the server applies moves. With `fs`
-/// it resolves drained events into sound cues; weapon-file cues (fire,
-/// reload) are not resolved, the probe loads no weapon files.
-///
-/// `save_playerstate` turns it into the playerstate capture instead: it answers
-/// the stock team and weapon menus, writes the fixture once the spawn has
-/// settled and exits. It sends no nudge, which would walk the capture off the
-/// spawn point.
-///
-/// `save_motion` joins the same way, then holds each movement input in turn
-/// and captures the playerstate settled under each, which is what a standing
-/// capture cannot show: every field the client predicts reads zero while the
-/// player stands still.
-///
-/// `save_combat` joins the same way and runs the weapon script in
-/// [`combat_script`], recording every snapshot rather than a settled sample:
-/// a shot moves `weaponstate`, `weapAnim` and the four-slot event ring, and
-/// the ring overwrites, so a settled sample cannot hold one. It is also the
-/// one mode with the stall response on, so a walking step gets past the first
-/// wall it meets.
-///
-/// `target` and `hit` are the two halves of the hit capture, one probe each:
-/// the target stands still, kills itself at 10 s and records what the server
-/// does to it, and the shooter walks up to it and shoots it. Both write their
-/// own fixture, and the target's `kill` is what makes the death half
-/// independent of whether the shooter ever finds a line of sight.
-///
-/// `pvs` joins the same way again, walks the route in [`pvs_route`] and prints
-/// the snapshot entity list at each station plus every add and removal along
-/// the way, answering what the server sends from where. `save.entities` walks
-/// the same route and writes the trace as the entity-list fixture; `pvs` alone
-/// writes nothing.
 /// Which captures a probe run overwrites. Each is a separate flag because
 /// each pins a different thing; the flag docs in `main.rs` say why.
 #[derive(Clone, Default)]
@@ -380,6 +348,39 @@ pub const MELEE_RANGE: f32 = 40.0;
 /// it, and far enough that the thrower is not inside its own blast radius.
 pub const GRENADE_RANGE: f32 = 300.0;
 
+/// Connects, drives the client to `Active`, prints a summary per second and
+/// nudges forward now and then to prove the server applies moves. With `fs`
+/// it resolves drained events into sound cues; weapon-file cues (fire,
+/// reload) are not resolved, the probe loads no weapon files.
+///
+/// `save_playerstate` turns it into the playerstate capture instead: it answers
+/// the stock team and weapon menus, writes the fixture once the spawn has
+/// settled and exits. It sends no nudge, which would walk the capture off the
+/// spawn point.
+///
+/// `save_motion` joins the same way, then holds each movement input in turn
+/// and captures the playerstate settled under each, which is what a standing
+/// capture cannot show: every field the client predicts reads zero while the
+/// player stands still.
+///
+/// `save_combat` joins the same way and runs the weapon script in
+/// [`combat_script`], recording every snapshot rather than a settled sample:
+/// a shot moves `weaponstate`, `weapAnim` and the four-slot event ring, and
+/// the ring overwrites, so a settled sample cannot hold one. It is also the
+/// one mode with the stall response on, so a walking step gets past the first
+/// wall it meets.
+///
+/// `target` and `hit` are the two halves of the hit capture, one probe each:
+/// the target stands still, kills itself at 10 s and records what the server
+/// does to it, and the shooter walks up to it and shoots it. Both write their
+/// own fixture, and the target's `kill` is what makes the death half
+/// independent of whether the shooter ever finds a line of sight.
+///
+/// `pvs` joins the same way again, walks the route in [`pvs_route`] and prints
+/// the snapshot entity list at each station plus every add and removal along
+/// the way, answering what the server sends from where. `save.entities` walks
+/// the same route and writes the trace as the entity-list fixture; `pvs` alone
+/// writes nothing.
 #[expect(clippy::too_many_arguments)]
 pub fn probe(
     addr: &str,
@@ -1078,8 +1079,6 @@ pub fn probe(
             }
         }
 
-        // 5 s after going active push forward for 2 s, again every 30 s, so a
-        // long run shows whether moves still apply after a map_restart.
         let mut cmd = net::msg::UserCmd::default();
         let ps_weapon = client
             .snapshots()
@@ -1111,6 +1110,8 @@ pub fn probe(
                 say_sent += 1;
             }
         }
+        // 5 s after going active push forward for 2 s, again every 30 s, so a
+        // long run shows whether moves still apply after a map_restart.
         if client.state() == NetState::Active && !joining && !probe_follow {
             let active_at = *reached_active.get_or_insert(now);
             let dt = now.duration_since(active_at).as_secs() % 30;
@@ -2299,8 +2300,6 @@ impl ProbeWatch {
         }
     }
 
-    /// `EventTracker::drain` is idempotent per `message_num`, so re-reading
-    /// the same snapshot is free.
     /// Every change to an entity's `pos` or `apos` trajectory group, which is
     /// what says whether retail ships a mover as per-frame origins (`trType`
     /// stationary, a new `trBase` every snapshot) or as a trajectory the
@@ -2333,6 +2332,8 @@ impl ProbeWatch {
         self.trajectories.retain(|n, _| s.entities.contains_key(n));
     }
 
+    /// `EventTracker::drain` is idempotent per `message_num`, so re-reading
+    /// the same snapshot is free.
     fn check_sounds(
         &mut self,
         s: &net::snapshot::Snapshot,
@@ -2598,8 +2599,6 @@ const SPAWN_SETTLE: Duration = Duration::from_secs(3);
 /// on the menus sits at 4, the spectator's.
 const PM_NORMAL: i32 = 0;
 
-/// Drives the stock team/weapon menu handshake under `--save-playerstate` and
-/// keeps what the fixture header needs.
 /// `--probe-download`: the download path a GUI client takes at a gamestate,
 /// headless. The referenced paks no local pak matches by checksum go into
 /// `dir` (`FS_ComparePaks`' rule and file names), then `donedl`; each pak's
@@ -2768,6 +2767,8 @@ impl DownloadProbe {
     }
 }
 
+/// Drives the stock team/weapon menu handshake under `--save-playerstate` and
+/// keeps what the fixture header needs.
 struct JoinProbe {
     /// What the team menu is answered with: `allies`, `axis`, `autoassign`
     /// or `spectator`, the four the stock gametypes accept.
@@ -3370,7 +3371,7 @@ fn weapon_cs_index(configstrings: &[String], name: &str) -> Option<(u8, String)>
 }
 
 /// `weaponstate` the capture keys off: the weapon is ready to take an input,
-/// and it is firing (combat doc 1.1).
+/// and it is firing (`docs/research/cod11-combat.md` 1.1).
 const WEAPONSTATE_READY: i32 = vcod_common::pmove::weapon::WEAPON_READY as i32;
 const WEAPONSTATE_FIRING: i32 = vcod_common::pmove::weapon::WEAPON_FIRING as i32;
 
@@ -4639,10 +4640,10 @@ fn data_secs(s: f32) -> Option<Duration> {
     Duration::try_from_secs_f32(s).ok()
 }
 
-/// A `weaponstate` of the reload's (5 reloading to 9 the reload's end, combat
-/// doc 1.1). A fire step that meets one before it has seen a shot restarts
-/// once: the weapon went busy under it, and the taps it has already spent
-/// bought nothing.
+/// A `weaponstate` of the reload's (5 reloading to 9 the reload's end,
+/// `docs/research/cod11-combat.md` 1.1). A fire step that meets one before
+/// it has seen a shot restarts once: the weapon went busy under it, and the
+/// taps it has already spent bought nothing.
 fn reloading(weaponstate: i32) -> bool {
     use vcod_common::pmove::weapon::{WEAPON_RELOAD_END, WEAPON_RELOADING};
     (i32::from(WEAPON_RELOADING)..=i32::from(WEAPON_RELOAD_END)).contains(&weaponstate)
@@ -5601,7 +5602,7 @@ struct Steer {
     chosen_at: Option<Instant>,
     /// Where the current heading was chosen, so a wedged walk is detectable.
     from: [f32; 3],
-    /// xorshift state for the unwedging turn; a fixed 45 degrees walked the
+    /// LCG state for the unwedging turn; a fixed 45 degrees walked the
     /// same loop over and over.
     rng: u32,
 }
@@ -7180,7 +7181,8 @@ fn write_scripted_fixture(
 }
 
 /// Writes the spawned player's wire state to `<map>-<gametype>.txt`. The map
-/// and gametype come out of cs 0 (serverinfo), so nothing here is hand-typed.
+/// and gametype come out of cs 0 (serverinfo); the server settings line is
+/// fixed text, not read off the server.
 fn write_playerstate_fixture(
     snap: &net::snapshot::Snapshot,
     configstrings: &[String],
@@ -7700,7 +7702,9 @@ enum SlopeWalk {
 
 /// Writes the route walk as `<map>-<gametype>-slope-<cmd_ms>ms.txt`: `!cmd`
 /// lines carry the usercmd as sent, `!snap` lines the playerstate the server
-/// answered with, interleaved in the order the probe saw them.
+/// answered with, interleaved in the order the probe saw them. The header's
+/// server settings and its `<spot>`, `<yaw>`, `<gun yaw>` and `<type>` are a
+/// template the committer fills in, not what the run used.
 fn write_slope_fixture(
     configstrings: &[String],
     join: &JoinProbe,
@@ -8856,7 +8860,8 @@ const UOFOOT_SWITCHES: &[(u64, &str)] = &[(23500, "fraggrenade_mp")];
 /// and the fall onto the grade settles well inside the rest.
 const PRONE_PLACE_WAIT: Duration = Duration::from_millis(3000);
 
-/// Runs [`prone_script`] with its yaws off `uphill`. The angles are world
+/// Runs one slope walk's steps ([`prone_script`], [`moves_script`] and the
+/// rest `--save-slope` picks) with their yaws off `uphill`. The angles are world
 /// view angles, which `send_frame` rebases on each snapshot's
 /// `delta_angles`, so the view holds the script's heading under a prone cap
 /// that pushes it, the way `hold_view_yaw` holds the route's.
@@ -9103,8 +9108,7 @@ const TRIGGER_STEER_ARC: i32 = 165;
 const TRIGGER_STEP_HEIGHT: f32 = 18.0;
 /// A walker that has not left this box in [`TRIGGER_WEDGE`] is wedged
 /// somewhere the steer cannot get it out of (a pit, a doorway it rebounds
-/// in) and kills itself to respawn somewhere else. One run lost 100 s of
-/// its 125 to a single such spot.
+/// in) and kills itself to respawn somewhere else.
 const TRIGGER_WEDGE_UNITS: f32 = 80.0;
 const TRIGGER_WEDGE: Duration = Duration::from_secs(12);
 
@@ -9113,8 +9117,7 @@ const TRIGGER_WEDGE: Duration = Duration::from_secs(12);
 /// does not end the run.
 ///
 /// A wander does not do: mp_pavlov is dense enough that a blind heading spends
-/// a whole run inside the town, and a first capture taken that way crossed one
-/// trigger in 190 s. The walk is not the measurement (the retail server's own
+/// a whole run inside the town. The walk is not the measurement (the retail server's own
 /// log is), so steering it at the answer costs nothing and buys the coverage.
 #[derive(Default)]
 struct TriggerProbe {
@@ -9466,7 +9469,7 @@ enum SdPhase {
     /// Defender: the view sweep, aim only, one entry per station. Use is
     /// not pressed: sd.gsc's `bomb_think` starts the defuse on the lookat's
     /// first fire and its progress loop reads only `useButtonPressed`, so a
-    /// held use completed the defuse at station 7 and swept a deleted trigger.
+    /// held use would finish the defuse mid-sweep.
     Sweep,
     /// Defender: aimed true, use held until the defuse lands.
     Defuse,
@@ -9512,8 +9515,8 @@ const SD_SETTLED_SPEED: f32 = 5.0;
 const SD_WATCH: Duration = Duration::from_secs(20);
 /// How far short of the bombzone the defender waits for the plant: inside the
 /// zone it would be standing on the attacker, and its own use press would
-/// contest the plant it is here to watch. At 150 it wandered into the
-/// courtyard clutter; at 200 it waits on the road the teleport put it on.
+/// contest the plant it is here to watch. 200 keeps it on the road the
+/// teleport put it on.
 const SD_STANDOFF: f32 = 200.0;
 /// (yaw, pitch) degrees off the aim at the bomb, one station each.
 #[rustfmt::skip]
@@ -11186,9 +11189,8 @@ struct TurretProbe {
     /// The refused tap's bearing and distance have been noted.
     refused_noted: bool,
     viewlocked: i32,
-    /// `(phase, ms, wire cmd, asked view)` per cmd sent from `aim` on.
-    /// Each cmd's phase, ms, the cmd as sent, the view asked for and the
-    /// netchan sequence of its message.
+    /// `(phase, ms, wire cmd, asked view, netchan sequence of its message)`
+    /// per cmd sent from `aim` on.
     cmds: Vec<(TurretPhase, u128, net::msg::UserCmd, [i32; 3], u32)>,
     /// Every trace, turret, event and server line, in arrival order.
     lines: Vec<(TurretPhase, u128, String)>,
@@ -12255,8 +12257,9 @@ health={} seq={} events=[{},{},{},{}] parms=[{},{},{},{}]{bend} legs={} torso={}
 /// then presses the two weapon binds a stuck player would reach for; the
 /// weapon-select script pulls the trigger on the rifle
 /// `client-probes/probe_weapsel` empties.
-/// With `--save-ladder` the climb runs [`LADDER_SCRIPT`] or
-/// [`LADDER_CLIMB_SCRIPT`] instead and records every cmd and snapshot.
+/// With `--save-ladder` the climb runs the script its value picks
+/// ([`LADDER_SCRIPT`], [`LADDER_CLIMB_SCRIPT`], [`LADDER_TURN_SCRIPT`] or
+/// [`LADDER_GRAB_SCRIPT`]) and records every cmd and snapshot.
 #[derive(Default)]
 struct LadderProbe {
     input: crate::play::input::PlayInput,
@@ -13572,8 +13575,7 @@ struct BumpProbe {
     stance_idx: usize,
     /// Since when the target's solid has read the awaited stance.
     stance_since: Option<Instant>,
-    /// The target's origin, its entity number, solid and ground on the newest
-    /// snapshot.
+    /// The target's origin, its entity number and solid on the newest snapshot.
     target: Option<([f32; 3], u32, i32)>,
     origin: [f32; 3],
     vel: [f32; 3],
@@ -14227,7 +14229,7 @@ sample of a set\n"
 
 /// At most this many samples of one entity set survive in a fixture. A fourth
 /// sample of a set already seen adds a position and no new visibility case,
-/// and 96 stations of a 12-entity map ran to 230 KB before this cap existed.
+/// and the cap keeps a many-station map's fixture small.
 const MAX_SAMPLES_PER_SET: usize = 3;
 
 /// A sample as it sits in the fixture. The body is kept verbatim so a reread

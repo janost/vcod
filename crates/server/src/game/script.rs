@@ -449,8 +449,7 @@ impl ScriptRuntime {
     /// A CoD2 level: `world` is the map's `.d3dbsp` as a [`MapWorld`]
     /// (`vcod_cod2::world`), whose entity string the spawn pass reads, and
     /// the scripts compile under `Dialect::Cod2` against CoD2's builtin
-    /// tables. Groundwork for hosting CoD2: the host still runs 1.1's
-    /// configstring layout and no weapon table.
+    /// tables, on the host's CoD2 profile (`crate::game::profile::COD2`).
     pub fn load_cod2(
         source: Box<dyn ScriptSource>,
         fs: Rc<Pk3Fs>,
@@ -990,10 +989,6 @@ impl ScriptRuntime {
         }
     }
 
-    /// A round's `G_Damage` on an entity with no client (combat doc 2.4,
-    /// step 4): a UO vehicle's branch ([`crate::game::vehicle::vehicle_damage`])
-    /// with the shot's forward as the direction, any other entity's generic
-    /// arm. The notifies wake their waiters with the frame's threads.
     /// A round's, a swing's or a shell's `G_CheckHitTriggerDamage`
     /// (`crate::game::damage_trigger::sweep`), charged to the attacker's
     /// client entity, or the world when it has none.
@@ -1009,6 +1004,10 @@ impl ScriptRuntime {
         });
     }
 
+    /// A round's `G_Damage` on an entity with no client (combat doc 2.4,
+    /// step 4): a UO vehicle's branch ([`crate::game::vehicle::vehicle_damage`])
+    /// with the shot's forward as the direction, any other entity's generic
+    /// arm. The notifies wake their waiters with the frame's threads.
     pub fn deliver_entity_hit(&mut self, hit: &crate::game::combat::EntityHit) {
         let id = hit.target;
         if self.host.ents.get(id).is_none() {
@@ -2095,8 +2094,6 @@ impl ScriptRuntime {
             .collect()
     }
 
-    /// One client's health as the script left it, read every frame the way
-    /// `client_weapons` is.
     /// `ClientEndFrame`'s `takedamage` write.
     pub fn set_client_takedamage(&mut self, slot: usize, on: bool) {
         if let Some(v) = self.host.client_vitals.get_mut(slot) {
@@ -2104,6 +2101,8 @@ impl ScriptRuntime {
         }
     }
 
+    /// One client's health as the script left it, read every frame the way
+    /// `client_weapons` is.
     pub fn client_vitals(&self, slot: usize) -> crate::game::host::Vitals {
         self.host
             .client_vitals
@@ -2850,9 +2849,6 @@ impl ScriptRuntime {
         self.host.client_events.push(ev);
     }
 
-    /// The client's entity, once `Connect` has been drained. The object
-    /// table is the single owner of that fact: an entity at the slot's own
-    /// number with a `client` store is one `spawn_client` made.
     /// Writes a client's simulated origin onto its script entity. The sim
     /// owns a player's position and the script reads it: with `spawn` as the
     /// only writer, `positionWouldTelefrag` would test where each client last
@@ -3220,6 +3216,9 @@ impl ScriptRuntime {
         })
     }
 
+    /// The client's entity, once `Connect` has been drained. The object
+    /// table is the single owner of that fact: an entity at the slot's own
+    /// number with a `client` store is one `spawn_client` made.
     pub fn client_entity(&self, slot: usize) -> Option<EntId> {
         let id = self.host.ents.handle(u32::try_from(slot).ok()?)?;
         self.host
@@ -3439,9 +3438,6 @@ impl ScriptRuntime {
         }
     }
 
-    /// The configstrings the script wrote (e.g. `setCullFog`, `ambientPlay`)
-    /// by the end of `load`. `Server::load_scripts` copies these back into
-    /// its own table once, before the first gamestate goes out.
     /// The object table as packet entities: what a snapshot carries before
     /// any per-client culling (`crates/server/src/game/wire.rs`).
     pub fn packet_entities(
@@ -3524,6 +3520,9 @@ impl ScriptRuntime {
         self.host.objectives_for(slot, team)
     }
 
+    /// The configstrings the script wrote (e.g. `setCullFog`, `ambientPlay`)
+    /// by the end of `load`. `Server::load_scripts` copies these back into
+    /// its own table once, before the first gamestate goes out.
     pub fn configstrings(&self) -> &[String] {
         &self.host.configstrings
     }
@@ -3748,8 +3747,6 @@ impl ScriptRuntime {
         &self.host.missiles
     }
 
-    /// The corpse queue, whose entities every client's snapshot carries
-    /// until their slots are reused (`crate::game::bodies`).
     /// The queue's corpses as the snapshot sends them: each with the event
     /// ring of the entity `cloneplayer` handed to script, which `playSound`
     /// appends to (`G_PlaySoundAlias` 0x67b30 writes `s.events` on any
@@ -3775,6 +3772,8 @@ impl ScriptRuntime {
         })
     }
 
+    /// The corpse queue, whose entities every client's snapshot carries
+    /// until their slots are reused (`crate::game::bodies`).
     pub fn bodies(&self) -> &crate::game::bodies::BodyQueue {
         &self.host.bodies
     }
@@ -4235,12 +4234,6 @@ impl ScriptRuntime {
         step
     }
 
-    /// What the bots read off stock `sd.gsc` this frame
-    /// (docs/research/bot-objectives.md): `game["attackers"]` and
-    /// `game["defenders"]`, the live `bombzone_A` / `bombzone_B` triggers'
-    /// bounds in that order, and once `level.bombplanted` the defuse
-    /// trigger's origin and bounds. Entity handles do not survive a
-    /// `map_restart`, so the caller asks again every frame.
     /// The stock `re.gsc` objectives as they stand this frame
     /// (docs/research/bot-objectives.md, "Retrieval"): the sides from
     /// `game["re_attackers"]` and `game["re_defenders"]`, and each entity of
@@ -4345,6 +4338,12 @@ impl ScriptRuntime {
         })
     }
 
+    /// What the bots read off stock `sd.gsc` this frame
+    /// (docs/research/bot-objectives.md): `game["attackers"]` and
+    /// `game["defenders"]`, the live `bombzone_A` / `bombzone_B` triggers'
+    /// bounds in that order, and once `level.bombplanted` the defuse
+    /// trigger's origin and bounds. Entity handles do not survive a
+    /// `map_restart`, so the caller asks again every frame.
     pub fn sd_objectives(&mut self) -> SdObjectives {
         use crate::game::builtins::entity::get_ent;
         use crate::game::trigger::entity_abs_bounds;

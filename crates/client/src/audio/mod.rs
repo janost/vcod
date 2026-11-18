@@ -1,4 +1,5 @@
-//! Spectator audio. Engine facts are in docs/research/cod11-sound-system.md.
+//! Client audio for every game, session and front end. CoD1 engine facts are in
+//! docs/research/cod11-sound-system.md.
 
 pub mod alias;
 pub mod bank;
@@ -1920,8 +1921,6 @@ impl AudioSystem {
         }
     }
 
-    /// `alias` on the viewer, the way `CG_LocalSound` and the chat and game
-    /// message beeps play.
     /// Whether the menu set has `alias` (UI syscall 0x26).
     pub fn has_menu_alias(&self, alias: &str) -> bool {
         self.menu_aliases.get(alias).is_some()
@@ -1941,6 +1940,8 @@ impl AudioSystem {
         self.play_inner(fs, cue, true, true)
     }
 
+    /// `alias` on the viewer, the way `CG_LocalSound` and the chat and game
+    /// message beeps play.
     pub fn play_local(&mut self, fs: &dyn AssetSource, alias: &str) -> Option<VoiceId> {
         let cue = Cue {
             alias: alias.to_string(),

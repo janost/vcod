@@ -1,5 +1,5 @@
-//! CoD 1.1 network client, headless (no wgpu/winit types). Wire reference:
-//! docs/protocol-1.1.md.
+//! CoD1's network client (1.1, 1.5 and United Offensive), headless: play,
+//! demos, UDP and HTTP downloads. Wire reference: docs/protocol-1.1.md.
 
 pub mod capture;
 pub mod cdkey;
@@ -278,8 +278,6 @@ fn process_qport() -> u16 {
     0x2000 | (std::process::id() as u16 & 0x0fff)
 }
 
-/// The protocol an `error` refusing the connect for its version names:
-/// `\nEXE_SERVER_IS_DIFFERENT_VER\x15<shortversion>\n`.
 /// Whose CD key a connection speaking `proto` sends: 1.1 and 1.5 share
 /// one, United Offensive has its own.
 fn key_game(proto: &Cod1Wire) -> cdkey::KeyGame {
@@ -290,6 +288,8 @@ fn key_game(proto: &Cod1Wire) -> cdkey::KeyGame {
     }
 }
 
+/// The protocol an `error` refusing the connect for its version names:
+/// `\nEXE_SERVER_IS_DIFFERENT_VER\x15<shortversion>\n`.
 fn other_version(rest: &[u8]) -> Option<&'static Cod1Wire> {
     let text = String::from_utf8_lossy(rest);
     let v = text

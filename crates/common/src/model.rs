@@ -17,8 +17,9 @@ pub struct Model {
     /// LOD 0's skeleton, parents before children. Every LOD's vertex bone
     /// ids index it: both formats read one parts file, LOD 0's.
     pub bones: Vec<Bone>,
-    /// The present LODs in order, never empty but in a server hit rig's
-    /// bones-only part (`vcod_cod2::player::PlayerRig::assemble_bones_with`).
+    /// The present LODs in order, empty only in a bones-only model built for
+    /// its skeleton (`vcod_cod2::player::PlayerRig::assemble_bones_with`,
+    /// `turretpose::GunSkel::new`).
     pub lods: Vec<Lod>,
     /// The descriptor's collision mesh, baked to model space. Empty for the
     /// models that have none.

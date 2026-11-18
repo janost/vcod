@@ -820,7 +820,8 @@ impl Ragdoll {
                 t.startsolid || t.fraction < 1.0
             })
             .collect();
-        // The anim's last move starts each point, scaled to one step.
+        // The anim's last move starts each point, scaled to one step and
+        // capped at 400 units a second (unverified on 1.7, no address).
         if let Some((before, ms)) = before.filter(|(b, ms)| b.len() == n && *ms > 0.0) {
             let scale = STEP_MS / ms;
             for (bone, i) in point_of.iter().enumerate() {

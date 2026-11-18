@@ -9,7 +9,7 @@ by deploying a bipod, and a grenade that cooks.
 Contents: 1 call order, 2 sprint flag, 3 speed, 4 fatigue, 5 jump,
 6 weapon while sprinting, 7 LMG bipod, 8 buttons and binds, 9 the
 capture, 10 what vcod does, 11 mounts and cursor hint, 12 grenade cook,
-13 weapon times and the sighted prone hold, 14 client sounds and sprint
+13 two questions: weapon times and the sighted prone hold, 14 client sounds and sprint
 pose, 15 automatic fire and the view kick, 16 lean footstep cadence,
 17 prone check, 18 stance box.
 
@@ -366,8 +366,7 @@ snapshot). Under 1.5's rules the sprint is missed on 156 snapshots. Needs
 `MoveRules::Uo` (`crates/common/src/pmove.rs`), which the predictor takes
 for protocol 22, implements sections 1 to 7, 11 and 12, the fatigue
 breaths and sprint footstep ids included. The vehicle seat arm is
-`seat_move` (`coduo-vehicles.md` 3). Left out:
-
+`seat_move` (`coduo-vehicles.md` 3).
 
 `bg_nofatigue` and `bg_lmg_yawcap` are `BgCvars` (`crates/common/src/pmove.rs`),
 read as each cvar's integer, the way the module reads them:

@@ -115,7 +115,7 @@ struct Run<'a> {
     /// Current view in ANGLE2SHORT units, pitch and yaw.
     view: [i32; 2],
     cmds: usize,
-    /// Whether the event ring is compared too; see `the_ring_matches`.
+    /// Whether the event ring is compared too; see `predictor_ring_matches_the_server_step`.
     ring: bool,
     rebuilds: usize,
     /// Rebuilds that landed inside a putaway, a stance's eye lerp, and cmds

@@ -259,10 +259,10 @@ pub enum ClientNameMode {
 /// 0x58550), stores 0 or 1 in `level+0x210`, and raises `Scr_Error("Unknown
 /// mode")` on anything else.
 ///
-/// The store and the error are faithful; the two readers are not reachable
-/// yet. `ClientUserinfoChanged` (0x421eb) and the name-change path at
-/// 0x5ba99 are both client code, which arrives in a later stage, so
-/// `GameHost::client_name_mode` is recorded and nothing reads it.
+/// `GameHost::client_name_mode` holds it. Retail's readers are
+/// `ClientUserinfoChanged` (0x421eb) and the name-change path at 0x5ba99;
+/// vcod's one reader is CoD4's userinfo change (cod4-gsc.md 12), so on
+/// CoD1 and CoD2 the mode is stored and not read.
 pub fn set_client_name_mode(
     host: &mut GameHost,
     cx: &mut Cx,

@@ -1174,7 +1174,8 @@ of 45 degree kinks, and at every node the view jumped to the next one.
 - Only on a plain run: on the ground, off the rungs, level view, full
   forward key and nothing else held, no leap's or creep's foot, no jump,
   run off, push off or unpin, no creep. Those keep the view the walk
-  that proved them had (AGENTS.md, "Bots").
+  that proved them had (`docs/dev/traps.md`, "Bots", "The follower pulls
+  its waypoint").
 - A fight, a launcher on a vehicle, a bipod's linger, a hurt look, a
   cover peek, a recalled spot and a retreat's look set the view after
   the walk, by their own rules, from the tick they take it. The tick

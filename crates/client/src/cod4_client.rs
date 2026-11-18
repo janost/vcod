@@ -1,12 +1,12 @@
 //! A watched or played CoD4 session on screen, `App`'s `Session::Cod4`:
 //! the session's clock, its view on the camera, its entities as dynamic
 //! models and brush models, its events and obituaries on the console, the
-//! binds into its cmds and the server's script menus as a list
+//! binds into its cmds and the server's script menus (`cod4_menu::quads`)
 //! (`play::cod4` holds the session; this draws it and feeds it keys).
 //!
-//! A player or corpse is posed (`play::cod4_players`); any other entity
-//! whose xmodel a zone holds draws it in its bind pose, one with none its
-//! type's box.
+//! A player or corpse is posed (`play::cod4_players`), a mounted gun or a
+//! vehicle by `cod4_vehicles`; any other entity whose xmodel a zone holds
+//! draws in its bind pose, one with none its type's box.
 
 use glam::{Mat4, Quat, Vec3};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -64,8 +64,8 @@ pub(crate) struct Cod4Client {
     /// What the bodies are posed from; `None` leaves them in the bind pose.
     bodies: Option<BodySource>,
     players: Cod4Players,
-    /// The last frame's drawn counts (models, brush models, bodies posed)
-    /// and server time, for F3.
+    /// The last frame's drawn counts (models, brush models, bodies posed),
+    /// for F3.
     drawn: (usize, usize, usize),
     /// The last frame's drawn angles by entity, the axes its voices turn
     /// with ([`Self::entity_angles`]).
@@ -215,8 +215,6 @@ pub(crate) fn play_event_cues(
     }
 }
 
-/// The client of a player's `EV_FIRE_WEAPON` or `_LASTSHOT`, the shots
-/// whose fire sound `CG_CompassAddWeaponPingInfo` takes the length of.
 /// `VCOD_PERF_TURN`'s yaw rate, degrees a second; read once.
 fn perf_turn() -> Option<f32> {
     static RATE: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
@@ -230,6 +228,8 @@ fn no_dynents() -> bool {
     *OFF.get_or_init(|| std::env::var("VCOD_NO_DYNENTS").is_ok_and(|v| v == "1"))
 }
 
+/// The client of a player's `EV_FIRE_WEAPON` or `_LASTSHOT`, the shots
+/// whose fire sound `CG_CompassAddWeaponPingInfo` takes the length of.
 fn shot_client(f: &Fired) -> Option<usize> {
     let e = f.state.as_ref()?;
     (matches!(f.name, "EV_FIRE_WEAPON" | "EV_FIRE_WEAPON_LASTSHOT")
@@ -396,13 +396,6 @@ impl Cod4Client {
         }
     }
 
-    /// A key while a script menu is up: the arrows and Tab move the
-    /// focus, Enter runs it, Esc the menu's `onEsc`, a character its
-    /// `execKey` (on the list, 1-9 pick); the rest go on to the binds,
-    /// which the cmds leave out while the menu is up (`talking`). With
-    /// none up, Esc opens the team menu (`g_scriptMainMenu`) and goes on
-    /// to free the mouse. `None` when the session has no menus to show (a
-    /// capture).
     /// A key with the chat field open: Enter sends `say <line>` or
     /// `say_team <line>` as `CL_KeyEvent`'s chat arm does,
     /// Escape drops it; with none open the script menus take it
@@ -425,6 +418,13 @@ impl Cod4Client {
         Some(true)
     }
 
+    /// A key while a script menu is up: the arrows and Tab move the
+    /// focus, Enter runs it, Esc the menu's `onEsc`, a character its
+    /// `execKey` (on the list, 1-9 pick); the rest go on to the binds,
+    /// which the cmds leave out while the menu is up (`talking`). With
+    /// none up, Esc opens the team menu (`g_scriptMainMenu`) and goes on
+    /// to free the mouse. `None` when the session has no menus to show (a
+    /// capture).
     pub(crate) fn menu_key(&mut self, code: winit::keyboard::KeyCode) -> Option<bool> {
         use crate::play::cod4_menus::MenuKey;
         use winit::keyboard::KeyCode;
@@ -1127,7 +1127,6 @@ impl Cod4Client {
         cx.r.set_cod4_dof(dof);
     }
 
-    /// This frame's view weapon, once.
     /// Whether a snapshot's view has been drawn, the game frame
     /// `--exec-in-game` waits for.
     pub(crate) fn in_game(&self) -> bool {
@@ -1140,6 +1139,7 @@ impl Cod4Client {
         self.view_ps.as_ref()
     }
 
+    /// This frame's view weapon, once.
     pub(crate) fn take_view(&mut self) -> Option<ViewFrame> {
         self.vm.take()
     }
@@ -2172,7 +2172,6 @@ impl Cod4Client {
         Some(self.effects.as_ref()?.named.clone())
     }
 
-    /// The fire events' rounds so far ([`RoundsSeen`]).
     /// The model keys uploaded so far, and the bodies the last pump posed.
     #[cfg(test)]
     pub(crate) fn uploads(&self) -> (BTreeSet<String>, usize) {
@@ -2185,6 +2184,7 @@ impl Cod4Client {
         self.menus_loaded
     }
 
+    /// The fire events' rounds so far ([`RoundsSeen`]).
     #[cfg(test)]
     pub(crate) fn take_rounds_seen(&mut self) -> Vec<RoundsSeen> {
         std::mem::take(&mut self.rounds_seen)

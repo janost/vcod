@@ -1,4 +1,4 @@
-//! The builtins one game version answers (design step 8). Retail compiles a
+//! The builtins one game version answers. Retail compiles a
 //! call to a name its tables lack as `unknown (builtin) function '%s'` or
 //! `unknown (builtin) method '%s'` (1.1d `cod_lnxded` strings 0x80d6a40 and
 //! 0x80d6a60, raised by the call emitters 0x8094be4 and 0x8095154), a script

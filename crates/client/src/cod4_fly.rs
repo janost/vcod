@@ -42,7 +42,7 @@ pub struct Cod4Map {
     /// materials in `materials`.
     pub models: HashMap<String, vcod_common::model::Model>,
     /// Each of `models`' surfaces' `partBits`, by model name: what an
-    /// entity's `hidePart`s take off it (`Cod4Client::set_parts`).
+    /// entity's `hidePart`s take off it (`Cod4Client::handle`).
     pub parts: Parts,
     /// The weapons asked for: world and projectile model names.
     pub weapons: HashMap<String, WeaponModels>,
@@ -338,7 +338,8 @@ pub fn load_from(
     if let Some(z) = mod_zone {
         src.add_zone_flagged(Arc::new(z.assets), vcod_cod4::install::zone_flags::MOD);
     }
-    // vcod draws no loading screen yet; the zone's assets still win.
+    // Only the zone's assets are kept; the loading screen reads its image
+    // through `levelshot`.
     load_zone(&install, map, &mut src);
     laps.lap("load zone");
     let lightmaps = m
@@ -1014,13 +1015,13 @@ fn add_whole_material(
     m.add_material(a, id)
 }
 
-/// A clip decoded once per name (lowercase), `None` where no zone holds
-/// it whole or it does not decode.
 /// A clip decoded for the shared sampler and as 1.7's sampler reads it.
 type Clip = (
     Arc<vcod_common::xanim::XAnim>,
     Arc<vcod_cod4::xanimcalc::Parts>,
 );
+/// A clip decoded once per name (lowercase), `None` where no zone holds
+/// it whole or it does not decode.
 type Clips = HashMap<String, Option<Clip>>;
 
 /// Clip `n` out of the first of `zones` holding it whole, decoded once.

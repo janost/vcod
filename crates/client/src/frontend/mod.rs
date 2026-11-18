@@ -142,7 +142,6 @@ fn unsupported(name: &str) -> bool {
     UNSUPPORTED.iter().any(|s| s.eq_ignore_ascii_case(name))
 }
 
-/// `ownerdraw` ids from `ui_mp/menudef.h`.
 /// Retail key numbers (CoDMP.exe keynames table, 0x57b8d0).
 const K_MOUSE1: u32 = 200;
 const K_MOUSE2: u32 = 201;
@@ -154,6 +153,7 @@ const K_KP_ENTER: u32 = 191;
 const K_MWHEELDOWN: u32 = 205;
 const K_MWHEELUP: u32 = 206;
 
+/// `ownerdraw` ids from `ui_mp/menudef.h`.
 const UI_NETSOURCE: i32 = 220;
 const UI_NETGAMETYPE: i32 = 245;
 const UI_NETMAPPREVIEW: i32 = 221;
@@ -2041,8 +2041,9 @@ impl Ui {
         true
     }
 
-    /// A scrolled list's row count and first row drawn: the map list and
-    /// the server list.
+    /// A scrolled list's row count and first row drawn, for every feeder
+    /// list that scrolls (maps, servers, mods, players and mutes, profiles,
+    /// server info).
     fn list_scroll(&self, item: &UiItem) -> Option<(usize, usize)> {
         if item.kind != ITEM_TYPE_LISTBOX {
             return None;
@@ -2107,12 +2108,12 @@ impl Ui {
         };
     }
 
-    /// A wheel notch. Over the map or Mods list it scrolls that list a row,
-    /// and in a menu with the server list it pages that list; retail
-    /// scrolls no list, and vcod keeps the scroll on purpose. Elsewhere, as
-    /// in retail: no item's key handler takes the wheel, so the menu's
-    /// `execKey` for `MWHEELDOWN` (205) or `MWHEELUP` (206) runs, else it
-    /// steps the focus as Tab does, and its release follows in the same
+    /// A wheel notch. Over the map, Mods, player, mute or server info list it
+    /// scrolls that list a row, and in a menu with the server list it pages
+    /// that list; retail scrolls no list, and vcod keeps the scroll on purpose.
+    /// Elsewhere, as in retail: no item's key handler takes the wheel, so the
+    /// menu's `execKey` for `MWHEELDOWN` (205) or `MWHEELUP` (206) runs, else
+    /// it steps the focus as Tab does, and its release follows in the same
     /// frame (docs/research/cod11-front-end.md section 19, "The wheel"). An
     /// edit field keeps it.
     pub fn wheel(&mut self, down: bool, shell: &Shell) -> Vec<UiEffect> {
@@ -2610,9 +2611,6 @@ impl Ui {
         }
     }
 
-    /// `Item_ListBox_Paint` for `FEEDER_SERVERS`. A cell's icon is a square
-    /// of the column's width from half a row down, and takes no text align
-    /// (ui_mp_x86.dll 0x400159b0).
     /// A server list cell ([`browser::column_cell`]). CoD2's map column
     /// (`UI_FeederItemText` column 3, Mac 0x152e8a) prints the `longname`
     /// of the `.arena` entry whose `map` is the server's `mapname` in any
@@ -2631,6 +2629,9 @@ impl Ui {
         browser::column_cell(s, kind)
     }
 
+    /// `Item_ListBox_Paint` for `FEEDER_SERVERS`. A cell's icon is a square
+    /// of the column's width from half a row down, and takes no text align
+    /// (ui_mp_x86.dll 0x400159b0).
     fn server_list(&self, p: &Painter, item: &UiItem, out: &mut Vec<HudQuad>) {
         let rows = self.browser.rows();
         let [x, y0, w, _] = item.rect;
@@ -2741,7 +2742,6 @@ fn contains(r: [f32; 4], p: [f32; 2]) -> bool {
     p[0] >= r[0] && p[0] <= r[0] + r[2] && p[1] >= r[1] && p[1] <= r[1] + r[3]
 }
 
-/// `%s` and `%d` in a localized format filled in order.
 /// `UI_StartServerRefresh`'s date (ui_mp_x86.dll 0x4000ea90): `%s %i, %i
 /// %i:%02i` over the month's `EXE_MONTH_ABV_*` text, day, year, hour and
 /// minute. Retail's June key is `EXE_MONTH_ABV_JUN`, which `exe.str` lacks
@@ -2834,6 +2834,7 @@ fn gl_info(p: &Painter, r: [f32; 4], scale: f32, color: [f32; 4], out: &mut Vec<
     }
 }
 
+/// `%s` and `%d` in a localized format filled in order.
 fn fill(fmt: &str, args: &[&str]) -> String {
     // CoD2's strings number their slots `&&1`..`&&9` (cod2-protocol.md
     // 3.4.1); no CoD1 string holds `&&`.
@@ -2992,8 +2993,6 @@ fn text_extents(item: &UiItem, kept: Option<[f32; 4]>, widths: TextWidths) -> [f
     ]
 }
 
-/// Draws on the 640x480 grid stretched over the window, as the UI module
-/// does.
 /// Paints menu items on the 640 grid, drawn in the window's centred 4:3
 /// box ([`Virtual`]); a rect that spans the whole grid width or height
 /// (a backdrop, a fade) spans the window's.

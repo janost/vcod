@@ -205,12 +205,12 @@ impl Session {
         self.cod2()?.map_name()
     }
 
-    /// The drawn CoD2 frame's `serverTime`; None with no frame.
     /// A CoD4 session's view drawn (`Cod4Client::in_game`).
     pub(crate) fn cod4_in_game(&self) -> bool {
         matches!(self, Session::Cod4(c) if c.in_game())
     }
 
+    /// The drawn CoD2 frame's `serverTime`; None with no frame.
     pub(crate) fn frame_time(&self) -> Option<i32> {
         let s = self.cod2()?.session.as_deref()?;
         s.frame().map(|f| f.time_ms)
@@ -428,8 +428,6 @@ impl Session {
         }
     }
 
-    /// The console lines a CoD4 session's script menus ran (`popup_leavegame`'s
-    /// `disconnect`), for the client's console.
     /// `rcon` on CoD2 1.3 and CoD4 1.7, whose `CL_Rcon_f` logs in
     /// (`console::rcon::Cod4Rcon`): to the server joined, else to `rcon
     /// host`'s address over `sock`; the console lines it prints. `None` on
@@ -483,6 +481,8 @@ impl Session {
         }
     }
 
+    /// The console lines a CoD4 session's script menus ran (`popup_leavegame`'s
+    /// `disconnect`), for the client's console.
     pub(crate) fn take_menu_console(&mut self) -> Vec<String> {
         match self {
             Session::Cod4(c) => c.session.menus.take_console(),

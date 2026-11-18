@@ -17,10 +17,17 @@ use vcod_common::net::trajectory;
 use vcod_common::pmove::cmd::{self, ANGLE2SHORT, EventRing, view_angles};
 use vcod_common::pmove::{self, PmEvent};
 use vcod_common::weapon::WeaponDef;
-
-/// `ET_PLAYER`, what another client sees a player as
-/// (`crates/client/src/entities.rs` carries the table).
+// Event ids: docs/research/cod11-events-and-fx.md.
+use vcod_common::net::event_ids::{
+    EV_DEATH, EV_PAIN, EV_PLAYER_TELEPORT_IN, EV_PLAYER_TELEPORT_OUT,
+};
+// `ET_PLAYER`, what another client sees a player as
+// (`crates/client/src/entities.rs` carries the table).
 use vcod_common::net::flags::ET_PLAYER;
+use vcod_common::net::flags::{EF_FIRING, EF_TALK};
+// `pingPlayer`'s bits (docs/research/cod11-hud-protocol.md, "Compass
+// friendlies").
+use vcod_common::net::flags::{EF_FRIEND_PING, EF_PING};
 
 /// A player entity's `eFlags` and `pos.trDuration`, transcribed from the
 /// retail two-probe capture rather than derived.
@@ -30,14 +37,6 @@ const PLAYER_TR_DURATION: i32 = 50;
 /// How far behind the frame `ClientSpawn` puts `commandTime` before its own
 /// think runs the client up to it (0x42a48).
 const SPAWN_THINK_MS: f32 = 100.0;
-
-/// `docs/research/cod11-events-and-fx.md`.
-use vcod_common::net::event_ids::EV_PLAYER_TELEPORT_IN;
-use vcod_common::net::event_ids::EV_PLAYER_TELEPORT_OUT;
-use vcod_common::net::flags::{EF_FIRING, EF_TALK};
-/// `pingPlayer`'s bit (docs/research/cod11-hud-protocol.md, "Compass
-/// friendlies").
-use vcod_common::net::flags::{EF_FRIEND_PING, EF_PING};
 
 /// What `linkTo` left on a client: the parent it follows, the gap it stood
 /// at when it linked and the velocity it had then. `Server` re-applies all
@@ -104,9 +103,7 @@ pub struct Seat {
     /// asks as 0 (coduo-vehicles.md 13, "The tank driver's link offset").
     pub link_offset: [f32; 3],
 }
-use vcod_common::net::event_ids::EV_DEATH;
-/// `EV_PAIN` and `EV_DEATH` (`docs/research/cod11-events-and-fx.md`).
-use vcod_common::net::event_ids::EV_PAIN;
+
 /// One `EV_PAIN` per 700 ms (combat doc, section 6, step 9).
 const PAIN_DEBOUNCE_MS: i32 = 700;
 /// `finishPlayerDamage`'s knockback (combat doc, 4.5): the stance scales,
@@ -178,9 +175,6 @@ pub enum PmType {
     Intermission,
 }
 
-/// One client's simulated state. `pm_type` selects the movement path, the way
-/// retail's own `playerState_t` does: a client is a spectator before the menu
-/// and a player after, within one connection.
 /// The end frame [`ClientSim::commit_pose`] runs in.
 #[derive(Clone, Copy, Debug)]
 pub struct EndFrame {
@@ -213,6 +207,9 @@ pub type TurretLegs = (
     Option<(usize, Vec<vcod_common::turretpose::TurretRow>)>,
 );
 
+/// One client's simulated state. `pm_type` selects the movement path, the way
+/// retail's own `playerState_t` does: a client is a spectator before the menu
+/// and a player after, within one connection.
 pub struct ClientSim {
     pub ps: pmove::PlayerState,
     pub pm_type: PmType,
@@ -1982,19 +1979,6 @@ impl ClientSim {
         }
     }
 
-    /// One event clause on the two channels. A `both` clause is the whole
-    /// body: retail puts the anim on the legs and restarts the torso on no
-    /// anim at all, which is the same 0 every settled pose reads. The
-    /// capture's grenade throws are the evidence: `legsAnim` 575, index 63,
-    /// with a bare toggle flip on the torso.
-    ///
-    /// The rule is general and the measurement is not: it also reaches
-    /// `fireweapon`'s pistol-ADS clause and `jump`'s two run clauses, neither
-    /// of which any capture covers (combat doc 1.14). It is kept general
-    /// because it is the convention the continuous selection already follows.
-    /// The landing is the one clause measured to break it: its `weaponclass
-    /// pistol AND grenade` arm is a `both` one and writes the legs alone,
-    /// and its caller clears the torso of the selection before it gets here.
     /// One [`TorsoCmd`] at `at` on the hold clock. The breakdown continue
     /// restarts the torso only where its clause's anim differs from the one
     /// playing; on the same anim it sets the timer again when the clip
@@ -2034,6 +2018,19 @@ impl ClientSim {
         }
     }
 
+    /// One event clause on the two channels. A `both` clause is the whole
+    /// body: retail puts the anim on the legs and restarts the torso on no
+    /// anim at all, which is the same 0 every settled pose reads. The
+    /// capture's grenade throws are the evidence: `legsAnim` 575, index 63,
+    /// with a bare toggle flip on the torso.
+    ///
+    /// The rule is general and the measurement is not: it also reaches
+    /// `fireweapon`'s pistol-ADS clause and `jump`'s two run clauses, neither
+    /// of which any capture covers (combat doc 1.14). It is kept general
+    /// because it is the convention the continuous selection already follows.
+    /// The landing is the one clause measured to break it: its `weaponclass
+    /// pistol AND grenade` arm is a `both` one and writes the legs alone,
+    /// and its caller clears the torso of the selection before it gets here.
     fn play_event(
         anim: &mut vcod_common::animscript::AnimState,
         sel: &vcod_common::animscript::Selection,
@@ -2248,13 +2245,6 @@ impl ClientSim {
         self.damage.taken = 0;
     }
 
-    /// The wire playerstate. Fields the two modes disagree about are measured
-    /// on both sides: the spectator's from the retail capture in
-    /// `crates/common/tests/fixtures/net/snapshots.bin`, whose zeros
-    /// `parses_captured_snapshot_run` pins, the player's from
-    /// `crates/server/tests/fixtures/playerstate/*.txt`, which the
-    /// `playerstate_ab` gate diffs against. `commandTime` mirrors the last
-    /// processed cmd's server time.
     /// Where the player is: the sim owns it, the script mirrors it.
     pub fn origin(&self) -> [f32; 3] {
         self.ps.origin.into()
@@ -2700,8 +2690,8 @@ impl ClientSim {
         // Packed at link time: docs/research/cod11-player-clip.md.
         set("solid", self.linked_solid);
         set("legsAnim", self.anim.legs());
-        // The torso does travel: the shoot, reload and putaway poses are the
-        // weapon's, and the next task is what gives it a value.
+        // The torso travels too: the shoot, reload and putaway poses are the
+        // weapon's.
         set("torsoAnim", self.anim.torso());
         set("weapon", i32::from(self.ps.weapon));
         set("iHeadIcon", self.head_icon);
@@ -2791,6 +2781,13 @@ impl ClientSim {
             });
     }
 
+    /// The wire playerstate. Fields the two modes disagree about are measured
+    /// on both sides: the spectator's from the retail capture in
+    /// `crates/common/tests/fixtures/net/snapshots.bin`, whose zeros
+    /// `parses_captured_snapshot_run` pins, the player's from
+    /// `crates/server/tests/fixtures/playerstate/*.txt`, which the
+    /// `playerstate_ab` gate diffs against. `commandTime` mirrors the last
+    /// processed cmd's server time.
     pub fn to_wire(&self, p: &Cod1Wire, client_num: i32, command_time: i32) -> msg::PlayerState {
         let player = self.pm_type == PmType::Normal;
         let mut w = msg::PlayerState::null(p);
@@ -2841,10 +2838,10 @@ impl ClientSim {
             set("groundEntityNum", self.ps.ground_entity_num() as i32);
             // All three come out of one `ClientEndFrame` block a spectator
             // never reaches. Its guards are `sessionstate` playing,
-            // `ps.clientNum == self` and, for the hint, `health > 0`;
-            // nothing follows another client and nothing dies yet, so
-            // `Normal` is the whole of that condition today. The hint is the
-            // one that peels off first, at `health` 0.
+            // `ps.clientNum == self` and, for the hint, `health > 0`. This
+            // arm tests `Normal` alone, which a dead player still is; whether
+            // a follow or a death should peel any of the three off here is
+            // unchecked.
             let stance_pmflags = if self.ps.ducked { PMF_DUCKED } else { 0 }
                 | if self.ps.stance == pmove::Stance::Prone {
                     PMF_PRONE
@@ -3122,8 +3119,9 @@ impl ClientSim {
         w.set_health(self.health);
         w.set_max_health(self.max_health);
         w.arrays.stats[1] = self.dead_yaw;
-        // `stats[3]` is six raw bits, so "nobody" travels as 63; the compass
-        // has no teammate to name until `TeamplayInfoMessage` exists.
+        // `stats[3]` is six raw bits, so "nobody" travels as 63. vcod's CoD1
+        // runs no `TeamplayInfoMessage` (protocol-1.1.md, "Block 1"), so it
+        // always names nobody.
         w.arrays.stats[3] = NO_TEAMMATE;
         w.arrays.stats[5] = i32::from(self.spawn_count);
         match &self.residue {

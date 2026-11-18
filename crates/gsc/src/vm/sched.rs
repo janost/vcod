@@ -258,9 +258,10 @@ impl Vm {
     /// Kills every thread endon-registered against `(target, event)`, then
     /// wakes every thread waiting on it, binding `args` into the locals the
     /// `waittill` recorded (a missing argument writes `Undefined`). Both
-    /// passes walk `threads` in start order, so two waiters on the same
-    /// event always wake oldest first, and every endon kill lands before
-    /// any notify wake. Waking only flips a thread's state to `Runnable`;
+    /// passes read the threads `NotifyIndex` holds for `(target, event)`.
+    /// Every endon kill lands before any notify wake, and waiters resume in
+    /// start order (newest `waittill` first under
+    /// `Vm::set_newest_waiter_first`). Waking only flips a thread's state to `Runnable`;
     /// it does not run here, so a notify can never reenter the VM.
     ///
     /// The event folds first: `waittill`/`endon` store the folded atom, and
@@ -1678,7 +1679,7 @@ later() { wait 0.05; return 9; }"#;
 
     /// A plain (non-threaded) call whose callee suspends on `wait` leaves
     /// the caller's frame mid-call across the suspend: exactly the case
-    /// `Frame::stack_effect_check` (vm.rs, test-only) has to survive rather
+    /// `Frame::stack_effect_check` (vm/interp.rs, test-only) has to survive rather
     /// than lose track of, since the caller and callee frames persist
     /// through separate `step_frames` invocations on either side of the
     /// wait. This would panic on a wrong `stack_effect` entry or a bug in

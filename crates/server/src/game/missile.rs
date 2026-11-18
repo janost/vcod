@@ -1854,8 +1854,6 @@ impl Missiles {
         self.live.iter().any(|m| m.id == id)
     }
 
-    /// One missile's `r.currentOrigin` into its script `origin`, as
-    /// [`Missiles::sync_origins`] does for all of them.
     /// A missile's `s.weapon`, gone off or not.
     pub fn weapon_of(&self, id: EntId) -> Option<u8> {
         self.live.iter().find(|m| m.id == id).map(|m| m.weapon)
@@ -1887,6 +1885,8 @@ impl Missiles {
         self.live.iter().find(|m| m.id == id).map(|m| m.origin)
     }
 
+    /// One missile's `r.currentOrigin` into its script `origin`, as
+    /// [`Missiles::sync_origins`] does for all of them.
     pub fn sync_origin(&self, ents: &mut ObjectTable, id: EntId) {
         if let Some(m) = self.live.iter().find(|m| m.id == id) {
             set_script_origin(ents, m.id, m.origin);

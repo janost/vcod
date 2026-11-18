@@ -310,8 +310,8 @@ const LADDER_MOVEMENT_DIR_CAP: i32 = 75;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PmEvent {
     pub event: i32,
-    /// The wire's `eventParm`. Every movement event carries 0; the weapon
-    /// step is what will fill it.
+    /// The wire's `eventParm`: the step's view offset, the landing's bob,
+    /// the landing pain's damage; 0 on the rest.
     pub parm: i32,
 }
 
@@ -588,7 +588,8 @@ pub struct PlayerState {
     /// Eye height the last stance change aimed at, and whether it went down.
     /// Both are wire state: retail carries them in `viewHeightLerpTarget` and
     /// `viewHeightLerpDown`, and leaves the target at 0 until the first
-    /// stance change (measured, docs/research/cod11-player-movement.md).
+    /// stance change (measured, cod11-mantle.md "The eye through a stance
+    /// change", `playerstate_motion_ab`).
     pub view_lerp_target: f32,
     pub view_lerp_down: bool,
     /// Retail's `pm_flags` 0x40, the backpedal latch: a backwards cmd sets it,
@@ -707,8 +708,8 @@ pub struct PlayerState {
     /// slide and clears it after, so the hull and the step gate below read
     /// retail's `pm_type` 4 arms.
     pub spectator: bool,
-    /// Which patch's movement this player runs. The server and bots run
-    /// 1.1's; the predictor takes the connection's
+    /// Which patch's movement this player runs: the server's protocol for
+    /// its players, the connection's for the predictor
     /// ([`MoveRules::for_protocol`]).
     pub rules: MoveRules,
     /// 1.5's `pm_flags` 0x2000, the jump penalty, timed by `pm_time`
@@ -1033,7 +1034,9 @@ impl PlayerState {
     /// The height of the box `ClientThink_real` leaves in `r.maxs` after
     /// this state's move: the stance box's, or for a spectator the standing
     /// one `ClientSpawn` wrote, which `SpectatorThink` never copies over
-    /// (docs/research/cod11-gsc-object-model.md 22.3).
+    /// (docs/research/cod11-gsc-object-model.md 22.3). `spectator` reads
+    /// true only inside [`spectator_move`]'s slide, so the callers, all
+    /// outside it, never take that arm.
     pub fn box_height(&self) -> f32 {
         if self.spectator {
             return HEIGHT_STAND;
@@ -1257,8 +1260,8 @@ fn begin_move(ps: &mut PlayerState) {
     ps.prone_flip_clears_torso = false;
 }
 
-/// `dt` in seconds, clamped to `MAX_FRAME_MS`. Returns the frame's movement
-/// sound events in wire `EV_*` numbering.
+/// `dt` in seconds, clamped to `MAX_FRAME_MS`. Returns the frame's events
+/// (movement, stance and weapon) in wire `EV_*` numbering.
 pub fn pmove(
     ps: &mut PlayerState,
     input: &PmInput,
@@ -4091,7 +4094,6 @@ enum WishArith {
     Msvc,
 }
 
-/// Desired direction (world space, unit or zero) and speed.
 /// The walk mover's wish direction and speed, retail's `PM_CmdScale`
 /// (game.mp.i386.so 0x2e690, called from `PM_WalkMove` at 0x2f2bf): Q3's
 /// `speed * max / (127 * total)` over the cmd bytes, with a backpedal read
@@ -4549,7 +4551,6 @@ fn walk_move(
     mask: u32,
     events: Option<&mut Vec<PmEvent>>,
 ) {
-    // along the slope, so it costs no speed
     let msvc = world.world.arith() == crate::patch::Arith::Msvc;
     let arith = if msvc {
         WishArith::Msvc
@@ -5085,12 +5086,12 @@ fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, m
     // `pml.groundPlane`, which a steep plane sets too (0x3483b reads it, not
     // `pml.walking`); `on_ground` covers a state no ground trace has run on.
     let ground = ps.ground_plane.or(ps.on_ground.then_some(ps.ground_normal));
-    // average of start and end velocity, matching the analytic parabola
     // Q3's `primal_velocity`: what a running timer hands back at the end.
     let mut primal = ps.velocity;
     let mut end_velocity = ps.velocity;
     if gravity {
-        // The x87 keeps `v - g * frametime` unrounded into the average and
+        // The average of start and end velocity, matching the analytic
+        // parabola. The x87 keeps `v - g * frametime` unrounded into it and
         // rounds each store once (0x34811-0x34838).
         let mut end_z = f64::from(ps.velocity.z) - f64::from(ps.gravity) * f64::from(dt);
         end_velocity.z = end_z as f32;

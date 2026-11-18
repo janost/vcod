@@ -16,7 +16,9 @@ Contents: 1 getting in and out; 2 the seat's cmd; 3 pmove in a seat; 4 the
 vehicle's motion; 5 the view; 6 view weapon and HUD; 7 prediction against
 the capture; 8 captures; 9 what vcod does (client); 10 server files and
 spawn; 11 seats on the server; 12 the drive step; 13 guns, heat and
-damage; 14 what vcod-server does; 15 wheel dust, death, seat view.
+damage; 14 what vcod-server does; 15 wheel dust, death, seat view; 16
+clearing and verifying a vehicle's spot; 17 the script surface no stock
+MP script uses.
 
 ## Sources and conventions
 

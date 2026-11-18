@@ -185,7 +185,7 @@ pub struct MantleAnims {
 }
 
 impl MantleAnims {
-    /// The clips off the zones, first zone first; `None` names the
+    /// The clips off the zones, first zone first; the error names the
     /// missing clip.
     pub fn from_zones(zones: &[&Assets]) -> Result<MantleAnims, String> {
         let mut clips = vec![Clip::default()];
