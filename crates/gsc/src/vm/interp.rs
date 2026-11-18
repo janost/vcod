@@ -122,6 +122,14 @@ const MAX_WAIT_SECONDS: f32 = 16777.0;
 /// The most returned frames' buffers [`Vm::recycle_frame`] keeps.
 const FRAME_POOL_MAX: usize = 64;
 
+/// The most frames in flight, a thread's and those of every thread under it
+/// on the native stack waiting on a spawn's immediate run. A call or a
+/// thread call past it is `script stack overflow (too many embedded
+/// function calls)`. Retail's CoD2 VM keeps one 32-entry frame stack for
+/// all of them and refuses a call once 31 are in use (cod2-gsc-diff.md
+/// 3.7); stock scripts reach 12, every CoD4 map's load included.
+pub(crate) const MAX_FRAMES: usize = 31;
+
 /// Converts an Int or Float value to `f32`; any other value has no numeric
 /// reading.
 fn to_f32(v: Value) -> Option<f32> {
@@ -188,6 +196,21 @@ fn numeric_cmp(a: Value, b: Value, f: impl Fn(f32, f32) -> bool) -> Result<Value
     }
 }
 
+/// The longest string a concatenation may build. No retail limit is on
+/// record; stock scripts build at most 138 bytes and anything sent to a
+/// client stops at 1024, while the interner keeps every string it is given
+/// for the level, so `s = s + s` would otherwise reach gigabytes in about
+/// 30 turns.
+pub(crate) const MAX_STRING_LEN: usize = 8192;
+
+/// `lhs` and `rhs` joined, or a script error past [`MAX_STRING_LEN`].
+fn concat(lhs: &str, rhs: &str) -> Result<String, ErrorKind> {
+    if lhs.len() + rhs.len() > MAX_STRING_LEN {
+        return Err(ErrorKind::BadType("string too long"));
+    }
+    Ok(format!("{lhs}{rhs}"))
+}
+
 fn eval_add(interner: &mut Interner, a: Value, b: Value) -> Result<Value, ErrorKind> {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_add(y))),
@@ -201,14 +224,14 @@ fn eval_add(interner: &mut Interner, a: Value, b: Value) -> Result<Value, ErrorK
             let rhs = format_number(other, interner).ok_or(ErrorKind::BadType(
                 "+ cannot concatenate that onto a string",
             ))?;
-            let s = format!("{}{rhs}", interner.resolve(x));
+            let s = concat(interner.resolve(x), &rhs)?;
             Ok(Value::String(interner.intern_exact(&s)))
         }
         (other, Value::String(y)) => {
             let lhs = format_number(other, interner).ok_or(ErrorKind::BadType(
                 "+ cannot concatenate that onto a string",
             ))?;
-            let s = format!("{lhs}{}", interner.resolve(y));
+            let s = concat(&lhs, interner.resolve(y))?;
             Ok(Value::String(interner.intern_exact(&s)))
         }
         (a, b) => match (to_f32(a), to_f32(b)) {
@@ -564,14 +587,13 @@ impl Vm {
         &mut self,
         host: &mut dyn Host,
         frames: &mut Vec<Frame>,
-        budget: u32,
+        remaining: &mut u32,
         thread_id: Option<ThreadId>,
         notifies: &mut Vec<(Target, Atom, Vec<Value>)>,
         errors: &mut Vec<ScriptError>,
     ) -> Result<Step, ScriptError> {
-        let mut remaining = budget;
         loop {
-            match self.step_ops(host, frames, &mut remaining, thread_id, notifies, errors) {
+            match self.step_ops(host, frames, remaining, thread_id, notifies, errors) {
                 Err(e) if self.recover_errors && e.kind.recoverable() => {
                     // Retail below `developer 1` (`Scr_Init`'s flag,
                     // coduo_lnxded 0x80aa818) leaves the failed
@@ -631,6 +653,16 @@ impl Vm {
                 &mut spawns,
             );
             match exit {
+                Exit::Call(frame) if self.outer_frames as usize + frames.len() >= MAX_FRAMES => {
+                    self.recycle_frame(frame);
+                    let f = frames.last().expect("a call leaves its caller on top");
+                    return Err(ScriptError {
+                        file: f.func_rc.file,
+                        func: f.func_rc.name,
+                        line: f.func_rc.lines[(f.ip as usize).saturating_sub(1)],
+                        kind: ErrorKind::StackOverflow,
+                    });
+                }
                 Exit::Call(frame) => frames.push(frame),
                 Exit::Return(v) => {
                     let done = frames.pop().expect("a frame is running");
@@ -827,6 +859,9 @@ impl Vm {
             }
             // A spawn ran another thread, which may have ended this one.
             let mut spawned = false;
+            // What the threads this op spawned ran, out of `left`.
+            #[cfg(test)]
+            let mut nested_spent = 0u32;
 
             // Test-only: `stack_effect`'s table checked against what this
             // op does to the operand stack. A non-threaded `Call`/`CallPtr`
@@ -1156,9 +1191,18 @@ impl Vm {
                         self_recv
                     };
                     if threaded {
+                        if self.outer_frames as usize + depth >= MAX_FRAMES {
+                            fail!(ErrorKind::StackOverflow);
+                        }
                         let args = stack[base..sp].to_vec();
                         sp = base - usize::from(has_recv);
-                        self.spawn(host, target, callee, recv, args, errors);
+                        let spent = self
+                            .spawn_nested(host, target, callee, recv, args, depth, left, errors);
+                        left -= spent;
+                        #[cfg(test)]
+                        {
+                            nested_spent += spent;
+                        }
                         spawned = true;
                         let v = self.thread_returned.take().filter(|_| self.thread_returns);
                         push!(v.unwrap_or(Value::Undefined));
@@ -1206,8 +1250,17 @@ impl Vm {
                     // `Cx::spawn`).
                     if !pending_spawns.is_empty() {
                         let (pending, field) = (&mut *pending_spawns, &mut *field_spawns);
+                        self.outer_frames += depth as u32;
+                        self.pool = Some(left);
                         spawned |= self
                             .run_builtin_spawns(host, func, at, notifies, errors, pending, field);
+                        let spent = left - self.pool.take().unwrap_or(0);
+                        self.outer_frames -= depth as u32;
+                        left -= spent;
+                        #[cfg(test)]
+                        {
+                            nested_spent += spent;
+                        }
                     }
                     push!(v);
                 }
@@ -1234,7 +1287,17 @@ impl Vm {
                     };
                     let args = &stack[base..base + argc as usize];
                     if threaded {
-                        self.spawn(host, target, callee, recv, args.to_vec(), errors);
+                        if self.outer_frames as usize + depth >= MAX_FRAMES {
+                            fail!(ErrorKind::StackOverflow);
+                        }
+                        let args = args.to_vec();
+                        let spent = self
+                            .spawn_nested(host, target, callee, recv, args, depth, left, errors);
+                        left -= spent;
+                        #[cfg(test)]
+                        {
+                            nested_spent += spent;
+                        }
                         spawned = true;
                         let v = self.thread_returned.take().filter(|_| self.thread_returns);
                         push!(v.unwrap_or(Value::Undefined));
@@ -1877,7 +1940,7 @@ impl Vm {
             // A fused op ran as many of `code`'s ops as it took budget.
             #[cfg(test)]
             {
-                let ran = 1 + (dbg_left - left) as usize;
+                let ran = 1 + (dbg_left - left - nested_spent) as usize;
                 // Along the run's path: a `Jump` inside it goes on at its
                 // target.
                 let (mut pc, mut effect) = (at, 0);
@@ -1933,6 +1996,28 @@ impl Vm {
         v
     }
 
+    /// [`Vm::spawn`] from a thread call in a step with `left` instructions
+    /// and `depth` frames: the new thread runs on what the step has left and
+    /// on top of its frames. The instructions it spent.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_nested(
+        &mut self,
+        host: &mut dyn Host,
+        target: FuncRef,
+        callee: Rc<Function>,
+        recv: Option<Target>,
+        args: Vec<Value>,
+        depth: usize,
+        left: u32,
+        errors: &mut Vec<ScriptError>,
+    ) -> u32 {
+        self.outer_frames += depth as u32;
+        self.pool = Some(left);
+        self.spawn(host, target, callee, recv, args, errors);
+        self.outer_frames -= depth as u32;
+        left - self.pool.take().unwrap_or(0)
+    }
+
     /// Runs the threads a builtin just queued (`Cx::spawn`), each to its
     /// first suspend, as retail's `Scr_ExecEntThread` from inside a builtin
     /// does, before the calling thread's next op; whether any ran. `func`
@@ -1954,6 +2039,16 @@ impl Vm {
         while let Some(queued) = queue.pop_front() {
             let target = queued.func;
             match self.functions.get(&target).cloned() {
+                Some(_) if self.outer_frames as usize >= MAX_FRAMES => {
+                    let e = ScriptError {
+                        file: func.file,
+                        func: func.name,
+                        line: func.lines[at],
+                        kind: ErrorKind::StackOverflow,
+                    };
+                    self.record_abort(&e);
+                    errors.push(e);
+                }
                 Some(f) => {
                     self.spawn(host, target, f, queued.recv, queued.args, errors);
                     spawned = true;
