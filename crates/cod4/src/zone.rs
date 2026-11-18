@@ -301,22 +301,23 @@ impl<R: BufRead> ZoneStream<R> {
         Ok(u32::from_le_bytes(b))
     }
 
-    /// `n` bytes into a vector grown as they inflate, so a short stream
-    /// fails before `n` is allocated.
+    /// `n` bytes into a vector grown as they inflate (doubling from 1 MiB,
+    /// ending at exactly `n`), so a short stream fails before `n` is
+    /// allocated.
     pub fn read_vec(&mut self, n: usize) -> Result<Vec<u8>> {
         ensure!(
             n as u64 <= self.left(),
             "{n} bytes at inflated offset {:#x} pass the XFile size",
             self.pos
         );
-        let mut out = Vec::with_capacity(n.min(1 << 20));
-        let got = (&mut self.inner).take(n as u64).read_to_end(&mut out)?;
-        self.pos += got as u64;
-        ensure!(
-            got == n,
-            "zone truncated at inflated offset {:#x}",
-            self.pos
-        );
+        let mut out = Vec::new();
+        while out.len() < n {
+            let start = out.len();
+            let more = (n - start).min(start.max(1 << 20));
+            out.reserve_exact(more);
+            out.resize(start + more, 0);
+            self.read_bytes(&mut out[start..])?;
+        }
         Ok(out)
     }
 
