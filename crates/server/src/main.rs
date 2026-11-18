@@ -125,6 +125,9 @@ fn main() -> Result<()> {
     // a level loads for seconds.
     check_game_flags(&matches, game)?;
     check_args(&args)?;
+    if game == Game::Cod1 {
+        set_protocol(&args.set)?;
+    }
     // A restricted (demo) install reads `demomain`, which `cod1_server` checks.
     if last_set(&args.set, "fs_restrict").is_none() {
         let chosen = vcod_common::game_dir::chosen_by(from_command_line(&matches, "game_dir"));
@@ -819,17 +822,22 @@ fn last_set<'a>(sets: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 fn protocol(sets: &[String], fs: &Pk3Fs) -> Result<&'static Protocol> {
-    if let Some(v) = last_set(sets, "protocol") {
-        return v
-            .trim()
-            .parse()
-            .ok()
-            .and_then(|v| Protocol::by_version(vcod_common::game::Game::Cod1, v))
-            .with_context(|| {
-                format!("--set protocol={v}: vcod speaks 1 (1.1), 6 (1.5) and 22 (UO 1.51)")
-            });
-    }
-    Ok(vcod_server::server::install_protocol(fs))
+    Ok(set_protocol(sets)?.unwrap_or_else(|| vcod_server::server::install_protocol(fs)))
+}
+
+/// CoD1's `--set protocol=`, if given: 1, 6 or 22.
+fn set_protocol(sets: &[String]) -> Result<Option<&'static Protocol>> {
+    let Some(v) = last_set(sets, "protocol") else {
+        return Ok(None);
+    };
+    v.trim()
+        .parse()
+        .ok()
+        .and_then(|v| Protocol::by_version(Game::Cod1, v))
+        .map(Some)
+        .with_context(|| {
+            format!("--set protocol={v}: vcod speaks 1 (1.1), 6 (1.5) and 22 (UO 1.51)")
+        })
 }
 
 /// `--trace`'s per-second tick summary, logged once 20 frames have run: the
@@ -925,6 +933,10 @@ mod tests {
         );
         let (_, a) = parse(&["mp_crash", "--bots", "9", "--max-clients", "12"]);
         assert!(check_args(&a).is_ok());
+        let (_, a) = parse(&["mp_crash", "--set", "protocol=5"]);
+        assert!(set_protocol(&a.set).is_err());
+        let (_, a) = parse(&["mp_crash", "--set", "protocol=22"]);
+        assert!(set_protocol(&a.set).unwrap().is_some());
         for n in ["0", "65"] {
             let r = Args::command().try_get_matches_from(["vcod-server", "x", "--max-clients", n]);
             assert!(r.is_err(), "--max-clients {n}");
