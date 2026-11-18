@@ -48,7 +48,9 @@ CoD4 1.7's formats and wire.
   (container, `XFile`, script strings, asset list).
 - `walk.rs` walks every body block-exactly into `assets/` (one module per
   family; bulk data kept under `WalkOptions::keep_bulk`).
-- `install.rs` finds the install through `COD4_DIR`.
+- `install.rs`: an install's zones, iwds, `fs_game` and usermaps. Tests
+  and tools find it through `COD4_DIR`; the binaries through `COD_DIR` or
+  `--game-dir`.
 - `map.rs` builds a map zone's render world, cells, static models, entities
   and range-checked collision counts. `mapworld.rs`, `drawsurf.rs`,
   `lightgrid.rs`, `primarylight.rs`, `sunshadow.rs` feed the renderer.
