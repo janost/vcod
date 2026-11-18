@@ -154,6 +154,8 @@ The scramble is 1.1's, with the command ring doubled to 128 slots.
 
 What changed is the string the server keys on. `MSG_ReadString` (Mac 0x1737fe) and `MSG_ReadCommandString` (0x8068522) map each byte through `I_CleanChar` (0x80b7edc, Mac 0x28700), which turns 0x92 into `'` and keeps every other byte. VERIFIED. 1.1's server reader also turned every byte over 127 into `.`. So a CoD2 client's copy of its last command keys the same as the server's after the 0x92 mapping alone. INFERRED.
 
+vcod's server holds each client and server command as a Latin-1 `String`, one char per wire byte. Its two scrambles and the usercmd key walk those bytes (`text::latin1_bytes`), never the string's UTF-8, so a command with a byte over 127 keys as the client holds it. CoD4's server does the same and writes its server commands one byte per char.
+
 ## 3. Server to client messages
 
 ### 3.1 The op numbers

@@ -186,10 +186,7 @@ pub fn write_delta_playerstate(w: &mut MsgWriter, from: Option<&PlayerState2>, t
     }
 }
 
-/// A Latin-1 string's bytes, one per char (the inverse of `super::latin1`).
-pub fn latin1_bytes(s: &str) -> Vec<u8> {
-    s.chars().map(|c| c as u32 as u8).collect()
-}
+pub use vcod_common::text::latin1_bytes;
 
 /// `svc_serverCommand`: the sequence and the text as its bytes.
 pub fn write_server_command(w: &mut MsgWriter, seq: i32, text: &[u8]) {
