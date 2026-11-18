@@ -3716,6 +3716,58 @@ pub(crate) mod tests {
 
     mod hud_menus;
 
+    /// How many live CoD4 servers this test binary runs at once: each holds
+    /// a loaded map, a client and its session, about 2.5 GB at the peak
+    /// (docs/dev/testing.md, "CoD4 live tests"). `VCOD_LIVE_SLOTS` sets it.
+    fn live_slots() -> usize {
+        static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        *N.get_or_init(|| {
+            std::env::var("VCOD_LIVE_SLOTS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3)
+                .max(1)
+        })
+    }
+
+    static LIVE: (std::sync::Mutex<usize>, std::sync::Condvar) =
+        (std::sync::Mutex::new(0), std::sync::Condvar::new());
+
+    thread_local! {
+        /// This thread holds a slot: a test's second server rides its first's.
+        static HOLDS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// A slot of [`live_slots`], released on drop.
+    pub(crate) struct LiveSlot(bool);
+
+    /// Waits for a free slot before a test builds a live server, so a run
+    /// on every core holds at most [`live_slots`] maps whatever its
+    /// `--test-threads`. Taken before the sim clock starts: a wait inside
+    /// one would trip its stall asserts.
+    pub(crate) fn live_slot() -> LiveSlot {
+        if HOLDS.get() {
+            return LiveSlot(false);
+        }
+        let mut n = LIVE.0.lock().unwrap_or_else(|e| e.into_inner());
+        while *n >= live_slots() {
+            n = LIVE.1.wait(n).unwrap_or_else(|e| e.into_inner());
+        }
+        *n += 1;
+        HOLDS.set(true);
+        LiveSlot(true)
+    }
+
+    impl Drop for LiveSlot {
+        fn drop(&mut self) {
+            if self.0 {
+                HOLDS.set(false);
+                *LIVE.0.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
+                LIVE.1.notify_one();
+            }
+        }
+    }
+
     /// A server command whose sequence leaps past the reliable ring
     /// drops the session as `EXE_ERR_RELIABLE_CYCLED_OUT`, the gap never
     /// walked.
@@ -6076,6 +6128,7 @@ pub(crate) mod tests {
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
         };
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -6143,6 +6196,7 @@ pub(crate) mod tests {
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
         };
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -6545,6 +6599,7 @@ pub(crate) mod tests {
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
         };
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -6631,6 +6686,7 @@ pub(crate) mod tests {
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
         };
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -6702,6 +6758,7 @@ pub(crate) mod tests {
         let Some(world) = crash_world() else {
             return;
         };
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -6935,6 +6992,7 @@ pub(crate) mod tests {
             stop,
             busy,
         } = http_server(base.path().to_path_buf(), deny, pad, slow);
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -7360,6 +7418,7 @@ pub(crate) mod tests {
     ) -> Option<T> {
         use vcod_server::cod4::{Cod4Config, Cod4Server};
         let install = vcod_cod4::testing::cod4_install()?;
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: map.into(),
@@ -8653,6 +8712,7 @@ pub(crate) mod tests {
         use vcod_server::cod4::{Cod4Config, Cod4Server};
         let install = vcod_cod4::testing::cod4_install()?;
         let world = crash_world();
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -8899,6 +8959,7 @@ pub(crate) mod tests {
         use vcod_server::cod4::{Cod4Config, Cod4Server};
         let install = vcod_cod4::testing::cod4_install()?;
         let world = crash_world();
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -10923,6 +10984,7 @@ pub(crate) mod tests {
             return;
         };
         let world = crash_world();
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -12844,6 +12906,7 @@ pub(crate) mod tests {
             return;
         };
         let main = install.root().join("main");
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -12974,6 +13037,7 @@ pub(crate) mod tests {
         };
         let root = install.root().to_path_buf();
         let world = crash_world();
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -13143,6 +13207,7 @@ pub(crate) mod tests {
         let (map, _) = vcod_cod4::map::Map::load(&install, "english", "mp_crash").unwrap();
         let spots = open_floor_spots(&world.clip, &map, 8);
         assert!(spots.len() >= 6, "{spots:?}");
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -13333,6 +13398,7 @@ pub(crate) mod tests {
             return;
         };
         let world = Arc::new(crate::cod4_fly::load_world(install.root(), "mp_backlot").unwrap());
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_backlot".into(),
@@ -13512,6 +13578,7 @@ pub(crate) mod tests {
             })
             .unwrap();
         let (pile_at, plate_at) = (defs[pile].origin, defs[plate].origin);
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -13639,6 +13706,7 @@ pub(crate) mod tests {
         let def = world.ragdoll.clone().expect("ragdoll.cfg's def");
         let (map, _) = vcod_cod4::map::Map::load(&install, "english", "mp_crash").unwrap();
         let spots = open_floor_spots(&world.clip, &map, 6);
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -13863,6 +13931,7 @@ pub(crate) mod tests {
         let def = world.ragdoll.clone().expect("ragdoll.cfg's def");
         let ((sounds, _), _) = crate::cod4_fly::load_av(&root, "mp_crash").unwrap();
         let defs = sounds.weapons.clone();
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -14035,6 +14104,7 @@ pub(crate) mod tests {
                 self.0.samples(128)
             }
         }
+        let _live = live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),

@@ -153,8 +153,10 @@ in process, on `play::cod4`'s `tests::sim` clock.
 - A test's loops count frames its own sleeps move. Under load it runs slower,
   never out of time; only `sim::Clock::sleep`'s 60 s wall assert stops a
   stalled one.
-- About 100 of them take about 5 min of wall at 4 test threads and peak near
-  10 GB.
+- A test takes one of `play::cod4::tests::live_slot`'s slots before it
+  builds its server, three unless `VCOD_LIVE_SLOTS` says more, so a run at
+  any `--test-threads` holds at most three maps at about 2.5 GB each. The
+  107 of them ran in 90 s at 8 test threads under heavy.sh's 14 GB cap.
 - Run the CoD4 client tests once. Two such test binaries side by side under
   one memory cap (a 1.1 and a UO pass of the same suite, both with
   `COD4_DIR` set) swap and crawl for an hour instead of failing. Leave

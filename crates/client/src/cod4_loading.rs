@@ -377,6 +377,7 @@ mod tests {
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
         };
+        let _live = crate::play::cod4::tests::live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -585,6 +586,7 @@ mod tests {
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
         };
+        let _live = crate::play::cod4::tests::live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
