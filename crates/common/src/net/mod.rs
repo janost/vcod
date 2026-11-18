@@ -44,8 +44,7 @@ use std::time::{Duration, Instant};
 /// copies into a 16 KiB stack buffer (docs/protocol-1.1.md, svc_download).
 const MAX_DOWNLOAD_BLKSIZE: usize = 0x4000;
 
-/// Largest pk3 a server may announce; the biggest stock pak is under 300 MiB.
-const MAX_DOWNLOAD_SIZE: u32 = 512 << 20;
+use download::MAX_DOWNLOAD_SIZE;
 
 /// The www redirect's flag bits (`DL_FLAG_DISCON`, `DL_FLAG_URL`): the
 /// server drops the client for the transfer; the URL is a page to open.

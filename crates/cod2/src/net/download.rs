@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use vcod_common::net::codec::{MsgReader, MsgWriter};
-use vcod_common::net::download::Download;
+use vcod_common::net::download::{Download, MAX_DOWNLOAD_SIZE};
 
 use super::ops::Svc;
 
@@ -442,6 +442,21 @@ impl Downloads {
                 if let Some(s) = size {
                     cur.size = (*s).max(0) as u64;
                 }
+                // vcod's bound, CoD1's: the announced size, at most
+                // `MAX_DOWNLOAD_SIZE`.
+                let landed = cur.spool.received + data.len() as u64;
+                if cur.size > u64::from(MAX_DOWNLOAD_SIZE) || landed > cur.size {
+                    let cur = self.current.take().unwrap();
+                    let why = format!(
+                        "{} sent {landed} bytes, {} announced (at most {MAX_DOWNLOAD_SIZE})",
+                        cur.remote, cur.size
+                    );
+                    cur.spool.abort();
+                    return vec![
+                        DownloadEvent::Command("stopdl".into()),
+                        DownloadEvent::Failed(why),
+                    ];
+                }
                 if let Err(e) = cur.spool.accept_block(data) {
                     let cur = self.current.take().unwrap();
                     cur.spool.abort();
@@ -605,6 +620,42 @@ mod tests {
         assert!(evs.contains(&DownloadEvent::Finished(dest.clone())));
         assert_eq!(std::fs::read(dest).unwrap(), iwd);
         assert!(dls.is_done());
+    }
+
+    /// A stream past its announced size, or an announced size past the
+    /// cap, fails and leaves no spool; so does a session dropped mid-way.
+    #[test]
+    fn an_oversize_transfer_fails_and_an_abandoned_one_leaves_no_spool() {
+        let si = "\\sv_referencedIwds\\1 \\sv_referencedIwdNames\\main/z";
+        let empty = |d: &tempfile::TempDir| {
+            std::fs::read_dir(d.path().join("main"))
+                .unwrap()
+                .next()
+                .is_none()
+        };
+        for (announced, first) in [(4, 3), (MAX_DOWNLOAD_SIZE as i32 + 1, 3)] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut dls = Downloads::new(dir.path(), si, missing_iwds(si, |_| false));
+            dls.next_download();
+            let mut evs = dls.on_message(&block(0, Some(announced), &vec![7; first]));
+            if announced == 4 {
+                assert_eq!(commands(&evs), ["nextdl 0"]);
+                evs = dls.on_message(&block(1, None, &[7; 2]));
+            }
+            assert_eq!(commands(&evs), ["stopdl"]);
+            assert!(
+                matches!(evs.last(), Some(DownloadEvent::Failed(_))),
+                "{evs:?}"
+            );
+            assert!(empty(&dir));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut dls = Downloads::new(dir.path(), si, missing_iwds(si, |_| false));
+        dls.next_download();
+        dls.on_message(&block(0, Some(100), &[7; 50]));
+        assert!(!empty(&dir));
+        drop(dls);
+        assert!(empty(&dir));
     }
 
     #[test]
