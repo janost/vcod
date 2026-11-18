@@ -656,14 +656,20 @@ impl<'a> Cx<'a> {
         let grow = Vec3::ONE;
         let lo = self.sw.start - self.sw.half_box - grow;
         let hi = self.sw.start + self.sw.half_box + grow;
-        let mut leafs = Vec::new();
+        thread_local! {
+            static LEAFS: std::cell::Cell<Vec<usize>> = const { std::cell::Cell::new(Vec::new()) };
+        }
+        // Taken, not borrowed, so a nested test just starts a list of its own.
+        let mut leafs = LEAFS.take();
+        leafs.clear();
         box_leafnums(self.map, lo, hi, 0, &mut leafs);
-        for leaf in leafs {
+        for &leaf in &leafs {
             if tr.allsolid {
                 break;
             }
             self.test_in_leaf(self.map.leafs[leaf], tr);
         }
+        LEAFS.set(leafs);
     }
 
     /// 0x08059878 (`CM_TestInLeaf`), on a leaf of the tree or a
