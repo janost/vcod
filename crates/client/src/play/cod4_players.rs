@@ -256,12 +256,6 @@ impl Cod4Players {
             .as_mut()
     }
 
-    /// Steps and poses `bodies` (entity number, its view) at
-    /// `render_time`; `snapshot_ms` is the newest snapshot's time, the
-    /// clock a body's anim rate reads. Each posed body comes back with its
-    /// index in `bodies`; one whose rig does not build is left out. Bodies
-    /// not in `bodies` are forgotten. A gunner's gun in `guns` (parallel
-    /// to `bodies`) puts his body on it.
     /// Body `n`'s rig, its pose at `render_time` under `frame` and its
     /// controls, as [`Self::posed`] last stepped it: what a test sets the
     /// server's arithmetic against.
@@ -289,6 +283,12 @@ impl Cod4Players {
         })
     }
 
+    /// Steps and poses `bodies` (entity number, its view) at
+    /// `render_time`; `snapshot_ms` is the newest snapshot's time, the
+    /// clock a body's anim rate reads. Each posed body comes back with its
+    /// index in `bodies`; one whose rig does not build is left out. Bodies
+    /// not in `bodies` are forgotten. A gunner's gun in `guns` (parallel
+    /// to `bodies`) puts his body on it.
     pub fn posed(
         &mut self,
         src: &BodySource,
