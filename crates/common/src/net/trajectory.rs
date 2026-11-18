@@ -44,25 +44,64 @@ pub struct Trajectory {
     pub delta: Vec3,
 }
 
+/// A trajectory's nine words in [`Trajectory::read`]'s order.
+const WORDS: [&str; 9] = [
+    "trType",
+    "trTime",
+    "trDuration",
+    "trBase[0]",
+    "trBase[1]",
+    "trBase[2]",
+    "trDelta[0]",
+    "trDelta[1]",
+    "trDelta[2]",
+];
+
+/// [`WORDS`] under `pos.` and `apos.`, spelled out so a read builds no name.
+fn names(prefix: &str) -> Option<&'static [&'static str; 9]> {
+    const POS: [&str; 9] = [
+        "pos.trType",
+        "pos.trTime",
+        "pos.trDuration",
+        "pos.trBase[0]",
+        "pos.trBase[1]",
+        "pos.trBase[2]",
+        "pos.trDelta[0]",
+        "pos.trDelta[1]",
+        "pos.trDelta[2]",
+    ];
+    const APOS: [&str; 9] = [
+        "apos.trType",
+        "apos.trTime",
+        "apos.trDuration",
+        "apos.trBase[0]",
+        "apos.trBase[1]",
+        "apos.trBase[2]",
+        "apos.trDelta[0]",
+        "apos.trDelta[1]",
+        "apos.trDelta[2]",
+    ];
+    match prefix {
+        "pos" => Some(&POS),
+        "apos" => Some(&APOS),
+        _ => None,
+    }
+}
+
 impl Trajectory {
     /// `prefix` is `"pos"` or `"apos"`.
     pub fn read(ent: &EntityState, p: &Cod1Wire, prefix: &str) -> Trajectory {
-        let i32_field = |name: &str| ent.field_i32(p, &format!("{prefix}.{name}"));
-        let f32_field = |name: &str| ent.field_f32(p, &format!("{prefix}.{name}"));
+        let at = |k: usize| match names(prefix) {
+            Some(n) => ent.field_i32(p, n[k]),
+            None => ent.field_i32(p, &format!("{prefix}.{}", WORDS[k])),
+        };
+        let f = |k: usize| f32::from_bits(at(k) as u32);
         Trajectory {
-            tr_type: i32_field("trType"),
-            tr_time: i32_field("trTime"),
-            tr_duration: i32_field("trDuration"),
-            base: Vec3::new(
-                f32_field("trBase[0]"),
-                f32_field("trBase[1]"),
-                f32_field("trBase[2]"),
-            ),
-            delta: Vec3::new(
-                f32_field("trDelta[0]"),
-                f32_field("trDelta[1]"),
-                f32_field("trDelta[2]"),
-            ),
+            tr_type: at(0),
+            tr_time: at(1),
+            tr_duration: at(2),
+            base: Vec3::new(f(3), f(4), f(5)),
+            delta: Vec3::new(f(6), f(7), f(8)),
         }
     }
 
@@ -174,23 +213,27 @@ impl Trajectory {
 
     /// The inverse of [`Trajectory::read`]: every word of the `prefix` trajectory.
     pub fn write(&self, ent: &mut EntityState, p: &Cod1Wire, prefix: &str) {
-        let mut seti = |name: &str, v: i32| {
-            if let Some(i) = EntityState::field_index(p, name) {
+        let [bx, by, bz] = self.base.to_array().map(f32::to_bits);
+        let [dx, dy, dz] = self.delta.to_array().map(f32::to_bits);
+        let words = [
+            self.tr_type,
+            self.tr_time,
+            self.tr_duration,
+            bx as i32,
+            by as i32,
+            bz as i32,
+            dx as i32,
+            dy as i32,
+            dz as i32,
+        ];
+        for (k, v) in words.into_iter().enumerate() {
+            let i = match names(prefix) {
+                Some(n) => EntityState::field_index(p, n[k]),
+                None => EntityState::field_index(p, &format!("{prefix}.{}", WORDS[k])),
+            };
+            if let Some(i) = i {
                 ent.fields[i] = v;
             }
-        };
-        seti(&format!("{prefix}.trType"), self.tr_type);
-        seti(&format!("{prefix}.trTime"), self.tr_time);
-        seti(&format!("{prefix}.trDuration"), self.tr_duration);
-        for (k, (b, d)) in self
-            .base
-            .to_array()
-            .iter()
-            .zip(self.delta.to_array())
-            .enumerate()
-        {
-            seti(&format!("{prefix}.trBase[{k}]"), b.to_bits() as i32);
-            seti(&format!("{prefix}.trDelta[{k}]"), d.to_bits() as i32);
         }
     }
 }

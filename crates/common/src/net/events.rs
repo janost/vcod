@@ -12,6 +12,15 @@ use crate::net::snapshot::Snapshot;
 /// CoD 1.1 MP, not Q3's 13 (CoDExtended shared.h:445; section 1); 16 on
 /// United Offensive ([`Cod1Wire::et_events`]).
 pub const ET_EVENTS: i32 = 12;
+/// The event ring's netfield names by slot, entity and playerstate alike.
+pub const EVENT_SLOTS: [&str; 4] = ["events[0]", "events[1]", "events[2]", "events[3]"];
+pub const EVENT_PARM_SLOTS: [&str; 4] = [
+    "eventParms[0]",
+    "eventParms[1]",
+    "eventParms[2]",
+    "eventParms[3]",
+];
+
 /// Slots in an entity's or the playerstate's event ring.
 pub const EVENT_RING: i32 = 4;
 
@@ -236,8 +245,8 @@ impl EventTracker {
             let diff = seq_diff(cur, prev).min(EVENT_RING);
             for i in (cur - diff)..cur {
                 let slot = (i & 3) as usize;
-                let ev = (p.event_to_v1)(es.field_i32(p, &format!("events[{slot}]")));
-                let parm = es.field_i32(p, &format!("eventParms[{slot}]"));
+                let ev = (p.event_to_v1)(es.field_i32(p, EVENT_SLOTS[slot]));
+                let parm = es.field_i32(p, EVENT_PARM_SLOTS[slot]);
                 out.push((None, Self::event_from(es, p, num, ev, parm)));
             }
         }
@@ -247,8 +256,7 @@ impl EventTracker {
 
         // playerState ring; entity_num u32::MAX marks the view.
         let cur = snap.ps.field_i32(p, "eventSequence");
-        let events: [i32; 4] =
-            std::array::from_fn(|slot| snap.ps.field_i32(p, &format!("events[{slot}]")));
+        let events: [i32; 4] = std::array::from_fn(|slot| snap.ps.field_i32(p, EVENT_SLOTS[slot]));
         if let Some((prev, old)) = self.ps_prev.replace((cur, events)) {
             for i in (cur - EVENT_RING)..cur {
                 let slot = (i & 3) as usize;
@@ -259,7 +267,7 @@ impl EventTracker {
                     Some(i & 0xff),
                     GameEvent {
                         event: (p.event_to_v1)(events[slot]),
-                        parm: snap.ps.field_i32(p, &format!("eventParms[{slot}]")),
+                        parm: snap.ps.field_i32(p, EVENT_PARM_SLOTS[slot]),
                         entity_num: u32::MAX,
                         client_num: snap.ps.field_i32(p, "clientNum"),
                         weapon: snap.ps.field_i32(p, "weapon"),

@@ -155,6 +155,11 @@ pub struct ClientState {
     pub fields: Vec<i32>,
 }
 
+/// `clientState_t.name`'s eight words' netfield names.
+const NAME_WORDS: [&str; 8] = [
+    "name[0]", "name[4]", "name[8]", "name[12]", "name[16]", "name[20]", "name[24]", "name[28]",
+];
+
 impl ClientState {
     pub fn null(p: &Cod1Wire) -> Self {
         ClientState {
@@ -176,7 +181,7 @@ impl ClientState {
     pub fn name(&self, p: &Cod1Wire) -> String {
         let mut bytes = Vec::with_capacity(32);
         for off in (0..32).step_by(4) {
-            let v = self.field_i32(p, &format!("name[{off}]")) as u32;
+            let v = self.field_i32(p, NAME_WORDS[off / 4]) as u32;
             bytes.extend_from_slice(&v.to_le_bytes());
         }
         bytes
@@ -197,7 +202,7 @@ impl ClientState {
         let mut bytes: Vec<u8> = name.bytes().take(31).collect();
         bytes.resize(32, 0);
         for (chunk, off) in bytes.chunks(4).zip((0..32).step_by(4)) {
-            let Some(idx) = Self::field_index(p, &format!("name[{off}]")) else {
+            let Some(idx) = Self::field_index(p, NAME_WORDS[off / 4]) else {
                 break;
             };
             let mut word = [0u8; 4];
