@@ -270,8 +270,7 @@ pub fn write_snapshot(
     w.write_long(frame.server_time);
     w.write_byte(head.delta_num);
     w.write_byte(head.snap_flags as u8);
-    let zero = PlayerState::default();
-    let from_ps = base.map_or(&zero, |b| &b.ps);
+    let from_ps = base.map_or(&*delta::ZERO_PS, |b| &b.ps);
     let mut to_ps = frame.ps.clone();
     to_ps.origin_sent = true;
     let ps_wire = PsWire::natural(from_ps, &to_ps);

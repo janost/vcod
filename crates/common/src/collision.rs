@@ -2998,7 +2998,7 @@ impl CollisionWorld {
             )
         };
         let (lo, hi) = sw.bounds(0.0);
-        let mut stack = vec![0u32];
+        let mut stack = crate::leafwalk::WalkStack::new(0u32);
         while let Some(i) = stack.pop() {
             let node = &self.nodes[i as usize];
             if !sw.statics && i == self.models_root
@@ -3007,7 +3007,8 @@ impl CollisionWorld {
                 continue;
             }
             if node.count == 0 {
-                stack.extend([node.first, node.second]);
+                stack.push(node.first);
+                stack.push(node.second);
                 continue;
             }
             let first = node.first as usize;
@@ -3239,7 +3240,11 @@ impl CollisionWorld {
                     return;
                 }
                 if boxed {
-                    let mut planes = Vec::new();
+                    thread_local! {
+                        static PLANES: std::cell::Cell<Vec<(Vec3, f32)>> =
+                            const { std::cell::Cell::new(Vec::new()) };
+                    }
+                    let mut planes = PLANES.take();
                     expand_brush_box(&brush.planes, mins, maxs, &mut planes);
                     clip_segment(
                         trace,
@@ -3250,6 +3255,7 @@ impl CollisionWorld {
                         Vec3::ZERO,
                         prim,
                     );
+                    PLANES.set(planes);
                 } else {
                     let sweep = capsule_sweep(start, end, mins, maxs);
                     let same_model = matches!(trace.hit,

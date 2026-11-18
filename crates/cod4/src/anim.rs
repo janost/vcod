@@ -718,13 +718,18 @@ impl BodySource {
 
     /// The clip `name` as 1.7's sampler reads it.
     pub fn parts(&self, name: &str) -> Option<&crate::xanimcalc::Parts> {
-        self.parts.get(&name.to_ascii_lowercase())
+        vcod_common::text::with_ascii_lowercase(name, |n| self.parts.get(n))
     }
 
     /// Bone `bone` of model `model` as 1.7 leaves a bone no leaf reached.
     pub fn base_local(&self, model: &str, bone: &str) -> Option<crate::skel::AnimMat> {
-        let bones = self.bases.get(&model.to_ascii_lowercase())?;
+        let bones = self.base_locals(model)?;
         bones.iter().find(|(n, _)| n == bone).map(|(_, m)| *m)
+    }
+
+    /// Every bone of model `model` by name with [`Self::base_local`]'s local.
+    pub fn base_locals(&self, model: &str) -> Option<&[(String, crate::skel::AnimMat)]> {
+        vcod_common::text::with_ascii_lowercase(model, |m| self.bases.get(m).map(Vec::as_slice))
     }
 
     /// How many clips the tree named that a zone held.

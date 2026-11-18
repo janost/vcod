@@ -1653,8 +1653,15 @@ impl Cod4Client {
         };
         for &(i, origin, rot) in &scene.dynents {
             let name = &w.dynents[i as usize].model;
-            let model = self.models.get(name).cloned();
-            let Some(handle) = self.upload(cx, name, || model) else {
+            // Checked first: a model clone for an uploaded name is only dropped.
+            let handle = match self.uploaded.get(name) {
+                Some(h) => *h,
+                None => {
+                    let model = self.models.get(name).cloned();
+                    self.upload(cx, name, || model)
+                }
+            };
+            let Some(handle) = handle else {
                 continue;
             };
             out.push(DynamicModelInstance {
@@ -1849,8 +1856,7 @@ impl Cod4Client {
             .filter_map(|d| Some((d.number, d.body.as_ref()?)))
             .collect();
         if let Some(gs) = self.session.gamestate() {
-            self.players.lean =
-                crate::play::cod4_predict::lean_from_mirror(|i| gs.configstring(i).to_vec());
+            self.players.lean = crate::play::cod4_predict::lean_from_mirror(|i| gs.configstring(i));
         }
         // Each gunner's gun as drawn: its model's two tags at the bind and
         // its weapon's column step.

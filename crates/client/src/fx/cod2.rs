@@ -570,6 +570,37 @@ mod tests {
         assert!(lit > 20, "{lit}");
     }
 
+    /// The level preload caches every effect a stock effect chains to under
+    /// the key its spawn looks it up by: playing all of them afterwards on
+    /// an empty search path, chains included, adds no cache entry.
+    #[test]
+    fn preloaded_stock_effects_chain_without_reading_a_file() {
+        use crate::fx::sim::{FxSystem, SpawnAt};
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let names: Vec<String> = fs
+            .names_with_suffix(".efx")
+            .into_iter()
+            .filter(|n| n.starts_with("fx/"))
+            .collect();
+        let mut fx = FxSystem::new();
+        fx.preload(&fs, names.iter().map(String::as_str));
+        let cached = fx.cached_paths();
+        let empty = vcod_common::pk3::Pk3Fs::empty();
+        let mut now = 1.0;
+        for n in &names {
+            fx.spawn(&empty, n, SpawnAt::Point { pos: Vec3::ZERO }, now);
+        }
+        for _ in 0..80 {
+            now += 0.05;
+            fx.step(0.05, now, None);
+            fx.spawn_chained(&empty, now);
+        }
+        let read: Vec<_> = fx.cached_paths().difference(&cached).cloned().collect();
+        assert!(read.is_empty(), "read in play: {read:?}");
+    }
+
     /// mp_downtown's snow: each `Cloud` particle draws as a cloud of
     /// flakes, never as a sprite: a 300-unit cube (`size`), 1.5-unit square
     /// flakes (`size2` under `nonUniformScale`, no `useLength`), white,

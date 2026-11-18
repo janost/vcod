@@ -386,7 +386,8 @@ impl Held {
         slots[4..].copy_from_slice(&hi);
         // A protocol without the upper words reads them 0.
         let owned = (0..4).fold(0u128, |m, i| {
-            m | u128::from(ps.field_i32(p, &format!("weapons[{i}]")) as u32) << (32 * i)
+            const WORDS: [&str; 4] = ["weapons[0]", "weapons[1]", "weapons[2]", "weapons[3]"];
+            m | u128::from(ps.field_i32(p, WORDS[i]) as u32) << (32 * i)
         });
         let count = |a: &[i16; 64], i: usize| a.get(i).copied().map_or(0, i32::from);
         let mut loaded = 0;

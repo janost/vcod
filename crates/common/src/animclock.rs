@@ -114,9 +114,19 @@ impl Play {
     }
 
     /// The node time after every whole frame step up to `now_ms`.
+    /// Stops early once a step returns its input bit for bit (rate 0, a
+    /// clip held at 1): step is pure, so every later step would too.
     fn time(&self, now_ms: i32) -> f32 {
         let steps = now_ms.wrapping_sub(self.time_ms).max(0) / STEP_MS;
-        (0..steps).fold(self.time_t, |t, _| self.step(t))
+        let mut t = self.time_t;
+        for _ in 0..steps {
+            let next = self.step(t);
+            if next.to_bits() == t.to_bits() {
+                break;
+            }
+            t = next;
+        }
+        t
     }
 
     /// One frame of the leaf arm of 1.5b's 0x80c84f0 (UO 0x80bd884): the
@@ -1379,6 +1389,25 @@ fn spread_phase_15_cgame(now_ms: i32, client_num: i32, period: i32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A default clock settled at the end of time takes no step walk: rate
+    /// 0 leaves the time where it is on the first step.
+    #[test]
+    fn a_default_play_settles_at_once() {
+        let mut p = Play::default();
+        let start = std::time::Instant::now();
+        p.settle(i32::MAX);
+        assert_eq!(p.time_t.to_bits(), 0f32.to_bits());
+        assert_eq!(p.time_ms, i32::MAX / STEP_MS * STEP_MS);
+        let held = Play {
+            rate: 1.0,
+            frequency: 1.0,
+            time_t: 1.0,
+            ..Play::default()
+        };
+        assert_eq!(held.time(i32::MAX), 1.0);
+        assert!(start.elapsed() < std::time::Duration::from_millis(50));
+    }
 
     /// `cod2_lnxded`'s rates for `pb_combatrun_left_loop` (`moveSpeed`
     /// 0x43363ead) off three snapped steps of 50 ms, read under gdb at the

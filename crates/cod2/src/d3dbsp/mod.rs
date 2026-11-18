@@ -9,7 +9,7 @@ mod brushtree;
 pub use brushtree::{BrushBox, BrushNode, BrushTree, partition_brushes};
 pub use vcod_common::clipmap::{CollAabbTree, CollBorder, CollPartition, CollTri};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use glam::{Vec2, Vec3};
 
 /// `IBSP`.
@@ -922,13 +922,18 @@ impl D3dBsp {
                 t.child_count
             );
         }
+        let sizes = self.aabb_subtree_sizes();
         for (i, c) in self.cells.iter().enumerate() {
             ensure!(
                 index_ok(c.first_aabb_tree as i64, self.aabb_trees.len()),
                 "cell {i}: aabb tree {} out of range",
                 c.first_aabb_tree
             );
-            self.aabb_tree_size(c.first_aabb_tree as usize)?;
+            ensure!(
+                sizes[c.first_aabb_tree as usize].is_some(),
+                "cell {i}: aabb tree walk from {} leaves lump 22",
+                c.first_aabb_tree
+            );
             ensure!(
                 run_ok(
                     c.first_portal as i64,
@@ -1136,30 +1141,24 @@ impl D3dBsp {
         Ok(())
     }
 
-    /// Nodes in the render AABB tree rooted at `root`, walked in preorder
-    /// (children follow their parent back to back), or an error when the
-    /// walk leaves lump 22.
-    pub fn aabb_tree_size(&self, root: usize) -> Result<usize> {
-        // Explicit stack: (node, children left to walk).
-        let mut next = root;
-        let mut pending = vec![1usize];
-        while let Some(left) = pending.last_mut() {
-            if *left == 0 {
-                pending.pop();
-                continue;
+    /// The size of the render AABB subtree at every node of lump 22, walked
+    /// in preorder (children follow their parent back to back), `None`
+    /// where the walk leaves the lump. One pass from the end: a walk per
+    /// cell is quadratic when the cells share one tree.
+    fn aabb_subtree_sizes(&self) -> Vec<Option<usize>> {
+        let n = self.aabb_trees.len();
+        let mut sizes = vec![None; n];
+        for i in (0..n).rev() {
+            let mut next = Some(i + 1);
+            for _ in 0..self.aabb_trees[i].child_count.max(0) {
+                next = next.and_then(|j| Some(j + sizes.get(j).copied().flatten()?));
+                if next.is_none() {
+                    break;
+                }
             }
-            *left -= 1;
-            let Some(t) = self.aabb_trees.get(next) else {
-                bail!("aabb tree walk from {root} leaves lump 22 at {next}");
-            };
-            next += 1;
-            // Each push follows a visited node, so the stack stays under
-            // the lump's length.
-            if t.child_count > 0 {
-                pending.push(t.child_count as usize);
-            }
+            sizes[i] = next.map(|j| j - i);
         }
-        Ok(next - root)
+        sizes
     }
 
     /// The bounds the axial sides give brush `i` and its runtime contents

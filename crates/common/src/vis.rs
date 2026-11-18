@@ -885,7 +885,9 @@ impl WorldVis {
         let c = self.cells[cell];
         self.mark_cell(cell, frustum, &mut w.vis);
         q.set_ancestors(parent, true);
-        let volumes = self.occluder_volumes(cell, w.eye);
+        let volumes = w.volumes[cell]
+            .get_or_insert_with(|| std::rc::Rc::new(self.occluder_volumes(cell, w.eye)))
+            .clone();
         w.vis.stats.occluders += volumes.len();
         let near = w.camera.planes.get(4).copied();
         // a portal too small on screen to queue its cell's portals: the

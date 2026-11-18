@@ -113,10 +113,10 @@ impl Interner {
     /// Interns by case-folded text: every spelling of one word gets the
     /// atom the first spelling seen was given.
     pub fn intern_folded(&mut self, s: &str) -> Atom {
-        let folded = s.to_ascii_lowercase();
-        if let Some(&a) = self.by_folded.get(&folded) {
+        if let Some(a) = self.get_folded(s) {
             return a;
         }
+        let folded = s.to_ascii_lowercase();
         let a = Atom(self.text.len() as u32);
         self.bytes += s.len();
         self.text.push(s.to_string());
@@ -135,8 +135,13 @@ impl Interner {
     }
 
     /// Looks up any spelling of a folded key without interning it.
+    /// Allocates only for a spelling with an uppercase letter.
     pub fn get_folded(&self, s: &str) -> Option<Atom> {
-        self.by_folded.get(&s.to_ascii_lowercase()).copied()
+        if s.bytes().any(|c| c.is_ascii_uppercase()) {
+            self.by_folded.get(&s.to_ascii_lowercase()).copied()
+        } else {
+            self.by_folded.get(s).copied()
+        }
     }
 
     /// The spelling first interned for this atom, verbatim.

@@ -1324,13 +1324,18 @@ impl Cod4Session {
             self.live_frame(&new)?;
         }
         self.walk();
-        // A live connection keeps the snapshots it still draws, deltas and
-        // walks: with every one kept the soak's client grew 100 to 250 MB a
-        // three-minute level (cod4-map-sweep.md, "The soak").
-        if let Source::Live { conn, .. } = &mut self.source
-            && conn.client.snapshots.len() >= 2 * self.keep_snapshots
+        // A live connection and a demo keep the snapshots they still draw,
+        // delta and walk: with every one kept the soak's client grew 100 to
+        // 250 MB a three-minute level (cod4-map-sweep.md, "The soak").
+        let client = match &mut self.source {
+            Source::Live { conn, .. } => Some(&mut conn.client),
+            Source::Demo(d) => Some(&mut d.client),
+            Source::Capture { .. } => None,
+        };
+        if let Some(c) = client
+            && c.snapshots.len() >= 2 * self.keep_snapshots
         {
-            let n = conn.client.shed(self.keep_snapshots);
+            let n = c.shed(self.keep_snapshots);
             self.walked = self.walked.saturating_sub(n);
         }
         Ok(())
@@ -1621,21 +1626,23 @@ impl Cod4Session {
 
     /// Esc with no script menu up: the server's `g_scriptMainMenu`.
     pub fn open_main_menu(&mut self) {
-        if let Some(gs) = self.gamestate().cloned() {
-            for a in self.menus.open_main(&gs) {
-                self.command(&a);
-            }
+        // The source's gamestate borrowed beside the menus, not cloned.
+        let Some(gs) = &source_client(&self.source).gamestate else {
+            return;
+        };
+        for a in self.menus.open_main(gs) {
+            self.command(&a);
         }
     }
 
     /// A key in the open script menu, its answers sent; false when the
     /// menu does nothing with it (or none is up).
     pub fn menu_key(&mut self, key: crate::play::cod4_menus::MenuKey) -> bool {
-        let Some(gs) = self.gamestate().cloned() else {
+        let Some(gs) = &source_client(&self.source).gamestate else {
             return false;
         };
         let mut out = Vec::new();
-        let taken = self.menus.key(key, &gs, &mut out);
+        let taken = self.menus.key(key, gs, &mut out);
         for a in out {
             self.command(&a);
         }
@@ -1645,13 +1652,13 @@ impl Cod4Session {
     /// The mouse over the open script menu: raw counts `d` or a position
     /// `at` on a `size` window, or (both `None`) MOUSE1; its answers sent.
     pub fn menu_mouse(&mut self, d: Option<[f32; 2]>, at: Option<[f32; 2]>, size: (f32, f32)) {
-        let Some(gs) = self.gamestate().cloned() else {
+        let Some(gs) = &source_client(&self.source).gamestate else {
             return;
         };
         let out = if d.is_none() && at.is_none() {
-            self.menus.click(size, &gs)
+            self.menus.click(size, gs)
         } else {
-            self.menus.mouse_move(d, at, size, &gs)
+            self.menus.mouse_move(d, at, size, gs)
         };
         for a in out {
             self.command(&a);
@@ -1885,7 +1892,7 @@ impl Cod4Session {
     #[cfg(test)]
     fn source_commands(&self) -> usize {
         match &self.source {
-            Source::Live { conn, .. } => conn.commands().len(),
+            Source::Live { conn, .. } => conn.reliable_sequence() as usize,
             _ => 0,
         }
     }
@@ -2328,8 +2335,8 @@ impl Cod4Session {
                 let rules = vcod_cod4::pmove::Rules {
                     // The server's slowed walk under a concussion
                     // (cod4-combat.md 10.8).
-                    shock_slows: w.shock_slows(|i| gs.configstring(i).to_vec()),
-                    ..cod4_predict::rules_from_mirror(|i| gs.configstring(i).to_vec())
+                    shock_slows: w.shock_slows(|i| gs.configstring(i)),
+                    ..cod4_predict::rules_from_mirror(|i| gs.configstring(i))
                 };
                 let weapon = |n: u32| {
                     weapon_name(&weapons, n)
@@ -2429,9 +2436,12 @@ impl Cod4Session {
             let other = u("otherFlags");
             self.kick.check_respawn(u("clientNum"), new.ps.stats[4]);
             self.kick.step(render_time, def.as_ref(), frac, other);
-            let heights = {
-                let r = cod4_predict::rules_from_mirror(|i| gs.configstring(i).to_vec());
+            // Read only on a frame with a new event to land.
+            let heights = if self.fired.len() > self.kick_seen {
+                let r = cod4_predict::rules_from_mirror(|i| gs.configstring(i));
                 (r.fall_damage_min_height, r.fall_damage_max_height)
+            } else {
+                Default::default()
             };
             for fd in self.fired.iter().skip(self.kick_seen) {
                 if fd.entity.is_some() {
@@ -6713,6 +6723,45 @@ pub(crate) mod tests {
         );
         assert!(!a.is_empty(), "no event in the capture");
         assert_eq!(a, b);
+    }
+
+    /// A demo sheds its old snapshots as a live session does and plays the
+    /// same events to its end.
+    #[test]
+    fn cod4_demo_sheds_old_snapshots_and_plays_on() {
+        let (retail, _, _) = capture_demo("play-1.7-spec.txt");
+        let play = |keep: Option<usize>| {
+            let mut d = Cod4Session::play_demo(retail.clone(), false).unwrap();
+            if let Some(k) = keep {
+                d.keep_snapshots = k;
+            }
+            let (mut fired, mut most, mut now) = (Vec::new(), 0, 0.0);
+            while !d.demo_over() && now < 600_000.0 {
+                d.step(now).unwrap();
+                d.take_commands();
+                fired.extend(
+                    d.take_fired()
+                        .iter()
+                        .map(|f| (f.name, f.entity, f.server_time)),
+                );
+                most = most.max(d.client().snapshots.len());
+                now += 16.0;
+            }
+            assert!(d.demo_over());
+            (
+                fired,
+                most,
+                d.client().shed_count,
+                d.client().total_snapshots(),
+            )
+        };
+        let (all, _, none_shed, total) = play(None);
+        let (shed, most, shed_count, total_shed) = play(Some(40));
+        assert_eq!(none_shed, 0);
+        assert!(total > 2 * 40, "{total} snapshots");
+        assert!(shed_count > 0 && most < 2 * 40, "held {most}");
+        assert_eq!(total_shed, total);
+        assert_eq!(shed, all);
     }
 
     /// `rcon` from a client joined to vcod-server (cod4-handshake.md 14.2):

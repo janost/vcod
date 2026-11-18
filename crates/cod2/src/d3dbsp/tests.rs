@@ -336,6 +336,22 @@ fn validation_errors() {
     assert!(e.contains("leaves lump 22"), "{e}");
 }
 
+/// Cells that all name one deep render AABB tree validate in one pass over
+/// it, not one walk per cell.
+#[test]
+fn cells_sharing_one_aabb_tree_validate_in_linear_time() {
+    let n = 30_000u32;
+    let tree: Vec<u32> = (0..n).flat_map(|i| [0, 0, u32::from(i + 1 < n)]).collect();
+    let cells: Vec<u32> = (0..n).flat_map(|_| [0u32; 13]).collect();
+    let m = Map::minimal()
+        .with(lump::CELLS, le(&cells))
+        .with(lump::AABB_TREES, le(&tree));
+    let start = std::time::Instant::now();
+    let b = m.parse().unwrap();
+    assert_eq!(b.cells.len(), n as usize);
+    assert!(start.elapsed() < std::time::Duration::from_secs(1));
+}
+
 /// A node cycle, a node with two parents and a lump-34 node listed by two
 /// parents are refused at parse, before any walker follows them.
 #[test]

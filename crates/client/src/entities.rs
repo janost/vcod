@@ -122,6 +122,24 @@ fn dobj_model(ent: &EntityState, p: &Cod1Wire) -> i32 {
     }
 }
 
+/// A client's six attachment slots' netfield names.
+const ATTACH_MODELS: [&str; 6] = [
+    "attachModelIndex[0]",
+    "attachModelIndex[1]",
+    "attachModelIndex[2]",
+    "attachModelIndex[3]",
+    "attachModelIndex[4]",
+    "attachModelIndex[5]",
+];
+const ATTACH_TAGS: [&str; 6] = [
+    "attachTagIndex[0]",
+    "attachTagIndex[1]",
+    "attachTagIndex[2]",
+    "attachTagIndex[3]",
+    "attachTagIndex[4]",
+    "attachTagIndex[5]",
+];
+
 pub fn resolve_visual(
     ent: &EntityState,
     clients: &BTreeMap<u32, ClientState>,
@@ -145,15 +163,15 @@ pub fn resolve_visual(
                 return EntityVisual::None; // spectators have no body
             };
             let mut attachments = Vec::new();
-            for i in 0..6 {
-                let am = client.field_i32(p, &format!("attachModelIndex[{i}]"));
+            for (model_field, tag_field) in ATTACH_MODELS.into_iter().zip(ATTACH_TAGS) {
+                let am = client.field_i32(p, model_field);
                 if am <= 0 {
                     continue;
                 }
                 let Some(m) = model_name(cs(models + am as usize)) else {
                     continue;
                 };
-                let at = client.field_i32(p, &format!("attachTagIndex[{i}]"));
+                let at = client.field_i32(p, tag_field);
                 let tag = (at > 0)
                     .then(|| cs(tags + at as usize))
                     .filter(|t| !t.is_empty())

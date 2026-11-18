@@ -577,27 +577,46 @@ impl Browser {
 
     /// The servers the list shows, in display order: those that answered
     /// (every favourite, answered or not) that pass the filter.
-    pub fn rows(&self) -> Vec<&Server> {
+    /// The servers the filter keeps, in the list's order.
+    fn filtered(&self) -> impl Iterator<Item = &Server> {
         let all = self.source == Source::Favorites;
         let blank = ServerInfo::default();
-        let mut rows: Vec<&Server> = self
-            .list()
-            .iter()
-            .filter(|s| {
-                (all || s.info.is_some()) && self.filter.passes(s.info.as_ref().unwrap_or(&blank))
-            })
-            .collect();
-        if let Some(&col) = self.sort.and_then(|c| self.columns.get(c)) {
-            rows.sort_by(|a, b| {
-                let ia = a.info.as_ref().unwrap_or(&blank);
-                let ib = b.info.as_ref().unwrap_or(&blank);
+        self.list().iter().filter(move |s| {
+            (all || s.info.is_some()) && self.filter.passes(s.info.as_ref().unwrap_or(&blank))
+        })
+    }
+
+    /// `rows().len()`, without the sort.
+    pub fn row_count(&self) -> usize {
+        self.filtered().count()
+    }
+
+    /// The row for `addr`, without the sort.
+    pub fn row(&self, addr: SocketAddrV4) -> Option<&Server> {
+        self.filtered().find(|s| s.addr == addr)
+    }
+
+    pub fn rows(&self) -> Vec<&Server> {
+        let blank = ServerInfo::default();
+        let mut rows: Vec<&Server> = self.filtered().collect();
+        let Some(&col) = self.sort.and_then(|c| self.columns.get(c)) else {
+            return rows;
+        };
+        fn of<'a>(s: &'a Server, blank: &'a ServerInfo) -> &'a ServerInfo {
+            s.info.as_ref().unwrap_or(blank)
+        }
+        // A string key is built once a row, not twice a comparison; both
+        // sorts are stable, so ties keep the list's order either way.
+        match col {
+            Column::Name => {
+                rows.sort_by_cached_key(|s| strip(&of(s, &blank).hostname).to_lowercase())
+            }
+            Column::Map => rows.sort_by_cached_key(|s| of(s, &blank).mapname.to_lowercase()),
+            Column::GameType => rows.sort_by_cached_key(|s| strip(&of(s, &blank).gametype)),
+            _ => rows.sort_by(|a, b| {
+                let (ia, ib) = (of(a, &blank), of(b, &blank));
                 match col {
-                    Column::Name => strip(&ia.hostname)
-                        .to_lowercase()
-                        .cmp(&strip(&ib.hostname).to_lowercase()),
-                    Column::Map => ia.mapname.to_lowercase().cmp(&ib.mapname.to_lowercase()),
                     Column::Players => ib.clients.cmp(&ia.clients),
-                    Column::GameType => strip(&ia.gametype).cmp(&strip(&ib.gametype)),
                     Column::Ping => a.ping.cmp(&b.ping),
                     // 1.5's `LAN_CompareServers` (CoDMP.exe 0x419c00) keys 1, 6, 7;
                     // an unknown `hw` (0) after every known one (0x419c4d).
@@ -612,9 +631,11 @@ impl Browser {
                     Column::Voice => ia.voice.cmp(&ib.voice),
                     Column::Pure => ia.pure.cmp(&ib.pure),
                     Column::Mod => ia.modded.cmp(&ib.modded),
-                    Column::Password => std::cmp::Ordering::Equal,
+                    Column::Name | Column::Map | Column::GameType | Column::Password => {
+                        std::cmp::Ordering::Equal
+                    }
                 }
-            });
+            }),
         }
         rows
     }
