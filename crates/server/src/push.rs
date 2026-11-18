@@ -630,15 +630,9 @@ mod tests {
     #[test]
     fn on_15_and_uo_a_body_whose_box_is_under_the_slab_stalls_it() {
         // A UO install's `main/` is 1.5's, so both run there.
-        let fs_15 = || {
-            let fs = vcod_common::testing::game_fs()?;
-            let p = crate::server::install_protocol(&fs);
-            (p.transport.version == vcod_common::net::protocol::PROTOCOL_V6.transport.version)
-                .then_some(fs)
-        };
         let cases = [
             (
-                fs_15(),
+                vcod_common::testing::game_fs_15(),
                 include_str!("../tests/fixtures/movers/mp_carentan-dm-pushcand-1.5.txt"),
             ),
             (

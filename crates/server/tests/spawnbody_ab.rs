@@ -258,10 +258,7 @@ fn a_spawn_into_a_player_runs_null_on_retail() {
 
 #[test]
 fn a_spawn_into_a_player_walks_out_of_him_as_on_15() {
-    let fs = vcod_common::testing::game_fs().filter(|fs| {
-        vcod_server::server::install_protocol(fs).transport.version
-            == vcod_common::net::protocol::PROTOCOL_V6.transport.version
-    });
+    let fs = vcod_common::testing::game_fs_15();
     check(fs, RETAIL_15);
 }
 
@@ -274,10 +271,7 @@ fn a_spawn_into_a_player_walks_out_of_him_as_on_uo() {
 /// now stands and no longer where he was (player-clip doc 13.5).
 #[test]
 fn a_spawns_think_meets_a_player_where_the_script_just_moved_him_on_15() {
-    let fs = vcod_common::testing::game_fs().filter(|fs| {
-        vcod_server::server::install_protocol(fs).transport.version
-            == vcod_common::net::protocol::PROTOCOL_V6.transport.version
-    });
+    let fs = vcod_common::testing::game_fs_15();
     check(fs, MOVED_15);
 }
 

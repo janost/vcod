@@ -502,15 +502,9 @@ fn two_gunners_in_each_others_arc_match_retail() {
     check(fs, &c, NEAR_15, &[]);
 }
 
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    let v6 = vcod_common::net::protocol::PROTOCOL_V6.transport.version;
-    (vcod_server::server::install_protocol(&fs).transport.version == v6).then_some(fs)
-}
-
 #[test]
 fn two_gunners_in_each_others_arc_match_15b() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     let c = Case {

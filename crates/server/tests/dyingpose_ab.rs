@@ -214,14 +214,6 @@ fn retail_log(fixture: &str) -> Vec<String> {
         .collect()
 }
 
-/// The 1.5b install's paks, `None` elsewhere (a UO install's `main/` is
-/// 1.5's, so these run there too).
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
-        .then_some(fs)
-}
-
 /// Every frame's bones within [`POSE_NEAR`] of retail's `fixture`.
 fn check_pose(fs: vcod_common::pk3::Pk3Fs, fixture: &str, seed: u64) {
     let retail = retail_log(fixture);
@@ -325,7 +317,7 @@ fn a_dying_body_poses_like_retail() {
 /// 1.5b's: the same hook and an ease with no dead test (16.4).
 #[test]
 fn a_dying_body_poses_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check_pose(fs, FIXTURE_15, SEED_15);
@@ -358,7 +350,7 @@ fn a_sound_played_on_a_corpse_rides_its_ring() {
 
 #[test]
 fn a_sound_played_on_a_corpse_rides_its_ring_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check_corpse(fs, &PROTOCOL_V6, "dyingpose-1.5", SEED_15);
@@ -383,7 +375,7 @@ fn a_death_runs_its_timers_down_like_retail() {
 
 #[test]
 fn a_death_runs_its_timers_down_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check_timers(fs, &PROTOCOL_V6, "dyingpose-1.5", SEED_15);
@@ -542,7 +534,7 @@ fn a_blast_corpse_keeps_its_fresh_flag_like_retail() {
 
 #[test]
 fn a_blast_corpse_keeps_its_fresh_flag_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check_blast(

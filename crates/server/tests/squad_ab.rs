@@ -36,13 +36,9 @@ fn escaped(letter: &str, text: &str) -> String {
 
 #[test]
 fn squad_says_reach_retail_s_listeners_on_15b() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     let text = include_str!("fixtures/chat/mp_carentan-squad-1.5.txt");
     let says: Vec<(usize, &str)> = text
         .lines()

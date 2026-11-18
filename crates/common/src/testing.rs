@@ -1,7 +1,7 @@
 //! Test helpers for every crate. Always compiled because the client crate's
 //! tests call into it.
 
-use crate::net::protocol::{PROTOCOL_V1, install_protocol};
+use crate::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, Protocol, install_protocol};
 use crate::pk3::Pk3Fs;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -13,8 +13,17 @@ use std::sync::Mutex;
 pub const REQUIRE: &str = "VCOD_REQUIRE_INSTALL";
 
 /// The names [`REQUIRE`] takes: `cod1` is `COD_DIR` set, `cod11` a 1.1
-/// install there, `uo` a `uo/` beside its `main/`.
-const INSTALLS: [&str; 6] = ["cod1", "cod11", "uo", "cod2", "cod4", "cod4_lnxded"];
+/// install there, `cod15` a 1.5 `main/` (a UO install's too), `uo` a `uo/`
+/// beside its `main/`.
+const INSTALLS: [&str; 7] = [
+    "cod1",
+    "cod11",
+    "cod15",
+    "uo",
+    "cod2",
+    "cod4",
+    "cod4_lnxded",
+];
 
 /// What an install env var names.
 #[derive(Debug, PartialEq)]
@@ -120,16 +129,19 @@ pub fn cod2_fs() -> Option<Pk3Fs> {
 /// `fs` when it is 1.1's install, else `None` (UO's `main/` is 1.5's,
 /// `install_protocol`).
 fn only_11(fs: Option<Pk3Fs>) -> Option<Pk3Fs> {
-    let is_11 =
-        |fs: &Pk3Fs| install_protocol(fs).transport.version == PROTOCOL_V1.transport.version;
+    only(fs, &PROTOCOL_V1, "cod11", "COD_DIR is not a 1.1 install")
+}
+
+/// `fs` when its paks are `p`'s version's, else a skip under `name`.
+fn only(fs: Option<Pk3Fs>, p: &Protocol, name: &str, other: &str) -> Option<Pk3Fs> {
     match fs {
-        Some(fs) if is_11(&fs) => Some(fs),
+        Some(fs) if install_protocol(&fs).transport.version == p.transport.version => Some(fs),
         Some(_) => {
-            skip("cod11", "COD_DIR is not a 1.1 install");
+            skip(name, other);
             None
         }
         None => {
-            skip("cod11", "COD_DIR is unset");
+            skip(name, "COD_DIR is unset");
             None
         }
     }
@@ -140,6 +152,17 @@ fn only_11(fs: Option<Pk3Fs>) -> Option<Pk3Fs> {
 /// paks from here.
 pub fn game_fs_11() -> Option<Pk3Fs> {
     only_11(game_fs())
+}
+
+/// [`game_fs`] when its `main/` is 1.5's, a UO install's included, `None`
+/// at a 1.1 install: the 1.5 gates take their paks from here.
+pub fn game_fs_15() -> Option<Pk3Fs> {
+    only(
+        game_fs(),
+        &PROTOCOL_V6,
+        "cod15",
+        "COD_DIR is not a 1.5 install",
+    )
 }
 
 /// [`game_fs`] with the install's stock paks alone (`--vanilla`,

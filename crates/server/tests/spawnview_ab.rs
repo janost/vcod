@@ -15,7 +15,6 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::NetClient;
 use vcod_common::net::msg::NULL_USERCMD;
-use vcod_common::net::protocol::PROTOCOL_V6;
 
 const SCRIPT: &str =
     include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_spawnview.gsc");
@@ -75,13 +74,9 @@ fn a_spawned_player_reads_as_retail_11() {
 
 #[test]
 fn a_spawned_player_reads_as_retail_15() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     check(fs, include_str!("fixtures/spawnview/mp_carentan-1.5.txt"));
 }
 

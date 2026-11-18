@@ -2737,12 +2737,7 @@ fn the_spawn_capture_matches_retail_on_mp_carentan() {
 fn the_spawn_capture_matches_15b_on_mp_carentan() {
     spawn_gate(
         "spawn-15",
-        || {
-            vcod_common::testing::game_fs().filter(|fs| {
-                vcod_server::server::install_protocol(fs).transport.version
-                    == PROTOCOL_V6.transport.version
-            })
-        },
+        vcod_common::testing::game_fs_15,
         &PROTOCOL_V6,
         &[],
     );
@@ -2824,12 +2819,7 @@ fn the_gunner_grid_capture_matches_retail_on_mp_carentan() {
 fn the_gunner_grid_capture_matches_15b_on_mp_carentan() {
     gungrid_gate(
         "gungrid-15",
-        || {
-            vcod_common::testing::game_fs().filter(|fs| {
-                vcod_server::server::install_protocol(fs).transport.version
-                    == PROTOCOL_V6.transport.version
-            })
-        },
+        vcod_common::testing::game_fs_15,
         &PROTOCOL_V6,
         GUNGRID_15,
         &[],
@@ -2886,12 +2876,7 @@ fn the_hitgrid_capture_matches_retail_on_mp_carentan() {
 fn the_hitgrid_capture_matches_15b_on_mp_carentan() {
     hit_gate(
         "hitgrid-15",
-        || {
-            vcod_common::testing::game_fs().filter(|fs| {
-                vcod_server::server::install_protocol(fs).transport.version
-                    == PROTOCOL_V6.transport.version
-            })
-        },
+        vcod_common::testing::game_fs_15,
         &PROTOCOL_V6,
         HITGRID,
         &[],
@@ -3078,13 +3063,9 @@ fn damage_key(line: &str) -> Option<String> {
 /// where he was put, and the placement takes him back once it runs again.
 #[test]
 fn a_15_match_timeout_holds_the_gunner_where_he_stands() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     let cvars = [
         ("g_timeoutsAllowed", "1"),
         ("g_timeoutLength", "1000"),

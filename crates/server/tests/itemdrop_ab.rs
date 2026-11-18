@@ -114,10 +114,7 @@ impl Patch {
             return vcod_common::testing::uo_fs();
         }
         // A UO install's `main/` is 1.5's.
-        vcod_common::testing::game_fs().filter(|fs| {
-            vcod_server::server::install_protocol(fs).transport.version
-                == PROTOCOL_V6.transport.version
-        })
+        vcod_common::testing::game_fs_15()
     }
 
     /// `G_BounceItem`'s lift, `0.5 + 0.5 * u`: (0, 0.5] on 1.1d, [0.5, 1)

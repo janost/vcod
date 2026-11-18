@@ -808,15 +808,9 @@ fn mover_script_reads_match_retail() {
 
 #[test]
 fn mover_script_reads_match_retail_on_1_5() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
-        eprintln!("COD_DIR unset or has no main/: skipping");
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        eprintln!("COD_DIR is not a 1.5 install: skipping");
-        return;
-    }
     mover_reads(&PROTOCOL_V6, fs, MOVERREADS_PROBE, MOVERREADS_15);
 }
 
@@ -861,15 +855,9 @@ fn mover_ramps_match_retail() {
 
 #[test]
 fn mover_ramps_match_retail_on_1_5() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
-        eprintln!("COD_DIR unset or has no main/: skipping");
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        eprintln!("COD_DIR is not a 1.5 install: skipping");
-        return;
-    }
     mover_reads(&PROTOCOL_V6, fs, MOVERRAMP_PROBE, MOVERRAMP_15);
 }
 

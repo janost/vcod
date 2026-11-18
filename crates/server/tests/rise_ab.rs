@@ -275,14 +275,6 @@ fn check(fs: Option<vcod_common::pk3::Pk3Fs>, fixture: &str, map: &str, weapon: 
     );
 }
 
-/// The 1.5b install's paks, `None` elsewhere (a UO install's `main/` is
-/// 1.5's, so this runs there too).
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    let v6 = vcod_common::net::protocol::PROTOCOL_V6.transport.version;
-    (vcod_server::server::install_protocol(&fs).transport.version == v6).then_some(fs)
-}
-
 #[test]
 fn a_rise_under_a_low_ceiling_is_refused_as_on_retail() {
     let fs = vcod_common::testing::game_fs_11();
@@ -297,12 +289,22 @@ fn a_climber_s_stance_keys_are_stripped_as_on_retail() {
 
 #[test]
 fn a_rise_under_a_low_ceiling_is_refused_as_on_15() {
-    check(fs_15(), CARENTAN_15, "mp_carentan", "m1carbine_mp");
+    check(
+        vcod_common::testing::game_fs_15(),
+        CARENTAN_15,
+        "mp_carentan",
+        "m1carbine_mp",
+    );
 }
 
 #[test]
 fn a_climber_s_stance_keys_are_stripped_as_on_15() {
-    check(fs_15(), SHIP_15, "mp_ship", "enfield_mp");
+    check(
+        vcod_common::testing::game_fs_15(),
+        SHIP_15,
+        "mp_ship",
+        "enfield_mp",
+    );
 }
 
 #[test]

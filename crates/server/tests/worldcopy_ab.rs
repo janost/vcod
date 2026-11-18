@@ -39,7 +39,6 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::protocol::PROTOCOL_V6;
 use vcod_common::net::{NetClient, NetEvent};
 use vcod_common::pk3::Pk3Fs;
 
@@ -269,7 +268,14 @@ fn ours_tilt_15() -> Option<&'static Ours> {
     static RUN: std::sync::OnceLock<Option<Ours>> = std::sync::OnceLock::new();
     RUN.get_or_init(|| {
         let (map, name) = ("mp_harbor", "probe_tiltslab");
-        run_ours_on(fs_15, map, name, PROBE_TILT, TILT_15, true)
+        run_ours_on(
+            vcod_common::testing::game_fs_15,
+            map,
+            name,
+            PROBE_TILT,
+            TILT_15,
+            true,
+        )
     })
     .as_ref()
 }
@@ -296,7 +302,14 @@ fn ours_roll_15() -> Option<&'static Ours> {
     static RUN: std::sync::OnceLock<Option<Ours>> = std::sync::OnceLock::new();
     RUN.get_or_init(|| {
         let (map, name) = ("mp_depot", "probe_rollramp");
-        run_ours_on(fs_15, map, name, PROBE_ROLL, ROLL_15, true)
+        run_ours_on(
+            vcod_common::testing::game_fs_15,
+            map,
+            name,
+            PROBE_ROLL,
+            ROLL_15,
+            true,
+        )
     })
     .as_ref()
 }
@@ -732,7 +745,11 @@ fn a_pitched_copy_blocks_its_rider_like_retail() {
 /// the carry (cod11-movers.md 21, "The carry's rounding").
 #[test]
 fn a_pitched_copy_blocks_its_rider_like_retail_on_15() {
-    pitched_matches(SERVER3_15, run3_on(fs_15, SERVER3_15), LIFT_15);
+    pitched_matches(
+        SERVER3_15,
+        run3_on(vcod_common::testing::game_fs_15, SERVER3_15),
+        LIFT_15,
+    );
 }
 
 #[test]
@@ -742,14 +759,6 @@ fn a_pitched_copy_blocks_its_rider_like_retail_on_uo() {
         run3_on(vcod_common::testing::uo_fs, SERVER3_UO),
         LIFT_15,
     );
-}
-
-/// The 1.5b install's paks, `None` elsewhere (a UO install's `main/` is
-/// 1.5's, so this runs there too).
-fn fs_15() -> Option<Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
-        .then_some(fs)
 }
 
 fn run3_on(fs: fn() -> Option<Pk3Fs>, fixture: &str) -> Option<Ours> {

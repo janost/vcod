@@ -34,7 +34,6 @@ use common::{ADDR, ADDR_B, ADDR_C, ClientEnd, FRAME_MS, Join, ProbeHold, Queues,
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::protocol::PROTOCOL_V6;
 use vcod_common::net::{NetClient, NetEvent};
 
 const MAP: &str = "mp_carentan";
@@ -247,14 +246,6 @@ fn check(fs: fn() -> Option<vcod_common::pk3::Pk3Fs>, fixture: &str) {
     assert_eq!(ours, retail, "\nours:\n{}", ours.join("\n"));
 }
 
-/// The 1.5b install's paks, `None` elsewhere (a UO install's `main/` is
-/// 1.5's, so this runs there too).
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
-        .then_some(fs)
-}
-
 #[test]
 fn a_push_lists_only_players_its_trace_names_the_pusher_for() {
     check(vcod_common::testing::game_fs_11, FIXTURE);
@@ -262,7 +253,7 @@ fn a_push_lists_only_players_its_trace_names_the_pusher_for() {
 
 #[test]
 fn a_push_lists_only_players_its_trace_names_the_pusher_for_on_15() {
-    check(fs_15, FIXTURE_15);
+    check(vcod_common::testing::game_fs_15, FIXTURE_15);
 }
 
 #[test]

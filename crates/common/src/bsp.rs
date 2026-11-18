@@ -1559,7 +1559,7 @@ mod tests {
             (LUMP_MODELS, &[0u8; 48]),
         ]);
         assert!(parse(&good).is_ok() && tree.nodes.len() == 1);
-        let frustum = Frustum::from_view_proj(glam::Mat4::perspective_rh(1.2, 1.0, 1.0, 4096.0));
+        let frustum = Frustum::from_view_proj(glam::Mat4::IDENTITY);
         crate::testing::fuzz("ibsp 59", &good, 1500, |b| {
             let Ok(bsp) = parse(b) else {
                 return;

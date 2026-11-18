@@ -585,15 +585,6 @@ fn a_swing_at_the_floor_raises_the_miss() {
     }
 }
 
-/// The install's `main/` when it is 1.5's (a UO install's is): the 1.5b
-/// fixtures' paks.
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    vcod_common::testing::game_fs().filter(|fs| {
-        vcod_server::server::install_protocol(fs).transport.version
-            == vcod_common::net::protocol::PROTOCOL_V6.transport.version
-    })
-}
-
 /// The shooter on mp_harbor's south sea wall over open water, looking
 /// along yaw 90 and `pitch` degrees down (`probe_skyshot`'s spot part),
 /// his rockets leaving with `rocket_deltas`.
@@ -673,7 +664,7 @@ fn a_frag_into_water_splashes() {
             include_str!("fixtures/missiles/mp_harbor-water-frag.txt"),
         ),
         (
-            fs_15(),
+            vcod_common::testing::game_fs_15(),
             include_str!("fixtures/missiles/mp_harbor-water-frag-15.txt"),
         ),
         (
@@ -730,7 +721,7 @@ fn a_rocket_into_water_splashes() {
             "panzerfaust_mp",
         ),
         (
-            fs_15(),
+            vcod_common::testing::game_fs_15(),
             include_str!("fixtures/missiles/mp_harbor-water-rocket-15.txt"),
             "panzerfaust_mp",
         ),
@@ -838,7 +829,7 @@ fn a_rocket_fired_inside_a_kerb_brush_goes_off_at_once() {
             "panzerfaust_mp",
         ),
         (
-            fs_15(),
+            vcod_common::testing::game_fs_15(),
             include_str!("fixtures/missiles/mp_carentan-kerb-rocket-15.txt"),
             "panzerfaust_mp",
         ),

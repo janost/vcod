@@ -26,8 +26,9 @@ The helpers in `vcod_common::testing` (and `vcod_cod4::testing`) read
   path without `main/` (`zone/` for CoD4), or a search path that opens no
   paks: the helper panics with the variable and the path.
 - `VCOD_REQUIRE_INSTALL=<names>` makes a skip panic for each install it
-  names: `cod1` (`COD_DIR` set), `cod11` (a 1.1 install there), `uo`
-  (`uo/` beside `main/`), `cod2`, `cod4`, `cod4_lnxded`. A gate run sets
+  names: `cod1` (`COD_DIR` set), `cod11` (a 1.1 install there), `cod15`
+  (a 1.5 `main/`, a UO install's included), `uo` (`uo/` beside `main/`),
+  `cod2`, `cod4`, `cod4_lnxded`. A gate run sets
   the names of the installs it means to test, so a wrong env cannot pass
   with no pak test run: `cod1,cod11` at 1.1, `cod1,uo` at UO, plus `cod2`
   and `cod4` when those are set. An unknown name panics.
@@ -38,6 +39,8 @@ Pick the fixture helper by what the test asserts:
   `COD_DIR`, so the test passes vacuously in CI.
 - Asserts 1.1's assets or replays a 1.1 capture: `testing::game_fs_11()`,
   `None` at a 1.5 or UO install.
+- Replays a 1.5b capture: `testing::game_fs_15()`, the install's `main/`
+  when it is 1.5's (a UO install's is), `None` at 1.1.
 - A UO test: `testing::uo_fs()`.
 - Asserts what the stock paks hold (menus, game types, a census):
   `testing::stock_fs()` / `stock_fs_11()`, the `--vanilla` search path, so a

@@ -87,13 +87,9 @@ fn the_model_bounds_reject_on_11() {
 
 #[test]
 fn the_model_bounds_reject_on_15() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     compare(
         include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-bounds-1.5.txt"),
         ours(fs, Some(&PROTOCOL_V6)),

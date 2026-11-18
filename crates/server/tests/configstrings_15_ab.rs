@@ -114,16 +114,9 @@ fn diff(retail: &BTreeMap<usize, String>, ours: &BTreeMap<usize, String>, skip: 
     );
 }
 
-/// The 1.5 install, `None` at any other.
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
-        .then_some(fs)
-}
-
 #[test]
 fn the_configstring_table_matches_15b_on_mp_carentan() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     diff(&retail(), &ours(fs), &[]);
@@ -135,7 +128,7 @@ fn the_configstring_table_matches_15b_on_mp_carentan() {
 /// `scr_motd` (186/250). 1, which lists the capture's extra pak, stays out.
 #[test]
 fn the_configstring_table_matches_15b_with_a_motd_and_a_message() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     let path = "tests/fixtures/configstrings/mp_carentan-dm-motd-15.txt";
