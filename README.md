@@ -137,9 +137,6 @@ its sha from `VCOD_GIT_SHA`, or calls itself `unknown`.
 
 ## How I know it's right (when it is)
 
-The retail dedicated servers are the oracle. When vcod and retail disagree,
-retail wins and the disagreement goes into a research doc.
-
 - A headless probe client (`vcod --net-probe`) joins a server and records
   what it sees, with a few dozen scripted modes: shoot someone, throw a
   grenade, plant the bomb, drive a tank into another tank.
@@ -178,11 +175,11 @@ the script VM, which depends on nothing else here.
 
 ## Some numbers, for fun
 
-As of the end of October 2026:
+As of November 2026, rounded:
 
-- about 630,000 lines of Rust, for four games that shipped in less,
-- about 5,600 tests, and 91 of them replay a retail capture and refuse to
-  pass until vcod agrees with it,
+- about 700,000 lines of Rust, for four games that shipped in less,
+- about 6,000 tests, and over 90 of them replay a retail capture and refuse
+  to pass until vcod agrees with it,
 - close to a million words of protocol and research notes, four and a half
   Moby-Dicks with a worse plot, except the twist where grenade cooking
   turned out not to exist until United Offensive,
@@ -258,7 +255,8 @@ you own. The reverse engineering was done to interoperate with the game's own
 files and servers. The research notes document file formats and the network
 protocol for that purpose: layouts and addresses recovered from the
 binaries, no copied code. The projects under "Consulted, not copied" were
-read as references, and no code from them is included. The screenshots show art owned by Activision.
+read as references, and no code from them is included. The screenshots show
+art owned by Activision.
 
 Quake III Arena and Return to Castle Wolfenstein are trademarks of id
 Software. Their GPL sources, and the other ported code, are credited in

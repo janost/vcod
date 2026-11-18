@@ -64,16 +64,17 @@ still missing against retail, and what vcod adds that retail never had.
 - Runs Activision's own gametype and map scripts on `vcod-gsc`, a `.gsc`
   compiler and VM in this repo, with each game's builtins and dialect.
   Menus, spawns, scoring, rounds and limits come from the stock scripts.
-- `map`, `map_restart`, `map_rotate` over `sv_mapRotation`, votes, rcon
-  (refused until `--set rconPassword=...`), bans in `ban.txt`
-  (`--ban-file`), `g_log`, pings, rate and `snaps` pacing, zombies,
-  downloads and `getinfo` / `getstatus` as each retail server does them.
+- The map cycle as each retail server runs it: `map`, `map_restart`,
+  `map_rotate` over `sv_mapRotation`, and votes.
+- Admin: rcon (refused until `--set rconPassword=...`), bans in `ban.txt`
+  (`--ban-file`), `g_log`.
+- The link as retail keeps it: pings, rate and `snaps` pacing, zombies,
+  downloads, `getinfo` and `getstatus`.
 - `dedicated` defaults to 1 (no heartbeat); `--set dedicated=2` opts in.
 - A stdin console as on the retail Linux servers: each line runs as a
   server command, with CoD1's line editor (history, tab completion) on a
   terminal (`--no-console` turns it off).
-- No authorize server, no anti-cheat. Host for people you'd lend your car
-  to.
+- No authorize server, no anti-cheat.
 
 ### Bots
 
@@ -83,12 +84,12 @@ graph built from each game's own pmove; they join through the stock
 menus, play the objectives and fight. On CoD1, UO and CoD2 they also yell
 the stock quick messages ("Grenade!", "Enemy down!"). Their routes, cover
 and probes are worked out on up to four threads beside the server's own
-(`VCOD_BOT_THREADS`), moving every bot as one thread would. Retail has no bots,
-so there's no oracle to blame for these ([bots.md](bots.md)).
+(`VCOD_BOT_THREADS`), moving every bot as one thread would. Retail has no
+bots, so they have no retail reference ([bots.md](bots.md)).
 
 ### Measuring against retail
 
-Retail's servers are the oracle, and they win every argument. A headless probe client
+Retail's servers are the oracle. A headless probe client
 (`vcod --net-probe`) records what a retail server sends, the captures are
 committed as fixtures, and the A/B tests replay their inputs on
 vcod-server and diff the result. `.gsc` probes run on retail and on vcod's
