@@ -42,7 +42,7 @@ load a third-party map and refuses `--set fs_game`.
 | Command | Does |
 |---|---|
 | `vcod` | Main menu and server browser, in the install's game. |
-| `vcod --connect <ip:port>` | Join through the server's menus. |
+| `vcod --connect <host[:port]>` | Join through the server's menus. The port is 28960 when left out. |
 | `vcod <map>` | Fly around a map offline. Map names are case-insensitive. |
 | `vcod --list` | CoD1: every `.bsp` in the search path. |
 
@@ -62,8 +62,10 @@ load a third-party map and refuses `--set fs_game`.
 | `--exec-after "<secs> <line>"` | A queue of console lines, each `secs` after the one before. |
 
 Start New Server in the menu runs `vcod-server` from beside `vcod` and
-joins it; build both. The client stops that server when it exits. vcod
-has no listen server.
+joins it; build both. The client stops that server when it exits: it
+sends `quit`, so players get their disconnect, and kills it only if it is
+still up 2 s later. A client that dies takes its server with it (the
+server reads the client's pipe as stdin). vcod has no listen server.
 
 ## CD keys
 
@@ -108,9 +110,9 @@ vcod-server <map> [--port 28960] [--hostname vcod] [--max-clients 8] [--gametype
 
 | Flag | Does |
 |---|---|
-| `--port <n>` | UDP port, default 28960. Binds `0.0.0.0`. |
+| `--port <n>` | UDP port, default 28960. Binds every interface, or the address in `--set net_ip=<ip>`. |
 | `--hostname <name>` | `sv_hostname`, default `vcod`. |
-| `--max-clients <n>` | `sv_maxclients`, default 8, at most 64. Bots count. |
+| `--max-clients <n>` | `sv_maxclients`, default 8, 1 to 64. Bots count: more `--bots` than slots is refused. |
 | `--gametype <gt>` | The script under `maps/mp/gametypes/`. Default `dm` (CoD4 `war`). |
 | `--set NAME=VALUE` | Retail's `+set`, repeatable. |
 | `--bots <n>`, `--bots-shoot` | Start with `n` bots; without `--bots-shoot` they never fire ([bots.md](bots.md)). |
@@ -119,6 +121,11 @@ vcod-server <map> [--port 28960] [--hostname vcod] [--max-clients 8] [--gametype
 | `--script-dir <dir>` | CoD4: loose `.gsc` files read over the zones' scripts each level, as retail reads a mod's. |
 | `--vanilla` | See [Install and game](#install-and-game). |
 | `--no-console` | Don't read stdin ([below](#stdin-console)). |
+
+A flag the game does not read is refused at start, as are a bad
+`--set`, more bots than slots and a port in use, all before the level
+loads: `--vanilla` is CoD1 and UO only, `--mod-dir` and
+`--gametype-script` are not read on CoD4, `--script-dir` is CoD4 only.
 
 The server answers `getinfo`, `getstatus` and `getchallenge` from
 anyone, rate limited per address and server-wide where retail is not
@@ -297,7 +304,7 @@ commands.
 
 | Command | Does |
 |---|---|
-| `connect <ip:port>`, `disconnect`, `reconnect`, `quit` | What they say |
+| `connect <host[:port]>` (port 28960 when left out), `disconnect`, `reconnect`, `quit` | What they say |
 | `say`, `say_team` | Chat |
 | `cmd <text>` | Send a raw client command |
 | `rcon <command>` | CoD1, UO: run a server command with `rconPassword`, on the connected server, else on `rconAddress` (`ip[:port]`, port 28960 by default). The reply prints in the console |
@@ -482,7 +489,8 @@ Client:
   with none up, the server's `g_scriptMainMenu`. A menu vcod cannot
   evaluate shows as a numbered list (1-9 pick). `--team` and `--class`
   answer them unseen.
-- `vcod <map>` flies `zone/english/<map>.ff`. A map missing from
+- `vcod <map>` flies `zone/<language>/<map>.ff` (`english`, or the one
+  language a localized install holds). A map missing from
   `zone/<language>/` loads from `usermaps/<map>/<map>.ff`; under a mod
   that directory's iwds load too.
 - Joining downloads the mod and usermap files the server references and
@@ -518,6 +526,9 @@ Server (`vcod-server <map> --game cod4`, or a CoD4 install):
   sight, R reload, 1-7 pick a weapon.
 - `vcod --net-probe <ip:port>` is a headless client that joins, prints a
   line a second and writes captures. `vcod --help` documents its modes.
+  Bare, on CoD1 and UO, it holds forward for 2 s in every 30 once in
+  play, which shows moves still apply; it sends no chat unless
+  `--probe-say` asks.
   `--probe-secs` sets how long it stays (default 65). On CoD2
   `--probe-team` / `--probe-weapon` make it join and play a scripted
   loop; `VCOD_COD2_RECORD=<dir>/<name>` records the run as

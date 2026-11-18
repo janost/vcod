@@ -9,10 +9,14 @@ The A/B gates against retail captures are in [retail.md](retail.md).
 | Env | Install | Runs |
 |---|---|---|
 | `COD_DIR` | CoD1 1.1 | the 1.1 tests and gates |
-| `COD_DIR` | CoD1 1.5 (`main/` with stock paks only) | `configstrings_15_ab`, `timeout_15_ab`, `legs_ab`'s 1.5 walks (the stop and go too), `turret_ab`'s 1.5 replay |
+| `COD_DIR` | CoD1 1.5 (`main/` with stock paks only: `--example stock_tree`, below) | `configstrings_15_ab`, `timeout_15_ab`, `legs_ab`'s 1.5 walks (the stop and go too), `turret_ab`'s 1.5 replay |
 | `COD_DIR` | UO (`uo/` beside 1.5's `main/`) | the UO tests and what reads only data 1.5 and UO share: `moves_ab`'s UO replays (sprint, mounts, cook), `configstrings_uo_ab`, `playerstate_uo_ab`, `playerstate_combat_ab`'s UO capture, `mount_uo_ab`, `uo_weapons_ab`, `legs_ab`'s UO walks, `turret_ab`'s UO replay |
 | `COD2_DIR` | CoD2 1.3 | the CoD2 tests, `cod2_map_census` |
 | `COD4_DIR` | CoD4 1.7 | the CoD4 tests, `cod4_live_*`, `cod4_map_sweep`, `cod4_soak` |
+
+`cargo run -p vcod-common --example stock_tree -- <install> <out>` links
+the stock-only tree the 1.5 and UO rows want: the paks `--vanilla` keeps,
+under `<out>/main/` and `<out>/uo/`.
 
 The helpers in `vcod_common::testing` (and `vcod_cod4::testing`) read
 `COD_DIR`, `COD2_DIR`, `COD4_DIR` and `COD4_LNXDED_DIR`. Both modules,
@@ -81,6 +85,18 @@ picks through `Server::pin_spawns`, as `gametypes_ab` does.
   server`; `tests/main.rs`). A file's tests filter by its name (`--
   vehicle_ab::`). The client's tests live in its binary: `cargo test -p
   vcod --bins`.
+
+## The gate runner
+
+`tools/gate.sh [area...]` runs fmt, clippy and the suite at each install
+the environment names: `COD_DIR` (1.1) with `COD2_DIR` and `COD4_DIR`,
+then the server suite again at `COD_UO_DIR` (a stock-only UO tree) with
+`COD4_DIR` unset. It sets `VCOD_REQUIRE_INSTALL` to match, so no install
+test can skip. Each area adds the ignored gates of one row group below:
+`nav`, `bots`, `render` (`LVP_ICD` points it at lavapipe), `cod2`, `cod4`.
+A step passes only on `test result: ok` lines that ran tests. `CARGO_WRAP`
+puts each cargo run under a wrapper (a memory-capped scope), `DRY=1`
+prints the commands.
 
 ## Ignored tests: when to run them
 
@@ -207,7 +223,9 @@ in process, on `play::cod4`'s `tests::sim` clock.
 ## Soaks
 
 Each soak plays every stock map for minutes through the real client frame and
-writes a `soak.md`.
+writes a `soak.md`. The soak, perf and off-LAN scripts first check the host
+tools and the built binaries they run (`tools/lib.sh`) and exit 2 naming
+the one missing.
 
 ### CoD4
 

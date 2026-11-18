@@ -584,10 +584,11 @@ pub fn probe(
         || save_turret
         || save_bump
         || save_legs
+        || save_shock
         || save_ladder.is_some()
         || probe_weapsel
         || scripted_role.is_some();
-    let mut client = NetClient::connect(addr)?;
+    let mut client = Connected(NetClient::connect(addr)?);
     if rate.is_some() || snaps.is_some() || name.is_some() {
         let def = net::Userinfo::default();
         client.set_userinfo(net::Userinfo {
@@ -921,9 +922,6 @@ pub fn probe(
                     // The join is entered by the first usercmd of the loop
                     // below, the way a retail client enters; nothing is sent
                     // here to start it.
-                    if !joining && say.is_empty() {
-                        client.send_reliable("say hello from vcod");
-                    }
                     say_from.get_or_insert(now);
                 }
                 NetEvent::Chat { text, team } => {
@@ -937,7 +935,7 @@ pub fn probe(
                 NetEvent::Dropped(r) => {
                     println!("dropped: {}", escape_ctl(&r));
                     return finish_probe(
-                        client,
+                        &mut client,
                         save_fixture,
                         save_snapshots,
                         tag.as_deref(),
@@ -1650,7 +1648,13 @@ pub fn probe(
             && let Some(s) = client.snapshots().newest()
             && shock.observe(now, s)
         {
-            shock.write(client.configstrings(), &join.team, &join.weapon, overwrite)?;
+            shock.write(
+                client.configstrings(),
+                &join.team,
+                &join.weapon,
+                tag.as_deref(),
+                overwrite,
+            )?;
             wrote_shock = true;
             break;
         }
@@ -1813,7 +1817,6 @@ pub fn probe(
                             client.configstrings(),
                             &join,
                             tag.as_deref(),
-                            overwrite,
                         )?;
                     }
                     break;
@@ -2012,7 +2015,13 @@ pub fn probe(
     }
     if save_shock && !wrote_shock {
         println!("shock: the run ended before the script did, writing what it has");
-        shock.write(client.configstrings(), &join.team, &join.weapon, overwrite)?;
+        shock.write(
+            client.configstrings(),
+            &join.team,
+            &join.weapon,
+            tag.as_deref(),
+            overwrite,
+        )?;
     }
     if save_legs && !wrote_legs {
         println!("legs: the run ended before the script did, writing what it has");
@@ -2088,12 +2097,36 @@ pub fn probe(
         );
     }
     finish_probe(
-        client,
+        &mut client,
         save_fixture,
         save_snapshots,
         tag.as_deref(),
         overwrite,
     )
+}
+
+/// The probe's connection, which says `disconnect` however the run ends:
+/// an error out of the loop would otherwise leave a ghost player on the
+/// server until its timeout, and the next run would not be alone there.
+struct Connected(NetClient<UdpTransport>);
+
+impl std::ops::Deref for Connected {
+    type Target = NetClient<UdpTransport>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Connected {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for Connected {
+    fn drop(&mut self) {
+        self.0.disconnect();
+    }
 }
 
 /// One trajectory group as one line, `trDuration` included: a bounded type
@@ -2412,7 +2445,7 @@ fn sound_cs_alias_paren(configstrings: &[String], p: &net::protocol::Cod1Wire, i
 /// them (`gamestate-<tag>.bin`, `snapshots-<tag>.bin`), both written, and
 /// refuses to replace one without `--overwrite-fixture`.
 fn finish_probe(
-    mut client: NetClient<UdpTransport>,
+    client: &mut NetClient<UdpTransport>,
     save_fixture: bool,
     save_snapshots: bool,
     tag: Option<&str>,
@@ -2425,11 +2458,13 @@ fn finish_probe(
         _ => path.to_string(),
     };
     let save_fixture = save_fixture || (tag.is_some() && save_snapshots);
+    // The scratch copies under `tmp/` are rewritten freely; a fixture is not.
     let guard = |path: &str| -> anyhow::Result<()> {
-        if tag.is_some() && !overwrite && std::path::Path::new(path).exists() {
+        let scratch = path == SCRATCH_PATH || path == SNAP_SCRATCH_PATH;
+        if !scratch && !overwrite && std::path::Path::new(path).exists() {
             anyhow::bail!(
-                "{path} already exists; --capture-tag would replace it. Pass \
-                 --overwrite-fixture if that is what you mean, or pick another tag."
+                "{path} already exists; pass --overwrite-fixture to replace it, or \
+                 --capture-tag for a new name"
             );
         }
         Ok(())
@@ -2537,7 +2572,7 @@ fn write_configstrings_fixture(
         CONFIGSTRINGS_FIXTURE_DIR,
         &format!("{map}-{gametype}{}.txt", tag_suffix(tag)),
     )?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("configstrings: {written} non-empty slots -> {path}");
     Ok(())
 }
@@ -3256,7 +3291,7 @@ fn write_motion_fixture(
         PLAYERSTATE_FIXTURE_DIR,
         &format!("{map}-{gametype}-motion{}.txt", tag_suffix(tag)),
     )?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!(
         "motion: {} poses ({} fields each) -> {path}",
         motion.captured.len(),
@@ -3271,37 +3306,55 @@ const BUTTON_ATTACK: u8 = 0x01;
 /// The stock frag, the only grenade in a spawn loadout.
 const FRAG_WEAPON: &str = "fraggrenade_mp";
 
-/// Writes a fixture that `--capture-tag` named, refusing to land on a file
-/// that is already there unless `--overwrite-fixture` says to. A tag is free
-/// text and nothing stops it spelling a committed fixture's name
-/// (`--save-ads --capture-tag sniper` writes exactly the path the scoped-rifle
-/// evidence lives at), and a capture against vcod's own server silently
-/// replacing the retail oracle is the one mistake this directory cannot
-/// survive. An untagged write is the documented way to retake a fixture and
-/// goes through `std::fs::write` unguarded.
-fn write_tagged_fixture(path: &str, out: &str, overwrite: bool) -> anyhow::Result<()> {
-    if !overwrite && std::path::Path::new(path).exists() {
-        anyhow::bail!(
-            "{path} already exists; --capture-tag would replace it. Pass \
-             --overwrite-fixture if that is what you mean, or pick another tag."
-        );
+/// Writes a fixture, refusing to land on a file that is already there
+/// unless `--overwrite-fixture` says to. The fixed names hold retail
+/// evidence, and a tag is free text that can spell one of them
+/// (`--save-ads --capture-tag sniper` is the scoped-rifle fixture's path):
+/// a capture against vcod's own server silently replacing the oracle is the
+/// one mistake these directories cannot survive. A refused capture is kept
+/// under `tmp/` rather than thrown away.
+fn write_capture(path: &str, out: &str, overwrite: bool) -> anyhow::Result<()> {
+    write_capture_in(path, out, overwrite, std::path::Path::new("tmp"))
+}
+
+/// [`write_capture`] keeping a refused capture in `keep` instead of `tmp/`.
+fn write_capture_in(
+    path: &str,
+    out: &str,
+    overwrite: bool,
+    keep: &std::path::Path,
+) -> anyhow::Result<()> {
+    if overwrite || !std::path::Path::new(path).exists() {
+        std::fs::write(path, out)?;
+        return Ok(());
     }
-    std::fs::write(path, out)?;
-    Ok(())
+    let kept = refused_copy(path, keep);
+    let saved = kept
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&kept, out));
+    let kept = match saved {
+        Ok(()) => format!("this capture is in {}", kept.display()),
+        Err(e) => format!("keeping it in {} failed too: {e}", kept.display()),
+    };
+    anyhow::bail!(
+        "{path} already exists; pass --overwrite-fixture to replace it, or \
+         --capture-tag for a new name ({kept})"
+    )
+}
+
+/// Where [`write_capture`] keeps a capture it would not write: `keep` and
+/// the fixture's file name.
+fn refused_copy(path: &str, keep: &std::path::Path) -> std::path::PathBuf {
+    let name = std::path::Path::new(path)
+        .file_name()
+        .map_or_else(|| "capture.txt".into(), |n| n.to_os_string());
+    keep.join(name)
 }
 
 /// `-<tag>` for a `--capture-tag`, empty without one.
 pub(crate) fn tag_suffix(tag: Option<&str>) -> String {
     tag.map(|t| format!("-{t}")).unwrap_or_default()
-}
-
-/// A tagged write goes through `write_tagged_fixture`'s guard; an untagged
-/// one is the documented retake and writes unguarded.
-fn write_capture(path: &str, out: &str, tag: Option<&str>, overwrite: bool) -> anyhow::Result<()> {
-    match tag {
-        Some(_) => write_tagged_fixture(path, out, overwrite),
-        None => Ok(std::fs::write(path, out)?),
-    }
 }
 
 /// A weapon's `cmd.weapon` byte: its slot in configstring 7, which is 1-based
@@ -4942,10 +4995,7 @@ leanf={:.4} commandTime={}\n",
         &format!("{map}-{gametype}-{}{suffix}.txt", combat.kind),
     )?;
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
-    match tag {
-        Some(_) => write_tagged_fixture(&path, &out, overwrite)?,
-        None => std::fs::write(&path, out)?,
-    }
+    write_capture(&path, &out, overwrite)?;
     println!(
         "{}: {} steps, {} traced snapshots -> {path}",
         combat.kind,
@@ -6518,7 +6568,7 @@ fn write_hit_fixture(
         &format!("{map}-{gametype}-{role}{}.txt", tag_suffix(tag)),
     )?;
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("hit: {role} -> {path}");
     Ok(())
 }
@@ -7033,7 +7083,7 @@ first_snapshot_after_gamestate_ms={}\n",
         &format!("{map}-{gametype}-{role}{}.txt", tag_suffix(tag)),
     )?;
     std::fs::create_dir_all(NETCHAN_FIXTURE_DIR)?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("netchan: {role} -> {path}");
     Ok(())
 }
@@ -7100,7 +7150,7 @@ fn write_scripted_fixture(
         GAMETYPES_FIXTURE_DIR,
         &format!("{map}-{gametype}-{role}{}.txt", tag_suffix(tag)),
     )?;
-    write_tagged_fixture(&path, &out, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("scripted: {} lines -> {path}", capture.lines.len());
     Ok(())
 }
@@ -7172,7 +7222,7 @@ fn write_playerstate_fixture(
         &format!("{map}-{gametype}{}.txt", tag_suffix(tag)),
     )?;
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!(
         "playerstate: {} fields, {}, {} serverCommands -> {path}",
         snap.ps.fields.len(),
@@ -7835,10 +7885,7 @@ fn write_slope_fixture(
         PLAYERSTATE_FIXTURE_DIR,
         &format!("{map}-{gametype}-slope-{cmd_ms}ms{suffix}.txt"),
     )?;
-    match tag {
-        Some(_) => write_tagged_fixture(&path, &out, overwrite)?,
-        None => std::fs::write(&path, &out)?,
-    }
+    write_capture(&path, &out, overwrite)?;
     println!(
         "slope: {} cmds, {} snapshots -> {path}",
         capture.cmds.len(),
@@ -10199,7 +10246,7 @@ angles={},{},{}\n",
         &format!("{map}-sd-{role}{}.txt", tag_suffix(tag)),
     )?;
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("sd: {role} -> {path}");
     Ok(())
 }
@@ -10847,7 +10894,7 @@ fn write_pickup_fixture(
         ITEMS_FIXTURE_DIR,
         &format!("{map}-dm-pickup{}.txt", tag_suffix(tag)),
     )?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("pickup: wrote {path}");
     Ok(())
 }
@@ -11684,7 +11731,7 @@ fn write_turret_fixture(
     match tag {
         Some(tag) => {
             let path = fixture_path(TURRET_FIXTURE_DIR, &format!("{map}-dm-turret-{tag}.txt"))?;
-            write_tagged_fixture(&path, &out, overwrite)?;
+            write_capture(&path, &out, overwrite)?;
             println!("turret: wrote {path}");
         }
         None => {
@@ -12720,7 +12767,7 @@ fn write_ladder_fixture(
         PLAYERSTATE_FIXTURE_DIR,
         &format!("{map}-dm-ladder{}.txt", tag_suffix(tag)),
     )?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("ladder: {} lines -> {path}", lines.len());
     Ok(())
 }
@@ -12781,7 +12828,7 @@ fn write_weapsel_fixture(
         WEAPSEL_FIXTURE_DIR,
         &format!("{map}-dm-weapsel{}.txt", tag_suffix(tag)),
     )?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("weapsel: wrote {path}");
     Ok(())
 }
@@ -13955,10 +14002,7 @@ fn write_bump_fixture(
         PLAYERSTATE_FIXTURE_DIR,
         &format!("{map}-dm-bump-{role}.txt"),
     )?;
-    match tag {
-        Some(_) => write_tagged_fixture(&path, &out, overwrite)?,
-        None => std::fs::write(&path, &out)?,
-    }
+    write_capture(&path, &out, overwrite)?;
     println!("bump: {} lines -> {path}", bp.lines.len());
     Ok(())
 }
@@ -14015,7 +14059,6 @@ fn write_entities_fixture(
     configstrings: &[String],
     join: &JoinProbe,
     tag: Option<&str>,
-    overwrite: bool,
 ) -> anyhow::Result<()> {
     let p = wire();
     let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
@@ -14103,10 +14146,9 @@ sample of a set\n"
     }
 
     std::fs::create_dir_all(ENTITIES_FIXTURE_DIR)?;
-    match tag {
-        Some(_) => write_tagged_fixture(&path, &out, overwrite)?,
-        None => std::fs::write(&path, out)?,
-    }
+    // Each run's samples join the file's: it is this mode's append target,
+    // so an existing file is no reason to refuse.
+    std::fs::write(&path, &out)?;
     println!(
         "entities: {} stations this run, {} samples in the file ({} read, {} dropped as \
          repeats), {} distinct entity sets -> {path}",
@@ -15224,24 +15266,25 @@ mod tests {
         );
     }
 
-    /// A tag is free text and can spell a committed fixture's name, so a
-    /// tagged write refuses a path that is already there. `--overwrite-fixture`
-    /// is the one way past it; the first write of a name is unaffected.
+    /// A fixture name already on disk, tagged or not, is refused without
+    /// `--overwrite-fixture`, and the refused capture is kept under `tmp/`.
     #[test]
-    fn a_tagged_write_refuses_to_replace_a_fixture() {
-        let dir = std::env::temp_dir().join(format!("vcod-tag-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("mp_carentan-tdm-ads-sniper.txt");
+    fn a_write_refuses_to_replace_a_fixture() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mp_carentan-tdm-ads-sniper.txt");
         let path = path.to_str().unwrap();
 
-        write_tagged_fixture(path, "retail", false).expect("a name nothing holds yet");
-        let err = write_tagged_fixture(path, "ours", false)
-            .expect_err("the second write lands on the first");
+        let keep = dir.path().join("tmp");
+        let write = |out, overwrite| write_capture_in(path, out, overwrite, &keep);
+
+        write("retail", false).expect("a name nothing holds yet");
+        let err = write("ours", false).expect_err("the second write lands on the first");
         assert!(err.to_string().contains("--overwrite-fixture"), "{err}");
         assert_eq!(std::fs::read_to_string(path).unwrap(), "retail");
+        let kept = keep.join("mp_carentan-tdm-ads-sniper.txt");
+        assert_eq!(std::fs::read_to_string(kept).unwrap(), "ours");
 
-        write_tagged_fixture(path, "ours", true).expect("the flag says to");
+        write("ours", true).expect("the flag says to");
         assert_eq!(std::fs::read_to_string(path).unwrap(), "ours");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

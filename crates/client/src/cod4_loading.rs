@@ -208,6 +208,22 @@ impl Loader {
         Self::start_job(server, game_dir, move |p, flag| join(a, p, flag))
     }
 
+    /// [`Self::start`] for a typed `host[:port]`, looked up on the worker
+    /// (port 28960 when left out, as `master::parse_address` gives), so a
+    /// slow name lookup holds the connect screen and not the window.
+    pub fn start_named(
+        server: String,
+        game_dir: PathBuf,
+        args: impl FnOnce(SocketAddr) -> JoinArgs + Send + 'static,
+    ) -> Loader {
+        let typed = server.clone();
+        Self::start_job(server, game_dir, move |p, flag| {
+            let at = vcod_common::net::master::parse_address(&typed)
+                .ok_or_else(|| anyhow::anyhow!("cannot resolve {typed}"))?;
+            join(args(SocketAddr::V4(at)), p, flag)
+        })
+    }
+
     /// `demo` / `timedemo` (cod4-demos.md 5): the demo read to its
     /// gamestate and its map loaded behind the same screen, `name` in the
     /// server's place.

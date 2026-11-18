@@ -21,6 +21,8 @@ pub struct Install {
     /// The level being loaded, whose `usermaps/<map>/` iwds join the
     /// search path under an `fs_game`.
     map: Option<String>,
+    /// The `zone/<language>/` the install holds ([`zone_language`]).
+    language: String,
 }
 
 /// The `allocFlags` each zone loads with. A later zone's asset replaces
@@ -62,7 +64,8 @@ impl Install {
     /// The install at `root`, if it has a `zone/` directory.
     pub fn at(root: impl Into<PathBuf>) -> Option<Self> {
         let root = root.into();
-        root.join("zone").is_dir().then_some(Self {
+        root.join("zone").is_dir().then(|| Self {
+            language: zone_language(&root),
             root,
             fs_game: None,
             map: None,
@@ -185,9 +188,21 @@ impl Install {
         &self.root
     }
 
-    /// `zone/<language>/`, where the stock fastfiles sit (`english`).
+    /// The language of the install's stock zones (`english`, `german`).
+    pub fn language(&self) -> &str {
+        &self.language
+    }
+
+    /// `zone/<language>/`, where the stock fastfiles sit. A localized
+    /// install ships only its own language's directory, so a `language` it
+    /// lacks (every caller asks for `english`) reads the one it has.
     pub fn zone_dir(&self, language: &str) -> PathBuf {
-        self.root.join("zone").join(language)
+        let dir = self.root.join("zone").join(language);
+        if dir.is_dir() {
+            dir
+        } else {
+            self.root.join("zone").join(&self.language)
+        }
     }
 
     /// Every `.ff` in `zone/<language>/`, sorted by name.
@@ -284,9 +299,47 @@ fn find_ci(dir: &Path, name: &str) -> Option<std::ffi::OsString> {
         .find(|n| n.to_str().is_some_and(|n| n.eq_ignore_ascii_case(name)))
 }
 
+/// The language directory under `root/zone/`: `english` when there is
+/// one, else the first by name that holds `common_mp.ff`, else `english`.
+fn zone_language(root: &Path) -> String {
+    let zone = root.join("zone");
+    if zone.join("english").is_dir() {
+        return "english".into();
+    }
+    let mut langs: Vec<String> = std::fs::read_dir(&zone)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().join("common_mp.ff").is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    langs.sort();
+    langs.into_iter().next().unwrap_or_else(|| "english".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Install, ZoneOrigin, zone_flags};
+
+    /// A localized install holds only `zone/<its language>/`: the zones
+    /// load from there whatever language a caller names.
+    #[test]
+    fn a_localized_install_reads_its_own_zone_directory() {
+        let dir = std::env::temp_dir().join(format!("vcod-cod4-lang-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.as_path();
+        std::fs::create_dir_all(root.join("zone/german")).unwrap();
+        for f in ["zone/german/common_mp.ff", "zone/german/mp_crash.ff"] {
+            std::fs::write(root.join(f), b"").unwrap();
+        }
+        let i = Install::at(root).unwrap();
+        assert_eq!(i.language(), "german");
+        assert_eq!(i.zone_dir("english"), root.join("zone/german"));
+        let z = i.zone_file("english", "mp_crash").unwrap();
+        assert_eq!(z.path, root.join("zone/german/mp_crash.ff"));
+        assert_eq!(i.zones("english").unwrap().len(), 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     /// A fake install: a stock map zone, a mod with `mod.ff` under `Mods/`
     /// and a usermap with its `_load` zone.

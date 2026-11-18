@@ -5,7 +5,9 @@
 # killed the server.
 #
 # Same environment as tools/run_probe.sh. Takes a couple of minutes: each
-# probe boots the retail server.
+# probe boots the retail server. A server that never reaches the level stops
+# the capture (run_probe.sh exits nonzero), rather than writing an empty
+# section.
 #
 #   tools/capture_probes.sh > crates/gsc/tests/fixtures/semantics/retail-captures.txt
 set -euo pipefail

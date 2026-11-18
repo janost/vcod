@@ -12,7 +12,9 @@ them on vcod.
   - `COD_VERSION=1.5` runs the 1.5b server. Point `COD_DIR` at a directory
     whose `main/` holds only the stock 1.5 paks (pak0-pakb and the localized
     ones): third-party pk3s in a 1.5 install override the stock gametypes and
-    break the script compile.
+    break the script compile. `cargo run -p vcod-common --example stock_tree
+    -- <install> <out>` links such a tree (`main/`, and `uo/` on a UO
+    install) from the stock paks `--vanilla` keeps.
   - `COD_VERSION=uo` runs the United Offensive 1.51b server (default map
     `mp_cassino`). Its `COD_DIR` needs the 1.5 `main/` and the UO `uo/`. The
     net probe joins it with the UO install as `--game-dir` and `--mod-dir uo`.
@@ -145,10 +147,14 @@ in the header of the fixture it produced. `--net-probe --game cod2` and
 
 ### Fixtures are retail evidence
 
-Most modes write into `crates/server/tests/fixtures/` under a fixed name, so
-a run against vcod overwrites the evidence. After one, move the files to
-`tmp/` and `git checkout` the directory. `--capture-tag` names a second run;
-tagged fixtures refuse to overwrite without `--overwrite-fixture`.
+Most modes write into `crates/server/tests/fixtures/` under a fixed name.
+A write onto a file that is already there, tagged or not, is refused
+without `--overwrite-fixture`, so a run against vcod cannot replace the
+evidence by accident; the refused capture is kept under `tmp/` with the
+fixture's file name. Retaking a fixture is `--overwrite-fixture`;
+`--capture-tag` names a second run. `--save-entities` is the exception:
+each run's samples join its file's. A probe that ends on an error still
+sends `disconnect`, so the server does not hold a ghost player.
 
 `--save-fixture` / `--save-snapshots` rewrite the parser's byte-exact
 captures in `crates/common/tests/fixtures/net/`.

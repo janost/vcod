@@ -18,13 +18,22 @@
 #     (OUTDIR/relay-SVFPS-SNAPS.log) and stops the probe AT s in for FOR s.
 #     Build the cod4_probe example (and vcod-server for ours) first.
 set -u
+. "$(dirname "$0")/lib.sh"
 if [ -z "${OFFLAN_INNER:-}" ]; then
-    exec env OFFLAN_INNER=1 unshare -rnm --fork bash "$0" "$@"
+    need unshare nsenter ip python3
+    need_built "$(dirname "$0")/../target/debug/examples/cod4_probe" "cargo build -p vcod-cod4 --example cod4_probe"
+    [ "${1:-}" = retail ] || need_built "$(dirname "$0")/../target/debug/vcod-server" "cargo build -p vcod-server"
+    # A pid namespace whose init is the inner half: when it ends, or the
+    # PID a caller captured (this unshare) is killed, every process of the
+    # run goes with it. TERM and INT reach the inner half's trap.
+    exec env OFFLAN_INNER=1 unshare -rnm --pid --fork --kill-child --mount-proc \
+        --forward-signals bash "$0" "$@"
 fi
 if grep -qE '^ *0 +0 +4294967295$' /proc/self/uid_map; then
     echo "offlan: the inner half runs only inside its own unshare; unset OFFLAN_INNER" >&2
     exit 1
 fi
+trap 'exit 143' TERM INT
 cd "$(dirname "$0")/.."
 KIND=$1; OUT=$(realpath -m "$2"); shift 2
 PAIRS=("$@"); [ ${#PAIRS[@]} -eq 0 ] && PAIRS=(20:20 40:20 30:20 40:30 20:30)

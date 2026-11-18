@@ -68,6 +68,10 @@ case "${COD_VERSION:-1.1}" in
 esac
 BIN="${COD_LNXDED:-$REF/$EXE}"
 [ -x "$BIN" ] || { echo "server binary $BIN missing or not executable; set COD_LNXDED" >&2; exit 1; }
+if [ ! -e /lib/ld-linux.so.2 ]; then
+    echo "32-bit loader /lib/ld-linux.so.2 missing; the server needs a 32-bit glibc" >&2
+    exit 1
+fi
 PORT_USED="${PORT:-28970}"
 MODULE="$GAMEDIR/$MODULE"
 . tools/retail_home.sh
@@ -119,4 +123,11 @@ sed -n 's/^ERROR: \(.*\)$/PROBE_ERROR \1/p' "$CONSOLE" | tr -d '\025'
 if grep -q "script runtime error" "$CONSOLE"; then
     echo "PROBE_FATAL"
     sed -n '/script runtime error/,/\*\{20\}/p' "$CONSOLE" | sed 's/^/PROBE_ERR /'
+elif [ ! -s "$LOG" ] && ! grep -q '^ERROR: ' "$CONSOLE"; then
+    # No game log and no error: the server never got as far as the level (a
+    # missing library, a bound port, a missing map). An empty section here
+    # would read as a probe that logged nothing.
+    echo "run_probe: the server wrote no $LOG; its console ends:" >&2
+    tail -n 20 "$CONSOLE" >&2
+    exit 1
 fi

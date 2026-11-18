@@ -421,33 +421,32 @@ impl App {
         if let Some(l) = self.cod4_loading.take() {
             l.cancel();
         }
-        let resolved = std::net::ToSocketAddrs::to_socket_addrs(addr.as_str())
-            .ok()
-            .and_then(|mut a| a.next());
-        let Some(at) = resolved else {
-            self.cod4_join_failed(&format!("cannot resolve {addr}"));
-            return;
-        };
         if let Some(f) = self.session.cod4_front_mut() {
             f.close();
         }
         log::info!("connecting to {addr}");
         vcod_common::laps::begin_load(format!("cod4 connect {addr}"));
         self.connect_addr = Some(addr.clone());
-        self.cod4_loading = Some(Loader::start(JoinArgs {
+        let name = self.shell.cvar("name").unwrap_or("vcod").to_string();
+        let join = crate::play::cod4_menus::Join {
+            team: self.team.clone(),
+            class: None,
+        };
+        let game_dir = self.game_dir.clone();
+        // `cl_allowDownload` and `cl_wwwDownload`, on by default as
+        // 1.7's (cod4-handshake.md 11).
+        let allow_download = self.shell.cvar("cl_allowDownload").is_none_or(|v| v != "0");
+        let www_download = self.shell.cvar("cl_wwwDownload").is_none_or(|v| v != "0");
+        let dir = game_dir.clone();
+        self.cod4_loading = Some(Loader::start_named(addr.clone(), dir, move |at| JoinArgs {
             addr: at,
             server: addr,
-            name: self.shell.cvar("name").unwrap_or("vcod").to_string(),
+            name,
             password,
-            join: crate::play::cod4_menus::Join {
-                team: self.team.clone(),
-                class: None,
-            },
-            game_dir: self.game_dir.clone(),
-            // `cl_allowDownload` and `cl_wwwDownload`, on by default as
-            // 1.7's (cod4-handshake.md 11).
-            allow_download: self.shell.cvar("cl_allowDownload").is_none_or(|v| v != "0"),
-            www_download: self.shell.cvar("cl_wwwDownload").is_none_or(|v| v != "0"),
+            join,
+            game_dir,
+            allow_download,
+            www_download,
         }));
     }
 

@@ -14,13 +14,22 @@
 #     Build target/release/vcod (and vcod-server for ours) first.
 # Read in docs/research/cod11-server-handshake.md, "Message pacing".
 set -u
+. "$(dirname "$0")/lib.sh"
 if [ -z "${OFFLAN_INNER:-}" ]; then
-    exec env OFFLAN_INNER=1 unshare -rn --fork bash "$0" "$@"
+    need unshare nsenter ip python3
+    need_built "$(dirname "$0")/../target/release/vcod" "cargo build --release -p vcod"
+    [ "${1:-}" = retail ] || need_built "$(dirname "$0")/../target/release/vcod-server" "cargo build --release -p vcod-server"
+    # A pid namespace whose init is the inner half: when it ends, or the
+    # PID a caller captured (this unshare) is killed, every process of the
+    # run goes with it. TERM and INT reach the inner half's trap.
+    exec env OFFLAN_INNER=1 unshare -rn --pid --fork --kill-child --mount-proc \
+        --forward-signals bash "$0" "$@"
 fi
 if grep -qE '^ *0 +0 +4294967295$' /proc/self/uid_map; then
     echo "offlan: the inner half runs only inside its own unshare; unset OFFLAN_INNER" >&2
     exit 1
 fi
+trap 'exit 143' TERM INT
 cd "$(dirname "$0")/.."
 KIND=$1; OUT=$(realpath -m "$2"); shift 2
 PAIRS=("$@"); [ ${#PAIRS[@]} -eq 0 ] && PAIRS=(5000:20 25000:10 1000:30)

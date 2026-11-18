@@ -352,6 +352,9 @@ impl Drop for Speex {
 pub trait VoiceInput {
     /// Everything captured since the last call.
     fn take(&mut self) -> Vec<i16>;
+    /// Whether the talk key is down: a device input records only then, so
+    /// the desktop's microphone indicator goes out between talks.
+    fn set_active(&mut self, _on: bool) {}
 }
 
 /// A 440 Hz tone at `rate`, `ms` of it per call's worth of wall time: the
@@ -397,7 +400,7 @@ impl VoiceInput for Tone {
 /// to the codec's rate by averaging (retail records at it itself,
 /// `DSOUNDRecord_Init`: CoD4 8000 Hz, CoD2 8192).
 pub struct Mic {
-    _stream: cpal::Stream,
+    stream: cpal::Stream,
     buf: Arc<Mutex<VecDeque<i16>>>,
 }
 
@@ -432,10 +435,7 @@ impl Mic {
         }
         .ok()?;
         stream.play().ok()?;
-        Some(Mic {
-            _stream: stream,
-            buf,
-        })
+        Some(Mic { stream, buf })
     }
 }
 
@@ -445,6 +445,18 @@ impl VoiceInput for Mic {
             .lock()
             .map(|mut b| b.drain(..).collect())
             .unwrap_or_default()
+    }
+
+    fn set_active(&mut self, on: bool) {
+        use cpal::traits::StreamTrait;
+        let r = if on {
+            self.stream.play()
+        } else {
+            self.stream.pause()
+        };
+        if let Err(e) = r {
+            log::debug!("voice: microphone play/pause: {e}");
+        }
     }
 }
 
@@ -634,6 +646,8 @@ pub struct VoiceChat {
     input: Option<Box<dyn VoiceInput>>,
     /// Captured samples not yet a whole frame.
     pending: Vec<i16>,
+    /// The input is recording: the talk key was down last frame.
+    talking: bool,
     streams: [Option<Ring>; 64],
     /// Frames sent and heard, for the debug overlay.
     pub sent: u64,
@@ -657,6 +671,7 @@ impl VoiceChat {
             speex,
             input,
             pending: Vec::new(),
+            talking: false,
             streams: std::array::from_fn(|_| None),
             sent: 0,
             played: 0,
@@ -688,6 +703,10 @@ impl VoiceChat {
                         }
                     },
                 });
+            if !self.talking {
+                self.talking = true;
+                input.set_active(true);
+            }
             self.pending
                 .extend(input.take().into_iter().map(|x| f.mic.apply(x)));
             while self.pending.len() >= FRAME_SAMPLES {
@@ -700,10 +719,14 @@ impl VoiceChat {
                 }
             }
         } else {
-            // Not talking: what the input caught meanwhile is dropped.
+            // Not talking: the input stops, and what it caught is dropped.
             if let Some(i) = self.input.as_mut() {
+                if self.talking {
+                    i.set_active(false);
+                }
                 i.take();
             }
+            self.talking = false;
             self.pending.clear();
         }
         for (talker, packet) in link.take_heard() {
@@ -847,6 +870,38 @@ mod tests {
         assert!(!cod2_own_talking(false, true, true));
         // CoD4's takes either.
         assert!(own_talking(true, false, true));
+    }
+
+    /// The input records only while the talk key is down: one start on the
+    /// press, one stop on the release, nothing while it stays up.
+    #[test]
+    fn the_input_records_only_while_talking() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct Rec(Rc<RefCell<Vec<bool>>>);
+        impl VoiceInput for Rec {
+            fn take(&mut self) -> Vec<i16> {
+                Vec::new()
+            }
+            fn set_active(&mut self, on: bool) {
+                self.0.borrow_mut().push(on);
+            }
+        }
+        let Some(speex) = Speex::open(COD4_RATE) else {
+            return;
+        };
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let mut v = VoiceChat::with(COD4_RATE, Some(speex), Some(Box::new(Rec(log.clone()))));
+        let mut link = VoiceLink::default();
+        for sending in [false, true, true, false, false, true] {
+            let f = VoiceFrame {
+                sending,
+                quality: 3,
+                mic: MicGain::default(),
+            };
+            v.frame(&mut link, &f, None);
+        }
+        assert_eq!(*log.borrow(), [true, false, true]);
     }
 
     /// With the system's libspeex, a second of the tone at quality 3

@@ -98,6 +98,8 @@ fi
 
 out=${1:?usage: cod1_soak.sh <outdir> [map...]}
 shift
+. "$(dirname "$0")/lib.sh"
+need unshare taskset unzip ss dbus-run-session kwin_wayland
 : "${COD_DIR:?set COD_DIR to the install}"
 : "${LVP_ICD:?set LVP_ICD to the lavapipe ICD json}"
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -111,6 +113,8 @@ if [[ -z ${BIN:-} ]]; then
 	cp "$here/target/release/vcod" "$here/target/release/vcod-server" "$out/bin/"
 	BIN=$out/bin
 fi
+need_built "$BIN/vcod" "cargo build --release -p vcod"
+need_built "$BIN/vcod-server" "cargo build --release -p vcod-server"
 export BIN COD_DIR LVP_ICD
 # The user's runtime dir: inside `unshare -r` the uid reads 0.
 export SOAK_RUNTIME=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
