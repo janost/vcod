@@ -182,7 +182,7 @@ fn cod4_a_restart_vote_passes_and_restarts() {
     assert_eq!(probes[1].configstring(13), "");
     assert_eq!(sv.server_id(), id, "the command waits 3 s");
     run_ms(&mut sv, &mut probes, &mut now, 3500);
-    assert_eq!(sv.server_id(), super::cycle::restart_server_id(id));
+    assert_eq!(sv.server_id(), crate::engine::conn::restart_server_id(id));
 }
 
 /// A `map` vote that passes runs `map <name>`: a spawn, the high nibble

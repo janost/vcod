@@ -12,12 +12,6 @@ use vcod_cod4::net::stats::Stats;
 /// (0x8175253). VERIFIED.
 const SPAWN_SLEEP_MS: u64 = 250;
 
-/// `sv_serverid` after a `fast_restart`: the low nibble steps, the high
-/// one kept (0x816c466).
-pub(super) fn restart_server_id(id: i32) -> i32 {
-    ((id + 1) & 0xf) + (id & 0xf0)
-}
-
 impl Cod4Server {
     /// `SV_SpawnServer` over the running server: `loadingnewmap\n<map>\n
     /// <gametype>` to every client past `CS_CONNECTED` (0x81751f0), on the
@@ -155,7 +149,7 @@ impl Cod4Server {
             .collect();
         drop(old);
         self.game.snap_flags ^= SNAPFLAG_SERVERCOUNT;
-        self.game.server_id = restart_server_id(self.game.server_id);
+        self.game.server_id = crate::engine::conn::restart_server_id(self.game.server_id);
         self.game.start_frame = Some(self.core.sv_time_ms);
         let (map, gametype) = (self.game.cfg.map.clone(), self.game.cfg.gametype.clone());
         let seed = self.game_seed();
@@ -291,17 +285,5 @@ impl Cod4Server {
         self.spawn_server(&map)?;
         self.set_cvar("sv_cheats", if devmap { "1" } else { "0" });
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_fast_restart_steps_the_low_nibble() {
-        assert_eq!(restart_server_id(16), 17);
-        assert_eq!(restart_server_id(0x1f), 0x10);
-        assert_eq!(super::super::spawn_server_id(0x1f), 0x2f);
     }
 }

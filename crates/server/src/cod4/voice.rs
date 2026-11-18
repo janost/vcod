@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use vcod_cod4::net::voice as wire;
 
 use super::{Cod4Server, State};
-use crate::voice::{Rules, Voicer, hears, session_of, team_of};
+use crate::voice::{Rules, Voicer, session_of, team_of};
 
 pub(super) use crate::voice::ClientVoice;
 
@@ -65,19 +65,6 @@ impl Cod4Server {
         }
     }
 
-    /// `SV_PreGameUserVoice` (0x817bc58): to every other client past
-    /// `CS_CONNECTED`'s start that has not muted the talker and wants
-    /// voice, the frames read with short lengths
-    /// ([`wire::parse_client_pregame`]).
-    fn pre_game_voice(&mut self, talker: usize, frame: &[u8]) {
-        for (n, c) in self.core.clients.iter_mut().enumerate() {
-            let Some(c) = c.as_mut() else { continue };
-            if n != talker && c.state > State::Zombie && !c.voice.muted[talker] && c.voice.send {
-                c.voice.queue(talker, frame);
-            }
-        }
-    }
-
     /// `SV_UserVoice` (0x817b95e) into `G_BroadcastVoice` (0x80a7170):
     /// the talker's `lastVoiceTime` stamped, then each client of the
     /// level the rules pass ([`hears`]), by number.
@@ -122,20 +109,7 @@ impl Cod4Server {
                 wants: c.voice.send,
             });
         }
-        let Some(t) = voicers[talker] else {
-            return;
-        };
-        for (i, l) in voicers.iter().enumerate() {
-            if let Some(l) = l
-                && hears(&rules, &t, l, i == talker)
-            {
-                self.core.clients[i]
-                    .as_mut()
-                    .unwrap()
-                    .voice
-                    .queue(talker, frame);
-            }
-        }
+        self.queue_voice(talker, frame, &rules, &voicers);
     }
 
     /// `SV_SendClientVoiceData` (0x817bab2), after the slot's message: an

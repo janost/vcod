@@ -11,10 +11,10 @@ use std::time::Instant;
 
 use vcod_common::net::codec::MsgWriter;
 use vcod_common::net::netchan::ClientMessage;
-use vcod_common::net::protocol::WireGame;
+use vcod_common::net::protocol::{SnapshotHead, WireGame};
 
 use super::link;
-use super::slot::{Conn, State};
+use super::slot::{Conn, PACKET_BACKUP, State};
 use super::{Engine, EngineCore, GameModule};
 use crate::game::script::ScriptRuntime;
 use crate::rcon::{Redirect, Verdict};
@@ -200,6 +200,66 @@ pub enum CommandSeq {
     Next,
 }
 
+/// `sv_serverid` after `SV_SpawnServer` (cod2_lnxded 0x8093520, cod4_lnxded
+/// 0x81748da): the high nibble steps, and steps again past a wrap to 0,
+/// the low nibble kept. VERIFIED (CoD4's first spawn's 16 live).
+pub fn spawn_server_id(id: i32) -> i32 {
+    let mut b = (id as u8).wrapping_add(0x10);
+    if b & 0xf0 == 0 {
+        b = b.wrapping_add(0x10);
+    }
+    i32::from(b)
+}
+
+/// `sv_serverid` after a `fast_restart` (`SV_MapRestart`, cod2_lnxded
+/// 0x808be3e, cod4_lnxded 0x816c466): the low nibble steps, the high one
+/// kept. VERIFIED.
+pub fn restart_server_id(id: i32) -> i32 {
+    ((id + 1) & 0xf) + (id & 0xf0)
+}
+
+/// A frame older than this many messages is not deltaed from
+/// (cod2-protocol.md 3.3).
+pub const MAX_DELTA_AGE: i32 = PACKET_BACKUP as i32 - 3;
+
+/// `SV_WriteSnapshotToClient` (cod2_lnxded 0x80985c8): `to` deltaed from
+/// the frame the client last acknowledged, while that is past the
+/// gamestate and young enough, else whole; the snapshot flags the
+/// server's count bit, 1 while the rate holds messages back and 2 for a
+/// zombie never sent one active; then `to` filed under its message.
+pub fn write_snapshot<W: WireGame, X>(
+    wire: &W,
+    w: &mut MsgWriter,
+    c: &mut Conn<(i32, W::Frame), X>,
+    to: W::Frame,
+    server_flags: u8,
+    baselines: &W::Baselines,
+) {
+    let message = c.link.netchan.outgoing_sequence as i32;
+    let from = (c.state == State::Active
+        && c.delta_message > 0
+        && c.delta_message > c.gamestate_message
+        && message - c.delta_message < MAX_DELTA_AGE)
+        .then(|| {
+            c.link.frames[c.delta_message as usize % PACKET_BACKUP]
+                .as_ref()
+                .filter(|(n, _)| *n == c.delta_message)
+                .map(|(_, f)| f)
+        })
+        .flatten();
+    if c.state == State::Active {
+        c.link.was_active = true;
+    }
+    let flags =
+        server_flags | u8::from(c.link.rate_delayed) | if c.link.was_active { 0 } else { 2 };
+    let head = SnapshotHead {
+        delta_num: from.map_or(0, |_| (message - c.delta_message) as u8),
+        snap_flags: u32::from(flags),
+    };
+    wire.write_snapshot(w, from, &to, head, baselines);
+    c.link.frames[message as usize % PACKET_BACKUP] = Some((message, to));
+}
+
 /// The unacknowledged server commands, each `svc_serverCommand`; every
 /// one of them now sent.
 pub fn write_pending_commands<G: ConnGame>(w: &mut MsgWriter, c: &mut G::Client) {
@@ -324,7 +384,10 @@ impl<G: ConnGame> Engine<G> {
     /// `nextSnapshotTime`: the next frame for a LAN client, else what the
     /// rate needs and at least the snapshot interval, a second on for one
     /// neither in the world nor downloading (cod2-protocol.md 17.2,
-    /// cod4-handshake.md 15).
+    /// cod4-handshake.md 15). CoD4's loopback walker was sent its 359-byte
+    /// spawn frame and the next snapshot 50 ms apart at `sv_maxRate` 5000,
+    /// and the gamestate's fragments 350 ms apart (VERIFIED live,
+    /// cod4-pmove.md 15, cod4-handshake.md 3).
     pub(crate) fn transmit(&mut self, slot: usize, ops: Vec<u8>) {
         let svs = self.core.sv_time_ms;
         let max_rate = self.int("sv_maxRate");
@@ -365,6 +428,19 @@ impl<G: ConnGame> Engine<G> {
         c.link.unsent = pkts.into();
     }
 
+    /// `SV_SendClientGameState`'s tail: the message the gamestate's `ops`
+    /// go in marked, the client `CS_PRIMED` with no delta base and no pure
+    /// verdict, the message sent.
+    pub(crate) fn transmit_gamestate(&mut self, slot: usize, ops: Vec<u8>) {
+        let c = self.core.clients[slot].as_mut().unwrap();
+        c.gamestate_message = c.link.netchan.outgoing_sequence as i32;
+        c.state = State::Primed;
+        c.delta_message = -1;
+        c.pure = None;
+        log::info!("client {slot} gamestate, message {}", c.gamestate_message);
+        self.transmit(slot, ops);
+    }
+
     /// Whether `slot` takes a turn in `SV_SendClientMessages`
     /// ([`super::send_messages`]): a client with a socket whose
     /// `nextSnapshotTime` came.
@@ -384,6 +460,43 @@ impl<G: ConnGame> Engine<G> {
         let left = pkt.len() - 10 + c.link.unsent.iter().map(|p| p.len() - 10).sum::<usize>();
         c.link.next_message_ms = svs + link::rate_msec(left, c.rates.send_rate(max_rate));
         Some((c.link.addr, pkt))
+    }
+
+    /// `SV_PreGameUserVoice` (cod2_lnxded 0x809c3c6, cod4_lnxded
+    /// 0x817bc58): every other client past `CS_ZOMBIE` that has not muted
+    /// the talker and wants voice, no game rule asked.
+    pub(crate) fn pre_game_voice(&mut self, talker: usize, frame: &[u8]) {
+        for (n, c) in self.core.clients.iter_mut().enumerate() {
+            let Some(c) = c.as_mut() else { continue };
+            if n != talker && c.state > State::Zombie && !c.voice.muted[talker] && c.voice.send {
+                c.voice.queue(talker, frame);
+            }
+        }
+    }
+
+    /// `G_BroadcastVoice`'s loop: `frame` queued for each client the
+    /// level's rules let hear `talker` (`voicers` by slot).
+    pub(crate) fn queue_voice(
+        &mut self,
+        talker: usize,
+        frame: &[u8],
+        rules: &crate::voice::Rules,
+        voicers: &[Option<crate::voice::Voicer>],
+    ) {
+        let Some(t) = voicers.get(talker).copied().flatten() else {
+            return;
+        };
+        for (i, l) in voicers.iter().enumerate() {
+            if let Some(l) = l
+                && crate::voice::hears(rules, &t, l, i == talker)
+            {
+                self.core.clients[i]
+                    .as_mut()
+                    .unwrap()
+                    .voice
+                    .queue(talker, frame);
+            }
+        }
     }
 
     /// `Cbuf_Execute` over the queued console lines (`quit` from Ctrl-C),
@@ -665,5 +778,20 @@ impl<G: ConnGame> Engine<G> {
             _ => return false,
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_server_id_steps_as_retail_s() {
+        assert_eq!(spawn_server_id(0), 16);
+        assert_eq!(spawn_server_id(17), 33);
+        assert_eq!(spawn_server_id(0x1f), 0x2f);
+        assert_eq!(spawn_server_id(0xf3), 0x13);
+        assert_eq!(restart_server_id(16), 17);
+        assert_eq!(restart_server_id(0x1f), 0x10);
     }
 }

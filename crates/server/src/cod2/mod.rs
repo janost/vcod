@@ -60,7 +60,7 @@ use vcod_common::net::codec::{MsgReader, MsgWriter};
 use vcod_common::net::com_hash_key_bytes;
 use vcod_common::net::msg::EntityState;
 use vcod_common::net::netchan::{ClientMessage, NetchanParams, ServerNetchan};
-use vcod_common::net::protocol::{SnapshotHead, WireGame};
+use vcod_common::net::protocol::WireGame;
 use vcod_common::pk3::Pk3Fs;
 
 use crate::engine::{Lan, conn, link};
@@ -71,8 +71,6 @@ use crate::game::cod2_wire::to_cod2_entity;
 pub const FRAME_MS: i32 = 50;
 /// `PACKET_BACKUP`: the frames a client can delta from.
 const PACKET_BACKUP: usize = crate::engine::slot::PACKET_BACKUP;
-/// A frame older than this many messages is not deltaed from (3.3).
-const MAX_DELTA_AGE: i32 = PACKET_BACKUP as i32 - 3;
 /// `TEAM_SPECTATOR` in a client state's `team`.
 const TEAM_SPECTATOR: u32 = 3;
 /// The playerstate's `pm_flags` and `eFlags` a retail spectator carries
@@ -513,7 +511,7 @@ impl Cod2Server {
         if !gametype.is_empty() {
             self.game.cfg.gametype = gametype.to_string();
         }
-        self.game.server_id = cycle::spawn_server_id(self.game.server_id);
+        self.game.server_id = conn::spawn_server_id(self.game.server_id);
         self.game.snap_flags ^= 4;
         let Some(fs) = fs else {
             self.write_engine_configstrings();
@@ -1195,16 +1193,7 @@ impl Cod2Server {
                 ..gs
             },
         );
-        c.gamestate_message = c.link.netchan.outgoing_sequence as i32;
-        c.state = State::Primed;
-        c.delta_message = -1;
-        c.pure = None;
-        log::info!(
-            "cod2: client {slot} gamestate, message {}",
-            c.gamestate_message
-        );
-        let ops = w.into_ops();
-        self.transmit(slot, ops);
+        self.transmit_gamestate(slot, w.into_ops());
     }
 
     /// `SV_DropClient` (0x808f02e): the game lets go of the slot, which
@@ -1441,40 +1430,20 @@ impl Cod2Server {
         let mut w = MsgWriter::new(&self.core.huff);
         if in_world {
             conn::write_pending_commands::<Cod2Game>(&mut w, c);
-            let message = c.link.netchan.outgoing_sequence as i32;
             let to = Frame2 {
                 server_time: svs,
                 ps,
                 entities,
                 clients: archived.map_or_else(|| clients.to_vec(), |r| r.to_vec()),
             };
-            let from = (c.state == State::Active
-                && c.delta_message > 0
-                && c.delta_message > c.gamestate_message
-                && message - c.delta_message < MAX_DELTA_AGE)
-                .then(|| {
-                    c.link.frames[c.delta_message as usize % PACKET_BACKUP]
-                        .as_ref()
-                        .filter(|(n, _)| *n == c.delta_message)
-                        .map(|(_, f)| f)
-                })
-                .flatten();
-            // `SV_WriteSnapshotToClient` (0x80985c8): the server count bit,
-            // 1 while the rate holds messages back, 2 for a zombie never
-            // sent one active.
-            if c.state == State::Active {
-                c.link.was_active = true;
-            }
-            let flags = self.game.snap_flags
-                | u8::from(c.link.rate_delayed)
-                | if c.link.was_active { 0 } else { 2 };
-            let baselines = &self.game.baselines;
-            let head = SnapshotHead {
-                delta_num: from.map_or(0, |_| (message - c.delta_message) as u8),
-                snap_flags: u32::from(flags),
-            };
-            PROTOCOL_118.write_snapshot(&mut w, from, &to, head, baselines);
-            c.link.frames[message as usize % PACKET_BACKUP] = Some((message, to));
+            conn::write_snapshot(
+                &PROTOCOL_118,
+                &mut w,
+                c,
+                to,
+                self.game.snap_flags,
+                &self.game.baselines,
+            );
         }
         if c.state != State::Zombie {
             let budget =

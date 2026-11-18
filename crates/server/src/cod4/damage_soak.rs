@@ -776,7 +776,7 @@ fn cod4_damage_survives_the_time_limit_restarted() {
         return;
     }
     assert!(levels.len() >= 2, "no restart: {levels:?}");
-    assert_eq!(levels[1], super::cycle::restart_server_id(levels[0]));
+    assert_eq!(levels[1], crate::engine::conn::restart_server_id(levels[0]));
 }
 
 /// [`PLAN`] with each client's cmds a link behind the server's clock, so

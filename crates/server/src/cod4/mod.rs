@@ -37,7 +37,7 @@ use vcod_cod4::net::stats::{STAT_PACKETS, Stats};
 use vcod_cod4::net::wire::{Cod4Wire, EOF, Frame4, PROTOCOL_17};
 use vcod_common::net::codec::MsgWriter;
 use vcod_common::net::netchan::{NetchanParams, ServerNetchan};
-use vcod_common::net::protocol::{SnapshotHead, WireGame};
+use vcod_common::net::protocol::WireGame;
 
 use crate::engine::{conn, link};
 
@@ -49,8 +49,6 @@ pub const FRAME_MS: i32 = 50;
 /// is sent 74 commands in 26 s.
 const MAX_RELIABLE_COMMANDS: usize = NetchanParams::COD2.reliable_commands;
 const PACKET_BACKUP: usize = crate::engine::slot::PACKET_BACKUP;
-/// A frame older than this many messages is not deltaed from.
-const MAX_DELTA_AGE: i32 = PACKET_BACKUP as i32 - 3;
 /// `TEAM_SPECTATOR` in a client state's `team`, as the spectator capture's
 /// roster reads (VERIFIED live, `play-1.7-spec.txt`).
 const TEAM_SPECTATOR: u32 = 3;
@@ -391,13 +389,7 @@ impl conn::ConnGame for Cod4Game {
     /// 0x8178aff..0x8178c98: a client in the world more than 28 messages
     /// past its last acknowledge, LAN or not, is due `irand(0, 2^n) *
     /// snapshotMsec` on, n counting such messages from 0 up to 8 and back
-    /// to 0 on any other (cod4-server-frame.md 12). The loopback walker was
-    /// sent its 359-byte spawn frame and the next snapshot 50 ms apart at
-    /// `sv_maxRate` 5000, and a client not yet in the world every 50 ms
-    /// (VERIFIED live, cod4-pmove.md 15, cod4-handshake.md 3). The
-    /// fragments that follow a message's first are rate-paced for every
-    /// client (`next_fragment`; the gamestate's 350 ms apart, VERIFIED
-    /// live).
+    /// to 0 on any other (cod4-server-frame.md 12).
     fn back_off(e: &mut Cod4Server, slot: usize, sequence: i32) -> bool {
         let svs = e.core.sv_time_ms;
         let c = e.core.clients[slot].as_mut().unwrap();
@@ -587,7 +579,7 @@ impl Cod4Server {
         if let Some(mut old) = self.game.level.take() {
             self.game.cvars = std::mem::take(&mut old.rt.host.cvars);
         }
-        self.game.server_id = spawn_server_id(self.game.server_id);
+        self.game.server_id = conn::spawn_server_id(self.game.server_id);
         self.game.snap_flags ^= SNAPFLAG_SERVERCOUNT;
         self.game.start_frame = Some(self.core.sv_time_ms);
         self.game.zones4 = None;
@@ -1299,16 +1291,7 @@ impl Cod4Server {
             feed,
         );
         PROTOCOL_17.write_gamestate(&mut w, &gs);
-        c.gamestate_message = c.link.netchan.outgoing_sequence as i32;
-        c.state = State::Primed;
-        c.delta_message = -1;
-        c.pure = None;
-        log::info!(
-            "cod4: client {slot} gamestate, message {}",
-            c.gamestate_message
-        );
-        let ops = w.into_ops();
-        self.transmit(slot, ops);
+        self.transmit_gamestate(slot, w.into_ops());
     }
 
     /// `SV_DropClient` (0x817096e): the slot turns `CS_ZOMBIE`; everyone
@@ -1498,7 +1481,6 @@ impl Cod4Server {
         let mut w = MsgWriter::new(&UNUSED_HUFF);
         if matches!(c.state, State::Active | State::Zombie) {
             conn::write_pending_commands::<Cod4Game>(&mut w, c);
-            let message = c.link.netchan.outgoing_sequence as i32;
             let mut ps = level_ps.unwrap_or_else(|| {
                 spectator_ps(slot, origin, angles, c.extra.command_time.max(svs - frame))
             });
@@ -1517,28 +1499,14 @@ impl Cod4Server {
                     .collect(),
                 clients: roster.to_vec(),
             };
-            let from = (c.state == State::Active
-                && c.delta_message > 0
-                && c.delta_message > c.gamestate_message
-                && message - c.delta_message < MAX_DELTA_AGE)
-                .then(|| {
-                    c.link.frames[c.delta_message as usize % PACKET_BACKUP]
-                        .as_ref()
-                        .filter(|(n, _)| *n == c.delta_message)
-                        .map(|(_, f)| f)
-                })
-                .flatten();
-            if c.state == State::Active {
-                c.link.was_active = true;
-            }
-            let flags =
-                flags_base | u8::from(c.link.rate_delayed) | if c.link.was_active { 0 } else { 2 };
-            let head = SnapshotHead {
-                delta_num: from.map_or(0, |_| (message - c.delta_message) as u8),
-                snap_flags: u32::from(flags),
-            };
-            PROTOCOL_17.write_snapshot(&mut w, from, &to, head, &self.game.baselines);
-            c.link.frames[message as usize % PACKET_BACKUP] = Some((message, to));
+            conn::write_snapshot(
+                &PROTOCOL_17,
+                &mut w,
+                c,
+                to,
+                flags_base,
+                &self.game.baselines,
+            );
         }
         if c.extra.download.active() && c.state != State::Zombie {
             let rate = c.rates.send_rate(max_rate);
@@ -1656,16 +1624,6 @@ fn iwd_cfg(fs: &vcod_common::pk3::Pk3Fs, name: &str, depth: u32) -> String {
         }
     }
     out
-}
-
-/// `sv_serverid` steps 16 a spawn, past 0 in the high nibble;
-/// the first spawn's 16 is VERIFIED live.
-fn spawn_server_id(id: i32) -> i32 {
-    let mut n = (id + 16) & 0xff;
-    if n & 0xf0 == 0 {
-        n += 16;
-    }
-    n
 }
 
 /// Whether a command goes `SV_CMD_CAN_IGNORE`, read off its letter: the

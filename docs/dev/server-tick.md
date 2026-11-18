@@ -95,6 +95,12 @@ ping rings, pacing, fragments and timeout clock are its `link`
 
 - What every server answers alike over it (`tick_frames`, `handle_packet`,
   `push_console`, `take_outgoing`) is one `impl<G: GameModule> Engine<G>`.
+- CoD2's and CoD4's slots are one `engine::slot::Conn`, and what the two
+  engines run alike between a datagram and the level (the netchan's
+  acceptance, the reliable ring, `transmit`'s pacing, `message_due`,
+  `next_fragment`, `flush_game_commands`) is one
+  `impl<G: ConnGame> Engine<G>` (`engine/conn.rs`); a step that differs
+  is a `ConnGame` hook.
 - The frame writers are the wire's (`WireGame::write_gamestate`,
   `write_snapshot`). A game builds its frame in its own numbering (CoD1 maps
   1.1's once a snapshot).
