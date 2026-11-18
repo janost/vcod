@@ -341,7 +341,8 @@ impl Cod4Level {
     /// Last Stand clears its entity too. Otherwise the use list is walked
     /// in order and the first entry that offers a hint wins
     /// ([`Self::entry_hint`]). Its entity is what the next use press
-    /// (`Player_ActivateCmd`) or frag press (the live grenade pickup)
+    /// (`Player_ActivateCmd`) or frag press
+    /// ([`Self::attempt_live_grenade_pickup`])
     /// takes. cod4-gsc.md 9.1-9.3; the pins are `turret_tests`.
     pub(super) fn update_cursor_hints(&mut self, slot: usize) {
         let Some(p) = self.players[slot].as_mut() else {
@@ -565,7 +566,7 @@ impl Cod4Level {
         }
     }
 
-    /// The live grenade pickup, inlined in the client event handler's
+    /// The live grenade pickup, inlined in `ClientEvents`' (0x80a581e)
     /// `EV_SWITCH_OFFHAND` arm (`cod4_lnxded` 0x80a59c6..0x80a5aa5): with
     /// an entity under the hint (`cursorHintEntIndex` not 0), the event's
     /// weapon a frag (`offhandClass` 1 at def+0x144), the entity a missile
@@ -577,8 +578,8 @@ impl Cod4Level {
     /// one), puts `EV_AMMO_PICKUP` on the player, notifies `trigger` on the
     /// grenade with the player and frees it (`death`), INFERRED.
     /// The offhand half then throws it back with that fuse: pmove spends no
-    /// ammo on a throw back and the grenade timer init arms the new grenade off
-    /// `grenadeTimeLeft` (cod4-combat.md 10, cod4-gsc.md 9.3).
+    /// ammo on a throw back and [`Cod4Level::fire_grenade`] arms the new
+    /// grenade off `grenadeTimeLeft` (cod4-combat.md 10, cod4-gsc.md 9.3).
     pub(super) fn attempt_live_grenade_pickup(&mut self, slot: usize, weapon: u32) {
         const OFFHAND_FRAG: i32 = 1;
         const EV_AMMO_PICKUP: u32 = 10;

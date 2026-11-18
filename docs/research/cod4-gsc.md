@@ -2529,8 +2529,8 @@ bot-objectives.md 12).
 `Player_GetUseList` is inlined in `Player_UpdateCursorHints` at
 `cod4_lnxded` 0x80d2c30 (called from 0x80a6cea), with `compare_use` at
 0x80d2c10 passed to `qsort` four times (0x80d3271, 0x80d33ad, 0x80d3700,
-0x80d3720). Port: `game::cod4::use_key` (`use_list`, `use_hint`,
-`use_entity`).
+0x80d3720). Port: `game::cod4::use_key` (`use_list`, `entry_hint`,
+`update_cursor_hints`, `use_entity`).
 
 - Constants, each read by an `fsubs` or `fadds` at 0x80d3655..0x80d36c4:
   0.76 (0x822094c, the `requireLookAt` dot); 512 (0x8211e70) off a
