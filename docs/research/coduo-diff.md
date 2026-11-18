@@ -2146,7 +2146,7 @@ loopback (`COD_VERSION=uo tools/run_server.sh`, mp_cassino dm).
   | `viewKick` | 0x6db55 | damage feedback of `force` from the given point |
   | `setContents` | 0x696b9 | |
   | `setTakeDamage` | 0x691d2 | writes the entity's `takedamage` (section 22) |
-| `setBounds` | | sets the link box and relinks |
+  | `setBounds` | | sets the link box and relinks |
 
   `weaponSlot` gains `satchel` and `binocular` (strings 0x9bc21, 0x9bc29,
   VERIFIED).
