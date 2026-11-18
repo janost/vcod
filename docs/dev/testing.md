@@ -85,7 +85,7 @@ picks through `Server::pin_spawns`, as `gametypes_ab` does.
 - `ci.yml` runs on ubuntu with no game data, so no pak test and no A/B gate
   runs there; they run only on a machine with an install. It pins the
   toolchain (`RUST_TOOLCHAIN`, bumped on purpose), passes `--locked`, and
-  also checks the workspace on Windows, macOS and the 1.90 MSRV, and runs
+  also checks the workspace on Windows, macOS and the 1.95 MSRV, and runs
   the suite on Windows and macOS. A second Linux step runs the client's
   render tests on lavapipe with `VCOD_REQUIRE_GPU=1`: a headless test takes
   its adapter through `renderer::headless::test_adapter`, so one that finds
