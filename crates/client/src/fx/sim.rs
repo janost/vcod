@@ -508,7 +508,6 @@ struct PendingMark {
     repose: Option<Bolt>,
 }
 
-/// Where one spawn's elements land.
 /// A camera's frustum as `FX_SetNextUpdateCamera` builds it: the view's
 /// forward plane through the eye, then its four sides, each `(normal,
 /// distance)` with the normal inward (cod4-effects.md 18).
@@ -542,6 +541,7 @@ impl Frustum {
     }
 }
 
+/// Where one spawn's elements land.
 struct SpawnOut<'a> {
     particles: &'a mut VecDeque<Particle>,
     marks: &'a mut Vec<PendingMark>,
@@ -756,7 +756,8 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
             }
         }
 
-        // evenDistribution is not implemented.
+        // CoD1's `evenDistribution` is not implemented (efx-grammar.md R6);
+        // CoD2's spreads the delays above.
         let (center, base) = element_origin(rng, em, at, frame);
 
         // axisFromSphere: velocity points radially out from the spawn center,
@@ -1407,9 +1408,6 @@ impl Shape {
     }
 }
 
-/// A sprite's vertex colour at `t` through its life: the rgb curve, then
-/// the alpha curve clamped to 0..1, into the alpha (`useAlpha`) or onto the
-/// rgb with an opaque alpha (0x48e640 then 0x48e7d0).
 /// [`vertex_colour`] at `pos`, a CoD4 element's alpha scaled by its
 /// distance fade from `cam_pos` ([`cod2::Live::distance_fade`]).
 fn faded_colour(p: &Particle, t: f32, pos: Vec3, cam_pos: Vec3) -> (Vec3, f32) {
@@ -1425,6 +1423,9 @@ fn faded_colour(p: &Particle, t: f32, pos: Vec3, cam_pos: Vec3) -> (Vec3, f32) {
     }
 }
 
+/// A sprite's vertex colour at `t` through its life: the rgb curve, then
+/// the alpha curve clamped to 0..1, into the alpha (`useAlpha`) or onto the
+/// rgb with an opaque alpha (0x48e640 then 0x48e7d0).
 fn vertex_colour(p: &Particle, t: f32) -> (Vec3, f32) {
     let (rgb, alpha) = match &p.cod2 {
         Some(l) => (l.rgb(t), l.alpha(t)),
@@ -1814,7 +1815,6 @@ impl FxSystem {
         self.warned.clear();
     }
 
-    /// A new map: world-space particles and marks are meaningless there.
     /// A freshly loaded cgame: [`Self::clear`], and the view weapon's
     /// `tag_brass` back to its zeroed start.
     pub fn restart_cgame(&mut self) {
@@ -1833,6 +1833,7 @@ impl FxSystem {
         self.view_brass
     }
 
+    /// A new map: world-space particles and marks are meaningless there.
     pub fn clear(&mut self) {
         self.particles.clear();
         self.marks.clear();
@@ -2096,15 +2097,15 @@ impl FxSystem {
         sounds
     }
 
-    /// Plays the effects due by `now` that others started: delayed
-    /// `playfx`, and the `impactfx`, `emitfx` and `deathfx` the steps
-    /// since the last call raised.
     /// The chained effects waiting to start, by path, for the gates.
     #[cfg(test)]
     pub(crate) fn pending_chains(&self) -> Vec<&str> {
         self.chains.iter().map(|c| c.path.as_str()).collect()
     }
 
+    /// Plays the effects due by `now` that others started: delayed
+    /// `playfx`, and the `impactfx`, `emitfx` and `deathfx` the steps
+    /// since the last call raised.
     pub fn spawn_chained(&mut self, fs: &dyn AssetSource, now: f32) -> Vec<FxSound> {
         self.budget = MAX_SPAWN_BUDGET;
         let sounds = self.drain_chains(fs, now, 0);

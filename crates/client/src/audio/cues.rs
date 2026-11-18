@@ -84,7 +84,7 @@ impl Source {
 pub struct Cue {
     pub alias: String,
     pub source: Source,
-    /// Seconds before start. Always 0 today.
+    /// Seconds before start; nonzero only for an effect's sound (`play_fx`).
     pub delay_s: f32,
 }
 

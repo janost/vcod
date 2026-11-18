@@ -1,5 +1,5 @@
 //! `--save-shock`: the client half of the shellshock capture. Waits for
-//! `client-probes/probe_shock` to put the player on mp_carentan's street
+//! `client-probes/probe_shock` to put the player on mp_carentan's floor
 //! mark, then runs forward and back along world x, a second each way, and
 //! holds `wbuttons` 0x4 while the playerstate's shellshock runs, as the
 //! retail cgame does (docs/research/cod11-shellshock.md, "Movement"). Writes
@@ -11,7 +11,7 @@ use vcod_common::net;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd, WBUTTON_SHELLSHOCK};
 use vcod_common::net::snapshot::Snapshot;
 
-/// `probe_shock.gsc`'s mark, `probe_legs`'s street spot.
+/// `probe_shock.gsc`'s mark, `probe_legs`'s floor spot.
 pub const SHOCK_SPOT: [f32; 3] = crate::legs_probe::LEGS_SPOT;
 
 /// Each leg of the walk, alternating forward and back from forward.
