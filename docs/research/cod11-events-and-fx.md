@@ -31,6 +31,7 @@ wire.
 | `cgame_mp_x86.dll` (1.1) | `4912169a9eb22b404f95c52863a5feb6` | event dispatch, effect/tracer/muzzle-flash selection |
 | `game_mp_x86.dll` (1.1) | `25e2fcfe02ca0c46f4e9ad2530d50691` | EV table cross-check |
 | `CoDMP.exe` (1.1) | `753fbcabd0fdda7f7dad3dbb29c3c008` | `entityState_t` / `playerState_t` netfield tables (client side) |
+| `ui_mp_x86.dll` (1.1) | `d9b88d926b54d7c194b258993271c8bb` | the front end (`cod11-front-end.md`), image base `0x40000000` |
 | `game.mp.i386.so` (1.1d Linux dedicated server) | `de8947beb6f86fbfb46f5adfaab3d3ed` | who writes which field (full symbols), `bytedirs`, `ByteToDir`/`DirToByte` |
 | `pak5.pk3 : fx/iw_impacts.csv` | none | the (impact type, surface) to `.efx` table |
 | `cgame_mp_x86.dll` (1.5) | `075e2af18aeaf2aeaf2a75ce22db683a` | 1.5 diff |
