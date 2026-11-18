@@ -72,8 +72,6 @@ const DFLAG_ARMOR_PIERCING: i32 = 2;
 const DFLAG_PENETRATION: i32 = 0x20;
 /// `EVENT_VALID_MSEC`: an exploded missile is freed this long after.
 const EVENT_VALID_MS: i32 = 300;
-/// `g_clonePlayerMaxVelocity`'s default is not read; vcod settles a corpse
-/// where it fell.
 /// A grenade's and a rocket's clip mask, 0x2802891 (`fire_grenade`
 /// lnxded 0x810e68e, `fire_rocket` 0x810e938): the blast probes' mask with
 /// bodies.
@@ -1551,8 +1549,6 @@ impl Cod2Level {
         }
     }
 
-    /// `OnSameTeam`: both on one team under a team gametype (a free-for-all
-    /// reads every client's `sessionteam` as `none`).
     /// `Player_UpdateLookAtEntity` (Mac 0x1cd1d4), from `ClientEndFrame`:
     /// `pm_flags` 0x300000 cleared, then a 15000-unit locational trace
     /// along the view (mask 0x22802801, the rifle priority map for a
@@ -1606,6 +1602,8 @@ impl Cod2Level {
         }
     }
 
+    /// `OnSameTeam`: both on one team under a team gametype (a free-for-all
+    /// reads every client's `sessionteam` as `none`).
     fn same_team(&mut self, a: usize, b: usize) -> bool {
         let (ta, tb) = (self.rt.client_team(a), self.rt.client_team(b));
         ta == tb

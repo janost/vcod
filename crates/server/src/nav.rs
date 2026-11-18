@@ -1621,9 +1621,6 @@ impl NavGraph {
             .or(near.first().map(|&(_, n)| (n, false)))
     }
 
-    /// A* from `from` to `to` over the directed edges, Euclidean cost and
-    /// heuristic. The node list runs from `from` to `to` inclusive; `None`
-    /// when `to` is unreachable or the search runs past its budget.
     /// Where a bot stands in a zone `mins`..`maxs` (a bombzone, a goal
     /// trigger): the node 16 units inside the bounds nearest their middle
     /// at the floor, from the component holding the most nodes of those a
@@ -1680,6 +1677,9 @@ impl NavGraph {
         best(true).or_else(|| best(false))
     }
 
+    /// A* from `from` to `to` over the directed edges, Euclidean cost and
+    /// heuristic. The node list runs from `from` to `to` inclusive; `None`
+    /// when `to` is unreachable or the search runs past its budget.
     pub fn path(&self, from: u32, to: u32) -> Option<Vec<u32>> {
         self.path_avoiding(from, to, &[])
     }
@@ -4092,7 +4092,6 @@ impl Follower {
         self.yield_ticks
     }
 
-    /// Test-facing: the current waypoint's node and the one after it.
     /// The edges of the path still ahead, the one under way first.
     pub fn ahead(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
         self.path
@@ -4102,6 +4101,7 @@ impl Follower {
             .map(|w| (w[0], w[1]))
     }
 
+    /// Test-facing: the current waypoint's node and the one after it.
     pub fn current(&self) -> (Option<u32>, Option<u32>) {
         (
             self.path.get(self.next).copied(),
@@ -6614,20 +6614,6 @@ fn jump_clear(
 /// 612.26 lands on its ledge at 652.42, 40.2 up (UO rules, measured).
 const JUMP_SLACK: f32 = 2.0;
 
-/// Whether `p` lies beneath a sheet of ground. Terrain and patches are
-/// surfaces, not solids, so a run that finds a gap at a sheet's edge can
-/// walk the map's floor under them (mp_hurtgen's, 48 units below its river
-/// bed). From there the ray up either stops on the underside of a triangle
-/// whose own face, `(b - a) x (c - a)`, points up, or passes through a
-/// one-sided terrain triangle and the same ray back down hits it. Both rays
-/// see what a player clips, not the brushes only a shot meets. Nothing else
-/// the ray back down meets is ground over the point: a patch (mp_ship's
-/// mast ladder stands 540 units under a spar's top facet), or a ceiling
-/// just over the head that the ray starts against (a low doorway on
-/// mp_pavlov kept 540 nodes behind it off the graph). The rays start a step
-/// over the feet, not at the head: mp_carentan's terrain runs 38 units over
-/// the base brush west of its boundary wall, and from the head a flood
-/// seeded there walked under it into the town.
 /// Whether a standing body at `from` on the ground walks straight to `to`
 /// on one floor: its capsule swept a step up clears, and every
 /// [`PULL_PROBE`] units along the line there is ground a body stands on
@@ -6648,6 +6634,20 @@ fn straight_floor(world: &CollisionWorld, from: Vec3, to: Vec3) -> bool {
     })
 }
 
+/// Whether `p` lies beneath a sheet of ground. Terrain and patches are
+/// surfaces, not solids, so a run that finds a gap at a sheet's edge can
+/// walk the map's floor under them (mp_hurtgen's, 48 units below its river
+/// bed). From there the ray up either stops on the underside of a triangle
+/// whose own face, `(b - a) x (c - a)`, points up, or passes through a
+/// one-sided terrain triangle and the same ray back down hits it. Both rays
+/// see what a player clips, not the brushes only a shot meets. Nothing else
+/// the ray back down meets is ground over the point: a patch (mp_ship's
+/// mast ladder stands 540 units under a spar's top facet), or a ceiling
+/// just over the head that the ray starts against (a low doorway on
+/// mp_pavlov kept 540 nodes behind it off the graph). The rays start a step
+/// over the feet, not at the head: mp_carentan's terrain runs 38 units over
+/// the base brush west of its boundary wall, and from the head a flood
+/// seeded there walked under it into the town.
 fn under_ground(world: &CollisionWorld, p: Vec3) -> bool {
     let start = p + Vec3::Z * vcod_common::pmove::STEPSIZE;
     let up = world.point_trace(start, start + Vec3::Z * 8192.0, MASK_PLAYERSOLID, false);

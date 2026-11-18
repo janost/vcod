@@ -261,6 +261,8 @@ impl Cod4Level {
                 hit = Hit {
                     normal: m.normal,
                     surface_flags: m.surface_flags,
+                    // The bit of a script model's 0x2080 the shot mask meets
+                    // (cod4-combat.md 13.1).
                     contents: 0x2000,
                     entity: self.takedamage_entity(b.id.0),
                     number: Some(b.id.0),

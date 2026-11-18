@@ -1,6 +1,8 @@
-//! The per-client builtins the stock join sequence reaches: the two server
-//! commands it sends, the three that arm a spawning player's weapons, and
-//! the spawn-point test `_spawnlogic` filters candidates with.
+//! The per-player builtins (`NAMES`): the server commands a join sends
+//! (`setClientCvar`, the menus), the weapon and ammo calls, the spawn-point
+//! test `_spawnlogic` filters candidates with, the view, movement and input
+//! queries, shellshock, chat, `cloneplayer`, `addTestClient` and 1.5's auto
+//! demo and screenshot calls.
 //!
 //! `setClientCvar` and `openMenu` write no game state: each renders one
 //! reliable command and queues it on `GameHost::client_commands`, which

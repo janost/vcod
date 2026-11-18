@@ -1883,7 +1883,8 @@ fn draw_spin(rand: &mut GlibcRand, facing: Vec3) -> Traj {
 }
 
 /// When a grenade bursts: `fuse_ms` past `now` for a timed one, else (or
-/// at a deadline of 0) 30 s on; never past 60 s.
+/// at a deadline of 0) 30 s on; never past 60 s. The 30 s and 60 s are
+/// vcod's, unverified against retail (cod4-combat.md 10.2 has no rule).
 fn grenade_deadline(now: i32, fuse_ms: Option<i32>) -> i32 {
     let at = fuse_ms
         .map(|ms| now + ms)

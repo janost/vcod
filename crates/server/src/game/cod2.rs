@@ -2,7 +2,7 @@
 //! world, each client's CoD2 `playerState` and its `ClientThink`, the
 //! engine notifies only CoD2 raises, and the callback arguments CoD2 adds.
 //!
-//! [`Cod2Level`] is the game half `server.rs` will drive for a CoD2 level:
+//! [`Cod2Level`] is the game half `crate::cod2` drives for a CoD2 level:
 //! it owns the [`ScriptRuntime`] (`load_cod2_in`) and one
 //! [`vcod_cod2::pmove`] state per client, and takes the engine's calls in
 //! retail's order (connect, begin, menu responses, one `client_think` per
@@ -1663,8 +1663,8 @@ impl Cod2Level {
         self.rt.engine_client_spawn(slot, origin.to_array(), yaw);
     }
 
-    /// Whether `slot` is a client playing in the world (not a spectator or
-    /// at the intermission).
+    /// Whether `slot` is a client playing in the world: not a spectator, at
+    /// the intermission or dead (`pm_type` below `SPECTATOR`).
     pub fn playing(&self, slot: usize) -> bool {
         self.players
             .get(slot)
@@ -1695,9 +1695,6 @@ impl Cod2Level {
         self.rt.host.save_persist
     }
 
-    /// What the next level keeps of this one: `game[]` and every `pers[]`
-    /// under `savePersist`, and on a restart of the same map the compiled
-    /// closures (`restart`).
     /// The hit rigs for the next level over `fs` ([`Cod2Init::rigs`]),
     /// when it is this level's.
     pub fn carried_rigs(
@@ -1714,6 +1711,9 @@ impl Cod2Level {
         self.parts.clone()
     }
 
+    /// What the next level keeps of this one: `game[]` and every `pers[]`
+    /// under `savePersist`, and on a restart of the same map the compiled
+    /// closures (`restart`).
     pub fn take_carry(&self, restart: bool) -> crate::game::script::Carry {
         let all = self.rt.take_carry();
         let keep = self.save_persist();

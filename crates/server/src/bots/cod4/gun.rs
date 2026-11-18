@@ -449,7 +449,8 @@ impl Cod4Bots {
     }
 
     /// Whether the bot in `slot` stands nearer `spot` than every other
-    /// playing bot on its team.
+    /// client on its team: humans and the dead too, and a follower at the
+    /// followed client's origin.
     fn nearest_mate_to(&self, slot: usize, teams: &[i32], spot: Vec3) -> bool {
         let Some(me) = self.ps(slot).map(|p| p.origin.distance(spot)) else {
             return false;
