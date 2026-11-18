@@ -2,6 +2,7 @@
 //! and `G_ParseField` (docs/research/cod11-gsc-object-model.md section 7).
 
 use crate::configstrings::CsRange;
+use crate::game::builtins::cvar::{atof, atoi};
 use crate::game::fields::{FieldType, Route};
 use crate::game::host::GameHost;
 use vcod_common::bsp::{field_value, spawn_string};
@@ -133,9 +134,7 @@ pub fn spawn_entities_from_string(
             let _p = crate::tick_profile::phase("spawn/vehicle");
             crate::game::vehicle::spawn(host, cx, id, pairs.clone(), true)?;
         }
-        let spawnflags = field_value(&pairs, "spawnflags")
-            .and_then(|v| v.trim().parse::<i32>().ok())
-            .unwrap_or(0);
+        let spawnflags = field_value(&pairs, "spawnflags").map_or(0, atoi);
         // Only UO's spawn table has `trigger_mount` (`SP_trigger_mount`).
         let mount = (classname == "trigger_mount" && host.is_uo()).then_some(
             crate::game::trigger::TriggerKind::Mount {
@@ -155,7 +154,7 @@ pub fn spawn_entities_from_string(
                 let (shape, round) = round;
                 // No `G_SpawnFloat("wait")` in cod2_lnxded: the field.
                 let wait_ms = field_value(&pairs, "wait")
-                    .and_then(|v| v.trim().parse::<f32>().ok())
+                    .map(atof)
                     .map_or(crate::game::trigger::MULTIPLE_DEFAULT_WAIT_MS, |s| {
                         (s * 1000.0) as i32
                     });
@@ -409,7 +408,7 @@ fn register_trigger(
     // `SP_trigger_multiple`'s `G_SpawnFloat("wait")` (1.1d 0x64c6f).
     let secs_ms = |key: &str, default: i32| -> i32 {
         spawn_string(block, key)
-            .and_then(|v| v.trim().parse::<f32>().ok())
+            .map(atof)
             .map_or(default, |s| (s * 1000.0) as i32)
     };
     if kind == crate::game::trigger::TriggerKind::Hurt {
@@ -420,14 +419,9 @@ fn register_trigger(
         } else {
             0
         };
-        let spawnflags = field_value(block, "spawnflags")
-            .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(0);
+        let spawnflags = field_value(block, "spawnflags").map_or(0, atoi);
         // `atof(G_SpawnString("life", "0"))`.
-        let life = spawn_string(block, "life")
-            .map(str::trim)
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0.0);
+        let life = spawn_string(block, "life").map_or(0.0, atof);
         host.triggers
             .register_hurt(id, shape, sound, spawnflags, life);
         return;
@@ -564,8 +558,7 @@ fn turret_def(
 /// any of them (the AGENTS.md gotcha on Radiant keys), so they are read
 /// here rather than through `host.get_field`.
 fn turret_keys(pairs: &[(String, String)]) -> crate::game::turret::TurretKeys {
-    let f =
-        |key: &str| -> Option<f32> { spawn_string(pairs, key).and_then(|v| v.trim().parse().ok()) };
+    let f = |key: &str| -> Option<f32> { spawn_string(pairs, key).map(atof) };
     crate::game::turret::TurretKeys {
         left: f("leftarc"),
         right: f("rightarc"),
@@ -1182,6 +1175,37 @@ fn parse_field(host: &mut GameHost, cx: &mut Cx, id: EntId, key: &str, raw: &str
     let _ = host.set_field(cx, id, atom, value);
 }
 
+/// `sscanf(raw, "%f %f %f")`: the components read in order up to the first
+/// that is not a number, each its longest numeric prefix as `%f` takes it;
+/// the rest stay 0.
+fn scan_vector(raw: &str) -> [f32; 3] {
+    let mut out = [0.0; 3];
+    let mut rest = raw;
+    for v in &mut out {
+        let t = rest.trim_start();
+        let len = t
+            .char_indices()
+            .take_while(|&(i, c)| {
+                c.is_ascii_digit()
+                    || c == '.'
+                    || ((c == '-' || c == '+') && i == 0)
+                    || ((c == 'e' || c == 'E') && i > 0)
+                    || ((c == '-' || c == '+') && t[..i].ends_with(['e', 'E']))
+            })
+            .count();
+        if !t[..len].bytes().any(|b| b.is_ascii_digit()) {
+            break;
+        }
+        *v = atof(&t[..len]);
+        rest = &t[len..];
+        // `%f %f`: the space directive skips blanks; anything else ends it.
+        if !rest.starts_with(char::is_whitespace) {
+            break;
+        }
+    }
+    out
+}
+
 /// The string-to-value conversions `G_ParseField` performs, one per field
 /// type. `sscanf("%f %f %f")` for a vector, `strtol` for an int, `strtod`
 /// for a float, an interned string otherwise. `strtol` reads what number
@@ -1189,17 +1213,10 @@ fn parse_field(host: &mut GameHost, cx: &mut Cx, id: EntId, key: &str, raw: &str
 /// reads 0 on retail UO (`client-probes/probe_spawnint`), and `bas.gsc`
 /// deletes a breached base's walls on `isdefined` of it.
 pub(crate) fn convert(cx: &mut Cx, ty: FieldType, raw: &str) -> Option<Value> {
-    use crate::game::builtins::cvar::{atof, atoi};
     Some(match ty {
         FieldType::Int => Value::Int(atoi(raw)),
         FieldType::Float => Value::Float(atof(raw)),
-        FieldType::Vector | FieldType::YawVector => {
-            let mut it = raw.split_whitespace().map(str::parse::<f32>);
-            let x = it.next()?.ok()?;
-            let y = it.next()?.ok()?;
-            let z = it.next()?.ok()?;
-            Value::Vector([x, y, z])
-        }
+        FieldType::Vector | FieldType::YawVector => Value::Vector(scan_vector(raw)),
         // A model name is stored as a model index in retail and read back
         // through `G_ModelName`; here the string is the storage and the
         // index is allocated on demand by `setModel`.
@@ -1217,6 +1234,21 @@ mod tests {
     use crate::game::testing::fixture;
     use crate::items::Items;
     use vcod_gsc::{EntId, Host, Value};
+
+    /// A vector key reads as `sscanf("%f %f %f")` does: the components
+    /// it read stand, the rest are 0 (BUG-138).
+    #[test]
+    fn a_short_vector_key_keeps_what_it_read() {
+        use crate::game::fields::FieldType;
+        let (mut vm, _host) = fixture();
+        vm.with_cx(|cx| {
+            let mut v = |raw: &str| super::convert(cx, FieldType::Vector, raw);
+            assert_eq!(v("100 200"), Some(Value::Vector([100.0, 200.0, 0.0])));
+            assert_eq!(v("1 2 3"), Some(Value::Vector([1.0, 2.0, 3.0])));
+            assert_eq!(v("1.5x 2"), Some(Value::Vector([1.5, 0.0, 0.0])));
+            assert_eq!(v("x 2 3"), Some(Value::Vector([0.0; 3])));
+        });
+    }
 
     /// The sweep stops at the first -3 degree step whose barrel-to-stock
     /// segment reaches the floor. A stock 40 units behind the aim tag and 16
