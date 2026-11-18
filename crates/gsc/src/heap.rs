@@ -1,8 +1,9 @@
 //! Struct and array storage for script values.
 //!
-//! No garbage collection: a script allocates a bounded number of structs
-//! and arrays over a map's lifetime, and the whole heap is dropped when the
-//! map changes. Anything requiring reclamation mid-map is a later project.
+//! No garbage collection: nothing is freed until the whole heap is dropped
+//! at the next level. [`Heap::vars`] counts what has been allocated, and the
+//! VM ends a thread that takes it past its ceiling
+//! (`interp::MAX_VARIABLES`), as retail's variable pool runs out.
 
 use std::collections::BTreeMap;
 
@@ -127,6 +128,10 @@ impl Elems {
         self.dense.len() + self.sparse.len()
     }
 
+    fn values_mut(&mut self) -> impl Iterator<Item = &mut Value> {
+        self.dense.iter_mut().chain(self.sparse.values_mut())
+    }
+
     /// Every element in `ArrayKey` order.
     fn iter(&self) -> impl Iterator<Item = (ArrayKey, Value)> + '_ {
         let below = self.sparse.range(..ArrayKey::Int(0));
@@ -161,6 +166,8 @@ pub struct Heap {
     /// Arrays a second place may hold ([`Heap::share`]): a write through
     /// one copies it first ([`Heap::own`]).
     shared: Vec<bool>,
+    /// [`Heap::vars`].
+    vars: u64,
 }
 
 impl Heap {
@@ -171,6 +178,7 @@ impl Heap {
     pub fn new_struct(&mut self) -> StructId {
         let id = StructId(self.structs.len() as u32);
         self.structs.push(FxHashMap::default());
+        self.vars += 1;
         id
     }
 
@@ -178,7 +186,79 @@ impl Heap {
         let id = ArrayId(self.arrays.len() as u32);
         self.arrays.push(Elems::default());
         self.shared.push(false);
+        self.vars += 1;
         id
+    }
+
+    /// Every struct and array allocated, plus their fields and elements, the
+    /// unreachable ones included: one per variable retail's pool would hold
+    /// for them, less what retail would have freed.
+    pub fn vars(&self) -> u64 {
+        self.vars
+    }
+
+    /// The arrays and the structs allocated.
+    pub fn objects(&self) -> (usize, usize) {
+        (self.arrays.len(), self.structs.len())
+    }
+
+    /// Whether `to` is `from` or an array `from` holds, at any depth through
+    /// arrays.
+    pub fn reaches(&self, from: ArrayId, to: ArrayId) -> bool {
+        if from == to {
+            return true;
+        }
+        let mut seen = std::collections::HashSet::<u32, crate::fxhash::FxBuildHasher>::default();
+        let mut todo = vec![from];
+        while let Some(a) = todo.pop() {
+            let Some(elems) = self.arrays.get(a.0 as usize) else {
+                continue;
+            };
+            for (_, v) in elems.iter() {
+                if let Value::Array(b) = v {
+                    if b == to {
+                        return true;
+                    }
+                    if seen.insert(b.0) {
+                        todo.push(b);
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// A copy of `a` and of every array it holds, at any depth, none of them
+    /// sharing storage with what they copy; structs and other values are
+    /// held as they are. What `a[0] = a` stores: the array as it stood,
+    /// not a cycle through it.
+    pub fn snapshot(&mut self, a: ArrayId) -> ArrayId {
+        let root = self.new_array();
+        let mut copies = FxHashMap::default();
+        copies.insert(a.0, root);
+        let mut todo = vec![(a, root)];
+        while let Some((src, dst)) = todo.pop() {
+            let mut elems = self.arrays.get(src.0 as usize).cloned().unwrap_or_default();
+            for v in elems.values_mut() {
+                if let Value::Array(b) = *v {
+                    let copy = match copies.get(&b.0) {
+                        Some(&c) => c,
+                        None => {
+                            let c = self.new_array();
+                            copies.insert(b.0, c);
+                            todo.push((b, c));
+                            c
+                        }
+                    };
+                    // A copy two elements hold is shared, as `own`'s are.
+                    self.shared[copy.0 as usize] = true;
+                    *v = Value::Array(copy);
+                }
+            }
+            self.vars += elems.len() as u64;
+            self.arrays[dst.0 as usize] = elems;
+        }
+        root
     }
 
     /// An array value stored somewhere new (a variable, a field, an
@@ -218,6 +298,7 @@ impl Heap {
             self.share(v);
         }
         let id = ArrayId(self.arrays.len() as u32);
+        self.vars += 1 + elems.len() as u64;
         self.arrays.push(elems);
         self.shared.push(false);
         id
@@ -238,7 +319,9 @@ impl Heap {
     /// for the same reason as `get_field`.
     pub fn set_field(&mut self, s: StructId, f: Atom, v: Value) {
         if let Some(fields) = self.structs.get_mut(s.0 as usize) {
-            fields.insert(f, v);
+            if fields.insert(f, v).is_none() {
+                self.vars += 1;
+            }
         } else {
             log::warn!("dropped a write to struct {} (out of range)", s.0);
         }
@@ -246,15 +329,20 @@ impl Heap {
 
     /// `f` as an undefined field unless `s` has one (`Cx::touch_field`).
     pub fn touch_field(&mut self, s: StructId, f: Atom) {
-        if let Some(fields) = self.structs.get_mut(s.0 as usize) {
-            fields.entry(f).or_insert(Value::Undefined);
+        if let Some(fields) = self.structs.get_mut(s.0 as usize)
+            && let std::collections::hash_map::Entry::Vacant(e) = fields.entry(f)
+        {
+            e.insert(Value::Undefined);
+            self.vars += 1;
         }
     }
 
     /// Removes `f` from `s` (`Cx::clear_field`).
     pub fn clear_field(&mut self, s: StructId, f: Atom) {
-        if let Some(fields) = self.structs.get_mut(s.0 as usize) {
-            fields.remove(&f);
+        if let Some(fields) = self.structs.get_mut(s.0 as usize)
+            && fields.remove(&f).is_some()
+        {
+            self.vars -= 1;
         }
     }
 
@@ -271,7 +359,9 @@ impl Heap {
     /// dropped rather than panicking.
     pub fn set_index(&mut self, a: ArrayId, k: ArrayKey, v: Value) {
         if let Some(elems) = self.arrays.get_mut(a.0 as usize) {
-            elems.insert(k, v);
+            if elems.insert(k, v) {
+                self.vars += 1;
+            }
         } else {
             log::warn!("dropped a write to array {} (out of range)", a.0);
         }
@@ -282,8 +372,10 @@ impl Heap {
     /// An undefined value from anywhere else is stored by [`Self::set_index`]
     /// and counted (`probe_undef_call_into_unset`).
     pub fn clear_index(&mut self, a: ArrayId, k: ArrayKey) {
-        if let Some(elems) = self.arrays.get_mut(a.0 as usize) {
-            elems.remove(k);
+        if let Some(elems) = self.arrays.get_mut(a.0 as usize)
+            && elems.remove(k)
+        {
+            self.vars -= 1;
         }
     }
 

@@ -986,7 +986,7 @@ impl Vm {
                     push!(v);
                 }
                 Op::StoreIndex => {
-                    let v = pop!();
+                    let mut v = pop!();
                     let key = pop!();
                     let obj = pop!();
                     self.heap.share(v);
@@ -996,6 +996,15 @@ impl Vm {
                     let Some(k) = array_key(key) else {
                         fail!(ErrorKind::BadType("array key must be a string or a number"));
                     };
+                    // `a[0] = a`: the target was owned before the value was
+                    // read, so the value holds it. An array is a value; the
+                    // element takes the array as it stood, not a cycle.
+                    if let Value::Array(a) = v
+                        && self.heap.reaches(a, id)
+                    {
+                        v = Value::Array(self.heap.snapshot(a));
+                        self.heap.share(v);
+                    }
                     self.heap.set_index(id, k, v);
                 }
                 Op::OwnLocal(slot) => {
