@@ -169,16 +169,10 @@ pub fn profiles_root(root: &Path) -> PathBuf {
 /// separator, `.` or `..`) is refused, where retail's file field never
 /// lets one be typed.
 pub fn create_profile(root: &Path, name: &str) -> bool {
-    let unsafe_name = name.is_empty()
-        || name == "."
-        || name == ".."
-        || name.contains(['/', '\\', ':'])
-        || name.chars().any(char::is_control);
-    if unsafe_name {
+    let Some(dir) = vcod_common::game_dir::confined_component(&profiles_root(root), name) else {
         log::warn!("cod4 front end: profile name {name:?} refused");
         return false;
-    }
-    let dir = profiles_root(root).join(name);
+    };
     match std::fs::create_dir_all(&dir) {
         Ok(()) => true,
         Err(e) => {
@@ -199,9 +193,10 @@ pub fn delete_profile(root: &Path, name: &str) -> bool {
         .is_ok()
 }
 
-/// `dir/name` as it is on disk, matched case-insensitively.
+/// `dir/name` as it is on disk, matched case-insensitively; `None` for a
+/// name that is not one plain component.
 fn find_dir(dir: &Path, name: &str) -> Option<PathBuf> {
-    let exact = dir.join(name);
+    let exact = vcod_common::game_dir::confined_component(dir, name)?;
     if exact.is_dir() {
         return Some(exact);
     }
@@ -255,12 +250,16 @@ impl ScriptMenus {
             "createplayerprofile" => self.create_profile(gs, out, depth),
             "deleteplayerprofile" => self.delete_profile(gs, out, depth),
             // `UI_LoadPlayerProfile` / `Com_ChangePlayerProfile`: the picked
-            // profile, when it is not the active one and its directory is
-            // there, becomes `com_playerProfile`; the client writes
-            // `active.txt` and switches to its config.
+            // profile, when it is listed, not the active one and its
+            // directory is there, becomes `com_playerProfile`; the client
+            // writes `active.txt` and switches to its config.
             "loadplayerprofile" => {
                 let picked = self.dvar("ui_playerProfileSelected").unwrap_or_default();
                 let active = self.dvar("com_playerProfile").unwrap_or_default();
+                let listed = self
+                    .profile_row(&picked)
+                    .map(|r| self.front.profiles[r].clone());
+                let picked = listed.unwrap_or_default();
                 let exists = players
                     .as_deref()
                     .is_some_and(|r| profile_dir(r, &picked).is_some());
@@ -570,5 +569,42 @@ mod tests {
         );
         std::fs::write(r.join("players/profiles/active.txt"), "charlie").unwrap();
         assert_eq!(active_profile(r), None);
+    }
+
+    /// A menu script that sets `ui_playerProfileSelected` or
+    /// `ui_playerProfileNameNew` to a path outside `players/profiles`
+    /// reaches no directory: load asks nothing of the client, create makes
+    /// nothing, delete removes nothing. A listed name still loads.
+    #[test]
+    fn cod4_profile_scripts_stay_in_players_profiles() {
+        let root = tempfile::tempdir().unwrap();
+        let r = root.path();
+        let profiles = r.join("players/profiles");
+        std::fs::create_dir_all(profiles.join("Alpha")).unwrap();
+        // `players/x`, one level up, and a directory outside the install
+        std::fs::create_dir_all(r.join("players/x")).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let abs = outside.path().to_str().unwrap().to_string();
+        let mut m = ScriptMenus::front_end();
+        m.front.players_root = Some(r.to_path_buf());
+        let gs = Gamestate::default();
+        let mut out = Vec::new();
+        assert!(m.front_script("addPlayerProfiles", &[], &gs, &mut out, 0));
+        for bad in ["../x", abs.as_str(), "C:x"] {
+            m.set_dvar("ui_playerProfileSelected", bad);
+            m.front_script("loadPlayerProfile", &[], &gs, &mut out, 0);
+            assert!(m.front.requests.is_empty(), "{bad}");
+            assert_eq!(profile_dir(r, bad), None, "{bad}");
+            assert!(!delete_profile(r, bad), "{bad}");
+            m.set_dvar("ui_playerProfileNameNew", &format!("{bad}/new"));
+            m.front_script("createPlayerProfile", &[], &gs, &mut out, 0);
+        }
+        assert!(r.join("players/x").is_dir());
+        assert!(outside.path().is_dir());
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+        assert_eq!(profile_list(r), ["Alpha"]);
+        m.set_dvar("ui_playerProfileSelected", "alpha");
+        m.front_script("loadPlayerProfile", &[], &gs, &mut out, 0);
+        assert_eq!(m.front.requests, [Request::LoadProfile("Alpha".into())]);
     }
 }

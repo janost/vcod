@@ -1764,14 +1764,17 @@ impl Cod4Session {
         else {
             return "You must be in level to record.".into();
         };
-        let file = |n: &str| dir.join(format!("{n}.dm_{EXTENSION}"));
+        use crate::play::demos::{auto_name, demo_file};
         let name = match name {
             // `clc.demoName` keeps 63 characters.
             Some(n) => n.chars().take(63).collect(),
-            None => vcod_common::net::demo::auto_name(|n| file(n).exists()),
+            None => auto_name(dir, EXTENSION),
         };
         let qpath = format!("demos/{name}.dm_{EXTENSION}");
-        let opened = std::fs::create_dir_all(dir).and_then(|_| std::fs::File::create(file(&name)));
+        let Some(file) = demo_file(dir, &name, EXTENSION) else {
+            return "ERROR: couldn't open.".into();
+        };
+        let opened = std::fs::create_dir_all(dir).and_then(|_| std::fs::File::create(file));
         let Ok(f) = opened else {
             return "ERROR: couldn't open.".into();
         };
@@ -6111,6 +6114,13 @@ pub(crate) mod tests {
                 // 3 s): one landing while the record waits for its full
                 // frame never reaches the file (cod4-demos.md 4).
                 if started.is_none() && since(t0) > Duration::from_secs(4) {
+                    // A name that leaves `demos/` opens nothing.
+                    for bad in ["../escape", "/escape", "C:escape"] {
+                        let line = s.start_recording(&demos, Some(bad));
+                        if line != "You must be in level to record." {
+                            assert_eq!(line, "ERROR: couldn't open.", "{bad}");
+                        }
+                    }
                     let line = s.start_recording(&demos, Some("live"));
                     if line.starts_with("recording to") {
                         assert_eq!(line, "recording to demos/live.dm_1.");
@@ -6142,6 +6152,7 @@ pub(crate) mod tests {
         let (live, live_fired, live_table, status) = client.join().unwrap();
         let (name, bytes) = status.last().cloned().unwrap();
         assert_eq!(name, "live");
+        assert!(!dir.0.join("../escape.dm_1").exists());
         let data = std::fs::read(dir.0.join("live.dm_1")).unwrap();
         // The trailer: a type 0 record of -1 and -1.
         assert_eq!(

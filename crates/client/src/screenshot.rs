@@ -143,14 +143,16 @@ impl Shooter {
             }
             Command::Savegame(name) => (format!("{name}.jpg"), savegame(game, cap)),
         };
-        let full = gamedir.join(&path);
         let mut lines = Vec::new();
-        let written = full
-            .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|_| std::fs::write(&full, bytes));
+        let written = match vcod_common::game_dir::confined(gamedir, &path) {
+            Some(full) => full
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|_| std::fs::write(&full, bytes)),
+            None => Err(outside()),
+        };
         if let Err(e) = written {
-            log::warn!("{}: {e}", full.display());
+            log::warn!("{path}: {e}");
             lines.push(format!("Failed to open {path}"));
         }
         // the levelshot's line follows whatever the write did; the save
@@ -165,25 +167,40 @@ impl Shooter {
     /// `screenshots/`). Returns the console lines.
     pub fn save(&mut self, game: Game, dir: &Path, req: &Request, cap: &Capture) -> Vec<String> {
         let rules = rules(game);
-        let path = match &req.name {
-            Some(name) => dir.join(format!("{name}.{}", req.format.ext())),
+        let (path, shown) = match &req.name {
+            Some(name) => {
+                let file = format!("{name}.{}", req.format.ext());
+                (
+                    vcod_common::game_dir::confined(dir, &file),
+                    format!("screenshots/{file}"),
+                )
+            }
             None => match self.next_free(dir, req.format, rules) {
-                Some(p) => p,
+                Some(p) => {
+                    let shown = shown(&p);
+                    (Some(p), shown)
+                }
                 None => return vec!["ScreenShot: Couldn't create a file".into()],
             },
         };
-        let bytes = match req.format {
-            Format::Tga => tga(cap, rules.tga_top_down),
-            Format::Jpeg => jpeg(cap, rules.jpeg_quality),
+        let written = match &path {
+            Some(path) => {
+                let bytes = match req.format {
+                    Format::Tga => tga(cap, rules.tga_top_down),
+                    Format::Jpeg => jpeg(cap, rules.jpeg_quality),
+                };
+                std::fs::create_dir_all(dir).and_then(|_| std::fs::write(path, bytes))
+            }
+            None => Err(outside()),
         };
         let mut lines = Vec::new();
-        if let Err(e) = std::fs::create_dir_all(dir).and_then(|_| std::fs::write(&path, bytes)) {
-            log::warn!("{}: {e}", path.display());
-            lines.push(format!("Failed to open {}", shown(&path)));
+        if let Err(e) = written {
+            log::warn!("{shown}: {e}");
+            lines.push(format!("Failed to open {shown}"));
         }
         // printed whether the write took or not, as retail's
         if !req.silent {
-            lines.push(format!("Wrote {}", shown(&path)));
+            lines.push(format!("Wrote {shown}"));
         }
         lines
     }
@@ -206,6 +223,11 @@ impl Shooter {
         }
         None
     }
+}
+
+/// A name that would leave the game folder fails as an open does.
+fn outside() -> std::io::Error {
+    std::io::Error::other("the name leaves the game folder")
 }
 
 /// `screenshots/<file>`, as the game names it in its line.
@@ -668,6 +690,49 @@ mod tests {
         assert_eq!(&bytes[..3], &[0xff, 0xd8, 0xff]);
         let img = image::load_from_memory(&bytes).unwrap();
         assert_eq!((img.width(), img.height()), (4, 4));
+    }
+
+    /// A shot's or a save game's name that climbs out, is rooted or names
+    /// a drive writes nothing and prints the failed open's line; a plain
+    /// name still lands in the game folder.
+    #[test]
+    fn shot_names_stay_in_the_game_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("main");
+        let shots = game.join("screenshots");
+        let c = cap(4, 4);
+        let abs = root.path().join("abs");
+        let mut s = Shooter::default();
+        for bad in ["../x", "a/../../x", "C:x", abs.to_str().unwrap()] {
+            let shot = parse(false, &[bad.to_string()]);
+            let lines = s.run(Game::Cod1, &game, None, &shot, &c);
+            assert_eq!(lines[0], format!("Failed to open screenshots/{bad}.tga"));
+            let save = parse(true, &["savegame".to_string(), bad.to_string()]);
+            let lines = s.run(Game::Cod1, &game, None, &save, &c);
+            assert_eq!(lines, [format!("Failed to open {bad}.jpg")]);
+        }
+        let files: Vec<_> = walk(root.path());
+        assert!(files.is_empty(), "{files:?}");
+        let shot = parse(false, &["plain".to_string()]);
+        let lines = s.run(Game::Cod1, &game, None, &shot, &c);
+        assert_eq!(lines, ["Wrote screenshots/plain.tga"]);
+        assert!(shots.join("plain.tga").is_file());
+        let save = parse(true, &["savegame".to_string(), "s1".to_string()]);
+        assert!(s.run(Game::Cod1, &game, None, &save, &c).is_empty());
+        assert!(game.join("s1.jpg").is_file());
+    }
+
+    /// Every file under `dir`.
+    fn walk(dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            if e.path().is_dir() {
+                out.extend(walk(&e.path()));
+            } else {
+                out.push(e.path());
+            }
+        }
+        out
     }
 
     #[test]

@@ -12,15 +12,25 @@ use vcod_common::text::atoi_msvc;
 
 /// `record`'s file under `dir` (the game directory's `demos/`) and the
 /// name it keeps (`clc.demoName`): `name` with the protocol's `.dm_<n>`,
-/// or the first free `demoNNNN`.
-pub fn record_path(dir: &Path, name: Option<&str>, p: &Protocol) -> (PathBuf, String) {
+/// or the first free `demoNNNN`. `None` for a name that leaves `dir`.
+pub fn record_path(dir: &Path, name: Option<&str>, p: &Protocol) -> Option<(PathBuf, String)> {
     let ext = demo::extension_number(p);
-    let file = |n: &str| dir.join(format!("{n}.dm_{ext}"));
     let name = match name {
         Some(n) => n.to_string(),
-        None => demo::auto_name(|n| file(n).exists()),
+        None => auto_name(dir, ext),
     };
-    (file(&name), name)
+    Some((demo_file(dir, &name, ext)?, name))
+}
+
+/// `<dir>/<name>.dm_<ext>`, the one join every game's `record` makes;
+/// `None` when `name` is rooted, holds `..` or a drive.
+pub fn demo_file(dir: &Path, name: &str, ext: impl std::fmt::Display) -> Option<PathBuf> {
+    vcod_common::game_dir::confined(dir, &format!("{name}.dm_{ext}"))
+}
+
+/// The first `demoNNNN` with no `.dm_<ext>` in `dir`.
+pub fn auto_name(dir: &Path, ext: impl std::fmt::Display) -> String {
+    demo::auto_name(|n| dir.join(format!("{n}.dm_{ext}")).exists())
 }
 
 /// `timedemo`'s count (`clc.timeDemoFrames` 0x15ef014 and
@@ -123,7 +133,8 @@ pub fn read_frame<T: Transport>(
 /// `demo <name>`'s file and the protocol it was recorded under. Retail
 /// reads only its own `.dm_<n>` and appends it to a name without one; vcod
 /// plays all three, so a bare name takes the first of `.dm_1`, `.dm_2`
-/// and `.dm_3` that exists, searched through `dirs` in order.
+/// and `.dm_3` that exists, searched through `dirs` in order. A name that
+/// leaves its directory finds nothing.
 pub fn find(dirs: &[PathBuf], name: &str) -> Option<(PathBuf, &'static Protocol)> {
     let candidates: Vec<(String, &'static Protocol)> = match demo::extension_of(name) {
         Some(n) => vec![(name.to_string(), demo::protocol_of_extension(n)?)],
@@ -133,7 +144,7 @@ pub fn find(dirs: &[PathBuf], name: &str) -> Option<(PathBuf, &'static Protocol)
     };
     for dir in dirs {
         for (file, p) in &candidates {
-            let path = dir.join(file);
+            let path = vcod_common::game_dir::confined(dir, file)?;
             if path.is_file() {
                 return Some((path, p));
             }
@@ -224,10 +235,10 @@ mod tests {
     fn record_names_count_up_and_demo_finds_any_protocol() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path().to_path_buf();
-        let path = |name, p| record_path(&d, name, p).0;
+        let path = |name, p| record_path(&d, name, p).unwrap().0;
         assert_eq!(
             record_path(&d, None, &PROTOCOL_V1),
-            (d.join("demo0000.dm_1"), "demo0000".to_string())
+            Some((d.join("demo0000.dm_1"), "demo0000".to_string()))
         );
         std::fs::write(d.join("demo0000.dm_1"), b"").unwrap();
         assert_eq!(path(None, &PROTOCOL_V1), d.join("demo0001.dm_1"));
@@ -235,7 +246,7 @@ mod tests {
         assert_eq!(path(None, &PROTOCOL_V22), d.join("demo0000.dm_3"));
         assert_eq!(
             record_path(&d, Some("x"), &PROTOCOL_V6),
-            (d.join("x.dm_2"), "x".to_string())
+            Some((d.join("x.dm_2"), "x".to_string()))
         );
 
         std::fs::write(d.join("x.dm_3"), b"").unwrap();
@@ -244,6 +255,28 @@ mod tests {
         let found = find(std::slice::from_ref(&d), "demo0000.dm_1").unwrap();
         assert_eq!(found.1.transport.version, 1);
         assert!(find(&[d], "nope").is_none());
+    }
+
+    #[test]
+    fn record_and_demo_refuse_names_that_leave_demos() {
+        let root = tempfile::tempdir().unwrap();
+        let d = root.path().join("demos");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(root.path().join("x.dm_1"), b"").unwrap();
+        let abs = root.path().join("x");
+        for bad in ["../x", "a/../../x", "C:x", abs.to_str().unwrap()] {
+            assert_eq!(record_path(&d, Some(bad), &PROTOCOL_V1), None, "{bad}");
+            assert!(find(std::slice::from_ref(&d), bad).is_none(), "{bad}");
+        }
+        std::fs::write(d.join("plain.dm_1"), b"").unwrap();
+        assert_eq!(
+            record_path(&d, Some("plain"), &PROTOCOL_V1).unwrap().0,
+            d.join("plain.dm_1")
+        );
+        assert_eq!(
+            find(std::slice::from_ref(&d), "plain").unwrap().0,
+            d.join("plain.dm_1")
+        );
     }
 
     /// A retail capture played as a demo at 60 fps through the clock the

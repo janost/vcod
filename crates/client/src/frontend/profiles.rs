@@ -191,11 +191,12 @@ impl Ui {
                     self.open_menu("profile_exists_popmenu", shell, out);
                     return;
                 }
-                let made = self
-                    .profiles
-                    .dir
-                    .as_ref()
-                    .is_some_and(|d| std::fs::create_dir_all(d.join(&new)).is_ok());
+                // The type-16 field types no separator; a script's name that
+                // would leave `players/` makes nothing.
+                let made = self.profiles.dir.as_ref().is_some_and(|d| {
+                    vcod_common::game_dir::confined_component(d, &new)
+                        .is_some_and(|p| std::fs::create_dir_all(p).is_ok())
+                });
                 if !made {
                     log::warn!("Unable to create new profile path: {new}");
                     self.open_menu("profile_create_fail_popmenu", shell, out);
@@ -225,7 +226,8 @@ impl Ui {
                     .position(|n| !sel.is_empty() && n.eq_ignore_ascii_case(&sel));
                 let removed = found.is_some_and(|i| {
                     self.profiles.dir.as_ref().is_some_and(|d| {
-                        std::fs::remove_dir_all(d.join(&self.profiles.names[i])).is_ok()
+                        vcod_common::game_dir::confined_component(d, &self.profiles.names[i])
+                            .is_some_and(|p| std::fs::remove_dir_all(p).is_ok())
                     })
                 });
                 let Some(i) = found.filter(|_| removed) else {
@@ -332,5 +334,46 @@ mod tests {
         std::fs::write(dir.join("active.txt"), "charlie").unwrap();
         assert_eq!(active_profile(&dir), None);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A script that sets both profile dvars to a path and runs create,
+    /// delete and load reaches no directory outside `players/`; a plain
+    /// name is still made, loaded and removed.
+    #[test]
+    fn profile_scripts_reach_no_directory_outside_players() {
+        let root = tempfile::tempdir().unwrap();
+        let players = root.path().join("main/players");
+        let victim = root.path().join("victim");
+        std::fs::create_dir_all(&players).unwrap();
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("keep"), b"x").unwrap();
+        let mut ui = Ui::new(&vcod_common::pk3::Pk3Fs::empty(), "0");
+        ui.set_profiles_dir(players.clone());
+        let shell = Shell::new();
+        let loads = |out: &[UiEffect]| {
+            out.iter()
+                .filter(|e| matches!(e, UiEffect::LoadProfile(_)))
+                .count()
+        };
+        for bad in ["../../victim", victim.to_str().unwrap(), "C:x"] {
+            let mut out = Vec::new();
+            ui.set_cvar("ui_playerProfileNameNew", bad, &mut out);
+            ui.profile_script("createPlayerProfile", &shell, &mut out);
+            ui.set_cvar("ui_playerProfileSelected", bad, &mut out);
+            ui.profile_script("deletePlayerProfile", &shell, &mut out);
+            ui.profile_script("loadPlayerProfile", &shell, &mut out);
+            assert_eq!(loads(&out), 0, "{bad}");
+        }
+        assert!(victim.join("keep").is_file());
+        assert!(list_profiles(&players).is_empty());
+        let mut out = Vec::new();
+        ui.set_cvar("ui_playerProfileNameNew", "Tester", &mut out);
+        ui.profile_script("createPlayerProfile", &shell, &mut out);
+        assert!(players.join("Tester").is_dir());
+        ui.set_cvar("ui_playerProfileSelected", "Tester", &mut out);
+        ui.profile_script("loadPlayerProfile", &shell, &mut out);
+        assert_eq!(loads(&out), 1);
+        ui.profile_script("deletePlayerProfile", &shell, &mut out);
+        assert!(!players.join("Tester").exists());
     }
 }
