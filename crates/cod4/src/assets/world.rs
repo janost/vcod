@@ -8,8 +8,14 @@ use super::model::{XModel, brush_sides, xmodel};
 use super::{Id, asset, push};
 use crate::walk::{Follow, Handle, S, W, u16s};
 use crate::zone::{Block, Pointer};
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use std::io::BufRead;
+
+/// Inline cells a portal chain may nest (no stock map inlines one) and
+/// splits a path tree may stack: the walk recurses once per level, and a
+/// hostile zone nests thousands deep in a few compressed kilobytes.
+const MAX_INLINE_CELL_DEPTH: usize = 8;
+const MAX_PATH_TREE_DEPTH: usize = 64;
 
 /// Raw bytes kept under [`crate::walk::WalkOptions::keep_bulk`].
 pub type Bulk = Option<Vec<u8>>;
@@ -456,7 +462,7 @@ pub fn game_world_sp<R: BufRead>(
             let n = s.u32(36) as usize;
             let a = w.load(0x10 * n)?;
             for i in 0..n {
-                path_tree(w, &a.elem(i, 0x10))?;
+                path_tree(w, &a.elem(i, 0x10), 0)?;
             }
         }
         w.pop()?;
@@ -471,13 +477,14 @@ pub fn game_world_sp<R: BufRead>(
 }
 
 /// `pathnode_tree_t`, 0x10: a split (`axis >= 0`, two child slots) or a
-/// leaf (a u16 node list).
-fn path_tree<R: BufRead>(w: &mut W<R>, t: &S) -> Result<()> {
+/// leaf (a u16 node list). `depth` is the split count above it.
+fn path_tree<R: BufRead>(w: &mut W<R>, t: &S, depth: usize) -> Result<()> {
     if t.i32(0) >= 0 {
+        ensure!(depth < MAX_PATH_TREE_DEPTH, "path tree deeper than {depth}");
         for o in [8, 12] {
             if let Follow::Inline = w.follow(t.ptr(o), 4)? {
                 let c = w.load(0x10)?;
-                path_tree(w, &c)?;
+                path_tree(w, &c, depth + 1)?;
             }
         }
     } else if w.inline_only(t.ptr(12), 2)? {
@@ -656,7 +663,7 @@ fn gfx_world_body<R: BufRead>(w: &mut W<R>, s: &S) -> Result<GfxWorld> {
     if w.inline_only(s.ptr(260), 4)? {
         let a = w.load(0x38 * cells)?;
         for i in 0..cells {
-            let c = gfx_cell(w, &a.elem(i, 0x38), a.at, cells)?;
+            let c = gfx_cell(w, &a.elem(i, 0x38), a.at, cells, 0)?;
             g.cells.push(c);
         }
     }
@@ -838,7 +845,13 @@ pub struct GfxPortal {
 /// `GfxCell`, 0x38: its AABB trees, portals (each naming a cell of
 /// `cells_at`'s array, or carrying one inline), cull groups and probe
 /// indices.
-fn gfx_cell<R: BufRead>(w: &mut W<R>, c: &S, cells_at: u32, cells: usize) -> Result<GfxCell> {
+fn gfx_cell<R: BufRead>(
+    w: &mut W<R>,
+    c: &S,
+    cells_at: u32,
+    cells: usize,
+    depth: usize,
+) -> Result<GfxCell> {
     let mut out = GfxCell {
         mins: c.vec3(0),
         maxs: c.vec3(12),
@@ -870,8 +883,12 @@ fn gfx_cell<R: BufRead>(w: &mut W<R>, c: &S, cells_at: u32, cells: usize) -> Res
             let p = a.elem(i, 0x44);
             let cell = match w.follow(p.ptr(32), 4)? {
                 Follow::Inline => {
+                    ensure!(
+                        depth < MAX_INLINE_CELL_DEPTH,
+                        "inline cells nest past {depth}"
+                    );
                     let cell = w.load(0x38)?;
-                    gfx_cell(w, &cell, cells_at, cells)?;
+                    gfx_cell(w, &cell, cells_at, cells, depth + 1)?;
                     None
                 }
                 Follow::At(at) => {
@@ -908,4 +925,80 @@ fn gfx_cell<R: BufRead>(w: &mut W<R>, c: &S, cells_at: u32, cells: usize) -> Res
         out.reflection_probes = w.bytes(1, c.u8(48) as usize)?;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::walk::{WalkOptions, walk};
+    use crate::zone::Zone;
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+    use std::io::Write;
+
+    const INLINE: u32 = u32::MAX;
+
+    fn le(words: &[u32]) -> Vec<u8> {
+        words.iter().flat_map(|w| w.to_le_bytes()).collect()
+    }
+
+    /// A zone of one `GameWorldSp` whose one path tree is a chain of
+    /// `splits` splits, each inlining the next as its first child.
+    fn path_chain(splits: usize) -> Vec<u8> {
+        let mut body = le(&[0, 0, 1, INLINE, 0x0D, INLINE]);
+        body.extend(le(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, INLINE]));
+        for _ in 0..splits {
+            body.extend(le(&[0, 0, INLINE, 0]));
+        }
+        body.extend(le(&[-1i32 as u32, 0, 0, 0]));
+        zone(body)
+    }
+
+    /// A zone of one `GfxWorld` with one cell whose portal inlines a cell,
+    /// whose portal inlines the next, `depth` cells deep.
+    fn cell_chain(depth: usize) -> Vec<u8> {
+        let mut body = le(&[0, 0, 1, INLINE, 0x10, INLINE]);
+        let mut world = vec![0u8; 0x2DC];
+        world[240..244].copy_from_slice(&1u32.to_le_bytes());
+        world[260..264].copy_from_slice(&INLINE.to_le_bytes());
+        body.extend(world);
+        let mut cell = vec![0u8; 0x38];
+        cell[32..36].copy_from_slice(&1u32.to_le_bytes());
+        cell[36..40].copy_from_slice(&INLINE.to_le_bytes());
+        let mut portal = vec![0u8; 0x44];
+        portal[32..36].copy_from_slice(&INLINE.to_le_bytes());
+        for _ in 0..=depth {
+            body.extend(&cell);
+            body.extend(&portal);
+        }
+        body.extend(vec![0u8; 0x38]);
+        zone(body)
+    }
+
+    fn zone(body: Vec<u8>) -> Vec<u8> {
+        let mut inflated = le(&[body.len() as u32, 0, 0x100, 0, 0, 0, 1 << 24, 0, 0, 0, 0]);
+        inflated.extend(body);
+        let mut z = ZlibEncoder::new(Vec::new(), Compression::fast());
+        z.write_all(&inflated).unwrap();
+        let mut out = b"IWffu100".to_vec();
+        out.extend(5u32.to_le_bytes());
+        out.extend(z.finish().unwrap());
+        out
+    }
+
+    fn walks(data: &[u8]) -> anyhow::Result<()> {
+        walk(Zone::open(data)?, WalkOptions::default()).map(|_| ())
+    }
+
+    #[test]
+    fn a_path_tree_past_the_depth_cap_is_refused() {
+        walks(&path_chain(super::MAX_PATH_TREE_DEPTH)).unwrap();
+        let e = format!("{:#}", walks(&path_chain(100_000)).unwrap_err());
+        assert!(e.contains("path tree deeper"), "{e}");
+    }
+
+    #[test]
+    fn inline_cells_past_the_depth_cap_are_refused() {
+        let e = format!("{:#}", walks(&cell_chain(100_000)).unwrap_err());
+        assert!(e.contains("inline cells nest"), "{e}");
+    }
 }
