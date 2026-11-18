@@ -144,7 +144,7 @@ impl Shooter {
             Command::Savegame(name) => (format!("{name}.jpg"), savegame(game, cap)),
         };
         let mut lines = Vec::new();
-        let written = match vcod_common::safe_path::under(gamedir, &path) {
+        let written = match vcod_common::game_dir::confined(gamedir, &path) {
             Some(full) => full
                 .parent()
                 .map_or(Ok(()), std::fs::create_dir_all)
@@ -171,7 +171,7 @@ impl Shooter {
             Some(name) => {
                 let file = format!("{name}.{}", req.format.ext());
                 (
-                    vcod_common::safe_path::under(dir, &file),
+                    vcod_common::game_dir::confined(dir, &file),
                     format!("screenshots/{file}"),
                 )
             }

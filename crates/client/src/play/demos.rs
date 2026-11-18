@@ -25,7 +25,7 @@ pub fn record_path(dir: &Path, name: Option<&str>, p: &Protocol) -> Option<(Path
 /// `<dir>/<name>.dm_<ext>`, the one join every game's `record` makes;
 /// `None` when `name` is rooted, holds `..` or a drive.
 pub fn demo_file(dir: &Path, name: &str, ext: impl std::fmt::Display) -> Option<PathBuf> {
-    vcod_common::safe_path::under(dir, &format!("{name}.dm_{ext}"))
+    vcod_common::game_dir::confined(dir, &format!("{name}.dm_{ext}"))
 }
 
 /// The first `demoNNNN` with no `.dm_<ext>` in `dir`.
@@ -144,7 +144,7 @@ pub fn find(dirs: &[PathBuf], name: &str) -> Option<(PathBuf, &'static Protocol)
     };
     for dir in dirs {
         for (file, p) in &candidates {
-            let path = vcod_common::safe_path::under(dir, file)?;
+            let path = vcod_common::game_dir::confined(dir, file)?;
             if path.is_file() {
                 return Some((path, p));
             }

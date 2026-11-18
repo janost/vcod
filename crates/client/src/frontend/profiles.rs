@@ -194,7 +194,7 @@ impl Ui {
                 // The type-16 field types no separator; a script's name that
                 // would leave `players/` makes nothing.
                 let made = self.profiles.dir.as_ref().is_some_and(|d| {
-                    vcod_common::safe_path::under_one(d, &new)
+                    vcod_common::game_dir::confined_component(d, &new)
                         .is_some_and(|p| std::fs::create_dir_all(p).is_ok())
                 });
                 if !made {
@@ -226,7 +226,7 @@ impl Ui {
                     .position(|n| !sel.is_empty() && n.eq_ignore_ascii_case(&sel));
                 let removed = found.is_some_and(|i| {
                     self.profiles.dir.as_ref().is_some_and(|d| {
-                        vcod_common::safe_path::under_one(d, &self.profiles.names[i])
+                        vcod_common::game_dir::confined_component(d, &self.profiles.names[i])
                             .is_some_and(|p| std::fs::remove_dir_all(p).is_ok())
                     })
                 });

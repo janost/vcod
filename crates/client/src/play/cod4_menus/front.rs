@@ -169,7 +169,7 @@ pub fn profiles_root(root: &Path) -> PathBuf {
 /// separator, `.` or `..`) is refused, where retail's file field never
 /// lets one be typed.
 pub fn create_profile(root: &Path, name: &str) -> bool {
-    let Some(dir) = vcod_common::safe_path::under_one(&profiles_root(root), name) else {
+    let Some(dir) = vcod_common::game_dir::confined_component(&profiles_root(root), name) else {
         log::warn!("cod4 front end: profile name {name:?} refused");
         return false;
     };
@@ -196,7 +196,7 @@ pub fn delete_profile(root: &Path, name: &str) -> bool {
 /// `dir/name` as it is on disk, matched case-insensitively; `None` for a
 /// name that is not one plain component.
 fn find_dir(dir: &Path, name: &str) -> Option<PathBuf> {
-    let exact = vcod_common::safe_path::under_one(dir, name)?;
+    let exact = vcod_common::game_dir::confined_component(dir, name)?;
     if exact.is_dir() {
         return Some(exact);
     }

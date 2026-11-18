@@ -2511,7 +2511,7 @@ fn chat_field_key(
 /// (vcod's own fallback), which a rooted, `..` or drive name never reaches.
 fn exec_text(fs: &Pk3Fs, config_dir: Option<&std::path::Path>, file: &str) -> Option<Vec<u8>> {
     fs.read(file)
-        .or_else(|| std::fs::read(vcod_common::safe_path::under(config_dir?, file)?).ok())
+        .or_else(|| std::fs::read(vcod_common::game_dir::confined(config_dir?, file)?).ok())
 }
 
 /// `record [name]` on `net` (CoDMP.exe 0x40e540): the file in `dir`, its
@@ -4423,7 +4423,7 @@ impl App {
         let path = self
             .demo_dirs()
             .into_iter()
-            .filter_map(|d| vcod_common::safe_path::under(&d, &file))
+            .filter_map(|d| vcod_common::game_dir::confined(&d, &file))
             .find(|p| p.is_file());
         if self.in_game() || self.session.busy() {
             self.disconnect(None);
@@ -4758,7 +4758,7 @@ impl App {
     /// Retail resets every dvar first; vcod keeps what the file does not set.
     fn load_profile(&mut self, name: &str) {
         let players = self.game_dir.join(&self.mod_dir).join("players");
-        let Some(dir) = vcod_common::safe_path::under_one(&players, name) else {
+        let Some(dir) = vcod_common::game_dir::confined_component(&players, name) else {
             log::warn!("player profile {name:?} refused");
             return;
         };

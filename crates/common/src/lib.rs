@@ -32,7 +32,6 @@ pub mod playerpose;
 pub mod pmove;
 pub mod props;
 pub mod rng;
-pub mod safe_path;
 pub mod shader;
 pub mod skeleton;
 pub mod static_light;

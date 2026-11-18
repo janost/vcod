@@ -56,7 +56,7 @@ impl ProfileStats {
         let path = if fs_game.is_empty() {
             dir.join(FILE)
         } else {
-            vcod_common::safe_path::under(&dir, fs_game)?.join(FILE)
+            vcod_common::game_dir::confined(&dir, fs_game)?.join(FILE)
         };
         let read = std::fs::read(&path)
             .ok()

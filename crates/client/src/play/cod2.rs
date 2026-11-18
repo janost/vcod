@@ -2122,7 +2122,7 @@ impl TimedemoCsv {
         if self.out.is_none() {
             // the map is the demo's: a drive or stream colon opens nothing
             let name = timedemo_csv_name(map, self.r_mode);
-            let file = vcod_common::safe_path::under(&self.dir, &name)
+            let file = vcod_common::game_dir::confined(&self.dir, &name)
                 .ok_or_else(|| std::io::Error::other("not a file name"))
                 .and_then(|path| {
                     std::fs::create_dir_all(&self.dir)?;

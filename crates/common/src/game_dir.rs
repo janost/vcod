@@ -1,7 +1,7 @@
 //! The binaries are meant to sit inside the CoD 1.1 install next to
 //! `CoDMP.exe`, hence the executable-directory fallback.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// `$COD_DIR`, else the executable's directory, else the working directory.
 pub fn default_game_dir() -> PathBuf {
@@ -30,6 +30,20 @@ pub fn confined_rel_path(name: &str) -> Option<PathBuf> {
         .filter(|c| !c.is_empty() && *c != ".")
         .collect();
     (!parts.is_empty()).then(|| parts.iter().collect())
+}
+
+/// `dir/name` when `name` passes [`confined_rel_path`].
+pub fn confined(dir: &Path, name: &str) -> Option<PathBuf> {
+    Some(dir.join(confined_rel_path(name)?))
+}
+
+/// `dir/name` when `name` is one component that passes [`confined_rel_path`]:
+/// a profile's directory.
+pub fn confined_component(dir: &Path, name: &str) -> Option<PathBuf> {
+    if name.contains(['/', '\\']) {
+        return None;
+    }
+    confined(dir, name)
 }
 
 #[cfg(test)]
@@ -66,6 +80,12 @@ mod tests {
             "a\nb",
         ] {
             assert_eq!(confined_rel_path(bad), None, "{bad:?}");
+            assert_eq!(confined_component(Path::new("d"), bad), None, "{bad:?}");
         }
+        let d = Path::new("d");
+        assert_eq!(confined(d, "a/b"), Some(d.join("a").join("b")));
+        assert_eq!(confined_component(d, "Able"), Some(d.join("Able")));
+        assert_eq!(confined_component(d, "a/b"), None);
+        assert_eq!(confined_component(d, "a\\b"), None);
     }
 }

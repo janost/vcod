@@ -479,7 +479,7 @@ impl App {
         let Some(data) = self
             .cod4_demo_dirs()
             .into_iter()
-            .filter_map(|d| vcod_common::safe_path::under(&d, &file))
+            .filter_map(|d| vcod_common::game_dir::confined(&d, &file))
             .find_map(|p| std::fs::read(p).ok())
         else {
             // `Com_Error`'s text goes through `SEH_LocalizeTextMessage`.
@@ -738,7 +738,7 @@ impl App {
 /// or when it would leave the install (rooted, a drive, a `..`), as
 /// `Install`'s own search path refuses it.
 fn cod4_mod_dir(value: &str) -> Option<String> {
-    vcod_common::safe_path::relative(value).map(|_| value.to_string())
+    vcod_common::game_dir::confined_rel_path(value).map(|_| value.to_string())
 }
 
 /// [`App::load_cod4_profile`]'s files: `active.txt` written, the
