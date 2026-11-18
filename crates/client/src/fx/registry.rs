@@ -766,8 +766,8 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
         // eventParm is the surface normal here too (doc section 2). `_NOMARKS`
         // only suppresses the decal, so both rocket ids read the same csv row.
         // `grenade_bounce` is blank in stock data and resolves to `Known`.
-        // The weapon's own `projExplosionEffect` is left out here, though
-        // 1.1's cgame adds it (cod11-events-and-fx.md 5a); the UO arm spawns it.
+        // An explode then adds the weapon's own `projExplosionEffect`
+        // (cod11-events-and-fx.md 5a), empty on every stock 1.1 weapon.
         EV_GRENADE_BOUNCE | EV_GRENADE_EXPLODE | EV_ROCKET_EXPLODE | EV_ROCKET_EXPLODE_NOMARKS => {
             let kind = match ev.event {
                 EV_GRENADE_BOUNCE => ImpactKind::GrenadeBounce,
@@ -775,15 +775,30 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
                 _ => ImpactKind::RocketExplode,
             };
             let surf = ev.surf_type.clamp(0, SURFACE_NAMES.len() as i32 - 1) as u8;
+            let at = SpawnAt::Surface {
+                pos: Vec3::from(ev.pos),
+                normal: Vec3::from(byte_to_dir(ev.parm)),
+            };
+            let nomarks = ev.event == EV_ROCKET_EXPLODE_NOMARKS;
             let mut out = Vec::new();
             if let Some(path) = table.get(kind, surf) {
                 out.push(Resolved::Spawn {
                     path: path.to_string(),
-                    at: SpawnAt::Surface {
-                        pos: Vec3::from(ev.pos),
-                        normal: Vec3::from(byte_to_dir(ev.parm)),
-                    },
-                    nomarks: ev.event == EV_ROCKET_EXPLODE_NOMARKS,
+                    at,
+                    nomarks,
+                    bolt: None,
+                    brass: false,
+                });
+            }
+            let own = (kind != ImpactKind::GrenadeBounce)
+                .then(|| weapon_def(ctx, ev.weapon))
+                .flatten()
+                .and_then(|d| d.proj_explosion_effect.clone());
+            if let Some(path) = own {
+                out.push(Resolved::Spawn {
+                    path,
+                    at,
+                    nomarks,
                     bolt: None,
                     brass: false,
                 });
@@ -1807,6 +1822,41 @@ mod tests {
                 other => panic!("event {id}: {other:?}"),
             }
         }
+    }
+
+    /// 1.1's explodes add the weapon's `projExplosionEffect` after the table
+    /// row; a bounce does not (cod11-events-and-fx.md 5a).
+    #[test]
+    fn a_1_1_explode_adds_the_weapons_own_effect() {
+        let mut table = ImpactTable::default();
+        table.add_csv(
+            "grenade_explode,dirt,fx/g.efx\nrocket_explode,dirt,fx/r.efx\n\
+             grenade_bounce,dirt,fx/b.efx\n",
+        );
+        let weapons = uo_weapons();
+        let ctx = ResolveCtx {
+            weapons: &weapons,
+            ..empty_ctx()
+        };
+        let paths = |id: i32| -> Vec<(String, bool)> {
+            resolve_with(&ev(id, 0, 6, [0.0; 3]), &table, &ctx)
+                .into_iter()
+                .filter_map(|r| match r {
+                    Resolved::Spawn { path, nomarks, .. } => Some((path, nomarks)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let s = |p: &str, m: bool| (p.to_string(), m);
+        assert_eq!(
+            paths(EV_GRENADE_EXPLODE),
+            [s("fx/g.efx", false), s("fx/shell.efx", false)]
+        );
+        assert_eq!(
+            paths(EV_ROCKET_EXPLODE_NOMARKS),
+            [s("fx/r.efx", true), s("fx/shell.efx", true)]
+        );
+        assert_eq!(paths(EV_GRENADE_BOUNCE), [s("fx/b.efx", false)]);
     }
 
     /// Retail's panzerfaust round (`net/snapshots-panzer-wall.bin`,
