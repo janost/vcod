@@ -3216,15 +3216,18 @@ impl Host for GameHost {
         value: Value,
     ) -> Result<(), ErrorKind> {
         self.write_field(cx, ent, field, value)?;
-        if ent.0 < FIRST_HUD_ELEM
-            && cx.resolve_folded(field) == "angles"
-            && let Some(e) = self.ents.get_mut_quiet(ent)
-        {
-            e.apos_base = None;
+        if ent.0 < FIRST_HUD_ELEM && cx.resolve_folded(field) == "angles" {
+            if let Some(e) = self.ents.get_mut_quiet(ent) {
+                e.apos_base = None;
+            }
+            if let Value::Vector(v) = value {
+                self.movers.set_angles(ent, glam::Vec3::from_array(v));
+            }
         }
         if ent.0 < FIRST_HUD_ELEM && cx.resolve_folded(field) == "origin" {
             if let Value::Vector(v) = value {
                 self.missiles.set_origin(ent, glam::Vec3::from_array(v));
+                self.movers.set_origin(ent, glam::Vec3::from_array(v));
             }
             self.link_entity(cx, ent);
         }
