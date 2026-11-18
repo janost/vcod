@@ -87,7 +87,7 @@ pub(super) fn step(sv: &mut Cod4Server, probes: &mut [Probe], now: &mut Instant)
         sv.handle_packet(p.addr, &pkt, *now);
     }
     *now += Duration::from_millis(FRAME_MS as u64);
-    sv.drain_console();
+    sv.run_console();
     sv.tick_frames(*now, 1);
     let svs = sv.core.sv_time_ms;
     for (to, pkt) in sv.take_outgoing() {
@@ -238,7 +238,7 @@ fn cod4_a_map_vote_keeps_a_slow_loading_client() {
     // The load: no packet either way.
     for _ in 0..15_000 / FRAME_MS {
         now += Duration::from_millis(FRAME_MS as u64);
-        sv.drain_console();
+        sv.run_console();
         sv.tick_frames(now, 1);
         sv.take_outgoing();
     }

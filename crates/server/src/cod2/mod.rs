@@ -63,7 +63,7 @@ use vcod_common::net::netchan::{NetchanParams, ServerNetchan};
 use vcod_common::net::protocol::{SnapshotHead, WireGame};
 use vcod_common::pk3::Pk3Fs;
 
-use crate::engine::{Lan, commands, link};
+use crate::engine::{Lan, conn, link};
 use crate::game::cod2::Cod2Level;
 use crate::game::cod2_wire::to_cod2_entity;
 
@@ -286,6 +286,50 @@ impl crate::engine::GameModule for Cod2Game {
         e.drain_game_log();
         // `SV_Frame`'s last step (cod2-protocol.md 1.6, 14.1).
         e.heartbeat(false);
+    }
+}
+
+impl conn::ConnGame for Cod2Game {
+    type Frame = (i32, Frame2);
+    type Extra = Cod2Client;
+
+    fn cvar<'a>(e: &'a Cod2Server, name: &str) -> &'a str {
+        e.game.cvars.get(name)
+    }
+    fn ignorable(text: &str) -> bool {
+        ignorable(text)
+    }
+    /// `SV_AddServerCommand` (0x8094750) adds nothing for a test client
+    /// (`client+0xae70c`, which `SV_AddTestClient` sets), so its
+    /// never-acked ring cannot overflow. VERIFIED.
+    fn takes_commands(c: &Client) -> bool {
+        !c.extra.test
+    }
+    fn downloading(c: &Client) -> bool {
+        !c.extra.download.name.is_empty()
+    }
+    fn drop_client(e: &mut Cod2Server, slot: usize, reason: &str) {
+        e.drop_client(slot, reason);
+    }
+    fn script(e: &mut Cod2Server) -> Option<&mut crate::game::script::ScriptRuntime> {
+        e.game.level.as_mut().map(|l| &mut l.rt)
+    }
+    fn write_configstring(e: &mut Cod2Server, i: usize, value: &str) {
+        e.write_configstring(i, value);
+    }
+    fn write_server_command(w: &mut MsgWriter, seq: i32, text: &str) {
+        write_server_command(w, seq, &latin1_bytes(text));
+    }
+    /// `SV_Netchan_Transmit` (17.2): the ops and `svc_EOF` compressed.
+    fn netchan_out(e: &mut Cod2Server, slot: usize, ops: Vec<u8>) -> Vec<Vec<u8>> {
+        let core = &mut e.core;
+        let c = core.clients[slot].as_mut().unwrap();
+        c.link
+            .netchan
+            .transmit_eof(c.link.last_client_command, &ops, Svc::Eof as u8, &core.huff)
+    }
+    fn exec(e: &mut Cod2Server, line: &str, out: &mut crate::rcon::Redirect) {
+        e.exec(line, out);
     }
 }
 
@@ -581,20 +625,6 @@ impl Cod2Server {
         self.core.sv_time_ms
     }
 
-    pub fn client_count(&self) -> usize {
-        self.core
-            .clients
-            .iter()
-            .flatten()
-            .filter(|c| c.state >= State::Connected)
-            .count()
-    }
-
-    /// An engine cvar as `atoi` reads it.
-    fn int(&self, name: &str) -> i32 {
-        crate::game::builtins::cvar::atoi(self.game.cvars.get(name))
-    }
-
     /// Test-facing: every level's `G_InitGame` seeds `srand` and the
     /// script's draws with `seed`, as retail's took its wall clock's
     /// milliseconds (cod2-combat.md 9.6).
@@ -650,56 +680,20 @@ impl Cod2Server {
             self.game.retired = None;
         }
         let _p = crate::tick_profile::phase("console");
-        let lines: Vec<String> = std::mem::take(&mut self.core.console)
-            .iter()
-            .flat_map(|l| crate::console::split_commands(l))
-            .collect();
-        for line in lines {
-            let mut out = crate::rcon::Redirect::default();
-            self.exec(&line, &mut out);
-            for p in out.finish() {
-                let text = p.trim_start_matches("print\n");
-                if !text.is_empty() {
-                    log::info!("{}", text.trim_end());
-                }
-            }
-        }
-    }
-
-    fn send_oob(&mut self, to: SocketAddr, text: &str) {
-        self.core
-            .outbox
-            .push((to, vcod_cod2::net::oob::packet(text)));
+        self.run_console();
     }
 
     fn client_packet(&mut self, from: SocketAddr, pkt: &[u8], now: Instant) {
-        if pkt.len() < 6 {
-            return;
-        }
-        let qport = u16::from_le_bytes([pkt[4], pkt[5]]);
-        let Some(slot) = self.core.clients.iter().position(|c| {
-            c.as_ref()
-                .is_some_and(|c| c.link.addr.ip() == from.ip() && c.link.netchan.qport == qport)
-        }) else {
+        let (slot, m) = match conn::incoming(&self.core, from, pkt) {
+            conn::Incoming::Message(slot, m) => (slot, m),
             // `SV_PacketEvent` (0x80960e2): a sender no slot holds is told
             // to go away (17.3).
-            self.send_oob(from, "disconnect");
-            return;
+            conn::Incoming::NoSlot => return self.send_oob(from, "disconnect"),
+            conn::Incoming::Dropped => return,
         };
         let svs = self.core.sv_time_ms;
         let c = self.core.clients[slot].as_mut().unwrap();
-        let Some(m) = c.link.netchan.process_in(pkt) else {
-            return;
-        };
-        // `SV_PacketEvent` drops a negative messageAcknowledge (cod2-protocol.md
-        // 2.2). A reliableAcknowledge past what we sent, or so far behind that
-        // its key is gone, is a forgery or garbage (`SV_ExecuteClientMessage`).
-        if m.message_ack < 0 || !c.link.reliable_ack_in_window(m.reliable_ack) {
-            return;
-        }
-        c.link.netchan.accept(&m);
-        c.link.addr = from;
-        c.link.reliable_ack = m.reliable_ack;
+        conn::commit(c, from, &m);
         // A zombie's packets go through the netchan and nothing else: its
         // `lastPacketTime` stands, so it is freed `sv_zombietime` after the
         // last one before the drop.
@@ -766,19 +760,12 @@ impl Cod2Server {
 
     /// One `clc_clientCommand`. False when the client was dropped.
     fn client_command(&mut self, slot: usize, seq: i32, text: String) -> bool {
-        let Some(c) = self.core.clients[slot].as_mut() else {
-            return false;
-        };
-        if seq <= c.link.last_client_command {
-            return true;
+        match self.take_client_command(slot, seq, &text) {
+            conn::CommandSeq::Old => return true,
+            conn::CommandSeq::Lost => return false,
+            conn::CommandSeq::Next => {}
         }
-        if seq > c.link.last_client_command + 1 {
-            self.drop_client(slot, "EXE_LOSTRELIABLECOMMANDS");
-            return false;
-        }
-        c.link.last_client_command = seq;
         log::debug!("cod2: client {slot} command {seq} {text:?}");
-        c.link.netchan.last_client_command_string = text.clone();
         let args = crate::game::say::tokenize(&text);
         self.game.argv1 = args.get(1).cloned().unwrap_or_default();
         let Some(cmd) = args.first() else {
@@ -954,49 +941,6 @@ impl Cod2Server {
         self.flush_game_commands();
     }
 
-    /// `SV_SendServerCommand(NULL, ..)` (0x8094a10): every client past
-    /// `CS_CONNECTED`, zombies left out.
-    fn send_to_all(&mut self, cmd: &str) {
-        for slot in 0..self.core.clients.len() {
-            if self.core.clients[slot]
-                .as_ref()
-                .is_some_and(|c| c.state > State::Connected)
-            {
-                self.send_server_command(slot, cmd);
-            }
-        }
-    }
-
-    /// The configstrings the script wrote and the server commands and
-    /// console lines it queued, out to their clients in the order they
-    /// were written, as retail's `SV_SetConfigstring` and
-    /// `SV_GameSendServerCommand` send each at once (cod2-map-cycle.md 3:
-    /// the intermission's `f` lines lead its `d 5` / `d 6`). The dvar
-    /// mirror's changes wait for the next `SV_Frame`'s head.
-    fn flush_game_commands(&mut self) {
-        let Some(level) = self.game.level.as_mut() else {
-            return;
-        };
-        let writes = level.rt.host.configstrings.take_writes_stamped();
-        let commands = level.rt.take_client_commands_stamped();
-        let console = level.rt.take_console();
-        let mut writes = writes.into_iter().peekable();
-        for (seq, to, cmd) in commands {
-            while let Some((_, i, v)) = writes.next_if(|w| w.0 < seq) {
-                self.write_configstring(i, &v);
-            }
-            if to == crate::game::commands::ALL_CLIENTS {
-                self.send_to_all(&cmd);
-            } else {
-                self.send_server_command(to, &cmd);
-            }
-        }
-        for (_, i, v) in writes {
-            self.write_configstring(i, &v);
-        }
-        self.core.console.extend(console);
-    }
-
     /// `SV_SetConfigstring` (0x8092780) of a game write: the table, and
     /// `d` (or its `x`/`y`/`z` pieces) to every client past
     /// `CS_CONNECTED`. 0 and 1 are the engine's. VERIFIED, the `2 <`
@@ -1115,7 +1059,7 @@ impl Cod2Server {
         };
         let c = self.core.clients[slot].as_mut().unwrap();
         let mut w = MsgWriter::new(&self.core.huff);
-        write_pending_commands(&mut w, c);
+        conn::write_pending_commands::<Cod2Game>(&mut w, c);
         PROTOCOL_118.write_gamestate(
             &mut w,
             &Gamestate2 {
@@ -1133,74 +1077,6 @@ impl Cod2Server {
         );
         let ops = w.into_ops();
         self.transmit(slot, ops);
-    }
-
-    /// `SV_SendMessageToClient` (0x809aba2): the message through the
-    /// netchan, its first packet now and any other one a turn
-    /// ([`crate::engine::send_messages`]), then `nextSnapshotTime` (17.2).
-    fn transmit(&mut self, slot: usize, ops: Vec<u8>) {
-        let svs = self.core.sv_time_ms;
-        let max_rate = self.int("sv_maxRate");
-        let Some(c) = self.core.clients[slot].as_mut() else {
-            return;
-        };
-        let mut pkts = c.link.netchan.transmit_eof(
-            c.link.last_client_command,
-            &ops,
-            Svc::Eof as u8,
-            &self.core.huff,
-        );
-        // The compressed message with its acknowledge: one packet less its
-        // sequence, or each fragment less its 10-byte header.
-        let bytes = match pkts.as_slice() {
-            [one] => one.len() - 4,
-            many => many.iter().map(|p| p.len() - 10).sum(),
-        };
-        let idle = c.state != State::Active && c.extra.download.name.is_empty();
-        match link::pace(
-            svs,
-            bytes,
-            c.lan,
-            c.rates.send_rate(max_rate),
-            c.rates.snapshot_msec,
-            idle,
-        ) {
-            link::Pace::Lan => c.link.next_message_ms = svs - 1,
-            link::Pace::At { next, delayed } => {
-                c.link.next_message_ms = next;
-                c.link.rate_delayed = delayed;
-            }
-        }
-        let to = c.link.addr;
-        if !pkts.is_empty() {
-            self.core.outbox.push((to, pkts.remove(0)));
-        }
-        c.link.unsent = pkts.into();
-    }
-
-    /// `SV_AddServerCommand` for one game or engine command, its type read
-    /// off its letter ([`ignorable`]); a full ring drops the client.
-    pub fn send_server_command(&mut self, slot: usize, text: &str) {
-        let Some(c) = self.core.clients[slot].as_mut() else {
-            return;
-        };
-        // `SV_AddServerCommand` (0x8094750) adds nothing for a test
-        // client (`client+0xae70c`, which `SV_AddTestClient` sets), so its
-        // never-acked ring cannot overflow. VERIFIED.
-        if c.extra.test {
-            return;
-        }
-        log::trace!("cod2: to client {slot}: {text:?}");
-        let active = c.state == State::Active;
-        if !commands::add(
-            &mut c.link,
-            &mut c.reliable_kept,
-            active,
-            text,
-            !ignorable(text),
-        ) {
-            self.drop_client(slot, "EXE_SERVERCOMMANDOVERFLOW");
-        }
     }
 
     /// `SV_DropClient` (0x808f02e): the game lets go of the slot, which
@@ -1370,27 +1246,6 @@ impl Cod2Server {
         }
     }
 
-    /// Whether `slot` takes a turn in `SV_SendClientMessages` (0x809bcce,
-    /// [`crate::engine::send_messages`]): a client with a socket whose
-    /// `nextSnapshotTime` came (17.2).
-    fn message_due(&self, slot: usize) -> bool {
-        let svs = self.core.sv_time_ms;
-        self.core.clients[slot]
-            .as_ref()
-            .is_some_and(|c| !c.bot && c.link.next_message_ms <= svs)
-    }
-
-    /// The turn's next fragment, paced on the bytes left (17.2).
-    fn next_fragment(&mut self, slot: usize) -> Option<(SocketAddr, Vec<u8>)> {
-        let svs = self.core.sv_time_ms;
-        let max_rate = self.int("sv_maxRate");
-        let c = self.core.clients[slot].as_mut()?;
-        let pkt = c.link.unsent.pop_front()?;
-        let left = pkt.len() - 10 + c.link.unsent.iter().map(|p| p.len() - 10).sum::<usize>();
-        c.link.next_message_ms = svs + link::rate_msec(left, c.rates.send_rate(max_rate));
-        Some((c.link.addr, pkt))
-    }
-
     /// A new message for `slot`, the roster and the world built on the
     /// first client that needs them.
     fn send_client_snapshot(&mut self, slot: usize, shared: &mut Cod2Snapshots) {
@@ -1457,7 +1312,7 @@ impl Cod2Server {
         let c = self.core.clients[slot].as_mut().unwrap();
         let mut w = MsgWriter::new(&self.core.huff);
         if in_world {
-            write_pending_commands(&mut w, c);
+            conn::write_pending_commands::<Cod2Game>(&mut w, c);
             let message = c.link.netchan.outgoing_sequence as i32;
             let to = Frame2 {
                 server_time: svs,
@@ -1650,15 +1505,6 @@ fn ignorable(text: &str) -> bool {
         text.as_bytes().first(),
         Some(b'c' | b'e' | b'f' | b'g' | b'h' | b'i' | b's' | b'G' | b'H' | b'I' | b' ')
     )
-}
-
-/// The unacknowledged server commands, each `svc_serverCommand`.
-fn write_pending_commands(w: &mut MsgWriter, c: &mut Client) {
-    c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;
-    for seq in c.link.reliable_ack + 1..=c.link.netchan.reliable_sequence as i32 {
-        let text = &c.link.netchan.reliable[seq as usize & (MAX_RELIABLE_COMMANDS - 1)];
-        write_server_command(w, seq, &latin1_bytes(text));
-    }
 }
 
 /// `ANGLE2SHORT`.

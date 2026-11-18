@@ -38,7 +38,7 @@ impl Cod4Server {
         let Some(qport) = body.get(..2).map(|q| u16::from_le_bytes([q[0], q[1]])) else {
             return;
         };
-        let Some(slot) = self.slot_of(from, qport) else {
+        let Some(slot) = crate::engine::conn::slot_of(&self.core, from, qport) else {
             return;
         };
         let svs = self.core.sv_time_ms;

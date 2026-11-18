@@ -39,7 +39,7 @@ use vcod_common::net::codec::MsgWriter;
 use vcod_common::net::netchan::{NetchanParams, ServerNetchan};
 use vcod_common::net::protocol::{SnapshotHead, WireGame};
 
-use crate::engine::{commands, link};
+use crate::engine::{conn, link};
 
 /// The frame at `sv_fps` 20, the dvar's default; a server steps
 /// [`Cod4Server::frame_ms`].
@@ -255,7 +255,7 @@ impl crate::engine::GameModule for Cod4Game {
     }
     fn drain_console(e: &mut Cod4Server, _now: Instant) {
         let _p = crate::tick_profile::phase("console");
-        e.drain_console();
+        e.run_console();
     }
     fn configstrings_head(e: &mut Cod4Server) {
         e.broadcast_configstrings();
@@ -294,19 +294,10 @@ impl crate::engine::GameModule for Cod4Game {
         None
     }
     fn message_due(e: &Cod4Server, slot: usize) -> bool {
-        let svs = e.core.sv_time_ms;
-        e.core.clients[slot]
-            .as_ref()
-            .is_some_and(|c| !c.bot && c.link.next_message_ms <= svs)
+        e.message_due(slot)
     }
     fn next_fragment(e: &mut Cod4Server, slot: usize) -> Option<(SocketAddr, Vec<u8>)> {
-        let svs = e.core.sv_time_ms;
-        let max_rate = e.int("sv_maxRate");
-        let c = e.core.clients[slot].as_mut()?;
-        let pkt = c.link.unsent.pop_front()?;
-        let left = pkt.len() - 10 + c.link.unsent.iter().map(|p| p.len() - 10).sum::<usize>();
-        c.link.next_message_ms = svs + link::rate_msec(left, c.rates.send_rate(max_rate));
-        Some((c.link.addr, pkt))
+        e.next_fragment(slot)
     }
     fn send_client_snapshot(e: &mut Cod4Server, slot: usize, snaps: &mut Cod4Snapshots) {
         let _p = crate::tick_profile::phase("messages/snapshot");
@@ -357,6 +348,72 @@ impl crate::engine::GameModule for Cod4Game {
     }
     fn heartbeat(e: &mut Cod4Server) {
         e.heartbeat();
+    }
+}
+
+impl conn::ConnGame for Cod4Game {
+    type Frame = (i32, Frame4);
+    type Extra = Cod4Client;
+
+    fn cvar<'a>(e: &'a Cod4Server, name: &str) -> &'a str {
+        e.game.cvars().get(name)
+    }
+    fn ignorable(text: &str) -> bool {
+        ignorable(text)
+    }
+    fn downloading(c: &Client) -> bool {
+        c.extra.download.active()
+    }
+    fn drop_client(e: &mut Cod4Server, slot: usize, reason: &str) {
+        e.drop_client(slot, reason);
+    }
+    fn script(e: &mut Cod4Server) -> Option<&mut crate::game::script::ScriptRuntime> {
+        e.game.level.as_mut().map(|l| &mut l.rt)
+    }
+    fn write_configstring(e: &mut Cod4Server, i: usize, value: &str) {
+        e.write_configstring(i, value);
+    }
+    fn flushed(e: &mut Cod4Server) {
+        e.drain_game_log();
+    }
+    fn write_server_command(w: &mut MsgWriter, seq: i32, text: &str) {
+        w.write_byte(SVC_SERVERCOMMAND);
+        w.write_long(seq);
+        w.write_string_bytes(text.as_bytes());
+    }
+    /// The ops and `svc_EOF` compressed with 1.7's tree.
+    fn netchan_out(e: &mut Cod4Server, slot: usize, mut ops: Vec<u8>) -> Vec<Vec<u8>> {
+        let c = e.core.clients[slot].as_mut().unwrap();
+        ops.push(EOF);
+        let block = e.game.huff.compress(&ops);
+        c.link
+            .netchan
+            .transmit_block(c.link.last_client_command, &block)
+    }
+    /// 0x8178aff..0x8178c98: a client in the world more than 28 messages
+    /// past its last acknowledge, LAN or not, is due `irand(0, 2^n) *
+    /// snapshotMsec` on, n counting such messages from 0 up to 8 and back
+    /// to 0 on any other (cod4-server-frame.md 12). The loopback walker was
+    /// sent its 359-byte spawn frame and the next snapshot 50 ms apart at
+    /// `sv_maxRate` 5000, and a client not yet in the world every 50 ms
+    /// (VERIFIED live, cod4-pmove.md 15, cod4-handshake.md 3). The
+    /// fragments that follow a message's first are rate-paced for every
+    /// client (`next_fragment`; the gamestate's 350 ms apart, VERIFIED
+    /// live).
+    fn back_off(e: &mut Cod4Server, slot: usize, sequence: i32) -> bool {
+        let svs = e.core.sv_time_ms;
+        let c = e.core.clients[slot].as_mut().unwrap();
+        if c.state == State::Active && c.delta_message >= 0 && sequence - c.delta_message > 28 {
+            let k = e.game.hold.irand(0, 1 << c.extra.stall_exp);
+            c.link.next_message_ms = svs + k * c.rates.snapshot_msec;
+            c.extra.stall_exp = (c.extra.stall_exp + 1).min(8);
+            return true;
+        }
+        c.extra.stall_exp = 0;
+        false
+    }
+    fn exec(e: &mut Cod4Server, line: &str, out: &mut crate::rcon::Redirect) {
+        e.exec(line, out);
     }
 }
 
@@ -653,10 +710,6 @@ impl Cod4Server {
         self.game.server_id
     }
 
-    fn int(&self, name: &str) -> i32 {
-        crate::game::builtins::cvar::atoi(self.game.cvars().get(name))
-    }
-
     fn pure(&self) -> bool {
         self.int("sv_pure") != 0
     }
@@ -780,29 +833,6 @@ impl Cod4Server {
         s
     }
 
-    /// Runs the queued console lines.
-    fn drain_console(&mut self) {
-        let lines: Vec<String> = std::mem::take(&mut self.core.console)
-            .iter()
-            .flat_map(|l| crate::console::split_commands(l))
-            .collect();
-        for line in lines {
-            let mut out = crate::rcon::Redirect::default();
-            self.exec(&line, &mut out);
-            for p in out.finish() {
-                let text = p.trim_start_matches("print\n");
-                if !text.is_empty() {
-                    log::info!("{}", text.trim_end());
-                }
-            }
-        }
-    }
-
-    fn send_oob(&mut self, to: SocketAddr, text: &str) {
-        let pkt = PROTOCOL_17.oob_packet(text);
-        self.core.outbox.push((to, pkt));
-    }
-
     /// `SV_MasterHeartbeat("COD-4")` (0x81780e4): at `dedicated 2` only,
     /// every 180 s, to `sv_master1`, or to `master.cod.pm` while that is
     /// empty, as the CoD1 and CoD2 servers default to it.
@@ -833,25 +863,12 @@ impl Cod4Server {
     /// A netchan packet: its slot by address and qport, the netchan, then
     /// `SV_ExecuteClientMessage`.
     fn client_packet(&mut self, from: SocketAddr, pkt: &[u8]) {
-        if pkt.len() < 6 {
-            return;
-        }
-        let qport = u16::from_le_bytes([pkt[4], pkt[5]]);
-        let Some(slot) = self.slot_of(from, qport) else {
+        let conn::Incoming::Message(slot, m) = conn::incoming(&self.core, from, pkt) else {
             return;
         };
         let svs = self.core.sv_time_ms;
         let c = self.core.clients[slot].as_mut().unwrap();
-        let Some(m) = c.link.netchan.process_in(pkt) else {
-            return;
-        };
-        // CoD2's acknowledge window (cod2-protocol.md 2.2).
-        if m.message_ack < 0 || !c.link.reliable_ack_in_window(m.reliable_ack) {
-            return;
-        }
-        c.link.netchan.accept(&m);
-        c.link.addr = from;
-        c.link.reliable_ack = m.reliable_ack;
+        conn::commit(c, from, &m);
         if c.state == State::Zombie {
             return;
         }
@@ -925,32 +942,18 @@ impl Cod4Server {
         }
     }
 
-    /// The slot holding `from`'s address and `qport`.
-    fn slot_of(&self, from: SocketAddr, qport: u16) -> Option<usize> {
-        self.core.clients.iter().position(|c| {
-            c.as_ref()
-                .is_some_and(|c| c.link.addr.ip() == from.ip() && c.link.netchan.qport == qport)
-        })
-    }
-
     /// One `clc_clientCommand`. False when the client was dropped. One
     /// from the last level's messages (`from_old`) runs only the engine's
     /// `disconnect` and `userinfo` (Q3's `SV_ExecuteClientCommand` rule,
     /// INFERRED).
     fn client_command(&mut self, slot: usize, seq: i32, text: &[u8], from_old: bool) -> bool {
-        let Some(c) = self.core.clients[slot].as_mut() else {
-            return false;
-        };
-        if seq <= c.link.last_client_command {
-            return true;
-        }
-        if seq > c.link.last_client_command + 1 {
-            self.drop_client(slot, "EXE_LOSTRELIABLECOMMANDS");
-            return false;
-        }
         let text: String = text.iter().map(|&b| char::from(b)).collect();
-        c.link.last_client_command = seq;
-        c.link.netchan.last_client_command_string = text.clone();
+        match self.take_client_command(slot, seq, &text) {
+            conn::CommandSeq::Old => return true,
+            conn::CommandSeq::Lost => return false,
+            conn::CommandSeq::Next => {}
+        }
+        let c = self.core.clients[slot].as_mut().unwrap();
         log::debug!("cod4: client {slot} command {seq} {text:?}");
         let args = crate::game::say::tokenize(&text);
         match args.first().map(String::as_str) {
@@ -1141,35 +1144,6 @@ impl Cod4Server {
         self.flush_game_commands();
     }
 
-    /// The configstrings the script wrote and the server commands it
-    /// queued, in the order they were raised, as retail's
-    /// `SV_SetConfigstring` and `SV_GameSendServerCommand` send each at
-    /// once. The dvar mirror's changes wait for the next frame's head.
-    fn flush_game_commands(&mut self) {
-        let Some(level) = self.game.level.as_mut() else {
-            return;
-        };
-        let writes = level.rt.host.configstrings.take_writes_stamped();
-        let commands = level.rt.take_client_commands_stamped();
-        let console = level.rt.take_console();
-        let mut writes = writes.into_iter().peekable();
-        for (seq, to, cmd) in commands {
-            while let Some((_, i, v)) = writes.next_if(|w| w.0 < seq) {
-                self.write_configstring(i, &v);
-            }
-            if to == crate::game::commands::ALL_CLIENTS {
-                self.send_to_all(&cmd);
-            } else {
-                self.send_server_command(to, &cmd);
-            }
-        }
-        for (_, i, v) in writes {
-            self.write_configstring(i, &v);
-        }
-        self.core.console.extend(console);
-        self.drain_game_log();
-    }
-
     /// `SV_SetConfigstring` of a game write: the table and `d <index>
     /// <string>` to every client past `CS_CONNECTED`. 0 and 1 are the
     /// engine's.
@@ -1261,7 +1235,7 @@ impl Cod4Server {
         let feed = self.core.checksum_feed;
         let c = self.core.clients[slot].as_mut().unwrap();
         let mut w = MsgWriter::new(&UNUSED_HUFF);
-        write_pending_commands(&mut w, c);
+        conn::write_pending_commands::<Cod4Game>(&mut w, c);
         let gs = Gamestate::from_table(
             c.link.netchan.reliable_sequence as i32,
             &self.core.configstrings,
@@ -1280,98 +1254,6 @@ impl Cod4Server {
         );
         let ops = w.into_ops();
         self.transmit(slot, ops);
-    }
-
-    /// `SV_SendMessageToClient`: the message through the netchan, its first
-    /// packet now and any other one a turn, then `nextSnapshotTime`.
-    fn transmit(&mut self, slot: usize, mut ops: Vec<u8>) {
-        let svs = self.core.sv_time_ms;
-        let max_rate = self.int("sv_maxRate");
-        let Some(c) = self.core.clients[slot].as_mut() else {
-            return;
-        };
-        ops.push(EOF);
-        let block = self.game.huff.compress(&ops);
-        let sequence = c.link.netchan.outgoing_sequence as i32;
-        let mut pkts = c
-            .link
-            .netchan
-            .transmit_block(c.link.last_client_command, &block);
-        let bytes = match pkts.as_slice() {
-            [one] => one.len() - 4,
-            many => many.iter().map(|p| p.len() - 10).sum(),
-        };
-        // `SV_SendMessageToClient` (0x8178b3e..0x8178bed): a LAN client's
-        // next message is due the next frame, anyone else's when its rate
-        // allows, and a second on for one neither in the world nor
-        // downloading (cod4-handshake.md 15). The loopback walker was sent
-        // its 359-byte spawn frame and the next snapshot 50 ms apart at
-        // `sv_maxRate` 5000, and a client not yet in the world every 50 ms
-        // (VERIFIED live, cod4-pmove.md 15, cod4-handshake.md 3). The
-        // fragments that follow a message's first are rate-paced for every
-        // client (`next_fragment`; the gamestate's 350 ms apart, VERIFIED
-        // live).
-        let idle = c.state != State::Active && !c.extra.download.active();
-        // 0x8178aff..0x8178c98: a client in the world more than 28
-        // messages past its last acknowledge, LAN or not, is due
-        // `irand(0, 2^n) * snapshotMsec` on, n counting such messages from
-        // 0 up to 8 and back to 0 on any other (cod4-server-frame.md 12).
-        if c.state == State::Active && c.delta_message >= 0 && sequence - c.delta_message > 28 {
-            let k = self.game.hold.irand(0, 1 << c.extra.stall_exp);
-            c.link.next_message_ms = svs + k * c.rates.snapshot_msec;
-            c.extra.stall_exp = (c.extra.stall_exp + 1).min(8);
-        } else {
-            c.extra.stall_exp = 0;
-            match link::pace(
-                svs,
-                bytes,
-                c.lan,
-                c.rates.send_rate(max_rate),
-                c.rates.snapshot_msec,
-                idle,
-            ) {
-                link::Pace::Lan => c.link.next_message_ms = svs - 1,
-                link::Pace::At { next, delayed } => {
-                    c.link.next_message_ms = next;
-                    c.link.rate_delayed = delayed;
-                }
-            }
-        }
-        let to = c.link.addr;
-        if !pkts.is_empty() {
-            self.core.outbox.push((to, pkts.remove(0)));
-        }
-        c.link.unsent = pkts.into();
-    }
-
-    /// `SV_AddServerCommand` for one game or engine command, its type read
-    /// off its letter ([`ignorable`]); a full ring drops the client.
-    pub fn send_server_command(&mut self, slot: usize, text: &str) {
-        let Some(c) = self.core.clients[slot].as_mut() else {
-            return;
-        };
-        let active = c.state == State::Active;
-        if !commands::add(
-            &mut c.link,
-            &mut c.reliable_kept,
-            active,
-            text,
-            !ignorable(text),
-        ) {
-            self.drop_client(slot, "EXE_SERVERCOMMANDOVERFLOW");
-        }
-    }
-
-    /// Every client past `CS_CONNECTED`, zombies left out.
-    fn send_to_all(&mut self, cmd: &str) {
-        for slot in 0..self.core.clients.len() {
-            if self.core.clients[slot]
-                .as_ref()
-                .is_some_and(|c| c.state > State::Connected)
-            {
-                self.send_server_command(slot, cmd);
-            }
-        }
     }
 
     /// `SV_DropClient` (0x817096e): the slot turns `CS_ZOMBIE`; everyone
@@ -1560,7 +1442,7 @@ impl Cod4Server {
         };
         let mut w = MsgWriter::new(&UNUSED_HUFF);
         if matches!(c.state, State::Active | State::Zombie) {
-            write_pending_commands(&mut w, c);
+            conn::write_pending_commands::<Cod4Game>(&mut w, c);
             let message = c.link.netchan.outgoing_sequence as i32;
             let mut ps = level_ps.unwrap_or_else(|| {
                 spectator_ps(slot, origin, angles, c.extra.command_time.max(svs - frame))
@@ -1666,15 +1548,6 @@ impl Cod4Server {
         ));
     }
 
-    pub fn client_count(&self) -> usize {
-        self.core
-            .clients
-            .iter()
-            .flatten()
-            .filter(|c| c.state >= State::Connected)
-            .count()
-    }
-
     /// A client's stats block as the server holds it.
     pub fn stats(&self, slot: usize) -> Option<&Stats> {
         self.core
@@ -1738,17 +1611,6 @@ fn spawn_server_id(id: i32) -> i32 {
         n += 16;
     }
     n
-}
-
-/// The unacknowledged server commands, each `svc_serverCommand`.
-fn write_pending_commands(w: &mut MsgWriter, c: &mut Client) {
-    c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;
-    for seq in c.link.reliable_ack + 1..=c.link.netchan.reliable_sequence as i32 {
-        let text = &c.link.netchan.reliable[seq as usize & (MAX_RELIABLE_COMMANDS - 1)];
-        w.write_byte(SVC_SERVERCOMMAND);
-        w.write_long(seq);
-        w.write_string_bytes(text.as_bytes());
-    }
 }
 
 /// Whether a command goes `SV_CMD_CAN_IGNORE`, read off its letter: the

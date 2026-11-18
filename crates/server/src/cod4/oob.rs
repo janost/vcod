@@ -532,7 +532,7 @@ impl Cod4Server {
         let qport = u16::from_le_bytes([body[0], body[1]]);
         let idx = usize::from(body[2]);
         let data = &body[3..];
-        let Some(slot) = self.slot_of(from, qport) else {
+        let Some(slot) = crate::engine::conn::slot_of(&self.core, from, qport) else {
             log::warn!("Received stats packet from unknown remote client {from}");
             return;
         };

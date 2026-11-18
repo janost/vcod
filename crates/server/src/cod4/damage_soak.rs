@@ -645,7 +645,7 @@ fn soak_run(plan: &'static [Act], cvars: &[(&str, &str)], lag_ms: i32) -> SoakRu
         now += Duration::from_millis(FRAME_MS as u64);
         // `main.rs`'s console ahead of the frame: the script's `exitLevel`
         // and `map_restart` lines.
-        sv.drain_console();
+        sv.run_console();
         sv.tick_frames(now, 1);
         let svs = sv.core.sv_time_ms;
         for (to, pkt) in sv.take_outgoing() {
