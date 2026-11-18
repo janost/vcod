@@ -9,7 +9,7 @@ mod brushtree;
 pub use brushtree::{BrushBox, BrushNode, BrushTree, partition_brushes};
 pub use vcod_common::clipmap::{CollAabbTree, CollBorder, CollPartition, CollTri};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use glam::{Vec2, Vec3};
 
 /// `IBSP`.
