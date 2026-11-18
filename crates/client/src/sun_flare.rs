@@ -180,7 +180,9 @@ impl FlareSim {
     pub fn step(&mut self, p: &FlareParams, f: &FrameIn) -> FrameOut {
         let mut out = FrameOut::default();
         let scale = f.width / VIRTUAL_WIDTH;
-        let radius = (p.sprite_size * scale).round() as i32;
+        // A .sun file's size is unchecked: held where the window math
+        // cannot overflow (the window is capped at MAX_WINDOW anyway).
+        let radius = (p.sprite_size * scale).round().clamp(-1e6, 1e6) as i32;
         // 0x4e81e0 adds the flare inside the band
         let added = f
             .window
@@ -738,6 +740,18 @@ mod tests {
         assert_eq!(out.query, None);
         assert_eq!(out.flare.expect("fading").intensity, 0.75);
         assert!(sim.glare < 1.0 && sim.blind < 1.0);
+    }
+
+    /// A third-party .sun file's huge sprite size steps without an
+    /// overflow (BUG-086).
+    #[test]
+    fn a_huge_sprite_size_steps_without_an_overflow() {
+        let mut p = harbor();
+        p.sprite_size = 1e12;
+        let mut sim = FlareSim::default();
+        for t in [0.0, 100.0, 200.0] {
+            sim.step(&p, &frame(t, 1.0, Some([640.0, 480.0]), 1.0));
+        }
     }
 
     #[test]
