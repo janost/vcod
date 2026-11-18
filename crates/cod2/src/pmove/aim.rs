@@ -376,12 +376,12 @@ impl AimState {
         if k.ads {
             out[0] = (d(out[0]) + d(pos) * d(k.ads_aim_pitch)) as f32;
         }
-        self.tilt(inp, &k, xyspeed, dt, &mut out);
-        self.idle(inp, &k, dt, &mut out);
-        walk_bob(ps, &k, pos, xyspeed, &mut out);
-        self.damage_kick(inp, &k, &mut out);
+        self.tilt(inp, k, xyspeed, dt, &mut out);
+        self.idle(inp, k, dt, &mut out);
+        walk_bob(ps, k, pos, xyspeed, &mut out);
+        self.damage_kick(inp, k, &mut out);
         if k.ads {
-            self.spring_step(&k, pos, dt);
+            self.spring_step(k, pos, dt);
             out[0] = (d(out[0]) + d(self.spring[0])) as f32;
             out[1] = (d(out[1]) + d(self.spring[1])) as f32;
             out[2] = (d(out[2]) + d(self.spring[2])) as f32;

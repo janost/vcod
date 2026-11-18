@@ -1530,7 +1530,7 @@ fn run_state(
                 return to_ready(ps, ws);
             };
             if delay_fired {
-                reload_delayed_action(ps, ws, &w);
+                reload_delayed_action(ps, ws, w);
             }
             if ws.weapon_time != 0 {
                 return;
@@ -1539,28 +1539,28 @@ fn run_state(
             if !w.segmented_reload {
                 return to_ready(ps, ws);
             }
-            if ws.state != state::RELOADING_INTERRUPTED && allow_reload(ws, &w) {
-                return set_reloading_state(ps, ws, &w);
+            if ws.state != state::RELOADING_INTERRUPTED && allow_reload(ws, w) {
+                return set_reloading_state(ps, ws, w);
             }
-            end_reload(ps, ws, &w);
+            end_reload(ps, ws, w);
         }
         state::RELOAD_START | state::RELOAD_START_INTERRUPTED => {
             let Some(w) = defs.get(ws.weapon) else {
                 return to_ready(ps, ws);
             };
             if delay_fired {
-                reload_delayed_action(ps, ws, &w);
+                reload_delayed_action(ps, ws, w);
             }
             if ws.weapon_time != 0 {
                 return;
             }
-            if (ws.state != state::RELOAD_START_INTERRUPTED || ws.clip_of(&w) == 0)
-                && allow_reload(ws, &w)
+            if (ws.state != state::RELOAD_START_INTERRUPTED || ws.clip_of(w) == 0)
+                && allow_reload(ws, w)
             {
-                return set_reloading_state(ps, ws, &w);
+                return set_reloading_state(ps, ws, w);
             }
             ws.set_rechamber(ws.weapon, false);
-            end_reload(ps, ws, &w);
+            end_reload(ps, ws, w);
         }
         state::MELEE_INIT => {
             if let Some(w) = defs.get(ws.weapon) {
@@ -1596,7 +1596,7 @@ fn run_state(
                 }
                 torso_event(ps, ws, c, defs, Event::FireWeapon, true);
                 if let Some(o) = o
-                    && ws.ammo_of(&o) + ws.clip_of(&o) == 0
+                    && ws.ammo_of(o) + ws.clip_of(o) == 0
                 {
                     ps.add_event(ev::EMPTY_OFFHAND, 0);
                 }
@@ -1849,7 +1849,7 @@ fn fire(
     // 0x80ef1ac: the times, the pullback of a grenade.
     if w.is_grenade() {
         if !delay_fired {
-            if ws.clip_of(&w) != 0 {
+            if ws.clip_of(w) != 0 {
                 ws.grenade_time_left = w.fuse_time;
                 start_anim(ps, ws, 0x13);
                 ps.add_event(ev::PULLBACK_WEAPON, 0);
@@ -1880,8 +1880,8 @@ fn fire(
     }
     ws.state = state::FIRING;
     // 0x80ef380: an empty clip reloads or clicks.
-    if ws.clip_of(&w) < 1 {
-        let dry = ws.ammo_of(&w) < 1;
+    if ws.clip_of(w) < 1 {
+        let dry = ws.ammo_of(w) < 1;
         if !w.is_grenade() && dry {
             ps.add_event(ev::NOAMMO, 0);
         }
@@ -1890,7 +1890,7 @@ fn fire(
             idle_anim(ps, ws);
             ws.weapon_time += 500;
         } else {
-            begin_reload(ps, ws, &w, c, defs);
+            begin_reload(ps, ws, w, c, defs);
         }
         return;
     }
@@ -1903,7 +1903,7 @@ fn fire(
     if w.is_grenade() {
         ws.weapon_time = w.fire_time;
     }
-    let last = ws.clip_of(&w) == 0;
+    let last = ws.clip_of(w) == 0;
     // 0x80ef496: the sighted or hip fire anim, the last shot's own.
     let n = match (ws.pos_frac > 0.75, last) {
         (true, true) => 6,
@@ -1926,7 +1926,7 @@ fn fire(
         ps.aim_spread_scale = (ps.aim_spread_scale + 255.0 * w.hip_spread_fire_add).min(255.0);
     }
     // 0x80ee95e: a clip-only weapon with nothing left is taken.
-    if w.clip_only && ws.clip_of(&w) == 0 && ws.ammo_of(&w) == 0 {
+    if w.clip_only && ws.clip_of(w) == 0 && ws.ammo_of(w) == 0 {
         ws.held &= !(1u128 << ws.weapon);
         ps.add_event(ev::NOAMMO, 0);
     }
