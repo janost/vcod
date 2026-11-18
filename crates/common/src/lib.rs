@@ -39,6 +39,7 @@ pub mod sun;
 pub mod terrain;
 pub mod testing;
 pub mod text;
+pub mod treecheck;
 pub mod turretpose;
 pub mod ui_menu;
 pub mod vehiclepose;

@@ -1001,6 +1001,12 @@ fn check_cells(g: &GfxWorld, surfaces: usize, sorted: usize, smodels: usize) -> 
                 );
             }
         }
+        vcod_common::treecheck::check_forest(c.aabb_trees.len(), |ti| {
+            let t = &c.aabb_trees[ti];
+            let first = ti as i64 + i64::from(t.children_offset) / 0x2C;
+            first..first + i64::from(t.child_count)
+        })
+        .with_context(|| format!("cell {ci} trees"))?;
         for &cg in &c.cull_groups {
             ensure!(
                 (0..g.cull_group_count as i32).contains(&cg),
@@ -1352,6 +1358,31 @@ mod tests {
             .flat_map(|h| unpack_tex_coords(h << 16 | (h ^ 0x8001)).map(f32::to_bits));
         assert_eq!(fnv(bits), PIN_TEX);
     }
+    /// A cell tree listed by two parents would make the client's preorder
+    /// copy it once per path.
+    #[test]
+    fn check_cells_refuses_a_tree_with_two_parents() {
+        let tree = |child_count, children_offset| crate::assets::world::GfxAabbTree {
+            child_count,
+            children_offset,
+            ..Default::default()
+        };
+        let world = |aabb_trees| GfxWorld {
+            cell_count: 1,
+            cells: vec![GfxCell {
+                aabb_trees,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let ok = world(vec![tree(2, 0x2C), tree(0, 0), tree(0, 0)]);
+        assert!(check_cells(&ok, 0, 0, 0).is_ok());
+        // tree 0 lists 1 and 2, tree 1 lists 2 again
+        let dag = world(vec![tree(2, 0x2C), tree(1, 0x2C), tree(0, 0)]);
+        let e = format!("{:#}", check_cells(&dag, 0, 0, 0).unwrap_err());
+        assert!(e.contains("two parents"), "{e}");
+    }
+
     const PIN_UNIT: u64 = 3097659338910776972;
     const PIN_TEX: u64 = 5623642612305634085;
 }

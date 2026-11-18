@@ -9,7 +9,7 @@ mod brushtree;
 pub use brushtree::{BrushBox, BrushNode, BrushTree, partition_brushes};
 pub use vcod_common::clipmap::{CollAabbTree, CollBorder, CollPartition, CollTri};
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use glam::{Vec2, Vec3};
 
 /// `IBSP`.
@@ -983,6 +983,10 @@ impl D3dBsp {
                 ensure!(ok, "node {i}: child {c} out of range");
             }
         }
+        vcod_common::treecheck::check_bsp(self.nodes.len(), self.leafs.len(), |n| {
+            self.nodes[n].children
+        })
+        .context("bsp nodes")?;
         let clusters = self.visibility.as_ref().map(|v| v.cluster_count as i64);
         for (i, l) in self.leafs.iter().enumerate() {
             ensure!(
@@ -1073,6 +1077,12 @@ impl D3dBsp {
                 );
             }
         }
+        vcod_common::treecheck::check_forest(self.coll_aabb_trees.len(), |n| {
+            let a = &self.coll_aabb_trees[n];
+            let first = i64::from(a.child_or_partition);
+            first..first + i64::from(a.child_count)
+        })
+        .context("collision aabb trees")?;
 
         // Models.
         for (i, m) in self.models.iter().enumerate() {

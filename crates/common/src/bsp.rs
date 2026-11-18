@@ -1,7 +1,7 @@
 //! IBSP 59 (CoD 1) loader into a [`MapWorld`]. Layouts:
 //! docs/research/bsp-ibsp59-format.md.
 
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 
 /// The IBSP 59 records are the [`MapWorld`]'s; they stay reachable here.
 pub use crate::mapworld::{
@@ -648,6 +648,8 @@ pub fn parse(data: &[u8]) -> Result<MapWorld> {
             ensure!(ok, "node {i} child {c} out of bounds");
         }
     }
+    crate::treecheck::check_bsp(nodes.len(), leafs.len(), |n| nodes[n].children)
+        .context("bsp nodes")?;
     for (i, l) in leafs.iter().enumerate() {
         ensure!(l.cell < cells.len() as i32, "leaf {i} cell out of bounds");
     }
@@ -695,6 +697,12 @@ pub fn parse(data: &[u8]) -> Result<MapWorld> {
         ensure!(
             list.end <= occluder_indices.len(),
             "cell {i} occluders out of range"
+        );
+    }
+    for &oi in &occluder_indices {
+        ensure!(
+            (oi as usize) < occluders.len(),
+            "occluder index {oi} out of range"
         );
     }
 
@@ -1387,5 +1395,52 @@ mod tests {
         data[off + 8..off + 12].copy_from_slice(&u32::MAX.to_le_bytes());
         let err = parse(&data).unwrap_err().to_string();
         assert!(err.contains("portal"), "{err}");
+    }
+
+    /// One plane, two solid leafs and `children` as lump 20.
+    fn tree_bsp(children: &[[i32; 2]]) -> Vec<u8> {
+        let nodes: Vec<u8> = children
+            .iter()
+            .flat_map(|c| {
+                let mut n = vec![0u8; 36];
+                n[4..8].copy_from_slice(&c[0].to_le_bytes());
+                n[8..12].copy_from_slice(&c[1].to_le_bytes());
+                n
+            })
+            .collect();
+        let mut leaf = [0u8; 36];
+        leaf[24..28].copy_from_slice(&(-1i32).to_le_bytes());
+        build_bsp(&[
+            (LUMP_MATERIALS, &[0u8; 72]),
+            (LUMP_MODELS, &[0u8; 48]),
+            (LUMP_PLANES, &[0u8; 16]),
+            (LUMP_NODES, &nodes),
+            (LUMP_LEAFS, &[leaf, leaf].concat()),
+        ])
+    }
+
+    #[test]
+    fn rejects_a_node_tree_that_is_not_a_tree() {
+        assert!(parse(&tree_bsp(&[[1, -1], [-1, -2]])).is_ok());
+        let err = |children: &[[i32; 2]]| format!("{:#}", parse(&tree_bsp(children)).unwrap_err());
+        let e = err(&[[0, -1]]);
+        assert!(e.contains("reached twice"), "{e}");
+        let e = err(&[[1, 2], [2, -1], [-1, -2]]);
+        assert!(e.contains("reached twice"), "{e}");
+    }
+
+    #[test]
+    fn rejects_an_occluder_index_past_lump_12() {
+        let occ = |index: u16| {
+            build_bsp(&[
+                (LUMP_MATERIALS, &[0u8; 72]),
+                (LUMP_MODELS, &[0u8; 48]),
+                (LUMP_OCCLUDERS, &[0u8; 20]),
+                (LUMP_OCCLUDER_INDICES, &index.to_le_bytes()),
+            ])
+        };
+        assert!(parse(&occ(0)).is_ok());
+        let err = parse(&occ(1)).unwrap_err().to_string();
+        assert!(err.contains("occluder index"), "{err}");
     }
 }
