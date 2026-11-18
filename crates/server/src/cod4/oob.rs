@@ -390,7 +390,7 @@ impl Cod4Server {
     /// authorize server first and answers only on its `accept` or after it
     /// has been silent 20 min (cod4-handshake.md 15); vcod skips that round
     /// trip and answers every address as retail answers the LAN. The hex
-    /// is kept as the GUID the connect takes.
+    /// goes into the slot as the GUID the connect takes.
     fn get_challenge(&mut self, from: SocketAddr, guid: &str) {
         let svs = self.core.sv_time_ms;
         // Two draws off the process's `rand()` (0x816f394), the level's
@@ -413,7 +413,7 @@ impl Cod4Server {
         } else if self.temp_banned(guid) {
             "temporarily"
         } else {
-            self.game.guids.insert(from, guid.to_string());
+            self.core.challenges.keep_guid(from, guid);
             self.send_oob(from, &format!("challengeResponse {challenge}"));
             return;
         };
@@ -507,7 +507,7 @@ impl Cod4Server {
             return;
         }
         // The bans were read at `getchallenge`; the connect reads none.
-        let guid = self.game.guids.get(&from).cloned().unwrap_or_default();
+        let guid = self.core.challenges.guid(ci).to_string();
         self.admit(slot, from, qport, challenge, guid.clone(), userinfo);
         self.core.challenges.taken(ci);
         log::info!(
@@ -1430,5 +1430,23 @@ mod query_tests {
         assert!(reply[0].starts_with("challengeResponse "), "{reply:?}");
         let late = SocketAddr::from(([10, 2, 0, 2], 5));
         assert_eq!(ask(&mut sv, late, "getinfo x", t + GLOBAL_PERIOD).len(), 1);
+    }
+
+    /// The `getchallenge` hex lives in the challenge slot, cut to 32 chars
+    /// as retail's `Q_strncpyz(.., 0x21)` cuts it, and the connect takes it
+    /// from there (cod4-handshake.md 15).
+    #[test]
+    fn cod4_the_connect_takes_the_slots_hex() {
+        let mut sv = bare();
+        let now = Instant::now();
+        let from = SocketAddr::from(([127, 0, 0, 1], 4660));
+        let hex = "0123456789abcdef".repeat(3);
+        let reply = ask(&mut sv, from, &format!("getchallenge 0 \"{hex}\""), now);
+        let challenge = reply[0].strip_prefix("challengeResponse ").unwrap();
+        let ui = format!("\\protocol\\6\\challenge\\{challenge}\\qport\\1\\name\\a");
+        let reply = ask(&mut sv, from, &format!("connect \"{ui}\""), now);
+        assert!(reply[0].starts_with("connectResponse"), "{reply:?}");
+        let client = sv.core.clients.iter().flatten().next().unwrap();
+        assert_eq!(client.guid, hex[..32]);
     }
 }
