@@ -633,7 +633,7 @@ impl Cod1Module {
             let collision = world.as_ref().map(|w| &w.collision);
             for slot in 0..clients.len() {
                 crate::tick_trace::step!("ClientEndFrame slot {slot}");
-                follow_end_frame(clients, slot, rt, archive, collision, sv_time_ms);
+                follow_end_frame(clients, proto, slot, rt, archive, collision, sv_time_ms);
                 // `takedamage` off the session state (0x40ed9, 0x40f93,
                 // 0x4107c, and `SpectatorClientEndFrame` 0x40788).
                 let session = rt.client_session(slot);
