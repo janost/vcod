@@ -11223,47 +11223,55 @@ impl HudUpload<'_> {
         let (w, h) = self.size;
         let mut verts: Vec<HudVert> = Vec::with_capacity(quads.len() * 4);
         let mut runs: Vec<(String, usize, bool)> = Vec::new();
+        // The texture the last quad named and what it resolved to: a run of
+        // glyphs on one font page asks the same of every quad.
+        let mut last: Option<(&str, bool, f32)> = None;
         for quad in quads {
             let (key, add) = match quad.texture.strip_prefix(hud::ADDITIVE) {
                 Some(k) => (k, true),
                 None => (quad.texture.as_str(), false),
             };
-            // A default-if-missing quad that resolves draws as its own name.
-            let name = default_shader_fallback(key).unwrap_or(key);
-            if !pass.textures.contains_key(key) {
-                let how = hud_image(name, self.lib.get(name), &pass.mip_names);
-                let tex = resolve_hud_texture(
-                    self.device,
-                    self.queue,
-                    &pass.texture_layout,
-                    self.samplers,
-                    fs,
-                    self.image_map,
-                    cod2_hud_image(fs, self.lib, name),
-                    key,
-                    how,
-                    self.textures.world_picmip(!how.picmip),
-                    self.image_gamma,
-                    self.textures.store(),
-                );
-                pass.textures.insert(key.to_string(), tex);
-            }
+            let (default, scale) = match last {
+                Some((t, default, scale)) if t == quad.texture => (default, scale),
+                _ => {
+                    // A default-if-missing quad that resolves draws as its own name.
+                    let name = default_shader_fallback(key).unwrap_or(key);
+                    if !pass.textures.contains_key(key) {
+                        let how = hud_image(name, self.lib.get(name), &pass.mip_names);
+                        let tex = resolve_hud_texture(
+                            self.device,
+                            self.queue,
+                            &pass.texture_layout,
+                            self.samplers,
+                            fs,
+                            self.image_map,
+                            cod2_hud_image(fs, self.lib, name),
+                            key,
+                            how,
+                            self.textures.world_picmip(!how.picmip),
+                            self.image_gamma,
+                            self.textures.store(),
+                        );
+                        pass.textures.insert(key.to_string(), tex);
+                    }
+                    let default = matches!(
+                        pass.textures.get(key),
+                        Some(Some(t)) if t.default
+                    );
+                    let scale = colour_scale(self.lib.get(name), self.identity_light);
+                    last = Some((quad.texture.as_str(), default, scale));
+                    (default, scale)
+                }
+            };
 
             // `black` shares `white`'s 1x1 texture; force the rgb here so it
             // draws black regardless of the element colour, alpha untouched.
-            let default = matches!(
-                pass.textures.get(key),
-                Some(Some(t)) if t.default
-            );
             let rgba = if key == "black" {
                 [0.0, 0.0, 0.0, quad.rgba[3]]
             } else if default {
                 [1.0; 4]
             } else {
-                hud_colour(
-                    quad.rgba,
-                    colour_scale(self.lib.get(name), self.identity_light),
-                )
+                hud_colour(quad.rgba, scale)
             };
 
             for i in 0..4 {
