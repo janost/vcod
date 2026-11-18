@@ -1081,8 +1081,8 @@ mod flow {
         let Some((mut ui, mut shell)) = ui() else {
             return;
         };
-        let dir = std::env::temp_dir().join(format!("vcod-ui-profiles-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         ui.set_profiles_dir(dir.clone());
         shell.use_cod2_cvars();
         let apply = |shell: &mut Shell, out: &[UiEffect]| {
@@ -1119,6 +1119,5 @@ mod flow {
         apply(&mut shell, &out);
         assert!(!dir.join("Tester").exists());
         assert_eq!(shell.cvar("ui_playerProfileCount"), Some("0"));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

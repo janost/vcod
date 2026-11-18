@@ -27,6 +27,9 @@ vcod-cod4 = { path = "../cod4" }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [[test]]
 name = "server"
 path = "tests/main.rs"

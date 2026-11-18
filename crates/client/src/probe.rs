@@ -15230,7 +15230,8 @@ mod tests {
     /// is the one way past it; the first write of a name is unaffected.
     #[test]
     fn a_tagged_write_refuses_to_replace_a_fixture() {
-        let dir = std::env::temp_dir().join(format!("vcod-tag-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("mp_carentan-tdm-ads-sniper.txt");
         let path = path.to_str().unwrap();
@@ -15243,6 +15244,5 @@ mod tests {
 
         write_tagged_fixture(path, "ours", true).expect("the flag says to");
         assert_eq!(std::fs::read_to_string(path).unwrap(), "ours");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

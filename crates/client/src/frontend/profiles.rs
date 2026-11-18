@@ -323,8 +323,8 @@ mod tests {
 
     #[test]
     fn the_active_profile_is_a_directory_named_in_active_txt() {
-        let dir = std::env::temp_dir().join(format!("vcod-profiles-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         std::fs::create_dir_all(dir.join("Able")).unwrap();
         std::fs::create_dir_all(dir.join("baker")).unwrap();
         assert_eq!(list_profiles(&dir), ["Able", "baker"]);
@@ -333,7 +333,6 @@ mod tests {
         assert_eq!(active_profile(&dir).as_deref(), Some("Able"));
         std::fs::write(dir.join("active.txt"), "charlie").unwrap();
         assert_eq!(active_profile(&dir), None);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// A script that sets both profile dvars to a path and runs create,

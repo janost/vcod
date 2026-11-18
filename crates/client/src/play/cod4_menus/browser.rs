@@ -1347,10 +1347,8 @@ mod tests {
         hud.load(&install.root().join("main"), "ui_mp");
         let a = hud.menu_assets().unwrap();
         let gs = Gamestate::default();
-        let dir = std::env::temp_dir().join(format!("vcod-cod4-browser-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let cache = dir.join(vcod_cod4::net::browser::CACHE_FILE);
-        let _ = std::fs::remove_file(&cache);
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join(vcod_cod4::net::browser::CACHE_FILE);
         let mut m = front_end(&hud);
         m.browser = Browser::with_cache(cache.clone());
         m.browser.lan_targets.clear();
@@ -1425,7 +1423,6 @@ mod tests {
             Some(&b"\xff\xff\xff\xffgetservers 6 full empty"[..])
         );
         drop(server);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A fake server on loopback: it answers `getinfo` with `info` until

@@ -292,8 +292,8 @@ mod tests {
     /// and a usermap with its `_load` zone.
     #[test]
     fn zone_search_follows_db_build_os_path() {
-        let root = std::env::temp_dir().join(format!("vcod-cod4-install-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
         for d in ["zone/english", "main", "Mods/Demo", "usermaps/mp_x"] {
             std::fs::create_dir_all(root.join(d)).unwrap();
         }
@@ -364,7 +364,6 @@ mod tests {
         );
         assert!(i.clone().with_fs_game(Some("../x")).game_dir().is_none());
         assert!(i.with_fs_game(Some("")).fs_game().is_none());
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

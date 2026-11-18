@@ -303,8 +303,8 @@ mod tests {
     /// directories and the filesystem root.
     #[test]
     fn download_names_open_as_retail_bar_vcod_s_refusals() {
-        let dir = std::env::temp_dir().join(format!("vcod-cod2-open-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let (home, base) = (dir.join("home"), dir.join("base"));
         std::fs::create_dir_all(home.join("main")).unwrap();
         std::fs::create_dir_all(base.join("main")).unwrap();
@@ -348,6 +348,5 @@ mod tests {
         assert_eq!(open("main"), None);
         assert_eq!(open(""), None);
         assert_eq!(open("."), None);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

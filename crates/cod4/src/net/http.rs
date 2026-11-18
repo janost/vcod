@@ -177,7 +177,8 @@ mod tests {
             let _ = s.write_all(b"HTTP/1.0 200 OK\r\n");
             let _ = s.write_all(&b"X: a\r\n".repeat(1 << 17));
         });
-        let dest = std::env::temp_dir().join(format!("vcod-cod4-http-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("x");
         let mut f = HttpFetch::start(&format!("http://127.0.0.1:{port}/x"), &dest, 100).unwrap();
         let res = loop {
             if let Some(r) = f.poll() {

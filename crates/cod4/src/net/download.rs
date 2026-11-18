@@ -795,8 +795,8 @@ mod tests {
     #[test]
     fn a_colour_coded_name_is_fetched_raw_and_kept() {
         use std::io::{BufRead, Write};
-        let root = std::env::temp_dir().join(format!("vcod-dl-caret-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
         let body: Vec<u8> = (0..5000u32).map(|i| (i * 7) as u8).collect();
@@ -861,7 +861,6 @@ mod tests {
             ]
         );
         assert_eq!(std::fs::read(&dest).unwrap(), body);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -885,11 +884,10 @@ mod tests {
         assert!(missing_files(si, |_| false, |_| None).is_empty());
     }
 
-    /// A scratch root and one queued file, its `download` sent.
-    fn queued(tag: &str, wanted: Wanted) -> (PathBuf, Downloads) {
-        let root = std::env::temp_dir().join(format!("vcod-dl-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let mut dls = Downloads::new(&root, vec![wanted]);
+    /// A scratch root, removed on drop, and one queued file, its `download` sent.
+    fn queued(wanted: Wanted) -> (tempfile::TempDir, Downloads) {
+        let root = tempfile::tempdir().unwrap();
+        let mut dls = Downloads::new(root.path(), vec![wanted]);
         assert!(
             matches!(&dls.next_download()[..], [DownloadEvent::Command(c)] if c.starts_with("download "))
         );
@@ -903,7 +901,8 @@ mod tests {
             checksum: None,
             size: Some(4),
         };
-        let (root, mut dls) = queued("over", ff);
+        let (tmp, mut dls) = queued(ff);
+        let root = tmp.path();
         let block = |block, size, data: &[u8]| DownloadMsg::Block {
             block,
             size,
@@ -922,7 +921,6 @@ mod tests {
         assert!(dls.is_done());
         assert!(!root.join("mods/m/mod.vcod-dl").exists());
         assert!(!root.join("mods/m/mod.ff").exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -932,7 +930,8 @@ mod tests {
             checksum: Some(1234),
             size: None,
         };
-        let (root, mut dls) = queued("sum", iwd);
+        let (tmp, mut dls) = queued(iwd);
+        let root = tmp.path();
         let block = |block, size, data: &[u8]| DownloadMsg::Block {
             block,
             size,
@@ -947,7 +946,6 @@ mod tests {
         assert_eq!(evs.len(), 2);
         assert!(!root.join("mods/m/z.vcod-dl").exists());
         assert!(!root.join("mods/m/z.iwd").exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

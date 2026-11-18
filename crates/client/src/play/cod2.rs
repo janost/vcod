@@ -3372,8 +3372,8 @@ mod tests {
     #[test]
     fn timedemo_writes_a_row_a_frame_after_the_first() {
         let data = include_bytes!("../../../cod2/tests/fixtures/demos/mp_toujane-retail.dm_1");
-        let dir = std::env::temp_dir().join(format!("vcod-timedemo-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let fs = Pk3Fs::empty();
         let mut cam = FlyCamera::new(Vec3::ZERO, 0.0);
         let mut plain = Cod2Session::play_demo(data.to_vec(), false).unwrap();
@@ -3394,7 +3394,6 @@ mod tests {
         assert!(s.demo_over(), "the demo never ended");
         let counted = s.demo.as_ref().unwrap().timedemo.as_ref().unwrap().frames();
         let text = std::fs::read_to_string(dir.join("timedemo_mp_toujane_mode_3.csv")).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
         let rows: Vec<(i32, i32)> = text
             .lines()
             .map(|l| {

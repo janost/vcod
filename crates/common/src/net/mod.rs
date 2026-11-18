@@ -2349,8 +2349,8 @@ mod tests {
 
     #[test]
     fn download_happy_path() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-happy-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
 
         let mut c = active_client();
@@ -2392,14 +2392,12 @@ mod tests {
         let gs = crate::testing::fixture("net/gamestate.bin");
         c.handle_message(&gs);
         assert_eq!(c.state(), NetState::Active);
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn download_takes_blocks_past_8192() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-big-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
 
         let mut c = active_client();
@@ -2423,13 +2421,12 @@ mod tests {
         }));
 
         assert_eq!(std::fs::read(&dest).unwrap(), zip);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn download_refusal_drops_with_reason() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-refuse-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
 
         let mut c = active_client();
@@ -2454,14 +2451,12 @@ mod tests {
                 .next()
                 .is_none()
         );
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn download_ignores_out_of_order_and_duplicate_blocks() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-order-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
 
         let mut c = active_client();
@@ -2489,14 +2484,12 @@ mod tests {
         c.handle_message(&block0);
         assert_eq!(c.download_progress(), Some((6, 11)));
         assert_eq!(reliable_count(&c, "nextdl 0"), 1);
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn download_of_garbage_drops_and_leaves_no_pak() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-garbage-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
 
         let mut c = active_client();
@@ -2525,14 +2518,12 @@ mod tests {
                 .next()
                 .is_none()
         );
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn download_exceeding_the_announced_size_drops() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-oversize-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
 
         let mut c = active_client();
@@ -2561,14 +2552,12 @@ mod tests {
                 .next()
                 .is_none()
         );
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn download_with_an_absurd_announced_size_drops() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-absurd-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
 
         let mut c = active_client();
@@ -2594,8 +2583,6 @@ mod tests {
                 .next()
                 .is_none()
         );
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

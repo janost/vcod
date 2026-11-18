@@ -347,10 +347,9 @@ mod tests {
     /// `BanFile` on the same path reads, `\r\n` lines included.
     #[test]
     fn the_file_round_trips_on_disk() {
-        let dir = std::env::temp_dir().join(format!("vcod-banfile-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let path = dir.join("ban.txt");
-        let _ = std::fs::remove_file(&path);
         let mut f = BanFile::open(path.clone());
         assert_eq!(f.unban("x"), None);
         f.append(-889163513, "Some One");
@@ -363,14 +362,14 @@ mod tests {
         assert!(again.is_banned(-889163513) && again.is_banned(42));
         assert_eq!(again.unban("some one"), Some(1));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "42 Two\r\n");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// A list vcod wrote as `<ip> <name>` before the guid file is read on,
     /// its addresses as guids; comments and guid lines stay as they are.
     #[test]
     fn an_old_address_list_becomes_guid_lines() {
-        let dir = std::env::temp_dir().join(format!("vcod-banmig-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("ban.txt");
         std::fs::write(
@@ -391,6 +390,5 @@ mod tests {
         );
         // Read on, the rewritten file needs no second pass.
         assert!(migrate(&std::fs::read_to_string(&path).unwrap()).is_none());
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

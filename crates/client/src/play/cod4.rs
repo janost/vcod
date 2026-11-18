@@ -6159,8 +6159,8 @@ pub(crate) mod tests {
         let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         sock.set_nonblocking(true).unwrap();
         let addr = sock.local_addr().unwrap();
-        let dir = Scratch::new("demo");
-        let demos = dir.0.clone();
+        let dir = tempfile::tempdir().unwrap();
+        let demos = dir.path().to_path_buf();
         let clock = sim::Clock::new();
         let client = sim::spawn(&clock, move || {
             let join = MenuJoin {
@@ -6217,8 +6217,8 @@ pub(crate) mod tests {
         let (live, live_fired, live_table, status) = client.join().unwrap();
         let (name, bytes) = status.last().cloned().unwrap();
         assert_eq!(name, "live");
-        assert!(!dir.0.join("../escape.dm_1").exists());
-        let data = std::fs::read(dir.0.join("live.dm_1")).unwrap();
+        assert!(!dir.path().join("../escape.dm_1").exists());
+        let data = std::fs::read(dir.path().join("live.dm_1")).unwrap();
         // The trailer: a type 0 record of -1 and -1.
         assert_eq!(
             &data[data.len() - 9..],
@@ -6717,8 +6717,8 @@ pub(crate) mod tests {
         let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         sock.set_nonblocking(true).unwrap();
         let addr = sock.local_addr().unwrap();
-        let dir = Scratch::new("demorun");
-        let demos = dir.0.clone();
+        let dir = tempfile::tempdir().unwrap();
+        let demos = dir.path().to_path_buf();
         let clock = sim::Clock::new();
         let client = sim::spawn(&clock, move || {
             let join = MenuJoin {
@@ -6760,7 +6760,7 @@ pub(crate) mod tests {
         });
         serve(&mut sv, &sock, &clock, &client, |_, _, _| true);
         client.join().unwrap();
-        let data = std::fs::read(dir.0.join("run.dm_1")).unwrap();
+        let data = std::fs::read(dir.path().join("run.dm_1")).unwrap();
         let mut d = Cod4Session::play_demo(data, false).unwrap();
         let mut eyes = Vec::new();
         let mut now = 0.0;
@@ -6802,28 +6802,6 @@ pub(crate) mod tests {
         // turns back; a stepped view stood still six frames in seven.
         assert!(turn_still * 20 < steps.len(), "{turn_still} still turns");
         assert!(run_still * 5 < steps.len(), "{run_still} still eyes");
-    }
-
-    /// A scratch directory under the temp dir, removed on drop.
-    struct Scratch(std::path::PathBuf);
-
-    impl Scratch {
-        fn new(tag: &str) -> Scratch {
-            let p = std::env::temp_dir().join(format!(
-                "vcod-cod4-www-{tag}-{}-{:?}",
-                std::process::id(),
-                std::thread::current().id()
-            ));
-            let _ = std::fs::remove_dir_all(&p);
-            std::fs::create_dir_all(&p).unwrap();
-            Scratch(p)
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
     }
 
     /// A loopback HTTP server over `root`: each GET's path logged, the
@@ -6929,12 +6907,12 @@ pub(crate) mod tests {
     ) -> Option<Www> {
         use vcod_server::cod4::{Cod4Config, Cod4Server};
         let install = vcod_cod4::testing::cod4_install()?;
-        let base = Scratch::new("base");
-        let home = Scratch::new("home");
+        let base = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
         for d in ["main", "zone"] {
-            std::os::unix::fs::symlink(install.root().join(d), base.0.join(d)).unwrap();
+            std::os::unix::fs::symlink(install.root().join(d), base.path().join(d)).unwrap();
         }
-        let game = base.0.join("mods/test");
+        let game = base.path().join("mods/test");
         std::fs::create_dir_all(&game).unwrap();
         let stock = vcod_common::pk3::Pk3Fs::open_iwd_layers(&install.root().join("main"), &[])
             .unwrap()
@@ -6956,7 +6934,7 @@ pub(crate) mod tests {
             asked,
             stop,
             busy,
-        } = http_server(base.0.clone(), deny, pad, slow);
+        } = http_server(base.path().to_path_buf(), deny, pad, slow);
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -6967,8 +6945,10 @@ pub(crate) mod tests {
             7,
         );
         sv.game.cvars_mut().set("fs_game", "mods/test");
-        sv.load(Some(&vcod_cod4::install::Install::at(&base.0).unwrap()))
-            .unwrap();
+        sv.load(Some(
+            &vcod_cod4::install::Install::at(&base.path()).unwrap(),
+        ))
+        .unwrap();
         sv.game.cvars_mut().set("sv_wwwDownload", "1");
         sv.game
             .cvars_mut()
@@ -6979,7 +6959,7 @@ pub(crate) mod tests {
         let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         sock.set_nonblocking(true).unwrap();
         let addr = sock.local_addr().unwrap();
-        let root = home.0.clone();
+        let root = home.path().to_path_buf();
         let clock = sim::Clock::new();
         let client = sim::spawn(&clock, move || {
             let join = MenuJoin {
@@ -7037,7 +7017,7 @@ pub(crate) mod tests {
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let landed = [("z_test.iwd", iwd), ("mod.ff", ff)]
             .into_iter()
-            .map(|(n, b)| (std::fs::read(home.0.join("mods/test").join(n)).ok(), b))
+            .map(|(n, b)| (std::fs::read(home.path().join("mods/test").join(n)).ok(), b))
             .collect();
         let asked = asked.lock().unwrap().clone();
         Some(Www {
