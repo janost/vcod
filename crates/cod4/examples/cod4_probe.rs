@@ -878,7 +878,8 @@ fn main() -> Result<()> {
                         if let Some(cp) = conn.commands().iter().position(|c| c.starts_with(b"cp "))
                         {
                             let text = String::from_utf8_lossy(&conn.commands()[cp]);
-                            eprintln!("command {}: {text}", cp + 1);
+                            let first = conn.reliable_sequence() as usize - conn.commands().len();
+                            eprintln!("command {}: {text}", first + cp + 1);
                         }
                     }
                     Op::ServerCommand { sequence, text } => {

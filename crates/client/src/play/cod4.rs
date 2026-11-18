@@ -1885,7 +1885,7 @@ impl Cod4Session {
     #[cfg(test)]
     fn source_commands(&self) -> usize {
         match &self.source {
-            Source::Live { conn, .. } => conn.commands().len(),
+            Source::Live { conn, .. } => conn.reliable_sequence() as usize,
             _ => 0,
         }
     }

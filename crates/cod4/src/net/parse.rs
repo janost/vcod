@@ -36,6 +36,9 @@ pub const CS_SYSTEMINFO: u16 = 1;
 pub const CS_MAPCENTER: u16 = 12;
 /// Snapshots a delta can reach back over.
 const PACKET_BACKUP: usize = 32;
+/// Server commands [`Client::server_commands`] keeps below the newest: twice
+/// the 128-command reliable ring.
+const KEPT_SERVER_COMMANDS: i32 = 256;
 
 /// `MSG_ReadString`: the bytes up to the NUL, as they are (no `%` or
 /// 0x92 mapping on 1.7's client, INFERRED).
@@ -98,15 +101,14 @@ impl Gamestate {
 
     /// A key of the systeminfo string (`sv_serverid`).
     pub fn systeminfo(&self, key: &str) -> Option<String> {
-        let s = String::from_utf8_lossy(self.configstring(CS_SYSTEMINFO)).into_owned();
-        let parts: Vec<&str> = s.split('\\').collect();
-        parts
-            .iter()
-            .skip(1)
-            .step_by(2)
-            .zip(parts.iter().skip(2).step_by(2))
-            .find(|(k, _)| **k == key)
-            .map(|(_, v)| v.to_string())
+        let s = String::from_utf8_lossy(self.configstring(CS_SYSTEMINFO));
+        let mut parts = s.split('\\').skip(1);
+        while let (Some(k), Some(v)) = (parts.next(), parts.next()) {
+            if k == key {
+                return Some(v.to_string());
+            }
+        }
+        None
     }
 }
 
@@ -241,6 +243,16 @@ impl Client {
                     self.server_commands
                         .entry(seq)
                         .or_insert_with(|| text.clone());
+                    // Older than two reliable rings: nothing keys or walks it.
+                    let floor = self
+                        .server_command_sequence
+                        .saturating_sub(KEPT_SERVER_COMMANDS);
+                    while let Some(e) = self.server_commands.first_entry() {
+                        if *e.key() > floor {
+                            break;
+                        }
+                        e.remove();
+                    }
                     ops.push(Op::ServerCommand {
                         sequence: seq,
                         text,
@@ -567,4 +579,48 @@ fn parse_map_center(s: &[u8]) -> [f32; 3] {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A long connection keeps a bounded window of server commands, and a
+    /// `d` past the configstring table changes nothing.
+    #[test]
+    fn server_commands_and_configstrings_stay_bounded() {
+        let mut c = Client::new();
+        c.gamestate = Some(Gamestate::default());
+        let mut applied = 0;
+        for seq in 1..=100_000 {
+            let parsed = Parsed {
+                ops: vec![Op::ServerCommand {
+                    sequence: seq,
+                    text: Vec::new(),
+                }],
+                eof_at: 0,
+                exact: true,
+            };
+            let block = c.huff.compress(&c.write(&parsed).unwrap());
+            let parsed = c.parse(seq as u32, &block).unwrap();
+            super::super::conn::apply_configstrings(&mut c, &mut applied, &parsed);
+        }
+        assert_eq!(c.server_command_sequence, 100_000);
+        assert!(c.server_commands.len() <= KEPT_SERVER_COMMANDS as usize);
+        assert!(c.server_commands.contains_key(&100_000));
+
+        let d = |seq: i32, text: &str| Parsed {
+            ops: vec![Op::ServerCommand {
+                sequence: seq,
+                text: text.as_bytes().to_vec(),
+            }],
+            eof_at: 0,
+            exact: true,
+        };
+        super::super::conn::apply_configstrings(&mut c, &mut applied, &d(100_001, "d 65535 x"));
+        super::super::conn::apply_configstrings(&mut c, &mut applied, &d(100_002, "d 2441 y"));
+        let gs = c.gamestate.as_ref().unwrap();
+        assert!(!gs.configstrings.contains_key(&65535));
+        assert_eq!(gs.configstring(2441), b"y");
+    }
 }

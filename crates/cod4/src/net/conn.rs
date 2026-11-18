@@ -19,6 +19,10 @@ use std::time::{Duration, Instant};
 use vcod_common::net::cdkey::{self, CdKey, KeyGame};
 use vcod_common::net::netchan::{Netchan, NetchanParams, scramble_client_ops};
 
+/// Acknowledged reliable commands kept: `MAX_RELIABLE_COMMANDS`, the ring
+/// the server keys a message off.
+const KEPT_COMMANDS: usize = 128;
+
 /// md5("vcodprobe"), the cd-key hash `getchallenge` carries without a key.
 pub const KEY_HASH: &str = "97c8407fc937bc7c1eddecf36de89e75";
 
@@ -197,8 +201,14 @@ pub struct Conn {
     seq: u32,
     /// The newest server message read (`messageAcknowledge`).
     ack: i32,
-    /// Reliable client commands, index = sequence - 1.
+    /// Reliable client commands, index = sequence - 1 - `commands_base`:
+    /// the server's acknowledged ones past the newest [`KEPT_COMMANDS`] are
+    /// dropped, as retail's ring overwrites them.
     commands: Vec<Vec<u8>>,
+    /// How many of the oldest commands were dropped.
+    commands_base: usize,
+    /// [`Self::recv`]'s datagram buffer, kept between calls.
+    recv_buf: Vec<u8>,
     /// The newest the server executed (each server message's first long).
     commands_acked: i32,
     last_cmd: UserCmd,
@@ -256,6 +266,8 @@ impl Conn {
             seq: 1,
             ack: 0,
             commands: Vec::new(),
+            commands_base: 0,
+            recv_buf: Vec::new(),
             commands_acked: 0,
             last_cmd: UserCmd::default(),
             cp_feed: None,
@@ -339,17 +351,43 @@ impl Conn {
     /// Queues a reliable command; returns its sequence.
     pub fn command(&mut self, text: impl Into<Vec<u8>>) -> usize {
         self.commands.push(text.into());
-        self.commands.len()
+        self.reliable_sequence() as usize
     }
 
-    /// Every reliable command queued, oldest first.
+    /// The reliable commands still held, oldest first: every one not yet
+    /// acknowledged and the newest [`KEPT_COMMANDS`] that were. The first
+    /// is sequence `reliable_sequence() - len + 1`.
     pub fn commands(&self) -> &[Vec<u8>] {
         &self.commands
     }
 
     /// `clc.reliableSequence`: the newest reliable command queued.
     pub fn reliable_sequence(&self) -> i32 {
-        self.commands.len() as i32
+        (self.commands_base + self.commands.len()) as i32
+    }
+
+    /// The text of reliable command `sequence`, empty when it was dropped
+    /// or never queued.
+    fn command_text(&self, sequence: i32) -> &[u8] {
+        usize::try_from(sequence - 1)
+            .ok()
+            .and_then(|i| i.checked_sub(self.commands_base))
+            .and_then(|i| self.commands.get(i))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// Drops the acknowledged commands older than the newest
+    /// [`KEPT_COMMANDS`], in steps of that many so the drain is amortised.
+    fn drop_acked_commands(&mut self) {
+        let keep_from = usize::try_from(self.commands_acked)
+            .unwrap_or(0)
+            .saturating_sub(KEPT_COMMANDS);
+        let n = keep_from.saturating_sub(self.commands_base);
+        if n >= KEPT_COMMANDS {
+            let n = n.min(self.commands.len());
+            self.commands.drain(..n);
+            self.commands_base += n;
+        }
     }
 
     /// `clc.serverMessageSequence`: the newest server message read.
@@ -383,10 +421,10 @@ impl Conn {
                     .parse()?;
                 let last = self.client.last_server_command().to_vec();
                 let key = clmsg::usercmd_key(gs.checksum_feed, self.ack, &last);
-                let mut ops: Vec<ClOp> = (self.commands_acked as usize..self.commands.len())
-                    .map(|i| ClOp::Command {
-                        sequence: i as i32 + 1,
-                        text: self.commands[i].clone(),
+                let mut ops: Vec<ClOp> = (self.commands_acked + 1..=self.reliable_sequence())
+                    .map(|sequence| ClOp::Command {
+                        sequence,
+                        text: self.command_text(sequence).to_vec(),
                     })
                     .collect();
                 let mut wired: Vec<(UserCmd, CmdWire)> = Vec::new();
@@ -471,16 +509,10 @@ impl Conn {
                 continue;
             }
             let rack = i32::from_le_bytes(msg[..4].try_into().unwrap());
-            let key = match rack {
-                1.. => self
-                    .commands
-                    .get(rack as usize - 1)
-                    .cloned()
-                    .unwrap_or_default(),
-                _ => Vec::new(),
-            };
+            let key = self.command_text(rack).to_vec();
             self.chan.decode(s, &key, &mut msg);
             self.commands_acked = self.commands_acked.max(rack);
+            self.drop_acked_commands();
             let parsed = self
                 .client
                 .parse(s, &msg[4..])
@@ -687,7 +719,15 @@ impl Conn {
     /// already waiting is returned even past it. Taps authorize traffic on
     /// the way.
     fn recv(&mut self, until: Instant) -> Result<Option<Vec<u8>>> {
-        let mut buf = vec![0u8; 65536];
+        let mut buf = std::mem::take(&mut self.recv_buf);
+        buf.resize(65536, 0);
+        let got = self.recv_into(until, &mut buf);
+        self.recv_buf = buf;
+        got
+    }
+
+    /// [`Self::recv`] into the connection's reused buffer.
+    fn recv_into(&mut self, until: Instant, buf: &mut [u8]) -> Result<Option<Vec<u8>>> {
         loop {
             if self
                 .cancel
@@ -697,13 +737,13 @@ impl Conn {
                 return Err(Cancelled.into());
             }
             for i in 0..self.auth.len() {
-                if let Ok((n, _)) = self.auth[i].recv_from(&mut buf) {
+                if let Ok((n, _)) = self.auth[i].recv_from(buf) {
                     let local = self.auth[i].local_addr()?;
                     let d = buf[..n].to_vec();
                     self.tap("auth", local, &d)?;
                 }
             }
-            match self.sock.recv_from(&mut buf) {
+            match self.sock.recv_from(buf) {
                 Ok((n, peer)) if peer == self.server => {
                     let d = buf[..n].to_vec();
                     self.tap("s2c", peer, &d)?;
@@ -855,6 +895,7 @@ pub fn apply_configstrings(client: &mut Client, applied: &mut i32, parsed: &Pars
         if let Some(i) = std::str::from_utf8(&rest[..at])
             .ok()
             .and_then(|n| n.parse::<u16>().ok())
+            .filter(|&i| u32::from(i) < super::parse::MAX_CONFIGSTRINGS)
         {
             gs.configstrings
                 .insert(i, rest.get(at + 1..).unwrap_or(&[]).to_vec());
@@ -884,6 +925,8 @@ mod tests {
             seq: 1,
             ack: 0,
             commands: Vec::new(),
+            commands_base: 0,
+            recv_buf: Vec::new(),
             commands_acked: 0,
             last_cmd: UserCmd::default(),
             cp_feed: None,
@@ -924,6 +967,24 @@ mod tests {
         }
         assert!(c.recv(Instant::now()).unwrap().is_none());
         assert_eq!(waiting(&c), 49);
+    }
+
+    /// Acknowledged commands past the reliable ring are dropped; the
+    /// sequence numbering and the newest ring's texts hold.
+    #[test]
+    fn acknowledged_commands_are_dropped_past_the_ring() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut c = joined(server.local_addr().unwrap());
+        for i in 1..=100_000 {
+            assert_eq!(c.command(format!("c{i}")), i);
+            c.commands_acked = i as i32 - 3;
+            c.drop_acked_commands();
+        }
+        assert_eq!(c.reliable_sequence(), 100_000);
+        assert!(c.commands().len() <= 3 * KEPT_COMMANDS);
+        assert_eq!(c.command_text(100_000), b"c100000");
+        assert_eq!(c.command_text(99_997 - KEPT_COMMANDS as i32 + 1), b"c99870");
+        assert_eq!(c.command_text(1), b"");
     }
 
     /// The challenge replies of a CoD4x server and of retail 1.7
