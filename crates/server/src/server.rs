@@ -949,7 +949,14 @@ fn follow_end_frame(
     } else {
         (0..clients.len()).map(|t| rt.client_team(t)).collect()
     };
-    let allowed = |t: usize| mask == 0 || follow::can_spectate(mask, teams[t]);
+    // A script's `spectatorclient` may name any number; past the slots it
+    // finds nothing and is written back to -1.
+    let allowed = |t: usize| {
+        mask == 0
+            || teams
+                .get(t)
+                .is_some_and(|&team| follow::can_spectate(mask, team))
+    };
     let mut age = session.archive_ms;
     let mut forced = session.spectator_client;
     let mut target = sim_mut(clients, slot).follow.target;
@@ -13201,6 +13208,22 @@ mod tests {
 
         rig.script()
             .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(5));
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        assert_eq!(
+            rig.script().client_field(0, "spectatorclient").as_deref(),
+            Some("-1")
+        );
+    }
+
+    /// Under a 1.5 spectate mask a forced follow past the slot count finds
+    /// nothing and is written back to -1 (BUG-020: it indexed the team list).
+    #[test]
+    fn protocol_6_a_forced_follow_past_the_slots_is_cleared() {
+        let mut rig = v6_rig();
+        rig.script().host.client_no_spectate[0] = 0x2;
+        rig.script()
+            .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(64));
         let s = rig.step(0);
         assert_eq!(ps_i32(&s, "clientNum"), 0);
         assert_eq!(
