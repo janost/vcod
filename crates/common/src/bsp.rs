@@ -11,6 +11,11 @@ pub use crate::mapworld::{
 };
 
 const LUMP_COUNT: usize = 33;
+/// How many times over the leaf lists may list their lumps (stock: once).
+const LEAF_RUN_FOLD: u64 = 4;
+/// How many times over the cull groups or the aabb nodes may list the soups
+/// (stock: at most 5.4 for the nodes, a parent's run holding its children's).
+const SOUP_RUN_FOLD: u64 = 64;
 const LUMP_MATERIALS: usize = 0;
 const LUMP_LIGHTMAPS: usize = 1;
 const LUMP_PLANES: usize = 2;
@@ -581,6 +586,18 @@ pub fn parse(data: &[u8]) -> Result<MapWorld> {
         leaf_brushes.iter().all(|&b| (b as usize) < brushes.len()),
         "a leaf brush past lump 4"
     );
+    // Runs may overlap, and the walks copy or fold each one: every stock and
+    // third-party map's leaf runs tile their lumps once and its node soup
+    // runs fold each soup at most 5.4 times (bsp-ibsp59-format.md, lumps 16
+    // and 21).
+    let total = |runs: &mut dyn Iterator<Item = u32>| runs.map(u64::from).sum::<u64>();
+    ensure!(
+        total(&mut leaf_lists.iter().map(|l| l.brushes.1))
+            <= LEAF_RUN_FOLD * leaf_brushes.len() as u64
+            && total(&mut leaf_lists.iter().map(|l| l.partitions.1))
+                <= LEAF_RUN_FOLD * leaf_partitions.len() as u64,
+        "leaf lists overlap past {LEAF_RUN_FOLD} times their lumps"
+    );
 
     let soup_count = soups.len() as u64;
     let in_soups = |first: u32, count: u32| first as u64 + count as u64 <= soup_count;
@@ -596,6 +613,11 @@ pub fn parse(data: &[u8]) -> Result<MapWorld> {
             "cull index {i} out of bounds"
         );
     }
+    ensure!(
+        total(&mut cull_groups.iter().map(|g| g.soup_count)) <= SOUP_RUN_FOLD * soup_count
+            && total(&mut aabb_nodes.iter().map(|n| n.soup_count)) <= SOUP_RUN_FOLD * soup_count,
+        "soup runs overlap past {SOUP_RUN_FOLD} times the soups"
+    );
     for (i, n) in aabb_nodes.iter().enumerate() {
         ensure!(
             in_soups(n.first_soup, n.soup_count),
@@ -1024,6 +1046,65 @@ mod tests {
         assert!(parse(&soup_bsp(&[0, 1, 2])).is_ok());
         let err = parse(&soup_bsp(&[0, 1, 3])).unwrap_err().to_string();
         assert!(err.contains("index"), "got: {err}");
+    }
+
+    /// A leaf may list its lump's runs only so many times over: listing the
+    /// whole lump in every leaf multiplies the walks' copies.
+    #[test]
+    fn rejects_runs_folded_over_their_lumps() {
+        let leafs = |runs: &[(u32, u32)]| -> Vec<u8> {
+            runs.iter()
+                .flat_map(|&(first, count)| {
+                    let mut l = [0u8; 36];
+                    l[16..20].copy_from_slice(&first.to_le_bytes());
+                    l[20..24].copy_from_slice(&count.to_le_bytes());
+                    l[24..28].copy_from_slice(&(-1i32).to_le_bytes()); // no cell
+                    l
+                })
+                .collect()
+        };
+        let with_leafs = |l: &[u8]| {
+            build_bsp(&[
+                (LUMP_MATERIALS, &[0u8; 72]),
+                (LUMP_MODELS, &[0u8; 48]),
+                (LUMP_BRUSHES, &[6, 0, 0, 0]),
+                (LUMP_BRUSHSIDES, &[0u8; 6 * 8]),
+                (LUMP_LEAF_BRUSHES, &[0u8; 8]),
+                (LUMP_LEAFS, l),
+            ])
+        };
+        parse(&with_leafs(&leafs(&[(0, 1), (1, 1), (0, 2)]))).unwrap();
+        let err = parse(&with_leafs(&leafs(&[(0, 2); 5])))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("overlap"), "got: {err}");
+
+        // One soup that 64 nodes may each list, 65 may not.
+        let mut soup = Vec::new();
+        soup.extend(0u32.to_le_bytes()); // material, lightmap
+        soup.extend(0u32.to_le_bytes()); // first_vertex
+        soup.extend(3u16.to_le_bytes()); // vertex_count
+        soup.extend(3u16.to_le_bytes()); // index_count
+        soup.extend(0u32.to_le_bytes()); // first_index
+        let idx: Vec<u8> = [0u16, 1, 2].iter().flat_map(|i| i.to_le_bytes()).collect();
+        let with_nodes = |n: usize| {
+            let nodes: Vec<u8> = [0u32, 1, 0]
+                .repeat(n)
+                .iter()
+                .flat_map(|w| w.to_le_bytes())
+                .collect();
+            build_bsp(&[
+                (LUMP_MATERIALS, &[0u8; 72]),
+                (LUMP_SOUPS, &soup),
+                (LUMP_MODELS, &[0u8; 48]),
+                (LUMP_DRAWVERTS, &[0u8; 3 * 44]),
+                (LUMP_DRAWINDICES, &idx),
+                (LUMP_AABB_NODES, &nodes),
+            ])
+        };
+        parse(&with_nodes(64)).unwrap();
+        let err = parse(&with_nodes(65)).unwrap_err().to_string();
+        assert!(err.contains("overlap"), "got: {err}");
     }
 
     #[test]
