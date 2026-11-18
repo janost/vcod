@@ -569,7 +569,8 @@ impl Origin {
         let base = f32::from_bits(from);
         let units = if bit(r) {
             let v = bits(r, 16) as i32 ^ self.biased(cvtt(base));
-            f64::from(v - 0x8000 + self.centre)
+            // Wrapping, as the x86 add: a hostile CS_MAPCENTER can put the centre anywhere.
+            f64::from(v.wrapping_sub(0x8000).wrapping_add(self.centre))
         } else {
             f64::from(base) + f64::from(bits(r, 7) as i32 - 64)
         };
@@ -1572,5 +1573,19 @@ mod tests {
             "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkskkkksss stats=0xa obj=Some(\"-,-,-,-,-,skkkkk,-,-,-,-,-,-,-,-,-,-\") hud=Some(\"|kkkkskkkkkkkkkkks,kkkks\")",
         ];
         assert_eq!(got, expected);
+    }
+
+    /// A long-form origin read off a centre at the end of i32's range
+    /// wraps as the x86 add does instead of overflowing.
+    #[test]
+    fn an_origin_off_a_centre_at_i32_min_wraps() {
+        let o = Origin { centre: i32::MIN };
+        let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
+        put_bit(&mut w, true);
+        // 0x8000 XOR the base's biased 0x8000: 0, less 0x8000, plus i32::MIN.
+        put_bits(&mut w, 0x8000, 16);
+        let mut r = MsgReader::from_plain(w.into_ops());
+        let units = f32::from_bits(o.read(&mut r, 1e30f32.to_bits()));
+        assert_eq!(units, i32::MIN.wrapping_sub(0x8000) as f32);
     }
 }

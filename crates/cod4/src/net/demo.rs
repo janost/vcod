@@ -470,4 +470,29 @@ mod tests {
             Err(DemoEnd::TooLong(MAX_MSGLEN + 1))
         );
     }
+
+    /// Two message records and the end marker, mutated: the reader ends
+    /// on every input without a panic.
+    #[test]
+    fn a_hostile_demo_never_panics() {
+        let mut b = Vec::new();
+        for seq in [5i32, 6] {
+            b.push(0);
+            b.extend(seq.to_le_bytes());
+            b.extend(5i32.to_le_bytes());
+            b.extend([9, 9, 9, 9, 1]);
+        }
+        b.push(0);
+        b.extend((-1i32).to_le_bytes());
+        b.extend((-1i32).to_le_bytes());
+        vcod_common::testing::fuzz("cod4 demo", &b, 3000, |m| {
+            let mut rd = DemoReader::new(m.to_vec());
+            for _ in 0..m.len() + 1 {
+                if rd.next_record().is_err() {
+                    return;
+                }
+            }
+            panic!("more records than bytes");
+        });
+    }
 }
