@@ -229,12 +229,17 @@ impl Parser {
         let old_ents: &[EntityState2] = from.map_or(&[], |f| &f.entities);
         let mut entities = Vec::with_capacity(old_ents.len() + 8);
         let mut oi = 0;
+        // A stock server writes each list ascending (3.3); that also caps
+        // it at 1023 entities and 64 clients.
+        let mut last = None;
         loop {
             let n = r.read_bits(GENTITYNUM_BITS) as u32;
             ensure!(!r.is_overflowed(), "packet entities: end of message");
             if n == ENTITYNUM_NONE {
                 break;
             }
+            ensure!(last < Some(n), "packet entities: {n} after {last:?}");
+            last = Some(n);
             while oi < old_ents.len() && old_ents[oi].number < n {
                 entities.push(old_ents[oi]);
                 oi += 1;
@@ -260,9 +265,12 @@ impl Parser {
         let old_cls: &[ClientState2] = from.map_or(&[], |f| &f.clients);
         let mut clients = Vec::with_capacity(old_cls.len() + 1);
         let mut oi = 0;
+        let mut last = None;
         while r.read_bits(1) == 1 {
             let n = r.read_bits(CLIENTNUM_BITS) as u32;
             ensure!(!r.is_overflowed(), "packet clients: end of message");
+            ensure!(last < Some(n), "packet clients: {n} after {last:?}");
+            last = Some(n);
             while oi < old_cls.len() && old_cls[oi].number < n {
                 clients.push(old_cls[oi]);
                 oi += 1;

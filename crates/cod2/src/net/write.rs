@@ -504,4 +504,46 @@ mod tests {
             (&f2.ps, &f2.entities, &f2.clients)
         );
     }
+
+    /// A packet entity or client list that repeats or goes back a number
+    /// is refused: a stock server writes them ascending (3.3).
+    #[test]
+    fn a_list_out_of_order_is_refused() {
+        let huff = Huffman::new();
+        let gs = Gamestate2 {
+            server_command_sequence: 0,
+            configstrings: Default::default(),
+            baselines: Default::default(),
+            client_num: 0,
+            checksum_feed: 0,
+        };
+        let mut e = EntityState2::null(5);
+        e.f[1] = 7;
+        let mut f = e;
+        f.number = 4;
+        let cs = ClientState2::null(3);
+        let frames = [
+            (vec![e, e], vec![]),
+            (vec![e, f], vec![]),
+            (vec![e], vec![cs, cs]),
+        ];
+        for (entities, clients) in frames {
+            let mut parser = Parser::new();
+            let mut w = MsgWriter::new(&huff);
+            write_gamestate(&mut w, &gs);
+            w.write_byte(Svc::Eof as u8);
+            parser.parse(1, &w.into_ops()).unwrap();
+            let to = Frame2 {
+                server_time: 1000,
+                ps: PlayerState2::default(),
+                entities,
+                clients,
+            };
+            let mut w = MsgWriter::new(&huff);
+            write_snapshot(&mut w, None, 0, 0, &to, |_| None, 0);
+            w.write_byte(Svc::Eof as u8);
+            assert!(parser.parse(2, &w.into_ops()).is_err());
+            assert!(parser.frame(2).is_none());
+        }
+    }
 }
