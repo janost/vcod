@@ -169,6 +169,9 @@ pub struct Cod2Game {
     /// The seed each level's `G_InitGame` takes when a test pinned one
     /// ([`Cod2Server::pin_game_seed`]); otherwise a draw off the engine's.
     game_seed: Option<u32>,
+    /// The world the last snapshot round built, for the archive that
+    /// follows it with no frame between ([`Cod2Server::archive_frame`]).
+    snapshot_world: Option<BTreeMap<u32, (EntityState, bool)>>,
 }
 
 /// The CoD2 server: the engine over [`Cod2Game`].
@@ -279,6 +282,9 @@ impl crate::engine::GameModule for Cod2Game {
 
     fn snapshots_begin(_e: &mut Cod2Server) -> Cod2Snapshots {
         None
+    }
+    fn snapshots_end(e: &mut Cod2Server, snaps: Cod2Snapshots) {
+        e.game.snapshot_world = snaps.map(|(_, world)| world);
     }
     fn message_due(e: &Cod2Server, slot: usize) -> bool {
         e.message_due(slot)
@@ -448,6 +454,7 @@ impl Cod2Server {
                 cvars,
                 level: None,
                 retired: None,
+                snapshot_world: None,
                 spot: (Vec3::ZERO, [0.0; 3]),
                 baselines: BTreeMap::new(),
                 server_id: 0,
@@ -1264,6 +1271,7 @@ impl Cod2Server {
     /// `G_RunFrame` on the stepped clock, then `SV_AddTestClient` for the
     /// slots it connected.
     fn run_level_frame(&mut self) {
+        self.game.snapshot_world = None;
         // `svs.time`, the frame clock `SV_DirectConnect`'s reconnect
         // check reads for `addTestClient`'s bot address too.
         let svs = self.core.sv_time_ms;
@@ -1285,7 +1293,11 @@ impl Cod2Server {
             return;
         }
         let roster = self.client_states();
-        let world = self.world_entities();
+        // The messages change no entity, so their world is this one.
+        let world = match self.game.snapshot_world.take() {
+            Some(world) => world,
+            None => self.world_entities(),
+        };
         if let Some(level) = self.game.level.as_mut() {
             level.archive_frame(&world, &roster);
         }
