@@ -422,10 +422,10 @@ impl Browser {
     fn finish(&mut self) {
         let rows = self.rows();
         let listed = rows.len();
-        let players: u32 = rows
+        let players: u64 = rows
             .iter()
             .filter_map(|s| s.info.as_ref())
-            .map(|i| i.clients)
+            .map(|i| u64::from(i.clients))
             .sum();
         let hidden = self.list().len().saturating_sub(listed);
         crate::console::log::print(&format!(
@@ -908,6 +908,16 @@ mod tests {
         let s = server("^1Red", 3, 42);
         let cols: Vec<String> = (0..6).map(|c| column_text(&s, c)).collect();
         assert_eq!(cols, ["X", "^1Red", "mp_harbor", "3 (20)", "^7dm", "42"]);
+    }
+
+    /// The end-of-refresh total sums server-sent counts without an
+    /// overflow (BUG-080).
+    #[test]
+    fn the_player_total_of_huge_counts_does_not_overflow() {
+        let mut b = Browser::default();
+        b.lists[0] = vec![server("a", u32::MAX, 10), server("b", u32::MAX, 10)];
+        b.finish();
+        assert_eq!(b.status, Status::Done);
     }
 
     #[test]
