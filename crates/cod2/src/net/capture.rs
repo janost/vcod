@@ -49,7 +49,10 @@ impl Capture {
                 d => anyhow::bail!("bad direction {d}"),
             };
             let len = u32::from_le_bytes(rest[1..5].try_into()?) as usize;
-            anyhow::ensure!(rest.len() >= 5 + len, "truncated packet");
+            anyhow::ensure!(
+                len.checked_add(5).is_some_and(|n| rest.len() >= n),
+                "truncated packet"
+            );
             packets.push((dir, rest[5..5 + len].to_vec()));
             rest = &rest[5 + len..];
         }
@@ -129,7 +132,10 @@ pub fn replay(cap: &Capture) -> anyhow::Result<Replayed> {
                 let Some((seq, mut body)) = nc.frame(p)? else {
                     continue;
                 };
-                let ack = i32::from_le_bytes(body[0..4].try_into()?);
+                let head = body
+                    .get(..4)
+                    .ok_or_else(|| anyhow::anyhow!("message {seq} shorter than its acknowledge"))?;
+                let ack = i32::from_le_bytes(head.try_into()?);
                 let key = client_commands[ack as usize % MAX_RELIABLE_COMMANDS].clone();
                 nc.decode(seq, &key, &mut body);
                 out.messages.push((seq as i32, body.clone()));
