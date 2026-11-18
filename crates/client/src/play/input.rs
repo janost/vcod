@@ -554,12 +554,11 @@ impl Default for ClRun {
 #[derive(Default)]
 pub struct PlayInput {
     down: HashSet<Action>,
-    /// `cl_stance`, the stance the client keeps; level, and resynced to
-    /// `Held::stance` whenever the server changes it without a matching key
-    /// press (a forced stand at spawn, say) so the client does not fight
-    /// it. A held `+prone` or `+movedown` overrides it in the cmd.
+    /// `cl_stance`, the stance the client keeps. Only the binds, the
+    /// respawn reset, the forced-stance events and the server's `v
+    /// cl_stance` write it, never the playerstate (cod11-console.md 9). A
+    /// held `+prone` or `+movedown` overrides it in the cmd.
     wanted_stance: Stance,
-    last_seen_stance: Stance,
     /// Retail's `cg_weaponSelect` (`0x301cbb0c`), the weapon every cmd
     /// asks for. Only a respawn, a bind, the `a` command, a pickup out of
     /// nothing selected and the out-of-ammo switch move it; the playerstate
@@ -940,13 +939,7 @@ impl PlayInput {
     }
 
     pub fn build(&mut self, server_time: i32, held: &Held) -> UserCmd {
-        // A stance the held key put the body in is not one to keep.
         let key_stance = held_stance(&self.down);
-        if held.stance != self.last_seen_stance && key_stance.is_none() {
-            self.wanted_stance = held.stance;
-        }
-        self.last_seen_stance = held.stance;
-
         self.sync(held);
         let weapon = self.selected;
 
@@ -2128,21 +2121,31 @@ mod tests {
         assert_eq!(i.build(100, &held(10)).weapon, 6);
     }
 
+    /// The playerstate's stance lags the keys by a round trip; `cl_stance`
+    /// follows the keys alone (cod11-console.md 9), so a crouch then a stand
+    /// inside one round trip keeps sending the stand while the crouch's echo
+    /// arrives.
     #[test]
-    fn a_server_forced_stance_change_is_adopted() {
+    fn a_lagging_snapshot_stance_does_not_override_the_keys() {
         let mut i = synced(10);
-        i.key(Action::Crouch, true);
-        i.key(Action::Crouch, false);
+        press(&mut i, Action::ToggleCrouch);
+        assert_ne!(i.build(100, &held(10)).wbuttons & msg::WBUTTON_CROUCH, 0);
+        press(&mut i, Action::ToggleCrouch);
+        assert_eq!(i.build(108, &held(10)).wbuttons & msg::WBUTTON_CROUCH, 0);
+        // The first press's echo: the server has the body crouched.
         let crouched = Held {
             stance: Stance::Crouch,
             ..held(10)
         };
-        let c = i.build(100, &crouched);
-        assert_ne!(c.wbuttons & msg::WBUTTON_CROUCH, 0);
-        // The server stands the client up on its own (a respawn); no key
-        // press asked for it, and the client must not fight it back.
-        let stood = held(10);
-        let c = i.build(108, &stood);
+        for t in [116, 124, 132] {
+            assert_eq!(i.build(t, &crouched).wbuttons & msg::WBUTTON_CROUCH, 0);
+        }
+        // A 1.5 stand-to-prone passes through crouch on the flags.
+        let mut i = synced(10);
+        press(&mut i, Action::Prone);
+        i.build(100, &held(10));
+        let c = i.build(108, &crouched);
+        assert_ne!(c.wbuttons & msg::WBUTTON_PRONE, 0);
         assert_eq!(c.wbuttons & msg::WBUTTON_CROUCH, 0);
     }
 
