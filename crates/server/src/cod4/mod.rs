@@ -604,7 +604,7 @@ impl Cod4Server {
         if self.game.common.is_empty() {
             let mod_zone = install.mod_zone().map(|_| "mod");
             for name in COMMON_ZONES.into_iter().chain(mod_zone) {
-                let path = install.zone_path(lang, name);
+                let path = install.zone_path(lang, name)?;
                 let zone = vcod_cod4::zone::Zone::open_path(&path)
                     .and_then(|z| vcod_cod4::walk::walk(z, Default::default()))
                     .with_context(|| path.display().to_string())?;

@@ -682,7 +682,7 @@ pub(crate) fn front_sounds(
     let mut set = vcod_cod4::sound::SoundSet::default();
     let mod_zone = install.mod_zone().map(|_| "mod");
     for name in FRONT_SOUND_ZONES.into_iter().chain(mod_zone) {
-        let path = install.zone_path("english", name);
+        let path = install.zone_path("english", name)?;
         let z = Zone::open_path(&path)
             .and_then(|z| walk(z, WalkOptions { keep_bulk: true }))
             .with_context(|| path.display().to_string())?;
