@@ -57,7 +57,8 @@ pub fn getservers(protocol: u32) -> String {
 pub const MASTER_INTERVAL_MS: u64 = 1000;
 
 /// At most one packet per [`MASTER_INTERVAL_MS`] to each master host, on a
-/// clock the caller passes in milliseconds.
+/// clock the caller passes in milliseconds. A loopback host is no public
+/// master: its packets always go, so tests' fake masters wait on nothing.
 #[derive(Debug, Default)]
 pub struct RateLimiter {
     last: HashMap<IpAddr, u64>,
@@ -66,6 +67,9 @@ pub struct RateLimiter {
 impl RateLimiter {
     /// Whether a packet to `host` may go at `now_ms`; a yes counts as sent.
     pub fn allow(&mut self, host: IpAddr, now_ms: u64) -> bool {
+        if host.is_loopback() {
+            return true;
+        }
         match self.last.get(&host) {
             Some(&t) if now_ms < t.saturating_add(MASTER_INTERVAL_MS) => false,
             _ => {
@@ -262,6 +266,8 @@ mod tests {
         assert!(r.allow(a, 6000));
         assert!(!r.allow(b, 6499));
         assert!(r.allow(b, 6500));
+        let local: IpAddr = "127.0.0.1".parse().unwrap();
+        assert!(r.allow(local, 7000) && r.allow(local, 7000), "loopback");
     }
 
     #[test]
