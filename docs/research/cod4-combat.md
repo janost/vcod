@@ -863,9 +863,11 @@ of the body's box along its yaw at `g_dropForwardSpeed` (10) and up at
 and `G_RunItem`'s fall and rest are 6.1.
 `itemWeaponSetAmmo(clip, stock)` keeps the counts. A living player whose
 box meets an item at rest and who holds the same weapon takes clip and
-stock into the reserve up to `maxAmmo` (+820), gets `EV_AMMO_PICKUP` (9),
-and the item goes (`Touch_Item`, `WeaponPickup_Touch`, `Add_Ammo`).
-INFERRED. `a_dropped_rifle_hands_its_ammo_over` runs it on the kill
+stock into the reserve up to `maxAmmo` (+820) and the item goes
+(`Touch_Item`, `WeaponPickup_Touch`, `Add_Ammo`). INFERRED. The touch's
+event is `EV_ITEM_PICKUP` (9, not `EV_AMMO_PICKUP`'s 10): the lunge
+capture (`play-1.7-lunge.txt`, t=52450) has event 9 parm 27 on an attacker
+already holding weapon 27. VERIFIED. `a_dropped_rifle_hands_its_ammo_over` runs it on the kill
 capture's rifle. VERIFIED (the gate). The use key's swap for a weapon not
 held is cod4-gsc.md 9.1. Not run: the compatible-weapon rule, the pickup
 prints.

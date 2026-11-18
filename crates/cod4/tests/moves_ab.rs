@@ -113,7 +113,7 @@ const GAPS: &[(&str, &str, usize, &str)] = &[
     ),
     // The charge swing's hit: the server's `EV_MELEE_BLOOD` (37) on the
     // attacker, and the lunge carries him over the victim's dropped rifle,
-    // whose ammo the server's touch hands him (`EV_AMMO_PICKUP`, 9).
+    // whose ammo the server's touch hands him (`EV_ITEM_PICKUP`, 9).
     (
         "lunge",
         "eventSequence",
