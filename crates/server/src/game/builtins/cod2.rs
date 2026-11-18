@@ -3,7 +3,7 @@
 //! not. Addresses are cod2_lnxded's (cod2-gsc-diff.md section 1).
 
 use crate::game::host::{GameHost, WeaponOp};
-use vcod_gsc::{Cx, EntId, ErrorKind, Target, Value};
+use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
 use super::client::client_receiver;
 use super::precache::{before_any_wait, name_arg};
@@ -710,8 +710,7 @@ fn update_scores(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let id: EntId = super::entity::entity_receiver(recv)?;
-    let slot = id.0 as usize;
+    let slot = super::client::client_receiver(host, recv)?;
     let [axis, allies] = host.team_scores;
     host.client_commands.push((slot, format!("H {allies}")));
     host.client_commands.push((slot, format!("G {axis}")));
@@ -1336,6 +1335,31 @@ mod tests {
             assert_eq!(host.configstrings[6], "");
             let bad = Value::String(cx.intern_exact("spectator"));
             assert!(set_team_score(&mut host, cx, None, &[bad, Value::Int(1)]).is_err());
+        });
+    }
+
+    /// `updateScores` goes to a player only; on any other entity it is a
+    /// script error and queues nothing (BUG-022: it queued for slot >= 64).
+    #[test]
+    fn update_scores_refuses_a_non_player() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            host.connect_client(cx, 0, "a").unwrap();
+            let cls = Value::String(cx.intern_exact("script_model"));
+            let Value::Entity(ent) =
+                super::super::entity::spawn(&mut host, cx, None, &[cls, Value::Vector([0.0; 3])])
+                    .unwrap()
+            else {
+                panic!("spawn returns the entity");
+            };
+            assert!(update_scores(&mut host, cx, Some(Target::Entity(ent)), &[]).is_err());
+            assert!(host.client_commands.is_empty());
+            let player = host.ents.handle(0).unwrap();
+            update_scores(&mut host, cx, Some(Target::Entity(player)), &[]).unwrap();
+            assert_eq!(
+                host.client_commands,
+                [(0, "H 0".to_string()), (0, "G 0".to_string())]
+            );
         });
     }
 
