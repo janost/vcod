@@ -1119,6 +1119,12 @@ mod flow {
         apply(&mut shell, &out);
         assert!(!dir.join("Tester").exists());
         assert_eq!(shell.cvar("ui_playerProfileCount"), Some("0"));
+        // With the last profile gone a click on the list and the select
+        // script read no row.
+        assert_eq!(ui.profile_selected(), None);
+        shell.execute("set com_playerProfile Tester");
+        let mut out = Vec::new();
+        ui.run(m, &script("uiScript selectActivePlayerProfile"), &shell, &mut out);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
