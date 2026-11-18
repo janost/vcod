@@ -652,6 +652,35 @@ fn a_first_client_forces_a_heartbeat() {
     assert_eq!(beats(&mut h), 1);
 }
 
+/// vcod's `sv_master2`, which retail CoD2 lacks: it beats beside the
+/// default master, on the CoD2 port.
+#[test]
+fn sv_master2_beats_beside_the_default_master() {
+    let mut h = Harness::new(4, &[]);
+    h.sv.set_master_resolver(|name| match name {
+        "master.cod.pm" => Some(SocketAddr::from(([127, 0, 0, 1], 0))),
+        "cod2master.activision.com" => Some(SocketAddr::from(([127, 0, 0, 2], 0))),
+        _ => None,
+    });
+    h.sv.set_cvar("sv_master2", "cod2master.activision.com");
+    h.sv.set_cvar("dedicated", "2");
+    h.frames(1);
+    let mut to: Vec<SocketAddr> =
+        h.sv.take_outgoing()
+            .into_iter()
+            .filter(|(_, p)| p[4..].starts_with(b"heartbeat COD-2"))
+            .map(|(to, _)| to)
+            .collect();
+    to.sort();
+    assert_eq!(
+        to,
+        [
+            SocketAddr::from(([127, 0, 0, 1], 20710)),
+            SocketAddr::from(([127, 0, 0, 2], 20710)),
+        ]
+    );
+}
+
 /// `SV_MasterHeartbeat`'s status arm (0x8096ed6): under `dedicated 2` the
 /// master gets a `statusResponse` every 600 s whose `challenge` is the last
 /// line's first argument, the command line's map at startup (17.6). It

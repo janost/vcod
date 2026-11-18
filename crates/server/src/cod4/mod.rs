@@ -888,15 +888,14 @@ impl Cod4Server {
     }
 
     /// `SV_MasterHeartbeat("COD-4")` (0x81780e4): at `dedicated 2` only,
-    /// every 180 s (cod4-server-frame.md 5), to `sv_master1`, or to
-    /// `master.cod.pm` while that is empty, on the CoD4 port, through the
-    /// masters every game beats ([`crate::master::Masters`]).
+    /// every 180 s (cod4-server-frame.md 5), to `sv_master1..5`, with
+    /// `master.cod.pm` while `sv_master1` is empty, on the CoD4 port,
+    /// through the masters every game beats ([`crate::master::Masters`]).
     fn heartbeat(&mut self) {
-        let master = match self.game.cvars().get("sv_master1") {
-            "" => vcod_common::net::master::COD4_MASTER.host,
-            m => m,
-        };
-        self.core.masters.set(0, master);
+        let cvars = self.game.cvars();
+        self.core
+            .masters
+            .sync_cvars(vcod_common::net::master::COD4_MASTER.host, |n| cvars.get(n));
         let dedicated = self.int("dedicated");
         let mut resolve = self.core.resolver;
         let beats = self.core.masters.heartbeat(
@@ -1924,6 +1923,7 @@ mod heartbeat_tests {
         match name {
             "master.cod.pm" => Some("198.51.100.4:0".parse().unwrap()),
             "198.51.100.9" => Some("198.51.100.9:0".parse().unwrap()),
+            "198.51.100.7" => Some("198.51.100.7:0".parse().unwrap()),
             _ => None,
         }
     }
@@ -1957,5 +1957,18 @@ mod heartbeat_tests {
         sv.heartbeat();
         let (to, _) = sv.core.outbox.pop().expect("a forced heartbeat");
         assert_eq!(to, "198.51.100.9:20810".parse().unwrap());
+        // `sv_master2` beats alongside the default `sv_master1`.
+        sv.set_cvar("sv_master1", "");
+        sv.set_cvar("sv_master2", "198.51.100.7");
+        sv.push_console("heartbeat");
+        sv.run_console();
+        sv.core.sv_time_ms += 1000;
+        sv.heartbeat();
+        let to: Vec<SocketAddr> = sv.core.outbox.drain(..).map(|(to, _)| to).collect();
+        let want: [SocketAddr; 2] = [
+            "198.51.100.4:20810".parse().unwrap(),
+            "198.51.100.7:20810".parse().unwrap(),
+        ];
+        assert_eq!(to, want);
     }
 }

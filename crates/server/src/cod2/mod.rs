@@ -451,8 +451,8 @@ impl Cod2Server {
         cvars.set("mapname", &cfg.map);
         let mut core =
             crate::engine::EngineCore::new(&PROTOCOL_118.transport, cfg.max_clients, seed | 1, {
-                // The one master `SV_MasterHeartbeat` (0x8096ed6) beats, with
-                // no `sv_master` cvars.
+                // Retail beats one constant master (0x8096ed6); vcod adds
+                // `sv_master1..5` (`Masters::sync_cvars`).
                 crate::master::Masters::new(vcod_common::net::master::COD2_MASTER)
             });
         // The script's configstrings, with 0 and 1 the engine's.
@@ -740,6 +740,10 @@ impl Cod2Server {
     /// the timer.
     fn heartbeat(&mut self, flatline: bool) {
         let dedicated = self.game.cvars.get("dedicated").parse().unwrap_or(0);
+        let cvars = &self.game.cvars;
+        self.core
+            .masters
+            .sync_cvars(vcod_common::net::master::COD2_MASTER.host, |n| cvars.get(n));
         let mut resolve = self.core.resolver;
         let beats = if flatline {
             self.core
