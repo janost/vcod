@@ -54,9 +54,9 @@ pub fn get_full_clip_ammo(
     Ok(Value::Int(size))
 }
 
-/// `spawnTriggerMount(mins, maxs, crouch)` (0x77974): a `trigger_mount`
+/// `spawnTriggerMount(mins, maxs, crouch)` (0x67974): a `trigger_mount`
 /// over the absolute box the two corners span, each axis sorted, at origin 0,
-/// linked by `SP_trigger_mount_no_brush` (0x87754) with contents 0x4000, or
+/// linked by `SP_trigger_mount_no_brush` (0x77754) with contents 0x4000, or
 /// 0x400000 and spawnflag 1 when `crouch` is true. An LMG deploys on it
 /// (docs/research/coduo-movement.md 11).
 pub fn spawn_trigger_mount(

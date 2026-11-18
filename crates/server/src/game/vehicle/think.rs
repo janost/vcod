@@ -101,7 +101,7 @@ pub fn run_undriven(
     true
 }
 
-/// `G_VehicleClientThink` (0x9b0ce), after the entity pass: every driven
+/// `G_VehicleClientThink` (0x8b0ce), after the entity pass: every driven
 /// vehicle steps once a server frame, in pool-slot order, so a vehicle a
 /// driver pushes moves on its own next think, the frame after
 /// (docs/research/coduo-vehicles.md 12). `inputs` is each client slot's

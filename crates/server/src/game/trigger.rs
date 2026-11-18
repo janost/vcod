@@ -155,8 +155,8 @@ pub const CONTENTS_TRIGGER: i32 = 0x4000_0000;
 pub const CONTENTS_TOUCH_MASK: i32 = 0x405c_0008;
 /// A `trigger_mount`'s contents: 0x4000, or 0x400000 for a crouched one,
 /// over `SP_trigger_mount_no_brush`'s 0x401c0008 for a script's box
-/// (game.mp.uo 0x87754) or over `InitTrigger`'s 0x40000000 for a map's
-/// brush (`SP_trigger_mount` 0x876d5).
+/// (game.mp.uo 0x77754) or over `InitTrigger`'s 0x40000000 for a map's
+/// brush (`SP_trigger_mount` 0x776d5).
 pub fn mount_contents(crouch: bool, brush: bool) -> i32 {
     let base = if brush { CONTENTS_TRIGGER } else { 0x401c_0008 };
     base | if crouch { 0x40_0000 } else { 0x4000 }
@@ -860,7 +860,7 @@ pub fn mount_boxes(host: &mut GameHost, cx: &mut Cx) -> Vec<vcod_common::movetra
 /// `G_CheckForCursorHints`' LMG probe (game.mp.uo 0x67b2f): `point`, 15
 /// ahead of the feet along the view's yaw and 1 up, meets mount contents
 /// (`trap_PointContents` under 0x404000, the world's and `boxes`'), or
-/// `G_CheckPointInsideTriggerMount` (0x8780f) finds a `trigger_mount` whose
+/// `G_CheckPointInsideTriggerMount` (0x7780f) finds a `trigger_mount` whose
 /// linked box comes within 0.1 of it. `Some` of `serverCursorHintVal` for
 /// hint 7: 0 off the contents, the trigger's spawnflag 1 off the second
 /// test, which only a point in the link's one-unit margin reaches.

@@ -766,7 +766,7 @@ into `eType` 13 `script_vehicle_corpse`; no stock MP script calls it
   pmove from that snapshot's `commandTime` on the next frame's cmds lands
   on the next snapshots to 0.005 (jeep 93.11678 vs 93.11677 at ct 37394,
   tank 30.149006 vs 30.149002 at ct 36991) (VERIFIED, capture and replay).
-- `ClientEndFrame` (0x52f59) writes `pm_type` again off the link alone: 1
+- `ClientEndFrame` (0x42f59) writes `pm_type` again off the link alone: 1
   linked, 0 not, 7 and 6 for a dead client (VERIFIED decompile). A rider
   the vehicle think puts out after `G_RunClient`'s turn is unlinked by his
   end frame and runs the next frame's cmds free (VERIFIED, 11.7's
@@ -882,7 +882,7 @@ living rider, run `G_VEH_CycleSlot` (0x8da1e) (VERIFIED decompile):
 
 The cycle is a client command, so it runs where `SV_ExecuteClientMessage`
 runs its packet's commands: after every earlier packet's usercmds, before
-its own packet's. `SetClientViewAngle` (0x54301) writes `delta_angles` as
+its own packet's. `SetClientViewAngle` (0x44301) writes `delta_angles` as
 `ANGLE2SHORT(view) - client+0x452c`, the angles of the last cmd run
 (VERIFIED decompile), so where the command lands among the frame's cmds
 moves the seat's `delta_angles` and every view after it. Both seat
@@ -1269,15 +1269,15 @@ probe_vehicletype willyjeep_mp +set probe_side 75 +set probe_pitch 15
 - The death's snapshot (t 18700) is already out of the seat: `pm_type` 6,
   `vehPos` 0, `viewlocked_entNum` 1023, seat bits off, the origin where
   the seat left it, velocity 0; `vehType` 1 and `vehMotion` 2 stay until
-  the respawn. `player_die` (0x5f972) touches no seat. The driven jeep's
-  think, `G_VehicleClientThink` (0x9b0ce) after the entity pass, puts its
-  dead riders out (`Scr_Vehicle_Think` 0x9c7cc, health under 1,
+  the respawn. `player_die` (0x4f972) touches no seat. The driven jeep's
+  think, `G_VehicleClientThink` (0x8b0ce) after the entity pass, puts its
+  dead riders out (`Scr_Vehicle_Think` 0x8c7cc, health under 1,
   `VEH_UnlinkPlayer(rider, 0)`), and the end frame's write (11.2) reads no
   link (VERIFIED decompile).
 - The view's pitch drops (24.999 seated, 0 on the death's snapshot), the
   yaw kept. `player_die` copies the entity's angles into `ps.viewangles`
   (combat doc 5.1 step 12, UO the same stores), and every cmd leaves them
-  (0, view yaw, 0) (`ClientThink_real` 0x50c91's tail) (VERIFIED
+  (0, view yaw, 0) (`ClientThink_real` 0x40c91's tail) (VERIFIED
   decompile and capture).
 - The corpse leaves the hull as 11.6's body does, a cmd held inside it
   then a push off its origin: (-234, -218, 274) at t 18750 and (-189,
@@ -1491,17 +1491,17 @@ trace").
   (VERIFIED, `vehicle_ram_ab`, 2026-10-16). A plain `f32` clip with a
   recomputed normal put a wheel's end on the face where the start's last
   bit said nothing.
-- **The think's turn.** `G_RunFrame`'s entity loop (game.mp.uo 0x69c21)
-  calls `G_RunEntity` (0x69a35) once per in-use entity by number, its link
+- **The think's turn.** `G_RunFrame`'s entity loop (game.mp.uo 0x59c21)
+  calls `G_RunEntity` (0x59a35) once per in-use entity by number, its link
   parent first. A vehicle is not a missile (4), item (3), mover (5, 8) or
-  client, so its arm is `G_RunThink` (0x69862): when `nextthink`
+  client, so its arm is `G_RunThink` (0x59862): when `nextthink`
   (`ent+0x20c`) is positive and not past `level.time` it is zeroed and
   `Scr_Vehicle_Think` called (VERIFIED decompile). The think returns at
-  once for a driven vehicle (`ent+0x17e` 2) while the flag at .bss
-  0xbe954 is 0, setting `nextthink` to `level.time`; otherwise it steps
+  once for a driven vehicle (`ent+0x17e` 2) while the flag at .data
+  0xae954 is 0, setting `nextthink` to `level.time`; otherwise it steps
   and sets `nextthink` to `level.time + 50` (VERIFIED decompile, 0x8c7cc).
-  `G_VehicleClientThink` (0x9b0ce) sets that flag, walks the 64 pool
-  records (.bss 0xe43c0, stride 0x3ec, entity number at +0x228) in order,
+  `G_VehicleClientThink` (0x8b0ce) sets that flag, walks the 64 pool
+  records (.bss 0xd43c0, stride 0x3ec, entity number at +0x228) in order,
   `G_RunThink`s each driven one, then clears it (VERIFIED decompile). So
   an undriven vehicle steps on its own turn in the entity pass, among the
   missiles, movers and links by number, and a driven one after the loop in
@@ -1774,14 +1774,14 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   0.40) on ours; the direct hit's point is retail's to the hundredth
   (VERIFIED, replay). Not measured: whether the struck face's normal or
   the trace's start puts it there; the gate holds the point to 4 units.
-- **A frag's splash on a hull.** `Scr_Vehicle_DamageScale` (0x9ccad) takes
+- **A frag's splash on a hull.** `Scr_Vehicle_DamageScale` (0x8ccad) takes
   `MOD_GRENADE_SPLASH` (4) through its own arm: the scale is the
   inflictor's weapon's `vehiclescale` (weapon info `+0x4ac`, off the
   grenade's `s.weapon` through `BG_GetInfoForWeapon`) when above 0, else
   1, times `dmgScaleUnder` / 100 when the point sits under half the hull's
   height plus 10 and within 0.8 `r.maxs[1]` of the origin (VERIFIED
-  decompile). `G_Damage` (0x5fedb) passes it the attacker and the
-  inflictor in that order; `G_ExplodeMissile` (0x6e2b5) hands
+  decompile). `G_Damage` (0x4fedb) passes it the attacker and the
+  inflictor in that order; `G_ExplodeMissile` (0x5e2b5) hands
   `G_RadiusDamage` the grenade as the inflictor (VERIFIED decompile). The
   stock frags carry `vehiclescale 0.5` (`fraggrenade_mp`,
   `stielhandgranate_mp`, VERIFIED, the files). A grenade's fuse explode
@@ -2208,9 +2208,9 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
     (`mp_cassino-tank-silhouette-uo.txt`'s `PROBE pose`, VERIFIED).
 - **The 400 ms window.** The 400 ms after a seat change: retail's bones
   glide to the new seat over eight frames (VERIFIED, `tank` run). The
-  setter (UO 0x2ce5f, 1.5b 0x28ced), when the legs anim changes crouch or
-  prone class (`BG_IsCrouchingAnim` 0x2cdac, movetype mask 0xc4;
-  `BG_IsProneAnim` 0x2ce04, 0x308), stores `bg.time + 400` in the client
+  setter (UO 0x1ce5f, 1.5b 0x28ced), when the legs anim changes crouch or
+  prone class (`BG_IsCrouchingAnim` 0x1cdac, movetype mask 0xc4;
+  `BG_IsProneAnim` 0x1ce04, 0x308), stores `bg.time + 400` in the client
   info (`ci+0x4c0`, 1.5b `ci+0x4a4`), and every later blend of either
   channel is at least what is left of that. Its other floors are 1.1's,
   without 1.1's 200/250 stance rule (VERIFIED decompile). 1.1d has no such
@@ -2635,7 +2635,7 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
     their weapon with bit 7, `0x9b` and `0xa0` on both sides, and neither
     side sends a bullet-hit temp entity for them: the client traces them
     (`fx::client_bullet`, coduo-diff.md 19).
-  - A shell on a vehicle: `G_MissileImpact` (game.mp.uo 0x6db67) ors
+  - A shell on a vehicle: `G_MissileImpact` (game.mp.uo 0x5db67) ors
     0x100000 into the explode's `eFlags` when the struck entity's `eType`
     is 12 (VERIFIED decompile), which turns the client to the impact row's
     `vehicle` column. vcod's shell names the entity its trace stopped on (a
@@ -2675,8 +2675,8 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   the goal time), and a steer change on the next frame ramps from about
   half of each (INFERRED, off the setter).
   - The node a legs change leaves keeps its leaves' goals. UO's legs setter
-    (game.mp.uo 0x2ce5f) clears the old anim with
-    `trap_XAnimClearGoalWeight` (0x84c62, syscall 0x57), which
+    (game.mp.uo 0x1ce5f) clears the old anim with
+    `trap_XAnimClearGoalWeight` (0x74c62, syscall 0x57), which
     `coduo_lnxded`'s dispatcher sends to 0x080bfc22, the node alone; the
     recursive clear 0x080bfd0c is reached only from syscalls 0x56 and 0x58
     (`trap_XAnimClearTreeGoalWeights`, `...Strict`) (VERIFIED decompile).
