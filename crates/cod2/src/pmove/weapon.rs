@@ -1226,7 +1226,7 @@ pub fn pm_weapon(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, defs
     if ws.restrict_kick_time > 0 {
         ws.restrict_kick_time = (ws.restrict_kick_time - msec).max(0);
     }
-    let cur = defs.get(ws.weapon).cloned();
+    let cur = defs.get(ws.weapon);
     if ws.weapon_time != 0 {
         ws.weapon_time -= msec;
         if ws.weapon_time < 1 {
@@ -1336,7 +1336,7 @@ pub fn pm_weapon(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, defs
             begin_change(ps, ws, 0, c, defs);
         }
     }
-    let cur = defs.get(ws.weapon).cloned();
+    let cur = defs.get(ws.weapon);
     // The reload key, an empty clip, and a segmented reload's interrupt.
     if !(state::OFFHAND_INIT..=state::OFFHAND).contains(&ws.state)
         && !in_binoculars(ws.state)
@@ -1411,7 +1411,7 @@ pub fn pm_weapon(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, defs
         }
     }
     // A bolt-action rifle's rechamber after its shot.
-    if let Some(w) = defs.get(ws.weapon).cloned()
+    if let Some(w) = defs.get(ws.weapon)
         && !(state::OFFHAND_INIT..=state::OFFHAND).contains(&ws.state)
         && !in_binoculars(ws.state)
         && w.bolt_action
@@ -1526,7 +1526,7 @@ fn run_state(
             }
         }
         state::RELOADING | state::RELOADING_INTERRUPTED => {
-            let Some(w) = defs.get(ws.weapon).cloned() else {
+            let Some(w) = defs.get(ws.weapon) else {
                 return to_ready(ps, ws);
             };
             if delay_fired {
@@ -1545,7 +1545,7 @@ fn run_state(
             end_reload(ps, ws, &w);
         }
         state::RELOAD_START | state::RELOAD_START_INTERRUPTED => {
-            let Some(w) = defs.get(ws.weapon).cloned() else {
+            let Some(w) = defs.get(ws.weapon) else {
                 return to_ready(ps, ws);
             };
             if delay_fired {
@@ -1580,7 +1580,7 @@ fn run_state(
         state::OFFHAND_HOLD => {
             const KEYS: i32 = key::FRAG | key::SMOKE;
             if c.oldcmd.buttons & KEYS == 0 || buttons & KEYS == 0 {
-                let o = defs.get(ws.offhand).cloned();
+                let o = defs.get(ws.offhand);
                 ws.state = state::OFFHAND_START;
                 ws.weapon_time = o.as_ref().map_or(0, |o| o.fire_time);
                 ws.weapon_delay = 0;
@@ -1843,7 +1843,7 @@ fn fire(
         ws.state = state::READY;
         return;
     }
-    let Some(w) = defs.get(ws.weapon).cloned() else {
+    let Some(w) = defs.get(ws.weapon) else {
         return;
     };
     // 0x80ef1ac: the times, the pullback of a grenade.

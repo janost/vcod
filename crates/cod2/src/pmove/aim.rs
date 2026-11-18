@@ -161,15 +161,13 @@ pub struct AimInput<'a> {
     pub msec: i32,
 }
 
-impl AimInput<'_> {
-    fn keys(&self, weapon: u8) -> AimKeys {
-        self.defs
-            .get(weapon)
-            .map(|w| w.aim.clone())
-            .unwrap_or_default()
+impl<'a> AimInput<'a> {
+    fn keys(&self, weapon: u8) -> &'a AimKeys {
+        static NONE: std::sync::LazyLock<AimKeys> = std::sync::LazyLock::new(AimKeys::default);
+        self.defs.get(weapon).map_or(&NONE, |w| &w.aim)
     }
 
-    fn view_keys(&self) -> AimKeys {
+    fn view_keys(&self) -> &'a AimKeys {
         self.keys(super::weapon::view_weapon(self.ps, self.ws, self.defs))
     }
 

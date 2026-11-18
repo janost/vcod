@@ -55,6 +55,28 @@ pub(crate) fn permute_planes(v: Vec3, planes: &[Vec3]) -> ([usize; MAX_CLIP_PLAN
     (order, dots[order[0]])
 }
 
+/// The slide's clip planes on the stack: at most `MAX_CLIP_PLANES` are
+/// ever pushed.
+#[derive(Default)]
+struct Planes {
+    buf: [Vec3; MAX_CLIP_PLANES + 1],
+    n: usize,
+}
+
+impl Planes {
+    fn push(&mut self, p: Vec3) {
+        self.buf[self.n] = p;
+        self.n += 1;
+    }
+}
+
+impl std::ops::Deref for Planes {
+    type Target = [Vec3];
+    fn deref(&self) -> &[Vec3] {
+        &self.buf[..self.n]
+    }
+}
+
 /// `PM_SlideMove` (0x80e9c42): four bumps along the velocity, each hit
 /// placed by the lerp; returns whether anything was met.
 pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
@@ -70,7 +92,7 @@ pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
         }
     }
     let mut time_left = pml.frametime;
-    let mut planes: Vec<Vec3> = Vec::with_capacity(MAX_CLIP_PLANES + 1);
+    let mut planes = Planes::default();
     if pml.ground_plane {
         planes.push(pml.ground_trace.normal);
     }
