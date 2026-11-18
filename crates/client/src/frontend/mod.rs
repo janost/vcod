@@ -1419,12 +1419,11 @@ impl Ui {
         if let Some(item) = self
             .thumb_drag
             .and_then(|(m, i)| self.menus.get(m)?.items.get(i))
+            && let Some((len, _)) = self.list_scroll(item)
         {
-            if let Some((len, _)) = self.list_scroll(item) {
-                let top = listbox::drag(item, len, self.cursor[1]);
-                let feeder = item.feeder;
-                self.set_list_top(feeder, top);
-            }
+            let top = listbox::drag(item, len, self.cursor[1]);
+            let feeder = item.feeder;
+            self.set_list_top(feeder, top);
         }
         // `Menu_HandleMouseMove` (0x40016b20) does nothing during an edit.
         if !self.editing() {

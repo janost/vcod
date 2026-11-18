@@ -893,7 +893,7 @@ fn place_rider(rt: &mut script::ScriptRuntime, slot: usize, sim: &mut ClientSim)
 
 /// An archived follow copy's velocity and teleport bit, read in the field
 /// table the archive was written in.
-fn archived_motion(ps: &msg::PlayerState, p: &Protocol) -> ([f32; 3], bool) {
+fn archived_motion(ps: &msg::PlayerState, p: &Cod1Wire) -> ([f32; 3], bool) {
     let velocity = [
         ps.field_f32(p, "velocity[0]"),
         ps.field_f32(p, "velocity[1]"),
@@ -905,7 +905,7 @@ fn archived_motion(ps: &msg::PlayerState, p: &Protocol) -> ([f32; 3], bool) {
 
 fn follow_end_frame(
     clients: &mut [Option<Client>],
-    proto: &Protocol,
+    proto: &Cod1Wire,
     slot: usize,
     rt: &mut script::ScriptRuntime,
     archive: &crate::archive::Archive,

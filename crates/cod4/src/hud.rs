@@ -1156,13 +1156,15 @@ mod tests {
     /// without an overflow (BUG-150).
     #[test]
     fn a_huge_string_table_reads_without_an_overflow() {
-        let mut a = Assets::default();
-        a.string_tables = vec![crate::assets::misc::StringTable {
-            name: "mp/rankIconTable.csv".into(),
-            columns: 0x8000_0000,
-            rows: 3,
-            values: Vec::new(),
-        }];
+        let a = Assets {
+            string_tables: vec![crate::assets::misc::StringTable {
+                name: "mp/rankIconTable.csv".into(),
+                columns: 0x8000_0000,
+                rows: 3,
+                values: Vec::new(),
+            }],
+            ..Assets::default()
+        };
         HudAssets::default().add(&a);
     }
 
@@ -1171,17 +1173,21 @@ mod tests {
     #[test]
     fn a_later_zones_hud_menu_replaces_the_earlier_ones_items() {
         let mut hud = HudAssets::default();
-        let mut stock = Assets::default();
-        stock.menus = vec![
-            menu(WEAPON_INFO_MENU, &["ammoStock", "weapname"]),
-            menu(COMPASS_MENU, &["minimapBG", "mini_map"]),
-        ];
+        let stock = Assets {
+            menus: vec![
+                menu(WEAPON_INFO_MENU, &["ammoStock", "weapname"]),
+                menu(COMPASS_MENU, &["minimapBG", "mini_map"]),
+            ],
+            ..Assets::default()
+        };
         hud.add(&stock);
-        let mut modded = Assets::default();
-        modded.menus = vec![
-            menu(WEAPON_INFO_MENU, &["weapname"]),
-            menu(COMPASS_MENU, &["mini_map"]),
-        ];
+        let modded = Assets {
+            menus: vec![
+                menu(WEAPON_INFO_MENU, &["weapname"]),
+                menu(COMPASS_MENU, &["mini_map"]),
+            ],
+            ..Assets::default()
+        };
         hud.add(&modded);
         assert!(hud.weapon_info.contains_key("weapname"));
         assert!(!hud.weapon_info.contains_key("ammoStock"));
