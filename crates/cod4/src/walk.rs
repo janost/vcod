@@ -694,8 +694,13 @@ mod tests {
         inflated.extend(le(blocks));
         inflated.extend(body);
         inflated.extend(extra);
+        deflated(&inflated)
+    }
+
+    /// The fastfile around an inflated stream (XFile header on).
+    fn deflated(inflated: &[u8]) -> Vec<u8> {
         let mut z = ZlibEncoder::new(Vec::new(), Compression::fast());
-        z.write_all(&inflated).unwrap();
+        z.write_all(inflated).unwrap();
         let mut out = b"IWffu100".to_vec();
         out.extend(5u32.to_le_bytes());
         out.extend(z.finish().unwrap());
@@ -775,5 +780,53 @@ mod tests {
         assert_eq!(w.stats.peak[Block::Temp as usize], 12);
         assert_eq!(w.stats.end[Block::Temp as usize], 0);
         assert!(w.stats.unresolved.is_empty());
+    }
+
+    /// The localize and rawfile zones' inflated streams, mutated (counts,
+    /// tokens, sizes, truncations), through the walk both ways: every input
+    /// ends in a zone or an error.
+    #[test]
+    fn a_hostile_zone_never_panics() {
+        let inflated = |blocks: &[u32; 9], body: &[u8]| {
+            let mut v = le(&[body.len() as u32, 0]);
+            v.extend(le(blocks));
+            v.extend(body);
+            v
+        };
+        let mut local = le(&[0, 0, 3, u32::MAX]);
+        local.extend(le(&[
+            0x1F,
+            u32::MAX,
+            0x16,
+            u32::MAX - 1,
+            0x16,
+            (4 << 28 | 32) + 1,
+        ]));
+        local.extend(le(&[u32::MAX, 3, u32::MAX]));
+        local.extend(b"a\0xyz\0");
+        local.extend(le(&[u32::MAX, u32::MAX]));
+        local.extend(b"v\0n\0");
+        let raw = raw_file(1, 2, b"xy\0");
+        let local_blocks = [28, 0, 0, 0, 40, 0, 0, 0, 0];
+        for (name, blocks, body) in [
+            ("localize zone", local_blocks, local),
+            ("rawfile zone", BLOCKS, raw),
+        ] {
+            let good = inflated(&blocks, &body);
+            let opts = WalkOptions { keep_bulk: true };
+            assert!(
+                Zone::open(&deflated(&good)[..])
+                    .and_then(|z| walk(z, opts))
+                    .is_ok(),
+                "{name}"
+            );
+            vcod_common::testing::fuzz(name, &good, 1000, |m| {
+                for keep_bulk in [false, true] {
+                    if let Ok(z) = Zone::open(&deflated(m)[..]) {
+                        let _ = walk(z, WalkOptions { keep_bulk });
+                    }
+                }
+            });
+        }
     }
 }
