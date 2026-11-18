@@ -413,7 +413,7 @@ impl Cod2Level {
     /// trim is written back into `archivetime` (cod2-killcam.md 4).
     pub fn snapshot_entities(
         &mut self,
-        world: &std::collections::BTreeMap<u32, (EntityState, bool)>,
+        live: &[Culled],
         slot: usize,
         ps: &PlayerState2,
     ) -> (Vec<EntityState2>, Option<std::rc::Rc<Vec<ClientState2>>>) {
@@ -439,9 +439,7 @@ impl Cod2Level {
                     .filter(|(_, te)| !te.scope.admits(viewer))
                     .map(|(n, _)| n)
                     .collect();
-                let ents = world.iter().map(|(n, (e, b))| (*n, e, *b));
-                let ents = self.cull(ents, &hidden, client_num, ps, self.level_time(), 0);
-                (ents, None)
+                (self.cull(live, &hidden, client_num, ps, 0), None)
             }
             Some(f) => {
                 let hidden: std::collections::HashSet<u32> = f
@@ -451,20 +449,38 @@ impl Cod2Level {
                     .map(|(n, _)| *n)
                     .collect();
                 let ents = f.entities.iter().map(|(n, e)| (*n, &e.0, e.1));
+                let ents = self.prepare_cull(ents, f.time);
                 let shift = self.level_time() - f.time;
-                let ents = self.cull(ents, &hidden, client_num, ps, f.time, shift);
+                let ents = self.cull(&ents, &hidden, client_num, ps, shift);
                 (ents, Some(f.roster.clone()))
             }
         }
     }
 
-    fn cull<'a>(
+    /// The world entities a snapshot cull reads, in world order: each
+    /// in CoD2's numbers with its broadcast flag and, unless broadcast,
+    /// its link at `time`. A snapshot round prepares the live world once
+    /// for every client.
+    pub fn prepare_cull<'a>(
         &self,
         ents: impl Iterator<Item = (u32, &'a EntityState, bool)>,
+        time: i32,
+    ) -> Vec<Culled> {
+        let vis = &self.world.vis;
+        ents.filter_map(|(n, e, broadcast)| {
+            let e = to_cod2_entity(e)?;
+            let link = (!broadcast).then(|| link(vis, &e, time));
+            Some(Culled { n, e, link })
+        })
+        .collect()
+    }
+
+    fn cull(
+        &self,
+        ents: &[Culled],
         hidden: &std::collections::HashSet<u32>,
         client_num: u32,
         ps: &PlayerState2,
-        time: i32,
         shift: i32,
     ) -> Vec<EntityState2> {
         let word = |i: usize| f32::from_bits(ps.f[i]);
@@ -474,13 +490,16 @@ impl Cod2Level {
         // The eye's cluster and area, placed once for every entity.
         let viewer = std::cell::OnceCell::new();
         let at = || *viewer.get_or_init(|| crate::world::Viewer::at(vis, eye));
-        ents.filter(|(n, _, _)| *n != client_num && !hidden.contains(n))
-            .filter_map(|(_, e, broadcast)| Some((to_cod2_entity(e)?, broadcast)))
-            .filter(|(e, broadcast)| {
-                // 1.5's rule: an entity touching no cluster is not sent.
-                *broadcast || crate::world::link_in_view(vis, at, &link(vis, e, time), false, None)
+        ents.iter()
+            .filter(|c| c.n != client_num && !hidden.contains(&c.n))
+            // 1.5's rule: an entity touching no cluster is not sent.
+            .filter(|c| {
+                c.link
+                    .as_ref()
+                    .is_none_or(|l| crate::world::link_in_view(vis, at, l, false, None))
             })
-            .map(|(mut e, _)| {
+            .map(|c| {
+                let mut e = c.e;
                 if shift != 0 {
                     super::cod2_archive::shift_entity(&mut e, shift);
                 }
@@ -589,6 +608,14 @@ pub fn temp_entity(te: &crate::game::temp_entity::TempEntity, number: u32) -> Op
     let etype = EntityState::field_index(p, "eType")?;
     e.fields[etype] = c2ev::ET_EVENTS + event;
     Some(e)
+}
+
+/// A world entity as [`Cod2Level::prepare_cull`] leaves it for the cull.
+pub struct Culled {
+    n: u32,
+    e: EntityState2,
+    /// `None` for a broadcast entity, which skips the cull.
+    link: Option<(vcod_common::mapworld::LinkClusters, [f32; 3], [f32; 3])>,
 }
 
 /// Where a CoD2 entity links, in its own numbers, and its clusters: a
