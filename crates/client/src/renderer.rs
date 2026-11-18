@@ -1705,8 +1705,9 @@ impl FogLive {
 
 /// Global fog from configstring 12, faded toward each new target. Same-mode
 /// transitions lerp over the script's fade time; cross-mode changes snap and
-/// linear fog clears to the fog colour (RTCW-MP tr_main.c R_SetFog /
-/// R_AddFogInterpolation).
+/// linear fog clears to the fog colour (docs/protocol-1.1.md, configstring
+/// 12: the clear is VERIFIED there; the fade and snap follow RTCW-MP's
+/// R_SetFog and are unverified against retail).
 #[derive(Default)]
 struct FogState {
     set: bool,
@@ -1874,10 +1875,10 @@ pub const STAGE_FLAG_BUNDLE1_VECTOR: u32 = 128;
 /// Sky dome draws only: add the view origin (StageParams.eye_off) to vertices.
 pub const STAGE_FLAG_EYE_OFFSET: u32 = 256;
 /// Sky dome draws only: fog applies in exp mode, never in linear mode
-/// (RTCW-MP tr_main.c R_SetFog sets drawsky per mode).
+/// (docs/protocol-1.1.md, configstring 12, VERIFIED live on mp_ship).
 pub const STAGE_FLAG_SKY: u32 = 512;
 /// `rgbGen vertex` scales the vertex rgb by identityLight; `exactVertex`
-/// stays raw (RTCW-MP tr_shade.c CGEN_VERTEX vs CGEN_EXACT_VERTEX).
+/// stays raw (0x4ffa60's rgbGen switch, cod11-shader-scripts.md 3).
 pub const STAGE_FLAG_VERTEX_RGB_HALF: u32 = 1024;
 /// The stage blends onto `GL_ONE`: GL_State loads a black fog colour for
 /// it (CoDMP.exe 0x4d2ad0), so fog fades it instead of greying it.
@@ -2119,7 +2120,9 @@ pub(crate) fn stage_params(shader: &Material, idx: usize, t: f32) -> Option<Stag
             let tb1 = b1.map_or([0.0; 4], |b| bundle_turb(&b.tcmods, t));
             [tb0[0], tb0[1], tb1[0], tb1[1]]
         },
-        // Retail writes these as colour bytes (Q3's EvalWaveFormClamped).
+        // Retail writes a table wave as colour bytes clamped after the
+        // identityLight scale (cod11-shader-scripts.md 4, 0x514c00); the
+        // other clamps follow Q3 and are unverified against retail.
         tint: [
             rgb[0].clamp(0.0, rgb_max),
             rgb[1].clamp(0.0, rgb_max),
@@ -3217,8 +3220,9 @@ struct DomeLayer {
 }
 
 /// The farbox cube. Absent from [`SkyRender`] when the env art is missing:
-/// retail gates the whole box on `outerbox[0]` having loaded
-/// (RB_StageIteratorSky tr_sky.c :994) and draws nothing otherwise.
+/// RTCW-MP gates the whole box on `outerbox[0]` having loaded
+/// (RB_StageIteratorSky tr_sky.c :994, cod11-shader-scripts.md 6) and draws
+/// nothing otherwise; unverified against retail.
 struct SkyBox {
     pipeline: wgpu::RenderPipeline,
     vertex_buf: wgpu::Buffer,
@@ -3292,7 +3296,8 @@ fn encode_world_sprites(
 }
 
 /// Builds the farbox for the block's env name. Missing non-rt sides draw
-/// tr.defaultImage flat white (tr_shader.c:1170), warned per load.
+/// flat white, warned per load: RTCW-MP's tr.defaultImage (tr_shader.c:1170),
+/// unverified against retail.
 #[expect(clippy::too_many_arguments)]
 fn build_sky_box(
     device: &wgpu::Device,
@@ -4231,7 +4236,7 @@ impl Renderer {
             cull_back,
         );
         // Overlays are pulled toward the viewer like the engine's polygon
-        // offset (Q3 defaults -1/-2); their alpha drives MSAA coverage.
+        // offset (`depth_bias`); their alpha drives MSAA coverage.
         let overlay_pipeline = make_pipeline(
             "overlay pipeline",
             &pipeline_layout,
@@ -5361,7 +5366,7 @@ impl Renderer {
                 parms.cloud_height,
                 sh.stages.len()
             );
-            // retail skips the whole box when outerbox[0] fails to load
+            // no box when outerbox[0] fails to load (`SkyBox`)
             let mut farbox = None;
             if cod2 {
                 farbox = cod2::build_sky_cube(
@@ -9017,7 +9022,8 @@ impl Renderer {
             sp.idle(&self.queue);
         }
         {
-            // Linear fog clears to the fog colour (RTCW clearscreen=true);
+            // Linear fog clears to the fog colour (docs/protocol-1.1.md,
+            // configstring 12);
             // otherwise the fixed steel blue stands in until the sky draws.
             let clear = if self.fog.set && self.fog.live.linear {
                 wgpu::Color {
