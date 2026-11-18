@@ -2315,12 +2315,13 @@ impl Server {
     fn svc_remote_command(&mut self, from: SocketAddr, raw: &[u8], read: Instant, now: Instant) {
         use crate::rcon::Verdict;
         let args = crate::game::say::tokenize(&oob_line(raw));
-        let verdict = self.core.rcon.check(&self.game.rcon_password, &args, read);
-        let shown = args.get(2).map_or("", String::as_str);
-        match verdict {
-            Verdict::Limited => return,
-            Verdict::Run(_) => log::info!("Rcon from {from}:\n{shown}"),
-            _ => log::info!("Bad rcon from {from}:\n{shown}"),
+        let verdict = self
+            .core
+            .rcon
+            .check(&self.game.rcon_password, &args, from.ip(), read);
+        match crate::rcon::log_line(&verdict, from, &args) {
+            Some(line) => log::info!("{line}"),
+            None => return,
         }
         self.game.redirect = Some(crate::rcon::Redirect::default());
         match verdict {
