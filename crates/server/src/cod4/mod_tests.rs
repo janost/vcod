@@ -88,3 +88,66 @@ fn modwarfare_boots_its_own_scripts_and_names_the_mod_as_retail() {
         "the weapon files"
     );
 }
+
+/// A message whose reliableAcknowledge is i32::MIN, or a `clc_move` whose
+/// messageAcknowledge is, is dropped whole on a bare level: the server
+/// takes neither ack nor a delta base from it and its next frames go out
+/// as before.
+#[test]
+fn cod4_a_message_with_an_acknowledge_near_i32_min_is_ignored() {
+    use super::vote_tests::run_ms;
+    use super::wire_ab::Probe;
+    use std::time::Duration;
+    let mut sv = Cod4Server::new(
+        Cod4Config {
+            map: "mp_crash".into(),
+            gametype: "war".into(),
+            hostname: "vcod".into(),
+            max_clients: 4,
+        },
+        7,
+    );
+    sv.set_cvar("sv_pure", "0");
+    sv.load(None).unwrap();
+    let mut probes = vec![Probe::new("p", 0, 28961, 3600, &[])];
+    let mut now = Instant::now();
+    run_ms(&mut sv, &mut probes, &mut now, 6000);
+    let state = |sv: &Cod4Server| {
+        let c = sv.core.clients[0].as_ref().unwrap();
+        (
+            c.link.netchan.incoming_sequence,
+            c.link.reliable_ack,
+            c.delta_message,
+        )
+    };
+    let c = sv.core.clients[0].as_ref().unwrap();
+    assert!(c.state == State::Active && c.delta_message > 0);
+
+    let p = &mut probes[0];
+    let before = state(&sv);
+    // reliableAcknowledge is the plain header's last long.
+    let mut pkt = p.packet(sv.core.sv_time_ms);
+    pkt[11..15].copy_from_slice(&i32::MIN.to_le_bytes());
+    sv.handle_packet(p.addr, &pkt, now);
+    assert_eq!(state(&sv), before, "reliableAcknowledge i32::MIN");
+    now += Duration::from_millis(FRAME_MS as u64);
+    sv.tick_frames(now, 1);
+    assert!(!sv.take_outgoing().is_empty());
+
+    // The move is keyed and scrambled under the bad messageAcknowledge, as
+    // a client sending it would.
+    let ack = std::mem::replace(&mut p.ack, i32::MIN);
+    let pkt = p.packet(sv.core.sv_time_ms);
+    p.ack = ack;
+    let before = state(&sv);
+    sv.handle_packet(p.addr, &pkt, now);
+    assert_eq!(state(&sv), before, "messageAcknowledge i32::MIN");
+    now += Duration::from_millis(FRAME_MS as u64);
+    sv.tick_frames(now, 1);
+    assert!(!sv.take_outgoing().is_empty());
+
+    // The same move under good acks is taken.
+    let pkt = p.packet(sv.core.sv_time_ms);
+    sv.handle_packet(p.addr, &pkt, now);
+    assert_eq!(state(&sv).2, ack);
+}

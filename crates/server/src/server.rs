@@ -2656,13 +2656,8 @@ impl Server {
             return;
         }
         // 0x808ca1a drops an ack too far behind. One ahead of what we sent is
-        // bogus too; `write_pending_commands` walks `reliable_ack + 1 ..=
-        // reliable_sequence`, so an unbounded value overflows or loops for ages.
-        let reliable_seq = c.link.netchan.reliable_sequence as i32;
-        if m.reliable_ack < 0
-            || m.reliable_ack > reliable_seq
-            || reliable_seq.saturating_sub(m.reliable_ack) > MAX_RELIABLE_COMMANDS as i32 - 1
-        {
+        // bogus too.
+        if !c.link.reliable_ack_in_window(m.reliable_ack) {
             log::debug!(
                 "client {slot}: reliableAcknowledge {} out of range",
                 m.reliable_ack
@@ -3967,13 +3962,10 @@ impl Server {
         let Some(m) = z.link.netchan.process_in(pkt) else {
             return;
         };
-        let seq = z.link.netchan.reliable_sequence as i32;
         if (0..z.link.netchan.outgoing_sequence as i32).contains(&m.message_ack) {
             z.message_ack = m.message_ack;
         }
-        if (0..=seq).contains(&m.reliable_ack)
-            && seq - m.reliable_ack < MAX_RELIABLE_COMMANDS as i32
-        {
+        if z.link.reliable_ack_in_window(m.reliable_ack) {
             z.link.reliable_ack = m.reliable_ack;
         }
     }

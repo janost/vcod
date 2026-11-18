@@ -254,19 +254,17 @@ pub fn blocks_per_message(rate: i32, snapshot_msec: i32) -> u32 {
 /// then `<fs_basepath>/<name>` when the two differ, every run of `/` and
 /// `\` folded to one `/` (`FS_BuildOSPath` 0x809eab0), so a leading `/`
 /// stays under the root. vcod's own rules beyond retail's (cod2-protocol.md
-/// 17.5): a name with a `..` component opens nothing, where retail serves
-/// `<root>/../<file>`; retail's third root, `fs_cdpath` (empty, so the
-/// filesystem root) when the two paths match, is never tried; an empty path
-/// is no root; a directory opens nothing.
+/// 17.5): a name holding `..`, a colon (a Windows drive prefix) or a
+/// control character opens nothing, where retail serves `<root>/../<file>`;
+/// retail's third root, `fs_cdpath` (empty, so the filesystem root) when
+/// the two paths match, is never tried; an empty path is no root; a
+/// directory opens nothing.
 pub fn open_download(homepath: &str, basepath: &str, name: &str) -> Option<Vec<u8>> {
     let parts: Vec<&str> = name
         .split(['/', '\\'])
         .filter(|c| !c.is_empty() && *c != ".")
         .collect();
-    if parts.is_empty() || parts.contains(&"..") {
-        return None;
-    }
-    let rel: std::path::PathBuf = parts.iter().collect();
+    let rel = vcod_common::game_dir::confined_rel_path(&parts.join("/"))?;
     let base = (!basepath.eq_ignore_ascii_case(homepath)).then_some(basepath);
     [Some(homepath), base]
         .into_iter()
@@ -325,6 +323,10 @@ mod tests {
         let abs = dir.join("secret.txt").to_string_lossy().into_owned();
         assert_eq!(open(&abs), None);
         assert_eq!(open_download(&h, &h, &abs), None);
+        // A drive prefix would replace the root on Windows.
+        assert_eq!(open("C:main/zz_ok.txt"), None);
+        assert_eq!(open("D:\\Users\\x.txt"), None);
+        assert_eq!(open("main/zz_ok.txt:s"), None);
         assert_eq!(open("main"), None);
         assert_eq!(open(""), None);
         assert_eq!(open("."), None);

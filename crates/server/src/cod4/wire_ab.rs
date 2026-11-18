@@ -115,7 +115,8 @@ pub(super) struct Probe {
     chan: Netchan,
     parser: Parser,
     seq: u32,
-    ack: i32,
+    /// The messageAcknowledge each packet carries: the last message read.
+    pub(super) ack: i32,
     commands: Vec<Vec<u8>>,
     commands_acked: i32,
     last_cmd: UserCmd,

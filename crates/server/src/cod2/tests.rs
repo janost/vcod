@@ -164,6 +164,75 @@ fn a_cod2_spectator_joins_a_bare_server_and_takes_delta_snapshots() {
     assert_eq!(sv.client_count(), 0);
 }
 
+/// A `clc_move` of one idle cmd under the header's `message_ack` and
+/// `reliable_ack`, keyed as the client keys it.
+fn move_packet(cl: &mut Client, sv: &Cod2Server, message_ack: i32, reliable_ack: i32) -> Vec<u8> {
+    use vcod_cod2::net::usercmd::write_delta_usercmd;
+    use vcod_common::net::huffman::Huffman;
+    let huff = Huffman::new();
+    let server_cmd = cl
+        .parser
+        .server_command(cl.parser.server_command_sequence)
+        .to_vec();
+    let key = (sv.core.checksum_feed ^ message_ack ^ com_hash_key_bytes(&server_cmd, 32)) as u32;
+    let snap = cl.parser.snapshot().unwrap();
+    let from = default_usercmd(&snap.ps);
+    let cmd = cl.idle_cmd(snap.server_time + FRAME_MS);
+    let mut w = MsgWriter::new(&huff);
+    w.write_bits(Clc::Move as i32, CLC_BITS);
+    w.write_byte(1);
+    write_delta_usercmd(&mut w, key, &from, &cmd);
+    w.write_bits(Clc::Eof as i32, CLC_BITS);
+    let ops = w.into_ops();
+    cl.netchan
+        .build_out_keyed(
+            sv.server_id(),
+            message_ack,
+            reliable_ack,
+            &server_cmd,
+            &ops,
+            &huff,
+        )
+        .unwrap()
+}
+
+/// A message whose reliableAcknowledge is i32::MIN, or a `clc_move` whose
+/// messageAcknowledge is, is dropped whole: the server takes neither ack
+/// nor a delta base from it and its next frames go out as before.
+#[test]
+fn a_cod2_message_with_an_acknowledge_near_i32_min_is_ignored() {
+    let now = Instant::now();
+    let mut sv = Cod2Server::new(cfg("mp_toujane"), 7, now);
+    sv.load(None).unwrap();
+    let mut cl = connect(&mut sv, now);
+    let seen = run(&mut sv, &mut cl, None, 2);
+    assert!(seen.deltas > 0, "{seen:?}");
+    let good_ack = cl.netchan.incoming_sequence as i32;
+    let rel_ack = cl.parser.server_command_sequence;
+    let mut later = Instant::now() + Duration::from_secs(5);
+    for (message_ack, reliable_ack) in [(good_ack, i32::MIN), (i32::MIN, rel_ack)] {
+        let state = |sv: &Cod2Server| {
+            let c = sv.core.clients[0].as_ref().unwrap();
+            (
+                c.link.netchan.incoming_sequence,
+                c.link.reliable_ack,
+                c.delta_message,
+            )
+        };
+        let before = state(&sv);
+        let pkt = move_packet(&mut cl, &sv, message_ack, reliable_ack);
+        sv.handle_packet(addr(), &pkt, later);
+        assert_eq!(state(&sv), before, "acks ({message_ack}, {reliable_ack})");
+        later += Duration::from_millis(FRAME_MS as u64);
+        sv.tick_frames(later, 1);
+        assert!(!sv.take_outgoing().is_empty());
+    }
+    // The same move under good acks is taken.
+    let pkt = move_packet(&mut cl, &sv, good_ack, rel_ack);
+    sv.handle_packet(addr(), &pkt, later);
+    assert_eq!(sv.core.clients[0].as_ref().unwrap().delta_message, good_ack);
+}
+
 /// `heartbeat COD-2` to cod.pm's CoD2 port at `dedicated 2` only, every
 /// three minutes, and the flatline on `quit`; a loopback fake stands in
 /// for the master.
@@ -357,9 +426,15 @@ fn cod2_console_replies_read_as_retail() {
         ),
         ("banana", ""),
         ("say \"hi all\"", ""),
+        // Read off 1.3's dvar set, not run live (cod2-protocol.md 17.5).
+        ("set fs_homepath /", "fs_homepath is write protected.\n"),
+        ("set FS_BASEPATH /", "FS_BASEPATH is write protected.\n"),
+        ("seta fs_game ../x", "fs_game is write protected.\n"),
     ] {
         assert_eq!(exec(&mut sv, line), format!("print\n{reply}"), "{line}");
     }
+    assert_eq!(sv.cvar("fs_homepath"), "");
+    assert_eq!(sv.cvar("fs_game"), "");
     connect(&mut sv, now);
     let status = exec(&mut sv, "status");
     let row = status.lines().nth(4).unwrap_or_default();

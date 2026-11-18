@@ -226,6 +226,13 @@ impl VoteRules {
     };
 }
 
+/// A newline or other control byte in a vote argument. vcod's addition to
+/// retail's `;` test: the console splits a passed vote's command on `\n` and
+/// `\r`, so the argument would run as a command of its own.
+pub(crate) fn holds_control_byte(args: &[&str]) -> bool {
+    args.iter().any(|a| a.bytes().any(|b| b < b' '))
+}
+
 const NO_MAP: &str = "e \"\u{15}the server doesn't have that map\"";
 
 impl GameHost {
@@ -374,6 +381,7 @@ impl GameHost {
         if kind.contains(';')
             || arg2.contains(';')
             || (rules.checks_third_arg && arg(3).contains(';'))
+            || holds_control_byte(&[&kind, &arg2, arg(3)])
         {
             return reply("e \"GAME_INVALIDVOTESTRING\"");
         }
@@ -819,6 +827,44 @@ mod tests {
 
     fn to(slot: usize, m: &str) -> (Option<usize>, String) {
         (Some(slot), format!("e \"{m}\""))
+    }
+
+    /// A newline, carriage return or other control byte in any argument
+    /// refuses the call, on every game's rules: a passed vote's command is
+    /// one console line.
+    #[test]
+    fn a_control_byte_in_a_vote_argument_refuses_the_call() {
+        use crate::game::profile::{COD1_15, COD2, COD4};
+        for (profile, line) in [
+            (&COD4, "callvote map \"mp_crash\nquit\""),
+            (&COD4, "callvote typemap war \"mp_crash\rquit\""),
+            (&COD2, "callvote map \"mp_toujane\nquit\""),
+            (&COD1_15, "callvote drawfriend \"1\nquit\""),
+            (&COD1_15, "callvote killcam \"0\rkillserver\""),
+            (&COD1_15, "callvote \"map_restart\nquit\""),
+        ] {
+            let mut vm = vcod_gsc::Vm::new();
+            let mut h = host(&mut vm, &["axis", "allies"]);
+            h.profile = profile;
+            h.patch_1_5 = std::ptr::eq(profile, &COD1_15);
+            for name in ["g_allowVoteDrawFriend", "g_allowVoteKillCam"] {
+                h.cvars.set(name, "1");
+            }
+            h.cvars.set("scr_drawfriend", "0");
+            h.cvars.set("scr_killcam", "1");
+            assert_eq!(
+                call(&mut vm, &mut h, 0, line),
+                [to(0, "GAME_INVALIDVOTESTRING")],
+                "{line:?}"
+            );
+            assert_eq!((h.vote.end_ms, h.vote.command.as_str()), (0, ""));
+        }
+        // The same map vote without the newline runs one command.
+        let mut vm = vcod_gsc::Vm::new();
+        let mut h = host(&mut vm, &["axis", "allies"]);
+        h.profile = &COD4;
+        call(&mut vm, &mut h, 0, "callvote map mp_crash");
+        assert_eq!(h.vote.command, "map mp_crash");
     }
 
     /// CoD2's engine vote (cod2-protocol.md 3.4.2): the third argument's

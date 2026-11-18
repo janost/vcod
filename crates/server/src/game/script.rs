@@ -2591,7 +2591,8 @@ impl ScriptRuntime {
 
     /// CoD2's votes under `g_oldVoting` 0 (default 1): `Cmd_CallVote_f`
     /// (cod2_lnxded 0x80ffbb2) refuses under `g_allowVote` 0 or on a `;` in
-    /// its three arguments and otherwise notifies `call_vote` with them;
+    /// its three arguments (vcod also on a control byte) and otherwise
+    /// notifies `call_vote` with them;
     /// `Cmd_Vote_f` (0x8100960) notifies `vote` with "yes" when the first
     /// letter is `y` or the second `Y` or `1` (Q3's test, as read), else
     /// "no". VERIFIED, both functions and the dvar defaults. `None` where
@@ -2626,7 +2627,9 @@ impl ScriptRuntime {
             )]);
         }
         let (a, b, c) = (arg(1), arg(2), arg(3));
-        if [a, b, c].iter().any(|s| s.contains(';')) {
+        if [a, b, c].iter().any(|s| s.contains(';'))
+            || crate::game::vote::holds_control_byte(&[a, b, c])
+        {
             return Some(vec![(Some(slot), "e \"GAME_INVALIDVOTESTRING\"".into())]);
         }
         self.notify_client(slot, "call_vote", &[a, b, c]);
