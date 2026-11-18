@@ -489,7 +489,8 @@ Client:
   with none up, the server's `g_scriptMainMenu`. A menu vcod cannot
   evaluate shows as a numbered list (1-9 pick). `--team` and `--class`
   answer them unseen.
-- `vcod <map>` flies `zone/english/<map>.ff`. A map missing from
+- `vcod <map>` flies `zone/<language>/<map>.ff` (`english`, or the one
+  language a localized install holds). A map missing from
   `zone/<language>/` loads from `usermaps/<map>/<map>.ff`; under a mod
   that directory's iwds load too.
 - Joining downloads the mod and usermap files the server references and
