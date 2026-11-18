@@ -951,6 +951,17 @@ impl Cod4Session {
         command_time < oldest.server_time && oldest.server_time <= time
     }
 
+    /// Gamestates read since the join: a new one starts the cgame's level
+    /// state over.
+    pub fn gamestate_count(&self) -> u32 {
+        self.gamestates
+    }
+
+    #[cfg(test)]
+    pub(crate) fn add_gamestate_for_test(&mut self) {
+        self.gamestates += 1;
+    }
+
     /// The map a new gamestate names when it is not the loaded one, once:
     /// the caller loads it (a map change, `loadingnewmap`, then the
     /// gamestate; cod4-map-cycle.md 6). Any new gamestate starts the
