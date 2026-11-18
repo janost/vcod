@@ -671,9 +671,11 @@ impl AudioSystem {
     /// A CoD4 session's alias table, built from its zones (`cod4_audio`),
     /// played by 1.7's master scale and CoD2's slave rules
     /// (docs/research/cod4-sound.md 5); the current map's gamestate filters
-    /// it again.
+    /// it again. The table comes with a new search path, so every decoded
+    /// sound goes.
     pub fn set_cod4_aliases(&mut self, table: AliasTable) {
         self.aliases_all = table;
+        self.bank = SoundBank::at_rate(self.bank.rate);
         self.volume_scale = COD4_VOLUME_SCALE;
         self.chain_secondaries = true;
         self.entity_offsets = true;
@@ -3713,6 +3715,21 @@ mod tests {
         assert_eq!(COD4_VOLUME_SCALE, 0.75);
         let shell = crate::console::shell::Shell::new();
         assert_eq!(shell.cvar_f32("mss_volume") * a.volume_scale, 0.8 * 0.75);
+    }
+
+    /// A file a new CoD4 table's search path overlays under a name already
+    /// decoded plays the new file, not the old decode.
+    #[test]
+    fn a_cod4_table_drops_the_old_search_paths_decodes() {
+        use crate::audio::bank::tests::wav;
+        let mut fs = Pk3Fs::empty();
+        fs.overlay("sound/weapons/shot.wav", wav(100));
+        let mut a = silent(&fs, 0);
+        a.set_cod4_aliases(AliasTable::default());
+        assert_eq!(a.bank.get(&fs, "weapons/shot.wav").unwrap().frames.len(), 100);
+        fs.overlay("sound/weapons/shot.wav", wav(200));
+        a.set_cod4_aliases(AliasTable::default());
+        assert_eq!(a.bank.get(&fs, "weapons/shot.wav").unwrap().frames.len(), 200);
     }
 
     /// A silent system over a CoD2 table of `csv`, on mp_toujane.
