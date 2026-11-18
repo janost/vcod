@@ -556,19 +556,16 @@ impl Cod4Server {
             }
             "map" | "devmap" => {
                 let devmap = cmd.eq_ignore_ascii_case("devmap");
-                if let Err(e) = self.map_command(arg(1), devmap, out) {
-                    log::error!("cod4: {cmd} {}: {e:#}", arg(1));
-                }
+                let r = self.map_command(arg(1), devmap, out);
+                self.load_failed(&format!("{cmd} {}", arg(1)), r);
             }
             "map_restart" | "fast_restart" => {
-                if let Err(e) = self.map_restart(cmd.eq_ignore_ascii_case("fast_restart")) {
-                    log::error!("cod4: {cmd}: {e:#}");
-                }
+                let r = self.map_restart(cmd.eq_ignore_ascii_case("fast_restart"));
+                self.load_failed(cmd, r);
             }
             "map_rotate" => {
-                if let Err(e) = self.map_rotate(out) {
-                    log::error!("cod4: map_rotate: {e:#}");
-                }
+                let r = self.map_rotate(out);
+                self.load_failed("map_rotate", r);
             }
             "tempbanclient" | "tempbanuser" | "kick" | "onlykick" => {
                 self.kick_command(cmd, &args, out);

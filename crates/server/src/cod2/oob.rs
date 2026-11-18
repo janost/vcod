@@ -395,9 +395,8 @@ impl Cod2Server {
                     return;
                 }
                 let devmap = cmd.eq_ignore_ascii_case("devmap");
-                if let Err(e) = self.map_command(&name, devmap) {
-                    log::error!("cod2: map {name}: {e:#}");
-                }
+                let r = self.map_command(&name, devmap);
+                self.load_failed(&format!("map {name}"), r);
             }
             // `SV_MapRestart_f`, `SV_FastRestart_f` and `SV_MapRotate_f`.
             "map_restart" | "fast_restart" | "map_rotate" => {
@@ -406,9 +405,7 @@ impl Cod2Server {
                     "fast_restart" => self.fast_restart(),
                     _ => self.map_rotate(),
                 };
-                if let Err(e) = r {
-                    log::error!("cod2: {cmd}: {e:#}");
-                }
+                self.load_failed(cmd, r);
             }
             // vcod's bot management (`server/bot_admin.rs`, docs/bots.md).
             "addbot" => bot_admin::add_bot_command(self, &args[1..], out),

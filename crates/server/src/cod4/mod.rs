@@ -165,6 +165,9 @@ pub struct Cod4Game {
     /// `killserver` ran: no level, no packet answered (VERIFIED live:
     /// retail answers neither rcon nor `getinfo` after it).
     killed: bool,
+    /// A load that failed with the level torn down, for the loop to end the
+    /// process on ([`crate::engine::GameModule::take_fatal`]).
+    fatal: Option<anyhow::Error>,
     /// The domains `dvar_bool`, `dvar_int` and `dvar_float` gave the dvars
     /// they made, keyed by the folded name (`oob::Domain`).
     domains: std::collections::HashMap<String, oob::Domain>,
@@ -352,6 +355,9 @@ impl crate::engine::GameModule for Cod4Game {
     fn heartbeat(e: &mut Cod4Server) {
         e.heartbeat();
     }
+    fn take_fatal(e: &mut Cod4Server) -> Option<anyhow::Error> {
+        e.game.fatal.take()
+    }
 }
 
 impl conn::ConnGame for Cod4Game {
@@ -519,6 +525,7 @@ impl Cod4Server {
                 bots: None,
                 log: Default::default(),
                 killed: false,
+                fatal: None,
                 hold: vcod_common::rng::HoldRand(seed as u32),
                 // `sv_fps`, registered by `SV_Init` (0x81735c8).
                 domains: [(
@@ -651,8 +658,9 @@ impl Cod4Server {
         let now = self.core.sv_time_ms;
         let info = self.serverinfo();
         self.init_game_log(&info, now);
-        // A level owns the one cvar table while it runs.
-        let cvars = std::mem::take(&mut self.game.cvars);
+        // A level owns the one cvar table while it runs; a failed load
+        // hands it back.
+        let cvars = self.game.cvars.clone();
         let seed = self.game_seed();
         let mut level = crate::game::cod4::level::Cod4Level::load_with(
             &zones4,
@@ -667,6 +675,7 @@ impl Cod4Server {
             None,
             seed,
         )?;
+        self.game.cvars = Default::default();
         self.game.zones4 = Some(std::rc::Rc::new(zones4));
         // `SV_SpawnServer`'s frames ahead of the baselines.
         for _ in 0..SPAWN_FRAMES {
