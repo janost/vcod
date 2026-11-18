@@ -169,6 +169,9 @@ impl SnapshotView {
     }
 }
 
+/// The most an `x`..`z` join holds.
+const BIG_JOIN: usize = 8192;
+
 /// The configstring table, kept live.
 #[derive(Clone, Debug, Default)]
 pub struct ConfigStrings {
@@ -222,6 +225,12 @@ impl ConfigStrings {
             _ => {
                 let (bi, s) = self.big.as_mut().filter(|(bi, _)| *bi == i)?;
                 s.push_str(val);
+                // vcod's bound, the gamestate's `BIG_INFO_STRING`.
+                if s.len() >= BIG_JOIN {
+                    log::warn!("configstring {i}: chunked update past {BIG_JOIN} bytes");
+                    self.big = None;
+                    return None;
+                }
                 if letter == 'y' {
                     return None;
                 }
@@ -681,6 +690,24 @@ mod tests {
         assert_eq!(cs.weapon_name(3), None);
         assert_eq!(cs.apply_command(b"v ui_x \"0\""), None);
         assert_eq!(cs.apply_command(b"d 1 "), Some(1));
+        assert_eq!(cs.get(1), "");
+    }
+
+    /// A run of `y` chunks is dropped once it passes 8192 bytes.
+    #[test]
+    fn a_chunked_configstring_is_bounded() {
+        let mut cs = ConfigStrings {
+            strings: vec![String::new(); 2048],
+            big: None,
+        };
+        let piece = format!("y 1 {}", "a".repeat(1000));
+        assert_eq!(cs.apply_command(b"x 1 a"), None);
+        for _ in 0..100 {
+            assert_eq!(cs.apply_command(piece.as_bytes()), None);
+            assert!(cs.big.as_ref().map_or(0, |(_, s)| s.len()) < BIG_JOIN);
+        }
+        assert_eq!(cs.big, None);
+        assert_eq!(cs.apply_command(b"z 1 b"), None);
         assert_eq!(cs.get(1), "");
     }
 
