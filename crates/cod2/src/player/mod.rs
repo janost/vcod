@@ -183,7 +183,7 @@ pub fn gunner_placement(
     tags: (Vec3, Vec3),
     rotate_inc: f32,
 ) -> Option<vcod_common::turretpose::GunnerPlacement> {
-    if f.eflags & eflags::MOUNTED == 0 || rotate_inc <= 0.0 {
+    if f.eflags & eflags::MOUNTED == 0 {
         return None;
     }
     let PlayerAnimSet { anims, clips } = set;

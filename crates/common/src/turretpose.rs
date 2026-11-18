@@ -507,6 +507,11 @@ pub fn place_gunner_at(
     rotate_inc: f32,
     seconds: f32,
 ) -> Option<GunnerPlacement> {
+    // A turret file without `animHorRotateInc` reads 0; the column split
+    // below divides by it.
+    if rotate_inc.is_nan() || rotate_inc <= 0.0 {
+        return None;
+    }
     let tree = &anims.tree;
     let node = anims.index.node_id(legs_anim)?;
     if !anims.script.is_turret_anim(&tree.nodes[node].name) {
@@ -774,6 +779,33 @@ mod tests {
             // Horizontal only: z is the height handed in (turrets doc 7.2).
             let err = (at - Vec3::from(want)).truncate().length();
             assert!(err < 0.25, "line {line}: {at:?} vs {want:?}, off {err}");
+        }
+    }
+
+    /// No `animHorRotateInc` (0, or anything not positive) places no
+    /// gunner, where a centred barrel's 0 / 0 column gave a NaN origin.
+    #[test]
+    fn a_turret_without_a_rotate_inc_places_no_gunner() {
+        let Some(fs) = crate::testing::game_fs_11() else {
+            return;
+        };
+        let anims = PlayerAnims::load(&fs).unwrap();
+        let bones = crate::model::load_bones(&fs, "mg42_bipod").unwrap();
+        let tag = |n: &str| bones.iter().find(|b| b.name == n).unwrap().pos;
+        let tag_weapon = tag_weapon_local(tag("tag_aim"), tag("tag_weapon"), [0.0; 3]);
+        let turret = (Vec3::new(1712.0, 1830.0, 8.0), Quat::IDENTITY);
+        let legs = anims.wire_of("standMG42_aim").unwrap();
+        for inc in [0.0, -15.0, f32::NAN] {
+            let placed = place_gunner(
+                &anims,
+                |n| crate::xanim::load(&fs, n).ok().map(Rc::new),
+                legs,
+                tag_weapon,
+                turret,
+                Vec3::new(1742.2, 1857.1, -23.9),
+                inc,
+            );
+            assert!(placed.is_none(), "rotate_inc {inc}");
         }
     }
 

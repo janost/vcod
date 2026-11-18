@@ -725,7 +725,10 @@ which key a second translation at frame 5, (-15.99, 5.62) against (-15.33,
   `n / 2 - yaw / animHorRotateInc`, clamped to the row and split between the
   two columns either side. With 7 columns and 15 degrees the gun's yaw 0
   lands halfway between `forward` and `15left`, not on `forward`: the 0.5
-  multiplies `n`, not `n - 1`.
+  multiplies `n`, not `n - 1`. Every stock turret file sets
+  `animHorRotateInc`; vcod places no gunner on a gun whose value is 0 or
+  less (`turretpose::place_gunner_at`), where the division gives NaN. What
+  retail does with 0 is unread.
 - INFERRED, 7.1's control flow: the barrel's pitch is not read. The row is
   found by height: the target is the player's height above the gun minus
   `tag_weapon`'s height in the gun's frame, which the barrel's pitch moves
