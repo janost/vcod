@@ -14,8 +14,23 @@ The A/B gates against retail captures are in [retail.md](retail.md).
 | `COD2_DIR` | CoD2 1.3 | the CoD2 tests, `cod2_map_census` |
 | `COD4_DIR` | CoD4 1.7 | the CoD4 tests, `cod4_live_*`, `cod4_map_sweep`, `cod4_soak` |
 
-`COD_DIR` must be absolute: a relative path resolves in the crate's directory
-and every pak test passes vacuously.
+The helpers in `vcod_common::testing` (and `vcod_cod4::testing`) read
+`COD_DIR`, `COD2_DIR`, `COD4_DIR` and `COD4_LNXDED_DIR`:
+
+- Unset or empty: `None`, the test returns early and passes. Each test
+  binary prints one `vcod testing: COD_DIR is unset, ...` line per reason
+  on stderr, past libtest's capture, so a run shows what it skipped. The
+  version pickers print one too (`COD_DIR is not a 1.1 install`, `COD_DIR
+  has no uo/`).
+- Set to a relative path (it would resolve in the crate's directory), a
+  path without `main/` (`zone/` for CoD4), or a search path that opens no
+  paks: the helper panics with the variable and the path.
+- `VCOD_REQUIRE_INSTALL=<names>` makes a skip panic for each install it
+  names: `cod1` (`COD_DIR` set), `cod11` (a 1.1 install there), `uo`
+  (`uo/` beside `main/`), `cod2`, `cod4`, `cod4_lnxded`. A gate run sets
+  the names of the installs it means to test, so a wrong env cannot pass
+  with no pak test run: `cod1,cod11` at 1.1, `cod1,uo` at UO, plus `cod2`
+  and `cod4` when those are set. An unknown name panics.
 
 Pick the fixture helper by what the test asserts:
 
