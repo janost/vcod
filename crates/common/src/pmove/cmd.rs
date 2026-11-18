@@ -212,13 +212,13 @@ pub fn chop(command_time: i32, cmd: &UserCmd, mut step: impl FnMut(&UserCmd, f32
     let mut base = if dt_ms <= 0 {
         cmd.server_time
     } else if dt_ms > MAX_PMOVE_ARREARS_MS {
-        cmd.server_time - MAX_PMOVE_ARREARS_MS
+        cmd.server_time.wrapping_sub(MAX_PMOVE_ARREARS_MS)
     } else {
         command_time
     };
     while base != cmd.server_time {
-        let msec = (cmd.server_time - base).min(MAX_FRAME_MS as i32);
-        base += msec;
+        let msec = cmd.server_time.wrapping_sub(base).min(MAX_FRAME_MS as i32);
+        base = base.wrapping_add(msec);
         let at = UserCmd {
             server_time: base,
             ..cmd
