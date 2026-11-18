@@ -630,7 +630,7 @@ impl Table {
         self.cells
             .chunks(self.columns)
             .rev()
-            .find(|row| row[c].eq_ignore_ascii_case(value))
+            .find(|row| row.get(c).is_some_and(|v| v.eq_ignore_ascii_case(value)))
             .and_then(|row| row.get(r))
             .map_or("", String::as_str)
     }
@@ -1107,6 +1107,17 @@ pub fn colour_image(a: &Assets, m: &Material) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A ragged last row (cells not a multiple of the columns) reads "".
+    #[test]
+    fn a_ragged_table_reads_empty() {
+        let t = Table {
+            columns: 3,
+            cells: ["a", "b", "c", "d", "e"].map(String::from).to_vec(),
+        };
+        assert_eq!(t.lookup(2, "x", 0), "");
+        assert_eq!(t.lookup(2, "c", 0), "a");
+    }
 
     /// The stock killstreak and promotion splashes' labels.
     #[test]
