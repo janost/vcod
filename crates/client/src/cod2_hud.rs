@@ -542,7 +542,7 @@ impl Cod2Hud {
             ev.parm,
             own,
             &frame.snap.clients,
-            |weapon| kill_icon(icons, &frame.configstrings, weapon, fs),
+            |weapon| kill_icon(icons, frame.configstrings, weapon, fs),
             |team| team_rgb(cs, team),
         )
     }

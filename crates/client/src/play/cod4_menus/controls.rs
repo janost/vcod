@@ -1157,7 +1157,7 @@ impl ScriptMenus {
 pub fn list_rows(lb: &ListBox, h: f32) -> usize {
     // A hostile fastfile's NaN, infinite or tiny height would never end the loop.
     const MAX_ROWS: usize = 1024;
-    if !(lb.element_height > 0.0) || !h.is_finite() {
+    if lb.element_height.is_nan() || lb.element_height <= 0.0 || !h.is_finite() {
         return 0;
     }
     let mut size = h - 2.0;
