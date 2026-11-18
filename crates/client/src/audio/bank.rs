@@ -59,6 +59,16 @@ fn to_rate(d: StaticSoundData, rate: u32) -> StaticSoundData {
     }
 }
 
+/// vcod's cap on a loaded (not streamed) sound, about six minutes at
+/// 44.1 kHz, 128 MiB decoded: a pak's file decodes whole before it plays.
+const MAX_STATIC_FRAMES: u64 = 1 << 24;
+
+/// Whether `bytes` decode to `max` frames or fewer; a file no probe takes
+/// is left to the decoder to refuse.
+fn within_budget(bytes: &[u8], max: u64) -> bool {
+    crate::audio::stream::frame_count(bytes.to_vec()).is_none_or(|n| n <= max)
+}
+
 /// Alias `file` values are relative to `sound/`; some carry a leading slash.
 pub(crate) fn sound_path(file: &str) -> String {
     format!("sound/{}", file.trim_start_matches('/'))
@@ -79,6 +89,10 @@ impl SoundBank {
         if !self.cache.contains_key(&key) {
             let path = sound_path(file);
             let decoded = match fs.read(&path) {
+                Some(bytes) if !within_budget(&bytes, MAX_STATIC_FRAMES) => {
+                    log::warn!("sound {path}: longer than {MAX_STATIC_FRAMES} frames, not loaded");
+                    None
+                }
                 Some(bytes) => match StaticSoundData::from_cursor(Cursor::new(bytes)) {
                     Ok(d) => Some(to_rate(d, self.rate)),
                     Err(e) => {
@@ -152,6 +166,37 @@ mod tests {
             settings: Default::default(),
             slice: None,
         }
+    }
+
+    /// An 8-bit mono WAV of `frames` frames at 8 kHz.
+    fn wav(frames: u32) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend(b"RIFF");
+        b.extend((36 + frames).to_le_bytes());
+        b.extend(b"WAVEfmt ");
+        b.extend(16u32.to_le_bytes());
+        b.extend(1u16.to_le_bytes()); // PCM
+        b.extend(1u16.to_le_bytes()); // mono
+        b.extend(8000u32.to_le_bytes());
+        b.extend(8000u32.to_le_bytes());
+        b.extend(1u16.to_le_bytes());
+        b.extend(8u16.to_le_bytes());
+        b.extend(b"data");
+        b.extend(frames.to_le_bytes());
+        b.resize(b.len() + frames as usize, 0x80);
+        b
+    }
+
+    /// A loaded sound is measured before it decodes: one past the budget
+    /// is refused, one at it decodes to that many frames.
+    #[test]
+    fn a_sound_past_the_frame_budget_is_refused() {
+        assert_eq!(crate::audio::stream::frame_count(wav(5000)), Some(5000));
+        assert!(within_budget(&wav(5000), 5000));
+        assert!(!within_budget(&wav(5001), 5000));
+        assert!(within_budget(b"not a sound", 5000));
+        let d = StaticSoundData::from_cursor(Cursor::new(wav(5000))).unwrap();
+        assert_eq!(d.frames.len(), 5000);
     }
 
     #[test]

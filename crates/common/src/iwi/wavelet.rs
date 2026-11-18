@@ -226,6 +226,17 @@ pub(super) fn decode(
         let (lw, lh) = ((w >> level).max(1) as usize, (h >> level).max(1) as usize);
         let mut level_faces = Vec::with_capacity(faces);
         for prev in base.iter_mut() {
+            if lw >= 2 && lh >= 2 {
+                // Each block reads at least a rounding bit per coded byte,
+                // after the level's refine bit: refuse a stream too short for
+                // that before allocating the level.
+                let from = bits.as_ref().map_or(byte * 8, |s| s.pos);
+                let least = 1 + (lw / 2) * (lh / 2) * src;
+                ensure!(
+                    from + least <= pixels.len() * 8,
+                    "wavelet iwi truncated: {lw}x{lh} level"
+                );
+            }
             let mut px = vec![0u8; lw * lh * out];
             if lw < 2 || lh < 2 {
                 // stored raw, before the bit stream starts
@@ -253,7 +264,9 @@ pub(super) fn decode(
                 refine_base(s, t, prev, src, out);
                 code_level(s, t, prev, &mut px, lw, src, out);
             }
-            *prev = px.clone();
+            if level > 0 {
+                *prev = px.clone();
+            }
             level_faces.push(px);
         }
         // the window keeps the next 16 bits in view; the level ends at the
@@ -410,5 +423,25 @@ mod tests {
         assert_eq!(levels.len(), 2);
         assert_eq!(levels[1].faces[0], [10, 20, 30, 0xff]);
         assert_eq!(levels[0].faces[0], [10, 20, 30, 0xff].repeat(4));
+    }
+
+    /// A header claiming a large level over a stream a few bytes long is
+    /// refused before the level is allocated.
+    #[test]
+    fn a_level_longer_than_the_stream_is_refused() {
+        let tables = WaveletTables {
+            blue: one_bit(0, 2),
+            red_green: one_bit(0, 1),
+            alpha: one_bit(0, 1),
+        };
+        // 8192 square, 14 levels: 1x1 raw, then 2x2 on up coded
+        let data = vec![0u8; 64];
+        let Err(e) = decode(&tables, &data, (8192, 8192), 14, 1, 4) else {
+            panic!("decoded");
+        };
+        assert!(e.to_string().contains("truncated"), "{e}");
+        // the 2x2 level reads 17 bits after the 4 raw bytes
+        assert!(decode(&tables, &[1, 2, 3, 4], (2, 2), 2, 1, 4).is_err());
+        assert!(decode(&tables, &[1, 2, 3, 4, 0, 0, 0], (2, 2), 2, 1, 4).is_ok());
     }
 }

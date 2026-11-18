@@ -143,6 +143,38 @@ pub fn open(bytes: Vec<u8>, rate: u32) -> Result<Resampled<FileDecoder>, FromFil
     Ok(Resampled::new(d, rate))
 }
 
+/// The frames `bytes` decode to, read off the default track's packet
+/// durations without decoding; `None` when no probe takes the file. Stops
+/// counting at the first bad packet, as a decode would.
+pub fn frame_count(bytes: Vec<u8>) -> Option<u64> {
+    let mss = MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes)), Default::default());
+    let mut reader = symphonia::default::get_probe()
+        .probe(
+            &Hint::default(),
+            mss,
+            Default::default(),
+            Default::default(),
+        )
+        .ok()?;
+    let track = reader.default_track(TrackType::Audio)?;
+    let id = track.id;
+    let Some(CodecParameters::Audio(params)) = track.codec_params.as_ref() else {
+        return None;
+    };
+    let rate = u128::from(params.sample_rate?);
+    // Packet durations are in the track's time base; frames are at `rate`.
+    let (numer, denom) = track.time_base.map_or((1, rate.max(1)), |tb| {
+        (u128::from(tb.numer.get()), u128::from(tb.denom.get()))
+    });
+    let mut dur = 0u128;
+    while let Ok(Some(p)) = reader.next_packet() {
+        if p.track_id == id {
+            dur += u128::from(p.dur.get());
+        }
+    }
+    u64::try_from(dur * numer * rate / denom).ok()
+}
+
 /// kira's own symphonia decoder (`kira::sound::streaming::SymphoniaDecoder`,
 /// crate-private), so a stream can be wrapped before kira takes it.
 pub struct FileDecoder {

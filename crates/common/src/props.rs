@@ -299,7 +299,7 @@ pub fn build(
     lighting: &mut StaticLighting,
     skin_draw: &dyn Fn(&str) -> SkinDraw,
 ) -> Props {
-    build_with(fs, &bsp.entities, Some(lighting), skin_draw)
+    build_with(fs, &bsp.entities, Some(lighting), skin_draw, MAX_PROP_VERTS)
 }
 
 /// The name `R_FindShader` (CoDMP.exe 0x4fc5c0) looks a model skin up by:
@@ -337,14 +337,22 @@ pub fn skin_type(skin: &str) -> Option<String> {
     Some(stem[start..at].to_ascii_lowercase())
 }
 
+/// vcod's cap on the vertices [`build`] bakes for one map, a dozen times
+/// the most a stock map bakes (mp_hurtgen, about 670k): a map's entity
+/// lump names any number of placements.
+const MAX_PROP_VERTS: usize = 8 << 20;
+
 /// A batch's skin, and its placement when the skin reflects.
 type GroupKey = (String, Option<u32>);
 
+/// [`build`] baking no more than `max_verts` vertices: a placement past
+/// them is skipped as an unloadable model is.
 fn build_with(
     fs: &dyn AssetSource,
     entities: &str,
     mut lighting: Option<&mut StaticLighting>,
     skin_draw: &dyn Fn(&str) -> SkinDraw,
+    max_verts: usize,
 ) -> Props {
     let placements = placements(entities);
     let mut gens: HashMap<String, SkinGen> = HashMap::new();
@@ -394,6 +402,21 @@ fn build_with(
             lods.push(lod);
             continue;
         };
+        let n: usize = model
+            .lods
+            .iter()
+            .flat_map(|l| &l.surfaces)
+            .map(|s| s.verts.len())
+            .sum();
+        if verts.len() + n > max_verts {
+            log::warn!(
+                "props: {} past {max_verts} baked vertices, not drawn",
+                p.model
+            );
+            bounds.push((Vec3::ZERO, Vec3::ZERO));
+            lods.push(lod);
+            continue;
+        }
         drawn += 1;
         lod.dists = model.lod_dists();
         lods.push(lod);
@@ -952,13 +975,32 @@ mod tests {
         }
     }
 
+    /// Past the vertex cap a placement bakes nothing, as an unloadable
+    /// model does; the ones before it bake whole.
+    #[test]
+    fn build_stops_baking_at_the_vertex_cap() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let one = "{\n\"model\" \"xmodel/crate_misc1a\"\n\"origin\" \"0 0 0\"\n\"classname\" \"misc_model\"\n}";
+        let n = build_with(&fs, one, None, &|_| SkinDraw::default(), MAX_PROP_VERTS)
+            .verts
+            .len();
+        assert!(n > 0);
+        let three = [one; 3].join("\n");
+        let props = build_with(&fs, &three, None, &|_| SkinDraw::default(), 2 * n);
+        assert_eq!(props.verts.len(), 2 * n);
+        assert_eq!(props.bounds.len(), 3);
+        assert_eq!(props.bounds[2], (Vec3::ZERO, Vec3::ZERO));
+    }
+
     #[test]
     fn build_reports_placement_ranges_and_bounds() {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
         let ents = "{\n\"model\" \"xmodel/crate_misc1a\"\n\"origin\" \"100 200 300\"\n\"classname\" \"misc_model\"\n}";
-        let props = build_with(&fs, ents, None, &|_| SkinDraw::default());
+        let props = build_with(&fs, ents, None, &|_| SkinDraw::default(), MAX_PROP_VERTS);
         assert_eq!(props.bounds.len(), 1);
         let (lo, hi) = props.bounds[0];
         assert!(
@@ -1006,7 +1048,7 @@ mod tests {
             reflects: skin.starts_with("metal_env@"),
             ..SkinDraw::default()
         };
-        let props = build_with(&fs, &ents, None, &skin_draw);
+        let props = build_with(&fs, &ents, None, &skin_draw, MAX_PROP_VERTS);
         let body: Vec<&Batch> = props
             .batches
             .iter()

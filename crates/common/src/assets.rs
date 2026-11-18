@@ -614,17 +614,57 @@ pub fn load_path_image(fs: &dyn AssetSource, path: &str) -> Image {
 /// taken leaves no mark, and one taken again (another map's load, while
 /// the client keeps the cache) marks again. A path that failed to read or
 /// decode is not kept, so each taker reads it again and warns as before.
-#[derive(Default)]
+/// Past [`DECODED_BUDGET`] bytes nothing more is kept: the rest decode on
+/// each take.
 pub struct DecodedImages {
     images: std::sync::Mutex<HashMap<String, Image>>,
+    budget: usize,
+}
+
+impl Default for DecodedImages {
+    fn default() -> Self {
+        Self::with_budget(DECODED_BUDGET)
+    }
+}
+
+/// [`DecodedImages`]' cap on the bytes it holds, well above a stock map's
+/// textures: a pak's images decode up to `MAX_IMAGE_DIM` square each.
+pub const DECODED_BUDGET: usize = 2 << 30;
+
+/// The bytes `img` holds.
+fn image_bytes(img: &Image) -> usize {
+    match &img.data {
+        ImageData::Rgba8(v) => v.len(),
+        ImageData::Bc { mips, .. } => mips.iter().map(Vec::len).sum(),
+    }
 }
 
 impl DecodedImages {
+    /// A cache that keeps at most `budget` bytes.
+    pub fn with_budget(budget: usize) -> Self {
+        DecodedImages {
+            images: Default::default(),
+            budget,
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Image>> {
         self.images.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// The `paths` not held yet, read (unflagged) and decoded in parallel.
+    fn held_bytes(held: &HashMap<String, Image>) -> usize {
+        held.values().map(image_bytes).sum()
+    }
+
+    /// Keeps `img` under `path` while the budget allows.
+    fn keep(&self, held: &mut HashMap<String, Image>, path: String, img: Image) {
+        if Self::held_bytes(held) + image_bytes(&img) <= self.budget {
+            held.insert(path, img);
+        }
+    }
+
+    /// The `paths` not held yet, read (unflagged) and decoded in parallel,
+    /// a few per core at a time, until the budget is spent.
     pub fn prefetch(&self, fs: &Pk3Fs, paths: impl IntoIterator<Item = String>) {
         let mut paths: Vec<String> = {
             let held = self.lock();
@@ -635,14 +675,20 @@ impl DecodedImages {
         };
         paths.sort_unstable();
         paths.dedup();
-        let images = crate::laps::par_map(&paths, |path| {
-            let raw = fs.read_unflagged(path)?;
-            decode_image(&extension(path), &raw).ok()
-        });
-        let mut held = self.lock();
-        for (p, img) in paths.into_iter().zip(images) {
-            if let Some(img) = img {
-                held.insert(p, img);
+        let chunk = 4 * std::thread::available_parallelism().map_or(1, |n| n.get());
+        for paths in paths.chunks(chunk) {
+            if Self::held_bytes(&self.lock()) >= self.budget {
+                break;
+            }
+            let images = crate::laps::par_map(paths, |path| {
+                let raw = fs.read_unflagged(path)?;
+                decode_image(&extension(path), &raw).ok()
+            });
+            let mut held = self.lock();
+            for (p, img) in paths.iter().zip(images) {
+                if let Some(img) = img {
+                    self.keep(&mut held, p.clone(), img);
+                }
             }
         }
     }
@@ -661,7 +707,7 @@ impl DecodedImages {
             return img;
         }
         if let Some(img) = find_image(fs, path, &extension(path), path) {
-            self.lock().insert(path.to_string(), img.clone());
+            self.keep(&mut self.lock(), path.to_string(), img.clone());
             return img;
         }
         log::warn!("no texture found for {path}, using the default image");
@@ -850,6 +896,24 @@ mod tests {
         let missing = |p: &str| Image::find(&fs, p).err().map(|e| e.is::<ImageMissing>());
         assert_eq!(missing("gfx/b.tga"), Some(true));
         assert_eq!(missing("gfx/bad.dds"), Some(false));
+    }
+
+    /// The decoded cache stops keeping images at its byte budget; a path
+    /// past it still loads, decoded again on each take.
+    #[test]
+    fn decoded_images_hold_no_more_than_their_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let tga = gray_tga(4, 4);
+        let pk3 = crate::testing::pk3_with(&[("a.tga", &tga), ("b.tga", &tga), ("c.tga", &tga)]);
+        std::fs::write(dir.path().join("pak0.pk3"), pk3).unwrap();
+        let fs = Pk3Fs::open(dir.path()).unwrap();
+        // two 4x4 RGBA images
+        let cache = DecodedImages::with_budget(2 * 64);
+        cache.prefetch(&fs, ["a.tga", "b.tga", "c.tga"].map(String::from));
+        assert_eq!(cache.len(), 2);
+        assert!(cache.take(&fs, "c.tga").is_none());
+        let c = cache.load_path_image(&fs, "c.tga");
+        assert_eq!((c.width, c.height, cache.len()), (4, 4, 2));
     }
 
     #[test]
