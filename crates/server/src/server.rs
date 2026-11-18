@@ -4621,6 +4621,8 @@ impl Server {
         self.game.module.driver.covers.clear();
         self.game.module.driver.hunts.clear();
         self.game.module.driver.creases = Default::default();
+        self.game.module.bot_parked = Default::default();
+        self.game.module.bot_drives = Default::default();
     }
 
     /// The cvar table a gametype script starts with: the engine defaults,
@@ -5463,6 +5465,9 @@ impl Server {
         self.load_scripts_with(fs, true, carry, save_persist)
             .map_err(LoadFailure::Fatal)?;
         drop(p);
+        // The bots' read of the old level's vehicles goes with it.
+        self.game.module.bot_parked = Default::default();
+        self.game.module.bot_drives.restart();
         self.print(&game_init_tail(self.team_counts()));
         // Step 8. The incoming level's whole table goes into the diff's copy
         // in one go: what a client learns of it is the burst below, measured
