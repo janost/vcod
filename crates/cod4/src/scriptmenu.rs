@@ -19,10 +19,6 @@ pub struct ScriptMenu {
     pub responses: Vec<String>,
     /// `onEsc`'s `scriptMenuResponse`, if it sends one.
     pub esc: Option<String>,
-    /// What `onOpen` opens: `(Some((dvar, value)), menu)` for an
-    /// `openMenuOnDvar` that opens `menu` when `dvar` reads `value`,
-    /// `(None, menu)` for a plain `open`.
-    pub opens: Vec<(Option<(String, String)>, String)>,
     /// The menu as drawn; `None` for one known only by its responses.
     pub layout: Option<Layout>,
 }
@@ -447,39 +443,7 @@ impl ScriptMenu {
             }
         }
         out.esc = m.on_esc.as_deref().and_then(response);
-        if let Some(open) = &m.on_open {
-            let t = tokens(open);
-            let mut i = 0;
-            while i < t.len() {
-                let rest = &t[i..];
-                if rest.len() >= 5
-                    && rest[0].eq_ignore_ascii_case("uiScript")
-                    && rest[1].eq_ignore_ascii_case("openMenuOnDvar")
-                {
-                    out.opens
-                        .push((Some((rest[2].clone(), rest[3].clone())), rest[4].clone()));
-                    i += 5;
-                } else if rest.len() >= 2 && rest[0].eq_ignore_ascii_case("open") {
-                    out.opens.push((None, rest[1].clone()));
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-            }
-        }
         out
-    }
-
-    /// The menu that shows when this one opens: the first redirect whose
-    /// dvar `dvar` reads as it asks, or this one.
-    pub fn shown(&self, dvar: impl Fn(&str) -> Option<String>) -> &str {
-        self.opens
-            .iter()
-            .find(|(when, _)| match when {
-                Some((d, v)) => dvar(d).is_some_and(|x| x == *v),
-                None => true,
-            })
-            .map_or(self.name.as_str(), |(_, m)| m.as_str())
     }
 }
 

@@ -3,6 +3,7 @@
 //! game message windows (cod4-hud.md 1, 3).
 
 use vcod_cod4::hud::HudAssets;
+use vcod_cod4::scriptmenu::Cmd;
 use vcod_cod4::testing::cod4_install;
 
 #[test]
@@ -148,10 +149,22 @@ fn the_team_and_class_menus_list_their_responses() {
     );
     assert_eq!(team.esc.as_deref(), Some("back"));
     let marines = &a.script_menus["changeclass_marines"];
-    let online = |d: &str| (d == "onlinegame").then(|| "1".to_string());
-    assert_eq!(marines.shown(online), "changeclass");
-    let offline = |d: &str| (d == "onlinegame").then(|| "0".to_string());
-    assert_eq!(marines.shown(offline), "changeclass_offline");
+    let on_open = &marines.layout.as_ref().expect("a drawn menu").on_open;
+    // The menu `onOpen` redirects to under `onlinegame` reading `online`.
+    let shown = |online: &str| {
+        on_open.iter().find_map(|c| match c {
+            Cmd::OpenMenuOnDvar {
+                dvar,
+                value,
+                menu,
+                not,
+            } if dvar == "onlinegame" => ((value == online) != *not).then_some(menu.as_str()),
+            Cmd::Open(menu) => Some(menu.as_str()),
+            _ => None,
+        })
+    };
+    assert_eq!(shown("1"), Some("changeclass"));
+    assert_eq!(shown("0"), Some("changeclass_offline"));
     let class = &a.script_menus["changeclass"];
     assert_eq!(
         &class.responses[..5],

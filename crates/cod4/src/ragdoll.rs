@@ -83,12 +83,12 @@ pub struct JointDef {
     pub limits: [Option<Limit>; 3],
 }
 
-/// `ragdoll_baselerp_bone <def> <bone> <msec> [<ragdoll bone>]`.
+/// `ragdoll_baselerp_bone <def> <bone> <msec> [<ragdoll bone>]`; nothing
+/// reads the optional ragdoll bone, so it is not kept.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BaseLerp {
     pub bone: String,
     pub msec: i32,
-    pub body: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -221,7 +221,6 @@ fn apply(defs: &mut [RagdollDef; RAGDOLL_DEFS], cmd: &str, a: &[&str]) -> Result
             def.base_lerp.push(BaseLerp {
                 bone: arg(1)?.to_string(),
                 msec: int(2)?,
-                body: a.get(3).and_then(|s| s.parse().ok()),
             })
         }
         // `ragdoll_pin_bone` is a single-player def's; MP's cfg has none.
@@ -1310,7 +1309,6 @@ ragdoll_baselerp_bone 1 j_hiptwist_le 1000 8
         assert_eq!(d.joints[0].kind, JointKind::Swivel);
         assert_eq!(d.joints[0].limits[0].unwrap().max, 50.0);
         assert_eq!(d.joints[1].limits[2].unwrap().min, -120.0);
-        assert_eq!(d.base_lerp[1].body, Some(8));
         assert_eq!(d.base_lerp[0].msec, 2000);
     }
 
