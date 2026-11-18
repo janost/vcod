@@ -34,6 +34,8 @@ pub struct ProfileStats {
     path: PathBuf,
     saved: Stats,
     changed_at: Option<Instant>,
+    /// Writes failed since the last one that worked: only the first warns.
+    failures: u32,
     /// The file was there: no `LiveStorage_StatsInit` for this profile.
     found: bool,
 }
@@ -71,6 +73,7 @@ impl ProfileStats {
             path,
             saved: stats.clone(),
             changed_at: None,
+            failures: 0,
             found,
         };
         Some((p, stats))
@@ -87,7 +90,8 @@ impl ProfileStats {
     }
 
     /// `stats` as the session holds them now: written once they have
-    /// settled past a change, or at once with `now` (the disconnect).
+    /// settled past a change, or at once with `now` (the disconnect). A
+    /// failed write waits the settle time again before the next try.
     pub fn save(&mut self, stats: &Stats, now: bool) {
         if stats.0[4..] == self.saved.0[4..] || !self.dir.is_dir() {
             self.changed_at = None;
@@ -109,8 +113,15 @@ impl ProfileStats {
                 log::info!("Successfully wrote stats data");
                 self.saved = stats.clone();
                 self.changed_at = None;
+                self.failures = 0;
             }
-            Err(e) => log::warn!("Unable to write stats: {} ({e}).", self.path.display()),
+            Err(e) => {
+                if self.failures == 0 {
+                    log::warn!("Unable to write stats: {} ({e}).", self.path.display());
+                }
+                self.failures += 1;
+                self.changed_at = Some(Instant::now());
+            }
         }
     }
 }
@@ -140,6 +151,26 @@ mod tests {
         std::fs::write(&file, [7u8; 16]).unwrap();
         let (_, fresh) = ProfileStats::load_from(root, "").unwrap();
         assert_eq!(fresh.0[..], Stats::fresh().0[..]);
+    }
+
+    /// A write that fails is tried again only once the settle time has
+    /// passed again, not on every frame.
+    #[test]
+    fn a_failed_write_waits_the_settle_time() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let tester = root.join("players/profiles/tester");
+        std::fs::create_dir_all(&tester).unwrap();
+        std::fs::write(root.join("players/profiles/active.txt"), "tester").unwrap();
+        // A file where the mod's directory goes: the write cannot be made.
+        std::fs::write(tester.join("m"), b"").unwrap();
+        let (mut p, mut stats) = ProfileStats::load_from(root, "m").unwrap();
+        stats.set(2301, 4200);
+        p.changed_at = Some(Instant::now() - std::time::Duration::from_secs(SETTLE_SECS + 1));
+        for _ in 0..50 {
+            p.save(&stats, false);
+        }
+        assert_eq!(p.failures, 1);
     }
 
     /// A mod's stats sit in the profile's `<fs_game>/`; an `fs_game` that
