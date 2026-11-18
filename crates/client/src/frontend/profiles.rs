@@ -89,9 +89,11 @@ impl Profiles {
 
     /// The row showing `name`, in any case.
     fn row_of(&self, name: &str) -> Option<usize> {
-        self.order
-            .iter()
-            .position(|&i| self.names.get(i).is_some_and(|n| n.eq_ignore_ascii_case(name)))
+        self.order.iter().position(|&i| {
+            self.names
+                .get(i)
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        })
     }
 
     fn name_at(&self, row: usize) -> Option<&str> {

@@ -3726,10 +3726,16 @@ mod tests {
         fs.overlay("sound/weapons/shot.wav", wav(100));
         let mut a = silent(&fs, 0);
         a.set_cod4_aliases(AliasTable::default());
-        assert_eq!(a.bank.get(&fs, "weapons/shot.wav").unwrap().frames.len(), 100);
+        assert_eq!(
+            a.bank.get(&fs, "weapons/shot.wav").unwrap().frames.len(),
+            100
+        );
         fs.overlay("sound/weapons/shot.wav", wav(200));
         a.set_cod4_aliases(AliasTable::default());
-        assert_eq!(a.bank.get(&fs, "weapons/shot.wav").unwrap().frames.len(), 200);
+        assert_eq!(
+            a.bank.get(&fs, "weapons/shot.wav").unwrap().frames.len(),
+            200
+        );
     }
 
     /// A silent system over a CoD2 table of `csv`, on mp_toujane.

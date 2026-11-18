@@ -1124,7 +1124,12 @@ mod flow {
         assert_eq!(ui.profile_selected(), None);
         shell.execute("set com_playerProfile Tester");
         let mut out = Vec::new();
-        ui.run(m, &script("uiScript selectActivePlayerProfile"), &shell, &mut out);
+        ui.run(
+            m,
+            &script("uiScript selectActivePlayerProfile"),
+            &shell,
+            &mut out,
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

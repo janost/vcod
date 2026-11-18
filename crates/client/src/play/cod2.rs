@@ -3481,8 +3481,11 @@ mod tests {
             www_download: false,
             ..ConnectOpts::default()
         };
-        let mut connecting =
-            Some(Cod2Session::connect_in_background(&addr, opts, Duration::from_secs(15)));
+        let mut connecting = Some(Cod2Session::connect_in_background(
+            &addr,
+            opts,
+            Duration::from_secs(15),
+        ));
         let (mut buf, mut next) = ([0u8; 4096], Instant::now());
         let (mut joined, mut freed) = (None, false);
         let t0 = Instant::now();
