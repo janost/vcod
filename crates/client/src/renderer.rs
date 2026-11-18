@@ -5710,6 +5710,13 @@ impl Renderer {
                     .then(|| (r.first, vcod_common::vis::soup_bounds(bsp, si)))
             })
             .collect();
+        // A material over several lightmaps or lights pushed its slot once
+        // per batch; the frame writes each slot once, with the last push's
+        // params as the repeated writes left it.
+        let mut written = HashSet::new();
+        animated.reverse();
+        animated.retain(|(_, _, slot)| written.insert(*slot));
+        animated.reverse();
         self.world = Some(WorldGpu {
             sun_casters,
             vertex_buf,
