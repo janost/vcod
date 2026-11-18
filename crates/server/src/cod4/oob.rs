@@ -467,8 +467,12 @@ impl Cod4Server {
         let qport = u16::from_le_bytes([body[0], body[1]]);
         let idx = usize::from(body[2]);
         let data = &body[3..];
-        let Some(slot) = crate::engine::conn::slot_of(&self.core, from, qport) else {
-            log::warn!("Received stats packet from unknown remote client {from}");
+        // vcod takes the slot's own address only, and logs a miss at debug:
+        // the line is retail's, but anyone can send the packet.
+        let Some(slot) = crate::engine::conn::slot_of(&self.core, from, qport)
+            .filter(|&s| self.core.clients[s].as_ref().unwrap().link.addr == from)
+        else {
+            log::debug!("Received stats packet from unknown remote client {from}");
             return;
         };
         if idx >= STAT_PACKETS {
@@ -483,16 +487,21 @@ impl Cod4Server {
         }
         let svs = self.core.sv_time_ms;
         let c = self.core.clients[slot].as_mut().unwrap();
-        log::debug!("Received packet {idx} of stats data");
-        c.extra.stats.0[start..start + len].copy_from_slice(&data[..len]);
-        c.extra.stat_packets |= 1 << idx;
-        c.link.last_packet_ms = svs;
-        let left = !c.extra.stat_packets & 0x7f;
-        if left == 0
-            && let Some(level) = self.game.level.as_mut()
-        {
-            level.set_stats(slot, &c.extra.stats);
+        // Only a slot waiting for its gamestate (after `connect`, or after
+        // a map change's `requeststats`) takes stats; any other answers
+        // with its mask and keeps its block (vcod's, cod4-handshake.md 3).
+        if c.state == State::Connected {
+            log::debug!("Received packet {idx} of stats data");
+            c.extra.stats.0[start..start + len].copy_from_slice(&data[..len]);
+            c.extra.stat_packets |= 1 << idx;
+            c.link.last_packet_ms = svs;
+            if c.extra.stat_packets == 0x7f
+                && let Some(level) = self.game.level.as_mut()
+            {
+                level.set_stats(slot, &c.extra.stats);
+            }
         }
+        let left = !c.extra.stat_packets & 0x7f;
         self.send_oob(from, &format!("statResponse {left}"));
     }
 

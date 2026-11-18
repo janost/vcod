@@ -69,6 +69,11 @@ and reader below against that section).
   walk goes on; otherwise `lastPacketTime` takes `svs.time`, then a state
   under 4 goes to `SV_PreGameUserVoice`, state 4 to `SV_UserVoice`, and the
   walk ends. VERIFIED (Mac 0x159e36).
+- vcod matches the slot the same way but takes neither the new port nor
+  the keep-alive from a packet off another port: anyone on the client's
+  IP who walks the qport could otherwise steer its snapshots or hold its
+  slot. The netchan's next message, which passes its sequence checks,
+  moves a translated port (`Cod2Server::voice_packet`).
 - The qport is `MSG_ReadShort`'s, sign-extended (Mac 0x1735cc returns
   `(int)(short)`), and compared with the slot's netchan qport as read off
   `connect`'s `atoi`, unmasked; `SV_PacketEvent` (Mac 0x15b836) masks its

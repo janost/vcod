@@ -132,3 +132,35 @@ fn a_cod4_reconnect_refused_by_g_password_frees_the_slot() {
     assert!(reply[0].ends_with(b"error\nGAME_INVALIDPASSWORD"));
     assert!(sv.core.clients[0].is_none());
 }
+
+/// `stats` and `v` from another port of the client's address under its
+/// qport change nothing: no stats chunk, no keep-alive. A `stats` from the
+/// client itself once it is in the world is answered with its mask and
+/// leaves the block the scripts read alone.
+#[test]
+fn a_cod4_stats_or_voice_packet_off_another_port_changes_no_slot() {
+    use vcod_cod4::net::stats::{STAT_CHUNK, Stats};
+    let (mut sv, mut p, now) = joined();
+    let forged = |idx: u8| {
+        let mut d = b"\xff\xff\xff\xffstats\0".to_vec();
+        d.extend_from_slice(&p.qport.to_le_bytes());
+        d.push(idx);
+        d.extend_from_slice(&[0xab; STAT_CHUNK]);
+        d
+    };
+    let block = |sv: &Cod4Server| sv.core.clients[0].as_ref().unwrap().extra.stats.0.to_vec();
+    let fresh = Stats::fresh().0.to_vec();
+    assert_eq!(block(&sv), fresh);
+    sv.core.clients[0].as_mut().unwrap().link.last_packet_ms = -5;
+    let forger = SocketAddr::from(([127, 0, 0, 1], 40000));
+    sv.handle_packet(forger, &forged(0), now);
+    let voice = vcod_common::net::voice::client_packet(p.qport, &[vec![1, 2, 3]]);
+    sv.handle_packet(forger, &voice, now);
+    assert!(sv.take_outgoing().iter().all(|(to, _)| *to != forger));
+    let c = sv.core.clients[0].as_ref().unwrap();
+    assert_eq!((c.link.last_packet_ms, c.link.addr), (-5, p.addr));
+    assert_eq!(block(&sv), fresh);
+    let reply = p.oob(&mut sv, &forged(0)[4..], now);
+    assert_eq!(reply, [b"\xff\xff\xff\xffstatResponse 0".to_vec()]);
+    assert_eq!(block(&sv), fresh);
+}
