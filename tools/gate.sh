@@ -6,7 +6,8 @@
 # Installs (each optional; absolute paths, docs/dev/testing.md):
 #   COD_DIR       CoD1 1.1: the workspace suite runs here, with COD2_DIR
 #                 and COD4_DIR, and VCOD_REQUIRE_INSTALL names all three
-#   COD_UO_DIR    a stock-only tree with uo/ beside 1.5's main/: the
+#   COD_UO_DIR    a stock-only tree with uo/ beside 1.5's main/ (the
+#                 stock_tree example links one): the
 #                 vcod-server suite runs again here, COD4_DIR unset (two
 #                 CoD4 client passes under one memory cap swap for an hour)
 #   COD2_DIR, COD4_DIR
