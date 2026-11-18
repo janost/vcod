@@ -68,7 +68,8 @@ impl Cod2Bots {
                 d.weap_type == TYPE_BULLET && d.weap_class != CLASS_PISTOL && d.offhand_class == 0
             })
         };
-        // A primary carried with no round in it.
+        // A primary carried; `wants` below holds it to one with no round
+        // (`view.gun` is none).
         let dry = (1u8..64).find(|&w| view.weapons_held >> w & 1 == 1 && primary(w));
         let wants = playing(level, slot)
             && view.gun.is_none()

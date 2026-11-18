@@ -16,10 +16,9 @@
 //! curvature and guidance, and an unguided one wobbles and bends to the
 //! attractors (docs/research/cod4-gsc.md 3.2, "Missiles under 1.7").
 //!
-//! Left out: water (`missileWaterMaxDepth`, the splash), glass, the live
-//! grenade's pickup (the live grenade pickup and the throw back), damage
-//! to entities other than players, Javelin's climb, and the actors'
-//! grenade danger.
+//! The live grenade's pickup and throw back are `use_key`'s (cod4-gsc.md
+//! 9.3). Left out: water (`missileWaterMaxDepth`, the splash), glass,
+//! Javelin's climb, and the actors' grenade danger.
 
 use glam::Vec3;
 use vcod_cod4::net::delta::EntityState;
@@ -192,9 +191,9 @@ pub struct Missile4 {
     /// `missile.team`: the thrower's `sessionteam` at the throw, the
     /// flashbang's fourth `flashbang` argument.
     pub team: String,
-    /// `G_FireRocket`'s missile (handler 9): it flies by
-    /// The missile trajectory step, and its hit and splash read `MOD_PROJECTILE`
-    /// and `MOD_PROJECTILE_SPLASH`.
+    /// `G_FireRocket`'s missile (handler 9): it flies by the missile
+    /// trajectory step (0x8095928), and its hit and splash read
+    /// `MOD_PROJECTILE` and `MOD_PROJECTILE_SPLASH`.
     pub rocket: bool,
     /// The vehicle that fired it (`r.ownerNum`), which its move passes.
     pub launcher: Option<EntId>,
@@ -584,8 +583,9 @@ impl Cod4Level {
 
     /// The grenade [`Self::fire_grenade`] stores: the `grenade` entity on
     /// the arc (speed truncated whole, hidden by its untruncated length),
-    /// tumbling when `spin` asks and the weapon spins, its fuse
-    /// (the grenade timer init) and, unless it arms by distance,
+    /// tumbling when `spin` asks and the weapon spins, its fuse (a cooked
+    /// or thrown back grenade's `grenadeTimeLeft`, else `fuse`) and,
+    /// unless it arms by distance,
     /// `grenade_fire` on the thrower.
     fn new_grenade(
         &mut self,

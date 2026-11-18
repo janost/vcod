@@ -20,11 +20,11 @@ use vcod_common::net::protocol::CsLayout;
 use vcod_common::pmove::weapon::NUM_AMMO;
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
 
-/// `ENTITYNUM_NONE`, the entity number an unattached objective record and an
-/// unowned HUD element both carry.
 /// `G_ExplodeMissile`'s concussion entity's life past the blast (`.rodata`
 /// 0x75b48, 500.0).
 const CONCUSSIVE_LIFE_MS: i32 = 500;
+/// `ENTITYNUM_NONE`, the entity number an unattached objective record and an
+/// unowned HUD element both carry.
 pub const ENTITYNUM_NONE: i32 = vcod_common::net::protocol::ENTITYNUM_NONE as i32;
 /// An attacker that is no client but not NULL either, whose `s.number`
 /// reads 0: a client slot `G_FreeEntity` memset, or `g_entities[1023]`,
@@ -758,7 +758,8 @@ impl AtomMemo {
         *self.plain[i].get_or_insert_with(|| !PLAIN_EXCEPT.contains(&cx.resolve_folded(field)))
     }
 
-    /// The handler `profile`'s builtin set gives `name`.
+    /// The handler `profile`'s builtin set gives `name`, matched under its
+    /// folded spelling (`setCullFog` as `setcullfog`).
     fn builtin(
         &mut self,
         profile: &'static crate::game::profile::HostProfile,
@@ -980,11 +981,8 @@ pub struct GameHost {
     pub game_log: Vec<(i32, String)>,
     /// The level clock in milliseconds: `getTime()` reads it, and it is set
     /// by `ScriptRuntime::load` at map load and by `run_frame` every frame
-    /// after. `getTime`'s real units are unmeasured (`probe_cvar` only
-    /// established non-negative); this is the reading chosen. A later task's
-    /// deferred entity free also needs the level clock rather than a
-    /// per-call timestamp, which is why this lives on the host instead of
-    /// being threaded through `get_time`'s own call.
+    /// after: milliseconds of `level.time` (cod11-gsc-language.md 9).
+    /// The deferred entity free reads it too.
     pub level_time_ms: i32,
     /// `level.initializing` (`level+0x1c`): set by `G_InitGame` before the
     /// gametype's `main`, the map's `main` and `Callback_StartGameType` run
@@ -1017,8 +1015,8 @@ pub struct GameHost {
     /// (`trap_SendConsoleCommand`), drained by
     /// `ScriptRuntime::take_console` into the server's own buffer.
     pub console: Vec<String>,
-    /// Who owns a client's name, from `setClientNameMode`. Nothing reads it
-    /// until clients exist: both of retail's readers are client code.
+    /// Who owns a client's name, from `setClientNameMode`. Only CoD4's
+    /// userinfo change reads it.
     pub client_name_mode: builtins::cvar::ClientNameMode,
     /// The registered-item bitset. `precacheItem` writes it and mirrors it
     /// into configstring 8 (`crate::items`); nothing else reads or writes
@@ -1248,8 +1246,6 @@ fn logged<R>(f: impl FnOnce() -> R) -> (R, Rc<[String]>) {
     (r, paths.into())
 }
 
-/// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
-/// state is the one xorshift degenerates on.
 /// Per client slot, the spawn points a gate replays from a retail capture,
 /// in spawn order (`None` keeps the script's own pick): the pick draws from
 /// a clock-seeded generator on retail (map-cycle doc 4.8), so no seed
@@ -1258,6 +1254,8 @@ pub type SpawnPins = std::rc::Rc<std::cell::RefCell<Vec<std::collections::VecDeq
 /// One replayed spawn: `(origin, angles)`, or `None` for the script's own.
 pub type SpawnPin = Option<([f32; 3], [f32; 3])>;
 
+/// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
+/// state is the one xorshift degenerates on.
 pub(crate) const RNG_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 
 impl GameHost {
@@ -2483,19 +2481,6 @@ impl GameHost {
         }
     }
 
-    /// `RegisterItem` (0x4e504): the registration bit, the alt-fire link,
-    /// the item's own two model fields and configstring 8. Every caller
-    /// goes through here rather than `Items::register`, so an item takes
-    /// its model slots wherever it is registered: at spawn for a placed
-    /// weapon, in `precacheItem` for the script's own list.
-    ///
-    /// A chained alt mode gets the same model pair as the item itself,
-    /// which retail may not: it reads a different struct there (object
-    /// model doc, section 15, M3). No stock alt-fire file carries a model
-    /// the base does not, so the two readings cannot be told apart.
-    ///
-    /// A new item past `level.initializing` is a script error
-    /// (`Scr_Error` at 0x4e577; UO and 1.5b the same).
     /// A weapon's 1-based wire index: [`crate::defs::Defs::weapon_index`]'s
     /// fixed list on CoD1; on CoD2 `G_GetWeaponIndexForName`, which loads
     /// and appends a weapon not yet named (`builtins::cod2::register_weapon`).
@@ -2515,6 +2500,19 @@ impl GameHost {
         }
     }
 
+    /// `RegisterItem` (0x4e504): the registration bit, the alt-fire link,
+    /// the item's own two model fields and configstring 8. Every caller
+    /// goes through here rather than `Items::register`, so an item takes
+    /// its model slots wherever it is registered: at spawn for a placed
+    /// weapon, in `precacheItem` for the script's own list.
+    ///
+    /// A chained alt mode gets the same model pair as the item itself,
+    /// which retail may not: it reads a different struct there (object
+    /// model doc, section 15, M3). No stock alt-fire file carries a model
+    /// the base does not, so the two readings cannot be told apart.
+    ///
+    /// A new item past `level.initializing` is a script error
+    /// (`Scr_Error` at 0x4e577; UO and 1.5b the same).
     pub fn register_item(&mut self, name: &str) -> Result<(), ErrorKind> {
         // CoD2's `RegisterItem` of a weapon is `G_GetWeaponIndexForName`.
         if self.profile.weapons == WeaponNumbering::Registered {
@@ -2765,8 +2763,7 @@ impl GameHost {
         true
     }
 
-    /// `G_RunThink` for `id` on its turn in the entity pass.
-    /// `G_RunThink` for `id`. Returns a think the host cannot run without
+    /// `G_RunThink` for `id` on its turn in the entity pass. Returns a think the host cannot run without
     /// the script context (`ThinkFn::MiscSpawner`) for the entity pass.
     #[must_use]
     pub fn run_entity_think(&mut self, id: EntId, now_ms: i32) -> Option<ThinkFn> {
@@ -3082,8 +3079,6 @@ impl Host for GameHost {
         recv: Option<Target>,
         args: &[Value],
     ) -> Result<Value, ErrorKind> {
-        // `resolve_folded`, not `resolve`: the atom carries the spelling the
-        // script used (`setCullFog`), and dispatch matches the folded form.
         match self.memo.builtin(self.profile, cx, name) {
             Some(f) => f(self, cx, recv, args),
             None => Err(ErrorKind::MissingBuiltin(name)),
@@ -3380,12 +3375,10 @@ impl GameHost {
             return Ok(());
         }
         let cod1 = matches!(self.ext, HostExt::Cod1);
-        // A client field's write reaches no engine slot (but `maxspeed`'s
-        // `speed`), so it leaves `ObjectTable::edits` alone.
         // The reach names what the write moves (`ObjectTable::edits`): a
         // client field, or what the client arm below keeps off the entity,
-        // moves none of what the table's caches read, an engine field its
-        // own slot alone.
+        // moves none of what the table's caches read (but `maxspeed`'s
+        // `speed`), an engine field its own slot alone.
         let client_arm = cx.resolve_folded(field);
         let client_arm = matches!(
             client_arm,
@@ -3602,10 +3595,8 @@ fn squad_of(cx: &mut Cx, value: Value) -> Result<u8, ErrorKind> {
         })
 }
 
-/// `.headiconteam`'s setter (0x41c84): `none`, `axis` and `allies` store
-/// 0, 1 and 2; `spectator` is the error; any other string stores 3, which
-/// the getter reads back as `spectator`.
-/// `.headiconteam`'s setter: 1.1d (0x41c84) and 1.5b (0x3bb58) store 3 for
+/// `.headiconteam`'s setter: `none`, `axis` and `allies` store 0, 1 and 2;
+/// 1.1d (0x41c84) and 1.5b (0x3bb58) store 3 for
 /// any string but the four names and refuse "spectator"; UO's (0x43e4c)
 /// stores 3 for "spectator" and refuses the rest (gametypes doc 7.3). The
 /// names compare case and all.

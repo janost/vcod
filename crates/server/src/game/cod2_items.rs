@@ -25,8 +25,8 @@ fn cvar(host: &GameHost, name: &str, default: f32) -> f32 {
 /// player's `r.currentOrigin` raised by half its box's height, along
 /// `AngleVectors((0, yaw, 0))`'s forward times `g_dropForwardSpeed`,
 /// climbing at `g_dropUpSpeedBase + crandom() * g_dropUpSpeedRand` off the
-/// game's `rand()`, under `TR_GRAVITY` from this frame. VERIFIED, the
-/// stores. `yaw` is in degrees.
+/// game's `rand()`, under `TR_GRAVITY` from this frame (cod2-combat.md
+/// 6.3). `yaw` is in degrees.
 pub fn launch_off(
     host: &mut GameHost,
     cx: &mut Cx,
