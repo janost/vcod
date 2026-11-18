@@ -5845,6 +5845,9 @@ impl Renderer {
     /// from the old map can index a new upload.
     pub fn unload_world(&mut self) {
         self.world = None;
+        // The recorded runs hold the old map's buffers and bind groups.
+        self.world_bundles.runs.clear();
+        self.prepass_bundles.runs.clear();
         self.marks.unload();
         self.coronas.clear();
         self.sky = None;
