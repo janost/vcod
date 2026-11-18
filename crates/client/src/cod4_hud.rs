@@ -364,8 +364,11 @@ pub(crate) struct Cod4Hud {
     /// The map whose zone `loaded` holds; `None` for the front end's or
     /// the connect screen's.
     zones_map: Option<String>,
-    /// Configstrings `d` changed since the gamestate.
+    /// Configstrings `d` changed since the gamestate, and the session's
+    /// gamestate count they were read under (a capture's gamestate takes
+    /// no `d`, so the HUD keeps them).
     cs: HashMap<u16, String>,
+    level_gamestates: u32,
     /// The server's `v` dvars.
     dvars: HashMap<String, String>,
     chat: Vec<Line>,
@@ -1120,11 +1123,30 @@ impl Cod4Hud {
             .collect()
     }
 
+    /// A new gamestate restarts the cgame (`CL_ParseGamestate`): the last
+    /// level's `d` strings, scores, message windows, centre print, compass
+    /// pings, damage overlay and hints go.
+    fn new_level(&mut self) {
+        self.cs.clear();
+        self.scores = None;
+        self.team_scores = [0; 4];
+        self.windows = Default::default();
+        self.center = None;
+        self.radar = Default::default();
+        self.damage = Default::default();
+        self.invalid_cmd = None;
+        self.hint = Default::default();
+    }
+
     /// Takes in the session's new server commands and this step's fired
     /// events at server time `now`.
     pub(crate) fn update(&mut self, s: &mut Cod4Session, fired: &[Fired], now: i32) {
         if let Some(gs) = s.gamestate() {
             self.weapons = crate::play::cod4::weapon_list(gs);
+        }
+        if self.level_gamestates != s.gamestate_count() {
+            self.level_gamestates = s.gamestate_count();
+            self.new_level();
         }
         for text in s.take_commands() {
             let Some(cmd) = Command::parse(&text) else {
@@ -4286,6 +4308,20 @@ pub(crate) mod tests {
         hud.cs
             .insert(13, format!("{} {}", last + 20_000, h::atoi(&id) + 1));
         assert_eq!(hud.build(&s, size, last, None, &shell).len(), without);
+    }
+
+    /// A `d` of the last level masks the gamestate only until a new
+    /// gamestate comes: then the HUD reads the new table.
+    #[test]
+    fn a_new_gamestate_drops_the_last_levels_d_strings() {
+        let (mut hud, mut s) = replay("play-1.7-prematch.txt", |_, _, _| {});
+        let own = String::from_utf8_lossy(s.gamestate().unwrap().configstring(11)).into_owned();
+        hud.cs.insert(11, "last level".into());
+        hud.update(&mut s, &[], 0);
+        assert_eq!(hud.configstring(&s, 11), "last level");
+        s.add_gamestate_for_test();
+        hud.update(&mut s, &[], 0);
+        assert_eq!(hud.configstring(&s, 11), own);
     }
 
     /// Retail's prematch sends the leader dialog as `s <index>` right

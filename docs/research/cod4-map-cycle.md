@@ -188,3 +188,7 @@ two menus sends them apart.
   map keeps the world. VERIFIED on ours
   (`cod4_live_map_change_names_the_new_map_and_spawns_there`). How the
   drawn map looks across the change is pending a hand check.
+- Any new gamestate also starts the HUD's level state over, as the cgame
+  restart does: the last level's `d` strings, scores, message windows,
+  centre print, compass pings, damage overlay and hints go. VERIFIED on
+  ours (`cod4_hud::tests::a_new_gamestate_drops_the_last_levels_d_strings`).

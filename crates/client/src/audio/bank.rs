@@ -138,7 +138,7 @@ impl SoundBank {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use kira::Frame;
 
@@ -169,7 +169,7 @@ mod tests {
     }
 
     /// An 8-bit mono WAV of `frames` frames at 8 kHz.
-    fn wav(frames: u32) -> Vec<u8> {
+    pub(crate) fn wav(frames: u32) -> Vec<u8> {
         let mut b = Vec::new();
         b.extend(b"RIFF");
         b.extend((36 + frames).to_le_bytes());

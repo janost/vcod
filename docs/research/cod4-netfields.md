@@ -493,7 +493,8 @@ The client sends 0x2000 bytes in seven `stats` packets
 
 vcod keeps its own stats file,
 `players/profiles/<profile>/[<fs_game>/]vcod_mpdata`, the 0x2000-byte
-block stored plain (`play::cod4_profile`): read at each join, sent in
+block stored plain (`play::cod4_profile`): read at each join under the
+`fs_game` the server's `connectResponse` names (cod4-front-end.md 6), sent in
 the `stats` packets, written back two seconds after the server's `N`
 commands change it and at the disconnect. Retail's `mpdata` is neither
 read nor written.

@@ -164,10 +164,23 @@ impl Join {
 }
 
 /// A connect running on its own thread ([`Cod2Session::connect_in_background`]).
+/// Dropped, it stops the connect: the handshake and downloads end at their
+/// next step, and a session already connected says `disconnect`.
 pub struct Connecting {
     pub addr: String,
-    rx: std::sync::mpsc::Receiver<anyhow::Result<Cod2Session>>,
+    handoff: Arc<std::sync::Mutex<Handoff>>,
+    job: std::thread::JoinHandle<()>,
+    cancel: Arc<AtomicBool>,
     progress: Arc<std::sync::Mutex<Option<Progress>>>,
+}
+
+/// The connect thread's result as [`Connecting`] and its thread hand it
+/// over: whichever side comes second sends `disconnect` for a session no
+/// one will take.
+enum Handoff {
+    Running,
+    Done(anyhow::Result<Box<Cod2Session>>),
+    Abandoned,
 }
 
 /// What the client sends and fetches on a connect: its name, and where
@@ -284,12 +297,23 @@ impl Connecting {
     /// The session once the gamestate is in, or why the connect failed;
     /// `None` while it runs.
     pub fn poll(&self) -> Option<anyhow::Result<Cod2Session>> {
-        match self.rx.try_recv() {
-            Ok(r) => Some(r),
-            Err(std::sync::mpsc::TryRecvError::Empty) => None,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                Some(Err(anyhow::anyhow!("the connect thread ended")))
+        let mut slot = self.handoff.lock().ok()?;
+        match std::mem::replace(&mut *slot, Handoff::Running) {
+            Handoff::Done(r) => Some(r.map(|s| *s)),
+            _ if self.job.is_finished() => Some(Err(anyhow::anyhow!("the connect thread ended"))),
+            _ => None,
+        }
+    }
+}
+
+impl Drop for Connecting {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        if let Ok(mut slot) = self.handoff.lock() {
+            if let Handoff::Done(Ok(s)) = &mut *slot {
+                s.disconnect();
             }
+            *slot = Handoff::Abandoned;
         }
     }
 }
@@ -436,6 +460,9 @@ pub struct Cod2Session {
     pub predict_bodies: bool,
     /// The map's collision world the prediction runs over, and its map.
     world: Option<(String, CollisionWorld)>,
+    /// The map whose collision failed to build and the gamestate count it
+    /// failed under: not tried again until a new gamestate.
+    world_failed: Option<(String, u32)>,
     /// `moveSpeedScale` by weapon name.
     move_scales: HashMap<String, f32>,
     /// The level's weapon table the prediction's `PM_Weapon` reads, and
@@ -490,22 +517,34 @@ impl Cod2Session {
     /// after `CL_InitCGame`). Blocks for at most `timeout` until the
     /// gamestate.
     pub fn connect(addr: &str, opts: &ConnectOpts, timeout: Duration) -> anyhow::Result<Self> {
-        Self::connect_with(addr, opts, timeout, None)
+        Self::connect_with(addr, opts, timeout, None, None)
     }
 
     /// [`Self::connect`] on a thread of its own, for the front end's
     /// `connect`; [`Connecting::progress`] follows its downloads.
     pub fn connect_in_background(addr: &str, opts: ConnectOpts, timeout: Duration) -> Connecting {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let handoff = Arc::new(std::sync::Mutex::new(Handoff::Running));
+        let cancel = Arc::new(AtomicBool::new(false));
         let a = addr.to_string();
         let progress = Arc::new(std::sync::Mutex::new(None));
         let shown = progress.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(Self::connect_with(&a, &opts, timeout, Some(shown)));
+        let (slot, flag) = (handoff.clone(), cancel.clone());
+        let job = std::thread::spawn(move || {
+            let r = Self::connect_with(&a, &opts, timeout, Some(shown), Some(&flag));
+            let Ok(mut slot) = slot.lock() else {
+                return;
+            };
+            match (&*slot, r) {
+                (Handoff::Abandoned, Ok(mut s)) => s.disconnect(),
+                (Handoff::Abandoned, Err(_)) => {}
+                (_, r) => *slot = Handoff::Done(r.map(Box::new)),
+            }
         });
         Connecting {
             addr: addr.to_string(),
-            rx,
+            handoff,
+            job,
+            cancel,
             progress,
         }
     }
@@ -517,7 +556,9 @@ impl Cod2Session {
         opts: &ConnectOpts,
         timeout: Duration,
         progress: Option<Arc<std::sync::Mutex<Option<Progress>>>>,
+        cancel: Option<&AtomicBool>,
     ) -> anyhow::Result<Self> {
+        let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
         let sock = UdpSocket::bind("0.0.0.0:0")?;
         sock.connect(addr)
             .with_context(|| format!("cannot reach {addr}"))?;
@@ -553,6 +594,10 @@ impl Cod2Session {
         // Past the first gamestate only `cl_timeout` gives up: a download
         // takes as long as it takes.
         while !s.settled() {
+            if cancelled() {
+                s.disconnect();
+                bail!("connect to {addr} cancelled");
+            }
             if s.view.gamestates == 0 && Instant::now() > until {
                 bail!("no gamestate from {addr}");
             }
@@ -634,6 +679,7 @@ impl Cod2Session {
             predictor: Cod2Predictor::default(),
             predict_bodies: true,
             world: None,
+            world_failed: None,
             move_scales: HashMap::new(),
             weapon_defs: Default::default(),
             predicted: None,
@@ -1497,12 +1543,18 @@ impl Cod2Session {
     }
 
     /// The map's collision world, built on first use of each map unless
-    /// the load handed it over ([`Self::install_world`]).
+    /// the load handed it over ([`Self::install_world`]). A failed build
+    /// waits for a new gamestate, and a map change the caller has yet to
+    /// take ([`Self::take_map_change`]) is left to its load.
     fn ensure_world(&mut self, fs: &Pk3Fs) {
         let Some(map) = self.map_name().map(str::to_string) else {
             return;
         };
-        if self.world.as_ref().is_some_and(|(m, _)| *m == map) {
+        let gamestates = self.view.gamestates;
+        if self.world.as_ref().is_some_and(|(m, _)| *m == map)
+            || self.world_failed.as_ref() == Some(&(map.clone(), gamestates))
+            || (gamestates != self.level_gamestates && map != self.loaded_map)
+        {
             return;
         }
         let t0 = Instant::now();
@@ -1532,10 +1584,12 @@ impl Cod2Session {
                     t0.elapsed().as_secs_f64() * 1000.0
                 );
                 self.world = Some((map.to_string(), cw));
+                self.world_failed = None;
             }
             Err(e) => {
                 log::warn!("cod2: no collision for {map}, not predicting: {e:#}");
                 self.world = None;
+                self.world_failed = Some((map.to_string(), self.view.gamestates));
             }
         }
     }
@@ -3351,6 +3405,118 @@ pub fn chat_command(team: bool, line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A map whose collision failed is not read again until a new
+    /// gamestate, and a map change the caller has yet to take is left to
+    /// its load. Needs `COD2_DIR`.
+    #[test]
+    fn prediction_builds_a_maps_collision_once_per_gamestate() {
+        let Some(stock) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let bsp = stock.read("maps/mp/mp_toujane.d3dbsp").unwrap();
+        let mut s = Cod2Session::new(None, Client::new(0, 0));
+        let gs = |map: &str| vcod_cod2::net::Gamestate2 {
+            server_command_sequence: 0,
+            configstrings: [(0u16, format!("\\mapname\\{map}"))].into_iter().collect(),
+            baselines: Default::default(),
+            client_num: 0,
+            checksum_feed: 0,
+        };
+        s.view.configstrings = vcod_cod2::net::ConfigStrings::from_gamestate(&gs("mp_x"));
+        s.view.gamestates = 1;
+        s.level_gamestates = 1;
+        s.loaded_map = "mp_x".into();
+        // Not in the search path: the build fails.
+        let mut fs = Pk3Fs::empty();
+        s.ensure_world(&fs);
+        assert!(s.world.is_none());
+        // There now, but the same gamestate does not read it again.
+        fs.overlay("maps/mp/mp_x.d3dbsp", bsp);
+        s.ensure_world(&fs);
+        assert!(s.world.is_none());
+        // A new gamestate for another map waits for the caller's load.
+        s.view.configstrings = vcod_cod2::net::ConfigStrings::from_gamestate(&gs("mp_y"));
+        s.view.gamestates = 2;
+        s.ensure_world(&fs);
+        assert!(s.world.is_none());
+        // Back on mp_x, a new gamestate builds it.
+        s.view.configstrings = vcod_cod2::net::ConfigStrings::from_gamestate(&gs("mp_x"));
+        s.ensure_world(&fs);
+        assert!(s.world.as_ref().is_some_and(|(m, _)| m == "mp_x"));
+    }
+
+    /// A front-end connect dropped once vcod-server holds its slot and has
+    /// sent the gamestate (Esc, or a second `connect`) says `disconnect`:
+    /// the slot frees at once instead of timing out. One dropped before
+    /// the gamestate carries no `sv_serverid`, and the server reads
+    /// nothing of it, as retail's does. Needs `COD2_DIR`.
+    #[test]
+    fn cod2_live_a_dropped_connect_frees_the_server_slot() {
+        use vcod_server::cod2::{Cod2Config, Cod2Server, FRAME_MS};
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let fs = std::rc::Rc::new(fs);
+        let mut sv = Cod2Server::new(
+            Cod2Config {
+                map: "mp_toujane".into(),
+                gametype: "dm".into(),
+                hostname: "drop".into(),
+                max_clients: 4,
+                gametype_script: None,
+            },
+            7,
+            Instant::now(),
+        );
+        sv.exec_default_cfg(&*fs);
+        sv.set_cvar("sv_pure", "0");
+        sv.load(Some(fs)).unwrap();
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let addr = sock.local_addr().unwrap().to_string();
+        let opts = ConnectOpts {
+            name: "dropper".into(),
+            allow_download: false,
+            www_download: false,
+            ..ConnectOpts::default()
+        };
+        let mut connecting = Some(Cod2Session::connect_in_background(
+            &addr,
+            opts,
+            Duration::from_secs(15),
+        ));
+        let (mut buf, mut next) = ([0u8; 4096], Instant::now());
+        let (mut joined, mut freed) = (None, false);
+        let t0 = Instant::now();
+        while t0.elapsed() < Duration::from_secs(30) {
+            while let Ok((n, from)) = sock.recv_from(&mut buf) {
+                sv.handle_packet(from, &buf[..n], Instant::now());
+            }
+            let now = Instant::now();
+            if now >= next {
+                next = now + Duration::from_millis(FRAME_MS as u64);
+                sv.tick_frames(now, 1);
+            }
+            for (to, p) in sv.take_outgoing() {
+                let _ = sock.send_to(&p, to);
+            }
+            if joined.is_none() && sv.client_count() == 1 {
+                joined = Some(Instant::now());
+            }
+            // The gamestate is a few frames out on loopback.
+            if joined.is_some_and(|t| t.elapsed() > Duration::from_millis(500)) {
+                connecting = None;
+            }
+            if connecting.is_none() && sv.client_count() == 0 {
+                freed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(connecting.is_none(), "the connect never took a slot");
+        assert!(freed, "the server kept the dropped connect's slot");
+    }
 
     /// `timedemo_<map>_mode_<r_mode>.csv`, the map short of its directory
     /// and last extension.

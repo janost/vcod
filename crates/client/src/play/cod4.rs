@@ -760,6 +760,18 @@ impl Cod4Session {
         let notes = downloads.as_ref().and_then(|d| d.notes.clone());
         // A reconnect a disconnected fetch, each one landing a file.
         for _ in 0..16 {
+            // The profile's stats under the server's `fs_game`, as 1.7
+            // loads them on `connectResponse` (cod4-front-end.md 6).
+            let under: Arc<std::sync::Mutex<Option<_>>> = Arc::new(std::sync::Mutex::new(None));
+            let stats_for = profile.as_ref().map(|(p, _)| {
+                let (base, slot) = (p.dir().to_path_buf(), under.clone());
+                Box::new(move |fs_game: &str| {
+                    let (p, stats) = super::cod4_profile::ProfileStats::in_dir(&base, fs_game)?;
+                    let sent = stats.clone();
+                    *slot.lock().ok()? = Some((p, stats));
+                    Some(sent)
+                }) as vcod_cod4::net::conn::StatsFor
+            });
             let conn = Self::join_conn(
                 addr,
                 Join {
@@ -770,9 +782,13 @@ impl Cod4Session {
                     cancel: cancel.clone(),
                     notes: notes.clone(),
                     stats: profile.as_ref().map(|(_, s)| s.clone()),
+                    stats_for,
                     ..Join::default()
                 },
             )?;
+            if let Some(p) = under.lock().ok().and_then(|mut u| u.take()) {
+                profile = Some(p);
+            }
             let Some(conn) = (match downloads.as_mut() {
                 Some(d) => fetch_missing(conn, d, &mut fetched)?,
                 None => Some(conn),
@@ -949,6 +965,17 @@ impl Cod4Session {
         };
         let command_time = snap.ps.get("commandTime").unwrap_or(0) as i32;
         command_time < oldest.server_time && oldest.server_time <= time
+    }
+
+    /// Gamestates read since the join: a new one starts the cgame's level
+    /// state over.
+    pub fn gamestate_count(&self) -> u32 {
+        self.gamestates
+    }
+
+    #[cfg(test)]
+    pub(crate) fn add_gamestate_for_test(&mut self) {
+        self.gamestates += 1;
     }
 
     /// The map a new gamestate names when it is not the loaded one, once:
@@ -1289,6 +1316,9 @@ impl Cod4Session {
             {
                 self.dropped = Some(why);
             }
+        }
+        if new.iter().any(|t| is_map_restart(t)) {
+            self.restart_dynents();
         }
         if self.is_live() {
             self.live_frame(&new)?;
@@ -3377,6 +3407,12 @@ pub fn yaw_at(e: &EntityState, time: i32) -> f32 {
 /// `e`'s angles at `time` off its angle trajectory.
 pub fn angles_at(e: &EntityState, time: i32) -> Vec3 {
     trajectory(e, "apos").evaluate(time)
+}
+
+/// `n` or `B`, which a `fast_restart` queues every client in place of a
+/// gamestate (cod4-map-cycle.md 2): the cgame runs `CG_MapRestart`.
+fn is_map_restart(text: &[u8]) -> bool {
+    matches!(text.split(|&b| b == b' ').next(), Some(b"n" | b"B"))
 }
 
 /// This frame's cmd on the newest snapshot's time plus its age (0 before
@@ -6130,6 +6166,138 @@ pub(crate) mod tests {
             spawns,
             [Some("mp_crash".to_string()), Some("mp_backlot".to_string())]
         );
+    }
+
+    /// A server running a mod answers `connectResponse mods/x`: the join
+    /// sends the profile's stats under `mods/x` and the session writes
+    /// back there, the file the main menu reads once the server's
+    /// systeminfo has set `fs_game` (cod4-front-end.md 6).
+    #[test]
+    fn cod4_live_a_modded_server_reads_the_mods_stats() {
+        use crate::play::cod4_profile::ProfileStats;
+        use vcod_server::cod4::{Cod4Config, Cod4Server};
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().to_path_buf();
+        std::fs::create_dir_all(root.join("players/profiles/tester")).unwrap();
+        std::fs::write(root.join("players/profiles/active.txt"), "tester").unwrap();
+        for (fs_game, v) in [("", 1), ("mods/x", 2)] {
+            let (mut p, mut stats) = ProfileStats::load_from(&root, fs_game).unwrap();
+            stats.set(2301, v);
+            p.save(&stats, true);
+        }
+        let mut sv = Cod4Server::new(
+            Cod4Config {
+                map: "mp_crash".into(),
+                gametype: "war".into(),
+                hostname: "vcod".into(),
+                max_clients: 4,
+            },
+            7,
+        );
+        sv.load(Some(&install)).unwrap();
+        sv.set_cvar("fs_game", "mods/x");
+        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let addr = sock.local_addr().unwrap();
+        let clock = sim::Clock::new();
+        let menu_root = root.clone();
+        let client = sim::spawn(&clock, move || {
+            let profile = ProfileStats::load_from(&root, "");
+            let mut s = Cod4Session::connect_profile(
+                addr,
+                "modder",
+                "",
+                Cp::Bare,
+                MenuJoin::default(),
+                None,
+                profile,
+            )
+            .unwrap();
+            let path = s.profile.as_ref().map(|p| p.path().to_path_buf());
+            let sent = s.menus.stats().and_then(|st| st.get(2301));
+            s.disconnect();
+            (path, sent)
+        });
+        serve(&mut sv, &sock, &clock, &client, |_, _, _| true);
+        let (path, sent) = client.join().unwrap();
+        let (menu, _) = ProfileStats::load_from(&menu_root, "mods/x").unwrap();
+        assert_eq!(path.as_deref(), Some(menu.path()));
+        assert_eq!(sent, Some(2));
+    }
+
+    /// vcod-server's `fast_restart` under a joined, spawned client: no
+    /// gamestate comes, only `B` (or `n`), and the session puts a moved
+    /// dynamic entity back at its def's pose, as `CG_MapRestart` runs
+    /// `DynEntCl_InitEntities` (cod4-world.md 13.7).
+    #[test]
+    fn cod4_live_fast_restart_puts_the_dynents_back() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use vcod_server::cod4::{Cod4Config, Cod4Game, Cod4Server};
+        use vcod_server::engine::GameModule;
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let world = Arc::new(crate::cod4_fly::load_world(install.root(), "mp_crash").unwrap());
+        let home = world.dynents[0].origin;
+        let mut sv = Cod4Server::new(
+            Cod4Config {
+                map: "mp_crash".into(),
+                gametype: "war".into(),
+                hostname: "vcod".into(),
+                max_clients: 4,
+            },
+            7,
+        );
+        sv.load(Some(&install)).unwrap();
+        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let addr = sock.local_addr().unwrap();
+        let moved = Arc::new(AtomicBool::new(false));
+        let flag = moved.clone();
+        let clock = sim::Clock::new();
+        let client = sim::spawn(&clock, move || {
+            let join = MenuJoin {
+                team: Some("allies".into()),
+                class: Some("assault_mp,0".into()),
+            };
+            let mut s = Cod4Session::connect(addr, "restarter", Cp::Bare, join).unwrap();
+            s.set_world(world);
+            let t0 = clk_now();
+            let (mut restarted, mut changes) = (false, 0);
+            while since(t0) < Duration::from_secs(40) && !restarted {
+                s.step(since(t0).as_secs_f64() * 1000.0).unwrap();
+                s.take_commands();
+                changes += usize::from(s.take_map_change().is_some());
+                let up = s.spawn().is_some();
+                let d = s.dynents.as_mut().unwrap();
+                if !flag.load(Ordering::Relaxed) && up {
+                    d.ents[0].origin += Vec3::Z * 100.0;
+                    flag.store(true, Ordering::Relaxed);
+                } else if flag.load(Ordering::Relaxed) {
+                    restarted = d.ents[0].origin.distance(home) < 0.01;
+                }
+                clk_sleep(Duration::from_millis(16));
+            }
+            s.disconnect();
+            (restarted, changes)
+        });
+        let mut asked = false;
+        serve(&mut sv, &sock, &clock, &client, |sv, now, next| {
+            if !asked && moved.load(Ordering::Relaxed) {
+                asked = true;
+                sv.core.console.push_back("fast_restart".into());
+                Cod4Game::drain_console(sv, now);
+                *next = now;
+            }
+            true
+        });
+        let (restarted, changes) = client.join().unwrap();
+        assert_eq!(changes, 0, "a fast_restart sends no gamestate");
+        assert!(restarted, "the moved dynent stayed moved");
     }
 
     /// `record` against vcod-server's `war` with four shooting bots,
