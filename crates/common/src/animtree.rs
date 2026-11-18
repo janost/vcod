@@ -31,6 +31,24 @@ pub struct AnimTree {
 /// Wire `legsAnim`/`torsoAnim` value to node id in an [`AnimTree`].
 pub struct AnimIndex {
     entries: Vec<usize>,
+    /// Each folded node name's first wire index, for [`Self::wire_of`].
+    by_name: HashMap<Box<str>, i32>,
+}
+
+/// Runs `f` on `s` with ASCII folded to lowercase, on the stack when it fits.
+fn with_folded<R>(s: &str, f: impl FnOnce(&str) -> R) -> R {
+    if !s.bytes().any(|c| c.is_ascii_uppercase()) {
+        return f(s);
+    }
+    let mut buf = [0u8; 64];
+    match buf.get_mut(..s.len()) {
+        Some(dst) => {
+            dst.copy_from_slice(s.as_bytes());
+            dst.make_ascii_lowercase();
+            f(std::str::from_utf8(dst).expect("ASCII folding keeps UTF-8 valid"))
+        }
+        None => f(&s.to_ascii_lowercase()),
+    }
 }
 
 #[derive(PartialEq)]
@@ -196,7 +214,13 @@ impl AnimIndex {
     pub fn build(tree: &AnimTree, referenced: &HashSet<String>) -> AnimIndex {
         let mut entries = vec![0usize];
         expand(tree, 0, false, referenced, &mut entries);
-        AnimIndex { entries }
+        let mut by_name = HashMap::with_capacity(entries.len());
+        for (i, &id) in entries.iter().enumerate() {
+            by_name
+                .entry(tree.nodes[id].name.to_ascii_lowercase().into_boxed_str())
+                .or_insert(i as i32);
+        }
+        AnimIndex { entries, by_name }
     }
 
     /// Masks off the restart toggle bit.
@@ -215,12 +239,8 @@ impl AnimIndex {
     /// The wire value that plays `name`, folded because the engine folds anim
     /// names. The first index that carries the name wins; the flattening
     /// gives a node exactly one slot.
-    pub fn wire_of(&self, tree: &AnimTree, name: &str) -> Option<i32> {
-        let name = name.to_ascii_lowercase();
-        self.entries
-            .iter()
-            .position(|&id| tree.nodes[id].name.to_ascii_lowercase() == name)
-            .map(|i| i as i32)
+    pub fn wire_of(&self, _tree: &AnimTree, name: &str) -> Option<i32> {
+        with_folded(name, |n| self.by_name.get(n).copied())
     }
 
     /// Slot 0 is always the root, so there is no empty index and no `is_empty`.
@@ -457,7 +477,7 @@ impl PlayerAnims {
     /// no state names.
     pub fn record(&self, wire: i32) -> crate::animscript::AnimRecord {
         self.name(wire)
-            .and_then(|n| self.records.get(&n.to_ascii_lowercase()))
+            .and_then(|n| with_folded(n, |n| self.records.get(n)))
             .copied()
             .unwrap_or_default()
     }
