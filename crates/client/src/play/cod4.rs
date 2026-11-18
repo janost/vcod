@@ -3741,7 +3741,7 @@ pub(crate) mod tests {
             w.write_byte(SVC_EOF);
             huff.compress(&w.into_ops())
         };
-        let mut feed = |s: &mut Cod4Session, seq: i32| {
+        let feed = |s: &mut Cod4Session, seq: i32| {
             let Source::Demo(d) = &mut s.source else {
                 unreachable!()
             };

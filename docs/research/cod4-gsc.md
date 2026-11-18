@@ -2836,7 +2836,12 @@ VERIFIED (both consoles, 8.1's table).
 - vcod: `Cod4Level::userinfo_changed` writes the name the scripts, chat
   and snapshots' client states read (`GameHost::client_names`), under
   `auto_change`, or under `manual_change` for a client not yet in the
-  game. It does not clean the name. The engine's copy (`status`, the log)
-  follows the userinfo at once, as retail's. The client sends its userinfo
+  game, cleaned as above (`cod4::game_name`). The engine's copy (`status`,
+  the log, the drop print) follows the userinfo at once, as retail's, cut
+  to 15 characters: `SV_UserinfoChanged` copies the `name` into 0x10
+  bytes at client +0x21290 (0x8170341..0x8170356). VERIFIED (the code).
+  vcod keeps at most 1023 bytes of a `userinfo` command's argument, as
+  `SV_UpdateUserinfo_f`'s 0x400-byte copy (0x817055e), and of any client
+  command. The client sends its userinfo
   on every change, so a `name` takes effect in the game, not only at the
   next connect.

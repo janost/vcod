@@ -69,6 +69,45 @@ fn cod4_status_lastmsg_reads_the_server_clock() {
     assert_eq!(after.split_whitespace().next(), Some("4321"), "{row}");
 }
 
+/// A `userinfo` past 0x400 bytes keeps 1023 of them, the game's name is
+/// cleaned to 15 characters and the drop print carries the engine's 15
+/// (cod4-gsc.md 12).
+#[test]
+fn cod4_a_long_userinfo_is_cut_and_its_name_cleaned() {
+    let Some((mut sv, mut probes, mut now)) = two_playing() else {
+        return;
+    };
+    let long = "x".repeat(100_000);
+    let text = format!("userinfo \"\\name\\   {long}\"");
+    let seq = sv.core.clients[0]
+        .as_ref()
+        .unwrap()
+        .link
+        .last_client_command
+        + 1;
+    assert!(sv.client_command(0, seq, text.as_bytes(), false));
+    // The probe never sent it: it stops here, its acks out of step.
+    probes[0].joined = false;
+    probes[0].connect_at = i32::MAX;
+    let c = sv.core.clients[0].as_ref().unwrap();
+    assert_eq!(c.link.userinfo.len(), 1023);
+    assert_eq!(
+        client_name(&c.link.userinfo),
+        format!("   {}", "x".repeat(12))
+    );
+    let level = sv.game.level.as_ref().unwrap();
+    assert_eq!(level.rt.host.client_names[0], "x".repeat(15));
+    assert_eq!(game_name("\\name\\  "), "UnnamedPlayer");
+    sv.drop_client(0, "EXE_DISCONNECTED");
+    run_ms(&mut sv, &mut probes, &mut now, 300);
+    let seen = probes[1].server_commands();
+    let left = seen
+        .iter()
+        .find(|c| c.starts_with("e \""))
+        .expect("the drop print");
+    assert!(left.len() < 64, "{left}");
+}
+
 /// `say` reaches both clients as a console chat line, `tell` only its
 /// client; `kick` with no name prints the usage, and `kick all` drops
 /// everyone, the bot and both players, each with `SV_DropClient`'s line

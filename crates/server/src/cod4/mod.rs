@@ -1009,13 +1009,14 @@ impl Cod4Server {
             // `SV_UpdateUserinfo_f` (0x8170536): the engine's copy, then
             // `ClientUserinfoChanged` (0x80a8068) for the game's name.
             Some("userinfo") => {
-                c.link.userinfo = args.get(1).cloned().unwrap_or_default();
+                let info = args.get(1).map_or("", String::as_str);
+                c.link.userinfo = info.chars().take(MAX_USERINFO).collect();
                 // Never the LAN rate: `SV_UserinfoChanged` gives it only
                 // below `dedicated 2` (0x817038f), which cod4_lnxded's
                 // read-only `dedicated` never is (cod4-handshake.md 15).
                 c.rates = link::Rates::of(&c.link.userinfo, false, 1);
                 c.voice.send = voice::wants_voice(&c.link.userinfo);
-                let name = client_name(&c.link.userinfo);
+                let name = game_name(&c.link.userinfo);
                 if let Some(level) = self.game.level.as_mut() {
                     level.userinfo_changed(slot, &name);
                 }
@@ -1668,7 +1669,7 @@ impl Cod4Server {
         link.next_message_ms = svs;
         link.last_packet_ms = svs;
         if let Some(level) = self.game.level.as_mut() {
-            level.connect(slot, &client_name(userinfo), self.game.spot);
+            level.connect(slot, &game_name(userinfo), self.game.spot);
             level.set_guid(slot, &guid);
         }
         self.core.clients[slot] = Some(Client {
@@ -1790,12 +1791,35 @@ fn ignorable(text: &str) -> bool {
     )
 }
 
-/// A userinfo's `name`.
+/// The engine's copy of a userinfo's `name`: its first 15 characters
+/// (`SV_UserinfoChanged` 0x8170320 copies it into 0x10 bytes).
 fn client_name(userinfo: &str) -> String {
     vcod_common::net::info_value_for_key(userinfo, "name")
         .unwrap_or("")
-        .to_string()
+        .chars()
+        .take(15)
+        .collect()
 }
+
+/// The game's copy (`ClientUserinfoChanged` 0x80a8068, cod4-gsc.md 12):
+/// leading spaces dropped, at most 15 characters, `UnnamedPlayer` when
+/// empty.
+fn game_name(userinfo: &str) -> String {
+    let name: String = vcod_common::net::info_value_for_key(userinfo, "name")
+        .unwrap_or("")
+        .trim_start_matches(' ')
+        .chars()
+        .take(15)
+        .collect();
+    if name.is_empty() {
+        "UnnamedPlayer".into()
+    } else {
+        name
+    }
+}
+
+/// `SV_UpdateUserinfo_f` (0x8170536) copies the userinfo into 0x400 bytes.
+const MAX_USERINFO: usize = 1023;
 
 /// A spectator floating at the intermission spot: the fields the retail
 /// spectator's first snapshot carries (`play-1.7-spec.txt`, VERIFIED live:
