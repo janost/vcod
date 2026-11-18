@@ -196,8 +196,13 @@ impl Default for DrawToggles {
 
 impl Hud {
     pub fn new(fs: &Pk3Fs) -> Result<Hud, String> {
-        Ok(Hud {
-            fonts: UiFonts::load(fs)?,
+        Ok(Hud::with_fonts(UiFonts::load(fs)?, fs))
+    }
+
+    /// [`Hud::new`] over fonts already loaded.
+    fn with_fonts(fonts: UiFonts, fs: &Pk3Fs) -> Hud {
+        Hud {
+            fonts,
             chat: Chat::new(),
             game_messages: messages::Window::new(messages::Kind::Game),
             bold_messages: messages::Window::new(messages::Kind::Bold),
@@ -216,7 +221,7 @@ impl Hud {
             unknown: 0,
             bob: Default::default(),
             drawn_view: None,
-        })
+        }
     }
 
     /// A download reopened the search path: reload the fonts and `hud.menu`,
@@ -1171,6 +1176,12 @@ mod tests {
         assert!(!steps_gun(0, 0x4000) && !steps_gun(0, 0x8000));
     }
 
+    /// A HUD over in-memory fonts and no paks: no `hud.menu`, no game
+    /// types. The state a HUD keeps across frames needs nothing more.
+    fn bare_hud() -> Hud {
+        Hud::with_fonts(hudelem::tests::test_fonts(), &Pk3Fs::empty())
+    }
+
     fn frame<'a>(
         ps: &'a PlayerState,
         predicted: Option<&'a Predicted>,
@@ -1496,10 +1507,7 @@ mod tests {
     /// the hit icons but not the centre print.
     #[test]
     fn a_restart_clears_the_hud_words_and_rearms_the_respawn_reset() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
-            return;
-        };
-        let mut hud = Hud::new(&fs).expect("hud");
+        let mut hud = bare_hud();
         let hit = |event| DamageFeedback {
             event,
             yaw: 0,
@@ -1544,11 +1552,8 @@ mod tests {
     /// the playerstate's.
     #[test]
     fn a_hit_feeds_the_kick_and_the_flash_on_a_mounted_gun() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
-            return;
-        };
         let p = &PROTOCOL_V1;
-        let mut hud = Hud::new(&fs).expect("hud");
+        let mut hud = bare_hud();
         let ps = |event: i32| {
             let mut ps = PlayerState::null(p);
             let mut set = |name: &str, v: i32| {
@@ -1586,11 +1591,8 @@ mod tests {
     /// baseline and the weapon name's stamp are gone.
     #[test]
     fn a_fresh_cgame_forgets_the_last_sessions_statics() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
-            return;
-        };
         let p = &PROTOCOL_V1;
-        let mut hud = Hud::new(&fs).expect("hud");
+        let mut hud = bare_hud();
         let ps = |event: i32| {
             let mut ps = PlayerState::null(p);
             let mut set = |name: &str, v: i32| {
@@ -1618,10 +1620,7 @@ mod tests {
 
     #[test]
     fn on_gamestate_forgets_the_map_but_keeps_chat() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
-            return;
-        };
-        let mut hud = Hud::new(&fs).expect("hud");
+        let mut hud = bare_hud();
         hud.kill_icons.insert(3, None);
         hud.game_messages.push_kill(
             messages::KillLine {
@@ -1657,10 +1656,7 @@ mod tests {
     /// `n` and `B` empty both message windows, kill lines included.
     #[test]
     fn a_restart_empties_the_message_windows() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
-            return;
-        };
-        let mut hud = Hud::new(&fs).expect("hud");
+        let mut hud = bare_hud();
         let loc = Localized::default();
         for restart in ["n", "B"] {
             let cmd =
@@ -1679,10 +1675,8 @@ mod tests {
     #[test]
     fn an_obituary_goes_to_the_game_message_window() {
         use vcod_common::net::events::GameEvent;
-        let Some(fs) = vcod_common::testing::game_fs() else {
-            return;
-        };
-        let mut hud = Hud::new(&fs).expect("hud");
+        let fs = Pk3Fs::empty();
+        let mut hud = bare_hud();
         let p = &vcod_common::net::protocol::PROTOCOL_V1;
         let ps = PlayerState::null(p);
         let clients: BTreeMap<u32, ClientState> = [(2, 1, "^1Me"), (3, 2, "Bob")]
