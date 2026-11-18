@@ -45,8 +45,9 @@ still missing against retail, and what vcod adds that retail never had.
 - Retail's drop-down console, binds and cvars, saved to `vcod_mp.cfg`.
 - F3 shows frame, draw, vis, audio, clock, net and prediction counters;
   F4 freezes or disables culling.
-- Hor+ widescreen and ultrawide. CoD1 and UO take `vc_widescreen`
-  ([features/cod1.md](features/cod1.md#beyond-retail)); CoD4 has its own
+- Hor+ widescreen and ultrawide. CoD1, UO and CoD2 take `vc_widescreen`
+  ([features/cod1.md](features/cod1.md#beyond-retail); on CoD2 it widens
+  the view's fov only); CoD4 has its own
   `r_aspectRatio` and `vc_windowAspect`
   ([features/cod4.md](features/cod4.md)).
 - Graphics extras retail never had (`vc_ssao`, `vc_shadows`, `vc_bloom`,
