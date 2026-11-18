@@ -54,6 +54,14 @@ The all-maps census tests scope to stock `pak[0-9].pk3`. Map downloads drop
 third-party `zzz_*.pk3` into `main/`; a census failure on one of those is not
 a regression.
 
+The CoD4 censuses in `vcod-cod4`'s `tests/` walk every stock map zone,
+each its own way, through `vcod_cod4::testing::stock_maps` (21 zones;
+`COD4_MAPS=<a,b>` narrows them). They stay unignored: the slowest,
+`clip_census`, took 13.5 s alone in the test profile, and the whole
+`--test cod4` binary 24 s at 4 threads (2026-11-18). Between 4 and 9 s
+each: `part_edges`' cylinder drop, `mapworld_census`, `map_census`,
+`look_census`, `drawsurf_census` and two of `sunshadow_census`'s.
+
 `Server::new` seeds its RNG with a constant; only `main.rs` passes the clock
 through `Server::with_seed`. Tests that depend on spawn picks rely on that.
 Each load still steps a fresh script seed, as retail's `G_InitGame` does

@@ -812,13 +812,7 @@ fn cod4_every_map_poses_both_teams() {
     let Some(install) = vcod_cod4::testing::cod4_install() else {
         return;
     };
-    let mut maps: Vec<String> = install
-        .zones("english")
-        .unwrap()
-        .iter()
-        .filter_map(|p| p.file_stem()?.to_str().map(str::to_string))
-        .filter(|n| n.starts_with("mp_") && !n.ends_with("_load"))
-        .collect();
+    let mut maps = vcod_cod4::testing::stock_maps(&install);
     if let Ok(only) = std::env::var("SOAK_MAPS") {
         maps.retain(|m| only.split(',').any(|o| o == m));
     }
