@@ -512,6 +512,15 @@ VERIFIED:
   sharing 181 techniques, 181 passes carrying vertex shader bytecode, 124
   images. One material, `,$levelbriefing`, has a null techset slot.
 
+vcod holds a walk to the same bounds before it allocates anything: a
+`blockSize` over 0x0FFFFFFF (an offset token's 28 bits), an `XFile.size`
+or a `blockSize` sum over 1 GiB (stock tops out at 181 MB and 101 MB,
+VERIFIED: the 72 client zones' headers),
+any data past its block's `blockSize`, a string running past it and
+inflated bytes past `size` are refused, and runtime arrays take block 1
+space without an allocation (`walk::W::advance`, `zone::ZoneStream`).
+The 85 stock zones pass unchanged.
+
 ## 12. Not walked or not decoded yet
 
 - No stock zone carries xmodelpieces, ui_map, aitype, mptype, character
