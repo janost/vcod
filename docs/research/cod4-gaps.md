@@ -99,8 +99,9 @@ Ranked by how much a player notices.
 - A map's dynamic entities (mp_crash holds 516) were neither drawn nor
   simulated. vcod now draws them, pushes them with blasts and rounds on
   its rigid-body solver, breaks the destructible ones into their effect,
-  and sets them back on a map restart, as 1.7's client does with nothing
-  on the wire (cod4-world.md 13).
+  and sets them back on a map restart and on a `fast_restart`'s `n` or
+  `B`, as 1.7's client does with nothing more on the wire (cod4-world.md
+  13).
 - The crosshair name and the friendly names over heads were not drawn.
   vcod now draws both as 1.7 does: over the posed `j_head`, sized by
   distance, in the relative team colour with the rank's icon and level,

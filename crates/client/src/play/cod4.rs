@@ -1290,6 +1290,9 @@ impl Cod4Session {
                 self.dropped = Some(why);
             }
         }
+        if new.iter().any(|t| is_map_restart(t)) {
+            self.restart_dynents();
+        }
         if self.is_live() {
             self.live_frame(&new)?;
         }
@@ -3376,6 +3379,12 @@ pub fn yaw_at(e: &EntityState, time: i32) -> f32 {
 /// `e`'s angles at `time` off its angle trajectory.
 pub fn angles_at(e: &EntityState, time: i32) -> Vec3 {
     trajectory(e, "apos").evaluate(time)
+}
+
+/// `n` or `B`, which a `fast_restart` queues every client in place of a
+/// gamestate (cod4-map-cycle.md 2): the cgame runs `CG_MapRestart`.
+fn is_map_restart(text: &[u8]) -> bool {
+    matches!(text.split(|&b| b == b' ').next(), Some(b"n" | b"B"))
 }
 
 /// This frame's cmd on the newest snapshot's time plus its age (0 before
@@ -6129,6 +6138,78 @@ pub(crate) mod tests {
             spawns,
             [Some("mp_crash".to_string()), Some("mp_backlot".to_string())]
         );
+    }
+
+    /// vcod-server's `fast_restart` under a joined, spawned client: no
+    /// gamestate comes, only `B` (or `n`), and the session puts a moved
+    /// dynamic entity back at its def's pose, as `CG_MapRestart` runs
+    /// `DynEntCl_InitEntities` (cod4-world.md 13.7).
+    #[test]
+    fn cod4_live_fast_restart_puts_the_dynents_back() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use vcod_server::cod4::{Cod4Config, Cod4Game, Cod4Server};
+        use vcod_server::engine::GameModule;
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let world = Arc::new(crate::cod4_fly::load_world(install.root(), "mp_crash").unwrap());
+        let home = world.dynents[0].origin;
+        let mut sv = Cod4Server::new(
+            Cod4Config {
+                map: "mp_crash".into(),
+                gametype: "war".into(),
+                hostname: "vcod".into(),
+                max_clients: 4,
+            },
+            7,
+        );
+        sv.load(Some(&install)).unwrap();
+        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let addr = sock.local_addr().unwrap();
+        let moved = Arc::new(AtomicBool::new(false));
+        let flag = moved.clone();
+        let clock = sim::Clock::new();
+        let client = sim::spawn(&clock, move || {
+            let join = MenuJoin {
+                team: Some("allies".into()),
+                class: Some("assault_mp,0".into()),
+            };
+            let mut s = Cod4Session::connect(addr, "restarter", Cp::Bare, join).unwrap();
+            s.set_world(world);
+            let t0 = clk_now();
+            let (mut restarted, mut changes) = (false, 0);
+            while since(t0) < Duration::from_secs(40) && !restarted {
+                s.step(since(t0).as_secs_f64() * 1000.0).unwrap();
+                s.take_commands();
+                changes += usize::from(s.take_map_change().is_some());
+                let up = s.spawn().is_some();
+                let d = s.dynents.as_mut().unwrap();
+                if !flag.load(Ordering::Relaxed) && up {
+                    d.ents[0].origin += Vec3::Z * 100.0;
+                    flag.store(true, Ordering::Relaxed);
+                } else if flag.load(Ordering::Relaxed) {
+                    restarted = d.ents[0].origin.distance(home) < 0.01;
+                }
+                clk_sleep(Duration::from_millis(16));
+            }
+            s.disconnect();
+            (restarted, changes)
+        });
+        let mut asked = false;
+        serve(&mut sv, &sock, &clock, &client, |sv, now, next| {
+            if !asked && moved.load(Ordering::Relaxed) {
+                asked = true;
+                sv.core.console.push_back("fast_restart".into());
+                Cod4Game::drain_console(sv, now);
+                *next = now;
+            }
+            true
+        });
+        let (restarted, changes) = client.join().unwrap();
+        assert_eq!(changes, 0, "a fast_restart sends no gamestate");
+        assert!(restarted, "the moved dynent stayed moved");
     }
 
     /// `record` against vcod-server's `war` with four shooting bots,
