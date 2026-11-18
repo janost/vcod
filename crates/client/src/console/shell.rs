@@ -1026,16 +1026,12 @@ impl Shell {
         // `CG_Init` (Mac 0x145214): a bool, 1, flags 0x1080, cheat and not
         // archived (cod2-efx.md 6.8).
         self.register("cg_drawGun", "1", CHEAT);
+        for (name, default, _) in WINVOICE_DVARS {
+            self.register_kept(name, default, ARCHIVE);
+        }
         // `CG_Init` (Mac 0x145214), all archived (flags 0x1001): the chat's
         // and say field's places, the stance hint prints and the hints'
         // fade (cod2-hud.md 9, 14).
-        for (name, default, _) in WINVOICE_DVARS {
-            let kept = self.cvar(name).map(str::to_string);
-            self.register(name, default, ARCHIVE);
-            if let (Some(v), Some(c)) = (kept, self.cvars.get_mut(name)) {
-                c.value = v;
-            }
-        }
         for (name, default) in [
             ("snd_volume", "1"),
             ("cg_drawMantleHint", "1"),
@@ -1046,11 +1042,7 @@ impl Shell {
             ("cg_hintFadeTime", "100"),
             ("cg_drawLagometer", "0"),
         ] {
-            let kept = self.cvar(name).map(str::to_string);
-            self.register(name, default, ARCHIVE);
-            if let (Some(v), Some(c)) = (kept, self.cvars.get_mut(&name.to_ascii_lowercase())) {
-                c.value = v;
-            }
+            self.register_kept(name, default, ARCHIVE);
         }
         // The player profile dvars (`Com_InitPlayerProfiles`, Mac 0x111aa6;
         // `UI_RegisterDvars`, Mac 0x1505b0), none archived; the main menu's
@@ -1066,9 +1058,6 @@ impl Shell {
                 self.register(name, default, 0);
             }
         }
-        // The shadow cookies' dvars at the renderer's defaults, none
-        // archived (`R_RegisterDvars`, Mac 0x000cb8b6; cod2-materials.md
-        // 9.8); `sc_count` is registered and read by nothing.
         for (name, default) in [
             ("cg_drawCrosshairNamesPosX", "300"),
             ("cg_drawCrosshairNamesPosY", "180"),
@@ -1077,6 +1066,9 @@ impl Shell {
                 self.register(name, default, 0);
             }
         }
+        // The shadow cookies' dvars at the renderer's defaults, none
+        // archived (`R_RegisterDvars`, Mac 0x000cb8b6; cod2-materials.md
+        // 9.8); `sc_count` is registered and read by nothing.
         for (name, default) in COOKIE_DVARS {
             if self.cvar(name).is_none() {
                 self.register(name, default, 0);
@@ -1172,11 +1164,7 @@ impl Shell {
         // `iw3mp.exe` 0x46f541).
         self.cvars.remove("timedemo");
         for (name, value, flags) in COD4_OPTION_DVARS {
-            let kept = self.cvar(name).map(str::to_string);
-            self.register(name, value, flags);
-            if let (Some(v), Some(c)) = (kept, self.cvars.get_mut(&name.to_ascii_lowercase())) {
-                c.value = v;
-            }
+            self.register_kept(name, value, flags);
         }
         self.set_enum_domain(
             "r_aspectRatio",
@@ -1672,8 +1660,6 @@ impl Shell {
         }
     }
 
-    /// Command and cvar names starting with `prefix`, case-insensitively,
-    /// sorted.
     /// Re-registration takes a latched value (`Cvar_Get`, CoDMP.exe
     /// 0x439489): `vid_restart` re-registers `cl_language` (0x40fd14), and
     /// startup registers it after the config ran. True when a value moved.
@@ -1706,6 +1692,8 @@ impl Shell {
         moved
     }
 
+    /// Command and cvar names starting with `prefix`, case-insensitively,
+    /// sorted.
     pub fn complete(&self, prefix: &str) -> Vec<String> {
         let p = prefix.to_ascii_lowercase();
         let mut names: Vec<String> = COMMANDS
