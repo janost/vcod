@@ -142,7 +142,14 @@ pub struct Join {
     /// The profile's stats block the seven `stats` packets carry
     /// (`vcod_mpdata`); a fresh profile's without one.
     pub stats: Option<Stats>,
+    /// The stats under the `fs_game` the server's `connectResponse` names,
+    /// which take `stats`' place when it gives any: 1.7 loads that
+    /// `fs_game`'s stats before it sends them (0x46b93c).
+    pub stats_for: Option<StatsFor>,
 }
+
+/// [`Join::stats_for`]: the profile's stats block under an `fs_game`.
+pub type StatsFor = Box<dyn FnMut(&str) -> Option<Stats> + Send>;
 
 impl Default for Join {
     fn default() -> Self {
@@ -158,6 +165,7 @@ impl Default for Join {
             notes: None,
             voice: false,
             stats: None,
+            stats_for: None,
         }
     }
 }
@@ -290,13 +298,18 @@ impl Conn {
             c.userinfo
                 .push_str(&format!("\\password\\{}", opts.password));
         }
-        c.oob_reply(
-            format!("connect \"{ui}\"").as_bytes(),
-            b"connectResponse",
-            10,
-        )?
-        .context("no connectResponse")?;
+        let reply = c
+            .oob_reply(
+                format!("connect \"{ui}\"").as_bytes(),
+                b"connectResponse",
+                10,
+            )?
+            .context("no connectResponse")?;
         c.note(JoinNote::Connected);
+        let fs_game = String::from_utf8_lossy(&reply[b"connectResponse".len()..]);
+        if let Some(stats) = opts.stats_for.and_then(|mut f| f(fs_game.trim())) {
+            c.stats = stats;
+        }
 
         // Stats: the lowest index the server still wants, until its mask is 0.
         let mut want = (1u32 << STAT_PACKETS) - 1;

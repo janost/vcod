@@ -55,6 +55,17 @@ impl ProfileStats {
     pub(crate) fn load_from(root: &Path, fs_game: &str) -> Option<(ProfileStats, Stats)> {
         let name = super::cod4_menus::front::active_profile(root)?;
         let dir = super::cod4_menus::front::profile_dir(root, &name)?;
+        Self::at(dir, fs_game)
+    }
+
+    /// The stats of the profile in `dir` under `fs_game`: what a server's
+    /// `connectResponse <fs_game>` loads before the stats go out
+    /// (cod4-front-end.md 6).
+    pub(crate) fn in_dir(dir: &Path, fs_game: &str) -> Option<(ProfileStats, Stats)> {
+        Self::at(dir.to_path_buf(), fs_game)
+    }
+
+    fn at(dir: PathBuf, fs_game: &str) -> Option<(ProfileStats, Stats)> {
         let path = if fs_game.is_empty() {
             dir.join(FILE)
         } else {
@@ -67,7 +78,7 @@ impl ProfileStats {
             .filter(|s| s.get(299) == Some(10));
         let found = read.is_some();
         let stats = read.unwrap_or_else(Stats::fresh);
-        log::info!("cod4: profile {name}'s stats from {}", path.display());
+        log::info!("cod4: profile stats from {}", path.display());
         let p = ProfileStats {
             dir,
             path,
@@ -77,6 +88,11 @@ impl ProfileStats {
             found,
         };
         Some((p, stats))
+    }
+
+    /// The file the stats are read from and written to.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
     }
 
     /// The profile's directory.

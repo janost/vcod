@@ -362,6 +362,21 @@ editor picked).
 - A server's systeminfo `fs_game` that is rooted, names a drive or holds
   `..` names no directory for vcod's demos or the profile's
   stats; they go where they would with none.
+- The stats a join sends are the server's `fs_game`'s. The
+  `connectResponse` arm of `CL_ConnectionlessPacket` (0x46b70f) takes the
+  reply's argument, or `""` (0x6bfea7) without one, compares it with the
+  `fs_game` dvar's string (`Q_stricmp`, 0x46b94c) and, when they differ,
+  calls 0x579900 with it before the client state goes to 6, the stats
+  phase (0x46b98a). 0x579900 keeps that `fs_game` (0xcc1ac98) and builds
+  the file name from it and `mpdata` (0x6f5c64, through 0x4faf90), or
+  `mpdata` alone for an empty one. VERIFIED (the disassembly); that
+  0xcb199a4 is the `fs_game` dvar is INFERRED (the compare's use).
+- vcod loads the profile's `vcod_mpdata` under the `connectResponse`'s
+  `fs_game` before the stats packets, and the session writes back there:
+  the file the main menu reads after the game, once the systeminfo has
+  set `fs_game`. A `fs_game` that would leave the profile keeps the
+  menu's file. VERIFIED on ours
+  (`play::cod4::tests::cod4_live_a_modded_server_reads_the_mods_stats`).
 
 ## 7. Joins, games and errors
 

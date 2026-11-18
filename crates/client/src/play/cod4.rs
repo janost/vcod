@@ -760,6 +760,18 @@ impl Cod4Session {
         let notes = downloads.as_ref().and_then(|d| d.notes.clone());
         // A reconnect a disconnected fetch, each one landing a file.
         for _ in 0..16 {
+            // The profile's stats under the server's `fs_game`, as 1.7
+            // loads them on `connectResponse` (cod4-front-end.md 6).
+            let under: Arc<std::sync::Mutex<Option<_>>> = Arc::new(std::sync::Mutex::new(None));
+            let stats_for = profile.as_ref().map(|(p, _)| {
+                let (base, slot) = (p.dir().to_path_buf(), under.clone());
+                Box::new(move |fs_game: &str| {
+                    let (p, stats) = super::cod4_profile::ProfileStats::in_dir(&base, fs_game)?;
+                    let sent = stats.clone();
+                    *slot.lock().ok()? = Some((p, stats));
+                    Some(sent)
+                }) as vcod_cod4::net::conn::StatsFor
+            });
             let conn = Self::join_conn(
                 addr,
                 Join {
@@ -770,9 +782,13 @@ impl Cod4Session {
                     cancel: cancel.clone(),
                     notes: notes.clone(),
                     stats: profile.as_ref().map(|(_, s)| s.clone()),
+                    stats_for,
                     ..Join::default()
                 },
             )?;
+            if let Some(p) = under.lock().ok().and_then(|mut u| u.take()) {
+                profile = Some(p);
+            }
             let Some(conn) = (match downloads.as_mut() {
                 Some(d) => fetch_missing(conn, d, &mut fetched)?,
                 None => Some(conn),
@@ -6149,6 +6165,66 @@ pub(crate) mod tests {
             spawns,
             [Some("mp_crash".to_string()), Some("mp_backlot".to_string())]
         );
+    }
+
+    /// A server running a mod answers `connectResponse mods/x`: the join
+    /// sends the profile's stats under `mods/x` and the session writes
+    /// back there, the file the main menu reads once the server's
+    /// systeminfo has set `fs_game` (cod4-front-end.md 6).
+    #[test]
+    fn cod4_live_a_modded_server_reads_the_mods_stats() {
+        use crate::play::cod4_profile::ProfileStats;
+        use vcod_server::cod4::{Cod4Config, Cod4Server};
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().to_path_buf();
+        std::fs::create_dir_all(root.join("players/profiles/tester")).unwrap();
+        std::fs::write(root.join("players/profiles/active.txt"), "tester").unwrap();
+        for (fs_game, v) in [("", 1), ("mods/x", 2)] {
+            let (mut p, mut stats) = ProfileStats::load_from(&root, fs_game).unwrap();
+            stats.set(2301, v);
+            p.save(&stats, true);
+        }
+        let mut sv = Cod4Server::new(
+            Cod4Config {
+                map: "mp_crash".into(),
+                gametype: "war".into(),
+                hostname: "vcod".into(),
+                max_clients: 4,
+            },
+            7,
+        );
+        sv.load(Some(&install)).unwrap();
+        sv.set_cvar("fs_game", "mods/x");
+        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let addr = sock.local_addr().unwrap();
+        let clock = sim::Clock::new();
+        let menu_root = root.clone();
+        let client = sim::spawn(&clock, move || {
+            let profile = ProfileStats::load_from(&root, "");
+            let mut s = Cod4Session::connect_profile(
+                addr,
+                "modder",
+                "",
+                Cp::Bare,
+                MenuJoin::default(),
+                None,
+                profile,
+            )
+            .unwrap();
+            let path = s.profile.as_ref().map(|p| p.path().to_path_buf());
+            let sent = s.menus.stats().and_then(|st| st.get(2301));
+            s.disconnect();
+            (path, sent)
+        });
+        serve(&mut sv, &sock, &clock, &client, |_, _, _| true);
+        let (path, sent) = client.join().unwrap();
+        let (menu, _) = ProfileStats::load_from(&menu_root, "mods/x").unwrap();
+        assert_eq!(path.as_deref(), Some(menu.path()));
+        assert_eq!(sent, Some(2));
     }
 
     /// vcod-server's `fast_restart` under a joined, spawned client: no
