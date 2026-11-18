@@ -1,5 +1,6 @@
-//! Test helpers for every crate. Always compiled because the client crate's
-//! tests call into it.
+//! Test helpers for every crate: built for this crate's tests and, through
+//! the `testing` feature, for every crate that lists it in its
+//! dev-dependencies.
 
 use crate::net::protocol::{PROTOCOL_V1, install_protocol};
 use crate::pk3::Pk3Fs;

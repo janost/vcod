@@ -15,7 +15,10 @@ The A/B gates against retail captures are in [retail.md](retail.md).
 | `COD4_DIR` | CoD4 1.7 | the CoD4 tests, `cod4_live_*`, `cod4_map_sweep`, `cod4_soak` |
 
 The helpers in `vcod_common::testing` (and `vcod_cod4::testing`) read
-`COD_DIR`, `COD2_DIR`, `COD4_DIR` and `COD4_LNXDED_DIR`:
+`COD_DIR`, `COD2_DIR`, `COD4_DIR` and `COD4_LNXDED_DIR`. Both modules, and
+`vcod_common::collision`'s test worlds, sit behind each crate's `testing`
+feature, which every crate that calls them turns on from its
+dev-dependencies, so release builds leave them out:
 
 - Unset or empty: `None`, the test returns early and passes. Each test
   binary prints one `vcod testing: COD_DIR is unset, ...` line per reason

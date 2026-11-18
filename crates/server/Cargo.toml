@@ -27,6 +27,10 @@ vcod-cod4 = { path = "../cod4" }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[dev-dependencies]
+vcod-common = { workspace = true, features = ["testing"] }
+vcod-cod4 = { path = "../cod4", features = ["testing"] }
+
 [[test]]
 name = "server"
 path = "tests/main.rs"

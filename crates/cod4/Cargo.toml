@@ -11,6 +11,10 @@ rust-version.workspace = true
 readme.workspace = true
 publish = false
 
+# `testing`: the install lookups, as vcod-common's feature of that name.
+[features]
+testing = ["vcod-common/testing"]
+
 [dependencies]
 anyhow.workspace = true
 # The zlib backend zip already builds (zlib-rs), so no second inflater.
@@ -18,6 +22,9 @@ flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 vcod-common = { path = "../common" }
 glam.workspace = true
 log.workspace = true
+
+[dev-dependencies]
+vcod-cod4 = { path = ".", features = ["testing"] }
 
 [[test]]
 name = "cod4"

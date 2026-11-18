@@ -2509,6 +2509,7 @@ dependencies = [
  "flate2",
  "glam",
  "log",
+ "vcod-cod4",
  "vcod-common",
 ]
 
@@ -2523,6 +2524,7 @@ dependencies = [
  "libc",
  "log",
  "tempfile",
+ "vcod-common",
  "zip",
 ]
 

@@ -3726,6 +3726,7 @@ fn build_bvh(prims: &mut [(Prim, Vec3, Vec3)], base: u32, nodes: &mut Vec<BvhNod
 /// Test helper: flat solid floor (-1024..1024, top at z=0) plus extra axial
 /// solid brushes. Always compiled: the client's fx tests use it.
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn test_world(extra: &[(Vec3, Vec3)]) -> CollisionWorld {
     let mut specs: Vec<(usize, [f32; 3], [f32; 3])> =
         vec![(0, [-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0])];
@@ -3742,6 +3743,7 @@ pub fn test_world(extra: &[(Vec3, Vec3)]) -> CollisionWorld {
 /// slope arrives as loose triangles, which is the only way this module takes
 /// geometry that is not axis-aligned.
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn ramp_test_world(deg: f32, x0: f32, x1: f32) -> CollisionWorld {
     let h = (x1 - x0) * deg.to_radians().tan();
     let (y0, y1) = (-512.0, 512.0);
@@ -3768,6 +3770,7 @@ pub fn ramp_test_world(deg: f32, x0: f32, x1: f32) -> CollisionWorld {
 
 /// Test helper: axial brushes with named materials `(name, contents, surface)`.
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn synthetic_world(
     materials: &[(&str, u32, u32)],
     brushes: &[(usize, [f32; 3], [f32; 3])],
@@ -3782,6 +3785,7 @@ pub fn synthetic_world(
 /// whether they are solid at all. The only shape in which
 /// [`CollisionWorld::set_model_linked`] is observable.
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn submodel_test_world(entities: &str, submodels: &[([f32; 3], [f32; 3])]) -> CollisionWorld {
     let side = |v: f32| crate::mapworld::BrushSide {
         plane_or_dist: v.to_bits(),
@@ -3832,6 +3836,7 @@ pub fn submodel_test_world(entities: &str, submodels: &[([f32; 3], [f32; 3])]) -
 /// `material` whose last row collapses onto `c`, its front the side
 /// `cross(b - a, c - a)` points to.
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn push_tri_patches(bsp: &mut crate::mapworld::MapWorld, tris: &[[Vec3; 3]], material: u16) {
     for &[a, b, c] in tris {
         let mid = |p: Vec3, q: Vec3| (p + q) * 0.5;
@@ -3853,6 +3858,7 @@ pub fn push_tri_patches(bsp: &mut crate::mapworld::MapWorld, tris: &[[Vec3; 3]],
 /// A test map's lump 24: `tris` as one terrain partition of `material`,
 /// each front the side `cross(b - a, c - a)` points to.
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn push_tri_terrain(bsp: &mut crate::mapworld::MapWorld, tris: &[[Vec3; 3]], material: u16) {
     let first_vert = bsp.collision_verts.len() as u32;
     let first_index = bsp.collision_indices.len() as u32;
@@ -3875,6 +3881,7 @@ pub fn push_tri_terrain(bsp: &mut crate::mapworld::MapWorld, tris: &[[Vec3; 3]],
 /// ([`push_tri_terrain`]), the only way this module takes swept geometry
 /// that is not axis-aligned.
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn synthetic_world_tris(
     materials: &[(&str, u32, u32)],
     brushes: &[(usize, [f32; 3], [f32; 3])],
@@ -3888,6 +3895,7 @@ pub fn synthetic_world_tris(
 /// [`synthetic_world`] plus world-space triangles as patches of material 0
 /// ([`push_tri_patches`]).
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn synthetic_world_patches(
     materials: &[(&str, u32, u32)],
     brushes: &[(usize, [f32; 3], [f32; 3])],
@@ -3899,6 +3907,7 @@ pub fn synthetic_world_patches(
 }
 
 /// A model-0 map of named materials and axial brushes.
+#[cfg(any(test, feature = "testing"))]
 fn synthetic_bsp(
     materials: &[(&str, u32, u32)],
     brushes: &[(usize, [f32; 3], [f32; 3])],

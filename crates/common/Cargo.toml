@@ -11,6 +11,11 @@ description = "What the vcod games share: formats, collision, movement and the C
 # tests/main.rs links every test file into one binary (`cargo test --test common`).
 autotests = false
 
+# The `testing` module and the test worlds, for other crates' tests: each
+# turns it on from its dev-dependencies, so no release build carries them.
+[features]
+testing = []
+
 [dependencies]
 anyhow.workspace = true
 bytemuck.workspace = true
@@ -23,6 +28,7 @@ zip.workspace = true
 libc = "0.2"
 
 [dev-dependencies]
+vcod-common = { path = ".", features = ["testing"] }
 tempfile.workspace = true
 
 [[test]]
