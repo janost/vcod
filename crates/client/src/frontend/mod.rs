@@ -602,6 +602,7 @@ impl Ui {
     /// The main menu, as retail shows it with no game up. While connecting
     /// or loading this is also what Esc opens (`UIMENU_MAIN`).
     pub fn open_main(&mut self, shell: &Shell, out: &mut Vec<UiEffect>) {
+        self.server_cvars.clear();
         self.in_game = false;
         self.active_type = UIMENU_MAIN;
         self.open_menu("main", shell, out);
@@ -684,6 +685,7 @@ impl Ui {
     /// it, as `Com_Error` leaves retail.
     pub fn show_error(&mut self, message: &str, shell: &Shell, out: &mut Vec<UiEffect>) {
         self.error = message.to_string();
+        self.server_cvars.clear();
         self.in_game = false;
         self.active_type = UIMENU_MAIN;
         self.open_menu("main", shell, out);
@@ -4894,6 +4896,32 @@ mod tests {
         ui.open_menu("c", &shell, &mut Vec::new());
         assert_eq!(ui.opening, 0);
         assert_eq!(ui.focused_menu(), ui.find("c"));
+    }
+
+    /// Off the server, a menu reads the console again, not the last
+    /// server's cvars: a drop and the main menu both forget them.
+    #[test]
+    fn the_server_cvars_go_with_the_game() {
+        let mut ui = ui_with_menu(r#"{ menuDef { name "main" rect 0 0 640 480 } }"#);
+        let mut shell = Shell::new();
+        shell.execute("set scr_allow_panzerfaust 1");
+        let server = || HashMap::from([("scr_allow_panzerfaust".into(), "0".into())]);
+        ui.set_server_cvars(server());
+        assert_eq!(
+            ui.cvar("scr_allow_panzerfaust", &shell).as_deref(),
+            Some("0")
+        );
+        ui.show_error("dropped", &shell, &mut Vec::new());
+        assert_eq!(
+            ui.cvar("scr_allow_panzerfaust", &shell).as_deref(),
+            Some("1")
+        );
+        ui.set_server_cvars(server());
+        ui.open_main(&shell, &mut Vec::new());
+        assert_eq!(
+            ui.cvar("scr_allow_panzerfaust", &shell).as_deref(),
+            Some("1")
+        );
     }
 
     /// A UI over one menu file, `ui_mp/m.menu`, holding `body`.
