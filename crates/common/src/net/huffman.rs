@@ -46,8 +46,10 @@ impl Node {
 pub struct Huffman {
     nodes: Vec<Node>,
     root: i32,
-    /// `huff_t.loc`: symbol -> node index.
-    loc: [i32; HMAX + 1],
+    /// Each byte's code, bit `i` the `i`-th bit sent, and its length: the
+    /// tree is frozen, so `Huff_offsetTransmit`'s leaf-to-root walk is done
+    /// once here.
+    codes: [(u64, u8); 256],
 }
 
 /// `huff_t`, the adaptive coder.
@@ -399,10 +401,23 @@ impl Huffman {
                 b.add_ref(i as u8);
             }
         }
+        let nodes = b.nodes[..b.bloc_node].to_vec();
+        let mut codes = [(0u64, 0u8); 256];
+        for (ch, code) in codes.iter_mut().enumerate() {
+            let mut node = b.loc[ch];
+            while nodes[node as usize].parent != NIL {
+                let parent = nodes[node as usize].parent;
+                let bit = u64::from(nodes[parent as usize].right == node);
+                assert!(code.1 < 64, "a Huffman code longer than 64 bits");
+                code.0 = (code.0 << 1) | bit;
+                code.1 += 1;
+                node = parent;
+            }
+        }
         Huffman {
-            nodes: b.nodes[..b.bloc_node].to_vec(),
+            nodes,
             root: b.tree,
-            loc: b.loc,
+            codes,
         }
     }
 
@@ -454,17 +469,9 @@ impl Huffman {
     /// `Huff_offsetTransmit`; `out` grows as needed.
     pub fn offset_transmit(&self, ch: u8, out: &mut Vec<u8>, bit_offset: &mut usize) {
         let mut bloc = *bit_offset;
-        let mut bits = [0u8; POOL];
-        let mut n = 0;
-        let mut node = self.loc[ch as usize];
-        while self.nodes[node as usize].parent != NIL {
-            let parent = self.nodes[node as usize].parent;
-            bits[n] = u8::from(self.nodes[parent as usize].right == node);
-            n += 1;
-            node = parent;
-        }
-        for i in (0..n).rev() {
-            add_bit(bits[i], out, &mut bloc);
+        let (code, len) = self.codes[ch as usize];
+        for i in 0..len {
+            add_bit((code >> i) as u8 & 1, out, &mut bloc);
         }
         *bit_offset = bloc;
     }
