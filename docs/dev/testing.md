@@ -9,10 +9,14 @@ The A/B gates against retail captures are in [retail.md](retail.md).
 | Env | Install | Runs |
 |---|---|---|
 | `COD_DIR` | CoD1 1.1 | the 1.1 tests and gates |
-| `COD_DIR` | CoD1 1.5 (`main/` with stock paks only) | `configstrings_15_ab`, `timeout_15_ab`, `legs_ab`'s 1.5 walks (the stop and go too), `turret_ab`'s 1.5 replay |
+| `COD_DIR` | CoD1 1.5 (`main/` with stock paks only: `--example stock_tree`, below) | `configstrings_15_ab`, `timeout_15_ab`, `legs_ab`'s 1.5 walks (the stop and go too), `turret_ab`'s 1.5 replay |
 | `COD_DIR` | UO (`uo/` beside 1.5's `main/`) | the UO tests and what reads only data 1.5 and UO share: `moves_ab`'s UO replays (sprint, mounts, cook), `configstrings_uo_ab`, `playerstate_uo_ab`, `playerstate_combat_ab`'s UO capture, `mount_uo_ab`, `uo_weapons_ab`, `legs_ab`'s UO walks, `turret_ab`'s UO replay |
 | `COD2_DIR` | CoD2 1.3 | the CoD2 tests, `cod2_map_census` |
 | `COD4_DIR` | CoD4 1.7 | the CoD4 tests, `cod4_live_*`, `cod4_map_sweep`, `cod4_soak` |
+
+`cargo run -p vcod-common --example stock_tree -- <install> <out>` links
+the stock-only tree the 1.5 and UO rows want: the paks `--vanilla` keeps,
+under `<out>/main/` and `<out>/uo/`.
 
 The helpers in `vcod_common::testing` (and `vcod_cod4::testing`) read
 `COD_DIR`, `COD2_DIR`, `COD4_DIR` and `COD4_LNXDED_DIR`:

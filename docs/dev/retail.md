@@ -12,7 +12,9 @@ them on vcod.
   - `COD_VERSION=1.5` runs the 1.5b server. Point `COD_DIR` at a directory
     whose `main/` holds only the stock 1.5 paks (pak0-pakb and the localized
     ones): third-party pk3s in a 1.5 install override the stock gametypes and
-    break the script compile.
+    break the script compile. `cargo run -p vcod-common --example stock_tree
+    -- <install> <out>` links such a tree (`main/`, and `uo/` on a UO
+    install) from the stock paks `--vanilla` keeps.
   - `COD_VERSION=uo` runs the United Offensive 1.51b server (default map
     `mp_cassino`). Its `COD_DIR` needs the 1.5 `main/` and the UO `uo/`. The
     net probe joins it with the UO install as `--game-dir` and `--mod-dir uo`.
