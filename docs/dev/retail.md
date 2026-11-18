@@ -64,6 +64,27 @@ them on vcod.
 - `--bots N [--bots-shoot]` adds clients.
 - `--trace` logs per-snapshot timing.
 
+## A retail client against vcod-server
+
+A 1.1 `CoDMP.exe` joining vcod-server (the first pass is
+`cod11-server-handshake.md`, "Retail client check"). Two shells:
+
+```
+RUST_LOG=debug cargo run -p vcod-server -- mp_carentan
+CoDMP.exe +set r_fullscreen 0 +connect 127.0.0.1:28960     # from the 1.1 install
+```
+
+Pass: the server logs `connected`, `gamestate, N bytes` and `sent its first
+move`, with no `usercmd not parsed` at debug level; the client loads the map;
+neither side prints `EXE_SERVER_IS_DIFFERENT_VER`.
+
+| Symptom | Suspect |
+|---|---|
+| `usercmd not parsed` at debug level | the full-field usercmd branch, INFERRED from disassembly only; table in `tools/re/net-notes.md` |
+| `Illegible server message N` right after the map loads | the missing `svc_EOF` terminator (`ServerNetchan::transmit`) |
+| the client disconnects right after the gamestate with another error | the configstring table in `crates/server/src/configstrings.rs` |
+| no `connectResponse` | `parse_connect` (`crates/common/src/net/connectionless.rs`) |
+
 ## Public servers and the master
 
 - vcod's browser and heartbeat use `master.cod.pm`, whose operator allowed

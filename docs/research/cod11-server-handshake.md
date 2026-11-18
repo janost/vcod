@@ -397,23 +397,8 @@ an op) and disconnects (server: `dropped: EXE_DISCONNECTED`). vcod's client
 never reads past the gamestate body, so only retail's catches it.
 `ServerNetchan::transmit` appends it; the byte-exact test pins it.
 
-Two shells:
-
-```
-RUST_LOG=debug cargo run -p vcod-server -- mp_carentan
-CoDMP.exe +set r_fullscreen 0 +connect 127.0.0.1:28960     # from the 1.1 install
-```
-
-Pass: the server logs `connected`, `gamestate, N bytes` and `sent its first
-move`, with no `usercmd not parsed` at debug level; the client loads the map;
-neither side prints `EXE_SERVER_IS_DIFFERENT_VER`.
-
-| Symptom | Suspect |
-|---|---|
-| `usercmd not parsed` at debug level | the full-field usercmd branch, INFERRED from disassembly only; table in `tools/re/net-notes.md` |
-| `Illegible server message N` right after the map loads | the missing `svc_EOF` terminator (`ServerNetchan::transmit`) |
-| the client disconnects right after the gamestate with another error | the configstring table in `crates/server/src/configstrings.rs` |
-| no `connectResponse` | `parse_connect` (`crates/common/src/net/connectionless.rs`) |
+The run's recipe, pass line and symptom table: `docs/dev/retail.md`, "A
+retail client against vcod-server".
 
 ## Housekeeping: master heartbeat, rcon, zombie slots, private slots
 
