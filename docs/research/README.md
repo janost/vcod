@@ -90,24 +90,24 @@ The CoD1 view weapon: `cod11-combat.md` (its offsets), `xanim-v14-format.md` (th
 
 | Doc | Covers |
 |---|---|
-| [cod4-handshake.md](cod4-handshake.md) | Handshake, stats phase and block, pure `cp`, netchan, Huffman, configstrings, what vcod-server sends, its console |
+| [cod4-handshake.md](cod4-handshake.md) | Handshake, stats phase and block, pure `cp` (8), netchan, Huffman, configstrings, what vcod-server sends (9), downloads (11), the server browser (12), CoD4x servers (13), the console and rcon (14), off the LAN: authorize, `requeststats`, pacing (15) |
 | [cod4-netfields.md](cod4-netfields.md) | Netfield tables, delta codec, gamestate end, snapshots, the move message |
-| [cod4-server-frame.md](cod4-server-frame.md) | `SV_Frame`'s order: cmds, zombies, archive, message order |
+| [cod4-server-frame.md](cod4-server-frame.md) | `SV_Frame`'s order: cmds, zombies, archive, message order; `sv_fps` (8); vcod-server's tick cost, measured: slow ticks (9), full servers of every game (10), 32 bots (11), off-LAN pacing (12) |
 | [cod4-map-cycle.md](cod4-map-cycle.md) | `map`, `fast_restart`, `map_rotate`, the client's map change, votes, the menu answers' one-packet rule |
 | [cod4-gsc.md](cod4-gsc.md) | gsc: dialect over CoD2's, builtin tables, configstring slots, the `war` boot, callbacks, connect to spawn, menus, loadout, server commands and squash, follow, hardpoints, script traces, launched parts on the client |
 | [cod4-pmove.md](cod4-pmove.md) | Player movement: flags, ground, step, stance, jump, sprint, dvars, the moves A/B (`cod4_moves_ab`), the server's think and spawn, `placeSpawnPoint`, the walk replay (`cod4::wire_ab`) |
 | [cod4-combat.md](cod4-combat.md) | Combat on vcod-server: `WeaponDef`, `PM_Weapon`, the shot, hit boxes, antilag, damage, corpse, dropped weapons, killcam, the A/B (`cod4_combat_ab`), the capture gates (`capture_ab`), grenades, launcher, melee, `kill` |
 | [cod4-collision.md](cod4-collision.md) | The clip map: leaf brush trees, triangles, submodels, static model clip, the clip census |
 | [cod4-player-anims.md](cod4-player-anims.md) | xanim parts, xmodel skinning, anim index, heads and tags, the anim script (`pmove::anim`), ragdoll, the view weapon's tree |
-| [cod4-client-view.md](cod4-client-view.md) | Client clock (`CL_AdjustTimeDelta`), snapshot lerp, teleport cuts, view weapon, prediction (`play::cod4_predict`), hardpoint jets and helicopter |
+| [cod4-client-view.md](cod4-client-view.md) | Client clock (`CL_AdjustTimeDelta`), snapshot lerp, teleport cuts, view weapon, prediction (`play::cod4_predict`), lean (7), shellshock (8), hardpoint jets and helicopter (11), depth of field (12), the gunner's view (13), recoil and kicks (14), hidden parts (15), third person (16) |
 | [cod4-hud.md](cod4-hud.md) | Fonts, server commands, scoreboard, kill feed, chat, hudelems, weapon HUD, compass, killcam, the script menus a join answers, damage overlays |
 | [cod4-sound.md](cod4-sound.md) | Alias lists, loaded and streamed sounds, `channels.def`, falloff, event and loop sounds, createfx sounds |
 | [cod4-effects.md](cod4-effects.md) | `FxEffectDef`, impact table, event effects, looping and tag-riding effects, createfx, client bullets and `whizby` |
 | [cod4-voice.md](cod4-voice.md) | Voice chat: packets, relay rules, codec, talker list, mute |
-| [cod4-front-end.md](cod4-front-end.md) | `ui_mp` main menu, menu stack, profiles, Create a Class and its stat commands, Start New Server, Mods, menu sounds and music |
-| [cod4-demos.md](cod4-demos.md) | Demos: what 1.7 keeps and changes from CoD2 |
-| [cod4-fastfile.md](cod4-fastfile.md) | `IWffu100` fastfiles: `XFile` blocks, pointer tokens, the `XAssetType` table, every asset body and its `Load_*`, the zone census |
-| [cod4-world.md](cod4-world.md) | Map worlds: vertices, surfaces, cells, portals, static models, techsets, images, collision indices, fog, draw order, the map census |
+| [cod4-front-end.md](cod4-front-end.md) | `ui_mp` main menu, menu stack, profiles, Create a Class and its stat commands, Start New Server, Mods, menu sounds and music, the Options pages (9), aspect and HUD scale (10) |
+| [cod4-demos.md](cod4-demos.md) | Demos: what 1.7 keeps and changes from CoD2; screenshots and `cl_avidemo` (10) |
+| [cod4-fastfile.md](cod4-fastfile.md) | `IWffu100` fastfiles: `XFile` blocks, pointer tokens, the `XAssetType` table, every asset body and its `Load_*`, the zone census; mods and usermaps, where a zone loads from (13) |
+| [cod4-world.md](cod4-world.md) | Map worlds: vertices, surfaces, cells, portals, static models, the light grid and model lighting (3.1, 3.2), primary lights (3.5), the sun shadow map (3.6), techsets, images, collision indices, reflection probes (9.7), water (9.8), fog, vision sets and glow (11), draw order (12), dynamic entities (13), the map census |
 | [cod4-gaps.md](cod4-gaps.md) | What a 1.7 client match shows that vcod still lacks |
 | [cod4-server-gaps.md](cod4-server-gaps.md) | What a 1.7 dedicated server does that vcod-server still lacks |
 | [cod4-map-sweep.md](cod4-map-sweep.md) | Every map under six gametypes on vcod-server and the client; the soak |
@@ -119,7 +119,7 @@ The CoD1 view weapon: `cod11-combat.md` (its offsets), `xanim-v14-format.md` (th
 | [bot-navigation.md](bot-navigation.md) | The nav graph (stock maps carry no path nodes), following, memory and hearing; stall tables and build times (the census floors) |
 | [bot-objectives.md](bot-objectives.md) | What each gametype asks of a bot and the brain that plays it: CoD1, UO (vehicles included), CoD2 and CoD4 gametypes, bot management, team play |
 | [bot-combat.md](bot-combat.md) | Skill levels, the `bot_match` harness and its numbers (1), cover, retreat, aim, footwork, before and after tables |
-| [bot-measurements-cod2-cod4.md](bot-measurements-cod2-cod4.md) | Older CoD2 and CoD4 `bot_match` runs, moved out of `docs/bots.md` |
+| [bot-measurements-cod2-cod4.md](bot-measurements-cod2-cod4.md) | Older CoD2 and CoD4 `bot_match` runs, moved out of `docs/bots.md` (vcod's own measurements, no retail claims) |
 
 ## Formats
 
