@@ -1526,7 +1526,7 @@ struct FollowFrame {
 }
 
 /// [`Server::download_opener`]'s file reader.
-type Opener = dyn Fn(&str) -> Result<Vec<u8>, crate::download::Refusal>;
+type Opener = dyn Fn(&str) -> Result<crate::download::DownloadFile, crate::download::Refusal>;
 
 /// What CoD1's `SV_SendClientMessages` builds once for every client's
 /// snapshot ([`Server::snapshots_begin`]).
@@ -1734,7 +1734,7 @@ fn write_download(
     w: &mut MsgWriter,
     now: i32,
     rate: i32,
-    open: &impl Fn(&str) -> Result<Vec<u8>, crate::download::Refusal>,
+    open: &impl Fn(&str) -> Result<crate::download::DownloadFile, crate::download::Refusal>,
     www: Option<&crate::download::WwwConfig>,
 ) {
     let budget = crate::download::blocks_per_message(rate, c.snapshot_msec());
@@ -3901,14 +3901,15 @@ impl Server {
     }
 
     /// What `SV_WriteDownloadToClient` (0x8086290) opens a download with:
-    /// the bytes, or the refusal. Only paks this server mounts and lists in
+    /// the pak's open file, or the refusal. Only paks this server mounts and lists in
     /// `sv_referencedPakNames` go out. Retail's `FS_SV_FOpenFileRead`
     /// opens any path under its game directories, `..` included, so a
     /// `download main/server.cfg` hands out the rcon password there
     /// (docs/research/cod11-server-handshake.md, "Serving a download").
     fn download_opener(
         &self,
-    ) -> impl Fn(&str) -> Result<Vec<u8>, crate::download::Refusal> + use<> {
+    ) -> impl Fn(&str) -> Result<crate::download::DownloadFile, crate::download::Refusal> + use<>
+    {
         let allow = self
             .level_cvar("sv_allowDownload")
             .is_none_or(|v| v.trim().parse::<i32>().unwrap_or(0) != 0);
@@ -3928,8 +3929,8 @@ impl Server {
                     fs.paks()
                         .find(|p| p.qualified_name().eq_ignore_ascii_case(stem))
                 })
-                .and_then(|p| std::fs::read(&p.path).ok())
-                .filter(|b| !b.is_empty())
+                .and_then(|p| crate::download::DownloadFile::open(&p.path))
+                .filter(|f| !f.is_empty())
                 .ok_or(Refusal::NotFound)
         }
     }
