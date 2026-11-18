@@ -230,6 +230,9 @@ Open, by how much a player notices.
    The strafe's rows hit traces on a strafing body too. Unread: the legs'
    swing and the controls' ease on a strafe under gdb (cod4-combat.md
    6.1).
+10. `addTestClient()` answers `undefined`, retail's answer with no free
+   slot: 1.7's `SV_AddTestClient` is not modelled, so a mod that adds test
+   clients gets none (`builtins::cod4_client`). M.
 
 ## The retail run
 

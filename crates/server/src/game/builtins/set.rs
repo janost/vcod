@@ -862,6 +862,27 @@ mod tests {
     use super::*;
     use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 
+    /// CoD4's `addTestClient` is its own: `undefined`, where the shared
+    /// handler reached CoD2's host state and panicked (BUG-064).
+    #[test]
+    fn cod4_add_test_client_answers_undefined() {
+        let add = BuiltinSet::cod4().get("addtestclient").unwrap();
+        let mut vm = vcod_gsc::Vm::new();
+        let mut host = crate::game::host::GameHost::new(
+            &crate::game::profile::COD4,
+            vec![String::new(); 2048],
+        );
+        host.test_clients.svs_time_ms = 5000;
+        vm.with_cx(|cx| {
+            for _ in 0..2 {
+                assert_eq!(
+                    add(&mut host, cx, None, &[]),
+                    Ok(vcod_gsc::Value::Undefined)
+                );
+            }
+        });
+    }
+
     #[test]
     fn implementations_are_unique() {
         let mut seen = std::collections::HashSet::new();
