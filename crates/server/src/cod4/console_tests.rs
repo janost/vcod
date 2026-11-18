@@ -214,7 +214,7 @@ fn cod4_an_off_lan_ban_holds_the_address_whatever_the_hex() {
     };
     let ip = std::net::Ipv4Addr::new(203, 0, 113, 7);
     let addr_guid = (u32::from(ip) as i32).to_string();
-    let mut join = |sv: &mut Cod4Server, slot: u32, port: u16| {
+    let join = |sv: &mut Cod4Server, slot: u32, port: u16| {
         let mut p = super::wire_ab::Probe::new("far", slot, port, 0, &[]);
         p.addr = std::net::SocketAddr::from((ip, port));
         p.join(sv, now);

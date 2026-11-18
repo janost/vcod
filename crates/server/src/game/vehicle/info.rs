@@ -175,7 +175,10 @@ impl VehicleInfo {
             ("collisionFrontDist", self.collision_front_dist),
             ("collisionBackDist", self.collision_back_dist),
         ];
-        if let Some((k, v)) = numbers.iter().find(|(_, v)| !(v.abs() <= MAX_MAGNITUDE)) {
+        if let Some((k, v)) = numbers
+            .iter()
+            .find(|(_, v)| !v.is_finite() || v.abs() > MAX_MAGNITUDE)
+        {
             return Err(format!("{k} {v} is not a number within {MAX_MAGNITUDE}"));
         }
         let sizes = [
