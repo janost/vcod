@@ -379,6 +379,9 @@ committed fixture, every key and field.
 
 ## 4. `SV_MapRestart_f`
 
+The server side. The client's side, `CG_MapRestart`, is
+`cod11-events-and-fx.md` 9.8.
+
 Label for `cod_lnxded` `0x8083de4`. VERIFIED: registered as the console
 command `map_restart` by `Cmd_AddCommand("map_restart", 0x8083de4)` at
 `0x8084b0a`, name string at `0x80d3fe7`. VERIFIED: also called directly from
