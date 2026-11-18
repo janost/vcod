@@ -3409,11 +3409,12 @@ impl Server {
         let Some(rt) = self.game.module.script.as_mut() else {
             return;
         };
-        let line = if rt.host.logs_1_1() {
-            format!("tell: {from_name} to {to_name}: {text}\n")
-        } else {
-            format!("tell;0;{slot};{from_name};0;{to};{to_name};{text}\n")
-        };
+        let line = crate::game::say::tell_line(
+            rt.host.logs_1_1(),
+            (slot, &from_name),
+            (to, &to_name),
+            text,
+        );
         rt.host.log_printf(line);
     }
 
