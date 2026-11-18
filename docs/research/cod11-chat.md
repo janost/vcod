@@ -81,6 +81,11 @@ VERIFIED off the function body, each branch confirmed by the live captures in 2.
 - The line is `va("%s \"\x15%s%c%c%s\"", word, head, '^', colour, text)` (0x7397a), `word` being `i` (0x73976) for mode 1 and `h` (0x73978) otherwise, sent by `trap_SendServerCommand(client, 0, line)`.
 - Recipients: with no target, every entity slot below `level.maxclients`; with one, that one. A recipient must be in use, have a client, be `CON_CONNECTED` (`client+0x20ec` == 2), pass `OnSameTeam` (0x64aec: teams equal and not 0) in mode 1, and, when the speaker's `sessionState` (`client+0x20d0`) is not 0 (playing), have a nonzero `sessionState` too. A dead or spectating speaker reaches only clients out of play.
 - `G_LogPrintf` writes `say: %s: %s` or `sayteam: %s: %s`.
+- vcod writes each control character of the text as a space in its
+  `games_mp.log` lines and its server log, in `say`, `sayteam` and `tell`
+  alike (`game::say::log_text`): a quoted line feed would otherwise start a
+  record the client wrote, stamp included. Retail writes the bytes. The
+  chat line on the wire keeps them.
 
 INFERRED: the location forms never appear on a stock map. `Team_GetLocationMsg` (0x647c0) walks `level.locationHead`, which only `target_location` entities fill, and a byte search over `pak*.pk3` finds that classname in no stock `.bsp`. vcod leaves them out.
 

@@ -199,7 +199,10 @@ it off too.
 ### rcon
 
 From any client's console (`rcon <command>` after `rconPassword <pw>`,
-or `rcon login <pw>` on CoD2 and CoD4) or a retail one.
+or `rcon login <pw>` on CoD2 and CoD4) or a retail one. Each address gets
+one request per 500 ms, and one that sends 8 wrong passwords in a burst is
+ignored until its count drains (one per 30 s). Every answered request is
+logged with its sender.
 
 | Game | Commands |
 |---|---|

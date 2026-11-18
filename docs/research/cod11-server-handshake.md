@@ -495,6 +495,13 @@ a second.
   (Q3's `Com_Milliseconds`). INFERRED (shape).
 - With the 5 ms socket read ("Pings"): 505 ms apart answered 20/20, 490 ms
   0/10. VERIFIED (live, 1.1d, 2026-10-17).
+- vcod keeps the 500 ms window per source address, so a flood from one
+  address cannot hold the admin's requests out, and drops an address that
+  sends 8 wrong passwords in a burst, its count draining one per 30 s
+  (`rcon::Rcon`, the same on CoD2 and CoD4). It tracks 4096 addresses at
+  once; past that a wrong password from a new address gets no answer. From
+  one address the timing above is unchanged. vcod's own: retail has one
+  window for the whole server and no count.
 - vcod-server rebuilds that moment (`handle_queued` in `main.rs`,
   `engine::Arrival::read`): the arrival, or the end of the previous packet's
   handling when later (an rcon `map_restart`); the tick is not counted, as

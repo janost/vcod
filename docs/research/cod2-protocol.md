@@ -66,7 +66,7 @@ Against 1.1's list, new: `con_disabled`, `ff`, `kc`, `hw`, `mod`, `voice`, `pb`;
 
 ### 1.6 `rcon`
 
-**Divergence from 1.1.** `SVC_RemoteCommand` (0x8097188; its commands are in 3.4.2) checks argv 1 against `rcon_password` (0x849f740, the `Dvar_RegisterString("rcon_password", ...)` site), Q3's name; 1.1's is `rconPassword`. VERIFIED. A second rcon less than 500 ms after the last one from anyone gets no answer, good password or bad (the global at 0x849fbf4). VERIFIED. Output goes back through `SV_FlushRedirect` (0x8097050) as `print\n<text>` packets of at most 1300 bytes. VERIFIED. A command starting `pb_sv_` also runs `PbServerForceProcess`. VERIFIED.
+**Divergence from 1.1.** `SVC_RemoteCommand` (0x8097188; its commands are in 3.4.2) checks argv 1 against `rcon_password` (0x849f740, the `Dvar_RegisterString("rcon_password", ...)` site), Q3's name; 1.1's is `rconPassword`. VERIFIED. A second rcon less than 500 ms after the last one from anyone gets no answer, good password or bad (the global at 0x849fbf4). VERIFIED. Output goes back through `SV_FlushRedirect` (0x8097050) as `print\n<text>` packets of at most 1300 bytes. VERIFIED. vcod logs `Rcon from %s:\n%s` or `Bad rcon from %s:\n%s` with the third token for every request it answers, as 1.1 and CoD4 1.7 do; whether CoD2 1.3 logs them is not recorded. Its window is per address with a wrong-password count, vcod's own (cod11-server-handshake.md, rcon). A command starting `pb_sv_` also runs `PbServerForceProcess`. VERIFIED.
 
 The refusals, each a `print` (0x8097188, strings at file offsets 0x103c95 and 0x103cc0), are CoD4 1.7's three (cod4-handshake.md 14.2). VERIFIED:
 
