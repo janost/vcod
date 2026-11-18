@@ -1886,8 +1886,11 @@ From the `cod4_lnxded` 1.7 disassembly, checked against the kill capture.
   is sent in the 100 ms (`Cod4Level::run_missiles`, `missile_entities`).
   The module's own frees go through `GameHost::free_entity`, which drops
   the row and the entity's `setCanDamage` entry.
-- The two refusals are not ported: no stock script deletes a client or an
-  entity from its own think.
+- The client refusal is ported as a script error
+  (`HostProfile::delete_refuses_client`); the think refusal is not, as no
+  stock script deletes an entity from its own think. On CoD1 and CoD2 vcod
+  notifies `death` on a deleted client and keeps his entity: retail's
+  client arm there is unread.
 
 ## 15. The capture gates
 

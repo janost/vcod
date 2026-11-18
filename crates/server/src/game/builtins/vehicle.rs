@@ -578,7 +578,8 @@ fn verify_position(
 
 /// `clearVehiclePosition()` (0x6950e): whatever stands in the vehicle's box
 /// (mask 0x4000100: corpses and dropped items) is deleted as `delete()`
-/// does it: notified `death` with itself, unlinked and freed 100 ms on.
+/// does it: notified `death` with itself, unlinked and freed 100 ms on (a
+/// dead player's corpse link is only notified).
 fn clear_vehicle_position(
     host: &mut GameHost,
     cx: &mut Cx,
