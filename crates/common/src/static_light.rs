@@ -578,6 +578,9 @@ impl RegionKeep {
     /// Fewer samples a side leave a cell's keep mostly noise: two halves
     /// of a cell's samples disagree by about as much as cells do.
     pub const MIN_SAMPLES: usize = 32;
+    /// Cells a side past which the grid is left empty: a whole +/-65536
+    /// world spans 128.
+    const MAX_SIDE: u64 = 256;
 
     /// The cell of `p`, in the grid's own index.
     fn cell(p: Vec3) -> (i32, i32) {
@@ -606,6 +609,15 @@ impl RegionKeep {
             let c = Self::cell(p);
             lo = (lo.0.min(c.0), lo.1.min(c.1));
             hi = (hi.0.max(c.0), hi.1.max(c.1));
+        }
+        let span = |lo: i32, hi: i32| (i64::from(hi) - i64::from(lo) + 1) as u64;
+        if span(lo.0, hi.0) > Self::MAX_SIDE || span(lo.1, hi.1) > Self::MAX_SIDE {
+            return Some(RegionKeep {
+                whole,
+                origin: lo,
+                size: (0, 0),
+                keeps: Vec::new(),
+            });
         }
         let size = ((hi.0 - lo.0 + 1) as usize, (hi.1 - lo.1 + 1) as usize);
         let mut sides = vec![(Vec::new(), Vec::new()); size.0 * size.1];
@@ -931,6 +943,10 @@ fn table_cos(deg: f32) -> f32 {
     ((i & 0x3ff) as f64 * std::f64::consts::TAU / 1024.0).sin() as f32
 }
 
+/// GL's spot exponent cap; stock maps' cones carry 0 to 5, and past 2^24 an
+/// f32 count never reaches the exponent.
+const MAX_SPOT_EXPONENT: f32 = 128.0;
+
 fn shade_vertex(world: &WorldLight, m: &ModelLights, p: Vec3, n: Vec3) -> [u8; 4] {
     let mut c = world.sky * m.sky + world.ambient;
     for (l, w) in &m.lights {
@@ -946,7 +962,7 @@ fn shade_vertex(world: &WorldLight, m: &ModelLights, p: Vec3, n: Vec3) -> [u8; 4
                 let cs = v.dot(l.spot_dir);
                 if cs > table_cos(l.spot_cutoff) {
                     let mut i = 0.0;
-                    while i < l.spot_exponent {
+                    while i < l.spot_exponent.min(MAX_SPOT_EXPONENT) {
                         atten *= cs;
                         i += 1.0;
                     }
@@ -1158,6 +1174,21 @@ mod tests {
         // 45 degrees off the axis is outside a 30 degree cone
         let off = shade_vertex(&w, &m, Vec3::new(10.0, 0.0, 0.0), Vec3::Z);
         assert_eq!(off[0], 0);
+    }
+
+    #[test]
+    fn a_huge_spot_exponent_shades_in_bounded_time() {
+        let mut l = point_light(Vec3::new(0.0, 0.0, 10.0), 202.0);
+        l.spot_dir = Vec3::Z;
+        l.spot_cutoff = 30.0;
+        l.spot_exponent = i32::MAX as f32;
+        let m = ModelLights {
+            lights: vec![(l, 1.0)],
+            sky: 0.0,
+        };
+        // Straight down the axis the cone's cosine is 1: the light is whole.
+        let c = shade_vertex(&WorldLight::default(), &m, Vec3::ZERO, Vec3::Z);
+        assert!(c[0] > 200, "{c:?}");
     }
 
     #[test]
@@ -1490,6 +1521,28 @@ mod tests {
         assert_eq!(at(0, -1), None);
         assert_eq!(at(5, 0), None);
         assert_eq!(r.whole.lit_n, 120);
+    }
+
+    /// Samples millions of units apart, or at an infinite coordinate, leave
+    /// the grid empty instead of sizing it by their spread.
+    #[test]
+    fn a_region_keep_over_a_huge_spread_keeps_only_the_whole() {
+        let lit: Vec<_> = (0..40)
+            .map(|i| (Vec3::new(i as f32, 0.0, 0.0), 0.8))
+            .collect();
+        for far in [
+            Vec3::new(5.0e6, 5.0e6, 0.0),
+            Vec3::new(f32::INFINITY, 0.0, 0.0),
+        ] {
+            let mut shadowed: Vec<_> = (0..40)
+                .map(|i| (Vec3::new(i as f32, 9.0, 0.0), 0.4))
+                .collect();
+            shadowed.push((far, 0.4));
+            let r = RegionKeep::of(&lit, &shadowed).unwrap();
+            assert_eq!((r.size, r.keeps.len()), ((0, 0), 0));
+            assert_eq!(r.at((0, 0)), None);
+            assert_eq!(r.whole.lit_n, 40);
+        }
     }
 
     #[test]

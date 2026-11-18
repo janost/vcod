@@ -44,8 +44,7 @@ use std::time::{Duration, Instant};
 /// copies into a 16 KiB stack buffer (docs/protocol-1.1.md, svc_download).
 const MAX_DOWNLOAD_BLKSIZE: usize = 0x4000;
 
-/// Largest pk3 a server may announce; the biggest stock pak is under 300 MiB.
-const MAX_DOWNLOAD_SIZE: u32 = 512 << 20;
+use download::MAX_DOWNLOAD_SIZE;
 
 /// The www redirect's flag bits (`DL_FLAG_DISCON`, `DL_FLAG_URL`): the
 /// server drops the client for the transfer; the URL is a page to open.
@@ -319,8 +318,9 @@ pub struct NetClient<T: Transport> {
     gamestate: Option<Gamestate>,
     snapshots: SnapshotRing,
     configstrings: Vec<String>,
-    /// `bigConfigString`: an `x`..`z` update being put together.
-    big_configstring: String,
+    /// `bigConfigString`: the index and value of an `x`..`z` update being
+    /// put together.
+    big_configstring: Option<(usize, String)>,
     server_id: i32,
     checksum_feed: i32,
     client_num: i32,
@@ -514,7 +514,7 @@ impl<T: Transport> NetClient<T> {
             gamestate: None,
             snapshots: SnapshotRing::new(),
             configstrings: vec![String::new(); proto.transport.max_configstrings],
-            big_configstring: String::new(),
+            big_configstring: None,
             server_id: 0,
             checksum_feed: 0,
             client_num: 0,
@@ -1673,6 +1673,7 @@ impl<T: Transport> NetClient<T> {
         self.gamestate = None;
         self.snapshots.clear();
         self.configstrings = vec![String::new(); self.proto.transport.max_configstrings];
+        self.big_configstring = None;
         self.server_id = 0;
         self.command_sequence = 0;
         self.commands_taken = None;
@@ -1688,6 +1689,7 @@ impl<T: Transport> NetClient<T> {
 
     fn on_gamestate(&mut self, gs: Gamestate) {
         self.configstrings = gs.configstrings.clone();
+        self.big_configstring = None;
         self.snapshots.clear();
         self.snapshots.set_baselines(gs.baselines.clone());
         self.server_id = server_id_from_gamestate(&gs);
@@ -1765,18 +1767,27 @@ impl<T: Transport> NetClient<T> {
             // opening it, `z` closing it (cod11-server-handshake.md,
             // "Configstring 1, systeminfo"; CoDMP.exe 0x4014e0, CoDUOMP.exe
             // 0x401630).
+            // The join is bounded as retail's 8192-byte buffer is; a `y` or
+            // `z` with no `x` open, or one past the bound, is dropped.
             Some("x") => {
-                if let Some((i, chunk)) = parse_configstring_update(&cmd) {
-                    self.big_configstring = format!("d {i} {chunk}");
-                }
+                self.big_configstring = parse_configstring_update(&cmd);
             }
             Some("y") | Some("z") => {
+                let Some((i, mut whole)) = self.big_configstring.take() else {
+                    return;
+                };
                 if let Some((_, chunk)) = parse_configstring_update(&cmd) {
-                    self.big_configstring.push_str(&chunk);
+                    whole.push_str(&chunk);
                 }
-                if tokens[0] == "z" {
-                    let whole = std::mem::take(&mut self.big_configstring);
-                    self.apply_configstring(&whole);
+                if whole.len() >= codec::BIG_INFO_STRING {
+                    log::warn!(
+                        "configstring {i}: chunked update past {} bytes",
+                        codec::BIG_INFO_STRING
+                    );
+                } else if tokens[0] == "z" {
+                    self.apply_configstring(&format!("d {i} {whole}"));
+                } else {
+                    self.big_configstring = Some((i, whole));
                 }
             }
             _ => {
@@ -3221,6 +3232,27 @@ mod tests {
         assert_eq!(c.configstrings[1], info);
         assert_eq!(c.server_id, 7);
         assert_eq!(c.events, vec![NetEvent::ConfigstringChanged(1)]);
+    }
+
+    /// A `y` with no `x` open joins nothing, and a run of them is bounded
+    /// at retail's 8192 bytes, then dropped.
+    #[test]
+    fn a_chunked_configstring_is_bounded() {
+        let t0 = Instant::now();
+        let mut c = NetClient::start(FakeTransport::default(), t0);
+        let piece = "a".repeat(999);
+        for seq in 1..=100 {
+            c.handle_server_command(seq, format!("y 1 {piece}"));
+        }
+        assert_eq!(c.big_configstring, None);
+        c.handle_server_command(101, format!("x 1 {piece}"));
+        for seq in 102..=200 {
+            c.handle_server_command(seq, format!("y 1 {piece}"));
+            let held = c.big_configstring.as_ref().map_or(0, |(_, s)| s.len());
+            assert!(held < codec::BIG_INFO_STRING, "{held}");
+        }
+        c.handle_server_command(201, format!("z 1 {piece}"));
+        assert_eq!(c.configstrings[1], "");
     }
 
     #[test]

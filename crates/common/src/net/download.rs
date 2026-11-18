@@ -276,14 +276,20 @@ pub fn listed_checksum(systeminfo: &str, remote: &str) -> Option<i32> {
         .and_then(|p| p.checksum)
 }
 
+/// Largest file a server may announce over UDP, any game; the biggest stock
+/// pak is under 300 MiB.
+pub const MAX_DOWNLOAD_SIZE: u32 = 512 << 20;
+
 /// One transfer, spooled into `<dest>.tmp` until the EOF block validates it as
 /// a zip and renames it into place. Never overwrites an existing destination.
+/// Dropped unfinished, it removes its spool.
 pub struct Download {
     /// As requested, e.g. `main/foo.pk3`.
     pub remote: String,
     dest: PathBuf,
     tmp: PathBuf,
-    file: File,
+    /// `None` once [`Self::finish`] closed it.
+    file: Option<File>,
     /// Next block accepted; retransmits are ignored.
     pub next_block: u16,
     /// From block 0; 0 until then.
@@ -307,7 +313,7 @@ impl Download {
             remote: remote.to_string(),
             dest: dest.to_path_buf(),
             tmp,
-            file,
+            file: Some(file),
             next_block: 0,
             size: 0,
             received: 0,
@@ -320,11 +326,17 @@ impl Download {
 
     /// A second handle on the spool, for an HTTP transfer's thread.
     pub fn spool(&self) -> std::io::Result<File> {
-        self.file.try_clone()
+        self.open()?.try_clone()
+    }
+
+    fn open(&self) -> std::io::Result<&File> {
+        self.file
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("the spool is closed"))
     }
 
     pub fn accept_block(&mut self, data: &[u8]) -> anyhow::Result<()> {
-        self.file
+        self.open()?
             .write_all(data)
             .with_context(|| format!("cannot write {}", self.tmp.display()))?;
         self.received += data.len() as u64;
@@ -336,8 +348,8 @@ impl Download {
     /// its checksum against `want` (`sv_referencedPaks`), then rename it into
     /// place. A file that fails is deleted so a bad transfer never poisons
     /// the search path; a wrong checksum comes back as [`WrongChecksum`].
-    pub fn finish(self, want: Option<i32>) -> anyhow::Result<()> {
-        drop(self.file);
+    pub fn finish(mut self, want: Option<i32>) -> anyhow::Result<()> {
+        self.file = None;
         let checked = File::open(&self.tmp)
             .map_err(anyhow::Error::from)
             .and_then(|f| zip::ZipArchive::new(f).map_err(anyhow::Error::from));
@@ -350,7 +362,7 @@ impl Download {
             if got != want {
                 let _ = std::fs::remove_file(&self.tmp);
                 return Err(WrongChecksum {
-                    remote: self.remote,
+                    remote: std::mem::take(&mut self.remote),
                     got,
                     want,
                 }
@@ -361,8 +373,15 @@ impl Download {
             .with_context(|| format!("cannot rename into {}", self.dest.display()))
     }
 
-    pub fn abort(self) {
-        drop(self.file);
+    /// Ends the transfer; the spool goes with it ([`Drop`]).
+    pub fn abort(self) {}
+}
+
+impl Drop for Download {
+    /// Past a successful [`Download::finish`] the spool was renamed away
+    /// and this finds nothing.
+    fn drop(&mut self) {
+        self.file = None;
         let _ = std::fs::remove_file(&self.tmp);
     }
 }
@@ -694,6 +713,16 @@ mod tests {
         let mut dl = Download::create("main/bar.pk3", &dest).unwrap();
         dl.accept_block(b"partial").unwrap();
         dl.abort();
+        assert!(
+            std::fs::read_dir(dir.join("main"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        // A transfer dropped mid-way, by a session that ended, the same.
+        let mut dl = Download::create("main/bar.pk3", &dest).unwrap();
+        dl.accept_block(b"partial").unwrap();
+        drop(dl);
         assert!(
             std::fs::read_dir(dir.join("main"))
                 .unwrap()

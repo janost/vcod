@@ -333,6 +333,10 @@ fn load_level(
     let map_name = session
         .map_name()
         .context("cod4: no mapname in serverinfo")?;
+    anyhow::ensure!(
+        vcod_cod4::install::is_zone_name(&map_name),
+        "cod4: the server's mapname {map_name:?} is no map name"
+    );
     p.set_level(map_name.clone(), session.gametype());
     let ents = session.entity_assets();
     let fs_game = session.fs_game();

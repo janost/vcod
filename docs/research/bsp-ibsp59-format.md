@@ -216,6 +216,8 @@ i32 child_count            // children follow in preorder
 
 Nodes carry no bounds; the engine computes them from the surfaces at load (INFERRED from the record, as in CoD2). A node with `child_count == 0` is a leaf. Leaves cover each cell-tree soup exactly once. The root node of a cell spans the cell's whole soup range.
 
+A parent's run holds its children's, so the nodes' runs sum to more than the soups: at most 5.38 times them, on `stalingrad.bsp` (VERIFIED, lump 16 of the 173 IBSP maps in the 1.1, 1.5, UO and third-party paks, 2026-11-18). `bsp::parse` refuses a map whose node or cull group runs sum past 64 times the soups, vcod's bound.
+
 ### Lump 9, cull groups (32 bytes), lump 10, indices
 
 A cull group is a bounding box over a contiguous soup range at the front of lump 6, shared between cells through lump 10 (mp_pavlov: 122 groups, 125 references). Every soup of a group lies inside the group's bounds (checked with a 1-unit margin on every map). Ranges are monotone and disjoint; on mp_powcamp and mp_rocket they are not sorted by cell.
@@ -242,6 +244,8 @@ leaf: i32 cluster; i32 area; i32 first_leaf_surface, leaf_surface_count;
 ```
 
 VERIFIED: every plane, child, brush and lump-24 reference is in range; `cluster` runs to `cluster_count - 1` of lump 28 (665 on mp_pavlov), `cell` to the cell count minus one, -1 for solid leafs. The tree reaches leafs 0..1753 on mp_pavlov; the 34 leafs after them belong to the 34 submodels, as in Q3. `area` is -1 exactly where `cluster` is -1, and -1 or 0 on every stock 1.1 MP map; UO's mp_berlin, mp_ponyri, mp_rhinevalley and mp_uo_stanjel and 1.5's mp_bocage hold a few leafs in areas 1 to 7, as do several 1.1 single-player maps (VERIFIED, lump 21 of every stock map). The snapshot cull reads it (`docs/protocol-1.1.md`, "Which entities a client is sent").
+
+Each leaf's brush run and partition run is its own: on all 173 IBSP maps in the 1.1, 1.5, UO and third-party paks the runs never overlap and sum to exactly the lengths of lumps 22 and 23 (VERIFIED, 2026-11-18). A brush in two leafs is listed twice. `bsp::parse` refuses runs that sum past 4 times their lump, vcod's bound: `LeafWalk` copies each leaf's run.
 
 ### Lump 28, PVS
 

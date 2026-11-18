@@ -864,7 +864,7 @@ impl HudAssets {
     ) -> Result<HudAssets> {
         let mut out = HudAssets::default();
         for name in zones {
-            let path = install.zone_path("english", name);
+            let path = install.zone_path("english", name)?;
             let walked = Zone::open_path(&path)
                 .and_then(|z| walk(z, WalkOptions { keep_bulk: false }))
                 .with_context(|| path.display().to_string())?;

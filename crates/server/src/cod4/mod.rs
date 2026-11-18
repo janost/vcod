@@ -38,6 +38,7 @@ use vcod_cod4::net::wire::{Cod4Wire, EOF, Frame4, PROTOCOL_17};
 use vcod_common::net::codec::MsgWriter;
 use vcod_common::net::netchan::{NetchanParams, ServerNetchan};
 use vcod_common::net::protocol::WireGame;
+use vcod_common::text::latin1_bytes;
 
 use crate::engine::{conn, link};
 
@@ -381,7 +382,7 @@ impl conn::ConnGame for Cod4Game {
     fn write_server_command(w: &mut MsgWriter, seq: i32, text: &str) {
         w.write_byte(SVC_SERVERCOMMAND);
         w.write_long(seq);
-        w.write_string_bytes(text.as_bytes());
+        w.write_string_bytes(&latin1_bytes(text));
     }
     /// The ops and `svc_EOF` compressed with 1.7's tree.
     fn netchan_out(e: &mut Cod4Server, slot: usize, mut ops: Vec<u8>) -> Vec<Vec<u8>> {
@@ -609,7 +610,7 @@ impl Cod4Server {
         if self.game.common.is_empty() {
             let mod_zone = install.mod_zone().map(|_| "mod");
             for name in COMMON_ZONES.into_iter().chain(mod_zone) {
-                let path = install.zone_path(lang, name);
+                let path = install.zone_path(lang, name)?;
                 let zone = vcod_cod4::zone::Zone::open_path(&path)
                     .and_then(|z| vcod_cod4::walk::walk(z, Default::default()))
                     .with_context(|| path.display().to_string())?;
@@ -912,8 +913,9 @@ impl Cod4Server {
             let key = clmsg::usercmd_key(
                 self.core.checksum_feed,
                 m.message_ack,
-                c.link.netchan.reliable[m.reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)]
-                    .as_bytes(),
+                &latin1_bytes(
+                    &c.link.netchan.reliable[m.reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)],
+                ),
             );
             let plain = self.game.huff.decompress(&m.ops);
             match clmsg::read_ops(plain, key, &UserCmd::default()) {
