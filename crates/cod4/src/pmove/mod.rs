@@ -607,6 +607,22 @@ impl Default for Tr {
     }
 }
 
+impl Tr {
+    /// Folds one entity's trace over the same sweep into the running one,
+    /// as the entity pass's cumulative trace keeps it: a nearer contact
+    /// replaces it, and a start in solid is kept from either side
+    /// (cod4-pmove.md 15).
+    pub fn fold(&mut self, c: Tr) {
+        if c.fraction < self.fraction {
+            let startsolid = self.startsolid || c.startsolid;
+            *self = c;
+            self.startsolid = startsolid;
+        } else if c.startsolid {
+            self.startsolid = true;
+        }
+    }
+}
+
 /// What pmove traces through: the handler's capsule trace. [`ClipMap`]
 /// alone is the world without entities; the server wraps it with the
 /// bodies and brush entities.

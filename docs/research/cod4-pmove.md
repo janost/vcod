@@ -723,6 +723,14 @@ cod4-server-frame.md 2). What the server adds around the step:
   such a hit. mp_crash's script
   movers carry `solid` 0 (VERIFIED, the walk capture's entities); no
   capture walks into a brush entity yet.
+- `SV_Trace`'s entity clip (0x817dcca) hands the running trace to the
+  model's trace (call at 0x817de21) and names the entity, its hit type
+  and its contents only when the fraction came back lower
+  (0x817de2b..0x817de65). VERIFIED (the instructions). So an entity's
+  start in solid with no nearer contact leaves the running fraction and
+  the world's contact standing. INFERRED. vcod folds each body and brush
+  entity in that way (`vcod_cod4::pmove::Tr::fold`), on the server
+  (`Cod4Clip`) and in the client's prediction (`play::cod4_predict`).
 - `ClientImpacts` (`cod4_lnxded` 0x80a501a) runs after the link, per cmd:
   for each entity in the touch list (pm+0x48 count, numbers from pm+0x4c)
   not listed earlier, with the script system up (0x815cfe0), `touch` on
