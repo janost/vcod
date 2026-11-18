@@ -145,8 +145,9 @@ pub struct Cod4Game {
     /// `sv.start_frameTime`: the frame the level last spawned or restarted
     /// on; a second restart in it does nothing (cod4-map-cycle.md 2).
     start_frame: Option<i32>,
-    /// `svs.tempBans`: the GUIDs `tempBanClient` kicked and when.
-    temp_bans: Vec<(String, i32)>,
+    /// `svs.tempBans`: the GUIDs `tempBanClient` kicked, vcod's address
+    /// guid beside each (`oob::address_guid`), and when.
+    temp_bans: Vec<(String, Option<String>, i32)>,
     /// The socket and the wait `SV_SpawnServer` uses mid-command; without
     /// it (a test) its OOB lines wait in the core's `outbox`.
     net_now: Option<crate::cod2::NetNow>,

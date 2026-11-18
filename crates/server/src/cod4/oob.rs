@@ -389,7 +389,9 @@ impl Cod4Server {
     /// authorize server first and answers only on its `accept` or after it
     /// has been silent 20 min (cod4-handshake.md 15); vcod skips that round
     /// trip and answers every address as retail answers the LAN. The hex
-    /// goes into the slot as the GUID the connect takes.
+    /// goes into the slot as the GUID the connect takes. With no authorize
+    /// tying the hex to a key, an off-LAN address is banned beside it
+    /// ([`address_guid`]).
     fn get_challenge(&mut self, from: SocketAddr, guid: &str) {
         let svs = self.core.sv_time_ms;
         // Two draws off the process's `rand()` (0x816f394), the level's
@@ -407,9 +409,14 @@ impl Cod4Server {
             .challenges
             .issue(from, svs, || (draw() << 16) ^ draw() ^ svs);
         drop(draw);
-        let kind = if self.core.bans.lists_guid(guid) {
+        let addr = address_guid(from);
+        let kind = if self.core.bans.lists_guid(guid)
+            || addr
+                .as_deref()
+                .is_some_and(|a| self.core.bans.lists_guid(a))
+        {
             "permanently"
-        } else if self.temp_banned(guid) {
+        } else if self.temp_banned(guid, addr.as_deref()) {
             "temporarily"
         } else {
             self.core.challenges.keep_guid(from, guid);
@@ -744,9 +751,10 @@ impl Cod4Server {
             return;
         };
         let c = self.core.clients[slot].as_ref().unwrap();
-        let (name, guid) = (
+        let (name, guid, addr) = (
             crate::game::say::clean_name(&super::client_name(&c.link.userinfo)),
             c.extra.guid.clone(),
+            address_guid(c.link.addr),
         );
         self.kick_slot(slot, out);
         if !cmd.eq_ignore_ascii_case("onlykick") {
@@ -754,11 +762,13 @@ impl Cod4Server {
                 "{name} (guid \"{guid}\") was kicked for cheating\n"
             ));
             let now = self.core.sv_time_ms;
-            self.game.temp_bans.retain(|(g, _)| *g != guid);
+            self.game
+                .temp_bans
+                .retain(|(g, a, _)| *g != guid || *a != addr);
             if self.game.temp_bans.len() == 16 {
                 self.game.temp_bans.remove(0);
             }
-            self.game.temp_bans.push((guid, now));
+            self.game.temp_bans.push((guid, addr, now));
         }
     }
 
@@ -811,21 +821,32 @@ impl Cod4Server {
 
     /// `SV_BanClient` (0x8171360): a client with no GUID, or one already
     /// in `ban.txt`, is refused with a print; otherwise `%s %s\r\n` (GUID,
-    /// cleaned name) is appended and the client kicked.
+    /// cleaned name) is appended and the client kicked. vcod also appends
+    /// an off-LAN client's [`address_guid`], so a client with no GUID can
+    /// be banned and one with a new hex stays out.
     pub(super) fn ban_client(&mut self, slot: usize, out: &mut Redirect) {
         let Some(c) = self.core.clients[slot].as_ref() else {
             return;
         };
-        let (guid, name) = (
+        let (guid, name, addr) = (
             c.extra.guid.clone(),
             crate::game::say::clean_name(&super::client_name(&c.link.userinfo)),
+            address_guid(c.link.addr),
         );
-        if guid.is_empty() {
+        let keys: Vec<String> = [Some(guid).filter(|g| !g.is_empty()), addr]
+            .into_iter()
+            .flatten()
+            .collect();
+        if keys.is_empty() {
             out.print("Can't ban user, GUID is unknown\n");
-        } else if self.core.bans.lists_guid(&guid) {
-            out.print(&format!("This GUID ({guid}) is already banned\n"));
+        } else if keys.iter().all(|k| self.core.bans.lists_guid(k)) {
+            out.print(&format!("This GUID ({}) is already banned\n", keys[0]));
         } else {
-            self.core.bans.append_line(&guid, &name);
+            for k in keys {
+                if !self.core.bans.lists_guid(&k) {
+                    self.core.bans.append_line(&k, &name);
+                }
+            }
             self.kick_slot(slot, out);
         }
     }
@@ -849,16 +870,24 @@ impl Cod4Server {
     }
 
     /// `SV_IsTempBannedGuid`: a GUID a ban named within
-    /// `sv_kickBanTime` seconds.
-    pub(super) fn temp_banned(&self, guid: &str) -> bool {
+    /// `sv_kickBanTime` seconds; vcod's address guid the same.
+    pub(super) fn temp_banned(&self, guid: &str, addr: Option<&str>) -> bool {
         let secs = crate::game::builtins::cvar::atof(self.game.cvars().get("sv_kickBanTime"));
         let now = self.core.sv_time_ms;
-        !guid.is_empty()
-            && self
-                .game
-                .temp_bans
-                .iter()
-                .any(|(g, t)| g == guid && f64::from(secs) * 1000.0 >= f64::from(now - t))
+        self.game.temp_bans.iter().any(|(g, a, t)| {
+            let named = (!guid.is_empty() && g == guid) || (addr.is_some() && a.as_deref() == addr);
+            named && f64::from(secs) * 1000.0 >= f64::from(now - t)
+        })
+    }
+}
+
+/// vcod's stand-in for the authorize server's tie of a GUID to a key: an
+/// off-LAN client's IPv4 address as a signed integer, as CoD1 and CoD2 ban
+/// ([`crate::engine::bans::guid_of`]); `None` on the LAN.
+fn address_guid(addr: SocketAddr) -> Option<String> {
+    match crate::engine::bans::guid_of(crate::engine::Lan::Cod2, addr) {
+        0 => None,
+        g => Some(g.to_string()),
     }
 }
 

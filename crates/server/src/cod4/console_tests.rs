@@ -204,6 +204,52 @@ fn cod4_ban_user_refuses_the_guid_until_unbanned() {
     assert!(!sv.core.bans.lists_guid(&guid));
 }
 
+/// Off the LAN no authorize ties the hex to a key, so `banClient` also
+/// writes the address's guid and a `tempBanClient` holds it: the client
+/// back with another hex, or none, from another port is refused.
+#[test]
+fn cod4_an_off_lan_ban_holds_the_address_whatever_the_hex() {
+    let Some((mut sv, _, now)) = two_playing() else {
+        return;
+    };
+    let ip = std::net::Ipv4Addr::new(203, 0, 113, 7);
+    let addr_guid = (u32::from(ip) as i32).to_string();
+    let mut join = |sv: &mut Cod4Server, slot: u32, port: u16| {
+        let mut p = super::wire_ab::Probe::new("far", slot, port, 0, &[]);
+        p.addr = std::net::SocketAddr::from((ip, port));
+        p.join(sv, now);
+        p
+    };
+    let challenge = |sv: &mut Cod4Server, p: &mut super::wire_ab::Probe, hex: &str| {
+        let replies = p.oob(sv, format!("getchallenge 0 \"{hex}\"").as_bytes(), now);
+        String::from_utf8_lossy(&replies[0][4..]).into_owned()
+    };
+    join(&mut sv, 2, 28990);
+    assert_eq!(console(&mut sv, "banClient 2"), "2:far EXE_PLAYERKICKED\n");
+    assert!(sv.core.bans.lists_guid(&addr_guid));
+    let mut back = super::wire_ab::Probe::new("far", 2, 28991, 0, &[]);
+    back.addr = std::net::SocketAddr::from((ip, 28991));
+    for hex in ["0123456789abcdef0123456789abcdef", ""] {
+        assert_eq!(
+            challenge(&mut sv, &mut back, hex),
+            "error\n\u{15}You are permanently banned from this server",
+            "{hex:?}"
+        );
+    }
+    assert_eq!(
+        console(&mut sv, "unbanUser far"),
+        "unbanned 2 user(s) named far\n"
+    );
+    join(&mut sv, 3, 28992);
+    assert!(sv.core.clients[3].is_some());
+    let out = console(&mut sv, "tempBanClient 3");
+    assert!(out.contains("was kicked for cheating"), "{out}");
+    assert_eq!(
+        challenge(&mut sv, &mut back, ""),
+        "error\n\u{15}You are temporarily banned from this server"
+    );
+}
+
 /// A bot has no GUID, as 1.7's test clients (`Connecting player #1 has an
 /// unknown GUID`): `status` leaves its column blank and `banUser` refuses
 /// it with `Can't ban user, GUID is unknown` (retail 1.7 live,

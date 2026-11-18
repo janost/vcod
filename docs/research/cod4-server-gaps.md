@@ -158,9 +158,9 @@ Open, by how much a player notices.
 
 1. The authorize round trip stays out on purpose: with its authorize
    server silent, 1.7 answers no off-LAN challenge for its first 20
-   minutes, then each after 7 s; vcod-server answers at once and an
-   off-LAN client's address stands in for its ban guid
-   (cod4-handshake.md 15).
+   minutes, then each after 7 s; vcod-server answers at once, and bans
+   an off-LAN client by its address beside its GUID (cod4-handshake.md
+   14 and 15).
 2. Closed: the helicopter's flight and its gun match retail word for word
    (Fixed above; `hardpoint_ab` `GAPS` gone).
 3. Closed: the five capture gates (`cod4::capture_ab`, cod4-combat.md 15)

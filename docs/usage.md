@@ -171,7 +171,8 @@ CoD1, UO and CoD2 send a flatline on Ctrl-C or `quit`.
 
 `--ban-file` keeps bans in retail's `ban.txt` shape: a guid and the
 cleaned name a line. An off-LAN client's guid is its IPv4 address as a
-signed integer (CoD4: the client's GUID). A file in vcod's older
+signed integer (CoD4: the client's GUID, and off the LAN its address
+beside it). A file in vcod's older
 `<ip> <name>` shape is rewritten into guid lines the first time the
 server opens it, after a copy is kept as `<path>.old`. Without
 `--ban-file` a ban lasts until the process exits.
