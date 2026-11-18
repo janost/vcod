@@ -3846,7 +3846,11 @@ impl Server {
         c.link.netchan.reliable[at] =
             vcod_common::net::codec::client_read_string(&format!("w \"{reason}\"")).into_owned();
         c.reliable_kind[at] = CmdKind::Reliable;
-        if !c.is_bot {
+        if c.is_bot {
+            // The slot is free at once, so its brain goes now: a client that
+            // takes the slot before the bot step would be driven by it.
+            self.game.module.driver.forget(slot);
+        } else {
             c.zombie = true;
             self.game.zombies[slot] = Some(c);
         }

@@ -91,6 +91,14 @@ pub(crate) struct BotDriver {
 }
 
 impl BotDriver {
+    /// Drops what the driver keeps for `slot`'s bot.
+    pub(crate) fn forget(&mut self, slot: usize) {
+        self.bots.remove(&slot);
+        self.enemies.remove(&slot);
+        self.sidesteps.remove(&slot);
+        self.paths.remove(&slot);
+    }
+
     /// [`NavGraph::zone_stand`], cached per zone in [`Self::sites`]; the
     /// middle of the zone's floor until the graph lands.
     pub(crate) fn zone_stand(&mut self, mins: [f32; 3], maxs: [f32; 3]) -> [f32; 3] {
@@ -1244,10 +1252,7 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
         .collect();
     let d = w.driver_mut();
     for slot in gone {
-        d.bots.remove(&slot);
-        d.enemies.remove(&slot);
-        d.sidesteps.remove(&slot);
-        d.paths.remove(&slot);
+        d.forget(slot);
     }
     replies.append(&mut w.take_orders());
     for (slot, r) in replies {

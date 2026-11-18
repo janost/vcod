@@ -580,7 +580,6 @@ impl AdminHost for Server {
         self.game.module.bot_admin.ledger.pinned.remove(&slot);
         self.game.module.bot_admin.landed.remove(&slot);
         self.drop_client(slot, "EXE_PLAYERKICKED");
-        self.game.module.driver.bots.remove(&slot);
     }
 
     /// The stock handlers switch a dead or spectating player and reopen the
@@ -636,6 +635,31 @@ mod tests {
             sv.game.module.driver.bots[&a].rng,
             sv.game.module.driver.bots[&b].rng
         );
+    }
+
+    /// A bot kicked outside `removebot` loses its brain with its slot, so
+    /// a client that takes the slot before the next bot step is not
+    /// driven by it (BUG-040).
+    #[test]
+    fn a_kicked_bot_takes_its_brain_with_it() {
+        let cfg = ServerConfig {
+            map: "mp_carentan".into(),
+            hostname: "vcod test".into(),
+            max_clients: 4,
+            gametype: "dm".into(),
+            test_entities: 0,
+            trace: false,
+            bots: 0,
+            bots_shoot: false,
+        };
+        let now = Instant::now();
+        let mut sv = Server::new(cfg, now);
+        let s = sv.bot_settings();
+        let slot = sv.add_bot(Side::Axis, s, None).expect("a slot");
+        sv.kick_slot(slot, now);
+        assert!(sv.core.clients[slot].is_none() && sv.game.zombies[slot].is_none());
+        assert!(!sv.game.module.driver.bots.contains_key(&slot));
+        assert_eq!(sv.bot_count(), 0);
     }
 
     /// On `bel` every bot answers the team menu with axis and the script
