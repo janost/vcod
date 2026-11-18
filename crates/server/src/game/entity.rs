@@ -845,7 +845,7 @@ impl ObjectTable {
 
     /// Every due think at once, by entity number: [`ObjectTable::run_think`]
     /// over the table. The server runs each entity's on its own turn in the
-    /// entity pass; this is for callers with no pass to run.
+    /// entity pass; only tests, which run no pass, call this.
     #[must_use]
     pub fn run_thinks(&mut self, now_ms: i32) -> Vec<(EntId, ThinkFn)> {
         let ids: Vec<EntId> = self.iter_inuse().map(|(id, _)| id).collect();
@@ -951,7 +951,6 @@ impl ObjectTable {
         self.get(id).map(|_| id)
     }
 
-    /// Whatever holds entity number `n` now.
     /// [`Self::get_mut`] for a write to what no reader of [`Self::edits`]
     /// reads (the client fields, the script struct, `apos_base`, the
     /// attachments, the loop sound and events): the count stays. A caller writes nothing else through
@@ -983,6 +982,7 @@ impl ObjectTable {
         self.slot_edits.get(slot).copied().unwrap_or(0)
     }
 
+    /// Whatever holds entity number `n` now.
     pub fn by_number_mut(&mut self, n: u32) -> Option<&mut GEntity> {
         let id = self.handle(n)?;
         self.get_mut(id)
