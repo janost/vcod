@@ -46,7 +46,10 @@ pub struct Font {
 impl Font {
     /// The glyph `R_GetCharacterGlyph` draws for `letter`.
     pub fn glyph(&self, letter: u32) -> &Glyph {
-        let i = if (0x20..0x80).contains(&letter) {
+        // A font of 0x60 glyphs or fewer draws `.` for every letter.
+        let i = if self.glyphs.len() <= ASCII_RUN {
+            None
+        } else if (0x20..0x80).contains(&letter) {
             Some(letter as usize - 0x20)
         } else {
             self.glyphs[ASCII_RUN.min(self.glyphs.len())..]
@@ -133,7 +136,11 @@ mod tests {
 
     /// A font of the 96 ASCII glyphs plus é, laid out as the files are.
     fn sample() -> Vec<u8> {
-        let count = ASCII_RUN + 1;
+        sample_of(ASCII_RUN + 1)
+    }
+
+    /// The first `count` glyphs of that font.
+    fn sample_of(count: usize) -> Vec<u8> {
         let strings = HEADER + count * GLYPH;
         let mut b = Vec::new();
         b.extend((strings as u32).to_le_bytes());
@@ -173,5 +180,15 @@ mod tests {
         let mut b = sample();
         b.truncate(HEADER + 10 * GLYPH);
         assert!(parse(&b).is_err());
+    }
+
+    #[test]
+    fn a_font_without_the_whole_ascii_run_draws_dots() {
+        for count in [20, ASCII_RUN] {
+            let f = parse(&sample_of(count)).unwrap();
+            for letter in 0..0x100 {
+                assert_eq!(f.glyph(letter).letter, b'.' as u16, "{count} glyphs");
+            }
+        }
     }
 }

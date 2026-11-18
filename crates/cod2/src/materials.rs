@@ -568,6 +568,8 @@ pub fn water_of(file: &MaterialFile) -> Option<WaterLit> {
         TextureImage::Water(w) => Some(w),
         TextureImage::Image(_) => None,
     })?;
+    // A width the height map's FFT cannot take draws the colour map.
+    crate::water::texture_side(def.texture_width)?;
     Some(WaterLit {
         color: file.constant("waterColor").map_or([0.0; 4], |c| c.literal),
         cube: file
@@ -1131,6 +1133,14 @@ mod tests {
             (64, [37.0; 2], [1.0, 0.0])
         );
         assert_eq!(m.stages.len(), 1);
+
+        // A width the FFT cannot take draws the colour map alone.
+        let Some(TextureImage::Water(def)) = f.textures.get_mut(2).map(|t| &mut t.image) else {
+            panic!("the water def");
+        };
+        def.texture_width = 100;
+        let (m, fb) = compile(&f, Some(&lit("water_l_sun", f.state_bits)), &mut w);
+        assert!(fb && m.water.is_none());
     }
 
     /// The scene's fog picks the set's fogged type, and that technique's

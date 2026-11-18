@@ -287,7 +287,7 @@ impl WaterBuilder {
                     tex_entry(1, cube),
                 ],
             }));
-        let setup = WaterSetup::new(w, &mut self.rng);
+        let setup = WaterSetup::new(w, &mut self.rng).expect("water_of checked the width");
         let side = setup.width as u32;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(&format!("watersetup {}", sh.name)),
