@@ -196,7 +196,9 @@ impl LeafWalk {
         true
     }
 
-    /// The leaf holding point `p` (Q3's `CM_PointLeafnum`).
+    /// The leaf holding point `p` (Q3's `CM_PointLeafnum`): a point on a
+    /// plane takes the front child, unlike
+    /// [`crate::mapworld::Visibility::leaf_at`]. Retail's rule is unread.
     pub fn leaf_at(&self, p: [f32; 3]) -> u32 {
         let mut num = 0i32;
         while num >= 0 {

@@ -423,7 +423,8 @@ impl Conn {
     }
 
     /// `disconnect` as a reliable command, sent three times as Q3's
-    /// `CL_Disconnect` does; the server frees the slot at once.
+    /// `CL_Disconnect` does (1.7's count unverified); the server frees the
+    /// slot at once.
     pub fn disconnect(&mut self) -> Result<()> {
         if self.client.gamestate.is_none() {
             return Ok(());

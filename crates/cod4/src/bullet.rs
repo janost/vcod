@@ -115,8 +115,9 @@ pub fn shots_and_range(d: &WeaponDef) -> (i32, f32) {
     }
 }
 
-/// `CG_BulletEndpos` / `Bullet_Endpos` (iw3mp.exe 0x456470,
-/// The spread disc draw at 0x4a66e0): `range` along `axis[0]` from `start`,
+/// `CG_BulletEndpos` / `Bullet_Endpos` (`iw3mp.exe` 0x456470, which draws
+/// the spread disc at 0x4a66e0; cod4-effects.md 12.2): `range` along
+/// `axis[0]` from `start`,
 /// pushed along the right and up axes by the disc's point times
 /// `tan(spread) * range`.
 pub fn bullet_end(seed: i32, spread: f32, start: Vec3, axis: &[Vec3; 3], range: f32) -> Vec3 {

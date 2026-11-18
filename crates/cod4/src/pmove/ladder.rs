@@ -12,7 +12,7 @@ use super::slide::step_slide_move;
 use super::{ENTITYNUM_NONE, Pml, Pmove, Stance, ev, leave_ladder, pm_type, pmf};
 use crate::collision::{CONTENTS_BODY, CONTENTS_PLAYERCLIP, SURF_LADDER};
 
-/// shrink a side.
+/// The probe box's shrink a side, CoD2's (cod2-movement.md 11).
 const PROBE_SHRINK: f32 = 6.0;
 /// The probe box's floor (an immediate).
 const PROBE_FLOOR: f32 = 8.0;
@@ -28,7 +28,8 @@ const ACCEL: f32 = 9.0;
 const SIDE_FRICTION: f32 = 16.0;
 /// The airborne press into the ladder (immediate 0xc2480000).
 const PRESS: f32 = -50.0;
-/// its normal turned round.
+/// The ladder's facing is its normal turned round, CoD2's
+/// (cod2-movement.md 11).
 const TURN: f32 = 180.0;
 /// `movementDir`'s cap on the ladder (immediate 0x4b).
 const MOVEMENT_DIR_CAP: i32 = 75;

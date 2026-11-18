@@ -37,8 +37,10 @@ pub const CS_MAPCENTER: u16 = 12;
 /// Snapshots a delta can reach back over.
 const PACKET_BACKUP: usize = 32;
 
-/// `MSG_ReadString`: the bytes up to the NUL, as they are (no `%` or
-/// 0x92 mapping on 1.7's client, INFERRED).
+/// `MSG_ReadString`: the bytes up to the NUL, as they are, no `%` or 0x92
+/// mapping (INFERRED, no 1.7 address recorded).
+/// [`super::download::DownloadMsg::read`] maps 0x92 through CoD2's reader
+/// instead; which one 1.7 does is unread.
 pub fn read_raw_string(r: &mut MsgReader) -> Vec<u8> {
     read_string_capped(r, usize::MAX)
 }

@@ -17,7 +17,9 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 
 /// The server dvar mirror: names at `CS_CODINFO..CS_CODINFO_VALUE`, each
-/// value `CS_CODINFO_VALUE - CS_CODINFO` slots on.
+/// value `CS_CODINFO_VALUE - CS_CODINFO` slots on. The scoreboard's dvars
+/// (`g_ScoresColor_*`, `g_TeamIcon_*`, `g_TeamName_*`) come through it;
+/// `sv_hostname` lives in the serverinfo.
 pub const CS_CODINFO: u16 = 20;
 pub const CS_CODINFO_VALUE: u16 = 148;
 /// Localized string `n` is configstring `CS_LOCALIZED_STRINGS + n`.
@@ -28,9 +30,7 @@ pub const CS_MATERIALS: u16 = 2002;
 /// (`[ebp*4 + 0xc64c34]` in `CG_ParseScores`, cod4-hud.md 7): slot 0 is
 /// the weapon list, 2259 `hud_status_dead`, 2260 `hud_status_connecting`.
 pub const CS_STATUS_ICONS: u16 = 2258;
-/// The server's `sv_hostname` lives in the serverinfo; the server dvars the
-/// scoreboard reads (`g_ScoresColor_*`, `g_TeamIcon_*`, `g_TeamName_*`)
-/// come through the [`CS_CODINFO`] mirror.
+/// `pm_type` 5, the intermission.
 pub const PM_INTERMISSION: u32 = 5;
 /// `"compass_map_<map>" x0 y0 x1 y1`: the minimap material and the world
 /// corners it spans.

@@ -176,7 +176,7 @@ impl Digest {
     }
 }
 
-/// `n` 50 ms cmds of `buttons` and `forward` keys, the yaw short `yaw`.
+/// `n` 50 ms cmds of `buttons` and the `forward` and `right` keys.
 #[derive(Clone, Copy)]
 struct Key {
     n: usize,

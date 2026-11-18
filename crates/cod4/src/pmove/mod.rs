@@ -14,8 +14,8 @@
 //! The weapon half ([`weapon`]: the aim spread, the sight, `PM_Weapon`)
 //! runs when the caller hands the level's weapon defs in ([`Pmove::defs`]);
 //! without them only the breath runs. The mantle ([`mantle`]) runs when
-//! [`Rules::mantle_anims`] holds the clips. Not here: the anim script calls
-//! and the melee charge.
+//! [`Rules::mantle_anims`] holds the clips. The anim script calls are
+//! [`anim`], the melee charge's lunge [`charge`] (cod4-pmove.md 3).
 
 pub mod aim;
 pub mod anim;

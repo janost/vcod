@@ -12,8 +12,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-/// The asset kinds [`Asset`] is implemented for. More join as their
-/// consumers move onto [`load`].
+/// The asset kinds [`Asset`] is implemented for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AssetKind {
     /// A weapon file, by its configstring 7 name (`kar98k_mp`).
@@ -242,12 +241,12 @@ impl AssetSource for Pk3Fs {
 /// `game`'s search path over `base` (the install's `main/`), `game_dir`'s
 /// archives on top: CoD1's pk3s (UO's `uo/` over its sibling `main/`,
 /// [`crate::pk3::base_dirs`]), CoD2's iwds. CoD4 has no path-based
-/// storage, so it fails.
+/// storage, so it fails; its assets come through `vcod_cod4`'s source.
 pub fn open_game_fs(game: Game, base: &Path, game_dir: Option<&Path>) -> Result<Pk3Fs> {
     match game {
         Game::Cod1 => Pk3Fs::open_layered(base, game_dir),
         Game::Cod2 => Pk3Fs::open_iwd(base, game_dir),
-        Game::Cod4 => bail!("CoD4 assets live in fastfiles, which vcod cannot read yet"),
+        Game::Cod4 => bail!("CoD4 assets live in fastfiles, not on a pak search path"),
     }
 }
 

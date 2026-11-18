@@ -1,7 +1,7 @@
 //! The weapon half of 1.7's `PmoveSingle`: `PM_AdjustAimSpreadScale`,
 //! `PM_UpdateAimDownSightFlag` and `PM_Weapon` with what it calls for a
 //! shot, a burst, a reload, a rechamber, a switch and the sprint's states
-//! (docs/research/cod4-pmove.md 16). The kill capture's shooter replays
+//! (docs/research/cod4-combat.md 2). The kill capture's shooter replays
 //! through it (`cod4_moves_ab`'s `shooter` rows).
 //!
 //! The offhand (frag, smoke, flash: states 15..20, the cook and the
@@ -9,9 +9,16 @@
 //! frag throw replays through them (`cod4_moves_ab`'s `walk` rows, armed).
 //!
 //! The melee charge's swing (`meleeChargeTime`, anim 9) starts here, its
-//! lunge is `super::charge`. Not here: detonation (21), night vision (25, 26), `ViewModelOverride` and the anim
-//! script's events. A state this module does not run holds until the
-//! server's cmds move it on.
+//! lunge is `super::charge`. Not here: detonation (21), night vision (25,
+//! 26), `ViewModelOverride` and the anim script's events. A state this
+//! module does not run holds until the server's cmds move it on.
+//!
+//! A retail name marked "unverified on 1.7" is the step vcod takes the
+//! function for; no address or doc section backs the name or its body.
+//! Where no capture reaches such a branch (segmented and no-partial
+//! reloads, a bolt's brass inside a reload, the clip-only take, the alt
+//! switch, the sight's blocks, the spread override, the sprint cutting a
+//! reload), `pmove::tests::weapon_pins` pins vcod's own output.
 
 use super::{Pml, Pmove, button, ef, pm_type, pmf};
 
@@ -126,7 +133,7 @@ pub const WEAPCLASS_ITEM: i32 = 9;
 
 /// The `WeaponDef` fields the weapon half reads, at their 1.7 offsets in
 /// the zone's 0x878-byte struct (the field order INFERRED, anchored as
-/// cod4-gsc.md 7 says; the table in cod4-pmove.md 16), with the ammo and
+/// cod4-gsc.md 7 says; the table in cod4-combat.md 1), with the ammo and
 /// clip slots the level's registration gave it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WeaponDef {
@@ -418,8 +425,8 @@ impl WeaponDef {
         Some(d)
     }
 
-    /// `PM_WeaponHasChargeMelee` (0x8063481): a charge anim and a
-    /// `meleeChargeTime`.
+    /// `PM_WeaponHasChargeMelee` (0x8063481, cod4-combat.md 10.4): a
+    /// charge anim and a `meleeChargeTime`.
     pub fn has_charge_melee(&self) -> bool {
         self.melee_charge_anim && self.melee_charge_time > 0
     }
@@ -475,7 +482,9 @@ fn set_bit(bits: &mut [u32; 4], i: u32, on: bool) {
 }
 
 impl super::PlayerState {
-    /// `PM_StartWeaponAnim`: the anim with the restart toggle flipped.
+    /// `PM_StartWeaponAnim` (name unverified on 1.7): the anim with the
+    /// restart toggle flipped, as the shooter's `weapAnim` 2 and 0x202 per
+    /// shot read (cod4-combat.md 2).
     pub fn start_weapon_anim(&mut self, anim: u32) {
         if self.pm_type < pm_type::DEAD {
             self.weap_anim = anim | ((self.weap_anim & 0x200) ^ 0x200);
@@ -507,7 +516,7 @@ fn held<'d>(pm: &Pmove<'d>) -> Option<&'d WeaponDef> {
     pm.defs?.def(pm.ps.weapon)
 }
 
-/// `PM_WeaponAmmoAvailable`: the held weapon's clip.
+/// `PM_WeaponAmmoAvailable` (unverified on 1.7): the held weapon's clip.
 pub fn ammo_available(ps: &super::PlayerState, defs: &dyn WeaponDefs) -> i32 {
     defs.def(ps.weapon).map_or(0, |d| clip(ps, d))
 }
@@ -528,11 +537,12 @@ fn is_melee(s: i32) -> bool {
 /// the scale (0..255) eases back by the weapon's decay rate, scaled by the
 /// stance on the ground and halved in the air, and opens up with the
 /// view's turn, a run past `bg_aimSpreadMoveSpeedThreshold` and the air;
-/// through the sight it only eases back. A script's spread override
-/// (state 1) eases back by the rate over the override's place in the
-/// stance's range and ends once the scale times that place drops under
-/// 255. The products stay on the x87 stack; the stance's rate, its range
-/// place and the scale are stored floats.
+/// through the sight it only eases back. The products stay on the x87
+/// stack; the stance's rate, its range place and the scale are stored
+/// floats. The shooter rows replay `aimSpreadScale` exact (cod4-combat.md
+/// 2). A script's spread override (state 1) eases back by the rate over
+/// the override's place in the stance's range and ends once the scale
+/// times that place drops under 255: unverified on 1.7, no capture runs it.
 pub(super) fn adjust_aim_spread(pm: &mut Pmove, pml: &Pml) {
     let Some(d) = held(pm) else {
         // The empty hand's def has no decay rate: the scale drops a whole
@@ -646,8 +656,9 @@ fn sight_barred_state(st: i32) -> bool {
         || matches!(st, state::NVG_ON | state::NVG_OFF)
 }
 
-/// Whether the sight may come up (`PM_IsAdsAllowed`, cod4-combat.md 2): a
-/// player in the world (`POF_PLAYER`) walking or linked to something with
+/// Whether the sight may come up (`PM_IsAdsAllowed`, unverified on 1.7;
+/// `weapon_pins::hands` pins the blocks, cod4-combat.md 2): a player in
+/// the world (`POF_PLAYER`) walking or linked to something with
 /// ground under him, holding a weapon that sights, off a turret, not
 /// barred by the script (`weapFlags` 0x20), in a state that shows it, and
 /// with a round where the weapon wants one (`noADSWhenMagEmpty`).
@@ -673,14 +684,15 @@ fn ads_allowed(pm: &Pmove, pml: &Pml) -> bool {
         && !(d.no_ads_when_mag_empty && clip(ps, d) == 0)
 }
 
-/// `PM_ExitAimDownSight`.
+/// `PM_ExitAimDownSight` (unverified on 1.7): `EV_RESET_ADS` and the
+/// sight flag down.
 fn exit_ads(ps: &mut super::PlayerState) {
     ps.add_event(ev::RESET_ADS, 0);
     ps.pm_flags &= !pmf::SIGHT;
 }
 
 /// The sight flag for this cmd (`PM_UpdateAimDownSightFlag`, run on every
-/// `PmoveSingle` arm before the sprint): set while the held sight key
+/// `PmoveSingle` arm before the sprint, cod4-combat.md 2): set while the held sight key
 /// (0x800) asks and [`ads_allowed`] lets it. The sprint key drops the
 /// sight (`EV_RESET_ADS` each cmd) unless a scope's breath key (0x2000) is
 /// down with it. Prone, a sight that is not a scope part way up comes up
@@ -710,7 +722,8 @@ pub(super) fn update_ads_flag(pm: &mut Pmove, pml: &Pml) {
     }
 }
 
-/// `BG_UsingSniperScope`: a scope weapon on its way into the sight.
+/// `BG_UsingSniperScope` (unverified on 1.7): a scope weapon on its way
+/// into the sight.
 pub(super) fn using_sniper_scope(pm: &Pmove) -> bool {
     held(pm).is_some_and(|d| d.overlay_reticle != 0) && pm.ps.weapon_pos_frac > 0.0
 }
@@ -731,12 +744,13 @@ fn sight_lowered(ps: &super::PlayerState, d: &WeaponDef) -> bool {
     reload_down || (st == state::RECHAMBER && !d.rechamber_while_ads)
 }
 
-/// `fWeaponPosFrac`'s step (`PM_UpdateAimDownSightLerp`): toward 1 at the
-/// def's in rate while the sight flag is up and nothing lowers the gun
-/// (an `adsFireOnly` weapon's delayed shot raises it whatever the flag),
+/// `fWeaponPosFrac`'s step (`PM_UpdateAimDownSightLerp`; the shooter rows
+/// replay `fWeaponPosFrac` exact, cod4-combat.md 2): toward 1 at the def's
+/// in rate while the sight flag is up and nothing lowers the gun (an
+/// `adsFireOnly` weapon's delayed shot raises it whatever the flag),
 /// toward 0 at the out rate otherwise, clamped to 0..1. Without a sighting
-/// weapon it reads 0 (a turret never gets here). `player_adsExitDelay`'s default 0
-/// leaves `adsDelayTime` at 0.
+/// weapon it reads 0 (a turret never gets here). `player_adsExitDelay`'s
+/// default 0 leaves `adsDelayTime` at 0.
 fn ads_lerp(pm: &mut Pmove, pml: &Pml) {
     let d = held(pm).filter(|d| d.aim_down_sight);
     let ps = &mut *pm.ps;
@@ -868,7 +882,7 @@ fn run_down(clock: &mut i32, step: i32) -> bool {
 }
 
 /// The cmd's clocks (`PM_Weapon_WeaponTimeAdjust`, inlined in `PM_Weapon`
-/// at `cod4_lnxded` 0x8062df0): the kick window on the plain msec, then
+/// at `cod4_lnxded` 0x8062df0, cod4-combat.md 2.1): the kick window on the plain msec, then
 /// `weaponTime` and `weaponDelay` on [`clock_step`]. True when the delay
 /// ran out this cmd: a delayed shot, a bolt's brass or a reload's rounds
 /// land now.
@@ -946,7 +960,8 @@ fn note_trigger_pull(pm: &mut Pmove) {
     }
 }
 
-/// The gun and the sprint (`PM_Weapon_CheckForSprint`): the sprint's start
+/// The gun and the sprint (`PM_Weapon_CheckForSprint`, unverified on 1.7;
+/// the states' stores are [`state`]'s addresses): the sprint's start
 /// lowers it over the def's `sprintInTime` (anim 23), its end brings it
 /// back over `sprintOutTime` (anim 25). A gun moving, firing, rechambering,
 /// in a melee, the offhand or night vision is left alone; a reload is not,
@@ -984,7 +999,8 @@ enum Change {
     To(u32, bool),
 }
 
-/// `PM_Weapon_CheckForChangeWeapon`: the gun may change outside a melee,
+/// `PM_Weapon_CheckForChangeWeapon` (unverified on 1.7): the gun may
+/// change outside a melee,
 /// the offhand and night vision, once its clocks allow (a reload and a
 /// rechamber always may, a shot never before its time). A mantle on a high
 /// row, the ladder and `disableWeapons` take it away (the first two
@@ -1099,14 +1115,16 @@ fn put_away(ps: &mut super::PlayerState, defs: &dyn WeaponDefs, next: u32, quick
     pin_prone(ps);
 }
 
-/// The old weapon is down (`PM_Weapon_FinishWeaponChange`): the cmd's byte
+/// The old weapon is down (`PM_Weapon_FinishWeaponChange`, unverified on
+/// 1.7): the cmd's byte
 /// is taken up, or the empty hand where the change would have refused it.
 /// The weapon already in hand just goes ready. A new one rises by the alt
 /// switch (anim 18, its sway kept at least 128) or by the empty, first
 /// (`weaponold` not yet set for it), quick or plain raise (22, 12, 20, 11,
 /// sway reset to 255) with `EV_FIRST_RAISE_WEAPON` or `EV_RAISE_WEAPON`
 /// when something was in hand. The old weapon, a clip-only one with
-/// nothing left and no detonator, is then taken (`BG_TakeClipOnlyWeaponIfEmpty`).
+/// nothing left and no detonator, is then taken
+/// (`BG_TakeClipOnlyWeaponIfEmpty`, unverified on 1.7).
 fn bring_up(pm: &mut Pmove, quick: bool) {
     let Some(defs) = pm.defs else { return };
     let wanted = u32::from(pm.cmd.weapon);
@@ -1198,7 +1216,8 @@ fn interrupted(s: i32) -> i32 {
     }
 }
 
-/// `PM_Weapon_AllowReload`: a reload has rounds to take and room to put
+/// `PM_Weapon_AllowReload` (unverified on 1.7): a reload has rounds to
+/// take and room to put
 /// them. A no-partial weapon also needs room for its whole `reloadAmmoAdd`
 /// (when that is less than a clip) or else an empty clip.
 fn may_reload(ps: &super::PlayerState, d: &WeaponDef) -> bool {
@@ -1257,9 +1276,10 @@ fn reload_request(pm: &mut Pmove) {
     }
 }
 
-/// `PM_BeginWeaponReload`: from ready, a shot, a rechamber or the sprint,
-/// holding a weapon. The burst count clears and the sight resets
-/// (`EV_RESET_ADS`, then `EV_RELOAD_START_NOTIFY`); a segmented weapon
+/// `PM_BeginWeaponReload` (name unverified on 1.7): from ready, a shot, a
+/// rechamber or the sprint, holding a weapon. The burst count clears and
+/// the sight resets (`EV_RESET_ADS`, then `EV_RELOAD_START_NOTIFY`, the
+/// shooter's 58900 in cod4-combat.md 2); a segmented weapon
 /// with a start plays it (anim 15, `EV_RELOAD_START`), any other goes
 /// straight to its first segment.
 fn start_reload(ps: &mut super::PlayerState, d: &WeaponDef) {
@@ -1334,7 +1354,8 @@ fn unchambered(ps: &super::PlayerState, d: &WeaponDef) -> bool {
     d.bolt_action && bit(&ps.weaponrechamber, ps.weapon)
 }
 
-/// `PM_SetWeaponReloadAddAmmoDelay`: `weaponDelay` runs to the add moment.
+/// `PM_SetWeaponReloadAddAmmoDelay` (name unverified on 1.7): `weaponDelay`
+/// runs to the add moment (the shooter's 1500 at 58900, cod4-combat.md 2).
 /// An unchambered bolt's runs to its brass instead, `rechamberBoltTime`
 /// at most (the segment's time if it adds nothing), never under 1. No add
 /// moment otherwise leaves the delay alone.
@@ -1348,7 +1369,8 @@ fn arm_add_delay(ps: &mut super::PlayerState, d: &WeaponDef) {
     }
 }
 
-/// `PM_Weapon_ReloadDelayedAction`: a reload's delay ran out. An
+/// `PM_Weapon_ReloadDelayedAction` (unverified on 1.7): a reload's delay
+/// ran out. An
 /// unchambered bolt ejects its brass (`EV_EJECT_BRASS`) and, while the
 /// segment still runs, waits again for the rest of the add moment past
 /// `rechamberBoltTime` (when that is at least a millisecond); otherwise
@@ -1372,7 +1394,8 @@ fn reload_delay_out(ps: &mut super::PlayerState, d: &WeaponDef) {
     top_up_clip(ps, d);
 }
 
-/// `PM_ReloadClip`: rounds from the reserve into the clip, what fits and
+/// `PM_ReloadClip` (unverified on 1.7): rounds from the reserve into the
+/// clip, what fits and
 /// the reserve holds, a start's `reloadStartAdd` or a segment's
 /// `reloadAmmoAdd` at most when less than a clip; `EV_RELOAD_ADDAMMO` if
 /// any moved. A start adding no rounds moves none.
@@ -1403,7 +1426,8 @@ fn top_up_clip(ps: &mut super::PlayerState, d: &WeaponDef) {
 }
 
 /// A reload state's clocks are out (`PM_Weapon_FinishReloadStart` for 9
-/// and 10, `PM_Weapon_FinishReload` for 7 and 8). The delay running out
+/// and 10, `PM_Weapon_FinishReload` for 7 and 8; both unverified on 1.7).
+/// The delay running out
 /// first does [`reload_delay_out`]; the segment then waits for its time.
 /// A held trigger marks a segmented reload interrupted. Another segment
 /// follows while [`may_reload`]: after a start unless it was interrupted
@@ -1523,8 +1547,9 @@ fn trigger_fires(pm: &mut Pmove, d: &WeaponDef, delay_done: bool) -> bool {
     false
 }
 
-/// An empty clip under the trigger (`PM_Weapon_CheckFiringAmmo`): a reserve
-/// reloads; with none a gun clicks (`EV_NOAMMO`) and waits 500 ms, and
+/// An empty clip under the trigger (`PM_Weapon_CheckFiringAmmo`, name
+/// unverified on 1.7): a reserve reloads; with none a gun clicks
+/// (`EV_NOAMMO`) and waits 500 ms (cod4-combat.md 2's dry burst), and
 /// either drops its chamber and goes to its idle anim (a grenade silently).
 fn dry_fire(ps: &mut super::PlayerState, d: &WeaponDef) {
     if reserve(ps, d) >= 1 {
@@ -1616,7 +1641,7 @@ fn release_round(ps: &mut super::PlayerState, d: &WeaponDef) {
     }
 }
 
-/// A shot (`PM_Weapon_FireWeapon`): an empty clip goes to [`dry_fire`];
+/// A shot (`PM_Weapon_FireWeapon`, name unverified on 1.7): an empty clip goes to [`dry_fire`];
 /// otherwise the round is loaded, the gun goes to `FIRE`, a pull's
 /// rounds are counted (the count capped at 4, a pull's first clearing the
 /// fresh-pull flag) and the round leaves now unless a delay holds it.
@@ -1779,7 +1804,8 @@ fn def_of<'d>(pm: &Pmove<'d>, w: u32) -> Option<&'d WeaponDef> {
     pm.defs?.def(w)
 }
 
-/// `BG_ThrowingBackGrenade`.
+/// `BG_ThrowingBackGrenade` (unverified on 1.7): someone else's grenade
+/// is in the hand.
 fn throwing_back(ps: &super::PlayerState) -> bool {
     ps.throw_back_grenade_owner != super::ENTITYNUM_NONE
 }
@@ -1789,7 +1815,8 @@ fn weapon_ammo(ps: &super::PlayerState, d: &WeaponDef) -> i32 {
     clip(ps, d) + reserve(ps, d)
 }
 
-/// `PM_WeaponUseAmmo`: `amount` off the clip, never below 0.
+/// `PM_WeaponUseAmmo` (unverified on 1.7): `amount` off the clip, never
+/// below 0.
 fn use_ammo(ps: &mut super::PlayerState, d: &WeaponDef, amount: i32) {
     if let Some(c) = ps.ammoclip.get_mut(d.clip_index) {
         *c -= (*c).min(amount);
