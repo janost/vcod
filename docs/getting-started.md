@@ -83,7 +83,7 @@ Stock classes: `assault_mp,0`, `specops_mp,0`, `heavygunner_mp,0`,
 ### Play with friends on a LAN
 
 1. On one machine: `vcod-server <map> --gametype tdm --max-clients 16`.
-   It binds `0.0.0.0:28960`; `--port` picks another port.
+   It binds `0.0.0.0:28960`; `--port` picks another port and `--set net_ip=<ip>` one interface.
 2. On each player's machine, open `vcod` and pick the server from the
    browser's Local source, or run `vcod --connect <host-ip>:28960`.
 
