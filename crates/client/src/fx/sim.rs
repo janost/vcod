@@ -1743,8 +1743,9 @@ impl FxSystem {
                     &mut sprites
                 };
                 set.extend(m.shaders.iter().cloned());
+                // Under the key a chain's spawn looks it up by.
                 for chained in [&m.impact_fx, &m.emit_fx, &m.death_fx, &m.play_fx] {
-                    todo.extend(chained.iter().filter(|p| !seen.contains(*p)).cloned());
+                    todo.extend(chained.iter().map(|p| efx::chained_path(p)));
                 }
             }
         }
@@ -1799,6 +1800,12 @@ impl FxSystem {
             }
         }
         (marks, sprites, models)
+    }
+
+    /// Every path the cache holds, a miss included.
+    #[cfg(test)]
+    pub(crate) fn cached_paths(&self) -> HashSet<String> {
+        self.cache.keys().cloned().collect()
     }
 
     /// An effect built elsewhere (CoD4's zone effects, `cod4_fx`), held
