@@ -49,6 +49,8 @@ pub const MAX_GENTITIES: usize = 1024;
 pub const GENTITYNUM_BITS: i32 = 10;
 pub const ENTITYNUM_NONE: u32 = 1023;
 pub const CLIENTNUM_BITS: i32 = 6;
+/// `cl.snapshots`' depth: `CL_GetSnapshot` (Mac 0x17a02c) refuses a
+/// snapshot 32 messages behind the newest.
 pub const PACKET_BACKUP: usize = 32;
 /// The command rings on both ends (2.4, 3.4).
 pub const MAX_RELIABLE_COMMANDS: usize = 128;

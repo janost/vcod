@@ -20,7 +20,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::NetClient;
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 
 const SCRIPT: &str =
     include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_menuclock.gsc");
@@ -80,7 +80,7 @@ fn retail_plays(capture: &str) -> Vec<(i64, i32)> {
 }
 
 /// Ours: the script log and every snapshot's `(serverTime, pm_type)`.
-fn ours(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol) -> (Vec<String>, Vec<(i64, i32)>) {
+fn ours(fs: vcod_common::pk3::Pk3Fs, proto: &'static Cod1Wire) -> (Vec<String>, Vec<(i64, i32)>) {
     let map = "mp_pavlov";
     let bsp_path = fs.resolve_map(map).expect("map in the paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
@@ -120,7 +120,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol) -> (Vec<String>, 
     (sv.script_log().to_vec(), plays)
 }
 
-fn check(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol, log: &str, capture: &str) {
+fn check(fs: vcod_common::pk3::Pk3Fs, proto: &'static Cod1Wire, log: &str, capture: &str) {
     let log: Vec<String> = log.lines().map(str::to_string).collect();
     let retail = summary(&log, &retail_plays(capture));
     let (our_log, plays) = ours(fs, proto);

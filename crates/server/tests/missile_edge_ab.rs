@@ -87,7 +87,7 @@ fn ours(
 /// [`ours`] with the missile pool's first draws pinned
 /// (`Server::pin_missile_draws`), and the first rockets' `trDelta`
 /// (`Server::pin_rocket_deltas`).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn ours_pinned(
     fs: vcod_common::pk3::Pk3Fs,
     map: &str,

@@ -4,6 +4,7 @@
 //! keeps them (cod4-pmove.md 7).
 
 use glam::Vec3;
+use vcod_common::clipmap::surface_material;
 
 use super::fpu::{self, d};
 use super::moves::{accelerate, air_move, free_scale, jump_check};
@@ -269,7 +270,7 @@ pub(crate) fn rung_footstep(pm: &mut Pmove) {
     let origin = pm.ps.origin;
     let end = fpu::ma(origin, RUNG_REACH, pm.ps.ladder_vec);
     let t = pm.trace_box(origin, end, mins, maxs, mask);
-    let mut surf = (t.surface_flags & 0x1f0_0000) >> 20;
+    let mut surf = surface_material(t.surface_flags);
     if t.fraction == 1.0 || surf == 0 {
         surf = RUNG_DEFAULT_SURFACE;
     }

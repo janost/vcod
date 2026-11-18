@@ -8,8 +8,8 @@ use std::rc::Rc;
 
 use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
 
+use super::Builtin;
 use super::cvar;
-use super::score::Builtin;
 use crate::game::host::GameHost;
 use vcod_common::net::protocol::CsRange;
 

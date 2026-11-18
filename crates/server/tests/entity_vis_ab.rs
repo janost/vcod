@@ -1,5 +1,5 @@
 //! The entity list a client is sent from one spot, diffed against the retail
-//! trace sample taken at that spot. Stage 5's visibility gate.
+//! trace sample taken at that spot. The visibility gate.
 //!
 //! `entities_ab.rs` pins what the map puts on the wire; this one pins who is
 //! shown it. Retail culls by the client's PVS cluster
@@ -23,7 +23,7 @@ use std::time::Instant;
 use vcod_common::net::msg::EntityState;
 use vcod_common::net::protocol::PROTOCOL_V1;
 
-/// Samples stage 5 knowingly does not reproduce, as `(map, label, reason)`.
+/// Samples vcod knowingly does not reproduce, as `(map, label, reason)`.
 /// Empty is the goal, and the guard below fails on one that starts matching.
 const GAPS: &[(&str, &str, &str)] = &[];
 

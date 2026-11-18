@@ -108,7 +108,6 @@ impl WeaponStrip {
 
     /// One frame of the strip at `now` (ms). `key_text` is the key bound to
     /// a command, `None` while unbound; `font` the console font.
-    #[allow(clippy::too_many_arguments)]
     pub fn build(
         &mut self,
         s: &StripView,
@@ -178,7 +177,7 @@ impl WeaponStrip {
     /// The selected slot of a select-fire gun: the mode in hand on top, the
     /// other modes under it, the two sliding past each other for 150 ms
     /// after a mode switch. Returns the strip's new left edge.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn alt_modes(
         &mut self,
         s: &StripView,
@@ -258,7 +257,6 @@ impl WeaponStrip {
 /// The key bound to `weaponslot <name>` under the slot's left edge
 /// (0x30037620): the console font at 0.25 in 6-unit cells, a black copy a
 /// unit down and right first.
-#[allow(clippy::too_many_arguments)]
 fn slot_key(
     slot: usize,
     x: f32,

@@ -54,7 +54,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6};
 use vcod_common::net::{NetClient, NetEvent};
 
 const MAP: &str = "mp_carentan";
@@ -146,7 +146,7 @@ const STOPGO_SPAWN_UO: [f32; 2] = [776.0, 3488.0];
 /// starts connecting on a fresh server (900 on 1.5 and 1050 on UO, whose
 /// gametypes open `serverinfo_<gametype>` before the team menu), so the
 /// client starts this many frames in for an idle set at `idle_ms`.
-fn join_frames(idle_ms: i32, proto: &Protocol) -> u32 {
+fn join_frames(idle_ms: i32, proto: &Cod1Wire) -> u32 {
     let join_ms = match proto.transport.version {
         v if v == PROTOCOL_V1.transport.version => 800,
         v if v == PROTOCOL_V6.transport.version => 900,

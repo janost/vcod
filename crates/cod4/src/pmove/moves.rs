@@ -3,6 +3,7 @@
 //! (docs/research/cod4-pmove.md 3, 6).
 
 use glam::Vec3;
+use vcod_common::clipmap::SURF_SLICK;
 
 use super::fpu::{self, d};
 use super::slide::{clip_velocity, jump_clear, project_velocity, step_slide_move};
@@ -65,7 +66,7 @@ pub(crate) fn friction(ps: &mut PlayerState, pml: &Pml, rules: &super::Rules) {
         // The lunge's own friction, on the ground or off it (0x8056fb8).
         drop = d(rules.melee_charge_friction) * d(pml.frametime);
     } else if pml.walking
-        && pml.ground_trace.surface_flags & 2 == 0
+        && pml.ground_trace.surface_flags & SURF_SLICK == 0
         && ps.pm_flags & pmf::TIME_KNOCKBACK == 0
     {
         let mut control = speed.max(d(rules.stopspeed));
@@ -353,8 +354,8 @@ pub(crate) fn walk_move(pm: &mut Pmove, pml: &mut Pml) {
     let (dir, keys) = flat_wish(pml, fm, rm);
     let plane = pml.ground_trace.normal;
     let wishdir = project_velocity(dir, plane);
-    let slick =
-        pml.ground_trace.surface_flags & 2 != 0 || pm.ps.pm_flags & pmf::TIME_KNOCKBACK != 0;
+    let slick = pml.ground_trace.surface_flags & SURF_SLICK != 0
+        || pm.ps.pm_flags & pmf::TIME_KNOCKBACK != 0;
     let accel = walk_accel(pm.ps, slick);
     accelerate(pm, pml, wishdir, (d(keys) * scale) as f32, accel);
 

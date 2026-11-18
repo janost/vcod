@@ -27,7 +27,7 @@ fn server_on(map: &str, gametype: &str, bots: usize) -> Option<(vcod_server::Ser
 
 fn server_from(
     fs: vcod_common::pk3::Pk3Fs,
-    protocol: Option<&'static vcod_common::net::protocol::Protocol>,
+    protocol: Option<&'static vcod_common::net::protocol::Cod1Wire>,
     map: &str,
     gametype: &str,
     bots: usize,

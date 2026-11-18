@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use vcod_common::net::flags::{EF_IN_VEHICLE_V22, EF_MOUNTED, PMF_OWN_VIEW};
 use vcod_common::net::msg::{self, PlayerState, UserCmd};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::text::atoi_msvc;
 use vcod_common::weapon::WeaponDef;
 use vcod_common::weapon_table::alt_chain;
@@ -371,14 +371,14 @@ pub struct Held {
 
 /// UO's seat gate: the seat bit off `eflags_ps`, `vehType` 1 and `vehPos` 3
 /// (the jeep passenger, who fires his own weapon) off `seat_ps`.
-fn seat_refuses(p: &Protocol, eflags_ps: &PlayerState, seat_ps: &PlayerState) -> bool {
+fn seat_refuses(p: &Cod1Wire, eflags_ps: &PlayerState, seat_ps: &PlayerState) -> bool {
     p.is_uo()
         && eflags_ps.field_i32(p, "eFlags") & EF_IN_VEHICLE_V22 != 0
         && !(seat_ps.field_i32(p, "vehType") == 1 && seat_ps.field_i32(p, "vehPos") == 3)
 }
 
 impl Held {
-    pub fn from_ps(ps: &PlayerState, p: &Protocol, weapons: &[Option<WeaponDef>]) -> Held {
+    pub fn from_ps(ps: &PlayerState, p: &Cod1Wire, weapons: &[Option<WeaponDef>]) -> Held {
         let lo = ps.field_i32(p, "weaponslots[0]").to_le_bytes();
         let hi = ps.field_i32(p, "weaponslots[4]").to_le_bytes();
         let mut slots = [0u8; 8];
@@ -421,7 +421,7 @@ impl Held {
     /// the own-view bit (1.1 0x3003830c, UO 0x30047792) and `weaponslot`'s
     /// `vehType` and `vehPos` (UO 0x30047778). The two differ for a
     /// snapshot at a mount, a seat change or the start of a follow.
-    pub fn cg_snap(&mut self, newest: &PlayerState, snap: &PlayerState, p: &Protocol) {
+    pub fn cg_snap(&mut self, newest: &PlayerState, snap: &PlayerState, p: &Cod1Wire) {
         self.own_view = snap.field_i32(p, "pm_flags") & PMF_OWN_VIEW != 0;
         self.seat_refuses_slot = seat_refuses(p, newest, snap);
     }

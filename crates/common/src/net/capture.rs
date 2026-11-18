@@ -11,7 +11,7 @@
 
 use super::flags::{ET_CORPSE, ET_FX, ET_ITEM, ET_PLAYER, ET_SCRIPTMOVER};
 use super::msg::{BUTTON_USE, HudElem, NULL_USERCMD, Objective, UserCmd, hud_field as h};
-use super::protocol::{CsRange, PROTOCOL_V1, Protocol};
+use super::protocol::{Cod1Wire, CsRange, PROTOCOL_V1};
 use super::snapshot::Snapshot;
 
 /// The cvar the gsc probe sets on a client with `setClientCvar`.
@@ -35,7 +35,7 @@ pub enum UseMode {
 pub struct ScriptedCapture {
     /// The connection's protocol, which every index and field is read
     /// through; 1.1 by default.
-    pub protocol: &'static Protocol,
+    pub protocol: &'static Cod1Wire,
     pub lines: Vec<String>,
     use_mode: UseMode,
     use_since: i64,
@@ -229,7 +229,7 @@ fn cs_name(cs: &[String], base: usize, idx: i32) -> String {
 /// Everything the trace records, as `key=value` words: the playerstate's
 /// vitals and origin, both HUD arrays, the objective block, the client roster and the
 /// players, corpses, items and script models in the snapshot.
-pub fn trace_body(snap: &Snapshot, cs: &[String], p: &Protocol) -> String {
+pub fn trace_body(snap: &Snapshot, cs: &[String], p: &Cod1Wire) -> String {
     let ps = &snap.ps;
     let f = |n: &str| ps.field_i32(p, n);
     let clips: Vec<String> = (0..64)
@@ -283,7 +283,7 @@ fn join_or_dash(v: &[String], sep: &str) -> String {
 /// `num:m:model:eFlags:x,y,z` with the base of its trajectory (`hide` is an
 /// eFlags bit, not an absence). Nothing else: a map's
 /// other entities do not move under these gametypes.
-fn entity_str(e: &super::msg::EntityState, cs: &[String], p: &Protocol) -> Option<String> {
+fn entity_str(e: &super::msg::EntityState, cs: &[String], p: &Cod1Wire) -> Option<String> {
     let f = |n: &str| e.field_i32(p, n);
     let n = e.number;
     Some(match f("eType") {
@@ -321,7 +321,7 @@ fn entity_str(e: &super::msg::EntityState, cs: &[String], p: &Protocol) -> Optio
 /// strings and the shader resolved. `timer` is `T` when the element carries a
 /// timer's server time and `-` when not: the time itself is the server's own
 /// clock, which two servers never share.
-pub fn hud_str(archived: &[HudElem], current: &[HudElem], cs: &[String], p: &Protocol) -> String {
+pub fn hud_str(archived: &[HudElem], current: &[HudElem], cs: &[String], p: &Cod1Wire) -> String {
     let half = |elems: &[HudElem]| {
         let v: Vec<String> = elems
             .iter()
@@ -333,7 +333,7 @@ pub fn hud_str(archived: &[HudElem], current: &[HudElem], cs: &[String], p: &Pro
     format!("{}|{}", half(archived), half(current))
 }
 
-fn hud_elem_str(e: &HudElem, cs: &[String], p: &Protocol) -> String {
+fn hud_elem_str(e: &HudElem, cs: &[String], p: &Cod1Wire) -> String {
     format!(
         "{}:{},{}:{}:{}:{}:{}:{},{}:{}:{:#x}",
         e.get(h::TYPE),
@@ -352,7 +352,7 @@ fn hud_elem_str(e: &HudElem, cs: &[String], p: &Protocol) -> String {
 
 /// Every slot that differs from the default, as
 /// `i:state:icon:entNum:team:x,y,z`.
-pub fn objectives_str(objs: &[Objective], cs: &[String], p: &Protocol) -> String {
+pub fn objectives_str(objs: &[Objective], cs: &[String], p: &Cod1Wire) -> String {
     let v: Vec<String> = objs
         .iter()
         .enumerate()

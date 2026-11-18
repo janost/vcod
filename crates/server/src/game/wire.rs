@@ -211,7 +211,7 @@ pub enum LinkBox {
 /// [`link_box`] by the spawn's box.
 pub fn link_box_of(class: LinkBox) -> ([f32; 3], [f32; 3]) {
     match class {
-        LinkBox::Turret => ([-32.0, -32.0, 0.0], [32.0, 32.0, 56.0]),
+        LinkBox::Turret => crate::game::turret::TURRET_BOX,
         // A script model is spawned with a zero box and nothing on the
         // `SP_script_model` path ever writes one, so its clusters come from
         // the engine's link epsilon alone. A `script_brushmodel` shares this

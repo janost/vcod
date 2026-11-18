@@ -10,7 +10,7 @@ use super::*;
 /// state CoD1 keeps itself, beside [`crate::engine::EngineCore`].
 pub struct Cod1Game {
     pub(super) cfg: ServerConfig,
-    pub(super) proto: &'static Protocol,
+    pub(super) proto: &'static Cod1Wire,
     /// `sv_serverid`, `0x10` per map load plus the restart count in the low
     /// nibble. u8 because the client echoes it in a one-byte header field.
     pub(super) server_id: u8,
@@ -244,7 +244,7 @@ pub(super) struct Lend<'a> {
     pub(super) clients: &'a mut Vec<Option<Client>>,
     pub(super) world: &'a Option<Rc<World>>,
     pub(super) fs: &'a Option<Rc<vcod_common::pk3::Pk3Fs>>,
-    pub(super) proto: &'static Protocol,
+    pub(super) proto: &'static Cod1Wire,
     /// `level.time` of the frame being run.
     pub(super) sv_time_ms: i32,
     /// `svs.time`, the network clock (`Server::svs_time_ms`).
@@ -283,10 +283,10 @@ pub(super) struct FrameOut {
 /// does not print them.
 impl crate::engine::GameModule for Cod1Game {
     type Client = Client;
-    type Wire = Protocol;
+    type Wire = Cod1Wire;
     type Snapshots = Cod1Snapshots;
 
-    fn wire(e: &Server) -> &'static Protocol {
+    fn wire(e: &Server) -> &'static Cod1Wire {
         e.game.proto
     }
     fn status(

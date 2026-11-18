@@ -1118,7 +1118,6 @@ impl Controllers {
     /// The lean and the spine's split of the torso and head angles, off the
     /// legs' `l`; `legs_off` is the view yaw `tag_origin`'s yaw is taken
     /// off, `None` for a dead body or a rider.
-    #[allow(clippy::too_many_arguments)]
     fn split(
         split: Split,
         mut t: [f32; 3],

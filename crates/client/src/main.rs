@@ -242,8 +242,8 @@ struct Args {
     /// player, which leaves every field the client predicts at zero.
     #[arg(long)]
     save_motion: bool,
-    /// Join a team, then run a scripted weapon sequence -- single shot,
-    /// sustained fire, reload, fire crouched and prone -- and write the retail
+    /// Join a team, then run a scripted weapon sequence (single shot,
+    /// sustained fire, reload, fire crouched and prone) and write the retail
     /// playerstate to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-combat.txt.
     /// Separate from --save-motion because that one samples a settled state
@@ -258,9 +258,9 @@ struct Args {
     /// sequence takes about 40 s, inside the default --probe-secs.
     #[arg(long)]
     save_combat: bool,
-    /// Join a team, then run the sight script -- sight held, released, held
+    /// Join a team, then run the sight script (sight held, released, held
     /// through a reload, through a shot and while walking, plus a hip shot
-    /// and a walk to kick the spread counter -- and write every snapshot's
+    /// and a walk to kick the spread counter) and write every snapshot's
     /// fWeaponPosFrac and aimSpreadScale to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-ads.txt.
     /// The same machine as --save-combat with another script; the two are
@@ -268,9 +268,9 @@ struct Args {
     /// never hold still for.
     #[arg(long)]
     save_ads: bool,
-    /// Join a team, then run the grenade script -- one melee swing on the
+    /// Join a team, then run the grenade script (one melee swing on the
     /// rifle, a switch to the frag, a cooked throw, a cook held past the pin,
-    /// a cook cancelled by a weapon switch and a throw at the ground -- and
+    /// a cook cancelled by a weapon switch and a throw at the ground) and
     /// write every snapshot's grenadeTimeLeft and weaponDelay, plus a !missile
     /// line per snapshot that had one on the wire, to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-grenade.txt.
@@ -1271,7 +1271,7 @@ impl ViewTail<'_> {
 
 /// F3 overlay text, top line first. A free function because the caller holds
 /// the renderer borrowed out of `App`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn hud_lines(
     mode: &Mode,
     // `Mode::Cod2`'s camera tag: the game the session plays.
@@ -2671,7 +2671,7 @@ fn view_muzzle(cam_pos: Vec3, forward: Vec3, right: Vec3, up: Vec3) -> (Vec3, Ve
 /// Leave the live map and enter Loading for the server's new map: drop the
 /// GPU world and per-map state, reset what a gamestate invalidates, and list
 /// the paks the client is missing.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn start_loading(
     net: &net::NetClient<net::UdpTransport>,
     hud: &mut Option<hud::Hud>,
@@ -2851,7 +2851,7 @@ fn allow_download(shell: &console::shell::Shell) -> bool {
 /// one is read again or dropped to reload lazily, since a new pak may carry
 /// files the old ones lacked or replace one under the same name. The GPU
 /// half is `Renderer::reopen`, the viewmodel rig `OnlineView::reopen`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn reopen_fs(
     base: &std::path::Path,
     game: Option<&std::path::Path>,
@@ -2918,7 +2918,6 @@ fn reread_live_map(
 /// starts over as `CL_InitCGame` (CoDMP.exe 0x4049c0) loads a fresh cgame
 /// (docs/research/cod11-front-end.md section 17, "The cgame restart").
 /// False, touching nothing, before the game is live.
-#[allow(clippy::too_many_arguments)]
 fn restart_live_cgame(
     phase: &mut Phase,
     view: &mut play::view::OnlineView,
@@ -2994,7 +2993,6 @@ fn leave_server_hud(hud: &mut hud::Hud) {
 }
 
 /// Parse the map, upload it to the GPU and hand back the live phase.
-#[allow(clippy::too_many_arguments)]
 fn load_map(
     map: &str,
     net: &net::NetClient<net::UdpTransport>,
@@ -3035,7 +3033,7 @@ fn load_map(
 
 /// The between-maps frame: the status text over an empty view, with chat
 /// still flowing through the normal HUD build (no snapshot clients).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn loading_frame(
     r: &mut Renderer,
     fs: &Pk3Fs,
@@ -8961,7 +8959,7 @@ impl ApplicationHandler for App {
 fn bound_key(
     shell: &console::shell::Shell,
     loc: &vcod_common::localize::Localized,
-    p: &net::protocol::Protocol,
+    p: &net::protocol::Cod1Wire,
     cmd: &str,
 ) -> Option<String> {
     hud::bind_commands(p)

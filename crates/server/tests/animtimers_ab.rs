@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::pk3::Pk3Fs;
 
 const MAP: &str = "mp_carentan";
@@ -125,7 +125,7 @@ fn retail(text: &str) -> Capture {
 /// placement's: `commandTime` to the two timers, `legsAnim` and
 /// `torsoAnim`, one entry per snapshot.
 fn ours(
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     fs: Pk3Fs,
     cap: &Capture,
     cvars: &[(&str, &str)],
@@ -250,12 +250,12 @@ fn ours(
 /// Retail's timers against ours on every snapshot both reached, and with
 /// `anims` the two channels' anim indices too; returns how many non-zero
 /// retail timers were compared.
-fn check(p: &'static Protocol, fs: Pk3Fs, tag: &str) -> usize {
+fn check(p: &'static Cod1Wire, fs: Pk3Fs, tag: &str) -> usize {
     check_with(p, fs, tag, &[], false)
 }
 
 fn check_with(
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     fs: Pk3Fs,
     tag: &str,
     cvars: &[(&str, &str)],

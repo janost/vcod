@@ -510,8 +510,8 @@ pub struct WeaponDef {
     /// Semantics INFERRED from the values; no decompilation evidence yet.
     pub ads_bob_factor: f32,
     /// `semiAuto 0` fires while the button is held at `fireTime` cadence.
-    /// The eight stock files that omit the key -- the four grenades, the
-    /// three bipod mg42s and the PTRS41 -- are not semi-automatic, so the
+    /// The eight stock files that omit the key (the four grenades, the
+    /// three bipod mg42s and the PTRS41) are not semi-automatic, so the
     /// default is off.
     pub semi_auto: bool,
     /// Reserve rounds behind the clip (`startAmmo`).

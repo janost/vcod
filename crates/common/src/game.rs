@@ -1,5 +1,5 @@
 //! Which game an install is. A CoD1 install's version (1.1, 1.5, United
-//! Offensive) is its [`crate::net::protocol::Protocol`]
+//! Offensive) is its [`crate::net::protocol::Cod1Wire`]
 //! ([`crate::net::protocol::install_protocol`]); the game sits above it.
 
 use std::path::Path;

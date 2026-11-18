@@ -101,7 +101,7 @@ impl Cod4Hud {
     /// Menu `name` when its `visible when` holds: each visible item's
     /// window and text (`Item_Paint`), a hint owner draw by its number.
     /// Returns the texts drawn.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn draw_zone_menu(
         &self,
         l: &Loaded,
@@ -253,7 +253,6 @@ impl Cod4Hud {
     /// Owner draw `it.owner_draw` of a hint menu over `rect`, `None` when
     /// it draws nothing this frame. It reads the newest snapshot's
     /// playerstate where retail reads the predicted one.
-    #[allow(clippy::too_many_arguments)]
     fn hint(
         &self,
         l: &Loaded,

@@ -17,6 +17,10 @@ set -u
 if [ -z "${OFFLAN_INNER:-}" ]; then
     exec env OFFLAN_INNER=1 unshare -rn --fork bash "$0" "$@"
 fi
+if grep -qE '^ *0 +0 +4294967295$' /proc/self/uid_map; then
+    echo "offlan: the inner half runs only inside its own unshare; unset OFFLAN_INNER" >&2
+    exit 1
+fi
 cd "$(dirname "$0")/.."
 KIND=$1; OUT=$(realpath -m "$2"); shift 2
 PAIRS=("$@"); [ ${#PAIRS[@]} -eq 0 ] && PAIRS=(5000:20 25000:10 1000:30)

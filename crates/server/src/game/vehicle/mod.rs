@@ -1052,7 +1052,7 @@ pub fn occupant_radius_scale(kind: i32) -> f32 {
 /// `builtins::uo::do_damage` sends every other entity down the generic arm.
 /// A missing attacker is the world's entity for a vehicle and undefined in
 /// a player's callback.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn g_damage(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -1156,7 +1156,7 @@ pub fn die_next(host: &mut GameHost, cx: &mut Cx) {
 /// six arguments, and at 0 `death` and `Scr_Vehicle_Die`, queued: a builtin
 /// walks it at once ([`die_next`]), the frame's other paths at
 /// `ScriptRuntime::vehicle_deaths`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn vehicle_damage(
     host: &mut GameHost,
     cx: &mut Cx,

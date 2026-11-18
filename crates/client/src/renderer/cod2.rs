@@ -1037,7 +1037,6 @@ impl<'a> Cod2Builder<'a> {
 
     /// [`Self::bind_in`] with probe 0, as every CoD2 batch's.
     #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
     pub fn bind(
         &mut self,
         fs: &Pk3Fs,
@@ -1055,7 +1054,6 @@ impl<'a> Cod2Builder<'a> {
     /// `probe` and primary light `light` (a CoD4 surface's; 0 elsewhere),
     /// which [`draws_lit`] accepted. A spot or omni light in `light` lights
     /// it in the sun's place (`lm_spot_*`, `lm_omni_*`).
-    #[allow(clippy::too_many_arguments)]
     pub fn bind_in(
         &mut self,
         fs: &Pk3Fs,
@@ -1161,7 +1159,6 @@ impl<'a> Cod2Builder<'a> {
     /// primary light `light` (the sun's technique unless it names a spot
     /// or omni light), which [`draws_cod4_model`] accepted, over the map's
     /// model lighting volume.
-    #[allow(clippy::too_many_arguments)]
     pub fn bind_cod4_model(
         &mut self,
         fs: &Pk3Fs,
@@ -1196,7 +1193,6 @@ impl<'a> Cod2Builder<'a> {
 
     /// Binds a CoD4 water batch of `sh` under reflection probe `probe`,
     /// which [`draws_cod4_water`] accepted.
-    #[allow(clippy::too_many_arguments)]
     pub fn bind_cod4_water(
         &mut self,
         fs: &Pk3Fs,
@@ -1899,7 +1895,7 @@ fn constant_image(name: &str) -> Image {
 
 /// The lit pipeline: the world vertex in buffer 0, [`tangent_stream`] in
 /// buffer 1, depth LessEqual, wound as the map's triangles.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(super) fn make_lit_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
@@ -2021,7 +2017,7 @@ fn make_floatz_pipeline(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn lit_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,

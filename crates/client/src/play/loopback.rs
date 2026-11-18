@@ -18,7 +18,7 @@ use vcod_common::net::msg::{
     BUTTON_ADS, BUTTON_ATTACK, BUTTON_SPRINT_V22, NULL_USERCMD, PlayerState, UserCmd,
     WBUTTON_CROUCH, WBUTTON_LEAN_LEFT, WBUTTON_PRONE, WBUTTON_RELOAD,
 };
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V22};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::pmove::predict;
@@ -158,7 +158,7 @@ struct Outcome {
 }
 
 /// The paks and protocol: UO's when `COD_DIR` is a UO install, else 1.1's.
-fn setup() -> Option<(Pk3Fs, &'static Protocol)> {
+fn setup() -> Option<(Pk3Fs, &'static Cod1Wire)> {
     match vcod_common::testing::uo_fs() {
         Some(fs) => Some((fs, &PROTOCOL_V22)),
         None => Some((vcod_common::testing::game_fs()?, &PROTOCOL_V1)),
@@ -187,7 +187,7 @@ fn run(c: Conditions, weapon: &str) -> Option<Outcome> {
     sv.load_scripts(fs.clone()).expect("load the scripts");
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let (mut net, _) = common::join(&mut sv, &q, &mut now, "axis", weapon);
-    let weapons = vcod_common::weapon_table::from_configstring(&fs, net.configstring(7));
+    let weapons = vcod_common::weapon_table::from_configstring(&*fs, net.configstring(7));
     let ps0 = net.snapshots().newest().unwrap().ps.clone();
     let held = ps0.field_i32(p, "weapon") as u8;
     assert_eq!(
@@ -393,7 +393,7 @@ fn switch_run(weapon: &str, give: &[&str], binds: &[super::input::Action]) -> Op
     sv.load_scripts(fs.clone()).expect("load the scripts");
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let (mut net, _) = common::join(&mut sv, &q, &mut now, "axis", weapon);
-    let weapons = vcod_common::weapon_table::from_configstring(&fs, net.configstring(7));
+    let weapons = vcod_common::weapon_table::from_configstring(&*fs, net.configstring(7));
     let mut input = PlayInput::default();
     input.new_gamestate();
     let mut name = WeaponNameFade::default();
@@ -560,7 +560,7 @@ fn each_thrown_frag_explodes_once() {
     sv.load_scripts(fs.clone()).expect("load the scripts");
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let (mut net, _) = common::join(&mut sv, &q, &mut now, "axis", "kar98k_mp");
-    let weapons = vcod_common::weapon_table::from_configstring(&fs, net.configstring(7));
+    let weapons = vcod_common::weapon_table::from_configstring(&*fs, net.configstring(7));
     let ps = &net.snapshots().newest().unwrap().ps;
     let frag = Held::from_ps(ps, p, &weapons).slots[4] as usize;
     let frag = net
@@ -630,7 +630,7 @@ fn a_key_catcher_lights_the_talk_flag() {
     sv.load_scripts(fs.clone()).expect("load the scripts");
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let (mut net, _) = common::join(&mut sv, &q, &mut now, "axis", "kar98k_mp");
-    let weapons = vcod_common::weapon_table::from_configstring(&fs, net.configstring(7));
+    let weapons = vcod_common::weapon_table::from_configstring(&*fs, net.configstring(7));
     let mut input = PlayInput::default();
     input.new_gamestate();
     let mut talk = |talking: bool| {

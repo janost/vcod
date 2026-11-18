@@ -2679,8 +2679,8 @@ What held the bots of 12.3 back, each read off a traced `bot_match` run
   so the two hit counts do not compare. On both games the view follows
   the brain's aim to within 0.003 degrees (median), and every weapon of
   the five classes, the frag and the offhands, takes a brain number.
-  INFERRED (the brain's `PONYRI_DBG` lines and the feed's weapon list,
-  mp_crash seed 1).
+  INFERRED (the brain's `RUST_LOG=vcod_server::bots::engage=trace` lines
+  and the feed's weapon list, mp_crash seed 1).
 - CoD4's `positionWouldTelefrag` now sees a body spawned this frame: 1.7
   writes `pm_type` in `ClientSpawn` and reads alive as below `PM_DEAD`
   (7). It moved no number here (the `sd` overlaps were followers).
@@ -3306,7 +3306,7 @@ three (833, 769, 317 stalled bot-ticks). VERIFIED (the runs).
   edges in (walks down off its rim at 24) and none out. VERIFIED (the
   graph). The rim is ringed by mantle strips 12 wide at (168, -5756),
   (168, -5310) and (378, -5536), tops at 28, which 1.7's pmove climbs
-  from the floor (row 1, flags 4, 700 ms; `mantle_spots`) and the
+  from the floor (row 1, flags 4, 700 ms; `cod4_mantle_spots`) and the
   graph's probe climbs too from the pool's nodes. VERIFIED (the
   probe from those nodes). The probe ran once, before the flood off the
   mantles' tops had found the pool, so no node there was probed. A CoD4

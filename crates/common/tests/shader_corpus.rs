@@ -29,7 +29,11 @@ fn stock_paks() -> Option<(tempfile::TempDir, Pk3Fs)> {
             continue;
         }
         let link = tmp.path().join(path.file_name()?);
+        #[cfg(unix)]
         std::os::unix::fs::symlink(&path, &link).ok()?;
+        // A Windows symlink needs a privilege a test run may lack: copy.
+        #[cfg(not(unix))]
+        std::fs::copy(&path, &link).ok()?;
     }
     let fs = Pk3Fs::open(tmp.path()).ok()?;
     Some((tmp, fs))

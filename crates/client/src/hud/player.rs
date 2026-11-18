@@ -39,7 +39,7 @@ pub struct DamageFeedback {
 
 impl DamageFeedback {
     pub fn from_ps(
-        p: &vcod_common::net::protocol::Protocol,
+        p: &vcod_common::net::protocol::Cod1Wire,
         ps: &vcod_common::net::msg::PlayerState,
     ) -> DamageFeedback {
         let int = |name: &str| ps.field_i32(p, name);
@@ -114,7 +114,7 @@ pub struct Context<'a> {
     /// Configstring 7's defs, index = weapon number (`weapon_table`).
     pub weapons: &'a [Option<WeaponDef>],
     pub configstrings: &'a [String],
-    /// Where its blocks sit (`Protocol::cs`).
+    /// Where its blocks sit (`Cod1Wire::cs`).
     pub cs: &'a CsLayout,
     pub loc: &'a Localized,
     pub font: &'a Font,

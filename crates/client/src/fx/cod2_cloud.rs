@@ -95,7 +95,6 @@ impl FxCloud {
     /// `width` is `size2` under `nonUniformScale`, else `size`; `length`
     /// is the `length` channel under `useLength`, else `width`
     /// (`Cloud::Update`, Mac 0x000a6638).
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pos: Vec3,
         vel: Vec3,

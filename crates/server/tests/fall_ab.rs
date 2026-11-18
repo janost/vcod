@@ -395,7 +395,6 @@ const RETAIL_CMDS_BEFORE_DROP_MS: i32 = 1000;
 /// unset it returns at the first drop, which names it: the script drops off
 /// the spawn's clock, which the cmds never move, so the run that knows the
 /// shift drops on the same frame.
-#[allow(clippy::too_many_arguments)]
 fn run_ours(
     gametype: &str,
     fs: vcod_common::pk3::Pk3Fs,

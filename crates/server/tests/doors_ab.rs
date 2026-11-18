@@ -19,7 +19,7 @@
 use crate::common;
 use std::collections::BTreeMap;
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::pk3::Pk3Fs;
 
 const MAP: &str = "mp_carentan";
@@ -70,7 +70,7 @@ fn to_done(mut lines: Vec<String>) -> Vec<String> {
     lines
 }
 
-fn check(fs: fn() -> Option<Pk3Fs>, proto: &'static Protocol, fixture: &str, tag: &str) {
+fn check(fs: fn() -> Option<Pk3Fs>, proto: &'static Cod1Wire, fixture: &str, tag: &str) {
     if fs().is_none() {
         eprintln!("COD_DIR unset or not the capture's install: skipping");
         return;
@@ -169,7 +169,7 @@ fn doors_run_as_on_retail_uo() {
 /// <surfType>` for each bullet impact's temp entity as it first comes
 /// (the round on door_h: one on the door, one on the wall behind it).
 pub fn wire_lines<'a>(
-    p: &Protocol,
+    p: &Cod1Wire,
     frames: impl IntoIterator<Item = (i32, &'a BTreeMap<u32, EntityState>)>,
 ) -> Vec<String> {
     let mover = vcod_common::net::cod1::flags::ET_MOVER;
@@ -239,7 +239,7 @@ pub fn wire_lines<'a>(
 }
 
 /// [`wire_lines`] off a committed capture pair `net/*-<tag>.bin`.
-fn retail_wire(p: &Protocol, tag: &str) -> Vec<String> {
+fn retail_wire(p: &Cod1Wire, tag: &str) -> Vec<String> {
     let frames = vcod_common::testing::fixture_frames(
         p,
         &format!("net/gamestate-{tag}.bin"),

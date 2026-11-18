@@ -176,7 +176,7 @@ fn direct_run(map: &str, probe: &str) -> Option<Vec<String>> {
 /// [`direct_run`] on `fs` under `proto`.
 fn direct_run_on(
     fs: vcod_common::pk3::Pk3Fs,
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
 ) -> Vec<String> {

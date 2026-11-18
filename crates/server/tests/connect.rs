@@ -215,8 +215,8 @@ fn frames_delta_against_the_acked_base_and_fall_back_when_acks_stop() {
     // A single mid-stream lost reply, well before the long ack silence below.
     // The client's ack the tick after this jumps straight past the sequence
     // it never received, so the base the server picks must line up with the
-    // packet's real netchan sequence rather than any renumbering of its own
-    // — a uniform off-by-one between the two cancels on every other frame in
+    // packet's real netchan sequence rather than any renumbering of its own:
+    // a uniform off-by-one between the two cancels on every other frame in
     // this test, but not across this gap. See `step_dropping_reply`.
     // Keep this inside 0..40 (acking) and away from the acking/silence
     // boundary at 40 and the loop's end at 80; ticks 38-40 and 78-79 are dead
@@ -349,7 +349,7 @@ fn scripted_entities_move_cycle_out_and_return() {
 /// fills `name[4]` and `name[8]` (the name packs 4 bytes per netfield), then
 /// "robertson" -> "abcd" clears them again. A base that only ever compares
 /// against null cannot tell "always zero" from "just cleared", so shrinking
-/// the name is what actually exercises a wrong base — a single short-to-short
+/// the name is what actually exercises a wrong base: a single short-to-short
 /// rename (e.g. "vcod" -> "bob") never leaves the null-compared and
 /// true-base-compared writers disagreeing, since both names live entirely in
 /// `name[0]`, which is non-zero either way.
@@ -405,7 +405,7 @@ fn a_renamed_client_deltas_against_its_roster_base() {
 
 /// The retail client never sends `begin`. It is not in the engine's client
 /// command table (CoDExtended, `src/sv_client.c`, `ucmds`), and Quake III
-/// Arena's table -- which CoD inherited -- does not have it either. Entry
+/// Arena's table (which CoD inherited) does not have it either. Entry
 /// into the world is the first usercmd after the gamestate (Quake III Arena,
 /// `code/server/sv_client.c`, `SV_UserMove`), so a client that only acks and
 /// moves must be promoted and start receiving snapshots. Without that

@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 use vcod_common::mapworld;
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::{ENTITYNUM_WORLD, Protocol};
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::trajectory::{TR_LINEAR, Trajectory};
 use vcod_common::{bsp, collision::CollisionWorld};
 
@@ -52,7 +52,7 @@ pub fn visible_entities(
     eye: [f32; 3],
     entities: &BTreeMap<u32, EntityState>,
     time: i32,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> BTreeMap<u32, EntityState> {
     let v = Viewer::at(vis, eye);
     if v.sees_nothing() {
@@ -99,7 +99,7 @@ pub fn entity_visible(
     from: i32,
     e: &EntityState,
     time: i32,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> bool {
     vis.link_visible(from, &entity_link(vis, e, time, p).0)
 }
@@ -112,7 +112,7 @@ pub fn entity_seen(
     v: &Viewer,
     e: &EntityState,
     time: i32,
-    p: &Protocol,
+    p: &Cod1Wire,
     fog: Option<f32>,
 ) -> bool {
     let (link, lo, hi) = entity_link(vis, e, time, p);
@@ -180,7 +180,7 @@ pub fn in_snapshot(
     e: &EntityState,
     broadcast: bool,
     time: i32,
-    p: &Protocol,
+    p: &Cod1Wire,
     fog: Option<f32>,
 ) -> bool {
     broadcast || link_in_snapshot(vis, eye, &entity_link(vis, e, time, p), p.is_v1(), fog)
@@ -213,7 +213,7 @@ fn entity_link(
     vis: &mapworld::Visibility,
     e: &EntityState,
     time: i32,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> (mapworld::LinkClusters, [f32; 3], [f32; 3]) {
     let (o, angles) = link_pose(e, time, p);
     let bmodel = (e.field_i32(p, "solid") == vcod_common::net::flags::SOLID_BMODEL)
@@ -242,7 +242,7 @@ pub fn link_at(
 /// each frame it moves at its trajectories evaluated at the level time
 /// (`G_MoverTeam` and the push, docs/research/cod11-movers.md sections 11
 /// and 14); anything else at its `trBase`.
-fn link_pose(e: &EntityState, time: i32, p: &Protocol) -> ([f32; 3], [f32; 3]) {
+fn link_pose(e: &EntityState, time: i32, p: &Cod1Wire) -> ([f32; 3], [f32; 3]) {
     use vcod_common::net::flags::{ET_MOVER, ET_SCRIPTMOVER};
     if matches!(e.field_i32(p, "eType"), ET_MOVER | ET_SCRIPTMOVER) {
         let at = |group| Trajectory::read(e, p, group).evaluate(time).to_array();
@@ -341,25 +341,23 @@ pub struct TestEntities {
     around: [f32; 3],
 }
 
-/// Entity numbers start at 32, clear of client slots for the default
-/// `--max-clients` (8) and any run up to 32; CoD 1.1 allows up to 64
-/// clients, so a server started with more than 32 collides a live slot
-/// with a test entity number.
-const FIRST_TEST_ENT: u32 = 32;
+/// Entity numbers start at 32, clear of the client slots of a server with
+/// `--max-clients` 32 or fewer, which `main` holds `--test-entities` to.
+pub const FIRST_TEST_ENT: u32 = 32;
 /// The last entity vanishes for 2 s out of every 8 s.
 const CYCLE_MS: i32 = 8000;
 const GONE_MS: i32 = 2000;
 /// The highest `--test-entities` count that keeps every scripted entity
-/// number below `ENTITYNUM_WORLD`; past this, the highest-numbered entity
-/// collides with the reserved world slot or the packet-entities terminator.
-pub const MAX_TEST_ENTITIES: usize = (ENTITYNUM_WORLD - FIRST_TEST_ENT) as usize;
+/// number below `MAX_CLIENTS`, where a loaded map's own entities start.
+pub const MAX_TEST_ENTITIES: usize =
+    vcod_common::net::protocol::MAX_CLIENTS - FIRST_TEST_ENT as usize;
 
 impl TestEntities {
     pub fn new(count: usize, around: [f32; 3]) -> Self {
         TestEntities { count, around }
     }
 
-    fn ent(&self, p: &Protocol, i: usize, server_time: i32) -> EntityState {
+    fn ent(&self, p: &Cod1Wire, i: usize, server_time: i32) -> EntityState {
         let mut e = EntityState::null(p);
         // `number` takes part in EntityState equality; stamp it so a built
         // entity compares equal to the same entity read back off the wire.
@@ -390,13 +388,13 @@ impl TestEntities {
         e
     }
 
-    pub fn baselines(&self, p: &Protocol) -> HashMap<u32, EntityState> {
+    pub fn baselines(&self, p: &Cod1Wire) -> HashMap<u32, EntityState> {
         (0..self.count)
             .map(|i| (FIRST_TEST_ENT + i as u32, self.ent(p, i, 0)))
             .collect()
     }
 
-    pub fn at(&self, p: &Protocol, server_time: i32) -> BTreeMap<u32, EntityState> {
+    pub fn at(&self, p: &Cod1Wire, server_time: i32) -> BTreeMap<u32, EntityState> {
         let cycled_out = server_time.rem_euclid(CYCLE_MS) >= CYCLE_MS - GONE_MS;
         let last = self.count.saturating_sub(1);
         (0..self.count)
@@ -543,23 +541,20 @@ mod tests {
     }
 
     #[test]
-    fn max_test_entities_is_the_last_count_below_entitynum_world() {
+    fn max_test_entities_stops_below_the_first_map_entity() {
         let p = &vcod_common::net::protocol::PROTOCOL_V1;
+        let first_map_entity = vcod_common::net::protocol::MAX_CLIENTS as u32;
 
         let at_max = TestEntities::new(MAX_TEST_ENTITIES, [0.0, 0.0, 64.0]);
         let highest = *at_max.baselines(p).keys().max().unwrap();
-        assert_eq!(
-            highest,
-            ENTITYNUM_WORLD - 1,
-            "MAX_TEST_ENTITIES should use every number up to ENTITYNUM_WORLD - 1"
-        );
+        assert_eq!(highest, first_map_entity - 1);
 
         let one_over = TestEntities::new(MAX_TEST_ENTITIES + 1, [0.0, 0.0, 64.0]);
         let highest_over = *one_over.baselines(p).keys().max().unwrap();
         assert_eq!(
-            highest_over, ENTITYNUM_WORLD,
-            "one past MAX_TEST_ENTITIES reaches ENTITYNUM_WORLD, which is what \
-             the --test-entities startup check rejects"
+            highest_over, first_map_entity,
+            "one past MAX_TEST_ENTITIES writes over a map entity, which the \
+             --test-entities startup check rejects"
         );
     }
 }

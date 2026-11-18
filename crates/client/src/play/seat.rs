@@ -270,7 +270,7 @@ pub fn clip(cam: &SeatCamera, trace: &mut dyn FnMut(Vec3, Vec3, u32) -> (f32, Ve
 /// The seat the newest snapshot's playerstate sits in, with its vehicle's
 /// entity number and angles; `None` on foot or off a UO server.
 pub fn of_snapshot(
-    p: &vcod_common::net::protocol::Protocol,
+    p: &vcod_common::net::protocol::Cod1Wire,
     s: &vcod_common::net::snapshot::Snapshot,
 ) -> Option<(Seat, u32, [f32; 3])> {
     use vcod_common::net::flags::{EF_IN_VEHICLE_V22, ET_VEHICLE_V22};
@@ -325,10 +325,10 @@ pub fn adds_view_body(pm_flags: i32, seat_body: bool, following: bool) -> bool {
 /// weapon, the lean and the body's pitches, and the seat packed into
 /// `surfType` with the vehicle in `otherEntityNum`.
 pub fn own_body(
-    p: &vcod_common::net::protocol::Protocol,
+    p: &vcod_common::net::protocol::Cod1Wire,
     ps: &vcod_common::net::msg::PlayerState,
 ) -> vcod_common::net::msg::EntityState {
-    use vcod_common::net::flags::{EF_DEAD, ET_PLAYER};
+    use vcod_common::net::flags::{EF_DEAD, ET_PLAYER, PM_DEAD};
     use vcod_common::net::msg::EntityState;
     use vcod_common::net::trajectory::TR_INTERPOLATE;
     let int = |n: &str| ps.field_i32(p, n);
@@ -341,7 +341,11 @@ pub fn own_body(
     };
     set("eType", ET_PLAYER);
     set("clientNum", int("clientNum"));
-    let dead = if int("pm_type") >= 6 { EF_DEAD } else { 0 };
+    let dead = if int("pm_type") >= PM_DEAD {
+        EF_DEAD
+    } else {
+        0
+    };
     set("eFlags", int("eFlags") & !EF_DEAD | dead);
     set("pos.trType", TR_INTERPOLATE);
     set("apos.trType", TR_INTERPOLATE);

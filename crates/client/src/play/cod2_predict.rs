@@ -135,7 +135,7 @@ impl Cod2Predictor {
     /// `moveSpeedScale` (0 for none). `None` for a state the cgame
     /// interpolates (followed, intermission) or a miss. `bodies` are the
     /// frame's [`solid_bodies`], clipped beside `world`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn predict(
         &mut self,
         snap: &PlayerState2,

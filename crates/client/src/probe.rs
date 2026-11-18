@@ -1,6 +1,7 @@
 //! `--net-probe`, the headless spectate client. Lives in the client crate
 //! because cue resolution needs the audio alias tables.
 
+use net::flags::{ET_TURRET, PM_DEAD};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 use vcod_common::net::trajectory::Trajectory;
@@ -146,7 +147,7 @@ fn nearest_v1(event: i32) -> i32 {
 /// it resolves drained events into sound cues; weapon-file cues (fire,
 /// reload) are not resolved, the probe loads no weapon files.
 ///
-/// `save_playerstate` turns it into the stage 4 capture instead: it answers
+/// `save_playerstate` turns it into the playerstate capture instead: it answers
 /// the stock team and weapon menus, writes the fixture once the spawn has
 /// settled and exits. It sends no nudge, which would walk the capture off the
 /// spawn point.
@@ -172,7 +173,7 @@ fn nearest_v1(event: i32) -> i32 {
 /// `pvs` joins the same way again, walks the route in [`pvs_route`] and prints
 /// the snapshot entity list at each station plus every add and removal along
 /// the way, answering what the server sends from where. `save.entities` walks
-/// the same route and writes the trace as the stage 5 fixture; `pvs` alone
+/// the same route and writes the trace as the entity-list fixture; `pvs` alone
 /// writes nothing.
 /// Which captures a probe run overwrites. Each is a separate flag because
 /// each pins a different thing; the flag docs in `main.rs` say why.
@@ -379,7 +380,7 @@ pub const MELEE_RANGE: f32 = 40.0;
 /// it, and far enough that the thrower is not inside its own blast radius.
 pub const GRENADE_RANGE: f32 = 300.0;
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn probe(
     addr: &str,
     save: Save,
@@ -1143,12 +1144,10 @@ pub fn probe(
         } else if save_combat && combat.running() {
             cmd = combat.cmd();
             weapon_switch = combat.weapon_override(ps_weapon);
-            // Only a step that declares itself a walk is steered. The turn
-            // used to ride every step, so the detour a stalled walk earned
-            // was still on the cmd of every later step that pushed forward
-            // while the fixture's `!input` recorded the untouched yaw: the
-            // ads capture's `ads_walk` ran 45 degrees off the line it says
-            // it ran, which its `viewangles` column now shows.
+            // Only a step that declares itself a walk is steered. A turn on
+            // every step would leave the detour a stalled walk earned on the
+            // cmd of every later step that pushes forward, while the
+            // fixture's `!input` records the untouched yaw.
             if combat.step_walks()
                 && let Some(o) = client
                     .snapshots()
@@ -1260,11 +1259,11 @@ pub fn probe(
             // Absolute: `send_frame` takes `delta_angles` off.
             cmd.angles[1] = deg_to_short(yaw);
         }
-        // A retail client sends the weapon it is holding on every cmd. The
-        // probe used to send 0, and retail's weapon-change check reads a
+        // A retail client sends the weapon it is holding on every cmd, and
+        // so does the probe: retail's weapon-change check reads a
         // `cmd.weapon` that differs from `ps.weapon` as a request to holster
-        // (docs/research/cod11-combat.md, section 1.8), so a capture taken
-        // with the zero can carry putaways the input never asked for. The
+        // (docs/research/cod11-combat.md, section 1.8), so a zero would
+        // carry putaways the input never asked for. The
         // byte only travels in the full usercmd branch, which a `wbuttons`,
         // `upmove` or `weapon` change forces (docs/protocol-1.1.md).
         // The ladder and weapon-select probes' byte is the play client's own.
@@ -1667,8 +1666,8 @@ pub fn probe(
         // The combat script steps only while alive and cannot resume from a
         // respawn elsewhere, and stock gametypes without `scr_forcerespawn`
         // never respawn a probe that presses nothing: a death (its own frag,
-        // or another client on a stock dm) used to idle out the run as
-        // "raise --probe-secs".
+        // or another client on a stock dm) would otherwise idle out the run
+        // as "raise --probe-secs".
         if save_combat
             && combat.running()
             && let Some(s) = client.snapshots().newest()
@@ -3274,9 +3273,9 @@ const FRAG_WEAPON: &str = "fraggrenade_mp";
 
 /// Writes a fixture that `--capture-tag` named, refusing to land on a file
 /// that is already there unless `--overwrite-fixture` says to. A tag is free
-/// text and nothing stops it spelling a committed fixture's name --
-/// `--save-ads --capture-tag sniper` writes exactly the path the scoped-rifle
-/// evidence lives at -- and a capture against vcod's own server silently
+/// text and nothing stops it spelling a committed fixture's name
+/// (`--save-ads --capture-tag sniper` writes exactly the path the scoped-rifle
+/// evidence lives at), and a capture against vcod's own server silently
 /// replacing the retail oracle is the one mistake this directory cannot
 /// survive. An untagged write is the documented way to retake a fixture and
 /// goes through `std::fs::write` unguarded.
@@ -3979,8 +3978,8 @@ struct StepResult {
 }
 
 /// Walks [`combat_script`] and keeps every snapshot along the way. A settled
-/// sample cannot hold a shot -- the event ring has four slots and overwrites
-/// as it goes -- so this mode records the trace itself and the settled
+/// sample cannot hold a shot (the event ring has four slots and overwrites
+/// as it goes), so this mode records the trace itself and the settled
 /// playerstate only as the step's tail.
 struct CombatProbe {
     steps: Vec<CombatStep>,
@@ -4219,9 +4218,9 @@ impl CombatProbe {
 
     /// Holds the step's base input, and taps only once its clock runs: a step
     /// waiting for the weapon to read ready must not be tapping while it waits.
-    /// A walk stands still until its clock runs too: `advance` used to walk
-    /// through the join's settle, so the `# spawn` pose (and the yaw a gate
-    /// rebases `!input` on) was taken after a stall turn the input never had.
+    /// A walk stands still until its clock runs too: walking through the
+    /// join's settle would take the `# spawn` pose (and the yaw a gate rebases
+    /// `!input` on) after a stall turn the input never had.
     fn cmd(&self) -> net::msg::UserCmd {
         match (self.steps.get(self.idx), self.started) {
             (Some(step), Some(t)) => step.cmd_at(t.elapsed()),
@@ -6453,7 +6452,7 @@ impl HitProbe {
 /// where `role` is the script's own prefix and the half: `hit-shooter`,
 /// `grenade-target` and so on. Both halves carry the same header keys, so a
 /// gate reads either the same way; `body` is the role's own section.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn write_hit_fixture(
     role: &str,
     configstrings: &[String],
@@ -7206,10 +7205,10 @@ struct ViewHold {
 /// read off `delta_angles`: `SetClientViewAngle` sets them to the spawn's
 /// yaw less the last cmd's angle, and that cmd was the asked-for yaw less the
 /// spectating `delta_angles` (cod15-movement.md, "The spawn's lie-down";
-/// cod11-combat.md 9.2). Before 2026-10-17 this took `delta_angles` off too,
-/// so the view followed every push the other way, and a prone swing past the
-/// cap oscillated (playerstate_motion_ab.rs); until the second fix that day
-/// it latched the first spawned view, so every capture faced world yaw 0.
+/// cod11-combat.md 9.2). Taking `delta_angles` off as well would turn the
+/// view against every push, and a prone swing past the cap would oscillate
+/// (playerstate_motion_ab.rs); latching the first spawned view would face
+/// every capture at world yaw 0.
 fn hold_view_yaw(
     cmd: &mut net::msg::UserCmd,
     client: &NetClient<UdpTransport>,
@@ -7312,7 +7311,9 @@ impl SlopeStats {
             let gained = ((seq - prev) & 0xff).min(4);
             for i in (seq - gained)..seq {
                 let slot = (i & 3) as usize;
-                if ev_v1(snap.ps.field_i32(p, &format!("events[{slot}]"))) == 143 {
+                if ev_v1(snap.ps.field_i32(p, &format!("events[{slot}]")))
+                    == net::event_ids::EV_STEP_VIEW
+                {
                     parms.push(snap.ps.field_i32(p, &format!("eventParms[{slot}]")) - 128);
                 }
             }
@@ -7478,7 +7479,7 @@ impl SlopeCapture {
                     ev_v1(i(&format!("events[{slot}]"))),
                     i(&format!("eventParms[{slot}]")),
                 );
-                if ev == 143 {
+                if ev == net::event_ids::EV_STEP_VIEW {
                     steps.push((parm - 128).to_string());
                 }
                 events.push(format!("{ev}:{parm}"));
@@ -7626,7 +7627,6 @@ enum SlopeWalk {
 /// Writes the route walk as `<map>-<gametype>-slope-<cmd_ms>ms.txt`: `!cmd`
 /// lines carry the usercmd as sent, `!snap` lines the playerstate the server
 /// answered with, interleaved in the order the probe saw them.
-#[allow(clippy::too_many_arguments)]
 fn write_slope_fixture(
     configstrings: &[String],
     join: &JoinProbe,
@@ -9013,7 +9013,7 @@ const TRIGGER_NEAR: f32 = 200.0;
 /// A leg's budget is its distance at this speed plus [`TRIGGER_LEG_SLACK`].
 /// Well under retail's ~190 u/s run: the walk detours around geometry and a
 /// budget set at the straight-line speed gives up on every target that is
-/// not in the open. A flat budget does not work either -- one long enough for
+/// not in the open. A flat budget does not work either: one long enough for
 /// a far target spends the run on a near one behind a wall.
 const TRIGGER_LEG_SPEED: f32 = 70.0;
 const TRIGGER_LEG_SLACK: Duration = Duration::from_secs(6);
@@ -9031,8 +9031,8 @@ const TRIGGER_STEER_ARC: i32 = 165;
 /// (the movement constants table in docs/research/cod11-mantle.md).
 const TRIGGER_STEP_HEIGHT: f32 = 18.0;
 /// A walker that has not left this box in [`TRIGGER_WEDGE`] is wedged
-/// somewhere the steer cannot get it out of -- a pit, a doorway it rebounds
-/// in -- and kills itself to respawn somewhere else. One run lost 100 s of
+/// somewhere the steer cannot get it out of (a pit, a doorway it rebounds
+/// in) and kills itself to respawn somewhere else. One run lost 100 s of
 /// its 125 to a single such spot.
 const TRIGGER_WEDGE_UNITS: f32 = 80.0;
 const TRIGGER_WEDGE: Duration = Duration::from_secs(12);
@@ -9043,8 +9043,8 @@ const TRIGGER_WEDGE: Duration = Duration::from_secs(12);
 ///
 /// A wander does not do: mp_pavlov is dense enough that a blind heading spends
 /// a whole run inside the town, and a first capture taken that way crossed one
-/// trigger in 190 s. The walk is not the measurement -- the retail server's own
-/// log is -- so steering it at the answer costs nothing and buys the coverage.
+/// trigger in 190 s. The walk is not the measurement (the retail server's own
+/// log is), so steering it at the answer costs nothing and buys the coverage.
 #[derive(Default)]
 struct TriggerProbe {
     boxes: Vec<TriggerBox>,
@@ -10029,9 +10029,6 @@ impl SdProbe {
 /// (`docs/research/cod11-gsc-object-model.md`, the objective record).
 const SD_STATE_CURRENT: i32 = 4;
 
-/// `pmove_t`'s dead state, the one a killed player sits at.
-const PM_DEAD: i32 = 6;
-
 /// The pair's fixture: the header, the notes and one `[phase <name>]` block
 /// per phase, each holding its cmds interleaved with its traces by server time.
 fn write_sd_fixture(
@@ -10883,7 +10880,6 @@ const TURRET_FIRE_YAW: f32 = 30.0;
 const TURRET_FIRE_PITCH: f32 = 10.0;
 const TURRET_PITCH_EDGE: f32 = 60.0;
 const TURRET_YAW_EDGE: f32 = 90.0;
-const ET_TURRET: i32 = 11;
 /// The strafe stops once the bearing off the gun's "behind" direction passes
 /// this, clear of the stock gun's 45-degree arc...
 const TURRET_REFUSE_BEARING: f32 = 50.0;
@@ -11751,7 +11747,6 @@ const BUMP_TARGET_SCHEDULE: [(Duration, BumpStance); 4] = [
 ];
 /// The target starts its schedule without a walker after this.
 const BUMP_TARGET_WAIT: Duration = Duration::from_secs(120);
-const GROUND_NONE: i32 = 1023;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BumpStance {
@@ -11786,11 +11781,11 @@ impl BumpStance {
         }
     }
 
-    /// From `pm_flags`: 0x1 prone, 0x2 ducked.
+    /// From `pm_flags`: prone, else ducked.
     fn of_pm_flags(f: i32) -> Self {
-        if f & 1 != 0 {
+        if f & net::flags::PMF_PRONE != 0 {
             BumpStance::Prone
-        } else if f & 2 != 0 {
+        } else if f & net::flags::PMF_DUCKED != 0 {
             BumpStance::Crouch
         } else {
             BumpStance::Stand
@@ -12105,7 +12100,7 @@ impl FallProbe {
         // a fall moves only the origin, so print the first airborne frames too
         key.push(i("commandTime") * (key[0] == net::protocol::ENTITYNUM_NONE as i32) as i32);
         // and a corpse's slide, which moves nothing else either
-        if i("pm_type") == 6 {
+        if i("pm_type") == PM_DEAD {
             key.extend([i("origin[0]"), i("origin[1]"), i("origin[2]")]);
         }
         // and a prone body's bend, printed once it is non-zero
@@ -12113,7 +12108,7 @@ impl FallProbe {
         key.extend(bend);
         // and the prone heading, which 1.1's flat body never shows otherwise
         let heading = i("proneDirection");
-        let prone = i("pm_flags") & 1 != 0;
+        let prone = i("pm_flags") & net::flags::PMF_PRONE != 0;
         key.push(heading * prone as i32);
         // and the body's clips, which a prone turn changes without a move
         let anims = [i("legsAnim"), i("torsoAnim")];
@@ -12852,7 +12847,7 @@ impl CompassProbe {
         let players: Vec<String> = snap
             .entities
             .iter()
-            .filter(|(_, e)| e.field_i32(p, "eType") == 1)
+            .filter(|(_, e)| e.field_i32(p, "eType") == net::flags::ET_PLAYER)
             .map(|(n, e)| {
                 let t = Trajectory::read(e, p, "pos");
                 format!(
@@ -13000,8 +12995,9 @@ origin={:.3},{:.3},{:.3}",
         }
         self.present = Some(snap.entities.keys().copied().collect());
         for (&num, ent) in &snap.entities {
-            // 8 a script mover, 5 a `func_bobbing` or `func_pendulum`.
-            if !matches!(ent.field_i32(p, "eType"), 5 | 8) {
+            // A script mover, or a `func_bobbing` or `func_pendulum`.
+            let et = ent.field_i32(p, "eType");
+            if et != net::flags::ET_SCRIPTMOVER && et != net::flags::ET_MOVER {
                 continue;
             }
             let key = [
@@ -13104,7 +13100,7 @@ impl KillcamProbe {
         let ms = self.ms(now);
         let i = |n: &str| s.ps.field_i32(p, n);
         let (client_num, pm_type, pm_flags) = (i("clientNum"), i("pm_type"), i("pm_flags"));
-        let following = pm_flags & 0x10000 != 0;
+        let following = pm_flags & net::flags::PMF_FOLLOW != 0;
         let alive = pm_type == PM_NORMAL && client_num == me && !following;
 
         if alive {
@@ -13331,7 +13327,10 @@ impl BumpTarget {
         let i = |n: &str| snap.ps.field_i32(p, n);
         let f = |n: &str| snap.ps.field_f32(p, n);
         let moving = f("velocity[0]").hypot(f("velocity[1]")) > 1.0;
-        if moving || i("pm_time") != 0 || i("pm_flags") & 0x100 != 0 {
+        if moving
+            || i("pm_time") != 0
+            || i("pm_flags") & vcod_common::pmove::PMF_TIME_KNOCKBACK != 0
+        {
             println!(
                 "BUMPT: !snap msg={} t={} ct={} origin={},{},{} vel={},{},{} ground={} pm_flags={} pm_time={}",
                 snap.message_num,
@@ -13755,7 +13754,7 @@ impl BumpProbe {
             ));
         }
         if self.phase == BumpPhase::Jump {
-            if self.ground == GROUND_NONE {
+            if self.ground == net::protocol::ENTITYNUM_NONE as i32 {
                 self.airborne = true;
             } else if self.airborne {
                 self.landed = true;
@@ -14008,7 +14007,7 @@ const ENTITIES_FIXTURE_DIR: &str = concat!(
 /// sent it there.
 ///
 /// The origin is the point of the file. A capture cannot be told to stand
-/// anywhere -- `setviewpos` is refused on a dedicated server -- so the gate
+/// anywhere (`setviewpos` is refused on a dedicated server), so the gate
 /// does not replay the route, it replays each recorded origin
 /// (docs/protocol-1.1.md, "Which entities a client is sent").
 fn write_entities_fixture(

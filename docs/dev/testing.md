@@ -15,7 +15,11 @@ The A/B gates against retail captures are in [retail.md](retail.md).
 | `COD4_DIR` | CoD4 1.7 | the CoD4 tests, `cod4_live_*`, `cod4_map_sweep`, `cod4_soak` |
 
 The helpers in `vcod_common::testing` (and `vcod_cod4::testing`) read
-`COD_DIR`, `COD2_DIR`, `COD4_DIR` and `COD4_LNXDED_DIR`:
+`COD_DIR`, `COD2_DIR`, `COD4_DIR` and `COD4_LNXDED_DIR`. Both modules,
+`vcod_common::collision`'s test worlds and vcod-server's `test_*` and
+`*_for_test` seams sit behind each crate's `testing` feature, which every
+crate that calls them turns on from its dev-dependencies, so release
+builds leave them out:
 
 - Unset or empty: `None`, the test returns early and passes. Each test
   binary prints one `vcod testing: COD_DIR is unset, ...` line per reason
@@ -64,10 +68,14 @@ picks through `Server::pin_spawns`, as `gametypes_ab` does.
 ## CI and the test binaries
 
 - `ci.yml` runs on ubuntu with no game data, so no pak test and no A/B gate
-  runs there; they run only on a machine with an install.
+  runs there; they run only on a machine with an install. It pins the
+  toolchain (`RUST_TOOLCHAIN`, bumped on purpose), passes `--locked`, and
+  also checks the workspace on Windows, macOS and the 1.90 MSRV.
 - `nightly.yml` rebuilds the rolling `nightly` release on master pushes that
   touch code (docs, tools and `*.md` are path-ignored). `workflow_dispatch`
-  forces one.
+  forces one. It runs `ci.yml` first and publishes only a green tip, fails
+  the Linux build if a strong glibc symbol passes README's floor, and ships
+  `THIRD-PARTY-LICENSES` (`tools/third_party_licenses.py`) and `SHA256SUMS`.
 - Each crate's integration tests are one binary named after the crate
   (`--test common`, `--test cod2`, `--test cod4`, `--test gsc`, `--test
   server`; `tests/main.rs`). A file's tests filter by its name (`--
@@ -123,6 +131,14 @@ What each holds:
   29662), both in `frontend/browser.rs`.
 
 Times are release wall on a 30-thread box, the binary built.
+
+The bit-exact gates (`moves_ab`, `cod4_moves_ab`, `cod4_combat_ab`,
+`trace_ab`, `nav_census`) were tuned on the host's glibc. Only `sinf` and
+`cosf` are pinned (`vcod_common::libm`, cod4-pmove.md 13.2); `atan2`,
+`tan`, `acos`, `pow` and the rest come from the platform's libm, whose
+results Rust does not promise across versions. A gate that fails after a
+glibc update or on another distro, with no code change, is that before it
+is a regression: name `ldd --version` in the report.
 
 ## Headless render: pipeline_check
 

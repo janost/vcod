@@ -1598,6 +1598,7 @@ impl Cod2Server {
     /// The challenge's salt on the frame clock instead of the wall's, so a harness
     /// that runs frames faster than real time sends the same bytes each
     /// run (`bot_match`'s `NETDIGEST`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_frame_clock(&mut self) {
         self.game.frame_clock = true;
     }

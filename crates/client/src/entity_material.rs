@@ -436,7 +436,6 @@ pub(crate) struct PassLayouts<'a> {
 impl EntityMaterials {
     /// Group 3's params buffer and both passes' pipeline layouts. Builds the
     /// opaque pipeline pair up front so both shaders validate at startup.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -864,7 +863,6 @@ fn ent_pipeline_to(
 impl EntityMaterials {
     /// A stage image the material names, loaded on first use through the
     /// world's resolution and texture gamma.
-    #[allow(clippy::too_many_arguments)]
     fn own_image(
         &mut self,
         device: &wgpu::Device,

@@ -47,7 +47,7 @@ compile-time row below was read.
   and hudelem lookups in that order. INFERRED from its control flow: it calls
   all four and keeps the first non-null, and only the generic lookup writes
   the developer out-parameter. 1.1 searched player, scriptent, hudelem, then
-  generic (`cod11-gsc-language.md` section 7); 1.5's order is CoD2's. No
+  generic (`cod11-gsc-object-model.md` section 9); 1.5's order is CoD2's. No
   method name sits in two CoD2 tables (VERIFIED, the dump), so the order
   decides nothing for stock names.
 - VERIFIED: a `developer` 1 record in CoD2: `print`, `println`, `print3d`,

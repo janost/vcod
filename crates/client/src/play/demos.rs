@@ -6,14 +6,14 @@ use super::clock::{DemoClock, ServerClock};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use vcod_common::net::demo;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::{NetClient, NetEvent, Transport};
 use vcod_common::text::atoi_msvc;
 
 /// `record`'s file under `dir` (the game directory's `demos/`) and the
 /// name it keeps (`clc.demoName`): `name` with the protocol's `.dm_<n>`,
 /// or the first free `demoNNNN`. `None` for a name that leaves `dir`.
-pub fn record_path(dir: &Path, name: Option<&str>, p: &Protocol) -> Option<(PathBuf, String)> {
+pub fn record_path(dir: &Path, name: Option<&str>, p: &Cod1Wire) -> Option<(PathBuf, String)> {
     let ext = demo::extension_number(p);
     let name = match name {
         Some(n) => n.to_string(),
@@ -135,8 +135,8 @@ pub fn read_frame<T: Transport>(
 /// plays all three, so a bare name takes the first of `.dm_1`, `.dm_2`
 /// and `.dm_3` that exists, searched through `dirs` in order. A name that
 /// leaves its directory finds nothing.
-pub fn find(dirs: &[PathBuf], name: &str) -> Option<(PathBuf, &'static Protocol)> {
-    let candidates: Vec<(String, &'static Protocol)> = match demo::extension_of(name) {
+pub fn find(dirs: &[PathBuf], name: &str) -> Option<(PathBuf, &'static Cod1Wire)> {
+    let candidates: Vec<(String, &'static Cod1Wire)> = match demo::extension_of(name) {
         Some(n) => vec![(name.to_string(), demo::protocol_of_extension(n)?)],
         None => (1..=3)
             .filter_map(|n| Some((format!("{name}.dm_{n}"), demo::protocol_of_extension(n)?)))
@@ -161,7 +161,7 @@ pub fn find(dirs: &[PathBuf], name: &str) -> Option<(PathBuf, &'static Protocol)
 /// 1.1's cgame knows neither command.
 pub fn auto_command(
     tokens: &[String],
-    p: &Protocol,
+    p: &Cod1Wire,
     autodemo: &str,
     name: &str,
     stamp: &str,

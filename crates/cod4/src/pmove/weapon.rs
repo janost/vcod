@@ -735,10 +735,10 @@ fn sight_lowered(ps: &super::PlayerState, d: &WeaponDef) -> bool {
 /// def's in rate while the sight flag is up and nothing lowers the gun
 /// (an `adsFireOnly` weapon's delayed shot raises it whatever the flag),
 /// toward 0 at the out rate otherwise, clamped to 0..1. Without a sighting
-/// weapon, or on a turret, it reads 0. `player_adsExitDelay`'s default 0
+/// weapon it reads 0 (a turret never gets here). `player_adsExitDelay`'s default 0
 /// leaves `adsDelayTime` at 0.
 fn ads_lerp(pm: &mut Pmove, pml: &Pml) {
-    let d = held(pm).filter(|d| d.aim_down_sight && pm.ps.e_flags & ef::TURRET == 0);
+    let d = held(pm).filter(|d| d.aim_down_sight);
     let ps = &mut *pm.ps;
     ps.ads_delay_time = 0;
     let Some(d) = d else {
@@ -1581,15 +1581,13 @@ fn load_round(ps: &mut super::PlayerState, d: &WeaponDef, delay_done: bool) -> b
     true
 }
 
-/// The round leaves once no delay holds it: one off the clip (not on a
-/// turret), the fire anim by the sight and the last round (2 and 3 from
-/// the hip, 5 and 6 sighted), `EV_FIRE_WEAPON` or `EV_FIRE_WEAPON_LASTSHOT`
+/// The round leaves once no delay holds it: one off the clip, the fire
+/// anim by the sight and the last round (2 and 3 from the hip, 5 and 6
+/// sighted), `EV_FIRE_WEAPON` or `EV_FIRE_WEAPON_LASTSHOT`
 /// (0x8064273), a held breath let go on a sighted scope, the hip spread's
 /// kick, and `EV_NOAMMO` once clip and reserve are both dry.
 fn release_round(ps: &mut super::PlayerState, d: &WeaponDef) {
-    if ps.e_flags & ef::TURRET == 0 {
-        use_ammo(ps, d, 1);
-    }
+    use_ammo(ps, d, 1);
     if d.weap_type == WEAPTYPE_GRENADE {
         ps.weapon_time = d.fire_time;
     }
@@ -1701,7 +1699,7 @@ fn on_lowered(pm: &mut Pmove, quick: bool) {
 /// on empty hands, with a main-hand grenade held back for its throw, or
 /// while frozen.
 fn on_trigger(pm: &mut Pmove, delay_done: bool) {
-    let Some(d) = held(pm).filter(|_| pm.ps.weapon != 0) else {
+    let Some(d) = held(pm) else {
         return;
     };
     if !trigger_fires(pm, d, delay_done) {
@@ -1857,7 +1855,7 @@ fn offhand_key_class(buttons: u32, secondary: u32) -> Option<i32> {
     }
 }
 
-/// Whether the offhand keys are heard: off a turret, weapons on, not
+/// Whether the offhand keys are heard: weapons on, not
 /// sprinting, no cocked main-hand grenade, not mid-throw (the throw's
 /// raise, 20, is free) and not under night vision.
 fn offhand_free(pm: &Pmove) -> bool {
@@ -1869,11 +1867,7 @@ fn offhand_free(pm: &Pmove) -> bool {
     });
     let busy = (state::OFFHAND_LOWER..state::OFFHAND_RAISE).contains(&ps.weapon_state)
         || matches!(ps.weapon_state, state::NVG_ON | state::NVG_OFF);
-    ps.e_flags & ef::TURRET == 0
-        && ps.weap_flags & wf::DISABLED == 0
-        && ps.pm_flags & pmf::SPRINTING == 0
-        && !busy
-        && !grenade_down
+    ps.weap_flags & wf::DISABLED == 0 && ps.pm_flags & pmf::SPRINTING == 0 && !busy && !grenade_down
 }
 
 /// The offhand request (`PM_Weapon_CheckForOffHand`, cod4-combat.md 10.1).
@@ -1929,8 +1923,8 @@ fn offhand_request(pm: &mut Pmove) {
 /// The offhand shows on the view model (`weapFlags` 2) from the pin to
 /// the release.
 fn throw_stage(pm: &mut Pmove, to: i32) {
-    let gun = held(pm).filter(|_| pm.ps.weapon != 0).cloned();
-    let off = def_of(pm, pm.ps.off_hand_index).cloned();
+    let gun = held(pm);
+    let off = def_of(pm, pm.ps.off_hand_index);
     let ps = &mut *pm.ps;
     let back = throwing_back(ps);
     ps.weapon_state = to;
@@ -1939,13 +1933,13 @@ fn throw_stage(pm: &mut Pmove, to: i32) {
     } else {
         ps.weap_flags |= wf::USING_OFFHAND;
     }
-    let field = |f: fn(&WeaponDef) -> i32| off.as_ref().map_or(0, f);
+    let field = |f: fn(&WeaponDef) -> i32| off.map_or(0, f);
     match to {
         state::OFFHAND_LOWER => {
             exit_ads(ps);
             ps.throw_back_grenade_owner = super::ENTITYNUM_NONE;
             ps.weapon_delay = 0;
-            ps.weapon_time = gun.as_ref().map_or(100, |g| g.quick_drop_time);
+            ps.weapon_time = gun.map_or(100, |g| g.quick_drop_time);
             if gun.is_some() {
                 ps.start_weapon_anim(19);
             }
@@ -1972,7 +1966,7 @@ fn throw_stage(pm: &mut Pmove, to: i32) {
         }
         state::GRENADE_GONE => {
             ps.add_event(ev::USE_OFFHAND, ps.off_hand_index);
-            match off.as_ref() {
+            match off {
                 _ if back => {}
                 Some(d) if weapon_ammo(ps, d) > 0 => use_ammo(ps, d, 1),
                 _ => ps.add_event(ev::EMPTY_OFFHAND, 0),

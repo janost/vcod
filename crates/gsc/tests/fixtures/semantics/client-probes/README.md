@@ -25,7 +25,7 @@ a map without), on a port clear of `run_server.sh`'s 28960 and
 cp client-probes/probe_pers.gsc "$COD_LNXDED_HOME/main/maps/mp/gametypes/"
 printf '"PROBE_PERS"\r\n' > "$COD_LNXDED_HOME/main/maps/mp/gametypes/probe_pers.txt"
 rm -f "$COD_LNXDED_HOME/main/games_mp.log"
-private/reference/cod-lnxded-1.1d/cod_lnxded \
+"$COD_LNXDED" \
     +set dedicated 1 +set developer 1 +set logfile 2 \
     +set g_log games_mp.log +set g_logSync 1 \
     +set fs_basepath "$COD_DIR" +set fs_homepath "$COD_LNXDED_HOME" \

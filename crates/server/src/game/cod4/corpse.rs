@@ -6,7 +6,7 @@
 
 use glam::Vec3;
 use vcod_cod4::collision::ClipMap;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 
 use vcod_cod2::player::BodyFrame;
 
@@ -40,7 +40,7 @@ pub fn launch(
     velocity: Vec3,
     height: f32,
     now_ms: i32,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) {
     let maxs = Vec3::new(15.0, 15.0, height);
     crate::game::corpse::launch(
@@ -219,7 +219,7 @@ const EF_FRESH: i32 = 0x8_0000;
 
 /// What a corpse's anims and hit boxes read off it: `r.currentOrigin`, its
 /// angles, its two anims, `eFlags` and the client it was.
-fn corpse_frame(b: &Body, p: &Protocol) -> Option<BodyFrame> {
+fn corpse_frame(b: &Body, p: &Cod1Wire) -> Option<BodyFrame> {
     let c = b.cod2.as_ref()?;
     let get = |n: &str| crate::game::corpse::field(&b.state, p, n);
     Some(BodyFrame {

@@ -1222,7 +1222,7 @@ VERIFIED, the writers agree: 1.5's console and message writer (0x409760, UO
 `CG_AddToTeamChat` (cgame 0x3002de50, UO 0x30039390; cod11-chat.md 3.2).
 
 vcod: `hud::font::set_team_colours`, called with
-`Protocol::team_colour_codes` and the client cvars at each HUD build and
+`Cod1Wire::team_colour_codes` and the client cvars at each HUD build and
 with no cvars at a gamestate; `hud::font::is_colour_code`, which every text
 path asks.
 
@@ -2714,14 +2714,9 @@ fov the game names is a 4:3 view's width, and a wider view keeps that
 vertical fov). The crosshair's side arms read the fov a 4:3 view as tall
 would be wide, at 4:3 retail's `640 / fov_x` (`hud::player::arm_offset`).
 
-## UNVERIFIED summary
+## Unverified
 
-| # | Claim | Check that settles it |
-|---|---|---|
-| 1 | Resolved: the `killIcon<Mod>` names bind to `gfx/hud/death_<name>.tga` through `scripts/hud.shader` (section 2). | n/a |
-| 2 | Resolved: scores token 4 is `deaths`, written by script (section 3). | n/a |
-| 3 | Resolved: the `b` grammar, confirmed on screen against a populated server's Tab scoreboard (section 3). | n/a |
-| 4 | Resolved: hudelems travel in the playerstate's array block 5, filled per client by `HudElem_UpdateClient` (section 5); the cgame's draw is section 8. | n/a |
-| 5 | The second font header float's id-internal field name (section 6). Its use is settled. | Nothing downstream depends on it. |
-| 6 | Moot: the status header is vcod's own; the stock client draws team totals only on the scoreboard (section 5). | n/a |
-| 7 | Trap `4`'s official name (section 1). Its signature and engine case are read (section 1.1). | The name is in no binary read so far. |
+| Claim | Check that settles it |
+|---|---|
+| The second font header float's id-internal field name (section 6). Its use is settled. | Nothing downstream depends on it. |
+| Trap `4`'s official name (section 1). Its signature and engine case are read (section 1.1). | The name is in no binary read so far. |

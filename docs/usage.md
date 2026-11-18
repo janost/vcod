@@ -535,8 +535,9 @@ Server (`vcod-server <map> --game cod4`, or a CoD4 install):
 - `VCOD_FRAME_PROFILE=<path>` writes each frame's CPU and GPU time by
   stage.
 - Server: `--trace` logs every snapshot per client and a per-second tick
-  summary; `--test-entities <n>` adds invisible moving entities to
-  exercise the entity encoding; `VCOD_TICK_TRACE=<path>` writes the
+  summary; `--test-entities <n>` adds up to 32 invisible moving entities
+  (numbers 32 to 63, so `--max-clients` 32 or fewer) to exercise the
+  entity encoding; `VCOD_TICK_TRACE=<path>` writes the
   tick's step log; `VCOD_TICK_PROFILE_MS=<ms>` logs every tick slower
   than that. `VCOD_BOT_THREADS=<n>` sets the threads the bots think on
   (default the cores up to 4; `1` thinks on the tick's own thread).

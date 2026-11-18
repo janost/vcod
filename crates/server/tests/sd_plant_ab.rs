@@ -385,7 +385,7 @@ fn shader_elems_ours(rig: &Rig, archived: &[HudElem], current: &[HudElem]) -> Ve
 /// (`type:shader:w:h:fromW:fromH:scaleStart:scaleTime:x:y` per element).
 /// The column is the archived array followed by the current one: the
 /// committed fixtures concatenate the two with no separator (their headers'
-/// "unarchived" is the probe's old label for it), and a probe from 17e43b0 on
+/// "unarchived" is the probe's old label for it), and the probe now
 /// writes `archived|current` with `-` for an empty half. Both parse here.
 fn shader_elems_retail(cs: &BTreeMap<usize, String>, hud: &str) -> Vec<String> {
     let mut out: Vec<String> = hud

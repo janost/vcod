@@ -4,7 +4,7 @@
 
 use super::HudQuad;
 use super::player::DamageFeedback;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::pmove::PlayerState;
 use vcod_common::pmove::aim::{self, AimInput, AimState, DamageKick, GunMove};
 use vcod_common::weapon::{OverlayReticle, WeaponDef};
@@ -171,7 +171,7 @@ pub enum Layout {
 }
 
 impl Layout {
-    pub fn of(proto: &Protocol) -> Self {
+    pub fn of(proto: &Cod1Wire) -> Self {
         if proto.is_uo() {
             Layout::Whole
         } else {

@@ -21,6 +21,14 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
 
 ## All games
 
+### Floats
+
+- Simulation code calls the host's libm for every transcendental except
+  `sinf` and `cosf` (`vcod_common::libm`, glibc 2.28's, cod4-pmove.md 13.2).
+  The Windows and macOS builds therefore run movement and combat on another
+  libm than the gates ran on, and a glibc update can move a gate by a bit.
+  Pin a function the same way before a gate depends on its last bit.
+
 ### Script host and VM
 
 - A game version's rule in the host, spawn, item, vote, field and print code

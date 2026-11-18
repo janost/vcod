@@ -41,7 +41,7 @@ pub enum Arith {
 impl Arith {
     /// The build a protocol's Linux server runs: 1.1d's keeps its floats,
     /// 1.5b's and United Offensive's store them.
-    pub fn for_protocol(p: &crate::net::protocol::Protocol) -> Self {
+    pub fn for_protocol(p: &crate::net::protocol::Cod1Wire) -> Self {
         if p.is_v1() {
             Arith::Kept
         } else {

@@ -2,6 +2,7 @@
 //! stands on a contact the trace calls walkable, not on a normal's z.
 
 use glam::Vec3;
+use vcod_common::clipmap::{SURF_NODAMAGE, SURF_NOSTEPS, SURF_SLICK, surface_material};
 
 use super::fpu::{self, d};
 use super::slide::jump_clear;
@@ -179,10 +180,10 @@ fn ground_trace_missed(pm: &mut Pmove, pml: &mut Pml) {
 /// `PM_GroundSurfaceType`: `surfaceFlags` bits 20..24, 0 under the
 /// no-sound flag 0x2000.
 pub(crate) fn surface_type(t: &Tr) -> u32 {
-    if t.surface_flags & 0x2000 != 0 {
+    if t.surface_flags & SURF_NOSTEPS != 0 {
         0
     } else {
-        (t.surface_flags & 0x1f0_0000) >> 20
+        surface_material(t.surface_flags)
     }
 }
 
@@ -235,7 +236,7 @@ pub(crate) fn crash_land(pm: &mut Pmove, pml: &mut Pml) {
     );
     let spared = lo >= hi
         || height <= lo
-        || pml.ground_trace.surface_flags & 1 != 0
+        || pml.ground_trace.surface_flags & SURF_NODAMAGE != 0
         || ps.pm_type >= pm_type::DEAD;
     let hurt = match () {
         _ if spared => 0,
@@ -255,7 +256,7 @@ pub(crate) fn crash_land(pm: &mut Pmove, pml: &mut Pml) {
     let ps = &mut *pm.ps;
     let surf = surface_type(&pml.ground_trace);
     let on_surface = |event: u32| if surf == 0 { 0 } else { event };
-    let slick = pml.ground_trace.surface_flags & 2 != 0;
+    let slick = pml.ground_trace.surface_flags & SURF_SLICK != 0;
     if hurt != 0 {
         if hurt == 100 || slick {
             ps.velocity = fpu::scale(ps.velocity, LAND_DAMP);

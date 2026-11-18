@@ -6,13 +6,13 @@ use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::pk3::Pk3Fs;
 use vcod_server::engine::{Arrival, Engine, GameModule};
 use vcod_server::{Server, ServerConfig};
 
 #[derive(Parser)]
-#[command(about = "Call of Duty (2003) 1.1 dedicated server, in progress", version = env!("VCOD_VERSION"))]
+#[command(about = env!("CARGO_PKG_DESCRIPTION"), version = env!("VCOD_VERSION"))]
 struct Args {
     /// Map name, e.g. mp_carentan
     map: String,
@@ -110,6 +110,8 @@ const MAX_PACKETS_PER_FRAME: usize = 256;
 const PACKET_QUEUE: usize = 4 * MAX_PACKETS_PER_FRAME;
 
 fn main() -> Result<()> {
+    // Only tests and gates read the script log.
+    vcod_server::game::host::KEEP_SCRIPT_LOG.store(false, std::sync::atomic::Ordering::Relaxed);
     let matches = Args::command().get_matches();
     let args = Args::from_arg_matches(&matches)?;
     let game = vcod_common::game::Game::resolve(args.game, &args.game_dir);
@@ -216,9 +218,15 @@ fn stdin_console(tty: bool) -> vcod_server::stdin_console::StdinConsole {
 fn cod1_server(args: Args, sets_after_map: &[bool]) -> Result<(Server, Net)> {
     if args.test_entities > vcod_server::world::MAX_TEST_ENTITIES {
         bail!(
-            "--test-entities {} exceeds {}, the most that fits below ENTITYNUM_WORLD",
+            "--test-entities {} exceeds {}, the most that fits below the map's entities",
             args.test_entities,
             vcod_server::world::MAX_TEST_ENTITIES
+        );
+    }
+    let first_test = vcod_server::world::FIRST_TEST_ENT as usize;
+    if args.test_entities > 0 && args.max_clients > first_test {
+        bail!(
+            "--test-entities needs --max-clients {first_test} or fewer: its entities start at {first_test}"
         );
     }
     if args.bots > args.max_clients {
@@ -722,13 +730,13 @@ fn last_set<'a>(sets: &'a [String], name: &str) -> Option<&'a str> {
         .next_back()
 }
 
-fn protocol(sets: &[String], fs: &Pk3Fs) -> Result<&'static Protocol> {
+fn protocol(sets: &[String], fs: &Pk3Fs) -> Result<&'static Cod1Wire> {
     if let Some(v) = last_set(sets, "protocol") {
         return v
             .trim()
             .parse()
             .ok()
-            .and_then(|v| Protocol::by_version(vcod_common::game::Game::Cod1, v))
+            .and_then(|v| Cod1Wire::by_version(vcod_common::game::Game::Cod1, v))
             .with_context(|| {
                 format!("--set protocol={v}: vcod speaks 1 (1.1), 6 (1.5) and 22 (UO 1.51)")
             });

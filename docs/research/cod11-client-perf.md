@@ -106,7 +106,7 @@ are too.
 
 The connect-to-first-frame load times, and the load profile that splits them, are in cod4-client-perf.md section 34 (all four games).
 
-## 4. The GPU frame against retail's renderer (P16)
+## 4. The GPU frame against retail's renderer
 
 Retail CoD1 is a Q3-lineage OpenGL renderer: one draw per shader stage
 over a shader-sorted list, a texture and lightmap pair collapsed into one
@@ -244,7 +244,7 @@ vcod -p vcod-server`):
 4` loads as 1 (cod11-console.md 8); no config sets `r_vc_depthprepass`.
 Compare `gpu.opaque` and fps with section 3's run. Pending.
 
-## 5. Fill per pixel against retail (P27)
+## 5. Fill per pixel against retail
 
 On a real card at 1600 x 900 vcod's mp_carentan spectator frame
 was GPU-bound (`gpu.opaque` 1.51 of 1.64 ms, 570 fps), where retail
@@ -360,7 +360,7 @@ From a release build (`cargo build --release -p vcod -p vcod-server`):
 and compare fps, `gpu.opaque` and the `frags` row with the 570 fps run. A card that keeps early depth without the discard shows it in
 `gpu.opaque` beyond the prop cut. Pending.
 
-## 6. The props' fill at mp_carentan's spectator spot (P29)
+## 6. The props' fill at mp_carentan's spectator spot
 
 After section 5 a real card read 659.6 fps at 1600 x 900
 (`gpu.opaque` 1.23 ms) with `frags` world 1612909, props 6270472,
@@ -443,7 +443,7 @@ Retail at a 16:9 view would answer the per-pixel question; it offers
 against retail at 1024 x 768 (a 4:3 window needs no `vc_widescreen`).
 Pending.
 
-## 7. The own body (backlog #52)
+## 7. The own body
 
 A live client's frame adds the body `cg.predictedPlayerEntity` stands for
 (`play::seat::adds_view_body`, the own view's `pm_flags` 0x40000) to the

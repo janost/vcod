@@ -22,9 +22,7 @@ use crate::assets::model::XAnim;
 
 /// `MANTLE_ON` and `MANTLE_OVER` surface flags, and the contents the
 /// surface probe traces (`CONTENTS_MANTLE`).
-pub const SURF_MANTLE_ON: u32 = 0x200_0000;
-pub const SURF_MANTLE_OVER: u32 = 0x400_0000;
-pub const CONTENTS_MANTLE: u32 = 0x100_0000;
+pub use vcod_common::clipmap::{CONTENTS_MANTLE, SURF_MANTLE_ON, SURF_MANTLE_OVER};
 /// `eFlags` 0x8000: mantling.
 pub const EF_MANTLE: u32 = 0x8000;
 
@@ -263,16 +261,6 @@ pub fn install(zones: &[&Assets]) -> Option<&'static MantleAnims> {
 /// The clips [`install`] kept, if any zone held them yet.
 pub fn installed() -> Option<&'static MantleAnims> {
     ANIMS.get()
-}
-
-/// `pmove_t`'s `mantleEndPos` and `mantleDuration` for a mantle under way:
-/// where the clips end it and their whole length in ms.
-pub fn end_and_duration(anims: &MantleAnims, ps: &PlayerState) -> (Vec3, i32) {
-    let st = &ps.mantle;
-    let (up, over) = anims.lengths(st);
-    let total = up + over;
-    let left = sub(anims.delta(st, total), anims.delta(st, st.timer));
-    (add(ps.origin, left), total)
 }
 
 fn row(st: &MantleState) -> (usize, usize, f32) {

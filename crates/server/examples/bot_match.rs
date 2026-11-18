@@ -171,7 +171,6 @@ impl CtfCarries {
     }
 
     /// `bodies`: each playing body's client, team and feet.
-    #[allow(clippy::too_many_arguments)]
     fn step(
         &mut self,
         tick: usize,
@@ -952,7 +951,7 @@ fn observer_addr(i: usize) -> (SocketAddr, u16) {
 }
 
 impl Observer {
-    fn new(proto: &'static vcod_common::net::protocol::Protocol, now: Instant, i: usize) -> Self {
+    fn new(proto: &'static vcod_common::net::protocol::Cod1Wire, now: Instant, i: usize) -> Self {
         let (addr, qport) = observer_addr(i);
         let pipe = Rc::new(std::cell::RefCell::new(Pipe::default()));
         let cl = vcod_common::net::NetClient::start_with_protocol(

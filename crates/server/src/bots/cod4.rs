@@ -614,13 +614,12 @@ impl Cod4Bots {
     /// attacker, at the level time.
     pub(crate) fn read_hits(&mut self, level: &Cod4Level) {
         let now = level.level_time();
-        let hits = level.hits_since(self.hits_read);
-        self.hits_read += hits.len();
-        for &(attacker, victim, _) in hits {
+        for &(attacker, victim, _) in level.hits_since(self.hits_read) {
             if attacker != victim {
                 self.attackers.insert(victim, (attacker, now));
             }
         }
+        self.hits_read = level.hit_count();
     }
 
     /// [`BotView::hurt`] for the bot in `slot`: a `damageEvent` new since

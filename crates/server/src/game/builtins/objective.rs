@@ -11,7 +11,7 @@ use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
 use vcod_common::net::msg::MAX_OBJECTIVES;
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("objective_add", objective_add),
@@ -23,10 +23,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("objective_current", objective_current),
     ("objective_team", objective_team),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 fn index_arg(v: Option<&Value>) -> Result<usize, ErrorKind> {
     match v {

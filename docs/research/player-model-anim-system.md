@@ -160,7 +160,7 @@ VERIFIED, both captures: `crates/server/tests/fixtures/playerstate/mp_carentan-d
 | `jump_takeoff` | `up=127`, first airborne frame | 100 | 100 | `jump` default, `legs pb_standjump_takeoff duration 5 blendtime 100` |
 | `land` | first frame back on the ground | 99 | 99 | `land` default, `legs pb_standjump_land duration 100 blendtime 50` |
 
-VERIFIED: `torsoAnim` is 0 in every pose of both captures, `jump_takeoff` included, and `playerstate_motion_ab` compares it. No movement pose raises a weapon event, so a torso index in one is a defect. VERIFIED: every clause reached in the table is written `both`. INFERRED: retail does not write the torso half of the continuous selection, so vcod clears `Selection::torso` before applying it and leaves the torso to events. Captures from before 2026-09-02 read 720 (index 208, `pt_stand_pullout_pose`) at `jump_takeoff`: a holstered weapon, not a clause ("The `jump_takeoff` torso index is gone").
+VERIFIED: `torsoAnim` is 0 in every pose of both captures, `jump_takeoff` included, and `playerstate_motion_ab` compares it. No movement pose raises a weapon event, so a torso index in one is a defect. VERIFIED: every clause reached in the table is written `both`. INFERRED: retail does not write the torso half of the continuous selection, so vcod clears `Selection::torso` before applying it and leaves the torso to events. Captures from before 2026-09-02 read 720 (index 208, `pt_stand_pullout_pose`) at `jump_takeoff`: a holstered weapon, not a clause ("The `jump_takeoff` torso 720 was a holstered weapon").
 
 ### Unarmed
 
@@ -244,17 +244,15 @@ INFERRED: `movementDir` cannot select those blocks. `set_movement_dir` (`crates/
 
 INFERRED, off the retail control flow ported into `walk_move` (`pmove.rs`, from 0x2f6db): `PM_WalkMove` skips the position step at zero velocity but still calls `PM_SetMovementDir`, and that function's prone branch reads `proneDirection` against the view yaw, not displacement. That is why a still prone player's legs turn with his body. INFERRED: the mechanism is prone-only; `PM_SetMovementDir` has no stand or crouch equivalent, so if the turn blocks are reachable at all, something else selects them.
 
-Closed 2026-11-14: nothing selects them. VERIFIED, objdump of each game module: the movetype condition is set by `BG_AnimScriptAnimation` (1.1d 0x29db0, 1.5b 0x18465, UO 0x1c377) through `BG_UpdateConditionValue` (condition 3 on 1.1d at 0x29ef1 and 1.5b at 0x1855a, 5 on UO at 0x1c46f), and every call of `BG_AnimScriptAnimation` passes its movetype as an immediate: 1.1d's five (`PM_Footsteps`, relocations at 0x3242f, 0x327d9, 0x32872, 0x3288e, 0x328a2) pass 1 to 13, 16 and 17 (0x32415, 0x32422, 0x326f9..0x327b5, 0x3285b, 0x3286c, 0x32881, 0x3289a), and the 22 calls in 1.5b and in UO pass 1 to 13, 16 and 17 alike. None passes 14 (`TURNRIGHT`) or 15 (`TURNLEFT`). VERIFIED: 1.1d has no other call of `BG_UpdateConditionValue`; 1.5b's and UO's other writes of the condition store 0 (1.5b 0x19b11, 0x19b61, 0x19c13, 0x19eab, 0x19f22, 0x1a466; UO 0x1dcaa, 0x1dcfa, 0x1ddac, 0x1e092, 0x1e102, 0x1e9be) or copy the `+0x54` word of the anim record being played (1.5b 0x1a256, UO 0x1e62e). INFERRED: that word holds the movetypes whose blocks name the anim, so it carries 14 or 15 only for `pl_chicken_dance` or `pl_chicken_dance_crouch`, which only those blocks name; the blocks are dead in MP, as the turn captures' 122 and vcod's selector have it. Not checked: a 1.1d write of the condition inlined outside `BG_UpdateConditionValue`.
+Nothing selects them. VERIFIED, objdump of each game module: the movetype condition is set by `BG_AnimScriptAnimation` (1.1d 0x29db0, 1.5b 0x18465, UO 0x1c377) through `BG_UpdateConditionValue` (condition 3 on 1.1d at 0x29ef1 and 1.5b at 0x1855a, 5 on UO at 0x1c46f), and every call of `BG_AnimScriptAnimation` passes its movetype as an immediate: 1.1d's five (`PM_Footsteps`, relocations at 0x3242f, 0x327d9, 0x32872, 0x3288e, 0x328a2) pass 1 to 13, 16 and 17 (0x32415, 0x32422, 0x326f9..0x327b5, 0x3285b, 0x3286c, 0x32881, 0x3289a), and the 22 calls in 1.5b and in UO pass 1 to 13, 16 and 17 alike. None passes 14 (`TURNRIGHT`) or 15 (`TURNLEFT`). VERIFIED: 1.1d has no other call of `BG_UpdateConditionValue`; 1.5b's and UO's other writes of the condition store 0 (1.5b 0x19b11, 0x19b61, 0x19c13, 0x19eab, 0x19f22, 0x1a466; UO 0x1dcaa, 0x1dcfa, 0x1ddac, 0x1e092, 0x1e102, 0x1e9be) or copy the `+0x54` word of the anim record being played (1.5b 0x1a256, UO 0x1e62e). INFERRED: that word holds the movetypes whose blocks name the anim, so it carries 14 or 15 only for `pl_chicken_dance` or `pl_chicken_dance_crouch`, which only those blocks name; the blocks are dead in MP, as the turn captures' 122 and vcod's selector have it. Not checked: a 1.1d write of the condition inlined outside `BG_UpdateConditionValue`.
 
 ### The restart toggle
 
 VERIFIED: the toggle's absolute value is not a function of the pose. `stand_up` is index 122 in both captures, with `legsAnim` 634 (toggle set) on mp_carentan and 122 (clear) on mp_pavlov; `run_back` is 93 in both and reads 93 against 605. INFERRED: only the change carries meaning, so a gate compares the index and checks per frame that the bit flips exactly when the index does, never the bit's value.
 
-### Open questions
+### Open: what clears the ads pose
 
-- Closed. The `torsoAnim` 720 and `weaponstate` 2 both old captures read at `jump_takeoff` were a holstered weapon from a `cmd.weapon` of 0; the retaken captures read 0 and 0 ("The `jump_takeoff` torso index is gone").
-- Closed. `pm_flags` 0x8 read set at `jump_takeoff` on mp_pavlov and clear on mp_carentan in the superseded captures. VERIFIED: the retaken pair reads it clear on both, as vcod does, and `playerstate_motion_ab` no longer excepts it.
-- Open. VERIFIED, in a run not committed: the ads pose latches. A capture that pressed the ads bit mid-script kept `pm_flags` 0x20 and 0x80 and `legsAnim` 121 `pb_stand_ads` for every later pose (a crouch run, a stand, two turns) with the bit long released, and read them clear at the jump that followed. UNVERIFIED: what clears them, and whether the jump did. The probe's motion script holds `ads_stand` last for this reason, so the committed captures cannot show it.
+VERIFIED, in a run not committed: the ads pose latches. A capture that pressed the ads bit mid-script kept `pm_flags` 0x20 and 0x80 and `legsAnim` 121 `pb_stand_ads` for every later pose (a crouch run, a stand, two turns) with the bit long released, and read them clear at the jump that followed. UNVERIFIED: what clears them, and whether the jump did. The probe's motion script holds `ads_stand` last for this reason, so the committed captures cannot show it.
 
 ## The weapon channel: what writes `torsoAnim`
 
@@ -308,7 +306,7 @@ Paired values are carentan then pavlov.
 
 VERIFIED: the event ids, torso indices and run lengths, read off the traces. INFERRED: the right-hand column (a duration inside a bound is a match, not a proof) and the state numbers themselves, read off behaviour, not an enum.
 
-VERIFIED: `weaponstate` 2 and event 156 appear in neither capture. In the superseded pair they sat at the reload key, both stance changes and the jump, and all went away once the probe sent its weapon.
+VERIFIED: `weaponstate` 2 and event 156 appear in neither capture.
 
 VERIFIED: 4 appears on pavlov only. INFERRED: the bolt action; the carbine's `rechamberTime` is 0.1 s, under two snapshot intervals, and its 15-round clip never emptied.
 
@@ -318,21 +316,21 @@ The next paragraph rests on the superseded pair. Its putaways came from a `cmd.w
 
 VERIFIED, superseded pair: the pullout pose is stance-matched like the shoot anim, 208 `pt_stand_pullout_pose` standing and 209 `pt_crouch_pullout_pose` crouched. Both maps' `stand_between` step reads 209 while `legsAnim` already reads the standing idle. INFERRED: the index latches when the state opens; that step's state opened while the player was still crouched. VERIFIED, same pair: the torso index clears before the state does; carentan's reload step holds 208 for about 500 ms of a `weaponstate` 2 that runs 600-700 ms.
 
-**The reload key reloads a partly-full clip.** VERIFIED: the step that taps `wbuttons` 0x08 reads `weaponstate` 5 with event 151 `EV_RELOAD` on both maps, for 53 samples on carentan and 48 on pavlov (`reloadTime` 2.65 and 2.4). VERIFIED: the torso index is the weapon's, 229 `pt_reload_stand_auto` for the carbine and 231 `pt_reload_stand_rifle` for the mosin, and `weapAnim` takes index 11 `WEAP_RELOAD`. This confirms what `cod11-combat.md` 1.7 read off the instructions. VERIFIED: the superseded pair read `weaponstate` 2 with event 156 here instead, with rounds in the clip and no state near `reloadTime`; the usercmd's `weapon` byte is the only difference between the runs.
+**The reload key reloads a partly-full clip.** VERIFIED: the step that taps `wbuttons` 0x08 reads `weaponstate` 5 with event 151 `EV_RELOAD` on both maps, for 53 samples on carentan and 48 on pavlov (`reloadTime` 2.65 and 2.4). VERIFIED: the torso index is the weapon's, 229 `pt_reload_stand_auto` for the carbine and 231 `pt_reload_stand_rifle` for the mosin, and `weapAnim` takes index 11 `WEAP_RELOAD`. This confirms what `cod11-combat.md` 1.7 read off the instructions.
 
 ### What `weapAnim` is not written by
 
 VERIFIED, superseded pair: no `weaponstate` 2 writes `weapAnim`. Carentan's reload step holds index 0 for all 13 samples of the state and takes 512 (index 0, toggle flipped) on the sample the state ends; pavlov's `stand_between` holds the rechamber index 4 for all 8 and lands on 512 the same way.
 
-VERIFIED: a real putaway does store `WEAP_DROP`. The grenade capture's `to_frag` step reads `weapAnim` 521 (index 9 with the toggle) for all of `weaponstate` 2, then 10 and 512 across the raise, one write per transition (`cod11-combat.md` 1.14). INFERRED: the two runs above sent `cmd.weapon` 0 and 1.2's setter refuses to write on that input, so their unchanged channel is the same artifact as their phantom putaways. The old reading here, that a putaway stores no anim and section 1.8's `WEAP_DROP` is only the event's parm, is superseded.
+VERIFIED: a real putaway does store `WEAP_DROP`. The grenade capture's `to_frag` step reads `weapAnim` 521 (index 9 with the toggle) for all of `weaponstate` 2, then 10 and 512 across the raise, one write per transition (`cod11-combat.md` 1.14). INFERRED: the two runs above sent `cmd.weapon` 0 and 1.2's setter refuses to write on that input, so their unchanged channel is the same artifact as their phantom putaways.
 
 VERIFIED: a rechamber ending writes no `weapAnim` either. Pavlov's `single_shot` reads 516 across the sample where `weaponstate` goes 4 to 0, and its `sustained_fire` never shows index 0 between two shots.
 
 VERIFIED: pavlov's `weaponstate` goes 3 to 4 on consecutive samples 50 ms of server time apart, and `weapAnim` 2 to 4 across the same pair: 341 to 390 ms on `sustained_fire`, 359 to 408 on `prone_fire` (2026-10-18 recapture; the 2026-10-17 one read 344 to 408 and 310 to 374 on `crouch_fire`, an earlier capture 328 to 378). INFERRED: the shot's state ends and the rechamber opens within one server frame. That frame holds several cmds, so it cannot show whether the rechamber waits a cmd for the state 3 exit; it does (`cod11-combat.md` 1.4).
 
-### The `jump_takeoff` torso index is gone
+### The `jump_takeoff` torso 720 was a holstered weapon
 
-VERIFIED: the movement captures committed before 2026-09-02 read `weaponstate` 2 and `torsoAnim` 720 at `jump_takeoff`, and the retaken pair reads 0 and 0. VERIFIED: the only difference is the usercmd's `weapon` byte. The compact usercmd branch carries no weapon byte, so a probe sending 0 reaches the weapon-change check only when `upmove`, `wbuttons` or the byte itself changes, and the jump's `upmove` change is what put it on the wire (`docs/protocol-1.1.md`, "Usercmd delta"). INFERRED: the 720 was a holstered weapon, not an animscript clause.
+VERIFIED: the movement captures committed before 2026-09-02 read `weaponstate` 2 and `torsoAnim` 720 at `jump_takeoff`, and the retaken pair reads 0 and 0. VERIFIED: the only difference is the usercmd's `weapon` byte. The compact usercmd branch carries no weapon byte, so a probe sending 0 reaches the weapon-change check only when `upmove`, `wbuttons` or the byte itself changes, and the jump's `upmove` change is what put it on the wire (`docs/protocol-1.1.md`, "Usercmd delta"). INFERRED: the 720 was a holstered weapon, not an animscript clause. VERIFIED: the retaken pair reads `pm_flags` 0x8 clear at `jump_takeoff` on both maps, as vcod does, and `playerstate_motion_ab` compares it.
 
 ### Prone fire, taken on both maps
 
