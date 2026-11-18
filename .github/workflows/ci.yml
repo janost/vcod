@@ -119,12 +119,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libasound2-dev
 
-      - run: rustup toolchain install 1.90 --profile minimal
+      - run: rustup toolchain install 1.95 --profile minimal
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Check
-        run: cargo +1.90 check --workspace --all-targets --locked
+        run: cargo +1.95 check --workspace --all-targets --locked
 
   # deny.toml: licences, the layering bans and sources on every run;
   # advisories only on the weekly schedule, so a new advisory does not

@@ -122,7 +122,7 @@ asphalt. Twenty-three years late, Infinity Ward, you're welcome.
 
 ## Building from source
 
-Rust 1.90 or newer. The client needs a GPU with BC (DXT) texture
+Rust 1.95 or newer. The client needs a GPU with BC (DXT) texture
 compression, and wgpu picks the backend (`WGPU_BACKEND=vulkan|gl|dx12|metal`
 narrows it). The server needs no GPU.
 

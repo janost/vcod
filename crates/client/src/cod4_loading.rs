@@ -696,6 +696,7 @@ mod tests {
     /// A join whose map fails to load (an install with no `zone/`) says
     /// `disconnect`: the server frees the slot at once instead of timing
     /// it out.
+    #[cfg(unix)]
     #[test]
     fn cod4_join_whose_map_load_fails_frees_the_server_slot() {
         use vcod_server::cod4::{Cod4Config, Cod4Server, FRAME_MS};
