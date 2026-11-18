@@ -1016,8 +1016,8 @@ pub struct GameHost {
     /// (`trap_SendConsoleCommand`), drained by
     /// `ScriptRuntime::take_console` into the server's own buffer.
     pub console: Vec<String>,
-    /// Who owns a client's name, from `setClientNameMode`. Nothing reads it
-    /// until clients exist: both of retail's readers are client code.
+    /// Who owns a client's name, from `setClientNameMode`. Only CoD4's
+    /// userinfo change reads it.
     pub client_name_mode: builtins::cvar::ClientNameMode,
     /// The registered-item bitset. `precacheItem` writes it and mirrors it
     /// into configstring 8 (`crate::items`); nothing else reads or writes
