@@ -1602,9 +1602,6 @@ impl PlayerHud {
         }
     }
 
-    /// `CG_DrawCursorhint` (Mac 0x18a7a6) at `cg_cursorHints` 4: a use
-    /// trigger's string (`&&1` its key) left of `hint_usable`, the health
-    /// and pickup hints, or a weapon on the ground's icon.
     /// `CG_DrawPlayerStance`'s hint prints under `cg_hudStanceHintPrints`
     /// (Mac 0x18bbbc): for 3 s after a stance change, beside the icon, a
     /// line for each other stance with a bound command
@@ -1663,6 +1660,9 @@ impl PlayerHud {
         }
     }
 
+    /// `CG_DrawCursorhint` (Mac 0x18a7a6) at `cg_cursorHints` 4: a use
+    /// trigger's string (`&&1` its key) left of `hint_usable`, the health
+    /// and pickup hints, or a weapon on the ground's icon.
     fn cursor_hint(
         &self,
         item: &Item,
