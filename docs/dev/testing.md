@@ -46,6 +46,9 @@ Pick the fixture helper by what the test asserts:
   (`iw_00`..`iw_24`, `localized_*_iwNN`). A map pack there (a `mp_*.iwd`,
   a `~~~.iwd` sorted last) overrides stock gametype and map scripts and
   joins `sv_iwdNames`, which the wire A/Bs compare with retail's.
+- A CoD4 test: `vcod_cod4::testing::cod4_install()` (`COD4_DIR`), or
+  `cod4_lnxded_install()` (`COD4_LNXDED_DIR`, the retail dedicated
+  server's own `zone/english/`, which `zone_census` reads).
 
 The all-maps census tests scope to stock `pak[0-9].pk3`. Map downloads drop
 third-party `zzz_*.pk3` into `main/`; a census failure on one of those is not
@@ -57,6 +60,19 @@ Each load still steps a fresh script seed, as retail's `G_InitGame` does
 (`cod11-map-cycle.md` 4.8), so a later level never repeats the first's draws.
 A gate that compares a later level's spawn with retail's replays retail's
 picks through `Server::pin_spawns`, as `gametypes_ab` does.
+
+## CI and the test binaries
+
+- `ci.yml` runs on ubuntu with no game data, so no pak test and no A/B gate
+  runs there; they run only on a machine with an install.
+- `nightly.yml` rebuilds the rolling `nightly` release on master pushes that
+  touch code (docs, tools and `*.md` are path-ignored). `workflow_dispatch`
+  forces one.
+- Each crate's integration tests are one binary named after the crate
+  (`--test common`, `--test cod2`, `--test cod4`, `--test gsc`, `--test
+  server`; `tests/main.rs`). A file's tests filter by its name (`--
+  vehicle_ab::`). The client's tests live in its binary: `cargo test -p
+  vcod --bins`.
 
 ## Ignored tests: when to run them
 
