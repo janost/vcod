@@ -544,7 +544,7 @@ pub(crate) fn mantle_move(pm: &mut Pmove, pml: &Pml) {
     let (up, over) = anims.lengths(&ps.mantle);
     let total = up + over;
     let old = ps.mantle.timer;
-    ps.mantle.timer = (old + pml.msec).min(total);
+    ps.mantle.timer = old.wrapping_add(pml.msec).min(total);
     let now = ps.mantle.timer;
     let d0 = anims.delta(&ps.mantle, old);
     let d1 = anims.delta(&ps.mantle, now);
@@ -555,7 +555,7 @@ pub(crate) fn mantle_move(pm: &mut Pmove, pml: &Pml) {
     let kept: [f64; 3] = std::array::from_fn(|i| d(d1[i]) - d(d0[i]));
     let step = Vec3::from_array(kept.map(|k| k as f32));
     ps.origin = Vec3::from_array(std::array::from_fn(|i| (kept[i] + d(ps.origin[i])) as f32));
-    let per_sec = 1.0 / (d(MSEC_TO_SEC) * f64::from(now - old));
+    let per_sec = 1.0 / (d(MSEC_TO_SEC) * f64::from(now.wrapping_sub(old)));
     ps.velocity = Vec3::from_array(std::array::from_fn(|i| (d(step[i]) * per_sec) as f32));
     if now == total {
         ps.pm_flags &= !pmf::MANTLE;
@@ -572,6 +572,9 @@ pub(crate) fn mantle_move(pm: &mut Pmove, pml: &Pml) {
     }
 }
 
+/// The most turns of the cap [`cap_view`] takes off the delta.
+const CAP_VIEW_STEPS: u32 = 1 << 16;
+
 /// `Mantle_CapView` (0x8050dc6): a view more than `mantle_view_yawcap` off
 /// the mantle's yaw is set back to the cap; the difference, wrapped into the
 /// cap and kept, goes into `delta_angles[1]`.
@@ -585,11 +588,16 @@ pub(crate) fn cap_view(pm: &mut Pmove) {
     if !(delta < -cap || cap < delta) {
         return;
     }
-    while delta < -cap {
+    // Retail's loops never end on a cap of 0 or less or on a huge delta;
+    // a cap of 0.003 or more over a delta in -180..180 stays under the bound.
+    let mut steps = 0u32;
+    while delta < -cap && steps < CAP_VIEW_STEPS {
         delta += cap;
+        steps += 1;
     }
-    while cap < delta {
+    while cap < delta && steps < CAP_VIEW_STEPS {
         delta -= cap;
+        steps += 1;
     }
     let edge = if delta <= 0.0 { cap } else { -cap };
     ps.delta_angles[1] = (delta + d(ps.delta_angles[1])) as f32;

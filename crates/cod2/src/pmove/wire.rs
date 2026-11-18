@@ -14,8 +14,9 @@ fn word(ps: &PlayerState2, name: &str) -> u32 {
     ps.f[field_index(&PLAYER_STATE_FIELDS, name)]
 }
 
+/// A NaN or infinite float is no retail state: 0.
 fn float(ps: &PlayerState2, name: &str) -> f32 {
-    f32::from_bits(word(ps, name))
+    vcod_common::fguard::finite(f32::from_bits(word(ps, name)))
 }
 
 fn vec3(ps: &PlayerState2, name: &str) -> Vec3 {
@@ -214,7 +215,7 @@ impl super::weapon::WeaponState {
             weapon_delay: short("weaponDelay"),
             state: word(w, "weaponstate") as i32,
             weap_anim: word(w, "weapAnim") as i32,
-            pos_frac: float(w, "fWeaponPosFrac"),
+            pos_frac: float(w, "fWeaponPosFrac").clamp(0.0, 1.0),
             hold_breath_scale: float(w, "holdBreathScale"),
             hold_breath_timer: word(w, "holdBreathTimer") as i32,
             grenade_time_left: short("grenadeTimeLeft"),

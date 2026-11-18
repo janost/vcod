@@ -17,6 +17,7 @@ use glam::Vec3;
 use super::breath::diff_track;
 use super::fpu::{angle_delta, d};
 use super::{PlayerState, ef, pmf};
+use vcod_common::fguard::{clamp, near, turns};
 
 /// `bg_bobAmplitudeStanding`, `Ducked`, `Prone`, `Sprinting` (horizontal,
 /// vertical) at their defaults, and `bg_bobMax` (cod4-client-view.md 4).
@@ -456,14 +457,14 @@ impl AimState {
         let dt = 0.001f32 * msec as f32;
         let scale = 1.0 / (dt * 60.0);
         let delta: [f32; 2] = std::array::from_fn(|i| {
-            let mut x = ps.view_angles[i] - self.sway_view[i];
+            let mut x = turns(ps.view_angles[i] - self.sway_view[i]);
             while x > 180.0 {
                 x -= 360.0;
             }
             while x < -180.0 {
                 x += 360.0;
             }
-            (x * scale).clamp(-max, max)
+            clamp(x * scale, -max, max)
         });
         self.sway_offset[1] = diff_track(horiz * delta[1], self.sway_offset[1], lerp, dt);
         self.sway_offset[2] = diff_track(vert * delta[0], self.sway_offset[2], lerp, dt);
@@ -650,7 +651,8 @@ impl AimState {
 
 /// `DiffTrackAngle`: [`diff_track`] the short way round, back into
 /// -180..180.
-fn diff_track_angle(mut tgt: f32, cur: f32, rate: f32, dt: f32) -> f32 {
+fn diff_track_angle(tgt: f32, cur: f32, rate: f32, dt: f32) -> f32 {
+    let mut tgt = near(tgt, cur);
     while tgt - cur > 180.0 {
         tgt -= 360.0;
     }
@@ -693,7 +695,7 @@ fn spring_axis(angle: &mut f32, speed: &mut f32, dt: f32, max: f32, k: [f32; 4])
     } else {
         *speed = (dt * static_decay + *speed).min(0.0);
     }
-    *speed = speed.clamp(-speed_max, speed_max);
+    *speed = clamp(*speed, -speed_max, speed_max);
     false
 }
 
@@ -790,5 +792,37 @@ mod tests {
             kick.pitch.abs() < 1e-5 && (kick.roll - 8.0).abs() < 1e-5,
             "{kick:?}"
         );
+    }
+
+    /// A NaN or out-of-range sight fraction and a weapon's negative or NaN
+    /// sway and spring maxima step the block without a panic; a view of
+    /// 1e30 without a hang (SEC-031).
+    #[test]
+    fn hostile_fractions_and_keys_fire() {
+        let k = AimKeys {
+            ads: true,
+            sway: [-1.0, 6.0, 1e30, 1.0, 1.0, 1.0],
+            ads_sway: [f32::NAN, 6.0, 1.0, f32::INFINITY, 1.0, 1.0],
+            hip_spring: [100.0, -5.0, 1.0, 1.0],
+            ads_spring: [100.0, f32::NAN, 1.0, 1.0],
+            hip_gun_kick: [10.0, 20.0, -5.0, 5.0],
+            ads_gun_kick: [10.0, 20.0, -5.0, 5.0],
+            gun_max: [10.0, 10.0],
+            ..AimKeys::default()
+        };
+        for frac in [0.0, 0.5, 5.0, -1.0, f32::NAN] {
+            for view in [[3.0, 40.0, 0.0], [1e30, -1e30, 0.0]] {
+                let ps = PlayerState {
+                    view_angles: view,
+                    weapon_pos_frac: frac,
+                    ..PlayerState::default()
+                };
+                let mut s = AimState::default();
+                s.fire_recoil(&ps, &k, || 0.5);
+                for t in [1000, 1016, 1032] {
+                    s.fire_angles(&ps, &k, &k, t, 16);
+                }
+            }
+        }
     }
 }

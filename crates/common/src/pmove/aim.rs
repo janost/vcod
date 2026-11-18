@@ -12,6 +12,7 @@
 //! lost the fractional part that decides the phase.
 
 use super::{PlayerState, Stance};
+use crate::fguard::{clamp, near};
 use crate::patch::Arith;
 use crate::weapon::{AimDef, WeaponDef};
 use crate::x87;
@@ -172,7 +173,7 @@ fn spring_axis(
     } else {
         *speed = (*speed + dt * static_decay).min(0.0);
     }
-    *speed = speed.clamp(-speed_max, speed_max);
+    *speed = clamp(*speed, -speed_max, speed_max);
     false
 }
 
@@ -199,7 +200,7 @@ pub fn angle_normalize_180(a: f32) -> f32 {
 /// `AngleSubtract` (`0x3e968`): the difference wrapped into -180..180 by
 /// repeated 360s, no rounding.
 pub fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut d = a - b;
+    let mut d = crate::fguard::turns(a - b);
     while d > 180.0 {
         d -= 360.0;
     }
@@ -397,15 +398,23 @@ fn sway(
     let horiz_scale = pick(aim.sway_horiz_scale);
     let vert_scale = pick(aim.sway_vert_scale);
 
-    let dp = angle_subtract(view[0], st.last_view[0]).clamp(-max_angle, max_angle);
-    let dy = angle_subtract(view[1], st.last_view[1]).clamp(-max_angle, max_angle);
+    let dp = clamp(
+        angle_subtract(view[0], st.last_view[0]),
+        -max_angle,
+        max_angle,
+    );
+    let dy = clamp(
+        angle_subtract(view[1], st.last_view[1]),
+        -max_angle,
+        max_angle,
+    );
     let k = lerp_speed * msec as f32 * 0.001;
 
     st.sway_offset[1] = approach(st.sway_offset[1], horiz_scale * dy * scale, k);
     st.sway_offset[2] = approach(st.sway_offset[2], dp * vert_scale * scale, k);
 
-    let mut ta0 = dp * pitch_scale * scale;
-    let mut ta1 = dy * yaw_scale * scale;
+    let mut ta0 = near(dp * pitch_scale * scale, st.sway_angles[0]);
+    let mut ta1 = near(dy * yaw_scale * scale, st.sway_angles[1]);
     while ta0 - st.sway_angles[0] > 180.0 {
         ta0 -= 360.0;
     }
@@ -1169,5 +1178,44 @@ mod tests {
         assert_eq!(at(&sighted, Some(&scope), 1100), [-7.5, 0.0, 3.0]);
         let never = DamageKick::default();
         assert_eq!(view_angles(&hip, None, &never, 50), [0.0; 3]);
+    }
+
+    /// A weapon file's crossed sway and kick maxima, a NaN or out-of-range
+    /// sight fraction and a view of 1e30 or infinity step the sway and the
+    /// spring without a panic or a hang (SEC-048, SEC-062).
+    #[test]
+    fn hostile_keys_and_fractions_step_the_gun() {
+        let mut m = HashMap::new();
+        for (k, v) in [
+            ("aimDownSight", "1"),
+            ("swayMaxAngle", "-1"),
+            ("adsSwayMaxAngle", "nan"),
+            ("swayPitchScale", "1e30"),
+            ("swayYawScale", "inf"),
+            ("swayLerpSpeed", "6"),
+            ("hipGunKickSpeedMax", "-5"),
+            ("adsGunKickSpeedMax", "nan"),
+            ("hipGunKickAccel", "100"),
+            ("gunMaxPitch", "10"),
+            ("gunMaxYaw", "10"),
+        ] {
+            m.insert(k.to_string(), v.to_string());
+        }
+        let def = WeaponDef::from_map(&m);
+        for frac in [0.0, 0.5, 2.0, -1.0, f32::NAN, f32::INFINITY] {
+            let ps = still(frac);
+            let mut st = AimState::default();
+            for view in [
+                [0.0, 0.0, 0.0],
+                [1e30, -1e30, 0.0],
+                [f32::INFINITY, f32::NAN, 0.0],
+            ] {
+                gun_angles(&ps, &mut st, &input(&def, view, 1000));
+                aim_angles(&ps, &mut st, &input(&def, view, 1050));
+            }
+            let mut kick = GunKick::default();
+            kick.kick(30.0, -30.0);
+            kick.step(&def, frac, 0.1);
+        }
     }
 }

@@ -3057,3 +3057,34 @@ fn pmove_single_and_the_sprint_hold_their_pinned_traces() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// A mantle cap of 0, -1 or 1e-30 off the server's dvar mirror, and a
+/// mantle yaw of 1e30 or infinity off its playerstate, step without a hang
+/// in `Mantle_CapView`'s loops (SEC-046).
+#[test]
+fn hostile_mantle_caps_and_yaws_step() {
+    for (cap, yaw) in [
+        (0.0, 0.0),
+        (-1.0, 0.0),
+        (1e-30, 0.0),
+        (60.0, 1e30),
+        (60.0, 1e20),
+        (0.0, f32::INFINITY),
+    ] {
+        let mut ps = standing();
+        ps.pm_flags |= pmf::MANTLE;
+        ps.mantle.yaw = yaw;
+        ps.view_angles[1] = 90.0;
+        let mut ps = PlayerState::from_wire(&ps.to_wire(&Default::default()));
+        let rules = Rules {
+            mantle_view_yawcap: cap,
+            ..Rules::default()
+        };
+        let mut old = cmd(ps.command_time, 0, 0);
+        for _ in 0..2 {
+            let mut c = cmd(ps.command_time + 50, 0, 0);
+            c.angles[1] = 0x4000;
+            player_step(&mut ps, &c, &mut old, &Floor, rules, RIFLE);
+        }
+    }
+}

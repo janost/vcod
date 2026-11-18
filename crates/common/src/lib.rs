@@ -10,6 +10,7 @@ pub mod bsp;
 pub mod clipmap;
 pub mod collision;
 pub mod deform;
+pub mod fguard;
 pub mod game;
 pub mod game_dir;
 pub mod iwi;

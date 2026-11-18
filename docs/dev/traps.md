@@ -59,6 +59,13 @@ names holds the evidence.
   Activision's own initial state over the upper-cased (CoD2) or lower-cased
   (CoD4) key, the same hash their `getchallenge` carries
   (cod11-server-handshake.md, "CD key authorization (the clients)").
+- A float off the wire or out of a file can be NaN, infinite or 1e30.
+  Retail's `while a > 180 { a -= 360 }` folds never end on one, and
+  `f32::clamp` panics on crossed or NaN bounds where retail's two compares
+  do not. Ported folds take `vcod_common::fguard::turns` (or `near`) first
+  and data-driven clamps `fguard::clamp`; both return a retail value
+  untouched. The playerstate readers (`predict::from_wire`, CoD2's and
+  CoD4's `PlayerState::from_wire`) zero non-finite floats.
 
 ### Bots
 

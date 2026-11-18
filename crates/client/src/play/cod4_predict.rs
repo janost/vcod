@@ -324,6 +324,9 @@ pub fn lean_from_mirror(cs: impl Fn(u16) -> Vec<u8>) -> vcod_common::playerpose:
         let Ok(v) = value.trim().parse::<f32>() else {
             continue;
         };
+        if !v.is_finite() {
+            continue;
+        }
         let slot = match key {
             "shift_left" => &mut d.shift_left,
             "shift_right" => &mut d.shift_right,
@@ -341,8 +344,8 @@ pub fn lean_from_mirror(cs: impl Fn(u16) -> Vec<u8>) -> vcod_common::playerpose:
 }
 
 /// The movement dvars off the server's mirror (`CS_CODINFO` names, the
-/// values 128 slots on): what a name the mirror carries says, the rest
-/// [`Rules::default`].
+/// values 128 slots on): what a name the mirror carries says, held to the
+/// dvar's domain (cod4-pmove.md 12), the rest [`Rules::default`].
 pub fn rules_from_mirror(cs: impl Fn(u16) -> Vec<u8>) -> Rules {
     let mut r = Rules::default();
     for i in CS_CODINFO..CS_CODINFO_VALUE {
@@ -354,40 +357,43 @@ pub fn rules_from_mirror(cs: impl Fn(u16) -> Vec<u8>) -> Rules {
         let Ok(v) = value.trim().parse::<f32>() else {
             continue;
         };
-        let slot = match name.to_ascii_lowercase().as_str() {
-            "friction" => &mut r.friction,
-            "stopspeed" => &mut r.stopspeed,
-            "inertiamax" => &mut r.inertia_max,
-            "inertiaangle" => &mut r.inertia_angle,
-            "jump_height" => &mut r.jump_height,
-            "jump_stepsize" => &mut r.jump_step_size,
-            "jump_ladderpushvel" => &mut r.jump_ladder_push_vel,
-            "jump_spreadadd" => &mut r.jump_spread_add,
-            "bg_ladder_yawcap" => &mut r.ladder_yawcap,
-            "bg_prone_yawcap" => &mut r.prone_yawcap,
-            "player_view_pitch_up" => &mut r.view_pitch_up,
-            "player_view_pitch_down" => &mut r.view_pitch_down,
-            "bg_falldamageminheight" => &mut r.fall_damage_min_height,
-            "bg_falldamagemaxheight" => &mut r.fall_damage_max_height,
-            "player_movethreshhold" => &mut r.move_threshold,
-            "player_footstepsthreshhold" => &mut r.footsteps_threshold,
-            "player_strafespeedscale" => &mut r.strafe_speed_scale,
-            "player_backspeedscale" => &mut r.back_speed_scale,
-            "player_spectatespeedscale" => &mut r.spectate_speed_scale,
-            "player_sprintspeedscale" => &mut r.sprint_speed_scale,
-            "player_sprinttime" => &mut r.sprint_time,
-            "player_sprintmintime" => &mut r.sprint_min_time,
-            "player_sprintrechargepause" => &mut r.sprint_recharge_pause,
-            "player_sprintstrafespeedscale" => &mut r.sprint_strafe_speed_scale,
-            "player_sprintcamerabob" => &mut r.sprint_camera_bob,
-            "player_dmgtimer_maxtime" => &mut r.dmgtimer_max_time,
-            "player_meleechargefriction" => &mut r.melee_charge_friction,
-            "player_dmgtimer_minscale" => &mut r.dmgtimer_min_scale,
-            "perk_sprintmultiplier" => &mut r.perk_sprint_multiplier,
-            "mantle_check_range" => &mut r.mantle_check_range,
-            "mantle_check_radius" => &mut r.mantle_check_radius,
-            "mantle_check_angle" => &mut r.mantle_check_angle,
-            "mantle_view_yawcap" => &mut r.mantle_view_yawcap,
+        if !v.is_finite() {
+            continue;
+        }
+        let (slot, lo, hi) = match name.to_ascii_lowercase().as_str() {
+            "friction" => (&mut r.friction, 0.0, 100.0),
+            "stopspeed" => (&mut r.stopspeed, 0.0, 1000.0),
+            "inertiamax" => (&mut r.inertia_max, 0.0, 1000.0),
+            "inertiaangle" => (&mut r.inertia_angle, -1.0, 1.0),
+            "jump_height" => (&mut r.jump_height, 0.0, 1000.0),
+            "jump_stepsize" => (&mut r.jump_step_size, 0.0, 64.0),
+            "jump_ladderpushvel" => (&mut r.jump_ladder_push_vel, 0.0, 1024.0),
+            "jump_spreadadd" => (&mut r.jump_spread_add, 0.0, 512.0),
+            "bg_ladder_yawcap" => (&mut r.ladder_yawcap, 0.0, 360.0),
+            "bg_prone_yawcap" => (&mut r.prone_yawcap, 0.0, 360.0),
+            "player_view_pitch_up" => (&mut r.view_pitch_up, 0.0, 90.0),
+            "player_view_pitch_down" => (&mut r.view_pitch_down, 0.0, 90.0),
+            "bg_falldamageminheight" => (&mut r.fall_damage_min_height, 1.0, f32::MAX),
+            "bg_falldamagemaxheight" => (&mut r.fall_damage_max_height, 1.0, f32::MAX),
+            "player_movethreshhold" => (&mut r.move_threshold, 1e-8, 20.0),
+            "player_footstepsthreshhold" => (&mut r.footsteps_threshold, 0.0, 50000.0),
+            "player_strafespeedscale" => (&mut r.strafe_speed_scale, 0.0, 20.0),
+            "player_backspeedscale" => (&mut r.back_speed_scale, 0.0, 20.0),
+            "player_spectatespeedscale" => (&mut r.spectate_speed_scale, 0.0, 20.0),
+            "player_sprintspeedscale" => (&mut r.sprint_speed_scale, 0.0, 5.0),
+            "player_sprinttime" => (&mut r.sprint_time, 0.0, 12.8),
+            "player_sprintmintime" => (&mut r.sprint_min_time, 0.0, 12.8),
+            "player_sprintrechargepause" => (&mut r.sprint_recharge_pause, 0.0, 9000.0),
+            "player_sprintstrafespeedscale" => (&mut r.sprint_strafe_speed_scale, 0.0, 5000.0),
+            "player_sprintcamerabob" => (&mut r.sprint_camera_bob, 0.0, 2.0),
+            "player_dmgtimer_maxtime" => (&mut r.dmgtimer_max_time, 0.0, f32::MAX),
+            "player_meleechargefriction" => (&mut r.melee_charge_friction, f32::MIN, f32::MAX),
+            "player_dmgtimer_minscale" => (&mut r.dmgtimer_min_scale, 0.0, 1.0),
+            "perk_sprintmultiplier" => (&mut r.perk_sprint_multiplier, 0.0, f32::MAX),
+            "mantle_check_range" => (&mut r.mantle_check_range, 0.0, 128.0),
+            "mantle_check_radius" => (&mut r.mantle_check_radius, 0.0, 15.0),
+            "mantle_check_angle" => (&mut r.mantle_check_angle, 0.0, 180.0),
+            "mantle_view_yawcap" => (&mut r.mantle_view_yawcap, 0.0, 180.0),
             "mantle_enable" => {
                 r.mantle_enable = v != 0.0;
                 continue;
@@ -402,7 +408,7 @@ pub fn rules_from_mirror(cs: impl Fn(u16) -> Vec<u8>) -> Rules {
             }
             _ => continue,
         };
-        *slot = v;
+        *slot = v.clamp(lo, hi);
     }
     r
 }
@@ -961,6 +967,33 @@ pub fn xyspeed(ps: &PlayerState) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mirrored dvar outside 1.7's domain is held to it, a NaN or an
+    /// infinity is dropped for the default (SEC-046).
+    #[test]
+    fn mirrored_dvars_keep_their_domain() {
+        let pairs = [
+            ("mantle_view_yawcap", "-5"),
+            ("bg_prone_yawcap", "1e30"),
+            ("friction", "nan"),
+            ("stopspeed", "inf"),
+            ("jump_height", "45"),
+        ];
+        let r = rules_from_mirror(|i| {
+            let k = usize::from(i.wrapping_sub(CS_CODINFO));
+            let v = usize::from(i.wrapping_sub(CS_CODINFO_VALUE));
+            match (pairs.get(k), pairs.get(v)) {
+                (Some((name, _)), _) if i < CS_CODINFO_VALUE => name.as_bytes().to_vec(),
+                (_, Some((_, value))) if i >= CS_CODINFO_VALUE => value.as_bytes().to_vec(),
+                _ => Vec::new(),
+            }
+        });
+        let d = Rules::default();
+        assert_eq!(r.mantle_view_yawcap, 0.0);
+        assert_eq!(r.prone_yawcap, 360.0);
+        assert_eq!((r.friction, r.stopspeed), (d.friction, d.stopspeed));
+        assert_eq!(r.jump_height, 45.0);
+    }
 
     /// `new_events` on hand-built rings: the slots past the old sequence,
     /// a corrected slot inside the last four, the 8-bit wrap, and nothing

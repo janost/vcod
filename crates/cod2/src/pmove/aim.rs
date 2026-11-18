@@ -252,7 +252,8 @@ fn diff_track(target: f32, cur: f32, rate: f32, dt: f32) -> f32 {
 
 /// `DiffTrackAngle` (0x80a3d66): [`diff_track`] the short way round, then
 /// `AngleNormalize180`.
-fn diff_track_angle(mut target: f32, cur: f32, rate: f32, dt: f32) -> f32 {
+fn diff_track_angle(target: f32, cur: f32, rate: f32, dt: f32) -> f32 {
+    let mut target = vcod_common::fguard::near(target, cur);
     while target - cur > 180.0 {
         target -= 360.0;
     }
