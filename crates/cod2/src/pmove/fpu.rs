@@ -8,57 +8,14 @@
 
 use glam::Vec3;
 use vcod_common::fguard::turns;
+pub(crate) use vcod_common::x87::{
+    dot, dot2, length_stored as length, lerp_stored as lerp, ma_stored as ma,
+    normalize2_kept as normalize2, scale_stored as scale, sqrt_stored as sqrt,
+};
 
 #[inline]
 pub(crate) fn d(x: f32) -> f64 {
     f64::from(x)
-}
-
-/// `DotProduct` (0x80e9980): the sum stays on the stack.
-pub(crate) fn dot(a: Vec3, b: Vec3) -> f64 {
-    d(a.x) * d(b.x) + d(a.y) * d(b.y) + d(a.z) * d(b.z)
-}
-
-/// The two-axis dot (0x80e9740 and `PM_StepSlideMove`'s 0x80eae6e).
-pub(crate) fn dot2(a: Vec3, b: Vec3) -> f64 {
-    d(a.x) * d(b.x) + d(a.y) * d(b.y)
-}
-
-/// `VectorMA`: `a + s * b`, each component stored.
-pub(crate) fn ma(a: Vec3, s: f32, b: Vec3) -> Vec3 {
-    Vec3::new(
-        (d(a.x) + d(s) * d(b.x)) as f32,
-        (d(a.y) + d(s) * d(b.y)) as f32,
-        (d(a.z) + d(s) * d(b.z)) as f32,
-    )
-}
-
-/// `VectorScale`: `s * v`, each component stored.
-pub(crate) fn scale(v: Vec3, s: f32) -> Vec3 {
-    Vec3::new(
-        (d(s) * d(v.x)) as f32,
-        (d(s) * d(v.y)) as f32,
-        (d(s) * d(v.z)) as f32,
-    )
-}
-
-/// `Vec3Lerp` (0x80e129e): `a + (b - a) * f` per component, stored. What
-/// every pmove caller rebuilds a trace's end point with: CoD2's `trace_t`
-/// has no `endpos` (docs/research/cod2-movement.md 3).
-pub(crate) fn lerp(a: Vec3, b: Vec3, f: f32) -> Vec3 {
-    let l = |a: f32, b: f32| (d(a) + (d(b) - d(a)) * d(f)) as f32;
-    Vec3::new(l(a.x, b.x), l(a.y, b.y), l(a.z, b.z))
-}
-
-/// `I_sqrt` (0x80e9590): libc `sqrt` of the float argument widened to a
-/// double, stored back to a float.
-pub(crate) fn sqrt(x: f64) -> f32 {
-    d(x as f32).sqrt() as f32
-}
-
-/// `VectorLength` (0x80e99e8): the sum passed to [`sqrt`] as a float.
-pub(crate) fn length(v: Vec3) -> f32 {
-    sqrt(dot(v, v))
 }
 
 /// `VectorLengthSquared` (0x80e99b4), kept.
@@ -86,17 +43,6 @@ pub(crate) fn normalize_to(v: Vec3) -> (Vec3, f32) {
     } else {
         (n, len)
     }
-}
-
-/// `Vec2Normalize` (0x80a44c2) on x and y: each component times `1 / len`,
-/// the reciprocal kept.
-pub(crate) fn normalize2(x: f32, y: f32) -> (f32, f32) {
-    let len = sqrt(d(x) * d(x) + d(y) * d(y));
-    if len == 0.0 {
-        return (x, y);
-    }
-    let inv = 1.0 / d(len);
-    ((d(x) * inv) as f32, (d(y) * inv) as f32)
 }
 
 /// `AngleNormalize360` through the short grid (0x80a8432): `182.04445 * a`
@@ -189,18 +135,6 @@ pub(crate) fn angle_subtract(a: f32, b: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_lerp_rounds_once_per_component() {
-        let a = Vec3::new(1.0, 0.1, -3.0);
-        let b = Vec3::new(2.0, 0.3, 5.0);
-        let f = 0.3f32;
-        let p = lerp(a, b, f);
-        let x = (1.0f64 + (2.0f64 - 1.0) * f64::from(f)) as f32;
-        assert_eq!(p.x.to_bits(), x.to_bits());
-        assert_eq!(lerp(a, b, 1.0), b);
-        assert_eq!(lerp(a, b, 0.0), a);
-    }
 
     #[test]
     fn the_short_grid_truncates() {
