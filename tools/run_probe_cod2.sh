@@ -8,7 +8,7 @@
 #   COD2_DIR      the CoD2 1.3 install, holding main/ (required)
 #   COD2_LNXDED   the 1.3 Linux dedicated server binary (required)
 #   COD2_LIB      directory with libstdc++.so.5 (default
-#                 private/reference/cod-lnxded-1.5b/lib)
+#                 private/retail/cod-lnxded-1.5b/lib)
 #   COD2_HOME     server homepath (default private/homes/cod2-moves); the
 #                 gametype goes into its main/ as loose files, and
 #                 games_mp.log and console.log land there. No `+` in it: the
@@ -40,7 +40,7 @@ SCRIPT="${1:?usage: run_probe_cod2.sh <script> <map> <x> <y> <z> <yaw> <out>}"
 MAP="$2" X="$3" Y="$4" Z="$5" YAW="$6" OUT="$7"
 : "${COD2_DIR:?point COD2_DIR at the CoD2 1.3 install}"
 : "${COD2_LNXDED:?point COD2_LNXDED at cod2_lnxded}"
-LIB="$(realpath "${COD2_LIB:-private/reference/cod-lnxded-1.5b/lib}")"
+LIB="$(realpath "${COD2_LIB:-private/retail/cod-lnxded-1.5b/lib}")"
 HOMEP="$(realpath -m "${COD2_HOME:-private/homes/cod2-moves}")"
 PROBE="$PWD/target/debug/examples/move_probe"
 [ -x "$PROBE" ] || { echo "build move_probe first" >&2; exit 1; }
@@ -98,7 +98,14 @@ exit $status
 '
 # The fixture's header: what the gate needs (the map) and how to remake it.
 HOW="${RAND_TRACE:+RAND_TRACE=$RAND_TRACE }${GT:+GT=$GT }${SECOND:+SECOND=$SECOND }${PROBE_GSC:+PROBE_GSC=$PROBE_GSC }${PROBE_ARGS:+PROBE_ARGS='$PROBE_ARGS' }tools/run_probe_cod2.sh $SCRIPT $MAP $X $Y $Z $YAW <out>"
-sed -i "1i # map $MAP\\n# made by: $HOW (retail cod2_lnxded 1.3, pure, defaults${SRV:+, $SRV})" "$OUT"
+# Written with printf, not sed: the values may hold sed's own syntax.
+prepend() {
+  local tmp
+  tmp=$(mktemp "$1.XXXXXX")
+  { printf '# map %s\n# made by: %s\n' "$MAP" "$2"; cat "$1"; } > "$tmp"
+  mv "$tmp" "$1"
+}
+prepend "$OUT" "$HOW (retail cod2_lnxded 1.3, pure, defaults${SRV:+, $SRV})"
 if [ -n "${SECOND:-}" ] && [ -f "${OUT%.txt}-b.txt" ]; then
-  sed -i "1i # map $MAP\\n# made by: $HOW, the second client (retail cod2_lnxded 1.3, pure, defaults${SRV:+, $SRV})" "${OUT%.txt}-b.txt"
+  prepend "${OUT%.txt}-b.txt" "$HOW, the second client (retail cod2_lnxded 1.3, pure, defaults${SRV:+, $SRV})"
 fi

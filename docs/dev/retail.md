@@ -33,6 +33,10 @@ them on vcod.
   `client-probes/probe_*`) installed as the gametype and prints its `PROBE`
   lines. `COD_VERSION` picks the server as `run_server.sh` does (UO's
   gametypes and log live under the homepath's `uo/`).
+- The retail packages are not in the repo. `COD_LNXDED` names the server
+  binary (`COD2_LNXDED` for CoD2); unset, the scripts look in the gitignored
+  `private/retail/` (`cod-lnxded-1.1d/`, `cod-lnxded-1.5b/`,
+  `coduo-lnxded-1.51b/`, each with its `lib/`).
 - A worktree has no `private/` (it is gitignored): link the main checkout's
   in.
 - Without `COD_LNXDED_HOME` both scripts run in a homepath of the port's own,
