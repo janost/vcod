@@ -1224,3 +1224,78 @@ fn a_cod2_attachments_tag_reaches_the_client_before_its_snapshot() {
     let aborts = sv.game.level.as_ref().unwrap().rt.aborts();
     assert!(aborts.is_empty(), "{}", aborts.join("\n"));
 }
+
+/// A `stopLoopSound` keeps a `script_origin` on the wire 300 ms of frame
+/// time (cod2-protocol.md 15.7), however long the server took to start
+/// (BUG-021: the stamp expired against the wall clock).
+#[test]
+fn a_cod2_broadcast_stamp_expires_on_the_frame_clock() {
+    let Some(fs) = vcod_common::testing::cod2_fs() else {
+        return;
+    };
+    let mut cfg = cfg("mp_toujane");
+    cfg.gametype_script = Some((
+        "maps/mp/gametypes/dm".into(),
+        "main() { maps\\mp\\gametypes\\_callbacksetup::SetupCallbacks(); \
+         level.callbackStartGameType = ::start; }\n\
+         start() { level.o = spawn(\"script_origin\", (0, 0, 0)); \
+         level.onum = level.o getEntityNumber(); }\n"
+            .into(),
+    ));
+    let now = Instant::now();
+    let mut sv = Cod2Server::new(cfg, 7, now);
+    sv.load(Some(Rc::new(fs))).unwrap();
+    sv.tick_frames(now, 2);
+    // A slow start: the wall clock is a minute ahead of the frame clock.
+    sv.game.start = now - Duration::from_secs(60);
+    let level = sv.game.level.as_mut().unwrap();
+    let n: u32 = level.rt.level_field_str("onum").parse().unwrap();
+    let id = level.rt.host.ents.handle(n).unwrap();
+    let stamp = level.rt.host.level_time_ms + 300;
+    level.rt.host.ents.get_mut(id).unwrap().broadcast_time = stamp;
+    for _ in 0..6 {
+        assert!(
+            sv.world_entities().contains_key(&n),
+            "at {}",
+            sv.core.sv_time_ms
+        );
+        sv.tick_frames(now, 1);
+    }
+    assert_eq!(sv.core.sv_time_ms, stamp);
+    assert!(sv.world_entities().contains_key(&n));
+    sv.tick_frames(now, 1);
+    assert!(!sv.world_entities().contains_key(&n));
+}
+
+/// `addTestClient` searches `sv_maxclients` slots, not the level's 64: with
+/// two slots the third call is undefined (BUG-041: slot 2 panicked the
+/// engine's install).
+#[test]
+fn a_cod2_test_client_past_sv_maxclients_is_undefined() {
+    let Some(fs) = vcod_common::testing::cod2_fs() else {
+        return;
+    };
+    let mut cfg = cfg("mp_toujane");
+    cfg.max_clients = 2;
+    cfg.gametype_script = Some((
+        "maps/mp/gametypes/dm".into(),
+        "main() { maps\\mp\\gametypes\\_callbacksetup::SetupCallbacks(); \
+         level.callbackStartGameType = ::start; \
+         level.callbackPlayerConnect = ::nop; \
+         level.callbackPlayerDisconnect = ::nop; }\n\
+         start() { level thread add(); }\n\
+         add() { wait 4; a = addTestClient(); b = addTestClient(); \
+         c = addTestClient(); level.third = isDefined(c); \
+         level.second = isDefined(b); }\n\
+         nop() {}\n"
+            .into(),
+    ));
+    let now = Instant::now();
+    let mut sv = Cod2Server::new(cfg, 7, now);
+    sv.load(Some(Rc::new(fs))).unwrap();
+    sv.tick_frames(now, 100);
+    let level = sv.game.level.as_mut().unwrap();
+    assert_eq!(level.rt.level_field_str("second"), "1");
+    assert_eq!(level.rt.level_field_str("third"), "0");
+    assert!(sv.core.clients.iter().all(Option::is_some));
+}

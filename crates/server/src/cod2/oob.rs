@@ -222,7 +222,7 @@ impl Cod2Server {
         if self.refuse_banned(from) {
             return;
         }
-        let (svs, xor) = (self.core.sv_time_ms, self.svs_time_ms());
+        let (svs, xor) = (self.core.sv_time_ms, self.wall_ms());
         let rng = &mut self.core.rng;
         // Retail's process has one `rand()`: a level's challenge draws come
         // off the game's stream (cod2-combat.md 9.6).

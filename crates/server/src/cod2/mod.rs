@@ -1023,7 +1023,7 @@ impl Cod2Server {
     /// votes and the rest (`Cod2Level::client_command`), in retail's
     /// compare order (cod2-protocol.md 3.4.1).
     fn game_command(&mut self, slot: usize, args: &[String], text: &str) {
-        let svs = self.svs_time_ms();
+        let svs = self.core.sv_time_ms;
         let Some(level) = self.game.level.as_mut() else {
             return;
         };
@@ -1466,7 +1466,9 @@ impl Cod2Server {
     /// The frame's entities before any client's cull
     /// ([`Cod2Level::world_entities`]).
     fn world_entities(&mut self) -> BTreeMap<u32, (EntityState, bool)> {
-        let svs = self.svs_time_ms();
+        // `r.broadcastTime` is stamped on level time, so it expires on the
+        // frame clock (cod2-protocol.md 15.7).
+        let svs = self.core.sv_time_ms;
         match self.game.level.as_mut() {
             Some(level) => level.world_entities(svs),
             None => BTreeMap::new(),
@@ -1568,20 +1570,25 @@ impl Cod2Server {
             c.bot = true;
             c.state = State::Active;
             c.extra.test = true;
-            self.core.clients[slot] = Some(c);
+            let Some(free) = self.core.clients.get_mut(slot) else {
+                log::warn!("cod2: test client {name} past sv_maxclients in slot {slot}");
+                continue;
+            };
+            *free = Some(c);
             log::info!("cod2: test client {name} in slot {slot}");
         }
     }
 
-    /// Seconds since the server started, `svs.time`.
-    fn svs_time_ms(&self) -> i32 {
+    /// Wall milliseconds since the server started, which only salt the
+    /// challenge; `svs.time` is `core.sv_time_ms`.
+    fn wall_ms(&self) -> i32 {
         if self.game.frame_clock {
             return self.core.sv_time_ms;
         }
         self.game.start.elapsed().as_millis() as i32
     }
 
-    /// `svs.time` on the frame clock instead of the wall's, so a harness
+    /// The challenge's salt on the frame clock instead of the wall's, so a harness
     /// that runs frames faster than real time sends the same bytes each
     /// run (`bot_match`'s `NETDIGEST`).
     pub fn test_frame_clock(&mut self) {

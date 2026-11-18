@@ -89,14 +89,20 @@ pub fn add_test_client(
                 .and_then(|id| host.ents.get(id))
                 .is_some_and(|e| e.client.is_some())
     };
-    let Some(slot) = (0..host.client_roster.len()).find(|&s| !taken(host, s)) else {
+    // `SV_AddTestClient` searches `sv_maxclients` slots; CoD2's roster is
+    // always 64 long.
+    let slots = match host.cvars.get("sv_maxclients").parse::<usize>() {
+        Ok(n) if n > 0 => n.min(host.client_roster.len()),
+        _ => host.client_roster.len(),
+    };
+    let Some(slot) = (0..slots).find(|&s| !taken(host, s)) else {
         return Ok(Value::Undefined);
     };
     let port = host.test_clients.counter;
     host.test_clients.counter += 1;
     // `sv_reconnectlimit`'s 3 s default, against `lastConnectTime` 0.
     let udp = host.test_clients.udp_slots;
-    let never_used = (0..host.client_roster.len()).any(|s| udp & (1 << s) == 0);
+    let never_used = (0..slots).any(|s| udp & (1 << s) == 0);
     if port == 0 && host.test_clients.svs_time_ms < 3000 && never_used {
         return Ok(Value::Undefined);
     }
