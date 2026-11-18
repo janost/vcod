@@ -423,7 +423,7 @@ fn get_ammo_count(
     };
     let c4 = host.cod4();
     let l = &c4.clients[slot].loadout;
-    if l.weapons[w / 32] & (1 << (w % 32)) == 0 {
+    if !l.has(w) {
         return Ok(Value::Int(0));
     }
     let d = &c4.table.defs[w];

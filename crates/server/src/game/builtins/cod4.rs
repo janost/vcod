@@ -642,6 +642,15 @@ pub fn register_weapon(host: &mut GameHost, name: &str) -> Result<usize, ErrorKi
     if let Some(i) = c4.weapons.iter().position(|w| w == name) {
         return Ok(i + 1);
     }
+    // The held bits and the 128-slot ammo arrays end at weapon 127; past
+    // it vcod refuses with its own error (retail's limit is not recorded).
+    if c4.weapons.len() + 1 >= crate::game::cod4::MAX_WEAPONS {
+        return Err(ErrorKind::Custom(format!(
+            "too many weapons registered: {name} would be weapon {}, the limit is {}",
+            c4.weapons.len() + 1,
+            crate::game::cod4::MAX_WEAPONS - 1
+        )));
+    }
     c4.weapons.push(name.to_string());
     let index = c4.weapons.len();
     let def = c4
@@ -1016,4 +1025,35 @@ pub fn placed_spawn(
     let down = start - glam::Vec3::new(0.0, 0.0, 262_144.0);
     let placed = lerp(start, down, trace(start, down).fraction);
     (placed, trace(placed, placed).startsolid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Weapon 127 is the last the held bits and the 128-slot ammo arrays
+    /// hold: the 128th registration is a script error, and 127 can be
+    /// given and counted.
+    #[test]
+    fn a_cod4_level_registers_at_most_127_weapons() {
+        let mut host = GameHost::new(
+            &crate::game::profile::COD4,
+            vec![String::new(); crate::game::cod4::MAX_CONFIGSTRINGS],
+        );
+        let max = crate::game::cod4::MAX_WEAPONS - 1;
+        for i in 1..=max {
+            assert_eq!(register_weapon(&mut host, &format!("w{i}_mp")), Ok(i));
+        }
+        assert!(matches!(
+            register_weapon(&mut host, "one_too_many_mp"),
+            Err(ErrorKind::Custom(_))
+        ));
+        assert_eq!(register_weapon(&mut host, "w7_mp"), Ok(7));
+        let c4 = host.cod4();
+        let d = c4.table.get(max).unwrap();
+        assert!(d.ammo_slot < 128 && d.clip_slot < 128);
+        let mut l = crate::game::cod4::weapons::Loadout::default();
+        assert!(l.give(&c4.table, max, 0).is_some());
+        assert!(l.has(max));
+    }
 }
