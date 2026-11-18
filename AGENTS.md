@@ -51,10 +51,10 @@ the retail 1.1d Linux server and its homepaths, old plans) and `tmp/`
 
 ### Dependency rules
 
-- `common` imports no wgpu, winit or kira. Check with `cargo tree -p
-  vcod-common -e normal --depth 1`.
+- `common` imports no wgpu, winit or kira.
 - `cod2` and `cod4` depend on `common` only among vcod's crates, and on no
-  wgpu, winit or kira either.
+  wgpu, winit or kira either. `cargo deny check` (`deny.toml`, run in CI)
+  enforces the wgpu, winit and kira half of these two rules.
 - `gsc` depends on neither `common` nor the client: `cargo tree -p vcod-gsc
   -e normal` lists only `anyhow` and `log`. `vcod-common` is a gsc
   dev-dependency for the corpus tests.
@@ -109,6 +109,7 @@ Before a commit, run what CI runs:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo deny check   # after a dependency change
 ```
 
 - Set `COD_DIR` (absolute) for the suite. Tests that need paks go through

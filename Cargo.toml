@@ -24,7 +24,8 @@ ctrlc = { version = "3", features = ["termination"] }
 env_logger = "0.11"
 glam = "0.33"
 image = { version = "0.25", default-features = false, features = ["tga", "jpeg"] }
-kira = { version = "0.12", default-features = false, features = ["cpal", "mp3", "wav", "pcm"] }
+# kira 0.12.6 moved to glam 0.34, a second glam beside the workspace's 0.33.
+kira = { version = "=0.12.5", default-features = false, features = ["cpal", "mp3", "wav", "pcm"] }
 log = "0.4"
 # CoD4 voice chat: the microphone (kira already builds cpal) and libspeex,
 # opened at run time (client cod4_voice.rs).
@@ -35,7 +36,7 @@ symphonia = { version = "0.6", default-features = false, features = ["mp3", "wav
 pollster = "1"
 winit = "0.30"
 wgpu = "30"
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 tempfile = "3"
 vcod-common = { path = "crates/common" }
 vcod-gsc = { path = "crates/gsc" }

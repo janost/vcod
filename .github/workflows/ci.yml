@@ -5,9 +5,12 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+  # Weekly advisory scan; see the deny job.
+  schedule:
+    - cron: "0 6 * * 1"
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 env:
@@ -15,6 +18,7 @@ env:
 
 jobs:
   check:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -41,3 +45,15 @@ jobs:
       # protocol and logic suite, plus the committed net captures.
       - name: Test
         run: cargo test --workspace
+
+  # deny.toml: licences, the layering bans and sources on every run;
+  # advisories only on the weekly schedule, so a new advisory does not
+  # block an unrelated merge.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: EmbarkStudios/cargo-deny-action@70f81531115945ba6eb6b941ec9d39d063438eb9 # v2.1.2
+        with:
+          command: check ${{ github.event_name == 'schedule' && 'advisories' || 'bans licenses sources' }}
