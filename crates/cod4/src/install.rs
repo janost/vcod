@@ -175,11 +175,6 @@ impl Install {
         out
     }
 
-    /// The install `$COD4_DIR` names; `None` when unset or not an install.
-    pub fn from_env() -> Option<Self> {
-        Self::at(std::env::var_os(ENV)?)
-    }
-
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -345,7 +340,7 @@ mod tests {
 
     #[test]
     fn code_strings_hold_the_cd_key_refusals() {
-        let Some(install) = super::Install::from_env() else {
+        let Some(install) = crate::testing::cod4_install() else {
             return;
         };
         let s = install.code_strings("english").unwrap();

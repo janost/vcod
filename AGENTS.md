@@ -113,7 +113,9 @@ cargo test --workspace
 
 - Set `COD_DIR` (absolute) for the suite. Tests that need paks go through
   `vcod_common::testing::game_fs()` and pass vacuously without it.
-  `COD2_DIR` and `COD4_DIR` do the same for their games.
+  `COD2_DIR` and `COD4_DIR` do the same for their games. Set to a relative
+  path or one that is no install, they panic. `VCOD_REQUIRE_INSTALL` turns
+  the skip into a failure: `docs/dev/testing.md`.
 - The suite is green under each install. `COD_DIR` at a 1.1 install runs the
   1.1 tests and gates; at a UO install (`uo/` beside 1.5's `main/`) the UO
   ones and whatever reads only data the two share. Which helper a test takes

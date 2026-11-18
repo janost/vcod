@@ -3,21 +3,109 @@
 
 use crate::net::protocol::{PROTOCOL_V1, install_protocol};
 use crate::pk3::Pk3Fs;
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::ffi::OsString;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
-/// `$COD_DIR`, else the test binary's directory, which never holds the game.
-pub fn game_dir() -> PathBuf {
-    crate::game_dir::default_game_dir()
+/// Comma list of installs whose absence fails a test instead of skipping it.
+pub const REQUIRE: &str = "VCOD_REQUIRE_INSTALL";
+
+/// The names [`REQUIRE`] takes: `cod1` is `COD_DIR` set, `cod11` a 1.1
+/// install there, `uo` a `uo/` beside its `main/`.
+const INSTALLS: [&str; 6] = ["cod1", "cod11", "uo", "cod2", "cod4", "cod4_lnxded"];
+
+/// What an install env var names.
+#[derive(Debug, PartialEq)]
+enum Root {
+    /// Unset or empty: CI's case.
+    Unset,
+    Found(PathBuf),
+    /// Set but unusable, and why.
+    Bad(String),
 }
 
-/// `None` when the game is not installed; callers return early so the run
-/// stays green.
-pub fn game_fs() -> Option<Pk3Fs> {
-    let dir = game_dir().join("main");
-    if !dir.is_dir() {
-        return None;
+fn resolve_root(var: &str, value: Option<OsString>, sub: &str) -> Root {
+    let Some(value) = value.filter(|v| !v.is_empty()) else {
+        return Root::Unset;
+    };
+    let root = PathBuf::from(value);
+    if !root.is_absolute() {
+        return Root::Bad(format!(
+            "{var}={} is relative; tests run in their crate's directory, so set an absolute path",
+            root.display()
+        ));
     }
-    Pk3Fs::open(&dir).ok()
+    if !root.join(sub).is_dir() {
+        return Root::Bad(format!("{var}={} has no {sub}/ directory", root.display()));
+    }
+    Root::Found(root)
+}
+
+/// Whether `list` (the value of [`REQUIRE`]) names `game`; panics on a name
+/// it does not know, so a typo cannot turn the switch off.
+fn requires(list: Option<&str>, game: &str) -> bool {
+    let Some(list) = list else { return false };
+    let names: Vec<&str> = list
+        .split(',')
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .collect();
+    if let Some(bad) = names.iter().find(|n| !INSTALLS.contains(n)) {
+        panic!("{REQUIRE}={list}: unknown install {bad:?}; known: {INSTALLS:?}");
+    }
+    names.contains(&game)
+}
+
+/// `$var`'s root, holding `sub/`. `None` when unset, so CI (no game data)
+/// passes; panics when the var is set to a relative path or one without
+/// `sub/`, which used to make every test that needs it pass vacuously.
+pub fn install_root(var: &str, game: &str, sub: &str) -> Option<PathBuf> {
+    match resolve_root(var, std::env::var_os(var), sub) {
+        Root::Found(root) => Some(root),
+        Root::Bad(why) => panic!("{why}"),
+        Root::Unset => {
+            skip(game, &format!("{var} is unset"));
+            None
+        }
+    }
+}
+
+/// Called where a test returns early for want of `game`: panics when
+/// [`REQUIRE`] names it, else says so on stderr once per `why` and binary.
+pub fn skip(game: &str, why: &str) {
+    if requires(std::env::var(REQUIRE).ok().as_deref(), game) {
+        panic!("{why}, and {REQUIRE} names {game}");
+    }
+    static SEEN: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+    if SEEN.lock().unwrap().insert(why.to_string()) {
+        let line = format!(
+            "vcod testing: {why}, so the tests that need it return early ({REQUIRE} fails them)\n"
+        );
+        // One write to the handle: libtest swallows a passing test's eprintln!.
+        let _ = std::io::stderr().write_all(line.as_bytes());
+    }
+}
+
+/// `fs` opened from `dir`, or a panic naming `dir`: the var that named it
+/// is set, so an open error or an empty search path is a broken install.
+fn opened(dir: &Path, fs: anyhow::Result<Pk3Fs>) -> Pk3Fs {
+    let fs = fs.unwrap_or_else(|e| panic!("{}: {e:#}", dir.display()));
+    assert!(fs.paks().next().is_some(), "{}: no paks", dir.display());
+    fs
+}
+
+/// `$COD_DIR` once checked as [`install_root`] does, else the test binary's
+/// directory, which never holds the game.
+pub fn game_dir() -> PathBuf {
+    install_root("COD_DIR", "cod1", "main").unwrap_or_else(crate::game_dir::default_game_dir)
+}
+
+/// `None` without `COD_DIR`; callers return early so the run stays green.
+pub fn game_fs() -> Option<Pk3Fs> {
+    let dir = install_root("COD_DIR", "cod1", "main")?.join("main");
+    Some(opened(&dir, Pk3Fs::open(&dir)))
 }
 
 /// A CoD2 install's stock `main/` iwds ([`Pk3Fs::open_iwd_stock`]), from
@@ -25,46 +113,61 @@ pub fn game_fs() -> Option<Pk3Fs> {
 /// The CoD2 tests assert stock 1.3 (its gametype and map scripts, retail's
 /// `sv_iwdNames`), which a map pack's iwd in `main/` would override.
 pub fn cod2_fs() -> Option<Pk3Fs> {
-    let dir = PathBuf::from(std::env::var_os("COD2_DIR")?).join("main");
-    if !dir.is_dir() {
-        return None;
-    }
-    Pk3Fs::open_iwd_stock(&dir).ok()
+    let dir = install_root("COD2_DIR", "cod2", "main")?.join("main");
+    Some(opened(&dir, Pk3Fs::open_iwd_stock(&dir)))
 }
 
-/// [`game_fs`] when the install is 1.1's, `None` at a 1.5 or UO install
-/// (UO's `main/` is 1.5's, `install_protocol`): tests that assert 1.1's
-/// assets or replay a 1.1 retail capture take their paks from here.
+/// `fs` when it is 1.1's install, else `None` (UO's `main/` is 1.5's,
+/// `install_protocol`).
+fn only_11(fs: Option<Pk3Fs>) -> Option<Pk3Fs> {
+    let is_11 =
+        |fs: &Pk3Fs| install_protocol(fs).transport.version == PROTOCOL_V1.transport.version;
+    match fs {
+        Some(fs) if is_11(&fs) => Some(fs),
+        Some(_) => {
+            skip("cod11", "COD_DIR is not a 1.1 install");
+            None
+        }
+        None => {
+            skip("cod11", "COD_DIR is unset");
+            None
+        }
+    }
+}
+
+/// [`game_fs`] when the install is 1.1's, `None` at a 1.5 or UO install:
+/// tests that assert 1.1's assets or replay a 1.1 retail capture take their
+/// paks from here.
 pub fn game_fs_11() -> Option<Pk3Fs> {
-    let fs = game_fs()?;
-    (install_protocol(&fs).transport.version == PROTOCOL_V1.transport.version).then_some(fs)
+    only_11(game_fs())
 }
 
 /// [`game_fs`] with the install's stock paks alone (`--vanilla`,
 /// [`Pk3Fs::open_search`]): tests that assert the stock assets take it, so
 /// a third-party pak in `main/` cannot move them.
 pub fn stock_fs() -> Option<Pk3Fs> {
-    let dir = game_dir().join("main");
-    if !dir.is_dir() {
-        return None;
-    }
-    Pk3Fs::open_search(&dir, None, None, true).ok()
+    let dir = install_root("COD_DIR", "cod1", "main")?.join("main");
+    Some(opened(&dir, Pk3Fs::open_search(&dir, None, None, true)))
 }
 
 /// [`stock_fs`] when the install is 1.1's, as [`game_fs_11`].
 pub fn stock_fs_11() -> Option<Pk3Fs> {
-    let fs = stock_fs()?;
-    (install_protocol(&fs).transport.version == PROTOCOL_V1.transport.version).then_some(fs)
+    only_11(stock_fs())
 }
 
 /// United Offensive's `uo/` over its sibling `main/`, `None` unless the
 /// install is UO's: the UO gates run only with `COD_DIR` at one.
 pub fn uo_fs() -> Option<Pk3Fs> {
-    let dir = game_dir().join("uo");
+    let Some(root) = install_root("COD_DIR", "cod1", "main") else {
+        skip("uo", "COD_DIR is unset");
+        return None;
+    };
+    let dir = root.join("uo");
     if !dir.is_dir() {
+        skip("uo", "COD_DIR has no uo/");
         return None;
     }
-    Pk3Fs::open(&dir).ok()
+    Some(opened(&dir, Pk3Fs::open(&dir)))
 }
 
 /// `maps/mp/mp_pavlov.bsp` from the retail paks.
@@ -351,4 +454,41 @@ pub fn pk3_with(entries: &[(&str, &[u8])]) -> Vec<u8> {
         w.write_all(bytes).unwrap();
     }
     w.finish().unwrap().into_inner()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_install_var_resolves_only_to_an_absolute_root_holding_its_subdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("main")).unwrap();
+        let at = |v: &str| resolve_root("COD_DIR", Some(v.into()), "main");
+        assert_eq!(resolve_root("COD_DIR", None, "main"), Root::Unset);
+        assert_eq!(at(""), Root::Unset);
+        assert_eq!(
+            at(tmp.path().to_str().unwrap()),
+            Root::Found(tmp.path().into())
+        );
+        let bad = |v: &str| match at(v) {
+            Root::Bad(why) => why,
+            r => panic!("{v}: {r:?}"),
+        };
+        assert!(bad("Games/CoD11").starts_with("COD_DIR=Games/CoD11 is relative"));
+        let missing = tmp.path().join("nope");
+        assert!(bad(missing.to_str().unwrap()).ends_with("has no main/ directory"));
+        let zone = resolve_root("COD4_DIR", Some(tmp.path().into()), "zone");
+        assert!(matches!(zone, Root::Bad(why) if why.starts_with("COD4_DIR=")));
+    }
+
+    #[test]
+    fn the_require_switch_names_installs_and_refuses_a_typo() {
+        assert!(!requires(None, "cod1"));
+        assert!(requires(Some("cod1, uo"), "uo"));
+        assert!(!requires(Some("cod1,uo"), "cod2"));
+        assert!(!requires(Some(""), "cod1"));
+        let typo = std::panic::catch_unwind(|| requires(Some("cod1,cod 2"), "cod1"));
+        assert!(typo.is_err());
+    }
 }
