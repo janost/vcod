@@ -107,9 +107,15 @@ Before a commit, run what CI runs:
 ```
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace --lib --bins --tests
 cargo deny check   # after a dependency change
 ```
+
+`--lib --bins --tests` leaves out the 39 examples, a GB of links that
+clippy's `--all-targets` already compiles. `tools/gate.sh [area...]` runs
+the first three once per install the environment names (`COD_DIR`,
+`COD_UO_DIR`, `COD2_DIR`, `COD4_DIR`) and then the ignored gates of each
+area; its header lists them.
 
 - Set `COD_DIR` (absolute) for the suite, and `COD2_DIR` and `COD4_DIR` for
   their games. A test that needs an install passes vacuously when its
@@ -124,7 +130,7 @@ cargo deny check   # after a dependency change
   `mod` line. The client's tests live in its binary: `cargo test -p vcod
   --bins`.
 - Some gates are `#[ignore]`d for their cost. Run the one for your area when
-  you touch it.
+  you touch it (`tools/gate.sh nav`, `bots`, `render`, `cod2`, `cod4`).
 
 Which fixture helper a test takes, which gates need which install, the
 ignored gates with their commands and costs, and the nightly build:

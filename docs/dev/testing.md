@@ -74,6 +74,18 @@ picks through `Server::pin_spawns`, as `gametypes_ab` does.
   vehicle_ab::`). The client's tests live in its binary: `cargo test -p
   vcod --bins`.
 
+## The gate runner
+
+`tools/gate.sh [area...]` runs fmt, clippy and the suite at each install
+the environment names: `COD_DIR` (1.1) with `COD2_DIR` and `COD4_DIR`,
+then the server suite again at `COD_UO_DIR` (a stock-only UO tree) with
+`COD4_DIR` unset. It sets `VCOD_REQUIRE_INSTALL` to match, so no install
+test can skip. Each area adds the ignored gates of one row group below:
+`nav`, `bots`, `render` (`LVP_ICD` points it at lavapipe), `cod2`, `cod4`.
+A step passes only on `test result: ok` lines that ran tests. `CARGO_WRAP`
+puts each cargo run under a wrapper (a memory-capped scope), `DRY=1`
+prints the commands.
+
 ## Ignored tests: when to run them
 
 | Touching | Run | Cost |
