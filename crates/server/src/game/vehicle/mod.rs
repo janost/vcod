@@ -774,9 +774,20 @@ pub fn free(host: &mut GameHost, id: EntId) {
 }
 
 /// `G_FreeVehicle`'s record half: the pool slot and the sound blends go.
+/// Each rider is put out where he sits, so his sim does not keep a seat on
+/// a freed number (coduo-vehicles.md 17.4).
 fn free_record(host: &mut GameHost, id: EntId) -> Option<Vehicle> {
     let v = host.vehicles.live.remove(&id)?;
     host.vehicles.slots[v.slot] = None;
+    for slot in v.seats.into_iter().flatten() {
+        host.vehicles.stale_seated.remove(&slot);
+        host.vehicles.riders.remove(&slot);
+        host.vehicles.seat_ops.push(seat::SeatOp::Exit {
+            slot,
+            origin: None,
+            velocity: None,
+        });
+    }
     for b in v.blends.into_iter().flatten() {
         host.free_entity(b);
     }
@@ -1468,6 +1479,30 @@ mod tests {
             rider_damage(KIND_FOUR_WHEEL, 1, TANK, Some(SHOOTER), 40, 0),
             Some(40)
         );
+    }
+
+    /// Freeing an occupied vehicle puts each rider out where he sits: his
+    /// sim gets a forced exit and no seat clock or stale seat bit stays.
+    #[test]
+    fn freeing_a_vehicle_puts_its_riders_out() {
+        let mut host = GameHost::new(&crate::game::profile::COD1_UO, vec![String::new(); 2048]);
+        let mut v = Vehicle::for_test(0);
+        v.seats[1] = Some(3);
+        v.seats[2] = Some(5);
+        host.vehicles.slots[0] = Some(TANK);
+        host.vehicles.live.insert(TANK, v);
+        host.vehicles.riders.insert(3, seat::RiderClock::default());
+        host.vehicles.stale_seated.insert(5);
+        free(&mut host, TANK);
+        let exit = |slot| seat::SeatOp::Exit {
+            slot,
+            origin: None,
+            velocity: None,
+        };
+        assert_eq!(host.vehicles.seat_ops, vec![exit(3), exit(5)]);
+        assert!(host.vehicles.riders.is_empty());
+        assert!(host.vehicles.stale_seated.is_empty());
+        assert_eq!(host.vehicles.seat_of(3), None);
     }
 
     #[test]
