@@ -1,3 +1,6 @@
+//! Contains routines ported from the RTCW-MP GPL source, Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company.
+//! See NOTICE.
+//!
 //! The game-neutral material the renderer draws: sort key, surface bits,
 //! cull, depth bias, per-stage blend, depth and alpha-test state, texture
 //! bindings by semantic, the colour and texture-coordinate generators and

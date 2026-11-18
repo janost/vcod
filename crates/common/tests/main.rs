@@ -5,6 +5,7 @@ mod cod2_iwd_iwi;
 mod cod2_wavelet;
 mod evidence_labels;
 mod gunskel_ab;
+mod notice_ports;
 mod shader_corpus;
 mod skel11_ab;
 mod slope_seams;
