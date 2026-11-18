@@ -2,7 +2,7 @@
 
 use super::material::{Image, image};
 use super::{Id, asset, push};
-use crate::walk::{Handle, W};
+use crate::walk::{Handle, W, product};
 use crate::zone::{Block, Pointer};
 use anyhow::Result;
 use std::io::BufRead;
@@ -102,7 +102,7 @@ pub fn string_table<R: BufRead>(
         let (columns, rows) = (s.u32(4), s.u32(8));
         let mut values = Vec::new();
         if w.inline_only(s.ptr(12), 4)? {
-            values = w.xstring_array(4, (columns * rows) as usize)?;
+            values = w.xstring_array(4, product(&[columns as usize, rows as usize])?)?;
         }
         w.pop()?;
         Ok(push(
