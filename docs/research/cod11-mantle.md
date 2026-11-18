@@ -2588,15 +2588,20 @@ vcod: `pmove.rs` has no swim and no water jump, and `air_move` runs
 | 0x02 | CROUCH | 0x34590 pattern |
 | 0x04 | the prone dive, set by a prone press on a moving player; read by viewheight-lerp timing | 0x31CD5, 0x345C9 ("Going prone") |
 | 0x10 | LADDER | set at 0x33937, cleared at 0x3377C/0x2ED7A |
-| 0x80 | affects ladder-anim speed-scale choice | 0x323D7 |
+| 0x80 | the ADS walk ("The wish speed"); also picks the ladder anim's speed scale | set @0x336DD, clear @0x3369D, read at 0x323D7 |
 | 0x08 | held-jump latch: set by a jump, cleared when `upmove` <= 9 | set @0x2EC36, clear @0x34135, tested at 0x2EC0D ("Jumps") |
 | 0x20 | ADS held (blocks the prone dive); set/cleared by PM_UpdateAimDownSightFlag | set @0x372A4/0x372B7, clear @0x3ABDC, tested at 0x31CCB |
 | 0x800 | Q3's `PMF_RESPAWNED`: set at spawn, cleared once attack is up; refuses a jump | set @0x429D6, clear @0x34000, tested at 0x2EBBE |
 | 0x2000 | 200 ms landing lockout after a jump; refuses a jump, never arms ("Jumps") | set @0x2FFE0, tested at 0x2EBC3 |
+| 0x100 | quarters the walk's accel ("The walk's accel floor") | tested at 0x2F4D8 |
+| 0x200 | the walk's accel takes 1.0 ("The walk's accel floor") | tested at 0x2F492..0x2F4A8 |
+| 0x4000 | zeroes the cmd's moves and buttons ("`pm_flags` 0x4000") | tested at 0x33E38 |
+| 0x8000 | prone blocked ("Prone Blocked, `pm_flags` 0x8000") | set at 0x331C4 |
 
 (`PMF_PRONE`, `PMF_CROUCH`, `PMF_LADDER`, `PMF_SLIDING=0x100` agree with
 CoDExtended's `shared.h`; bits 0x04/0x08/0x80/0x800/0x2000 are INFERRED from
-usage sites only.)
+usage sites only. The 0x100, 0x200, 0x4000 and 0x8000 rows restate the
+sections they name, under those sections' labels.)
 
 ## Tunables (all read directly from rodata, VERIFIED values)
 

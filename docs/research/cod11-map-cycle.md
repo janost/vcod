@@ -1416,7 +1416,9 @@ Two runs, both on `mp_carentan`:
   against `--probe-team axis --probe-target --save-roundrestart` and
   `--probe-team allies --save-roundrestart`. It spans three round restarts.
   Neither probe reached a team (8.3), so it measured the restart the round
-  clock drives, not the one an elimination does.
+  clock drives, not the one an elimination does. 8.3's cause is closed
+  since, and 8.1's last bullet reads two elimination restarts off the `sd`
+  fixtures.
 
 ### 8.1 What matches
 
@@ -1603,10 +1605,10 @@ by the frame's pass, not resumed on the previous frame's clock, which
 `probe_notify_frame` measures (`cod11-gsc-language.md`, the thread pick
 paragraph).
 
-So the `sd` half is still unmeasured against retail: the elimination-driven
-restart, the team scores, the win announcements and the weapons a client
-keeps across a restart need a fresh capture now that the menu is
-answerable.
+The elimination restart's timing is read off the `sd` fixtures (8.1, last
+bullet) and gated by `roundrestart_ab`. The team scores, the win
+announcements and the weapons a client keeps across a restart are still
+unmeasured against retail.
 
 The `dm` rotation was two maps and never wrapped, so the wrap back to the
 first entry is measured by the gate, not by a capture.

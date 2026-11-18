@@ -574,14 +574,14 @@ VERIFIED (measured 2026-10-18, `nav_build`, release, user time on a loaded machi
 | `MIN_WALK_NORMAL` | 0.7 | `bg_local.h` (steeper than about 45.6 degrees is not ground) |
 | `MAX_CLIP_PLANES` | 8 | game.mp 0x34a1c: `PM_SlideMove` clears the velocity once `numplanes > 7`; Q3 has 5, and four bumps from two starting planes never reach 8 |
 | `SURFACE_CLIP_EPSILON` | 0.125 | `qcommon/cm_local.h` |
-| `MAX_FRAME_MS` | 66 | `bg_pmove.c` pmove msec clamp |
+| `MAX_FRAME_MS` | 66 | `bg_pmove.c` pmove msec clamp; retail's chop at 0x344d3 (`../protocol-1.1.md`, "How long a cmd is simulated for") |
 | `HALF_WIDTH` | 15 | CoD bbox `(-15, -15, 0)..(15, 15, height)` |
 | `HEIGHT_STAND / CROUCH / PRONE` | 70 / 50 / 30 | CoD |
-| `VIEW_STAND / CROUCH / PRONE` | 60 / 40 / 11 | CoD viewheights; `standViewHeight = 60` is corroborated in `player-model-anim-system.md` |
+| `VIEW_STAND / CROUCH / PRONE` | 60 / 40 / 11 | CoD viewheights; retail's `bg_viewheight_standing`, `_crouched`, `_prone` defaults in the server cvar mirror (`cod11-server-handshake.md`, CS 150-152); `standViewHeight = 60` is corroborated in `player-model-anim-system.md` |
 | `LEAN_TIME_TO_MS` | 350 | game.mp rodata 0x70c60, `PM_UpdateLean`'s ramp out ("Lean" below). The 2026-09-01 live capture reads `leanf` climbing 0.1429 a snapshot, 50/350 |
 | `LEAN_TIME_FROM_MS` | 280 | game.mp rodata 0x70c5c, the ramp back ("Lean" below). The retail server eases `leanf` back to 0: the 2026-10-09 `probe_freeze` motion run reads -1, 0, 1 across `lean_left`, `center`, `lean_right` |
 
-The full rodata table is `cod11-mantle.md`, "Tunables".
+The full rodata table is `cod11-mantle.md`, "Tunables". A row whose origin is a Q3 or RTCW-MP header, or bare "CoD", with no retail address is not read out of retail: INFERRED, from the source shape and the gates that pass with it.
 
 - `PM_STOPSPEED` is flat, not stance-scaled. A crawl gains `19 * dt * 100` a frame because of the walk's accel floor; without the floor its `19 * dt * 28.5` = 4.33 loses to the friction's `100 * 5.5 * dt` = 4.40.
 - The wading slowdown is in the walk cmd scale, not the mover: `1 - waterlevel / 3 * 0.5` (`cod11-mantle.md`, "The wish speed"), applied by `pmove::wish`.
