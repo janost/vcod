@@ -13,10 +13,13 @@
 //!
 //! The sniper's breath hold is [`update_hold_breath`].
 //!
-//! Not here: the weapon slots' alt-weapon bookkeeping (`ps+0x555`), `PM_SetProneMovementOverride`,
-//! and the jump and prone stance's effects on the sight. The torso events
-//! (`BG_AnimScriptEvent` for the fire, reload, melee, drop and raise) run
-//! when the caller hands [`WeaponCmd::anim`] the script.
+//! Not ported: the weapon slots' alt-weapon bookkeeping (`ps+0x555`).
+//! Elsewhere in pmove: the prone sight flag (`pm_flags` 0x800) is set by
+//! [`update_sight_flag`] and cleared by `PmoveSingle`'s prone check
+//! (cod2-movement.md 17.3); the jump's `jump_spreadAdd` is `moves.rs`'s
+//! jump start. The torso events (`BG_AnimScriptEvent` for the fire,
+//! reload, melee, drop and raise) run when the caller hands
+//! [`WeaponCmd::anim`] the script.
 
 use crate::net::UserCmd2;
 use crate::pmove::anim::{self, AnimInput, AnimTable, Event};
@@ -1462,14 +1465,14 @@ pub fn pm_weapon(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, defs
     run_state(ps, ws, c, defs, delay_fired);
 }
 
-/// The quick drop's end, or an empty hand's offhand key: the grenade comes
-/// up and the pin comes out (state 13).
 /// `Mantle_IsWeaponInactive`, the ladder or `pm_flags` 0x4000000: the
 /// weapon stays down.
 fn holstered(ps: &PlayerState) -> bool {
     super::mantle::weapon_inactive(ps) || ps.pm_flags & (pmf::LADDER | wpf::DISABLED) != 0
 }
 
+/// The quick drop's end, or an empty hand's offhand key: the grenade comes
+/// up and the pin comes out (state 13).
 fn prepare_offhand(ps: &mut PlayerState, ws: &mut WeaponState, defs: &dyn Weapons) {
     let hold = defs.get(ws.offhand).map_or(0, |o| o.hold_fire_time);
     ws.state = state::OFFHAND_PREPARE;
@@ -1962,12 +1965,13 @@ pub fn table(
     out
 }
 
-/// One cmd of `PmoveSingle` with its weapon half, as vcod-server's
-/// `client_think` runs it: `EF_FIRING`, the sight flag and the aim spread,
+/// One cmd of `PmoveSingle` with its weapon half: `EF_FIRING`, the sight flag and the aim spread,
 /// the move at the held weapon's `moveSpeedScale`, then `PM_Weapon` and
 /// `ClientEvents`' zeroing of a thrown grenade's fuse (cod2-combat.md 2.6).
 /// Only a living or dead body runs the weapon. The client predicts with
 /// it; the movement A/B replays retail's captures through it.
+/// vcod-server's `client_think` (`game::cod2`) runs its own copy of this
+/// order.
 pub fn armed_step(
     ps: &mut PlayerState,
     ws: &mut WeaponState,
