@@ -529,6 +529,26 @@ fn cod4_renderer_builds_and_draws_without_validation_errors() {
     let after = sum(&r);
     eprintln!("glow: pixel sum {before} -> {after}");
     assert!(after > before + before / 100, "{before} -> {after}");
+    // A vision set with neither film nor glow runs no post pass; a
+    // flashbang and a shellshock still leave the scene pass for the 2D.
+    r.set_level_look(Some(LevelLook::default()));
+    use crate::play::cod4_shock::Screen;
+    for screen in [
+        Screen::Save,
+        Screen::Flash {
+            white: 128.0,
+            grab: 128.0,
+        },
+        Screen::Blur { decay_ms: 500 },
+        Screen::Off,
+    ] {
+        r.set_cod4_shock(Some(screen));
+        draw_frames(&mut r, &fs, above, &[], || None);
+        assert_clean(
+            &errors,
+            &format!("CoD4 mp_crash frame, no post pass, {screen:?}"),
+        );
+    }
 }
 
 /// mp_toujane through the CoD2 session's draw: the retail capture's frame

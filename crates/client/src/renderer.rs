@@ -10092,10 +10092,21 @@ impl Renderer {
                     )
                 })
                 .flatten();
+            // A CoD4 shellshock's capture and blends run single-sampled
+            // with no depth, as the CoD1 and CoD2 one does.
+            let cod4_screen = matches!(
+                cod4_shock,
+                Some(
+                    crate::play::cod4_shock::Screen::Save
+                        | crate::play::cod4_shock::Screen::Blur { .. }
+                        | crate::play::cod4_shock::Screen::Flash { .. }
+                )
+            );
             let after = bloom
                 || shafts
                 || post
                 || shock.is_some()
+                || cod4_screen
                 || glow.is_some()
                 || world_blur.is_some();
             if after {
