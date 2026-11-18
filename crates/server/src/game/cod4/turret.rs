@@ -483,7 +483,7 @@ impl Cod4Level {
     /// at `level.time` (no antilag), its impacts naming the gun as their
     /// shooter (cod4-effects.md 12.4), then `EV_FIRE_WEAPON_MG42` on the
     /// gun with the gunner's number.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn fire_lead(
         &mut self,
         slot: usize,

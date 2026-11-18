@@ -336,7 +336,7 @@ impl Cod4Level {
     /// (damage, attacker, direction, point, means of death, model, tag,
     /// part, damage flags), `names` the last three; once health is gone it
     /// is held at -999 at worst and `death` notified with the attacker.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn damage_entity(
         &mut self,
         id: EntId,
@@ -390,7 +390,6 @@ impl Cod4Level {
     /// `CanDamage`'s five traces from the blast to its bounds' middle and
     /// four corners across it gets through, radius flags (5), toward its
     /// origin 24 up.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn radius_damage_entities(
         &mut self,
         origin: Vec3,

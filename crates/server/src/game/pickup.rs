@@ -378,7 +378,6 @@ fn outgoing(inv: &Inventory, table: &WeaponTable, w: usize) -> Result<Option<u8>
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn pickup_weapon(
     inv: &mut Inventory,
     it: &mut ItemCounts,
@@ -464,7 +463,6 @@ fn pickup_weapon(
 /// `Touch_Item` (section 7), minus the writes to the world: the caller
 /// raises the event, the notifies and the removal off the [`Outcome`].
 /// `slot` is the player's client number.
-#[allow(clippy::too_many_arguments)]
 pub fn touch_item(
     inv: &mut Inventory,
     item: &ItemView,

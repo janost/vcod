@@ -1865,7 +1865,7 @@ impl Body {
     /// when it closes fast enough to meet the surface this step, at what
     /// closes the gap otherwise, and inside pushed out at
     /// `phys_contact_erp` up to `phys_mcv`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn contact(
         &self,
         r: Vec3,

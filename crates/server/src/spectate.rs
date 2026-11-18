@@ -1366,7 +1366,6 @@ impl ClientSim {
     /// `no_spectate` is 1.5's `allowSpectateTeam` mask: without free flight
     /// the sight edge keeps the follow and the spectator does not fly
     /// (1.5 game.mp 0x389eb).
-    #[allow(clippy::too_many_arguments)]
     pub fn spectator_think(
         &mut self,
         forced: i32,

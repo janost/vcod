@@ -300,7 +300,6 @@ pub struct Cod4Level {
 
 impl Cod4Level {
     /// The zones' level: `game::cod4::load`'s bootstrap at `now_ms`.
-    #[allow(clippy::too_many_arguments)]
     pub fn load(
         zones: &Cod4Zones,
         install: &Install,
@@ -328,7 +327,7 @@ impl Cod4Level {
 
     /// [`Self::load`] with what the last level handed on
     /// ([`super::load_with`], [`Self::take_carry`]).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn load_with(
         zones: &Cod4Zones,
         install: &Install,

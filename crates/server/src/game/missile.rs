@@ -825,7 +825,6 @@ impl Missile {
 
     /// `G_BounceMissile` (12.4). Returns whether the contact was loud enough
     /// for the caller to raise 177.
-    #[allow(clippy::too_many_arguments)]
     fn bounce(
         &mut self,
         prev_ms: i32,
@@ -1330,7 +1329,7 @@ impl Missiles {
     /// usercmd in `SV_ClientThink`, between frames, so the first
     /// `G_RunMissile` after a throw is a full frame of flight (the capture's
     /// first `!missile` line is already past its first bounce).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn fire_grenade(
         &mut self,
         ents: &mut ObjectTable,
@@ -1562,7 +1561,7 @@ impl Missiles {
     /// already the barrage's 1000 up from the strike point. `owner` is the
     /// barrage's: `None` when its caller left, and the shell then charges
     /// nobody on contact (combat doc 13.7).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn fire_artillery(
         &mut self,
         ents: &mut ObjectTable,
@@ -1634,7 +1633,7 @@ impl Missiles {
     /// the vehicle (docs/research/coduo-vehicles.md 13). A player's
     /// launcher (`Weapon_RocketLauncher_Fire`, 0x7b3da) keeps the line.
     /// 1.1's (0x54614, combat doc 13.6) flies straight for 30 s.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn fire_rocket(
         &mut self,
         ents: &mut ObjectTable,

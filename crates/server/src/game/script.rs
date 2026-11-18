@@ -387,7 +387,7 @@ impl ScriptRuntime {
     /// "mp_pavlov" and "dm". `configstrings` and `cvars` seed the host;
     /// `world`, once the caller has one, lets `bulletTrace` trace against the
     /// real map geometry, and `weapons` is what the weapon builtins read.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn load(
         fs: Rc<Pk3Fs>,
         map: &str,
@@ -417,7 +417,7 @@ impl ScriptRuntime {
     /// BSP, so `source` only decides where `.gsc` text comes from: a test
     /// overlays one file on the paks and gets the real bootstrap rather than
     /// a hand-written copy of it that a change here would not reach.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn load_from(
         source: Box<dyn ScriptSource>,
         fs: Rc<Pk3Fs>,
@@ -451,7 +451,6 @@ impl ScriptRuntime {
     /// the scripts compile under `Dialect::Cod2` against CoD2's builtin
     /// tables. Groundwork for hosting CoD2: the host still runs 1.1's
     /// configstring layout and no weapon table.
-    #[allow(clippy::too_many_arguments)]
     pub fn load_cod2(
         source: Box<dyn ScriptSource>,
         fs: Rc<Pk3Fs>,
@@ -478,7 +477,7 @@ impl ScriptRuntime {
     /// [`ScriptRuntime::load_cod2`] with the level's collision
     /// (`crate::game::cod2::level_world`), which the traces, the spawn
     /// pass's links and the triggers read.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn load_cod2_in(
         source: Box<dyn ScriptSource>,
         fs: Rc<Pk3Fs>,
@@ -508,7 +507,7 @@ impl ScriptRuntime {
     /// (`take_carry`): `game[]` and `pers[]` under `savePersist`, the
     /// compiled closures on a restart of the same map. Its map and area
     /// tree are rebuilt off `world`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn load_cod2_carry(
         source: Box<dyn ScriptSource>,
         fs: Rc<Pk3Fs>,
@@ -551,7 +550,7 @@ impl ScriptRuntime {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn load_game(
         profile: &'static HostProfile,
         source: Box<dyn ScriptSource>,
@@ -584,7 +583,7 @@ impl ScriptRuntime {
     /// [`Self::load_game`] with `setup` run on the fresh host ahead of the
     /// spawn pass: a game's own state the profile cannot hold
     /// (`game::cod4::load`'s zones).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn load_game_with(
         profile: &'static HostProfile,
         source: Box<dyn ScriptSource>,
@@ -1160,7 +1159,7 @@ impl ScriptRuntime {
     /// callback undefined (`Scr_PlayerDamage`, game.mp 0x5ca18), and an
     /// undefined direction makes the stock gametypes add
     /// `DAMAGE_NO_KNOCKBACK` (cod11-movers.md 21, "The sine crush").
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn deliver_unowned_hit(
         &mut self,
         victim_slot: usize,
@@ -3645,7 +3644,7 @@ impl ScriptRuntime {
     /// `Attack::Throw`: the grenade a release put in the air. `now_ms` is
     /// the `level.time` the throw ran at, which is a frame behind the one
     /// this is called on (`crate::game::missile::Missiles::fire_grenade`).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn fire_grenade(
         &mut self,
         owner: usize,

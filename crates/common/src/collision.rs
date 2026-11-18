@@ -328,7 +328,7 @@ impl Capsule {
 /// `start` to `end`. Its six sides are axial, which take a capsule as its
 /// box, so the sweep is the box's. A contact it makes names `entity`
 /// ([`CollisionWorld::entity_num`]) and its `hit` is `Prim::Clip(contents)`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn clip_entity_box(
     trace: &mut Trace,
     start: Vec3,
@@ -488,7 +488,6 @@ pub(crate) fn note_contact(candidate: f64, fraction: f64) {
 /// fractions, which `arith` says. A trace a brush clips always
 /// lands closer than the trace's fraction, so the lead side replaces the
 /// trace's contact outright.
-#[allow(clippy::too_many_arguments)]
 fn clip_brush_capsule(
     trace: &mut Trace,
     sw: &CapsuleSweep,
@@ -2037,7 +2036,7 @@ impl CollisionWorld {
     /// clip in lump order and a brush that brings the fraction to 0 ends the
     /// model: a box it meets at 0 never reads a later brush all solid
     /// (bsp-ibsp59-format.md, "The leaf walk").
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn clip_model(
         &self,
         model: usize,
@@ -2100,7 +2099,7 @@ impl CollisionWorld {
     /// turned into the model's frame, the box axial there, the capsule's
     /// sphere offset turned, and the brushes clipped as built (movers doc
     /// 22). The normal comes back in the world's frame.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn clip_turned_model(
         &self,
         model: usize,
@@ -2168,7 +2167,7 @@ impl CollisionWorld {
     }
 
     /// The posed models' half of a trace: the BVH skipped their brushes.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn trace_posed(
         &self,
         start: Vec3,
@@ -2714,7 +2713,6 @@ impl CollisionWorld {
         self.trace_shape(start, end, mins, maxs, mask, false, skip, true)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn trace_with_mask(
         &self,
         start: Vec3,
@@ -2728,7 +2726,7 @@ impl CollisionWorld {
         self.trace_shape(start, end, mins, maxs, mask, statics, skip, false)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn trace_shape(
         &self,
         start: Vec3,
@@ -3045,7 +3043,7 @@ impl CollisionWorld {
     /// frame and merged as Q3's `SV_ClipMoveToEntities` merges an entity's
     /// trace: it wins when allsolid or strictly nearer, and a copy the sweep
     /// starts in marks the result startsolid either way.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn trace_copies(
         &self,
         start: Vec3,
@@ -3077,7 +3075,6 @@ impl CollisionWorld {
 
     /// One world copy alone against a sweep, in its frame; the normal comes
     /// back in the world's, `endpos` is left to the caller.
-    #[allow(clippy::too_many_arguments)]
     fn clip_copy(
         &self,
         c: WorldCopy,
@@ -3377,7 +3374,7 @@ impl CollisionWorld {
     /// (`terrain.rs`), or for a point trace its point arm (0x8052894) on each
     /// triangle. A trace already at fraction 0 has stopped, as retail's tree
     /// walk does.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn clip_terrain(
         &self,
         part: u32,

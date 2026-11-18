@@ -740,7 +740,7 @@ impl Cod4Predictor {
     /// over and drops any correction in flight (`CG_TransitionPlayerState`).
     /// `defs`, the level's weapon defs, runs the weapon half
     /// (not for a spectator, as the server's think leaves it out).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn predict(
         &mut self,
         snap: &delta::PlayerState,

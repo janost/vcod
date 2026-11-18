@@ -523,7 +523,6 @@ impl Cod2Level {
 
     /// The level over the map's parts, which the engine's collision and the
     /// combat's traces share.
-    #[allow(clippy::too_many_arguments)]
     pub fn load_level(
         fs: Rc<Pk3Fs>,
         parts: PartsSource,

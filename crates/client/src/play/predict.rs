@@ -257,7 +257,7 @@ impl Predictor {
     /// brush models with its serverTime; `None` when its `pm_type` is not one
     /// the client predicts, or when the cmd history no longer reaches back
     /// to its `commandTime` (a miss).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn predict(
         &mut self,
         p: &Protocol,
@@ -353,7 +353,6 @@ impl Predictor {
     /// A new snapshot or moved bodies: rebuild from the snapshot, replay every
     /// cmd past its `commandTime`, and ease out what it corrected. False on a
     /// miss.
-    #[allow(clippy::too_many_arguments)]
     fn replay_snapshot(
         &mut self,
         p: &Protocol,

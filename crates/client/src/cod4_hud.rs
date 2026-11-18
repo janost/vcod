@@ -2355,7 +2355,6 @@ impl Cod4Hud {
     /// `CGAME_VOTE(<seconds left>):<text>` and the tallies, each with the
     /// key bound to `vote yes` or `vote no` (the command itself when none
     /// is) until the player voted (`eFlags` 0x100000). cod4-hud.md 14.
-    #[allow(clippy::too_many_arguments)]
     fn draw_vote(
         &self,
         l: &Loaded,
@@ -2793,7 +2792,7 @@ impl Cod4Hud {
     /// of that pass by `sort`, text through the
     /// label and the text or value, materials by their configstring's
     /// image. Waypoints (in the world) are left out.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn draw_elems(
         &self,
         l: &Loaded,
@@ -2949,7 +2948,6 @@ impl Cod4Hud {
 
     /// One message line on the window's grid line `y`, its pieces left to
     /// right; an icon is font heights wide and tall, centred on the text.
-    #[allow(clippy::too_many_arguments)]
     fn draw_line(
         &self,
         f: &Font,
@@ -3075,7 +3073,6 @@ pub(crate) fn text(
 /// pushed two glyph pixels to each corner, in `glow`'s colour times 0.1
 /// at the glyph's own alpha (`SetDrawText2DGlowParms` `iw3mp.exe`
 /// 0x5f6aa0, the pass at 0x6148d6..0x614aff; cod4-hud.md 22).
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn glow_text(
     f: &Font,
     s: &str,

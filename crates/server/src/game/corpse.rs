@@ -95,7 +95,6 @@ pub fn lerp(from: Vec3, to: Vec3, fraction: f32) -> Vec3 {
 /// `max_velocity`, no ground, no death anim yet (CoD2 cod2-combat.md 6.2;
 /// 1.7's stores 0x80ad004..0x80ad082). VERIFIED. `maxs` is the box's top
 /// corner the clone sweeps.
-#[allow(clippy::too_many_arguments)]
 pub fn launch(
     body: &mut Body,
     origin: Vec3,

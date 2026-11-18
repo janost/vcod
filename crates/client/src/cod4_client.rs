@@ -192,7 +192,6 @@ impl FlyKeys {
 /// The fired events' sounds, each player shot's fire sound's length then
 /// holding the shooter's compass ping (`CG_FireWeapon`,
 /// cod4-hud.md 15.9), placed by `at` (`cod4_audio::place`).
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn play_event_cues(
     audio: &mut crate::audio::AudioSystem,
     fs: &vcod_common::pk3::Pk3Fs,
@@ -239,7 +238,6 @@ fn shot_client(f: &Fired) -> Option<usize> {
 }
 
 impl Cod4Client {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         session: Cod4Session,
         models: HashMap<String, Model>,
@@ -318,7 +316,6 @@ impl Cod4Client {
     /// map's entity models, weapons, bodies, sounds and effects,
     /// prediction world and look in place of the last map's; every
     /// renderer handle and the zones' menus start over.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_map(
         &mut self,
         models: HashMap<String, Model>,

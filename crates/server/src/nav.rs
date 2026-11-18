@@ -209,7 +209,6 @@ impl NavGraph {
     /// the edges past the follower's reach
     /// ([`Self::drop_out_of_reach`]) and probes for mantles again off the
     /// floors the last mantles' tops led to.
-    #[allow(clippy::too_many_arguments)]
     pub fn build_opts(
         world: &CollisionWorld,
         seeds: &[[f32; 3]],
@@ -2432,7 +2431,6 @@ impl Follower {
     /// search next tick, so neither one long plan nor many bots planning at
     /// once (the tick the graph lands) stall a tick.
     /// `rand` picks roam destinations.
-    #[allow(clippy::too_many_arguments)]
     pub fn waypoint(
         &mut self,
         g: &NavGraph,
@@ -2490,7 +2488,6 @@ impl Follower {
     }
 
     /// [`Self::waypoint`] before the bookkeeping.
-    #[allow(clippy::too_many_arguments)]
     fn follow(
         &mut self,
         g: &NavGraph,
@@ -5139,7 +5136,6 @@ pub trait WalkStep: Send + Sync {
     /// step may push as `delta_angles`; `weapons` holds the def of
     /// `ps.weapon`. `carry` is what the step kept after the walk's last
     /// cmd, `None` on its first.
-    #[allow(clippy::too_many_arguments)]
     fn step(
         &self,
         ps: &mut PlayerState,
@@ -5987,7 +5983,6 @@ struct Trail {
 
 /// [`walk_with`] without the crease test, the body's weapon moving it at
 /// `move_scale`; `trail` gathers what it passed over.
-#[allow(clippy::too_many_arguments)]
 fn walk_sliding(
     world: &CollisionWorld,
     from: Vec3,

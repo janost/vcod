@@ -566,7 +566,6 @@ impl Cod4Level {
 
     /// `G_FireGrenade` (doc 10.2): a grenade from `start` at `dir`, stored
     /// in the missile list; its index there.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn fire_grenade(
         &mut self,
         slot: usize,
@@ -588,7 +587,6 @@ impl Cod4Level {
     /// tumbling when `spin` asks and the weapon spins, its fuse
     /// (the grenade timer init) and, unless it arms by distance,
     /// `grenade_fire` on the thrower.
-    #[allow(clippy::too_many_arguments)]
     fn new_grenade(
         &mut self,
         slot: usize,
@@ -1194,7 +1192,6 @@ impl Cod4Level {
     /// at `endpos`, hides and is freed 300 ms on, `death` notified; an
     /// armed one's splash (players, helicopters, other entities) follows,
     /// then `projectile_impact` on its thrower and a flashbang's blast.
-    #[allow(clippy::too_many_arguments)]
     fn impact_burst(
         &mut self,
         mut m: Missile4,
@@ -1468,7 +1465,7 @@ impl Cod4Level {
     /// radius takes the falloff at his distance times his `CanDamage`
     /// share, radius flags (5), pushed from the blast toward a point 24
     /// over his feet. Slot order here, where retail walks its area list.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn radius_damage(
         &mut self,
         origin: Vec3,

@@ -875,7 +875,7 @@ pub fn player_step_armed(
 /// [`player_step_armed`] with the anim script picking the legs and torso
 /// anims (the server's step), each event's command drawn off `rand`.
 /// Returns the touch list and [`Pmove::mantle_started`].
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn player_step_animated<'a>(
     ps: &'a mut PlayerState,
     cmd: &Cmd,

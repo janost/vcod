@@ -175,7 +175,6 @@ impl Virtual {
     }
 
     /// `uvs` in the quad's ring order: TL, TR, BR, BL.
-    #[allow(clippy::too_many_arguments)]
     pub fn quad_uv(
         &self,
         x: f32,
@@ -319,7 +318,7 @@ fn shadow_alpha(quads: &mut [HudQuad], alpha: f32) {
 
 /// Draws `elems` in retail's order: sorted by `sort`, stably, so pass the
 /// archived array first and the current one after it.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn build(
     elems: &[HudElem],
     configstrings: &[String],
@@ -362,7 +361,7 @@ fn draw_order(elems: &[HudElem]) -> Vec<&HudElem> {
     order
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn draw(
     e: &HudElem,
     cs: &[String],

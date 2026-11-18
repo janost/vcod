@@ -286,7 +286,6 @@ fn ours_pair_on(
 /// both clients join on the capture's clock and the target sends the
 /// capture's cmds (`ProbeHold::times`): where his drop onto the grade
 /// settles, and the prone body it leaves, rides them.
-#[allow(clippy::too_many_arguments)]
 fn ours_pair_in(
     fs: vcod_common::pk3::Pk3Fs,
     map: &str,
@@ -325,7 +324,7 @@ fn ours_pair_in(
 /// [`TARGET_PLAYS_AFTER_JOIN_MS`] says, and the target's first playing
 /// snapshot time. `part` is `probe_part`'s value, then any more of the
 /// probe's cvars as `name value` words.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn ours_pair_run(
     fs: Rc<vcod_common::pk3::Pk3Fs>,
     map: &str,

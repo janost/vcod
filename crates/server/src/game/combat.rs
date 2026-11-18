@@ -651,7 +651,7 @@ fn bipod_muzzle(ps: &PlayerState, world: Option<MuzzleWorld<'_>>, muzzle: Vec3) 
 /// through the hit-location table with no distance term (2.4), halved at
 /// each player a rifle round passes through (2.4, step 5). `muzzle_boxes`
 /// is what a UO bipod's muzzle trace meets besides `world`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn bullet_fire(
     shooter: usize,
     def: &WeaponDef,
@@ -712,7 +712,6 @@ pub fn bullet_fire(
 /// and where a round with the weapon's spread ends, `range` out.
 /// `world` is what a UO LMG on its bipod traces its muzzle against; no
 /// rocket or strike is fired from one.
-#[allow(clippy::too_many_arguments)]
 pub fn aim_end(
     me: &ClientSim,
     def: &WeaponDef,
@@ -840,7 +839,7 @@ fn bullet_end(muzzle: Vec3, forward: Vec3, range: f32) -> Vec3 {
 /// `pass` is the trace's pass entity: the gunner on a turret, the vehicle
 /// for a UO vehicle's gun, whose riders it then passes too; `falloff` a UO
 /// weapon's `Damage_Falloff`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn bullet_fire_from(
     shooter: usize,
     pass: Pass,
@@ -880,7 +879,7 @@ pub fn bullet_fire_from(
 
 /// [`bullet_fire_from`] to an end point already worked out: a UO vehicle
 /// gun's `BG_Bullet_Endpos` with its spread (`vehicle::fire::prepare`).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn bullet_fire_to(
     shooter: usize,
     pass: Pass,
@@ -1024,7 +1023,7 @@ pub(crate) fn located_damage(damage: i32, multiplier: f32) -> i32 {
 /// the leg, and its halving halves that (game.mp.uo 0x7a920); a UO model
 /// it meets (a vehicle) takes `G_Damage` and stops it. A UO round rolls its
 /// tracer off `rng` on each leg that may draw one (coduo-diff.md 21).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn fire_round(
     shooter: usize,
     pass: Pass,
@@ -1499,7 +1498,7 @@ impl BodyPose {
 /// The trace a bullet and a swing both make (combat doc, sections 2.2, 2.5
 /// and 3): the world, every placed model and shootable box, then every live
 /// player's body, each entity under `pass`'s rule.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn trace_attack(
     muzzle: Vec3,
     end: Vec3,
@@ -1606,7 +1605,6 @@ fn box_normal(p: Vec3, lo: Vec3, hi: Vec3) -> Vec3 {
 /// mask 0x2802031 with `bulletPriorityMap`): where the aim from `muzzle` to
 /// `end` stops, on the world, a live body or a shootable grenade, and
 /// whether it struck a sky face. `None` when it met nothing.
-#[allow(clippy::too_many_arguments)]
 pub fn strike_point(
     muzzle: Vec3,
     end: Vec3,
@@ -1850,7 +1848,7 @@ pub const MELEE_RANGE: f32 = 64.0;
 /// retail's melee capture read 81 and 79 off a 50-damage swing at `head`.
 /// `damageable` are the brush entities with `takedamage`, whose brushes a
 /// swing stops on with no glass test (a door's, movers doc 26.9).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn melee_fire(
     attacker: usize,
     def: &WeaponDef,
@@ -2289,7 +2287,6 @@ pub struct Blast {
 }
 
 impl Blast {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         at: Vec3,
         radius: f32,
@@ -2792,7 +2789,7 @@ mod tests {
     }
 
     /// Every victim of one blast with nothing changing between them.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn radius_damage(
         at: Vec3,
         radius: f32,

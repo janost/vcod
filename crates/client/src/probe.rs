@@ -380,7 +380,7 @@ pub const MELEE_RANGE: f32 = 40.0;
 /// it, and far enough that the thrower is not inside its own blast radius.
 pub const GRENADE_RANGE: f32 = 300.0;
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn probe(
     addr: &str,
     save: Save,
@@ -6454,7 +6454,7 @@ impl HitProbe {
 /// where `role` is the script's own prefix and the half: `hit-shooter`,
 /// `grenade-target` and so on. Both halves carry the same header keys, so a
 /// gate reads either the same way; `body` is the role's own section.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn write_hit_fixture(
     role: &str,
     configstrings: &[String],
@@ -7629,7 +7629,6 @@ enum SlopeWalk {
 /// Writes the route walk as `<map>-<gametype>-slope-<cmd_ms>ms.txt`: `!cmd`
 /// lines carry the usercmd as sent, `!snap` lines the playerstate the server
 /// answered with, interleaved in the order the probe saw them.
-#[allow(clippy::too_many_arguments)]
 fn write_slope_fixture(
     configstrings: &[String],
     join: &JoinProbe,

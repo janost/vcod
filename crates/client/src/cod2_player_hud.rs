@@ -769,7 +769,6 @@ impl Ctx<'_> {
     }
 
     /// `UI_DrawText`: `s` with its baseline at grid `(x, y)` under `align`.
-    #[allow(clippy::too_many_arguments)]
     fn text(
         &self,
         s: &str,
@@ -826,7 +825,7 @@ fn rgba(rgb: [f32; 4], a: f32) -> [f32; 4] {
 
 impl PlayerHud {
     /// The HUD for `frame` on a `w` x `h` window at cgame time `now`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn build(
         &mut self,
         frame: &Frame,
@@ -896,7 +895,6 @@ impl PlayerHud {
     /// `CG_DrawCrosshairNames`' line (Mac 0x1cddb4): `s` in font 0 at
     /// 1/3, aligned (0, 0), at `cg_drawCrosshairNamesPosX` and 16 under
     /// `cg_drawCrosshairNamesPosY`, without the style 3 shadow.
-    #[allow(clippy::too_many_arguments)]
     pub fn crosshair_name(
         &self,
         s: &str,
@@ -929,7 +927,6 @@ impl PlayerHud {
     /// and the followed name centred at y 40 and 65, font 0 at 1/3.
     /// `keys` are the bound keys of `+attack`, `toggleads` (else
     /// `+speed`) and `+melee` (else `+melee_breath`), empty when unbound.
-    #[allow(clippy::too_many_arguments)]
     pub fn follow(
         &self,
         frame: &Frame,

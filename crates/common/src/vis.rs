@@ -870,7 +870,6 @@ impl WorldVis {
     /// under the same frustum. `depth` counts the portals opened on the
     /// way here (0 at the eye's cell); each portal queued keeps the
     /// shallowest it was queued from (iw3mp.exe 0x60a289, 0x60a2aa).
-    #[allow(clippy::too_many_arguments)]
     fn visit_queued(
         &self,
         cell: usize,
@@ -990,7 +989,7 @@ impl WorldVis {
     /// left out, as in `walk`), the cell beyond goes on `list` once and
     /// its own portals are tried the same way, under the same planes.
     /// Retail's list holds 384 (its stack array).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn further_cells(
         &self,
         cell: usize,

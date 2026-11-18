@@ -171,7 +171,6 @@ impl CtfCarries {
     }
 
     /// `bodies`: each playing body's client, team and feet.
-    #[allow(clippy::too_many_arguments)]
     fn step(
         &mut self,
         tick: usize,

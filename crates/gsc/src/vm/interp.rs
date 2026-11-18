@@ -708,7 +708,7 @@ impl Vm {
     /// and the budget live in locals here and go back to `fr` and
     /// `remaining` on the way out. `depth` is the frame stack's depth with
     /// `fr` on top.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn run_ops(
         &mut self,
         host: &mut dyn Host,
@@ -2005,7 +2005,7 @@ impl Vm {
     /// [`Vm::spawn`] from a thread call in a step with `left` instructions
     /// and `depth` frames: the new thread runs on what the step has left and
     /// on top of its frames. The instructions it spent.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn spawn_nested(
         &mut self,
         host: &mut dyn Host,
@@ -2029,7 +2029,6 @@ impl Vm {
     /// does, before the calling thread's next op; whether any ran. `func`
     /// and `at` name the call, for an unknown function's error.
     #[inline(never)]
-    #[allow(clippy::too_many_arguments)]
     fn run_builtin_spawns(
         &mut self,
         host: &mut dyn Host,

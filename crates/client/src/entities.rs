@@ -324,7 +324,7 @@ impl AssemblyCache {
     /// The cached assembly for `key`, or `None` while parts are outstanding.
     /// A part already in `parts` is adopted for free; a new one costs one unit
     /// of `budget`, and a spent budget ends the call.
-    #[allow(clippy::too_many_arguments)] // one call site, all context params
+    #[expect(clippy::too_many_arguments)] // one call site, all context params
     pub fn resolve(
         &mut self,
         key: &[String],
@@ -1625,7 +1625,6 @@ fn model_rotation(visual: &EntityVisual, angles: Vec3) -> Quat {
 /// names, and the gun's z for the trace down; each leaf's root is read at
 /// the legs clip's time `seconds` gives (turrets doc 7.2). `None` leaves the
 /// body where the snapshot put it, as the routine's early returns do.
-#[allow(clippy::too_many_arguments)]
 fn place_body(
     anims: &PlayerAnims,
     ent: &EntityState,
@@ -1686,7 +1685,7 @@ fn trace_down(world: MoveWorld, gunner: u32, mut at: Vec3, gun_z: f32) -> Vec3 {
 /// `weapon_flash` also gets `b.ps.weapon` unconditionally: that player's body
 /// is the skipped entity, and playerState-ring fire events
 /// (`entity_num == u32::MAX`) need its exact `worldFlashEffect`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn build_instances(
     scene: &mut EntityScene,
     (a, b, f): (SnapView, SnapView, f32),

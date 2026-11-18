@@ -1,0 +1,2 @@
+# A function may take up to 8 arguments before clippy asks for a struct.
+too-many-arguments-threshold = 8

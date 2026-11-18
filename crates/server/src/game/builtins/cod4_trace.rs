@@ -78,7 +78,6 @@ pub(crate) fn locational4(
 }
 
 /// [`trace4`] over `bodies`.
-#[allow(clippy::too_many_arguments)]
 fn trace4_with(
     host: &GameHost,
     start: Vec3,

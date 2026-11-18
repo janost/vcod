@@ -743,7 +743,7 @@ impl Cod4Level {
     }
 
     /// A bullet's `G_DamageClient` at the shot's time.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn damage_client(
         &mut self,
         attacker: usize,
@@ -775,7 +775,7 @@ impl Cod4Level {
     /// weapon's location multiplier (not on a melee), at least 1, into
     /// `CodeCallback_PlayerDamage`, then the playerstate half the script's
     /// `finishPlayerDamage` queued.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn damage_from(
         &mut self,
         attacker: usize,
@@ -1270,7 +1270,6 @@ impl Cod4Level {
 
     /// [`Self::body_trace`]; `ease` steps the body's controls a frame
     /// first, as every trace but a round's penetration legs does.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn body_trace_eased(
         &mut self,
         slot: usize,

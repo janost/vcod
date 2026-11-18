@@ -125,7 +125,6 @@ impl Soak {
     /// The frame's input, decided before the cmds are built. `ps` is the
     /// newest snapshot's playerstate, `serverinfo` configstring 0, `feet`
     /// the drawn origin, `menu_up` whether a menu holds the keys.
-    #[allow(clippy::too_many_arguments)]
     pub fn act(
         &mut self,
         input: &mut PlayInput,

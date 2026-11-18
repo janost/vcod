@@ -365,7 +365,6 @@ fn run_ours_on(
 /// when it logs them. `late_ms` starts the client that much earlier.
 /// `known` is a first pass's lift for each landing by ours' level time.
 /// `probe_rate` sends the probe client's three cmds a frame instead of one.
-#[allow(clippy::too_many_arguments)]
 fn run_once(
     fs: Pk3Fs,
     map: &str,

@@ -603,7 +603,7 @@ impl ViewFx {
     /// the cmds carry it into. `predicted` when `f`'s playerstate is the
     /// frame's prediction ([`crate::cod2_viewmodel::pos_frac`]). `land_z`
     /// is [`Land::gun`]'s drop on the gun's world z.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn frame(
         &mut self,
         f: &Frame,

@@ -1299,7 +1299,7 @@ impl Cod2Level {
     /// gunner's is the weapon in his hands (cod2-turrets.md 11). `owner`
     /// is the entity a world impact names (`otherEntityNum`): the shooter,
     /// or a gunner's turret.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn bullet_fire(
         &mut self,
         slot: usize,
@@ -1424,7 +1424,7 @@ impl Cod2Level {
     /// impact event, glass passed a quarter unit on, and a struck client's
     /// `G_Damage` at the range's damage times `scale`; a rifle round goes
     /// on through a client not on the shooter's side at half.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn bullet_extended(
         &mut self,
         attacker: usize,
@@ -1619,7 +1619,7 @@ impl Cod2Level {
     /// `loc*` multiplier for a bullet weapon, else the level's hit-location
     /// table, truncated; a result above 0 goes to the damage callback with
     /// `timeOffset`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn g_damage(
         &mut self,
         victim: usize,
@@ -2406,7 +2406,7 @@ impl Cod2Level {
     /// point, raised 24. Under `setPlayerIgnoreRadiusDamage` no client is
     /// touched. A thrower who left takes no walk at all. `ignore` is
     /// passed over.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn radius_damage(
         &mut self,
         at: Vec3,

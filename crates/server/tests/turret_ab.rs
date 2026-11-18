@@ -215,7 +215,7 @@ fn build(cvars: &[(&str, &str)], weapon: &str, gunner_second: bool) -> Option<Ri
 /// `alone_ms` before the clients connect, and a non-empty `target_cmds`
 /// stamps the target's cmds (`Rig::target_cmds`) from its join on. A
 /// second gunner joins as `late` says, or with the target.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn build_on(
     fs: Pk3Fs,
     p: &'static Protocol,

@@ -855,7 +855,6 @@ impl Terrain {
     }
 
     /// A corner swept as a sphere of radius `r_eps` (0x8053121-0x8053235).
-    #[allow(clippy::too_many_arguments)]
     fn sweep_vertex(
         &self,
         rec: u32,

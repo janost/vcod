@@ -322,7 +322,6 @@ impl Cod4Level {
     /// `Bullet_GetDamage` (the range falloff off the round's first start)
     /// times what is left of the round, truncated; the shooter's own body
     /// takes nothing.
-    #[allow(clippy::too_many_arguments)]
     fn bullet_process(
         &mut self,
         slot: usize,
@@ -415,7 +414,6 @@ impl Cod4Level {
     /// `bullet_penetrationEnabled` and the weapon has a `penetrateType`,
     /// else `Bullet_FireExtended`. `shooter` is the entity it leaves from:
     /// `slot`'s own, or the turret `slot` mans.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn bullet_fire_round(
         &mut self,
         slot: usize,

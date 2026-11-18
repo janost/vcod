@@ -338,7 +338,6 @@ fn apply_sim_ops(
 
 /// One op of [`apply_sim_ops`]. `cmd_ms` is the client's last processed
 /// cmd's serverTime, the clock its anim timers run on.
-#[allow(clippy::too_many_arguments)]
 fn apply_sim_op(
     sim: &mut ClientSim,
     rt: &mut script::ScriptRuntime,
@@ -413,7 +412,6 @@ fn apply_effects(rt: &mut script::ScriptRuntime, effects: Vec<Effect>) {
 /// gunner takes its feedback this frame; one below had its end frame
 /// already and takes it on the next, and a gunner below that dies keeps
 /// the gun until its own next turn releases it.
-#[allow(clippy::too_many_arguments)]
 fn deliver_turret_rounds(
     clients: &mut [Option<Client>],
     rt: &mut script::ScriptRuntime,
@@ -1267,7 +1265,6 @@ fn mirror_for_callback(
 /// What a callback queued for `slot`, applied to its sim before its next cmd:
 /// retail's script writes the playerstate there and then. `at` is the frame
 /// clock and the client's last processed cmd's serverTime.
-#[allow(clippy::too_many_arguments)]
 fn apply_callback_ops(
     rt: &mut script::ScriptRuntime,
     sim: &mut ClientSim,
@@ -1662,7 +1659,6 @@ fn fog_cull_of(p: &Protocol, configstrings: &[String]) -> Option<f32> {
 /// team other than none or spectator; a candidate is a playing client on
 /// it whose entity is not in a snapshot from the viewer's leaned eye.
 /// `broadcast` is [`script::ScriptRuntime::in_snapshot_broadcast`] by slot.
-#[allow(clippy::too_many_arguments)]
 fn compass_friend(
     clients: &[Option<Client>],
     slot: usize,

@@ -803,7 +803,6 @@ fn probe_runs(patch: &Patch) {
 }
 
 /// One item's lines, both sides, timed from each side's `PROBE start`.
-#[allow(clippy::too_many_arguments)]
 fn compare_item(
     patch: &Patch,
     tag: &str,

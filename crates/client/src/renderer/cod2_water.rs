@@ -205,7 +205,6 @@ impl WaterBuilder {
 
     /// Binds a water batch of `sh`, which [`draws_water`] accepted: the
     /// material's group (and its height map, same index) and the pipeline.
-    #[allow(clippy::too_many_arguments)]
     pub fn bind(
         &mut self,
         device: &wgpu::Device,
@@ -259,7 +258,6 @@ impl WaterBuilder {
     /// The material and height map groups of `w` over `cube`; without
     /// `mips` the height map keeps its top level only (the tests' exact
     /// sampling).
-    #[allow(clippy::too_many_arguments)]
     fn add(
         &mut self,
         device: &wgpu::Device,
@@ -423,7 +421,6 @@ mod tests {
     /// seen from `eye`, then identityLight 1 and the exp fog, its keep
     /// interpolated from the vertices of the plane's triangle under `p`
     /// (`Fog_VertexCalc`, cod2-client-perf.md 9).
-    #[allow(clippy::too_many_arguments)]
     fn hlsl(
         tex: &[u8],
         faces: &[[u8; 4]; 6],

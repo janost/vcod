@@ -134,7 +134,6 @@ impl GunKick {
 
 /// One axis of the spring (cgame `0x30012910`). True, with both zeroed,
 /// once the angle is under 0.25 and the speed under 1.
-#[allow(clippy::too_many_arguments)]
 fn spring_axis(
     angle: &mut f32,
     speed: &mut f32,

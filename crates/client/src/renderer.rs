@@ -1106,7 +1106,7 @@ struct EntBound {
 /// iterator does, over `indices` (the surface's own, or a run of its
 /// neighbours' from [`ent_run`]). `bound` tracks the bound pipeline across
 /// calls.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn draw_ent_stages(
     pass: &mut impl DrawSink,
     mats: &EntityMaterials,
@@ -2629,7 +2629,7 @@ pub(crate) fn par_build_on<T: Send>(
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn scene_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
@@ -2748,7 +2748,7 @@ pub(crate) fn stage_animated(sh: &Material, idx: usize) -> bool {
 /// Group(1) and group(2) bind groups for one authored stage, shared by the
 /// world stage-batch loop and the cloud dome. `lm` is the batch's
 /// lightmap page (bundle-0 `$lightmap` samples it through the flag).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn stage_bind_groups(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -3292,7 +3292,7 @@ fn encode_world_sprites(
 
 /// Builds the farbox for the block's env name. Missing non-rt sides draw
 /// tr.defaultImage flat white (tr_shader.c:1170), warned per load.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn build_sky_box(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -3463,7 +3463,7 @@ const SUN_SPRITE_SCALE: f32 = 0.001_311_092_9;
 
 /// Builds the sunfile sprite for a parsed `.sun` file along the sun
 /// direction. `None` when the sprite image does not resolve.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn build_sun_sprite(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -3975,7 +3975,7 @@ impl Renderer {
 
     /// Everything past the device: the passes, pipelines and layouts every
     /// frame uses, drawing into `target` sized by `config`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn build(
         device: wgpu::Device,
         queue: wgpu::Queue,
@@ -6040,7 +6040,6 @@ impl Renderer {
     /// cgame's clock), the pool expired, faded and uploaded after this
     /// frame's `temporary` marks (`crate::blob_shadow`). `enabled` is
     /// `cg_marks`.
-    #[allow(clippy::too_many_arguments)]
     pub fn set_marks(
         &mut self,
         fs: &Pk3Fs,
@@ -7200,7 +7199,7 @@ impl Renderer {
     /// `fx_ready` says whether this frame's depth and colour copies are
     /// taken for a `cod4_worldfx` stage: without its copy a feathered one
     /// draws as its plain stage, a distortion one not at all.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn emit_world_draw(
         &self,
         pass: &mut impl DrawSink,
@@ -10512,7 +10511,6 @@ fn single_pass<'e>(
 /// The camera group (`camera_layout`): the Camera block, the fx lights,
 /// `vc_shadows`' receiver inputs, `r_textureMode`'s samplers, CoD2's
 /// dynamic shadow and CoD4's sun shadow map.
-#[allow(clippy::too_many_arguments)]
 fn camera_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -10969,7 +10967,6 @@ struct FxImage<'a> {
 /// `upload_levels` handles both RGBA sprites and BC `.dds` mip chains (many
 /// effect textures are DXT5). Unresolvable names warn once; the caller
 /// caches the `None`.
-#[allow(clippy::too_many_arguments)]
 fn resolve_fx_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -11712,7 +11709,7 @@ fn hud_bind_group(
 /// with `picmip` levels dropped, `gamma` baked as retail's upload bakes it
 /// and stored as `store` says. Unresolvable names warn once; the caller
 /// caches the `None`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn resolve_hud_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

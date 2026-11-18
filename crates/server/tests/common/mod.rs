@@ -282,7 +282,6 @@ pub fn join_pair_stamped(
 /// capture that starts soon after it can still be met. In the game a late
 /// `b` sends a 60 fps probe's cmds ([`probe_cadence`]), so a fall off the
 /// gsc's placement lands, and plays its land anim, when retail's did.
-#[allow(clippy::too_many_arguments)]
 pub fn join_pair_staggered(
     sv: &mut Server,
     qa: &Rc<RefCell<Queues>>,
@@ -2521,7 +2520,6 @@ fn spawned_origin(text: &str) -> [f32; 3] {
 
 /// One run of [`direct_replay`], the client joined `late_ms` earlier:
 /// the `PROBE` lines, the client's first snapshot time and its snapshots.
-#[allow(clippy::too_many_arguments)]
 fn direct_replay_once(
     fs: vcod_common::pk3::Pk3Fs,
     proto: &'static vcod_common::net::protocol::Protocol,
