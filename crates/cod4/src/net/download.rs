@@ -138,12 +138,31 @@ fn pairs(systeminfo: &str, names: &str, sums: &str) -> Vec<(String, i64)> {
         .collect()
 }
 
+/// An install's own directories, which a server's `fs_game` may not name:
+/// a download never lands in them.
+const STOCK_DIRS: [&str; 8] = [
+    "main",
+    "main_shared",
+    "zone",
+    "players",
+    "usermaps",
+    "miles",
+    "video",
+    "docs",
+];
+
+/// The most bytes one download takes, on either transport: vcod's cap,
+/// past any mod's iwd or fastfile.
+pub const MAX_DOWNLOAD_BYTES: u64 = 1 << 30;
+
 /// The directory a server's own files sit in: `fs_game` when set, else
-/// `None` (stock `main`).
+/// `None` (stock `main`). One that leaves the install or names one of its
+/// own directories is `None` too: nothing is fetched into it.
 pub fn fs_game(systeminfo: &str) -> Option<String> {
-    info_value_for_key(systeminfo, "fs_game")
-        .filter(|g| !g.is_empty() && !g.eq_ignore_ascii_case("main"))
-        .map(str::to_string)
+    let g = info_value_for_key(systeminfo, "fs_game")?;
+    let rel = vcod_common::game_dir::confined_rel_path(g)?;
+    let top = rel.components().next()?.as_os_str().to_str()?;
+    (!STOCK_DIRS.iter().any(|d| top.eq_ignore_ascii_case(d))).then(|| g.to_string())
 }
 
 /// What `FS_CompareWithServerFiles` puts on the download list: every
@@ -411,8 +430,13 @@ impl Downloads {
                 if !self.disconnected {
                     out.push(DownloadEvent::Command("wwwdl done".into()));
                 }
-                out.push(cur.finish());
-                if self.disconnected {
+                let landed = cur.finish();
+                let failed = matches!(landed, DownloadEvent::Failed(_));
+                out.push(landed);
+                if failed {
+                    self.queue.clear();
+                    self.started = false;
+                } else if self.disconnected {
                     self.queue.clear();
                     self.started = false;
                     out.push(DownloadEvent::Reconnect);
@@ -541,6 +565,14 @@ impl Downloads {
                 if let Some(s) = size {
                     cur.size = (*s).max(0) as u64;
                 }
+                let limit = cur.limit();
+                if cur.got + data.len() as u64 > limit {
+                    let cur = self.current.take().unwrap();
+                    return vec![
+                        DownloadEvent::Command("stopdl".into()),
+                        self.abandon(cur, format!("more than {limit} bytes")),
+                    ];
+                }
                 if let Err(e) = cur.file.write_all(data) {
                     let cur = self.current.take().unwrap();
                     let _ = std::fs::remove_file(&cur.tmp);
@@ -556,8 +588,7 @@ impl Downloads {
                 let mut out = vec![DownloadEvent::Command(format!("nextdl {block}"))];
                 if data.is_empty() {
                     let cur = self.current.take().unwrap();
-                    out.push(cur.finish());
-                    out.extend(self.next_download());
+                    out.extend(self.land(cur));
                 }
                 out
             }
@@ -566,6 +597,33 @@ impl Downloads {
 }
 
 impl Downloads {
+    /// The file renamed into place and the next one asked for; a file
+    /// that fails its check ends the queue.
+    fn land(&mut self, cur: Current) -> Vec<DownloadEvent> {
+        match cur.finish() {
+            e @ DownloadEvent::Failed(_) => {
+                self.queue.clear();
+                self.started = false;
+                vec![e]
+            }
+            e => {
+                let mut out = vec![e];
+                out.extend(self.next_download());
+                out
+            }
+        }
+    }
+
+    /// The file in flight given up for `why`: its spool removed and the
+    /// queue ended.
+    fn abandon(&mut self, cur: Current, why: String) -> DownloadEvent {
+        drop(cur.file);
+        let _ = std::fs::remove_file(&cur.tmp);
+        self.queue.clear();
+        self.started = false;
+        DownloadEvent::Failed(format!("{}: {why}", cur.wanted.remote))
+    }
+
     /// `CL_ParseDownload`'s block -1 (iw3mp.exe 0x474270..0x474439).
     fn redirect(&mut self, url: &str, size: i32, flags: i32) -> Vec<DownloadEvent> {
         let mut cur = self.current.take().unwrap();
@@ -585,7 +643,7 @@ impl Downloads {
         log::info!("cod4: Server redirected download: {url}");
         let mut out = vec![DownloadEvent::Command("wwwdl ack".into())];
         let fetch = if self.www {
-            super::http::HttpFetch::start(url, &cur.tmp)
+            super::http::HttpFetch::start(url, &cur.tmp, cur.limit())
         } else {
             Err("cl_wwwDownload is off".into())
         };
@@ -613,11 +671,46 @@ impl Downloads {
 }
 
 impl Current {
-    /// The spool renamed into place, unchecked, as both of 1.7's ends of a
-    /// file do (`CL_WWWDownload` 0x472a4b, `CL_ParseDownload` 0x474614):
-    /// the next gamestate's `CL_InitDownloads` compares it again.
+    /// The most bytes the file may take: its announced size, under
+    /// [`MAX_DOWNLOAD_BYTES`].
+    fn limit(&self) -> u64 {
+        match self.size {
+            0 => MAX_DOWNLOAD_BYTES,
+            s => s.min(MAX_DOWNLOAD_BYTES),
+        }
+    }
+
+    /// Why the landed spool is not the file the server listed: short of
+    /// its announced size, a fastfile off its listed size, an iwd off its
+    /// listed checksum.
+    fn check(&self) -> Option<String> {
+        if self.size > 0 && self.got != self.size {
+            return Some(format!("{} of {} bytes", self.got, self.size));
+        }
+        if let Some(size) = self.wanted.size
+            && self.got as i64 != size
+        {
+            return Some(format!("{} bytes, the server lists {size}", self.got));
+        }
+        if let Some(sum) = self.wanted.checksum
+            && iwd_file_checksum(&self.tmp) != Some(sum)
+        {
+            return Some(format!("not the iwd of checksum {sum}"));
+        }
+        None
+    }
+
+    /// The spool renamed into place once it is the file the server listed
+    /// ([`Self::check`]); 1.7 renames it unchecked (`CL_WWWDownload`
+    /// 0x472a4b, `CL_ParseDownload` 0x474614) and compares it on the next
+    /// gamestate. A spool that fails is removed and ends the queue.
     fn finish(self) -> DownloadEvent {
+        let why = self.check();
         drop(self.file);
+        if let Some(why) = why {
+            let _ = std::fs::remove_file(&self.tmp);
+            return DownloadEvent::Failed(format!("{}: {why}", self.wanted.remote));
+        }
         match std::fs::rename(&self.tmp, &self.dest) {
             Ok(()) => DownloadEvent::Finished(self.wanted.remote, self.dest, self.size),
             Err(e) => {
@@ -700,8 +793,8 @@ mod tests {
 
     /// A redirect to a name holding a colour code (a CoD4x update
     /// backend's `mods/cod4i/^7mod.ff`): the GET carries the `^` raw, as
-    /// libwww sends the path, and the file lands under that name with no
-    /// size check, as 1.7 renames its spool (cod4-handshake.md 11, 13).
+    /// libwww sends the path, and the file lands under that name
+    /// (cod4-handshake.md 11, 13).
     #[test]
     fn a_colour_coded_name_is_fetched_raw_and_kept() {
         use std::io::{BufRead, Write};
@@ -733,8 +826,7 @@ mod tests {
         let wanted = Wanted {
             remote: "mods/cod4i/^7mod.ff".into(),
             checksum: None,
-            // Not the served size: the file is kept all the same.
-            size: Some(body.len() as i64 + 1),
+            size: Some(body.len() as i64),
         };
         let mut dls = Downloads::new(&root, vec![wanted]);
         assert_eq!(
@@ -772,6 +864,92 @@ mod tests {
             ]
         );
         assert_eq!(std::fs::read(&dest).unwrap(), body);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fs_game_names_no_stock_directory() {
+        assert_eq!(fs_game("\\fs_game\\mods/mw").as_deref(), Some("mods/mw"));
+        for bad in [
+            "",
+            "main",
+            "Zone",
+            "zone/english",
+            "players",
+            "usermaps",
+            "../x",
+            "/x",
+            "c:/x",
+        ] {
+            assert_eq!(fs_game(&format!("\\fs_game\\{bad}")), None, "{bad}");
+        }
+        // A server naming the install's own zones fetches nothing.
+        let si = "\\fs_game\\zone\\sv_referencedFFCheckSums\\5 \\sv_referencedFFNames\\zone/english/common_mp";
+        assert!(missing_files(si, |_| false, |_| None).is_empty());
+    }
+
+    /// A scratch root and one queued file, its `download` sent.
+    fn queued(tag: &str, wanted: Wanted) -> (PathBuf, Downloads) {
+        let root = std::env::temp_dir().join(format!("vcod-dl-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut dls = Downloads::new(&root, vec![wanted]);
+        assert!(
+            matches!(&dls.next_download()[..], [DownloadEvent::Command(c)] if c.starts_with("download "))
+        );
+        (root, dls)
+    }
+
+    #[test]
+    fn a_transfer_past_its_announced_size_aborts_and_removes_its_spool() {
+        let ff = Wanted {
+            remote: "mods/m/mod.ff".into(),
+            checksum: None,
+            size: Some(4),
+        };
+        let (root, mut dls) = queued("over", ff);
+        let block = |block, size, data: &[u8]| DownloadMsg::Block {
+            block,
+            size,
+            data: data.to_vec(),
+        };
+        assert_eq!(
+            dls.on_message(&block(0, Some(4), b"abc")),
+            [DownloadEvent::Command("nextdl 0".into())]
+        );
+        let evs = dls.on_message(&block(1, None, b"de"));
+        assert_eq!(evs[0], DownloadEvent::Command("stopdl".into()));
+        assert!(
+            matches!(&evs[1], DownloadEvent::Failed(w) if w.contains("more than 4 bytes")),
+            "{evs:?}"
+        );
+        assert!(dls.is_done());
+        assert!(!root.join("mods/m/mod.vcod-dl").exists());
+        assert!(!root.join("mods/m/mod.ff").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_iwd_off_its_listed_checksum_is_removed() {
+        let iwd = Wanted {
+            remote: "mods/m/z.iwd".into(),
+            checksum: Some(1234),
+            size: None,
+        };
+        let (root, mut dls) = queued("sum", iwd);
+        let block = |block, size, data: &[u8]| DownloadMsg::Block {
+            block,
+            size,
+            data: data.to_vec(),
+        };
+        dls.on_message(&block(0, Some(3), b"zip"));
+        let evs = dls.on_message(&block(1, None, b""));
+        assert!(
+            matches!(&evs[1], DownloadEvent::Failed(w) if w.contains("checksum 1234")),
+            "{evs:?}"
+        );
+        assert_eq!(evs.len(), 2);
+        assert!(!root.join("mods/m/z.vcod-dl").exists());
+        assert!(!root.join("mods/m/z.iwd").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

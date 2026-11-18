@@ -7117,20 +7117,19 @@ pub(crate) mod tests {
         assert!(w.spawned.is_some());
     }
 
-    /// A file that still differs after its download is kept, as 1.7
-    /// keeps it, and asked for again on `donedl`'s gamestate; where
-    /// retail would fetch it on every gamestate, the join ends there.
+    /// A redirected file longer than the size the server announced fails
+    /// its fetch: `wwwdl fail`, and it comes whole over UDP. 1.7 keeps the
+    /// long file and fetches it again on every gamestate.
     #[test]
-    fn cod4_live_www_file_still_different_ends_the_join() {
+    fn cod4_live_www_file_past_its_size_falls_back_to_udp() {
         let Some(w) = live_www(&[], &[], &["/mods/test/mod.ff"], Duration::ZERO) else {
             return;
         };
         assert_eq!(w.asked, ["/mods/test/z_test.iwd", "/mods/test/mod.ff"]);
-        let (got, want) = &w.landed[1];
-        assert_eq!(got.as_ref().map(Vec::len), Some(want.len() + 1));
-        assert!(w.spawned.is_none());
-        let why = w.refused.unwrap();
-        assert!(why.contains("mods/test/mod.ff is different"), "{why}");
+        for (got, want) in &w.landed {
+            assert!(got.as_ref() == Some(want), "a file did not land whole");
+        }
+        assert!(w.spawned.is_some(), "{:?}", w.refused);
     }
 
     /// The level time of the newest snapshot once `ui_score_bar "0"` has
