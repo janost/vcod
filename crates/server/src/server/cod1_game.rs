@@ -30,7 +30,8 @@ pub struct Cod1Game {
     /// section 12). Always 0 on 1.1.
     pub(super) paused_ms: i32,
     /// Gamestate entity baselines a delta frame may omit an unchanged entity
-    /// against; empty when `test_entities` is off.
+    /// against: every linked script entity's, plus the test entities'
+    /// (`Server::rebuild_baselines`).
     pub(super) baselines: HashMap<u32, msg::EntityState>,
     /// Wall clock of the previous tick, for the trace's send-interval column.
     pub(super) last_tick: Option<Instant>,
@@ -120,11 +121,11 @@ pub struct Cod1Game {
     /// The game module's state.
     pub(super) module: Cod1Module,
     /// The moves the tick's first frame replayed, by slot, for its
-    /// snapshots; the frame being run's, from `replay_moves` to
-    /// `run_frame`; `--trace`'s wall gap since the last tick and the frames
-    /// it was owed.
+    /// snapshots.
     pub(super) tick_moved: Option<Vec<MoveSummary>>,
+    /// The frame being run's moves, from `replay_moves` to `run_frame`.
     pub(super) frame_moved: Vec<MoveSummary>,
+    /// `--trace`'s wall gap since the last tick and the frames it was owed.
     pub(super) tick_wall: (Option<f32>, u32),
 }
 

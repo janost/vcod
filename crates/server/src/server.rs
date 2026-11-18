@@ -477,14 +477,6 @@ fn followable(clients: &[Option<Client>], slot: usize) -> bool {
         .is_some_and(|s| s.own_view)
 }
 
-/// `ClientEndFrame`'s follow half for one slot, in slot order: a playing or
-/// dead client takes the own-view bit a follow copies, or is spawned where a
-/// copy still in its playerstate left it, and a spectator runs
-/// `SpectatorClientEndFrame` (0x40760). A forced follow's copy is taken
-/// `archivetime` back, retried 50 ms younger each time it fails down to a
-/// live one, and the age it settled on is written back; a forced follow that
-/// finds nothing writes -1 back into `spectatorclient`, and so does a follow
-/// that finds nothing to copy, which is `StopFollowing`.
 /// The seat changes the host made this cmd, onto the riders' sims
 /// (`crate::game::vehicle::seat::SeatOp`), and the script's copy of where
 /// each one now stands.
@@ -891,6 +883,14 @@ fn place_rider(rt: &mut script::ScriptRuntime, slot: usize, sim: &mut ClientSim)
     rt.set_client_origin(slot, at.0.to_array());
 }
 
+/// `ClientEndFrame`'s follow half for one slot, in slot order: a playing or
+/// dead client takes the own-view bit a follow copies, or is spawned where a
+/// copy still in its playerstate left it, and a spectator runs
+/// `SpectatorClientEndFrame` (0x40760). A forced follow's copy is taken
+/// `archivetime` back, retried 50 ms younger each time it fails down to a
+/// live one, and the age it settled on is written back; a forced follow that
+/// finds nothing writes -1 back into `spectatorclient`, and so does a follow
+/// that finds nothing to copy, which is `StopFollowing`.
 fn follow_end_frame(
     clients: &mut [Option<Client>],
     slot: usize,
