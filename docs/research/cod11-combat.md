@@ -910,8 +910,10 @@ INFERRED: `eFlags 0xC000` marks a player on a mounted MG, since `FireWeapon`
 tests the same mask before taking its turret branch and the fire path skips the
 clip decrement when it is set.
 
-UNVERIFIED: what sets `pm_flags 0x800`, and what `pm_flags 0x400` and `0x4000`
-mean. VERIFIED: `BG_GetMinSpreadForWeapon` tests `pm_flags & 1` and
+`pm_flags` 0x800 is `PMF_RESPAWNED` (16.5; `cod11-mantle.md`, State
+reference) and 0x4000 has its own section in `cod11-mantle.md`; what 0x400
+means is open (section 10). VERIFIED: `BG_GetMinSpreadForWeapon` tests
+`pm_flags & 1` and
 `pm_flags & 2` and loads `hipSpreadProneMin`, `hipSpreadDuckedMin` and
 `hipSpreadStandMin` off those tests, and the weapon-change check tests
 `pm_flags & 0x10` and holds a store of weapon 0. INFERRED: the prone minimum
@@ -2076,7 +2078,8 @@ the PVS anyway.
 ### 2.6 `Bullet_Endpos`
 
 VERIFIED: `Bullet_Endpos` is `0x69624`, 0xcf bytes, and nothing in the
-combat path above calls it. UNVERIFIED: what does, and what it is for.
+combat path above calls it. Its arithmetic is the spread cone's end point
+(2.2, "The rounding"); which 1.1d function calls it is open.
 
 ### 2.7 What a `bulletTrace` clips
 
@@ -5259,7 +5262,7 @@ truncated). `damageEvent` stays 0 through the fatal hit (INFERRED: 6's step
 respawns on use with the full loadout, and the killer's score goes 0 to 1 the
 frame after the kill.
 
-### 9.2 What differs
+### 9.2 What differed: the closed divergences and their pins
 
 Every divergence these runs found is closed. Retail facts and the traps they
 set, each with its pin:
@@ -5755,18 +5758,17 @@ server ran.
   sweep against a target with more than two hits of health at a fixed short
   range, with the pitch read off the cmd rather than the echo, would settle
   it.
-- UNVERIFIED: what sets `pm_flags 0x800`, which stops `PM_Weapon` outright,
-  and what `pm_flags 0x400` and `0x4000` mean. INFERRED for `0x400`: set
+- UNVERIFIED: what `pm_flags 0x400` means. (0x800, which stops `PM_Weapon`
+  outright, is `PMF_RESPAWNED`: 16.5 and `cod11-mantle.md`'s State
+  reference give its set and clear; 0x4000 is `cod11-mantle.md`,
+  "`pm_flags` 0x4000".) INFERRED for `0x400`: set
   whenever a fire, a melee finish or a weapon change happens while
   `pm_flags & 1`, and ORed in by the ADS flag update's prone arm (1.13), so
   it is prone-specific.
 - UNVERIFIED: the meaning of bit `0x10` of the trace word at offset 32, which
   makes a bullet continue through a surface at full damage.
-- UNVERIFIED: what `Bullet_Endpos` (`0x69624`) is for; nothing on this path
-  calls it.
-- UNVERIFIED: the hit-location partition itself. It is decided inside
-  `trap_LocationalTrace`, in the engine binary, so nothing above pins how a
-  point on a player maps to one of the 19 names.
+- UNVERIFIED: which 1.1d function calls `Bullet_Endpos` (`0x69624`). Its
+  arithmetic is the spread cone's end point (2.2, "The rounding").
 - Settled: every jump adds 64 to `ps.aimSpreadScale`, capped at 255
   (`PM_CheckJump` 0x2edc6-0x2edf3, `cod11-mantle.md`, "Jumps"; the 255 once
   attributed to the ground jump was the prone dive's block). VERIFIED: both
@@ -9444,7 +9446,7 @@ timer already dropped.
 VERIFIED, by capture: under the timer `PM_SlideMove` leaves a push into a
 wall in the velocity (`cod11-player-clip.md` 8.5, `probe_slide`).
 
-### 16.2 As implemented
+### 16.2 vcod's port, and a retail read
 
 `Server::replay_moves` (`crates/server/src/server.rs`) runs every packet
 since the last tick in the order the server executed it: `handle_packet`

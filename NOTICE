@@ -7,10 +7,12 @@ version. See LICENSE for the full text.
 
 Ported code
 
-Parts of crates/common (net/msg.rs, net/huffman.rs, net/netchan.rs,
-net/trajectory.rs, net/gamestate.rs, net/snapshot.rs, net/connectionless.rs,
-pmove.rs, collision.rs) and crates/server/src/server.rs are ports of routines
-from:
+Source files whose header says "Contains routines ported from" carry ports of
+routines from the sources below. Among them: in crates/common, net/msg.rs,
+net/huffman.rs, net/netchan.rs, net/trajectory.rs, net/gamestate.rs,
+net/snapshot.rs, net/connectionless.rs, net/codec.rs, pmove.rs, collision.rs,
+patch.rs, leafwalk.rs and animscript.rs; in crates/server, server.rs and
+game/missile.rs; in crates/client, frontend/mod.rs and sky.rs. The sources:
 
   Quake III Arena GPL Source Code
   Copyright (C) 1999-2005 Id Software, Inc.
@@ -29,6 +31,11 @@ the source names the file it came from.
 The triangle-strip decoder in crates/common/src/xmodel.rs is ported from
 cod-asset-importer by mauserzjeh, licensed under GPL-3.0.
 https://github.com/mauserzjeh/cod-asset-importer
+
+The struct layouts behind the CoD 1.1 netfield tables in crates/common/src/net/
+started from CoDExtended, a GPL server extension for CoD 1.1, and some of its
+type names (pm_type, entity types) are used as they are there.
+https://github.com/xtnded/codextended
 
 Quake III Arena and Return to Castle Wolfenstein are trademarks of id Software.
 Call of Duty is a trademark of Activision Publishing, Inc. This project is not

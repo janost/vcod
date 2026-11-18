@@ -146,7 +146,7 @@ impl Cod1Module {
                 match s.mode {
                     SpawnMode::Player => {
                         sim.become_player(s.origin, s.yaw_deg, cmd_angles);
-                        // UO's `G_DObjUpdate` (0x87df9) rebuilds a client's
+                        // UO's `G_DObjUpdate` (0x77df9) rebuilds a client's
                         // DObj when the spawning thread sets his model.
                         sim.dobj_ahead = sim.ps.rules == vcod_common::pmove::MoveRules::Uo;
                         // The builtin's think on its fresh sim already ran

@@ -4885,7 +4885,7 @@ impl Renderer {
         }
         // A prop skin with a `skins/<name>` block, or a template the prop
         // path cannot draw, goes through its stages like a map material,
-        // slotted after them (shader doc 8).
+        // slotted after them (shader doc 8.2).
         // A lit CoD2 prop's stages read its baked light as `lightingDiffuse`,
         // rescaled from identityLight 0.5 as `vs_prop` does, never raw.
         let cod2_lit: HashMap<&str, Material> = props
@@ -9099,7 +9099,7 @@ impl Renderer {
                     )
                 );
             let gamma_direct = post && swap_direct;
-            // Shafts need a sun flare's direction (shader doc 8).
+            // Shafts need a sun flare's direction (shader doc 8.7).
             let shafts = self
                 .sky
                 .as_ref()
@@ -10561,7 +10561,7 @@ fn camera_bind_group(
 /// (wood@chateau_exteriordoor's is a gloss mask; docs/research/
 /// cod11-shader-scripts.md, "World shader types").
 /// How a static prop's skin draws when it has no `skins/` block, by its
-/// `type@` template as the entity path resolves it (shader doc 8).
+/// `type@` template as the entity path resolves it (shader doc 8.2).
 enum PropSkinDraw {
     /// More than one stage, or a blend: the stage path, `$texturename`
     /// bound to the skin.

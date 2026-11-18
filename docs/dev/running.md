@@ -9,7 +9,9 @@ debug overlays and env vars. The player-facing flags are in
 - Both binaries expect to sit next to `CoDMP.exe` and read `main/`. With
   `--mod-dir uo`, `uo/` sits over `main/`: any base other than `main` sits
   over its sibling `main/` (`pk3::base_dirs`).
-- `COD_DIR` overrides the install; `--game-dir` overrides both.
+- `COD_DIR` overrides the install for every game; `--game-dir` overrides
+  both. `COD2_DIR`, `COD4_DIR` and `COD4_LNXDED_DIR` are read by tests and
+  tools only (`docs/dev/testing.md`).
 - `--vanilla` keeps only the install patch's stock paks on the search path
   (`pk3::is_vanilla_pak`, `Pk3Fs::vanilla`).
 - `--game cod1|cod2|cod4` overrides `game::Game::detect`: CoD4 by `zone/` or
@@ -61,8 +63,9 @@ The game is the detected install's (or `--game`'s).
   its configstring blocks `proto.cs`, never the 1.1 constants.
 - `dedicated` defaults to 1 (no heartbeat, unlike retail's 2). `--set
   dedicated=2` opts in.
-- There is no stdin console. Admin commands go through rcon, refused until
-  `--set rconPassword=...`.
+- Admin commands go through the stdin console (`--no-console` turns it
+  off; CoD1's line editor is `tty_console.rs`) or rcon once `--set
+  rconPassword=...` is set (`docs/usage.md`, "Stdin console").
 
 ## Logs and env vars
 

@@ -1434,7 +1434,7 @@ retail behaviour; the lines still serve as D2 samples.
 The release view: 12.7 cannot separate the angle the release sets from the
 one the probe's cmds asked for.
 
-## 13. As implemented
+## 13. The A/B runs: what retail measured, and vcod's port
 
 The mounted frame is `ScriptRuntime::turret_think_client` over
 `game::turret`'s `aim`, `fire_tick`, `loop_tick` and `muzzle`, run once per

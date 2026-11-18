@@ -46,6 +46,9 @@ Pick the fixture helper by what the test asserts:
   (`iw_00`..`iw_24`, `localized_*_iwNN`). A map pack there (a `mp_*.iwd`,
   a `~~~.iwd` sorted last) overrides stock gametype and map scripts and
   joins `sv_iwdNames`, which the wire A/Bs compare with retail's.
+- A CoD4 test: `vcod_cod4::testing::cod4_install()` (`COD4_DIR`), or
+  `cod4_lnxded_install()` (`COD4_LNXDED_DIR`, the retail dedicated
+  server's own `zone/english/`, which `zone_census` reads).
 
 The all-maps census tests scope to stock `pak[0-9].pk3`. Map downloads drop
 third-party `zzz_*.pk3` into `main/`; a census failure on one of those is not
@@ -57,6 +60,19 @@ Each load still steps a fresh script seed, as retail's `G_InitGame` does
 (`cod11-map-cycle.md` 4.8), so a later level never repeats the first's draws.
 A gate that compares a later level's spawn with retail's replays retail's
 picks through `Server::pin_spawns`, as `gametypes_ab` does.
+
+## CI and the test binaries
+
+- `ci.yml` runs on ubuntu with no game data, so no pak test and no A/B gate
+  runs there; they run only on a machine with an install.
+- `nightly.yml` rebuilds the rolling `nightly` release on master pushes that
+  touch code (docs, tools and `*.md` are path-ignored). `workflow_dispatch`
+  forces one.
+- Each crate's integration tests are one binary named after the crate
+  (`--test common`, `--test cod2`, `--test cod4`, `--test gsc`, `--test
+  server`; `tests/main.rs`). A file's tests filter by its name (`--
+  vehicle_ab::`). The client's tests live in its binary: `cargo test -p
+  vcod --bins`.
 
 ## Ignored tests: when to run them
 
@@ -70,7 +86,7 @@ picks through `Server::pin_spawns`, as `gametypes_ab` does.
 | CoD4 hit boxes per map | `--lib -- --ignored cod4_every_map_poses_both_teams` (`COD4_DIR`) | ~25 s |
 | CoD2 gametypes | `--lib -- --ignored cod2_gametype_census` (`COD2_DIR`) | ~18 s |
 | 1.5 stuck seed | `--lib -- --ignored the_15_overlap_spectator_seed_is_the_only_fit` | ~2 s |
-| shaders or render layouts | `renderer::pipeline_check` (lavapipe env below) | |
+| shaders or render layouts | `cargo test -p vcod --bins -- renderer::pipeline_check` (not ignored: it skips without a Vulkan adapter; lavapipe env below) | |
 | CoD2 maps, CoD2 load path | `cod2_map_census`, `cod2_load_profile` | |
 | CoD4 maps, gametypes | `cod4_map_sweep` | 6-8 min and ~3 GB a map |
 
@@ -94,6 +110,17 @@ What each holds:
   `SLOPE_FIXTURE`), and the seed searches `recover_game_seed` (CoD4),
   `recover_spread_seed` and `recover_rocket_seed` (CoD2), each driven by
   its env vars (their doc comments).
+- Measurements, run by hand with `-- --ignored --nocapture`, each named in
+  its research doc: `lit_pipeline_register_census` (a driver's shader
+  statistics), `cod2_cull_profile`, `cod2_cell_walks_draw_alike`
+  (`pipeline_check`) and `cell_walks_side_by_side` (`--test cod2`), each
+  over `VCOD_PROFILE_MAPS` (cod2-client-perf.md 8, 9);
+  `leaf_order_census` (`LEAF_MAPS`, `LEAF_SAMPLES`; bsp-ibsp59-format.md),
+  `stock_sun_keep` and `regional_sun_keep`
+  (cod11-light-grid-and-leaf-lights.md 12).
+- Live network checks, never in a gate: `master_list_live` (asks the
+  public master) and `lan_scan_live` (needs a LAN server on 29661 and
+  29662), both in `frontend/browser.rs`.
 
 Times are release wall on a 30-thread box, the binary built.
 

@@ -1,3 +1,6 @@
+//! Contains routines ported from the RTCW-MP GPL source, Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company.
+//! See NOTICE.
+//!
 //! `mp/playeranim.script`: which animation a player plays, given its state.
 //!
 //! RTCW's character animation script format verbatim, ported from

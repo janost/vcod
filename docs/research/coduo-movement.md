@@ -463,12 +463,12 @@ short.
   weapon's `useHintString` (weapon def +0x494) is not empty, its index
   (+0x498) is the string.
 - The activate-entity loop runs after; the first usable entity's hint
-  replaces the 7 and the value stays (stores at 0x67c37).
+  replaces the 7 and the value stays (stores at 0x57c37).
 
 No stock LMG file sets `useHintString` (VERIFIED, the `pakuo` weapon
 files), so the string stays -1.
 
-`G_CheckPointInsideTriggerMount` (0x8780f, VERIFIED decompile) asks
+`G_CheckPointInsideTriggerMount` (0x7780f, VERIFIED decompile) asks
 `trap_EntitiesInBox` for the point grown 0.1 under mask 0x405c0008 and
 takes the first entity whose classname is `trigger_mount`; the value is
 its spawnflag 1. The query walks linked boxes, which `SV_LinkEntity` grows
@@ -480,7 +480,7 @@ it does the entities' is not read out of the server binary. vcod masks
 both (INFERRED: otherwise every wall 15 ahead would hint 7, and the
 captures show no hint away from the mounts).
 
-`spawnTriggerMount(mins, maxs, crouch)` (0x77974, VERIFIED decompile)
+`spawnTriggerMount(mins, maxs, crouch)` (0x67974, VERIFIED decompile)
 reads two vectors and `Scr_GetBool`, sorts each axis, `G_Spawn`s, sets
 classname `trigger_mount` and `r.mins`/`r.maxs` to the sorted corners at
 origin 0, and calls `SP_trigger_mount_no_brush`:
@@ -491,7 +491,7 @@ origin 0, and calls `SP_trigger_mount_no_brush`:
 - `r.svFlags` 1 (no client sees it), `eFlags` |= 2, linked;
 - returns the entity.
 
-`SP_trigger_mount` (0x876d5), the map's, ORs the same bit into
+`SP_trigger_mount` (0x776d5), the map's, ORs the same bit into
 `InitTrigger`'s contents.
 
 vcod-server:

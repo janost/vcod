@@ -640,8 +640,8 @@ server holds the float itself.
 
 ## 14. Open
 
-- The rest of pmove in the kept model: `PM_StepSlideMove` at 0x805e930 and the `PM_SlideMove` it
-  calls at 0x805e030 (both INFERRED, section 1) are the next to read.
+- `PM_StepSlideMove` (0x805e930) and `PM_SlideMove` (0x805e030) are read
+  in section 5; the rest of pmove in the kept model is unread.
 - Captures for the sprint, the ladder, a prone body and the sighted
   walk.
 - The server's open items are section 15's last list.

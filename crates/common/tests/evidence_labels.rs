@@ -1,7 +1,7 @@
-//! The evidence labels in `docs/research/*.md`, checked for the two shapes a
-//! grep can see.
+//! The evidence labels in `docs/research/*.md` and `docs/protocol-1.1.md`,
+//! checked for the two shapes a grep can see.
 //!
-//! `AGENTS.md` asks for one label per claim: VERIFIED for what was read out
+//! `docs/research/README.md` asks for one label per claim: VERIFIED for what was read out
 //! of a binary, an asset or a capture, INFERRED for anything read off control
 //! flow, which includes instruction sequencing and branch conditions. Five
 //! review rounds across four implementers went on enforcing that by reading,
@@ -20,14 +20,14 @@
 //!
 //! - a correctly-split pair of sentences with the split in the wrong place: a
 //!   VERIFIED half that still narrates sequencing ("followed by", "then") or a
-//!   branch condition ("gated on that field being non-null"). That was the
-//!   last occurrence of this defect in the repo and no grep finds it;
+//!   branch condition ("gated on that field being non-null"). Several CoD4
+//!   and UO docs still carry it, and no grep finds it;
 //! - a claim carrying no label at all;
-//! - a blanket in a section heading (`## 16. ..., VERIFIED`). `AGENTS.md`
+//! - a blanket in a section heading (`## 16. ..., VERIFIED`). The rule
 //!   forbids it the same as any other per-section blanket, and nine section
 //!   headings in `cod11-gsc-object-model.md` still carry one;
 //! - a document-level default ("everything here is VERIFIED unless labelled
-//!   otherwise"), the most common blanket left in the corpus. `AGENTS.md`
+//!   otherwise"), the most common blanket left in the corpus. The rule
 //!   sanctions it where the document's provenance is uniform and every
 //!   exception is labelled, which is a judgement no grep makes, so this
 //!   check neither flags it nor vouches for it;
@@ -42,7 +42,8 @@
 
 use std::path::PathBuf;
 
-/// Every `docs/research/*.md`, sorted, read from the repo the crate sits in.
+/// Every `docs/research/*.md`, sorted, then `docs/protocol-1.1.md`, read from
+/// the repo the crate sits in.
 fn research_docs() -> Vec<(String, String)> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/research");
     let mut docs: Vec<(String, String)> = std::fs::read_dir(&dir)
@@ -57,6 +58,9 @@ fn research_docs() -> Vec<(String, String)> {
         .collect();
     docs.sort();
     assert!(!docs.is_empty(), "no research docs under {}", dir.display());
+    let wire = dir.join("../protocol-1.1.md");
+    let text = std::fs::read_to_string(&wire).unwrap_or_else(|e| panic!("read {wire:?}: {e}"));
+    docs.push(("protocol-1.1.md".into(), text));
     docs
 }
 

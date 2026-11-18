@@ -360,9 +360,8 @@ down, mask 0x2810011, the player's box (-15,-15,0)..(15,15,70). VERIFIED
 
 ## 6. Open
 
-- 1.7 addresses for the INFERRED facts above. `CM_Trace` should be
-  findable off its `0xfff` box-model compare and the 0.7 walkable
-  constant in `cod4_lnxded`.
+- 1.7 addresses for the INFERRED facts above that still carry none
+  (`CM_Trace` is 0x811ce5c, section 2).
 - The float model of the border arm (`CM_TraceSphereThroughBorder`,
   0x811626a: its ends, then its own corner tests, `fsqrt` at 0x8116423,
   0x811653a, 0x8116640, 0x81166d3) and of the position test's walk

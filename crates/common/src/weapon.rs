@@ -561,7 +561,7 @@ pub struct WeaponDef {
     pub explosion_inner_damage: i32,
     pub explosion_outer_damage: i32,
     /// UO's `vehiclescale`: a grenade's splash on a vehicle is multiplied by
-    /// it when positive (`Scr_Vehicle_DamageScale` 0x9ccad, coduo-vehicles.md
+    /// it when positive (`Scr_Vehicle_DamageScale` 0x8ccad, coduo-vehicles.md
     /// 13); 0 where the file has none.
     pub vehicle_scale: f32,
     /// Units per second along the view, and the extra lift added to z.
