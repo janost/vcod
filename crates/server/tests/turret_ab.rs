@@ -1496,7 +1496,10 @@ const FIXTURE_VICTIM_19_SCRIPT: &str = concat!(
 /// When in a frame the target's cmds go out: the net probe sends one every
 /// 16 ms of its own clock, three a frame.
 const TARGET_CMD_MS: [u64; 3] = [16, 33, FRAME_MS as u64];
-const ORIGIN_EPS: f32 = 0.25;
+/// Retail's fixture prints origins to 0.1 and ours compares at full
+/// precision: the rounding alone reaches sqrt(3) * 0.05 = 0.087. Measured
+/// 2026-11-18 over every gated row at 1.1 and UO: 0.072 at most.
+const ORIGIN_EPS: f32 = 0.09;
 /// Retail's fixture prints angles to 0.1.
 const PRINT_EPS: f32 = 0.05;
 /// One `ANGLE2SHORT` step.

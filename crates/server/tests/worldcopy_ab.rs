@@ -73,8 +73,10 @@ const PROBE_ROLL: &str =
 const PROBE_CRUSH: &str =
     include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_sinecrush.gsc");
 
-/// Float formatting.
-const TOL: f32 = 0.05;
+/// Both logs print two decimals, so the same float can land a print step
+/// apart. Measured 2026-11-18 at 1.1 and UO: 0.01 over every frame row, 0
+/// on the spawned copies.
+const TOL: f32 = 0.02;
 
 /// How long before its first snapshot a capture's client starts joining.
 const FIRST_SNAP_AFTER_JOIN_MS: i64 = 400;
