@@ -3228,5 +3228,8 @@ vcod: `vcod_common::menu_precomp` expands the text before
 so the menu grammar still reads whitespace-separated words; `$evalint`,
 `$evalfloat`, `#pragma` and the `__LINE__` family are not read. Retail
 stops the file at an error (`#error`, a call with the wrong argument
-count); vcod warns and goes on.
+count); vcod warns and goes on. vcod bounds a hostile file: the output stops at 4 MiB,
+a file runs at most 256 `#include`s, and an `#if` expression nested past 64
+levels reads 0 (`menu_precomp::MAX_OUTPUT`, `MAX_INCLUDES`,
+`MAX_EXPR_DEPTH`). Stock menus come nowhere near any of them.
 
