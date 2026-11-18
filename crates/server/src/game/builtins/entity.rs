@@ -895,11 +895,11 @@ pub fn placed_origin(
 const CEILING_CHECK: f32 = 128.0;
 const DROP_DISTANCE: f32 = 262144.0;
 
-/// `isPlayer(ent)` reads the entity number against `MAX_CLIENTS`, which is
-/// what makes it answerable before stage 4 gives clients any state. Retail's
-/// `isPlayer` reads `ent->client`; stage 4 replaces this with the real check.
+/// `isPlayer(ent)`: whether `ent` is a live client's entity, retail's
+/// `ent->client` read; a handle to a client who left is the VM's dead
+/// entity type there and reads 0.
 pub fn is_player(
-    _host: &mut GameHost,
+    host: &mut GameHost,
     _cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
@@ -913,7 +913,8 @@ pub fn is_player(
     let Some(Value::Entity(id)) = args.first() else {
         return Ok(Value::Int(0));
     };
-    Ok(Value::Int((id.0 < MAX_CLIENTS as u32) as i32))
+    let live = host.ents.get(*id).is_some_and(|e| e.client.is_some());
+    Ok(Value::Int(i32::from(live)))
 }
 
 /// `isAlive(ent)` (`.so` 0x5cf8c): 0 for an argument that is not an entity,
@@ -1689,21 +1690,25 @@ mod tests {
         });
     }
 
-    /// `isPlayer` reads the entity number against `MAX_CLIENTS`, which is
-    /// what makes it answerable before stage 4 gives clients any state.
+    /// `isPlayer` answers for a live client's entity only: a map entity
+    /// and a handle to a client who left (the VM's dead entity type on
+    /// retail) read 0 (BUG-114).
     #[test]
-    fn is_player_reads_the_entity_number() {
+    fn is_player_reads_the_live_client() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
+            let ask = |host: &mut GameHost, cx: &mut Cx, v: Value| {
+                is_player(host, cx, None, &[v]).unwrap()
+            };
             let map_ent = Value::Entity(host.ents.spawn(cx).unwrap());
+            assert_eq!(ask(&mut host, cx, map_ent), Value::Int(0));
+            let player = host.ents.spawn_client(cx, 3, None).unwrap();
+            assert_eq!(ask(&mut host, cx, Value::Entity(player)), Value::Int(1));
+            host.ents.free_client(3);
+            assert_eq!(ask(&mut host, cx, Value::Entity(player)), Value::Int(0));
             assert_eq!(
-                is_player(&mut host, cx, None, &[map_ent]).unwrap(),
+                ask(&mut host, cx, Value::Entity(EntId(5, 0))),
                 Value::Int(0)
-            );
-            let client = Value::Entity(EntId(3, 0));
-            assert_eq!(
-                is_player(&mut host, cx, None, &[client]).unwrap(),
-                Value::Int(1)
             );
         });
     }
