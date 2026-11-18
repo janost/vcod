@@ -172,7 +172,7 @@ pub(crate) enum Joining {
 
 /// What a game lends the driver for one tick. Each method is a read or a
 /// write the driver makes at one point of the tick, and the driver keeps
-/// that order (AGENTS.md, "Bots"): a call moved across another changes
+/// that order (docs/dev/traps.md, All games, "Bots"): a call moved across another changes
 /// what the bots draw and see.
 pub(crate) trait BotWorld {
     /// The game's objective state, read once a tick before the views and
@@ -1336,7 +1336,7 @@ fn yell<W: BotWorld>(
 
 /// Pass 2 for one bot: its view, with the enemy (cached), the noise it
 /// answers, the heal and the sidestep round a friend in the line; and the
-/// enemy its cover spot is looked for against ([`covers`]).
+/// enemy its cover spot is looked for against ([`look_covers`]).
 fn sense<W: BotWorld>(
     w: &mut W,
     slot: usize,
@@ -1504,8 +1504,8 @@ fn stand_room<W: BotWorld>(w: &W, feet: [f32; 3]) -> bool {
 /// [`BotView::cover`] for the bot in `slot` fighting `enemy`: the spot it
 /// holds while that still hides and peeks, else the nearest that does
 /// ([`super::cover::find`]), looked at every [`COVER_REFRESH_MS`]: `Ok`
-/// with the spot, or `Err` with the look to take, whose spot [`covers`]
-/// keeps.
+/// with the spot, or `Err` with the look to take, whose spot
+/// [`BotDriver::covers`] keeps.
 fn cover<W: BotWorld>(
     w: &mut W,
     slot: usize,

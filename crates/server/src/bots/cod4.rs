@@ -107,8 +107,6 @@ impl Arms {
     }
 }
 
-/// The CoD4 server's bots: the shared driver's state and what CoD4's hooks
-/// keep beside it.
 /// How long a bot takes to enter the world on a fresh level. A client
 /// loads the map first; a bot at once would spawn before `_spawnlogic`'s
 /// `spawnPerFrameUpdate` has reached every spawn point (one a frame), and
@@ -117,6 +115,8 @@ impl Arms {
 /// (cod4-gsc.md 8). 3 s covers 60 spawn points.
 pub(crate) const BOT_LOAD_MS: i32 = 3000;
 
+/// The CoD4 server's bots: the shared driver's state and what CoD4's hooks
+/// keep beside it.
 pub struct Cod4Bots {
     pub(crate) driver: super::driver::BotDriver,
     shoot: bool,
