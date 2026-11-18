@@ -1073,21 +1073,31 @@ impl Cod4Bots {
     /// one whose frag comes down nearest `target`, within
     /// [`super::LOB_MISS`], and not within its `explosionRadius` of the
     /// thrower, flown from the eye at `projectileSpeed` plus
-    /// `projectileSpeedUp` under gravity 800 until it meets the world.
+    /// `projectileSpeedUp` under gravity 800 until it meets the world. With
+    /// friendly fire on, none onto a playing teammate's `explosionRadius`.
     pub(crate) fn lob_probe(
         &self,
         level: &Cod4Level,
         slot: usize,
         weapon: u8,
         target: [f32; 3],
+        teams: &[i32],
     ) -> Option<[f32; 2]> {
         const STEP_S: f32 = 0.05;
         let ps = self.ps(slot)?;
         let w = self.arms.get(&slot)?.weapon(weapon);
         let def: &WeaponDef = level.weapon_defs().get(w as usize).filter(|_| w > 0)?;
-        let (world, _) = self.world.as_ref()?;
         let radius = def.explosion_radius as f32;
         let target = Vec3::from(target);
+        let mates = teams
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| i != slot && self.playing(level, i))
+            .filter_map(|(i, &t)| Some((t, self.ps(i)?.origin)));
+        if friendly_fire(level) && mate_in_blast(teams.get(slot).copied(), mates, target, radius) {
+            return None;
+        }
+        let (world, _) = self.world.as_ref()?;
         let from = eye(ps);
         let to = target - from;
         let yaw = to.y.atan2(to.x).to_degrees();
@@ -2005,8 +2015,51 @@ pub fn to_cmd4(cmd: &UserCmd) -> UserCmd4 {
     }
 }
 
+/// Whether the level's teammates can hurt each other: 1.7's
+/// `scr_team_fftype` (the stock scripts' `level.friendlyfire`) or the
+/// engine's `scr_friendlyfire`.
+fn friendly_fire(level: &Cod4Level) -> bool {
+    let cvars = level.rt.cvars();
+    ["scr_team_fftype", "scr_friendlyfire"]
+        .iter()
+        .any(|n| crate::game::builtins::cvar::atoi(cvars.get(n)) != 0)
+}
+
+/// Whether `a` and `b` are on one team that is not `free`.
+pub(super) fn same_team(a: Option<i32>, b: Option<i32>) -> bool {
+    a.is_some_and(|a| (a == TEAM_AXIS || a == TEAM_ALLIES) && Some(a) == b)
+}
+
+/// Whether one of `mates` (team, origin) on `mine`'s team stands within
+/// `radius` of `target`.
+fn mate_in_blast(
+    mine: Option<i32>,
+    mates: impl IntoIterator<Item = (i32, Vec3)>,
+    target: Vec3,
+    radius: f32,
+) -> bool {
+    mates
+        .into_iter()
+        .any(|(t, at)| same_team(mine, Some(t)) && at.distance(target) < radius)
+}
+
 #[cfg(test)]
 mod tests {
+    /// A frag aimed into a teammate's blast is refused, one into an enemy's
+    /// or a `free` player's is not (BUG-058).
+    #[test]
+    fn a_lob_into_a_teammate_s_blast_is_refused() {
+        use super::{TEAM_ALLIES, TEAM_AXIS, Vec3, mate_in_blast};
+        let target = Vec3::new(100.0, 0.0, 0.0);
+        let near = Vec3::new(150.0, 0.0, 0.0);
+        let far = Vec3::new(600.0, 0.0, 0.0);
+        let mine = Some(TEAM_AXIS);
+        assert!(mate_in_blast(mine, [(TEAM_AXIS, near)], target, 256.0));
+        assert!(!mate_in_blast(mine, [(TEAM_AXIS, far)], target, 256.0));
+        assert!(!mate_in_blast(mine, [(TEAM_ALLIES, near)], target, 256.0));
+        assert!(!mate_in_blast(Some(3), [(3, near)], target, 256.0));
+    }
+
     use super::*;
 
     #[test]

@@ -527,9 +527,15 @@ impl BotWorld for Cod4Server {
 
     fn forget_drive(&mut self, _: usize) {}
 
-    fn lob_probe(&self, slot: usize, weapon: u8, target: [f32; 3], _: &[i32]) -> Option<[f32; 2]> {
+    fn lob_probe(
+        &self,
+        slot: usize,
+        weapon: u8,
+        target: [f32; 3],
+        teams: &[i32],
+    ) -> Option<[f32; 2]> {
         self.cod4_bots()
-            .lob_probe(self.game.level.as_ref()?, slot, weapon, target)
+            .lob_probe(self.game.level.as_ref()?, slot, weapon, target, teams)
     }
 
     fn take_orders(&mut self) -> Vec<(usize, String)> {
