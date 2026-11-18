@@ -249,6 +249,12 @@ impl crate::engine::GameModule for Cod4Game {
             e.client_packet(from, pkt);
         }
     }
+    fn drop_sender(e: &mut Cod4Server, from: SocketAddr, pkt: &[u8], reason: &str) {
+        if let Some(slot) = conn::sender_slot(&e.core, from, pkt) {
+            e.drop_client(slot, reason);
+        }
+    }
+
     fn drain_console(e: &mut Cod4Server, _now: Instant) {
         let _p = crate::tick_profile::phase("console");
         e.run_console();

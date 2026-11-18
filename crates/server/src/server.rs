@@ -12646,6 +12646,34 @@ mod tests {
         assert_eq!(sent[1].0, high);
     }
 
+    /// A panic in one client's packet drops that client, not the server
+    /// (`engine::contain`): the next frame runs, the zombie gets its drop
+    /// and the other client its snapshot.
+    #[test]
+    fn a_panicking_packet_drops_only_its_client() {
+        use crate::engine::contain::{self, inject};
+        let t = Instant::now();
+        let low = addr(5);
+        let high = SocketAddr::from(([127, 0, 0, 2], 5));
+        let mut sv = Server::new(cfg(), t);
+        let mut nc = active_at(&mut sv, low, t);
+        active_at(&mut sv, high, t);
+        sv.take_outgoing();
+        contain::enable();
+        inject::arm(inject::Site::ClientPacket);
+        let huff = Huffman::new();
+        let ack = nc.incoming_sequence as i32;
+        let pkt = nc.build_out(0x10, ack, 0, &ack_ops(), &huff).unwrap();
+        sv.handle_packet(low, &pkt, t);
+        assert_eq!(sv.client_count(), 1);
+        assert!(sv.game.zombies[0].is_some(), "slot 0 dropped");
+        assert!(sv.core.clients[1].is_some());
+        sv.tick(t);
+        let sent: Vec<_> = sv.take_outgoing().into_iter().map(|(to, _)| to).collect();
+        assert_eq!(sent, [low, high]);
+        assert!(sv.fatal().is_none());
+    }
+
     /// A spectator in slot 0 on a real netchan and two players put straight
     /// into slots 1 and 2 with no socket, under a script that does nothing
     /// but give every client an entity. The players' `sessionstate` is set

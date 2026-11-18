@@ -53,6 +53,8 @@ pub struct EngineCore<C> {
     /// A `quit` ran: the flatline is in the outbox and the binary exits once
     /// it has flushed it.
     pub quit: bool,
+    /// The panics the boundaries caught (`engine::contain`).
+    pub panics: super::contain::Panics,
 }
 
 impl<C> EngineCore<C> {
@@ -81,6 +83,7 @@ impl<C> EngineCore<C> {
             rcon: Default::default(),
             sv_time_ms: 0,
             quit: false,
+            panics: Default::default(),
         }
     }
 }

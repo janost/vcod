@@ -227,6 +227,12 @@ impl crate::engine::GameModule for Cod2Game {
         e.client_packet(from, pkt, at.now);
     }
 
+    fn drop_sender(e: &mut Cod2Server, from: SocketAddr, pkt: &[u8], reason: &str) {
+        if let Some(slot) = conn::sender_slot(&e.core, from, pkt) {
+            e.drop_client(slot, reason);
+        }
+    }
+
     fn drain_console(e: &mut Cod2Server, now: Instant) {
         e.drain_console(now);
     }

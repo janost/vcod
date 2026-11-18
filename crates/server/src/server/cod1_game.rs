@@ -325,6 +325,18 @@ impl crate::engine::GameModule for Cod1Game {
     fn client_packet(e: &mut Server, from: SocketAddr, pkt: &[u8], at: crate::engine::Arrival) {
         e.handle_client_packet(from, pkt, at.now);
     }
+    fn drop_sender(e: &mut Server, from: SocketAddr, pkt: &[u8], reason: &str) {
+        let Some(qport) = pkt.get(4..6).map(|q| u16::from_le_bytes([q[0], q[1]])) else {
+            return;
+        };
+        let slot = e.core.clients.iter().position(|c| {
+            c.as_ref()
+                .is_some_and(|c| c.link.addr.ip() == from.ip() && c.link.netchan.qport == qport)
+        });
+        if let Some(slot) = slot {
+            e.drop_client(slot, reason);
+        }
+    }
     fn drain_console(e: &mut Server, now: Instant) {
         e.drain_console(now);
     }

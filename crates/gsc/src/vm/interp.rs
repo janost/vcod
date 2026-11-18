@@ -1242,7 +1242,13 @@ impl Vm {
                         notifies,
                         spawns: pending_spawns,
                     };
-                    let v = tri!(host.builtin(&mut cx, name, recv, &stack[base..sp]));
+                    let v = tri!(super::call_builtin(
+                        host,
+                        &mut cx,
+                        name,
+                        recv,
+                        &stack[base..sp]
+                    ));
                     sp = base - usize::from(has_recv);
                     // Retail's `Scr_ExecEntThread` from inside a builtin:
                     // each queued thread runs to its first suspend here,

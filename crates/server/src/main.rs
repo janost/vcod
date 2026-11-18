@@ -129,6 +129,13 @@ fn main() -> Result<()> {
     );
     let default_panic = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // A boundary catches it and the server runs on (`engine::contain`).
+        if vcod_server::engine::contain::catching() {
+            if vcod_server::engine::contain::loud() {
+                log::error!("{info}");
+            }
+            return;
+        }
         #[cfg(unix)]
         vcod_server::tty_console::restore();
         eprintln!("vcod-server {} panicked", vcod_server::VERSION);
@@ -535,6 +542,7 @@ fn serve<G: GameModule>(
         vcod_server::tick_profile::enable();
     }
     let mut quit_queued = false;
+    vcod_server::engine::contain::enable();
     // A fixed schedule, not a sleep after each tick: `SV_Frame` runs one
     // game frame per `sv_fps` slice of wall time and catches up when a
     // frame overran, so `svs.time` tracks the wall clock. Sleeping the
@@ -575,7 +583,7 @@ fn serve<G: GameModule>(
         // The console first, then the count: what it ran (a `map_restart`)
         // is owed by this tick's frames, as `Com_Frame` charges the time
         // `Cbuf_Execute` took to the next `SV_Frame` (0x806d003, 0x806d0e4).
-        G::drain_console(server, now);
+        server.exec_console(now);
         // CoD4's `sv_fps`, read every `SV_Frame` (cod4-server-frame.md 8).
         schedule.frame = Duration::from_millis(G::wall_frame_ms(server).max(1) as u64);
         let frames = schedule.owed(Instant::now());
@@ -596,8 +604,9 @@ fn serve<G: GameModule>(
         }
         // A level load that failed with the level already torn down: there is
         // no script to end the level and no table for a client to pull, which
-        // is what retail's `Com_Error` ends the process for.
-        if let Some(e) = G::take_fatal(server) {
+        // is what retail's `Com_Error` ends the process for. Or the level
+        // panicked too often to load it again (`engine::contain`).
+        if let Some(e) = server.fatal() {
             log::error!("{e:#}");
             std::process::exit(1);
         }
