@@ -934,7 +934,7 @@ fn a_cod2_test_client_joins_and_thinks_on_random_cmds() {
     };
     assert_eq!(slot, "0");
     let c = sv.core.clients[0].as_ref().expect("an engine client");
-    assert!(c.test && c.bot && c.state == State::Active);
+    assert!(c.extra.test && c.bot && c.state == State::Active);
     // Nothing is queued for it, or its unacked ring would overflow.
     assert_eq!(c.link.netchan.reliable_sequence, 0);
     let origin = |sv: &Cod2Server| {

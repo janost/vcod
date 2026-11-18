@@ -355,7 +355,7 @@ impl Cod2Server {
         // The connect took a client: the stored ping goes (0x808e2aa).
         self.core.challenges.taken(ci);
         if let Some(c) = self.core.clients[slot].as_mut() {
-            c.last_heard = now;
+            c.extra.last_heard = now;
         }
         log::info!("cod2: {from} connected as client {slot} ({})", key("name"));
         self.send_oob(from, "connectResponse");
@@ -753,7 +753,7 @@ impl Cod2Server {
                     crate::engine::bans::guid_of(crate::engine::Lan::Cod2, c.link.addr)
                 },
                 " ".repeat(pad),
-                c.last_heard.elapsed().as_millis(),
+                c.extra.last_heard.elapsed().as_millis(),
                 " ".repeat(22usize.saturating_sub(addr.len())),
                 c.link.netchan.qport,
             ));

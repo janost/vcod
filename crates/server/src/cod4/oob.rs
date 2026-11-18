@@ -549,14 +549,14 @@ impl Cod4Server {
         let svs = self.core.sv_time_ms;
         let c = self.core.clients[slot].as_mut().unwrap();
         log::debug!("Received packet {idx} of stats data");
-        c.stats.0[start..start + len].copy_from_slice(&data[..len]);
-        c.stat_packets |= 1 << idx;
+        c.extra.stats.0[start..start + len].copy_from_slice(&data[..len]);
+        c.extra.stat_packets |= 1 << idx;
         c.link.last_packet_ms = svs;
-        let left = !c.stat_packets & 0x7f;
+        let left = !c.extra.stat_packets & 0x7f;
         if left == 0
             && let Some(level) = self.game.level.as_mut()
         {
-            level.set_stats(slot, &c.stats);
+            level.set_stats(slot, &c.extra.stats);
         }
         self.send_oob(from, &format!("statResponse {left}"));
     }
@@ -705,7 +705,7 @@ impl Cod4Server {
                     let line = format!(
                         "{slot:3} {:5} {ping}{:>32} {name}^7{:pad$}{:7} {:<22}{:5} {:5}\n",
                         score,
-                        c.guid,
+                        c.extra.guid,
                         "",
                         self.core.sv_time_ms - c.link.last_packet_ms,
                         c.link.addr.to_string(),
@@ -985,7 +985,7 @@ impl Cod4Server {
         let c = self.core.clients[slot].as_ref().unwrap();
         let (name, guid) = (
             crate::game::say::clean_name(&super::client_name(&c.link.userinfo)),
-            c.guid.clone(),
+            c.extra.guid.clone(),
         );
         self.kick_slot(slot, out);
         if !cmd.eq_ignore_ascii_case("onlykick") {
@@ -1051,7 +1051,7 @@ impl Cod4Server {
             return;
         };
         let (guid, name) = (
-            c.guid.clone(),
+            c.extra.guid.clone(),
             crate::game::say::clean_name(&super::client_name(&c.link.userinfo)),
         );
         if guid.is_empty() {
@@ -1470,6 +1470,6 @@ mod query_tests {
         let reply = ask(&mut sv, from, &format!("connect \"{ui}\""), now);
         assert!(reply[0].starts_with("connectResponse"), "{reply:?}");
         let client = sv.core.clients.iter().flatten().next().unwrap();
-        assert_eq!(client.guid, hex[..32]);
+        assert_eq!(client.extra.guid, hex[..32]);
     }
 }

@@ -82,27 +82,13 @@ pub struct Cod4Config {
     pub max_clients: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum State {
-    /// `CS_ZOMBIE`: dropped, still sent its last commands until
-    /// `sv_zombietime` passes without a packet.
-    Zombie,
-    /// `connectResponse` sent: the stats come in, bare messages go out.
-    Connected,
-    /// `CS_CLIENTLOADING`: the gamestate sent, not yet in the world.
-    Primed,
-    Active,
-}
+use crate::engine::slot::State;
 
-pub struct Client {
-    link: crate::engine::slot::Link<(i32, Frame4)>,
-    state: State,
-    /// The message the gamestate went in; an older acknowledge is ignored.
-    gamestate_message: i32,
-    /// The frame the client's last `clc_move` acknowledged, -1 for none.
-    delta_message: i32,
-    /// `lastUsercmd.serverTime`.
-    last_cmd_time: i32,
+/// A CoD4 client slot (`engine::slot::Conn`).
+pub type Client = crate::engine::slot::Conn<(i32, Frame4), Cod4Client>;
+
+/// What a CoD4 slot keeps beside the engine's connection.
+pub struct Cod4Client {
     /// The playerstate's `commandTime`: the newest cmd thought.
     command_time: i32,
     /// The 0x2000-byte stats block and which of its seven packets came.
@@ -111,25 +97,10 @@ pub struct Client {
     /// The `getchallenge` hex the client sent, its GUID (VERIFIED live, the
     /// console's `guid "<hex>"`).
     guid: String,
-    /// `pureAuthentic`: `None` until a `cp`.
-    pure: Option<bool>,
-    rates: link::Rates,
-    /// `Sys_IsLANAddress` of its address: its snapshots go out every frame,
-    /// unpaced ([`Self::transmit`]).
-    lan: bool,
-    /// One of vcod's bots (`bots.rs`): no address, no messages.
-    bot: bool,
-    last_connect_ms: i32,
-    /// Each reliable ring slot's `svscmd_type`: false for
-    /// `SV_CMD_CAN_IGNORE` ([`commands::add`]).
-    reliable_kept: [bool; MAX_RELIABLE_COMMANDS],
     /// The file in flight (cod4-handshake.md 11).
     download: download::Download,
-    /// Voice chat (`voice.rs`): the frames queued for this client this
-    /// frame, its mute list and `sendVoice`.
-    voice: voice::ClientVoice,
     /// The exponent of the next unacked back-off draw (slot +0x804f8,
-    /// 0..=8); see [`Self::transmit`].
+    /// 0..=8); see [`Cod4Server::transmit`].
     stall_exp: u32,
 }
 
@@ -888,9 +859,9 @@ impl Cod4Server {
         if c.state == State::Connected {
             // `SV_SendClientGameState`: only once all seven stats
             // packets are in; with none yet, the client is asked again.
-            if c.stat_packets == (1 << STAT_PACKETS) - 1 {
+            if c.extra.stat_packets == (1 << STAT_PACKETS) - 1 {
                 self.send_gamestate(slot);
-            } else if c.stat_packets == 0 {
+            } else if c.extra.stat_packets == 0 {
                 self.send_oob(from, "requeststats\n");
             }
             return;
@@ -1039,30 +1010,30 @@ impl Cod4Server {
             return false;
         };
         match args[0].as_str() {
-            "download" => c.download.begin(arg),
+            "download" => c.extra.download.begin(arg),
             "nextdl" => {
-                if !c.download.next_dl(atoi(arg), svs) {
+                if !c.extra.download.next_dl(atoi(arg), svs) {
                     self.drop_client(slot, "broken download");
                     return false;
                 }
             }
             "stopdl" => {
-                if c.download.active() {
+                if c.extra.download.active() {
                     log::info!(
                         "clientDownload: {slot} : file {:?} aborted",
-                        c.download.name
+                        c.extra.download.name
                     );
                 }
-                c.download.close();
+                c.extra.download.close();
             }
             // 0x816fd00: the transfer closed, then `SV_SendClientGameState`.
             "donedl" => {
                 log::info!("clientDownload: {slot} Done");
-                c.download.close();
+                c.extra.download.close();
                 self.send_gamestate(slot);
             }
-            "retransdl" => c.download.retransmit(atoi(arg)),
-            _ => match c.download.wwwdl(arg) {
+            "retransdl" => c.extra.download.retransmit(atoi(arg)),
+            _ => match c.extra.download.wwwdl(arg) {
                 download::Www::None => {}
                 download::Www::Gamestate => self.send_gamestate(slot),
                 download::Www::Drop(reason) => {
@@ -1251,7 +1222,7 @@ impl Cod4Server {
             }
             c.last_cmd_time = cmd.server_time;
             // No pmove yet: the cmd moves the clock and the view.
-            c.command_time = cmd.server_time;
+            c.extra.command_time = cmd.server_time;
             if let Some(level) = self.game.level.as_mut() {
                 use crate::game::cod4::level::Inactivity;
                 match level.inactivity_timer(slot, cmd) {
@@ -1340,17 +1311,17 @@ impl Cod4Server {
         // fragments that follow a message's first are rate-paced for every
         // client (`next_fragment`; the gamestate's 350 ms apart, VERIFIED
         // live).
-        let idle = c.state != State::Active && !c.download.active();
+        let idle = c.state != State::Active && !c.extra.download.active();
         // 0x8178aff..0x8178c98: a client in the world more than 28
         // messages past its last acknowledge, LAN or not, is due
         // `irand(0, 2^n) * snapshotMsec` on, n counting such messages from
         // 0 up to 8 and back to 0 on any other (cod4-server-frame.md 12).
         if c.state == State::Active && c.delta_message >= 0 && sequence - c.delta_message > 28 {
-            let k = self.game.hold.irand(0, 1 << c.stall_exp);
+            let k = self.game.hold.irand(0, 1 << c.extra.stall_exp);
             c.link.next_message_ms = svs + k * c.rates.snapshot_msec;
-            c.stall_exp = (c.stall_exp + 1).min(8);
+            c.extra.stall_exp = (c.extra.stall_exp + 1).min(8);
         } else {
-            c.stall_exp = 0;
+            c.extra.stall_exp = 0;
             match link::pace(
                 svs,
                 bytes,
@@ -1592,7 +1563,7 @@ impl Cod4Server {
             write_pending_commands(&mut w, c);
             let message = c.link.netchan.outgoing_sequence as i32;
             let mut ps = level_ps.unwrap_or_else(|| {
-                spectator_ps(slot, origin, angles, c.command_time.max(svs - frame))
+                spectator_ps(slot, origin, angles, c.extra.command_time.max(svs - frame))
             });
             ps.sent_angles();
             // Every entity but the one the playerstate views from: retail
@@ -1632,7 +1603,7 @@ impl Cod4Server {
             PROTOCOL_17.write_snapshot(&mut w, from, &to, head, &self.game.baselines);
             c.link.frames[message as usize % PACKET_BACKUP] = Some((message, to));
         }
-        if c.download.active() && c.state != State::Zombie {
+        if c.extra.download.active() && c.state != State::Zombie {
             let rate = c.rates.send_rate(max_rate);
             let budget = vcod_cod4::net::download::blocks_per_message(rate, c.rates.snapshot_msec);
             let wants_www =
@@ -1643,7 +1614,8 @@ impl Cod4Server {
                 download::servable(root.as_deref()?, name)
                     .and_then(|p| crate::download::DownloadFile::open(&p))
             };
-            c.download
+            c.extra
+                .download
                 .write(&mut w, svs, budget, &dl_cvars, wants_www, &open);
         }
         c.link.ping_ring[c.link.netchan.outgoing_sequence as usize % PACKET_BACKUP] = (svs, -1);
@@ -1673,29 +1645,25 @@ impl Cod4Server {
             level.connect(slot, &game_name(userinfo), self.game.spot);
             level.set_guid(slot, &guid);
         }
-        self.core.clients[slot] = Some(Client {
+        // `Sys_IsLANAddress` with the subnet table (0x81d59c8), the
+        // pacing's and the ping limits' test; only the challenge takes
+        // the subnet-blind one (cod4-handshake.md 15).
+        let lan = link::Lan::Cod2.is_lan(from.ip());
+        self.core.clients[slot] = Some(Client::connected(
             link,
-            state: State::Connected,
-            gamestate_message: -1,
-            delta_message: -1,
-            last_cmd_time: 0,
-            command_time: svs,
-            stats: Stats(Box::new([0; vcod_cod4::net::stats::STATS_BYTES])),
-            stat_packets: 0,
-            guid,
-            pure: None,
-            rates: link::Rates::of(userinfo, false, 1),
-            // `Sys_IsLANAddress` with the subnet table (0x81d59c8), the
-            // pacing's and the ping limits' test; only the challenge takes
-            // the subnet-blind one (cod4-handshake.md 15).
-            lan: link::Lan::Cod2.is_lan(from.ip()),
-            bot: false,
-            last_connect_ms: svs,
-            reliable_kept: [true; MAX_RELIABLE_COMMANDS],
-            download: download::Download::default(),
-            voice: voice::client_voice(userinfo),
-            stall_exp: 0,
-        });
+            svs,
+            link::Rates::of(userinfo, false, 1),
+            lan,
+            voice::client_voice(userinfo),
+            Cod4Client {
+                command_time: svs,
+                stats: Stats(Box::new([0; vcod_cod4::net::stats::STATS_BYTES])),
+                stat_packets: 0,
+                guid,
+                download: download::Download::default(),
+                stall_exp: 0,
+            },
+        ));
     }
 
     pub fn client_count(&self) -> usize {
@@ -1709,7 +1677,11 @@ impl Cod4Server {
 
     /// A client's stats block as the server holds it.
     pub fn stats(&self, slot: usize) -> Option<&Stats> {
-        self.core.clients.get(slot)?.as_ref().map(|c| &c.stats)
+        self.core
+            .clients
+            .get(slot)?
+            .as_ref()
+            .map(|c| &c.extra.stats)
     }
 
     /// The GUID a client gave with its `getchallenge`.
@@ -1718,7 +1690,7 @@ impl Cod4Server {
             .clients
             .get(slot)?
             .as_ref()
-            .map(|c| c.guid.as_str())
+            .map(|c| c.extra.guid.as_str())
     }
 }
 

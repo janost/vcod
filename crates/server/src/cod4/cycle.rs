@@ -80,9 +80,13 @@ impl Cod4Server {
                 continue;
             };
             c.state = State::Connected;
-            c.stat_packets = 0;
+            c.extra.stat_packets = 0;
             c.pure = None;
-            let (addr, name, guid) = (c.link.addr, game_name(&c.link.userinfo), c.guid.clone());
+            let (addr, name, guid) = (
+                c.link.addr,
+                game_name(&c.link.userinfo),
+                c.extra.guid.clone(),
+            );
             let spot = self.game.spot;
             if let Some(level) = self.game.level.as_mut() {
                 level.connect(slot, &name, spot);
@@ -203,8 +207,9 @@ impl Cod4Server {
             let (active, name, stats, guid) = (
                 c.state == State::Active,
                 game_name(&c.link.userinfo),
-                (c.stat_packets == 0x7f).then(|| kept.unwrap_or_else(|| c.stats.clone())),
-                c.guid.clone(),
+                (c.extra.stat_packets == 0x7f)
+                    .then(|| kept.unwrap_or_else(|| c.extra.stats.clone())),
+                c.extra.guid.clone(),
             );
             self.send_server_command(slot, cmd);
             if let Some(level) = self.game.level.as_mut() {

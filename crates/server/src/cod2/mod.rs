@@ -97,53 +97,22 @@ pub struct Cod2Config {
     pub gametype_script: Option<(String, String)>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum State {
-    /// `CS_ZOMBIE`: dropped, still sent its last commands until
-    /// `sv_zombietime` passes without a packet (17.3).
-    Zombie,
-    /// `connectResponse` sent; bare messages until the client asks.
-    Connected,
-    /// Gamestate sent, not yet in the world.
-    Primed,
-    Active,
-}
+use crate::engine::slot::State;
 
-pub struct Client {
-    /// The connection half CoD1's client keeps too (`engine::slot`); its
-    /// frames are the message number each went in and the frame.
-    link: crate::engine::slot::Link<(i32, Frame2)>,
-    state: State,
-    /// The message the gamestate went in; an older acknowledge is ignored.
-    gamestate_message: i32,
-    /// The frame the client's last `clc_move` acknowledged, -1 for none.
-    delta_message: i32,
-    /// `lastUsercmd.serverTime`: a cmd at or before it is not thought again.
-    last_cmd_time: i32,
+/// A CoD2 client slot (`engine::slot::Conn`); its frames are the message
+/// number each went in and the frame.
+pub type Client = crate::engine::slot::Conn<(i32, Frame2), Cod2Client>;
+
+/// What a CoD2 slot keeps beside the engine's connection.
+pub struct Cod2Client {
     /// A bare server's spectator; with a level the playerstate is the
     /// level's (`Cod2Level::players`).
     ps: PlayerState,
-    /// `SV_VerifyIwds_f`'s verdict: `None` until a `cp`.
-    pure: Option<bool>,
     last_heard: Instant,
-    /// A bot (`bots.rs`): no address, no packets, its cmds the brain's.
-    bot: bool,
-    /// `SV_UserinfoChanged`'s rate, snapshot interval and www flag.
-    rates: link::Rates,
-    /// Whether the address is on the LAN (`Sys_IsLANAddress`).
-    lan: bool,
-    /// `lastConnectTime`, on `svs.time`.
-    last_connect_ms: i32,
     download: house::Download,
     /// An `addTestClient` client: the bots' pass thinks for it on a
     /// random cmd, where a vcod bot (`bot` alone) has its brain.
     test: bool,
-    /// Voice chat (`voice.rs`): the frames queued for the client this
-    /// frame, its mute list and `sendVoice`.
-    voice: crate::voice::ClientVoice,
-    /// Each reliable ring slot's type: false for type 0, the commands a
-    /// client not ready loses ([`commands::add`]).
-    reliable_kept: [bool; MAX_RELIABLE_COMMANDS],
 }
 
 /// The pure lists of `SV_SpawnServer` (cod2-protocol.md 11.3).
@@ -737,13 +706,13 @@ impl Cod2Server {
         if c.state == State::Zombie {
             return;
         }
-        c.last_heard = now;
+        c.extra.last_heard = now;
         c.link.last_packet_ms = svs;
         let ops = self.core.huff.decompress_block(&m.ops);
         let id = i32::from(m.server_id);
         // A downloading client's messages are read whatever their serverId
         // (`SV_ExecuteClientMessage` 0x809114e).
-        if id != self.game.server_id && c.download.name.is_empty() {
+        if id != self.game.server_id && c.extra.download.name.is_empty() {
             // `SV_ExecuteClientMessage` (0x809114e): an id of this spawn
             // from before a `fast_restart` only lets a primed client in;
             // any other stale id gets the gamestate again once the client
@@ -886,24 +855,24 @@ impl Cod2Server {
         match args[0].as_str() {
             // `vdr` (0x80907ba): the pure verdict back to unknown.
             "vdr" => c.pure = None,
-            "download" => c.download.begin(arg(1)),
+            "download" => c.extra.download.begin(arg(1)),
             "nextdl" => {
-                if !c.download.next_dl(atoi(arg(1)), svs) {
+                if !c.extra.download.next_dl(atoi(arg(1)), svs) {
                     self.drop_client(slot, "broken download");
                 }
             }
             "stopdl" => {
-                if !c.download.name.is_empty() {
+                if !c.extra.download.name.is_empty() {
                     log::info!(
                         "clientDownload: {slot} : file {:?} aborted",
-                        c.download.name
+                        c.extra.download.name
                     );
                 }
-                c.download.close();
+                c.extra.download.close();
             }
             "donedl" => self.send_gamestate(slot),
-            "retransdl" => c.download.retransmit(atoi(arg(1))),
-            "wwwdl" => match c.download.wwwdl(arg(1)) {
+            "retransdl" => c.extra.download.retransmit(atoi(arg(1))),
+            "wwwdl" => match c.extra.download.wwwdl(arg(1)) {
                 house::Www::None => {}
                 house::Www::Gamestate => self.send_gamestate(slot),
                 house::Www::Drop(why) => self.drop_client(slot, why),
@@ -1071,8 +1040,8 @@ impl Cod2Server {
         let base = match self.game.level.as_ref() {
             Some(level) => level
                 .wire_playerstate(slot, 0)
-                .unwrap_or_else(|| spectator_wire(&c.ps, slot)),
-            None => spectator_wire(&c.ps, slot),
+                .unwrap_or_else(|| spectator_wire(&c.extra.ps, slot)),
+            None => spectator_wire(&c.extra.ps, slot),
         };
         let mut from = default_usercmd(&base);
         let mut cmds = Vec::with_capacity(count);
@@ -1121,7 +1090,7 @@ impl Cod2Server {
             match self.game.level.as_mut() {
                 Some(level) => level.client_think(slot, &cmd),
                 // A bare server: the cmds advance the clock and nothing else.
-                None => c.ps.command_time = c.ps.command_time.max(cmd.server_time),
+                None => c.extra.ps.command_time = c.extra.ps.command_time.max(cmd.server_time),
             }
         }
         self.flush_game_commands();
@@ -1187,7 +1156,7 @@ impl Cod2Server {
             [one] => one.len() - 4,
             many => many.iter().map(|p| p.len() - 10).sum(),
         };
-        let idle = c.state != State::Active && c.download.name.is_empty();
+        let idle = c.state != State::Active && c.extra.download.name.is_empty();
         match link::pace(
             svs,
             bytes,
@@ -1218,7 +1187,7 @@ impl Cod2Server {
         // `SV_AddServerCommand` (0x8094750) adds nothing for a test
         // client (`client+0xae70c`, which `SV_AddTestClient` sets), so its
         // never-acked ring cannot overflow. VERIFIED.
-        if c.test {
+        if c.extra.test {
             return;
         }
         log::trace!("cod2: to client {slot}: {text:?}");
@@ -1248,7 +1217,7 @@ impl Cod2Server {
         }
         log::info!("cod2: client {slot} dropped: {reason}");
         c.state = State::Zombie;
-        c.download.close();
+        c.extra.download.close();
         let bot = c.bot;
         let name = vcod_common::net::info_value_for_key(&c.link.userinfo, "name")
             .unwrap_or("")
@@ -1479,11 +1448,11 @@ impl Cod2Server {
             Some(level) if in_world => {
                 let ps = level
                     .wire_playerstate(slot, team_of(slot))
-                    .unwrap_or_else(|| spectator_wire(&c.ps, slot));
+                    .unwrap_or_else(|| spectator_wire(&c.extra.ps, slot));
                 let (entities, archived) = level.snapshot_entities(world, slot, &ps);
                 (ps, entities, archived)
             }
-            _ => (spectator_wire(&c.ps, slot), Vec::new(), None),
+            _ => (spectator_wire(&c.extra.ps, slot), Vec::new(), None),
         };
         let c = self.core.clients[slot].as_mut().unwrap();
         let mut w = MsgWriter::new(&self.core.huff);
@@ -1528,7 +1497,8 @@ impl Cod2Server {
             let budget =
                 house::blocks_per_message(c.rates.send_rate(max_rate), c.rates.snapshot_msec);
             let open = |name: &str| house::open_download(&home, &base, name);
-            c.download
+            c.extra
+                .download
                 .write(&mut w, svs, budget, &dl_cvars, c.rates.wants_www, &open);
         }
         c.link.ping_ring[c.link.netchan.outgoing_sequence as usize % PACKET_BACKUP] = (svs, -1);
@@ -1615,24 +1585,19 @@ impl Cod2Server {
         );
         link.next_message_ms = svs;
         link.last_packet_ms = svs;
-        Client {
+        Client::connected(
             link,
-            state: State::Connected,
-            gamestate_message: -1,
-            delta_message: -1,
-            last_cmd_time: 0,
-            ps,
-            pure: None,
-            last_heard: Instant::now(),
-            bot: false,
+            svs,
             rates,
             lan,
-            last_connect_ms: svs,
-            download: house::Download::default(),
-            test: false,
-            voice: voice::client_voice(userinfo, rates.rate),
-            reliable_kept: [true; MAX_RELIABLE_COMMANDS],
-        }
+            voice::client_voice(userinfo, rates.rate),
+            Cod2Client {
+                ps,
+                last_heard: Instant::now(),
+                download: house::Download::default(),
+                test: false,
+            },
+        )
     }
 
     /// `SV_AddTestClient` (lnxded 0x80913da): each slot `addTestClient`
@@ -1651,7 +1616,7 @@ impl Cod2Server {
             let mut c = self.new_client(slot, addr, 0, 0, &userinfo);
             c.bot = true;
             c.state = State::Active;
-            c.test = true;
+            c.extra.test = true;
             self.core.clients[slot] = Some(c);
             log::info!("cod2: test client {name} in slot {slot}");
         }

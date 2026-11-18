@@ -108,8 +108,8 @@ impl Cod4Server {
             // `Callback_PlayerConnect` kicks a client whose class stats read
             // 0 (`_globallogic.gsc`'s stat integrity check), and a
             // `fast_restart` hands the level the slot's own block.
-            c.stats = vcod_cod4::net::stats::Stats::fresh();
-            c.stat_packets = ALL_STATS;
+            c.extra.stats = vcod_cod4::net::stats::Stats::fresh();
+            c.extra.stat_packets = ALL_STATS;
         }
         if let Some(r) = self
             .game
@@ -236,7 +236,7 @@ impl Cod4Server {
                     continue;
                 }
                 c.state = State::Active;
-                c.stat_packets = ALL_STATS;
+                c.extra.stat_packets = ALL_STATS;
                 if let Some(level) = self.game.level.as_mut() {
                     level.begin(slot);
                 }
@@ -562,7 +562,7 @@ impl BotWorld for Cod4Server {
                 continue;
             }
             c.last_cmd_time = cmd.server_time;
-            c.command_time = cmd.server_time;
+            c.extra.command_time = cmd.server_time;
             if let Some(level) = self.game.level.as_mut() {
                 level.client_think(slot, &cmd);
             }
