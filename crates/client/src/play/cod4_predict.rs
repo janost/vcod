@@ -51,7 +51,9 @@ const STEP_SMOOTH_MS: i32 = 100;
 pub const CMD_BACKUP: usize = 128;
 
 /// What prediction moves through: the level's clip map and every weapon's
-/// move scales, by name.
+/// move scales, by name. The four weapon maps are keyed by lower-case
+/// name; look a weapon up through [`Cod4World::weapon_move`],
+/// [`Cod4World::is_primary`], [`Cod4World::def`] and [`Cod4World::kick`].
 pub struct Cod4World {
     pub clip: Arc<ClipMap>,
     pub weapons: HashMap<String, WeaponMove>,
@@ -105,14 +107,15 @@ impl Cod4World {
                 }
             }
             for d in &a.weapons {
+                let key = d.name.to_ascii_lowercase();
                 if let Some(m) = WeaponMove::from_raw(&d.raw) {
-                    weapons.entry(d.name.clone()).or_insert(m);
+                    weapons.entry(key.clone()).or_insert(m);
                 }
                 if d.raw.get(316..320) == Some(&[0; 4]) {
-                    primaries.insert(d.name.clone());
+                    primaries.insert(key.clone());
                 }
                 kicks
-                    .entry(d.name.clone())
+                    .entry(key)
                     .or_insert_with(|| crate::play::cod4_kick::KickDef::from_raw(&d.raw));
                 if let Some(def) = WeaponDef::of(d) {
                     let s = |k: &str| d.strings.get(k).cloned().unwrap_or_default();
@@ -215,6 +218,27 @@ impl Cod4World {
             n += 1;
         }
         n
+    }
+
+    /// A weapon's move scales by its name in any case.
+    pub fn weapon_move(&self, name: &str) -> Option<WeaponMove> {
+        self.weapons.get(&name.to_ascii_lowercase()).copied()
+    }
+
+    /// Whether `weapnext` walks a weapon, by its name in any case.
+    pub fn is_primary(&self, name: &str) -> bool {
+        self.primaries.contains(&name.to_ascii_lowercase())
+    }
+
+    /// A weapon's def and its ammo, clip and alt names, by its name in any
+    /// case.
+    pub fn def(&self, name: &str) -> Option<&(WeaponDef, [String; 3])> {
+        self.defs.get(&name.to_ascii_lowercase())
+    }
+
+    /// A weapon's recoil keys by its name in any case.
+    pub fn kick(&self, name: &str) -> Option<&crate::play::cod4_kick::KickDef> {
+        self.kicks.get(&name.to_ascii_lowercase())
     }
 
     /// The record a shellshock name loads: its own file, else
@@ -667,7 +691,7 @@ impl Cod4Predictor {
             ps.view_angles = v;
         }
         let ps = &ps;
-        let msec = (t - ps.command_time).min(200);
+        let msec = t.wrapping_sub(ps.command_time).min(200);
         let view = keys(vcod_cod4::pmove::aim::view_weapon(ps));
         let held = keys(ps.weapon);
         let mut state = self.aim;
@@ -699,7 +723,7 @@ impl Cod4Predictor {
         if let Some(last) = self.level_time.replace(server_time)
             && server_time > last
         {
-            self.frame_ms = server_time - last;
+            self.frame_ms = server_time.wrapping_sub(last);
         }
         let event = snap.get("damageEvent").unwrap_or(0);
         let last = self.damage_event.replace(event);
@@ -727,7 +751,7 @@ impl Cod4Predictor {
     fn level_at(&self, t: i32) -> Option<i32> {
         let snap = self.level_time?;
         let frame = self.frame_ms.max(1);
-        Some(snap + (t - snap).max(0) / frame * frame)
+        Some(snap.wrapping_add(t.wrapping_sub(snap).max(0) / frame * frame))
     }
 
     /// Predicts off `snap` (`cg.nextSnap`'s playerstate) with `cmds`, the
@@ -879,7 +903,7 @@ impl Cod4Predictor {
     /// is the frame's own.
     fn smooth_steps(&mut self, change: f32, time: i32, smooth: bool) {
         if !smooth || change.abs() < STEP_SMOOTH_MIN {
-            if time - self.step_start > STEP_SMOOTH_MS {
+            if time.wrapping_sub(self.step_start) > STEP_SMOOTH_MS {
                 self.step_change = 0.0;
             }
             return;
@@ -891,7 +915,7 @@ impl Cod4Predictor {
 
     /// `CG_SmoothCameraZ`: what is left of the step's ease at `time`.
     fn step_left(&self, time: i32) -> f32 {
-        let since = time - self.step_start;
+        let since = time.wrapping_sub(self.step_start);
         if self.step_change == 0.0 || since < 0 {
             return 0.0;
         }
@@ -963,6 +987,20 @@ pub fn xyspeed(ps: &PlayerState) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Snapshot times at the ends of an i32 wrap as retail's do: the
+    /// packet's level time reads without an overflow (BUG-122).
+    #[test]
+    fn a_level_time_across_the_i32_wrap_does_not_overflow() {
+        let mut p = Cod4Predictor {
+            level_time: Some(i32::MIN + 5),
+            frame_ms: 50,
+            ..Cod4Predictor::default()
+        };
+        let _ = p.level_at(i32::MAX);
+        p.level_time = Some(i32::MAX - 5);
+        assert!(p.level_at(i32::MIN + 100).is_some());
+    }
 
     /// A mirrored dvar outside 1.7's domain is held to it, a NaN or an
     /// infinity is dropped for the default (SEC-046).

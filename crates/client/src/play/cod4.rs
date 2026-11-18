@@ -1535,7 +1535,7 @@ impl Cod4Session {
         let list = weapon_list(gs);
         (1..128)
             .filter(|&n| crate::play::cod4_input::holds(held, n))
-            .filter(|&n| weapon_name(&list, u32::from(n)).is_some_and(|x| w.primaries.contains(x)))
+            .filter(|&n| weapon_name(&list, u32::from(n)).is_some_and(|x| w.is_primary(x)))
             .collect()
     }
 
@@ -2333,7 +2333,7 @@ impl Cod4Session {
                 };
                 let weapon = |n: u32| {
                     weapon_name(&weapons, n)
-                        .and_then(|name| w.weapons.get(name).copied())
+                        .and_then(|name| w.weapon_move(name))
                         .unwrap_or(WeaponMove::NONE)
                 };
                 let cut = (
@@ -2424,8 +2424,8 @@ impl Cod4Session {
             } else {
                 ps.map_or(u("weapon"), |p| p.weapon)
             };
-            let def = weapon_name(&weapons, weapon)
-                .and_then(|n| self.world.as_ref()?.kicks.get(n).cloned());
+            let def =
+                weapon_name(&weapons, weapon).and_then(|n| self.world.as_ref()?.kick(n).cloned());
             let other = u("otherFlags");
             self.kick.check_respawn(u("clientNum"), new.ps.stats[4]);
             self.kick.step(render_time, def.as_ref(), frac, other);
@@ -5491,6 +5491,21 @@ pub(crate) mod tests {
     fn view_steps(name: &str, hz: f64) -> Vec<(i32, f32, bool)> {
         let (steps, _) = view_steps_in(name, hz, None);
         steps.iter().map(|&(t, d, r)| (t, d.length(), r)).collect()
+    }
+
+    /// A weapon looks up by its name in any case in all four of the
+    /// world's maps (BUG-121).
+    #[test]
+    fn a_weapon_name_looks_up_in_any_case() {
+        let Some(w) = crash_world() else {
+            return;
+        };
+        for n in ["m16_mp", "M16_MP"] {
+            assert!(w.weapon_move(n).is_some(), "{n}");
+            assert!(w.def(n).is_some(), "{n}");
+            assert!(w.kick(n).is_some(), "{n}");
+            assert_eq!(w.is_primary(n), w.is_primary("m16_mp"), "{n}");
+        }
     }
 
     /// mp_crash's prediction world, loaded once.
