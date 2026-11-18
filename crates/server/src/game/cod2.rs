@@ -749,8 +749,7 @@ impl Cod2Level {
     /// at 0.5, forward and right each 127 at 0.33 or else -127 at 0.5,
     /// then each view angle moved `360 * G_crandom()` at 0.33. VERIFIED,
     /// the calls and the constants at 0x814b8f8. The cmd's time is 0,
-    /// which `ClientThink_real` lifts to a second behind `level.time`
-    /// (the store at 0x80f5614 VERIFIED; the cmd's clamp INFERRED, Q3's).
+    /// which [`Self::client_think`] lifts to a second behind `level.time`.
     pub fn test_client_cmd(&mut self, slot: usize) -> Option<UserCmd2> {
         let weapon = self.players.get(slot)?.as_ref()?.ws.weapon;
         if self.rt.client_archive_ms(slot) != 0 {
@@ -758,7 +757,7 @@ impl Cod2Level {
         }
         let r = |l: &Self| l.combat.g_random();
         let mut cmd = UserCmd2 {
-            server_time: self.level_time - 1000,
+            server_time: 0,
             weapon,
             ..Default::default()
         };
@@ -880,6 +879,27 @@ impl Cod2Level {
     pub fn client_think(&mut self, slot: usize, cmd: &UserCmd2) {
         crate::tick_trace::step!("ClientThink slot {slot} cmd {}", cmd.server_time);
         let level_time = self.level_time;
+        // `SV_ClientThink` (0x8090dac) takes the lag time off the cmd as sent.
+        if self.players.get(slot).is_some_and(Option::is_some) {
+            let state = &mut self.rt.host.cod2_mut().clients[slot];
+            state.lag_time = lag_time(state.lag_time, cmd.server_time, level_time);
+        }
+        // `ClientThink_real` (0x80f5d2e) holds the cmd's clock within 1000 ms
+        // behind and 200 ms ahead of `level.time`, then drops a cmd no newer
+        // than `commandTime` unless the view follows another client
+        // (cod2-movement.md 21).
+        let cmd = &UserCmd2 {
+            server_time: cmd.server_time.clamp(level_time - 1000, level_time + 200),
+            ..*cmd
+        };
+        if let Some(p) = self.players.get_mut(slot).and_then(Option::as_mut)
+            && cmd.server_time - p.ps.command_time < 1
+            && p.ps.client_num == slot as u32
+        {
+            // `ClientThink` already rotated it into `pers.oldcmd`'s place.
+            p.oldcmd = *cmd;
+            return;
+        }
         // Before any arm, as each of `ClientThink_real`'s stores them (Mac
         // 0x1a3d00): a killcam's follower skips it on use.
         if let Some(p) = self.players.get_mut(slot).and_then(Option::as_mut) {
@@ -909,8 +929,6 @@ impl Cod2Level {
         let Some(p) = self.players.get_mut(slot).and_then(Option::as_mut) else {
             return;
         };
-        let state = &mut self.rt.host.cod2_mut().clients[slot];
-        state.lag_time = lag_time(state.lag_time, cmd.server_time, level_time);
         let seq = p.ps.event_sequence;
         sync_weapons_in(&self.rt.host, slot, &mut p.ws);
         let defs = &self.combat.weapons;
@@ -2021,6 +2039,75 @@ mod tests {
         level.mantle_blocks[0].2.owner = 0;
         let own = strafe(&mut level);
         assert!((own - free).length() < 1.0, "{own} vs {free}");
+    }
+
+    /// `ClientThink_real` holds a cmd's clock to 200 ms past `level.time`:
+    /// 32 cmds a frame stamped a second apart from a second ahead run no
+    /// farther than an honest walk plus those 200 ms. Needs `COD2_DIR`.
+    #[test]
+    fn cmds_stamped_ahead_run_no_further_than_level_time_allows() {
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let gsc = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../cod2/tests/fixtures/moves/probe_moves.gsc"
+        ))
+        .unwrap();
+        let mut cvars = crate::cvars::Cvars::new();
+        for (k, v) in [
+            ("probe_x", "-299"),
+            ("probe_y", "997"),
+            ("probe_z", "43"),
+            ("probe_yaw", "90"),
+        ] {
+            cvars.set(k, v);
+        }
+        let script = ("maps/mp/gametypes/probe_moves".to_string(), gsc);
+        let mut level =
+            Cod2Level::load_with_script(Rc::new(fs), "mp_toujane", "probe_moves", script, cvars, 0)
+                .unwrap();
+        level.connect(0, "runner");
+        let mut now = 0;
+        let mut frame = |level: &mut Cod2Level, times: &dyn Fn(i32) -> Vec<i32>, walk: bool| {
+            for server_time in times(now) {
+                let cmd = UserCmd2 {
+                    server_time,
+                    forward_move: if walk { 127 } else { 0 },
+                    ..Default::default()
+                };
+                level.client_think(0, &cmd);
+            }
+            now += 50;
+            level.run_frame(now);
+        };
+        let honest = |now: i32| (1..=4).map(|k| now + 12 * k).collect();
+        let ahead = |now: i32| (1..=32).map(|k| now + 1000 * k).collect();
+        frame(&mut level, &honest, false);
+        level.begin(0);
+        for _ in 0..20 {
+            frame(&mut level, &honest, false);
+        }
+        let start = level.players[0].as_ref().unwrap().ps.clone();
+        assert_eq!(start.pm_type, pm_type::NORMAL);
+        let mut run = |level: &mut Cod2Level, times: &dyn Fn(i32) -> Vec<i32>| {
+            let at = level.level_time;
+            let p = level.players[0].as_mut().unwrap();
+            p.ps = start.clone();
+            p.ps.command_time = at;
+            for _ in 0..20 {
+                frame(level, times, true);
+                let ps = &level.players[0].as_ref().unwrap().ps;
+                assert!(ps.command_time <= level.level_time + 200);
+            }
+            let ps = &level.players[0].as_ref().unwrap().ps;
+            (ps.origin - start.origin).truncate().length()
+        };
+        let walked = run(&mut level, &honest);
+        let flood = run(&mut level, &ahead);
+        assert!(walked > 100.0, "the walk is clear: {walked}");
+        let allowed = walked + start.speed as f32 * 0.25;
+        assert!(flood <= allowed, "flood {flood}, walk {walked}");
     }
 
     /// A blow latched while dead (`P_DamageFeedback` skips `pm_type` 6)
