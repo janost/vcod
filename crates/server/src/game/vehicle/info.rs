@@ -24,6 +24,9 @@ const KINDS: [&str; 6] = [
 pub const MPH: f32 = 17.6;
 /// The most files the parse takes (`Com_Error` past it).
 const MAX_FILES: usize = 64;
+/// vcod's bound on a file's numbers: an angle fold by 360s ends in a few
+/// hundred steps below it. The stock files' largest is 1760 (100 mph).
+const MAX_MAGNITUDE: f32 = 100_000.0;
 /// The file must start with this and fit 8 KB past it.
 const HEADER: &str = "VEHICLEFILE";
 const MAX_BODY: usize = 0x2000;
@@ -117,9 +120,85 @@ impl VehicleInfo {
     }
 
     /// `ParseConfigStringToStruct` over one file's info string, the header
-    /// already stripped, then the scalings. `None` on a bad `type`, which is
-    /// retail's `Com_Error`.
-    pub fn parse(name: &str, body: &str) -> Option<VehicleInfo> {
+    /// already stripped, then the scalings. An error on a bad `type`, which
+    /// is retail's `Com_Error`, or on a number the drive step cannot take
+    /// ([`Self::check`]).
+    pub fn parse(name: &str, body: &str) -> Result<VehicleInfo, String> {
+        let info = Self::parse_fields(name, body).ok_or("unknown vehicle type")?;
+        info.check()?;
+        Ok(info)
+    }
+
+    /// vcod's: refuses a file whose numbers would panic or hang the drive
+    /// step, where retail misbehaves. A number past [`MAX_MAGNITUDE`] or not
+    /// finite, a negative rate, acceleration or distance the step takes as
+    /// a size, or a box whose mins pass its maxs. Stock files are all
+    /// inside these (coduo-vehicles.md 10.1).
+    fn check(&self) -> Result<(), String> {
+        let numbers = [
+            ("texureScrollScale", self.texture_scroll_scale),
+            ("maxSpeed", self.max_speed),
+            ("accel", self.accel),
+            ("rotRate", self.rot_rate),
+            ("rotAccel", self.rot_accel),
+            ("maxBodyPitch", self.max_body_pitch),
+            ("maxBodyRoll", self.max_body_roll),
+            ("collisionDamage", self.collision_damage),
+            ("collisionSpeed", self.collision_speed),
+            ("suspensionTravel", self.suspension_travel),
+            ("turretHorizSpanLeft", self.turret.horiz_left),
+            ("turretHorizSpanRight", self.turret.horiz_right),
+            ("turretVertSpanUp", self.turret.vert_up),
+            ("turretVertSpanDown", self.turret.vert_down),
+            ("turretRotRate", self.turret.rot_rate),
+            ("turretGunnerHorizSpanLeft", self.gunner.horiz_left),
+            ("turretGunnerHorizSpanRight", self.gunner.horiz_right),
+            ("turretGunnerVertSpanUp", self.gunner.vert_up),
+            ("turretGunnerVertSpanDown", self.gunner.vert_down),
+            ("turretGunnerRotRate", self.gunner.rot_rate),
+            ("engineSndSpeed", self.engine_snd_speed),
+            ("dmgScaleFront", self.dmg_scale_front),
+            ("dmgScaleSide", self.dmg_scale_side),
+            ("dmgScaleBehind", self.dmg_scale_behind),
+            ("dmgScaleUnder", self.dmg_scale_under),
+            ("dmgScaleBullet", self.dmg_scale_bullet),
+            ("minsX", self.mins[0]),
+            ("minsY", self.mins[1]),
+            ("minsZ", self.mins[2]),
+            ("maxsX", self.maxs[0]),
+            ("maxsY", self.maxs[1]),
+            ("maxsZ", self.maxs[2]),
+            ("accelFwdRollDegrees", self.accel_fwd_roll),
+            ("accelSideRollDegrees", self.accel_side_roll),
+            ("accelSpringTension", self.accel_spring_tension),
+            ("stepsize", self.stepsize),
+            ("collisionFrontDist", self.collision_front_dist),
+            ("collisionBackDist", self.collision_back_dist),
+        ];
+        if let Some((k, v)) = numbers.iter().find(|(_, v)| !(v.abs() <= MAX_MAGNITUDE)) {
+            return Err(format!("{k} {v} is not a number within {MAX_MAGNITUDE}"));
+        }
+        let sizes = [
+            ("rotRate", self.rot_rate),
+            ("rotAccel", self.rot_accel),
+            ("turretRotRate", self.turret.rot_rate),
+            ("turretGunnerRotRate", self.gunner.rot_rate),
+            ("maxsX", self.maxs[0]),
+            ("collisionFrontDist", self.collision_front_dist),
+            ("collisionBackDist", self.collision_back_dist),
+            ("stepsize", self.stepsize),
+            ("suspensionTravel", self.suspension_travel),
+        ];
+        if let Some((k, v)) = sizes.iter().find(|(_, v)| *v < 0.0) {
+            return Err(format!("{k} {v} is negative"));
+        }
+        if (0..3).any(|i| self.mins[i] > self.maxs[i]) {
+            return Err("its mins pass its maxs".into());
+        }
+        Ok(())
+    }
+
+    fn parse_fields(name: &str, body: &str) -> Option<VehicleInfo> {
         let kv = info_pairs(body);
         let get = |k: &str| {
             kv.iter()
@@ -198,8 +277,8 @@ pub struct VehicleInfos {
 impl VehicleInfos {
     /// The files under `vehicles/` in search order (newest pak first, each
     /// pak's own entry order, a name seen before skipped), at most 64.
-    /// A file that fails the header, size or `type` check is skipped where
-    /// retail stops the level.
+    /// A file that fails the header, size, `type` or number check is
+    /// skipped where retail stops the level.
     pub fn load(fs: &Pk3Fs) -> VehicleInfos {
         let mut list = Vec::new();
         for name in fs
@@ -220,8 +299,8 @@ impl VehicleInfos {
                 continue;
             }
             match VehicleInfo::parse(&name, body) {
-                Some(info) => list.push(info),
-                None => log::warn!("vehicles/{name}: unknown vehicle type"),
+                Ok(info) => list.push(info),
+                Err(why) => log::warn!("vehicles/{name}: {why}"),
             }
         }
         VehicleInfos { list }
@@ -266,6 +345,29 @@ mod tests {
     use super::*;
 
     const PANZER: &str = r"\type\tank\steerWheels\0\texureScroll\1\quadBarrel\0\bulletDamage\0\grenadeDamage\1\projectileDamage\1\hasGunner\1\numPassengers\0\texureScrollScale\5.5\maxSpeed\15\accel\12.55\rotRate\50\rotAccel\70\maxBodyPitch\5\maxBodyRoll\5\collisionDamage\100\collisionSpeed\15\suspensionTravel\7\useHintString\GMI_VEHICLE_PANZERIV_HINT\turretWeapon\PanzerIV_turret_mp\turretAltWeapon\mg34_tank_mp\turretHorizSpanLeft\180\turretHorizSpanRight\180\turretVertSpanUp\30\turretVertSpanDown\15\turretRotRate\30\turretGunnerWeapon\mg42_turret_mp\turretGunnerHorizSpanLeft\180\turretGunnerHorizSpanRight\180\turretGunnerVertSpanUp\50\turretGunnerVertSpanDown\30\turretGunnerRotRate\360\lowIdleSnd\panzerIV_idle_low\highIdleSnd\panzerIV_idle_high\lowEngineSnd\panzerIV_engine_low\highEngineSnd\panzerIV_engine_high\turretSpinSnd\panzerIV_turret_spin\turretStopSnd\panzerIV_turret_stop\impactSnd\vehicle_impact\engineSndSpeed\10\dmgScaleFront\33\dmgScaleSide\50\dmgScaleBehind\100\dmgScaleBullet\100\dmgScaleUnder\200\minsX\-70\minsY\-70\minsZ\0\maxsX\70\maxsY\70\maxsZ\120\accelFwdRollDegrees\2.5\accelSideRollDegrees\2.5\accelSpringTension\1.2\stepsize\42\collisionFrontDist\105\collisionBackDist\112";
+
+    /// The three files that panicked or hung the drive step are skipped:
+    /// a negative turn rate, a negative box the dismount sizes its search
+    /// with, and a span that sent the turret's angle fold past 2^33.
+    #[test]
+    fn a_file_the_drive_step_cannot_take_is_refused() {
+        for (key, bad) in [
+            (r"\rotAccel\70", r"\rotAccel\-70"),
+            (r"\rotRate\50", r"\rotRate\-1"),
+            (r"\maxsX\70", r"\maxsX\-200"),
+            (r"\collisionFrontDist\105", r"\collisionFrontDist\-500"),
+            (r"\turretVertSpanUp\30", r"\turretVertSpanUp\-1e30"),
+            (r"\maxSpeed\15", r"\maxSpeed\1e39"),
+        ] {
+            assert!(PANZER.contains(key), "{key}");
+            let body = PANZER.replace(key, bad);
+            let err = VehicleInfo::parse("panzerIV_mp", &body).unwrap_err();
+            assert!(
+                err.contains(key.split('\\').nth(1).unwrap()),
+                "{bad}: {err}"
+            );
+        }
+    }
 
     #[test]
     fn the_panzer_file_parses_with_retails_scalings() {
