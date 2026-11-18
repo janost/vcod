@@ -2,6 +2,8 @@
 //! threads"): how many, and a map over per-bot work run on them under the
 //! ticking thread's walk rules.
 
+#![allow(unsafe_code)]
+
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};

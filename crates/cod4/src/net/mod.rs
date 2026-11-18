@@ -12,7 +12,6 @@ pub mod demo;
 pub mod download;
 pub mod events;
 pub mod fields;
-pub mod http;
 pub mod huffman;
 pub mod parse;
 pub mod pure;

@@ -22,6 +22,17 @@ pub const TOO_LONG: &str = "rcon command too long";
 pub fn packet(password: &str, args: &[String]) -> Option<Vec<u8>> {
     let mut p = connectionless::build_oob("rcon ");
     p.extend_from_slice(password.as_bytes());
+    push_args(&mut p, args);
+    if p.len() >= MESSAGE_MAX {
+        return None;
+    }
+    p.push(0);
+    Some(p)
+}
+
+/// Each argument after a space, quoted when empty or holding a byte at or
+/// below a space.
+fn push_args(p: &mut Vec<u8>, args: &[String]) {
     for a in args {
         p.push(b' ');
         let quote = a.is_empty() || a.bytes().any(|b| b <= b' ');
@@ -33,11 +44,6 @@ pub fn packet(password: &str, args: &[String]) -> Option<Vec<u8>> {
             p.push(b'"');
         }
     }
-    if p.len() >= MESSAGE_MAX {
-        return None;
-    }
-    p.push(0);
-    Some(p)
 }
 
 /// The text of an OOB `print` packet, as `CL_ConnectionlessPacket` prints
@@ -160,17 +166,7 @@ impl Cod4Rcon {
             }
             _ => {
                 let mut p = format!("rcon {}", self.password).into_bytes();
-                for a in args {
-                    p.push(b' ');
-                    let quote = a.is_empty() || a.bytes().any(|b| b <= b' ');
-                    if quote {
-                        p.push(b'"');
-                    }
-                    p.extend_from_slice(a.as_bytes());
-                    if quote {
-                        p.push(b'"');
-                    }
-                }
+                push_args(&mut p, args);
                 if p.len() >= COD4_MESSAGE_MAX {
                     return Lines(vec![format!(
                         "rcon commands are limited to {} characters",

@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 
+use crate::audio::cod2::atof;
 use glam::Vec3;
 use vcod_cod2::net::events as ev;
 use vcod_cod2::net::{ConfigStrings, Frame, SnapshotView};
@@ -77,16 +78,6 @@ pub enum SoundCommand {
 fn wire_ms(s: &str) -> i32 {
     let v = (atof(s) * 1000.0 + 0.5).floor() as i32;
     v.max(0)
-}
-
-/// C's `atof` over a server command's word: the longest leading number.
-fn atof(s: &str) -> f32 {
-    let s = s.trim_start();
-    (1..=s.len())
-        .rev()
-        .filter(|&n| s.is_char_boundary(n))
-        .find_map(|n| s[..n].parse::<f32>().ok())
-        .unwrap_or(0.0)
 }
 
 /// `CG_ServerCommand`'s sound arms, keyed like the rest on the first

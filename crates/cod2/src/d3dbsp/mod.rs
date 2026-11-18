@@ -1177,55 +1177,6 @@ impl D3dBsp {
     pub fn brush_boxes(&self) -> Vec<BrushBox> {
         (0..self.brushes.len()).map(|i| self.brush_box(i)).collect()
     }
-
-    /// `CMod_LoadBrushRelated`'s leaf pass (0x08053c84): every leaf's brush
-    /// tree, built leaf by leaf on one shared copy of lump 27 as retail
-    /// rewrites it in place. Returns that rewritten list (one spare slot at
-    /// the end, as the loader allocates it) and each leaf's tree, `None` for
-    /// a leaf with no brushes. A tree's [`BrushNode::Leaf`] runs index the
-    /// returned list.
-    pub fn leaf_brush_trees(&self) -> Result<(Vec<u16>, Vec<Option<BrushTree>>)> {
-        let boxes = self.brush_boxes();
-        let mut list: Vec<u16> = self.leaf_brushes.iter().map(|&b| b as u16).collect();
-        list.push(0);
-        let mut trees = Vec::with_capacity(self.leafs.len());
-        for (i, l) in self.leafs.iter().enumerate() {
-            if l.leaf_brush_count == 0 {
-                trees.push(None);
-                continue;
-            }
-            let tree = partition_brushes(
-                &boxes,
-                &mut list,
-                l.first_leaf_brush as usize,
-                l.leaf_brush_count as usize,
-            )
-            .map_err(|e| e.context(format!("leaf {i}")))?;
-            trees.push(Some(tree));
-        }
-        Ok((list, trees))
-    }
-
-    /// `CMod_LoadSubmodelBrushNodes` (0x08053404): model `m`'s brush tree
-    /// over its own `first_brush .. first_brush + brush_count`, with the
-    /// list it rewrote. `None` for a model with no brushes.
-    pub fn model_brush_tree(&self, m: usize) -> Result<Option<(Vec<u16>, BrushTree)>> {
-        let model = &self.models[m];
-        if model.brush_count == 0 {
-            return Ok(None);
-        }
-        let mut list: Vec<u16> = (model.first_brush..model.first_brush + model.brush_count)
-            .map(|b| b as u16)
-            .collect();
-        let tree = partition_brushes(
-            &self.brush_boxes(),
-            &mut list,
-            0,
-            model.brush_count as usize,
-        )
-        .map_err(|e| e.context(format!("model {m}")))?;
-        Ok(Some((list, tree)))
-    }
 }
 
 #[cfg(test)]

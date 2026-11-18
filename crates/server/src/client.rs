@@ -81,48 +81,7 @@ impl CmdKind {
     }
 }
 
-/// What [`Client::queue_server_command`] did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Queued {
-    Added,
-    /// An unsent match was taken out and this one appended.
-    Replaced,
-    /// A [`CmdKind::CanIgnore`] command the client is not ready for.
-    Dropped,
-    /// Queueing would overwrite a slot the client has not acked; nothing
-    /// was written, the caller drops the client.
-    Overflow,
-}
-
-/// `SV_FindPendingCommand` (cod_lnxded 0x808b580): whether `new` makes the
-/// pending `old` redundant. Same text, or the same letter for `a b o p q r
-/// t`, or the same first argument for `d` and `v`; never a `x y z` big
-/// configstring chunk.
-fn supersedes(new: &str, old: &str) -> bool {
-    let (n, o) = (new.as_bytes(), old.as_bytes());
-    let Some(&letter) = n.first() else {
-        return false;
-    };
-    if o.first() != Some(&letter) || (b'x'..=b'z').contains(&letter) {
-        return false;
-    }
-    if n[1..] == o[1..] {
-        return true;
-    }
-    let first_arg = |b: &[u8]| -> Vec<u8> {
-        b.get(2..)
-            .unwrap_or_default()
-            .iter()
-            .copied()
-            .take_while(|&c| c != b' ')
-            .collect()
-    };
-    match letter {
-        b'a' | b'b' | b'o' | b'p' | b'q' | b'r' | b't' => true,
-        b'd' | b'v' => first_arg(n) == first_arg(o),
-        _ => false,
-    }
-}
+pub use crate::engine::commands::Queued;
 
 /// `cl->pureAuthentic`: what the last `cp` proved (`SV_VerifyPaks_f`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -148,8 +107,9 @@ pub struct Client {
     pub gamestate_message_num: i64,
     pub last_packet: Instant,
     pub last_connect: Instant,
-    /// Each ring slot's [`CmdKind`], beside `netchan.reliable`.
-    pub reliable_kind: [CmdKind; MAX_RELIABLE_COMMANDS],
+    /// Each ring slot's type beside `netchan.reliable`: true for
+    /// [`CmdKind::Reliable`] ([`crate::engine::commands::queue`]).
+    pub reliable_kept: [bool; MAX_RELIABLE_COMMANDS],
     pub message_ack: i32,
     /// `deltaMessage`: the acked message the next snapshot deltas from, set
     /// by each move op, -1 after a `clc_moveNoDelta` or a gamestate.
@@ -212,7 +172,7 @@ impl Client {
             last_packet: now,
             last_connect: now,
             zombie: false,
-            reliable_kind: [CmdKind::CanIgnore; MAX_RELIABLE_COMMANDS],
+            reliable_kept: [false; MAX_RELIABLE_COMMANDS],
             message_ack: 0,
             delta_message: -1,
             last_processed_st: 0,
@@ -280,21 +240,7 @@ impl Client {
     /// commands leave the ring, the rest close up. What a zombie's drop
     /// notice runs, its state no longer active (0x8085e74).
     pub fn squash_ignorable(&mut self) {
-        let slot = |seq: i32| seq as usize & (MAX_RELIABLE_COMMANDS - 1);
-        let seq = self.link.netchan.reliable_sequence as i32;
-        let mut to = self.link.reliable_sent + 1;
-        for from in self.link.reliable_sent + 1..=seq {
-            if self.reliable_kind[slot(from)] == CmdKind::CanIgnore {
-                continue;
-            }
-            if slot(from) != slot(to) {
-                self.link.netchan.reliable[slot(to)] =
-                    std::mem::take(&mut self.link.netchan.reliable[slot(from)]);
-                self.reliable_kind[slot(to)] = self.reliable_kind[slot(from)];
-            }
-            to += 1;
-        }
-        self.link.netchan.reliable_sequence = (to - 1) as u32;
+        crate::engine::commands::squash(&mut self.link, &mut self.reliable_kept);
     }
 
     /// `SV_AddServerCommand` (cod_lnxded 0x808b680) without the overflow's
@@ -308,47 +254,22 @@ impl Client {
     /// the ring before their acks (protocol-1.1.md, "The server command
     /// queue").
     pub fn queue_server_command(&mut self, cmd: &str) -> Queued {
-        const RING: i32 = MAX_RELIABLE_COMMANDS as i32;
+        use crate::engine::commands;
         // The ring keys the client's messages, so it holds the client's copy.
         let cmd: &str = &client_read_string(cmd);
-        let kind = CmdKind::of(cmd);
-        if self.is_bot && kind == CmdKind::CanIgnore {
-            return Queued::Dropped;
-        }
-        let slot = |seq: i32| seq as usize & (MAX_RELIABLE_COMMANDS - 1);
-        let mut seq = self.link.netchan.reliable_sequence as i32;
-        let mut queued = Queued::Added;
+        let reliable = CmdKind::of(cmd) == CmdKind::Reliable;
         if !self.is_bot {
-            if seq - self.link.reliable_ack > 31 || self.state != ClientState::Active {
-                self.squash_ignorable();
-                seq = self.link.netchan.reliable_sequence as i32;
-                if kind == CmdKind::CanIgnore {
-                    return Queued::Dropped;
-                }
-            }
-            let found = (self.link.reliable_sent + 1..=seq).find(|&i| {
-                self.reliable_kind[slot(i)] == CmdKind::Reliable
-                    && supersedes(cmd, &self.link.netchan.reliable[slot(i)])
-            });
-            if let Some(at) = found {
-                for i in at..seq {
-                    self.link.netchan.reliable[slot(i)] =
-                        std::mem::take(&mut self.link.netchan.reliable[slot(i + 1)]);
-                    self.reliable_kind[slot(i)] = self.reliable_kind[slot(i + 1)];
-                }
-                // The freed last slot takes `cmd` below.
-                seq -= 1;
-                queued = Queued::Replaced;
-            }
+            let active = self.state == ClientState::Active;
+            let kept = &mut self.reliable_kept;
+            return commands::queue(&commands::COD1, &mut self.link, kept, active, cmd, reliable);
         }
-        if seq + 1 - self.link.reliable_ack > RING {
-            return Queued::Overflow;
+        if !reliable {
+            Queued::Dropped
+        } else if commands::append(&mut self.link, &mut self.reliable_kept, cmd, true) {
+            Queued::Added
+        } else {
+            Queued::Overflow
         }
-        seq += 1;
-        self.link.netchan.reliable_sequence = seq as u32;
-        self.link.netchan.reliable[slot(seq)] = cmd.to_string();
-        self.reliable_kind[slot(seq)] = kind;
-        queued
     }
 
     /// The frame sent as `message_num`, if still in the ring.
@@ -626,21 +547,6 @@ mod tests {
         c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;
         assert_eq!(c.queue_server_command("v sq_a \"4\""), Queued::Added);
         assert_eq!(unsent(&c), ["v sq_a \"4\""]);
-    }
-
-    #[test]
-    fn what_supersedes_what() {
-        // `d` matches on the index alone, as `v` on the name.
-        assert!(supersedes("d 5 118", "d 5 117"));
-        assert!(!supersedes("d 5 118", "d 51 118"));
-        // These letters on the letter alone.
-        assert!(supersedes("t 3", "t 1"));
-        assert!(supersedes("b 0 1 2", "b 9"));
-        // Anything else on the whole text only.
-        assert!(supersedes("n", "n"));
-        assert!(!supersedes("m 1", "m 2"));
-        // A big configstring's chunks never.
-        assert!(!supersedes("x 20 abc", "x 20 abc"));
     }
 
     /// Before it is active, and once 32 behind its acks, a client loses

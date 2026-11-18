@@ -533,11 +533,6 @@ impl Server {
             playing: sim.pm_type == crate::spectate::PmType::Normal && !sim.dead,
             enemy,
             hurt: self.bot_hurt(sim),
-            // Checked in pass 2 against this tick's teammates.
-            friend_in_line: false,
-            sidestep: None,
-            cover: None,
-            hunt: None,
             use_takes_weapon: sim.cursor_hint >= self.game.proto.cursor_hints.weapon,
             grenade,
             grenade_cooks: grenade
@@ -579,17 +574,7 @@ impl Server {
             } else {
                 Vec::new()
             },
-            // Dealt with the posts (`driver::deal_posts`).
-            fallen: Vec::new(),
-            post: None,
-            give_way: None,
-            guard_post: None,
-            lane: None,
             stand_room: true,
-            exposure: None,
-            // Probed in pass 3, on the ticks the brain throws.
-            lob: None,
-            waypoint: None,
             hazard_ahead: std::array::from_fn(|i| {
                 self.game.world.as_ref().is_some_and(|w| {
                     let (s, c) = (i as f32 * 45.0).to_radians().sin_cos();
@@ -597,10 +582,6 @@ impl Server {
                     crate::nav::hazard(&w.hazards, sim.ps.origin + ahead)
                 })
             }),
-            // Felt in pass 3, on the ticks the brain reads it.
-            drop_ahead: [None; 8],
-            // Felt in pass 3, on the ticks the brain reads it.
-            wall_ahead: [false; 8],
             linked: sim.link_to.is_some(),
             stranded: self.game.module.driver.nav.as_ref().is_some_and(|g| {
                 let at = sim.ps.origin.into();
@@ -629,30 +610,14 @@ impl Server {
                 .filter(|_| sim.ps.on_ladder)
                 .and_then(|g| g.ladder_middle(sim.ps.origin))
                 .map(Into::into),
-            back_face: None,
             on_ground: sim.ps.on_ground,
-            jump: false,
             sliding: sim.ps.sliding(),
-            leap: false,
-            lip: false,
-            crouch_jump: false,
-            stop: false,
-            mate_ahead: false,
-            squad: Default::default(),
-            run_off: false,
-            back_drop: false,
-            rungs_hold: false,
-            mantle: false,
             move_scale: def
                 .map(|d| d.move_speed_scale)
                 .filter(|&m| m > 0.0)
                 .unwrap_or(1.0),
             fatigue: (sim.ps.rules == vcod_common::pmove::MoveRules::Uo).then_some(sim.ps.fatigue),
             sprinting: sim.ps.sprinting,
-            sprint_room: 0.0,
-            push_off: None,
-            unpin: None,
-            detour: false,
             pistol,
             rocket,
             primaries: [sim.ps.weapon_slots[1], sim.ps.weapon_slots[2]],
@@ -661,11 +626,6 @@ impl Server {
             reload_ms,
             draw_ms,
             loaded,
-            sd: None,
-            re: None,
-            bel: None,
-            uo: None,
-            noise: None,
             // Stock `sd.gsc` and `re.gsc` spawn the dead as spectators.
             one_life: self
                 .game
@@ -683,10 +643,9 @@ impl Server {
                 heal: None,
                 cover: None,
             },
-            // Filled for the level's vehicles in pass 2.
-            vehicles: Vec::new(),
-            seat: None,
-            armor: None,
+            // The rest starts empty; the driver's later passes fill what
+            // the tick needs.
+            ..Default::default()
         })
     }
 

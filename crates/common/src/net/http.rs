@@ -131,6 +131,17 @@ impl Fetch {
     /// Start fetching `url` into `out`. A body longer than `limit` bytes, or
     /// shorter than its `Content-Length`, fails the transfer.
     pub fn spawn(url: &str, out: File, limit: u64) -> anyhow::Result<Fetch> {
+        Self::spawn_timed(url, out, limit, CONNECT_TIMEOUT)
+    }
+
+    /// [`Self::spawn`] with `connect` for the connect timeout (CoD4's
+    /// libwww waits 30 s, cod4-handshake.md 11).
+    pub fn spawn_timed(
+        url: &str,
+        out: File,
+        limit: u64,
+        connect: Duration,
+    ) -> anyhow::Result<Fetch> {
         let first = parse_url(url)?;
         let received = Arc::new(AtomicU64::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
@@ -138,7 +149,7 @@ impl Fetch {
         let url = url.to_string();
         let handle = std::thread::Builder::new()
             .name("www-download".into())
-            .spawn(move || get(&url, first, out, &counter, &stop, limit))
+            .spawn(move || get(&url, first, out, &counter, &stop, limit, connect))
             .context("cannot start the download thread")?;
         Ok(Fetch {
             received,
@@ -177,6 +188,7 @@ fn get(
     received: &AtomicU64,
     cancel: &AtomicBool,
     limit: u64,
+    connect: Duration,
 ) -> anyhow::Result<()> {
     for _ in 0..=MAX_REDIRECTS {
         let addr = (url.host.as_str(), url.port)
@@ -184,7 +196,7 @@ fn get(
             .with_context(|| format!("cannot resolve {}", url.host))?
             .next()
             .with_context(|| format!("no address for {}", url.host))?;
-        let mut sock = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
+        let mut sock = TcpStream::connect_timeout(&addr, connect)
             .with_context(|| format!("cannot connect to {addr}"))?;
         sock.set_read_timeout(Some(READ_TIMEOUT))?;
         sock.set_write_timeout(Some(READ_TIMEOUT))?;

@@ -859,7 +859,7 @@ impl Cod4Level {
         {
             let mut own = vcod_cod4::pmove::PlayerState::from_wire(&p.ps);
             own.add_event(ev::MELEE_BLOOD, 0);
-            p.ps = own.to_wire(&p.ps);
+            own.write_wire(&mut p.ps);
         }
         let event = crate::game::temp_entity::TempEntity {
             event: if victim.is_some() {
@@ -1527,7 +1527,7 @@ impl Cod4Level {
                     (ps.torso_anim, ps.torso_timer) = (anim.torso_anim, anim.torso_timer);
                 }
             }
-            p.ps = ps.to_wire(&p.ps);
+            ps.write_wire(&mut p.ps);
             p.ps.set(ps!("damageDuration"), ps.damage_duration as u32);
             p.ps.set(ps!("flinchYawAnim"), flinch);
             p.ps.stats[0] = if op.fatal { 0 } else { health.max(0) };
@@ -1665,7 +1665,7 @@ impl Cod4Level {
                 ps.ammo[d.ammo_index] = after;
                 ps.add_event(EV_ITEM_PICKUP, it.weapon);
                 let p = self.players[slot].as_mut().unwrap();
-                p.ps = ps.to_wire(&p.ps);
+                ps.write_wire(&mut p.ps);
                 let l = &mut self.rt.host.cod4_mut().clients[slot].loadout;
                 l.ammo[d.ammo_index] = after;
                 taken.push(it.id);

@@ -5,9 +5,7 @@
 //! tests own a queue. Ported from RTCW-MP sv_main.c / sv_client.c; reply
 //! strings come from docs/research/cod11-server-handshake.md.
 
-use crate::client::{
-    Client, ClientState, CmdKind, PacketCommand, Queued, QueuedCmd, sanitize_name,
-};
+use crate::client::{Client, ClientState, PacketCommand, Queued, QueuedCmd, sanitize_name};
 use crate::compass;
 use crate::configstrings;
 use crate::console;
@@ -3903,7 +3901,7 @@ impl Server {
         let at = c.link.netchan.reliable_sequence as usize & (MAX_RELIABLE_COMMANDS - 1);
         c.link.netchan.reliable[at] =
             vcod_common::net::codec::client_read_string(&format!("w \"{reason}\"")).into_owned();
-        c.reliable_kind[at] = CmdKind::Reliable;
+        c.reliable_kept[at] = true;
         if c.is_bot {
             // The slot is free at once, so its brain goes now: a client that
             // takes the slot before the bot step would be driven by it.

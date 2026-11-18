@@ -7,6 +7,8 @@
 //!
 //! Off (no thread enabled) a phase costs one relaxed load and a branch.
 
+#![allow(unsafe_code)]
+
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};

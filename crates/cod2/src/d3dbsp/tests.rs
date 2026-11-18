@@ -136,10 +136,11 @@ fn minimal_map_decodes() {
     assert!(vis.sees(0, 0));
     assert!(!vis.sees(0, 1));
     assert_eq!(b.entities, "{\n\"classname\" \"worldspawn\"\n}\n");
-    let (list, trees) = b.leaf_brush_trees().unwrap();
-    assert_eq!(list, [0, 0]);
-    assert!(trees[0].is_none());
-    assert_eq!(trees[1].as_ref().unwrap().nodes.len(), 1);
+    let clip = crate::map::clip_map(&b).unwrap();
+    assert_eq!(clip.leaf_brush_list, [0, 0]);
+    assert_eq!(clip.leafs[0].brush_node, 0);
+    assert_eq!(clip.leafs[1].brush_node, 1);
+    assert_eq!(clip.brush_nodes.len(), 2);
 }
 
 #[test]
@@ -403,7 +404,7 @@ fn noise_never_panics() {
             b[at] = (x >> 8) as u8;
         }
         if let Ok(bsp) = D3dBsp::parse(&b) {
-            let _ = bsp.leaf_brush_trees();
+            let _ = crate::map::clip_map(&bsp);
         }
     }
 }

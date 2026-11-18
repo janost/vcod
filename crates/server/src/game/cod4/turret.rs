@@ -553,7 +553,7 @@ impl Cod4Level {
             body.view_height_target = height;
             body.add_event(event, 0);
         }
-        p.ps = body.to_wire(&p.ps);
+        body.write_wire(&mut p.ps);
 
         let flags = (p.ps.word(ps!("eFlags")) ^ 2) & !ef::TURRET;
         p.ps.set(ps!("eFlags"), flags);

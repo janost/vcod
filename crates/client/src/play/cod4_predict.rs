@@ -34,7 +34,6 @@ use vcod_cod4::pmove::weapon::{WeaponDef, WeaponDefs};
 use vcod_cod4::pmove::{
     self, CONTENTS_BODY, Cmd, PlayerState, PmWorld, Pmove, Rules, Tr, WeaponMove,
 };
-use vcod_common::turretpose::angles_quat;
 
 /// `cg_errordecay`'s default: `Dvar_RegisterFloat` (iw3mp.exe 0x43c3d6)
 /// of the name at 0x6ca2cc with the float 100.0 at 0x6f9e58
@@ -542,11 +541,6 @@ impl PmWorld for Solids<'_> {
                     if contents & mask == 0 {
                         continue;
                     }
-                    let mut c = vcod_common::collision::Trace::clear(end);
-                    c.fraction = t.fraction;
-                    // `CM_TempBoxModel`'s model 0xfff takes `CM_Trace`'s
-                    // capsule arm (iw3mp.exe 0x4f5080), as on the server
-                    // (cod4-client-view.md 5.1).
                     let body = vcod_common::movetrace::Body {
                         entity: s.number,
                         origin: s.origin,
@@ -554,32 +548,19 @@ impl PmWorld for Solids<'_> {
                         maxs: bmax,
                         contents,
                     };
-                    vcod_common::movetrace::clip_body_kept(&mut c, start, end, mins, maxs, &body);
-                    t.fold(Tr {
-                        fraction: c.fraction,
-                        normal: c.normal,
-                        surface_flags: 0,
-                        contents,
-                        entity_num: s.number,
-                        startsolid: c.startsolid,
-                        allsolid: c.allsolid,
-                        walkable: c.normal.z >= vcod_cod4::collision::WALKABLE_NORMAL_Z,
-                    });
+                    t.fold_capsule(start, end, mins, maxs, &body);
                 }
                 SolidKind::Brush(model) => {
                     if model >= self.clip.submodels.len() {
                         continue;
                     }
-                    // `CM_TransformedBoxTrace`: in the model's frame.
-                    let q = angles_quat(s.angles.to_array());
-                    let local = |p: Vec3| q.inverse() * (p - s.origin);
-                    let c =
-                        self.clip
-                            .trace_model(model, local(start), local(end), mins, maxs, mask);
-                    let mut w = pmove::world_tr(&c);
-                    w.normal = q * c.normal;
-                    w.entity_num = s.number;
-                    t.fold(w);
+                    let b = pmove::Brush {
+                        entity: s.number,
+                        model,
+                        origin: s.origin,
+                        angles: s.angles,
+                    };
+                    t.fold_brush(self.clip, &b, start, end, mins, maxs, mask);
                 }
             }
             if t.fraction == 0.0 {

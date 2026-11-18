@@ -648,6 +648,72 @@ pub fn world_tr(t: &ClipTrace) -> Tr {
     }
 }
 
+impl Tr {
+    /// Folds in a client's body (`body.entity` below [`MAX_CLIENTS`]):
+    /// `CM_TempBoxModel`'s model 0xfff takes `CM_Trace`'s capsule arm
+    /// (`cod4_lnxded` 0x811d29c, iw3mp.exe 0x4f5080), so a body met at an
+    /// angle stops on its round side (cod4-pmove.md 15,
+    /// cod4-client-view.md 5.1). The server and the predictor both clip
+    /// through it.
+    pub fn fold_capsule(
+        &mut self,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        body: &vcod_common::movetrace::Body,
+    ) {
+        let mut c = vcod_common::collision::Trace::clear(end);
+        c.fraction = self.fraction;
+        vcod_common::movetrace::clip_body_kept(&mut c, start, end, mins, maxs, body);
+        self.fold_body(&c, body.contents, body.entity);
+    }
+
+    /// Folds in a sweep `c` that met entity `entity`'s `contents`.
+    pub fn fold_body(&mut self, c: &vcod_common::collision::Trace, contents: u32, entity: u32) {
+        self.fold(Tr {
+            fraction: c.fraction,
+            normal: c.normal,
+            surface_flags: 0,
+            contents,
+            entity_num: entity,
+            startsolid: c.startsolid,
+            allsolid: c.allsolid,
+            walkable: c.normal.z >= crate::collision::WALKABLE_NORMAL_Z,
+        });
+    }
+
+    /// Folds in brush entity `b`: `CM_TransformedBoxTrace`, the sweep in
+    /// its inline model's frame and the normal turned back.
+    pub fn fold_brush(
+        &mut self,
+        clip: &ClipMap,
+        b: &Brush,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        mask: u32,
+    ) {
+        let q = vcod_common::turretpose::angles_quat(b.angles.to_array());
+        let local = |p: Vec3| q.inverse() * (p - b.origin);
+        let c = clip.trace_model(b.model, local(start), local(end), mins, maxs, mask);
+        let mut w = world_tr(&c);
+        w.normal = q * c.normal;
+        w.entity_num = b.entity;
+        self.fold(w);
+    }
+}
+
+/// A brush entity linked to inline model `model`, as it stands.
+#[derive(Clone, Copy, Debug)]
+pub struct Brush {
+    pub entity: u32,
+    pub model: usize,
+    pub origin: Vec3,
+    pub angles: Vec3,
+}
+
 impl PmWorld for ClipMap {
     fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, _pass: u32, mask: u32) -> Tr {
         world_tr(&ClipMap::trace(self, start, end, mins, maxs, mask))

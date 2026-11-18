@@ -172,8 +172,12 @@ pub fn parse(name: &str, text: &[u8], anim_types: &[&str]) -> Result<TextWeapon>
             },
             4 => put(&mut raw, at, atoi(v) as u32),
             5 => put(&mut raw, at, u32::from(atoi(v) != 0)),
-            6 => put(&mut raw, at, (atof(v) as f32).to_bits()),
-            7 => put(&mut raw, at, stored_ms(atof(v) as f32) as u32),
+            6 => put(&mut raw, at, (vcod_common::text::atof(v) as f32).to_bits()),
+            7 => put(
+                &mut raw,
+                at,
+                stored_ms(vcod_common::text::atof(v) as f32) as u32,
+            ),
             20 => {
                 let i = lookup(anim_types.iter().copied(), v)
                     .ok_or_else(|| anyhow!("unknown weapon player anim type {v} in {name}"))?;
@@ -285,10 +289,6 @@ fn info_pairs(s: &str) -> Vec<(&str, &str)> {
         out.push((k, it.next().unwrap_or("")));
     }
     out
-}
-
-fn atof(s: &str) -> f64 {
-    crate::menuexp::atof(s)
 }
 
 /// Field type 7, seconds to milliseconds as 1.7's parser stores them

@@ -622,7 +622,7 @@ impl Cod4Level {
         }
         let mut pm = vcod_cod4::pmove::PlayerState::from_wire(&p.ps);
         pm.add_event(EV_AMMO_PICKUP, w % 128);
-        p.ps = pm.to_wire(&p.ps);
+        pm.write_wire(&mut p.ps);
         self.rt
             .host
             .engine_notifies

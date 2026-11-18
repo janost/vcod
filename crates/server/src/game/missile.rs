@@ -457,6 +457,46 @@ fn bounce_kept(v: Vec3, n: Vec3, soft: bool) -> Vec3 {
 }
 
 impl Missile {
+    /// The fields every spawn path starts from: no owner, model, events,
+    /// shell or flags, the trajectories at rest at the origin; each path
+    /// sets the rest.
+    fn blank() -> Missile {
+        let rest = Trajectory {
+            tr_type: TR_STATIONARY,
+            tr_time: 0,
+            tr_duration: 0,
+            base: Vec3::ZERO,
+            delta: Vec3::ZERO,
+        };
+        Missile {
+            id: EntId(0, 0),
+            owner: None,
+            parent_unspawned: false,
+            weapon: 0,
+            model: 0,
+            traj: rest,
+            apos: rest,
+            explode_at_ms: 0,
+            origin: Vec3::ZERO,
+            events: EventRing::default(),
+            last_run_ms: 0,
+            surf_type: 0,
+            ground: ENTITYNUM_NONE as i32,
+            exploded_ms: None,
+            fused: false,
+            uo: false,
+            falls: false,
+            explosion_type: 0,
+            eflags: 0,
+            shell: None,
+            rocket: false,
+            free_at_ms: None,
+            shootable: None,
+            dropped: false,
+            splash: None,
+        }
+    }
+
     /// The client its move trace passes, `r.ownerNum`: the thrower, until a
     /// shootable grenade's leave-owner think makes it its own owner.
     fn passes(&self) -> usize {
@@ -1371,7 +1411,6 @@ impl Missiles {
         self.live.push(Missile {
             id,
             owner: Some(owner),
-            parent_unspawned: false,
             weapon,
             model,
             traj: Trajectory {
@@ -1390,22 +1429,11 @@ impl Missiles {
             },
             explode_at_ms: now_ms + fuse,
             origin,
-            events: EventRing::default(),
             last_run_ms: now_ms,
-            surf_type: 0,
             ground: ENTITYNUM_NONE as i32,
-            exploded_ms: None,
-            fused: false,
             uo: self.uo,
             falls: self.falls,
-            explosion_type: 0,
-            eflags: 0,
-            shell: None,
-            rocket: false,
-            free_at_ms: None,
-            shootable: None,
-            dropped: false,
-            splash: None,
+            ..Missile::blank()
         });
         Ok(id)
     }
@@ -1427,10 +1455,7 @@ impl Missiles {
     ) -> Vec<Vec3> {
         let mut m = Missile {
             id: EntId(0, 0),
-            owner: None,
-            parent_unspawned: false,
             weapon,
-            model: 0,
             traj: Trajectory {
                 tr_type: TR_GRAVITY,
                 tr_time: 0,
@@ -1447,22 +1472,10 @@ impl Missiles {
             },
             explode_at_ms: fuse_ms,
             origin,
-            events: EventRing::default(),
-            last_run_ms: 0,
-            surf_type: 0,
             ground: ENTITYNUM_NONE as i32,
-            exploded_ms: None,
-            fused: false,
             uo: self.uo,
             falls: self.falls,
-            explosion_type: 0,
-            eflags: 0,
-            shell: None,
-            rocket: false,
-            free_at_ms: None,
-            shootable: None,
-            dropped: false,
-            splash: None,
+            ..Missile::blank()
         };
         let mut draws = Draws::default();
         let mut at = Vec::new();
@@ -1594,7 +1607,6 @@ impl Missiles {
             owner,
             parent_unspawned: owner.is_none(),
             weapon,
-            model: 0,
             traj: Trajectory {
                 delta: Vec3::new(0.0, 0.0, -shell.speed),
                 ..stationary(origin)
@@ -1604,22 +1616,14 @@ impl Missiles {
             // `G_DropArtillery` arms `G_ExplodeMissile` 15 s past the drop.
             explode_at_ms: i32::MAX,
             origin,
-            events: EventRing::default(),
             last_run_ms: now_ms,
-            surf_type: 0,
             ground: ENTITYNUM_WORLD as i32,
-            exploded_ms: None,
-            fused: false,
             uo: true,
             falls: true,
             explosion_type,
             eflags: vcod_common::net::flags::eflags_v22_to_v1(SHELL_EFLAGS_V22),
             shell: Some(shell),
-            rocket: false,
-            free_at_ms: None,
-            shootable: None,
-            dropped: false,
-            splash: None,
+            ..Missile::blank()
         });
         Ok(id)
     }
@@ -1672,9 +1676,7 @@ impl Missiles {
         self.live.push(Missile {
             id,
             owner: Some(owner),
-            parent_unspawned: false,
             weapon,
-            model: 0,
             traj: Trajectory {
                 tr_type,
                 tr_time: now_ms - FRAME_BEHIND_MS,
@@ -1691,12 +1693,8 @@ impl Missiles {
             },
             explode_at_ms: now_ms + life_ms,
             origin: start,
-            events: EventRing::default(),
             last_run_ms: now_ms,
-            surf_type: 0,
             ground: ENTITYNUM_NONE as i32,
-            exploded_ms: None,
-            fused: false,
             uo: self.uo,
             falls: self.falls,
             explosion_type,
@@ -1706,10 +1704,7 @@ impl Missiles {
                 ..shell
             }),
             rocket: true,
-            free_at_ms: None,
-            shootable: None,
-            dropped: false,
-            splash: None,
+            ..Missile::blank()
         });
         Ok(id)
     }

@@ -96,6 +96,45 @@ pub fn escape_controls(s: &str) -> std::borrow::Cow<'_, str> {
 }
 
 /// The text after leading blanks and one sign, and whether that sign was `-`.
+/// C's `atof` over the decimal forms the games' files and commands use:
+/// leading blanks, a sign, digits with at most one point, then an exponent
+/// only when digits follow it; the longest such prefix, 0 with none. The
+/// result is the double `atof` returns; a caller that stores a float casts
+/// it, as the binaries do. `inf`, `nan` and hex forms read as 0.
+pub fn atof(s: &str) -> f64 {
+    let t = s.trim_start();
+    let b = t.as_bytes();
+    let mut end = 0;
+    if matches!(b.first(), Some(b'-' | b'+')) {
+        end = 1;
+    }
+    let digits = |end: &mut usize| {
+        while b.get(*end).is_some_and(u8::is_ascii_digit) {
+            *end += 1;
+        }
+    };
+    digits(&mut end);
+    if b.get(end) == Some(&b'.') {
+        end += 1;
+        digits(&mut end);
+    }
+    let mut best = t[..end].parse::<f64>().unwrap_or(0.0);
+    if matches!(b.get(end), Some(b'e' | b'E')) {
+        let mut e = end + 1;
+        if matches!(b.get(e), Some(b'-' | b'+')) {
+            e += 1;
+        }
+        let start = e;
+        digits(&mut e);
+        if e > start
+            && let Ok(v) = t[..e].parse::<f64>()
+        {
+            best = v;
+        }
+    }
+    best
+}
+
 fn sign(s: &str) -> (bool, &str) {
     let s = s.trim_start();
     match s.as_bytes().first() {
@@ -108,6 +147,21 @@ fn sign(s: &str) -> (bool, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn atof_takes_the_c_prefix() {
+        assert_eq!(atof(" 1.5e2x"), 150.0);
+        assert_eq!(atof(".25"), 0.25);
+        assert_eq!(atof("-.5"), -0.5);
+        assert_eq!(atof("1.5.3"), 1.5);
+        for zero in ["", ".", "-.", "+", "x1", "inf"] {
+            assert_eq!(atof(zero), 0.0, "{zero:?}");
+        }
+        // An exponent with no digits is not read.
+        assert_eq!(atof("3e"), 3.0);
+        assert_eq!(atof("1e+"), 1.0);
+        assert_eq!(atof("2E-1x"), 0.2);
+    }
 
     #[test]
     fn escape_controls_shows_c0_del_and_c1_and_keeps_newline_and_tab() {

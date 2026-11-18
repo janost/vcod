@@ -133,6 +133,37 @@ pub struct GEntity {
     pub team: crate::game::teams::TeamLinks,
 }
 
+impl GEntity {
+    /// A fresh entity holding `engine`'s fields and script struct `script`,
+    /// solid, nothing else set; each spawn path sets what differs.
+    pub fn new(engine: Vec<Value>, script: StructId) -> GEntity {
+        GEntity {
+            engine,
+            client: None,
+            script,
+            solid: true,
+            hidden: false,
+            attachments: Vec::new(),
+            attach_ignore_collision: 0,
+            hud: None,
+            think: None,
+            nextthink: 0,
+            events: EventRing::default(),
+            loop_sound: 0,
+            constant_light: 0,
+            broadcast: false,
+            broadcast_time: 0,
+            apos_base: None,
+            item: None,
+            brush_model: None,
+            link: None,
+            unlinked: false,
+            ground: 0,
+            team: Default::default(),
+        }
+    }
+}
+
 /// The `gentity` fields `SV_LinkEntity` reads off an entity with no client
 /// (`crate::area`, combat doc 14.7).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -482,30 +513,7 @@ impl ObjectTable {
                 engine[slot] = Value::Vector([0.0; 3]);
             }
         }
-        self.ents[id.0 as usize] = Some(GEntity {
-            engine,
-            client: None,
-            script,
-            solid: true,
-            hidden: false,
-            attachments: Vec::new(),
-            attach_ignore_collision: 0,
-            hud: None,
-            think: None,
-            nextthink: 0,
-            events: EventRing::default(),
-            loop_sound: 0,
-            constant_light: 0,
-            broadcast: false,
-            broadcast_time: 0,
-            apos_base: None,
-            item: None,
-            brush_model: None,
-            link: None,
-            unlinked: false,
-            ground: 0,
-            team: Default::default(),
-        });
+        self.ents[id.0 as usize] = Some(GEntity::new(engine, script));
         id
     }
 
@@ -538,30 +546,7 @@ impl ObjectTable {
             if let Route::Engine { slot, .. } = crate::game::fields::route_entity("classname") {
                 engine[slot] = Value::String(cx.intern_exact("worldspawn"));
             }
-            self.world = Some(GEntity {
-                engine,
-                client: None,
-                script: cx.new_struct(),
-                solid: true,
-                hidden: false,
-                attachments: Vec::new(),
-                attach_ignore_collision: 0,
-                hud: None,
-                think: None,
-                nextthink: 0,
-                events: EventRing::default(),
-                loop_sound: 0,
-                constant_light: 0,
-                broadcast: false,
-                broadcast_time: 0,
-                apos_base: None,
-                item: None,
-                brush_model: None,
-                link: None,
-                unlinked: false,
-                ground: 0,
-                team: Default::default(),
-            });
+            self.world = Some(GEntity::new(engine, cx.new_struct()));
         }
         EntId(ENTITYNUM_WORLD, 0)
     }
@@ -650,28 +635,8 @@ impl ObjectTable {
             engine[cs] = Value::String(cx.intern_exact("noclass"));
         }
         self.ents[slot] = Some(GEntity {
-            engine,
             client: Some(client),
-            script,
-            solid: true,
-            hidden: false,
-            attachments: Vec::new(),
-            attach_ignore_collision: 0,
-            hud: None,
-            think: None,
-            nextthink: 0,
-            events: EventRing::default(),
-            loop_sound: 0,
-            constant_light: 0,
-            broadcast: false,
-            broadcast_time: 0,
-            apos_base: None,
-            item: None,
-            brush_model: None,
-            link: None,
-            unlinked: false,
-            ground: 0,
-            team: Default::default(),
+            ..GEntity::new(engine, script)
         });
         Ok(EntId(slot as u32, self.ent_gens[slot]))
     }
@@ -732,28 +697,8 @@ impl ObjectTable {
             }
         }
         self.huds[i] = Some(GEntity {
-            engine,
-            client: None,
-            script,
-            solid: true,
-            hidden: false,
-            attachments: Vec::new(),
-            attach_ignore_collision: 0,
             hud: Some(HudState::default()),
-            think: None,
-            nextthink: 0,
-            events: EventRing::default(),
-            loop_sound: 0,
-            constant_light: 0,
-            broadcast: false,
-            broadcast_time: 0,
-            apos_base: None,
-            item: None,
-            brush_model: None,
-            link: None,
-            unlinked: false,
-            ground: 0,
-            team: Default::default(),
+            ..GEntity::new(engine, script)
         });
         Ok(EntId(FIRST_HUD_ELEM + i as u32, self.hud_gens[i]))
     }

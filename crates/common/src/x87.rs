@@ -39,6 +39,61 @@ pub fn normalize_in_place(v: Vec3) -> Vec3 {
     normalize(v)
 }
 
+/// The two-axis dot left on the stack (CoD2's 0x80e9740 and
+/// `PM_StepSlideMove`'s 0x80eae6e).
+pub fn dot2(a: Vec3, b: Vec3) -> f64 {
+    f64::from(a.x) * f64::from(b.x) + f64::from(a.y) * f64::from(b.y)
+}
+
+/// The CoD2 and CoD4 pmove's `VectorMA`: `a + s * b`, each component
+/// stored (cod2-movement.md 2).
+pub fn ma_stored(a: Vec3, s: f32, b: Vec3) -> Vec3 {
+    let s = f64::from(s);
+    let m = |a: f32, b: f32| (f64::from(a) + s * f64::from(b)) as f32;
+    Vec3::new(m(a.x, b.x), m(a.y, b.y), m(a.z, b.z))
+}
+
+/// The CoD2 and CoD4 pmove's `VectorScale`: `s * v`, each component
+/// stored.
+pub fn scale_stored(v: Vec3, s: f32) -> Vec3 {
+    scale(v, f64::from(s))
+}
+
+/// The CoD2 and CoD4 pmove's `Vec3Lerp` (CoD2's 0x80e129e):
+/// `a + (b - a) * f` per component, stored. What every pmove caller rebuilds a trace's
+/// end point with: CoD2's `trace_t` has no `endpos`
+/// (docs/research/cod2-movement.md 3).
+pub fn lerp_stored(a: Vec3, b: Vec3, f: f32) -> Vec3 {
+    let f = f64::from(f);
+    let l = |a: f32, b: f32| (f64::from(a) + (f64::from(b) - f64::from(a)) * f) as f32;
+    Vec3::new(l(a.x, b.x), l(a.y, b.y), l(a.z, b.z))
+}
+
+/// `I_sqrt` (CoD2's 0x80e9590): libc `sqrt` of the float argument widened
+/// to a double, stored back to a float.
+pub fn sqrt_stored(x: f64) -> f32 {
+    f64::from(x as f32).sqrt() as f32
+}
+
+/// `VectorLength` (CoD2's 0x80e99e8): the sum passed to [`sqrt_stored`]
+/// as a float.
+pub fn length_stored(v: Vec3) -> f32 {
+    sqrt_stored(dot(v, v))
+}
+
+/// `Vec2Normalize` (CoD2's 0x80a44c2) on x and y: the length through
+/// [`sqrt_stored`], each component times `1 / len` with the reciprocal
+/// kept. A zero vector is left alone.
+pub fn normalize2_kept(x: f32, y: f32) -> (f32, f32) {
+    let (x64, y64) = (f64::from(x), f64::from(y));
+    let len = sqrt_stored(x64 * x64 + y64 * y64);
+    if len == 0.0 {
+        return (x, y);
+    }
+    let inv = 1.0 / f64::from(len);
+    ((x64 * inv) as f32, (y64 * inv) as f32)
+}
+
 /// CoD4 1.7's `Vec3NormalizeTo` (`cod4_lnxded` 0x8192a64): the squared
 /// length and its root left on the stack, each component times the
 /// reciprocal and rounded once; a zero vector comes out as it went in.
@@ -555,6 +610,18 @@ pub fn out_of_frame_x87(v: Vec3, rows: &[Vec3; 3]) -> Vec3 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_stored_lerp_rounds_once_per_component() {
+        let a = Vec3::new(1.0, 0.1, -3.0);
+        let b = Vec3::new(2.0, 0.3, 5.0);
+        let f = 0.3f32;
+        let p = lerp_stored(a, b, f);
+        let x = (1.0f64 + (2.0f64 - 1.0) * f64::from(f)) as f32;
+        assert_eq!(p.x.to_bits(), x.to_bits());
+        assert_eq!(lerp_stored(a, b, 1.0), b);
+        assert_eq!(lerp_stored(a, b, 0.0), a);
+    }
+
     use super::*;
 
     /// The model `angle_vectors` replaced: every stack value an `f64`.

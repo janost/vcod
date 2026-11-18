@@ -10,6 +10,8 @@
 //! playback. Speex is opened at run time (`libspeex`), so a build without
 //! it still joins and relays; it then neither sends nor plays.
 
+#![allow(unsafe_code)]
+
 use std::collections::VecDeque;
 use std::ffi::{c_char, c_int, c_void};
 use std::sync::{Arc, Mutex};
