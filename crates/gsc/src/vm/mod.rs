@@ -338,6 +338,10 @@ pub enum ErrorKind {
     /// The host's `G_Error` inside a builtin: the thread dies, the pass
     /// ends there, and the host drops the level.
     GameError(&'static str),
+    /// The level's script variables or interned strings past vcod's
+    /// ceiling (`interp::MAX_VARIABLES`): retail's `exceeded maximum number
+    /// of script variables`. Ends the thread whose op allocated.
+    TooManyVariables,
     /// A builtin panicked, with the panic's text, under
     /// [`contain_builtin_panics`]: the thread dies; what the builtin had
     /// done before the panic stands.
@@ -835,6 +839,10 @@ pub struct Vm {
     /// The threads still due when a pass stopped at a cap, in pick order,
     /// each under its queue stamp: the next pass runs them first.
     deferred: std::collections::VecDeque<(sched::ThreadId, u64)>,
+    /// `interp::MAX_VARIABLES` and `interp::MAX_STRING_BYTES`; a test lowers
+    /// them.
+    max_vars: u64,
+    max_string_bytes: usize,
 }
 
 impl Default for Vm {
@@ -897,6 +905,8 @@ impl Vm {
             notify_index: Default::default(),
             ready: Default::default(),
             deferred: Default::default(),
+            max_vars: interp::MAX_VARIABLES,
+            max_string_bytes: interp::MAX_STRING_BYTES,
         }
     }
 
@@ -980,6 +990,13 @@ impl Vm {
     /// a thread on to its next suspend (cod11-gsc-language.md section 10).
     pub fn set_kill_mid_step(&mut self, on: bool) {
         self.kill_mid_step = on;
+    }
+
+    /// Whether the heap and the threads, or the interned strings, are past
+    /// the level's ceiling.
+    pub(crate) fn over_ceiling(&self) -> bool {
+        self.heap.vars() + self.threads.len() as u64 > self.max_vars
+            || self.interner.bytes() > self.max_string_bytes
     }
 
     pub fn set_budget(&mut self, budget: u32) {
@@ -1456,6 +1473,38 @@ pub(crate) mod tests {
         vm.call_now(&mut host, main, None, vec![])
             .expect_err("expected a runtime error")
             .kind
+    }
+
+    /// A script that keeps allocating ends at the level's ceiling with
+    /// `TooManyVariables`, in both error modes, instead of growing the heap,
+    /// the thread list or the interner until the host runs out of memory.
+    /// The ceilings are lowered here so each case stays small.
+    #[test]
+    fn a_leaking_script_ends_at_the_variable_ceiling() {
+        for src in [
+            "main() { for (i = 0; ; i++) a[i] = i; }",
+            "main() { a[0] = 1; for (;;) { b = a; b[1] = 2; } }",
+            "main() { for (;;) thread f(); } f() { wait 1; }",
+            "main() { for (i = 0; ; i++) s = \"x\" + i; }",
+        ] {
+            for recover in [false, true] {
+                let ast = crate::parse::parse_file(src).unwrap();
+                let mut vm = Vm::new();
+                let fns =
+                    crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+                vm.install(fns).unwrap();
+                vm.set_recover_errors(recover);
+                vm.max_vars = vm.heap.vars() + 5_000;
+                vm.max_string_bytes = vm.interner.bytes() + 50_000;
+                let main = vm.func_ref("test/script", "main");
+                let e = vm
+                    .call_now(&mut TestHost::default(), main, None, vec![])
+                    .unwrap_err();
+                assert_eq!(e.kind, ErrorKind::TooManyVariables, "{src}");
+                assert!(vm.heap.vars() + (vm.thread_count() as u64) < vm.max_vars + 10);
+                assert!(vm.interner.bytes() < vm.max_string_bytes + 100);
+            }
+        }
     }
 
     /// `s = s + s` stops at `MAX_STRING_LEN` with a script error, in both
@@ -2408,10 +2457,8 @@ pub(crate) mod tests {
         assert_eq!(v, Value::Int(0));
         let (v, _, _) = run("main() { a = []; a[0] = a; return a[0].size; }");
         assert_eq!(v, Value::Int(0));
-        let (v, _, _) = run(
-            "main() { a = []; a[0] = []; a[0][0] = a; \
-             return isdefined(a[0][0][0]) * 10 + isdefined(a[0][0][0][0]); }",
-        );
+        let (v, _, _) = run("main() { a = []; a[0] = []; a[0][0] = a; \
+             return isdefined(a[0][0][0]) * 10 + isdefined(a[0][0][0][0]); }");
         assert_eq!(v, Value::Int(10));
         let (v, _, _) = run(r#"main() { game["g"] = game; return isdefined(game["g"]["g"]); }"#);
         assert_eq!(v, Value::Int(0));

@@ -613,6 +613,19 @@ vcod (all three games):
   `level.time` as usual. Retail has neither ceiling; a count, not wall time, keeps the replays deterministic.
 - A concatenation past 8192 bytes is a script error (`string too long`,
   `interp::MAX_STRING_LEN`); stock scripts build at most 138.
+- The heap frees nothing within a level, so vcod caps the level instead
+  of a live pool: past 64,000,000 variables (every struct and array
+  allocated with their fields and elements, `Heap::vars`, plus the live
+  threads; `interp::MAX_VARIABLES`) or 256 MiB of interned strings
+  (`MAX_STRING_BYTES`), the op that allocates ends its thread with
+  `ErrorKind::TooManyVariables`. Retail's counterpart is its fixed pool's
+  terminal `exceeded maximum number of script variables`
+  (cod11-gsc-language.md, "Runtime errors below developer 1"). Measured
+  on vcod-server, CoD4 `war` on mp_crash with 12 shooting bots, one
+  5.8-minute round: 97,340 variables (37,788 arrays, 3,616 structs), 852
+  threads at most, 379,460 bytes of strings. At that rate a level that
+  never rotates or restarts reaches the ceiling after about 60 hours; a
+  script allocating in a loop reaches it within seconds.
 
 ## 4. Callbacks, engine notifies, script loading
 
