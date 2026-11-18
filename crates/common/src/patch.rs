@@ -195,8 +195,9 @@ impl Grid {
     /// `CM_SubdivideGridColumns` (0x804c040). CoD's differs from Q3's in two
     /// ways: the tolerance is the record's own (an integer), and a column
     /// that needs no subdivision keeps its approximating point and the walk
-    /// steps over both, where Q3 removes it.
-    fn subdivide_columns(&mut self, tolerance: i32, arith: Arith) {
+    /// steps over both, where Q3 removes it. `false` when a split would pass
+    /// `MAX_GRID` columns, which no stock tolerance reaches.
+    fn subdivide_columns(&mut self, tolerance: i32, arith: Arith) -> bool {
         let tol = f64::from(tolerance);
         let mut i = 0;
         while i + 2 < self.width {
@@ -219,6 +220,9 @@ impl Grid {
             if !needs {
                 i += 2;
                 continue;
+            }
+            if self.width + 2 > MAX_GRID {
+                return false;
             }
             for j in 0..self.height {
                 let (prev, mid, next) = (self.at(i, j), self.at(i + 1, j), self.at(i + 2, j));
@@ -243,6 +247,7 @@ impl Grid {
             }
             self.width += 2;
         }
+        true
     }
 
     /// `CM_RemoveDegenerateColumns` (0x804c338), Q3's.
@@ -598,6 +603,9 @@ impl Builder {
                     continue;
                 }
                 let (plane, flipped) = self.find_plane2(n, d);
+                if plane < 0 {
+                    continue;
+                }
                 facet.borders.push(Border {
                     plane,
                     inward: flipped,
@@ -673,6 +681,10 @@ impl Builder {
     }
 
     fn add_facet(&mut self, mut facet: Facet, g: &Grid, i: usize, j: usize, which: i32) {
+        // Retail stops the load at the first overflow; nothing after it counts.
+        if self.overflow {
+            return;
+        }
         if self.facets.len() == MAX_FACETS {
             self.overflow = true;
             return;
@@ -884,11 +896,15 @@ impl PatchCollide {
             }
         }
         g.set_wrap_width();
-        g.subdivide_columns(tolerance, arith);
+        if !g.subdivide_columns(tolerance, arith) {
+            return None;
+        }
         g.remove_degenerate_columns();
         g.transpose();
         g.set_wrap_width();
-        g.subdivide_columns(tolerance, arith);
+        if !g.subdivide_columns(tolerance, arith) {
+            return None;
+        }
         g.remove_degenerate_columns();
 
         let mut mins = [f32::MAX; 3];
@@ -1155,6 +1171,25 @@ mod tests {
     #[test]
     fn a_flat_patch_keeps_its_middle_points() {
         assert_eq!(flat().facet_count(), 4);
+    }
+
+    /// A negative tolerance splits every column until the grid is full, and
+    /// a large bumpy patch fills the plane pool: both refuse the patch.
+    #[test]
+    fn a_hostile_patch_is_refused_not_overrun() {
+        let pts: Vec<V3> = (0..3)
+            .flat_map(|j| (0..3).map(move |i| [i as f32 * 32.0, j as f32 * 32.0, 0.0]))
+            .collect();
+        assert!(PatchCollide::generate(3, 3, -1, &pts).is_none());
+        let pts: Vec<V3> = (0..29usize)
+            .flat_map(|j| {
+                (0..29usize).map(move |i| {
+                    let z = ((i * 73_856_093) ^ (j * 19_349_663)) % 97;
+                    [i as f32 * 16.0, j as f32 * 16.0, z as f32]
+                })
+            })
+            .collect();
+        assert!(PatchCollide::generate(29, 29, i32::MAX, &pts).is_none());
     }
 
     #[test]

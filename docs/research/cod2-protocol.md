@@ -210,6 +210,8 @@ VERIFIED: `SV_WriteSnapshotToClient` (0x80985c8) writes the op, `svs.time`, the 
 
 The entity, client and baseline deltas are 1.1's `MSG_ReadDeltaStruct` shape: a remove bit, a no-change bit, an `lc` byte, then `lc` fields through `MSG_ReadDeltaField` and the rest copied from the base (`MSG_ReadDeltaStruct` 0x8069d4a, Mac 0x174292). VERIFIED. The field codec under it changed; section 5.2.
 
+vcod's parser (`vcod_cod2::net::parse`) refuses a snapshot whose packet entity or client state numbers do not rise: a stock server merges each list ascending, and the rule caps a frame at 1023 entities and 64 client states where vcod's frames hold their own lists instead of retail's rings. vcod's guard, not a retail check.
+
 ### 3.4 `svc_serverCommand` (4)
 
 `long sequence`, `string text`, 1.1's. VERIFIED. The ring is 128 slots on both ends (`(seq & 0x7f) * 0x400` on the client, `* 0x408` on the server). VERIFIED.
@@ -1402,4 +1404,4 @@ The extrapolated frames are the clock's (18.1) and the same under either rule.
 - 48 columns the same for the snapshots: a ping above 0 times 0.0266667 (24 per 900 ms), green, yellow when `snapFlags & 1`, at y `-92 - v` and `v` high, or y -116 and 24 high past 24; -1 a red column at y -116, 24 high; 0 nothing.
 - `snc` through `CG_DrawBigDevString(-55, -140)` when `cg_nopredict` or `cg_synchronousClients` is set.
 
-vcod: `play::cod2_net::Lagometer` keeps the two rings, filled in `Cod2Session::process_snapshots` with the ping `NetMeter` measured for each parsed snapshot (18.4); `cod2_hud::lagometer` draws them through `ScreenPlacement` when the console's `cg_drawLagometer` is set. vcod has neither `cg_nopredict` nor `cg_synchronousClients`, so `snc` never draws.
+vcod: `play::cod2_net::Lagometer` keeps the two rings, filled in `Cod2Session::process_snapshots` with the ping `NetMeter` measured for each parsed snapshot (18.4); `cod2_hud::lagometer` draws them through `ScreenPlacement` when the console's `cg_drawLagometer` is set. vcod has neither `cg_nopredict` nor `cg_synchronousClients`, so `snc` never draws. `NetView::process` lists at most the last 128 message numbers it asked for, the ring's depth: a server's jump in sequence would otherwise list every number between.

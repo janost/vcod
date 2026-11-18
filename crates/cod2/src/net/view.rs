@@ -278,6 +278,8 @@ impl ConfigStrings {
 /// `cl.snapshots`' depth (`PACKET_BACKUP`): `CL_GetSnapshot` (Mac
 /// 0x17a02c) refuses a snapshot 32 messages behind the newest.
 const PACKET_BACKUP: i32 = 32;
+/// `CG_AddLagometerSnapshotInfo`'s ring (cod2-protocol.md 18.6).
+const LAGOMETER: i32 = 128;
 /// The parse rings' depth: `CL_GetSnapshot` refuses a snapshot whose
 /// entities or clients the 2048-slot rings have since overwritten.
 const MAX_PARSE: u64 = 0x800;
@@ -403,7 +405,7 @@ impl NetView {
             .is_none_or(|&(_, ents, clients)| {
                 self.parsed.0 - ents < MAX_PARSE && self.parsed.1 - clients < MAX_PARSE
             });
-        newest.message_num - s.message_num < PACKET_BACKUP && rings
+        newest.message_num.wrapping_sub(s.message_num) < PACKET_BACKUP && rings
     }
 
     fn by_num(&self, n: i32) -> Option<&SnapshotView> {
@@ -483,10 +485,17 @@ impl NetView {
         };
         // The first process reports every kept message from the oldest.
         let first = self.chain().next().map_or(c.processed, |s| s.message_num);
-        let from = self.cgame.map_or(first, |o| o.processed + 1);
-        let read = (from..=c.processed)
-            .map(|n| (n, self.by_num(n).is_some()))
-            .collect();
+        let from = self
+            .cgame
+            .map_or(Some(first), |o| o.processed.checked_add(1));
+        // The server picks the numbers: no more than the lagometer's ring
+        // keeps is listed (cod2-protocol.md 18.6).
+        let read = from.map_or(Vec::new(), |from| {
+            let from = from.max(c.processed.saturating_sub(LAGOMETER - 1));
+            (from..=c.processed)
+                .map(|n| (n, self.by_num(n).is_some()))
+                .collect()
+        });
         self.cgame = Some(c);
         (time, read)
     }
@@ -798,6 +807,22 @@ mod tests {
         let v = view_of(&(1..=40).map(|n| (n, 0)).collect::<Vec<_>>());
         assert_eq!(v.chain().next().unwrap().message_num, 9);
         assert_eq!(v.frame(460).unwrap().prev.unwrap().message_num, 9);
+    }
+
+    /// A jump in message numbers lists at most the lagometer's ring.
+    #[test]
+    fn a_sequence_jump_lists_a_short_range() {
+        let mut v = view_of(&[(100, 0)]);
+        v.process(5000);
+        for n in [0x4000_0000, i32::MAX] {
+            let mut s = snap(6000, vec![body(0.0, 0)]);
+            s.message_num = n;
+            v.push(s, (0, 0));
+            let (_, read) = v.process(6000);
+            assert_eq!(read.len(), LAGOMETER as usize, "{n:#x}");
+            assert_eq!(read.last(), Some(&(n, true)));
+        }
+        assert_eq!(v.process(6000).1, []);
     }
 
     #[test]

@@ -265,13 +265,24 @@ fn holds(ps: &PlayerView, w: i32) -> bool {
     (0..2).contains(&word) && w > 0 && (ps.raw.i32(&format!("weapons[{word}]")) >> b) & 1 != 0
 }
 
+/// `ps.ammoclip[slot]`. The wire carries 64 slots; a weapon list with more
+/// clip names (a mod's) reads 0 past them.
+fn clip_in(ps: &PlayerView, slot: usize) -> i32 {
+    ps.raw.ammoclip.get(slot).copied().unwrap_or(0)
+}
+
+/// `ps.ammo[slot]`, as [`clip_in`].
+fn ammo_in(ps: &PlayerView, slot: usize) -> i32 {
+    ps.raw.ammo.get(slot).copied().unwrap_or(0)
+}
+
 /// `BG_GetTotalAmmoReserve` (Mac 0x7a9d0) without shared ammo caps (no
 /// stock weapon has one): a clip-only weapon's clip, else its ammo.
 fn reserve(ps: &PlayerView, w: &Weap) -> i32 {
     if w.def.flag("clipOnly") {
-        ps.raw.ammoclip[w.clip]
+        clip_in(ps, w.clip)
     } else {
-        ps.raw.ammo[w.ammo]
+        ammo_in(ps, w.ammo)
     }
 }
 
@@ -286,7 +297,7 @@ fn low_ammo(ps: &PlayerView, w: &Weap) -> bool {
 /// size or under.
 fn low_clip(ps: &PlayerView, w: &Weap) -> bool {
     let size = w.def.int("clipSize");
-    let clip = ps.raw.ammoclip[w.clip];
+    let clip = clip_in(ps, w.clip);
     !w.def.flag("clipOnly") && clip >= 0 && size >= 1 && clip.min(999) as f32 <= size as f32 * 0.33
 }
 
@@ -1275,7 +1286,7 @@ impl PlayerHud {
         let clip = if weap.def.flag("clipOnly") {
             -1
         } else {
-            ps.raw.ammoclip[weap.clip]
+            clip_in(ps, weap.clip)
         };
         Some((clip, reserve(ps, weap)))
     }
@@ -1491,7 +1502,7 @@ impl PlayerHud {
         let [x, y, w, _] = item.rect;
         let (al, sc) = (item.align, item.text_scale);
         let clip = (!weap.def.flag("clipOnly"))
-            .then(|| ps.raw.ammoclip[weap.clip])
+            .then(|| clip_in(ps, weap.clip))
             .filter(|&c| c >= 0)
             .map(|c| format!("{:2}", c.min(999)));
         let rsv = Some(reserve(ps, weap))
@@ -1556,7 +1567,7 @@ impl PlayerHud {
                 .all()
                 .filter(move |(i, w)| w.def.int("offhandClass") == class && holds(ps, *i))
         };
-        let available = held().find(|(_, w)| ps.raw.ammo[w.ammo] + ps.raw.ammoclip[w.clip] != 0);
+        let available = held().find(|(_, w)| ammo_in(ps, w.ammo) + clip_in(ps, w.clip) != 0);
         let Some(first) = available.or_else(|| held().next()) else {
             return;
         };
@@ -1575,7 +1586,7 @@ impl PlayerHud {
                 }
             }
             Offhand::Count => {
-                let n: i32 = held().map(|(_, w)| ps.raw.ammoclip[w.clip]).sum();
+                let n: i32 = held().map(|(_, w)| clip_in(ps, w.clip)).sum();
                 let c = if n == 0 {
                     rgba(
                         [LOW_AMMO_RGB[0], LOW_AMMO_RGB[1], LOW_AMMO_RGB[2], 0.0],
@@ -2089,6 +2100,24 @@ fn slot_weapon(ps: &PlayerView, slot: usize) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mod's weapon list can hand out clip and ammo slots past the
+    /// wire's 64; the HUD reads 0 there.
+    #[test]
+    fn a_slot_past_the_wire_arrays_reads_zero() {
+        let def = weapon::parse("w", b"WEAPONFILE\\clipSize\\30\\maxAmmo\\90", &[])
+            .unwrap()
+            .def;
+        let w = Weap {
+            params: WeaponParams::from_def(&def, 70, 90, 0),
+            def,
+            ammo: 70,
+            clip: 90,
+        };
+        let ps = PlayerView::new(&vcod_cod2::net::delta::PlayerState2::default(), 0);
+        assert_eq!(reserve(&ps, &w), 0);
+        assert!(low_clip(&ps, &w));
+    }
 
     #[test]
     fn fade_holds_then_falls() {

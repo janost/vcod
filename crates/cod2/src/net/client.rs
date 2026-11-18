@@ -44,8 +44,9 @@ impl Client {
         }
     }
 
-    /// A sequenced packet from the server. `None` while fragments are joined
-    /// or for a stale packet.
+    /// A sequenced packet from the server. `None` while fragments are joined,
+    /// for a stale packet, or for one whose acknowledge is more than 128
+    /// behind our commands (`CL_PacketEvent`, cod2-demos.md 2).
     pub fn receive(&mut self, packet: &[u8]) -> anyhow::Result<Option<Parsed>> {
         if packet.len() < 4 {
             return Ok(None);
@@ -54,6 +55,9 @@ impl Client {
             return Ok(None);
         };
         let ack = i32::from_le_bytes(body.get(..4).context("short message")?.try_into()?);
+        if self.ack_too_old(ack) {
+            return Ok(None);
+        }
         let cmd = &self.reliable_commands[ack as usize % MAX_RELIABLE_COMMANDS];
         self.netchan.decode(sequence, cmd, &mut body);
         self.server_message(sequence as i32, &body).map(Some)
@@ -79,11 +83,16 @@ impl Client {
     /// as a live one is.
     pub fn demo_message(&mut self, sequence: i32, msg: &[u8]) -> anyhow::Result<Option<Parsed>> {
         let ack = i32::from_le_bytes(msg.get(..4).context("short message")?.try_into()?);
-        if ack < self.reliable_sequence - MAX_RELIABLE_COMMANDS as i32 {
+        if self.ack_too_old(ack) {
             return Ok(None);
         }
         self.netchan.incoming_sequence = sequence as u32;
         self.message(sequence, msg).map(Some)
+    }
+
+    /// The `- 0x80` compare live and demo messages are skipped on.
+    fn ack_too_old(&self, ack: i32) -> bool {
+        ack < self.reliable_sequence - MAX_RELIABLE_COMMANDS as i32
     }
 
     /// One server message past the netchan, parsed.
@@ -185,7 +194,12 @@ impl Client {
     /// `clc_moveNoDelta` (none: no move op), then `clc_EOF`.
     pub fn build_packet(&mut self, cmds: &[UserCmd2]) -> anyhow::Result<Vec<u8>> {
         let mut w = MsgWriter::new(&self.huff);
-        for seq in self.reliable_acknowledge + 1..=self.reliable_sequence {
+        // The ack is the server's word: no more than the ring is resent.
+        let first = self
+            .reliable_acknowledge
+            .saturating_add(1)
+            .max(self.reliable_sequence - MAX_RELIABLE_COMMANDS as i32 + 1);
+        for seq in first..=self.reliable_sequence {
             w.write_bits(Clc::ClientCommand as i32, CLC_BITS);
             w.write_long(seq);
             w.write_string_bytes(&self.reliable_commands[seq as usize % MAX_RELIABLE_COMMANDS]);
@@ -242,6 +256,35 @@ impl Client {
         UserCmd2 {
             server_time,
             ..base
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::ops::Svc;
+    use super::*;
+    use vcod_common::net::netchan::ServerNetchan;
+
+    /// A server's ack past the ring, or wrapping on the add, resends at most
+    /// the ring; one more than 128 behind is not taken.
+    #[test]
+    fn a_hostile_reliable_acknowledge_keeps_the_packet_small() {
+        let huff = Huffman::new();
+        for ack in [i32::MAX, i32::MIN, -1_000_000, 1_000_000] {
+            let mut cl = Client::new(1, 2);
+            let mut sv = ServerNetchan::with_params(1, 2, NetchanParams::COD2);
+            for _ in 0..3 {
+                cl.add_reliable("say x");
+            }
+            for p in sv.transmit_eof(ack, &[], Svc::Eof as u8, &huff) {
+                let _ = cl.receive(&p);
+            }
+            if ack < 0 {
+                assert_eq!(cl.reliable_acknowledge, 0, "{ack:#x}");
+            }
+            let packet = cl.build_packet(&[]).unwrap();
+            assert!(packet.len() < 64, "{ack:#x}: {} bytes", packet.len());
         }
     }
 }

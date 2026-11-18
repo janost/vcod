@@ -1248,7 +1248,7 @@ impl<'a> Cod2Builder<'a> {
     fn cod4_water_map(&mut self, name: &str) -> Option<wgpu::TextureView> {
         let (_, w) = self.waters.iter().find(|(n, _)| n == name)?;
         let setup =
-            vcod_cod2::water::WaterSetup::from_spectrum(w.width, w.h0.clone(), w.omega.clone());
+            vcod_cod2::water::WaterSetup::from_spectrum(w.width, w.h0.clone(), w.omega.clone())?;
         let side = w.width as u32;
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some(&format!("watersetup {name}")),
