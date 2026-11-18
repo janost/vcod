@@ -399,6 +399,8 @@ The 34 types, in table order, with STABS enum names (VERIFIED):
   renderer's fog mode stands for the offset. Every CoD2 draw (lit, stage,
   model, effect) measures the radial distance; a CoD2 model also honours
   `nofog` and the black fog of an additive blend.
+- Retail's per-vertex fog in the compiled shaders, and vcod's match:
+  `cod2-client-perf.md` 9.
 
 ## 5. Techniques (dx9)
 
