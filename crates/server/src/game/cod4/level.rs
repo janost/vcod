@@ -1444,30 +1444,38 @@ impl Cod4Level {
     /// The brush entities pmove clips: every entity linked with an inline
     /// model, solid (`es.solid` `SOLID_BMODEL` and no `EF_NONSOLID_BMODEL`).
     fn brush_entities(&mut self) -> Vec<Brush4> {
-        let word = |e: &EntityState, n: &str| ent_word(e.etype(), n).map_or(0, |w| e.0[w]);
-        let f = |e: &EntityState, n: &str| f32::from_bits(word(e, n));
+        const NAMES: [&str; 9] = [
+            "solid",
+            "lerp.eFlags",
+            "index",
+            "lerp.pos.trBase[0]",
+            "lerp.pos.trBase[1]",
+            "lerp.pos.trBase[2]",
+            "lerp.apos.trBase[0]",
+            "lerp.apos.trBase[1]",
+            "lerp.apos.trBase[2]",
+        ];
+        // Each type's words for `NAMES`, looked up once.
+        static WORDS: std::sync::OnceLock<Vec<[Option<usize>; 9]>> = std::sync::OnceLock::new();
+        let words = WORDS.get_or_init(|| {
+            (0..vcod_cod4::net::fields::ENTITY_BY_TYPE.len() as u32)
+                .map(|t| NAMES.map(|n| ent_word(t, n)))
+                .collect()
+        });
+        let word = |e: &EntityState, k: usize| {
+            words[(e.etype() as usize).min(words.len() - 1)][k].map_or(0, |w| e.0[w])
+        };
+        let f = |e: &EntityState, k: usize| f32::from_bits(word(e, k));
         self.rt
             .packet_entities(&super::COD4_HOST_PROTO)
             .values()
             .filter_map(super::wire::ent4)
-            .filter(|e| {
-                word(e, "solid") == 0xff_ffff
-                    && word(e, "lerp.eFlags") & 1 == 0
-                    && word(e, "index") != 0
-            })
+            .filter(|e| word(e, 0) == 0xff_ffff && word(e, 1) & 1 == 0 && word(e, 2) != 0)
             .map(|e| Brush4 {
                 entity: e.number(),
-                model: word(&e, "index") as usize,
-                origin: Vec3::new(
-                    f(&e, "lerp.pos.trBase[0]"),
-                    f(&e, "lerp.pos.trBase[1]"),
-                    f(&e, "lerp.pos.trBase[2]"),
-                ),
-                angles: Vec3::new(
-                    f(&e, "lerp.apos.trBase[0]"),
-                    f(&e, "lerp.apos.trBase[1]"),
-                    f(&e, "lerp.apos.trBase[2]"),
-                ),
+                model: word(&e, 2) as usize,
+                origin: Vec3::new(f(&e, 3), f(&e, 4), f(&e, 5)),
+                angles: Vec3::new(f(&e, 6), f(&e, 7), f(&e, 8)),
             })
             .collect()
     }
