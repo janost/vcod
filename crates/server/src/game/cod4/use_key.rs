@@ -11,7 +11,7 @@ use glam::Vec3;
 use vcod_cod4::net::delta::ENTITYNUM_NONE;
 use vcod_gsc::{EntId, Host, Value};
 
-use super::level::{Cod4Level, PsExt};
+use super::level::{Cod4Level, PsExt, ps};
 use crate::game::trigger::TriggerKind;
 
 /// `+activate` (0x8) and `+usereload` (0x20).
@@ -20,9 +20,7 @@ const USE_BUTTONS: u32 = 0x28;
 /// throwback and MG radii, 96 up and down) and its contents.
 const AREA_BOX: Vec3 = Vec3::new(192.0, 192.0, 96.0);
 const CONTENTS_USE: i32 = 0x20_0000;
-/// `playerMins`, `playerMaxs`.
-const PLAYER_MINS: Vec3 = Vec3::new(-15.0, -15.0, 0.0);
-const PLAYER_MAXS: Vec3 = Vec3::new(15.0, 15.0, 70.0);
+use vcod_cod4::pmove::{PLAYER_MAXS, PLAYER_MINS};
 /// The reach from the eye to an entry's middle, the view-angle weight,
 /// the penalty an ungrabbable item or a blocked sight takes (`cod4_lnxded`
 /// rodata 0x820e278, 0x8214ac8, 0x8220950) and the sight trace's mask
@@ -343,15 +341,16 @@ impl Cod4Level {
     /// Last Stand clears its entity too. Otherwise the use list is walked
     /// in order and the first entry that offers a hint wins
     /// ([`Self::entry_hint`]). Its entity is what the next use press
-    /// (`Player_ActivateCmd`) or frag press (the live grenade pickup)
+    /// (`Player_ActivateCmd`) or frag press
+    /// ([`Self::attempt_live_grenade_pickup`])
     /// takes. cod4-gsc.md 9.1-9.3; the pins are `turret_tests`.
     pub(super) fn update_cursor_hints(&mut self, slot: usize) {
         let Some(p) = self.players[slot].as_mut() else {
             return;
         };
-        p.ps.set("cursorHint", 0);
-        if p.ps.word("throwBackGrenadeOwner") == ENTITYNUM_NONE {
-            p.ps.set("throwBackGrenadeTimeLeft", 0);
+        p.ps.set(ps!("cursorHint"), 0);
+        if p.ps.word(ps!("throwBackGrenadeOwner")) == ENTITYNUM_NONE {
+            p.ps.set(ps!("throwBackGrenadeTimeLeft"), 0);
         }
         let alive = self.rt.client_vitals(slot).health > 0;
         let Some(ps) = self.pm_state(slot).filter(|_| alive) else {
@@ -367,6 +366,7 @@ impl Cod4Level {
             return;
         }
         let busy = vcod_cod4::pmove::pmf::MANTLE | vcod_cod4::pmove::pmf::SPRINTING;
+        // 15..=19 is unverified against retail; the press refuses 15..=20 (cod4-gsc.md 9).
         if ps.pm_flags & busy != 0 || (15..=19).contains(&ps.weapon_state) {
             return;
         }
@@ -441,15 +441,15 @@ impl Cod4Level {
             return;
         };
         if let Some(left) = hint.and_then(|h| h.fuse_left) {
-            p.ps.set("throwBackGrenadeTimeLeft", left as u32);
+            p.ps.set(ps!("throwBackGrenadeTimeLeft"), left as u32);
         }
         match hint.filter(|h| h.hint != 0) {
             Some(h) => {
-                p.ps.set("cursorHintEntIndex", h.ent.0);
-                p.ps.set("cursorHint", h.hint);
-                p.ps.set("cursorHintString", h.string as u32);
+                p.ps.set(ps!("cursorHintEntIndex"), h.ent.0);
+                p.ps.set(ps!("cursorHint"), h.hint);
+                p.ps.set(ps!("cursorHintString"), h.string as u32);
             }
-            None => p.ps.set("cursorHintEntIndex", ENTITYNUM_NONE),
+            None => p.ps.set(ps!("cursorHintEntIndex"), ENTITYNUM_NONE),
         }
     }
 
@@ -511,10 +511,10 @@ impl Cod4Level {
                     0
                 };
             } else if !refused
-                && p.ps.word("cursorHint") != 0
-                && p.ps.word("cursorHintEntIndex") != ENTITYNUM_NONE
+                && p.ps.word(ps!("cursorHint")) != 0
+                && p.ps.word(ps!("cursorHintEntIndex")) != ENTITYNUM_NONE
             {
-                let n = p.ps.word("cursorHintEntIndex");
+                let n = p.ps.word(ps!("cursorHintEntIndex"));
                 p.use_hold = self.rt.host.ents.handle(n).map(|id| (id, now));
             }
         }
@@ -567,7 +567,7 @@ impl Cod4Level {
         }
     }
 
-    /// The live grenade pickup, inlined in the client event handler's
+    /// The live grenade pickup, inlined in `ClientEvents`' (0x80a581e)
     /// `EV_SWITCH_OFFHAND` arm (`cod4_lnxded` 0x80a59c6..0x80a5aa5): with
     /// an entity under the hint (`cursorHintEntIndex` not 0), the event's
     /// weapon a frag (`offhandClass` 1 at def+0x144), the entity a missile
@@ -579,16 +579,16 @@ impl Cod4Level {
     /// one), puts `EV_AMMO_PICKUP` on the player, notifies `trigger` on the
     /// grenade with the player and frees it (`death`), INFERRED.
     /// The offhand half then throws it back with that fuse: pmove spends no
-    /// ammo on a throw back and the grenade timer init arms the new grenade off
-    /// `grenadeTimeLeft` (cod4-combat.md 10, cod4-gsc.md 9.3).
+    /// ammo on a throw back and [`Cod4Level::fire_grenade`] arms the new
+    /// grenade off `grenadeTimeLeft` (cod4-combat.md 10, cod4-gsc.md 9.3).
     pub(super) fn attempt_live_grenade_pickup(&mut self, slot: usize, weapon: u32) {
         const OFFHAND_FRAG: i32 = 1;
         const EV_AMMO_PICKUP: u32 = 10;
         let Some(p) = self.players[slot].as_ref() else {
             return;
         };
-        let hint = p.ps.word("cursorHintEntIndex");
-        let left = p.ps.word("throwBackGrenadeTimeLeft") as i32;
+        let hint = p.ps.word(ps!("cursorHintEntIndex"));
+        let left = p.ps.word(ps!("throwBackGrenadeTimeLeft")) as i32;
         let frag = |w: u32| {
             self.combat
                 .defs
@@ -614,10 +614,10 @@ impl Cod4Level {
         };
         let alive = self.rt.client_vitals(slot).health >= 1;
         let p = self.players[slot].as_mut().unwrap();
-        p.ps.set("throwBackGrenadeOwner", owner);
-        p.ps.set("grenadeTimeLeft", left as u32);
+        p.ps.set(ps!("throwBackGrenadeOwner"), owner);
+        p.ps.set(ps!("grenadeTimeLeft"), left as u32);
         // `Touch_Item`: a living player who may grab (weapons on).
-        if !alive || p.ps.word("weapFlags") & 0x80 != 0 {
+        if !alive || p.ps.word(ps!("weapFlags")) & 0x80 != 0 {
             return;
         }
         let mut pm = vcod_cod4::pmove::PlayerState::from_wire(&p.ps);
@@ -629,8 +629,8 @@ impl Cod4Level {
             .push((id, "trigger", vec![Value::Entity(client)]));
         // `G_FreeEntity` drops it from every hint that names it.
         for p in self.players.iter_mut().flatten() {
-            if p.ps.word("cursorHintEntIndex") == id.0 {
-                p.ps.set("cursorHintEntIndex", ENTITYNUM_NONE);
+            if p.ps.word(ps!("cursorHintEntIndex")) == id.0 {
+                p.ps.set(ps!("cursorHintEntIndex"), ENTITYNUM_NONE);
             }
         }
         self.free_missile(id);
@@ -746,24 +746,24 @@ impl Cod4Level {
             let Some(p) = self.players.get_mut(slot).and_then(Option::as_mut) else {
                 continue;
             };
-            let pm = p.ps.word("pm_type");
+            let pm = p.ps.word(ps!("pm_type"));
             match op {
                 LinkOp::Link { .. } => {
                     p.linked = true;
                     match pm {
-                        PM_NORMAL => p.ps.set("pm_type", PM_NORMAL_LINKED),
-                        PM_DEAD => p.ps.set("pm_type", PM_DEAD_LINKED),
+                        PM_NORMAL => p.ps.set(ps!("pm_type"), PM_NORMAL_LINKED),
+                        PM_DEAD => p.ps.set(ps!("pm_type"), PM_DEAD_LINKED),
                         _ => {}
                     }
                     for k in 0..3 {
-                        p.ps.setf(&format!("velocity[{k}]"), 0.0);
+                        p.ps.setf(ps!(3 "velocity")[k], 0.0);
                     }
                 }
                 LinkOp::Unlink => {
                     p.linked = false;
                     match pm {
-                        PM_NORMAL_LINKED => p.ps.set("pm_type", PM_NORMAL),
-                        PM_DEAD_LINKED => p.ps.set("pm_type", PM_DEAD),
+                        PM_NORMAL_LINKED => p.ps.set(ps!("pm_type"), PM_NORMAL),
+                        PM_DEAD_LINKED => p.ps.set(ps!("pm_type"), PM_DEAD),
                         _ => {}
                     }
                 }

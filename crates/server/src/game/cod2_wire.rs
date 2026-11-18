@@ -25,6 +25,21 @@ use super::entity::{HUD_OWNER_ALL, HudState};
 use super::fields::{Route, route_hud_cod2};
 use super::host::GameHost;
 
+/// An entity field's index (or `N` indices) in vcod's CoD1-shaped entity
+/// over [`PROTOCOL_118`]'s table, resolved at compile time.
+macro_rules! es2 {
+    ($($t:tt)*) => {
+        vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, $($t)*)
+    };
+}
+
+/// A playerstate field's index (or `N` indices), resolved at compile time.
+macro_rules! ps2 {
+    ($($t:tt)*) => {
+        vcod_cod2::field!(PLAYER_STATE_FIELDS, $($t)*)
+    };
+}
+
 /// What `game::wire` builds a CoD2 entity in (cod2-protocol.md 14.1): a
 /// script model, script brush model, `script_origin` and brush mover 6
 /// (CoD2 has no 1.1 `ET_MOVER`), a turret 9, a looped effect 8; `eFlags`
@@ -105,10 +120,7 @@ impl Cod2Level {
                 Some(copy) => (**copy).clone(),
                 None => self.wire_playerstate(f.target, f.team)?,
             };
-            let (pm, ef) = (
-                field_index(&PLAYER_STATE_FIELDS, "pm_flags"),
-                field_index(&PLAYER_STATE_FIELDS, "eFlags"),
-            );
+            let (pm, ef) = (ps2!("pm_flags"), ps2!("eFlags"));
             let mask = self.rt.host.client_no_spectate[slot];
             let (pm_flags, e_flags) =
                 Cod2Level::follow_flags(w.f[pm], w.f[ef], own_ef, f.forced, mask);
@@ -118,36 +130,39 @@ impl Cod2Level {
             return Some(w);
         }
         let mut w = p.ps.to_wire(&PlayerState2::default());
-        let ef = field_index(&PLAYER_STATE_FIELDS, "eFlags");
+        let ef = ps2!("eFlags");
         w.f[ef] = (w.f[ef] & !super::cod2_cmds::EF_VOTED) | own_ef;
-        let mut set = |name: &str, v: u32| w.f[field_index(&PLAYER_STATE_FIELDS, name)] = v;
+        let mut set = |i: usize, v: u32| w.f[i] = v;
         let host = &self.rt.host;
-        set("clientNum", slot as u32);
+        set(ps2!("clientNum"), slot as u32);
         // The turret's view lock and the cursor hint (cod2-turrets.md 4, 6).
         let g = &p.gunner;
-        set("viewlocked", g.viewlocked as u32);
-        set("viewlocked_entNum", g.viewlocked_ent);
-        set("cursorHint", g.hint as u32);
-        set("cursorHintString", g.hint_string as u32);
+        set(ps2!("viewlocked"), g.viewlocked as u32);
+        set(ps2!("viewlocked_entNum"), g.viewlocked_ent);
+        set(ps2!("cursorHint"), g.hint as u32);
+        set(ps2!("cursorHintString"), g.hint_string as u32);
         let weapons = host.client_weapons.get(slot).copied().unwrap_or_default();
-        set("weapon", u32::from(weapons.current));
-        set("weapons[0]", weapons.held as u32);
-        set("weapons[1]", (weapons.held >> 32) as u32);
+        set(ps2!("weapon"), u32::from(weapons.current));
+        set(ps2!("weapons[0]"), weapons.held as u32);
+        set(ps2!("weapons[1]"), (weapons.held >> 32) as u32);
         // Four slot bytes a word (`ps+0x554`), INFERRED from the layout.
         let pack = |s: &[u8]| s.iter().rev().fold(0u32, |a, &b| a << 8 | u32::from(b));
         set(
-            "weaponslots[0]",
+            ps2!("weaponslots[0]"),
             pack(&weapons.slots[..weapons.slots.len().min(4)]),
         );
         if weapons.slots.len() > 4 {
             set(
-                "weaponslots[4]",
+                ps2!("weaponslots[4]"),
                 pack(&weapons.slots[4..weapons.slots.len().min(8)]),
             );
         }
-        set("offHandIndex", u32::from(host.cod2().clients[slot].offhand));
         set(
-            "viewmodelIndex",
+            ps2!("offHandIndex"),
+            u32::from(host.cod2().clients[slot].offhand),
+        );
+        set(
+            ps2!("viewmodelIndex"),
             host.client_viewmodel.get(slot).copied().unwrap_or(0) as u32,
         );
         // `ClientEndFrame`'s use pass (0x8121bc6, the gunner's hint above)
@@ -155,26 +170,26 @@ impl Cod2Level {
         // zeroed `cursorHintString` (cod2-protocol.md 15.6). A dead body's
         // pass resets it to -1 (cod2-turrets.md 14).
         if (pm_type::SPECTATOR..=pm_type::INTERMISSION).contains(&p.ps.pm_type) {
-            set("cursorHintString", 0);
+            set(ps2!("cursorHintString"), 0);
         }
         // `PM_Weapon`'s half of the playerstate.
         let ws = &p.ws;
-        set("weaponstate", ws.state as u32);
-        set("weaponTime", ws.weapon_time as u32);
-        set("weaponDelay", ws.weapon_delay as u32);
-        set("grenadeTimeLeft", ws.grenade_time_left as u32);
-        set("weaponRestrictKickTime", ws.restrict_kick_time as u32);
-        set("weapAnim", ws.weap_anim as u32);
-        set("fWeaponPosFrac", ws.pos_frac.to_bits());
-        set("holdBreathScale", ws.hold_breath_scale.to_bits());
-        set("holdBreathTimer", ws.hold_breath_timer as u32);
-        set("adsDelayTime", ws.ads_delay_time as u32);
-        set("weaponrechamber[0]", ws.rechamber as u32);
-        set("weaponrechamber[1]", (ws.rechamber >> 32) as u32);
-        set("damageEvent", p.damage_event as u32 & 0xff);
-        set("damageYaw", p.damage_yaw as u32 & 0xff);
-        set("damagePitch", p.damage_pitch as u32 & 0xff);
-        set("damageCount", p.damage_count as u32);
+        set(ps2!("weaponstate"), ws.state as u32);
+        set(ps2!("weaponTime"), ws.weapon_time as u32);
+        set(ps2!("weaponDelay"), ws.weapon_delay as u32);
+        set(ps2!("grenadeTimeLeft"), ws.grenade_time_left as u32);
+        set(ps2!("weaponRestrictKickTime"), ws.restrict_kick_time as u32);
+        set(ps2!("weapAnim"), ws.weap_anim as u32);
+        set(ps2!("fWeaponPosFrac"), ws.pos_frac.to_bits());
+        set(ps2!("holdBreathScale"), ws.hold_breath_scale.to_bits());
+        set(ps2!("holdBreathTimer"), ws.hold_breath_timer as u32);
+        set(ps2!("adsDelayTime"), ws.ads_delay_time as u32);
+        set(ps2!("weaponrechamber[0]"), ws.rechamber as u32);
+        set(ps2!("weaponrechamber[1]"), (ws.rechamber >> 32) as u32);
+        set(ps2!("damageEvent"), p.damage_event as u32 & 0xff);
+        set(ps2!("damageYaw"), p.damage_yaw as u32 & 0xff);
+        set(ps2!("damagePitch"), p.damage_pitch as u32 & 0xff);
+        set(ps2!("damageCount"), p.damage_count as u32);
         if let Some(a) = host.client_ammo.get(slot) {
             for (to, from) in w.ammo.iter_mut().zip(a.ammo) {
                 *to = i32::from(from);
@@ -226,11 +241,8 @@ impl Cod2Level {
         // `s+0x98`), which the playerstate copy leaves alone
         // (cod2-protocol.md 15.6).
         let (icon, team) = self.rt.head_icon(slot);
-        for (name, v) in [("iHeadIcon", icon), ("iHeadIconTeam", team)] {
-            if let Some(i) = EntityState::field_index(PROTOCOL_118.as_cod1_shim(), name) {
-                e.fields[i] = v;
-            }
-        }
+        e.fields[es2!("iHeadIcon")] = icon;
+        e.fields[es2!("iHeadIconTeam")] = team;
         Some(e)
     }
 
@@ -244,18 +256,14 @@ impl Cod2Level {
         let p = PROTOCOL_118.as_cod1_shim();
         let mut e = EntityState::null(p);
         e.number = slot as u32;
-        let mut seti = |name: &str, v: i32| {
-            if let Some(i) = EntityState::field_index(p, name) {
-                e.fields[i] = v;
-            }
-        };
+        let mut seti = |i: usize, v: i32| e.fields[i] = v;
         // `pm_flags` 0x800000 or 0x400000 is a body; [`Cod2Level::playing`]
         // is the first.
-        seti("eType", v1::ET_PLAYER);
-        seti("pos.trType", TR_LINEAR_STOP);
-        seti("pos.trTime", ps.command_time);
-        seti("pos.trDuration", SMOOTH_DURATION_MS);
-        seti("apos.trType", TR_INTERPOLATE);
+        seti(es2!("eType"), v1::ET_PLAYER);
+        seti(es2!("pos.trType"), TR_LINEAR_STOP);
+        seti(es2!("pos.trTime"), ps.command_time);
+        seti(es2!("pos.trDuration"), SMOOTH_DURATION_MS);
+        seti(es2!("apos.trType"), TR_INTERPOLATE);
         // The snap (`param_3` 1) truncates both bases to whole units
         // toward zero: each `fistp` runs under the control word with 0xc00
         // or-ed in (0x80dfd2b, 0x80dfdc3). VERIFIED, the disassembly and
@@ -264,20 +272,17 @@ impl Cod2Level {
         // sd capture's spawn at z -0.953 did (cod2-protocol.md 15.7).
         let snap = |v: f32| v as i32 as f32;
         for k in 0..3 {
+            seti(es2!(3 "pos.trBase")[k], snap(ps.origin[k]).to_bits() as i32);
+            seti(es2!(3 "pos.trDelta")[k], ps.velocity[k].to_bits() as i32);
             seti(
-                &format!("pos.trBase[{k}]"),
-                snap(ps.origin[k]).to_bits() as i32,
-            );
-            seti(
-                &format!("pos.trDelta[{k}]"),
-                ps.velocity[k].to_bits() as i32,
-            );
-            seti(
-                &format!("apos.trBase[{k}]"),
+                es2!(3 "apos.trBase")[k],
                 snap(ps.view_angles[k]).to_bits() as i32,
             );
         }
-        seti("angles2[1]", (ps.movement_dir as f32).to_bits() as i32);
+        seti(
+            es2!("angles2[1]"),
+            (ps.movement_dir as f32).to_bits() as i32,
+        );
         let mut eflags = ps.e_flags as i32;
         if ps.pm_type >= pm_type::DEAD {
             eflags |= 0x20000;
@@ -289,39 +294,39 @@ impl Cod2Level {
         } else {
             eflags &= !0x40000;
         }
-        seti("eFlags", eflags);
+        seti(es2!("eFlags"), eflags);
         if ps.pm_type < pm_type::DEAD {
-            seti("solid", pack_solid(ps.mins, ps.maxs));
+            seti(es2!("solid"), pack_solid(ps.mins, ps.maxs));
         }
-        seti("clientNum", slot as i32);
-        seti("groundEntityNum", ps.ground_entity_num & 0xffff);
-        seti("leanf", ps.leanf.to_bits() as i32);
+        seti(es2!("clientNum"), slot as i32);
+        seti(es2!("groundEntityNum"), ps.ground_entity_num & 0xffff);
+        seti(es2!("leanf"), ps.leanf.to_bits() as i32);
         // `BG_PlayerStateToEntityState` (0x80dfcc2) copies the anims pmove
         // and the death picked, toggles and all. VERIFIED, the stores.
-        seti("legsAnim", ps.legs_anim);
-        seti("torsoAnim", ps.torso_anim);
+        seti(es2!("legsAnim"), ps.legs_anim);
+        seti(es2!("torsoAnim"), ps.torso_anim);
         let weapon = self
             .rt
             .host
             .client_weapons
             .get(slot)
             .map_or(0, |w| w.current);
-        seti("weapon", i32::from(weapon));
+        seti(es2!("weapon"), i32::from(weapon));
         // The prone pitches; the lerp across a stance change is not done
         // (the factor reads 1).
         if ps.effective_stance() == Stance::Prone {
-            seti("fTorsoHeight", ps.prone_valid[0].to_bits() as i32);
-            seti("fTorsoPitch", ps.prone_valid[1].to_bits() as i32);
-            seti("fWaistPitch", ps.prone_valid[2].to_bits() as i32);
+            seti(es2!("fTorsoHeight"), ps.prone_valid[0].to_bits() as i32);
+            seti(es2!("fTorsoPitch"), ps.prone_valid[1].to_bits() as i32);
+            seti(es2!("fWaistPitch"), ps.prone_valid[2].to_bits() as i32);
         }
         // The entity's own ring, which `ClientEndFrame` feeds from the
         // playerstate's less the events kept for the client's own ears
         // (`BodyEvents::copy_from`).
         let ring = &self.players.get(slot)?.as_ref()?.body_events;
-        seti("eventSequence", ring.sequence & 0xff);
+        seti(es2!("eventSequence"), ring.sequence & 0xff);
         for k in 0..4 {
-            seti(&format!("events[{k}]"), ring.events[k]);
-            seti(&format!("eventParms[{k}]"), ring.parms[k]);
+            seti(es2!(4 "events")[k], ring.events[k]);
+            seti(es2!(4 "eventParms")[k], ring.parms[k]);
         }
         Some(e)
     }
@@ -408,7 +413,7 @@ impl Cod2Level {
     /// trim is written back into `archivetime` (cod2-killcam.md 4).
     pub fn snapshot_entities(
         &mut self,
-        world: &std::collections::BTreeMap<u32, (EntityState, bool)>,
+        live: &[Culled],
         slot: usize,
         ps: &PlayerState2,
     ) -> (Vec<EntityState2>, Option<std::rc::Rc<Vec<ClientState2>>>) {
@@ -422,7 +427,7 @@ impl Cod2Level {
         } else {
             None
         };
-        let client_num = ps.f[field_index(&PLAYER_STATE_FIELDS, "clientNum")];
+        let client_num = ps.f[ps2!("clientNum")];
         let viewer = client_num as usize;
         match frame {
             None => {
@@ -434,9 +439,7 @@ impl Cod2Level {
                     .filter(|(_, te)| !te.scope.admits(viewer))
                     .map(|(n, _)| n)
                     .collect();
-                let ents = world.iter().map(|(n, (e, b))| (*n, e, *b));
-                let ents = self.cull(ents, &hidden, client_num, ps, self.level_time(), 0);
-                (ents, None)
+                (self.cull(live, &hidden, client_num, ps, 0), None)
             }
             Some(f) => {
                 let hidden: std::collections::HashSet<u32> = f
@@ -446,37 +449,57 @@ impl Cod2Level {
                     .map(|(n, _)| *n)
                     .collect();
                 let ents = f.entities.iter().map(|(n, e)| (*n, &e.0, e.1));
+                let ents = self.prepare_cull(ents, f.time);
                 let shift = self.level_time() - f.time;
-                let ents = self.cull(ents, &hidden, client_num, ps, f.time, shift);
+                let ents = self.cull(&ents, &hidden, client_num, ps, shift);
                 (ents, Some(f.roster.clone()))
             }
         }
     }
 
-    fn cull<'a>(
+    /// The world entities a snapshot cull reads, in world order: each
+    /// in CoD2's numbers with its broadcast flag and, unless broadcast,
+    /// its link at `time`. A snapshot round prepares the live world once
+    /// for every client.
+    pub fn prepare_cull<'a>(
         &self,
         ents: impl Iterator<Item = (u32, &'a EntityState, bool)>,
+        time: i32,
+    ) -> Vec<Culled> {
+        let vis = &self.world.vis;
+        ents.filter_map(|(n, e, broadcast)| {
+            let e = to_cod2_entity(e)?;
+            let link = (!broadcast).then(|| link(vis, &e, time));
+            Some(Culled { n, e, link })
+        })
+        .collect()
+    }
+
+    fn cull(
+        &self,
+        ents: &[Culled],
         hidden: &std::collections::HashSet<u32>,
         client_num: u32,
         ps: &PlayerState2,
-        time: i32,
         shift: i32,
     ) -> Vec<EntityState2> {
-        let word = |n: &str| f32::from_bits(ps.f[field_index(&PLAYER_STATE_FIELDS, n)]);
-        let eye = [
-            word("origin[0]"),
-            word("origin[1]"),
-            word("origin[2]") + word("viewHeightCurrent"),
-        ];
+        let word = |i: usize| f32::from_bits(ps.f[i]);
+        let [x, y, z] = ps2!(3 "origin");
+        let eye = [word(x), word(y), word(z) + word(ps2!("viewHeightCurrent"))];
         let vis = &self.world.vis;
-        ents.filter(|(n, _, _)| *n != client_num && !hidden.contains(n))
-            .filter_map(|(_, e, broadcast)| Some((to_cod2_entity(e)?, broadcast)))
-            .filter(|(e, broadcast)| {
-                // 1.5's rule: an entity touching no cluster is not sent.
-                *broadcast
-                    || crate::world::link_in_snapshot(vis, eye, &link(vis, e, time), false, None)
+        // The eye's cluster and area, placed once for every entity.
+        let viewer = std::cell::OnceCell::new();
+        let at = || *viewer.get_or_init(|| crate::world::Viewer::at(vis, eye));
+        ents.iter()
+            .filter(|c| c.n != client_num && !hidden.contains(&c.n))
+            // 1.5's rule: an entity touching no cluster is not sent.
+            .filter(|c| {
+                c.link
+                    .as_ref()
+                    .is_none_or(|l| crate::world::link_in_view(vis, at, l, false, None))
             })
-            .map(|(mut e, _)| {
+            .map(|c| {
+                let mut e = c.e;
                 if shift != 0 {
                     super::cod2_archive::shift_entity(&mut e, shift);
                 }
@@ -571,7 +594,7 @@ pub fn to_cod2_entity(es: &EntityState) -> Option<EntityState2> {
     for (to, from) in out.f.iter_mut().zip(&es.fields) {
         *to = *from as u32;
     }
-    let t = out.i32("eType");
+    let t = out.f[es2!("eType")] as i32;
     let events = c2ev::ET_EVENTS..c2ev::ET_EVENTS + c2ev::EV_NAMES.len() as i32;
     ((0..=c2ev::ET_TURRET).contains(&t) || events.contains(&t)).then_some(out)
 }
@@ -587,6 +610,14 @@ pub fn temp_entity(te: &crate::game::temp_entity::TempEntity, number: u32) -> Op
     Some(e)
 }
 
+/// A world entity as [`Cod2Level::prepare_cull`] leaves it for the cull.
+pub struct Culled {
+    n: u32,
+    e: EntityState2,
+    /// `None` for a broadcast entity, which skips the cull.
+    link: Option<(vcod_common::mapworld::LinkClusters, [f32; 3], [f32; 3])>,
+}
+
 /// Where a CoD2 entity links, in its own numbers, and its clusters: a
 /// script mover (1.1's brush movers are one too) at its trajectories
 /// evaluated at `time` (CoD2's `BG_EvaluateTrajectory`), anything else at
@@ -599,16 +630,17 @@ fn link(
 ) -> (vcod_common::mapworld::LinkClusters, [f32; 3], [f32; 3]) {
     use super::wire::LinkBox;
     use vcod_cod2::trajectory::Trajectory2;
-    let etype = e.i32("eType");
-    let base = |g: &str| [0, 1, 2].map(|k| e.f32(&format!("{g}.trBase[{k}]")));
+    let word = |i: usize| e.f[i] as i32;
+    let etype = word(es2!("eType"));
+    let base = |ix: [usize; 3]| ix.map(|i| f32::from_bits(e.f[i]));
     let (o, a) = if etype == c2ev::ET_SCRIPTMOVER {
         let at = |g: &str| Trajectory2::read(e, g).evaluate(time).to_array();
         (at("pos"), at("apos"))
     } else {
-        (base("pos"), base("apos"))
+        (base(es2!(3 "pos.trBase")), base(es2!(3 "apos.trBase")))
     };
-    let bmodel =
-        (e.i32("solid") == vcod_common::net::flags::SOLID_BMODEL).then(|| e.i32("index") as usize);
+    let bmodel = (word(es2!("solid")) == vcod_common::net::flags::SOLID_BMODEL)
+        .then(|| word(es2!("index")) as usize);
     let class = match etype {
         c2ev::ET_TURRET => LinkBox::Turret,
         c2ev::ET_SCRIPTMOVER => LinkBox::ScriptMover,
@@ -708,6 +740,60 @@ pub fn event_to_cod2(event: i32) -> Option<i32> {
         .map(|i| i as i32)
 }
 
+/// The hud element fields the wire reads, by [`hr!`] index.
+const HUD_READS: [&str; 14] = [
+    "archived",
+    "x",
+    "y",
+    "z",
+    "fontscale",
+    "font",
+    "alignx",
+    "aligny",
+    "horzalign",
+    "vertalign",
+    "color",
+    "label",
+    "sort",
+    "foreground",
+];
+
+const fn hud_read(name: &str) -> usize {
+    let mut i = 0;
+    while i < HUD_READS.len() {
+        let (a, b) = (HUD_READS[i].as_bytes(), name.as_bytes());
+        if a.len() == b.len() {
+            let mut k = 0;
+            while k < a.len() && a[k] == b[k] {
+                k += 1;
+            }
+            if k == a.len() {
+                return i;
+            }
+        }
+        i += 1;
+    }
+    panic!("not in HUD_READS")
+}
+
+/// A `HUD_READS` index, resolved at compile time.
+macro_rules! hr {
+    ($name:literal) => {
+        const { hud_read($name) }
+    };
+}
+
+/// Each `HUD_READS` field's engine cell, routed once.
+fn hud_cells() -> &'static [Option<usize>; 14] {
+    static CELLS: std::sync::OnceLock<[Option<usize>; 14]> = std::sync::OnceLock::new();
+    CELLS.get_or_init(|| {
+        HUD_READS.map(|name| match route_hud_cod2(name) {
+            Route::Engine { slot, .. } => Some(slot),
+            _ => None,
+        })
+    })
+}
+
 /// `HudElem_UpdateClient` (0x8104882): the element pool walked from slot
 /// 0, a team element kept for its team, an owned one for its owner, each
 /// copied into the archived or the current array by its `archived` flag,
@@ -730,7 +816,7 @@ pub fn hud_elems(
         {
             continue;
         }
-        let (out, n) = if hud_i32(host, id, "archived") != 0 {
+        let (out, n) = if hud_i32(host, id, hr!("archived")) != 0 {
             (&mut archived, &mut na)
         } else {
             (&mut current, &mut nc)
@@ -759,67 +845,132 @@ fn cod2_elem_type(t: i32) -> i32 {
 
 fn build_hud_elem(host: &GameHost, id: EntId, s: &HudState) -> HudElem2 {
     let mut w = [0u32; HUDELEM_FIELDS.len()];
-    let mut set = |name: &str, v: u32| w[field_index(&HUDELEM_FIELDS, name)] = v;
+    let mut set = |i: usize, v: u32| w[i] = v;
     let f = |v: f32| v.to_bits();
-    set("type", cod2_elem_type(s.elem_type) as u32);
-    set("x", f(hud_f32(host, id, "x")));
-    set("y", f(hud_f32(host, id, "y")));
-    set("z", f(hud_f32(host, id, "z")));
-    set("fontScale", f(hud_f32(host, id, "fontscale")));
-    set("font", hud_i32(host, id, "font") as u32);
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "type"),
+        cod2_elem_type(s.elem_type) as u32,
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "x"),
+        f(hud_f32(host, id, hr!("x"))),
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "y"),
+        f(hud_f32(host, id, hr!("y"))),
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "z"),
+        f(hud_f32(host, id, hr!("z"))),
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "fontScale"),
+        f(hud_f32(host, id, hr!("fontscale"))),
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "font"),
+        hud_i32(host, id, hr!("font")) as u32,
+    );
     // `alignx << 2 | aligny` and `horzalign << 3 | vertalign`
     // (`vcod_cod2::hudelem`).
-    let org = (hud_i32(host, id, "alignx") << 2 | hud_i32(host, id, "aligny")) as u32;
-    let screen = (hud_i32(host, id, "horzalign") << 3 | hud_i32(host, id, "vertalign")) as u32;
-    set("alignOrg", org);
-    set("alignScreen", screen);
-    set("fromAlignOrg", org);
-    set("fromAlignScreen", screen);
-    set("color.rgba", hud_i32(host, id, "color") as u32);
-    set("fromColor.rgba", s.from_color as u32);
-    set("fadeStartTime", s.fade_start as u32);
-    set("fadeTime", s.fade_ms as u32);
-    set("label", hud_i32(host, id, "label") as u32);
-    set("width", s.width as u32);
-    set("height", s.height as u32);
-    set("materialIndex", s.shader as u32);
-    set("fromWidth", s.from_width as u32);
-    set("fromHeight", s.from_height as u32);
-    set("scaleStartTime", s.scale_start as u32);
-    set("scaleTime", s.scale_ms as u32);
-    set("fromX", f(s.from_x as f32));
-    set("fromY", f(s.from_y as f32));
-    set("moveStartTime", s.move_start as u32);
-    set("moveTime", s.move_ms as u32);
-    set("time", s.time as u32);
-    set("duration", s.duration as u32);
-    set("value", f(s.value));
-    set("text", s.text as u32);
-    set("sort", f(hud_f32(host, id, "sort")));
+    let org = (hud_i32(host, id, hr!("alignx")) << 2 | hud_i32(host, id, hr!("aligny"))) as u32;
+    let screen =
+        (hud_i32(host, id, hr!("horzalign")) << 3 | hud_i32(host, id, hr!("vertalign"))) as u32;
+    set(vcod_cod2::field!(HUDELEM_FIELDS, "alignOrg"), org);
+    set(vcod_cod2::field!(HUDELEM_FIELDS, "alignScreen"), screen);
+    set(vcod_cod2::field!(HUDELEM_FIELDS, "fromAlignOrg"), org);
+    set(vcod_cod2::field!(HUDELEM_FIELDS, "fromAlignScreen"), screen);
     set(
-        "foreground",
-        u32::from(hud_i32(host, id, "foreground") != 0),
+        vcod_cod2::field!(HUDELEM_FIELDS, "color.rgba"),
+        hud_i32(host, id, hr!("color")) as u32,
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "fromColor.rgba"),
+        s.from_color as u32,
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "fadeStartTime"),
+        s.fade_start as u32,
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "fadeTime"),
+        s.fade_ms as u32,
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "label"),
+        hud_i32(host, id, hr!("label")) as u32,
+    );
+    set(vcod_cod2::field!(HUDELEM_FIELDS, "width"), s.width as u32);
+    set(vcod_cod2::field!(HUDELEM_FIELDS, "height"), s.height as u32);
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "materialIndex"),
+        s.shader as u32,
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "fromWidth"),
+        s.from_width as u32,
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "fromHeight"),
+        s.from_height as u32,
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "scaleStartTime"),
+        s.scale_start as u32,
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "scaleTime"),
+        s.scale_ms as u32,
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "fromX"),
+        f(s.from_x as f32),
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "fromY"),
+        f(s.from_y as f32),
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "moveStartTime"),
+        s.move_start as u32,
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "moveTime"),
+        s.move_ms as u32,
+    );
+    set(vcod_cod2::field!(HUDELEM_FIELDS, "time"), s.time as u32);
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "duration"),
+        s.duration as u32,
+    );
+    set(vcod_cod2::field!(HUDELEM_FIELDS, "value"), f(s.value));
+    set(vcod_cod2::field!(HUDELEM_FIELDS, "text"), s.text as u32);
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "sort"),
+        f(hud_f32(host, id, hr!("sort"))),
+    );
+    set(
+        vcod_cod2::field!(HUDELEM_FIELDS, "foreground"),
+        u32::from(hud_i32(host, id, hr!("foreground")) != 0),
     );
     w
 }
 
-fn hud_value(host: &GameHost, id: EntId, name: &str) -> Option<Value> {
-    let Route::Engine { slot, .. } = route_hud_cod2(name) else {
-        return None;
-    };
+fn hud_value(host: &GameHost, id: EntId, read: usize) -> Option<Value> {
+    let slot = hud_cells()[read]?;
     host.ents.get(id).map(|e| e.engine[slot])
 }
 
-fn hud_i32(host: &GameHost, id: EntId, name: &str) -> i32 {
-    match hud_value(host, id, name) {
+fn hud_i32(host: &GameHost, id: EntId, read: usize) -> i32 {
+    match hud_value(host, id, read) {
         Some(Value::Int(i)) => i,
         Some(Value::Float(f)) => f as i32,
         _ => 0,
     }
 }
 
-fn hud_f32(host: &GameHost, id: EntId, name: &str) -> f32 {
-    match hud_value(host, id, name) {
+fn hud_f32(host: &GameHost, id: EntId, read: usize) -> f32 {
+    match hud_value(host, id, read) {
         Some(Value::Int(i)) => i as f32,
         Some(Value::Float(f)) => f,
         _ => 0.0,

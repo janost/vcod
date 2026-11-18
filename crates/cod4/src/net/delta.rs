@@ -31,9 +31,50 @@ impl Field {
         }
     }
 
-    pub fn word(&self) -> usize {
+    pub const fn word(&self) -> usize {
         self.offset as usize / 4
     }
+}
+
+/// `name`'s word in `table`. Meant for a `const` block, where a name the
+/// table lacks fails the build.
+pub const fn word_named(table: &[Field], name: &str) -> usize {
+    let mut i = 0;
+    while i < table.len() {
+        let (a, b) = (table[i].name.as_bytes(), name.as_bytes());
+        if a.len() == b.len() {
+            let mut k = 0;
+            while k < a.len() && a[k] == b[k] {
+                k += 1;
+            }
+            if k == a.len() {
+                return table[i].word();
+            }
+        }
+        i += 1;
+    }
+    panic!("no such field")
+}
+
+/// `base[k]`'s word in `table` (`k` under 10), as [`word_named`].
+pub const fn word_at(table: &[Field], base: &str, k: usize) -> usize {
+    assert!(k < 10);
+    let b = base.as_bytes();
+    let mut i = 0;
+    while i < table.len() {
+        let a = table[i].name.as_bytes();
+        if a.len() == b.len() + 3 && a[b.len()] == b'[' && a[b.len() + 1] == b'0' + k as u8 {
+            let mut j = 0;
+            while j < b.len() && a[j] == b[j] {
+                j += 1;
+            }
+            if j == b.len() && a[b.len() + 2] == b']' {
+                return table[i].word();
+            }
+        }
+        i += 1;
+    }
+    panic!("no such field")
 }
 
 /// What a field read needs besides the bits: the snapshot's time (the
@@ -829,7 +870,11 @@ pub fn read_delta_entity(
 ) -> Result<(Option<EntityState>, Wire)> {
     let lc = match read_wire_head(r, min_bits(ENTITY_LC_FIELDS)) {
         Err(Wire::Removed) => return Ok((None, Wire::Removed)),
-        Err(wire) => return Ok((Some(*from), wire)),
+        Err(wire) => {
+            let mut to = *from;
+            to.0[0] = number;
+            return Ok((Some(to), wire));
+        }
         Ok(lc) => lc,
     };
     let mut to = *from;
@@ -907,7 +952,11 @@ pub fn read_delta_client(
     let table = &fields::CLIENT_STATE;
     let lc = match read_wire_head(r, min_bits(table.len() as u32)) {
         Err(Wire::Removed) => return Ok((None, Wire::Removed)),
-        Err(wire) => return Ok((Some(*from), wire)),
+        Err(wire) => {
+            let mut to = *from;
+            to.0[0] = number;
+            return Ok((Some(to), wire));
+        }
         Ok(lc) => lc,
     };
     ensure!(
@@ -1314,6 +1363,38 @@ pub fn write_delta_playerstate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An entity or client sent unchanged against the zero state still
+    /// carries its own number (BUG-096).
+    #[test]
+    fn an_unchanged_delta_keeps_its_own_number() {
+        let ctx = Ctx {
+            time: 0,
+            map_center: [0.0; 3],
+        };
+        let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
+        write_delta_entity(
+            &mut w,
+            &ctx,
+            &EntityState::default(),
+            &EntityState::default(),
+            &Wire::Unchanged,
+        );
+        write_delta_client(
+            &mut w,
+            &ctx,
+            &ClientState::default(),
+            &ClientState::default(),
+            &Wire::Unchanged,
+        );
+        let mut r = MsgReader::from_plain(w.into_ops());
+        let (e, wire) = read_delta_entity(&mut r, &ctx, &EntityState::default(), 37).unwrap();
+        assert!(matches!(wire, Wire::Unchanged));
+        assert_eq!(e.unwrap().number(), 37);
+        let (c, wire) = read_delta_client(&mut r, &ctx, &ClientState::default(), 5).unwrap();
+        assert!(matches!(wire, Wire::Unchanged));
+        assert_eq!(c.unwrap().0[0], 5);
+    }
 
     #[test]
     fn min_bits_matches_the_table_widths() {

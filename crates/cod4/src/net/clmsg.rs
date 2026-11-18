@@ -18,6 +18,8 @@ pub const MAX_CLIENT_COMMAND: usize = 1023;
 use anyhow::{Result, bail};
 use vcod_common::net::codec::{MsgReader, MsgWriter};
 
+/// The most usercmds a move message may carry (`SV_UserMove` 0x81725c3).
+pub const MAX_PACKET_USERCMDS: usize = 32;
 pub const CLC_MOVE: u32 = 0;
 pub const CLC_MOVE_NO_DELTA: u32 = 1;
 pub const CLC_CLIENT_COMMAND: u32 = 2;
@@ -428,9 +430,6 @@ pub fn usercmd_key(checksum_feed: i32, message_ack: i32, server_command: &[u8]) 
     checksum_feed ^ message_ack ^ vcod_common::net::com_hash_key_bytes(server_command, 32)
 }
 
-/// The ops of a decompressed client block (`SV_ExecuteClientMessage`): 3-bit
-/// op codes, commands until the move. `base` is the first cmd's base;
-/// fields a cmd leaves unsent read off it.
 /// The commands that open a message, up to its first other op: what
 /// `SV_ProcessClientCommands` reads of a message from before a
 /// map change, whose usercmds are keyed to the last level's feed.
@@ -448,6 +447,9 @@ pub fn read_commands(plain: Vec<u8>) -> Vec<ClOp> {
     ops
 }
 
+/// The ops of a decompressed client block (`SV_ExecuteClientMessage`): 3-bit
+/// op codes, commands until the move. `base` is the first cmd's base;
+/// fields a cmd leaves unsent read off it.
 pub fn read_ops(plain: Vec<u8>, key: i32, base: &UserCmd) -> Result<Vec<ClOp>> {
     let mut r = MsgReader::from_plain(plain);
     let mut ops = Vec::new();

@@ -640,8 +640,8 @@ server holds the float itself.
 
 ## 14. Open
 
-- The rest of pmove in the kept model: `PM_StepSlideMove` at 0x805e930 and the `PM_SlideMove` it
-  calls at 0x805e030 (both INFERRED, section 1) are the next to read.
+- `PM_StepSlideMove` (0x805e930) and `PM_SlideMove` (0x805e030) are read
+  in section 5; the rest of pmove in the kept model is unread.
 - Captures for the sprint, the ladder, a prone body and the sighted
   walk.
 - The server's open items are section 15's last list.
@@ -723,6 +723,14 @@ cod4-server-frame.md 2). What the server adds around the step:
   such a hit. mp_crash's script
   movers carry `solid` 0 (VERIFIED, the walk capture's entities); no
   capture walks into a brush entity yet.
+- `SV_Trace`'s entity clip (0x817dcca) hands the running trace to the
+  model's trace (call at 0x817de21) and names the entity, its hit type
+  and its contents only when the fraction came back lower
+  (0x817de2b..0x817de65). VERIFIED (the instructions). So an entity's
+  start in solid with no nearer contact leaves the running fraction and
+  the world's contact standing. INFERRED. vcod folds each body and brush
+  entity in that way (`vcod_cod4::pmove::Tr::fold`), on the server
+  (`Cod4Clip`) and in the client's prediction (`play::cod4_predict`).
 - `ClientImpacts` (`cod4_lnxded` 0x80a501a) runs after the link, per cmd:
   for each entity in the touch list (pm+0x48 count, numbers from pm+0x4c)
   not listed earlier, with the script system up (0x815cfe0), `touch` on
@@ -999,7 +1007,7 @@ disassembly):
 `play-1.7-mantle.txt` (its recipe in its header): a probe teleported by
 `setviewpos` to the -x face of mp_crash's low wall at x -16..36, y
 -1376 (brush 2242, `MANTLE_OVER`, found by `cargo run -p vcod-cod4
---example mantle_spots`) faces +x, walks into it and taps jump, swinging
+--example cod4_mantle_spots`) faces +x, walks into it and taps jump, swinging
 its view 120 left over the mantle and back; then faces -x and vaults
 back; then leans. Each mantle is row 4 (up 39, over mid), flags 5 (over
 and stand), 900 ms: `mantleState.timer` reads 16 (the second time 32)

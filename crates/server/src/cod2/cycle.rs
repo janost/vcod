@@ -71,6 +71,16 @@ impl Cod2Server {
     /// through `ClientConnect`. Each gets its gamestate when its next
     /// message carries the old id (`client_packet`).
     pub(super) fn spawn_server(&mut self, map: &str) -> anyhow::Result<()> {
+        // A gametype with no script fails before the teardown, so the
+        // level serving stays (as CoD1's `LoadFailure::KeptLevel`).
+        let gametype = match self.game.level.as_ref() {
+            Some(level) => level.rt.host.cvars.get("g_gametype"),
+            None => self.game.cvars.get("g_gametype"),
+        };
+        if self.game.level.is_some() && !self.gametype_script_exists(gametype) {
+            log::error!("cod2: no script for gametype {gametype}; the level stays");
+            return Ok(());
+        }
         let p = crate::tick_profile::phase("load/carry");
         let (carry, rigs, parts) = match self.game.level.as_ref() {
             Some(level) => {
@@ -219,6 +229,32 @@ impl Cod2Server {
         }
         self.write_engine_configstrings();
         Ok(())
+    }
+
+    /// Whether `gametype`'s script reads: `maps/mp/gametypes/<g>.gsc` in
+    /// the search path or the configured overlay. True on a bare server.
+    fn gametype_script_exists(&self, gametype: &str) -> bool {
+        let stem = format!("maps/mp/gametypes/{}", gametype.to_ascii_lowercase());
+        let overlay = (self.game.cfg.gametype_script.as_ref())
+            .is_some_and(|(s, _)| s.eq_ignore_ascii_case(&stem));
+        overlay
+            || self
+                .game
+                .fs
+                .as_ref()
+                .is_none_or(|fs| fs.contains(&format!("{stem}.gsc")))
+    }
+
+    /// A map cycle command's result: logged, and with the level torn down
+    /// kept as the fatal that ends the process, as retail's `Com_Error`
+    /// stops its server.
+    pub(super) fn load_failed(&mut self, what: &str, r: anyhow::Result<()>) {
+        let Err(e) = r else { return };
+        if self.game.level.is_none() && self.game.fs.is_some() {
+            self.game.fatal = Some(e.context(format!("cod2: {what}")));
+        } else {
+            log::error!("cod2: {what}: {e:#}");
+        }
     }
 
     /// `map_rotate` (`SV_MapRotate_f`): the rotation's gametype into

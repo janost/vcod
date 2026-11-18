@@ -322,8 +322,9 @@ fn plant_value(interner: &mut Interner, v: &CarryValue, ids: &[Value]) -> Value 
 #[derive(Clone, PartialEq, Debug)]
 pub enum ErrorKind {
     /// The host has no such builtin. Kills the thread that reached it and
-    /// nothing else. `Loader::missing_builtins` lists the statically
-    /// visible ones at load time so this is not the first place a host gap
+    /// nothing else. The server's `BuiltinSet::unknown_calls` (and, for
+    /// tests, `Loader::missing_builtins`) lists the statically visible ones
+    /// at load time so this is not the first place a host gap
     /// shows up, but it is still reachable for every one of them.
     MissingBuiltin(Atom),
     BadType(&'static str),
@@ -529,11 +530,6 @@ impl Cx<'_> {
 
     pub fn get_field(&self, s: StructId, f: Atom) -> Value {
         self.heap.get_field(s, f)
-    }
-
-    /// How many fields the struct holds.
-    pub fn field_count(&self, s: StructId) -> usize {
-        self.heap.struct_fields(s).len()
     }
 
     pub fn set_field(&mut self, s: StructId, f: Atom, v: Value) {
@@ -766,7 +762,7 @@ pub struct Vm {
     /// fail it (`probe_level_bracket_read`).
     struct_index_reads_undefined: bool,
     /// `.size` on an array or string, interned once here rather than per
-    /// `LoadField` — `_load.gsc` reads it inside three loops.
+    /// `LoadField`: `_load.gsc` reads it inside three loops.
     size_atom: Atom,
     /// Kept in start order so a `run_frame` walk, and a `notify` wake, are
     /// both deterministic.
@@ -928,12 +924,6 @@ impl Vm {
         self.recover_errors = on;
     }
 
-    /// CoD2's notify wake order: the waiter whose `waittill` parked last
-    /// resumes first. Live on mp_toujane, the stock gametypes' `connecting`
-    /// waiters (`_teams`, `_weapons`, `_grenadeindicators`, parked in that
-    /// order at init) answered the first connect newest first and the
-    /// second, after each had parked again in that wake order, oldest
-    /// first (cod2-protocol.md 15.5).
     /// CoD2's `x = thread f()`: the value `f` returned when it ran to its end
     /// without suspending, else undefined. VERIFIED live on retail 1.3
     /// (cod2-protocol.md 15.7); CoD1's reads undefined (not measured).
@@ -949,6 +939,12 @@ impl Vm {
         self.struct_index_reads_undefined = on;
     }
 
+    /// CoD2's notify wake order: the waiter whose `waittill` parked last
+    /// resumes first. Live on mp_toujane, the stock gametypes' `connecting`
+    /// waiters (`_teams`, `_weapons`, `_grenadeindicators`, parked in that
+    /// order at init) answered the first connect newest first and the
+    /// second, after each had parked again in that wake order, oldest
+    /// first (cod2-protocol.md 15.5).
     pub fn set_newest_waiter_first(&mut self, on: bool) {
         self.newest_waiter_first = on;
     }
@@ -1229,7 +1225,7 @@ impl Vm {
     /// One error as `file::func:line: Kind`.
     ///
     /// `ErrorKind`'s own `Debug` prints `MissingBuiltin`'s `Atom` as a bare
-    /// index (`MissingBuiltin(Atom(43))`) -- useless as the work list this
+    /// index (`MissingBuiltin(Atom(43))`): useless as the work list this
     /// exists to be, since nothing else here names the builtin. `ErrorKind`
     /// keeps the `Atom` for its callers, which match on it; only the
     /// rendered text resolves it.
@@ -1259,7 +1255,7 @@ impl Vm {
     /// The struct/array store, for a host that needs to allocate an array
     /// or struct (`getentarray`, `spawnstruct`) or read/write a field or
     /// element from outside the instruction loop. `Heap`'s own methods are
-    /// the API — bounds-checked, so an id the host mishandles reads
+    /// the API: bounds-checked, so an id the host mishandles reads
     /// `Undefined` or drops a write rather than panicking.
     pub fn heap(&self) -> &Heap {
         &self.heap
@@ -1277,12 +1273,9 @@ impl Vm {
     }
 
     /// `level`'s struct id. `level()` returns a `Target` for notify and call
-    /// receivers; this is for the host's own heap reads.
-    ///
-    /// Unused outside this file's tests, and it will stay that way until
-    /// `Cx` grows the same pair: a host reading `level.<field>` from inside
-    /// a builtin holds a `Cx`, not a `Vm`. Reachable today only from a host
-    /// that owns the `Vm` between frames.
+    /// receivers; this is for the host's own heap reads between frames (the
+    /// server's script host). A builtin holds a `Cx`, which has no such
+    /// pair.
     pub fn level_id(&self) -> StructId {
         self.level
     }
@@ -1345,7 +1338,7 @@ impl Vm {
     /// stack walk instead of installing it. That check is the only thing
     /// standing between a compiler bug and a panic in `step_frames` (which
     /// trusts the stack discipline it proves), so it has to run here, on
-    /// every function this ever accepts — not just in the compiler's own
+    /// every function this ever accepts, not just in the compiler's own
     /// test suite, which is the only place it ran before. Also rejects a
     /// function whose `FuncRef` collides with one already installed, rather
     /// than silently overwriting it. Both checks run over the whole batch
@@ -1606,6 +1599,21 @@ pub(crate) mod tests {
         ] {
             let (v, _, _) = run(&format!("main() {{ return {src}; }}"));
             assert_eq!(v, want, "{src}");
+        }
+    }
+
+    /// A vertical tab is a `strtol` blank like the other `isspace` bytes
+    /// (BUG-101).
+    #[test]
+    fn a_vertical_tab_before_a_cast_number_is_a_blank() {
+        for (src, want) in [
+            ("(int)\"\u{b}7\"", Value::Int(7)),
+            ("(int)\"\u{b}-7\"", Value::Int(-7)),
+            ("(float)\"\u{b}2.5\"", Value::Float(2.5)),
+            ("!\"\u{b}7\"", Value::Int(0)),
+        ] {
+            let (v, _, _) = run(&format!("main() {{ return {src}; }}"));
+            assert_eq!(v, want, "{src:?}");
         }
     }
 
@@ -1979,7 +1987,7 @@ pub(crate) mod tests {
 
     /// Before `Target`, `WaitTill` accepted only `Value::Entity` and a
     /// `level`/`game` receiver was a `BadType` script error, not a
-    /// suspend — every stock gametype's round-end wait would have failed
+    /// suspend: every stock gametype's round-end wait would have failed
     /// outright rather than blocking.
     #[test]
     fn level_waittill_suspends_rather_than_failing_on_receiver_type() {
@@ -1993,10 +2001,8 @@ pub(crate) mod tests {
         assert!(matches!(e.kind, ErrorKind::SuspendedInImmediateCall));
     }
 
-    /// `Notify`/`EndOn` used to pop and discard their receiver with no
-    /// type check at all, so this was silently accepted either way. Now
-    /// that the receiver is resolved to a `Target`, a `level`/`game`
-    /// receiver must still be accepted, not newly rejected.
+    /// `Notify`/`EndOn` resolve their receiver to a `Target`, and a
+    /// `level`/`game` receiver must be accepted there, not rejected.
     #[test]
     fn level_notify_and_endon_accept_a_struct_receiver() {
         let (v, _, _) = run(r#"main() { level notify("go"); level endon("stop"); return 1; }"#);

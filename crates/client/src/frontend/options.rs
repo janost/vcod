@@ -521,7 +521,6 @@ impl Ui {
     }
 
     /// `Item_Slider_Paint`'s bar and thumb.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn slider_quads(
         &self,
         p: &Painter,

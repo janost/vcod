@@ -107,7 +107,6 @@ struct Drawn<'a> {
 
 /// `Item_Paint` of a visible item: its window, then its text, which it
 /// returns with its baseline's window position.
-#[allow(clippy::too_many_arguments)]
 fn item(
     menus: &ScriptMenus,
     a: &MenuAssets,
@@ -190,14 +189,15 @@ fn item(
 }
 
 /// `autowrapped`'s static flag (`ItemParse_autowrapped`, `iw3mp.exe`
-/// 0x556cc0), which `Item_Text_Paint` tests (0x551fb9).
+/// 0x556cc0), which `Item_Text_Paint` tests (0x551fb9); cod4-hud.md 12.4.
 const ITEM_AUTOWRAPPED: u32 = 0x80_0000;
 
-/// Where the line at the head of `s` stops for `width` grid units
-/// (`R_TextLineWrapPosition`): just past a newline; otherwise, once the
-/// text through some character is wider than `width`, before the last
-/// whitespace seen by then (never the first character), so a word wider
-/// than the line runs on to the next break; else the whole of `s`.
+/// Where the line at the head of `s` stops for `width` grid units (after
+/// `R_TextLineWrapPosition`, a name with no address: unverified against
+/// retail): just past a newline; otherwise, once the text through some
+/// character is wider than `width`, before the last whitespace seen by then
+/// (never the first character), so a word wider than the line runs on to the
+/// next break; else the whole of `s`.
 fn line_break(s: &str, width: f32, measure: &impl Fn(&str) -> f32) -> usize {
     let mut last_gap = None;
     for (at, ch) in s.char_indices() {
@@ -231,10 +231,11 @@ fn break_lines<'s>(s: &'s str, width: f32, measure: &impl Fn(&str) -> f32) -> Ve
 }
 
 /// The lines the wrapped text draw puts `s` in for a rect `width` wide. A
-/// centred text that overflows is balanced first
-/// (`UI_PickWordWrapLineWidth`): the fewest lines the rect's width allows
-/// are kept at the narrowest width, tried from an even split upward in
-/// steps of 8 below the rect's, that still breaks into that many.
+/// centred text that overflows is balanced first (after
+/// `UI_PickWordWrapLineWidth`, a name with no address: the rule and its step of
+/// 8 are unverified against retail): the fewest lines the rect's width allows
+/// are kept at the narrowest width, tried from an even split upward in steps of
+/// 8 below the rect's, that still breaks into that many.
 fn wrap_lines(s: &str, width: f32, centred: bool, measure: impl Fn(&str) -> f32) -> Vec<&str> {
     let full = measure(s);
     let rect = width as i32;
@@ -312,11 +313,11 @@ impl Paint<'_> {
         (s.to_string(), [rx, ry + th * sp.virtual_to_real[1]])
     }
 
-    /// `Item_Text_AutoWrapped_Paint` (0x551da0): `s` broken into lines
-    /// of the rect's width ([`wrap_lines`]), each aligned on its own, the
-    /// first where an unwrapped text's baseline goes and each next one
-    /// its height and 5 below. Returns each line with its baseline's
-    /// window position.
+    /// `Item_Text_AutoWrapped_Paint` (0x551da0, cod4-hud.md 12.4): `s` broken
+    /// into lines of the rect's width ([`wrap_lines`]), each aligned on its
+    /// own, the first where an unwrapped text's baseline goes and each next one
+    /// its height and 5 below. Returns each line with its baseline's window
+    /// position.
     fn wrapped(&self, s: &str, out: &mut Vec<HudQuad>) -> Vec<(String, [f32; 2])> {
         let (_, _, th) = self.font();
         let [x, top] = text_rect(self.it, self.rect, 0.0, th, 0.0);
@@ -348,7 +349,6 @@ impl Paint<'_> {
 /// `Item_Paint` of a HUD menu's plain item (`cod4_hud::menus`): its
 /// window in `fore` over `rect`, then `text` localized and placed by its
 /// alignment. Returns the text with its baseline's window position.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn hud_item(
     a: &MenuAssets,
     it: &LayoutItem,
@@ -527,7 +527,6 @@ fn slider(
 /// `pos`, aligned in its width, its baseline the row's bottom plus
 /// `textaligny`, until a row no longer fits. Returns each text drawn with
 /// its baseline's window position.
-#[allow(clippy::too_many_arguments)]
 fn list_box(
     menus: &ScriptMenus,
     a: &MenuAssets,
@@ -705,7 +704,6 @@ fn text_colour(
 /// `backColor`, through the background when there is one; 3, 5 and 6
 /// draw the material in `foreColor` when `WINDOW_FORECOLORSET`, else
 /// white; then the border.
-#[allow(clippy::too_many_arguments)]
 fn window(
     a: &MenuAssets,
     it: &LayoutItem,
@@ -824,10 +822,11 @@ mod tests {
     use crate::play::cod4_menus::{CS_SCRIPT_MENUS, Join, MenuKey};
     use vcod_cod4::net::parse::Gamestate;
 
-    /// `R_TextLineWrapPosition`'s breaks, a unit a character: at the last
-    /// space before the overflow, a longer word whole, a newline always;
-    /// a centred text balances its lines (`UI_PickWordWrapLineWidth`).
-    /// Fails with the whole new text when `actual` moved off the pin.
+    /// vcod's breaks ([`line_break`]), a unit a character: at the last space
+    /// before the overflow, a longer word whole, a newline always; a centred
+    /// text balances its lines ([`wrap_lines`]). Pins vcod's own output, not a
+    /// retail measurement. Fails with the whole new text when `actual` moved
+    /// off the pin.
     fn pin(tag: &str, actual: &str, expected: &str) {
         assert!(actual == expected, "{tag} moved:\n{actual}");
     }

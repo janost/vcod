@@ -5,7 +5,7 @@
 //! per version; the load picks it (`ScriptRuntime::load_game`).
 
 use vcod_common::game::Game;
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_gsc::VmProfile;
 
 use crate::defs::{self, Defs};
@@ -32,6 +32,9 @@ pub struct HostProfile {
     /// (CoD4 1.7's `Scr_Delete` 0x80c3cd6 ends in `G_FreeEntity`,
     /// cod4-combat.md 14); the entity still goes 100 ms out, as CoD1's.
     pub delete_queues_number: bool,
+    /// `delete()` on a client is a script error (`Cannot delete a client
+    /// entity`, CoD4 1.7's `Scr_Delete`, cod4-combat.md 14).
+    pub delete_refuses_client: bool,
     /// 1.1's rules: protocol 1, or CoD2, which keeps them wherever vcod has
     /// not measured its own (cod2-gsc-diff.md 5.1).
     pub speaks_1_1: bool,
@@ -201,6 +204,7 @@ const fn cod1(defs: &'static Defs, builtins: fn() -> &'static BuiltinSet, v1: bo
         compile_against_builtins: false,
         ent_reuse_after_ms: None,
         delete_queues_number: false,
+        delete_refuses_client: false,
         speaks_1_1: v1,
         lowercase_shaders: false,
         reads_radiant_keys: false,
@@ -269,6 +273,7 @@ pub static COD2: HostProfile = HostProfile {
     compile_against_builtins: true,
     ent_reuse_after_ms: Some(500),
     delete_queues_number: false,
+    delete_refuses_client: false,
     speaks_1_1: true,
     lowercase_shaders: true,
     reads_radiant_keys: true,
@@ -330,6 +335,7 @@ pub static COD4: HostProfile = HostProfile {
     compile_against_builtins: true,
     ent_reuse_after_ms: Some(500),
     delete_queues_number: true,
+    delete_refuses_client: true,
     speaks_1_1: true,
     lowercase_shaders: true,
     reads_radiant_keys: true,
@@ -380,7 +386,7 @@ pub static COD4: HostProfile = HostProfile {
 
 impl HostProfile {
     /// CoD1's profile for `proto`, as [`Defs::of`] picks its tables.
-    pub fn cod1(proto: &Protocol) -> &'static HostProfile {
+    pub fn cod1(proto: &Cod1Wire) -> &'static HostProfile {
         match proto.transport.version {
             v if v == PROTOCOL_V22.transport.version => &COD1_UO,
             v if v == PROTOCOL_V6.transport.version => &COD1_15,
@@ -393,7 +399,7 @@ impl HostProfile {
         let proto = protocol
             .parse()
             .ok()
-            .and_then(|v| Protocol::by_version(Game::Cod1, v))
+            .and_then(|v| Cod1Wire::by_version(Game::Cod1, v))
             .unwrap_or(&PROTOCOL_V1);
         Self::cod1(proto)
     }

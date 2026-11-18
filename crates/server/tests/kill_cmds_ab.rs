@@ -26,7 +26,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::animtree::PlayerAnims;
 use vcod_common::net::msg::{BUTTON_USE, NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::pk3::Pk3Fs;
 
 /// One `!kill` with the death frame retail sent behind it.
@@ -90,7 +90,7 @@ fn retail(path: &str, anims: &PlayerAnims) -> Vec<Death> {
 /// The same kills on ours: alive two seconds, then `kill` and its cmds in
 /// one frame, one message each as the probe sent them, and a frame with no
 /// cmd at all; then the use press until the respawn.
-fn ours(proto: &'static Protocol, fs: Pk3Fs, kills: &[usize], timers: bool) -> Vec<Death> {
+fn ours(proto: &'static Cod1Wire, fs: Pk3Fs, kills: &[usize], timers: bool) -> Vec<Death> {
     let anims = PlayerAnims::load(&fs).expect("the player anims");
     let bsp_path = fs.resolve_map("mp_carentan").expect("map");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
@@ -170,7 +170,7 @@ fn ours(proto: &'static Protocol, fs: Pk3Fs, kills: &[usize], timers: bool) -> V
     out
 }
 
-fn check(proto: &'static Protocol, fs: Pk3Fs, fixture: &str) {
+fn check(proto: &'static Cod1Wire, fs: Pk3Fs, fixture: &str) {
     let anims = PlayerAnims::load(&fs).expect("the player anims");
     let retail = retail(fixture, &anims);
     assert!(

@@ -1,13 +1,13 @@
-//! Post-processing before the HUD: a CoD4 vision set's film tweak
-//! (retail's `postfx_color`, docs/research/cod4-world.md 11) and its glow
-//! added after it (`glow_apply_bloom`, the chain in `crate::cod2_glow`),
-//! and the
-//! vcod-only `vc_hdr` tonemap from the float world target, `vc_grade`,
-//! `vc_vignette` and `vc_grain`. While any is on, the map pass resolves into this pass's world
-//! target, the pass writes retail's framebuffer bytes into the gamma pass's
-//! scene, and the HUD draws over that, so none of it touches the HUD. With
-//! all four off it never runs and the frame is the retail path
-//! (docs/research/cod11-gamma.md, section 9).
+//! Post-processing before the HUD: CoD4's depth of field, a CoD4 vision
+//! set's film tweak (retail's `postfx_color`, docs/research/cod4-world.md
+//! 11) and its glow added after it (`glow_apply_bloom`, the chain in
+//! `crate::cod2_glow`), and the vcod-only `vc_hdr` tonemap from the float
+//! world target, `vc_grade`, `vc_vignette` and `vc_grain`. While any is on,
+//! the map pass resolves into this pass's world target, the pass writes
+//! retail's framebuffer bytes into the gamma pass's scene, and the HUD draws
+//! over that, so none of it touches the HUD. With all of them off it never
+//! runs and the frame is the retail path (docs/research/cod11-gamma.md,
+//! section 9).
 
 use crate::renderer::SCENE_FORMAT;
 
@@ -239,7 +239,6 @@ impl PostPass {
     /// its framebuffer before anything vcod adds; then the bound glow at
     /// `glow` (`glowApply`'s intensity, 0 for none), as `glow_apply_bloom`
     /// adds into it.
-    #[allow(clippy::too_many_arguments)]
     pub fn set_params(
         &self,
         queue: &wgpu::Queue,

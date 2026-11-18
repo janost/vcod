@@ -304,6 +304,22 @@ impl Iwi {
             mips: self.levels.iter().map(|l| l.faces[face].clone()).collect(),
         };
         let data = match self.header.format {
+            // wgpu takes a BC texture only in whole blocks, as parse_dds
+            f @ (IwiFormat::Dxt1 | IwiFormat::Dxt3 | IwiFormat::Dxt5)
+                if width % 4 != 0 || height % 4 != 0 =>
+            {
+                let format = match f {
+                    IwiFormat::Dxt1 => TextureFormat::Bc1RgbaUnorm,
+                    IwiFormat::Dxt3 => TextureFormat::Bc2RgbaUnorm,
+                    _ => TextureFormat::Bc3RgbaUnorm,
+                };
+                ImageData::Rgba8(crate::assets::decode_bc(
+                    format,
+                    width,
+                    height,
+                    &self.levels[0].faces[face],
+                ))
+            }
             IwiFormat::Dxt1 => bc(TextureFormat::Bc1RgbaUnorm),
             IwiFormat::Dxt3 => bc(TextureFormat::Bc2RgbaUnorm),
             IwiFormat::Dxt5 => bc(TextureFormat::Bc3RgbaUnorm),
@@ -413,6 +429,22 @@ mod tests {
         assert_eq!(format, TextureFormat::Bc1RgbaUnorm);
         assert_eq!(mips.len(), 4);
         assert_eq!((img.width, img.height), (8, 4));
+    }
+
+    /// A DXT file whose largest level is not whole blocks goes up as RGBA.
+    #[test]
+    fn dxt1_of_part_blocks_decodes_to_rgba() {
+        // 6x6: levels 6x6 (4 blocks), 3x3 (1), 1x1 (1), stored 1x1 first
+        let mut b = header(11, 0, 6, 6, [0; 4]);
+        for blocks in [1usize, 1, 4] {
+            b.extend(std::iter::repeat_n(0u8, blocks * 8));
+        }
+        let img = Iwi::parse(&b).unwrap().to_image();
+        assert_eq!((img.width, img.height), (6, 6));
+        let ImageData::Rgba8(px) = img.data else {
+            panic!("not rgba")
+        };
+        assert_eq!(px.len(), 6 * 6 * 4);
     }
 
     #[test]

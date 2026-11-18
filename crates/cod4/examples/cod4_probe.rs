@@ -738,6 +738,7 @@ fn main() -> Result<()> {
             voice: false,
             notes: None,
             stats: None,
+            stats_for: None,
         },
     )?;
 

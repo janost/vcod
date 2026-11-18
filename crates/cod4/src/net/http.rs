@@ -173,7 +173,16 @@ mod tests {
         let port = l.local_addr().unwrap().port();
         std::thread::spawn(move || {
             let (mut s, _) = l.accept().unwrap();
-            let _ = s.read(&mut [0u8; 512]);
+            // Read the whole request: a close with request bytes unread
+            // sends a reset, which the client can see before the cap.
+            let mut req = Vec::new();
+            let mut b = [0u8; 512];
+            while !req.ends_with(b"\r\n\r\n") {
+                match s.read(&mut b) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => req.extend_from_slice(&b[..n]),
+                }
+            }
             let _ = s.write_all(b"HTTP/1.0 200 OK\r\n");
             let _ = s.write_all(&b"X: a\r\n".repeat(1 << 17));
         });
@@ -186,7 +195,8 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(5));
         };
-        assert!(res.unwrap_err().contains("over 65536"));
+        let e = res.unwrap_err();
+        assert!(e.contains("over 65536"), "{e}");
         assert!(!dest.exists());
     }
 

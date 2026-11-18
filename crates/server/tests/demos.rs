@@ -16,7 +16,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use vcod_common::net::demo::{DemoEnd, DemoReader};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V22};
 use vcod_common::net::{NetClient, NetEvent, NetState};
 
 /// A `Write` the test reads back after the client is done with it.
@@ -33,7 +33,7 @@ impl Write for Shared {
     }
 }
 
-fn setup() -> Option<(vcod_common::pk3::Pk3Fs, &'static Protocol)> {
+fn setup() -> Option<(vcod_common::pk3::Pk3Fs, &'static Cod1Wire)> {
     match vcod_common::testing::uo_fs() {
         Some(fs) => Some((fs, &PROTOCOL_V22)),
         None => Some((vcod_common::testing::game_fs()?, &PROTOCOL_V1)),

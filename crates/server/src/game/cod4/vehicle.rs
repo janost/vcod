@@ -1194,7 +1194,7 @@ impl Cod4Level {
     /// location multiplier applies to an entity. `Helicopter_Pain`'s jolt
     /// scales by the file's `maxBodyPitch` and `maxBodyRoll`, 0 on
     /// `cobra_mp`, so it moves nothing and is left out.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn damage_heli(
         &mut self,
         id: EntId,
@@ -1289,7 +1289,7 @@ impl Cod4Level {
             .cloned()
         else {
             if let Some(m) = s.missile {
-                self.rt.host.ents.free(m);
+                self.rt.host.free_entity(m);
             }
             return;
         };

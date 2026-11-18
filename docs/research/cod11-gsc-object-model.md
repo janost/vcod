@@ -17,19 +17,14 @@ python3 tools/re/dump_script_fields.py game.mp.i386.so all
 python3 tools/re/dump_builtins.py     game.mp.i386.so all
 ```
 
-## 1. One trap that cost the previous pass three wrong claims
+## 1. Pointers in `.data` read as zero in the file
 
 Pointers stored in `.data` read as zero in the file. The module is a shared
 object, so every address in a static table (`SP_info_null`,
 `ScriptEnt_MoveTo`, ...) is an `R_386_32` relocation in `.rel.data` with the
-in-place word left at 0.
-
-Read raw, that produced three wrong claims in `cod11-gsc-language.md` section 7
-(corrected there): some builtin records carry a null function pointer,
-`getent` and `getentarray` among them, and the `move*`/`rotate*` builtins sit
-in a `.rodata` whitelist with a zero second field. Nothing has a null function
-pointer; the movers are an ordinary dispatch table in `.data`. Both dumpers
-resolve `.rel.data` and print the symbol.
+in-place word left at 0. Read raw, builtin records seem to carry null function
+pointers and the movers seem to be a `.rodata` whitelist; neither is true
+(section 9). Both dumpers resolve `.rel.data` and print the symbol.
 
 ## 2. Struct sizes, VERIFIED
 
@@ -577,8 +572,6 @@ function (`hurt_touch`'s `+0x171` byte included) is an inner gate.
 
 ## 9. Builtins are five tables, VERIFIED
 
-`cod11-gsc-language.md` section 7 points here for the record struct.
-
 | table | address | stride | count | walked by | 1.5b address, count | UO 1.51b address, count |
 |---|---|---|---|---|---|---|
 | `functions` | 0x7e508 | 12 | 106 | `Scr_GetFunction` 0x5c15c | 0x83c40, 110 | 0xadde0, 120 |
@@ -684,23 +677,13 @@ its classname is not `worldspawn`, runs `SP_worldspawn` on it, then loops
 `G_ParseSpawnVars` plus `G_CallSpawn` over the rest. The world is not
 allocated through `G_Spawn` and takes no number in the 72-and-up range.
 
-## 12. What stage 2 takes from this
+## 12. Summary
 
-The rules the host follows:
-
-- Four object kinds; the field id discriminates two of them: a plain index for
-  entity, `| 0xC000` for client, a plain index in its own namespace for HUD
-  elements.
-- Field lookup by name is case-insensitive, at script level and for Radiant
-  keys at map load. Field ids are dense small integers (`u16`).
-- `getentarray` sees case-four entities in ascending entity number (BSP lump
-  order), numbered from 72. Five classnames free the entity their `SP_`
-  function was handed and the slot is reused at once, so those blocks take no
-  number (sections 13, 14).
-- A Radiant key that is neither an engine field nor in `radiant/keys.txt` is
-  dropped at load; stashing it would show scripts fields retail lacks.
-- 216 builtin names is the dispatch ceiling, in the five-table split and
-  lookup order of section 9. The 37 names `mp_pavlov` needs are a subset.
+The field id names the object kind (section 5), name lookups fold case
+(section 7), `getEntArray` order and entity numbers follow sections 10, 11, 13
+and 14, and builtin dispatch is section 9's five tables in its lookup order. A
+Radiant key that is neither an engine field nor in `radiant/keys.txt` is
+dropped at load (section 7).
 
 ## 13. Five classnames consume their block without an entity, VERIFIED
 
@@ -2611,8 +2594,8 @@ VERIFIED, the plant fixture against the wire: these elements travel in the
 playerstate's archived HUD array, not the current one; reading `hud_current`
 alone shows an empty column through a whole plant at `pm_type` 1. Both
 committed client fixtures head their `hud=` column "unarchived HUD array", the
-probe's old label (writer corrected in 17e43b0); a recapture's header reads
-differently.
+probe's old label; the probe now writes `archived|current`, with `-` for an
+empty half.
 
 VERIFIED, `maps/MP/gametypes/sd.gsc` in `pak5.pk3`: `bomb_think` creates the
 defuse icon on any `"trigger"` notify from a defender who `isOnGround()`, its
@@ -2885,9 +2868,6 @@ vcod: `Cod1Game::udp_slots` marks each slot a UDP connect took, which
 
 ## Open, and worth a probe
 
-- Answered: same-deadline waits resume newest-queued first
-  (`cod11-gsc-language.md`, `probe_wait0_yield`), which 23.7's thread order
-  needed.
 - Whether `Scr_FindField` searches only the radiant fields (section 7).
 - Whether `Scr_AddFields` really reads `radiant/keys.txt` (section 6).
 - The name-to-index direction of the three HUD enum tables (section 5). The

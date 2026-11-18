@@ -5,9 +5,11 @@ the three connectionless replies, the gamestate framing and the whole
 configstring table for two stock maps. vcod-server copies its constants from
 these captures.
 
-Everything here is **VERIFIED live 2026-08-25** against `cod_lnxded` (1.1d)
-with `game.mp.i386.so` (`gamedate: Nov 13 2003`) and the 1.5 install's assets,
-unless a line says otherwise.
+Everything from "Setup" through "What a minimal server has to set" is
+**VERIFIED live 2026-08-25** against `cod_lnxded` (1.1d) with
+`game.mp.i386.so` (`gamedate: Nov 13 2003`) and the 1.5 install's assets,
+unless a line says otherwise. From "Retail client check" on, each section
+names its own runs and binaries and each claim carries its own label.
 
 Contents: setup; connectionless replies; the gamestate message; configstrings
 at gamestate; what a minimal server has to set; retail client check;
@@ -395,23 +397,8 @@ an op) and disconnects (server: `dropped: EXE_DISCONNECTED`). vcod's client
 never reads past the gamestate body, so only retail's catches it.
 `ServerNetchan::transmit` appends it; the byte-exact test pins it.
 
-Two shells:
-
-```
-RUST_LOG=debug cargo run -p vcod-server -- mp_carentan
-CoDMP.exe +set r_fullscreen 0 +connect 127.0.0.1:28960     # from the 1.1 install
-```
-
-Pass: the server logs `connected`, `gamestate, N bytes` and `sent its first
-move`, with no `usercmd not parsed` at debug level; the client loads the map;
-neither side prints `EXE_SERVER_IS_DIFFERENT_VER`.
-
-| Symptom | Suspect |
-|---|---|
-| `usercmd not parsed` at debug level | the full-field usercmd branch, INFERRED from disassembly only; table in `tools/re/net-notes.md` |
-| `Illegible server message N` right after the map loads | the missing `svc_EOF` terminator (`ServerNetchan::transmit`) |
-| the client disconnects right after the gamestate with another error | the configstring table in `crates/server/src/configstrings.rs` |
-| no `connectResponse` | `parse_connect` (`crates/common/src/net/connectionless.rs`) |
+The run's recipe, pass line and symptom table: `docs/dev/retail.md`, "A
+retail client against vcod-server".
 
 ## Housekeeping: master heartbeat, rcon, zombie slots, private slots
 
@@ -660,6 +647,7 @@ A zombie never active:
 
 All three servers send a frame's messages in one slot-order pass, whatever
 each slot's state; zombies and unentered clients get no pass of their own.
+INFERRED (control flow of the three `SV_SendClientMessages` below).
 
 | | 1.1d | 1.5b | UO 1.51b |
 |---|---|---|---|
@@ -1500,7 +1488,7 @@ The read schedule:
 
 Q3's `EF_CONNECTION` rule survives in all three game modules but never reaches
 the wire: the entity's `eFlags` are overwritten from the playerstate right
-after.
+after. INFERRED, from the store order the table's addresses give.
 
 | module | stamp | `ClientEndFrame` | bit set | copies (`eFlags` source) |
 |---|---|---|---|---|

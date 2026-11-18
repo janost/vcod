@@ -80,18 +80,16 @@ impl PmWorld for Cod4Clip<'_> {
                         b.entity,
                     );
                 }
-                if c.fraction < t.fraction || (c.startsolid && !t.startsolid) {
-                    t = Tr {
-                        fraction: c.fraction,
-                        normal: c.normal,
-                        surface_flags: 0,
-                        contents: b.contents,
-                        entity_num: b.entity,
-                        startsolid: c.startsolid,
-                        allsolid: c.allsolid,
-                        walkable: c.normal.z >= vcod_cod4::collision::WALKABLE_NORMAL_Z,
-                    };
-                }
+                t.fold(Tr {
+                    fraction: c.fraction,
+                    normal: c.normal,
+                    surface_flags: 0,
+                    contents: b.contents,
+                    entity_num: b.entity,
+                    startsolid: c.startsolid,
+                    allsolid: c.allsolid,
+                    walkable: c.normal.z >= vcod_cod4::collision::WALKABLE_NORMAL_Z,
+                });
                 if t.fraction == 0.0 {
                     return t;
                 }
@@ -107,12 +105,10 @@ impl PmWorld for Cod4Clip<'_> {
             let c = self
                 .clip
                 .trace_model(b.model, local(start), local(end), mins, maxs, mask);
-            if c.fraction < t.fraction || (c.startsolid && !t.startsolid) {
-                let mut w = pmove::world_tr(&c);
-                w.normal = q * c.normal;
-                w.entity_num = b.entity;
-                t = w;
-            }
+            let mut w = pmove::world_tr(&c);
+            w.normal = q * c.normal;
+            w.entity_num = b.entity;
+            t.fold(w);
             if t.fraction == 0.0 {
                 break;
             }
@@ -138,4 +134,122 @@ pub fn level_world(clip: Arc<ClipMap>) -> Rc<crate::world::World> {
         rubble: Vec::new(),
         nav_cover: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vcod_cod4::collision::{CONTENTS_SOLID, MASK_PLAYERSOLID, Submodel};
+    use vcod_common::clipmap::{self, BrushNode, CBrush, CLeaf, CNode, CPlane};
+
+    fn leaf(b: &CBrush, brush_node: u32) -> CLeaf {
+        CLeaf {
+            first_aabb: 0,
+            aabb_count: 0,
+            brush_contents: CONTENTS_SOLID,
+            terrain_contents: 0,
+            mins: b.mins - Vec3::splat(0.125),
+            maxs: b.maxs + Vec3::splat(0.125),
+            brush_node,
+        }
+    }
+
+    fn brush(mins: Vec3, maxs: Vec3) -> CBrush {
+        CBrush {
+            mins,
+            maxs,
+            contents: CONTENTS_SOLID,
+            sides: Vec::new(),
+            axial_material: [[0; 3]; 2],
+        }
+    }
+
+    /// A world wall at x 64..96 and submodel 1, a block round the origin.
+    fn wall_and_block() -> ClipMap {
+        let wall = brush(
+            Vec3::new(64.0, -100.0, -100.0),
+            Vec3::new(96.0, 100.0, 100.0),
+        );
+        let block = brush(Vec3::splat(-32.0), Vec3::splat(32.0));
+        let (world_leaf, block_leaf) = (leaf(&wall, 1), leaf(&block, 2));
+        let world = clipmap::ClipMap {
+            planes: vec![CPlane {
+                normal: Vec3::Z,
+                dist: -1000.0,
+                kind: 2,
+                signbits: 0,
+            }],
+            nodes: vec![CNode {
+                plane: 0,
+                children: [-1, -1],
+            }],
+            leafs: vec![world_leaf],
+            brush_nodes: vec![
+                BrushNode::Leaf {
+                    first: 0,
+                    count: 0,
+                    contents: 0,
+                },
+                BrushNode::Leaf {
+                    first: 0,
+                    count: 1,
+                    contents: CONTENTS_SOLID,
+                },
+                BrushNode::Leaf {
+                    first: 1,
+                    count: 1,
+                    contents: CONTENTS_SOLID,
+                },
+            ],
+            leaf_brush_list: vec![0, 1],
+            brushes: vec![wall, block],
+            materials: vec![(0, CONTENTS_SOLID)],
+            verts: Vec::new(),
+            edges: Vec::new(),
+            tris: Vec::new(),
+            borders: Vec::new(),
+            partitions: Vec::new(),
+            aabbs: Vec::new(),
+            indexed: None,
+            reach: Default::default(),
+        };
+        let sub = |leaf| Submodel {
+            mins: Vec3::splat(-32.0),
+            maxs: Vec3::splat(32.0),
+            radius: 56.0,
+            leaf,
+        };
+        ClipMap {
+            name: "wall_and_block".into(),
+            world,
+            submodels: vec![sub(world_leaf), sub(block_leaf)],
+            static_models: Vec::new(),
+        }
+    }
+
+    /// A sweep that starts inside a brush entity and leaves it still stops
+    /// on the world wall behind it, and keeps the start in solid.
+    #[test]
+    fn leaving_a_brush_entity_still_stops_on_the_wall_behind_it() {
+        let clip = wall_and_block();
+        let brushes = [Brush4 {
+            entity: 70,
+            model: 1,
+            origin: Vec3::ZERO,
+            angles: Vec3::ZERO,
+        }];
+        let world = Cod4Clip {
+            clip: &clip,
+            bodies: &[],
+            brushes: &brushes,
+        };
+        let (start, end) = (Vec3::ZERO, Vec3::new(128.0, 0.0, 0.0));
+        let alone =
+            pmove::world_tr(&clip.trace(start, end, Vec3::ZERO, Vec3::ZERO, MASK_PLAYERSOLID));
+        assert!(alone.fraction < 0.5 && !alone.startsolid, "{alone:?}");
+        let t = world.trace(start, end, Vec3::ZERO, Vec3::ZERO, 1023, MASK_PLAYERSOLID);
+        assert_eq!(t.fraction, alone.fraction, "{t:?}");
+        assert_eq!(t.entity_num, alone.entity_num);
+        assert!(t.startsolid);
+    }
 }

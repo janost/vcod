@@ -9,6 +9,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+use bytemuck::Zeroable;
 use vcod_common::sun::{SunFade, SunFile};
 
 use crate::renderer::{DEPTH_FORMAT, Frame, msaa_samples};
@@ -180,7 +181,9 @@ impl FlareSim {
     pub fn step(&mut self, p: &FlareParams, f: &FrameIn) -> FrameOut {
         let mut out = FrameOut::default();
         let scale = f.width / VIRTUAL_WIDTH;
-        let radius = (p.sprite_size * scale).round() as i32;
+        // A .sun file's size is unchecked: held where the window math
+        // cannot overflow (the window is capped at MAX_WINDOW anyway).
+        let radius = (p.sprite_size * scale).round().clamp(-1e6, 1e6) as i32;
         // 0x4e81e0 adds the flare inside the band
         let added = f
             .window
@@ -564,13 +567,13 @@ impl SunFlareGpu {
         queue.write_buffer(&self.verts, 0, bytemuck::cast_slice(&quads));
     }
 
-    /// The flare's direction, a point at infinity.
     /// `r_textureMode` changed: a mipmapped flare samples through its new
     /// sampler.
     pub fn set_samplers(&mut self, device: &wgpu::Device, samplers: &TexSamplers) {
         self.image = image_group(device, &self.image_layout, &self.image_view, samplers);
     }
 
+    /// The flare's direction, a point at infinity.
     pub fn dir(&self) -> glam::Vec3 {
         self.flare_dir
     }
@@ -629,11 +632,6 @@ impl SunFlareGpu {
     }
 }
 
-use bytemuck::Zeroable;
-
-/// Two triangles over a window-pixel rectangle `[x0, y0, x1, y1]`
-/// (bottom-left origin) at NDC depth `z`. uv runs as 0x4d94b0's: t = 0 at
-/// the bottom.
 fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -672,6 +670,9 @@ fn image_group(
     })
 }
 
+/// Two triangles over a window-pixel rectangle `[x0, y0, x1, y1]`
+/// (bottom-left origin) at NDC depth `z`. uv runs as 0x4d94b0's: t = 0 at
+/// the bottom.
 fn quad(r: [f32; 4], z: f32, color: [f32; 4], width: f32, height: f32) -> [Vert; 6] {
     let v = |x: f32, y: f32, s: f32, t: f32| Vert {
         pos: [x / width * 2.0 - 1.0, y / height * 2.0 - 1.0, z],
@@ -738,6 +739,18 @@ mod tests {
         assert_eq!(out.query, None);
         assert_eq!(out.flare.expect("fading").intensity, 0.75);
         assert!(sim.glare < 1.0 && sim.blind < 1.0);
+    }
+
+    /// A third-party .sun file's huge sprite size steps without an
+    /// overflow (BUG-086).
+    #[test]
+    fn a_huge_sprite_size_steps_without_an_overflow() {
+        let mut p = harbor();
+        p.sprite_size = 1e12;
+        let mut sim = FlareSim::default();
+        for t in [0.0, 100.0, 200.0] {
+            sim.step(&p, &frame(t, 1.0, Some([640.0, 480.0]), 1.0));
+        }
     }
 
     #[test]

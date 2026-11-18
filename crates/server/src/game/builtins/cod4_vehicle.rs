@@ -9,8 +9,8 @@
 use glam::Vec3;
 use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
 
+use super::Builtin;
 use super::entity::entity_receiver;
-use super::score::Builtin;
 use crate::game::cod4::vehicle::{Heli4, MPH, TurretTarget, VehInfo, VehShot};
 use crate::game::host::GameHost;
 use crate::game::temp_entity::{Scope, TempEntity};

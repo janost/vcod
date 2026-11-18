@@ -1,8 +1,7 @@
 //! CoD4 1.7's level on the shared host: its zones as the asset source, its
 //! scripts off the zones' rawfiles, its configstring layout and the state
 //! its game module keeps beside the shared tables (docs/research/cod4-gsc.md).
-//! The server does not serve CoD4 yet; [`load`] builds the host and runs the
-//! bootstrap.
+//! [`load`] builds the host and runs the bootstrap.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -128,8 +127,8 @@ pub const CS_ITEMS: usize = 2314;
 pub const MAX_WEAPONS: usize = 128;
 
 /// The host's CoD1-shaped protocol for a CoD4 level: CoD2's shim with 1.7's
-/// configstring blocks. Nothing goes on a wire through it yet (S-C4-1 adds
-/// `Cod4Wire`); the host reads only its `cs`.
+/// configstring blocks. The host builds its entities in these fields and
+/// [`wire::ent4`] moves them into 1.7's `entityState_t`.
 pub static COD4_HOST_PROTO: Cod1Wire = {
     use vcod_cod2::net::PROTOCOL_118 as P;
     let shim = P.as_cod1_shim();
@@ -162,8 +161,8 @@ pub static COD4_HOST_PROTO: Cod1Wire = {
     }
 };
 
-/// 1.7's tables. The weapon list is the level's (placeholder: none yet);
-/// `modNames` in the order `cod4_lnxded` registers them (0x80a4109).
+/// 1.7's tables. The weapon list is empty here: the level's weapons are
+/// [`Cod4HostState::weapons`] and `table`. `modNames` in the order `cod4_lnxded` registers them (0x80a4109).
 pub static COD4_DEFS: Defs = Defs {
     proto: &COD4_HOST_PROTO,
     weapons: "",
@@ -619,8 +618,8 @@ pub struct Cod4HostState {
     /// Each slot's stats block (`getStat`/`setStat`): the client's own
     /// once its `stats` packets are in, a fresh profile's before.
     pub stats: Vec<vcod_cod4::net::stats::Stats>,
-    /// The weapons the level named, index 1 first (placeholder until the
-    /// weapon defs land; configstring [`CS_WEAPONFILES`]).
+    /// The weapons the level named, index 1 first (configstring
+    /// [`CS_WEAPONFILES`]).
     pub weapons: Vec<String>,
     /// The same weapons' defs and ammo slots, by number.
     pub table: weapons::Cod4Weapons,
@@ -1011,7 +1010,6 @@ impl Default for Cod4HostState {
 /// its first wait. `overrides` is the probe directory [`Cod4Scripts`]
 /// reads first. `fresh_mirror` starts 1.7's dvar mirror empty; the server
 /// hands in its cvars with the engine's mirrored dvars already in it.
-#[allow(clippy::too_many_arguments)]
 pub fn load(
     zones: &Cod4Zones,
     install: &Install,
@@ -1064,7 +1062,7 @@ fn brush_models(entities: String, clip: Option<&vcod_cod4::collision::ClipMap>) 
 /// [`load`] across a level boundary: `carry`'s `game[]`, `pers[]`, compiled
 /// scripts and seed, and on a `fast_restart` the last level's
 /// configstrings, which `SV_RestartGameProgs` keeps (cod4-map-cycle.md 2).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn load_with(
     zones: &Cod4Zones,
     install: &Install,

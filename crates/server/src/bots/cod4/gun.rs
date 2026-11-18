@@ -221,6 +221,7 @@ impl Cod4Bots {
 
     /// Test-facing: `team` saw an enemy down `gun`'s lane at `now_ms`
     /// (the level's time).
+    #[cfg(any(test, feature = "testing"))]
     pub fn mark_lane_for_test(&mut self, gun: EntId, team: i32, now_ms: i32) {
         self.gun.lanes.insert((gun, team), now_ms);
     }
@@ -248,7 +249,7 @@ impl Cod4Bots {
         let gun = self.gun_step(level, slot, view, &guns, teams);
         self.pass.guns = guns;
         let throw = if gun.is_none() {
-            self.throw_back_step(level, slot, view)
+            self.throw_back_step(level, slot, view, teams)
         } else {
             None
         };
@@ -448,7 +449,8 @@ impl Cod4Bots {
     }
 
     /// Whether the bot in `slot` stands nearer `spot` than every other
-    /// playing bot on its team.
+    /// client on its team: humans and the dead too, and a follower at the
+    /// followed client's origin.
     fn nearest_mate_to(&self, slot: usize, teams: &[i32], spot: Vec3) -> bool {
         let Some(me) = self.ps(slot).map(|p| p.origin.distance(spot)) else {
             return false;
@@ -570,6 +572,7 @@ impl Cod4Bots {
         level: &Cod4Level,
         slot: usize,
         view: &BotView,
+        teams: &[i32],
     ) -> Option<ThrowBack> {
         let ps = self.ps(slot)?.clone();
         let none = ENTITYNUM_NONE as i32;
@@ -607,7 +610,9 @@ impl Cod4Bots {
         let missile = (level.rt.host.cod4().missiles.iter()).find(|m| m.id.0 as i32 == hint)?;
         let thrower = missile
             .owner
-            .filter(|&o| o != slot)
+            .filter(|&o| {
+                o != slot && !super::same_team(teams.get(slot).copied(), teams.get(o).copied())
+            })
             .and_then(|o| self.ps(o))
             .map(|p| p.origin + Vec3::Z * 40.0);
         let target = thrower.or(view.enemy.map(|e| Vec3::from(e.origin)));

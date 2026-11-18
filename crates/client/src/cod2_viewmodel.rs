@@ -633,6 +633,17 @@ pub fn view_angles(frame: &Frame) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A search path opened again drops the view weapon's rigs, the misses
+    /// included, so a weapon a download brought loads (BUG-083).
+    #[test]
+    fn a_reopened_search_path_drops_the_rigs() {
+        let mut c = crate::cod2_client::Cod2Client::new(None);
+        c.view.rigs.insert(("kar98k_mp".into(), None), None);
+        assert_eq!(c.view.rigs_loaded(), 1);
+        c.search_path_reopened();
+        assert_eq!(c.view.rigs_loaded(), 0);
+    }
     use vcod_common::pk3::Pk3Fs;
     use vcod_common::testing::cod2_fs;
 

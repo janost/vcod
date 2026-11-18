@@ -347,7 +347,7 @@ impl AliasTable {
                 other => MasterSlave::Slave(other.parse::<f32>().unwrap_or(0.0)),
             };
 
-            // Clamped so a group's weights sum in u32; NaN falls to 1 via max.
+            // Clamped so up to 4294 rows' weights sum in u32; NaN falls to 1 via max.
             let probability = cell("probability")
                 .parse::<f32>()
                 .map(|p| p.round().max(1.0).min(MAX_PROBABILITY as f32) as u32)
@@ -524,11 +524,12 @@ impl AliasTable {
 /// A `probability`-weighted row of `rows` among those `open` lets in, off
 /// `roll` uniform in `[0, 1)`, with its index.
 fn draw(rows: &[AliasRow], roll: f32, open: impl Fn(usize) -> bool) -> (Pick<'_>, Option<usize>) {
-    let total: u32 = rows
+    // In u64: a CoD4 zone's weights reach u32::MAX each.
+    let total: u64 = rows
         .iter()
         .enumerate()
         .filter(|&(i, _)| open(i))
-        .map(|(_, r)| r.probability)
+        .map(|(_, r)| u64::from(r.probability))
         .sum();
     if total == 0 {
         // No row admits the distance: retail's pick comes back empty
@@ -536,12 +537,12 @@ fn draw(rows: &[AliasRow], roll: f32, open: impl Fn(usize) -> bool) -> (Pick<'_>
         // `probability` parses to at least 1.
         return (Pick::Silent, None);
     }
-    let mut target = (roll.clamp(0.0, 0.999_999) * total as f32) as u32;
+    let mut target = (roll.clamp(0.0, 0.999_999) * total as f32) as u64;
     for (i, r) in rows.iter().enumerate() {
         if !open(i) {
             continue;
         }
-        if target < r.probability {
+        if target < u64::from(r.probability) {
             let pick = if is_null_file(&r.file) {
                 Pick::Silent
             } else {
@@ -549,7 +550,7 @@ fn draw(rows: &[AliasRow], roll: f32, open: impl Fn(usize) -> bool) -> (Pick<'_>
             };
             return (pick, Some(i));
         }
-        target -= r.probability;
+        target -= u64::from(r.probability);
     }
     (Pick::Unknown, None)
 }
@@ -722,6 +723,20 @@ mod tests {
         assert_eq!(rows[1].probability, MAX_PROBABILITY);
         assert!(matches!(t.pick("big", 0.0, None).0, Pick::Row(r) if r.file == "a.wav"));
         assert!(matches!(t.pick("big", 0.75, None).0, Pick::Row(r) if r.file == "b.wav"));
+    }
+
+    /// Weights the CoD4 builder makes can reach u32::MAX; the sum does not
+    /// overflow and the draw still picks by weight (BUG-078).
+    #[test]
+    fn two_rows_at_u32_max_weight_pick_without_overflow() {
+        let text = format!("{HEADER}\nbig,1,a.wav,,,,,,,,,1,,,,\nbig,2,b.wav,,,,,,,,,1,,,,\n");
+        let t = AliasTable::parse_csv(&text, "test");
+        let mut rows = t.get("big").unwrap().to_vec();
+        for r in &mut rows {
+            r.probability = u32::MAX;
+        }
+        assert!(matches!(draw(&rows, 0.0, |_| true).0, Pick::Row(r) if r.file == "a.wav"));
+        assert!(matches!(draw(&rows, 0.75, |_| true).0, Pick::Row(r) if r.file == "b.wav"));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use glam::Vec3;
 use vcod_common::net::flags::{EF_NODRAW, ET_MISSILE, ET_SOUND_BLEND_V22, PM_INTERMISSION};
-use vcod_common::net::protocol::{ENTITYNUM_NONE, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, ENTITYNUM_NONE};
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::net::trajectory::Trajectory;
 use vcod_common::weapon::WeaponDef;
@@ -65,7 +65,7 @@ pub fn split(v: f32) -> (f32, f32) {
 /// ones play. Either alias offset 0 or a missing configstring plays
 /// nothing.
 pub fn sources(
-    p: &Protocol,
+    p: &Cod1Wire,
     (a, b, frac): (&Snapshot, &Snapshot, f32),
     cs_sounds: usize,
     configstrings: &[String],
@@ -155,7 +155,7 @@ pub fn shell_blend(pos: Vec3, vel: Vec3, view: Vec3) -> f32 {
 /// docs/research/coduo-diff.md 16). A missile with `EF_NODRAW` plays
 /// nothing.
 pub fn shell_sources(
-    p: &Protocol,
+    p: &Cod1Wire,
     a: &Snapshot,
     weapons: &[Option<WeaponDef>],
     entity_pos: &HashMap<u32, Vec3>,

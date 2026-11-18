@@ -31,6 +31,7 @@ wire.
 | `cgame_mp_x86.dll` (1.1) | `4912169a9eb22b404f95c52863a5feb6` | event dispatch, effect/tracer/muzzle-flash selection |
 | `game_mp_x86.dll` (1.1) | `25e2fcfe02ca0c46f4e9ad2530d50691` | EV table cross-check |
 | `CoDMP.exe` (1.1) | `753fbcabd0fdda7f7dad3dbb29c3c008` | `entityState_t` / `playerState_t` netfield tables (client side) |
+| `ui_mp_x86.dll` (1.1) | `d9b88d926b54d7c194b258993271c8bb` | the front end (`cod11-front-end.md`), image base `0x40000000` |
 | `game.mp.i386.so` (1.1d Linux dedicated server) | `de8947beb6f86fbfb46f5adfaab3d3ed` | who writes which field (full symbols), `bytedirs`, `ByteToDir`/`DirToByte` |
 | `pak5.pk3 : fx/iw_impacts.csv` | none | the (impact type, surface) to `.efx` table |
 | `cgame_mp_x86.dll` (1.5) | `075e2af18aeaf2aeaf2a75ce22db683a` | 1.5 diff |
@@ -1136,8 +1137,8 @@ following someone. The server side of the follow (buttons, cycle, let-go, discon
 live measurements) is `cod11-spectator-follow.md`.
 
 `SpectatorClientEndFrame` @ `game.mp.i386.so 0x40760` is the whole story. When
-`client->sess.spectatorClient >= 0` the server copies the followed player's
-whole client block over the spectator's (`rep movsd` with `ecx = 0x834`, so
+it has a client to follow (`cod11-spectator-follow.md` 5) the server copies the
+followed player's whole client block over the spectator's (`rep movsd` with `ecx = 0x834`, so
 8400 bytes starting at `ps`, the entire `playerState_t` and then some) and then
 patches the flags back in byte `ps+0xe`: it clears bit `0x04` (pm_flags
 `0x040000`), sets bit `0x01` (`0x010000`), and sets bit `0x02` (`0x020000`)
@@ -1166,9 +1167,8 @@ first-person suppression case.
 With the client's own number from the connect handshake:
 
 - `ps.clientNum != own_client_num` -> following that client.
-- `(ps.pm_flags & 0x010000) != 0` -> spectator view of any kind.
-- `(ps.pm_flags & 0x020000) != 0` -> following a specific client rather than
-  free-flying.
+- The two flags read as the table says: `0x010000` a follow that found its
+  client, `0x020000` a forced one.
 
 The netfield table in `crates/common/src/net/cod1/fields_v1.rs` gives `pm_flags`
 19 bits, so all three flags survive the delta encoding.
@@ -1620,12 +1620,3 @@ snapshot of a gamestate and the first after a restart: the selection,
 (`OnlineView::track_spawn`), the hit icons and the gun's sway, tilt,
 movement and damage kick (`Hud::track_spawn`, `GunAim::respawn`), and
 the weapon name's stamp (`WeaponNameFade`).
-
----
-
-## Open items
-
-None. Whether a follow-spectator receives 175/176 for the followed player is
-settled in section 2: the single-client test compares the snapshot's
-`ps.clientNum`, not the client slot. A free-flying spectator's capture never
-shows them.

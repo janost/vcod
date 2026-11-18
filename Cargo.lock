@@ -2082,12 +2082,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
-name = "simd-adler32"
-version = "0.3.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
-
-[[package]]
 name = "simd_cesu8"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2516,6 +2510,7 @@ dependencies = [
  "glam",
  "log",
  "tempfile",
+ "vcod-cod4",
  "vcod-common",
 ]
 
@@ -2530,6 +2525,7 @@ dependencies = [
  "libc",
  "log",
  "tempfile",
+ "vcod-common",
  "zip",
 ]
 
@@ -2537,7 +2533,6 @@ dependencies = [
 name = "vcod-gsc"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "log",
  "tempfile",
  "vcod-common",
@@ -2559,6 +2554,7 @@ dependencies = [
  "vcod-cod4",
  "vcod-common",
  "vcod-gsc",
+ "vcod-server",
 ]
 
 [[package]]
@@ -3340,7 +3336,6 @@ dependencies = [
  "typed-path",
  "windows-sys 0.61.2",
  "zeroize",
- "zopfli",
 ]
 
 [[package]]
@@ -3348,18 +3343,6 @@ name = "zlib-rs"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
-
-[[package]]
-name = "zopfli"
-version = "0.8.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aaf7fc5d30c28483d93805c4a5e12b05bbb52407fa67c5f8bd552374cd01fb11"
-dependencies = [
- "bumpalo",
- "crc32fast",
- "log",
- "simd-adler32",
-]
 
 [[package]]
 name = "zune-core"

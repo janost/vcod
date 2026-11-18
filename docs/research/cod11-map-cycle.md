@@ -379,6 +379,9 @@ committed fixture, every key and field.
 
 ## 4. `SV_MapRestart_f`
 
+The server side. The client's side, `CG_MapRestart`, is
+`cod11-events-and-fx.md` 9.8.
+
 Label for `cod_lnxded` `0x8083de4`. VERIFIED: registered as the console
 command `map_restart` by `Cmd_AddCommand("map_restart", 0x8083de4)` at
 `0x8084b0a`, name string at `0x80d3fe7`. VERIFIED: also called directly from
@@ -1416,7 +1419,9 @@ Two runs, both on `mp_carentan`:
   against `--probe-team axis --probe-target --save-roundrestart` and
   `--probe-team allies --save-roundrestart`. It spans three round restarts.
   Neither probe reached a team (8.3), so it measured the restart the round
-  clock drives, not the one an elimination does.
+  clock drives, not the one an elimination does. 8.3's cause is closed
+  since, and 8.1's last bullet reads two elimination restarts off the `sd`
+  fixtures.
 
 ### 8.1 What matches
 
@@ -1503,7 +1508,7 @@ compare these frame for frame, with no tolerance.
   starts (53350 to 118400). The probe's receive clock read 5177 ms and
   64619 / 64624 ms for the same spans.
 
-### 8.2 What differs
+### 8.2 What differed, and the one still open
 
 Each bullet was a defect in vcod the runs found. One is still open, the
 `loadingnewmap` timing (the sixth bullet).
@@ -1579,7 +1584,7 @@ Each bullet was a defect in vcod the runs found. One is still open, the
   flush follows a serverinfo write with
   `SV_SetConfigstring(0, Cvar_InfoString(CVAR_SERVERINFO))`.
 
-### 8.3 What the runs could not reach
+### 8.3 What the first runs could not reach (closed)
 
 VERIFIED, the `sd` run: both probes answered the team menu and never left
 it, reading `team` 3 and `pm_type` 4 for the whole run, where the same probe
@@ -1603,10 +1608,10 @@ by the frame's pass, not resumed on the previous frame's clock, which
 `probe_notify_frame` measures (`cod11-gsc-language.md`, the thread pick
 paragraph).
 
-So the `sd` half is still unmeasured against retail: the elimination-driven
-restart, the team scores, the win announcements and the weapons a client
-keeps across a restart need a fresh capture now that the menu is
-answerable.
+The elimination restart's timing is read off the `sd` fixtures (8.1, last
+bullet) and gated by `roundrestart_ab`. The team scores, the win
+announcements and the weapons a client keeps across a restart are still
+unmeasured against retail.
 
 The `dm` rotation was two maps and never wrapped, so the wrap back to the
 first entry is measured by the gate, not by a capture.

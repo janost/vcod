@@ -7,16 +7,12 @@ use crate::game::host::GameHost;
 use vcod_common::net::protocol::{CS_ALLIES_SCORE, CS_AXIS_SCORE};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("getteamscore", get_team_score),
     ("setteamscore", set_team_score),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// Axis 0, allies 1, and the configstring each mirrors into. Both builtins
 /// compare against the same two `scr_const` slots and error on anything

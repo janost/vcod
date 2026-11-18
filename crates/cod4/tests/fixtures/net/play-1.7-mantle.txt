@@ -11,7 +11,7 @@
 #     --goto "-39.8 -1376.2 124.5 0"
 # The probe teleports half a second after its spawn to the -x face of the
 # low wall at (-16..36, -1376) (brush 2242, MANTLE_OVER, found by
-# `--example mantle_spots`), faces +x, walks into it and taps jump at 2 s
+# `--example cod4_mantle_spots`), faces +x, walks into it and taps jump at 2 s
 # (the mantle over it, the view swung past the yaw cap and back), then
 # faces -x and vaults back at 6 s, then leans left at 9 s and right at
 # 10.5 s (docs/research/cod4-pmove.md 17, 18).

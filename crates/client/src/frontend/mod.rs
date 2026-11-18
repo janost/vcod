@@ -142,7 +142,6 @@ fn unsupported(name: &str) -> bool {
     UNSUPPORTED.iter().any(|s| s.eq_ignore_ascii_case(name))
 }
 
-/// `ownerdraw` ids from `ui_mp/menudef.h`.
 /// Retail key numbers (CoDMP.exe keynames table, 0x57b8d0).
 const K_MOUSE1: u32 = 200;
 const K_MOUSE2: u32 = 201;
@@ -154,6 +153,7 @@ const K_KP_ENTER: u32 = 191;
 const K_MWHEELDOWN: u32 = 205;
 const K_MWHEELUP: u32 = 206;
 
+/// `ownerdraw` ids from `ui_mp/menudef.h`.
 const UI_NETSOURCE: i32 = 220;
 const UI_NETGAMETYPE: i32 = 245;
 const UI_NETMAPPREVIEW: i32 = 221;
@@ -662,6 +662,8 @@ impl Ui {
         self.cursor_item.clear();
         self.focus.clear();
         self.options.clear();
+        self.thumb_drag = None;
+        self.arrow_hold = None;
         if let Some(name) = focused {
             self.open_menu(&name, shell, out);
         }
@@ -709,6 +711,8 @@ impl Ui {
         self.hidden.retain(|&(m, _)| m < base);
         self.focus_menu = self.focus_menu.filter(|&m| m < base);
         self.hover = self.hover.filter(|&(m, _)| m < base);
+        self.thumb_drag = self.thumb_drag.filter(|&(m, _)| m < base);
+        self.arrow_hold = self.arrow_hold.filter(|&((m, _), ..)| m < base);
         self.over.retain(|&(m, _)| m < base);
         self.cursor_item.retain(|&m, _| m < base);
         self.focus.retain(|&m, _| m < base);
@@ -1412,13 +1416,14 @@ impl Ui {
         let mut out = Vec::new();
         self.options.new_input();
         self.drag_to(shell, &mut out);
-        if let Some((m, i)) = self.thumb_drag {
-            let item = &self.menus[m].items[i];
-            if let Some((len, _)) = self.list_scroll(item) {
-                let top = listbox::drag(item, len, self.cursor[1]);
-                let feeder = item.feeder;
-                self.set_list_top(feeder, top);
-            }
+        if let Some(item) = self
+            .thumb_drag
+            .and_then(|(m, i)| self.menus.get(m)?.items.get(i))
+            && let Some((len, _)) = self.list_scroll(item)
+        {
+            let top = listbox::drag(item, len, self.cursor[1]);
+            let feeder = item.feeder;
+            self.set_list_top(feeder, top);
         }
         // `Menu_HandleMouseMove` (0x40016b20) does nothing during an edit.
         if !self.editing() {
@@ -2036,8 +2041,9 @@ impl Ui {
         true
     }
 
-    /// A scrolled list's row count and first row drawn: the map list and
-    /// the server list.
+    /// A scrolled list's row count and first row drawn, for every feeder
+    /// list that scrolls (maps, servers, mods, players and mutes, profiles,
+    /// server info).
     fn list_scroll(&self, item: &UiItem) -> Option<(usize, usize)> {
         if item.kind != ITEM_TYPE_LISTBOX {
             return None;
@@ -2050,6 +2056,7 @@ impl Ui {
                 Some((self.players.len(), self.player_top))
             }
             Some(FEEDER_PLAYER_PROFILES) => Some((self.profiles.len(), self.profiles.top)),
+            Some(FEEDER_SERVERSTATUS) => self.status.as_ref().map(|q| (q.rows.len(), q.top)),
             _ => None,
         }
     }
@@ -2061,6 +2068,11 @@ impl Ui {
             Some(FEEDER_MODS) => self.mod_top = top,
             Some(FEEDER_PLAYER_LIST | FEEDER_MUTELIST) => self.player_top = top,
             Some(FEEDER_PLAYER_PROFILES) => self.profiles.top = top,
+            Some(FEEDER_SERVERSTATUS) => {
+                if let Some(q) = &mut self.status {
+                    q.top = top;
+                }
+            }
             _ => {}
         }
     }
@@ -2096,12 +2108,12 @@ impl Ui {
         };
     }
 
-    /// A wheel notch. Over the map or Mods list it scrolls that list a row,
-    /// and in a menu with the server list it pages that list; retail
-    /// scrolls no list, and vcod keeps the scroll on purpose. Elsewhere, as
-    /// in retail: no item's key handler takes the wheel, so the menu's
-    /// `execKey` for `MWHEELDOWN` (205) or `MWHEELUP` (206) runs, else it
-    /// steps the focus as Tab does, and its release follows in the same
+    /// A wheel notch. Over the map, Mods, player, mute or server info list it
+    /// scrolls that list a row, and in a menu with the server list it pages
+    /// that list; retail scrolls no list, and vcod keeps the scroll on purpose.
+    /// Elsewhere, as in retail: no item's key handler takes the wheel, so the
+    /// menu's `execKey` for `MWHEELDOWN` (205) or `MWHEELUP` (206) runs, else
+    /// it steps the focus as Tab does, and its release follows in the same
     /// frame (docs/research/cod11-front-end.md section 19, "The wheel"). An
     /// edit field keeps it.
     pub fn wheel(&mut self, down: bool, shell: &Shell) -> Vec<UiEffect> {
@@ -2264,7 +2276,13 @@ impl Ui {
             let item = &self.menus[m].items[i];
             if matches!(
                 item.feeder,
-                Some(FEEDER_ALLMAPS | FEEDER_MODS | FEEDER_PLAYER_LIST | FEEDER_MUTELIST)
+                Some(
+                    FEEDER_ALLMAPS
+                        | FEEDER_MODS
+                        | FEEDER_PLAYER_LIST
+                        | FEEDER_MUTELIST
+                        | FEEDER_SERVERSTATUS
+                )
             ) && let Some((len, cur)) = self.list_scroll(item)
             {
                 let max = listbox::max_scroll(item, len);
@@ -2518,7 +2536,8 @@ impl Ui {
         let [x, y0, _, _] = item.rect;
         let (x, mut y) = (x + 1.0, y0 + 1.0);
         let eh = item.element_height.max(1.0);
-        for row in q.rows.iter().take(visible_rows(item)) {
+        let top = q.top.min(listbox::max_scroll(item, q.rows.len()));
+        for row in q.rows.iter().skip(top).take(visible_rows(item)) {
             for (col, cell) in item.columns.iter().zip(row) {
                 let text = truncate_visible(&loc.translate(cell), col.max_chars);
                 p.text(
@@ -2592,9 +2611,6 @@ impl Ui {
         }
     }
 
-    /// `Item_ListBox_Paint` for `FEEDER_SERVERS`. A cell's icon is a square
-    /// of the column's width from half a row down, and takes no text align
-    /// (ui_mp_x86.dll 0x400159b0).
     /// A server list cell ([`browser::column_cell`]). CoD2's map column
     /// (`UI_FeederItemText` column 3, Mac 0x152e8a) prints the `longname`
     /// of the `.arena` entry whose `map` is the server's `mapname` in any
@@ -2613,6 +2629,9 @@ impl Ui {
         browser::column_cell(s, kind)
     }
 
+    /// `Item_ListBox_Paint` for `FEEDER_SERVERS`. A cell's icon is a square
+    /// of the column's width from half a row down, and takes no text align
+    /// (ui_mp_x86.dll 0x400159b0).
     fn server_list(&self, p: &Painter, item: &UiItem, out: &mut Vec<HudQuad>) {
         let rows = self.browser.rows();
         let [x, y0, w, _] = item.rect;
@@ -2723,7 +2742,6 @@ fn contains(r: [f32; 4], p: [f32; 2]) -> bool {
     p[0] >= r[0] && p[0] <= r[0] + r[2] && p[1] >= r[1] && p[1] <= r[1] + r[3]
 }
 
-/// `%s` and `%d` in a localized format filled in order.
 /// `UI_StartServerRefresh`'s date (ui_mp_x86.dll 0x4000ea90): `%s %i, %i
 /// %i:%02i` over the month's `EXE_MONTH_ABV_*` text, day, year, hour and
 /// minute. Retail's June key is `EXE_MONTH_ABV_JUN`, which `exe.str` lacks
@@ -2816,6 +2834,7 @@ fn gl_info(p: &Painter, r: [f32; 4], scale: f32, color: [f32; 4], out: &mut Vec<
     }
 }
 
+/// `%s` and `%d` in a localized format filled in order.
 fn fill(fmt: &str, args: &[&str]) -> String {
     // CoD2's strings number their slots `&&1`..`&&9` (cod2-protocol.md
     // 3.4.1); no CoD1 string holds `&&`.
@@ -2974,8 +2993,6 @@ fn text_extents(item: &UiItem, kept: Option<[f32; 4]>, widths: TextWidths) -> [f
     ]
 }
 
-/// Draws on the 640x480 grid stretched over the window, as the UI module
-/// does.
 /// Paints menu items on the 640 grid, drawn in the window's centred 4:3
 /// box ([`Virtual`]); a rect that spans the whole grid width or height
 /// (a backdrop, a fade) spans the window's.
@@ -3664,6 +3681,48 @@ mod tests {
             .clone();
         let [x, y, w, h] = item.rect;
         (item, [x + w - 8.0, y + h - 4.0])
+    }
+
+    /// The server info popup's rows past its first page are reached by the
+    /// wheel: a long serverinfo no longer hides the player rows.
+    #[test]
+    fn the_server_info_list_scrolls() {
+        let Some(mut ui) = ui() else { return };
+        let shell = Shell::new();
+        let (m, i) = ui
+            .menus
+            .iter()
+            .enumerate()
+            .find_map(|(m, menu)| {
+                let i = menu.items.iter().position(|i| {
+                    i.kind == ITEM_TYPE_LISTBOX && i.feeder == Some(FEEDER_SERVERSTATUS)
+                })?;
+                Some((m, i))
+            })
+            .expect("a stock menu lists the server's status");
+        let rows = (0..40)
+            .map(|n| {
+                [
+                    format!("key{n}"),
+                    n.to_string(),
+                    String::new(),
+                    String::new(),
+                ]
+            })
+            .collect();
+        let name = ui.menus[m].name.clone();
+        let mut out = Vec::new();
+        // Opening runs the menu's `serverstatus` query; the rows come after.
+        ui.open_menu(&name, &shell, &mut out);
+        ui.status = Some(StatusQuery::with_rows(rows));
+        let r = ui.menus[m].items[i].rect;
+        ui.mouse_move(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0, 640.0, 480.0, &shell);
+        assert_eq!(ui.hover, Some((m, i)));
+        ui.wheel(true, &shell);
+        ui.wheel(true, &shell);
+        assert_eq!(ui.status.as_ref().unwrap().top, 2);
+        let item = ui.menus[m].items[i].clone();
+        assert_eq!(ui.list_scroll(&item), Some((40, 2)));
     }
 
     #[test]
@@ -5210,6 +5269,23 @@ mod tests {
         assert!(out.is_empty());
     }
 
+    /// A scroll thumb held on a script menu lets go when the script menus
+    /// are reloaded: a mouse move after it indexes nothing gone (BUG-081).
+    #[test]
+    fn a_held_thumb_lets_go_when_the_script_menus_reload() {
+        let Some(fs) = vcod_common::testing::stock_fs_11() else {
+            return;
+        };
+        let mut ui = Ui::new(&fs, "0");
+        let names = ["team_americangerman".into(), "weapon_american".into()];
+        assert!(ui.load_script_menus(&fs, &names, "0").is_empty());
+        let m = ui.find("weapon_american").unwrap();
+        ui.thumb_drag = Some((m, 0));
+        assert!(ui.load_script_menus(&fs, &[], "0").is_empty());
+        assert_eq!(ui.thumb_drag, None);
+        ui.mouse_move(10.0, 10.0, 640.0, 480.0, &Shell::new());
+    }
+
     #[test]
     fn the_stock_weapon_menu_hides_a_disallowed_weapon() {
         let Some(fs) = vcod_common::testing::stock_fs_11() else {
@@ -5261,7 +5337,7 @@ mod tests {
     /// `g_motd`'s configstring (14, UO 15) reaches no menu.
     fn shows_the_mirrors_motd(
         fs: &Pk3Fs,
-        proto: &vcod_common::net::protocol::Protocol,
+        proto: &vcod_common::net::protocol::Cod1Wire,
         capture: &str,
         menu: &str,
     ) {

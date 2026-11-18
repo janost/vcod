@@ -310,8 +310,8 @@ const LADDER_MOVEMENT_DIR_CAP: i32 = 75;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PmEvent {
     pub event: i32,
-    /// The wire's `eventParm`. Every movement event carries 0; the weapon
-    /// step is what will fill it.
+    /// The wire's `eventParm`: the step's view offset, the landing's bob,
+    /// the landing pain's damage; 0 on the rest.
     pub parm: i32,
 }
 
@@ -588,7 +588,8 @@ pub struct PlayerState {
     /// Eye height the last stance change aimed at, and whether it went down.
     /// Both are wire state: retail carries them in `viewHeightLerpTarget` and
     /// `viewHeightLerpDown`, and leaves the target at 0 until the first
-    /// stance change (measured, docs/research/cod11-player-movement.md).
+    /// stance change (measured, cod11-mantle.md "The eye through a stance
+    /// change", `playerstate_motion_ab`).
     pub view_lerp_target: f32,
     pub view_lerp_down: bool,
     /// Retail's `pm_flags` 0x40, the backpedal latch: a backwards cmd sets it,
@@ -668,10 +669,6 @@ pub struct PlayerState {
     /// `pm_flags` 0x1000: the melee bit was down last frame. The only edge
     /// latch in the weapon machine (combat doc, section 1.10).
     pub melee_latched: bool,
-    /// `pm_flags` 0x400: a weapon change threw away a cooking grenade. Not a
-    /// netfield, and nothing reads it yet; retail ORs the bit only for a
-    /// prone player (combat doc, section 1.8).
-    pub grenade_cancelled: bool,
     /// The previous cmd's view angles in ANGLE2SHORT units, pitch and yaw.
     /// Retail's `pm->oldcmd.angles`, which the spread's turn term subtracts
     /// this cmd's from.
@@ -711,8 +708,8 @@ pub struct PlayerState {
     /// slide and clears it after, so the hull and the step gate below read
     /// retail's `pm_type` 4 arms.
     pub spectator: bool,
-    /// Which patch's movement this player runs. The server and bots run
-    /// 1.1's; the predictor takes the connection's
+    /// Which patch's movement this player runs: the server's protocol for
+    /// its players, the connection's for the predictor
     /// ([`MoveRules::for_protocol`]).
     pub rules: MoveRules,
     /// 1.5's `pm_flags` 0x2000, the jump penalty, timed by `pm_time`
@@ -762,7 +759,7 @@ pub enum MoveRules {
 
 impl MoveRules {
     /// The rules a server speaking this protocol runs.
-    pub fn for_protocol(p: &crate::net::protocol::Protocol) -> Self {
+    pub fn for_protocol(p: &crate::net::protocol::Cod1Wire) -> Self {
         match p.transport.version {
             6 => MoveRules::V1_5,
             22 => MoveRules::Uo,
@@ -963,7 +960,6 @@ impl PlayerState {
             aim_spread_scale: 0.0,
             grenade_time_left_ms: 0,
             melee_latched: false,
-            grenade_cancelled: false,
             last_cmd_angles: [0; 2],
             last_cmd_ads: false,
             last_cmd_moves: [0; 2],
@@ -1038,7 +1034,9 @@ impl PlayerState {
     /// The height of the box `ClientThink_real` leaves in `r.maxs` after
     /// this state's move: the stance box's, or for a spectator the standing
     /// one `ClientSpawn` wrote, which `SpectatorThink` never copies over
-    /// (docs/research/cod11-gsc-object-model.md 22.3).
+    /// (docs/research/cod11-gsc-object-model.md 22.3). `spectator` reads
+    /// true only inside [`spectator_move`]'s slide, so the callers, all
+    /// outside it, never take that arm.
     pub fn box_height(&self) -> f32 {
         if self.spectator {
             return HEIGHT_STAND;
@@ -1097,7 +1095,8 @@ impl PlayerState {
     /// `viewHeightLerpTime` for a playerstate whose `commandTime` is
     /// `server_time`: the time the running leg began, or 0.
     pub fn view_lerp_stamp(&self, server_time: i32) -> i32 {
-        self.view_lerp_ms.map_or(0, |ms| server_time - ms)
+        self.view_lerp_ms
+            .map_or(0, |ms| server_time.wrapping_sub(ms))
     }
 
     /// The stance `ps.eFlags` carries (0x20 crouch, 0x40 prone): the stance
@@ -1245,8 +1244,24 @@ fn drop_knockback(ps: &mut PlayerState, dt: f32) {
     }
 }
 
-/// `dt` in seconds, clamped to `MAX_FRAME_MS`. Returns the frame's movement
-/// sound events in wire `EV_*` numbering.
+/// The per-move outputs `PmoveSingle` clears at its top whatever the
+/// pm_type (`pm_flags` 0x8000 at 0x33e5a): every move arm calls it first.
+fn begin_move(ps: &mut PlayerState) {
+    ps.view_yaw_correction = 0.0;
+    ps.view_pitch_correction = 0.0;
+    ps.view_yaw_shorts = None;
+    ps.view_capped = [None; 2];
+    ps.prone_blocked = false;
+    ps.jumped = false;
+    ps.land_anim = false;
+    ps.takeoff = None;
+    ps.breakdown_continue = false;
+    ps.prone_flip = false;
+    ps.prone_flip_clears_torso = false;
+}
+
+/// `dt` in seconds, clamped to `MAX_FRAME_MS`. Returns the frame's events
+/// (movement, stance and weapon) in wire `EV_*` numbering.
 pub fn pmove(
     ps: &mut PlayerState,
     input: &PmInput,
@@ -1255,11 +1270,7 @@ pub fn pmove(
     weapons: &[Option<WeaponDef>],
 ) -> Vec<PmEvent> {
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
-    ps.view_yaw_correction = 0.0;
-    ps.view_pitch_correction = 0.0;
-    ps.view_yaw_shorts = None;
-    ps.view_capped = [None; 2];
-    ps.prone_blocked = false;
+    begin_move(ps);
     ps.since_jump_ms += msec(dt);
     if ps.rules == MoveRules::Uo {
         uo_prologue(ps, weapons);
@@ -1287,12 +1298,6 @@ pub fn pmove(
     );
     let weapon_def = weapons.get(ps.weapon as usize).and_then(Option::as_ref);
     let mut events = Vec::new();
-    ps.jumped = false;
-    ps.land_anim = false;
-    ps.takeoff = None;
-    ps.breakdown_continue = false;
-    ps.prone_flip = false;
-    ps.prone_flip_clears_torso = false;
     let was_on_ground = ps.on_ground;
     // retail's `pml.previous_origin` and `previous_velocity`, taken at the
     // top of PmoveSingle
@@ -1718,7 +1723,7 @@ fn update_fatigue(ps: &mut PlayerState, input: &PmInput, dt: f32, events: &mut V
 /// (`EV_FATIGUE_LAST_SOUND` again) once `iFatigueSoundTime` is more than
 /// 1700 ms old, stamping it; a rested one clears a stamp that old.
 fn fatigue_sound(ps: &mut PlayerState, server_time: i32, events: &mut Vec<PmEvent>) {
-    let stale = ps.fatigue_sound_time + FATIGUE_SOUND_MS < server_time;
+    let stale = ps.fatigue_sound_time.wrapping_add(FATIGUE_SOUND_MS) < server_time;
     if !ps.winded {
         if ps.fatigue_sound_time > 0 && stale {
             ps.fatigue_sound_time = 0;
@@ -1832,7 +1837,7 @@ pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) -> Vec<PmEven
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
     let idle = PmInput::default();
     let mut events = Vec::new();
-    ps.jumped = false;
+    begin_move(ps);
     ps.move_start = ps.origin;
     let start_vz = ps.velocity.z;
     // `PM_ClearAimDownSightFlag` (`game.mp.i386.so` 0x3abd4), which
@@ -1895,7 +1900,7 @@ fn dead_eye(ps: &mut PlayerState, dt: f32) {
 /// `cmd::dead_step`'s (cod11-player-clip.md 1.1).
 pub fn dead_linked_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
-    ps.jumped = false;
+    begin_move(ps);
     ps.move_start = ps.origin;
     ps.ads_active = false;
     update_lean(ps, &PmInput::default(), false, world, dt);
@@ -2240,6 +2245,7 @@ pub fn spectator_move(
     dt: f32,
 ) -> Vec<PmEvent> {
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
+    begin_move(ps);
     ps.on_ground = false;
     let arith = world.map_or(crate::patch::Arith::Kept, |w| w.world.arith());
     if ps.rules.v15() {
@@ -2525,7 +2531,7 @@ fn update_stance(
     // duration` read before this cmd's adjust (0x308cc, 0 with no leg).
     ps.prone_box_crouch = ps.stance == Stance::Prone && ps.view_height_cur != VIEW_PRONE && {
         let frac = ps.view_lerp_ms.map_or(0.0, |ms| {
-            (f64::from(ms + msec) / f64::from(view_lerp_duration(ps))).clamp(0.0, 1.0)
+            (f64::from(ms.wrapping_add(msec)) / f64::from(view_lerp_duration(ps))).clamp(0.0, 1.0)
         });
         frac <= 0.5
     };
@@ -2584,8 +2590,8 @@ fn prone_flip(ps: &mut PlayerState) {
 /// The target never moves mid-leg, so 1.1's turn back never happens.
 fn view_height_adjust_v15(ps: &mut PlayerState, msec: i32) {
     if let Some(ms) = ps.view_lerp_ms.as_mut() {
-        *ms += msec;
-        let pct = (*ms * 100 / view_lerp_duration(ps)).clamp(0, 100);
+        *ms = ms.wrapping_add(msec);
+        let pct = (ms.wrapping_mul(100) / view_lerp_duration(ps)).clamp(0, 100);
         if pct == 100 {
             ps.view_height_cur = ps.view_lerp_target;
             ps.view_lerp_ms = None;
@@ -2614,8 +2620,8 @@ fn view_height_adjust(ps: &mut PlayerState, msec: i32) {
     let target = ps.stance.view_height();
     let mut pct = 0;
     if let Some(ms) = ps.view_lerp_ms.as_mut() {
-        *ms += msec;
-        pct = (*ms * 100 / view_lerp_duration(ps)).clamp(0, 100);
+        *ms = ms.wrapping_add(msec);
+        pct = (ms.wrapping_mul(100) / view_lerp_duration(ps)).clamp(0, 100);
         if pct == 100 {
             ps.view_height_cur = ps.view_lerp_target;
             ps.view_lerp_ms = None;
@@ -2984,23 +2990,6 @@ pub fn check_prone(world: &MoveWorld, q: ProneQuery) -> Option<ProneBody> {
         torso_pitch: angle_normalize180(vectopitch(chest - hips)),
         waist_pitch: angle_normalize180(vectopitch(hips - feet)),
     })
-}
-
-/// Whether a body may lie down at `origin` facing `yaw_deg`, the sweep
-/// behind the facing alone: [`check_prone`] off the ground.
-pub fn prone_fits(world: &MoveWorld, origin: Vec3, yaw_deg: f32) -> bool {
-    check_prone(
-        world,
-        ProneQuery {
-            origin,
-            yaw_deg,
-            entry: false,
-            ground: false,
-            length: PRONE_CHECK_LENGTH,
-            rules: MoveRules::V1_1,
-        },
-    )
-    .is_some()
 }
 
 /// `vectopitch` (0x3dd7c): wire convention (positive down), in 0..360.
@@ -4105,7 +4094,6 @@ enum WishArith {
     Msvc,
 }
 
-/// Desired direction (world space, unit or zero) and speed.
 /// The walk mover's wish direction and speed, retail's `PM_CmdScale`
 /// (game.mp.i386.so 0x2e690, called from `PM_WalkMove` at 0x2f2bf): Q3's
 /// `speed * max / (127 * total)` over the cmd bytes, with a backpedal read
@@ -4563,7 +4551,6 @@ fn walk_move(
     mask: u32,
     events: Option<&mut Vec<PmEvent>>,
 ) {
-    // along the slope, so it costs no speed
     let msvc = world.world.arith() == crate::patch::Arith::Msvc;
     let arith = if msvc {
         WishArith::Msvc
@@ -5099,12 +5086,12 @@ fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, m
     // `pml.groundPlane`, which a steep plane sets too (0x3483b reads it, not
     // `pml.walking`); `on_ground` covers a state no ground trace has run on.
     let ground = ps.ground_plane.or(ps.on_ground.then_some(ps.ground_normal));
-    // average of start and end velocity, matching the analytic parabola
     // Q3's `primal_velocity`: what a running timer hands back at the end.
     let mut primal = ps.velocity;
     let mut end_velocity = ps.velocity;
     if gravity {
-        // The x87 keeps `v - g * frametime` unrounded into the average and
+        // The average of start and end velocity, matching the analytic
+        // parabola. The x87 keeps `v - g * frametime` unrounded into it and
         // rounds each store once (0x34811-0x34838).
         let mut end_z = f64::from(ps.velocity.z) - f64::from(ps.gravity) * f64::from(dt);
         end_velocity.z = end_z as f32;
@@ -5851,6 +5838,27 @@ mod tests {
             &[],
         );
         assert_eq!(ps.knockback_ms, 0.0);
+    }
+
+    /// `PmoveSingle` clears `pm_flags` 0x8000 at its top whatever the
+    /// pm_type (0x33e5a): a dead, a dead linked and a spectator move each
+    /// end with the refused prone press gone (BUG-132).
+    #[test]
+    fn every_move_arm_clears_the_prone_blocked_flag() {
+        let w = flat();
+        let w = MoveWorld::bare(&w);
+        for arm in 0..3 {
+            let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+            ps.prone_blocked = true;
+            ps.prone_flip = true;
+            match arm {
+                0 => drop(dead_move(&mut ps, &w, 0.05)),
+                1 => dead_linked_move(&mut ps, &w, 0.05),
+                _ => drop(spectator_move(&mut ps, Some(&w), 0.0, 0.0, 0.0, 0, 0.05)),
+            }
+            assert!(!ps.prone_blocked, "arm {arm}");
+            assert!(!ps.prone_flip, "arm {arm}");
+        }
     }
 
     /// A death takes the sight down: `PmoveSingle`'s dead arm calls
@@ -9216,15 +9224,6 @@ mod tests {
             "a corpse slides through players: {}",
             ps.origin.x
         );
-    }
-
-    #[test]
-    fn prone_fit_ignores_bodies() {
-        let w = flat();
-        // yaw 0 traces backward (-x) for the prone body's length, so the
-        // body has to sit behind the player to be in the trace's way at all.
-        let bodies = [body(-30.0, 0.0, 0.0)];
-        assert!(prone_fits(&MoveWorld::new(&w, &bodies, 0), Vec3::ZERO, 0.0));
     }
 
     #[test]

@@ -50,7 +50,7 @@ fn drawn(fs: Pk3Fs, name: &str, cvars: &[(&str, &str)]) -> Vec<Drawn> {
     const PLACED_MS: i64 = 800;
     let text = capture(name);
     let proto = vcod_server::server::install_protocol(&fs);
-    let p: &Protocol = proto;
+    let p: &Cod1Wire = proto;
     let (map, probe) = ("mp_carentan", "probe_ownline");
     let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map(map).unwrap()).unwrap()).unwrap();
     let world = CollisionWorld::build(&bsp, &[]);

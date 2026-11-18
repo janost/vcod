@@ -1,5 +1,5 @@
-//! CoD 1.1 network client, headless (no wgpu/winit types). Wire reference:
-//! docs/protocol-1.1.md.
+//! CoD1's network client (1.1, 1.5 and United Offensive), headless: play,
+//! demos, UDP and HTTP downloads. Wire reference: docs/protocol-1.1.md.
 
 pub mod capture;
 pub mod cdkey;
@@ -35,7 +35,7 @@ use msg::{
     UserCmd, write_delta_usercmd_in,
 };
 use netchan::Netchan;
-use protocol::{PROTOCOL_V1, Protocol};
+use protocol::{Cod1Wire, PROTOCOL_V1};
 use snapshot::SnapshotRing;
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
@@ -90,9 +90,13 @@ pub struct UdpTransport {
 }
 
 impl UdpTransport {
+    /// `addr` is `host[:port]`, the port 28960 when left out, as the
+    /// browser's and `rcon`'s ([`master::parse_address`]).
     pub fn connect(addr: &str) -> anyhow::Result<Self> {
+        let to =
+            master::parse_address(addr).ok_or_else(|| anyhow::anyhow!("cannot resolve {addr}"))?;
         let sock = UdpSocket::bind("0.0.0.0:0")?;
-        sock.connect(addr)?;
+        sock.connect(to)?;
         Self::from_socket(sock)
     }
 
@@ -274,11 +278,9 @@ fn process_qport() -> u16 {
     0x2000 | (std::process::id() as u16 & 0x0fff)
 }
 
-/// The protocol an `error` refusing the connect for its version names:
-/// `\nEXE_SERVER_IS_DIFFERENT_VER\x15<shortversion>\n`.
 /// Whose CD key a connection speaking `proto` sends: 1.1 and 1.5 share
 /// one, United Offensive has its own.
-fn key_game(proto: &Protocol) -> cdkey::KeyGame {
+fn key_game(proto: &Cod1Wire) -> cdkey::KeyGame {
     if proto.is_uo() {
         cdkey::KeyGame::Uo
     } else {
@@ -286,12 +288,14 @@ fn key_game(proto: &Protocol) -> cdkey::KeyGame {
     }
 }
 
-fn other_version(rest: &[u8]) -> Option<&'static Protocol> {
+/// The protocol an `error` refusing the connect for its version names:
+/// `\nEXE_SERVER_IS_DIFFERENT_VER\x15<shortversion>\n`.
+fn other_version(rest: &[u8]) -> Option<&'static Cod1Wire> {
     let text = String::from_utf8_lossy(rest);
     let v = text
         .trim()
         .strip_prefix("EXE_SERVER_IS_DIFFERENT_VER\u{15}")?;
-    Protocol::by_short_version(v.trim())
+    Cod1Wire::by_short_version(v.trim())
 }
 
 /// CoD 1.1 spectate client, generic over its [`Transport`] so the state
@@ -299,13 +303,13 @@ fn other_version(rest: &[u8]) -> Option<&'static Protocol> {
 pub struct NetClient<T: Transport> {
     transport: T,
     huff: Huffman,
-    proto: &'static Protocol,
+    proto: &'static Cod1Wire,
     /// The handshake already switched protocol once; a second refusal ends it.
     proto_switched: bool,
     /// The install's protocol ([`NetClient::connect_from`]): a server of
     /// another game ([`Transport::same_game`](crate::net::wire::Transport::same_game)) ends the handshake instead of
     /// switching. `None` switches to any.
-    install: Option<&'static Protocol>,
+    install: Option<&'static Cod1Wire>,
 
     state: NetState,
     challenge: i32,
@@ -449,7 +453,7 @@ impl NetClient<UdpTransport> {
 
     /// Connects speaking the install's protocol, and refuses a server of
     /// another game rather than playing it on the wrong assets.
-    pub fn connect_from(addr: &str, install: &'static Protocol) -> anyhow::Result<Self> {
+    pub fn connect_from(addr: &str, install: &'static Cod1Wire) -> anyhow::Result<Self> {
         let transport = UdpTransport::connect(addr)?;
         Ok(Self::start_from(transport, Instant::now(), install))
     }
@@ -465,7 +469,7 @@ impl<T: Transport> NetClient<T> {
     }
 
     /// [`NetClient::connect_from`] over any transport.
-    pub fn start_from(transport: T, now: Instant, install: &'static Protocol) -> Self {
+    pub fn start_from(transport: T, now: Instant, install: &'static Cod1Wire) -> Self {
         let mut c = Self::start_with_protocol(transport, now, process_qport(), install);
         c.install = Some(install);
         c
@@ -478,7 +482,7 @@ impl<T: Transport> NetClient<T> {
         transport: T,
         now: Instant,
         qport: u16,
-        proto: &'static Protocol,
+        proto: &'static Cod1Wire,
     ) -> Self {
         let mut c = Self::idle(transport, now, qport, proto);
         c.send_getchallenge();
@@ -491,14 +495,14 @@ impl<T: Transport> NetClient<T> {
     /// `demo <name>` (CoDMP.exe 0x40eb40): plays `data`, a demo file
     /// recorded under `proto`, through the parse a connection runs. Nothing
     /// goes out on `transport`; [`Self::pump_demo`] reads it.
-    pub fn play_demo(transport: T, now: Instant, proto: &'static Protocol, data: Vec<u8>) -> Self {
+    pub fn play_demo(transport: T, now: Instant, proto: &'static Cod1Wire, data: Vec<u8>) -> Self {
         let mut c = Self::idle(transport, now, 0, proto);
         c.state = NetState::LoadingGamestate;
         c.demo = Some(demo::DemoReader::new(data, proto));
         c
     }
 
-    fn idle(transport: T, now: Instant, qport: u16, proto: &'static Protocol) -> Self {
+    fn idle(transport: T, now: Instant, qport: u16, proto: &'static Cod1Wire) -> Self {
         NetClient {
             transport,
             huff: Huffman::new(),
@@ -687,7 +691,7 @@ impl<T: Transport> NetClient<T> {
 
     /// The protocol this connection speaks; it can change once, while the
     /// handshake runs, when the server turns out to be the other version.
-    pub fn protocol(&self) -> &'static Protocol {
+    pub fn protocol(&self) -> &'static Cod1Wire {
         self.proto
     }
 
@@ -3034,6 +3038,16 @@ mod tests {
             }
         }
         panic!("never dropped");
+    }
+
+    /// `connect 127.0.0.1` goes to the default port instead of failing as
+    /// an invalid socket address.
+    #[test]
+    fn connect_without_a_port_uses_28960() {
+        let t = UdpTransport::connect("127.0.0.1").unwrap();
+        let peer = t.sock.as_ref().unwrap().peer_addr().unwrap();
+        assert_eq!(peer.to_string(), "127.0.0.1:28960");
+        assert!(UdpTransport::connect("127.0.0.1:x").is_err());
     }
 
     /// Over real UDP on loopback, a server that checks no key answers the

@@ -10,7 +10,7 @@ use super::*;
 /// state CoD1 keeps itself, beside [`crate::engine::EngineCore`].
 pub struct Cod1Game {
     pub(super) cfg: ServerConfig,
-    pub(super) proto: &'static Protocol,
+    pub(super) proto: &'static Cod1Wire,
     /// `sv_serverid`, `0x10` per map load plus the restart count in the low
     /// nibble. u8 because the client echoes it in a one-byte header field.
     pub(super) server_id: u8,
@@ -30,7 +30,8 @@ pub struct Cod1Game {
     /// section 12). Always 0 on 1.1.
     pub(super) paused_ms: i32,
     /// Gamestate entity baselines a delta frame may omit an unchanged entity
-    /// against; empty when `test_entities` is off.
+    /// against: every linked script entity's, plus the test entities'
+    /// (`Server::rebuild_baselines`).
     pub(super) baselines: HashMap<u32, msg::EntityState>,
     /// Wall clock of the previous tick, for the trace's send-interval column.
     pub(super) last_tick: Option<Instant>,
@@ -120,11 +121,11 @@ pub struct Cod1Game {
     /// The game module's state.
     pub(super) module: Cod1Module,
     /// The moves the tick's first frame replayed, by slot, for its
-    /// snapshots; the frame being run's, from `replay_moves` to
-    /// `run_frame`; `--trace`'s wall gap since the last tick and the frames
-    /// it was owed.
+    /// snapshots.
     pub(super) tick_moved: Option<Vec<MoveSummary>>,
+    /// The frame being run's moves, from `replay_moves` to `run_frame`.
     pub(super) frame_moved: Vec<MoveSummary>,
+    /// `--trace`'s wall gap since the last tick and the frames it was owed.
     pub(super) tick_wall: (Option<f32>, u32),
 }
 
@@ -244,7 +245,7 @@ pub(super) struct Lend<'a> {
     pub(super) clients: &'a mut Vec<Option<Client>>,
     pub(super) world: &'a Option<Rc<World>>,
     pub(super) fs: &'a Option<Rc<vcod_common::pk3::Pk3Fs>>,
-    pub(super) proto: &'static Protocol,
+    pub(super) proto: &'static Cod1Wire,
     /// `level.time` of the frame being run.
     pub(super) sv_time_ms: i32,
     /// `svs.time`, the network clock (`Server::svs_time_ms`).
@@ -283,10 +284,10 @@ pub(super) struct FrameOut {
 /// does not print them.
 impl crate::engine::GameModule for Cod1Game {
     type Client = Client;
-    type Wire = Protocol;
+    type Wire = Cod1Wire;
     type Snapshots = Cod1Snapshots;
 
-    fn wire(e: &Server) -> &'static Protocol {
+    fn wire(e: &Server) -> &'static Cod1Wire {
         e.game.proto
     }
     fn status(

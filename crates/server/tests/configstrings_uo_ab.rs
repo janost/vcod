@@ -88,7 +88,6 @@ fn server_with(
 /// [`server_with`] with the worldspawn carrying `message` when given and,
 /// with `replay`, the sets run again as console lines after the load, as
 /// retail's command line runs a `+set` placed after `+map`.
-#[allow(clippy::too_many_arguments)]
 fn server_at(
     mut fs: vcod_common::pk3::Pk3Fs,
     map: &str,

@@ -358,6 +358,9 @@ a GPU, and sound and voice chat have not been compared by ear.
 - The browser asks `master.cod.pm` for its Internet list.
 - `VCOD_NETSIM`, the F3 net and prediction lines, and the headless
   `--net-probe` and `--probe-demo` clients.
+- `vc_widescreen 1` (default): Hor+ past 4:3, as on CoD1. `cg_fov` is a
+  4:3 view's width and a wider window sees more at the sides; `0` keeps
+  retail's fixed horizontal fov.
 - `r_vc_depthprepass` (default 1 on CoD2): a depth-only pass before the
   lit world, same pixels, faster on most GPUs.
 

@@ -17,7 +17,7 @@ use crate::game::host::GameHost;
 use crate::game::script::{TEAM_ALLIES, TEAM_AXIS, TEAM_SPECTATOR};
 use vcod_gsc::{Cx, EntId, ErrorKind, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("newhudelem", new_hud_elem),
@@ -37,10 +37,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("fadeovertime", fade_over_time),
     ("moveovertime", move_over_time),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// The `hudelem_t` type codes: the tag on the union its payload fields make
 /// up, each the immediate its method stores at `+0x0`. 0 is a free record,
@@ -116,7 +112,7 @@ pub fn new_client_hud_elem(
 /// names it takes and the numbers it stores (0x4b3ed, 0x4b400, 0x4b41d) are
 /// the three `.sessionteam` assigns bar `none`
 /// (docs/research/clientstate-wire-format.md, "`team`"), so a `none` client
-/// -- which is every player under `dm` -- matches no team element.
+/// (which is every player under `dm`) matches no team element.
 pub fn new_team_hud_elem(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -267,7 +263,6 @@ pub(crate) fn with_hud(
     Ok(())
 }
 
-/// A size argument, which retail reads with `Scr_GetInt`.
 fn as_f32(v: Value) -> Option<f32> {
     match v {
         Value::Int(i) => Some(i as f32),
@@ -276,6 +271,7 @@ fn as_f32(v: Value) -> Option<f32> {
     }
 }
 
+/// A size argument, which retail reads with `Scr_GetInt`.
 fn as_int(v: Value) -> Option<i32> {
     match v {
         Value::Int(i) => Some(i),
@@ -462,7 +458,7 @@ fn tween_ms(v: Value) -> Result<i32, ErrorKind> {
     Ok((seconds * 1000.0 + 0.5) as i32)
 }
 
-/// `<hudelem> scaleOverTime(time, width, height)` (0x4bd34, method 6):
+/// `<hudelem> scaleOverTime(time, width, height)` (0x4bd34, method 10):
 /// stamps `scaleStartTime`/`scaleTime`, snapshots the live size into
 /// `fromWidth`/`fromHeight`, then writes the new size
 /// (docs/research/cod11-gsc-object-model.md 23.4). It does not tag the
@@ -496,9 +492,9 @@ pub fn scale_over_time(
     Ok(Value::Undefined)
 }
 
-/// `<hudelem> fadeOverTime(time)` (0x4c720, method 7): stamps
+/// `<hudelem> fadeOverTime(time)` (0x4c720, method 9): stamps
 /// `fadeStartTime`/`fadeTime`, snapshots the live `color` slot into
-/// `fromColor`, and takes no target of its own -- the script writes the new
+/// `fromColor`, and takes no target of its own: the script writes the new
 /// `color` afterwards.
 pub fn fade_over_time(
     host: &mut GameHost,
@@ -521,7 +517,7 @@ pub fn fade_over_time(
     Ok(Value::Undefined)
 }
 
-/// `<hudelem> moveOverTime(time)` (0x4c7ec, method 9): the same shape as
+/// `<hudelem> moveOverTime(time)` (0x4c7ec, method 11): the same shape as
 /// `fadeOverTime` over `x`/`y` instead of `color`.
 pub fn move_over_time(
     host: &mut GameHost,

@@ -5,12 +5,17 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+  # nightly.yml runs this workflow before it builds, so a red master
+  # publishes nothing.
+  workflow_call:
   # Weekly advisory scan; see the deny job.
   schedule:
     - cron: "0 6 * * 1"
 
+# github.workflow is the caller's name under workflow_call, so the nightly's
+# run of these jobs does not cancel the push's own.
 concurrency:
-  group: ci-${{ github.ref }}-${{ github.event_name }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 # Every job only reads the repository.
@@ -19,6 +24,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Pinned so a new stable's clippy cannot turn master red by itself; bump it
+  # on purpose, together with nightly.yml's.
+  RUST_TOOLCHAIN: "1.100.0"
 
 jobs:
   check:
@@ -37,7 +45,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libasound2-dev mesa-vulkan-drivers
 
-      - run: rustup component add rustfmt clippy
+      - name: Toolchain
+        run: |
+          rustup toolchain install ${{ env.RUST_TOOLCHAIN }} --profile minimal --component rustfmt,clippy
+          rustup default ${{ env.RUST_TOOLCHAIN }}
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
@@ -45,24 +56,29 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # COD_DIR is unset here, so tests that need the retail paks return
       # early (vcod_common::testing::game_fs). What runs is the parser,
-      # protocol and logic suite, the committed net captures, and the
-      # render tests that need no paks, on lavapipe: VCOD_REQUIRE_GPU fails
-      # them if no adapter turns up.
+      # protocol and logic suite and the committed net captures.
       - name: Test
+        run: cargo test --workspace --locked
+
+      # The client's render tests on lavapipe, which VCOD_REQUIRE_GPU fails
+      # if no adapter turns up rather than letting them skip.
+      # Never run yet: drop continue-on-error after the first green run.
+      - name: Render tests on lavapipe
+        continue-on-error: true
         env:
           WGPU_BACKEND: vulkan
           VCOD_REQUIRE_GPU: "1"
-        run: cargo test --workspace
+        run: cargo test -p vcod --bins --locked
 
-  # The suite on the other two shipped targets, which the nightly only
-  # builds: a cfg(windows) or cfg(unix) arm that breaks, or a test that
-  # assumes Linux paths, fails before merge. No paks and no GPU here.
-  other-os:
-    if: github.event_name != 'schedule'
+  # The nightly ships Windows and macOS binaries; this compiles them, tests
+  # included, before a merge rather than after. Skipped when nightly.yml
+  # calls this workflow: its own build covers the same targets.
+  platforms:
+    if: github.event_name != 'schedule' && github.workflow == 'CI'
     strategy:
       fail-fast: false
       matrix:
@@ -73,10 +89,42 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Toolchain
+        run: |
+          rustup toolchain install ${{ env.RUST_TOOLCHAIN }} --profile minimal
+          rustup default ${{ env.RUST_TOOLCHAIN }}
+
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
+      - name: Check
+        run: cargo check --workspace --all-targets --locked
+
+      # The suite itself: a test that assumes Linux paths fails here.
+      # Never run yet: drop continue-on-error after the first green run.
       - name: Test
-        run: cargo test --workspace
+        continue-on-error: true
+        run: cargo test --workspace --locked
+
+  # Cargo.toml's rust-version. Skipped under nightly.yml, as platforms is.
+  msrv:
+    if: github.event_name != 'schedule' && github.workflow == 'CI'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev
+
+      - run: rustup toolchain install 1.90 --profile minimal
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Check
+        run: cargo +1.90 check --workspace --all-targets --locked
 
   # deny.toml: licences, the layering bans and sources on every run;
   # advisories only on the weekly schedule, so a new advisory does not

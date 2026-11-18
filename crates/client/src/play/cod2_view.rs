@@ -31,8 +31,7 @@ const EF_TURRET: i32 = 0x300;
 const EF_CROUCH: i32 = 0x4;
 const EF_PRONE: i32 = 0x8;
 /// `viewHeightTarget` of a prone and a crouched body.
-const VIEW_PRONE: i32 = 11;
-const VIEW_CROUCH: i32 = 40;
+use vcod_cod2::pmove::{VIEW_CROUCH, VIEW_PRONE};
 /// `bg_bobAmplitudeStanding`, `Ducked`, `Prone` (cod2-movement.md 13).
 const BOB_AMPLITUDE: [f32; 3] = [0.007, 0.0075, 0.03];
 
@@ -603,7 +602,7 @@ impl ViewFx {
     /// the cmds carry it into. `predicted` when `f`'s playerstate is the
     /// frame's prediction ([`crate::cod2_viewmodel::pos_frac`]). `land_z`
     /// is [`Land::gun`]'s drop on the gun's world z.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn frame(
         &mut self,
         f: &Frame,

@@ -17,7 +17,7 @@ use glam::Vec3;
 use vcod_common::collision::{CONTENTS_WATER, CollisionWorld, sound_material};
 use vcod_common::net::events::dir_to_byte;
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use vcod_common::net::trajectory::{
     DEFAULT_GRAVITY, TR_GRAVITY, TR_LINEAR, TR_STATIONARY, Trajectory,
 };
@@ -64,8 +64,7 @@ const BOUNCE_NUDGE: f32 = 0.1;
 /// 0x5432f, 1.5b 0x550e4); UO's skips that test and the impact on 0x4 and
 /// pushes the contact 2 units into the sky (0x5f247, 0x5f533), combat doc
 /// 12.3.
-const SURF_SKY: u32 = 0x4;
-pub(crate) const SURF_NOIMPACT: u32 = 0x10;
+use vcod_common::clipmap::{SURF_NOIMPACT, SURF_SKY};
 /// UO's push along `-normal` (`.rodata 0xa180c`, -2.0).
 const UO_SKY_PUSH: f32 = 2.0;
 /// The sky brushes' contents bit: UO's `G_MissileTrace` (0x5edf4) reads a
@@ -223,7 +222,7 @@ pub struct Missile {
     /// projectile off it.
     pub weapon: u8,
     /// The projectile model's configstring index. Retail's `fire_grenade`
-    /// writes no `s.index` -- every `!missile` line reads `index=0` -- so
+    /// writes no `s.index` (every `!missile` line reads `index=0`), so
     /// this never reaches the wire; the registration it comes from is what
     /// puts the model in the client's table.
     pub model: i32,
@@ -826,7 +825,6 @@ impl Missile {
 
     /// `G_BounceMissile` (12.4). Returns whether the contact was loud enough
     /// for the caller to raise 177.
-    #[allow(clippy::too_many_arguments)]
     fn bounce(
         &mut self,
         prev_ms: i32,
@@ -838,7 +836,7 @@ impl Missile {
         draws: &mut Draws,
     ) -> bool {
         // The impact time is interpolated in whole milliseconds, and the
-        // fraction is whichever trace 12.3 read -- the downward one on a
+        // fraction is whichever trace 12.3 read: the downward one on a
         // ground snap, where it is a fraction of 1.5 units and not of the
         // frame. That is retail's arithmetic, and the capture's bounce
         // deltas only come out on it. All three builds keep the product on
@@ -1169,7 +1167,7 @@ impl Missile {
     /// capture reads `index=0`, the client drawing the projectile off
     /// `s.weapon` instead. The owner rides `r.ownerNum` and `parent`, which
     /// are server-side, so no client-facing field carries it.
-    fn to_entity(&self, p: &Protocol) -> EntityState {
+    fn to_entity(&self, p: &Cod1Wire) -> EntityState {
         let mut e = EntityState::null(p);
         e.number = self.id.0;
         let mut set = |name: &str, v: i32| {
@@ -1331,7 +1329,7 @@ impl Missiles {
     /// usercmd in `SV_ClientThink`, between frames, so the first
     /// `G_RunMissile` after a throw is a full frame of flight (the capture's
     /// first `!missile` line is already past its first bounce).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn fire_grenade(
         &mut self,
         ents: &mut ObjectTable,
@@ -1563,7 +1561,7 @@ impl Missiles {
     /// already the barrage's 1000 up from the strike point. `owner` is the
     /// barrage's: `None` when its caller left, and the shell then charges
     /// nobody on contact (combat doc 13.7).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn fire_artillery(
         &mut self,
         ents: &mut ObjectTable,
@@ -1635,7 +1633,7 @@ impl Missiles {
     /// the vehicle (docs/research/coduo-vehicles.md 13). A player's
     /// launcher (`Weapon_RocketLauncher_Fire`, 0x7b3da) keeps the line.
     /// 1.1's (0x54614, combat doc 13.6) flies straight for 30 s.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn fire_rocket(
         &mut self,
         ents: &mut ObjectTable,
@@ -1856,8 +1854,6 @@ impl Missiles {
         self.live.iter().any(|m| m.id == id)
     }
 
-    /// One missile's `r.currentOrigin` into its script `origin`, as
-    /// [`Missiles::sync_origins`] does for all of them.
     /// A missile's `s.weapon`, gone off or not.
     pub fn weapon_of(&self, id: EntId) -> Option<u8> {
         self.live.iter().find(|m| m.id == id).map(|m| m.weapon)
@@ -1889,6 +1885,8 @@ impl Missiles {
         self.live.iter().find(|m| m.id == id).map(|m| m.origin)
     }
 
+    /// One missile's `r.currentOrigin` into its script `origin`, as
+    /// [`Missiles::sync_origins`] does for all of them.
     pub fn sync_origin(&self, ents: &mut ObjectTable, id: EntId) {
         if let Some(m) = self.live.iter().find(|m| m.id == id) {
             set_script_origin(ents, m.id, m.origin);
@@ -1908,7 +1906,7 @@ impl Missiles {
     /// `SVF_BROADCAST` (11.1), so the caller adds them past its own PVS cull.
     pub fn entities<'a>(
         &'a self,
-        p: &'a Protocol,
+        p: &'a Cod1Wire,
     ) -> impl Iterator<Item = (u32, EntityState)> + 'a {
         // A hanging shell is `SVF_NOCLIENT` until its drop.
         self.live
@@ -2361,7 +2359,7 @@ mod tests {
     /// The throw's origin and velocity, against the retail capture's own
     /// numbers: standing at (1200, 1760, 144.125) with a 60-unit view height
     /// and yaw 90, the fixture's grenade leaves `pos.trBase`
-    /// (1200, 1760, 204) with `trDelta` (0, 960, 120) -- the eye truncated
+    /// (1200, 1760, 204) with `trDelta` (0, 960, 120): the eye truncated
     /// toward zero, `forward * projectileSpeed` and `projectileSpeedUp` on z
     /// (section 11.3). Reconstructed from the first `!missile` line's bounce:
     /// `trDelta` (0, -288, 75.6) is `-0.3 * 960` and `0.75 * (120 - 800 *

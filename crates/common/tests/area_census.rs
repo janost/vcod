@@ -1,7 +1,8 @@
 //! The stock MP maps' areas against their PVS: no cluster a leaf of area 1
 //! or above holds is in a leaf of area 0, and no PVS row joins the two in
 //! either direction, so `SV_AddEntitiesVisibleFromPoint`'s area test sends
-//! no entity the PVS test would not (docs/protocol-1.1.md, "Areas").
+//! no entity the PVS test would not (docs/protocol-1.1.md, "Which entities a
+//! client is sent", "Areas").
 
 use vcod_common::{bsp, testing};
 

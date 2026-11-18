@@ -27,7 +27,7 @@ use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_USE, UserCmd};
 
 /// A mounted gun's `eType` (11 on both protocols).
 const ET_TURRET_V22: i32 = 11;
-use vcod_common::net::protocol::{PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V22};
 use vcod_common::net::snapshot::Snapshot;
 
 const MAP: &str = "mp_cassino";
@@ -121,7 +121,7 @@ struct Flight {
 }
 
 impl Run {
-    fn record(&mut self, tracker: &mut EventTracker, s: &Snapshot, p: &Protocol) {
+    fn record(&mut self, tracker: &mut EventTracker, s: &Snapshot, p: &Cod1Wire) {
         for ev in tracker.drain(s, p) {
             self.seen.push(Seen {
                 t: s.server_time,
@@ -204,7 +204,7 @@ fn ours_with(
     setup: impl FnOnce(&mut vcod_server::Server),
 ) -> Run {
     let fs = vcod_common::testing::uo_fs().unwrap();
-    let p: &'static Protocol = &PROTOCOL_V22;
+    let p: &'static Cod1Wire = &PROTOCOL_V22;
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{PROBE}.gsc");
     let probe = std::fs::read_to_string(src).expect("read the probe");
     let bsp_path = fs.resolve_map(MAP).expect("the map in the UO paks");
@@ -563,7 +563,7 @@ fn the_mounted_mg_overheats_and_cools_as_on_uo() {
     let Some(fs) = vcod_common::testing::uo_fs() else {
         return;
     };
-    let p: &'static Protocol = &PROTOCOL_V22;
+    let p: &'static Cod1Wire = &PROTOCOL_V22;
     let frames = vcod_common::testing::fixture_frames(
         p,
         "net/gamestate-uo-turret.bin",
@@ -692,7 +692,7 @@ fn a_reported_flame_burns_every_frame_while_the_bit_is_held() {
     let Some(fs) = vcod_common::testing::uo_fs() else {
         return;
     };
-    let p: &'static Protocol = &PROTOCOL_V22;
+    let p: &'static Cod1Wire = &PROTOCOL_V22;
     let bsp_path = fs.resolve_map(MAP).unwrap();
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();
@@ -768,7 +768,7 @@ fn a_flamethrower_pulse_deals_no_bullet_damage() {
     let Some(fs) = vcod_common::testing::uo_fs() else {
         return;
     };
-    let p: &'static Protocol = &PROTOCOL_V22;
+    let p: &'static Cod1Wire = &PROTOCOL_V22;
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{PROBE}.gsc");
     let probe = std::fs::read_to_string(src).expect("read the probe");
     let bsp_path = fs.resolve_map(MAP).unwrap();
@@ -1105,7 +1105,7 @@ fn the_bazooka_rocket_leaves_on_retails_bits() {
 /// lines. The script's log and every event the probe's snapshots carried.
 fn ours_direct(probe: &str, src: &str, fixture: &str, secs: i64) -> (Vec<String>, Run) {
     let fs = vcod_common::testing::uo_fs().unwrap();
-    let p: &'static Protocol = &PROTOCOL_V22;
+    let p: &'static Cod1Wire = &PROTOCOL_V22;
     let bsp_path = fs.resolve_map(MAP).expect("the map in the UO paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();

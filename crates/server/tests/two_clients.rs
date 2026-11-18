@@ -1,4 +1,4 @@
-//! Two clients on one server, each seeing the other. Stage 5's own gate for
+//! Two clients on one server, each seeing the other. The gate for
 //! the half no capture of a single client can reach: retail sends a client no
 //! entity for itself, so the entity-list gates say nothing about what one
 //! client is told about another.
@@ -235,7 +235,7 @@ fn a_player_entity_carries_the_fields_retail_sets() {
     let p = &PROTOCOL_V1;
     // The union over the capture's player entities: a field set in any
     // sample. Whole blocks, because `eType` sits in the middle of one and the
-    // fields above it -- the whole trajectory -- belong to the same entity.
+    // fields above it (the whole trajectory) belong to the same entity.
     let mut retail_sets: BTreeSet<&str> = BTreeSet::new();
     for block in text.split("[ent ").skip(1) {
         let body = block.split_once(']').map(|(_, b)| b).unwrap_or(block);
@@ -776,8 +776,8 @@ fn a_weapon_switch_off_the_usercmd_byte_happens_once() {
     let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
 
     let p = &PROTOCOL_V1;
-    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as i32;
-    let colt = vcod_server::configstrings::weapon_index("colt_mp").unwrap() as u8;
+    let carbine = vcod_server::defs::V1.weapon_index("m1carbine_mp").unwrap() as i32;
+    let colt = vcod_server::defs::V1.weapon_index("colt_mp").unwrap() as u8;
     assert_eq!(
         cl.snapshots().newest().unwrap().ps.field_i32(p, "weapon"),
         carbine,
@@ -872,8 +872,10 @@ fn a_client_out_of_grenades_gets_its_rifle_back() {
     let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
 
     let p = &PROTOCOL_V1;
-    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
-    let frag = vcod_server::configstrings::weapon_index("fraggrenade_mp").unwrap() as u8;
+    let carbine = vcod_server::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
+    let frag = vcod_server::defs::V1
+        .weapon_index("fraggrenade_mp")
+        .unwrap() as u8;
     let run = |sv: &mut vcod_server::Server,
                cl: &mut vcod_common::net::NetClient<common::ClientEnd>,
                now: &mut Instant,
@@ -1531,8 +1533,8 @@ fn map_restart_re_inits_the_level_without_a_gamestate() {
 
 /// The score limit ends the map (map-cycle doc 6, and section 2's
 /// `exitLevel`): `dm` with `scr_dm_scorelimit 1`, A kills B, and the stock
-/// `endMap` puts both clients at the intermission camera -- `pm_type` 5, a
-/// scoreboard and the winner's `cg_objectiveText` -- then ten seconds later
+/// `endMap` puts both clients at the intermission camera (`pm_type` 5, a
+/// scoreboard and the winner's `cg_objectiveText`), then ten seconds later
 /// calls `exitLevel(false)`, whose `map_rotate` loads the next map in
 /// `sv_mapRotation` on the live netchan.
 #[test]

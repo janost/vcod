@@ -237,7 +237,8 @@ bot does with the same keys. If one kills you, it earned it. The view holds:
   with a bolt rifle, lies down at long range, takes cover and leans,
   retreats when hurt, and peeks for or hunts an enemy it lost.
 - It throws frags at an enemy behind cover or one just lost, on a lob
-  whose arc comes down by him, and runs from a live frag near it.
+  whose arc comes down by him, and runs from a live frag near it. With
+  friendly fire on it throws none that would burst by a playing teammate.
 
 ### Getting around
 
@@ -506,7 +507,7 @@ are most of a miss. Blame the gun. Full tables and the earlier runs:
   0.4% more and stalls 3% more over six seeds of all maps, so it is off.
 - Frags: thrown through the frag key. A live frag under its cursor hint
   with 1.5 s or more on the fuse is picked up and thrown back toward its
-  thrower (or the enemy in sight).
+  thrower, unless he is a teammate (else the enemy in sight).
 - Mounted SAWs, in `war` and `dm` only: a bot takes a free gun whose arc
   covers the enemy it fights, or a lane its team saw an enemy in within
   8 s, past 250 units from the gun, when the spot behind it is within

@@ -1,7 +1,8 @@
-//! Test helpers for every crate. Always compiled because the client crate's
-//! tests call into it.
+//! Test helpers for every crate: built for this crate's tests and, through
+//! the `testing` feature, for every crate that lists it in its
+//! dev-dependencies.
 
-use crate::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, Protocol, install_protocol};
+use crate::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, install_protocol};
 use crate::pk3::Pk3Fs;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -69,7 +70,7 @@ fn requires(list: Option<&str>, game: &str) -> bool {
 
 /// `$var`'s root, holding `sub/`. `None` when unset, so CI (no game data)
 /// passes; panics when the var is set to a relative path or one without
-/// `sub/`, which used to make every test that needs it pass vacuously.
+/// `sub/`, since either would make every test that needs it pass vacuously.
 pub fn install_root(var: &str, game: &str, sub: &str) -> Option<PathBuf> {
     match resolve_root(var, std::env::var_os(var), sub) {
         Root::Found(root) => Some(root),
@@ -133,7 +134,7 @@ fn only_11(fs: Option<Pk3Fs>) -> Option<Pk3Fs> {
 }
 
 /// `fs` when its paks are `p`'s version's, else a skip under `name`.
-fn only(fs: Option<Pk3Fs>, p: &Protocol, name: &str, other: &str) -> Option<Pk3Fs> {
+fn only(fs: Option<Pk3Fs>, p: &Cod1Wire, name: &str, other: &str) -> Option<Pk3Fs> {
     match fs {
         Some(fs) if install_protocol(&fs).transport.version == p.transport.version => Some(fs),
         Some(_) => {
@@ -304,7 +305,7 @@ pub fn fixture(rel: &str) -> Vec<u8> {
 
 /// A committed gamestate capture (`--save-fixture`), decoded.
 pub fn fixture_gamestate(
-    p: &crate::net::protocol::Protocol,
+    p: &crate::net::protocol::Cod1Wire,
     gamestate: &str,
 ) -> crate::net::gamestate::Gamestate {
     use crate::net::huffman::Huffman;
@@ -318,7 +319,7 @@ pub fn fixture_gamestate(
 /// format: message number, length, message), decoded against its gamestate
 /// capture, with the server commands between them.
 pub fn fixture_frames(
-    p: &crate::net::protocol::Protocol,
+    p: &crate::net::protocol::Cod1Wire,
     gamestate: &str,
     snapshots: &str,
 ) -> Vec<Frame> {
@@ -394,7 +395,7 @@ pub struct SlopeSnap {
 }
 
 /// Every `!cmd` and `!snap` line of a `--save-slope` capture, in order.
-pub fn parse_slope(p: &crate::net::protocol::Protocol, text: &str) -> Vec<SlopeLine> {
+pub fn parse_slope(p: &crate::net::protocol::Cod1Wire, text: &str) -> Vec<SlopeLine> {
     use crate::net::msg::{NULL_USERCMD, PlayerState, UserCmd};
     let mut out = Vec::new();
     for line in text.lines() {

@@ -1,6 +1,6 @@
 //! The client's frame clock, retail's `cls.realtime`: the wall clock, except
 //! that a `cl_avidemo` frame moves it a fixed step however long the frame
-//! took to draw and write (`crate::screenshot::avidemo_step`). Behind the
+//! took to draw and write (`crate::screenshot::avidemo`). Behind the
 //! wall clock (or ahead of it) once an avidemo has run; the gap stays when
 //! it stops, so the clock never jumps. The main thread's frame, its demo
 //! clocks and the CoD2 and CoD4 sessions read it.

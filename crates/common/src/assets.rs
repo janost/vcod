@@ -139,7 +139,7 @@ pub fn parse_dds(data: &[u8]) -> Result<Image> {
 
 /// One BC level of `width` x `height` as RGBA, the blocks' spare edge
 /// texels cut off.
-fn decode_bc(format: TextureFormat, width: u32, height: u32, data: &[u8]) -> Vec<u8> {
+pub(crate) fn decode_bc(format: TextureFormat, width: u32, height: u32, data: &[u8]) -> Vec<u8> {
     let (w, h) = (width as usize, height as usize);
     let block_size = format.block_size() as usize;
     let mut px = vec![0u8; w * h * 4];
@@ -288,7 +288,7 @@ pub fn dlight_blob() -> Image {
 
 /// Material facts from `scripts/*.shader` (world) and `fxshaders/*.shader`
 /// (effects, pak5); the scan is by suffix, not directory. Thin queries over
-/// [`ShaderLib`] for the consumers that predate the full parser.
+/// [`ShaderLib`].
 pub struct Shaders {
     lib: std::sync::Arc<crate::shader::ShaderLib>,
 }

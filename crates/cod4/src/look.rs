@@ -475,8 +475,8 @@ impl VisionBlend {
     /// What draws at `now_ms`.
     pub fn at(&self, now_ms: i32) -> Vision {
         match self.fade {
-            Some((start, ms)) if start + ms >= now_ms => {
-                let frac = (now_ms - start) as f32 / ms as f32;
+            Some((start, ms)) if start.saturating_add(ms) >= now_ms => {
+                let frac = now_ms.wrapping_sub(start) as f32 / ms as f32;
                 Vision::lerp(&self.from, &self.to, frac.max(0.0))
             }
             _ => self.to,
@@ -613,6 +613,17 @@ mod tests {
         assert_eq!(b.at(3001), map);
         b.set(intro, 0, 4000);
         assert_eq!(b.at(4000), intro);
+    }
+
+    /// A configstring fade near i32::MAX holds the fade instead of
+    /// overflowing its end time (BUG-150).
+    #[test]
+    fn a_fade_past_i32_max_does_not_overflow() {
+        let mut b = VisionBlend::default();
+        b.set(Vision::default(), 1, 0);
+        b.set(Vision::parse(MP_CRASH), i32::MAX, 100);
+        let c = b.at(200).film.contrast;
+        assert!((c - Vision::default().film.contrast).abs() < 1e-3, "{c}");
     }
 
     /// FNV-1a over a stream of words: the pins below hash every output's bits.

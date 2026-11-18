@@ -4,6 +4,7 @@
 //! (docs/research/cod2-movement.md 11).
 
 use glam::Vec3;
+use vcod_common::clipmap::surface_material;
 
 use super::fpu::{self, d};
 use super::moves::{accelerate, air_move, cmd_scale_flat, jump_check};
@@ -279,7 +280,7 @@ pub(crate) fn rung_footstep(pm: &mut Pmove) {
     let origin = pm.ps.origin;
     let end = fpu::ma(origin, RUNG_REACH, pm.ps.ladder_vec);
     let t = pm.trace_box(origin, end, mins, maxs, mask);
-    let mut surf = ((t.surface_flags & 0x1f0_0000) >> 20) as i32;
+    let mut surf = surface_material(t.surface_flags) as i32;
     if t.fraction == 1.0 || surf == 0 {
         surf = RUNG_DEFAULT_SURFACE;
     }

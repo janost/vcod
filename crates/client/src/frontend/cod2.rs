@@ -459,7 +459,7 @@ mod tests {
 
     /// A server's team menu: a click on its auto-assign button answers
     /// `scriptMenuResponse` with the menu's own name, what a CoD2 session
-    /// sends as `mr <serverId> <index> autoassign` ([`mr_command`]).
+    /// sends as `mr <serverId> <index> autoassign` (`Cod2Session::menu_response`).
     #[test]
     fn a_script_menu_click_answers_its_response() {
         let Some(fs) = vcod_common::testing::cod2_fs() else {
@@ -1119,5 +1119,16 @@ mod flow {
         apply(&mut shell, &out);
         assert!(!dir.join("Tester").exists());
         assert_eq!(shell.cvar("ui_playerProfileCount"), Some("0"));
+        // With the last profile gone a click on the list and the select
+        // script read no row.
+        assert_eq!(ui.profile_selected(), None);
+        shell.execute("set com_playerProfile Tester");
+        let mut out = Vec::new();
+        ui.run(
+            m,
+            &script("uiScript selectActivePlayerProfile"),
+            &shell,
+            &mut out,
+        );
     }
 }

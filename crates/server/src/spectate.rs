@@ -12,15 +12,22 @@ pub use vcod_common::net::flags::{
     EF_TELEPORT_BIT, PM_DEAD, PM_DEAD_LINKED, PM_INTERMISSION, PM_NORMAL_LINKED, PM_SPECTATOR,
 };
 use vcod_common::net::msg::{self, UserCmd};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::trajectory;
 use vcod_common::pmove::cmd::{self, ANGLE2SHORT, EventRing, view_angles};
 use vcod_common::pmove::{self, PmEvent};
 use vcod_common::weapon::WeaponDef;
-
-/// `ET_PLAYER`, what another client sees a player as
-/// (`crates/client/src/entities.rs` carries the table).
+// Event ids: docs/research/cod11-events-and-fx.md.
+use vcod_common::net::event_ids::{
+    EV_DEATH, EV_PAIN, EV_PLAYER_TELEPORT_IN, EV_PLAYER_TELEPORT_OUT,
+};
+// `ET_PLAYER`, what another client sees a player as
+// (`crates/client/src/entities.rs` carries the table).
 use vcod_common::net::flags::ET_PLAYER;
+use vcod_common::net::flags::{EF_FIRING, EF_TALK};
+// `pingPlayer`'s bits (docs/research/cod11-hud-protocol.md, "Compass
+// friendlies").
+use vcod_common::net::flags::{EF_FRIEND_PING, EF_PING};
 
 /// A player entity's `eFlags` and `pos.trDuration`, transcribed from the
 /// retail two-probe capture rather than derived.
@@ -30,14 +37,6 @@ const PLAYER_TR_DURATION: i32 = 50;
 /// How far behind the frame `ClientSpawn` puts `commandTime` before its own
 /// think runs the client up to it (0x42a48).
 const SPAWN_THINK_MS: f32 = 100.0;
-
-/// `docs/research/cod11-events-and-fx.md`.
-use vcod_common::net::event_ids::EV_PLAYER_TELEPORT_IN;
-use vcod_common::net::event_ids::EV_PLAYER_TELEPORT_OUT;
-use vcod_common::net::flags::{EF_FIRING, EF_TALK};
-/// `pingPlayer`'s bit (docs/research/cod11-hud-protocol.md, "Compass
-/// friendlies").
-use vcod_common::net::flags::{EF_FRIEND_PING, EF_PING};
 
 /// What `linkTo` left on a client: the parent it follows, the gap it stood
 /// at when it linked and the velocity it had then. `Server` re-applies all
@@ -104,18 +103,16 @@ pub struct Seat {
     /// asks as 0 (coduo-vehicles.md 13, "The tank driver's link offset").
     pub link_offset: [f32; 3],
 }
-use vcod_common::net::event_ids::EV_DEATH;
-/// `EV_PAIN` and `EV_DEATH` (`docs/research/cod11-events-and-fx.md`).
-use vcod_common::net::event_ids::EV_PAIN;
+
 /// One `EV_PAIN` per 700 ms (combat doc, section 6, step 9).
 const PAIN_DEBOUNCE_MS: i32 = 700;
 /// `finishPlayerDamage`'s knockback (combat doc, 4.5): the stance scales,
-/// the cap, and `g_knockback / 250` at the cvar's stock 1000.
+/// the cap, and `g_knockback / 250` ([`ClientSim::knockback`]).
 const KNOCKBACK_STAND: f32 = 0.3;
 const KNOCKBACK_DUCKED: f32 = 0.15;
 const KNOCKBACK_PRONE: f32 = 0.02;
 const KNOCKBACK_MAX: i32 = 60;
-const KNOCKBACK_UNITS: f32 = 1000.0 / 250.0;
+const KNOCKBACK_MASS: f32 = 250.0;
 
 /// `finishPlayerDamage`'s per-frame accumulator (combat doc, 4.5): what the
 /// frame's hits added up to and where the last one came from, which
@@ -178,9 +175,6 @@ pub enum PmType {
     Intermission,
 }
 
-/// One client's simulated state. `pm_type` selects the movement path, the way
-/// retail's own `playerState_t` does: a client is a spectator before the menu
-/// and a player after, within one connection.
 /// The end frame [`ClientSim::commit_pose`] runs in.
 #[derive(Clone, Copy, Debug)]
 pub struct EndFrame {
@@ -213,6 +207,9 @@ pub type TurretLegs = (
     Option<(usize, Vec<vcod_common::turretpose::TurretRow>)>,
 );
 
+/// One client's simulated state. `pm_type` selects the movement path, the way
+/// retail's own `playerState_t` does: a client is a spectator before the menu
+/// and a player after, within one connection.
 pub struct ClientSim {
     pub ps: pmove::PlayerState,
     pub pm_type: PmType,
@@ -492,6 +489,10 @@ pub struct ClientSim {
     /// `(int)g_gravity`, mirrored off the host every frame
     /// (cod15-movement.md, "ps.gravity").
     pub gravity: i32,
+    /// `g_knockback.value`, mirrored off the host every frame: the
+    /// knockback's velocity is `knockback * g_knockback / 250`
+    /// (cod11-combat.md 4.5).
+    pub knockback: f32,
     /// The last frame a follow sent this spectator, the copy with its flags
     /// patched: the playerstate `StopFollowing` writes over.
     pub follow_wire: Option<msg::PlayerState>,
@@ -635,7 +636,7 @@ impl ClientSim {
     /// A client entering the world: the spectator fly
     /// ([`pmove::spectator_move`]), angles straight off the latest cmd.
     /// `cmd_angles` are the angles of the usercmd that brought the client in
-    /// -- `SV_ClientEnterWorld`'s `cmds[0]`, zero when there is none -- so
+    /// (`SV_ClientEnterWorld`'s `cmds[0]`, zero when there is none), so
     /// the view it already had survives entry instead of snapping.
     pub fn spectator(origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) -> Self {
         let view = view_angles(cmd_angles, spawn_delta_angles(yaw_deg, cmd_angles));
@@ -733,6 +734,7 @@ impl ClientSim {
             stance_window_ms: 0,
             max_speed: pmove::SPEED_RUN as i32,
             gravity: pmove::GRAVITY as i32,
+            knockback: 1000.0,
             follow_wire: None,
             residue: None,
             end_frame_wire: None,
@@ -744,7 +746,7 @@ impl ClientSim {
 
     /// The mode change `spawnPlayer()` makes: the same sim, restarted at the
     /// spawn point the script chose. `cmd_angles` is the client's last-known
-    /// cmd angles going into the spawn -- a spectator can have turned freely
+    /// cmd angles going into the spawn: a spectator can have turned freely
     /// before answering the weapon menu, unlike a fresh connect, so the
     /// caller must supply the real value rather than assume zero.
     pub fn become_player(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
@@ -1366,7 +1368,6 @@ impl ClientSim {
     /// `no_spectate` is 1.5's `allowSpectateTeam` mask: without free flight
     /// the sight edge keeps the follow and the spectator does not fly
     /// (1.5 game.mp 0x389eb).
-    #[allow(clippy::too_many_arguments)]
     pub fn spectator_think(
         &mut self,
         forced: i32,
@@ -1950,9 +1951,9 @@ impl ClientSim {
         for (t, c) in torso_cmds {
             self.torso_cmd(c, (now_ms, t), &conditions, inputs);
         }
-        // Nothing is selected while off the ground -- retail returns before
+        // Nothing is selected while off the ground: retail returns before
         // the selection unless the ladder flag is set (@0x323a2), which is
-        // what gives a climber its `climbup`/`climbdown` -- so a jump owns
+        // what gives a climber its `climbup`/`climbdown`, so a jump owns
         // the legs until the landing. A mounted player is also off the
         // ground (`ps.mounted` clears `on_ground` in pmove) but the 0x322c8
         // mounted arm runs ahead of that early-out (turrets doc, section 10).
@@ -1978,19 +1979,6 @@ impl ClientSim {
         }
     }
 
-    /// One event clause on the two channels. A `both` clause is the whole
-    /// body: retail puts the anim on the legs and restarts the torso on no
-    /// anim at all, which is the same 0 every settled pose reads. The
-    /// capture's grenade throws are the evidence -- `legsAnim` 575, index 63,
-    /// with a bare toggle flip on the torso.
-    ///
-    /// The rule is general and the measurement is not: it also reaches
-    /// `fireweapon`'s pistol-ADS clause and `jump`'s two run clauses, neither
-    /// of which any capture covers (combat doc 1.14). It is kept general
-    /// because it is the convention the continuous selection already follows.
-    /// The landing is the one clause measured to break it -- its `weaponclass
-    /// pistol AND grenade` arm is a `both` one and writes the legs alone --
-    /// and its caller clears the torso of the selection before it gets here.
     /// One [`TorsoCmd`] at `at` on the hold clock. The breakdown continue
     /// restarts the torso only where its clause's anim differs from the one
     /// playing; on the same anim it sets the timer again when the clip
@@ -2030,6 +2018,19 @@ impl ClientSim {
         }
     }
 
+    /// One event clause on the two channels. A `both` clause is the whole
+    /// body: retail puts the anim on the legs and restarts the torso on no
+    /// anim at all, which is the same 0 every settled pose reads. The
+    /// capture's grenade throws are the evidence: `legsAnim` 575, index 63,
+    /// with a bare toggle flip on the torso.
+    ///
+    /// The rule is general and the measurement is not: it also reaches
+    /// `fireweapon`'s pistol-ADS clause and `jump`'s two run clauses, neither
+    /// of which any capture covers (combat doc 1.14). It is kept general
+    /// because it is the convention the continuous selection already follows.
+    /// The landing is the one clause measured to break it: its `weaponclass
+    /// pistol AND grenade` arm is a `both` one and writes the legs alone,
+    /// and its caller clears the torso of the selection before it gets here.
     fn play_event(
         anim: &mut vcod_common::animscript::AnimState,
         sel: &vcod_common::animscript::Selection,
@@ -2119,14 +2120,15 @@ impl ClientSim {
             };
             let kb = ((damage as f32 * scale) as i32).min(KNOCKBACK_MAX);
             if kb > 0 && has_dir {
-                let kvel = dir * (kb as f32 * KNOCKBACK_UNITS);
+                let units = self.knockback * kb as f32 / KNOCKBACK_MASS;
+                let kvel = dir * units;
                 let x = self.ps.velocity.x;
                 self.ps.velocity += kvel;
                 // 1.1d keeps x's product on the stack into its add
                 // (0x439e7..0x439fb); 1.5b and UO store it (cod11-combat.md
                 // 4.5).
                 if self.ps.rules == pmove::MoveRules::V1_1 {
-                    let s = f64::from(kb as f32 * KNOCKBACK_UNITS);
+                    let s = f64::from(units);
                     self.ps.velocity.x = (f64::from(x) + f64::from(dir.x) * s) as f32;
                 }
             }
@@ -2156,8 +2158,8 @@ impl ClientSim {
         self.dead_yaw = dead_yaw;
         // The death anim on the legs, and the torso restarted on 0: both
         // retail deaths read `torsoAnim` 512 beside the death `legsAnim`
-        // (combat doc, 8.1 and 8.4). Nothing selects for this sim again --
-        // `update_anims` returns on a dead one -- so the drawn index is what
+        // (combat doc, 8.1 and 8.4). Nothing selects for this sim again
+        // (`update_anims` returns on a dead one), so the drawn index is what
         // the corpse clone carries.
         if let (Some(inputs), Some(c)) = (anims, &conditions) {
             let mut sel = inputs.anims.script.select_event_random("death", c, rng);
@@ -2243,13 +2245,6 @@ impl ClientSim {
         self.damage.taken = 0;
     }
 
-    /// The wire playerstate. Fields the two modes disagree about are measured
-    /// on both sides: the spectator's from the retail capture in
-    /// `crates/common/tests/fixtures/net/snapshots.bin`, whose zeros
-    /// `parses_captured_snapshot_run` pins, the player's from
-    /// `crates/server/tests/fixtures/playerstate/*.txt`, which the
-    /// `playerstate_ab` gate diffs against. `commandTime` mirrors the last
-    /// processed cmd's server time.
     /// Where the player is: the sim owns it, the script mirrors it.
     pub fn origin(&self) -> [f32; 3] {
         self.ps.origin.into()
@@ -2668,10 +2663,10 @@ impl ClientSim {
     }
 
     /// What other clients are sent about this one. Retail sends a client no
-    /// entity for itself -- the playerstate carries it -- so this is only ever
+    /// entity for itself (the playerstate carries it), so this is only ever
     /// built for somebody else (`docs/protocol-1.1.md`, "Which entities a
     /// client is sent"). The body model is not here either: it rides the
-    /// `clientState` roster's `modelindex`, which stage 4 already sends.
+    /// `clientState` roster's `modelindex`.
     ///
     /// Measured against a retail capture of one probe watching another
     /// (`crates/server/tests/fixtures/entities/mp_carentan-dm-players.txt`).
@@ -2681,7 +2676,7 @@ impl ClientSim {
     ///
     /// The event ring rides here as well as on the playerstate: it is how
     /// another client hears this one's shots and footsteps.
-    pub fn to_entity(&self, p: &Protocol, slot: usize, command_time: i32) -> msg::EntityState {
+    pub fn to_entity(&self, p: &Cod1Wire, slot: usize, command_time: i32) -> msg::EntityState {
         let mut e = msg::EntityState::null(p);
         e.number = slot as u32;
         let mut set = |name: &str, v: i32| {
@@ -2695,8 +2690,8 @@ impl ClientSim {
         // Packed at link time: docs/research/cod11-player-clip.md.
         set("solid", self.linked_solid);
         set("legsAnim", self.anim.legs());
-        // The torso does travel: the shoot, reload and putaway poses are the
-        // weapon's, and the next task is what gives it a value.
+        // The torso travels too: the shoot, reload and putaway poses are the
+        // weapon's.
         set("torsoAnim", self.anim.torso());
         set("weapon", i32::from(self.ps.weapon));
         set("iHeadIcon", self.head_icon);
@@ -2786,7 +2781,14 @@ impl ClientSim {
             });
     }
 
-    pub fn to_wire(&self, p: &Protocol, client_num: i32, command_time: i32) -> msg::PlayerState {
+    /// The wire playerstate. Fields the two modes disagree about are measured
+    /// on both sides: the spectator's from the retail capture in
+    /// `crates/common/tests/fixtures/net/snapshots.bin`, whose zeros
+    /// `parses_captured_snapshot_run` pins, the player's from
+    /// `crates/server/tests/fixtures/playerstate/*.txt`, which the
+    /// `playerstate_ab` gate diffs against. `commandTime` mirrors the last
+    /// processed cmd's server time.
+    pub fn to_wire(&self, p: &Cod1Wire, client_num: i32, command_time: i32) -> msg::PlayerState {
         let player = self.pm_type == PmType::Normal;
         let mut w = msg::PlayerState::null(p);
         // A field the protocol lacks (UO dropped `gunfx`, 1.1 has no sprint
@@ -2836,10 +2838,10 @@ impl ClientSim {
             set("groundEntityNum", self.ps.ground_entity_num() as i32);
             // All three come out of one `ClientEndFrame` block a spectator
             // never reaches. Its guards are `sessionstate` playing,
-            // `ps.clientNum == self` and, for the hint, `health > 0`;
-            // nothing follows another client and nothing dies yet, so
-            // `Normal` is the whole of that condition today. The hint is the
-            // one that peels off first, at `health` 0.
+            // `ps.clientNum == self` and, for the hint, `health > 0`. This
+            // arm tests `Normal` alone, which a dead player still is; whether
+            // a follow or a death should peel any of the three off here is
+            // unchecked.
             let stance_pmflags = if self.ps.ducked { PMF_DUCKED } else { 0 }
                 | if self.ps.stance == pmove::Stance::Prone {
                     PMF_PRONE
@@ -3117,8 +3119,9 @@ impl ClientSim {
         w.set_health(self.health);
         w.set_max_health(self.max_health);
         w.arrays.stats[1] = self.dead_yaw;
-        // `stats[3]` is six raw bits, so "nobody" travels as 63; the compass
-        // has no teammate to name until `TeamplayInfoMessage` exists.
+        // `stats[3]` is six raw bits, so "nobody" travels as 63. vcod's CoD1
+        // runs no `TeamplayInfoMessage` (protocol-1.1.md, "Block 1"), so it
+        // always names nobody.
         w.arrays.stats[3] = NO_TEAMMATE;
         w.arrays.stats[5] = i32::from(self.spawn_count);
         match &self.residue {
@@ -3133,7 +3136,7 @@ impl Residue {
     /// `pm_type` and `speed` once a cmd has flown, its `pm_flags` less the
     /// follow and ADS bits (0x46bb1), and its `eFlags` with the mount bits
     /// cleared (0x46b8c) and the teleport bit the sim flips.
-    fn under(&self, own: msg::PlayerState, p: &Protocol) -> msg::PlayerState {
+    fn under(&self, own: msg::PlayerState, p: &Cod1Wire) -> msg::PlayerState {
         let idx = |name| msg::PlayerState::field_index(p, name).unwrap();
         let mut w = self.wire.clone();
         w.fields[idx("pm_flags")] &= !(crate::follow::PMF_FOLLOW | pmove::weapon::PMF_ADS);
@@ -3182,7 +3185,7 @@ mod tests {
     /// `gunfx`, and the lookup used to panic there.
     #[test]
     fn a_stopped_follow_rebuilds_on_every_protocol() {
-        for p in Protocol::ALL {
+        for p in Cod1Wire::ALL {
             let mut own = msg::PlayerState::null(p);
             let at = |name| msg::PlayerState::field_index(p, name).unwrap();
             own.fields[at("clientNum")] = 3;
@@ -3419,7 +3422,7 @@ mod tests {
     /// One frame of the anim machine with the state set by hand, for the
     /// clauses the retail capture cannot reach: it was taken with one rifle,
     /// never held two axes at once and never strafed crouched. Names rather
-    /// than indices -- `animtree.rs` is what pins the index order.
+    /// than indices: `animtree.rs` is what pins the index order.
     #[test]
     fn the_conditions_pick_the_clause_the_script_names() {
         let Some(fs) = vcod_common::testing::game_fs() else {
@@ -4010,9 +4013,9 @@ mod tests {
     }
 
     /// A spectator carries the captured spectator constants; a player does
-    /// not. The values `to_wire` used to pin unconditionally are the ones the
-    /// retail player capture disagrees with once the client is alive, which is
-    /// why they move behind the mode instead of staying literals.
+    /// not. The retail player capture disagrees with those values once the
+    /// client is alive, so `to_wire` takes them from the mode rather than
+    /// from literals.
     #[test]
     fn the_wire_constants_follow_the_mode() {
         let p = &PROTOCOL_V1;
@@ -4105,9 +4108,9 @@ mod tests {
     /// `SHORT2ANGLE(cmd.angles + delta_angles)` per axis, retail's
     /// `PM_UpdateViewAngles`.
     ///
-    /// The numbers here are this test's own -- `become_player` at 225 degrees
+    /// The numbers here are this test's own: `become_player` at 225 degrees
     /// puts 40960 in `delta_angles[1]`, and a cmd yaw of 0 makes the sum
-    /// -135.0 -- chosen so the two are not the same word and a write that
+    /// -135.0, chosen so the two are not the same word and a write that
     /// echoed the delta instead of summing would fail. The relation they
     /// check is the retail one, measured off the `--save-ads` capture taken
     /// on `mp_carentan` under `tdm` with `kar98k_sniper_mp`, which reads
@@ -4117,7 +4120,7 @@ mod tests {
     /// and docs/protocol-1.1.md, "View angles", carries the derivation.
     ///
     /// The relation holds in every other retail player capture too, including
-    /// the two whose `viewangles` reads 0 -- there the probe subtracts
+    /// the two whose `viewangles` reads 0: there the probe subtracts
     /// `delta_angles` when it builds each cmd, so the sum is zero and the
     /// field is not evidence of an unwritten one (`playerstate_ab.rs`,
     /// `check_spawn_shape`).
@@ -4141,8 +4144,8 @@ mod tests {
         assert_eq!(view(&ps, 2), 0.0);
 
         // Spawned facing 225 and turning 45 to the right: -135 + 45. The
-        // angles are the shorts that land on a whole degree -- 8192 is 45 and
-        // 4096 is 22.5 -- since ANGLE2SHORT truncates and a 60 would leave the
+        // angles are the shorts that land on a whole degree (8192 is 45 and
+        // 4096 is 22.5) since ANGLE2SHORT truncates and a 60 would leave the
         // assert chasing the rounding rather than the sum.
         sim.step(&cmd(0, 0, 8192), 0.05, None, &[]);
         assert_eq!(view(&sim.to_wire(p, 0, 0), 1), -90.0);
@@ -4313,6 +4316,22 @@ mod tests {
         let w = sim.to_wire(p, 0, 0);
         assert_eq!(w.field_i32(p, "damageYaw"), 128);
         assert_eq!(w.field_i32(p, "damagePitch"), 249);
+    }
+
+    /// `g_knockback` scales the push: 0 leaves the velocity alone, the
+    /// stock 1000 is the measured push, 2000 doubles it (BUG-143).
+    #[test]
+    fn g_knockback_scales_the_push() {
+        let push = |g: f32| {
+            let mut sim = target();
+            sim.knockback = g;
+            sim.take_damage(&hit_op(40, false), None, &mut 1, (1000, 1000));
+            sim.ps.velocity
+        };
+        assert_eq!(push(0.0), Vec3::ZERO);
+        let stock = push(1000.0);
+        assert_ne!(stock, Vec3::ZERO);
+        assert!((push(2000.0) - stock * 2.0).length() < 1e-3);
     }
 
     /// One surviving hit writes the four feedback fields, the pain event

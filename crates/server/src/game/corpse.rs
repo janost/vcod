@@ -9,7 +9,7 @@
 
 use glam::{DVec3, Vec3};
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 
 use super::bodies::{Body, Cod2Corpse};
 
@@ -95,7 +95,6 @@ pub fn lerp(from: Vec3, to: Vec3, fraction: f32) -> Vec3 {
 /// `max_velocity`, no ground, no death anim yet (CoD2 cod2-combat.md 6.2;
 /// 1.7's stores 0x80ad004..0x80ad082). VERIFIED. `maxs` is the box's top
 /// corner the clone sweeps.
-#[allow(clippy::too_many_arguments)]
 pub fn launch(
     body: &mut Body,
     origin: Vec3,
@@ -104,7 +103,7 @@ pub fn launch(
     max_velocity: f32,
     fall: i32,
     maxs: Vec3,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) {
     let capped = Vec3::new(
         velocity.x.min(max_velocity),
@@ -149,7 +148,7 @@ pub fn step(
     body: &mut Body,
     now_ms: i32,
     root: Vec3,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> Moved {
     let Some(mut corpse) = body.cod2 else {
         return Moved::Kept;
@@ -227,7 +226,7 @@ pub fn step(
 }
 
 /// The clone at rest at `at`: `rest`, no time, no velocity.
-fn settle(e: &mut EntityState, p: &Protocol, rest: i32, at: Vec3) {
+fn settle(e: &mut EntityState, p: &Cod1Wire, rest: i32, at: Vec3) {
     put(e, p, "pos.trType", rest);
     put(e, p, "pos.trTime", 0);
     put_vec(e, p, "pos.trBase", at);
@@ -245,24 +244,24 @@ fn facing(angles: Vec3) -> (DVec3, DVec3) {
 
 /// A field of the clone's entity by its netfield name, 0 where the
 /// protocol has none.
-pub fn field(e: &EntityState, p: &Protocol, name: &str) -> i32 {
+pub fn field(e: &EntityState, p: &Cod1Wire, name: &str) -> i32 {
     EntityState::field_index(p, name).map_or(0, |i| e.fields[i])
 }
 
-pub fn put(e: &mut EntityState, p: &Protocol, name: &str, v: i32) {
+pub fn put(e: &mut EntityState, p: &Cod1Wire, name: &str, v: i32) {
     if let Some(i) = EntityState::field_index(p, name) {
         e.fields[i] = v;
     }
 }
 
 /// A float vector field (`pos.trBase` and kin) by its `[0]`..`[2]` names.
-pub fn field_vec(e: &EntityState, p: &Protocol, name: &str) -> Vec3 {
+pub fn field_vec(e: &EntityState, p: &Cod1Wire, name: &str) -> Vec3 {
     Vec3::from_array(std::array::from_fn(|k| {
         f32::from_bits(field(e, p, &format!("{name}[{k}]")) as u32)
     }))
 }
 
-pub fn put_vec(e: &mut EntityState, p: &Protocol, name: &str, v: Vec3) {
+pub fn put_vec(e: &mut EntityState, p: &Cod1Wire, name: &str, v: Vec3) {
     for (k, x) in v.to_array().into_iter().enumerate() {
         put(e, p, &format!("{name}[{k}]"), x.to_bits() as i32);
     }

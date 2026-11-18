@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 /// checksum lists. `crates/server/tests/connect.rs` covers both.
 const STRUCTURAL_SKIP: &[usize] = &[0, 1];
 
-/// Slots stage 3 knowingly does not reproduce, each with the reason. Empty
+/// Slots vcod knowingly does not reproduce, each with the reason. Empty
 /// is the goal. A gap that starts matching fails the guard below, so this
 /// list cannot rot into a lie.
 const GAPS: &[(usize, &str)] = &[];
@@ -185,7 +185,7 @@ fn the_configstring_table_matches_retail_on_mp_carentan() {
 
 /// The other stock gametype the map-cycle gates run under, whose bootstrap
 /// precaches a different string set and only when `game["gamestarted"]` is
-/// unset (`tests/restart_carry.rs` is what checks the restart after it).
+/// unset (`roundrestart_ab.rs` checks the restart after it).
 #[test]
 fn the_configstring_table_matches_retail_on_mp_carentan_sd() {
     check("mp_carentan", "sd");

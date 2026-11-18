@@ -6,7 +6,7 @@
 use crate::game::host::{GameHost, LevelLatch};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("getcvar", get_cvar),
@@ -21,10 +21,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("map_restart", map_restart),
     ("setclientnamemode", set_client_name_mode),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// C `atoi` as the Linux servers read it (`strtol`).
 pub(crate) use vcod_common::text::atoi;
@@ -263,10 +259,10 @@ pub enum ClientNameMode {
 /// 0x58550), stores 0 or 1 in `level+0x210`, and raises `Scr_Error("Unknown
 /// mode")` on anything else.
 ///
-/// The store and the error are faithful; the two readers are not reachable
-/// yet. `ClientUserinfoChanged` (0x421eb) and the name-change path at
-/// 0x5ba99 are both client code, which arrives in a later stage, so
-/// `GameHost::client_name_mode` is recorded and nothing reads it.
+/// `GameHost::client_name_mode` holds it. Retail's readers are
+/// `ClientUserinfoChanged` (0x421eb) and the name-change path at 0x5ba99;
+/// vcod's one reader is CoD4's userinfo change (cod4-gsc.md 12), so on
+/// CoD1 and CoD2 the mode is stored and not read.
 pub fn set_client_name_mode(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -288,7 +284,7 @@ pub fn set_client_name_mode(
 }
 
 /// `exitLevel([savePersist])` (map-cycle doc, sections 1 and 2): the shared
-/// one-shot latch, then `ExitLevel` itself -- the queued `map_rotate`, both
+/// one-shot latch, then `ExitLevel` itself: the queued `map_rotate`, both
 /// team scores and every connected client's score back to 0, and the log
 /// line. Nothing else: no intermission state, no camera and no timer.
 pub fn exit_level(
@@ -301,7 +297,7 @@ pub fn exit_level(
     host.console.push("map_rotate".to_string());
     host.team_scores = [0, 0];
     host.zero_client_scores();
-    host.script_log.push("ExitLevel: executed".to_string());
+    host.keep_script_line("ExitLevel: executed".to_string());
     // CoD4's `ExitLevel` (0x80b4585) writes the same line to games_mp.log.
     crate::game::cod4::log_printf(host, "ExitLevel: executed\n".to_string());
     Ok(Value::Undefined)
@@ -405,7 +401,7 @@ mod tests {
 
     /// `ExitLevel`'s two passes and its log line (map-cycle doc, section 2):
     /// both team scores and every connected client's score back to 0, and
-    /// no scoreboard pushed for it -- the passes write the field rather
+    /// no scoreboard pushed for it: the passes write the field rather
     /// than calling the setter, so the ranks stay clean.
     #[test]
     fn exitlevel_zeroes_the_team_scores_and_every_client_score() {

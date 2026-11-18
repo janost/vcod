@@ -259,3 +259,28 @@ fn a_spectators_new_attachment_tag_takes_its_index() {
     assert_ne!(model, 0, "the bomb's model");
     assert_ne!(tag, 0, "tag_inhand took no index");
 }
+
+/// A restart into a gametype with no script tears the level down and fails:
+/// the fatal is kept for the loop, the cvar table (`+set`s, rcon's
+/// password) survives, and a good map loads over it.
+#[test]
+fn a_restart_into_a_missing_gametype_keeps_the_cvars_and_reports_fatal() {
+    let install = vcod_cod4::testing::cod4_install();
+    let Some((mut sv, mut now)) = level("mp_crash", "war", 100) else {
+        return;
+    };
+    sv.set_cvar("rcon_password", "hunter2");
+    sv.core.console.push_back("g_gametype bogus".into());
+    sv.core.console.push_back("map_restart".into());
+    run(&mut sv, &mut now, 100);
+    assert!(sv.game.level.is_none());
+    let fatal = <Cod4Game as crate::engine::GameModule>::take_fatal(&mut sv);
+    assert!(fatal.is_some(), "no fatal");
+    assert_eq!(sv.game.cvars().get("rcon_password"), "hunter2");
+    assert_eq!(sv.game.cvars().get("sv_pure"), "0");
+    sv.set_cvar("g_gametype", "war");
+    sv.core.console.push_back("map mp_crash".into());
+    run(&mut sv, &mut now, 100);
+    assert!(sv.game.level.is_some() && install.is_some());
+    assert_eq!(sv.game.cvars().get("rcon_password"), "hunter2");
+}

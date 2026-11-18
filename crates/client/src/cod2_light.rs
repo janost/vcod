@@ -1199,7 +1199,6 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
     /// texel would blend its neighbours across the seams), and the entity
     /// volume holding `blocks` from block 0 on; binding 7 the light grid
     /// weight cubes.
-    #[allow(clippy::too_many_arguments)]
     fn draw_harness_probes(
         device: &wgpu::Device,
         queue: &wgpu::Queue,

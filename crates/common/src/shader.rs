@@ -39,15 +39,15 @@ pub struct Shader {
     pub sunfile: Option<String>,
     /// The shader's `deformVertexes` records in script order, at most
     /// [`MAX_SHADER_DEFORMS`]; the runtime runs them one after another on
-    /// the same vertices (CoDMP.exe 0x5149b0; shader doc 8).
+    /// the same vertices (CoDMP.exe 0x5149b0; shader doc 8.1).
     pub deforms: Vec<Deform>,
     /// `deformVertexes autosprite` / `autosprite2`: camera-facing quads
-    /// (0x514080 / 0x514330; shader doc 8).
+    /// (0x514080 / 0x514330; shader doc 8.1).
     pub sprite: Option<Sprite>,
     pub surface: SurfaceBits,
     /// Set by the renderer on a static prop's batch: the model's left and
     /// up axes in the world, so `tcGen environment` reflects in the model's
-    /// frame on world-baked vertices (shader doc 8, "Static props").
+    /// frame on world-baked vertices (shader doc 8.2, "Static props").
     pub model_axes: Option<[[f32; 3]; 2]>,
 }
 
@@ -114,7 +114,7 @@ fn tokens(text: &str) -> impl Iterator<Item = &str> {
 ///
 /// Names are lowercased with `\` normalized to `/`; bodies are verbatim token
 /// slices of `text` with comments gone and braces flattened into the stream as
-/// standalone `{`/`}` tokens (same approach as `assets.rs`'s brace handling).
+/// standalone `{`/`}` tokens.
 /// Anonymous top-level blocks come out with an empty name; duplicate names are
 /// both returned (last-wins dedupe happens at map level). An unterminated
 /// block at EOF is dropped.
@@ -290,8 +290,8 @@ impl Shader {
     /// The polygon offset the shader draws at: its keyword's, else the
     /// single one for a shader sorted decal.
     pub fn depth_bias(&self) -> Option<PolygonOffset> {
-        // exact compare is sound: both sides come from the same 4.0 literal
-        // or its exact decimal parse
+        // exact compare is sound: `sort` holds `SORT_DECAL` (6.0) itself or
+        // the exact parse of a small integer
         self.polygon_offset
             .or((self.sort == Some(SORT_DECAL)).then_some(PolygonOffset::Single))
     }
@@ -306,8 +306,6 @@ impl Shader {
             }
             Some(_) => DrawClass::Blend,
         };
-        // exact compare is sound: both sides come from the same 4.0 literal
-        // or its exact decimal parse
         Some(ClassedStage {
             class,
             depth_write: st.writes_depth(),
@@ -397,7 +395,7 @@ pub fn default_material() -> Material {
 /// Retail's `<default>` shader (CoDMP.exe 0x4fd780): one opaque stage of
 /// `*default` that writes depth, its rgbGen left 0, which 0x4ffa60's default
 /// case fills with identityLight. `R_FindShader` returns it for a skin it
-/// cannot build (shader doc 8, "Model skin scripts").
+/// cannot build (shader doc 8.2, "Model skin scripts").
 pub fn default_shader() -> Shader {
     Shader {
         name: "<default>".to_string(),
@@ -1447,7 +1445,7 @@ fn top_token(
             usize::from(one_arg().is_some())
         }
         "deformvertexes" => {
-            // The 1.1 parser (CoDMP.exe 0x4f9d20, shader doc 8) accepts
+            // The 1.1 parser (CoDMP.exe 0x4f9d20, shader doc 8.1) accepts
             // projectionShadow, autosprite, autosprite2, text0-7, bulge,
             // wave, flap, normal, syncNormal and move, three records at
             // most. vcod draws all but projectionShadow, text0-7 and
@@ -1681,14 +1679,16 @@ pub fn parse_shader(name: &str, body: &[&str], warns: &mut WarnSet) -> Shader {
 // ---- library ----
 
 /// Every `.shader` script in the mod's paks, parsed and keyed by material
-/// name. Later archives win because `Pk3Fs` resolves each script path to its
-/// highest layer already, and a name repeated inside one script takes the
-/// last block, like RTCW's hash insert.
+/// name. `Pk3Fs` resolves each script path to its highest layer. Scripts
+/// load in lowercased path order and the last block under a name wins, in
+/// one script and across scripts: `scripts/zzz.shader` beats
+/// `scripts/common.shader`, any `scripts/` file beats `fxshaders/`. vcod's
+/// choice after RTCW's hash insert; retail's rule is unverified
+/// (cod11-shader-scripts.md has no section on it).
 pub struct ShaderLib {
     by_name: HashMap<String, Shader>,
     /// First texture path per material (lowercased, known image extension
-    /// stripped): what the implicit-material loader used to read off the
-    /// minimal parser in `assets.rs`.
+    /// stripped), for the implicit-material loader.
     images: HashMap<String, String>,
     /// Unique parse warnings fired during the scan.
     warns: usize,
@@ -1817,8 +1817,8 @@ impl ShaderLib {
     }
 }
 
-/// The first `map`/`clampmap` image of a raw block body, normalized the way
-/// the minimal parser stored them: lowercased, leading slash and known image
+/// The first `map`/`clampmap` image of a raw block body, normalized for the
+/// implicit-material loader: lowercased, leading slash and known image
 /// extension gone, `$lightmap`/`*white` skipped, the clamps and
 /// `heightToNormal` treated as modifiers before the path.
 fn body_image(body: &[&str]) -> Option<String> {

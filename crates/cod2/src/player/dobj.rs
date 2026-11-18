@@ -291,14 +291,6 @@ fn st<T: Ar>(x: T) -> f32 {
     x.st()
 }
 
-/// A model's quat shorts as `DObjCalcAnim` gives an unreached bone
-/// (0x80c3b90): each short times [`SCALE`], stored.
-pub fn base_quat(shorts: [i16; 4]) -> [f32; 4] {
-    // The product is exact in an `f64`: one rounding, as the store.
-    let q = |s: i16| (f64::from(s) * f64::from(SCALE)) as f32;
-    shorts.map(q)
-}
-
 /// A node of the anim tree as the walk meets it: a leaf's clip at its
 /// node time and weight, or a node's weight and children in index order.
 pub enum Tree<'a> {

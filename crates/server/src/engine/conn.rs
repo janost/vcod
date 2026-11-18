@@ -579,7 +579,10 @@ impl<G: ConnGame> Engine<G> {
     /// `CS_ZOMBIE` (cod2-protocol.md 1.5, cod4-handshake.md 14).
     pub(crate) fn svc_status(&mut self, challenge: &str) -> String {
         let mut info = self.core.configstrings[0].clone();
+        // `Info_SetValueForKey` drops a value's `\`, `;` and `"`, so a
+        // challenge cannot add keys (cod2-protocol.md 1.5).
         let mut add = |k: &str, v: String| {
+            let v = vcod_common::net::connectionless::info_value(v);
             if !v.is_empty() {
                 info.push_str(&format!("\\{k}\\{v}"));
             }

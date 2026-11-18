@@ -371,8 +371,7 @@ pub struct Cod2Bots {
 type HitFelt = (usize, i32, [f32; 3]);
 
 /// A smoke grenade on its way out: the throw's (pitch, yaw), the smoke
-/// weapon, whether the pullback has reached the hold, and the ticks
-/// since the ask.
+/// weapon and the ticks since the ask.
 #[derive(Clone, Copy, Debug)]
 pub struct SmokeThrow {
     aim: [f32; 2],
@@ -466,6 +465,7 @@ impl Cod2Bots {
             fresh.driver.creases = std::mem::take(&mut self.driver.creases);
             fresh.driver.sites = std::mem::take(&mut self.driver.sites);
             fresh.driver.radios = std::mem::take(&mut self.driver.radios);
+            fresh.driver.posts.carry_surveys(&mut self.driver.posts);
         }
         fresh.driver.bots = std::mem::take(&mut self.driver.bots);
         for bot in fresh.driver.bots.values_mut() {

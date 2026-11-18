@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use vcod_common::mapworld::Visibility;
 use vcod_common::net::msg::{self, hud_field};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 
 use crate::engine::archive::FrameRing;
 use crate::game::temp_entity::Scope;
@@ -53,7 +53,7 @@ impl WorldFrame {
         eye: [f32; 3],
         vis: Option<&Visibility>,
         shift: i32,
-        p: &Protocol,
+        p: &Cod1Wire,
     ) -> BTreeMap<u32, msg::EntityState> {
         let viewer = vis.map(|v| crate::world::Viewer::at(v, eye));
         if viewer.is_some_and(|v| v.sees_nothing()) {
@@ -225,7 +225,7 @@ fn share_unchanged(
 
 /// The entity times a replay shifts: `pos.trTime`, `apos.trTime`, `time` and
 /// `time2` (the four adds in 0x808f130's archive arm).
-fn entity_time_fields(p: &Protocol) -> Vec<usize> {
+fn entity_time_fields(p: &Cod1Wire) -> Vec<usize> {
     ["pos.trTime", "apos.trTime", "time", "time2"]
         .iter()
         .filter_map(|n| msg::EntityState::field_index(p, n))
@@ -261,7 +261,7 @@ fn shift_times(fields: &mut [i32], which: &[usize], shift: i32) {
 
 /// The playerstate a replay of `view` puts on the wire, `shift` ms after it
 /// was archived.
-pub fn replayed_ps(view: &ArchivedView, shift: i32, p: &Protocol) -> msg::PlayerState {
+pub fn replayed_ps(view: &ArchivedView, shift: i32, p: &Cod1Wire) -> msg::PlayerState {
     let mut ps = view.ps.clone();
     let which: Vec<usize> = PS_TIMES
         .iter()
@@ -282,7 +282,7 @@ mod tests {
     use super::*;
     use vcod_common::net::protocol::PROTOCOL_V1;
 
-    const P: &Protocol = &PROTOCOL_V1;
+    const P: &Cod1Wire = &PROTOCOL_V1;
 
     fn entity(n: u32, x: f32) -> Rc<msg::EntityState> {
         let mut e = msg::EntityState::null(P);

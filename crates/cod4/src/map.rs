@@ -194,8 +194,7 @@ pub struct ModelMesh {
     /// `lodInfo[i].dist` for each of the model's `numLods`, LOD 0 first:
     /// LOD `i` draws below its distance.
     pub lod_dists: Vec<f32>,
-    /// LODs 1 and on, in model space as `surfaces` is. Kept for static
-    /// models only; [`Map::add_model`] leaves it empty.
+    /// LODs 1 and on, in model space as `surfaces` is.
     pub coarser: Vec<Vec<ModelSurface>>,
 }
 
@@ -549,23 +548,6 @@ impl Map {
         }
     }
 
-    /// `x`'s first LOD in model space, its materials appended to
-    /// [`Map::materials`] (each name once): an entity's model, drawn where
-    /// its entity stands. `None` for a model with no geometry kept.
-    pub fn add_model(
-        &mut self,
-        a: &Assets,
-        x: &crate::assets::model::XModel,
-    ) -> Result<Option<ModelMesh>> {
-        let surfaces = model_surfaces(x, 0, &mut |id| self.add_material(a, id))?;
-        Ok((!surfaces.is_empty()).then(|| ModelMesh {
-            name: x.name.clone(),
-            surfaces,
-            lod_dists: lod_dists(x),
-            coarser: Vec::new(),
-        }))
-    }
-
     /// Zone material `id` in [`Map::materials`], appended once by name.
     pub fn add_material(
         &mut self,
@@ -889,9 +871,6 @@ fn render_world(a: &Assets, g: &GfxWorld) -> Result<Map> {
     })
 }
 
-/// An xmodel's first LOD's surfaces, each with its material added to the
-/// map's through `add`. A surface whose geometry the walk did not keep is
-/// left out.
 /// `x`'s `lodInfo[].dist`, its `numLods` of them.
 fn lod_dists(x: &crate::assets::model::XModel) -> Vec<f32> {
     x.lods
@@ -901,7 +880,9 @@ fn lod_dists(x: &crate::assets::model::XModel) -> Vec<f32> {
         .collect()
 }
 
-/// LOD `lod`'s surfaces of `x` in model space.
+/// LOD `lod`'s surfaces of `x` in model space, each with its material
+/// added to the map's through `add`. A surface whose geometry the walk did
+/// not keep is left out.
 fn model_surfaces(
     x: &crate::assets::model::XModel,
     lod: usize,

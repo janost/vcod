@@ -957,7 +957,6 @@ fn set_stance(ps: &mut PlayerState, stance: Stance) {
 /// stance needs, the eye's target, its lerp, then the box, `eFlags` and
 /// `pm_flags` off the stance the eye reached.
 pub(crate) fn check_duck(pm: &mut Pmove, pml: &mut Pml) {
-    pm.prone_change = false;
     let mask = pm.tracemask & !super::CONTENTS_BODY;
     if pm.ps.pm_type == pm_type::SPECTATOR {
         pm.mins = Vec3::splat(-8.0);
@@ -1106,12 +1105,9 @@ fn pick_eye_target(pm: &mut Pmove) {
     } else {
         VIEW_STAND
     };
-    if (now == VIEW_PRONE) != (next == VIEW_PRONE) {
-        pm.prone_change = true;
-        if next == VIEW_PRONE && ps.pm_time == 0 {
-            ps.pm_flags |= pmf::JUMPING;
-            ps.pm_time = 1800;
-        }
+    if now != VIEW_PRONE && next == VIEW_PRONE && ps.pm_time == 0 {
+        ps.pm_flags |= pmf::JUMPING;
+        ps.pm_time = 1800;
     }
     ps.view_height_target = next;
 }

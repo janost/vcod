@@ -42,7 +42,7 @@ pub struct GEntity {
     pub engine: Vec<Value>,
     /// A client entity's `gclient_t` fields, indexed by raw `CLIENT_FIELDS`
     /// position (`Route::Client`), a separate store from `engine` because
-    /// retail's `gclient_s *client` is a separate struct from `gentity_t` —
+    /// retail's `gclient_s *client` is a separate struct from `gentity_t`:
     /// sharing one array between the two field tables' index spaces would
     /// alias unrelated fields together. `Some` only for an entity
     /// `spawn_client` made; `None` for every map entity and HUD element,
@@ -292,7 +292,7 @@ impl HudState {
 /// What an entity's `think` runs when `nextthink` comes due. A Rust enum
 /// rather than a script reference: retail's `think` is a C function pointer
 /// (`G_FreeEntity` for a deleted entity) and script-side timing goes through
-/// `thread`/`wait`. Stage 4's movers and doors add variants.
+/// `thread`/`wait`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ThinkFn {
     Free,
@@ -345,8 +345,8 @@ pub const CONCUSSIVE_THINK_MS: i32 = 100;
 pub struct ObjectTable {
     ents: Vec<Option<GEntity>>,
     /// The HUD element range, `EntId(FIRST_HUD_ELEM..)`. A separate vector
-    /// rather than a longer `ents`, so `iter_inuse` — and through it
-    /// `getEntArray` — cannot see a HUD element. A HUD element reuses
+    /// rather than a longer `ents`, so `iter_inuse` (and through it
+    /// `getEntArray`) cannot see a HUD element. A HUD element reuses
     /// `GEntity` for the two stores it does need (engine slots, keyed by
     /// `fields::route_hud`, and its own script struct); the gentity-only
     /// `solid`, `hidden` and `attachments` go unused.
@@ -845,7 +845,7 @@ impl ObjectTable {
 
     /// Every due think at once, by entity number: [`ObjectTable::run_think`]
     /// over the table. The server runs each entity's on its own turn in the
-    /// entity pass; this is for callers with no pass to run.
+    /// entity pass; only tests, which run no pass, call this.
     #[must_use]
     pub fn run_thinks(&mut self, now_ms: i32) -> Vec<(EntId, ThinkFn)> {
         let ids: Vec<EntId> = self.iter_inuse().map(|(id, _)| id).collect();
@@ -951,7 +951,6 @@ impl ObjectTable {
         self.get(id).map(|_| id)
     }
 
-    /// Whatever holds entity number `n` now.
     /// [`Self::get_mut`] for a write to what no reader of [`Self::edits`]
     /// reads (the client fields, the script struct, `apos_base`, the
     /// attachments, the loop sound and events): the count stays. A caller writes nothing else through
@@ -983,6 +982,7 @@ impl ObjectTable {
         self.slot_edits.get(slot).copied().unwrap_or(0)
     }
 
+    /// Whatever holds entity number `n` now.
     pub fn by_number_mut(&mut self, n: u32) -> Option<&mut GEntity> {
         let id = self.handle(n)?;
         self.get_mut(id)

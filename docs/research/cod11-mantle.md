@@ -1100,6 +1100,16 @@ Still apart, not modelled:
   stops at 84000 for that reason;
 - `pm_flags` 0x400.
 
+VERIFIED, vcod measurement (`playerstate_slope_ab.rs`, `PRONE`), the gate's
+earlier readings: on 2026-09-27 origin |dz| at most 0.173 and dxy at most
+0.52, both prone pitches 1.42 degrees off, before the dive, the landing damp,
+the body swing, the pitch cap, the fit trace at 24 and the eye's legs
+("Prone: the fit check, the body swing and the yaw cap", "The eye through a
+stance change"); on 2026-10-09 the body's bend up to 8 units and 19.3
+degrees off, before `BG_CheckProneValid`'s ground samples; and the street's
+rebased run at dxy max 0.71 until vcod carried its weapon state across the
+rebase.
+
 ### Why it matters to a server
 
 All three are `bg_`/`PM_` code, so a retail client predicts them. A server
@@ -2329,6 +2339,12 @@ The friction's own floor stays the flat 100 of 0x2e500 (`PM_STOPSPEED`),
 not scaled by stance: without the accel floor a crawl's 4.33 gain per frame
 would lose to that friction's 4.40.
 
+VERIFIED, vcod measurement 2026-09-23 (`playerstate_slope_ab.rs`, rebased),
+before the velocity snap of "The tail of the default arm" and this floor:
+origin |dz| at most 0.125 and dxy at most 4.5, with up to 12 rows past a
+unit. With both in, the walks land on retail's origin to the bit on every
+snapshot of the 8 ms and 25 ms captures (2026-11-13).
+
 ### The ground clip keeps the speed
 
 VERIFIED, in `PM_WalkMove` past the accelerate: 0x2f5b8-0x2f5d9 store the
@@ -2588,37 +2604,42 @@ vcod: `pmove.rs` has no swim and no water jump, and `air_move` runs
 | 0x02 | CROUCH | 0x34590 pattern |
 | 0x04 | the prone dive, set by a prone press on a moving player; read by viewheight-lerp timing | 0x31CD5, 0x345C9 ("Going prone") |
 | 0x10 | LADDER | set at 0x33937, cleared at 0x3377C/0x2ED7A |
-| 0x80 | affects ladder-anim speed-scale choice | 0x323D7 |
+| 0x80 | the ADS walk ("The wish speed"); also picks the ladder anim's speed scale | set @0x336DD, clear @0x3369D, read at 0x323D7 |
 | 0x08 | held-jump latch: set by a jump, cleared when `upmove` <= 9 | set @0x2EC36, clear @0x34135, tested at 0x2EC0D ("Jumps") |
 | 0x20 | ADS held (blocks the prone dive); set/cleared by PM_UpdateAimDownSightFlag | set @0x372A4/0x372B7, clear @0x3ABDC, tested at 0x31CCB |
 | 0x800 | Q3's `PMF_RESPAWNED`: set at spawn, cleared once attack is up; refuses a jump | set @0x429D6, clear @0x34000, tested at 0x2EBBE |
 | 0x2000 | 200 ms landing lockout after a jump; refuses a jump, never arms ("Jumps") | set @0x2FFE0, tested at 0x2EBC3 |
+| 0x100 | quarters the walk's accel ("The walk's accel floor") | tested at 0x2F4D8 |
+| 0x200 | the walk's accel takes 1.0 ("The walk's accel floor") | tested at 0x2F492..0x2F4A8 |
+| 0x4000 | zeroes the cmd's moves and buttons ("`pm_flags` 0x4000") | tested at 0x33E38 |
+| 0x8000 | prone blocked ("Prone Blocked, `pm_flags` 0x8000") | set at 0x331C4 |
 
 (`PMF_PRONE`, `PMF_CROUCH`, `PMF_LADDER`, `PMF_SLIDING=0x100` agree with
 CoDExtended's `shared.h`; bits 0x04/0x08/0x80/0x800/0x2000 are INFERRED from
-usage sites only.)
+usage sites only. The 0x100, 0x200, 0x4000 and 0x8000 rows restate the
+sections they name, under those sections' labels.)
 
-## Tunables (all read directly from rodata, VERIFIED values)
+## Tunables
 
-| symbol | address | value |
-|---|---|---|
-| pm_stopspeed | 0x70824 | 100.0 |
-| walk accel floor | 0x70908 | 100.0 |
-| pm_ladderScale | 0x70828 | 0.5 |
-| pm_ladderPushOff | 0x7082C | 128.0 |
-| pm_ladderJumpTime | 0x70830 | 300 (ms, int) |
-| pm_waterSwimScale | 0x70834 | 0.5 |
-| pm_waterWadeScale | 0x70838 | 0.7 |
-| pm_prone_accelerate | 0x7083C | 19.0 |
-| pm_ducked_accelerate | 0x70840 | 12.0 |
-| pm_accelerate | 0x70844 | 9.0 |
-| pm_airaccelerate | 0x70848 | 1.0 |
-| pm_wateraccelerate | 0x7084C | 4.0 |
-| pm_flyaccelerate | 0x70850 | 8.0 |
-| pm_friction | 0x70854 | 5.5 |
-| pm_waterfriction | 0x70858 | 1.0 |
-| pm_ladderfriction | 0x7085C | 16.0 |
-| pm_spectatorfriction | 0x70860 | 5.0 |
+| symbol | address | value | label |
+|---|---|---|---|
+| pm_stopspeed | 0x70824 | 100.0 | VERIFIED (rodata) |
+| walk accel floor | 0x70908 | 100.0 | VERIFIED (rodata) |
+| pm_ladderScale | 0x70828 | 0.5 | VERIFIED (rodata) |
+| pm_ladderPushOff | 0x7082C | 128.0 | VERIFIED (rodata) |
+| pm_ladderJumpTime | 0x70830 | 300 (ms, int) | VERIFIED (rodata) |
+| pm_waterSwimScale | 0x70834 | 0.5 | VERIFIED (rodata) |
+| pm_waterWadeScale | 0x70838 | 0.7 | VERIFIED (rodata) |
+| pm_prone_accelerate | 0x7083C | 19.0 | VERIFIED (rodata) |
+| pm_ducked_accelerate | 0x70840 | 12.0 | VERIFIED (rodata) |
+| pm_accelerate | 0x70844 | 9.0 | VERIFIED (rodata) |
+| pm_airaccelerate | 0x70848 | 1.0 | VERIFIED (rodata) |
+| pm_wateraccelerate | 0x7084C | 4.0 | VERIFIED (rodata) |
+| pm_flyaccelerate | 0x70850 | 8.0 | VERIFIED (rodata) |
+| pm_friction | 0x70854 | 5.5 | VERIFIED (rodata) |
+| pm_waterfriction | 0x70858 | 1.0 | VERIFIED (rodata) |
+| pm_ladderfriction | 0x7085C | 16.0 | VERIFIED (rodata) |
+| pm_spectatorfriction | 0x70860 | 5.0 | VERIFIED (rodata) |
 
 Other constants seen in the move paths: 0.25 down-trace, MIN_WALK_NORMAL 0.7,
 impact threshold 10, viewheight lerp 180 deg/s-ish factors, spectator bbox

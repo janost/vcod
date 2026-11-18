@@ -23,7 +23,7 @@ use super::{Cx, ErrorKind, Host, QueuedSpawn, ScriptError, Target, Vm};
 
 /// Interpreter-internal: not part of the public API, since nothing outside
 /// this crate drives `step_frames` directly, and doing so needs the
-/// non-empty-`frames` precondition its doc comment states -- one an
+/// non-empty-`frames` precondition its doc comment states, one an
 /// embedder has no way to satisfy correctly from outside the scheduler.
 #[derive(Debug)]
 pub(crate) struct Frame {
@@ -34,7 +34,7 @@ pub(crate) struct Frame {
     /// that produces a `Frame` goes through `make_frame`, which sets this;
     /// a suspended frame just carries it along in `Thread::frames` across
     /// the wait, unchanged, rather than being rebuilt on resume. `func`
-    /// stays alongside it, unresolved, for error attribution -- a
+    /// stays alongside it, unresolved, for error attribution: a
     /// `ScriptError` names the file/function by `Atom`, not by the `Rc`.
     pub func_rc: Rc<Function>,
     pub ip: u32,
@@ -49,8 +49,8 @@ pub(crate) struct Frame {
     /// currently running on top of it returns, per `stack_effect`'s
     /// declared `(pop, push)` for that `Call`/`CallPtr`. Lives on the frame,
     /// not a local in `step_frames`, because a call can suspend (`wait`)
-    /// several layers deep and resume in a later `step_frames` invocation —
-    /// this has to survive that.
+    /// several layers deep and resume in a later `step_frames` invocation.
+    /// This has to survive that.
     #[cfg(test)]
     stack_effect_check: Option<i32>,
 }
@@ -433,9 +433,8 @@ fn not_of(v: Value, interner: &Interner) -> Result<bool, ErrorKind> {
 /// otherwise the cast fails (`# probe_cast_string`,
 /// tests/fixtures/semantics/retail-captures.txt).
 fn string_int(text: &str) -> Option<i32> {
-    let (len, neg) = numeric_prefix(text, false);
-    let digits = text[..len].trim_start_matches(|c: char| c.is_ascii_whitespace());
-    let digits = digits.trim_start_matches(['+', '-']);
+    let (start, len, neg) = numeric_prefix(text, false);
+    let digits = text[start..len].trim_start_matches(['+', '-']);
     // strtol saturates at a 32-bit long.
     let n = digits.bytes().fold(0i64, |n, d| {
         (n * 10 + i64::from(d - b'0')).min(i64::from(i32::MAX) + 1)
@@ -447,14 +446,15 @@ fn string_int(text: &str) -> Option<i32> {
 
 /// [`string_int`]'s `strtod` arm.
 fn string_float(text: &str) -> Option<f32> {
-    let (len, _) = numeric_prefix(text, true);
-    let f = text[..len].trim_start().parse::<f64>().unwrap_or(0.0) as f32;
+    let (start, len, _) = numeric_prefix(text, true);
+    let f = text[start..len].parse::<f64>().unwrap_or(0.0) as f32;
     (f != 0.0 || zero_spelled(text)).then_some(f)
 }
 
-/// The byte length of `text`'s blanks plus its longest decimal number (an
-/// integer, or with `float` a fraction and an exponent too), and its sign.
-fn numeric_prefix(text: &str, float: bool) -> (usize, bool) {
+/// Where `text`'s longest decimal number (an integer, or with `float` a
+/// fraction and an exponent too) starts past the `isspace` blanks and
+/// ends, and its sign; an empty run when there is none.
+fn numeric_prefix(text: &str, float: bool) -> (usize, usize, bool) {
     let b = text.as_bytes();
     let mut i = 0;
     while i < b.len() && (b[i] == b' ' || (b'\t'..=b'\r').contains(&b[i])) {
@@ -491,7 +491,11 @@ fn numeric_prefix(text: &str, float: bool) -> (usize, bool) {
             }
         }
     }
-    if any { (i, neg) } else { (start, false) }
+    if any {
+        (start, i, neg)
+    } else {
+        (start, start, false)
+    }
 }
 
 /// The engine's test that a cast's 0 was meant: the first character past
@@ -511,7 +515,7 @@ pub(crate) const DEAD_ENTITY: ErrorKind = ErrorKind::BadType("dead entity is not
 /// A call's receiver reads as a `Target` when it is an entity or a heap
 /// struct (`level` is one, and a common receiver in the corpus); `game` is
 /// array-typed, not a struct, so it falls through to `None` here like any
-/// other non-entity, non-struct value -- no corpus script uses `game` as a
+/// other non-entity, non-struct value: no corpus script uses `game` as a
 /// receiver, which is what makes that safe. `undefined` and any other
 /// value leave the callee's `self` unbound rather than erroring.
 fn as_target(v: Value) -> Option<Target> {
@@ -609,7 +613,7 @@ impl Vm {
     /// apply once this call returns. `errors` collects any `ScriptError` raised by a
     /// thread that a threaded call spawns and immediately runs during this
     /// call (`spawn` recurses into `step_thread`, which recurses back into
-    /// this function on the new thread's own frames) -- a nested spawn's
+    /// this function on the new thread's own frames): a nested spawn's
     /// failure does not abort this thread's own execution, only its own.
     pub(crate) fn step_frames(
         &mut self,
@@ -736,7 +740,7 @@ impl Vm {
     /// and the budget live in locals here and go back to `fr` and
     /// `remaining` on the way out. `depth` is the frame stack's depth with
     /// `fr` on top.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn run_ops(
         &mut self,
         host: &mut dyn Host,
@@ -2061,7 +2065,7 @@ impl Vm {
     /// [`Vm::spawn`] from a thread call in a step with `left` instructions
     /// and `depth` frames: the new thread runs on what the step has left and
     /// on top of its frames. The instructions it spent.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn spawn_nested(
         &mut self,
         host: &mut dyn Host,
@@ -2085,7 +2089,6 @@ impl Vm {
     /// does, before the calling thread's next op; whether any ran. `func`
     /// and `at` name the call, for an unknown function's error.
     #[inline(never)]
-    #[allow(clippy::too_many_arguments)]
     fn run_builtin_spawns(
         &mut self,
         host: &mut dyn Host,

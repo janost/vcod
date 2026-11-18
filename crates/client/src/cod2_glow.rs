@@ -259,6 +259,38 @@ pub fn blur_plan(radius: f32, width: u32, height: u32) -> Option<BlurPlan> {
 /// The frame's glow for a `width`-wide view (`RB_ApplyLatePostEffectsCmd`
 /// and `RB_GlowFilterImage`): `None` when no level glows. `sky` is whether
 /// the level has a sky, without which no sky bleed counts.
+/// A glow step's texture: the scene or one of the quarter targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Target {
+    Scene,
+    T9,
+    T11,
+    T12,
+}
+
+/// The glow chains' `(src, dst)` per step, `totals` passes each, from the
+/// scene: each chain ping-pongs 11 and 12 and ends in 9 (cod2-materials.md
+/// 9.9); a step never writes the target it reads, so a one-pass chain that
+/// starts from 9 ends in 11. Also the target the last chain ended in, which
+/// the applies read.
+fn glow_route(totals: &[usize]) -> (Vec<(Target, Target)>, Target) {
+    let mut src = Target::Scene;
+    let mut out = Vec::new();
+    for &n in totals {
+        for i in 0..n {
+            let dst = match (i + 1 == n, src) {
+                (true, Target::T9) => Target::T11,
+                (true, _) => Target::T9,
+                (false, Target::T11) => Target::T12,
+                (false, _) => Target::T11,
+            };
+            out.push((src, dst));
+            src = dst;
+        }
+    }
+    (out, src)
+}
+
 pub fn plan(s: &GlowSettings, width: u32, height: u32, sky: bool) -> Option<Plan> {
     let mut r: [f32; 2] = std::array::from_fn(|i| {
         if s.bloom[i] > 0.0 || (sky && s.sky_bleed[i] > 0.0) {
@@ -559,7 +591,7 @@ impl Cod2Glow {
     /// adding into the scene); then the blur drawn over the scene. `sky` is
     /// the level's sky cube, sampled along each pixel's view ray through
     /// `inv_view_proj` from `eye`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn encode(
         &mut self,
         device: &wgpu::Device,
@@ -630,9 +662,19 @@ impl Cod2Glow {
             }
         }
         if let Some(plan) = glow {
+            let view = |t: Target| match t {
+                Target::Scene => scene,
+                Target::T9 => t9,
+                Target::T11 => t11,
+                Target::T12 => t12,
+            };
+            let totals: Vec<usize> = (plan.chains.iter().enumerate())
+                .map(|(c, passes)| passes.len() + usize::from(c == 0))
+                .collect();
+            let (route, ended) = glow_route(&totals);
+            let mut route = route.into_iter();
             // the setup is the first chain's first pass
             // (`RB_ApplyGlowFilter` from the resolved scene)
-            let mut src = scene;
             for (c, passes) in plan.chains.iter().enumerate() {
                 let setup = (c == 0).then_some((
                     if plan.film.is_some() {
@@ -646,20 +688,18 @@ impl Cod2Glow {
                         ..blank
                     },
                 ));
-                let total = passes.len() + usize::from(c == 0);
                 let all = setup
                     .into_iter()
                     .chain(passes.iter().map(|p| (&self.filter, filter(p))));
-                for (i, (pipeline, params)) in all.enumerate() {
-                    let dst = pong(i, total, t9);
+                for (pipeline, params) in all {
+                    let (src, dst) = route.next().expect("a route step per pass");
                     steps.push(Step {
                         pipeline,
-                        src,
-                        dst,
+                        src: view(src),
+                        dst: view(dst),
                         load: false,
                         params,
                     });
-                    src = dst;
                 }
             }
             for a in &plan.applies {
@@ -670,7 +710,7 @@ impl Cod2Glow {
                 };
                 steps.push(Step {
                     pipeline,
-                    src: t9,
+                    src: view(ended),
                     dst: scene,
                     load: true,
                     params: Params {

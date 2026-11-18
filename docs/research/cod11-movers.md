@@ -140,7 +140,7 @@ per-frame origins. A two-second move is two snapshot updates, one at each end.
 |---|---|---|---|
 | `moveto`/`movex`/`movey`/`movez`, no ramps | `pos` | `trType` 3 (`TR_LINEAR_STOP`), `trTime` = call time, `trDuration` = ms, `trBase` = start, `trDelta` = velocity u/s | `trType` 0, `trBase` = end, `trTime` = completion time; `trDelta`, `trDuration` stale |
 | the same with ramps | `pos` | one trajectory per segment: `trType` 9 (`TR_ACCELERATE`) for `ta` ms, 3 for the cruise, 10 (`TR_DECCELERATE`) for `td` ms; each with `trDelta` = cruise `v` and `trBase` at its own start | `trType` 0 at the end origin |
-| `movegravity` | `pos` | `trType` 5 (`TR_GRAVITY`), `trDuration` = ms, `trDelta` = initial velocity | not observed (probe deleted the entity first) |
+| `movegravity` | `pos` | `trType` 5 (`TR_GRAVITY`), `trDuration` = ms, `trDelta` = initial velocity | stationary where it fell to (section 5) |
 | `rotateto`/`rotatepitch`/`rotateyaw`/`rotateroll`/`rotatevelocity` | `apos` | `trType` 3, `trDelta` = deg/s | `trType` 0, `trBase` = angle reached, unnormalized: a full turn read `(0, 360, 0)` |
 
 Measured: `movez(96, 2, 0.5, 0.5)` from `z = 592` sent
@@ -3367,6 +3367,16 @@ INFERRED: the one row is the stored `dt` and stored `base + delta * dt` of
 `G_MoverTeam`; with 1.1d's `evaluate_kept` ours reads 1.1d's value there.
 `ride_ab.rs`'s `mover_script_reads_match_retail_on_1_5` and `_on_uo` replay
 both, every line exact.
+
+**A script write over a settled plan.** `Scr_SetOrigin` runs `G_SetOrigin`,
+which writes `pos.trBase` and zeroes `trType`, `trTime`, `trDuration` and
+`trDelta` (combat doc, the `G_SetOrigin` 0x67D38 note). INFERRED, that a
+write after the move's `movedone` leaves the mover standing at the written
+point. vcod: `Movers::set_origin` and `set_angles` put a settled group's plan
+stationary at the write, its clip pose with it. A write during a move is
+not measured: retail's `Reached_ScriptMover` still runs at the segment's
+end, and what it does over a stationary `trType` needs a probe; vcod leaves
+the running plan alone there.
 
 ## 24. Segments to the last bit
 

@@ -142,3 +142,23 @@ impl Renderer {
         Some((r, errors))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A new material lib drops the mark shaders the old one resolved, so
+    /// a decal an earlier level missed resolves on the next (BUG-124).
+    /// Skips without an adapter.
+    #[test]
+    fn a_new_material_lib_drops_the_mark_shaders() {
+        let fs = vcod_common::pk3::Pk3Fs::empty();
+        let Some((mut r, _)) = Renderer::headless_sized(&fs, false, 1, (64, 64)) else {
+            return;
+        };
+        r.prewarm_marks(&fs, ["gfx/impact/bullethit_dirt"]);
+        assert_eq!(r.mark_shaders(), 1);
+        r.set_material_lib(vcod_common::material::MaterialLib::default());
+        assert_eq!(r.mark_shaders(), 0);
+    }
+}

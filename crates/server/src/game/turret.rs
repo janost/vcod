@@ -8,7 +8,13 @@
 use crate::spectate::ClientSim;
 use glam::Vec3;
 use vcod_common::fguard;
-use vcod_common::net::protocol::{CsLayout, PROTOCOL_V1, Protocol};
+// The stance events: `cod11-events-and-fx.md`. ENTITYNUM_NONE is
+// `viewlocked_entNum` after a release (turrets doc 12.7).
+use vcod_common::net::event_ids::{
+    EV_STANCE_FORCE_CROUCH, EV_STANCE_FORCE_PRONE, EV_STANCE_FORCE_STAND,
+};
+use vcod_common::net::protocol::ENTITYNUM_NONE;
+use vcod_common::net::protocol::{Cod1Wire, CsLayout, PROTOCOL_V1};
 use vcod_common::pmove::Stance;
 use vcod_common::pmove::aim::{angle_normalize_180, angle_subtract};
 use vcod_gsc::EntId;
@@ -241,7 +247,7 @@ impl TurretRecord {
     /// `origin2[0..3]`: the pitch and yaw highs, then the lows, which their
     /// cgame holds the gunner's view inside (turrets doc 14.3). `None` on
     /// 1.1, which sends none, and before the first aim.
-    pub fn wire_arcs(&self, p: &Protocol) -> Option<[f32; 4]> {
+    pub fn wire_arcs(&self, p: &Cod1Wire) -> Option<[f32; 4]> {
         (self.aimed && !p.is_v1()).then_some([
             self.pitch_range[1],
             self.yaw_range[1],
@@ -316,7 +322,7 @@ pub fn mount(
 /// `r.currentAngles`) at the clamped view at once. `turret_use` writes
 /// through `other->client`, so a user that is no player segfaults all
 /// three retail servers; vcod notifies alone there (cod11-combat.md 5.9,
-/// "useBy on a turret"). Returns false for anything not a turret.
+/// "`useBy` on a gun, a sine mover and a `misc_spawner`"). Returns false for anything not a turret.
 pub fn use_by(
     host: &mut crate::game::host::GameHost,
     cx: &mut vcod_gsc::Cx,
@@ -406,7 +412,7 @@ pub enum AimRule {
 }
 
 impl AimRule {
-    pub fn of(p: &Protocol) -> Self {
+    pub fn of(p: &Cod1Wire) -> Self {
         match p.transport.version {
             v if v == PROTOCOL_V1.transport.version => AimRule::V1,
             v if v == vcod_common::net::protocol::PROTOCOL_V22.transport.version => AimRule::Uo,
@@ -619,13 +625,6 @@ pub fn lift_onto_floor(
     }
     at
 }
-
-use vcod_common::net::event_ids::EV_STANCE_FORCE_CROUCH;
-use vcod_common::net::event_ids::EV_STANCE_FORCE_PRONE;
-/// `EV_STANCE_FORCE_STAND`/`_CROUCH`/`_PRONE` (`cod11-events-and-fx.md`).
-use vcod_common::net::event_ids::EV_STANCE_FORCE_STAND;
-/// `viewlocked_entNum` after a release (turrets doc 12.7).
-use vcod_common::net::protocol::ENTITYNUM_NONE;
 
 /// The record half of `G_ClientStopUsingTurret` (0x53054, turrets doc 8):
 /// the gun is free and its loop timer spent. Returns the gunner's slot and

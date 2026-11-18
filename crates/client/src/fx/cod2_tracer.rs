@@ -199,7 +199,7 @@ impl Tracer {
     }
 }
 
-/// `FX_Beam_GenerateVerts` (iw3mp.exe 0x492xxx) for one beam from `begin`
+/// `FX_Beam_GenerateVerts` (iw3mp.exe 0x492ab0) for one beam from `begin`
 /// to `end` with radii `radius` at its ends: `flat`, the beam's direction
 /// on screen taken back into the world (`FX_GenerateBeam_GetFlatDelta`: the
 /// ends' clip positions past the near plane, divided,

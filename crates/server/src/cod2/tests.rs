@@ -164,6 +164,25 @@ fn a_cod2_spectator_joins_a_bare_server_and_takes_delta_snapshots() {
     assert_eq!(sv.client_count(), 0);
 }
 
+/// The status reply's challenge goes in as `Info_SetValueForKey` stores a
+/// value, its `\`, `;` and `"` dropped: a challenge cannot add keys
+/// (cod2-protocol.md 1.5; BUG-103).
+#[test]
+fn a_cod2_status_challenge_cannot_add_keys() {
+    let now = Instant::now();
+    let mut sv = Cod2Server::new(cfg("mp_toujane"), 7, now);
+    sv.load(None).unwrap();
+    let Reply::Status { info, .. } = ask(&mut sv, &oob::getstatus("x\\sv_hostname\\Fake"), now)
+    else {
+        panic!("no statusResponse");
+    };
+    assert!(
+        info.contains("\\challenge\\xsv_hostnameFake\\pswrd\\0"),
+        "{info}"
+    );
+    assert!(!info.contains("\\sv_hostname\\Fake"), "{info}");
+}
+
 /// A `clc_move` of one idle cmd under the header's `message_ack` and
 /// `reliable_ack`, keyed as the client keys it.
 fn move_packet(cl: &mut Client, sv: &Cod2Server, message_ack: i32, reliable_ack: i32) -> Vec<u8> {
@@ -231,6 +250,28 @@ fn a_cod2_message_with_an_acknowledge_near_i32_min_is_ignored() {
     let pkt = move_packet(&mut cl, &sv, good_ack, rel_ack);
     sv.handle_packet(addr(), &pkt, later);
     assert_eq!(sv.core.clients[0].as_ref().unwrap().delta_message, good_ack);
+}
+
+/// `SV_ClientThink` (0x8090dac) runs `ClientThink` only for an active
+/// client: a move from a client sent back to connected (a map change's
+/// state) is stored and not thought (cod2-protocol.md 14.1; BUG-110).
+#[test]
+fn a_cod2_move_from_a_client_not_active_is_not_thought() {
+    let now = Instant::now();
+    let mut sv = Cod2Server::new(cfg("mp_toujane"), 7, now);
+    sv.load(None).unwrap();
+    let mut cl = connect(&mut sv, now);
+    run(&mut sv, &mut cl, None, 2);
+    let good_ack = cl.netchan.incoming_sequence as i32;
+    let rel_ack = cl.parser.server_command_sequence;
+    let thought = |sv: &Cod2Server| sv.core.clients[0].as_ref().unwrap().extra.ps.command_time;
+    sv.core.clients[0].as_mut().unwrap().state = State::Connected;
+    let before = thought(&sv);
+    let pkt = move_packet(&mut cl, &sv, good_ack, rel_ack);
+    sv.handle_packet(addr(), &pkt, Instant::now() + Duration::from_secs(1));
+    let c = sv.core.clients[0].as_ref().unwrap();
+    assert_eq!(c.delta_message, good_ack, "the move was read");
+    assert_eq!(thought(&sv), before);
 }
 
 /// A message that does not read to its end (a move of no cmds), and one

@@ -1,11 +1,13 @@
-//! Weapon state machine: picks the viewmodel clip (idle, fire, rechamber,
-//! reload, ADS) from LMB/RMB/R input and weapon-file times. Pure logic.
+//! The shared weapon definition ([`WeaponDef`], with its
+//! [`AimDef`], view anims and sounds), and the viewer's weapon state
+//! machine ([`WeaponState`]), which picks the viewmodel clip (idle, fire,
+//! rechamber, reload, ADS) from LMB/RMB/R input and weapon-file times.
 //!
-//! Checked against the first six WALK_LOADOUT files. Not modelled here: segmented
-//! reloads, altWeapon. The sway, idle and kick keys are parsed into
-//! `AimDef` for the server's aim block (`crate::pmove::aim`); this file's
-//! own viewmodel machine still ignores them. `adsBobFactor` scales the walk
-//! bob on the gun down the sight (combat doc, 15.2).
+//! The state machine was checked against the first six WALK_LOADOUT files.
+//! It does not model segmented reloads or altWeapon and ignores the sway,
+//! idle and kick keys, which `AimDef` hands the server's aim block
+//! (`crate::pmove::aim`). `adsBobFactor` scales the walk bob on the gun
+//! down the sight (cod11-combat.md 15.2).
 
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
@@ -505,13 +507,13 @@ pub struct WeaponDef {
     pub ads_overlay_reticle: OverlayReticle,
     pub ads_overlay_width: f32,
     pub ads_overlay_height: f32,
-    /// Second ADS bob multiplier the files carry separately; 1.0 changes
-    /// nothing, thompson/springfield ship 0 (bob frozen when fully aimed).
-    /// Semantics INFERRED from the values; no decompilation evidence yet.
+    /// Scales the gun's walk bob down the sight by `1 - (1 - adsBobFactor) *
+    /// frac` (cod11-combat.md 15.2); 1.0 changes nothing, thompson and
+    /// springfield ship 0 (bob frozen when fully aimed).
     pub ads_bob_factor: f32,
     /// `semiAuto 0` fires while the button is held at `fireTime` cadence.
-    /// The eight stock files that omit the key -- the four grenades, the
-    /// three bipod mg42s and the PTRS41 -- are not semi-automatic, so the
+    /// The eight stock files that omit the key (the four grenades, the
+    /// three bipod mg42s and the PTRS41) are not semi-automatic, so the
     /// default is off.
     pub semi_auto: bool,
     /// Reserve rounds behind the clip (`startAmmo`).
@@ -561,7 +563,7 @@ pub struct WeaponDef {
     pub explosion_inner_damage: i32,
     pub explosion_outer_damage: i32,
     /// UO's `vehiclescale`: a grenade's splash on a vehicle is multiplied by
-    /// it when positive (`Scr_Vehicle_DamageScale` 0x9ccad, coduo-vehicles.md
+    /// it when positive (`Scr_Vehicle_DamageScale` 0x8ccad, coduo-vehicles.md
     /// 13); 0 where the file has none.
     pub vehicle_scale: f32,
     /// Units per second along the view, and the extra lift added to z.

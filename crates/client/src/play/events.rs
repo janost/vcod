@@ -4,7 +4,7 @@
 //! `CG_CheckChangedPredictableEvents` does.
 
 use vcod_common::net::events::{EVENT_RING, EventTracker, GameEvent};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::pmove::predict::Predicted;
 
@@ -64,7 +64,7 @@ impl PredictedEvents {
             self.played_to = Some(pred_seq);
             return Vec::new();
         };
-        // A respawn restarts the ring at 0 (AGENTS.md, Gotchas).
+        // A respawn restarts the ring at 0 (docs/dev/traps.md, "Wire and netcode").
         if ahead(pred_seq, mark) < -EVENT_RING {
             self.stop();
             self.played_to = Some(pred_seq);
@@ -120,12 +120,11 @@ impl PredictedEvents {
 /// `predicted`: this frame's prediction, when it ran. The frame we reach a
 /// state the client does not predict still skips the copies, then tracking
 /// stops.
-#[allow(clippy::too_many_arguments)]
 pub fn frame_events(
     tracked: &mut PredictedEvents,
     tracker: &mut EventTracker,
     newest: &Snapshot,
-    p: &Protocol,
+    p: &Cod1Wire,
     own: bool,
     predicting: bool,
     predicted: Option<&Predicted>,
@@ -177,7 +176,7 @@ fn on_view_body(ev: &GameEvent, view_body: Option<u32>) -> bool {
 /// (64, UO 128), configstring 7's weapons
 /// (docs/research/cod11-gsc-object-model.md, section 15).
 /// `PlayInput::picked_up` decides whether it becomes the selection.
-pub fn picked_up_weapon(ev: &GameEvent, view_body: Option<u32>, p: &Protocol) -> Option<u8> {
+pub fn picked_up_weapon(ev: &GameEvent, view_body: Option<u32>, p: &Cod1Wire) -> Option<u8> {
     use vcod_common::net::event_ids::{EV_AMMO_PICKUP, EV_ITEM_PICKUP, EV_ITEM_PICKUP_QUIET};
     let pickup = matches!(
         ev.event,
@@ -476,8 +475,8 @@ mod tests {
         assert!(!e.filter_snapshot(84, FIRE), "played by the prediction");
     }
 
-    /// A respawn restarts the ring at 0 (AGENTS.md, Gotchas): the prediction
-    /// resets the mark, or the new life's events are all swallowed.
+    /// A respawn restarts the ring at 0 (docs/dev/traps.md, "Wire and
+    /// netcode"): the prediction resets the mark, or the new life's events are all swallowed.
     #[test]
     fn sequence_going_back_resets() {
         let mut e = tracking(0);

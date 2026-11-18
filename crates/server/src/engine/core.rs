@@ -1,8 +1,8 @@
 //! The engine state both servers embed: what retail's `svs` and `sv` hold
 //! that no game module reads by its own layout. `Server` (CoD1) and
 //! `Cod2Server` are each an `Engine` with one as its `core`, `C` being the
-//! game's client slot; both drive it through `engine::tick` (AGENTS.md,
-//! "The server tick").
+//! game's client slot; both drive it through `engine::tick`
+//! (docs/dev/server-tick.md, "One skeleton for every game").
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -11,7 +11,7 @@ use vcod_common::net::wire::Transport;
 
 pub struct EngineCore<C> {
     /// The wire's transport: version, netchan framing, codec, paks. CoD1
-    /// keeps it in step with its `Protocol` (`Server::set_protocol`).
+    /// keeps it in step with its `Cod1Wire` (`Server::set_protocol`).
     pub transport: &'static Transport,
     pub huff: Huffman,
     /// The datagrams this frame or packet produced, drained by the binary.

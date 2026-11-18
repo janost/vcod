@@ -7,7 +7,7 @@
 //! `cgame_mp_x86.dll` 0x30005470) and `Com_Error`s on anything above 10.
 
 use super::msg::EntityState;
-use super::protocol::Protocol;
+use super::protocol::Cod1Wire;
 use glam::Vec3;
 
 /// `trType_t`. CoD 1.1 has no `TR_LINEAR_STOP_BACK`, `TR_SPLINE` or
@@ -46,7 +46,7 @@ pub struct Trajectory {
 
 impl Trajectory {
     /// `prefix` is `"pos"` or `"apos"`.
-    pub fn read(ent: &EntityState, p: &Protocol, prefix: &str) -> Trajectory {
+    pub fn read(ent: &EntityState, p: &Cod1Wire, prefix: &str) -> Trajectory {
         let i32_field = |name: &str| ent.field_i32(p, &format!("{prefix}.{name}"));
         let f32_field = |name: &str| ent.field_f32(p, &format!("{prefix}.{name}"));
         Trajectory {
@@ -72,41 +72,41 @@ impl Trajectory {
         match self.tr_type {
             TR_STATIONARY | TR_INTERPOLATE | TR_GRAVITY_PAUSED => self.base,
             TR_LINEAR => {
-                let dt = (at_ms - self.tr_time) as f32 * 0.001;
+                let dt = at_ms.wrapping_sub(self.tr_time) as f32 * 0.001;
                 self.base + self.delta * dt
             }
             TR_LINEAR_STOP => {
-                let clamped = at_ms.min(self.tr_time + self.tr_duration);
-                let dt = ((clamped - self.tr_time) as f32 * 0.001).max(0.0);
+                let clamped = at_ms.min(self.tr_time.wrapping_add(self.tr_duration));
+                let dt = (clamped.wrapping_sub(self.tr_time) as f32 * 0.001).max(0.0);
                 self.base + self.delta * dt
             }
             TR_SINE => {
-                let dt = (at_ms - self.tr_time) as f32 / self.tr_duration as f32;
+                let dt = at_ms.wrapping_sub(self.tr_time) as f32 / self.tr_duration as f32;
                 let phase = (dt * std::f32::consts::TAU).sin();
                 self.base + self.delta * phase
             }
             TR_GRAVITY => {
-                let dt = (at_ms - self.tr_time) as f32 * 0.001;
+                let dt = at_ms.wrapping_sub(self.tr_time) as f32 * 0.001;
                 let mut r = self.base + self.delta * dt;
                 r.z -= 0.5 * DEFAULT_GRAVITY * dt * dt;
                 r
             }
             TR_GRAVITY_LOW => {
-                let dt = (at_ms - self.tr_time) as f32 * 0.001;
+                let dt = at_ms.wrapping_sub(self.tr_time) as f32 * 0.001;
                 let mut r = self.base + self.delta * dt;
                 r.z -= 0.5 * (DEFAULT_GRAVITY * 0.3) * dt * dt;
                 r
             }
             TR_GRAVITY_FLOAT => {
-                let dt = (at_ms - self.tr_time) as f32 * 0.001;
+                let dt = at_ms.wrapping_sub(self.tr_time) as f32 * 0.001;
                 let mut r = self.base + self.delta * dt;
                 // Single `dt`, not `dt * dt`: faithful to RTCW's bg_misc.c.
                 r.z -= 0.5 * (DEFAULT_GRAVITY * 0.2) * dt;
                 r
             }
             TR_ACCELERATE => {
-                let clamped = at_ms.min(self.tr_time + self.tr_duration);
-                let dt = (clamped - self.tr_time) as f32 * 0.001;
+                let clamped = at_ms.min(self.tr_time.wrapping_add(self.tr_duration));
+                let dt = clamped.wrapping_sub(self.tr_time) as f32 * 0.001;
                 let dur_s = self.tr_duration as f32 * 0.001;
                 if dur_s == 0.0 || self.delta == Vec3::ZERO {
                     return self.base;
@@ -116,8 +116,8 @@ impl Trajectory {
                 self.base + dir * (phase * 0.5 * dt * dt)
             }
             TR_DECCELERATE => {
-                let clamped = at_ms.min(self.tr_time + self.tr_duration);
-                let dt = (clamped - self.tr_time) as f32 * 0.001;
+                let clamped = at_ms.min(self.tr_time.wrapping_add(self.tr_duration));
+                let dt = clamped.wrapping_sub(self.tr_time) as f32 * 0.001;
                 let dur_s = self.tr_duration as f32 * 0.001;
                 if dur_s == 0.0 || self.delta == Vec3::ZERO {
                     return self.base;
@@ -137,7 +137,7 @@ impl Trajectory {
     /// a line's `base + delta * dt` (0x2c640) and an arc's `z` less `400 *
     /// dt * dt` (0x2c6c0). Other types are [`Trajectory::evaluate`]'s.
     pub fn evaluate_kept(&self, at_ms: i32) -> Vec3 {
-        let dt = f64::from(at_ms - self.tr_time) * f64::from(0.001f32);
+        let dt = f64::from(at_ms.wrapping_sub(self.tr_time)) * f64::from(0.001f32);
         let (b, d) = (self.base.as_dvec3(), self.delta.as_dvec3());
         if self.tr_type == TR_LINEAR {
             return (b + d * dt).as_vec3();
@@ -163,7 +163,7 @@ impl Trajectory {
         if self.tr_type != TR_LINEAR && self.tr_type != TR_GRAVITY {
             return self.evaluate(at_ms);
         }
-        let dt = f64::from((at_ms - self.tr_time) as f32 * 0.001);
+        let dt = f64::from(at_ms.wrapping_sub(self.tr_time) as f32 * 0.001);
         let r = (self.base.as_dvec3() + self.delta.as_dvec3() * dt).as_vec3();
         if self.tr_type == TR_LINEAR {
             return r;
@@ -173,7 +173,7 @@ impl Trajectory {
     }
 
     /// The inverse of [`Trajectory::read`]: every word of the `prefix` trajectory.
-    pub fn write(&self, ent: &mut EntityState, p: &Protocol, prefix: &str) {
+    pub fn write(&self, ent: &mut EntityState, p: &Cod1Wire, prefix: &str) {
         let mut seti = |name: &str, v: i32| {
             if let Some(i) = EntityState::field_index(p, name) {
                 ent.fields[i] = v;
@@ -207,6 +207,24 @@ mod tests {
             tr_duration: dur,
             base,
             delta,
+        }
+    }
+
+    /// Wire times wrap as retail's C ints do; no type panics on them.
+    #[test]
+    fn extreme_wire_times_wrap_without_a_panic() {
+        let d = Vec3::new(1.0, 2.0, 3.0);
+        for t in 0..=TR_DECCELERATE {
+            for (time, dur, at) in [
+                (i32::MIN, i32::MAX, 1000),
+                (i32::MAX, i32::MAX, -1000),
+                (1000, 0x7fff_ffff, i32::MAX),
+            ] {
+                let tr = traj(t, time, dur, Vec3::ZERO, d);
+                let _ = tr.evaluate(at);
+                let _ = tr.evaluate_kept(at);
+                let _ = tr.evaluate_stored(at);
+            }
         }
     }
 

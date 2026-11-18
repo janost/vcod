@@ -249,7 +249,6 @@ impl ServerDownload {
     /// 1.5b's order, which opens the pak before the www branch (UO's
     /// stalls; cod15-protocol-diff.md 14). One whose last www transfer
     /// failed gets the blocks on 1.5b and the redirect again on UO.
-    #[allow(clippy::too_many_arguments)]
     pub fn write(
         &mut self,
         w: &mut MsgWriter,

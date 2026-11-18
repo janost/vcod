@@ -41,7 +41,7 @@ fn masked(payload: &[u8]) -> String {
     }
 }
 
-/// One `oob.py` step: a query or a connect, on or off the LAN.
+/// One step of an `oob-*.txt` capture: a query or a connect, on or off the LAN.
 enum Step {
     Info,
     Status,

@@ -83,12 +83,12 @@ pub struct JointDef {
     pub limits: [Option<Limit>; 3],
 }
 
-/// `ragdoll_baselerp_bone <def> <bone> <msec> [<ragdoll bone>]`.
+/// `ragdoll_baselerp_bone <def> <bone> <msec> [<ragdoll bone>]`; nothing
+/// reads the optional ragdoll bone, so it is not kept.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BaseLerp {
     pub bone: String,
     pub msec: i32,
-    pub body: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -221,7 +221,6 @@ fn apply(defs: &mut [RagdollDef; RAGDOLL_DEFS], cmd: &str, a: &[&str]) -> Result
             def.base_lerp.push(BaseLerp {
                 bone: arg(1)?.to_string(),
                 msec: int(2)?,
-                body: a.get(3).and_then(|s| s.parse().ok()),
             })
         }
         // `ragdoll_pin_bone` is a single-player def's; MP's cfg has none.
@@ -466,7 +465,8 @@ pub struct Ragdoll {
     msec: f32,
     still_ms: f32,
     /// Each step's end (ms run) and its fastest point's speed as the sleep
-    /// test reads it.
+    /// test reads it. Kept for the tests only.
+    #[cfg(any(test, feature = "testing"))]
     speeds: Vec<(f32, f32)>,
     acc_ms: f32,
     /// The last step's length, ms: a point's `pos - prev` moved over it.
@@ -820,7 +820,8 @@ impl Ragdoll {
                 t.startsolid || t.fraction < 1.0
             })
             .collect();
-        // The anim's last move starts each point, scaled to one step.
+        // The anim's last move starts each point, scaled to one step and
+        // capped at 400 units a second (unverified on 1.7, no address).
         if let Some((before, ms)) = before.filter(|(b, ms)| b.len() == n && *ms > 0.0) {
             let scale = STEP_MS / ms;
             for (bone, i) in point_of.iter().enumerate() {
@@ -846,6 +847,7 @@ impl Ragdoll {
             state: State::Running,
             msec: 0.0,
             still_ms: 0.0,
+            #[cfg(any(test, feature = "testing"))]
             speeds: Vec::new(),
             acc_ms: 0.0,
             last_ms: STEP_MS,
@@ -963,12 +965,15 @@ impl Ragdoll {
             .points
             .iter()
             .all(|p| (p.pos - p.prev).length() / dt < self.dvars.sleep_speed);
-        let fastest = self
-            .points
-            .iter()
-            .map(|p| (p.pos - p.prev).length() / dt)
-            .fold(0.0f32, f32::max);
-        self.speeds.push((self.msec, fastest));
+        #[cfg(any(test, feature = "testing"))]
+        {
+            let fastest = self
+                .points
+                .iter()
+                .map(|p| (p.pos - p.prev).length() / dt)
+                .fold(0.0f32, f32::max);
+            self.speeds.push((self.msec, fastest));
+        }
         if still {
             self.still_ms += ms;
         } else {
@@ -1261,6 +1266,7 @@ impl Ragdoll {
 
     /// Each step it ran: the ms run at its end and its fastest point's speed,
     /// units a second, as the sleep test reads it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn step_speeds(&self) -> &[(f32, f32)] {
         &self.speeds
     }
@@ -1310,7 +1316,6 @@ ragdoll_baselerp_bone 1 j_hiptwist_le 1000 8
         assert_eq!(d.joints[0].kind, JointKind::Swivel);
         assert_eq!(d.joints[0].limits[0].unwrap().max, 50.0);
         assert_eq!(d.joints[1].limits[2].unwrap().min, -120.0);
-        assert_eq!(d.base_lerp[1].body, Some(8));
         assert_eq!(d.base_lerp[0].msec, 2000);
     }
 

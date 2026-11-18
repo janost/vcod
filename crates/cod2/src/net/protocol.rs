@@ -93,8 +93,8 @@ pub struct Cod2Wire {
     pub client_fields: &'static [NetField],
     /// Where the configstring blocks sit.
     pub cs: CsLayout,
-    /// `ET_EVENTS`: an `eType` at or above it is a temp event entity
-    /// carrying event `eType - et_events`.
+    /// `ET_EVENTS`: an `eType` above it is a temp event entity carrying
+    /// event `eType - et_events` (cod2-protocol.md 13, `10 < eType`).
     pub et_events: i32,
     pub hud: HudWire,
     /// What a `map_restart` that drops `pers[]` sends a client.
@@ -159,9 +159,10 @@ static COD1_SHIM_118: Cod1Wire = Cod1Wire {
 };
 
 impl Cod2Wire {
-    /// The event an `eType` carries, `None` for an ordinary entity.
+    /// The event an `eType` carries, `None` for an ordinary entity
+    /// ([`super::events::event_of`]).
     pub fn event_of(&self, etype: i32) -> Option<i32> {
-        (etype >= self.et_events).then(|| etype - self.et_events)
+        (etype > self.et_events).then(|| etype - self.et_events)
     }
 
     /// This descriptor as a [`Cod1Wire`] with identity maps

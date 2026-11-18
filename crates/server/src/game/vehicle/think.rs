@@ -3,7 +3,7 @@
 //! the riders read back (docs/research/coduo-vehicles.md 12 and 13).
 
 use super::info::KIND_FOUR_WHEEL;
-use super::{Gun, MAX_SEATS, physics};
+use super::{MAX_SEATS, physics};
 use crate::game::host::GameHost;
 use vcod_gsc::{Cx, EntId};
 
@@ -101,7 +101,7 @@ pub fn run_undriven(
     true
 }
 
-/// `G_VehicleClientThink` (0x9b0ce), after the entity pass: every driven
+/// `G_VehicleClientThink` (0x8b0ce), after the entity pass: every driven
 /// vehicle steps once a server frame, in pool-slot order, so a vehicle a
 /// driver pushes moves on its own next think, the frame after
 /// (docs/research/coduo-vehicles.md 12). `inputs` is each client slot's
@@ -651,16 +651,6 @@ pub fn riders(host: &GameHost, id: EntId) -> [Option<usize>; MAX_SEATS + 1] {
         .map_or([None; MAX_SEATS + 1], |v| v.seats)
 }
 
-/// Which gun a `turret_*` notify names.
-pub fn gun_of(event: &str) -> Option<Gun> {
-    match event {
-        "turret_fire" => Some(Gun::Main),
-        "turret_alt_fire" => Some(Gun::Alt),
-        "turret_gunner_fire" => Some(Gun::Gunner),
-        _ => None,
-    }
-}
-
 /// The collision world with the players' bodies in it: a trace whose mask
 /// holds `CONTENTS_BODY` (0x2000000) also meets each body's box. The other
 /// vehicles' collmaps are the world's own model instances; what the step
@@ -681,7 +671,7 @@ struct OtherVehicle {
     jolting: bool,
 }
 
-const CONTENTS_BODY: u32 = 0x0200_0000;
+use vcod_common::clipmap::CONTENTS_BODY;
 
 impl physics::VehicleWorld for BodiesWorld<'_> {
     fn trace(

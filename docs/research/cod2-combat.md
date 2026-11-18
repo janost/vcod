@@ -343,6 +343,13 @@ VERIFIED, its switch:
 | 197 | `player_die` with `MOD_SUICIDE` and 100000 |
 | 116..138 (landings) | `G_Damage` with `MOD_FALLING` (0xb) and `maxHealth * parm / 100`, all of it from a parm of 100 up |
 
+The walk starts at `eventSequence - 4` when the old sequence
+`ClientThink_real` hands it is further back, so a cmd raising five or more
+events walks only the ring's four (lnxded 0x80f52da: `sub $0x4` from
+`ps+0xa4`, `cmp`, `jge`). VERIFIED, the clamp. The body's copy in
+`ClientEndFrame` (0x80f56f8, `cod2-protocol.md` 16.3) has no such clamp.
+VERIFIED, the loop. vcod's walk is `game::cod2::cmd_events`.
+
 ### 2.2 The muzzle and the aim
 
 `G_CalcMuzzlePoints` (lnxded 0x81207ec) takes `AngleVectors` of
@@ -1014,6 +1021,8 @@ has only one with a goal weight). Test `a_corpse_falls_and_rests`
   `TR_GRAVITY`, a think at +1000. It is kept in a ring of
   `g_maxDroppedWeapons` (16, 1..32) that evicts the slot farthest from
   every playing client.
+- On `cod2_lnxded` the launch is at 0x81063d4. INFERRED (carried over
+  from vcod's port, `game::cod2_items::launch_off`, not re-read).
 - `crandom` is `2 * rand() / 2^31 - 1` (Mac 0x2cf1a). VERIFIED.
 - `Touch_Item` (Mac 0x1b1bea) is 1.1's (`cod11-items.md` 7) on CoD2's item
   rows (a weapon's row is its index). VERIFIED:

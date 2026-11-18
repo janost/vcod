@@ -164,3 +164,27 @@ fn a_cod4_stats_or_voice_packet_off_another_port_changes_no_slot() {
     assert_eq!(reply, [b"\xff\xff\xff\xffstatResponse 0".to_vec()]);
     assert_eq!(block(&sv), fresh);
 }
+
+/// `SV_UserMove` refuses a move message of more than 32 cmds or none
+/// (0x81725bd `cmdCount < 1`, 0x81725c3 `cmdCount > MAX_PACKET_USERCMDS`)
+/// before it reads one (BUG-102).
+#[test]
+fn a_cod4_move_of_33_cmds_or_none_is_refused() {
+    let (mut sv, _p, _now) = joined();
+    let last = |sv: &Cod4Server| sv.core.clients[0].as_ref().unwrap().last_cmd_time;
+    let t0 = last(&sv);
+    let cmds = |n: i32| -> Vec<UserCmd> {
+        (1..=n)
+            .map(|i| UserCmd {
+                server_time: t0 + i,
+                ..UserCmd::default()
+            })
+            .collect()
+    };
+    sv.user_move(0, -1, false, &cmds(33));
+    assert_eq!(last(&sv), t0);
+    sv.user_move(0, -1, false, &[]);
+    assert_eq!(last(&sv), t0);
+    sv.user_move(0, -1, false, &cmds(32));
+    assert_eq!(last(&sv), t0 + 32);
+}

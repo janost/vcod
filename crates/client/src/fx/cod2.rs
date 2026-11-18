@@ -227,7 +227,7 @@ impl Live {
             (0, 0.0)
         } else {
             let start = match p.sequence_start_frame_mode {
-                0 => (p.sequence_fixed_frame - 1).max(0) as u32,
+                0 => p.sequence_fixed_frame.saturating_sub(1).max(0) as u32,
                 1 => ((rng.next_f32() * frames as f32) as u32).min(frames - 1),
                 _ => index,
             };
@@ -345,11 +345,14 @@ impl Live {
             return None;
         }
         let p = &self.el.prim;
-        let mut f = (age_ms * self.rate) as u32 + self.frame0;
+        let mut f = ((age_ms * self.rate) as u32).saturating_add(self.frame0);
         if f >= self.frames {
             f = if p.sequence_loop_mode == 1
                 && (p.sequence_loop_times < 1
-                    || (p.sequence_loop_times as u32 + 1) * self.frames <= f)
+                    || (p.sequence_loop_times as u32)
+                        .saturating_add(1)
+                        .saturating_mul(self.frames)
+                        <= f)
             {
                 self.frames - 1
             } else {

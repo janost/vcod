@@ -90,7 +90,7 @@ impl Plan {
     /// crush capture advances its `trTime` 50 a frame too (movers doc,
     /// section 12).
     fn stall(&mut self) {
-        self.current.tr_time += crate::server::FRAME_MS;
+        self.current.tr_time = self.current.tr_time.wrapping_add(crate::server::FRAME_MS);
     }
 
     /// `G_MoverTeam`'s tail for one group at level time `now_ms`: when the
@@ -100,7 +100,7 @@ impl Plan {
     fn advance(&mut self, now_ms: i32) -> Option<&'static str> {
         if self.notify.is_none()
             || self.current.tr_type == TR_STATIONARY
-            || self.current.tr_time + self.current.tr_duration > now_ms
+            || self.current.tr_time.wrapping_add(self.current.tr_duration) > now_ms
         {
             return None;
         }
@@ -218,7 +218,7 @@ impl Plan {
                 base: cur,
                 delta: vf,
             };
-            self.segs.accel_end = self.at(now_ms + self.current.tr_duration);
+            self.segs.accel_end = self.at(now_ms.wrapping_add(self.current.tr_duration));
         } else {
             self.segs.accel_end = cur;
             self.current = if cruise != 0.0 {
@@ -267,7 +267,7 @@ impl Plan {
             self.segs.cruise = m.secs;
             self.segs.decel = 0.0;
             self.current = segment(TR_LINEAR_STOP, m.secs, cur);
-            self.segs.dest = self.at(now_ms + self.current.tr_duration);
+            self.segs.dest = self.at(now_ms.wrapping_add(self.current.tr_duration));
             return self.begin(now_ms);
         }
         let (secs, accel, decel) = (f64::from(m.secs), f64::from(m.accel), f64::from(m.decel));
@@ -277,7 +277,7 @@ impl Plan {
         self.segs.speed = x87::dot(v, v).sqrt() as f32;
         if m.accel != 0.0 {
             self.current = segment(TR_ACCELERATE, m.accel, cur);
-            self.segs.accel_end = self.at(now_ms + self.current.tr_duration);
+            self.segs.accel_end = self.at(now_ms.wrapping_add(self.current.tr_duration));
         } else {
             self.segs.accel_end = cur;
             self.current = if cruise != 0.0 {
@@ -290,7 +290,7 @@ impl Plan {
         self.segs.cruise_end = cruise_end;
         self.segs.dest = if m.decel != 0.0 {
             let tail = segment(TR_DECCELERATE, m.decel, cruise_end);
-            bg_evaluate(self.stored, &tail, now_ms + tail.tr_duration)
+            bg_evaluate(self.stored, &tail, now_ms.wrapping_add(tail.tr_duration))
         } else {
             cruise_end
         };
@@ -384,13 +384,13 @@ fn bg_evaluate(stored: bool, tr: &Trajectory, t: i32) -> Vec3 {
         };
     }
     let dt = |t: i32| {
-        let dt = f64::from(t - tr.tr_time) * f64::from(0.001_f32);
+        let dt = f64::from(t.wrapping_sub(tr.tr_time)) * f64::from(0.001_f32);
         if stored { f64::from(dt as f32) } else { dt }
     };
     let dt = match tr.tr_type {
         TR_LINEAR => dt(t),
         // Clamped to the end and to no less than 0 (0x2c673..0x2c69e).
-        TR_LINEAR_STOP => dt(t.min(tr.tr_time + tr.tr_duration)).max(0.0),
+        TR_LINEAR_STOP => dt(t.min(tr.tr_time.wrapping_add(tr.tr_duration))).max(0.0),
         _ => return tr.evaluate(t),
     };
     let f = |base: f32, delta: f32| (f64::from(delta) * dt + f64::from(base)) as f32;
@@ -408,7 +408,10 @@ fn bg_evaluate(stored: bool, tr: &Trajectory, t: i32) -> Vec3 {
 /// `(base + delta dt) - dir * (phase/2 dt^2)` decelerating, one rounding.
 fn ramp_kept(tr: &Trajectory, t: i32) -> Vec3 {
     let k = f64::from(0.001_f32);
-    let dt = f64::from(t.min(tr.tr_time + tr.tr_duration) - tr.tr_time) * k;
+    let dt = f64::from(
+        t.min(tr.tr_time.wrapping_add(tr.tr_duration))
+            .wrapping_sub(tr.tr_time),
+    ) * k;
     let len = x87::dot(tr.delta, tr.delta).sqrt() as f32;
     let phase = f64::from(len) / (f64::from(tr.tr_duration) * k);
     let dir = x87::normalize(tr.delta).as_dvec3();
@@ -428,7 +431,12 @@ fn ramp_kept(tr: &Trajectory, t: i32) -> Vec3 {
 /// segment's `base + delta dt` stored before the ramp term is added.
 fn ramp_stored(tr: &Trajectory, t: i32) -> Vec3 {
     let k = f64::from(0.001_f32);
-    let dt = f64::from((f64::from(t.min(tr.tr_time + tr.tr_duration) - tr.tr_time) * k) as f32);
+    let dt = f64::from(
+        (f64::from(
+            t.min(tr.tr_time.wrapping_add(tr.tr_duration))
+                .wrapping_sub(tr.tr_time),
+        ) * k) as f32,
+    );
     let len = x87::dot(tr.delta, tr.delta).sqrt() as f32;
     let phase = f64::from((f64::from(len) / (f64::from(tr.tr_duration) * k)) as f32);
     let dir = x87::normalize2_stored(tr.delta).as_dvec3();
@@ -555,6 +563,36 @@ impl Movers {
         self.rows.remove(&id);
     }
 
+    /// A script `.origin` write (`Scr_SetOrigin`'s `G_SetOrigin`) on a
+    /// group that has settled: the plan stands at `at`, so the next entity
+    /// pass and the wire keep it there, and the clip's pose moves with the
+    /// write's link. A group still moving is left to its plan: what retail
+    /// does to a running move is unmeasured.
+    pub fn set_origin(&mut self, id: EntId, at: Vec3) {
+        let Some(m) = self.rows.get_mut(&id) else {
+            return;
+        };
+        if m.pos.started && m.pos.notify.is_none() {
+            m.pos.current = stationary(at);
+            if let Some(c) = m.clip.as_mut() {
+                c.0 = at;
+            }
+        }
+    }
+
+    /// [`Self::set_origin`]'s twin for `.angles` (`Scr_SetAngles`).
+    pub fn set_angles(&mut self, id: EntId, at: Vec3) {
+        let Some(m) = self.rows.get_mut(&id) else {
+            return;
+        };
+        if m.apos.started && m.apos.notify.is_none() {
+            m.apos.current = stationary(at);
+            if let Some(c) = m.clip.as_mut() {
+                c.1 = at;
+            }
+        }
+    }
+
     /// The origin and angles a mover's plans put it at `t`, ahead of what
     /// script reads, `None` for a group no verb has run on.
     pub fn pose_at(&self, id: EntId, t: i32) -> Option<(Option<Vec3>, Option<Vec3>)> {
@@ -642,8 +680,8 @@ impl Movers {
 /// run by the next frame's threads (docs/research/cod11-movers.md, section
 /// 8; combat doc 14.7, "Entity numbers").
 ///
-/// The write-back is what the capture shows retail doing -- `getorigin()` and
-/// `.angles` both read the interpolated value on every frame of a move -- and
+/// The write-back is what the capture shows retail doing (`getorigin()` and
+/// `.angles` both read the interpolated value on every frame of a move), and
 /// it is also what keeps this to one representation: `istouching`, the touch
 /// pass, `getorigin` and the wire build all go on reading the entity's own
 /// fields. `.angles` is `r.currentAngles`: raw while a rotate runs, through
@@ -726,7 +764,9 @@ fn evaluate(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec<Done>
         .any(|p| p.started && p.current.tr_type != TR_STATIONARY);
     m.reach_links = [&m.pos, &m.apos]
         .iter()
-        .filter(|p| p.notify.is_some() && level_ms >= p.current.tr_time + p.current.tr_duration)
+        .filter(|p| {
+            p.notify.is_some() && level_ms >= p.current.tr_time.wrapping_add(p.current.tr_duration)
+        })
         .count() as u8;
     let unadvanced = (m.pos.clone(), m.apos.clone());
     for plan in [&mut m.pos, &mut m.apos] {
@@ -886,7 +926,7 @@ pub fn reached_part(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) {
         };
         let p = if apos { &m.apos } else { &m.pos };
         if p.current.tr_type != TR_STATIONARY
-            && t >= p.current.tr_time + p.current.tr_duration
+            && t >= p.current.tr_time.wrapping_add(p.current.tr_duration)
             && host.game_error.is_none()
         {
             if m.door.is_some() {
@@ -1286,8 +1326,7 @@ fn spawn_static(
     host.link_shaped(cx, id, shape);
     let spawnflags = match keys {
         Some(b) => vcod_common::bsp::field_value(b, "spawnflags")
-            .and_then(|v| v.trim().parse::<i32>().ok())
-            .unwrap_or(0),
+            .map_or(0, crate::game::builtins::cvar::atoi),
         None => {
             let atom = cx.intern_folded("spawnflags");
             match host.get_field(cx, id, atom) {
@@ -1305,8 +1344,7 @@ fn spawn_static(
     // no key.
     let health_key = keys
         .and_then(|b| vcod_common::bsp::spawn_string(b, "health"))
-        .and_then(|v| v.trim().parse::<i32>().ok())
-        .unwrap_or(0);
+        .map_or(0, crate::game::builtins::cvar::atoi);
     let use_static = health_key != 0 || spawnflags & 6 != 0;
     if spawnflags & 6 != 0 {
         set(host, cx, "health", vcod_gsc::Value::Int(STATIC_HEALTH));
@@ -1706,6 +1744,22 @@ mod tests {
         assert_eq!(plan.current.tr_type, TR_STATIONARY);
         assert_eq!(plan.current.base.z, 688.0);
         assert_eq!(plan.advance(4000), None, "the notify comes once");
+    }
+
+    /// A script time past i32 milliseconds saturates the duration and
+    /// the segment ends wrap as retail's C ints do, with no overflow
+    /// panic (BUG-098).
+    #[test]
+    fn a_huge_move_time_wraps_without_a_panic() {
+        for ramp in [Ramp::new(3e6, 1e6, 1e6), Ramp::new(3e6, 0.0, 0.0)] {
+            let mut plan = Plan::default();
+            plan.start_toward(1000, Vec3::ZERO, Vec3::new(0.0, 0.0, 50.0), ramp);
+            plan.notify = Some(MOVEDONE);
+            for at in [1050, 2_000_000_000, i32::MAX] {
+                let _ = plan.at(at);
+                let _ = plan.advance(at);
+            }
+        }
     }
 
     /// The accel-only case says the two ends are independent:

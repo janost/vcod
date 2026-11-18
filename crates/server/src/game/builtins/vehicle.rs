@@ -11,7 +11,7 @@ use crate::game::host::GameHost;
 use crate::game::vehicle::{Gun, Jolt, TurretTarget};
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("attachpath", attach_path),
@@ -53,10 +53,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("verifyposition", verify_position),
     ("clearvehicleposition", clear_vehicle_position),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// `fn_7c280`: the receiver must be a `script_vehicle` with a record.
 fn vehicle(host: &GameHost, recv: Option<Target>) -> Result<EntId, ErrorKind> {
@@ -578,7 +574,8 @@ fn verify_position(
 
 /// `clearVehiclePosition()` (0x6950e): whatever stands in the vehicle's box
 /// (mask 0x4000100: corpses and dropped items) is deleted as `delete()`
-/// does it: notified `death` with itself, unlinked and freed 100 ms on.
+/// does it: notified `death` with itself, unlinked and freed 100 ms on (a
+/// dead player's corpse link is only notified).
 fn clear_vehicle_position(
     host: &mut GameHost,
     cx: &mut Cx,

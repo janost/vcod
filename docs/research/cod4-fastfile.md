@@ -13,7 +13,15 @@ Sources, each claim naming its own:
   `COD4_LNXDED_DIR`).
 - `cod4_lnxded-bin`, the 1.7 Linux dedicated server (md5
   `6b9995fa2e800664644da1c067779414`), stripped. Addresses are its virtual
-  addresses (first `LOAD` at file offset 0 maps to 0x08048000).
+  addresses (first `LOAD` at file offset 0 maps to 0x08048000). It is not
+  the `cod4_lnxded` the other CoD4 docs read (md5
+  `bf8448740b3f4cb74c2254f01af14cdd`, `docs/dev/reverse-engineering.md`):
+  its build date string reads `May 20 2008` against that one's `Jun 28
+  2008`, its text segment is 0x1a0 bytes shorter, and none of the 55
+  `0x081.....`/`0x082.....` addresses this doc cites holds the same bytes
+  in both. VERIFIED (md5s, the date strings, a byte compare at each cited
+  address). So this doc's addresses apply to `cod4_lnxded-bin` only; the
+  two files sit side by side in the dedicated server install.
 VERIFIED means read out of a 1.7 zone or the 1.7 server binary; INFERRED
 means read off control flow. A claim labelled INFERRED that names no 1.7
 address is not yet confirmed on 1.7.

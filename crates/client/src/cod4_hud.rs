@@ -364,8 +364,11 @@ pub(crate) struct Cod4Hud {
     /// The map whose zone `loaded` holds; `None` for the front end's or
     /// the connect screen's.
     zones_map: Option<String>,
-    /// Configstrings `d` changed since the gamestate.
+    /// Configstrings `d` changed since the gamestate, and the session's
+    /// gamestate count they were read under (a capture's gamestate takes
+    /// no `d`, so the HUD keeps them).
     cs: HashMap<u16, String>,
+    level_gamestates: u32,
     /// The server's `v` dvars.
     dvars: HashMap<String, String>,
     chat: Vec<Line>,
@@ -1120,11 +1123,30 @@ impl Cod4Hud {
             .collect()
     }
 
+    /// A new gamestate restarts the cgame (`CL_ParseGamestate`): the last
+    /// level's `d` strings, scores, message windows, centre print, compass
+    /// pings, damage overlay and hints go.
+    fn new_level(&mut self) {
+        self.cs.clear();
+        self.scores = None;
+        self.team_scores = [0; 4];
+        self.windows = Default::default();
+        self.center = None;
+        self.radar = Default::default();
+        self.damage = Default::default();
+        self.invalid_cmd = None;
+        self.hint = Default::default();
+    }
+
     /// Takes in the session's new server commands and this step's fired
     /// events at server time `now`.
     pub(crate) fn update(&mut self, s: &mut Cod4Session, fired: &[Fired], now: i32) {
         if let Some(gs) = s.gamestate() {
             self.weapons = crate::play::cod4::weapon_list(gs);
+        }
+        if self.level_gamestates != s.gamestate_count() {
+            self.level_gamestates = s.gamestate_count();
+            self.new_level();
         }
         for text in s.take_commands() {
             let Some(cmd) = Command::parse(&text) else {
@@ -1928,8 +1950,6 @@ fn clip_rounds(kind: i32, size: i32, base: [f32; 2]) -> Vec<[f32; 4]> {
         .collect()
 }
 
-/// `cg.inKillCam`: the drawn playerstate is an archived one
-/// (`ps.deltaTime` set, `CG_TransitionKillcam`).
 /// The action slots' menu and the night vision slot's icon
 /// (`cgMedia.hudIconNVG`).
 const DPAD_MENU: &str = "dpad";
@@ -2152,6 +2172,8 @@ fn held_ammo(l: &Loaded, s: &Cod4Session, snap: &Snapshot) -> Option<HeldAmmo> {
     })
 }
 
+/// `cg.inKillCam`: the drawn playerstate is an archived one
+/// (`ps.deltaTime` set, `CG_TransitionKillcam`).
 fn in_killcam(snap: &Snapshot) -> bool {
     snap.ps.get("deltaTime").unwrap_or(0) != 0
 }
@@ -2355,7 +2377,6 @@ impl Cod4Hud {
     /// `CGAME_VOTE(<seconds left>):<text>` and the tallies, each with the
     /// key bound to `vote yes` or `vote no` (the command itself when none
     /// is) until the player voted (`eFlags` 0x100000). cod4-hud.md 14.
-    #[allow(clippy::too_many_arguments)]
     fn draw_vote(
         &self,
         l: &Loaded,
@@ -2793,7 +2814,7 @@ impl Cod4Hud {
     /// of that pass by `sort`, text through the
     /// label and the text or value, materials by their configstring's
     /// image. Waypoints (in the world) are left out.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn draw_elems(
         &self,
         l: &Loaded,
@@ -2949,7 +2970,6 @@ impl Cod4Hud {
 
     /// One message line on the window's grid line `y`, its pieces left to
     /// right; an icon is font heights wide and tall, centred on the text.
-    #[allow(clippy::too_many_arguments)]
     fn draw_line(
         &self,
         f: &Font,
@@ -3020,8 +3040,6 @@ impl Cod4Hud {
     }
 }
 
-/// [`font::layout`] with its shadow faded with the text: the shared
-/// layout draws every shadow at 0.8 alpha.
 /// `CG_DrawDisconnect` (`iw3mp.exe` 0x42f930): `CGAME_CONNECTIONINTERUPTED`
 /// at scale 0.5 centred on the 640 grid, its baseline at y 100 (0x6f9e58),
 /// white in style 3, and unless `cg.time & 0x200` the `net_disconnect`
@@ -3049,6 +3067,8 @@ fn draw_interrupted(l: &Loaded, sp: &ScreenPlacement, now: i32, out: &mut Vec<Hu
     }
 }
 
+/// [`font::layout`] with its shadow faded with the text: the shared
+/// layout draws every shadow at 0.8 alpha.
 pub(crate) fn text(
     f: &Font,
     s: &str,
@@ -3075,7 +3095,6 @@ pub(crate) fn text(
 /// pushed two glyph pixels to each corner, in `glow`'s colour times 0.1
 /// at the glyph's own alpha (`SetDrawText2DGlowParms` `iw3mp.exe`
 /// 0x5f6aa0, the pass at 0x6148d6..0x614aff; cod4-hud.md 22).
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn glow_text(
     f: &Font,
     s: &str,
@@ -3647,9 +3666,9 @@ fn world_to_compass(rect: [f32; 4], up: [f32; 2], eye: glam::Vec3, at: glam::Vec
     screen.map(|v| v * fit)
 }
 
-/// `materialIndex`'s or a kill icon's image as a HUD texture path.
-/// A material's colour map as the HUD's texture name; `white`, whose
-/// image is the engine's `$white`, as the HUD's own white.
+/// A material's colour map (`materialIndex`'s or a kill icon's) as the
+/// HUD's texture name; `white`, whose image is the engine's `$white`, as
+/// the HUD's own white.
 fn image_of(l: &Loaded, material: &str) -> Option<String> {
     if material.eq_ignore_ascii_case("white") {
         return Some("white".into());
@@ -4286,6 +4305,20 @@ pub(crate) mod tests {
         hud.cs
             .insert(13, format!("{} {}", last + 20_000, h::atoi(&id) + 1));
         assert_eq!(hud.build(&s, size, last, None, &shell).len(), without);
+    }
+
+    /// A `d` of the last level masks the gamestate only until a new
+    /// gamestate comes: then the HUD reads the new table.
+    #[test]
+    fn a_new_gamestate_drops_the_last_levels_d_strings() {
+        let (mut hud, mut s) = replay("play-1.7-prematch.txt", |_, _, _| {});
+        let own = String::from_utf8_lossy(s.gamestate().unwrap().configstring(11)).into_owned();
+        hud.cs.insert(11, "last level".into());
+        hud.update(&mut s, &[], 0);
+        assert_eq!(hud.configstring(&s, 11), "last level");
+        s.add_gamestate_for_test();
+        hud.update(&mut s, &[], 0);
+        assert_eq!(hud.configstring(&s, 11), own);
     }
 
     /// Retail's prematch sends the leader dialog as `s <index>` right

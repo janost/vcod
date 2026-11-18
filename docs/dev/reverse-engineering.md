@@ -2,7 +2,10 @@
 
 Which retail binary answers which question, the scripts in `tools/re/`, and
 the disassembly traps. What a binary says goes into the subsystem's research
-doc with its address and an evidence label (AGENTS.md, "Evidence labels").
+doc with its address and an evidence label (`docs/research/README.md`,
+"Evidence labels"). A branch or an instruction order read at a named address
+range is VERIFIED (the instructions); which function it is, unless a string
+names it, is INFERRED.
 
 ## The binaries
 
@@ -18,6 +21,7 @@ doc with its address and an evidence label (AGENTS.md, "Evidence labels").
 | CoD2 1.3 | `cod2_lnxded` | stripped, links the game in |
 | CoD2 1.3 | Mac 1.3 MP binary (i386 slice) | keeps its symbols: the names for `cod2_lnxded` |
 | CoD4 1.7 | `cod4_lnxded` (md5 `bf8448740b3f4cb74c2254f01af14cdd`) | the server; stripped, read with `objdump` |
+| CoD4 1.7 | `cod4_lnxded-bin` (md5 `6b9995fa2e800664644da1c067779414`) | an earlier build beside it (`May 20 2008`); only `cod4-fastfile.md`'s `Load_*` addresses are in it |
 | CoD4 1.7 | `iw3mp.exe` | the client: menu commands, vision fields, default stats |
 
 The md5s of the CoD1 modules are in `docs/research/cod11-events-and-fx.md`.

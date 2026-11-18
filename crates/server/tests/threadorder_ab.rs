@@ -25,7 +25,7 @@ use common::{Join, Queues, step, step_pair_b_first};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::{NetClient, NetEvent};
 
 const SCRIPT: &str =
@@ -77,7 +77,7 @@ fn groups(lines: &[String]) -> Vec<Vec<String>> {
 
 fn server(
     fs: vcod_common::pk3::Pk3Fs,
-    proto: &'static Protocol,
+    proto: &'static Cod1Wire,
     now: &mut Instant,
 ) -> vcod_server::Server {
     let map = "mp_pavlov";
@@ -92,7 +92,7 @@ fn server(
     sv
 }
 
-fn ours(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol) -> Vec<String> {
+fn ours(fs: vcod_common::pk3::Pk3Fs, proto: &'static Cod1Wire) -> Vec<String> {
     let mut now = Instant::now();
     let mut sv = server(fs, proto, &mut now);
     let q = Rc::new(RefCell::new(Queues::default()));
@@ -129,7 +129,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol) -> Vec<String> {
 }
 
 /// Ours against one retail log of the one-client run.
-fn check(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol, retail: &str) {
+fn check(fs: vcod_common::pk3::Pk3Fs, proto: &'static Cod1Wire, retail: &str) {
     let retail: Vec<String> = retail.lines().map(str::to_string).collect();
     let ours = ours(fs, proto);
     if std::env::var_os("TO_REPORT").is_some() {
@@ -231,7 +231,7 @@ fn same_frame_kills(lines: &[String]) -> Vec<String> {
     .remove(0)
 }
 
-fn ours_pair(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol) -> Vec<String> {
+fn ours_pair(fs: vcod_common::pk3::Pk3Fs, proto: &'static Cod1Wire) -> Vec<String> {
     let mut now = Instant::now();
     let mut sv = server(fs, proto, &mut now);
     let qa = Rc::new(RefCell::new(Queues::default()));
@@ -276,7 +276,7 @@ fn ours_pair(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol) -> Vec<Strin
 }
 
 /// Ours against one retail log of the two-client run.
-fn check_pair(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol, retail: &str) {
+fn check_pair(fs: vcod_common::pk3::Pk3Fs, proto: &'static Cod1Wire, retail: &str) {
     let retail: Vec<String> = retail.lines().map(str::to_string).collect();
     let ours = ours_pair(fs, proto);
     if std::env::var_os("TO_REPORT").is_some() {

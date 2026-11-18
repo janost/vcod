@@ -62,8 +62,10 @@ pub struct Seen {
 }
 
 /// How many clips a channel keeps blending out at once. A change lands at
-/// most once an end frame and the longest blend is 250 ms, so a sixth one is
-/// at weight 0 by the time it would be pushed out.
+/// most once an end frame; with blends of 250 ms at most, a sixth one is at
+/// weight 0 by the time it would be pushed out. A blend stretched to 400 ms
+/// by 1.5's and UO's crouch window ([`blend_ms_windowed`]) may still carry
+/// weight then; changing the count changes poses.
 const FADES: usize = 5;
 /// The sync groups a clock remembers past their blend out: the aim and
 /// fire groups of one stance and the other's.
@@ -646,7 +648,6 @@ impl ChannelClock {
         self.update_in(anims, legs, wire, seen, at, Some(window), None);
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn update_in(
         &mut self,
         anims: &PlayerAnims,
@@ -745,7 +746,6 @@ impl ChannelClock {
     /// `trap_XAnimSetTime` 0x2aa5a; 1.5's and UO's [`spread_phase_15`]). A death anim on a body not freshly
     /// cloned goes straight to its last frame at full weight, every other
     /// clip on the channel dropped (0x2a97b..0x2aa5a, cgame 0x3000395d..0x300039f5).
-    #[allow(clippy::too_many_arguments)]
     fn set(
         &mut self,
         anims: &PlayerAnims,

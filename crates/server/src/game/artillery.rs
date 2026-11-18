@@ -60,7 +60,6 @@ pub enum Out {
 impl Barrage {
     /// `fire_artillery_barrage` at `level_ms`, the time the firing cmd ran
     /// under.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: EntId,
         owner: usize,

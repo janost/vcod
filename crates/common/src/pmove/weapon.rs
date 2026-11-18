@@ -4,10 +4,11 @@
 //! document's; the behaviour the two combat captures measured is in
 //! docs/research/player-model-anim-system.md, "The weapon channel".
 //!
-//! Not modelled yet: retail's `BG_TakePlayerWeapon` on a spent `clipOnly`
-//! weapon (the host owns the held bits, so pmove cannot clear one), and the
-//! three stops of 1.12, whose `pm_flags`/`pm_type`/`eFlags` this
-//! `PlayerState` does not carry.
+//! Not modelled: retail's `BG_TakePlayerWeapon` on a spent `clipOnly`
+//! weapon (the host owns the held bits, so pmove cannot clear one). The
+//! three stops of 1.12 run outside this module: the mounted gun in
+//! `pmove`'s mounted arm, the dead and respawned cases in
+//! `pmove::cmd::dead_step`.
 //!
 //! `cmd.weapon` is read as retail reads it: a 0 under a held weapon is a
 //! request to holster (1.8), so every caller sends the weapon it holds or
@@ -41,7 +42,7 @@ pub const WEAPON_DEPLOY: u8 = 12;
 pub const WEAPON_BREAKDOWN: u8 = 13;
 
 /// The wire `EV_*` ids pmove raises. `EV_EMPTYCLIP` (150) is not among them:
-/// docs/research/cod11-events-and-fx.md section 1.5 found no site that raises it.
+/// docs/research/cod11-combat.md section 1.5 found no site that raises it.
 pub use crate::net::event_ids::{
     EV_EJECT_BRASS, EV_FIRE_MELEE, EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT, EV_MELEE_SWIPE,
     EV_NOAMMO, EV_PULLBACK_WEAPON, EV_PUTAWAY_WEAPON, EV_RAISE_WEAPON, EV_RECHAMBER_WEAPON,
@@ -393,7 +394,7 @@ impl SpreadStance {
             dive: ps.prone_dive,
             into_leg_ms: ps
                 .view_lerp_ms
-                .map(|_| time - ps.view_lerp_stamp(command_time)),
+                .map(|_| time.wrapping_sub(ps.view_lerp_stamp(command_time))),
         }
     }
 }
@@ -510,8 +511,8 @@ fn pm_weapon_step(
     }
     if begin_change(ps, input, weapons, events) {
         // The pickup half runs later in the same `PM_Weapon` (section 1.8), so
-        // a putaway that left no drop time -- the cancelled pullback, a weapon
-        // gone from under the player -- raises on this frame and never shows
+        // a putaway that left no drop time (the cancelled pullback, a weapon
+        // gone from under the player) raises on this frame and never shows
         // `weaponstate` 2.
         if ps.weaponstate == WEAPON_DROPPING && ps.weapon_time_ms == 0 {
             pickup(ps, input, weapons, events);
@@ -987,13 +988,12 @@ fn putaway(
     ps.weaponstate = WEAPON_DROPPING;
     // The short branch of section 1.8: a weapon that is gone from under the
     // player, and a grenade still on its pin, go without a drop time, an anim
-    // or an event. Retail ORs `pm_flags` 0x400 in only for a prone player;
-    // this flag is set on every cancel, since nothing reads it either way.
+    // or an event. Retail also ORs `pm_flags` 0x400 in for a prone player;
+    // nothing reads that bit.
     if ps.weapon == 0 || !holds(ps, ps.weapon) || ps.grenade_time_left_ms > 0 {
         ps.weapon_time_ms = 0;
         if ps.grenade_time_left_ms > 0 {
             ps.grenade_time_left_ms = 0;
-            ps.grenade_cancelled = true;
         }
         // UO's short branch raises `EV_REMOVE_WEAPON_ATTACHMENTS` with the
         // weapon going down (game.mp.uo 0x448ee; coduo-diff.md 21).
@@ -1380,7 +1380,6 @@ const WEAPON_TYPE_GAS: &str = "gas";
 /// `holdFireTime`.
 fn pullback(ps: &mut PlayerState, def: &WeaponDef, events: &mut Vec<PmEvent>) {
     ps.grenade_time_left_ms = ms(def.fuse_time);
-    ps.grenade_cancelled = false;
     set_anim(ps, WEAP_GRENADE_PULLBACK);
     push(events, EV_PULLBACK_WEAPON);
     ps.weapon_delay_ms = ms(def.hold_fire_time);
@@ -1846,8 +1845,8 @@ mod tests {
     }
 
     /// The `cancel` step of `mp_carentan-tdm-grenade.txt`: a weapon change
-    /// during a pullback drops the grenade with no putaway at all -- no
-    /// `EV_PUTAWAY_WEAPON`, no drop time, no round spent -- and the raise
+    /// during a pullback drops the grenade with no putaway at all (no
+    /// `EV_PUTAWAY_WEAPON`, no drop time, no round spent), and the raise
     /// lands on the same frame.
     #[test]
     fn a_weapon_change_cancels_a_cooking_grenade() {
@@ -1873,7 +1872,6 @@ mod tests {
         );
         assert_eq!(ev, vec![EV_RAISE_WEAPON]);
         assert_eq!(ps.grenade_time_left_ms, 0);
-        assert!(ps.grenade_cancelled);
         assert_eq!(ps.weaponstate, WEAPON_RAISING);
         assert_eq!(ps.weapon, 2);
         assert_eq!(ps.ammoclip[1], 3);
@@ -1996,8 +1994,8 @@ mod tests {
         assert_eq!(ps.weaponstate, WEAPON_READY);
     }
 
-    /// 1.10: the melee bit swings once per press -- the swipe, the hit event
-    /// when `meleeDelay` runs out, and idle when `meleeTime` does.
+    /// 1.10: the melee bit swings once per press (the swipe, the hit event
+    /// when `meleeDelay` runs out, and idle when `meleeTime` does).
     #[test]
     fn the_melee_bit_swings_once_per_press() {
         let (mut ps, w) = armed(&with_melee(carbine()));
@@ -2309,7 +2307,7 @@ mod tests {
         assert_eq!(ps.weapon_pos_frac, 0.0, "500 ms down");
     }
 
-    /// A weapon with `aimDownSight 0` -- the grenades and the mounted MGs --
+    /// A weapon with `aimDownSight 0` (the grenades and the mounted MGs)
     /// holds the fraction at 0 whatever the button does.
     #[test]
     fn a_weapon_with_no_sight_never_leaves_the_hip() {
@@ -2408,7 +2406,7 @@ mod tests {
         // no sight, so the hold does not apply to it.
         step(&mut ps, &w, &crawl, 1);
         assert!(ps.ads_active);
-        // A gap in the flag -- a jump, a weapon raise -- is not recovered
+        // A gap in the flag (a jump, a weapon raise) is not recovered
         // while it crawls with the sight already held.
         ps.ads_active = false;
         step(&mut ps, &w, &crawl, 3);
@@ -2547,8 +2545,8 @@ mod tests {
         );
     }
 
-    /// A weapon with no decay rate at all -- and a weapon index with no file
-    /// behind it -- empties the counter in one frame, which is what retail's
+    /// A weapon with no decay rate at all (and a weapon index with no file
+    /// behind it) empties the counter in one frame, which is what retail's
     /// `decay = 1.0` with no frame-time scaling does.
     #[test]
     fn a_weapon_with_no_decay_rate_slams_the_spread_shut() {

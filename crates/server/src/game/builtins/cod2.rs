@@ -5,9 +5,9 @@
 use crate::game::host::{GameHost, WeaponOp};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
+use super::Builtin;
 use super::client::client_receiver;
 use super::precache::{before_any_wait, name_arg};
-use super::score::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("assert", developer_statement),

@@ -55,12 +55,12 @@ fn tokenize(text: &str) -> Vec<(usize, &str)> {
     let mut line = 1;
     while i < b.len() {
         match b[i] {
-            b' ' | b'\t' => i += 1,
             b'\n' => {
                 line += 1;
                 i += 1;
             }
-            b'\r' => i += 1,
+            // `Com_Parse`: any byte at or under a space is a blank.
+            c if c <= b' ' => i += 1,
             b'/' if b.get(i + 1) == Some(&b'/') => {
                 while i < b.len() && b[i] != b'\n' {
                     i += 1;
@@ -93,7 +93,7 @@ fn tokenize(text: &str) -> Vec<(usize, &str)> {
                 let start_line = line;
                 let start = i;
                 while i < b.len()
-                    && !matches!(b[i], b' ' | b'\t' | b'\n')
+                    && b[i] > b' '
                     && !(b[i] == b'/' && matches!(b.get(i + 1), Some(b'/' | b'*')))
                 {
                     i += 1;
@@ -197,6 +197,17 @@ mod tests {
         assert_eq!(v.categories[0].name, "cat");
         assert_eq!(v.categories[0].variants.len(), 1);
         assert_eq!(v.categories[0].variants[0].head_icon, None);
+    }
+
+    /// A CRLF file reads as its LF twin: any byte at or under a space ends
+    /// a token, as `Com_Parse` has it.
+    #[test]
+    fn a_crlf_file_parses_as_its_lf_twin() {
+        let lf = "male\ncat\n{\nsnd icon\nsnd2\n}\nother { a }\n";
+        let crlf = lf.replace('\n', "\r\n");
+        let (a, b) = (parse(lf).unwrap(), parse(&crlf).unwrap());
+        assert_eq!(b.gender, Gender::Male);
+        assert_eq!(format!("{a:?}"), format!("{b:?}"));
     }
 
     #[test]

@@ -60,7 +60,6 @@ pub(super) struct WorldFxPass {
 
 impl WorldFxPass {
     /// The pipelines for `keys` (fx, variant, two-sided, polygon offset).
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
@@ -131,7 +130,6 @@ impl WorldFxPass {
 /// The distortion pipeline: the world vertex in buffer 0, the tangent
 /// stream (`cod2::tangent_stream`) in buffer 1, as the lit pipeline reads
 /// them.
-#[allow(clippy::too_many_arguments)]
 fn distort_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,

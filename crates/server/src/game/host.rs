@@ -20,11 +20,11 @@ use vcod_common::net::protocol::CsLayout;
 use vcod_common::pmove::weapon::NUM_AMMO;
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
 
-/// `ENTITYNUM_NONE`, the entity number an unattached objective record and an
-/// unowned HUD element both carry.
 /// `G_ExplodeMissile`'s concussion entity's life past the blast (`.rodata`
 /// 0x75b48, 500.0).
 const CONCUSSIVE_LIFE_MS: i32 = 500;
+/// `ENTITYNUM_NONE`, the entity number an unattached objective record and an
+/// unowned HUD element both carry.
 pub const ENTITYNUM_NONE: i32 = vcod_common::net::protocol::ENTITYNUM_NONE as i32;
 /// An attacker that is no client but not NULL either, whose `s.number`
 /// reads 0: a client slot `G_FreeEntity` memset, or `g_entities[1023]`,
@@ -44,10 +44,15 @@ pub fn empty_objective() -> Objective {
     }
 }
 
+/// Whether a level keeps [`GameHost::script_log`]. On for tests and the
+/// in-process servers; `vcod-server` turns it off, as nothing there reads it.
+pub static KEEP_SCRIPT_LOG: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+
 /// The builtins `GameHost` answers itself: the env and io names, which have
 /// no family module of their own. `builtins::set::implementations` lists
 /// them with the families.
-pub const INLINE: &[(&str, builtins::score::Builtin)] = &[
+pub const INLINE: &[(&str, builtins::Builtin)] = &[
     ("setcullfog", set_cull_fog),
     ("setexpfog", set_exp_fog),
     ("ambientplay", ambient_play),
@@ -156,7 +161,8 @@ pub enum ClientEvent {
 /// (cod2-gsc-diff.md 4.1, "timeOffset and deathAnimDuration"): a hit's
 /// `timeOffset` ([`crate::game::cod2::time_offset`] for a bullet, 0 for
 /// every other `G_Damage` caller) and the death anim's length
-/// `BG_AnimScriptEvent` returns. Both 0 until a CoD2 hit sets them.
+/// `BG_AnimScriptEvent` returns. Both 0 until a hit sets them. CoD4's
+/// level fills the same pair (`Cod4HostState::callback`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Cod2CallbackArgs {
     pub time_offset: i32,
@@ -645,7 +651,7 @@ struct AtomMemo {
     profile: usize,
     entity: Vec<Option<Route>>,
     hud: Vec<Option<Route>>,
-    builtins: Vec<Option<Option<builtins::score::Builtin>>>,
+    builtins: Vec<Option<Option<builtins::Builtin>>>,
     plain: Vec<Option<bool>>,
     /// [`AtomMemo::read`]'s answers, an entity's and a hudelem's.
     reads: Vec<Option<(Except, Route)>>,
@@ -752,13 +758,14 @@ impl AtomMemo {
         *self.plain[i].get_or_insert_with(|| !PLAIN_EXCEPT.contains(&cx.resolve_folded(field)))
     }
 
-    /// The handler `profile`'s builtin set gives `name`.
+    /// The handler `profile`'s builtin set gives `name`, matched under its
+    /// folded spelling (`setCullFog` as `setcullfog`).
     fn builtin(
         &mut self,
         profile: &'static crate::game::profile::HostProfile,
         cx: &Cx,
         name: Atom,
-    ) -> Option<builtins::score::Builtin> {
+    ) -> Option<builtins::Builtin> {
         self.check(profile, cx);
         let i = name.0 as usize;
         if self.builtins.len() <= i {
@@ -789,7 +796,7 @@ pub struct GameHost {
     pub test_clients: TestClients,
     /// Each client's weapons, by slot. `giveWeapon` and `setSpawnWeapon`
     /// write it, `spawn` clears it, and `Server` copies it into the client's
-    /// sim every frame — the same re-read-it-each-frame arrangement the
+    /// sim every frame: the same re-read-it-each-frame arrangement the
     /// configstring table has, because a thread past a `wait` can still
     /// change it.
     pub client_weapons: Vec<crate::weapons::PlayerWeapons>,
@@ -803,8 +810,8 @@ pub struct GameHost {
     pub client_shellshock: Vec<[i32; 3]>,
     /// What the weapon builtins did to a client's ammo and current weapon,
     /// by slot, in call order. Unlike `client_weapons` these are edges rather
-    /// than state -- `ps.ammoclip` is spent by firing, so re-applying a full
-    /// clip every frame would make the weapon bottomless -- so `Server`
+    /// than state (`ps.ammoclip` is spent by firing, so re-applying a full
+    /// clip every frame would make the weapon bottomless), so `Server`
     /// drains them after `run_frame` and applies each once.
     pub client_weapon_ops: Vec<(usize, WeaponOp)>,
     /// Each client's ammo arrays ([`AmmoArrays`]), by slot.
@@ -943,7 +950,8 @@ pub struct GameHost {
     pub frozen: bool,
     /// The map's collision, once one exists. `None` in every unit test and
     /// on a fresh `GameHost`; `bulletTrace` traces against it when present
-    /// and reports a clean miss when it is not. Stage 10 is what sets it.
+    /// and reports a clean miss when it is not. Each level load sets it from
+    /// the map the server built (`Server::load_world`).
     pub world: Option<std::rc::Rc<crate::world::World>>,
     /// Counts the script's link changes of submodel brushes (`delete`,
     /// `notSolid`, `solid`): the bots' navigation graph is rebuilt once
@@ -963,9 +971,9 @@ pub struct GameHost {
     /// (`Carry::seed`), as `G_InitGame`'s `Rand_Init(trap_Milliseconds())`
     /// does (map-cycle doc 4.8). CoD2 keeps its own (`Cod2HostState::rand`).
     pub holdrand: vcod_common::rng::HoldRand,
-    /// Every `logPrint` line, in order. Retail's `logPrint` writes to the
-    /// server's `games_mp.log`; this is where that will come from, and it is
-    /// what lets a test replay a retail capture.
+    /// Every `print` and `logPrint` line, in order, for the tests and gates
+    /// that replay a retail capture (`games_mp.log` is [`Self::log_printf`]'s).
+    /// Kept only while [`KEEP_SCRIPT_LOG`] holds; the server binary clears it.
     pub script_log: Vec<String>,
     /// The `G_LogPrintf` lines (`logPrint`, `ExitLevel`, chat, pickups),
     /// each with `level.time`, for the engine to write to `games_mp.log`
@@ -973,11 +981,8 @@ pub struct GameHost {
     pub game_log: Vec<(i32, String)>,
     /// The level clock in milliseconds: `getTime()` reads it, and it is set
     /// by `ScriptRuntime::load` at map load and by `run_frame` every frame
-    /// after. `getTime`'s real units are unmeasured (`probe_cvar` only
-    /// established non-negative); this is the reading chosen. A later task's
-    /// deferred entity free also needs the level clock rather than a
-    /// per-call timestamp, which is why this lives on the host instead of
-    /// being threaded through `get_time`'s own call.
+    /// after: milliseconds of `level.time` (cod11-gsc-language.md 9).
+    /// The deferred entity free reads it too.
     pub level_time_ms: i32,
     /// `level.initializing` (`level+0x1c`): set by `G_InitGame` before the
     /// gametype's `main`, the map's `main` and `Callback_StartGameType` run
@@ -1010,8 +1015,8 @@ pub struct GameHost {
     /// (`trap_SendConsoleCommand`), drained by
     /// `ScriptRuntime::take_console` into the server's own buffer.
     pub console: Vec<String>,
-    /// Who owns a client's name, from `setClientNameMode`. Nothing reads it
-    /// until clients exist: both of retail's readers are client code.
+    /// Who owns a client's name, from `setClientNameMode`. Only CoD4's
+    /// userinfo change reads it.
     pub client_name_mode: builtins::cvar::ClientNameMode,
     /// The registered-item bitset. `precacheItem` writes it and mirrors it
     /// into configstring 8 (`crate::items`); nothing else reads or writes
@@ -1241,8 +1246,6 @@ fn logged<R>(f: impl FnOnce() -> R) -> (R, Rc<[String]>) {
     (r, paths.into())
 }
 
-/// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
-/// state is the one xorshift degenerates on.
 /// Per client slot, the spawn points a gate replays from a retail capture,
 /// in spawn order (`None` keeps the script's own pick): the pick draws from
 /// a clock-seeded generator on retail (map-cycle doc 4.8), so no seed
@@ -1251,9 +1254,18 @@ pub type SpawnPins = std::rc::Rc<std::cell::RefCell<Vec<std::collections::VecDeq
 /// One replayed spawn: `(origin, angles)`, or `None` for the script's own.
 pub type SpawnPin = Option<([f32; 3], [f32; 3])>;
 
+/// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
+/// state is the one xorshift degenerates on.
 pub(crate) const RNG_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 
 impl GameHost {
+    /// One line onto [`Self::script_log`] while [`KEEP_SCRIPT_LOG`] holds.
+    pub fn keep_script_line(&mut self, line: String) {
+        if KEEP_SCRIPT_LOG.load(std::sync::atomic::Ordering::Relaxed) {
+            self.script_log.push(line);
+        }
+    }
+
     /// Starts a new skeleton stamp: every client's bones go unposed.
     pub fn clear_dobj_stamps(&mut self) {
         for stamps in &mut self.dobj_posed {
@@ -1299,6 +1311,23 @@ impl GameHost {
         }
         if let Some(q) = self.client_squad.get_mut(slot) {
             *q = 0;
+        }
+        if let Some(v) = self.client_vitals.get_mut(slot) {
+            *v = Vitals::default();
+        }
+        if let Some(m) = self.client_no_spectate.get_mut(slot) {
+            *m = 0;
+        }
+        // The engine's mirrors of the last occupant's moves and ammo.
+        if slot < self.client_buttons.len() {
+            self.client_buttons[slot] = 0;
+            self.client_last_cmd[slot] = vcod_common::net::msg::NULL_USERCMD;
+            self.client_pm_type[slot] = 0;
+            self.client_on_ground[slot] = false;
+            self.client_stance[slot] = vcod_common::pmove::Stance::Stand;
+            self.client_ammo[slot] = AmmoArrays::default();
+            self.client_aim[slot] = ([0.0; 3], [0.0; 2], false);
+            self.client_grenade_ms[slot] = 0;
         }
         self.reset_client_objectives(slot);
         // The carried `pers`, if the boundary this client crossed kept one;
@@ -2463,19 +2492,6 @@ impl GameHost {
         }
     }
 
-    /// `RegisterItem` (0x4e504): the registration bit, the alt-fire link,
-    /// the item's own two model fields and configstring 8. Every caller
-    /// goes through here rather than `Items::register`, so an item takes
-    /// its model slots wherever it is registered -- at spawn for a placed
-    /// weapon, in `precacheItem` for the script's own list.
-    ///
-    /// A chained alt mode gets the same model pair as the item itself,
-    /// which retail may not: it reads a different struct there (object
-    /// model doc, section 15, M3). No stock alt-fire file carries a model
-    /// the base does not, so the two readings cannot be told apart.
-    ///
-    /// A new item past `level.initializing` is a script error
-    /// (`Scr_Error` at 0x4e577; UO and 1.5b the same).
     /// A weapon's 1-based wire index: [`crate::defs::Defs::weapon_index`]'s
     /// fixed list on CoD1; on CoD2 `G_GetWeaponIndexForName`, which loads
     /// and appends a weapon not yet named (`builtins::cod2::register_weapon`).
@@ -2495,6 +2511,19 @@ impl GameHost {
         }
     }
 
+    /// `RegisterItem` (0x4e504): the registration bit, the alt-fire link,
+    /// the item's own two model fields and configstring 8. Every caller
+    /// goes through here rather than `Items::register`, so an item takes
+    /// its model slots wherever it is registered: at spawn for a placed
+    /// weapon, in `precacheItem` for the script's own list.
+    ///
+    /// A chained alt mode gets the same model pair as the item itself,
+    /// which retail may not: it reads a different struct there (object
+    /// model doc, section 15, M3). No stock alt-fire file carries a model
+    /// the base does not, so the two readings cannot be told apart.
+    ///
+    /// A new item past `level.initializing` is a script error
+    /// (`Scr_Error` at 0x4e577; UO and 1.5b the same).
     pub fn register_item(&mut self, name: &str) -> Result<(), ErrorKind> {
         // CoD2's `RegisterItem` of a weapon is `G_GetWeaponIndexForName`.
         if self.profile.weapons == WeaponNumbering::Registered {
@@ -2601,6 +2630,9 @@ impl GameHost {
         // ahead of the vehicle.
         crate::game::vehicle::free(self, id);
         self.missiles.free_vehicle_refs(id);
+        if let HostExt::Cod4(c) = &mut self.ext {
+            c.missiles.retain(|m| m.id != id);
+        }
         self.triggers.remove(id);
         self.looped_fx.remove(&id);
         self.script_takedamage.remove(&id);
@@ -2742,8 +2774,7 @@ impl GameHost {
         true
     }
 
-    /// `G_RunThink` for `id` on its turn in the entity pass.
-    /// `G_RunThink` for `id`. Returns a think the host cannot run without
+    /// `G_RunThink` for `id` on its turn in the entity pass. Returns a think the host cannot run without
     /// the script context (`ThinkFn::MiscSpawner`) for the entity pass.
     #[must_use]
     pub fn run_entity_think(&mut self, id: EntId, now_ms: i32) -> Option<ThinkFn> {
@@ -2955,7 +2986,14 @@ fn hud_color_word(e: &crate::game::entity::GEntity, route: Route) -> u32 {
 /// to match. A free function so the bullet spread (`crate::game::combat`)
 /// draws from `Server`'s state the same way.
 pub fn rand_unit(state: &mut u64) -> f32 {
-    u64_to_f32(vcod_common::rng::xorshift(state)) / u64::MAX as f32
+    unit_of(vcod_common::rng::xorshift(state))
+}
+
+/// [`rand_unit`] off one generator word.
+fn unit_of(x: u64) -> f32 {
+    // The top 2^39 words round to 2^64 as f32: held under 1, which leaves
+    // every other draw as it was.
+    (u64_to_f32(x) / u64::MAX as f32).min(f32::from_bits(0x3f7f_ffff))
 }
 
 /// `x as f32` without a `u64` to `f32` cast: LLVM 23's instruction selection
@@ -3059,8 +3097,6 @@ impl Host for GameHost {
         recv: Option<Target>,
         args: &[Value],
     ) -> Result<Value, ErrorKind> {
-        // `resolve_folded`, not `resolve`: the atom carries the spelling the
-        // script used (`setCullFog`), and dispatch matches the folded form.
         match self.memo.builtin(self.profile, cx, name) {
             Some(f) => f(self, cx, recv, args),
             None => Err(ErrorKind::MissingBuiltin(name)),
@@ -3207,15 +3243,18 @@ impl Host for GameHost {
         value: Value,
     ) -> Result<(), ErrorKind> {
         self.write_field(cx, ent, field, value)?;
-        if ent.0 < FIRST_HUD_ELEM
-            && cx.resolve_folded(field) == "angles"
-            && let Some(e) = self.ents.get_mut_quiet(ent)
-        {
-            e.apos_base = None;
+        if ent.0 < FIRST_HUD_ELEM && cx.resolve_folded(field) == "angles" {
+            if let Some(e) = self.ents.get_mut_quiet(ent) {
+                e.apos_base = None;
+            }
+            if let Value::Vector(v) = value {
+                self.movers.set_angles(ent, glam::Vec3::from_array(v));
+            }
         }
         if ent.0 < FIRST_HUD_ELEM && cx.resolve_folded(field) == "origin" {
             if let Value::Vector(v) = value {
                 self.missiles.set_origin(ent, glam::Vec3::from_array(v));
+                self.movers.set_origin(ent, glam::Vec3::from_array(v));
             }
             self.link_entity(cx, ent);
         }
@@ -3354,12 +3393,10 @@ impl GameHost {
             return Ok(());
         }
         let cod1 = matches!(self.ext, HostExt::Cod1);
-        // A client field's write reaches no engine slot (but `maxspeed`'s
-        // `speed`), so it leaves `ObjectTable::edits` alone.
         // The reach names what the write moves (`ObjectTable::edits`): a
         // client field, or what the client arm below keeps off the entity,
-        // moves none of what the table's caches read, an engine field its
-        // own slot alone.
+        // moves none of what the table's caches read (but `maxspeed`'s
+        // `speed`), an engine field its own slot alone.
         let client_arm = cx.resolve_folded(field);
         let client_arm = matches!(
             client_arm,
@@ -3576,10 +3613,8 @@ fn squad_of(cx: &mut Cx, value: Value) -> Result<u8, ErrorKind> {
         })
 }
 
-/// `.headiconteam`'s setter (0x41c84): `none`, `axis` and `allies` store
-/// 0, 1 and 2; `spectator` is the error; any other string stores 3, which
-/// the getter reads back as `spectator`.
-/// `.headiconteam`'s setter: 1.1d (0x41c84) and 1.5b (0x3bb58) store 3 for
+/// `.headiconteam`'s setter: `none`, `axis` and `allies` store 0, 1 and 2;
+/// 1.1d (0x41c84) and 1.5b (0x3bb58) store 3 for
 /// any string but the four names and refuse "spectator"; UO's (0x43e4c)
 /// stores 3 for "spectator" and refuses the rest (gametypes doc 7.3). The
 /// names compare case and all.
@@ -3673,8 +3708,8 @@ fn enum_index(cx: &Cx, names: &[&str], value: Value) -> Result<Value, ErrorKind>
 /// hudelem `x` is type 0, an int, in retail's field table (object-model doc,
 /// "HUD element fields"), and the plant writes
 /// `320 - level.barsize / 2.0` into it, so `Scr_SetGenericField`'s int arm
-/// cannot be refusing a float. The rounding is not measured -- that value is
-/// 176.0, integral whichever way retail rounds -- and truncation toward zero
+/// cannot be refusing a float. The rounding is not measured (that value is
+/// 176.0, integral whichever way retail rounds), and truncation toward zero
 /// is taken from the language doc's other numeric conversions. Open: a probe
 /// writing 1.7 into an int field and reading it back would pin it.
 fn coerce(ty: FieldType, v: Value) -> Value {
@@ -3728,6 +3763,48 @@ mod tests {
         for x in edges.into_iter().chain(draws) {
             assert_eq!(u64_to_f32(x).to_bits(), (x as f32).to_bits(), "{x:#x}");
         }
+    }
+
+    /// A connect into a used slot starts from a clean `gclient_t`: none of
+    /// the last occupant's engine mirrors carry over (BUG-141).
+    #[test]
+    fn a_connect_starts_the_slots_mirrors_clean() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut host = GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]);
+        vm.with_cx(|cx| {
+            host.connect_client(cx, 2, "a");
+        });
+        host.client_buttons[2] = 7;
+        host.client_last_cmd[2].server_time = 1234;
+        host.client_pm_type[2] = 4;
+        host.client_on_ground[2] = true;
+        host.client_stance[2] = vcod_common::pmove::Stance::Prone;
+        host.client_ammo[2].ammo[1] = 30;
+        host.client_aim[2].2 = true;
+        host.client_grenade_ms[2] = 500;
+        host.ents.free_client(2);
+        vm.with_cx(|cx| {
+            host.connect_client(cx, 2, "b");
+        });
+        assert_eq!(host.client_buttons[2], 0);
+        assert_eq!(host.client_last_cmd[2], vcod_common::net::msg::NULL_USERCMD);
+        assert_eq!(host.client_pm_type[2], 0);
+        assert!(!host.client_on_ground[2]);
+        assert_eq!(host.client_stance[2], vcod_common::pmove::Stance::Stand);
+        assert_eq!(host.client_ammo[2], AmmoArrays::default());
+        assert!(!host.client_aim[2].2);
+        assert_eq!(host.client_grenade_ms[2], 0);
+    }
+
+    /// The top 2^39 words round to 2^64 as f32; the draw still stays under
+    /// 1, so CoD4's `randomInt(n)` stays under `n` (BUG-140).
+    #[test]
+    fn the_top_generator_words_stay_under_one() {
+        for x in [u64::MAX, u64::MAX - (1 << 38), 1 << 63] {
+            assert!(unit_of(x) < 1.0, "{x:#x}");
+            assert!(((unit_of(x) * 10.0) as i32) < 10);
+        }
+        assert_eq!(unit_of(0), 0.0);
     }
 
     /// `mp_pavlov.gsc` opens with exactly these two calls, and they are the
@@ -3976,7 +4053,7 @@ mod tests {
     /// A HUD enum field stores retail's index and reads back the name, the
     /// set/get hook pair retail hangs on the field record. The stock
     /// `startGame` writes `level.clock.alignX = "center"`, so a string has
-    /// to be what the field takes -- but `"center"` alone proves nothing
+    /// to be what the field takes, but `"center"` alone proves nothing
     /// about the order, since it is index 1 of three either way, so every
     /// name in all three tables is checked against its index here.
     #[test]

@@ -12,7 +12,7 @@ pub use vcod_common::net::event_ids::EV_PLAY_FX;
 pub use vcod_common::net::event_ids::EV_PLAY_FX_DIR;
 pub use vcod_common::net::event_ids::EV_PLAY_FX_ON_TAG;
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("loadfx", load_fx),
@@ -22,10 +22,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("grenadeexplosioneffect", grenade_explosion_effect),
     ("earthquake", earthquake),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// `loadFX(path)`: intern the effect path into the effect configstring
 /// range and hand back its effect id, which is what `level._effect[...]`

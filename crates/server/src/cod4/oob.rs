@@ -51,8 +51,10 @@ pub(super) const ENGINE_CVARS: &[(&str, &str)] = &[
     // (cod4-server-frame.md 5). An empty `sv_master1` beats master.cod.pm.
     ("dedicated", "1"),
     ("sv_master1", ""),
-    // Registered defaults; `sv_timeout`'s
-    // 240 is Q3's.
+    // The timeout and ban defaults here are unverified on 1.7. `sv_timeout`,
+    // `sv_zombietime`, `sv_reconnectlimit` and `sv_kickBanTime` are CoD2
+    // 1.3's `SV_Init` values (cod2-protocol.md 17.1, 17.3, 17.7);
+    // `sv_connectTimeout`'s 45 has no source in the docs.
     ("sv_timeout", "240"),
     // `SV_Init`'s int dvar (0x81735c8): 20, 10..1000, read every frame
     // (cod4-server-frame.md 8).
@@ -572,19 +574,16 @@ impl Cod4Server {
             }
             "map" | "devmap" => {
                 let devmap = cmd.eq_ignore_ascii_case("devmap");
-                if let Err(e) = self.map_command(arg(1), devmap, out) {
-                    log::error!("cod4: {cmd} {}: {e:#}", arg(1));
-                }
+                let r = self.map_command(arg(1), devmap, out);
+                self.load_failed(&format!("{cmd} {}", arg(1)), r);
             }
             "map_restart" | "fast_restart" => {
-                if let Err(e) = self.map_restart(cmd.eq_ignore_ascii_case("fast_restart")) {
-                    log::error!("cod4: {cmd}: {e:#}");
-                }
+                let r = self.map_restart(cmd.eq_ignore_ascii_case("fast_restart"));
+                self.load_failed(cmd, r);
             }
             "map_rotate" => {
-                if let Err(e) = self.map_rotate(out) {
-                    log::error!("cod4: map_rotate: {e:#}");
-                }
+                let r = self.map_rotate(out);
+                self.load_failed("map_rotate", r);
             }
             "tempbanclient" | "tempbanuser" | "kick" | "onlykick" => {
                 self.kick_command(cmd, &args, out);

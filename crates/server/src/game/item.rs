@@ -459,7 +459,7 @@ pub fn use_item(host: &mut GameHost, cx: &mut Cx, id: EntId) -> Option<bool> {
     Some(respawn_item(host, cx, id))
 }
 
-/// A listed item as `crate::push::push` sees it, `None` for an entity that
+/// A listed item as `crate::push::push_with` sees it, `None` for an entity that
 /// is not an item lying in the world.
 pub fn push_body(host: &mut GameHost, cx: &mut Cx, id: EntId) -> Option<crate::push::ItemBody> {
     let st = host.ents.get(id)?.item.filter(|i| !i.taken)?;
@@ -621,6 +621,11 @@ pub(crate) fn launch(
             .to_string()
     };
     let classname = cx.intern_exact(&classname);
+    // CoD2's weapons are registered by `precacheItem` (`register_weapon`).
+    // Registered before the spawn, so a refusal leaves no entity behind.
+    if host.profile.weapons == crate::game::profile::WeaponNumbering::Fixed {
+        host.register_item(&name)?;
+    }
     let id = host.ents.spawn(cx)?;
     for (field, value) in [
         ("classname", Value::String(classname)),
@@ -629,10 +634,6 @@ pub(crate) fn launch(
     ] {
         let atom = cx.intern_folded(field);
         host.set_field(cx, id, atom, value)?;
-    }
-    // CoD2's weapons are registered by `precacheItem` (`register_weapon`).
-    if host.profile.weapons == crate::game::profile::WeaponNumbering::Fixed {
-        host.register_item(&name)?;
     }
     let now = host.level_time_ms;
     if let Some(e) = host.ents.get_mut(id) {
@@ -1126,7 +1127,7 @@ pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: 
             format!("{word};0;{slot};{name};{item}")
         };
         host.log_printf(format!("{text}\n"));
-        host.script_log.push(line);
+        host.keep_script_line(line);
     }
     for c in out.commands {
         host.client_commands.push((slot, c));
@@ -1185,8 +1186,13 @@ pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: 
             .schedule(id, ThinkFn::Free, now + FREE_AFTER_PICKUP_MS);
     } else if let Some(secs) = respawn {
         host.ents
-            .schedule(id, ThinkFn::RespawnItem, now + secs * 1000);
+            .schedule(id, ThinkFn::RespawnItem, respawn_at(now, secs));
     }
+}
+
+/// The respawn think's deadline `secs` after `now`.
+fn respawn_at(now: i32, secs: i32) -> i32 {
+    now.saturating_add(secs.saturating_mul(1000))
 }
 
 /// `Touch_Item`'s respawn (section 7): the pickup function's value, which is
@@ -1248,6 +1254,28 @@ mod tests {
                 assert!(l > lo - 1e-6 && l <= hi, "{l} outside ({lo}, {hi}]");
             }
         }
+    }
+
+    /// A launch of an item nobody registered past level init is the
+    /// script error, and leaves no entity behind (BUG-112).
+    #[test]
+    fn an_unregistered_launch_leaves_no_entity() {
+        let (mut vm, mut host) = fixture();
+        host.initializing = false;
+        let index = crate::items::classname_index(host.defs, "item_health").unwrap();
+        let before = host.ents.iter_inuse().count();
+        let r = vm.with_cx(|cx| launch(&mut host, cx, index, Vec3::ZERO, Vec3::ZERO, None));
+        assert!(r.is_err());
+        assert_eq!(host.ents.iter_inuse().count(), before);
+    }
+
+    /// A map's `wait` past i32 milliseconds neither overflows nor comes
+    /// due at once (BUG-137).
+    #[test]
+    fn a_huge_respawn_wait_is_far_off() {
+        assert_eq!(respawn_at(5000, 20), 25_000);
+        assert!(respawn_at(5000, 3_000_000) > 5000 + 1_000_000);
+        assert!(respawn_at(i32::MAX - 10, 1) > 0);
     }
 
     /// The use key's sort: scores under 1.0 apart compare equal and the
@@ -1329,7 +1357,7 @@ mod tests {
     #[test]
     fn a_placed_item_is_on_the_wire_until_it_is_taken() {
         let (mut vm, mut host) = fixture();
-        let fg = crate::configstrings::weapon_index("fg42_mp").unwrap();
+        let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap();
         let id = vm.with_cx(|cx| {
             let id = host.ents.spawn(cx).unwrap();
             let cn = cx.intern_folded("classname");
@@ -1358,7 +1386,7 @@ mod tests {
     #[test]
     fn a_thrown_drop_flies_and_names_its_dropper_until_the_lockout_clears() {
         let (mut vm, mut host) = fixture();
-        let fg = crate::configstrings::weapon_index("fg42_mp").unwrap() as u8;
+        let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap() as u8;
         let d = Dropped {
             weapon: fg,
             count: 70,
@@ -1455,7 +1483,7 @@ mod tests {
     #[test]
     fn a_thrown_drop_lands_ahead_facing_the_droppers_yaw_with_the_weapon_roll() {
         let (mut vm, mut host) = floor_host(vcod_common::collision::test_world(&[]));
-        let carbine = crate::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+        let carbine = crate::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
         let d = Dropped {
             weapon: carbine,
             count: 400,
@@ -1608,7 +1636,7 @@ mod tests {
     fn a_taken_item_respawns_on_its_flags_and_fields() {
         let (mut vm, mut host) = fixture();
         host.weapons = std::rc::Rc::new(crate::game::pickup::tests_table());
-        let colt = crate::configstrings::weapon_index("colt_mp").unwrap();
+        let colt = crate::defs::V1.weapon_index("colt_mp").unwrap();
         host.client_weapons[0].give(colt, 3);
         host.client_vitals[0].max_health = 100;
         host.client_vitals[0].health = 40;

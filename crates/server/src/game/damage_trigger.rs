@@ -180,7 +180,8 @@ pub fn activate(
             let r = host.rand_int();
             let crandom = 2.0 * (r as f32 / 2_147_483_648.0) - 1.0;
             let ms = ((crandom * spec.random + spec.wait) * 1000.0) as i32;
-            host.ents.schedule(id, ThinkFn::MultiWait, now + ms);
+            host.ents
+                .schedule(id, ThinkFn::MultiWait, multi_wait_at(now, ms));
         } else {
             host.ents
                 .schedule(id, ThinkFn::Free, now + crate::game::trigger::SPENT_FREE_MS);
@@ -188,6 +189,11 @@ pub fn activate(
     }
     restore(host, cx, id);
     fired
+}
+
+/// The re-arm deadline `ms` after `now`.
+fn multi_wait_at(now: i32, ms: i32) -> i32 {
+    now.saturating_add(ms)
 }
 
 /// `health` back to [`FULL_HEALTH`].
@@ -268,7 +274,6 @@ pub fn damaged(
 /// crosses (`trap_SightTraceToEntity`) is notified `"damage"` with the
 /// damage and the attacker on the spot, activated, and put back to full
 /// when nothing accumulates. Nothing comes off `health`.
-#[allow(clippy::too_many_arguments)]
 pub fn sweep(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -350,6 +355,14 @@ pub fn sweep(
 mod tests {
     use super::*;
     use crate::game::trigger::TriggerShape;
+
+    /// A `wait` past i32 milliseconds re-arms far off, not at once and not
+    /// with an overflow (BUG-137).
+    #[test]
+    fn a_huge_wait_rearms_far_off() {
+        assert_eq!(multi_wait_at(1000, 500), 1500);
+        assert!(multi_wait_at(1000, i32::MAX) > 1000);
+    }
 
     /// The spawnflags' refusals on 1.1 against the means-of-death table
     /// (cod11-combat.md 4.1): mp_foy's belltower (115) on UO takes a

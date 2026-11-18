@@ -80,7 +80,6 @@ impl LoadProgress {
     }
 
     /// `name` has `got` of `size` bytes down; a new name starts its clock.
-    // Fed by C4-45's `Fetch::progress` once that branch and this one meet.
     pub fn set_download(&self, name: &str, got: u64, size: u64) {
         self.with(|s| {
             let started = match &s.download {
@@ -208,6 +207,22 @@ impl Loader {
         Self::start_job(server, game_dir, move |p, flag| join(a, p, flag))
     }
 
+    /// [`Self::start`] for a typed `host[:port]`, looked up on the worker
+    /// (port 28960 when left out, as `master::parse_address` gives), so a
+    /// slow name lookup holds the connect screen and not the window.
+    pub fn start_named(
+        server: String,
+        game_dir: PathBuf,
+        args: impl FnOnce(SocketAddr) -> JoinArgs + Send + 'static,
+    ) -> Loader {
+        let typed = server.clone();
+        Self::start_job(server, game_dir, move |p, flag| {
+            let at = vcod_common::net::master::parse_address(&typed)
+                .ok_or_else(|| anyhow::anyhow!("cannot resolve {typed}"))?;
+            join(args(SocketAddr::V4(at)), p, flag)
+        })
+    }
+
     /// `demo` / `timedemo` (cod4-demos.md 5): the demo read to its
     /// gamestate and its map loaded behind the same screen, `name` in the
     /// server's place.
@@ -312,7 +327,8 @@ fn join(a: JoinArgs, p: &LoadProgress, cancel: &Arc<AtomicBool>) -> Result<Joine
     load_level(session, &a.game_dir, p, cancel, stock)
 }
 
-/// The map a session's gamestate names, loaded for it.
+/// The map a session's gamestate names, loaded for it. A load that ends
+/// any other way than handing the session over says `disconnect`.
 fn load_level(
     mut session: Cod4Session,
     game_dir: &std::path::Path,
@@ -320,14 +336,42 @@ fn load_level(
     cancel: &Arc<AtomicBool>,
     stock: Option<crate::cod4_fly::StockZones>,
 ) -> Result<Joined> {
-    let cancelled = |s: &mut Cod4Session| {
-        let gone = cancel.load(Ordering::Relaxed);
-        if gone {
-            s.disconnect();
+    match load_map(&session, game_dir, p, cancel, stock) {
+        Ok((map, map_name, fs_game, hud)) => {
+            p.set_loaded(1.0);
+            p.set_stage(Stage::Done);
+            Ok(Joined {
+                session,
+                map,
+                map_name,
+                fs_game,
+                hud,
+            })
         }
-        gone
-    };
-    if cancelled(&mut session) {
+        Err(e) => {
+            session.disconnect();
+            Err(e)
+        }
+    }
+}
+
+/// [`load_level`]'s load: the map, its name, the session's `fs_game` and
+/// the HUD; `Cancelled` once Esc was pressed. A panic in the load is an
+/// error like any other.
+fn load_map(
+    session: &Cod4Session,
+    game_dir: &std::path::Path,
+    p: &LoadProgress,
+    cancel: &Arc<AtomicBool>,
+    stock: Option<crate::cod4_fly::StockZones>,
+) -> Result<(
+    crate::cod4_fly::Cod4Map,
+    String,
+    Option<String>,
+    crate::cod4_hud::LevelZones,
+)> {
+    let cancelled = || cancel.load(Ordering::Relaxed);
+    if cancelled() {
         return Err(vcod_cod4::net::conn::Cancelled.into());
     }
     let map_name = session
@@ -342,23 +386,17 @@ fn load_level(
     let fs_game = session.fs_game();
     let report = p.clone();
     crate::cod4_fly::set_load_report(Some(Box::new(move |f| report.set_loaded(f))));
-    let loaded =
+    let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         crate::cod4_fly::load_with_hud(game_dir, fs_game.as_deref(), &map_name, &ents, stock)
-            .with_context(|| format!("cannot load CoD4 map '{map_name}'"));
+    }))
+    .unwrap_or_else(|_| Err(anyhow::anyhow!("the load panicked")))
+    .with_context(|| format!("cannot load CoD4 map '{map_name}'"));
     crate::cod4_fly::set_load_report(None);
-    if cancelled(&mut session) {
+    if cancelled() {
         return Err(vcod_cod4::net::conn::Cancelled.into());
     }
     let (map, hud) = loaded?;
-    p.set_loaded(1.0);
-    p.set_stage(Stage::Done);
-    Ok(Joined {
-        session,
-        map,
-        map_name,
-        fs_game,
-        hud,
-    })
+    Ok((map, map_name, fs_game, hud))
 }
 
 #[cfg(test)]
@@ -653,5 +691,70 @@ mod tests {
         );
         assert_eq!(most, 1, "the client was in the slot table");
         assert!(freed, "the server kept the cancelled client past 20 s");
+    }
+
+    /// A join whose map fails to load (an install with no `zone/`) says
+    /// `disconnect`: the server frees the slot at once instead of timing
+    /// it out.
+    #[test]
+    fn cod4_join_whose_map_load_fails_frees_the_server_slot() {
+        use vcod_server::cod4::{Cod4Config, Cod4Server, FRAME_MS};
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let mut sv = Cod4Server::new(
+            Cod4Config {
+                map: "mp_crash".into(),
+                gametype: "war".into(),
+                hostname: "vcod".into(),
+                max_clients: 4,
+            },
+            7,
+        );
+        sv.load(Some(&install)).unwrap();
+        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let addr = sock.local_addr().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(install.root().join("main"), root.path().join("main")).unwrap();
+        let game_dir = root.path().to_path_buf();
+        let client = std::thread::spawn(move || {
+            let mut l = Loader::start(args(addr, game_dir));
+            finish(&mut l, 60).expect("the join ends")
+        });
+        let mut next = Instant::now();
+        let mut buf = [0u8; 2048];
+        let (mut most, mut freed) = (0, false);
+        let mut finished_at: Option<Instant> = None;
+        let t0 = Instant::now();
+        while t0.elapsed() < Duration::from_secs(90) {
+            while let Ok((n, from)) = sock.recv_from(&mut buf) {
+                sv.handle_packet(from, &buf[..n], Instant::now());
+            }
+            let now = Instant::now();
+            if now >= next {
+                sv.tick_frames(now, 1);
+                next += Duration::from_millis(FRAME_MS as u64);
+            }
+            for (to, p) in sv.take_outgoing() {
+                let _ = sock.send_to(&p, to);
+            }
+            most = most.max(sv.client_count());
+            if client.is_finished() {
+                let at = *finished_at.get_or_insert_with(Instant::now);
+                if sv.client_count() == 0 {
+                    freed = true;
+                    break;
+                }
+                if at.elapsed() > Duration::from_secs(5) {
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let e = client.join().unwrap().err().expect("the load fails");
+        assert!(format!("{e:#}").contains("cannot load CoD4 map"), "{e:#}");
+        assert_eq!(most, 1, "the client was in the slot table");
+        assert!(freed, "the server kept the client past 5 s");
     }
 }

@@ -822,7 +822,7 @@ pub struct BasBaseView {
     /// standing bot has such a shot from (`Server::breach_stands`).
     pub stands: Vec<[f32; 3]>,
     /// In a tank's driver's seat: a shell fired now bursts on the base
-    /// (`Server::shell_laid`).
+    /// (`Server::shell_view`).
     pub laid: bool,
 }
 
@@ -1227,8 +1227,8 @@ pub struct Bot {
     /// Menu indices already answered, so a reopened menu is not answered
     /// twice (the same bookkeeping `JoinProbe` keeps).
     answered: Vec<i32>,
-    /// The tick's usercmd is stamped with the server's own clock; the driver
-    /// stamps it, so the brain carries only the input state below.
+    // The tick's usercmd is stamped with the server's own clock; the driver
+    // stamps it, so the brain carries only the input state below.
     /// The bot's own generator: its brain's draws and its path's
     /// (`nav::Follower::waypoint`), never the server's shared `rand()`
     /// the spread, the recoil and the melee roll take, so one bot's
@@ -1315,7 +1315,8 @@ pub struct Bot {
     /// (coduo-diff.md 22).
     armed: u8,
     /// A weapon switch under way: the byte every cmd carries until
-    /// `ps.weapon` reads it (AGENTS.md, "Every cmd carries the weapon").
+    /// `ps.weapon` reads it (docs/dev/traps.md, "Wire and netcode", "The cmd's
+    /// weapon byte").
     switch_to: Option<u8>,
     /// `bas` launchers tapped for with nothing taken and health items no
     /// body reaches (`Bot::track_heal`), and the ticks each stays passed
@@ -1386,16 +1387,17 @@ pub struct Bot {
     /// A goal a test pins in place of the brain's own (`Bot::force_goal`).
     forced: Option<[f32; 3]>,
     obj: Objective,
-    /// An LMG's bipod: ticks the sight button has been held with no deploy,
-    /// ticks left before another try once one was refused or the target
-    /// left the yaw cap, and ticks the bipod stays down with no enemy.
+    /// An LMG's bipod: ticks the sight button has been held with no deploy.
     lmg_tries: u32,
+    /// Ticks left before another bipod try once one was refused or the
+    /// target left the yaw cap.
     lmg_rest: u32,
-    /// Ticks in sight of an enemy with no round fired at him, and the
-    /// enemy given up on for a while past [`FUTILE_TICKS`]
-    /// ([`Bot::ignores`]).
+    /// Ticks in sight of an enemy with no round fired at him.
     futile: u32,
+    /// The enemy given up on for a while past [`FUTILE_TICKS`]
+    /// ([`Bot::ignores`]).
     ignored: Option<(usize, u32)>,
+    /// Ticks the bipod stays down with no enemy.
     lmg_linger: u32,
     /// A throw turned away from an enemy that came inside the blast: the
     /// yaw it goes to. And the ticks a throw has been held past its release
@@ -1911,7 +1913,10 @@ impl Bot {
                 // selects `n` and its cmds ask for it (combat doc 9.8), so the
                 // bot's byte does too; the pickup half reads only the byte.
                 ["a", w] => {
-                    if let Ok(w) = w.parse::<u8>() {
+                    // The held mask is 64 bits: a weapon past it is never held.
+                    if let Ok(w) = w.parse::<u8>()
+                        && w < 64
+                    {
                         self.switch_to = Some(w);
                     }
                 }
@@ -1979,6 +1984,8 @@ impl Bot {
     /// indices the last one used; without the clear the bot never spawns
     /// again (the same rejoin the probes learned).
     pub fn rearm(&mut self) {
+        self.stage = Stage::Wander;
+        self.end_throw();
         self.main_menu.clear();
         self.answered.clear();
         self.round_start = true;
@@ -2759,14 +2766,14 @@ impl Bot {
         }
         Some(match t {
             ObjTarget::Plant(s) => Goal::To(s.stand),
-            // Too close: any way out will do, and the roam leaves the ring
-            // well before it gets anywhere.
             // A charge about to blow: away from it, the way out of its room.
             ObjTarget::Guard { at, inner, .. }
                 if inner >= BAS_BLAST && dist_sq(view.origin, at) < inner * inner =>
             {
                 Goal::Away(at)
             }
+            // Too close: any way out will do, and the roam leaves the ring
+            // well before it gets anywhere.
             ObjTarget::Guard { at, inner, .. } if dist_sq(view.origin, at) < inner * inner => {
                 Goal::Roam
             }
@@ -3671,8 +3678,11 @@ impl Bot {
             return cmd;
         }
         if !view.playing {
-            // Spectator or intermission camera: nothing to press.
+            // Spectator or intermission camera: nothing to press, and no
+            // throw carries into the next level or round.
             self.respawn_ticks = 0;
+            self.stage = Stage::Wander;
+            self.end_throw();
             self.disengage();
             self.recall = None;
             self.end_life();
@@ -4320,7 +4330,11 @@ impl Bot {
         // or swapped at a pickup) and the byte would read as a holster for
         // good.
         if let Some(w) = self.switch_to
-            && (view.weapon == w || view.weapons_held >> w & 1 == 0)
+            && (view.weapon == w
+                || view
+                    .weapons_held
+                    .checked_shr(u32::from(w))
+                    .is_none_or(|m| m & 1 == 0))
         {
             self.switch_to = None;
         }
@@ -4735,24 +4749,23 @@ impl Bot {
         let off = yaw_diff(view.view[0] + g[0], tp).hypot(yaw_diff(view.view[1] + g[1], ty));
         let cone = (HIT_RADIUS / dist).atan().to_degrees();
 
-        if std::env::var_os("PONYRI_DBG").is_some() {
-            eprintln!(
-                "BOT org={:?} e={} dist={:.0} off={:.3} cone={:.3} err={:.1} cd={} busy={} ads_frac={} fil={} clip={} view={:?} aim={:?}",
-                view.origin,
-                e.slot,
-                dist,
-                off,
-                cone,
-                self.target.as_ref().map_or(0.0, |t| t.error),
-                self.fire_cooldown,
-                view.busy_ms,
-                view.ads_frac,
-                view.friend_in_line,
-                view.clip,
-                view.view,
-                aim
-            );
-        }
+        log::trace!(
+        target: "vcod_server::bots::engage",
+        "BOT org={:?} e={} dist={:.0} off={:.3} cone={:.3} err={:.1} cd={} busy={} ads_frac={} fil={} clip={} view={:?} aim={:?}",
+            view.origin,
+            e.slot,
+            dist,
+            off,
+            cone,
+            self.target.as_ref().map_or(0.0, |t| t.error),
+            self.fire_cooldown,
+            view.busy_ms,
+            view.ads_frac,
+            view.friend_in_line,
+            view.clip,
+            view.view,
+            aim
+        );
         if view.lmg {
             let ready = self.bipod(view, [tp - g[0], ty], cmd);
             self.trigger(view, dist, off, cone, ready, cmd);
@@ -4861,8 +4874,8 @@ impl Bot {
         ]
     }
 
-    /// Semi-autos tap, at least `fireTime` apart (AGENTS.md, "Fire is
-    /// tapped"); automatics hold the bit for a burst, shorter at range.
+    /// Semi-autos tap, at least `fireTime` apart (combat doc 1.4); automatics
+    /// hold the bit for a burst, shorter at range.
     /// Inside the cone the trigger goes down; past it, with a chance that
     /// falls to none at the weapon's reach ([`REACH_AUTO`]), so a settling
     /// aim fires before it has settled.
@@ -5057,7 +5070,6 @@ impl Bot {
         self.fired
     }
 
-    /// A fresh wander heading, and a new stall baseline to measure it by.
     /// A new stall window from `at`.
     fn restart_stall(&mut self, at: [f32; 3]) {
         self.stall_origin = at;
@@ -5108,6 +5120,7 @@ impl Bot {
         self.restart_stall(view.origin);
     }
 
+    /// A fresh wander heading, and a new stall baseline to measure it by.
     fn pick_heading(&mut self, view: &BotView) {
         self.heading = (self.rand() % 360) as f32;
         // Turned a step at a time off a hazard or a drop, beside the
@@ -5163,9 +5176,8 @@ impl Bot {
 
     /// The view through a throw: up over the enemy in sight, or where it
     /// was last seen, by a lob that grows with the range, else held where
-    /// it is. The cmd used to carry
-    /// zero angles here, which threw the frag wherever `delta_angles`
-    /// pointed, often into a wall at the thrower's feet.
+    /// it is. Zero angles here would throw the frag wherever `delta_angles`
+    /// points, often into a wall at the thrower's feet.
     fn lob_angles(&self, view: &BotView) -> [i32; 3] {
         let aim = match self.throw_target(view) {
             // The throw leaves along the aim, the view and the gun's
@@ -5399,20 +5411,22 @@ const HOLSTER_TICKS: u32 = 40;
 /// target this close, so the shot goes from the hip.
 const SCOPE_MIN_RANGE: f32 = 200.0;
 
-/// An LMG's deploy that has not taken this many ticks after the press was
-/// refused (a wall ahead, no room to go prone); the button rests this long
-/// before the next try. The bipod stays down this long once the target is
-/// gone, the shot waits on the sight this far up (0.99, coduo-movement.md
-/// 6), and a target more than this far round the deploy's facing is past
-/// `bg_lmg_yawcap`'s 55 degrees, near enough.
-const LMG_TRY_TICKS: u32 = 10;
 /// In sight this long with no round fired, an enemy is left out of the
-/// view this long ([`Bot::count_futile`]).
+/// view for [`IGNORE_TICKS`] ([`Bot::count_futile`]).
 const FUTILE_TICKS: u32 = 200;
+/// How long an enemy given up on stays out of the view.
 const IGNORE_TICKS: u32 = 600;
+/// An LMG's deploy that has not taken this many ticks after the press was
+/// refused (a wall ahead, no room to go prone).
+const LMG_TRY_TICKS: u32 = 10;
+/// Ticks the button rests after a refused deploy before the next try.
 const LMG_REST_TICKS: u32 = 40;
+/// Ticks the bipod stays down once the target is gone.
 const LMG_LINGER_TICKS: u32 = 60;
+/// The shot waits on the sight this far up (coduo-movement.md 6).
 const LMG_READY_FRAC: f32 = 0.99;
+/// A target more than this far round the deploy's facing is past
+/// `bg_lmg_yawcap`'s 55 degrees, near enough.
 const LMG_ARC_DEG: f32 = 50.0;
 /// The pitch clamp of a deployed LMG's view, either way of
 /// `proneTorsoPitch` (`PM_UpdateViewAngles`, coduo-movement.md 7;
@@ -5445,7 +5459,6 @@ const SPRINT_FRESH: f32 = 0.5;
 const SPRINT_TAIL: f32 = 160.0;
 use vcod_common::pmove::cmd::ANGLE2SHORT;
 
-/// Whether a body at `origin` (feet) has reached the chest-high `spot`.
 /// The feet stand inside a zone, [`SITE_MARGIN`] in from its sides, or on
 /// its stand when the zone is narrower than the margin.
 pub(crate) fn inside_site(o: [f32; 3], s: &SiteView) -> bool {
@@ -5456,6 +5469,7 @@ pub(crate) fn inside_site(o: [f32; 3], s: &SiteView) -> bool {
     inside || (flat < 16.0 && (o[2] - s.stand[2]).abs() < 32.0)
 }
 
+/// Whether a body at `origin` (feet) has reached the chest-high `spot`.
 fn arrived(origin: [f32; 3], spot: [f32; 3]) -> bool {
     let h = (spot[0] - origin[0]).hypot(spot[1] - origin[1]);
     h < ARRIVE_RADIUS && (spot[2] - origin[2]).abs() < ARRIVE_HEIGHT
@@ -5488,7 +5502,6 @@ pub(crate) fn cmd_angles(view: &BotView, aim: [f32; 2]) -> [i32; 3] {
     ]
 }
 
-/// The shorter signed way round, degrees.
 /// The strafe key that slides a body on a ladder, facing it at `yaw`,
 /// toward `m` along the face; none once within [`LADDER_CENTRED`].
 pub(crate) fn along_face(yaw: f32, from: [f32; 3], m: [f32; 2]) -> i8 {
@@ -5501,6 +5514,7 @@ pub(crate) fn along_face(yaw: f32, from: [f32; 3], m: [f32; 2]) -> i8 {
     }
 }
 
+/// The shorter signed way round, degrees.
 fn yaw_diff(to: f32, from: f32) -> f32 {
     (to - from + 180.0).rem_euclid(360.0) - 180.0
 }
@@ -5659,6 +5673,34 @@ mod tests {
             velocity: [0.0; 3],
         });
         (bot, v)
+    }
+
+    /// A switch to a weapon past the 64-bit held mask (a modded level's
+    /// `a <n>`) ends as a weapon not held, with no shift overflow
+    /// (BUG-156).
+    #[test]
+    fn a_switch_past_the_held_mask_ends() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = view();
+        v.playing = true;
+        bot.switch_to = Some(70);
+        bot.think(&v);
+        assert_eq!(bot.switch_to, None);
+    }
+
+    /// An intermission or a spectator spell drops a throw under way, as a
+    /// death does: the next level does not start on last level's frag
+    /// (BUG-135).
+    #[test]
+    fn a_throw_under_way_ends_when_the_bot_stops_playing() {
+        let mut bot = Bot::new("allies", true, 1);
+        bot.stage = Stage::Cook { left: 5, spoon: 2 };
+        bot.throw_at = Some([100.0, 0.0, 0.0]);
+        let mut v = view();
+        v.playing = false;
+        bot.think(&v);
+        assert!(matches!(bot.stage, Stage::Wander));
+        assert_eq!(bot.throw_at, None);
     }
 
     pub(super) fn view() -> BotView {

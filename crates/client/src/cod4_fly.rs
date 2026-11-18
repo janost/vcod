@@ -42,7 +42,7 @@ pub struct Cod4Map {
     /// materials in `materials`.
     pub models: HashMap<String, vcod_common::model::Model>,
     /// Each of `models`' surfaces' `partBits`, by model name: what an
-    /// entity's `hidePart`s take off it (`Cod4Client::set_parts`).
+    /// entity's `hidePart`s take off it (`Cod4Client::handle`).
     pub parts: Parts,
     /// The weapons asked for: world and projectile model names.
     pub weapons: HashMap<String, WeaponModels>,
@@ -175,8 +175,13 @@ pub struct StockZones {
 /// [`StockZones`] off the install at `game_dir`, each zone on a thread
 /// of its own.
 pub fn walk_stock(game_dir: &Path) -> Result<StockZones> {
-    let install = Install::at(game_dir)
-        .with_context(|| format!("{} has no zone/ directory", game_dir.display()))?;
+    let install = Install::at(game_dir).with_context(|| {
+        format!(
+            "{} has no zone/ directory: {}",
+            game_dir.display(),
+            vcod_common::game_dir::INSTALL_HINT
+        )
+    })?;
     let names: Vec<&str> = std::iter::once("common_mp").chain(SOUND_ZONES).collect();
     let mut walked = vcod_common::laps::par_map(&names, |name| {
         let path = install.zone("english", name);
@@ -201,7 +206,13 @@ pub fn load_from(
     stock: Option<StockZones>,
 ) -> Result<Cod4Map> {
     let install = Install::at(game_dir)
-        .with_context(|| format!("{} has no zone/ directory", game_dir.display()))?
+        .with_context(|| {
+            format!(
+                "{} has no zone/ directory: {}",
+                game_dir.display(),
+                vcod_common::game_dir::INSTALL_HINT
+            )
+        })?
         .with_fs_game(fs_game)
         .with_map(Some(map));
     let mut laps = vcod_common::laps::Laps::new(format!("cod4 map {map}"));
@@ -327,7 +338,8 @@ pub fn load_from(
     if let Some(z) = mod_zone {
         src.add_zone_flagged(Arc::new(z.assets), vcod_cod4::install::zone_flags::MOD);
     }
-    // vcod draws no loading screen yet; the zone's assets still win.
+    // Only the zone's assets are kept; the loading screen reads its image
+    // through `levelshot`.
     load_zone(&install, map, &mut src);
     laps.lap("load zone");
     let lightmaps = m
@@ -761,8 +773,13 @@ pub(crate) type Bodies = (
 /// The replay gate's load; [`load`] builds the same beside the world.
 #[cfg(test)]
 pub fn load_bodies(game_dir: &Path, map: &str, ents: &EntityAssets) -> Result<Bodies> {
-    let install = Install::at(game_dir)
-        .with_context(|| format!("{} has no zone/ directory", game_dir.display()))?;
+    let install = Install::at(game_dir).with_context(|| {
+        format!(
+            "{} has no zone/ directory: {}",
+            game_dir.display(),
+            vcod_common::game_dir::INSTALL_HINT
+        )
+    })?;
     let (mut m, walked) = Map::load(&install, "english", map)?;
     let path = install.zone("english", "common_mp");
     let common = Zone::open_path(&path)
@@ -778,8 +795,13 @@ pub fn load_bodies(game_dir: &Path, map: &str, ents: &EntityAssets) -> Result<Bo
 /// builds them beside it. The replay gate's load.
 #[cfg(test)]
 pub fn load_av(game_dir: &Path, map: &str) -> Result<(Av, OverlayFiles)> {
-    let install = Install::at(game_dir)
-        .with_context(|| format!("{} has no zone/ directory", game_dir.display()))?;
+    let install = Install::at(game_dir).with_context(|| {
+        format!(
+            "{} has no zone/ directory: {}",
+            game_dir.display(),
+            vcod_common::game_dir::INSTALL_HINT
+        )
+    })?;
     let (mut m, walked) = Map::load(&install, "english", map)?;
     let StockZones { common, sound } = walk_stock(game_dir)?;
     sound_and_fx(&mut m, &[&walked.assets, &common.assets], map, &sound)
@@ -789,8 +811,13 @@ pub fn load_av(game_dir: &Path, map: &str) -> Result<(Av, OverlayFiles)> {
 /// them. The gate's load.
 #[cfg(test)]
 pub fn load_fly_av(game_dir: &Path, map: &str) -> Result<(FlyAv, OverlayFiles)> {
-    let install = Install::at(game_dir)
-        .with_context(|| format!("{} has no zone/ directory", game_dir.display()))?;
+    let install = Install::at(game_dir).with_context(|| {
+        format!(
+            "{} has no zone/ directory: {}",
+            game_dir.display(),
+            vcod_common::game_dir::INSTALL_HINT
+        )
+    })?;
     let (mut m, walked) = Map::load(&install, "english", map)?;
     let StockZones { common, sound } = walk_stock(game_dir)?;
     let (av, files) = sound_and_fx(&mut m, &[&walked.assets, &common.assets], map, &sound)?;
@@ -805,8 +832,13 @@ pub fn load_fly_av(game_dir: &Path, map: &str) -> Result<(FlyAv, OverlayFiles)> 
 /// map and the weapons of its zone and `common_mp`. The replay gate's load.
 #[cfg(test)]
 pub fn load_world(game_dir: &Path, map: &str) -> Result<crate::play::cod4_predict::Cod4World> {
-    let install = Install::at(game_dir)
-        .with_context(|| format!("{} has no zone/ directory", game_dir.display()))?;
+    let install = Install::at(game_dir).with_context(|| {
+        format!(
+            "{} has no zone/ directory: {}",
+            game_dir.display(),
+            vcod_common::game_dir::INSTALL_HINT
+        )
+    })?;
     let (_, walked) = Map::load(&install, "english", map)?;
     let path = install.zone("english", "common_mp");
     let common = Zone::open_path(&path)
@@ -983,13 +1015,13 @@ fn add_whole_material(
     m.add_material(a, id)
 }
 
-/// A clip decoded once per name (lowercase), `None` where no zone holds
-/// it whole or it does not decode.
 /// A clip decoded for the shared sampler and as 1.7's sampler reads it.
 type Clip = (
     Arc<vcod_common::xanim::XAnim>,
     Arc<vcod_cod4::xanimcalc::Parts>,
 );
+/// A clip decoded once per name (lowercase), `None` where no zone holds
+/// it whole or it does not decode.
 type Clips = HashMap<String, Option<Clip>>;
 
 /// Clip `n` out of the first of `zones` holding it whole, decoded once.

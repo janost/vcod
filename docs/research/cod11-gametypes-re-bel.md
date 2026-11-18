@@ -442,21 +442,14 @@ VERIFIED: `objective_position` (0x5e128) opens with the same detach
 at the top of the `retrieval_think` it restarts pins the marker where the
 book fell.
 
-### 7.5 What ours got wrong, and the fixes
+### 7.5 Head icons and the model index on the wire, and the drop's landing
 
-Each was a difference the gate showed. All are fixed; `gametypes_ab`'s
-`GAPS` is empty.
-
-- No head icon on the wire. `.headicon` and `.headiconteam` are indices in
-  the client store, the getters answer as 7.3 says, and
-  `ClientSim::to_entity` writes `iHeadIcon` / `iHeadIconTeam`, mirrored at
-  the end frame. Unset, they read `""` and `"none"` (not `undefined`), and
-  `.statusicon` `""`.
-- `objective_position` must detach (7.4), or the dropped book's marker
-  stays on the carrier's entity number.
-- A client that never had a model sends `modelindex` 0, not the first
-  empty model slot (`client_model_index` must not match `""` against the
-  table).
+vcod's `ClientSim::to_entity` writes `.headicon` and `.headiconteam` into
+`iHeadIcon` and `iHeadIconTeam`, mirrored at the end frame, with 7.3's
+unset reads (`""`, `"none"`, and `""` for `.statusicon`). VERIFIED,
+`gametypes_ab` against the retail capture: a client that never had a model
+sends `modelindex` 0, not the first empty model slot, so vcod's
+`client_model_index` never matches `""` against the table.
 
 Left alone. VERIFIED, the log fixture and ours: the landing after
 `setOrigin` 1.66 units over the 1.8-degree grade at the drop point settles
@@ -552,18 +545,13 @@ whose connecting client reads "player" lists it with `pers["team"]`
 undefined. `cod11-items.md`'s `PROBE other 0 noclass` reading is the same
 fact.
 
-### 8.4 What ours got wrong, and the fixes
+### 8.4 What a spawn resets
 
-- A client is `classname` "noclass" from its connect until
-  `self spawn(...)` (`client_spawn`), so `getentarray("player",
-  "classname")` agrees with retail through the connect callback.
-- A spawn clears the client's objective copy. `ClientSpawn` zeroes the
-  whole `gclient_t` (0x42804, 0x22c4 bytes), the copy at `client+0x3e8`
-  with it; `client_spawn` resets the copy
-  (`GameHost::reset_client_objectives`).
-
-VERIFIED, the gate without these two fixes: the swap itself, the menus,
-the HUD, the roster, the scores and the log already matched retail.
+VERIFIED: `ClientSpawn` zeroes the whole `gclient_t` (0x42804, 0x22c4
+bytes), the objective copy at `client+0x3e8` with it, and moves
+`classname` from "noclass" to "player" (8.3). vcod's `client_spawn` does
+both (`GameHost::reset_client_objectives`), so `getentarray("player",
+"classname")` agrees with retail through the connect callback.
 
 The marker's origin is its own view (`marker`). INFERRED, off `bel.gsc`'s
 `make_obj_marker`: it reads the allied player's origin inside
@@ -744,4 +732,4 @@ follow a killcam or a swap with no non-playing snapshot go uncounted.
   view (`common::ProbeHold`, `framed` and `aim`), every marker row matches
   on both roles and no other row of the gate moves, at 1.1d and UO: the
   slide off a `setOrigin` onto the grade moves only on a cmd's own time
-  (AGENTS.md, "A fall onto a slope").
+  (`docs/dev/traps.md`, "Movement and collision", "A fall onto a slope").

@@ -24,7 +24,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::trajectory::Trajectory;
 use vcod_common::net::{NetClient, NetEvent};
 
@@ -871,7 +871,7 @@ fn mover_ramps_match_retail_on_uo() {
 }
 
 fn mover_reads(
-    proto: &'static Protocol,
+    proto: &'static Cod1Wire,
     fs: vcod_common::pk3::Pk3Fs,
     (name, source): MoverProbe,
     fixture: &str,

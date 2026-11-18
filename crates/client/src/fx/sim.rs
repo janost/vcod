@@ -164,7 +164,7 @@ enum Behavior {
 fn classify(kind: &str) -> Behavior {
     match kind {
         // CoD2's `Cloud` lives as a sprite does and draws through
-        // `FxSystem::clouds` (docs/research/cod2-efx.md 5.1).
+        // `FxSystem::clouds` (docs/research/cod2-efx.md 5).
         "Particle" | "OrientedParticle" | "Cylinder" | "Cloud" => Behavior::Billboard,
         "Decal" => Behavior::Decal,
         "Tail" | "Line" => Behavior::Stretch,
@@ -223,6 +223,9 @@ struct Particle {
     /// A `relative` element of an effect played on a tag rides that tag
     /// (R10).
     bolt: Option<Bolt>,
+    /// The bolt's frame as the particle last stood on it: where a deathfx
+    /// plays once the tag is gone.
+    last_frame: Option<BoltFrame>,
     /// A delayed element of an effect played on a tag, held in the tag's
     /// frame until it falls due and posed there on the tag as it then
     /// stands (0x493f40), with its gravity.
@@ -505,7 +508,6 @@ struct PendingMark {
     repose: Option<Bolt>,
 }
 
-/// Where one spawn's elements land.
 /// A camera's frustum as `FX_SetNextUpdateCamera` builds it: the view's
 /// forward plane through the eye, then its four sides, each `(normal,
 /// distance)` with the normal inward (cod4-effects.md 18).
@@ -539,6 +541,7 @@ impl Frustum {
     }
 }
 
+/// Where one spawn's elements land.
 struct SpawnOut<'a> {
     particles: &'a mut VecDeque<Particle>,
     marks: &'a mut Vec<PendingMark>,
@@ -753,7 +756,8 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
             }
         }
 
-        // evenDistribution is not implemented.
+        // CoD1's `evenDistribution` is not implemented (efx-grammar.md R6);
+        // CoD2's spreads the delays above.
         let (center, base) = element_origin(rng, em, at, frame);
 
         // axisFromSphere: velocity points radially out from the spawn center,
@@ -937,6 +941,7 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
             emit4,
             depth: cx.depth,
             bolt: bolt.or(repose).map(|(id, _)| id),
+            last_frame: bolt.map(|(_, f)| f),
             repose: repose.map(|_| gravity),
             cod2: live,
         };
@@ -1046,7 +1051,7 @@ fn step_pool(pool: &mut VecDeque<Particle>, cx: &StepCx, rng: &mut Rng, chains: 
                 e.vel = p.vel;
             }
             if let Some(e) = &mut p.emit4 {
-                e.at = f.origin + f.rotate(p.pos);
+                e.at = p.pos;
             }
             if let Some(d) = &mut p.debris {
                 d.angles += forward_angles(f.axis.0);
@@ -1060,12 +1065,15 @@ fn step_pool(pool: &mut VecDeque<Particle>, cx: &StepCx, rng: &mut Rng, chains: 
                 // `impactKills` bit still set (0x49f1e0, R10).
                 None => {
                     if !p.impact_kills {
-                        death_chain(p, None, now, rng, chains);
+                        death_chain(p, p.last_frame, now, rng, chains);
                     }
                     return false;
                 }
             },
         };
+        if frame.is_some() {
+            p.last_frame = frame;
+        }
         if p.life <= 0.0 || now - p.spawn > p.life {
             death_chain(p, frame, now, rng, chains);
             return false;
@@ -1400,9 +1408,6 @@ impl Shape {
     }
 }
 
-/// A sprite's vertex colour at `t` through its life: the rgb curve, then
-/// the alpha curve clamped to 0..1, into the alpha (`useAlpha`) or onto the
-/// rgb with an opaque alpha (0x48e640 then 0x48e7d0).
 /// [`vertex_colour`] at `pos`, a CoD4 element's alpha scaled by its
 /// distance fade from `cam_pos` ([`cod2::Live::distance_fade`]).
 fn faded_colour(p: &Particle, t: f32, pos: Vec3, cam_pos: Vec3) -> (Vec3, f32) {
@@ -1418,6 +1423,9 @@ fn faded_colour(p: &Particle, t: f32, pos: Vec3, cam_pos: Vec3) -> (Vec3, f32) {
     }
 }
 
+/// A sprite's vertex colour at `t` through its life: the rgb curve, then
+/// the alpha curve clamped to 0..1, into the alpha (`useAlpha`) or onto the
+/// rgb with an opaque alpha (0x48e640 then 0x48e7d0).
 fn vertex_colour(p: &Particle, t: f32) -> (Vec3, f32) {
     let (rgb, alpha) = match &p.cod2 {
         Some(l) => (l.rgb(t), l.alpha(t)),
@@ -1546,6 +1554,7 @@ fn tracer_particle(spawn: f32, life: f32, head: Vec3, vel: Vec3, len: f32, width
         emit4: None,
         depth: 0,
         bolt: None,
+        last_frame: None,
         repose: None,
         cod2: None,
     }
@@ -1798,7 +1807,6 @@ impl FxSystem {
         self.warned.clear();
     }
 
-    /// A new map: world-space particles and marks are meaningless there.
     /// A freshly loaded cgame: [`Self::clear`], and the view weapon's
     /// `tag_brass` back to its zeroed start.
     pub fn restart_cgame(&mut self) {
@@ -1817,6 +1825,7 @@ impl FxSystem {
         self.view_brass
     }
 
+    /// A new map: world-space particles and marks are meaningless there.
     pub fn clear(&mut self) {
         self.particles.clear();
         self.marks.clear();
@@ -1965,7 +1974,6 @@ impl FxSystem {
     /// CoD1's muzzle flash hands syscall 0xe5 the shooter's `lerpOrigin`
     /// or the view weapon's origin (cgame 0x30036cf0), its brass the view
     /// weapon's last `tag_brass` (0x30038a30).
-    #[allow(clippy::too_many_arguments)]
     pub fn spawn_marked_from(
         &mut self,
         fs: &dyn AssetSource,
@@ -1996,7 +2004,6 @@ impl FxSystem {
         drop_oldest(&mut self.marks, MAX_PENDING);
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn spawn_effect(
         &mut self,
         fs: &dyn AssetSource,
@@ -2082,15 +2089,15 @@ impl FxSystem {
         sounds
     }
 
-    /// Plays the effects due by `now` that others started: delayed
-    /// `playfx`, and the `impactfx`, `emitfx` and `deathfx` the steps
-    /// since the last call raised.
     /// The chained effects waiting to start, by path, for the gates.
     #[cfg(test)]
     pub(crate) fn pending_chains(&self) -> Vec<&str> {
         self.chains.iter().map(|c| c.path.as_str()).collect()
     }
 
+    /// Plays the effects due by `now` that others started: delayed
+    /// `playfx`, and the `impactfx`, `emitfx` and `deathfx` the steps
+    /// since the last call raised.
     pub fn spawn_chained(&mut self, fs: &dyn AssetSource, now: f32) -> Vec<FxSound> {
         self.budget = MAX_SPAWN_BUDGET;
         let sounds = self.drain_chains(fs, now, 0);
@@ -3951,6 +3958,76 @@ mod tests {
         s.set_tag_bolts(&HashMap::new());
         s.step(0.2, 0.2, None);
         assert_eq!(s.counts().0, 0);
+    }
+
+    /// A delayed CoD4 element with `effectEmitted` that falls due on a
+    /// moved tag starts its walk where it was posed: a still one plays
+    /// nothing on its first step.
+    #[test]
+    fn a_delayed_emitting_element_on_a_tag_walks_from_where_it_was_posed() {
+        let mut late = still_particle();
+        late.delay = R1 { a: 100.0, b: 100.0 };
+        late.emit_fx = vec!["fx/puff".into()];
+        late.cod4_emit = Some(efx::Cod4Emit {
+            dist: R1 { a: 10.0, b: 10.0 },
+            variance_base: 0.0,
+            variance_amp: 0.0,
+        });
+        let mut s = sys_with_files(&[("fx/late.efx", vec![late])]);
+        let tag = TagBolt {
+            entity: 70,
+            slot: 1,
+        };
+        let play = TagPose {
+            origin: Vec3::new(10.0, 0.0, 0.0),
+            axis: [Vec3::X, Vec3::Y, Vec3::Z],
+        };
+        s.spawn_on_tag(&Pk3Fs::empty(), "fx/late.efx", tag, play, 0.0);
+        let due = TagPose {
+            origin: Vec3::new(0.0, 100.0, 0.0),
+            axis: [Vec3::Y, -Vec3::X, Vec3::Z],
+        };
+        s.set_tag_bolts(&HashMap::from([(tag, due)]));
+        s.step(0.11, 0.11, None);
+        assert_eq!(s.counts().0, 1);
+        assert!(s.chains.is_empty(), "{:?}", s.chains.len());
+    }
+
+    /// A `relative` element whose tag stops posing plays its deathfx where
+    /// it last stood in the world, not at its tag-local position.
+    #[test]
+    fn a_relative_elements_deathfx_plays_where_it_last_stood() {
+        let mut rel = still_particle();
+        rel.flags = vec!["relative".into()];
+        rel.origin = R3 {
+            a: [5.0, 0.0, 0.0],
+            b: [5.0, 0.0, 0.0],
+        };
+        rel.death_fx = vec!["fx/x".into()];
+        let mut s = sys_with_files(&[("fx/tag.efx", vec![rel])]);
+        let tag = TagBolt {
+            entity: 70,
+            slot: 1,
+        };
+        let axis = [Vec3::Y, -Vec3::X, Vec3::Z];
+        let pose = TagPose {
+            origin: Vec3::new(10.0, 0.0, 0.0),
+            axis,
+        };
+        s.spawn_on_tag(&Pk3Fs::empty(), "fx/tag.efx", tag, pose, 0.0);
+        let moved = TagPose {
+            origin: Vec3::new(0.0, 100.0, 0.0),
+            axis,
+        };
+        s.set_tag_bolts(&HashMap::from([(tag, moved)]));
+        s.step(0.01, 0.01, None);
+        assert!(s.chains.is_empty());
+        s.set_tag_bolts(&HashMap::new());
+        s.step(0.01, 0.02, None);
+        assert_eq!(s.counts().0, 0);
+        assert_eq!(s.chains.len(), 1);
+        let at = spawn_pos(s.chains[0].at);
+        assert!((at - Vec3::new(0.0, 105.0, 0.0)).length() < 1e-4, "{at:?}");
     }
 
     /// A delayed `Decal` of an effect on a tag is posed on the tag as it

@@ -1,14 +1,14 @@
-//! Model attachment builtins, all five operating on `GEntity::attachments`,
-//! a per-entity list of `(model, tag)` pairs. `setViewModel` used to live
-//! here too; it hangs off a `gclient_t` in retail and now lives beside the
-//! other player methods in `client.rs`.
+//! Model attachment builtins, all seven operating on `GEntity::attachments`,
+//! a per-entity list of `(model, tag)` pairs. `setViewModel` hangs off a
+//! `gclient_t` in retail and lives beside the other player methods in
+//! `client.rs`.
 
 use crate::configstrings::CsRange;
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::host::GameHost;
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("attach", attach),
@@ -19,10 +19,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("getattachtagname", get_attach_tag_name),
     ("getattachignorecollision", get_attach_ignore_collision),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// The six attachment slots of a `gentity_t` (`+0x2ec` models, `+0x2f2`
 /// tags): `G_EntAttach` (0x66190) refuses a seventh.

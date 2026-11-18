@@ -22,7 +22,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::NetEvent;
 use vcod_common::net::msg::{BUTTON_ATTACK, EntityState, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6};
 
 const SCRIPT: &str =
     include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_dyingpose.gsc");
@@ -125,13 +125,13 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, seed: u64) -> (Vec<String>, Option<EntitySt
 }
 
 /// A dead (`pm_type` 6) playerstate's timers.
-fn dead_timers(p: &Protocol, ps: &vcod_common::net::msg::PlayerState) -> Option<Timers> {
+fn dead_timers(p: &Cod1Wire, ps: &vcod_common::net::msg::PlayerState) -> Option<Timers> {
     let i = |n: &str| ps.field_i32(p, n);
     (i("pm_type") == 6).then(|| (i("commandTime"), i("legsTimer"), i("torsoTimer")))
 }
 
 /// Retail's dead snapshots' timers out of a capture pair.
-fn retail_timers(p: &Protocol, tag: &str) -> Vec<Timers> {
+fn retail_timers(p: &Cod1Wire, tag: &str) -> Vec<Timers> {
     vcod_common::testing::fixture_frames(
         p,
         &format!("net/gamestate-{tag}.bin"),
@@ -146,7 +146,7 @@ fn retail_timers(p: &Protocol, tag: &str) -> Vec<Timers> {
 /// on the first dead snapshot, counted from the last cmd's serverTime, then
 /// run down by every cmd's msec, so each reaches 0 at one serverTime
 /// (combat doc 16.4, "The dying body").
-fn check_timers(fs: vcod_common::pk3::Pk3Fs, p: &Protocol, tag: &str, seed: u64) {
+fn check_timers(fs: vcod_common::pk3::Pk3Fs, p: &Cod1Wire, tag: &str, seed: u64) {
     let retail = retail_timers(p, tag);
     let (_, _, ours) = ours(fs, seed);
     let ends = |v: &[Timers]| -> Vec<(i32, i32)> {
@@ -238,7 +238,7 @@ fn check_pose(fs: vcod_common::pk3::Pk3Fs, fixture: &str, seed: u64) {
 }
 
 /// Retail's corpse as the capture pair first sent entity 64.
-fn retail_corpse(p: &Protocol, tag: &str) -> EntityState {
+fn retail_corpse(p: &Cod1Wire, tag: &str) -> EntityState {
     let frames = vcod_common::testing::fixture_frames(
         p,
         &format!("net/gamestate-{tag}.bin"),
@@ -273,7 +273,7 @@ fn retail_corpse(p: &Protocol, tag: &str) -> EntityState {
 }
 
 /// Our corpse's ring, flags and yaw against retail's first one.
-fn check_corpse(fs: vcod_common::pk3::Pk3Fs, p: &Protocol, tag: &str, seed: u64) {
+fn check_corpse(fs: vcod_common::pk3::Pk3Fs, p: &Cod1Wire, tag: &str, seed: u64) {
     let retail = retail_corpse(p, tag);
     let (log, corpse, _) = ours(fs, seed);
     assert!(
@@ -395,7 +395,7 @@ fn a_death_runs_its_timers_down_like_uo() {
 type CorpseClock = (Option<i32>, Option<i32>);
 
 fn corpse_clock<'a>(
-    p: &Protocol,
+    p: &Cod1Wire,
     snaps: impl Iterator<Item = &'a vcod_common::net::snapshot::Snapshot>,
 ) -> CorpseClock {
     let (mut seen, mut cleared) = (None, None);
@@ -490,7 +490,7 @@ fn ours_blast(fs: vcod_common::pk3::Pk3Fs) -> (Vec<String>, CorpseClock) {
 /// on, so the clone's 250 ms think clears 0x800 250 ms after the corpse
 /// first rides a snapshot where a cmd-path death's clears it after 200
 /// (combat doc 5.2).
-fn check_blast(fs: vcod_common::pk3::Pk3Fs, p: &Protocol, tag: &str, fixture: &str) {
+fn check_blast(fs: vcod_common::pk3::Pk3Fs, p: &Cod1Wire, tag: &str, fixture: &str) {
     let frames = vcod_common::testing::fixture_frames(
         p,
         &format!("net/gamestate-{tag}.bin"),

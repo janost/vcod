@@ -27,7 +27,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::event_ids::{EV_BULLET_HIT_LARGE, EV_BULLET_HIT_SMALL, EV_UO_BULLET_HIT};
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::pk3::Pk3Fs;
 
 const MAP: &str = "mp_carentan";
@@ -226,7 +226,7 @@ fn retail(text: &str) -> Capture {
 }
 
 /// The bullet impacts on one of our snapshots.
-fn our_impacts(p: &Protocol, s: &vcod_common::net::snapshot::Snapshot) -> Vec<(u32, [i32; 3])> {
+fn our_impacts(p: &Cod1Wire, s: &vcod_common::net::snapshot::Snapshot) -> Vec<(u32, [i32; 3])> {
     s.entities
         .iter()
         .filter(|(_, e)| {
@@ -246,7 +246,7 @@ fn our_impacts(p: &Protocol, s: &vcod_common::net::snapshot::Snapshot) -> Vec<(u
 /// then each frame the cmds retail's snapshot of that frame had
 /// acknowledged, at their own times: the sight's idle sway runs on the
 /// level time, so both servers aim on the same one.
-fn ours(p: &'static Protocol, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<Vec3>, Vec<State>) {
+fn ours(p: &'static Cod1Wire, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<Vec3>, Vec<State>) {
     common::steady_weapon(&mut fs, part.weapon);
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{PROBE}.gsc");
     let probe = std::fs::read_to_string(src).expect("read the probe");
@@ -440,7 +440,7 @@ fn ours(p: &'static Protocol, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
 }
 
 /// The capture's impacts against ours, one for one.
-fn check(p: &'static Protocol, fs: Pk3Fs, part: Part, tag: &str) {
+fn check(p: &'static Cod1Wire, fs: Pk3Fs, part: Part, tag: &str) {
     let path = format!(
         "tests/fixtures/playerstate/{MAP}-dm-slope-8ms-moveshot-{}-{tag}.txt",
         part.name

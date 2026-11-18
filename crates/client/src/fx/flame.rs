@@ -1,7 +1,7 @@
 //! United Offensive's flamethrower: the cgame's own chunk system, not an
 //! `.efx` (uo cgame 0x30024050 `CG_FireFlameChunks` .. 0x30027d10
 //! `CG_AddFlameChunks`, a reworked RTCW `cg_flamethrower.c`;
-//! docs/research/coduo-diff.md section 12). A body firing a `gas` weapon
+//! docs/research/coduo-diff.md section 19). A body firing a `gas` weapon
 //! streams chunks off its `tag_flash` while its `eFlags` firing bit is up;
 //! each chunk slows, grows, bounces off the world and the bodies in it
 //! ([`ChunkWorld`]) and plays through the
@@ -31,7 +31,7 @@ use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld, body_trace};
 
 use super::sim::FxQuad;
 use vcod_common::net::flags::{EF_FIRING, ET_PLAYER};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::weapon::WeaponDef;
 
@@ -778,7 +778,7 @@ impl FlameSystem {
 /// entity, each whose `eFlags` firing bit is up with a `gas` weapon in
 /// hand, at its muzzle (the view's for the ridden body).
 pub fn nozzles(
-    p: &Protocol,
+    p: &Cod1Wire,
     snap: &Snapshot,
     ps_client: i32,
     weapons: &[Option<WeaponDef>],

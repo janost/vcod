@@ -1,4 +1,5 @@
-//! Spectator audio. Engine facts are in docs/research/cod11-sound-system.md.
+//! Client audio for every game, session and front end. CoD1 engine facts are in
+//! docs/research/cod11-sound-system.md.
 
 pub mod alias;
 pub mod bank;
@@ -34,7 +35,7 @@ use crate::fx::sim::{FxSound, Rng};
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::events::GameEvent;
 use vcod_common::net::flags::{EF_NODRAW, ET_MISSILE};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::weapon::WeaponSounds;
 
@@ -107,7 +108,7 @@ pub struct AudioStats {
 }
 
 pub struct AudioSystem {
-    /// The connection's `CS_SOUNDS` (`Protocol::cs`), 1.1's until a
+    /// The connection's `CS_SOUNDS` (`Cod1Wire::cs`), 1.1's until a
     /// gamestate names another.
     cs_sounds: usize,
     /// `None` when disabled or no device opened; cues still resolve, nothing
@@ -350,7 +351,7 @@ impl AudioSystem {
                 VOLUME_SCALE
             },
             manager,
-            cs_sounds: cues::CS_SOUNDS,
+            cs_sounds: cues::CS_SOUNDS_V1,
             menu_aliases: aliases_all.for_map("menu"),
             aliases_all,
             aliases: AliasTable::default(),
@@ -420,12 +421,7 @@ impl AudioSystem {
     pub fn restart(&mut self, fs: &dyn AssetSource, rate: u32) {
         let ambient = self.ambient.as_ref().map(|(alias, _)| alias.clone());
         let ambient_id = self.ambient.as_ref().map(|(_, id)| *id);
-        let loops: HashSet<VoiceId> = self
-            .loop_voices
-            .values()
-            .chain(self.projectile_voices.values())
-            .flat_map(|v| std::iter::once(v.id).chain(v.secondary.iter().copied()))
-            .collect();
+        let loops = self.owner_started();
         let music = self.music;
         let mut saved: Vec<(VoiceId, Resumable)> = self
             .table
@@ -436,7 +432,6 @@ impl AudioSystem {
                     && Some(*id) != ambient_id
                     && !self.ambient_ramps.contains_key(id)
                     && !loops.contains(id)
-                    && self.shock_loop.is_none_or(|(l, _)| l != *id)
             })
             .filter_map(|id| {
                 let mut r = self.resumable.get(&id)?.clone();
@@ -451,7 +446,6 @@ impl AudioSystem {
             .collect();
         // Retail's save and restore walk the slots in order.
         saved.sort_by_key(|(id, _)| *id);
-        self.table.clear();
         self.stop_all();
         self.fade = SoundFade::FULL;
         self.bank = SoundBank::at_rate(rate);
@@ -475,7 +469,7 @@ impl AudioSystem {
 
     /// Where the connection's sound aliases sit, which United Offensive
     /// moved (docs/research/coduo-diff.md, section 7).
-    pub fn set_protocol(&mut self, p: &vcod_common::net::protocol::Protocol) {
+    pub fn set_protocol(&mut self, p: &vcod_common::net::protocol::Cod1Wire) {
         self.cs_sounds = p.cs.sounds();
         self.uo = p.is_uo();
     }
@@ -485,7 +479,6 @@ impl AudioSystem {
     pub fn on_gamestate(&mut self, map: &str) {
         self.aliases = self.aliases_all.for_map(map);
         self.map = Some(map.to_string());
-        self.table.clear();
         self.stop_all();
         self.last_pick.clear();
         self.pick_counts.clear();
@@ -498,6 +491,8 @@ impl AudioSystem {
     /// restarts the ambient from CS 3; a loop restarts with the next
     /// snapshot that carries it.
     pub fn stop_all(&mut self) {
+        // The table too, so a sound started this frame meets clean pools.
+        self.table.clear();
         // A dropped kira handle keeps playing.
         for (_, mut h) in self.handles.drain() {
             h.stop();
@@ -671,9 +666,11 @@ impl AudioSystem {
     /// A CoD4 session's alias table, built from its zones (`cod4_audio`),
     /// played by 1.7's master scale and CoD2's slave rules
     /// (docs/research/cod4-sound.md 5); the current map's gamestate filters
-    /// it again.
+    /// it again. The table comes with a new search path, so every decoded
+    /// sound goes.
     pub fn set_cod4_aliases(&mut self, table: AliasTable) {
         self.aliases_all = table;
+        self.bank = SoundBank::at_rate(self.bank.rate);
         self.volume_scale = COD4_VOLUME_SCALE;
         self.chain_secondaries = true;
         self.entity_offsets = true;
@@ -880,7 +877,7 @@ impl AudioSystem {
     pub fn step_sound_blends(
         &mut self,
         fs: &dyn AssetSource,
-        p: &vcod_common::net::protocol::Protocol,
+        p: &vcod_common::net::protocol::Cod1Wire,
         pair: (
             &vcod_common::net::snapshot::Snapshot,
             &vcod_common::net::snapshot::Snapshot,
@@ -1506,18 +1503,9 @@ impl AudioSystem {
     /// started (an event's `playSound`, an effect's sound) plays a frame.
     /// Returns how many it stopped.
     pub fn reap_loops(&mut self) -> usize {
-        let mut kept: HashSet<VoiceId> = self
-            .loop_voices
-            .values()
-            .chain(self.projectile_voices.values())
-            .flat_map(|v| std::iter::once(v.id).chain(v.secondary.iter().copied()))
-            .collect();
+        let mut kept = self.owner_started();
         kept.extend(self.ambient.as_ref().map(|a| a.1));
         kept.extend(self.music.as_ref().map(|m| m.id));
-        kept.extend(self.held.values().copied());
-        kept.extend(self.blends.values().map(|b| b.id));
-        kept.extend(self.fire_loops.values().filter_map(|f| f.voice));
-        kept.extend(self.shock_loop.map(|s| s.0));
         kept.extend(self.shock_end);
         let gone: Vec<VoiceId> = self
             .table
@@ -1530,6 +1518,24 @@ impl AudioSystem {
             self.stop_voice(id);
         }
         gone.len()
+    }
+
+    /// The voices an owner starts again itself: the entity and projectile
+    /// loops with their secondaries, the held and blend voices, the fire
+    /// loops and the shock loop. `snd_restart` leaves them to their owners
+    /// and the loop reaper keeps them.
+    fn owner_started(&self) -> HashSet<VoiceId> {
+        let mut ids: HashSet<VoiceId> = self
+            .loop_voices
+            .values()
+            .chain(self.projectile_voices.values())
+            .flat_map(|v| std::iter::once(v.id).chain(v.secondary.iter().copied()))
+            .collect();
+        ids.extend(self.held.values().copied());
+        ids.extend(self.blends.values().map(|b| b.id));
+        ids.extend(self.fire_loops.values().filter_map(|f| f.voice));
+        ids.extend(self.shock_loop.map(|s| s.0));
+        ids
     }
 
     /// A loop's voice and its secondary's.
@@ -1915,8 +1921,6 @@ impl AudioSystem {
         }
     }
 
-    /// `alias` on the viewer, the way `CG_LocalSound` and the chat and game
-    /// message beeps play.
     /// Whether the menu set has `alias` (UI syscall 0x26).
     pub fn has_menu_alias(&self, alias: &str) -> bool {
         self.menu_aliases.get(alias).is_some()
@@ -1936,6 +1940,8 @@ impl AudioSystem {
         self.play_inner(fs, cue, true, true)
     }
 
+    /// `alias` on the viewer, the way `CG_LocalSound` and the chat and game
+    /// message beeps play.
     pub fn play_local(&mut self, fs: &dyn AssetSource, alias: &str) -> Option<VoiceId> {
         let cue = Cue {
             alias: alias.to_string(),
@@ -2092,7 +2098,6 @@ impl AudioSystem {
     /// `S_StopAllSounds(0)` (0x44fa40): every voice ends, the ambient and
     /// the music with it.
     fn stop_everything(&mut self) {
-        self.table.clear();
         self.stop_all();
     }
 
@@ -2316,7 +2321,7 @@ pub fn volume_cvar(shell: &crate::console::shell::Shell) -> &'static str {
 /// (1.1 cgame 0x3001b3f0, 1.5's 0x3001c670, UO's 0x3001edb0) skips one
 /// with `EF_NODRAW`; the explode rides the missile's own entity as
 /// `eType` 0, so the frame it blows stops the sound.
-pub fn missile_sounds(p: &Protocol, snap: &Snapshot) -> HashMap<u32, (i32, Vec3)> {
+pub fn missile_sounds(p: &Cod1Wire, snap: &Snapshot) -> HashMap<u32, (i32, Vec3)> {
     snap.entities
         .iter()
         .filter(|(_, e)| {
@@ -2374,6 +2379,39 @@ mod tests {
         a.step(&HashMap::new(), &HashMap::new(), None);
         let s = a.stats();
         assert_eq!((s.plays, s.misses, s.voices, s.culled), (0, 1, 0, 1));
+    }
+
+    /// `stop_all` empties the voice table itself: a sound started in the
+    /// same frame after it counts against a clean pool (BUG-115).
+    #[test]
+    fn stop_all_leaves_no_voice_in_the_pools() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let mut a = AudioSystem::new(
+            &fs,
+            AudioOpts {
+                enabled: false,
+                volume: 1.0,
+                rate: 0,
+            },
+        );
+        let v = voices::NewVoice {
+            source: Source::Point(Vec3::ZERO),
+            channel: crate::audio::alias::Channel::Auto,
+            volume: 1.0,
+            dist: (100.0, 1100.0),
+            curve: None,
+            master_slave: alias::MasterSlave::None,
+            spatial: true,
+            looping: false,
+            streamed: false,
+            duration_ms: 500,
+            protected: false,
+        };
+        assert!(a.table.add(v, |_| false).is_ok());
+        a.stop_all();
+        assert!(a.table.is_empty());
     }
 
     #[test]
@@ -2514,7 +2552,7 @@ mod tests {
         );
         a.on_gamestate("mp_carentan");
         let mut cs = vec![String::new(); 800];
-        cs[cues::CS_SOUNDS + 3] = "bomb_tick".to_string();
+        cs[cues::CS_SOUNDS_V1 + 3] = "bomb_tick".to_string();
         let mut loops = HashMap::new();
         loops.insert(12u32, (3, Vec3::new(1.0, 2.0, 3.0)));
         a.set_loop_sounds(&fs, &cs, &loops);
@@ -2763,7 +2801,7 @@ mod tests {
         a.on_gamestate("mp_carentan");
         let mut cs = vec![String::new(); 800];
         // `MP_bomb_plant` is `all_mp`, one-shot, channel `auto`.
-        cs[cues::CS_SOUNDS + 4] = "MP_bomb_plant".to_string();
+        cs[cues::CS_SOUNDS_V1 + 4] = "MP_bomb_plant".to_string();
         let mut loops = HashMap::new();
         loops.insert(13u32, (4, Vec3::ZERO));
         a.set_loop_sounds(&fs, &cs, &loops);
@@ -2793,8 +2831,8 @@ mod tests {
         );
         a.on_gamestate("mp_carentan");
         let mut cs = vec![String::new(); 800];
-        cs[cues::CS_SOUNDS + 3] = "bomb_tick".to_string();
-        cs[cues::CS_SOUNDS + 4] = "ambient_mp_carentan".to_string();
+        cs[cues::CS_SOUNDS_V1 + 3] = "bomb_tick".to_string();
+        cs[cues::CS_SOUNDS_V1 + 4] = "ambient_mp_carentan".to_string();
         let mut loops = HashMap::new();
         loops.insert(12u32, (3, Vec3::ZERO));
         a.set_loop_sounds(&fs, &cs, &loops);
@@ -3110,7 +3148,7 @@ mod tests {
         );
         a.on_gamestate("mp_carentan");
         let mut cs = vec![String::new(); 800];
-        cs[cues::CS_SOUNDS + 5] = "MP_announcer_allies_win".to_string();
+        cs[cues::CS_SOUNDS_V1 + 5] = "MP_announcer_allies_win".to_string();
         let tok = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
 
         assert!(a.on_server_command(&fs, &tok(&["s", "5"]), &cs));
@@ -3197,8 +3235,8 @@ mod tests {
         assert!(row.channel.is_spatial() && row.dist.1 < far.length());
 
         let mut cs = vec![String::new(); 800];
-        cs[cues::CS_SOUNDS + 3] = "bomb_tick".to_string();
-        cs[cues::CS_SOUNDS + 4] = "no_such_loop_alias".to_string();
+        cs[cues::CS_SOUNDS_V1 + 3] = "bomb_tick".to_string();
+        cs[cues::CS_SOUNDS_V1 + 4] = "no_such_loop_alias".to_string();
         let mut loops = HashMap::new();
         loops.insert(12u32, (3, far));
         loops.insert(13u32, (4, Vec3::ZERO));
@@ -3713,6 +3751,27 @@ mod tests {
         assert_eq!(COD4_VOLUME_SCALE, 0.75);
         let shell = crate::console::shell::Shell::new();
         assert_eq!(shell.cvar_f32("mss_volume") * a.volume_scale, 0.8 * 0.75);
+    }
+
+    /// A file a new CoD4 table's search path overlays under a name already
+    /// decoded plays the new file, not the old decode.
+    #[test]
+    fn a_cod4_table_drops_the_old_search_paths_decodes() {
+        use crate::audio::bank::tests::wav;
+        let mut fs = Pk3Fs::empty();
+        fs.overlay("sound/weapons/shot.wav", wav(100));
+        let mut a = silent(&fs, 0);
+        a.set_cod4_aliases(AliasTable::default());
+        assert_eq!(
+            a.bank.get(&fs, "weapons/shot.wav").unwrap().frames.len(),
+            100
+        );
+        fs.overlay("sound/weapons/shot.wav", wav(200));
+        a.set_cod4_aliases(AliasTable::default());
+        assert_eq!(
+            a.bank.get(&fs, "weapons/shot.wav").unwrap().frames.len(),
+            200
+        );
     }
 
     /// A silent system over a CoD2 table of `csv`, on mp_toujane.

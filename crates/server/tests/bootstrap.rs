@@ -3,7 +3,7 @@
 //!
 //! A thread that hits a missing builtin (or any other script error) dies
 //! where it stands and the rest of the map keeps serving, which is retail's
-//! behaviour and the right one — but it means half a bootstrap looks exactly
+//! behaviour and the right one, but it means half a bootstrap looks exactly
 //! like a whole one from the outside. The VM only reported an abort through
 //! `log::warn!` and the harness installs no logger, so every abort in every
 //! test to date was swallowed; `Server::script_aborts` is the surface that

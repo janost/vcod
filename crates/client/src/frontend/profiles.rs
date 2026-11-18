@@ -89,13 +89,18 @@ impl Profiles {
 
     /// The row showing `name`, in any case.
     fn row_of(&self, name: &str) -> Option<usize> {
-        self.order
-            .iter()
-            .position(|&i| self.names[i].eq_ignore_ascii_case(name))
+        self.order.iter().position(|&i| {
+            self.names
+                .get(i)
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        })
     }
 
     fn name_at(&self, row: usize) -> Option<&str> {
-        self.order.get(row).map(|&i| self.names[i].as_str())
+        self.order
+            .get(row)
+            .and_then(|&i| self.names.get(i))
+            .map(String::as_str)
     }
 
     pub(super) fn len(&self) -> usize {
@@ -240,10 +245,10 @@ impl Ui {
                 }
                 let row = self.profiles.row_of(&sel).unwrap_or(0);
                 self.profiles.names.remove(i);
+                self.profiles.sort();
                 if self.profiles.len() == 0 {
                     self.set_cvar("ui_playerProfileSelected", "", out);
                 } else {
-                    self.profiles.sort();
                     let row = row.min(self.profiles.len() - 1);
                     self.select_profile(row, out);
                 }

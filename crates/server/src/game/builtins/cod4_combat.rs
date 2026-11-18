@@ -9,9 +9,9 @@
 use vcod_cod4::pmove::anim::EventAnim;
 use vcod_gsc::{Cx, EntId, ErrorKind, Target, Value};
 
+use super::Builtin;
 use super::client::client_receiver;
 use super::cod4_client::{weapon_arg, with_loadout};
-use super::score::Builtin;
 use crate::game::cod4::combat::{Damage4, HITLOC_NAMES, Item4, ev};
 use crate::game::host::GameHost;
 use crate::game::temp_entity::{Scope, TempEntity};
@@ -959,7 +959,7 @@ fn hold_dropped(host: &mut GameHost, cx: &mut Cx, id: EntId, taking: Option<EntI
         );
         if let Some(e) = host.cod4().dropped_weapons[k] {
             host.cod4_mut().items.retain(|i| i.id != e);
-            host.ents.free(e);
+            host.free_entity(e);
         }
         k
     });

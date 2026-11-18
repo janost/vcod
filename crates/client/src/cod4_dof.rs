@@ -403,7 +403,6 @@ impl DofPass {
 
     /// Blurs `world` (the resolved world target, `world_view` its view)
     /// by `depth`, the frame's depth, under `c`.
-    #[allow(clippy::too_many_arguments)]
     pub fn encode(
         &mut self,
         device: &wgpu::Device,

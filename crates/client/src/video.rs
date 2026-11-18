@@ -1,6 +1,6 @@
 //! The window's video mode from `r_mode`, `r_fullscreen` and the custom
 //! size, and the pick of a monitor mode for exclusive fullscreen
-//! (docs/research/cod11-front-end.md, "vcod: fullscreen and wide windows").
+//! (docs/research/cod11-front-end.md 21).
 
 /// CoDMP.exe's mode table (0x5716c0, 13 rows of name, width, height and
 /// pixel aspect 1.0, read by `R_GetModeInfo` 0x4b0ec0).

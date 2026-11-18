@@ -975,6 +975,11 @@ impl D3dBsp {
                 n.plane
             );
             for &c in &n.children {
+                // `CMod_LoadNodes` keeps each child as an `i16`.
+                ensure!(
+                    i16::try_from(c).is_ok(),
+                    "CMod_LoadNodes: children exceeded: node {i} child {c}"
+                );
                 let ok = if c < 0 {
                     index_ok(-(c as i64 + 1), self.leafs.len())
                 } else {
@@ -989,6 +994,23 @@ impl D3dBsp {
         .context("bsp nodes")?;
         let clusters = self.visibility.as_ref().map(|v| v.cluster_count as i64);
         for (i, l) in self.leafs.iter().enumerate() {
+            // `CMod_LoadLeafs` keeps the cluster as an `i16` and the
+            // collision AABB run as two `u16` words.
+            ensure!(
+                i16::try_from(l.cluster).is_ok(),
+                "cluster exceeded: leaf {i} cluster {}",
+                l.cluster
+            );
+            ensure!(
+                u16::try_from(l.first_coll_aabb).is_ok(),
+                "firstCollAabbIndex exceeded: leaf {i} {}",
+                l.first_coll_aabb
+            );
+            ensure!(
+                u16::try_from(l.coll_aabb_count).is_ok(),
+                "collAabbCount exceeded: leaf {i} {}",
+                l.coll_aabb_count
+            );
             ensure!(
                 l.cluster >= -1 && clusters.is_none_or(|n| (l.cluster as i64) < n.max(1)),
                 "leaf {i}: cluster {} out of range",

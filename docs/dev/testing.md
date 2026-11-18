@@ -9,13 +9,21 @@ The A/B gates against retail captures are in [retail.md](retail.md).
 | Env | Install | Runs |
 |---|---|---|
 | `COD_DIR` | CoD1 1.1 | the 1.1 tests and gates |
-| `COD_DIR` | CoD1 1.5 (`main/` with stock paks only) | `configstrings_15_ab`, `timeout_15_ab`, `legs_ab`'s 1.5 walks (the stop and go too), `turret_ab`'s 1.5 replay |
+| `COD_DIR` | CoD1 1.5 (`main/` with stock paks only: `--example stock_tree`, below) | `configstrings_15_ab`, `timeout_15_ab`, `legs_ab`'s 1.5 walks (the stop and go too), `turret_ab`'s 1.5 replay |
 | `COD_DIR` | UO (`uo/` beside 1.5's `main/`) | the UO tests and what reads only data 1.5 and UO share: `moves_ab`'s UO replays (sprint, mounts, cook), `configstrings_uo_ab`, `playerstate_uo_ab`, `playerstate_combat_ab`'s UO capture, `mount_uo_ab`, `uo_weapons_ab`, `legs_ab`'s UO walks, `turret_ab`'s UO replay |
 | `COD2_DIR` | CoD2 1.3 | the CoD2 tests, `cod2_map_census` |
 | `COD4_DIR` | CoD4 1.7 | the CoD4 tests, `cod4_live_*`, `cod4_map_sweep`, `cod4_soak` |
 
+`cargo run -p vcod-common --example stock_tree -- <install> <out>` links
+the stock-only tree the 1.5 and UO rows want: the paks `--vanilla` keeps,
+under `<out>/main/` and `<out>/uo/`.
+
 The helpers in `vcod_common::testing` (and `vcod_cod4::testing`) read
-`COD_DIR`, `COD2_DIR`, `COD4_DIR` and `COD4_LNXDED_DIR`:
+`COD_DIR`, `COD2_DIR`, `COD4_DIR` and `COD4_LNXDED_DIR`. Both modules,
+`vcod_common::collision`'s test worlds and vcod-server's `test_*` and
+`*_for_test` seams sit behind each crate's `testing` feature, which every
+crate that calls them turns on from its dev-dependencies, so release
+builds leave them out:
 
 - Unset or empty: `None`, the test returns early and passes. Each test
   binary prints one `vcod testing: COD_DIR is unset, ...` line per reason
@@ -49,6 +57,9 @@ Pick the fixture helper by what the test asserts:
   (`iw_00`..`iw_24`, `localized_*_iwNN`). A map pack there (a `mp_*.iwd`,
   a `~~~.iwd` sorted last) overrides stock gametype and map scripts and
   joins `sv_iwdNames`, which the wire A/Bs compare with retail's.
+- A CoD4 test: `vcod_cod4::testing::cod4_install()` (`COD4_DIR`), or
+  `cod4_lnxded_install()` (`COD4_LNXDED_DIR`, the retail dedicated
+  server's own `zone/english/`, which `zone_census` reads).
 
 The all-maps census tests scope to stock `pak[0-9].pk3`. Map downloads drop
 third-party `zzz_*.pk3` into `main/`; a census failure on one of those is not
@@ -69,6 +80,40 @@ Each load still steps a fresh script seed, as retail's `G_InitGame` does
 A gate that compares a later level's spawn with retail's replays retail's
 picks through `Server::pin_spawns`, as `gametypes_ab` does.
 
+## CI and the test binaries
+
+- `ci.yml` runs on ubuntu with no game data, so no pak test and no A/B gate
+  runs there; they run only on a machine with an install. It pins the
+  toolchain (`RUST_TOOLCHAIN`, bumped on purpose), passes `--locked`, and
+  also checks the workspace on Windows, macOS and the 1.90 MSRV, and runs
+  the suite on Windows and macOS. A second Linux step runs the client's
+  render tests on lavapipe with `VCOD_REQUIRE_GPU=1`: a headless test takes
+  its adapter through `renderer::headless::test_adapter`, so one that finds
+  none fails there. The Windows/macOS suite and the lavapipe step are
+  `continue-on-error` until their first green run.
+- `nightly.yml` rebuilds the rolling `nightly` release on master pushes that
+  touch code (docs, tools and `*.md` are path-ignored). `workflow_dispatch`
+  forces one. It runs `ci.yml` first and publishes only a green tip, fails
+  the Linux build if a strong glibc symbol passes README's floor, and ships
+  `THIRD-PARTY-LICENSES` (`tools/third_party_licenses.py`) and `SHA256SUMS`.
+- Each crate's integration tests are one binary named after the crate
+  (`--test common`, `--test cod2`, `--test cod4`, `--test gsc`, `--test
+  server`; `tests/main.rs`). A file's tests filter by its name (`--
+  vehicle_ab::`). The client's tests live in its binary: `cargo test -p
+  vcod --bins`.
+
+## The gate runner
+
+`tools/gate.sh [area...]` runs fmt, clippy and the suite at each install
+the environment names: `COD_DIR` (1.1) with `COD2_DIR` and `COD4_DIR`,
+then the server suite again at `COD_UO_DIR` (a stock-only UO tree) with
+`COD4_DIR` unset. It sets `VCOD_REQUIRE_INSTALL` to match, so no install
+test can skip. Each area adds the ignored gates of one row group below:
+`nav`, `bots`, `render` (`LVP_ICD` points it at lavapipe), `cod2`, `cod4`.
+A step passes only on `test result: ok` lines that ran tests. `CARGO_WRAP`
+puts each cargo run under a wrapper (a memory-capped scope), `DRY=1`
+prints the commands.
+
 ## Ignored tests: when to run them
 
 `--ignored` always takes a name filter. Unfiltered it also starts the soaks
@@ -86,6 +131,7 @@ broadcast on the LAN.
 | CoD4 hit boxes per map | `--lib -- --ignored cod4_every_map_poses_both_teams` (`COD4_DIR`) | 29 s of test, 7 min with the release build (2026-11-18) |
 | CoD2 gametypes | `--lib -- --ignored cod2_gametype_census` (`COD2_DIR`) | ~18 s |
 | 1.5 stuck seed | `--lib -- --ignored the_15_overlap_spectator_seed_is_the_only_fit` | ~2 s |
+| shaders or render layouts | `cargo test -p vcod --bins -- renderer::pipeline_check` (not ignored: it skips without a Vulkan adapter; lavapipe env below) | |
 | CoD2 maps, CoD2 load path | `cod2_map_census`, `cod2_load_profile` | |
 | CoD4 maps, gametypes | `cod4_map_sweep` | 6-8 min and ~3 GB a map |
 
@@ -115,6 +161,14 @@ server it lists) and `lan_scan_live` (a LAN broadcast). Both panic unless
 `VCOD_LIVE_NET=1` is set as well.
 
 Times are release wall on a 30-thread box, the binary built.
+
+The bit-exact gates (`moves_ab`, `cod4_moves_ab`, `cod4_combat_ab`,
+`trace_ab`, `nav_census`) were tuned on the host's glibc. Only `sinf` and
+`cosf` are pinned (`vcod_common::libm`, cod4-pmove.md 13.2); `atan2`,
+`tan`, `acos`, `pow` and the rest come from the platform's libm, whose
+results Rust does not promise across versions. A gate that fails after a
+glibc update or on another distro, with no code change, is that before it
+is a regression: name `ldd --version` in the report.
 
 ## Headless render: pipeline_check
 
@@ -188,7 +242,9 @@ in process, on `play::cod4`'s `tests::sim` clock.
 ## Soaks
 
 Each soak plays every stock map for minutes through the real client frame and
-writes a `soak.md`.
+writes a `soak.md`. The soak, perf and off-LAN scripts first check the host
+tools and the built binaries they run (`tools/lib.sh`) and exit 2 naming
+the one missing.
 
 ### CoD4
 
@@ -300,7 +356,9 @@ only yardstick.
     number to compare on a loaded machine (cod4-server-frame.md 9.1); on
     CoD1 and CoD2 `RESTART=<n>` runs `map_restart` every `n` ticks, a spawn wave
     each (cod4-server-frame.md 9). `TICKSTATS=1` (with `JOBS=1`) prints each
-    phase's mean, p50, p99 and max a tick. `VCOD_BOT_THREADS=1` runs the
+    phase's mean, p50, p99 and max a tick; `TICKSTATS=insns` counts each
+    phase's user-space instructions instead, the number to compare on a
+    loaded machine. `VCOD_BOT_THREADS=1` runs the
     bots' pass serial: its digests match the threaded run's.
 
   It prints kills, deaths, damage, time-to-kill, wins, objective actions,

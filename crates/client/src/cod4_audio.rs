@@ -11,7 +11,7 @@ use vcod_cod4::assets::Assets;
 use vcod_cod4::map::stub_name;
 use vcod_cod4::sound::{Alias, ChannelDef, SURFACES, SoundSet};
 
-use crate::audio::alias::{AliasRow, AliasTable, Channel, MasterSlave};
+use crate::audio::alias::{AliasRow, AliasTable, Channel, MAX_PROBABILITY, MasterSlave};
 use crate::audio::cod2::{PROBABILITY_SCALE, VfCurve};
 use crate::audio::cues::{Cue, Source};
 use crate::play::cod4::{Fired, ent_u32};
@@ -217,7 +217,7 @@ fn row(a: &Alias, channels: &[ChannelDef]) -> AliasRow {
         channel: channel(c),
         streamed: a.streamed(),
         looping: a.looping(),
-        probability: ((a.probability * PROBABILITY_SCALE) as u32).max(1),
+        probability: ((a.probability * PROBABILITY_SCALE) as u32).clamp(1, MAX_PROBABILITY),
         master_slave: if a.master() {
             MasterSlave::Master
         } else if a.slave() {

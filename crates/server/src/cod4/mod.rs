@@ -166,6 +166,9 @@ pub struct Cod4Game {
     /// `killserver` ran: no level, no packet answered (VERIFIED live:
     /// retail answers neither rcon nor `getinfo` after it).
     killed: bool,
+    /// A load that failed with the level torn down, for the loop to end the
+    /// process on ([`crate::engine::GameModule::take_fatal`]).
+    fatal: Option<anyhow::Error>,
     /// The domains `dvar_bool`, `dvar_int` and `dvar_float` gave the dvars
     /// they made, keyed by the folded name (`oob::Domain`).
     domains: std::collections::HashMap<String, oob::Domain>,
@@ -289,7 +292,8 @@ impl crate::engine::GameModule for Cod4Game {
         e.run_level_frame();
         true
     }
-    /// No killcam without a level: nothing reads the archive yet.
+    /// Empty: the killcam's entity rounds are archived as each frame's
+    /// snapshot world is built (`send_client_snapshot`, `archive_entities`).
     fn archive(_e: &mut Cod4Server) {}
     fn check_timeouts(e: &mut Cod4Server) {
         e.check_timeouts();
@@ -352,6 +356,9 @@ impl crate::engine::GameModule for Cod4Game {
     }
     fn heartbeat(e: &mut Cod4Server) {
         e.heartbeat();
+    }
+    fn take_fatal(e: &mut Cod4Server) -> Option<anyhow::Error> {
+        e.game.fatal.take()
     }
 }
 
@@ -520,6 +527,7 @@ impl Cod4Server {
                 bots: None,
                 log: Default::default(),
                 killed: false,
+                fatal: None,
                 hold: vcod_common::rng::HoldRand(seed as u32),
                 // `sv_fps`, registered by `SV_Init` (0x81735c8).
                 domains: [(
@@ -652,8 +660,9 @@ impl Cod4Server {
         let now = self.core.sv_time_ms;
         let info = self.serverinfo();
         self.init_game_log(&info, now);
-        // A level owns the one cvar table while it runs.
-        let cvars = std::mem::take(&mut self.game.cvars);
+        // A level owns the one cvar table while it runs; a failed load
+        // hands it back.
+        let cvars = self.game.cvars.clone();
         let seed = self.game_seed();
         let mut level = crate::game::cod4::level::Cod4Level::load_with(
             &zones4,
@@ -668,6 +677,7 @@ impl Cod4Server {
             None,
             seed,
         )?;
+        self.game.cvars = Default::default();
         self.game.zones4 = Some(std::rc::Rc::new(zones4));
         // `SV_SpawnServer`'s frames ahead of the baselines.
         for _ in 0..SPAWN_FRAMES {
@@ -1224,6 +1234,11 @@ impl Cod4Server {
         let now = self.core.sv_time_ms;
         let c = self.core.clients[slot].as_mut().unwrap();
         c.delta_message = if delta { message_ack } else { -1 };
+        // `cmdCount < 1` (0x81725bd) and `cmdCount > MAX_PACKET_USERCMDS`
+        // (0x81725c3) print and return before a cmd is read.
+        if cmds.is_empty() || cmds.len() > clmsg::MAX_PACKET_USERCMDS {
+            return;
+        }
         if message_ack >= 0 {
             c.link.ping_ring[message_ack as usize % PACKET_BACKUP].1 = now;
         }
@@ -1599,12 +1614,6 @@ impl Cod4Server {
     }
 }
 
-/// A config file out of the iwds with each `exec <name>` line replaced by
-/// that file's text, as `Cbuf` runs it; a file no iwd holds reads as
-/// empty. `server_map.cfg` (in `iw_00.iwd`) sets `sv_mapRotation`. `iw_00.iwd` holds two
-/// `default_mp_gamesettings.cfg`, and retail reads the later one: no
-/// `scr_game_playerwaittime` line, so the prematch waits the script's 15 s
-/// (VERIFIED live, rcon and the game end time 619800).
 /// `Dvar_InfoString(0x404)` over `cvars`: configstring 0, `getstatus`'s
 /// info and the log's `InitGame` line, case-folded order.
 fn serverinfo_of(cvars: &crate::cvars::Cvars) -> String {
@@ -1615,6 +1624,12 @@ fn serverinfo_of(cvars: &crate::cvars::Cvars) -> String {
     )
 }
 
+/// A config file out of the iwds with each `exec <name>` line replaced by
+/// that file's text, as `Cbuf` runs it; a file no iwd holds reads as
+/// empty. `server_map.cfg` (in `iw_00.iwd`) sets `sv_mapRotation`. `iw_00.iwd` holds two
+/// `default_mp_gamesettings.cfg`, and retail reads the later one: no
+/// `scr_game_playerwaittime` line, so the prematch waits the script's 15 s
+/// (VERIFIED live, rcon and the game end time 619800).
 fn iwd_cfg(fs: &vcod_common::pk3::Pk3Fs, name: &str, depth: u32) -> String {
     let Some(raw) = fs.read(name) else {
         return String::new();
@@ -1836,7 +1851,12 @@ fn pure_lists_in(main: &Path, feed: i32, out: &mut Iwds) -> anyhow::Result<()> {
 /// An info string in `Dvar`'s case-folded order; empty values left out.
 fn info_sorted(pairs: impl Iterator<Item = (String, String)>) -> String {
     let mut pairs: Vec<(String, String)> = pairs.collect();
-    pairs.sort_by_key(|(k, _)| k.to_ascii_lowercase());
+    // By the folded key, compared without building it.
+    pairs.sort_by(|(a, _), (b, _)| {
+        a.bytes()
+            .map(|c| c.to_ascii_lowercase())
+            .cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
+    });
     let mut info = vcod_common::net::connectionless::Info::new();
     for (k, v) in &pairs {
         info.set(k, v);

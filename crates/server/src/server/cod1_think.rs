@@ -1,7 +1,7 @@
 //! CoD1's `ClientThink_real` for every packet since the last frame, run by
 //! `Server::replay_moves`: the cmds in arrival
 //! order, each one's shots, throws, falls and touches inside it (combat
-//! doc 16; AGENTS.md, "The server tick").
+//! doc 16; docs/dev/server-tick.md, "CoD1's frame").
 
 use super::cod1_game::{Cod1Module, Lend};
 use super::*;
@@ -634,10 +634,6 @@ impl Cod1Module {
         );
     }
 
-    /// `Cmd_Kill_f`, and what it did to the sim before the cmds behind it
-    /// run: the drop takes the weapon they switch away from, and `EV_DEATH`
-    /// goes on the ring ahead of their events. `pm_type` stays until the end
-    /// frame, so they still move alive (combat doc, 9.2).
     /// `G_VEH_CycleSlot` for a living rider (coduo-vehicles.md 11.3).
     fn cycle_seat(&mut self, eng: &mut Lend<'_>, slot: usize, back: bool) {
         if let Some(rt) = self.script.as_mut()
@@ -648,6 +644,10 @@ impl Cod1Module {
         }
     }
 
+    /// `Cmd_Kill_f`, and what it did to the sim before the cmds behind it
+    /// run: the drop takes the weapon they switch away from, and `EV_DEATH`
+    /// goes on the ring ahead of their events. `pm_type` stays until the end
+    /// frame, so they still move alive (combat doc, 9.2).
     fn run_kill(&mut self, eng: &mut Lend<'_>, slot: usize, weapons: &crate::weapons::WeaponTable) {
         let proto = eng.proto;
         let now_ms = eng.sv_time_ms;

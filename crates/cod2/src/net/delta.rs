@@ -26,6 +26,76 @@ pub fn field_index(table: &[NetField], name: &str) -> usize {
         .unwrap_or_else(|| panic!("no netfield {name}"))
 }
 
+/// [`field_index`] for a `const` block, where a name the table lacks fails
+/// the build; [`field!`](crate::field) wraps it.
+pub const fn index_of(table: &[NetField], name: &str) -> usize {
+    let mut i = 0;
+    while i < table.len() {
+        if const_eq(table[i].name, name, 0) {
+            return i;
+        }
+        i += 1;
+    }
+    panic!("no such netfield")
+}
+
+/// `base[k]`'s index in `table` (`k` under 10), as [`index_of`].
+pub const fn index_at(table: &[NetField], base: &str, k: usize) -> usize {
+    assert!(k < 10);
+    let mut i = 0;
+    while i < table.len() {
+        let a = table[i].name.as_bytes();
+        let n = base.len();
+        if a.len() == n + 3
+            && const_eq(table[i].name, base, 3)
+            && a[n] == b'['
+            && a[n + 1] == b'0' + k as u8
+            && a[n + 2] == b']'
+        {
+            return i;
+        }
+        i += 1;
+    }
+    panic!("no such netfield")
+}
+
+/// Whether `a` is `b` followed by `extra` more bytes.
+const fn const_eq(a: &str, b: &str, extra: usize) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() + extra {
+        return false;
+    }
+    let mut k = 0;
+    while k < b.len() {
+        if a[k] != b[k] {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+/// A netfield's index in a table, resolved at compile time:
+/// `field!(TABLE, "name")`, or `field!(TABLE, 3 "origin")` for
+/// `origin[0..3]`.
+#[macro_export]
+macro_rules! field {
+    ($table:expr, $name:literal) => {
+        const { $crate::net::delta::index_of(&$table, $name) }
+    };
+    ($table:expr, $n:literal $name:literal) => {
+        const {
+            let mut ix = [0usize; $n];
+            let mut k = 0;
+            while k < $n {
+                ix[k] = $crate::net::delta::index_at(&$table, $name, k);
+                k += 1;
+            }
+            ix
+        }
+    };
+}
+
 /// `entityState_s`, 240 bytes: its number and the 59 netfield words.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EntityState2 {

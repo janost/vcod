@@ -242,7 +242,7 @@ pub fn entity_victims(
 /// the world when `None`. `engine` (a missile's blast, outside any
 /// builtin) queues the notifies on `GameHost::engine_notifies` instead of
 /// raising them on `cx`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn damage_entities(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -286,21 +286,21 @@ pub fn damage_entities(
 }
 
 /// `radiusDamage(origin, range, maxDamage, minDamage)` on CoD2
-/// (`GScr_RadiusDamage`, Mac 0x19947a): `G_RadiusDamage` with no
-/// inflictor, the world (entity 1022) as the attacker and
+/// (`GScr_RadiusDamage`, Mac 0x19947a; cod2-combat.md 7): `G_RadiusDamage`
+/// with no inflictor, the world (entity 1022) as the attacker and
 /// `MOD_EXPLOSIVE` (14), under the level's `setPlayerIgnoreRadiusDamage`
-/// flag for the walk only. VERIFIED, the call. Each playing client the
-/// blast reaches gets `CodeCallback_PlayerDamage` with an undefined
-/// inflictor, the world, `DFLAG_RADIUS`, weapon and hit location
-/// `"none"` and a `timeOffset` of 0, its damage times the hit-location
-/// table's `none` row (`G_Damage`, Mac 0x1c4272, the world's weapon being
-/// 0). Every entity with `takedamage` takes `G_Damage`'s entity arm.
+/// flag for the walk only. Each playing client the blast reaches gets
+/// `CodeCallback_PlayerDamage` with an undefined inflictor, the world,
+/// `DFLAG_RADIUS`, weapon and hit location `"none"` and a `timeOffset` of
+/// 0, its damage times the hit-location table's `none` row. Every entity
+/// with `takedamage` takes `G_Damage`'s entity arm.
 ///
 /// Retail walks the area tree once and runs each victim's callback before
 /// measuring the next; vcod measures every victim first, the clients in
 /// slot order ahead of the entities, then starts the callbacks in that
-/// order (each runs to its first `wait` before the builtin returns).
-/// INFERRED to differ only when a callback moves another victim.
+/// order (each runs to its first `wait` before the builtin returns), which
+/// differs only when a callback moves another victim (the doc's open
+/// item).
 pub fn radius_damage(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -385,7 +385,7 @@ impl super::cod2::Cod2Level {
     /// `health` with the `damage` notify (damage, attacker), and `death` at
     /// 0 or below; a `trigger_damage` fires off it. `attacker` is a client
     /// slot.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn entity_damage(
         &mut self,
         id: EntId,

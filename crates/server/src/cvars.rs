@@ -14,7 +14,7 @@ use vcod_gsc::ErrorKind;
 mod registry;
 
 pub use vcod_common::net::protocol::{
-    CS_CVAR_NAMES as MIRROR_NAMES, CS_CVAR_VALUES as MIRROR_VALUES,
+    CS_CVAR_NAMES_V1 as MIRROR_NAMES, CS_CVAR_VALUES_V1 as MIRROR_VALUES,
 };
 
 /// The 21 cvars the game module registers into the mirror at init, before
@@ -172,7 +172,7 @@ impl Cvars {
         let v6 = protocol == 6 || uo;
         let mut cv = Cvars {
             vars: BTreeMap::new(),
-            mirror: vcod_common::net::protocol::Protocol::by_version(
+            mirror: vcod_common::net::protocol::Cod1Wire::by_version(
                 vcod_common::game::Game::Cod1,
                 protocol,
             )
@@ -396,7 +396,7 @@ impl Cvars {
     /// `Cvar_Get(name, default)`: takes the default only when the cvar does
     /// not exist, so a cvar already set on the command line keeps its
     /// value. This is how a cvar table's row is seeded, and the opposite of
-    /// `set` above -- seeding with `set` would silently overwrite whatever
+    /// `set` above: seeding with `set` would silently overwrite whatever
     /// the operator passed.
     pub fn register(&mut self, name: &str, default: &str) {
         let c = self
@@ -425,7 +425,7 @@ impl Cvars {
     /// `set` and not `register` is the right primitive here. Nothing the
     /// stock file names is in the game module's own cvar table, so there is
     /// no registration to lose, and `set` never flags a cvar into the
-    /// 140/204 mirror -- a `scr_*` value from the file reaches the mirror
+    /// 140/204 mirror: a `scr_*` value from the file reaches the mirror
     /// only if a script later calls `makeCvarServerInfo` on that name,
     /// which keeps the existing value.
     pub fn exec_cfg(&mut self, text: &str) -> usize {
@@ -710,7 +710,7 @@ mod tests {
 
     /// `g_useGear` is in the game module's own cvar table with default
     /// `"1"` and flags 0x21, not the 0x800 the mirrored set carries, so it
-    /// never reaches the 140/204 block -- but every character script gates
+    /// never reaches the 140/204 block, but every character script gates
     /// its gear model precaches on it through
     /// `character\_utility::useOptionalModels`, so a missing default costs
     /// the model configstring block every gear model on the map.
@@ -748,7 +748,7 @@ mod tests {
     /// `makeCvarServerInfo` never overwrites a cvar that already has a
     /// value, so that call is not what produced the `"0"`. What did is
     /// `default_mp.cfg`, which the engine execs at startup and whose line
-    /// 95 is `set scr_allow_fg42 0` -- the file's only `scr_allow_*` row
+    /// 95 is `set scr_allow_fg42 0`: the file's only `scr_allow_*` row
     /// set to `0` (docs/research/cod11-gsc-object-model.md section 18).
     /// `Server::cvars` runs the file, so this table is a transcription of
     /// the capture, not a source of values.
@@ -961,6 +961,16 @@ mod tests {
             cv.list(Some("*_debugMove"))
                 .starts_with("        g_debugMove \"0\"\n\n")
         );
+    }
+
+    /// The registry was captured off a server started with its own
+    /// rcon password; a fresh table carries none, as retail's default is
+    /// empty (BUG-104).
+    #[test]
+    fn a_fresh_table_has_no_rcon_password() {
+        for p in [1, 6, 22] {
+            assert_eq!(Cvars::for_protocol(p).get("rconPassword"), "", "{p}");
+        }
     }
 
     /// `cvarlist <filter>` on a retail 1.1d server's 210 cvars (handshake

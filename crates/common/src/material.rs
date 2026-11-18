@@ -1,3 +1,6 @@
+//! Contains routines ported from the RTCW-MP GPL source, Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company.
+//! See NOTICE.
+//!
 //! The game-neutral material the renderer draws: sort key, surface bits,
 //! cull, depth bias, per-stage blend, depth and alpha-test state, texture
 //! bindings by semantic, the colour and texture-coordinate generators and
@@ -241,7 +244,7 @@ pub struct Flap {
 
 /// `deformVertexes bulge`: a sine along the base `s` coordinate, travelling
 /// at `speed`, pushes each vertex out along its normal by up to `height`
-/// (CoDMP.exe 0x513ad0; shader doc 8).
+/// (CoDMP.exe 0x513ad0; shader doc 8.1).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bulge {
     pub width: f32,
@@ -250,7 +253,7 @@ pub struct Bulge {
 }
 
 /// `deformVertexes normal`: each normal is nudged by `amp` times the noise
-/// at the vertex and renormalized (CoDMP.exe 0x513990; shader doc 8).
+/// at the vertex and renormalized (CoDMP.exe 0x513990; shader doc 8.1).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DeformNormal {
     pub amp: f32,
@@ -501,7 +504,7 @@ pub struct Material {
     pub dropped_stages: usize,
     /// Set by the renderer on a static prop's batch: the model's left and
     /// up axes in the world, so `tcGen environment` reflects in the model's
-    /// frame on world-baked vertices (shader doc 8, "Static props").
+    /// frame on world-baked vertices (shader doc 8.2, "Static props").
     pub model_axes: Option<[[f32; 3]; 2]>,
     /// A CoD2 `lmap*` technique: the renderer's CoD2 world pipeline draws
     /// a lightmapped surface with it in place of `stages`. `None` on CoD1.

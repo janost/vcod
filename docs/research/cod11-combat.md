@@ -326,8 +326,8 @@ INFERRED: that is the whole semi-automatic edge. Nothing latches the button in
 `weaponTime == 0` while the trigger stays down, and the fire path is gated on
 `weaponTime` having reached 0. INFERRED: releasing the trigger lets the next
 frame take the `else` and store 0, after which the weapon can fire again. The
-net probe taps the bit for that reason (`Pulse`, AGENTS.md "The probe
-client").
+net probe taps the bit for that reason (`Pulse`, `docs/dev/retail.md`, "The
+probe client").
 
 VERIFIED, same block (`.so` 0x38842-0x388c4): after the store of 1 it
 compares `weaponstate` against 4, then against 3, 4, 10 and 11. Both arms
@@ -910,8 +910,10 @@ INFERRED: `eFlags 0xC000` marks a player on a mounted MG, since `FireWeapon`
 tests the same mask before taking its turret branch and the fire path skips the
 clip decrement when it is set.
 
-UNVERIFIED: what sets `pm_flags 0x800`, and what `pm_flags 0x400` and `0x4000`
-mean. VERIFIED: `BG_GetMinSpreadForWeapon` tests `pm_flags & 1` and
+`pm_flags` 0x800 is `PMF_RESPAWNED` (16.5; `cod11-mantle.md`, State
+reference) and 0x4000 has its own section in `cod11-mantle.md`; what 0x400
+means is open (section 10). VERIFIED: `BG_GetMinSpreadForWeapon` tests
+`pm_flags & 1` and
 `pm_flags & 2` and loads `hipSpreadProneMin`, `hipSpreadDuckedMin` and
 `hipSpreadStandMin` off those tests, and the weapon-change check tests
 `pm_flags & 0x10` and holds a store of weapon 0. INFERRED: the prone minimum
@@ -2076,7 +2078,8 @@ the PVS anyway.
 ### 2.6 `Bullet_Endpos`
 
 VERIFIED: `Bullet_Endpos` is `0x69624`, 0xcf bytes, and nothing in the
-combat path above calls it. UNVERIFIED: what does, and what it is for.
+combat path above calls it. Its arithmetic is the spread cone's end point
+(2.2, "The rounding"); which 1.1d function calls it is open.
 
 ### 2.7 What a `bulletTrace` clips
 
@@ -3099,6 +3102,8 @@ playerstate's `viewangles`, which the server echoes a snapshot late at
 times, so a height is good to one table step (1 to 4 units at these ranges)
 plus the 1.5 degree hip cone. VERIFIED, the labels and the numbers;
 INFERRED, the pairing of each hit with a tap.
+`tools/pair_sweep.py <shooter.log> <target.log> <labels.txt>` does the
+pairing and prints each crossing height.
 
 The first hit of each life, the victim idle in `legsAnim` 634 and not yet
 knocked back:
@@ -3282,7 +3287,7 @@ the lean:
 - The clock the grid poses at. VERIFIED, `game.mp.i386.so`: `G_RunFrame`'s
   first `Scr_RunCurrentThreads` (0x50653) runs before
   `trap_DObjInitServerTime` and `G_DObjUpdateServerTime` (0x5069f,
-  0x506ed; cod11-movers.md 15, "A bone asked for before anim update").
+  0x506ed; cod11-movers.md 15, "A bone asked for before the anim update").
   VERIFIED, `cod_lnxded`: the time step 0x080bbab0 adds `dtime * rate *
   frequency` to a node's old time (`+0x2c`, copied from the time by the
   weight step 0x080bb130 first) for every node whose weight is not 0,
@@ -4164,7 +4169,8 @@ cmd-path death's comes due after 200. Ours matches on all three
 
 INFERRED: nothing frees a clone on a timer. It lives until the eighth
 subsequent death reuses its slot, which is the eight-body behaviour the
-project already observed live (`AGENTS.md`, "Netcode debugging").
+project already observed live (`docs/dev/traps.md`, "Combat and items", "The
+body queue is eight entities").
 
 **As implemented** (`crates/server/src/game/bodies.rs` and the `cloneplayer`
 builtin in `crates/server/src/game/builtins/client.rs`). The clone is written
@@ -5244,7 +5250,7 @@ VERIFIED, the shooter's single shot on `mp_carentan`: `weaponstate` 3,
 as retail's shooter capture. `torsoAnim` reads 765 (512 | 253), the number
 the retaken `combat` fixtures measure; the retail `dm` shooter fixture's 0
 predates the `cmd.weapon` fix (`player-model-anim-system.md`, "The
-`jump_takeoff` torso index is gone") and is not evidence.
+`jump_takeoff` torso 720 was a holstered weapon") and is not evidence.
 
 VERIFIED, `mp_ship` `dm`, the kill by a bullet: `health` 0, `pm_type` 6,
 `torsoAnim` 512, the dead view height lerping 60 -> 50.8 -> 42 -> 32.8 -> 24
@@ -5259,7 +5265,7 @@ truncated). `damageEvent` stays 0 through the fatal hit (INFERRED: 6's step
 respawns on use with the full loadout, and the killer's score goes 0 to 1 the
 frame after the kill.
 
-### 9.2 What differs
+### 9.2 What differed: the closed divergences and their pins
 
 Every divergence these runs found is closed. Retail facts and the traps they
 set, each with its pin:
@@ -5755,18 +5761,17 @@ server ran.
   sweep against a target with more than two hits of health at a fixed short
   range, with the pitch read off the cmd rather than the echo, would settle
   it.
-- UNVERIFIED: what sets `pm_flags 0x800`, which stops `PM_Weapon` outright,
-  and what `pm_flags 0x400` and `0x4000` mean. INFERRED for `0x400`: set
+- UNVERIFIED: what `pm_flags 0x400` means. (0x800, which stops `PM_Weapon`
+  outright, is `PMF_RESPAWNED`: 16.5 and `cod11-mantle.md`'s State
+  reference give its set and clear; 0x4000 is `cod11-mantle.md`,
+  "`pm_flags` 0x4000".) INFERRED for `0x400`: set
   whenever a fire, a melee finish or a weapon change happens while
   `pm_flags & 1`, and ORed in by the ADS flag update's prone arm (1.13), so
   it is prone-specific.
 - UNVERIFIED: the meaning of bit `0x10` of the trace word at offset 32, which
   makes a bullet continue through a surface at full damage.
-- UNVERIFIED: what `Bullet_Endpos` (`0x69624`) is for; nothing on this path
-  calls it.
-- UNVERIFIED: the hit-location partition itself. It is decided inside
-  `trap_LocationalTrace`, in the engine binary, so nothing above pins how a
-  point on a player maps to one of the 19 names.
+- UNVERIFIED: which 1.1d function calls `Bullet_Endpos` (`0x69624`). Its
+  arithmetic is the spread cone's end point (2.2, "The rounding").
 - Settled: every jump adds 64 to `ps.aimSpreadScale`, capped at 255
   (`PM_CheckJump` 0x2edc6-0x2edf3, `cod11-mantle.md`, "Jumps"; the 255 once
   attributed to the ground jump was the prone dive's block). VERIFIED: both
@@ -7885,7 +7890,7 @@ the turret's waiters:
 
 INFERRED: the notifies wake their waiters after the builtin's caller has
 moved on, and the later notify's waiter runs first, the newest-first resume
-order of AGENTS.md's script notes. Where the turret falls in the walk
+order (`cod11-gsc-language.md` 9). Where the turret falls in the walk
 relative to slot 1 is not visible here, since its notifies are deferred.
 
 **As implemented.** `GameHost::blast_entities` lists the turrets with
@@ -9310,7 +9315,7 @@ calls `Com_EventLoop` in the loop at 0x806cfe0..0x806d001 and then
 never inside one. `Com_EventLoop` hands each received datagram to
 `SV_PacketEvent` as it takes it off the queue, and its only callers are
 `Com_Frame`'s loop and, on a non-dedicated process only, a second call after
-`SV_Frame` (cod11-server-handshake.md, "The read schedule"). INFERRED: so
+`SV_Frame` (cod11-server-handshake.md, "Pings", "The read schedule"). INFERRED: so
 within a server frame every client's cmds, and the shots in them, run in
 packet arrival order, and `G_RunFrame`'s `ClientEndFrame` pass runs after all
 of them.
@@ -9444,7 +9449,7 @@ timer already dropped.
 VERIFIED, by capture: under the timer `PM_SlideMove` leaves a push into a
 wall in the velocity (`cod11-player-clip.md` 8.5, `probe_slide`).
 
-### 16.2 As implemented
+### 16.2 vcod's port, and a retail read
 
 `Server::replay_moves` (`crates/server/src/server.rs`) runs every packet
 since the last tick in the order the server executed it: `handle_packet`

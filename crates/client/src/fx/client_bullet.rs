@@ -133,7 +133,6 @@ impl ClientBullets {
     /// The coaxial gun's `tag_altfire` aims off `view`: toward where the
     /// view's line meets the world, turned at most [`ALTFIRE_TURN`] off the
     /// tag (0x30045638..0x30045806).
-    #[allow(clippy::too_many_arguments)]
     pub fn fire(
         &mut self,
         frame: u32,

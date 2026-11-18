@@ -1,9 +1,12 @@
-//! CoD2's world shading (docs/research/cod2-materials.md 9): the
-//! lightmapped phong family (`cod2_world.wgsl`) and the cube-map sky
-//! (`sky_cube.wgsl`). A CoD2 world batch whose material carries
-//! [`PhongLit`] draws through [`Cod2World`] instead of its stage; every
-//! other CoD2 material, and every CoD1 one, keeps the stage path, so no
-//! CoD1 pipeline or key changes.
+//! The lit world of CoD2 and CoD4 (`cod2_world.wgsl`) and the cube-map sky
+//! (`sky_cube.wgsl`). CoD2: the lightmapped phong family
+//! (docs/research/cod2-materials.md 9). CoD4: lit world, static models and
+//! water, primary lights, reflection probes and the model lighting volume
+//! (cod4-world.md 3 and 9), one pipeline per lit path (cod4-client-perf.md
+//! 29) and `floatZ` from the depth prepass (cod4-client-perf.md 35). A world
+//! batch whose material carries [`PhongLit`] draws through [`Cod2World`]
+//! instead of its stage; every other material, CoD1's included, keeps the
+//! stage path, so no CoD1 pipeline or key changes.
 
 use std::collections::HashMap;
 use vcod_common::asset_source::AssetSource;
@@ -829,7 +832,6 @@ pub(super) fn uniform_entry(
     }
 }
 
-/// A one-level texture of `format` from tightly packed rows.
 /// A `width` x `height` x 4 RGBA volume, its slices one after another, as
 /// 1.7's model lighting image (`R_InitModelLightingImage`, cod4-world.md
 /// 3.2).
@@ -864,6 +866,7 @@ fn upload_volume(
         .create_view(&Default::default())
 }
 
+/// A one-level texture of `format` from tightly packed rows.
 fn upload_plain(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -873,6 +876,11 @@ fn upload_plain(
     bytes_per_texel: u32,
     data: &[u8],
 ) -> wgpu::TextureView {
+    debug_assert_eq!(
+        data.len() as u32,
+        width * height * bytes_per_texel,
+        "upload_plain {label}: data is not width x height texels"
+    );
     let texture = device.create_texture_with_data(
         queue,
         &wgpu::TextureDescriptor {
@@ -892,7 +900,6 @@ fn upload_plain(
         wgpu::util::TextureDataOrder::LayerMajor,
         data,
     );
-    debug_assert_eq!(data.len() as u32, width * height * bytes_per_texel);
     texture.create_view(&Default::default())
 }
 
@@ -1037,7 +1044,6 @@ impl<'a> Cod2Builder<'a> {
 
     /// [`Self::bind_in`] with probe 0, as every CoD2 batch's.
     #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
     pub fn bind(
         &mut self,
         fs: &Pk3Fs,
@@ -1055,7 +1061,6 @@ impl<'a> Cod2Builder<'a> {
     /// `probe` and primary light `light` (a CoD4 surface's; 0 elsewhere),
     /// which [`draws_lit`] accepted. A spot or omni light in `light` lights
     /// it in the sun's place (`lm_spot_*`, `lm_omni_*`).
-    #[allow(clippy::too_many_arguments)]
     pub fn bind_in(
         &mut self,
         fs: &Pk3Fs,
@@ -1161,7 +1166,6 @@ impl<'a> Cod2Builder<'a> {
     /// primary light `light` (the sun's technique unless it names a spot
     /// or omni light), which [`draws_cod4_model`] accepted, over the map's
     /// model lighting volume.
-    #[allow(clippy::too_many_arguments)]
     pub fn bind_cod4_model(
         &mut self,
         fs: &Pk3Fs,
@@ -1196,7 +1200,6 @@ impl<'a> Cod2Builder<'a> {
 
     /// Binds a CoD4 water batch of `sh` under reflection probe `probe`,
     /// which [`draws_cod4_water`] accepted.
-    #[allow(clippy::too_many_arguments)]
     pub fn bind_cod4_water(
         &mut self,
         fs: &Pk3Fs,
@@ -1899,7 +1902,7 @@ fn constant_image(name: &str) -> Image {
 
 /// The lit pipeline: the world vertex in buffer 0, [`tangent_stream`] in
 /// buffer 1, depth LessEqual, wound as the map's triangles.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(super) fn make_lit_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
@@ -2021,7 +2024,7 @@ fn make_floatz_pipeline(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn lit_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
@@ -2450,6 +2453,32 @@ pub(super) mod tests {
         assert_eq!(t.len(), 5);
         assert_eq!(t[1][1], [0.0, 1.0, 0.0]);
         assert_eq!(t[4], [[0.0; 3]; 2]);
+    }
+
+    /// A short slice trips the size check before wgpu reads past it.
+    #[test]
+    fn upload_plain_checks_the_size_before_the_upload() {
+        let Some((device, queue)) = headless() else {
+            return;
+        };
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            upload_plain(
+                &device,
+                &queue,
+                "short",
+                (2, 2),
+                wgpu::TextureFormat::Rgba8Unorm,
+                4,
+                &[0; 4],
+            )
+        }));
+        let msg = r.expect_err("a short slice uploaded");
+        let msg = msg
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| msg.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        assert!(msg.contains("upload_plain short"), "{msg}");
     }
 
     /// A device off a headless adapter, `None` where the machine has none.

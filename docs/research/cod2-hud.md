@@ -722,7 +722,7 @@ rise over 100 ms and an eased fall over 400. VERIFIED (0x326350 100,
 ### 17.2 The shake
 
 `CG_ShakeCamera` (0x1cea88) and `CG_StartShakeCamera` (0x1d0138) are
-1.1's four-slot quake (cod11-combat.md, "The earthquake shake"): the
+1.1's four-slot quake (cod11-combat.md 17.2): the
 600 ms clock, the 18, 16 and 10 degree gains and the 8, 15 and 12 pi
 frequencies. VERIFIED (0x3263bc, 0x326280, 0x326260, 0x32626c,
 0x340d58..0x340d68). `CG_EntityEvent` starts one on `EV_FIRE_WEAPON_MG42`

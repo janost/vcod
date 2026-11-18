@@ -220,8 +220,6 @@ fn convex_hull_on_plane(points: &[Vec3], n: Vec3) -> Vec<Vec3> {
     hull.into_iter().map(|p| p.2).collect()
 }
 
-/// Whether `p`, on the winding's plane, lies inside it (`ProjectedWinding
-/// ContainsCoplanarPoint`): on the inner side of every edge.
 /// Whether a popped portal's hull covers `min_area` of the screen, so its
 /// cell queues its own portals (`R_VisitPortals`, CoD2 Mac 0xf14c0): the
 /// share of the screen's 2 x 2 its points' NDC rectangle covers, then,
@@ -253,6 +251,8 @@ fn clips_children(hull: &[Vec3], view_proj: Mat4, min_area: f32) -> bool {
     (twice * 0.125).abs() >= min_area
 }
 
+/// Whether `p`, on the winding's plane, lies inside it (`ProjectedWinding
+/// ContainsCoplanarPoint`): on the inner side of every edge.
 fn point_in_winding(p: Vec3, verts: &[Vec3], n: Vec3) -> bool {
     let mut sign = 0.0f32;
     for i in 0..verts.len() {
@@ -684,8 +684,8 @@ impl WorldVis {
                 self.mark_group(&self.cull_groups[gi as usize], frustum, &mut w.vis);
             }
         }
-        // Sightlines that leave the graph over low geometry — bulwarks, rails
-        // (mp_ship's deck over the ocean) — under-mark: the walk treats those
+        // Sightlines that leave the graph over low geometry (bulwarks, rails,
+        // mp_ship's deck over the ocean) under-mark: the walk treats those
         // walls as sealed. Any cell sharing a portal with a visited cell is
         // frustum-tested directly, to a fixpoint; the camera frustum is the
         // conservative bound, same as the fallback path.
@@ -870,7 +870,6 @@ impl WorldVis {
     /// under the same frustum. `depth` counts the portals opened on the
     /// way here (0 at the eye's cell); each portal queued keeps the
     /// shallowest it was queued from (iw3mp.exe 0x60a289, 0x60a2aa).
-    #[allow(clippy::too_many_arguments)]
     fn visit_queued(
         &self,
         cell: usize,
@@ -990,7 +989,7 @@ impl WorldVis {
     /// left out, as in `walk`), the cell beyond goes on `list` once and
     /// its own portals are tried the same way, under the same planes.
     /// Retail's list holds 384 (its stack array).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn further_cells(
         &self,
         cell: usize,
@@ -1033,8 +1032,6 @@ impl WorldVis {
         }
     }
 
-    /// The cell's AABB tree and cull groups under `frustum`
-    /// (`R_AddVisibleSurfacesInCell`).
     /// Every soup the listed cells' trees and cull groups hold, unculled:
     /// the most a walk that reaches those cells can mark.
     pub fn cell_soups(&self, cells: &[bool]) -> Vec<bool> {
@@ -1046,6 +1043,8 @@ impl WorldVis {
         vis.soups
     }
 
+    /// The cell's AABB tree and cull groups under `frustum`
+    /// (`R_AddVisibleSurfacesInCell`).
     fn mark_cell(&self, cell: usize, frustum: &Frustum, vis: &mut Visible) {
         let c = &self.cells[cell];
         self.mark_tree(c.first_aabb, frustum, vis);

@@ -3,6 +3,7 @@
 //! (docs/research/cod2-movement.md 5, 6).
 
 use glam::Vec3;
+use vcod_common::clipmap::SURF_SLICK;
 
 use super::anim::Event;
 use super::fpu::{self, d};
@@ -47,7 +48,7 @@ pub(crate) fn friction(ps: &mut PlayerState, pml: &Pml, rules: &super::Rules) {
     }
     let mut drop = 0f32;
     if pml.walking
-        && pml.ground_trace.surface_flags & 2 == 0
+        && pml.ground_trace.surface_flags & SURF_SLICK == 0
         && ps.pm_flags & pmf::TIME_KNOCKBACK == 0
     {
         let mut control = speed.max(rules.stopspeed);
@@ -284,8 +285,8 @@ pub(crate) fn walk_move(pm: &mut Pmove, pml: &mut Pml) {
     pml.right = fpu::normalize(clip_velocity(pml.right, n)).0;
     let (wishdir, len) = fpu::normalize(flat_wish(pml, fm, rm, 3));
     let wishspeed = (d(len) * d(scale)) as f32;
-    let slick =
-        pml.ground_trace.surface_flags & 2 != 0 || pm.ps.pm_flags & pmf::TIME_KNOCKBACK != 0;
+    let slick = pml.ground_trace.surface_flags & SURF_SLICK != 0
+        || pm.ps.pm_flags & pmf::TIME_KNOCKBACK != 0;
     let mut accel = if slick {
         1.0
     } else {

@@ -14,7 +14,7 @@ pub const NO_LIGHTMAP: u16 = 65535;
 #[derive(Debug, Clone)]
 pub struct Material {
     pub name: String,
-    /// Unused; surfaces are skipped by material name.
+    /// `SURF_*` bits; the client's impact marks read `SURF_NOMARKS`.
     #[allow(dead_code)]
     pub surface_flags: u32,
     pub content_flags: u32,
@@ -237,7 +237,7 @@ impl Pvs {
     }
 
     /// Whether a viewer in `from` can be shown something in `to`. A cluster
-    /// outside the table -- which is what a solid leaf's -1 is -- is visible,
+    /// outside the table (which is what a solid leaf's -1 is) is visible,
     /// matching the engine: its own test only ever runs on real clusters.
     pub fn visible(&self, from: i32, to: i32) -> bool {
         let (Ok(f), Ok(t)) = (usize::try_from(from), usize::try_from(to)) else {
@@ -682,7 +682,10 @@ impl Visibility {
 
     /// The leaf a point falls in, by walking the tree from node 0. The engine
     /// descends the same way for its camera cell (`0x4e2be0`): a point on the
-    /// plane takes the back child.
+    /// plane takes the back child. That address is the client renderer's;
+    /// the dedicated server's snapshot cull calls this too, and the server's
+    /// own tie rule is unread ([`crate::leafwalk::LeafWalk::leaf_at`] takes
+    /// Q3's front child).
     pub fn leaf_at(&self, p: [f32; 3]) -> Option<&Leaf> {
         if self.nodes.is_empty() {
             return self.leafs.first();

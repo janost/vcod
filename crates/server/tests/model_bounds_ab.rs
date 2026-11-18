@@ -13,12 +13,12 @@ use crate::common;
 
 use std::rc::Rc;
 use std::time::Instant;
-use vcod_common::net::protocol::{PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V6, PROTOCOL_V22};
 
 const SCRIPT: &str =
     include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_modelbounds.gsc");
 
-fn ours(fs: vcod_common::pk3::Pk3Fs, proto: Option<&'static Protocol>) -> Vec<String> {
+fn ours(fs: vcod_common::pk3::Pk3Fs, proto: Option<&'static Cod1Wire>) -> Vec<String> {
     let map = "mp_carentan";
     let bsp_path = fs.resolve_map(map).expect("map in the paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();

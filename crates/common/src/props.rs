@@ -128,8 +128,8 @@ pub fn rotation(angles: Vec3) -> Mat3 {
         * Mat3::from_rotation_x(angles.z.to_radians())
 }
 
-/// q3map2 reads `modelscale` with `FloatForKey` and applies it only when
-/// non-zero. Also guards `bake`'s normal division.
+/// A `modelscale` of zero counts as unset, as q3map2's `FloatForKey` check
+/// reads it (unverified on retail). Also guards `bake`'s normal division.
 fn scale_or_one(v: f32) -> f32 {
     if v.is_finite() && v != 0.0 { v } else { 1.0 }
 }
@@ -164,8 +164,10 @@ pub fn placements(entities: &str) -> Vec<Placement> {
                 Some([0.0, yaw, 0.0])
             })
             .unwrap_or([0.0; 3]);
-        // q3map2 precedence (model.c): "modelscale" seeds all axes, then
-        // "modelscale_vec" overwrites them. Retail maps carry both keys.
+        // "modelscale" seeds all axes, then "modelscale_vec" overwrites
+        // them, as CoDMP.exe's drawn-model pass 0x4dbae0 does
+        // (cod11-gsc-object-model.md, "The order of a block's keys"). Retail
+        // maps carry both keys.
         let uniform = e
             .get("modelscale")
             .and_then(|s| s.trim().parse::<f32>().ok())
@@ -311,7 +313,7 @@ fn skin_lookup_name(skin: &str) -> &str {
 /// The script block a model skin resolves to: the model loader formats
 /// `"skins/%s"` (CoDMP.exe 0x504352) and `R_FindShader` cuts the name at
 /// the first `.`. A name whose cut holds an `@` takes its `.stype` instead
-/// and never looks a script up (shader doc 8).
+/// and never looks a script up (shader doc 8.2).
 pub fn skin_script(skin: &str) -> Option<String> {
     let stem = skin_lookup_name(skin);
     (!stem.contains('@')).then(|| format!("skins/{stem}"))

@@ -1,5 +1,5 @@
-//! The earthquake shake on the drawn view (docs/research/cod11-combat.md,
-//! "The earthquake shake"): four slots of `(start, scale, duration, radius,
+//! The earthquake shake on the drawn view (docs/research/cod11-combat.md
+//! 17.2): four slots of `(start, scale, duration, radius,
 //! origin)` the cgame fills off `EV_EARTHQUAKE` and every
 //! `EV_FIRE_WEAPON_MG42`, and the strongest one shaking the refdef's
 //! angles after `CG_CalcViewValues`.
@@ -8,7 +8,7 @@ use glam::Vec3;
 use vcod_common::net::event_ids::{EV_EARTHQUAKE, EV_FIRE_WEAPON_MG42};
 use vcod_common::net::events::GameEvent;
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 
 /// One quake: what `0x30017dd0` copies into a slot.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -41,7 +41,7 @@ impl Quake {
 /// `0x30017dd0`. `es` is the event's entity, `None` for the playerstate's
 /// ring; `origin` is where the event's body is drawn.
 pub fn from_event(
-    p: &Protocol,
+    p: &Cod1Wire,
     ev: &GameEvent,
     es: Option<&EntityState>,
     origin: Vec3,

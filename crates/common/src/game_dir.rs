@@ -14,6 +14,53 @@ pub fn default_game_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// What to do about an install that is not where the binary looked.
+pub const INSTALL_HINT: &str =
+    "pass --game-dir <install> or set COD_DIR to the folder that holds main/ (zone/ for CoD4)";
+
+/// How `--game-dir` was picked, for an error about it: the flag when
+/// `flag` is set, else [`default_game_dir`]'s source.
+pub fn chosen_by(flag: bool) -> &'static str {
+    if flag {
+        "--game-dir"
+    } else if std::env::var_os("COD_DIR").is_some() {
+        "COD_DIR"
+    } else {
+        "the executable's directory"
+    }
+}
+
+/// Fails unless `root` holds the directory `game` reads first: `zone/`
+/// for CoD4, else `mod_dir` (`main`, or `uo`). `chosen` is [`chosen_by`].
+pub fn check_install(
+    root: &Path,
+    game: crate::game::Game,
+    mod_dir: &str,
+    chosen: &str,
+) -> anyhow::Result<()> {
+    let sub = match game {
+        crate::game::Game::Cod4 => "zone",
+        _ => mod_dir,
+    };
+    let dir = root.join(sub);
+    if dir.is_dir() {
+        return Ok(());
+    }
+    anyhow::bail!("no {sub}/ in {} ({chosen}): {INSTALL_HINT}", root.display())
+}
+
+/// The hint for a map that was not found under `main/` while `root`
+/// holds United Offensive's paks beside it.
+pub fn uo_map_hint(root: &Path, mod_dir: &str) -> Option<&'static str> {
+    let uo_paks = std::fs::read_dir(root.join("uo")).ok()?.flatten().any(|e| {
+        e.file_name()
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .starts_with("pakuo")
+    });
+    (mod_dir == "main" && uo_paks).then_some("United Offensive maps need --mod-dir uo")
+}
+
 /// `name` as a relative path that cannot leave the directory it is joined to, or `None`.
 pub fn confined_rel_path(name: &str) -> Option<PathBuf> {
     // Retail's file layer refuses `..` and `::` anywhere in a path it
@@ -49,6 +96,31 @@ pub fn confined_component(dir: &Path, name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_install_names_the_directory_and_the_fix() {
+        use crate::game::Game;
+        let root = tempfile::tempdir().unwrap();
+        let e = check_install(root.path(), Game::Cod1, "main", "COD_DIR").unwrap_err();
+        let e = e.to_string();
+        assert!(e.starts_with("no main/ in "), "{e}");
+        assert!(e.contains("(COD_DIR)") && e.contains("--game-dir"), "{e}");
+        let e = check_install(root.path(), Game::Cod4, "main", "--game-dir").unwrap_err();
+        assert!(e.to_string().starts_with("no zone/ in "), "{e}");
+        std::fs::create_dir_all(root.path().join("main")).unwrap();
+        assert!(check_install(root.path(), Game::Cod1, "main", "x").is_ok());
+        assert!(check_install(root.path(), Game::Cod1, "uo", "x").is_err());
+    }
+
+    #[test]
+    fn uo_paks_beside_main_give_the_mod_dir_hint() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(uo_map_hint(root.path(), "main"), None);
+        std::fs::create_dir_all(root.path().join("uo")).unwrap();
+        std::fs::write(root.path().join("uo/PakUO00.pk3"), b"").unwrap();
+        assert!(uo_map_hint(root.path(), "main").is_some());
+        assert_eq!(uo_map_hint(root.path(), "uo"), None);
+    }
 
     #[test]
     fn confined_rel_path_keeps_names_under_their_directory() {

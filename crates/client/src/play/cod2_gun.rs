@@ -17,8 +17,7 @@ const WEAPON_RELOADING: i32 = 5;
 const EF_CROUCH: i32 = 0x4;
 const EF_PRONE: i32 = 0x8;
 /// `viewHeightTarget` of a crouched and a prone body: the offset's stance.
-const VIEW_CROUCH: i32 = 40;
-const VIEW_PRONE: i32 = 11;
+use vcod_cod2::pmove::{VIEW_CROUCH, VIEW_PRONE};
 /// `bg_bobAmplitudeStanding`, `Ducked`, `Prone` (cod2-movement.md 13).
 const BOB_AMPLITUDE: [f32; 3] = [0.007, 0.0075, 0.03];
 

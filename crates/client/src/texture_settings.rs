@@ -2,7 +2,8 @@
 //! `r_picmip`, `r_picmip2`, `r_texturebits`, `r_simpleMipMaps` and
 //! `r_weightMipMaps` at image load (latched, so a change waits for
 //! `vid_restart`) and `r_textureMode` on the samplers
-//! (docs/research/cod11-front-end.md, section 14, "Texture settings").
+//! (docs/research/cod11-front-end.md, section 14, "How retail applies the
+//! Graphics, Performance and Sound pages").
 
 use vcod_common::asset_source::AssetSource;
 use vcod_common::assets::{self, Image, ImageData};
@@ -381,7 +382,8 @@ pub fn iwi_picmip(data: &[u8], picmip: u32) -> u32 {
 /// texture gamma baked in (`gamma::bake_image`) unless the image goes up
 /// unmipped at its own size, the mip chain built from that, then
 /// `r_texturebits` on every level. Block-compressed images lose whole mip
-/// levels while both sides stay above 4 and keep their own chain only with
+/// levels while both sides stay above 4 and halve to whole blocks, and keep
+/// their own chain only with
 /// `chain`; uncompressed ones are halved to `size >> picmip` and stored at
 /// 16 bits a texel with `r_texturebits 16` (0x4ebe30). Returns an
 /// uncompressed image's levels below level 0 (empty without `chain`).
@@ -513,12 +515,18 @@ impl Down<'_> {
 }
 
 /// `a#3.tga` -> `a#4.tga`: the digits after the first `#` plus one, the
-/// rest kept (0x4eb1d0, `"%i%s"` at 0x54bf78). `None` without a `#`.
+/// rest kept (0x4eb1d0, `"%i%s"` at 0x54bf78). `None` without a `#`, or
+/// past the last level an i64 holds.
 fn next_custom_level(name: &str) -> Option<String> {
     let at = name.find('#')? + 1;
     let digits = name[at..].bytes().take_while(u8::is_ascii_digit).count();
     let n: i64 = name[at..at + digits].parse().unwrap_or(0);
-    Some(format!("{}{}{}", &name[..at], n + 1, &name[at + digits..]))
+    Some(format!(
+        "{}{}{}",
+        &name[..at],
+        n.checked_add(1)?,
+        &name[at + digits..]
+    ))
 }
 
 fn drop_levels(img: &mut Image, picmip: u32, down: &mut Down) {
@@ -526,7 +534,15 @@ fn drop_levels(img: &mut Image, picmip: u32, down: &mut Down) {
         ImageData::Bc { mips, .. } => {
             let mut drop = 0;
             let (mut w, mut h) = (img.width, img.height);
-            while drop < picmip && w >= 5 && h >= 5 && mips.len() > drop as usize + 1 {
+            // wgpu takes a BC texture only in whole blocks: a side that
+            // would halve to a part block keeps the level.
+            while drop < picmip
+                && w >= 5
+                && h >= 5
+                && (w >> 1) % 4 == 0
+                && (h >> 1) % 4 == 0
+                && mips.len() > drop as usize + 1
+            {
                 w >>= 1;
                 h >>= 1;
                 drop += 1;
@@ -683,6 +699,14 @@ mod tests {
         }
     }
 
+    /// A `#N` level at i64::MAX ends the custom chain instead of
+    /// overflowing (BUG-086).
+    #[test]
+    fn the_last_custom_level_ends_the_chain() {
+        assert_eq!(next_custom_level("a#3.tga").as_deref(), Some("a#4.tga"));
+        assert_eq!(next_custom_level("x#9223372036854775807.tga"), None);
+    }
+
     #[test]
     fn picmip_cvars_clamp_to_three_levels() {
         let f = TextureFilter::by_name("GL_LINEAR").unwrap();
@@ -762,6 +786,28 @@ mod tests {
         };
         assert_eq!(mips.len(), 3);
         assert_eq!(mips[0][0], 1);
+    }
+
+    /// A mipmapped BC image whose sides are blocks but not powers of two
+    /// stops at the last level that is whole blocks.
+    #[test]
+    fn picmip_keeps_compressed_levels_whole_blocks() {
+        let chain = Mips {
+            chain: true,
+            custom: None,
+        };
+        for ((w, h), picmip, want) in [((12, 12), 1, (12, 12)), ((24, 24), 2, (12, 12))] {
+            let mut img = Image {
+                width: w,
+                height: h,
+                data: ImageData::Bc {
+                    format: TextureFormat::Bc1RgbaUnorm,
+                    mips: (0..4).map(|l| vec![l as u8; 8]).collect(),
+                },
+            };
+            prepare(&mut img, picmip, None, bits(16), chain);
+            assert_eq!((img.width, img.height), want, "{w}x{h} at {picmip}");
+        }
     }
 
     #[test]

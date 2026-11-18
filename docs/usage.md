@@ -2,8 +2,9 @@
 
 Command lines, controls, the console and the menus, for all four games.
 New here: [getting-started.md](getting-started.md) is shorter, with the
-install layout, a quick start per game and recipes. Bots: [bots.md](bots.md). What each
-game supports: [docs/features/](features/) ([CoD1](features/cod1.md),
+install layout, a quick start per game and recipes. Bots:
+[bots.md](bots.md). What each game supports:
+[docs/features/](features/) ([CoD1](features/cod1.md),
 [UO](features/uo.md), [CoD2](features/cod2.md), [CoD4](features/cod4.md)).
 
 - [Install and game](#install-and-game)
@@ -25,8 +26,8 @@ Both binaries share these flags.
 | `--mod-dir uo` | United Offensive: `uo/` searched over the `main/` beside it, as UO does. Default `main`. |
 | `--vanilla` | CoD1 and UO: only the patch's stock paks (`pak0`..`pak8` on 1.1, `pak0`..`pakf` on 1.5, UO's `pakuo*` and `uomappack00`, and their `localized_*` paks). Every other pk3 in `main/` and `uo/` is ignored. |
 
-`COD_DIR` is the only variable the binaries read. `COD2_DIR` and
-`COD4_DIR` point tests and tools at those installs.
+`COD_DIR` is the only install variable the binaries read, for every game.
+`COD2_DIR` and `COD4_DIR` point tests and tools at those installs.
 
 With `--vanilla` the client downloads nothing: a server on a non-stock
 map fails the load with a popup naming its paks, and one that only adds
@@ -41,7 +42,7 @@ load a third-party map and refuses `--set fs_game`.
 | Command | Does |
 |---|---|
 | `vcod` | Main menu and server browser, in the install's game. |
-| `vcod --connect <ip:port>` | Join through the server's menus. |
+| `vcod --connect <host[:port]>` | Join through the server's menus. The port is 28960 when left out. |
 | `vcod <map>` | Fly around a map offline. Map names are case-insensitive. |
 | `vcod --list` | CoD1: every `.bsp` in the search path. |
 
@@ -61,16 +62,18 @@ load a third-party map and refuses `--set fs_game`.
 | `--exec-after "<secs> <line>"` | A queue of console lines, each `secs` after the one before. |
 
 Start New Server in the menu runs `vcod-server` from beside `vcod` and
-joins it; build both. The client stops that server when it exits. vcod
-has no listen server.
+joins it; build both. The client stops that server when it exits: it
+sends `quit`, so players get their disconnect, and kills it only if it is
+still up 2 s later. A client that dies takes its server with it (the
+server reads the client's pipe as stdin). vcod has no listen server.
 
 ## CD keys
 
-Many public servers check CD keys, so dig out the jewel case. Until the game's authorize server has
+Many public servers check CD keys. Until the game's authorize server has
 seen your key, such a server answers `needcdkey` and vcod shows the
 game's own "key not valid" or "awaiting key authorization" message.
 
-Give vcod the key one of two ways:
+Give vcod the key one of three ways:
 
 - `VCOD_CDKEY="XXXX-XXXX-XXXX-XXXX"`: the key's 16 characters (dashes,
   spaces and case don't matter; anything past the 16th is ignored), for
@@ -78,8 +81,9 @@ Give vcod the key one of two ways:
 - CoD 1.1 and 1.5 only: the retail file `main/codkey`, which the 1.1
   installer writes. 1.5, UO, CoD2 and CoD4 keep the key in the Windows
   registry, which vcod does not read; use the variable there.
-- The game's own CD key menu: Verify checks the key against the check characters as retail
-  does, and a valid key serves until vcod quits, ahead of the other two.
+- The game's own CD key menu: Verify checks the key against the check
+  characters as retail does, and a valid key serves until vcod quits,
+  ahead of the other two.
   On CoD 1.1 Verify also writes `main/codkey`, as retail does; the other
   games' menus write the registry, which vcod leaves alone.
 
@@ -106,9 +110,9 @@ vcod-server <map> [--port 28960] [--hostname vcod] [--max-clients 8] [--gametype
 
 | Flag | Does |
 |---|---|
-| `--port <n>` | UDP port, default 28960. Binds `0.0.0.0`. |
+| `--port <n>` | UDP port, default 28960. Binds every interface, or the address in `--set net_ip=<ip>`. |
 | `--hostname <name>` | `sv_hostname`, default `vcod`. |
-| `--max-clients <n>` | `sv_maxclients`, default 8, at most 64. Bots count. |
+| `--max-clients <n>` | `sv_maxclients`, default 8, 1 to 64. Bots count: more `--bots` than slots is refused. |
 | `--gametype <gt>` | The script under `maps/mp/gametypes/`. Default `dm` (CoD4 `war`). |
 | `--set NAME=VALUE` | Retail's `+set`, repeatable. |
 | `--bots <n>`, `--bots-shoot` | Start with `n` bots; without `--bots-shoot` they never fire ([bots.md](bots.md)). |
@@ -117,6 +121,11 @@ vcod-server <map> [--port 28960] [--hostname vcod] [--max-clients 8] [--gametype
 | `--script-dir <dir>` | CoD4: loose `.gsc` files read over the zones' scripts each level, as retail reads a mod's. |
 | `--vanilla` | See [Install and game](#install-and-game). |
 | `--no-console` | Don't read stdin ([below](#stdin-console)). |
+
+A flag the game does not read is refused at start, as are a bad
+`--set`, more bots than slots and a port in use, all before the level
+loads: `--vanilla` is CoD1 and UO only, `--mod-dir` and
+`--gametype-script` are not read on CoD4, `--script-dir` is CoD4 only.
 
 The server answers `getinfo`, `getstatus` and `getchallenge` from
 anyone, rate limited per address and server-wide where retail is not
@@ -192,9 +201,9 @@ walk the last 32 lines, tab completes the first word against the commands
 and cvars (several matches print and the line grows to what they share),
 and log lines print above what you are typing. Left and right do nothing.
 Up, down and any other control key also throw away keys typed ahead, and a
-non-ASCII character is dropped. The terminal is put back on exit. `--set ttycon=0` turns the editor off and
-the terminal edits the line, as on CoD2 and CoD4, whose retail servers turn
-it off too.
+non-ASCII character is dropped. The terminal is put back on exit. `--set
+ttycon=0` turns the editor off and the terminal edits the line, as on CoD2
+and CoD4, whose retail servers turn it off too.
 
 ### rcon
 
@@ -218,8 +227,8 @@ logged with its sender.
 `--bots <n> [--bots-shoot]`, rcon's `addbot`, `removebot` and
 `listbots`, and the `vc_bot_*` cvars (`vc_bot_minplayers`,
 `vc_bot_autobalance`, `vc_bot_shoot`, `vc_bot_names`, `vc_bot_skill`,
-`vc_bot_retreat`, `vc_bot_vehicles`, UO only) work alike on all four games. The guide is
-[bots.md](bots.md).
+`vc_bot_retreat`, `vc_bot_vehicles`, UO only) work alike on all four
+games. The guide is [bots.md](bots.md).
 
 ### Other cvars
 
@@ -295,7 +304,7 @@ commands.
 
 | Command | Does |
 |---|---|
-| `connect <ip:port>`, `disconnect`, `reconnect`, `quit` | What they say |
+| `connect <host[:port]>` (port 28960 when left out), `disconnect`, `reconnect`, `quit` | What they say |
 | `say`, `say_team` | Chat |
 | `cmd <text>` | Send a raw client command |
 | `rcon <command>` | CoD1, UO: run a server command with `rconPassword`, on the connected server, else on `rconAddress` (`ip[:port]`, port 28960 by default). The reply prints in the console |
@@ -375,7 +384,7 @@ default, set it again (`set r_aaSamples 4`).
 - Mouse to pick, double-click or Enter to join. With the cursor over a
   list, the arrows, Home, End and Page Up / Down move the selection; the
   wheel or the scroll bar scrolls it. The wheel is vcod's: the games'
-  wheel scrolls no list, and I wasn't going to copy that.
+  wheel scrolls no list.
 - Tab and the arrows no list takes move the menu's focus while the key
   is down. Held keys do not repeat, except typing and Backspace in a text
   field. Enter and the middle button act on the item under the cursor.
@@ -480,7 +489,8 @@ Client:
   with none up, the server's `g_scriptMainMenu`. A menu vcod cannot
   evaluate shows as a numbered list (1-9 pick). `--team` and `--class`
   answer them unseen.
-- `vcod <map>` flies `zone/english/<map>.ff`. A map missing from
+- `vcod <map>` flies `zone/<language>/<map>.ff` (`english`, or the one
+  language a localized install holds). A map missing from
   `zone/<language>/` loads from `usermaps/<map>/<map>.ff`; under a mod
   that directory's iwds load too.
 - Joining downloads the mod and usermap files the server references and
@@ -516,6 +526,9 @@ Server (`vcod-server <map> --game cod4`, or a CoD4 install):
   sight, R reload, 1-7 pick a weapon.
 - `vcod --net-probe <ip:port>` is a headless client that joins, prints a
   line a second and writes captures. `vcod --help` documents its modes.
+  Bare, on CoD1 and UO, it holds forward for 2 s in every 30 once in
+  play, which shows moves still apply; it sends no chat unless
+  `--probe-say` asks.
   `--probe-secs` sets how long it stays (default 65). On CoD2
   `--probe-team` / `--probe-weapon` make it join and play a scripted
   loop; `VCOD_COD2_RECORD=<dir>/<name>` records the run as
@@ -533,8 +546,9 @@ Server (`vcod-server <map> --game cod4`, or a CoD4 install):
 - `VCOD_FRAME_PROFILE=<path>` writes each frame's CPU and GPU time by
   stage.
 - Server: `--trace` logs every snapshot per client and a per-second tick
-  summary; `--test-entities <n>` adds invisible moving entities to
-  exercise the entity encoding; `VCOD_TICK_TRACE=<path>` writes the
+  summary; `--test-entities <n>` adds up to 32 invisible moving entities
+  (numbers 32 to 63, so `--max-clients` 32 or fewer) to exercise the
+  entity encoding; `VCOD_TICK_TRACE=<path>` writes the
   tick's step log; `VCOD_TICK_PROFILE_MS=<ms>` logs every tick slower
   than that. `VCOD_BOT_THREADS=<n>` sets the threads the bots think on
   (default the cores up to 4; `1` thinks on the tick's own thread).

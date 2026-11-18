@@ -6,7 +6,7 @@
 use crate::collision::ModelTri;
 use crate::model::Model;
 use crate::net::msg::EntityState;
-use crate::net::protocol::Protocol;
+use crate::net::protocol::Cod1Wire;
 use crate::skeleton::{PoseBuffer, Skeleton};
 use crate::turretpose::angles_quat;
 use glam::{Quat, Vec3};
@@ -39,7 +39,7 @@ pub struct VehicleFields {
 }
 
 impl VehicleFields {
-    pub fn read(e: &EntityState, p: &Protocol) -> VehicleFields {
+    pub fn read(e: &EntityState, p: &Cod1Wire) -> VehicleFields {
         let f = |n: &str| e.field_f32(p, n);
         let i = |n: &str| e.field_i32(p, n);
         VehicleFields {

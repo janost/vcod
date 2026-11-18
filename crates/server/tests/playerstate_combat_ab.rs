@@ -19,7 +19,7 @@ use crate::common;
 
 use common::{Sample, Trace, parse_fixture};
 use std::collections::BTreeSet;
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 
 const EV_FIRE_WEAPON: i32 = 159;
 const EV_FIRE_WEAPON_LASTSHOT: i32 = 161;
@@ -198,7 +198,7 @@ fn torso_flips(trace: &[Trace]) -> usize {
 
 /// One of our samples as a trace, its events in 1.1's numbering as the
 /// probe prints a capture's.
-fn trace_of(p: &Protocol, s: &Sample, ms: i64) -> Trace {
+fn trace_of(p: &Cod1Wire, s: &Sample, ms: i64) -> Trace {
     let ps = &s.ps;
     let ev = |i: usize| (p.event_to_v1)(ps.field_i32(p, &format!("events[{i}]")));
     Trace {
@@ -269,8 +269,8 @@ fn transient_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
 ///
 /// It is its own channel and not part of [`transient_misses`] on purpose. A
 /// gap that suppressed both would let a view regression hide behind a sight
-/// one, and the self-clean assert -- which only knows that *something* still
-/// differs -- would keep passing while it did.
+/// one, and the self-clean assert (which only knows that *something* still
+/// differs) would keep passing while it did.
 ///
 fn view_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
     let mut bad = Vec::new();
@@ -304,7 +304,7 @@ fn check(map: &str, gametype: &str, kind: &str) {
 /// [`check`] on `proto`'s server, the capture taken on that protocol's
 /// retail server.
 fn check_on(
-    proto: &'static Protocol,
+    proto: &'static Cod1Wire,
     fs: vcod_common::pk3::Pk3Fs,
     map: &str,
     gametype: &str,
@@ -345,7 +345,7 @@ fn check_on(
     }
     // A grenade capture replays from the spot its own script threw from:
     // where a blast lands, and so who it hurts, is the map's business and
-    // not the input's (`# grenade` header, AGENTS.md).
+    // not the input's (`# grenade` header, `common::captured_place`).
     let place = common::captured_place(&text);
     let replayed = common::replay_as(proto, map, gametype, &steps, (&team, &weapon), fs, place);
     let mine: Vec<Vec<Trace>> = replayed

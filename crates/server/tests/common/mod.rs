@@ -77,7 +77,7 @@ pub fn step(
     step_at(sv, ADDR, q, cl, now)
 }
 
-/// Like `step`, but the server's reply never reaches the client — a lost
+/// Like `step`, but the server's reply never reaches the client: a lost
 /// snapshot packet, not a lost ack. The client's next real ack then names a
 /// frame it received without having received the one right before it, the
 /// only case where a server-side message_num that has drifted from the
@@ -282,7 +282,6 @@ pub fn join_pair_stamped(
 /// capture that starts soon after it can still be met. In the game a late
 /// `b` sends a 60 fps probe's cmds ([`probe_cadence`]), so a fall off the
 /// gsc's placement lands, and plays its land anim, when retail's did.
-#[allow(clippy::too_many_arguments)]
 pub fn join_pair_staggered(
     sv: &mut Server,
     qa: &Rc<RefCell<Queues>>,
@@ -956,7 +955,7 @@ pub fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
 /// When each of a step's taps goes down, in ms from the step's start: one
 /// usercmd long, at the first cmd at or after the capture's own tap time. The
 /// capture holds the bit 32 ms out of every `pulse_period_ms`, which no cmd
-/// grid divides evenly, so the tap is placed rather than sampled -- sampling
+/// grid divides evenly, so the tap is placed rather than sampled: sampling
 /// it drops the taps that fall between two cmds.
 fn taps(step: &Step) -> Vec<i64> {
     (0..i64::from(step.pulses))
@@ -968,8 +967,8 @@ fn taps(step: &Step) -> Vec<i64> {
 /// per step, the way the probe traced retail's.
 /// The weapon byte a cmd carries: the step's switch once it has been asked
 /// for, the step's own byte otherwise, and our own `ps.weapon` where the
-/// capture recorded a 0. A 0 is not neutral -- retail reads a `cmd.weapon`
-/// differing from `ps.weapon` as a request to holster -- and the capture's 0
+/// capture recorded a 0. A 0 is not neutral (retail reads a `cmd.weapon`
+/// differing from `ps.weapon` as a request to holster), and the capture's 0
 /// means the probe was holding nothing, which is a fact about retail's
 /// playerstate and not an input to replay.
 fn weapon_byte(step: &Step, t: i64, ours_now: u8) -> u8 {
@@ -1021,7 +1020,7 @@ pub fn replay(
 
 /// [`replay`] on a server speaking `proto`.
 pub fn replay_as(
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     gametype: &str,
     steps: &[Step],
@@ -2455,7 +2454,7 @@ const DIRECT_JOIN_MS: i64 = 400;
 /// they land. Returns the script's `PROBE` lines.
 pub fn direct_replay(
     fs: fn() -> Option<vcod_common::pk3::Pk3Fs>,
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
     weapon: &str,
@@ -2476,7 +2475,7 @@ pub type SnapEntities = Vec<(
 /// between its spawn and the script's first placing is the spawn point's.
 pub fn direct_replay_frames(
     fs: fn() -> Option<vcod_common::pk3::Pk3Fs>,
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
     weapon: &str,
@@ -2487,7 +2486,7 @@ pub fn direct_replay_frames(
 
 fn direct_replay_run(
     fs: fn() -> Option<vcod_common::pk3::Pk3Fs>,
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
     weapon: &str,
@@ -2521,10 +2520,9 @@ fn spawned_origin(text: &str) -> [f32; 3] {
 
 /// One run of [`direct_replay`], the client joined `late_ms` earlier:
 /// the `PROBE` lines, the client's first snapshot time and its snapshots.
-#[allow(clippy::too_many_arguments)]
 fn direct_replay_once(
     fs: vcod_common::pk3::Pk3Fs,
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
     weapon: &str,

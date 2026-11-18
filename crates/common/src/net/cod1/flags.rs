@@ -18,6 +18,9 @@ pub const PM_INTERMISSION: i32 = 5;
 pub const PM_DEAD: i32 = 6;
 pub const PM_DEAD_LINKED: i32 = 7;
 
+/// A player entity whose `pm_type` reads above 5, dead or dead and linked:
+/// `BG_PlayerStateToEntityState` sets and clears it (0x2cda6..0x2cdb2).
+pub const EF_DEAD: i32 = 0x1;
 /// Stance bits in `eFlags` and `pm_flags`, measured off the retail server
 /// under each input (`crates/server/tests/fixtures/playerstate/*-motion.txt`):
 /// standing reads `eFlags` 16 / `pm_flags` 0x40000 and crouched 48 / 0x40002.
@@ -25,14 +28,13 @@ pub const PM_DEAD_LINKED: i32 = 7;
 /// a crouch latch rather than a stance bit: prone entered from a crouch reads
 /// 0x40003 and prone entered from standing 0x40001, which is why
 /// `PlayerState::ducked` carries it.
-/// A player entity whose `pm_type` reads above 5, dead or dead and linked:
-/// `BG_PlayerStateToEntityState` sets and clears it (0x2cda6..0x2cdb2).
-pub const EF_DEAD: i32 = 0x1;
 pub const EF_CROUCH: i32 = 0x20;
 pub const EF_PRONE: i32 = 0x40;
+/// The capsule bit: client prediction clips only entities that carry it.
+pub const EF_CAPSULE: i32 = 0x10;
 /// The per-spawn toggle: every spawn flips it, a spectator's and the
 /// intermission camera's included, and a level boundary clears it
-/// (docs/research/cod11-map-cycle.md, 8.2). Not per life --
+/// (docs/research/cod11-map-cycle.md, 8.2). Not per life:
 /// `mp_carentan-sd-roundrestart-target.txt` reads 24 on two consecutive
 /// lives (`!trace ms=28607` and `ms=118532`) because the spectator frame
 /// between them took the intervening flip. The `dm` hit capture's near-even

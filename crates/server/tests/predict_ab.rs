@@ -41,7 +41,7 @@ use vcod_common::net::msg::{
     WBUTTON_RELOAD,
 };
 use vcod_common::net::protocol::{
-    ENTITYNUM_WORLD, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol,
+    Cod1Wire, ENTITYNUM_WORLD, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22,
 };
 use vcod_common::net::trajectory::Trajectory;
 use vcod_common::pmove::movers::SnapshotMovers;
@@ -51,7 +51,7 @@ use vcod_common::testing::SlopeLine;
 use vcod_common::weapon::WeaponDef;
 use vcod_server::spectate::ClientSim;
 
-const P: &Protocol = &PROTOCOL_V1;
+const P: &Cod1Wire = &PROTOCOL_V1;
 const ANGLE2SHORT: f32 = pm::cmd::ANGLE2SHORT;
 
 /// Retail's configstring 7 on mp_carentan dm.
@@ -79,7 +79,7 @@ fn load_world(fs: &vcod_common::pk3::Pk3Fs, map: &str) -> (CollisionWorld, Strin
 
 /// What a client decodes: the playerstate written as a delta from the null
 /// state and read back, so every field arrives at its netfield width.
-fn over_the_wire(p: &Protocol, w: &msg::PlayerState) -> msg::PlayerState {
+fn over_the_wire(p: &Cod1Wire, w: &msg::PlayerState) -> msg::PlayerState {
     // Built once: the tree costs a debug build over 200 ms.
     static HUFF: std::sync::OnceLock<Huffman> = std::sync::OnceLock::new();
     let huff = HUFF.get_or_init(Huffman::new);
@@ -102,7 +102,7 @@ fn over_the_wire(p: &Protocol, w: &msg::PlayerState) -> msg::PlayerState {
 /// The server sim and the predictor, fed the same cmds.
 struct Run<'a> {
     /// The wire both sides speak.
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     sim: ClientSim,
     pred: Predicted,
     world: &'a CollisionWorld,
@@ -115,7 +115,7 @@ struct Run<'a> {
     /// Current view in ANGLE2SHORT units, pitch and yaw.
     view: [i32; 2],
     cmds: usize,
-    /// Whether the event ring is compared too; see `the_ring_matches`.
+    /// Whether the event ring is compared too; see `predictor_ring_matches_the_server_step`.
     ring: bool,
     rebuilds: usize,
     /// Rebuilds that landed inside a putaway, a stance's eye lerp, and cmds
@@ -781,7 +781,7 @@ enum CaptureLine {
 
 /// A slope capture's cmds and decoded playerstates, less what this gate
 /// does not read.
-fn parse_capture(p: &Protocol, text: &str) -> Vec<CaptureLine> {
+fn parse_capture(p: &Cod1Wire, text: &str) -> Vec<CaptureLine> {
     vcod_common::testing::parse_slope(p, text)
         .into_iter()
         .map(|l| match l {
@@ -799,7 +799,7 @@ fn parse_capture(p: &Protocol, text: &str) -> Vec<CaptureLine> {
 /// snapshots run seated on both sides. Whether the sim rides now.
 fn follow_seat(
     sim: &mut ClientSim,
-    p: &Protocol,
+    p: &Cod1Wire,
     w: &msg::PlayerState,
     vang: Option<[f32; 3]>,
 ) -> bool {
@@ -847,7 +847,7 @@ fn follow_seat(
 /// capture mounts standing, and its release carries 1.1's
 /// `EV_STANCE_FORCE_STAND` in the ring. Whether the snapshot's body was on a
 /// gun.
-fn follow_turret(sim: &mut ClientSim, p: &Protocol, w: &msg::PlayerState) -> bool {
+fn follow_turret(sim: &mut ClientSim, p: &Cod1Wire, w: &msg::PlayerState) -> bool {
     use vcod_common::net::flags::{
         EF_MOUNTED, EF_MOUNTED_DUCK, EF_MOUNTED_PRONE, EF_MOUNTED_STAND,
     };
@@ -950,7 +950,7 @@ fn follow_state(run: &mut Run<'_>, w: &msg::PlayerState) -> bool {
 /// cmds after a rebuild (`iFatigueSoundTime` was one, coduo-movement.md 15).
 /// `Err` names the fields that differed.
 fn capture_side_by_side(
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     fs: &vcod_common::pk3::Pk3Fs,
     file: &str,
     map: &str,
@@ -1129,7 +1129,7 @@ fn predictor_matches_the_1_5_server_step() {
 /// difference, and when fewer than `min_compared` pairs, or `min_moved`
 /// that moved, were compared.
 fn retail_state_rows(
-    p: &Protocol,
+    p: &Cod1Wire,
     fs: &vcod_common::pk3::Pk3Fs,
     file: &str,
     pm_type: i32,
@@ -1516,7 +1516,7 @@ struct Delta {
 /// nothing: linked (`pm_type` 1 or 7, the parent's carry), in a UO vehicle
 /// seat (placed at the seat tag, coduo-vehicles.md 3) or on a mounted MG
 /// (placed by the turret pass, cod11-turrets.md).
-fn carried(p: &Protocol, w: &msg::PlayerState) -> bool {
+fn carried(p: &Cod1Wire, w: &msg::PlayerState) -> bool {
     use vcod_common::net::flags::{
         EF_IN_VEHICLE_V22, EF_MOUNTED, PM_DEAD_LINKED, PM_NORMAL_LINKED,
     };
@@ -1558,7 +1558,7 @@ fn snap_times(text: &str) -> Vec<i32> {
 /// predicted origin against retail's. `PREDICT_TRACE=<commandTime>` prints
 /// that snapshot's prediction cmd by cmd.
 fn replay(
-    p: &Protocol,
+    p: &Cod1Wire,
     text: &str,
     world: &CollisionWorld,
     weapons: &[Option<WeaponDef>],
@@ -1654,7 +1654,7 @@ const REPLAY_GAPS: &[(&str, i32)] = &[
     ("mp_peaks-tdm-slope-8ms-jeep-die-uo.txt", 18793),
 ];
 
-fn replay_retail_runs(p: &Protocol, fs: &vcod_common::pk3::Pk3Fs, server: &str, min_runs: usize) {
+fn replay_retail_runs(p: &Cod1Wire, fs: &vcod_common::pk3::Pk3Fs, server: &str, min_runs: usize) {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/playerstate");
     let mut runs: Vec<(String, String)> = std::fs::read_dir(dir)
         .expect("the fixture directory")

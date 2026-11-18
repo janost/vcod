@@ -1,9 +1,9 @@
 //! The front end's menu files: `ui_mp/*.menu` and `ui/*.menu`, the full
 //! `menuDef` / `itemDef` grammar the UI module reads, as far as the main menu
 //! the server browser and the options screens use it
-//! (docs/research/cod11-front-end.md). Unlike
-//! [`crate::menu`], which keeps only what a script menu needs, this keeps the
-//! layout: rects, colours, styles, text placement and the item scripts.
+//! (docs/research/cod11-front-end.md): rects, colours, styles, text
+//! placement and the item scripts. [`crate::menu`] holds the tokenizer and
+//! the item cvar test.
 
 use crate::asset_source::{Asset, AssetKind, AssetSource};
 use crate::game::Game;

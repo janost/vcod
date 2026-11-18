@@ -8,10 +8,126 @@ the open sections of the `cod4-*.md` docs, the builtin handlers in
 commands 1.7 registers (their strings in `cod4_lnxded`) against
 `cod4::oob`'s `exec`, and the dvars 1.7 reads against what `cod4/` and
 `game/cod4/` read. First audit 2026-10-26 at b5311fc8; rechecked against
-the code 2026-10-30. Sizes: S under an hour, M a few hours, L a day or
-more.
+the code 2026-10-30, edited as items close since. Open items lead; closed
+ones are kept at the end for the causes they name.
 
-## Fixed
+## Open
+
+By how much a player notices.
+
+- `cod4_tag_read_ab`'s 2 `GAPS` frames, the target's head a tenth off
+  across the truncation, which fit the skeleton's few ulps off retail's
+  in a gdb run (cod4-combat.md 6.1); `cod4_trace_read_ab`'s 11, the
+  swaying target's `aimSpreadScale` an ulp off (cod4-gsc.md 3.3).
+  The strafe's rows hit traces on a strafing body too. Unread: the legs'
+  swing and the controls' ease on a strafe under gdb (cod4-combat.md
+  6.1).
+
+## Not gaps
+
+- The authorize round trip, out on purpose: with its authorize
+  server silent, 1.7 answers no off-LAN challenge for its first 20
+  minutes, then each after 7 s; vcod-server answers at once, and bans
+  an off-LAN client by its address beside its GUID (cod4-handshake.md
+  14 and 15).
+- PunkBuster: `sv_punkbuster` reads 0 and no `pb_sv_*` command runs.
+  1.7's PunkBuster is a separate download (`pbsetup.run`) a stock install
+  of the dedicated server does not run either.
+- Every builtin the stock scripts of the 21 stock maps call has a
+  handler (cod4-gsc.md 3.1); the ones that return a constant
+  (`getAssignedTeam`, `buttonPressed`, `sendRanks` and kin) do so on 1.7
+  too, VERIFIED there.
+- A `physicsLaunch`ed part stays where it stood on the server: 1.7's
+  `BG_EvaluateTrajectory` (0x80536ba) reads `TR_PHYSICS` at `trBase`
+  too. VERIFIED (cod4-gsc.md 3.2). Each client flies it off the
+  launch's contact and force (cod4-gsc.md 3.6).
+
+## The retail run
+
+`cod4_lnxded` 1.7 in `unshare -rnm` (cod4-handshake.md 7), stock `war`
+on mp_crash, `+set g_log games_mp.log +set g_logSync 1 +set
+g_inactivity 30 +set sv_pure 0 +set rcon_password ...`. Two
+`cod4_probe` clients joined 40 s after the start: `alpha` (axis, idle,
+`--cmd "5 say hello log" --cmd "6 say_team team log" --cmd "8 kill"`)
+and `bravo` (a spectator); the console commands went over rcon, then
+`kick bravo`, `killserver` and queries.
+
+## games_mp.log
+
+- `G_LogPrintf` (0x80b43c4) does nothing without the open file
+  (0x836f6d8); else it formats the text and writes `%3i:%i%i %s`
+  (0x8219b90) with the minutes and the two digits of the seconds of
+  `level.time` (0x836f8ac). VERIFIED. It prints nothing to the console.
+  INFERRED (no print call in it).
+- `G_InitGame` (0x80b563a) sets `level.time` to its `levelTime`
+  argument, the server's clock (0x80b56cb), so stamps run on across
+  levels: the run's first `InitGame` read `0:00`, `J;` `0:43`, and a
+  logged rotation's eighth level started at `74:21`. VERIFIED live.
+- `g_log` (default `games_mp.log`, archived, 0x80b4830) empty prints
+  `Not logging to disk.` (0x821a330); else the file opens in the home
+  path's game directory, `FS_APPEND` (mode 2) or `FS_APPEND_SYNC` (mode 3)
+  as `g_logSync` reads (0x80b5793..0x80b57b5); a failure prints `WARNING:
+  Couldn't open logfile: %s` (0x821ae24). VERIFIED. The run's file was
+  `<home>/main/games_mp.log`, a mod run's `<home>/mods/<mod>/games_mp.log`.
+  VERIFIED live.
+- On opening it writes the 60-dash separator (0x821ae48) and `InitGame:
+  %s` (0x821a322) with `Dvar_InfoString(0x400)` (0x80b5aab). VERIFIED.
+  The run's line was configstring 0's pairs without the empty `fs_game`:
+  `\g_compassShowEnemies\0\g_gametype\war\gamename\Call of Duty 4\...\ui_maxclients\32`.
+  VERIFIED live.
+- `G_ShutdownGame` (0x80b5ce8) writes `ShutdownGame:` (0x821a36a) and the
+  separator, then closes the file. VERIFIED. `killserver` wrote both.
+  VERIFIED live. A `fast_restart` runs both functions again. INFERRED.
+- The engine's other lines: `ExitLevel: executed` (0x80b4585), `say;%s;%d;%s;%s`
+  and `sayteam;%s;%d;%s;%s` from `G_Say` (0x80ae9d5, 0x80aeb51; GUID,
+  client number, the name `I_CleanStr`'d, the text), and
+  `Weapon;%s;%d;%s;%s` (0x8092183, the weapon's internal name last).
+  VERIFIED. A team line from a client on no team goes out and is logged
+  as `say` (0x80aea99); a tell writes none (0x80ae9ab). INFERRED. The
+  `Weapon` line sits past the held-weapon bit test of the pickup
+  (0x80920b9), so it is a weapon not held being taken. INFERRED.
+- The run's `say` lines read `say;<guid>;1;alpha;hello log` and
+  `sayteam;<guid>;1;alpha;team log`. VERIFIED live.
+- `logPrint` (`GScr_LogPrint`, 0x80bd1ac) joins its arguments up to 1023
+  bytes (0x80bd216) and hands them to `G_LogPrintf` as the format.
+  VERIFIED. The stock `_globallogic.gsc` writes `J;`, `Q;`, `D;` and
+  `K;` with `self getGuid()` (VERIFIED, the rawfile); the run's `J;`
+  and `Q;` lines carried the client's GUID. VERIFIED live. `kill` was
+  refused with `GAME_CHEATSNOTENABLED`, so no `K;` line came. VERIFIED
+  live.
+- vcod (`engine::gamelog`, shared with CoD1 and CoD2, cod11-map-cycle.md
+  9): the game queues each line with `level.time`
+  (`GameHost::log_printf`), the engine writes them after each frame,
+  packet and command; `vcod-server` fills `fs_homepath` with the game
+  directory, and a server with none (a test's) writes no file.
+
+## g_inactivity
+
+- `g_inactivity` is an int, 0..INT_MAX, default 0 (0x80b4a3c).
+  VERIFIED. 1.7 has no `g_inactivitySpectator` (no such string in
+  `cod4_lnxded`). VERIFIED.
+- `ClientSpawn` sets the deadline `level.time + 1000 * g_inactivity`
+  (0x80a7e05). VERIFIED.
+- `ClientThink_real` (0x80a5c1a) calls `ClientInactivityTimer`
+  (0x80a4d56) only for a session state other than 2 and 3, spectating
+  and the intermission (0x80a5cb4..0x80a5ccf), and thinks no further when
+  it returns 0. INFERRED.
+- The timer: `g_inactivity` 0 puts the deadline 60 s ahead and clears
+  the warning; a cmd with a move (the `forwardmove`/`rightmove` word at
+  +0x2fa6) or buttons 0x401 puts it `g_inactivity` seconds ahead; a local
+  client (`pers.localClient`, +0x2fd0, a bot or loopback address per
+  0x813b1b0) is never dropped; past the deadline
+  `SV_GameDropClient(.., "GAME_DROPPEDFORINACTIVITY")` (0x8217d59);
+  within 10 s of it, once, `c "GAME_INACTIVEDROPWARNING"` (0x8217d73) to
+  the client. INFERRED (the branches; the strings VERIFIED).
+- The run: `alpha` spawned about 5.5 s after its first snapshot, was
+  sent `c "GAME_INACTIVEDROPWARNING"` 20 s later and `w
+  "GAME_DROPPEDFORINACTIVITY"` 30 s after the spawn, its `Q;` line
+  logged; `bravo`, a spectator as long, was never warned. VERIFIED live.
+- vcod (`Cod4Level::inactivity_timer`) runs the timer for the network
+  clients' cmds only, so its bots, like retail's, are never timed.
+
+## Closed
 
 - The helicopter's flight is 1.7's `VEH_UpdateMoveToGoal` (0x809e38a)
   with its float model: what the x87 keeps on its stack and what it
@@ -151,184 +267,65 @@ more.
 - A script's `bulletTrace` meets a player as its capsule where its last
   cmd linked it, under 1.7's capsule dispatch, and poses no body
   (`cod4_trace_read_ab`, cod4-gsc.md 3.3).
-
-## Ranked
-
-Open, by how much a player notices.
-
-1. The authorize round trip stays out on purpose: with its authorize
-   server silent, 1.7 answers no off-LAN challenge for its first 20
-   minutes, then each after 7 s; vcod-server answers at once, and bans
-   an off-LAN client by its address beside its GUID (cod4-handshake.md
-   14 and 15).
-2. Closed: the helicopter's flight and its gun match retail word for word
-   (Fixed above; `hardpoint_ab` `GAPS` gone).
-3. Closed: the five capture gates (`cod4::capture_ab`, cod4-combat.md 15)
-   tolerate nothing. The second rocket's number was a battle chatter
-   temp entity off `reload_start`, which `ClientEvents` notifies on
-   `EV_RELOAD_START_NOTIFY`; the wobble's `trDelta` and the free
-   spectator's turn were glibc's `sinf` and `cosf` in 1.7's
-   `AngleVectors`; the killcam's view was the view rows going out only
-   when they differ from the server's base. Closed: the
-   thrown back frag's bounce off the shooter's head: the torso pitch's
-   swing folds in floats, the control bones take 1.7's control arm and
-   controller, and the hit poses sample their clips through 1.7's
-   `DObjCalcAnim`, each word for word with a gdb dump (cod4-combat.md
-   15.1, cod4-player-anims.md 11). Closed: the dropped weapon's hit
-   `trDelta`, prone and standing: the bodies' tags
-   and hit boxes compose through 1.7's skeleton (cod4-gsc.md 3.2, "The
-   skeleton"). Closed: the grenade's strike on a
-   standing body and the dying prone body's `tag_weapon_right`, 0.11 high:
-   the server's bodies ran CoD2's controllers, met traces inside half
-   1.7's broad box, and eased per trace where 1.7 eases once a frame
-   (cod4-combat.md 3.3). Closed: the dropped weapon's start at
-   the hand's tag, its fall, its 50 ms move and its rest on its side
-   (`Drop_Weapon`, `G_RunItem`, cod4-combat.md 6.1). Closed: the spawn's
-   `delta_angles` the rocket and touch gates listed after a `setviewpos`
-   were the gates' replay, not the server; the prone killcam's trim was
-   `psoffsettime`, which 1.7 takes off the playerstate's look back and
-   not the entities' (cod4-combat.md 7.1).
-4. Closed: off the LAN `sv_fps` and `snaps` set the rate together,
-   `ceil(snapshotMsec / frame)` frames a message, and vcod-server matched
-   retail at nine pairs (cod4-server-frame.md 12). Its own public address
-   was off the LAN because `cod4_lnxded` runs at `dedicated 2` only, so
-   the challenge takes the subnet-blind test (cod4-handshake.md 15, "The
-   server's own address"). A client 28 messages behind on its acks backs
-   off as 1.7's (Fixed above).
-5. Closed: an empty `sv_master1` heartbeats `master.cod.pm:20810` at
-   `dedicated 2`, as CoD1's and CoD2's servers do (`Cod4Server::heartbeat`).
-6. Closed: under `sv_clientSideBullets` 0 vcod-server raises the world's
-   and the exits' `EV_BULLET_HIT`s as `cod4_lnxded` does (0x808a05c),
-   gated word for word on a retail capture (cod4-effects.md 12.4).
-7. Closed: a round meets a fresh corpse, its capsule before its first
-   anim update and then its hit boxes as its anims alone pose them, the
-   head included, and raises its flesh's entry and exit; the highest
-   priority box crossed takes the hit in any bone order. The clone keeps
-   the live body's box, and a fall stuck in solid sweeps again from 32 up
-   without playerclip: the plate run's corpse falls again in place every
-   frame, `trTime` the frame's (cod4-combat.md 3, 5.2, 5.3). The
-   knockback's ulp was the round's direction, now normalized as
-   `Bullet_Endpos` does; an exit's impact carries that direction
-   (cod4-effects.md 12.4). `cod4_corpse_rounds_ab` and
-   `cod4_corpse_drag_ab` match every corpse word and impact.
-8. Closed: the two corpse captures' `GAPS`. The killcam's pitch: the
-   follow and killcam copies read a playerstate `SV_ArchiveSnapshot` sent
-   through the delta codec once already (cod4-combat.md 7). The second
-   spawn's `delta_angles`: 1.7 keeps a follower's and a killcam's cmds for
-   the next spawn's view, and the gates' replay now sends a twin's own cmd
-   angles before its spawn and a packet after the frame its client had
-   already read (cod4-gsc.md 7). The floor run's dropped rifle: the hand's
-   tag is placed at `r.currentOrigin` when the killed callback reads it,
-   which the target's own cmd had carried 1.8 units past the last end
-   frame's (cod4-combat.md 6.1). The plate run's killcam impact 348: the
-   killcam's archived entities pass by their archived mask alone, never a
-   live temp entity's (cod4-combat.md 7).
-9. `cod4_tag_read_ab`'s 2 `GAPS` frames, the target's head a tenth off
-   across the truncation, which fit the skeleton's few ulps off retail's
-   in a gdb run (cod4-combat.md 6.1); `cod4_trace_read_ab`'s 11, the
-   swaying target's `aimSpreadScale` an ulp off (cod4-gsc.md 3.3).
-   The strafe's rows hit traces on a strafing body too. Unread: the legs'
-   swing and the controls' ease on a strafe under gdb (cod4-combat.md
-   6.1).
-10. `addTestClient()` answers `undefined`, retail's answer with no free
-   slot: 1.7's `SV_AddTestClient` is not modelled, so a mod that adds test
-   clients gets none (`builtins::cod4_client`). M.
-
-## The retail run
-
-`cod4_lnxded` 1.7 in `unshare -rnm` (cod4-handshake.md 7), stock `war`
-on mp_crash, `+set g_log games_mp.log +set g_logSync 1 +set
-g_inactivity 30 +set sv_pure 0 +set rcon_password ...`. Two
-`cod4_probe` clients joined 40 s after the start: `alpha` (axis, idle,
-`--cmd "5 say hello log" --cmd "6 say_team team log" --cmd "8 kill"`)
-and `bravo` (a spectator); the console commands went over rcon, then
-`kick bravo`, `killserver` and queries.
-
-## games_mp.log
-
-- `G_LogPrintf` (0x80b43c4) does nothing without the open file
-  (0x836f6d8); else it formats the text and writes `%3i:%i%i %s`
-  (0x8219b90) with the minutes and the two digits of the seconds of
-  `level.time` (0x836f8ac). VERIFIED. It prints nothing to the console.
-  INFERRED (no print call in it).
-- `G_InitGame` (0x80b563a) sets `level.time` to its `levelTime`
-  argument, the server's clock (0x80b56cb), so stamps run on across
-  levels: the run's first `InitGame` read `0:00`, `J;` `0:43`, and a
-  logged rotation's eighth level started at `74:21`. VERIFIED live.
-- `g_log` (default `games_mp.log`, archived, 0x80b4830) empty prints
-  `Not logging to disk.` (0x821a330); else the file opens in the home
-  path's game directory, `FS_APPEND` (mode 2) or `FS_APPEND_SYNC` (mode 3)
-  as `g_logSync` reads (0x80b5793..0x80b57b5); a failure prints `WARNING:
-  Couldn't open logfile: %s` (0x821ae24). VERIFIED. The run's file was
-  `<home>/main/games_mp.log`, a mod run's `<home>/mods/<mod>/games_mp.log`.
-  VERIFIED live.
-- On opening it writes the 60-dash separator (0x821ae48) and `InitGame:
-  %s` (0x821a322) with `Dvar_InfoString(0x400)` (0x80b5aab). VERIFIED.
-  The run's line was configstring 0's pairs without the empty `fs_game`:
-  `\g_compassShowEnemies\0\g_gametype\war\gamename\Call of Duty 4\...\ui_maxclients\32`.
-  VERIFIED live.
-- `G_ShutdownGame` (0x80b5ce8) writes `ShutdownGame:` (0x821a36a) and the
-  separator, then closes the file. VERIFIED. `killserver` wrote both.
-  VERIFIED live. A `fast_restart` runs both functions again. INFERRED.
-- The engine's other lines: `ExitLevel: executed` (0x80b4585), `say;%s;%d;%s;%s`
-  and `sayteam;%s;%d;%s;%s` from `G_Say` (0x80ae9d5, 0x80aeb51; GUID,
-  client number, the name `I_CleanStr`'d, the text), and
-  `Weapon;%s;%d;%s;%s` (0x8092183, the weapon's internal name last).
-  VERIFIED. A team line from a client on no team goes out and is logged
-  as `say` (0x80aea99); a tell writes none (0x80ae9ab). INFERRED. The
-  `Weapon` line sits past the held-weapon bit test of the pickup
-  (0x80920b9), so it is a weapon not held being taken. INFERRED.
-- The run's `say` lines read `say;<guid>;1;alpha;hello log` and
-  `sayteam;<guid>;1;alpha;team log`. VERIFIED live.
-- `logPrint` (`GScr_LogPrint`, 0x80bd1ac) joins its arguments up to 1023
-  bytes (0x80bd216) and hands them to `G_LogPrintf` as the format.
-  VERIFIED. The stock `_globallogic.gsc` writes `J;`, `Q;`, `D;` and
-  `K;` with `self getGuid()` (VERIFIED, the rawfile); the run's `J;`
-  and `Q;` lines carried the client's GUID. VERIFIED live. `kill` was
-  refused with `GAME_CHEATSNOTENABLED`, so no `K;` line came. VERIFIED
-  live.
-- vcod (`engine::gamelog`, shared with CoD1 and CoD2, cod11-map-cycle.md
-  9): the game queues each line with `level.time`
-  (`GameHost::log_printf`), the engine writes them after each frame,
-  packet and command; `vcod-server` fills `fs_homepath` with the game
-  directory, and a server with none (a test's) writes no file.
-
-## g_inactivity
-
-- `g_inactivity` is an int, 0..INT_MAX, default 0 (0x80b4a3c).
-  VERIFIED. 1.7 has no `g_inactivitySpectator` (no such string in
-  `cod4_lnxded`). VERIFIED.
-- `ClientSpawn` sets the deadline `level.time + 1000 * g_inactivity`
-  (0x80a7e05). VERIFIED.
-- `ClientThink_real` (0x80a5c1a) calls `ClientInactivityTimer`
-  (0x80a4d56) only for a session state other than 2 and 3, spectating
-  and the intermission (0x80a5cb4..0x80a5ccf), and thinks no further when
-  it returns 0. INFERRED.
-- The timer: `g_inactivity` 0 puts the deadline 60 s ahead and clears
-  the warning; a cmd with a move (the `forwardmove`/`rightmove` word at
-  +0x2fa6) or buttons 0x401 puts it `g_inactivity` seconds ahead; a local
-  client (`pers.localClient`, +0x2fd0, a bot or loopback address per
-  0x813b1b0) is never dropped; past the deadline
-  `SV_GameDropClient(.., "GAME_DROPPEDFORINACTIVITY")` (0x8217d59);
-  within 10 s of it, once, `c "GAME_INACTIVEDROPWARNING"` (0x8217d73) to
-  the client. INFERRED (the branches; the strings VERIFIED).
-- The run: `alpha` spawned about 5.5 s after its first snapshot, was
-  sent `c "GAME_INACTIVEDROPWARNING"` 20 s later and `w
-  "GAME_DROPPEDFORINACTIVITY"` 30 s after the spawn, its `Q;` line
-  logged; `bravo`, a spectator as long, was never warned. VERIFIED live.
-- vcod (`Cod4Level::inactivity_timer`) runs the timer for the network
-  clients' cmds only, so its bots, like retail's, are never timed.
-
-## Not gaps
-
-- PunkBuster: `sv_punkbuster` reads 0 and no `pb_sv_*` command runs.
-  1.7's PunkBuster is a separate download (`pbsetup.run`) a stock install
-  of the dedicated server does not run either.
-- Every builtin the stock scripts of the 21 stock maps call has a
-  handler (cod4-gsc.md 3.1); the ones that return a constant
-  (`getAssignedTeam`, `buttonPressed`, `sendRanks` and kin) do so on 1.7
-  too, VERIFIED there.
-- A `physicsLaunch`ed part stays where it stood on the server: 1.7's
-  `BG_EvaluateTrajectory` (0x80536ba) reads `TR_PHYSICS` at `trBase`
-  too. VERIFIED (cod4-gsc.md 3.2). Each client flies it off the
-  launch's contact and force (cod4-gsc.md 3.6).
+- the helicopter's flight and its gun match retail word for word
+  (Fixed above; `hardpoint_ab` `GAPS` gone).
+- the five capture gates (`cod4::capture_ab`, cod4-combat.md 15)
+  tolerate nothing. The second rocket's number was a battle chatter
+  temp entity off `reload_start`, which `ClientEvents` notifies on
+  `EV_RELOAD_START_NOTIFY`; the wobble's `trDelta` and the free
+  spectator's turn were glibc's `sinf` and `cosf` in 1.7's
+  `AngleVectors`; the killcam's view was the view rows going out only
+  when they differ from the server's base. Closed: the
+  thrown back frag's bounce off the shooter's head: the torso pitch's
+  swing folds in floats, the control bones take 1.7's control arm and
+  controller, and the hit poses sample their clips through 1.7's
+  `DObjCalcAnim`, each word for word with a gdb dump (cod4-combat.md
+  15.1, cod4-player-anims.md 11). Closed: the dropped weapon's hit
+  `trDelta`, prone and standing: the bodies' tags
+  and hit boxes compose through 1.7's skeleton (cod4-gsc.md 3.2, "The
+  skeleton"). Closed: the grenade's strike on a
+  standing body and the dying prone body's `tag_weapon_right`, 0.11 high:
+  the server's bodies ran CoD2's controllers, met traces inside half
+  1.7's broad box, and eased per trace where 1.7 eases once a frame
+  (cod4-combat.md 3.3). Closed: the dropped weapon's start at
+  the hand's tag, its fall, its 50 ms move and its rest on its side
+  (`Drop_Weapon`, `G_RunItem`, cod4-combat.md 6.1). Closed: the spawn's
+  `delta_angles` the rocket and touch gates listed after a `setviewpos`
+  were the gates' replay, not the server; the prone killcam's trim was
+  `psoffsettime`, which 1.7 takes off the playerstate's look back and
+  not the entities' (cod4-combat.md 7.1).
+- off the LAN `sv_fps` and `snaps` set the rate together,
+  `ceil(snapshotMsec / frame)` frames a message, and vcod-server matched
+  retail at nine pairs (cod4-server-frame.md 12). Its own public address
+  was off the LAN because `cod4_lnxded` runs at `dedicated 2` only, so
+  the challenge takes the subnet-blind test (cod4-handshake.md 15, "The
+  server's own address"). A client 28 messages behind on its acks backs
+  off as 1.7's (Fixed above).
+- an empty `sv_master1` heartbeats `master.cod.pm:20810` at
+  `dedicated 2`, as CoD1's and CoD2's servers do (`Cod4Server::heartbeat`).
+- under `sv_clientSideBullets` 0 vcod-server raises the world's
+  and the exits' `EV_BULLET_HIT`s as `cod4_lnxded` does (0x808a05c),
+  gated word for word on a retail capture (cod4-effects.md 12.4).
+- a round meets a fresh corpse, its capsule before its first
+  anim update and then its hit boxes as its anims alone pose them, the
+  head included, and raises its flesh's entry and exit; the highest
+  priority box crossed takes the hit in any bone order. The clone keeps
+  the live body's box, and a fall stuck in solid sweeps again from 32 up
+  without playerclip: the plate run's corpse falls again in place every
+  frame, `trTime` the frame's (cod4-combat.md 3, 5.2, 5.3). The
+  knockback's ulp was the round's direction, now normalized as
+  `Bullet_Endpos` does; an exit's impact carries that direction
+  (cod4-effects.md 12.4). `cod4_corpse_rounds_ab` and
+  `cod4_corpse_drag_ab` match every corpse word and impact.
+- the two corpse captures' `GAPS`. The killcam's pitch: the
+  follow and killcam copies read a playerstate `SV_ArchiveSnapshot` sent
+  through the delta codec once already (cod4-combat.md 7). The second
+  spawn's `delta_angles`: 1.7 keeps a follower's and a killcam's cmds for
+  the next spawn's view, and the gates' replay now sends a twin's own cmd
+  angles before its spawn and a packet after the frame its client had
+  already read (cod4-gsc.md 7). The floor run's dropped rifle: the hand's
+  tag is placed at `r.currentOrigin` when the killed callback reads it,
+  which the target's own cmd had carried 1.8 units past the last end
+  frame's (cod4-combat.md 6.1). The plate run's killcam impact 348: the
+  killcam's archived entities pass by their archived mask alone, never a
+  live temp entity's (cod4-combat.md 7).

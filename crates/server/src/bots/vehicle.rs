@@ -336,6 +336,7 @@ impl Bot {
             self.rider = Rider {
                 rest: RIDDEN_TICKS,
                 boarded: self.rider.boarded,
+                rockets: self.rider.rockets,
                 ..Rider::default()
             };
         }
@@ -817,4 +818,21 @@ pub(crate) fn angles_from(from: [f32; 3], at: [f32; 3]) -> [f32; 2] {
     let d: [f32; 3] = std::array::from_fn(|i| at[i] - from[i]);
     let pitch = -d[2].atan2(d[0].hypot(d[1]).max(1.0)).to_degrees();
     [pitch.clamp(-80.0, 80.0), d[1].atan2(d[0]).to_degrees()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Getting out keeps the gates' rockets-at-armor count, as a death
+    /// does (BUG-106).
+    #[test]
+    fn getting_out_keeps_the_rocket_count() {
+        let mut bot = Bot::new("allies", true, 1);
+        bot.rider.seated = 5;
+        bot.rider.rockets = 3;
+        let _ = bot.think_vehicle(&crate::bots::tests::view(), UserCmd::default());
+        assert_eq!(bot.rider.seated, 0);
+        assert_eq!(bot.rockets_at_armor(), 3);
+    }
 }

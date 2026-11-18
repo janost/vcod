@@ -1,4 +1,4 @@
-//! The builtins one game version answers (design step 8). Retail compiles a
+//! The builtins one game version answers. Retail compiles a
 //! call to a name its tables lack as `unknown (builtin) function '%s'` or
 //! `unknown (builtin) method '%s'` (1.1d `cod_lnxded` strings 0x80d6a40 and
 //! 0x80d6a60, raised by the call emitters 0x8094be4 and 0x8095154), a script
@@ -15,11 +15,11 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_gsc::Vm;
 use vcod_gsc::bytecode::Op;
 
-use super::score::Builtin;
+use super::Builtin;
 
 /// One version's builtins by folded name: whether retail lists it as a free
 /// function, as a method (any of the per-class tables), and vcod's handler.
@@ -38,7 +38,7 @@ struct Entry {
 
 impl BuiltinSet {
     /// The set for `proto`'s game version, built on first use.
-    pub fn of(proto: &Protocol) -> &'static BuiltinSet {
+    pub fn of(proto: &Cod1Wire) -> &'static BuiltinSet {
         if proto.is_uo() {
             Self::uo()
         } else if proto.is_v1() {

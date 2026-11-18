@@ -60,7 +60,6 @@ fn on_map(map: &MapAxes, r: [f32; 4], at: [f32; 2]) -> [f32; 2] {
 }
 
 impl Cod4Hud {
-    #[allow(clippy::too_many_arguments)]
     /// The `fullscreenmap` menu's visible items, its owner draws and the
     /// "press fire" text: drawn while the selector is up (its items'
     /// `visible when` read `selectingLocation()`).
@@ -175,7 +174,7 @@ impl Cod4Hud {
 
     /// One full-map owner draw (181..188) on the grid rect `rect`
     /// (cod4-hud.md 15.8).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn full_map_owner_draw(
         &self,
         l: &Loaded,

@@ -21,7 +21,8 @@ const GAPS: &[(usize, &str)] = &[];
 /// The one part of the gamestate left out of the comparison: the mirror
 /// block's engine dvars (`friction`, `g_TeamColor_*`, `jump_height`,
 /// `player_*`, `stopspeed`, ...), which 1.7's engine registers and mirrors
-/// and vcod does not register yet (S-C4-1); the scripts' own (`scr_*`,
+/// and this level-only boot does not (vcod's engine half registers them,
+/// `crate::cod4::oob`); the scripts' own (`scr_*`,
 /// `ui_*`) are compared by name. With the engine's missing the script
 /// dvars also sit at other slots than retail's, as the block is sorted by
 /// name.
@@ -80,6 +81,7 @@ fn mirror(cs: &dyn Fn(usize) -> String) -> BTreeMap<String, String> {
 
 /// `war` on mp_crash loaded and booted with the stock settings, for a
 /// test that needs a level's host; `None` without `COD4_DIR`.
+#[cfg(any(test, feature = "testing"))]
 pub(crate) fn booted_for_test() -> Option<crate::game::script::ScriptRuntime> {
     let install = vcod_cod4::testing::cod4_install()?;
     let zones = Cod4Zones::load(&install, "mp_crash").unwrap();
@@ -147,7 +149,7 @@ fn cod4_boot() {
         }
     }
     // The mirror: every script dvar retail mirrors, ours mirrors at its
-    // value (the engine's own dvars are not registered on ours yet).
+    // value (the engine's own dvars are not registered in this boot).
     let (m_ours, m_theirs) = (mirror(&ours_at), mirror(&theirs_at));
     for (name, value) in &m_theirs {
         if !script_dvar(name) {

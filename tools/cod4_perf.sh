@@ -61,7 +61,9 @@
 # under <outdir>. Kills only the processes it started.
 set -u
 SESSION=${SESSION:-0}
+. "$(dirname "$0")/lib.sh"
 if [[ $SESSION != 1 && ${PERF_INNER:-} != 1 ]]; then
+	need unshare dbus-run-session kwin_wayland python3
 	PERF_INNER=1 exec unshare -rn dbus-run-session -- "$0" "$@"
 fi
 OUT=$(realpath -m "$1") MAP=$2 SECS=${3:-10}
@@ -69,6 +71,8 @@ shift 3 2> /dev/null || shift $#
 SWEEP=${SWEEP:-0}
 HERE=$(cd "$(dirname "$0")" && pwd)
 BIN=${BIN:-$HERE/../target/release}
+need_built "$BIN/vcod" "cargo build --release -p vcod"
+need_built "$BIN/vcod-server" "cargo build --release -p vcod-server"
 GAME=${GAME:-cod4}
 case $GAME in
 cod4) : "${COD4_DIR:?set COD4_DIR to the CoD4 1.7 install}"; DIR=$COD4_DIR GARGS=(--game cod4) ;;
@@ -216,7 +220,7 @@ wait "$cp" 2> /dev/null
 kill $kp "$spid" 2> /dev/null
 wait $kp "$spid" 2> /dev/null
 if [[ $SWEEP == 1 ]]; then
-	python3 "$HERE/cod4_perf.py" --sweep "$OUT/profile.txt" | tee "$OUT/sweep.tsv"
+	python3 -I "$HERE/cod4_perf.py" --sweep "$OUT/profile.txt" | tee "$OUT/sweep.tsv"
 else
-	python3 "$HERE/cod4_perf.py" --skip-secs "${SKIP_SECS:-10}" "$OUT/profile.txt"
+	python3 -I "$HERE/cod4_perf.py" --skip-secs "${SKIP_SECS:-10}" "$OUT/profile.txt"
 fi

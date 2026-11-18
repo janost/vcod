@@ -728,7 +728,7 @@ fn the_kill_command_kills_its_sender() {
 
 /// A dropped rifle hands its ammo over: once the target's M16 lies at rest,
 /// the shooter (an M16 too) is put on it; it takes the stock and clip
-/// `dropWeaponForDeath` set into its reserve (`EV_AMMO_PICKUP`, 9) and the
+/// `dropWeaponForDeath` set into its reserve (`EV_ITEM_PICKUP`, 9) and the
 /// item goes (cod4-combat.md 6).
 #[test]
 fn a_dropped_rifle_hands_its_ammo_over() {
@@ -760,7 +760,7 @@ fn a_dropped_rifle_hands_its_ammo_over() {
         .iter()
         .filter(|f| (49_000..49_500).contains(&f.server_time))
         .any(|f| (0..4).any(|k| f.ps.get(&format!("events[{k}]")) == Some(9)));
-    assert!(got, "EV_AMMO_PICKUP");
+    assert!(got, "EV_ITEM_PICKUP");
     let after = level.pm_state(1).unwrap().ammo;
     assert!(after.iter().sum::<i32>() > before.unwrap().iter().sum::<i32>());
 }

@@ -1,17 +1,17 @@
 //! `--save-shock`: the client half of the shellshock capture. Waits for
-//! `client-probes/probe_shock` to put the player on mp_carentan's street
+//! `client-probes/probe_shock` to put the player on mp_carentan's floor
 //! mark, then runs forward and back along world x, a second each way, and
 //! holds `wbuttons` 0x4 while the playerstate's shellshock runs, as the
 //! retail cgame does (docs/research/cod11-shellshock.md, "Movement"). Writes
 //! every usercmd and every snapshot's shellshock and movement fields to
-//! `crates/server/tests/fixtures/shellshock/<map>-dm-shock-client.txt`.
+//! `crates/server/tests/fixtures/shellshock/<map>-dm-shock-client[-<tag>].txt`.
 
 use std::time::Instant;
 use vcod_common::net;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd, WBUTTON_SHELLSHOCK};
 use vcod_common::net::snapshot::Snapshot;
 
-/// `probe_shock.gsc`'s mark, `probe_legs`'s street spot.
+/// `probe_shock.gsc`'s mark, `probe_legs`'s floor spot.
 pub const SHOCK_SPOT: [f32; 3] = crate::legs_probe::LEGS_SPOT;
 
 /// Each leg of the walk, alternating forward and back from forward.
@@ -87,7 +87,7 @@ impl ShockProbe {
     /// snapshot after it. True once the script has run out and a second has
     /// passed.
     pub fn observe(&mut self, now: Instant, s: &Snapshot) -> bool {
-        let p = &net::protocol::PROTOCOL_V1;
+        let p = crate::probe::wire();
         let f = |name: &str| s.ps.field_i32(p, name);
         self.shock = (s.server_time, f("shellshockTime"), f("shellshockDuration"));
         let o = s.ps.origin(p);
@@ -133,15 +133,17 @@ impl ShockProbe {
         configstrings: &[String],
         team: &str,
         weapon: &str,
+        tag: Option<&str>,
         overwrite: bool,
     ) -> anyhow::Result<()> {
         let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
         let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
         let map = key("mapname");
         let mut out = String::new();
-        out.push_str(
-            "# Retail CoD 1.1d dedicated server: the client half of the shellshock capture.\n",
-        );
+        out.push_str(&format!(
+            "# Retail CoD {} dedicated server: the client half of the shellshock capture.\n",
+            crate::probe::retail_build()
+        ));
         out.push_str(&format!(
             "# map {map}, gametype {}, team={team} weapon={weapon}\n",
             key("g_gametype")
@@ -168,9 +170,15 @@ impl ShockProbe {
             out.push_str(l);
             out.push('\n');
         }
-        let dir = "crates/server/tests/fixtures/shellshock";
+        let dir = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../server/tests/fixtures/shellshock"
+        );
         std::fs::create_dir_all(dir)?;
-        let path = crate::probe::fixture_path(dir, &format!("{map}-dm-shock-client.txt"))?;
+        let path = crate::probe::fixture_path(
+            dir,
+            &format!("{map}-dm-shock-client{}.txt", crate::probe::tag_suffix(tag)),
+        )?;
         if !overwrite && std::path::Path::new(&path).exists() {
             anyhow::bail!("{path} already exists; pass --overwrite-fixture to replace it");
         }

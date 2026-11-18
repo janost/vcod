@@ -134,10 +134,8 @@ pub mod ev {
     pub const STEP_VIEW: i32 = 143;
 }
 
-/// `ClientThink_real`'s `pm.tracemask` (0x80f5d2e): alive.
-pub const MASK_PLAYERSOLID: u32 = 0x2810011;
-/// ... and dead.
-pub const MASK_DEADSOLID: u32 = 0x810011;
+/// `ClientThink_real`'s `pm.tracemask` (0x80f5d2e): alive, and dead.
+pub use vcod_common::clipmap::{MASK_DEADSOLID, MASK_PLAYERSOLID};
 /// `SpectatorThink` (0x80f4eb2).
 pub const MASK_SPECTATOR: u32 = 0x800811;
 
@@ -447,9 +445,9 @@ pub(crate) struct Pml {
     pub msec: i32,
     pub walking: bool,
     pub ground_plane: bool,
+    /// `pml_t`'s `almostGroundPlane`, kept as retail sets it; nothing reads it yet.
     pub almost_ground_plane: bool,
     pub ground_trace: Tr,
-    pub impact_speed: f32,
     pub previous_origin: Vec3,
     pub previous_velocity: Vec3,
 }

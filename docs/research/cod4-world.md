@@ -2246,9 +2246,13 @@ nothing. VERIFIED (13.1's census).
   point's random offset (from vcod's own seed), the round's trace through
   the model's collision, its push and damage, its impact effect and sound
   as the world's on the struck surface, the break and its effect,
-  a sleeping body dropped where it lies, and `CG_MapRestart`'s restart.
-  VERIFIED (the code against the above; `dynent::tests`,
-  `dynent_census`, `cod4_live_a_frag_flings_the_maps_clutter_and_breaks_a_plate`).
+  a sleeping body dropped where it lies, and `CG_MapRestart`'s restart
+  on `n` and `B` (a `fast_restart`, which sends no gamestate) and on a new
+  gamestate. VERIFIED (the code against the above; `dynent::tests`,
+  `dynent_census`, `cod4_live_a_frag_flings_the_maps_clutter_and_breaks_a_plate`,
+  `cod4_live_fast_restart_puts_the_dynents_back`).
+- Not ported: the rest of `CG_MapRestart` (0x44b350); vcod resets only
+  the dynamic entities on `n` and `B`. INFERRED (the code).
 - The body is cod4-gsc.md 3.6's solver, not ODE, at a fixed 17 ms step.
   mp_crash's pots stand inside an item clip brush (contents 0x400) over
   their table; every point of theirs starts solid, so the solver met

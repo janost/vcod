@@ -3,8 +3,6 @@
 
 pub mod centerprint;
 pub mod chat;
-// Nothing feeds it yet: CoD2 runs fly mode only, with no server to send hudelems.
-#[allow(dead_code)]
 pub mod cod2elem;
 pub mod font;
 pub mod friends;
@@ -30,7 +28,7 @@ use vcod_common::net::NetEvent;
 use vcod_common::net::events::GameEvent;
 use vcod_common::net::flags::{PM_DEAD, PMF_FOLLOW, PMF_PRONE_BLOCKED};
 use vcod_common::net::msg::{ClientState, EntityState, HudElem, PlayerState};
-use vcod_common::net::protocol::{CsRange, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, CsRange};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::Stance;
 use vcod_common::pmove::predict::Predicted;
@@ -124,7 +122,7 @@ pub struct HudFrame<'a> {
     pub screen_h: f32,
     pub configstrings: &'a [String],
     pub clients: &'a BTreeMap<u32, ClientState>,
-    pub protocol: &'a Protocol,
+    pub protocol: &'a Cod1Wire,
     /// Server-clock ms.
     pub server_time: i32,
     /// The serverTime of the snapshot the render clock interpolates from,
@@ -408,6 +406,12 @@ impl Hud {
         self.game_messages.push_kill(line, (f.now * 1000.0) as i32);
     }
 
+    /// The shellshock's time left at this frame's clock, which scales the
+    /// view weapon's turn sway ([`crate::play::shock::sway_scale`]).
+    pub fn set_shock_left(&mut self, ms: i32) {
+        self.player.gun.shock_left_ms = ms;
+    }
+
     /// Steps the gun's aim once for this frame, as `0x300371f0` does before
     /// the 2D pass: the view weapon draws off the result and the scope
     /// overlay centres on it (combat doc 17.4). `gun_kick` is this frame's
@@ -415,15 +419,9 @@ impl Hud {
     /// dead (`cg.renderingThirdPerson`, `[0x30207158]`, set at `0x30033d39`
     /// for a snapshot pm_type of 6 or more) or on a mounted gun
     /// (`0x30037210`-`0x30037274`).
-    /// The shellshock's time left at this frame's clock, which scales the
-    /// view weapon's turn sway ([`crate::play::shock::sway_scale`]).
-    pub fn set_shock_left(&mut self, ms: i32) {
-        self.player.gun.shock_left_ms = ms;
-    }
-
     pub fn step_gun(
         &mut self,
-        p: &Protocol,
+        p: &Cod1Wire,
         ps: &PlayerState,
         predicted: Option<&Predicted>,
         server_time: i32,
@@ -720,7 +718,7 @@ pub fn bind_keys(text: &str, bound: &dyn Fn(&str) -> Option<String>) -> String {
 /// The cgame's bind table (1.1 0x3006f150, 1.5 0x30071150, UO
 /// 0x3008adb8, 24-byte rows): the only commands its key lookup
 /// (0x30046860) names. Anything else reads unbound.
-pub fn bind_commands(p: &Protocol) -> &'static [&'static str] {
+pub fn bind_commands(p: &Cod1Wire) -> &'static [&'static str] {
     match p.transport.version {
         6 => BIND_COMMANDS_15,
         22 => BIND_COMMANDS_UO,
@@ -787,7 +785,7 @@ fn steps_gun(pm_type: i32, e_flags: i32) -> bool {
 /// the replay at its own clock, or a followed player's snapshot at the
 /// render clock. Retail runs both on whichever playerstate it draws.
 fn gun_clock(
-    p: &Protocol,
+    p: &Cod1Wire,
     ps: &PlayerState,
     predicted: Option<&Predicted>,
     server_time: i32,
@@ -816,7 +814,7 @@ impl Hud {
     /// (`0x30028a58`).
     pub fn feed_damage(
         &mut self,
-        p: &Protocol,
+        p: &Cod1Wire,
         ps: &PlayerState,
         server_time: i32,
         snap_time: i32,
@@ -833,7 +831,7 @@ impl Hud {
     /// [`Self::feed_damage`]'s.
     pub fn view_kick(
         &mut self,
-        p: &Protocol,
+        p: &Cod1Wire,
         ps: &PlayerState,
         predicted: Option<&Predicted>,
         server_time: i32,
@@ -865,7 +863,7 @@ impl Hud {
     /// `view` is the kicked view, wire degrees.
     pub fn eye_bob(
         &self,
-        p: &Protocol,
+        p: &Cod1Wire,
         ps: &PlayerState,
         predicted: Option<&Predicted>,
         server_time: i32,
@@ -1375,8 +1373,8 @@ mod tests {
         bar.set(msg_field::HEIGHT, 10);
         bar.set(msg_field::COLOR, -1);
         ps.arrays.hud_current.push(bar);
-        let mut cs = vec![String::new(); hudelem::CS_SHADERS + 2];
-        cs[hudelem::CS_SHADERS + 1] = "white".into();
+        let mut cs = vec![String::new(); hudelem::CS_SHADERS_V1 + 2];
+        cs[hudelem::CS_SHADERS_V1 + 1] = "white".into();
         let (loc, clients) = (Localized::default(), BTreeMap::new());
         let pm_type = PlayerState::field_index(&PROTOCOL_V1, "pm_type").expect("pm_type");
         let mut drawn = |pm: i32, local_player: bool| -> Vec<String> {
@@ -1422,8 +1420,8 @@ mod tests {
         bar.set(msg_field::HEIGHT, 10);
         bar.set(msg_field::COLOR, -1);
         ps.arrays.hud_current.push(bar);
-        let mut cs = vec![String::new(); hudelem::CS_SHADERS + 2];
-        cs[hudelem::CS_SHADERS + 1] = "white".into();
+        let mut cs = vec![String::new(); hudelem::CS_SHADERS_V1 + 2];
+        cs[hudelem::CS_SHADERS_V1 + 1] = "white".into();
         let (loc, clients) = (Localized::default(), BTreeMap::new());
         let mut drawn = |status: bool| -> Vec<String> {
             let f = HudFrame {
@@ -1740,7 +1738,7 @@ mod tests {
             e_type: 0,
             eflags: 0,
         };
-        let printed = |p: &Protocol, ev: &GameEvent, pm_flags: i32| {
+        let printed = |p: &Cod1Wire, ev: &GameEvent, pm_flags: i32| {
             let mut ps = PlayerState::null(p);
             ps.fields[PlayerState::field_index(p, "clientNum").unwrap()] = 2;
             ps.fields[PlayerState::field_index(p, "pm_flags").unwrap()] = pm_flags;

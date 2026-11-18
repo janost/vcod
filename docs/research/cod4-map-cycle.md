@@ -47,6 +47,10 @@ client's half is `vcod_cod4::net::conn` and `play::cod4`.
 - vcod-server walks the five common zones once and only the map's zone
   on a spawn, and resumes the last gametype's script compile when its
   files read the same (`Carry::gametype`). vcod's choice, not retail's.
+- A spawn or restart whose load fails (no gametype script, a script that
+  does not compile) leaves no level: vcod hands the dvar table back and
+  ends the process (`GameModule::take_fatal`), where retail raises
+  `Com_Error`. vcod's choice, as CoD1's and CoD2's.
 
 ## 2. The restart: `fast_restart`, `map_restart`
 
@@ -188,3 +192,7 @@ two menus sends them apart.
   map keeps the world. VERIFIED on ours
   (`cod4_live_map_change_names_the_new_map_and_spawns_there`). How the
   drawn map looks across the change is pending a hand check.
+- Any new gamestate also starts the HUD's level state over, as the cgame
+  restart does: the last level's `d` strings, scores, message windows,
+  centre print, compass pings, damage overlay and hints go. VERIFIED on
+  ours (`cod4_hud::tests::a_new_gamestate_drops_the_last_levels_d_strings`).

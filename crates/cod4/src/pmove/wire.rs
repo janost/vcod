@@ -5,52 +5,52 @@ use glam::Vec3;
 
 use super::{PlayerState, SprintState};
 use crate::net::delta;
-use crate::net::fields::PLAYER_STATE;
+use crate::net::fields::{ENTITY_PLAYER, PLAYER_STATE};
 
-/// `name`'s word in a wire playerstate, looked up at compile time
-/// through [`ix!`]: a name `PLAYER_STATE` lacks fails the build.
-const fn index(name: &str) -> usize {
-    let mut i = 0;
-    while i < PLAYER_STATE.len() {
-        let (a, b) = (PLAYER_STATE[i].name.as_bytes(), name.as_bytes());
-        if a.len() == b.len() {
-            let mut k = 0;
-            while k < a.len() && a[k] == b[k] {
-                k += 1;
-            }
-            if k == a.len() {
-                return PLAYER_STATE[i].offset as usize / 4;
-            }
-        }
-        i += 1;
-    }
-    panic!("no such playerstate field")
+/// `name`'s word in a table of wire fields, looked up at compile time
+/// through [`ix!`] and [`ex!`]: a name the table lacks fails the build.
+const fn index(table: &[delta::Field], name: &str) -> usize {
+    delta::word_named(table, name)
 }
 
-/// A field's word, or an array field's words (`ix!(3 "origin")` for
-/// `origin[0..3]`), as constants.
+/// A field's word, or an array field's words (`(3 "origin")` for
+/// `origin[0..3]`), in `$table`, as constants.
+macro_rules! words {
+    ($table:expr, $name:literal) => {
+        const { index(&$table, $name) }
+    };
+    ($table:expr, 3 $name:literal) => {
+        const {
+            [
+                index(&$table, concat!($name, "[0]")),
+                index(&$table, concat!($name, "[1]")),
+                index(&$table, concat!($name, "[2]")),
+            ]
+        }
+    };
+    ($table:expr, 4 $name:literal) => {
+        const {
+            [
+                index(&$table, concat!($name, "[0]")),
+                index(&$table, concat!($name, "[1]")),
+                index(&$table, concat!($name, "[2]")),
+                index(&$table, concat!($name, "[3]")),
+            ]
+        }
+    };
+}
+
+/// A playerstate field's word or words ([`words!`] over `PLAYER_STATE`).
 macro_rules! ix {
-    ($name:literal) => {
-        const { index($name) }
+    ($($t:tt)*) => {
+        words!(PLAYER_STATE, $($t)*)
     };
-    (3 $name:literal) => {
-        const {
-            [
-                index(concat!($name, "[0]")),
-                index(concat!($name, "[1]")),
-                index(concat!($name, "[2]")),
-            ]
-        }
-    };
-    (4 $name:literal) => {
-        const {
-            [
-                index(concat!($name, "[0]")),
-                index(concat!($name, "[1]")),
-                index(concat!($name, "[2]")),
-                index(concat!($name, "[3]")),
-            ]
-        }
+}
+
+/// A player entity's field word or words ([`words!`] over `ENTITY_PLAYER`).
+macro_rules! ex {
+    ($($t:tt)*) => {
+        words!(ENTITY_PLAYER, $($t)*)
     };
 }
 
@@ -412,30 +412,24 @@ pub fn player_entity(slot: usize, ps: &delta::PlayerState) -> delta::EntityState
     let mut e = delta::EntityState::default();
     e.0[0] = slot as u32;
     e.0[1] = 1;
-    let mut put = |name: &str, v: u32| {
-        if let Some(f) = delta::EntityState::table(1).iter().find(|f| f.name == name) {
-            e.0[f.word()] = v;
-        }
-    };
+    let mut put = |word: usize, v: u32| e.0[word] = v;
     let origin = ix!(3 "origin");
     let angles = ix!(3 "viewangles");
+    let (pos, apos) = (ex!(3 "lerp.pos.trBase"), ex!(3 "lerp.apos.trBase"));
     for i in 0..3 {
-        put(
-            &format!("lerp.pos.trBase[{i}]"),
-            float(ps, origin[i]).trunc().to_bits(),
-        );
-        put(
-            &format!("lerp.apos.trBase[{i}]"),
-            float(ps, angles[i]).trunc().to_bits(),
-        );
+        put(pos[i], float(ps, origin[i]).trunc().to_bits());
+        put(apos[i], float(ps, angles[i]).trunc().to_bits());
     }
-    put("lerp.u.player.leanf", word(ps, ix!("leanf")));
+    put(ex!("lerp.u.player.leanf"), word(ps, ix!("leanf")));
     let (torso, waist) = prone_pitches(ps);
-    put("fTorsoPitch", torso.to_bits());
-    put("fWaistPitch", waist.to_bits());
-    put("lerp.u.player.movementDir", word(ps, ix!("movementDir")));
-    put("lerp.pos.trType", 3);
-    put("lerp.apos.trType", 1);
+    put(ex!("fTorsoPitch"), torso.to_bits());
+    put(ex!("fWaistPitch"), waist.to_bits());
+    put(
+        ex!("lerp.u.player.movementDir"),
+        word(ps, ix!("movementDir")),
+    );
+    put(ex!("lerp.pos.trType"), 3);
+    put(ex!("lerp.apos.trType"), 1);
     // 0x20000 for a dead body (`pm_type` past 6), 0x40000 for one down
     // its sights (`PMF_SIGHT` 0x10), each cleared otherwise
     // (0x8052a54..0x8052a82, 0x8052ca2, 0x8052cb1).
@@ -447,27 +441,27 @@ pub fn player_entity(slot: usize, ps: &delta::PlayerState) -> delta::EntityState
     if word(ps, ix!("pm_flags")) & 0x10 != 0 {
         e_flags |= 0x4_0000;
     }
-    put("lerp.eFlags", e_flags);
+    put(ex!("lerp.eFlags"), e_flags);
     let held = word(ps, ix!("weapon"));
-    put("weapon", held);
+    put(ex!("weapon"), held);
     // The held weapon's camo, `weaponmodels[weapon]` (0x8052af5..0x8052b03).
     put(
-        "weaponModel",
+        ex!("weaponModel"),
         ps.weapon_models
             .get(held as usize)
             .map_or(0, |&m| u32::from(m)),
     );
-    put("legsAnim", word(ps, ix!("legsAnim")));
-    put("torsoAnim", word(ps, ix!("torsoAnim")));
-    put("groundEntityNum", word(ps, ix!("groundEntityNum")));
+    put(ex!("legsAnim"), word(ps, ix!("legsAnim")));
+    put(ex!("torsoAnim"), word(ps, ix!("torsoAnim")));
+    put(ex!("groundEntityNum"), word(ps, ix!("groundEntityNum")));
     // A gunner names his gun: `eFlags & 0x300` copies `viewlocked_entNum`
     // (ps+0x59c) into `otherEntityNum` (0x8052ab9; cod4-gsc.md 9.2).
     if own & 0x300 != 0 {
-        put("otherEntityNum", word(ps, ix!("viewlocked_entNum")));
+        put(ex!("otherEntityNum"), word(ps, ix!("viewlocked_entNum")));
     }
-    put("clientNum", slot as u32);
+    put(ex!("clientNum"), slot as u32);
     let h = body_height(word(ps, ix!("pm_flags"))) as u32;
-    put("solid", 15 | (1 << 8) | ((h + 32) << 16));
+    put(ex!("solid"), 15 | (1 << 8) | ((h + 32) << 16));
     e
 }
 

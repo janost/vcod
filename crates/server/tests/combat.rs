@@ -1,4 +1,4 @@
-//! Two clients on one server, one shooting the other. Stage 6's gate for the
+//! Two clients on one server, one shooting the other. The gate for the
 //! path no single-client capture can reach: a hit registered against another
 //! sim, the callbacks, the corpse, the dropped weapon, the obituary, the
 //! scoreboard and the respawn.
@@ -770,7 +770,7 @@ fn the_kill_commands_death_frame_is_retails() {
         ("allies", "m1carbine_mp"),
     );
     let p = &PROTOCOL_V1;
-    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+    let carbine = vcod_server::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
     // The byte a retail client sends: the weapon it holds.
     let holding = vcod_common::net::msg::UserCmd {
         weapon: carbine,
@@ -894,7 +894,7 @@ fn a_bullet_deaths_frame_is_retails() {
         ("allies", "m1carbine_mp"),
     );
     let p = &PROTOCOL_V1;
-    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+    let carbine = vcod_server::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
     let num = |c: &vcod_common::net::NetClient<common::ClientEnd>| {
         c.snapshots().newest().unwrap().ps.field_i32(p, "clientNum") as usize
     };
@@ -906,7 +906,8 @@ fn a_bullet_deaths_frame_is_retails() {
     );
     sv.place_client(na, spot, 0.0);
     sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
-    // Both hold the carbine, as a retail client's cmd says (AGENTS.md).
+    // Both hold the carbine, as a retail client's cmd says (docs/dev/traps.md,
+    // "Wire and netcode", "The cmd's weapon byte").
     let sight = UserCmd {
         buttons: BUTTON_ADS,
         weapon: carbine,
@@ -1014,8 +1015,8 @@ fn a_player_killed_earlier_in_the_frame_stops_no_later_round() {
     sv.place_client(na, spot, 0.0);
     sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
     sv.place_client(nc, [spot[0] + 80.0, spot[1], spot[2]], 180.0);
-    let thompson = vcod_server::configstrings::weapon_index("thompson_mp").unwrap() as u8;
-    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+    let thompson = vcod_server::defs::V1.weapon_index("thompson_mp").unwrap() as u8;
+    let carbine = vcod_server::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
     let a_sight = UserCmd {
         buttons: BUTTON_ADS,
         weapon: thompson,
@@ -1074,7 +1075,8 @@ fn a_player_killed_earlier_in_the_frame_stops_no_later_round() {
 /// hit-location table. The retail melee capture is the numbers: two swings
 /// killed a 100-health player at `head` for 81 and 79, and the kill's
 /// obituary carried parm 135, `0x80 | MOD_MELEE`
-/// (`mp_carentan-tdm-melee-shooter.txt`).
+/// (`mp_carentan-tdm-melee-shooter.txt`; the other probe's trace of the same
+/// run is `mp_carentan-tdm-melee-target.txt`).
 #[test]
 fn a_melee_swing_hits_and_the_kill_shows_the_melee_icon() {
     use vcod_common::net::msg::{BUTTON_MELEE, NULL_USERCMD, UserCmd};
@@ -1393,7 +1395,9 @@ fn two_placed_under(
 }
 
 fn frag_index() -> u8 {
-    vcod_server::configstrings::weapon_index("fraggrenade_mp").expect("the frag in CS 7") as u8
+    vcod_server::defs::V1
+        .weapon_index("fraggrenade_mp")
+        .expect("the frag in CS 7") as u8
 }
 
 /// `G_RadiusDamage` end to end (combat doc, 14.1): a frag thrown at the
@@ -2045,7 +2049,7 @@ fn a_throw_s_first_frame_matches_retail_s_capture() {
 /// 5.1 step 5 and 11.3: a player killed with a grenade cooking drops it live
 /// where he stood, `r.currentOrigin` with z raised by 40, and the velocity is
 /// three `rand()` draws whose signs put x and y in (-480, -160] and z in
-/// (-160, 0] -- retail's own skew, not a random direction. The fuse is what
+/// (-160, 0]: retail's own skew, not a random direction. The fuse is what
 /// was left of `grenadeTimeLeft`, the full 4000 for a cook retail never counts
 /// down (1.11).
 ///
@@ -2053,10 +2057,11 @@ fn a_throw_s_first_frame_matches_retail_s_capture() {
 /// `fixtures/playerstate/mp_carentan-tdm-grenade-death-shooter.txt`: the dying
 /// player's trace reads `origin=1216.9,1296.0,-7.9 grenadeTimeLeft=4000`, and
 /// the missile on the death frame reads
-/// `pos=5,1405500,1216.9,1296.0,32.1,-423.0,-214.0,-99.0` -- the +40 on z, a
+/// `pos=5,1405500,1216.9,1296.0,32.1,-423.0,-214.0,-99.0`: the +40 on z, a
 /// delta inside those ranges, and an explode 3950 ms later. The `kill` runs
 /// outside every cmd, so `r.currentOrigin` is the unsnapped `ps.origin`:
-/// 1216.9 and 32.1 where a snap would read 1216 and 33 (5.5).
+/// 1216.9 and 32.1 where a snap would read 1216 and 33 (5.5). The other
+/// probe's side of the run is `mp_carentan-tdm-grenade-death-target.txt`.
 #[test]
 fn a_player_killed_mid_cook_drops_a_live_grenade() {
     use vcod_common::net::msg::{BUTTON_ATTACK, NULL_USERCMD, UserCmd};
@@ -2613,7 +2618,9 @@ fn fire_panzerfaust(
 ) -> RocketSeen {
     use vcod_common::net::msg::{BUTTON_ATTACK, NULL_USERCMD, UserCmd};
     let p = &PROTOCOL_V1;
-    let pf = vcod_server::configstrings::weapon_index("panzerfaust_mp").expect("CS 7") as u8;
+    let pf = vcod_server::defs::V1
+        .weapon_index("panzerfaust_mp")
+        .expect("CS 7") as u8;
     let aimed = UserCmd {
         angles: [angle_short(aim.1), angle_short(aim.0), 0],
         weapon: pf,

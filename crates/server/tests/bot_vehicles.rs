@@ -399,3 +399,27 @@ fn a_bot_keeps_out_of_a_burning_hull() {
     assert!(!b.dead);
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
 }
+
+/// A hull burning when the round restarts is no wreck for the bots on the
+/// next tick: the restart reissues the map's vehicles under the same
+/// handles, alive.
+#[test]
+#[ignore = "builds mp_cassino's UO graph, ~10 s in release; run with --ignored"]
+fn a_restart_clears_a_burning_hull_s_wreck() {
+    let Some((mut sv, mut now)) = uo_server(1, false) else {
+        eprintln!("COD_DIR has no uo/: skipping");
+        return;
+    };
+    run(&mut sv, &mut now, 100);
+    let tank = sv.test_vehicles()[0];
+    assert!(sv.test_damage_vehicle(tank.num, 10000));
+    run(&mut sv, &mut now, 5);
+    assert!(
+        !sv.test_wrecks().is_empty(),
+        "the hull never read as a wreck"
+    );
+    sv.push_console("map_restart");
+    run(&mut sv, &mut now, 2);
+    assert!(sv.test_vehicles().iter().any(|v| v.num == tank.num));
+    assert_eq!(sv.test_wrecks(), Vec::<[f32; 3]>::new());
+}

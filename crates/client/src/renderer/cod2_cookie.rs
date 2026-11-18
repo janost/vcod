@@ -822,7 +822,6 @@ impl Cookies {
     /// prepass, a receiver draws where it is no farther than that depth,
     /// as retail's do over theirs, and writes none; without, the
     /// receivers keep a depth of their own, the nearest one's keep.
-    #[allow(clippy::too_many_arguments)]
     pub fn encode_receivers(
         &mut self,
         device: &wgpu::Device,

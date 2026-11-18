@@ -389,3 +389,42 @@ fn noise_never_panics() {
         }
     });
 }
+
+/// `CMod_LoadLeafs` keeps a leaf's collision AABB run as `u16` words and
+/// its cluster as an `i16`; `CMod_LoadNodes` keeps each child as an `i16`.
+/// Values past them are the loaders' errors (BUG-125).
+#[test]
+fn leaf_and_node_words_past_their_runtime_width_are_refused() {
+    let leaf = |cluster: i32, first: u32, count: u32| {
+        let mut l = le(&[-1i32 as u32, 0, 0, 0, 0, 0, -1i32 as u32, 0, 0]);
+        l.extend(le(&[
+            cluster as u32,
+            0,
+            first,
+            count,
+            0,
+            1,
+            -1i32 as u32,
+            0,
+            0,
+        ]));
+        l
+    };
+    let m = Map::minimal().with(lump::LEAFS, leaf(0, 0x1_0000, 0));
+    assert!(
+        err(&m).contains("firstCollAabbIndex exceeded"),
+        "{}",
+        err(&m)
+    );
+    let m = Map::minimal().with(lump::LEAFS, leaf(0, 0, 0x1_0000));
+    assert!(err(&m).contains("collAabbCount exceeded"), "{}", err(&m));
+    let m = Map::minimal()
+        .with(lump::VISIBILITY, Vec::new())
+        .with(lump::LEAFS, leaf(0x8000, 0, 0));
+    assert!(err(&m).contains("cluster exceeded"), "{}", err(&m));
+    let m = Map::minimal().with(
+        lump::NODES,
+        le(&[0, -2i32 as u32, 0x8000, 0, 0, 0, 0, 0, 0]),
+    );
+    assert!(err(&m).contains("children exceeded"), "{}", err(&m));
+}

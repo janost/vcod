@@ -1,6 +1,6 @@
 //! CoD1's `G_RunFrame` and each slot's `ClientEndFrame`, run by
 //! `Server::game_frame`. The order is retail's
-//! (AGENTS.md, "The server tick"); the engine runs the clock and the
+//! (docs/dev/server-tick.md, "CoD1's frame"); the engine runs the clock and the
 //! client moves ahead of it and the configstring, command and scoreboard
 //! traffic after it.
 
@@ -146,7 +146,7 @@ impl Cod1Module {
                 match s.mode {
                     SpawnMode::Player => {
                         sim.become_player(s.origin, s.yaw_deg, cmd_angles);
-                        // UO's `G_DObjUpdate` (0x87df9) rebuilds a client's
+                        // UO's `G_DObjUpdate` (0x77df9) rebuilds a client's
                         // DObj when the spawning thread sets his model.
                         sim.dobj_ahead = sim.ps.rules == vcod_common::pmove::MoveRules::Uo;
                         // The builtin's think on its fresh sim already ran
@@ -214,9 +214,9 @@ impl Cod1Module {
             }
             // What the client holds comes across the same way the
             // configstrings do: re-read every frame, because any thread can
-            // have changed them. The held bits have to be among them --
+            // have changed them. The held bits have to be among them, since
             // `PM_Weapon` disarms a player who no longer owns `ps.weapon`
-            // (combat doc, section 1.8) -- and `ps.weapon` with them, so a
+            // (combat doc, section 1.8). `ps.weapon` comes with them, so a
             // sim reset outside a move comes back armed. The write-back
             // above is what makes that safe: the host's copy already carries
             // whatever the machine switched to this tick.
@@ -633,7 +633,7 @@ impl Cod1Module {
             let collision = world.as_ref().map(|w| &w.collision);
             for slot in 0..clients.len() {
                 crate::tick_trace::step!("ClientEndFrame slot {slot}");
-                follow_end_frame(clients, slot, rt, archive, collision, sv_time_ms);
+                follow_end_frame(clients, proto, slot, rt, archive, collision, sv_time_ms);
                 // `takedamage` off the session state (0x40ed9, 0x40f93,
                 // 0x4107c, and `SpectatorClientEndFrame` 0x40788).
                 let session = rt.client_session(slot);
@@ -696,6 +696,7 @@ impl Cod1Module {
             let broadcast: Vec<bool> = (0..clients.len())
                 .map(|slot| rt.in_snapshot_broadcast(slot as u32))
                 .collect();
+            let mut friend_links = vec![None; clients.len()];
             for slot in 0..clients.len() {
                 let Some(sim) = clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
                     continue;
@@ -712,6 +713,7 @@ impl Cod1Module {
                     world.as_ref().map(|w| (&w.vis, fog)),
                     sv_time_ms,
                     proto,
+                    &mut friend_links,
                 );
                 let sim = clients[slot].as_mut().unwrap().sim.as_mut().unwrap();
                 sim.compass_candidate = sessions[slot] == Some(follow::SessionState::Playing)
