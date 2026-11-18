@@ -1881,6 +1881,11 @@ From the `cod4_lnxded` 1.7 disassembly, checked against the kill capture.
 - What a script sees of a deleted entity inside the frame is unmeasured on
   1.7. `Scr_FreeEntityNum` likely only marks the object dead and leaves
   its threads for later. INFERRED. vcod keeps CoD1's 100 ms.
+- A deleted grenade's missile row goes with `delete()`'s unlink, at the
+  next missile pass and from the next snapshot, so it neither bursts nor
+  is sent in the 100 ms (`Cod4Level::run_missiles`, `missile_entities`).
+  The module's own frees go through `GameHost::free_entity`, which drops
+  the row and the entity's `setCanDamage` entry.
 - The two refusals are not ported: no stock script deletes a client or an
   entity from its own think.
 

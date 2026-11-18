@@ -959,7 +959,7 @@ fn hold_dropped(host: &mut GameHost, cx: &mut Cx, id: EntId, taking: Option<EntI
         );
         if let Some(e) = host.cod4().dropped_weapons[k] {
             host.cod4_mut().items.retain(|i| i.id != e);
-            host.ents.free(e);
+            host.free_entity(e);
         }
         k
     });

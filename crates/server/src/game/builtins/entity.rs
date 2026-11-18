@@ -618,7 +618,7 @@ pub fn delete(
 }
 
 /// `delete()`'s unlink, and its free armed [`DELETE_DEFER_MS`] out.
-fn unlink_and_free(host: &mut GameHost, id: EntId) {
+pub(crate) fn unlink_and_free(host: &mut GameHost, id: EntId) {
     link_submodel(host, id, false);
     // The unlink (0x5da81) is now; the slot's reuse waits.
     if let Some(e) = host.ents.get_mut(id).filter(|e| e.client.is_none()) {

@@ -1186,7 +1186,7 @@ impl Cod4Level {
         self.apply_link_ops();
         self.per_frame_notifies();
         for id in std::mem::take(&mut self.rt.host.cod4_mut().free_next) {
-            self.rt.host.ents.free(id);
+            self.rt.host.free_entity(id);
         }
         // The script's `finishPlayerDamage`s and `suicide`s wrote their
         // victims' playerstates inside the call, ahead of any `spawn` after.

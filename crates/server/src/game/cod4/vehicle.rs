@@ -1289,7 +1289,7 @@ impl Cod4Level {
             .cloned()
         else {
             if let Some(m) = s.missile {
-                self.rt.host.ents.free(m);
+                self.rt.host.free_entity(m);
             }
             return;
         };

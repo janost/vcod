@@ -748,6 +748,12 @@ impl Cod4Level {
     /// `G_RunFrame`'s missiles, by entity number: each runs its move and
     /// its think; the event entities past their 300 ms are freed.
     pub(super) fn run_missiles(&mut self) {
+        // A script `delete()` frees on retail inside the call: its row goes
+        // with the unlink, not at the deferred free (cod4-combat.md 14).
+        let host = &mut self.rt.host;
+        let mut missiles = std::mem::take(&mut host.cod4_mut().missiles);
+        missiles.retain(|m| host.ents.get(m.id).is_some_and(|e| !e.unlinked));
+        host.cod4_mut().missiles = missiles;
         // `detonate`: `G_ExplodeMissile` with the new parent, if any.
         for (id, parent) in std::mem::take(&mut self.rt.host.cod4_mut().detonations) {
             if let (Some(i), Some(owner)) = (self.missile_index(id), parent) {
@@ -773,7 +779,7 @@ impl Cod4Level {
             if let Some(at) = m.free_at {
                 if now - at > EVENT_VALID_MS {
                     self.rt.host.cod4_mut().missiles.remove(i);
-                    self.rt.host.ents.free(id);
+                    self.rt.host.free_entity(id);
                 }
                 continue;
             }
@@ -796,7 +802,7 @@ impl Cod4Level {
             }
         });
         for id in freed {
-            self.rt.host.ents.free(id);
+            self.rt.host.free_entity(id);
         }
     }
 
@@ -1627,7 +1633,8 @@ impl Cod4Level {
     pub(super) fn missile_entities(&self) -> Vec<EntityState> {
         let c4 = self.rt.host.cod4();
         let mut out = Vec::new();
-        for m in &c4.missiles {
+        let live = |id: EntId| self.rt.host.ents.get(id).is_some_and(|e| !e.unlinked);
+        for m in c4.missiles.iter().filter(|m| live(m.id)) {
             let mut e = EntityState::default();
             e.0[0] = m.id.0;
             e.0[1] = 4;

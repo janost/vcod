@@ -2607,6 +2607,9 @@ impl GameHost {
         // ahead of the vehicle.
         crate::game::vehicle::free(self, id);
         self.missiles.free_vehicle_refs(id);
+        if let HostExt::Cod4(c) = &mut self.ext {
+            c.missiles.retain(|m| m.id != id);
+        }
         self.triggers.remove(id);
         self.looped_fx.remove(&id);
         self.script_takedamage.remove(&id);

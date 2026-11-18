@@ -1581,10 +1581,10 @@ impl Cod4Level {
             }
         }
         items.retain(|i| !freed.contains(&i.id));
-        for id in freed {
-            host.ents.free(id);
-        }
         host.cod4_mut().items = items;
+        for id in freed {
+            host.free_entity(id);
+        }
     }
 
     /// `Touch_Item` for the weapons at rest: a living player whose box
@@ -1638,7 +1638,7 @@ impl Cod4Level {
             .items
             .retain(|i| !taken.contains(&i.id));
         for id in taken {
-            self.rt.host.ents.free(id);
+            self.rt.host.free_entity(id);
         }
     }
 
