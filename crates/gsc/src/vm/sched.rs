@@ -199,17 +199,6 @@ impl Vm {
         self.spawn(host, func, f, recv, args, &mut errors)
     }
 
-    /// A thread whose immediate run itself spawns a thread nested this
-    /// deep runs the native Rust stack out (`spawn` -> `step_thread` ->
-    /// `step_frames` -> `spawn` -> ...) long before `budget` would catch
-    /// it, since each level only costs one `Call`-equivalent instruction
-    /// against its *own* fresh budget. No corpus script nests a `thread`
-    /// statement inside another spawned thread's own immediate execution
-    /// more than one or two levels deep; this is purely a backstop against
-    /// a spawn bomb (a thread whose first act is spawning another), not a
-    /// limit real scripts should ever approach.
-    const MAX_SPAWN_DEPTH: u32 = 64;
-
     /// Pushes a new `Runnable` thread and immediately steps it to its own
     /// suspend, return, or error — never leaving it merely `Runnable` for
     /// a later scheduling pass to discover cold. Retail scripts pair a
@@ -220,13 +209,9 @@ impl Vm {
     /// thread registers for it, dropping the event and hanging the
     /// `waittill` forever. Spawning is therefore recursive — the spawned
     /// thread's own immediate run may itself spawn and immediately run a
-    /// further thread — bounded by `MAX_SPAWN_DEPTH`, since each nesting
-    /// level costs Rust native stack, not `budget` (see its doc comment).
-    /// Past that depth the new thread is left merely `Runnable`, the
-    /// pre-immediate-run behavior, for the next `run_frame` to pick up
-    /// instead of stepping it here: still correct (nothing hangs, nothing
-    /// panics), it just loses "runs before its spawner continues" at a
-    /// depth no real script reaches.
+    /// further thread — each level on the native stack. A spawn from a
+    /// running step counts the spawner's frames against `interp::MAX_FRAMES`
+    /// first, which bounds that nesting, and runs on the step's budget.
     pub(crate) fn spawn(
         &mut self,
         host: &mut dyn Host,
@@ -251,26 +236,10 @@ impl Vm {
         });
         self.queue_ready(id);
         self.thread_returned = None;
-        if self.spawn_depth < Self::MAX_SPAWN_DEPTH {
-            self.spawn_depth += 1;
-            let returned = self.step_thread(host, id, errors);
-            self.spawn_depth -= 1;
-            self.thread_returned = returned;
-        } else {
-            // Silent otherwise, this degrades into exactly the deadlock
-            // that running a spawned thread immediately (rather than
-            // merely `Runnable`, see this function's doc comment) exists
-            // to prevent: two threads left waiting on each other with
-            // nothing to say why. A named constant and the function that
-            // tripped it is enough to spot "a script nests `thread` this
-            // deep" during triage.
-            log::warn!(
-                "gsc: MAX_SPAWN_DEPTH ({}) exceeded spawning {}::{}; thread left runnable for the next scheduling pass instead of running immediately",
-                Self::MAX_SPAWN_DEPTH,
-                self.interner.resolve(func.file),
-                self.interner.resolve(func.name)
-            );
-        }
+        self.spawn_depth += 1;
+        let returned = self.step_thread(host, id, errors);
+        self.spawn_depth -= 1;
+        self.thread_returned = returned;
         id
     }
 
@@ -579,8 +548,22 @@ impl Vm {
 
         let mut frames = std::mem::take(&mut self.threads[idx].frames);
         let mut notifies = Vec::new();
-        let budget = self.budget;
-        let result = self.step_frames(host, &mut frames, budget, Some(id), &mut notifies, errors);
+        // A thread spawned mid-step runs on what its spawner has left, and
+        // hands back what it did not use; any other step gets the budget.
+        let nested = self.pool.take();
+        let mut left = nested.unwrap_or(self.budget);
+        let result = self.step_frames(
+            host,
+            &mut frames,
+            &mut left,
+            Some(id),
+            &mut notifies,
+            errors,
+        );
+        match nested {
+            Some(_) => self.pool = Some(left),
+            None => self.spent += u64::from(self.budget - left),
+        }
         if self.spawn_depth == 0 {
             self.killed.clear();
         }
@@ -701,6 +684,14 @@ impl Vm {
     /// thousand `wait 0` turns in one frame have to fit.
     const MAX_THREADS_PER_FRAME: u32 = 10_000;
 
+    /// A ceiling on the instructions one pass runs, its threads' nested
+    /// spawns counted, past which the threads still due wait for the next
+    /// pass, as past [`Self::MAX_THREADS_PER_FRAME`]. A step may still run
+    /// its whole budget once the pass is past the ceiling, so a pass stops
+    /// within `MAX_PASS_INSTRUCTIONS + budget`. The heaviest stock pass the
+    /// tests run, CoD4's included, runs 1.43 million.
+    const MAX_PASS_INSTRUCTIONS: u64 = 10_000_000;
+
     fn queue_seq(&mut self) -> u64 {
         let seq = self.next_seq;
         self.next_seq += 1;
@@ -735,10 +726,14 @@ impl Vm {
     /// current millisecond's threads run: one due in the gap waits until a
     /// later walk crosses its due time, hours on, as on retail.
     pub fn run_frame(&mut self, host: &mut dyn Host, level_ms: i32) -> Vec<ScriptError> {
-        let errors = self.step_runnable(host, level_ms & CLOCK_MASK);
+        let (errors, done) = self.step_runnable(host, level_ms & CLOCK_MASK);
         // `Scr_SetTime` leaves the clock on `level.time` whether or not it
-        // walked forward.
-        self.now_ms = level_ms & CLOCK_MASK;
+        // walked forward. A pass a cap cut short leaves it where the walk
+        // stopped instead, so the next walk still reaches the threads due
+        // behind it.
+        if done {
+            self.now_ms = level_ms & CLOCK_MASK;
+        }
         errors
     }
 
@@ -746,7 +741,7 @@ impl Vm {
     /// threads due on the clock itself and any a notify woke, before the
     /// clock walks.
     pub fn run_current(&mut self, host: &mut dyn Host) -> Vec<ScriptError> {
-        self.step_runnable(host, self.now_ms)
+        self.step_runnable(host, self.now_ms).0
     }
 
     /// The pick both passes share, measured against retail by
@@ -764,14 +759,24 @@ impl Vm {
     /// both join that pass's pick with the threads due on the clock
     /// (`client-probes/probe_threadorder`, cod11-gsc-language.md, "The
     /// packet pass").
-    fn step_runnable(&mut self, host: &mut dyn Host, level: i32) -> Vec<ScriptError> {
+    ///
+    /// Whether the pass ran everything due, rather than stopping at a cap.
+    fn step_runnable(&mut self, host: &mut dyn Host, level: i32) -> (Vec<ScriptError>, bool) {
         let mut errors = Vec::new();
         let mut steps = 0;
+        let start = self.spent;
         while steps < Self::MAX_THREADS_PER_FRAME {
+            if self.spent - start >= Self::MAX_PASS_INSTRUCTIONS {
+                log::warn!(
+                    "gsc: MAX_PASS_INSTRUCTIONS ({}) reached in one pass; the threads still due wait for the next",
+                    Self::MAX_PASS_INSTRUCTIONS
+                );
+                return (errors, false);
+            }
             let now = self.now_ms;
             let next = self.next_ready(now, level);
             let Some((at, _, tid)) = next else {
-                return errors;
+                return (errors, true);
             };
             self.now_ms = at;
             let Some(idx) = self.thread_index(tid) else {
@@ -794,7 +799,7 @@ impl Vm {
                 .last()
                 .is_some_and(|e| matches!(e.kind, ErrorKind::GameError(_)))
             {
-                return errors;
+                return (errors, true);
             }
         }
         // Was silent before: a frame past the cap just stopped simulating the
@@ -803,7 +808,7 @@ impl Vm {
             "gsc: MAX_THREADS_PER_FRAME ({}) reached in one pass; the threads still due wait for the next",
             Self::MAX_THREADS_PER_FRAME
         );
-        errors
+        (errors, false)
     }
 
     /// Runs `func` to completion on a fresh one-frame stack. A `wait` or
@@ -838,10 +843,17 @@ impl Vm {
         // <Value, ScriptError>` either; they are still logged as they
         // happen (`step_thread`), same as `start_thread`.
         let mut errors = Vec::new();
-        let budget = self.budget;
+        let mut left = self.budget;
         // No real thread to register an `endon` against here (`None`); a
         // one-shot `call_now` script that calls `endon` simply drops it.
-        let result = self.step_frames(host, &mut frames, budget, None, &mut notifies, &mut errors);
+        let result = self.step_frames(
+            host,
+            &mut frames,
+            &mut left,
+            None,
+            &mut notifies,
+            &mut errors,
+        );
         // A notify fired before the failure below still had its effect.
         for (target, event, args) in notifies {
             self.notify(target, event, &args);
@@ -1230,25 +1242,23 @@ mod tests {
         assert_eq!(vm.thread_count(), 0, "aborted, not left runnable");
     }
 
+    /// Plain recursion stops at the frame cap with retail's stack overflow,
+    /// whatever the budget, even with a thousand locals a frame: the frames
+    /// it held stay within `MAX_FRAMES`. `main`'s leading `wait 0;` is the
+    /// same trick as above, to get the error into `run_frame`'s returned
+    /// errors.
     #[test]
-    fn unbounded_recursion_aborts_its_thread_instead_of_overflowing_the_stack() {
-        // Plain (non-`thread`) recursion: `recurse()` calling itself pushes
-        // a new `Frame` onto the same thread's frame stack on every call,
-        // never the native Rust stack, so this terminates via the budget
-        // rather than a stack overflow. `main`'s leading `wait 0;` is the
-        // same trick as above, to get the budget error into `run_frame`'s
-        // returned errors instead of a discarded `start_thread` one — the
-        // wait has to be outside the recursion itself, since a `wait`
-        // inside `recurse` would just suspend on the second call instead
-        // of ever exhausting the budget.
-        let mut vm = vm_with("main() { wait 0; recurse(); } recurse() { recurse(); }");
-        vm.set_budget(10_000);
+    fn unbounded_recursion_ends_its_thread_at_the_frame_cap() {
+        let locals: String = (0..1000).map(|i| format!("x{i} = 0; ")).collect();
+        let src = format!("main() {{ wait 0; recurse(); }} recurse() {{ recurse(); {locals} }}");
+        let mut vm = vm_with(&src);
+        vm.set_budget(u32::MAX);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
         vm.start_thread(&mut host, f, None, vec![]);
         let errs = vm.run_frame(&mut host, 0);
         assert_eq!(errs.len(), 1);
-        assert!(matches!(errs[0].kind, crate::vm::ErrorKind::Budget));
+        assert_eq!(errs[0].kind, crate::vm::ErrorKind::StackOverflow);
         assert_eq!(vm.thread_count(), 0, "aborted, not left runnable");
     }
 
@@ -1462,24 +1472,61 @@ later() { wait 0.05; return 9; }"#;
 
     /// A thread whose first act is spawning another, unboundedly, recurses
     /// through the native Rust stack (`spawn` -> `step_thread` ->
-    /// `step_frames` -> `spawn` -> ...), not the `Vec<Frame>` a plain
-    /// recursive `Call` grows, and each nested spawn gets its own fresh
-    /// `budget`, so the instruction budget alone would never catch this —
-    /// only `spawn`'s own `MAX_SPAWN_DEPTH` cap does. If this test doesn't
-    /// crash the process outright, the cap is working; the assertions
-    /// pin exactly how it degrades: the infinite nest nonetheless unwinds
-    /// (everything below the cap runs to completion), leaving one
-    /// dangling thread for the next scheduling pass to continue the chain
-    /// from, so the live thread count never grows past that.
+    /// `step_frames` -> `spawn` -> ...). Every spawner's frame counts
+    /// against `MAX_FRAMES`, so the thread call at the cap is a stack
+    /// overflow, the nest unwinds and nothing is left running.
     #[test]
-    fn a_spawn_bomb_is_capped_by_native_stack_depth_not_left_to_overflow_it() {
+    fn a_spawn_bomb_stops_at_the_frame_cap() {
         let mut vm = vm_with("main() { thread main(); }");
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
         vm.start_thread(&mut host, f, None, vec![]);
-        assert_eq!(vm.thread_count(), 1);
-        vm.run_frame(&mut host, 0);
-        assert_eq!(vm.thread_count(), 1, "still bounded after another pass");
+        assert_eq!(vm.thread_count(), 0);
+        assert_eq!(vm.abort_count(), 1);
+        assert_eq!(vm.aborts()[0].kind, crate::vm::ErrorKind::StackOverflow);
+    }
+
+    /// A spawn runs on what its spawner's step has left, so a loop of
+    /// spawns whose threads each loop, or a spawn tree as deep as the frame
+    /// cap allows, ends within one step's budget instead of each spawn
+    /// drawing a fresh one.
+    #[test]
+    fn spawned_threads_share_their_spawners_budget() {
+        for src in [
+            "main() { for (;;) thread g(); } g() { for (i = 0; i < 150000; i++) {} }",
+            "main() { f(); } f() { for (i = 0; i < 100000; i++) thread f(); }",
+        ] {
+            let mut vm = vm_with(src);
+            vm.set_budget(200_000);
+            let mut host = TestHost::default();
+            let f = vm.func_ref("test/script", "main");
+            vm.start_thread(&mut host, f, None, vec![]);
+            assert_eq!(vm.thread_count(), 0, "{src}");
+            assert_eq!(vm.spent, 200_000, "{src}");
+        }
+    }
+
+    /// A pass stops taking steps once its threads have run
+    /// `MAX_PASS_INSTRUCTIONS`, leaving the rest due for the next pass.
+    #[test]
+    fn a_pass_stops_at_its_instruction_ceiling() {
+        let mut vm = vm_with(
+            "main() { level.ran = 0; for (n = 0; n < 200; n++) thread spin(); } \
+             spin() { wait 0.05; for (i = 0; i < 20000; i++) {} level.ran++; }",
+        );
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, f, None, vec![]);
+        let before = vm.spent;
+        vm.run_frame(&mut host, 100);
+        let pass = vm.spent - before;
+        assert!(pass >= Vm::MAX_PASS_INSTRUCTIONS, "{pass}");
+        assert!(pass < Vm::MAX_PASS_INSTRUCTIONS + 1_000_000, "{pass}");
+        assert_ne!(level_string(&mut vm, "ran"), "Int(200)");
+        for t in 1..4 {
+            vm.run_frame(&mut host, 100 + 50 * t);
+        }
+        assert_eq!(level_string(&mut vm, "ran"), "Int(200)");
     }
 
     /// An `endon` registered earlier in a step must be visible to a notify
@@ -2065,20 +2112,18 @@ later() { wait 0.05; return 9; }"#;
 
     /// A builtin that spawns a thread whose first act is the same builtin is
     /// a spawn bomb reached through `Cx::spawn` rather than a `thread`
-    /// statement; `MAX_SPAWN_DEPTH` has to bound that path too, leaving a
-    /// warning and a runnable thread instead of overflowing the native
+    /// statement; the frame cap bounds that path too, refusing the spawn at
+    /// the cap with a stack overflow instead of overflowing the native
     /// stack.
     #[test]
-    fn a_builtin_spawn_bomb_hits_the_depth_guard() {
+    fn a_builtin_spawn_bomb_stops_at_the_frame_cap() {
         let mut vm = vm_with("main() { level again(); } bomb() { level again(); }");
         let mut host = SpawnHost::default();
         let main = vm.func_ref("test/script", "main");
         vm.start_thread(&mut host, main, None, vec![]);
-        assert!(
-            vm.thread_count() > 0,
-            "the capped spawn is left runnable for the next pass"
-        );
-        assert_eq!(vm.abort_count(), 0, "nothing errored on the way down");
+        assert_eq!(vm.thread_count(), 0);
+        assert_eq!(vm.abort_count(), 1);
+        assert_eq!(vm.aborts()[0].kind, crate::vm::ErrorKind::StackOverflow);
     }
 
     /// A `FuncRef` no installed function answers is a recorded abort naming

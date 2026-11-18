@@ -215,6 +215,9 @@ pub enum ErrorKind {
     BadType(&'static str),
     /// Per-frame instruction cap (`Vm::budget`).
     Budget,
+    /// A call or a thread past `interp::MAX_FRAMES` frames: retail's
+    /// `script stack overflow (too many embedded function calls)`.
+    StackOverflow,
     /// A `wait` or `waittill` reached inside `call_now`.
     SuspendedInImmediateCall,
     Custom(String),
@@ -225,8 +228,8 @@ pub enum ErrorKind {
 
 impl ErrorKind {
     /// Whether retail below `developer 1` runs on past it: every error but
-    /// vcod's own (a builtin it lacks, the instruction cap, a wait inside
-    /// `call_now`), which stand for retail's terminal ones.
+    /// vcod's own (a builtin it lacks, the instruction cap, the frame cap, a
+    /// wait inside `call_now`), which stand for retail's terminal ones.
     pub fn recoverable(&self) -> bool {
         matches!(self, ErrorKind::BadType(_) | ErrorKind::Custom(_))
     }
@@ -609,21 +612,27 @@ pub struct Vm {
     next_seq: u64,
     /// Instructions a thread may run in one scheduling step before it is
     /// aborted with `ErrorKind::Budget`. Every instruction counts against
-    /// it, `Call`/`CallPtr` included, so unbounded recursion is caught the
-    /// same as an unbounded loop.
+    /// it, `Call`/`CallPtr` included, and so does every instruction of the
+    /// threads it spawns and runs mid-step (`pool`). The heaviest stock
+    /// step, a CoD4 map's load with the threads it starts, runs 394,000.
     budget: u32,
+    /// What the step running a thread call or a builtin's spawns has left,
+    /// for the spawned thread's immediate run to draw on and hand back.
+    pool: Option<u32>,
+    /// Instructions the outermost steps have run, for a pass's ceiling
+    /// (`sched::MAX_PASS_INSTRUCTIONS`).
+    spent: u64,
+    /// The frames of the threads under the running one on the native
+    /// stack, each waiting on a thread it spawned to suspend. Retail's one
+    /// script call stack holds them all (`interp::MAX_FRAMES`).
+    outer_frames: u32,
     /// The script clock every `wait` counts from (`Vm::time`): the last
     /// frame's `level.time` between frames, a thread's own due time while
     /// `run_frame` walks it forward. Only `set_time` and `run_frame` move it.
     now_ms: i32,
     /// How many `spawn` calls are currently nested on the native Rust
     /// stack (a thread whose immediate run itself spawns a thread, whose
-    /// immediate run spawns another, ...). `budget` bounds a single
-    /// thread's own instructions, including its `Call`s, but not this: a
-    /// `Call` only grows `Frame`s on a `Vec`, while a nested `spawn` grows
-    /// the native call stack (`spawn` -> `step_thread` -> `step_frames` ->
-    /// `spawn` -> ...), which overflows long before any instruction
-    /// budget would. See `spawn`'s `MAX_SPAWN_DEPTH` check.
+    /// immediate run spawns another, ...); `outer_frames` bounds it.
     spawn_depth: u32,
     /// The threads that have died of an error, in the order they died, up
     /// to `MAX_RECORDED_ABORTS`; with `recover_errors` on, every runtime
@@ -713,6 +722,9 @@ impl Vm {
             next_thread: 0,
             next_seq: 0,
             budget: 1_000_000,
+            pool: None,
+            spent: 0,
+            outer_frames: 0,
             now_ms: 0,
             spawn_depth: 0,
             aborts: Vec::new(),
@@ -1289,6 +1301,33 @@ pub(crate) mod tests {
         vm.call_now(&mut host, main, None, vec![])
             .expect_err("expected a runtime error")
             .kind
+    }
+
+    /// `s = s + s` stops at `MAX_STRING_LEN` with a script error, in both
+    /// error modes, the interner holding kilobytes rather than gigabytes.
+    #[test]
+    fn a_doubling_string_stops_at_the_length_cap() {
+        for recover in [false, true] {
+            let src = r#"main() { s = "x"; for (;;) s = s + s; }"#;
+            let ast = crate::parse::parse_file(src).unwrap();
+            let mut vm = Vm::new();
+            let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+            vm.install(fns).unwrap();
+            vm.set_recover_errors(recover);
+            let main = vm.func_ref("test/script", "main");
+            let e = vm
+                .call_now(&mut TestHost::default(), main, None, vec![])
+                .unwrap_err();
+            let want = if recover {
+                ErrorKind::Budget
+            } else {
+                ErrorKind::BadType("string too long")
+            };
+            assert_eq!(e.kind, want);
+            let texts = || vm.interner().texts();
+            assert!(texts().all(|t| t.len() <= interp::MAX_STRING_LEN));
+            assert!(texts().map(str::len).sum::<usize>() < 64 * 1024);
+        }
     }
 
     #[test]

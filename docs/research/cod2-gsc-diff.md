@@ -560,6 +560,58 @@ unresolved (`UNKNOWN` lines: none in MP), so `abs`, `array_levelthread`,
 ...) the MP table lacks. No stock script trips vcod's definite-assignment
 pass or the `not an lvalue` rule.
 
+### 3.7 VM limits: the call stack, the loop check, string length
+
+Read off `cod2_lnxded` 1.3's disassembly (`objdump -d`; addresses are the
+binary's own).
+
+- VERIFIED: every script-call arm of the op loop (0x8081128, 0x8081194,
+  0x8081231, 0x80812ac, 0x808133c, 0x80813d7, 0x808149b, 0x8081545) does
+  `cmpl $0x1e,0x83d8a88` and on `jg` pushes 0x8145000, `script stack
+  overflow (too many embedded function calls)`, to the error call at
+  0x80853fc.
+- VERIFIED: 0x83d8a88 is incremented at 0x80820ec, 0x8082c1e and
+  0x8082c80, each beside `addl $0x18,0x83d8a8c`, and decremented at
+  0x8080203, 0x80802a7, 0x80821c0, 0x8082b34 and 0x8082b94. The init at
+  0x807fe8a stores 0 into 0x83d8a88, 0x83d8aa0 into 0x83d8a8c and 0x83d8da0
+  into 0x83d8a90.
+- INFERRED, from the init and the stride: 0x83d8a88 counts the frames in
+  flight on one 0x18-byte frame stack of 32 entries (0x83d8aa0 to
+  0x83d8da0), and a call is refused once 31 are in use. The increments at
+  0x8082c1e and 0x8082c80 sit at a thread's entry, so a thread a running
+  one starts with `thread` counts its spawner's frames too.
+- VERIFIED: the loop check at 0x8081759 calls 0x80d5d98, subtracts
+  0x83dce9c and compares against 0x9c3; past it, the warning 0x8145060
+  (`script runtime warning: potential infinite loop in script.`) when
+  0x83dce94 is set, the error 0x81450a0 (`script runtime error: potential
+  infinite loop in script - killing thread.`) when 0x83d8a95 is clear.
+  0x8085628 stores 0x80d5d98's answer into 0x83dce9c and is called at
+  0x8080f83, 0x80817ce, 0x8081808 and 0x8082d7a among others. INFERRED:
+  0x80d5d98 is the millisecond clock, so the check is 2.5 s of wall time
+  since the run last resumed, as 1.1's (cod11-gsc-language.md, "The script
+  clock").
+- VERIFIED: `string too long` (0x815c0ee) is pushed only from one
+  function's 0x3ff-byte copy loop (0x81144a9..0x81146e3). INFERRED: that
+  function is a builtin copying a substring, not the VM's `+`; no length
+  limit on a concatenated string was found.
+
+vcod (all three games):
+
+- A call or a `thread` call with 31 frames in flight, the thread's own and
+  those of every thread under it on the native stack, ends the thread with
+  `ErrorKind::StackOverflow` (`interp::MAX_FRAMES`). Stock scripts reach 12,
+  every CoD4 map's load included.
+- A step's instruction budget (`Vm::budget`, 1,000,000) covers the threads
+  it spawns and runs mid-step: each draws on what its spawner has left and
+  hands back what it did not use. The heaviest stock step, a CoD4 map's
+  load with the threads it starts, runs 394,000. A pass stops taking steps
+  past `MAX_PASS_INSTRUCTIONS` (10,000,000; the heaviest stock pass runs
+  1.43 million) or `MAX_THREADS_PER_FRAME`, and the clock stays where the
+  walk stopped so the next pass runs what was left. Retail has neither
+  ceiling; a count, not wall time, keeps the replays deterministic.
+- A concatenation past 8192 bytes is a script error (`string too long`,
+  `interp::MAX_STRING_LEN`); stock scripts build at most 138.
+
 ## 4. Callbacks, engine notifies, script loading
 
 ### 4.1 CodeCallbacks

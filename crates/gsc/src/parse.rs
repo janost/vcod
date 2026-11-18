@@ -32,10 +32,18 @@ fn keyword_text(tok: &Tok) -> Option<&'static str> {
     })
 }
 
+/// How deep the tree may nest: statements in statements, operands in
+/// operators, and a chain of binary operators or postfixes one level a
+/// link. The parser and every pass over its tree recurse once a level, so
+/// this bounds their native stack. Stock scripts reach 37 (CoD2 and CoD4).
+pub const MAX_DEPTH: u32 = 256;
+
 pub struct Parser<'a> {
     t: &'a [Spanned],
     i: usize,
     dialect: Dialect,
+    /// The nesting [`MAX_DEPTH`] bounds, where the parse now is.
+    depth: u32,
 }
 
 impl<'a> Parser<'a> {
@@ -44,7 +52,12 @@ impl<'a> Parser<'a> {
     }
 
     pub fn with_dialect(t: &'a [Spanned], dialect: Dialect) -> Self {
-        Parser { t, i: 0, dialect }
+        Parser {
+            t,
+            i: 0,
+            dialect,
+            depth: 0,
+        }
     }
 
     fn peek(&self) -> &Tok {
@@ -89,6 +102,20 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// One level deeper, failing past [`MAX_DEPTH`]. A parse error ends the
+    /// parse, so only a successful path needs the matching [`Self::leave`].
+    fn enter(&mut self) -> Result<(), ParseError> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(self.err(&format!("nested past {MAX_DEPTH} levels")));
+        }
+        Ok(())
+    }
+
+    fn leave(&mut self, levels: u32) {
+        self.depth -= levels;
+    }
+
     fn ident_name(&mut self) -> Result<String, ParseError> {
         match self.peek().clone() {
             Tok::Ident(s) => {
@@ -122,14 +149,18 @@ impl<'a> Parser<'a> {
     // `==`).
     fn binary(&mut self, min_prec: u8) -> Result<Expr, ParseError> {
         let mut lhs = self.unary()?;
+        let mut links = 0;
         while let Some((op, prec)) = self.peek_binop() {
             if prec < min_prec {
                 break;
             }
             self.bump();
+            self.enter()?;
+            links += 1;
             let rhs = self.binary(prec + 1)?;
             lhs = Expr::Bin(op, Box::new(lhs), Box::new(rhs));
         }
+        self.leave(links);
         Ok(lhs)
     }
 
@@ -161,6 +192,13 @@ impl<'a> Parser<'a> {
     // `!`/`-` prefix, then a cast, both binding tighter than any binary
     // operator and applying to the following unary in turn.
     fn unary(&mut self) -> Result<Expr, ParseError> {
+        self.enter()?;
+        let e = self.unary_at()?;
+        self.leave(1);
+        Ok(e)
+    }
+
+    fn unary_at(&mut self) -> Result<Expr, ParseError> {
         if self.eat(&Tok::Not) {
             return Ok(Expr::Un(UnOp::Not, Box::new(self.unary()?)));
         }
@@ -202,7 +240,15 @@ impl<'a> Parser<'a> {
     // makes that expression the receiver. A call paren never attaches to a
     // field access or an index result, only to this receiver form.
     fn postfix(&mut self, mut base: Expr) -> Result<Expr, ParseError> {
+        let mut links = 0;
         loop {
+            if matches!(
+                self.peek(),
+                Tok::Dot | Tok::LBracket | Tok::Thread | Tok::Ident(_)
+            ) {
+                self.enter()?;
+                links += 1;
+            }
             match self.peek().clone() {
                 Tok::Dot => {
                     self.bump();
@@ -236,6 +282,7 @@ impl<'a> Parser<'a> {
                 _ => break,
             }
         }
+        self.leave(links);
         Ok(base)
     }
 
@@ -547,6 +594,13 @@ impl<'a> Parser<'a> {
     // block has no `Stmt` variant of its own, so it flattens into its
     // contained statements; a bare `;` produces none.
     fn statement(&mut self) -> Result<Vec<Stmt>, ParseError> {
+        self.enter()?;
+        let stmts = self.statement_at()?;
+        self.leave(1);
+        Ok(stmts)
+    }
+
+    fn statement_at(&mut self) -> Result<Vec<Stmt>, ParseError> {
         match self.peek().clone() {
             Tok::LBrace => self.block(),
             Tok::Semi => {
@@ -1095,6 +1149,47 @@ mod tests {
 
     fn file(src: &str) -> File {
         parse_file(src).unwrap()
+    }
+
+    /// Nesting and chains past [`MAX_DEPTH`] are a parse error, not a
+    /// native stack overflow: 100,000 parens, `!`s, blocks, `if`s, a sum's
+    /// terms and a field chain.
+    #[test]
+    fn nesting_past_the_cap_is_a_parse_error() {
+        let n = 100_000;
+        let cases = [
+            format!("f() {{ x = {}1{}; }}", "(".repeat(n), ")".repeat(n)),
+            format!("f() {{ x = {}1; }}", "!".repeat(n)),
+            format!("f() {{ {}{} }}", "{".repeat(n), "}".repeat(n)),
+            format!("f() {{ {} x = 1; }}", "if (1) ".repeat(n)),
+            format!("f() {{ x = 1{}; }}", "+1".repeat(n)),
+            format!("f() {{ x = a{}; }}", ".b".repeat(n)),
+        ];
+        for src in &cases {
+            let e = parse_file(src).unwrap_err();
+            assert!(e.msg.contains("nested past"), "{}", e.msg);
+        }
+    }
+
+    /// A tree just under the cap parses and compiles, CoD2's
+    /// definite-assignment pass included, on a test thread's stack.
+    #[test]
+    fn nesting_under_the_cap_compiles() {
+        let n = MAX_DEPTH as usize - 8;
+        let cases = [
+            format!("f() {{ x = {}1{}; }}", "(".repeat(n), ")".repeat(n)),
+            format!("f() {{ x = 1{}; }}", "+1".repeat(n)),
+            format!("f() {{ {} x = 1; }}", "if (1) ".repeat(n)),
+        ];
+        for src in &cases {
+            let ast = parse_file_dialect(src, Dialect::Cod2).unwrap();
+            let mut interner = crate::atom::Interner::default();
+            let opts = crate::compile::CompileOptions {
+                dialect: Dialect::Cod2,
+                ..Default::default()
+            };
+            crate::compile::compile_file_with(&ast, "t", &mut interner, &opts).unwrap();
+        }
     }
 
     #[test]
