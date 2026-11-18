@@ -216,7 +216,7 @@ wait "$cp" 2> /dev/null
 kill $kp "$spid" 2> /dev/null
 wait $kp "$spid" 2> /dev/null
 if [[ $SWEEP == 1 ]]; then
-	python3 "$HERE/cod4_perf.py" --sweep "$OUT/profile.txt" | tee "$OUT/sweep.tsv"
+	python3 -I "$HERE/cod4_perf.py" --sweep "$OUT/profile.txt" | tee "$OUT/sweep.tsv"
 else
-	python3 "$HERE/cod4_perf.py" --skip-secs "${SKIP_SECS:-10}" "$OUT/profile.txt"
+	python3 -I "$HERE/cod4_perf.py" --skip-secs "${SKIP_SECS:-10}" "$OUT/profile.txt"
 fi
