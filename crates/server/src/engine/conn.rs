@@ -1,8 +1,10 @@
 //! What CoD2's and CoD4's servers do alike between a datagram and the
 //! level, over their [`Conn`] slots: the netchan's packet acceptance, the
 //! command sequence, the reliable ring, the message pacing and its
-//! fragments, the script's commands out to their clients and the console
-//! queue. Both retail engines run these routines line for line alike at
+//! fragments, the snapshot's delta, the script's commands out to their
+//! clients, the console queue, `getinfo`, `getstatus`, rcon, `connect` up
+//! to `ClientConnect`, the console arms both share and the voice queue.
+//! Both retail engines run these routines line for line alike at
 //! their own addresses (cod2-protocol.md 2, 3.4, 17; cod4-handshake.md 3,
 //! 15); what differs is a [`ConnGame`] hook. CoD1's server keeps its own.
 
