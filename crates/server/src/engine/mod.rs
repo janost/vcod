@@ -10,6 +10,7 @@ pub mod bans;
 pub mod challenge;
 pub mod commands;
 pub mod conn;
+pub mod contain;
 pub mod core;
 pub mod game;
 pub mod gamelog;

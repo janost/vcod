@@ -187,13 +187,12 @@ impl Pool {
         while s.busy.load(Ordering::SeqCst) > 0 {
             std::hint::spin_loop();
         }
+        // Taken before a re-raise, so a caught panic leaves the next run clean.
+        let worker = s.panicked.swap(false, Ordering::Relaxed);
         if let Err(e) = here {
             std::panic::resume_unwind(e);
         }
-        assert!(
-            !s.panicked.swap(false, Ordering::Relaxed),
-            "a bots' worker panicked"
-        );
+        assert!(!worker, "a bots' worker panicked");
     }
 }
 
@@ -226,7 +225,9 @@ impl PoolState {
                 // the count drains, which this worker's leaving comes
                 // after.
                 let job = unsafe { *self.job.load(Ordering::Acquire).cast::<JobRef>() };
-                let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).is_ok();
+                let ok = crate::engine::contain::caught_scope(|| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).is_ok()
+                });
                 self.panicked.fetch_or(!ok, Ordering::Relaxed);
             }
             self.busy.fetch_sub(1, Ordering::SeqCst);

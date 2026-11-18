@@ -142,6 +142,16 @@ pub fn slot_of<F, X>(core: &EngineCore<Conn<F, X>>, from: SocketAddr, qport: u16
     })
 }
 
+/// The slot a netchan packet from `from` is for, by its qport.
+pub fn sender_slot<F, X>(
+    core: &EngineCore<Conn<F, X>>,
+    from: SocketAddr,
+    pkt: &[u8],
+) -> Option<usize> {
+    let q = pkt.get(4..6)?;
+    slot_of(core, from, u16::from_le_bytes([q[0], q[1]]))
+}
+
 /// `SV_PacketEvent`'s slot by address and qport and `Netchan_Process`,
 /// the acknowledges checked: a negative `messageAcknowledge` is dropped
 /// (cod2-protocol.md 2.2). So is one of a message never sent, and a

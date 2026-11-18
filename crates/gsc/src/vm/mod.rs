@@ -224,6 +224,42 @@ pub enum ErrorKind {
     /// The host's `G_Error` inside a builtin: the thread dies, the pass
     /// ends there, and the host drops the level.
     GameError(&'static str),
+    /// A builtin panicked, with the panic's text, under
+    /// [`contain_builtin_panics`]: the thread dies; what the builtin had
+    /// done before the panic stands.
+    Panic(String),
+}
+
+thread_local! {
+    static CONTAIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Turns a builtin's panic on this thread into [`ErrorKind::Panic`] for
+/// the thread that called it. Off by default, so a test sees the panic.
+pub fn contain_builtin_panics(on: bool) {
+    CONTAIN.set(on);
+}
+
+/// `host.builtin`, its panic caught under [`contain_builtin_panics`].
+pub(crate) fn call_builtin(
+    host: &mut dyn Host,
+    cx: &mut Cx,
+    name: Atom,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    if !CONTAIN.get() {
+        return host.builtin(cx, name, recv, args);
+    }
+    let call = std::panic::AssertUnwindSafe(|| host.builtin(cx, name, recv, args));
+    std::panic::catch_unwind(call).unwrap_or_else(|p| {
+        let text = p
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| p.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "a non-text panic".into());
+        Err(ErrorKind::Panic(text))
+    })
 }
 
 impl ErrorKind {
@@ -1259,6 +1295,7 @@ pub(crate) mod tests {
                     _ => Err(ErrorKind::BadType("double wants an int")),
                 },
                 "isdefined" => Ok(Value::Int((args[0] != Value::Undefined) as i32)),
+                "boom" => panic!("boom"),
                 _ => Ok(Value::Undefined),
             }
         }

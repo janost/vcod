@@ -1242,6 +1242,45 @@ mod tests {
         assert_eq!(vm.thread_count(), 0, "aborted, not left runnable");
     }
 
+    /// Under `contain_builtin_panics` a builtin's panic ends the thread
+    /// that called it as a runtime error, in both error modes; a thread
+    /// beside it runs on, this frame and the next.
+    #[test]
+    fn a_panicking_builtin_ends_only_its_thread() {
+        for recover in [false, true] {
+            let mut vm = vm_with(
+                r#"main() { wait 0; boom(); mark("after"); }
+                other() { wait 0; mark("b"); wait 0.05; mark("b2"); }"#,
+            );
+            vm.set_recover_errors(recover);
+            crate::vm::contain_builtin_panics(true);
+            let mut host = TestHost::default();
+            for f in ["main", "other"] {
+                let f = vm.func_ref("test/script", f);
+                vm.start_thread(&mut host, f, None, vec![]);
+            }
+            let errs = vm.run_frame(&mut host, 0);
+            assert_eq!(errs.len(), 1, "{errs:?}");
+            assert_eq!(errs[0].kind, ErrorKind::Panic("boom".into()));
+            assert_eq!(vm.thread_count(), 1, "only the panicking thread ended");
+            assert!(vm.run_frame(&mut host, 50).is_empty());
+            assert!(vm.run_frame(&mut host, 100).is_empty());
+            crate::vm::contain_builtin_panics(false);
+            let marks: Vec<Value> = host
+                .calls
+                .iter()
+                .filter(|(n, _)| n == "mark")
+                .map(|(_, a)| a[0])
+                .collect();
+            let text = |v: &Value| match v {
+                Value::String(a) => vm.interner().resolve(*a).to_string(),
+                v => format!("{v:?}"),
+            };
+            let marks: Vec<String> = marks.iter().map(text).collect();
+            assert_eq!(marks, ["b", "b2"], "recover {recover}");
+        }
+    }
+
     /// Plain recursion stops at the frame cap with retail's stack overflow,
     /// whatever the budget, even with a thousand locals a frame: the frames
     /// it held stay within `MAX_FRAMES`. `main`'s leading `wait 0;` is the
