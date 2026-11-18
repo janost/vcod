@@ -1719,10 +1719,17 @@ struct FogState {
     from: FogLive,
     /// target params, transition start (frame seconds), duration (s)
     target: Option<(FogParams, f32, f32)>,
+    /// The last fog asked for: CoD1's frame sets it every frame, and only a
+    /// new one starts a fade.
+    asked: Option<FogParams>,
 }
 
 impl FogState {
     fn set_target(&mut self, p: FogParams, now: f32) {
+        if self.set && self.asked == Some(p) {
+            return;
+        }
+        self.asked = Some(p);
         // No fade, first fog, or a mode change snaps like retail.
         let snap = !self.set || p.fade_ms == 0 || self.live.linear != p.is_linear();
         self.from = self.live;
@@ -1736,6 +1743,7 @@ impl FogState {
     fn clear(&mut self) {
         self.set = false;
         self.target = None;
+        self.asked = None;
     }
 
     fn finish(&mut self) {
@@ -1771,6 +1779,42 @@ impl FogState {
         if k >= 1.0 {
             self.target = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod fog_state_tests {
+    use super::*;
+
+    fn fog(far: f32, fade_ms: u32) -> FogParams {
+        FogParams {
+            near: 0.0,
+            far,
+            density: 1.0,
+            color: [0.5; 3],
+            fade_ms,
+            start: 0.0,
+        }
+    }
+
+    /// CoD1's frame asks for the same fog every frame: the fade still runs
+    /// to its end, and the repeat starts no new one.
+    #[test]
+    fn a_fog_asked_for_every_frame_fades_to_its_end() {
+        let mut f = FogState::default();
+        f.set_target(fog(1000.0, 0), 0.0);
+        f.advance(0.0);
+        let to = fog(2000.0, 500);
+        for i in 1..=40 {
+            let t = i as f32 * 0.016;
+            f.set_target(to, t);
+            f.advance(t);
+        }
+        assert_eq!(f.live.far, 2000.0);
+        assert!(f.target.is_none());
+        f.set_target(to, 1.0);
+        f.advance(1.0);
+        assert!(f.target.is_none());
     }
 }
 
@@ -10092,10 +10136,21 @@ impl Renderer {
                     )
                 })
                 .flatten();
+            // A CoD4 shellshock's capture and blends run single-sampled
+            // with no depth, as the CoD1 and CoD2 one does.
+            let cod4_screen = matches!(
+                cod4_shock,
+                Some(
+                    crate::play::cod4_shock::Screen::Save
+                        | crate::play::cod4_shock::Screen::Blur { .. }
+                        | crate::play::cod4_shock::Screen::Flash { .. }
+                )
+            );
             let after = bloom
                 || shafts
                 || post
                 || shock.is_some()
+                || cod4_screen
                 || glow.is_some()
                 || world_blur.is_some();
             if after {
