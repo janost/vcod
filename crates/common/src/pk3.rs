@@ -388,17 +388,9 @@ pub fn is_vanilla_pak(pak: &PakInfo, t: &crate::net::wire::Transport) -> bool {
 /// A stock iwd by its qualified name (`main/iw_07`): `FS_iwIwd(name,
 /// "main")`, the same test in CoD2 1.3 (lnxded 0x8065324) and CoD4 1.7
 /// (0x81286c2), `iw_00` .. `iw_24` or `localized_*` holding `_iw00` ..
-/// `_iw24` (`vcod_cod2::net::download::fs_iw_iwd`).
+/// `_iw24`.
 pub fn is_stock_iwd(qualified: &str) -> bool {
-    let name = qualified.to_ascii_lowercase().replace('\\', "/");
-    let Some(base) = name.strip_prefix("main/") else {
-        return false;
-    };
-    if (0..25).any(|n| base == format!("iw_{n:02}")) {
-        return true;
-    }
-    base.strip_prefix("localized_")
-        .is_some_and(|rest| (0..25).any(|n| rest.contains(&format!("_iw{n:02}"))))
+    crate::pak_checksum::fs_iw_iwd(qualified, "main")
 }
 
 /// `base` and what sits under it, lowest priority first: a base other than

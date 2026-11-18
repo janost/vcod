@@ -9,26 +9,9 @@ use std::path::{Path, PathBuf};
 
 use vcod_common::net::codec::{MsgReader, MsgWriter};
 use vcod_common::net::download::{Download, MAX_DOWNLOAD_SIZE};
+pub use vcod_common::pak_checksum::fs_iw_iwd;
 
 use super::ops::Svc;
-
-/// `FS_iwIwd(name, base)` (0x8065324): `<base>/iw_00` .. `<base>/iw_24`
-/// compared whole (case and slash folded, so a name with `.iwd` never
-/// matches), or a name whose part up to `localized_` is
-/// `<base>/localized_` and whose rest holds `_iw00` .. `_iw24`.
-pub fn fs_iw_iwd(name: &str, base: &str) -> bool {
-    let fold = |s: &str| s.to_ascii_lowercase().replace('\\', "/");
-    let name = fold(name);
-    let base = fold(base);
-    if (0..25).any(|n| name == format!("{base}/iw_{n:02}")) {
-        return true;
-    }
-    let Some(at) = name.find("localized_") else {
-        return false;
-    };
-    let (head, rest) = name.split_at(at + "localized_".len());
-    head == format!("{base}/localized_") && (0..25).any(|n| rest.contains(&format!("_iw{n:02}")))
-}
 
 /// `FS_svrIwd` (0x8065450): a name holding `_svr_`, any case.
 pub fn fs_svr_iwd(name: &str) -> bool {
