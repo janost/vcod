@@ -58,12 +58,72 @@ impl log::Log for Tee {
     }
 }
 
-/// env_logger as before (`RUST_LOG`, default `info`), teed into the console.
+/// env_logger as before (`RUST_LOG`, default `info`), its message's
+/// control characters escaped: server text reaches the log.
+fn builder() -> env_logger::Builder {
+    let mut b = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    let fmt = env_logger::fmt::ConfigurableFormat::default();
+    b.format(move |buf, r| {
+        let text = r.args().to_string();
+        let text = vcod_common::text::escape_controls(&text);
+        fmt.format(
+            buf,
+            &log::Record::builder()
+                .level(r.level())
+                .target(r.target())
+                .module_path(r.module_path())
+                .file(r.file())
+                .line(r.line())
+                .args(format_args!("{text}"))
+                .build(),
+        )
+    });
+    b
+}
+
+/// [`builder`]'s logger, teed into the console.
 pub fn init() {
-    let logger =
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).build();
+    let logger = builder().build();
     let max = logger.filter();
     if log::set_boxed_logger(Box::new(Tee(logger))).is_ok() {
         log::set_max_level(max);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct Sink(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_server_string_with_esc_reaches_the_terminal_escaped() {
+        let sink = Sink::default();
+        let mut b = super::builder();
+        b.filter_level(log::LevelFilter::Info)
+            .write_style(env_logger::WriteStyle::Never)
+            .target(env_logger::Target::Pipe(Box::new(sink.clone())));
+        log::Log::log(
+            &b.build(),
+            &log::Record::builder()
+                .level(log::Level::Error)
+                .args(format_args!("redirect to \x1b[2Jhttp://x/\rforged"))
+                .build(),
+        );
+        let term = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+        assert!(!term.contains('\x1b') && !term.contains('\r'), "{term:?}");
+        assert!(term.contains("\\x1b[2Jhttp://x/\\x0dforged"), "{term:?}");
     }
 }

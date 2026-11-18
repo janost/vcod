@@ -21,6 +21,7 @@ pub mod engine;
 pub mod follow;
 pub mod game;
 pub mod items;
+pub mod logfmt;
 pub mod master;
 pub mod nav;
 pub mod push;
