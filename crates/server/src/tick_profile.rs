@@ -14,6 +14,10 @@ use std::time::{Duration, Instant};
 /// Set once any thread enables a profile; never cleared.
 static ON: AtomicBool = AtomicBool::new(false);
 
+/// Phases count user-space instructions instead of wall time, one
+/// instruction a nanosecond of their `Duration` ([`enable_insns`]).
+static INSNS: AtomicBool = AtomicBool::new(false);
+
 /// A phase's name, time and how many times it ran.
 pub type PhaseTime = (&'static str, Duration, u32);
 
@@ -25,6 +29,15 @@ thread_local! {
 pub fn enable() {
     PHASES.with(|p| *p.borrow_mut() = Some(Vec::new()));
     ON.store(true, Ordering::Relaxed);
+}
+
+/// [`enable`], with every phase (on any thread) counting the
+/// instructions its thread retired in it instead of its wall time: a
+/// `Duration` of 1 ns is one instruction. On a loaded machine the count
+/// moves far less than the time.
+pub fn enable_insns() {
+    INSNS.store(true, Ordering::Relaxed);
+    enable();
 }
 
 /// The phases since the last call, in first-finished order: name, time,
@@ -294,7 +307,31 @@ impl Watch {
 }
 
 /// Times its scope into `name` when this thread profiles.
-pub struct Phase(Option<(&'static str, Instant)>);
+pub struct Phase(Option<(&'static str, Start)>);
+
+#[derive(Clone, Copy)]
+enum Start {
+    Wall(Instant),
+    Insns(u64),
+}
+
+impl Start {
+    fn now() -> Start {
+        match INSNS.load(Ordering::Relaxed).then(instructions).flatten() {
+            Some(n) => Start::Insns(n),
+            None => Start::Wall(Instant::now()),
+        }
+    }
+
+    fn elapsed(self) -> Duration {
+        match self {
+            Start::Wall(t0) => t0.elapsed(),
+            Start::Insns(n0) => {
+                Duration::from_nanos(instructions().map_or(0, |n| n.saturating_sub(n0)))
+            }
+        }
+    }
+}
 
 impl Drop for Phase {
     fn drop(&mut self) {
@@ -321,7 +358,7 @@ pub fn phase(name: &'static str) -> Phase {
     if !ON.load(Ordering::Relaxed) {
         return Phase(None);
     }
-    Phase(enabled().then(|| (name, Instant::now())))
+    Phase(enabled().then(|| (name, Start::now())))
 }
 
 #[cold]
