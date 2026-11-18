@@ -244,8 +244,9 @@ impl LightGrid {
         let (ra, ca) = (self.row_axis, self.col_axis);
         // floored to an int, then shifted arithmetically
         let shift = [5, 5, 6];
-        let cell: [u32; 3] =
-            std::array::from_fn(|k| ((p[k].floor() as i32 + 0x20000) >> shift[k]) as u32);
+        let cell: [u32; 3] = std::array::from_fn(|k| {
+            ((p[k].floor() as i32).wrapping_add(0x20000) >> shift[k]) as u32
+        });
         let unit = |k: usize| if k == 2 { 0.015625 } else { 0.03125 };
         let frac = [ra, ca, 2].map(|k| (p[k] - GRID_ORIGIN) * unit(k) - cell[k] as f32);
         let near = |c: usize, bit: usize, f: f32| if c & bit != 0 { f } else { 1.0 - f };
@@ -253,7 +254,7 @@ impl LightGrid {
             near(c, ROW_BIT, frac[0]) * (near(c, COL_BIT, frac[1]) * near(c, UP_BIT, frac[2]))
         });
         let mut over = cell;
-        over[ra] += 1;
+        over[ra] = over[ra].wrapping_add(1);
         let quads = [self.quad(cell), self.quad(over)];
 
         let mut out = Lookup {
@@ -584,6 +585,16 @@ mod tests {
 
     /// Three samples at weights 0.5, 0.3 and 0.2 blend in 256ths as the
     /// fixed point does: 128, 77 and 51 sum to 256.
+    /// An origin past the grid's 32-bit cell math wraps as 1.7's adds do
+    /// instead of overflowing (BUG-150).
+    #[test]
+    fn a_far_origin_looks_up_without_an_overflow() {
+        let g = LightGrid::default();
+        for p in [[3e9, 0.0, 0.0], [-131_090.0, 0.0, 0.0], [0.0, -3e9, 1e10]] {
+            let _ = g.lookup(p, &|_, _| false);
+        }
+    }
+
     #[test]
     fn blend_rounds_in_fixed_point() {
         let g = LightGrid {
