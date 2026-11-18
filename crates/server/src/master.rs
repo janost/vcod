@@ -28,6 +28,8 @@ pub const DEFAULT_MASTER: Master = COD1_MASTER;
 pub const HEARTBEAT_GAME: &str = "COD-1";
 /// CoD2's `SV_MasterHeartbeat("COD-2")` (cod2_lnxded 0x8096ed6).
 pub const HEARTBEAT_GAME_COD2: &str = "COD-2";
+/// CoD4's `SV_MasterHeartbeat("COD-4")` (cod4_lnxded 0x81780e4).
+pub const HEARTBEAT_GAME_COD4: &str = "COD-4";
 pub const FLATLINE: &str = "flatline";
 pub const MAX_MASTERS: usize = 5;
 

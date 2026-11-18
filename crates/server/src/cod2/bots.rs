@@ -118,7 +118,7 @@ impl Cod2Server {
             return;
         };
         for (slot, c) in self.core.clients.iter_mut().enumerate() {
-            let Some(c) = c.as_mut().filter(|c| c.test) else {
+            let Some(c) = c.as_mut().filter(|c| c.extra.test) else {
                 continue;
             };
             let Some(cmd) = level.test_client_cmd(slot) else {

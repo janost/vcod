@@ -108,8 +108,15 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     `engine::answer_status` (the `getinfo`/`getstatus` reply).
   - `core.rs` `EngineCore`, the engine state each game embeds as `core`.
   - `slot.rs` `Link`, a client slot's connection half, each client struct's
-    `link`. `commands.rs` CoD2's and CoD4's server-command queue
+    `link`; `Conn`, the whole CoD2 and CoD4 slot, the game's half its
+    `extra`. `commands.rs` CoD2's and CoD4's server-command queue
     (`SV_AddServerCommand`); CoD1's is `Client::queue_server_command`.
+  - `conn.rs` what CoD2 and CoD4 run alike between a datagram and the
+    level, over `ConnGame`'s hooks: packet acceptance, the command
+    sequence, the reliable ring, pacing and fragments, the snapshot's
+    delta, the script's commands out, `getinfo`, `getstatus`, rcon,
+    `connect` up to `ClientConnect`, the shared console arms, voice
+    queueing.
   - `link.rs` the LAN test, rates, pacing, ping. `archive.rs` the killcam
     ring. `rotation.rs` `map_rotate`'s walk. `challenge.rs` the challenge
     table. `ratelimit.rs` the query limiter. `bans.rs` `ban.txt` and the temporary bans. `gamelog.rs`

@@ -1,13 +1,16 @@
-//! A client slot's connection half, the `client_t` fields both servers
+//! A client slot's connection half, the `client_t` fields the servers
 //! keep under the same rules: the netchan and the reliable rings' acks,
 //! the frames a delta is taken from, the ping ring, the message pacing and
-//! its fragments, and the timeout clock. Each game's client struct embeds
-//! one as `link`; its state machine, rates, downloads and game half stay
-//! its own.
+//! its fragments, and the timeout clock ([`Link`]). Each game's client
+//! embeds one as `link`. CoD2 and CoD4 share the rest of the slot too
+//! ([`Conn`]): the state machine, the gamestate and delta marks, the pure
+//! verdict, the rates and the voice; CoD1's client keeps its own.
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
-use vcod_common::net::netchan::ServerNetchan;
+use vcod_common::net::netchan::{NetchanParams, ServerNetchan};
+
+use super::link::Rates;
 
 /// `PACKET_BACKUP`, the same 32 on every game: the frame and ping rings.
 pub const PACKET_BACKUP: usize = 32;
@@ -98,5 +101,85 @@ impl<F> Link<F> {
         let seq = i64::from(self.netchan.reliable_sequence);
         let ack = i64::from(ack);
         (0..=seq).contains(&ack) && seq - ack < self.netchan.reliable.len() as i64
+    }
+}
+
+/// `MAX_RELIABLE_COMMANDS` of CoD2's and CoD4's netchan: the reliable
+/// rings' length.
+pub const RELIABLE_COMMANDS: usize = NetchanParams::COD2.reliable_commands;
+
+/// A CoD2 or CoD4 slot's `clientState_t`, in order: a zombie is below
+/// every live state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum State {
+    /// `CS_ZOMBIE`: dropped, still sent its last commands until
+    /// `sv_zombietime` passes without a packet.
+    Zombie,
+    /// `connectResponse` sent; bare messages until the client asks (CoD4:
+    /// the stats come in).
+    Connected,
+    /// The gamestate sent, not yet in the world (`CS_PRIMED`, CoD4's
+    /// `CS_CLIENTLOADING`).
+    Primed,
+    Active,
+}
+
+/// A CoD2 or CoD4 client slot: the connection both engines keep alike,
+/// `extra` the game's own half. `F` is the game's sent frame.
+pub struct Conn<F, X> {
+    pub link: Link<F>,
+    pub state: State,
+    /// The message the gamestate went in; an older acknowledge is ignored.
+    pub gamestate_message: i32,
+    /// The frame the client's last `clc_move` acknowledged, -1 for none.
+    pub delta_message: i32,
+    /// `lastUsercmd.serverTime`: a cmd at or before it is not thought again.
+    pub last_cmd_time: i32,
+    /// `pureAuthentic`, `SV_VerifyIwds_f`'s verdict: `None` until a `cp`.
+    pub pure: Option<bool>,
+    /// `SV_UserinfoChanged`'s rate, snapshot interval and www flag.
+    pub rates: Rates,
+    /// `Sys_IsLANAddress` of the address: its messages go out every frame.
+    pub lan: bool,
+    /// One of vcod's bots or a test client: no address, no messages.
+    pub bot: bool,
+    /// `lastConnectTime`, on `svs.time`.
+    pub last_connect_ms: i32,
+    /// Each reliable ring slot's type: false for type 0
+    /// (`SV_CMD_CAN_IGNORE`), the commands a client not ready loses
+    /// ([`super::commands::add`]).
+    pub reliable_kept: [bool; RELIABLE_COMMANDS],
+    /// Voice chat: the frames queued for the client this frame, its mute
+    /// list and `sendVoice`.
+    pub voice: crate::voice::ClientVoice,
+    pub extra: X,
+}
+
+impl<F, X> Conn<F, X> {
+    /// A client `connectResponse` just went to at `svs_ms`: nothing sent
+    /// or acknowledged, not pure yet.
+    pub fn connected(
+        link: Link<F>,
+        svs_ms: i32,
+        rates: Rates,
+        lan: bool,
+        voice: crate::voice::ClientVoice,
+        extra: X,
+    ) -> Self {
+        Conn {
+            link,
+            state: State::Connected,
+            gamestate_message: -1,
+            delta_message: -1,
+            last_cmd_time: 0,
+            pure: None,
+            rates,
+            lan,
+            bot: false,
+            last_connect_ms: svs_ms,
+            reliable_kept: [true; RELIABLE_COMMANDS],
+            voice,
+            extra,
+        }
     }
 }

@@ -87,7 +87,7 @@ pub(super) fn step(sv: &mut Cod4Server, probes: &mut [Probe], now: &mut Instant)
         sv.handle_packet(p.addr, &pkt, *now);
     }
     *now += Duration::from_millis(FRAME_MS as u64);
-    sv.drain_console();
+    sv.run_console();
     sv.tick_frames(*now, 1);
     let svs = sv.core.sv_time_ms;
     for (to, pkt) in sv.take_outgoing() {
@@ -182,7 +182,7 @@ fn cod4_a_restart_vote_passes_and_restarts() {
     assert_eq!(probes[1].configstring(13), "");
     assert_eq!(sv.server_id(), id, "the command waits 3 s");
     run_ms(&mut sv, &mut probes, &mut now, 3500);
-    assert_eq!(sv.server_id(), super::cycle::restart_server_id(id));
+    assert_eq!(sv.server_id(), crate::engine::conn::restart_server_id(id));
 }
 
 /// A `map` vote that passes runs `map <name>`: a spawn, the high nibble
@@ -238,7 +238,7 @@ fn cod4_a_map_vote_keeps_a_slow_loading_client() {
     // The load: no packet either way.
     for _ in 0..15_000 / FRAME_MS {
         now += Duration::from_millis(FRAME_MS as u64);
-        sv.drain_console();
+        sv.run_console();
         sv.tick_frames(now, 1);
         sv.take_outgoing();
     }

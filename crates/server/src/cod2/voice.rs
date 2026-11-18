@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use vcod_cod2::net::voice as wire;
 
 use super::{Cod2Server, State};
-use crate::voice::{ClientVoice, Rules, Voicer, hears, session_of, team_of};
+use crate::voice::{ClientVoice, Rules, Voicer, session_of, team_of};
 
 impl Cod2Server {
     /// `SV_VoicePacket` (0x8094b56): the slot whose address and qport
@@ -57,18 +57,6 @@ impl Cod2Server {
         }
     }
 
-    /// `SV_PreGameUserVoice` (0x809c3c6): to every other client past
-    /// `CS_ZOMBIE` that has not muted the talker and wants voice, no game
-    /// rule asked.
-    fn pre_game_voice(&mut self, talker: usize, frame: &[u8]) {
-        for (n, c) in self.core.clients.iter_mut().enumerate() {
-            let Some(c) = c.as_mut() else { continue };
-            if n != talker && c.state > State::Zombie && !c.voice.muted[talker] && c.voice.send {
-                c.voice.queue(talker, frame);
-            }
-        }
-    }
-
     /// `SV_UserVoice` (0x809c2ee) into `G_BroadcastVoice` (0x80f9976): the
     /// talker's `lastVoiceTime` stamped, then each client of the level the
     /// rules pass ([`hears`]), by number.
@@ -101,20 +89,7 @@ impl Cod2Server {
                 })
             })
             .collect();
-        let Some(t) = voicers.get(talker).copied().flatten() else {
-            return;
-        };
-        for (i, l) in voicers.iter().enumerate() {
-            if let Some(l) = l
-                && hears(&rules, &t, l, i == talker)
-            {
-                self.core.clients[i]
-                    .as_mut()
-                    .unwrap()
-                    .voice
-                    .queue(talker, frame);
-            }
-        }
+        self.queue_voice(talker, frame, &rules, &voicers);
     }
 
     /// `SV_SendClientVoiceData` (0x809c0a2), after the slot's snapshot (not

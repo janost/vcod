@@ -11,22 +11,6 @@ use vcod_common::pk3::Pk3Fs;
 use super::{Cod2Server, State};
 use crate::game::cod2::{Cod2Init, Cod2Level};
 
-/// `sv_serverid` after `SV_SpawnServer` (0x8093520): the high nibble steps,
-/// and steps again past a wrap to 0, the low nibble kept. VERIFIED.
-pub fn spawn_server_id(id: i32) -> i32 {
-    let mut b = (id as u8).wrapping_add(0x10);
-    if b & 0xf0 == 0 {
-        b = b.wrapping_add(0x10);
-    }
-    i32::from(b)
-}
-
-/// `sv_serverid` after a `fast_restart` (`SV_MapRestart` 0x808be3e): the
-/// low nibble steps, the high one kept. VERIFIED.
-pub fn restart_server_id(id: i32) -> i32 {
-    ((id + 1) & 0xf) + (id & 0xf0)
-}
-
 /// What `SV_MapRotate_f` (0x808c132) does with `sv_mapRotationCurrent`
 /// (refilled from `sv_mapRotation` when empty or used up): the gametypes it
 /// sets on the way and the map it ends in, `None` for a `fast_restart`.
@@ -193,7 +177,7 @@ impl Cod2Server {
         let rigs = level.carried_rigs(self.game.fs.as_ref());
         let parts = Some(level.carried_parts());
         let configstrings = level.rt.configstrings().to_vec();
-        self.game.server_id = restart_server_id(self.game.server_id);
+        self.game.server_id = crate::engine::conn::restart_server_id(self.game.server_id);
         self.game.snap_flags ^= 4;
         self.shutdown_game_log();
         self.game.retired = self.game.level.take();
@@ -381,15 +365,6 @@ impl Cod2Server {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_server_id_steps_as_retail_s() {
-        assert_eq!(spawn_server_id(0), 16);
-        assert_eq!(spawn_server_id(17), 33);
-        assert_eq!(spawn_server_id(0xf3), 0x13);
-        assert_eq!(restart_server_id(16), 17);
-        assert_eq!(restart_server_id(0x1f), 0x10);
-    }
 
     #[test]
     fn the_rotation_walks_gametypes_to_a_map() {

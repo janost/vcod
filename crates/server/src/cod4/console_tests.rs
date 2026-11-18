@@ -506,7 +506,7 @@ fn cod4_an_unacking_client_backs_off() {
     c.delta_message = c.link.netchan.outgoing_sequence as i32 - 28;
     sv.transmit(0, Vec::new());
     let c = sv.core.clients[0].as_ref().unwrap();
-    assert_eq!((c.link.next_message_ms, c.stall_exp), (svs - 1, 0));
+    assert_eq!((c.link.next_message_ms, c.extra.stall_exp), (svs - 1, 0));
     let msec = c.rates.snapshot_msec;
     let mut longest = 0;
     for n in 0..12u32 {
@@ -514,7 +514,7 @@ fn cod4_an_unacking_client_backs_off() {
         let c = sv.core.clients[0].as_ref().unwrap();
         let wait = c.link.next_message_ms - svs;
         assert!((0..msec << n.min(8)).contains(&wait), "{n}: {wait}");
-        assert_eq!((wait % msec, c.stall_exp), (0, (n + 1).min(8)));
+        assert_eq!((wait % msec, c.extra.stall_exp), (0, (n + 1).min(8)));
         longest = longest.max(wait);
     }
     assert!(longest >= 2 * msec, "{longest}");
@@ -522,5 +522,5 @@ fn cod4_an_unacking_client_backs_off() {
     c.delta_message = c.link.netchan.outgoing_sequence as i32 - 1;
     sv.transmit(0, Vec::new());
     let c = sv.core.clients[0].as_ref().unwrap();
-    assert_eq!((c.link.next_message_ms, c.stall_exp), (svs - 1, 0));
+    assert_eq!((c.link.next_message_ms, c.extra.stall_exp), (svs - 1, 0));
 }

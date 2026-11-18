@@ -645,7 +645,7 @@ fn soak_run(plan: &'static [Act], cvars: &[(&str, &str)], lag_ms: i32) -> SoakRu
         now += Duration::from_millis(FRAME_MS as u64);
         // `main.rs`'s console ahead of the frame: the script's `exitLevel`
         // and `map_restart` lines.
-        sv.drain_console();
+        sv.run_console();
         sv.tick_frames(now, 1);
         let svs = sv.core.sv_time_ms;
         for (to, pkt) in sv.take_outgoing() {
@@ -776,7 +776,7 @@ fn cod4_damage_survives_the_time_limit_restarted() {
         return;
     }
     assert!(levels.len() >= 2, "no restart: {levels:?}");
-    assert_eq!(levels[1], super::cycle::restart_server_id(levels[0]));
+    assert_eq!(levels[1], crate::engine::conn::restart_server_id(levels[0]));
 }
 
 /// [`PLAN`] with each client's cmds a link behind the server's clock, so
