@@ -682,7 +682,10 @@ impl Visibility {
 
     /// The leaf a point falls in, by walking the tree from node 0. The engine
     /// descends the same way for its camera cell (`0x4e2be0`): a point on the
-    /// plane takes the back child.
+    /// plane takes the back child. That address is the client renderer's;
+    /// the dedicated server's snapshot cull calls this too, and the server's
+    /// own tie rule is unread ([`crate::leafwalk::LeafWalk::leaf_at`] takes
+    /// Q3's front child).
     pub fn leaf_at(&self, p: [f32; 3]) -> Option<&Leaf> {
         if self.nodes.is_empty() {
             return self.leafs.first();
