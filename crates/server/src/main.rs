@@ -384,6 +384,7 @@ fn cod1_server(args: Args, sock: UdpSocket, sets_after_map: &[bool]) -> Result<(
 
     let (sock, packets) = listen(sock)?;
     log::info!("vcod-server: {} on udp/{}", args.map, args.port);
+    master_hint(&args.set);
     let seed = wall_seed();
     log::info!(
         "speaking protocol {} (patch {})",
@@ -490,6 +491,7 @@ fn cod2_server(args: Args, sock: UdpSocket) -> Result<(vcod_server::cod2::Cod2Se
         sleep: Box::new(net_sleep),
     });
     log::info!("vcod-server: CoD2 {} on udp/{}", args.map, args.port);
+    master_hint(&args.set);
     Ok((server, (sock, packets)))
 }
 
@@ -538,6 +540,7 @@ fn cod4_server(args: Args, sock: UdpSocket) -> Result<(vcod_server::cod4::Cod4Se
         sleep: Box::new(net_sleep),
     });
     log::info!("vcod-server: CoD4 {} on udp/{}", args.map, args.port);
+    master_hint(&args.set);
     Ok((server, (sock, packets)))
 }
 
@@ -847,6 +850,19 @@ fn last_set<'a>(sets: &'a [String], name: &str) -> Option<&'a str> {
         .next_back()
 }
 
+/// Whether `--set dedicated=` asks for 2, the only value that heartbeats.
+/// vcod's default is 1 (retail's is 2), so an unset one does not.
+fn heartbeats(sets: &[String]) -> bool {
+    last_set(sets, "dedicated").is_some_and(|v| v.trim().parse::<i32>().ok() == Some(2))
+}
+
+/// Says at startup that a server below `dedicated 2` stays off the master list.
+fn master_hint(sets: &[String]) {
+    if !heartbeats(sets) {
+        log::info!("not listed on the master server: --set dedicated=2 sends heartbeats");
+    }
+}
+
 /// The protocol to host: `--set protocol=<1|6|22>`, else the install's
 /// ([`vcod_server::server::install_protocol`]). One per process, as each
 /// retail binary speaks one.
@@ -913,6 +929,16 @@ impl TickStats {
 mod tests {
     use super::*;
     use std::net::SocketAddr;
+
+    #[test]
+    fn only_dedicated_2_heartbeats() {
+        let sets = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(!heartbeats(&sets(&[])));
+        assert!(!heartbeats(&sets(&["dedicated=1"])));
+        assert!(heartbeats(&sets(&["Dedicated=2"])));
+        assert!(!heartbeats(&sets(&["dedicated=2", "dedicated=1"])));
+        assert!(!heartbeats(&sets(&["dedicated=yes"])));
+    }
 
     fn parse(argv: &[&str]) -> (ArgMatches, Args) {
         let m = Args::command()
