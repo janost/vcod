@@ -5,6 +5,7 @@
 //! [`assign_indices`].
 
 use crate::pk3::Pk3Fs;
+use crate::pmove::weapon::NUM_AMMO;
 use crate::weapon::WeaponDef;
 
 /// The only classnames `bg_itemlist` (`game.mp.i386.so` `.data` 0x7b9d8)
@@ -69,31 +70,52 @@ pub fn link_alts<'a>(defs: &mut [Option<WeaponDef>], names: impl Iterator<Item =
 
 /// Assigns the ammo, clip and shared-cap indexes in index order. Ammo and
 /// clip names each get their own table, so the two indexes never share a
-/// namespace.
+/// namespace. A def whose ammo or clip would index past the playerstate's
+/// `NUM_AMMO` slots, which no wire can carry, is dropped to `None`.
 pub fn assign_indices(defs: &mut [Option<WeaponDef>]) {
     let mut ammo_names: Vec<String> = Vec::new();
     let mut clip_names: Vec<String> = Vec::new();
     let mut cap_names: Vec<String> = Vec::new();
-    for def in defs.iter_mut().flatten() {
-        def.ammo_index = name_index(&mut ammo_names, &def.ammo_name);
-        def.clip_index = name_index(&mut clip_names, &def.clip_name);
-        def.shared_cap_index = (!def.shared_ammo_cap_name.is_empty())
-            .then(|| name_index(&mut cap_names, &def.shared_ammo_cap_name));
+    for slot in defs.iter_mut() {
+        let Some(def) = slot else { continue };
+        let ammo = def.ammo_name.to_ascii_lowercase();
+        let clip = def.clip_name.to_ascii_lowercase();
+        if name_index(&ammo_names, &ammo) >= NUM_AMMO || name_index(&clip_names, &clip) >= NUM_AMMO
+        {
+            log::warn!(
+                "weapon table: {:?}: past {} ammo or clip names",
+                def.display_name,
+                NUM_AMMO - 1
+            );
+            *slot = None;
+            continue;
+        }
+        def.ammo_index = intern(&mut ammo_names, ammo);
+        def.clip_index = intern(&mut clip_names, clip);
+        def.shared_cap_index = (!def.shared_ammo_cap_name.is_empty()).then(|| {
+            intern(
+                &mut cap_names,
+                def.shared_ammo_cap_name.to_ascii_lowercase(),
+            )
+        });
     }
 }
 
-/// Lowercase, look up, append on a miss. The first name handed out is 1, not
-/// 0: the retail hit capture's spawn line reads the colt's clip at 3 and the
-/// carbine's at 10, one above where a 0-based walk puts them.
-fn name_index(table: &mut Vec<String>, name: &str) -> usize {
-    let lower = name.to_ascii_lowercase();
-    match table.iter().position(|n| *n == lower) {
-        Some(i) => i + 1,
-        None => {
-            table.push(lower);
-            table.len()
-        }
+/// A lowercased name's index, or the one it would take. The first name
+/// handed out is 1, not 0: the retail hit capture's spawn line reads the
+/// colt's clip at 3 and the carbine's at 10, one above where a 0-based walk
+/// puts them.
+fn name_index(table: &[String], lower: &str) -> usize {
+    table.iter().position(|n| n == lower).unwrap_or(table.len()) + 1
+}
+
+/// [`name_index`], appending the name on a miss.
+fn intern(table: &mut Vec<String>, lower: String) -> usize {
+    let i = name_index(table, &lower);
+    if i > table.len() {
+        table.push(lower);
     }
+    i
 }
 
 #[cfg(test)]
