@@ -51,8 +51,10 @@ pub(super) const ENGINE_CVARS: &[(&str, &str)] = &[
     // (cod4-server-frame.md 5). An empty `sv_master1` beats master.cod.pm.
     ("dedicated", "1"),
     ("sv_master1", ""),
-    // Registered defaults; `sv_timeout`'s
-    // 240 is Q3's.
+    // The timeout and ban defaults here are unverified on 1.7. `sv_timeout`,
+    // `sv_zombietime`, `sv_reconnectlimit` and `sv_kickBanTime` are CoD2
+    // 1.3's `SV_Init` values (cod2-protocol.md 17.1, 17.3, 17.7);
+    // `sv_connectTimeout`'s 45 has no source in the docs.
     ("sv_timeout", "240"),
     // `SV_Init`'s int dvar (0x81735c8): 20, 10..1000, read every frame
     // (cod4-server-frame.md 8).
