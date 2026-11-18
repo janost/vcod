@@ -70,6 +70,20 @@ live.
   (registered 0.2, VERIFIED): `weaponTime` after the third round reads
   0xb8, 0xc8, counting to 0; the gate fails at 0.25. VERIFIED (the gate).
   `weapFlags` 0x100 is the fresh trigger pull. VERIFIED live.
+- A burst whose clip runs dry with no reserve stays mid-burst, on 1.7 as in
+  vcod: the gun clicks every 500 ms and takes no sprint, offhand, change,
+  reload or melee request until ammo for it, a use-key swap or death.
+  INFERRED (the branches): `PM_Weapon` tests `weaponShotCount` (ps+0xf0)
+  against `fireType` 2..4 at 0x80630a4..0x80630c0 and, mid-burst, jumps
+  past the requests to 0x8063574; the trigger test at
+  0x8063802..0x8063827 fires mid-burst with no key; the shot's empty clip
+  (0x806409c) with no reserve raises `EV_NOAMMO` (0x80649c1) and adds 500
+  to `weaponTime` (0x8064a1e) without touching the count; the time-out
+  skips its reset mid-burst (0x806454b..0x806460f).
+- The only stores to ps+0xf0 in 0x8050000..0x8070000 are 0x80612d4 (the
+  reload start, zero), 0x80641a3 (the shot's increment), 0x806460f (the
+  time-out, zero) and 0x8065106 (the held-trigger reload arm, zero).
+  VERIFIED (the disassembly).
 - An empty clip with reserve reloads: 58900 reads `weaponstate` 7,
   `weaponTime` 2365, `weaponDelay` 1500 (empty reload, add time), with
   `EV_RELOAD_START_NOTIFY` (19), `EV_RESET_ADS` (14),
