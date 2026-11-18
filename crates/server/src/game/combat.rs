@@ -1811,7 +1811,7 @@ fn stamped_pose(
     now_ms: i32,
     stamps: Option<&mut DobjStamps>,
 ) -> vcod_common::skeleton::PoseBuffer {
-    let Some(stamps) = stamps else {
+    let Some(stamps) = stamps.filter(|_| !skel.bones().is_empty()) else {
         let inputs = body.pose.pose_inputs(anims, now_ms);
         return pose_player(skel, &inputs, |name| rigs.clip(fs, name));
     };
@@ -4162,6 +4162,28 @@ mod tests {
             "{:?}",
             hits.iter().map(|h| h.damage).collect::<Vec<_>>()
         );
+    }
+
+    /// A rig with no bones poses empty under the host's stamps instead of
+    /// panicking on the first trace near it.
+    #[test]
+    fn a_boneless_rig_poses_empty_under_stamps() {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        let skel = vcod_common::skeleton::Skeleton::build(&[]);
+        let mut stamps = DobjStamps::default();
+        let pose = stamped_pose(
+            &skel,
+            &box_body(1, 0.0),
+            &anims,
+            &mut HitRigs::default(),
+            &fs,
+            1000,
+            Some(&mut stamps),
+        );
+        assert!(pose.bone_worlds(&skel).is_empty());
     }
 
     /// A standing box body for the no-paks path, where the link box is the

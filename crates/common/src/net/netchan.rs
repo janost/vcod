@@ -7,6 +7,7 @@
 
 use super::huffman::Huffman;
 use super::msg::SVC_EOF;
+use crate::text::latin1_bytes;
 
 /// `MAX_PACKETLEN`, net_chan.c:57.
 pub const MAX_PACKETLEN: usize = 1400;
@@ -61,6 +62,9 @@ impl NetchanParams {
     };
 }
 
+/// The key rings hold each command as a Latin-1 `String`, one char per wire
+/// byte; the scramble keys on those bytes ([`latin1_bytes`]), never on the
+/// UTF-8, so a byte over 127 keys as the peer sent it.
 pub struct Netchan {
     pub params: NetchanParams,
     pub qport: u16,
@@ -127,9 +131,7 @@ impl Netchan {
         } else {
             0
         };
-        let key = self.reliable[ack as usize & (self.reliable.len() - 1)]
-            .as_bytes()
-            .to_vec();
+        let key = latin1_bytes(&self.reliable[ack as usize & (self.reliable.len() - 1)]);
         self.decode(sequence, &key, &mut payload);
         Ok(Some(payload))
     }
@@ -221,9 +223,9 @@ impl Netchan {
         ops: &[u8],
         huff: &Huffman,
     ) -> anyhow::Result<Vec<u8>> {
-        let key = self.server_commands[reliable_ack as usize & (self.server_commands.len() - 1)]
-            .as_bytes()
-            .to_vec();
+        let key = latin1_bytes(
+            &self.server_commands[reliable_ack as usize & (self.server_commands.len() - 1)],
+        );
         self.build_out_keyed(server_id, message_ack, reliable_ack, &key, ops, huff)
     }
 
@@ -342,9 +344,10 @@ impl ServerNetchan {
         let message_ack = i32::from_le_bytes(body[1..5].try_into().unwrap());
         let reliable_ack = i32::from_le_bytes(body[5..9].try_into().unwrap());
         let mut ops = body[CLIENT_HEADER_LEN..].to_vec();
-        let string = self.reliable[reliable_ack as usize & (self.reliable.len() - 1)].as_bytes();
+        let string =
+            latin1_bytes(&self.reliable[reliable_ack as usize & (self.reliable.len() - 1)]);
         let seed = self.challenge as u32 ^ u32::from(server_id) ^ message_ack as u32;
-        scramble_client_ops(seed as u8, string, &mut ops);
+        scramble_client_ops(seed as u8, &string, &mut ops);
         Some(ClientMessage {
             sequence: raw,
             server_id,
@@ -395,7 +398,7 @@ impl ServerNetchan {
     pub fn transmit_block(&mut self, reliable_ack: i32, block: &[u8]) -> Vec<Vec<u8>> {
         let mut msg = reliable_ack.to_le_bytes().to_vec();
         msg.extend_from_slice(block);
-        let string = self.last_client_command_string.as_bytes().to_vec();
+        let string = latin1_bytes(&self.last_client_command_string);
         let mut key = (self.challenge as u32 ^ self.outgoing_sequence) as u8;
         let mut index = 0;
         // The 4-byte sequence keeps message and packet parity equal, so `i` from
@@ -699,7 +702,7 @@ mod tests {
             payload.extend((0..200u32).map(|i| (i * 7) as u8));
 
             let seq = 42u32;
-            let copy = server_read(key_string.as_bytes());
+            let copy = server_read(&latin1_bytes(key_string));
             let pkt = reference_encode(nc.challenge, seq, &copy, &payload);
             let out = nc.process_in(&pkt, &h).unwrap().unwrap();
             assert_eq!(out, payload, "key string {key_string:?}");
@@ -869,6 +872,30 @@ mod tests {
         let pkt = cl.build_out(16, 9, 100, &[1, 2, 3], &h).unwrap();
         let m = sv.process_in(&pkt).unwrap();
         assert_eq!(&h.decompress_block(&m.ops)[..3], &[1, 2, 3]);
+    }
+
+    /// A retail CoD2 or CoD4 peer keys on the bytes it sent and read; the
+    /// server holds them as Latin-1 `String`s, so its keys must be those
+    /// bytes, not their UTF-8.
+    #[test]
+    fn server_keys_on_the_wire_bytes_of_a_latin1_command() {
+        let h = Huffman::new();
+        let (qport, challenge) = (0x2abc, 0x1357_9bdf);
+        let mut sv = ServerNetchan::with_params(qport, challenge, NetchanParams::COD2);
+        let mut cl = Netchan::with_params(qport, challenge, NetchanParams::COD2);
+        let said: &[u8] = b"say caf\xe9 \xe9t\xe9";
+        sv.last_client_command_string = crate::text::latin1(said);
+        let ops: Vec<u8> = (0..40u8).collect();
+        let pkts = sv.transmit_eof(3, &ops, 7, &h);
+        let (seq, mut m) = cl.frame(&pkts[0]).unwrap().unwrap();
+        cl.decode(seq, said, &mut m);
+        assert_eq!(&h.decompress_block(&m[4..])[..ops.len()], &ops[..]);
+
+        let cmd: &[u8] = b"h \"caf\xe9\"";
+        sv.reliable[9] = crate::text::latin1(cmd);
+        let pkt = cl.build_out_keyed(16, 9, 9, cmd, &ops, &h).unwrap();
+        let m = sv.process_in(&pkt).unwrap();
+        assert_eq!(&h.decompress_block(&m.ops)[..ops.len()], &ops[..]);
     }
 
     #[test]

@@ -345,13 +345,18 @@ impl Hud {
         self.spawn = None;
     }
 
-    /// A fresh cgame, on a map load or an in-game `vid_restart`: a
-    /// gamestate's resets, and the chat ring, which lives in the cgame
-    /// (cod11-chat.md 3.2) and goes with it (cod11-front-end.md section
-    /// 17, "The cgame restart").
+    /// A fresh cgame, on a map load, an in-game `vid_restart` or a
+    /// disconnect: a gamestate's resets, and the chat ring and the rest of
+    /// the cgame's statics, which go with the freed DLL (cod11-chat.md 3.2,
+    /// cod11-front-end.md section 17, "The cgame restart").
     pub fn restart_cgame(&mut self) {
         self.on_gamestate();
         self.chat = Chat::new();
+        self.player = PlayerHud::default();
+        self.vote = vote::Vote::default();
+        self.complaint = vote::Complaint::default();
+        self.vote_sound = false;
+        self.drawn_view = None;
     }
 
     /// `EV_OBITUARY` to a kill line in the game message window. Entity
@@ -1574,6 +1579,41 @@ mod tests {
             k.pitch.abs() < 1e-4 && (k.side.abs() - 20.0).abs() < 1e-4,
             "{k:?}"
         );
+    }
+
+    /// A fresh cgame after a session whose clock ran past the next one's
+    /// (a reconnect, a demo played again): the old hit's flash, its damage
+    /// baseline and the weapon name's stamp are gone.
+    #[test]
+    fn a_fresh_cgame_forgets_the_last_sessions_statics() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let p = &PROTOCOL_V1;
+        let mut hud = Hud::new(&fs).expect("hud");
+        let ps = |event: i32| {
+            let mut ps = PlayerState::null(p);
+            let mut set = |name: &str, v: i32| {
+                ps.fields[PlayerState::field_index(p, name).expect(name)] = v;
+            };
+            set("damageEvent", event);
+            set("damageCount", 100);
+            ps
+        };
+        hud.feed_damage(p, &ps(1), 1_000_000, 1_000_000);
+        hud.feed_damage(p, &ps(2), 1_000_000, 1_000_000);
+        assert!(hud.player.damage.flash_alpha(1_000_100).is_some());
+        hud.player.weapon_name.step((0, 1), 1_000_000);
+
+        hud.restart_cgame();
+
+        assert_eq!(hud.player.damage.flash_alpha(1_000), None);
+        hud.feed_damage(p, &ps(3), 1_000, 1_000);
+        assert_eq!(hud.player.damage.kick(), Default::default(), "baseline");
+        // The same spawn pair stamps the name on the new clock.
+        assert_eq!(hud.player.weapon_name.step((0, 1), 1_000), Some(1.0));
+        assert_eq!(hud.player.weapon_name.step((0, 1), 3_000), None);
+        assert!(hud.player.weapon_name.cycle_allowed(200));
     }
 
     #[test]

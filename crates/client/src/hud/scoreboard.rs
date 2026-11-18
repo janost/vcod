@@ -243,8 +243,8 @@ pub struct Scoreboard {
     next_request: f32,
     warned_malformed: bool,
     warned_truncated: bool,
-    /// Gates [`Self::totals`] so an unrequested board does not override the
-    /// header with `(0, 0)`.
+    /// A `b` reply came since the last gamestate; gates [`Self::totals`] so
+    /// an unrequested board does not override the header with `(0, 0)`.
     received: bool,
     /// Items (banners and rows) scrolled off the top (`0x3020c03c`).
     scroll: i32,
@@ -288,11 +288,11 @@ impl Scoreboard {
         self.rows_drawn
     }
 
-    /// Latest (axis, allies), or `None` before the first reply. `Hud::build`
-    /// prefers these over CS 5/6, which can lag (doc section 5, "Header vs.
-    /// scoreboard totals").
+    /// Latest (axis, allies) while the board is up and its replies keep
+    /// coming, else `None`. `Hud::build` prefers these over CS 5/6, which
+    /// can lag (doc section 5, "Header vs. scoreboard totals").
     pub fn totals(&self) -> Option<(i32, i32)> {
-        self.received
+        (self.received && (self.held || self.intermission))
             .then_some((self.axis_score, self.allies_score))
     }
 
@@ -371,9 +371,11 @@ impl Scoreboard {
         self.next_request = now + REQUEST_INTERVAL;
     }
 
-    /// Drop the rows; the totals, visibility and request timer stay.
+    /// Drop the rows and the reply's totals; visibility and the request
+    /// timer stay.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.received = false;
     }
 
     /// The board's alpha at `now`, `None` when it is not drawn: 1 while
@@ -1075,6 +1077,22 @@ mod tests {
         b.on_server_command(&toks("b 2 0 0 1 5 40 0 0 2 9 60 0 0"));
         let rows = b.rows_for_team(0);
         assert_eq!(rows.iter().map(|e| e.client).collect::<Vec<_>>(), [1, 2]);
+    }
+
+    /// The header takes a `b` reply's totals only while the board is up:
+    /// once it is down or a gamestate came, CS 5/6 speak again.
+    #[test]
+    fn totals_last_only_while_the_board_is_up() {
+        let mut b = Scoreboard::new();
+        b.press(0.0);
+        b.on_server_command(&toks("b 0 50 40"));
+        assert_eq!(b.totals(), Some((50, 40)));
+        b.release(1.0);
+        assert_eq!(b.totals(), None);
+        b.intermission = true;
+        assert_eq!(b.totals(), Some((50, 40)));
+        b.clear();
+        assert_eq!(b.totals(), None);
     }
 
     #[test]

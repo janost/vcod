@@ -4,13 +4,14 @@
 //! `http://host[:port]/path` GET on a thread of its own, the bytes spooled
 //! into a file while the netchan keeps running.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
+use vcod_common::net::http::{Guarded, read_head};
 
 /// libwww's event timeout for an `http` URL, 30000 ms (0x500b61).
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -120,29 +121,15 @@ fn get(
         "GET {path} HTTP/1.0\r\nHost: {host}\r\nUser-Agent: vcod\r\nConnection: close\r\n\r\n"
     )
     .map_err(|e| e.to_string())?;
-    let mut r = BufReader::new(sock);
-    let mut line = String::new();
-    // A header line past this is no server's.
-    let read_line = |r: &mut BufReader<TcpStream>, line: &mut String| {
-        Read::take(r, 8192)
-            .read_line(line)
-            .map_err(|e| e.to_string())
-    };
-    read_line(&mut r, &mut line)?;
-    let status = line.split_whitespace().nth(1).unwrap_or("");
+    let mut r = BufReader::new(Guarded::head(sock, stop));
+    let head = read_head(&mut r).map_err(|e| format!("{e:#}"))?;
+    r.get_mut().deadline = None;
+    let status = head[0].split_whitespace().nth(1).unwrap_or("");
     if status != "200" {
-        return Err(format!("HTTP status {:?}", line.trim_end()));
+        return Err(format!("HTTP status {:?}", head[0]));
     }
     let mut length = None;
-    loop {
-        line.clear();
-        if read_line(&mut r, &mut line)? == 0 {
-            return Err("headers cut short".into());
-        }
-        let l = line.trim_end();
-        if l.is_empty() {
-            break;
-        }
+    for l in &head[1..] {
         if let Some((k, v)) = l.split_once(':')
             && k.trim().eq_ignore_ascii_case("content-length")
         {
@@ -176,6 +163,31 @@ fn get(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A head of endless header lines fails at 64 KiB, before any file is
+    /// made.
+    #[test]
+    fn an_endless_head_fails_bounded() {
+        use std::net::TcpListener;
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let _ = s.read(&mut [0u8; 512]);
+            let _ = s.write_all(b"HTTP/1.0 200 OK\r\n");
+            let _ = s.write_all(&b"X: a\r\n".repeat(1 << 17));
+        });
+        let dest = std::env::temp_dir().join(format!("vcod-cod4-http-{}", std::process::id()));
+        let mut f = HttpFetch::start(&format!("http://127.0.0.1:{port}/x"), &dest, 100).unwrap();
+        let res = loop {
+            if let Some(r) = f.poll() {
+                break r;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(res.unwrap_err().contains("over 65536"));
+        assert!(!dest.exists());
+    }
 
     #[test]
     fn urls() {

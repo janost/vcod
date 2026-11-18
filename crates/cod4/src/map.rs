@@ -427,7 +427,7 @@ impl Map {
     /// [`Install::zone_file`]) with the bulk data kept and builds the map;
     /// the walk is returned too, for its images.
     pub fn load(install: &Install, language: &str, name: &str) -> Result<(Map, Walked)> {
-        let path = install.zone_path(language, name);
+        let path = install.zone_path(language, name)?;
         let zone = Zone::open_path(&path).with_context(|| path.display().to_string())?;
         let walked = walk(zone, WalkOptions { keep_bulk: true })?;
         ensure!(

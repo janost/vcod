@@ -349,6 +349,9 @@ pub struct Ui {
     assets: Assets,
     /// Menus whose `onClose` is running.
     closing: Vec<usize>,
+    /// Nested [`Ui::open_menu`] calls: an `open` reached from a menu's
+    /// own `onOpen` or `mouseEnter`.
+    opening: u32,
     /// A key reached the UI with no focused menu: `_UI_KeyEvent`
     /// (0x4000d6f0) took the UI down and left the menus on the stack,
     /// still flagged visible, until a menu opens again.
@@ -486,6 +489,7 @@ impl Ui {
             levelshots: if load { levelshots(fs) } else { HashSet::new() },
             assets,
             closing: Vec::new(),
+            opening: 0,
             text_rects: RefCell::default(),
             list_menus: 0,
             active_type: UIMENU_NONE,
@@ -598,6 +602,7 @@ impl Ui {
     /// The main menu, as retail shows it with no game up. While connecting
     /// or loading this is also what Esc opens (`UIMENU_MAIN`).
     pub fn open_main(&mut self, shell: &Shell, out: &mut Vec<UiEffect>) {
+        self.server_cvars.clear();
         self.in_game = false;
         self.active_type = UIMENU_MAIN;
         self.open_menu("main", shell, out);
@@ -680,6 +685,7 @@ impl Ui {
     /// it, as `Com_Error` leaves retail.
     pub fn show_error(&mut self, message: &str, shell: &Shell, out: &mut Vec<UiEffect>) {
         self.error = message.to_string();
+        self.server_cvars.clear();
         self.in_game = false;
         self.active_type = UIMENU_MAIN;
         self.open_menu("main", shell, out);
@@ -990,10 +996,22 @@ impl Ui {
     /// takes the focus, its `onOpen` runs, then `Display_MouseMove` at the
     /// cursor.
     fn open_menu(&mut self, name: &str, shell: &Shell, out: &mut Vec<UiEffect>) {
+        // Retail recurses forever on a menu that opens itself; vcod stops.
+        const MAX_OPENING: u32 = 16;
         let Some(m) = self.find(name).filter(|_| !unsupported(name)) else {
             crate::console::log::print(&format!("The {name} menu is not in vcod yet."));
             return;
         };
+        if self.opening >= MAX_OPENING {
+            log::warn!("menu {name}: opened {MAX_OPENING} deep, not opened");
+            return;
+        }
+        self.opening += 1;
+        self.open_menu_at(m, shell, out);
+        self.opening -= 1;
+    }
+
+    fn open_menu_at(&mut self, m: usize, shell: &Shell, out: &mut Vec<UiEffect>) {
         self.down = false;
         self.leave_stack(m);
         self.open.push(m);
@@ -4858,6 +4876,52 @@ mod tests {
         assert_eq!(quads[0].verts[2], [1280.0, 640.0]);
         assert!(quads.len() > 50, "button text drawn: {}", quads.len());
         assert_eq!(quads.last().unwrap().texture, "ui/assets/3_cursor3");
+    }
+
+    /// Menus that open themselves or each other from `onOpen` or
+    /// `mouseEnter` end.
+    #[test]
+    fn a_menu_opening_itself_ends() {
+        let mut ui = ui_with_menu(
+            r#"{ menuDef { name "main" rect 0 0 640 480 onOpen { open main } }
+            menuDef { name "a" rect 0 0 640 480 onOpen { open b } }
+            menuDef { name "b" rect 0 0 640 480 onOpen { open a } }
+            menuDef { name "c" rect 0 0 640 480
+              itemDef { rect 0 0 640 480 visible 1 type 1 mouseEnter { open c } } } }"#,
+        );
+        let shell = Shell::new();
+        ui.open_main(&shell, &mut Vec::new());
+        ui.open_menu("a", &shell, &mut Vec::new());
+        ui.mouse_move(320.0, 240.0, 640.0, 480.0, &shell);
+        ui.open_menu("c", &shell, &mut Vec::new());
+        assert_eq!(ui.opening, 0);
+        assert_eq!(ui.focused_menu(), ui.find("c"));
+    }
+
+    /// Off the server, a menu reads the console again, not the last
+    /// server's cvars: a drop and the main menu both forget them.
+    #[test]
+    fn the_server_cvars_go_with_the_game() {
+        let mut ui = ui_with_menu(r#"{ menuDef { name "main" rect 0 0 640 480 } }"#);
+        let mut shell = Shell::new();
+        shell.execute("set scr_allow_panzerfaust 1");
+        let server = || HashMap::from([("scr_allow_panzerfaust".into(), "0".into())]);
+        ui.set_server_cvars(server());
+        assert_eq!(
+            ui.cvar("scr_allow_panzerfaust", &shell).as_deref(),
+            Some("0")
+        );
+        ui.show_error("dropped", &shell, &mut Vec::new());
+        assert_eq!(
+            ui.cvar("scr_allow_panzerfaust", &shell).as_deref(),
+            Some("1")
+        );
+        ui.set_server_cvars(server());
+        ui.open_main(&shell, &mut Vec::new());
+        assert_eq!(
+            ui.cvar("scr_allow_panzerfaust", &shell).as_deref(),
+            Some("1")
+        );
     }
 
     /// A UI over one menu file, `ui_mp/m.menu`, holding `body`.

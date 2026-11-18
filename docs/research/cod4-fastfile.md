@@ -556,7 +556,11 @@ The 85 stock zones pass unchanged.
   the 1.7 client only `mod.ff` comes from the `fs_game` directory, no other
   referenced zone. `vcod_cod4::install` follows
   the 1.7 rule, the directory names matched case-blind (`mods/ModWarfare`
-  on a disk holding `Mods/ModWarfare`, as Windows opens it).
+  on a disk holding `Mods/ModWarfare`, as Windows opens it). vcod also
+  refuses a zone name that is not one plain path component
+  (`install::is_zone_name`: no separator, `..`, drive or control byte), so
+  a server's `mapname` never opens a file outside these directories; the
+  1.7 client's own check on it is not read.
 - `DB_ModFileExists` builds mode 1's `mod` path and only answers when `fs_game`
   is set; `DB_AddUserMapDir` adds `usermaps/<map>` to the iwd search
   (`FS_AddUserMapDirIWDs`) only under a set `fs_game` too. INFERRED. The

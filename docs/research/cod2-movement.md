@@ -775,6 +775,20 @@ script's cmds through the pmove.
   and 280 back (rodata 0x8155110, 0x815510c). `AddLeanToPosition` takes 16
   and 20 (immediates 0x80e6c95, 0x80e6c8c). The wall box is ±8 under
   0x2810011. VERIFIED.
+- What a prone view flick costs vcod-server. `pmove::stance::prone_view`'s
+  turn loop steps the view a degree toward the body a pass, each pass a
+  swing test and most a turned-body test, so a cmd that swings the view
+  180 degrees beside a wall runs some 170 passes. INFERRED (the loop). On
+  mp_toujane, every spawn, the body crawled into whatever lies ahead, 32
+  one-millisecond cmds swinging 180 degrees each take 1.9 ms mean and 8 ms
+  at worst, 32 still cmds 0.17 ms and 0.8 ms (dev profile,
+  `pmove_walk::a_prone_view_flick_costs`, ignored; 2026-11-18). VERIFIED
+  (the run). The loop stays as it is. The cmd clock bounds the cost: a cmd
+  runs only when it moves `commandTime` on, and `serverTime` stops 200 ms
+  past `level.time` (section 21), so a client gets about 1000 such cmds
+  thought a second, some 60 ms of server CPU a second on average and 250
+  ms at worst. INFERRED (the arithmetic). vcod adds no think budget: one
+  counted in cmds would drop cmds retail thinks.
 
 ## 11. Ladder
 

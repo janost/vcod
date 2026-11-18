@@ -2780,7 +2780,8 @@ fn fetch_missing(
     loop {
         let gs = conn.client.gamestate.as_ref().context("gamestate")?;
         let si = String::from_utf8_lossy(gs.configstring(1)).into_owned();
-        let map = info_value(gs.configstring(CS_SERVERINFO), "mapname");
+        let map = info_value(gs.configstring(CS_SERVERINFO), "mapname")
+            .filter(|m| vcod_cod4::install::is_zone_name(m));
         let wanted = vcod_cod4::net::download::missing_in(fetch.root, &si, map.as_deref());
         if wanted.is_empty() {
             return Ok(Some(conn));

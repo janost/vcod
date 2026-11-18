@@ -1161,7 +1161,8 @@ key, mouse buttons included, reaches the binds. INFERRED (the combination).
   `mr <sv_serverid> <index> <response>` with the index looked up by name
   (`play::join::script_menu_response`), so `open` and `close` go out as on
   retail. Cvar tests read the server's `v` cvars and the 140/204 mirror
-  (`Ui::set_server_cvars`) before the console's.
+  (`Ui::set_server_cvars`) before the console's, until the main menu or a
+  drop clears them.
 - `WINDOW_STYLE_CVAR_SHADER` items paint their window with the shader their
   cvar names and nothing else (`viewmap`'s layout image), as `Item_Paint`
   (`0x40016470`) does. For style 6 it reads the cvar (display context

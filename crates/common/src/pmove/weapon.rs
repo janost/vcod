@@ -1624,6 +1624,34 @@ mod tests {
         step(ps, weapons, &input, frames)
     }
 
+    /// The wire carries 64 clip slots: a table naming more clips drops the
+    /// weapons past them, so holding the last one cannot index past
+    /// `ammoclip`.
+    #[test]
+    fn a_weapon_past_the_clip_slots_is_dropped_not_indexed() {
+        let mut w: Vec<Option<WeaponDef>> = std::iter::once(None)
+            .chain((0..70).map(|i| {
+                Some(WeaponDef {
+                    ammo_name: "a".into(),
+                    clip_name: format!("clip{i}"),
+                    ..carbine()
+                })
+            }))
+            .collect();
+        crate::weapon_table::assign_indices(&mut w);
+        assert_eq!(w[63].as_ref().unwrap().clip_index, NUM_AMMO - 1);
+        assert!(w[64].is_none() && w[70].is_none());
+        let mut ps = PlayerState::spawn(glam::Vec3::ZERO, 0.0);
+        give(&mut ps, 70, 1);
+        ps.weapon = 70;
+        let input = PmInput {
+            weapon: 70,
+            attack: true,
+            ..Default::default()
+        };
+        step(&mut ps, &w, &input, 40);
+    }
+
     /// The frag's own numbers, off `weapons/mp/fraggrenade_mp` in `pak0.pk3`.
     fn frag() -> WeaponDef {
         let mut d = def(1.0, 0.0, 2.0, 0.25, 3, false);
