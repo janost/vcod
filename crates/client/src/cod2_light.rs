@@ -146,6 +146,18 @@ impl Cod2Lighting {
             wanted[props.vert_placement[i] as usize] = true;
         }
         let todo: Vec<usize> = (0..wanted.len()).filter(|&pi| wanted[pi]).collect();
+        // The xmodel flag matters only under `gndLt`: read once per model
+        // that some such placement names.
+        let mut ground_models = std::collections::HashMap::new();
+        for b in todo.iter().filter_map(|&pi| blocks.get(pi)) {
+            if StaticModelKeys::of(b).ground.is_some()
+                && let Some(m) = b.get("model")
+            {
+                ground_models
+                    .entry(m.as_str())
+                    .or_insert_with(|| ground_lit(fs, m));
+            }
+        }
         let sample = |&pi: &usize| {
             let block = blocks.get(pi);
             let keys = block.map_or(
@@ -157,8 +169,8 @@ impl Cod2Lighting {
                 StaticModelKeys::of,
             );
             let ground_lit = block
-                .and_then(|b| b.get("model"))
-                .is_some_and(|m| ground_lit(fs, m));
+                .and_then(|b| ground_models.get(b.get("model")?.as_str()))
+                .is_some_and(|&g| g);
             let (lo, hi) = props.bounds[pi];
             let blocked =
                 |a: Vec3, b: Vec3| self.clip.point_trace(a, b, SIGHT_MASK, false).fraction < 1.0;
