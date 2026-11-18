@@ -6945,10 +6945,8 @@ pub(crate) mod tests {
             7,
         );
         sv.game.cvars_mut().set("fs_game", "mods/test");
-        sv.load(Some(
-            &vcod_cod4::install::Install::at(&base.path()).unwrap(),
-        ))
-        .unwrap();
+        sv.load(Some(&vcod_cod4::install::Install::at(base.path()).unwrap()))
+            .unwrap();
         sv.game.cvars_mut().set("sv_wwwDownload", "1");
         sv.game
             .cvars_mut()

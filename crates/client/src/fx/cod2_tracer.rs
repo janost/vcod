@@ -112,14 +112,9 @@ pub struct Tracer {
 }
 
 impl Tracer {
-    /// `CG_SpawnTracer` at `now` (seconds), back-dated `back_ms`
+    /// `CG_SpawnTracer` under `rules` at `now` (seconds), back-dated `back_ms`
     /// (`(rand() % cg.frametime) / 2`, the caller's roll). The life is
-    /// the whole distance at [`SPEED`], truncated to whole ms.
-    pub fn new(muzzle: Vec3, hit: Vec3, now: f32, back_ms: i32) -> Tracer {
-        Tracer::with(COD2, muzzle, hit, now, back_ms)
-    }
-
-    /// [`Self::new`] under `rules`.
+    /// the whole distance at the rules' speed, truncated to whole ms.
     pub fn with(rules: Rules, muzzle: Vec3, hit: Vec3, now: f32, back_ms: i32) -> Tracer {
         let d = hit - muzzle;
         let dist = d.length();
@@ -331,7 +326,7 @@ mod tests {
     /// meets the hit, and the tracer dies as the tail gets there.
     #[test]
     fn the_streak_runs_from_muzzle_to_hit() {
-        let t = Tracer::new(Vec3::ZERO, Vec3::new(1000.0, 0.0, 0.0), 1.0, 0);
+        let t = Tracer::with(COD2, Vec3::ZERO, Vec3::new(1000.0, 0.0, 0.0), 1.0, 0);
         // 1000 / 4500 s = 222.2 ms, truncated.
         assert!((t.end - t.start - 0.222).abs() < 1e-5);
         let (tail, head) = t.segment(1.0);
@@ -343,7 +338,7 @@ mod tests {
         assert!((tail.x - 900.0).abs() < 0.1 && (head.x - 1000.0).abs() < 0.01);
         assert!(t.live(1.0) && t.live(1.221) && !t.live(1.2225) && !t.live(0.999));
         // A back-date starts it earlier and ends it as much earlier.
-        let b = Tracer::new(Vec3::ZERO, Vec3::new(1000.0, 0.0, 0.0), 1.0, 8);
+        let b = Tracer::with(COD2, Vec3::ZERO, Vec3::new(1000.0, 0.0, 0.0), 1.0, 8);
         assert!((b.start - 0.992).abs() < 1e-6 && (b.end - 1.214).abs() < 1e-5);
     }
 
@@ -351,7 +346,8 @@ mod tests {
     /// close, wider past 5000 units.
     #[test]
     fn the_quad_faces_the_eye_and_widens_far_off() {
-        let t = Tracer::new(
+        let t = Tracer::with(
+            COD2,
             Vec3::new(0.0, 100.0, 0.0),
             Vec3::new(1000.0, 100.0, 0.0),
             0.0,

@@ -268,13 +268,10 @@ fn assert_clean(errors: &Errors, what: &str) {
 #[test]
 fn headless_device_has_the_window_limits() {
     let Some((r, errors)) = Renderer::headless(&vcod_common::pk3::Pk3Fs::empty(), false, 1) else {
-        eprintln!("no adapter with BC textures; skipped");
         return;
     };
     assert_clean(&errors, "renderer build");
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let adapter = super::headless::test_adapter(super::headless::Need::Bc).unwrap();
     let have = r.device.limits();
     let want = device_limits(&adapter);
     assert_eq!(have.max_buffer_size, want.max_buffer_size);

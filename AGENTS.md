@@ -124,7 +124,9 @@ cargo deny check   # after a dependency change
   `docs/dev/testing.md`.
 - `ci.yml` runs on ubuntu with no game data. A new test needing paks returns
   early through `game_fs()` or uses `Pk3Fs::empty()`: no pak test and no A/B
-  gate runs in CI, only on a machine with an install.
+  gate runs in CI, only on a machine with an install. A headless render test
+  takes its adapter through `renderer::headless::test_adapter`: CI draws on
+  lavapipe with `VCOD_REQUIRE_GPU=1`, so one that finds none fails there.
 - `nightly.yml` rebuilds the rolling `nightly` release on master pushes that
   touch code (docs, tools and `*.md` are path-ignored). `workflow_dispatch`
   forces one.

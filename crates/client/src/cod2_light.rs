@@ -402,21 +402,7 @@ mod tests {
     /// A device off a headless adapter (Vulkan or Metal), `None` where the
     /// machine has none.
     fn headless() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: None,
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        }))
-        .ok()?;
-        let info = adapter.get_info();
-        eprintln!("adapter: {} {:?}", info.name, info.backend);
-        if info.backend == wgpu::Backend::Gl {
-            return None;
-        }
-        pollster::block_on(adapter.request_device(&Default::default())).ok()
+        crate::renderer::headless::test_device(crate::renderer::headless::Need::NotGl)
     }
 
     /// `src` between the line holding `from` and the one holding `to`.
@@ -2259,17 +2245,6 @@ fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
 
     /// [`headless`] with BC textures, which CoD2's colour maps are.
     fn headless_bc() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
-        let bc = wgpu::Features::TEXTURE_COMPRESSION_BC;
-        if adapter.get_info().backend == wgpu::Backend::Gl || !adapter.features().contains(bc) {
-            return None;
-        }
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_features: bc,
-            ..Default::default()
-        }))
-        .ok()
+        crate::renderer::headless::test_device(crate::renderer::headless::Need::Bc)
     }
 }

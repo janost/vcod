@@ -580,15 +580,7 @@ mod tests {
     use glam::{Vec2, Vec4};
 
     fn headless() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
-        let info = adapter.get_info();
-        eprintln!("adapter: {} {:?}", info.name, info.backend);
-        if info.backend == wgpu::Backend::Gl {
-            return None;
-        }
-        pollster::block_on(adapter.request_device(&Default::default())).ok()
+        crate::renderer::headless::test_device(crate::renderer::headless::Need::NotGl)
     }
 
     const N: u32 = 128;

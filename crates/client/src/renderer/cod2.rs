@@ -2454,22 +2454,9 @@ pub(super) mod tests {
 
     /// A device off a headless adapter, `None` where the machine has none.
     pub(in crate::renderer) fn headless() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: None,
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        }))
-        .ok()?;
-        let info = adapter.get_info();
-        eprintln!("adapter: {} {:?}", info.name, info.backend);
         // GL binds a texture to one sampler, which sample_image's
         // per-mode samplers break, here as in every stage pipeline
-        if info.backend == wgpu::Backend::Gl {
-            return None;
-        }
+        let adapter = super::super::headless::test_adapter(super::super::headless::Need::NotGl)?;
         let bc = adapter.features() & wgpu::Features::TEXTURE_COMPRESSION_BC;
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("cod2 test device"),

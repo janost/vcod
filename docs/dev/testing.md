@@ -113,7 +113,9 @@ Times are release wall on a 30-thread box, the binary built.
 `renderer::pipeline_check` builds the real `Renderer` headless and draws a
 CoD1, a CoD2 and a CoD4 frame under wgpu validation. Its gates are plain
 `#[test]`s, not ignored: they need a Vulkan (not GL) adapter with BC
-textures, and without one each prints `skipped` and passes. On lavapipe:
+textures, and without one each prints `skipped` and passes, as every
+headless render test does; `VCOD_REQUIRE_GPU=1` fails them instead, as
+CI sets it on lavapipe. On lavapipe:
 `VK_DRIVER_FILES=<lvp_icd.json> WGPU_BACKEND=vulkan GALLIVM_PERF=nopt`. Run it
 after any shader or layout change. A render test that passes headless can
 still draw wrong live; a change to a draw path also needs a test through the

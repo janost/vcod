@@ -1644,14 +1644,8 @@ mod tests {
     /// (the map sweep's 2012 validation errors).
     #[test]
     fn probes_past_the_layer_limit_leave_a_valid_array() {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
-            eprintln!("no adapter; skipped");
-            return;
-        };
-        let Ok((device, queue)) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        let Some((device, queue)) =
+            crate::renderer::headless::test_device(crate::renderer::headless::Need::Any)
         else {
             return;
         };
@@ -1670,14 +1664,8 @@ mod tests {
     /// cube's) uploads its first levels, not an invalid texture.
     #[test]
     fn a_probe_with_too_many_levels_leaves_a_valid_array() {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
-            eprintln!("no adapter; skipped");
-            return;
-        };
-        let Ok((device, queue)) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        let Some((device, queue)) =
+            crate::renderer::headless::test_device(crate::renderer::headless::Need::Any)
         else {
             return;
         };
