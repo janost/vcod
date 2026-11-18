@@ -10,7 +10,7 @@ pub fn print_line(host: &mut GameHost, cx: &Cx, args: &[Value]) -> Result<Value,
     // Retail's log splits a multi-line string into separate log lines; a
     // capture diff reads it the same way.
     for l in line.lines() {
-        host.script_log.push(l.to_string());
+        host.keep_script_line(l.to_string());
     }
     Ok(Value::Undefined)
 }

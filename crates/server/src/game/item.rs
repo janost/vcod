@@ -1124,7 +1124,7 @@ pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: 
             format!("{word};0;{slot};{name};{item}")
         };
         host.log_printf(format!("{text}\n"));
-        host.script_log.push(line);
+        host.keep_script_line(line);
     }
     for c in out.commands {
         host.client_commands.push((slot, c));

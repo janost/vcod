@@ -44,6 +44,11 @@ pub fn empty_objective() -> Objective {
     }
 }
 
+/// Whether a level keeps [`GameHost::script_log`]. On for tests and the
+/// in-process servers; `vcod-server` turns it off, as nothing there reads it.
+pub static KEEP_SCRIPT_LOG: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+
 /// The builtins `GameHost` answers itself: the env and io names, which have
 /// no family module of their own. `builtins::set::implementations` lists
 /// them with the families.
@@ -963,9 +968,9 @@ pub struct GameHost {
     /// (`Carry::seed`), as `G_InitGame`'s `Rand_Init(trap_Milliseconds())`
     /// does (map-cycle doc 4.8). CoD2 keeps its own (`Cod2HostState::rand`).
     pub holdrand: vcod_common::rng::HoldRand,
-    /// Every `logPrint` line, in order. Retail's `logPrint` writes to the
-    /// server's `games_mp.log`; this is where that will come from, and it is
-    /// what lets a test replay a retail capture.
+    /// Every `print` and `logPrint` line, in order, for the tests and gates
+    /// that replay a retail capture (`games_mp.log` is [`Self::log_printf`]'s).
+    /// Kept only while [`KEEP_SCRIPT_LOG`] holds; the server binary clears it.
     pub script_log: Vec<String>,
     /// The `G_LogPrintf` lines (`logPrint`, `ExitLevel`, chat, pickups),
     /// each with `level.time`, for the engine to write to `games_mp.log`
@@ -1254,6 +1259,13 @@ pub type SpawnPin = Option<([f32; 3], [f32; 3])>;
 pub(crate) const RNG_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 
 impl GameHost {
+    /// One line onto [`Self::script_log`] while [`KEEP_SCRIPT_LOG`] holds.
+    pub fn keep_script_line(&mut self, line: String) {
+        if KEEP_SCRIPT_LOG.load(std::sync::atomic::Ordering::Relaxed) {
+            self.script_log.push(line);
+        }
+    }
+
     /// Starts a new skeleton stamp: every client's bones go unposed.
     pub fn clear_dobj_stamps(&mut self) {
         for stamps in &mut self.dobj_posed {

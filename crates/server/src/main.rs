@@ -110,6 +110,8 @@ const MAX_PACKETS_PER_FRAME: usize = 256;
 const PACKET_QUEUE: usize = 4 * MAX_PACKETS_PER_FRAME;
 
 fn main() -> Result<()> {
+    // Only tests and gates read the script log.
+    vcod_server::game::host::KEEP_SCRIPT_LOG.store(false, std::sync::atomic::Ordering::Relaxed);
     let matches = Args::command().get_matches();
     let args = Args::from_arg_matches(&matches)?;
     let game = vcod_common::game::Game::resolve(args.game, &args.game_dir);

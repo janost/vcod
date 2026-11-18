@@ -297,7 +297,7 @@ pub fn exit_level(
     host.console.push("map_rotate".to_string());
     host.team_scores = [0, 0];
     host.zero_client_scores();
-    host.script_log.push("ExitLevel: executed".to_string());
+    host.keep_script_line("ExitLevel: executed".to_string());
     // CoD4's `ExitLevel` (0x80b4585) writes the same line to games_mp.log.
     crate::game::cod4::log_printf(host, "ExitLevel: executed\n".to_string());
     Ok(Value::Undefined)
