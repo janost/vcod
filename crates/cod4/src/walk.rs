@@ -534,7 +534,8 @@ impl<'z, R: BufRead> W<'z, R> {
         (0..n).map(|i| self.xstring(s.ptr(o + 4 * i))).collect()
     }
 
-    /// `Load_ScriptString`: a script string index, kept as is.
+    /// Counts an offset token under `what` that named nothing loaded;
+    /// `zone_census` and `Map::load` require the count empty.
     pub fn unresolved(&mut self, what: &'static str) {
         *self.stats.unresolved.entry(what).or_default() += 1;
     }
