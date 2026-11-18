@@ -1300,6 +1300,12 @@ impl GameHost {
         if let Some(q) = self.client_squad.get_mut(slot) {
             *q = 0;
         }
+        if let Some(v) = self.client_vitals.get_mut(slot) {
+            *v = Vitals::default();
+        }
+        if let Some(m) = self.client_no_spectate.get_mut(slot) {
+            *m = 0;
+        }
         self.reset_client_objectives(slot);
         // The carried `pers`, if the boundary this client crossed kept one;
         // taken, so a later reconnect starts empty as retail's does.

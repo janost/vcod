@@ -5485,6 +5485,39 @@ mod tests {
         assert!(after.aborts().is_empty(), "{:?}", after.aborts());
     }
 
+    /// A client connecting into a slot its last occupant left in the same
+    /// level reads a zeroed `gclient_t`: no health, no `maxhealth`, not
+    /// alive, no `allowSpectateTeam` bits.
+    #[test]
+    fn a_connect_into_a_used_slot_starts_with_no_vitals_or_spectate_mask() {
+        use crate::game::host::Vitals;
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() { level.callbackPlayerConnect = ::c; }\n\
+             CodeCallback_PlayerConnect() { [[level.callbackPlayerConnect]](); }\n\
+             CodeCallback_PlayerDisconnect() {}\n\
+             c() { level.h = self.health; level.m = self.maxhealth; \
+                   level.alive = isAlive(self); }\n",
+        );
+        rt.reconnect_client(0, "first".into());
+        rt.host.client_vitals[0] = Vitals {
+            health: 100,
+            max_health: 100,
+            dead: false,
+            takedamage: true,
+        };
+        rt.host.client_no_spectate[0] = 0x17;
+        rt.client_disconnect(0);
+        rt.run_frame(50);
+
+        rt.reconnect_client(0, "second".into());
+        assert_eq!(rt.level_field("h"), vcod_gsc::Value::Int(0));
+        assert_eq!(rt.level_field("m"), vcod_gsc::Value::Int(0));
+        assert_eq!(rt.level_field("alive"), vcod_gsc::Value::Int(0));
+        assert_eq!(rt.host.client_vitals[0], Vitals::default());
+        assert_eq!(rt.host.client_no_spectate[0], 0);
+    }
+
     /// `ClientDisconnect`'s `menuresponse` ("-1", "disconnect") wakes a
     /// level thread waiting on the player, which runs on the next frame's
     /// clock, after the callback; the player's own waiter dies with it
