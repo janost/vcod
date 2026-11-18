@@ -606,9 +606,11 @@ vcod (all three games):
   hands back what it did not use. The heaviest stock step, a CoD4 map's
   load with the threads it starts, runs 394,000. A pass stops taking steps
   past `MAX_PASS_INSTRUCTIONS` (10,000,000; the heaviest stock pass runs
-  1.43 million) or `MAX_THREADS_PER_FRAME`, and the clock stays where the
-  walk stopped so the next pass runs what was left. Retail has neither
-  ceiling; a count, not wall time, keeps the replays deterministic.
+  1.43 million) or `MAX_THREADS_PER_FRAME`. Every thread still due then
+  turns runnable and the next pass runs those first, in the order this one
+  would have picked them (`Vm::deferred`), so a `wait 0` spin cannot
+  starve the other threads due beside it; the clock moves on to
+  `level.time` as usual. Retail has neither ceiling; a count, not wall time, keeps the replays deterministic.
 - A concatenation past 8192 bytes is a script error (`string too long`,
   `interp::MAX_STRING_LEN`); stock scripts build at most 138.
 

@@ -19,7 +19,7 @@ use crate::value::{FuncRef, Value};
 use super::interp::{Frame, Step, Suspend};
 use super::{ErrorKind, Host, ScriptError, Target, Vm};
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct ThreadId(pub u32);
 
 /// The script clock and every `wait` deadline are 24-bit: they wrap every
@@ -678,15 +678,15 @@ impl Vm {
     /// `WARNING: potential infinite loop in script.` about once a second
     /// (`cod_lnxded` 0x80a5b8c; docs/research/cod11-gsc-language.md). The
     /// cap keeps a server here alive through such a script, and a spawn
-    /// bomb, at the cost of leaving the rest of the frame's threads for the
-    /// next one. It sits well above what a real frame steps: the stock
+    /// bomb, at the cost of moving the rest of the frame's threads to the
+    /// head of the next pass (`Vm::deferred`). It sits well above what a real frame steps: the stock
     /// scripts step a few hundred at most, and `probe_wait0_loop`'s
     /// thousand `wait 0` turns in one frame have to fit.
     const MAX_THREADS_PER_FRAME: u32 = 10_000;
 
     /// A ceiling on the instructions one pass runs, its threads' nested
-    /// spawns counted, past which the threads still due wait for the next
-    /// pass, as past [`Self::MAX_THREADS_PER_FRAME`]. A step may still run
+    /// spawns counted, past which the threads still due run first in the
+    /// next pass, as past [`Self::MAX_THREADS_PER_FRAME`]. A step may still run
     /// its whole budget once the pass is past the ceiling, so a pass stops
     /// within `MAX_PASS_INSTRUCTIONS + budget`. The heaviest stock pass the
     /// tests run, CoD4's included, runs 1.43 million.
@@ -726,14 +726,10 @@ impl Vm {
     /// current millisecond's threads run: one due in the gap waits until a
     /// later walk crosses its due time, hours on, as on retail.
     pub fn run_frame(&mut self, host: &mut dyn Host, level_ms: i32) -> Vec<ScriptError> {
-        let (errors, done) = self.step_runnable(host, level_ms & CLOCK_MASK);
+        let errors = self.step_runnable(host, level_ms & CLOCK_MASK);
         // `Scr_SetTime` leaves the clock on `level.time` whether or not it
-        // walked forward. A pass a cap cut short leaves it where the walk
-        // stopped instead, so the next walk still reaches the threads due
-        // behind it.
-        if done {
-            self.now_ms = level_ms & CLOCK_MASK;
-        }
+        // walked forward; a pass a cap cut short deferred what it left.
+        self.now_ms = level_ms & CLOCK_MASK;
         errors
     }
 
@@ -741,7 +737,7 @@ impl Vm {
     /// threads due on the clock itself and any a notify woke, before the
     /// clock walks.
     pub fn run_current(&mut self, host: &mut dyn Host) -> Vec<ScriptError> {
-        self.step_runnable(host, self.now_ms).0
+        self.step_runnable(host, self.now_ms)
     }
 
     /// The pick both passes share, measured against retail by
@@ -760,25 +756,37 @@ impl Vm {
     /// (`client-probes/probe_threadorder`, cod11-gsc-language.md, "The
     /// packet pass").
     ///
-    /// Whether the pass ran everything due, rather than stopping at a cap.
-    fn step_runnable(&mut self, host: &mut dyn Host, level: i32) -> (Vec<ScriptError>, bool) {
+    /// The threads a capped pass left (`Vm::deferred`) run first, in the
+    /// order it would have picked them, on the clock as it stands.
+    fn step_runnable(&mut self, host: &mut dyn Host, level: i32) -> Vec<ScriptError> {
         let mut errors = Vec::new();
         let mut steps = 0;
         let start = self.spent;
-        while steps < Self::MAX_THREADS_PER_FRAME {
-            if self.spent - start >= Self::MAX_PASS_INSTRUCTIONS {
-                log::warn!(
-                    "gsc: MAX_PASS_INSTRUCTIONS ({}) reached in one pass; the threads still due wait for the next",
-                    Self::MAX_PASS_INSTRUCTIONS
-                );
-                return (errors, false);
-            }
-            let now = self.now_ms;
-            let next = self.next_ready(now, level);
-            let Some((at, _, tid)) = next else {
-                return (errors, true);
+        loop {
+            let cap = if steps >= Self::MAX_THREADS_PER_FRAME {
+                Some(("MAX_THREADS_PER_FRAME", u64::from(Self::MAX_THREADS_PER_FRAME)))
+            } else if self.spent - start >= Self::MAX_PASS_INSTRUCTIONS {
+                Some(("MAX_PASS_INSTRUCTIONS", Self::MAX_PASS_INSTRUCTIONS))
+            } else {
+                None
             };
-            self.now_ms = at;
+            if let Some((name, n)) = cap {
+                log::warn!(
+                    "gsc: {name} ({n}) reached in one pass; the threads still due run first in the next"
+                );
+                self.defer_due(level);
+                return errors;
+            }
+            let tid = match self.take_deferred() {
+                Some(tid) => tid,
+                None => {
+                    let Some((at, _, tid)) = self.next_ready(self.now_ms, level) else {
+                        return errors;
+                    };
+                    self.now_ms = at;
+                    tid
+                }
+            };
             let Some(idx) = self.thread_index(tid) else {
                 continue;
             };
@@ -799,16 +807,44 @@ impl Vm {
                 .last()
                 .is_some_and(|e| matches!(e.kind, ErrorKind::GameError(_)))
             {
-                return (errors, true);
+                return errors;
             }
         }
-        // Was silent before: a frame past the cap just stopped simulating the
-        // rest with nothing in the log to say why.
-        log::warn!(
-            "gsc: MAX_THREADS_PER_FRAME ({}) reached in one pass; the threads still due wait for the next",
-            Self::MAX_THREADS_PER_FRAME
-        );
-        (errors, false)
+    }
+
+    /// The next thread a capped pass left, its runnable key taken out of
+    /// the index; one that died or ran since is skipped.
+    fn take_deferred(&mut self) -> Option<ThreadId> {
+        while let Some((id, seq)) = self.deferred.pop_front() {
+            let live = self.thread_index(id).is_some_and(|i| {
+                let t = &self.threads[i];
+                matches!(t.state, ThreadState::Runnable) && t.seq == seq
+            });
+            if live {
+                self.ready.runnable.remove(&(Reverse(seq), id));
+                return Some(id);
+            }
+        }
+        None
+    }
+
+    /// Every thread still due this pass, in pick order, behind any an
+    /// earlier capped pass left: runnable now, so the clock can move past
+    /// their due times without stranding them.
+    fn defer_due(&mut self, level: i32) {
+        let now = self.now_ms;
+        let mut queued: std::collections::HashSet<ThreadId, crate::fxhash::FxBuildHasher> =
+            self.deferred.iter().map(|&(id, _)| id).collect();
+        while let Some((_, _, id)) = self.next_ready(now, level) {
+            let Some(i) = self.thread_index(id) else {
+                continue;
+            };
+            if queued.insert(id) {
+                let t = &mut self.threads[i];
+                t.state = ThreadState::Runnable;
+                self.deferred.push_back((id, t.seq));
+            }
+        }
     }
 
     /// Runs `func` to completion on a fresh one-frame stack. A `wait` or
@@ -1852,6 +1888,29 @@ later() { wait 0.05; return 9; }"#;
         vm.start_thread(&mut host, spin, None, vec![]);
         vm.run_frame(&mut host, 100);
         assert!(!host.calls.iter().any(|(n, _)| n == "done"));
+        assert_eq!(vm.thread_count(), 2);
+    }
+
+    /// The threads a capped pass did not reach run first in the next pass,
+    /// so a `wait 0.05` loop beside a `wait 0` spin keeps counting, and the
+    /// clock keeps up with `level.time`.
+    #[test]
+    fn a_capped_pass_defers_the_threads_still_due() {
+        let mut vm = vm_with(
+            r#"main() { level.n = 0; for (;;) { wait 0.05; level.n++; } }
+            spin() { wait 0.05; for (;;) wait 0; }"#,
+        );
+        let mut host = TestHost::default();
+        let main = vm.func_ref("test/script", "main");
+        let spin = vm.func_ref("test/script", "spin");
+        vm.start_thread(&mut host, main, None, vec![]);
+        vm.start_thread(&mut host, spin, None, vec![]);
+        for t in 1..=10 {
+            vm.run_frame(&mut host, 50 * t + 50);
+        }
+        assert_eq!(vm.time(), 550);
+        let n = level_string(&mut vm, "n");
+        assert!(matches!(n.as_str(), "Int(4)" | "Int(5)"), "{n}");
         assert_eq!(vm.thread_count(), 2);
     }
 

@@ -718,6 +718,9 @@ pub struct Vm {
     notify_index: sched::NotifyIndex,
     /// The threads the scheduler may pick next ([`sched::ReadyIndex`]).
     ready: sched::ReadyIndex,
+    /// The threads still due when a pass stopped at a cap, in pick order,
+    /// each under its queue stamp: the next pass runs them first.
+    deferred: std::collections::VecDeque<(sched::ThreadId, u64)>,
 }
 
 impl Default for Vm {
@@ -779,6 +782,7 @@ impl Vm {
             frame_pool: Vec::new(),
             notify_index: Default::default(),
             ready: Default::default(),
+            deferred: Default::default(),
         }
     }
 
