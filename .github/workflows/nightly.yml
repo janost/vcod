@@ -30,7 +30,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Pinned: the build image's glibc is the oldest the binaries run on.
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             name: linux-amd64
           - os: windows-latest
