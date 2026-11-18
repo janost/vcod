@@ -2,8 +2,9 @@
 //! localized message and its substitution arguments are packed into, which
 //! `setClientCvar`, `iPrintLn` and the pickup messages all send verbatim.
 //!
-//! The two separators and where each goes are in
-//! `docs/research/cod11-hud-protocol.md`, "Localized strings on the wire".
+//! The two separators and where each goes are on `ARG_SEP`, `PART_SEP` and
+//! `construct` below; the live cases are `cod11-map-cycle.md` 8.2 and
+//! `cod11-chat.md` 1.
 
 use crate::game::host::GameHost;
 use vcod_gsc::{Cx, Value};

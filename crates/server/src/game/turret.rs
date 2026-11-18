@@ -322,7 +322,7 @@ pub fn mount(
 /// `r.currentAngles`) at the clamped view at once. `turret_use` writes
 /// through `other->client`, so a user that is no player segfaults all
 /// three retail servers; vcod notifies alone there (cod11-combat.md 5.9,
-/// "useBy on a turret"). Returns false for anything not a turret.
+/// "`useBy` on a gun, a sine mover and a `misc_spawner`"). Returns false for anything not a turret.
 pub fn use_by(
     host: &mut crate::game::host::GameHost,
     cx: &mut vcod_gsc::Cx,

@@ -166,8 +166,11 @@ human squinting at a screen, which is where you come in.
   movement, combat, vehicles, sound, scripts, bots and the rest. Every claim
   names the binary address it rests on and says whether it was verified or
   inferred. I'd call this the most useful part of the repo.
-- [AGENTS.md](AGENTS.md): the contributor guide. Layout, measuring against
-  retail, and the traps I already paid for.
+- [AGENTS.md](AGENTS.md): the contributor guide. Layout, workflow, the
+  evidence rules and the research doc index.
+- [docs/dev/](docs/dev/): the contributor's reference. The module map, the
+  server tick, testing, running and debugging, measuring against retail,
+  reverse engineering, and the traps I already paid for.
 
 The code is six crates. `vcod-common` holds CoD 1's formats, collision,
 movement and protocol and what every game shares, with no GPU or audio.

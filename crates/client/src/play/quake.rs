@@ -1,5 +1,5 @@
-//! The earthquake shake on the drawn view (docs/research/cod11-combat.md,
-//! "The earthquake shake"): four slots of `(start, scale, duration, radius,
+//! The earthquake shake on the drawn view (docs/research/cod11-combat.md
+//! 17.2): four slots of `(start, scale, duration, radius,
 //! origin)` the cgame fills off `EV_EARTHQUAKE` and every
 //! `EV_FIRE_WEAPON_MG42`, and the strongest one shaking the refdef's
 //! angles after `CG_CalcViewValues`.

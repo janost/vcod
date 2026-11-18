@@ -164,7 +164,7 @@ enum Behavior {
 fn classify(kind: &str) -> Behavior {
     match kind {
         // CoD2's `Cloud` lives as a sprite does and draws through
-        // `FxSystem::clouds` (docs/research/cod2-efx.md 5.1).
+        // `FxSystem::clouds` (docs/research/cod2-efx.md 5).
         "Particle" | "OrientedParticle" | "Cylinder" | "Cloud" => Behavior::Billboard,
         "Decal" => Behavior::Decal,
         "Tail" | "Line" => Behavior::Stretch,

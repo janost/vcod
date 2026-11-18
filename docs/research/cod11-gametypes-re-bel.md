@@ -732,4 +732,4 @@ follow a killcam or a swap with no non-playing snapshot go uncounted.
   view (`common::ProbeHold`, `framed` and `aim`), every marker row matches
   on both roles and no other row of the gate moves, at 1.1d and UO: the
   slide off a `setOrigin` onto the grade moves only on a cmd's own time
-  (AGENTS.md, "A fall onto a slope").
+  (`docs/dev/traps.md`, "Movement and collision", "A fall onto a slope").

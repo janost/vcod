@@ -1,6 +1,6 @@
 //! CoD1's `G_RunFrame` and each slot's `ClientEndFrame`, run by
 //! `Server::game_frame`. The order is retail's
-//! (AGENTS.md, "The server tick"); the engine runs the clock and the
+//! (docs/dev/server-tick.md, "CoD1's frame"); the engine runs the clock and the
 //! client moves ahead of it and the configstring, command and scoreboard
 //! traffic after it.
 

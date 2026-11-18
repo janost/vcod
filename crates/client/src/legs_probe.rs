@@ -6,7 +6,7 @@
 //! `legs_ab.rs` replays cmd for cmd beside the gsc's bone log. Under a
 //! `--capture-tag` starting `torso` it runs [`TORSO_SCRIPT`] instead, firing,
 //! reloading and aiming on the move beside `client-probes/probe_torso`, for
-//! `torso_ab.rs`. Under one starting `stopgo` it runs [`STOPGO_SCRIPT`],
+//! `legs_ab.rs`. Under one starting `stopgo` it runs [`STOPGO_SCRIPT`],
 //! whose short stops and swaps take a legs clip back while it still blends
 //! out, beside the same `probe_legs`.
 

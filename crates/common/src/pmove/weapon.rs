@@ -41,7 +41,7 @@ pub const WEAPON_DEPLOY: u8 = 12;
 pub const WEAPON_BREAKDOWN: u8 = 13;
 
 /// The wire `EV_*` ids pmove raises. `EV_EMPTYCLIP` (150) is not among them:
-/// docs/research/cod11-events-and-fx.md section 1.5 found no site that raises it.
+/// docs/research/cod11-combat.md section 1.5 found no site that raises it.
 pub use crate::net::event_ids::{
     EV_EJECT_BRASS, EV_FIRE_MELEE, EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT, EV_MELEE_SWIPE,
     EV_NOAMMO, EV_PULLBACK_WEAPON, EV_PUTAWAY_WEAPON, EV_RAISE_WEAPON, EV_RECHAMBER_WEAPON,

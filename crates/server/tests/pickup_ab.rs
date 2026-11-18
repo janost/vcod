@@ -150,7 +150,7 @@ struct Sample {
 }
 
 /// The ring's new slots between two samples: `(prev..cur)`, the order
-/// retail writes them (AGENTS.md, `eventSequence`).
+/// retail writes them (docs/dev/traps.md, "Wire and netcode", `eventSequence`).
 fn drain(
     last: &mut Option<i32>,
     seq: i32,

@@ -1,7 +1,7 @@
 //! CoD1's `ClientThink_real` for every packet since the last frame, run by
 //! `Server::replay_moves`: the cmds in arrival
 //! order, each one's shots, throws, falls and touches inside it (combat
-//! doc 16; AGENTS.md, "The server tick").
+//! doc 16; docs/dev/server-tick.md, "CoD1's frame").
 
 use super::cod1_game::{Cod1Module, Lend};
 use super::*;

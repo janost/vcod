@@ -352,7 +352,8 @@ pub fn send_messages<G: GameModule>(e: &mut Engine<G>) {
 /// `SV_Frame` for `frames` owed game frames (at least
 /// [`GameModule::MIN_FRAMES`]), then one round of timeouts and messages,
 /// or one after each frame under [`GameModule::POST_EACH_FRAME`]
-/// (AGENTS.md, "The server tick"). `now` is the tick's moment.
+/// (docs/dev/server-tick.md, "One skeleton for every game"). `now` is the
+/// tick's moment.
 pub fn tick<G: GameModule>(e: &mut Engine<G>, now: Instant, frames: u32) {
     crate::tick_trace::step!("SV_Frame frames {frames} svs {}", G::svs_time_ms(e));
     if !G::frame_head(e, now, frames) {

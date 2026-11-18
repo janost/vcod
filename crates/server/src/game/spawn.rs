@@ -561,8 +561,8 @@ fn turret_def(
 /// key name: `G_SpawnString` (1.1d 0x61390, CoD2 0x80f415e) `strcmp`s the
 /// pairs in lump order and takes the first. None of the five reaches
 /// script: neither `fields::ENTITY_FIELDS` nor `fields::RADIANT_KEYS` names
-/// any of them (the AGENTS.md gotcha on Radiant keys), so they are read
-/// here rather than through `host.get_field`.
+/// any of them (docs/dev/traps.md, "Script", "A BSP key reaches script"),
+/// so they are read here rather than through `host.get_field`.
 fn turret_keys(pairs: &[(String, String)]) -> crate::game::turret::TurretKeys {
     let f =
         |key: &str| -> Option<f32> { spawn_string(pairs, key).and_then(|v| v.trim().parse().ok()) };
