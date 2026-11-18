@@ -365,6 +365,7 @@ impl Cod4Level {
             return;
         }
         let busy = vcod_cod4::pmove::pmf::MANTLE | vcod_cod4::pmove::pmf::SPRINTING;
+        // 15..=19 is unverified against retail; the press refuses 15..=20 (cod4-gsc.md 9).
         if ps.pm_flags & busy != 0 || (15..=19).contains(&ps.weapon_state) {
             return;
         }
