@@ -1,4 +1,4 @@
-//! Model attachment builtins, all five operating on `GEntity::attachments`,
+//! Model attachment builtins, all seven operating on `GEntity::attachments`,
 //! a per-entity list of `(model, tag)` pairs. `setViewModel` hangs off a
 //! `gclient_t` in retail and lives beside the other player methods in
 //! `client.rs`.

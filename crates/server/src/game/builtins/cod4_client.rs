@@ -19,7 +19,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("logstring", nothing),
     ("addtestclient", add_test_client),
     ("stoprumble", nothing),
-    // Over the host's world, the map's clip map (`game::cod4::clip`).
     ("setperk", set_perk),
     ("pingplayer", ping_player),
     ("unsetperk", unset_perk),

@@ -161,7 +161,8 @@ pub enum ClientEvent {
 /// (cod2-gsc-diff.md 4.1, "timeOffset and deathAnimDuration"): a hit's
 /// `timeOffset` ([`crate::game::cod2::time_offset`] for a bullet, 0 for
 /// every other `G_Damage` caller) and the death anim's length
-/// `BG_AnimScriptEvent` returns. Both 0 until a CoD2 hit sets them.
+/// `BG_AnimScriptEvent` returns. Both 0 until a hit sets them. CoD4's
+/// level fills the same pair (`Cod4HostState::callback`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Cod2CallbackArgs {
     pub time_offset: i32,
