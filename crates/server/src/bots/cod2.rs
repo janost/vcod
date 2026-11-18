@@ -371,8 +371,7 @@ pub struct Cod2Bots {
 type HitFelt = (usize, i32, [f32; 3]);
 
 /// A smoke grenade on its way out: the throw's (pitch, yaw), the smoke
-/// weapon, whether the pullback has reached the hold, and the ticks
-/// since the ask.
+/// weapon and the ticks since the ask.
 #[derive(Clone, Copy, Debug)]
 pub struct SmokeThrow {
     aim: [f32; 2],
