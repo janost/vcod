@@ -963,6 +963,16 @@ mod tests {
         );
     }
 
+    /// The registry was captured off a server started with its own
+    /// rcon password; a fresh table carries none, as retail's default is
+    /// empty (BUG-104).
+    #[test]
+    fn a_fresh_table_has_no_rcon_password() {
+        for p in [1, 6, 22] {
+            assert_eq!(Cvars::for_protocol(p).get("rconPassword"), "", "{p}");
+        }
+    }
+
     /// `cvarlist <filter>` on a retail 1.1d server's 210 cvars (handshake
     /// doc, "Console commands over rcon"): the names each filter listed.
     #[test]

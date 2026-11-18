@@ -12,7 +12,8 @@ Left out: the `scr_*` cvars and the seven other `set` lines of
 `default_mp.cfg`, which `Cvars::exec_cfg` creates from the paks, and the
 rows `cvars.rs` already seeds (`ENGINE_MIRRORED`, `ENGINE_DEFAULTS`). The
 defaults retail takes from the host (`fs_basepath`, `fs_homepath`,
-`username`) are written empty.
+`username`) and the capture's own `rconPassword` (retail's default is
+empty) are written empty.
 """
 import re
 import socket
@@ -20,7 +21,7 @@ import sys
 
 CFG_SETS = {"sensitivity", "cl_freelook", "ui_mousepitch", "m_pitch", "m_filter",
             "cl_mouseaccel", "ui_allow_sniperrifles"}
-HOST = {"fs_basepath", "fs_homepath", "username"}
+HOST = {"fs_basepath", "fs_homepath", "username", "rconpassword"}
 SEEDED = re.compile(r'^\s+\("([A-Za-z0-9_]+)",')
 
 
