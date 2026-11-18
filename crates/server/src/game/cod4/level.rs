@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use glam::Vec3;
@@ -296,10 +297,11 @@ pub struct Cod4Level {
     /// Each client's playerstate as the last frame left it: what a
     /// follower copies (`SV_GetArchivedClientInfo` at archive time 0, the
     /// newest archived frame).
-    archive: Vec<Option<PlayerState>>,
+    archive: Vec<Option<Rc<PlayerState>>>,
     /// Every frame's playerstates, newest first, for the killcam's look
-    /// back (`SV_GetArchivedClientInfo` at an `archivetime`).
-    history: std::collections::VecDeque<(i32, Vec<Option<PlayerState>>)>,
+    /// back (`SV_GetArchivedClientInfo` at an `archivetime`). A row shares
+    /// its states with that frame's `archive`.
+    history: std::collections::VecDeque<(i32, Vec<Option<Rc<PlayerState>>>)>,
     level_time: i32,
     /// `level.previousTime`: the last frame's `level.time` (`G_RunFrame`,
     /// 0x80b6212).
@@ -1305,7 +1307,7 @@ impl Cod4Level {
             *a = p.as_ref().map(|p| {
                 let mut ps = p.ps.clone();
                 ps.sent_angles();
-                ps
+                Rc::new(ps)
             });
         }
         self.history.push_front((now_ms, self.archive.clone()));
@@ -1745,7 +1747,7 @@ impl Cod4Level {
             }
             Err(_) => return None,
         };
-        let theirs = self.archive.get(target)?.clone()?;
+        let theirs = PlayerState::clone(self.archive.get(target)?.as_ref()?);
         let is_player = theirs.word(ps!("otherFlags")) & POF_PLAYER != 0;
         let team = self.rt.client_team(target) as u32;
         (is_player && !refused.team(team)).then_some((target, theirs))
@@ -1844,7 +1846,8 @@ impl Cod4Level {
                 .find(|(t, _)| *t >= at)
                 .and_then(|(t, f)| {
                     let ps = f.get(target as usize)?.as_ref()?;
-                    (ps.word(ps!("otherFlags")) & POF_PLAYER != 0).then(|| (*t, ps.clone()))
+                    (ps.word(ps!("otherFlags")) & POF_PLAYER != 0)
+                        .then(|| (*t, PlayerState::clone(ps)))
                 });
             if hit.is_some() || archive == 0 {
                 break hit;
@@ -2644,7 +2647,7 @@ mod tests {
             p.ps.set(ps!("eFlags"), 0x22);
             p.ps.set(ps!("clientNum"), slot as u32);
         }
-        level.archive[slot] = Some(p.ps.clone());
+        level.archive[slot] = Some(Rc::new(p.ps.clone()));
     }
 
     /// What a spectator's end frame leaves: `otherFlags`, the slot
