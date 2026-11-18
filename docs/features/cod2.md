@@ -209,7 +209,8 @@ levelshot` writes a resampled 128 x 128 `levelshots/<map>.tga`,
   dir, over UDP (`sv_allowDownload`; stock paks refused as retail does),
   or redirects to `sv_wwwBaseURL` (`sv_wwwDownload`).
 - `--set dedicated=2` heartbeats `master.cod.pm:20710` every three
-  minutes.
+  minutes, or the master `sv_master1` names, plus any in
+  `sv_master2`..`5`. Retail has no `sv_master` dvars.
 - `g_log` writes 1.3's `games_mp.log`
   ([cod11-map-cycle.md](../research/cod11-map-cycle.md) 9).
 - Retail `CoD2MP_s.exe` 1.3 joins it, pure or not: menus, spawn, move,

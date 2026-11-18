@@ -172,16 +172,23 @@ three minutes, at most one packet a second to a master host:
 | CoD1 | `master.cod.pm:20510` |
 | UO | `master.cod.pm:20610` |
 | CoD2 | `master.cod.pm:20710` |
-| CoD4 | `master.cod.pm:20810` (`sv_master1` overrides it) |
+| CoD4 | `master.cod.pm:20810` |
 
 CoD1, UO and CoD2 send a flatline on Ctrl-C or `quit`.
 
+`sv_master1` replaces the default master and `sv_master2`..`5` add
+more, in every game; each gets the game's master port.
+
 vcod's browser lists `master.cod.pm`'s servers. A retail client's
 Internet list comes from Activision's master, which hears from a vcod
-server only when one of `sv_master2`..`5` names it, on CoD1 and UO:
-`--set sv_master2=codmaster.activision.com` (CoD1) or
-`--set sv_master2=coduomaster.activision.com` (UO). The server then
-heartbeats both, each on the game's master port.
+server only when one of `sv_master2`..`5` names it:
+
+| Game | Add |
+|---|---|
+| CoD1 | `--set sv_master2=codmaster.activision.com` |
+| UO | `--set sv_master2=coduomaster.activision.com` |
+| CoD2 | `--set sv_master2=cod2master.activision.com` |
+| CoD4 | `--set sv_master2=cod4master.activision.com` |
 
 ### Bans
 

@@ -133,6 +133,26 @@ impl Masters {
         }
     }
 
+    /// CoD2 and CoD4, whose retail servers have no `sv_master` dvars: reads
+    /// `sv_master1..5` through `get` before each beat, an empty
+    /// `sv_master1` standing for `default`. A name that failed to resolve
+    /// comes back from its cvar and is tried again at the next beat.
+    pub fn sync_cvars<'a>(&mut self, default: &str, get: impl Fn(&str) -> &'a str) {
+        const NAMES: [&str; MAX_MASTERS] = [
+            "sv_master1",
+            "sv_master2",
+            "sv_master3",
+            "sv_master4",
+            "sv_master5",
+        ];
+        for (i, name) in NAMES.into_iter().enumerate() {
+            match get(name) {
+                "" if i == 0 => self.set(i, default),
+                v => self.set(i, v),
+            }
+        }
+    }
+
     /// `SV_Heartbeat_f` (0x8084bd0): the next frame sends.
     pub fn force(&mut self) {
         self.next_ms = -9_999_999;
