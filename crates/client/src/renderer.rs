@@ -1054,10 +1054,6 @@ impl SceneTargets<'_> {
     }
 }
 
-/// Where the SSAO multiply goes in the merged list: after the last draw
-/// that sorts up to decal, so it darkens the opaque surfaces and the
-/// polygonOffset layers and impact marks blended onto them and none of the
-/// blends after.
 /// Where the depth copy a CoD2 feather reads goes: before the first
 /// entity or view weapon surface, so the copy holds the world (props
 /// included) and not the models, as retail's `floatZ` under
@@ -1070,6 +1066,10 @@ fn feather_copy_at(items: &[SortedItem], split: usize) -> usize {
         .map_or(split, |m| m.min(split))
 }
 
+/// Where the SSAO multiply goes in the merged list: after the last draw
+/// that sorts up to decal, so it darkens the opaque surfaces and the
+/// polygonOffset layers and impact marks blended onto them and none of the
+/// blends after.
 fn ssao_split(
     items: &[SortedItem],
     world: &[f32],
@@ -2582,8 +2582,6 @@ fn stage_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-/// A pipeline over shader.wgsl's world vertex layout into the scene target:
-/// the world, layer, overlay and stage pipelines, and the marks'.
 /// `f(0..n)` on scoped threads, in index order. Pipeline creation is
 /// thread safe, and a driver that compiles on the calling thread (lavapipe)
 /// takes seconds a pipeline for `shader.wgsl`'s stage entries.
@@ -2629,6 +2627,8 @@ pub(crate) fn par_build_on<T: Send>(
         .collect()
 }
 
+/// A pipeline over shader.wgsl's world vertex layout into the scene target:
+/// the world, layer, overlay and stage pipelines, and the marks'.
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn scene_pipeline(
     device: &wgpu::Device,
@@ -2888,7 +2888,8 @@ struct HudTextPass {
 }
 
 /// On-screen HUD (chat, killfeed, scoreboard, status). Same lazy texture
-/// cache and run pattern as [`FxPass`], straight alpha only, no depth test.
+/// cache and run pattern as [`FxPass`]; straight alpha, plus additive for
+/// [`hud::ADDITIVE`] quads; no depth test.
 struct HudPass {
     pipeline: wgpu::RenderPipeline,
     pipeline_1x: wgpu::RenderPipeline,
@@ -5864,10 +5865,6 @@ impl Renderer {
         self.vis_counts = VisCounts::default();
     }
 
-    /// Quads in draw order (already back-to-front); `time` is the shader
-    /// clock in seconds (tcMod, animMap, wave gens). Unseen images resolve
-    /// lazily; an unresolvable one warns once and is cached as `None`. Each
-    /// run draws once per stage (`fx_stage_draws`).
     /// An fx material's image as the fx pass binds it: a scripted stage
     /// names its image file, a material without a script resolves through
     /// the image map.
@@ -5925,6 +5922,10 @@ impl Renderer {
         self.fx.textures.len()
     }
 
+    /// Quads in draw order (already back-to-front); `time` is the shader
+    /// clock in seconds (tcMod, animMap, wave gens). Unseen images resolve
+    /// lazily; an unresolvable one warns once and is cached as `None`. Each
+    /// run draws once per stage (`fx_stage_draws`).
     pub fn set_fx_quads(&mut self, fs: &dyn AssetSource, quads: Vec<FxQuad>, time: f32) {
         // build_quads is capped by construction; the vertex buffer is sized
         // exactly, so truncate anyway.
@@ -6929,8 +6930,6 @@ impl Renderer {
         }
     }
 
-    /// The `r_gamma` textures bake in from the next `load_world` (retail
-    /// reloads every image per map), or `None` with device gamma.
     /// `r_swapInterval`, read every frame (`GLimp_EndFrame` 0x50a610 calls
     /// `wglSwapIntervalEXT` when it changes): 0 presents without waiting
     /// for the vertical blank.
@@ -6965,7 +6964,6 @@ impl Renderer {
         self.frame_writes.borrow().clone()
     }
 
-    /// `r_vc_depthprepass` (cod4-client-perf.md 12).
     /// Whether a CoD4 feather's `floatZ` comes from the depth prepass
     /// ([`Self::floatz_prepass`]) or the copy at the split.
     #[cfg(test)]
@@ -6980,6 +6978,7 @@ impl Renderer {
         self.cookies_on_prepass = on;
     }
 
+    /// `r_vc_depthprepass` (cod4-client-perf.md 12).
     pub fn set_depth_prepass(&mut self, on: bool) {
         self.depth_prepass = on;
     }
@@ -6996,8 +6995,9 @@ impl Renderer {
         self.dlight_quality = quality;
     }
 
-    /// The texture gamma of the next world load. HUD images reload under
-    /// a new one, as retail reloads every image at a map load.
+    /// The `r_gamma` textures bake in from the next `load_world`, or `None`
+    /// with device gamma. HUD images reload under a new one, as retail
+    /// reloads every image at a map load.
     pub fn set_image_gamma(&mut self, gamma: Option<f32>) {
         let table = gamma.map(|g| crate::gamma::ramp(g, 0));
         if table != self.image_gamma {
@@ -7054,8 +7054,8 @@ impl Renderer {
         &self.vis_counts
     }
 
-    /// (stage draws emitted last frame, stages dropped at load, unique
-    /// shader-lib warnings) for the F3 `shader:` line.
+    /// (stage draws emitted last frame, dlight draws last frame, stages
+    /// dropped at load, unique shader-lib warnings) for the F3 `shader:` line.
     pub fn shader_stats(&self) -> (usize, usize, usize, usize) {
         (
             self.world.as_ref().map_or(0, |w| w.stage_draws_last),
@@ -7157,7 +7157,6 @@ impl Renderer {
         })
     }
 
-    /// `[variant][two_sided][bias]`.
     /// The world's draw sets: the world under the shared camera, then each
     /// moved brush model under its own.
     fn world_sets<'a>(
@@ -10562,11 +10561,6 @@ fn camera_bind_group(
     })
 }
 
-/// Whether a script-less `<type>@<image>` world material's
-/// `shadertypes/world/<type>.stype` draws opaque: no stage alpha-tests and
-/// the first one does not blend. Its image's alpha is then read by nothing
-/// (wood@chateau_exteriordoor's is a gloss mask; docs/research/
-/// cod11-shader-scripts.md, "World shader types").
 /// How a static prop's skin draws when it has no `skins/` block, by its
 /// `type@` template as the entity path resolves it (shader doc 8.2).
 enum PropSkinDraw {
@@ -10621,6 +10615,11 @@ fn uploads_cutout(img: &Image, levels: &[Vec<u8>]) -> bool {
             .any(|l| l.iter().skip(3).step_by(4).any(|&a| a < 128))
 }
 
+/// Whether a script-less `<type>@<image>` world material's
+/// `shadertypes/world/<type>.stype` draws opaque: no stage alpha-tests and
+/// the first one does not blend. Its image's alpha is then read by nothing
+/// (wood@chateau_exteriordoor's is a gloss mask; docs/research/
+/// cod11-shader-scripts.md, "World shader types").
 fn world_type_draws_opaque(fs: &dyn AssetSource, name: &str) -> bool {
     crate::entity_material::skin_type(name)
         .and_then(|kind| {
@@ -11430,8 +11429,6 @@ enum HudTex {
     Missing,
 }
 
-/// A material name (`hudStanceStand`, `hintHealth`) resolves through the
-/// shader-script image map, same as fx; anything else is a bare pk3 path.
 /// The material a prop skin draws with: CoD1's `skins/<name>` script
 /// block, or the CoD2 material the model names.
 fn prop_material<'a>(lib: &'a MaterialLib, cod2: bool, skin: &str) -> Option<&'a Material> {
@@ -11537,6 +11534,8 @@ fn material_lib(fs: &dyn AssetSource) -> MaterialLib {
     }
 }
 
+/// A material name (`hudStanceStand`, `hintHealth`) resolves through the
+/// shader-script image map, same as fx; anything else is a bare pk3 path.
 /// `ShaderLib::load` folds every material name to lowercase, so the lookup
 /// does too before falling back to the name as given.
 fn hud_texture_path(
@@ -11864,11 +11863,6 @@ fn vm_uniform_group(
     })
 }
 
-/// Group 0 is the camera, group 1 the viewmodel skin layout (the uploaded
-/// models' bind groups are built against it), group 2 the bone storage
-/// buffer, group 3 the stage's `StageParams`. Vertex buffer 1 is
-/// instance-step `InstanceRaw`. The entity materials also build the
-/// viewmodel's pipelines over `vm`'s layouts.
 /// [`DynHandle::bone_boxes`] of `model`'s LOD 0.
 fn bone_boxes(model: &model::Model) -> Vec<(u8, glam::Vec3, glam::Vec3)> {
     bone_boxes_of(model.lods.first().into_iter().flat_map(|l| &l.surfaces))
@@ -11954,6 +11948,11 @@ fn instance_seen(d: &DynamicPass, k: usize, frustum: &vcod_common::vis::Frustum)
     frustum.intersects_aabb(lo - grow, hi + grow)
 }
 
+/// Group 0 is the camera, group 1 the viewmodel skin layout (the uploaded
+/// models' bind groups are built against it), group 2 the bone storage
+/// buffer, group 3 the stage's `StageParams`. Vertex buffer 1 is
+/// instance-step `InstanceRaw`. The entity materials also build the
+/// viewmodel's pipelines over `vm`'s layouts.
 fn create_dynamic_pass(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
