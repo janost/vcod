@@ -160,11 +160,8 @@ pub mod ev {
 }
 
 /// `ClientThink_real`'s `pm.tracemask`: alive, dead and spectating.
-pub const MASK_PLAYERSOLID: u32 = 0x2810011;
-pub const MASK_DEADSOLID: u32 = 0x810011;
+pub use vcod_common::clipmap::{CONTENTS_BODY, MASK_DEADSOLID, MASK_PLAYERSOLID};
 pub const MASK_SPECTATOR: u32 = 0x800811;
-/// `CONTENTS_BODY`.
-pub const CONTENTS_BODY: u32 = 0x200_0000;
 /// `otherFlags` 4: a player in the world (`POF_PLAYER`).
 pub const POF_PLAYER: u32 = 4;
 
@@ -1399,7 +1396,7 @@ const FOLIAGE_RESET_MS: i32 = 500;
 /// tall (0x820df28).
 const FOLIAGE_BOX_SCALE: f32 = 0.75;
 const FOLIAGE_BOX_HEIGHT: f32 = f32::from_bits(0x3f66_6666);
-const CONTENTS_FOLIAGE: u32 = 2;
+use vcod_common::clipmap::CONTENTS_FOLIAGE;
 
 /// `PM_FoliageSounds` (inlined at 0x805d05e): a body moving at 40 or more
 /// raises `EV_FOLIAGE_SOUND` each time its interval (1.5 s slow, down to

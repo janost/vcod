@@ -22,8 +22,8 @@ pub type PenTable = [[f32; 29]; 4];
 pub const PERK_BULLET_PENETRATION: u32 = 0x20;
 /// `iDFlags` 8, `level.iDFLAGS_PENETRATION`: a hit past a first surface.
 pub const DFLAG_PENETRATION: i32 = 8;
-/// `CONTENTS_BODY` and the hit's surface flags for a body (flesh, 7).
-const CONTENTS_BODY: u32 = 0x200_0000;
+/// The hit's surface flags for a body (flesh, 7).
+use vcod_common::clipmap::CONTENTS_BODY;
 const SURF_FLESH: u32 = 0x70_0000;
 /// `SURF_NOPENETRATE`: such a surface stops a round.
 const SURF_NOPENETRATE: u32 = 0x100;

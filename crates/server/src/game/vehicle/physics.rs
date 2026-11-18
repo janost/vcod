@@ -19,7 +19,7 @@ pub const ENTITYNUM_WORLD: u32 = 1022;
 pub const ENTITYNUM_NONE: u32 = 1023;
 /// `ent+0x1a0` at spawn: what the hull's ground trace and slide clip.
 pub const CLIPMASK: u32 = 0x201;
-const CONTENTS_BODY: u32 = 0x2000000;
+use vcod_common::clipmap::CONTENTS_BODY;
 const CONTENTS_VEHICLE: u32 = 0x800000;
 /// The wheel traces' masks, driven and not (0x81331).
 const WHEEL_MASK_DRIVEN: u32 = 0x10211;

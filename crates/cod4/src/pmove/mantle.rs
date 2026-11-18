@@ -22,9 +22,7 @@ use crate::assets::model::XAnim;
 
 /// `MANTLE_ON` and `MANTLE_OVER` surface flags, and the contents the
 /// surface probe traces (`CONTENTS_MANTLE`).
-pub const SURF_MANTLE_ON: u32 = 0x200_0000;
-pub const SURF_MANTLE_OVER: u32 = 0x400_0000;
-pub const CONTENTS_MANTLE: u32 = 0x100_0000;
+pub use vcod_common::clipmap::{CONTENTS_MANTLE, SURF_MANTLE_ON, SURF_MANTLE_OVER};
 /// `eFlags` 0x8000: mantling.
 pub const EF_MANTLE: u32 = 0x8000;
 

@@ -134,10 +134,8 @@ pub mod ev {
     pub const STEP_VIEW: i32 = 143;
 }
 
-/// `ClientThink_real`'s `pm.tracemask` (0x80f5d2e): alive.
-pub const MASK_PLAYERSOLID: u32 = 0x2810011;
-/// ... and dead.
-pub const MASK_DEADSOLID: u32 = 0x810011;
+/// `ClientThink_real`'s `pm.tracemask` (0x80f5d2e): alive, and dead.
+pub use vcod_common::clipmap::{MASK_DEADSOLID, MASK_PLAYERSOLID};
 /// `SpectatorThink` (0x80f4eb2).
 pub const MASK_SPECTATOR: u32 = 0x800811;
 

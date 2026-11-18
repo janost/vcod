@@ -1,6 +1,7 @@
 //! `PM_GroundTrace` and the landing (docs/research/cod2-movement.md 7, 8).
 
 use glam::Vec3;
+use vcod_common::clipmap::{SURF_NODAMAGE, SURF_NOSTEPS, SURF_SLICK, surface_material};
 
 use super::anim::Event;
 use super::fpu::{self, d};
@@ -168,10 +169,10 @@ fn ground_trace_missed(pm: &mut Pmove, pml: &mut Pml) {
 /// `PM_GroundSurfaceType` (0x80e2220): `surfaceFlags` bits 20..24, 0 under
 /// the no-sound flag 0x2000.
 pub(crate) fn surface_type(t: &Tr) -> i32 {
-    if t.surface_flags & 0x2000 != 0 {
+    if t.surface_flags & SURF_NOSTEPS != 0 {
         0
     } else {
-        ((t.surface_flags & 0x1f0_0000) >> 20) as i32
+        surface_material(t.surface_flags) as i32
     }
 }
 
@@ -208,7 +209,7 @@ pub(crate) fn crash_land(pm: &mut Pmove, pml: &mut Pml) {
         log::warn!("bg_fallDamageMaxHeight must be greater than bg_fallDamageMinHeight");
         0
     } else if height <= lo
-        || pml.ground_trace.surface_flags & 1 != 0
+        || pml.ground_trace.surface_flags & SURF_NODAMAGE != 0
         || ps.pm_type > pm_type::INTERMISSION
     {
         0
@@ -254,7 +255,7 @@ pub(crate) fn crash_land(pm: &mut Pmove, pml: &mut Pml) {
             }
         }
     } else {
-        if damage < 100 && pml.ground_trace.surface_flags & 2 == 0 {
+        if damage < 100 && pml.ground_trace.surface_flags & SURF_SLICK == 0 {
             let stun = (damage * 35 + 500).min(2000);
             ps.pm_time = stun;
             ps.pm_flags |= super::pmf::TIME_LAND;

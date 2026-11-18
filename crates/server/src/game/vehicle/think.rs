@@ -671,7 +671,7 @@ struct OtherVehicle {
     jolting: bool,
 }
 
-const CONTENTS_BODY: u32 = 0x0200_0000;
+use vcod_common::clipmap::CONTENTS_BODY;
 
 impl physics::VehicleWorld for BodiesWorld<'_> {
     fn trace(

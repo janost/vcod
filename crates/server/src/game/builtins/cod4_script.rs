@@ -112,8 +112,7 @@ const MASK_PHYSICS: u32 = 0x82_0011;
 const MASK_DAMAGE_CONE: u32 = 0x80_2011;
 const MASK_SIGHT_CONE: u32 = 0x801;
 /// `playerMins`, `playerMaxs` (0x820e024, 0x820e030).
-const PLAYER_MINS: Vec3 = Vec3::new(-15.0, -15.0, 0.0);
-const PLAYER_MAXS: Vec3 = Vec3::new(15.0, 15.0, 70.0);
+use vcod_cod4::pmove::{PLAYER_MAXS, PLAYER_MINS};
 
 /// The handlers 1.7 leaves empty (`push ebp; mov ebp,esp; pop ebp; ret`,
 /// VERIFIED: `sendRanks` 0x80bb058, `endParty` 0x80bb05e, `endLobby`
