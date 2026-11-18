@@ -139,13 +139,14 @@ pub fn decode_zone_cube(img: &ZoneImage) -> Result<Vec<Vec<Image>>> {
     );
     let [w, h, _] = def.dimensions.map(u32::from);
     ensure!(
-        w > 0 && h > 0 && w <= MAX_IMAGE_DIM && h <= MAX_IMAGE_DIM,
-        "bad size {w}x{h}"
+        w > 0 && w == h && w <= MAX_IMAGE_DIM,
+        "{}: cube of {w}x{h}",
+        img.name
     );
     let levels = if def.flags & IMG_FLAG_NOMIPMAPS != 0 {
         1
     } else {
-        w.max(h).ilog2() + 1
+        w.ilog2() + 1
     };
     let dims: Vec<(u32, u32)> = (0..levels)
         .map(|l| ((w >> l).max(1), (h >> l).max(1)))
@@ -219,6 +220,33 @@ mod tests {
         };
         assert_eq!(mips, [[6; 8], [7; 8], [8; 8]]);
         assert!(decode_load_def(&d, &data, 1, 0).is_err());
+    }
+
+    /// A cube must be square: its level count and the renderer's cube
+    /// both read one side.
+    #[test]
+    fn a_cube_that_is_not_square_is_refused() {
+        let cube = |w: u16, h: u16| {
+            let n: usize = (0..=w.max(h).ilog2())
+                .map(|l| 4 * (usize::from(w >> l).max(1)) * usize::from(h >> l).max(1))
+                .sum();
+            let (mut d, data) = def(d3dfmt::A8R8G8B8, w, h, 0, vec![0; 6 * n]);
+            d.data = Some(data);
+            ZoneImage {
+                name: "probe".into(),
+                map_type: MAPTYPE_CUBE,
+                semantic: 0,
+                width: w,
+                height: h,
+                depth: 1,
+                category: 0,
+                delay_load_pixels: false,
+                load_def: Some(d),
+            }
+        };
+        assert_eq!(decode_zone_cube(&cube(64, 64)).unwrap()[0].len(), 7);
+        let e = decode_zone_cube(&cube(64, 128)).err().expect("decoded");
+        assert!(format!("{e:#}").contains("cube of 64x128"), "{e:#}");
     }
 
     #[test]
