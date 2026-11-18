@@ -176,8 +176,10 @@ ends on its block's last byte. VERIFIED live.
   the command the one `reliableAcknowledge` names: `SV_UserMove`
   (0x8172560) XORs the word at 0x13e77f94, the client's +0x20e5c and the
   hash (0x8197b80, length 32) of its command slot `+0x20e54 & 127`
-  (0x81725eb..0x8172633), after refusing a count past 32 (0x81725c3).
-  INFERRED (the fields' meaning off the code).
+  (0x81725eb..0x8172633), after refusing a count past 32 (0x81725c3,
+  `cmdCount > MAX_PACKET_USERCMDS`) or under 1 (0x81725bd, `cmdCount <
+  1`): each prints and returns before a cmd is read, after the delta
+  message is set. INFERRED (the fields' meaning off the code).
 - The op block is compressed with the same static tree and scrambled from
   byte 9 with key `challenge ^ serverId ^ messageAcknowledge`, walking the
   newest server command's text. INFERRED. The capture's 50
