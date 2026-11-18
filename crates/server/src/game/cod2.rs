@@ -107,6 +107,20 @@ pub fn binocular_notify(event: i32) -> Option<&'static str> {
     })
 }
 
+/// The events and parms a cmd raised since `old`, oldest first, as
+/// `ClientEvents` (lnxded 0x80f52da) walks them: from `eventSequence - 4` at
+/// the earliest, so the 4-slot ring is never read past a lap.
+pub fn cmd_events(ps: &PlayerState, old: i32) -> Vec<(i32, i32)> {
+    (old.max(ps.event_sequence - 4)..ps.event_sequence)
+        .map(|i| {
+            (
+                ps.events[(i & 3) as usize],
+                ps.event_parms[(i & 3) as usize],
+            )
+        })
+        .collect()
+}
+
 /// A CoD2 map's server world: the engine's collision through
 /// `vcod_cod2::collision::collision_world`, its PVS, and the spawn spots
 /// the bots' graph floods from. No hazard, rubble or cover list: those are
@@ -1018,7 +1032,8 @@ impl Cod2Level {
             p.ps.weapon_state = p.ws.state;
         }
         sync_weapons_out(&mut self.rt.host, slot, &p.ws);
-        let fired = (seq..p.ps.event_sequence).map(|i| p.ps.events[(i & 3) as usize]);
+        let events = cmd_events(&p.ps, seq);
+        let fired = events.iter().map(|&(e, _)| e);
         self.combat.fire_recoil(&mut p.aim, &p.ps, &p.ws, fired);
         if let Some((end, duration)) = mantle {
             let (mins, maxs) = (p.ps.mins, p.ps.maxs);
@@ -1035,14 +1050,6 @@ impl Cod2Level {
         state.body = playing.then(|| crate::game::cod2_blast::BlastBody::of(ps));
         let origin = ps.origin.to_array();
         let eye = [origin[0], origin[1], origin[2] + ps.view_height_current];
-        let events: Vec<(i32, i32)> = (seq..ps.event_sequence)
-            .map(|i| {
-                (
-                    ps.events[(i & 3) as usize],
-                    ps.event_parms[(i & 3) as usize],
-                )
-            })
-            .collect();
         let aim = [ps.view_angles[0], ps.view_angles[1]];
         self.rt.set_client_pm_type(slot, pm);
         self.rt.set_client_on_ground(slot, on_ground);
@@ -1897,6 +1904,22 @@ mod tests {
         body.copy_from(&ps);
         assert_eq!((body.sequence, body.copied), (3, 1));
         assert_eq!(body.events[2], ev::EV_FIRE_WEAPON);
+    }
+
+    /// Six events in one cmd: the ring holds the newest four once each, and
+    /// `ClientEvents` handles each of those once, not the two oldest twice.
+    #[test]
+    fn a_cmd_s_event_walk_stops_at_the_ring_s_four() {
+        let mut ps = PlayerState::default();
+        let old = ps.event_sequence;
+        for parm in 1..=6 {
+            ps.add_event(100 + parm, parm);
+        }
+        assert_eq!(
+            cmd_events(&ps, old),
+            vec![(103, 3), (104, 4), (105, 5), (106, 6)]
+        );
+        assert_eq!(cmd_events(&ps, old + 5), vec![(106, 6)]);
     }
 
     #[test]
