@@ -575,6 +575,13 @@ pub struct Display {
     pub join: Option<JoinRequest>,
 }
 
+/// A sort column's key: a number or a text, one kind per column.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum SortCol {
+    Number(i64),
+    Text(String),
+}
+
 use super::ScriptMenus;
 use vcod_cod4::menuexp::atoi;
 use vcod_cod4::net::parse::Gamestate;
@@ -679,39 +686,38 @@ impl ScriptMenus {
             })
             .collect();
         if let Some(col) = self.display.sort {
-            rows.sort_by(|&a, &b| {
-                let o = self.compare(&list[a], &list[b], col);
-                if self.display.reverse { o.reverse() } else { o }
-            });
+            // Each row's key is built once, not twice a comparison.
+            if self.display.reverse {
+                rows.sort_by_cached_key(|&i| std::cmp::Reverse(self.sort_key(&list[i], col)));
+            } else {
+                rows.sort_by_cached_key(|&i| self.sort_key(&list[i], col));
+            }
         }
         self.display.rows = rows;
     }
 
-    /// `LAN_CompareServers` (0x475b20): the column's key, then the ping,
-    /// the game type and the host name.
-    fn compare(&self, a: &Server, b: &Server, col: i32) -> std::cmp::Ordering {
-        let (ia, ib) = (a.info(), b.info());
-        let host = |s: &Server| super::controls::clean(&s.info().hostname).to_lowercase();
-        let ping = |s: &Server| s.rec.ping as i16;
+    /// `LAN_CompareServers` (0x475b20) as a key: the column's, then the
+    /// ping, the game type and the host name.
+    fn sort_key(&self, s: &Server, col: i32) -> (SortCol, i16, String, String) {
+        let i = s.info();
+        let ping = s.rec.ping as i16;
+        let host = || super::controls::clean(&i.hostname).to_lowercase();
+        let n = |v: i64| SortCol::Number(v);
         let key = match col {
-            0 => ia.password.cmp(&ib.password),
+            0 => n(i.password.into()),
             // A `hw` of 0 sorts last.
-            1 => (ia.hw == 0, ia.hw).cmp(&(ib.hw == 0, ib.hw)),
-            2 => host(a).cmp(&host(b)),
-            3 => self.map_name(&ia.mapname).cmp(&self.map_name(&ib.mapname)),
-            4 => ia.clients.cmp(&ib.clients),
-            5 => self
-                .gametype_name(&ia.gametype)
-                .cmp(&self.gametype_name(&ib.gametype)),
-            6 => ia.voice.cmp(&ib.voice),
-            7 => ia.pure.cmp(&ib.pure),
-            8 => ia.modded.cmp(&ib.modded),
-            9 => ia.pb.cmp(&ib.pb),
-            _ => ping(a).cmp(&ping(b)),
+            1 => n(i64::from(i.hw == 0) << 8 | i64::from(i.hw)),
+            2 => SortCol::Text(host()),
+            3 => SortCol::Text(self.map_name(&i.mapname)),
+            4 => n(i.clients.into()),
+            5 => SortCol::Text(self.gametype_name(&i.gametype)),
+            6 => n(i.voice.into()),
+            7 => n(i.pure.into()),
+            8 => n(i.modded.into()),
+            9 => n(i.pb.into()),
+            _ => n(ping.into()),
         };
-        key.then(ping(a).cmp(&ping(b)))
-            .then_with(|| ia.gametype.cmp(&ib.gametype))
-            .then_with(|| host(a).cmp(&host(b)))
+        (key, ping, i.gametype.clone(), host())
     }
 
     fn localized(&self, key: &str) -> String {
