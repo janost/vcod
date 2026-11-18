@@ -62,10 +62,21 @@ impl PlayerWeapons {
             return;
         }
         self.give(index, slot);
-        let mut alt = table.get(index).map_or(0, |d| d.alt_index);
-        while alt != 0 && !self.holds(alt) {
-            self.give(alt, 0);
-            alt = table.get(alt).map_or(0, |d| d.alt_index);
+        // `give` holds nothing past index 63, so a cycle there never stops
+        // on `holds`; `alt_chain` stops on a repeat. Past 255 nothing is held.
+        let Ok(start) = u8::try_from(index) else {
+            return;
+        };
+        let alt_of = |w: u8| {
+            table
+                .get(usize::from(w))
+                .map_or(0, |d| u8::try_from(d.alt_index).unwrap_or(0))
+        };
+        for alt in vcod_common::weapon_table::alt_chain(start, alt_of) {
+            if self.holds(usize::from(alt)) {
+                break;
+            }
+            self.give(usize::from(alt), 0);
         }
     }
 
@@ -76,12 +87,7 @@ impl PlayerWeapons {
         if !self.holds(index) {
             return;
         }
-        let mut chain = vec![index];
-        let mut alt = table.get(index).map_or(0, |d| d.alt_index);
-        while alt != 0 && !chain.contains(&alt) {
-            chain.push(alt);
-            alt = table.get(alt).map_or(0, |d| d.alt_index);
-        }
+        let chain = table.alt_chain(index);
         for s in self
             .slots
             .iter_mut()
@@ -238,6 +244,35 @@ impl WeaponTable {
 mod tests {
     use super::*;
     use crate::configstrings::weapon_index;
+
+    /// An `altWeapon` cycle past index 63, where `give` holds nothing, ends
+    /// the walk (BUG-044: `give_chain` looped forever); a chain below 64
+    /// gives every mode up to one already held.
+    #[test]
+    fn give_chain_ends_on_an_alt_cycle_past_63() {
+        let def = |alt_index| {
+            Some(WeaponDef {
+                alt_index,
+                ..WeaponDef::default()
+            })
+        };
+        let mut defs: Vec<Option<WeaponDef>> = (0..66).map(|_| def(0)).collect();
+        defs[0] = None;
+        defs[1] = def(64);
+        defs[64] = def(65);
+        defs[65] = def(64);
+        defs[2] = def(3);
+        defs[3] = def(4);
+        defs[4] = def(2);
+        let table = WeaponTable::from_defs(defs);
+        let mut w = PlayerWeapons::default();
+        w.give_chain(&table, 1, 1);
+        assert_eq!(w.held, 1 << 1);
+        w.give_chain(&table, 2, 2);
+        assert_eq!(w.held, 1 << 1 | 1 << 2 | 1 << 3 | 1 << 4);
+        w.take_chain(&table, 3);
+        assert_eq!(w.held, 1 << 1);
+    }
 
     /// The wire words the `playerstate_ab` captures pin, decoded from
     /// `crates/server/tests/fixtures/playerstate/mp_carentan-dm.txt`: an

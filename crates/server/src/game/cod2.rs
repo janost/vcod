@@ -70,8 +70,9 @@ pub struct Cod2ClientState {
 /// behind `level_time` counts as 1000 behind, and the stored time moves
 /// only forward, or to a time at or past `level_time`. VERIFIED.
 pub fn lag_time(stored: i32, cmd_time: i32, level_time: i32) -> i32 {
-    let t = if level_time - cmd_time > 1000 {
-        level_time - 1000
+    // Retail's 32-bit arithmetic: a hostile cmd time wraps, it never traps.
+    let t = if level_time.wrapping_sub(cmd_time) > 1000 {
+        level_time.wrapping_sub(1000)
     } else {
         cmd_time
     };
@@ -889,7 +890,7 @@ impl Cod2Level {
         // than `commandTime` unless the view follows another client
         // (cod2-movement.md 21).
         let cmd = &UserCmd2 {
-            server_time: cmd.server_time.clamp(level_time - 1000, level_time + 200),
+            server_time: super::hold_cmd_time(cmd.server_time, level_time),
             ..*cmd
         };
         if let Some(p) = self.players.get_mut(slot).and_then(Option::as_mut)
@@ -1905,6 +1906,7 @@ mod tests {
         assert_eq!(lag_time(950, 900, 1000), 950);
         assert_eq!(lag_time(950, 1000, 1000), 1000);
         assert_eq!(lag_time(950, 100, 5000), 4000);
+        assert_eq!(lag_time(950, i32::MIN, 1000), 950);
         assert_eq!(time_offset(1000, 950, true), 50);
         assert_eq!(time_offset(1000, 950, false), 0);
     }

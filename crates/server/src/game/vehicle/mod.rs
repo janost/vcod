@@ -268,6 +268,13 @@ impl Default for Vehicles {
 }
 
 impl Vehicles {
+    /// Drops the seat ops pending for `slot` alone: a spawn or a disconnect
+    /// settles that client's seat itself, and the other riders' ops still
+    /// land.
+    pub fn drop_seat_ops(&mut self, slot: usize) {
+        self.seat_ops.retain(|op| op.slot() != slot);
+    }
+
     pub fn info_of(&self, v: &Vehicle) -> &VehicleInfo {
         &self.infos.list[v.info]
     }

@@ -1536,6 +1536,10 @@ impl ClientSim {
     ) -> Vec<PmEvent> {
         // `pers.cmd` takes every cmd, ahead of the dead and intermission returns.
         self.last_cmd_angles = cmd.angles;
+        // Pmove's per-cmd torso requests: a cmd that runs no pmove (dead,
+        // intermission) raises none, whatever the last live one left.
+        self.ps.prone_flip_clears_torso = false;
+        self.ps.breakdown_continue = false;
         // `PmoveSingle` clears the bit on every cmd and sets it again ahead
         // of the move and the weapon, off the state the cmd starts from. Its
         // only `pm_type` test is against 5, so a dead body's first cmd, which
@@ -4717,6 +4721,23 @@ mod tests {
         assert!(sim.attacking);
         sim.step(&fire, 0.008, None, &weapons);
         assert!(!sim.attacking);
+    }
+
+    /// A body killed on the cmd that flipped its prone queues no torso cmd
+    /// on the dead cmds that follow (BUG-024: one a cmd until respawn).
+    #[test]
+    fn a_dead_body_queues_no_torso_cmd() {
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([0.0; 3], 0.0, [0; 3]);
+        sim.ps.prone_flip_clears_torso = true;
+        sim.ps.breakdown_continue = true;
+        sim.die();
+        sim.pm_dead = true;
+        for _ in 0..3 {
+            sim.step(&NULL_USERCMD, 0.008, None, &[]);
+            sim.note_footsteps(&NULL_USERCMD);
+        }
+        assert!(sim.torso_cmds.is_empty());
     }
 
     /// The bit rides the entity and the playerstate both, off the last cmd

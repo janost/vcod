@@ -163,9 +163,7 @@ impl Cod1Module {
             // and 200 ms ahead of the `level.time` it runs on, the last
             // frame's (player-clip doc 8.12).
             let level_ms = now_ms.wrapping_sub(FRAME_MS);
-            cmd.server_time = cmd
-                .server_time
-                .clamp(level_ms.wrapping_sub(1000), level_ms.wrapping_add(200));
+            cmd.server_time = crate::game::hold_cmd_time(cmd.server_time, level_ms);
             // Stale cmds (dt <= 0) are skipped whole; a long one is chopped
             // rather than clamped away.
             let dt_ms = cmd.server_time.wrapping_sub(c.last_processed_st);

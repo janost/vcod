@@ -76,15 +76,19 @@ impl Cod4Server {
             c.state = State::Connected;
             c.extra.stat_packets = 0;
             c.pure = None;
-            let (addr, name, guid) = (
+            let (addr, name, guid, bot) = (
                 c.link.addr,
                 game_name(&c.link.userinfo),
                 c.extra.guid.clone(),
+                c.bot,
             );
             let spot = self.game.spot;
             if let Some(level) = self.game.level.as_mut() {
                 level.connect(slot, &name, spot);
                 level.set_guid(slot, &guid);
+                if bot {
+                    level.mark_bot(slot);
+                }
             }
             self.send_oob(addr, "requeststats\n");
         }
@@ -198,17 +202,21 @@ impl Cod4Server {
             else {
                 continue;
             };
-            let (active, name, stats, guid) = (
+            let (active, name, stats, guid, bot) = (
                 c.state == State::Active,
                 game_name(&c.link.userinfo),
                 (c.extra.stat_packets == 0x7f)
                     .then(|| kept.unwrap_or_else(|| c.extra.stats.clone())),
                 c.extra.guid.clone(),
+                c.bot,
             );
             self.send_server_command(slot, cmd);
             if let Some(level) = self.game.level.as_mut() {
                 level.connect(slot, &name, spot);
                 level.set_guid(slot, &guid);
+                if bot {
+                    level.mark_bot(slot);
+                }
                 if let Some(stats) = &stats {
                     level.set_stats(slot, stats);
                 }

@@ -492,9 +492,7 @@ fn followable(clients: &[Option<Client>], slot: usize) -> bool {
 fn apply_seat_ops(clients: &mut [Option<Client>], rt: &mut script::ScriptRuntime) {
     use crate::game::vehicle::seat::SeatOp;
     for op in std::mem::take(&mut rt.host.vehicles.seat_ops) {
-        let slot = match op {
-            SeatOp::Enter { slot, .. } | SeatOp::Exit { slot, .. } => slot,
-        };
+        let slot = op.slot();
         let Some(sim) = clients
             .get_mut(slot)
             .and_then(Option::as_mut)
@@ -949,7 +947,14 @@ fn follow_end_frame(
     } else {
         (0..clients.len()).map(|t| rt.client_team(t)).collect()
     };
-    let allowed = |t: usize| mask == 0 || follow::can_spectate(mask, teams[t]);
+    // A script's `spectatorclient` may name any number; past the slots it
+    // finds nothing and is written back to -1.
+    let allowed = |t: usize| {
+        mask == 0
+            || teams
+                .get(t)
+                .is_some_and(|&team| follow::can_spectate(mask, team))
+    };
     let mut age = session.archive_ms;
     let mut forced = session.spectator_client;
     let mut target = sim_mut(clients, slot).follow.target;
@@ -3850,7 +3855,11 @@ impl Server {
         c.link.netchan.reliable[at] =
             vcod_common::net::codec::client_read_string(&format!("w \"{reason}\"")).into_owned();
         c.reliable_kind[at] = CmdKind::Reliable;
-        if !c.is_bot {
+        if c.is_bot {
+            // The slot is free at once, so its brain goes now: a client that
+            // takes the slot before the bot step would be driven by it.
+            self.game.module.driver.forget(slot);
+        } else {
             c.zombie = true;
             self.game.zombies[slot] = Some(c);
         }
@@ -6604,10 +6613,7 @@ impl Server {
         // no entering cmd, one frame back, so the first cmd's dt is a sane
         // 50 ms rather than the whole age of the client's clock.
         c.last_processed_st = entering.map_or(self.core.sv_time_ms.wrapping_sub(FRAME_MS), |c| {
-            c.server_time.clamp(
-                self.core.sv_time_ms.wrapping_sub(1000),
-                self.core.sv_time_ms.wrapping_add(200),
-            )
+            crate::game::hold_cmd_time(c.server_time, self.core.sv_time_ms)
         });
         c.last_usercmd_st = entering.map_or(c.last_processed_st, |c| c.server_time);
         log::info!("client {slot} {:?} begin (spectator)", c.name);
@@ -13218,6 +13224,30 @@ mod tests {
         assert_eq!(ps_i32(&s, "clientNum"), 0);
     }
 
+    /// Cmds keep running as the clock nears `i32::MAX`: the hold on a cmd's
+    /// clock no longer crosses its bounds there (BUG-060: it panicked past
+    /// `i32::MAX - 200`).
+    #[test]
+    fn cmds_run_as_the_clock_nears_i32_max() {
+        let mut rig = FollowRig::new();
+        rig.sv.start_clock_at(i32::MAX - 300);
+        rig.st = i32::MAX - 400;
+        for _ in 0..5 {
+            rig.step(0);
+        }
+        assert!(rig.sv.core.sv_time_ms > i32::MAX - 200);
+        assert_eq!(
+            crate::game::hold_cmd_time(i32::MAX, i32::MAX - 100),
+            i32::MAX
+        );
+        assert_eq!(
+            crate::game::hold_cmd_time(0, i32::MAX - 100),
+            i32::MAX - 1100
+        );
+        assert_eq!(crate::game::hold_cmd_time(i32::MIN, 5000), 4000);
+        assert_eq!(crate::game::hold_cmd_time(9000, 5000), 5200);
+    }
+
     /// A script's `spectatorclient` is a forced follow: both bits on the
     /// frame, the buttons do nothing to it, and one naming a slot with
     /// nothing to follow is written back to -1.
@@ -13234,6 +13264,22 @@ mod tests {
 
         rig.script()
             .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(5));
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        assert_eq!(
+            rig.script().client_field(0, "spectatorclient").as_deref(),
+            Some("-1")
+        );
+    }
+
+    /// Under a 1.5 spectate mask a forced follow past the slot count finds
+    /// nothing and is written back to -1 (BUG-020: it indexed the team list).
+    #[test]
+    fn protocol_6_a_forced_follow_past_the_slots_is_cleared() {
+        let mut rig = v6_rig();
+        rig.script().host.client_no_spectate[0] = 0x2;
+        rig.script()
+            .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(64));
         let s = rig.step(0);
         assert_eq!(ps_i32(&s, "clientNum"), 0);
         assert_eq!(

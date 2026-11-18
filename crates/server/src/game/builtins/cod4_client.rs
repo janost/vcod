@@ -17,6 +17,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("updatescores", update_scores),
     ("setteamscore", set_team_score),
     ("logstring", nothing),
+    ("addtestclient", add_test_client),
     ("stoprumble", nothing),
     // Over the host's world, the map's clip map (`game::cod4::clip`).
     ("setperk", set_perk),
@@ -880,6 +881,18 @@ fn clear_perks(
 /// A builtin whose 1.7 effect is nothing a server keeps: `logString` (no
 /// log line on 1.7's dedicated build, INFERRED), `stopRumble`.
 fn nothing(
+    _: &mut GameHost,
+    _: &mut Cx,
+    _: Option<Target>,
+    _: &[Value],
+) -> Result<Value, ErrorKind> {
+    Ok(Value::Undefined)
+}
+
+/// `addTestClient()`: `undefined`, retail's answer with no free slot. The
+/// CoD4 engine installs no test client (cod4-server-gaps.md, Ranked 10);
+/// the shared handler is CoD2's and panicked on a CoD4 host (BUG-064).
+fn add_test_client(
     _: &mut GameHost,
     _: &mut Cx,
     _: Option<Target>,

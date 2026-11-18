@@ -70,9 +70,9 @@
 //! 64 printed as `net@<tick>` every N ticks and `net <map> <gametype> seed
 //! <s> ticks <n> <hex>` per match. The observer is a client, so it changes
 //! the match: compare `NETDIGEST` runs only with `NETDIGEST` runs. CoD2's
-//! `svs.time` reads the wall clock, which keys the challenge and so every
-//! netchan byte; under `NETDIGEST` the CoD2 server runs it on the frame
-//! clock (`Cod2Server::test_frame_clock`). `NETDUMP=<dir>` writes the
+//! challenge is salted with the wall clock, which keys every netchan byte;
+//! under `NETDIGEST` the CoD2 server salts it with the frame clock
+//! (`Cod2Server::test_frame_clock`). `NETDUMP=<dir>` writes the
 //! datagrams themselves, a line each (`<tick> <to> <len> <hex>`), to
 //! `<dir>/<game>_<map>_<gametype>_s<seed>.net`, to find the bytes behind a
 //! `net@` window that parted.

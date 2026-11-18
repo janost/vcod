@@ -1817,6 +1817,14 @@ impl ScriptRuntime {
         let Some(id) = self.client_entity(slot) else {
             return false;
         };
+        // `sess.sessionState` against 0 (0x495d7, cod11-combat.md "The two
+        // suicides"): a spectator who played before still has health.
+        if self
+            .client_session(slot)
+            .is_some_and(|s| s.state != crate::follow::SessionState::Playing)
+        {
+            return false;
+        }
         // A client that never spawned has no health to take.
         if self
             .host
@@ -3380,7 +3388,7 @@ impl ScriptRuntime {
                         ([0.0; 3], [0.0; 3]),
                     )
                 });
-                self.host.vehicles.seat_ops.clear();
+                self.host.vehicles.drop_seat_ops(slot);
                 self.host.vehicles.riders.remove(&slot);
                 // Whatever the last level boundary lifted for this slot dies
                 // with the client that owned it: the next occupant of the
@@ -5748,6 +5756,59 @@ mod tests {
         assert_eq!(rt.level_field("gone"), vcod_gsc::Value::Int(3));
         assert!(rt.client_entity(3).is_none());
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+    }
+
+    /// `kill` from a spectator who has played does nothing: no death, no
+    /// sim op, no killed callback (BUG-066: only `max_health` and `dead`
+    /// were tested).
+    #[test]
+    fn kill_from_a_spectator_who_played_is_ignored() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() {}\n\
+             CodeCallback_PlayerConnect() {}\n\
+             CodeCallback_PlayerKilled(a, b, c, d, e, f, g) { level.killed = 1; }\n",
+        );
+        rt.spawn_client_for_test(0, [0.0; 3]);
+        rt.host.client_vitals[0].max_health = 100;
+        rt.host.client_vitals[0].health = 100;
+        rt.set_client_state_for_test(0, "spectator");
+        assert!(!rt.kill_client(0));
+        rt.run_frame(50);
+        assert!(!rt.host.client_vitals[0].dead);
+        assert!(rt.host.client_sim_ops.is_empty());
+        assert_eq!(rt.level_field("killed"), Value::Undefined);
+        rt.set_client_state_for_test(0, "playing");
+        assert!(rt.kill_client(0));
+        rt.run_frame(100);
+        assert_eq!(rt.level_field("killed"), Value::Int(1));
+    }
+
+    /// A disconnect drops the leaver's pending seat ops, not the other
+    /// riders' (BUG-043: it dropped every one).
+    #[test]
+    fn a_disconnect_keeps_the_other_riders_seat_ops() {
+        use crate::game::vehicle::seat::SeatOp;
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() {}\n\
+             CodeCallback_PlayerConnect() {}\n\
+             CodeCallback_PlayerDisconnect() {}\n",
+        );
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 3,
+            name: "vcod".into(),
+        });
+        rt.run_frame(50);
+        let exit = |slot| SeatOp::Exit {
+            slot,
+            origin: None,
+            velocity: None,
+        };
+        rt.host.vehicles.seat_ops = vec![exit(1), exit(3), exit(2)];
+        rt.client_disconnect(3);
+        let left: Vec<usize> = rt.host.vehicles.seat_ops.iter().map(SeatOp::slot).collect();
+        assert_eq!(left, [1, 2]);
     }
 
     /// A thread still polling the player when it disconnects dies with the

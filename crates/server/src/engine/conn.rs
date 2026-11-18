@@ -327,7 +327,7 @@ impl<G: ConnGame> Engine<G> {
     /// off its letter ([`ConnGame::ignorable`]); a full ring drops the
     /// client.
     pub fn send_server_command(&mut self, slot: usize, text: &str) {
-        let Some(c) = self.core.clients[slot].as_mut() else {
+        let Some(c) = self.core.clients.get_mut(slot).and_then(Option::as_mut) else {
             return;
         };
         if !G::takes_commands(c) {

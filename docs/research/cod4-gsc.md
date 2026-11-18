@@ -143,6 +143,9 @@ scripts call.
   bits end at weapon 127; vcod refuses a 128th registration with its own
   script error, as the held bits and the 128-slot ammo arrays hold no
   more. Retail's limit is not recorded.
+- `isMantling` (0x80c4fc8) and `isOnLadder` (0x80c5040) answer
+  `ps.pm_flags` bit 0x4 and bit 0x8 of the receiver's `gclient_t`
+  (`gentity+0x15c`, `pm_flags` at +0xc). VERIFIED (objdump).
 - INFERRED: `hidePart` keeps `partBits` (`Cod4HostState::part_bits`) and a
   hidden bone's collision stops clipping rounds
   (`entity_damage::ModelPart`); `setCanDamage` is UO's `setTakeDamage`;
