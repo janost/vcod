@@ -141,8 +141,10 @@ confirmed on 1.7.
   does not set keeps its value. With no profile on disk the main menu
   asks for one as 1.7's does; vcod has no stand-in profile. A deleted
   profile that held the config sends the config back to
-  `main/vcod_mp.cfg` until another loads. A name with a path separator
-  is refused (the file field cannot type one).
+  `main/vcod_mp.cfg` until another loads. Create, delete and load
+  refuse a name that is not one plain directory name (a separator, `.`,
+  `..`, a `:`), and load takes only a listed name (the file field cannot
+  type one).
 - vcod's config for a CoD4 install with an active profile is
   `players/profiles/<name>/vcod_mp.cfg`, read from 1.7's `config_mp.cfg`
   there until vcod has written its own; with none, `main/vcod_mp.cfg`.
@@ -357,6 +359,9 @@ editor picked).
   cod4-fastfile.md 13). `fs_game` is the session's only: vcod does not
   write it to a config. `mods_menu`'s Launch Without Mods row is visible
   only under a mod. VERIFIED (the walk, its `visible when`).
+- A server's systeminfo `fs_game` that is rooted, names a drive or holds a
+  `..` component names no directory for vcod's demos or the profile's
+  stats; they go where they would with none.
 
 ## 7. Joins, games and errors
 

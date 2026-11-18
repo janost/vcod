@@ -390,4 +390,6 @@ seeds a profile that has none yet) and written from then on.
 the profile's file, or writes the current settings there when it has
 none. vcod resets no dvar and does not disconnect; the stock menus offer
 the load from the main menu only (`player_profile_ingame_warning` in a
-game).
+game). Create, delete and load refuse a name that is not one plain
+directory name (a separator, `.`, `..`, a `:`, a control character); the
+type-16 field types none.

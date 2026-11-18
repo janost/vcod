@@ -2120,12 +2120,17 @@ impl TimedemoCsv {
     fn frame(&mut self, map: &str, td: &crate::play::demos::TimeDemo, now_ms: i32) {
         use std::io::Write;
         if self.out.is_none() {
-            let path = self.dir.join(timedemo_csv_name(map, self.r_mode));
-            let file =
-                std::fs::create_dir_all(&self.dir).and_then(|_| std::fs::File::create(&path));
+            // the map is the demo's: a drive or stream colon opens nothing
+            let name = timedemo_csv_name(map, self.r_mode);
+            let file = vcod_common::safe_path::under(&self.dir, &name)
+                .ok_or_else(|| std::io::Error::other("not a file name"))
+                .and_then(|path| {
+                    std::fs::create_dir_all(&self.dir)?;
+                    std::fs::File::create(path)
+                });
             match file {
                 Ok(f) => self.out = Some(std::io::BufWriter::new(f)),
-                Err(e) => log::warn!("timedemo: {}: {e}", path.display()),
+                Err(e) => log::warn!("timedemo: {name}: {e}"),
             }
         }
         if td.started()
@@ -2356,14 +2361,17 @@ impl Cod2Session {
         if self.view.snap.is_none() {
             return "You must be in a level to record.".into();
         }
-        let file = |n: &str| dir.join(format!("{n}.dm_{EXTENSION}"));
+        use crate::play::demos::{auto_name, demo_file};
         // `clc.demoName` holds 63 characters.
         let name = match name {
             Some(n) => n.chars().take(63).collect(),
-            None => vcod_common::net::demo::auto_name(|n| file(n).exists()),
+            None => auto_name(dir, EXTENSION),
         };
         let qpath = format!("demos/{name}.dm_{EXTENSION}");
-        let out = std::fs::create_dir_all(dir).and_then(|_| std::fs::File::create(file(&name)));
+        let Some(file) = demo_file(dir, &name, EXTENSION) else {
+            return "ERROR: couldn't open.".into();
+        };
+        let out = std::fs::create_dir_all(dir).and_then(|_| std::fs::File::create(file));
         let Ok(out) = out else {
             return "ERROR: couldn't open.".into();
         };

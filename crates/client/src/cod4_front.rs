@@ -402,12 +402,10 @@ impl App {
     }
 
     /// The `fs_game` the front end runs under: the Mods menu's pick
-    /// (`mods/<dir>`), else none.
+    /// (`mods/<dir>`) or the last server's, else none. Demos and the
+    /// profile's stats are written under it.
     fn cod4_fs_game(&self) -> Option<String> {
-        self.shell
-            .cvar("fs_game")
-            .filter(|g| !g.is_empty())
-            .map(str::to_string)
+        cod4_mod_dir(self.shell.cvar("fs_game")?)
     }
 
     /// `connect <addr>` on a CoD4 install, or the browser's join with its
@@ -481,7 +479,7 @@ impl App {
         let Some(data) = self
             .cod4_demo_dirs()
             .into_iter()
-            .map(|d| d.join(&file))
+            .filter_map(|d| vcod_common::safe_path::under(&d, &file))
             .find_map(|p| std::fs::read(p).ok())
         else {
             // `Com_Error`'s text goes through `SEH_LocalizeTextMessage`.
@@ -736,6 +734,13 @@ impl App {
     }
 }
 
+/// An `fs_game` value as a directory under the install: `None` when empty
+/// or when it would leave the install (rooted, a drive, a `..`), as
+/// `Install`'s own search path refuses it.
+fn cod4_mod_dir(value: &str) -> Option<String> {
+    vcod_common::safe_path::relative(value).map(|_| value.to_string())
+}
+
 /// [`App::load_cod4_profile`]'s files: `active.txt` written, the
 /// profile's config run (vcod's, else 1.7's), `name` given the profile's
 /// when it has none, and vcod's config written there. Returns that
@@ -781,6 +786,16 @@ mod tests {
     use super::*;
     use glam::Vec3;
     use vcod_cod4::scriptmenu::Cmd;
+
+    /// A server's systeminfo `fs_game` names the demos' and the stats'
+    /// directory only when it stays under the install.
+    #[test]
+    fn cod4_fs_game_from_a_server_stays_in_the_install() {
+        assert_eq!(cod4_mod_dir("mods/x").as_deref(), Some("mods/x"));
+        for bad in ["", "../x", "mods/../../x", "/abs", "C:\\x"] {
+            assert_eq!(cod4_mod_dir(bad), None, "{bad}");
+        }
+    }
 
     /// The front end over the `COD4_DIR` install, its main menu up with
     /// vcod's stock CoD4 console.

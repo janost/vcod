@@ -2507,6 +2507,13 @@ fn chat_field_key(
     None
 }
 
+/// `exec`'s file: the search path's, else the one under `config_dir`
+/// (vcod's own fallback), which a rooted, `..` or drive name never reaches.
+fn exec_text(fs: &Pk3Fs, config_dir: Option<&std::path::Path>, file: &str) -> Option<Vec<u8>> {
+    fs.read(file)
+        .or_else(|| std::fs::read(vcod_common::safe_path::under(config_dir?, file)?).ok())
+}
+
 /// `record [name]` on `net` (CoDMP.exe 0x40e540): the file in `dir`, its
 /// refusals and progress printed as retail prints them.
 fn start_record(
@@ -2514,14 +2521,16 @@ fn start_record(
     dir: &std::path::Path,
     name: Option<&str>,
 ) {
-    let (path, name) = play::demos::record_path(dir, name, net.protocol());
-    let file = std::fs::create_dir_all(dir).and_then(|_| std::fs::File::create(&path));
     // Refused before the file is made, as retail checks first.
     if net.is_recording() {
         console::log::print("Already recording.");
         return;
     }
-    let file = match file {
+    let Some((path, name)) = play::demos::record_path(dir, name, net.protocol()) else {
+        console::log::print("ERROR: couldn't open.");
+        return;
+    };
+    let file = match std::fs::create_dir_all(dir).and_then(|_| std::fs::File::create(&path)) {
         Ok(f) => f,
         Err(e) => {
             console::log::print(&format!("ERROR: couldn't open {}: {e}", path.display()));
@@ -4316,10 +4325,7 @@ impl App {
     /// `localized_english_pak0.pk3`) or else beside the config, run as
     /// console text. A file that execs itself stops at a fixed depth.
     fn exec_file(&mut self, event_loop: &ActiveEventLoop, file: &str) {
-        let text = self.fs.read(file).or_else(|| {
-            let dir = self.config_path.parent()?;
-            std::fs::read(dir.join(file)).ok()
-        });
+        let text = exec_text(&self.fs, self.config_path.parent(), file);
         let Some(text) = text else {
             console::log::print(&format!("couldn't exec {file}"));
             return;
@@ -4417,7 +4423,7 @@ impl App {
         let path = self
             .demo_dirs()
             .into_iter()
-            .map(|d| d.join(&file))
+            .filter_map(|d| vcod_common::safe_path::under(&d, &file))
             .find(|p| p.is_file());
         if self.in_game() || self.session.busy() {
             self.disconnect(None);
@@ -4752,10 +4758,14 @@ impl App {
     /// Retail resets every dvar first; vcod keeps what the file does not set.
     fn load_profile(&mut self, name: &str) {
         let players = self.game_dir.join(&self.mod_dir).join("players");
+        let Some(dir) = vcod_common::safe_path::under_one(&players, name) else {
+            log::warn!("player profile {name:?} refused");
+            return;
+        };
         if let Err(e) = std::fs::write(players.join("active.txt"), name) {
             log::warn!("cannot write {}: {e}", players.join("active.txt").display());
         }
-        self.config_path = players.join(name).join(CONFIG_FILE);
+        self.config_path = dir.join(CONFIG_FILE);
         self.shell
             .execute(&format!("set com_playerProfile \"{name}\""));
         match std::fs::read_to_string(&self.config_path) {
@@ -9034,6 +9044,31 @@ fn cookie_settings(shell: &console::shell::Shell) -> renderer::CookieSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `exec`'s disk fallback reads a file beside the config, in a
+    /// subdirectory too, and nothing a rooted, `..` or drive name points at.
+    #[test]
+    fn exec_reads_only_under_the_config_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let main = root.path().join("main");
+        std::fs::create_dir_all(main.join("cfgs")).unwrap();
+        std::fs::write(main.join("mine.cfg"), "a").unwrap();
+        std::fs::write(main.join("cfgs/sub.cfg"), "b").unwrap();
+        std::fs::write(root.path().join("secret"), "s").unwrap();
+        let fs = Pk3Fs::empty();
+        let read = |f: &str| exec_text(&fs, Some(&main), f);
+        assert_eq!(read("mine.cfg").as_deref(), Some(&b"a"[..]));
+        assert_eq!(read("cfgs/sub.cfg").as_deref(), Some(&b"b"[..]));
+        let abs = root.path().join("secret");
+        for bad in [
+            "../secret",
+            "cfgs/../../secret",
+            "C:secret",
+            abs.to_str().unwrap(),
+        ] {
+            assert_eq!(read(bad), None, "{bad}");
+        }
+    }
 
     /// A CoD2 session's `vid_restart` stops its sounds as retail's
     /// `SND_StopSounds(1)` does; the offline fly camera keeps them.

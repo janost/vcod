@@ -48,14 +48,15 @@ impl ProfileStats {
         Self::load_from(&root, &fs_game)
     }
 
-    /// [`Self::load`] under `root` and `fs_game`.
+    /// [`Self::load`] under `root` and `fs_game`; `None` too for an
+    /// `fs_game` that would leave the profile's directory.
     pub(crate) fn load_from(root: &Path, fs_game: &str) -> Option<(ProfileStats, Stats)> {
         let name = super::cod4_menus::front::active_profile(root)?;
         let dir = super::cod4_menus::front::profile_dir(root, &name)?;
         let path = if fs_game.is_empty() {
             dir.join(FILE)
         } else {
-            dir.join(fs_game).join(FILE)
+            vcod_common::safe_path::under(&dir, fs_game)?.join(FILE)
         };
         let read = std::fs::read(&path)
             .ok()
@@ -139,5 +140,22 @@ mod tests {
         std::fs::write(&file, [7u8; 16]).unwrap();
         let (_, fresh) = ProfileStats::load_from(root, "").unwrap();
         assert_eq!(fresh.0[..], Stats::fresh().0[..]);
+    }
+
+    /// A mod's stats sit in the profile's `<fs_game>/`; an `fs_game` that
+    /// climbs out, is rooted or names a drive loads no file to write.
+    #[test]
+    fn a_server_fs_game_cannot_move_the_stats_file() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let tester = root.join("players/profiles/tester");
+        std::fs::create_dir_all(&tester).unwrap();
+        std::fs::write(root.join("players/profiles/active.txt"), "tester").unwrap();
+        let (p, _) = ProfileStats::load_from(root, "mods/x").unwrap();
+        assert_eq!(p.path, tester.join("mods/x").join(FILE));
+        let abs = root.join("elsewhere");
+        for bad in ["../x", "a/../../x", "C:x", abs.to_str().unwrap()] {
+            assert!(ProfileStats::load_from(root, bad).is_none(), "{bad}");
+        }
     }
 }
