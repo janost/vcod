@@ -593,7 +593,8 @@ impl ScriptSource for Cod4Scripts {
     fn read(&self, canonical: &str) -> Option<String> {
         let path = format!("{canonical}.gsc");
         if let Some(dir) = &self.overrides
-            && let Ok(text) = std::fs::read(dir.join(&path))
+            && let Some(rel) = vcod_common::game_dir::confined_rel_path(&path)
+            && let Ok(text) = std::fs::read(dir.join(rel))
         {
             return Some(String::from_utf8_lossy(&text).into_owned());
         }

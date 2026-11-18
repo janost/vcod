@@ -253,6 +253,73 @@ fn cod4_writeconfig_matches_retail() {
     assert!(!text.contains("vplain"), "{text}");
 }
 
+/// `writeconfig` and `exec` names stay under the home path: `..`, an
+/// absolute name and a drive prefix write and read nothing, and the
+/// console cannot move the home path (cod4-handshake.md 14.1).
+#[test]
+fn cod4_file_commands_stay_under_the_home_path() {
+    let root = scratch("esc");
+    let _ = std::fs::remove_dir_all(&root);
+    let home = root.join("a/home");
+    let mut sv = bare(home.as_path());
+    let abs = root.join("abs.cfg").display().to_string();
+    for (name, shown) in [
+        ("../x.cfg", "../x.cfg"),
+        ("../../x", "../../x.cfg"),
+        ("sub/../../x.cfg", "sub/../../x.cfg"),
+        (&abs, &abs),
+        ("C:x.cfg", "C:x.cfg"),
+    ] {
+        assert_eq!(
+            console(&mut sv, &format!("writeconfig {name}")),
+            format!("Writing {shown}.\nCouldn't write {shown}.\n"),
+            "{name}"
+        );
+    }
+    let mut written = Vec::new();
+    let mut stack = vec![root.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            if e.path().is_dir() {
+                stack.push(e.path());
+            } else {
+                written.push(e.path());
+            }
+        }
+    }
+    assert!(written.is_empty(), "{written:?}");
+    std::fs::create_dir_all(home.join("main")).unwrap();
+    std::fs::write(root.join("a/out.cfg"), "set vesc 1\n").unwrap();
+    std::fs::write(root.join("abs.cfg"), "set vesc 1\n").unwrap();
+    for name in ["../../out.cfg", "..\\..\\out.cfg", &abs] {
+        assert_eq!(
+            console(&mut sv, &format!("exec {name}")),
+            format!("^1Error: couldn't exec {name}\n")
+        );
+    }
+    assert_eq!(sv.cvar("vesc"), "");
+    let before = sv.cvar("fs_homepath").to_string();
+    for line in ["set fs_homepath /", "seta FS_HOMEPATH /", "fs_homepath /"] {
+        let word = line.split(' ').rev().nth(1).unwrap();
+        assert_eq!(
+            console(&mut sv, line),
+            format!("{word} is write protected.\n")
+        );
+    }
+    assert_eq!(
+        console(&mut sv, "set fs_game ../x"),
+        "fs_game is write protected.\n"
+    );
+    assert_eq!(sv.cvar("fs_homepath"), before);
+    assert_eq!(sv.cvar("fs_game"), "");
+    assert_eq!(
+        console(&mut sv, "writeconfig sub/ok"),
+        "Writing sub/ok.cfg.\n"
+    );
+    assert!(home.join("players/sub/ok.cfg").is_file());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// `dvar_bool`, `dvar_int` and `dvar_float` make a dvar the query prints
 /// with its domain; `setdvartotime` and `touchFile` print their usage
 /// (VERIFIED live).

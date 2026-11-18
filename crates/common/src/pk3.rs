@@ -274,9 +274,11 @@ fn archives_in(dir: &Path, kind: ArchiveKind) -> Result<Vec<PathBuf>> {
 /// highest priority first: each directory's archives (`localized_*`
 /// aside), then its loose file; then every directory's `localized_*`
 /// archives. CoD4 1.7's `path` lists a home path's iwds, its directory,
-/// then the base path's (docs/research/cod4-handshake.md 14.1).
+/// then the base path's (docs/research/cod4-handshake.md 14.1). A loose
+/// file is read only when `name` stays under its directory.
 pub fn read_search(dirs: &[PathBuf], kind: ArchiveKind, name: &str) -> Option<Vec<u8>> {
     let key = path_key(name);
+    let loose = crate::game_dir::confined_rel_path(name);
     let member = |pak: &Path| -> Option<Vec<u8>> {
         let mut zip = zip::ZipArchive::new(std::fs::File::open(pak).ok()?).ok()?;
         let entry = zip.file_names().find(|n| path_key(n) == key)?.to_string();
@@ -301,7 +303,9 @@ pub fn read_search(dirs: &[PathBuf], kind: ArchiveKind, name: &str) -> Option<Ve
         {
             return Some(data);
         }
-        if let Ok(data) = std::fs::read(dir.join(name)) {
+        if let Some(rel) = &loose
+            && let Ok(data) = std::fs::read(dir.join(rel))
+        {
             return Some(data);
         }
     }
@@ -1043,6 +1047,23 @@ mod tests {
         assert_eq!(read("b.cfg").as_deref(), Some("base iwd"));
         assert_eq!(read("c.cfg").as_deref(), Some("base loose"));
         assert_eq!(read("nothere.cfg"), None);
+    }
+
+    /// A loose read stays under each directory: `..` and an absolute name
+    /// find nothing beside or above it.
+    #[test]
+    fn read_search_reads_no_loose_file_outside_its_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home/main");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(dir.path().join("secret.cfg"), "outside").unwrap();
+        std::fs::write(home.join("ok.cfg"), "inside").unwrap();
+        let dirs = [home];
+        let read = |p: &str| read_search(&dirs, ArchiveKind::Iwd, p);
+        assert_eq!(read("ok.cfg").as_deref(), Some(&b"inside"[..]));
+        assert_eq!(read("../../secret.cfg"), None);
+        let abs = dir.path().join("secret.cfg");
+        assert_eq!(read(&abs.to_string_lossy()), None);
     }
 
     #[test]

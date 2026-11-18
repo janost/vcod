@@ -839,7 +839,9 @@ impl Cod4Server {
             }
             "set" | "seta" | "sets" | "setu" => {
                 if args.len() >= 3 {
-                    self.set_cvar(arg(1), &args[2..].join(" "));
+                    if !self.console_set(arg(1), &args[2..].join(" "), out) {
+                        return;
+                    }
                     // `seta` archives the dvar, a registered one too
                     // (VERIFIED live: `seta g_inactivity 5` reached the
                     // next `writeconfig`).
@@ -860,7 +862,7 @@ impl Cod4Server {
                 _ if args.len() != 2 => out.print("USAGE: reset <variable>\n"),
                 Some((n, _, d)) => {
                     let (n, d) = (n.to_string(), d.to_string());
-                    self.set_cvar(&n, &d);
+                    self.console_set(&n, &d, out);
                 }
                 None => {}
             },
@@ -868,7 +870,7 @@ impl Cod4Server {
                 _ if args.len() != 3 => out.print("USAGE: setfromdvar <dest_dvar> <source_dvar>\n"),
                 Some((_, v, _)) => {
                     let v = v.to_string();
-                    self.set_cvar(arg(1), &v);
+                    self.console_set(arg(1), &v, out);
                 }
                 None => out.print(&format!("dvar '{}' doesn't exist\n", arg(2))),
             },
@@ -895,7 +897,7 @@ impl Cod4Server {
             "setdvartotime" => {
                 if args.len() == 2 {
                     let now = self.core.sv_time_ms.to_string();
-                    self.set_cvar(arg(1), &now);
+                    self.console_set(arg(1), &now, out);
                 } else {
                     out.print("USAGE: set <variable>\n");
                 }
@@ -927,7 +929,9 @@ impl Cod4Server {
                                 dom.describe()
                             ));
                         }
-                        _ => self.set_cvar(name, &value),
+                        _ => {
+                            self.console_set(name, &value, out);
+                        }
                     }
                 }
                 // `Dvar_Command`'s print; a dvar a `set` made is a string
@@ -1116,17 +1120,32 @@ impl Cod4Server {
             ));
             return;
         };
-        self.set_cvar(&name, &next);
+        if !self.console_set(&name, &next, out) {
+            return;
+        }
         if print {
             out.print(&format!("{name} toggled to {next}\n"));
         }
+    }
+
+    /// A console write of a dvar: `set_cvar`, but a file root
+    /// (`crate::cvars::FILE_ROOTS`) prints the dvar set's refusal
+    /// (0x81a0653) and keeps its value. `false` when refused.
+    fn console_set(&mut self, name: &str, value: &str, out: &mut Redirect) -> bool {
+        if crate::cvars::is_file_root(name) {
+            out.print(&format!("{name} is write protected.\n"));
+            return false;
+        }
+        self.set_cvar(name, value);
+        true
     }
 
     /// `Com_WriteConfig_f` (`writeconfig`, file 0x1db56b): `<name>`
     /// (`.cfg` added when it has no extension) under the home path's
     /// `players/`, the header, a `seta` line per archived dvar (its latched
     /// value when one waits) and the console channel line (VERIFIED live:
-    /// `players/vtest.cfg`, `players/sub/vw3.cfg`).
+    /// `players/vtest.cfg`, `players/sub/vw3.cfg`). A name that would
+    /// leave `players/` writes nothing (`confined_rel_path`).
     fn write_config(&mut self, args: &[String], out: &mut Redirect) {
         if args.len() != 2 {
             out.print("Usage: writeconfig <filename>\n");
@@ -1138,7 +1157,11 @@ impl Cod4Server {
         if home.is_empty() {
             return;
         }
-        let path = std::path::Path::new(&home).join("players").join(&name);
+        let Some(rel) = vcod_common::game_dir::confined_rel_path(&name) else {
+            out.print(&format!("Couldn't write {name}.\n"));
+            return;
+        };
+        let path = std::path::Path::new(&home).join("players").join(rel);
         let text = self.config_text();
         let wrote = path
             .parent()
