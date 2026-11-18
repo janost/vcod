@@ -292,7 +292,7 @@ impl HudState {
 /// What an entity's `think` runs when `nextthink` comes due. A Rust enum
 /// rather than a script reference: retail's `think` is a C function pointer
 /// (`G_FreeEntity` for a deleted entity) and script-side timing goes through
-/// `thread`/`wait`. Stage 4's movers and doors add variants.
+/// `thread`/`wait`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ThinkFn {
     Free,

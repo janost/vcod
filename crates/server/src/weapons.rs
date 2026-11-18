@@ -316,8 +316,7 @@ mod tests {
     }
 
     /// The `weaponclass` condition in `mp/playeranim.script` is this field.
-    /// Values read straight out of the shipped weapon files, through the
-    /// table rather than the standalone lookup `PlayerWeapons` used to use.
+    /// Values read straight out of the shipped weapon files, through the table.
     #[test]
     fn a_weapon_file_names_its_class() {
         let Some(fs) = vcod_common::testing::game_fs() else {

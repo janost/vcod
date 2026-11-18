@@ -1,4 +1,4 @@
-//! Two clients on one server, each seeing the other. Stage 5's own gate for
+//! Two clients on one server, each seeing the other. The gate for
 //! the half no capture of a single client can reach: retail sends a client no
 //! entity for itself, so the entity-list gates say nothing about what one
 //! client is told about another.

@@ -943,7 +943,8 @@ pub struct GameHost {
     pub frozen: bool,
     /// The map's collision, once one exists. `None` in every unit test and
     /// on a fresh `GameHost`; `bulletTrace` traces against it when present
-    /// and reports a clean miss when it is not. Stage 10 is what sets it.
+    /// and reports a clean miss when it is not. Each level load sets it from
+    /// the map the server built (`Server::load_world`).
     pub world: Option<std::rc::Rc<crate::world::World>>,
     /// Counts the script's link changes of submodel brushes (`delete`,
     /// `notSolid`, `solid`): the bots' navigation graph is rebuilt once

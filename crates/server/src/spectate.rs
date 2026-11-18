@@ -2671,7 +2671,7 @@ impl ClientSim {
     /// entity for itself (the playerstate carries it), so this is only ever
     /// built for somebody else (`docs/protocol-1.1.md`, "Which entities a
     /// client is sent"). The body model is not here either: it rides the
-    /// `clientState` roster's `modelindex`, which stage 4 already sends.
+    /// `clientState` roster's `modelindex`.
     ///
     /// Measured against a retail capture of one probe watching another
     /// (`crates/server/tests/fixtures/entities/mp_carentan-dm-players.txt`).
@@ -4010,9 +4010,9 @@ mod tests {
     }
 
     /// A spectator carries the captured spectator constants; a player does
-    /// not. The values `to_wire` used to pin unconditionally are the ones the
-    /// retail player capture disagrees with once the client is alive, which is
-    /// why they move behind the mode instead of staying literals.
+    /// not. The retail player capture disagrees with those values once the
+    /// client is alive, so `to_wire` takes them from the mode rather than
+    /// from literals.
     #[test]
     fn the_wire_constants_follow_the_mode() {
         let p = &PROTOCOL_V1;

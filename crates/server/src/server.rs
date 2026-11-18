@@ -8459,8 +8459,8 @@ mod tests {
     }
 
     /// A failed load reports the error and leaves the table untouched; the
-    /// caller (`main.rs`) exits on it. Stage 2 kept serving here, which is no
-    /// longer the right answer: the table is mostly script output now.
+    /// caller (`main.rs`) exits on it rather than serving on: the table is
+    /// mostly script output.
     #[test]
     fn a_failed_script_load_reports_and_changes_nothing() {
         let mut sv = Server::new(cfg(), Instant::now());

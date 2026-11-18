@@ -1826,10 +1826,8 @@ pub(crate) mod tests {
         assert!(matches!(e.kind, ErrorKind::SuspendedInImmediateCall));
     }
 
-    /// `Notify`/`EndOn` used to pop and discard their receiver with no
-    /// type check at all, so this was silently accepted either way. Now
-    /// that the receiver is resolved to a `Target`, a `level`/`game`
-    /// receiver must still be accepted, not newly rejected.
+    /// `Notify`/`EndOn` resolve their receiver to a `Target`, and a
+    /// `level`/`game` receiver must be accepted there, not rejected.
     #[test]
     fn level_notify_and_endon_accept_a_struct_receiver() {
         let (v, _, _) = run(r#"main() { level notify("go"); level endon("stop"); return 1; }"#);

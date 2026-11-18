@@ -1,4 +1,4 @@
-//! The entity list, diffed against a retail trace. Stage 5's content gate:
+//! The entity list, diffed against a retail trace. The content gate:
 //! every entity the trace shows retail sending has to exist in ours with the
 //! same fields.
 //!
@@ -27,12 +27,12 @@ use std::time::Instant;
 use vcod_common::net::msg::EntityState;
 use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
 
-/// Entities stage 5 knowingly does not reproduce, each with the reason. Empty
+/// Entities vcod knowingly does not reproduce, each with the reason. Empty
 /// is the goal, and a listed gap that starts matching fails the guard below,
 /// so the list cannot rot into a lie.
 const GAPS: &[(&str, &str)] = &[];
 
-/// Fields stage 5 knowingly does not reproduce, as `(map, field, reason)`.
+/// Fields vcod knowingly does not reproduce, as `(map, field, reason)`.
 /// Same rule as `GAPS`: a listed field that stops differing on its own map
 /// fails the guard, so this cannot rot either. Scoped to a map because a gap
 /// only exists where the entity that carries it does: pavlov places no
@@ -254,8 +254,8 @@ fn ours(
 // ------------------------------------------------------------------- the diff
 
 /// What matches an entity across two servers. Never the slot: the number comes
-/// out of each server's own spawn order. Stage 2 pinned ours against a retail
-/// capture and they agreed, so the numbers are checked separately, as a
+/// out of each server's own spawn order. Ours agrees with a retail capture,
+/// and the numbers are checked separately, as a
 /// finding rather than as the key.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
 struct Key {

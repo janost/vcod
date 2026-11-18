@@ -553,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    /// A miss is `None`, so the caller draws stage 2's interpolated snapshots.
+    /// A miss is `None`, so the caller draws the interpolated snapshots.
     fn history_gap_draws_the_snapshot() {
         let world = test_world(&[]);
         let snap = standing(5000, 0.0);

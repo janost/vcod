@@ -60,7 +60,7 @@ fn requires(list: Option<&str>, game: &str) -> bool {
 
 /// `$var`'s root, holding `sub/`. `None` when unset, so CI (no game data)
 /// passes; panics when the var is set to a relative path or one without
-/// `sub/`, which used to make every test that needs it pass vacuously.
+/// `sub/`, since either would make every test that needs it pass vacuously.
 pub fn install_root(var: &str, game: &str, sub: &str) -> Option<PathBuf> {
     match resolve_root(var, std::env::var_os(var), sub) {
         Root::Found(root) => Some(root),

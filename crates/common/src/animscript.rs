@@ -1123,7 +1123,7 @@ land
     }
 
     /// Every anim name the script names, which is what decides the animtree
-    /// index order. This replaces `animtree::anim_script_names`.
+    /// index order.
     #[test]
     fn referenced_names_are_lowercased_and_deduplicated() {
         let s = AnimScript::parse(SAMPLE).unwrap();

@@ -24,8 +24,8 @@ pub fn weapon_index(name: &str) -> Option<usize> {
         .map(|i| i + 1)
 }
 
-/// Map-independent configstrings the engine itself sets. Everything else
-/// this table used to carry is script output and is earned back at load:
+/// Map-independent configstrings the engine itself sets. These slots are
+/// script output instead, written at load:
 /// 21/22 from `precacheStatusIcon`, 29 from `precacheHeadIcon`,
 /// 140..180 / 204..244 from the cvar mirror, 1180..1187 from
 /// `precacheMenu`, 1245/1246 from `precacheString` and 1501..1505 from
@@ -965,9 +965,7 @@ mod tests {
             );
             seen.push((lo, hi));
             // 0 and 1 are set by `static_configstrings` outside the
-            // `STATIC` list (serverinfo, systeminfo). 179/243/1501 used to
-            // be as well, but the layout-image write is gone now that
-            // `Shader` genuinely starts at 1501.
+            // `STATIC` list (serverinfo, systeminfo).
             for i in STATIC.iter().map(|&(i, _)| i).chain([0, 1]) {
                 assert!(
                     i < lo || i > hi,

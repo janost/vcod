@@ -1,10 +1,9 @@
 //! The two-client rig for the mounted MG on carentan: an allied gunner
 //! placed 40 units behind the gun and an axis target 300 units in front of
 //! it, both by `probe_turret.gsc`'s `watch_teleports` under
-//! `probe_teleport 1`. Tasks 8-11 add their own tests against this rig as
-//! the mount, the arc clamp, the fire path and the release each land; task
-//! 13 replays a retail fixture on top of it (the gate at the end of this
-//! file).
+//! `probe_teleport 1`. The tests below drive the mount, the arc clamp, the
+//! fire path and the release against this rig, and the gate at the end of
+//! this file replays a retail fixture on top of it.
 //!
 //! Stock turret facts (global constraints): `mg42_bipod_stand_mp`, arcs
 //! ±45 yaw and -40..+40 pitch, 60 damage, 50 ms `fireTime`, stance 0

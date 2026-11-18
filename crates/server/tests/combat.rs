@@ -1,4 +1,4 @@
-//! Two clients on one server, one shooting the other. Stage 6's gate for the
+//! Two clients on one server, one shooting the other. The gate for the
 //! path no single-client capture can reach: a hit registered against another
 //! sim, the callbacks, the corpse, the dropped weapon, the obituary, the
 //! scoreboard and the respawn.

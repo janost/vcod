@@ -1859,7 +1859,7 @@ mod fx_lights_uniform_tests {
     }
 }
 
-// ---- shader-script stage machinery (consumed by Tasks 7-8) ----
+// ---- shader-script stage machinery ----
 
 pub const STAGE_FLAG_VERTEX_RGB: u32 = 1;
 pub const STAGE_FLAG_VERTEX_ALPHA: u32 = 2;
@@ -3782,7 +3782,7 @@ pub struct Renderer {
     /// Kept past map load so later inline submodels resolve `textures/...`
     /// names the same way the world did.
     shaders: assets::Shaders,
-    /// Parsed shader scripts; Task 7 classifies map materials against it.
+    /// Parsed shader scripts; map materials are classified against it.
     shader_lib: MaterialLib,
     /// The map's active sky (farbox + optional cloud dome); `None` without a
     /// matching sky block.
@@ -4241,7 +4241,7 @@ impl Renderer {
             cull_back,
         );
         // One twin pair per variant, [back-culled, two-sided], picked per
-        // StageBatch by ClassedStage in Task 7.
+        // StageBatch from its ClassedStage.
         // The stage table and the dlight pass compile on their own threads
         // while this one builds the entity pass (`par_build`).
         let (stage_pipelines, dlight, vm_pass, dynamic) = std::thread::scope(|s| {

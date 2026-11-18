@@ -380,7 +380,7 @@ pub enum Route {
     /// distinct offsets, so two names sharing a retail offset share a slot.
     Engine { slot: usize, ty: FieldType },
     /// A client field. Index into `CLIENT_FIELDS`. Reaching one needs a
-    /// `gclient_t`, which stage 4 brings.
+    /// `gclient_t`, which only a client's entity carries (`GEntity::client`).
     Client(usize),
     /// Everything else: a radiant key, or a name a script invented. Both go
     /// to the entity's own struct in the VM heap.
