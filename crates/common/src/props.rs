@@ -311,7 +311,7 @@ fn skin_lookup_name(skin: &str) -> &str {
 /// The script block a model skin resolves to: the model loader formats
 /// `"skins/%s"` (CoDMP.exe 0x504352) and `R_FindShader` cuts the name at
 /// the first `.`. A name whose cut holds an `@` takes its `.stype` instead
-/// and never looks a script up (shader doc 8).
+/// and never looks a script up (shader doc 8.2).
 pub fn skin_script(skin: &str) -> Option<String> {
     let stem = skin_lookup_name(skin);
     (!stem.contains('@')).then(|| format!("skins/{stem}"))

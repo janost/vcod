@@ -39,15 +39,15 @@ pub struct Shader {
     pub sunfile: Option<String>,
     /// The shader's `deformVertexes` records in script order, at most
     /// [`MAX_SHADER_DEFORMS`]; the runtime runs them one after another on
-    /// the same vertices (CoDMP.exe 0x5149b0; shader doc 8).
+    /// the same vertices (CoDMP.exe 0x5149b0; shader doc 8.1).
     pub deforms: Vec<Deform>,
     /// `deformVertexes autosprite` / `autosprite2`: camera-facing quads
-    /// (0x514080 / 0x514330; shader doc 8).
+    /// (0x514080 / 0x514330; shader doc 8.1).
     pub sprite: Option<Sprite>,
     pub surface: SurfaceBits,
     /// Set by the renderer on a static prop's batch: the model's left and
     /// up axes in the world, so `tcGen environment` reflects in the model's
-    /// frame on world-baked vertices (shader doc 8, "Static props").
+    /// frame on world-baked vertices (shader doc 8.2, "Static props").
     pub model_axes: Option<[[f32; 3]; 2]>,
 }
 
@@ -397,7 +397,7 @@ pub fn default_material() -> Material {
 /// Retail's `<default>` shader (CoDMP.exe 0x4fd780): one opaque stage of
 /// `*default` that writes depth, its rgbGen left 0, which 0x4ffa60's default
 /// case fills with identityLight. `R_FindShader` returns it for a skin it
-/// cannot build (shader doc 8, "Model skin scripts").
+/// cannot build (shader doc 8.2, "Model skin scripts").
 pub fn default_shader() -> Shader {
     Shader {
         name: "<default>".to_string(),
@@ -1447,7 +1447,7 @@ fn top_token(
             usize::from(one_arg().is_some())
         }
         "deformvertexes" => {
-            // The 1.1 parser (CoDMP.exe 0x4f9d20, shader doc 8) accepts
+            // The 1.1 parser (CoDMP.exe 0x4f9d20, shader doc 8.1) accepts
             // projectionShadow, autosprite, autosprite2, text0-7, bulge,
             // wave, flap, normal, syncNormal and move, three records at
             // most. vcod draws all but projectionShadow, text0-7 and

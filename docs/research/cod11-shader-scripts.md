@@ -913,17 +913,18 @@ is INFERRED from assets, not disassembled; retail's evaluation order is
 unread, but the kept and dropped stages on stock assets are deterministic
 under it and match the fallback shapes.
 
-## 8. Deliberately not implemented
+## 8. What vcod leaves out, and what it draws past the grammar
 
-Each omission with its census justification:
+What vcod leaves out or substitutes, each with its census justification,
+first; then what it draws beyond section 3's keywords: vertex deforms
+(8.1), model skin scripts (8.2), world shader types (8.3), the sun (8.4),
+coronas (8.5), `r_flares` (8.6) and `vc_sunShafts` (8.7).
 
 - NV/ATI hardware-path stage contents (`waterMap`, register combiners,
   nv_texshader tcGens, sunHalfAngle). Every occurrence but stalin_1wet sits
   behind a `requires` gate this profile fails, so dropping them reproduces
   retail on fallback hardware. The ungated `tcGen environment` stages
   (stalin_1wet, mp_ship's doors and windows) draw (§3).
-- Vertex deforms, model skin scripts and the sun: the three subsections
-  at the end of this section.
 - Fog: the script keywords stay inert, but stock MP fog does not come from
   them. `fogvars` / `skyfogvars` occur only in SP sky blocks (pak4/pak9
   `sky.shader`), `waterfogvars` nowhere at all. `nofog` sits only on fx,
@@ -969,7 +970,7 @@ Each omission with its census justification:
   traced. `portal` sorts but draws no portal view. The stage `detail` flag
   and `fog on|off` are consumed inertly.
 
-### Vertex deforms
+### 8.1 Vertex deforms
 
 The 1.1 stage parser hands `deformVertexes` to 0x4f9d20, which stores up to
 three deforms per shader in 0x34-byte records and warns
@@ -1119,7 +1120,7 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   undeformed normal.
 - Inert: syncNormal, projectionShadow, text0-7. None has a stock user.
 
-### Model skin scripts
+### 8.2 Model skin scripts
 
 - VERIFIED: the xmodel loader formats `"skins/%s"` (0x54650c, pushed at
   0x504352 and 0x504838) with the surface's skin name and calls
@@ -1337,7 +1338,7 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   no shader carries 0x1000 and the remap has nothing to act on; the
   `not precached` error is not ported either.
 
-### World shader types
+### 8.3 World shader types
 
 - VERIFIED, CoDMP.exe: the shader-type path (0x4fc0c0) builds
   `shadertypes/` (0x546cd4, loaded at 0x4fbf3c) + `world/` (0x546c00,
@@ -1368,7 +1369,7 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   mp_depot's `glass@window2a` opaque. Blended types (`cloth_blend`,
   `glass_blend_in`) still cut rather than blend.
 
-### The sun: disc, flare, blind and glare
+### 8.4 The sun: disc, flare, blind and glare
 
 - VERIFIED: worldspawn `sundirection` (string 0x54d1c8) is read with
   `"%f %f %f"` (0x564c44) and passed through AngleVectors (0x42e660, forward
@@ -1510,7 +1511,7 @@ with the stock flare stage hard-coded and the image of the named block's
 first stage. A missing `.sun` file draws no sun at all, as retail does,
 so the seven stock MP skies above draw no disc, flare or wash.
 
-### Coronas
+### 8.5 Coronas
 
 The world's `corona` entities are sprites the renderer adds itself, not
 flares. None of the 1.1 flare machinery draws them.
@@ -1559,7 +1560,7 @@ never draws). The cull is the frustum and
 the visited cells' bounds (`Vis::prop_visible`), not retail's portal
 planes.
 
-### r_flares
+### 8.6 r_flares
 
 - VERIFIED, registrations: `r_flares` "1" CVAR_CHEAT (0x4b386b);
   `r_flareSize` "96", `r_flareFadeIn` and `r_flareFadeOut` "0.2", all
@@ -1584,7 +1585,7 @@ planes.
   and its washes stepping and drawing. The dlight flares (`r_flares` 2 or
   3, cheat only) are not implemented.
 
-### vc_sunShafts (vcod only)
+### 8.7 vc_sunShafts (vcod only)
 
 Not retail: `crate::sun_shafts`. Its sun is the flare's direction (the
 lump-30 sun light), so it needs a sun flare: a loaded `.sun` file with a
@@ -1617,7 +1618,7 @@ out between the sun's NDC reaching the screen edge and 1.6.
 - PENDING HUMAN REVIEW: pixel-truth against the retail renderer. The above
   shows surfaces render as authored; only a side-by-side with the real game
   settles the last percent of blending and sky shading.
-- Known divergences, all in §8: NV/ATI hw-path stages dropped (retail
+- Known divergences, in §8 and 8.1: NV/ATI hw-path stages dropped (retail
   fallback parity), `deformVertexes` syncNormal, projectionShadow and
   text0-7 inert, script fog keywords inert (no stock MP map sets fog from a
   script; the fog every map shows arrives in configstring 12 and is
