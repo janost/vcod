@@ -65,7 +65,7 @@ const fn ads(s: Step) -> Step {
 const TAP_MS: u128 = 32;
 const FIRE_PERIOD_MS: u128 = 300;
 
-/// From the snapshot that showed the placement. The street is clear 680
+/// From the snapshot that showed the placement. The floor is clear 680
 /// units either side of the mark, and each run is paired with its way back.
 const SCRIPT: &[Step] = &[
     step("settle", 1500, 0, 0, false),
@@ -118,7 +118,7 @@ const TORSO_SCRIPT: &[Step] = &[
 /// while it still has weight (`legs_ab.rs`, cod11-combat.md 3.1, "The
 /// setter on a weighted node"); the strafe swap does the same in one
 /// 150 ms step. Each long stop lets every node settle first. Forward runs
-/// 3 s and backward 1.7 s, inside the street's 680 units.
+/// 3 s and backward 1.7 s, inside the floor's 680 units.
 const STOPGO_SCRIPT: &[Step] = &[
     step("settle", 1500, 0, 0, false),
     step("run", 1000, 127, 0, false),

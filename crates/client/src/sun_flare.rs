@@ -9,6 +9,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+use bytemuck::Zeroable;
 use vcod_common::sun::{SunFade, SunFile};
 
 use crate::renderer::{DEPTH_FORMAT, Frame, msaa_samples};
@@ -564,13 +565,13 @@ impl SunFlareGpu {
         queue.write_buffer(&self.verts, 0, bytemuck::cast_slice(&quads));
     }
 
-    /// The flare's direction, a point at infinity.
     /// `r_textureMode` changed: a mipmapped flare samples through its new
     /// sampler.
     pub fn set_samplers(&mut self, device: &wgpu::Device, samplers: &TexSamplers) {
         self.image = image_group(device, &self.image_layout, &self.image_view, samplers);
     }
 
+    /// The flare's direction, a point at infinity.
     pub fn dir(&self) -> glam::Vec3 {
         self.flare_dir
     }
@@ -629,11 +630,6 @@ impl SunFlareGpu {
     }
 }
 
-use bytemuck::Zeroable;
-
-/// Two triangles over a window-pixel rectangle `[x0, y0, x1, y1]`
-/// (bottom-left origin) at NDC depth `z`. uv runs as 0x4d94b0's: t = 0 at
-/// the bottom.
 fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -672,6 +668,9 @@ fn image_group(
     })
 }
 
+/// Two triangles over a window-pixel rectangle `[x0, y0, x1, y1]`
+/// (bottom-left origin) at NDC depth `z`. uv runs as 0x4d94b0's: t = 0 at
+/// the bottom.
 fn quad(r: [f32; 4], z: f32, color: [f32; 4], width: f32, height: f32) -> [Vert; 6] {
     let v = |x: f32, y: f32, s: f32, t: f32| Vert {
         pos: [x / width * 2.0 - 1.0, y / height * 2.0 - 1.0, z],
