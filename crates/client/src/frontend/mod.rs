@@ -2044,7 +2044,7 @@ impl Ui {
         }
         match item.feeder {
             Some(FEEDER_ALLMAPS) => Some((self.active_maps().len(), self.map_top)),
-            Some(FEEDER_SERVERS) => Some((self.browser.rows().len(), self.list_top)),
+            Some(FEEDER_SERVERS) => Some((self.browser.row_count(), self.list_top)),
             Some(FEEDER_MODS) => Some((self.mods.len(), self.mod_top)),
             Some(FEEDER_PLAYER_LIST | FEEDER_MUTELIST) => {
                 Some((self.players.len(), self.player_top))
@@ -2094,7 +2094,7 @@ impl Ui {
             return;
         };
         let n = self.list_rows_visible(top);
-        let len = self.browser.rows().len();
+        let len = self.browser.row_count();
         self.list_top = if up {
             self.list_top.saturating_sub(n / 2)
         } else {
@@ -2484,7 +2484,7 @@ impl Ui {
     fn map_preview(&self) -> String {
         let map = self
             .selected
-            .and_then(|a| self.browser.rows().into_iter().find(|s| s.addr == a))
+            .and_then(|a| self.browser.row(a))
             .and_then(|s| s.info.as_ref())
             .map(|i| i.mapname.clone())
             .unwrap_or_default();
