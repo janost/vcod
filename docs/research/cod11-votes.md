@@ -39,7 +39,7 @@ The tests (1.1 0x47888, 1.5 0x43c00). Each string is VERIFIED at its address or 
 2. A vote running: `e "GAME_VOTEALREADYINPROGRESS"`.
 3. `client+0x215c` at 3 or more: `e "GAME_MAXVOTESCALLED"`. VERIFIED (an `objdump` of both modules finds only this compare, 1.1 0x478cf, 1.5 0x43cab): no instruction writes `+0x215c`, so this never goes.
 4. A spectator: `e "GAME_NOSPECTATORCALLVOTE"`.
-5. `;` in `argv[1]` or `argv[2]`: `e "GAME_INVALIDVOTESTRING"`.
+5. `;` in `argv[1]` or `argv[2]`: `e "GAME_INVALIDVOTESTRING"`. vcod also gives it for a byte below 0x20 in `argv[1..=3]` (`vote::holds_control_byte`): a quoted argument keeps a newline, and the console would run what follows it as a second command once the vote passed. Retail tests only the `;`.
 6. An unknown kind: `e "GAME_INVALIDVOTESTRING"` then the list. VERIFIED, both captures: 1.1's is `e "GAME_VOTECOMMANDSARE\x15 map_restart, map_rotate, map <mapname>, g_gametype <typename>, typemap <typename> <mapname>, kick <player>, clientkick <clientnum>"` (1.1 0x73c40); 1.5's adds `tempBanUser <player>, tempBanClient <clientNum>, drawfriend <value>, killcam <value>, friendlyfire <value>` (1.5 file 0x78a40).
 7. 1.5 only: the kind's own `g_allowVote<Kind>` at 0 gives `e "GAME_VOTINGNOTENABLED"`. VERIFIED: the gates by name in the decompile, and the 1.5b run's `clientkick` under `g_allowVoteClientKick 0`.
 8. A passed vote still waiting runs now: `voteExecuteTime` cleared and `voteString` sent to the console (VERIFIED, 1.1 0x47a45).

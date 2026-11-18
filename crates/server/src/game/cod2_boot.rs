@@ -171,6 +171,8 @@ fn play(gametype: &str, teams: [&str; 2]) {
     assert!(level.rt.vote_command(0, &argv, now).is_empty());
     let argv = ["callvote", "map;quit", ""].map(String::from);
     assert_eq!(level.rt.vote_command(0, &argv, now).len(), 1);
+    let argv = ["callvote", "map", "mp_toujane\nquit"].map(String::from);
+    assert_eq!(level.rt.vote_command(0, &argv, now).len(), 1);
     // The precaches landed in CoD2's blocks (`CS_LAYOUT_118`): the menus
     // from 1246, the weapons the level named in configstring 7.
     let cs = level.rt.configstrings();
