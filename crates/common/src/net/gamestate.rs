@@ -8,7 +8,7 @@ use super::msg::{
     EntityState, MsgReader, MsgWriter, SVC_BASELINE, SVC_CONFIGSTRING, SVC_EOF, SVC_GAMESTATE,
     SVC_SERVER_COMMAND, read_delta_entity, write_delta_entity,
 };
-use super::protocol::{GENTITYNUM_BITS, MAX_GENTITIES, Protocol};
+use super::protocol::{Cod1Wire, GENTITYNUM_BITS, MAX_GENTITIES};
 use std::collections::HashMap;
 
 #[derive(Debug, Default)]
@@ -26,7 +26,7 @@ pub struct Gamestate {
 /// `reliableAcknowledge` (docs/protocol-1.1.md, message headers); leading
 /// `svc_serverCommand` ops are skipped here. [`parse_body`] takes over once
 /// the op byte is consumed.
-pub fn parse(r: &mut MsgReader, p: &Protocol) -> anyhow::Result<Gamestate> {
+pub fn parse(r: &mut MsgReader, p: &Cod1Wire) -> anyhow::Result<Gamestate> {
     loop {
         match r.read_byte() {
             SVC_GAMESTATE => return parse_body(r, p),
@@ -41,7 +41,7 @@ pub fn parse(r: &mut MsgReader, p: &Protocol) -> anyhow::Result<Gamestate> {
 }
 
 /// `CL_ParseGamestate`, with the op byte already consumed.
-pub fn parse_body(r: &mut MsgReader, p: &Protocol) -> anyhow::Result<Gamestate> {
+pub fn parse_body(r: &mut MsgReader, p: &Cod1Wire) -> anyhow::Result<Gamestate> {
     let mut gs = Gamestate {
         configstrings: vec![String::new(); p.transport.max_configstrings],
         server_command_sequence: r.read_long(),
@@ -87,7 +87,7 @@ pub fn parse_body(r: &mut MsgReader, p: &Protocol) -> anyhow::Result<Gamestate> 
 /// `SV_SendClientGameState` from the op on, inverse of [`parse_body`]. The
 /// caller writes the plain `reliableAcknowledge` and any leading server
 /// commands.
-pub fn write(w: &mut MsgWriter, p: &Protocol, gs: &Gamestate) {
+pub fn write(w: &mut MsgWriter, p: &Cod1Wire, gs: &Gamestate) {
     w.write_byte(SVC_GAMESTATE);
     w.write_long(gs.server_command_sequence);
     for (i, cs) in gs.configstrings.iter().enumerate() {

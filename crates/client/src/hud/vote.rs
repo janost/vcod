@@ -118,7 +118,6 @@ impl Vote {
 
     /// Draws the lines at x 8, baselines 200 and 210 (0x43480000,
     /// 0x43520000). True when the draw owes `player_talk`.
-    #[allow(clippy::too_many_arguments)]
     pub fn build(
         &mut self,
         fonts: &UiFonts,
@@ -206,7 +205,6 @@ impl Complaint {
     }
 
     /// Draws the lines where the vote's go; true while up.
-    #[allow(clippy::too_many_arguments)]
     pub fn build(
         &self,
         fonts: &UiFonts,

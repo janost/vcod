@@ -5,7 +5,7 @@
 //! per version; the load picks it (`ScriptRuntime::load_game`).
 
 use vcod_common::game::Game;
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_gsc::VmProfile;
 
 use crate::defs::{self, Defs};
@@ -386,7 +386,7 @@ pub static COD4: HostProfile = HostProfile {
 
 impl HostProfile {
     /// CoD1's profile for `proto`, as [`Defs::of`] picks its tables.
-    pub fn cod1(proto: &Protocol) -> &'static HostProfile {
+    pub fn cod1(proto: &Cod1Wire) -> &'static HostProfile {
         match proto.transport.version {
             v if v == PROTOCOL_V22.transport.version => &COD1_UO,
             v if v == PROTOCOL_V6.transport.version => &COD1_15,
@@ -399,7 +399,7 @@ impl HostProfile {
         let proto = protocol
             .parse()
             .ok()
-            .and_then(|v| Protocol::by_version(Game::Cod1, v))
+            .and_then(|v| Cod1Wire::by_version(Game::Cod1, v))
             .unwrap_or(&PROTOCOL_V1);
         Self::cod1(proto)
     }

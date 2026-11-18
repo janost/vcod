@@ -18,7 +18,7 @@ use crate::game::say::SayMode;
 use vcod_common::pmove;
 use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("setclientcvar", set_client_cvar),
@@ -572,7 +572,7 @@ pub fn allow_complaint(
 }
 
 /// `self closeMenu()` (`.so` 0x45574): the reliable command `u`, with no
-/// argument -- the whole format string at 0x73204 is the one letter. The
+/// argument: the whole format string at 0x73204 is the one letter. The
 /// client's handler is `0x3002de60`, "close script menus"
 /// (`docs/research/cod11-hud-protocol.md` section 0).
 pub fn close_menu(
@@ -602,10 +602,6 @@ pub fn freeze_controls(
     };
     v.as_bool()?;
     Ok(Value::Undefined)
-}
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
 }
 
 /// The model configstring slot `ps.viewmodelIndex` counts from. `G_ModelIndex`
@@ -858,7 +854,7 @@ pub fn give_max_ammo(
 }
 
 /// `self setSpawnWeapon(name)` (0x452a4): `ps.weapon = index`, for a weapon
-/// the player already holds, with `ps.weaponstate` -- retail's other store --
+/// the player already holds, with `ps.weaponstate` (retail's other store)
 /// back to ready. Object model doc, section 20.
 pub fn set_spawn_weapon(
     host: &mut GameHost,
@@ -979,7 +975,7 @@ pub fn get_weapon_slot_weapon(
 /// `"none"` is not a weapon name but weapon index 0, which empties the slot:
 /// retail compares the argument against `"none"` ahead of its name lookup
 /// (0x43ebd), and stock script feeds `getWeaponSlotWeapon`'s own `"none"`
-/// straight back in -- `sd.gsc`'s `spawnPlayer` re-gives the `pers["weapon2"]`
+/// straight back in: `sd.gsc`'s `spawnPlayer` re-gives the `pers["weapon2"]`
 /// `endRound` stashed, which is `"none"` for a player carrying one primary.
 /// Either way whatever stood in the slot is taken first (0x43f6b).
 pub fn set_weapon_slot_weapon(
@@ -1349,7 +1345,8 @@ mod tests {
         assert_eq!(clamp_rounds(50, 999), 50);
         assert_eq!(clamp_rounds(i32::MAX, u32::MAX), i16::MAX);
     }
-    use crate::configstrings::{CsRange, weapon_index};
+    use crate::configstrings::CsRange;
+    use crate::defs::V1;
     use crate::game::entity::ThinkFn;
     use crate::game::testing::fixture;
     use vcod_gsc::EntId;
@@ -1778,7 +1775,7 @@ mod tests {
     }
 
     /// The weapon name comes out of the host's own `client_weapons`, and a
-    /// slot holding nothing reads `"none"` -- which is what a player on a
+    /// slot holding nothing reads `"none"`, which is what a player on a
     /// ladder reports, the holster having written 0 into `ps.weapon`.
     #[test]
     fn getcurrentweapon_names_what_the_client_holds() {
@@ -1794,7 +1791,7 @@ mod tests {
                     v => panic!("{v:?}"),
                 };
             assert_eq!(name(&mut host, cx), "none");
-            host.client_weapons[0].current = weapon_index("m1carbine_mp").unwrap() as u8;
+            host.client_weapons[0].current = V1.weapon_index("m1carbine_mp").unwrap() as u8;
             assert_eq!(name(&mut host, cx), "m1carbine_mp");
         });
     }
@@ -1823,7 +1820,7 @@ mod tests {
         let (mut vm, mut host) = fixture();
         host.weapons = std::rc::Rc::new(crate::game::pickup::tests_table());
         host.level_time_ms = 5_000;
-        let carbine = weapon_index("m1carbine_mp").unwrap();
+        let carbine = V1.weapon_index("m1carbine_mp").unwrap();
         let (clip_index, ammo_index) = {
             let d = host.weapons.get(carbine).unwrap();
             (d.clip_index, d.ammo_index)
@@ -1871,7 +1868,7 @@ mod tests {
     fn dropitem_of_a_weapon_not_held_drops_nothing() {
         let (mut vm, mut host) = fixture();
         host.weapons = std::rc::Rc::new(crate::game::pickup::tests_table());
-        let carbine = weapon_index("m1carbine_mp").unwrap();
+        let carbine = V1.weapon_index("m1carbine_mp").unwrap();
         host.client_weapons[0].give(carbine, 1);
         let held = host.client_weapons[0];
         vm.with_cx(|cx| {
@@ -2000,8 +1997,8 @@ mod tests {
     }
 
     /// `cloneplayer` copies the mirror `Server::replay_moves` wrote into the
-    /// body queue's next slot. A client with no mirror -- connected but never
-    /// in the world -- clones nothing.
+    /// body queue's next slot. A client with no mirror (connected but never
+    /// in the world) clones nothing.
     #[test]
     fn cloneplayer_pushes_the_mirrored_state_into_the_body_queue() {
         let p = &vcod_common::net::protocol::PROTOCOL_V1;
@@ -2075,7 +2072,7 @@ mod tests {
                         .into()
                 ))
             );
-            assert!(!host.client_weapons[0].holds(weapon_index("mp40_mp").unwrap()));
+            assert!(!host.client_weapons[0].holds(V1.weapon_index("mp40_mp").unwrap()));
         });
     }
 
@@ -2087,7 +2084,7 @@ mod tests {
         let Some((mut vm, mut host)) = armed_fixture() else {
             return;
         };
-        let mg = weapon_index("mg42_bipod_stand_mp").unwrap();
+        let mg = V1.weapon_index("mg42_bipod_stand_mp").unwrap();
         assert_eq!(host.weapons.get(mg).unwrap().weapon_class, "turret");
         host.initializing = false;
         vm.with_cx(|cx| {
@@ -2136,7 +2133,7 @@ mod tests {
         let Some((mut vm, mut host)) = armed_fixture() else {
             return;
         };
-        let carbine = weapon_index("m1carbine_mp").unwrap();
+        let carbine = V1.weapon_index("m1carbine_mp").unwrap();
         let (ammo_index, clip_index) = {
             let def = host.weapons.get(carbine).expect("the carbine");
             (def.ammo_index, def.clip_index)
@@ -2200,7 +2197,7 @@ mod tests {
         let Some((mut vm, mut host)) = armed_fixture() else {
             return;
         };
-        let thompson = weapon_index("thompson_mp").unwrap();
+        let thompson = V1.weapon_index("thompson_mp").unwrap();
         vm.with_cx(|cx| {
             let e = loadout(&mut host, cx);
             let t = Some(Target::Entity(e));
@@ -2219,7 +2216,7 @@ mod tests {
             }
             assert!(host.client_weapons[0].holds(thompson));
             // `BG_GivePlayerWeapon` holds the select-fire mode beside it.
-            let semi = weapon_index("thompson_semi_mp").unwrap();
+            let semi = V1.weapon_index("thompson_semi_mp").unwrap();
             assert!(host.client_weapons[0].holds(semi));
             assert!(!host.client_weapons[0].slots.contains(&(semi as u8)));
             switch_to_weapon(&mut host, cx, t, &[name]).unwrap();
@@ -2243,7 +2240,7 @@ mod tests {
         let Some((mut vm, mut host)) = armed_fixture() else {
             return;
         };
-        let thompson = weapon_index("thompson_mp").unwrap();
+        let thompson = V1.weapon_index("thompson_mp").unwrap();
         vm.with_cx(|cx| {
             let e = loadout(&mut host, cx);
             let t = Some(Target::Entity(e));
@@ -2298,7 +2295,7 @@ mod tests {
     /// `switchToWeapon` sends the client `a <colt>` and queues nothing for
     /// the sim: the cmds that then name the colt put the carbine away and
     /// raise the colt, `ps.weapon` reading it only from the raise on. The
-    /// host's own copy is left alone -- the mirror would otherwise force the
+    /// host's own copy is left alone: the mirror would otherwise force the
     /// target weapon in ahead of the putaway.
     #[test]
     fn switchtoweapon_goes_through_the_putaway_and_the_raise() {
@@ -2307,8 +2304,8 @@ mod tests {
             return;
         };
         let (carbine, colt) = (
-            weapon_index("m1carbine_mp").unwrap(),
-            weapon_index("colt_mp").unwrap(),
+            V1.weapon_index("m1carbine_mp").unwrap(),
+            V1.weapon_index("colt_mp").unwrap(),
         );
         vm.with_cx(|cx| {
             let e = loadout(&mut host, cx);

@@ -171,7 +171,6 @@ impl CtfCarries {
     }
 
     /// `bodies`: each playing body's client, team and feet.
-    #[allow(clippy::too_many_arguments)]
     fn step(
         &mut self,
         tick: usize,
@@ -656,9 +655,13 @@ impl Tally {
 /// `tickstats <map> <gametype> seed <s>: ticks N p50 p90 p99 max` and a
 /// line per phase (mean, p50, p99 and max ms a tick, longest mean first). Tick 0,
 /// which waits on the nav graph, is left out. Run with `JOBS=1`: matches
-/// beside each other share the CPUs.
+/// beside each other share the CPUs. `TICKSTATS=insns` counts each phase's
+/// user-space instructions instead (`tick_profile::enable_insns`), printed
+/// in the same columns as millions, and a tick as the sum of its top-level
+/// phases: the number to compare on a loaded machine.
 #[derive(Default)]
 struct TickStats {
+    insns: bool,
     ms: Vec<f32>,
     /// Each phase's time per counted tick, 0 where it did not run.
     phases: BTreeMap<&'static str, Vec<f32>>,
@@ -668,16 +671,35 @@ struct TickStats {
 
 impl TickStats {
     fn from_env() -> Option<TickStats> {
-        (std::env::var("TICKSTATS").as_deref() == Ok("1")).then(|| {
-            vcod_server::tick_profile::enable();
-            TickStats::default()
-        })
+        match std::env::var("TICKSTATS").as_deref() {
+            Ok("1") => {
+                vcod_server::tick_profile::enable();
+                Some(TickStats::default())
+            }
+            Ok("insns") => {
+                vcod_server::tick_profile::enable_insns();
+                Some(TickStats {
+                    insns: true,
+                    ..TickStats::default()
+                })
+            }
+            _ => None,
+        }
     }
 
     fn add(&mut self, tick: usize, ms: f32, phases: &[vcod_server::tick_profile::PhaseTime]) {
         if tick == 0 {
             return;
         }
+        let ms = if self.insns {
+            phases
+                .iter()
+                .filter(|p| !p.0.contains('/'))
+                .map(|p| p.1.as_secs_f32() * 1000.0)
+                .sum()
+        } else {
+            ms
+        };
         let n = self.ms.len();
         self.ms.push(ms);
         for (name, d, _) in phases {
@@ -700,6 +722,9 @@ impl TickStats {
 
     fn print(&self, map: &str, gametype: &str, seed: u64) {
         let n = self.ms.len();
+        if self.insns {
+            eprintln!("tickstats {map} {gametype} seed {seed}: the ms columns are M insns");
+        }
         eprintln!(
             "tickstats {map} {gametype} seed {seed}: ticks {n} p50 {:.2} p90 {:.2} p99 {:.2} max {:.1} ms (tick {}: {})",
             Self::pct(&self.ms, 0.5),
@@ -952,7 +977,7 @@ fn observer_addr(i: usize) -> (SocketAddr, u16) {
 }
 
 impl Observer {
-    fn new(proto: &'static vcod_common::net::protocol::Protocol, now: Instant, i: usize) -> Self {
+    fn new(proto: &'static vcod_common::net::protocol::Cod1Wire, now: Instant, i: usize) -> Self {
         let (addr, qport) = observer_addr(i);
         let pipe = Rc::new(std::cell::RefCell::new(Pipe::default()));
         let cl = vcod_common::net::NetClient::start_with_protocol(

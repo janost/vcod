@@ -457,7 +457,7 @@ pub fn use_item(host: &mut GameHost, cx: &mut Cx, id: EntId) -> Option<bool> {
     Some(respawn_item(host, cx, id))
 }
 
-/// A listed item as `crate::push::push` sees it, `None` for an entity that
+/// A listed item as `crate::push::push_with` sees it, `None` for an entity that
 /// is not an item lying in the world.
 pub fn push_body(host: &mut GameHost, cx: &mut Cx, id: EntId) -> Option<crate::push::ItemBody> {
     let st = host.ents.get(id)?.item.filter(|i| !i.taken)?;
@@ -1125,7 +1125,7 @@ pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: 
             format!("{word};0;{slot};{name};{item}")
         };
         host.log_printf(format!("{text}\n"));
-        host.script_log.push(line);
+        host.keep_script_line(line);
     }
     for c in out.commands {
         host.client_commands.push((slot, c));
@@ -1355,7 +1355,7 @@ mod tests {
     #[test]
     fn a_placed_item_is_on_the_wire_until_it_is_taken() {
         let (mut vm, mut host) = fixture();
-        let fg = crate::configstrings::weapon_index("fg42_mp").unwrap();
+        let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap();
         let id = vm.with_cx(|cx| {
             let id = host.ents.spawn(cx).unwrap();
             let cn = cx.intern_folded("classname");
@@ -1384,7 +1384,7 @@ mod tests {
     #[test]
     fn a_thrown_drop_flies_and_names_its_dropper_until_the_lockout_clears() {
         let (mut vm, mut host) = fixture();
-        let fg = crate::configstrings::weapon_index("fg42_mp").unwrap() as u8;
+        let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap() as u8;
         let d = Dropped {
             weapon: fg,
             count: 70,
@@ -1481,7 +1481,7 @@ mod tests {
     #[test]
     fn a_thrown_drop_lands_ahead_facing_the_droppers_yaw_with_the_weapon_roll() {
         let (mut vm, mut host) = floor_host(vcod_common::collision::test_world(&[]));
-        let carbine = crate::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+        let carbine = crate::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
         let d = Dropped {
             weapon: carbine,
             count: 400,
@@ -1634,7 +1634,7 @@ mod tests {
     fn a_taken_item_respawns_on_its_flags_and_fields() {
         let (mut vm, mut host) = fixture();
         host.weapons = std::rc::Rc::new(crate::game::pickup::tests_table());
-        let colt = crate::configstrings::weapon_index("colt_mp").unwrap();
+        let colt = crate::defs::V1.weapon_index("colt_mp").unwrap();
         host.client_weapons[0].give(colt, 3);
         host.client_vitals[0].max_health = 100;
         host.client_vitals[0].health = 40;

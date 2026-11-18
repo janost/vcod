@@ -6,9 +6,9 @@
 //! and a lone client sees nobody else's, so there is nothing on the wire to
 //! diff the client-tagged fields against. Every expectation below is read out
 //! of `pak5.pk3:maps/mp/gametypes/dm.gsc` with the line named, so it proves
-//! that our VM ran those lines and stored what they say — not that a retail
+//! that our VM ran those lines and stored what they say, not that a retail
 //! server holds the same values. What a second client sees of the first is
-//! stage 5's gate, and that is the A/B this cannot be.
+//! `two_clients.rs`'s gate, and that is the A/B this cannot be.
 //!
 //! Needs `COD_DIR`; without the paks it returns early.
 

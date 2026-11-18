@@ -27,7 +27,7 @@ use vcod_common::bonetrace::{PriorityMap, bone_trace_worlds_cod4};
 use vcod_common::playerpose::{Cod4Arith, Controllers};
 use vcod_gsc::{EntId, Value};
 
-use super::level::{Cod4Level, PM_DEAD, PsExt};
+use super::level::{Cod4Level, PM_DEAD, PsExt, ps};
 use crate::follow::SessionState;
 
 /// `bulletPriorityMap` and `riflePriorityMap`, one byte per hit
@@ -359,6 +359,44 @@ fn controller_frame(f: &BodyFrame, end_frame: Option<([f32; 3], f32)>) -> BodyFr
     c
 }
 
+/// The newest [`Tail::CAP`] entries of a level-long log, numbered from the
+/// level's first so a reader keeps its place by count.
+pub struct Tail<T> {
+    items: VecDeque<T>,
+    dropped: usize,
+}
+
+impl<T> Default for Tail<T> {
+    fn default() -> Self {
+        Tail {
+            items: VecDeque::new(),
+            dropped: 0,
+        }
+    }
+}
+
+impl<T> Tail<T> {
+    pub const CAP: usize = 4096;
+
+    pub fn push(&mut self, v: T) {
+        if self.items.len() == Self::CAP {
+            self.items.pop_front();
+            self.dropped += 1;
+        }
+        self.items.push_back(v);
+    }
+
+    /// How many were ever pushed.
+    pub fn total(&self) -> usize {
+        self.dropped + self.items.len()
+    }
+
+    /// The entries numbered `from` on that are still kept.
+    pub fn since(&self, from: usize) -> impl Iterator<Item = &T> {
+        self.items.iter().skip(from.saturating_sub(self.dropped))
+    }
+}
+
 /// What the level keeps for the shots: the body poses, the hit poses' rigs,
 /// the weapon defs pmove reads and the antilag's positions.
 #[derive(Default)]
@@ -398,16 +436,16 @@ pub struct Combat4 {
     /// The gun pitch and yaw by slot: what the last cmd's aim block left,
     /// the angles a round leaves along (cod4-combat.md 3.2).
     pub(super) gun_angles: Vec<[f32; 2]>,
-    /// Every bullet or melee hit scored, `(attacker, victim, hit
-    /// location)`, for the tests.
-    pub hits: Vec<(usize, usize, u8)>,
-    /// Every bullet round fired, a gunner's turret rounds too, `(shooter,
+    /// The bullet and melee hits scored, `(attacker, victim, hit
+    /// location)`: the bots' hit feed and the tests.
+    pub hits: Tail<(usize, usize, u8)>,
+    /// The bullet rounds fired, a gunner's turret rounds too, `(shooter,
     /// game time, start, the aim's end, where the spread put it)`, for the
     /// tests.
-    pub shots: Vec<(usize, i32, Vec3, Vec3, Vec3)>,
-    /// Every player a blast's splash reached, `(victim, damage)` as the
+    pub shots: Tail<(usize, i32, Vec3, Vec3, Vec3)>,
+    /// The players a blast's splash reached, `(victim, damage)` as the
     /// engine hands it to the scripts, for the tests.
-    pub splashes: Vec<(usize, i32)>,
+    pub splashes: Tail<(usize, i32)>,
     /// `info/bullet_penetration_mp`, read at the level's first shot
     /// (`None` inside when the zones carry none).
     pub(super) penetration: Option<Option<Rc<super::bullet::PenTable>>>,
@@ -574,12 +612,12 @@ impl Cod4Level {
             return;
         };
         let ps = &p.ps;
-        let seq = ps.word("eventSequence") as i32;
+        let seq = ps.word(ps!("eventSequence")) as i32;
         let events: Vec<(u32, u32)> = (old_seq.max(seq - 4)..seq)
             .map(|k| {
                 (
-                    ps.word(&format!("events[{}]", k & 3)),
-                    ps.word(&format!("eventParms[{}]", k & 3)),
+                    ps.word(ps!(4 "events")[(k & 3) as usize]),
+                    ps.word(ps!(4 "eventParms")[(k & 3) as usize]),
                 )
             })
             .collect();
@@ -706,7 +744,7 @@ impl Cod4Level {
     }
 
     /// A bullet's `G_DamageClient` at the shot's time.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn damage_client(
         &mut self,
         attacker: usize,
@@ -738,7 +776,7 @@ impl Cod4Level {
     /// weapon's location multiplier (not on a melee), at least 1, into
     /// `CodeCallback_PlayerDamage`, then the playerstate half the script's
     /// `finishPlayerDamage` queued.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn damage_from(
         &mut self,
         attacker: usize,
@@ -1001,7 +1039,8 @@ impl Cod4Level {
     /// A body in play: playing, `pm_type` normal or last stand.
     pub(super) fn playing(&mut self, slot: usize) -> bool {
         self.players[slot].as_ref().is_some_and(|p| {
-            super::level::in_play(p.ps.word("pm_type")) && p.ps.word("otherFlags") & 4 != 0
+            super::level::in_play(p.ps.word(ps!("pm_type")))
+                && p.ps.word(ps!("otherFlags")) & 4 != 0
         }) && self
             .rt
             .client_session(slot)
@@ -1159,7 +1198,10 @@ impl Cod4Level {
     fn body_frame(&mut self, slot: usize, origin: Vec3) -> Option<BodyFrame> {
         let ps = vcod_cod4::pmove::PlayerState::from_wire(&self.players.get(slot)?.as_ref()?.ps);
         let w = &self.players[slot].as_ref()?.ps;
-        let (legs, torso) = (w.word("legsAnim") as i32, w.word("torsoAnim") as i32);
+        let (legs, torso) = (
+            w.word(ps!("legsAnim")) as i32,
+            w.word(ps!("torsoAnim")) as i32,
+        );
         // A spawn's own end frame reads `legsAnim` 0 and sets no clip
         // (cod4-player-anims.md 3); the idle comes with the first think's.
         self.combat.anims()?;
@@ -1189,9 +1231,9 @@ impl Cod4Level {
             return;
         };
         let origin = Vec3::new(
-            f32::from_bits(p.ps.word("origin[0]")).trunc(),
-            f32::from_bits(p.ps.word("origin[1]")).trunc(),
-            f32::from_bits(p.ps.word("origin[2]")).trunc(),
+            f32::from_bits(p.ps.word(ps!("origin[0]"))).trunc(),
+            f32::from_bits(p.ps.word(ps!("origin[1]"))).trunc(),
+            f32::from_bits(p.ps.word(ps!("origin[2]"))).trunc(),
         );
         let now = self.level_time();
         // `level.frametime` (0x80a4838).
@@ -1233,7 +1275,6 @@ impl Cod4Level {
 
     /// [`Self::body_trace`]; `ease` steps the body's controls a frame
     /// first, as every trace but a round's penetration legs does.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn body_trace_eased(
         &mut self,
         slot: usize,
@@ -1434,9 +1475,9 @@ impl Cod4Level {
                 playing[s].then(|| {
                     let ps = &self.players[s].as_ref().unwrap().ps;
                     Vec3::new(
-                        f32::from_bits(ps.word("origin[0]")),
-                        f32::from_bits(ps.word("origin[1]")),
-                        f32::from_bits(ps.word("origin[2]")),
+                        f32::from_bits(ps.word(ps!("origin[0]"))),
+                        f32::from_bits(ps.word(ps!("origin[1]"))),
+                        f32::from_bits(ps.word(ps!("origin[2]"))),
                     )
                 })
             })
@@ -1488,11 +1529,11 @@ impl Cod4Level {
                 }
             }
             p.ps = ps.to_wire(&p.ps);
-            p.ps.set("damageDuration", ps.damage_duration as u32);
-            p.ps.set("flinchYawAnim", flinch);
+            p.ps.set(ps!("damageDuration"), ps.damage_duration as u32);
+            p.ps.set(ps!("flinchYawAnim"), flinch);
             p.ps.stats[0] = if op.fatal { 0 } else { health.max(0) };
             if op.fatal {
-                p.ps.set("weapon", 0);
+                p.ps.set(ps!("weapon"), 0);
                 p.ps.stats[1] = op.dead_yaw.unwrap_or(ps.view_angles[1] as i32);
             }
         }
@@ -1525,18 +1566,20 @@ impl Cod4Level {
         let hurt =
             (blood > 0 && max_health > 0).then(|| (100 * blood / max_health).min(MAX_DAMAGE_COUNT));
         match hurt {
-            _ if ps.word("pm_type") >= PM_DEAD => {}
+            _ if ps.word(ps!("pm_type")) >= PM_DEAD => {}
             Some(count) => {
                 let [pitch, yaw] = damage_direction(from);
-                ps.set("damageEvent", ps.word("damageEvent").wrapping_add(1));
-                ps.set("damageCount", count as u32);
-                ps.set("damagePitch", pitch);
-                ps.set("damageYaw", yaw);
+                ps.set(
+                    ps!("damageEvent"),
+                    ps.word(ps!("damageEvent")).wrapping_add(1),
+                );
+                ps.set(ps!("damageCount"), count as u32);
+                ps.set(ps!("damagePitch"), pitch);
+                ps.set(ps!("damageYaw"), yaw);
                 let widened =
-                    f64::from(f32::from_bits(ps.word("aimSpreadScale"))) + f64::from(count);
-                ps.setf("aimSpreadScale", widened.min(255.0) as f32);
-                let view =
-                    std::array::from_fn(|k| f32::from_bits(ps.word(&format!("viewangles[{k}]"))));
+                    f64::from(f32::from_bits(ps.word(ps!("aimSpreadScale")))) + f64::from(count);
+                ps.setf(ps!("aimSpreadScale"), widened.min(255.0) as f32);
+                let view = std::array::from_fn(|k| f32::from_bits(ps.word(ps!(3 "viewangles")[k])));
                 self.combat.blood[slot] = (0, None);
                 self.combat.hit_dir[slot] = from;
                 self.combat.aim[slot].kick = vcod_cod4::pmove::aim::DamageKick::feedback(
@@ -1546,10 +1589,10 @@ impl Cod4Level {
                     now,
                 );
             }
-            None if kick_age > DAMAGE_COUNT_MS => ps.set("damageCount", 0),
+            None if kick_age > DAMAGE_COUNT_MS => ps.set(ps!("damageCount"), 0),
             None => {}
         }
-        self.combat.aim_spread[slot] = f32::from_bits(ps.word("aimSpreadScale")) / 255.0;
+        self.combat.aim_spread[slot] = f32::from_bits(ps.word(ps!("aimSpreadScale"))) / 255.0;
     }
 
     /// The weapons `dropItem` launched, each through `G_RunItem`
@@ -1770,17 +1813,17 @@ impl Cod4Level {
 
     /// [`Combat4::hits`].
     pub fn combat_hits(&self) -> Vec<(usize, usize, u8)> {
-        self.combat.hits.clone()
+        self.combat.hits.since(0).copied().collect()
     }
 
     /// [`Combat4::splashes`].
-    pub fn combat_splashes(&self) -> &[(usize, i32)] {
-        &self.combat.splashes
+    pub fn combat_splashes(&self) -> Vec<(usize, i32)> {
+        self.combat.splashes.since(0).copied().collect()
     }
 
     /// [`Combat4::shots`].
-    pub fn combat_shots(&self) -> &[(usize, i32, Vec3, Vec3, Vec3)] {
-        &self.combat.shots
+    pub fn combat_shots(&self) -> Vec<(usize, i32, Vec3, Vec3, Vec3)> {
+        self.combat.shots.since(0).copied().collect()
     }
 
     /// `slot`'s playerstate as a pmove one.
@@ -1939,17 +1982,20 @@ fn damage_direction(from: Option<[f32; 3]>) -> [u32; 2] {
 #[cfg(test)]
 impl Cod4Level {
     /// `slot`'s melee swing at the level's time; for tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn fire_melee_for_test(&mut self, slot: usize) {
         let now = self.level_time();
         self.fire_melee(slot, now);
     }
 
     /// Applies the queued [`Damage4`]s now; for tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn apply_damage_ops_for_test(&mut self) {
         self.apply_damage_ops();
     }
 
     /// `slot`'s end-frame damage feedback now; for tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn damage_feedback_for_test(&mut self, slot: usize) {
         self.damage_feedback(slot);
     }
@@ -2155,5 +2201,21 @@ mod tests {
         let (a, b) = (Vec3::new(-10.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0));
         assert!(segment_meets_box(a, b, lo, hi, 1.0));
         assert!(!segment_meets_box(a, b, lo, hi, 0.4));
+    }
+
+    /// A level-long log keeps its newest entries and its count, so a reader
+    /// past the dropped ones still gets exactly what is new.
+    #[test]
+    fn a_tail_keeps_the_newest_and_counts_them_all() {
+        let mut t = Tail::default();
+        for i in 0..Tail::<usize>::CAP + 5 {
+            t.push(i);
+        }
+        assert_eq!(t.total(), Tail::<usize>::CAP + 5);
+        assert_eq!(t.since(0).count(), Tail::<usize>::CAP);
+        assert_eq!(t.since(0).next(), Some(&5));
+        let last: Vec<_> = t.since(Tail::<usize>::CAP + 3).copied().collect();
+        assert_eq!(last, [Tail::<usize>::CAP + 3, Tail::<usize>::CAP + 4]);
+        assert_eq!(t.since(t.total()).count(), 0);
     }
 }

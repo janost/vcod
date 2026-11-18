@@ -1981,7 +1981,6 @@ impl FxSystem {
     /// CoD1's muzzle flash hands syscall 0xe5 the shooter's `lerpOrigin`
     /// or the view weapon's origin (cgame 0x30036cf0), its brass the view
     /// weapon's last `tag_brass` (0x30038a30).
-    #[allow(clippy::too_many_arguments)]
     pub fn spawn_marked_from(
         &mut self,
         fs: &dyn AssetSource,
@@ -2012,7 +2011,6 @@ impl FxSystem {
         drop_oldest(&mut self.marks, MAX_PENDING);
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn spawn_effect(
         &mut self,
         fs: &dyn AssetSource,

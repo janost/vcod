@@ -18,8 +18,9 @@ use std::io::Write as _;
 use glam::Vec3;
 
 use super::input::{Action, PlayInput};
+use vcod_common::net::flags::{PM_DEAD, PM_NORMAL_LINKED};
 use vcod_common::net::msg::PlayerState;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 
 /// What the soak asks of `App` once the frame's borrows end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,10 +62,6 @@ pub struct Soak {
     asks: Vec<Ask>,
     audio_misses: u64,
 }
-
-/// pmove's `pm_type`s the soak reads (CoD1's numbering).
-const PM_NORMAL_LINKED: i32 = 1;
-const PM_DEAD: i32 = 6;
 
 impl Soak {
     /// The soak when `VCOD_SOAK` names a file it can create.
@@ -128,12 +125,11 @@ impl Soak {
     /// The frame's input, decided before the cmds are built. `ps` is the
     /// newest snapshot's playerstate, `serverinfo` configstring 0, `feet`
     /// the drawn origin, `menu_up` whether a menu holds the keys.
-    #[allow(clippy::too_many_arguments)]
     pub fn act(
         &mut self,
         input: &mut PlayInput,
         ps: Option<&PlayerState>,
-        p: &Protocol,
+        p: &Cod1Wire,
         serverinfo: &str,
         feet: Vec3,
         time: f32,

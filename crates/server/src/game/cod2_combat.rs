@@ -282,22 +282,6 @@ pub fn parse_hitloc_table(text: &str) -> Option<[f32; 19]> {
 }
 
 impl Combat {
-    /// The level's combat state over the map's clip and the paks.
-    pub fn new(clip: Option<Arc<ClipMap>>, fs: Option<&Pk3Fs>) -> Combat {
-        Self::with_statics(clip, None, fs)
-    }
-
-    /// [`Self::new`] with the static models the bullets clip: the
-    /// `misc_model` placements' xmodel collision, as world triangles.
-    pub fn with_statics(
-        clip: Option<Arc<ClipMap>>,
-        statics: Option<vcod_common::collision::CollisionWorld>,
-        fs: Option<&Pk3Fs>,
-    ) -> Combat {
-        let (hitloc_mult, anims) = Self::tables(fs);
-        Self::with_parts(clip, statics.map(Rc::new), hitloc_mult, anims)
-    }
-
     /// What the combat reads off the paks: the hit-location multipliers and
     /// the player anim set the hit poses play (no clip loaded yet).
     pub fn tables(fs: Option<&Pk3Fs>) -> ([f32; 19], Option<PlayerAnimSet>) {
@@ -354,6 +338,7 @@ impl Combat {
     }
 
     /// Whether the world lets a shot from `a` to `b`.
+    #[cfg(test)]
     pub fn clear_shot(&self, a: Vec3, b: Vec3) -> bool {
         self.clip.as_ref().is_none_or(|c| {
             c.trace(a, b, Vec3::ZERO, Vec3::ZERO, MASK_SHOT & !CONTENTS_BODY)
@@ -1314,7 +1299,7 @@ impl Cod2Level {
     /// gunner's is the weapon in his hands (cod2-turrets.md 11). `owner`
     /// is the entity a world impact names (`otherEntityNum`): the shooter,
     /// or a gunner's turret.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn bullet_fire(
         &mut self,
         slot: usize,
@@ -1336,6 +1321,11 @@ impl Cod2Level {
             }
         }
         let saved = self.antilag_move(&origins);
+        // `G_Damage`'s tenth argument, `timeOffset`, from the bullet path is
+        // `level.time` minus the shot's time (0x811fe90's caller passes
+        // `DAT_0864c56c - param_9`); `client_events` hands `lag_time` under
+        // `g_antilag` 1, its default (0x8111842..), else `level.time`, so 0.
+        // Every other `G_Damage` caller passes 0. VERIFIED, the call sites.
         let time_offset = now - lag_time;
         let (pellets, range) = if w.weap_class == 3 {
             (w.shot_count.max(0), w.min_damage_range)
@@ -1434,7 +1424,7 @@ impl Cod2Level {
     /// impact event, glass passed a quarter unit on, and a struck client's
     /// `G_Damage` at the range's damage times `scale`; a rifle round goes
     /// on through a client not on the shooter's side at half.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn bullet_extended(
         &mut self,
         attacker: usize,
@@ -1629,7 +1619,7 @@ impl Cod2Level {
     /// `loc*` multiplier for a bullet weapon, else the level's hit-location
     /// table, truncated; a result above 0 goes to the damage callback with
     /// `timeOffset`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn g_damage(
         &mut self,
         victim: usize,
@@ -2416,7 +2406,7 @@ impl Cod2Level {
     /// point, raised 24. Under `setPlayerIgnoreRadiusDamage` no client is
     /// touched. A thrower who left takes no walk at all. `ignore` is
     /// passed over.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn radius_damage(
         &mut self,
         at: Vec3,

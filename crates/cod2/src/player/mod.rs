@@ -543,7 +543,6 @@ impl PlayerBody {
     /// [`Self::pose`], each clip sampled at its node time when `node_time`
     /// (the server's tree, stepped a frame at a time: `G_RunFrame`'s
     /// lnxded 0x80920d0 over every entity's DObj).
-    #[allow(clippy::too_many_arguments)]
     pub fn pose_in(
         &self,
         rig: &PlayerRig,
@@ -675,7 +674,7 @@ impl PlayerBody {
 
     /// [`Self::pose_in`]; a `drawn` pose skips the engine records
     /// (`playerpose::pose_player_drawn`), which only a trace reads.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn pose_with(
         &self,
         rig: &PlayerRig,

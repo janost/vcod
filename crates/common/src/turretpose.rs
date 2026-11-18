@@ -468,7 +468,6 @@ pub enum GunnerRule {
 }
 
 /// [`place_gunner`] under `rule`.
-#[allow(clippy::too_many_arguments)]
 pub fn place_gunner_by(
     rule: GunnerRule,
     anims: &PlayerAnims,
@@ -495,7 +494,7 @@ pub fn place_gunner_by(
 /// [`place_gunner_by`] with every leaf's root delta sampled at the turret
 /// group's clip time `seconds` (`XAnimCalcAbsDelta` reads the leaves at
 /// their time, cod11-turrets.md 7.2), not at frame 0.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn place_gunner_at(
     rule: GunnerRule,
     anims: &PlayerAnims,

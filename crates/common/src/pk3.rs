@@ -478,7 +478,11 @@ impl Pk3Fs {
         vanilla: bool,
     ) -> Result<Self> {
         if !base.is_dir() {
-            bail!("cannot read mod dir {}", base.display());
+            bail!(
+                "cannot read mod dir {}: {}",
+                base.display(),
+                crate::game_dir::INSTALL_HINT
+            );
         }
         let mut dirs = base_dirs(base);
         if let Some(g) = game.filter(|g| g.is_dir()) {
@@ -512,7 +516,11 @@ impl Pk3Fs {
 
     fn open_iwd_dirs(base: &Path, game: Option<&Path>, stock: bool) -> Result<Self> {
         if !base.is_dir() {
-            bail!("cannot read game dir {}", base.display());
+            bail!(
+                "cannot read game dir {}: {}",
+                base.display(),
+                crate::game_dir::INSTALL_HINT
+            );
         }
         // the wavelet .iwi tables live only in the install's render DLL
         if let Some(root) = base.parent() {
@@ -527,7 +535,11 @@ impl Pk3Fs {
     /// over the last (CoD4's `usermaps/<map>/` then `fs_game`).
     pub fn open_iwd_layers(base: &Path, over: &[PathBuf]) -> Result<Self> {
         if !base.is_dir() {
-            bail!("cannot read game dir {}", base.display());
+            bail!(
+                "cannot read game dir {}: {}",
+                base.display(),
+                crate::game_dir::INSTALL_HINT
+            );
         }
         if let Some(root) = base.parent() {
             crate::iwi::load_wavelet_tables(root);
@@ -706,7 +718,7 @@ impl Pk3Fs {
     /// The `cp` command `CL_SendPureChecksums` sends after a map load, keyed
     /// with the gamestate's `checksumFeed` (`crate::pak_checksum::pure_command`),
     /// opening with the paks of `dlls`, the protocol's client game and UI
-    /// modules (`Protocol::pure_dlls`). The general list is every referenced
+    /// modules (`Cod1Wire::pure_dlls`). The general list is every referenced
     /// pak but the `localized_*` ones.
     pub fn pure_command(&self, checksum_feed: i32, dlls: [&str; 2]) -> String {
         let dll = |name: &str| {
@@ -1234,7 +1246,7 @@ mod tests {
         let uo_dlls = [("uo_cgame_mp_x86.dll", "C"), ("uo_ui_mp_x86.dll", "U")];
         make_pk3(&uo, "pakuo07.pk3", &uo_dlls);
         let fs = Pk3Fs::open(&uo).unwrap();
-        let opens = |p: &crate::net::protocol::Protocol, pak: &str| {
+        let opens = |p: &crate::net::protocol::Cod1Wire, pak: &str| {
             let sum = fs.paks().find(|i| i.name == pak).unwrap().pure_checksum(5);
             fs.pure_command(5, p.pure_dlls)
                 .starts_with(&format!("cp {sum} {sum} @"))

@@ -172,6 +172,9 @@ pub struct Cod2Game {
     /// The seed each level's `G_InitGame` takes when a test pinned one
     /// ([`Cod2Server::pin_game_seed`]); otherwise a draw off the engine's.
     game_seed: Option<u32>,
+    /// The world the last snapshot round built, for the archive that
+    /// follows it with no frame between ([`Cod2Server::archive_frame`]).
+    snapshot_world: Option<BTreeMap<u32, (EntityState, bool)>>,
 }
 
 /// The CoD2 server: the engine over [`Cod2Game`].
@@ -183,7 +186,11 @@ pub type Cod2Server = crate::engine::Engine<Cod2Game>;
 /// connect callbacks' commands, cod2-map-cycle.md 2), the bots (0x8096952),
 /// The roster and the world every CoD2 snapshot of a turn is built from,
 /// once the first client needs them.
-type Cod2Snapshots = Option<(Vec<ClientState2>, BTreeMap<u32, (EntityState, bool)>)>;
+type Cod2Snapshots = Option<(
+    Vec<ClientState2>,
+    BTreeMap<u32, (EntityState, bool)>,
+    Vec<crate::game::cod2_wire::Culled>,
+)>;
 
 /// `SV_CalcPings` (0x80963c8), the frames owed, each `G_RunFrame`
 /// (0x810a13a) through its `ClientEndFrame`s to `CheckVote`, the archive
@@ -282,6 +289,9 @@ impl crate::engine::GameModule for Cod2Game {
 
     fn snapshots_begin(_e: &mut Cod2Server) -> Cod2Snapshots {
         None
+    }
+    fn snapshots_end(e: &mut Cod2Server, snaps: Cod2Snapshots) {
+        e.game.snapshot_world = snaps.map(|(_, world, _)| world);
     }
     fn message_due(e: &Cod2Server, slot: usize) -> bool {
         e.message_due(slot)
@@ -454,6 +464,7 @@ impl Cod2Server {
                 cvars,
                 level: None,
                 retired: None,
+                snapshot_world: None,
                 spot: (Vec3::ZERO, [0.0; 3]),
                 baselines: BTreeMap::new(),
                 server_id: 0,
@@ -1277,6 +1288,7 @@ impl Cod2Server {
     /// `G_RunFrame` on the stepped clock, then `SV_AddTestClient` for the
     /// slots it connected.
     fn run_level_frame(&mut self) {
+        self.game.snapshot_world = None;
         // `svs.time`, the frame clock `SV_DirectConnect`'s reconnect
         // check reads for `addTestClient`'s bot address too.
         let svs = self.core.sv_time_ms;
@@ -1298,7 +1310,11 @@ impl Cod2Server {
             return;
         }
         let roster = self.client_states();
-        let world = self.world_entities();
+        // The messages change no entity, so their world is this one.
+        let world = match self.game.snapshot_world.take() {
+            Some(world) => world,
+            None => self.world_entities(),
+        };
         if let Some(level) = self.game.level.as_mut() {
             level.archive_frame(&world, &roster);
         }
@@ -1385,9 +1401,13 @@ impl Cod2Server {
     /// A new message for `slot`, the roster and the world built on the
     /// first client that needs them.
     fn send_client_snapshot(&mut self, slot: usize, shared: &mut Cod2Snapshots) {
-        let (clients, world) =
-            shared.get_or_insert_with(|| (self.client_states(), self.world_entities()));
-        let ops = self.client_message(slot, clients, world);
+        let (clients, _, live) = shared.get_or_insert_with(|| {
+            let clients = self.client_states();
+            let world = self.world_entities();
+            let live = self.prepare_cull(&world);
+            (clients, world, live)
+        });
+        let ops = self.client_message(slot, clients, live);
         self.transmit(slot, ops);
         self.send_voice(slot);
     }
@@ -1397,8 +1417,21 @@ impl Cod2Server {
     fn send_client_message(&mut self, slot: usize) {
         let clients = self.client_states();
         let world = self.world_entities();
-        let ops = self.client_message(slot, &clients, &world);
+        let live = self.prepare_cull(&world);
+        let ops = self.client_message(slot, &clients, &live);
         self.transmit(slot, ops);
+    }
+
+    /// The live world as every client's cull reads it this round
+    /// ([`crate::game::cod2_wire::Culled`]).
+    fn prepare_cull(
+        &self,
+        world: &BTreeMap<u32, (EntityState, bool)>,
+    ) -> Vec<crate::game::cod2_wire::Culled> {
+        self.game.level.as_ref().map_or_else(Vec::new, |level| {
+            let ents = world.iter().map(|(n, (e, b))| (*n, e, *b));
+            level.prepare_cull(ents, level.level_time())
+        })
     }
 
     /// `SV_SendClientSnapshot` (0x809adea): an active client or a zombie
@@ -1408,7 +1441,7 @@ impl Cod2Server {
         &mut self,
         slot: usize,
         clients: &[ClientState2],
-        world: &BTreeMap<u32, (EntityState, bool)>,
+        live: &[crate::game::cod2_wire::Culled],
     ) -> Vec<u8> {
         let svs = self.core.sv_time_ms;
         let team_of = |slot: usize| {
@@ -1440,7 +1473,7 @@ impl Cod2Server {
                 let ps = level
                     .wire_playerstate(slot, team_of(slot))
                     .unwrap_or_else(|| spectator_wire(&c.extra.ps, slot));
-                let (entities, archived) = level.snapshot_entities(world, slot, &ps);
+                let (entities, archived) = level.snapshot_entities(live, slot, &ps);
                 (ps, entities, archived)
             }
             _ => (spectator_wire(&c.extra.ps, slot), Vec::new(), None),
@@ -1604,6 +1637,7 @@ impl Cod2Server {
     /// The challenge's salt on the frame clock instead of the wall's, so a harness
     /// that runs frames faster than real time sends the same bytes each
     /// run (`bot_match`'s `NETDIGEST`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_frame_clock(&mut self) {
         self.game.frame_clock = true;
     }

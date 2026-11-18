@@ -8,7 +8,7 @@ use common::{Queues, connect, step};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::protocol::{PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::{NetEvent, NetState};
 use vcod_server::Server;
 
@@ -115,7 +115,7 @@ struct WrongPak {
     scratch: std::path::PathBuf,
 }
 
-fn wrong_pak_at_the_url(proto: &'static Protocol, tag: &str) -> WrongPak {
+fn wrong_pak_at_the_url(proto: &'static Cod1Wire, tag: &str) -> WrongPak {
     let scratch = std::env::temp_dir().join(format!("vcod-www-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&scratch);
     let served = scratch.join("server/main");

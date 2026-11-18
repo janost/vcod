@@ -237,7 +237,7 @@ impl Pvs {
     }
 
     /// Whether a viewer in `from` can be shown something in `to`. A cluster
-    /// outside the table -- which is what a solid leaf's -1 is -- is visible,
+    /// outside the table (which is what a solid leaf's -1 is) is visible,
     /// matching the engine: its own test only ever runs on real clusters.
     pub fn visible(&self, from: i32, to: i32) -> bool {
         let (Ok(f), Ok(t)) = (usize::try_from(from), usize::try_from(to)) else {

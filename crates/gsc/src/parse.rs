@@ -840,7 +840,7 @@ impl<'a> Parser<'a> {
 
     // One expression-or-assignment statement, desugaring compound
     // assignment and increment/decrement into `Assign`, without consuming a
-    // trailing `;` — a `for` clause needs none, everywhere else adds one.
+    // trailing `;`: a `for` clause needs none, everywhere else adds one.
     fn simple_stmt(&mut self) -> Result<Stmt, ParseError> {
         let (line, col) = (self.line(), self.col());
         let target = self.expr()?;
@@ -1391,7 +1391,7 @@ mod tests {
     // for the largest single share of the corpus census's parse failures
     // (76 of 138, all "expected LParen, found Backslash") before this rule
     // was handled, and is pinned here as a focused unit test rather than
-    // relying on the census alone -- the deref form is covered above, and
+    // relying on the census alone: the deref form is covered above, and
     // the receiver-attached form by `method_call_target_can_be_namespaced`.
     #[test]
     fn statement_level_thread_can_target_a_namespaced_path() {

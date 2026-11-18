@@ -40,7 +40,7 @@ pub fn material_kind(name: &str, has_block: bool, nodraw: bool, sky: bool) -> Ma
 }
 
 /// Name rules for materials without an authored block: the `textures/common`
-/// gameplay families never draw (other common materials do — water renders);
+/// gameplay families never draw (other common materials do: water renders);
 /// unscripted sky names stay invisible. Everything else draws. Public for
 /// lib-less callers (bounds, submodels, the asset census).
 pub fn implicit_kind(name: &str) -> MaterialKind {
@@ -189,7 +189,7 @@ mod tests {
         }
     }
 
-    /// wall draws, clip skips, floor draws — matching the implicit name rules.
+    /// wall draws, clip skips, floor draws, matching the implicit name rules.
     fn test_kinds() -> Vec<MaterialKind> {
         vec![MaterialKind::Draw, MaterialKind::Skip, MaterialKind::Draw]
     }

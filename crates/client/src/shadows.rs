@@ -1392,7 +1392,7 @@ impl ShadowPass {
     /// (`renderer::CAMERA_FLOATS`), whose fog tail the mask copies; `moved`
     /// the poses of the brush models off their spawn pose; `keep` the map's
     /// measured [`RegionKeep`] once known.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn prepare(
         &mut self,
         queue: &wgpu::Queue,
@@ -1555,7 +1555,6 @@ impl ShadowPass {
     /// pieces when the window or the world changed, the dynamic layer every
     /// frame.
     /// `cut` resolves an alpha-tested caster's batch to its bindings.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode_maps<'a>(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,

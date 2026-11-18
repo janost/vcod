@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::msg::{self, PlayerState, UserCmd};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::{NetClient, NetEvent};
 
 const SCRIPT: &str =
@@ -73,7 +73,7 @@ fn phases(lines: &[String]) -> Vec<(i32, String)> {
 }
 
 /// The capture's `!snap` lines as `(serverTime, playerstate)`.
-fn retail_snaps(text: &str, p: &Protocol) -> Vec<(i32, PlayerState)> {
+fn retail_snaps(text: &str, p: &Cod1Wire) -> Vec<(i32, PlayerState)> {
     let mut out = Vec::new();
     for line in text.lines().filter(|l| l.starts_with("!snap ")) {
         let kv: BTreeMap<&str, &str> = line
@@ -97,7 +97,7 @@ fn retail_snaps(text: &str, p: &Protocol) -> Vec<(i32, PlayerState)> {
 fn rows(
     snaps: &[(i32, PlayerState)],
     phases: &[(i32, String)],
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> BTreeMap<String, Row> {
     let at = |t: i32| snaps.iter().find(|s| s.0 == t).map(|s| &s.1);
     let mut out = BTreeMap::new();

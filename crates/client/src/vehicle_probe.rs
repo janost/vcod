@@ -16,7 +16,7 @@
 
 use std::time::Instant;
 use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_MELEE, BUTTON_USE, UserCmd};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::snapshot::Snapshot;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -465,7 +465,7 @@ impl VehicleProbe {
         now: Instant,
         spawned: bool,
         newest: Option<&Snapshot>,
-        p: &Protocol,
+        p: &Cod1Wire,
     ) -> UserCmd {
         let mut cmd = UserCmd::default();
         let view = newest.map(|s| s.ps.viewangles(p));
@@ -573,7 +573,7 @@ impl VehicleProbe {
 
     /// A `VEH` line per vehicle, per player and per missile, once per
     /// snapshot.
-    pub fn report(&mut self, s: &Snapshot, p: &Protocol) {
+    pub fn report(&mut self, s: &Snapshot, p: &Cod1Wire) {
         if self.last_snap == Some(s.message_num) {
             return;
         }

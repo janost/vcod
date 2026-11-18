@@ -1019,7 +1019,7 @@ impl SunShadowPass {
     /// `fwd`, near plane `z_near`) under a sun toward `to_sun`, draws the
     /// casters over their world's vertex buffer into the atlas and points
     /// the receivers at it. `None` for `casters` turns the receivers off.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn encode(
         &mut self,
         device: &wgpu::Device,
@@ -1207,7 +1207,7 @@ impl SunShadowPass {
     /// [`Self::encode`], whose clear it keeps) and points the receivers at
     /// them; with `settings.on` false or no casters the history empties
     /// and the receivers read none.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn encode_spot(
         &mut self,
         device: &wgpu::Device,

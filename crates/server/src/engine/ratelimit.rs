@@ -1,3 +1,6 @@
+//! Contains routines ported from the ioquake3 GPL source, Copyright (C) 1999-2005 Id Software, Inc. and the ioquake3 contributors.
+//! See NOTICE.
+//!
 //! The connectionless query limiter all three games put in front of
 //! `getinfo`, `getstatus` and `getchallenge`, so a spoofed `getstatus`
 //! cannot use the server as a reflector. ioq3's `SVC_RateLimitAddress` and

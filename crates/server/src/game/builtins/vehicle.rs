@@ -11,7 +11,7 @@ use crate::game::host::GameHost;
 use crate::game::vehicle::{Gun, Jolt, TurretTarget};
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("attachpath", attach_path),
@@ -53,10 +53,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("verifyposition", verify_position),
     ("clearvehicleposition", clear_vehicle_position),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// `fn_7c280`: the receiver must be a `script_vehicle` with a record.
 fn vehicle(host: &GameHost, recv: Option<Target>) -> Result<EntId, ErrorKind> {

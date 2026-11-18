@@ -46,7 +46,7 @@ use vcod_common::net::msg::{
 };
 use vcod_common::net::netchan::{ClientMessage, MAX_RELIABLE_COMMANDS, ServerNetchan};
 use vcod_common::net::protocol::WireGame;
-use vcod_common::net::protocol::{CS_SERVERINFO, PROTOCOL_V1, Protocol};
+use vcod_common::net::protocol::{CS_SERVERINFO, Cod1Wire, PROTOCOL_V1};
 use vcod_common::net::{com_hash_key, flags, info_value_for_key, snapshot};
 use vcod_common::pmove::FallHeights;
 
@@ -126,7 +126,7 @@ struct PureCheck {
 }
 
 impl PureCheck {
-    fn new(fs: &vcod_common::pk3::Pk3Fs, feed: i32, proto: &Protocol) -> Self {
+    fn new(fs: &vcod_common::pk3::Pk3Fs, feed: i32, proto: &Cod1Wire) -> Self {
         let dll = |name: &str| fs.source_pak(name).map(|p| p.pure_checksum(feed));
         PureCheck {
             cgame: dll(proto.pure_dlls[0]),
@@ -301,6 +301,7 @@ fn apply_weapon_ops(clients: &mut [Option<Client>], rt: &mut script::ScriptRunti
 }
 
 /// A standing player with its feet at `feet`, as a blast candidate in slot 0.
+#[cfg(any(test, feature = "testing"))]
 fn standing_blast_victim(feet: [f32; 3]) -> crate::game::combat::BlastVictim {
     use vcod_common::pmove::{HALF_WIDTH, Stance};
     let feet = glam::Vec3::from(feet);
@@ -338,7 +339,6 @@ fn apply_sim_ops(
 
 /// One op of [`apply_sim_ops`]. `cmd_ms` is the client's last processed
 /// cmd's serverTime, the clock its anim timers run on.
-#[allow(clippy::too_many_arguments)]
 fn apply_sim_op(
     sim: &mut ClientSim,
     rt: &mut script::ScriptRuntime,
@@ -413,7 +413,6 @@ fn apply_effects(rt: &mut script::ScriptRuntime, effects: Vec<Effect>) {
 /// gunner takes its feedback this frame; one below had its end frame
 /// already and takes it on the next, and a gunner below that dies keeps
 /// the gun until its own next turn releases it.
-#[allow(clippy::too_many_arguments)]
 fn deliver_turret_rounds(
     clients: &mut [Option<Client>],
     rt: &mut script::ScriptRuntime,
@@ -1264,7 +1263,7 @@ struct Round {
 fn mirror_for_callback(
     rt: &mut script::ScriptRuntime,
     sim: &ClientSim,
-    proto: &'static Protocol,
+    proto: &'static Cod1Wire,
     slot: usize,
     st: i32,
 ) {
@@ -1280,7 +1279,6 @@ fn mirror_for_callback(
 /// What a callback queued for `slot`, applied to its sim before its next cmd:
 /// retail's script writes the playerstate there and then. `at` is the frame
 /// clock and the client's last processed cmd's serverTime.
-#[allow(clippy::too_many_arguments)]
 fn apply_callback_ops(
     rt: &mut script::ScriptRuntime,
     sim: &mut ClientSim,
@@ -1470,13 +1468,13 @@ pub enum LoadFailure {
 /// What `G_ShutdownGame(1)` and `G_InitGame` print on a restart ahead of
 /// the spawn (handshake doc, "Console commands over rcon"); the rest is
 /// [`game_init_tail`].
-fn restart_game_banner(p: &Protocol) -> String {
+fn restart_game_banner(p: &Cod1Wire) -> String {
     format!("==== RestartGame ====\n{}", game_init_head(p))
 }
 
 /// `G_InitGame`'s lines ahead of the spawn, the game module's name and
 /// date being 1.1's, 1.5b's or UO's (their startup logs).
-fn game_init_head(p: &Protocol) -> String {
+fn game_init_head(p: &Cod1Wire) -> String {
     let (name, date) = match p.transport.version {
         6 => ("Call of Duty", "Nov 15 2004"),
         22 => ("CoD:United Offensive", "Feb 10 2005"),
@@ -1662,11 +1660,15 @@ fn strtol(s: &str) -> i64 {
 pub use vcod_common::net::protocol::install_protocol;
 
 /// [`Server::fog_cull`] off the fields, for a caller holding the script.
-fn fog_cull_of(p: &Protocol, configstrings: &[String]) -> Option<f32> {
+fn fog_cull_of(p: &Cod1Wire, configstrings: &[String]) -> Option<f32> {
     (!p.is_v1())
         .then(|| crate::world::fog_cull(configstrings.get(p.cs.fog).map_or("", String::as_str)))
         .flatten()
 }
+
+/// A teammate's link as the compass cull reads it, built once a frame: the
+/// compass pass changes nothing it is built from.
+type FriendLink = (vcod_common::mapworld::LinkClusters, [f32; 3], [f32; 3]);
 
 /// `ClientEndFrame`'s call of `G_GetNonPVSFriendlyInfo` for `slot`
 /// (`crate::compass`): `None` when its session takes no end frame that
@@ -1684,7 +1686,8 @@ fn compass_friend(
     broadcast: &[bool],
     cull: Option<(&vcod_common::bsp::Visibility, Option<f32>)>,
     time: i32,
-    p: &Protocol,
+    p: &Cod1Wire,
+    links: &mut [Option<FriendLink>],
 ) -> Option<Option<(i32, u32, bool)>> {
     use follow::SessionState::{Dead, Playing};
     let sim = clients[slot].as_ref()?.sim.as_ref()?;
@@ -1696,6 +1699,7 @@ fn compass_friend(
         return Some(None);
     }
     let eye: [f32; 3] = sim.ps.view().eye.into();
+    let viewer = std::cell::OnceCell::new();
     let mut pinged = false;
     let found = compass::next_friend(sim.last_friend, [eye[0], eye[1]], |n| {
         let c = clients.get(n)?.as_ref()?;
@@ -1712,8 +1716,15 @@ fn compass_friend(
         }
         // No map: nothing to cull against, so everything is in view.
         let (vis, fog) = cull?;
-        let e = other.to_entity(p, n, c.last_processed_st);
-        if crate::world::in_snapshot(vis, eye, &e, broadcast[n], time, p, fog) {
+        if broadcast[n] {
+            return None;
+        }
+        let link = links[n].get_or_insert_with(|| {
+            let e = other.to_entity(p, n, c.last_processed_st);
+            crate::world::entity_link(vis, &e, time, p)
+        });
+        let at = || *viewer.get_or_init(|| crate::world::Viewer::at(vis, eye));
+        if crate::world::link_in_view(vis, at, link, p.is_v1(), fog) {
             return None;
         }
         pinged = other.ping;
@@ -1780,7 +1791,7 @@ fn zombie_message(
     c: &mut Client,
     sv_time_ms: i32,
     snap_flags: u32,
-    proto: &'static Protocol,
+    proto: &'static Cod1Wire,
     huff: &Huffman,
 ) -> Vec<Vec<u8>> {
     let mut w = MsgWriter::new(huff);
@@ -3199,6 +3210,7 @@ impl Server {
     /// `mount_origin` and past the reach and arc tests. Test-facing, like
     /// `place_client`: it puts a second gunner on a map with one reachable
     /// gun. False when either is missing or the gun is manned.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_mount(&mut self, slot: usize, gun: u32, mount_origin: [f32; 3]) -> bool {
         let Some(rt) = self.game.module.script.as_mut() else {
             return false;
@@ -3236,6 +3248,7 @@ impl Server {
 
     /// Writes a client's `sessionteam` and nothing else. Test-facing: a 1.5
     /// match timeout needs a side, which a `dm` probe gametype gives no one.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_set_client_team(&mut self, slot: usize, team: &str) {
         if let Some(rt) = self.game.module.script.as_mut() {
             rt.set_client_team_for_test(slot, team);
@@ -3243,6 +3256,7 @@ impl Server {
     }
 
     /// Writes a client's `sessionstate` as a script would. Test-facing.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_set_client_session(&mut self, slot: usize, state: &str) {
         if let Some(rt) = self.game.module.script.as_mut() {
             rt.set_client_string_for_test(slot, "sessionstate", state);
@@ -3252,6 +3266,7 @@ impl Server {
     /// Moves a client's playerstate origin and nothing else: no teleport
     /// bit, no event, no view. Test-facing: a replay starts from a retail
     /// capture's settled origin where the join left ours elsewhere.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_set_client_origin(&mut self, slot: usize, origin: [f32; 3]) {
         if let Some(sim) = self
             .core
@@ -3268,6 +3283,7 @@ impl Server {
     /// placement that shares the spawn's frame keeps the velocity the cmds
     /// run at the spawn point left (cod11-combat.md 2.1, "The street
     /// placement"), and a replay hands ours retail's from the capture.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_set_client_velocity(&mut self, slot: usize, velocity: [f32; 3]) {
         if let Some(sim) = self
             .core
@@ -3284,6 +3300,7 @@ impl Server {
     /// next tick's sim-op pass: after that tick's moves and before its end
     /// frame. Test-facing: the stuck gate overlaps two players the way
     /// `probe_bump.gsc` did on retail.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_script_set_origin(&mut self, slot: usize, origin: [f32; 3]) {
         assert!(
             self.game.module.script.is_some(),
@@ -3297,6 +3314,7 @@ impl Server {
 
     /// Moves the entity numbered `num` as script would. Test-facing, like
     /// `test_mount`: carentan's second gun sits out of the first one's arc.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_place_entity(&mut self, num: u32, origin: [f32; 3], angles: [f32; 3]) {
         if let Some(rt) = self.game.module.script.as_mut() {
             rt.place_entity(num, origin, angles);
@@ -3463,6 +3481,7 @@ impl Server {
     /// lift instead of drawing retail's random half unit (items doc 14.2), so
     /// a gate can see each landing and rest it where a retail capture's draw
     /// put it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_item_lifts(&mut self, f: crate::game::host::ItemLift) {
         if let Some(rt) = self.game.module.script.as_mut() {
             rt.host.test_item_lift = Some(f);
@@ -3545,12 +3564,14 @@ impl Server {
 
     /// Test-facing: raise entity `num` by `dz` (an `origin` write) and return
     /// its origin; `dz` 0 only reads it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_raise_entity(&mut self, num: u32, dz: f32) -> Option<[f32; 3]> {
         self.game.module.script.as_mut()?.raise_entity(num, dz)
     }
 
     /// Test-facing: `self pingPlayer()` on `slot`, with no script to call
     /// it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_ping_player(&mut self, slot: usize) {
         if let Some(rt) = self.game.module.script.as_mut() {
             let until = rt.host.level_time_ms + 3000;
@@ -3562,6 +3583,7 @@ impl Server {
 
     /// Test-facing: `self giveWeapon(name)` on `slot` without its ammo, for
     /// a weapon no stock loadout hands out. False for an unknown name.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_give_weapon(&mut self, slot: usize, name: &str) -> bool {
         let Some(rt) = self.game.module.script.as_mut() else {
             return false;
@@ -3577,6 +3599,7 @@ impl Server {
     /// Test-facing: `self giveMaxAmmo(name)` on `slot`, a full clip and
     /// reserve, as the frame's weapon pass applies it. False for an unknown
     /// name.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_give_max_ammo(&mut self, slot: usize, name: &str) -> bool {
         use crate::game::host::WeaponOp;
         let Some(rt) = self.game.module.script.as_mut() else {
@@ -3611,6 +3634,7 @@ impl Server {
     /// Test-facing: the seed the spread and the melee rolls draw from, so a
     /// gate that needs a shot to land where it did once can have it again.
     /// The bots added after it draw their own streams off `seed` too.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_seed_rng(&mut self, seed: u64) {
         self.core.rng = seed | 1;
         self.game.module.bot_admin.seed_rng = bot_admin::seed_stream(seed);
@@ -3622,6 +3646,7 @@ impl Server {
     /// say the sightline between them is real, or a spawn point that moved
     /// into a wall reads as "the damage path is broken". A server with no
     /// collision world answers yes.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_clear_line(&self, origin: [f32; 3], yaw_deg: f32, dist: f32) -> bool {
         let Some(world) = self.game.world.as_ref() else {
             return true;
@@ -3638,6 +3663,7 @@ impl Server {
     /// (combat doc, 14.3), against the world alone: the script models the
     /// live blast also meets are left out. 0 is a player the blast cannot
     /// see at all.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_can_damage(&self, at: [f32; 3], feet: [f32; 3]) -> f32 {
         let Some(world) = self.game.world.as_ref() else {
             return 1.0;
@@ -3650,6 +3676,7 @@ impl Server {
     /// `feet`, against the world, the script models and every live player's
     /// posed body but `slot`'s own, which is the victim's pass entity
     /// (combat doc, 14.4).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_can_damage_among_players(
         &mut self,
         at: [f32; 3],
@@ -3698,6 +3725,7 @@ impl Server {
     /// yet. What a bot scenario needs to put a walker where it can reach its
     /// goal. On the graph means within a pitch of a node on the same floor:
     /// `nearest` alone answers from a bank for a point down in a ditch.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_nav_route(&self, from: [f32; 3], to: [f32; 3]) -> Option<f32> {
         let g = self.game.module.driver.nav.as_ref()?;
         let on = |p: [f32; 3]| {
@@ -3715,6 +3743,7 @@ impl Server {
 
     /// Test-facing: what a standing box dropped from `p` lands on, and
     /// where, as `CollisionWorld::describe` names it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_floor_under(&self, p: [f32; 3]) -> Option<(f32, String)> {
         let world = self.game.world.as_ref()?;
         use vcod_common::pmove::{HALF_WIDTH, Stance};
@@ -3734,12 +3763,14 @@ impl Server {
 
     /// Test-facing: entity `ent`'s box in the area tree (`r.absmin`,
     /// `r.absmax`), `None` while it is not linked.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_area_link(&self, ent: u32) -> Option<([f32; 3], [f32; 3])> {
         let link = self.game.module.script.as_ref()?.host.area.last_link(ent)?;
         Some((link.absmin, link.absmax))
     }
 
     /// Test-facing: whether submodel `m`'s brushes clip.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_model_linked(&self, m: usize) -> bool {
         self.game
             .world
@@ -3751,6 +3782,7 @@ impl Server {
     /// or `None` when it starts inside geometry or finds no floor within
     /// 256 units. What a test needs to put a second client somewhere the map
     /// actually holds one.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_ground_under(&self, p: [f32; 3]) -> Option<[f32; 3]> {
         let world = self.game.world.as_ref()?;
         use vcod_common::pmove::{HALF_WIDTH, Stance};
@@ -3766,6 +3798,7 @@ impl Server {
     /// Clones a client into the body queue and returns the corpse's entity
     /// number. Test-facing, like `place_client`: `cloneplayer` is the script
     /// path that will call this, and it does not exist yet.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_push_body(&mut self, slot: usize) -> Option<u32> {
         let c = self.core.clients.get(slot)?.as_ref()?;
         let state = c
@@ -3783,6 +3816,7 @@ impl Server {
 
     /// Raises one event for the next snapshot build. Test-facing, like
     /// `test_push_body`: the script builtins are what raise these in earnest.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_push_temp_entity(&mut self, te: temp_entity::TempEntity) {
         if let Some(rt) = self.game.module.script.as_mut() {
             rt.push_temp_entity(te);
@@ -4147,7 +4181,7 @@ impl Server {
         slot: usize,
         port: u16,
         name: String,
-        proto: &'static Protocol,
+        proto: &'static Cod1Wire,
         sv_time_ms: i32,
     ) {
         let Some(entry) = clients.get_mut(slot) else {
@@ -4372,6 +4406,7 @@ impl Server {
     }
 
     /// Test-facing: turns a bot's retreat on or off (`Bot::set_retreat`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_retreat(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.set_retreat(on);
@@ -4380,6 +4415,7 @@ impl Server {
 
     /// Test-facing: whether a bot varies its peeks and hunts from a
     /// vantage (`Bot::wary`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_wary(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.wary = on;
@@ -4393,6 +4429,7 @@ impl Server {
     }
 
     /// Test-facing: whether a bot fights from cover (`bots::cover`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_cover(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.cover.enabled = on;
@@ -4400,6 +4437,7 @@ impl Server {
     }
 
     /// Test-facing: whether a bot moves while it fights (`Bot::footwork`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_footwork(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.footwork = on;
@@ -4407,6 +4445,7 @@ impl Server {
     }
 
     /// Test-facing: whether a bot aims as a hand does (`Bot::human_aim`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_human_aim(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.human_aim = on;
@@ -4415,6 +4454,7 @@ impl Server {
 
     /// Test-facing: whether a bot reacts to hits, keeps its target and
     /// sees in a cone (`Bot::aware`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_aware(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.aware = on;
@@ -4422,6 +4462,7 @@ impl Server {
     }
 
     /// Test-facing: whether a bot plays as one of its team (`bots::team`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_team_play(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.team_play = on;
@@ -4429,6 +4470,7 @@ impl Server {
     }
 
     /// Test-facing: whether a bot keeps apart from its team (`Bot::squad`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_squad(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.squad = on;
@@ -4437,6 +4479,7 @@ impl Server {
 
     /// Test-facing: whether an S&D defender converges on a site under
     /// attack (`Bot::converge`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_converge(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.converge = on;
@@ -4445,6 +4488,7 @@ impl Server {
 
     /// Test-facing: whether a bot walks to its objective by a way in
     /// dealt apart from its teammates' (`Bot::lanes`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_lanes(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.lanes = on;
@@ -4453,6 +4497,7 @@ impl Server {
 
     /// Test-facing: whether a bot plays its objective by posts
     /// (`Bot::tactics`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_tactics(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.tactics = on;
@@ -4469,6 +4514,7 @@ impl Server {
     }
 
     /// Test-facing: pins a bot's goal to a point (`Bot::force_goal`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_goal(&mut self, slot: usize, p: Option<[f32; 3]>) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.force_goal(p);
@@ -4518,6 +4564,7 @@ impl Server {
     }
 
     /// Test-facing: whether a bot guards from the ways in (`Bot::far`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_far(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.far = on;
@@ -4525,6 +4572,7 @@ impl Server {
     }
 
     /// Test-facing: whether a bot's guards answer cues (`Bot::cues`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_cues(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.cues = on;
@@ -4533,6 +4581,7 @@ impl Server {
 
     /// Test-facing: whether a bot keeps farther apart on the way
     /// (`Bot::travel`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_travel(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.travel = on;
@@ -4541,6 +4590,7 @@ impl Server {
 
     /// Test-facing: whether a `ctf` carrier keeps for home and waits in
     /// cover (`Bot::ctf_carry`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_ctf_carry(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.ctf_carry = on;
@@ -4549,24 +4599,28 @@ impl Server {
 
     /// Test-facing: a `ctf` carrier's escorts, safer route and hold from
     /// an enemy ahead (`Bot::ctf_escort`, `ctf_route`, `ctf_hold`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_ctf_escort(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.ctf_escort = on;
         }
     }
 
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_ctf_route(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.ctf_route = on;
         }
     }
 
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_ctf_hold(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.ctf_hold = on;
         }
     }
 
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_ctf_sprint(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.ctf_sprint = on;
@@ -4576,18 +4630,21 @@ impl Server {
     /// Test-facing: a `ctf` flag's guards once it is taken, on the
     /// carrier's way out or closing on him, and nearer outposts
     /// (`Bot::ctf_watch`, `ctf_close`, `ctf_near`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_ctf_watch(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.ctf_watch = on;
         }
     }
 
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_ctf_close(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.ctf_close = on;
         }
     }
 
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_ctf_near(&mut self, slot: usize, on: bool) {
         if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.ctf_near = on;
@@ -4616,6 +4673,7 @@ impl Server {
     }
 
     /// Test-facing: a client command a bot sends with its next replies.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_bot_command(&mut self, slot: usize, cmd: &str) {
         self.game
             .module
@@ -4752,6 +4810,7 @@ impl Server {
     /// Test seam: the paks a download is served from, with no level load.
     /// Every pak in `fs` is listed in the systeminfo as if the level had
     /// read it, so a client checks a transfer against its checksum.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_mount_paks(&mut self, fs: Rc<vcod_common::pk3::Pk3Fs>) {
         self.game.paks = configstrings::PakLists::of(
             false,
@@ -4766,7 +4825,7 @@ impl Server {
     /// The protocol this server speaks: one per process, as each retail
     /// binary speaks one (docs/research/cod15-protocol-diff.md, "Server
     /// side"). Set before the first level loads.
-    pub fn set_protocol(&mut self, p: &'static Protocol) {
+    pub fn set_protocol(&mut self, p: &'static Cod1Wire) {
         self.game.proto = p;
         self.core.transport = &p.transport;
         // `sv_master1` defaults to the binary's own master unless set.
@@ -4797,7 +4856,7 @@ impl Server {
         self.core.sent_configstrings = self.core.configstrings.clone();
     }
 
-    pub fn protocol(&self) -> &'static Protocol {
+    pub fn protocol(&self) -> &'static Cod1Wire {
         self.game.proto
     }
 
@@ -5685,8 +5744,8 @@ impl Server {
     /// `SV_SetConfigstring`'s per-frame half: every slot the running level
     /// changed goes out as `d <index> <text>` to every client, which is what
     /// retail's broadcast gate lets through while `sv.state` reads 2
-    /// (map-cycle doc, 3.1). The script allocates all through the level -- a
-    /// `playSound` or `precacheString` from a thread past a `wait` -- and the
+    /// (map-cycle doc, 3.1). The script allocates all through the level (a
+    /// `playSound` or `precacheString` from a thread past a `wait`), and the
     /// index a later `s` or event carries is worthless to a client whose slot
     /// is still empty.
     ///
@@ -5820,8 +5879,8 @@ impl Server {
     }
 
     /// Marks the whole table as already known to every client. The two level
-    /// boundaries hand it over wholesale -- a map change in the gamestate
-    /// each client pulls, a restart in the burst 4.3 describes -- so neither
+    /// boundaries hand it over wholesale (a map change in the gamestate
+    /// each client pulls, a restart in the burst 4.3 describes), so neither
     /// leaves anything for the diff above to send.
     fn sync_sent_configstrings(&mut self) {
         self.core.sent_configstrings = self.core.configstrings.clone();
@@ -5884,10 +5943,10 @@ impl Server {
     /// retail's does for a command no one registered. `false` when a load left no level,
     /// which stops the drain.
     ///
-    /// A load that failed before the teardown -- no paks, a map the paks do
-    /// not have, a bsp that would not parse -- leaves the level that is
-    /// serving alone and is logged. One that failed after it -- the map or
-    /// gametype scripts -- has no level left to fall back to, so it ends the
+    /// A load that failed before the teardown (no paks, a map the paks do
+    /// not have, a bsp that would not parse) leaves the level that is
+    /// serving alone and is logged. One that failed after it (the map or
+    /// gametype scripts) has no level left to fall back to, so it ends the
     /// process through [`Self::take_fatal`].
     fn exec_console_line(&mut self, line: &str, now: Instant) -> bool {
         match console::Command::parse(line) {
@@ -8447,7 +8506,7 @@ mod tests {
     /// the seam it is built across: `WEAPON_LIST` is 1-based on the wire, so
     /// `items::item_name` subtracts one to name it. Misaligned by one, every
     /// pistol player animates as a rifleman and nothing says so. Needs the
-    /// paks -- the classes come from the weapon files.
+    /// paks: the classes come from the weapon files.
     #[test]
     fn the_weapon_class_table_lines_up_with_the_wire_index() {
         let Some(fs) = vcod_common::testing::game_fs_11() else {
@@ -8460,7 +8519,9 @@ mod tests {
             ("thompson_mp", "smg"),
             ("m1carbine_mp", "rifle"),
         ] {
-            let index = crate::configstrings::weapon_index(weapon).expect("in WEAPON_LIST");
+            let index = crate::defs::V1
+                .weapon_index(weapon)
+                .expect("in WEAPON_LIST");
             assert_eq!(
                 sv.game.module.weapon_table.class(index),
                 class,
@@ -8480,8 +8541,8 @@ mod tests {
     }
 
     /// A failed load reports the error and leaves the table untouched; the
-    /// caller (`main.rs`) exits on it. Stage 2 kept serving here, which is no
-    /// longer the right answer: the table is mostly script output now.
+    /// caller (`main.rs`) exits on it rather than serving on: the table is
+    /// mostly script output.
     #[test]
     fn a_failed_script_load_reports_and_changes_nothing() {
         let mut sv = Server::new(cfg(), Instant::now());
@@ -8508,7 +8569,7 @@ mod tests {
                 "main() { e = spawn(\"script_origin\", (0, 0, 0)); wait 0.5; e playsound(\"late_alias\"); }",
             ),
         );
-        let slot = vcod_common::net::protocol::CS_SOUNDS + 1;
+        let slot = vcod_common::net::protocol::CS_SOUNDS_V1 + 1;
         // sv_time starts at 0 and each tick advances it one 50 ms frame, so
         // the thread is still suspended after the first.
         sv.tick(now);
@@ -9427,7 +9488,7 @@ mod tests {
     /// A load that fails after the teardown leaves no level to serve and no
     /// console line that could bring one back, which is what retail ends the
     /// process for: the server records it and `main` exits on it. A load that
-    /// fails before the teardown -- a map the paks do not have -- keeps the
+    /// fails before the teardown (a map the paks do not have) keeps the
     /// level that is serving and records nothing.
     #[test]
     fn a_script_load_that_fails_after_the_teardown_is_fatal() {
@@ -10775,7 +10836,7 @@ mod tests {
     /// announced; each serverTime is absolute so the test isolates the angle
     /// base from the serverTime base. `n` cmds, 20 ms apart from `st`: one is
     /// enough to prove the field decodes, but a probe of *which* base it
-    /// decoded against needs the resulting velocity to actually get there --
+    /// decoded against needs the resulting velocity to actually get there:
     /// `pmove::spectator_move`'s `accelerate` blends toward the wishdir
     /// rather than snapping to it, so a single cmd's movement is still mostly
     /// the previous leg's residual velocity. A burst gives the (correct or
@@ -10907,7 +10968,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         // Enough configstrings to pass one fragment.
         for i in 0..40 {
-            sv.core.configstrings[vcod_common::net::protocol::CS_SOUNDS + 1 + i] =
+            sv.core.configstrings[vcod_common::net::protocol::CS_SOUNDS_V1 + 1 + i] =
                 format!("sound/misc/{i:03}_{}", "x".repeat(40));
         }
         let mut nc = connected(&mut sv, addr(5), now);
@@ -10969,7 +11030,7 @@ mod tests {
         nc: &mut Netchan,
         ring: &mut SnapshotRing,
         now: Instant,
-        p: &Protocol,
+        p: &Cod1Wire,
     ) -> vcod_common::net::snapshot::Snapshot {
         let huff = Huffman::new();
         sv.tick(now);
@@ -11174,7 +11235,7 @@ mod tests {
         let _nc = begun(&mut sv, now);
         sv.tick(now);
         sv.place_client(0, [0.0, 0.0, 64.0], 0.0);
-        let frag = crate::configstrings::weapon_index("fraggrenade_mp").unwrap();
+        let frag = crate::defs::V1.weapon_index("fraggrenade_mp").unwrap();
         let def = sv.game.module.weapon_table.get(frag).unwrap().clone();
         let mut held = crate::weapons::PlayerWeapons::default();
         held.give(frag, sv.game.module.weapon_table.slot(frag));
@@ -11532,7 +11593,7 @@ mod tests {
         let _nc = begun(&mut sv, now);
         sv.tick(now);
         sv.place_client(0, [0.0, 0.0, 1.0], 0.0);
-        let index = |n| crate::configstrings::weapon_index(n).unwrap();
+        let index = |n| crate::defs::V1.weapon_index(n).unwrap();
         let (carbine, thompson, colt) = (
             index("m1carbine_mp"),
             index("thompson_mp"),
@@ -11785,7 +11846,7 @@ mod tests {
         let _nc = begun(&mut sv, now);
         sv.tick(now);
         sv.place_client(0, [0.0, 0.0, 1.0], 0.0);
-        let carbine = crate::configstrings::weapon_index("m1carbine_mp").unwrap();
+        let carbine = crate::defs::V1.weapon_index("m1carbine_mp").unwrap();
         let def = sv.game.module.weapon_table.get(carbine).unwrap().clone();
         let mut held = crate::weapons::PlayerWeapons::default();
         held.give(carbine, sv.game.module.weapon_table.slot(carbine));
@@ -12297,22 +12358,22 @@ mod tests {
 
     /// A retail client omits unchanged angle fields (change bit 0) instead of
     /// announcing them, so the server must decode them against the cmd it
-    /// last stored for this client, not `NULL_USERCMD` -- decoding against
+    /// last stored for this client, not `NULL_USERCMD`: decoding against
     /// the null base resets the move basis to yaw 0 for a frame (the
     /// "spectator flash" bug, AGENTS.md's gotchas). `ps.yaw` steers
     /// `pmove::spectator_move`'s wishdir directly, so a burst of `forward`
     /// cmds sent right after the omission is a direct probe of which base
     /// the server used: yaw -45 accelerates the spectator diagonally
     /// (velocity settles near `vx == -vy`), yaw 0 (the bug) only along +x
-    /// (`vy` stays small). A single cmd is not enough to tell them apart --
+    /// (`vy` stays small). A single cmd is not enough to tell them apart:
     /// `accelerate` blends toward the wishdir rather than snapping to it, so
     /// one frame is still mostly the previous leg's momentum; a 20-cmd burst
     /// gives the (correct or wrongly-reset) wishdir time to dominate, which
     /// I confirmed empirically (`vy` -283 with the real base, -20 with the
     /// bug forced, at this burst length). `viewangles` no longer carries
-    /// this -- it stays unwritten, docs/protocol-1.1.md "Spectator view
-    /// angles" -- so this checks the property the field used to stand in
-    /// for directly.
+    /// this (it stays unwritten, docs/protocol-1.1.md "Spectator view
+    /// angles"), so this checks the property directly instead of through
+    /// that field.
     #[test]
     fn omitted_angles_decode_against_the_stored_last_cmd() {
         let now = Instant::now();
@@ -12590,7 +12651,7 @@ mod tests {
 
     /// A move message that fails to decode is discarded whole: the next good
     /// one still chains from the last successfully decoded cmd, not
-    /// `NULL_USERCMD` -- same base-decode property and the same burst probe
+    /// `NULL_USERCMD`: same base-decode property and the same burst probe
     /// as `omitted_angles_decode_against_the_stored_last_cmd`, with a
     /// garbled packet spliced in first.
     #[test]
@@ -12787,12 +12848,12 @@ mod tests {
         now: Instant,
         st: i32,
         /// What the rig's client decodes its frames with.
-        decode: &'static Protocol,
+        decode: &'static Cod1Wire,
     }
 
     /// Protocol 6 with `pm_flags` left in 1.5's layout, for asserting the
     /// wire bits.
-    static RAW_V6: Protocol = Protocol {
+    static RAW_V6: Cod1Wire = Cod1Wire {
         pm_flags_to_v1: |f| f,
         ..PROTOCOL_V6
     };
@@ -12812,8 +12873,8 @@ mod tests {
         /// A server speaking `p`, its frames decoded through `decode`.
         fn with_protocol(
             rt: crate::game::script::ScriptRuntime,
-            p: &'static Protocol,
-            decode: &'static Protocol,
+            p: &'static Cod1Wire,
+            decode: &'static Cod1Wire,
         ) -> Self {
             let now = Instant::now();
             let mut sv = Server::new(cfg(), now);

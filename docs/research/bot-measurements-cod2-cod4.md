@@ -1,5 +1,7 @@
 # Bot measurements: CoD2 and CoD4
 
+Every number here is VERIFIED: measured on vcod-server by `bot_match`, ours, no retail claim (bots are vcod's own).
+
 `bot_match` runs moved out of docs/bots.md, which keeps only current behaviour. Each table names its seeds and arms; the harness and what each number means are in [bot-combat.md](bot-combat.md) section 1. Newer CoD2 and CoD4 runs are in [bot-objectives.md](bot-objectives.md) sections 11 and 12 and [bot-combat.md](bot-combat.md) sections 14 to 17.
 
 ## 1. CoD2: cover, lean, retreat and smoke (2026-10-22)

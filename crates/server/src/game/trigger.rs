@@ -591,12 +591,12 @@ pub struct BrushHull {
 }
 
 /// Every lump-27 submodel's brushes as clip planes, indexed by model number,
-/// for the exact stage of the touch pass. Model 0 is the world and is left
-/// empty: no trigger uses it and its brushes are the map's whole solid
-/// geometry.
+/// for the exact stage of the touch pass. Model 0's list is empty: its
+/// brushes are the map's whole solid geometry, and a scripted trigger on
+/// model 0 goes through the world copy instead.
 ///
-/// Trigger brushes are not in `CollisionWorld` -- it drops them on purpose,
-/// since retail leaves a trigger hollow to movement -- so they are decoded
+/// Trigger brushes are not in `CollisionWorld` (it drops them on purpose,
+/// since retail leaves a trigger hollow to movement), so they are decoded
 /// straight off the lump here, through the same side decode the clip uses.
 pub fn model_brush_hulls(bsp: &vcod_common::mapworld::MapWorld) -> Vec<Vec<BrushHull>> {
     bsp.models
@@ -671,8 +671,8 @@ pub(crate) fn capsule_contacts_hulls(
 /// *brushes* (docs/research/cod11-gsc-object-model.md section 22). The clip
 /// box is `r.mins`/`r.maxs`, which `ClientThink_real` copies from pmove's
 /// stance box ahead of the pass (22.3): 70, 50 or 30 high. Neither box
-/// contains the other -- the candidate reaches 52 below the feet and a
-/// standing clip box 70 above them -- so both have to hold.
+/// contains the other (the candidate reaches 52 below the feet and a
+/// standing clip box 70 above them), so both have to hold.
 ///
 /// Only an entity with a touch function is touched (0x3f9cd): a
 /// `trigger_damage` sets none, and a `trigger_lookat` or `trigger_use` has
@@ -822,7 +822,7 @@ pub fn link(host: &mut GameHost, cx: &mut Cx, id: EntId, spawnflags: i32) {
         TriggerKind::Hurt => (CONTENTS_TOUCH_MASK, false),
         TriggerKind::Use => (CONTENTS_USE, false),
         TriggerKind::Mount { crouch } => (mount_contents(crouch, t.shape.model.is_some()), true),
-        TriggerKind::Door { .. } => (0x4000_0000, false),
+        TriggerKind::Door { .. } => (CONTENTS_TRIGGER, false),
     };
     if links {
         host.link_shaped(cx, id, shape(contents));
@@ -966,6 +966,17 @@ pub fn aim_trace(
         pitch.sin(),
     );
     let end = start + forward * AIM_TRACE_RANGE;
+    let rows: Vec<(EntId, Trigger)> = host
+        .triggers
+        .iter()
+        .filter(|(_, t)| t.kind == TriggerKind::LookAt)
+        .map(|(id, t)| (id, *t))
+        .collect();
+    // Most stock maps have no lookat trigger; the world trace below has no
+    // side effect, so skipping it changes nothing.
+    if rows.is_empty() {
+        return None;
+    }
     // The second trace's mask less the lookat bit and BODY, which no brush
     // carries; it holds every world bit the first one does.
     let world_f = host.world.as_ref().map_or(1.0, |w| {
@@ -973,12 +984,6 @@ pub fn aim_trace(
             .point_trace(start, end, AIM_WORLD_MASK, true)
             .fraction
     });
-    let rows: Vec<(EntId, Trigger)> = host
-        .triggers
-        .iter()
-        .filter(|(_, t)| t.kind == TriggerKind::LookAt)
-        .map(|(id, t)| (id, *t))
-        .collect();
     let origin_atom = cx.intern_folded("origin");
     let mut best: Option<(f32, EntId)> = None;
     for (id, t) in rows {

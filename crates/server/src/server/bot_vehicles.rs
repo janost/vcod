@@ -262,6 +262,7 @@ impl Server {
     }
 
     /// Test-facing: the kind of the live vehicle `num` (`info::KIND_*`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_vehicle_kind(&self, num: u32) -> Option<i32> {
         let host = &self.game.module.script.as_ref()?.host;
         let (_, v) = host.vehicles.live.iter().find(|(id, _)| id.0 == num)?;
@@ -270,6 +271,7 @@ impl Server {
 
     /// Test-facing: vehicles the seven-second stuck kill destroyed this
     /// level.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_stuck_kills(&self) -> u32 {
         self.game
             .module
@@ -281,6 +283,7 @@ impl Server {
     /// Test-facing: a blast of `damage` on vehicle `num` from itself, as
     /// the stock self-destruct's `doDamage` (`_tankdrive_gmi.gsc`); false
     /// when `num` is no live vehicle.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_damage_vehicle(&mut self, num: u32, damage: i32) -> bool {
         let Some(rt) = self.game.module.script.as_mut() else {
             return false;
@@ -306,6 +309,7 @@ impl Server {
     }
 
     /// Test-facing: each live vehicle in pool order, as a bot would see it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_vehicles(&self) -> Vec<VehicleSpot> {
         let Some(rt) = self.game.module.script.as_ref() else {
             return Vec::new();

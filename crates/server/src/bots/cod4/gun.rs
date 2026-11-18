@@ -221,6 +221,7 @@ impl Cod4Bots {
 
     /// Test-facing: `team` saw an enemy down `gun`'s lane at `now_ms`
     /// (the level's time).
+    #[cfg(any(test, feature = "testing"))]
     pub fn mark_lane_for_test(&mut self, gun: EntId, team: i32, now_ms: i32) {
         self.gun.lanes.insert((gun, team), now_ms);
     }

@@ -242,7 +242,7 @@ pub fn entity_victims(
 /// the world when `None`. `engine` (a missile's blast, outside any
 /// builtin) queues the notifies on `GameHost::engine_notifies` instead of
 /// raising them on `cx`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn damage_entities(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -385,7 +385,7 @@ impl super::cod2::Cod2Level {
     /// `health` with the `damage` notify (damage, attacker), and `death` at
     /// 0 or below; a `trigger_damage` fires off it. `attacker` is a client
     /// slot.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn entity_damage(
         &mut self,
         id: EntId,

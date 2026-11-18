@@ -312,7 +312,6 @@ impl Canvas<'_, '_> {
     /// `w`, placed by `align` (0 left, 1 centred, 2 right less 4) and set
     /// on the item line at `y` by `cg_scoreboardTextOffset`; `drop` lowers
     /// it further.
-    #[allow(clippy::too_many_arguments)]
     fn cell(
         &mut self,
         t: &str,

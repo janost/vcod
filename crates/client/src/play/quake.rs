@@ -8,7 +8,7 @@ use glam::Vec3;
 use vcod_common::net::event_ids::{EV_EARTHQUAKE, EV_FIRE_WEAPON_MG42};
 use vcod_common::net::events::GameEvent;
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 
 /// One quake: what `0x30017dd0` copies into a slot.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -41,7 +41,7 @@ impl Quake {
 /// `0x30017dd0`. `es` is the event's entity, `None` for the playerstate's
 /// ring; `origin` is where the event's body is drawn.
 pub fn from_event(
-    p: &Protocol,
+    p: &Cod1Wire,
     ev: &GameEvent,
     es: Option<&EntityState>,
     origin: Vec3,

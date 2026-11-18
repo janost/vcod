@@ -3102,6 +3102,8 @@ playerstate's `viewangles`, which the server echoes a snapshot late at
 times, so a height is good to one table step (1 to 4 units at these ranges)
 plus the 1.5 degree hip cone. VERIFIED, the labels and the numbers;
 INFERRED, the pairing of each hit with a tap.
+`tools/pair_sweep.py <shooter.log> <target.log> <labels.txt>` does the
+pairing and prints each crossing height.
 
 The first hit of each life, the victim idle in `legsAnim` 634 and not yet
 knocked back:
@@ -5247,7 +5249,7 @@ VERIFIED, the shooter's single shot on `mp_carentan`: `weaponstate` 3,
 as retail's shooter capture. `torsoAnim` reads 765 (512 | 253), the number
 the retaken `combat` fixtures measure; the retail `dm` shooter fixture's 0
 predates the `cmd.weapon` fix (`player-model-anim-system.md`, "The
-`jump_takeoff` torso index is gone") and is not evidence.
+`jump_takeoff` torso 720 was a holstered weapon") and is not evidence.
 
 VERIFIED, `mp_ship` `dm`, the kill by a bullet: `health` 0, `pm_type` 6,
 `torsoAnim` 512, the dead view height lerping 60 -> 50.8 -> 42 -> 32.8 -> 24

@@ -1007,7 +1007,7 @@ disassembly):
 `play-1.7-mantle.txt` (its recipe in its header): a probe teleported by
 `setviewpos` to the -x face of mp_crash's low wall at x -16..36, y
 -1376 (brush 2242, `MANTLE_OVER`, found by `cargo run -p vcod-cod4
---example mantle_spots`) faces +x, walks into it and taps jump, swinging
+--example cod4_mantle_spots`) faces +x, walks into it and taps jump, swinging
 its view 120 left over the mantle and back; then faces -x and vaults
 back; then leans. Each mantle is row 4 (up 39, over mid), flags 5 (over
 and stand), 900 ms: `mantleState.timer` reads 16 (the second time 32)

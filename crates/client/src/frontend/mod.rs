@@ -2056,6 +2056,7 @@ impl Ui {
                 Some((self.players.len(), self.player_top))
             }
             Some(FEEDER_PLAYER_PROFILES) => Some((self.profiles.len(), self.profiles.top)),
+            Some(FEEDER_SERVERSTATUS) => self.status.as_ref().map(|q| (q.rows.len(), q.top)),
             _ => None,
         }
     }
@@ -2067,6 +2068,11 @@ impl Ui {
             Some(FEEDER_MODS) => self.mod_top = top,
             Some(FEEDER_PLAYER_LIST | FEEDER_MUTELIST) => self.player_top = top,
             Some(FEEDER_PLAYER_PROFILES) => self.profiles.top = top,
+            Some(FEEDER_SERVERSTATUS) => {
+                if let Some(q) = &mut self.status {
+                    q.top = top;
+                }
+            }
             _ => {}
         }
     }
@@ -2270,7 +2276,13 @@ impl Ui {
             let item = &self.menus[m].items[i];
             if matches!(
                 item.feeder,
-                Some(FEEDER_ALLMAPS | FEEDER_MODS | FEEDER_PLAYER_LIST | FEEDER_MUTELIST)
+                Some(
+                    FEEDER_ALLMAPS
+                        | FEEDER_MODS
+                        | FEEDER_PLAYER_LIST
+                        | FEEDER_MUTELIST
+                        | FEEDER_SERVERSTATUS
+                )
             ) && let Some((len, cur)) = self.list_scroll(item)
             {
                 let max = listbox::max_scroll(item, len);
@@ -2524,7 +2536,8 @@ impl Ui {
         let [x, y0, _, _] = item.rect;
         let (x, mut y) = (x + 1.0, y0 + 1.0);
         let eh = item.element_height.max(1.0);
-        for row in q.rows.iter().take(visible_rows(item)) {
+        let top = q.top.min(listbox::max_scroll(item, q.rows.len()));
+        for row in q.rows.iter().skip(top).take(visible_rows(item)) {
             for (col, cell) in item.columns.iter().zip(row) {
                 let text = truncate_visible(&loc.translate(cell), col.max_chars);
                 p.text(
@@ -3670,6 +3683,48 @@ mod tests {
             .clone();
         let [x, y, w, h] = item.rect;
         (item, [x + w - 8.0, y + h - 4.0])
+    }
+
+    /// The server info popup's rows past its first page are reached by the
+    /// wheel: a long serverinfo no longer hides the player rows.
+    #[test]
+    fn the_server_info_list_scrolls() {
+        let Some(mut ui) = ui() else { return };
+        let shell = Shell::new();
+        let (m, i) = ui
+            .menus
+            .iter()
+            .enumerate()
+            .find_map(|(m, menu)| {
+                let i = menu.items.iter().position(|i| {
+                    i.kind == ITEM_TYPE_LISTBOX && i.feeder == Some(FEEDER_SERVERSTATUS)
+                })?;
+                Some((m, i))
+            })
+            .expect("a stock menu lists the server's status");
+        let rows = (0..40)
+            .map(|n| {
+                [
+                    format!("key{n}"),
+                    n.to_string(),
+                    String::new(),
+                    String::new(),
+                ]
+            })
+            .collect();
+        let name = ui.menus[m].name.clone();
+        let mut out = Vec::new();
+        // Opening runs the menu's `serverstatus` query; the rows come after.
+        ui.open_menu(&name, &shell, &mut out);
+        ui.status = Some(StatusQuery::with_rows(rows));
+        let r = ui.menus[m].items[i].rect;
+        ui.mouse_move(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0, 640.0, 480.0, &shell);
+        assert_eq!(ui.hover, Some((m, i)));
+        ui.wheel(true, &shell);
+        ui.wheel(true, &shell);
+        assert_eq!(ui.status.as_ref().unwrap().top, 2);
+        let item = ui.menus[m].items[i].clone();
+        assert_eq!(ui.list_scroll(&item), Some((40, 2)));
     }
 
     #[test]
@@ -5284,7 +5339,7 @@ mod tests {
     /// `g_motd`'s configstring (14, UO 15) reaches no menu.
     fn shows_the_mirrors_motd(
         fs: &Pk3Fs,
-        proto: &vcod_common::net::protocol::Protocol,
+        proto: &vcod_common::net::protocol::Cod1Wire,
         capture: &str,
         menu: &str,
     ) {

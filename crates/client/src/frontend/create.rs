@@ -184,7 +184,8 @@ pub fn server_args(
     if req.cod2 {
         args.extend(["--game".into(), "cod2".into()]);
     }
-    if vanilla {
+    // `--vanilla` is CoD1's; the CoD2 server refuses it.
+    if vanilla && !req.cod2 {
         args.push("--vanilla".into());
     } else if let Some(game) = fs_game.filter(|g| !g.is_empty()) {
         args.extend(["--set".into(), format!("fs_game={game}")]);
@@ -200,7 +201,8 @@ pub fn server_args(
             if let Ok(n) = v.trim().parse::<usize>()
                 && n > 0
             {
-                args.extend(["--max-clients".into(), n.to_string()]);
+                // `sv_maxclients` caps at 64, which the server refuses past.
+                args.extend(["--max-clients".into(), n.min(64).to_string()]);
             }
         } else {
             args.extend(["--set".into(), format!("{name}={v}")]);
@@ -483,6 +485,8 @@ struct JoinProbe {
 /// the child never outlives the client.
 pub struct ServerProcess {
     child: Child,
+    /// The server's stdin (`vcod-server --quit-on-eof`).
+    stdin: Option<std::process::ChildStdin>,
     pub port: u16,
     pub log: PathBuf,
     /// Dedicated No: the client joins it, and leaving the game stops it.
@@ -514,15 +518,20 @@ impl ServerProcess {
         } else {
             None
         };
-        let child = Command::new(exe)
+        // The server reads its stdin as our pipe: `quit` on it stops it
+        // cleanly, and its end, this process gone however it went, too.
+        let mut child = Command::new(exe)
             .args(args)
-            .stdin(Stdio::null())
+            .arg("--quit-on-eof")
+            .stdin(Stdio::piped())
             .stdout(out)
             .stderr(err)
             .spawn()
             .with_context(|| format!("starting {}", exe.display()))?;
+        let stdin = child.stdin.take();
         Ok(ServerProcess {
             child,
+            stdin,
             port,
             log,
             joined: join,
@@ -561,11 +570,27 @@ impl ServerProcess {
 }
 
 impl Drop for ServerProcess {
+    /// `quit` first, so the players get their disconnect and a master its
+    /// flatline; a server still up after [`QUIT_WAIT`] is killed.
     fn drop(&mut self) {
+        if let Some(mut pipe) = self.stdin.take() {
+            use std::io::Write;
+            let _ = pipe.write_all(b"quit\n");
+        }
+        let until = Instant::now() + QUIT_WAIT;
+        while Instant::now() < until {
+            if !matches!(self.child.try_wait(), Ok(None)) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
+
+/// How long a stopped server gets to run `quit` before it is killed.
+const QUIT_WAIT: Duration = Duration::from_secs(2);
 
 /// `vcod-server` beside the running executable.
 pub fn server_exe() -> Result<PathBuf> {
@@ -583,6 +608,34 @@ pub fn server_exe() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dropping the process sends `quit` down its stdin and waits for it
+    /// to end, instead of killing it: a child that exits on `quit` is gone
+    /// well inside [`QUIT_WAIT`], one that never reads is killed after it.
+    #[cfg(unix)]
+    #[test]
+    fn a_stopped_server_gets_quit_before_a_kill() {
+        let dir = tempfile::tempdir().unwrap();
+        let spawn = |script: &str| {
+            let args = ["-c".to_string(), script.to_string(), "sh".to_string()];
+            ServerProcess::spawn(
+                Path::new("/bin/sh"),
+                &args,
+                0,
+                dir.path().join("log"),
+                false,
+            )
+            .unwrap()
+        };
+        let quits = spawn(r#"read l; [ "$l" = quit ] && exit 0; sleep 30"#);
+        let t0 = Instant::now();
+        drop(quits);
+        assert!(t0.elapsed() < QUIT_WAIT / 2, "{:?}", t0.elapsed());
+        let deaf = spawn("sleep 30");
+        let t0 = Instant::now();
+        drop(deaf);
+        assert!(t0.elapsed() >= QUIT_WAIT, "{:?}", t0.elapsed());
+    }
 
     #[test]
     fn arena_blocks_parse_and_an_empty_gametype_allows_all() {

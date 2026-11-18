@@ -209,7 +209,6 @@ impl NavGraph {
     /// the edges past the follower's reach
     /// ([`Self::drop_out_of_reach`]) and probes for mantles again off the
     /// floors the last mantles' tops led to.
-    #[allow(clippy::too_many_arguments)]
     pub fn build_opts(
         world: &CollisionWorld,
         seeds: &[[f32; 3]],
@@ -2435,7 +2434,6 @@ impl Follower {
     /// search next tick, so neither one long plan nor many bots planning at
     /// once (the tick the graph lands) stall a tick.
     /// `rand` picks roam destinations.
-    #[allow(clippy::too_many_arguments)]
     pub fn waypoint(
         &mut self,
         g: &NavGraph,
@@ -2493,7 +2491,6 @@ impl Follower {
     }
 
     /// [`Self::waypoint`] before the bookkeeping.
-    #[allow(clippy::too_many_arguments)]
     fn follow(
         &mut self,
         g: &NavGraph,
@@ -5154,7 +5151,6 @@ pub trait WalkStep: Send + Sync {
     /// step may push as `delta_angles`; `weapons` holds the def of
     /// `ps.weapon`. `carry` is what the step kept after the walk's last
     /// cmd, `None` on its first.
-    #[allow(clippy::too_many_arguments)]
     fn step(
         &self,
         ps: &mut PlayerState,
@@ -6002,7 +5998,6 @@ struct Trail {
 
 /// [`walk_with`] without the crease test, the body's weapon moving it at
 /// `move_scale`; `trail` gathers what it passed over.
-#[allow(clippy::too_many_arguments)]
 fn walk_sliding(
     world: &CollisionWorld,
     from: Vec3,
@@ -8479,8 +8474,8 @@ mod tests {
 
     /// mp_depot by (-64, 352): a body run off a ledge at z 12 comes to rest
     /// on a step's corner at z 3, right under a floor at z 27 and under a
-    /// ceiling 37 over the feet. A flood walk resting there was merged into
-    /// the floor's node until 2026-10-09; the walk to the node itself jumps.
+    /// ceiling 37 over the feet. A flood walk resting there is not merged
+    /// into the floor's node: the walk to the node itself jumps.
     #[test]
     fn a_walk_jumps_onto_a_floor_right_overhead_under_a_ceiling() {
         let Some(world) = map_world("mp_depot") else {
@@ -8659,11 +8654,11 @@ mod tests {
 
     /// mp_ship's ladders, each from its open face: up and down both proved
     /// by the bots' own steering. One plain, one whose head stands right
-    /// above its foot in a shaft, one only the creep gets down, and the five
-    /// that got no rung before 2026-10-07. The climb under the mast's spar
+    /// above its foot in a shaft, one only the creep gets down, and five
+    /// more. The climb under the mast's spar
     /// ends on the spar's edge at 1147 beside the plate, and the creep back
     /// off it at a run is 40 units out before it has dropped the 8 under the
-    /// plate `PM_CheckLadderMove`'s box needs (2026-10-12): up only.
+    /// plate `PM_CheckLadderMove`'s box needs: up only.
     #[test]
     fn ships_ladders_are_climbed_both_ways() {
         let Some(fs) = vcod_common::testing::game_fs() else {
@@ -9130,7 +9125,7 @@ mod tests {
         let w = &world.collision;
         let target = glam::Vec2::new(-1856.1, -538.4);
         let mut ps = PlayerState::spawn(Vec3::new(-1779.3, -607.2, 116.125), 0.0);
-        ps.weapon = crate::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+        ps.weapon = crate::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
         let mw = MoveWorld::bare(w);
         let mut last = None;
         for tick in 1..20 {

@@ -107,7 +107,6 @@ struct Drawn<'a> {
 
 /// `Item_Paint` of a visible item: its window, then its text, which it
 /// returns with its baseline's window position.
-#[allow(clippy::too_many_arguments)]
 fn item(
     menus: &ScriptMenus,
     a: &MenuAssets,
@@ -348,7 +347,6 @@ impl Paint<'_> {
 /// `Item_Paint` of a HUD menu's plain item (`cod4_hud::menus`): its
 /// window in `fore` over `rect`, then `text` localized and placed by its
 /// alignment. Returns the text with its baseline's window position.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn hud_item(
     a: &MenuAssets,
     it: &LayoutItem,
@@ -527,7 +525,6 @@ fn slider(
 /// `pos`, aligned in its width, its baseline the row's bottom plus
 /// `textaligny`, until a row no longer fits. Returns each text drawn with
 /// its baseline's window position.
-#[allow(clippy::too_many_arguments)]
 fn list_box(
     menus: &ScriptMenus,
     a: &MenuAssets,
@@ -705,7 +702,6 @@ fn text_colour(
 /// `backColor`, through the background when there is one; 3, 5 and 6
 /// draw the material in `foreColor` when `WINDOW_FORECOLORSET`, else
 /// white; then the border.
-#[allow(clippy::too_many_arguments)]
 fn window(
     a: &MenuAssets,
     it: &LayoutItem,

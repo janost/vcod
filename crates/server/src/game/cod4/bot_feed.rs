@@ -18,10 +18,15 @@ impl Cod4Level {
         &self.combat.defs
     }
 
-    /// The bullet and melee hits scored from the `from`th on, as
-    /// `(attacker, victim, hit location)`.
-    pub fn hits_since(&self, from: usize) -> &[(usize, usize, u8)] {
-        self.combat.hits.get(from..).unwrap_or(&[])
+    /// The bullet and melee hits scored from the `from`th on that the
+    /// level still keeps, as `(attacker, victim, hit location)`.
+    pub fn hits_since(&self, from: usize) -> impl Iterator<Item = &(usize, usize, u8)> {
+        self.combat.hits.since(from)
+    }
+
+    /// How many hits the level has scored: the cursor for [`Self::hits_since`].
+    pub fn hit_count(&self) -> usize {
+        self.combat.hits.total()
     }
 
     /// `game[key]` as text, `""` unset: `state` reads `playing` and

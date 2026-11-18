@@ -34,7 +34,7 @@ use crate::fx::sim::{FxSound, Rng};
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::events::GameEvent;
 use vcod_common::net::flags::{EF_NODRAW, ET_MISSILE};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::weapon::WeaponSounds;
 
@@ -107,7 +107,7 @@ pub struct AudioStats {
 }
 
 pub struct AudioSystem {
-    /// The connection's `CS_SOUNDS` (`Protocol::cs`), 1.1's until a
+    /// The connection's `CS_SOUNDS` (`Cod1Wire::cs`), 1.1's until a
     /// gamestate names another.
     cs_sounds: usize,
     /// `None` when disabled or no device opened; cues still resolve, nothing
@@ -350,7 +350,7 @@ impl AudioSystem {
                 VOLUME_SCALE
             },
             manager,
-            cs_sounds: cues::CS_SOUNDS,
+            cs_sounds: cues::CS_SOUNDS_V1,
             menu_aliases: aliases_all.for_map("menu"),
             aliases_all,
             aliases: AliasTable::default(),
@@ -468,7 +468,7 @@ impl AudioSystem {
 
     /// Where the connection's sound aliases sit, which United Offensive
     /// moved (docs/research/coduo-diff.md, section 7).
-    pub fn set_protocol(&mut self, p: &vcod_common::net::protocol::Protocol) {
+    pub fn set_protocol(&mut self, p: &vcod_common::net::protocol::Cod1Wire) {
         self.cs_sounds = p.cs.sounds();
         self.uo = p.is_uo();
     }
@@ -876,7 +876,7 @@ impl AudioSystem {
     pub fn step_sound_blends(
         &mut self,
         fs: &dyn AssetSource,
-        p: &vcod_common::net::protocol::Protocol,
+        p: &vcod_common::net::protocol::Cod1Wire,
         pair: (
             &vcod_common::net::snapshot::Snapshot,
             &vcod_common::net::snapshot::Snapshot,
@@ -2320,7 +2320,7 @@ pub fn volume_cvar(shell: &crate::console::shell::Shell) -> &'static str {
 /// (1.1 cgame 0x3001b3f0, 1.5's 0x3001c670, UO's 0x3001edb0) skips one
 /// with `EF_NODRAW`; the explode rides the missile's own entity as
 /// `eType` 0, so the frame it blows stops the sound.
-pub fn missile_sounds(p: &Protocol, snap: &Snapshot) -> HashMap<u32, (i32, Vec3)> {
+pub fn missile_sounds(p: &Cod1Wire, snap: &Snapshot) -> HashMap<u32, (i32, Vec3)> {
     snap.entities
         .iter()
         .filter(|(_, e)| {
@@ -2551,7 +2551,7 @@ mod tests {
         );
         a.on_gamestate("mp_carentan");
         let mut cs = vec![String::new(); 800];
-        cs[cues::CS_SOUNDS + 3] = "bomb_tick".to_string();
+        cs[cues::CS_SOUNDS_V1 + 3] = "bomb_tick".to_string();
         let mut loops = HashMap::new();
         loops.insert(12u32, (3, Vec3::new(1.0, 2.0, 3.0)));
         a.set_loop_sounds(&fs, &cs, &loops);
@@ -2800,7 +2800,7 @@ mod tests {
         a.on_gamestate("mp_carentan");
         let mut cs = vec![String::new(); 800];
         // `MP_bomb_plant` is `all_mp`, one-shot, channel `auto`.
-        cs[cues::CS_SOUNDS + 4] = "MP_bomb_plant".to_string();
+        cs[cues::CS_SOUNDS_V1 + 4] = "MP_bomb_plant".to_string();
         let mut loops = HashMap::new();
         loops.insert(13u32, (4, Vec3::ZERO));
         a.set_loop_sounds(&fs, &cs, &loops);
@@ -2830,8 +2830,8 @@ mod tests {
         );
         a.on_gamestate("mp_carentan");
         let mut cs = vec![String::new(); 800];
-        cs[cues::CS_SOUNDS + 3] = "bomb_tick".to_string();
-        cs[cues::CS_SOUNDS + 4] = "ambient_mp_carentan".to_string();
+        cs[cues::CS_SOUNDS_V1 + 3] = "bomb_tick".to_string();
+        cs[cues::CS_SOUNDS_V1 + 4] = "ambient_mp_carentan".to_string();
         let mut loops = HashMap::new();
         loops.insert(12u32, (3, Vec3::ZERO));
         a.set_loop_sounds(&fs, &cs, &loops);
@@ -3147,7 +3147,7 @@ mod tests {
         );
         a.on_gamestate("mp_carentan");
         let mut cs = vec![String::new(); 800];
-        cs[cues::CS_SOUNDS + 5] = "MP_announcer_allies_win".to_string();
+        cs[cues::CS_SOUNDS_V1 + 5] = "MP_announcer_allies_win".to_string();
         let tok = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
 
         assert!(a.on_server_command(&fs, &tok(&["s", "5"]), &cs));
@@ -3234,8 +3234,8 @@ mod tests {
         assert!(row.channel.is_spatial() && row.dist.1 < far.length());
 
         let mut cs = vec![String::new(); 800];
-        cs[cues::CS_SOUNDS + 3] = "bomb_tick".to_string();
-        cs[cues::CS_SOUNDS + 4] = "no_such_loop_alias".to_string();
+        cs[cues::CS_SOUNDS_V1 + 3] = "bomb_tick".to_string();
+        cs[cues::CS_SOUNDS_V1 + 4] = "no_such_loop_alias".to_string();
         let mut loops = HashMap::new();
         loops.insert(12u32, (3, far));
         loops.insert(13u32, (4, Vec3::ZERO));

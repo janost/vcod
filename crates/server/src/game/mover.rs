@@ -680,8 +680,8 @@ impl Movers {
 /// run by the next frame's threads (docs/research/cod11-movers.md, section
 /// 8; combat doc 14.7, "Entity numbers").
 ///
-/// The write-back is what the capture shows retail doing -- `getorigin()` and
-/// `.angles` both read the interpolated value on every frame of a move -- and
+/// The write-back is what the capture shows retail doing (`getorigin()` and
+/// `.angles` both read the interpolated value on every frame of a move), and
 /// it is also what keeps this to one representation: `istouching`, the touch
 /// pass, `getorigin` and the wire build all go on reading the entity's own
 /// fields. `.angles` is `r.currentAngles`: raw while a rotate runs, through

@@ -22,13 +22,13 @@ pub type PenTable = [[f32; 29]; 4];
 pub const PERK_BULLET_PENETRATION: u32 = 0x20;
 /// `iDFlags` 8, `level.iDFLAGS_PENETRATION`: a hit past a first surface.
 pub const DFLAG_PENETRATION: i32 = 8;
-/// `CONTENTS_BODY` and the hit's surface flags for a body (flesh, 7).
-const CONTENTS_BODY: u32 = 0x200_0000;
+/// The hit's surface flags for a body (flesh, 7).
+use vcod_common::clipmap::CONTENTS_BODY;
 const SURF_FLESH: u32 = 0x70_0000;
 /// `SURF_NOPENETRATE`: such a surface stops a round.
 const SURF_NOPENETRATE: u32 = 0x100;
-/// `SURF_SKY`: a round into it raises no impact.
-const SURF_SKY: u32 = 0x4;
+/// A round into the sky raises no impact.
+use vcod_common::clipmap::SURF_SKY;
 /// `bullet_penetrationMinFxDist`'s default.
 const PENETRATION_MIN_FX_DIST: f32 = 30.0;
 /// Glass's contents bit: an extended round shoots on through it
@@ -322,7 +322,6 @@ impl Cod4Level {
     /// `Bullet_GetDamage` (the range falloff off the round's first start)
     /// times what is left of the round, truncated; the shooter's own body
     /// takes nothing.
-    #[allow(clippy::too_many_arguments)]
     fn bullet_process(
         &mut self,
         slot: usize,
@@ -415,7 +414,6 @@ impl Cod4Level {
     /// `bullet_penetrationEnabled` and the weapon has a `penetrateType`,
     /// else `Bullet_FireExtended`. `shooter` is the entity it leaves from:
     /// `slot`'s own, or the turret `slot` mans.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn bullet_fire_round(
         &mut self,
         slot: usize,
@@ -630,6 +628,7 @@ impl Cod4Level {
     /// One round of the weapon named `weapon` from `start` toward `end`,
     /// fired by `slot` at the level's time with the bodies where they
     /// stand; for tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn fire_round_for_test(&mut self, slot: usize, weapon: &str, start: Vec3, end: Vec3) {
         self.sync_defs();
         let d = self
@@ -646,6 +645,7 @@ impl Cod4Level {
 
 impl Cod4Level {
     /// The clip map alone under the shot mask, for the tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn shot_trace_for_test(&self, start: Vec3, end: Vec3) -> vcod_common::clipmap::ClipTrace {
         let mut t = vcod_common::clipmap::ClipTrace::clear();
         if let Some(c) = &self.clip {

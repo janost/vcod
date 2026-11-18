@@ -2002,7 +2002,6 @@ pub fn client_bullets(
 /// ([`client_bullets`]), none under `sv_clientSideBullets` 0, where
 /// `CG_FireWeapon` skips `DrawBulletImpacts` (0x457cec); and its
 /// [`ServerRound`], its shooter looked up in `entities`, the snapshot's.
-#[allow(clippy::too_many_arguments)]
 pub fn frame_rounds(
     fired: &[Fired],
     weapons: &[String],

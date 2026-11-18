@@ -31,6 +31,7 @@ pub mod source;
 pub mod state;
 pub mod sunshadow;
 pub mod techset;
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod walk;
 pub mod weapon_file;

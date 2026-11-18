@@ -8,7 +8,7 @@ use crate::renderer::VmDraw;
 use crate::viewmodel::{self, ViewWeapon};
 use glam::{Mat4, Vec3};
 use vcod_common::net::msg;
-use vcod_common::net::protocol::{CS_MODELS_V1, Protocol};
+use vcod_common::net::protocol::{CS_MODELS_V1, Cod1Wire};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::aim;
 use vcod_common::pmove::predict::Predicted;
@@ -70,7 +70,7 @@ impl ViewPs {
         }
     }
 
-    pub fn from_snapshot(p: &Protocol, ps: &msg::PlayerState) -> ViewPs {
+    pub fn from_snapshot(p: &Cod1Wire, ps: &msg::PlayerState) -> ViewPs {
         let f = |name: &str| ps.field_f32(p, name);
         ViewPs {
             weapon: ps.field_i32(p, "weapon") as u8,
@@ -80,7 +80,7 @@ impl ViewPs {
             lean: f("leanf"),
             ammoclip: ps.arrays.ammoclip,
             pm_type: ps.field_i32(p, "pm_type"),
-            mounted: ps.field_i32(p, "eFlags") & 0xc000 != 0,
+            mounted: ps.field_i32(p, "eFlags") & vcod_common::net::flags::EF_MOUNTED != 0,
             pm_flags: ps.field_i32(p, "pm_flags"),
             eye: Vec3::new(
                 f("origin[0]"),
@@ -265,7 +265,7 @@ pub struct OnlineView {
     last_ms: Option<i64>,
     quakes: Quakes,
     land: Land,
-    /// The connection's `CS_MODELS` (`Protocol::cs`), 1.1's until set.
+    /// The connection's `CS_MODELS` (`Cod1Wire::cs`), 1.1's until set.
     cs_models: Option<usize>,
 }
 
@@ -303,7 +303,7 @@ pub fn land_change(event: i32, parm: i32, fall: vcod_common::pmove::FallHeights)
 
 impl OnlineView {
     /// The connection's protocol, whose model block the hands index.
-    pub fn set_protocol(&mut self, p: &Protocol) {
+    pub fn set_protocol(&mut self, p: &Cod1Wire) {
         self.cs_models = Some(p.cs.models());
     }
 

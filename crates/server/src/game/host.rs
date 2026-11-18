@@ -44,10 +44,15 @@ pub fn empty_objective() -> Objective {
     }
 }
 
+/// Whether a level keeps [`GameHost::script_log`]. On for tests and the
+/// in-process servers; `vcod-server` turns it off, as nothing there reads it.
+pub static KEEP_SCRIPT_LOG: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+
 /// The builtins `GameHost` answers itself: the env and io names, which have
 /// no family module of their own. `builtins::set::implementations` lists
 /// them with the families.
-pub const INLINE: &[(&str, builtins::score::Builtin)] = &[
+pub const INLINE: &[(&str, builtins::Builtin)] = &[
     ("setcullfog", set_cull_fog),
     ("setexpfog", set_exp_fog),
     ("ambientplay", ambient_play),
@@ -645,7 +650,7 @@ struct AtomMemo {
     profile: usize,
     entity: Vec<Option<Route>>,
     hud: Vec<Option<Route>>,
-    builtins: Vec<Option<Option<builtins::score::Builtin>>>,
+    builtins: Vec<Option<Option<builtins::Builtin>>>,
     plain: Vec<Option<bool>>,
     /// [`AtomMemo::read`]'s answers, an entity's and a hudelem's.
     reads: Vec<Option<(Except, Route)>>,
@@ -758,7 +763,7 @@ impl AtomMemo {
         profile: &'static crate::game::profile::HostProfile,
         cx: &Cx,
         name: Atom,
-    ) -> Option<builtins::score::Builtin> {
+    ) -> Option<builtins::Builtin> {
         self.check(profile, cx);
         let i = name.0 as usize;
         if self.builtins.len() <= i {
@@ -789,7 +794,7 @@ pub struct GameHost {
     pub test_clients: TestClients,
     /// Each client's weapons, by slot. `giveWeapon` and `setSpawnWeapon`
     /// write it, `spawn` clears it, and `Server` copies it into the client's
-    /// sim every frame — the same re-read-it-each-frame arrangement the
+    /// sim every frame: the same re-read-it-each-frame arrangement the
     /// configstring table has, because a thread past a `wait` can still
     /// change it.
     pub client_weapons: Vec<crate::weapons::PlayerWeapons>,
@@ -803,8 +808,8 @@ pub struct GameHost {
     pub client_shellshock: Vec<[i32; 3]>,
     /// What the weapon builtins did to a client's ammo and current weapon,
     /// by slot, in call order. Unlike `client_weapons` these are edges rather
-    /// than state -- `ps.ammoclip` is spent by firing, so re-applying a full
-    /// clip every frame would make the weapon bottomless -- so `Server`
+    /// than state (`ps.ammoclip` is spent by firing, so re-applying a full
+    /// clip every frame would make the weapon bottomless), so `Server`
     /// drains them after `run_frame` and applies each once.
     pub client_weapon_ops: Vec<(usize, WeaponOp)>,
     /// Each client's ammo arrays ([`AmmoArrays`]), by slot.
@@ -943,7 +948,8 @@ pub struct GameHost {
     pub frozen: bool,
     /// The map's collision, once one exists. `None` in every unit test and
     /// on a fresh `GameHost`; `bulletTrace` traces against it when present
-    /// and reports a clean miss when it is not. Stage 10 is what sets it.
+    /// and reports a clean miss when it is not. Each level load sets it from
+    /// the map the server built (`Server::load_world`).
     pub world: Option<std::rc::Rc<crate::world::World>>,
     /// Counts the script's link changes of submodel brushes (`delete`,
     /// `notSolid`, `solid`): the bots' navigation graph is rebuilt once
@@ -963,9 +969,9 @@ pub struct GameHost {
     /// (`Carry::seed`), as `G_InitGame`'s `Rand_Init(trap_Milliseconds())`
     /// does (map-cycle doc 4.8). CoD2 keeps its own (`Cod2HostState::rand`).
     pub holdrand: vcod_common::rng::HoldRand,
-    /// Every `logPrint` line, in order. Retail's `logPrint` writes to the
-    /// server's `games_mp.log`; this is where that will come from, and it is
-    /// what lets a test replay a retail capture.
+    /// Every `print` and `logPrint` line, in order, for the tests and gates
+    /// that replay a retail capture (`games_mp.log` is [`Self::log_printf`]'s).
+    /// Kept only while [`KEEP_SCRIPT_LOG`] holds; the server binary clears it.
     pub script_log: Vec<String>,
     /// The `G_LogPrintf` lines (`logPrint`, `ExitLevel`, chat, pickups),
     /// each with `level.time`, for the engine to write to `games_mp.log`
@@ -1254,6 +1260,13 @@ pub type SpawnPin = Option<([f32; 3], [f32; 3])>;
 pub(crate) const RNG_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 
 impl GameHost {
+    /// One line onto [`Self::script_log`] while [`KEEP_SCRIPT_LOG`] holds.
+    pub fn keep_script_line(&mut self, line: String) {
+        if KEEP_SCRIPT_LOG.load(std::sync::atomic::Ordering::Relaxed) {
+            self.script_log.push(line);
+        }
+    }
+
     /// Starts a new skeleton stamp: every client's bones go unposed.
     pub fn clear_dobj_stamps(&mut self) {
         for stamps in &mut self.dobj_posed {
@@ -2483,7 +2496,7 @@ impl GameHost {
     /// `RegisterItem` (0x4e504): the registration bit, the alt-fire link,
     /// the item's own two model fields and configstring 8. Every caller
     /// goes through here rather than `Items::register`, so an item takes
-    /// its model slots wherever it is registered -- at spawn for a placed
+    /// its model slots wherever it is registered: at spawn for a placed
     /// weapon, in `precacheItem` for the script's own list.
     ///
     /// A chained alt mode gets the same model pair as the item itself,
@@ -3703,8 +3716,8 @@ fn enum_index(cx: &Cx, names: &[&str], value: Value) -> Result<Value, ErrorKind>
 /// hudelem `x` is type 0, an int, in retail's field table (object-model doc,
 /// "HUD element fields"), and the plant writes
 /// `320 - level.barsize / 2.0` into it, so `Scr_SetGenericField`'s int arm
-/// cannot be refusing a float. The rounding is not measured -- that value is
-/// 176.0, integral whichever way retail rounds -- and truncation toward zero
+/// cannot be refusing a float. The rounding is not measured (that value is
+/// 176.0, integral whichever way retail rounds), and truncation toward zero
 /// is taken from the language doc's other numeric conversions. Open: a probe
 /// writing 1.7 into an int field and reading it back would pin it.
 fn coerce(ty: FieldType, v: Value) -> Value {
@@ -4048,7 +4061,7 @@ mod tests {
     /// A HUD enum field stores retail's index and reads back the name, the
     /// set/get hook pair retail hangs on the field record. The stock
     /// `startGame` writes `level.clock.alignX = "center"`, so a string has
-    /// to be what the field takes -- but `"center"` alone proves nothing
+    /// to be what the field takes, but `"center"` alone proves nothing
     /// about the order, since it is index 1 of three either way, so every
     /// name in all three tables is checked against its index here.
     #[test]

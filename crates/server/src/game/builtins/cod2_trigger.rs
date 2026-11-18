@@ -3,9 +3,9 @@
 //! `trigger_use_touch` and writes the two bytes the use list reads
 //! (`game::cod2_use`). Addresses are cod2_lnxded's, VERIFIED.
 
+use super::Builtin;
 use super::client::client_receiver;
 use super::entity::entity_receiver;
-use super::score::Builtin;
 use crate::game::host::GameHost;
 use crate::game::trigger::{Trigger, TriggerKind};
 use vcod_gsc::{Cx, EntId, ErrorKind, Target, Value};

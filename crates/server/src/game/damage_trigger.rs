@@ -274,7 +274,6 @@ pub fn damaged(
 /// crosses (`trap_SightTraceToEntity`) is notified `"damage"` with the
 /// damage and the attacker on the spot, activated, and put back to full
 /// when nothing accumulates. Nothing comes off `health`.
-#[allow(clippy::too_many_arguments)]
 pub fn sweep(
     host: &mut GameHost,
     cx: &mut Cx,

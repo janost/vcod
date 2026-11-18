@@ -7,7 +7,7 @@
 
 use crate::collision::CollisionWorld;
 use crate::net::msg::EntityState;
-use crate::net::protocol::Protocol;
+use crate::net::protocol::Cod1Wire;
 use crate::net::trajectory::Trajectory;
 use glam::Vec3;
 
@@ -39,7 +39,7 @@ pub struct SnapshotMovers {
 
 impl SnapshotMovers {
     pub fn from_entities<'a>(
-        p: &Protocol,
+        p: &Cod1Wire,
         entities: impl IntoIterator<Item = (&'a u32, &'a EntityState)>,
     ) -> Self {
         let mut out = SnapshotMovers::default();
@@ -135,7 +135,7 @@ mod tests {
     use crate::net::protocol::PROTOCOL_V1;
     use crate::net::trajectory::{TR_LINEAR_STOP, TR_STATIONARY};
 
-    const P: &Protocol = &PROTOCOL_V1;
+    const P: &Cod1Wire = &PROTOCOL_V1;
 
     fn ent(num: u32, fields: &[(&str, i32)], pos: Trajectory) -> (u32, EntityState) {
         let mut e = EntityState::null(P);

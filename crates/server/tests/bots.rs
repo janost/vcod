@@ -1576,7 +1576,7 @@ fn a_bot_in_mp_foys_hollow_kills_itself() {
 /// one script that puts up the quick-message head icon (bots/yell.rs).
 fn a_fighting_bot_yells_on(
     fs: vcod_common::pk3::Pk3Fs,
-    protocol: &'static vcod_common::net::protocol::Protocol,
+    protocol: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
 ) {
     let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map(map).unwrap()).unwrap())

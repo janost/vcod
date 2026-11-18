@@ -328,7 +328,7 @@ impl Capsule {
 /// `start` to `end`. Its six sides are axial, which take a capsule as its
 /// box, so the sweep is the box's. A contact it makes names `entity`
 /// ([`CollisionWorld::entity_num`]) and its `hit` is `Prim::Clip(contents)`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn clip_entity_box(
     trace: &mut Trace,
     start: Vec3,
@@ -488,7 +488,6 @@ pub(crate) fn note_contact(candidate: f64, fraction: f64) {
 /// fractions, which `arith` says. A trace a brush clips always
 /// lands closer than the trace's fraction, so the lead side replaces the
 /// trace's contact outright.
-#[allow(clippy::too_many_arguments)]
 fn clip_brush_capsule(
     trace: &mut Trace,
     sw: &CapsuleSweep,
@@ -688,14 +687,7 @@ pub fn clip_model_tris(
 ) -> Option<(f32, Vec3, u32)> {
     let mut trace = Trace {
         fraction,
-        endpos: end,
-        normal: Vec3::ZERO,
-        surface_flags: 0,
-        startsolid: false,
-        allsolid: false,
-        hit: None,
-        enter: -1.0,
-        copy: None,
+        ..Trace::clear(end)
     };
     for (i, mt) in tris.iter().enumerate() {
         if mt.contents & mask != 0 {
@@ -736,14 +728,7 @@ pub fn clip_model_surfs(
 ) -> Option<(f32, Vec3, u32)> {
     let mut trace = Trace {
         fraction,
-        endpos: end,
-        normal: Vec3::ZERO,
-        surface_flags: 0,
-        startsolid: false,
-        allsolid: false,
-        hit: None,
-        enter: -1.0,
-        copy: None,
+        ..Trace::clear(end)
     };
     for s in surfs {
         let Some(first) = tris.get(s.tris.start) else {
@@ -1987,17 +1972,7 @@ impl CollisionWorld {
         maxs: Vec3,
         mask: u32,
     ) -> Trace {
-        let mut trace = Trace {
-            fraction: 1.0,
-            endpos: end,
-            normal: Vec3::ZERO,
-            surface_flags: 0,
-            startsolid: false,
-            allsolid: false,
-            hit: None,
-            enter: -1.0,
-            copy: None,
-        };
+        let mut trace = Trace::clear(end);
         if model < self.model_span.len() && model != 0 && self.model_linked(model) {
             let pose = self
                 .poses
@@ -2049,17 +2024,7 @@ impl CollisionWorld {
             .copied();
         let mut trace = match copy.filter(|c| c.contents & mask != 0) {
             Some(c) => self.clip_copy(c, start, end, mins, maxs, mask, true),
-            None => Trace {
-                fraction: 1.0,
-                endpos: end,
-                normal: Vec3::ZERO,
-                surface_flags: 0,
-                startsolid: false,
-                allsolid: false,
-                hit: None,
-                enter: -1.0,
-                copy: None,
-            },
+            None => Trace::clear(end),
         };
         trace.endpos = start + (end - start) * trace.fraction;
         trace
@@ -2071,7 +2036,7 @@ impl CollisionWorld {
     /// clip in lump order and a brush that brings the fraction to 0 ends the
     /// model: a box it meets at 0 never reads a later brush all solid
     /// (bsp-ibsp59-format.md, "The leaf walk").
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn clip_model(
         &self,
         model: usize,
@@ -2134,7 +2099,7 @@ impl CollisionWorld {
     /// turned into the model's frame, the box axial there, the capsule's
     /// sphere offset turned, and the brushes clipped as built (movers doc
     /// 22). The normal comes back in the world's frame.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn clip_turned_model(
         &self,
         model: usize,
@@ -2202,7 +2167,7 @@ impl CollisionWorld {
     }
 
     /// The posed models' half of a trace: the BVH skipped their brushes.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn trace_posed(
         &self,
         start: Vec3,
@@ -2544,17 +2509,7 @@ impl CollisionWorld {
     }
 
     fn position_walk(&self, p: Vec3, mins: Vec3, maxs: Vec3, mask: u32, world_only: bool) -> Trace {
-        let mut trace = Trace {
-            fraction: 1.0,
-            endpos: p,
-            normal: Vec3::ZERO,
-            surface_flags: 0,
-            startsolid: false,
-            allsolid: false,
-            hit: None,
-            enter: -1.0,
-            copy: None,
-        };
+        let mut trace = Trace::clear(p);
         let capsule = Capsule::of(mins, maxs);
         self.trace_world_clip(p, p, mins, maxs, mask, &mut trace);
         self.walk_tree(
@@ -2758,7 +2713,6 @@ impl CollisionWorld {
         self.trace_shape(start, end, mins, maxs, mask, false, skip, true)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn trace_with_mask(
         &self,
         start: Vec3,
@@ -2772,7 +2726,7 @@ impl CollisionWorld {
         self.trace_shape(start, end, mins, maxs, mask, statics, skip, false)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn trace_shape(
         &self,
         start: Vec3,
@@ -2789,17 +2743,7 @@ impl CollisionWorld {
             Some(Pusher::Copy(e)) => (None, Some(e)),
             None => (None, None),
         };
-        let mut trace = Trace {
-            fraction: 1.0,
-            endpos: end,
-            normal: Vec3::ZERO,
-            surface_flags: 0,
-            startsolid: false,
-            allsolid: false,
-            hit: None,
-            enter: -1.0,
-            copy: None,
-        };
+        let mut trace = Trace::clear(end);
 
         let mut scratch = Vec::new();
         let capsule = if boxed {
@@ -2887,17 +2831,7 @@ impl CollisionWorld {
             if !(lo.cmple(inst.pose.hi).all() && hi.cmpge(inst.pose.lo).all()) {
                 continue;
             }
-            let mut t = Trace {
-                fraction: 1.0,
-                endpos: end,
-                normal: Vec3::ZERO,
-                surface_flags: 0,
-                startsolid: false,
-                allsolid: false,
-                hit: None,
-                enter: -1.0,
-                copy: None,
-            };
+            let mut t = Trace::clear(end);
             self.clip_model(
                 inst.model,
                 Some(&inst.pose),
@@ -3109,7 +3043,7 @@ impl CollisionWorld {
     /// frame and merged as Q3's `SV_ClipMoveToEntities` merges an entity's
     /// trace: it wins when allsolid or strictly nearer, and a copy the sweep
     /// starts in marks the result startsolid either way.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn trace_copies(
         &self,
         start: Vec3,
@@ -3141,7 +3075,6 @@ impl CollisionWorld {
 
     /// One world copy alone against a sweep, in its frame; the normal comes
     /// back in the world's, `endpos` is left to the caller.
-    #[allow(clippy::too_many_arguments)]
     fn clip_copy(
         &self,
         c: WorldCopy,
@@ -3157,17 +3090,7 @@ impl CollisionWorld {
         let mid = (mins + maxs) * 0.5;
         let (ls, le) = (c.to_local(start + mid) - mid, c.to_local(end + mid) - mid);
         let capsule = Capsule::of(mins, maxs);
-        let mut t = Trace {
-            fraction: 1.0,
-            endpos: le,
-            normal: Vec3::ZERO,
-            surface_flags: 0,
-            startsolid: false,
-            allsolid: false,
-            hit: None,
-            enter: -1.0,
-            copy: None,
-        };
+        let mut t = Trace::clear(le);
         self.walk_tree(
             TraceInput {
                 start: ls,
@@ -3451,7 +3374,7 @@ impl CollisionWorld {
     /// (`terrain.rs`), or for a point trace its point arm (0x8052894) on each
     /// triangle. A trace already at fraction 0 has stopped, as retail's tree
     /// walk does.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn clip_terrain(
         &self,
         part: u32,
@@ -3803,6 +3726,7 @@ fn build_bvh(prims: &mut [(Prim, Vec3, Vec3)], base: u32, nodes: &mut Vec<BvhNod
 /// Test helper: flat solid floor (-1024..1024, top at z=0) plus extra axial
 /// solid brushes. Always compiled: the client's fx tests use it.
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn test_world(extra: &[(Vec3, Vec3)]) -> CollisionWorld {
     let mut specs: Vec<(usize, [f32; 3], [f32; 3])> =
         vec![(0, [-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0])];
@@ -3819,6 +3743,7 @@ pub fn test_world(extra: &[(Vec3, Vec3)]) -> CollisionWorld {
 /// slope arrives as loose triangles, which is the only way this module takes
 /// geometry that is not axis-aligned.
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn ramp_test_world(deg: f32, x0: f32, x1: f32) -> CollisionWorld {
     let h = (x1 - x0) * deg.to_radians().tan();
     let (y0, y1) = (-512.0, 512.0);
@@ -3845,6 +3770,7 @@ pub fn ramp_test_world(deg: f32, x0: f32, x1: f32) -> CollisionWorld {
 
 /// Test helper: axial brushes with named materials `(name, contents, surface)`.
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn synthetic_world(
     materials: &[(&str, u32, u32)],
     brushes: &[(usize, [f32; 3], [f32; 3])],
@@ -3859,6 +3785,7 @@ pub fn synthetic_world(
 /// whether they are solid at all. The only shape in which
 /// [`CollisionWorld::set_model_linked`] is observable.
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn submodel_test_world(entities: &str, submodels: &[([f32; 3], [f32; 3])]) -> CollisionWorld {
     let side = |v: f32| crate::mapworld::BrushSide {
         plane_or_dist: v.to_bits(),
@@ -3909,6 +3836,7 @@ pub fn submodel_test_world(entities: &str, submodels: &[([f32; 3], [f32; 3])]) -
 /// `material` whose last row collapses onto `c`, its front the side
 /// `cross(b - a, c - a)` points to.
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn push_tri_patches(bsp: &mut crate::mapworld::MapWorld, tris: &[[Vec3; 3]], material: u16) {
     for &[a, b, c] in tris {
         let mid = |p: Vec3, q: Vec3| (p + q) * 0.5;
@@ -3930,6 +3858,7 @@ pub fn push_tri_patches(bsp: &mut crate::mapworld::MapWorld, tris: &[[Vec3; 3]],
 /// A test map's lump 24: `tris` as one terrain partition of `material`,
 /// each front the side `cross(b - a, c - a)` points to.
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn push_tri_terrain(bsp: &mut crate::mapworld::MapWorld, tris: &[[Vec3; 3]], material: u16) {
     let first_vert = bsp.collision_verts.len() as u32;
     let first_index = bsp.collision_indices.len() as u32;
@@ -3952,6 +3881,7 @@ pub fn push_tri_terrain(bsp: &mut crate::mapworld::MapWorld, tris: &[[Vec3; 3]],
 /// ([`push_tri_terrain`]), the only way this module takes swept geometry
 /// that is not axis-aligned.
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn synthetic_world_tris(
     materials: &[(&str, u32, u32)],
     brushes: &[(usize, [f32; 3], [f32; 3])],
@@ -3965,6 +3895,7 @@ pub fn synthetic_world_tris(
 /// [`synthetic_world`] plus world-space triangles as patches of material 0
 /// ([`push_tri_patches`]).
 #[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub fn synthetic_world_patches(
     materials: &[(&str, u32, u32)],
     brushes: &[(usize, [f32; 3], [f32; 3])],
@@ -3976,6 +3907,7 @@ pub fn synthetic_world_patches(
 }
 
 /// A model-0 map of named materials and axial brushes.
+#[cfg(any(test, feature = "testing"))]
 fn synthetic_bsp(
     materials: &[(&str, u32, u32)],
     brushes: &[(usize, [f32; 3], [f32; 3])],
@@ -4111,17 +4043,7 @@ mod tests {
         let (mins, maxs) = (Vec3::new(-15.0, -15.0, -35.0), Vec3::new(15.0, 15.0, 35.0));
         let (start, end) = (Vec3::new(100.0, 0.0, 0.0), Vec3::ZERO);
         let stop = |sphere: Vec3| {
-            let mut trace = Trace {
-                fraction: 1.0,
-                endpos: end,
-                normal: Vec3::ZERO,
-                surface_flags: 0,
-                startsolid: false,
-                allsolid: false,
-                hit: None,
-                enter: -1.0,
-                copy: None,
-            };
+            let mut trace = Trace::clear(end);
             let sweep = capsule_sweep(start, end, mins, maxs);
             clip_brush_capsule(
                 &mut trace,
@@ -4591,17 +4513,7 @@ mod tests {
         mins: Vec3,
         maxs: Vec3,
     ) -> Trace {
-        let mut trace = Trace {
-            fraction: 1.0,
-            endpos: end,
-            normal: Vec3::ZERO,
-            surface_flags: 0,
-            startsolid: false,
-            allsolid: false,
-            hit: None,
-            enter: -1.0,
-            copy: None,
-        };
+        let mut trace = Trace::clear(end);
         let capsule = Capsule::of(mins, maxs);
         let sweep = capsule_sweep(start, end, mins, maxs);
         for brushes in [true, false] {

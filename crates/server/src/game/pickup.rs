@@ -5,7 +5,7 @@
 //! docs/research/cod11-items.md.
 
 use crate::weapons::{PlayerWeapons, WeaponTable};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::pmove::weapon::NUM_AMMO;
 use vcod_common::weapon::WeaponDef;
 
@@ -378,7 +378,6 @@ fn outgoing(inv: &Inventory, table: &WeaponTable, w: usize) -> Result<Option<u8>
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn pickup_weapon(
     inv: &mut Inventory,
     it: &mut ItemCounts,
@@ -464,7 +463,6 @@ fn pickup_weapon(
 /// `Touch_Item` (section 7), minus the writes to the world: the caller
 /// raises the event, the notifies and the removal off the [`Outcome`].
 /// `slot` is the player's client number.
-#[allow(clippy::too_many_arguments)]
 pub fn touch_item(
     inv: &mut Inventory,
     item: &ItemView,
@@ -533,7 +531,7 @@ pub fn activate_score(muzzle: [f32; 3], forward: [f32; 3], centre: [f32; 3]) -> 
 /// `G_CheckForCursorHints`' value for an item (section 2.3), for the one
 /// `activate_ent` picked, in the protocol's own numbering (UO's sits one
 /// higher than 1.1's, its owned weapons 128 past the unowned).
-pub fn cursor_hint(proto: &Protocol, kind: ItemKind, owned: bool) -> i32 {
+pub fn cursor_hint(proto: &Cod1Wire, kind: ItemKind, owned: bool) -> i32 {
     let hints = &proto.cursor_hints;
     match kind {
         ItemKind::Weapon(w) if owned => i32::from(w) + hints.weapon + proto.max_weapons as i32,
@@ -549,7 +547,7 @@ pub fn cursor_hint(proto: &Protocol, kind: ItemKind, owned: bool) -> i32 {
 /// real table is, so the arithmetic runs without paks.
 #[cfg(test)]
 pub(crate) fn tests_table() -> WeaponTable {
-    use crate::configstrings::weapon_index;
+    use crate::defs::V1;
     fn def(keys: &[(&str, &str)]) -> WeaponDef {
         let map = keys
             .iter()
@@ -559,7 +557,7 @@ pub(crate) fn tests_table() -> WeaponTable {
     }
     let mut defs = vec![None; crate::defs::V1.num_items()];
     let mut put = |name: &str, keys: &[(&str, &str)]| {
-        defs[weapon_index(name).unwrap()] = Some(def(keys));
+        defs[V1.weapon_index(name).unwrap()] = Some(def(keys));
     };
     put(
         "colt_mp",
@@ -655,14 +653,14 @@ pub(crate) fn tests_table() -> WeaponTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::configstrings::weapon_index;
+    use crate::defs::V1;
 
     fn table() -> WeaponTable {
         tests_table()
     }
 
     fn idx(name: &str) -> u8 {
-        weapon_index(name).unwrap() as u8
+        V1.weapon_index(name).unwrap() as u8
     }
 
     /// The americans' spawn: carbine in primary, colt in pistol, frag in

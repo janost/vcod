@@ -1,3 +1,11 @@
+# play-1.7-models-target.txt: the target probe of the script model capture (docs/research/cod4-combat.md 13.1) on retail
+# cod4_lnxded 1.7 under +set fs_game mods/vcodms (crates/cod4/tests/fixtures/gsc/model_shot
+# packed in the mod's iwd), +devmap mp_backlot, war, sv_pure 0:
+#   cargo run -p vcod-cod4 --example cod4_probe -- 127.0.0.1:28960 out.txt
+#     --team allies --script idle --name target --qport 4021 --secs 25
+#   (0.5 s later) cargo run -p vcod-cod4 --example cod4_probe -- 127.0.0.1:28960 out.txt
+#     --team axis --script shoot --name shooter --qport 4022 --secs 25
+# The server's PROBE lines and the full recipe are play-1.7-models-hits.txt.
 0 c2s 127.0.0.1:28960 ffffffff6765746368616c6c656e676520302022393763383430376663393337626337633165646465636633366465383965373522
 3 s2c 127.0.0.1:28960 ffffffff6368616c6c656e6765526573706f6e736520313131313339383135
 3 c2s 127.0.0.1:28960 ffffffff636f6e6e65637420225c63675f707265646963744974656d735c315c636c5f70756e6b6275737465725c305c636c5f616e6f6e796d6f75735c305c636f6c6f725c345c686561645c64656661756c745c6d6f64656c5c6d756c74695c736e6170735c32305c726174655c32353030305c6e616d655c7461726765745c70726f746f636f6c5c365c6368616c6c656e67655c3131313133393831355c71706f72745c3430323122

@@ -668,10 +668,6 @@ pub struct PlayerState {
     /// `pm_flags` 0x1000: the melee bit was down last frame. The only edge
     /// latch in the weapon machine (combat doc, section 1.10).
     pub melee_latched: bool,
-    /// `pm_flags` 0x400: a weapon change threw away a cooking grenade. Not a
-    /// netfield, and nothing reads it yet; retail ORs the bit only for a
-    /// prone player (combat doc, section 1.8).
-    pub grenade_cancelled: bool,
     /// The previous cmd's view angles in ANGLE2SHORT units, pitch and yaw.
     /// Retail's `pm->oldcmd.angles`, which the spread's turn term subtracts
     /// this cmd's from.
@@ -762,7 +758,7 @@ pub enum MoveRules {
 
 impl MoveRules {
     /// The rules a server speaking this protocol runs.
-    pub fn for_protocol(p: &crate::net::protocol::Protocol) -> Self {
+    pub fn for_protocol(p: &crate::net::protocol::Cod1Wire) -> Self {
         match p.transport.version {
             6 => MoveRules::V1_5,
             22 => MoveRules::Uo,
@@ -963,7 +959,6 @@ impl PlayerState {
             aim_spread_scale: 0.0,
             grenade_time_left_ms: 0,
             melee_latched: false,
-            grenade_cancelled: false,
             last_cmd_angles: [0; 2],
             last_cmd_ads: false,
             last_cmd_moves: [0; 2],
@@ -2992,23 +2987,6 @@ pub fn check_prone(world: &MoveWorld, q: ProneQuery) -> Option<ProneBody> {
         torso_pitch: angle_normalize180(vectopitch(chest - hips)),
         waist_pitch: angle_normalize180(vectopitch(hips - feet)),
     })
-}
-
-/// Whether a body may lie down at `origin` facing `yaw_deg`, the sweep
-/// behind the facing alone: [`check_prone`] off the ground.
-pub fn prone_fits(world: &MoveWorld, origin: Vec3, yaw_deg: f32) -> bool {
-    check_prone(
-        world,
-        ProneQuery {
-            origin,
-            yaw_deg,
-            entry: false,
-            ground: false,
-            length: PRONE_CHECK_LENGTH,
-            rules: MoveRules::V1_1,
-        },
-    )
-    .is_some()
 }
 
 /// `vectopitch` (0x3dd7c): wire convention (positive down), in 0..360.
@@ -9245,15 +9223,6 @@ mod tests {
             "a corpse slides through players: {}",
             ps.origin.x
         );
-    }
-
-    #[test]
-    fn prone_fit_ignores_bodies() {
-        let w = flat();
-        // yaw 0 traces backward (-x) for the prone body's length, so the
-        // body has to sit behind the player to be in the trace's way at all.
-        let bodies = [body(-30.0, 0.0, 0.0)];
-        assert!(prone_fits(&MoveWorld::new(&w, &bodies, 0), Vec3::ZERO, 0.0));
     }
 
     #[test]

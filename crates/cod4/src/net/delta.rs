@@ -31,9 +31,50 @@ impl Field {
         }
     }
 
-    pub fn word(&self) -> usize {
+    pub const fn word(&self) -> usize {
         self.offset as usize / 4
     }
+}
+
+/// `name`'s word in `table`. Meant for a `const` block, where a name the
+/// table lacks fails the build.
+pub const fn word_named(table: &[Field], name: &str) -> usize {
+    let mut i = 0;
+    while i < table.len() {
+        let (a, b) = (table[i].name.as_bytes(), name.as_bytes());
+        if a.len() == b.len() {
+            let mut k = 0;
+            while k < a.len() && a[k] == b[k] {
+                k += 1;
+            }
+            if k == a.len() {
+                return table[i].word();
+            }
+        }
+        i += 1;
+    }
+    panic!("no such field")
+}
+
+/// `base[k]`'s word in `table` (`k` under 10), as [`word_named`].
+pub const fn word_at(table: &[Field], base: &str, k: usize) -> usize {
+    assert!(k < 10);
+    let b = base.as_bytes();
+    let mut i = 0;
+    while i < table.len() {
+        let a = table[i].name.as_bytes();
+        if a.len() == b.len() + 3 && a[b.len()] == b'[' && a[b.len() + 1] == b'0' + k as u8 {
+            let mut j = 0;
+            while j < b.len() && a[j] == b[j] {
+                j += 1;
+            }
+            if j == b.len() && a[b.len() + 2] == b']' {
+                return table[i].word();
+            }
+        }
+        i += 1;
+    }
+    panic!("no such field")
 }
 
 /// What a field read needs besides the bits: the snapshot's time (the

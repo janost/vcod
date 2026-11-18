@@ -26,6 +26,8 @@ body:
         - Call of Duty 1.1
         - Call of Duty 1.5
         - United Offensive 1.51
+        - Call of Duty 2 1.3
+        - Call of Duty 4 1.7
         - Other / not sure
     validations:
       required: true
@@ -99,7 +101,7 @@ body:
     attributes:
       label: Logs
       description: |
-        Run vcod (and vcod-server) from a terminal and paste what it printed around the bug, from the first line (it names the version). `RUST_LOG=debug` gives more. A crash prints `vcod <version> panicked` and a backtrace with `RUST_BACKTRACE=1`; paste all of it.
+        Run vcod (and vcod-server) from a terminal and paste what it printed around the bug, from the first line (it names the version). `RUST_LOG=debug` gives more. A crash prints `vcod <version> panicked` and the panic's message with its file and line; paste all of it. The release builds carry no function names, so `RUST_BACKTRACE=1` adds little to a nightly's crash.
       render: text
 
   - type: input

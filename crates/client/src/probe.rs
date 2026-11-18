@@ -1,6 +1,7 @@
 //! `--net-probe`, the headless spectate client. Lives in the client crate
 //! because cue resolution needs the audio alias tables.
 
+use net::flags::{ET_TURRET, PM_DEAD};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 use vcod_common::net::trajectory::Trajectory;
@@ -146,7 +147,7 @@ fn nearest_v1(event: i32) -> i32 {
 /// it resolves drained events into sound cues; weapon-file cues (fire,
 /// reload) are not resolved, the probe loads no weapon files.
 ///
-/// `save_playerstate` turns it into the stage 4 capture instead: it answers
+/// `save_playerstate` turns it into the playerstate capture instead: it answers
 /// the stock team and weapon menus, writes the fixture once the spawn has
 /// settled and exits. It sends no nudge, which would walk the capture off the
 /// spawn point.
@@ -172,7 +173,7 @@ fn nearest_v1(event: i32) -> i32 {
 /// `pvs` joins the same way again, walks the route in [`pvs_route`] and prints
 /// the snapshot entity list at each station plus every add and removal along
 /// the way, answering what the server sends from where. `save.entities` walks
-/// the same route and writes the trace as the stage 5 fixture; `pvs` alone
+/// the same route and writes the trace as the entity-list fixture; `pvs` alone
 /// writes nothing.
 /// Which captures a probe run overwrites. Each is a separate flag because
 /// each pins a different thing; the flag docs in `main.rs` say why.
@@ -379,7 +380,7 @@ pub const MELEE_RANGE: f32 = 40.0;
 /// it, and far enough that the thrower is not inside its own blast radius.
 pub const GRENADE_RANGE: f32 = 300.0;
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn probe(
     addr: &str,
     save: Save,
@@ -583,10 +584,11 @@ pub fn probe(
         || save_turret
         || save_bump
         || save_legs
+        || save_shock
         || save_ladder.is_some()
         || probe_weapsel
         || scripted_role.is_some();
-    let mut client = NetClient::connect(addr)?;
+    let mut client = Connected(NetClient::connect(addr)?);
     if rate.is_some() || snaps.is_some() || name.is_some() {
         let def = net::Userinfo::default();
         client.set_userinfo(net::Userinfo {
@@ -920,9 +922,6 @@ pub fn probe(
                     // The join is entered by the first usercmd of the loop
                     // below, the way a retail client enters; nothing is sent
                     // here to start it.
-                    if !joining && say.is_empty() {
-                        client.send_reliable("say hello from vcod");
-                    }
                     say_from.get_or_insert(now);
                 }
                 NetEvent::Chat { text, team } => {
@@ -936,7 +935,7 @@ pub fn probe(
                 NetEvent::Dropped(r) => {
                     println!("dropped: {}", escape_ctl(&r));
                     return finish_probe(
-                        client,
+                        &mut client,
                         save_fixture,
                         save_snapshots,
                         tag.as_deref(),
@@ -1143,12 +1142,10 @@ pub fn probe(
         } else if save_combat && combat.running() {
             cmd = combat.cmd();
             weapon_switch = combat.weapon_override(ps_weapon);
-            // Only a step that declares itself a walk is steered. The turn
-            // used to ride every step, so the detour a stalled walk earned
-            // was still on the cmd of every later step that pushed forward
-            // while the fixture's `!input` recorded the untouched yaw: the
-            // ads capture's `ads_walk` ran 45 degrees off the line it says
-            // it ran, which its `viewangles` column now shows.
+            // Only a step that declares itself a walk is steered. A turn on
+            // every step would leave the detour a stalled walk earned on the
+            // cmd of every later step that pushes forward, while the
+            // fixture's `!input` records the untouched yaw.
             if combat.step_walks()
                 && let Some(o) = client
                     .snapshots()
@@ -1260,11 +1257,11 @@ pub fn probe(
             // Absolute: `send_frame` takes `delta_angles` off.
             cmd.angles[1] = deg_to_short(yaw);
         }
-        // A retail client sends the weapon it is holding on every cmd. The
-        // probe used to send 0, and retail's weapon-change check reads a
+        // A retail client sends the weapon it is holding on every cmd, and
+        // so does the probe: retail's weapon-change check reads a
         // `cmd.weapon` that differs from `ps.weapon` as a request to holster
-        // (docs/research/cod11-combat.md, section 1.8), so a capture taken
-        // with the zero can carry putaways the input never asked for. The
+        // (docs/research/cod11-combat.md, section 1.8), so a zero would
+        // carry putaways the input never asked for. The
         // byte only travels in the full usercmd branch, which a `wbuttons`,
         // `upmove` or `weapon` change forces (docs/protocol-1.1.md).
         // The ladder and weapon-select probes' byte is the play client's own.
@@ -1651,7 +1648,13 @@ pub fn probe(
             && let Some(s) = client.snapshots().newest()
             && shock.observe(now, s)
         {
-            shock.write(client.configstrings(), &join.team, &join.weapon, overwrite)?;
+            shock.write(
+                client.configstrings(),
+                &join.team,
+                &join.weapon,
+                tag.as_deref(),
+                overwrite,
+            )?;
             wrote_shock = true;
             break;
         }
@@ -1667,8 +1670,8 @@ pub fn probe(
         // The combat script steps only while alive and cannot resume from a
         // respawn elsewhere, and stock gametypes without `scr_forcerespawn`
         // never respawn a probe that presses nothing: a death (its own frag,
-        // or another client on a stock dm) used to idle out the run as
-        // "raise --probe-secs".
+        // or another client on a stock dm) would otherwise idle out the run
+        // as "raise --probe-secs".
         if save_combat
             && combat.running()
             && let Some(s) = client.snapshots().newest()
@@ -1814,7 +1817,6 @@ pub fn probe(
                             client.configstrings(),
                             &join,
                             tag.as_deref(),
-                            overwrite,
                         )?;
                     }
                     break;
@@ -2016,7 +2018,13 @@ pub fn probe(
     }
     if save_shock && !wrote_shock {
         println!("shock: the run ended before the script did, writing what it has");
-        shock.write(client.configstrings(), &join.team, &join.weapon, overwrite)?;
+        shock.write(
+            client.configstrings(),
+            &join.team,
+            &join.weapon,
+            tag.as_deref(),
+            overwrite,
+        )?;
     }
     if save_legs && !wrote_legs {
         println!("legs: the run ended before the script did, writing what it has");
@@ -2092,12 +2100,36 @@ pub fn probe(
         );
     }
     finish_probe(
-        client,
+        &mut client,
         save_fixture,
         save_snapshots,
         tag.as_deref(),
         overwrite,
     )
+}
+
+/// The probe's connection, which says `disconnect` however the run ends:
+/// an error out of the loop would otherwise leave a ghost player on the
+/// server until its timeout, and the next run would not be alone there.
+struct Connected(NetClient<UdpTransport>);
+
+impl std::ops::Deref for Connected {
+    type Target = NetClient<UdpTransport>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Connected {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for Connected {
+    fn drop(&mut self) {
+        self.0.disconnect();
+    }
 }
 
 /// One trajectory group as one line, `trDuration` included: a bounded type
@@ -2416,7 +2448,7 @@ fn sound_cs_alias_paren(configstrings: &[String], p: &net::protocol::Cod1Wire, i
 /// them (`gamestate-<tag>.bin`, `snapshots-<tag>.bin`), both written, and
 /// refuses to replace one without `--overwrite-fixture`.
 fn finish_probe(
-    mut client: NetClient<UdpTransport>,
+    client: &mut NetClient<UdpTransport>,
     save_fixture: bool,
     save_snapshots: bool,
     tag: Option<&str>,
@@ -2429,11 +2461,13 @@ fn finish_probe(
         _ => path.to_string(),
     };
     let save_fixture = save_fixture || (tag.is_some() && save_snapshots);
+    // The scratch copies under `tmp/` are rewritten freely; a fixture is not.
     let guard = |path: &str| -> anyhow::Result<()> {
-        if tag.is_some() && !overwrite && std::path::Path::new(path).exists() {
+        let scratch = path == SCRATCH_PATH || path == SNAP_SCRATCH_PATH;
+        if !scratch && !overwrite && std::path::Path::new(path).exists() {
             anyhow::bail!(
-                "{path} already exists; --capture-tag would replace it. Pass \
-                 --overwrite-fixture if that is what you mean, or pick another tag."
+                "{path} already exists; pass --overwrite-fixture to replace it, or \
+                 --capture-tag for a new name"
             );
         }
         Ok(())
@@ -2541,7 +2575,7 @@ fn write_configstrings_fixture(
         CONFIGSTRINGS_FIXTURE_DIR,
         &format!("{map}-{gametype}{}.txt", tag_suffix(tag)),
     )?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("configstrings: {written} non-empty slots -> {path}");
     Ok(())
 }
@@ -3260,7 +3294,7 @@ fn write_motion_fixture(
         PLAYERSTATE_FIXTURE_DIR,
         &format!("{map}-{gametype}-motion{}.txt", tag_suffix(tag)),
     )?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!(
         "motion: {} poses ({} fields each) -> {path}",
         motion.captured.len(),
@@ -3275,37 +3309,55 @@ const BUTTON_ATTACK: u8 = 0x01;
 /// The stock frag, the only grenade in a spawn loadout.
 const FRAG_WEAPON: &str = "fraggrenade_mp";
 
-/// Writes a fixture that `--capture-tag` named, refusing to land on a file
-/// that is already there unless `--overwrite-fixture` says to. A tag is free
-/// text and nothing stops it spelling a committed fixture's name --
-/// `--save-ads --capture-tag sniper` writes exactly the path the scoped-rifle
-/// evidence lives at -- and a capture against vcod's own server silently
-/// replacing the retail oracle is the one mistake this directory cannot
-/// survive. An untagged write is the documented way to retake a fixture and
-/// goes through `std::fs::write` unguarded.
-fn write_tagged_fixture(path: &str, out: &str, overwrite: bool) -> anyhow::Result<()> {
-    if !overwrite && std::path::Path::new(path).exists() {
-        anyhow::bail!(
-            "{path} already exists; --capture-tag would replace it. Pass \
-             --overwrite-fixture if that is what you mean, or pick another tag."
-        );
+/// Writes a fixture, refusing to land on a file that is already there
+/// unless `--overwrite-fixture` says to. The fixed names hold retail
+/// evidence, and a tag is free text that can spell one of them
+/// (`--save-ads --capture-tag sniper` is the scoped-rifle fixture's path):
+/// a capture against vcod's own server silently replacing the oracle is the
+/// one mistake these directories cannot survive. A refused capture is kept
+/// under `tmp/` rather than thrown away.
+fn write_capture(path: &str, out: &str, overwrite: bool) -> anyhow::Result<()> {
+    write_capture_in(path, out, overwrite, std::path::Path::new("tmp"))
+}
+
+/// [`write_capture`] keeping a refused capture in `keep` instead of `tmp/`.
+fn write_capture_in(
+    path: &str,
+    out: &str,
+    overwrite: bool,
+    keep: &std::path::Path,
+) -> anyhow::Result<()> {
+    if overwrite || !std::path::Path::new(path).exists() {
+        std::fs::write(path, out)?;
+        return Ok(());
     }
-    std::fs::write(path, out)?;
-    Ok(())
+    let kept = refused_copy(path, keep);
+    let saved = kept
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&kept, out));
+    let kept = match saved {
+        Ok(()) => format!("this capture is in {}", kept.display()),
+        Err(e) => format!("keeping it in {} failed too: {e}", kept.display()),
+    };
+    anyhow::bail!(
+        "{path} already exists; pass --overwrite-fixture to replace it, or \
+         --capture-tag for a new name ({kept})"
+    )
+}
+
+/// Where [`write_capture`] keeps a capture it would not write: `keep` and
+/// the fixture's file name.
+fn refused_copy(path: &str, keep: &std::path::Path) -> std::path::PathBuf {
+    let name = std::path::Path::new(path)
+        .file_name()
+        .map_or_else(|| "capture.txt".into(), |n| n.to_os_string());
+    keep.join(name)
 }
 
 /// `-<tag>` for a `--capture-tag`, empty without one.
 pub(crate) fn tag_suffix(tag: Option<&str>) -> String {
     tag.map(|t| format!("-{t}")).unwrap_or_default()
-}
-
-/// A tagged write goes through `write_tagged_fixture`'s guard; an untagged
-/// one is the documented retake and writes unguarded.
-fn write_capture(path: &str, out: &str, tag: Option<&str>, overwrite: bool) -> anyhow::Result<()> {
-    match tag {
-        Some(_) => write_tagged_fixture(path, out, overwrite),
-        None => Ok(std::fs::write(path, out)?),
-    }
 }
 
 /// A weapon's `cmd.weapon` byte: its slot in configstring 7, which is 1-based
@@ -3982,8 +4034,8 @@ struct StepResult {
 }
 
 /// Walks [`combat_script`] and keeps every snapshot along the way. A settled
-/// sample cannot hold a shot -- the event ring has four slots and overwrites
-/// as it goes -- so this mode records the trace itself and the settled
+/// sample cannot hold a shot (the event ring has four slots and overwrites
+/// as it goes), so this mode records the trace itself and the settled
 /// playerstate only as the step's tail.
 struct CombatProbe {
     steps: Vec<CombatStep>,
@@ -4222,9 +4274,9 @@ impl CombatProbe {
 
     /// Holds the step's base input, and taps only once its clock runs: a step
     /// waiting for the weapon to read ready must not be tapping while it waits.
-    /// A walk stands still until its clock runs too: `advance` used to walk
-    /// through the join's settle, so the `# spawn` pose (and the yaw a gate
-    /// rebases `!input` on) was taken after a stall turn the input never had.
+    /// A walk stands still until its clock runs too: walking through the
+    /// join's settle would take the `# spawn` pose (and the yaw a gate rebases
+    /// `!input` on) after a stall turn the input never had.
     fn cmd(&self) -> net::msg::UserCmd {
         match (self.steps.get(self.idx), self.started) {
             (Some(step), Some(t)) => step.cmd_at(t.elapsed()),
@@ -4964,10 +5016,7 @@ leanf={:.4} commandTime={}\n",
         &format!("{map}-{gametype}-{}{suffix}.txt", combat.kind),
     )?;
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
-    match tag {
-        Some(_) => write_tagged_fixture(&path, &out, overwrite)?,
-        None => std::fs::write(&path, out)?,
-    }
+    write_capture(&path, &out, overwrite)?;
     println!(
         "{}: {} steps, {} traced snapshots -> {path}",
         combat.kind,
@@ -6477,7 +6526,7 @@ impl HitProbe {
 /// where `role` is the script's own prefix and the half: `hit-shooter`,
 /// `grenade-target` and so on. Both halves carry the same header keys, so a
 /// gate reads either the same way; `body` is the role's own section.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn write_hit_fixture(
     role: &str,
     configstrings: &[String],
@@ -6543,7 +6592,7 @@ fn write_hit_fixture(
         &format!("{map}-{gametype}-{role}{}.txt", tag_suffix(tag)),
     )?;
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("hit: {role} -> {path}");
     Ok(())
 }
@@ -7058,7 +7107,7 @@ first_snapshot_after_gamestate_ms={}\n",
         &format!("{map}-{gametype}-{role}{}.txt", tag_suffix(tag)),
     )?;
     std::fs::create_dir_all(NETCHAN_FIXTURE_DIR)?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("netchan: {role} -> {path}");
     Ok(())
 }
@@ -7125,7 +7174,7 @@ fn write_scripted_fixture(
         GAMETYPES_FIXTURE_DIR,
         &format!("{map}-{gametype}-{role}{}.txt", tag_suffix(tag)),
     )?;
-    write_tagged_fixture(&path, &out, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("scripted: {} lines -> {path}", capture.lines.len());
     Ok(())
 }
@@ -7197,7 +7246,7 @@ fn write_playerstate_fixture(
         &format!("{map}-{gametype}{}.txt", tag_suffix(tag)),
     )?;
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!(
         "playerstate: {} fields, {}, {} serverCommands -> {path}",
         snap.ps.fields.len(),
@@ -7230,10 +7279,10 @@ struct ViewHold {
 /// read off `delta_angles`: `SetClientViewAngle` sets them to the spawn's
 /// yaw less the last cmd's angle, and that cmd was the asked-for yaw less the
 /// spectating `delta_angles` (cod15-movement.md, "The spawn's lie-down";
-/// cod11-combat.md 9.2). Before 2026-10-17 this took `delta_angles` off too,
-/// so the view followed every push the other way, and a prone swing past the
-/// cap oscillated (playerstate_motion_ab.rs); until the second fix that day
-/// it latched the first spawned view, so every capture faced world yaw 0.
+/// cod11-combat.md 9.2). Taking `delta_angles` off as well would turn the
+/// view against every push, and a prone swing past the cap would oscillate
+/// (playerstate_motion_ab.rs); latching the first spawned view would face
+/// every capture at world yaw 0.
 fn hold_view_yaw(
     cmd: &mut net::msg::UserCmd,
     client: &NetClient<UdpTransport>,
@@ -7336,7 +7385,9 @@ impl SlopeStats {
             let gained = ((seq - prev) & 0xff).min(4);
             for i in (seq - gained)..seq {
                 let slot = (i & 3) as usize;
-                if ev_v1(snap.ps.field_i32(p, &format!("events[{slot}]"))) == 143 {
+                if ev_v1(snap.ps.field_i32(p, &format!("events[{slot}]")))
+                    == net::event_ids::EV_STEP_VIEW
+                {
                     parms.push(snap.ps.field_i32(p, &format!("eventParms[{slot}]")) - 128);
                 }
             }
@@ -7502,7 +7553,7 @@ impl SlopeCapture {
                     ev_v1(i(&format!("events[{slot}]"))),
                     i(&format!("eventParms[{slot}]")),
                 );
-                if ev == 143 {
+                if ev == net::event_ids::EV_STEP_VIEW {
                     steps.push((parm - 128).to_string());
                 }
                 events.push(format!("{ev}:{parm}"));
@@ -7650,7 +7701,6 @@ enum SlopeWalk {
 /// Writes the route walk as `<map>-<gametype>-slope-<cmd_ms>ms.txt`: `!cmd`
 /// lines carry the usercmd as sent, `!snap` lines the playerstate the server
 /// answered with, interleaved in the order the probe saw them.
-#[allow(clippy::too_many_arguments)]
 fn write_slope_fixture(
     configstrings: &[String],
     join: &JoinProbe,
@@ -7859,10 +7909,7 @@ fn write_slope_fixture(
         PLAYERSTATE_FIXTURE_DIR,
         &format!("{map}-{gametype}-slope-{cmd_ms}ms{suffix}.txt"),
     )?;
-    match tag {
-        Some(_) => write_tagged_fixture(&path, &out, overwrite)?,
-        None => std::fs::write(&path, &out)?,
-    }
+    write_capture(&path, &out, overwrite)?;
     println!(
         "slope: {} cmds, {} snapshots -> {path}",
         capture.cmds.len(),
@@ -9037,7 +9084,7 @@ const TRIGGER_NEAR: f32 = 200.0;
 /// A leg's budget is its distance at this speed plus [`TRIGGER_LEG_SLACK`].
 /// Well under retail's ~190 u/s run: the walk detours around geometry and a
 /// budget set at the straight-line speed gives up on every target that is
-/// not in the open. A flat budget does not work either -- one long enough for
+/// not in the open. A flat budget does not work either: one long enough for
 /// a far target spends the run on a near one behind a wall.
 const TRIGGER_LEG_SPEED: f32 = 70.0;
 const TRIGGER_LEG_SLACK: Duration = Duration::from_secs(6);
@@ -9055,8 +9102,8 @@ const TRIGGER_STEER_ARC: i32 = 165;
 /// (the movement constants table in docs/research/cod11-mantle.md).
 const TRIGGER_STEP_HEIGHT: f32 = 18.0;
 /// A walker that has not left this box in [`TRIGGER_WEDGE`] is wedged
-/// somewhere the steer cannot get it out of -- a pit, a doorway it rebounds
-/// in -- and kills itself to respawn somewhere else. One run lost 100 s of
+/// somewhere the steer cannot get it out of (a pit, a doorway it rebounds
+/// in) and kills itself to respawn somewhere else. One run lost 100 s of
 /// its 125 to a single such spot.
 const TRIGGER_WEDGE_UNITS: f32 = 80.0;
 const TRIGGER_WEDGE: Duration = Duration::from_secs(12);
@@ -9067,8 +9114,8 @@ const TRIGGER_WEDGE: Duration = Duration::from_secs(12);
 ///
 /// A wander does not do: mp_pavlov is dense enough that a blind heading spends
 /// a whole run inside the town, and a first capture taken that way crossed one
-/// trigger in 190 s. The walk is not the measurement -- the retail server's own
-/// log is -- so steering it at the answer costs nothing and buys the coverage.
+/// trigger in 190 s. The walk is not the measurement (the retail server's own
+/// log is), so steering it at the answer costs nothing and buys the coverage.
 #[derive(Default)]
 struct TriggerProbe {
     boxes: Vec<TriggerBox>,
@@ -10053,9 +10100,6 @@ impl SdProbe {
 /// (`docs/research/cod11-gsc-object-model.md`, the objective record).
 const SD_STATE_CURRENT: i32 = 4;
 
-/// `pmove_t`'s dead state, the one a killed player sits at.
-const PM_DEAD: i32 = 6;
-
 /// The pair's fixture: the header, the notes and one `[phase <name>]` block
 /// per phase, each holding its cmds interleaved with its traces by server time.
 fn write_sd_fixture(
@@ -10226,7 +10270,7 @@ angles={},{},{}\n",
         &format!("{map}-sd-{role}{}.txt", tag_suffix(tag)),
     )?;
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("sd: {role} -> {path}");
     Ok(())
 }
@@ -10874,7 +10918,7 @@ fn write_pickup_fixture(
         ITEMS_FIXTURE_DIR,
         &format!("{map}-dm-pickup{}.txt", tag_suffix(tag)),
     )?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("pickup: wrote {path}");
     Ok(())
 }
@@ -10907,7 +10951,6 @@ const TURRET_FIRE_YAW: f32 = 30.0;
 const TURRET_FIRE_PITCH: f32 = 10.0;
 const TURRET_PITCH_EDGE: f32 = 60.0;
 const TURRET_YAW_EDGE: f32 = 90.0;
-const ET_TURRET: i32 = 11;
 /// The strafe stops once the bearing off the gun's "behind" direction passes
 /// this, clear of the stock gun's 45-degree arc...
 const TURRET_REFUSE_BEARING: f32 = 50.0;
@@ -11712,7 +11755,7 @@ fn write_turret_fixture(
     match tag {
         Some(tag) => {
             let path = fixture_path(TURRET_FIXTURE_DIR, &format!("{map}-dm-turret-{tag}.txt"))?;
-            write_tagged_fixture(&path, &out, overwrite)?;
+            write_capture(&path, &out, overwrite)?;
             println!("turret: wrote {path}");
         }
         None => {
@@ -11775,7 +11818,6 @@ const BUMP_TARGET_SCHEDULE: [(Duration, BumpStance); 4] = [
 ];
 /// The target starts its schedule without a walker after this.
 const BUMP_TARGET_WAIT: Duration = Duration::from_secs(120);
-const GROUND_NONE: i32 = 1023;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BumpStance {
@@ -11810,11 +11852,11 @@ impl BumpStance {
         }
     }
 
-    /// From `pm_flags`: 0x1 prone, 0x2 ducked.
+    /// From `pm_flags`: prone, else ducked.
     fn of_pm_flags(f: i32) -> Self {
-        if f & 1 != 0 {
+        if f & net::flags::PMF_PRONE != 0 {
             BumpStance::Prone
-        } else if f & 2 != 0 {
+        } else if f & net::flags::PMF_DUCKED != 0 {
             BumpStance::Crouch
         } else {
             BumpStance::Stand
@@ -12148,7 +12190,7 @@ impl FallProbe {
         // a fall moves only the origin, so print the first airborne frames too
         key.push(i("commandTime") * (key[0] == net::protocol::ENTITYNUM_NONE as i32) as i32);
         // and a corpse's slide, which moves nothing else either
-        if i("pm_type") == 6 {
+        if i("pm_type") == PM_DEAD {
             key.extend([i("origin[0]"), i("origin[1]"), i("origin[2]")]);
         }
         // and a prone body's bend, printed once it is non-zero
@@ -12156,7 +12198,7 @@ impl FallProbe {
         key.extend(bend);
         // and the prone heading, which 1.1's flat body never shows otherwise
         let heading = i("proneDirection");
-        let prone = i("pm_flags") & 1 != 0;
+        let prone = i("pm_flags") & net::flags::PMF_PRONE != 0;
         key.push(heading * prone as i32);
         // and the body's clips, which a prone turn changes without a move
         let anims = [i("legsAnim"), i("torsoAnim")];
@@ -12792,7 +12834,7 @@ fn write_ladder_fixture(
         PLAYERSTATE_FIXTURE_DIR,
         &format!("{map}-dm-ladder{}.txt", tag_suffix(tag)),
     )?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("ladder: {} lines -> {path}", lines.len());
     Ok(())
 }
@@ -12850,7 +12892,7 @@ fn write_weapsel_fixture(
         PLAYERSTATE_FIXTURE_DIR,
         &format!("{map}-dm-weapsel{}.txt", tag_suffix(tag)),
     )?;
-    write_capture(&path, &out, tag, overwrite)?;
+    write_capture(&path, &out, overwrite)?;
     println!("weapsel: wrote {path}");
     Ok(())
 }
@@ -12916,7 +12958,7 @@ impl CompassProbe {
         let players: Vec<String> = snap
             .entities
             .iter()
-            .filter(|(_, e)| e.field_i32(p, "eType") == 1)
+            .filter(|(_, e)| e.field_i32(p, "eType") == net::flags::ET_PLAYER)
             .map(|(n, e)| {
                 let t = Trajectory::read(e, p, "pos");
                 format!(
@@ -13064,8 +13106,9 @@ origin={:.3},{:.3},{:.3}",
         }
         self.present = Some(snap.entities.keys().copied().collect());
         for (&num, ent) in &snap.entities {
-            // 8 a script mover, 5 a `func_bobbing` or `func_pendulum`.
-            if !matches!(ent.field_i32(p, "eType"), 5 | 8) {
+            // A script mover, or a `func_bobbing` or `func_pendulum`.
+            let et = ent.field_i32(p, "eType");
+            if et != net::flags::ET_SCRIPTMOVER && et != net::flags::ET_MOVER {
                 continue;
             }
             let key = [
@@ -13168,7 +13211,7 @@ impl KillcamProbe {
         let ms = self.ms(now);
         let i = |n: &str| s.ps.field_i32(p, n);
         let (client_num, pm_type, pm_flags) = (i("clientNum"), i("pm_type"), i("pm_flags"));
-        let following = pm_flags & 0x10000 != 0;
+        let following = pm_flags & net::flags::PMF_FOLLOW != 0;
         let alive = pm_type == PM_NORMAL && client_num == me && !following;
 
         if alive {
@@ -13395,7 +13438,10 @@ impl BumpTarget {
         let i = |n: &str| snap.ps.field_i32(p, n);
         let f = |n: &str| snap.ps.field_f32(p, n);
         let moving = f("velocity[0]").hypot(f("velocity[1]")) > 1.0;
-        if moving || i("pm_time") != 0 || i("pm_flags") & 0x100 != 0 {
+        if moving
+            || i("pm_time") != 0
+            || i("pm_flags") & vcod_common::pmove::PMF_TIME_KNOCKBACK != 0
+        {
             println!(
                 "BUMPT: !snap msg={} t={} ct={} origin={},{},{} vel={},{},{} ground={} pm_flags={} pm_time={}",
                 snap.message_num,
@@ -13819,7 +13865,7 @@ impl BumpProbe {
             ));
         }
         if self.phase == BumpPhase::Jump {
-            if self.ground == GROUND_NONE {
+            if self.ground == net::protocol::ENTITYNUM_NONE as i32 {
                 self.airborne = true;
             } else if self.airborne {
                 self.landed = true;
@@ -14020,10 +14066,7 @@ fn write_bump_fixture(
         PLAYERSTATE_FIXTURE_DIR,
         &format!("{map}-dm-bump-{role}.txt"),
     )?;
-    match tag {
-        Some(_) => write_tagged_fixture(&path, &out, overwrite)?,
-        None => std::fs::write(&path, &out)?,
-    }
+    write_capture(&path, &out, overwrite)?;
     println!("bump: {} lines -> {path}", bp.lines.len());
     Ok(())
 }
@@ -14072,7 +14115,7 @@ const ENTITIES_FIXTURE_DIR: &str = concat!(
 /// sent it there.
 ///
 /// The origin is the point of the file. A capture cannot be told to stand
-/// anywhere -- `setviewpos` is refused on a dedicated server -- so the gate
+/// anywhere (`setviewpos` is refused on a dedicated server), so the gate
 /// does not replay the route, it replays each recorded origin
 /// (docs/protocol-1.1.md, "Which entities a client is sent").
 fn write_entities_fixture(
@@ -14080,7 +14123,6 @@ fn write_entities_fixture(
     configstrings: &[String],
     join: &JoinProbe,
     tag: Option<&str>,
-    overwrite: bool,
 ) -> anyhow::Result<()> {
     let p = wire();
     let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
@@ -14168,10 +14210,9 @@ sample of a set\n"
     }
 
     std::fs::create_dir_all(ENTITIES_FIXTURE_DIR)?;
-    match tag {
-        Some(_) => write_tagged_fixture(&path, &out, overwrite)?,
-        None => std::fs::write(&path, out)?,
-    }
+    // Each run's samples join the file's: it is this mode's append target,
+    // so an existing file is no reason to refuse.
+    std::fs::write(&path, &out)?;
     println!(
         "entities: {} stations this run, {} samples in the file ({} read, {} dropped as \
          repeats), {} distinct entity sets -> {path}",
@@ -15337,24 +15378,25 @@ mod tests {
         );
     }
 
-    /// A tag is free text and can spell a committed fixture's name, so a
-    /// tagged write refuses a path that is already there. `--overwrite-fixture`
-    /// is the one way past it; the first write of a name is unaffected.
+    /// A fixture name already on disk, tagged or not, is refused without
+    /// `--overwrite-fixture`, and the refused capture is kept under `tmp/`.
     #[test]
-    fn a_tagged_write_refuses_to_replace_a_fixture() {
-        let dir = std::env::temp_dir().join(format!("vcod-tag-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("mp_carentan-tdm-ads-sniper.txt");
+    fn a_write_refuses_to_replace_a_fixture() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mp_carentan-tdm-ads-sniper.txt");
         let path = path.to_str().unwrap();
 
-        write_tagged_fixture(path, "retail", false).expect("a name nothing holds yet");
-        let err = write_tagged_fixture(path, "ours", false)
-            .expect_err("the second write lands on the first");
+        let keep = dir.path().join("tmp");
+        let write = |out, overwrite| write_capture_in(path, out, overwrite, &keep);
+
+        write("retail", false).expect("a name nothing holds yet");
+        let err = write("ours", false).expect_err("the second write lands on the first");
         assert!(err.to_string().contains("--overwrite-fixture"), "{err}");
         assert_eq!(std::fs::read_to_string(path).unwrap(), "retail");
+        let kept = keep.join("mp_carentan-tdm-ads-sniper.txt");
+        assert_eq!(std::fs::read_to_string(kept).unwrap(), "ours");
 
-        write_tagged_fixture(path, "ours", true).expect("the flag says to");
+        write("ours", true).expect("the flag says to");
         assert_eq!(std::fs::read_to_string(path).unwrap(), "ours");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

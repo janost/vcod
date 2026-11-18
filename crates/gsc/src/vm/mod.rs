@@ -531,11 +531,6 @@ impl Cx<'_> {
         self.heap.get_field(s, f)
     }
 
-    /// How many fields the struct holds.
-    pub fn field_count(&self, s: StructId) -> usize {
-        self.heap.struct_fields(s).len()
-    }
-
     pub fn set_field(&mut self, s: StructId, f: Atom, v: Value) {
         self.heap.set_field(s, f, v);
     }
@@ -766,7 +761,7 @@ pub struct Vm {
     /// fail it (`probe_level_bracket_read`).
     struct_index_reads_undefined: bool,
     /// `.size` on an array or string, interned once here rather than per
-    /// `LoadField` — `_load.gsc` reads it inside three loops.
+    /// `LoadField`: `_load.gsc` reads it inside three loops.
     size_atom: Atom,
     /// Kept in start order so a `run_frame` walk, and a `notify` wake, are
     /// both deterministic.
@@ -1229,7 +1224,7 @@ impl Vm {
     /// One error as `file::func:line: Kind`.
     ///
     /// `ErrorKind`'s own `Debug` prints `MissingBuiltin`'s `Atom` as a bare
-    /// index (`MissingBuiltin(Atom(43))`) -- useless as the work list this
+    /// index (`MissingBuiltin(Atom(43))`): useless as the work list this
     /// exists to be, since nothing else here names the builtin. `ErrorKind`
     /// keeps the `Atom` for its callers, which match on it; only the
     /// rendered text resolves it.
@@ -1259,7 +1254,7 @@ impl Vm {
     /// The struct/array store, for a host that needs to allocate an array
     /// or struct (`getentarray`, `spawnstruct`) or read/write a field or
     /// element from outside the instruction loop. `Heap`'s own methods are
-    /// the API — bounds-checked, so an id the host mishandles reads
+    /// the API: bounds-checked, so an id the host mishandles reads
     /// `Undefined` or drops a write rather than panicking.
     pub fn heap(&self) -> &Heap {
         &self.heap
@@ -1345,7 +1340,7 @@ impl Vm {
     /// stack walk instead of installing it. That check is the only thing
     /// standing between a compiler bug and a panic in `step_frames` (which
     /// trusts the stack discipline it proves), so it has to run here, on
-    /// every function this ever accepts — not just in the compiler's own
+    /// every function this ever accepts, not just in the compiler's own
     /// test suite, which is the only place it ran before. Also rejects a
     /// function whose `FuncRef` collides with one already installed, rather
     /// than silently overwriting it. Both checks run over the whole batch
@@ -1994,7 +1989,7 @@ pub(crate) mod tests {
 
     /// Before `Target`, `WaitTill` accepted only `Value::Entity` and a
     /// `level`/`game` receiver was a `BadType` script error, not a
-    /// suspend — every stock gametype's round-end wait would have failed
+    /// suspend: every stock gametype's round-end wait would have failed
     /// outright rather than blocking.
     #[test]
     fn level_waittill_suspends_rather_than_failing_on_receiver_type() {
@@ -2008,10 +2003,8 @@ pub(crate) mod tests {
         assert!(matches!(e.kind, ErrorKind::SuspendedInImmediateCall));
     }
 
-    /// `Notify`/`EndOn` used to pop and discard their receiver with no
-    /// type check at all, so this was silently accepted either way. Now
-    /// that the receiver is resolved to a `Target`, a `level`/`game`
-    /// receiver must still be accepted, not newly rejected.
+    /// `Notify`/`EndOn` resolve their receiver to a `Target`, and a
+    /// `level`/`game` receiver must be accepted there, not rejected.
     #[test]
     fn level_notify_and_endon_accept_a_struct_receiver() {
         let (v, _, _) = run(r#"main() { level notify("go"); level endon("stop"); return 1; }"#);

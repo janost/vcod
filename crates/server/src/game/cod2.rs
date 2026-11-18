@@ -83,17 +83,6 @@ pub fn lag_time(stored: i32, cmd_time: i32, level_time: i32) -> i32 {
     }
 }
 
-/// A bullet's `timeOffset`: `G_Damage`'s tenth argument from the bullet
-/// path is `level.time` minus the shot's time (0x811fe90's caller passes
-/// `DAT_0864c56c - param_9`), and `FireWeaponAntiLag` (0x8120870) is
-/// handed the client's [`lag_time`] under `g_antilag` 1, its default
-/// (`Dvar_RegisterBool("g_antilag", 1, ..)`, 0x8111842..), else
-/// `level.time`. Every other `G_Damage` caller (melee, blasts, falls,
-/// triggers, `finishPlayerDamage`) passes 0. VERIFIED, the call sites.
-pub fn time_offset(level_time: i32, lag_time: i32, antilag: bool) -> i32 {
-    if antilag { level_time - lag_time } else { 0 }
-}
-
 /// The notify CoD2's `ClientEvents` (0x80f52da) raises on the player for a
 /// playerstate event, events 168..172, VERIFIED (cod2-gsc-diff.md 4.2).
 pub fn binocular_notify(event: i32) -> Option<&'static str> {
@@ -548,7 +537,6 @@ impl Cod2Level {
 
     /// The level over the map's parts, which the engine's collision and the
     /// combat's traces share.
-    #[allow(clippy::too_many_arguments)]
     pub fn load_level(
         fs: Rc<Pk3Fs>,
         parts: PartsSource,
@@ -1938,8 +1926,6 @@ mod tests {
         assert_eq!(lag_time(950, 1000, 1000), 1000);
         assert_eq!(lag_time(950, 100, 5000), 4000);
         assert_eq!(lag_time(950, i32::MIN, 1000), 950);
-        assert_eq!(time_offset(1000, 950, true), 50);
-        assert_eq!(time_offset(1000, 950, false), 0);
     }
 
     /// `script_struct` blocks become `level.struct` entries in lump order,

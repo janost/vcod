@@ -13,7 +13,7 @@ use crate::net::flags::{
     PMF_PRONE_BLOCKED, PMF_PRONE_DIVE, PMF_RESPAWNED, PMF_SPRINT_V22, PMF_WINDED_V22,
 };
 use crate::net::msg::{self, UserCmd};
-use crate::net::protocol::{ENTITYNUM_NONE, Protocol};
+use crate::net::protocol::{Cod1Wire, ENTITYNUM_NONE};
 use crate::weapon::WeaponDef;
 use glam::Vec3;
 
@@ -53,7 +53,7 @@ pub fn on_foot(pm_type: i32) -> bool {
 /// whose `server_time` equals `commandTime`, which is the only source for the
 /// few sim fields the wire does not carry; `None` leaves them at their spawn
 /// values.
-pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>) -> Predicted {
+pub fn from_wire(p: &Cod1Wire, w: &msg::PlayerState, last_cmd: Option<&UserCmd>) -> Predicted {
     let int = |name: &str| w.field_i32(p, name);
     // A NaN or infinite float is no retail state: 0, as the guards in
     // `crate::fguard` expect.

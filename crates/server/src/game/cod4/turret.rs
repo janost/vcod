@@ -16,7 +16,7 @@ use vcod_cod4::net::delta::{ENTITYNUM_NONE, EntityState};
 use vcod_cod4::pmove::{self, ef, pmf};
 use vcod_gsc::{EntId, Value};
 
-use super::level::{Cod4Level, PsExt};
+use super::level::{Cod4Level, PsExt, ps};
 use crate::game::turret::{TurretRecord, TurretStance};
 use vcod_common::pmove::Stance;
 
@@ -112,14 +112,14 @@ fn barrel_for(rec: &TurretRecord, view: [f32; 3], gun: [f32; 3]) -> [f32; 3] {
 }
 
 /// A playerstate vector field `name[0..3]` as floats.
-fn ps_vec(ps: &vcod_cod4::net::delta::PlayerState, name: &str) -> [f32; 3] {
-    [0, 1, 2].map(|k| f32::from_bits(ps.word(&format!("{name}[{k}]"))))
+fn ps_vec(ps: &vcod_cod4::net::delta::PlayerState, words: [usize; 3]) -> [f32; 3] {
+    words.map(|w| f32::from_bits(ps.word(w)))
 }
 
 /// `viewlocked` and the entity it is locked on.
 fn lock_view(ps: &mut vcod_cod4::net::delta::PlayerState, mode: u32, on: u32) {
-    ps.set("viewlocked", mode);
-    ps.set("viewlocked_entNum", on);
+    ps.set(ps!("viewlocked"), mode);
+    ps.set(ps!("viewlocked_entNum"), on);
 }
 
 /// The stance a body stands in by its `pm_flags`, prone before crouched.
@@ -261,20 +261,20 @@ impl Cod4Level {
         };
         let ps = &mut p.ps;
         // The gun's side: where and how he stood, the barrel on his view.
-        rec.angles2 = barrel_for(rec, ps_vec(ps, "viewangles"), gun.angles);
-        rec.mount_stance = Some(stance_of(ps.word("pm_flags")));
-        rec.mount_origin = ps_vec(ps, "origin");
+        rec.angles2 = barrel_for(rec, ps_vec(ps, ps!(3 "viewangles")), gun.angles);
+        rec.mount_stance = Some(stance_of(ps.word(ps!("pm_flags"))));
+        rec.mount_origin = ps_vec(ps, ps!(3 "origin"));
         rec.fresh_mount = true;
         rec.busy = 1;
         rec.owner = Some(slot);
         // His side: the clamp on the arcs, the gun's stance, the lock.
         for (axis, arc) in Arc::pair(rec).into_iter().enumerate() {
             let (base, range) = arc.view_clamp(gun.angles[axis]);
-            ps.setf(&format!("viewAngleClampBase[{axis}]"), base);
-            ps.setf(&format!("viewAngleClampRange[{axis}]"), range);
+            ps.setf(ps!(2 "viewAngleClampBase")[axis], base);
+            ps.setf(ps!(2 "viewAngleClampRange")[axis], range);
         }
-        let flags = ps.word("eFlags") & !ef::TURRET | gun_stance_bits(rec.def.stance);
-        ps.set("eFlags", flags);
+        let flags = ps.word(ps!("eFlags")) & !ef::TURRET | gun_stance_bits(rec.def.stance);
+        ps.set(ps!("eFlags"), flags);
         lock_view(ps, VIEWLOCK_FULL, id.0);
         p.turret_active = 1;
     }
@@ -286,7 +286,7 @@ impl Cod4Level {
         let Some(p) = self.players[slot].as_ref() else {
             return;
         };
-        if p.ps.word("otherFlags") & 4 == 0 || p.ps.word("eFlags") & ef::TURRET == 0 {
+        if p.ps.word(ps!("otherFlags")) & 4 == 0 || p.ps.word(ps!("eFlags")) & ef::TURRET == 0 {
             return;
         }
         let Some(id) = self.manned_gun(slot) else {
@@ -347,7 +347,7 @@ impl Cod4Level {
             == Some(crate::follow::SessionState::Playing);
         let last_stand = self.players[slot]
             .as_ref()
-            .is_some_and(|p| p.ps.word("pm_type") == super::level::PM_LASTSTAND);
+            .is_some_and(|p| p.ps.word(ps!("pm_type")) == super::level::PM_LASTSTAND);
         if active != 1 || !playing || last_stand {
             self.stop_using_turret(id);
         } else {
@@ -380,14 +380,14 @@ impl Cod4Level {
             return;
         };
         lock_view(&mut p.ps, VIEWLOCK_FULL, id.0);
-        let view = ps_vec(&p.ps, "viewangles");
+        let view = ps_vec(&p.ps, ps!(3 "viewangles"));
         rec.angles2 = barrel_for(rec, view, gun.angles);
         if std::mem::take(&mut rec.fresh_mount) {
             rec.teleport_bit = !rec.teleport_bit;
         }
         rec.firing = false;
 
-        let held = attack && p.ps.word("pm_flags") & pmf::FROZEN == 0;
+        let held = attack && p.ps.word(ps!("pm_flags")) & pmf::FROZEN == 0;
         let single_shot = def.fire_type == FIRETYPE_SINGLESHOT;
         if !round_due(&mut rec.cooldown_ms, &mut p.trigger_down, held, single_shot) {
             return;
@@ -395,7 +395,7 @@ impl Cod4Level {
         rec.cooldown_ms = def.fire_time;
         rec.loop_left_ms = 3 * def.fire_time;
         rec.firing = true;
-        p.ps.set("viewlocked", VIEWLOCK_JITTER);
+        p.ps.set(ps!("viewlocked"), VIEWLOCK_JITTER);
         let (barrel, tags) = (rec.angles2, rec.tags);
         let spread = self.gun_file(id).map_or(0.0, |f| f.player_spread.max(0.0));
         self.fire_lead(slot, id, &def, gun, barrel, tags, spread, view);
@@ -424,11 +424,10 @@ impl Cod4Level {
         let Some(p) = self.players[slot].as_ref() else {
             return;
         };
-        let word = |k: &str| p.ps.word(k);
-        let legs = word("legsAnim") as i32;
-        let origin =
-            Vec3::from_array([0, 1, 2].map(|k| f32::from_bits(word(&format!("origin[{k}]")))));
-        let eye = f32::from_bits(word("viewHeightCurrent"));
+        let word = |k: usize| p.ps.word(k);
+        let legs = word(ps!("legsAnim")) as i32;
+        let origin = Vec3::from_array(ps!(3 "origin").map(|k| f32::from_bits(word(k))));
+        let eye = f32::from_bits(word(ps!("viewHeightCurrent")));
         let Some(src) = self.combat.src.clone() else {
             return;
         };
@@ -471,7 +470,7 @@ impl Cod4Level {
         }
         if let Some(p) = self.players[slot].as_mut() {
             for k in 0..3 {
-                p.ps.setf(&format!("origin[{k}]"), at[k]);
+                p.ps.setf(ps!(3 "origin")[k], at[k]);
             }
         }
         self.rt.set_client_origin(slot, at.to_array());
@@ -483,7 +482,7 @@ impl Cod4Level {
     /// at `level.time` (no antilag), its impacts naming the gun as their
     /// shooter (cod4-effects.md 12.4), then `EV_FIRE_WEAPON_MG42` on the
     /// gun with the gunner's number.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn fire_lead(
         &mut self,
         slot: usize,
@@ -556,10 +555,10 @@ impl Cod4Level {
         }
         p.ps = body.to_wire(&p.ps);
 
-        let flags = (p.ps.word("eFlags") ^ 2) & !ef::TURRET;
-        p.ps.set("eFlags", flags);
+        let flags = (p.ps.word(ps!("eFlags")) ^ 2) & !ef::TURRET;
+        p.ps.set(ps!("eFlags"), flags);
         let to = [spot[0], spot[1], spot[2] + 1.0];
-        let yaw = ps_vec(&p.ps, "viewangles")[1];
+        let yaw = ps_vec(&p.ps, ps!(3 "viewangles"))[1];
         let cmd = p.cmd;
         super::level::place_player(&mut p.ps, to, [0.0, yaw, 0.0], Some(&cmd));
         lock_view(&mut p.ps, 0, ENTITYNUM_NONE);
@@ -640,6 +639,7 @@ impl Cod4Level {
 
     /// Slot `slot` uses gun entity `gun` as the use key would, for a
     /// client test that needs another player on a gun; whether he is on it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn use_turret_for_test(&mut self, slot: usize, gun: u32) -> bool {
         let Some(id) = self.rt.host.ents.handle(gun) else {
             return false;
@@ -666,9 +666,9 @@ impl Cod4Level {
         };
         let s = self.hint_slot(Some(&drop));
         if let Some(p) = self.players[slot].as_mut() {
-            p.ps.set("cursorHintEntIndex", ENTITYNUM_NONE);
-            p.ps.set("cursorHint", w + 4);
-            p.ps.set("cursorHintString", s as u32);
+            p.ps.set(ps!("cursorHintEntIndex"), ENTITYNUM_NONE);
+            p.ps.set(ps!("cursorHint"), w + 4);
+            p.ps.set(ps!("cursorHintString"), s as u32);
         }
     }
 }

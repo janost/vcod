@@ -38,6 +38,7 @@ pub mod skeleton;
 pub mod static_light;
 pub mod sun;
 pub mod terrain;
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod text;
 pub mod treecheck;
