@@ -336,6 +336,42 @@ fn validation_errors() {
     assert!(e.contains("leaves lump 22"), "{e}");
 }
 
+/// A node cycle, a node with two parents and a lump-34 node listed by two
+/// parents are refused at parse, before any walker follows them.
+#[test]
+fn trees_that_are_not_trees_are_refused() {
+    let m = Map::minimal();
+    let node = |c0: i32, c1: i32| le(&[0, c0 as u32, c1 as u32, 0, 0, 0, 0, 0, 0]);
+    let e = err(&m.clone().with(lump::NODES, node(0, -2)));
+    assert!(e.contains("reached twice"), "{e}");
+    let shared = [node(1, 1), node(-2, -2)].concat();
+    let e = err(&m.clone().with(lump::NODES, shared));
+    assert!(e.contains("reached twice"), "{e}");
+
+    let mut tri = le(&[f(0.0), f(0.0), f(1.0), f(0.0)]);
+    tri.extend(le(&[0; 8]));
+    tri.extend(le(&[-1i32 as u32; 6]));
+    let part = [vec![0, 0, 1, 0], le(&[0, 0])].concat();
+    let aabb = |children: u8, first: u32| {
+        let mut a = le(&[0, 0, 0, f(1.0), f(1.0), f(1.0)]);
+        a.extend([0, 0, children, 0]);
+        a.extend(le(&[first]));
+        a
+    };
+    let with_aabbs = |trees: Vec<u8>| {
+        m.clone()
+            .with(lump::COLL_TRIS, tri.clone())
+            .with(lump::COLL_PARTITIONS, part.clone())
+            .with(lump::COLL_AABB_TREES, trees)
+    };
+    let tree = [aabb(2, 1), aabb(0, 0), aabb(0, 0)].concat();
+    assert!(with_aabbs(tree).parse().is_ok());
+    // node 0 lists 1 and 2, node 1 lists 2 again
+    let dag = [aabb(2, 1), aabb(1, 2), aabb(0, 0)].concat();
+    let e = err(&with_aabbs(dag));
+    assert!(e.contains("two parents"), "{e}");
+}
+
 /// Garbage after the header never panics.
 #[test]
 fn noise_never_panics() {
