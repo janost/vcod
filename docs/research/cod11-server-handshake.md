@@ -2428,6 +2428,12 @@ Defaults and order:
   name), `nextdl` (`0x8086168`), `stopdl` (`0x8087960`), `donedl`
   (`0x80879fc`: `SV_SendClientGameState`), `retransdl` (`0x8087a2c`).
   VERIFIED.
+- vcod builds no second gamestate for a `donedl` (or a redirect's
+  `wwwdl done`) while the gamestate is still the last message it sent the
+  client (`Client::gamestate_last`): one message of pipelined `donedl`s
+  would otherwise queue a whole gamestate each. A client's single `donedl`
+  after its download never meets it. vcod's own, as CoD2's and CoD4's
+  (cod2-protocol.md 14).
 - `SV_WriteDownloadToClient` (`0x8086290`) opens the file on the next message.
   A refusal is `svc_download`, block 0, size -1, the string with the name
   after `\x15`. VERIFIED (strings `0x80d4838`, `0x80d48c2`, `0x80d48a0`,

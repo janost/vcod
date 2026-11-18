@@ -2845,7 +2845,14 @@ impl Server {
                     c.download = None;
                 }
             }
-            "donedl" => self.send_gamestate(slot),
+            "donedl" => {
+                if !self.core.clients[slot]
+                    .as_ref()
+                    .is_some_and(Client::gamestate_last)
+                {
+                    self.send_gamestate(slot);
+                }
+            }
             // `SV_WWWDownload` (UO 0x808c298), the redirect's replies.
             "wwwdl" => {
                 let sub = args.split_whitespace().next().unwrap_or("");
@@ -2866,7 +2873,9 @@ impl Server {
                     WwwReply::Close => c.download = None,
                     WwwReply::CloseAndGamestate => {
                         c.download = None;
-                        self.send_gamestate(slot);
+                        if !c.gamestate_last() {
+                            self.send_gamestate(slot);
+                        }
                     }
                     WwwReply::Drop(reason) => {
                         self.drop_client(slot, reason);
@@ -10316,6 +10325,28 @@ mod tests {
             )
             .unwrap();
         sv.handle_packet(addr(5), &pkt, now);
+    }
+
+    /// Fifty `donedl` in one message build one gamestate: a second one
+    /// while the gamestate is still the last message sent is a flood.
+    #[test]
+    fn a_donedl_flood_sends_one_gamestate() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = active(&mut sv, now);
+        let seq = |sv: &Server| {
+            let c = sv.core.clients[0].as_ref().unwrap();
+            (c.link.netchan.outgoing_sequence, c.gamestate_message_num)
+        };
+        let mut t = now;
+        while seq(&sv).0 as i64 == seq(&sv).1 + 1 {
+            t += Duration::from_millis(50);
+            sv.tick(t);
+        }
+        sv.take_outgoing();
+        let (before, _) = seq(&sv);
+        pipelined(&mut sv, &mut nc, &["donedl"; 50], t);
+        assert_eq!(seq(&sv), (before + 1, i64::from(before)));
     }
 
     /// Score requests pipelined faster than a snapshot goes out leave one
