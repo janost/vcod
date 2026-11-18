@@ -64,7 +64,8 @@ const MAX_PACKET_USERCMDS: u8 = vcod_common::net::MAX_MOVE_CMDS as u8;
 /// Queued-but-unreplayed usercmds per client; past this a flood drops the
 /// oldest rather than building latency.
 const MAX_PENDING_CMDS: usize = 64;
-/// pmove steps per snapshot tick; a flood beyond this fast-forwards.
+/// Cmds a client replays per tick; past this only its newest runs on, over
+/// the whole span the dropped ones covered (vcod's flood bound, not retail's).
 const MAX_CMDS_PER_TICK: usize = 32;
 /// `SV_ClientCommand`'s flood window (`cod_lnxded` 0x8086f5f, `add eax,0x320`):
 /// a non-exempt client command opens 800 ms during which every further
@@ -2926,7 +2927,7 @@ impl Server {
                 if let Some(c) = self.core.clients[slot].as_mut()
                     && !c.commands_at.iter().any(|(_, k)| *k == PacketCommand::Kill)
                 {
-                    c.commands_at.push((packet, PacketCommand::Kill));
+                    c.queue_command(packet, PacketCommand::Kill);
                 }
             }
             // `Cmd_MenuResponse_f`: the client answering a menu `openMenu`
@@ -2951,8 +2952,7 @@ impl Server {
                 let packet = self.game.packet_seq;
                 let back = word == "prevvehslot";
                 if let Some(c) = self.core.clients[slot].as_mut() {
-                    c.commands_at
-                        .push((packet, PacketCommand::CycleSeat { back }));
+                    c.queue_command(packet, PacketCommand::CycleSeat { back });
                 }
             }
             "fdc" if self.game.proto.is_uo() => {
@@ -2972,8 +2972,7 @@ impl Server {
                 {
                     let packet = self.game.packet_seq;
                     if let Some(c) = self.core.clients[slot].as_mut() {
-                        c.commands_at
-                            .push((packet, PacketCommand::MenuResponse(menu, response)));
+                        c.queue_command(packet, PacketCommand::MenuResponse(menu, response));
                     }
                 }
             }
@@ -11522,6 +11521,69 @@ mod tests {
         assert_eq!(w.field_i32(&PROTOCOL_V1, "speed"), 250);
     }
 
+    /// Past `MAX_CMDS_PER_TICK` a flood keeps its newest cmd, which covers
+    /// the dropped span once: 50 one-ms cmds a tick for 2 s run no farther
+    /// than 25 two-ms ones, and `commandTime` ends each tick on the newest.
+    #[test]
+    fn a_cmd_flood_runs_no_faster_than_real_time() {
+        let run = |per_tick: i32| {
+            let now = Instant::now();
+            let mut sv = Server::new(cfg(), now);
+            sv.load_world(World {
+                collision: test_world(&[]),
+                vis: vcod_common::bsp::Visibility::none(),
+                spawn: ([0.0, 0.0, 1.0], 0.0),
+                spawn_points: Vec::new(),
+                hazards: Vec::new(),
+                rubble: Vec::new(),
+                nav_cover: Vec::new(),
+            });
+            install_script(
+                &mut sv,
+                crate::game::script::ScriptRuntime::for_test("main() {}"),
+            );
+            let _nc = begun(&mut sv, now);
+            sv.tick(now);
+            sv.place_client(0, [0.0, 0.0, 1.0], 0.0);
+            let rt = sv.game.module.script.as_mut().unwrap();
+            rt.set_client_state_for_test(0, "playing");
+            sv.tick(now + Duration::from_millis(50));
+            let st = sv.core.clients[0].as_ref().unwrap().last_processed_st;
+            let start = sv.core.clients[0]
+                .as_ref()
+                .unwrap()
+                .sim
+                .as_ref()
+                .unwrap()
+                .ps
+                .origin;
+            let step = FRAME_MS / per_tick;
+            for tick in 1..=40 {
+                let c = sv.core.clients[0].as_mut().unwrap();
+                let newest = st + FRAME_MS * tick;
+                for j in (0..per_tick).rev() {
+                    let cmd = UserCmd {
+                        server_time: newest - step * j,
+                        forward: 127,
+                        ..NULL_USERCMD
+                    };
+                    c.pending.push(cmd.into());
+                }
+                sv.tick(now + Duration::from_millis(50 + 50 * tick as u64));
+                let c = sv.core.clients[0].as_ref().unwrap();
+                assert_eq!(
+                    c.last_processed_st, newest,
+                    "{per_tick} a tick, tick {tick}"
+                );
+            }
+            let sim = sv.core.clients[0].as_ref().unwrap().sim.as_ref().unwrap();
+            (sim.ps.origin - start).truncate().length()
+        };
+        let (honest, flood) = (run(25), run(50));
+        assert!(honest > 300.0, "{honest}");
+        assert!(flood <= honest + 1.0, "flood {flood} against {honest}");
+    }
+
     /// `ClientEndFrame` stores `(int)g_gravity` in a player's `ps.gravity`
     /// (game.mp 0x410aa): a jump climbs as high and stays up `sqrt 2` times
     /// as long at 400, and the wire carries it (cod15-movement.md,
@@ -12094,6 +12156,26 @@ mod tests {
             now + std::time::Duration::from_millis(100),
         );
         assert!(s2.valid, "snapshots must continue");
+    }
+
+    /// `mr` is flood-exempt; a client cannot queue more of them for the
+    /// move pass than its reliable ring holds unacknowledged.
+    #[test]
+    fn menu_response_flood_is_bounded() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let _nc = begun(&mut sv, now);
+        let last = sv.core.clients[0]
+            .as_ref()
+            .unwrap()
+            .link
+            .last_client_command;
+        for i in 1..=1000 {
+            assert!(sv.client_command(0, last + i, "mr x".to_string()));
+        }
+        let c = sv.core.clients[0].as_ref().unwrap();
+        assert_eq!(c.link.last_client_command, last + 1000);
+        assert_eq!(c.commands_at.len(), MAX_RELIABLE_COMMANDS);
     }
 
     /// A retail client omits unchanged angle fields (change bit 0) instead of

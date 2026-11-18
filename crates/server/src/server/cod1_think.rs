@@ -48,7 +48,7 @@ impl Cod1Module {
         let max_clients = eng.clients.len();
         let mut moved = vec![MoveSummary::default(); max_clients];
         let mut rounds: Vec<Round> = (0..max_clients).map(|_| Round::default()).collect();
-        // A client past the per-tick cap keeps the rest for the next tick.
+        // A client past the per-tick cap has had its middle cmds dropped.
         let mut capped = vec![false; max_clients];
         // `SpectatorThink` reads the other clients' own-view bits as the
         // last end frame left them, and each spectator's forced follow.
@@ -95,12 +95,8 @@ impl Cod1Module {
                     }
                     continue;
                 }
-                let kill = c.commands_at.first().map(|(p, _)| (*p, false));
-                let cmd = c
-                    .pending
-                    .first()
-                    .filter(|_| !capped[slot])
-                    .map(|q| (q.packet, true));
+                let kill = c.commands_at.front().map(|(p, _)| (*p, false));
+                let cmd = c.pending.first().map(|q| (q.packet, true));
                 if let Some(item) = kill.into_iter().chain(cmd).min()
                     && next.is_none_or(|(p, is_cmd, _)| item < (p, is_cmd))
                 {
@@ -120,7 +116,12 @@ impl Cod1Module {
                 }
             }
             if !is_cmd {
-                let (_, command) = eng.clients[slot].as_mut().unwrap().commands_at.remove(0);
+                let (_, command) = eng.clients[slot]
+                    .as_mut()
+                    .unwrap()
+                    .commands_at
+                    .pop_front()
+                    .unwrap();
                 crate::tick_trace::step!("SV_ExecuteClientCommand slot {slot} packet {packet}");
                 match command {
                     PacketCommand::Kill => {
@@ -141,18 +142,11 @@ impl Cod1Module {
             let collision = eng.world.as_ref().map(|w| &w.collision);
             let c = eng.clients[slot].as_mut().unwrap();
             let m = &mut moved[slot];
-            if m.processed >= MAX_CMDS_PER_TICK {
-                // The resync keeps the newest two cmds and sets the base as
-                // if only the last replays, so the penultimate may
-                // double-count one frame; harmless for flight.
-                c.last_processed_st = c
-                    .pending
-                    .last()
-                    .unwrap()
-                    .cmd
-                    .server_time
-                    .wrapping_sub(FRAME_MS);
-                c.pending.drain(..c.pending.len().saturating_sub(2));
+            if m.processed >= MAX_CMDS_PER_TICK && !capped[slot] {
+                // vcod's own bound, not retail's: only the newest cmd runs
+                // on, and its chop covers the dropped span once from the
+                // untouched `last_processed_st`.
+                c.pending.drain(..c.pending.len() - 1);
                 capped[slot] = true;
                 continue;
             }

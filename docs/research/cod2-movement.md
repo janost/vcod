@@ -1538,3 +1538,34 @@ cgame's box gives away, on both servers. VERIFIED. So vcod-server stops a
 run into a player where retail's does, to the probe's resolution.
 VERIFIED. Retail's own client would correct the same unit on every
 snapshot. INFERRED, from the same rule.
+
+## 21. The server's cmd clock
+
+`SV_ClientThink` (0x8090dac) copies the cmd into the client, and for an
+active client (state 4) hands its `serverTime` as sent to the lag time
+(0x80f5614), then calls `ClientThink` (0x80f65f8). VERIFIED, the calls.
+`ClientThink` copies `pers.cmd` (client +0x26c8) to `pers.oldcmd`
+(+0x26e4), fetches the new cmd into `pers.cmd`, stores `level.time` at
++0x27b8 and, unless `g_synchronousClients`, calls `ClientThink_real`
+(0x80f5d2e) on `&pers.cmd`. VERIFIED.
+
+`ClientThink_real` returns at once unless `pers.connected` (+0x26c4) is 2,
+then, on `pers.cmd` in place:
+
+| step | what | where |
+|---|---|---|
+| clamp the clock ahead | `serverTime = min(serverTime, level.time + 200)` | 0x80f5d57-0x80f5d72, `add $0xc8` |
+| clamp it behind | `serverTime = max(serverTime, level.time - 1000)` | 0x80f5d77-0x80f5d92, `sub $0x3e8` |
+| the span | `msec = serverTime - ps.commandTime` | 0x80f5d94-0x80f5da0 |
+| drop a stale cmd | `msec < 1` returns unless `ps.clientNum` (+0xcc) is another client's | 0x80f5da6-0x80f5dcb |
+| clamp the span | `msec = min(msec, 200)` | 0x80f5dd0-0x80f5ddc |
+
+VERIFIED, every immediate, with `level.time` at 0x864c56c. The clamps are
+1.1's (`docs/protocol-1.1.md`, "How long a cmd is simulated for") and so
+are CoD4 1.7's (`ClientThink_real` 0x80a5c1a: `add $0xc8` at 0x80a5c51,
+`sub $0x3e8` at 0x80a5c61; VERIFIED). A client stamping its cmds ahead
+moves at most 200 ms past `level.time`; `Pmove`'s own 1000 ms pull-up
+(section 4) is the bound behind. A stale cmd still took `pers.oldcmd`'s
+place in `ClientThink`. vcod: `Cod2Level::client_think`, whose
+`cmds_stamped_ahead_run_no_further_than_level_time_allows` sends 32 cmds a
+frame stamped a second apart.
