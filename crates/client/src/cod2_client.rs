@@ -95,6 +95,19 @@ impl Cod2Client {
             voice: None,
         }
     }
+
+    /// Ends the session, or the connect still running, with `disconnect`
+    /// to the server, and starts the client over as a new connection
+    /// finds it, as retail builds a new cgame on every connect.
+    pub(crate) fn leave(&mut self) {
+        if let Some(p) = self.pump.take() {
+            self.session = Some(p.finish());
+        }
+        if let Some(mut s) = self.session.take() {
+            s.disconnect();
+        }
+        *self = Self::new(None);
+    }
 }
 
 /// What a [`Cod2Client`] frame step borrows from `App`, built at the call
@@ -1029,5 +1042,23 @@ impl Cod2Client {
             ui.set_server_cvars(self.menus.cvars.all(s.configstrings(), shell));
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Leaving starts the client over: the next connection preloads its
+    /// level's models and parses its view effects afresh.
+    #[test]
+    fn leaving_starts_the_client_over() {
+        let mut c = Cod2Client::new(None);
+        c.models_for = 1;
+        c.menus_for = 1;
+        c.view_fx.shock_command = Some(vec!["shellshock".into()]);
+        c.leave();
+        assert_eq!((c.models_for, c.menus_for), (0, 0));
+        assert!(c.view_fx.shock_command.is_none());
     }
 }

@@ -15,7 +15,7 @@ use vcod_common::{bsp, mesh};
 
 use crate::camera::FlyCamera;
 use crate::play::cod2::{Cod2Session, ConnectOpts, Join, ServerError};
-use crate::{App, Mode, World, cod2_hud, cod2_scene, cod2_viewmodel, play, version_tag};
+use crate::{App, Mode, World, cod2_scene, version_tag};
 
 /// How long a front-end connect waits for the gamestate, as `--connect`.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -67,7 +67,7 @@ impl App {
             .session
             .cod2_mut()
             .and_then(|c| c.connecting.take())
-            .map(|c| c.addr)
+            .map(|c| c.addr.clone())
             .unwrap_or_default();
         vcod_common::laps::mark(|| "cod2 gamestate".into());
         let entered = result.and_then(|s| self.enter_cod2(s));
@@ -267,24 +267,12 @@ impl App {
         loaded
     }
 
-    /// Ends the CoD2 session, or the connect still running: `disconnect`
-    /// to the server and the session's HUD and view state dropped.
+    /// Ends the CoD2 session, or the connect still running
+    /// ([`Cod2Client::leave`]).
     pub(crate) fn leave_cod2(&mut self) {
-        let Some(c) = self.session.cod2_mut() else {
-            return;
-        };
-        c.connecting = None;
-        if let Some(p) = c.pump.take() {
-            c.session = Some(p.finish());
+        if let Some(c) = self.session.cod2_mut() {
+            c.leave();
         }
-        if let Some(mut s) = c.session.take() {
-            s.disconnect();
-        }
-        c.draw = cod2_scene::Cod2Draw::new();
-        c.view = cod2_viewmodel::Cod2View::default();
-        c.hud = cod2_hud::Cod2Hud::default();
-        c.menus = play::join::Join::new(None, None);
-        c.menus_for = 0;
     }
 }
 
