@@ -70,6 +70,15 @@ pub mod vehicle;
 pub mod vote;
 pub mod wire;
 
+/// `ClientThink_real`'s hold on a cmd's clock: at most 1000 ms behind and
+/// 200 ms ahead of `level_time` (CoD1 player-clip doc 8.12, cod2-movement.md
+/// 21, CoD4's twin). Widened so neither bound wraps: past `i32::MAX - 200`
+/// the plain clamp's bounds cross and it panics.
+pub fn hold_cmd_time(server_time: i32, level_time: i32) -> i32 {
+    let level = i64::from(level_time);
+    i64::from(server_time).clamp(level - 1000, level + 200) as i32
+}
+
 /// `testing::fixture` with a two-submodel world attached, for the paths that
 /// read brush bounds. Model 1 is a 32x32x72 box, model 2 a 64-unit cube;
 /// both are the shapes the trigger tests assert against.

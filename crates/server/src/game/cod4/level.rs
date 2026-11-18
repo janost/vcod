@@ -907,7 +907,7 @@ impl Cod4Level {
         self.combat.anims();
         self.sync_anim_names();
         let p = self.players[slot].as_mut()?;
-        cmd.server_time = cmd.server_time.clamp(level_time - 1000, level_time + 200);
+        cmd.server_time = crate::game::hold_cmd_time(cmd.server_time, level_time);
         let command_time = p.ps.word("commandTime") as i32;
         if cmd.server_time - command_time < 1 && p.ps.word("clientNum") == slot as u32 {
             return None;

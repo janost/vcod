@@ -6602,10 +6602,7 @@ impl Server {
         // no entering cmd, one frame back, so the first cmd's dt is a sane
         // 50 ms rather than the whole age of the client's clock.
         c.last_processed_st = entering.map_or(self.core.sv_time_ms.wrapping_sub(FRAME_MS), |c| {
-            c.server_time.clamp(
-                self.core.sv_time_ms.wrapping_sub(1000),
-                self.core.sv_time_ms.wrapping_add(200),
-            )
+            crate::game::hold_cmd_time(c.server_time, self.core.sv_time_ms)
         });
         c.last_usercmd_st = entering.map_or(c.last_processed_st, |c| c.server_time);
         log::info!("client {slot} {:?} begin (spectator)", c.name);
@@ -13192,6 +13189,30 @@ mod tests {
         rig.sv.drop_client(1, "EXE_DISCONNECTED");
         let s = rig.step(0);
         assert_eq!(ps_i32(&s, "clientNum"), 0);
+    }
+
+    /// Cmds keep running as the clock nears `i32::MAX`: the hold on a cmd's
+    /// clock no longer crosses its bounds there (BUG-060: it panicked past
+    /// `i32::MAX - 200`).
+    #[test]
+    fn cmds_run_as_the_clock_nears_i32_max() {
+        let mut rig = FollowRig::new();
+        rig.sv.start_clock_at(i32::MAX - 300);
+        rig.st = i32::MAX - 400;
+        for _ in 0..5 {
+            rig.step(0);
+        }
+        assert!(rig.sv.core.sv_time_ms > i32::MAX - 200);
+        assert_eq!(
+            crate::game::hold_cmd_time(i32::MAX, i32::MAX - 100),
+            i32::MAX
+        );
+        assert_eq!(
+            crate::game::hold_cmd_time(0, i32::MAX - 100),
+            i32::MAX - 1100
+        );
+        assert_eq!(crate::game::hold_cmd_time(i32::MIN, 5000), 4000);
+        assert_eq!(crate::game::hold_cmd_time(9000, 5000), 5200);
     }
 
     /// A script's `spectatorclient` is a forced follow: both bits on the
