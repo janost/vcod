@@ -437,6 +437,66 @@ pub fn parse_slope(p: &crate::net::protocol::Protocol, text: &str) -> Vec<SlopeL
     out
 }
 
+/// Runs `parse` over `rounds` seeded mutations of `good` (bit flips, edge
+/// bytes and words, truncation, splices; [`mutate`]) and fails naming the
+/// round whose input panicked. A hostile-input test asserts only that the
+/// parser returns, so it needs no expected values and runs with no install.
+pub fn fuzz(name: &str, good: &[u8], rounds: u32, mut parse: impl FnMut(&[u8])) {
+    let mut seed = name.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, c| {
+        (h ^ c as u64).wrapping_mul(0x0100_0000_01b3)
+    });
+    for round in 0..rounds {
+        let input = mutate(good, &mut seed);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parse(&input)));
+        if let Err(e) = r {
+            let why = e
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| e.downcast_ref::<&str>().copied())
+                .unwrap_or("?");
+            panic!(
+                "{name}: round {round} panicked: {why}\ninput ({} bytes): {:02x?}",
+                input.len(),
+                &input[..input.len().min(256)]
+            );
+        }
+    }
+}
+
+/// One to four random edits of `good`, drawn from `seed`.
+pub fn mutate(good: &[u8], seed: &mut u64) -> Vec<u8> {
+    use crate::rng::xorshift;
+    const BYTES: [u8; 6] = [0, 1, 0x7f, 0x80, 0xfe, 0xff];
+    const WORDS: [u32; 6] = [0, 1, 0x7fff_ffff, 0x8000_0000, 0xffff_ffff, 0x0001_0000];
+    let mut b = good.to_vec();
+    let mut pick = |n: usize| (xorshift(seed) % n.max(1) as u64) as usize;
+    for _ in 0..1 + pick(4) {
+        let at = pick(b.len());
+        match pick(7) {
+            _ if b.is_empty() => b.push(BYTES[pick(BYTES.len())]),
+            0 | 1 => b[at] ^= 1 << pick(8),
+            2 => b[at] = BYTES[pick(BYTES.len())],
+            3 => {
+                let w = WORDS[pick(WORDS.len())].to_le_bytes();
+                let end = (at + 4).min(b.len());
+                b[at..end].copy_from_slice(&w[..end - at]);
+            }
+            4 => b.truncate(at),
+            5 => {
+                let len = pick(64).min(b.len() - at);
+                let piece = b[at..at + len].to_vec();
+                let to = pick(b.len());
+                b.splice(to..to, piece);
+            }
+            _ => {
+                let len = pick(b.len() - at + 1);
+                b.drain(at..at + len);
+            }
+        }
+    }
+    b
+}
+
 /// A one-entry stored pk3 (`maps/mp/foo.bsp`), for tests that need a
 /// transfer to pass validation.
 pub fn pk3_bytes() -> Vec<u8> {

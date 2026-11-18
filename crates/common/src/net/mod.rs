@@ -744,8 +744,10 @@ impl<T: Transport> NetClient<T> {
     pub fn take_server_commands(&mut self) -> Vec<String> {
         let cap = self.netchan.server_commands.len();
         let from = *self.commands_taken.get_or_insert(self.command_sequence);
-        let first = (self.command_sequence - cap as i32 + 1).max(from + 1);
-        let out = (first..=self.command_sequence)
+        // i64: the sequence is the server's, any i32 at all.
+        let last = self.command_sequence as i64;
+        let first = (last - cap as i64 + 1).max(from as i64 + 1);
+        let out = (first..=last)
             .map(|seq| self.netchan.server_commands[seq as usize & (cap - 1)].clone())
             .collect();
         self.commands_taken = Some(self.command_sequence);
@@ -3958,5 +3960,109 @@ mod tests {
         assert_eq!(times.len(), records.len() - 1, "a snapshot a record");
         assert!(times.windows(2).all(|t| t[0] < t[1]));
         assert!(c.transport.sent.is_empty());
+    }
+
+    /// The captured gamestate and the first snapshot messages, each fed
+    /// whole and then mutated through an active client's message parse
+    /// and its server command cursor: nothing panics.
+    #[test]
+    fn hostile_server_messages_never_panic() {
+        use crate::testing::fuzz;
+        // A dropped client is put back in play rather than built again: a
+        // new one's Huffman tree costs 30 ms in the test profile.
+        let feed = |c: &mut NetClient<FakeTransport>, msg: &[u8]| {
+            c.handle_message(msg);
+            c.take_server_commands();
+            c.state = NetState::Active;
+        };
+        let mut c = active_client();
+        let gs = crate::testing::fixture("net/gamestate.bin");
+        fuzz("cod1 gamestate", &gs, 400, |m| feed(&mut c, m));
+        let data = crate::testing::fixture("net/snapshots.bin");
+        let mut c = active_client();
+        let mut off = 0;
+        while off + 8 <= data.len() {
+            let num = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
+            let len = u32::from_le_bytes(data[off + 4..off + 8].try_into().unwrap()) as usize;
+            let msg = &data[off + 8..off + 8 + len];
+            off += 8 + len;
+            c.netchan.incoming_sequence = num;
+            feed(&mut c, msg);
+            fuzz("cod1 snapshot", msg, 100, |m| {
+                c.netchan.incoming_sequence = num;
+                feed(&mut c, m);
+            });
+        }
+    }
+
+    /// A server command sequence at either end of i32 keeps the cursor
+    /// arithmetic in range.
+    #[test]
+    fn take_server_commands_at_the_ends_of_the_sequence() {
+        for seq in [i32::MIN, i32::MIN + 1, i32::MAX] {
+            let mut c = active_client();
+            c.command_sequence = seq;
+            c.commands_taken = None;
+            assert!(c.take_server_commands().is_empty());
+            c.commands_taken = Some(seq.wrapping_sub(1));
+            c.take_server_commands();
+        }
+    }
+
+    /// Connectionless replies and netchan packets, mutated, through the
+    /// client's packet path, and client packets through the server's
+    /// netchan; `connect`'s Huffman decode and the master's list too.
+    #[test]
+    fn hostile_packets_never_panic() {
+        use crate::testing::fuzz;
+        let mut c = active_client();
+        for (cmd, tail) in [
+            ("challengeResponse", " 7"),
+            ("print", "\nhello\n"),
+            ("statusResponse", "\n\\sv_hostname\\x\n0 50 \"a\"\n"),
+            ("infoResponse", "\n\\protocol\\1\\hostname\\x"),
+            ("error", "\nEXE_X"),
+        ] {
+            fuzz(cmd, &oob(cmd, tail), 300, |p| {
+                c.handle_packet(p);
+                c.state = NetState::Active;
+            });
+        }
+        let mut frag = (5u32 | 1 << 31).to_le_bytes().to_vec();
+        frag.extend_from_slice(&0u16.to_le_bytes());
+        frag.extend_from_slice(&8u16.to_le_bytes());
+        frag.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        let mut nc = netchan::Netchan::new(1234, 0);
+        fuzz("netchan fragment", &frag, 2000, |p| {
+            let _ = nc.frame(p);
+        });
+
+        let mut c = NetClient::start_with_qport(FakeTransport::default(), Instant::now(), 77);
+        c.transport
+            .incoming
+            .push_back(oob("challengeResponse", " 100"));
+        c.pump_at(Instant::now());
+        let connect = c.transport.sent.last().unwrap().clone();
+        fuzz("connect", &connect, 2000, |p| {
+            let _ = connectionless::parse_connect(p);
+        });
+        let mut c = active_client();
+        c.send_frame(&UserCmd::default());
+        c.send_reliable("say hello");
+        c.send_frame(&UserCmd::default());
+        let moved = c.transport.sent.last().unwrap().clone();
+        let sv = netchan::ServerNetchan::new(c.qport, 100);
+        fuzz("client move", &moved, 2000, |p| {
+            let _ = sv.process_in(p);
+        });
+
+        let mut list = b"getserversResponse\n\0".to_vec();
+        for i in 0..8u8 {
+            list.extend_from_slice(&[b'\\', 10, 0, 0, i, 0x6d, 0x60]);
+        }
+        list.extend_from_slice(b"\\EOT");
+        fuzz("servers", &list, 2000, |b| {
+            master::parse_servers_response(b);
+        });
     }
 }
