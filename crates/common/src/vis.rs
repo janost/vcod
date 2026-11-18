@@ -684,8 +684,8 @@ impl WorldVis {
                 self.mark_group(&self.cull_groups[gi as usize], frustum, &mut w.vis);
             }
         }
-        // Sightlines that leave the graph over low geometry — bulwarks, rails
-        // (mp_ship's deck over the ocean) — under-mark: the walk treats those
+        // Sightlines that leave the graph over low geometry (bulwarks, rails,
+        // mp_ship's deck over the ocean) under-mark: the walk treats those
         // walls as sealed. Any cell sharing a portal with a visited cell is
         // frustum-tested directly, to a fixpoint; the camera frustum is the
         // conservative bound, same as the fallback path.

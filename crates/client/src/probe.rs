@@ -3274,9 +3274,9 @@ const FRAG_WEAPON: &str = "fraggrenade_mp";
 
 /// Writes a fixture that `--capture-tag` named, refusing to land on a file
 /// that is already there unless `--overwrite-fixture` says to. A tag is free
-/// text and nothing stops it spelling a committed fixture's name --
-/// `--save-ads --capture-tag sniper` writes exactly the path the scoped-rifle
-/// evidence lives at -- and a capture against vcod's own server silently
+/// text and nothing stops it spelling a committed fixture's name
+/// (`--save-ads --capture-tag sniper` writes exactly the path the scoped-rifle
+/// evidence lives at), and a capture against vcod's own server silently
 /// replacing the retail oracle is the one mistake this directory cannot
 /// survive. An untagged write is the documented way to retake a fixture and
 /// goes through `std::fs::write` unguarded.
@@ -3979,8 +3979,8 @@ struct StepResult {
 }
 
 /// Walks [`combat_script`] and keeps every snapshot along the way. A settled
-/// sample cannot hold a shot -- the event ring has four slots and overwrites
-/// as it goes -- so this mode records the trace itself and the settled
+/// sample cannot hold a shot (the event ring has four slots and overwrites
+/// as it goes), so this mode records the trace itself and the settled
 /// playerstate only as the step's tail.
 struct CombatProbe {
     steps: Vec<CombatStep>,
@@ -9013,7 +9013,7 @@ const TRIGGER_NEAR: f32 = 200.0;
 /// A leg's budget is its distance at this speed plus [`TRIGGER_LEG_SLACK`].
 /// Well under retail's ~190 u/s run: the walk detours around geometry and a
 /// budget set at the straight-line speed gives up on every target that is
-/// not in the open. A flat budget does not work either -- one long enough for
+/// not in the open. A flat budget does not work either: one long enough for
 /// a far target spends the run on a near one behind a wall.
 const TRIGGER_LEG_SPEED: f32 = 70.0;
 const TRIGGER_LEG_SLACK: Duration = Duration::from_secs(6);
@@ -9031,8 +9031,8 @@ const TRIGGER_STEER_ARC: i32 = 165;
 /// (the movement constants table in docs/research/cod11-mantle.md).
 const TRIGGER_STEP_HEIGHT: f32 = 18.0;
 /// A walker that has not left this box in [`TRIGGER_WEDGE`] is wedged
-/// somewhere the steer cannot get it out of -- a pit, a doorway it rebounds
-/// in -- and kills itself to respawn somewhere else. One run lost 100 s of
+/// somewhere the steer cannot get it out of (a pit, a doorway it rebounds
+/// in) and kills itself to respawn somewhere else. One run lost 100 s of
 /// its 125 to a single such spot.
 const TRIGGER_WEDGE_UNITS: f32 = 80.0;
 const TRIGGER_WEDGE: Duration = Duration::from_secs(12);
@@ -9043,8 +9043,8 @@ const TRIGGER_WEDGE: Duration = Duration::from_secs(12);
 ///
 /// A wander does not do: mp_pavlov is dense enough that a blind heading spends
 /// a whole run inside the town, and a first capture taken that way crossed one
-/// trigger in 190 s. The walk is not the measurement -- the retail server's own
-/// log is -- so steering it at the answer costs nothing and buys the coverage.
+/// trigger in 190 s. The walk is not the measurement (the retail server's own
+/// log is), so steering it at the answer costs nothing and buys the coverage.
 #[derive(Default)]
 struct TriggerProbe {
     boxes: Vec<TriggerBox>,
@@ -14008,7 +14008,7 @@ const ENTITIES_FIXTURE_DIR: &str = concat!(
 /// sent it there.
 ///
 /// The origin is the point of the file. A capture cannot be told to stand
-/// anywhere -- `setviewpos` is refused on a dedicated server -- so the gate
+/// anywhere (`setviewpos` is refused on a dedicated server), so the gate
 /// does not replay the route, it replays each recorded origin
 /// (docs/protocol-1.1.md, "Which entities a client is sent").
 fn write_entities_fixture(

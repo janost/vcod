@@ -30,8 +30,8 @@ pub struct PlayerWeapons {
 
 impl PlayerWeapons {
     /// `giveWeapon`: hold the weapon and put it in its file's `weaponSlot`.
-    /// A weapon whose file names no slot — including every weapon on a host
-    /// with no paks mounted — is still held; only the slot byte goes unset.
+    /// A weapon whose file names no slot (including every weapon on a host
+    /// with no paks mounted) is still held; only the slot byte goes unset.
     pub fn give(&mut self, index: usize, slot: usize) {
         if index < u64::BITS as usize {
             weapon::give_slot(&mut self.held, &mut self.slots, index as u8, slot);

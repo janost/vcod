@@ -1696,7 +1696,7 @@ impl FogLive {
         }
     }
 
-    /// 1 = GL_EXP, 2 = GL_LINEAR — the WGSL Camera mode encoding; the off
+    /// 1 = GL_EXP, 2 = GL_LINEAR: the WGSL Camera mode encoding; the off
     /// state is carried by [`FogState::set`], not here.
     fn mode(&self) -> f32 {
         if self.linear { 2.0 } else { 1.0 }
@@ -1705,8 +1705,8 @@ impl FogLive {
 
 /// Global fog from configstring 12, faded toward each new target. Same-mode
 /// transitions lerp over the script's fade time; cross-mode changes snap and
-/// linear fog clears to the fog colour — RTCW-MP tr_main.c R_SetFog /
-/// R_AddFogInterpolation.
+/// linear fog clears to the fog colour (RTCW-MP tr_main.c R_SetFog /
+/// R_AddFogInterpolation).
 #[derive(Default)]
 struct FogState {
     set: bool,

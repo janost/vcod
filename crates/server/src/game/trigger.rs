@@ -595,8 +595,8 @@ pub struct BrushHull {
 /// empty: no trigger uses it and its brushes are the map's whole solid
 /// geometry.
 ///
-/// Trigger brushes are not in `CollisionWorld` -- it drops them on purpose,
-/// since retail leaves a trigger hollow to movement -- so they are decoded
+/// Trigger brushes are not in `CollisionWorld` (it drops them on purpose,
+/// since retail leaves a trigger hollow to movement), so they are decoded
 /// straight off the lump here, through the same side decode the clip uses.
 pub fn model_brush_hulls(bsp: &vcod_common::mapworld::MapWorld) -> Vec<Vec<BrushHull>> {
     bsp.models
@@ -671,8 +671,8 @@ pub(crate) fn capsule_contacts_hulls(
 /// *brushes* (docs/research/cod11-gsc-object-model.md section 22). The clip
 /// box is `r.mins`/`r.maxs`, which `ClientThink_real` copies from pmove's
 /// stance box ahead of the pass (22.3): 70, 50 or 30 high. Neither box
-/// contains the other -- the candidate reaches 52 below the feet and a
-/// standing clip box 70 above them -- so both have to hold.
+/// contains the other (the candidate reaches 52 below the feet and a
+/// standing clip box 70 above them), so both have to hold.
 ///
 /// Only an entity with a touch function is touched (0x3f9cd): a
 /// `trigger_damage` sets none, and a `trigger_lookat` or `trigger_use` has

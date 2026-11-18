@@ -14,8 +14,8 @@
 //! the restart's own frame, the length of the round that ran its timer out
 //! and the wait from the death that ended the other round to its restart
 //! (both frame for frame on the server clock), plus the vitals either side of the respawn. Not a command-for-command
-//! diff -- the burst carries slots ours pins to constants
-//! (`mapchange_ab::CMD_GAPS`) -- but the *set* of configstring slots each
+//! diff, since the burst carries slots ours pins to constants
+//! (`mapchange_ab::CMD_GAPS`), but the *set* of configstring slots each
 //! half is sent an update for is compared whole: a restart keeps the
 //! engine's table, so the incoming level's registrations land where the
 //! outgoing level's did and nothing is re-broadcast (map-cycle doc, 4.6).
@@ -134,7 +134,7 @@ fn vitals(k: &NetchanKind) -> Vitals {
 }
 
 /// Compares one field of the respawn against retail, unless [`RESTART_GAPS`]
-/// suppresses it -- in which case the divergence itself is what is asserted,
+/// suppresses it, in which case the divergence itself is what is asserted,
 /// so a gap that starts matching fails and has to be deleted.
 fn compare(half: &str, what: &str, retail: i32, ours: i32) {
     match RESTART_GAPS.iter().find(|(w, _)| *w == what) {

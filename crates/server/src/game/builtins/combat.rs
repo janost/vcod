@@ -31,8 +31,8 @@ use vcod_common::net::event_ids::EV_OBITUARY;
 /// `self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags,
 /// sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc)` (`.so` 0x4376c), where a
 /// player's damage lands (combat doc, section 4.5): the health comes off the
-/// host's vitals here, and everything the sim does with it -- knockback,
-/// the feedback fields, `EV_PAIN` or `EV_DEATH` -- goes out as one `SimOp`.
+/// host's vitals here, and everything the sim does with it (knockback,
+/// the feedback fields, `EV_PAIN` or `EV_DEATH`) goes out as one `SimOp`.
 /// A killing hit runs `player_die` (5.1): a grenade still cooking is dropped
 /// live, and the callback into
 /// `CodeCallback_PlayerKilled` is spawned so it runs before this builtin's
@@ -389,7 +389,7 @@ pub(crate) fn dead_yaw(
 /// The three effects a suicide has, for the two callers that need them: the
 /// `suicide` builtin and `Cmd_Kill_f`. Writes the vitals, queues the sim's
 /// `Damaged` op and returns the `CodeCallback_PlayerKilled` argument vector,
-/// leaving only the invocation to the caller -- a builtin spawns the thread
+/// leaving only the invocation to the caller: a builtin spawns the thread
 /// so it runs before its own next instruction, while the client command has
 /// nothing waiting on it and starts one.
 ///
@@ -2191,7 +2191,7 @@ mod tests {
     /// `suicide` is a death with no attacker but the player itself: the
     /// vitals go to zero, the sim gets a fatal `Damaged` with no damage and
     /// no knockback, and `CodeCallback_PlayerKilled` runs before the calling
-    /// thread continues -- the same ordering a fatal `finishPlayerDamage`
+    /// thread continues: the same ordering a fatal `finishPlayerDamage`
     /// gets. The callback sees `player_die`'s arguments from the builtin's
     /// call (0x453e5): damage 100000, `MOD_SUICIDE`, weapon 0 as `"none"`,
     /// no direction and hit location `"none"`, whatever the player holds.

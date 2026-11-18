@@ -288,7 +288,7 @@ pub fn set_client_name_mode(
 }
 
 /// `exitLevel([savePersist])` (map-cycle doc, sections 1 and 2): the shared
-/// one-shot latch, then `ExitLevel` itself -- the queued `map_rotate`, both
+/// one-shot latch, then `ExitLevel` itself: the queued `map_rotate`, both
 /// team scores and every connected client's score back to 0, and the log
 /// line. Nothing else: no intermission state, no camera and no timer.
 pub fn exit_level(
@@ -405,7 +405,7 @@ mod tests {
 
     /// `ExitLevel`'s two passes and its log line (map-cycle doc, section 2):
     /// both team scores and every connected client's score back to 0, and
-    /// no scoreboard pushed for it -- the passes write the field rather
+    /// no scoreboard pushed for it: the passes write the field rather
     /// than calling the setter, so the ranks stay clean.
     #[test]
     fn exitlevel_zeroes_the_team_scores_and_every_client_score() {

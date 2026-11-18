@@ -42,7 +42,7 @@ pub struct GEntity {
     pub engine: Vec<Value>,
     /// A client entity's `gclient_t` fields, indexed by raw `CLIENT_FIELDS`
     /// position (`Route::Client`), a separate store from `engine` because
-    /// retail's `gclient_s *client` is a separate struct from `gentity_t` —
+    /// retail's `gclient_s *client` is a separate struct from `gentity_t`:
     /// sharing one array between the two field tables' index spaces would
     /// alias unrelated fields together. `Some` only for an entity
     /// `spawn_client` made; `None` for every map entity and HUD element,
@@ -345,8 +345,8 @@ pub const CONCUSSIVE_THINK_MS: i32 = 100;
 pub struct ObjectTable {
     ents: Vec<Option<GEntity>>,
     /// The HUD element range, `EntId(FIRST_HUD_ELEM..)`. A separate vector
-    /// rather than a longer `ents`, so `iter_inuse` — and through it
-    /// `getEntArray` — cannot see a HUD element. A HUD element reuses
+    /// rather than a longer `ents`, so `iter_inuse` (and through it
+    /// `getEntArray`) cannot see a HUD element. A HUD element reuses
     /// `GEntity` for the two stores it does need (engine slots, keyed by
     /// `fields::route_hud`, and its own script struct); the gentity-only
     /// `solid`, `hidden` and `attachments` go unused.

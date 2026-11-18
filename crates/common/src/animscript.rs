@@ -15,8 +15,8 @@ use std::collections::{HashMap, HashSet};
 /// multiplayer script carries, so they have no variant; anything else the file
 /// names becomes `Unknown`, which never holds, so a clause the machine cannot
 /// evaluate never matches instead of matching unconditionally. The shipped
-/// script reaches that path nowhere -- its `enemy_weapon` and `impact_point`
-/// clauses are all commented out -- so `Unknown` is what a downloaded pak or a
+/// script reaches that path nowhere (its `enemy_weapon` and `impact_point`
+/// clauses are all commented out), so `Unknown` is what a downloaded pak or a
 /// later revision lands in.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum CondKind {
@@ -591,9 +591,9 @@ impl AnimScript {
         pick(block, c)
     }
 
-    /// The same, for one of the `EVENTS` blocks. The events that reach it --
-    /// `fireweapon`, `reload`, `dropweapon`, `raiseweapon`, `jump`, `jumpbk`,
-    /// `land` -- list one anim per channel per clause in the shipped file, so
+    /// The same, for one of the `EVENTS` blocks. The events that reach it
+    /// (`fireweapon`, `reload`, `dropweapon`, `raiseweapon`, `jump`, `jumpbk`,
+    /// `land`) list one anim per channel per clause in the shipped file, so
     /// the first line is the whole answer.
     pub fn select_event(&self, event: &str, c: &Conditions) -> Selection {
         let Some(block) = self.event(event) else {
@@ -1200,8 +1200,8 @@ land
         assert!(sel.torso.is_none());
     }
 
-    /// The `EVENTS` clauses gate on movetype *categories* -- `crouching`,
-    /// `prone`, `moving` -- which the file itself defines as `set movetype`
+    /// The `EVENTS` clauses gate on movetype *categories* (`crouching`,
+    /// `prone`, `moving`) which the file itself defines as `set movetype`
     /// aliases over the movetype names the machine produces. So a category
     /// needs no separate condition kind: the alias expands where it is used.
     #[test]

@@ -1148,9 +1148,9 @@ fn recover_spread_seed() {
 /// the exact replay, the 32-bit `holdrand` behind them off a 2^17 search,
 /// and the seed off walking that back to a value inside the run's wall
 /// clock, `COMBAT_SEED_FROM..COMBAT_SEED_TO` (Unix seconds). glibc's
-/// `srand` took the same seed. Run by hand (`cargo test -p vcod-server
-/// --lib -- --ignored recover_rocket_seed --nocapture`, `COD2_DIR` set,
-/// `COMBAT_SEED_CAPTURE` naming the capture).
+/// `srand` took the same seed. Run by hand
+/// (`cargo test -p vcod-server --lib -- --ignored recover_rocket_seed --nocapture`,
+/// `COD2_DIR` set, `COMBAT_SEED_CAPTURE` naming the capture).
 #[test]
 #[ignore]
 fn recover_rocket_seed() {

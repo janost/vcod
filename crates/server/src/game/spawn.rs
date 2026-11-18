@@ -344,7 +344,7 @@ fn worldspawn_ambient(world: &[(String, String)]) -> String {
 }
 
 /// `SP_worldspawn` (0x61cec): `G_SpawnString("northyaw", "", &out)` then, if
-/// the result is empty, the literal `"0"` in its place -- a raw copy of the
+/// the result is empty, the literal `"0"` in its place: a raw copy of the
 /// BSP text, never a rendered number, which is why this does not go through
 /// `Cx::format_number`. `mp_carentan`'s own worldspawn block carries no
 /// `northyaw` key at all (checked against the shipped BSP), so its capture's
@@ -361,8 +361,8 @@ fn worldspawn_northyaw(world: &[(String, String)]) -> String {
 /// `SP_trigger_hurt` (0x64ef8): `G_SpawnString("sound", "world_hurt_me",
 /// &out)`, unconditionally, before any of the entity's other fields are
 /// touched (INFERRED FROM DECOMPILATION, reading control flow only). Both
-/// gate maps place exactly one `trigger_hurt` with no `sound` key -- VERIFIED,
-/// read straight from the shipped BSPs -- so the default is what lands in
+/// gate maps place exactly one `trigger_hurt` with no `sound` key (VERIFIED,
+/// read straight from the shipped BSPs), so the default is what lands in
 /// configstring 525 on both.
 ///
 /// Unlike `worldspawn_northyaw`, this only falls back when the key is
@@ -377,8 +377,8 @@ fn trigger_hurt_sound(block: &[(String, String)]) -> String {
         .to_string()
 }
 
-/// A trigger's shape is its submodel's (`"model" "*N"`) -- the box for the
-/// cheap reject and the model number the exact test takes its brushes from --
+/// A trigger's shape is its submodel's (`"model" "*N"`): the box for the
+/// cheap reject and the model number the exact test takes its brushes from,
 /// and its `wait` key is seconds on the wire. A trigger with no
 /// brush model, or one naming a model the BSP has no bounds for, is registered
 /// with a zero box and no model: it then touches nothing, which is what
@@ -503,7 +503,7 @@ fn round_trigger(
 /// from the shipped `weapons/mp/mg42_bipod_stand_mp`: its `loopFireSound`
 /// and `stopFireSound` keys are `weap_mg42_loop` and `weap_mg42_cooldown`,
 /// exactly `mp_carentan`'s captured 526/527. So the alias names come from
-/// the weapon file, keyed by the entity's own `weaponinfo` value -- the same
+/// the weapon file, keyed by the entity's own `weaponinfo` value: the same
 /// string `spawn_item_name` already resolved for `RegisterItem`, reused here
 /// rather than re-read.
 ///
@@ -585,7 +585,7 @@ fn register_sound_alias(host: &mut GameHost, name: String) {
 }
 
 /// A placed weapon's `bg_itemlist` classname is its weapon file's
-/// `radiantName`, not its own file name -- and not always that name with an
+/// `radiantName`, not its own file name, and not always that name with an
 /// `mpweapon_` prefix stripped, either. VERIFIED: read straight from every
 /// `weapons/mp/*_mp` file in the shipped paks. 23 of `WEAPON_LIST`'s 32
 /// weapons carry a non-empty `radiantName`; this table is all 23, so a
@@ -652,7 +652,7 @@ const RADIANT_NAMES: &[(&str, &str)] = &[
     ("mpweapon_webley", "webley_mp"),
 ];
 
-/// The item a spawned entity registers, if any -- `G_CallSpawn`'s second
+/// The item a spawned entity registers, if any: `G_CallSpawn`'s second
 /// case, before `spawns` (section 17 of the object model doc): a classname
 /// matched against `bg_itemlist` calls `G_SpawnItem` -> `RegisterItem`
 /// straight after the entity is built, before any script runs, and neither
@@ -1206,7 +1206,7 @@ pub(crate) fn convert(cx: &mut Cx, ty: FieldType, raw: &str) -> Option<Value> {
         FieldType::CString | FieldType::IString | FieldType::ModelIndex => {
             Value::String(cx.intern_exact(raw))
         }
-        // No entity field is an enum -- the three that are all live on HUD
+        // No entity field is an enum: the three that are all live on HUD
         // elements, which no BSP entity block builds.
         FieldType::Entity | FieldType::Object | FieldType::Enum(_) => return None,
     })
@@ -1489,7 +1489,7 @@ mod tests {
     /// cannot recover: three drop an underscore from their own file name,
     /// and `rgd-33russianfrag_mp`'s `radiantName` is not any spelling of it
     /// at all. This pins `RADIANT_NAMES` against the four names that
-    /// disproved the transform this table replaced -- a regression back to
+    /// disproved the transform this table replaced: a regression back to
     /// deriving the name from the classname would silently stop registering
     /// all four.
     #[test]
@@ -1595,7 +1595,7 @@ mod tests {
     /// setting its bit; for a weapon those are the weapon file's
     /// `worldModel` and `projectileModel`. The panzerfaust's world model is
     /// already the placed block's own `model` key, so the rocket is the
-    /// slot the registration adds -- retail's mp_carentan capture has the
+    /// slot the registration adds: retail's mp_carentan capture has the
     /// two adjacent.
     #[test]
     fn a_placed_weapon_precaches_its_world_and_projectile_models() {
@@ -1742,7 +1742,7 @@ mod tests {
 
     /// `SP_worldspawn` (0x61cec) copies `northyaw` verbatim into configstring
     /// 11: a `G_SpawnString` read with an empty default, and if the result is
-    /// the empty string it substitutes the literal `"0"` -- no numeric parse
+    /// the empty string it substitutes the literal `"0"`: no numeric parse
     /// at any point, so a present key reproduces retail byte for byte
     /// whatever text it holds.
     #[test]
@@ -1918,7 +1918,7 @@ mod tests {
 
     /// `SP_trigger_hurt` (0x64ef8) always registers a sound alias, its own
     /// `sound` key or the compiled-in default `"world_hurt_me"` when the key
-    /// is absent -- both gate maps place exactly one `trigger_hurt` with no
+    /// is absent: both gate maps place exactly one `trigger_hurt` with no
     /// `sound` key, which is why `world_hurt_me` takes slot 525 on both, one
     /// with no `misc_mg42` at all.
     #[test]
@@ -1980,7 +1980,7 @@ mod tests {
     }
 
     /// The full pipeline against both gate maps' own BSPs, pinned to the
-    /// exact retail values in the committed captures -- the residual four
+    /// exact retail values in the committed captures: the residual four
     /// slots `configstrings_ab` measures.
     #[test]
     fn both_gate_maps_reproduce_the_residual_configstrings() {

@@ -12,7 +12,7 @@
 //! folded key first owns it, so the two can never hand out different atoms
 //! for one identifier, and `fold_atom` maps any atom onto that owner. Event
 //! names reach the VM as case-preserved string values, so `Op::WaitTill`,
-//! `Op::EndOn` and `Vm::notify` fold before matching -- if one stopped, a
+//! `Op::EndOn` and `Vm::notify` fold before matching: if one stopped, a
 //! waiting thread would hang with nothing logged.
 //!
 //! Runtime-built strings (e.g. `s = s + "x"` in a loop) intern permanently,

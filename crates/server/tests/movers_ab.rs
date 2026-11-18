@@ -8,8 +8,8 @@
 //! measured.
 //!
 //! The walk is not replayed and no map is loaded. Each phase is set up here
-//! the way `probe_mover.gsc` set it up -- a `script_origin` at
-//! `(100, 0, 100)` with zero angles -- the verb is called at the level time
+//! the way `probe_mover.gsc` set it up: a `script_origin` at
+//! `(100, 0, 100)` with zero angles. The verb is called at the level time
 //! retail called it at, and the level clock is stepped in 50 ms frames while
 //! every sampled frame's origin and angles are compared. Retail's own frame
 //! times are the ones stepped to, so a phase that starts at 4150 is compared
@@ -263,8 +263,8 @@ fn the_completion_notifies_land_on_retails_frames() {
 /// The wire half: the four records a ramped `movez(96, 2, 0.5, 0.5)` from
 /// `z = 592` put on the wire, read out of the client capture and compared
 /// against what our own table would send. This is the fact that decides the
-/// design -- a mover travels as one trajectory per segment and the client
-/// extrapolates between them -- so it is checked against the capture rather
+/// design (a mover travels as one trajectory per segment and the client
+/// extrapolates between them), so it is checked against the capture rather
 /// than against a transcription of it.
 #[test]
 fn a_ramped_move_puts_retails_four_records_on_the_wire() {

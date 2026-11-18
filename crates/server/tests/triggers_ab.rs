@@ -19,7 +19,7 @@
 //! What it does not cover: mp_pavlov's one `trigger_hurt` never fired. Its
 //! brush is the kill volume under the floor and a walking player never reaches
 //! it, so every fire line is a `trigger_multiple` and the hurt half of the
-//! touch pass -- the cadence, the damage, the slow spawnflag -- has no retail
+//! touch pass (the cadence, the damage, the slow spawnflag) has no retail
 //! evidence behind it here (`hurtfall_ab.rs` lifts it into a falling
 //! player's path on mp_carentan and gates the kill and the corpse). Entity 72 is pinned as existing and as surviving
 //! the gametype's deletion pass, and no further. Nor does any other trigger
@@ -37,7 +37,7 @@
 //!
 //! A second one, and it is the one that let a live bug through. The probe's
 //! walker steers at brush centres, so every station the fixture sampled sits
-//! well inside the real brush -- and inside the brush a bounding-box test and
+//! well inside the real brush, and inside the brush a bounding-box test and
 //! a brush contact agree. The gate stayed green for as long as ours tested
 //! the bounding box, while a player standing in the bulge of a wedge-shaped
 //! minefield died meters clear of the mines. Nothing here samples that bulge;
@@ -45,8 +45,8 @@
 //! (`a_wedge_is_touched_by_its_brush_and_not_by_the_bulge_of_its_box` and the
 //! mp_pavlov one beside it).
 //!
-//! A capture cannot be replayed as a walk -- the route is not reproducible and
-//! a retail spawn is random -- so the gate replays each recorded origin, the
+//! A capture cannot be replayed as a walk (the route is not reproducible and
+//! a retail spawn is random), so the gate replays each recorded origin, the
 //! way `entities_ab.rs` does (docs/protocol-1.1.md, "Which entities a client
 //! is sent").
 //!
@@ -73,7 +73,7 @@ const JOIN: (&str, &str) = ("allies", "mosin_nagant_mp");
 const FIXTURE: &str = "tests/fixtures/triggers/mp_pavlov-dm-triggers.txt";
 
 /// One `PROBE fire` record: which trigger fired, its classname, and where the
-/// toucher stood. The toucher's own entity number is dropped -- it is the
+/// toucher stood. The toucher's own entity number is dropped: it is the
 /// client slot on both sides and says nothing about the touch.
 #[derive(Debug, Clone, PartialEq)]
 struct Fire {

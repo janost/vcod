@@ -2045,7 +2045,7 @@ fn a_throw_s_first_frame_matches_retail_s_capture() {
 /// 5.1 step 5 and 11.3: a player killed with a grenade cooking drops it live
 /// where he stood, `r.currentOrigin` with z raised by 40, and the velocity is
 /// three `rand()` draws whose signs put x and y in (-480, -160] and z in
-/// (-160, 0] -- retail's own skew, not a random direction. The fuse is what
+/// (-160, 0]: retail's own skew, not a random direction. The fuse is what
 /// was left of `grenadeTimeLeft`, the full 4000 for a cook retail never counts
 /// down (1.11).
 ///
@@ -2053,7 +2053,7 @@ fn a_throw_s_first_frame_matches_retail_s_capture() {
 /// `fixtures/playerstate/mp_carentan-tdm-grenade-death-shooter.txt`: the dying
 /// player's trace reads `origin=1216.9,1296.0,-7.9 grenadeTimeLeft=4000`, and
 /// the missile on the death frame reads
-/// `pos=5,1405500,1216.9,1296.0,32.1,-423.0,-214.0,-99.0` -- the +40 on z, a
+/// `pos=5,1405500,1216.9,1296.0,32.1,-423.0,-214.0,-99.0`: the +40 on z, a
 /// delta inside those ranges, and an explode 3950 ms later. The `kill` runs
 /// outside every cmd, so `r.currentOrigin` is the unsnapped `ps.origin`:
 /// 1216.9 and 32.1 where a snap would read 1216 and 33 (5.5).

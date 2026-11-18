@@ -1313,8 +1313,8 @@ fn the_challenges_come_off_the_levels_rand() {
 /// search walks `COD4_SEED_FROM..COD4_SEED_TO` (Unix ms, around the run's
 /// `games_mp.log`, which `G_InitGame` opens) for a stream whose first 64
 /// draws give every capture in `COD4_SEED_CAPTURES` (default `walk,spec`)
-/// its challenge with a `svs.time` under 2^18. Run by hand (`cargo test -p
-/// vcod-server --lib -- --ignored recover_game_seed --nocapture`); it finds
+/// its challenge with a `svs.time` under 2^18. Run by hand
+/// (`cargo test -p vcod-server --lib -- --ignored recover_game_seed --nocapture`); it finds
 /// [`WALK_SEED`] alone, and with `kill-target,kill-shooter` `combat_ab`'s
 /// `KILL_SEED`.
 #[test]

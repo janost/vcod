@@ -1423,7 +1423,7 @@ mod tests {
     }
 
     /// An entity whose `model` is an xmodel name owns no brushes, so
-    /// `notSolid()` on one must not unlink submodel 1 -- or any script model
+    /// `notSolid()` on one must not unlink submodel 1, or any script model
     /// standing near a door would take the door out of the clip.
     #[test]
     fn notsolid_on_an_xmodel_entity_leaves_the_submodels_alone() {

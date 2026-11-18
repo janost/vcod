@@ -35,7 +35,7 @@ const GAPS: &[(&str, &str)] = &[];
 /// Fields stage 5 knowingly does not reproduce, as `(map, field, reason)`.
 /// Same rule as `GAPS`: a listed field that stops differing on its own map
 /// fails the guard, so this cannot rot either. Scoped to a map because a gap
-/// only exists where the entity that carries it does -- pavlov places no
+/// only exists where the entity that carries it does: pavlov places no
 /// turret, so a turret's field matches there by having nothing to differ on.
 const FIELD_GAPS: &[(&str, &str, &str)] = &[];
 
@@ -45,7 +45,7 @@ const FIELD_GAPS: &[(&str, &str, &str)] = &[];
 /// we box-trace, so its resting z and the surface normal it aligns to are a
 /// little different. Measured maxima across both maps are 0.024 units of z and
 /// 0.035 degrees of angle; this bound is twice that, and it is far under the
-/// errors the gate exists to catch -- an item floating at the mapper's z is
+/// errors the gate exists to catch: an item floating at the mapper's z is
 /// five units out and an unwrapped roll is 360 degrees out.
 ///
 /// It also covers `+0.0` against `-0.0`, which is what a flat floor's pitch

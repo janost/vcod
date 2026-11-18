@@ -223,7 +223,7 @@ pub struct Missile {
     /// projectile off it.
     pub weapon: u8,
     /// The projectile model's configstring index. Retail's `fire_grenade`
-    /// writes no `s.index` -- every `!missile` line reads `index=0` -- so
+    /// writes no `s.index` (every `!missile` line reads `index=0`), so
     /// this never reaches the wire; the registration it comes from is what
     /// puts the model in the client's table.
     pub model: i32,
@@ -838,7 +838,7 @@ impl Missile {
         draws: &mut Draws,
     ) -> bool {
         // The impact time is interpolated in whole milliseconds, and the
-        // fraction is whichever trace 12.3 read -- the downward one on a
+        // fraction is whichever trace 12.3 read: the downward one on a
         // ground snap, where it is a fraction of 1.5 units and not of the
         // frame. That is retail's arithmetic, and the capture's bounce
         // deltas only come out on it. All three builds keep the product on
@@ -2361,7 +2361,7 @@ mod tests {
     /// The throw's origin and velocity, against the retail capture's own
     /// numbers: standing at (1200, 1760, 144.125) with a 60-unit view height
     /// and yaw 90, the fixture's grenade leaves `pos.trBase`
-    /// (1200, 1760, 204) with `trDelta` (0, 960, 120) -- the eye truncated
+    /// (1200, 1760, 204) with `trDelta` (0, 960, 120): the eye truncated
     /// toward zero, `forward * projectileSpeed` and `projectileSpeedUp` on z
     /// (section 11.3). Reconstructed from the first `!missile` line's bounce:
     /// `trDelta` (0, -288, 75.6) is `-0.3 * 960` and `0.75 * (120 - 800 *

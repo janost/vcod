@@ -5,7 +5,7 @@
 //! the join here answers the stock menus with the same two.
 //!
 //! Only `[playerstate]` is diffed. Retail sends a client no entity for
-//! itself -- the playerstate carries it -- so both fixtures' `[entity]`
+//! itself (the playerstate carries it), so both fixtures' `[entity]`
 //! section is a comment saying so, and there is nothing to compare there;
 //! the check below fails if a retaken fixture ever grows one. The
 //! client-tagged entity fields are asserted against script state elsewhere,
@@ -31,7 +31,7 @@ const GAPS: &[(&str, &str)] = &[];
 
 /// Fields no capture can pin: they advance with the frame the capture was
 /// taken on, so retail's value and ours are both correct and different.
-/// Unlike `GAPS` these carry no guard -- one matching by luck is not a
+/// Unlike `GAPS` these carry no guard: one matching by luck is not a
 /// defect, and asserting that it must differ would be wrong.
 const VOLATILE: &[(&str, &str)] = &[(
     "commandTime",
@@ -368,7 +368,7 @@ fn check(map: &str) {
             continue;
         }
         // The anim channels compare by index: bit 512 is the restart toggle,
-        // and its absolute value is not a fact about the pose -- retail's
+        // and its absolute value is not a fact about the pose: retail's
         // standing `stand_up` reads 634 on mp_carentan and 122 on mp_pavlov
         // (docs/research/player-model-anim-system.md, "The restart toggle").
         let mask = match f.name {

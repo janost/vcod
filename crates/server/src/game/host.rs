@@ -789,7 +789,7 @@ pub struct GameHost {
     pub test_clients: TestClients,
     /// Each client's weapons, by slot. `giveWeapon` and `setSpawnWeapon`
     /// write it, `spawn` clears it, and `Server` copies it into the client's
-    /// sim every frame — the same re-read-it-each-frame arrangement the
+    /// sim every frame: the same re-read-it-each-frame arrangement the
     /// configstring table has, because a thread past a `wait` can still
     /// change it.
     pub client_weapons: Vec<crate::weapons::PlayerWeapons>,
@@ -803,8 +803,8 @@ pub struct GameHost {
     pub client_shellshock: Vec<[i32; 3]>,
     /// What the weapon builtins did to a client's ammo and current weapon,
     /// by slot, in call order. Unlike `client_weapons` these are edges rather
-    /// than state -- `ps.ammoclip` is spent by firing, so re-applying a full
-    /// clip every frame would make the weapon bottomless -- so `Server`
+    /// than state (`ps.ammoclip` is spent by firing, so re-applying a full
+    /// clip every frame would make the weapon bottomless), so `Server`
     /// drains them after `run_frame` and applies each once.
     pub client_weapon_ops: Vec<(usize, WeaponOp)>,
     /// Each client's ammo arrays ([`AmmoArrays`]), by slot.
@@ -2466,7 +2466,7 @@ impl GameHost {
     /// `RegisterItem` (0x4e504): the registration bit, the alt-fire link,
     /// the item's own two model fields and configstring 8. Every caller
     /// goes through here rather than `Items::register`, so an item takes
-    /// its model slots wherever it is registered -- at spawn for a placed
+    /// its model slots wherever it is registered: at spawn for a placed
     /// weapon, in `precacheItem` for the script's own list.
     ///
     /// A chained alt mode gets the same model pair as the item itself,
@@ -3673,8 +3673,8 @@ fn enum_index(cx: &Cx, names: &[&str], value: Value) -> Result<Value, ErrorKind>
 /// hudelem `x` is type 0, an int, in retail's field table (object-model doc,
 /// "HUD element fields"), and the plant writes
 /// `320 - level.barsize / 2.0` into it, so `Scr_SetGenericField`'s int arm
-/// cannot be refusing a float. The rounding is not measured -- that value is
-/// 176.0, integral whichever way retail rounds -- and truncation toward zero
+/// cannot be refusing a float. The rounding is not measured (that value is
+/// 176.0, integral whichever way retail rounds), and truncation toward zero
 /// is taken from the language doc's other numeric conversions. Open: a probe
 /// writing 1.7 into an int field and reading it back would pin it.
 fn coerce(ty: FieldType, v: Value) -> Value {
@@ -3976,7 +3976,7 @@ mod tests {
     /// A HUD enum field stores retail's index and reads back the name, the
     /// set/get hook pair retail hangs on the field record. The stock
     /// `startGame` writes `level.clock.alignX = "center"`, so a string has
-    /// to be what the field takes -- but `"center"` alone proves nothing
+    /// to be what the field takes, but `"center"` alone proves nothing
     /// about the order, since it is index 1 of three either way, so every
     /// name in all three tables is checked against its index here.
     #[test]

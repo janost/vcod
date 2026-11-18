@@ -273,8 +273,8 @@ impl<'a> Compiler<'a> {
         // Every function returns. A jump already patched to land just past
         // the body (e.g. an `if` with no `else`, ending in `return`) relies
         // on this instruction actually being there, so the rule has to be
-        // syntactic — the AST's last statement, not whichever op happened
-        // to be emitted last — or such a jump lands one past the end of
+        // syntactic (the AST's last statement, not whichever op happened
+        // to be emitted last), or such a jump lands one past the end of
         // `code`.
         let last_is_return = matches!(
             def.body.last(),
@@ -405,7 +405,7 @@ impl<'a> Compiler<'a> {
     /// making `StoreIndex` fail (measured,
     /// tests/fixtures/semantics/retail-captures.txt `# probe_autoviv`).
     /// Only recurses through the shapes that have somewhere to write the
-    /// new array back to -- a local slot, a struct/entity field, or another
+    /// new array back to: a local slot, a struct/entity field, or another
     /// array's element; anything else (a call result, `self`, `level`, ...)
     /// compiles as a plain value and leans on `StoreIndex`'s existing
     /// not-an-array error.
@@ -590,7 +590,7 @@ impl<'a> Compiler<'a> {
     // `case` tests the hidden local and jumps to this arm's landing
     // address; `default` isn't tested, it's the address the label chain
     // falls back to when nothing matches. Either way, an arm with an empty
-    // body has no landing address of its own — its jump site (a `case`'s)
+    // body has no landing address of its own: its jump site (a `case`'s)
     // or its role as the fallback (`default`'s) is queued and resolved
     // against whichever body comes next, which is exactly the fallthrough
     // the corpus's stacked labels rely on.
@@ -646,8 +646,8 @@ impl<'a> Compiler<'a> {
             self.compile_block(&arm.body)?;
         }
 
-        // Whatever's left over — trailing empty cases, a trailing empty
-        // `default`, or no `default` at all — lands at the switch's end.
+        // Whatever's left over (trailing empty cases, a trailing empty
+        // `default`, or no `default` at all) lands at the switch's end.
         let epilogue = self.code.len() as u32;
         for p in pending.drain(..) {
             self.patch(p, epilogue);
@@ -1072,7 +1072,7 @@ mod tests {
     /// A function's last statement is an `if` with no `else`, whose only
     /// branch ends in `return`. The `if`'s `JumpIfFalse` was patched to
     /// land right after the then-branch, at the code length measured
-    /// *then* — a real instruction only if the compiler still appends the
+    /// *then*: a real instruction only if the compiler still appends the
     /// implicit `ReturnUndef` despite the then-branch's `Op::Return` being
     /// the last op emitted. Checking the AST's last statement rather than
     /// the last op is what keeps that patch in bounds.
@@ -1089,7 +1089,7 @@ mod tests {
     }
 
     /// A case with no trailing `break` is idiomatic and must fall through
-    /// into the next body without leaving a stray value behind — the
+    /// into the next body without leaving a stray value behind: the
     /// `compile()` helper's `stack_depth` check is the real assertion
     /// here; a build without the fix panics inside `compile()` itself.
     #[test]
@@ -1100,7 +1100,7 @@ mod tests {
     /// `default` in the middle of a switch, with the following case falling
     /// into it exactly as it falls into any other case: `cover_stand.gsc`'s
     /// shape (`default:` sets state and falls into the case that acts on
-    /// it). Checked by op order — the default's `StoreField` must precede
+    /// it). Checked by op order: the default's `StoreField` must precede
     /// the matched case's call, proving the default body physically
     /// precedes and falls into it rather than being appended at the end.
     #[test]

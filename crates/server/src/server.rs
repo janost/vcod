@@ -5664,8 +5664,8 @@ impl Server {
     /// `SV_SetConfigstring`'s per-frame half: every slot the running level
     /// changed goes out as `d <index> <text>` to every client, which is what
     /// retail's broadcast gate lets through while `sv.state` reads 2
-    /// (map-cycle doc, 3.1). The script allocates all through the level -- a
-    /// `playSound` or `precacheString` from a thread past a `wait` -- and the
+    /// (map-cycle doc, 3.1). The script allocates all through the level (a
+    /// `playSound` or `precacheString` from a thread past a `wait`), and the
     /// index a later `s` or event carries is worthless to a client whose slot
     /// is still empty.
     ///
@@ -5799,8 +5799,8 @@ impl Server {
     }
 
     /// Marks the whole table as already known to every client. The two level
-    /// boundaries hand it over wholesale -- a map change in the gamestate
-    /// each client pulls, a restart in the burst 4.3 describes -- so neither
+    /// boundaries hand it over wholesale (a map change in the gamestate
+    /// each client pulls, a restart in the burst 4.3 describes), so neither
     /// leaves anything for the diff above to send.
     fn sync_sent_configstrings(&mut self) {
         self.core.sent_configstrings = self.core.configstrings.clone();
@@ -5863,10 +5863,10 @@ impl Server {
     /// retail's does for a command no one registered. `false` when a load left no level,
     /// which stops the drain.
     ///
-    /// A load that failed before the teardown -- no paks, a map the paks do
-    /// not have, a bsp that would not parse -- leaves the level that is
-    /// serving alone and is logged. One that failed after it -- the map or
-    /// gametype scripts -- has no level left to fall back to, so it ends the
+    /// A load that failed before the teardown (no paks, a map the paks do
+    /// not have, a bsp that would not parse) leaves the level that is
+    /// serving alone and is logged. One that failed after it (the map or
+    /// gametype scripts) has no level left to fall back to, so it ends the
     /// process through [`Self::take_fatal`].
     fn exec_console_line(&mut self, line: &str, now: Instant) -> bool {
         match console::Command::parse(line) {
@@ -8426,7 +8426,7 @@ mod tests {
     /// the seam it is built across: `WEAPON_LIST` is 1-based on the wire, so
     /// `items::item_name` subtracts one to name it. Misaligned by one, every
     /// pistol player animates as a rifleman and nothing says so. Needs the
-    /// paks -- the classes come from the weapon files.
+    /// paks: the classes come from the weapon files.
     #[test]
     fn the_weapon_class_table_lines_up_with_the_wire_index() {
         let Some(fs) = vcod_common::testing::game_fs_11() else {
@@ -9406,7 +9406,7 @@ mod tests {
     /// A load that fails after the teardown leaves no level to serve and no
     /// console line that could bring one back, which is what retail ends the
     /// process for: the server records it and `main` exits on it. A load that
-    /// fails before the teardown -- a map the paks do not have -- keeps the
+    /// fails before the teardown (a map the paks do not have) keeps the
     /// level that is serving and records nothing.
     #[test]
     fn a_script_load_that_fails_after_the_teardown_is_fatal() {
@@ -10713,7 +10713,7 @@ mod tests {
     /// announced; each serverTime is absolute so the test isolates the angle
     /// base from the serverTime base. `n` cmds, 20 ms apart from `st`: one is
     /// enough to prove the field decodes, but a probe of *which* base it
-    /// decoded against needs the resulting velocity to actually get there --
+    /// decoded against needs the resulting velocity to actually get there:
     /// `pmove::spectator_move`'s `accelerate` blends toward the wishdir
     /// rather than snapping to it, so a single cmd's movement is still mostly
     /// the previous leg's residual velocity. A burst gives the (correct or
@@ -12235,22 +12235,22 @@ mod tests {
 
     /// A retail client omits unchanged angle fields (change bit 0) instead of
     /// announcing them, so the server must decode them against the cmd it
-    /// last stored for this client, not `NULL_USERCMD` -- decoding against
+    /// last stored for this client, not `NULL_USERCMD`: decoding against
     /// the null base resets the move basis to yaw 0 for a frame (the
     /// "spectator flash" bug, AGENTS.md's gotchas). `ps.yaw` steers
     /// `pmove::spectator_move`'s wishdir directly, so a burst of `forward`
     /// cmds sent right after the omission is a direct probe of which base
     /// the server used: yaw -45 accelerates the spectator diagonally
     /// (velocity settles near `vx == -vy`), yaw 0 (the bug) only along +x
-    /// (`vy` stays small). A single cmd is not enough to tell them apart --
+    /// (`vy` stays small). A single cmd is not enough to tell them apart:
     /// `accelerate` blends toward the wishdir rather than snapping to it, so
     /// one frame is still mostly the previous leg's momentum; a 20-cmd burst
     /// gives the (correct or wrongly-reset) wishdir time to dominate, which
     /// I confirmed empirically (`vy` -283 with the real base, -20 with the
     /// bug forced, at this burst length). `viewangles` no longer carries
-    /// this -- it stays unwritten, docs/protocol-1.1.md "Spectator view
-    /// angles" -- so this checks the property the field used to stand in
-    /// for directly.
+    /// this (it stays unwritten, docs/protocol-1.1.md "Spectator view
+    /// angles"), so this checks the property directly instead of through
+    /// that field.
     #[test]
     fn omitted_angles_decode_against_the_stored_last_cmd() {
         let now = Instant::now();
@@ -12528,7 +12528,7 @@ mod tests {
 
     /// A move message that fails to decode is discarded whole: the next good
     /// one still chains from the last successfully decoded cmd, not
-    /// `NULL_USERCMD` -- same base-decode property and the same burst probe
+    /// `NULL_USERCMD`: same base-decode property and the same burst probe
     /// as `omitted_angles_decode_against_the_stored_last_cmd`, with a
     /// garbled packet spliced in first.
     #[test]

@@ -32,7 +32,7 @@ pub const EF_CROUCH: i32 = 0x20;
 pub const EF_PRONE: i32 = 0x40;
 /// The per-spawn toggle: every spawn flips it, a spectator's and the
 /// intermission camera's included, and a level boundary clears it
-/// (docs/research/cod11-map-cycle.md, 8.2). Not per life --
+/// (docs/research/cod11-map-cycle.md, 8.2). Not per life:
 /// `mp_carentan-sd-roundrestart-target.txt` reads 24 on two consecutive
 /// lives (`!trace ms=28607` and `ms=118532`) because the spectator frame
 /// between them took the intervening flip. The `dm` hit capture's near-even
