@@ -14,7 +14,7 @@ use vcod_gsc::ErrorKind;
 mod registry;
 
 pub use vcod_common::net::protocol::{
-    CS_CVAR_NAMES as MIRROR_NAMES, CS_CVAR_VALUES as MIRROR_VALUES,
+    CS_CVAR_NAMES_V1 as MIRROR_NAMES, CS_CVAR_VALUES_V1 as MIRROR_VALUES,
 };
 
 /// The 21 cvars the game module registers into the mirror at init, before

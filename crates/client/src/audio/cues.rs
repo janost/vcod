@@ -16,7 +16,7 @@ use vcod_common::weapon::WeaponSounds;
 
 /// First of the 256 sound-alias configstrings (section 9). `EV_SOUND_ALIAS`
 /// `eventParm` indexes it; 0 means no alias.
-pub use vcod_common::net::protocol::CS_SOUNDS;
+pub use vcod_common::net::protocol::CS_SOUNDS_V1;
 
 /// Entity number for the map ambient, so no cue can end it (retail uses
 /// reserved stream slots instead, section 2). Outside 0..1024 and distinct
@@ -515,7 +515,7 @@ mod tests {
     ) -> CueCtx<'a> {
         CueCtx {
             configstrings: cs,
-            sounds: CS_SOUNDS,
+            sounds: CS_SOUNDS_V1,
             weapon_sounds: ws,
             muzzles: mz,
             shot_fallbacks: EMPTY_FALLBACKS.get_or_init(HashMap::new),
@@ -780,7 +780,7 @@ mod tests {
     #[test]
     fn sound_alias_reads_cs_524_plus_parm_on_the_entity() {
         let mut cs = vec![String::new(); 800];
-        cs[CS_SOUNDS + 7] = "mp_bomb_plant".to_string();
+        cs[CS_SOUNDS_V1 + 7] = "mp_bomb_plant".to_string();
         let (ws, mz) = (HashMap::new(), HashMap::new());
         let mut e = ev(EV_SOUND_ALIAS);
         e.parm = 7;

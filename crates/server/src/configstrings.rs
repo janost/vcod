@@ -5,7 +5,7 @@
 use crate::server::ServerConfig;
 use vcod_common::net::connectionless::Info;
 use vcod_common::net::protocol::{
-    CS_LEVEL_START_TIME, CS_SERVERINFO, CS_SYSTEMINFO, Cod1Wire, CsLayout, PROTOCOL_V1,
+    CS_LEVEL_START_TIME_V1, CS_SERVERINFO, CS_SYSTEMINFO, Cod1Wire, CsLayout, PROTOCOL_V1,
 };
 use vcod_common::pk3::PakInfo;
 use vcod_common::pmove::FallHeights;
@@ -26,7 +26,7 @@ pub const WEAPON_LIST: &str = "bar_mp bar_slow_mp bren_mp colt_mp enfield_mp fg4
 pub const STATIC: &[(usize, &str)] = &[
     (2, "cod"),
     (7, WEAPON_LIST),
-    (CS_LEVEL_START_TIME, "0"),
+    (CS_LEVEL_START_TIME_V1, "0"),
     (20, "\\winner\\0"),
     (1212, "CGAME_USEMG42"),
     (1213, "CGAME_USEPTRS41"),

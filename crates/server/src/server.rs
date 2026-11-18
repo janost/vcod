@@ -8485,7 +8485,7 @@ mod tests {
                 "main() { e = spawn(\"script_origin\", (0, 0, 0)); wait 0.5; e playsound(\"late_alias\"); }",
             ),
         );
-        let slot = vcod_common::net::protocol::CS_SOUNDS + 1;
+        let slot = vcod_common::net::protocol::CS_SOUNDS_V1 + 1;
         // sv_time starts at 0 and each tick advances it one 50 ms frame, so
         // the thread is still suspended after the first.
         sv.tick(now);
@@ -10843,7 +10843,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         // Enough configstrings to pass one fragment.
         for i in 0..40 {
-            sv.core.configstrings[vcod_common::net::protocol::CS_SOUNDS + 1 + i] =
+            sv.core.configstrings[vcod_common::net::protocol::CS_SOUNDS_V1 + 1 + i] =
                 format!("sound/misc/{i:03}_{}", "x".repeat(40));
         }
         let mut nc = connected(&mut sv, addr(5), now);

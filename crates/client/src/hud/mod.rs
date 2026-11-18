@@ -1362,8 +1362,8 @@ mod tests {
         bar.set(msg_field::HEIGHT, 10);
         bar.set(msg_field::COLOR, -1);
         ps.arrays.hud_current.push(bar);
-        let mut cs = vec![String::new(); hudelem::CS_SHADERS + 2];
-        cs[hudelem::CS_SHADERS + 1] = "white".into();
+        let mut cs = vec![String::new(); hudelem::CS_SHADERS_V1 + 2];
+        cs[hudelem::CS_SHADERS_V1 + 1] = "white".into();
         let (loc, clients) = (Localized::default(), BTreeMap::new());
         let pm_type = PlayerState::field_index(&PROTOCOL_V1, "pm_type").expect("pm_type");
         let mut drawn = |pm: i32, local_player: bool| -> Vec<String> {
@@ -1409,8 +1409,8 @@ mod tests {
         bar.set(msg_field::HEIGHT, 10);
         bar.set(msg_field::COLOR, -1);
         ps.arrays.hud_current.push(bar);
-        let mut cs = vec![String::new(); hudelem::CS_SHADERS + 2];
-        cs[hudelem::CS_SHADERS + 1] = "white".into();
+        let mut cs = vec![String::new(); hudelem::CS_SHADERS_V1 + 2];
+        cs[hudelem::CS_SHADERS_V1 + 1] = "white".into();
         let (loc, clients) = (Localized::default(), BTreeMap::new());
         let mut drawn = |status: bool| -> Vec<String> {
             let f = HudFrame {

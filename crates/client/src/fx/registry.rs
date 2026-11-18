@@ -1028,7 +1028,7 @@ mod tests {
     use super::*;
     use std::sync::OnceLock;
     use vcod_common::net::events::BYTE_DIRS;
-    use vcod_common::net::protocol::{CS_EFFECTS, CS_FX_TAGS};
+    use vcod_common::net::protocol::{CS_EFFECTS_V1, CS_FX_TAGS_V1};
 
     static EMPTY_BRASS: LazyLock<HashMap<u32, (Vec3, Vec3)>> = LazyLock::new(HashMap::new);
 
@@ -1100,7 +1100,7 @@ mod tests {
     #[test]
     fn play_fx_resolves_the_effect_configstring() {
         let mut cs = vec![String::new(); 2048];
-        cs[CS_EFFECTS + 3] = "fx/explosions/mp_bomb.efx".to_string();
+        cs[CS_EFFECTS_V1 + 3] = "fx/explosions/mp_bomb.efx".to_string();
         let ctx = ResolveCtx {
             configstrings: &cs,
             cs: &vcod_common::net::protocol::CS_LAYOUT_V1,
@@ -1150,10 +1150,10 @@ mod tests {
     #[test]
     fn play_fx_on_tag_reads_the_tag_pair() {
         let mut cs = vec![String::new(); 2048];
-        cs[CS_EFFECTS + 3] = "fx/explosions/mp_bomb.efx".to_string();
-        cs[CS_FX_TAGS + 1] = "03tag_helmet".to_string();
-        cs[CS_FX_TAGS + 2] = "07tag_helmet".to_string();
-        cs[CS_FX_TAGS + 3] = "x".to_string();
+        cs[CS_EFFECTS_V1 + 3] = "fx/explosions/mp_bomb.efx".to_string();
+        cs[CS_FX_TAGS_V1 + 1] = "03tag_helmet".to_string();
+        cs[CS_FX_TAGS_V1 + 2] = "07tag_helmet".to_string();
+        cs[CS_FX_TAGS_V1 + 3] = "x".to_string();
         let ctx = ResolveCtx {
             configstrings: &cs,
             cs: &vcod_common::net::protocol::CS_LAYOUT_V1,

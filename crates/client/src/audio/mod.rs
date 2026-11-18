@@ -350,7 +350,7 @@ impl AudioSystem {
                 VOLUME_SCALE
             },
             manager,
-            cs_sounds: cues::CS_SOUNDS,
+            cs_sounds: cues::CS_SOUNDS_V1,
             menu_aliases: aliases_all.for_map("menu"),
             aliases_all,
             aliases: AliasTable::default(),
@@ -2514,7 +2514,7 @@ mod tests {
         );
         a.on_gamestate("mp_carentan");
         let mut cs = vec![String::new(); 800];
-        cs[cues::CS_SOUNDS + 3] = "bomb_tick".to_string();
+        cs[cues::CS_SOUNDS_V1 + 3] = "bomb_tick".to_string();
         let mut loops = HashMap::new();
         loops.insert(12u32, (3, Vec3::new(1.0, 2.0, 3.0)));
         a.set_loop_sounds(&fs, &cs, &loops);
@@ -2763,7 +2763,7 @@ mod tests {
         a.on_gamestate("mp_carentan");
         let mut cs = vec![String::new(); 800];
         // `MP_bomb_plant` is `all_mp`, one-shot, channel `auto`.
-        cs[cues::CS_SOUNDS + 4] = "MP_bomb_plant".to_string();
+        cs[cues::CS_SOUNDS_V1 + 4] = "MP_bomb_plant".to_string();
         let mut loops = HashMap::new();
         loops.insert(13u32, (4, Vec3::ZERO));
         a.set_loop_sounds(&fs, &cs, &loops);
@@ -2793,8 +2793,8 @@ mod tests {
         );
         a.on_gamestate("mp_carentan");
         let mut cs = vec![String::new(); 800];
-        cs[cues::CS_SOUNDS + 3] = "bomb_tick".to_string();
-        cs[cues::CS_SOUNDS + 4] = "ambient_mp_carentan".to_string();
+        cs[cues::CS_SOUNDS_V1 + 3] = "bomb_tick".to_string();
+        cs[cues::CS_SOUNDS_V1 + 4] = "ambient_mp_carentan".to_string();
         let mut loops = HashMap::new();
         loops.insert(12u32, (3, Vec3::ZERO));
         a.set_loop_sounds(&fs, &cs, &loops);
@@ -3110,7 +3110,7 @@ mod tests {
         );
         a.on_gamestate("mp_carentan");
         let mut cs = vec![String::new(); 800];
-        cs[cues::CS_SOUNDS + 5] = "MP_announcer_allies_win".to_string();
+        cs[cues::CS_SOUNDS_V1 + 5] = "MP_announcer_allies_win".to_string();
         let tok = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
 
         assert!(a.on_server_command(&fs, &tok(&["s", "5"]), &cs));
@@ -3197,8 +3197,8 @@ mod tests {
         assert!(row.channel.is_spatial() && row.dist.1 < far.length());
 
         let mut cs = vec![String::new(); 800];
-        cs[cues::CS_SOUNDS + 3] = "bomb_tick".to_string();
-        cs[cues::CS_SOUNDS + 4] = "no_such_loop_alias".to_string();
+        cs[cues::CS_SOUNDS_V1 + 3] = "bomb_tick".to_string();
+        cs[cues::CS_SOUNDS_V1 + 4] = "no_such_loop_alias".to_string();
         let mut loops = HashMap::new();
         loops.insert(12u32, (3, far));
         loops.insert(13u32, (4, Vec3::ZERO));

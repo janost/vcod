@@ -135,11 +135,11 @@ impl LoopedFx {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vcod_common::net::protocol::{CS_EFFECTS, CS_LAYOUT_V1};
+    use vcod_common::net::protocol::{CS_EFFECTS_V1, CS_LAYOUT_V1};
 
     fn cs() -> Vec<String> {
         let mut cs = vec![String::new(); 2048];
-        cs[CS_EFFECTS + 2] = "fx/smoke/chimneysmoke.efx".into();
+        cs[CS_EFFECTS_V1 + 2] = "fx/smoke/chimneysmoke.efx".into();
         cs
     }
 

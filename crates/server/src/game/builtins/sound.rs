@@ -243,7 +243,7 @@ pub fn sound_fade(
 mod tests {
     use super::*;
     use crate::game::testing::fixture;
-    use vcod_common::net::protocol::CS_SOUNDS;
+    use vcod_common::net::protocol::CS_SOUNDS_V1;
     use vcod_gsc::Host;
 
     /// `playSound` allocates a sound-alias configstring, mirroring
@@ -313,7 +313,10 @@ mod tests {
                 .iter()
                 .position(|s| s == "Explo_plant_no_tick")
                 .unwrap();
-            assert_eq!(es.field_i32(p, "eventParms[0]"), (alias - CS_SOUNDS) as i32);
+            assert_eq!(
+                es.field_i32(p, "eventParms[0]"),
+                (alias - CS_SOUNDS_V1) as i32
+            );
         });
     }
 
