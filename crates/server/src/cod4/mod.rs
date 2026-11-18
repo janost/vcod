@@ -877,8 +877,8 @@ impl Cod4Server {
         let Some(m) = c.link.netchan.process_in(pkt) else {
             return;
         };
-        let seq = c.link.netchan.reliable_sequence as i32;
-        if m.reliable_ack > seq || seq - m.reliable_ack >= MAX_RELIABLE_COMMANDS as i32 {
+        // CoD2's acknowledge window (cod2-protocol.md 2.2).
+        if m.message_ack < 0 || !c.link.reliable_ack_in_window(m.reliable_ack) {
             return;
         }
         c.link.netchan.accept(&m);
