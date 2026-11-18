@@ -4461,6 +4461,8 @@ impl Renderer {
     pub fn set_material_lib(&mut self, lib: MaterialLib) {
         self.shader_lib = lib;
         self.lib_warn_count = self.shader_lib.warn_count();
+        // The mark shaders resolved through the old lib and search path.
+        self.marks.reopen();
     }
 
     /// Builds the map's GPU state; a previous map is dropped first.
@@ -6645,12 +6647,7 @@ impl Renderer {
         let Some(lighting) = d.lighting.as_mut() else {
             return vec![GpuLightSet::default()];
         };
-        let mut scene = d.scene_lights.clone();
-        scene.extend_from_slice(&d.entity_scene_lights);
-        scene.truncate(crate::fx::sim::MAX_SCENE_LIGHTS);
-        if !lights_models(self.dynamic_light) {
-            scene.clear();
-        }
+        let scene = model_scene_lights(&d.scene_lights, &d.entity_scene_lights, self.dynamic_light);
         let mut sets = Vec::new();
         let mut seen: HashMap<[u32; 3], u32> = HashMap::new();
         for ((model, raw), origin) in d.instances.iter_mut().zip(&d.light_origins) {
@@ -8836,7 +8833,12 @@ impl Renderer {
                     }
                     (Some(c2), _) => c2.entity_set(draw.light_origin, self.identity_light),
                     (None, Some(l)) => {
-                        let picked = l.entity_lights(draw.light_origin, &self.dynamic.scene_lights);
+                        let scene = model_scene_lights(
+                            &self.dynamic.scene_lights,
+                            &self.dynamic.entity_scene_lights,
+                            self.dynamic_light,
+                        );
+                        let picked = l.entity_lights(draw.light_origin, &scene);
                         entity_light::pack(&picked, Some(to_view), self.identity_light)
                     }
                     (None, None) => GpuLightSet::default(),
@@ -12497,6 +12499,20 @@ fn lights_models(mode: i32) -> bool {
     mode != 0
 }
 
+/// The scene lights the model light pick reads, the view weapon's
+/// included: the cgame's then the entities' (`constantLight`, the
+/// projectiles'), capped at the scene's count, and none under
+/// `r_dynamiclight 0` (light grid doc, the model pick count).
+fn model_scene_lights(scene: &[SceneLight], entity: &[SceneLight], mode: i32) -> Vec<SceneLight> {
+    if !lights_models(mode) {
+        return Vec::new();
+    }
+    let mut out = scene.to_vec();
+    out.extend_from_slice(entity);
+    out.truncate(crate::fx::sim::MAX_SCENE_LIGHTS);
+    out
+}
+
 /// Shader-stage images uploaded during one world load, and the texture
 /// gamma they load through (`r_ignorehwgamma 1`, `gamma::bake_image`).
 struct BundleViews<'a> {
@@ -12698,6 +12714,33 @@ mod tests {
     /// Every base stage draws, in order, on its own image and tcMods; a
     /// `perLight` stage is the dlight pass's and a `$lightmap` bundle 1 is
     /// not drawn (CoDMP.exe 0x500b30, 0x4f3699).
+    /// The view weapon's light pick reads the same list as every other
+    /// model's: the cgame's and the entities' lights, capped, and none
+    /// under `r_dynamiclight 0` (BUG-123).
+    #[test]
+    fn the_model_light_pick_takes_both_lists_under_the_cvar() {
+        let light = |x: f32| SceneLight {
+            origin: glam::Vec3::new(x, 0.0, 0.0),
+            color: glam::Vec3::ONE,
+            intensity: 1.0,
+        };
+        let scene = vec![light(1.0)];
+        let ents = vec![light(2.0), light(3.0)];
+        assert!(model_scene_lights(&scene, &ents, 0).is_empty());
+        for mode in [1, 2] {
+            let got = model_scene_lights(&scene, &ents, mode);
+            assert_eq!(
+                got.iter().map(|l| l.origin.x).collect::<Vec<_>>(),
+                [1.0, 2.0, 3.0]
+            );
+        }
+        let many = vec![light(0.0); crate::fx::sim::MAX_SCENE_LIGHTS + 5];
+        assert_eq!(
+            model_scene_lights(&many, &ents, 1).len(),
+            crate::fx::sim::MAX_SCENE_LIGHTS
+        );
+    }
+
     #[test]
     fn fx_stage_draws_every_base_stage() {
         assert_eq!(fx_stage_draws(None, "gfx/x", 0.0).len(), 1);
