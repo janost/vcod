@@ -63,6 +63,13 @@ impl QuickChat {
         self.tables = None;
     }
 
+    /// A new cgame (a disconnect or a gamestate): the queued lines named
+    /// the last server's clients, and retail's ring starts empty.
+    pub fn clear(&mut self) {
+        self.queue.clear();
+        self.next_due_s = 0.0;
+    }
+
     /// The `j`/`k`/`l` handler; true when the command was quick chat. argv
     /// layout per the research doc: `[letter, scope, ?, clientNum, category,
     /// originX, originY, originZ]`.
@@ -227,6 +234,16 @@ mod tests {
         assert!(!qc.on_server_command(&fs(), &["s".to_string(), "5".to_string()], |_| None));
         assert!(qc.on_server_command(&fs(), &cmd("j", 2, "praise"), |_| None));
         assert!(qc.on_server_command(&fs(), &cmd("l", 2, "praise"), |_| None));
+    }
+
+    /// Lines queued on one server do not play on the next (BUG-085).
+    #[test]
+    fn a_clear_drops_the_queued_lines() {
+        let mut qc = QuickChat::with_tables(Some(vc(vec![cat("praise", &["snd"])])), None);
+        assert!(qc.on_server_command(&fs(), &cmd("j", 2, "praise"), |_| Some(0)));
+        assert!(qc.on_server_command(&fs(), &cmd("j", 3, "praise"), |_| Some(0)));
+        qc.clear();
+        assert!(qc.drain(100.0).is_none());
     }
 
     // Every test here injects its tables, so the fs is never read.
