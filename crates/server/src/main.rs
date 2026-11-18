@@ -1,32 +1,33 @@
-//! `vcod-server`, a CoD 1.1 dedicated server. Answers browsers, accepts retail
+//! `vcod-server`, the dedicated server for CoD1 1.1 and 1.5, United
+//! Offensive, CoD2 1.3 and CoD4 1.7. Answers browsers, accepts retail
 //! clients, runs the stock gametype scripts on the gsc VM and sends
 //! delta-compressed snapshots.
 
 use anyhow::{Context, Result, bail};
-use clap::{CommandFactory, FromArgMatches, Parser};
+use clap::parser::ValueSource;
+use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser};
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
+use vcod_common::game::Game;
 use vcod_common::net::protocol::Protocol;
 use vcod_common::pk3::Pk3Fs;
 use vcod_server::engine::{Arrival, Engine, GameModule};
 use vcod_server::{Server, ServerConfig};
 
 #[derive(Parser)]
-#[command(about = "Call of Duty (2003) 1.1 dedicated server, in progress", version = env!("VCOD_VERSION"))]
+#[command(about = env!("CARGO_PKG_DESCRIPTION"), version = env!("VCOD_VERSION"))]
 struct Args {
     /// Map name, e.g. mp_carentan
     map: String,
     /// Game install; defaults to $COD_DIR, else the executable's directory
     #[arg(long, default_value_os_t = vcod_common::game_dir::default_game_dir())]
     game_dir: std::path::PathBuf,
-    /// Pk3 subdirectory, main for CoD1 or uo for United Offensive
+    /// CoD1 and CoD2: the data directory under the install, main, or uo
+    /// for United Offensive
     #[arg(long, default_value = "main")]
     mod_dir: String,
-    /// Which game the install is: cod1, cod2 or cod4. Defaults to what the
-    /// game dir holds. cod2 runs its own engine (`vcod_server::cod2`):
-    /// players join, move, fight, chat and vote, rcon admins them, and the
-    /// maps cycle. cod4 runs a 1.7 level (`vcod_server::cod4`) the same
-    /// way: the stock gametype scripts, pmove, combat, bots and the cycle.
+    /// Which game the install is: cod1 (1.1, 1.5 and UO), cod2 or cod4.
+    /// Defaults to what the game dir holds
     #[arg(long)]
     game: Option<vcod_common::game::Game>,
     /// UDP port
@@ -35,30 +36,33 @@ struct Args {
     /// sv_hostname
     #[arg(long, default_value = "vcod")]
     hostname: String,
-    /// sv_maxclients
-    #[arg(long, default_value_t = 8)]
+    /// sv_maxclients, 1 to 64; bots count
+    #[arg(long, default_value_t = 8,
+          value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=64))]
     max_clients: usize,
     /// g_gametype: the script under maps/mp/gametypes to run; dm, or war
     /// for cod4, where a `--set g_gametype=` wins over it
     #[arg(long)]
     gametype: Option<String>,
-    /// A gametype script from disk instead of the paks: overlaid at
+    /// CoD1 and CoD2: a gametype script from disk instead of the paks: overlaid at
     /// maps/mp/gametypes/<stem> and run as gametype <stem>. For the client
     /// probes in crates/gsc/tests/fixtures/semantics/client-probes/.
-    #[arg(long)]
+    #[arg(long, help_heading = "Developer")]
     gametype_script: Option<std::path::PathBuf>,
     /// CoD4: a directory whose loose .gsc files each level reads over the
     /// zones' scripts (maps/mp/mp_crash.gsc, say), as retail reads a mod's.
     /// For a probe or a perf run's scripted scene.
-    #[arg(long)]
+    #[arg(long, help_heading = "Developer")]
     script_dir: Option<std::path::PathBuf>,
-    /// Scripted entities that exercise the packet-entity wire path. 0 is off.
-    #[arg(long, default_value_t = 0)]
+    /// CoD1: scripted entities that exercise the packet-entity wire path.
+    /// 0 is off.
+    #[arg(long, default_value_t = 0, help_heading = "Developer")]
     test_entities: usize,
-    /// Debug bots in play. Each takes a real client slot; 0 is off.
+    /// Bots to add at start. Each takes a client slot; 0 is off. Without
+    /// --bots-shoot they only roam (docs/bots.md).
     #[arg(long, default_value_t = 0)]
     bots: usize,
-    /// Whether the bots fight. Without it they only roam.
+    /// Whether the --bots fight. Without it they only roam.
     #[arg(long)]
     bots_shoot: bool,
     /// A cvar to set, retail's `+set name value`; repeatable, e.g.
@@ -74,7 +78,7 @@ struct Args {
     /// until the process exits.
     #[arg(long)]
     ban_file: Option<std::path::PathBuf>,
-    /// Load only the install's stock retail paks (the patch's numbered paks,
+    /// CoD1 and UO: load only the install's stock retail paks (the patch's numbered paks,
     /// their `localized_*` ones, UO's map pack) and ignore every other pk3:
     /// third-party maps, `zzz_*` mods, downloads. Refuses `fs_game`.
     #[arg(long)]
@@ -88,7 +92,7 @@ struct Args {
     /// commandTime a client predicts from, the usercmds consumed, and whether
     /// the frame went out as a delta. Also one `tick:` line per second: the
     /// slowest tick and how far the loop ran behind its schedule.
-    #[arg(long)]
+    #[arg(long, help_heading = "Developer")]
     trace: bool,
 }
 
@@ -112,7 +116,17 @@ const PACKET_QUEUE: usize = 4 * MAX_PACKETS_PER_FRAME;
 fn main() -> Result<()> {
     let matches = Args::command().get_matches();
     let args = Args::from_arg_matches(&matches)?;
-    let game = vcod_common::game::Game::resolve(args.game, &args.game_dir);
+    let game = Game::resolve(args.game, &args.game_dir);
+    // Everything that can fail without the game's data fails here, before
+    // a level loads for seconds.
+    check_game_flags(&matches, game)?;
+    check_args(&args)?;
+    // A restricted (demo) install reads `demomain`, which `cod1_server` checks.
+    if last_set(&args.set, "fs_restrict").is_none() {
+        let chosen = vcod_common::game_dir::chosen_by(from_command_line(&matches, "game_dir"));
+        vcod_common::game_dir::check_install(&args.game_dir, game, &args.mod_dir, chosen)?;
+    }
+    let sock = bind(last_set(&args.set, "net_ip"), args.port)?;
     let tty = tty_console_wanted(&args, game);
     init_log(tty);
     // `Com_AddStartupCommands` queues the command line in order, so a set
@@ -143,17 +157,67 @@ fn main() -> Result<()> {
     }));
     let trace = args.trace;
     let console = (!args.no_console).then(|| stdin_console(tty));
-    if game == vcod_common::game::Game::Cod2 {
-        let (mut server, net) = cod2_server(args)?;
+    if game == Game::Cod2 {
+        let (mut server, net) = cod2_server(args, sock)?;
         return serve(&mut server, net, console, trace);
     }
-    if game == vcod_common::game::Game::Cod4 {
-        let (mut server, net) = cod4_server(args)?;
+    if game == Game::Cod4 {
+        let (mut server, net) = cod4_server(args, sock)?;
         return serve(&mut server, net, console, trace);
     }
-    game.ensure_supported()?;
-    let (mut server, net) = cod1_server(args, &sets_after_map)?;
+    let (mut server, net) = cod1_server(args, sock, &sets_after_map)?;
     serve(&mut server, net, console, trace)
+}
+
+/// Whether `id` was given on the command line rather than defaulted.
+fn from_command_line(matches: &ArgMatches, id: &str) -> bool {
+    matches.value_source(id) == Some(ValueSource::CommandLine)
+}
+
+/// The flags only some games read, by clap id, and those games.
+const GAME_FLAGS: [(&str, &[Game]); 5] = [
+    ("vanilla", &[Game::Cod1]),
+    ("mod_dir", &[Game::Cod1, Game::Cod2]),
+    ("gametype_script", &[Game::Cod1, Game::Cod2]),
+    ("test_entities", &[Game::Cod1]),
+    ("script_dir", &[Game::Cod4]),
+];
+
+/// Refuses a flag `game` would accept and ignore.
+fn check_game_flags(matches: &ArgMatches, game: Game) -> Result<()> {
+    for (id, games) in GAME_FLAGS {
+        if !games.contains(&game) && from_command_line(matches, id) {
+            let names: Vec<String> = games.iter().map(|g| format!("{g:?}")).collect();
+            bail!(
+                "--{} is {} only; this is {game:?}",
+                id.replace('_', "-"),
+                names.join(" and ")
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The argument checks that need no game data.
+fn check_args(args: &Args) -> Result<()> {
+    if let Some(pair) = args.set.iter().find(|p| !p.contains('=')) {
+        bail!("--set takes NAME=VALUE, got {pair:?}");
+    }
+    if args.bots > args.max_clients {
+        bail!(
+            "--bots {} exceeds --max-clients {}; each bot takes a real slot",
+            args.bots,
+            args.max_clients
+        );
+    }
+    if args.test_entities > vcod_server::world::MAX_TEST_ENTITIES {
+        bail!(
+            "--test-entities {} exceeds {}, the most that fits below ENTITYNUM_WORLD",
+            args.test_entities,
+            vcod_server::world::MAX_TEST_ENTITIES
+        );
+    }
+    Ok(())
 }
 
 /// Whether stdin gets CoD1's tty line editor: a terminal, `ttycon` not
@@ -213,21 +277,7 @@ fn stdin_console(tty: bool) -> vcod_server::stdin_console::StdinConsole {
 
 /// CoD1 (1.1, 1.5, UO): the install's paks, the map and its scripts
 /// loaded, listening.
-fn cod1_server(args: Args, sets_after_map: &[bool]) -> Result<(Server, Net)> {
-    if args.test_entities > vcod_server::world::MAX_TEST_ENTITIES {
-        bail!(
-            "--test-entities {} exceeds {}, the most that fits below ENTITYNUM_WORLD",
-            args.test_entities,
-            vcod_server::world::MAX_TEST_ENTITIES
-        );
-    }
-    if args.bots > args.max_clients {
-        bail!(
-            "--bots {} exceeds --max-clients {}; each bot takes a real slot",
-            args.bots,
-            args.max_clients
-        );
-    }
+fn cod1_server(args: Args, sock: UdpSocket, sets_after_map: &[bool]) -> Result<(Server, Net)> {
     // `FS_SetRestrictions` (cod_lnxded 0x80713e8, 1.5b 0x8075af8, UO
     // 0x807625a): a non-zero `fs_restrict` runs the demo's data only. 1.1
     // and 1.5 search `demomain` for `main`, UO keeps its base, and every pak
@@ -268,15 +318,19 @@ fn cod1_server(args: Args, sets_after_map: &[bool]) -> Result<(Server, Net)> {
         }
     }
     // A missing or corrupt map fails here rather than at first use.
-    let bsp = vcod_common::mapworld::find(&*fs, &args.map)
-        .with_context(|| format!("loading the map from {}", dir.display()))?;
+    let bsp = vcod_common::mapworld::find(&*fs, &args.map).with_context(|| {
+        match vcod_common::game_dir::uo_map_hint(&args.game_dir, &args.mod_dir) {
+            Some(hint) => format!("loading the map from {} ({hint})", dir.display()),
+            None => format!("loading the map from {}", dir.display()),
+        }
+    })?;
 
     let (gametype, overlay) = gametype_overlay(&args)?;
+    let protocol = protocol(&args.set, &fs)?;
 
-    let (sock, packets) = listen(args.port)?;
+    let (sock, packets) = listen(sock)?;
     log::info!("vcod-server: {} on udp/{}", args.map, args.port);
     let seed = wall_seed();
-    let protocol = protocol(&args.set, &fs)?;
     log::info!(
         "speaking protocol {} (patch {})",
         protocol.transport.version,
@@ -315,10 +369,7 @@ fn cod1_server(args: Args, sets_after_map: &[bool]) -> Result<(Server, Net)> {
     if let Some(path) = args.ban_file {
         server.set_bans(vcod_server::engine::bans::BanFile::open(path));
     }
-    for pair in &args.set {
-        let Some((name, value)) = pair.split_once('=') else {
-            bail!("--set takes NAME=VALUE, got {pair:?}");
-        };
+    for (name, value) in args.set.iter().filter_map(|p| p.split_once('=')) {
         server.set_cvar(name, value);
     }
     // A failed script load is fatal, not a warning. The configstring table is
@@ -339,7 +390,7 @@ fn cod1_server(args: Args, sets_after_map: &[bool]) -> Result<(Server, Net)> {
 
 /// `--game cod2`: the CoD2 engine (`vcod_server::cod2`) over the
 /// install's iwds, the level loaded, listening.
-fn cod2_server(args: Args) -> Result<(vcod_server::cod2::Cod2Server, Net)> {
+fn cod2_server(args: Args, sock: UdpSocket) -> Result<(vcod_server::cod2::Cod2Server, Net)> {
     let fs = std::rc::Rc::new(
         Pk3Fs::open_iwd(&args.game_dir.join(&args.mod_dir), None)
             .with_context(|| format!("opening the iwds in {}", args.game_dir.display()))?,
@@ -364,10 +415,7 @@ fn cod2_server(args: Args) -> Result<(vcod_server::cod2::Cod2Server, Net)> {
     }
     // `games_mp.log` goes under the home path; `--set` outranks it.
     server.set_cvar("fs_homepath", &args.game_dir.to_string_lossy());
-    for pair in &args.set {
-        let Some((name, value)) = pair.split_once('=') else {
-            bail!("--set takes NAME=VALUE, got {pair:?}");
-        };
+    for (name, value) in args.set.iter().filter_map(|p| p.split_once('=')) {
         server.set_cvar(vcod_server::rcon::login_cvar_name(name), value);
     }
     server.set_cvar("net_port", &args.port.to_string());
@@ -377,7 +425,7 @@ fn cod2_server(args: Args) -> Result<(vcod_server::cod2::Cod2Server, Net)> {
     if args.bots > 0 {
         server.add_bots(args.bots, args.bots_shoot);
     }
-    let (sock, packets) = listen(args.port)?;
+    let (sock, packets) = listen(sock)?;
     let out = sock.try_clone().context("cloning the socket")?;
     server.set_net_now(vcod_server::cod2::NetNow {
         send: Box::new(move |to, pkt| {
@@ -393,7 +441,7 @@ fn cod2_server(args: Args) -> Result<(vcod_server::cod2::Cod2Server, Net)> {
 
 /// `--game cod4`: a CoD4 1.7 level (`vcod_server::cod4`) over the
 /// install's zones and iwds, listening.
-fn cod4_server(args: Args) -> Result<(vcod_server::cod4::Cod4Server, Net)> {
+fn cod4_server(args: Args, sock: UdpSocket) -> Result<(vcod_server::cod4::Cod4Server, Net)> {
     let install = vcod_cod4::install::Install::at(&args.game_dir)
         .with_context(|| format!("{} has no zone/ directory", args.game_dir.display()))?;
     let gametype = args.gametype.clone().unwrap_or_else(|| "war".into());
@@ -411,10 +459,7 @@ fn cod4_server(args: Args) -> Result<(vcod_server::cod4::Cod4Server, Net)> {
     let base = args.game_dir.display().to_string();
     server.set_cvar("fs_basepath", &base);
     server.set_cvar("fs_homepath", &base);
-    for pair in &args.set {
-        let Some((name, value)) = pair.split_once('=') else {
-            bail!("--set takes NAME=VALUE, got {pair:?}");
-        };
+    for (name, value) in args.set.iter().filter_map(|p| p.split_once('=')) {
         server.set_cvar(vcod_server::rcon::login_cvar_name(name), value);
     }
     server.set_cvar("net_port", &args.port.to_string());
@@ -428,7 +473,7 @@ fn cod4_server(args: Args) -> Result<(vcod_server::cod4::Cod4Server, Net)> {
     if args.bots > 0 {
         server.add_bots(args.bots, args.bots_shoot);
     }
-    let (sock, packets) = listen(args.port)?;
+    let (sock, packets) = listen(sock)?;
     let out = sock.try_clone().context("cloning the socket")?;
     server.set_net_now(vcod_server::cod2::NetNow {
         send: Box::new(move |to, pkt| {
@@ -479,14 +524,50 @@ fn net_sleep(d: std::time::Duration) {
     }
 }
 
-/// Binds the port and starts the reader thread. A thread reads the socket
+/// Binds `port` on `net_ip`'s address: every interface when unset, empty
+/// or `localhost`, as retail's default does. The level loads after this,
+/// so a port in use fails at once; nothing reads it until [`listen`].
+fn bind(net_ip: Option<&str>, port: u16) -> Result<UdpSocket> {
+    let ip = bind_ip(net_ip)?;
+    let sock = UdpSocket::bind((ip, port))
+        .with_context(|| format!("binding {ip}:{port}: another server may hold it; pass --port"))?;
+    if !ip.is_unspecified() {
+        log::info!("net_ip: bound {ip}:{port}");
+    }
+    Ok(sock)
+}
+
+/// `net_ip`'s address: an IPv4 address or a name that has one.
+fn bind_ip(net_ip: Option<&str>) -> Result<std::net::Ipv4Addr> {
+    use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
+    let Some(v) = net_ip
+        .map(str::trim)
+        .filter(|v| !v.is_empty() && *v != "localhost")
+    else {
+        return Ok(Ipv4Addr::UNSPECIFIED);
+    };
+    if let Ok(ip) = v.parse() {
+        return Ok(ip);
+    }
+    (v, 0)
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut a| {
+            a.find_map(|a| match a {
+                SocketAddr::V4(a) => Some(*a.ip()),
+                SocketAddr::V6(_) => None,
+            })
+        })
+        .with_context(|| format!("net_ip {v:?} is no IPv4 address or host name"))
+}
+
+/// Starts the reader thread on the bound socket. A thread reads the socket
 /// as packets arrive so each carries its arrival time
 /// (`engine::Arrival`); the loop handles them while it waits for
 /// the next frame, and those that came in during a tick that overran its
 /// slot at the next tick's start. Either way each is answered before the
 /// loop moves on (`handle_queued`).
-fn listen(port: u16) -> Result<Net> {
-    let sock = UdpSocket::bind(("0.0.0.0", port)).with_context(|| format!("binding udp/{port}"))?;
+fn listen(sock: UdpSocket) -> Result<Net> {
     let (packet_tx, packets) = std::sync::mpsc::sync_channel(PACKET_QUEUE);
     let reader = sock.try_clone().context("cloning the socket")?;
     std::thread::spawn(move || {
@@ -780,6 +861,72 @@ impl TickStats {
 mod tests {
     use super::*;
     use std::net::SocketAddr;
+
+    fn parse(argv: &[&str]) -> (ArgMatches, Args) {
+        let m = Args::command()
+            .try_get_matches_from(std::iter::once("vcod-server").chain(argv.iter().copied()))
+            .unwrap();
+        let a = Args::from_arg_matches(&m).unwrap();
+        (m, a)
+    }
+
+    /// A flag the game would accept and ignore is refused, by name; a
+    /// default is not a flag given.
+    #[test]
+    fn flags_for_another_game_are_refused() {
+        let (m, _) = parse(&["mp_crash", "--vanilla", "--mod-dir", "uo"]);
+        assert!(check_game_flags(&m, Game::Cod1).is_ok());
+        let e = check_game_flags(&m, Game::Cod4).unwrap_err().to_string();
+        assert_eq!(e, "--vanilla is Cod1 only; this is Cod4");
+        let (m, _) = parse(&["mp_crash", "--mod-dir", "uo"]);
+        assert!(check_game_flags(&m, Game::Cod2).is_ok());
+        let e = check_game_flags(&m, Game::Cod4).unwrap_err().to_string();
+        assert_eq!(e, "--mod-dir is Cod1 and Cod2 only; this is Cod4");
+        let (m, _) = parse(&["mp_crash"]);
+        for g in [Game::Cod1, Game::Cod2, Game::Cod4] {
+            assert!(check_game_flags(&m, g).is_ok());
+        }
+    }
+
+    /// The checks that need no game data, and clap's slot range.
+    #[test]
+    fn bad_arguments_fail_before_the_level() {
+        let (_, a) = parse(&["mp_crash", "--set", "g_gametype"]);
+        assert!(
+            check_args(&a)
+                .unwrap_err()
+                .to_string()
+                .contains("NAME=VALUE")
+        );
+        let (_, a) = parse(&["mp_crash", "--bots", "9"]);
+        assert!(
+            check_args(&a)
+                .unwrap_err()
+                .to_string()
+                .contains("--max-clients 8")
+        );
+        let (_, a) = parse(&["mp_crash", "--bots", "9", "--max-clients", "12"]);
+        assert!(check_args(&a).is_ok());
+        for n in ["0", "65"] {
+            let r = Args::command().try_get_matches_from(["vcod-server", "x", "--max-clients", n]);
+            assert!(r.is_err(), "--max-clients {n}");
+        }
+    }
+
+    /// `net_ip` as retail reads it: unset, empty and `localhost` are every
+    /// interface.
+    #[test]
+    fn net_ip_picks_the_bound_address() {
+        use std::net::Ipv4Addr;
+        for v in [None, Some(""), Some("localhost")] {
+            assert_eq!(bind_ip(v).unwrap(), Ipv4Addr::UNSPECIFIED, "{v:?}");
+        }
+        assert_eq!(bind_ip(Some("127.0.0.1")).unwrap(), Ipv4Addr::LOCALHOST);
+        // A NUL fails before any lookup, so the test needs no resolver.
+        assert!(bind_ip(Some("bad\0ip")).is_err());
+        let a = parse(&["x", "--set", "net_ip=1.2.3.4", "--set", "net_ip=127.0.0.1"]).1;
+        assert_eq!(last_set(&a.set, "net_ip"), Some("127.0.0.1"));
+    }
 
     /// A catch-up tick counts every frame it ran: ten ticks of two frames
     /// are the second's summary, as twenty ticks of one are.

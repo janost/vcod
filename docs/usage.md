@@ -108,9 +108,9 @@ vcod-server <map> [--port 28960] [--hostname vcod] [--max-clients 8] [--gametype
 
 | Flag | Does |
 |---|---|
-| `--port <n>` | UDP port, default 28960. Binds `0.0.0.0`. |
+| `--port <n>` | UDP port, default 28960. Binds every interface, or the address in `--set net_ip=<ip>`. |
 | `--hostname <name>` | `sv_hostname`, default `vcod`. |
-| `--max-clients <n>` | `sv_maxclients`, default 8, at most 64. Bots count. |
+| `--max-clients <n>` | `sv_maxclients`, default 8, 1 to 64. Bots count: more `--bots` than slots is refused. |
 | `--gametype <gt>` | The script under `maps/mp/gametypes/`. Default `dm` (CoD4 `war`). |
 | `--set NAME=VALUE` | Retail's `+set`, repeatable. |
 | `--bots <n>`, `--bots-shoot` | Start with `n` bots; without `--bots-shoot` they never fire ([bots.md](bots.md)). |
@@ -119,6 +119,11 @@ vcod-server <map> [--port 28960] [--hostname vcod] [--max-clients 8] [--gametype
 | `--script-dir <dir>` | CoD4: loose `.gsc` files read over the zones' scripts each level, as retail reads a mod's. |
 | `--vanilla` | See [Install and game](#install-and-game). |
 | `--no-console` | Don't read stdin ([below](#stdin-console)). |
+
+A flag the game does not read is refused at start, as are a bad
+`--set`, more bots than slots and a port in use, all before the level
+loads: `--vanilla` is CoD1 and UO only, `--mod-dir` and
+`--gametype-script` are not read on CoD4, `--script-dir` is CoD4 only.
 
 The server answers `getinfo`, `getstatus` and `getchallenge` from
 anyone, rate limited per address and server-wide where retail is not
