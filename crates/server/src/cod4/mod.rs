@@ -133,8 +133,6 @@ pub struct Cod4Game {
     pub zones: Vec<Arc<vcod_cod4::assets::Assets>>,
     /// Entity baselines; empty until entities spawn.
     baselines: BTreeMap<u32, EntityState>,
-    /// `svs.time` at the last heartbeat.
-    last_beat_ms: Option<i32>,
     /// The running level; `None` on a bare server, whose cvars are
     /// [`Self::cvars`]'s own. A level owns the one cvar table while it runs.
     pub level: Option<crate::game::cod4::level::Cod4Level>,
@@ -510,7 +508,6 @@ impl Cod4Server {
                 fastfiles: Vec::new(),
                 zones: Vec::new(),
                 baselines: BTreeMap::new(),
-                last_beat_ms: None,
                 level: None,
                 install: None,
                 common: Vec::new(),
@@ -881,30 +878,24 @@ impl Cod4Server {
     }
 
     /// `SV_MasterHeartbeat("COD-4")` (0x81780e4): at `dedicated 2` only,
-    /// every 180 s, to `sv_master1`, or to `master.cod.pm` while that is
-    /// empty, as the CoD1 and CoD2 servers default to it.
+    /// every 180 s (cod4-server-frame.md 5), to `sv_master1`, or to
+    /// `master.cod.pm` while that is empty, on the CoD4 port, through the
+    /// masters every game beats ([`crate::master::Masters`]).
     fn heartbeat(&mut self) {
-        if self.int("dedicated") != 2 {
-            return;
-        }
         let master = match self.game.cvars().get("sv_master1") {
-            "" => vcod_common::net::master::COD4_MASTER.host.to_string(),
-            m => m.to_string(),
+            "" => vcod_common::net::master::COD4_MASTER.host,
+            m => m,
         };
-        let now = self.core.sv_time_ms;
-        if self.game.last_beat_ms.is_some_and(|t| now - t < 180_000) {
-            return;
-        }
-        self.game.last_beat_ms = Some(now);
-        let with_port = if master.contains(':') {
-            master
-        } else {
-            format!("{master}:20810")
-        };
-        if let Some(to) = (self.core.resolver)(&with_port) {
-            log::info!("Sending heartbeat to {with_port}");
-            self.send_oob(to, "heartbeat COD-4\n");
-        }
+        self.core.masters.set(0, master);
+        let dedicated = self.int("dedicated");
+        let mut resolve = self.core.resolver;
+        let beats = self.core.masters.heartbeat(
+            dedicated,
+            self.core.sv_time_ms,
+            crate::master::HEARTBEAT_GAME_COD4,
+            &mut resolve,
+        );
+        self.core.outbox.extend(beats);
     }
 
     /// A netchan packet: its slot by address and qport, the netchan, then
@@ -1941,12 +1932,19 @@ mod wire_ab;
 mod heartbeat_tests {
     use super::*;
 
+    /// `master::resolve`'s shape: the name's host, port 0.
     fn resolve(name: &str) -> Option<SocketAddr> {
-        (name == "master.cod.pm:20810").then(|| "198.51.100.4:20810".parse().unwrap())
+        match name {
+            "master.cod.pm" => Some("198.51.100.4:0".parse().unwrap()),
+            "198.51.100.9" => Some("198.51.100.9:0".parse().unwrap()),
+            _ => None,
+        }
     }
 
-    /// An empty `sv_master1` beats `master.cod.pm:20810` at `dedicated 2`,
-    /// and nothing at the default `dedicated 1`.
+    /// An empty `sv_master1` beats `master.cod.pm` on 20810 at `dedicated
+    /// 2`, and nothing at the default `dedicated 1`; a resolved name takes
+    /// the CoD4 port, and a set `sv_master1` beats its host at the next
+    /// beat the `heartbeat` command forces.
     #[test]
     fn dedicated_2_beats_master_cod_pm_by_default() {
         let cfg = Cod4Config {
@@ -1962,7 +1960,15 @@ mod heartbeat_tests {
         sv.set_cvar("dedicated", "2");
         sv.heartbeat();
         let (to, pkt) = sv.core.outbox.pop().expect("a heartbeat");
-        assert_eq!(to, resolve("master.cod.pm:20810").unwrap());
+        assert_eq!(to, "198.51.100.4:20810".parse().unwrap());
         assert!(pkt.ends_with(b"heartbeat COD-4\n"));
+        sv.heartbeat();
+        assert!(sv.core.outbox.is_empty(), "the next is 180 s on");
+        sv.set_cvar("sv_master1", "198.51.100.9");
+        sv.push_console("heartbeat");
+        sv.run_console();
+        sv.heartbeat();
+        let (to, _) = sv.core.outbox.pop().expect("a forced heartbeat");
+        assert_eq!(to, "198.51.100.9:20810".parse().unwrap());
     }
 }

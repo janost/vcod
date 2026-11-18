@@ -575,7 +575,7 @@ impl Cod4Server {
             }
             // `SV_Heartbeat_f` (0x816c180): the next heartbeat is due at
             // once (`svs.nextHeartbeatTime` to INT_MIN).
-            "heartbeat" => self.game.last_beat_ms = None,
+            "heartbeat" => self.core.masters.force(),
             // `SV_KillServer_f` (0x816c2f2): `SV_Shutdown("EXE_SERVERKILLED")`.
             "killserver" => self.kill_server("EXE_SERVERKILLED"),
             // `SV_ConSay_f` (0x816d328) and `SV_ConTell_f` (0x816cca6): the
