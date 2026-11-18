@@ -14,6 +14,7 @@ mod material_stock;
 mod materials_lib;
 mod model_load;
 mod moves_ab;
+mod net_hostile;
 mod player_rigs;
 mod pmove_walk;
 mod pure;
