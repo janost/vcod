@@ -1324,13 +1324,18 @@ impl Cod4Session {
             self.live_frame(&new)?;
         }
         self.walk();
-        // A live connection keeps the snapshots it still draws, deltas and
-        // walks: with every one kept the soak's client grew 100 to 250 MB a
-        // three-minute level (cod4-map-sweep.md, "The soak").
-        if let Source::Live { conn, .. } = &mut self.source
-            && conn.client.snapshots.len() >= 2 * self.keep_snapshots
+        // A live connection and a demo keep the snapshots they still draw,
+        // delta and walk: with every one kept the soak's client grew 100 to
+        // 250 MB a three-minute level (cod4-map-sweep.md, "The soak").
+        let client = match &mut self.source {
+            Source::Live { conn, .. } => Some(&mut conn.client),
+            Source::Demo(d) => Some(&mut d.client),
+            Source::Capture { .. } => None,
+        };
+        if let Some(c) = client
+            && c.snapshots.len() >= 2 * self.keep_snapshots
         {
-            let n = conn.client.shed(self.keep_snapshots);
+            let n = c.shed(self.keep_snapshots);
             self.walked = self.walked.saturating_sub(n);
         }
         Ok(())
@@ -6698,6 +6703,45 @@ pub(crate) mod tests {
         );
         assert!(!a.is_empty(), "no event in the capture");
         assert_eq!(a, b);
+    }
+
+    /// A demo sheds its old snapshots as a live session does and plays the
+    /// same events to its end.
+    #[test]
+    fn cod4_demo_sheds_old_snapshots_and_plays_on() {
+        let (retail, _, _) = capture_demo("play-1.7-spec.txt");
+        let play = |keep: Option<usize>| {
+            let mut d = Cod4Session::play_demo(retail.clone(), false).unwrap();
+            if let Some(k) = keep {
+                d.keep_snapshots = k;
+            }
+            let (mut fired, mut most, mut now) = (Vec::new(), 0, 0.0);
+            while !d.demo_over() && now < 600_000.0 {
+                d.step(now).unwrap();
+                d.take_commands();
+                fired.extend(
+                    d.take_fired()
+                        .iter()
+                        .map(|f| (f.name, f.entity, f.server_time)),
+                );
+                most = most.max(d.client().snapshots.len());
+                now += 16.0;
+            }
+            assert!(d.demo_over());
+            (
+                fired,
+                most,
+                d.client().shed_count,
+                d.client().total_snapshots(),
+            )
+        };
+        let (all, _, none_shed, total) = play(None);
+        let (shed, most, shed_count, total_shed) = play(Some(40));
+        assert_eq!(none_shed, 0);
+        assert!(total > 2 * 40, "{total} snapshots");
+        assert!(shed_count > 0 && most < 2 * 40, "held {most}");
+        assert_eq!(total_shed, total);
+        assert_eq!(shed, all);
     }
 
     /// `rcon` from a client joined to vcod-server (cod4-handshake.md 14.2):
