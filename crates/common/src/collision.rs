@@ -688,14 +688,7 @@ pub fn clip_model_tris(
 ) -> Option<(f32, Vec3, u32)> {
     let mut trace = Trace {
         fraction,
-        endpos: end,
-        normal: Vec3::ZERO,
-        surface_flags: 0,
-        startsolid: false,
-        allsolid: false,
-        hit: None,
-        enter: -1.0,
-        copy: None,
+        ..Trace::clear(end)
     };
     for (i, mt) in tris.iter().enumerate() {
         if mt.contents & mask != 0 {
@@ -736,14 +729,7 @@ pub fn clip_model_surfs(
 ) -> Option<(f32, Vec3, u32)> {
     let mut trace = Trace {
         fraction,
-        endpos: end,
-        normal: Vec3::ZERO,
-        surface_flags: 0,
-        startsolid: false,
-        allsolid: false,
-        hit: None,
-        enter: -1.0,
-        copy: None,
+        ..Trace::clear(end)
     };
     for s in surfs {
         let Some(first) = tris.get(s.tris.start) else {
@@ -1987,17 +1973,7 @@ impl CollisionWorld {
         maxs: Vec3,
         mask: u32,
     ) -> Trace {
-        let mut trace = Trace {
-            fraction: 1.0,
-            endpos: end,
-            normal: Vec3::ZERO,
-            surface_flags: 0,
-            startsolid: false,
-            allsolid: false,
-            hit: None,
-            enter: -1.0,
-            copy: None,
-        };
+        let mut trace = Trace::clear(end);
         if model < self.model_span.len() && model != 0 && self.model_linked(model) {
             let pose = self
                 .poses
@@ -2049,17 +2025,7 @@ impl CollisionWorld {
             .copied();
         let mut trace = match copy.filter(|c| c.contents & mask != 0) {
             Some(c) => self.clip_copy(c, start, end, mins, maxs, mask, true),
-            None => Trace {
-                fraction: 1.0,
-                endpos: end,
-                normal: Vec3::ZERO,
-                surface_flags: 0,
-                startsolid: false,
-                allsolid: false,
-                hit: None,
-                enter: -1.0,
-                copy: None,
-            },
+            None => Trace::clear(end),
         };
         trace.endpos = start + (end - start) * trace.fraction;
         trace
@@ -2544,17 +2510,7 @@ impl CollisionWorld {
     }
 
     fn position_walk(&self, p: Vec3, mins: Vec3, maxs: Vec3, mask: u32, world_only: bool) -> Trace {
-        let mut trace = Trace {
-            fraction: 1.0,
-            endpos: p,
-            normal: Vec3::ZERO,
-            surface_flags: 0,
-            startsolid: false,
-            allsolid: false,
-            hit: None,
-            enter: -1.0,
-            copy: None,
-        };
+        let mut trace = Trace::clear(p);
         let capsule = Capsule::of(mins, maxs);
         self.trace_world_clip(p, p, mins, maxs, mask, &mut trace);
         self.walk_tree(
@@ -2789,17 +2745,7 @@ impl CollisionWorld {
             Some(Pusher::Copy(e)) => (None, Some(e)),
             None => (None, None),
         };
-        let mut trace = Trace {
-            fraction: 1.0,
-            endpos: end,
-            normal: Vec3::ZERO,
-            surface_flags: 0,
-            startsolid: false,
-            allsolid: false,
-            hit: None,
-            enter: -1.0,
-            copy: None,
-        };
+        let mut trace = Trace::clear(end);
 
         let mut scratch = Vec::new();
         let capsule = if boxed {
@@ -2887,17 +2833,7 @@ impl CollisionWorld {
             if !(lo.cmple(inst.pose.hi).all() && hi.cmpge(inst.pose.lo).all()) {
                 continue;
             }
-            let mut t = Trace {
-                fraction: 1.0,
-                endpos: end,
-                normal: Vec3::ZERO,
-                surface_flags: 0,
-                startsolid: false,
-                allsolid: false,
-                hit: None,
-                enter: -1.0,
-                copy: None,
-            };
+            let mut t = Trace::clear(end);
             self.clip_model(
                 inst.model,
                 Some(&inst.pose),
@@ -3157,17 +3093,7 @@ impl CollisionWorld {
         let mid = (mins + maxs) * 0.5;
         let (ls, le) = (c.to_local(start + mid) - mid, c.to_local(end + mid) - mid);
         let capsule = Capsule::of(mins, maxs);
-        let mut t = Trace {
-            fraction: 1.0,
-            endpos: le,
-            normal: Vec3::ZERO,
-            surface_flags: 0,
-            startsolid: false,
-            allsolid: false,
-            hit: None,
-            enter: -1.0,
-            copy: None,
-        };
+        let mut t = Trace::clear(le);
         self.walk_tree(
             TraceInput {
                 start: ls,
@@ -4111,17 +4037,7 @@ mod tests {
         let (mins, maxs) = (Vec3::new(-15.0, -15.0, -35.0), Vec3::new(15.0, 15.0, 35.0));
         let (start, end) = (Vec3::new(100.0, 0.0, 0.0), Vec3::ZERO);
         let stop = |sphere: Vec3| {
-            let mut trace = Trace {
-                fraction: 1.0,
-                endpos: end,
-                normal: Vec3::ZERO,
-                surface_flags: 0,
-                startsolid: false,
-                allsolid: false,
-                hit: None,
-                enter: -1.0,
-                copy: None,
-            };
+            let mut trace = Trace::clear(end);
             let sweep = capsule_sweep(start, end, mins, maxs);
             clip_brush_capsule(
                 &mut trace,
@@ -4591,17 +4507,7 @@ mod tests {
         mins: Vec3,
         maxs: Vec3,
     ) -> Trace {
-        let mut trace = Trace {
-            fraction: 1.0,
-            endpos: end,
-            normal: Vec3::ZERO,
-            surface_flags: 0,
-            startsolid: false,
-            allsolid: false,
-            hit: None,
-            enter: -1.0,
-            copy: None,
-        };
+        let mut trace = Trace::clear(end);
         let capsule = Capsule::of(mins, maxs);
         let sweep = capsule_sweep(start, end, mins, maxs);
         for brushes in [true, false] {
