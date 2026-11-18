@@ -88,8 +88,8 @@ CoD2's order is in `cod2-protocol.md` 14.1. CoD4's is in
 ## Engine state
 
 `EngineCore` is the engine state every game drives: transport, slot table,
-configstrings and their sent copy, console queue, challenges, bans, masters,
-rcon limiter, the game clock and `rand()`. A slot's netchan, acks, frame and
+configstrings and their sent copy, console queue, challenges, query limiter,
+bans, masters, rcon limiter, the game clock and `rand()`. A slot's netchan, acks, frame and
 ping rings, pacing, fragments and timeout clock are its `link`
 (`engine::slot::Link`).
 

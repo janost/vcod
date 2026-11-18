@@ -750,3 +750,63 @@ fn kick_bans_a_guid_for_sv_kick_ban_time() {
     h.frames(21);
     assert_eq!(challenge_reply(&mut h, OFF), ["challengeResponse N"]);
 }
+
+/// vcod's query limiter (`engine::ratelimit`; retail answers every one):
+/// one address's burst of status queries gets the address's burst of
+/// replies, then one a second; many addresses share the global bucket,
+/// which does not hold a challenge off.
+#[test]
+fn query_bursts_are_rate_limited() {
+    use crate::engine::ratelimit::{ADDR_BURST, ADDR_PERIOD, GLOBAL_BURST, GLOBAL_PERIOD};
+    let mut h = Harness::new(4, &[]);
+    let ask = |h: &mut Harness, from: SocketAddr, q: &str, now: Instant| {
+        h.sv.handle_packet(from, &oob::packet(q), now);
+        h.replies(from).len()
+    };
+    let now = h.now;
+    let a = SocketAddr::from(([198, 51, 100, 2], 5000));
+    let answered: usize = (0..ADDR_BURST + 5)
+        .map(|i| {
+            let q = if i % 2 == 0 {
+                "getstatus x"
+            } else {
+                "GETINFO x"
+            };
+            ask(&mut h, a, q, now)
+        })
+        .sum();
+    assert_eq!(answered, ADDR_BURST as usize);
+    assert_eq!(ask(&mut h, a, "getinfo x", now + ADDR_PERIOD), 1);
+    assert_eq!(ask(&mut h, a, "getinfo x", now + ADDR_PERIOD), 0);
+
+    let t = now + ADDR_PERIOD * 10;
+    let answered: usize = (0..GLOBAL_BURST + 5)
+        .map(|i| {
+            ask(
+                &mut h,
+                SocketAddr::from(([10, 1, 0, i as u8], 5)),
+                "getstatus",
+                t,
+            )
+        })
+        .sum();
+    assert_eq!(answered, GLOBAL_BURST as usize);
+    assert_eq!(
+        ask(
+            &mut h,
+            SocketAddr::from(([10, 2, 0, 1], 5)),
+            "getchallenge",
+            t
+        ),
+        1
+    );
+    assert_eq!(
+        ask(
+            &mut h,
+            SocketAddr::from(([10, 2, 0, 2], 5)),
+            "getinfo x",
+            t + GLOBAL_PERIOD
+        ),
+        1
+    );
+}

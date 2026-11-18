@@ -1197,7 +1197,7 @@ Recipe: retail and `vcod-server --game cod2`, both on `mp_toujane` `dm` inside `
 
 `getinfo` (`SVC_Info`, 0x809537c): `clients` counts the slots past `CS_ZOMBIE`, present only when non-zero; `sv_maxclients` is `sv_maxclients - (sv_privateClients - private slots in use)`, present only when positive. VERIFIED, and live: 1 with no one on (2 slots, 1 private), 2 with a private and a public client. `getstatus` (`SVC_Status`, 0x8094c84) lists every client past `CS_ZOMBIE` as `<score> <cl->ping> "<name>"`, 999 for one not yet in the world. VERIFIED live. Under `g_password` `getinfo` carries `pswrd\1` after `gametype`/`pure` and `getstatus` `pswrd\1`. VERIFIED live.
 
-vcod: `oob.rs` follows 1 to 7 and both replies; it never asks the authorize server, so an off-LAN client's challenge is answered at once and its ping runs from that answer. `g_password`'s check sits in the engine's connect, before the level's `ClientConnect`. Every out-of-band reply of the two captures matched retail's bytes past the challenge number, live and in `cod2::house_tests`.
+vcod: `oob.rs` follows 1 to 7 and both replies; it never asks the authorize server, so an off-LAN client's challenge is answered at once and its ping runs from that answer. `g_password`'s check sits in the engine's connect, before the level's `ClientConnect`. Every out-of-band reply of the two captures matched retail's bytes past the challenge number, live and in `cod2::house_tests`. Where retail answers every query, vcod rate limits `getinfo`, `getstatus` and `getchallenge` per source address and server-wide as on CoD1 (`engine::ratelimit`, protocol-1.1.md's last section; `cod2::house_tests::query_bursts_are_rate_limited`).
 
 ### 17.2 Pacing
 

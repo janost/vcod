@@ -33,7 +33,7 @@ mod cod1_game;
 mod cod1_think;
 use cod1_game::{Cod1Game, Cod1Module, FrameOut, Lend};
 use std::collections::{BTreeMap, HashMap};
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::movetrace::CONTENTS_CORPSE;
@@ -60,15 +60,6 @@ const ZOMBIE_TIME: Duration = Duration::from_secs(2);
 /// `sv_reconnectlimit` default. Also how long a slot must have been silent
 /// before a connect carrying a different challenge may reclaim it.
 const RECONNECT_LIMIT: Duration = Duration::from_secs(3);
-/// ioq3 `SVC_RateLimitAddress`: per source ip, a burst of 10 connectionless
-/// requests, one back per second.
-const ADDR_BURST: u32 = 10;
-const ADDR_PERIOD: Duration = Duration::from_secs(1);
-/// ioq3 `outboundLeakyBucket`: all connectionless replies, 10 per 100 ms.
-const GLOBAL_BURST: u32 = 10;
-const GLOBAL_PERIOD: Duration = Duration::from_millis(100);
-/// Source ips tracked at once; the least recently seen is evicted.
-const MAX_BUCKETS: usize = 1024;
 const MAX_PACKET_USERCMDS: u8 = vcod_common::net::MAX_MOVE_CMDS as u8;
 /// Queued-but-unreplayed usercmds per client; past this a flood drops the
 /// oldest rather than building latency.
@@ -151,66 +142,6 @@ impl PureCheck {
     fn verify(&self, cmd: &str) -> bool {
         let args: Vec<&str> = cmd.split_whitespace().collect();
         vcod_common::pak_checksum::verify_pure(&args, self.cgame, self.ui, &self.loaded, self.feed)
-    }
-}
-
-/// ioq3 `leakyBucket_t`: `used` tokens, one drained per period.
-struct Bucket {
-    last: Instant,
-    used: u32,
-}
-
-impl Bucket {
-    /// `SVC_RateLimit`. True when this request is over the limit.
-    fn limited(&mut self, now: Instant, burst: u32, period: Duration) -> bool {
-        let interval = now.saturating_duration_since(self.last);
-        let expired = interval.as_micros() / period.as_micros();
-        if expired > u128::from(self.used) {
-            self.used = 0;
-            self.last = now;
-        } else {
-            self.used -= expired as u32;
-            self.last += period * expired as u32;
-        }
-        if self.used < burst {
-            self.used += 1;
-            return false;
-        }
-        true
-    }
-}
-
-/// The connectionless reply limiter, so `getstatus` cannot be used as a
-/// reflector: a bucket per source ip in front of one for all replies.
-struct RateLimiter {
-    global: Bucket,
-    addrs: HashMap<IpAddr, Bucket>,
-}
-
-impl RateLimiter {
-    fn new(now: Instant) -> Self {
-        RateLimiter {
-            global: Bucket { last: now, used: 0 },
-            addrs: HashMap::new(),
-        }
-    }
-
-    /// `SVC_RateLimitAddress`. The global bucket is untouched by a request
-    /// this rejects.
-    fn addr_limited(&mut self, from: IpAddr, now: Instant) -> bool {
-        if !self.addrs.contains_key(&from) && self.addrs.len() >= MAX_BUCKETS {
-            let oldest = *self.addrs.iter().min_by_key(|(_, b)| b.last).unwrap().0;
-            self.addrs.remove(&oldest);
-        }
-        self.addrs
-            .entry(from)
-            .or_insert(Bucket { last: now, used: 0 })
-            .limited(now, ADDR_BURST, ADDR_PERIOD)
-    }
-
-    /// Both buckets, in ioq3's order; true when the reply must not go out.
-    fn reply_limited(&mut self, from: IpAddr, now: Instant) -> bool {
-        self.addr_limited(from, now) || self.global.limited(now, GLOBAL_BURST, GLOBAL_PERIOD)
     }
 }
 
@@ -1894,7 +1825,7 @@ impl Server {
 
     /// `new` with the generator seeded from `seed`; the binary passes the
     /// wall clock.
-    pub fn with_seed(mut cfg: ServerConfig, now: Instant, seed: u64) -> Self {
+    pub fn with_seed(mut cfg: ServerConfig, _now: Instant, seed: u64) -> Self {
         cfg.max_clients = cfg.max_clients.min(MAX_CLIENTS);
         let seed = seed | 1;
         let (bots, bots_shoot) = (cfg.bots, cfg.bots_shoot);
@@ -1921,7 +1852,6 @@ impl Server {
             cfg,
             proto: &PROTOCOL_V1,
             server_id,
-            limiter: RateLimiter::new(now),
             module: Cod1Module::new(seed, bots, bots_shoot, fall),
             stuck_rand: None,
             world: None,
@@ -2067,7 +1997,7 @@ impl Server {
     fn handle_oob(&mut self, from: SocketAddr, cmd: &str, raw: &[u8], now: Instant, read: Instant) {
         match cmd {
             "getinfo" | "getstatus" | "getchallenge" => {
-                if self.game.limiter.reply_limited(from.ip(), now) {
+                if self.core.limiter.limited(cmd, from.ip(), now) {
                     log::debug!("{from}: {cmd} rate limited");
                     return;
                 }
@@ -10464,6 +10394,8 @@ mod tests {
         assert_eq!((cs[5].as_str(), cs[6].as_str()), ("3", "-9999"));
     }
 
+    use crate::engine::ratelimit::{ADDR_BURST, ADDR_PERIOD, GLOBAL_BURST, GLOBAL_PERIOD};
+
     fn count_replies(sv: &mut Server, to: SocketAddr) -> usize {
         sv.take_outgoing().iter().filter(|(a, _)| *a == to).count()
     }
@@ -10493,39 +10425,23 @@ mod tests {
     }
 
     #[test]
-    fn connectionless_replies_share_a_global_bucket() {
+    fn status_replies_share_a_global_bucket() {
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
         let mut answered = 0;
         for i in 0..GLOBAL_BURST + 5 {
             let from = SocketAddr::from(([10, 1, (i >> 8) as u8, i as u8], 5));
-            sv.handle_packet(from, &oob("getchallenge"), now);
+            sv.handle_packet(from, &oob("getinfo x"), now);
             answered += count_replies(&mut sv, from);
         }
         assert_eq!(answered, GLOBAL_BURST as usize);
+        // A challenge is not held off by the spent global bucket.
+        let joiner = SocketAddr::from(([10, 2, 0, 2], 5));
+        sv.handle_packet(joiner, &oob("getchallenge"), now);
+        assert_eq!(count_replies(&mut sv, joiner), 1);
         let late = SocketAddr::from(([10, 2, 0, 1], 5));
-        sv.handle_packet(late, &oob("getchallenge"), now + GLOBAL_PERIOD);
+        sv.handle_packet(late, &oob("getinfo x"), now + GLOBAL_PERIOD);
         assert_eq!(count_replies(&mut sv, late), 1);
-    }
-
-    #[test]
-    fn the_address_table_is_bounded() {
-        let now = Instant::now();
-        let mut sv = Server::new(cfg(), now);
-        for i in 0..MAX_BUCKETS as u32 + 8 {
-            let from = SocketAddr::from(([10, (i >> 16) as u8, (i >> 8) as u8, i as u8], 5));
-            // Spread over time so the global bucket stays open and the
-            // eviction order is defined.
-            sv.handle_packet(from, &oob("getinfo x"), now + GLOBAL_PERIOD * i);
-        }
-        assert_eq!(sv.game.limiter.addrs.len(), MAX_BUCKETS);
-        // The least recently seen address went first.
-        assert!(
-            !sv.game
-                .limiter
-                .addrs
-                .contains_key(&std::net::IpAddr::from([10, 0, 0, 0]))
-        );
     }
 
     /// Retail matches an OOB `disconnect` and drops nothing (0x808c827).

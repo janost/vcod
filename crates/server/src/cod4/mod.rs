@@ -164,8 +164,6 @@ pub struct Cod4Game {
     baselines: BTreeMap<u32, EntityState>,
     /// `svs.time` at the last heartbeat.
     last_beat_ms: Option<i32>,
-    /// The `getchallenge` GUID hex by address, for the connect.
-    guids: std::collections::HashMap<SocketAddr, String>,
     /// The running level; `None` on a bare server, whose cvars are
     /// [`Self::cvars`]'s own. A level owns the one cvar table while it runs.
     pub level: Option<crate::game::cod4::level::Cod4Level>,
@@ -438,7 +436,6 @@ impl Cod4Server {
                 zones: Vec::new(),
                 baselines: BTreeMap::new(),
                 last_beat_ms: None,
-                guids: Default::default(),
                 level: None,
                 install: None,
                 common: Vec::new(),

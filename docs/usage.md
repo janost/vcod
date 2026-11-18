@@ -118,7 +118,9 @@ vcod-server <map> [--port 28960] [--hostname vcod] [--max-clients 8] [--gametype
 | `--vanilla` | See [Install and game](#install-and-game). |
 | `--no-console` | Don't read stdin ([below](#stdin-console)). |
 
-The server answers `getstatus` from anyone, as retail does. Keep it on a
+The server answers `getinfo`, `getstatus` and `getchallenge` from
+anyone, rate limited per address and server-wide where retail is not
+([protocol-1.1.md](protocol-1.1.md), the last section). Keep it on a
 LAN or behind a firewall you control. Admin goes through the stdin
 console or rcon, so set `rconPassword` before you need rcon.
 
