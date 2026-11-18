@@ -1836,7 +1836,12 @@ fn pure_lists_in(main: &Path, feed: i32, out: &mut Iwds) -> anyhow::Result<()> {
 /// An info string in `Dvar`'s case-folded order; empty values left out.
 fn info_sorted(pairs: impl Iterator<Item = (String, String)>) -> String {
     let mut pairs: Vec<(String, String)> = pairs.collect();
-    pairs.sort_by_key(|(k, _)| k.to_ascii_lowercase());
+    // By the folded key, compared without building it.
+    pairs.sort_by(|(a, _), (b, _)| {
+        a.bytes()
+            .map(|c| c.to_ascii_lowercase())
+            .cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
+    });
     let mut info = vcod_common::net::connectionless::Info::new();
     for (k, v) in &pairs {
         info.set(k, v);
