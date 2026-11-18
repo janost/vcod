@@ -18,6 +18,7 @@ use vcod_cod4::scriptmenu::{
 
 use super::{ScriptMenus, placed};
 use crate::console::keys;
+use crate::console::shell::{bare, quotable};
 use crate::hud::cod2elem::ScreenPlacement;
 
 /// The CoD4 dvars an option control sets and the vcod cvar each is: the
@@ -236,8 +237,9 @@ impl ScriptMenus {
     pub(super) fn set_dvar(&mut self, name: &str, value: &str) {
         match self.host_cvar(name) {
             Some(c) => {
+                let value = quotable(value);
                 self.console.push(format!("set {c} \"{value}\""));
-                self.host.cvars.insert(c.to_string(), value.to_string());
+                self.host.cvars.insert(c.to_string(), value);
             }
             None => {
                 self.ui
@@ -792,6 +794,7 @@ impl ScriptMenus {
             }
         }
         if key != "BACKSPACE" {
+            let cmd = quotable(&cmd);
             self.console.push(format!("bind {key} \"{cmd}\""));
             self.host.binds.retain(|(b, _)| b != key);
             self.host.binds.push((key.to_string(), cmd));
@@ -1084,19 +1087,19 @@ impl ScriptMenus {
             usize::try_from(at)
                 .ok()
                 .and_then(|m| self.lists.maps.get(m))
-                .map(|a| a.map.clone())
+                .map(|a| bare(&a.map))
         };
         let gametype = || {
             let at = atoi(&self.dvar("ui_netGameType").unwrap_or_default());
             usize::try_from(at)
                 .ok()
                 .and_then(|g| self.lists.gametypes.get(g))
-                .map(|(g, _)| g.clone())
+                .map(|(g, _)| bare(g))
         };
         let player = || {
             self.player_index
                 .and_then(|i| self.host.players.get(i))
-                .map(|(n, name)| (*n, clean(name)))
+                .map(|(n, name)| (*n, quotable(&clean(name))))
         };
         let line = match name.to_ascii_lowercase().as_str() {
             "update" => {

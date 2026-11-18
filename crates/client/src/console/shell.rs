@@ -1769,8 +1769,9 @@ impl Shell {
     /// `unbindall`, every bind, then every archived cvar as `seta`.
     pub fn config_text(&self) -> String {
         let mut s = format!("{CONFIG_HEADER}\nunbindall\n");
+        // Retail writes values unescaped; vcod drops what would end the line.
         for (k, v) in &self.binds {
-            s.push_str(&format!("bind {k} \"{v}\"\n"));
+            s.push_str(&format!("bind {k} \"{}\"\n", quotable(v)));
         }
         // `Cvar_WriteVariables` (CoDMP.exe 0x43a148) writes a pending latch.
         for (k, c) in self.cvars.iter().filter(|(_, c)| c.archive) {
@@ -1779,7 +1780,7 @@ impl Shell {
                 .get(k)
                 .or(c.latched.as_ref())
                 .unwrap_or(&c.value);
-            s.push_str(&format!("seta {} \"{value}\"\n", c.name));
+            s.push_str(&format!("seta {} \"{}\"\n", c.name, quotable(value)));
         }
         s
     }
@@ -1861,6 +1862,23 @@ fn args_from(line: &str, n: usize) -> String {
         }
     }
     rest.to_string()
+}
+
+/// `s` for a quoted argument of a console line built from server, menu or
+/// typed text: `"`, CR and LF out, so [`split_commands`] and [`tokenize`]
+/// read back one command with `s` as one token.
+pub fn quotable(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(c, '"' | '\r' | '\n'))
+        .collect()
+}
+
+/// `s` for an unquoted argument of such a line: [`quotable`] with `;` out
+/// too.
+pub fn bare(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(c, '"' | ';' | '\r' | '\n'))
+        .collect()
 }
 
 /// Splits on `;` and newlines outside quotes, as `Cbuf_Execute` does.
@@ -2190,6 +2208,23 @@ mod tests {
         assert_eq!(t.bind("F1"), Some("vote yes"));
         assert_eq!(t.bind("W"), None);
         assert_eq!(t.cvar("name"), Some("Rob"));
+    }
+
+    /// A server's forced value holding a quote and a newline saves as one
+    /// line: the config reads back the same cvars and binds, no more.
+    #[test]
+    fn a_forced_value_cannot_add_config_lines() {
+        let mut s = Shell::new();
+        s.execute("unbindall; bind f1 \"say a; say b\"");
+        s.apply_systeminfo("\\rate\\25000\"\nbind MOUSE1 \"quit;\r\nseta name x");
+        let text = s.config_text();
+        let mut t = Shell::new();
+        t.exec_config(&text);
+        assert_eq!(t.cvar("rate"), Some("25000bind MOUSE1 quit;seta name x"));
+        assert_eq!(t.bind("F1"), Some("say a; say b"));
+        assert_eq!(t.bind("MOUSE1"), None);
+        assert_eq!(t.cvar("name"), s.cvar("name"));
+        assert_eq!(t.config_text(), text);
     }
 
     #[test]

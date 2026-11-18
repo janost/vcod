@@ -13,6 +13,7 @@ use winit::keyboard::KeyCode;
 use super::{
     HudQuad, Painter, SCROLLBAR_SIZE, Ui, UiEffect, listbox, truncate_visible, visible_rows,
 };
+use crate::console::shell::quotable;
 
 /// `UI_FeederCount` rebuilds the list at most this often (ui_mp_x86.dll
 /// 0x4000c66b, `realTime + 3000`).
@@ -56,6 +57,7 @@ impl Ui {
     /// selected row; nothing when the row is past the list.
     pub(super) fn vote_kick(&self, out: &mut Vec<UiEffect>) {
         if let Some(name) = self.players.get(self.player_row) {
+            let name = quotable(name);
             out.push(UiEffect::Command(format!("callvote kick \"{name}\"")));
         }
     }

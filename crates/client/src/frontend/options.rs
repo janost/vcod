@@ -30,7 +30,7 @@ fn enum_index(entries: &[String], value: &str) -> usize {
 use winit::keyboard::KeyCode;
 
 use super::{Painter, Ui, UiEffect};
-use crate::console::shell::Shell;
+use crate::console::shell::{Shell, bare, quotable};
 use crate::hud::HudQuad;
 
 /// `g_bindings` (`ui_mp_x86.dll` 0x40036130, 50 records of 24 bytes): the
@@ -168,10 +168,9 @@ impl Ui {
 
     /// `set name "value"` through the console, readable at once.
     pub(super) fn set_cvar(&mut self, name: &str, value: &str, out: &mut Vec<UiEffect>) {
+        let (name, value) = (bare(name), quotable(value));
         out.push(UiEffect::Command(format!("set {name} \"{value}\"")));
-        self.options
-            .pending
-            .push((name.to_string(), value.to_string()));
+        self.options.pending.push((name, value));
     }
 
     /// `Item_HandleKey` for a click on an options control. False when the
@@ -339,6 +338,7 @@ impl Ui {
             unbind(a);
             unbind(b);
         }
+        let cmd = quotable(&cmd);
         out.push(UiEffect::Command(format!("bind {key} \"{cmd}\"")));
         out
     }
