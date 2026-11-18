@@ -75,7 +75,6 @@ const FLOOD_WINDOW_MS: i32 = 800;
 /// How long the script's brush links hold still before the bots' graph
 /// is rebuilt over them (`Server::relink_nav`).
 const NAV_RELINK_MS: i32 = 2000;
-/// A retrieval objective as the bots see it, with its carrier's slot.
 /// A retrieval objective as [`Server::bot_re`] reads it: the view with the
 /// carrier's feet in `carrier_at` for every team, the carrier's slot, and
 /// the compass record's `teamNum`.
@@ -452,10 +451,6 @@ fn deliver_turret_rounds(
     }
 }
 
-/// The host's health onto each playing sim. Neither `ClientEndFrame`'s
-/// intermission arm nor `SpectatorClientEndFrame` copies `ent->health` into
-/// the playerstate, so both keep the zero their own spawn left (map-cycle
-/// doc, 6.2; `spectate.rs`, `become_spectator`).
 /// What the follow reads for `slot`: the script's fields when the slot has
 /// a client entity, the sim's own mode when it has none.
 fn session_of(
@@ -477,14 +472,6 @@ fn followable(clients: &[Option<Client>], slot: usize) -> bool {
         .is_some_and(|s| s.own_view)
 }
 
-/// `ClientEndFrame`'s follow half for one slot, in slot order: a playing or
-/// dead client takes the own-view bit a follow copies, or is spawned where a
-/// copy still in its playerstate left it, and a spectator runs
-/// `SpectatorClientEndFrame` (0x40760). A forced follow's copy is taken
-/// `archivetime` back, retried 50 ms younger each time it fails down to a
-/// live one, and the age it settled on is written back; a forced follow that
-/// finds nothing writes -1 back into `spectatorclient`, and so does a follow
-/// that finds nothing to copy, which is `StopFollowing`.
 /// The seat changes the host made this cmd, onto the riders' sims
 /// (`crate::game::vehicle::seat::SeatOp`), and the script's copy of where
 /// each one now stands.
@@ -545,11 +532,6 @@ struct VehicleFireCtx<'a> {
     now_ms: i32,
 }
 
-/// The rounds `fireTurret`, `fireAltTurret` and `fireGunner` asked for
-/// (`crate::game::vehicle::fire`): aimed off the posed vehicle, traced from
-/// its muzzle against the bodies, charged to the rider with the vehicle as
-/// the inflictor. A vehicle round leaves no impact of its own: the client
-/// traces it (event parm bit 7).
 /// `GameHost::dobj_posed`, which an engine trace stamps its bodies in
 /// (`combat::DobjStamps`); empty on a host with no script.
 fn dobj_stamps(
@@ -561,6 +543,11 @@ fn dobj_stamps(
     }
 }
 
+/// The rounds `fireTurret`, `fireAltTurret` and `fireGunner` asked for
+/// (`crate::game::vehicle::fire`): aimed off the posed vehicle, traced from
+/// its muzzle against the bodies, charged to the rider with the vehicle as
+/// the inflictor. A vehicle round leaves no impact of its own: the client
+/// traces it (event parm bit 7).
 fn vehicle_fire(
     clients: &mut [Option<Client>],
     rt: &mut script::ScriptRuntime,
@@ -891,6 +878,14 @@ fn place_rider(rt: &mut script::ScriptRuntime, slot: usize, sim: &mut ClientSim)
     rt.set_client_origin(slot, at.0.to_array());
 }
 
+/// `ClientEndFrame`'s follow half for one slot, in slot order: a playing or
+/// dead client takes the own-view bit a follow copies, or is spawned where a
+/// copy still in its playerstate left it, and a spectator runs
+/// `SpectatorClientEndFrame` (0x40760). A forced follow's copy is taken
+/// `archivetime` back, retried 50 ms younger each time it fails down to a
+/// live one, and the age it settled on is written back; a forced follow that
+/// finds nothing writes -1 back into `spectatorclient`, and so does a follow
+/// that finds nothing to copy, which is `StopFollowing`.
 fn follow_end_frame(
     clients: &mut [Option<Client>],
     slot: usize,
@@ -1157,6 +1152,10 @@ fn mirror_vitals_of(sim: &mut ClientSim, rt: &script::ScriptRuntime, slot: usize
     sim.max_speed = rt.host.client_speed(slot);
     sim.gravity = rt.host.client_gravity();
     sim.ps.bg = rt.host.bg_cvars();
+    // Health onto a playing sim only. Neither `ClientEndFrame`'s intermission
+    // arm nor `SpectatorClientEndFrame` copies `ent->health` into the
+    // playerstate, so both keep the zero their own spawn left (map-cycle doc,
+    // 6.2; `spectate.rs`, `become_spectator`).
     if sim.pm_type != crate::spectate::PmType::Normal {
         return;
     }
@@ -2954,12 +2953,6 @@ impl Server {
                     c.queue_command(packet, PacketCommand::Kill);
                 }
             }
-            // `Cmd_MenuResponse_f`: the client answering a menu `openMenu`
-            // opened, or giving one up (`noop`, `bad`). Unlike the entry
-            // notify this fires straight through: nothing is armed by it,
-            // and a notify no thread is parked on is simply lost, which is
-            // what retail does too. It runs in the move pass, in packet
-            // order with `kill` (`client-probes/probe_threadorder`).
             // 1.5's `ClientCommand` (0x46341) runs both past its
             // intermission test (cod15-protocol-diff.md, section 12).
             "matchtimeout" | "matchtimein" if self.v15() => {
@@ -2990,6 +2983,12 @@ impl Server {
                     None => log::debug!("client {slot}: bad fdc {args:?}"),
                 }
             }
+            // `Cmd_MenuResponse_f`: the client answering a menu `openMenu`
+            // opened, or giving one up (`noop`, `bad`). Unlike the entry
+            // notify this fires straight through: nothing is armed by it,
+            // and a notify no thread is parked on is simply lost, which is
+            // what retail does too. It runs in the move pass, in packet
+            // order with `kill` (`client-probes/probe_threadorder`).
             "mr" => {
                 if let Some((menu, response)) =
                     parse_menu_response(trimmed, i32::from(self.game.server_id))
@@ -3409,9 +3408,6 @@ impl Server {
         }
     }
 
-    /// `G_Say`: retail's `trap_SendServerCommand` queues the line from
-    /// inside `ClientCommand`, and so does this. Nothing without a script, which is
-    /// where the teams and session states live.
     /// `Cmd_Tell_f`'s log line ahead of its two `G_Say`s: 1.1's `tell: %s
     /// to %s: %s` (0x47210), 1.5's and UO's `tell;%d;%d;%s;%d;%d;%s;%s`
     /// (each side's GUID, 0 with no authorize, slot and name), the names
@@ -3437,6 +3433,9 @@ impl Server {
         rt.host.log_printf(line);
     }
 
+    /// `G_Say`: retail's `trap_SendServerCommand` queues the line from
+    /// inside `ClientCommand`, and so does this. Nothing without a script, which is
+    /// where the teams and session states live.
     fn say(&mut self, slot: usize, target: Option<usize>, mode: SayMode, text: &str) {
         let Some(rt) = self.game.module.script.as_mut() else {
             return;
