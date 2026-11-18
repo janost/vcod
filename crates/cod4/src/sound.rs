@@ -285,16 +285,27 @@ pub fn wav(l: &LoadedSound) -> Result<Vec<u8>> {
         );
     }
     let block = l.channels * l.bits / 8;
-    let len = (data.len() as u32 / block) * block;
+    let byte_rate = l.rate.checked_mul(block);
+    let len = u32::try_from(data.len()).map(|n| n / block * block).ok();
+    let (Some(byte_rate), Some(len), Some(riff)) =
+        (byte_rate, len, len.and_then(|n| n.checked_add(36)))
+    else {
+        bail!(
+            "{}: {} Hz or {} bytes past a wav header",
+            l.name,
+            l.rate,
+            data.len()
+        );
+    };
     let mut out = Vec::with_capacity(44 + len as usize);
     out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&(36 + len).to_le_bytes());
+    out.extend_from_slice(&riff.to_le_bytes());
     out.extend_from_slice(b"WAVEfmt ");
     out.extend_from_slice(&16u32.to_le_bytes());
     out.extend_from_slice(&1u16.to_le_bytes());
     out.extend_from_slice(&(l.channels as u16).to_le_bytes());
     out.extend_from_slice(&l.rate.to_le_bytes());
-    out.extend_from_slice(&(l.rate * block).to_le_bytes());
+    out.extend_from_slice(&byte_rate.to_le_bytes());
     out.extend_from_slice(&(block as u16).to_le_bytes());
     out.extend_from_slice(&(l.bits as u16).to_le_bytes());
     out.extend_from_slice(b"data");
@@ -316,6 +327,24 @@ mod tests {
         assert_eq!(c[1].name, "auto");
         assert!(c[1].is3d && !c[2].is3d);
         assert_eq!(c[2].priority, 1);
+    }
+
+    /// A zone rate whose byte rate passes u32 is an error, not a panic
+    /// (BUG-130).
+    #[test]
+    fn a_byte_rate_past_u32_is_refused() {
+        let l = LoadedSound {
+            name: "x.wav".into(),
+            format: 1,
+            rate: u32::MAX,
+            bits: 16,
+            channels: 2,
+            samples: 1,
+            block_size: 4,
+            data_len: 4,
+            data: Some(vec![0; 4]),
+        };
+        assert!(wav(&l).is_err());
     }
 
     #[test]
