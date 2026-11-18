@@ -3315,11 +3315,21 @@ const FRAG_WEAPON: &str = "fraggrenade_mp";
 /// one mistake these directories cannot survive. A refused capture is kept
 /// under `tmp/` rather than thrown away.
 fn write_capture(path: &str, out: &str, overwrite: bool) -> anyhow::Result<()> {
+    write_capture_in(path, out, overwrite, std::path::Path::new("tmp"))
+}
+
+/// [`write_capture`] keeping a refused capture in `keep` instead of `tmp/`.
+fn write_capture_in(
+    path: &str,
+    out: &str,
+    overwrite: bool,
+    keep: &std::path::Path,
+) -> anyhow::Result<()> {
     if overwrite || !std::path::Path::new(path).exists() {
         std::fs::write(path, out)?;
         return Ok(());
     }
-    let kept = refused_copy(path);
+    let kept = refused_copy(path, keep);
     let saved = kept
         .parent()
         .map_or(Ok(()), std::fs::create_dir_all)
@@ -3334,13 +3344,13 @@ fn write_capture(path: &str, out: &str, overwrite: bool) -> anyhow::Result<()> {
     )
 }
 
-/// Where [`write_capture`] keeps a capture it would not write: `tmp/` and
+/// Where [`write_capture`] keeps a capture it would not write: `keep` and
 /// the fixture's file name.
-fn refused_copy(path: &str) -> std::path::PathBuf {
+fn refused_copy(path: &str, keep: &std::path::Path) -> std::path::PathBuf {
     let name = std::path::Path::new(path)
         .file_name()
         .map_or_else(|| "capture.txt".into(), |n| n.to_os_string());
-    std::path::Path::new("tmp").join(name)
+    keep.join(name)
 }
 
 /// `-<tag>` for a `--capture-tag`, empty without one.
@@ -15265,21 +15275,17 @@ mod tests {
         let path = dir.path().join("mp_carentan-tdm-ads-sniper.txt");
         let path = path.to_str().unwrap();
 
-        write_capture(path, "retail", false).expect("a name nothing holds yet");
-        let err =
-            write_capture(path, "ours", false).expect_err("the second write lands on the first");
-        let err = err.to_string();
-        assert!(
-            err.contains("--overwrite-fixture") && err.contains("tmp/"),
-            "{err}"
-        );
-        assert_eq!(std::fs::read_to_string(path).unwrap(), "retail");
-        assert_eq!(
-            refused_copy(path),
-            std::path::Path::new("tmp/mp_carentan-tdm-ads-sniper.txt")
-        );
+        let keep = dir.path().join("tmp");
+        let write = |out, overwrite| write_capture_in(path, out, overwrite, &keep);
 
-        write_capture(path, "ours", true).expect("the flag says to");
+        write("retail", false).expect("a name nothing holds yet");
+        let err = write("ours", false).expect_err("the second write lands on the first");
+        assert!(err.to_string().contains("--overwrite-fixture"), "{err}");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "retail");
+        let kept = keep.join("mp_carentan-tdm-ads-sniper.txt");
+        assert_eq!(std::fs::read_to_string(kept).unwrap(), "ours");
+
+        write("ours", true).expect("the flag says to");
         assert_eq!(std::fs::read_to_string(path).unwrap(), "ours");
     }
 }
