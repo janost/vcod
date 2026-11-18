@@ -176,6 +176,13 @@ three minutes, at most one packet a second to a master host:
 
 CoD1, UO and CoD2 send a flatline on Ctrl-C or `quit`.
 
+vcod's browser lists `master.cod.pm`'s servers. A retail client's
+Internet list comes from Activision's master, which hears from a vcod
+server only when one of `sv_master2`..`5` names it, on CoD1 and UO:
+`--set sv_master2=codmaster.activision.com` (CoD1) or
+`--set sv_master2=coduomaster.activision.com` (UO). The server then
+heartbeats both, each on the game's master port.
+
 ### Bans
 
 `--ban-file` keeps bans in retail's `ban.txt` shape: a guid and the
