@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use vcod_common::net::msg::UserCmd;
 use vcod_common::net::{NetClient, NetState};
 
-/// The render clock this branch replaced: newest snapshot time plus local
+/// The render clock `ServerClock` replaced: newest snapshot time plus local
 /// time since it arrived, 100 ms back, re-anchored on every snapshot and
 /// never stepped back.
 struct OldClock {

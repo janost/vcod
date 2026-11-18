@@ -80,7 +80,6 @@ impl LoadProgress {
     }
 
     /// `name` has `got` of `size` bytes down; a new name starts its clock.
-    // Fed by C4-45's `Fetch::progress` once that branch and this one meet.
     pub fn set_download(&self, name: &str, got: u64, size: u64) {
         self.with(|s| {
             let started = match &s.download {

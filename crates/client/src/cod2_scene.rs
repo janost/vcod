@@ -593,8 +593,6 @@ impl Cod2Draw {
         c
     }
 
-    /// Hands `frame`'s entities and bodies to the renderer: the brush
-    /// models' poses and every model instance.
     /// The scene fog once configstring 12 changes (`CG_ParseFog`, Mac
     /// 0x1e273c): seven numbers set the fog and fade to it over the last,
     /// in ms; anything shorter switches it off. The colour lands as the
@@ -646,6 +644,8 @@ impl Cod2Draw {
         self.scene.models.get(name).is_some_and(Option::is_some)
     }
 
+    /// Hands `frame`'s entities and bodies to the renderer: the brush
+    /// models' poses and every model instance.
     pub fn draw(&mut self, frame: &Frame, fs: &Pk3Fs, r: &mut Renderer) -> DrawCounts {
         use crate::frame_prof::{Count, Stage, span};
         let mut prof = span(Stage::Pose);
