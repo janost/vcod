@@ -5262,7 +5262,7 @@ truncated). `damageEvent` stays 0 through the fatal hit (INFERRED: 6's step
 respawns on use with the full loadout, and the killer's score goes 0 to 1 the
 frame after the kill.
 
-### 9.2 What differs
+### 9.2 What differed: the closed divergences and their pins
 
 Every divergence these runs found is closed. Retail facts and the traps they
 set, each with its pin:
@@ -9446,7 +9446,7 @@ timer already dropped.
 VERIFIED, by capture: under the timer `PM_SlideMove` leaves a push into a
 wall in the velocity (`cod11-player-clip.md` 8.5, `probe_slide`).
 
-### 16.2 As implemented
+### 16.2 vcod's port, and a retail read
 
 `Server::replay_moves` (`crates/server/src/server.rs`) runs every packet
 since the last tick in the order the server executed it: `handle_packet`

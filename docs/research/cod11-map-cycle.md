@@ -1508,7 +1508,7 @@ compare these frame for frame, with no tolerance.
   starts (53350 to 118400). The probe's receive clock read 5177 ms and
   64619 / 64624 ms for the same spans.
 
-### 8.2 What differs
+### 8.2 What differed, and the one still open
 
 Each bullet was a defect in vcod the runs found. One is still open, the
 `loadingnewmap` timing (the sixth bullet).
@@ -1584,7 +1584,7 @@ Each bullet was a defect in vcod the runs found. One is still open, the
   flush follows a serverinfo write with
   `SV_SetConfigstring(0, Cvar_InfoString(CVAR_SERVERINFO))`.
 
-### 8.3 What the runs could not reach
+### 8.3 What the first runs could not reach (closed)
 
 VERIFIED, the `sd` run: both probes answered the team menu and never left
 it, reading `team` 3 and `pm_type` 4 for the whole run, where the same probe

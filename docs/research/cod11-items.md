@@ -1034,7 +1034,7 @@ console, and the watchers on item 170, spawned mid-run, logged its `touch`
 and `trigger` lines. INFERRED: a watcher's `endon("death")` on an item that is
 taken or freed ends or parks without an error.
 
-## 13. As implemented
+## 13. The A/B runs: what retail measured, and vcod's port
 
 | retail | vcod (`crates/server/src/game/`) |
 |---|---|
