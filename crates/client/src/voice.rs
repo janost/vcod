@@ -752,7 +752,7 @@ mod tests {
     /// the session that owned it is dropped.
     #[test]
     fn a_talkers_stream_finishes_with_its_voice_chat() {
-        use kira::sound::{Sound, SoundData};
+        use kira::sound::SoundData;
         let mut v = VoiceChat::with(COD4_RATE, None, None);
         let ring: Ring = Arc::new(Mutex::new(VecDeque::new()));
         let (sound, ()) = VoiceStreamData(ring.clone(), COD4_RATE)
