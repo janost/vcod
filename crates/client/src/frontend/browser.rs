@@ -31,6 +31,13 @@ const MASTER_TIMEOUT: Duration = Duration::from_secs(5);
 /// `MAX_OTHER_SERVERS`, the Local list's cap.
 const MAX_LOCAL: usize = 0x80;
 
+/// The Internet list's cap for a master protocol: 1.1's 2048 entries and
+/// the `0x800` addresses its overflow block holds (`CL_ServersResponsePacket`
+/// 0x4107b0), else the 20000 of 1.5, UO and CoD2 (front-end doc 8).
+fn max_internet(protocol: u32) -> usize {
+    if protocol == 1 { 2048 + 0x800 } else { 20000 }
+}
+
 /// The master an Internet refresh asks and the one protocol it asks for:
 /// the install's, never another the client could also join.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -294,6 +301,19 @@ impl Browser {
         &mut self.lists[self.source as usize]
     }
 
+    /// A master's addresses not listed yet, up to [`max_internet`].
+    fn add_master_servers(&mut self, addrs: impl IntoIterator<Item = SocketAddrV4>) {
+        let cap = max_internet(self.master_query.map_or(1, |q| q.protocol));
+        for addr in addrs {
+            if self.list().len() >= cap {
+                break;
+            }
+            if !self.list().iter().any(|s| s.addr == addr) {
+                self.list_mut().push(Server::new(addr));
+            }
+        }
+    }
+
     /// A new source: stops the refresh running for the old one, and starts
     /// one for Local and Favorites as `UI_NetSource_HandleKey` does.
     pub fn set_source(&mut self, source: Source) {
@@ -466,11 +486,7 @@ impl Browser {
             };
             match cmd {
                 "getserversResponse" if Some(from) == self.master => {
-                    for addr in parse_servers_response(rest) {
-                        if !self.list().iter().any(|s| s.addr == addr) {
-                            self.list_mut().push(Server::new(addr));
-                        }
-                    }
+                    self.add_master_servers(parse_servers_response(rest));
                     self.status = Status::Pinging;
                 }
                 "infoResponse" => {
@@ -935,6 +951,32 @@ mod tests {
         assert_eq!(names(&b), ["tdm"]);
         b.filter.game_type = Some("dm".into());
         assert_eq!(names(&b), ["dm"]);
+    }
+
+    /// A master that keeps answering fills the Internet list to the size
+    /// retail's arrays hold and no further.
+    #[test]
+    fn the_internet_list_stops_at_retails_size() {
+        let addrs = |from: u32, n: u32| {
+            (from..from + n).map(|i| SocketAddrV4::new(Ipv4Addr::from(0x0a00_0000 + i), 28960))
+        };
+        for (protocol, cap) in [(1, 4096), (6, 20000), (118, 20000)] {
+            let mut b = Browser {
+                source: Source::Internet,
+                master_query: Some(MasterQuery {
+                    master: vcod_common::net::master::COD1_MASTER,
+                    protocol,
+                }),
+                ..Browser::default()
+            };
+            b.add_master_servers(addrs(0, 10));
+            b.add_master_servers(addrs(5, 10));
+            assert_eq!(b.list().len(), 15);
+            for k in 0..100 {
+                b.add_master_servers(addrs(k * 256, 256));
+            }
+            assert_eq!(b.list().len(), cap);
+        }
     }
 
     /// A loopback "server" that answers `getinfo` with `info`.

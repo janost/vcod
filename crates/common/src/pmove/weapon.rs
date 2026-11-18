@@ -20,6 +20,7 @@ use crate::net::event_ids::{
 };
 use crate::net::flags::ANIM_TOGGLEBIT;
 use crate::weapon::WeaponDef;
+use crate::weapon_table::alt_chain;
 
 /// `ps.weaponstate`, the twelve values of section 1.1.
 pub const WEAPON_READY: u8 = 0;
@@ -1033,29 +1034,20 @@ fn putaway(
 fn alt_slot_swap(ps: &mut PlayerState, weapons: &[Option<WeaponDef>], target: u8) {
     let slot_type = |w: u8| weapon_def(weapons, w).map_or(0, WeaponDef::slot_type);
     let from = ps.weapon;
-    let mut w = from;
-    let slot = loop {
+    let alt_of = |w: u8| weapon_def(weapons, w).map_or(0, |d| d.alt_index as u8);
+    let mut slot = None;
+    for w in std::iter::once(from).chain(alt_chain(from, alt_of)) {
         match slot_type(w) {
-            0 => return,
-            1 | 2 => {
-                if let Some(s) = [1, 2].into_iter().find(|&s| ps.weapon_slots[s] == w) {
-                    break s;
-                }
-            }
-            t @ 3..=5 => {
-                if ps.weapon_slots[t] == w {
-                    break t;
-                }
-            }
+            1 | 2 => slot = [1, 2].into_iter().find(|&s| ps.weapon_slots[s] == w),
+            t @ 3..=5 => slot = (ps.weapon_slots[t] == w).then_some(t),
             _ => return,
         }
-        let next = weapon_def(weapons, w).map_or(0, |d| d.alt_index as u8);
-        if next != 0 {
-            w = next;
+        if slot.is_some() {
+            break;
         }
-        if w == from {
-            return;
-        }
+    }
+    let Some(slot) = slot else {
+        return;
     };
     if !holds(ps, target) {
         return;
@@ -2810,6 +2802,30 @@ mod tests {
     /// mode up on `altRaiseTime` with `WEAP_ALTSWITCHTO`, no raise event,
     /// the cone opened only to 128, and the primary slot naming the mode
     /// now in hand (`.so` 0x37a9c, 0x37d84).
+    /// The held mode in no slot and a chain that never leads back to it:
+    /// a loop skipping it (`A B B` in configstring 7) or a one-way link.
+    /// The swap gives up and leaves the slots alone.
+    #[test]
+    fn an_alt_swap_ends_on_a_chain_that_skips_the_held_weapon() {
+        let (mut ps, mut w) = select_fire();
+        w.push(Some(WeaponDef {
+            alt_index: 1,
+            ..carbine()
+        }));
+        w[3].as_mut().unwrap().weapon_slot = "primary".into();
+        ps.weapon = 3;
+        ps.weapons_held |= 1 << 3;
+        ps.weapon_slots = [0; NUM_SLOTS];
+        alt_slot_swap(&mut ps, &w, 2);
+        assert_eq!(ps.weapon_slots, [0; NUM_SLOTS]);
+
+        w[1].as_mut().unwrap().alt_index = 2;
+        w[2].as_mut().unwrap().alt_index = 0;
+        ps.weapon = 1;
+        alt_slot_swap(&mut ps, &w, 2);
+        assert_eq!(ps.weapon_slots, [0; NUM_SLOTS]);
+    }
+
     #[test]
     fn an_alt_switch_takes_the_alt_arm_and_moves_the_slot() {
         let (mut ps, w) = select_fire();

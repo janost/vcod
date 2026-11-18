@@ -340,9 +340,12 @@ impl<'a> Cursor<'a> {
     }
 }
 
+/// A finite number: `inf`, `nan` and overflowing literals are refused.
 fn parse_f32(s: &str, line: usize) -> Result<f32, String> {
     s.parse::<f32>()
-        .map_err(|_| format!("line {line}: invalid number '{s}'"))
+        .ok()
+        .filter(|v| v.is_finite())
+        .ok_or_else(|| format!("line {line}: invalid number '{s}'"))
 }
 
 fn parse_f32_list(vals: &[&str], line: usize) -> Result<Vec<f32>, String> {
@@ -713,6 +716,15 @@ Tail
             em.shaders,
             ["gfx/effects/antiaircraft_tracer"].map(std::sync::Arc::<str>::from)
         );
+    }
+
+    #[test]
+    fn non_finite_numbers_refuse_the_file() {
+        for v in ["inf", "-inf", "nan", "1e39"] {
+            let text = format!("FxRunner\n{{\n\tdelay\t{v}\n}}\n");
+            assert!(parse(&text).is_err(), "{v}");
+        }
+        assert!(parse("FxRunner\n{\n\tdelay\t1e30\n}\n").is_ok());
     }
 
     /// `fx/impacts/blast_flash2.efx`'s flash: `nonUniformScale 1` and its

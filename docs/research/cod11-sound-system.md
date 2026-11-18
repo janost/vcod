@@ -1375,7 +1375,10 @@ the ambients are 2D loops (`local`).
 - vcod: `q` sets the same target and rate; `AudioSystem::step` advances the
   level by the wall milliseconds since the last step and multiplies it into
   the master gain of every voice. A landing on 0, or `q 0 0`, stops every
-  sound. `snd_restart` puts the fade back at full. The server's
+  sound. `snd_restart` puts the fade back at full. vcod ignores a `q`
+  whose level is infinite or NaN, and caps the gain it hands kira at
+  +12 dB and a playback rate at 8 (`audio/handle.rs`): bounds on a hostile
+  server, above `q 2 0` on a full alias. The server's
   `soundFade`, `musicPlay` and `musicStop` send retail's text to every
   client (`crates/server/src/game/builtins/sound.rs`).
 

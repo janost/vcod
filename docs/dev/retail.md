@@ -238,6 +238,9 @@ ring and temp entities, means of death.
 - `eType`, configstring slots and weapon indices stay the wire's.
 - A fixture-writing mode refuses to run off 1.1 without `--capture-tag`. Both
   servers load mp_carentan, so give each its own tag.
+- A fixture-writing mode also ends at the gamestate when the serverinfo's
+  `mapname` or `g_gametype` holds anything but letters, digits and `_`: the
+  two name the fixture file.
 - Run on both retail servers: the join, `--save-playerstate`, `-motion`,
   `-combat`, `-grenade`, `-configstrings`, `--probe-target` with
   `--save-hit`, `--probe-follow`, `--probe-pvs`, `--probe-weapsel`,

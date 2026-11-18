@@ -426,8 +426,18 @@ impl Conn {
     /// queued). A gamestate queues the `cp` ahead of any move, as the client
     /// sends it once the level is loaded, before its first usercmd.
     pub fn poll(&mut self, until: Instant) -> Result<Vec<Received>> {
+        self.poll_at_most(until, vcod_common::net::MAX_PACKETS_PER_PUMP)
+    }
+
+    /// [`Conn::poll`] reading at most `max` datagrams, so a flood cannot
+    /// hold the frame.
+    fn poll_at_most(&mut self, until: Instant, max: usize) -> Result<Vec<Received>> {
         let mut out = Vec::new();
-        while let Some(d) = self.recv(until)? {
+        let mut read = 0;
+        while read < max
+            && let Some(d) = self.recv(until)?
+        {
+            read += 1;
             if d.len() >= 4 && d[..4] == [0xff; 4] {
                 // `CL_ConnectionlessPacket` hands `v` to `CL_VoicePacket`
                 // (`iw3mp.exe` 0x46b60b).
@@ -693,7 +703,10 @@ impl Conn {
                     }
                     return Ok(Some(d));
                 }
-                Ok(_) => continue,
+                // Another sender's datagram, which must not hold the loop
+                // past `until`.
+                Ok(_) if now() < until => continue,
+                Ok(_) => return Ok(None),
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {}
                 Err(e) => return Err(e.into()),
@@ -839,6 +852,66 @@ pub fn apply_configstrings(client: &mut Client, applied: &mut i32, parsed: &Pars
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A joined connection to `server`, as [`Conn::join`] leaves one.
+    fn joined(server: SocketAddr) -> Conn {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_nonblocking(true).unwrap();
+        Conn {
+            stats: Stats::fresh(),
+            sock,
+            server,
+            auth: Vec::new(),
+            tap: None,
+            qport: 1,
+            challenge: 0,
+            cp: Cp::Bare,
+            chan: Netchan::with_params(1, 0, NetchanParams::COD2),
+            client: Client::new(),
+            seq: 1,
+            ack: 0,
+            commands: Vec::new(),
+            commands_acked: 0,
+            last_cmd: UserCmd::default(),
+            cp_feed: None,
+            applied: 0,
+            loading: None,
+            stats_sent: None,
+            disconnect: None,
+            cancel: None,
+            notes: None,
+            no_delta: false,
+            voice_in: Vec::new(),
+            prints: Vec::new(),
+            userinfo: String::new(),
+        }
+    }
+
+    fn waiting(c: &Conn) -> usize {
+        let mut buf = [0u8; 16];
+        std::iter::from_fn(|| c.sock.recv_from(&mut buf).ok()).count()
+    }
+
+    /// A flood from the server is read `max` datagrams a poll; one from
+    /// another sender ends a wait at its deadline.
+    #[test]
+    fn a_flood_cannot_hold_the_receive_loop() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut c = joined(server.local_addr().unwrap());
+        let me = c.sock.local_addr().unwrap();
+        for _ in 0..50 {
+            server.send_to(b"x", me).unwrap();
+        }
+        assert!(c.poll_at_most(Instant::now(), 8).unwrap().is_empty());
+        assert_eq!(waiting(&c), 42);
+
+        let other = UdpSocket::bind("127.0.0.1:0").unwrap();
+        for _ in 0..50 {
+            other.send_to(b"x", me).unwrap();
+        }
+        assert!(c.recv(Instant::now()).unwrap().is_none());
+        assert_eq!(waiting(&c), 49);
+    }
 
     /// The challenge replies of a CoD4x server and of retail 1.7
     /// (cod4-handshake.md 3, 13).

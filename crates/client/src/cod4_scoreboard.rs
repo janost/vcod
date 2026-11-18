@@ -581,7 +581,7 @@ fn ping_bars(c: &mut Canvas, g: &PingGraph, ping: i32, [x, y, w, h]: [f32; 4]) {
     };
     c.pic("white", [x + 8.0 - 1.0, y, w + 2.0, h], faded(g.bg));
     let most = g.max_bars.max(1);
-    let earned = (most - ping / g.interval.max(1)).max(1);
+    let earned = earned_bars(g, ping);
     let rgba = faded(bar_colour(g, earned, most));
     let bar_w = (w / most as f32 - 1.0).max(1.0);
     let mut bar_x = x + 8.0;
@@ -590,6 +590,13 @@ fn ping_bars(c: &mut Canvas, g: &PingGraph, ping: i32, [x, y, w, h]: [f32; 4]) {
         c.pic("white", [bar_x, y + h - bar_h, bar_w, bar_h], rgba);
         bar_x += bar_w + 1.0;
     }
+}
+
+/// `MaxBars` less `ping / Interval`, at least one. No retail server sends a
+/// negative ping; one counts as 0 so it cannot earn more than `MaxBars`.
+fn earned_bars(g: &PingGraph, ping: i32) -> i32 {
+    let most = g.max_bars.max(1);
+    (most - ping.max(0) / g.interval.max(1)).clamp(1, most)
 }
 
 /// The bars' colour: below half of `most` from the high ping's colour
@@ -847,6 +854,29 @@ mod tests {
     /// Fails with the whole new text when `actual` moved off the pin.
     fn pin(tag: &str, actual: &str, expected: &str) {
         assert!(actual == expected, "{tag} moved:\n{actual}");
+    }
+
+    /// A negative ping from a hostile server earns no more than the
+    /// graph's bars, and `i32::MIN` over an interval of 1 cannot overflow.
+    #[test]
+    fn a_negative_ping_earns_at_most_max_bars() {
+        let g = PingGraph::default();
+        for (ping, bars) in [(0, 4), (99, 4), (100, 3), (350, 1), (5000, 1)] {
+            assert_eq!(earned_bars(&g, ping), bars, "{ping}");
+        }
+        for interval in [100, 1, 0, -5] {
+            let g = PingGraph { interval, ..g };
+            assert_eq!(earned_bars(&g, i32::MIN), 4);
+            assert_eq!(earned_bars(&g, -1), 4);
+        }
+        let scores = Scores {
+            rows: vec![row(0, 0, i32::MIN, 0), row(1, 0, -150, 0)],
+            ..Scores::default()
+        };
+        let clients = vec![client(0, 1, 0, "a"), client(1, 2, 0, "b")];
+        let s = board(&scores, clients, 0, 1, true);
+        // Per row: its band, the graph's backing and four bars.
+        assert_eq!(s.lines().filter(|l| l.starts_with("P white")).count(), 12);
     }
 
     #[test]

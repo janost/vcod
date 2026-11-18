@@ -10,6 +10,7 @@ use super::font::{self, Font};
 use super::hudelem::Virtual;
 use vcod_common::localize::Localized;
 use vcod_common::weapon::{SLOT_NAMES, WeaponDef};
+use vcod_common::weapon_table::alt_chain;
 
 /// What the strip reads: the selection and the predicted playerstate's
 /// weapons, and the select stamp's fade (the weapon name's, 0x30019a30 on
@@ -61,27 +62,15 @@ impl StripView<'_> {
         if !self.holds(w) {
             return 0;
         }
-        let mut at = w;
-        loop {
-            if let Some(n) = (1..=self.last_slot()).find(|&n| self.slots[n] == at) {
-                return n;
-            }
-            at = self.alt(at);
-            if at == 0 || at == w {
-                return 0;
-            }
-        }
+        std::iter::once(w)
+            .chain(alt_chain(w, |a| self.alt(a)))
+            .find_map(|at| (1..=self.last_slot()).find(|&n| self.slots[n] == at))
+            .unwrap_or(0)
     }
 
     /// How many modes `w`'s `altWeapon` chain runs through, `w` included.
     fn modes(&self, w: u8) -> usize {
-        let mut n = 1;
-        let mut at = self.alt(w);
-        while at != 0 && at != w {
-            n += 1;
-            at = self.alt(at);
-        }
-        n
+        1 + alt_chain(w, |a| self.alt(a)).count()
     }
 }
 
@@ -323,6 +312,24 @@ mod tests {
             alpha: Some(1.0),
             uo: false,
         }
+    }
+
+    /// configstring 7 `A B B` gives 1->2, 2->1, 3->1: the walks from 3
+    /// loop without passing it, and end.
+    #[test]
+    fn alt_walks_end_on_a_loop_that_skips_the_start() {
+        let w = vec![
+            None,
+            def("auto", true, 2),
+            def("semi", true, 1),
+            def("semi", true, 1),
+            def("pistol", false, 0),
+        ];
+        let s = view(&w, 3, [0; 8]);
+        assert_eq!(s.slot_of(3), 0);
+        assert_eq!(s.modes(3), 3);
+        let mut strip = WeaponStrip::default();
+        quads(&mut strip, &s, 0);
     }
 
     fn quads(strip: &mut WeaponStrip, s: &StripView, now: i32) -> Vec<(String, [f32; 4])> {

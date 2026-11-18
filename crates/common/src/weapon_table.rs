@@ -67,6 +67,27 @@ pub fn link_alts<'a>(defs: &mut [Option<WeaponDef>], names: impl Iterator<Item =
     }
 }
 
+/// The modes along `start`'s `altWeapon` chain (`alt_of` gives a weapon's
+/// `alt_index`), `start` excluded. The walk ends at an index 0, back at
+/// `start`, or at the first index seen twice, so a loop that skips `start`
+/// (a hostile configstring 7 naming a weapon twice) ends too.
+pub fn alt_chain(start: u8, alt_of: impl Fn(u8) -> u8) -> impl Iterator<Item = u8> {
+    let mut seen = [0u64; 4];
+    let mut first_visit = move |w: u8| {
+        let (word, bit) = (usize::from(w >> 6), w & 63);
+        let new = seen[word] >> bit & 1 == 0;
+        seen[word] |= 1 << bit;
+        new
+    };
+    first_visit(start);
+    let mut at = start;
+    std::iter::from_fn(move || {
+        at = alt_of(at);
+        (at != 0 && first_visit(at)).then_some(at)
+    })
+    .fuse()
+}
+
 /// Assigns the ammo, clip and shared-cap indexes in index order. Ammo and
 /// clip names each get their own table, so the two indexes never share a
 /// namespace.
@@ -166,5 +187,19 @@ mod tests {
         assert_eq!(alt("bar_slow_mp"), bar);
         assert_eq!(alt("bar_mp"), bar + 1);
         assert_eq!(alt("m1carbine_mp"), 0);
+    }
+
+    /// A stock pair walks to its mode and stops back at the start; a loop
+    /// that skips the start (`A B B` in configstring 7 gives 1->2, 2->1,
+    /// 3->1) and a one-way link both end.
+    #[test]
+    fn the_alt_chain_ends_on_any_table() {
+        let walk = |alt: &[u8], from: u8| -> Vec<u8> {
+            alt_chain(from, |w| alt.get(usize::from(w)).copied().unwrap_or(0)).collect()
+        };
+        assert_eq!(walk(&[0, 2, 1], 1), [2]);
+        assert_eq!(walk(&[0, 2, 1, 1], 3), [1, 2]);
+        assert_eq!(walk(&[0, 2, 0], 1), [2]);
+        assert_eq!(walk(&[0, 0, 0, 0, 5, 6, 5], 4), [5, 6]);
     }
 }

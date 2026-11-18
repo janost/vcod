@@ -305,6 +305,20 @@ mod tests {
         UoArcs::lerp(at, at, 0.5)
     }
 
+    /// A 1.5 or UO server's huge or infinite gun angle folds at once and
+    /// still lands inside the arcs (BUG-008).
+    #[test]
+    fn a_hostile_base_angle_folds_inside_the_arcs() {
+        let arcs = capture_arcs();
+        for base in [1e30, -1e30, f32::INFINITY, f32::NAN] {
+            let [p, y] = arcs.barrel([10.0, 20.0, 0.0], [base, base]);
+            assert!(
+                (-40.0..=40.0).contains(&p) && (-45.0..=45.0).contains(&y),
+                "{base}"
+            );
+        }
+    }
+
     #[test]
     fn the_uo_view_is_held_inside_the_arcs() {
         let arcs = capture_arcs();
