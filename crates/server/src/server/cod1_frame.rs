@@ -214,9 +214,9 @@ impl Cod1Module {
             }
             // What the client holds comes across the same way the
             // configstrings do: re-read every frame, because any thread can
-            // have changed them. The held bits have to be among them --
+            // have changed them. The held bits have to be among them, since
             // `PM_Weapon` disarms a player who no longer owns `ps.weapon`
-            // (combat doc, section 1.8) -- and `ps.weapon` with them, so a
+            // (combat doc, section 1.8). `ps.weapon` comes with them, so a
             // sim reset outside a move comes back armed. The write-back
             // above is what makes that safe: the host's copy already carries
             // whatever the machine switched to this tick.

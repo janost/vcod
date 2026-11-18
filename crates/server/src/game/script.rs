@@ -1804,9 +1804,9 @@ impl ScriptRuntime {
     }
 
     /// `Cmd_Kill_f`: the `kill` client command, which is the `suicide` builtin
-    /// reached from outside the VM. Same three effects -- the vitals, the
+    /// reached from outside the VM. Same three effects (the vitals, the
     /// `Damaged` op the sim reads, and `CodeCallback_PlayerKilled` with
-    /// `MOD_SUICIDE` -- but started as a thread rather than spawned, since
+    /// `MOD_SUICIDE`), but started as a thread rather than spawned, since
     /// nothing is waiting on it. A dead or spectating client is ignored, the
     /// way the builtin ignores a dead one. Returns whether the kill ran.
     pub fn kill_client(&mut self, slot: usize) -> bool {
@@ -2471,7 +2471,7 @@ impl ScriptRuntime {
 
     /// `Cmd_MenuResponse_f` (0x486d8): notify the client's entity with the
     /// menu's **name** and the response. The name, not the index the client
-    /// sent -- retail reads configstring `CsRange::Menu.start + index` back
+    /// sent: retail reads configstring `CsRange::Menu.start + index` back
     /// and passes that string, which is why `dm.gsc` can both compare it
     /// against `game["menu_team"]` and hand it straight back to `openMenu`.
     ///
@@ -2854,9 +2854,9 @@ impl ScriptRuntime {
     /// table is the single owner of that fact: an entity at the slot's own
     /// number with a `client` store is one `spawn_client` made.
     /// Writes a client's simulated origin onto its script entity. The sim
-    /// owns a player's position and the script reads it: `spawn` used to be
-    /// the only writer, so `positionWouldTelefrag` tested where each client
-    /// last spawned rather than where it now stands.
+    /// owns a player's position and the script reads it: with `spawn` as the
+    /// only writer, `positionWouldTelefrag` would test where each client last
+    /// spawned rather than where it now stands.
     pub fn set_client_origin(&mut self, slot: usize, origin: [f32; 3]) {
         use vcod_gsc::Host;
         self.host.vehicles.lifted.remove(&slot);
@@ -2939,9 +2939,9 @@ impl ScriptRuntime {
     /// (`docs/research/clientstate-wire-format.md`). 0 when the client has no
     /// model yet, which is what a client still on the menus has.
     ///
-    /// The model itself comes from the stock character scripts --
+    /// The model itself comes from the stock character scripts:
     /// `character/mp_american_airborne01.gsc` does
-    /// `self setModel("xmodel/playerbody_american_airborne")` -- through
+    /// `self setModel("xmodel/playerbody_american_airborne")`, called through
     /// `_teams::model()` on spawn.
     pub fn client_model_index(&mut self, slot: usize) -> i32 {
         let Some(name) = self.client_field(slot, "model") else {
@@ -4842,7 +4842,7 @@ impl ScriptRuntime {
     }
 
     /// `for_test` with the file path spelled out, for a test whose script has
-    /// to answer to a path the runtime dispatches into by name --
+    /// to answer to a path the runtime dispatches into by name:
     /// `CALLBACK_SETUP` and its `CodeCallback_*` entry points.
     pub fn for_test_at(path: &str, src: &str) -> ScriptRuntime {
         let mut vm = Vm::new();
@@ -5219,8 +5219,8 @@ mod tests {
     /// targetname, so no arm reaches it and it stays solid. mp_powcamp
     /// (`*3`, `*9`) and mp_rocket (`*3`) are the other two stock maps with
     /// one. The gametype is `sd` because `*1` is also a `bombzone`, which
-    /// `_gameobjects::main` deletes -- unlinking it for another reason --
-    /// under every other gametype.
+    /// `_gameobjects::main` deletes under every other gametype, which
+    /// would be another reason to unlink it.
     #[test]
     fn the_bootstrap_unlinks_mp_depots_exploder_brush_model() {
         let Some(fs) = vcod_common::testing::game_fs_11() else {
@@ -5499,7 +5499,7 @@ mod tests {
         assert_eq!(after.host.client_vitals[0].health, 0);
 
         // The carry is spent by the connect that took it, so the next one
-        // starts empty -- which is every connect but a persisting
+        // starts empty, which is every connect but a persisting
         // boundary's.
         after.reconnect_client(0, "vcod".into());
         assert_eq!(after.client_pers(0, "team").as_deref(), Some("allies"));
@@ -5654,7 +5654,7 @@ mod tests {
 
     /// The two things a client entity carries before any script touches it:
     /// `.name` from the userinfo, and a `.pers` the gametype can index. Both
-    /// are measured on the retail 1.1d server -- a probe gametype logged
+    /// are measured on the retail 1.1d server: a probe gametype logged
     /// `pers` defined and `self.name` correct inside
     /// `Callback_PlayerConnect`, before its `waittill("begin")`. Without
     /// either, `dm.gsc`'s connect callback dies before it opens a menu.
@@ -6352,7 +6352,7 @@ mod tests {
     /// A script `delete()` takes the trigger row with the entity, and the
     /// entity number it hands back carries no box into its next tenant.
     /// `sd.gsc` deletes both bombzones at the plant, so a row that outlived
-    /// its entity would keep firing at the old brush -- and, once the number
+    /// its entity would keep firing at the old brush, and, once the number
     /// is reused, fire on a spawn that was never a trigger.
     #[test]
     fn a_deleted_trigger_takes_its_row_and_leaves_the_reused_number_clean() {
@@ -6407,7 +6407,7 @@ mod tests {
     /// (docs/research/cod11-gsc-object-model.md 8.2), so of the four values a
     /// client can carry on our wire only a living player's 0 gets through:
     /// spectator 4, intermission 5 and dead 6 all fail the compare. The dead
-    /// case is the minefield bug -- a corpse lying in the trigger re-armed
+    /// case is the minefield bug: a corpse lying in the trigger re-armed
     /// `minefield_kill` on every pass.
     #[test]
     fn only_a_living_client_touches_a_trigger() {

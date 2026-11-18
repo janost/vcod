@@ -5162,9 +5162,8 @@ impl Bot {
 
     /// The view through a throw: up over the enemy in sight, or where it
     /// was last seen, by a lob that grows with the range, else held where
-    /// it is. The cmd used to carry
-    /// zero angles here, which threw the frag wherever `delta_angles`
-    /// pointed, often into a wall at the thrower's feet.
+    /// it is. Zero angles here would throw the frag wherever `delta_angles`
+    /// points, often into a wall at the thrower's feet.
     fn lob_angles(&self, view: &BotView) -> [i32; 3] {
         let aim = match self.throw_target(view) {
             // The throw leaves along the aim, the view and the gun's

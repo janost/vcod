@@ -201,8 +201,8 @@ fn the_corpus_builtin_surface_is_stable() {
     // The engine's own name table holds 144 (§7); the corpus surface is
     // larger because this per-file pass compiles each file in isolation
     // with no cross-file resolution, so every unqualified call to a
-    // function this file does not itself define — a genuine call to
-    // another script's function, not just a real engine builtin — compiles
+    // function this file does not itself define (a genuine call to
+    // another script's function, not just a real engine builtin) compiles
     // to `CallBuiltin` and is counted here. A grammar change to call
     // classification, or a change to what this scan resolves before
     // counting, is what should move this number.
@@ -231,7 +231,7 @@ impl vcod_gsc::ScriptSource for StockSource {
 
 /// One gametype/map entry point's expected shape: file and function counts
 /// are ranges, not exact values, so a stock pak revision doesn't break this
-/// outright -- but narrow enough that a real regression (a broken reference,
+/// outright, but narrow enough that a real regression (a broken reference,
 /// a resolution bug that silently drops half the closure) still fails it.
 struct Expect {
     entry: &'static str,

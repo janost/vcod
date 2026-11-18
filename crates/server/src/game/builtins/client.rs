@@ -572,7 +572,7 @@ pub fn allow_complaint(
 }
 
 /// `self closeMenu()` (`.so` 0x45574): the reliable command `u`, with no
-/// argument -- the whole format string at 0x73204 is the one letter. The
+/// argument: the whole format string at 0x73204 is the one letter. The
 /// client's handler is `0x3002de60`, "close script menus"
 /// (`docs/research/cod11-hud-protocol.md` section 0).
 pub fn close_menu(
@@ -854,7 +854,7 @@ pub fn give_max_ammo(
 }
 
 /// `self setSpawnWeapon(name)` (0x452a4): `ps.weapon = index`, for a weapon
-/// the player already holds, with `ps.weaponstate` -- retail's other store --
+/// the player already holds, with `ps.weaponstate` (retail's other store)
 /// back to ready. Object model doc, section 20.
 pub fn set_spawn_weapon(
     host: &mut GameHost,
@@ -975,7 +975,7 @@ pub fn get_weapon_slot_weapon(
 /// `"none"` is not a weapon name but weapon index 0, which empties the slot:
 /// retail compares the argument against `"none"` ahead of its name lookup
 /// (0x43ebd), and stock script feeds `getWeaponSlotWeapon`'s own `"none"`
-/// straight back in -- `sd.gsc`'s `spawnPlayer` re-gives the `pers["weapon2"]`
+/// straight back in: `sd.gsc`'s `spawnPlayer` re-gives the `pers["weapon2"]`
 /// `endRound` stashed, which is `"none"` for a player carrying one primary.
 /// Either way whatever stood in the slot is taken first (0x43f6b).
 pub fn set_weapon_slot_weapon(
@@ -1763,7 +1763,7 @@ mod tests {
     }
 
     /// The weapon name comes out of the host's own `client_weapons`, and a
-    /// slot holding nothing reads `"none"` -- which is what a player on a
+    /// slot holding nothing reads `"none"`, which is what a player on a
     /// ladder reports, the holster having written 0 into `ps.weapon`.
     #[test]
     fn getcurrentweapon_names_what_the_client_holds() {
@@ -1985,8 +1985,8 @@ mod tests {
     }
 
     /// `cloneplayer` copies the mirror `Server::replay_moves` wrote into the
-    /// body queue's next slot. A client with no mirror -- connected but never
-    /// in the world -- clones nothing.
+    /// body queue's next slot. A client with no mirror (connected but never
+    /// in the world) clones nothing.
     #[test]
     fn cloneplayer_pushes_the_mirrored_state_into_the_body_queue() {
         let p = &vcod_common::net::protocol::PROTOCOL_V1;
@@ -2283,7 +2283,7 @@ mod tests {
     /// `switchToWeapon` sends the client `a <colt>` and queues nothing for
     /// the sim: the cmds that then name the colt put the carbine away and
     /// raise the colt, `ps.weapon` reading it only from the raise on. The
-    /// host's own copy is left alone -- the mirror would otherwise force the
+    /// host's own copy is left alone: the mirror would otherwise force the
     /// target weapon in ahead of the putaway.
     #[test]
     fn switchtoweapon_goes_through_the_putaway_and_the_raise() {

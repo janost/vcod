@@ -269,8 +269,8 @@ fn transient_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
 ///
 /// It is its own channel and not part of [`transient_misses`] on purpose. A
 /// gap that suppressed both would let a view regression hide behind a sight
-/// one, and the self-clean assert -- which only knows that *something* still
-/// differs -- would keep passing while it did.
+/// one, and the self-clean assert (which only knows that *something* still
+/// differs) would keep passing while it did.
 ///
 fn view_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
     let mut bad = Vec::new();

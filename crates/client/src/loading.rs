@@ -1,6 +1,5 @@
 //! Download-and-load state machine for one map. Pure: the caller pumps the
 //! net client, feeds the events in, and performs the returned `Action`.
-//! Replaces the blocking loops that ran before the window existed.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

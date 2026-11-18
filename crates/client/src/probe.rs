@@ -147,7 +147,7 @@ fn nearest_v1(event: i32) -> i32 {
 /// it resolves drained events into sound cues; weapon-file cues (fire,
 /// reload) are not resolved, the probe loads no weapon files.
 ///
-/// `save_playerstate` turns it into the stage 4 capture instead: it answers
+/// `save_playerstate` turns it into the playerstate capture instead: it answers
 /// the stock team and weapon menus, writes the fixture once the spawn has
 /// settled and exits. It sends no nudge, which would walk the capture off the
 /// spawn point.
@@ -173,7 +173,7 @@ fn nearest_v1(event: i32) -> i32 {
 /// `pvs` joins the same way again, walks the route in [`pvs_route`] and prints
 /// the snapshot entity list at each station plus every add and removal along
 /// the way, answering what the server sends from where. `save.entities` walks
-/// the same route and writes the trace as the stage 5 fixture; `pvs` alone
+/// the same route and writes the trace as the entity-list fixture; `pvs` alone
 /// writes nothing.
 /// Which captures a probe run overwrites. Each is a separate flag because
 /// each pins a different thing; the flag docs in `main.rs` say why.
@@ -1144,12 +1144,10 @@ pub fn probe(
         } else if save_combat && combat.running() {
             cmd = combat.cmd();
             weapon_switch = combat.weapon_override(ps_weapon);
-            // Only a step that declares itself a walk is steered. The turn
-            // used to ride every step, so the detour a stalled walk earned
-            // was still on the cmd of every later step that pushed forward
-            // while the fixture's `!input` recorded the untouched yaw: the
-            // ads capture's `ads_walk` ran 45 degrees off the line it says
-            // it ran, which its `viewangles` column now shows.
+            // Only a step that declares itself a walk is steered. A turn on
+            // every step would leave the detour a stalled walk earned on the
+            // cmd of every later step that pushes forward, while the
+            // fixture's `!input` records the untouched yaw.
             if combat.step_walks()
                 && let Some(o) = client
                     .snapshots()
@@ -1261,11 +1259,11 @@ pub fn probe(
             // Absolute: `send_frame` takes `delta_angles` off.
             cmd.angles[1] = deg_to_short(yaw);
         }
-        // A retail client sends the weapon it is holding on every cmd. The
-        // probe used to send 0, and retail's weapon-change check reads a
+        // A retail client sends the weapon it is holding on every cmd, and
+        // so does the probe: retail's weapon-change check reads a
         // `cmd.weapon` that differs from `ps.weapon` as a request to holster
-        // (docs/research/cod11-combat.md, section 1.8), so a capture taken
-        // with the zero can carry putaways the input never asked for. The
+        // (docs/research/cod11-combat.md, section 1.8), so a zero would
+        // carry putaways the input never asked for. The
         // byte only travels in the full usercmd branch, which a `wbuttons`,
         // `upmove` or `weapon` change forces (docs/protocol-1.1.md).
         // The ladder and weapon-select probes' byte is the play client's own.
@@ -1668,8 +1666,8 @@ pub fn probe(
         // The combat script steps only while alive and cannot resume from a
         // respawn elsewhere, and stock gametypes without `scr_forcerespawn`
         // never respawn a probe that presses nothing: a death (its own frag,
-        // or another client on a stock dm) used to idle out the run as
-        // "raise --probe-secs".
+        // or another client on a stock dm) would otherwise idle out the run
+        // as "raise --probe-secs".
         if save_combat
             && combat.running()
             && let Some(s) = client.snapshots().newest()
@@ -3275,9 +3273,9 @@ const FRAG_WEAPON: &str = "fraggrenade_mp";
 
 /// Writes a fixture that `--capture-tag` named, refusing to land on a file
 /// that is already there unless `--overwrite-fixture` says to. A tag is free
-/// text and nothing stops it spelling a committed fixture's name --
-/// `--save-ads --capture-tag sniper` writes exactly the path the scoped-rifle
-/// evidence lives at -- and a capture against vcod's own server silently
+/// text and nothing stops it spelling a committed fixture's name
+/// (`--save-ads --capture-tag sniper` writes exactly the path the scoped-rifle
+/// evidence lives at), and a capture against vcod's own server silently
 /// replacing the retail oracle is the one mistake this directory cannot
 /// survive. An untagged write is the documented way to retake a fixture and
 /// goes through `std::fs::write` unguarded.
@@ -3980,8 +3978,8 @@ struct StepResult {
 }
 
 /// Walks [`combat_script`] and keeps every snapshot along the way. A settled
-/// sample cannot hold a shot -- the event ring has four slots and overwrites
-/// as it goes -- so this mode records the trace itself and the settled
+/// sample cannot hold a shot (the event ring has four slots and overwrites
+/// as it goes), so this mode records the trace itself and the settled
 /// playerstate only as the step's tail.
 struct CombatProbe {
     steps: Vec<CombatStep>,
@@ -4220,9 +4218,9 @@ impl CombatProbe {
 
     /// Holds the step's base input, and taps only once its clock runs: a step
     /// waiting for the weapon to read ready must not be tapping while it waits.
-    /// A walk stands still until its clock runs too: `advance` used to walk
-    /// through the join's settle, so the `# spawn` pose (and the yaw a gate
-    /// rebases `!input` on) was taken after a stall turn the input never had.
+    /// A walk stands still until its clock runs too: walking through the
+    /// join's settle would take the `# spawn` pose (and the yaw a gate rebases
+    /// `!input` on) after a stall turn the input never had.
     fn cmd(&self) -> net::msg::UserCmd {
         match (self.steps.get(self.idx), self.started) {
             (Some(step), Some(t)) => step.cmd_at(t.elapsed()),
@@ -7207,10 +7205,10 @@ struct ViewHold {
 /// read off `delta_angles`: `SetClientViewAngle` sets them to the spawn's
 /// yaw less the last cmd's angle, and that cmd was the asked-for yaw less the
 /// spectating `delta_angles` (cod15-movement.md, "The spawn's lie-down";
-/// cod11-combat.md 9.2). Before 2026-10-17 this took `delta_angles` off too,
-/// so the view followed every push the other way, and a prone swing past the
-/// cap oscillated (playerstate_motion_ab.rs); until the second fix that day
-/// it latched the first spawned view, so every capture faced world yaw 0.
+/// cod11-combat.md 9.2). Taking `delta_angles` off as well would turn the
+/// view against every push, and a prone swing past the cap would oscillate
+/// (playerstate_motion_ab.rs); latching the first spawned view would face
+/// every capture at world yaw 0.
 fn hold_view_yaw(
     cmd: &mut net::msg::UserCmd,
     client: &NetClient<UdpTransport>,
@@ -9015,7 +9013,7 @@ const TRIGGER_NEAR: f32 = 200.0;
 /// A leg's budget is its distance at this speed plus [`TRIGGER_LEG_SLACK`].
 /// Well under retail's ~190 u/s run: the walk detours around geometry and a
 /// budget set at the straight-line speed gives up on every target that is
-/// not in the open. A flat budget does not work either -- one long enough for
+/// not in the open. A flat budget does not work either: one long enough for
 /// a far target spends the run on a near one behind a wall.
 const TRIGGER_LEG_SPEED: f32 = 70.0;
 const TRIGGER_LEG_SLACK: Duration = Duration::from_secs(6);
@@ -9033,8 +9031,8 @@ const TRIGGER_STEER_ARC: i32 = 165;
 /// (the movement constants table in docs/research/cod11-mantle.md).
 const TRIGGER_STEP_HEIGHT: f32 = 18.0;
 /// A walker that has not left this box in [`TRIGGER_WEDGE`] is wedged
-/// somewhere the steer cannot get it out of -- a pit, a doorway it rebounds
-/// in -- and kills itself to respawn somewhere else. One run lost 100 s of
+/// somewhere the steer cannot get it out of (a pit, a doorway it rebounds
+/// in) and kills itself to respawn somewhere else. One run lost 100 s of
 /// its 125 to a single such spot.
 const TRIGGER_WEDGE_UNITS: f32 = 80.0;
 const TRIGGER_WEDGE: Duration = Duration::from_secs(12);
@@ -9045,8 +9043,8 @@ const TRIGGER_WEDGE: Duration = Duration::from_secs(12);
 ///
 /// A wander does not do: mp_pavlov is dense enough that a blind heading spends
 /// a whole run inside the town, and a first capture taken that way crossed one
-/// trigger in 190 s. The walk is not the measurement -- the retail server's own
-/// log is -- so steering it at the answer costs nothing and buys the coverage.
+/// trigger in 190 s. The walk is not the measurement (the retail server's own
+/// log is), so steering it at the answer costs nothing and buys the coverage.
 #[derive(Default)]
 struct TriggerProbe {
     boxes: Vec<TriggerBox>,
@@ -14009,7 +14007,7 @@ const ENTITIES_FIXTURE_DIR: &str = concat!(
 /// sent it there.
 ///
 /// The origin is the point of the file. A capture cannot be told to stand
-/// anywhere -- `setviewpos` is refused on a dedicated server -- so the gate
+/// anywhere (`setviewpos` is refused on a dedicated server), so the gate
 /// does not replay the route, it replays each recorded origin
 /// (docs/protocol-1.1.md, "Which entities a client is sent").
 fn write_entities_fixture(

@@ -14,8 +14,8 @@ use vcod_gsc::ErrorKind;
 /// `BG_SetupWeaponInfo`'s list, configstring 7, 1-based on the wire.
 pub const WEAPON_LIST: &str = "bar_mp bar_slow_mp bren_mp colt_mp enfield_mp fg42_mp fg42_semi_mp fraggrenade_mp kar98k_mp kar98k_sniper_mp luger_mp m1carbine_mp m1garand_mp mg42_bipod_duck_mp mg42_bipod_prone_mp mg42_bipod_stand_mp mk1britishfrag_mp mosin_nagant_mp mosin_nagant_sniper_mp mp40_mp mp44_mp mp44_semi_mp panzerfaust_mp ppsh_mp ppsh_semi_mp ptrs41_antitank_rifle_mp rgd-33russianfrag_mp springfield_mp sten_mp stielhandgranate_mp thompson_mp thompson_semi_mp";
 
-/// Map-independent configstrings the engine itself sets. Everything else
-/// this table used to carry is script output and is earned back at load:
+/// Map-independent configstrings the engine itself sets. These slots are
+/// script output instead, written at load:
 /// 21/22 from `precacheStatusIcon`, 29 from `precacheHeadIcon`,
 /// 140..180 / 204..244 from the cvar mirror, 1180..1187 from
 /// `precacheMenu`, 1245/1246 from `precacheString` and 1501..1505 from
@@ -967,9 +967,7 @@ mod tests {
             );
             seen.push((lo, hi));
             // 0 and 1 are set by `static_configstrings` outside the
-            // `STATIC` list (serverinfo, systeminfo). 179/243/1501 used to
-            // be as well, but the layout-image write is gone now that
-            // `Shader` genuinely starts at 1501.
+            // `STATIC` list (serverinfo, systeminfo).
             for i in STATIC.iter().map(|&(i, _)| i).chain([0, 1]) {
                 assert!(
                     i < lo || i > hi,

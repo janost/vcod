@@ -1100,6 +1100,16 @@ Still apart, not modelled:
   stops at 84000 for that reason;
 - `pm_flags` 0x400.
 
+VERIFIED, vcod measurement (`playerstate_slope_ab.rs`, `PRONE`), the gate's
+earlier readings: on 2026-09-27 origin |dz| at most 0.173 and dxy at most
+0.52, both prone pitches 1.42 degrees off, before the dive, the landing damp,
+the body swing, the pitch cap, the fit trace at 24 and the eye's legs
+("Prone: the fit check, the body swing and the yaw cap", "The eye through a
+stance change"); on 2026-10-09 the body's bend up to 8 units and 19.3
+degrees off, before `BG_CheckProneValid`'s ground samples; and the street's
+rebased run at dxy max 0.71 until vcod carried its weapon state across the
+rebase.
+
 ### Why it matters to a server
 
 All three are `bg_`/`PM_` code, so a retail client predicts them. A server
@@ -2328,6 +2338,12 @@ retail for half the 1463 snapshots of the 8 ms route.
 The friction's own floor stays the flat 100 of 0x2e500 (`PM_STOPSPEED`),
 not scaled by stance: without the accel floor a crawl's 4.33 gain per frame
 would lose to that friction's 4.40.
+
+VERIFIED, vcod measurement 2026-09-23 (`playerstate_slope_ab.rs`, rebased),
+before the velocity snap of "The tail of the default arm" and this floor:
+origin |dz| at most 0.125 and dxy at most 4.5, with up to 12 rows past a
+unit. With both in, the walks land on retail's origin to the bit on every
+snapshot of the 8 ms and 25 ms captures (2026-11-13).
 
 ### The ground clip keeps the speed
 

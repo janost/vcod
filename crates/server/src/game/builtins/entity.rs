@@ -1,8 +1,7 @@
 //! Entity builtins the map-load and spawn paths reach: lookup, spawn (both
 //! the map-entity form and `ClientSpawn`), delete, visibility/solidity and
 //! setModel. Per-family dispatch: `NAMES`/`lookup` is matched against
-//! `Cx::resolve_folded`, same shape `host.rs` uses for the env/io names, and
-//! Task 9 adds more families beside this one.
+//! `Cx::resolve_folded`, the same shape every family in `builtins/` uses.
 
 use crate::configstrings::CsRange;
 use crate::game::entity::{FIRST_HUD_ELEM, ThinkFn};
@@ -697,7 +696,7 @@ fn set_solid(host: &mut GameHost, recv: Option<Target>, solid: bool) -> Result<V
 
 /// `hide()`/`show()` and `solid()`/`notSolid()` flip real flags on the
 /// entity, not script-struct keys: `_load.gsc` hides every exploder model
-/// at load and stage 5 reads these when it builds entity states.
+/// at load, and a hidden entity goes out with `EF_NODRAW`.
 pub fn hide(
     host: &mut GameHost,
     _cx: &mut Cx,
@@ -882,9 +881,9 @@ pub fn placed_origin(
 const CEILING_CHECK: f32 = 128.0;
 const DROP_DISTANCE: f32 = 262144.0;
 
-/// `isPlayer(ent)` reads the entity number against `MAX_CLIENTS`, which is
-/// what makes it answerable before stage 4 gives clients any state. Retail's
-/// `isPlayer` reads `ent->client`; stage 4 replaces this with the real check.
+/// `isPlayer(ent)` reads the entity number against `MAX_CLIENTS`. Retail's
+/// `isPlayer` reads `ent->client`; entity numbers 0..63 are the client slots
+/// and never reach the allocator, so the number stands in for the pointer.
 pub fn is_player(
     _host: &mut GameHost,
     _cx: &mut Cx,
@@ -1419,7 +1418,7 @@ mod tests {
     }
 
     /// An entity whose `model` is an xmodel name owns no brushes, so
-    /// `notSolid()` on one must not unlink submodel 1 -- or any script model
+    /// `notSolid()` on one must not unlink submodel 1, or any script model
     /// standing near a door would take the door out of the clip.
     #[test]
     fn notsolid_on_an_xmodel_entity_leaves_the_submodels_alone() {
@@ -1659,7 +1658,7 @@ mod tests {
 
     /// `hide`/`show` and `solid`/`notSolid` flip real flags on the entity, not
     /// script-struct keys: `_load.gsc` hides every exploder model at load and
-    /// stage 5 reads these when it builds entity states.
+    /// a hidden entity goes out with `EF_NODRAW`.
     #[test]
     fn hide_and_notsolid_flip_entity_flags() {
         let (mut vm, mut host) = fixture();
@@ -1676,8 +1675,7 @@ mod tests {
         });
     }
 
-    /// `isPlayer` reads the entity number against `MAX_CLIENTS`, which is
-    /// what makes it answerable before stage 4 gives clients any state.
+    /// `isPlayer` reads the entity number against `MAX_CLIENTS`.
     #[test]
     fn is_player_reads_the_entity_number() {
         let (mut vm, mut host) = fixture();

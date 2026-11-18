@@ -1,7 +1,7 @@
 //! Model attachment builtins, all five operating on `GEntity::attachments`,
-//! a per-entity list of `(model, tag)` pairs. `setViewModel` used to live
-//! here too; it hangs off a `gclient_t` in retail and now lives beside the
-//! other player methods in `client.rs`.
+//! a per-entity list of `(model, tag)` pairs. `setViewModel` hangs off a
+//! `gclient_t` in retail and lives beside the other player methods in
+//! `client.rs`.
 
 use crate::configstrings::CsRange;
 use crate::game::builtins::entity::entity_receiver;

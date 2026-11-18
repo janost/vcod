@@ -8369,8 +8369,8 @@ mod tests {
 
     /// mp_depot by (-64, 352): a body run off a ledge at z 12 comes to rest
     /// on a step's corner at z 3, right under a floor at z 27 and under a
-    /// ceiling 37 over the feet. A flood walk resting there was merged into
-    /// the floor's node until 2026-10-09; the walk to the node itself jumps.
+    /// ceiling 37 over the feet. A flood walk resting there is not merged
+    /// into the floor's node: the walk to the node itself jumps.
     #[test]
     fn a_walk_jumps_onto_a_floor_right_overhead_under_a_ceiling() {
         let Some(world) = map_world("mp_depot") else {
@@ -8549,11 +8549,11 @@ mod tests {
 
     /// mp_ship's ladders, each from its open face: up and down both proved
     /// by the bots' own steering. One plain, one whose head stands right
-    /// above its foot in a shaft, one only the creep gets down, and the five
-    /// that got no rung before 2026-10-07. The climb under the mast's spar
+    /// above its foot in a shaft, one only the creep gets down, and five
+    /// more. The climb under the mast's spar
     /// ends on the spar's edge at 1147 beside the plate, and the creep back
     /// off it at a run is 40 units out before it has dropped the 8 under the
-    /// plate `PM_CheckLadderMove`'s box needs (2026-10-12): up only.
+    /// plate `PM_CheckLadderMove`'s box needs: up only.
     #[test]
     fn ships_ladders_are_climbed_both_ways() {
         let Some(fs) = vcod_common::testing::game_fs() else {

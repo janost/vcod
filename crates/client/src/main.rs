@@ -242,8 +242,8 @@ struct Args {
     /// player, which leaves every field the client predicts at zero.
     #[arg(long)]
     save_motion: bool,
-    /// Join a team, then run a scripted weapon sequence -- single shot,
-    /// sustained fire, reload, fire crouched and prone -- and write the retail
+    /// Join a team, then run a scripted weapon sequence (single shot,
+    /// sustained fire, reload, fire crouched and prone) and write the retail
     /// playerstate to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-combat.txt.
     /// Separate from --save-motion because that one samples a settled state
@@ -258,9 +258,9 @@ struct Args {
     /// sequence takes about 40 s, inside the default --probe-secs.
     #[arg(long)]
     save_combat: bool,
-    /// Join a team, then run the sight script -- sight held, released, held
+    /// Join a team, then run the sight script (sight held, released, held
     /// through a reload, through a shot and while walking, plus a hip shot
-    /// and a walk to kick the spread counter -- and write every snapshot's
+    /// and a walk to kick the spread counter) and write every snapshot's
     /// fWeaponPosFrac and aimSpreadScale to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-ads.txt.
     /// The same machine as --save-combat with another script; the two are
@@ -268,9 +268,9 @@ struct Args {
     /// never hold still for.
     #[arg(long)]
     save_ads: bool,
-    /// Join a team, then run the grenade script -- one melee swing on the
+    /// Join a team, then run the grenade script (one melee swing on the
     /// rifle, a switch to the frag, a cooked throw, a cook held past the pin,
-    /// a cook cancelled by a weapon switch and a throw at the ground -- and
+    /// a cook cancelled by a weapon switch and a throw at the ground) and
     /// write every snapshot's grenadeTimeLeft and weaponDelay, plus a !missile
     /// line per snapshot that had one on the wire, to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-grenade.txt.

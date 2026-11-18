@@ -77,7 +77,7 @@ pub fn step(
     step_at(sv, ADDR, q, cl, now)
 }
 
-/// Like `step`, but the server's reply never reaches the client — a lost
+/// Like `step`, but the server's reply never reaches the client: a lost
 /// snapshot packet, not a lost ack. The client's next real ack then names a
 /// frame it received without having received the one right before it, the
 /// only case where a server-side message_num that has drifted from the
@@ -955,7 +955,7 @@ pub fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
 /// When each of a step's taps goes down, in ms from the step's start: one
 /// usercmd long, at the first cmd at or after the capture's own tap time. The
 /// capture holds the bit 32 ms out of every `pulse_period_ms`, which no cmd
-/// grid divides evenly, so the tap is placed rather than sampled -- sampling
+/// grid divides evenly, so the tap is placed rather than sampled: sampling
 /// it drops the taps that fall between two cmds.
 fn taps(step: &Step) -> Vec<i64> {
     (0..i64::from(step.pulses))
@@ -967,8 +967,8 @@ fn taps(step: &Step) -> Vec<i64> {
 /// per step, the way the probe traced retail's.
 /// The weapon byte a cmd carries: the step's switch once it has been asked
 /// for, the step's own byte otherwise, and our own `ps.weapon` where the
-/// capture recorded a 0. A 0 is not neutral -- retail reads a `cmd.weapon`
-/// differing from `ps.weapon` as a request to holster -- and the capture's 0
+/// capture recorded a 0. A 0 is not neutral (retail reads a `cmd.weapon`
+/// differing from `ps.weapon` as a request to holster), and the capture's 0
 /// means the probe was holding nothing, which is a fact about retail's
 /// playerstate and not an input to replay.
 fn weapon_byte(step: &Step, t: i64, ours_now: u8) -> u8 {

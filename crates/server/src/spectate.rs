@@ -635,7 +635,7 @@ impl ClientSim {
     /// A client entering the world: the spectator fly
     /// ([`pmove::spectator_move`]), angles straight off the latest cmd.
     /// `cmd_angles` are the angles of the usercmd that brought the client in
-    /// -- `SV_ClientEnterWorld`'s `cmds[0]`, zero when there is none -- so
+    /// (`SV_ClientEnterWorld`'s `cmds[0]`, zero when there is none), so
     /// the view it already had survives entry instead of snapping.
     pub fn spectator(origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) -> Self {
         let view = view_angles(cmd_angles, spawn_delta_angles(yaw_deg, cmd_angles));
@@ -744,7 +744,7 @@ impl ClientSim {
 
     /// The mode change `spawnPlayer()` makes: the same sim, restarted at the
     /// spawn point the script chose. `cmd_angles` is the client's last-known
-    /// cmd angles going into the spawn -- a spectator can have turned freely
+    /// cmd angles going into the spawn: a spectator can have turned freely
     /// before answering the weapon menu, unlike a fresh connect, so the
     /// caller must supply the real value rather than assume zero.
     pub fn become_player(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
@@ -1949,9 +1949,9 @@ impl ClientSim {
         for (t, c) in torso_cmds {
             self.torso_cmd(c, (now_ms, t), &conditions, inputs);
         }
-        // Nothing is selected while off the ground -- retail returns before
+        // Nothing is selected while off the ground: retail returns before
         // the selection unless the ladder flag is set (@0x323a2), which is
-        // what gives a climber its `climbup`/`climbdown` -- so a jump owns
+        // what gives a climber its `climbup`/`climbdown`, so a jump owns
         // the legs until the landing. A mounted player is also off the
         // ground (`ps.mounted` clears `on_ground` in pmove) but the 0x322c8
         // mounted arm runs ahead of that early-out (turrets doc, section 10).
@@ -1980,15 +1980,15 @@ impl ClientSim {
     /// One event clause on the two channels. A `both` clause is the whole
     /// body: retail puts the anim on the legs and restarts the torso on no
     /// anim at all, which is the same 0 every settled pose reads. The
-    /// capture's grenade throws are the evidence -- `legsAnim` 575, index 63,
+    /// capture's grenade throws are the evidence: `legsAnim` 575, index 63,
     /// with a bare toggle flip on the torso.
     ///
     /// The rule is general and the measurement is not: it also reaches
     /// `fireweapon`'s pistol-ADS clause and `jump`'s two run clauses, neither
     /// of which any capture covers (combat doc 1.14). It is kept general
     /// because it is the convention the continuous selection already follows.
-    /// The landing is the one clause measured to break it -- its `weaponclass
-    /// pistol AND grenade` arm is a `both` one and writes the legs alone --
+    /// The landing is the one clause measured to break it: its `weaponclass
+    /// pistol AND grenade` arm is a `both` one and writes the legs alone,
     /// and its caller clears the torso of the selection before it gets here.
     /// One [`TorsoCmd`] at `at` on the hold clock. The breakdown continue
     /// restarts the torso only where its clause's anim differs from the one
@@ -2155,8 +2155,8 @@ impl ClientSim {
         self.dead_yaw = dead_yaw;
         // The death anim on the legs, and the torso restarted on 0: both
         // retail deaths read `torsoAnim` 512 beside the death `legsAnim`
-        // (combat doc, 8.1 and 8.4). Nothing selects for this sim again --
-        // `update_anims` returns on a dead one -- so the drawn index is what
+        // (combat doc, 8.1 and 8.4). Nothing selects for this sim again
+        // (`update_anims` returns on a dead one), so the drawn index is what
         // the corpse clone carries.
         if let (Some(inputs), Some(c)) = (anims, &conditions) {
             let mut sel = inputs.anims.script.select_event_random("death", c, rng);
@@ -2667,10 +2667,10 @@ impl ClientSim {
     }
 
     /// What other clients are sent about this one. Retail sends a client no
-    /// entity for itself -- the playerstate carries it -- so this is only ever
+    /// entity for itself (the playerstate carries it), so this is only ever
     /// built for somebody else (`docs/protocol-1.1.md`, "Which entities a
     /// client is sent"). The body model is not here either: it rides the
-    /// `clientState` roster's `modelindex`, which stage 4 already sends.
+    /// `clientState` roster's `modelindex`.
     ///
     /// Measured against a retail capture of one probe watching another
     /// (`crates/server/tests/fixtures/entities/mp_carentan-dm-players.txt`).
@@ -3418,7 +3418,7 @@ mod tests {
     /// One frame of the anim machine with the state set by hand, for the
     /// clauses the retail capture cannot reach: it was taken with one rifle,
     /// never held two axes at once and never strafed crouched. Names rather
-    /// than indices -- `animtree.rs` is what pins the index order.
+    /// than indices: `animtree.rs` is what pins the index order.
     #[test]
     fn the_conditions_pick_the_clause_the_script_names() {
         let Some(fs) = vcod_common::testing::game_fs() else {
@@ -4009,9 +4009,9 @@ mod tests {
     }
 
     /// A spectator carries the captured spectator constants; a player does
-    /// not. The values `to_wire` used to pin unconditionally are the ones the
-    /// retail player capture disagrees with once the client is alive, which is
-    /// why they move behind the mode instead of staying literals.
+    /// not. The retail player capture disagrees with those values once the
+    /// client is alive, so `to_wire` takes them from the mode rather than
+    /// from literals.
     #[test]
     fn the_wire_constants_follow_the_mode() {
         let p = &PROTOCOL_V1;
@@ -4104,9 +4104,9 @@ mod tests {
     /// `SHORT2ANGLE(cmd.angles + delta_angles)` per axis, retail's
     /// `PM_UpdateViewAngles`.
     ///
-    /// The numbers here are this test's own -- `become_player` at 225 degrees
+    /// The numbers here are this test's own: `become_player` at 225 degrees
     /// puts 40960 in `delta_angles[1]`, and a cmd yaw of 0 makes the sum
-    /// -135.0 -- chosen so the two are not the same word and a write that
+    /// -135.0, chosen so the two are not the same word and a write that
     /// echoed the delta instead of summing would fail. The relation they
     /// check is the retail one, measured off the `--save-ads` capture taken
     /// on `mp_carentan` under `tdm` with `kar98k_sniper_mp`, which reads
@@ -4116,7 +4116,7 @@ mod tests {
     /// and docs/protocol-1.1.md, "View angles", carries the derivation.
     ///
     /// The relation holds in every other retail player capture too, including
-    /// the two whose `viewangles` reads 0 -- there the probe subtracts
+    /// the two whose `viewangles` reads 0: there the probe subtracts
     /// `delta_angles` when it builds each cmd, so the sum is zero and the
     /// field is not evidence of an unwritten one (`playerstate_ab.rs`,
     /// `check_spawn_shape`).
@@ -4140,8 +4140,8 @@ mod tests {
         assert_eq!(view(&ps, 2), 0.0);
 
         // Spawned facing 225 and turning 45 to the right: -135 + 45. The
-        // angles are the shorts that land on a whole degree -- 8192 is 45 and
-        // 4096 is 22.5 -- since ANGLE2SHORT truncates and a 60 would leave the
+        // angles are the shorts that land on a whole degree (8192 is 45 and
+        // 4096 is 22.5) since ANGLE2SHORT truncates and a 60 would leave the
         // assert chasing the rounding rather than the sum.
         sim.step(&cmd(0, 0, 8192), 0.05, None, &[]);
         assert_eq!(view(&sim.to_wire(p, 0, 0), 1), -90.0);

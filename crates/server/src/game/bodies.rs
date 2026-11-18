@@ -345,8 +345,8 @@ fn clone_of(
 
 /// The landing `G_RunItem` (0x4EB18) and `G_BounceItem` (0x4E858) give a
 /// clone on its first frame: one downward trace, and on contact
-/// `G_SetOrigin(ent, trace.endpos)` -- `pos.trType` 0, `pos.trDelta` 0,
-/// `pos.trTime` 0, `pos.trBase` at the endpoint -- plus
+/// `G_SetOrigin(ent, trace.endpos)` (`pos.trType` 0, `pos.trDelta` 0,
+/// `pos.trTime` 0, `pos.trBase` at the endpoint) plus
 /// `s.groundEntityNum = trace.entityNum`. A clone's `physicsBounce` is 0, so
 /// the reflected velocity is multiplied away and the first contact settles
 /// it; no bounce loop is needed.
@@ -354,7 +354,7 @@ fn clone_of(
 /// The trajectory rewrite happens whether or not a trace found ground: a
 /// corpse left under `TR_GRAVITY` sinks by `400 * age^2` on a retail client,
 /// which clips a body against nothing (section 5.3). With no
-/// collision world -- every unit test, and any host built without a map --
+/// collision world (every unit test, and any host built without a map)
 /// the body settles where it fell.
 fn settle(e: &mut EntityState, collision: Option<&CollisionWorld>, p: &Cod1Wire) {
     set_field(e, p, "pos.trType", TR_STATIONARY);

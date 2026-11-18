@@ -112,7 +112,7 @@ pub fn new_client_hud_elem(
 /// names it takes and the numbers it stores (0x4b3ed, 0x4b400, 0x4b41d) are
 /// the three `.sessionteam` assigns bar `none`
 /// (docs/research/clientstate-wire-format.md, "`team`"), so a `none` client
-/// -- which is every player under `dm` -- matches no team element.
+/// (which is every player under `dm`) matches no team element.
 pub fn new_team_hud_elem(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -494,7 +494,7 @@ pub fn scale_over_time(
 
 /// `<hudelem> fadeOverTime(time)` (0x4c720, method 7): stamps
 /// `fadeStartTime`/`fadeTime`, snapshots the live `color` slot into
-/// `fromColor`, and takes no target of its own -- the script writes the new
+/// `fromColor`, and takes no target of its own: the script writes the new
 /// `color` afterwards.
 pub fn fade_over_time(
     host: &mut GameHost,

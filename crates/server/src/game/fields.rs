@@ -211,7 +211,7 @@ pub const ENTITY_FIELDS: &[EngineField] = &[
 /// deliberate: five of these entries (`sessionteam`, `sessionstate`,
 /// `statusicon`, `headicon`, `headiconteam`) carry `offset: 0` because
 /// retail's dump marks them "fully custom get and set"
-/// (docs/research/cod11-gsc-object-model.md, "Client fields, 0x72ed4") —
+/// (docs/research/cod11-gsc-object-model.md, "Client fields, 0x72ed4"):
 /// they have no struct offset to alias on, not a shared one. Deduping by
 /// offset the way `ENTITY_FIELDS` does would silently merge those five
 /// distinct fields into one storage cell.
@@ -380,7 +380,7 @@ pub enum Route {
     /// distinct offsets, so two names sharing a retail offset share a slot.
     Engine { slot: usize, ty: FieldType },
     /// A client field. Index into `CLIENT_FIELDS`. Reaching one needs a
-    /// `gclient_t`, which stage 4 brings.
+    /// `gclient_t`, which only a client's entity carries (`GEntity::client`).
     Client(usize),
     /// Everything else: a radiant key, or a name a script invented. Both go
     /// to the entity's own struct in the VM heap.

@@ -30,8 +30,8 @@ pub struct PlayerWeapons {
 
 impl PlayerWeapons {
     /// `giveWeapon`: hold the weapon and put it in its file's `weaponSlot`.
-    /// A weapon whose file names no slot — including every weapon on a host
-    /// with no paks mounted — is still held; only the slot byte goes unset.
+    /// A weapon whose file names no slot (including every weapon on a host
+    /// with no paks mounted) is still held; only the slot byte goes unset.
     pub fn give(&mut self, index: usize, slot: usize) {
         if index < u64::BITS as usize {
             weapon::give_slot(&mut self.held, &mut self.slots, index as u8, slot);
@@ -316,8 +316,7 @@ mod tests {
     }
 
     /// The `weaponclass` condition in `mp/playeranim.script` is this field.
-    /// Values read straight out of the shipped weapon files, through the
-    /// table rather than the standalone lookup `PlayerWeapons` used to use.
+    /// Values read straight out of the shipped weapon files, through the table.
     #[test]
     fn a_weapon_file_names_its_class() {
         let Some(fs) = vcod_common::testing::game_fs() else {

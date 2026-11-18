@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 /// checksum lists. `crates/server/tests/connect.rs` covers both.
 const STRUCTURAL_SKIP: &[usize] = &[0, 1];
 
-/// Slots stage 3 knowingly does not reproduce, each with the reason. Empty
+/// Slots vcod knowingly does not reproduce, each with the reason. Empty
 /// is the goal. A gap that starts matching fails the guard below, so this
 /// list cannot rot into a lie.
 const GAPS: &[(usize, &str)] = &[];
