@@ -876,6 +876,11 @@ fn upload_plain(
     bytes_per_texel: u32,
     data: &[u8],
 ) -> wgpu::TextureView {
+    debug_assert_eq!(
+        data.len() as u32,
+        width * height * bytes_per_texel,
+        "upload_plain {label}: data is not width x height texels"
+    );
     let texture = device.create_texture_with_data(
         queue,
         &wgpu::TextureDescriptor {
@@ -895,7 +900,6 @@ fn upload_plain(
         wgpu::util::TextureDataOrder::LayerMajor,
         data,
     );
-    debug_assert_eq!(data.len() as u32, width * height * bytes_per_texel);
     texture.create_view(&Default::default())
 }
 
@@ -2449,6 +2453,32 @@ pub(super) mod tests {
         assert_eq!(t.len(), 5);
         assert_eq!(t[1][1], [0.0, 1.0, 0.0]);
         assert_eq!(t[4], [[0.0; 3]; 2]);
+    }
+
+    /// A short slice trips the size check before wgpu reads past it.
+    #[test]
+    fn upload_plain_checks_the_size_before_the_upload() {
+        let Some((device, queue)) = headless() else {
+            return;
+        };
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            upload_plain(
+                &device,
+                &queue,
+                "short",
+                (2, 2),
+                wgpu::TextureFormat::Rgba8Unorm,
+                4,
+                &[0; 4],
+            )
+        }));
+        let msg = r.expect_err("a short slice uploaded");
+        let msg = msg
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| msg.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        assert!(msg.contains("upload_plain short"), "{msg}");
     }
 
     /// A device off a headless adapter, `None` where the machine has none.
