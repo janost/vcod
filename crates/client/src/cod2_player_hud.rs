@@ -317,7 +317,7 @@ fn angle_normalize_180(a: f32) -> f32 {
 
 /// `AngleSubtract`: `a - b` into -180..180.
 fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut d = a - b;
+    let mut d = vcod_common::fguard::turns(a - b);
     while d > 180.0 {
         d -= 360.0;
     }

@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use vcod_cod4::xanimcalc::Parts;
 use vcod_cod4::xanimtree::{Clock, FlatTree};
+use vcod_common::fguard::clamp;
 use vcod_common::model::Model;
 use vcod_common::playerpose::Cod4Arith;
 use vcod_common::{skeleton, xanim::XAnim};
@@ -781,7 +782,7 @@ fn track(goal: f32, cur: f32, rate: f32, dt: f32) -> f32 {
 
 /// `DiffTrackAngle`: [`track`] the short way round, wrapped to -180..180.
 fn track_angle(goal: f32, cur: f32, rate: f32, dt: f32) -> f32 {
-    let mut near = goal;
+    let mut near = vcod_common::fguard::near(goal, cur);
     while near - cur > 180.0 {
         near -= 360.0;
     }
@@ -897,7 +898,7 @@ impl Sway {
         let dt = frame_ms as f32 * 0.001;
         let view = ps.angles.to_array();
         let [pitch, yaw] =
-            [0, 1].map(|k| (angle_diff(view[k], self.view[k]) / (dt * 60.0)).clamp(-cap, cap));
+            [0, 1].map(|k| clamp(angle_diff(view[k], self.view[k]) / (dt * 60.0), -cap, cap));
         self.lag = [
             track(yaw * left_k, self.lag[0], rate, dt),
             track(pitch * up_k, self.lag[1], rate, dt),
@@ -1407,6 +1408,35 @@ mod tests {
     /// The sight's fov eases in over the raise's last `adsZoomInFrac`,
     /// out over the drop's last `adsZoomOutFrac`, and floors at
     /// `cg_fovMin`.
+    /// A weapon's negative or NaN `swayMaxAngle`, a huge sway scale and a
+    /// view of 1e30 step the sway without a panic or a hang (SEC-019).
+    #[test]
+    fn hostile_sway_numbers_step() {
+        let n = ViewNumbers {
+            aim_down_sight: true,
+            sway: [
+                [-1.0, 6.0, 1e30, f32::INFINITY, 1.0, 1.0],
+                [f32::NAN, 6.0, 1.0, 1.0, 1.0, 1.0],
+            ],
+            ..ViewNumbers::default()
+        };
+        for pos_frac in [0.0, 0.5, f32::NAN] {
+            let mut sway = Sway::default();
+            for angles in [
+                Vec3::ZERO,
+                Vec3::new(30.0, -60.0, 0.0),
+                Vec3::new(1e30, -1e30, 0.0),
+            ] {
+                let ps = ViewPs {
+                    pos_frac,
+                    angles,
+                    ..ViewPs::default()
+                };
+                sway.step(&ps, &n, 16);
+            }
+        }
+    }
+
     #[test]
     fn the_sight_zooms_over_its_last_fraction() {
         let n = ViewNumbers {
