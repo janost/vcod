@@ -320,7 +320,8 @@ impl Conn {
             let stop = now() + Duration::from_millis(500);
             while let Some(r) = c.recv(stop)? {
                 if let Some(rest) = r.get(4..).and_then(|b| b.strip_prefix(b"statResponse ")) {
-                    want = String::from_utf8_lossy(rest).trim().parse()?;
+                    let mask: u32 = String::from_utf8_lossy(rest).trim().parse()?;
+                    want = mask & ((1u32 << STAT_PACKETS) - 1);
                     break;
                 }
             }
