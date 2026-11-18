@@ -333,13 +333,9 @@ fn the_springfield_timers_run_like_retail_on_1_1() {
 
 #[test]
 fn the_anim_timers_run_like_retail_on_1_5() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     let live = check(&PROTOCOL_V6, fs, "moves-1.5");
     assert!(live > 50, "{live}");
 }
@@ -368,13 +364,9 @@ fn the_prone_move_anims_run_like_retail_on_1_1() {
 
 #[test]
 fn the_prone_move_anims_run_like_retail_on_1_5() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     let live = check_with(&PROTOCOL_V6, fs, "pronemove-rifle-1.5", &[], true);
     assert!(live > 20, "{live}");
 }

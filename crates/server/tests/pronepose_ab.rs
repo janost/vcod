@@ -314,17 +314,9 @@ fn a_prone_body_on_the_mp_brecourt_field_poses_like_retail() {
     );
 }
 
-/// The 1.5b install's paks, `None` elsewhere (a UO install's `main/` is
-/// 1.5's, so these run there too).
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
-        .then_some(fs)
-}
-
 #[test]
 fn a_prone_body_on_the_mp_carentan_mound_poses_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check(
@@ -338,7 +330,7 @@ fn a_prone_body_on_the_mp_carentan_mound_poses_like_15() {
 
 #[test]
 fn a_prone_body_on_flat_ground_poses_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check(
@@ -352,7 +344,7 @@ fn a_prone_body_on_flat_ground_poses_like_15() {
 
 #[test]
 fn a_prone_body_on_the_mp_brecourt_field_poses_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check(
@@ -428,7 +420,7 @@ fn a_spawn_lies_down_on_its_own_yaw_like_retail() {
 
 #[test]
 fn a_spawn_lies_down_on_its_own_yaw_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check_spawn(
@@ -596,7 +588,7 @@ fn check_rays(
 /// (cod11-combat.md 3.1, "The clip's float time").
 #[test]
 fn a_prone_body_on_the_mp_brecourt_field_traces_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check_rays(

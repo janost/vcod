@@ -21,15 +21,7 @@ fn every_stock_map_has_its_fog_and_vision() {
         walk(z, WalkOptions::default()).unwrap().assets.raw_files
     };
     let common = raw("common_mp");
-    let mut maps: Vec<String> = install
-        .zones("english")
-        .unwrap()
-        .iter()
-        .filter_map(|p| p.file_stem()?.to_str().map(str::to_owned))
-        .filter(|n| n.starts_with("mp_") && !n.ends_with("_load"))
-        .collect();
-    maps.sort();
-    assert_eq!(maps.len(), 21, "{maps:?}");
+    let maps = vcod_cod4::testing::stock_maps(&install);
     let mut names: Vec<&str> = maps.iter().map(String::as_str).collect();
     names.extend(["mpintro", "default"]);
     let mut own = Vec::new();

@@ -77,8 +77,12 @@ impl RateLimiter {
 }
 
 /// [`RateLimiter::allow`] on the process's one limiter and the monotonic
-/// clock: every master packet the client sends asks this first.
+/// clock: every master packet the client sends asks this first. A loopback
+/// host always passes: the limit is a courtesy to public masters.
 pub fn master_send_allowed(host: IpAddr) -> bool {
+    if host.is_loopback() {
+        return true;
+    }
     static START: OnceLock<Instant> = OnceLock::new();
     static LIMIT: OnceLock<Mutex<RateLimiter>> = OnceLock::new();
     let now = Instant::now().duration_since(*START.get_or_init(Instant::now));
@@ -262,6 +266,14 @@ mod tests {
         assert!(r.allow(a, 6000));
         assert!(!r.allow(b, 6499));
         assert!(r.allow(b, 6500));
+    }
+
+    /// A loopback host is no public master: the client's packets to one
+    /// always go, so fake masters in tests wait on nothing.
+    #[test]
+    fn the_client_sends_to_a_loopback_master_unlimited() {
+        let local: IpAddr = "127.0.0.1".parse().unwrap();
+        assert!((0..3).all(|_| master_send_allowed(local)));
     }
 
     #[test]

@@ -8785,8 +8785,8 @@ mod tests {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
-        let home = std::env::temp_dir().join(format!("vcod-cod1-log-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&home);
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().to_path_buf();
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
         sv.set_cvar("fs_homepath", &home.display().to_string());
@@ -8823,7 +8823,6 @@ mod tests {
         want.extend(["ShutdownGame:", &sep]);
         assert_eq!(lines, want, "{text}");
         assert!(text.lines().all(|l| l.as_bytes()[3] == b':'), "{text}");
-        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

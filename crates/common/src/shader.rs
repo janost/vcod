@@ -3162,4 +3162,28 @@ textures/sfx/test_water
         assert!(!Arc::ptr_eq(&a, &b));
         assert_eq!(b.len(), 1);
     }
+
+    /// The sample scripts, mutated, through the parse and the per-frame
+    /// wave and tcMod evaluation.
+    #[test]
+    fn a_hostile_shader_script_never_panics() {
+        let good =
+            format!("{SAMPLE}\nnoisy\n{{\n{{\nmap a.tga\nrgbGen wave noise 0 1 0 1e30\n}}\n}}\n");
+        crate::testing::fuzz("shader", good.as_bytes(), 3000, |b| {
+            let text = String::from_utf8_lossy(b);
+            for (name, body) in split_blocks(&text) {
+                let sh = parse_shader(&name, &body, &mut WarnSet::new());
+                // What a frame evaluates of a stage at a time.
+                for stage in &sh.stages {
+                    if let RgbGen::Wave(w) = &stage.rgb_gen {
+                        rgb_wave_value(w, 1.5);
+                    }
+                    for b in &stage.bundles {
+                        bundle_affine(&b.tcmods, 1.5);
+                        bundle_turb(&b.tcmods, 1.5);
+                    }
+                }
+            }
+        });
+    }
 }

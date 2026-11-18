@@ -389,24 +389,21 @@ fn trees_that_are_not_trees_are_refused() {
     assert!(e.contains("two parents"), "{e}");
 }
 
-/// Garbage after the header never panics.
+/// The minimal map, mutated, through the parse and what a level builds
+/// off it first: the neutral world, the clip map and a trace.
 #[test]
 fn noise_never_panics() {
     let good = Map::minimal().bytes();
-    let mut x = 0x1234_5678u32;
-    for _ in 0..2000 {
-        let mut b = good.clone();
-        for _ in 0..8 {
-            x ^= x << 13;
-            x ^= x >> 17;
-            x ^= x << 5;
-            let at = (x as usize) % b.len();
-            b[at] = (x >> 8) as u8;
+    vcod_common::testing::fuzz("d3dbsp", &good, 2000, |b| {
+        let Ok(bsp) = D3dBsp::parse(b) else {
+            return;
+        };
+        crate::world::from_bsp(&bsp);
+        if let Ok(clip) = crate::map::clip_map(&bsp) {
+            let (a, z) = (glam::Vec3::splat(-64.0), glam::Vec3::splat(64.0));
+            clip.trace(a, z, glam::Vec3::splat(-15.0), glam::Vec3::splat(15.0), !0);
         }
-        if let Ok(bsp) = D3dBsp::parse(&b) {
-            let _ = crate::map::clip_map(&bsp);
-        }
-    }
+    });
 }
 
 /// `CMod_LoadLeafs` keeps a leaf's collision AABB run as `u16` words and

@@ -32,7 +32,6 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::movetrace::{Body, CONTENTS_BODY};
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::PROTOCOL_V6;
 use vcod_common::net::{NetClient, NetEvent};
 use vcod_common::pk3::Pk3Fs;
 use vcod_server::Server;
@@ -393,14 +392,6 @@ type Client = NetClient<ClientEnd>;
 
 const MAP: &str = "mp_carentan";
 
-/// The 1.5b install's paks, `None` elsewhere (a UO install's `main/` is
-/// 1.5's, so this runs there too).
-fn fs_15() -> Option<Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
-        .then_some(fs)
-}
-
 /// A dm server on `fs`'s protocol, its pushes drawn from glibc's `rand()`
 /// under `seed` when given (`Server::pin_stuck_rand`).
 fn server(fs: Pk3Fs, seed: Option<(u32, usize)>) -> (Server, Instant) {
@@ -718,7 +709,7 @@ fn push_vels(frames: &[Frame]) -> Vec<Vec2> {
 /// is held to the band only.
 #[test]
 fn ours_15_pushes_the_still_pair_beside_a_spectator_in_slot_0() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         eprintln!("COD_DIR unset or not 1.5's: skipping");
         return;
     };
@@ -737,7 +728,7 @@ fn ours_15_pushes_the_still_pair_beside_a_spectator_in_slot_0() {
 /// overlap's eight give other directions.
 #[test]
 fn ours_15_pushes_only_the_walker_beside_a_spectator_in_slot_0() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         eprintln!("COD_DIR unset or not 1.5's: skipping");
         return;
     };

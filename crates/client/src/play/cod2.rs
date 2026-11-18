@@ -2612,6 +2612,17 @@ fn ask_keyed<T>(
     auth: Option<&KeyAuth>,
     want: impl Fn(&Reply) -> Option<T>,
 ) -> anyhow::Result<T> {
+    ask_keyed_paced(sock, p, auth, want, Duration::from_secs(1))
+}
+
+/// [`ask_keyed`] with its five sends `wait` apart.
+fn ask_keyed_paced<T>(
+    sock: &UdpSocket,
+    p: &[u8],
+    auth: Option<&KeyAuth>,
+    want: impl Fn(&Reply) -> Option<T>,
+    wait: Duration,
+) -> anyhow::Result<T> {
     let mut buf = vec![0u8; 0x10000];
     let mut awaiting_key = false;
     for _ in 0..5 {
@@ -2619,7 +2630,7 @@ fn ask_keyed<T>(
             a.request();
         }
         sock.send(p)?;
-        let until = Instant::now() + Duration::from_secs(1);
+        let until = Instant::now() + wait;
         while Instant::now() < until {
             let Ok(n) = sock.recv(&mut buf) else {
                 continue;
@@ -3540,8 +3551,8 @@ mod tests {
     #[test]
     fn timedemo_writes_a_row_a_frame_after_the_first() {
         let data = include_bytes!("../../../cod2/tests/fixtures/demos/mp_toujane-retail.dm_1");
-        let dir = std::env::temp_dir().join(format!("vcod-timedemo-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let fs = Pk3Fs::empty();
         let mut cam = FlyCamera::new(Vec3::ZERO, 0.0);
         let mut plain = Cod2Session::play_demo(data.to_vec(), false).unwrap();
@@ -3562,7 +3573,6 @@ mod tests {
         assert!(s.demo_over(), "the demo never ended");
         let counted = s.demo.as_ref().unwrap().timedemo.as_ref().unwrap().frames();
         let text = std::fs::read_to_string(dir.join("timedemo_mp_toujane_mode_3.csv")).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
         let rows: Vec<(i32, i32)> = text
             .lines()
             .map(|l| {
@@ -3629,10 +3639,17 @@ mod tests {
             server: sock.peer_addr().ok(),
             key,
         };
-        ask_keyed(&sock, &oob::getchallenge(None), Some(&auth), |r| match r {
+        let want = |r: &Reply| match r {
             Reply::Challenge(c) => Some(*c),
             _ => None,
-        })
+        };
+        ask_keyed_paced(
+            &sock,
+            &oob::getchallenge(None),
+            Some(&auth),
+            want,
+            Duration::from_millis(10),
+        )
     }
 
     #[test]

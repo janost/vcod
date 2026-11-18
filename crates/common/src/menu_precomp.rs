@@ -936,4 +936,14 @@ mod tests {
             ["rect", "0", "0", "640", "480"]
         );
     }
+
+    #[test]
+    fn a_hostile_menu_source_never_panics() {
+        let good = "#define A(x) x x\n#define B A(A(1))\n#ifdef B\nB\n#else\n2\n#endif\n#include \"a.h\"\n";
+        crate::testing::fuzz("precompiler", good.as_bytes(), 3000, |b| {
+            run(&String::from_utf8_lossy(b), &|_| {
+                Some("#define C 3\nC".into())
+            });
+        });
+    }
 }

@@ -13,29 +13,7 @@ use vcod_common::asset_source::AssetSource;
 /// A device off a headless adapter with BC textures, `None` where the
 /// machine has none.
 fn headless() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::default(),
-        compatible_surface: None,
-        force_fallback_adapter: false,
-        apply_limit_buckets: false,
-    }))
-    .ok()?;
-    let info = adapter.get_info();
-    eprintln!("adapter: {} {:?}", info.name, info.backend);
-    if !adapter
-        .features()
-        .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
-    {
-        return None;
-    }
-    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("hud shot device"),
-        required_features: wgpu::Features::TEXTURE_COMPRESSION_BC,
-        ..Default::default()
-    }))
-    .ok()
+    crate::renderer::headless::test_device(crate::renderer::headless::Need::Bc)
 }
 
 #[test]

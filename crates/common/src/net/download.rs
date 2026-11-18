@@ -635,8 +635,8 @@ mod tests {
 
     #[test]
     fn download_spools_and_renames() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-spool-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
 
         let zip = crate::testing::pk3_bytes();
@@ -655,14 +655,12 @@ mod tests {
         assert_eq!(std::fs::read(&dest).unwrap(), zip);
 
         assert!(Download::create("main/foo.pk3", &dest).is_err());
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn finish_rejects_a_file_that_is_not_a_zip() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-garbage-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/bad.pk3");
 
         let mut dl = Download::create("main/bad.pk3", &dest).unwrap();
@@ -676,14 +674,12 @@ mod tests {
                 .next()
                 .is_none()
         );
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn finish_rejects_a_pak_whose_checksum_the_server_does_not_list() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-chk-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
         let mut dl = Download::create("main/foo.pk3", &dest).unwrap();
         dl.accept_block(&crate::testing::pk3_bytes()).unwrap();
@@ -694,7 +690,6 @@ mod tests {
         assert_eq!((wrong.remote.as_str(), wrong.want), ("main/foo.pk3", 1234));
         assert!(!dest.exists());
         assert!(!dest.with_extension("pk3.tmp").exists());
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -706,8 +701,8 @@ mod tests {
 
     #[test]
     fn abort_removes_the_partial_file() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-abort-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/bar.pk3");
 
         let mut dl = Download::create("main/bar.pk3", &dest).unwrap();
@@ -729,7 +724,5 @@ mod tests {
                 .next()
                 .is_none()
         );
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -381,12 +381,7 @@ mod tests {
     }
 
     fn headless() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        pollster::block_on(instance.request_adapter(&Default::default()))
-            .ok()
-            .filter(|a| a.get_info().backend != wgpu::Backend::Gl)
-            .and_then(|a| pollster::block_on(a.request_device(&Default::default())).ok())
+        crate::renderer::headless::test_device(crate::renderer::headless::Need::NotGl)
     }
 
     fn mp_crash_film() -> vcod_cod4::look::FilmConsts {

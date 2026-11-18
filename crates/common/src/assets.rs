@@ -1659,4 +1659,15 @@ gfx/effects/second_stage_only
             "expected the sign mask to be left alone"
         );
     }
+
+    /// A 8x8 DXT1 and DXT5, mutated: the decode returns on every input.
+    #[test]
+    fn a_hostile_dds_never_panics() {
+        for (fourcc, block) in [(b"DXT1", 8), (b"DXT5", 16)] {
+            let good = make_dds(fourcc, 8, 8, &vec![0x5a; 4 * block]);
+            crate::testing::fuzz("dds", &good, 1500, |d| {
+                let _ = parse_dds(d);
+            });
+        }
+    }
 }

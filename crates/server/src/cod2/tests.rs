@@ -1098,12 +1098,12 @@ fn a_cod2_frame_runs_in_retails_order() {
     let now = Instant::now();
     let mut sv = Cod2Server::new(cfg("mp_toujane"), 7, now);
     sv.load(Some(Rc::new(fs))).unwrap();
-    let path = std::env::temp_dir().join(format!("vcod-cod2-order-{}.trace", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("order.trace");
     crate::tick_trace::install(&path).unwrap();
     sv.tick_frames(now, 2);
     crate::tick_trace::finish().unwrap();
     let trace = std::fs::read_to_string(&path).unwrap();
-    let _ = std::fs::remove_file(&path);
     let steps: Vec<&str> = trace
         .lines()
         .filter_map(|l| {
@@ -1148,8 +1148,8 @@ fn a_cod2_server_writes_games_mp_log() {
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
     };
-    let home = std::env::temp_dir().join(format!("vcod-cod2-log-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&home);
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().to_path_buf();
     let now = Instant::now();
     let mut sv = Cod2Server::new(cfg("mp_toujane"), 7, now);
     sv.set_cvar("fs_homepath", &home.display().to_string());
@@ -1173,7 +1173,6 @@ fn a_cod2_server_writes_games_mp_log() {
         want.extend([sep.as_str(), "InitGame:", "ShutdownGame:", &sep]);
     }
     assert_eq!(lines, want, "{text}");
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// A tag `attach` names takes its configstring in the frame

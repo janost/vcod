@@ -126,6 +126,9 @@ are its header's.
 | `VCOD_BOT_THREADS=<n>` | `vcod-server` | The threads the bots' pass plans on, `1` serial ([server-tick.md](server-tick.md#the-bots-threads)). |
 | `VC_NAV_COD4=1` | `vcod-server` | CoD4 bots walk the nav graph's CoD4 step ([bots.md](../bots.md), traps.md). |
 | `VCOD_REQUIRE_INSTALL=<names>` | tests | Turns an install skip into a failure ([testing.md](testing.md)). |
+| `VCOD_REQUIRE_GPU=1` | tests | Turns a headless render test's adapter skip into a failure ([testing.md](testing.md#headless-render-pipeline_check)). |
+| `VCOD_LIVE_SLOTS=<n>` | CoD4 live tests | How many test servers run at once, 3 by default ([testing.md](testing.md#cod4-live-tests)). |
+| `VCOD_LIVE_NET=1` | `master_list_live`, `lan_scan_live` | Lets the two ignored tests that contact a public master or the LAN run. |
 | `VCOD_C4_SHOTS=<dir>` | CoD4 live tests | Writes their frames ([testing.md](testing.md#cod4-live-tests)). |
 | `VCOD_SWEEP_MAPS`, `VCOD_SWEEP_GAMETYPES`, `VCOD_SWEEP_JOBS`, `VCOD_SWEEP_LEVEL_SECS`, `VCOD_SWEEP_OUT` | `cod4_map_sweep`, the soaks | Which maps and gametypes, how many at once, each level's length, the output directory (`play/cod4_sweep.rs`). |
 | `VCOD_SOAK_MINUTES`, `VCOD_SOAK_RENDER_HZ`, `VCOD_SOAK_TICK_LOG_MS`, `VCOD_SOAK_CLIENT_LOG_MS`, `VCOD_SOAK_TICK_WATCH` | CoD4 and CoD2 soaks | `tools/cod4_soak.sh`'s header. |

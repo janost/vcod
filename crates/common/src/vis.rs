@@ -1448,9 +1448,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(data) = fs.read("maps/mp/mp_brecourt.bsp") else {
-            return;
-        };
+        let data = crate::testing::stock_file(&fs, "maps/mp/mp_brecourt.bsp");
         let b = crate::bsp::parse(&data).unwrap();
         let vis = WorldVis::build(&b);
         let (lo, hi) = crate::mesh::map_bounds(&b);
@@ -1952,9 +1950,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(data) = fs.read("maps/MP/mp_powcamp.bsp") else {
-            return;
-        };
+        let data = crate::testing::stock_file(&fs, "maps/MP/mp_powcamp.bsp");
         let bsp = crate::bsp::parse(&data).unwrap();
         let vis = WorldVis::build(&bsp);
         let m = &bsp.models[2];
@@ -1979,9 +1975,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(data) = fs.read("maps/MP/mp_ship.bsp") else {
-            return;
-        };
+        let data = crate::testing::stock_file(&fs, "maps/MP/mp_ship.bsp");
         let bsp = crate::bsp::parse(&data).unwrap();
         let vis = WorldVis::build(&bsp);
         let ocean_soup = bsp

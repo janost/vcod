@@ -294,14 +294,6 @@ fn check(fs: fn() -> Option<vcod_common::pk3::Pk3Fs>, fixture: &str) {
     );
 }
 
-/// The 1.5b install's paks, `None` elsewhere (a UO install's `main/` is
-/// 1.5's, too).
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    let v6 = vcod_common::net::protocol::PROTOCOL_V6.transport.version;
-    (vcod_server::server::install_protocol(&fs).transport.version == v6).then_some(fs)
-}
-
 #[test]
 fn prone_from_a_crouch_and_a_held_body_s_landing_match_retail() {
     check(
@@ -313,7 +305,7 @@ fn prone_from_a_crouch_and_a_held_body_s_landing_match_retail() {
 #[test]
 fn prone_from_a_crouch_and_a_held_body_s_landing_match_15() {
     check(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         include_str!("fixtures/pronecrouch/mp_carentan-1.5.txt"),
     );
 }

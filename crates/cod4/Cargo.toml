@@ -25,6 +25,7 @@ log.workspace = true
 
 [dev-dependencies]
 vcod-cod4 = { path = ".", features = ["testing"] }
+tempfile.workspace = true
 
 [[test]]
 name = "cod4"

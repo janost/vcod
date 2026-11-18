@@ -4200,7 +4200,7 @@ impl ScriptRuntime {
             return None;
         }
         // A parent that has not had its turn is where script left it.
-        let fresh = host.links.get(id).is_some_and(|l| ran.contains(&l.parent));
+        let fresh = crate::game::link::fresh(host, ran, id);
         let (done, step, think) = self.vm.with_cx(|cx| {
             if crate::game::link::run_linked(host, cx, id, fresh) {
                 return (Vec::new(), None, true);

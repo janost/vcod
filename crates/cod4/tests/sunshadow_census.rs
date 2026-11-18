@@ -20,14 +20,7 @@ fn casters_by_techset() {
     let Some(install) = cod4_install() else {
         return;
     };
-    let mut maps: Vec<String> = install
-        .zones("english")
-        .unwrap()
-        .iter()
-        .filter_map(|p| p.file_stem()?.to_str().map(str::to_owned))
-        .filter(|n| n.starts_with("mp_") && !n.ends_with("_load"))
-        .collect();
-    maps.sort();
+    let maps = vcod_cod4::testing::stock_maps(&install);
     let mut by_set: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     for name in &maps {
         let (map, _) = Map::load(&install, "english", name).unwrap();
@@ -91,14 +84,7 @@ fn world_surfaces_by_primary_light() {
     let Some(install) = cod4_install() else {
         return;
     };
-    let mut maps: Vec<String> = install
-        .zones("english")
-        .unwrap()
-        .iter()
-        .filter_map(|p| p.file_stem()?.to_str().map(str::to_owned))
-        .filter(|n| n.starts_with("mp_") && !n.ends_with("_load"))
-        .collect();
-    maps.sort();
+    let maps = vcod_cod4::testing::stock_maps(&install);
     let mut src = vcod_cod4::source::Cod4Source::open(&install).unwrap();
     for name in &maps {
         let (map, walked) = Map::load(&install, "english", name).unwrap();
@@ -366,14 +352,7 @@ fn secondary_lightmaps_hold_the_falloff_rows() {
     let Some(install) = cod4_install() else {
         return;
     };
-    let mut maps: Vec<String> = install
-        .zones("english")
-        .unwrap()
-        .iter()
-        .filter_map(|p| p.file_stem()?.to_str().map(str::to_owned))
-        .filter(|n| n.starts_with("mp_") && !n.ends_with("_load"))
-        .collect();
-    maps.sort();
+    let maps = vcod_cod4::testing::stock_maps(&install);
     let rgba = |img: &vcod_common::assets::Image| match &img.data {
         vcod_common::assets::ImageData::Rgba8(px) => px.as_chunks::<4>().0.to_vec(),
         _ => panic!("a compressed lightmap or falloff"),

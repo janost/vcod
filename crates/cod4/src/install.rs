@@ -325,9 +325,8 @@ mod tests {
     /// load from there whatever language a caller names.
     #[test]
     fn a_localized_install_reads_its_own_zone_directory() {
-        let dir = std::env::temp_dir().join(format!("vcod-cod4-lang-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let root = dir.as_path();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
         std::fs::create_dir_all(root.join("zone/german")).unwrap();
         for f in ["zone/german/common_mp.ff", "zone/german/mp_crash.ff"] {
             std::fs::write(root.join(f), b"").unwrap();
@@ -338,15 +337,14 @@ mod tests {
         let z = i.zone_file("english", "mp_crash").unwrap();
         assert_eq!(z.path, root.join("zone/german/mp_crash.ff"));
         assert_eq!(i.zones("english").unwrap().len(), 2);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// A fake install: a stock map zone, a mod with `mod.ff` under `Mods/`
     /// and a usermap with its `_load` zone.
     #[test]
     fn zone_search_follows_db_build_os_path() {
-        let root = std::env::temp_dir().join(format!("vcod-cod4-install-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
         for d in ["zone/english", "main", "Mods/Demo", "usermaps/mp_x"] {
             std::fs::create_dir_all(root.join(d)).unwrap();
         }
@@ -417,7 +415,6 @@ mod tests {
         );
         assert!(i.clone().with_fs_game(Some("../x")).game_dir().is_none());
         assert!(i.with_fs_game(Some("")).fs_game().is_none());
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

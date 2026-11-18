@@ -426,35 +426,15 @@ fn a_silent_client_times_out_with_no_zombie_turn() {
 }
 
 /// A served iwd under `fs_basepath`.
-fn base_with_iwd() -> (tempfile_dir::Dir, Vec<u8>) {
-    let dir = tempfile_dir::Dir::new();
+fn base_with_iwd() -> (tempfile::TempDir, Vec<u8>) {
+    let dir = tempfile::tempdir().unwrap();
     let filler: Vec<u8> = (0..40_000u32)
         .map(|i| (i.wrapping_mul(2654435761) >> 24) as u8)
         .collect();
     let bytes = vcod_common::testing::pk3_with(&[("vcod/filler.bin", &filler)]);
-    std::fs::create_dir_all(dir.0.join("main")).unwrap();
-    std::fs::write(dir.0.join("main/zzz_test.iwd"), &bytes).unwrap();
+    std::fs::create_dir_all(dir.path().join("main")).unwrap();
+    std::fs::write(dir.path().join("main/zzz_test.iwd"), &bytes).unwrap();
     (dir, bytes)
-}
-
-/// A scratch directory under the target dir, removed on drop.
-mod tempfile_dir {
-    pub struct Dir(pub std::path::PathBuf);
-    impl Dir {
-        pub fn new() -> Dir {
-            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let p = std::env::temp_dir().join(format!("vcod-cod2-dl-{}-{n}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&p);
-            std::fs::create_dir_all(&p).unwrap();
-            Dir(p)
-        }
-    }
-    impl Drop for Dir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
 }
 
 /// `download` over UDP: block 0 carries the size, a block a message at
@@ -463,11 +443,11 @@ mod tempfile_dir {
 #[test]
 fn an_iwd_downloads_over_udp_and_the_gamestate_follows() {
     let (base, bytes) = base_with_iwd();
-    let dest = tempfile_dir::Dir::new();
-    let mut h = Harness::new(4, &[("fs_basepath", &base.0.to_string_lossy())]);
+    let dest = tempfile::tempdir().unwrap();
+    let mut h = Harness::new(4, &[("fs_basepath", &base.path().to_string_lossy())]);
     let mut p = h.join(LAN, "\\name\\dl\\rate\\25000\\snaps\\20");
     p.dls = Some(Downloads::new(
-        &dest.0,
+        dest.path(),
         "",
         vec!["main/zzz_test.iwd".into()],
     ));
@@ -477,7 +457,7 @@ fn an_iwd_downloads_over_udp_and_the_gamestate_follows() {
         "{:?}",
         p.commands
     );
-    assert_eq!(p.finished, vec![dest.0.join("main/zzz_test.iwd")]);
+    assert_eq!(p.finished, vec![dest.path().join("main/zzz_test.iwd")]);
     assert_eq!(std::fs::read(&p.finished[0]).unwrap(), bytes);
     let blocks = bytes.len().div_ceil(2048) + 1;
     assert_eq!(p.downloads.len(), blocks, "one send a block, no retransmit");
@@ -502,16 +482,16 @@ fn an_iwd_downloads_over_udp_and_the_gamestate_follows() {
 #[test]
 fn a_lan_download_moves_a_fragment_a_frame() {
     let (base, bytes) = base_with_iwd();
-    let dest = tempfile_dir::Dir::new();
-    let mut h = Harness::new(4, &[("fs_basepath", &base.0.to_string_lossy())]);
+    let dest = tempfile::tempdir().unwrap();
+    let mut h = Harness::new(4, &[("fs_basepath", &base.path().to_string_lossy())]);
     let mut p = h.join(LAN, "\\name\\dl\\snaps\\20");
     p.dls = Some(Downloads::new(
-        &dest.0,
+        dest.path(),
         "",
         vec!["main/zzz_test.iwd".into()],
     ));
     h.pump(&mut p, 200, false);
-    assert_eq!(p.finished, vec![dest.0.join("main/zzz_test.iwd")]);
+    assert_eq!(p.finished, vec![dest.path().join("main/zzz_test.iwd")]);
     let blocks = bytes.len().div_ceil(2048) + 1;
     assert_eq!(p.dl_per_message.iter().sum::<usize>(), blocks);
     assert_eq!(
@@ -543,8 +523,8 @@ fn a_lan_download_moves_a_fragment_a_frame() {
 #[test]
 fn download_refusals_match_retail() {
     let (base, _) = base_with_iwd();
-    let dest = tempfile_dir::Dir::new();
-    let basepath = base.0.to_string_lossy().to_string();
+    let dest = tempfile::tempdir().unwrap();
+    let basepath = base.path().to_string_lossy().to_string();
     for (sets, name, want) in [
         (
             vec![],
@@ -571,7 +551,7 @@ fn download_refusals_match_retail() {
         all.extend(sets);
         let mut h = Harness::new(4, &all);
         let mut p = h.join(LAN, "\\name\\dl");
-        p.dls = Some(Downloads::new(&dest.0, "", vec![name.into()]));
+        p.dls = Some(Downloads::new(dest.path(), "", vec![name.into()]));
         h.pump(&mut p, 20, false);
         assert_eq!(
             p.downloads,
@@ -587,11 +567,11 @@ fn download_refusals_match_retail() {
 #[test]
 fn a_www_redirect_falls_back_to_udp_after_fail() {
     let (base, bytes) = base_with_iwd();
-    let dest = tempfile_dir::Dir::new();
+    let dest = tempfile::tempdir().unwrap();
     let mut h = Harness::new(
         4,
         &[
-            ("fs_basepath", &base.0.to_string_lossy()),
+            ("fs_basepath", &base.path().to_string_lossy()),
             ("sv_wwwDownload", "1"),
             ("sv_wwwBaseURL", "http:"),
             ("sv_wwwDlDisconnected", "1"),
@@ -602,7 +582,7 @@ fn a_www_redirect_falls_back_to_udp_after_fail() {
         "\\name\\www\\rate\\25000\\snaps\\20\\cl_wwwDownload\\1",
     );
     p.dls = Some(Downloads::new(
-        &dest.0,
+        dest.path(),
         "",
         vec!["main/zzz_test.iwd".into()],
     ));
@@ -618,7 +598,7 @@ fn a_www_redirect_falls_back_to_udp_after_fail() {
     // The fallback gamestate starts a new queue, served over UDP.
     assert_eq!(p.gamestates, 2);
     p.dls = Some(Downloads::new(
-        &dest.0,
+        dest.path(),
         "",
         vec!["main/zzz_test.iwd".into()],
     ));
@@ -626,7 +606,7 @@ fn a_www_redirect_falls_back_to_udp_after_fail() {
     let evs = p.dls.as_mut().unwrap().next_download();
     p.apply(evs);
     h.pump(&mut p, 200, false);
-    assert_eq!(p.finished, vec![dest.0.join("main/zzz_test.iwd")]);
+    assert_eq!(p.finished, vec![dest.path().join("main/zzz_test.iwd")]);
 }
 
 /// `SV_Heartbeat_f` on a first client, as retail's master log shows

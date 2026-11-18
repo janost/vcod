@@ -347,13 +347,9 @@ fn a_1_1_sighted_burst_stays_on_one_spot() {
 /// 1.5b's sighted rounds climb with the spring.
 #[test]
 fn a_1_5_sighted_burst_climbs_with_the_gun_kick() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     let climb = check(&PROTOCOL_V6, fs, "1.5");
     assert!(climb > 50.0, "{climb}");
 }

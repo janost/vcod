@@ -21,7 +21,6 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::NetClient;
 use vcod_common::net::msg::UserCmd;
-use vcod_common::net::protocol::PROTOCOL_V6;
 
 const SCRIPT: &str =
     include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_specspawn.gsc");
@@ -123,13 +122,9 @@ fn a_spectator_spawn_runs_a_null_cmd_like_retail() {
 
 #[test]
 fn a_spectator_spawn_runs_the_last_cmd_like_15() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     check(fs, include_str!("fixtures/specspawn/mp_carentan-1.5.txt"));
 }
 

@@ -8625,9 +8625,9 @@ mod tests {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
-        let Some(entry) = fs.resolve_map("mp_ship") else {
-            return;
-        };
+        let entry = fs
+            .resolve_map("mp_ship")
+            .expect("a stock map every install ships");
         let bsp = vcod_common::bsp::parse(&fs.read(&entry).unwrap()).unwrap();
         let world = crate::world::World::from_bsp(&bsp, Some(&fs));
         let boxes = ladders(&world.collision);
@@ -8667,9 +8667,9 @@ mod tests {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
-        let Some(entry) = fs.resolve_map("mp_hurtgen") else {
-            return;
-        };
+        let entry = fs
+            .resolve_map("mp_hurtgen")
+            .expect("a stock map every install ships");
         let bsp = vcod_common::bsp::parse(&fs.read(&entry).unwrap()).unwrap();
         let world = crate::world::World::from_bsp(&bsp, Some(&fs));
         assert!(

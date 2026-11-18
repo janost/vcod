@@ -289,9 +289,8 @@ fn a_pak_holding_the_load_spec_or_an_animtree_is_referenced() {
         return;
     };
     let dir = vcod_common::testing::game_dir();
-    let scratch = std::env::temp_dir()
-        .join(format!("vcod-loadreads-{}", std::process::id()))
-        .join("uo");
+    let tmp = tempfile::tempdir().unwrap();
+    let scratch = tmp.path().join("uo");
     std::fs::create_dir_all(&scratch).unwrap();
     let files = [
         ("zzz_spec", "soundloadspecs/mp/mp_foy.csv"),
@@ -306,7 +305,6 @@ fn a_pak_holding_the_load_spec_or_an_animtree_is_referenced() {
     let dirs = vec![dir.join("main"), dir.join("uo"), scratch.clone()];
     let fs = vcod_common::pk3::Pk3Fs::open_dirs(dirs, None, false).unwrap();
     let sv = server_with(fs, "mp_foy", "bas", 0, &[], 0);
-    let _ = std::fs::remove_dir_all(scratch.parent().unwrap());
     let names = vcod_common::net::connectionless::info_value_for_key(
         sv.configstring(1),
         "sv_referencedPakNames",

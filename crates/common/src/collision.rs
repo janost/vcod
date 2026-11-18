@@ -5585,9 +5585,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(data) = fs.read("maps/mp/mp_harbor.bsp") else {
-            return;
-        };
+        let data = crate::testing::stock_file(&fs, "maps/mp/mp_harbor.bsp");
         let bsp = crate::bsp::parse(&data).unwrap();
 
         let axial_bounds = |b: &crate::mapworld::Brush| -> ([f32; 3], [f32; 3]) {
@@ -5817,9 +5815,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(data) = fs.read("maps/mp/mp_carentan.bsp") else {
-            return;
-        };
+        let data = crate::testing::stock_file(&fs, "maps/mp/mp_carentan.bsp");
         let bsp = crate::bsp::parse(&data).unwrap();
         let world = CollisionWorld::build(&bsp, &[]);
         let muzzle = Vec3::new(1706.721, 1822.8395, 28.679152);
@@ -5843,9 +5839,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(data) = fs.read("maps/mp/mp_carentan.bsp") else {
-            return;
-        };
+        let data = crate::testing::stock_file(&fs, "maps/mp/mp_carentan.bsp");
         let bsp = crate::bsp::parse(&data).unwrap();
         // The probe ran as a dm gametype, and a round meets the props too.
         let world = CollisionWorld::build(&bsp, &crate::props::collision_tris(&fs, &bsp.entities));

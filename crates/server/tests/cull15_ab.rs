@@ -139,14 +139,9 @@ fn ours(fs: vcod_common::pk3::Pk3Fs) -> Run {
 
 #[test]
 fn the_15_cull_matches_retail_step_for_step() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        eprintln!("COD_DIR is not a 1.5 install: skipping");
-        return;
-    }
     let (rs, rsn) = retail();
     let (os, osn) = ours(fs);
     let names: Vec<&String> = rs.iter().map(|(n, _)| n).collect();
@@ -191,14 +186,9 @@ fn the_15_cull_matches_retail_step_for_step() {
 /// again while sounded (docs/research/cod11-hud-protocol.md 9).
 #[test]
 fn the_15_solid_eye_fog_and_compass_match_retail() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        eprintln!("COD_DIR is not a 1.5 install: skipping");
-        return;
-    }
     common::snapcull::matches(
         "tests/fixtures/entities/snapcull-carentan-15.txt",
         fs,

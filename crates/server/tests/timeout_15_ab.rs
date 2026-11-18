@@ -62,13 +62,9 @@ fn kept(text: &str) -> bool {
 
 #[test]
 fn a_match_timeout_runs_as_15b_ran_it() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     let retail = retail();
     let bsp_path = fs
         .resolve_map("mp_carentan")

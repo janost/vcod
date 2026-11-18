@@ -34,8 +34,9 @@ builds leave them out:
   path without `main/` (`zone/` for CoD4), or a search path that opens no
   paks: the helper panics with the variable and the path.
 - `VCOD_REQUIRE_INSTALL=<names>` makes a skip panic for each install it
-  names: `cod1` (`COD_DIR` set), `cod11` (a 1.1 install there), `uo`
-  (`uo/` beside `main/`), `cod2`, `cod4`, `cod4_lnxded`. A gate run sets
+  names: `cod1` (`COD_DIR` set), `cod11` (a 1.1 install there), `cod15`
+  (a 1.5 `main/`, a UO install's included), `uo` (`uo/` beside `main/`),
+  `cod2`, `cod4`, `cod4_lnxded`. A gate run sets
   the names of the installs it means to test, so a wrong env cannot pass
   with no pak test run: `cod1,cod11` at 1.1, `cod1,uo` at UO, plus `cod2`
   and `cod4` when those are set. An unknown name panics.
@@ -46,6 +47,8 @@ Pick the fixture helper by what the test asserts:
   `COD_DIR`, so the test passes vacuously in CI.
 - Asserts 1.1's assets or replays a 1.1 capture: `testing::game_fs_11()`,
   `None` at a 1.5 or UO install.
+- Replays a 1.5b capture: `testing::game_fs_15()`, the install's `main/`
+  when it is 1.5's (a UO install's is), `None` at 1.1.
 - A UO test: `testing::uo_fs()`.
 - Asserts what the stock paks hold (menus, game types, a census):
   `testing::stock_fs()` / `stock_fs_11()`, the `--vanilla` search path, so a
@@ -62,6 +65,14 @@ The all-maps census tests scope to stock `pak[0-9].pk3`. Map downloads drop
 third-party `zzz_*.pk3` into `main/`; a census failure on one of those is not
 a regression.
 
+The CoD4 censuses in `vcod-cod4`'s `tests/` walk every stock map zone,
+each its own way, through `vcod_cod4::testing::stock_maps` (21 zones;
+`COD4_MAPS=<a,b>` narrows them). They stay unignored: the slowest,
+`clip_census`, took 13.5 s alone in the test profile, and the whole
+`--test cod4` binary 24 s at 4 threads (2026-11-18). Between 4 and 9 s
+each: `part_edges`' cylinder drop, `mapworld_census`, `map_census`,
+`look_census`, `drawsurf_census` and two of `sunshadow_census`'s.
+
 `Server::new` seeds its RNG with a constant; only `main.rs` passes the clock
 through `Server::with_seed`. Tests that depend on spawn picks rely on that.
 Each load still steps a fresh script seed, as retail's `G_InitGame` does
@@ -74,7 +85,12 @@ picks through `Server::pin_spawns`, as `gametypes_ab` does.
 - `ci.yml` runs on ubuntu with no game data, so no pak test and no A/B gate
   runs there; they run only on a machine with an install. It pins the
   toolchain (`RUST_TOOLCHAIN`, bumped on purpose), passes `--locked`, and
-  also checks the workspace on Windows, macOS and the 1.90 MSRV.
+  also checks the workspace on Windows, macOS and the 1.90 MSRV, and runs
+  the suite on Windows and macOS. A second Linux step runs the client's
+  render tests on lavapipe with `VCOD_REQUIRE_GPU=1`: a headless test takes
+  its adapter through `renderer::headless::test_adapter`, so one that finds
+  none fails there. The Windows/macOS suite and the lavapipe step are
+  `continue-on-error` until their first green run.
 - `nightly.yml` rebuilds the rolling `nightly` release on master pushes that
   touch code (docs, tools and `*.md` are path-ignored). `workflow_dispatch`
   forces one. It runs `ci.yml` first and publishes only a green tip, fails
@@ -100,6 +116,11 @@ prints the commands.
 
 ## Ignored tests: when to run them
 
+`--ignored` always takes a name filter. Unfiltered it also starts the soaks
+and the map sweep (minutes and gigabytes a map) and the two live browser
+tests, which ask cod.pm's public master and every server it lists, and
+broadcast on the LAN.
+
 | Touching | Run | Cost |
 |---|---|---|
 | pmove, collision or nav | `cargo test --release -p vcod-server --test server -- --ignored nav_census::` | ~20 s at 1.1; ~80 s at UO |
@@ -107,44 +128,37 @@ prints the commands.
 | the bots' driver or its threads | `cargo test --release -p vcod-server --test server -- bot_threads::` (not ignored; each install it finds; `tdm` and `sd`, UO `ctf`) | ~15 s a game |
 | UO bot vehicles | `-- --ignored bot_vehicles::` at a UO install | ~12 s |
 | CoD4 bots | `cargo test --release -p vcod-server --lib -- --ignored cod4::bots::` (`COD4_DIR`) | ~4 s |
-| CoD4 hit boxes per map | `--lib -- --ignored cod4_every_map_poses_both_teams` (`COD4_DIR`) | ~25 s |
+| CoD4 hit boxes per map | `--lib -- --ignored cod4_every_map_poses_both_teams` (`COD4_DIR`) | 29 s of test, 7 min with the release build (2026-11-18) |
 | CoD2 gametypes | `--lib -- --ignored cod2_gametype_census` (`COD2_DIR`) | ~18 s |
 | 1.5 stuck seed | `--lib -- --ignored the_15_overlap_spectator_seed_is_the_only_fit` | ~2 s |
 | shaders or render layouts | `cargo test -p vcod --bins -- renderer::pipeline_check` (not ignored: it skips without a Vulkan adapter; lavapipe env below) | |
 | CoD2 maps, CoD2 load path | `cod2_map_census`, `cod2_load_profile` | |
 | CoD4 maps, gametypes | `cod4_map_sweep` | 6-8 min and ~3 GB a map |
 
-What each holds:
+`nav_census` builds every stock nav graph (at UO, the 19-map UO census).
+`server/tests/bots.rs` and `bot_vehicles.rs` hold one map scenario a test,
+a graph build each; their doc comments name the map and the gametype, and
+the UO ones return at once at a 1.1 install. In the `bas` rounds
+`BAS_HEALTH=24500` plays stock base health, `BAS_MAP=all` the five stock
+bas maps, `BOTS_SEED=` another seed.
 
-- `nav_census`: all stock nav graphs. At UO, the 19-map UO census.
-- `server/tests/bots.rs` at 1.1: three mp_ship six-bot runs, mp_ship's boat,
-  mp_ship's head-on ladder pair, mp_ship's hold ladder top, mp_hurtgen's
-  crease and mp_depot's roof ledges (a graph build each).
-- `bots.rs` at UO: mp_cassino's six-bot tdm run, its walled-in spawns test
-  and four mp_foy `bas` rounds
-  (`uo_bots_breach_bases_until_a_bas_round_ends`, the two `four_*_bas_round`
-  runs, `a_seeded_bas_match_replays_beside_another`). The rounds run at
-  `scr_bas_basehealth 3000`; `BAS_HEALTH=24500` plays them at stock,
-  `BAS_MAP=all` on the five stock bas maps, `BOTS_SEED=` another seed.
-- `tests/bot_vehicles.rs` at UO: bots boarding, driving and firing
-  mp_cassino's tanks, rockets at one, and mp_kharkov's jeep. With a 1.1
-  install it returns at once, as the UO files of the other two do.
-- By-hand tools, not gates: `playerstate_slope_ab`'s
-  `the_mover_replays_the_fixture_named_by_slope_fixture` (panics without
-  `SLOPE_FIXTURE`), and the seed searches `recover_game_seed` (CoD4),
-  `recover_spread_seed` and `recover_rocket_seed` (CoD2), each driven by
-  its env vars (their doc comments).
-- Measurements, run by hand with `-- --ignored --nocapture`, each named in
-  its research doc: `lit_pipeline_register_census` (a driver's shader
-  statistics), `cod2_cull_profile`, `cod2_cell_walks_draw_alike`
-  (`pipeline_check`) and `cell_walks_side_by_side` (`--test cod2`), each
-  over `VCOD_PROFILE_MAPS` (cod2-client-perf.md 8, 9);
-  `leaf_order_census` (`LEAF_MAPS`, `LEAF_SAMPLES`; bsp-ibsp59-format.md),
-  `stock_sun_keep` and `regional_sun_keep`
-  (cod11-light-grid-and-leaf-lights.md 12).
-- Live network checks, never in a gate: `master_list_live` (asks the
-  public master) and `lan_scan_live` (needs a LAN server on 29661 and
-  29662), both in `frontend/browser.rs`.
+Measurements and by-hand tools, not gates. Each prints what it measured;
+its doc comment says what it reads and which env vars drive it.
+
+| Test | Area | Doc |
+|---|---|---|
+| `the_mover_replays_the_fixture_named_by_slope_fixture` | 1.1 slope replays (panics without `SLOPE_FIXTURE`) | `playerstate_slope_ab.rs` |
+| `recover_game_seed`, `recover_spread_seed`, `recover_rocket_seed` | CoD4 and CoD2 seed searches | their doc comments |
+| `leaf_order_census` | CoD1 leaf walk order (`LEAF_MAPS`, `LEAF_SAMPLES`) | bsp-ibsp59-format.md |
+| `stock_sun_keep`, `regional_sun_keep` | CoD1 sun keep | cod11-light-grid-and-leaf-lights.md 12 |
+| `cod2_cull_profile`, `cod2_cell_walks_draw_alike` (lavapipe), `cell_walks_side_by_side` (`vcod-cod2`) | CoD2 cell walk (`VCOD_PROFILE_MAPS`) | cod2-client-perf.md 8, 9 |
+| `a_prone_view_flick_costs` | CoD2 prone view cost | cod2-movement.md 10 |
+| `lit_pipeline_register_census` | CoD4 shader registers on a driver | cod4-client-perf.md 29 |
+| `spawn_wave` | the gsc interpreter | "The gsc interpreter" below |
+
+Never run by an agent: `master_list_live` (cod.pm's public master and every
+server it lists) and `lan_scan_live` (a LAN broadcast). Both panic unless
+`VCOD_LIVE_NET=1` is set as well.
 
 Times are release wall on a 30-thread box, the binary built.
 
@@ -159,8 +173,11 @@ is a regression: name `ldd --version` in the report.
 ## Headless render: pipeline_check
 
 `renderer::pipeline_check` builds the real `Renderer` headless and draws a
-CoD1 and a CoD2 frame under wgpu validation. It needs a Vulkan (not GL)
-adapter with BC textures and otherwise skips. On lavapipe:
+CoD1, a CoD2 and a CoD4 frame under wgpu validation. Its gates are plain
+`#[test]`s, not ignored: they need a Vulkan (not GL) adapter with BC
+textures, and without one each prints `skipped` and passes, as every
+headless render test does; `VCOD_REQUIRE_GPU=1` fails them instead, as
+CI sets it on lavapipe. On lavapipe:
 `VK_DRIVER_FILES=<lvp_icd.json> WGPU_BACKEND=vulkan GALLIVM_PERF=nopt`. Run it
 after any shader or layout change. A render test that passes headless can
 still draw wrong live; a change to a draw path also needs a test through the
@@ -198,8 +215,10 @@ in process, on `play::cod4`'s `tests::sim` clock.
 - A test's loops count frames its own sleeps move. Under load it runs slower,
   never out of time; only `sim::Clock::sleep`'s 60 s wall assert stops a
   stalled one.
-- About 100 of them take about 5 min of wall at 4 test threads and peak near
-  10 GB.
+- A test takes one of `play::cod4::tests::live_slot`'s slots before it
+  builds its server, three unless `VCOD_LIVE_SLOTS` says more, so a run at
+  any `--test-threads` holds at most three maps at about 2.5 GB each. The
+  107 of them ran in 90 s at 8 test threads under heavy.sh's 14 GB cap.
 - Run the CoD4 client tests once. Two such test binaries side by side under
   one memory cap (a 1.1 and a UO pass of the same suite, both with
   `COD4_DIR` set) swap and crawl for an hour instead of failing. Leave

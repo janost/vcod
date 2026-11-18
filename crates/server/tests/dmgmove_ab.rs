@@ -296,10 +296,7 @@ fn a_cmd_behind_a_callbacks_move_starts_where_it_put_him_on_11() {
 
 #[test]
 fn a_cmd_behind_a_callbacks_move_starts_where_it_put_him_on_15() {
-    let fs = vcod_common::testing::game_fs().filter(|fs| {
-        vcod_server::server::install_protocol(fs).transport.version
-            == vcod_common::net::protocol::PROTOCOL_V6.transport.version
-    });
+    let fs = vcod_common::testing::game_fs_15();
     check(fs, RETAIL_15);
 }
 

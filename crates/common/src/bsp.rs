@@ -1294,9 +1294,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(data) = fs.read("maps/MP/mp_ship.bsp") else {
-            return;
-        };
+        let data = crate::testing::stock_file(&fs, "maps/MP/mp_ship.bsp");
         let c = coronas(&parse(&data).unwrap().entities);
         assert_eq!(c.len(), 36);
         assert!(c.iter().all(|c| (c.radius - 7.65).abs() < 1e-4));
@@ -1307,9 +1305,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(data) = fs.read("maps/MP/mp_ship.bsp") else {
-            return;
-        };
+        let data = crate::testing::stock_file(&fs, "maps/MP/mp_ship.bsp");
         let bsp = parse(&data).unwrap();
         // `-45 110 0` as angles; the compiler's lump-30 sun (words 7..9)
         // points the same way, which a vector reading of the key would not
@@ -1523,5 +1519,57 @@ mod tests {
         assert!(parse(&occ(0)).is_ok());
         let err = parse(&occ(1)).unwrap_err().to_string();
         assert!(err.contains("occluder index"), "{err}");
+    }
+
+    /// A two-leaf tree beside a soup of three verts, mutated, through the
+    /// parse and what a loaded map runs first: the collision build, a trace
+    /// and the vis walk. Each returns on every input.
+    #[test]
+    fn a_hostile_bsp_never_panics_its_first_users() {
+        use crate::collision::{CollisionWorld, MASK_PLAYERSOLID};
+        use crate::vis::{Frustum, WorldVis};
+        use glam::Vec3;
+        let tree = parse(&tree_bsp(&[[-1, -2]])).unwrap();
+        let mut soup = Vec::new();
+        soup.extend(0u16.to_le_bytes());
+        soup.extend(0u16.to_le_bytes());
+        soup.extend(0u32.to_le_bytes());
+        soup.extend(3u16.to_le_bytes());
+        soup.extend(3u16.to_le_bytes());
+        soup.extend(0u32.to_le_bytes());
+        let mut leaf = [0u8; 36];
+        leaf[24..28].copy_from_slice(&(-1i32).to_le_bytes());
+        let mut node = vec![0u8; 36];
+        node[4..8].copy_from_slice(&(-1i32).to_le_bytes());
+        node[8..12].copy_from_slice(&(-2i32).to_le_bytes());
+        let mut plane = 1f32.to_le_bytes().to_vec();
+        plane.extend([0u8; 12]);
+        let good = build_bsp(&[
+            (LUMP_MATERIALS, &[0u8; 72]),
+            (LUMP_PLANES, &plane),
+            (LUMP_SOUPS, &soup),
+            (LUMP_DRAWVERTS, &[0u8; 3 * 44]),
+            (LUMP_DRAWINDICES, &[0, 0, 1, 0, 2, 0]),
+            (LUMP_NODES, &node),
+            (LUMP_LEAFS, &[leaf, leaf].concat()),
+            (LUMP_MODELS, &[0u8; 48]),
+        ]);
+        assert!(parse(&good).is_ok() && tree.nodes.len() == 1);
+        let frustum = Frustum::from_view_proj(glam::Mat4::IDENTITY);
+        crate::testing::fuzz("ibsp 59", &good, 1500, |b| {
+            let Ok(bsp) = parse(b) else {
+                return;
+            };
+            let world = CollisionWorld::build(&bsp, &[]);
+            let (a, z) = (Vec3::new(-64.0, 0.0, 32.0), Vec3::new(64.0, 0.0, -32.0));
+            world.move_trace(
+                a,
+                z,
+                Vec3::splat(-15.0),
+                Vec3::splat(15.0),
+                MASK_PLAYERSOLID,
+            );
+            WorldVis::build(&bsp).visible(Vec3::ZERO, &frustum, None);
+        });
     }
 }

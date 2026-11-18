@@ -808,3 +808,105 @@ pub const FIELDS: [(&str, u16, u8); 502] = [
     ("adsDofStart", 2160, 6),
     ("adsDofEnd", 2164, 6),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pmove::anim::PLAYER_ANIM_TYPES;
+
+    fn word(raw: &[u8], at: usize) -> u32 {
+        u32::from_le_bytes(raw[at..at + 4].try_into().unwrap())
+    }
+
+    fn file(body: &str) -> Vec<u8> {
+        format!("WEAPONFILE{body}").into_bytes()
+    }
+
+    fn parsed(body: &str) -> TextWeapon {
+        parse("t_mp", &file(body), &PLAYER_ANIM_TYPES).unwrap()
+    }
+
+    /// One field of each kind lands at its offset: an int, a bool, a
+    /// float, seconds as stored milliseconds, a name table's index, the
+    /// anim type list's, a string; keys in any case, the first value
+    /// under a key, an empty value leaving the zero.
+    #[test]
+    fn each_field_type_lands_at_its_offset() {
+        let w = parsed(
+            "\\displayName\\WEAPON_T\\FIRETIME\\0.065\\fireTime\\9\\impactType\\BULLET_AP\
+             \\fireType\\3-Round Burst\\playerAnimType\\smg\\maxDamageRange\\1500\
+             \\clipSize\\\\ammoName\\Ammo_T",
+        );
+        let raw = &w.weapon.raw;
+        assert_eq!(word(raw, 876), 65, "fireTime: 0.065 s stores as 65 ms");
+        assert_eq!(word(raw, 312), 3, "impactType bullet_ap");
+        assert_eq!(word(raw, 320), 3, "fireType 3-Round Burst");
+        assert_eq!(word(raw, 296), 3, "playerAnimType smg");
+        assert_eq!(f32::from_bits(word(raw, 2056)), 1500.0);
+        assert_eq!(w.weapon.strings["displayName"], "WEAPON_T");
+        assert_eq!(w.weapon.strings["ammoName"], "ammo_t", "lowercased");
+        assert_eq!(w.weapon.strings["name"], "t_mp");
+    }
+
+    /// The loader's last steps: stock sound aliases, the inverse sight
+    /// times' fallbacks for no time, the range fallbacks for none.
+    #[test]
+    fn finish_fills_what_the_file_left_out() {
+        let w = parsed("\\adsTransInTime\\0.25");
+        let raw = &w.weapon.raw;
+        assert_eq!(w.weapon.sounds["raiseSound"], "weap_raise");
+        assert_eq!(f32::from_bits(word(raw, 0x7f8)), 1.0 / 250.0);
+        assert_eq!(word(raw, 0x7fc), 0x3b03_126f, "1/500 for no out time");
+        assert_eq!(word(raw, 0x808), 0x4974_23f0);
+        assert_eq!(word(raw, 0x80c), 0x4974_23f2);
+        let own = parsed("\\raiseSound\\my_raise");
+        assert_eq!(own.weapon.sounds["raiseSound"], "my_raise");
+    }
+
+    #[test]
+    fn a_bounce_sound_names_one_alias_a_surface() {
+        let w = parsed("\\bounceSound\\grenade_bounce");
+        assert_eq!(w.weapon.bounce_sounds.len(), crate::sound::SURFACES.len());
+        let first = format!("grenade_bounce_{}", crate::sound::SURFACES[0]);
+        assert_eq!(w.weapon.bounce_sounds[0].as_deref(), Some(first.as_str()));
+    }
+
+    /// What the loader refuses, in its words: no tag, 0x2800 bytes or
+    /// more past it, a name no table holds, an anim type off the list.
+    #[test]
+    fn a_bad_weapon_file_is_refused() {
+        let err = |text: &[u8]| {
+            parse("t_mp", text, &PLAYER_ANIM_TYPES)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default()
+        };
+        assert!(err(b"\\fireTime\\1").contains("does not appear"));
+        let long = file(&"x".repeat(0x2800));
+        assert!(err(&long).contains("too long"));
+        assert!(parse("t_mp", &file(&"x".repeat(0x27ff)), &PLAYER_ANIM_TYPES).is_ok());
+        assert!(err(&file("\\impactType\\laser")).contains("unknown impactType laser"));
+        assert!(err(&file("\\playerAnimType\\sword")).contains("anim type sword"));
+    }
+
+    /// Field type 7's store: the float product, truncated.
+    #[test]
+    fn stored_ms_truncates_the_stored_product() {
+        assert_eq!(stored_ms(0.065), 65);
+        assert_eq!(stored_ms(0.1), 100);
+        assert_eq!(stored_ms(1.3), 1300);
+        assert_eq!(stored_ms(0.0), 0);
+    }
+
+    /// A mod's weapon file is untrusted: mutated, it parses or is refused.
+    #[test]
+    fn a_hostile_weapon_file_never_panics() {
+        let good = file(
+            "\\displayName\\W\\fireTime\\0.1\\impactType\\shotgun\\playerAnimType\\smg\
+             \\bounceSound\\b\\gunModel3\\m\\idleAnim\\a\\clipSize\\30",
+        );
+        vcod_common::testing::fuzz("weapon file", &good, 3000, |b| {
+            let _ = parse("t_mp", b, &PLAYER_ANIM_TYPES);
+        });
+    }
+}

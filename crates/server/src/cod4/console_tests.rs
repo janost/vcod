@@ -278,15 +278,9 @@ fn cod4_a_bot_has_no_guid_to_ban() {
     assert!(sv.core.clients[bot].is_some());
 }
 
-/// A scratch home path of this process's.
-fn scratch(tag: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("vcod-cod4-console-{tag}-{}", std::process::id()))
-}
-
 /// A bare server named and sized as the retail run's (`CoD4Host`, 8
 /// slots), its home path a scratch directory.
 fn bare(home: &std::path::Path) -> Cod4Server {
-    let _ = std::fs::remove_dir_all(home);
     std::fs::create_dir_all(home).unwrap();
     let mut sv = Cod4Server::new(
         Cod4Config {
@@ -306,8 +300,8 @@ fn bare(home: &std::path::Path) -> Cod4Server {
 /// dvar, a registered one too.
 #[test]
 fn cod4_writeconfig_matches_retail() {
-    let home = scratch("wc");
-    let mut sv = bare(home.as_path());
+    let home = tempfile::tempdir().unwrap();
+    let mut sv = bare(home.path());
     assert_eq!(
         console(&mut sv, "writeconfig"),
         "Usage: writeconfig <filename>\n"
@@ -317,7 +311,7 @@ fn cod4_writeconfig_matches_retail() {
         "Writing vtest.cfg.\n"
     );
     let retail = include_str!("../../../cod4/tests/fixtures/net/writeconfig-1.7.cfg");
-    let ours = std::fs::read_to_string(home.as_path().join("players/vtest.cfg")).unwrap();
+    let ours = std::fs::read_to_string(home.path().join("players/vtest.cfg")).unwrap();
     assert_eq!(ours, retail);
     console(&mut sv, "seta g_inactivity 5");
     console(&mut sv, "seta vnew 7");
@@ -326,7 +320,7 @@ fn cod4_writeconfig_matches_retail() {
         console(&mut sv, "writeconfig sub/vw3"),
         "Writing sub/vw3.cfg.\n"
     );
-    let text = std::fs::read_to_string(home.as_path().join("players/sub/vw3.cfg")).unwrap();
+    let text = std::fs::read_to_string(home.path().join("players/sub/vw3.cfg")).unwrap();
     assert!(
         text.contains("\nseta g_inactivity \"5\"\nseta g_log "),
         "{text}"
@@ -343,11 +337,10 @@ fn cod4_writeconfig_matches_retail() {
 /// console cannot move the home path (cod4-handshake.md 14.1).
 #[test]
 fn cod4_file_commands_stay_under_the_home_path() {
-    let root = scratch("esc");
-    let _ = std::fs::remove_dir_all(&root);
-    let home = root.join("a/home");
-    let mut sv = bare(home.as_path());
-    let abs = root.join("abs.cfg").display().to_string();
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("a/home");
+    let mut sv = bare(&home);
+    let abs = root.path().join("abs.cfg").display().to_string();
     for (name, shown) in [
         ("../x.cfg", "../x.cfg"),
         ("../../x", "../../x.cfg"),
@@ -362,7 +355,7 @@ fn cod4_file_commands_stay_under_the_home_path() {
         );
     }
     let mut written = Vec::new();
-    let mut stack = vec![root.clone()];
+    let mut stack = vec![root.path().to_path_buf()];
     while let Some(d) = stack.pop() {
         for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
             if e.path().is_dir() {
@@ -374,8 +367,8 @@ fn cod4_file_commands_stay_under_the_home_path() {
     }
     assert!(written.is_empty(), "{written:?}");
     std::fs::create_dir_all(home.join("main")).unwrap();
-    std::fs::write(root.join("a/out.cfg"), "set vesc 1\n").unwrap();
-    std::fs::write(root.join("abs.cfg"), "set vesc 1\n").unwrap();
+    std::fs::write(root.path().join("a/out.cfg"), "set vesc 1\n").unwrap();
+    std::fs::write(root.path().join("abs.cfg"), "set vesc 1\n").unwrap();
     for name in ["../../out.cfg", "..\\..\\out.cfg", &abs] {
         assert_eq!(
             console(&mut sv, &format!("exec {name}")),
@@ -402,7 +395,6 @@ fn cod4_file_commands_stay_under_the_home_path() {
         "Writing sub/ok.cfg.\n"
     );
     assert!(home.join("players/sub/ok.cfg").is_file());
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// `dvar_bool`, `dvar_int` and `dvar_float` make a dvar the query prints
@@ -410,8 +402,8 @@ fn cod4_file_commands_stay_under_the_home_path() {
 /// (VERIFIED live).
 #[test]
 fn cod4_typed_dvar_commands() {
-    let home = scratch("dv");
-    let mut sv = bare(home.as_path());
+    let home = tempfile::tempdir().unwrap();
+    let mut sv = bare(home.path());
     assert_eq!(
         console(&mut sv, "dvar_bool vb2 0 extra"),
         "USAGE: dvar_bool <name> <default>\n"
@@ -446,9 +438,9 @@ fn cod4_typed_dvar_commands() {
 /// alone, a miss printed as typed (the retail run's answers).
 #[test]
 fn cod4_exec_reads_fastfiles_then_the_disk() {
-    let home = scratch("ex");
-    let mut sv = bare(home.as_path());
-    let main = home.as_path().join("main");
+    let home = tempfile::tempdir().unwrap();
+    let mut sv = bare(home.path());
+    let main = home.path().join("main");
     std::fs::create_dir_all(&main).unwrap();
     std::fs::write(main.join("vt_loose.cfg"), "set vtl loose\n").unwrap();
     std::fs::write(main.join("ragdoll.cfg"), "set vtr loose\n").unwrap();

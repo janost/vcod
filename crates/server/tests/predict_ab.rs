@@ -1104,7 +1104,7 @@ fn predictor_matches_the_1_1_server_step() {
 /// 1.5's).
 #[test]
 fn predictor_matches_the_1_5_server_step() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     let failures: Vec<String> = [
@@ -1329,7 +1329,7 @@ fn predictor_holds_retail_linked_corpse_1_1() {
 /// 1.5 install, or a UO one (its `main/` is 1.5's).
 #[test]
 fn predictor_holds_retail_linked_corpse_1_5() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     retail_state_rows(
@@ -1393,22 +1393,12 @@ fn predictor_holds_retail_intermission_1_1() {
     );
 }
 
-/// A 1.5 install's paks, or a UO one's `main/` (1.5's).
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    vcod_common::testing::game_fs().filter(|fs| {
-        vcod_common::net::protocol::install_protocol(fs)
-            .transport
-            .version
-            == 6
-    })
-}
-
 /// The 22 s spectator spell of retail 1.5b's `probe_states` capture: 1.5's
 /// stored fly move (cod15-movement.md 5, "The fly move"). Needs `COD_DIR` at
 /// a 1.5 install, or a UO one.
 #[test]
 fn predictor_flies_retail_spectator_1_5() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     retail_state_rows(
@@ -1427,7 +1417,7 @@ fn predictor_flies_retail_spectator_1_5() {
 /// `COD_DIR` at a 1.5 install, or a UO one.
 #[test]
 fn predictor_drops_retail_corpse_1_5() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     retail_state_rows(
@@ -1444,7 +1434,7 @@ fn predictor_drops_retail_corpse_1_5() {
 /// at a 1.5 install, or a UO one.
 #[test]
 fn predictor_holds_retail_intermission_1_5() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     retail_state_rows(
@@ -1749,7 +1739,7 @@ fn predictor_replays_retail_slope_runs() {
 /// 1.5 install, or a UO one (its `main/` is 1.5's).
 #[test]
 fn predictor_replays_retail_slope_runs_1_5() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     replay_retail_runs(&PROTOCOL_V6, &fs, "1.5b", 10);

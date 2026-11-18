@@ -1502,7 +1502,7 @@ behind it (each shot rewound, section 9). VERIFIED (the gates
 `cod4_damage_survives_every_transition` and `..._on_a_lagged_link`).
 Every stock map poses both teams' heads with each class's body (urban,
 desert, woodland). VERIFIED (`cod4_every_map_poses_both_teams`, ignored:
-21 map loads, about 50 s).
+21 map loads, 29 s of test in release on 2026-11-18).
 
 Two steps follow the stock script's rules. The team menu's answer and the
 class's in one packet lose the class, on ours and on retail

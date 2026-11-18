@@ -2070,6 +2070,54 @@ mod tests {
         assert_eq!(crouched.buttons, button::CROUCH);
     }
 
+    /// One think a [`BOT_TICK_MS`] of level time: every frame at sv_fps
+    /// 20, every other at 40, two a frame at 10; a clock that went back or
+    /// fell behind starts over at the level's time.
+    #[test]
+    fn bots_think_every_50_ms_of_level_time() {
+        let mut b = Cod4Bots::new(false);
+        let mut at = |level, frame| b.think_times(level, frame);
+        assert_eq!(at(1000, 50), [1000]);
+        assert_eq!(at(1050, 50), [1050]);
+        assert_eq!(at(1100, 25), [1100]);
+        assert_eq!(at(1125, 25), [] as [i32; 0]);
+        assert_eq!(at(1150, 25), [1150]);
+        assert_eq!(at(1200, 100), [1200, 1250]);
+        assert_eq!(at(1300, 100), [1300, 1350]);
+        assert_eq!(at(400, 100), [400, 450], "the clock went back");
+        assert_eq!(at(9000, 50), [9000], "a catch-up past the bots");
+    }
+
+    /// A new level rearms every brain and drops what the old one left; the
+    /// same map keeps the world it built, another drops it; the admin's
+    /// settings and the class picks carry over either way.
+    #[test]
+    fn a_new_level_rearms_the_brains_and_keeps_the_map_only_when_it_stays() {
+        let mut b = Cod4Bots::new(true);
+        b.add(0, "bot0", "axis", 1);
+        b.on_level(1, "mp_crash");
+        b.brush_key = "crash brushes".into();
+        b.throwing.insert(0, true);
+        b.classes.insert(0, 2);
+        b.objectives = false;
+        b.driver.bots.get_mut(&0).unwrap().answered.push(3);
+        b.on_level(1, "mp_crash");
+        assert!(b.throwing.contains_key(&0), "the same level keeps all");
+
+        b.on_level(2, "mp_crash");
+        let bot = &b.driver.bots[&0];
+        assert!(bot.answered.is_empty() && bot.round_start);
+        assert!(b.throwing.is_empty());
+        assert_eq!(b.brush_key, "crash brushes");
+        assert_eq!((b.classes.get(&0), b.objectives), (Some(&2), false));
+
+        b.on_level(3, "mp_strike");
+        assert!(b.brush_key.is_empty(), "another map builds its own");
+        assert_eq!((b.classes.get(&0), b.objectives), (Some(&2), false));
+        assert_eq!(b.on_level, Some((3, "mp_strike".into())));
+        assert!(b.driver.bots.contains_key(&0));
+    }
+
     #[test]
     fn a_weapon_keeps_its_brain_number() {
         let mut arms = Arms::default();

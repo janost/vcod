@@ -976,6 +976,133 @@ pub fn xyspeed(ps: &PlayerState) -> f32 {
 mod tests {
     use super::*;
 
+    /// The mirror's configstrings for `pairs` of dvar name and value.
+    fn mirror(pairs: &[(&str, &str)]) -> impl Fn(u16) -> &'static [u8] {
+        // Leaked so the closure can hand out the `&[u8]` the mirror readers take.
+        let leak = |s: &str| -> &'static str { Box::leak(s.to_owned().into_boxed_str()) };
+        let pairs: Vec<(&'static str, &'static str)> =
+            pairs.iter().map(|(n, v)| (leak(n), leak(v))).collect();
+        move |i| {
+            let k = usize::from(i.wrapping_sub(CS_CODINFO));
+            let v = usize::from(i.wrapping_sub(CS_CODINFO_VALUE));
+            match (pairs.get(k), pairs.get(v)) {
+                (Some((n, _)), _) if i < CS_CODINFO_VALUE => n.as_bytes(),
+                (_, Some((_, v))) if i >= CS_CODINFO_VALUE => v.as_bytes(),
+                _ => &[],
+            }
+        }
+    }
+
+    /// The `field: value` pairs of a derived `Debug` struct, by field.
+    fn fields(debug: String) -> std::collections::BTreeMap<String, String> {
+        let body = &debug[debug.find('{').unwrap() + 1..debug.rfind('}').unwrap()];
+        body.split(", ")
+            .filter_map(|f| f.trim().split_once(": "))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// The fields `got` holds apart from `base`.
+    fn moved<T: std::fmt::Debug>(base: &T, got: &T) -> Vec<String> {
+        let (a, b) = (fields(format!("{base:?}")), fields(format!("{got:?}")));
+        b.into_iter()
+            .filter(|(k, v)| a.get(k) != Some(v))
+            .map(|(k, _)| k)
+            .collect()
+    }
+
+    /// Each mirrored movement dvar, by its 1.7 name (cod4-pmove.md 12)
+    /// in the server's case, moves one field of [`Rules`] and no two move
+    /// the same one; the values sit inside every domain and off every
+    /// default.
+    #[test]
+    fn each_mirrored_movement_dvar_lands_in_its_own_field() {
+        let names = [
+            "friction",
+            "stopspeed",
+            "inertiaMax",
+            "inertiaAngle",
+            "jump_height",
+            "jump_stepSize",
+            "jump_ladderPushVel",
+            "jump_spreadAdd",
+            "bg_ladder_yawcap",
+            "bg_prone_yawcap",
+            "player_view_pitch_up",
+            "player_view_pitch_down",
+            "bg_fallDamageMinHeight",
+            "bg_fallDamageMaxHeight",
+            "player_moveThreshhold",
+            "player_footstepsThreshhold",
+            "player_strafeSpeedScale",
+            "player_backSpeedScale",
+            "player_spectateSpeedScale",
+            "player_sprintSpeedScale",
+            "player_sprintTime",
+            "player_sprintMinTime",
+            "player_sprintRechargePause",
+            "player_sprintStrafeSpeedScale",
+            "player_sprintCameraBob",
+            "player_dmgtimer_maxTime",
+            "player_meleeChargeFriction",
+            "player_dmgtimer_minScale",
+            "perk_sprintMultiplier",
+            "mantle_check_range",
+            "mantle_check_radius",
+            "mantle_check_angle",
+            "mantle_view_yawcap",
+            "mantle_enable",
+            "jump_slowdownEnable",
+            "player_sprintForwardMinimum",
+        ];
+        let base = Rules::default();
+        let mut owner: std::collections::BTreeMap<String, &str> = Default::default();
+        for name in names {
+            // 0.4375 is inside every domain and no default; the flags
+            // flip off their default either way.
+            let value = match name {
+                "mantle_enable" => {
+                    if base.mantle_enable {
+                        "0"
+                    } else {
+                        "1"
+                    }
+                }
+                "jump_slowdownEnable" => {
+                    if base.jump_slowdown_enable {
+                        "0"
+                    } else {
+                        "1"
+                    }
+                }
+                "player_sprintForwardMinimum" => "7",
+                _ => "0.4375",
+            };
+            let got = rules_from_mirror(mirror(&[(name, value)]));
+            let moved = moved(&base, &got);
+            assert_eq!(moved.len(), 1, "{name} moved {moved:?}");
+            if let Some(other) = owner.insert(moved[0].clone(), name) {
+                panic!("{name} and {other} both set {}", moved[0]);
+            }
+        }
+    }
+
+    /// The eight lean dvars each land in their own field.
+    #[test]
+    fn each_mirrored_lean_dvar_lands_in_its_own_field() {
+        let base = lean_from_mirror(|_| &[]);
+        let mut seen = std::collections::BTreeSet::new();
+        for side in ["left", "right", "crouch_left", "crouch_right"] {
+            for kind in ["shift", "rotate"] {
+                let name = format!("player_lean_{kind}_{side}");
+                let got = lean_from_mirror(mirror(&[(&name, "3.25")]));
+                let moved = moved(&base, &got);
+                assert_eq!(moved.len(), 1, "{name} moved {moved:?}");
+                assert!(seen.insert(moved[0].clone()), "{name}: {}", moved[0]);
+            }
+        }
+    }
+
     /// Snapshot times at the ends of an i32 wrap as retail's do: the
     /// packet's level time reads without an overflow (BUG-122).
     #[test]

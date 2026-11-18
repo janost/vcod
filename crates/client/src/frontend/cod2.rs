@@ -1081,8 +1081,8 @@ mod flow {
         let Some((mut ui, mut shell)) = ui() else {
             return;
         };
-        let dir = std::env::temp_dir().join(format!("vcod-ui-profiles-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         ui.set_profiles_dir(dir.clone());
         shell.use_cod2_cvars();
         let apply = |shell: &mut Shell, out: &[UiEffect]| {
@@ -1130,6 +1130,5 @@ mod flow {
             &shell,
             &mut out,
         );
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

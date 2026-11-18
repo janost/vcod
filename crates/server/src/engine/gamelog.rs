@@ -165,8 +165,8 @@ mod tests {
 
     #[test]
     fn opens_under_the_mod_or_main_and_appends() {
-        let home = std::env::temp_dir().join(format!("vcod-gamelog-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&home);
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().to_path_buf();
         for _ in 0..2 {
             let mut log = GameLog::open(&home, "", "games_mp.log", false).unwrap();
             log.print(1000, "x\n");
@@ -175,15 +175,14 @@ mod tests {
         assert_eq!(text, "  0:01 x\n  0:01 x\n");
         let log = GameLog::open(&home, "mods/m", "games_mp.log", true).unwrap();
         assert_eq!(log.path, home.join("mods/m/games_mp.log"));
-        let _ = std::fs::remove_dir_all(&home);
     }
 
     /// A `g_log` or `fs_game` a script or rcon set cannot move the log
     /// out of `<home>/<game>`.
     #[test]
     fn refuses_a_log_outside_the_home_path() {
-        let dir = std::env::temp_dir().join(format!("vcod-gamelog-esc-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("root");
         let home = dir.join("a/b/home");
         let abs = dir.join("abs.log").to_string_lossy().into_owned();
         for name in [
@@ -205,6 +204,5 @@ mod tests {
         assert!(!dir.exists());
         let log = GameLog::open(&home, "", "logs/games_mp.log", false).unwrap();
         assert_eq!(log.path, home.join("main/logs/games_mp.log"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -34,6 +34,7 @@ libc = "0.2"
 
 [dev-dependencies]
 vcod-server = { path = ".", features = ["testing"] }
+tempfile.workspace = true
 
 [[test]]
 name = "server"

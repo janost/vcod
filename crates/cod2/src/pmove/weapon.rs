@@ -2163,6 +2163,119 @@ mod tests {
         assert_eq!(ws.state, state::READY);
     }
 
+    /// The stock trench gun's reload (`weapons/mp/shotgun_mp`) in slot 1:
+    /// an 800 ms start whose round lands at its end (`reloadStartAddTime`
+    /// 1.3 s capped by the start), 600 ms segments landing one round each
+    /// at their end (`reloadAddTime` 0.8 s capped by the segment), an
+    /// 800 ms end.
+    fn with_pump(clip: i32, reserve: i32) -> (Vec<Option<WeaponParams>>, WeaponState) {
+        let pump = WeaponParams {
+            name: "pump".into(),
+            ammo_index: 1,
+            clip_index: 1,
+            clip_size: 6,
+            fire_time: 900,
+            segmented_reload: true,
+            reload_start_time: 800,
+            reload_start_add_time: 1300,
+            reload_start_add: 1,
+            reload_time: 600,
+            reload_empty_time: 600,
+            reload_add_time: 800,
+            reload_ammo_add: 1,
+            reload_end_time: 800,
+            ..Default::default()
+        };
+        let mut defs = table();
+        defs[1] = Some(pump);
+        let mut ws = holding(1);
+        ws.clip[1] = clip;
+        ws.ammo[1] = reserve;
+        (defs, ws)
+    }
+
+    /// cod2-combat.md 1: the start lands `reloadStartAdd`, each segment
+    /// `reloadAmmoAdd`, until the clip is full; then the end.
+    #[test]
+    fn a_segmented_reload_loops_until_the_clip_is_full() {
+        let (defs, mut ws) = with_pump(3, 10);
+        let mut ps = PlayerState::default();
+        let mut old = UserCmd2::default();
+        let mut evs = run(&mut ps, &mut ws, &defs, key::RELOAD, 50, &mut old);
+        assert_eq!(ws.state, state::RELOAD_START);
+        evs.extend(run(&mut ps, &mut ws, &defs, 0, 800, &mut old));
+        assert_eq!((ws.clip[1], ws.ammo[1]), (4, 9), "the start's round");
+        evs.extend(run(&mut ps, &mut ws, &defs, 0, 4000, &mut old));
+        assert_eq!(
+            evs,
+            [
+                ev::RESET_ADS,
+                ev::RELOAD_START,
+                ev::RELOAD,
+                ev::RELOAD,
+                ev::RELOAD_END
+            ]
+        );
+        assert_eq!((ws.clip[1], ws.ammo[1], ws.state), (6, 7, state::READY));
+    }
+
+    /// The reserve running dry ends the loop with the clip short.
+    #[test]
+    fn a_segmented_reload_ends_when_the_reserve_runs_out() {
+        let (defs, mut ws) = with_pump(3, 2);
+        let mut ps = PlayerState::default();
+        let mut old = UserCmd2::default();
+        let mut evs = run(&mut ps, &mut ws, &defs, key::RELOAD, 50, &mut old);
+        evs.extend(run(&mut ps, &mut ws, &defs, 0, 4000, &mut old));
+        assert_eq!(
+            evs,
+            [ev::RESET_ADS, ev::RELOAD_START, ev::RELOAD, ev::RELOAD_END]
+        );
+        assert_eq!((ws.clip[1], ws.ammo[1], ws.state), (5, 0, state::READY));
+    }
+
+    /// A fire press during a segment marks it interrupted: its round still
+    /// lands, then the reload ends instead of looping.
+    #[test]
+    fn a_fire_press_ends_a_segmented_reload_after_its_segment() {
+        let (defs, mut ws) = with_pump(1, 10);
+        let mut ps = PlayerState::default();
+        let mut old = UserCmd2::default();
+        run(&mut ps, &mut ws, &defs, key::RELOAD, 50, &mut old);
+        run(&mut ps, &mut ws, &defs, 0, 850, &mut old);
+        assert_eq!(ws.state, state::RELOADING);
+        run(&mut ps, &mut ws, &defs, button::ATTACK, 50, &mut old);
+        assert_eq!(ws.state, state::RELOADING_INTERRUPTED);
+        let evs = run(&mut ps, &mut ws, &defs, 0, 2000, &mut old);
+        assert_eq!(evs, [ev::RELOAD_END]);
+        assert_eq!((ws.clip[1], ws.ammo[1], ws.state), (3, 8, state::READY));
+    }
+
+    /// Interrupted in its start, the reload ends when the start left rounds
+    /// in the clip; a start that lands none (`reloadStartAdd` 0) on an
+    /// empty clip runs one segment first.
+    #[test]
+    fn an_interrupted_start_segments_only_on_a_clip_still_empty() {
+        for (clip, start_add, segments, want) in [(2, 1, 0, (3, 9)), (0, 0, 1, (1, 9))] {
+            let (mut defs, mut ws) = with_pump(clip, 10);
+            defs[1].as_mut().unwrap().reload_start_add = start_add;
+            let mut ps = PlayerState::default();
+            let mut old = UserCmd2::default();
+            run(&mut ps, &mut ws, &defs, key::RELOAD, 50, &mut old);
+            assert_eq!(ws.state, state::RELOAD_START, "clip {clip}");
+            run(&mut ps, &mut ws, &defs, button::ATTACK, 50, &mut old);
+            assert_eq!(ws.state, state::RELOAD_START_INTERRUPTED, "clip {clip}");
+            let evs = run(&mut ps, &mut ws, &defs, 0, 3000, &mut old);
+            let reloads = evs
+                .iter()
+                .filter(|&&e| e == ev::RELOAD || e == ev::RELOAD_FROM_EMPTY)
+                .count();
+            assert_eq!(reloads, segments, "clip {clip}: {evs:?}");
+            assert_eq!((ws.clip[1], ws.ammo[1]), want, "clip {clip}");
+            assert_eq!(ws.state, state::READY);
+        }
+    }
+
     #[test]
     fn the_frag_key_drops_the_gun_holds_the_grenade_and_throws_on_release() {
         let defs = table();

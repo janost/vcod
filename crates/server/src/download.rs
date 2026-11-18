@@ -471,7 +471,8 @@ mod tests {
 
     #[test]
     fn a_file_opens_by_length_and_a_short_one_fails_its_read() {
-        let dir = std::env::temp_dir().join(format!("vcod-dlfile-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("f.pk3");
         let bytes: Vec<u8> = (0..5000u32).map(|i| i as u8).collect();
@@ -490,7 +491,6 @@ mod tests {
             .unwrap();
         assert_eq!(f.read_block(0).unwrap(), bytes[..BLOCK]);
         assert!(f.read_block(1).is_err(), "cut short after the open");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

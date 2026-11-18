@@ -761,6 +761,74 @@ pub fn script_menu_name<'a>(cs: &'a [String], layout: &CsLayout, index: usize) -
 mod tests {
     use super::*;
 
+    /// CoD4's allocators over 1.7's constants, on an empty table.
+    fn cod4() -> (Allocators, ConfigStrings) {
+        let a = Allocators::with_constants(
+            &crate::game::cod4::CS_LAYOUT_COD4,
+            vcod_cod4::net::constant_cs::CONSTANT_CONFIGSTRINGS,
+        );
+        (a, ConfigStrings::new(vec![String::new(); 2400]))
+    }
+
+    /// The slots `with_constants`'s comment gives off the 1.7 capture: a
+    /// shellshock on its constant, one with no constant in its range on
+    /// the first slot no constant names, a menu on its block's first empty
+    /// slot whatever its constant.
+    #[test]
+    fn cod4_names_take_their_constant_slots() {
+        let (mut a, mut cs) = cod4();
+        let mut at = |r, n: &str| a.index(&mut cs, r, n).unwrap();
+        assert_eq!(at(CsRange::ShellShock, "default"), 1968);
+        assert_eq!(at(CsRange::ShellShock, "concussion_grenade_mp"), 1969);
+        // flashbang's constant, 1970, is the menus' first slot.
+        assert_eq!(at(CsRange::ShellShock, "flashbang"), 1955);
+        assert_eq!(
+            at(CsRange::Menu, "scoreboard"),
+            1970,
+            "not its constant 1986"
+        );
+        assert_eq!(at(CsRange::Localized, "PLATFORM_HOLD_TO_DROP"), 351);
+    }
+
+    /// New localized strings fill around the constants' slots, 350 and
+    /// 351 left to theirs; from the ambient slot 821 on names keep in
+    /// lower case, but a sound alias's.
+    #[test]
+    fn cod4_new_names_skip_the_constant_slots_and_fold_from_821() {
+        let (mut a, mut cs) = cod4();
+        for i in 0..40 {
+            a.index(&mut cs, CsRange::Localized, &format!("S_{i}"))
+                .unwrap();
+        }
+        assert_eq!(a.index(&mut cs, CsRange::Localized, "S_40"), Ok(352));
+        assert_eq!((cs[350].as_str(), cs[351].as_str()), ("", ""));
+        assert_eq!(cs[352], "S_40");
+        let s = a.index(&mut cs, CsRange::ShellShock, "Default").unwrap();
+        assert_eq!((s, cs[s].as_str()), (1968, "default"));
+        let s = a
+            .index(&mut cs, CsRange::SoundAlias, "US_1mc_team")
+            .unwrap();
+        assert_eq!(cs[s], "US_1mc_team");
+        let s = a.index(&mut cs, CsRange::Menu, "Class").unwrap();
+        assert_eq!(cs[s], "class");
+    }
+
+    /// A range whose free slots are all constants' takes them in order, so
+    /// a later name with that constant finds its slot taken and writes over
+    /// it. vcod's reading of the rule (cod4-gsc.md 5); no capture reaches
+    /// a full range.
+    #[test]
+    fn cod4_a_constant_slot_another_name_took_is_written_over() {
+        let (mut a, mut cs) = cod4();
+        for i in 0..13 {
+            a.index(&mut cs, CsRange::ShellShock, &format!("s{i}"))
+                .unwrap();
+        }
+        assert_eq!(a.index(&mut cs, CsRange::ShellShock, "s13"), Ok(1968));
+        assert_eq!(a.index(&mut cs, CsRange::ShellShock, "default"), Ok(1968));
+        assert_eq!(cs[1968], "default");
+    }
+
     fn pak(name: &str, game: &str, checksum: i32) -> PakInfo {
         PakInfo {
             path: format!("{game}/{name}.pk3").into(),

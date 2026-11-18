@@ -21,7 +21,6 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::event_ids::EV_ITEM_RESPAWN;
-use vcod_common::net::protocol::PROTOCOL_V6;
 use vcod_common::pk3::Pk3Fs;
 
 const MAP: &str = "mp_carentan";
@@ -43,12 +42,6 @@ fn cfg(map: &str, gametype: &str) -> ServerConfig {
         bots: 0,
         bots_shoot: false,
     }
-}
-
-fn fs_15() -> Option<Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    (crate::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
-        .then_some(fs)
 }
 
 /// The fixture's lines that start with `tag `, the tag stripped.
@@ -147,7 +140,7 @@ fn map_items_finish_spawning_like_retail() {
         &format!("{D}/mp_carentan-dm-finish.txt"),
     );
     finish(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         MAP,
         "item_health",
         &format!("{D}/mp_carentan-dm-finish-1.5.txt"),
@@ -214,7 +207,10 @@ fn the_banner_counts_the_teams_like_retail() {
         vcod_common::testing::game_fs_11,
         "tests/fixtures/teams/mp_carentan-dm-teams.txt",
     );
-    banner(fs_15, "tests/fixtures/teams/mp_carentan-dm-teams-1.5.txt");
+    banner(
+        vcod_common::testing::game_fs_15,
+        "tests/fixtures/teams/mp_carentan-dm-teams-1.5.txt",
+    );
     banner(
         vcod_common::testing::uo_fs,
         "tests/fixtures/teams/mp_carentan-dm-teams-uo.txt",
@@ -287,7 +283,10 @@ fn use_by_on_a_teamed_item_respawns_retail_s_pick() {
         vcod_common::testing::game_fs_11,
         "tests/fixtures/teams/mp_carentan-dm-teams.txt",
     );
-    picks(fs_15, "tests/fixtures/teams/mp_carentan-dm-teams-1.5.txt");
+    picks(
+        vcod_common::testing::game_fs_15,
+        "tests/fixtures/teams/mp_carentan-dm-teams-1.5.txt",
+    );
     picks(
         vcod_common::testing::uo_fs,
         "tests/fixtures/teams/mp_carentan-dm-teams-uo.txt",

@@ -9,24 +9,6 @@ use vcod_cod4::net::conn::{Conn, Cp, Join};
 use vcod_cod4::net::download::{DownloadEvent, DownloadMsg, Downloads, Wanted, iwd_file_checksum};
 use vcod_cod4::net::parse::Op;
 
-/// A scratch directory under the temp dir, removed on drop.
-struct Dir(PathBuf);
-
-impl Dir {
-    fn new(tag: &str) -> Dir {
-        let p = std::env::temp_dir().join(format!("vcod-cod4-dl-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        Dir(p)
-    }
-}
-
-impl Drop for Dir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 /// What the client saw.
 #[derive(Default)]
 struct Seen {
@@ -154,17 +136,17 @@ fn fetch(base: &Path, home: &Path, wanted: Vec<Wanted>, sets: &[(&str, &str)]) -
 }
 
 /// The served install: an iwd of generated filler and a fastfile of bytes.
-fn base() -> (Dir, Vec<u8>, Vec<u8>) {
-    let dir = Dir::new(&format!("base-{:?}", std::thread::current().id()));
-    std::fs::create_dir_all(dir.0.join("zone")).unwrap();
-    std::fs::create_dir_all(dir.0.join("mods/test")).unwrap();
+fn base() -> (tempfile::TempDir, Vec<u8>, Vec<u8>) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("zone")).unwrap();
+    std::fs::create_dir_all(dir.path().join("mods/test")).unwrap();
     let filler: Vec<u8> = (0..9000u32)
         .map(|i| (i.wrapping_mul(2654435761) >> 24) as u8)
         .collect();
     let iwd = vcod_common::testing::pk3_with(&[("vcod/filler.bin", &filler)]);
     let ff: Vec<u8> = (0..3000u32).map(|i| (i * 7) as u8).collect();
-    std::fs::write(dir.0.join("mods/test/z_test.iwd"), &iwd).unwrap();
-    std::fs::write(dir.0.join("mods/test/mod.ff"), &ff).unwrap();
+    std::fs::write(dir.path().join("mods/test/z_test.iwd"), &iwd).unwrap();
+    std::fs::write(dir.path().join("mods/test/mod.ff"), &ff).unwrap();
     (dir, iwd, ff)
 }
 
@@ -186,8 +168,8 @@ fn wanted(base: &Path, ff: &[u8]) -> Vec<Wanted> {
 #[test]
 fn a_mod_downloads_and_the_client_joins_on_the_next_gamestate() {
     let (base, iwd, ff) = base();
-    let home = Dir::new(&format!("home-{:?}", std::thread::current().id()));
-    let seen = fetch(&base.0, &home.0, wanted(&base.0, &ff), &[]);
+    let home = tempfile::tempdir().unwrap();
+    let seen = fetch(base.path(), home.path(), wanted(base.path(), &ff), &[]);
     let finished: Vec<&PathBuf> = seen
         .events
         .iter()
@@ -198,10 +180,13 @@ fn a_mod_downloads_and_the_client_joins_on_the_next_gamestate() {
         .collect();
     assert_eq!(finished.len(), 2, "{:?}", seen.events);
     assert_eq!(
-        std::fs::read(home.0.join("mods/test/z_test.iwd")).unwrap(),
+        std::fs::read(home.path().join("mods/test/z_test.iwd")).unwrap(),
         iwd
     );
-    assert_eq!(std::fs::read(home.0.join("mods/test/mod.ff")).unwrap(), ff);
+    assert_eq!(
+        std::fs::read(home.path().join("mods/test/mod.ff")).unwrap(),
+        ff
+    );
     // Block 0..n of each file and the empty block past each.
     let want = iwd.len().div_ceil(2048) + 1 + ff.len().div_ceil(2048) + 1;
     assert_eq!(seen.blocks, want, "one send a block, no retransmit");
@@ -212,11 +197,11 @@ fn a_mod_downloads_and_the_client_joins_on_the_next_gamestate() {
 #[test]
 fn a_server_without_downloads_refuses_with_retails_key() {
     let (base, _, ff) = base();
-    let home = Dir::new(&format!("home-{:?}", std::thread::current().id()));
+    let home = tempfile::tempdir().unwrap();
     let seen = fetch(
-        &base.0,
-        &home.0,
-        wanted(&base.0, &ff),
+        base.path(),
+        home.path(),
+        wanted(base.path(), &ff),
         &[("sv_allowDownload", "0")],
     );
     assert_eq!(
@@ -227,5 +212,5 @@ fn a_server_without_downloads_refuses_with_retails_key() {
         "{:?}",
         seen.events
     );
-    assert!(!home.0.join("mods/test/z_test.iwd").exists());
+    assert!(!home.path().join("mods/test/z_test.iwd").exists());
 }

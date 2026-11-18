@@ -574,20 +574,12 @@ fn a_leaning_bodys_bones_sit_as_on_retail() {
     );
 }
 
-/// The 1.5b install's paks, `None` elsewhere (a UO install's `main/` is
-/// 1.5's, so this runs there too).
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    let v6 = vcod_common::net::protocol::PROTOCOL_V6.transport.version;
-    (vcod_server::server::install_protocol(&fs).transport.version == v6).then_some(fs)
-}
-
 /// The 1.5b `probe_bones` capture logs both clients' cmds and `ct=`, so
 /// the hold's `setOrigin` drop lands where retail's did (`ProbeHold::ran`;
 /// docs/research/cod11-combat.md 3.6).
 #[test]
 fn a_leaning_body_on_15_poses_as_on_retail() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check(
@@ -657,7 +649,7 @@ fn a_dropped_body_lands_and_poses_as_on_retail_on_its_logged_frames() {
 
 #[test]
 fn a_dropped_body_on_15_lands_and_poses_as_on_retail_on_its_cmds() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     let fixture = include_str!("fixtures/leanhit/mp_carentan-leanhit-cmds-1.5.txt");
@@ -696,7 +688,7 @@ fn a_round_leaves_along_retails_aim_on_its_press() {
 
 #[test]
 fn a_round_on_15_leaves_along_retails_aim_on_its_press() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     let fixture = include_str!("fixtures/leanhit/mp_carentan-leanhit-press-1.5.txt");
@@ -753,7 +745,7 @@ fn a_body_stands_in_the_angles_setplayerangles_gave_it_until_his_next_cmd() {
 
 #[test]
 fn a_body_stands_in_the_angles_setplayerangles_gave_it_until_his_next_cmd_on_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     let fixture = include_str!("fixtures/leanhit/mp_carentan-leanhit-turn-1.5.txt");
@@ -789,7 +781,7 @@ fn a_round_poses_a_turned_body_at_its_turn() {
 
 #[test]
 fn a_round_on_15_poses_a_turned_body_one_build_on() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     let fixture = include_str!("fixtures/leanhit/mp_carentan-leanhit-turnonce-1.5.txt");

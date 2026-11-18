@@ -16,19 +16,6 @@ use crate::game::builtins::set::BuiltinSet;
 /// (cod4-gsc.md 3.2).
 const LEFT_OUT: &[(&str, &str)] = &[];
 
-/// The stock MP maps: every `mp_*.ff` but the `_load` screens.
-fn stock_maps(install: &vcod_cod4::install::Install) -> Vec<String> {
-    let mut maps: Vec<String> = install
-        .zones("english")
-        .unwrap()
-        .iter()
-        .filter_map(|p| p.file_stem()?.to_str().map(str::to_string))
-        .filter(|n| n.starts_with("mp_") && !n.ends_with("_load"))
-        .collect();
-    maps.sort();
-    maps
-}
-
 fn walk_zone(install: &vcod_cod4::install::Install, name: &str) -> Arc<vcod_cod4::assets::Assets> {
     let path = install.zone("english", name);
     let zone = vcod_cod4::zone::Zone::open_path(&path).unwrap();
@@ -44,7 +31,7 @@ fn cod4_builtin_census() {
     let Some(install) = vcod_cod4::testing::cod4_install() else {
         return;
     };
-    let maps = stock_maps(&install);
+    let maps = vcod_cod4::testing::stock_maps(&install);
     assert!(maps.len() >= 16, "{maps:?}");
     let set = BuiltinSet::cod4();
     let mut source = vcod_cod4::source::Cod4Source::open(&install).unwrap();

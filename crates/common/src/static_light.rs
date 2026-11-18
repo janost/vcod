@@ -1257,9 +1257,9 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(path) = fs.resolve_map("mp_carentan") else {
-            return;
-        };
+        let path = fs
+            .resolve_map("mp_carentan")
+            .expect("a stock map every install ships");
         let bsp = bsp::parse(&fs.read(&path).unwrap()).unwrap();
         let Some((origin, _)) = bsp::find_spawn(&bsp.entities) else {
             return;

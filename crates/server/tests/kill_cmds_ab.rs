@@ -197,14 +197,10 @@ fn a_kills_death_frame_matches_11d_by_its_cmds() {
 
 #[test]
 fn a_kills_death_frame_matches_15b_by_its_cmds() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    // UO's `main/` is 1.5's, so this one runs at a UO install too.
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    // UO's `main/` is 1.5's, so this one runs at a UO install too.
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     check(
         &PROTOCOL_V6,
         fs,
@@ -241,13 +237,9 @@ fn a_kills_death_timers_match_11d_by_its_cmds() {
 
 #[test]
 fn a_kills_death_timers_match_15b_by_its_cmds() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     check(
         &PROTOCOL_V6,
         fs,

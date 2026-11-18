@@ -147,13 +147,9 @@ fn a_menu_answers_spawn_runs_on_retails_clock() {
 
 #[test]
 fn a_menu_answers_spawn_runs_on_retails_clock_on_1_5() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     check(
         fs,
         &PROTOCOL_V6,

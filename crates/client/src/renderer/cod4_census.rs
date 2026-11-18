@@ -287,15 +287,7 @@ fn cod4_material_census_draws_every_combination_as_retail() {
     let Some(install) = vcod_cod4::testing::cod4_install() else {
         return;
     };
-    let mut maps: Vec<String> = install
-        .zones("english")
-        .unwrap()
-        .iter()
-        .filter_map(|p| p.file_stem()?.to_str().map(str::to_owned))
-        .filter(|n| n.starts_with("mp_") && !n.ends_with("_load"))
-        .collect();
-    maps.sort();
-    assert_eq!(maps.len(), 21, "{maps:?}");
+    let maps = vcod_cod4::testing::stock_maps(&install);
     // (set, retail, vcod) -> surfaces
     let mut rows: BTreeMap<(String, Option<Draw>, Option<Draw>), Row> = BTreeMap::new();
     // a blended draw's sortKey -> vcod's sort values for it

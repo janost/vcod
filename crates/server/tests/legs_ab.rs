@@ -578,13 +578,9 @@ fn a_walking_body_is_posed_like_retail() {
 /// at 1.5's spread phase (cod11-movers.md 15, "The phase on 1.5 and UO").
 #[test]
 fn a_walking_body_is_posed_like_retail_on_15() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     let run = ours_walk(fs, CLIENT_15, SPAWN_15, SPAWN_MSG).unwrap();
     check_walk(&run, SERVER_15, CLIENT_15);
 }
@@ -676,11 +672,7 @@ const STOPGO_TAKEN_BACK: &[&str] = &["back_go", "go2", "go3", "go4", "strafe_rig
 /// The 1.5b stop-and-go walk: every go inside a blend keeps the run's time.
 #[test]
 fn a_body_stopping_and_going_is_posed_like_retail_on_15() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
-        return;
-    };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
+    if vcod_common::testing::game_fs_15().is_none() {
         return;
     }
     check_stop_and_go(
@@ -1005,13 +997,9 @@ fn check_torso_selection(fs: vcod_common::pk3::Pk3Fs, client: &str) -> usize {
 /// clauses are empty (1.5b 0x28889, 0x2888e).
 #[test]
 fn a_body_firing_on_the_move_selects_retails_anims_on_15() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     assert!(check_torso_selection(fs, TORSO_CLIENT_15) > 500);
 }
 

@@ -797,13 +797,14 @@ mod tests {
     }
 
     /// The front end over the `COD4_DIR` install, its main menu up with
-    /// vcod's stock CoD4 console.
-    fn front() -> Option<(Cod4Front, Shell)> {
+    /// vcod's stock CoD4 console, and its profile directory (removed on drop).
+    fn front() -> Option<(Cod4Front, Shell, tempfile::TempDir)> {
         let install = vcod_cod4::testing::cod4_install()?;
         let mut f = Cod4Front::new(install.root().to_path_buf());
         // A profile of the test's own, active, so `main` opens over no
         // profile pick and nothing is written into the install.
-        let players = tempfile::tempdir().unwrap().keep();
+        let tmp = tempfile::tempdir().unwrap();
+        let players = tmp.path().to_path_buf();
         std::fs::create_dir_all(players.join("players/profiles/tester")).unwrap();
         std::fs::write(players.join("players/profiles/active.txt"), "tester").unwrap();
         f.menus.front.players_root = Some(players);
@@ -820,7 +821,7 @@ mod tests {
         for line in f.take_console() {
             shell.execute(&line);
         }
-        Some((f, shell))
+        Some((f, shell, tmp))
     }
 
     fn names(f: &Cod4Front) -> Vec<String> {
@@ -865,7 +866,7 @@ mod tests {
     /// their materials.
     #[test]
     fn cod4_front_main_menu_draws_from_ui_mp() {
-        let Some((f, _)) = front() else {
+        let Some((f, _, _players)) = front() else {
             return;
         };
         assert_eq!(stack(&f), ["main_text"]);
@@ -897,7 +898,7 @@ mod tests {
     /// unlock it); its `statset 260 1` reaches the file.
     #[test]
     fn cod4_front_create_a_class_unlocks_off_the_profiles_stats() {
-        let Some((mut f, shell)) = front() else {
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         click(&mut f, "Create a Class");
@@ -1018,7 +1019,7 @@ mod tests {
     /// page shows the picks when it opens again.
     #[test]
     fn cod4_front_create_a_class_picks_reach_the_profile() {
-        let Some((mut f, shell)) = front() else {
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         let players = f.menus.front.players_root.clone().unwrap();
@@ -1066,7 +1067,7 @@ mod tests {
     /// the stats the join sent from the profile's file.
     #[test]
     fn cod4_front_create_a_class_spawns_with_its_picks() {
-        let Some((mut f, shell)) = front() else {
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         let players = f.menus.front.players_root.clone().unwrap();
@@ -1129,7 +1130,7 @@ mod tests {
     /// `quit`. Esc backs out of a popup as its `onEsc` does.
     #[test]
     fn cod4_front_quit_asks_first() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         click(&mut f, "Quit");
@@ -1156,7 +1157,7 @@ mod tests {
     /// Esc) closes it, whose `onClose` opens `main_text` again.
     #[test]
     fn cod4_front_start_new_server_asks_for_its_server() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         click(&mut f, "Start New Server");
@@ -1250,7 +1251,7 @@ mod tests {
     /// 8 past their own text (`Item_TextField_Paint`).
     #[test]
     fn cod4_front_start_new_server_values_sit_beside_their_labels() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         click(&mut f, "Start New Server");
@@ -1297,7 +1298,7 @@ mod tests {
     /// crosshair rows.
     #[test]
     fn cod4_front_option_pages_draw_their_values() {
-        let Some((mut f, shell)) = front() else {
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         for (path, at_least) in [
@@ -1336,7 +1337,7 @@ mod tests {
     /// `vid_restart`, which the client's console runs.
     #[test]
     fn cod4_graphics_page_applies_the_video_mode() {
-        let Some((mut f, mut shell)) = front() else {
+        let Some((mut f, mut shell, _players)) = front() else {
             return;
         };
         shell.register_cod4_options();
@@ -1430,7 +1431,7 @@ mod tests {
     #[test]
     fn cod4_graphics_pages_apply_the_aspect_and_the_picmip() {
         use crate::console::shell::Effect;
-        let Some((mut f, mut shell)) = front() else {
+        let Some((mut f, mut shell, _players)) = front() else {
             return;
         };
         shell.register_cod4_options();
@@ -1557,7 +1558,7 @@ mod tests {
     /// `VCOD_FRONT_PPM=<path>` saves the frame.
     #[test]
     fn cod4_front_start_new_server_renders_offscreen() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         click(&mut f, "Start New Server");
@@ -1594,7 +1595,7 @@ mod tests {
     /// mods/<dir>`.
     #[test]
     fn cod4_front_mods_lists_the_mods_directory() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         let mods = crate::play::cod4_menus::front::mod_list(&f.root);
@@ -1621,7 +1622,7 @@ mod tests {
     /// clears the message and opens `main` again.
     #[test]
     fn cod4_front_error_popup_says_why() {
-        let Some((mut f, shell)) = front() else {
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         f.open_main(&shell, Some(("Server disconnected", true)));
@@ -1678,7 +1679,7 @@ mod tests {
     /// `VCOD_FRONT_PPM=<path>` saves the frame for a look.
     #[test]
     fn cod4_front_main_menu_renders_offscreen() {
-        let Some((f, _)) = front() else {
+        let Some((f, _, _players)) = front() else {
             return;
         };
         let Some(bgra) = render(&f, (640, 384)) else {
@@ -1702,7 +1703,7 @@ mod tests {
     /// its layout (no expression vcod cannot evaluate); Esc comes back.
     #[test]
     fn cod4_front_screens_open_and_draw() {
-        let Some((mut f, shell)) = front() else {
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         for (row, menu) in [
@@ -1787,7 +1788,7 @@ mod tests {
     /// the main menu comes back with `error_popmenu` saying why.
     #[test]
     fn cod4_front_join_game_joins_a_lan_server_and_drops_back_to_the_menu() {
-        let Some((mut f, shell)) = front() else {
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         let Some(server) = crate::play::cod4_menus::browser::TestServer::start("secret") else {
@@ -1859,7 +1860,7 @@ mod tests {
     /// `VCOD_FRONT_PPM=<path>` saves the frame.
     #[test]
     fn cod4_front_join_game_renders_its_row_offscreen() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         let Some(server) = crate::play::cod4_menus::browser::TestServer::start("") else {
@@ -1902,7 +1903,7 @@ mod tests {
     /// and Start hands both to the server it asks for.
     #[test]
     fn cod4_front_start_new_server_edit_fields_reach_the_server() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         click(&mut f, "Start New Server");
@@ -1935,7 +1936,7 @@ mod tests {
     /// zones' table and the search path.
     #[test]
     fn cod4_front_plays_its_menu_sounds_and_music() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         let set = f.sounds_to_install().expect("the front end's sounds load");
@@ -1976,7 +1977,7 @@ mod tests {
     /// which the menu shows when it opens again.
     #[test]
     fn cod4_front_cd_key_menu_verifies_the_key() {
-        let Some((mut f, _shell)) = front() else {
+        let Some((mut f, _shell, _players)) = front() else {
             return;
         };
         let gs = f.gs.clone();
@@ -2026,7 +2027,7 @@ mod tests {
     /// one comes back (cod4-front-end.md 3).
     #[test]
     fn cod4_front_profiles_are_created_loaded_and_deleted() {
-        let Some((mut f, shell)) = front() else {
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         let players = tempfile::tempdir().unwrap();

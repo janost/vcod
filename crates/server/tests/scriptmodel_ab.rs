@@ -997,13 +997,9 @@ fn a_frag_rolls_down_terrain_like_retail() {
 /// install.
 #[test]
 fn a_frag_rolls_up_terrain_like_retail_on_15() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     compare_rolls(
         fs,
         include_str!("fixtures/scriptmodel/mp_brecourt-scriptmodel-roll-1.5.txt"),
@@ -1134,13 +1130,9 @@ fn shooter_origins(lines: &[String]) -> Vec<[f32; 3]> {
 /// retail's ground (12.6). Runs only with `COD_DIR` at a 1.5 install.
 #[test]
 fn a_frag_leaves_15s_untruncated_muzzle() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     compare_throw_starts(
         fs,
         include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-throw-1.5.txt"),
@@ -1198,13 +1190,9 @@ fn a_frag_rests_on_a_prone_players_back_on_15() {
 /// ground and base bits, the strike on him too.
 #[test]
 fn a_frag_rests_on_a_prone_players_back_like_retail_on_15() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     let fixture =
         include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-prone-rest-1.5-cmds.txt");
     prone_back_gate(fs, fixture, landed(fixture), true);

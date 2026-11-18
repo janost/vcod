@@ -221,13 +221,9 @@ fn the_touch_pass_wakes_its_threads_in_retails_order() {
 /// Retail 1.5b's run: the same lines as 1.1d's.
 #[test]
 fn the_touch_pass_wakes_its_threads_in_retails_order_on_1_5() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     check(
         fs,
         &PROTOCOL_V6,
@@ -298,13 +294,9 @@ fn a_full_trigger_queue_notifies_on_the_spot_on_1_1() {
 
 #[test]
 fn a_full_trigger_queue_notifies_on_the_spot_on_1_5() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     check_trigqueue(fs, &PROTOCOL_V6);
 }
 

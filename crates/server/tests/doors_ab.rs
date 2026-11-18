@@ -51,10 +51,7 @@ fn fs_11() -> Option<Pk3Fs> {
 }
 
 fn fs_15() -> Option<Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    let v6 = PROTOCOL_V6.transport.version;
-    let fs = (vcod_server::server::install_protocol(&fs).transport.version == v6).then_some(fs);
-    with_doors(fs)
+    with_doors(vcod_common::testing::game_fs_15())
 }
 
 fn fs_uo() -> Option<Pk3Fs> {
