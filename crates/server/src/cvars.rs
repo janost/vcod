@@ -122,6 +122,15 @@ struct Cvar {
 }
 
 /// What a console write did; the message, if any, is `Cvar_Set2`'s.
+/// The roots file commands resolve names under, write protected in every
+/// game (cod4-handshake.md 14.1, cod2-protocol.md 17.5).
+pub const FILE_ROOTS: &[&str] = &["fs_basepath", "fs_homepath", "fs_game"];
+
+/// Whether `name` is one of [`FILE_ROOTS`].
+pub fn is_file_root(name: &str) -> bool {
+    FILE_ROOTS.iter().any(|r| r.eq_ignore_ascii_case(name))
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum ConsoleSet {
     /// The value is live.

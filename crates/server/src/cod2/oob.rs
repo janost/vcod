@@ -678,14 +678,25 @@ impl Cod2Server {
             }
             "set" | "seta" | "sets" => {
                 if args.len() >= 3 {
-                    self.set_cvar(arg(1), &args[2..].join(" "));
+                    self.console_set(arg(1), &args[2..].join(" "), out);
                 }
             }
             name => match self.game.cvars.lookup(name) {
-                Some(_) if args.len() >= 2 => self.set_cvar(name, &args[1..].join(" ")),
+                Some(_) if args.len() >= 2 => self.console_set(name, &args[1..].join(" "), out),
                 Some((n, v, d)) => out.print(&format!("\"{n}\" is:\"{v}^7\" default:\"{d}^7\"\n")),
                 None => log::info!("cod2: unknown command {line:?}"),
             },
+        }
+    }
+
+    /// A console write of a dvar: `set_cvar`, but a file root
+    /// (`crate::cvars::FILE_ROOTS`) prints the dvar set's refusal
+    /// (0x80b2c22) and keeps its value.
+    fn console_set(&mut self, name: &str, value: &str, out: &mut Redirect) {
+        if crate::cvars::is_file_root(name) {
+            out.print(&format!("{name} is write protected.\n"));
+        } else {
+            self.set_cvar(name, value);
         }
     }
 

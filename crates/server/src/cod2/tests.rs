@@ -426,9 +426,15 @@ fn cod2_console_replies_read_as_retail() {
         ),
         ("banana", ""),
         ("say \"hi all\"", ""),
+        // Read off 1.3's dvar set, not run live (cod2-protocol.md 17.5).
+        ("set fs_homepath /", "fs_homepath is write protected.\n"),
+        ("set FS_BASEPATH /", "FS_BASEPATH is write protected.\n"),
+        ("seta fs_game ../x", "fs_game is write protected.\n"),
     ] {
         assert_eq!(exec(&mut sv, line), format!("print\n{reply}"), "{line}");
     }
+    assert_eq!(sv.cvar("fs_homepath"), "");
+    assert_eq!(sv.cvar("fs_game"), "");
     connect(&mut sv, now);
     let status = exec(&mut sv, "status");
     let row = status.lines().nth(4).unwrap_or_default();

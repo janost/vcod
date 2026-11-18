@@ -113,6 +113,12 @@ pub fn set_cvar(
         return Err(ErrorKind::BadType("setCvar takes a name and a value"));
     };
     let name = cx.resolve(*name).to_string();
+    // A script cannot move the file roots `writeconfig`, `exec` and
+    // `games_mp.log` resolve under.
+    if crate::cvars::is_file_root(&name) {
+        log::warn!("setCvar: {name} is write protected");
+        return Ok(Value::Undefined);
+    }
     let rendered = match value {
         Value::Localized(_) => super::message::construct(host, cx, &[value]),
         _ => cx
@@ -519,6 +525,24 @@ mod tests {
             set_cvar(&mut host, cx, None, &[third, Value::Float(1.0 / 3.0)]).unwrap();
             assert_eq!(host.cvars.get("probe_third"), "0.333333");
         });
+    }
+
+    /// A script's `setCvar` leaves the file roots alone, so a map cannot
+    /// point `games_mp.log` outside the home path through `fs_homepath`.
+    #[test]
+    fn setcvar_leaves_the_file_roots_alone() {
+        let (mut vm, mut host) = fixture();
+        host.cvars.set("fs_homepath", "/srv/cod");
+        vm.with_cx(|cx| {
+            for root in ["fs_homepath", "FS_BASEPATH", "fs_game"] {
+                let name = Value::String(cx.intern_exact(root));
+                let to = Value::String(cx.intern_exact("/"));
+                set_cvar(&mut host, cx, None, &[name, to]).unwrap();
+            }
+        });
+        assert_eq!(host.cvars.get("fs_homepath"), "/srv/cod");
+        assert_eq!(host.cvars.get("fs_basepath"), "");
+        assert_eq!(host.cvars.get("fs_game"), "");
     }
 
     /// `makeCvarServerInfo` puts the cvar in the 140/204 mirror and leaves an
