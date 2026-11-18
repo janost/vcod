@@ -135,7 +135,7 @@ impl FxPlay {
                 muzzle,
                 hit,
                 back_ms,
-            } => fx.spawn_cod2_tracer(muzzle, hit, now, back_ms),
+            } => fx.spawn_local_tracer(crate::fx::cod2_tracer::COD2, muzzle, hit, now, back_ms),
             Play::OnTag { path, bolt, pose } => {
                 log::debug!("cod2 fx {path} on {bolt:?} ({})", self.why);
                 fx.spawn_on_tag(fs, path, *bolt, *pose, now);

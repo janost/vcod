@@ -1579,7 +1579,7 @@ pub struct FxSystem {
     rewind_ms: Option<f32>,
     /// United Offensive's tracer rules, see [`Self::set_tracer_rules`].
     tracer_rules: TracerRules,
-    /// CoD2's tracers in flight ([`Self::spawn_cod2_tracer`]).
+    /// CoD2's and CoD4's tracers in flight ([`Self::spawn_local_tracer`]).
     cod2_tracers: Vec<cod2_tracer::Tracer>,
     /// CoD4 trails on their effects' tags.
     trails: Vec<(Bolt, cod4_trail::Trail)>,
@@ -1639,9 +1639,17 @@ impl FxSystem {
         }
     }
 
-    /// A CoD2 tracer from `muzzle` to `hit`, spawned at `now` less
-    /// `back_ms`; the event path rolled its chance.
-    pub fn spawn_cod2_tracer(&mut self, muzzle: Vec3, hit: Vec3, now: f32, back_ms: i32) {
+    /// A CoD2 or CoD4 tracer from `muzzle` to `hit` (`CG_SpawnTracer`
+    /// under `rules`, [`cod2_tracer::COD2`] or [`cod2_tracer::COD4`]),
+    /// spawned at `now` less `back_ms`; the caller rolled its chance.
+    pub fn spawn_local_tracer(
+        &mut self,
+        rules: cod2_tracer::Rules,
+        muzzle: Vec3,
+        hit: Vec3,
+        now: f32,
+        back_ms: i32,
+    ) {
         crate::frame_digest::effect("", muzzle);
         crate::frame_digest::effect("", hit);
         crate::frame_digest::u32(crate::frame_digest::Part::Fx, back_ms as u32);
@@ -1650,23 +1658,7 @@ impl FxSystem {
             self.cod2_tracers.remove(0);
         }
         self.cod2_tracers
-            .push(cod2_tracer::Tracer::new(muzzle, hit, now, back_ms));
-    }
-
-    /// A CoD4 tracer from `muzzle` to `hit` (`CG_SpawnTracer` under 1.7's
-    /// dvars, [`cod2_tracer::COD4`]), back-dated `back_ms`; the caller
-    /// rolled its chance.
-    pub fn spawn_cod4_tracer(&mut self, muzzle: Vec3, hit: Vec3, now: f32, back_ms: i32) {
-        if self.cod2_tracers.len() >= cod2_tracer::MAX_LOCAL_ENTITIES {
-            self.cod2_tracers.remove(0);
-        }
-        self.cod2_tracers.push(cod2_tracer::Tracer::with(
-            cod2_tracer::COD4,
-            muzzle,
-            hit,
-            now,
-            back_ms,
-        ));
+            .push(cod2_tracer::Tracer::with(rules, muzzle, hit, now, back_ms));
     }
 
     /// The connection's tracer rules: a United Offensive server's, with

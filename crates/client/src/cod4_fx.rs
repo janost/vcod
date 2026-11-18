@@ -2203,7 +2203,7 @@ impl Cod4Effects {
                 } else {
                     0
                 };
-                fx.spawn_cod4_tracer(hit.muzzle, end, now, back);
+                fx.spawn_local_tracer(crate::fx::cod2_tracer::COD4, hit.muzzle, end, now, back);
                 spawned += 1;
             }
         }
@@ -2232,7 +2232,7 @@ impl Cod4Effects {
         } else {
             0
         };
-        fx.spawn_cod4_tracer(r.muzzle, r.end, now, back);
+        fx.spawn_local_tracer(crate::fx::cod2_tracer::COD4, r.muzzle, r.end, now, back);
         self.tracers += 1;
     }
 
