@@ -172,7 +172,7 @@ impl Cvars {
         let v6 = protocol == 6 || uo;
         let mut cv = Cvars {
             vars: BTreeMap::new(),
-            mirror: vcod_common::net::protocol::Protocol::by_version(
+            mirror: vcod_common::net::protocol::Cod1Wire::by_version(
                 vcod_common::game::Game::Cod1,
                 protocol,
             )

@@ -5,7 +5,7 @@
 //! docs/research/cod11-items.md.
 
 use crate::weapons::{PlayerWeapons, WeaponTable};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::pmove::weapon::NUM_AMMO;
 use vcod_common::weapon::WeaponDef;
 
@@ -531,7 +531,7 @@ pub fn activate_score(muzzle: [f32; 3], forward: [f32; 3], centre: [f32; 3]) -> 
 /// `G_CheckForCursorHints`' value for an item (section 2.3), for the one
 /// `activate_ent` picked, in the protocol's own numbering (UO's sits one
 /// higher than 1.1's, its owned weapons 128 past the unowned).
-pub fn cursor_hint(proto: &Protocol, kind: ItemKind, owned: bool) -> i32 {
+pub fn cursor_hint(proto: &Cod1Wire, kind: ItemKind, owned: bool) -> i32 {
     let hints = &proto.cursor_hints;
     match kind {
         ItemKind::Weapon(w) if owned => i32::from(w) + hints.weapon + proto.max_weapons as i32,

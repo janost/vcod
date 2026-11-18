@@ -12,7 +12,7 @@ use vcod_common::collision::CollisionWorld;
 use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld};
 use vcod_common::net::flags::EF_TELEPORT_BIT;
 use vcod_common::net::msg;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::pmove::predict::{self, Predicted};
 use vcod_common::weapon::WeaponDef;
@@ -260,7 +260,7 @@ impl Predictor {
     #[expect(clippy::too_many_arguments)]
     pub fn predict(
         &mut self,
-        p: &Protocol,
+        p: &Cod1Wire,
         ps: &msg::PlayerState,
         ring: &CmdRing,
         world: &CollisionWorld,
@@ -355,7 +355,7 @@ impl Predictor {
     /// miss.
     fn replay_snapshot(
         &mut self,
-        p: &Protocol,
+        p: &Cod1Wire,
         ps: &msg::PlayerState,
         ring: &CmdRing,
         world: &MoveWorld,
@@ -478,7 +478,7 @@ impl Predictor {
 /// (`docs/research/cod11-player-clip.md`). `lerped` is where each was drawn,
 /// else its `trBase` stands in.
 pub fn solid_bodies(
-    p: &Protocol,
+    p: &Cod1Wire,
     entities: &BTreeMap<u32, msg::EntityState>,
     own: u32,
     lerped: &HashMap<u32, Vec3>,
@@ -513,7 +513,7 @@ mod tests {
     use vcod_common::net::msg::UserCmd;
     use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD, PROTOCOL_V1};
 
-    const P: &Protocol = &PROTOCOL_V1;
+    const P: &Cod1Wire = &PROTOCOL_V1;
 
     /// A snapshot with no brush models.
     fn still() -> (SnapshotMovers, i32) {

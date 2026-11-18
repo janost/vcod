@@ -1222,7 +1222,7 @@ VERIFIED, the writers agree: 1.5's console and message writer (0x409760, UO
 `CG_AddToTeamChat` (cgame 0x3002de50, UO 0x30039390; cod11-chat.md 3.2).
 
 vcod: `hud::font::set_team_colours`, called with
-`Protocol::team_colour_codes` and the client cvars at each HUD build and
+`Cod1Wire::team_colour_codes` and the client cvars at each HUD build and
 with no cvars at a gamestate; `hud::font::is_colour_code`, which every text
 path asks.
 

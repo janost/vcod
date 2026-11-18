@@ -35,7 +35,7 @@ pub const STATIC_ITEMS: &[(usize, &str, &str)] = &[
 /// follow the protocol's `max_weapons` weapon rows, 65..69 on 1.1 and 1.5,
 /// 129..133 on United Offensive (coduo-diff.md 12). `(classname, model)`.
 pub fn static_item(
-    p: &crate::net::protocol::Protocol,
+    p: &crate::net::protocol::Cod1Wire,
     index: usize,
 ) -> Option<(&'static str, &'static str)> {
     let row = index.checked_sub(p.max_weapons + 1)?;

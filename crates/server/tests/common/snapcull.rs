@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::msg::NULL_USERCMD;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 
 /// An entity list as `number:eType`, the wire's type.
 type Ents = BTreeSet<String>;
@@ -47,7 +47,7 @@ impl SnapRun {
     }
 }
 
-fn retail(path: &str, p: &Protocol) -> SnapRun {
+fn retail(path: &str, p: &Cod1Wire) -> SnapRun {
     let text = std::fs::read_to_string(path).expect("read the fixture");
     let field = |l: &str, key: &str| -> Option<String> {
         l.split_whitespace()
@@ -87,7 +87,7 @@ fn retail(path: &str, p: &Protocol) -> SnapRun {
     }
 }
 
-fn ours(fs: vcod_common::pk3::Pk3Fs, p: &'static Protocol, cvars: &[(&str, &str)]) -> SnapRun {
+fn ours(fs: vcod_common::pk3::Pk3Fs, p: &'static Cod1Wire, cvars: &[(&str, &str)]) -> SnapRun {
     use super::{ClientEnd, Queues};
     use vcod_common::net::NetClient;
     const SNAP_MAP: &str = "mp_carentan";
@@ -163,7 +163,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, p: &'static Protocol, cvars: &[(&str, &str)
 }
 
 /// `probe_snapcull`'s rows, retail's `fixture` against ours.
-pub fn matches(fixture: &str, fs: vcod_common::pk3::Pk3Fs, p: &'static Protocol) {
+pub fn matches(fixture: &str, fs: vcod_common::pk3::Pk3Fs, p: &'static Cod1Wire) {
     matches_with(fixture, fs, p, &[]);
 }
 
@@ -171,7 +171,7 @@ pub fn matches(fixture: &str, fs: vcod_common::pk3::Pk3Fs, p: &'static Protocol)
 pub fn matches_with(
     fixture: &str,
     fs: vcod_common::pk3::Pk3Fs,
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     cvars: &[(&str, &str)],
 ) {
     let r = retail(fixture, p);

@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::pk3::Pk3Fs;
 use vcod_server::engine::{Arrival, Engine, GameModule};
 use vcod_server::{Server, ServerConfig};
@@ -730,13 +730,13 @@ fn last_set<'a>(sets: &'a [String], name: &str) -> Option<&'a str> {
         .next_back()
 }
 
-fn protocol(sets: &[String], fs: &Pk3Fs) -> Result<&'static Protocol> {
+fn protocol(sets: &[String], fs: &Pk3Fs) -> Result<&'static Cod1Wire> {
     if let Some(v) = last_set(sets, "protocol") {
         return v
             .trim()
             .parse()
             .ok()
-            .and_then(|v| Protocol::by_version(vcod_common::game::Game::Cod1, v))
+            .and_then(|v| Cod1Wire::by_version(vcod_common::game::Game::Cod1, v))
             .with_context(|| {
                 format!("--set protocol={v}: vcod speaks 1 (1.1), 6 (1.5) and 22 (UO 1.51)")
             });

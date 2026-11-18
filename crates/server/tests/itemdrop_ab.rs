@@ -37,7 +37,7 @@ use std::time::{Duration, Instant};
 
 use glam::Vec3;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::trajectory::{TR_GRAVITY, TR_LINEAR, TR_STATIONARY, Trajectory};
 use vcod_server::game::item::{LAUNCH_CLIPMASK, RUN_CLIPMASK, Ran, bounds, run_flight};
 
@@ -76,7 +76,7 @@ const SPIN: [f64; 3] = [50.0, 40.0, 60.0];
 /// One patch's capture and the draws its module makes.
 struct Patch {
     fixture: &'static str,
-    proto: &'static Protocol,
+    proto: &'static Cod1Wire,
     /// `crandom()`'s sign: 1.1d's reads `2 * rand() * -2^-31 - 1`, (-3, -1];
     /// 1.5b's and UO's `2 * rand() / 2^31 - 1`, [-1, 1) (items doc 14.2).
     negative: bool,
@@ -302,7 +302,7 @@ fn retail(patch: &Patch) -> Run {
     Run::new(probe, lines)
 }
 
-fn world(fs: &vcod_common::pk3::Pk3Fs, proto: &'static Protocol) -> vcod_server::world::World {
+fn world(fs: &vcod_common::pk3::Pk3Fs, proto: &'static Cod1Wire) -> vcod_server::world::World {
     let bsp_path = fs.resolve_map(MAP).expect("the map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("bsp");
     let w = vcod_server::world::World::from_bsp(&bsp, Some(fs));

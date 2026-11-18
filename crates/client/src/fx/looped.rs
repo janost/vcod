@@ -8,7 +8,7 @@ use crate::fx::sim::SpawnAt;
 use glam::Vec3;
 use std::collections::HashMap;
 use vcod_common::net::flags::ET_FX;
-use vcod_common::net::protocol::{CsLayout, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, CsLayout};
 use vcod_common::net::snapshot::Snapshot;
 
 /// One play: the `.efx` path and where it goes.
@@ -34,7 +34,7 @@ pub struct FxEntity {
 }
 
 impl FxEntity {
-    pub fn from_state(e: &vcod_common::net::msg::EntityState, p: &Protocol) -> Option<FxEntity> {
+    pub fn from_state(e: &vcod_common::net::msg::EntityState, p: &Cod1Wire) -> Option<FxEntity> {
         if e.field_i32(p, "eType") != ET_FX {
             return None;
         }
@@ -66,7 +66,7 @@ impl LoopedFx {
     pub fn frame(
         &mut self,
         snap: &Snapshot,
-        p: &Protocol,
+        p: &Cod1Wire,
         time: i32,
         view: Vec3,
         configstrings: &[String],

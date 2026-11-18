@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_gsc::Vm;
 use vcod_gsc::bytecode::Op;
 
@@ -38,7 +38,7 @@ struct Entry {
 
 impl BuiltinSet {
     /// The set for `proto`'s game version, built on first use.
-    pub fn of(proto: &Protocol) -> &'static BuiltinSet {
+    pub fn of(proto: &Cod1Wire) -> &'static BuiltinSet {
         if proto.is_uo() {
             Self::uo()
         } else if proto.is_v1() {

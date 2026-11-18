@@ -12,7 +12,7 @@ use common::{ADDR, ADDR_B, ADDR_C, ClientEnd, Join, Queues};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::{NetClient, NetEvent, NetState, Userinfo};
 
 const NAMES: [&str; 3] = ["Able", "Baker", "Charlie"];
@@ -82,7 +82,7 @@ fn retail(fixture: &str) -> Retail {
 
 /// `order` is the connect order, which fixes the slots: retail's 1.5b run
 /// put the spectator in slot 0.
-fn run(fixture: &str, proto: &'static Protocol, cvars: &[(&str, &str)], order: [usize; 3]) {
+fn run(fixture: &str, proto: &'static Cod1Wire, cvars: &[(&str, &str)], order: [usize; 3]) {
     let fs = if proto.transport.version == PROTOCOL_V22.transport.version {
         vcod_common::testing::uo_fs()
     } else {

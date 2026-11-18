@@ -5261,7 +5261,7 @@ mod tests {
     /// `g_motd`'s configstring (14, UO 15) reaches no menu.
     fn shows_the_mirrors_motd(
         fs: &Pk3Fs,
-        proto: &vcod_common::net::protocol::Protocol,
+        proto: &vcod_common::net::protocol::Cod1Wire,
         capture: &str,
         menu: &str,
     ) {

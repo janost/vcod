@@ -758,7 +758,7 @@ pub enum MoveRules {
 
 impl MoveRules {
     /// The rules a server speaking this protocol runs.
-    pub fn for_protocol(p: &crate::net::protocol::Protocol) -> Self {
+    pub fn for_protocol(p: &crate::net::protocol::Cod1Wire) -> Self {
         match p.transport.version {
             6 => MoveRules::V1_5,
             22 => MoveRules::Uo,

@@ -11,7 +11,7 @@ use vcod_common::net::wire::Transport;
 
 pub struct EngineCore<C> {
     /// The wire's transport: version, netchan framing, codec, paks. CoD1
-    /// keeps it in step with its `Protocol` (`Server::set_protocol`).
+    /// keeps it in step with its `Cod1Wire` (`Server::set_protocol`).
     pub transport: &'static Transport,
     pub huff: Huffman,
     /// The datagrams this frame or packet produced, drained by the binary.

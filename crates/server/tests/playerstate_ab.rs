@@ -21,7 +21,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
 use vcod_common::net::msg::PlayerState;
-use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1};
 
 /// Fields the server knowingly does not reproduce, each with the reason.
 /// Empty is the goal and it is empty: `legsAnim` was the last entry and the
@@ -80,7 +80,7 @@ fn cfg(map: &str) -> vcod_server::ServerConfig {
 struct Capture {
     team: String,
     weapon: String,
-    /// `Protocol::player_fields` order, raw wire words.
+    /// `Cod1Wire::player_fields` order, raw wire words.
     ps: Vec<i32>,
 }
 
@@ -324,7 +324,7 @@ fn check_spawn_shape(entities: &str, ps: &PlayerState, who: &str, out: &mut Vec<
     }
 }
 
-fn field_index(p: &Protocol, name: &str) -> usize {
+fn field_index(p: &Cod1Wire, name: &str) -> usize {
     PlayerState::field_index(p, name).unwrap_or_else(|| panic!("no playerstate field {name:?}"))
 }
 

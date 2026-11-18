@@ -46,7 +46,7 @@ use vcod_common::net::msg::{
 };
 use vcod_common::net::netchan::{ClientMessage, MAX_RELIABLE_COMMANDS, ServerNetchan};
 use vcod_common::net::protocol::WireGame;
-use vcod_common::net::protocol::{CS_SERVERINFO, PROTOCOL_V1, Protocol};
+use vcod_common::net::protocol::{CS_SERVERINFO, Cod1Wire, PROTOCOL_V1};
 use vcod_common::net::{com_hash_key, flags, info_value_for_key, snapshot};
 use vcod_common::pmove::FallHeights;
 
@@ -126,7 +126,7 @@ struct PureCheck {
 }
 
 impl PureCheck {
-    fn new(fs: &vcod_common::pk3::Pk3Fs, feed: i32, proto: &Protocol) -> Self {
+    fn new(fs: &vcod_common::pk3::Pk3Fs, feed: i32, proto: &Cod1Wire) -> Self {
         let dll = |name: &str| fs.source_pak(name).map(|p| p.pure_checksum(feed));
         PureCheck {
             cgame: dll(proto.pure_dlls[0]),
@@ -1249,7 +1249,7 @@ struct Round {
 fn mirror_for_callback(
     rt: &mut script::ScriptRuntime,
     sim: &ClientSim,
-    proto: &'static Protocol,
+    proto: &'static Cod1Wire,
     slot: usize,
     st: i32,
 ) {
@@ -1454,13 +1454,13 @@ pub enum LoadFailure {
 /// What `G_ShutdownGame(1)` and `G_InitGame` print on a restart ahead of
 /// the spawn (handshake doc, "Console commands over rcon"); the rest is
 /// [`game_init_tail`].
-fn restart_game_banner(p: &Protocol) -> String {
+fn restart_game_banner(p: &Cod1Wire) -> String {
     format!("==== RestartGame ====\n{}", game_init_head(p))
 }
 
 /// `G_InitGame`'s lines ahead of the spawn, the game module's name and
 /// date being 1.1's, 1.5b's or UO's (their startup logs).
-fn game_init_head(p: &Protocol) -> String {
+fn game_init_head(p: &Cod1Wire) -> String {
     let (name, date) = match p.transport.version {
         6 => ("Call of Duty", "Nov 15 2004"),
         22 => ("CoD:United Offensive", "Feb 10 2005"),
@@ -1646,7 +1646,7 @@ fn strtol(s: &str) -> i64 {
 pub use vcod_common::net::protocol::install_protocol;
 
 /// [`Server::fog_cull`] off the fields, for a caller holding the script.
-fn fog_cull_of(p: &Protocol, configstrings: &[String]) -> Option<f32> {
+fn fog_cull_of(p: &Cod1Wire, configstrings: &[String]) -> Option<f32> {
     (!p.is_v1())
         .then(|| crate::world::fog_cull(configstrings.get(p.cs.fog).map_or("", String::as_str)))
         .flatten()
@@ -1667,7 +1667,7 @@ fn compass_friend(
     broadcast: &[bool],
     cull: Option<(&vcod_common::bsp::Visibility, Option<f32>)>,
     time: i32,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> Option<Option<(i32, u32, bool)>> {
     use follow::SessionState::{Dead, Playing};
     let sim = clients[slot].as_ref()?.sim.as_ref()?;
@@ -1763,7 +1763,7 @@ fn zombie_message(
     c: &mut Client,
     sv_time_ms: i32,
     snap_flags: u32,
-    proto: &'static Protocol,
+    proto: &'static Cod1Wire,
     huff: &Huffman,
 ) -> Vec<Vec<u8>> {
     let mut w = MsgWriter::new(huff);
@@ -4127,7 +4127,7 @@ impl Server {
         slot: usize,
         port: u16,
         name: String,
-        proto: &'static Protocol,
+        proto: &'static Cod1Wire,
         sv_time_ms: i32,
     ) {
         let Some(entry) = clients.get_mut(slot) else {
@@ -4744,7 +4744,7 @@ impl Server {
     /// The protocol this server speaks: one per process, as each retail
     /// binary speaks one (docs/research/cod15-protocol-diff.md, "Server
     /// side"). Set before the first level loads.
-    pub fn set_protocol(&mut self, p: &'static Protocol) {
+    pub fn set_protocol(&mut self, p: &'static Cod1Wire) {
         self.game.proto = p;
         self.core.transport = &p.transport;
         // `sv_master1` defaults to the binary's own master unless set.
@@ -4775,7 +4775,7 @@ impl Server {
         self.core.sent_configstrings = self.core.configstrings.clone();
     }
 
-    pub fn protocol(&self) -> &'static Protocol {
+    pub fn protocol(&self) -> &'static Cod1Wire {
         self.game.proto
     }
 
@@ -10905,7 +10905,7 @@ mod tests {
         nc: &mut Netchan,
         ring: &mut SnapshotRing,
         now: Instant,
-        p: &Protocol,
+        p: &Cod1Wire,
     ) -> vcod_common::net::snapshot::Snapshot {
         let huff = Huffman::new();
         sv.tick(now);
@@ -12723,12 +12723,12 @@ mod tests {
         now: Instant,
         st: i32,
         /// What the rig's client decodes its frames with.
-        decode: &'static Protocol,
+        decode: &'static Cod1Wire,
     }
 
     /// Protocol 6 with `pm_flags` left in 1.5's layout, for asserting the
     /// wire bits.
-    static RAW_V6: Protocol = Protocol {
+    static RAW_V6: Cod1Wire = Cod1Wire {
         pm_flags_to_v1: |f| f,
         ..PROTOCOL_V6
     };
@@ -12748,8 +12748,8 @@ mod tests {
         /// A server speaking `p`, its frames decoded through `decode`.
         fn with_protocol(
             rt: crate::game::script::ScriptRuntime,
-            p: &'static Protocol,
-            decode: &'static Protocol,
+            p: &'static Cod1Wire,
+            decode: &'static Cod1Wire,
         ) -> Self {
             let now = Instant::now();
             let mut sv = Server::new(cfg(), now);

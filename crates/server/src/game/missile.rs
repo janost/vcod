@@ -17,7 +17,7 @@ use glam::Vec3;
 use vcod_common::collision::{CONTENTS_WATER, CollisionWorld, sound_material};
 use vcod_common::net::events::dir_to_byte;
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use vcod_common::net::trajectory::{
     DEFAULT_GRAVITY, TR_GRAVITY, TR_LINEAR, TR_STATIONARY, Trajectory,
 };
@@ -1167,7 +1167,7 @@ impl Missile {
     /// capture reads `index=0`, the client drawing the projectile off
     /// `s.weapon` instead. The owner rides `r.ownerNum` and `parent`, which
     /// are server-side, so no client-facing field carries it.
-    fn to_entity(&self, p: &Protocol) -> EntityState {
+    fn to_entity(&self, p: &Cod1Wire) -> EntityState {
         let mut e = EntityState::null(p);
         e.number = self.id.0;
         let mut set = |name: &str, v: i32| {
@@ -1906,7 +1906,7 @@ impl Missiles {
     /// `SVF_BROADCAST` (11.1), so the caller adds them past its own PVS cull.
     pub fn entities<'a>(
         &'a self,
-        p: &'a Protocol,
+        p: &'a Cod1Wire,
     ) -> impl Iterator<Item = (u32, EntityState)> + 'a {
         // A hanging shell is `SVF_NOCLIENT` until its drop.
         self.live

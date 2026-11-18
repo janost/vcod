@@ -12,7 +12,7 @@ pub use vcod_common::net::flags::{
     EF_TELEPORT_BIT, PM_DEAD, PM_DEAD_LINKED, PM_INTERMISSION, PM_NORMAL_LINKED, PM_SPECTATOR,
 };
 use vcod_common::net::msg::{self, UserCmd};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::trajectory;
 use vcod_common::pmove::cmd::{self, ANGLE2SHORT, EventRing, view_angles};
 use vcod_common::pmove::{self, PmEvent};
@@ -2680,7 +2680,7 @@ impl ClientSim {
     ///
     /// The event ring rides here as well as on the playerstate: it is how
     /// another client hears this one's shots and footsteps.
-    pub fn to_entity(&self, p: &Protocol, slot: usize, command_time: i32) -> msg::EntityState {
+    pub fn to_entity(&self, p: &Cod1Wire, slot: usize, command_time: i32) -> msg::EntityState {
         let mut e = msg::EntityState::null(p);
         e.number = slot as u32;
         let mut set = |name: &str, v: i32| {
@@ -2785,7 +2785,7 @@ impl ClientSim {
             });
     }
 
-    pub fn to_wire(&self, p: &Protocol, client_num: i32, command_time: i32) -> msg::PlayerState {
+    pub fn to_wire(&self, p: &Cod1Wire, client_num: i32, command_time: i32) -> msg::PlayerState {
         let player = self.pm_type == PmType::Normal;
         let mut w = msg::PlayerState::null(p);
         // A field the protocol lacks (UO dropped `gunfx`, 1.1 has no sprint
@@ -3132,7 +3132,7 @@ impl Residue {
     /// `pm_type` and `speed` once a cmd has flown, its `pm_flags` less the
     /// follow and ADS bits (0x46bb1), and its `eFlags` with the mount bits
     /// cleared (0x46b8c) and the teleport bit the sim flips.
-    fn under(&self, own: msg::PlayerState, p: &Protocol) -> msg::PlayerState {
+    fn under(&self, own: msg::PlayerState, p: &Cod1Wire) -> msg::PlayerState {
         let idx = |name| msg::PlayerState::field_index(p, name).unwrap();
         let mut w = self.wire.clone();
         w.fields[idx("pm_flags")] &= !(crate::follow::PMF_FOLLOW | pmove::weapon::PMF_ADS);
@@ -3181,7 +3181,7 @@ mod tests {
     /// `gunfx`, and the lookup used to panic there.
     #[test]
     fn a_stopped_follow_rebuilds_on_every_protocol() {
-        for p in Protocol::ALL {
+        for p in Cod1Wire::ALL {
             let mut own = msg::PlayerState::null(p);
             let at = |name| msg::PlayerState::field_index(p, name).unwrap();
             own.fields[at("clientNum")] = 3;

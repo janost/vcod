@@ -90,7 +90,7 @@ pub struct Cue {
 
 pub struct CueCtx<'a> {
     pub configstrings: &'a [String],
-    /// The connection's `CS_SOUNDS` (`Protocol::cs`).
+    /// The connection's `CS_SOUNDS` (`Cod1Wire::cs`).
     pub sounds: usize,
     /// Keyed by 1-based CS7 weapon index; `None` = weapon file failed to load.
     pub weapon_sounds: &'a HashMap<i32, Option<WeaponSounds>>,

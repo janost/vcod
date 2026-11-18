@@ -30,10 +30,6 @@ pub struct HudWire {
     pub fields: usize,
 }
 
-/// CoD1's descriptor under its old name, for the call sites that predate
-/// [`Cod1Wire`].
-pub type Protocol = Cod1Wire;
-
 /// `<near> <far> <density> <r> <g> <b> <fadeTime ms>`. `density > 1`
 /// selects linear farclip fog across near..far; otherwise GL_EXP at that
 /// density (RTCW-MP tr_main.c R_SetFog). Linear fog leaves the sky alone,

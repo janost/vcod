@@ -7,7 +7,7 @@
 //! net/snapshots-uo-quake.bin`.
 
 use vcod_common::net::events::EventTracker;
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -21,7 +21,7 @@ fn main() {
         _ => PROTOCOL_V1,
     };
     // The wire's ids and flags, not vcod's 1.1 view of them.
-    let p = Protocol {
+    let p = Cod1Wire {
         event_to_v1: |e| e,
         eflags_to_v1: |f| f,
         ..base

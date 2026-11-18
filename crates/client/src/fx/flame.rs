@@ -31,7 +31,7 @@ use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld, body_trace};
 
 use super::sim::FxQuad;
 use vcod_common::net::flags::{EF_FIRING, ET_PLAYER};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::weapon::WeaponDef;
 
@@ -778,7 +778,7 @@ impl FlameSystem {
 /// entity, each whose `eFlags` firing bit is up with a `gas` weapon in
 /// hand, at its muzzle (the view's for the ridden body).
 pub fn nozzles(
-    p: &Protocol,
+    p: &Cod1Wire,
     snap: &Snapshot,
     ps_client: i32,
     weapons: &[Option<WeaponDef>],

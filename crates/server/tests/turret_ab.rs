@@ -24,7 +24,7 @@ use vcod_common::animtree::PlayerAnims;
 use vcod_common::net::NetClient;
 use vcod_common::net::events::EventTracker;
 use vcod_common::net::msg::{BUTTON_ATTACK, BUTTON_USE, NULL_USERCMD, UserCmd, WBUTTON_CROUCH};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::aim::angle_subtract;
 use vcod_server::Server;
@@ -74,7 +74,7 @@ fn deg_to_short_rounded(deg: f32) -> i32 {
 struct Rig {
     sv: Server,
     /// The server's protocol, which every snapshot field is read through.
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     qg: Rc<RefCell<Queues>>,
     qt: Rc<RefCell<Queues>>,
     now: Instant,
@@ -218,7 +218,7 @@ fn build(cvars: &[(&str, &str)], weapon: &str, gunner_second: bool) -> Option<Ri
 #[expect(clippy::too_many_arguments)]
 fn build_on(
     fs: Pk3Fs,
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     cvars: &[(&str, &str)],
     weapon: &str,
     gunner_second: bool,
@@ -596,7 +596,7 @@ impl Rig {
 
 /// A raw `events[]` slot in 1.1's numbering, as the probe prints a capture's
 /// (`probe::ev_v1`).
-fn ev_v1(p: &Protocol, raw: i32) -> i32 {
+fn ev_v1(p: &Cod1Wire, raw: i32) -> i32 {
     nearest_v1((p.event_to_v1)(raw))
 }
 
@@ -1716,7 +1716,7 @@ struct LateGunner {
 /// server speaking `p`: the gunner joined with the header's weapon, as
 /// client 1, standing where retail's did, the start rebased at most
 /// `rebase_max` on any axis (`docs/research/cod11-turrets.md` 13.1).
-fn rig_on(cap: &Capture, fs: Pk3Fs, p: &'static Protocol, rebase_max: f32) -> Option<Rig> {
+fn rig_on(cap: &Capture, fs: Pk3Fs, p: &'static Cod1Wire, rebase_max: f32) -> Option<Rig> {
     rig_after(cap, fs, p, rebase_max, 0, None)
 }
 
@@ -1725,7 +1725,7 @@ fn rig_on(cap: &Capture, fs: Pk3Fs, p: &'static Protocol, rebase_max: f32) -> Op
 fn rig_after(
     cap: &Capture,
     fs: Pk3Fs,
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     rebase_max: f32,
     alone_ms: i64,
     late: Option<LateGunner>,
@@ -1797,7 +1797,7 @@ fn place_ms<'a>(mut log: impl Iterator<Item = &'a str>, num: u32) -> Option<i32>
 fn rig_aligned(
     cap: &Capture,
     fs: &impl Fn() -> Option<Pk3Fs>,
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     rebase_max: f32,
     place: i32,
     gunner: Option<(i32, Spawn)>,
@@ -2289,7 +2289,7 @@ fn the_142_step_off_the_sandbags_matches_retail() {
 fn spawn_gate(
     tag: &str,
     fs: impl Fn() -> Option<Pk3Fs>,
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     gaps: &[(&str, &str)],
 ) {
     if fs().is_none() {
@@ -2374,7 +2374,7 @@ fn credit_rows(script: &str, rig: &Rig) -> Vec<String> {
 fn hit_gate(
     tag: &str,
     fs: impl Fn() -> Option<Pk3Fs>,
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     cvars: &'static [(&'static str, &'static str)],
     gaps: &[(&str, &str)],
 ) {
@@ -2391,7 +2391,7 @@ fn hit_gate(
 fn hit_replay(
     tag: &str,
     fs: impl Fn() -> Option<Pk3Fs>,
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     cvars: &'static [(&'static str, &'static str)],
 ) -> Option<(String, Vec<String>, Vec<String>)> {
     fs()?;
@@ -2663,7 +2663,7 @@ const GUNNER_SPAWN: Spawn = ([1738.2423, 1860.1884, -23.875], [0.0, 229.0, 0.0])
 fn gungrid_gate(
     tag: &str,
     fs: impl Fn() -> Option<Pk3Fs>,
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     cvars: &'static [(&'static str, &'static str)],
     gaps: &[(&str, &str)],
 ) {
@@ -3295,7 +3295,7 @@ fn seatnext_read<'a>(mut log: impl Iterator<Item = &'a str>) -> Option<String> {
 /// (cod11-gametypes-re-bel.md 8.6): 0 on 1.1, the yaw through
 /// `SHORT2ANGLE` on UO. A frame later, on the cmds retail's next frame ran,
 /// the script reads retail's `PROBE seatnext`.
-fn a_gunner_spawned_off_the_gun(fs: Pk3Fs, p: &'static Protocol, fixture: &str) {
+fn a_gunner_spawned_off_the_gun(fs: Pk3Fs, p: &'static Cod1Wire, fixture: &str) {
     let mut rig = build_on(
         fs,
         p,

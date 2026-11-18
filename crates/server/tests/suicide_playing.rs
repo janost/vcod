@@ -106,7 +106,7 @@ fn a_suicide_that_stays_playing_keeps_pm_type_0() {
 fn probe_suicide_near(
     fs: vcod_common::pk3::Pk3Fs,
     map: &str,
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
 ) -> Vec<String> {
     let mut now = Instant::now();
     let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");

@@ -16,7 +16,7 @@ use vcod_common::model::{self, Model};
 use vcod_common::movetrace::MoveWorld;
 use vcod_common::net::flags::{EF_CROUCH, EF_DEAD, EF_PRONE};
 use vcod_common::net::msg::{ClientState, EntityState, PlayerState};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::net::trajectory::{TR_INTERPOLATE, TR_LINEAR_STOP, Trajectory};
 use vcod_common::pk3::Pk3Fs;
@@ -114,7 +114,7 @@ pub(crate) fn split_weapon_list(list: &str) -> Vec<String> {
 /// A model entity's model slot: `index` on 1.1, `xmodel` on United
 /// Offensive, whose `G_DObjUpdate` writes that field instead
 /// (docs/research/coduo-diff.md 22).
-fn dobj_model(ent: &EntityState, p: &Protocol) -> i32 {
+fn dobj_model(ent: &EntityState, p: &Cod1Wire) -> i32 {
     if EntityState::field_index(p, "xmodel").is_some() {
         ent.field_i32(p, "xmodel")
     } else {
@@ -126,7 +126,7 @@ pub fn resolve_visual(
     ent: &EntityState,
     clients: &BTreeMap<u32, ClientState>,
     configstrings: &[String],
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> EntityVisual {
     let cs = |i: usize| configstrings.get(i).map(String::as_str).unwrap_or("");
     let (models, tags) = (p.cs.models(), p.cs.tags());
@@ -596,7 +596,7 @@ impl VehicleFrame {
 /// The steering wheel's roll a degree of steer on vehicle `num`: four
 /// times the steer when `cg.snap`'s player (`snap`, the older of the pair)
 /// drives it unsighted (cgame 0x30020b8b), 0.75 otherwise.
-fn steering_ratio(snap: &PlayerState, num: u32, p: &Protocol) -> f32 {
+fn steering_ratio(snap: &PlayerState, num: u32, p: &Cod1Wire) -> f32 {
     let driving = snap.field_i32(p, "eFlags") & EF_IN_VEHICLE_V22 != 0
         && snap.field_i32(p, "vehPos") == 1
         && snap.field_i32(p, "viewlocked_entNum") == num as i32;
@@ -609,7 +609,7 @@ fn steering_ratio(snap: &PlayerState, num: u32, p: &Protocol) -> f32 {
 
 /// Whether `cg.snap`'s player (`snap`, the older of the pair) mans vehicle
 /// `num`'s second gun, whose gun then follows the view (cgame 0x300207c0).
-fn own_gunner(snap: &PlayerState, num: u32, p: &Protocol) -> bool {
+fn own_gunner(snap: &PlayerState, num: u32, p: &Cod1Wire) -> bool {
     snap.field_i32(p, "eFlags") & EF_IN_VEHICLE_V22 != 0
         && snap.field_i32(p, "vehPos") == 2
         && snap.field_i32(p, "viewlocked_entNum") == num as i32
@@ -795,7 +795,7 @@ impl EntityScene {
         renderer: &mut Renderer,
         fs: &Pk3Fs,
         configstrings: &[String],
-        p: &Protocol,
+        p: &Cod1Wire,
     ) -> usize {
         use vcod_common::net::protocol::CsRange;
         if self.anims.is_none() {
@@ -991,7 +991,7 @@ fn update_channels(
 
 /// What a body's channel updates read off its entity: the client number,
 /// the snapped origin the rate is measured from, the flags.
-fn seen(ent: &EntityState, p: &Protocol) -> Seen {
+fn seen(ent: &EntityState, p: &Cod1Wire) -> Seen {
     Seen {
         client_num: ent.field_i32(p, "clientNum"),
         tr_base: Vec3::new(
@@ -1056,7 +1056,7 @@ fn gunner_legs_seconds(
     anims: &PlayerAnims,
     rules: MoveRules,
     ent: &EntityState,
-    p: &Protocol,
+    p: &Cod1Wire,
     at: Times,
     frametime_ms: i32,
 ) -> f32 {
@@ -1123,7 +1123,7 @@ impl EntityAnim {
 /// The model of a compiled-in ammo or health item row, without the
 /// `xmodel/` prefix the table spells (`weapon_table::STATIC_ITEMS`).
 fn static_item_model(
-    p: &vcod_common::net::protocol::Protocol,
+    p: &vcod_common::net::protocol::Cod1Wire,
     index: usize,
 ) -> Option<&'static str> {
     let (_, model) = vcod_common::weapon_table::static_item(p, index)?;
@@ -1402,7 +1402,7 @@ pub fn constant_light(cl: u32, origin: Vec3) -> Option<SceneLight> {
 
 /// `CG_CalcMuzzlePoint`'s stance point for a player body without a
 /// `tag_flash` ([`crate::fx::registry::muzzle_fallback`]).
-fn stance_point(ent: &EntityState, p: &Protocol) -> Vec3 {
+fn stance_point(ent: &EntityState, p: &Cod1Wire) -> Vec3 {
     let tr_base = Vec3::new(
         ent.field_f32(p, "pos.trBase[0]"),
         ent.field_f32(p, "pos.trBase[1]"),
@@ -1414,7 +1414,7 @@ fn stance_point(ent: &EntityState, p: &Protocol) -> Vec3 {
 /// What [`stale_shot_points`] reads of the frame.
 struct StaleShots<'a, 'b> {
     snap: SnapView<'a>,
-    p: &'b Protocol,
+    p: &'b Cod1Wire,
     skip_num: i32,
     entity_pos: &'b HashMap<u32, Vec3>,
     entity_angles: &'b HashMap<u32, Vec3>,
@@ -1539,7 +1539,7 @@ struct LerpFrom<'a> {
 /// and 32 standing, 20 crouched, 12 prone (cgame 0x30028210, 0x30028400);
 /// a turret 32 above its origin (0x3001b2e0); anything else at the drawn
 /// origin (cod11-light-grid-and-leaf-lights.md, section 13).
-fn light_origin(etype: i32, ent: &EntityState, p: &Protocol, lerped: Vec3, drawn: Vec3) -> Vec3 {
+fn light_origin(etype: i32, ent: &EntityState, p: &Cod1Wire, lerped: Vec3, drawn: Vec3) -> Vec3 {
     match etype {
         ET_PLAYER | ET_CORPSE => {
             let eflags = ent.field_i32(p, "eFlags");
@@ -1572,7 +1572,7 @@ fn lerp_pos_angles(
     from: &LerpFrom,
     f: f32,
     render_time: i32,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> (Vec3, Vec3) {
     let prev = from.snap.entity(num);
     let cur = prev.unwrap_or(ent);
@@ -1628,7 +1628,7 @@ fn model_rotation(visual: &EntityVisual, angles: Vec3) -> Quat {
 fn place_body(
     anims: &PlayerAnims,
     ent: &EntityState,
-    p: &Protocol,
+    p: &Cod1Wire,
     guns: &HashMap<u32, GunFrame>,
     pos: Vec3,
     seconds: impl FnOnce() -> f32,
@@ -1696,7 +1696,7 @@ pub fn build_instances(
     fs: &Pk3Fs,
     trace: Option<MoveWorld>,
     renderer: &mut Renderer,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> BuiltScene {
     // Destructure so `anims` can be read while the other fields are written.
     let EntityScene {
@@ -2834,7 +2834,7 @@ mod tests {
         states.insert(5, anim(tag(Vec3::new(7.0, 8.0, 9.0))));
         states.insert(6, anim(None));
         states.insert(7, anim(tag(Vec3::ZERO)));
-        let run = |p: &'static Protocol| {
+        let run = |p: &'static Cod1Wire| {
             let ent = |num: u32| {
                 let mut e = EntityState::null(p);
                 e.number = num;

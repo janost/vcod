@@ -18,7 +18,7 @@ use vcod_common::net::msg::{
     BUTTON_ADS, BUTTON_ATTACK, BUTTON_SPRINT_V22, NULL_USERCMD, PlayerState, UserCmd,
     WBUTTON_CROUCH, WBUTTON_LEAN_LEFT, WBUTTON_PRONE, WBUTTON_RELOAD,
 };
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V22};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::pmove::predict;
@@ -158,7 +158,7 @@ struct Outcome {
 }
 
 /// The paks and protocol: UO's when `COD_DIR` is a UO install, else 1.1's.
-fn setup() -> Option<(Pk3Fs, &'static Protocol)> {
+fn setup() -> Option<(Pk3Fs, &'static Cod1Wire)> {
     match vcod_common::testing::uo_fs() {
         Some(fs) => Some((fs, &PROTOCOL_V22)),
         None => Some((vcod_common::testing::game_fs()?, &PROTOCOL_V1)),

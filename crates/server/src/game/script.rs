@@ -3445,7 +3445,7 @@ impl ScriptRuntime {
     /// any per-client culling (`crates/server/src/game/wire.rs`).
     pub fn packet_entities(
         &mut self,
-        p: &vcod_common::net::protocol::Protocol,
+        p: &vcod_common::net::protocol::Cod1Wire,
     ) -> std::collections::BTreeMap<u32, vcod_common::net::msg::EntityState> {
         let host = &mut self.host;
         self.vm
@@ -3492,7 +3492,7 @@ impl ScriptRuntime {
     /// What the baseline pass writes (`crate::game::wire::baseline_entities`).
     pub fn baseline_entities(
         &mut self,
-        p: &vcod_common::net::protocol::Protocol,
+        p: &vcod_common::net::protocol::Cod1Wire,
     ) -> std::collections::BTreeMap<u32, vcod_common::net::msg::EntityState> {
         let host = &mut self.host;
         self.vm
@@ -3755,7 +3755,7 @@ impl ScriptRuntime {
     /// entity with no client).
     pub fn body_entities<'a>(
         &'a self,
-        p: &'a vcod_common::net::protocol::Protocol,
+        p: &'a vcod_common::net::protocol::Cod1Wire,
     ) -> impl Iterator<Item = (u32, vcod_common::net::msg::EntityState)> + 'a {
         self.host.bodies.entities().map(move |(n, mut e)| {
             if let Some(g) = self

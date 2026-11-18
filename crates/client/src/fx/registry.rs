@@ -304,7 +304,7 @@ pub struct ResolveCtx<'a> {
     pub eject_brass: bool,
     /// The gamestate's table, for the effect paths `EV_PLAY_FX` names.
     pub configstrings: &'a [String],
-    /// Where its blocks sit (`Protocol::cs`).
+    /// Where its blocks sit (`Cod1Wire::cs`).
     pub cs: &'a CsLayout,
 }
 

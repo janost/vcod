@@ -20,7 +20,7 @@ use glam::Vec3;
 use super::input::{Action, PlayInput};
 use vcod_common::net::flags::{PM_DEAD, PM_NORMAL_LINKED};
 use vcod_common::net::msg::PlayerState;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 
 /// What the soak asks of `App` once the frame's borrows end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,7 +129,7 @@ impl Soak {
         &mut self,
         input: &mut PlayInput,
         ps: Option<&PlayerState>,
-        p: &Protocol,
+        p: &Cod1Wire,
         serverinfo: &str,
         feet: Vec3,
         time: f32,

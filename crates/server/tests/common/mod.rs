@@ -1020,7 +1020,7 @@ pub fn replay(
 
 /// [`replay`] on a server speaking `proto`.
 pub fn replay_as(
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     gametype: &str,
     steps: &[Step],
@@ -2454,7 +2454,7 @@ const DIRECT_JOIN_MS: i64 = 400;
 /// they land. Returns the script's `PROBE` lines.
 pub fn direct_replay(
     fs: fn() -> Option<vcod_common::pk3::Pk3Fs>,
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
     weapon: &str,
@@ -2475,7 +2475,7 @@ pub type SnapEntities = Vec<(
 /// between its spawn and the script's first placing is the spawn point's.
 pub fn direct_replay_frames(
     fs: fn() -> Option<vcod_common::pk3::Pk3Fs>,
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
     weapon: &str,
@@ -2486,7 +2486,7 @@ pub fn direct_replay_frames(
 
 fn direct_replay_run(
     fs: fn() -> Option<vcod_common::pk3::Pk3Fs>,
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
     weapon: &str,
@@ -2522,7 +2522,7 @@ fn spawned_origin(text: &str) -> [f32; 3] {
 /// the `PROBE` lines, the client's first snapshot time and its snapshots.
 fn direct_replay_once(
     fs: vcod_common::pk3::Pk3Fs,
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
     weapon: &str,

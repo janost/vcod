@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use vcod_common::net::gamestate;
 use vcod_common::net::huffman::Huffman;
 use vcod_common::net::msg::MsgReader;
-use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1};
 use vcod_common::net::snapshot::{
     SVC_EOF, SVC_NOP, SVC_SERVER_COMMAND, SVC_SNAPSHOT, SnapshotRing,
 };
@@ -27,7 +27,7 @@ fn main() {
     }
 }
 
-fn report(gs_name: &str, snap_name: &str, p: &Protocol) {
+fn report(gs_name: &str, snap_name: &str, p: &Cod1Wire) {
     let h = Huffman::new();
 
     let gs_data = vcod_common::testing::fixture(gs_name);

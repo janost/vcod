@@ -465,7 +465,7 @@ pub const BULLET_RANGE: f32 = 8192.0;
 pub const UO_BULLET_RANGE: f32 = 10_000.0;
 
 /// How far a protocol's server traces a bullet.
-pub fn bullet_range(p: &vcod_common::net::protocol::Protocol) -> f32 {
+pub fn bullet_range(p: &vcod_common::net::protocol::Cod1Wire) -> f32 {
     if p.is_uo() {
         UO_BULLET_RANGE
     } else {

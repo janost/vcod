@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::msg::NULL_USERCMD;
-use vcod_common::net::protocol::{PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V22};
 
 const MAP: &str = "mp_berlin";
 const PROBE: &str = "probe_uocull";
@@ -92,7 +92,7 @@ fn retail() -> Run {
 
 fn ours() -> Run {
     let fs = vcod_common::testing::uo_fs().unwrap();
-    let p: &'static Protocol = &PROTOCOL_V22;
+    let p: &'static Cod1Wire = &PROTOCOL_V22;
     let bsp_path = fs.resolve_map(MAP).expect("the map in the UO paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();

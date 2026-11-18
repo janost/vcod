@@ -8959,7 +8959,7 @@ impl ApplicationHandler for App {
 fn bound_key(
     shell: &console::shell::Shell,
     loc: &vcod_common::localize::Localized,
-    p: &net::protocol::Protocol,
+    p: &net::protocol::Cod1Wire,
     cmd: &str,
 ) -> Option<String> {
     hud::bind_commands(p)

@@ -273,7 +273,7 @@ pub fn fixture(rel: &str) -> Vec<u8> {
 
 /// A committed gamestate capture (`--save-fixture`), decoded.
 pub fn fixture_gamestate(
-    p: &crate::net::protocol::Protocol,
+    p: &crate::net::protocol::Cod1Wire,
     gamestate: &str,
 ) -> crate::net::gamestate::Gamestate {
     use crate::net::huffman::Huffman;
@@ -287,7 +287,7 @@ pub fn fixture_gamestate(
 /// format: message number, length, message), decoded against its gamestate
 /// capture, with the server commands between them.
 pub fn fixture_frames(
-    p: &crate::net::protocol::Protocol,
+    p: &crate::net::protocol::Cod1Wire,
     gamestate: &str,
     snapshots: &str,
 ) -> Vec<Frame> {
@@ -363,7 +363,7 @@ pub struct SlopeSnap {
 }
 
 /// Every `!cmd` and `!snap` line of a `--save-slope` capture, in order.
-pub fn parse_slope(p: &crate::net::protocol::Protocol, text: &str) -> Vec<SlopeLine> {
+pub fn parse_slope(p: &crate::net::protocol::Cod1Wire, text: &str) -> Vec<SlopeLine> {
     use crate::net::msg::{NULL_USERCMD, PlayerState, UserCmd};
     let mut out = Vec::new();
     for line in text.lines() {

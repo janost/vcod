@@ -7,7 +7,7 @@
 //! obituary, which is the first of them vcod raised).
 
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_gsc::EntId;
 
 pub use vcod_common::net::events::ET_EVENTS;
@@ -88,7 +88,7 @@ pub struct Quake {
 /// The entity state one temp entity puts on the wire at `number`. The origin
 /// is truncated toward zero, as `G_TempEntity` (0x67938) stores it
 /// (`docs/research/cod11-turrets.md` 8).
-pub fn build(te: &TempEntity, number: u32, p: &Protocol) -> EntityState {
+pub fn build(te: &TempEntity, number: u32, p: &Cod1Wire) -> EntityState {
     let mut e = EntityState::null(p);
     e.number = number;
     let mut set = |name: &str, v: i32| {

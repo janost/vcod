@@ -7,7 +7,7 @@ use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::flags::EF_DEAD;
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use vcod_common::net::trajectory::{TR_GRAVITY, TR_STATIONARY};
 use vcod_common::playerpose::EF_ADS;
 
@@ -126,7 +126,7 @@ impl BodyQueue {
         source: Option<usize>,
         now_ms: i32,
         collision: Option<&CollisionWorld>,
-        p: &Protocol,
+        p: &Cod1Wire,
     ) -> u32 {
         let i = self.next % self.slots.len();
         self.next += 1;
@@ -153,7 +153,7 @@ impl BodyQueue {
         mut state: EntityState,
         now_ms: i32,
         collision: Option<&CollisionWorld>,
-        p: &Protocol,
+        p: &Cod1Wire,
         fresh: Option<(i32, i32)>,
     ) -> u32 {
         let i = self.next % self.slots.len();
@@ -193,7 +193,7 @@ impl BodyQueue {
 
     /// A body's `pos.trBase` under `p`: a CoD4 corpse's `origin`, where
     /// `clonePlayer` put it (`None` for an empty slot).
-    pub fn tr_base(&self, number: u32, p: &Protocol) -> Option<Vec3> {
+    pub fn tr_base(&self, number: u32, p: &Cod1Wire) -> Option<Vec3> {
         let i = number.checked_sub(BODY_FIRST)? as usize;
         let b = self.slots.get(i)?.as_ref()?;
         let mut at = [0.0; 3];
@@ -217,7 +217,7 @@ impl BodyQueue {
         &mut self,
         mut from_sim: impl FnMut(usize) -> Option<EntityState>,
         collision: Option<&CollisionWorld>,
-        p: &Protocol,
+        p: &Cod1Wire,
     ) {
         for (i, slot) in self.slots.iter_mut().enumerate() {
             let Some(body) = slot else { continue };
@@ -245,7 +245,7 @@ impl BodyQueue {
     /// The think `cloneplayer` arms: 250 ms after a body is born its
     /// `eFlags` bit 0x800 goes out (`.so` 0x456DC).
     /// `ScriptRuntime::run_entity_pass` runs it on the body's own number.
-    pub fn run_think(&mut self, number: u32, now_ms: i32, p: &Protocol) {
+    pub fn run_think(&mut self, number: u32, now_ms: i32, p: &Cod1Wire) {
         let Some(index) = EntityState::field_index(p, "eFlags") else {
             return;
         };
@@ -266,7 +266,7 @@ impl BodyQueue {
     }
 
     /// [`BodyQueue::run_think`] for all eight.
-    pub fn run_thinks(&mut self, now_ms: i32, p: &Protocol) {
+    pub fn run_thinks(&mut self, now_ms: i32, p: &Cod1Wire) {
         for i in 0..BODY_QUEUE_SIZE as u32 {
             self.run_think(BODY_FIRST + i, now_ms, p);
         }
@@ -283,7 +283,7 @@ impl BodyQueue {
         }
     }
 
-    /// The live bodies, by entity number. No `Protocol`: a body's fields are
+    /// The live bodies, by entity number. No `Cod1Wire`: a body's fields are
     /// resolved once, at the push.
     pub fn entities(&self) -> impl Iterator<Item = (u32, EntityState)> + '_ {
         self.slots
@@ -308,7 +308,7 @@ fn clone_of(
     toggle: bool,
     now_ms: i32,
     collision: Option<&CollisionWorld>,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> EntityState {
     let mut e = EntityState::null(p);
     e.number = number;
@@ -356,7 +356,7 @@ fn clone_of(
 /// which clips a body against nothing (section 5.3). With no
 /// collision world -- every unit test, and any host built without a map --
 /// the body settles where it fell.
-fn settle(e: &mut EntityState, collision: Option<&CollisionWorld>, p: &Protocol) {
+fn settle(e: &mut EntityState, collision: Option<&CollisionWorld>, p: &Cod1Wire) {
     set_field(e, p, "pos.trType", TR_STATIONARY);
     set_field(e, p, "pos.trTime", 0);
     set_field(e, p, "groundEntityNum", ENTITYNUM_WORLD as i32);
@@ -385,7 +385,7 @@ fn settle(e: &mut EntityState, collision: Option<&CollisionWorld>, p: &Protocol)
     }
 }
 
-fn set_field(e: &mut EntityState, p: &Protocol, name: &str, v: i32) {
+fn set_field(e: &mut EntityState, p: &Cod1Wire, name: &str, v: i32) {
     if let Some(i) = EntityState::field_index(p, name) {
         e.fields[i] = v;
     }
@@ -396,7 +396,7 @@ mod tests {
     use super::*;
     use vcod_common::net::protocol::PROTOCOL_V1;
 
-    fn dying(p: &Protocol, slot: u32) -> EntityState {
+    fn dying(p: &Cod1Wire, slot: u32) -> EntityState {
         let mut e = EntityState::null(p);
         e.number = slot;
         let set = |e: &mut EntityState, n: &str, v: i32| {

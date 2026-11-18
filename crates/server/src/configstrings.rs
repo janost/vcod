@@ -5,7 +5,7 @@
 use crate::server::ServerConfig;
 use vcod_common::net::connectionless::Info;
 use vcod_common::net::protocol::{
-    CS_LEVEL_START_TIME, CS_SERVERINFO, CS_SYSTEMINFO, CsLayout, PROTOCOL_V1, Protocol,
+    CS_LEVEL_START_TIME, CS_SERVERINFO, CS_SYSTEMINFO, Cod1Wire, CsLayout, PROTOCOL_V1,
 };
 use vcod_common::pk3::PakInfo;
 use vcod_common::pmove::FallHeights;
@@ -51,7 +51,7 @@ pub const STATIC_V22: &[(usize, &str)] = &[
 ];
 
 /// The static table a server speaking `p` starts from.
-pub fn static_table(p: &Protocol) -> &'static [(usize, &'static str)] {
+pub fn static_table(p: &Cod1Wire) -> &'static [(usize, &'static str)] {
     if p.is_uo() { STATIC_V22 } else { STATIC }
 }
 
@@ -105,7 +105,7 @@ impl PakLists {
     pub fn of<'a>(
         pure: bool,
         paks: impl IntoIterator<Item = (&'a PakInfo, bool)>,
-        p: &Protocol,
+        p: &Cod1Wire,
         basegame: &str,
     ) -> Self {
         let mut lists = PakLists {
@@ -129,7 +129,7 @@ impl PakLists {
 /// lists every pak, 1.5 a pak a file was read from or one outside `main`,
 /// UO one read from or outside both `main` and `fs_basegame`. Each
 /// directory test is `Q_stricmpn` over the other name's length.
-fn lists_referenced(p: &Protocol, pak: &PakInfo, read: bool, basegame: &str) -> bool {
+fn lists_referenced(p: &Cod1Wire, pak: &PakInfo, read: bool, basegame: &str) -> bool {
     let under = |dir: &str| {
         pak.game
             .get(..dir.len())
@@ -240,7 +240,7 @@ pub fn systeminfo(
         // A stock pak is never downloaded, so its referenced entry is the
         // cheapest to lose; `sv_paks` is what a pure client keeps loaded.
         // 1.5's rows ride a UO table too; its stock paks are either's.
-        let stock: &[&Protocol] = if v6.is_some() {
+        let stock: &[&Cod1Wire] = if v6.is_some() {
             &[
                 &vcod_common::net::protocol::PROTOCOL_V6,
                 &vcod_common::net::protocol::PROTOCOL_V22,
@@ -270,7 +270,7 @@ pub fn static_configstrings(
     cheats: bool,
     paks: &PakLists,
     v6: Option<&[(String, String)]>,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> Vec<String> {
     let mut cs = vec![String::new(); p.transport.max_configstrings];
     let table = static_table(p);
@@ -850,7 +850,7 @@ mod tests {
             (pak("pak0", "main", 4), false),
             (pak("localized_english_pak0", "main", 5), true),
         ];
-        let names = |p: &Protocol, basegame: &str| -> Vec<String> {
+        let names = |p: &Cod1Wire, basegame: &str| -> Vec<String> {
             let lists = PakLists::of(false, paks.iter().map(|(p, r)| (p, *r)), p, basegame);
             lists.referenced.into_iter().map(|(_, n)| n).collect()
         };

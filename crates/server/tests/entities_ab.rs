@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::time::Instant;
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1};
 
 /// Entities stage 5 knowingly does not reproduce, each with the reason. Empty
 /// is the goal, and a listed gap that starts matching fails the guard below,
@@ -266,7 +266,7 @@ struct Key {
     origin: [i32; 3],
 }
 
-fn key(p: &Protocol, e: &EntityState) -> Key {
+fn key(p: &Cod1Wire, e: &EntityState) -> Key {
     let at = |axis: usize| e.field_f32(p, &format!("pos.trBase[{axis}]")).round() as i32;
     Key {
         etype: e.field_i32(p, "eType"),
@@ -275,7 +275,7 @@ fn key(p: &Protocol, e: &EntityState) -> Key {
     }
 }
 
-fn describe(p: &Protocol, num: u32, e: &EntityState) -> String {
+fn describe(p: &Cod1Wire, num: u32, e: &EntityState) -> String {
     let k = key(p, e);
     format!(
         "ent {num} eType {} index {} at [{}, {}, {}]",

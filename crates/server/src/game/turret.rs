@@ -14,7 +14,7 @@ use vcod_common::net::event_ids::{
     EV_STANCE_FORCE_CROUCH, EV_STANCE_FORCE_PRONE, EV_STANCE_FORCE_STAND,
 };
 use vcod_common::net::protocol::ENTITYNUM_NONE;
-use vcod_common::net::protocol::{CsLayout, PROTOCOL_V1, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, CsLayout, PROTOCOL_V1};
 use vcod_common::pmove::Stance;
 use vcod_common::pmove::aim::{angle_normalize_180, angle_subtract};
 use vcod_gsc::EntId;
@@ -247,7 +247,7 @@ impl TurretRecord {
     /// `origin2[0..3]`: the pitch and yaw highs, then the lows, which their
     /// cgame holds the gunner's view inside (turrets doc 14.3). `None` on
     /// 1.1, which sends none, and before the first aim.
-    pub fn wire_arcs(&self, p: &Protocol) -> Option<[f32; 4]> {
+    pub fn wire_arcs(&self, p: &Cod1Wire) -> Option<[f32; 4]> {
         (self.aimed && !p.is_v1()).then_some([
             self.pitch_range[1],
             self.yaw_range[1],
@@ -412,7 +412,7 @@ pub enum AimRule {
 }
 
 impl AimRule {
-    pub fn of(p: &Protocol) -> Self {
+    pub fn of(p: &Cod1Wire) -> Self {
         match p.transport.version {
             v if v == PROTOCOL_V1.transport.version => AimRule::V1,
             v if v == vcod_common::net::protocol::PROTOCOL_V22.transport.version => AimRule::Uo,
