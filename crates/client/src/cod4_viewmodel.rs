@@ -1122,6 +1122,14 @@ pub struct Cod4View {
 }
 
 impl Cod4View {
+    /// A frame the caller does not draw (third person): the models it
+    /// handed over wait for the next drawn frame, as a scope's do.
+    pub fn undrawn(&mut self, out: Cod4ViewFrame) {
+        if let Some(m) = out.frame.and_then(|f| f.models) {
+            self.pending_models = Some(m);
+        }
+    }
+
     /// The drawn main node and its clock, for the replay gate.
     #[cfg(test)]
     pub fn anim(&self) -> Option<(&str, ViewAnim)> {
@@ -1404,6 +1412,31 @@ pub fn tag_to_world(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A third-person frame's new models wait for the first drawn frame,
+    /// as a scope-hidden frame's do (BUG-118).
+    #[test]
+    fn an_undrawn_frames_models_wait_for_the_next_drawn_one() {
+        let models: ViewModels = Arc::from(Vec::new());
+        let out = Cod4ViewFrame {
+            frame: Some(ViewFrame {
+                models: Some(models),
+                draw: crate::renderer::VmDraw {
+                    transform: glam::Mat4::IDENTITY,
+                    light_origin: Vec3::ZERO,
+                    fov_x: 0.0,
+                    bone_sets: Vec::new(),
+                },
+            }),
+            fov: 65.0,
+            tags: WeaponTags::default(),
+            sounds: Vec::new(),
+            gun_dir: None,
+        };
+        let mut v = Cod4View::default();
+        v.undrawn(out);
+        assert!(v.pending_models.is_some());
+    }
 
     /// The sight's fov eases in over the raise's last `adsZoomInFrac`,
     /// out over the drop's last `adsZoomOutFrac`, and floors at
