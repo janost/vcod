@@ -89,8 +89,10 @@ picks through `Server::pin_spawns`, as `gametypes_ab` does.
   the suite on Windows and macOS. A second Linux step runs the client's
   render tests on lavapipe with `VCOD_REQUIRE_GPU=1`: a headless test takes
   its adapter through `renderer::headless::test_adapter`, so one that finds
-  none fails there. The Windows/macOS suite and the lavapipe step are
-  `continue-on-error` until their first green run.
+  none fails there. Lavapipe is installed in that step only: with it present
+  the main suite drew on it too, and the client test binary died once on
+  SIGSEGV. The Windows/macOS suite and the lavapipe step are
+  `continue-on-error`, the lavapipe step until that crash is understood.
 - `nightly.yml` rebuilds the rolling `nightly` release on master pushes that
   touch code (docs, tools and `*.md` are path-ignored). `workflow_dispatch`
   forces one. It runs `ci.yml` first and publishes only a green tip, fails
