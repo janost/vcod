@@ -250,7 +250,12 @@ busy byte and `otherEntityNum` 0, the gun's busy byte 0, its owner 0x3ff,
 mount spot raised 1, its pitch 0, event 140.
 
 The player's free (0x80f910e) releases too. vcod also releases a gun whose
-gunner is gone or respawned off it. INFERRED.
+gunner is gone, and a spawn (`ClientSpawn`, the follow copy's spawn)
+releases the spawned client's gun before it places him, as CoD4's does
+(cod4-gsc.md 9.2), so a gunner put to spectator or intermission lands at
+the spawn's spot. INFERRED. A gun the script frees under its gunner
+(`G_FreeTurret`) queues the release in `GameHost::free_entity`;
+`Cod2Level::turret_end_frame` drains it onto the gunner's playerstate.
 
 ## 9. The gunner's eye
 

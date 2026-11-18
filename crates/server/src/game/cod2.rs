@@ -1144,6 +1144,11 @@ impl Cod2Level {
         _p = crate::tick_profile::phase("frame/spawns");
         for s in self.rt.take_client_spawns() {
             crate::tick_trace::step!("ClientSpawn slot {}", s.slot);
+            // `ClientSpawn` lets a manned gun go before it places the body,
+            // so the release's teleport lands under the spawn's.
+            if let Some(id) = self.manned_gun(s.slot) {
+                self.stop_using_turret(id);
+            }
             let Some(p) = self.players.get_mut(s.slot).and_then(Option::as_mut) else {
                 continue;
             };
@@ -1628,6 +1633,9 @@ impl Cod2Level {
                 None => return,
             },
         };
+        if let Some(id) = self.manned_gun(slot) {
+            self.stop_using_turret(id);
+        }
         let now = self.level_time;
         let p = self.players[slot].as_mut().unwrap();
         p.spectator_client = -1;

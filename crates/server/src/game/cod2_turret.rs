@@ -259,14 +259,25 @@ impl Cod2Level {
     /// gunner `turret_think_client` (0x810bb0a). Runs after the frame's
     /// `pm_flags` 0x800000 is set.
     pub fn turret_end_frame(&mut self) {
-        // A gunner gone or respawned off the gun lets it go (`ClientSpawn`
-        // and the entity's free call `G_ClientStopUsingTurret`, lnxded
-        // 0x80f910e). INFERRED, which of the two vcod's respawn stands for.
+        // A gun the script freed under its gunner (`G_FreeTurret`): the
+        // record half ran in `GameHost::free_entity`.
+        for op in std::mem::take(&mut self.rt.host.turret_ops) {
+            if let crate::game::turret::TurretOp::Release {
+                slot,
+                origin,
+                stance,
+            } = op
+            {
+                self.release_gunner(slot, origin, stance);
+            }
+        }
+        // A gunner gone lets the gun go (the entity's free calls
+        // `G_ClientStopUsingTurret`, lnxded 0x80f910e); a spawn releases
+        // before its placement (`Cod2Level::run_frame`).
         let stale: Vec<EntId> = (self.rt.host.turrets.iter())
             .filter_map(|(id, r)| {
                 let p = self.players.get(r.owner?).and_then(Option::as_ref);
-                p.is_none_or(|p| p.ps.e_flags & ef::TURRET == 0)
-                    .then_some(*id)
+                p.is_none().then_some(*id)
             })
             .collect();
         for id in stale {
@@ -507,6 +518,17 @@ impl Cod2Level {
         if let Some(ent) = self.rt.host.ents.get_mut(id) {
             ent.loop_sound = 0;
         }
+        self.release_gunner(slot, origin, stance);
+    }
+
+    /// `G_ClientStopUsingTurret`'s player half: the stance event,
+    /// `TeleportPlayer` to the mount spot and the lock let go.
+    fn release_gunner(
+        &mut self,
+        slot: usize,
+        origin: [f32; 3],
+        stance: Option<vcod_common::pmove::Stance>,
+    ) {
         let Some(p) = self.players.get_mut(slot).and_then(Option::as_mut) else {
             return;
         };
