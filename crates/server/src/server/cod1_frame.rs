@@ -696,6 +696,7 @@ impl Cod1Module {
             let broadcast: Vec<bool> = (0..clients.len())
                 .map(|slot| rt.in_snapshot_broadcast(slot as u32))
                 .collect();
+            let mut friend_links = vec![None; clients.len()];
             for slot in 0..clients.len() {
                 let Some(sim) = clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
                     continue;
@@ -712,6 +713,7 @@ impl Cod1Module {
                     world.as_ref().map(|w| (&w.vis, fog)),
                     sv_time_ms,
                     proto,
+                    &mut friend_links,
                 );
                 let sim = clients[slot].as_mut().unwrap().sim.as_mut().unwrap();
                 sim.compass_candidate = sessions[slot] == Some(follow::SessionState::Playing)
