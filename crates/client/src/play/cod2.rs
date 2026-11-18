@@ -2556,6 +2556,17 @@ fn ask_keyed<T>(
     auth: Option<&KeyAuth>,
     want: impl Fn(&Reply) -> Option<T>,
 ) -> anyhow::Result<T> {
+    ask_keyed_paced(sock, p, auth, want, Duration::from_secs(1))
+}
+
+/// [`ask_keyed`] with its five sends `wait` apart.
+fn ask_keyed_paced<T>(
+    sock: &UdpSocket,
+    p: &[u8],
+    auth: Option<&KeyAuth>,
+    want: impl Fn(&Reply) -> Option<T>,
+    wait: Duration,
+) -> anyhow::Result<T> {
     let mut buf = vec![0u8; 0x10000];
     let mut awaiting_key = false;
     for _ in 0..5 {
@@ -2563,7 +2574,7 @@ fn ask_keyed<T>(
             a.request();
         }
         sock.send(p)?;
-        let until = Instant::now() + Duration::from_secs(1);
+        let until = Instant::now() + wait;
         while Instant::now() < until {
             let Ok(n) = sock.recv(&mut buf) else {
                 continue;
@@ -3460,10 +3471,17 @@ mod tests {
             server: sock.peer_addr().ok(),
             key,
         };
-        ask_keyed(&sock, &oob::getchallenge(None), Some(&auth), |r| match r {
+        let want = |r: &Reply| match r {
             Reply::Challenge(c) => Some(*c),
             _ => None,
-        })
+        };
+        ask_keyed_paced(
+            &sock,
+            &oob::getchallenge(None),
+            Some(&auth),
+            want,
+            Duration::from_millis(10),
+        )
     }
 
     #[test]
