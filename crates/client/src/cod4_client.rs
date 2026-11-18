@@ -1652,8 +1652,15 @@ impl Cod4Client {
         };
         for &(i, origin, rot) in &scene.dynents {
             let name = &w.dynents[i as usize].model;
-            let model = self.models.get(name).cloned();
-            let Some(handle) = self.upload(cx, name, || model) else {
+            // Checked first: a model clone for an uploaded name is only dropped.
+            let handle = match self.uploaded.get(name) {
+                Some(h) => *h,
+                None => {
+                    let model = self.models.get(name).cloned();
+                    self.upload(cx, name, || model)
+                }
+            };
+            let Some(handle) = handle else {
                 continue;
             };
             out.push(DynamicModelInstance {

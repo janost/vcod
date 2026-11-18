@@ -1626,21 +1626,23 @@ impl Cod4Session {
 
     /// Esc with no script menu up: the server's `g_scriptMainMenu`.
     pub fn open_main_menu(&mut self) {
-        if let Some(gs) = self.gamestate().cloned() {
-            for a in self.menus.open_main(&gs) {
-                self.command(&a);
-            }
+        // The source's gamestate borrowed beside the menus, not cloned.
+        let Some(gs) = &source_client(&self.source).gamestate else {
+            return;
+        };
+        for a in self.menus.open_main(gs) {
+            self.command(&a);
         }
     }
 
     /// A key in the open script menu, its answers sent; false when the
     /// menu does nothing with it (or none is up).
     pub fn menu_key(&mut self, key: crate::play::cod4_menus::MenuKey) -> bool {
-        let Some(gs) = self.gamestate().cloned() else {
+        let Some(gs) = &source_client(&self.source).gamestate else {
             return false;
         };
         let mut out = Vec::new();
-        let taken = self.menus.key(key, &gs, &mut out);
+        let taken = self.menus.key(key, gs, &mut out);
         for a in out {
             self.command(&a);
         }
@@ -1650,13 +1652,13 @@ impl Cod4Session {
     /// The mouse over the open script menu: raw counts `d` or a position
     /// `at` on a `size` window, or (both `None`) MOUSE1; its answers sent.
     pub fn menu_mouse(&mut self, d: Option<[f32; 2]>, at: Option<[f32; 2]>, size: (f32, f32)) {
-        let Some(gs) = self.gamestate().cloned() else {
+        let Some(gs) = &source_client(&self.source).gamestate else {
             return;
         };
         let out = if d.is_none() && at.is_none() {
-            self.menus.click(size, &gs)
+            self.menus.click(size, gs)
         } else {
-            self.menus.mouse_move(d, at, size, &gs)
+            self.menus.mouse_move(d, at, size, gs)
         };
         for a in out {
             self.command(&a);
