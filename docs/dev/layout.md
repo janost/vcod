@@ -112,7 +112,7 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     (`SV_AddServerCommand`); CoD1's is `Client::queue_server_command`.
   - `link.rs` the LAN test, rates, pacing, ping. `archive.rs` the killcam
     ring. `rotation.rs` `map_rotate`'s walk. `challenge.rs` the challenge
-    table. `bans.rs` `ban.txt` and the temporary bans. `gamelog.rs`
+    table. `ratelimit.rs` the query limiter. `bans.rs` `ban.txt` and the temporary bans. `gamelog.rs`
     `games_mp.log`.
 - CoD1: `server.rs` (the frame), `server/cod1_game.rs` (`Cod1Game`),
   `server/cod1_frame.rs`, `spectate.rs` (usercmds in, playerstate out).

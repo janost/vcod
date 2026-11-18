@@ -33,6 +33,8 @@ pub struct EngineCore<C> {
     /// `drain_console` (docs/research/cod11-map-cycle.md section 5.2).
     pub console: VecDeque<String>,
     pub challenges: super::challenge::Challenges,
+    /// The `getinfo`, `getstatus` and `getchallenge` limiter.
+    pub limiter: super::ratelimit::RateLimiter,
     /// `ban.txt` and the stand-ins for the authorize server's list.
     pub bans: super::bans::BanFile,
     /// The temporary bans, stamped on each game's clock (1.5's `tempBan*`
@@ -71,6 +73,7 @@ impl<C> EngineCore<C> {
             clients: (0..max_clients).map(|_| None).collect(),
             console: VecDeque::new(),
             challenges: Default::default(),
+            limiter: Default::default(),
             bans: Default::default(),
             temp_bans: Default::default(),
             masters,

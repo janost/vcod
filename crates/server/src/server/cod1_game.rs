@@ -19,7 +19,6 @@ pub struct Cod1Game {
     /// The game has already disconnected it, so it lives beside `clients`
     /// rather than in it; a slot is free only when both are `None`.
     pub(super) zombies: Vec<Option<Client>>,
-    pub(super) limiter: RateLimiter,
     /// [`Server::pin_stuck_rand`]'s generator.
     pub(super) stuck_rand: Option<vcod_common::rng::GlibcRand>,
     /// The map's collision and spawn, loaded by the binary; tests run

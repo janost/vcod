@@ -194,7 +194,13 @@ impl Cod2Server {
             return;
         };
         let arg = |i: usize| args.get(i).map_or("", String::as_str);
-        match cmd.to_ascii_lowercase().as_str() {
+        let cmd = cmd.to_ascii_lowercase();
+        // vcod's own limiter (`engine::ratelimit`); retail answers every query.
+        if self.core.limiter.limited(&cmd, from.ip(), now) {
+            log::debug!("cod2: {from}: {cmd} rate limited");
+            return;
+        }
+        match cmd.as_str() {
             "getstatus" => {
                 crate::engine::answer_status(self, from, crate::engine::StatusQuery::Status, arg(1))
             }

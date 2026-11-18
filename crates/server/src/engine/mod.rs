@@ -13,6 +13,7 @@ pub mod core;
 pub mod game;
 pub mod gamelog;
 pub mod link;
+pub mod ratelimit;
 pub mod rotation;
 pub mod slot;
 

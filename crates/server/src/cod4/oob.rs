@@ -361,7 +361,13 @@ impl Cod4Server {
             return;
         };
         let arg = |i: usize| args.get(i).map_or("", String::as_str);
-        match cmd.to_ascii_lowercase().as_str() {
+        let cmd = cmd.to_ascii_lowercase();
+        // vcod's own limiter (`engine::ratelimit`); retail answers every query.
+        if self.core.limiter.limited(&cmd, from.ip(), now) {
+            log::debug!("cod4: {from}: {cmd} rate limited");
+            return;
+        }
+        match cmd.as_str() {
             "getstatus" => {
                 crate::engine::answer_status(self, from, crate::engine::StatusQuery::Status, arg(1))
             }
@@ -1352,3 +1358,77 @@ fn unquote(text: &str) -> &str {
 
 /// `PROTOCOL_VERSION`, 6 for 1.6 and 1.7 alike (cod4-handshake.md 3).
 const PROTOCOL: u32 = 6;
+
+#[cfg(test)]
+mod query_tests {
+    use super::*;
+    use crate::cod4::Cod4Config;
+    use crate::engine::ratelimit::{ADDR_BURST, ADDR_PERIOD, GLOBAL_BURST, GLOBAL_PERIOD};
+
+    fn bare() -> Cod4Server {
+        let cfg = Cod4Config {
+            map: "mp_crash".into(),
+            gametype: "war".into(),
+            hostname: "CoD4Host".into(),
+            max_clients: 8,
+        };
+        let mut sv = Cod4Server::new(cfg, 7);
+        sv.load(None).unwrap();
+        sv
+    }
+
+    /// The out-of-band replies `text` from `from` gets.
+    fn ask(sv: &mut Cod4Server, from: SocketAddr, text: &str, now: Instant) -> Vec<String> {
+        let mut pkt = vec![0xff; 4];
+        pkt.extend_from_slice(text.as_bytes());
+        sv.handle_packet(from, &pkt, now);
+        sv.take_outgoing()
+            .into_iter()
+            .filter(|(to, _)| *to == from)
+            .filter_map(|(_, p)| p.strip_prefix(&[0xff; 4][..]).map(<[u8]>::to_vec))
+            .map(|t| String::from_utf8_lossy(&t).into_owned())
+            .collect()
+    }
+
+    /// `engine::ratelimit`: one address's burst of status queries gets the
+    /// address's burst of replies, then one a second; many addresses share
+    /// the global bucket, which does not hold a challenge off.
+    #[test]
+    fn cod4_query_bursts_are_rate_limited() {
+        let mut sv = bare();
+        let now = Instant::now();
+        let a = SocketAddr::from(([198, 51, 100, 2], 5000));
+        let answered: usize = (0..ADDR_BURST + 5)
+            .map(|i| {
+                let q = if i % 2 == 0 {
+                    "getstatus x"
+                } else {
+                    "GETINFO x"
+                };
+                ask(&mut sv, a, q, now).len()
+            })
+            .sum();
+        assert_eq!(answered, ADDR_BURST as usize);
+        assert_eq!(ask(&mut sv, a, "getinfo x", now + ADDR_PERIOD).len(), 1);
+        assert_eq!(ask(&mut sv, a, "getinfo x", now + ADDR_PERIOD).len(), 0);
+
+        let t = now + ADDR_PERIOD * 10;
+        let answered: usize = (0..GLOBAL_BURST + 5)
+            .map(|i| {
+                ask(
+                    &mut sv,
+                    SocketAddr::from(([10, 1, 0, i as u8], 5)),
+                    "getstatus",
+                    t,
+                )
+                .len()
+            })
+            .sum();
+        assert_eq!(answered, GLOBAL_BURST as usize);
+        let joiner = SocketAddr::from(([10, 2, 0, 1], 5));
+        let reply = ask(&mut sv, joiner, "getchallenge 0 \"ab\"", t);
+        assert!(reply[0].starts_with("challengeResponse "), "{reply:?}");
+        let late = SocketAddr::from(([10, 2, 0, 2], 5));
+        assert_eq!(ask(&mut sv, late, "getinfo x", t + GLOBAL_PERIOD).len(), 1);
+    }
+}
