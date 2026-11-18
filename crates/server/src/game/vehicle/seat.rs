@@ -80,6 +80,15 @@ pub enum SeatOp {
     },
 }
 
+impl SeatOp {
+    /// The client whose sim the op changes.
+    pub fn slot(&self) -> usize {
+        match *self {
+            SeatOp::Enter { slot, .. } | SeatOp::Exit { slot, .. } => slot,
+        }
+    }
+}
+
 /// A vehicle model loaded once: its skeleton for the tags and the model
 /// for its collision surfaces.
 pub struct Rig {

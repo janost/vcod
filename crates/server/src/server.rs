@@ -492,9 +492,7 @@ fn followable(clients: &[Option<Client>], slot: usize) -> bool {
 fn apply_seat_ops(clients: &mut [Option<Client>], rt: &mut script::ScriptRuntime) {
     use crate::game::vehicle::seat::SeatOp;
     for op in std::mem::take(&mut rt.host.vehicles.seat_ops) {
-        let slot = match op {
-            SeatOp::Enter { slot, .. } | SeatOp::Exit { slot, .. } => slot,
-        };
+        let slot = op.slot();
         let Some(sim) = clients
             .get_mut(slot)
             .and_then(Option::as_mut)

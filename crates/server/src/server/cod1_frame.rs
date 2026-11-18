@@ -131,7 +131,7 @@ impl Cod1Module {
                             ([0.0; 3], [0.0; 3]),
                         )
                     });
-                    rt.host.vehicles.seat_ops.clear();
+                    rt.host.vehicles.drop_seat_ops(s.slot);
                     sim.leave_seat(None, None);
                 }
                 if s.mode == SpawnMode::Player {
