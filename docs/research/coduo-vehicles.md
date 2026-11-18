@@ -340,7 +340,6 @@ field matches retail but these (VERIFIED, replay):
 
 - `delta_angles` at each `nextvehslot`: the new seat's
   `SetClientViewAngle`, the server's.
-- `origin` and `velocity` on the exit's snapshot: the dismount.
 - `aimSpreadScale` on the first pair, which has no cmd at its
   `commandTime`.
 - Tank: `aimSpreadScale` and `eventSequence` on the main gun's snapshot,
@@ -396,6 +395,11 @@ Two rows the gate once carried are closed:
   release check (`cod11-combat.md` 1.4); ending it in the timer was the
   bug. The seat was incidental: no on-foot capture had a bolt-action shot
   released before its `fireTime` ran out.
+- The tank's `origin.z` and `velocity` on the exit's snapshot (the
+  dismount, `VEH_UnlinkPlayer` setting the body down) match: the replay of
+  2026-11-18 misses neither (VERIFIED, replay). Which change closed them is
+  not traced. The gate now lists each gap by the commandTimes it misses on
+  and fails on a listed row that matches.
 
 With the seat stripped from the playerstate the replay misses
 `delta_angles` on 44 and 230 snapshots, `fWeaponPosFrac` and the driver's

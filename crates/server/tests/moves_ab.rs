@@ -505,7 +505,7 @@ const PRONEMOVE_DEPLOY_CROUCH_UO: &str = "mp_carentan-dm-slope-8ms-pronemove-dep
 /// Fields a capture's replay may miss, with how many snapshots and why.
 /// The 1.5 captures replay under 1.5b's stored arithmetic
 /// (cod15-movement.md 7).
-const GAPS: &[(&str, &str, usize)] = &[];
+const GAPS: &[(&str, &str, &[i32])] = &[];
 
 fn setup() -> Option<(CollisionWorld, Vec<Option<WeaponDef>>)> {
     let fs = vcod_common::testing::game_fs()?;
@@ -557,15 +557,12 @@ fn the_predictor_replays_each_patch_under_its_own_rules() {
             c.file,
             r.compared
         );
-        for (field, misses) in &r.misses {
-            let allowed = GAPS
-                .iter()
-                .find(|(f, name, _)| *f == c.file && name == field)
-                .map_or(0, |g| g.2);
-            if misses.len() > allowed {
-                failures.push(format!("{}: {field} {} wrong", c.file, misses.len()));
-            }
-        }
+        let gaps = gaps_of(GAPS, c.file);
+        failures.extend(
+            over(&r, &gaps)
+                .into_iter()
+                .map(|f| format!("{}: {f}", c.file)),
+        );
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
@@ -667,11 +664,7 @@ fn the_predictor_replays_uo_prone_moves() {
         );
         print(file, &r);
         assert!(r.compared > 400, "{file}: only {} snapshots", r.compared);
-        let gaps: Vec<(&str, usize)> = PRONEMOVE_GAPS
-            .iter()
-            .filter(|(f, _, _)| *f == file)
-            .map(|&(_, name, n)| (name, n))
-            .collect();
+        let gaps = gaps_of(PRONEMOVE_GAPS, file);
         failures.extend(over(&r, &gaps).into_iter().map(|f| format!("{file}: {f}")));
     }
     assert!(failures.is_empty(), "{failures:#?}");
@@ -688,14 +681,30 @@ fn the_predictor_replays_uo_prone_moves() {
 ///   miss and the standing one misses the mirror image. The second deploy
 ///   comes as a turn's cone decays, and the stood body decays it at the
 ///   standing rate: `aimSpreadScale` off with the stance.
-const PRONEMOVE_GAPS: &[(&str, &str, usize)] = &[
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "ducked", 2),
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "stance", 2),
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "viewHeightCurrent", 2),
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "viewHeightLerpTarget", 2),
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "viewHeightLerpTime", 2),
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "viewHeightTarget", 2),
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "aimSpreadScale", 1),
+const PRONEMOVE_GAPS: &[(&str, &str, &[i32])] = &[
+    (PRONEMOVE_DEPLOY_CROUCH_UO, "ducked", &[23490, 39491]),
+    (PRONEMOVE_DEPLOY_CROUCH_UO, "stance", &[23490, 39491]),
+    (
+        PRONEMOVE_DEPLOY_CROUCH_UO,
+        "viewHeightCurrent",
+        &[23490, 39491],
+    ),
+    (
+        PRONEMOVE_DEPLOY_CROUCH_UO,
+        "viewHeightLerpTarget",
+        &[23490, 39491],
+    ),
+    (
+        PRONEMOVE_DEPLOY_CROUCH_UO,
+        "viewHeightLerpTime",
+        &[23490, 39491],
+    ),
+    (
+        PRONEMOVE_DEPLOY_CROUCH_UO,
+        "viewHeightTarget",
+        &[23490, 39491],
+    ),
+    (PRONEMOVE_DEPLOY_CROUCH_UO, "aimSpreadScale", &[39491]),
 ];
 
 /// United Offensive's talk mask (`TALK_UO`), which keeps the sight as
@@ -868,19 +877,8 @@ fn the_predictor_replays_uo_seats() {
         assert!(seated > 400, "{file}: only {seated} seated snapshots");
         let r = replay(&PROTOCOL_V22, MoveRules::Uo, &lines, &world, &weapons);
         print(file, &r);
-        let failures: Vec<String> = r
-            .misses
-            .iter()
-            .filter(|(field, misses)| {
-                let allowed = SEAT_GAPS
-                    .iter()
-                    .find(|(f, name, _)| *f == file && name == *field)
-                    .map_or(0, |g| g.2);
-                misses.len() > allowed
-            })
-            .map(|(field, misses)| format!("{file}: {field} {} wrong", misses.len()))
-            .collect();
-        assert!(failures.is_empty(), "{failures:#?}");
+        let failures = over(&r, &gaps_of(SEAT_GAPS, file));
+        assert!(failures.is_empty(), "{file}: {failures:#?}");
 
         // The same capture with every seat taken off the playerstate must
         // miss the clamps and the sight: that is what shows the seat is
@@ -911,23 +909,19 @@ fn the_predictor_replays_uo_seats() {
 /// - `delta_angles` at each `nextvehslot`: the new seat's
 ///   `SetClientViewAngle` (game 0x8998d). `vehicle_ab` cannot compare it:
 ///   its absolute value rides the replaying client's own cmd angles.
-/// - `origin.z` and `velocity` on the exit's snapshot: `VEH_UnlinkPlayer`
-///   sets the body down at the dismount spot (`vehicle_ab`: origin, velocity).
 /// - On the tank, `aimSpreadScale` and `eventSequence` on the main gun's
 ///   snapshot: the driver's damage feedback from `Scr_Vehicle_Pain`
 ///   (`P_DamageFeedback`: count 44 onto the cone, `EV_PAIN` 100)
 ///   (`vehicle_ab`: `eventSequence`, `damageEvent`, `damageCount`).
 ///
 /// See docs/research/coduo-vehicles.md 7.
-const SEAT_GAPS: &[(&str, &str, usize)] = &[
-    (TANK_SEATS_UO, "delta_angles[0]", 2),
-    (TANK_SEATS_UO, "delta_angles[1]", 2),
-    (TANK_SEATS_UO, "origin.z", 1),
-    (TANK_SEATS_UO, "velocity", 1),
-    (TANK_SEATS_UO, "aimSpreadScale", 1),
-    (TANK_SEATS_UO, "eventSequence", 1),
-    (JEEP_SEATS_UO, "delta_angles[0]", 2),
-    (JEEP_SEATS_UO, "delta_angles[1]", 2),
+const SEAT_GAPS: &[(&str, &str, &[i32])] = &[
+    (TANK_SEATS_UO, "delta_angles[0]", &[33536, 41042]),
+    (TANK_SEATS_UO, "delta_angles[1]", &[33536, 41042]),
+    (TANK_SEATS_UO, "aimSpreadScale", &[32433]),
+    (TANK_SEATS_UO, "eventSequence", &[32433]),
+    (JEEP_SEATS_UO, "delta_angles[0]", &[32241, 39741]),
+    (JEEP_SEATS_UO, "delta_angles[1]", &[32241, 39741]),
 ];
 
 /// What the server makes of a driver's cmd bytes, off the tank capture
@@ -997,18 +991,36 @@ fn uo_setup(text: &str, map: &str) -> Option<(CollisionWorld, Vec<Option<WeaponD
     Some((world, weapons))
 }
 
-/// The fields of `r` past what `gaps` allows them.
-fn over(r: &Report, gaps: &[(&str, usize)]) -> Vec<String> {
-    r.misses
-        .iter()
-        .filter(|(field, misses)| {
-            let allowed = gaps
-                .iter()
-                .find(|(name, _)| name == *field)
-                .map_or(0, |g| g.1);
-            misses.len() > allowed
-        })
-        .map(|(field, misses)| format!("{field} {} wrong", misses.len()))
+/// A gap: a field a replay misses and the commandTimes it misses it on.
+type Gap = (&'static str, &'static [i32]);
+
+/// Where `r` and `gaps` disagree: a miss off the list, or a listed one the
+/// replay no longer misses (drop it from the list).
+fn over(r: &Report, gaps: &[Gap]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (field, misses) in &r.misses {
+        let cts: Vec<i32> = misses
+            .iter()
+            .map(|m| m[3..m.find(':').unwrap()].parse().unwrap())
+            .collect();
+        let listed = gaps.iter().find(|g| g.0 == *field).map_or(&[][..], |g| g.1);
+        if cts != listed {
+            out.push(format!("{field} wrong at ct {cts:?}, listed {listed:?}"));
+        }
+    }
+    for (field, listed) in gaps {
+        if !r.misses.contains_key(field) {
+            out.push(format!("{field} listed at ct {listed:?} matches: drop it"));
+        }
+    }
+    out
+}
+
+/// The gaps `list` holds for the capture `file`, which names its key.
+fn gaps_of(list: &[(&str, &'static str, &'static [i32])], file: &str) -> Vec<Gap> {
+    list.iter()
+        .filter(|(f, _, _)| file.contains(f))
+        .map(|&(_, field, cts)| (field, cts))
         .collect()
 }
 
@@ -1038,11 +1050,7 @@ fn the_predictor_replays_uo_mounts_and_cook() {
         let r = replay(&PROTOCOL_V22, MoveRules::Uo, &lines, &world, &weapons);
         print(file, &r);
         assert!(r.compared > 500, "{file}: only {} snapshots", r.compared);
-        let gaps: Vec<(&str, usize)> = UOFOOT_GAPS
-            .iter()
-            .filter(|(f, _, _)| file.contains(f))
-            .map(|&(_, name, n)| (name, n))
-            .collect();
+        let gaps = gaps_of(UOFOOT_GAPS, file);
         failures.extend(over(&r, &gaps).into_iter().map(|f| format!("{file}: {f}")));
     }
     assert!(failures.is_empty(), "{failures:#?}");
@@ -1055,13 +1063,13 @@ fn the_predictor_replays_uo_mounts_and_cook() {
 ///   `serverCursorHintVal` 0, which the predictor (and, by the same code,
 ///   the retail cgame) reads as a standing mount. The next snapshot puts
 ///   the stance right (coduo-movement.md, 11).
-const UOFOOT_GAPS: &[(&str, &str, usize)] = &[
-    ("mount", "ducked", 2),
-    ("mount", "stance", 2),
-    ("mount", "viewHeightCurrent", 2),
-    ("mount", "viewHeightLerpTarget", 2),
-    ("mount", "viewHeightLerpTime", 2),
-    ("mount", "viewHeightTarget", 2),
+const UOFOOT_GAPS: &[(&str, &str, &[i32])] = &[
+    ("mount", "ducked", &[21042, 36542]),
+    ("mount", "stance", &[21042, 36542]),
+    ("mount", "viewHeightCurrent", &[21042, 36542]),
+    ("mount", "viewHeightLerpTarget", &[21042, 36542]),
+    ("mount", "viewHeightLerpTime", &[21042, 36542]),
+    ("mount", "viewHeightTarget", &[21042, 36542]),
 ];
 
 /// Runs at, along and over mp_carentan's patches (`--probe-patchwalk`,
