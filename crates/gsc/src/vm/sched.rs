@@ -1678,7 +1678,7 @@ later() { wait 0.05; return 9; }"#;
 
     /// A plain (non-threaded) call whose callee suspends on `wait` leaves
     /// the caller's frame mid-call across the suspend: exactly the case
-    /// `Frame::stack_effect_check` (vm.rs, test-only) has to survive rather
+    /// `Frame::stack_effect_check` (vm/interp.rs, test-only) has to survive rather
     /// than lose track of, since the caller and callee frames persist
     /// through separate `step_frames` invocations on either side of the
     /// wait. This would panic on a wrong `stack_effect` entry or a bug in

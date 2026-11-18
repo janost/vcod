@@ -459,7 +459,7 @@ mod tests {
 
     /// A server's team menu: a click on its auto-assign button answers
     /// `scriptMenuResponse` with the menu's own name, what a CoD2 session
-    /// sends as `mr <serverId> <index> autoassign` ([`mr_command`]).
+    /// sends as `mr <serverId> <index> autoassign` (`Cod2Session::menu_response`).
     #[test]
     fn a_script_menu_click_answers_its_response() {
         let Some(fs) = vcod_common::testing::cod2_fs() else {

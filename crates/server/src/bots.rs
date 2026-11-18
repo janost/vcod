@@ -822,7 +822,7 @@ pub struct BasBaseView {
     /// standing bot has such a shot from (`Server::breach_stands`).
     pub stands: Vec<[f32; 3]>,
     /// In a tank's driver's seat: a shell fired now bursts on the base
-    /// (`Server::shell_laid`).
+    /// (`Server::shell_view`).
     pub laid: bool,
 }
 

@@ -42,7 +42,7 @@ pub struct Cod4Map {
     /// materials in `materials`.
     pub models: HashMap<String, vcod_common::model::Model>,
     /// Each of `models`' surfaces' `partBits`, by model name: what an
-    /// entity's `hidePart`s take off it (`Cod4Client::set_parts`).
+    /// entity's `hidePart`s take off it (`Cod4Client::handle`).
     pub parts: Parts,
     /// The weapons asked for: world and projectile model names.
     pub weapons: HashMap<String, WeaponModels>,

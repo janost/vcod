@@ -151,8 +151,8 @@ mod tests {
     }
 
     /// On the four maps that snow, a material's sky surface flag (0x4)
-    /// says what its file's `gameFlags & 8` says, so [`OutdoorMap::of_bsp`]
-    /// reads the bounds off the bsp alone.
+    /// says what its file's `gameFlags & 8` says, so `sky_bounds` reads the
+    /// bounds off the bsp alone.
     #[test]
     fn the_sky_flag_matches_the_material_files_on_the_snow_maps() {
         let Some(fs) = vcod_common::testing::cod2_fs() else {
