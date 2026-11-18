@@ -91,6 +91,7 @@ impl ProfileStats {
     }
 
     /// The file the stats are read from and written to.
+    #[cfg(test)]
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }

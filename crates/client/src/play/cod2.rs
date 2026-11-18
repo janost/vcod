@@ -179,7 +179,7 @@ pub struct Connecting {
 /// one will take.
 enum Handoff {
     Running,
-    Done(anyhow::Result<Cod2Session>),
+    Done(anyhow::Result<Box<Cod2Session>>),
     Abandoned,
 }
 
@@ -299,7 +299,7 @@ impl Connecting {
     pub fn poll(&self) -> Option<anyhow::Result<Cod2Session>> {
         let mut slot = self.handoff.lock().ok()?;
         match std::mem::replace(&mut *slot, Handoff::Running) {
-            Handoff::Done(r) => Some(r),
+            Handoff::Done(r) => Some(r.map(|s| *s)),
             _ if self.job.is_finished() => Some(Err(anyhow::anyhow!("the connect thread ended"))),
             _ => None,
         }
@@ -537,7 +537,7 @@ impl Cod2Session {
             match (&*slot, r) {
                 (Handoff::Abandoned, Ok(mut s)) => s.disconnect(),
                 (Handoff::Abandoned, Err(_)) => {}
-                (_, r) => *slot = Handoff::Done(r),
+                (_, r) => *slot = Handoff::Done(r.map(Box::new)),
             }
         });
         Connecting {
