@@ -1462,90 +1462,14 @@ Same conventions as `cod11-events-and-fx.md`:
 
 ---
 
-## Where the engine differs from the original design
-
-Where the engine departs from the csv legend and Q3/RTCW lineage, with the
-section that holds the evidence.
-
-1. **`dist_max` blank or 0 is `dist_min * 5`** (section 1c), so the default
-   pair is `(120, 600)` and an explicit `0` is replaced after the swap and
-   defaults are applied. The csv legend reads `0` as "no cutoff".
-2. **Falloff is linear in amplitude between `dist_min` and `dist_max`**, a
-   sound farther than `dist_max` at start is never started, and every alias's
-   random volume carries a constant `0.8` factor (section 3).
-3. **`vol_max` and `pitch_max` default to `vol_min` and `pitch_min`** when
-   their cell is blank (section 1c); `1.0` applies only when both cells are
-   blank.
-4. **Channel rules are not Q3's.** Replacement is by (entity, channel) and
-   `auto` never replaces; looping aliases dedupe by (entity, alias name);
-   voice stealing prefers lower channel indices; `menu, local, music,
-   announcer, shellshock` are the only 2D channels (section 2). There is no
-   per-entity channel slot table of the Q3 kind.
-5. **No own-entity special case** (section 5). Sounds from the followed
-   player are 3D sounds at the listener, centred and at full volume on their
-   own. A 2D emitter is right only for aliases whose channel is 2D, the `s`
-   command's included.
-6. **`masterslave` caps slave rows at the csv number while any master plays**
-   (section 4); the level is a float gain cap, not a percentage, and no MP row
-   is a master.
-7. **`null.wav` picks occupy a voice** and count for the replacement rule and
-   the no-repeat rule (section 1f); the pick counter advances even when
-   nothing plays.
-8. **The pick is weighted by `probability`**, and with three or more rows the
-   last-played row is excluded (section 1e). `sequence` orders rows within a
-   name group and has no other effect.
-9. **Alias names match case-insensitively; `loadspec` matches whole words,
-   `!x` and `! x` are equivalent, `all_mp` matches only as the whole cell**
-   (section 1d). Every csv in every pak is merged and none overrides another.
-10. **Footstep aliases** (section 7b): `EV_JUMP_*` plays `step_run_<surf>`,
-    since no jump alias exists; `EV_LANDING_PAIN_*` plays `land_<surf>` plus
-    `land_damage`; every footstep group also plays `gear_rattle_run` (run,
-    jump) or `gear_rattle_walk` (walk, prone) at the entity, ungated by
-    `cg_footsteps`. There is **no `_default` fallback**, the engine's
-    `asphalt` never matches the csv's `asphault`, and **`canvas` is not a
-    surface**, so the 36 `*_canvas` rows are unreachable (section 7a).
-11. **Fire events** (section 8): `loopFireSound` and `stopFireSound` are never
-    used by the MP client; 161 uses `lastShotSound` with a `fireSound`
-    fallback; 169/170 play `fireSound` twice. `EV_EJECT_BRASS` has no alias,
-    only the effect. `ammoPickupSound` is dead; 148 plays the item's pickup
-    alias (section 7d).
-12. **Pain, death, item respawn/pop and teleport have no sound** in the 1.1 MP
-    client (section 7c).
-13. **Grenade and rocket explosions play the per-surface alias and the
-    weapon's `projExplosionSound`** at `ENTITYNUM_WORLD`; bounces play
-    `grenade_bounce_<surf>` only (section 7c).
-14. **`EV_SOUND_ALIAS` plays on the entity at `es.pos.trBase`** and tracks the
-    entity afterwards (section 9). Copies off the `ps` ring (entity `u32::MAX`
-    in vcod) are the followed player's own `playSound`s and belong on that
-    player's entity, not as local 2D sounds.
-15. **Wire path** (section 9): `ambientPlay` is configstring 3
-    (`n\alias\t\time`); `playLocalSound` is the `s <idx>` server command,
-    addressed per client; `playLoopSound` is `es.loopSound`; quick chat is
-    `j`/`k`/`l`. Configstrings 524..779 are `CS_SOUNDS` with index 0 unused.
-    The ambient is not a server command.
-16. **Streamed aliases are positional when their channel is 3D**, with the
-    pan formula of section 3; only the channel decides (section 10).
-17. **Positional sounds started on an entity follow it** (section 3). An
-    entity-keyed emitter is the right shape; a fixed point belongs only to
-    `ENTITYNUM_WORLD` starts.
-18. **Whizby placement and trigger** (section 6). With
-    `u = normalize(impact - start)`, `L = |impact - start|` and
-    `t = (vieworg - start) . u`, the cue fires only when `64 <= t <= L - 64`
-    **and** `|start + t*u - vieworg| <= 140`, and the emitter is
-    `start + (t - 16) * u` (16 units back toward the shooter), as
-    `ENTITYNUM_WORLD` on channel `auto`; not at the closest point itself.
-19. **Pan model.** The engine's own stream pan (section 3) is
-    `pan = (1 - u . left) * 0.5`, with `u` the unit vector from listener to
-    emitter and `left = viewaxis[1]` (0 = full left, 0.5 = centre, 1 = full
-    right, no front/back cue). For Miles 3D samples the engine hands Miles a
-    listener-space position instead and Miles pans (open item 3). The stream
-    formula is the only pan the binary states outright; vcod uses it for every
-    voice.
-
-### vcod divergences from retail
+## vcod divergences from retail
 
 What vcod knowingly does differently, and why.
 
+- **One pan law for every voice.** Retail hands Miles a listener-space
+  position for a 3D sample and lets Miles pan it (section 3, open item 3); only
+  positional streams use the engine's own `(1 - u . axis[1]) * 0.5`. vcod uses
+  that stream formula for every voice.
 - **`null.wav` picks start no voice.** Retail plays the silent file on a real
   voice (section 1f), so it can end a same-channel voice on the same entity.
   vcod advances the pick counter and starts nothing, so a same-channel voice
@@ -1593,17 +1517,14 @@ What vcod knowingly does differently, and why.
 1. **Menu-set `loadspec` default.** `FUN_00433e90("menu", 0)` passes a stack
    slot as the loader's default flag; not pinned whether blank rows load for
    the menu set. Irrelevant to vcod.
-2. **Per-channel volumes.** Closed: the shellshock's mix
-   (`cod11-shellshock.md`, section 4).
+2. Per-channel volumes: section 2 and `cod11-shellshock.md` section 4.
 3. **Miles panning law for 3D samples.** Section 3 gives the position handed
    to Miles; the pan curve inside the Miles 3D software provider is unread.
    The stream pan formula `(1 - u . left) / 2` is the engine's own and the
    safe model for both.
 4. **`ambientStop` client no-op** is inferred from the null-record early return
    in `FUN_0044dc80`; not observed live.
-5. **Quick-chat id to alias table.** Closed: `FUN_3002d390` @ `0x3002d390`
-   walks tables `FUN_30020a00` fills from `mp/*_chat.voice` files, which no
-   stock pak ships, so stock `j`/`k`/`l` play nothing (`cod11-quick-chat.md`).
+5. Quick-chat id to alias table: `cod11-quick-chat.md`.
 6. **`ps.events` to `es.event` copy** for `playSound` on a player entity:
    behaviour confirmed live (capture A, section 9); the server code path,
    assumed to be Q3's `BG_PlayerStateToEntityState`, is unread.
@@ -1611,8 +1532,7 @@ What vcod knowingly does differently, and why.
    10.
 8. **Announcer timer** aliases (`mp_announce_*`) are cgame-clock driven; the
    trigger times were not read.
-9. **`svFlags` bit 8** set by `playSound` is `SVF_BROADCAST`. Closed: "playSound
-   makes the entity broadcast" in section 9.
+9. `svFlags` bit 8: section 9, "playSound makes the entity broadcast".
 10. **Consumer of `eFlags & 0x100`** (section 11c): the hidden-from-host bit
     the listen-server snapshot encoder sets on player entities. Any cgame or
     engine reader is unread; no audio path reads it.
