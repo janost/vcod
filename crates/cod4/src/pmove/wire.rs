@@ -10,21 +10,7 @@ use crate::net::fields::{ENTITY_PLAYER, PLAYER_STATE};
 /// `name`'s word in a table of wire fields, looked up at compile time
 /// through [`ix!`] and [`ex!`]: a name the table lacks fails the build.
 const fn index(table: &[delta::Field], name: &str) -> usize {
-    let mut i = 0;
-    while i < table.len() {
-        let (a, b) = (table[i].name.as_bytes(), name.as_bytes());
-        if a.len() == b.len() {
-            let mut k = 0;
-            while k < a.len() && a[k] == b[k] {
-                k += 1;
-            }
-            if k == a.len() {
-                return table[i].offset as usize / 4;
-            }
-        }
-        i += 1;
-    }
-    panic!("no such field")
+    delta::word_named(table, name)
 }
 
 /// A field's word, or an array field's words (`(3 "origin")` for

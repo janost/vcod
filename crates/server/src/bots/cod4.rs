@@ -315,6 +315,7 @@ impl Cod4Bots {
             fresh.driver.creases = std::mem::take(&mut self.driver.creases);
             fresh.driver.probes = std::mem::take(&mut self.driver.probes);
             fresh.driver.sites = std::mem::take(&mut self.driver.sites);
+            fresh.driver.posts.carry_surveys(&mut self.driver.posts);
             fresh.world = self.world.take();
             fresh.brush_key = std::mem::take(&mut self.brush_key);
             fresh.recheck_brushes = fresh.world.is_some();

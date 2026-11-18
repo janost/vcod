@@ -1208,3 +1208,60 @@ acknowledged message 70 or 71. VERIFIED live.
   `holdrand` (`Cod4Game::hold`), so the gaps differ and the bounds hold;
   `cod4_an_unacking_client_backs_off` checks the bounds, the exponent and
   the reset.
+
+## 13. Counted in instructions
+
+Section 10's and 11's tables are wall time on a shared machine, where two
+runs of one binary part by 15%. `bot_match TICKSTATS=insns` counts each
+phase's user-space instructions instead (`tick_profile::enable_insns`, a
+`perf_event_open` counter per thread): two runs of one binary give the
+same count to three places. vcod's own tick; retail has no counterpart.
+Runs: seed 1, 2400 ticks, `JOBS=1`, `tdm` (CoD4 `war`), 24 bots (CoD4 32),
+8 observers where named. Each pair's `DIGEST=1` line is the same, and
+`NETDIGEST=600` over 1200 ticks too on 1.1 mp_carentan, UO mp_cassino and
+CoD2 mp_toujane. VERIFIED (the runs' logs).
+
+M instructions a tick, mean (tick p50), before and after:
+
+| game, map | phase | before | after |
+|---|---|---|---|
+| 1.1 mp_carentan, 8 observers | `frame` | 12.16 | 3.57 |
+| 1.1 mp_carentan, 8 observers | tick p50 | 35.6 | 26.7 |
+| CoD2 mp_toujane | `archive` | 6.34 | 2.49 |
+| CoD2 mp_toujane | tick p50 | 27.4 | 23.1 |
+| CoD2 mp_toujane, 8 observers | `messages` | 11.66 | 4.61 |
+| CoD2 mp_toujane, 8 observers | `archive` | 6.47 | 1.28 |
+| CoD4 mp_crossfire | `bots/moves` | 37.1 | 31.6 |
+| CoD4 mp_crossfire | tick p50 | 89.6 | 81.3 |
+
+What cost what:
+
+- CoD1: `aim_trace` traced 8192 units through the world for every client
+  each end frame before it looked for a `trigger_lookat`, which most stock
+  maps lack (`frame` 12.16 to 8.85); the compass scan built and relinked
+  an entity for every teammate of every slot (8.85 to 3.57; each
+  teammate's link now built once a frame). VERIFIED (the runs' logs).
+- CoD2: the playerstate, body entity and HUD element words were found by
+  name (`vcod_cod2::field!` now); the archive rebuilt the world the
+  snapshot round had built; each client's cull converted and linked every
+  entity and placed its own viewer per entity. VERIFIED (the runs' logs).
+- CoD4: playerstate words by name (`ps!`), `ent4`'s per-field `String`
+  and table scan, and every leg of every round rebuilding each script
+  model's bounds (`bots/moves` p99 79.8 to 59.0). VERIFIED (the runs'
+  logs).
+- CoD4's killcam history kept 64 inline playerstate slots a frame, present
+  or not, plus a second copy: peak resident 523 to 448 MB at 32 bots.
+  VERIFIED (the runs' `getrusage`).
+- S&D round starts in CoD2 and CoD4 redid every guard-post survey (143 M
+  instructions in one tick on mp_crash); the surveys now outlive a round
+  on the same map. VERIFIED (the runs' logs).
+
+Left, measured and not changed: CoD4's end frame poses every playing body
+for the next frame's tag reads (`posed_bodies`, 7 M of `frame/end frames`'
+9.6 M at 32 bots) and evaluates the death anim choices twice a cmd and
+frame (1.3 M each); CoD1's per-frame configstring copy, systeminfo and
+serverinfo (0.24 M together). VERIFIED (instrumented runs). CoD1's
+snapshot build is not measured here: phases inside the entered client's
+snapshot never ran for `bot_match`'s CoD1 observers, so they take the
+unentered message and no snapshot. INFERRED (the phases that did not
+run).

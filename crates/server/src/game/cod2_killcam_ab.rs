@@ -212,7 +212,11 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str, report: bool) -> Vec<(St
         let live = roster(&mut level);
         let team = level.rt.client_team(0);
         let ours: PlayerState2 = level.wire_playerstate(0, team).unwrap();
-        let (ents, archived) = level.snapshot_entities(&world, 0, &ours);
+        let culled = level.prepare_cull(
+            world.iter().map(|(n, (e, b))| (*n, e, *b)),
+            level.level_time(),
+        );
+        let (ents, archived) = level.snapshot_entities(&culled, 0, &ours);
         let team = level.rt.client_team(1);
         let shooter_ps = level.wire_playerstate(1, team).unwrap();
         level.archive_frame(&world, &live);

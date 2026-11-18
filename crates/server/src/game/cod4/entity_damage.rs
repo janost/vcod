@@ -256,29 +256,20 @@ impl Cod4Level {
                     rot,
                 });
             }
-            // The bounds a blast reads: the base model's surfaces, else
-            // the attachments' placed.
-            let mut corners = Vec::new();
-            let base_only = parts.first().is_some_and(|p| p.model.is_empty());
-            for p in parts.iter().filter(|p| !base_only || p.model.is_empty()) {
-                for s in p.surfs.iter() {
-                    let (lo, hi) = (Vec3::from(s.mins), Vec3::from(s.maxs));
-                    for k in 0..8 {
-                        let c = Vec3::new(
-                            if k & 1 == 0 { lo.x } else { hi.x },
-                            if k & 2 == 0 { lo.y } else { hi.y },
-                            if k & 4 == 0 { lo.z } else { hi.z },
-                        );
-                        corners.push(p.at + p.rot * c);
-                    }
-                }
-            }
-            let Some(&first) = corners.first() else {
+            let key = (
+                model,
+                parts
+                    .iter()
+                    .map(|p| (p.model.clone(), p.tag.clone()))
+                    .collect(),
+            );
+            let bounds = *self
+                .box_bounds
+                .entry(key)
+                .or_insert_with(|| parts_bounds(&parts));
+            let Some((mins, maxs)) = bounds else {
                 continue;
             };
-            let (mins, maxs) = corners
-                .iter()
-                .fold((first, first), |(lo, hi), &c| (lo.min(c), hi.max(c)));
             out.push(DamageBox {
                 id,
                 origin,
@@ -452,6 +443,37 @@ impl Cod4Level {
             missile::LineScore::FirstClear,
         )
     }
+}
+
+/// [`Cod4Level::shot_boxes`]' bounds of a model and its attachments, by
+/// the base model's name and each attachment's model and tag.
+pub(super) type BoxBounds =
+    std::collections::HashMap<(String, Vec<(String, String)>), Option<(Vec3, Vec3)>>;
+
+/// The bounds a blast reads: the base model's surfaces, else the
+/// attachments' placed. `None` for no surface.
+fn parts_bounds(parts: &[ModelPart]) -> Option<(Vec3, Vec3)> {
+    let mut corners = Vec::new();
+    let base_only = parts.first().is_some_and(|p| p.model.is_empty());
+    for p in parts.iter().filter(|p| !base_only || p.model.is_empty()) {
+        for s in p.surfs.iter() {
+            let (lo, hi) = (Vec3::from(s.mins), Vec3::from(s.maxs));
+            for k in 0..8 {
+                let c = Vec3::new(
+                    if k & 1 == 0 { lo.x } else { hi.x },
+                    if k & 2 == 0 { lo.y } else { hi.y },
+                    if k & 4 == 0 { lo.z } else { hi.z },
+                );
+                corners.push(p.at + p.rot * c);
+            }
+        }
+    }
+    let &first = corners.first()?;
+    Some(
+        corners
+            .iter()
+            .fold((first, first), |(lo, hi), &c| (lo.min(c), hi.max(c))),
+    )
 }
 
 #[cfg(test)]

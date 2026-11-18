@@ -337,7 +337,9 @@ only yardstick.
     number to compare on a loaded machine (cod4-server-frame.md 9.1); on
     CoD1 and CoD2 `RESTART=<n>` runs `map_restart` every `n` ticks, a spawn wave
     each (cod4-server-frame.md 9). `TICKSTATS=1` (with `JOBS=1`) prints each
-    phase's mean, p50, p99 and max a tick. `VCOD_BOT_THREADS=1` runs the
+    phase's mean, p50, p99 and max a tick; `TICKSTATS=insns` counts each
+    phase's user-space instructions instead, the number to compare on a
+    loaded machine. `VCOD_BOT_THREADS=1` runs the
     bots' pass serial: its digests match the threaded run's.
 
   It prints kills, deaths, damage, time-to-kill, wins, objective actions,

@@ -1653,6 +1653,10 @@ fn fog_cull_of(p: &Cod1Wire, configstrings: &[String]) -> Option<f32> {
         .flatten()
 }
 
+/// A teammate's link as the compass cull reads it, built once a frame: the
+/// compass pass changes nothing it is built from.
+type FriendLink = (vcod_common::mapworld::LinkClusters, [f32; 3], [f32; 3]);
+
 /// `ClientEndFrame`'s call of `G_GetNonPVSFriendlyInfo` for `slot`
 /// (`crate::compass`): `None` when its session takes no end frame that
 /// makes the call (spectator, intermission), else the packed teammate, its
@@ -1660,6 +1664,7 @@ fn fog_cull_of(p: &Cod1Wire, configstrings: &[String]) -> Option<f32> {
 /// team other than none or spectator; a candidate is a playing client on
 /// it whose entity is not in a snapshot from the viewer's leaned eye.
 /// `broadcast` is [`script::ScriptRuntime::in_snapshot_broadcast`] by slot.
+#[allow(clippy::too_many_arguments)]
 fn compass_friend(
     clients: &[Option<Client>],
     slot: usize,
@@ -1669,6 +1674,7 @@ fn compass_friend(
     cull: Option<(&vcod_common::bsp::Visibility, Option<f32>)>,
     time: i32,
     p: &Cod1Wire,
+    links: &mut [Option<FriendLink>],
 ) -> Option<Option<(i32, u32, bool)>> {
     use follow::SessionState::{Dead, Playing};
     let sim = clients[slot].as_ref()?.sim.as_ref()?;
@@ -1680,6 +1686,7 @@ fn compass_friend(
         return Some(None);
     }
     let eye: [f32; 3] = sim.ps.view().eye.into();
+    let viewer = std::cell::OnceCell::new();
     let mut pinged = false;
     let found = compass::next_friend(sim.last_friend, [eye[0], eye[1]], |n| {
         let c = clients.get(n)?.as_ref()?;
@@ -1696,8 +1703,15 @@ fn compass_friend(
         }
         // No map: nothing to cull against, so everything is in view.
         let (vis, fog) = cull?;
-        let e = other.to_entity(p, n, c.last_processed_st);
-        if crate::world::in_snapshot(vis, eye, &e, broadcast[n], time, p, fog) {
+        if broadcast[n] {
+            return None;
+        }
+        let link = links[n].get_or_insert_with(|| {
+            let e = other.to_entity(p, n, c.last_processed_st);
+            crate::world::entity_link(vis, &e, time, p)
+        });
+        let at = || *viewer.get_or_init(|| crate::world::Viewer::at(vis, eye));
+        if crate::world::link_in_view(vis, at, link, p.is_v1(), fog) {
             return None;
         }
         pinged = other.ping;

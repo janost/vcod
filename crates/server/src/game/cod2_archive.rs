@@ -10,7 +10,6 @@ use std::rc::Rc;
 
 use vcod_cod2::net::delta::{
     ClientState2, HudElem2, MAX_HUDELEMS, MAX_OBJECTIVES, Objective2, PS_FIELDS, PlayerState2,
-    field_index,
 };
 use vcod_cod2::net::fields::{HUDELEM_FIELDS, PLAYER_STATE_FIELDS};
 use vcod_common::net::msg::EntityState;
@@ -164,10 +163,12 @@ impl Cod2Archive {
     }
 }
 
+/// `origin[0..3]`'s playerstate words.
+const ORIGIN: [usize; 3] = vcod_cod2::field!(PLAYER_STATE_FIELDS, 3 "origin");
+
 /// The origin in an archived playerstate.
 pub fn ps_origin(ps: &PlayerState2) -> glam::Vec3 {
-    let f = |n| f32::from_bits(ps.f[field_index(&PLAYER_STATE_FIELDS, n)]);
-    glam::Vec3::new(f("origin[0]"), f("origin[1]"), f("origin[2]"))
+    glam::Vec3::from_array(ORIGIN.map(|i| f32::from_bits(ps.f[i])))
 }
 
 /// `SV_GetClientPositionAtTime` (lnxded 0x8099dac): where a client stood
@@ -249,34 +250,37 @@ impl Rewind {
 
 /// The playerstate times a replay moves forward when non-zero
 /// (`ps+0x0`, `+0x10`, `+0x44`, `+0x70`, `+0xfc`, `+0x5dc`).
-const PS_TIMES: [&str; 6] = [
-    "commandTime",
-    "pm_time",
-    "foliageSoundTime",
-    "jumpTime",
-    "viewHeightLerpTime",
-    "shellshockTime",
+const PS_TIMES: [usize; 6] = [
+    vcod_cod2::field!(PLAYER_STATE_FIELDS, "commandTime"),
+    vcod_cod2::field!(PLAYER_STATE_FIELDS, "pm_time"),
+    vcod_cod2::field!(PLAYER_STATE_FIELDS, "foliageSoundTime"),
+    vcod_cod2::field!(PLAYER_STATE_FIELDS, "jumpTime"),
+    vcod_cod2::field!(PLAYER_STATE_FIELDS, "viewHeightLerpTime"),
+    vcod_cod2::field!(PLAYER_STATE_FIELDS, "shellshockTime"),
 ];
 
 /// The archived HUD half's times (`+0x28`, `+0x48`, `+0x60`, `+0x68` of
 /// each element at `ps+0x1728`).
-const HUD_TIMES: [&str; 4] = ["fadeStartTime", "scaleStartTime", "moveStartTime", "time"];
+const HUD_TIMES: [usize; 4] = [
+    vcod_cod2::field!(HUDELEM_FIELDS, "fadeStartTime"),
+    vcod_cod2::field!(HUDELEM_FIELDS, "scaleStartTime"),
+    vcod_cod2::field!(HUDELEM_FIELDS, "moveStartTime"),
+    vcod_cod2::field!(HUDELEM_FIELDS, "time"),
+];
 
 /// 0x195a06's shift: `shift` added to each non-zero time, `deltaTime`
 /// whatever it held, and a fade start past `now` held at `now`. VERIFIED.
 pub fn shift_ps(ps: &mut PlayerState2, shift: i32, now: i32) {
-    for n in PS_TIMES {
-        let i = field_index(&PLAYER_STATE_FIELDS, n);
+    for i in PS_TIMES {
         if ps.f[i] != 0 {
             ps.f[i] = ps.f[i].wrapping_add(shift as u32);
         }
     }
-    let i = field_index(&PLAYER_STATE_FIELDS, "deltaTime");
+    let i = vcod_cod2::field!(PLAYER_STATE_FIELDS, "deltaTime");
     ps.f[i] = ps.f[i].wrapping_add(shift as u32);
-    let fade = field_index(&HUDELEM_FIELDS, "fadeStartTime");
+    let fade = HUD_TIMES[0];
     for h in &mut ps.hud_archival {
-        for n in HUD_TIMES {
-            let i = field_index(&HUDELEM_FIELDS, n);
+        for i in HUD_TIMES {
             if h[i] != 0 {
                 h[i] = h[i].wrapping_add(shift as u32);
             }
@@ -291,8 +295,13 @@ pub fn shift_ps(ps: &mut PlayerState2, shift: i32, now: i32) {
 /// `pos.trTime`, `apos.trTime`, `time`, `time2` (`+0x10`, `+0x34`,
 /// `+0x54`, `+0x58`, Mac 0x195f84). VERIFIED.
 pub fn shift_entity(e: &mut vcod_cod2::net::EntityState2, shift: i32) {
-    for n in ["pos.trTime", "apos.trTime", "time", "time2"] {
-        let i = vcod_cod2::net::delta::field_index(&vcod_cod2::net::fields::ENTITY_STATE_FIELDS, n);
+    use vcod_cod2::net::fields::ENTITY_STATE_FIELDS;
+    for i in [
+        vcod_cod2::field!(ENTITY_STATE_FIELDS, "pos.trTime"),
+        vcod_cod2::field!(ENTITY_STATE_FIELDS, "apos.trTime"),
+        vcod_cod2::field!(ENTITY_STATE_FIELDS, "time"),
+        vcod_cod2::field!(ENTITY_STATE_FIELDS, "time2"),
+    ] {
         if e.f[i] != 0 {
             e.f[i] = e.f[i].wrapping_add(shift as u32);
         }
@@ -302,6 +311,7 @@ pub fn shift_entity(e: &mut vcod_cod2::net::EntityState2, shift: i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_cod2::net::delta::field_index;
 
     fn ps(command_time: u32) -> PlayerState2 {
         let mut ps = PlayerState2::default();

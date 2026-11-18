@@ -192,6 +192,19 @@ pub fn in_snapshot(
 pub fn link_in_snapshot(
     vis: &mapworld::Visibility,
     eye: [f32; 3],
+    link: &(mapworld::LinkClusters, [f32; 3], [f32; 3]),
+    v1: bool,
+    fog: Option<f32>,
+) -> bool {
+    link_in_view(vis, || Viewer::at(vis, eye), link, v1, fog)
+}
+
+/// [`link_in_snapshot`] with the viewer from `viewer`, which runs only when
+/// the link has a cluster to test, so a caller testing many links from one
+/// eye can place it once.
+pub fn link_in_view(
+    vis: &mapworld::Visibility,
+    viewer: impl FnOnce() -> Viewer,
     (link, lo, hi): &(mapworld::LinkClusters, [f32; 3], [f32; 3]),
     v1: bool,
     fog: Option<f32>,
@@ -200,7 +213,8 @@ pub fn link_in_snapshot(
     if v1 && link.clusters.is_empty() {
         return true;
     }
-    let v = Viewer::at(vis, eye);
+    let v = viewer();
+    let eye = v.eye;
     link.in_area(v.area)
         && !link.clusters.is_empty()
         && vis.link_visible(v.cluster, link)
@@ -209,7 +223,7 @@ pub fn link_in_snapshot(
 
 /// The clusters an entity's link box leaves it with, and that box
 /// (`r.absmin`, `r.absmax`).
-fn entity_link(
+pub fn entity_link(
     vis: &mapworld::Visibility,
     e: &EntityState,
     time: i32,

@@ -466,6 +466,7 @@ impl Cod2Bots {
             fresh.driver.creases = std::mem::take(&mut self.driver.creases);
             fresh.driver.sites = std::mem::take(&mut self.driver.sites);
             fresh.driver.radios = std::mem::take(&mut self.driver.radios);
+            fresh.driver.posts.carry_surveys(&mut self.driver.posts);
         }
         fresh.driver.bots = std::mem::take(&mut self.driver.bots);
         for bot in fresh.driver.bots.values_mut() {

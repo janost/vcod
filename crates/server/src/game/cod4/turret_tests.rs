@@ -8,7 +8,7 @@ use glam::Vec3;
 use vcod_cod4::net::clmsg::UserCmd;
 use vcod_gsc::{EntId, Host};
 
-use super::level::{Cod4Level, PsExt};
+use super::level::{Cod4Level, PsExt, ps};
 use crate::cod4::{Cod4Config, Cod4Game, Cod4Server};
 use crate::engine::GameModule;
 
@@ -113,9 +113,9 @@ impl Run {
     fn hint(&mut self, slot: usize) -> (u32, u32, u32) {
         let p = self.level().players[slot].as_ref().unwrap();
         (
-            p.ps.word("cursorHint"),
-            p.ps.word("cursorHintString"),
-            p.ps.word("cursorHintEntIndex"),
+            p.ps.word(ps!("cursorHint")),
+            p.ps.word(ps!("cursorHintString")),
+            p.ps.word(ps!("cursorHintEntIndex")),
         )
     }
 
@@ -156,8 +156,8 @@ impl Run {
             rec.mount_origin,
         );
         let p = level.players[slot].as_ref().unwrap();
-        let w = |k: &str| p.ps.word(k);
-        let f = |k: &str| f32::from_bits(p.ps.word(k));
+        let w = |k: &str| p.ps.word(super::level::ps_word(k));
+        let f = |k: &str| f32::from_bits(p.ps.word(super::level::ps_word(k)));
         format!(
             "{rec}; active {} eFlags {:#x} pm_flags {:#x} viewlocked {} {} \
              clamp {:?} {:?} {:?} {:?} origin {:?} {:?} {:?} view {:?} hint {:?}",
@@ -222,7 +222,7 @@ fn the_saw_mounts_at_its_arc_limits_and_lets_go_on_death() {
         let rec = &level.rt.host.turrets[&gun];
         let (firing, cooldown, lp) = (rec.firing, rec.cooldown_ms, rec.loop_left_ms);
         let p = level.players[slot].as_ref().unwrap();
-        let locked = p.ps.word("viewlocked");
+        let locked = p.ps.word(ps!("viewlocked"));
         let down = p.trigger_down;
         let shots = level.combat_shots().len();
         fire.push((firing, cooldown, lp, locked, down, shots));
