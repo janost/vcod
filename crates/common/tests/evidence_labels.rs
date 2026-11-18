@@ -2,10 +2,11 @@
 //! checked for the two shapes a grep can see.
 //!
 //! `docs/research/README.md` asks for one label per claim: VERIFIED for what was read out
-//! of a binary, an asset or a capture, INFERRED for anything read off control
-//! flow, which includes instruction sequencing and branch conditions. Five
-//! review rounds across four implementers went on enforcing that by reading,
-//! so the two blunt shapes are enforced here instead:
+//! of a binary, an asset or a capture, a branch condition or instruction order
+//! read at a named address range included; INFERRED for a function's identity,
+//! intent, flow read without addresses, and another game's or engine's source
+//! shape. Five review rounds across four implementers went on enforcing labels
+//! by reading, so the two blunt shapes are enforced here instead:
 //!
 //! - a per-section blanket, spelled `VERIFIED throughout`, which the rule
 //!   forbids outright: a section is a mix of claims and a blanket covers the
@@ -18,10 +19,10 @@
 //!
 //! **What it cannot catch**, and a reader still has to:
 //!
-//! - a correctly-split pair of sentences with the split in the wrong place: a
-//!   VERIFIED half that still narrates sequencing ("followed by", "then") or a
-//!   branch condition ("gated on that field being non-null"). Several CoD4
-//!   and UO docs still carry it, and no grep finds it;
+//! - a VERIFIED claim that narrates sequencing ("followed by", "then") or a
+//!   branch condition ("gated on that field being non-null") with no address
+//!   range behind it, or that rests on another game's source shape. A grep
+//!   cannot tell it from the same sentence read at a cited range;
 //! - a claim carrying no label at all;
 //! - a blanket in a section heading (`## 16. ..., VERIFIED`). The rule
 //!   forbids it the same as any other per-section blanket, and nine section

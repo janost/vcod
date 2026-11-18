@@ -6,8 +6,10 @@ Verified engine facts, with the binary addresses, assets and captures they rest 
 
 Every claim names the module, the virtual address and the string or table it rests on, and carries its own label:
 
-- VERIFIED: read out of a binary, an asset or a live capture.
-- INFERRED: read off control flow, which includes instruction order and branch conditions ("then", "followed by", "when that field is non-null").
+- VERIFIED: read out of a binary, an asset or a live capture. A branch condition or an instruction order ("then", "followed by", "when that field is non-null") read at a named address range in the binary counts: cite it as "VERIFIED (the instructions)" with the addresses.
+- INFERRED: a function's identity, its intent, flow read without addresses, and anything taken from another game's or engine's source shape (the Q3 lineage, a sibling game's binary).
+
+A doc may keep a stricter rule and label all control flow INFERRED (`cod4-server-frame.md`, `cod4-voice.md`, `cod4-netfields.md`, the CoD2 docs, and each doc whose header says so). A stricter label is not a defect; a VERIFIED branch or order with no address behind it is.
 
 One label per claim. A document may open with a document-level VERIFIED default only when its provenance is uniform and every exception is labelled. A section-level blanket, including one in a heading, is never allowed. Docs carry derived facts (offsets, tables, enum orders), never pasted decompiler output. `crates/common/tests/evidence_labels.rs` catches two mechanical shapes; its header lists what a reader still has to check.
 
