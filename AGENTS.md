@@ -122,7 +122,8 @@ cargo deny check   # after a dependency change
   ones and whatever reads only data the two share. Which helper a test takes
   (`game_fs_11`, `uo_fs`, `stock_fs`) and which gates need which install:
   `docs/dev/testing.md`.
-- `ci.yml` runs on ubuntu with no game data. A new test needing paks returns
+- `ci.yml` runs on ubuntu with no game data, and the test suite again on
+  windows and macOS. A new test needing paks returns
   early through `game_fs()` or uses `Pk3Fs::empty()`: no pak test and no A/B
   gate runs in CI, only on a machine with an install. A headless render test
   takes its adapter through `renderer::headless::test_adapter`: CI draws on
