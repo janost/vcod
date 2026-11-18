@@ -111,13 +111,8 @@ impl Cod4Server {
             c.extra.stats = vcod_cod4::net::stats::Stats::fresh();
             c.extra.stat_packets = ALL_STATS;
         }
-        if let Some(r) = self
-            .game
-            .level
-            .as_mut()
-            .and_then(|l| l.rt.host.client_roster[slot].as_mut())
-        {
-            r.bot = true;
+        if let Some(l) = self.game.level.as_mut() {
+            l.mark_bot(slot);
         }
         let seed = self.rand() as u64;
         let skill = self.skill_cvar();
@@ -829,6 +824,36 @@ mod tests {
         assert_eq!(spawned.len(), 2, "spawned {spawned:?}");
         let aborts = sv.game.level.as_mut().unwrap().rt.aborts();
         assert!(aborts.is_empty(), "script errors:\n{}", aborts.join("\n"));
+    }
+
+    /// The roster's bot flag, which keeps a bot out of `numVotingClients`,
+    /// survives `fast_restart` and a map change (BUG-042: each level's
+    /// `ClientConnect` cleared it).
+    #[test]
+    fn cod4_bots_stay_marked_across_restarts_and_map_changes() {
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let mut sv = Cod4Server::new(
+            super::super::Cod4Config {
+                map: "mp_crash".into(),
+                gametype: "war".into(),
+                hostname: "bots".into(),
+                max_clients: 8,
+            },
+            5,
+        );
+        sv.load(Some(&install)).unwrap();
+        let slots = sv.add_bots(2, false);
+        let marked = |sv: &Cod4Server| {
+            let roster = &sv.game.level.as_ref().unwrap().rt.host.client_roster;
+            slots.iter().all(|&s| roster[s].is_some_and(|r| r.bot))
+        };
+        assert!(marked(&sv));
+        sv.map_restart(true).unwrap();
+        assert!(marked(&sv), "after fast_restart");
+        sv.spawn_server("mp_crash").unwrap();
+        assert!(marked(&sv), "after the map change");
     }
 
     /// Four shooting bots on mp_crash `war` for 100 s: every one comes

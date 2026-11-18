@@ -464,6 +464,15 @@ impl Cod4Level {
         }
     }
 
+    /// Marks `slot` as one of vcod's own bots (`--bots`, `addbot`), which
+    /// `numVotingClients` leaves out (`game::vote`). A fresh level's
+    /// [`Self::connect`] clears it, so each level change marks again.
+    pub fn mark_bot(&mut self, slot: usize) {
+        if let Some(r) = self.rt.host.client_roster[slot].as_mut() {
+            r.bot = true;
+        }
+    }
+
     /// `ClientConnect` (`SV_DirectConnect` runs it): the slot's state
     /// cleared, the client's entity and `CodeCallback_PlayerConnect` on the
     /// next frame's packet pass, a spectator floating at `spot` until the
