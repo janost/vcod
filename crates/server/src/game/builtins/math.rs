@@ -31,7 +31,8 @@ fn vec_len(v: [f32; 3]) -> f32 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
 }
 
-/// `distance(a, b)`: the straight-line distance between two points.
+/// `distance(a, b)`: the straight-line distance between two points, in
+/// f32. Unverified against retail: no handler address or probe.
 pub fn distance(
     _host: &mut GameHost,
     _cx: &mut Cx,
@@ -45,7 +46,8 @@ pub fn distance(
     Ok(Value::Float(vec_len(d)))
 }
 
-/// `length(v)`: the vector's own magnitude.
+/// `length(v)`: the vector's own magnitude, in f32. Unverified against
+/// retail: no handler address or probe.
 pub fn length(
     _host: &mut GameHost,
     _cx: &mut Cx,
@@ -58,10 +60,9 @@ pub fn length(
     Ok(Value::Float(vec_len(*v)))
 }
 
-/// `vectorNormalize(v)`: a unit vector in the same direction. A zero-length
-/// input returns `(0,0,0)` rather than dividing by zero, the Q3/RTCW
-/// lineage's `VectorNormalize` convention; not measured against retail, no
-/// probe covers a zero-length `vectorNormalize` call yet.
+/// `vectorNormalize(v)`: a unit vector in the same direction, `(0,0,0)` for
+/// a zero-length input. vcod's choice, unverified against retail: no
+/// handler address or probe.
 pub fn vector_normalize(
     _host: &mut GameHost,
     _cx: &mut Cx,
@@ -177,8 +178,9 @@ pub(crate) fn vectoyaw(v: [f32; 3]) -> f64 {
     }
 }
 
-/// `anglesToForward(angles)`: `AngleVectors`'s forward half, same lineage as
-/// `vectorToAngles` above and its inverse on a unit vector.
+/// `anglesToForward(angles)`: an `AngleVectors` forward in plain f32, the
+/// inverse of `vectorToAngles` on a unit vector. Unverified against retail:
+/// no handler address, and not the x87 port `vcod_common::x87::angle_vectors`.
 pub fn angles_to_forward(
     _host: &mut GameHost,
     _cx: &mut Cx,
@@ -193,8 +195,8 @@ pub fn angles_to_forward(
     Ok(Value::Vector([cp * cy, cp * sy, -sp]))
 }
 
-/// `anglesToRight(angles)` and `anglesToUp(angles)`: `AngleVectors`' right
-/// and up.
+/// `anglesToRight(angles)` and `anglesToUp(angles)`: an `AngleVectors` right
+/// and up in plain f32, unverified as [`angles_to_forward`] is.
 fn angle_vectors(args: &[Value]) -> Result<[[f32; 3]; 3], ErrorKind> {
     let Some(Value::Vector(a)) = args.first() else {
         return Err(ErrorKind::BadType("anglesTo* takes an angles vector"));
