@@ -1886,13 +1886,17 @@ const CLIP_MATERIALS: [&str; 5] = [
     "ammo_counter_beltbullet",
 ];
 
+/// vcod's bound on the clip graphic's rounds, far above any stock clip: a
+/// mod's weapon file names the count (cod4-hud.md 9).
+const MAX_CLIP_ROUNDS: usize = 1000;
+
 /// The clip graphic's rounds (cod4-hud.md 9), the first nearest the
 /// item's corner `base`: each of a `size` clip of `kind` as a real-pixel
 /// rect `[x, y, w, h]`. The sizes are physical pixels, not the 640x480
-/// grid's.
+/// grid's. A clip past [`MAX_CLIP_ROUNDS`] draws that many.
 fn clip_rounds(kind: i32, size: i32, base: [f32; 2]) -> Vec<[f32; 4]> {
     let [bx, by] = base;
-    let count = size.max(0) as usize;
+    let count = (size.max(0) as usize).min(MAX_CLIP_ROUNDS);
     // Kinds 1..=4 run leftward, centred on the corner's height:
     // (width, height, pitch from one round's left to the next).
     let row = match kind {
@@ -4648,6 +4652,9 @@ pub(crate) mod tests {
         assert!(clip_rounds(0, 4, [0.0, 0.0]).is_empty());
         assert!(clip_rounds(1, 0, [10.0, 10.0]).is_empty());
         assert!(clip_rounds(3, -2, [10.0, 10.0]).is_empty());
+        for kind in [1, 5] {
+            assert_eq!(clip_rounds(kind, i32::MAX, [0.0; 2]).len(), MAX_CLIP_ROUNDS);
+        }
         let base = [612.5, 431.25];
         assert_eq!(
             clip_rounds(2, 2, base),
