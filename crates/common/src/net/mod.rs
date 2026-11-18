@@ -873,7 +873,8 @@ impl<T: Transport> NetClient<T> {
         }
         self.netchan.reliable_sequence += 1;
         let slot = self.netchan.reliable_sequence as usize & (self.netchan.reliable.len() - 1);
-        self.netchan.reliable[slot] = cmd.to_string();
+        // The copy the server reads, which keys its scramble of our messages.
+        self.netchan.reliable[slot] = codec::wire_string(cmd).into_owned();
         if !["team ", "score ", "mr "]
             .iter()
             .any(|x| cmd.starts_with(x))
@@ -1828,12 +1829,15 @@ impl<T: Transport> NetClient<T> {
         }
         if !cmds.is_empty() {
             let key = self.usercmd_key(message_ack, reliable_ack);
-            // clc_moveNoDelta sets our deltaMessage to -1 and every snapshot back
-            // is a full keyframe; once we hold a snapshot, clc_move lets the server
-            // delta-compress. Keyframes on a populated server fragment and drop.
-            // A recording waits on a full frame (CoDMP.exe 0x40bc5a).
+            // clc_moveNoDelta sets our deltaMessage to -1 and the next snapshot
+            // back is a full keyframe; clc_move lets the server delta from the
+            // message we ack. That message has to hold a valid frame: one that
+            // failed to parse or lacked its base would be every later frame's
+            // base. A recording waits on a full frame too (CoDMP.exe
+            // 0x40bc44..0x40bc6f, cod11-demos.md 4).
             let waiting = self.recording.as_ref().is_some_and(|r| r.waiting);
-            let clc = if self.snapshots.newest().is_some() && !waiting {
+            let acked_valid = self.snapshots.get(self.netchan.incoming_sequence).is_some();
+            let clc = if acked_valid && !waiting {
                 CLC_MOVE
             } else {
                 CLC_MOVE_NO_DELTA

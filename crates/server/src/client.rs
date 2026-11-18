@@ -6,6 +6,7 @@ use crate::spectate::ClientSim;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::time::Instant;
+use vcod_common::net::codec::client_read_string;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::netchan::{ClientMessage, MAX_RELIABLE_COMMANDS, ServerNetchan};
 use vcod_common::net::snapshot::Snapshot;
@@ -150,6 +151,9 @@ pub struct Client {
     /// Each ring slot's [`CmdKind`], beside `netchan.reliable`.
     pub reliable_kind: [CmdKind; MAX_RELIABLE_COMMANDS],
     pub message_ack: i32,
+    /// `deltaMessage`: the acked message the next snapshot deltas from, set
+    /// by each move op, -1 after a `clc_moveNoDelta` or a gamestate.
+    pub delta_message: i32,
     /// The serverTime of the last usercmd the sim consumed; cmd-to-cmd
     /// deltas drive the pmove dt, retail-style.
     pub last_processed_st: i32,
@@ -210,6 +214,7 @@ impl Client {
             zombie: false,
             reliable_kind: [CmdKind::CanIgnore; MAX_RELIABLE_COMMANDS],
             message_ack: 0,
+            delta_message: -1,
             last_processed_st: 0,
             last_usercmd_st: 0,
             pending: Vec::new(),
@@ -295,6 +300,8 @@ impl Client {
     /// queue").
     pub fn queue_server_command(&mut self, cmd: &str) -> Queued {
         const RING: i32 = MAX_RELIABLE_COMMANDS as i32;
+        // The ring keys the client's messages, so it holds the client's copy.
+        let cmd: &str = &client_read_string(cmd);
         let kind = CmdKind::of(cmd);
         if self.is_bot && kind == CmdKind::CanIgnore {
             return Queued::Dropped;
