@@ -10,11 +10,11 @@ use vcod_common::net::event_ids::{
 use vcod_common::pmove::aim::GunKick;
 use vcod_common::weapon::WeaponDef;
 
-/// `pm_flags` 0x40000: the playerstate is the client's own view.
-pub const PMF_OWN_VIEW: i32 = 0x40000;
-/// `pm_flags` 0x40000 or 0x10000 (a follow): the view rides that body, and
-/// its shots kick (`0x30038bbf`).
-pub const PMF_VIEW_BODY: i32 = 0x50000;
+use vcod_common::net::flags::PMF_FOLLOW;
+pub use vcod_common::net::flags::PMF_OWN_VIEW;
+/// `pm_flags` own view or a follow: the view rides that body, and its shots
+/// kick (`0x30038bbf`).
+pub const PMF_VIEW_BODY: i32 = PMF_OWN_VIEW | PMF_FOLLOW;
 
 /// `CG_KickAngles`' clamp on each axis, degrees (`0x30069350`).
 const KICK_MAX: f32 = 10.0;

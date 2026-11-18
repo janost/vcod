@@ -80,7 +80,7 @@ impl ViewPs {
             lean: f("leanf"),
             ammoclip: ps.arrays.ammoclip,
             pm_type: ps.field_i32(p, "pm_type"),
-            mounted: ps.field_i32(p, "eFlags") & 0xc000 != 0,
+            mounted: ps.field_i32(p, "eFlags") & vcod_common::net::flags::EF_MOUNTED != 0,
             pm_flags: ps.field_i32(p, "pm_flags"),
             eye: Vec3::new(
                 f("origin[0]"),

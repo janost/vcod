@@ -1,6 +1,7 @@
 //! `--net-probe`, the headless spectate client. Lives in the client crate
 //! because cue resolution needs the audio alias tables.
 
+use net::flags::{ET_TURRET, PM_DEAD};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 use vcod_common::net::trajectory::Trajectory;
@@ -7312,7 +7313,9 @@ impl SlopeStats {
             let gained = ((seq - prev) & 0xff).min(4);
             for i in (seq - gained)..seq {
                 let slot = (i & 3) as usize;
-                if ev_v1(snap.ps.field_i32(p, &format!("events[{slot}]"))) == 143 {
+                if ev_v1(snap.ps.field_i32(p, &format!("events[{slot}]")))
+                    == net::event_ids::EV_STEP_VIEW
+                {
                     parms.push(snap.ps.field_i32(p, &format!("eventParms[{slot}]")) - 128);
                 }
             }
@@ -7478,7 +7481,7 @@ impl SlopeCapture {
                     ev_v1(i(&format!("events[{slot}]"))),
                     i(&format!("eventParms[{slot}]")),
                 );
-                if ev == 143 {
+                if ev == net::event_ids::EV_STEP_VIEW {
                     steps.push((parm - 128).to_string());
                 }
                 events.push(format!("{ev}:{parm}"));
@@ -10029,9 +10032,6 @@ impl SdProbe {
 /// (`docs/research/cod11-gsc-object-model.md`, the objective record).
 const SD_STATE_CURRENT: i32 = 4;
 
-/// `pmove_t`'s dead state, the one a killed player sits at.
-const PM_DEAD: i32 = 6;
-
 /// The pair's fixture: the header, the notes and one `[phase <name>]` block
 /// per phase, each holding its cmds interleaved with its traces by server time.
 fn write_sd_fixture(
@@ -10883,7 +10883,6 @@ const TURRET_FIRE_YAW: f32 = 30.0;
 const TURRET_FIRE_PITCH: f32 = 10.0;
 const TURRET_PITCH_EDGE: f32 = 60.0;
 const TURRET_YAW_EDGE: f32 = 90.0;
-const ET_TURRET: i32 = 11;
 /// The strafe stops once the bearing off the gun's "behind" direction passes
 /// this, clear of the stock gun's 45-degree arc...
 const TURRET_REFUSE_BEARING: f32 = 50.0;
@@ -11751,7 +11750,6 @@ const BUMP_TARGET_SCHEDULE: [(Duration, BumpStance); 4] = [
 ];
 /// The target starts its schedule without a walker after this.
 const BUMP_TARGET_WAIT: Duration = Duration::from_secs(120);
-const GROUND_NONE: i32 = 1023;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BumpStance {
@@ -11786,11 +11784,11 @@ impl BumpStance {
         }
     }
 
-    /// From `pm_flags`: 0x1 prone, 0x2 ducked.
+    /// From `pm_flags`: prone, else ducked.
     fn of_pm_flags(f: i32) -> Self {
-        if f & 1 != 0 {
+        if f & net::flags::PMF_PRONE != 0 {
             BumpStance::Prone
-        } else if f & 2 != 0 {
+        } else if f & net::flags::PMF_DUCKED != 0 {
             BumpStance::Crouch
         } else {
             BumpStance::Stand
@@ -12105,7 +12103,7 @@ impl FallProbe {
         // a fall moves only the origin, so print the first airborne frames too
         key.push(i("commandTime") * (key[0] == net::protocol::ENTITYNUM_NONE as i32) as i32);
         // and a corpse's slide, which moves nothing else either
-        if i("pm_type") == 6 {
+        if i("pm_type") == PM_DEAD {
             key.extend([i("origin[0]"), i("origin[1]"), i("origin[2]")]);
         }
         // and a prone body's bend, printed once it is non-zero
@@ -12113,7 +12111,7 @@ impl FallProbe {
         key.extend(bend);
         // and the prone heading, which 1.1's flat body never shows otherwise
         let heading = i("proneDirection");
-        let prone = i("pm_flags") & 1 != 0;
+        let prone = i("pm_flags") & net::flags::PMF_PRONE != 0;
         key.push(heading * prone as i32);
         // and the body's clips, which a prone turn changes without a move
         let anims = [i("legsAnim"), i("torsoAnim")];
@@ -12852,7 +12850,7 @@ impl CompassProbe {
         let players: Vec<String> = snap
             .entities
             .iter()
-            .filter(|(_, e)| e.field_i32(p, "eType") == 1)
+            .filter(|(_, e)| e.field_i32(p, "eType") == net::flags::ET_PLAYER)
             .map(|(n, e)| {
                 let t = Trajectory::read(e, p, "pos");
                 format!(
@@ -13000,8 +12998,9 @@ origin={:.3},{:.3},{:.3}",
         }
         self.present = Some(snap.entities.keys().copied().collect());
         for (&num, ent) in &snap.entities {
-            // 8 a script mover, 5 a `func_bobbing` or `func_pendulum`.
-            if !matches!(ent.field_i32(p, "eType"), 5 | 8) {
+            // A script mover, or a `func_bobbing` or `func_pendulum`.
+            let et = ent.field_i32(p, "eType");
+            if et != net::flags::ET_SCRIPTMOVER && et != net::flags::ET_MOVER {
                 continue;
             }
             let key = [
@@ -13104,7 +13103,7 @@ impl KillcamProbe {
         let ms = self.ms(now);
         let i = |n: &str| s.ps.field_i32(p, n);
         let (client_num, pm_type, pm_flags) = (i("clientNum"), i("pm_type"), i("pm_flags"));
-        let following = pm_flags & 0x10000 != 0;
+        let following = pm_flags & net::flags::PMF_FOLLOW != 0;
         let alive = pm_type == PM_NORMAL && client_num == me && !following;
 
         if alive {
@@ -13331,7 +13330,10 @@ impl BumpTarget {
         let i = |n: &str| snap.ps.field_i32(p, n);
         let f = |n: &str| snap.ps.field_f32(p, n);
         let moving = f("velocity[0]").hypot(f("velocity[1]")) > 1.0;
-        if moving || i("pm_time") != 0 || i("pm_flags") & 0x100 != 0 {
+        if moving
+            || i("pm_time") != 0
+            || i("pm_flags") & vcod_common::pmove::PMF_TIME_KNOCKBACK != 0
+        {
             println!(
                 "BUMPT: !snap msg={} t={} ct={} origin={},{},{} vel={},{},{} ground={} pm_flags={} pm_time={}",
                 snap.message_num,
@@ -13755,7 +13757,7 @@ impl BumpProbe {
             ));
         }
         if self.phase == BumpPhase::Jump {
-            if self.ground == GROUND_NONE {
+            if self.ground == net::protocol::ENTITYNUM_NONE as i32 {
                 self.airborne = true;
             } else if self.airborne {
                 self.landed = true;

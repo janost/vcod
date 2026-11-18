@@ -232,8 +232,6 @@ pub struct Assembly {
     pub skeleton: Rc<Skeleton>,
     /// The skeleton's clip bindings, kept from pose to pose.
     pub binds: vcod_common::skeleton::BindCache,
-    #[allow(dead_code)] // handles.len() is what the draw path uses
-    pub model_count: usize,
 }
 
 /// Loaded+uploaded player parts by xmodel name, shared across assemblies.
@@ -441,7 +439,6 @@ fn finalize_assembly(pending: PendingAssembly) -> Option<Rc<Assembly>> {
     handles.extend(parts.iter().map(|(_, _, h)| *h));
 
     Some(Rc::new(Assembly {
-        model_count: handles.len(),
         handles,
         skeleton,
         binds: Default::default(),
@@ -719,11 +716,6 @@ impl EntityScene {
         resolve_model(&mut self.model_cache, renderer, fs, name)
     }
 
-    /// `name` on entity `num` as drawn this frame, in the world: the
-    /// entity's drawn origin and rotation times the bone's posed frame,
-    /// what `PlayEffect`'s bolt reads (CoDMP.exe 0x49e8d0,
-    /// docs/research/efx-grammar.md R10). `None` for an entity not drawn
-    /// with an xmodel this frame or a model without the tag.
     /// Entity `num`'s drawn origin this frame, the `lerpOrigin` CoD1's
     /// `CG_PlayFxOnTag` hands syscall 0xe5 beside the bolt (cgame
     /// 0x3001db80), which `cullrange` measures from.
@@ -731,6 +723,11 @@ impl EntityScene {
         self.drawn.get(&num).map(|d| d.pos)
     }
 
+    /// `name` on entity `num` as drawn this frame, in the world: the
+    /// entity's drawn origin and rotation times the bone's posed frame,
+    /// what `PlayEffect`'s bolt reads (CoDMP.exe 0x49e8d0,
+    /// docs/research/efx-grammar.md R10). `None` for an entity not drawn
+    /// with an xmodel this frame or a model without the tag.
     pub fn tag_pose(&mut self, fs: &dyn AssetSource, num: u32, name: &str) -> Option<TagPose> {
         let d = self.drawn.get(&num)?.clone();
         let (lp, lr) = match &d.rig {
@@ -2945,7 +2942,6 @@ mod tests {
             handles: Vec::new(),
             skeleton: skel.clone(),
             binds: Default::default(),
-            model_count: 0,
         });
         let wire = anims.wire_of("pb_stand_alert").unwrap();
         let mut e = EntityState::null(p);

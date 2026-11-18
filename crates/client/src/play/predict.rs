@@ -24,8 +24,7 @@ const ERROR_DECAY_MS: f64 = 100.0;
 const MISS_EPSILON: f32 = 0.1;
 /// A correction longer than this is drawn at once.
 const SNAP_DISTANCE: f32 = 256.0;
-/// `eFlags` capsule bit; the client clips only capsule entities.
-const EF_CAPSULE: i32 = 0x10;
+use vcod_common::net::flags::EF_CAPSULE;
 use vcod_common::net::flags::ET_ITEM;
 use vcod_common::net::flags::ET_PLAYER;
 /// A brush submodel's `solid`; `SnapshotMovers` clips those.

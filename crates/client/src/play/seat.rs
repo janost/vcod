@@ -328,7 +328,7 @@ pub fn own_body(
     p: &vcod_common::net::protocol::Protocol,
     ps: &vcod_common::net::msg::PlayerState,
 ) -> vcod_common::net::msg::EntityState {
-    use vcod_common::net::flags::{EF_DEAD, ET_PLAYER};
+    use vcod_common::net::flags::{EF_DEAD, ET_PLAYER, PM_DEAD};
     use vcod_common::net::msg::EntityState;
     use vcod_common::net::trajectory::TR_INTERPOLATE;
     let int = |n: &str| ps.field_i32(p, n);
@@ -341,7 +341,11 @@ pub fn own_body(
     };
     set("eType", ET_PLAYER);
     set("clientNum", int("clientNum"));
-    let dead = if int("pm_type") >= 6 { EF_DEAD } else { 0 };
+    let dead = if int("pm_type") >= PM_DEAD {
+        EF_DEAD
+    } else {
+        0
+    };
     set("eFlags", int("eFlags") & !EF_DEAD | dead);
     set("pos.trType", TR_INTERPOLATE);
     set("apos.trType", TR_INTERPOLATE);

@@ -3,8 +3,6 @@
 
 pub mod centerprint;
 pub mod chat;
-// Nothing feeds it yet: CoD2 runs fly mode only, with no server to send hudelems.
-#[allow(dead_code)]
 pub mod cod2elem;
 pub mod font;
 pub mod friends;
@@ -403,6 +401,12 @@ impl Hud {
         self.game_messages.push_kill(line, (f.now * 1000.0) as i32);
     }
 
+    /// The shellshock's time left at this frame's clock, which scales the
+    /// view weapon's turn sway ([`crate::play::shock::sway_scale`]).
+    pub fn set_shock_left(&mut self, ms: i32) {
+        self.player.gun.shock_left_ms = ms;
+    }
+
     /// Steps the gun's aim once for this frame, as `0x300371f0` does before
     /// the 2D pass: the view weapon draws off the result and the scope
     /// overlay centres on it (combat doc 17.4). `gun_kick` is this frame's
@@ -410,12 +414,6 @@ impl Hud {
     /// dead (`cg.renderingThirdPerson`, `[0x30207158]`, set at `0x30033d39`
     /// for a snapshot pm_type of 6 or more) or on a mounted gun
     /// (`0x30037210`-`0x30037274`).
-    /// The shellshock's time left at this frame's clock, which scales the
-    /// view weapon's turn sway ([`crate::play::shock::sway_scale`]).
-    pub fn set_shock_left(&mut self, ms: i32) {
-        self.player.gun.shock_left_ms = ms;
-    }
-
     pub fn step_gun(
         &mut self,
         p: &Protocol,

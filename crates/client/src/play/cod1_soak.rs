@@ -18,6 +18,7 @@ use std::io::Write as _;
 use glam::Vec3;
 
 use super::input::{Action, PlayInput};
+use vcod_common::net::flags::{PM_DEAD, PM_NORMAL_LINKED};
 use vcod_common::net::msg::PlayerState;
 use vcod_common::net::protocol::Protocol;
 
@@ -61,10 +62,6 @@ pub struct Soak {
     asks: Vec<Ask>,
     audio_misses: u64,
 }
-
-/// pmove's `pm_type`s the soak reads (CoD1's numbering).
-const PM_NORMAL_LINKED: i32 = 1;
-const PM_DEAD: i32 = 6;
 
 impl Soak {
     /// The soak when `VCOD_SOAK` names a file it can create.

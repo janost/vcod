@@ -4,7 +4,7 @@
 //! server's `WeaponTable` and the client's predictor both index through
 //! [`assign_indices`].
 
-use crate::pk3::Pk3Fs;
+use crate::asset_source::AssetSource;
 use crate::pmove::weapon::NUM_AMMO;
 use crate::weapon::WeaponDef;
 
@@ -45,7 +45,7 @@ pub fn static_item(
 /// Index 0 `None`, then one entry per space-separated configstring 7 name in
 /// wire order, indexed by [`assign_indices`]. A file that fails to load
 /// leaves its slot `None`.
-pub fn from_configstring(fs: &Pk3Fs, cs7: &str) -> Vec<Option<WeaponDef>> {
+pub fn from_configstring(fs: &dyn AssetSource, cs7: &str) -> Vec<Option<WeaponDef>> {
     let mut defs: Vec<Option<WeaponDef>> = std::iter::once(None)
         .chain(cs7.split(' ').map(|name| {
             crate::weapon::load(fs, name)

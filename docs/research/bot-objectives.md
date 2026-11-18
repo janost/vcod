@@ -2679,8 +2679,8 @@ What held the bots of 12.3 back, each read off a traced `bot_match` run
   so the two hit counts do not compare. On both games the view follows
   the brain's aim to within 0.003 degrees (median), and every weapon of
   the five classes, the frag and the offhands, takes a brain number.
-  INFERRED (the brain's `PONYRI_DBG` lines and the feed's weapon list,
-  mp_crash seed 1).
+  INFERRED (the brain's `RUST_LOG=vcod_server::bots::engage=trace` lines
+  and the feed's weapon list, mp_crash seed 1).
 - CoD4's `positionWouldTelefrag` now sees a body spawned this frame: 1.7
   writes `pm_type` in `ClientSpawn` and reads alive as below `PM_DEAD`
   (7). It moved no number here (the `sd` overlaps were followers).

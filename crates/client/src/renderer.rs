@@ -3790,6 +3790,8 @@ pub struct Renderer {
     /// Global fog from configstring 12; the F3 `fog:` line.
     fog: FogState,
     hud_quad_cap_warned: bool,
+    /// The fx quad and stage-draw caps warn once, not every frame.
+    fx_cap_warned: bool,
     /// `vc_shadows`; built when it turns on, dropped when it turns off.
     shadows: Option<shadows::ShadowPass>,
     /// CoD2's shadow cookies, drawn on a CoD2 map while `sc_enable` is set.
@@ -4435,6 +4437,7 @@ impl Renderer {
             water_time: 0.0,
             dlight_quality: true,
             hud_quad_cap_warned: false,
+            fx_cap_warned: false,
             shadows: None,
             cookies,
             dyn_shadows,
@@ -4853,7 +4856,7 @@ impl Renderer {
 
         laps.lap("prop skins");
         let count = |p: fn(Pass) -> bool| batch_draws.iter().filter(|d| p(d.pass)).count();
-        println!(
+        log::info!(
             "{} batches ({} opaque, {} prop, {} layer, {} overlay), {} draw indices, {} vertices",
             batch_draws.len(),
             count(|p| matches!(p, Pass::Opaque | Pass::Solid)),
@@ -4863,7 +4866,7 @@ impl Renderer {
             indices.len(),
             vertices.len()
         );
-        println!(
+        log::info!(
             "{} textures loaded, {} missing, {} lightmap pages",
             loaded,
             fallbacks,
@@ -5015,7 +5018,7 @@ impl Renderer {
                 );
             }
         }
-        println!(
+        log::info!(
             "stage params: {} slots x {STAGE_PARAMS_SIZE} B (stride {stage_params_stride})",
             stage_slots.len()
         );
@@ -5326,13 +5329,13 @@ impl Renderer {
                 stage: AnimFrames::static_(implicit_stage_bg.groups[0].clone()),
             });
         }
-        println!(
+        log::info!(
             "dlight pass: {} stage draws over {} batches",
             dlight_batches.len(),
             dlights_of_batch.iter().filter(|d| !d.is_empty()).count()
         );
         self.shader_dropped = dropped_stages;
-        println!(
+        log::info!(
             "shader scripts: {} stage batches, {} dropped stages, {} lib warnings",
             stage_batches.len(),
             dropped_stages,
@@ -5926,10 +5929,12 @@ impl Renderer {
         // build_quads is capped by construction; the vertex buffer is sized
         // exactly, so truncate anyway.
         let quads = if quads.len() > MAX_FX_QUADS {
-            log::warn!(
-                "fx: {} quads exceeds the {MAX_FX_QUADS} cap, truncating",
-                quads.len()
-            );
+            if !std::mem::replace(&mut self.fx_cap_warned, true) {
+                log::warn!(
+                    "fx: {} quads exceeds the {MAX_FX_QUADS} cap, truncating",
+                    quads.len()
+                );
+            }
             &quads[..MAX_FX_QUADS]
         } else {
             &quads[..]
@@ -5971,7 +5976,11 @@ impl Renderer {
             let sh = self.shader_lib.get(name);
             for draw in fx_stage_draws(sh, name, time) {
                 if verts.len() / 4 + group.len() > MAX_FX_DRAWN {
-                    log::warn!("fx: stage draws exceed the {MAX_FX_DRAWN} quad cap, truncating");
+                    if !std::mem::replace(&mut self.fx_cap_warned, true) {
+                        log::warn!(
+                            "fx: stage draws exceed the {MAX_FX_DRAWN} quad cap, truncating"
+                        );
+                    }
                     break 'runs;
                 }
                 if !self.fx.textures.contains_key(draw.image) {
