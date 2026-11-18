@@ -14,7 +14,7 @@ pub const NO_LIGHTMAP: u16 = 65535;
 #[derive(Debug, Clone)]
 pub struct Material {
     pub name: String,
-    /// Unused; surfaces are skipped by material name.
+    /// `SURF_*` bits; the client's impact marks read `SURF_NOMARKS`.
     #[allow(dead_code)]
     pub surface_flags: u32,
     pub content_flags: u32,
