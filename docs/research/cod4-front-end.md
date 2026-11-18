@@ -359,8 +359,8 @@ editor picked).
   cod4-fastfile.md 13). `fs_game` is the session's only: vcod does not
   write it to a config. `mods_menu`'s Launch Without Mods row is visible
   only under a mod. VERIFIED (the walk, its `visible when`).
-- A server's systeminfo `fs_game` that is rooted, names a drive or holds a
-  `..` component names no directory for vcod's demos or the profile's
+- A server's systeminfo `fs_game` that is rooted, names a drive or holds
+  `..` names no directory for vcod's demos or the profile's
   stats; they go where they would with none.
 
 ## 7. Joins, games and errors

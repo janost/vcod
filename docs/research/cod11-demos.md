@@ -53,7 +53,7 @@ the player's mod directory, else under the base directory its config sits
 in, and reads from the same list. Its `demo` plays all three: a bare name
 takes the first of `.dm_1`, `.dm_2`, `.dm_3` that exists, and the number
 picks the protocol the file is parsed under. A `record` or `demo` name
-that is rooted, names a drive or holds a `..` component reaches no file:
+that is rooted, names a drive or holds `..` reaches no file:
 `record` prints `ERROR: couldn't open.`, `demo` finds nothing. vcod's
 CoD2 and CoD4 `record` and `demo` refuse the same.
 
@@ -532,7 +532,7 @@ the same in all three unless a bullet says otherwise. vcod:
 - INFERRED (Q3's `FS_WriteFile`): the path is under `fs_homepath` and the
   game folder, the mod's under `fs_game`. vcod writes
   `<install>/<fs_game or main or uo>/screenshots/`. A shot's or a save
-  game's name that is rooted, names a drive or holds a `..` component
+  game's name that is rooted, names a drive or holds `..`
   writes nothing and prints the lines a failed write prints.
 
 ### 10.3 Format
