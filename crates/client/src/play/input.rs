@@ -11,8 +11,7 @@ use vcod_common::text::atoi_msvc;
 use vcod_common::weapon::WeaponDef;
 
 /// `eFlags` bits the server writes for a crouched/prone player
-/// (`crates/server/src/spectate.rs`, `to_wire`), the inverse the caller reads
-/// to build [`Held::stance`] from a playerstate.
+/// (`crates/server/src/spectate.rs`, `to_wire`).
 pub use vcod_common::net::flags::{EF_CROUCH, EF_PRONE};
 
 /// ANGLE2SHORT units per degree.
@@ -322,32 +321,17 @@ pub fn held_stance(down: &HashSet<Action>) -> Option<Stance> {
     }
 }
 
-impl Stance {
-    /// The inverse of `spectate.rs`'s `to_wire` write of [`EF_CROUCH`] /
-    /// [`EF_PRONE`], for the caller building [`Held`] from a playerstate.
-    pub fn from_eflags(e_flags: i32) -> Stance {
-        if e_flags & EF_PRONE != 0 {
-            Stance::Prone
-        } else if e_flags & EF_CROUCH != 0 {
-            Stance::Crouch
-        } else {
-            Stance::Stand
-        }
-    }
-}
-
 /// The bit of the newest playerstate a cmd and the weapon selection read:
 /// the weapon held, the eight weapon slots (`weaponslots[0]`/`weaponslots[4]`
 /// unpacked little-endian, the inverse of
-/// `vcod_common::pmove::weapon::pack_slots`), the stance
-/// ([`Stance::from_eflags`]), what is carried and loaded, and whose view and
-/// spawn it is. The default (nothing held, standing, no view) stands in
-/// before the first snapshot.
+/// `vcod_common::pmove::weapon::pack_slots`), what is carried and loaded,
+/// and whose view and spawn it is. Not the stance: `cl_stance` never reads
+/// the playerstate's. The default (nothing held, no view) stands in before
+/// the first snapshot.
 #[derive(Clone, Default)]
 pub struct Held {
     pub weapon: u8,
     pub slots: [u8; 8],
-    pub stance: Stance,
     /// `ps.weapons`: bit `n` while weapon `n` is carried, two words on 1.1
     /// and 1.5 and four on UO, whose `BG_PlayerHasWeapon` (uo cgame
     /// 0x30047370) tests bit `n & 31` of word `n >> 5` for up to 128.
@@ -418,7 +402,6 @@ impl Held {
         Held {
             weapon: ps.field_i32(p, "weapon") as u8,
             slots,
-            stance: Stance::from_eflags(ps.field_i32(p, "eFlags")),
             owned,
             loaded,
             alt,
@@ -1136,7 +1119,6 @@ mod tests {
         Held {
             weapon,
             slots: [0, 10, 0, 3, 6, 0, 0, 0],
-            stance: Stance::Stand,
             owned,
             loaded: owned,
             alt,
@@ -1200,6 +1182,20 @@ mod tests {
         let view = |k: usize| ((c.angles[k] + delta[k]) as i16) as f32 * 360.0 / 65536.0;
         assert!((view(0) + 10.0).abs() < 0.01, "{}", view(0));
         assert!((view(1) - 45.0).abs() < 0.01, "{}", view(1));
+    }
+
+    /// `held(10)`'s spawn off a playerstate whose `eFlags` show the body
+    /// crouched.
+    fn crouched_echo() -> Held {
+        let p = &vcod_common::net::protocol::PROTOCOL_V1;
+        let mut ps = PlayerState::null(p);
+        ps.fields[PlayerState::field_index(p, "eFlags").unwrap()] = EF_CROUCH;
+        Held {
+            weapon: 10,
+            own_view: true,
+            spawn: Some((0, 1)),
+            ..Held::from_ps(&ps, p, &[])
+        }
     }
 
     /// `held(weapon)` already seen, so binds resolve against it.
@@ -1731,10 +1727,7 @@ mod tests {
         );
         assert_eq!(c.up, -127);
         // The server's crouch while held is not taken as the kept stance.
-        let crouched = Held {
-            stance: Stance::Crouch,
-            ..held(10)
-        };
+        let crouched = crouched_echo();
         assert_eq!(i.build(108, &crouched).up, -127);
         i.key(Action::MoveDown, false);
         let c = i.build(116, &crouched);
@@ -2133,10 +2126,7 @@ mod tests {
         press(&mut i, Action::ToggleCrouch);
         assert_eq!(i.build(108, &held(10)).wbuttons & msg::WBUTTON_CROUCH, 0);
         // The first press's echo: the server has the body crouched.
-        let crouched = Held {
-            stance: Stance::Crouch,
-            ..held(10)
-        };
+        let crouched = crouched_echo();
         for t in [116, 124, 132] {
             assert_eq!(i.build(t, &crouched).wbuttons & msg::WBUTTON_CROUCH, 0);
         }
@@ -2226,7 +2216,6 @@ mod tests {
         let h = Held::from_ps(&ps, p, &weapons);
         assert_eq!(h.weapon, 10);
         assert_eq!(h.slots, [0, 10, 0, 3, 6, 0, 0, 7]);
-        assert_eq!(h.stance, Stance::Prone);
         assert_eq!(h.owned, 1 << 3 | 1 << 10 | 1 << 32);
         assert_eq!(h.loaded, 1 << 3);
         assert_eq!((h.alt_of(10), h.count()), (3, 10));
@@ -2271,12 +2260,5 @@ mod tests {
         let c = i.build(100, &held(10));
         assert_eq!((c.forward, c.buttons), (0, 0));
         assert_ne!(c.wbuttons & msg::WBUTTON_CROUCH, 0);
-    }
-
-    #[test]
-    fn stance_from_eflags_round_trips() {
-        assert_eq!(Stance::from_eflags(0), Stance::Stand);
-        assert_eq!(Stance::from_eflags(EF_CROUCH), Stance::Crouch);
-        assert_eq!(Stance::from_eflags(EF_PRONE), Stance::Prone);
     }
 }
