@@ -54,7 +54,8 @@ pub fn walk<R: BufRead>(mut zone: Zone<R>, opts: WalkOptions) -> Result<Walked> 
     let entries = zone.assets.clone();
     let strings = zone.script_strings.clone();
     let vpos = zone.virtual_pos();
-    let mut w = W::new(zone.stream(), opts, vpos);
+    let limit = zone.header.block_size;
+    let mut w = W::new(zone.stream(), opts, vpos, limit);
     w.out.script_strings = strings;
     // The asset array sits at the end of the list in the virtual block;
     // each header slot is an alias later tokens may name.
@@ -90,6 +91,15 @@ pub fn walk<R: BufRead>(mut zone: Zone<R>, opts: WalkOptions) -> Result<Walked> 
 /// A packed `block << 28 | offset` address, as offset tokens carry them.
 pub fn addr(block: Block, offset: u32) -> u32 {
     (block as u32) << 28 | offset
+}
+
+/// The byte size of `parts` multiplied (an element size and the counts a
+/// zone gives), refused when it overflows.
+pub fn product(parts: &[usize]) -> Result<usize> {
+    parts
+        .iter()
+        .try_fold(1usize, |a, &b| a.checked_mul(b))
+        .with_context(|| format!("array size {parts:?} overflows"))
 }
 
 /// Little-endian u16s.
@@ -181,6 +191,8 @@ pub struct W<'z, R: BufRead> {
     s: &'z mut ZoneStream<R>,
     pos: [u32; BLOCK_COUNT],
     peak: [u32; BLOCK_COUNT],
+    /// The `XFile`'s `blockSize`: no block's position passes its own.
+    limit: [u32; BLOCK_COUNT],
     stack: Vec<Frame>,
     opts: WalkOptions,
     /// Pointer slots (and alias slots) holding an asset, by address:
@@ -206,7 +218,12 @@ pub struct W<'z, R: BufRead> {
 }
 
 impl<'z, R: BufRead> W<'z, R> {
-    fn new(s: &'z mut ZoneStream<R>, opts: WalkOptions, virtual_pos: u32) -> Self {
+    fn new(
+        s: &'z mut ZoneStream<R>,
+        opts: WalkOptions,
+        virtual_pos: u32,
+        limit: [u32; BLOCK_COUNT],
+    ) -> Self {
         // DB_InitStreams starts every block at 0; the list itself went to
         // a static, not the temp block.
         let mut pos = [0; BLOCK_COUNT];
@@ -215,6 +232,7 @@ impl<'z, R: BufRead> W<'z, R> {
             s,
             pos,
             peak: pos,
+            limit,
             stack: Vec::new(),
             opts,
             slots: HashMap::new(),
@@ -265,27 +283,34 @@ impl<'z, R: BufRead> W<'z, R> {
         Ok(addr(b, self.pos[b as usize]))
     }
 
+    /// Moves the current block's position `n` bytes on, refused past the
+    /// block's `blockSize`. Every caller claims its bytes here before it
+    /// allocates or reads them.
     fn advance(&mut self, n: usize) -> Result<Block> {
         let b = self.block()?;
         let i = b as usize;
-        self.pos[i] = self.pos[i]
-            .checked_add(u32::try_from(n)?)
-            .context("block overflow")?;
+        let (pos, limit) = (self.pos[i], self.limit[i]);
+        self.pos[i] = u32::try_from(n)
+            .ok()
+            .and_then(|n| pos.checked_add(n))
+            .filter(|&end| end <= limit)
+            .with_context(|| {
+                format!("{n} bytes at {b:?} {pos:#x} pass the block's size {limit:#x}")
+            })?;
         self.peak[i] = self.peak[i].max(self.pos[i]);
         Ok(b)
     }
 
     /// `Load_Stream(true, ...)`: `n` bytes into the current block. The
     /// runtime block is zero-filled and reads nothing.
-    fn fill(&mut self, buf: &mut [u8]) -> Result<()> {
-        match self.advance(buf.len())? {
-            Block::Runtime => buf.fill(0),
+    fn read(&mut self, n: usize) -> Result<Vec<u8>> {
+        Ok(match self.advance(n)? {
+            Block::Runtime => vec![0; n],
             Block::LargeRuntime | Block::PhysicalRuntime => {
                 bail!("deferred block data (no stock zone has any)")
             }
-            _ => self.s.read_bytes(buf)?,
-        }
-        Ok(())
+            _ => self.s.read_vec(n)?,
+        })
     }
 
     /// Records the `n` bytes about to land at the current position as a
@@ -302,11 +327,10 @@ impl<'z, R: BufRead> W<'z, R> {
     /// position.
     pub fn load(&mut self, size: usize) -> Result<S> {
         let at = self.here()?;
+        let b = self.read(size)?;
         if size > 0 {
             self.spans.insert(at, size as u32);
         }
-        let mut b = vec![0; size];
-        self.fill(&mut b)?;
         Ok(S { at, b })
     }
 
@@ -324,16 +348,33 @@ impl<'z, R: BufRead> W<'z, R> {
         }
         self.align(align)?;
         self.note_span(n)?;
-        let mut left = n;
-        let mut scratch = std::mem::take(&mut self.scratch);
-        scratch.resize(n.min(1 << 16), 0);
-        while left > 0 {
-            let k = left.min(scratch.len());
-            self.fill(&mut scratch[..k])?;
-            left -= k;
+        match self.advance(n)? {
+            Block::Runtime => {}
+            Block::LargeRuntime | Block::PhysicalRuntime => {
+                bail!("deferred block data (no stock zone has any)")
+            }
+            _ => {
+                let mut left = n;
+                let mut scratch = std::mem::take(&mut self.scratch);
+                scratch.resize(n.min(1 << 16), 0);
+                while left > 0 {
+                    let k = left.min(scratch.len());
+                    self.s.read_bytes(&mut scratch[..k])?;
+                    left -= k;
+                }
+                self.scratch = scratch;
+            }
         }
-        self.scratch = scratch;
         Ok(None)
+    }
+
+    /// `n` bytes of [`Block::Runtime`] space: claimed, never allocated.
+    pub fn reserve(&mut self, align: u32, n: usize) -> Result<()> {
+        ensure!(self.block()? == Block::Runtime, "reserve outside block 1");
+        self.align(align)?;
+        self.note_span(n)?;
+        self.advance(n)?;
+        Ok(())
     }
 
     /// [`Self::bulk`]'s bytes kept whatever the options say: what a small
@@ -342,9 +383,7 @@ impl<'z, R: BufRead> W<'z, R> {
     pub fn bulk_kept(&mut self, align: u32, n: usize) -> Result<Vec<u8>> {
         self.align(align)?;
         self.note_span(n)?;
-        let mut b = vec![0; n];
-        self.fill(&mut b)?;
-        Ok(b)
+        self.read(n)
     }
 
     /// Data a slot may share with an earlier struct: `n` bytes inline at
@@ -430,9 +469,7 @@ impl<'z, R: BufRead> W<'z, R> {
     pub fn bytes(&mut self, align: u32, n: usize) -> Result<Vec<u8>> {
         self.align(align)?;
         self.note_span(n)?;
-        let mut b = vec![0; n];
-        self.fill(&mut b)?;
-        Ok(b)
+        self.read(n)
     }
 
     /// The slot's data: inline (the block aligned to `align` for it), at
@@ -467,7 +504,9 @@ impl<'z, R: BufRead> W<'z, R> {
             Follow::Null => Ok(None),
             Follow::Inline => {
                 let at = self.here()?;
-                let bytes = self.s.read_cstr()?;
+                let b = self.block()? as usize;
+                let room = self.limit[b].saturating_sub(self.pos[b]);
+                let bytes = self.s.read_cstr(u64::from(room.saturating_sub(1)))?;
                 self.advance(bytes.len() + 1)?;
                 let s: String = bytes.iter().map(|&c| c as char).collect();
                 self.strings.insert(at, s.clone());
@@ -524,7 +563,9 @@ impl<'z, R: BufRead> W<'z, R> {
                     "-2 token on a {what} handle"
                 );
                 self.align(4)?;
-                let alias = (p == Pointer::InlineShared).then(|| self.alias_slot());
+                let alias = (p == Pointer::InlineShared)
+                    .then(|| self.alias_slot())
+                    .transpose()?;
                 let at = self.here()?;
                 let r = load(self)?;
                 self.objects.insert(at, r);
@@ -578,13 +619,13 @@ impl<'z, R: BufRead> W<'z, R> {
     }
 
     /// `DB_InsertPointer`: a 4-byte alias slot in [`Block::Virtual`].
-    pub fn alias_slot(&mut self) -> u32 {
-        let v = Block::Virtual as usize;
-        self.pos[v] = (self.pos[v] + 3) & !3;
-        let a = addr(Block::Virtual, self.pos[v]);
-        self.pos[v] += 4;
-        self.peak[v] = self.peak[v].max(self.pos[v]);
-        a
+    pub fn alias_slot(&mut self) -> Result<u32> {
+        self.push(Block::Virtual);
+        self.align(4)?;
+        let a = self.here()?;
+        self.advance(4)?;
+        self.pop()?;
+        Ok(a)
     }
 }
 
@@ -619,6 +660,7 @@ impl Handle {
 mod tests {
     use super::*;
     use crate::assets::AssetRef;
+    use crate::zone::MAX_BLOCK_SIZE;
     use flate2::Compression;
     use flate2::write::ZlibEncoder;
     use std::io::Write;
@@ -638,14 +680,84 @@ mod tests {
         body.extend(b"a\0xyz\0");
         body.extend(le(&[INLINE, INLINE]));
         body.extend(b"v\0n\0");
-        let mut inflated = le(&[body.len() as u32, 0, 28, 0, 0, 0, 40, 0, 0, 0, 0]);
+        ff(&[28, 0, 0, 0, 40, 0, 0, 0, 0], &body, &[])
+    }
+
+    /// A fastfile of `body` under `blocks`, its XFile size counting
+    /// `body` only, with `extra` inflated after it.
+    fn ff(blocks: &[u32; 9], body: &[u8], extra: &[u8]) -> Vec<u8> {
+        ff_sized(body.len() as u32, blocks, body, extra)
+    }
+
+    fn ff_sized(size: u32, blocks: &[u32; 9], body: &[u8], extra: &[u8]) -> Vec<u8> {
+        let mut inflated = le(&[size, 0]);
+        inflated.extend(le(blocks));
         inflated.extend(body);
+        inflated.extend(extra);
         let mut z = ZlibEncoder::new(Vec::new(), Compression::fast());
         z.write_all(&inflated).unwrap();
         let mut out = b"IWffu100".to_vec();
         out.extend(5u32.to_le_bytes());
         out.extend(z.finish().unwrap());
         out
+    }
+
+    /// One rawfile: a `name_len`-byte name and `data` under a header
+    /// claiming `len` bytes.
+    fn raw_file(name_len: usize, len: u32, data: &[u8]) -> Vec<u8> {
+        const INLINE: u32 = u32::MAX;
+        let mut body = le(&[0, 0, 1, INLINE, 0x1F, INLINE]);
+        body.extend(le(&[INLINE, len, INLINE]));
+        body.extend(std::iter::repeat_n(b'a', name_len));
+        body.push(0);
+        body.extend(data);
+        body
+    }
+
+    fn walk_err(data: &[u8]) -> String {
+        let opts = WalkOptions { keep_bulk: true };
+        match Zone::open(data).and_then(|z| walk(z, opts)) {
+            Ok(_) => panic!("walked"),
+            Err(e) => format!("{e:#}"),
+        }
+    }
+
+    const BLOCKS: [u32; 9] = [64, 0, 0, 0, 1024, 0, 0, 0, 0];
+
+    #[test]
+    fn a_count_past_its_block_is_refused_before_allocating() {
+        // 4 GiB of rawfile under a 1 KiB virtual block.
+        let e = walk_err(&ff(&BLOCKS, &raw_file(1, u32::MAX - 1, b"xy\0"), &[]));
+        assert!(e.contains("pass the block's size"), "{e}");
+        walk(
+            Zone::open(&ff(&BLOCKS, &raw_file(1, 2, b"xy\0"), &[])[..]).unwrap(),
+            WalkOptions { keep_bulk: true },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_string_longer_than_its_block_is_refused() {
+        let e = walk_err(&ff(&BLOCKS, &raw_file(4096, 0, b"\0"), &[]));
+        assert!(e.contains("no NUL"), "{e}");
+    }
+
+    #[test]
+    fn inflated_data_past_the_xfile_size_is_refused() {
+        let e = walk_err(&ff(&BLOCKS, &raw_file(1, 2, b"xy\0"), &[0; 4096]));
+        assert!(e.contains("past the XFile size"), "{e}");
+    }
+
+    #[test]
+    fn oversized_headers_are_refused() {
+        let body = raw_file(1, 2, b"xy\0");
+        let mut blocks = BLOCKS;
+        blocks[7] = 1 << 28;
+        assert!(walk_err(&ff(&blocks, &body, &[])).contains("block 7 size"));
+        let blocks = [MAX_BLOCK_SIZE; 9];
+        assert!(walk_err(&ff(&blocks, &body, &[])).contains("blocks total"));
+        let e = walk_err(&ff_sized(u32::MAX, &BLOCKS, &body, &[]));
+        assert!(e.contains("XFile size"), "{e}");
     }
 
     #[test]

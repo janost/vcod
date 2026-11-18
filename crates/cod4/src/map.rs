@@ -93,7 +93,7 @@ pub const NO_LIGHTMAP: u8 = 31;
 
 /// A material as the map uses it: its technique set by name and class,
 /// and each texture's image by name.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct MapMaterial {
     pub name: String,
     /// `None` only for a material whose techset slot is null. Names here
@@ -374,7 +374,7 @@ pub struct ClipMaterial {
 
 /// One map: what the client draws and what the server needs to know is
 /// there. Built from the map zone's walk ([`Map::from_assets`]).
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Map {
     /// The gfx world's name, `maps/mp/<map>.d3dbsp`.
     pub bsp_name: String,

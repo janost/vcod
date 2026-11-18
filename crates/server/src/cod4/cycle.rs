@@ -4,7 +4,7 @@
 //! `sv_mapRotation` (`SV_MapRotate_f` 0x816dae2, the script's
 //! `exitLevel`) and the spawn they end in (`SV_SpawnServer` 0x81748da).
 
-use super::{Cod4Server, SNAPFLAG_SERVERCOUNT, SPAWN_FRAME_MS, SPAWN_FRAMES, State, client_name};
+use super::{Cod4Server, SNAPFLAG_SERVERCOUNT, SPAWN_FRAME_MS, SPAWN_FRAMES, State, game_name};
 use crate::rcon::Redirect;
 use vcod_cod4::net::stats::Stats;
 
@@ -82,7 +82,7 @@ impl Cod4Server {
             c.state = State::Connected;
             c.stat_packets = 0;
             c.pure = None;
-            let (addr, name, guid) = (c.link.addr, client_name(&c.link.userinfo), c.guid.clone());
+            let (addr, name, guid) = (c.link.addr, game_name(&c.link.userinfo), c.guid.clone());
             let spot = self.game.spot;
             if let Some(level) = self.game.level.as_mut() {
                 level.connect(slot, &name, spot);
@@ -202,7 +202,7 @@ impl Cod4Server {
             };
             let (active, name, stats, guid) = (
                 c.state == State::Active,
-                client_name(&c.link.userinfo),
+                game_name(&c.link.userinfo),
                 (c.stat_packets == 0x7f).then(|| kept.unwrap_or_else(|| c.stats.clone())),
                 c.guid.clone(),
             );

@@ -508,7 +508,10 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   two and the elbows and knees hinges, neck, shoulders and hips
   swivels), 33 self collision pairs and 9 base lerp bones (head 2000 ms;
   wrists, ankles and the four twist bones 1000). VERIFIED (the file;
-  `ragdoll::tests::the_stock_cfg_builds_the_mp_def`). The corpse binds
+  `ragdoll::tests::the_stock_cfg_builds_the_mp_def`). vcod refuses a
+  def's lines past 32 bones, 32 joints, 64 self pairs and 32 base lerp
+  bones, its own caps: no `iw3mp.exe` string names a count refusal.
+  VERIFIED (the strings). The corpse binds
   def 1 whatever it is asked. INFERRED
   (`Ragdoll_CreateRagdollForDObj`).
 - The dvars, registered at iw3mp.exe 0x5ba330: `ragdoll_enable` bool 1

@@ -480,8 +480,10 @@ Client:
   `zone/<language>/` loads from `usermaps/<map>/<map>.ff`; under a mod
   that directory's iwds load too.
 - Joining downloads the mod and usermap files the server references and
-  the install lacks, into the install at the server's path. With
-  `cl_allowDownload 0` the join is refused instead.
+  the install lacks, into the install at the server's path. A file
+  larger than the server announced, or off its listed size or checksum,
+  ends the join and is not kept. With `cl_allowDownload 0` the join is
+  refused instead.
 - Other modes exit with an error.
 
 Server (`vcod-server <map> --game cod4`, or a CoD4 install):

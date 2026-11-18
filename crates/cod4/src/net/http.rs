@@ -52,7 +52,8 @@ impl HttpFetch {
     /// `DL_BeginDownload`: starts the GET of `url` into `dest` (created or
     /// truncated). Err when the URL is not one this can fetch, as
     /// `DL_BeginDownload` returning 0 (the caller answers `wwwdl fail`).
-    pub fn start(url: &str, dest: &Path) -> Result<HttpFetch, String> {
+    /// More than `limit` bytes fail the fetch.
+    pub fn start(url: &str, dest: &Path, limit: u64) -> Result<HttpFetch, String> {
         let (dial, host, path) = split_url(url).ok_or_else(|| format!("cannot fetch {url}"))?;
         let dest: PathBuf = dest.to_path_buf();
         let bytes = Arc::new(AtomicU64::new(0));
@@ -60,7 +61,7 @@ impl HttpFetch {
         let (b, s) = (bytes.clone(), stop.clone());
         let thread = std::thread::Builder::new()
             .name("cod4-http".into())
-            .spawn(move || get(&dial, &host, &path, &dest, &b, &s))
+            .spawn(move || get(&dial, &host, &path, &dest, limit, &b, &s))
             .map_err(|e| e.to_string())?;
         Ok(HttpFetch {
             bytes,
@@ -100,6 +101,7 @@ fn get(
     host: &str,
     path: &str,
     dest: &Path,
+    limit: u64,
     bytes: &AtomicU64,
     stop: &AtomicBool,
 ) -> Result<u64, String> {
@@ -120,7 +122,13 @@ fn get(
     .map_err(|e| e.to_string())?;
     let mut r = BufReader::new(sock);
     let mut line = String::new();
-    r.read_line(&mut line).map_err(|e| e.to_string())?;
+    // A header line past this is no server's.
+    let read_line = |r: &mut BufReader<TcpStream>, line: &mut String| {
+        Read::take(r, 8192)
+            .read_line(line)
+            .map_err(|e| e.to_string())
+    };
+    read_line(&mut r, &mut line)?;
     let status = line.split_whitespace().nth(1).unwrap_or("");
     if status != "200" {
         return Err(format!("HTTP status {:?}", line.trim_end()));
@@ -128,7 +136,7 @@ fn get(
     let mut length = None;
     loop {
         line.clear();
-        if r.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
+        if read_line(&mut r, &mut line)? == 0 {
             return Err("headers cut short".into());
         }
         let l = line.trim_end();
@@ -141,6 +149,9 @@ fn get(
             length = v.trim().parse::<u64>().ok();
         }
     }
+    if let Some(l) = length.filter(|&l| l > limit) {
+        return Err(format!("{l} bytes, more than {limit}"));
+    }
     let mut out = std::fs::File::create(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     let mut buf = [0u8; 16384];
     let mut got = 0u64;
@@ -151,6 +162,9 @@ fn get(
                 Some(l) if l != got => Err(format!("{got} of {l} bytes")),
                 _ => Ok(got),
             };
+        }
+        if got + n as u64 > limit {
+            return Err(format!("more than {limit} bytes"));
         }
         out.write_all(&buf[..n]).map_err(|e| e.to_string())?;
         got += n as u64;

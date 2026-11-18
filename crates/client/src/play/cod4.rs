@@ -1909,8 +1909,30 @@ impl Cod4Session {
             Some(gs) if self.cmd_seq > newest => gs.server_command_sequence,
             _ => self.cmd_seq,
         };
-        let got: Vec<Vec<u8>> = (from + 1..=newest)
-            .map(|q| c.server_command(q).to_vec())
+        // The commands up to the gamestate's sequence came with it: only
+        // those received are walked. Past it, more than the netchan's ring
+        // of reliable commands means the ones between are lost:
+        // `EXE_ERR_RELIABLE_CYCLED_OUT`, not a walk of them.
+        let base = c
+            .gamestate
+            .as_ref()
+            .map_or(from, |gs| gs.server_command_sequence.max(from));
+        let ring = vcod_common::net::netchan::NetchanParams::COD2.reliable_commands;
+        if i64::from(newest) - i64::from(base) > ring as i64 {
+            self.cmd_seq = newest;
+            self.dropped
+                .get_or_insert_with(|| "EXE_ERR_RELIABLE_CYCLED_OUT".into());
+            return Vec::new();
+        }
+        let early = (from < base).then(|| c.server_commands.range(from + 1..=base));
+        let got: Vec<Vec<u8>> = early
+            .into_iter()
+            .flatten()
+            .map(|(_, t)| t.clone())
+            .chain(
+                (i64::from(base) + 1..=i64::from(newest))
+                    .map(|q| c.server_command(q as i32).to_vec()),
+            )
             .collect();
         self.cmd_seq = newest;
         self.commands.extend(got.iter().cloned());
@@ -3692,6 +3714,48 @@ pub(crate) mod tests {
     use std::collections::BTreeMap;
 
     mod hud_menus;
+
+    /// A server command whose sequence leaps past the reliable ring
+    /// drops the session as `EXE_ERR_RELIABLE_CYCLED_OUT`, the gap never
+    /// walked.
+    #[test]
+    fn a_command_past_the_reliable_ring_drops_the_session() {
+        use vcod_cod4::net::parse::{Gamestate, SVC_EOF, SVC_SERVERCOMMAND, UNUSED_HUFF};
+        use vcod_common::net::codec::MsgWriter;
+        let huff = vcod_cod4::net::huffman::Huffman::new();
+        let gs = Gamestate {
+            server_command_sequence: 3,
+            ..Default::default()
+        };
+        let opening = vcod_cod4::net::demo::gamestate_message(&huff, 0, 3, &gs);
+        let mut demo = vec![0];
+        demo.extend(1i32.to_le_bytes());
+        demo.extend((opening.len() as i32).to_le_bytes());
+        demo.extend(&opening);
+        let mut s = Cod4Session::play_demo(demo, false).unwrap();
+        let command = |seq: i32| {
+            let mut w = MsgWriter::new(&UNUSED_HUFF);
+            w.write_byte(SVC_SERVERCOMMAND);
+            w.write_long(seq);
+            w.write_string_bytes(b"x");
+            w.write_byte(SVC_EOF);
+            huff.compress(&w.into_ops())
+        };
+        let feed = |s: &mut Cod4Session, seq: i32| {
+            let Source::Demo(d) = &mut s.source else {
+                unreachable!()
+            };
+            d.client.parse(2, &command(seq)).unwrap();
+            s.queue_commands()
+        };
+        assert_eq!(feed(&mut s, 4), [b"x".to_vec()]);
+        assert!(s.take_dropped().is_none());
+        assert!(feed(&mut s, i32::MAX).is_empty());
+        assert_eq!(
+            s.take_dropped().as_deref(),
+            Some("EXE_ERR_RELIABLE_CYCLED_OUT")
+        );
+    }
 
     /// `CG_ScanForCrosshairEntity`'s trace: a client under 64 the point
     /// met, a teammate by team, none while we spectate, nothing on the
@@ -7053,20 +7117,19 @@ pub(crate) mod tests {
         assert!(w.spawned.is_some());
     }
 
-    /// A file that still differs after its download is kept, as 1.7
-    /// keeps it, and asked for again on `donedl`'s gamestate; where
-    /// retail would fetch it on every gamestate, the join ends there.
+    /// A redirected file longer than the size the server announced fails
+    /// its fetch: `wwwdl fail`, and it comes whole over UDP. 1.7 keeps the
+    /// long file and fetches it again on every gamestate.
     #[test]
-    fn cod4_live_www_file_still_different_ends_the_join() {
+    fn cod4_live_www_file_past_its_size_falls_back_to_udp() {
         let Some(w) = live_www(&[], &[], &["/mods/test/mod.ff"], Duration::ZERO) else {
             return;
         };
         assert_eq!(w.asked, ["/mods/test/z_test.iwd", "/mods/test/mod.ff"]);
-        let (got, want) = &w.landed[1];
-        assert_eq!(got.as_ref().map(Vec::len), Some(want.len() + 1));
-        assert!(w.spawned.is_none());
-        let why = w.refused.unwrap();
-        assert!(why.contains("mods/test/mod.ff is different"), "{why}");
+        for (got, want) in &w.landed {
+            assert!(got.as_ref() == Some(want), "a file did not land whole");
+        }
+        assert!(w.spawned.is_some(), "{:?}", w.refused);
     }
 
     /// The level time of the newest snapshot once `ui_score_bar "0"` has

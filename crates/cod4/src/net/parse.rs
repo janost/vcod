@@ -40,13 +40,21 @@ const PACKET_BACKUP: usize = 32;
 /// `MSG_ReadString`: the bytes up to the NUL, as they are (no `%` or
 /// 0x92 mapping on 1.7's client, INFERRED).
 pub fn read_raw_string(r: &mut MsgReader) -> Vec<u8> {
+    read_string_capped(r, usize::MAX)
+}
+
+/// [`read_raw_string`] keeping at most `max` bytes, the rest read to the
+/// NUL and dropped, as a fixed buffer's read does.
+pub fn read_string_capped(r: &mut MsgReader, max: usize) -> Vec<u8> {
     let mut out = Vec::new();
     loop {
         let c = r.read_byte();
         if c == 0 || r.is_overflowed() {
             return out;
         }
-        out.push(c);
+        if out.len() < max {
+            out.push(c);
+        }
     }
 }
 

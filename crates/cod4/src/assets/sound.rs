@@ -211,7 +211,7 @@ pub fn loaded_sound<R: BufRead>(
             Pointer::Null | Pointer::Offset { .. } => None,
             p => {
                 if p == Pointer::InlineShared {
-                    w.alias_slot();
+                    w.alias_slot()?;
                 }
                 w.bulk(1, data_len as usize)?
             }

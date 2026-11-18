@@ -6,9 +6,9 @@ use super::material::{Image, Material, image, material};
 use super::misc::{LightDef, PhysPreset, light_def, phys_preset};
 use super::model::{XModel, brush_sides, xmodel};
 use super::{Id, asset, push};
-use crate::walk::{Follow, Handle, S, W, u16s};
+use crate::walk::{Follow, Handle, S, W, product, u16s};
 use crate::zone::{Block, Pointer};
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use std::io::BufRead;
 
 /// Inline cells a portal chain may nest (no stock map inlines one) and
@@ -239,7 +239,7 @@ fn clip_map_t<R: BufRead>(w: &mut W<R>) -> Result<ClipMap> {
         }
         c.brushes = w.keep_bulk().then_some(a.b);
     }
-    c.visibility = array(w, &s, 156, 1, n(148) * n(152))?;
+    c.visibility = array(w, &s, 156, 1, product(&[n(148), n(152)])?)?;
     c.map_ents = map_ents(w, s.ptr(164), s.slot(164))?;
     match w.follow(s.ptr(168), 16)? {
         Follow::Inline => {
@@ -273,7 +273,7 @@ fn clip_map_t<R: BufRead>(w: &mut W<R>) -> Result<ClipMap> {
 fn runtime<R: BufRead>(w: &mut W<R>, s: &S, o: usize, align: u32, n: usize) -> Result<()> {
     w.push(Block::Runtime);
     if w.inline_only(s.ptr(o), align)? {
-        w.bulk(align, n)?;
+        w.reserve(align, n)?;
     }
     w.pop()
 }
@@ -686,8 +686,11 @@ fn gfx_world_body<R: BufRead>(w: &mut W<R>, s: &S) -> Result<GfxWorld> {
     lg.row_axis = s.u32(292);
     lg.col_axis = s.u32(296);
     if row_axis < 3 {
-        let span = s.u16(286 + 2 * row_axis) as usize + 1 - s.u16(280 + 2 * row_axis) as usize;
-        lg.row_data_start = array(w, s, 300, 2, 2 * span)?;
+        let (lo, hi) = (lg.mins[row_axis], lg.maxs[row_axis]);
+        let span = hi
+            .checked_sub(lo)
+            .with_context(|| format!("light grid row axis maxs {hi} below mins {lo}"))?;
+        lg.row_data_start = array(w, s, 300, 2, 2 * (usize::from(span) + 1))?;
     }
     lg.raw_row_data = array(w, s, 308, 1, n(304))?;
     lg.entries = array(w, s, 316, 4, 4 * n(312))?;
@@ -709,12 +712,12 @@ fn gfx_world_body<R: BufRead>(w: &mut W<R>, s: &S) -> Result<GfxWorld> {
     g.outdoor_image = image(w, s.ptr(540), s.slot(540))?;
     let dyn_count = [n(692), n(696)];
     let shadowed = n(220).saturating_sub(n(216) + 1);
-    runtime(w, s, 544, 4, 4 * cells * cells.div_ceil(32))?;
+    runtime(w, s, 544, 4, product(&[4, cells, cells.div_ceil(32)])?)?;
     runtime(w, s, 548, 4, 6 * dyn_count[0])?;
     runtime(w, s, 552, 4, 4 * dyn_count[1])?;
-    runtime(w, s, 556, 4, 4 * shadowed * 4096)?;
-    runtime(w, s, 560, 4, 4 * dyn_count[0] * shadowed)?;
-    runtime(w, s, 564, 4, 4 * dyn_count[1] * shadowed)?;
+    runtime(w, s, 556, 4, product(&[4, shadowed, 4096])?)?;
+    runtime(w, s, 560, 4, product(&[4, dyn_count[0], shadowed])?)?;
+    runtime(w, s, 564, 4, product(&[4, dyn_count[1], shadowed])?)?;
     runtime(w, s, 568, 1, dyn_count[0])?;
     let lights = n(220);
     if w.inline_only(s.ptr(572), 4)? {
@@ -791,8 +794,8 @@ fn gfx_world_body<R: BufRead>(w: &mut W<R>, s: &S) -> Result<GfxWorld> {
     runtime(w, &d, 96, 128, 4 * d.u32(40) as usize)?;
     // GfxWorldDpvsDynamic at 684.
     let words = [n(684), n(688)];
-    runtime(w, s, 700, 4, 4 * words[0] * cells)?;
-    runtime(w, s, 704, 4, 4 * words[1] * cells)?;
+    runtime(w, s, 700, 4, product(&[4, words[0], cells])?)?;
+    runtime(w, s, 704, 4, product(&[4, words[1], cells])?)?;
     for (k, words) in words.iter().enumerate() {
         for j in 0..3 {
             runtime(w, s, 708 + 12 * k + 4 * j, 16, 32 * words)?;
@@ -975,7 +978,19 @@ mod tests {
     }
 
     fn zone(body: Vec<u8>) -> Vec<u8> {
-        let mut inflated = le(&[body.len() as u32, 0, 0x100, 0, 0, 0, 1 << 24, 0, 0, 0, 0]);
+        let mut inflated = le(&[
+            body.len() as u32,
+            0,
+            0x1000,
+            1 << 16,
+            0,
+            0,
+            1 << 24,
+            0,
+            0,
+            0,
+            0,
+        ]);
         inflated.extend(body);
         let mut z = ZlibEncoder::new(Vec::new(), Compression::fast());
         z.write_all(&inflated).unwrap();
@@ -987,6 +1002,61 @@ mod tests {
 
     fn walks(data: &[u8]) -> anyhow::Result<()> {
         walk(Zone::open(data)?, WalkOptions::default()).map(|_| ())
+    }
+
+    /// A zone of one `GfxWorld` with no cells, `set` writing its struct.
+    fn gfx_world(set: impl FnOnce(&mut [u8])) -> Vec<u8> {
+        let mut body = le(&[0, 0, 1, INLINE, 0x10, INLINE]);
+        let mut world = vec![0u8; 0x2DC];
+        set(&mut world);
+        body.extend(world);
+        zone(body)
+    }
+
+    fn put(b: &mut [u8], o: usize, v: u32) {
+        b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+    }
+
+    /// Both walk options refuse `data` with an error holding `want`.
+    fn refused(data: &[u8], want: &str) {
+        for keep_bulk in [false, true] {
+            let r = walk(Zone::open(data).unwrap(), WalkOptions { keep_bulk });
+            let e = format!("{:#}", r.err().expect("walked"));
+            assert!(e.contains(want), "{e}");
+        }
+    }
+
+    #[test]
+    fn a_light_grid_with_maxs_below_mins_is_refused() {
+        walks(&gfx_world(|_| {})).unwrap();
+        refused(
+            &gfx_world(|b| {
+                b[280..282].copy_from_slice(&5u16.to_le_bytes());
+                put(b, 300, INLINE);
+            }),
+            "maxs 0 below mins 5",
+        );
+    }
+
+    #[test]
+    fn a_runtime_array_past_its_block_is_refused_unallocated() {
+        // 4 * 2^30 primary lights * 4096: 2^44 bytes of shadow bits.
+        refused(
+            &gfx_world(|b| {
+                put(b, 220, 1 << 30);
+                put(b, 556, INLINE);
+            }),
+            "pass the block's size",
+        );
+        // 4 * 2^31 * (2^32 - 2): the product overflows.
+        refused(
+            &gfx_world(|b| {
+                put(b, 220, u32::MAX);
+                put(b, 692, 1 << 31);
+                put(b, 560, INLINE);
+            }),
+            "overflows",
+        );
     }
 
     #[test]

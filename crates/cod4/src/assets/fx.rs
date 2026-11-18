@@ -92,7 +92,11 @@ pub fn fx<R: BufRead>(w: &mut W<R>, p: Pointer, slot: u32) -> Result<Option<Id<F
         let s = w.load(0x20)?;
         w.push(Block::Virtual);
         let name = w.xstring(s.ptr(0))?.unwrap_or_default();
-        let n = (s.i32(16) + s.i32(20) + s.i32(24)).max(0) as usize;
+        let n = [16, 20, 24]
+            .map(|o| i64::from(s.i32(o)))
+            .iter()
+            .sum::<i64>()
+            .max(0) as usize;
         let mut elems = Vec::new();
         if w.inline_only(s.ptr(28), 4)? {
             let a = w.load(0xFC * n)?;

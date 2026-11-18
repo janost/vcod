@@ -1810,7 +1810,8 @@ fn upload_probe(
     label: &str,
     p: &vcod_common::mapworld::ProbeCube,
 ) -> wgpu::TextureView {
-    let levels = p.faces.first().map_or(1, Vec::len) as u32;
+    // A chain longer than the size allows fails validation: cut it.
+    let levels = (p.faces.first().map_or(1, Vec::len) as u32).min(p.size.max(1).ilog2() + 1);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d {
@@ -1825,9 +1826,12 @@ fn upload_probe(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    for (face, levels) in p.faces.iter().enumerate() {
-        for (level, px) in levels.iter().enumerate() {
+    for (face, chain) in p.faces.iter().take(6).enumerate() {
+        for (level, px) in chain.iter().take(levels as usize).enumerate() {
             let side = (p.size >> level).max(1);
+            if px.len() != (4 * side * side) as usize {
+                continue;
+            }
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &texture,

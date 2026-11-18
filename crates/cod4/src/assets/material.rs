@@ -1,7 +1,7 @@
 //! Materials, technique sets and images.
 
 use super::{Id, asset, push};
-use crate::walk::{Follow, Handle, S, W};
+use crate::walk::{Follow, Handle, S, W, product};
 use crate::zone::{Block, Pointer};
 use anyhow::Result;
 use std::io::BufRead;
@@ -164,7 +164,7 @@ fn texture_table<R: BufRead>(w: &mut W<R>, n: usize) -> Result<Vec<TextureDef>> 
 fn water_t<R: BufRead>(w: &mut W<R>, image_id: &mut Option<Id<Image>>) -> Result<Water> {
     let s = w.load(0x44)?;
     let (m, n) = (s.u32(12), s.u32(16));
-    let cells = (m * n) as usize;
+    let cells = product(&[m as usize, n as usize])?;
     let mut h0 = None;
     if w.inline_only(s.ptr(4), 4)? {
         h0 = w.bulk(4, 8 * cells)?; // H0: complex_s
@@ -401,7 +401,9 @@ pub fn image<R: BufRead>(w: &mut W<R>, p: Pointer, slot: u32) -> Result<Option<I
             }
             p => {
                 w.align(4)?;
-                let alias = (p == Pointer::InlineShared).then(|| w.alias_slot());
+                let alias = (p == Pointer::InlineShared)
+                    .then(|| w.alias_slot())
+                    .transpose()?;
                 let at = w.here()?;
                 let h = w.load(0x10)?;
                 let size = h.u32(12);

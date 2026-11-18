@@ -238,8 +238,9 @@ impl Shape {
                 let (lo, hi) = (Vec3::from(b.mins), Vec3::from(b.maxs));
                 let (c, h) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
                 sweep_half = brush_sweep_half(lo, hi);
-                // A brush no side cuts is its bounds' box.
-                let cut = (!b.planes.is_empty())
+                // A brush no side cuts is its bounds' box, as is one
+                // with more sides than corners are worth finding.
+                let cut = (!b.planes.is_empty() && b.planes.len() + 6 <= MAX_BRUSH_PLANES)
                     .then(|| brush_corners(b))
                     .filter(|cut| {
                         let at_bounds = |p: &Vec3| ((*p - c).abs() - h).abs().max_element() < 0.01;
@@ -400,6 +401,11 @@ fn brush_corners(b: &PhysBrush) -> Vec<Vec3> {
     plane_corners(&planes)
 }
 
+/// The most planes [`plane_corners`] takes: its cost is cubic to quartic
+/// in them, and the stock maps' brushes have at most 38 (6 axial and 32
+/// sides).
+const MAX_BRUSH_PLANES: usize = 64;
+
 /// Where three of `planes` (`n . p <= d` inside) meet inside all of them,
 /// each corner once.
 fn plane_corners(planes: &[(Vec3, f32)]) -> Vec<Vec3> {
@@ -445,9 +451,13 @@ pub struct Solid {
 pub type Solids<'a> = dyn FnMut(Vec3, Vec3) -> Vec<Solid> + 'a;
 
 impl Solid {
-    /// A brush of `planes`; `None` when they bound nothing.
+    /// A brush of `planes`; `None` when they bound nothing or number
+    /// past [`MAX_BRUSH_PLANES`].
     pub fn brush(planes: &[(Vec3, f32)]) -> Option<Solid> {
         const EPS: f32 = 0.01;
+        if planes.len() > MAX_BRUSH_PLANES {
+            return None;
+        }
         let verts = plane_corners(planes);
         let mut faces = Vec::new();
         for &(n, d) in planes {
@@ -2465,6 +2475,39 @@ mod tests {
         // A 300 ms frame: two steps of 150.
         b.advance(417, &mut none, &d);
         assert_eq!((b.steps, b.sim_ms), (3, 417));
+    }
+
+    #[test]
+    fn a_brush_of_5000_sides_falls_back_at_once() {
+        // Planes in general position: every triple meets.
+        let planes: Vec<[f32; 4]> = (0..5000)
+            .map(|i| {
+                let (a, b) = (i as f32 * 0.37, i as f32 * 0.11);
+                [a.cos() * b.sin(), a.sin() * b.sin(), b.cos(), 10.0]
+            })
+            .collect();
+        let list = PhysGeomList {
+            geoms: vec![crate::assets::model::PhysGeom {
+                brush: Some(PhysBrush {
+                    mins: [-10.0; 3],
+                    maxs: [10.0; 3],
+                    planes: planes.clone(),
+                }),
+                kind: 0,
+                orientation: [[0.0; 3]; 3],
+                offset: [0.0; 3],
+                half_lengths: [0.0; 3],
+            }],
+            ..Default::default()
+        };
+        let s = Shape::of_geoms(&list).unwrap();
+        // The bounds' box: 8 corners, 12 edges, 6 faces.
+        assert_eq!(s.points.len(), 26);
+        let world: Vec<(Vec3, f32)> = planes
+            .iter()
+            .map(|p| (Vec3::new(p[0], p[1], p[2]), p[3]))
+            .collect();
+        assert!(Solid::brush(&world).is_none());
     }
 
     #[test]

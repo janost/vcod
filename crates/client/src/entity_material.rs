@@ -1269,7 +1269,9 @@ fn probe_array(
 ) -> wgpu::TextureView {
     let levels_of = |p: &vcod_common::mapworld::ProbeCube| p.faces.first().map_or(1, Vec::len);
     let first = probes.iter().find(|p| p.size > 0 && p.faces.len() == 6);
-    let (size, levels) = first.map_or((1, 1), |p| (p.size, levels_of(p)));
+    let (size, chain) = first.map_or((1, 1), |p| (p.size, levels_of(p)));
+    // A chain longer than the size allows fails validation: cut it.
+    let levels = chain.min(size.ilog2() as usize + 1);
     // A cube array holds six layers a probe; mp_cargoship has more probes
     // than wgpu's default 256 layers hold (cod4-world.md 9.7). Probes past
     // the device's limit stay unbound.
@@ -1292,11 +1294,11 @@ fn probe_array(
         view_formats: &[],
     });
     let fits = |p: &&vcod_common::mapworld::ProbeCube| {
-        p.size == size && p.faces.len() == 6 && p.faces.iter().all(|f| f.len() == levels)
+        p.size == size && p.faces.len() == 6 && p.faces.iter().all(|f| f.len() == chain)
     };
     for (i, p) in probes.iter().enumerate().filter(|(_, p)| fits(p)) {
         for (face, chain) in p.faces.iter().enumerate() {
-            for (level, px) in chain.iter().enumerate() {
+            for (level, px) in chain.iter().take(levels).enumerate() {
                 let side = (size >> level).max(1);
                 if px.len() != (4 * side * side) as usize {
                     continue;
@@ -1660,6 +1662,33 @@ mod tests {
         let n = device.limits().max_texture_array_layers as usize / 6 + 5;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let _view = probe_array(&device, &queue, &vec![cube; n]);
+        let err = pollster::block_on(scope.pop());
+        assert!(err.is_none(), "{err:?}");
+    }
+
+    /// A probe whose chain runs past what its size holds (a non-square
+    /// cube's) uploads its first levels, not an invalid texture.
+    #[test]
+    fn a_probe_with_too_many_levels_leaves_a_valid_array() {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            eprintln!("no adapter; skipped");
+            return;
+        };
+        let Ok((device, queue)) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        else {
+            return;
+        };
+        // A 2x2 cube holds 2 levels; this one carries 4.
+        let chain = vec![vec![9; 16], vec![9; 4], vec![9; 4], vec![9; 4]];
+        let cube = vcod_common::mapworld::ProbeCube {
+            size: 2,
+            faces: vec![chain; 6],
+        };
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let _view = probe_array(&device, &queue, &[cube]);
         let err = pollster::block_on(scope.pop());
         assert!(err.is_none(), "{err:?}");
     }

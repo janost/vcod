@@ -9,7 +9,12 @@
 //! through it is the check (section 8).
 
 use super::huffman::Huffman;
-use super::parse::{UNUSED_HUFF, read_raw_string};
+use super::parse::{UNUSED_HUFF, read_string_capped};
+
+/// The most bytes of a client command the server keeps: the Q3 lineage's
+/// 1024-byte string buffer, as the 0x400-byte userinfo copy
+/// (`SV_UpdateUserinfo_f` 0x8170536).
+pub const MAX_CLIENT_COMMAND: usize = 1023;
 use anyhow::{Result, bail};
 use vcod_common::net::codec::{MsgReader, MsgWriter};
 
@@ -434,7 +439,7 @@ pub fn read_commands(plain: Vec<u8>) -> Vec<ClOp> {
     let mut ops = Vec::new();
     while r.read_bits(3) as u32 == CLC_CLIENT_COMMAND && !r.is_overflowed() {
         let sequence = r.read_long();
-        let text = read_raw_string(&mut r);
+        let text = read_string_capped(&mut r, MAX_CLIENT_COMMAND);
         if r.is_overflowed() {
             break;
         }
@@ -458,7 +463,7 @@ pub fn read_ops(plain: Vec<u8>, key: i32, base: &UserCmd) -> Result<Vec<ClOp>> {
             }
             CLC_CLIENT_COMMAND => {
                 let sequence = r.read_long();
-                let text = read_raw_string(&mut r);
+                let text = read_string_capped(&mut r, MAX_CLIENT_COMMAND);
                 ops.push(ClOp::Command { sequence, text });
             }
             CLC_MOVE | CLC_MOVE_NO_DELTA => {
@@ -585,6 +590,36 @@ mod tests {
         ];
         let plain = write_ops(&ops, key, &base);
         assert_eq!(read_ops(plain, key, &base).unwrap(), ops);
+    }
+
+    /// A client command keeps its first 1023 bytes; the rest is read to
+    /// its NUL and the ops after it still parse.
+    #[test]
+    fn a_long_client_command_keeps_1023_bytes() {
+        let base = UserCmd::default();
+        let ops = vec![
+            ClOp::Command {
+                sequence: 3,
+                text: vec![b'a'; 100_000],
+            },
+            ClOp::Command {
+                sequence: 4,
+                text: b"say hi".to_vec(),
+            },
+            ClOp::Eof,
+        ];
+        let got = read_ops(write_ops(&ops, 0, &base), 0, &base).unwrap();
+        assert_eq!(
+            got,
+            [
+                ClOp::Command {
+                    sequence: 3,
+                    text: vec![b'a'; MAX_CLIENT_COMMAND],
+                },
+                ops[1].clone(),
+                ClOp::Eof,
+            ]
+        );
     }
 
     /// Pins the wire bytes of every branch: the long one with the location
