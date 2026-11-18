@@ -1017,7 +1017,7 @@ fn any_ammo_for_weapon_modes(
     Ok(Value::Int(i32::from(any)))
 }
 
-/// `self isOnLadder()`: `pm_flags`' ladder bit as the last cmd left it.
+/// `self isOnLadder()` (0x80c5040): `pm_flags`' ladder bit as the last cmd left it.
 fn is_on_ladder(
     host: &mut GameHost,
     _: &mut Cx,
@@ -1031,20 +1031,42 @@ fn is_on_ladder(
     )))
 }
 
-/// `self isMantling()`: never; the mantle is not modelled.
+/// `self isMantling()` (0x80c4fc8): `pm_flags`' mantle bit as the last cmd
+/// left it.
 fn is_mantling(
     host: &mut GameHost,
     _: &mut Cx,
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    client_receiver(host, recv)?;
-    Ok(Value::Int(0))
+    let slot = client_receiver(host, recv)?;
+    let pm = host.cod4().pm_flags.get(slot).copied().unwrap_or(0);
+    Ok(Value::Int(i32::from(
+        pm & vcod_cod4::pmove::pmf::MANTLE != 0,
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `isMantling` reads `pm_flags`' 0x4 as `isOnLadder` reads 0x8
+    /// (BUG-023: it answered 0 always).
+    #[test]
+    fn is_mantling_reads_the_mantle_bit() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut host = GameHost::new(&crate::game::profile::COD4, vec![String::new(); 2048]);
+        vm.with_cx(|cx| {
+            host.connect_client(cx, 0, "a").unwrap();
+            let me = Some(Target::Entity(host.ents.handle(0).unwrap()));
+            host.cod4_mut().pm_flags = vec![vcod_cod4::pmove::pmf::MANTLE; 1];
+            assert_eq!(is_mantling(&mut host, cx, me, &[]), Ok(Value::Int(1)));
+            assert_eq!(is_on_ladder(&mut host, cx, me, &[]), Ok(Value::Int(0)));
+            host.cod4_mut().pm_flags[0] = vcod_cod4::pmove::pmf::LADDER;
+            assert_eq!(is_mantling(&mut host, cx, me, &[]), Ok(Value::Int(0)));
+            assert_eq!(is_on_ladder(&mut host, cx, me, &[]), Ok(Value::Int(1)));
+        });
+    }
 
     /// An M16 item (weapon 27) at `x` on the level's list.
     fn item(host: &mut GameHost, cx: &mut Cx, x: f32) -> EntId {

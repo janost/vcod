@@ -140,6 +140,9 @@ scripts call.
   INFERRED. 2314: four bits per lowercase hex digit, weapon 0 and each
   registered weapon set; 113 weapons read
   `ffffffffffffffffffffffffffff3000`. VERIFIED (capture).
+- `isMantling` (0x80c4fc8) and `isOnLadder` (0x80c5040) answer
+  `ps.pm_flags` bit 0x4 and bit 0x8 of the receiver's `gclient_t`
+  (`gentity+0x15c`, `pm_flags` at +0xc). VERIFIED (objdump).
 - INFERRED: `hidePart` keeps `partBits` (`Cod4HostState::part_bits`) and a
   hidden bone's collision stops clipping rounds
   (`entity_damage::ModelPart`); `setCanDamage` is UO's `setTakeDamage`;
