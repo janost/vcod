@@ -31,11 +31,8 @@ Grep the module header comments for more; each one names its research doc.
 
 CoD2 1.3's formats, wire (`net/`), pmove and collision.
 
-- `map.rs` is the map loader: a `.d3dbsp` parsed once (`MapFile`) into the
-  `MapWorld` and the `ClipMap` (`LoadedMap`, built side by side).
-  `ClipMap::build` reads `ClipLumps`, never the `D3dBsp`. The server's
-  collision and combat and the client's prediction share one `Arc<ClipMap>`
-  per load.
+- `map.rs` is the map loader: a `.d3dbsp` parsed once into the `MapWorld`
+  and the `ClipMap` (`docs/dev/assets.md`).
 - `materials.rs`, `material/` (binary materials, techsets), `efx.rs`,
   `font.rs`, `hudelem.rs`, `xmodel.rs`, `model.rs`, `weapon.rs`, `player/`,
   `water.rs`, `outdoor.rs`, `lightgrid.rs`.
