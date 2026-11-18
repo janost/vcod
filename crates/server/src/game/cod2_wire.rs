@@ -427,7 +427,7 @@ impl Cod2Level {
         } else {
             None
         };
-        let client_num = ps.f[field_index(&PLAYER_STATE_FIELDS, "clientNum")];
+        let client_num = ps.f[ps2!("clientNum")];
         let viewer = client_num as usize;
         match frame {
             None => {
@@ -467,19 +467,18 @@ impl Cod2Level {
         time: i32,
         shift: i32,
     ) -> Vec<EntityState2> {
-        let word = |n: &str| f32::from_bits(ps.f[field_index(&PLAYER_STATE_FIELDS, n)]);
-        let eye = [
-            word("origin[0]"),
-            word("origin[1]"),
-            word("origin[2]") + word("viewHeightCurrent"),
-        ];
+        let word = |i: usize| f32::from_bits(ps.f[i]);
+        let [x, y, z] = ps2!(3 "origin");
+        let eye = [word(x), word(y), word(z) + word(ps2!("viewHeightCurrent"))];
         let vis = &self.world.vis;
+        // The eye's cluster and area, placed once for every entity.
+        let viewer = std::cell::OnceCell::new();
+        let at = || *viewer.get_or_init(|| crate::world::Viewer::at(vis, eye));
         ents.filter(|(n, _, _)| *n != client_num && !hidden.contains(n))
             .filter_map(|(_, e, broadcast)| Some((to_cod2_entity(e)?, broadcast)))
             .filter(|(e, broadcast)| {
                 // 1.5's rule: an entity touching no cluster is not sent.
-                *broadcast
-                    || crate::world::link_in_snapshot(vis, eye, &link(vis, e, time), false, None)
+                *broadcast || crate::world::link_in_view(vis, at, &link(vis, e, time), false, None)
             })
             .map(|(mut e, _)| {
                 if shift != 0 {
@@ -576,7 +575,7 @@ pub fn to_cod2_entity(es: &EntityState) -> Option<EntityState2> {
     for (to, from) in out.f.iter_mut().zip(&es.fields) {
         *to = *from as u32;
     }
-    let t = out.i32("eType");
+    let t = out.f[es2!("eType")] as i32;
     let events = c2ev::ET_EVENTS..c2ev::ET_EVENTS + c2ev::EV_NAMES.len() as i32;
     ((0..=c2ev::ET_TURRET).contains(&t) || events.contains(&t)).then_some(out)
 }
@@ -604,16 +603,17 @@ fn link(
 ) -> (vcod_common::mapworld::LinkClusters, [f32; 3], [f32; 3]) {
     use super::wire::LinkBox;
     use vcod_cod2::trajectory::Trajectory2;
-    let etype = e.i32("eType");
-    let base = |g: &str| [0, 1, 2].map(|k| e.f32(&format!("{g}.trBase[{k}]")));
+    let word = |i: usize| e.f[i] as i32;
+    let etype = word(es2!("eType"));
+    let base = |ix: [usize; 3]| ix.map(|i| f32::from_bits(e.f[i]));
     let (o, a) = if etype == c2ev::ET_SCRIPTMOVER {
         let at = |g: &str| Trajectory2::read(e, g).evaluate(time).to_array();
         (at("pos"), at("apos"))
     } else {
-        (base("pos"), base("apos"))
+        (base(es2!(3 "pos.trBase")), base(es2!(3 "apos.trBase")))
     };
-    let bmodel =
-        (e.i32("solid") == vcod_common::net::flags::SOLID_BMODEL).then(|| e.i32("index") as usize);
+    let bmodel = (word(es2!("solid")) == vcod_common::net::flags::SOLID_BMODEL)
+        .then(|| word(es2!("index")) as usize);
     let class = match etype {
         c2ev::ET_TURRET => LinkBox::Turret,
         c2ev::ET_SCRIPTMOVER => LinkBox::ScriptMover,
