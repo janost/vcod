@@ -251,7 +251,7 @@ fn load(fixture: &str, map: &str, vehicletype: &str, near: Vec3) -> Option<Case>
         }
     }
     let infos = VehicleInfos::load(&fs);
-    let info = infos.list[infos.find(vehicletype).unwrap()].clone();
+    let info = infos.list[infos.find(vehicletype).unwrap()].as_ref().clone();
     let name = xmodel.strip_prefix("xmodel/").unwrap_or(&xmodel);
     let bones = vcod_common::model::load_bones(&fs, name).unwrap();
     let model = VehicleModel::from_bones(&bones);

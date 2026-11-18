@@ -274,7 +274,7 @@ impl VehicleInfo {
 /// Every vehicle file of the level, in `trap_FS_GetFileList`'s order.
 #[derive(Clone, Debug, Default)]
 pub struct VehicleInfos {
-    pub list: Vec<VehicleInfo>,
+    pub list: Vec<std::rc::Rc<VehicleInfo>>,
 }
 
 impl VehicleInfos {
@@ -302,7 +302,7 @@ impl VehicleInfos {
                 continue;
             }
             match VehicleInfo::parse(&name, body) {
-                Ok(info) => list.push(info),
+                Ok(info) => list.push(std::rc::Rc::new(info)),
                 Err(why) => log::warn!("vehicles/{name}: {why}"),
             }
         }
@@ -314,6 +314,7 @@ impl VehicleInfos {
     /// `index` (`G_SoundAliasIndex`), which returns the alias number.
     pub fn register_sounds(&mut self, mut index: impl FnMut(&str) -> i32) {
         for info in &mut self.list {
+            let info = std::rc::Rc::make_mut(info);
             for (i, alias) in info.sounds.iter().enumerate() {
                 info.sound_index[i] = if alias.is_empty() { 0 } else { index(alias) };
             }

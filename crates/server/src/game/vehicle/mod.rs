@@ -275,7 +275,7 @@ impl Vehicles {
         self.seat_ops.retain(|op| op.slot() != slot);
     }
 
-    pub fn info_of(&self, v: &Vehicle) -> &VehicleInfo {
+    pub fn info_of(&self, v: &Vehicle) -> &std::rc::Rc<VehicleInfo> {
         &self.infos.list[v.info]
     }
 
