@@ -474,6 +474,15 @@ fn language_index(cl_language: &str) -> i32 {
     if neg { n.wrapping_neg() } else { n }
 }
 
+/// `listBoxDef_t`'s `columnInfo` slots: a larger `columns` count is cut to
+/// this (Q3's `MAX_LB_COLUMNS`; CoD4's `listBoxDef_s` holds 16, cod4-hud.md).
+const MAX_LB_COLUMNS: usize = 16;
+
+/// The column count a `columns` token gives, cut to [`MAX_LB_COLUMNS`].
+fn column_count(t: Option<&String>) -> usize {
+    (num(t) as usize).min(MAX_LB_COLUMNS)
+}
+
 /// Q3's `atof`/`atoi` plus the `0x` hex `menudef.h` uses for flags.
 fn num(t: Option<&String>) -> f32 {
     let Some(t) = t else { return 0.0 };
@@ -682,7 +691,7 @@ fn parse_item(tokens: &[String], game: Game, errors: &mut Vec<String>) -> UiItem
             "feeder" => item.feeder = Some(num(tokens.get(i + 1)) as i32),
             "elementheight" => item.element_height = num(tokens.get(i + 1)),
             "columns" => {
-                let n = num(tokens.get(i + 1)) as usize;
+                let n = column_count(tokens.get(i + 1));
                 item.columns = (0..n)
                     .map(|c| {
                         let at = i + 2 + c * 3;
@@ -928,7 +937,7 @@ mod cod2 {
             }
             Some(Rect) => *i += super::rect_align(tokens, *i - 1, &mut [0; 2]) - 1,
             Some(Columns) => {
-                let n = super::num(tokens.get(*i)) as usize;
+                let n = super::column_count(tokens.get(*i));
                 *i += 1 + n * 3;
             }
         }
@@ -942,7 +951,7 @@ mod cod2 {
             0..=12 => t,
             14 => super::ITEM_TYPE_BIND,
             16 => super::ITEM_TYPE_EDITFIELD,
-            _ => 100 + t,
+            _ => t.saturating_add(100),
         }
     }
 }
@@ -1442,6 +1451,21 @@ mod tests {
         let fs = crate::pk3::Pk3Fs::open(dir.path()).unwrap();
         let got: Vec<String> = game_types(&fs).into_iter().map(|g| g.script).collect();
         assert_eq!(got, ["tdm", "dm", "sd"]);
+    }
+
+    #[test]
+    fn a_huge_column_count_or_item_type_is_cut() {
+        for n in ["1e30", "4000000000", "-5"] {
+            let text = format!("menuDef {{ itemDef {{ type 6 columns {n} 1 2 3 visible 1 }} }}");
+            for game in [Game::Cod1, Game::Cod2] {
+                let file = parse_menu_file_in(game, &text, &|_| None);
+                let cols = file.menus[0].items[0].columns.len();
+                assert!(cols <= MAX_LB_COLUMNS, "{n}: {cols}");
+            }
+        }
+        let text = "menuDef { itemDef { type 2147483647 } }";
+        let file = parse_menu_file_in(Game::Cod2, text, &|_| None);
+        assert_eq!(file.menus[0].items[0].kind, i32::MAX);
     }
 
     #[test]
