@@ -212,6 +212,8 @@ fn parse_parts(data: &[u8], model_type: u8) -> Result<Vec<Bone>> {
     let num_bones = r.u16()? as usize; // non-root
     let num_root = r.u16()? as usize;
     let total = num_root + num_bones;
+    // Every stock and third-party part file holds a bone; a pose needs one.
+    ensure!(total > 0, "xmodelparts with no bones");
 
     let mut locals: Vec<(i32, Vec3, Quat)> = Vec::with_capacity(total);
     locals.resize(num_root, (-1, Vec3::ZERO, Quat::IDENTITY));
@@ -634,6 +636,13 @@ mod tests {
 
     fn load(fs: &dyn AssetSource, name: &str) -> Result<Model> {
         crate::model::load(fs, name)
+    }
+
+    /// A part file with no bones would build a skeleton nothing can pose.
+    #[test]
+    fn a_part_file_with_no_bones_is_refused() {
+        let parts = [14u8, 0, 0, 0, 0, 0];
+        assert!(parse_parts(&parts, b'0').is_err());
     }
 
     /// Encodes a triangle the way the descriptor does and decodes it back.
