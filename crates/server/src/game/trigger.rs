@@ -966,6 +966,17 @@ pub fn aim_trace(
         pitch.sin(),
     );
     let end = start + forward * AIM_TRACE_RANGE;
+    let rows: Vec<(EntId, Trigger)> = host
+        .triggers
+        .iter()
+        .filter(|(_, t)| t.kind == TriggerKind::LookAt)
+        .map(|(id, t)| (id, *t))
+        .collect();
+    // Most stock maps have no lookat trigger; the world trace below has no
+    // side effect, so skipping it changes nothing.
+    if rows.is_empty() {
+        return None;
+    }
     // The second trace's mask less the lookat bit and BODY, which no brush
     // carries; it holds every world bit the first one does.
     let world_f = host.world.as_ref().map_or(1.0, |w| {
@@ -973,12 +984,6 @@ pub fn aim_trace(
             .point_trace(start, end, AIM_WORLD_MASK, true)
             .fraction
     });
-    let rows: Vec<(EntId, Trigger)> = host
-        .triggers
-        .iter()
-        .filter(|(_, t)| t.kind == TriggerKind::LookAt)
-        .map(|(id, t)| (id, *t))
-        .collect();
     let origin_atom = cx.intern_folded("origin");
     let mut best: Option<(f32, EntId)> = None;
     for (id, t) in rows {
