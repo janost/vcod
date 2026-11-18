@@ -78,7 +78,15 @@ pub fn compile_file_with(
 
     let mut local_funcs = HashSet::new();
     for f in &file.funcs {
-        local_funcs.insert(interner.intern_folded(&f.name));
+        if !local_funcs.insert(interner.intern_folded(&f.name)) {
+            // CoD2's wording (cod2-gsc-diff.md 3.1); 1.1d has no such string.
+            let msg = if opts.dialect.cod2_family() {
+                format!("function '{}' already defined in '{path}'", f.name)
+            } else {
+                format!("function {} is defined twice in {path}", f.name)
+            };
+            return Err(CompileError { line: f.line, msg });
+        }
     }
     let included = link_includes(file, path, interner, &local_funcs, opts)?;
 
@@ -1276,6 +1284,26 @@ mod tests {
             Ok(_) => panic!("{src} compiled"),
             Err(e) => e.msg,
         }
+    }
+
+    /// A name defined twice in one file is refused at the second
+    /// definition's line, by name: retail's wording under CoD2.
+    #[test]
+    fn a_function_defined_twice_names_itself_and_its_line() {
+        let src = "main() {}\nother() {}\n\nMAIN() {}\n";
+        let e = compile_cod2(src).map(|_| ()).unwrap_err();
+        assert_eq!(e.line, 4);
+        assert!(
+            e.msg.starts_with("function 'MAIN' already defined in '"),
+            "{}",
+            e.msg
+        );
+        let ast = crate::parse::parse_file(src).unwrap();
+        let e = compile_file(&ast, "test/script", &mut Interner::default()).unwrap_err();
+        assert_eq!(
+            (e.line, e.msg.as_str()),
+            (4, "function MAIN is defined twice in test/script")
+        );
     }
 
     /// The file a call to `name` in the first function goes to, or `None`

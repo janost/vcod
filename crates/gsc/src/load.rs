@@ -328,7 +328,14 @@ impl Loader {
         vm.install(fns).map_err(|e| LoadError {
             path: path.to_string(),
             line: 0,
-            msg: e.to_string(),
+            msg: match e {
+                crate::vm::InstallError::Duplicate(r) => format!(
+                    "duplicate function {}::{}",
+                    vm.interner().resolve(r.file),
+                    vm.interner().resolve(r.name)
+                ),
+                e => e.to_string(),
+            },
         })?;
         installed.extend(new_funcs);
         Ok(Some(refs))
