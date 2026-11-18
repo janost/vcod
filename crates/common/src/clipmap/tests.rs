@@ -149,3 +149,44 @@ fn a_mask_without_solid_passes_everything() {
     let t = map().trace(s, e, PLAYER_MINS, PLAYER_MAXS, CONTENTS_WATER);
     assert_eq!(t, ClipTrace::clear());
 }
+
+/// One test map per shape `check_trees` refuses: the kernels would spin,
+/// recurse without end, or index past an array on each.
+#[test]
+fn check_trees_refuses_what_the_kernels_cannot_walk() {
+    assert!(map().check_trees().is_ok());
+    let refused = |edit: &dyn Fn(&mut ClipMap)| {
+        let mut m = map();
+        edit(&mut m);
+        m.check_trees().is_err()
+    };
+    let node = |children| CNode { plane: 0, children };
+    assert!(refused(&|m| m.nodes.clear()));
+    assert!(refused(&|m| m.nodes[0].children = [0, -1]));
+    assert!(refused(&|m| m.nodes = vec![node([1, 1]), node([-1, -1])]));
+    let aabb = |child_count, child_or_partition| CollAabbTree {
+        child_count,
+        child_or_partition,
+        ..map().aabbs[0]
+    };
+    assert!(refused(&|m| m.aabbs[0] = aabb(1, 0)));
+    assert!(refused(
+        &|m| m.aabbs = vec![aabb(2, 1), aabb(1, 2), aabb(0, 0)]
+    ));
+    let split = |children, straddlers| BrushNode::Split {
+        axis: 0,
+        dist: 0.0,
+        clearance: 0.0,
+        straddlers,
+        children,
+        contents: CONTENTS_SOLID,
+    };
+    assert!(refused(&|m| m.brush_nodes[1] = split([0, 1], false)));
+    let leaf = map().brush_nodes[1];
+    assert!(refused(&|m| {
+        m.brush_nodes = vec![leaf, split([1, 2], true), leaf, leaf];
+    }));
+    assert!(!refused(&|m| {
+        m.brush_nodes = vec![leaf, split([2, 3], true), leaf, leaf, leaf];
+    }));
+}

@@ -184,6 +184,7 @@ pub fn build_with_submodels(b: &ClipLumps, models: &[Model]) -> Result<(ClipMap,
         indexed: None,
         reach: Default::default(),
     };
+    clip.check_trees()?;
     Ok((clip, submodels))
 }
 

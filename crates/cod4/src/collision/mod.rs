@@ -830,29 +830,31 @@ fn build(c: &world::ClipMap, a: &Assets, refs: &[&Assets]) -> Result<ClipMap> {
         })
         .collect::<Result<Vec<_>>>()?;
 
+    let world = clipmap::ClipMap {
+        planes,
+        nodes,
+        leafs,
+        brush_nodes,
+        leaf_brush_list,
+        brushes,
+        materials,
+        verts: Vec::new(),
+        edges: Vec::new(),
+        tris: Vec::new(),
+        borders,
+        partitions,
+        aabbs,
+        indexed: Some(IndexedMesh {
+            verts,
+            tris,
+            walkable: bulk(&c.tri_edge_walkable, "walkable bits")?.to_vec(),
+        }),
+        reach: Default::default(),
+    };
+    world.check_trees()?;
     Ok(ClipMap {
         name: c.name.clone(),
-        world: clipmap::ClipMap {
-            planes,
-            nodes,
-            leafs,
-            brush_nodes,
-            leaf_brush_list,
-            brushes,
-            materials,
-            verts: Vec::new(),
-            edges: Vec::new(),
-            tris: Vec::new(),
-            borders,
-            partitions,
-            aabbs,
-            indexed: Some(IndexedMesh {
-                verts,
-                tris,
-                walkable: bulk(&c.tri_edge_walkable, "walkable bits")?.to_vec(),
-            }),
-            reach: Default::default(),
-        },
+        world,
         submodels,
         static_models,
     })

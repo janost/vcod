@@ -285,6 +285,54 @@ impl IndexedMesh {
 }
 
 impl ClipMap {
+    /// What the kernels take on trust, checked once by the loaders: the
+    /// BSP nodes, the AABB trees and the brush trees are trees
+    /// ([`crate::treecheck`]) whose links stay in their arrays. A brush
+    /// node's straddler subtree and children lie past it; offset 0 would
+    /// name itself.
+    pub fn check_trees(&self) -> anyhow::Result<()> {
+        use crate::treecheck::{check_bsp, check_forest};
+        use anyhow::{Context, ensure};
+        ensure!(!self.nodes.is_empty(), "clip map has no nodes");
+        check_bsp(self.nodes.len(), self.leafs.len(), |n| {
+            self.nodes[n].children
+        })
+        .context("bsp nodes")?;
+        for (i, l) in self.leafs.iter().enumerate() {
+            ensure!(
+                usize::from(l.first_aabb) + usize::from(l.aabb_count) <= self.aabbs.len()
+                    && (l.brush_node == 0 || (l.brush_node as usize) < self.brush_nodes.len()),
+                "leaf {i}: aabb trees or brush node out of range"
+            );
+        }
+        check_forest(self.aabbs.len(), |n| {
+            let first = i64::from(self.aabbs[n].child_or_partition);
+            first..first + i64::from(self.aabbs[n].child_count)
+        })
+        .context("collision aabb trees")?;
+        check_forest(self.brush_nodes.len(), |n| {
+            let k = n as i64;
+            match self.brush_nodes[n] {
+                // CoD4's placeholder node 0 links to itself: its zero
+                // contents stop the kernels, and the other walks skip root 0.
+                BrushNode::Split { contents: 0, .. } if n == 0 => [None; 3],
+                BrushNode::Split {
+                    straddlers,
+                    children,
+                    ..
+                } => [
+                    straddlers.then_some(k + 1),
+                    Some(k + i64::from(children[0])),
+                    Some(k + i64::from(children[1])),
+                ],
+                BrushNode::Leaf { .. } => [None; 3],
+            }
+            .into_iter()
+            .flatten()
+        })
+        .context("brush trees")
+    }
+
     /// Per BSP node, the union of its leaves' brush boxes (`CLeaf::mins`,
     /// `maxs`) and AABB tree roots: the leaf tests a sweep runs under it
     /// ([`trace::Cx`]'s brush box cull and `CM_CullBox`) pass only for a
