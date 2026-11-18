@@ -111,7 +111,7 @@ cargo test --workspace --lib --bins --tests
 cargo deny check   # after a dependency change
 ```
 
-`--lib --bins --tests` leaves out the 39 examples, a GB of links that
+`--lib --bins --tests` leaves out the examples, about a GB of links that
 clippy's `--all-targets` already compiles. `tools/gate.sh [area...]` runs
 the first three once per install the environment names (`COD_DIR`,
 `COD_UO_DIR`, `COD2_DIR`, `COD4_DIR`) and then the ignored gates of each
