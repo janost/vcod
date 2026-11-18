@@ -35,7 +35,7 @@ wgpu.workspace = true
 [dev-dependencies]
 vcod-common = { workspace = true, features = ["testing"] }
 vcod-cod4 = { path = "../cod4", features = ["testing"] }
-vcod-server = { path = "../server" }
+vcod-server = { path = "../server", features = ["testing"] }
 tempfile.workspace = true
 zip.workspace = true
 

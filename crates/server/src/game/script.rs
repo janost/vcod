@@ -4723,11 +4723,13 @@ pub type Bounds = ([f32; 3], [f32; 3]);
 
 impl ScriptRuntime {
     /// A client's `sessionteam`, as a test sets it (`Server::test_set_client_team`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_client_team_for_test(&mut self, slot: usize, team: &str) {
         self.set_client_string_for_test(slot, "sessionteam", team);
     }
 
     /// Writes one string field of a client's entity, as a script would.
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_client_string_for_test(&mut self, slot: usize, name: &str, value: &str) {
         use vcod_gsc::Host;
         let Some(ent) = self.client_entity(slot) else {
@@ -4809,6 +4811,7 @@ impl ScriptRuntime {
 
     /// A `trigger_hurt` of `shape` on `id` doing `dmg` a touch, linked as
     /// its spawn would link it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn register_hurt_for_test(
         &mut self,
         id: EntId,
@@ -4825,6 +4828,7 @@ impl ScriptRuntime {
     }
 
     /// A trigger the test registered, linked as its spawn would link it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn link_trigger_for_test(&mut self, id: EntId) {
         let host = &mut self.host;
         self.vm.with_cx(|cx| host.link_trigger(cx, id));
@@ -4872,6 +4876,7 @@ impl ScriptRuntime {
 
     /// Compile and install another file's worth of functions into a test
     /// runtime, so a test can add a thread body after `for_test`.
+    #[cfg(any(test, feature = "testing"))]
     pub fn install_for_test(&mut self, src: &str) {
         let ast = vcod_gsc::parse::parse_file(src).expect("test script parses");
         let fns = vcod_gsc::compile::compile_file(&ast, &self.entry, self.vm.interner_mut())
@@ -4880,6 +4885,7 @@ impl ScriptRuntime {
     }
 
     /// A map entity at `origin`, the way the entity lump makes one.
+    #[cfg(any(test, feature = "testing"))]
     pub fn spawn_map_entity_for_test(&mut self, origin: [f32; 3]) -> EntId {
         use vcod_gsc::Host;
         let host = &mut self.host;
@@ -4892,6 +4898,7 @@ impl ScriptRuntime {
     }
 
     /// A client entity in `slot` at `origin`.
+    #[cfg(any(test, feature = "testing"))]
     pub fn spawn_client_for_test(&mut self, slot: usize, origin: [f32; 3]) -> EntId {
         let host = &mut self.host;
         let id = self
@@ -4902,6 +4909,7 @@ impl ScriptRuntime {
     }
 
     /// Writes a client field through the field setter, the way script does.
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_client_field_for_test(&mut self, slot: usize, name: &str, v: Value) {
         use vcod_gsc::Host;
         let Some(ent) = self.client_entity(slot) else {
@@ -4918,6 +4926,7 @@ impl ScriptRuntime {
     /// `"spectator"`; the four legal strings are in
     /// docs/research/cod11-map-cycle.md 6.1. Also the `takedamage` the
     /// client's next end frame would write for it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_client_state_for_test(&mut self, slot: usize, state: &str) {
         use vcod_gsc::Host;
         self.set_client_takedamage(slot, state == "playing");
@@ -4933,6 +4942,7 @@ impl ScriptRuntime {
     }
 
     /// Start `name` as a thread on `ent`, the way a script's `thread` does.
+    #[cfg(any(test, feature = "testing"))]
     pub fn start_thread_for_test(&mut self, ent: EntId, name: &str) {
         let f = self.vm.func_ref(&self.entry, name);
         self.vm
@@ -4959,6 +4969,7 @@ impl ScriptRuntime {
     }
 
     /// Set a test client's health and max health, the way a spawn does.
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_client_health_for_test(&mut self, slot: usize, health: i32) {
         if let Some(v) = self.host.client_vitals.get_mut(slot) {
             v.health = health;
@@ -4967,6 +4978,7 @@ impl ScriptRuntime {
     }
 
     /// Writes a folded field on `level`.
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_level_field_for_test(&mut self, name: &str, v: Value) {
         let level = self.vm.level_id();
         self.vm.with_cx(|cx| {

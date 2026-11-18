@@ -293,6 +293,7 @@ impl Cod4Level {
 
     /// Test-facing: the script models a round meets ([`Self::shot_boxes`]),
     /// `(number, origin, open to damage)`.
+    #[cfg(any(test, feature = "testing"))]
     pub fn shot_models_for_test(&mut self) -> Vec<(u32, Vec3, bool)> {
         self.shot_boxes()
             .iter()
@@ -303,6 +304,7 @@ impl Cod4Level {
     /// Test-facing: where `start` to `end` first meets the clip map, a
     /// static model or a script model under the shot mask, and the script
     /// model's number when it is one.
+    #[cfg(any(test, feature = "testing"))]
     pub fn shot_model_trace_for_test(&mut self, start: Vec3, end: Vec3) -> (Vec3, Option<u32>) {
         let mask = super::combat::MASK_SHOT;
         let mut fraction = self.clip.as_ref().map_or(1.0, |c| {

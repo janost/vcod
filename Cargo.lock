@@ -2552,6 +2552,7 @@ dependencies = [
  "vcod-cod4",
  "vcod-common",
  "vcod-gsc",
+ "vcod-server",
 ]
 
 [[package]]

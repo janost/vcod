@@ -80,6 +80,7 @@ fn mirror(cs: &dyn Fn(usize) -> String) -> BTreeMap<String, String> {
 
 /// `war` on mp_crash loaded and booted with the stock settings, for a
 /// test that needs a level's host; `None` without `COD4_DIR`.
+#[cfg(any(test, feature = "testing"))]
 pub(crate) fn booted_for_test() -> Option<crate::game::script::ScriptRuntime> {
     let install = vcod_cod4::testing::cod4_install()?;
     let zones = Cod4Zones::load(&install, "mp_crash").unwrap();

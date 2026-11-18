@@ -640,6 +640,7 @@ impl Cod4Level {
 
     /// Slot `slot` uses gun entity `gun` as the use key would, for a
     /// client test that needs another player on a gun; whether he is on it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn use_turret_for_test(&mut self, slot: usize, gun: u32) -> bool {
         let Some(id) = self.rt.host.ents.handle(gun) else {
             return false;

@@ -57,6 +57,7 @@ impl Cod4Server {
     /// Test-facing: one bot on axis (else allies) that holds still: its
     /// cmds carry no move and no button, and the view its first one took,
     /// so a body put somewhere stands there as put. Its slot.
+    #[cfg(any(test, feature = "testing"))]
     pub fn add_held_bot_for_test(&mut self, axis: bool) -> Option<usize> {
         let side = if axis { Side::Axis } else { Side::Allies };
         let slot = self.add_bot(side, false, None)?;

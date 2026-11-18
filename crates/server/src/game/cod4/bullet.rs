@@ -628,6 +628,7 @@ impl Cod4Level {
     /// One round of the weapon named `weapon` from `start` toward `end`,
     /// fired by `slot` at the level's time with the bodies where they
     /// stand; for tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn fire_round_for_test(&mut self, slot: usize, weapon: &str, start: Vec3, end: Vec3) {
         self.sync_defs();
         let d = self
@@ -644,6 +645,7 @@ impl Cod4Level {
 
 impl Cod4Level {
     /// The clip map alone under the shot mask, for the tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn shot_trace_for_test(&self, start: Vec3, end: Vec3) -> vcod_common::clipmap::ClipTrace {
         let mut t = vcod_common::clipmap::ClipTrace::clear();
         if let Some(c) = &self.clip {

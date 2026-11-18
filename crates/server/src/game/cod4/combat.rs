@@ -1975,17 +1975,20 @@ fn damage_direction(from: Option<[f32; 3]>) -> [u32; 2] {
 #[cfg(test)]
 impl Cod4Level {
     /// `slot`'s melee swing at the level's time; for tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn fire_melee_for_test(&mut self, slot: usize) {
         let now = self.level_time();
         self.fire_melee(slot, now);
     }
 
     /// Applies the queued [`Damage4`]s now; for tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn apply_damage_ops_for_test(&mut self) {
         self.apply_damage_ops();
     }
 
     /// `slot`'s end-frame damage feedback now; for tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn damage_feedback_for_test(&mut self, slot: usize) {
         self.damage_feedback(slot);
     }

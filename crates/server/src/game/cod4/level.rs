@@ -1906,6 +1906,7 @@ impl Cod4Level {
     /// script's health writes clamp to it), more than any one frame's
     /// rounds take: the cmds of two packets can both run between two
     /// frames, and two head hits kill.
+    #[cfg(any(test, feature = "testing"))]
     pub fn heal_for_test(&mut self, slot: usize) {
         if let Some(v) = self.rt.host.client_vitals.get_mut(slot)
             && v.health > 0
@@ -1918,6 +1919,7 @@ impl Cod4Level {
     /// Test-facing: `slot` takes `damage` without knockback along `dir`
     /// (`None`: from no direction), his health left alone, as a script's
     /// `finishPlayerDamage` followed by a heal.
+    #[cfg(any(test, feature = "testing"))]
     pub fn hurt_for_test(&mut self, slot: usize, damage: i32, dir: Option<[f32; 3]>) {
         self.rt
             .host

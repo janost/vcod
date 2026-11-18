@@ -1700,6 +1700,7 @@ impl Cod4Level {
     /// bursts with no `owner` and a kill by one aborts in `ch_kills`;
     /// those go through [`Self::rest_grenade_for_test`] and
     /// [`Self::explode_for_test`] a frame apart.
+    #[cfg(any(test, feature = "testing"))]
     pub fn burst_for_test(&mut self, slot: usize, weapon: &str, at: Vec3) -> bool {
         let Some(w) = self.combat.defs.iter().position(|d| d.name == weapon) else {
             return false;
@@ -1720,6 +1721,7 @@ impl Cod4Level {
 impl Cod4Level {
     /// Test-facing: the missile `id` bursts where it is now
     /// (`G_ExplodeMissile`). False when it is gone.
+    #[cfg(any(test, feature = "testing"))]
     pub fn explode_for_test(&mut self, id: EntId) -> bool {
         if !self.rt.host.cod4().missiles.iter().any(|m| m.id == id) {
             return false;
@@ -1733,6 +1735,7 @@ impl Cod4Level {
     /// Test-facing: `slot` lets go of a grenade named `weapon` at `start`
     /// moving at `vel`, with `fuse_ms` on its fuse (`G_FireGrenade`, no
     /// spin); its entity, `None` with no such weapon.
+    #[cfg(any(test, feature = "testing"))]
     pub fn fire_grenade_for_test(
         &mut self,
         slot: usize,
@@ -1750,6 +1753,7 @@ impl Cod4Level {
 
 impl Cod4Level {
     /// Drops a frag from `at` with no throw velocity, for the client's live tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn drop_frag_for_test(&mut self, slot: usize, at: Vec3, fuse_ms: i32) -> bool {
         let Some(w) = self
             .combat
@@ -1770,6 +1774,7 @@ impl Cod4Level {
     /// `grenade_fire` reaches the script with the frame's notifies, so a
     /// claymore or C4 bursting a frame later carries the `owner`
     /// `_weapons.gsc` gives it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn rest_grenade_for_test(
         &mut self,
         slot: usize,

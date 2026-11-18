@@ -12,6 +12,11 @@ description = "Dedicated server for Call of Duty 1.1 and 1.5, United Offensive, 
 # tests/main.rs links every test file into one binary (`cargo test --test server`).
 autotests = false
 
+# `testing`: the test seams on `Server` and the levels (`test_*`,
+# `*_for_test`) for the tests of this crate and the client.
+[features]
+testing = ["vcod-common/testing", "vcod-cod4/testing"]
+
 [dependencies]
 vcod-common.workspace = true
 vcod-gsc.workspace = true
@@ -28,8 +33,7 @@ vcod-cod4 = { path = "../cod4" }
 libc = "0.2"
 
 [dev-dependencies]
-vcod-common = { workspace = true, features = ["testing"] }
-vcod-cod4 = { path = "../cod4", features = ["testing"] }
+vcod-server = { path = ".", features = ["testing"] }
 
 [[test]]
 name = "server"
