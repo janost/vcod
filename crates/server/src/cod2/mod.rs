@@ -722,10 +722,10 @@ impl Cod2Server {
         let Some(m) = c.link.netchan.process_in(pkt) else {
             return;
         };
-        // An acknowledge past what we sent, or so far behind that its key is
-        // gone, is a forgery or garbage (`SV_ExecuteClientMessage`).
-        let seq = c.link.netchan.reliable_sequence as i32;
-        if m.reliable_ack > seq || seq - m.reliable_ack >= MAX_RELIABLE_COMMANDS as i32 {
+        // `SV_PacketEvent` drops a negative messageAcknowledge (cod2-protocol.md
+        // 2.2). A reliableAcknowledge past what we sent, or so far behind that
+        // its key is gone, is a forgery or garbage (`SV_ExecuteClientMessage`).
+        if m.message_ack < 0 || !c.link.reliable_ack_in_window(m.reliable_ack) {
             return;
         }
         c.link.netchan.accept(&m);
@@ -1518,7 +1518,7 @@ impl Cod2Server {
                 | if c.link.was_active { 0 } else { 2 };
             let baselines = &self.game.baselines;
             let head = SnapshotHead {
-                delta_num: (message - c.delta_message) as u8,
+                delta_num: from.map_or(0, |_| (message - c.delta_message) as u8),
                 snap_flags: u32::from(flags),
             };
             PROTOCOL_118.write_snapshot(&mut w, from, &to, head, baselines);

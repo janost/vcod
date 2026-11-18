@@ -88,4 +88,15 @@ impl<F> Link<F> {
     pub fn no_frames() -> Vec<Option<F>> {
         (0..PACKET_BACKUP).map(|_| None).collect()
     }
+
+    /// Whether a client message's `reliableAcknowledge` names a command the
+    /// ring still holds: not negative, not past `reliable_sequence`, less
+    /// than the ring's length behind it. Taken in i64 so an ack near
+    /// `i32::MIN` cannot wrap into the window and send
+    /// `write_pending_commands` walking 2^31 commands.
+    pub fn reliable_ack_in_window(&self, ack: i32) -> bool {
+        let seq = i64::from(self.netchan.reliable_sequence);
+        let ack = i64::from(ack);
+        (0..=seq).contains(&ack) && seq - ack < self.netchan.reliable.len() as i64
+    }
 }
