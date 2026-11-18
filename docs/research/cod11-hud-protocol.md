@@ -898,11 +898,13 @@ reply carried axis 221 / allies 231. Both are legitimate wire values: a `d`
 for 5/6 and the next `b` (or the client's own `score` re-request, section 4)
 do not land in the same tick, so the two can read a few points apart.
 
-vcod's header prefers the latest `b` reply's totals once the scoreboard has
-one (`Scoreboard::totals`, `status::read_status`'s `scoreboard_totals`),
-falling back to CS 5/6 before any `b`. A `b` reply is requested and answered
-in one round trip, while CS 5/6 wait on a `d` push, so `b` is the more
-current. The header is vcod's own, drawn for spectators only (`hud/mod.rs`);
+vcod's header prefers the latest `b` reply's totals while the board is up
+(held, or intermission) and a reply has come since the last gamestate
+(`Scoreboard::totals`, `status::read_status`'s `scoreboard_totals`), and
+reads CS 5/6 otherwise. While the board is up the client re-requests `score`
+every 2 s (section 4), and a `b` reply is answered in one round trip while
+CS 5/6 wait on a `d` push, so `b` is the more current; once the board is
+down no reply comes and CS 5/6 are. The header is vcod's own, drawn for spectators only (`hud/mod.rs`);
 retail draws team totals only on the scoreboard (section 3.1).
 
 ### There is no round-timer configstring
