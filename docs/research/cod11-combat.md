@@ -5246,7 +5246,7 @@ VERIFIED, the shooter's single shot on `mp_carentan`: `weaponstate` 3,
 as retail's shooter capture. `torsoAnim` reads 765 (512 | 253), the number
 the retaken `combat` fixtures measure; the retail `dm` shooter fixture's 0
 predates the `cmd.weapon` fix (`player-model-anim-system.md`, "The
-`jump_takeoff` torso index is gone") and is not evidence.
+`jump_takeoff` torso 720 was a holstered weapon") and is not evidence.
 
 VERIFIED, `mp_ship` `dm`, the kill by a bullet: `health` 0, `pm_type` 6,
 `torsoAnim` 512, the dead view height lerping 60 -> 50.8 -> 42 -> 32.8 -> 24

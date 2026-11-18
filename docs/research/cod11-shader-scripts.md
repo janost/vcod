@@ -1601,8 +1601,7 @@ out between the sun's NDC reaching the screen edge and 1.6.
 
 - `stock_shaders_parse_without_warnings` (`shader_corpus.rs`) parses every
   stock `.shader` and `.stype` of the install `COD_DIR` names (1.1, 1.5, or
-  UO's `uo/` over `main/`) and fails on any warning: 0 on each (65 unique on
-  1.1 and 207 on UO before the line-bound arguments and keyword fixes).
+  UO's `uo/` over `main/`) and fails on any warning: 0 on each.
 - Corpus tests (`crates/common/tests/shader_corpus.rs`, needs `COD_DIR`):
   >500-block library pin, 250..350 world-reference band, the every-MP-map-has-a-sky
   pin, and every stage image of every authored MP material resolving through
@@ -1614,8 +1613,7 @@ out between the sun's NDC reaching the screen edge and 1.6.
 - Live fly-throughs on a 1.5/UO install: mp_pavlov (night sky), mp_harbor,
   mp_bocage (overcast hedgerow sky, fence and foliage cutouts, terrain
   detail blends), noville (dusk cloud dome, scrolling cloud stage visible),
-  burnville. Zero missing textures on stock main maps; 94-145 fps during the
-  passes.
+  burnville. Zero missing textures on stock main maps.
 - PENDING HUMAN REVIEW: pixel-truth against the retail renderer. The above
   shows surfaces render as authored; only a side-by-side with the real game
   settles the last percent of blending and sky shading.

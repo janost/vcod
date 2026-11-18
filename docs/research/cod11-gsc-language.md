@@ -63,7 +63,7 @@ Vector component reads: `_utility.gsc:178` `vectorScale`, `_utility.gsc:250` `or
 
 Switch fallthrough on empty cases is common: `dm.gsc:249-251` stacks `case "allies": case "axis": case "autoassign":` before one body. Field access tolerates spaces around the dot (`animscripts/init.gsc:129` `self . ramboChance *= 2;`).
 
-## 3. What is absent — and two corrections to the design's absence list
+## 3. Absent constructs, `do`/`while` and the bitwise operators
 
 VERIFIED by census, zero hits: `#include`, `foreach`, ternary `?:`, `&=`, `^=`, `<<=`, `>>=`.
 
@@ -78,7 +78,7 @@ VERIFIED by census, zero hits: `#include`, `foreach`, ternary `?:`, `&=`, `^=`, 
 
 Every `^` is a colour code in a string or sits in a comment; `<<`/`>>`/`~` appear only in `//` comments (dividers, arrows). A plain `grep -c` overcounts all four.
 
-Correction 1: `do`/`while` exists, once, in `animscripts/predict.gsc:103-114`, inside `tumbleWall()`:
+`do`/`while` exists, once, in `animscripts/predict.gsc:103-114`, inside `tumbleWall()`:
 
 ```
 do
@@ -90,14 +90,14 @@ do
 
 `grep -rn '} while' pak0 pak4 pak5` returns only this. Re-verified: `parse_file` accepts it (`StmtKind::DoWhile`), and the compile census finds that one site.
 
-Correction 2: two bitwise operators are required.
+Two bitwise operators are in use.
 
 - Binary `&` tests `spawnflags` bits. VERIFIED in 11 files, e.g. `_utility.gsc:65` `if (self.spawnflags & 1)`, `_load.gsc` `if (trigger.spawnflags & 8)` (three sites), `stalingrad.gsc` `if (ai[i].spawnflags & 4)`, `_scripted.gsc` `if (bitflags & level.teleport)`. Every map's `maps\mp\_load::main()` reaches `_load.gsc`'s.
 - `|=` accumulates damage flags in all five stock gametypes: `dm.gsc`, `tdm.gsc`, `sd.gsc`, `re.gsc` and `bel.gsc` each have `iDFlags |= level.iDFLAGS_NO_KNOCKBACK;`. The constants come from `_callbacksetup.gsc`'s `SetupCallbacks()`: `level.iDFLAGS_RADIUS=1`, `iDFLAGS_NO_ARMOR=2`, `iDFLAGS_NO_KNOCKBACK=4`, `iDFLAGS_NO_TEAM_PROTECTION=8`, `iDFLAGS_NO_PROTECTION=16`, `iDFLAGS_PASSTHRU=32`.
 
 Absent: `&=`, `^=`, `<<=`, `>>=`, and any standalone `|` outside `||`/`|=`. Re-verified: `parse_file` accepts both (`BinOp::BitAnd`; `|=` desugars to `BinOp::BitOr`, see its comment in `crates/gsc/src/ast.rs`). Compile census: 11 files, 24 sites for binary `&`; 5 files, 5 sites for `|=`, one per stock gametype. A VM with no bitwise operators cannot compile `_load.gsc`, `_utility.gsc`, `_scripted.gsc`, `stalingrad.gsc` or any stock gametype.
 
-## 4. The complete operator set (corrected)
+## 4. The complete operator set
 
 `+ - * / %`, binary `&` (section 3), `= += -= *= /= |=`, `++ --`, `== != < > <= >=`, `&& || !`, unary `-`. No ternary, no shifts, no `~`, no `&=`/`^=`/`<<=`/`>>=`.
 
@@ -188,13 +188,7 @@ The script side: `dm.gsc:142` builds `game["menu_team"] = "team_" + game["allies
 
 ## 7. The engine's script-function name table
 
-Superseded by `cod11-gsc-object-model.md` section 9, which dumps every builtin table with `tools/re/dump_builtins.py`. Summary:
-
-- Count 216, VERIFIED, in five tables. `functions` (0x7e508, 106 entries) holds the free functions. `Scr_GetMethod` searches player (0x733dc, 46), scriptent (0x78d40, 12) and hudelem (0x749b4, 14) methods in that order and falls back to the generic entity methods (0x7ea00, 38). Every walk is a linear `strcmp` over a hardcoded count.
-- Records, VERIFIED: `functions` rows are 12 bytes `{char *name; void (*fn)(); int developer;}`, method rows 8 bytes `{char *name; void (*fn)();}`. `developer` is 1 on `print`, `println` and `assert`, 0 elsewhere, as in CoDExtended's `SCRIPTFUNCTION { name, function, developer }` (`src/script.c`).
-- Trap: a pointer stored in `.data` reads as 0 in the file, since the module is a shared object and `.rel.data` supplies the address. Read raw, every function pointer looks null. So no record has a null function (`getent` is `Scr_GetEnt`, `getentarray` `Scr_GetEntArray`); an earlier count of 144 was 106 plus 38 under a uniform 8-byte stride, which does not hold; and the `move*`/`rotate*` builtins are the scriptent method table in `.data` with real code pointers (`ScriptEntCmd_MoveTo`, `ScriptEntCmd_GravityMove`, `ScriptEntCmd_RotateVelocity` and the rest), not a `.rodata` whitelist.
-
-`Scr_GetFunction` writes the table's spelling back through its `char **` first argument (0x5c199), so the engine canonicalises a builtin name on lookup, consistent with section 8.
+The five builtin tables, their record layouts, lookup order and the `.rel.data` trap that hides their pointers are in `cod11-gsc-object-model.md` section 9 (216 builtins in 1.1).
 
 ## 8. Atom identity and case folding
 
@@ -469,7 +463,7 @@ UO's stock `maps/mp/_birdbush.gsc` (pakuo01) adds `(int) self.script_noteworthy`
 
 ## 10. Divergences kept as documentation, not code
 
-Deliberate choices the corpus cannot settle. Closed since: `delete()` deferring the free (`cod11-gsc-object-model.md` section 14, `probe_delete`), stale handles reading as retail's dead entity (`probe_stale_handle`), `game.foo` and `level["k"]` refused at compile time (`probe_game_dotwrite`), the second of two notifies in one step being lost (`probe_notify_twice`), and the `SP_` spawn layer (last entry).
+Deliberate choices the corpus cannot settle.
 
 - **A thread killed by *another* thread's `endon` notify mid-step keeps executing to its next suspend.** A thread's own `notify` never kills it (`probe_endon_self`, `Vm::notify_from`). The remaining case is a nested spawn's notify: `main`'s `self thread killer();` runs `killer` synchronously (`Vm::spawn`); if `killer` notifies the event `main` registered with `endon`, `Vm::notify` removes `main` from `self.threads` while `main`'s own `step_frames` is still running up the call stack. `main` runs on to its next `wait`/`waittill`/return; only then does `step_thread` find its entry gone and drop the frames. Example: `main() { self endon("die"); self thread killer(); sideEffectA(); sideEffectB(); wait 5; done(); }` ends with `threads=0`, both side effects run, `done()` never does. Pinned by `sched::tests::a_thread_killed_by_its_own_endon_mid_step_still_runs_to_its_next_suspend`. CoD2's stock tdm relies on the other rule, and retail 1.3 stops the thread at once (cod2-protocol.md 16.8): a CoD2 level turns on `Vm::set_kill_mid_step` (a list of threads a notify ended, checked before each instruction). 1.1 is unmeasured and keeps the old rule.
 - **A bare local is accepted as a statement.** vcod compiles `x;` (and so `waittillframeend;`, which 1.1 has no keyword for) as a local read and a pop. VERIFIED, a 1.1d probe: retail refuses both as `bad syntax` (cod2-gsc-diff.md 3.2). No stock 1.1 script has one; CoD2's `waittillframeend` lives behind `Dialect::Cod2`.
@@ -483,4 +477,4 @@ Deliberate choices the corpus cannot settle. Closed since: `delete()` deferring 
   - **The victim walk.** VERIFIED: retail walks `trap_EntitiesInBox` over a `radius * sqrt(2)` box, and the loop body reads `takedamage` and the entity's own bounds (14.1). INFERRED, the skip being a branch: it takes anything with `takedamage` and measures a brush model to the nearest point of its bounds. vcod (`builtins::combat::blast_candidates`) walks `entities_in_box` in the area tree's order (14.7), keeping clients and turrets; a client is tested for `takedamage` on its turn and measured at its script `origin` field, a turret takes `G_Damage`'s entity arm (14.6). `func_static` and `trigger_damage` are walked (`cod11-combat.md` 14.6, 14.8). Doors have `takedamage` on retail and no spawn here; no stock MP map places one.
   - **The victim's box and eye are the standing ones.** VERIFIED: retail's probe points come off the entity's bounds and its `client+0xD0` eye height (14.3). vcod's host carries no stance for the builtin, so a crouched or prone player is measured standing. That moves the five probe points, not the distance (origin to origin either way). The second chance's box midpoint is taken at the origin of the client's last link, mirrored from the sim: its last cmd's truncated origin, or the unsnapped one after a `setOrigin` with no cmd since, or on a linked client (14.3).
   - **Not a divergence: a fifth argument is ignored.** VERIFIED: retail reads its four arguments by index, `Scr_GetVector(0)` and `Scr_GetFloat(1)` to `(3)` (14.2). INFERRED, from the absence of an arity check: a fifth argument is ignored, not refused, as in vcod. No 1.1 call passes one. UO's builtin takes an attacker and an inflictor after the four (`coduo-vehicles.md` 11.2).
-- **Of the `SP_` layer, only what the wire can see runs.** Mostly closed. `spawn_entities_from_string` (`crates/server/src/game/spawn.rs`) reproduces `G_CallSpawn`'s third case for the five classnames whose `SP_` is an unconditional `G_FreeEntity(self)` (`SPAWN_FREES`; entity numbering, `cod11-gsc-object-model.md` section 13), the spawn-time configstring writes (`SP_worldspawn`'s `northyaw`, `SP_trigger_hurt`'s alias, the item and two aliases a mounted mg42 registers through `SP_turret`; object-model sections 17 and 19), and the trigger, script entity, item and turret `SP_` functions, plus `func_bobbing`/`func_pendulum` (`mover::spawn_sine`). Still absent: the engine setup of `func_door`, `func_door_rotating` and `func_rotating`. They are live and script-visible with every Radiant key applied, but a script that asks a `func_door` to move is the case that would show it.
+- **Of the `SP_` layer, only what the wire can see runs.** `spawn_entities_from_string` (`crates/server/src/game/spawn.rs`) reproduces `G_CallSpawn`'s third case for the five classnames whose `SP_` is an unconditional `G_FreeEntity(self)` (`SPAWN_FREES`; entity numbering, `cod11-gsc-object-model.md` section 13), the spawn-time configstring writes (`SP_worldspawn`'s `northyaw`, `SP_trigger_hurt`'s alias, the item and two aliases a mounted mg42 registers through `SP_turret`; object-model sections 17 and 19), and the trigger, script entity, item and turret `SP_` functions, plus `func_bobbing`/`func_pendulum` (`mover::spawn_sine`). Still absent: the engine setup of `func_door`, `func_door_rotating` and `func_rotating`. They are live and script-visible with every Radiant key applied, but a script that asks a `func_door` to move is the case that would show it.

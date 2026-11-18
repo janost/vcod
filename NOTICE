@@ -62,6 +62,13 @@ The release archives carry THIRD-PARTY-LICENSES: the licence and notice
 files of every Rust crate the binaries link, written at build time by
 tools/third_party_licenses.py.
 
+Test fixtures
+
+The files under crates/*/tests/fixtures/ are recordings of retail Call of Duty
+server output (wire captures, configstring tables, debugger readings, log
+lines, one retail client demo) made by the author of vcod, beside probe
+scripts and pinned outputs written for the tests. They hold no game assets.
+
 Quake III Arena and Return to Castle Wolfenstein are trademarks of id Software.
 Call of Duty is a trademark of Activision Publishing, Inc. This project is not
 affiliated with or endorsed by id Software, Activision or Infinity Ward.
