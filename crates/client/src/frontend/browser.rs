@@ -1174,12 +1174,23 @@ mod tests {
         assert!(b.resolve.is_none() && b.socket.is_none());
     }
 
+    /// Panics unless `VCOD_LIVE_NET` is set, so an unfiltered `--ignored`
+    /// run contacts no one.
+    fn live_net_allowed(test: &str, what: &str) {
+        assert!(
+            std::env::var_os("VCOD_LIVE_NET").is_some(),
+            "{test} {what}: set VCOD_LIVE_NET=1 to run it"
+        );
+    }
+
     /// The Internet list against cod.pm's live master: one `getservers 118`
     /// on the CoD2 port, then a `getinfo` to every server it lists. Run with
-    /// `cargo test -p vcod --bins master_list_live -- --ignored --nocapture`.
+    /// `VCOD_LIVE_NET=1 cargo test -p vcod --bins master_list_live --
+    /// --ignored --nocapture`.
     #[test]
     #[ignore]
     fn master_list_live() {
+        live_net_allowed("master_list_live", "asks cod.pm's public master");
         let mut b = Browser {
             master_query: Some(MasterQuery::of(&vcod_cod2::net::PROTOCOL_118.transport)),
             source: Source::Internet,
@@ -1211,11 +1222,12 @@ mod tests {
 
     /// The LAN scan against real servers: run ours and the retail one on
     /// 29661 and 29662 first (docs/research/cod11-front-end.md, "Local
-    /// servers"), then `cargo test -p vcod lan_scan_live -- --ignored
-    /// --nocapture`.
+    /// servers"), then `VCOD_LIVE_NET=1 cargo test -p vcod lan_scan_live --
+    /// --ignored --nocapture`.
     #[test]
     #[ignore]
     fn lan_scan_live() {
+        live_net_allowed("lan_scan_live", "broadcasts on the LAN");
         let mut b = Browser {
             lan_targets: [29661, 29662]
                 .map(|p| SocketAddrV4::new(Ipv4Addr::BROADCAST, p))

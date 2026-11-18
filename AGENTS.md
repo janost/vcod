@@ -135,9 +135,11 @@ cargo deny check   # after a dependency change
   live in its binary: `cargo test -p vcod --bins`.
 - Some gates are `#[ignore]`d for their cost. Run the one for your area when
   you touch it: nav and pmove (`nav_census`), bots (`bots::`, and
-  `bot_vehicles::` at UO), shaders and
-  layouts (`renderer::pipeline_check`), CoD2 maps (`cod2_map_census`), CoD4
-  maps (`cod4_map_sweep`). Commands and costs: `docs/dev/testing.md`.
+  `bot_vehicles::` at UO), CoD2 maps (`cod2_map_census`), CoD4 maps
+  (`cod4_map_sweep`). `--ignored` always takes a name filter. Shaders and
+  layouts: `renderer::pipeline_check`, plain tests that skip without a
+  Vulkan adapter, so run them on lavapipe. Commands and costs:
+  `docs/dev/testing.md`.
 
 ## Evidence labels
 

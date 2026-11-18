@@ -60,6 +60,11 @@ picks through `Server::pin_spawns`, as `gametypes_ab` does.
 
 ## Ignored tests: when to run them
 
+`--ignored` always takes a name filter. Unfiltered it also starts the soaks
+and the map sweep (minutes and gigabytes a map) and the two live browser
+tests, which ask cod.pm's public master and every server it lists, and
+broadcast on the LAN.
+
 | Touching | Run | Cost |
 |---|---|---|
 | pmove, collision or nav | `cargo test --release -p vcod-server --test server -- --ignored nav_census::` | ~20 s at 1.1; ~80 s at UO |
@@ -70,38 +75,42 @@ picks through `Server::pin_spawns`, as `gametypes_ab` does.
 | CoD4 hit boxes per map | `--lib -- --ignored cod4_every_map_poses_both_teams` (`COD4_DIR`) | ~25 s |
 | CoD2 gametypes | `--lib -- --ignored cod2_gametype_census` (`COD2_DIR`) | ~18 s |
 | 1.5 stuck seed | `--lib -- --ignored the_15_overlap_spectator_seed_is_the_only_fit` | ~2 s |
-| shaders or render layouts | `renderer::pipeline_check` (lavapipe env below) | |
 | CoD2 maps, CoD2 load path | `cod2_map_census`, `cod2_load_profile` | |
 | CoD4 maps, gametypes | `cod4_map_sweep` | 6-8 min and ~3 GB a map |
 
-What each holds:
+`nav_census` builds every stock nav graph (at UO, the 19-map UO census).
+`server/tests/bots.rs` and `bot_vehicles.rs` hold one map scenario a test,
+a graph build each; their doc comments name the map and the gametype, and
+the UO ones return at once at a 1.1 install. In the `bas` rounds
+`BAS_HEALTH=24500` plays stock base health, `BAS_MAP=all` the five stock
+bas maps, `BOTS_SEED=` another seed.
 
-- `nav_census`: all stock nav graphs. At UO, the 19-map UO census.
-- `server/tests/bots.rs` at 1.1: three mp_ship six-bot runs, mp_ship's boat,
-  mp_ship's head-on ladder pair, mp_ship's hold ladder top, mp_hurtgen's
-  crease and mp_depot's roof ledges (a graph build each).
-- `bots.rs` at UO: mp_cassino's six-bot tdm run, its walled-in spawns test
-  and four mp_foy `bas` rounds
-  (`uo_bots_breach_bases_until_a_bas_round_ends`, the two `four_*_bas_round`
-  runs, `a_seeded_bas_match_replays_beside_another`). The rounds run at
-  `scr_bas_basehealth 3000`; `BAS_HEALTH=24500` plays them at stock,
-  `BAS_MAP=all` on the five stock bas maps, `BOTS_SEED=` another seed.
-- `tests/bot_vehicles.rs` at UO: bots boarding, driving and firing
-  mp_cassino's tanks, rockets at one, and mp_kharkov's jeep. With a 1.1
-  install it returns at once, as the UO files of the other two do.
-- By-hand tools, not gates: `playerstate_slope_ab`'s
-  `the_mover_replays_the_fixture_named_by_slope_fixture` (panics without
-  `SLOPE_FIXTURE`), and the seed searches `recover_game_seed` (CoD4),
-  `recover_spread_seed` and `recover_rocket_seed` (CoD2), each driven by
-  its env vars (their doc comments).
+Measurements and by-hand tools, not gates. Each prints what it measured;
+its doc comment says what it reads and which env vars drive it.
+
+| Test | Area | Doc |
+|---|---|---|
+| `the_mover_replays_the_fixture_named_by_slope_fixture` | 1.1 slope replays (panics without `SLOPE_FIXTURE`) | `playerstate_slope_ab.rs` |
+| `recover_game_seed`, `recover_spread_seed`, `recover_rocket_seed` | CoD4 and CoD2 seed searches | their doc comments |
+| `leaf_order_census` | CoD1 leaf walk order (`LEAF_MAPS`, `LEAF_SAMPLES`) | bsp-ibsp59-format.md |
+| `stock_sun_keep`, `regional_sun_keep` | CoD1 sun keep | cod11-light-grid-and-leaf-lights.md 12 |
+| `cod2_cull_profile`, `cod2_cell_walks_draw_alike` (lavapipe), `cell_walks_side_by_side` (`vcod-cod2`) | CoD2 cell walk (`VCOD_PROFILE_MAPS`) | cod2-client-perf.md 8, 9 |
+| `a_prone_view_flick_costs` | CoD2 prone view cost | cod2-movement.md 10 |
+| `lit_pipeline_register_census` | CoD4 shader registers on a driver | cod4-client-perf.md 29 |
+| `spawn_wave` | the gsc interpreter | "The gsc interpreter" below |
+
+Never run by an agent: `master_list_live` (cod.pm's public master and every
+server it lists) and `lan_scan_live` (a LAN broadcast). Both panic unless
+`VCOD_LIVE_NET=1` is set as well.
 
 Times are release wall on a 30-thread box, the binary built.
 
 ## Headless render: pipeline_check
 
 `renderer::pipeline_check` builds the real `Renderer` headless and draws a
-CoD1 and a CoD2 frame under wgpu validation. It needs a Vulkan (not GL)
-adapter with BC textures and otherwise skips. On lavapipe:
+CoD1, a CoD2 and a CoD4 frame under wgpu validation. Its gates are plain
+`#[test]`s, not ignored: they need a Vulkan (not GL) adapter with BC
+textures, and without one each prints `skipped` and passes. On lavapipe:
 `VK_DRIVER_FILES=<lvp_icd.json> WGPU_BACKEND=vulkan GALLIVM_PERF=nopt`. Run it
 after any shader or layout change. A render test that passes headless can
 still draw wrong live; a change to a draw path also needs a test through the
