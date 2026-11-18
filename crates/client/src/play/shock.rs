@@ -284,7 +284,7 @@ fn cubic(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
 /// moves by `[left, up]` before it is normalized. Zero once the shock is
 /// over; full radius until its last 3 s, then a smoothstep down.
 pub fn view_kick(p: &ShockParams, elapsed: i32, duration: i32) -> [f32; 2] {
-    let remaining = duration - elapsed;
+    let remaining = duration.wrapping_sub(elapsed);
     if remaining < 1 {
         return [0.0, 0.0];
     }
@@ -368,7 +368,7 @@ fn mouse(p: &ShockParams, elapsed: i32, duration: i32) -> ShockMouse {
     if !p.mouse {
         return ShockMouse::NONE;
     }
-    let remaining = duration - elapsed;
+    let remaining = duration.wrapping_sub(elapsed);
     if remaining < p.mouse_fade_ms {
         if remaining < 1 {
             return ShockMouse::NONE;
@@ -655,8 +655,12 @@ impl ShellShock {
         if !p.sound {
             return ShockSound::idle(self.abort_end());
         }
-        let elapsed = now - start;
-        let until_off = p.mod_end_delay_ms - elapsed + p.fade_out_ms + duration;
+        let elapsed = now.wrapping_sub(start);
+        let until_off = p
+            .mod_end_delay_ms
+            .wrapping_sub(elapsed)
+            .wrapping_add(p.fade_out_ms)
+            .wrapping_add(duration);
         let f = if until_off < p.fade_out_ms {
             (until_off as f32 / p.fade_out_ms as f32).max(0.0)
         } else if elapsed < p.fade_in_ms {
@@ -670,7 +674,11 @@ impl ShellShock {
         } else {
             (p.room.clone(), f * p.wet)
         };
-        let until_loop_off = p.loop_end_delay_ms - elapsed + p.loop_fade_ms + duration;
+        let until_loop_off = p
+            .loop_end_delay_ms
+            .wrapping_sub(elapsed)
+            .wrapping_add(p.loop_fade_ms)
+            .wrapping_add(duration);
         let loop_blend = (until_loop_off > 0)
             .then(|| (1.0 - until_loop_off as f32 / p.loop_fade_ms as f32).max(0.0));
         let end = start
@@ -680,7 +688,7 @@ impl ShellShock {
             self.abort_end()
         } else if end != self.end_latch {
             self.end_latch = end;
-            Some(("shellshock_end", now - end))
+            Some(("shellshock_end", now.wrapping_sub(end)))
         } else {
             None
         };
@@ -856,6 +864,19 @@ mod tests {
         assert_eq!(sway_scale(5.0, 1500), 3.0);
         assert_eq!(sway_scale(5.0, 0), 1.0);
         assert_eq!(sway_scale(0.0, 0), 1.0);
+    }
+
+    /// Shock times at the i32 edges wrap as retail's do: the kick, the
+    /// mouse and the sound mix take them without an overflow (BUG-119).
+    #[test]
+    fn shock_times_at_the_i32_edges_do_not_overflow() {
+        let p = default_shock();
+        let _ = view_kick(&p, 10, i32::MIN);
+        let _ = view_kick(&p, -10, i32::MAX);
+        let _ = mouse(&p, 10, i32::MIN);
+        let mut s = ShellShock::default();
+        let _ = s.sound(&p, i32::MAX - 5, i32::MAX, i32::MIN + 5);
+        let _ = s.sound(&p, 10, i32::MAX, 20);
     }
 
     #[test]
