@@ -2490,7 +2490,8 @@ Defaults and order:
 - Downloads (`crates/server/src/download.rs`) are limited on purpose to
   mounted paks listed in `sv_referencedPakNames`: those are all a retail
   client asks for (`FS_ComparePaks` lists from them), and retail's open path
-  serves any file. Blocks go in the per-client message at `nextSnapshotTime`,
+  serves any file. A transfer holds the pak's open file and reads each block
+  off it as it goes out (`DownloadFile`), never the whole pak. Blocks go in the per-client message at `nextSnapshotTime`,
   alone before the world and after the snapshot once in it, with no server
   commands until active; a fragmented message goes a fragment a turn.
 - The client sends a packet every 50 ms during a download (`NetClient`); the

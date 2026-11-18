@@ -1639,7 +1639,8 @@ impl Cod4Server {
                     .is_some_and(|v| v != "0");
             let root = self.game.install.as_ref().map(|i| i.root().to_path_buf());
             let open = |name: &str| {
-                download::servable(root.as_deref()?, name).and_then(|p| std::fs::read(p).ok())
+                download::servable(root.as_deref()?, name)
+                    .and_then(|p| crate::download::DownloadFile::open(&p))
             };
             c.download
                 .write(&mut w, svs, budget, &dl_cvars, wants_www, &open);

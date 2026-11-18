@@ -144,7 +144,7 @@ Common ones:
 | `protocol` | CoD1: `1`, `6` or `22` overrides the install's protocol. |
 | `g_log`, `g_logSync` | `games_mp.log` (below): empty `g_log` turns it off, `g_logSync 1` flushes every line. A `g_log` holding `..` or a colon, or starting at the root, logs nothing. |
 | `fs_homepath` | Where the log goes. Default the `--game-dir`. CoD2 serves downloads from here first, then the game dir. Like `fs_game` and `fs_basepath`, set on the command line only: rcon and scripts cannot move it. |
-| `sv_allowDownload` | On by default: serve the server's non-stock paks to a client that lacks them. CoD2 serves any file a client names under `fs_homepath` or the game dir, none outside them. `sv_wwwDownload 1` with `sv_wwwBaseURL` redirects instead. |
+| `sv_allowDownload` | On by default: serve the server's non-stock paks to a client that lacks them. CoD2 serves any `.iwd` a client names under `fs_homepath` or the game dir, nothing else and nothing outside them. `sv_wwwDownload 1` with `sv_wwwBaseURL` redirects instead. |
 | `sv_pure` | 1 by default, as on retail: clients must pass the pure `cp` check. 0 turns it off. |
 
 ### Log

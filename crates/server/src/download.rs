@@ -2,7 +2,11 @@
 //! 0x8086290) and the `nextdl` / `retransdl` handlers
 //! (docs/research/cod11-server-handshake.md, "Serving a download"), and on
 //! protocols 6 and 22 the www redirect (docs/research/cod15-protocol-diff.md
-//! 14).
+//! 14). [`DownloadFile`] is the open file all three games serve blocks
+//! from.
+
+use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
 
 use vcod_common::net::msg::MsgWriter;
 
@@ -14,6 +18,76 @@ pub const BLOCK: usize = 2048;
 const WINDOW: u32 = 8;
 /// Unacked blocks go again after this long.
 const RETRANSMIT_MS: i32 = 1000;
+
+trait Source: Read + Seek + Send {}
+impl<T: Read + Seek + Send> Source for T {}
+
+/// A file a transfer serves: its length and the open handle each 0x800-byte
+/// block is read from as it goes out, so a transfer holds one handle and
+/// never the file's bytes. Block `i` is bytes
+/// `i * 0x800 ..`, and the block past the last byte is the empty one that
+/// ends a transfer.
+pub struct DownloadFile {
+    src: Box<dyn Source>,
+    len: u64,
+}
+
+impl DownloadFile {
+    /// The regular file at `path`; `None` when it does not open.
+    pub fn open(path: &Path) -> Option<Self> {
+        let file = std::fs::File::open(path).ok()?;
+        let meta = file.metadata().ok()?;
+        meta.is_file().then(|| DownloadFile {
+            src: Box::new(file),
+            len: meta.len(),
+        })
+    }
+
+    #[cfg(test)]
+    pub fn from_reader(src: impl Read + Seek + Send + 'static, len: u64) -> Self {
+        DownloadFile {
+            src: Box::new(src),
+            len,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        let len = bytes.len() as u64;
+        Self::from_reader(std::io::Cursor::new(bytes), len)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The size block 0 and a redirect carry.
+    pub fn size(&self) -> i32 {
+        self.len as i32
+    }
+
+    /// Blocks in the transfer, the empty end block included.
+    pub fn blocks(&self) -> u32 {
+        self.len.div_ceil(BLOCK as u64) as u32 + 1
+    }
+
+    /// Block `i` is the empty one past the last byte.
+    pub fn is_end(&self, i: u32) -> bool {
+        u64::from(i) * BLOCK as u64 >= self.len
+    }
+
+    /// Block `i`'s bytes off the handle; an error when the file came up
+    /// short of its length.
+    pub fn read_block(&mut self, i: u32) -> std::io::Result<Vec<u8>> {
+        let start = (u64::from(i) * BLOCK as u64).min(self.len);
+        let mut buf = vec![0; (self.len - start).min(BLOCK as u64) as usize];
+        if !buf.is_empty() {
+            self.src.seek(SeekFrom::Start(start))?;
+            self.src.read_exact(&mut buf)?;
+        }
+        Ok(buf)
+    }
+}
 
 /// Why a download is refused, the localized key the client shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,13 +209,12 @@ pub enum NextDl {
     Broken,
 }
 
-/// One client's transfer. Block `i` is bytes `i * BLOCK ..` of the file, and
-/// the block past the last byte is the empty one that ends it.
+/// One client's transfer.
 pub struct ServerDownload {
     /// As the client asked, e.g. `main/foo.pk3`.
     pub name: String,
     /// `None` until the first write opens it.
-    data: Option<Vec<u8>>,
+    file: Option<DownloadFile>,
     /// `downloadClientBlock`: the next block the client has to ack.
     acked: u32,
     /// `downloadCurrentBlock`: the next block to put on the wire.
@@ -157,7 +230,7 @@ impl ServerDownload {
     pub fn new(name: &str) -> Self {
         ServerDownload {
             name: name.chars().take(63).collect(),
-            data: None,
+            file: None,
             acked: 0,
             current: 0,
             send_time: 0,
@@ -165,22 +238,10 @@ impl ServerDownload {
         }
     }
 
-    fn blocks(&self) -> u32 {
-        self.data
-            .as_ref()
-            .map_or(0, |d| d.len().div_ceil(BLOCK) as u32 + 1)
-    }
-
-    fn block(&self, i: u32) -> &[u8] {
-        let d = self.data.as_deref().unwrap_or_default();
-        let start = (i as usize * BLOCK).min(d.len());
-        &d[start..(start + BLOCK).min(d.len())]
-    }
-
     /// `SV_WriteDownloadToClient`: opens the file on the first call (`open`
-    /// answers with its bytes or the refusal), then writes up to `budget`
-    /// blocks inside the send window. False when the transfer is over
-    /// (refused), so the caller drops it.
+    /// answers with it or the refusal), then writes up to `budget` blocks
+    /// inside the send window. False when the transfer is over (refused, or
+    /// the file failed a read), so the caller drops it.
     ///
     /// With `www` set and a client that sent `cl_wwwDownload 1`, the
     /// redirect goes out instead, on every message until `wwwdl ack`, and
@@ -194,7 +255,7 @@ impl ServerDownload {
         w: &mut MsgWriter,
         now_ms: i32,
         budget: u32,
-        open: impl FnOnce(&str) -> Result<Vec<u8>, Refusal>,
+        open: impl FnOnce(&str) -> Result<DownloadFile, Refusal>,
         www: Option<&WwwConfig>,
         wants_www: bool,
         state: &mut WwwState,
@@ -202,9 +263,9 @@ impl ServerDownload {
         if state.acked {
             return true;
         }
-        if self.data.is_none() {
+        if self.file.is_none() {
             match open(&self.name) {
-                Ok(bytes) => self.data = Some(bytes),
+                Ok(file) => self.file = Some(file),
                 Err(why) => {
                     log::info!("clientDownload: {:?} refused: {why:?}", self.name);
                     w.write_byte(SVC_DOWNLOAD);
@@ -222,7 +283,7 @@ impl ServerDownload {
                     if !state.redirected {
                         log::info!("Redirecting client to {url}");
                     }
-                    let size = self.data.as_ref().map_or(0, |d| d.len() as i32);
+                    let size = self.file.as_ref().map_or(0, DownloadFile::size);
                     write_redirect(w, &url, size, www.disconnected);
                     state.redirected = true;
                     return true;
@@ -241,7 +302,10 @@ impl ServerDownload {
             self.streaming = true;
             self.send_time = now_ms;
         }
-        let in_flight = (self.acked + WINDOW).min(self.blocks());
+        let Some(file) = self.file.as_mut() else {
+            return false;
+        };
+        let in_flight = (self.acked + WINDOW).min(file.blocks());
         for _ in 0..budget.max(1) {
             if self.acked == in_flight {
                 break;
@@ -252,14 +316,20 @@ impl ServerDownload {
                 }
                 self.current = self.acked;
             }
-            let block = self.block(self.current);
+            let block = match file.read_block(self.current) {
+                Ok(block) => block,
+                Err(e) => {
+                    log::warn!("clientDownload: {:?} read failed: {e}", self.name);
+                    return false;
+                }
+            };
             w.write_byte(SVC_DOWNLOAD);
             w.write_short(self.current as i16);
             if self.current == 0 {
-                w.write_long(self.data.as_ref().map_or(0, |d| d.len() as i32));
+                w.write_long(file.size());
             }
             w.write_short(block.len() as i16);
-            for &b in block {
+            for b in block {
                 w.write_byte(b);
             }
             self.current += 1;
@@ -270,10 +340,10 @@ impl ServerDownload {
 
     /// `SV_NextDownload_f` (0x8086168) for `nextdl <block>`.
     pub fn next_dl(&mut self, block: i32, now_ms: i32) -> NextDl {
-        if block != self.acked as i32 || self.data.is_none() {
+        let Some(file) = self.file.as_ref().filter(|_| block == self.acked as i32) else {
             return NextDl::Broken;
-        }
-        if self.block(self.acked).is_empty() {
+        };
+        if file.is_end(self.acked) {
             log::info!("clientDownload: {:?} completed", self.name);
             return NextDl::Completed;
         }
@@ -299,6 +369,7 @@ pub fn blocks_per_message(rate: i32, snapshot_ms: i32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use vcod_common::net::huffman::Huffman;
     use vcod_common::net::msg::MsgReader;
 
@@ -308,7 +379,7 @@ mod tests {
         w: &mut MsgWriter,
         now: i32,
         budget: u32,
-        open: impl FnOnce(&str) -> Result<Vec<u8>, Refusal>,
+        open: impl FnOnce(&str) -> Result<DownloadFile, Refusal>,
     ) -> bool {
         dl.write(w, now, budget, open, None, false, &mut WwwState::default())
     }
@@ -336,7 +407,9 @@ mod tests {
         let file: Vec<u8> = (0..5000).map(|i| i as u8).collect();
         let mut dl = ServerDownload::new("main/foo.pk3");
         let mut w = MsgWriter::new(&huff);
-        assert!(udp(&mut dl, &mut w, 0, 8, |_| Ok(file.clone())));
+        assert!(udp(&mut dl, &mut w, 0, 8, |_| Ok(
+            DownloadFile::from_bytes(file.clone())
+        )));
         let got = blocks(&w.finish(), &huff);
         assert_eq!(got.len(), 4);
         assert_eq!((got[0].0, got[0].1, got[0].2.len()), (0, 5000, BLOCK));
@@ -350,12 +423,85 @@ mod tests {
         assert_eq!(dl.next_dl(3, 10), NextDl::Completed);
     }
 
+    /// A source that counts the bytes read off it.
+    struct Counting(
+        std::io::Cursor<std::sync::Arc<[u8]>>,
+        std::sync::Arc<AtomicUsize>,
+    );
+
+    impl Read for Counting {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.0.read(buf)?;
+            self.1.fetch_add(n, Ordering::Relaxed);
+            Ok(n)
+        }
+    }
+
+    impl Seek for Counting {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.0.seek(pos)
+        }
+    }
+
+    /// A transfer reads the blocks it sends off the handle: a `download`
+    /// sent again and again costs a block a message, never the whole file,
+    /// and a full window waits without reading.
+    #[test]
+    fn a_transfer_reads_only_the_blocks_it_sends() {
+        let huff = Huffman::new();
+        let bytes: std::sync::Arc<[u8]> = vec![7u8; 1 << 20].into();
+        let read = std::sync::Arc::new(AtomicUsize::new(0));
+        let open = |_: &str| {
+            let src = Counting(std::io::Cursor::new(bytes.clone()), read.clone());
+            Ok(DownloadFile::from_reader(src, bytes.len() as u64))
+        };
+        for n in 0..100 {
+            let mut dl = ServerDownload::new("main/big.pk3");
+            let mut w = MsgWriter::new(&huff);
+            assert!(udp(&mut dl, &mut w, n * 50, 1, open));
+            assert_eq!(blocks(&w.finish(), &huff).len(), 1);
+        }
+        assert_eq!(read.swap(0, Ordering::Relaxed), 100 * BLOCK);
+        let mut dl = ServerDownload::new("main/big.pk3");
+        for now in [0, 50, 100] {
+            let mut w = MsgWriter::new(&huff);
+            assert!(udp(&mut dl, &mut w, now, 20, open));
+        }
+        assert_eq!(read.load(Ordering::Relaxed), 8 * BLOCK, "one window");
+    }
+
+    #[test]
+    fn a_file_opens_by_length_and_a_short_one_fails_its_read() {
+        let dir = std::env::temp_dir().join(format!("vcod-dlfile-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("f.pk3");
+        let bytes: Vec<u8> = (0..5000u32).map(|i| i as u8).collect();
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(DownloadFile::open(&dir).is_none(), "a directory");
+        let mut f = DownloadFile::open(&path).unwrap();
+        assert_eq!((f.size(), f.blocks()), (5000, 4));
+        assert!(!f.is_end(2) && f.is_end(3));
+        assert_eq!(f.read_block(2).unwrap(), bytes[2 * BLOCK..]);
+        assert!(f.read_block(3).unwrap().is_empty());
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(3000)
+            .unwrap();
+        assert_eq!(f.read_block(0).unwrap(), bytes[..BLOCK]);
+        assert!(f.read_block(1).is_err(), "cut short after the open");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_window_waits_for_acks_and_retransmits_after_a_second() {
         let huff = Huffman::new();
         let mut dl = ServerDownload::new("main/big.pk3");
         let mut w = MsgWriter::new(&huff);
-        udp(&mut dl, &mut w, 0, 20, |_| Ok(vec![0; 20 * BLOCK]));
+        udp(&mut dl, &mut w, 0, 20, |_| {
+            Ok(DownloadFile::from_bytes(vec![0; 20 * BLOCK]))
+        });
         assert_eq!(blocks(&w.finish(), &huff).len(), 8, "one window");
         let mut w = MsgWriter::new(&huff);
         udp(&mut dl, &mut w, 500, 20, |_| unreachable!());
@@ -409,7 +555,7 @@ mod tests {
             let mut dl = ServerDownload::new("main/nsf_mp_j5outpost.pk3");
             let mut state = WwwState::default();
             let mut w = MsgWriter::new(&huff);
-            let open = |_: &str| Ok(vec![0; 953499]);
+            let open = |_: &str| Ok(DownloadFile::from_bytes(vec![0; 953499]));
             assert!(dl.write(
                 &mut w,
                 0,
@@ -437,7 +583,7 @@ mod tests {
                 &mut w,
                 0,
                 4,
-                |_| Ok(vec![1; 10]),
+                |_| Ok(DownloadFile::from_bytes(vec![1; 10])),
                 Some(&cfg),
                 true,
                 &mut state,
@@ -480,7 +626,7 @@ mod tests {
             &mut w,
             0,
             4,
-            |_| Ok(vec![1; 10]),
+            |_| Ok(DownloadFile::from_bytes(vec![1; 10])),
             Some(&cfg),
             false,
             &mut state,
@@ -505,7 +651,7 @@ mod tests {
             &mut w,
             0,
             4,
-            |_| Ok(vec![1; 10]),
+            |_| Ok(DownloadFile::from_bytes(vec![1; 10])),
             Some(&cfg),
             true,
             &mut state,
@@ -541,7 +687,7 @@ mod tests {
             (r.read_byte(), r.read_short())
         };
         let mut w = MsgWriter::new(&huff);
-        let open = |_: &str| Ok(vec![1; 10]);
+        let open = |_: &str| Ok(DownloadFile::from_bytes(vec![1; 10]));
         assert!(dl.write(&mut w, 0, 4, open, Some(&cfg), true, &mut state));
         assert_ne!(first_op(w).0, SVC_DOWNLOAD, "the first message is empty");
         let mut w = MsgWriter::new(&huff);
