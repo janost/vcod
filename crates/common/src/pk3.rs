@@ -478,7 +478,11 @@ impl Pk3Fs {
         vanilla: bool,
     ) -> Result<Self> {
         if !base.is_dir() {
-            bail!("cannot read mod dir {}", base.display());
+            bail!(
+                "cannot read mod dir {}: {}",
+                base.display(),
+                crate::game_dir::INSTALL_HINT
+            );
         }
         let mut dirs = base_dirs(base);
         if let Some(g) = game.filter(|g| g.is_dir()) {
@@ -512,7 +516,11 @@ impl Pk3Fs {
 
     fn open_iwd_dirs(base: &Path, game: Option<&Path>, stock: bool) -> Result<Self> {
         if !base.is_dir() {
-            bail!("cannot read game dir {}", base.display());
+            bail!(
+                "cannot read game dir {}: {}",
+                base.display(),
+                crate::game_dir::INSTALL_HINT
+            );
         }
         // the wavelet .iwi tables live only in the install's render DLL
         if let Some(root) = base.parent() {
@@ -527,7 +535,11 @@ impl Pk3Fs {
     /// over the last (CoD4's `usermaps/<map>/` then `fs_game`).
     pub fn open_iwd_layers(base: &Path, over: &[PathBuf]) -> Result<Self> {
         if !base.is_dir() {
-            bail!("cannot read game dir {}", base.display());
+            bail!(
+                "cannot read game dir {}: {}",
+                base.display(),
+                crate::game_dir::INSTALL_HINT
+            );
         }
         if let Some(root) = base.parent() {
             crate::iwi::load_wavelet_tables(root);
