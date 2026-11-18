@@ -917,3 +917,163 @@ fn traceline_in<T: Ar>(
         normal: rows[axis].map(|r| st(d(r) * d(face_sign))),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vcod_common::rng::xorshift;
+
+    /// A float off `seed`: mostly a unit-range value, sometimes one a
+    /// rounding from a tie, zero, a denormal or a wide one.
+    fn float(seed: &mut u64) -> f32 {
+        let r = xorshift(seed);
+        let unit = (r >> 40) as f32 / (1u64 << 24) as f32 * 2.0 - 1.0;
+        match r % 16 {
+            0 => 0.0,
+            1 => f32::from_bits((r >> 32) as u32 & 0x007f_ffff),
+            2 => unit * 4096.0,
+            3 => (unit * 64.0).round() / 64.0 + f32::EPSILON * unit,
+            4 => 0.5 + f32::EPSILON / 2.0 * ((r >> 8) % 3) as f32,
+            _ => unit,
+        }
+    }
+
+    fn floats<const N: usize>(seed: &mut u64) -> [f32; N] {
+        std::array::from_fn(|_| float(seed))
+    }
+
+    /// Both arms over one input: when the fast arm proved every store, its
+    /// words are the 64-bit stack's. Returns whether it proved them. A
+    /// result past the float range is left out: [`F80`] models no
+    /// infinities or NaNs.
+    fn agree(what: &str, fast: impl Fn() -> Vec<f32>, wide: impl Fn() -> Vec<f32>) -> bool {
+        DOUBT.set(false);
+        let f = fast();
+        if DOUBT.get() || f.iter().any(|x| !x.is_finite()) {
+            return false;
+        }
+        let bits = |v: Vec<f32>| v.into_iter().map(f32::to_bits).collect::<Vec<_>>();
+        assert_eq!(bits(f), bits(wide()), "{what}");
+        true
+    }
+
+    /// The fast arm's error bounds against the 64-bit stack over seeded
+    /// inputs, near ties, zero quats and denormals among them, through
+    /// every generic step but the tree walks (cod2-player-anims.md 11).
+    #[test]
+    fn the_bounded_arm_stores_the_wide_arms_words_whenever_it_is_sure() {
+        let mut seed = 0x0d0b_1a5e_u64;
+        let mut proved = 0;
+        const N: usize = 3000;
+        for i in 0..N {
+            let m = Mat {
+                quat: floats(&mut seed),
+                trans: floats(&mut seed),
+                weight: float(&mut seed).abs() * 2.0,
+            };
+            let (b, v): ([f32; 4], [f32; 3]) = (floats(&mut seed), floats(&mut seed));
+            let angles = floats::<3>(&mut seed).map(|a| a * 360.0);
+            let w = float(&mut seed).abs();
+            let flat = |r: [[f32; 3]; 3]| r.concat();
+            let packed = |m: Mat| [&m.quat[..], &m.trans, &[m.weight]].concat();
+            let fold = |ms: Vec<Mat>| ms.into_iter().flat_map(packed).collect::<Vec<_>>();
+            proved += [
+                agree(
+                    &format!("{i} axis {m:?}"),
+                    || flat(m.axis_in::<Bounded>()),
+                    || flat(m.axis_in::<F80>()),
+                ),
+                agree(
+                    &format!("{i} place {m:?} {v:?}"),
+                    || m.place_in::<Bounded>(v).to_vec(),
+                    || m.place_in::<F80>(v).to_vec(),
+                ),
+                agree(
+                    &format!("{i} mul {:?} {b:?}", m.quat),
+                    || mul::<Bounded>(m.quat, b).to_vec(),
+                    || mul::<F80>(m.quat, b).to_vec(),
+                ),
+                agree(
+                    &format!("{i} weigh {m:?}"),
+                    || {
+                        let mut m = m;
+                        weigh::<Bounded>(&mut m);
+                        packed(m)
+                    },
+                    || {
+                        let mut m = m;
+                        weigh::<F80>(&mut m);
+                        packed(m)
+                    },
+                ),
+                agree(
+                    &format!("{i} rsqrt {:?}", m.quat),
+                    || rsqrt::<Bounded>(m.quat).map(st).into_iter().collect(),
+                    || rsqrt::<F80>(m.quat).map(st).into_iter().collect(),
+                ),
+                agree(
+                    &format!("{i} normalize {m:?} {w}"),
+                    || {
+                        let mut ms = vec![m];
+                        normalize::<Bounded>(&mut ms, w, &[true]);
+                        divide::<Bounded>(&mut ms, &[true]);
+                        fold(ms)
+                    },
+                    || {
+                        let mut ms = vec![m];
+                        normalize::<F80>(&mut ms, w, &[true]);
+                        divide::<F80>(&mut ms, &[true]);
+                        fold(ms)
+                    },
+                ),
+                agree(
+                    &format!("{i} angles {angles:?}"),
+                    || angles_quat_in::<Bounded>(angles).to_vec(),
+                    || angles_quat_in::<F80>(angles).to_vec(),
+                ),
+            ]
+            .iter()
+            .filter(|&&p| p)
+            .count();
+        }
+        // Doubt is the exception: a sweep that proves little checks little.
+        assert!(proved > N * 7 * 9 / 10, "{proved} of {} proved", N * 7);
+    }
+
+    /// Products of three floats (inexact in an `f64`), sums, a quotient, a
+    /// root and a difference of them.
+    fn chain<T: Ar>(x: [f32; 6]) -> [T; 5] {
+        let (d, ext) = (d::<T>, ext::<T>);
+        let p = d(x[0]) * d(x[1]) * d(x[2]);
+        let s = p + d(x[3]) * d(x[4]) * d(x[5]);
+        let q = s / (d(x[3]) * d(x[3]) + ext(1.0));
+        let r = (s * s + ext(1.0)).sqrt();
+        [p, s, q, r, q - r * p]
+    }
+
+    /// Every bound holds: both arms sit within their bound of the exact
+    /// value, so the fast arm's value is within twice it of the 64-bit
+    /// stack's, and a value it calls exact is the stack's to the bit.
+    #[test]
+    fn every_bound_covers_the_wide_arms_value() {
+        let mut seed = 0xb0_u64 << 20 | 0x5eed;
+        let mut inexact = 0;
+        for i in 0..20000 {
+            let x = floats::<6>(&mut seed);
+            DOUBT.set(false);
+            let fast = chain::<Bounded>(x);
+            if DOUBT.get() {
+                continue;
+            }
+            for (k, (Bounded(v, e), w)) in fast.into_iter().zip(chain::<F80>(x)).enumerate() {
+                let off = (F80::from_f64(v) - w).to_f64().abs();
+                assert!(
+                    off <= 2.0 * e,
+                    "{i} {x:?} step {k}: {v} off {off} past bound {e}"
+                );
+                inexact += usize::from(e != 0.0);
+            }
+        }
+        assert!(inexact > 20000, "{inexact} inexact steps");
+    }
+}
