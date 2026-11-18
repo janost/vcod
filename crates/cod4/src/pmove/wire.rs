@@ -10,21 +10,7 @@ use crate::net::fields::PLAYER_STATE;
 /// `name`'s word in a wire playerstate, looked up at compile time
 /// through [`ix!`]: a name `PLAYER_STATE` lacks fails the build.
 const fn index(name: &str) -> usize {
-    let mut i = 0;
-    while i < PLAYER_STATE.len() {
-        let (a, b) = (PLAYER_STATE[i].name.as_bytes(), name.as_bytes());
-        if a.len() == b.len() {
-            let mut k = 0;
-            while k < a.len() && a[k] == b[k] {
-                k += 1;
-            }
-            if k == a.len() {
-                return PLAYER_STATE[i].offset as usize / 4;
-            }
-        }
-        i += 1;
-    }
-    panic!("no such playerstate field")
+    delta::word_named(&PLAYER_STATE, name)
 }
 
 /// A field's word, or an array field's words (`ix!(3 "origin")` for

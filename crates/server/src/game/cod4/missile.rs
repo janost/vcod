@@ -29,7 +29,7 @@ use vcod_gsc::{EntId, Value};
 
 use super::clip::Cod4Clip;
 use super::combat::{BULLET_PRIORITY, WEAPTYPE_PROJECTILE};
-use super::level::{Cod4Level, PsExt};
+use super::level::{Cod4Level, PsExt, ps};
 
 /// `trType`: still, straight (the spin) and the arc.
 pub const TR_STATIONARY: u32 = 0;
@@ -479,9 +479,9 @@ impl Cod4Level {
         self.g_fire_rocket(id, weapon, d, shot);
         if let Some(p) = self.players[slot].as_mut() {
             for k in 0..3 {
-                let name = format!("velocity[{k}]");
-                let v = f32::from_bits(p.ps.word(&name)) - 64.0 * forward[k];
-                p.ps.set(&name, v.to_bits());
+                let word = ps!(3 "velocity")[k];
+                let v = f32::from_bits(p.ps.word(word)) - 64.0 * forward[k];
+                p.ps.set(word, v.to_bits());
             }
         }
     }
@@ -629,7 +629,7 @@ impl Cod4Level {
         let cooked = self.pm_state(slot).map_or(0, |ps| ps.grenade_time_left);
         if timed {
             if let Some(p) = self.players[slot].as_mut() {
-                p.ps.set("grenadeTimeLeft", 0);
+                p.ps.set(ps!("grenadeTimeLeft"), 0);
             }
             self.rt.host.cod4_mut().clients[slot].held_grenade = None;
         }
