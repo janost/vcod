@@ -3,6 +3,7 @@
 use crate::engine::slot::Link;
 use crate::engine::{Lan, link};
 use crate::spectate::ClientSim;
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::time::Instant;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
@@ -161,8 +162,8 @@ pub struct Client {
     /// flooded client cannot build unbounded latency.
     pub pending: Vec<QueuedCmd>,
     /// The [`PacketCommand`]s this client sent, each with the packet it
-    /// came in, in arrival order.
-    pub commands_at: Vec<(u64, PacketCommand)>,
+    /// came in, in arrival order. Filled through [`Self::queue_command`].
+    pub commands_at: VecDeque<(u64, PacketCommand)>,
     /// UO's `fdc <entnum>` (`Cmd_FlameDamageClient_f`, game.mp.uo 0x4ee2c):
     /// whose flame the client says it stands in and the `level.time` it
     /// said so.
@@ -212,7 +213,7 @@ impl Client {
             last_processed_st: 0,
             last_usercmd_st: 0,
             pending: Vec::new(),
-            commands_at: Vec::new(),
+            commands_at: VecDeque::new(),
             flame: None,
             last_cmd: NULL_USERCMD,
             sim: None,
@@ -250,6 +251,15 @@ impl Client {
         self.link.frames = vec![None; SV_PACKET_BACKUP];
         self.pending.clear();
         self.commands_at.clear();
+    }
+
+    /// Queues a packet's command for the move pass. Past
+    /// `MAX_RELIABLE_COMMANDS` queued, the most an honest client can have
+    /// unacknowledged, a flood of exempt `mr`s is dropped (vcod's bound).
+    pub fn queue_command(&mut self, packet: u64, command: PacketCommand) {
+        if self.commands_at.len() < MAX_RELIABLE_COMMANDS {
+            self.commands_at.push_back((packet, command));
+        }
     }
 
     /// `SV_AddServerCommand`'s squash: the unsent [`CmdKind::CanIgnore`]
