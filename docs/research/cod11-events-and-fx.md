@@ -1137,8 +1137,8 @@ following someone. The server side of the follow (buttons, cycle, let-go, discon
 live measurements) is `cod11-spectator-follow.md`.
 
 `SpectatorClientEndFrame` @ `game.mp.i386.so 0x40760` is the whole story. When
-`client->sess.spectatorClient >= 0` the server copies the followed player's
-whole client block over the spectator's (`rep movsd` with `ecx = 0x834`, so
+it has a client to follow (`cod11-spectator-follow.md` 5) the server copies the
+followed player's whole client block over the spectator's (`rep movsd` with `ecx = 0x834`, so
 8400 bytes starting at `ps`, the entire `playerState_t` and then some) and then
 patches the flags back in byte `ps+0xe`: it clears bit `0x04` (pm_flags
 `0x040000`), sets bit `0x01` (`0x010000`), and sets bit `0x02` (`0x020000`)
@@ -1167,9 +1167,8 @@ first-person suppression case.
 With the client's own number from the connect handshake:
 
 - `ps.clientNum != own_client_num` -> following that client.
-- `(ps.pm_flags & 0x010000) != 0` -> spectator view of any kind.
-- `(ps.pm_flags & 0x020000) != 0` -> following a specific client rather than
-  free-flying.
+- The two flags read as the table says: `0x010000` a follow that found its
+  client, `0x020000` a forced one.
 
 The netfield table in `crates/common/src/net/cod1/fields_v1.rs` gives `pm_flags`
 19 bits, so all three flags survive the delta encoding.
