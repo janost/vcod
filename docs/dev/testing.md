@@ -97,6 +97,14 @@ What each holds:
 
 Times are release wall on a 30-thread box, the binary built.
 
+The bit-exact gates (`moves_ab`, `cod4_moves_ab`, `cod4_combat_ab`,
+`trace_ab`, `nav_census`) were tuned on the host's glibc. Only `sinf` and
+`cosf` are pinned (`vcod_common::libm`, cod4-pmove.md 13.2); `atan2`,
+`tan`, `acos`, `pow` and the rest come from the platform's libm, whose
+results Rust does not promise across versions. A gate that fails after a
+glibc update or on another distro, with no code change, is that before it
+is a regression: name `ldd --version` in the report.
+
 ## Headless render: pipeline_check
 
 `renderer::pipeline_check` builds the real `Renderer` headless and draws a
