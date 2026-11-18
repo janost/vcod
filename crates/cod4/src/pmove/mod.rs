@@ -160,11 +160,8 @@ pub mod ev {
 }
 
 /// `ClientThink_real`'s `pm.tracemask`: alive, dead and spectating.
-pub const MASK_PLAYERSOLID: u32 = 0x2810011;
-pub const MASK_DEADSOLID: u32 = 0x810011;
+pub use vcod_common::clipmap::{CONTENTS_BODY, MASK_DEADSOLID, MASK_PLAYERSOLID};
 pub const MASK_SPECTATOR: u32 = 0x800811;
-/// `CONTENTS_BODY`.
-pub const CONTENTS_BODY: u32 = 0x200_0000;
 /// `otherFlags` 4: a player in the world (`POF_PLAYER`).
 pub const POF_PLAYER: u32 = 4;
 
@@ -607,6 +604,22 @@ impl Default for Tr {
     }
 }
 
+impl Tr {
+    /// Folds one entity's trace over the same sweep into the running one,
+    /// as the entity pass's cumulative trace keeps it: a nearer contact
+    /// replaces it, and a start in solid is kept from either side
+    /// (cod4-pmove.md 15).
+    pub fn fold(&mut self, c: Tr) {
+        if c.fraction < self.fraction {
+            let startsolid = self.startsolid || c.startsolid;
+            *self = c;
+            self.startsolid = startsolid;
+        } else if c.startsolid {
+            self.startsolid = true;
+        }
+    }
+}
+
 /// What pmove traces through: the handler's capsule trace. [`ClipMap`]
 /// alone is the world without entities; the server wraps it with the
 /// bodies and brush entities.
@@ -653,7 +666,6 @@ pub(crate) struct Pml {
     pub ground_plane: bool,
     pub almost_ground_plane: bool,
     pub ground_trace: Tr,
-    pub impact_speed: f32,
     pub previous_origin: Vec3,
     pub previous_velocity: Vec3,
 }
@@ -712,7 +724,6 @@ pub struct Pmove<'a> {
     pub rand: Option<&'a mut dyn FnMut() -> i32>,
     /// `touchents`: every entity the cmd met, first meeting first.
     pub touch: Vec<u32>,
-    pub prone_change: bool,
     /// The horizontal speed `PM_Footsteps` measured.
     pub xyspeed: f32,
     /// Each step `PM_StepSlideMove` took, as `(commandTime, dz)`: what it
@@ -753,7 +764,6 @@ impl<'a> Pmove<'a> {
             anim: None,
             rand: None,
             touch: Vec::new(),
-            prone_change: false,
             xyspeed: 0.0,
             view_steps: Vec::new(),
             mantle_started: None,
@@ -878,7 +888,7 @@ pub fn player_step_armed(
 /// [`player_step_armed`] with the anim script picking the legs and torso
 /// anims (the server's step), each event's command drawn off `rand`.
 /// Returns the touch list and [`Pmove::mantle_started`].
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn player_step_animated<'a>(
     ps: &'a mut PlayerState,
     cmd: &Cmd,
@@ -1402,7 +1412,7 @@ const FOLIAGE_RESET_MS: i32 = 500;
 /// tall (0x820df28).
 const FOLIAGE_BOX_SCALE: f32 = 0.75;
 const FOLIAGE_BOX_HEIGHT: f32 = f32::from_bits(0x3f66_6666);
-const CONTENTS_FOLIAGE: u32 = 2;
+use vcod_common::clipmap::CONTENTS_FOLIAGE;
 
 /// `PM_FoliageSounds` (inlined at 0x805d05e): a body moving at 40 or more
 /// raises `EV_FOLIAGE_SOUND` each time its interval (1.5 s slow, down to

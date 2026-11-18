@@ -74,8 +74,10 @@ copied on purpose.
    [nightly release](https://github.com/janost/vcod/releases/tag/nightly)
    (or [build it](#building-from-source)) and put `vcod` and `vcod-server`
    in the game's directory. The Linux build needs glibc 2.35 or newer
-   (Ubuntu 22.04, Fedora 36). Each binary tells the games apart by the
-   install. Elsewhere, point `COD_DIR` or `--game-dir` at it.
+   (Ubuntu 22.04, Fedora 36). The nightly is rebuilt from master once CI
+   passes; `SHA256SUMS` beside the archives holds their checksums. Each
+   binary tells the games apart by the install. Elsewhere, point `COD_DIR`
+   or `--game-dir` at it.
 3. **Play against bots**:
 
    | Game | Server |
@@ -251,8 +253,12 @@ closely, I had it audited function by function and rewritten from the retail
 vcod is not affiliated with or endorsed by Activision or Infinity Ward. Call
 of Duty is a trademark of Activision Publishing, Inc. This repository
 contains no game assets, game code or binaries; it reads the files of a copy
-you own. The reverse engineering was done to interoperate with the game's own
-files and servers. The research notes document file formats and the network
+you own. The test fixtures under `crates/*/tests/fixtures/` are recordings of
+retail server output that I made (wire captures, configstring tables,
+debugger readings, log lines, one retail client demo) beside probe scripts and
+pinned outputs written for the tests, and hold no game assets; each fixture
+root's README says how they were made. The reverse engineering was done to
+interoperate with the game's own files and servers. The research notes document file formats and the network
 protocol for that purpose: layouts and addresses recovered from the
 binaries, no copied code. The projects under "Consulted, not copied" were
 read as references, and no code from them is included. The screenshots show

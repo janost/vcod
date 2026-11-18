@@ -253,7 +253,6 @@ fn play(root: &std::path::Path, addr: std::net::SocketAddr) -> Option<Seen> {
 /// A `zfeather` smoke sprite 80 units square, standing half in the ground
 /// 120 ahead of `eye`, seen 30 degrees down: drawn feathered and hard,
 /// each against the frame without it.
-#[allow(clippy::too_many_arguments)]
 fn feather(
     r: &mut Renderer,
     c: &crate::cod4_client::Cod4Client,

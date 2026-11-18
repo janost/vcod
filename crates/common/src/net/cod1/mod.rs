@@ -245,32 +245,32 @@ pub const CS_ALLIES_SCORE: usize = 6;
 /// `SP_worldspawn` (0x61cec).
 pub const CS_NORTHYAW: usize = 11;
 /// `level.startTime`, server-clock ms.
-pub const CS_LEVEL_START_TIME: usize = 13;
+pub const CS_LEVEL_START_TIME_V1: usize = 13;
 
 /// The mirrored server cvars: names here, values in the next block at the
 /// same offset; the client `Cvar_Set`s the pairs.
-pub const CS_CVAR_NAMES: std::ops::RangeInclusive<usize> = 140..=203;
-pub const CS_CVAR_VALUES: std::ops::RangeInclusive<usize> = 204..=267;
+pub const CS_CVAR_NAMES_V1: std::ops::RangeInclusive<usize> = 140..=203;
+pub const CS_CVAR_VALUES_V1: std::ops::RangeInclusive<usize> = 204..=267;
 
 /// `CS_SOUNDS`: a sound-alias index (`EV_SOUND_ALIAS`'s parm, `loopSound`,
 /// `s <idx>`) counts from here, so the alias range's first slot travels as 1
 /// and 0 means no alias (docs/protocol-1.1.md, `s <idx>`).
-pub const CS_SOUNDS: usize = CsRange::SoundAlias.bounds().0 - 1;
+pub const CS_SOUNDS_V1: usize = CsRange::SoundAlias.bounds().0 - 1;
 /// A hudelem's `text`/`label` index counts from here, 1-based like
 /// `CS_SOUNDS`.
-pub const CS_LOCALIZED: usize = CsRange::Localized.bounds().0 - 1;
+pub const CS_LOCALIZED_V1: usize = CsRange::Localized.bounds().0 - 1;
 /// A hudelem's `shaderIndex` and the objective icons count from here, 1-based.
-pub const CS_SHADERS: usize = CsRange::Shader.bounds().0 - 1;
+pub const CS_SHADERS_V1: usize = CsRange::Shader.bounds().0 - 1;
 /// An effect id (`loadFx`'s return, `EV_PLAY_FX`'s parm, an `ET_FX`
 /// entity's `scale`) counts from here, 1..63 (`CG_PlayFx`, cgame
 /// 0x3001db20, docs/research/cod11-events-and-fx.md 5c).
-pub const CS_EFFECTS: usize = CsRange::Effect.bounds().0 - 1;
+pub const CS_EFFECTS_V1: usize = CsRange::Effect.bounds().0 - 1;
 /// `EV_PLAY_FX_ON_TAG`'s parm counts from here: configstring `844 + parm`
 /// holds `"%02d%s"` of the effect id and the tag (cgame 0x3001db80).
-pub const CS_FX_TAGS: usize = CsRange::FxTag.bounds().0 - 1;
+pub const CS_FX_TAGS_V1: usize = CsRange::FxTag.bounds().0 - 1;
 /// The first of the 32 hint-string configstrings `G_GetHintStringIndex`
 /// (0x5a238) fills; `serverCursorHintString` indexes from here.
-pub const CS_HINT_STRINGS: usize = 1212;
+pub const CS_HINT_STRINGS_V1: usize = 1212;
 /// 1.5's match timeout: the ms left (`%i`, empty once over) and the message
 /// under it, written by `Cmd_MatchTimeout_f`, `Cmd_MatchTimein_f` and
 /// `CheckMatchTimeout` (game.mp.i386.so 1.5b 0x4fea8). No 1.1 module writes
@@ -300,7 +300,7 @@ pub const CS_LAYOUT_V1: CsLayout = CsLayout {
     match_timeout: None,
     vote: 15,
     fog: CS_FOG_V1,
-    level_start: CS_LEVEL_START_TIME,
+    level_start: CS_LEVEL_START_TIME_V1,
     motd: 14, // SP_worldspawn 0x61dde (1.5b 0x66a3d)
     winner: 20,
 };
@@ -383,7 +383,10 @@ mod tests {
 
     #[test]
     fn range_bases_sit_one_below_their_ranges() {
-        assert_eq!((CS_SOUNDS, CS_LOCALIZED, CS_SHADERS), (524, 1244, 1500));
+        assert_eq!(
+            (CS_SOUNDS_V1, CS_LOCALIZED_V1, CS_SHADERS_V1),
+            (524, 1244, 1500)
+        );
     }
 
     #[test]

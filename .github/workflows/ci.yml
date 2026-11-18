@@ -5,12 +5,17 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+  # nightly.yml runs this workflow before it builds, so a red master
+  # publishes nothing.
+  workflow_call:
   # Weekly advisory scan; see the deny job.
   schedule:
     - cron: "0 6 * * 1"
 
+# github.workflow is the caller's name under workflow_call, so the nightly's
+# run of these jobs does not cancel the push's own.
 concurrency:
-  group: ci-${{ github.ref }}-${{ github.event_name }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 # Every job only reads the repository.
@@ -19,6 +24,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Pinned so a new stable's clippy cannot turn master red by itself; bump it
+  # on purpose, together with nightly.yml's.
+  RUST_TOOLCHAIN: "1.100.0"
 
 jobs:
   check:
@@ -36,7 +44,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libasound2-dev
 
-      - run: rustup component add rustfmt clippy
+      - name: Toolchain
+        run: |
+          rustup toolchain install ${{ env.RUST_TOOLCHAIN }} --profile minimal --component rustfmt,clippy
+          rustup default ${{ env.RUST_TOOLCHAIN }}
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
@@ -44,13 +55,59 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # COD_DIR is unset here, so tests that need the retail paks return
       # early (vcod_common::testing::game_fs). What runs is the parser,
       # protocol and logic suite, plus the committed net captures.
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
+
+  # The nightly ships Windows and macOS binaries; this compiles them, tests
+  # included, before a merge rather than after. Skipped when nightly.yml
+  # calls this workflow: its own build covers the same targets.
+  platforms:
+    if: github.event_name != 'schedule' && github.workflow == 'CI'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install ${{ env.RUST_TOOLCHAIN }} --profile minimal
+          rustup default ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Check
+        run: cargo check --workspace --all-targets --locked
+
+  # Cargo.toml's rust-version. Skipped under nightly.yml, as platforms is.
+  msrv:
+    if: github.event_name != 'schedule' && github.workflow == 'CI'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev
+
+      - run: rustup toolchain install 1.90 --profile minimal
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Check
+        run: cargo +1.90 check --workspace --all-targets --locked
 
   # deny.toml: licences, the layering bans and sources on every run;
   # advisories only on the weekly schedule, so a new advisory does not

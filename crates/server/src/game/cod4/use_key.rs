@@ -20,9 +20,7 @@ const USE_BUTTONS: u32 = 0x28;
 /// throwback and MG radii, 96 up and down) and its contents.
 const AREA_BOX: Vec3 = Vec3::new(192.0, 192.0, 96.0);
 const CONTENTS_USE: i32 = 0x20_0000;
-/// `playerMins`, `playerMaxs`.
-const PLAYER_MINS: Vec3 = Vec3::new(-15.0, -15.0, 0.0);
-const PLAYER_MAXS: Vec3 = Vec3::new(15.0, 15.0, 70.0);
+use vcod_cod4::pmove::{PLAYER_MAXS, PLAYER_MINS};
 /// The reach from the eye to an entry's middle, the view-angle weight,
 /// the penalty an ungrabbable item or a blocked sight takes (`cod4_lnxded`
 /// rodata 0x820e278, 0x8214ac8, 0x8220950) and the sight trace's mask

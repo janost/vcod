@@ -5,12 +5,12 @@
 //! the join here answers the stock menus with the same two.
 //!
 //! Only `[playerstate]` is diffed. Retail sends a client no entity for
-//! itself -- the playerstate carries it -- so both fixtures' `[entity]`
+//! itself (the playerstate carries it), so both fixtures' `[entity]`
 //! section is a comment saying so, and there is nothing to compare there;
 //! the check below fails if a retaken fixture ever grows one. The
 //! client-tagged entity fields are asserted against script state elsewhere,
-//! and what a second client sees of the first is stage 5's gate.
-//! `[servercommands]` is task 7's evidence, not this gate's.
+//! and what a second client sees of the first is `two_clients.rs`'s gate.
+//! The fixtures' `[servercommands]` section is not compared here.
 //!
 //! Needs `COD_DIR`; without the paks it returns early.
 
@@ -21,7 +21,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
 use vcod_common::net::msg::PlayerState;
-use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1};
 
 /// Fields the server knowingly does not reproduce, each with the reason.
 /// Empty is the goal and it is empty: `legsAnim` was the last entry and the
@@ -31,7 +31,7 @@ const GAPS: &[(&str, &str)] = &[];
 
 /// Fields no capture can pin: they advance with the frame the capture was
 /// taken on, so retail's value and ours are both correct and different.
-/// Unlike `GAPS` these carry no guard -- one matching by luck is not a
+/// Unlike `GAPS` these carry no guard: one matching by luck is not a
 /// defect, and asserting that it must differ would be wrong.
 const VOLATILE: &[(&str, &str)] = &[(
     "commandTime",
@@ -80,7 +80,7 @@ fn cfg(map: &str) -> vcod_server::ServerConfig {
 struct Capture {
     team: String,
     weapon: String,
-    /// `Protocol::player_fields` order, raw wire words.
+    /// `Cod1Wire::player_fields` order, raw wire words.
     ps: Vec<i32>,
 }
 
@@ -180,7 +180,7 @@ fn retail(map: &str) -> Capture {
     capture
 }
 
-/// Configstring 7 out of the retail capture the stage 3 gate diffs, which is
+/// Configstring 7 out of the retail capture `configstrings_ab` diffs, which is
 /// the list `playerState.weapon` indexes.
 fn retail_weapon_list(map: &str) -> String {
     let path = format!(
@@ -324,7 +324,7 @@ fn check_spawn_shape(entities: &str, ps: &PlayerState, who: &str, out: &mut Vec<
     }
 }
 
-fn field_index(p: &Protocol, name: &str) -> usize {
+fn field_index(p: &Cod1Wire, name: &str) -> usize {
     PlayerState::field_index(p, name).unwrap_or_else(|| panic!("no playerstate field {name:?}"))
 }
 
@@ -368,7 +368,7 @@ fn check(map: &str) {
             continue;
         }
         // The anim channels compare by index: bit 512 is the restart toggle,
-        // and its absolute value is not a fact about the pose -- retail's
+        // and its absolute value is not a fact about the pose: retail's
         // standing `stand_up` reads 634 on mp_carentan and 122 on mp_pavlov
         // (docs/research/player-model-anim-system.md, "The restart toggle").
         let mask = match f.name {

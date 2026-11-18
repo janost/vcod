@@ -8,7 +8,7 @@ use crate::fx::sim::SpawnAt;
 use glam::Vec3;
 use std::collections::HashMap;
 use vcod_common::net::flags::ET_FX;
-use vcod_common::net::protocol::{CsLayout, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, CsLayout};
 use vcod_common::net::snapshot::Snapshot;
 
 /// One play: the `.efx` path and where it goes.
@@ -34,7 +34,7 @@ pub struct FxEntity {
 }
 
 impl FxEntity {
-    pub fn from_state(e: &vcod_common::net::msg::EntityState, p: &Protocol) -> Option<FxEntity> {
+    pub fn from_state(e: &vcod_common::net::msg::EntityState, p: &Cod1Wire) -> Option<FxEntity> {
         if e.field_i32(p, "eType") != ET_FX {
             return None;
         }
@@ -66,7 +66,7 @@ impl LoopedFx {
     pub fn frame(
         &mut self,
         snap: &Snapshot,
-        p: &Protocol,
+        p: &Cod1Wire,
         time: i32,
         view: Vec3,
         configstrings: &[String],
@@ -135,11 +135,11 @@ impl LoopedFx {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vcod_common::net::protocol::{CS_EFFECTS, CS_LAYOUT_V1};
+    use vcod_common::net::protocol::{CS_EFFECTS_V1, CS_LAYOUT_V1};
 
     fn cs() -> Vec<String> {
         let mut cs = vec![String::new(); 2048];
-        cs[CS_EFFECTS + 2] = "fx/smoke/chimneysmoke.efx".into();
+        cs[CS_EFFECTS_V1 + 2] = "fx/smoke/chimneysmoke.efx".into();
         cs
     }
 

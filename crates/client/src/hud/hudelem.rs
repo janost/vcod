@@ -12,7 +12,7 @@ use vcod_common::net::msg::{HudElem, hud_field as f};
 
 use vcod_common::net::protocol::CsLayout;
 #[cfg(test)]
-pub use vcod_common::net::protocol::{CS_LOCALIZED, CS_SHADERS};
+pub use vcod_common::net::protocol::{CS_LOCALIZED_V1, CS_SHADERS_V1};
 
 /// Retail's 640x480 virtual screen, scaled to fit the window and centred,
 /// so a wider window pillarboxes it to 4:3 and a narrower one letterboxes
@@ -175,7 +175,6 @@ impl Virtual {
     }
 
     /// `uvs` in the quad's ring order: TL, TR, BR, BL.
-    #[allow(clippy::too_many_arguments)]
     pub fn quad_uv(
         &self,
         x: f32,
@@ -319,7 +318,7 @@ fn shadow_alpha(quads: &mut [HudQuad], alpha: f32) {
 
 /// Draws `elems` in retail's order: sorted by `sort`, stably, so pass the
 /// archived array first and the current one after it.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn build(
     elems: &[HudElem],
     configstrings: &[String],
@@ -362,7 +361,7 @@ fn draw_order(elems: &[HudElem]) -> Vec<&HudElem> {
     order
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn draw(
     e: &HudElem,
     cs: &[String],
@@ -733,7 +732,7 @@ pub(crate) mod tests {
 
     #[test]
     fn text_centres_on_its_point_both_ways() {
-        let cs = cs_with(&[(CS_LOCALIZED + 1, "HELLO")]);
+        let cs = cs_with(&[(CS_LOCALIZED_V1 + 1, "HELLO")]);
         let e = elem(&[
             (f::TYPE, 1),
             (f::TEXT, 1),
@@ -755,7 +754,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_fixed_slot_centres_each_glyph_in_its_cell() {
-        let cs = cs_with(&[(CS_LOCALIZED + 1, "^1AB")]);
+        let cs = cs_with(&[(CS_LOCALIZED_V1 + 1, "^1AB")]);
         let fixed = |font: i32| {
             elem(&[
                 (f::TYPE, 1),
@@ -814,7 +813,7 @@ pub(crate) mod tests {
 
     #[test]
     fn shader_element_fills_its_rect() {
-        let cs = cs_with(&[(CS_SHADERS + 5, "white")]);
+        let cs = cs_with(&[(CS_SHADERS_V1 + 5, "white")]);
         let e = elem(&[
             (f::TYPE, 3),
             (f::SHADER, 5),
@@ -839,7 +838,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_shader_shorter_than_its_font_aligns_by_its_own_height() {
-        let cs = cs_with(&[(CS_SHADERS + 5, "white")]);
+        let cs = cs_with(&[(CS_SHADERS_V1 + 5, "white")]);
         let e = elem(&[
             (f::TYPE, 3),
             (f::SHADER, 5),
@@ -855,7 +854,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_shader_label_leads_it_inside_the_aligned_box() {
-        let cs = cs_with(&[(CS_SHADERS + 5, "white"), (CS_LOCALIZED + 2, "AB")]);
+        let cs = cs_with(&[(CS_SHADERS_V1 + 5, "white"), (CS_LOCALIZED_V1 + 2, "AB")]);
         let e = elem(&[
             (f::TYPE, 3),
             (f::SHADER, 5),
@@ -893,7 +892,7 @@ pub(crate) mod tests {
 
     #[test]
     fn progress_bar_scale_tween_is_halfway_at_half_time() {
-        let cs = cs_with(&[(CS_SHADERS + 2, "white")]);
+        let cs = cs_with(&[(CS_SHADERS_V1 + 2, "white")]);
         let bar = |from_w: i32| {
             elem(&[
                 (f::TYPE, 3),
@@ -924,7 +923,7 @@ pub(crate) mod tests {
 
     #[test]
     fn fade_tween_is_halfway_at_half_time() {
-        let cs = cs_with(&[(CS_SHADERS + 2, "white")]);
+        let cs = cs_with(&[(CS_SHADERS_V1 + 2, "white")]);
         let e = elem(&[
             (f::TYPE, 3),
             (f::SHADER, 2),
@@ -952,9 +951,9 @@ pub(crate) mod tests {
     #[test]
     fn sorted_by_sort_stably_across_both_arrays() {
         let cs = cs_with(&[
-            (CS_SHADERS + 1, "a"),
-            (CS_SHADERS + 2, "b"),
-            (CS_SHADERS + 3, "c"),
+            (CS_SHADERS_V1 + 1, "a"),
+            (CS_SHADERS_V1 + 2, "b"),
+            (CS_SHADERS_V1 + 3, "c"),
         ]);
         let sh = |shader: i32, sort: f32| {
             let mut e = elem(&[
@@ -1049,7 +1048,7 @@ pub(crate) mod tests {
     /// the middle.
     #[test]
     fn hud_elems_stretch_full_width_and_keep_to_their_edge() {
-        let cs = cs_with(&[(CS_SHADERS + 1, "black"), (CS_LOCALIZED + 1, "9")]);
+        let cs = cs_with(&[(CS_SHADERS_V1 + 1, "black"), (CS_LOCALIZED_V1 + 1, "9")]);
         let bar = elem(&[
             (f::TYPE, 3),
             (f::SHADER, 1),

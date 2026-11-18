@@ -538,3 +538,56 @@ fn retail_gunner_killed_on_the_gun_replays_on_the_cod2_server() {
     // The trigger goes down on the frame the gunner dies: no round.
     gate(&DIE, 0);
 }
+
+/// mp_carentan's mg42 manned by the dm client, the clock at the mount.
+fn manned() -> Option<(Cod2Level, EntId, usize, i32)> {
+    let (mut level, gun, runs, done) = spawned(&MG42)?;
+    let slot = runs[0].slot;
+    level.mount_turret(slot, gun);
+    let now = done[0] + 50;
+    level.run_frame(now);
+    assert_eq!(level.manned_gun(slot), Some(gun));
+    Some((level, gun, slot, now))
+}
+
+/// A spawn of a gunner still on the gun (a spectator pick, the map's
+/// intermission) lets the gun go first and lands at the spawn's spot, not
+/// back at the mount.
+#[test]
+fn a_spawn_off_a_manned_gun_lands_at_the_spawn() {
+    use crate::game::host::{SpawnMode, SpawnRequest};
+    for mode in [SpawnMode::Spectator, SpawnMode::Intermission] {
+        let Some((mut level, _, slot, now)) = manned() else {
+            return;
+        };
+        let at = [100.0, 200.0, 300.0];
+        level.rt.host.client_spawns.push(SpawnRequest {
+            slot,
+            origin: at,
+            yaw_deg: 0.0,
+            angles: [0.0; 3],
+            mode,
+        });
+        level.run_frame(now + 50);
+        let p = level.players[slot].as_ref().unwrap();
+        assert_eq!(p.ps.origin, Vec3::from(at), "{mode:?}");
+        assert_eq!(level.manned_gun(slot), None);
+        assert_eq!((p.gunner.busy, p.gunner.viewlocked), (0, 0));
+        assert_eq!(p.ps.e_flags & 0x300, 0);
+    }
+}
+
+/// A manned gun freed by script lets its gunner go: the turret bits, the
+/// busy byte and the view lock clear, and no release stays queued.
+#[test]
+fn a_freed_gun_lets_its_gunner_go() {
+    let Some((mut level, gun, slot, now)) = manned() else {
+        return;
+    };
+    level.rt.host.free_entity(gun);
+    level.run_frame(now + 50);
+    let p = level.players[slot].as_ref().unwrap();
+    assert_eq!(p.ps.e_flags & 0x300, 0);
+    assert_eq!((p.gunner.busy, p.gunner.viewlocked), (0, 0));
+    assert!(level.rt.host.turret_ops.is_empty());
+}

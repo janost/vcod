@@ -147,8 +147,9 @@ fn a_leaning_scoped_shot_leaves_from_retails_muzzle() {
     let text = std::fs::read_to_string(&path).unwrap();
     let weapon = common::header_value(&text, "weapon", &path).to_string();
     let team = common::header_value(&text, "joined", &path).to_string();
-    let held =
-        vcod_server::configstrings::weapon_index(&weapon).expect("the joined weapon in CS 7");
+    let held = vcod_server::defs::V1
+        .weapon_index(&weapon)
+        .expect("the joined weapon in CS 7");
     let mut steps = parse_fixture(&text, held as u8);
     let retail = retail_shots(&text);
     assert_eq!(retail.len(), 7, "the capture's seven shots");
@@ -232,8 +233,9 @@ fn the_lean_ramps_and_settles_like_retail() {
     let text = std::fs::read_to_string(&path).unwrap();
     let weapon = common::header_value(&text, "weapon", &path).to_string();
     let team = common::header_value(&text, "joined", &path).to_string();
-    let held =
-        vcod_server::configstrings::weapon_index(&weapon).expect("the joined weapon in CS 7");
+    let held = vcod_server::defs::V1
+        .weapon_index(&weapon)
+        .expect("the joined weapon in CS 7");
     let steps = parse_fixture(&text, held as u8);
     let retail = retail_shots(&text);
     let mine = replay(

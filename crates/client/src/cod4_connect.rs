@@ -447,7 +447,6 @@ fn print_time(t: i64, words: &impl Fn(&str) -> String) -> String {
 }
 
 /// Text with its baseline at full-screen grid `(x, y)`.
-#[allow(clippy::too_many_arguments)]
 fn put(
     sp: &ScreenPlacement,
     f: &Font,
@@ -462,7 +461,7 @@ fn put(
 }
 
 /// [`put`] with a glow ([`glow_text`]).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn put_glow(
     sp: &ScreenPlacement,
     f: &Font,

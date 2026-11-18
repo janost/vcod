@@ -166,7 +166,7 @@ impl Vm {
     /// Starts a new thread running `func` from its first instruction and
     /// returns its id. The function must already be installed. Runs the
     /// thread immediately, to its own suspend/return/error, before
-    /// returning -- see `spawn`. A `wait` the new thread's first
+    /// returning (see `spawn`). A `wait` the new thread's first
     /// instructions hit counts from the script clock ([`Vm::time`]), which
     /// between frames is the last frame's `level.time`, not the caller's.
     ///
@@ -200,16 +200,16 @@ impl Vm {
     }
 
     /// Pushes a new `Runnable` thread and immediately steps it to its own
-    /// suspend, return, or error — never leaving it merely `Runnable` for
+    /// suspend, return, or error, never leaving it merely `Runnable` for
     /// a later scheduling pass to discover cold. Retail scripts pair a
     /// `thread` statement with a `notify` a line or two later expecting
     /// the spawned thread to have already reached its `waittill`
     /// (`animscripts/predict.gsc:102-108`; 246 corpus sites do this within
     /// three lines): a deferred spawn would let the notify fire before the
     /// thread registers for it, dropping the event and hanging the
-    /// `waittill` forever. Spawning is therefore recursive — the spawned
+    /// `waittill` forever. Spawning is therefore recursive: the spawned
     /// thread's own immediate run may itself spawn and immediately run a
-    /// further thread — each level on the native stack. A spawn from a
+    /// further thread, each level on the native stack. A spawn from a
     /// running step counts the spawner's frames against `interp::MAX_FRAMES`
     /// first, which bounds that nesting, and runs on the step's budget.
     pub(crate) fn spawn(
@@ -272,7 +272,7 @@ impl Vm {
     /// [`Vm::notify`] knowing which thread executed the `notify`, which its
     /// own endons do not kill: a thread that notifies an event it is itself
     /// registered against runs on and resumes past its next `wait`
-    /// (`probe_endon_self`). Stock `dm.gsc`'s `endMap` depends on it -- it
+    /// (`probe_endon_self`). Stock `dm.gsc`'s `endMap` depends on it: it
     /// runs inside a `Callback_PlayerKilled` thread that opened with
     /// `self endon("spawned")`, calls `spawnIntermission` (which notifies
     /// "spawned") on every player including that one, and only then waits
@@ -509,8 +509,8 @@ impl Vm {
         thread_index_in(&self.threads, id)
     }
 
-    /// Steps the thread `id` -- assumed `Runnable`, a no-op otherwise or if
-    /// it no longer exists (see below) -- until it suspends, returns, or
+    /// Steps the thread `id`, assumed `Runnable`, a no-op otherwise or if
+    /// it no longer exists (see below), until it suspends, returns, or
     /// errors, then updates its stored state or removes it, and flushes
     /// any notify a builtin queued along the way (`Op::Notify` resolves
     /// where it executes; neither runs a thread, so a notify can't reenter
@@ -520,7 +520,7 @@ impl Vm {
     /// back here `self.threads` may have gained, lost, or reordered
     /// entries; every write-back below re-resolves `id` to its current
     /// index rather than trusting the one taken before the step, and
-    /// tolerates it having vanished -- a thread killed by an endon fired
+    /// tolerates it having vanished: a thread killed by an endon fired
     /// from a thread it itself spawned, mid-step, is simply gone by the
     /// time we look again, and there is nothing left to write back to.
     /// Errors, whether this thread's own or a nested spawn's, are pushed
@@ -855,7 +855,7 @@ impl Vm {
     /// a hang: there is no scheduler here to come back to it later. But a
     /// threaded call inside `func` spawns and immediately runs a real,
     /// independent thread (`spawn`), and that thread's own `wait` is not
-    /// an error -- it's an ordinary suspend, resolved into a
+    /// an error: it's an ordinary suspend, resolved into a
     /// `WaitingUntil` deadline the same way `run_frame`/`start_thread`
     /// would, counted from the script clock ([`Vm::time`]).
     pub fn call_now(
@@ -1239,7 +1239,7 @@ mod tests {
     /// The same rule from the host side: a host interning an event name
     /// case-sensitively still reaches a `waittill` and an `endon` spelled
     /// the other way. `dier`'s `"PLAYERCONNECT"` is deliberately not the
-    /// canonical spelling -- `waiter` compiles first and claims it -- so the
+    /// canonical spelling (`waiter` compiles first and claims it), so the
     /// kill below lands only if `Op::EndOn` folds.
     #[test]
     fn a_host_notify_folds_the_event_name_it_was_given() {
@@ -1453,8 +1453,8 @@ later() { wait 0.05; return 9; }"#;
     /// (246 corpus sites pair a `thread` statement with a `notify` within
     /// three lines): a spawned thread must reach its own `waittill` before
     /// its spawner's `notify` two lines later, or the notify is missed and
-    /// the spawned thread's `waittill` — and its spawner's own later wait
-    /// for the reply — hang forever. `main` spawns `getNotetrack`, which
+    /// the spawned thread's `waittill` (and its spawner's own later wait
+    /// for the reply) hang forever. `main` spawns `getNotetrack`, which
     /// must register its `waittill("go")` before `main`'s `notify("go")`
     /// runs; `getNotetrack` then wakes and replies, and `main` must
     /// eventually see that reply too. If either registration lost the
@@ -1494,9 +1494,9 @@ later() { wait 0.05; return 9; }"#;
     /// Pins the id-watermark rescan in `run_frame` together with kill-
     /// before-wake ordering and the notify-flush boundary: `killer`'s
     /// in-script `notify` (not a host-driven one between frames, like
-    /// every other notify test here) kills `victim` — an *earlier* id
-    /// than `killer`'s own — mid-`run_frame`-pass, and `witness` — a
-    /// *later* id than either — must still run in that same pass rather
+    /// every other notify test here) kills `victim` (an *earlier* id
+    /// than `killer`'s own) mid-`run_frame`-pass, and `witness` (a
+    /// *later* id than either) must still run in that same pass rather
     /// than being skipped because `victim`'s removal shifted indices out
     /// from under a cached one.
     #[test]
@@ -1677,7 +1677,7 @@ later() { wait 0.05; return 9; }"#;
     }
 
     /// A plain (non-threaded) call whose callee suspends on `wait` leaves
-    /// the caller's frame mid-call across the suspend -- exactly the case
+    /// the caller's frame mid-call across the suspend: exactly the case
     /// `Frame::stack_effect_check` (vm.rs, test-only) has to survive rather
     /// than lose track of, since the caller and callee frames persist
     /// through separate `step_frames` invocations on either side of the
@@ -1842,7 +1842,7 @@ later() { wait 0.05; return 9; }"#;
     /// `main`'s own step ever returns to the outer loop), then still runs
     /// both side effects and reaches its own `wait 5` before the outer
     /// `step_thread` looks for `main`'s entry again to write back the
-    /// suspended frames -- finds it already gone -- and simply drops them:
+    /// suspended frames, finds it already gone, and simply drops them:
     /// the side effects already ran for real, but `main` never resumes to
     /// call `done()`.
     #[test]
@@ -2057,7 +2057,7 @@ later() { wait 0.05; return 9; }"#;
     /// A thread spawned by a `call_now`-driven script (a host callback
     /// like `CodeCallback_PlayerConnect`, say) is a real, independent
     /// thread, not the throwaway one-shot stack `call_now` itself runs
-    /// on -- its own `wait` is an ordinary suspend, not an immediate-call
+    /// on: its own `wait` is an ordinary suspend, not an immediate-call
     /// error, and counts from the script clock. `f`'s `wait 1` taken at
     /// 5_000 is due at 6_000 and runs on the frame after it.
     #[test]

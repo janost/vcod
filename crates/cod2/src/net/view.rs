@@ -284,9 +284,6 @@ impl ConfigStrings {
     }
 }
 
-/// `cl.snapshots`' depth (`PACKET_BACKUP`): `CL_GetSnapshot` (Mac
-/// 0x17a02c) refuses a snapshot 32 messages behind the newest.
-const PACKET_BACKUP: i32 = 32;
 /// `CG_AddLagometerSnapshotInfo`'s ring (cod2-protocol.md 18.6).
 const LAGOMETER: i32 = 128;
 /// The parse rings' depth: `CL_GetSnapshot` refuses a snapshot whose
@@ -414,7 +411,7 @@ impl NetView {
             .is_none_or(|&(_, ents, clients)| {
                 self.parsed.0 - ents < MAX_PARSE && self.parsed.1 - clients < MAX_PARSE
             });
-        newest.message_num.wrapping_sub(s.message_num) < PACKET_BACKUP && rings
+        newest.message_num.wrapping_sub(s.message_num) < super::ops::PACKET_BACKUP as i32 && rings
     }
 
     fn by_num(&self, n: i32) -> Option<&SnapshotView> {
@@ -571,13 +568,13 @@ fn lerp3(a: [f32; 3], b: [f32; 3], f: f32) -> [f32; 3] {
     [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * f)
 }
 
-/// Angles lerped the short way round, degrees.
 /// Whether two states of one entity straddle a teleport: their
 /// [`EF_TELEPORT_BIT`]s differ, and the client snaps to the newer.
 pub fn teleported(older_eflags: i32, newer_eflags: i32) -> bool {
     (older_eflags ^ newer_eflags) & EF_TELEPORT_BIT != 0
 }
 
+/// Angles lerped the short way round, degrees.
 fn lerp_angles(a: Vec3, b: Vec3, f: f32) -> Vec3 {
     Vec3::from_array([0, 1, 2].map(|i| {
         let d = (b[i] - a[i] + 180.0).rem_euclid(360.0) - 180.0;

@@ -8,13 +8,13 @@
 use super::gamestate::{self, Gamestate};
 use super::huffman::Huffman;
 use super::msg::{MsgWriter, SVC_EOF};
-use super::protocol::Protocol;
+use super::protocol::Cod1Wire;
 use std::io::{self, Write};
 
 /// The `.dm_<n>` number `CL_Record_f` formats in: 1 on 1.1 (CoDMP.exe
 /// 0x40e540), 2 on 1.5 (CoDMP15.exe 0x40f210), 3 on UO (CoDUOMP.exe
 /// 0x40fb80).
-pub fn extension_number(p: &Protocol) -> u32 {
+pub fn extension_number(p: &Cod1Wire) -> u32 {
     match p.transport.version {
         6 => 2,
         22 => 3,
@@ -23,7 +23,7 @@ pub fn extension_number(p: &Protocol) -> u32 {
 }
 
 /// The protocol a `.dm_<n>` file was recorded under.
-pub fn protocol_of_extension(n: u32) -> Option<&'static Protocol> {
+pub fn protocol_of_extension(n: u32) -> Option<&'static Cod1Wire> {
     use super::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
     match n {
         1 => Some(&PROTOCOL_V1),
@@ -41,7 +41,7 @@ pub fn extension_of(name: &str) -> Option<u32> {
 
 /// `CL_ReadDemoMessage`'s buffer: 16384 bytes on 1.1 and 1.5, 32768 on UO
 /// (CoDMP.exe 0x40e9c0, CoDUOMP.exe 0x410060). A longer record is fatal.
-pub fn max_message(p: &Protocol) -> usize {
+pub fn max_message(p: &Cod1Wire) -> usize {
     if p.is_uo() { 0x8000 } else { 0x4000 }
 }
 
@@ -60,7 +60,7 @@ pub fn auto_name(exists: impl Fn(&str) -> bool) -> String {
 /// `d` applied, the baselines but entity 0's, `serverCommandSequence`),
 /// compressed, with the `svc_EOF` a server message ends on.
 pub fn gamestate_message(
-    p: &Protocol,
+    p: &Cod1Wire,
     huff: &Huffman,
     reliable_sequence: i32,
     gs: &Gamestate,
@@ -141,7 +141,7 @@ pub struct DemoReader {
 }
 
 impl DemoReader {
-    pub fn new(data: Vec<u8>, p: &Protocol) -> Self {
+    pub fn new(data: Vec<u8>, p: &Cod1Wire) -> Self {
         Self::with_max(data, max_message(p))
     }
 
@@ -257,11 +257,11 @@ mod tests {
         };
         let h = Huffman::new();
         let msg = gamestate_message(p, &h, 0, &gs);
-        let read = |p: &Protocol| {
+        let read = |p: &Cod1Wire| {
             let mut r = MsgReader::new(&msg[4..], &h);
             gamestate::parse(&mut r, p).unwrap().baselines[&5].fields[i]
         };
-        let raw = Protocol {
+        let raw = Cod1Wire {
             eflags_to_v1: |f| f,
             ..PROTOCOL_V22
         };

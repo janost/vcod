@@ -47,8 +47,8 @@ impl BanFile {
         }
     }
 
-    /// [`BanFile::at`], after rewriting the lines of vcod's old CoD1 list
-    /// (`<ip> <name>`, before 2026-10-23) as `%i %s\r\n` with the address's
+    /// [`BanFile::at`], after rewriting the lines of vcod's older CoD1 list
+    /// format (`<ip> <name>`) as `%i %s\r\n` with the address's
     /// guid, so they keep holding. Other lines are left as they are. The
     /// old file is kept beside it as `<name>.old` before the first rewrite.
     pub fn open(path: PathBuf) -> BanFile {

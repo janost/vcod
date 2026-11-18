@@ -763,7 +763,7 @@ fn cue_at(
 /// in ([`super::posts::OUTER`]), leaving one an enemy saw or shot them on.
 /// A cue pulls back [`super::posts::COLLAPSE_SHARE`] of the outposted,
 /// nearest it first, their starts staggered; a cue again holds them there.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn deal_far(
     kept: &mut super::posts::Posts,
     tick: &Tick,
@@ -1698,7 +1698,7 @@ const MATE_HOLD_TICKS: u32 = 200;
 /// [`MATE_HOLD_TICKS`]. A guard who
 /// held a door left a queue of teammates behind him, each walking into
 /// his back (bot-objectives.md 12.7). Empty otherwise.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn mates_in_way(
     follower: &mut crate::nav::Follower,
     g: &NavGraph,
@@ -1928,7 +1928,6 @@ struct RoutePlan {
 /// a search's slice ([`crate::nav::PLAN_SLICE`]): then the search it ran
 /// from a full budget took the slice it takes here and stopped where it
 /// stops here.
-#[allow(clippy::too_many_arguments)]
 fn route<W: BotWorld>(
     w: &mut W,
     slot: usize,
@@ -2010,7 +2009,7 @@ fn route<W: BotWorld>(
 /// `oncoming` the bodies the bot gives way to, read only when needed.
 /// `Some` when the follower gave up an edge (`gave_up` before), `true`
 /// with another body near ([`BotDriver::edge_stalls`]).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn route_core<W: BotWorld>(
     input: &RouteIn,
     follower: &mut Follower,

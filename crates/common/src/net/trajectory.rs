@@ -7,7 +7,7 @@
 //! `cgame_mp_x86.dll` 0x30005470) and `Com_Error`s on anything above 10.
 
 use super::msg::EntityState;
-use super::protocol::Protocol;
+use super::protocol::Cod1Wire;
 use glam::Vec3;
 
 /// `trType_t`. CoD 1.1 has no `TR_LINEAR_STOP_BACK`, `TR_SPLINE` or
@@ -46,7 +46,7 @@ pub struct Trajectory {
 
 impl Trajectory {
     /// `prefix` is `"pos"` or `"apos"`.
-    pub fn read(ent: &EntityState, p: &Protocol, prefix: &str) -> Trajectory {
+    pub fn read(ent: &EntityState, p: &Cod1Wire, prefix: &str) -> Trajectory {
         let i32_field = |name: &str| ent.field_i32(p, &format!("{prefix}.{name}"));
         let f32_field = |name: &str| ent.field_f32(p, &format!("{prefix}.{name}"));
         Trajectory {
@@ -173,7 +173,7 @@ impl Trajectory {
     }
 
     /// The inverse of [`Trajectory::read`]: every word of the `prefix` trajectory.
-    pub fn write(&self, ent: &mut EntityState, p: &Protocol, prefix: &str) {
+    pub fn write(&self, ent: &mut EntityState, p: &Cod1Wire, prefix: &str) {
         let mut seti = |name: &str, v: i32| {
             if let Some(i) = EntityState::field_index(p, name) {
                 ent.fields[i] = v;

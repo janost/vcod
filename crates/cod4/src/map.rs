@@ -194,8 +194,7 @@ pub struct ModelMesh {
     /// `lodInfo[i].dist` for each of the model's `numLods`, LOD 0 first:
     /// LOD `i` draws below its distance.
     pub lod_dists: Vec<f32>,
-    /// LODs 1 and on, in model space as `surfaces` is. Kept for static
-    /// models only; [`Map::add_model`] leaves it empty.
+    /// LODs 1 and on, in model space as `surfaces` is.
     pub coarser: Vec<Vec<ModelSurface>>,
 }
 
@@ -547,23 +546,6 @@ impl Map {
             planes: self.dpvs_planes.clone(),
             origins: self.reflection_probe_origins.clone(),
         }
-    }
-
-    /// `x`'s first LOD in model space, its materials appended to
-    /// [`Map::materials`] (each name once): an entity's model, drawn where
-    /// its entity stands. `None` for a model with no geometry kept.
-    pub fn add_model(
-        &mut self,
-        a: &Assets,
-        x: &crate::assets::model::XModel,
-    ) -> Result<Option<ModelMesh>> {
-        let surfaces = model_surfaces(x, 0, &mut |id| self.add_material(a, id))?;
-        Ok((!surfaces.is_empty()).then(|| ModelMesh {
-            name: x.name.clone(),
-            surfaces,
-            lod_dists: lod_dists(x),
-            coarser: Vec::new(),
-        }))
     }
 
     /// Zone material `id` in [`Map::materials`], appended once by name.

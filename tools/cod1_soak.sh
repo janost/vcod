@@ -28,7 +28,7 @@ if [[ ${SOAK_INNER:-} == map ]]; then
 	# One map, inside its own network namespace.
 	out=$1 map=$2 gts=$3
 	ip link set lo up
-	sb=$out/sandbox
+	sb=${out:?}/sandbox
 	rm -rf "$sb"
 	mkdir -p "$sb/main"
 	for f in "$COD_DIR"/main/*.pk3; do ln -s "$(readlink -f "$f")" "$sb/main/"; done
@@ -103,8 +103,8 @@ need unshare taskset unzip ss dbus-run-session kwin_wayland
 : "${COD_DIR:?set COD_DIR to the install}"
 : "${LVP_ICD:?set LVP_ICD to the lavapipe ICD json}"
 here=$(cd "$(dirname "$0")/.." && pwd)
-mkdir -p "$out"
-out=$(cd "$out" && pwd)
+mkdir -p "$out" || exit 1
+out=$(cd "$out" && pwd) || exit 1
 if [[ -z ${BIN:-} ]]; then
 	(cd "$here" && nice -n 10 cargo build --release -p vcod -p vcod-server) > "$out/build.log" 2>&1 ||
 		{ echo "soak: build failed ($out/build.log)" >&2; exit 1; }

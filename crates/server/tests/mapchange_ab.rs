@@ -8,10 +8,10 @@
 //! so the run crosses two level ends: a `map_restart` and then a real map
 //! change (docs/research/cod11-map-cycle.md, sections 3 and 4).
 //!
-//! What is compared is an ordered subsequence of markers -- the intermission
+//! What is compared is an ordered subsequence of markers (the intermission
 //! frame, the restart's three reliable commands, the respawn, the second
 //! intermission, the out-of-band notice, the gamestate and the respawn on the
-//! second map -- and the interval between named pairs of them, the script
+//! second map), and the interval between named pairs of them, the script
 //! waits and the respawns frame for frame on the server clock, plus the
 //! presence of each command in [`BURST_CMDS`] and [`INTERMISSION_CMDS`] on
 //! both sides. The restart's configstring burst is compared slot for slot

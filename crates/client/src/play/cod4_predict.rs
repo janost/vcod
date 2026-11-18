@@ -524,18 +524,16 @@ impl PmWorld for Solids<'_> {
                         contents,
                     };
                     vcod_common::movetrace::clip_body_kept(&mut c, start, end, mins, maxs, &body);
-                    if c.fraction < t.fraction || (c.startsolid && !t.startsolid) {
-                        t = Tr {
-                            fraction: c.fraction,
-                            normal: c.normal,
-                            surface_flags: 0,
-                            contents,
-                            entity_num: s.number,
-                            startsolid: c.startsolid,
-                            allsolid: c.allsolid,
-                            walkable: c.normal.z >= vcod_cod4::collision::WALKABLE_NORMAL_Z,
-                        };
-                    }
+                    t.fold(Tr {
+                        fraction: c.fraction,
+                        normal: c.normal,
+                        surface_flags: 0,
+                        contents,
+                        entity_num: s.number,
+                        startsolid: c.startsolid,
+                        allsolid: c.allsolid,
+                        walkable: c.normal.z >= vcod_cod4::collision::WALKABLE_NORMAL_Z,
+                    });
                 }
                 SolidKind::Brush(model) => {
                     if model >= self.clip.submodels.len() {
@@ -547,12 +545,10 @@ impl PmWorld for Solids<'_> {
                     let c =
                         self.clip
                             .trace_model(model, local(start), local(end), mins, maxs, mask);
-                    if c.fraction < t.fraction || (c.startsolid && !t.startsolid) {
-                        let mut w = pmove::world_tr(&c);
-                        w.normal = q * c.normal;
-                        w.entity_num = s.number;
-                        t = w;
-                    }
+                    let mut w = pmove::world_tr(&c);
+                    w.normal = q * c.normal;
+                    w.entity_num = s.number;
+                    t.fold(w);
                 }
             }
             if t.fraction == 0.0 {
@@ -740,7 +736,7 @@ impl Cod4Predictor {
     /// over and drops any correction in flight (`CG_TransitionPlayerState`).
     /// `defs`, the level's weapon defs, runs the weapon half
     /// (not for a spectator, as the server's think leaves it out).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn predict(
         &mut self,
         snap: &delta::PlayerState,

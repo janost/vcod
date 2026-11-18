@@ -421,6 +421,10 @@ Recipe: `client-probes/probe_vehicle` installed as the gametype
 | `mp_peaks-tdm-slope-8ms-jeep-gun-spawn-uo.txt` | 2026-10-20 | `GUN` with `--slope-from-spawn`: logs from the first playing snapshot, so the spawn's think, the placement's fall and the boarding are in it. Written as `--capture-tag jeep-gun-r5` and renamed: the only one of five runs whose spawn (tdm spawnpoint 277) gave seat 606. Its `PROBE` lines (`PROBE spawned` among them) are `fixtures/vehicles/mp_peaks-jeep-gun-spawn-uo.txt` (section 13, "The driver's idle"). |
 | `mp_cassino-tdm-slope-8ms-tank-gun-uo.txt` | 2026-10-20 | `GUN` on the Panzer IV (`+set probe_vehicletype panzeriv_mp +set probe_bones 1`, `--capture-tag tank-gun-uo`), the gun on `tag_secondary_player`'s base with the tank's 50-up span. Its `PROBE bone` lines are `fixtures/vehicles/mp_cassino-tank-gun-bones-uo.txt`. `vehicle_ab`'s `the_tank_gun_replays_on_ours` matches every field of all 923 snapshots, the gun's included (VERIFIED, replay); `the_tank_rider_s_bones_follow_retail_s_in_both_seats` matches both stints' marks (section 13, "The tank driver's link offset"). |
 
+`cargo run -p vcod-common --example rider_dump -- gamestate-uo-tank.bin
+snapshots-uo-tank.bin` lists every seated player entity of a binary UO
+capture in `crates/common/tests/fixtures/net/` with its trajectory fields.
+
 ## 9. What vcod does
 
 - **Prediction.** `pmove::VehicleSeat` (`PlayerState::seat`) comes off a
@@ -3124,4 +3128,7 @@ drives under the fields (`playerstate/mp_peaks-tdm-slope-8ms-jeep-closespeed-uo.
   entity fields (`vehicletype`, `capturing`, `vehicle_owner`, script
   fields in vcod) across, and sends it as `eType` 13 standing still
   (`Vehicles::corpses`). Riders are not measured: retail leaves them on a
-  freed record, vcod's seats go with the record.
+  freed record. vcod's seats go with the record, and each rider gets a
+  forced exit where he sits (`SeatOp::Exit` with no spot) so his sim is
+  not left on a freed number; a `delete()` of an occupied vehicle does the
+  same.

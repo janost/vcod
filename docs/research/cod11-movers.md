@@ -3368,6 +3368,16 @@ INFERRED: the one row is the stored `dt` and stored `base + delta * dt` of
 `ride_ab.rs`'s `mover_script_reads_match_retail_on_1_5` and `_on_uo` replay
 both, every line exact.
 
+**A script write over a settled plan.** `Scr_SetOrigin` runs `G_SetOrigin`,
+which writes `pos.trBase` and zeroes `trType`, `trTime`, `trDuration` and
+`trDelta` (combat doc, the `G_SetOrigin` 0x67D38 note). INFERRED, that a
+write after the move's `movedone` leaves the mover standing at the written
+point. vcod: `Movers::set_origin` and `set_angles` put a settled group's plan
+stationary at the write, its clip pose with it. A write during a move is
+not measured: retail's `Reached_ScriptMover` still runs at the segment's
+end, and what it does over a stationary `trType` needs a probe; vcod leaves
+the running plan alone there.
+
 ## 24. Segments to the last bit
 
 Evidence: three captures off one probe on mp_carentan, no client,

@@ -343,6 +343,13 @@ VERIFIED, its switch:
 | 197 | `player_die` with `MOD_SUICIDE` and 100000 |
 | 116..138 (landings) | `G_Damage` with `MOD_FALLING` (0xb) and `maxHealth * parm / 100`, all of it from a parm of 100 up |
 
+The walk starts at `eventSequence - 4` when the old sequence
+`ClientThink_real` hands it is further back, so a cmd raising five or more
+events walks only the ring's four (lnxded 0x80f52da: `sub $0x4` from
+`ps+0xa4`, `cmp`, `jge`). VERIFIED, the clamp. The body's copy in
+`ClientEndFrame` (0x80f56f8, `cod2-protocol.md` 16.3) has no such clamp.
+VERIFIED, the loop. vcod's walk is `game::cod2::cmd_events`.
+
 ### 2.2 The muzzle and the aim
 
 `G_CalcMuzzlePoints` (lnxded 0x81207ec) takes `AngleVectors` of

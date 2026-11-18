@@ -209,7 +209,6 @@ impl NavGraph {
     /// the edges past the follower's reach
     /// ([`Self::drop_out_of_reach`]) and probes for mantles again off the
     /// floors the last mantles' tops led to.
-    #[allow(clippy::too_many_arguments)]
     pub fn build_opts(
         world: &CollisionWorld,
         seeds: &[[f32; 3]],
@@ -2293,6 +2292,9 @@ pub struct Follower {
     /// The threat an [`Goal::Away`](crate::bots::Goal::Away) destination
     /// was picked against.
     threat: Option<Vec3>,
+    /// The kind of the last goal asked for: a change drops `arrived` and
+    /// `threat`, which belong to the goal that set them.
+    goal_kind: Option<std::mem::Discriminant<crate::bots::Goal>>,
     /// The body fell off its path: the next plan starts at a node it walks
     /// to ([`NavGraph::nearest_walkable`]).
     fell: bool,
@@ -2432,7 +2434,6 @@ impl Follower {
     /// search next tick, so neither one long plan nor many bots planning at
     /// once (the tick the graph lands) stall a tick.
     /// `rand` picks roam destinations.
-    #[allow(clippy::too_many_arguments)]
     pub fn waypoint(
         &mut self,
         g: &NavGraph,
@@ -2490,7 +2491,6 @@ impl Follower {
     }
 
     /// [`Self::waypoint`] before the bookkeeping.
-    #[allow(clippy::too_many_arguments)]
     fn follow(
         &mut self,
         g: &NavGraph,
@@ -2520,6 +2520,12 @@ impl Follower {
         }
         let here = Vec3::from(at);
         let drop_landed = self.landed_partway(g, here, body, landed);
+        let kind = Some(std::mem::discriminant(&goal));
+        if self.goal_kind != kind {
+            self.goal_kind = kind;
+            self.arrived = false;
+            self.threat = None;
+        }
         match goal {
             Goal::Hold => {
                 self.reset();
@@ -2884,7 +2890,7 @@ impl Follower {
         }
         let Some(&w) = self.path.get(self.next) else {
             // Arrived. A roam picks somewhere new; a point is walked at.
-            self.path.clear();
+            self.drop_path();
             return match goal {
                 Goal::To(p) => {
                     self.arrived = true;
@@ -2911,7 +2917,7 @@ impl Follower {
                 self.avoid_edge(edge.0, edge.1);
                 self.fell = true;
             }
-            self.path.clear();
+            self.drop_path();
             return None;
         }
         // Fallen off the path: a waypoint more than a climb over the feet,
@@ -3819,7 +3825,7 @@ impl Follower {
                 self.aside_rest = ASIDE_REST;
                 self.shun = Arc::default();
                 self.shun_through = false;
-                self.path.clear();
+                self.drop_path();
                 self.search = None;
                 self.fell = true;
                 return None;
@@ -4718,11 +4724,17 @@ impl Follower {
     }
 
     fn reset(&mut self) {
-        self.held = None;
-        self.pull_base = None;
         self.dest = None;
         self.search = None;
+        self.drop_path();
+    }
+
+    /// The path gone with what indexes or follows it: the pulled base, the
+    /// held waypoint and the walked-out mark.
+    fn drop_path(&mut self) {
         self.path.clear();
+        self.held = None;
+        self.pull_base = None;
         self.arrived = false;
     }
 }
@@ -5139,7 +5151,6 @@ pub trait WalkStep: Send + Sync {
     /// step may push as `delta_angles`; `weapons` holds the def of
     /// `ps.weapon`. `carry` is what the step kept after the walk's last
     /// cmd, `None` on its first.
-    #[allow(clippy::too_many_arguments)]
     fn step(
         &self,
         ps: &mut PlayerState,
@@ -5987,7 +5998,6 @@ struct Trail {
 
 /// [`walk_with`] without the crease test, the body's weapon moving it at
 /// `move_scale`; `trail` gathers what it passed over.
-#[allow(clippy::too_many_arguments)]
 fn walk_sliding(
     world: &CollisionWorld,
     from: Vec3,
@@ -7815,6 +7825,96 @@ mod tests {
         assert_eq!(f.dest, Some(0));
     }
 
+    /// A point goal walked out, then a roam: the roam's legs are no longer
+    /// "arrived", so they string-pull and report a straight run.
+    #[test]
+    fn a_roam_after_a_walked_out_point_runs_its_legs() {
+        use crate::bots::Goal;
+        let g = row();
+        let mut f = Follower::default();
+        let mut at = [0.0f32; 3];
+        let goal = Goal::To([96.0, 0.0, 0.0]);
+        for _ in 0..20 {
+            match f.waypoint(&g, None, goal, at, Footing::STANDING, &mut 100, &mut || 0) {
+                Some(w) => at = w,
+                None => break,
+            }
+            if f.arrived {
+                break;
+            }
+        }
+        assert!(f.arrived, "the point was never walked out");
+        let mut picks = [5].into_iter().cycle();
+        let mut rand = || picks.next().unwrap();
+        // The first roam tick may walk out the point's node; the next picks.
+        for _ in 0..3 {
+            let roam = Goal::Roam;
+            f.waypoint(&g, None, roam, at, Footing::STANDING, &mut 100, &mut rand);
+            if f.dest == Some(5) {
+                break;
+            }
+        }
+        assert_eq!(f.dest, Some(5));
+        assert!(!f.arrived);
+        assert!(f.straight_run(&g, Vec3::from(at)) > 0.0);
+    }
+
+    /// Away, a roam, then Away from the same spot: the flight picks its
+    /// destination again instead of following the roam's.
+    #[test]
+    fn a_flight_after_a_roam_picks_a_flight_destination() {
+        use crate::bots::Goal;
+        let g = row();
+        let mut f = Follower::default();
+        let mut picks = [0, 4, 1, 5, 3].into_iter().cycle();
+        let mut rand = || picks.next().unwrap();
+        let away = Goal::Away([0.0, 0.0, 0.0]);
+        let at = [64.0, 0.0, 0.0];
+        f.waypoint(&g, None, away, at, Footing::STANDING, &mut 100, &mut rand);
+        assert_eq!(f.dest, Some(5));
+        f.waypoint(
+            &g,
+            None,
+            Goal::Roam,
+            at,
+            Footing::STANDING,
+            &mut 100,
+            &mut rand,
+        );
+        // The roam's own pick, toward the threat.
+        f.dest = Some(0);
+        f.path.clear();
+        f.waypoint(&g, None, away, at, Footing::STANDING, &mut 100, &mut rand);
+        assert_eq!(f.dest, Some(5));
+    }
+
+    /// The off-path clear drops the pulled base and the held waypoint with
+    /// the path, so the next plan starts at its own first node.
+    #[test]
+    fn an_off_path_clear_drops_the_pulled_base() {
+        let g = row();
+        let mut f = Follower::default();
+        let goal = crate::bots::Goal::To([160.0, 0.0, 0.0]);
+        f.waypoint(
+            &g,
+            None,
+            goal,
+            [0.0; 3],
+            Footing::STANDING,
+            &mut 100,
+            &mut || 0,
+        );
+        assert!(!f.path.is_empty());
+        f.next = 4;
+        f.pull_base = Some(3);
+        // Far off the waypoint: the path is dropped.
+        let off = [32.0, 2000.0, 0.0];
+        f.waypoint(&g, None, goal, off, Footing::STANDING, &mut 0, &mut || 0);
+        assert!(f.path.is_empty());
+        assert_eq!(f.pull_base, None);
+        assert_eq!(f.held, None);
+    }
+
     /// A bot pinned on its way from node 1 to node 2 (by a body guarding the
     /// stairs, say) plans round that edge, through node 3, once it gives up.
     #[test]
@@ -8374,8 +8474,8 @@ mod tests {
 
     /// mp_depot by (-64, 352): a body run off a ledge at z 12 comes to rest
     /// on a step's corner at z 3, right under a floor at z 27 and under a
-    /// ceiling 37 over the feet. A flood walk resting there was merged into
-    /// the floor's node until 2026-10-09; the walk to the node itself jumps.
+    /// ceiling 37 over the feet. A flood walk resting there is not merged
+    /// into the floor's node: the walk to the node itself jumps.
     #[test]
     fn a_walk_jumps_onto_a_floor_right_overhead_under_a_ceiling() {
         let Some(world) = map_world("mp_depot") else {
@@ -8554,11 +8654,11 @@ mod tests {
 
     /// mp_ship's ladders, each from its open face: up and down both proved
     /// by the bots' own steering. One plain, one whose head stands right
-    /// above its foot in a shaft, one only the creep gets down, and the five
-    /// that got no rung before 2026-10-07. The climb under the mast's spar
+    /// above its foot in a shaft, one only the creep gets down, and five
+    /// more. The climb under the mast's spar
     /// ends on the spar's edge at 1147 beside the plate, and the creep back
     /// off it at a run is 40 units out before it has dropped the 8 under the
-    /// plate `PM_CheckLadderMove`'s box needs (2026-10-12): up only.
+    /// plate `PM_CheckLadderMove`'s box needs: up only.
     #[test]
     fn ships_ladders_are_climbed_both_ways() {
         let Some(fs) = vcod_common::testing::game_fs() else {
@@ -9025,7 +9125,7 @@ mod tests {
         let w = &world.collision;
         let target = glam::Vec2::new(-1856.1, -538.4);
         let mut ps = PlayerState::spawn(Vec3::new(-1779.3, -607.2, 116.125), 0.0);
-        ps.weapon = crate::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+        ps.weapon = crate::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
         let mw = MoveWorld::bare(w);
         let mut last = None;
         for tick in 1..20 {

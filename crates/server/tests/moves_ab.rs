@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, HashMap};
 use vcod_common::collision::CollisionWorld;
 use vcod_common::movetrace::MoveWorld;
 use vcod_common::net::msg::{self, NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::patch::Arith;
 use vcod_common::pmove::predict::{self, Predicted};
 use vcod_common::pmove::{MoveRules, Stance};
@@ -61,7 +61,7 @@ enum Line {
     Snap(Box<msg::PlayerState>, Option<[f32; 3]>),
 }
 
-fn parse(p: &Protocol, text: &str) -> Vec<Line> {
+fn parse(p: &Cod1Wire, text: &str) -> Vec<Line> {
     vcod_common::testing::parse_slope(p, text)
         .into_iter()
         .map(|l| match l {
@@ -224,7 +224,7 @@ impl Report {
 /// which `PM_UpdateViewAngles` composed them from, and its sight bit is
 /// `fWeaponPosFrac != 0`, as `SV_UserMove`'s base cmd (docs/protocol-1.1.md,
 /// "The base cmd is built from the playerstate").
-fn base_cmd(p: &Protocol, w: &msg::PlayerState) -> UserCmd {
+fn base_cmd(p: &Cod1Wire, w: &msg::PlayerState) -> UserCmd {
     let view = w.viewangles(p);
     let short = |i: usize| {
         let delta = w.field_i32(p, &format!("delta_angles[{i}]"));
@@ -241,7 +241,7 @@ fn base_cmd(p: &Protocol, w: &msg::PlayerState) -> UserCmd {
 
 /// Each snapshot rebuilt and predicted to the next one under `rules`.
 fn replay(
-    p: &Protocol,
+    p: &Cod1Wire,
     rules: MoveRules,
     lines: &[Line],
     world: &CollisionWorld,
@@ -387,7 +387,7 @@ fn print(name: &str, r: &Report) {
 
 struct Capture {
     file: &'static str,
-    protocol: &'static Protocol,
+    protocol: &'static Cod1Wire,
     rules: MoveRules,
 }
 
@@ -1072,7 +1072,7 @@ const UOFOOT_GAPS: &[(&str, &str, usize)] = &[
 /// arithmetic (bsp-ibsp59-format.md, "Patch collision on 1.5 and UO").
 /// The 1.1 and 1.5 runs need `COD_DIR` at the 1.1 install, as the moves
 /// gate does; the UO ones at a UO install.
-const PATCHWALK: [(&str, &Protocol, MoveRules); 9] = [
+const PATCHWALK: [(&str, &Cod1Wire, MoveRules); 9] = [
     (
         "mp_carentan-dm-slope-8ms-patchwalk-pole-1.1.txt",
         &PROTOCOL_V1,
@@ -1145,7 +1145,7 @@ fn the_predictor_replays_walks_against_patches() {
 
 /// `lines` with every snapshot's `speed` and `gravity` put back to the
 /// stock 190 and 800.
-fn at_stock_speed_and_gravity(p: &Protocol, mut lines: Vec<Line>) -> Vec<Line> {
+fn at_stock_speed_and_gravity(p: &Cod1Wire, mut lines: Vec<Line>) -> Vec<Line> {
     let speed = msg::PlayerState::field_index(p, "speed").unwrap();
     let gravity = msg::PlayerState::field_index(p, "gravity").unwrap();
     for l in &mut lines {

@@ -83,17 +83,6 @@ pub fn lag_time(stored: i32, cmd_time: i32, level_time: i32) -> i32 {
     }
 }
 
-/// A bullet's `timeOffset`: `G_Damage`'s tenth argument from the bullet
-/// path is `level.time` minus the shot's time (0x811fe90's caller passes
-/// `DAT_0864c56c - param_9`), and `FireWeaponAntiLag` (0x8120870) is
-/// handed the client's [`lag_time`] under `g_antilag` 1, its default
-/// (`Dvar_RegisterBool("g_antilag", 1, ..)`, 0x8111842..), else
-/// `level.time`. Every other `G_Damage` caller (melee, blasts, falls,
-/// triggers, `finishPlayerDamage`) passes 0. VERIFIED, the call sites.
-pub fn time_offset(level_time: i32, lag_time: i32, antilag: bool) -> i32 {
-    if antilag { level_time - lag_time } else { 0 }
-}
-
 /// The notify CoD2's `ClientEvents` (0x80f52da) raises on the player for a
 /// playerstate event, events 168..172, VERIFIED (cod2-gsc-diff.md 4.2).
 pub fn binocular_notify(event: i32) -> Option<&'static str> {
@@ -106,6 +95,20 @@ pub fn binocular_notify(event: i32) -> Option<&'static str> {
         EV_BINOCULAR_DROP => "binocular_drop",
         _ => return None,
     })
+}
+
+/// The events and parms a cmd raised since `old`, oldest first, as
+/// `ClientEvents` (lnxded 0x80f52da) walks them: from `eventSequence - 4` at
+/// the earliest, so the 4-slot ring is never read past a lap.
+pub fn cmd_events(ps: &PlayerState, old: i32) -> Vec<(i32, i32)> {
+    (old.max(ps.event_sequence - 4)..ps.event_sequence)
+        .map(|i| {
+            (
+                ps.events[(i & 3) as usize],
+                ps.event_parms[(i & 3) as usize],
+            )
+        })
+        .collect()
 }
 
 /// A CoD2 map's server world: the engine's collision through
@@ -534,7 +537,6 @@ impl Cod2Level {
 
     /// The level over the map's parts, which the engine's collision and the
     /// combat's traces share.
-    #[allow(clippy::too_many_arguments)]
     pub fn load_level(
         fs: Rc<Pk3Fs>,
         parts: PartsSource,
@@ -1019,7 +1021,8 @@ impl Cod2Level {
             p.ps.weapon_state = p.ws.state;
         }
         sync_weapons_out(&mut self.rt.host, slot, &p.ws);
-        let fired = (seq..p.ps.event_sequence).map(|i| p.ps.events[(i & 3) as usize]);
+        let events = cmd_events(&p.ps, seq);
+        let fired = events.iter().map(|&(e, _)| e);
         self.combat.fire_recoil(&mut p.aim, &p.ps, &p.ws, fired);
         if let Some((end, duration)) = mantle {
             let (mins, maxs) = (p.ps.mins, p.ps.maxs);
@@ -1036,14 +1039,6 @@ impl Cod2Level {
         state.body = playing.then(|| crate::game::cod2_blast::BlastBody::of(ps));
         let origin = ps.origin.to_array();
         let eye = [origin[0], origin[1], origin[2] + ps.view_height_current];
-        let events: Vec<(i32, i32)> = (seq..ps.event_sequence)
-            .map(|i| {
-                (
-                    ps.events[(i & 3) as usize],
-                    ps.event_parms[(i & 3) as usize],
-                )
-            })
-            .collect();
         let aim = [ps.view_angles[0], ps.view_angles[1]];
         self.rt.set_client_pm_type(slot, pm);
         self.rt.set_client_on_ground(slot, on_ground);
@@ -1138,6 +1133,11 @@ impl Cod2Level {
         _p = crate::tick_profile::phase("frame/spawns");
         for s in self.rt.take_client_spawns() {
             crate::tick_trace::step!("ClientSpawn slot {}", s.slot);
+            // `ClientSpawn` lets a manned gun go before it places the body,
+            // so the release's teleport lands under the spawn's.
+            if let Some(id) = self.manned_gun(s.slot) {
+                self.stop_using_turret(id);
+            }
             let Some(p) = self.players.get_mut(s.slot).and_then(Option::as_mut) else {
                 continue;
             };
@@ -1622,6 +1622,9 @@ impl Cod2Level {
                 None => return,
             },
         };
+        if let Some(id) = self.manned_gun(slot) {
+            self.stop_using_turret(id);
+        }
         let now = self.level_time;
         let p = self.players[slot].as_mut().unwrap();
         p.spectator_client = -1;
@@ -1900,6 +1903,22 @@ mod tests {
         assert_eq!(body.events[2], ev::EV_FIRE_WEAPON);
     }
 
+    /// Six events in one cmd: the ring holds the newest four once each, and
+    /// `ClientEvents` handles each of those once, not the two oldest twice.
+    #[test]
+    fn a_cmd_s_event_walk_stops_at_the_ring_s_four() {
+        let mut ps = PlayerState::default();
+        let old = ps.event_sequence;
+        for parm in 1..=6 {
+            ps.add_event(100 + parm, parm);
+        }
+        assert_eq!(
+            cmd_events(&ps, old),
+            vec![(103, 3), (104, 4), (105, 5), (106, 6)]
+        );
+        assert_eq!(cmd_events(&ps, old + 5), vec![(106, 6)]);
+    }
+
     #[test]
     fn the_lag_time_moves_forward_and_trails_by_a_second_at_most() {
         assert_eq!(lag_time(0, 950, 1000), 950);
@@ -1907,8 +1926,6 @@ mod tests {
         assert_eq!(lag_time(950, 1000, 1000), 1000);
         assert_eq!(lag_time(950, 100, 5000), 4000);
         assert_eq!(lag_time(950, i32::MIN, 1000), 950);
-        assert_eq!(time_offset(1000, 950, true), 50);
-        assert_eq!(time_offset(1000, 950, false), 0);
     }
 
     /// `script_struct` blocks become `level.struct` entries in lump order,

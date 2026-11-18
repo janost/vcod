@@ -30,8 +30,8 @@ case $GAME in
   *) echo "soak: GAME is cod4 or cod2" >&2; exit 2 ;;
 esac
 here=$(cd "$(dirname "$0")/.." && pwd)
-mkdir -p "$out"
-out=$(cd "$out" && pwd)
+mkdir -p "$out" || exit 1
+out=$(cd "$out" && pwd) || exit 1
 maps=("$@")
 if [ ${#maps[@]} -eq 0 ] && [ "$GAME" = cod4 ]; then
   for f in "$COD4_DIR"/zone/english/mp_*.ff; do

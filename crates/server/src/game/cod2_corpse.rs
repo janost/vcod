@@ -6,7 +6,7 @@
 
 use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 
 use super::bodies::Body;
 use super::corpse::{CLIPMASK, CONTENTS_NODROP, CorpseAnim, CorpseWorld, Kinds, MAXS, MINS};
@@ -26,7 +26,7 @@ pub fn launch(
     velocity: Vec3,
     now_ms: i32,
     max_velocity: f32,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) {
     super::corpse::launch(
         body,
@@ -84,7 +84,7 @@ pub fn run(
     body: &mut Body,
     now_ms: i32,
     delta: Vec3,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> Moved {
     super::corpse::step(world, body, now_ms, delta, p)
 }
@@ -162,7 +162,7 @@ mod tests {
     use vcod_common::collision::test_world;
     use vcod_common::net::msg::EntityState;
 
-    fn proto() -> &'static Protocol {
+    fn proto() -> &'static Cod1Wire {
         vcod_cod2::net::PROTOCOL_118.as_cod1_shim()
     }
 

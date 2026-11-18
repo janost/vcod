@@ -7,12 +7,31 @@ version. See LICENSE for the full text.
 
 Ported code
 
-Source files whose header says "Contains routines ported from" carry ports of
-routines from the sources below. Among them: in crates/common, net/msg.rs,
-net/huffman.rs, net/netchan.rs, net/trajectory.rs, net/gamestate.rs,
-net/snapshot.rs, net/connectionless.rs, net/codec.rs, pmove.rs, collision.rs,
-patch.rs, leafwalk.rs and animscript.rs; in crates/server, server.rs and
-game/missile.rs; in crates/client, frontend/mod.rs and sky.rs. The sources:
+The files below carry a "Contains routines ported from" header naming the
+source and pointing here (crates/common/tests/notice_ports.rs keeps the two
+in step):
+
+  crates/client/src/frontend/mod.rs
+  crates/client/src/sky.rs
+  crates/common/src/animscript.rs
+  crates/common/src/collision.rs
+  crates/common/src/leafwalk.rs
+  crates/common/src/material.rs
+  crates/common/src/net/codec.rs
+  crates/common/src/net/connectionless.rs
+  crates/common/src/net/gamestate.rs
+  crates/common/src/net/huffman.rs
+  crates/common/src/net/msg.rs
+  crates/common/src/net/netchan.rs
+  crates/common/src/net/snapshot.rs
+  crates/common/src/net/trajectory.rs
+  crates/common/src/patch.rs
+  crates/common/src/pmove.rs
+  crates/server/src/engine/ratelimit.rs
+  crates/server/src/game/missile.rs
+  crates/server/src/server.rs
+
+They are ports of routines from:
 
   Quake III Arena GPL Source Code
   Copyright (C) 1999-2005 Id Software, Inc.
@@ -25,7 +44,12 @@ game/missile.rs; in crates/client, frontend/mod.rs and sky.rs. The sources:
   additional terms reproduced below.
   https://github.com/id-Software/RTCW-MP
 
-Both are used here under GPL-3.0. Where a routine is a port, the comment in
+  ioquake3 (the query rate limiter in engine/ratelimit.rs)
+  Copyright (C) 1999-2005 Id Software, Inc. and the ioquake3 contributors.
+  Licensed under the GNU General Public License, version 2 or later.
+  https://github.com/ioquake/ioq3
+
+All three are used here under GPL-3.0. Where a routine is a port, the comment in
 the source names the file it came from.
 
 The triangle-strip decoder in crates/common/src/xmodel.rs is ported from
@@ -36,6 +60,19 @@ The struct layouts behind the CoD 1.1 netfield tables in crates/common/src/net/
 started from CoDExtended, a GPL server extension for CoD 1.1, and some of its
 type names (pm_type, entity types) are used as they are there.
 https://github.com/xtnded/codextended
+
+Third-party crates
+
+The release archives carry THIRD-PARTY-LICENSES: the licence and notice
+files of every Rust crate the binaries link, written at build time by
+tools/third_party_licenses.py.
+
+Test fixtures
+
+The files under crates/*/tests/fixtures/ are recordings of retail Call of Duty
+server output (wire captures, configstring tables, debugger readings, log
+lines, one retail client demo) made by the author of vcod, beside probe
+scripts and pinned outputs written for the tests. They hold no game assets.
 
 Quake III Arena and Return to Castle Wolfenstein are trademarks of id Software.
 Call of Duty is a trademark of Activision Publishing, Inc. This project is not

@@ -564,7 +564,6 @@ impl Draw<'_> {
     }
 
     /// Text trap 0x36 in font 0 at a baseline.
-    #[allow(clippy::too_many_arguments)]
     fn text(&self, s: &str, x: f32, y: f32, scale: f32, rgb: [f32; 3], out: &mut Vec<HudQuad>) {
         let rgba = [rgb[0], rgb[1], rgb[2], self.alpha];
         menu_text_rgba(self.font(scale), s, (x, y), scale, rgba, self.v, out);
@@ -572,7 +571,6 @@ impl Draw<'_> {
 
     /// [`Self::text`] in `UI_DrawText`'s style 0, no shadow: CoD2's row
     /// cell once it shrank below 0.16 (cod2-hud.md 13).
-    #[allow(clippy::too_many_arguments)]
     fn text_plain(
         &self,
         s: &str,
@@ -644,7 +642,7 @@ impl Cursor {
     /// `0x3002a970`: the team's banner, its name and player count in the
     /// team's colour, and for axis and allies the team's score and average
     /// ping in their columns. Returns the y the rows start at.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn banner(
         &mut self,
         d: &Draw,
@@ -738,7 +736,7 @@ impl Cursor {
     }
 
     /// `0x3002ace0`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn row(
         &mut self,
         d: &Draw,

@@ -1620,12 +1620,3 @@ snapshot of a gamestate and the first after a restart: the selection,
 (`OnlineView::track_spawn`), the hit icons and the gun's sway, tilt,
 movement and damage kick (`Hud::track_spawn`, `GunAim::respawn`), and
 the weapon name's stamp (`WeaponNameFade`).
-
----
-
-## Open items
-
-None. Whether a follow-spectator receives 175/176 for the followed player is
-settled in section 2: the single-client test compares the snapshot's
-`ps.clientNum`, not the client slot. A free-flying spectator's capture never
-shows them.

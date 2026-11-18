@@ -35,6 +35,10 @@ them on vcod.
   `client-probes/probe_*`) installed as the gametype and prints its `PROBE`
   lines. `COD_VERSION` picks the server as `run_server.sh` does (UO's
   gametypes and log live under the homepath's `uo/`).
+- The retail packages are not in the repo. `COD_LNXDED` names the server
+  binary (`COD2_LNXDED` for CoD2); unset, the scripts look in the gitignored
+  `private/retail/` (`cod-lnxded-1.1d/`, `cod-lnxded-1.5b/`,
+  `coduo-lnxded-1.51b/`, each with its `lib/`).
 - A worktree has no `private/` (it is gitignored): link the main checkout's
   in.
 - Without `COD_LNXDED_HOME` both scripts run in a homepath of the port's own,
@@ -177,6 +181,16 @@ captures in `crates/common/tests/fixtures/net/`.
 | `*-turret-hit.bin` | a 1.1d `--save-turret` gunner's own snapshots while a `--save-hit` probe shoots him off the gun (same section) |
 | `*-follow-1.1.bin` | a 1.1d spectator following a `--save-hit` shooter under `client-probes/probe_passthru` (`cod11-spectator-follow.md` 11.1) |
 | `*-demo.bin`, `*-demo-1.5.bin`, `*-demo-uo.bin`, `demo*.dm_<n>` | `--save-demo --probe-slope --probe-team allies` beside a `--probe-slope --probe-team axis` probe, on 1.1d and 1.5b mp_carentan and UO mp_cassino. The snapshot file holds every message, and the `.dm_<n>` is the probe's own `tmp/probe-<tag>.dm_<n>` (`cod11-demos.md` 9.2) |
+| `*-doors-11.bin`, `*-doors-15.bin`, `*-doors-uo.bin` | a `--probe-uo-weapon direct` client under `client-probes/probe_doors` on mp_carentan with six submodels' entities replaced by `crates/server/tests/fixtures/doors/mp_carentan-doors.ent`, on 1.1d, 1.5b and UO; recipe in the headers of `crates/server/tests/fixtures/doors/mp_carentan-dm-doors*.txt` (`cod11-movers.md` 26) |
+| `*-dyingpose.bin`, `*-dyingpose-1.5.bin`, `*-dyingpose-uo.bin` | a `--probe-team axis --probe-yaw 90` client under `client-probes/probe_dyingpose` on mp_carentan, on 1.1d, 1.5b and UO; recipe in the headers of `crates/server/tests/fixtures/dyingpose/mp_carentan-dm{,-1.5,-uo}.txt` (`cod11-combat.md` 5.2, 16.4) |
+| `*-corpseblast.bin`, `*-corpseblast-1.5.bin`, `*-corpseblast-uo.bin` | a `--probe-team axis --probe-uo-weapon throw` client under `client-probes/probe_corpseblast` on mp_carentan, on 1.1d, 1.5b and UO; recipe in the headers of `crates/server/tests/fixtures/dyingpose/mp_carentan-dm-corpseblast*.txt` (`cod11-combat.md` 5.2) |
+| `*-follow-stance.bin`, `*-follow-stance-uo.bin` | a `--probe-follow --save-snapshots` spectator (client 1) following a `--probe-fall --probe-fall-prone 90` client 0 under `client-probes/probe_pronedrop` (`+set probe_teleport 1`) on mp_carentan, on 1.1d and UO (`cod11-mantle.md`, "The forced-stance events"; the probe's recipe in `client-probes/README.md`) |
+| `*-skyrocket.bin`, `*-skyfrag.bin` | `client-probes/probe_skyshot`'s sky part on 1.1d mp_carentan by the recipe in the gsc's header: `+set probe_weapon panzerfaust_mp` with `--probe-uo-weapon aim` for the rocket, `fraggrenade_mp` with `throw` for the frag (`cod11-combat.md` 13.6) |
+| `*-uo-blasttank.bin`, `*-uo-fragtank.bin`, `*-uo-blastjeep.bin`, `*-uo-fragjeep.bin` | the `--probe-uo-weapon direct` shooter under `client-probes/probe_vehblast`, a bazooka or a frag on an empty Panzer IV on mp_cassino or Willys on mp_peaks; recipe in the headers of `crates/server/tests/fixtures/vehicles/{mp_cassino-blast-tank,mp_peaks-blast-jeep}-{rocket,frag}-uo.txt` (`coduo-vehicles.md` 13) |
+| `*-uo-mine.bin` | the watcher beside a `--probe-fall` victim under `client-probes/probe_minefield` (`+set probe_field 1`) on UO mp_pavlov; recipe in the header of `crates/server/tests/fixtures/triggers/mp_pavlov-uo-mine-victim.txt` |
+| `*-uo-satchelshot.bin`, `*-uo-satchelchain.bin` | the `--probe-uo-weapon direct` shooter under `client-probes/probe_satchelshot` on UO mp_cassino, the chain with `+set probe_shoot 0 +set probe_turn 10`; recipe in the headers of `crates/server/tests/fixtures/missiles/mp_cassino-satchel{shot,chain}-uo.txt` (`coduo-diff.md` 21) |
+| `*-uo-shellfuse.bin` | the `--probe-vehicle sit` driver under `client-probes/probe_shellfuse` on UO mp_kharkov; recipe in the header of `crates/server/tests/fixtures/vehicles/mp_kharkov-shell-fuse-uo.txt` (`cod11-combat.md` 13.7) |
+| `*-uo-shellveh.bin` | the `--probe-vehicle sit` driver of a 2026-10-15 run of `client-probes/probe_vehicle_shell` on UO mp_kharkov; the header of `crates/server/tests/fixtures/vehicles/mp_kharkov-tank-shell-uo.txt` gives a later run's recipe, whose log repeats that run's (`coduo-vehicles.md` 13) |
 
 `cargo run -p vcod-common --example event_dump` prints a capture's events in
 the wire's numbering.

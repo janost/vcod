@@ -1636,12 +1636,6 @@ pub fn in_binoculars(st: i32) -> bool {
     (state::BINOCULARS_ADS_EXIT..=state::BINOCULARS_RAISE_WEAPON).contains(&st)
 }
 
-/// `PM_IsBinocularsADS` (Mac 0x7a04a): states 19 and 20, where the client
-/// sends the sight bit on its own (cod2-protocol.md, the button bits).
-pub fn is_binoculars_ads(ws: &WeaponState) -> bool {
-    matches!(ws.state, state::BINOCULARS_RAISE | state::BINOCULARS_HOLD)
-}
-
 /// The first weapon whose `weaponType` is binoculars (3), the loop
 /// `PM_Weapon` runs over `bg_weaponDefs`; 0 for none.
 pub fn binocular_weapon(defs: &dyn Weapons) -> u8 {

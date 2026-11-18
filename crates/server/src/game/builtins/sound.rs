@@ -13,7 +13,7 @@ use crate::game::builtins::entity::entity_receiver;
 use crate::game::host::{GameHost, SimOp};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("playsound", play_sound),
@@ -24,10 +24,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("musicstop", music_stop),
     ("soundfade", sound_fade),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// The alias's configstring slot, allocated on first use the way retail's
 /// `G_SoundAliasIndex` allocates it.
@@ -247,7 +243,7 @@ pub fn sound_fade(
 mod tests {
     use super::*;
     use crate::game::testing::fixture;
-    use vcod_common::net::protocol::CS_SOUNDS;
+    use vcod_common::net::protocol::CS_SOUNDS_V1;
     use vcod_gsc::Host;
 
     /// `playSound` allocates a sound-alias configstring, mirroring
@@ -317,7 +313,10 @@ mod tests {
                 .iter()
                 .position(|s| s == "Explo_plant_no_tick")
                 .unwrap();
-            assert_eq!(es.field_i32(p, "eventParms[0]"), (alias - CS_SOUNDS) as i32);
+            assert_eq!(
+                es.field_i32(p, "eventParms[0]"),
+                (alias - CS_SOUNDS_V1) as i32
+            );
         });
     }
 

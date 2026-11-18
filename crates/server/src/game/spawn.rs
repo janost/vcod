@@ -344,7 +344,7 @@ fn worldspawn_ambient(world: &[(String, String)]) -> String {
 }
 
 /// `SP_worldspawn` (0x61cec): `G_SpawnString("northyaw", "", &out)` then, if
-/// the result is empty, the literal `"0"` in its place -- a raw copy of the
+/// the result is empty, the literal `"0"` in its place: a raw copy of the
 /// BSP text, never a rendered number, which is why this does not go through
 /// `Cx::format_number`. `mp_carentan`'s own worldspawn block carries no
 /// `northyaw` key at all (checked against the shipped BSP), so its capture's
@@ -361,8 +361,8 @@ fn worldspawn_northyaw(world: &[(String, String)]) -> String {
 /// `SP_trigger_hurt` (0x64ef8): `G_SpawnString("sound", "world_hurt_me",
 /// &out)`, unconditionally, before any of the entity's other fields are
 /// touched (INFERRED FROM DECOMPILATION, reading control flow only). Both
-/// gate maps place exactly one `trigger_hurt` with no `sound` key -- VERIFIED,
-/// read straight from the shipped BSPs -- so the default is what lands in
+/// gate maps place exactly one `trigger_hurt` with no `sound` key (VERIFIED,
+/// read straight from the shipped BSPs), so the default is what lands in
 /// configstring 525 on both.
 ///
 /// Unlike `worldspawn_northyaw`, this only falls back when the key is
@@ -377,8 +377,8 @@ fn trigger_hurt_sound(block: &[(String, String)]) -> String {
         .to_string()
 }
 
-/// A trigger's shape is its submodel's (`"model" "*N"`) -- the box for the
-/// cheap reject and the model number the exact test takes its brushes from --
+/// A trigger's shape is its submodel's (`"model" "*N"`): the box for the
+/// cheap reject and the model number the exact test takes its brushes from,
 /// and its `wait` key is seconds on the wire. A trigger with no
 /// brush model, or one naming a model the BSP has no bounds for, is registered
 /// with a zero box and no model: it then touches nothing, which is what
@@ -503,7 +503,7 @@ fn round_trigger(
 /// from the shipped `weapons/mp/mg42_bipod_stand_mp`: its `loopFireSound`
 /// and `stopFireSound` keys are `weap_mg42_loop` and `weap_mg42_cooldown`,
 /// exactly `mp_carentan`'s captured 526/527. So the alias names come from
-/// the weapon file, keyed by the entity's own `weaponinfo` value -- the same
+/// the weapon file, keyed by the entity's own `weaponinfo` value: the same
 /// string `spawn_item_name` already resolved for `RegisterItem`, reused here
 /// rather than re-read.
 ///
@@ -585,7 +585,7 @@ fn register_sound_alias(host: &mut GameHost, name: String) {
 }
 
 /// A placed weapon's `bg_itemlist` classname is its weapon file's
-/// `radiantName`, not its own file name -- and not always that name with an
+/// `radiantName`, not its own file name, and not always that name with an
 /// `mpweapon_` prefix stripped, either. VERIFIED: read straight from every
 /// `weapons/mp/*_mp` file in the shipped paks. 23 of `WEAPON_LIST`'s 32
 /// weapons carry a non-empty `radiantName`; this table is all 23, so a
@@ -652,7 +652,7 @@ const RADIANT_NAMES: &[(&str, &str)] = &[
     ("mpweapon_webley", "webley_mp"),
 ];
 
-/// The item a spawned entity registers, if any -- `G_CallSpawn`'s second
+/// The item a spawned entity registers, if any: `G_CallSpawn`'s second
 /// case, before `spawns` (section 17 of the object model doc): a classname
 /// matched against `bg_itemlist` calls `G_SpawnItem` -> `RegisterItem`
 /// straight after the entity is built, before any script runs, and neither
@@ -1047,44 +1047,6 @@ pub(crate) fn axis_to_angles(axis: [[f32; 3]; 3]) -> [f32; 3] {
     [pitch, yaw, roll]
 }
 
-#[cfg(test)]
-mod align_tests {
-    use super::align_to_surface;
-
-    /// A flat floor keeps the mapper's yaw, flattens the pitch, and leaves the
-    /// weapon's 90 degrees of roll. The mapper's own roll (180 here) is
-    /// dropped, because only `AngleVectors`' forward feeds the alignment and
-    /// forward does not depend on roll.
-    #[test]
-    fn a_flat_floor_keeps_the_yaw_and_adds_the_weapon_roll() {
-        let out = align_to_surface([0.0, 90.0, 180.0], [0.0, 0.0, 1.0], true);
-        assert!(out[0].abs() < 1e-3, "pitch {}", out[0]);
-        assert!((out[1] - 90.0).abs() < 1e-3, "yaw {}", out[1]);
-        assert!((out[2] - 90.0).abs() < 1e-3, "roll {}", out[2]);
-    }
-
-    /// A floor tilted about x tips the item into it. The retail capture this
-    /// was measured against carries pitch 359.09 and roll 89.65 for a
-    /// panzerfaust on carentan's sloped floor, so a roll that wrapped to 449
-    /// would be wrong by a whole turn: the roll is signed, unlike yaw and
-    /// pitch.
-    #[test]
-    fn a_tilted_floor_tips_the_item_and_leaves_the_roll_inside_one_turn() {
-        let tilt = 2f32.to_radians();
-        let out = align_to_surface([0.0, 90.0, 180.0], [0.0, -tilt.sin(), tilt.cos()], true);
-        assert!(
-            out[2] > 0.0 && out[2] < 180.0,
-            "roll {} left its turn",
-            out[2]
-        );
-        assert!(
-            (out[0] - 358.0).abs() < 1.0,
-            "pitch {} is not the tilt",
-            out[0]
-        );
-    }
-}
-
 /// The Radiant classname that places a weapon, the reverse of
 /// [`radiant_weapon`]. A dropped weapon's entity carries it as its
 /// classname, which is what script reads off a retail drop
@@ -1206,14 +1168,103 @@ pub(crate) fn convert(cx: &mut Cx, ty: FieldType, raw: &str) -> Option<Value> {
         FieldType::CString | FieldType::IString | FieldType::ModelIndex => {
             Value::String(cx.intern_exact(raw))
         }
-        // No entity field is an enum -- the three that are all live on HUD
+        // No entity field is an enum: the three that are all live on HUD
         // elements, which no BSP entity block builds.
         FieldType::Entity | FieldType::Object | FieldType::Enum(_) => return None,
     })
 }
 
+/// `G_SpawnTurret` on `id` for the turret weapon `weaponinfo`: the map
+/// load's `SP_turret` with the entity's spawn keys, or CoD2's
+/// `spawnTurret` builtin (lnxded 0x811138c) with none, whose spawn vars are
+/// not valid there (cod2-turrets.md 2).
+pub(crate) fn spawn_turret(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    id: EntId,
+    weaponinfo: &str,
+    keys: &crate::game::turret::TurretKeys,
+) -> Result<(), ErrorKind> {
+    let cod2_rules = host.profile.spawn.turret_weapon_and_player_sounds;
+    // CoD2's `G_SpawnTurret` takes the weapon's index first
+    // (lnxded 0x810c6b2, cod2-turrets.md 2).
+    if cod2_rules {
+        // CoD4 numbers its weapons in registration order too
+        // (`G_GetWeaponIndexForName`, cod4-gsc.md 9.2).
+        if matches!(host.ext, crate::game::host::HostExt::Cod4(_)) {
+            crate::game::builtins::cod4::register_weapon(host, weaponinfo)?;
+        } else {
+            host.weapon_index(weaponinfo);
+        }
+    }
+    for alias in turret_sound_aliases(host.fs.as_deref(), weaponinfo, cod2_rules) {
+        register_sound_alias(host, alias);
+    }
+    let bones = turret_bones(host, cx, id);
+    let rest = settle_turret_pitch(host, cx, id, bones.as_deref());
+    let Some(def) = turret_def(host.fs.as_deref(), weaponinfo) else {
+        return Ok(());
+    };
+    if host.turrets.len() >= MAX_TURRETS {
+        // Retail's `Com_Error` here is fatal
+        // (`docs/research/cod11-turrets.md`'s turret record table); we log
+        // and spawn no record.
+        log::error!("G_SpawnTurret: max number of turrets ({MAX_TURRETS}) exceeded");
+        return Ok(());
+    }
+    let mut rec = crate::game::turret::TurretRecord::new(weaponinfo, def, *keys, rest);
+    // `G_SpawnTurret` zeroes `angles2` and thinks `turret_think_init` 100 ms
+    // on (0x52fd2).
+    rec.angles2 = [0.0; 3];
+    rec.init_at = Some(host.level_time_ms + 100);
+    rec.tags = bones
+        .as_deref()
+        .and_then(crate::game::turret::TurretTags::from_bones);
+    rec.gun = bones
+        .as_deref()
+        .and_then(crate::game::turret::GunRig::from_bones);
+    host.turrets.insert(id, rec);
+    host.link_turret(cx, id);
+    let health = cx.intern_folded("health");
+    if matches!(
+        host.get_field(cx, id, health),
+        Value::Int(0) | Value::Undefined
+    ) {
+        let full = Value::Int(crate::game::turret::TURRET_HEALTH);
+        host.set_field(cx, id, health, full)?;
+    }
+    Ok(())
+}
+
+/// A turret's tags once a `setModel` gave it a model (`G_DObjUpdate`): a
+/// `spawnTurret` gun has none until then.
+pub(crate) fn turret_model_changed(host: &mut GameHost, cx: &mut Cx, id: EntId) {
+    if !host.turrets.contains_key(&id) {
+        return;
+    }
+    let bones = turret_bones(host, cx, id);
+    // `turret_think_init` sweeps the rest pitch off the DObj a frame after
+    // the spawn, so a model set before then still settles it.
+    let pending = host.turrets.get(&id).is_some_and(|r| r.init_at.is_some());
+    let rest = pending.then(|| settle_turret_pitch(host, cx, id, bones.as_deref()));
+    let tags = bones
+        .as_deref()
+        .and_then(crate::game::turret::TurretTags::from_bones);
+    let gun = bones
+        .as_deref()
+        .and_then(crate::game::turret::GunRig::from_bones);
+    if let Some(rec) = host.turrets.get_mut(&id) {
+        rec.tags = tags;
+        rec.gun = gun;
+        if let Some(rest) = rest {
+            rec.rest_pitch = rest;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::align_to_surface;
     use crate::game::testing::fixture;
     use crate::items::Items;
     use vcod_gsc::{EntId, Host, Value};
@@ -1489,7 +1540,7 @@ mod tests {
     /// cannot recover: three drop an underscore from their own file name,
     /// and `rgd-33russianfrag_mp`'s `radiantName` is not any spelling of it
     /// at all. This pins `RADIANT_NAMES` against the four names that
-    /// disproved the transform this table replaced -- a regression back to
+    /// disproved the transform this table replaced: a regression back to
     /// deriving the name from the classname would silently stop registering
     /// all four.
     #[test]
@@ -1595,7 +1646,7 @@ mod tests {
     /// setting its bit; for a weapon those are the weapon file's
     /// `worldModel` and `projectileModel`. The panzerfaust's world model is
     /// already the placed block's own `model` key, so the rocket is the
-    /// slot the registration adds -- retail's mp_carentan capture has the
+    /// slot the registration adds: retail's mp_carentan capture has the
     /// two adjacent.
     #[test]
     fn a_placed_weapon_precaches_its_world_and_projectile_models() {
@@ -1742,7 +1793,7 @@ mod tests {
 
     /// `SP_worldspawn` (0x61cec) copies `northyaw` verbatim into configstring
     /// 11: a `G_SpawnString` read with an empty default, and if the result is
-    /// the empty string it substitutes the literal `"0"` -- no numeric parse
+    /// the empty string it substitutes the literal `"0"`: no numeric parse
     /// at any point, so a present key reproduces retail byte for byte
     /// whatever text it holds.
     #[test]
@@ -1918,7 +1969,7 @@ mod tests {
 
     /// `SP_trigger_hurt` (0x64ef8) always registers a sound alias, its own
     /// `sound` key or the compiled-in default `"world_hurt_me"` when the key
-    /// is absent -- both gate maps place exactly one `trigger_hurt` with no
+    /// is absent: both gate maps place exactly one `trigger_hurt` with no
     /// `sound` key, which is why `world_hurt_me` takes slot 525 on both, one
     /// with no `misc_mg42` at all.
     #[test]
@@ -1980,7 +2031,7 @@ mod tests {
     }
 
     /// The full pipeline against both gate maps' own BSPs, pinned to the
-    /// exact retail values in the committed captures -- the residual four
+    /// exact retail values in the committed captures: the residual four
     /// slots `configstrings_ab` measures.
     #[test]
     fn both_gate_maps_reproduce_the_residual_configstrings() {
@@ -2034,92 +2085,37 @@ mod tests {
             assert!(tags.flash.x > tags.player.x, "{tags:?}");
         }
     }
-}
 
-/// `G_SpawnTurret` on `id` for the turret weapon `weaponinfo`: the map
-/// load's `SP_turret` with the entity's spawn keys, or CoD2's
-/// `spawnTurret` builtin (lnxded 0x811138c) with none, whose spawn vars are
-/// not valid there (cod2-turrets.md 2).
-pub(crate) fn spawn_turret(
-    host: &mut GameHost,
-    cx: &mut Cx,
-    id: EntId,
-    weaponinfo: &str,
-    keys: &crate::game::turret::TurretKeys,
-) -> Result<(), ErrorKind> {
-    let cod2_rules = host.profile.spawn.turret_weapon_and_player_sounds;
-    // CoD2's `G_SpawnTurret` takes the weapon's index first
-    // (lnxded 0x810c6b2, cod2-turrets.md 2).
-    if cod2_rules {
-        // CoD4 numbers its weapons in registration order too
-        // (`G_GetWeaponIndexForName`, cod4-gsc.md 9.2).
-        if matches!(host.ext, crate::game::host::HostExt::Cod4(_)) {
-            crate::game::builtins::cod4::register_weapon(host, weaponinfo)?;
-        } else {
-            host.weapon_index(weaponinfo);
-        }
+    /// A flat floor keeps the mapper's yaw, flattens the pitch, and leaves the
+    /// weapon's 90 degrees of roll. The mapper's own roll (180 here) is
+    /// dropped, because only `AngleVectors`' forward feeds the alignment and
+    /// forward does not depend on roll.
+    #[test]
+    fn a_flat_floor_keeps_the_yaw_and_adds_the_weapon_roll() {
+        let out = align_to_surface([0.0, 90.0, 180.0], [0.0, 0.0, 1.0], true);
+        assert!(out[0].abs() < 1e-3, "pitch {}", out[0]);
+        assert!((out[1] - 90.0).abs() < 1e-3, "yaw {}", out[1]);
+        assert!((out[2] - 90.0).abs() < 1e-3, "roll {}", out[2]);
     }
-    for alias in turret_sound_aliases(host.fs.as_deref(), weaponinfo, cod2_rules) {
-        register_sound_alias(host, alias);
-    }
-    let bones = turret_bones(host, cx, id);
-    let rest = settle_turret_pitch(host, cx, id, bones.as_deref());
-    let Some(def) = turret_def(host.fs.as_deref(), weaponinfo) else {
-        return Ok(());
-    };
-    if host.turrets.len() >= MAX_TURRETS {
-        // Retail's `Com_Error` here is fatal
-        // (`docs/research/cod11-turrets.md`'s turret record table); we log
-        // and spawn no record.
-        log::error!("G_SpawnTurret: max number of turrets ({MAX_TURRETS}) exceeded");
-        return Ok(());
-    }
-    let mut rec = crate::game::turret::TurretRecord::new(weaponinfo, def, *keys, rest);
-    // `G_SpawnTurret` zeroes `angles2` and thinks `turret_think_init` 100 ms
-    // on (0x52fd2).
-    rec.angles2 = [0.0; 3];
-    rec.init_at = Some(host.level_time_ms + 100);
-    rec.tags = bones
-        .as_deref()
-        .and_then(crate::game::turret::TurretTags::from_bones);
-    rec.gun = bones
-        .as_deref()
-        .and_then(crate::game::turret::GunRig::from_bones);
-    host.turrets.insert(id, rec);
-    host.link_turret(cx, id);
-    let health = cx.intern_folded("health");
-    if matches!(
-        host.get_field(cx, id, health),
-        Value::Int(0) | Value::Undefined
-    ) {
-        let full = Value::Int(crate::game::turret::TURRET_HEALTH);
-        host.set_field(cx, id, health, full)?;
-    }
-    Ok(())
-}
 
-/// A turret's tags once a `setModel` gave it a model (`G_DObjUpdate`): a
-/// `spawnTurret` gun has none until then.
-pub(crate) fn turret_model_changed(host: &mut GameHost, cx: &mut Cx, id: EntId) {
-    if !host.turrets.contains_key(&id) {
-        return;
-    }
-    let bones = turret_bones(host, cx, id);
-    // `turret_think_init` sweeps the rest pitch off the DObj a frame after
-    // the spawn, so a model set before then still settles it.
-    let pending = host.turrets.get(&id).is_some_and(|r| r.init_at.is_some());
-    let rest = pending.then(|| settle_turret_pitch(host, cx, id, bones.as_deref()));
-    let tags = bones
-        .as_deref()
-        .and_then(crate::game::turret::TurretTags::from_bones);
-    let gun = bones
-        .as_deref()
-        .and_then(crate::game::turret::GunRig::from_bones);
-    if let Some(rec) = host.turrets.get_mut(&id) {
-        rec.tags = tags;
-        rec.gun = gun;
-        if let Some(rest) = rest {
-            rec.rest_pitch = rest;
-        }
+    /// A floor tilted about x tips the item into it. The retail capture this
+    /// was measured against carries pitch 359.09 and roll 89.65 for a
+    /// panzerfaust on carentan's sloped floor, so a roll that wrapped to 449
+    /// would be wrong by a whole turn: the roll is signed, unlike yaw and
+    /// pitch.
+    #[test]
+    fn a_tilted_floor_tips_the_item_and_leaves_the_roll_inside_one_turn() {
+        let tilt = 2f32.to_radians();
+        let out = align_to_surface([0.0, 90.0, 180.0], [0.0, -tilt.sin(), tilt.cos()], true);
+        assert!(
+            out[2] > 0.0 && out[2] < 180.0,
+            "roll {} left its turn",
+            out[2]
+        );
+        assert!(
+            (out[0] - 358.0).abs() < 1.0,
+            "pitch {} is not the tilt",
+            out[0]
+        );
     }
 }

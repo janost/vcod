@@ -19,7 +19,7 @@ use vcod_common::net::NetEvent;
 use vcod_common::net::event_ids::{EV_FIRE_WEAPONB, EV_UO_BULLET_HIT, EV_UO_FIRE_WEAPONC};
 use vcod_common::net::events::{EventTracker, GameEvent};
 use vcod_common::net::msg::{BUTTON_ATTACK, BUTTON_MELEE, BUTTON_USE, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V22};
 
 const MAP: &str = "mp_cassino";
 const PROBE: &str = "probe_vehicle";
@@ -54,7 +54,7 @@ fn report(side: &str, seen: &[Seen]) {
 
 /// `VEHFIRE_ENTS=1`: every entity a snapshot carries but bodies, sound
 /// blends and vehicles.
-fn dump_ents(side: &str, s: &vcod_common::net::snapshot::Snapshot, p: &Protocol) {
+fn dump_ents(side: &str, s: &vcod_common::net::snapshot::Snapshot, p: &Cod1Wire) {
     if std::env::var_os("VEHFIRE_ENTS").is_none() {
         return;
     }
@@ -113,7 +113,7 @@ fn ours_run() -> &'static [Seen] {
 /// snapshots carried.
 fn ours(pitch: f32, secs: i64) -> Vec<Seen> {
     let fs = vcod_common::testing::uo_fs().unwrap();
-    let p: &'static Protocol = &PROTOCOL_V22;
+    let p: &'static Cod1Wire = &PROTOCOL_V22;
     let bsp_path = fs.resolve_map(MAP).expect("the map in the UO paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();

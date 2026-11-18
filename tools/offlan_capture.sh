@@ -25,6 +25,10 @@ if [ -z "${OFFLAN_INNER:-}" ]; then
     exec env OFFLAN_INNER=1 unshare -rn --pid --fork --kill-child --mount-proc \
         --forward-signals bash "$0" "$@"
 fi
+if grep -qE '^ *0 +0 +4294967295$' /proc/self/uid_map; then
+    echo "offlan: the inner half runs only inside its own unshare; unset OFFLAN_INNER" >&2
+    exit 1
+fi
 trap 'exit 143' TERM INT
 cd "$(dirname "$0")/.."
 KIND=$1; OUT=$(realpath -m "$2"); shift 2

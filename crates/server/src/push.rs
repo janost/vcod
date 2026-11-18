@@ -45,25 +45,13 @@ enum Kept {
 /// area-tree order: every kept entity is unlinked first (0x55561), each is
 /// pushed and relinked on its turn (0x555e1), and the whole list is linked
 /// again at the end (0x55661). Returns the slots a `TR_SINE` pusher crushed,
-/// or `None` when a player fits nowhere: every entity pushed before it is
-/// back where it was and relinked, it and the rest of the list stay
-/// unlinked, and the caller stalls the mover
+/// or `Err` with the player who fits nowhere, `G_MoverPush`'s obstacle
+/// (0x55621): every entity pushed before it, the team's earlier parts' pushes
+/// on `pushed` too, is back where it was and relinked, it and the rest of the
+/// list stay unlinked, and the caller stalls the mover
 /// (docs/research/cod11-movers.md, section 12). A sine mover is never
 /// stopped: a player it cannot place is crushed (0x55617) and the push goes
 /// on, the caller owing it `G_Damage`'s 99999 (section 21).
-pub fn push(
-    host: &mut GameHost,
-    cx: &mut Cx,
-    step: &Step,
-    sims: &mut [(usize, &mut ClientSim)],
-    world: &CollisionWorld,
-) -> Option<Vec<usize>> {
-    push_with(host, cx, step, sims, world, &mut Vec::new()).ok()
-}
-
-/// [`push`] onto a team's `pushed` list: a block puts back everything on it,
-/// the team's earlier parts' pushes too, and names the player who could not
-/// be placed, `G_MoverPush`'s obstacle (0x55621).
 pub fn push_with(
     host: &mut GameHost,
     cx: &mut Cx,

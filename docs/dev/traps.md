@@ -21,6 +21,14 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
 
 ## All games
 
+### Floats
+
+- Simulation code calls the host's libm for every transcendental except
+  `sinf` and `cosf` (`vcod_common::libm`, glibc 2.28's, cod4-pmove.md 13.2).
+  The Windows and macOS builds therefore run movement and combat on another
+  libm than the gates ran on, and a glibc update can move a gate by a bit.
+  Pin a function the same way before a gate depends on its last bit.
+
 ### Script host and VM
 
 - A game version's rule in the host, spawn, item, vote, field and print code
@@ -902,7 +910,9 @@ otherwise.
 
 - A CoD4 nav graph clips the brush entities standing once the level has run a
   frame (`bots::cod4::BrushedClip`), and its cache key carries their set. A
-  test's `bot_world(.., Vec::new())` and `nav_build` clip the clip map alone.
+  level on the same map keeps the world and graph only while that set reads
+  the same after its first frame: another gametype rebuilds them. A test's
+  `bot_world(.., Vec::new())` and `nav_build` clip the clip map alone.
 - The walk rules (`Cod4Walk`, `VC_NAV_COD4`) are under [Bots](#bots) in
   All games.
 

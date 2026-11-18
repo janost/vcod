@@ -46,8 +46,8 @@ pub(super) const MASK_RADIUS_LOS: u32 = 0x80_2011;
 /// The flashbang's `CanDamage` mask (the flashbang blast).
 const MASK_FLASH_LOS: u32 = 0x801;
 const MASK_EXPLODE_DOWN: u32 = 0x811;
-/// `SURF_NOIMPACT`: a missile meeting it is freed without a burst.
-const SURF_NOIMPACT: u32 = 4;
+/// A missile meeting the sky bit (0x4) is freed without a burst.
+use vcod_common::clipmap::SURF_SKY;
 /// `g_minGrenadeDamageSpeed`.
 const MIN_GRENADE_DAMAGE_SPEED: f32 = 400.0;
 /// The `nextthink` `G_ExplodeMissile` gives a smoke grenade still in the
@@ -566,7 +566,6 @@ impl Cod4Level {
 
     /// `G_FireGrenade` (doc 10.2): a grenade from `start` at `dir`, stored
     /// in the missile list; its index there.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn fire_grenade(
         &mut self,
         slot: usize,
@@ -588,7 +587,6 @@ impl Cod4Level {
     /// tumbling when `spin` asks and the weapon spins, its fuse
     /// (the grenade timer init) and, unless it arms by distance,
     /// `grenade_fire` on the thrower.
-    #[allow(clippy::too_many_arguments)]
     fn new_grenade(
         &mut self,
         slot: usize,
@@ -748,6 +746,12 @@ impl Cod4Level {
     /// `G_RunFrame`'s missiles, by entity number: each runs its move and
     /// its think; the event entities past their 300 ms are freed.
     pub(super) fn run_missiles(&mut self) {
+        // A script `delete()` frees on retail inside the call: its row goes
+        // with the unlink, not at the deferred free (cod4-combat.md 14).
+        let host = &mut self.rt.host;
+        let mut missiles = std::mem::take(&mut host.cod4_mut().missiles);
+        missiles.retain(|m| host.ents.get(m.id).is_some_and(|e| !e.unlinked));
+        host.cod4_mut().missiles = missiles;
         // `detonate`: `G_ExplodeMissile` with the new parent, if any.
         for (id, parent) in std::mem::take(&mut self.rt.host.cod4_mut().detonations) {
             if let (Some(i), Some(owner)) = (self.missile_index(id), parent) {
@@ -773,7 +777,7 @@ impl Cod4Level {
             if let Some(at) = m.free_at {
                 if now - at > EVENT_VALID_MS {
                     self.rt.host.cod4_mut().missiles.remove(i);
-                    self.rt.host.ents.free(id);
+                    self.rt.host.free_entity(id);
                 }
                 continue;
             }
@@ -796,7 +800,7 @@ impl Cod4Level {
             }
         });
         for id in freed {
-            self.rt.host.ents.free(id);
+            self.rt.host.free_entity(id);
         }
     }
 
@@ -853,7 +857,7 @@ impl Cod4Level {
             return self.store_missile(m);
         }
         self.store_missile(m);
-        if hit.surface_flags & SURF_NOIMPACT != 0 {
+        if hit.surface_flags & SURF_SKY != 0 {
             self.free_missile(id);
         } else {
             let heading = (goal - start).normalize_or_zero();
@@ -1194,7 +1198,6 @@ impl Cod4Level {
     /// at `endpos`, hides and is freed 300 ms on, `death` notified; an
     /// armed one's splash (players, helicopters, other entities) follows,
     /// then `projectile_impact` on its thrower and a flashbang's blast.
-    #[allow(clippy::too_many_arguments)]
     fn impact_burst(
         &mut self,
         mut m: Missile4,
@@ -1468,7 +1471,7 @@ impl Cod4Level {
     /// radius takes the falloff at his distance times his `CanDamage`
     /// share, radius flags (5), pushed from the blast toward a point 24
     /// over his feet. Slot order here, where retail walks its area list.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn radius_damage(
         &mut self,
         origin: Vec3,
@@ -1627,7 +1630,8 @@ impl Cod4Level {
     pub(super) fn missile_entities(&self) -> Vec<EntityState> {
         let c4 = self.rt.host.cod4();
         let mut out = Vec::new();
-        for m in &c4.missiles {
+        let live = |id: EntId| self.rt.host.ents.get(id).is_some_and(|e| !e.unlinked);
+        for m in c4.missiles.iter().filter(|m| live(m.id)) {
             let mut e = EntityState::default();
             e.0[0] = m.id.0;
             e.0[1] = 4;
@@ -1703,6 +1707,7 @@ impl Cod4Level {
     /// bursts with no `owner` and a kill by one aborts in `ch_kills`;
     /// those go through [`Self::rest_grenade_for_test`] and
     /// [`Self::explode_for_test`] a frame apart.
+    #[cfg(any(test, feature = "testing"))]
     pub fn burst_for_test(&mut self, slot: usize, weapon: &str, at: Vec3) -> bool {
         let Some(w) = self.combat.defs.iter().position(|d| d.name == weapon) else {
             return false;
@@ -1723,6 +1728,7 @@ impl Cod4Level {
 impl Cod4Level {
     /// Test-facing: the missile `id` bursts where it is now
     /// (`G_ExplodeMissile`). False when it is gone.
+    #[cfg(any(test, feature = "testing"))]
     pub fn explode_for_test(&mut self, id: EntId) -> bool {
         if !self.rt.host.cod4().missiles.iter().any(|m| m.id == id) {
             return false;
@@ -1736,6 +1742,7 @@ impl Cod4Level {
     /// Test-facing: `slot` lets go of a grenade named `weapon` at `start`
     /// moving at `vel`, with `fuse_ms` on its fuse (`G_FireGrenade`, no
     /// spin); its entity, `None` with no such weapon.
+    #[cfg(any(test, feature = "testing"))]
     pub fn fire_grenade_for_test(
         &mut self,
         slot: usize,
@@ -1753,6 +1760,7 @@ impl Cod4Level {
 
 impl Cod4Level {
     /// Drops a frag from `at` with no throw velocity, for the client's live tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn drop_frag_for_test(&mut self, slot: usize, at: Vec3, fuse_ms: i32) -> bool {
         let Some(w) = self
             .combat
@@ -1773,6 +1781,7 @@ impl Cod4Level {
     /// `grenade_fire` reaches the script with the frame's notifies, so a
     /// claymore or C4 bursting a frame later carries the `owner`
     /// `_weapons.gsc` gives it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn rest_grenade_for_test(
         &mut self,
         slot: usize,

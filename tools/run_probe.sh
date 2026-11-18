@@ -17,7 +17,7 @@
 #
 #   COD_DIR          game install, the directory containing main/ (required)
 #   COD_VERSION      1.1 (default), 1.5 or uo, as tools/run_server.sh takes it
-#   COD_LNXDED       server binary (default private/reference/cod-lnxded-1.1d/cod_lnxded,
+#   COD_LNXDED       server binary (default private/retail/cod-lnxded-1.1d/cod_lnxded,
 #                    cod-lnxded-1.5b/cod_lnxded for 1.5)
 #   COD_LNXDED_HOME  homepath holding main/game.mp.i386.so (uo/game.mp.uo.i386.so).
 #                    Unset, the module comes from private/server (private/server-1.5,
@@ -57,11 +57,11 @@ fi
 [ -d "$COD_DIR/main" ] || { echo "COD_DIR=$COD_DIR has no main/ directory" >&2; exit 1; }
 EXE=cod_lnxded GAMEDIR=main MODULE=game.mp.i386.so
 case "${COD_VERSION:-1.1}" in
-    1.1) REF=private/reference/cod-lnxded-1.1d HOME_DEFAULT=private/server ;;
-    1.5) REF=private/reference/cod-lnxded-1.5b HOME_DEFAULT=private/server-1.5
+    1.1) REF=private/retail/cod-lnxded-1.1d HOME_DEFAULT=private/server ;;
+    1.5) REF=private/retail/cod-lnxded-1.5b HOME_DEFAULT=private/server-1.5
          export LD_LIBRARY_PATH="$PWD/$REF/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
     # United Offensive's gametypes, log and module live under uo/.
-    uo) REF=private/reference/coduo-lnxded-1.51b HOME_DEFAULT=private/server-uo
+    uo) REF=private/retail/coduo-lnxded-1.51b HOME_DEFAULT=private/server-uo
         EXE=coduo_lnxded GAMEDIR=uo MODULE=game.mp.uo.i386.so
         export LD_LIBRARY_PATH="$PWD/$REF/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
     *) echo "COD_VERSION must be 1.1, 1.5 or uo" >&2; exit 1 ;;
@@ -75,8 +75,9 @@ fi
 PORT_USED="${PORT:-28970}"
 MODULE="$GAMEDIR/$MODULE"
 . tools/retail_home.sh
-# Parsed as shell words, so a quoted value with spaces survives.
-eval "PRE_ARGS=(${PRE_MAP_ARGS:-})"
+# Parsed as shell words, so a quoted value with spaces survives; xargs
+# splits them without eval.
+mapfile -t PRE_ARGS < <(printf '%s' "${PRE_MAP_ARGS:-}" | xargs -r printf '%s\n')
 
 # Loose files under the homepath shadow nothing in the paks: no stock gametype
 # is named like a probe. The .txt is the description file the engine warns

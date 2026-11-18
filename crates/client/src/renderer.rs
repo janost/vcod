@@ -1106,7 +1106,7 @@ struct EntBound {
 /// iterator does, over `indices` (the surface's own, or a run of its
 /// neighbours' from [`ent_run`]). `bound` tracks the bound pipeline across
 /// calls.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn draw_ent_stages(
     pass: &mut impl DrawSink,
     mats: &EntityMaterials,
@@ -1696,7 +1696,7 @@ impl FogLive {
         }
     }
 
-    /// 1 = GL_EXP, 2 = GL_LINEAR — the WGSL Camera mode encoding; the off
+    /// 1 = GL_EXP, 2 = GL_LINEAR: the WGSL Camera mode encoding; the off
     /// state is carried by [`FogState::set`], not here.
     fn mode(&self) -> f32 {
         if self.linear { 2.0 } else { 1.0 }
@@ -1705,8 +1705,8 @@ impl FogLive {
 
 /// Global fog from configstring 12, faded toward each new target. Same-mode
 /// transitions lerp over the script's fade time; cross-mode changes snap and
-/// linear fog clears to the fog colour — RTCW-MP tr_main.c R_SetFog /
-/// R_AddFogInterpolation.
+/// linear fog clears to the fog colour (RTCW-MP tr_main.c R_SetFog /
+/// R_AddFogInterpolation).
 #[derive(Default)]
 struct FogState {
     set: bool,
@@ -1859,7 +1859,7 @@ mod fx_lights_uniform_tests {
     }
 }
 
-// ---- shader-script stage machinery (consumed by Tasks 7-8) ----
+// ---- shader-script stage machinery ----
 
 pub const STAGE_FLAG_VERTEX_RGB: u32 = 1;
 pub const STAGE_FLAG_VERTEX_ALPHA: u32 = 2;
@@ -2629,7 +2629,7 @@ pub(crate) fn par_build_on<T: Send>(
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn scene_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
@@ -2748,7 +2748,7 @@ pub(crate) fn stage_animated(sh: &Material, idx: usize) -> bool {
 /// Group(1) and group(2) bind groups for one authored stage, shared by the
 /// world stage-batch loop and the cloud dome. `lm` is the batch's
 /// lightmap page (bundle-0 `$lightmap` samples it through the flag).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn stage_bind_groups(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -3292,7 +3292,7 @@ fn encode_world_sprites(
 
 /// Builds the farbox for the block's env name. Missing non-rt sides draw
 /// tr.defaultImage flat white (tr_shader.c:1170), warned per load.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn build_sky_box(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -3463,7 +3463,7 @@ const SUN_SPRITE_SCALE: f32 = 0.001_311_092_9;
 
 /// Builds the sunfile sprite for a parsed `.sun` file along the sun
 /// direction. `None` when the sprite image does not resolve.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn build_sun_sprite(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -3782,7 +3782,7 @@ pub struct Renderer {
     /// Kept past map load so later inline submodels resolve `textures/...`
     /// names the same way the world did.
     shaders: assets::Shaders,
-    /// Parsed shader scripts; Task 7 classifies map materials against it.
+    /// Parsed shader scripts; map materials are classified against it.
     shader_lib: MaterialLib,
     /// The map's active sky (farbox + optional cloud dome); `None` without a
     /// matching sky block.
@@ -3790,6 +3790,8 @@ pub struct Renderer {
     /// Global fog from configstring 12; the F3 `fog:` line.
     fog: FogState,
     hud_quad_cap_warned: bool,
+    /// The fx quad and stage-draw caps warn once, not every frame.
+    fx_cap_warned: bool,
     /// `vc_shadows`; built when it turns on, dropped when it turns off.
     shadows: Option<shadows::ShadowPass>,
     /// CoD2's shadow cookies, drawn on a CoD2 map while `sc_enable` is set.
@@ -3973,7 +3975,7 @@ impl Renderer {
 
     /// Everything past the device: the passes, pipelines and layouts every
     /// frame uses, drawing into `target` sized by `config`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn build(
         device: wgpu::Device,
         queue: wgpu::Queue,
@@ -4241,7 +4243,7 @@ impl Renderer {
             cull_back,
         );
         // One twin pair per variant, [back-culled, two-sided], picked per
-        // StageBatch by ClassedStage in Task 7.
+        // StageBatch from its ClassedStage.
         // The stage table and the dlight pass compile on their own threads
         // while this one builds the entity pass (`par_build`).
         let (stage_pipelines, dlight, vm_pass, dynamic) = std::thread::scope(|s| {
@@ -4435,6 +4437,7 @@ impl Renderer {
             water_time: 0.0,
             dlight_quality: true,
             hud_quad_cap_warned: false,
+            fx_cap_warned: false,
             shadows: None,
             cookies,
             dyn_shadows,
@@ -4853,7 +4856,7 @@ impl Renderer {
 
         laps.lap("prop skins");
         let count = |p: fn(Pass) -> bool| batch_draws.iter().filter(|d| p(d.pass)).count();
-        println!(
+        log::info!(
             "{} batches ({} opaque, {} prop, {} layer, {} overlay), {} draw indices, {} vertices",
             batch_draws.len(),
             count(|p| matches!(p, Pass::Opaque | Pass::Solid)),
@@ -4863,7 +4866,7 @@ impl Renderer {
             indices.len(),
             vertices.len()
         );
-        println!(
+        log::info!(
             "{} textures loaded, {} missing, {} lightmap pages",
             loaded,
             fallbacks,
@@ -5015,7 +5018,7 @@ impl Renderer {
                 );
             }
         }
-        println!(
+        log::info!(
             "stage params: {} slots x {STAGE_PARAMS_SIZE} B (stride {stage_params_stride})",
             stage_slots.len()
         );
@@ -5326,13 +5329,13 @@ impl Renderer {
                 stage: AnimFrames::static_(implicit_stage_bg.groups[0].clone()),
             });
         }
-        println!(
+        log::info!(
             "dlight pass: {} stage draws over {} batches",
             dlight_batches.len(),
             dlights_of_batch.iter().filter(|d| !d.is_empty()).count()
         );
         self.shader_dropped = dropped_stages;
-        println!(
+        log::info!(
             "shader scripts: {} stage batches, {} dropped stages, {} lib warnings",
             stage_batches.len(),
             dropped_stages,
@@ -5926,10 +5929,12 @@ impl Renderer {
         // build_quads is capped by construction; the vertex buffer is sized
         // exactly, so truncate anyway.
         let quads = if quads.len() > MAX_FX_QUADS {
-            log::warn!(
-                "fx: {} quads exceeds the {MAX_FX_QUADS} cap, truncating",
-                quads.len()
-            );
+            if !std::mem::replace(&mut self.fx_cap_warned, true) {
+                log::warn!(
+                    "fx: {} quads exceeds the {MAX_FX_QUADS} cap, truncating",
+                    quads.len()
+                );
+            }
             &quads[..MAX_FX_QUADS]
         } else {
             &quads[..]
@@ -5971,7 +5976,11 @@ impl Renderer {
             let sh = self.shader_lib.get(name);
             for draw in fx_stage_draws(sh, name, time) {
                 if verts.len() / 4 + group.len() > MAX_FX_DRAWN {
-                    log::warn!("fx: stage draws exceed the {MAX_FX_DRAWN} quad cap, truncating");
+                    if !std::mem::replace(&mut self.fx_cap_warned, true) {
+                        log::warn!(
+                            "fx: stage draws exceed the {MAX_FX_DRAWN} quad cap, truncating"
+                        );
+                    }
                     break 'runs;
                 }
                 if !self.fx.textures.contains_key(draw.image) {
@@ -6031,7 +6040,6 @@ impl Renderer {
     /// cgame's clock), the pool expired, faded and uploaded after this
     /// frame's `temporary` marks (`crate::blob_shadow`). `enabled` is
     /// `cg_marks`.
-    #[allow(clippy::too_many_arguments)]
     pub fn set_marks(
         &mut self,
         fs: &Pk3Fs,
@@ -7191,7 +7199,7 @@ impl Renderer {
     /// `fx_ready` says whether this frame's depth and colour copies are
     /// taken for a `cod4_worldfx` stage: without its copy a feathered one
     /// draws as its plain stage, a distortion one not at all.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn emit_world_draw(
         &self,
         pass: &mut impl DrawSink,
@@ -10503,7 +10511,6 @@ fn single_pass<'e>(
 /// The camera group (`camera_layout`): the Camera block, the fx lights,
 /// `vc_shadows`' receiver inputs, `r_textureMode`'s samplers, CoD2's
 /// dynamic shadow and CoD4's sun shadow map.
-#[allow(clippy::too_many_arguments)]
 fn camera_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -10960,7 +10967,6 @@ struct FxImage<'a> {
 /// `upload_levels` handles both RGBA sprites and BC `.dds` mip chains (many
 /// effect textures are DXT5). Unresolvable names warn once; the caller
 /// caches the `None`.
-#[allow(clippy::too_many_arguments)]
 fn resolve_fx_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -11703,7 +11709,7 @@ fn hud_bind_group(
 /// with `picmip` levels dropped, `gamma` baked as retail's upload bakes it
 /// and stored as `store` says. Unresolvable names warn once; the caller
 /// caches the `None`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn resolve_hud_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

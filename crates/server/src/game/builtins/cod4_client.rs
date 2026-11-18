@@ -5,8 +5,8 @@
 
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
+use super::Builtin;
 use super::client::client_receiver;
-use super::score::Builtin;
 use crate::game::host::GameHost;
 
 pub const NAMES: &[(&str, Builtin)] = &[

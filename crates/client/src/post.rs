@@ -239,7 +239,6 @@ impl PostPass {
     /// its framebuffer before anything vcod adds; then the bound glow at
     /// `glow` (`glowApply`'s intensity, 0 for none), as `glow_apply_bloom`
     /// adds into it.
-    #[allow(clippy::too_many_arguments)]
     pub fn set_params(
         &self,
         queue: &wgpu::Queue,

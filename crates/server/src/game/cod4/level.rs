@@ -300,7 +300,6 @@ pub struct Cod4Level {
 
 impl Cod4Level {
     /// The zones' level: `game::cod4::load`'s bootstrap at `now_ms`.
-    #[allow(clippy::too_many_arguments)]
     pub fn load(
         zones: &Cod4Zones,
         install: &Install,
@@ -328,7 +327,7 @@ impl Cod4Level {
 
     /// [`Self::load`] with what the last level handed on
     /// ([`super::load_with`], [`Self::take_carry`]).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn load_with(
         zones: &Cod4Zones,
         install: &Install,
@@ -1195,7 +1194,7 @@ impl Cod4Level {
         self.apply_link_ops();
         self.per_frame_notifies();
         for id in std::mem::take(&mut self.rt.host.cod4_mut().free_next) {
-            self.rt.host.ents.free(id);
+            self.rt.host.free_entity(id);
         }
         // The script's `finishPlayerDamage`s and `suicide`s wrote their
         // victims' playerstates inside the call, ahead of any `spawn` after.
@@ -1907,6 +1906,7 @@ impl Cod4Level {
     /// script's health writes clamp to it), more than any one frame's
     /// rounds take: the cmds of two packets can both run between two
     /// frames, and two head hits kill.
+    #[cfg(any(test, feature = "testing"))]
     pub fn heal_for_test(&mut self, slot: usize) {
         if let Some(v) = self.rt.host.client_vitals.get_mut(slot)
             && v.health > 0
@@ -1919,6 +1919,7 @@ impl Cod4Level {
     /// Test-facing: `slot` takes `damage` without knockback along `dir`
     /// (`None`: from no direction), his health left alone, as a script's
     /// `finishPlayerDamage` followed by a heal.
+    #[cfg(any(test, feature = "testing"))]
     pub fn hurt_for_test(&mut self, slot: usize, damage: i32, dir: Option<[f32; 3]>) {
         self.rt
             .host

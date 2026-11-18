@@ -176,8 +176,8 @@ impl Loader {
     /// load, every function this call installed is removed again and every
     /// path it newly marked loaded is unmarked, so a failed load leaves the
     /// `Vm` exactly as it found it (a half-loaded gametype that still looks
-    /// loaded is worse than a clean refusal) and a retry — e.g. once a
-    /// missing file exists — does not silently no-op on a path this call
+    /// loaded is worse than a clean refusal) and a retry (e.g. once a
+    /// missing file exists) does not silently no-op on a path this call
     /// already gave up on.
     pub fn load(&mut self, vm: &mut Vm, path: &str) -> Result<(), LoadError> {
         let mut installed = Vec::new();
@@ -561,7 +561,7 @@ mod tests {
     }
 
     /// A bare `::name` pointer with no call around it (`x = file::fn;`)
-    /// lowers to a `Value::Function` constant, not an `Op::Call` — the shape
+    /// lowers to a `Value::Function` constant, not an `Op::Call`: the shape
     /// every stock gametype uses to register its engine callbacks. Deleting
     /// the constant-pool scan in `load_one` would still pass every other
     /// test in this file; only this one would catch it.
@@ -606,7 +606,7 @@ mod tests {
 
     /// `refs` (the set driving the load order) is a `BTreeSet`, so with
     /// several broken references from one file, the one reported is always
-    /// the alphabetically first — deterministic run to run, not whichever a
+    /// the alphabetically first: deterministic run to run, not whichever a
     /// `HashSet`'s hash-seed-dependent iteration order happened to visit
     /// first.
     #[test]

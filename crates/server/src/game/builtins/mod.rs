@@ -2,6 +2,13 @@
 //! matching the engine's own case-insensitive script-function lookup
 //! (docs/research/cod11-gsc-language.md, atom identity).
 
+use crate::game::host::GameHost;
+use vcod_gsc::{Cx, ErrorKind, Target, Value};
+
+/// Every builtin's signature: the host, the VM, `self` for a method, the
+/// arguments.
+pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+
 pub mod attach;
 pub mod client;
 pub mod cod2;

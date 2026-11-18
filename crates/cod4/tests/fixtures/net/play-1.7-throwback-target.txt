@@ -1,3 +1,11 @@
+# play-1.7-throwback-target.txt: the target probe of the throw back pair (cod4::capture_ab's THROWBACK, docs/research/cod4-combat.md 15) on retail
+# cod4_lnxded 1.7, in the namespace of docs/research/cod4-handshake.md 7:
+#   cod4_lnxded <server line of that section> +set g_gametype war +set sv_pure 0 +devmap mp_crash
+#   cargo run -p vcod-cod4 --example cod4_probe -- 127.0.0.1:28960 out.txt
+#     --name target --qport 4021 --secs 25 --team allies --goto "207 2291 296" --script throwback
+#   (a second later) cargo run -p vcod-cod4 --example cod4_probe -- 127.0.0.1:28960 out.txt
+#     --name shooter --qport 4022 --secs 25 --team axis --goto "123 2110 300" --script frag --aim-z -60
+# The shooter's half is play-1.7-throwback-shooter.txt.
 0 c2s 127.0.0.1:28960 ffffffff6765746368616c6c656e676520302022393763383430376663393337626337633165646465636633366465383965373522
 5 s2c 127.0.0.1:28960 ffffffff6368616c6c656e6765526573706f6e7365202d31363835393937343737
 6 c2s 127.0.0.1:28960 ffffffff636f6e6e65637420225c63675f707265646963744974656d735c315c636c5f70756e6b6275737465725c305c636c5f616e6f6e796d6f75735c305c636f6c6f725c345c686561645c64656661756c745c6d6f64656c5c6d756c74695c736e6170735c32305c726174655c32353030305c6e616d655c7461726765745c70726f746f636f6c5c365c6368616c6c656e67655c2d313638353939373437375c71706f72745c3430323122

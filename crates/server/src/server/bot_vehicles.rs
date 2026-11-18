@@ -262,6 +262,7 @@ impl Server {
     }
 
     /// Test-facing: the kind of the live vehicle `num` (`info::KIND_*`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_vehicle_kind(&self, num: u32) -> Option<i32> {
         let host = &self.game.module.script.as_ref()?.host;
         let (_, v) = host.vehicles.live.iter().find(|(id, _)| id.0 == num)?;
@@ -270,6 +271,7 @@ impl Server {
 
     /// Test-facing: vehicles the seven-second stuck kill destroyed this
     /// level.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_stuck_kills(&self) -> u32 {
         self.game
             .module
@@ -281,6 +283,7 @@ impl Server {
     /// Test-facing: a blast of `damage` on vehicle `num` from itself, as
     /// the stock self-destruct's `doDamage` (`_tankdrive_gmi.gsc`); false
     /// when `num` is no live vehicle.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_damage_vehicle(&mut self, num: u32, damage: i32) -> bool {
         let Some(rt) = self.game.module.script.as_mut() else {
             return false;
@@ -300,7 +303,13 @@ impl Server {
         true
     }
 
+    /// Test-facing: where the bots read a burning hull, by entity number.
+    pub fn test_wrecks(&self) -> Vec<[f32; 3]> {
+        self.game.module.bot_parked.wrecks()
+    }
+
     /// Test-facing: each live vehicle in pool order, as a bot would see it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_vehicles(&self) -> Vec<VehicleSpot> {
         let Some(rt) = self.game.module.script.as_ref() else {
             return Vec::new();
@@ -480,6 +489,14 @@ pub(super) struct BotDrives {
     routes: BTreeMap<usize, DriveRoute>,
     fits: HullFits,
     graph: usize,
+}
+
+impl BotDrives {
+    /// A restart of the level: the routes ran over the old level's
+    /// vehicles; the fits stay, the map being the same.
+    pub(super) fn restart(&mut self) {
+        self.routes.clear();
+    }
 }
 
 /// Fit tests by node point and box half width, kept across graph
@@ -955,6 +972,11 @@ impl Server {
                 nodes: Vec::new(),
                 wreck: None,
             });
+            // A live hull is no wreck, whatever a record of its number left
+            // (a restart reissues map vehicles under the same handles).
+            if !v.dead && p.wreck.take().is_some() {
+                changed = true;
+            }
             // A hull burns where it died until its second blast deletes it.
             if p.wreck.is_none() && v.dead && rt.host.ents.get(*id).is_some_and(|e| !e.unlinked) {
                 let at = v.pose.origin;

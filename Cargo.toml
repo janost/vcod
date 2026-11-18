@@ -21,7 +21,8 @@ jiff = "0.2"
 bytemuck = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 ctrlc = { version = "3", features = ["termination"] }
-env_logger = "0.11"
+# No `regex`: RUST_LOG takes plain targets and levels here.
+env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 glam = "0.33"
 image = { version = "0.25", default-features = false, features = ["tga", "jpeg"] }
 # kira 0.12.6 moved to glam 0.34, a second glam beside the workspace's 0.33.
@@ -36,7 +37,8 @@ symphonia = { version = "0.6", default-features = false, features = ["mp3", "wav
 pollster = "1"
 winit = "0.30"
 wgpu = "30"
-zip = { version = "9", default-features = false, features = ["deflate"] }
+# `deflate` would add zopfli, a compressor only a ZipWriter above level 9 uses.
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 tempfile = "3"
 vcod-common = { path = "crates/common" }
 vcod-gsc = { path = "crates/gsc" }

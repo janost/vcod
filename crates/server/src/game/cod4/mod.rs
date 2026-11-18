@@ -1011,7 +1011,6 @@ impl Default for Cod4HostState {
 /// its first wait. `overrides` is the probe directory [`Cod4Scripts`]
 /// reads first. `fresh_mirror` starts 1.7's dvar mirror empty; the server
 /// hands in its cvars with the engine's mirrored dvars already in it.
-#[allow(clippy::too_many_arguments)]
 pub fn load(
     zones: &Cod4Zones,
     install: &Install,
@@ -1064,7 +1063,7 @@ fn brush_models(entities: String, clip: Option<&vcod_cod4::collision::ClipMap>) 
 /// [`load`] across a level boundary: `carry`'s `game[]`, `pers[]`, compiled
 /// scripts and seed, and on a `fast_restart` the last level's
 /// configstrings, which `SV_RestartGameProgs` keeps (cod4-map-cycle.md 2).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn load_with(
     zones: &Cod4Zones,
     install: &Install,

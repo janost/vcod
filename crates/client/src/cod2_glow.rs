@@ -559,7 +559,7 @@ impl Cod2Glow {
     /// adding into the scene); then the blur drawn over the scene. `sky` is
     /// the level's sky cube, sampled along each pixel's view ray through
     /// `inv_view_proj` from `eye`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn encode(
         &mut self,
         device: &wgpu::Device,

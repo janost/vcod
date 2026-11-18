@@ -432,7 +432,6 @@ fn glyph_index(c: char) -> usize {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn push_quad(
     out: &mut Vec<HudQuad>,
     x: f32,
@@ -498,7 +497,6 @@ pub fn char_count(text: &str) -> usize {
 
 /// [`layout`] on a fixed pitch: every glyph centred in a `cell`-wide cell,
 /// window px, however wide its own advance. Returns the advance.
-#[allow(clippy::too_many_arguments)]
 pub fn layout_fixed(
     font: &Font,
     text: &str,
@@ -536,7 +534,6 @@ pub fn layout_fixed(
 }
 
 /// [`layout_fixed`] without the shadow, as the console draws its text.
-#[allow(clippy::too_many_arguments)]
 pub fn layout_cells(
     font: &Font,
     text: &str,

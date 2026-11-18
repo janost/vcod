@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use vcod_common::asset_source::{AssetSource, RawFile};
 
+use crate::game::builtins::attach::ATTACH_SLOTS;
 use crate::game::builtins::set::BuiltinSet;
 use crate::game::host::{ClientEvent, GameHost, SpawnRequest};
 use crate::game::item::Activate;
@@ -222,24 +223,6 @@ fn render(cx: &vcod_gsc::Cx, v: Value) -> String {
     cx.format_number(v).unwrap_or_else(|| format!("{v:?}"))
 }
 
-/// Owns one map's loaded script closure, the `Vm` it lives in, and the
-/// `GameHost` the object table and configstrings live in. The host has to
-/// outlive map load: a thread can spawn an entity in one frame and read it
-/// back in the next, so a host that died at the end of `load` would throw
-/// the object table away under it.
-///
-/// Always a fresh `Vm`/`GameHost` per map, never a reload into a live one:
-/// `Vm::install` rejects a duplicate `FuncRef` rather than silently
-/// overwriting, so re-loading a shared gametype script into a `Vm` that
-/// already has it would fail loudly. Every stock gametype references the
-/// same shared scripts, so a map change that reused one long-lived `Vm`
-/// would hit this on the first shared file. A map change therefore builds
-/// a new `ScriptRuntime` and drops the old one; the heap goes with it,
-/// which is also what the VM's no-garbage-collection design assumes.
-/// `clientState` carries six attachment pairs
-/// (`docs/research/clientstate-wire-format.md`).
-pub const ATTACH_SLOTS: usize = 6;
-
 /// What a client entity wears, by name: `.model` and the attachments with
 /// their ignoreCollision bits. `None` without a model.
 pub(crate) fn wear(
@@ -355,6 +338,20 @@ pub enum PassStop {
     Client(usize),
 }
 
+/// Owns one map's loaded script closure, the `Vm` it lives in, and the
+/// `GameHost` the object table and configstrings live in. The host has to
+/// outlive map load: a thread can spawn an entity in one frame and read it
+/// back in the next, so a host that died at the end of `load` would throw
+/// the object table away under it.
+///
+/// Always a fresh `Vm`/`GameHost` per map, never a reload into a live one:
+/// `Vm::install` rejects a duplicate `FuncRef` rather than silently
+/// overwriting, so re-loading a shared gametype script into a `Vm` that
+/// already has it would fail loudly. Every stock gametype references the
+/// same shared scripts, so a map change that reused one long-lived `Vm`
+/// would hit this on the first shared file. A map change therefore builds
+/// a new `ScriptRuntime` and drops the old one; the heap goes with it,
+/// which is also what the VM's no-garbage-collection design assumes.
 pub struct ScriptRuntime {
     vm: Vm,
     pub(crate) host: GameHost,
@@ -390,7 +387,7 @@ impl ScriptRuntime {
     /// "mp_pavlov" and "dm". `configstrings` and `cvars` seed the host;
     /// `world`, once the caller has one, lets `bulletTrace` trace against the
     /// real map geometry, and `weapons` is what the weapon builtins read.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn load(
         fs: Rc<Pk3Fs>,
         map: &str,
@@ -420,7 +417,7 @@ impl ScriptRuntime {
     /// BSP, so `source` only decides where `.gsc` text comes from: a test
     /// overlays one file on the paks and gets the real bootstrap rather than
     /// a hand-written copy of it that a change here would not reach.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn load_from(
         source: Box<dyn ScriptSource>,
         fs: Rc<Pk3Fs>,
@@ -454,7 +451,6 @@ impl ScriptRuntime {
     /// the scripts compile under `Dialect::Cod2` against CoD2's builtin
     /// tables. Groundwork for hosting CoD2: the host still runs 1.1's
     /// configstring layout and no weapon table.
-    #[allow(clippy::too_many_arguments)]
     pub fn load_cod2(
         source: Box<dyn ScriptSource>,
         fs: Rc<Pk3Fs>,
@@ -481,7 +477,7 @@ impl ScriptRuntime {
     /// [`ScriptRuntime::load_cod2`] with the level's collision
     /// (`crate::game::cod2::level_world`), which the traces, the spawn
     /// pass's links and the triggers read.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn load_cod2_in(
         source: Box<dyn ScriptSource>,
         fs: Rc<Pk3Fs>,
@@ -511,7 +507,7 @@ impl ScriptRuntime {
     /// (`take_carry`): `game[]` and `pers[]` under `savePersist`, the
     /// compiled closures on a restart of the same map. Its map and area
     /// tree are rebuilt off `world`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn load_cod2_carry(
         source: Box<dyn ScriptSource>,
         fs: Rc<Pk3Fs>,
@@ -554,7 +550,7 @@ impl ScriptRuntime {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn load_game(
         profile: &'static HostProfile,
         source: Box<dyn ScriptSource>,
@@ -587,7 +583,7 @@ impl ScriptRuntime {
     /// [`Self::load_game`] with `setup` run on the fresh host ahead of the
     /// spawn pass: a game's own state the profile cannot hold
     /// (`game::cod4::load`'s zones).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn load_game_with(
         profile: &'static HostProfile,
         source: Box<dyn ScriptSource>,
@@ -1163,7 +1159,7 @@ impl ScriptRuntime {
     /// callback undefined (`Scr_PlayerDamage`, game.mp 0x5ca18), and an
     /// undefined direction makes the stock gametypes add
     /// `DAMAGE_NO_KNOCKBACK` (cod11-movers.md 21, "The sine crush").
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn deliver_unowned_hit(
         &mut self,
         victim_slot: usize,
@@ -1808,9 +1804,9 @@ impl ScriptRuntime {
     }
 
     /// `Cmd_Kill_f`: the `kill` client command, which is the `suicide` builtin
-    /// reached from outside the VM. Same three effects -- the vitals, the
+    /// reached from outside the VM. Same three effects (the vitals, the
     /// `Damaged` op the sim reads, and `CodeCallback_PlayerKilled` with
-    /// `MOD_SUICIDE` -- but started as a thread rather than spawned, since
+    /// `MOD_SUICIDE`), but started as a thread rather than spawned, since
     /// nothing is waiting on it. A dead or spectating client is ignored, the
     /// way the builtin ignores a dead one. Returns whether the kill ran.
     pub fn kill_client(&mut self, slot: usize) -> bool {
@@ -1876,7 +1872,7 @@ impl ScriptRuntime {
     }
 
     /// `G_MoverPush` over the players in `sims` and the items `step`
-    /// listed (`crate::push::push`); a blocked push holds the mover a frame.
+    /// listed (`crate::push::push_with`); a blocked push holds the mover a frame.
     /// A player a sine mover crushes takes `G_Damage(player, mover, mover,
     /// NULL, NULL, 99999, 0, MOD_CRUSH)` (game.mp 0x55617) before the
     /// mover's end-of-period test.
@@ -2475,7 +2471,7 @@ impl ScriptRuntime {
 
     /// `Cmd_MenuResponse_f` (0x486d8): notify the client's entity with the
     /// menu's **name** and the response. The name, not the index the client
-    /// sent -- retail reads configstring `CsRange::Menu.start + index` back
+    /// sent: retail reads configstring `CsRange::Menu.start + index` back
     /// and passes that string, which is why `dm.gsc` can both compare it
     /// against `game["menu_team"]` and hand it straight back to `openMenu`.
     ///
@@ -2658,8 +2654,7 @@ impl ScriptRuntime {
         }
         let arg = |i: usize| argv.get(i).map_or("", String::as_str);
         if argv[0].eq_ignore_ascii_case("vote") {
-            let b = arg(1).as_bytes();
-            let yes = b.first() == Some(&b'y') || matches!(b.get(1), Some(b'Y' | b'1'));
+            let yes = crate::game::vote::is_yes(arg(1));
             self.notify_client(slot, "vote", &[if yes { "yes" } else { "no" }]);
             return Some(Vec::new());
         }
@@ -2859,9 +2854,9 @@ impl ScriptRuntime {
     /// table is the single owner of that fact: an entity at the slot's own
     /// number with a `client` store is one `spawn_client` made.
     /// Writes a client's simulated origin onto its script entity. The sim
-    /// owns a player's position and the script reads it: `spawn` used to be
-    /// the only writer, so `positionWouldTelefrag` tested where each client
-    /// last spawned rather than where it now stands.
+    /// owns a player's position and the script reads it: with `spawn` as the
+    /// only writer, `positionWouldTelefrag` would test where each client last
+    /// spawned rather than where it now stands.
     pub fn set_client_origin(&mut self, slot: usize, origin: [f32; 3]) {
         use vcod_gsc::Host;
         self.host.vehicles.lifted.remove(&slot);
@@ -2944,9 +2939,9 @@ impl ScriptRuntime {
     /// (`docs/research/clientstate-wire-format.md`). 0 when the client has no
     /// model yet, which is what a client still on the menus has.
     ///
-    /// The model itself comes from the stock character scripts --
+    /// The model itself comes from the stock character scripts:
     /// `character/mp_american_airborne01.gsc` does
-    /// `self setModel("xmodel/playerbody_american_airborne")` -- through
+    /// `self setModel("xmodel/playerbody_american_airborne")`, called through
     /// `_teams::model()` on spawn.
     pub fn client_model_index(&mut self, slot: usize) -> i32 {
         let Some(name) = self.client_field(slot, "model") else {
@@ -3450,7 +3445,7 @@ impl ScriptRuntime {
     /// any per-client culling (`crates/server/src/game/wire.rs`).
     pub fn packet_entities(
         &mut self,
-        p: &vcod_common::net::protocol::Protocol,
+        p: &vcod_common::net::protocol::Cod1Wire,
     ) -> std::collections::BTreeMap<u32, vcod_common::net::msg::EntityState> {
         let host = &mut self.host;
         self.vm
@@ -3497,7 +3492,7 @@ impl ScriptRuntime {
     /// What the baseline pass writes (`crate::game::wire::baseline_entities`).
     pub fn baseline_entities(
         &mut self,
-        p: &vcod_common::net::protocol::Protocol,
+        p: &vcod_common::net::protocol::Cod1Wire,
     ) -> std::collections::BTreeMap<u32, vcod_common::net::msg::EntityState> {
         let host = &mut self.host;
         self.vm
@@ -3649,7 +3644,7 @@ impl ScriptRuntime {
     /// `Attack::Throw`: the grenade a release put in the air. `now_ms` is
     /// the `level.time` the throw ran at, which is a frame behind the one
     /// this is called on (`crate::game::missile::Missiles::fire_grenade`).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn fire_grenade(
         &mut self,
         owner: usize,
@@ -3760,7 +3755,7 @@ impl ScriptRuntime {
     /// entity with no client).
     pub fn body_entities<'a>(
         &'a self,
-        p: &'a vcod_common::net::protocol::Protocol,
+        p: &'a vcod_common::net::protocol::Cod1Wire,
     ) -> impl Iterator<Item = (u32, vcod_common::net::msg::EntityState)> + 'a {
         self.host.bodies.entities().map(move |(n, mut e)| {
             if let Some(g) = self
@@ -4728,11 +4723,13 @@ pub type Bounds = ([f32; 3], [f32; 3]);
 
 impl ScriptRuntime {
     /// A client's `sessionteam`, as a test sets it (`Server::test_set_client_team`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_client_team_for_test(&mut self, slot: usize, team: &str) {
         self.set_client_string_for_test(slot, "sessionteam", team);
     }
 
     /// Writes one string field of a client's entity, as a script would.
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_client_string_for_test(&mut self, slot: usize, name: &str, value: &str) {
         use vcod_gsc::Host;
         let Some(ent) = self.client_entity(slot) else {
@@ -4814,6 +4811,7 @@ impl ScriptRuntime {
 
     /// A `trigger_hurt` of `shape` on `id` doing `dmg` a touch, linked as
     /// its spawn would link it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn register_hurt_for_test(
         &mut self,
         id: EntId,
@@ -4830,6 +4828,7 @@ impl ScriptRuntime {
     }
 
     /// A trigger the test registered, linked as its spawn would link it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn link_trigger_for_test(&mut self, id: EntId) {
         let host = &mut self.host;
         self.vm.with_cx(|cx| host.link_trigger(cx, id));
@@ -4843,7 +4842,7 @@ impl ScriptRuntime {
     }
 
     /// `for_test` with the file path spelled out, for a test whose script has
-    /// to answer to a path the runtime dispatches into by name --
+    /// to answer to a path the runtime dispatches into by name:
     /// `CALLBACK_SETUP` and its `CodeCallback_*` entry points.
     pub fn for_test_at(path: &str, src: &str) -> ScriptRuntime {
         let mut vm = Vm::new();
@@ -4877,6 +4876,7 @@ impl ScriptRuntime {
 
     /// Compile and install another file's worth of functions into a test
     /// runtime, so a test can add a thread body after `for_test`.
+    #[cfg(any(test, feature = "testing"))]
     pub fn install_for_test(&mut self, src: &str) {
         let ast = vcod_gsc::parse::parse_file(src).expect("test script parses");
         let fns = vcod_gsc::compile::compile_file(&ast, &self.entry, self.vm.interner_mut())
@@ -4885,6 +4885,7 @@ impl ScriptRuntime {
     }
 
     /// A map entity at `origin`, the way the entity lump makes one.
+    #[cfg(any(test, feature = "testing"))]
     pub fn spawn_map_entity_for_test(&mut self, origin: [f32; 3]) -> EntId {
         use vcod_gsc::Host;
         let host = &mut self.host;
@@ -4897,6 +4898,7 @@ impl ScriptRuntime {
     }
 
     /// A client entity in `slot` at `origin`.
+    #[cfg(any(test, feature = "testing"))]
     pub fn spawn_client_for_test(&mut self, slot: usize, origin: [f32; 3]) -> EntId {
         let host = &mut self.host;
         let id = self
@@ -4907,6 +4909,7 @@ impl ScriptRuntime {
     }
 
     /// Writes a client field through the field setter, the way script does.
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_client_field_for_test(&mut self, slot: usize, name: &str, v: Value) {
         use vcod_gsc::Host;
         let Some(ent) = self.client_entity(slot) else {
@@ -4923,6 +4926,7 @@ impl ScriptRuntime {
     /// `"spectator"`; the four legal strings are in
     /// docs/research/cod11-map-cycle.md 6.1. Also the `takedamage` the
     /// client's next end frame would write for it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_client_state_for_test(&mut self, slot: usize, state: &str) {
         use vcod_gsc::Host;
         self.set_client_takedamage(slot, state == "playing");
@@ -4938,6 +4942,7 @@ impl ScriptRuntime {
     }
 
     /// Start `name` as a thread on `ent`, the way a script's `thread` does.
+    #[cfg(any(test, feature = "testing"))]
     pub fn start_thread_for_test(&mut self, ent: EntId, name: &str) {
         let f = self.vm.func_ref(&self.entry, name);
         self.vm
@@ -4964,6 +4969,7 @@ impl ScriptRuntime {
     }
 
     /// Set a test client's health and max health, the way a spawn does.
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_client_health_for_test(&mut self, slot: usize, health: i32) {
         if let Some(v) = self.host.client_vitals.get_mut(slot) {
             v.health = health;
@@ -4972,6 +4978,7 @@ impl ScriptRuntime {
     }
 
     /// Writes a folded field on `level`.
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_level_field_for_test(&mut self, name: &str, v: Value) {
         let level = self.vm.level_id();
         self.vm.with_cx(|cx| {
@@ -5070,6 +5077,58 @@ mod tests {
         }
         assert_eq!(rt.level_field("woke"), Value::Int(1));
         assert_eq!(rt.level_field("held"), Value::Undefined);
+    }
+
+    /// `delete()` on a connected client notifies `death` but leaves his
+    /// entity: the slot is the connection's until the drop.
+    #[test]
+    fn a_deleted_client_keeps_his_entity() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() { level.callbackPlayerConnect = ::c; }\n\
+             CodeCallback_PlayerConnect() { [[level.callbackPlayerConnect]](); }\n\
+             c() { self thread d(); level thread w(self); }\n\
+             d() { wait 0.05; self delete(); }\n\
+             w(p) { p waittill(\"death\"); level.died = 1; }\n",
+        );
+        rt.reconnect_client(0, "vcod".into());
+        let before = rt.client_entity(0).expect("connected");
+        for frame in 1..=6 {
+            rt.run_frame(frame * 50);
+        }
+        assert_eq!(rt.level_field("died"), Value::Int(1));
+        assert_eq!(rt.client_entity(0), Some(before));
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+    }
+
+    /// CoD4's `delete()` refuses a client with a script error before any
+    /// notify (cod4-combat.md 14).
+    #[test]
+    fn cod4_refuses_to_delete_a_client() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() { level.callbackPlayerConnect = ::c; }\n\
+             CodeCallback_PlayerConnect() { [[level.callbackPlayerConnect]](); }\n\
+             c() { self thread d(); level thread w(self); }\n\
+             d() { wait 0.05; self delete(); level.past = 1; }\n\
+             w(p) { p waittill(\"death\"); level.died = 1; }\n",
+        );
+        rt.host.set_profile(&crate::game::profile::COD4);
+        rt.reconnect_client(0, "vcod".into());
+        let before = rt.client_entity(0).expect("connected");
+        for frame in 1..=6 {
+            rt.run_frame(frame * 50);
+        }
+        assert_eq!(rt.level_field("died"), Value::Undefined);
+        assert_eq!(rt.level_field("past"), Value::Undefined);
+        assert_eq!(rt.client_entity(0), Some(before));
+        assert!(
+            rt.aborts()
+                .iter()
+                .any(|a| a.contains("Cannot delete a client entity")),
+            "{:?}",
+            rt.aborts()
+        );
     }
 
     /// `probe_entnum` on retail: the free a `delete()` schedules 100 ms out
@@ -5212,8 +5271,8 @@ mod tests {
     /// targetname, so no arm reaches it and it stays solid. mp_powcamp
     /// (`*3`, `*9`) and mp_rocket (`*3`) are the other two stock maps with
     /// one. The gametype is `sd` because `*1` is also a `bombzone`, which
-    /// `_gameobjects::main` deletes -- unlinking it for another reason --
-    /// under every other gametype.
+    /// `_gameobjects::main` deletes under every other gametype, which
+    /// would be another reason to unlink it.
     #[test]
     fn the_bootstrap_unlinks_mp_depots_exploder_brush_model() {
         let Some(fs) = vcod_common::testing::game_fs_11() else {
@@ -5492,7 +5551,7 @@ mod tests {
         assert_eq!(after.host.client_vitals[0].health, 0);
 
         // The carry is spent by the connect that took it, so the next one
-        // starts empty -- which is every connect but a persisting
+        // starts empty, which is every connect but a persisting
         // boundary's.
         after.reconnect_client(0, "vcod".into());
         assert_eq!(after.client_pers(0, "team").as_deref(), Some("allies"));
@@ -5535,6 +5594,39 @@ mod tests {
             "the dropped client's carried pers reached the next occupant"
         );
         assert!(after.aborts().is_empty(), "{:?}", after.aborts());
+    }
+
+    /// A client connecting into a slot its last occupant left in the same
+    /// level reads a zeroed `gclient_t`: no health, no `maxhealth`, not
+    /// alive, no `allowSpectateTeam` bits.
+    #[test]
+    fn a_connect_into_a_used_slot_starts_with_no_vitals_or_spectate_mask() {
+        use crate::game::host::Vitals;
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() { level.callbackPlayerConnect = ::c; }\n\
+             CodeCallback_PlayerConnect() { [[level.callbackPlayerConnect]](); }\n\
+             CodeCallback_PlayerDisconnect() {}\n\
+             c() { level.h = self.health; level.m = self.maxhealth; \
+                   level.alive = isAlive(self); }\n",
+        );
+        rt.reconnect_client(0, "first".into());
+        rt.host.client_vitals[0] = Vitals {
+            health: 100,
+            max_health: 100,
+            dead: false,
+            takedamage: true,
+        };
+        rt.host.client_no_spectate[0] = 0x17;
+        rt.client_disconnect(0);
+        rt.run_frame(50);
+
+        rt.reconnect_client(0, "second".into());
+        assert_eq!(rt.level_field("h"), vcod_gsc::Value::Int(0));
+        assert_eq!(rt.level_field("m"), vcod_gsc::Value::Int(0));
+        assert_eq!(rt.level_field("alive"), vcod_gsc::Value::Int(0));
+        assert_eq!(rt.host.client_vitals[0], Vitals::default());
+        assert_eq!(rt.host.client_no_spectate[0], 0);
     }
 
     /// `ClientDisconnect`'s `menuresponse` ("-1", "disconnect") wakes a
@@ -5647,7 +5739,7 @@ mod tests {
 
     /// The two things a client entity carries before any script touches it:
     /// `.name` from the userinfo, and a `.pers` the gametype can index. Both
-    /// are measured on the retail 1.1d server -- a probe gametype logged
+    /// are measured on the retail 1.1d server: a probe gametype logged
     /// `pers` defined and `self.name` correct inside
     /// `Callback_PlayerConnect`, before its `waittill("begin")`. Without
     /// either, `dm.gsc`'s connect callback dies before it opens a menu.
@@ -6345,7 +6437,7 @@ mod tests {
     /// A script `delete()` takes the trigger row with the entity, and the
     /// entity number it hands back carries no box into its next tenant.
     /// `sd.gsc` deletes both bombzones at the plant, so a row that outlived
-    /// its entity would keep firing at the old brush -- and, once the number
+    /// its entity would keep firing at the old brush, and, once the number
     /// is reused, fire on a spawn that was never a trigger.
     #[test]
     fn a_deleted_trigger_takes_its_row_and_leaves_the_reused_number_clean() {
@@ -6400,7 +6492,7 @@ mod tests {
     /// (docs/research/cod11-gsc-object-model.md 8.2), so of the four values a
     /// client can carry on our wire only a living player's 0 gets through:
     /// spectator 4, intermission 5 and dead 6 all fail the compare. The dead
-    /// case is the minefield bug -- a corpse lying in the trigger re-armed
+    /// case is the minefield bug: a corpse lying in the trigger re-armed
     /// `minefield_kill` on every pass.
     #[test]
     fn only_a_living_client_touches_a_trigger() {
@@ -6671,7 +6763,7 @@ mod tests {
         };
         for (name, s) in [("m1carbine_mp", 1), ("colt_mp", 3), ("fraggrenade_mp", 4)] {
             rt.host.precache_items_for_test(&[name]);
-            let w = crate::configstrings::weapon_index(name).unwrap();
+            let w = crate::defs::V1.weapon_index(name).unwrap();
             let d = rt.host.weapons.get(w).unwrap().clone();
             rt.host.client_weapons[0].give(w, s);
             rt.host.client_ammo[0].clip[d.clip_index] = d.clip_size as i16;
@@ -6680,7 +6772,7 @@ mod tests {
             }
         }
         rt.host.client_weapons[0].current =
-            crate::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+            crate::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
         rt.set_client_origin(0, [0.0; 3]);
         rt
     }
@@ -6812,7 +6904,7 @@ mod tests {
     #[test]
     fn two_items_in_reach_on_one_cmd_see_each_others_ammo() {
         let mut rt = pickup_rig();
-        let fg = crate::configstrings::weapon_index("fg42_mp").unwrap();
+        let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap();
         let d = rt.host.weapons.get(fg).unwrap().clone();
         rt.host.client_weapons[0].give(fg, 2);
         rt.host.client_ammo[0].clip[d.clip_index] = 20;
@@ -6859,7 +6951,7 @@ mod tests {
     #[test]
     fn the_use_key_swaps_and_the_trigger_notify_names_the_drop() {
         let mut rt = pickup_rig();
-        let fg = crate::configstrings::weapon_index("fg42_mp").unwrap();
+        let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap();
         rt.host.client_weapons[0].give(fg, 2);
         let pf = rt.place_item("mpweapon_panzerfaust", [40.0, 0.0, 30.0], 0);
         cmd(&mut rt, 0, 0, [0.0, 0.0, 60.0], [36.0, 0.0, 0.0]);
@@ -6871,7 +6963,7 @@ mod tests {
             [36.0, 0.0, 0.0],
         );
         assert!(rt.host.ents.get(pf).unwrap().item.unwrap().taken);
-        let carbine = crate::configstrings::weapon_index("m1carbine_mp").unwrap();
+        let carbine = crate::defs::V1.weapon_index("m1carbine_mp").unwrap();
         let (drop, state) = rt
             .host
             .ents
@@ -6901,7 +6993,7 @@ mod tests {
                 .iter()
                 .any(|(id, ev, _)| *id == client && *ev == "touch")
         );
-        let panzerfaust = crate::configstrings::weapon_index("panzerfaust_mp").unwrap();
+        let panzerfaust = crate::defs::V1.weapon_index("panzerfaust_mp").unwrap();
         assert!(
             rt.take_client_commands()
                 .contains(&(0, format!("a {panzerfaust}")))
@@ -7190,7 +7282,7 @@ mod tests {
     #[test]
     fn an_owned_weapon_hints_73_past_its_index_until_taken() {
         let mut rt = pickup_rig();
-        let fg = crate::configstrings::weapon_index("fg42_mp").unwrap();
+        let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap();
         let d = rt.host.weapons.get(fg).unwrap().clone();
         rt.host.client_weapons[0].give(fg, 2);
         rt.host.client_ammo[0].ammo[d.ammo_index] = 100;
@@ -7205,12 +7297,12 @@ mod tests {
     #[test]
     fn an_owner_locked_drop_hints_nothing_until_its_lock_clears() {
         let mut rt = pickup_rig();
-        let fg = crate::configstrings::weapon_index("fg42_mp").unwrap();
+        let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap();
         rt.host.client_weapons[0].give(fg, 2);
         rt.place_item("mpweapon_panzerfaust", [40.0, 0.0, 30.0], 0);
         assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 32);
         cmd(&mut rt, 0, vcod_common::net::msg::BUTTON_USE, EYE, AT_ITEM);
-        let carbine = crate::configstrings::weapon_index("m1carbine_mp").unwrap();
+        let carbine = crate::defs::V1.weapon_index("m1carbine_mp").unwrap();
         let drop = rt
             .host
             .ents

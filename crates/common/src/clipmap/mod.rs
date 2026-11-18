@@ -56,6 +56,13 @@ pub const SURF_NOSTEPS: u32 = 0x2000;
 pub const SURF_NONSOLID: u32 = 0x4000;
 pub const SURF_MANTLE_ON: u32 = 0x200_0000;
 pub const SURF_MANTLE_OVER: u32 = 0x400_0000;
+/// The sound material's bits.
+pub const SURF_MATERIAL_MASK: u32 = 0x1f0_0000;
+
+/// The sound material a surface's flags carry (bits 20-24).
+pub const fn surface_material(flags: u32) -> u32 {
+    (flags & SURF_MATERIAL_MASK) >> 20
+}
 
 /// A live player's `pm->tracemask` (`ClientThink_real`, Mac 1.3): SOLID,
 /// GLASS, PLAYERCLIP, BODY and 0x800000, which no material carries.
@@ -468,13 +475,6 @@ impl ClipMap {
             })
             .map(|b| (b.mins, b.maxs))
             .collect()
-    }
-
-    /// The brush contents bits [`trace`](Self::trace) and
-    /// [`point_contents`](Self::point_contents) read: the material's word
-    /// with 0x4 and 0x20000000 cleared (`CMod_LoadBrushes`).
-    pub fn brush_contents(&self, brush: usize) -> u32 {
-        self.brushes[brush].contents
     }
 }
 

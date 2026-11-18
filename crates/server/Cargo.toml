@@ -8,9 +8,14 @@ readme.workspace = true
 rust-version.workspace = true
 publish = false
 build = "../version.rs"
-description = "Call of Duty (2003) 1.1 dedicated server, in progress"
+description = "Dedicated server for Call of Duty 1.1 and 1.5, United Offensive, Call of Duty 2 and Call of Duty 4"
 # tests/main.rs links every test file into one binary (`cargo test --test server`).
 autotests = false
+
+# `testing`: the test seams on `Server` and the levels (`test_*`,
+# `*_for_test`) for the tests of this crate and the client.
+[features]
+testing = ["vcod-common/testing", "vcod-cod4/testing"]
 
 [dependencies]
 vcod-common.workspace = true
@@ -26,6 +31,9 @@ vcod-cod4 = { path = "../cod4" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+vcod-server = { path = ".", features = ["testing"] }
 
 [[test]]
 name = "server"

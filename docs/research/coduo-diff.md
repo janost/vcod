@@ -98,7 +98,7 @@ loaders (bsp, xmodel, xanim, shader, efx, weapon, menu, sound alias, gsc).
   client connects with its install's protocol (22 on a UO install) and
   refuses a server of the other game (`Transport::same_game`,
   `NetClient::connect_from`); the net probe still switches to 1.51 through
-  `Protocol::by_short_version` (`net::other_version`).
+  `Cod1Wire::by_short_version` (`net::other_version`).
 - `challengeResponse <n>` is one integer, as on 1.1 and 1.5 (live,
   VERIFIED).
 

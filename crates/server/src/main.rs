@@ -9,7 +9,7 @@ use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser};
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
 use vcod_common::game::Game;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::pk3::Pk3Fs;
 use vcod_server::engine::{Arrival, Engine, GameModule};
 use vcod_server::{Server, ServerConfig};
@@ -118,6 +118,8 @@ const MAX_PACKETS_PER_FRAME: usize = 256;
 const PACKET_QUEUE: usize = 4 * MAX_PACKETS_PER_FRAME;
 
 fn main() -> Result<()> {
+    // Only tests and gates read the script log.
+    vcod_server::game::host::KEEP_SCRIPT_LOG.store(false, std::sync::atomic::Ordering::Relaxed);
     let matches = Args::command().get_matches();
     let args = Args::from_arg_matches(&matches)?;
     let game = Game::resolve(args.game, &args.game_dir);
@@ -230,9 +232,15 @@ fn check_args(args: &Args) -> Result<()> {
     }
     if args.test_entities > vcod_server::world::MAX_TEST_ENTITIES {
         bail!(
-            "--test-entities {} exceeds {}, the most that fits below ENTITYNUM_WORLD",
+            "--test-entities {} exceeds {}, the most that fits below the map's entities",
             args.test_entities,
             vcod_server::world::MAX_TEST_ENTITIES
+        );
+    }
+    let first_test = vcod_server::world::FIRST_TEST_ENT as usize;
+    if args.test_entities > 0 && args.max_clients > first_test {
+        bail!(
+            "--test-entities needs --max-clients {first_test} or fewer: its entities start at {first_test}"
         );
     }
     Ok(())
@@ -821,19 +829,19 @@ fn last_set<'a>(sets: &'a [String], name: &str) -> Option<&'a str> {
         .next_back()
 }
 
-fn protocol(sets: &[String], fs: &Pk3Fs) -> Result<&'static Protocol> {
+fn protocol(sets: &[String], fs: &Pk3Fs) -> Result<&'static Cod1Wire> {
     Ok(set_protocol(sets)?.unwrap_or_else(|| vcod_server::server::install_protocol(fs)))
 }
 
 /// CoD1's `--set protocol=`, if given: 1, 6 or 22.
-fn set_protocol(sets: &[String]) -> Result<Option<&'static Protocol>> {
+fn set_protocol(sets: &[String]) -> Result<Option<&'static Cod1Wire>> {
     let Some(v) = last_set(sets, "protocol") else {
         return Ok(None);
     };
     v.trim()
         .parse()
         .ok()
-        .and_then(|v| Protocol::by_version(Game::Cod1, v))
+        .and_then(|v| Cod1Wire::by_version(Game::Cod1, v))
         .map(Some)
         .with_context(|| {
             format!("--set protocol={v}: vcod speaks 1 (1.1), 6 (1.5) and 22 (UO 1.51)")

@@ -5,7 +5,7 @@
 use crate::game::host::GameHost;
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("distance", distance),
@@ -26,10 +26,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("acos", acos),
     ("atan", atan),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 fn vec_len(v: [f32; 3]) -> f32 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()

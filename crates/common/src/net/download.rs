@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use super::protocol::Protocol;
+use super::protocol::Cod1Wire;
 use super::wire::Transport;
 
 /// Pak names from `sv_referencedPakNames`, e.g. `main/bellicourt_v1_1`.
@@ -146,7 +146,7 @@ fn checksum_list(systeminfo: &str, key: &str) -> Vec<i32> {
 /// don't pair up is matched by name.
 fn lacking(
     pak: &ReferencedPak,
-    proto: &Protocol,
+    proto: &Cod1Wire,
     dirs: &[&str],
     have: &impl Fn(i32) -> bool,
     exists: &impl Fn(&Path) -> bool,
@@ -172,7 +172,7 @@ fn lacking(
 /// missing.
 pub fn missing_paks(
     systeminfo: &str,
-    proto: &Protocol,
+    proto: &Cod1Wire,
     dirs: &[&str],
     have: impl Fn(i32) -> bool,
     exists: impl Fn(&Path) -> bool,
@@ -193,7 +193,7 @@ pub fn missing_paks(
 /// another `pak0` (docs/research/cod15-protocol-diff.md, "Paks").
 pub fn missing_stock_paks(
     systeminfo: &str,
-    proto: &Protocol,
+    proto: &Cod1Wire,
     have: impl Fn(i32) -> bool,
 ) -> Vec<String> {
     referenced_paks(systeminfo)
@@ -208,7 +208,7 @@ pub fn missing_stock_paks(
 /// with the map sort ahead of the rest.
 pub fn candidates_for_map(
     systeminfo: &str,
-    proto: &Protocol,
+    proto: &Cod1Wire,
     map: &str,
     dirs: &[&str],
     have: impl Fn(i32) -> bool,

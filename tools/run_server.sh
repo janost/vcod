@@ -15,7 +15,7 @@
 #
 #   COD_DIR          game install, the directory containing main/ (required)
 #   COD_VERSION      1.1 (default), 1.5 or uo
-#   COD_LNXDED       server binary (default private/reference/cod-lnxded-1.1d/cod_lnxded,
+#   COD_LNXDED       server binary (default private/retail/cod-lnxded-1.1d/cod_lnxded,
 #                    cod-lnxded-1.5b/cod_lnxded for 1.5,
 #                    coduo-lnxded-1.51b/coduo_lnxded for uo)
 #   COD_LNXDED_HOME  homepath holding main/game.mp.i386.so, or uo/game.mp.uo.i386.so.
@@ -26,7 +26,7 @@
 #
 # The 1.5b and UO binaries link libstdc++.so.5 (gcc 3.2), which current
 # distributions no longer ship; the script puts the binary's lib/ directory
-# (private/reference/cod-lnxded-1.5b/lib, coduo-lnxded-1.51b/lib) on
+# (private/retail/cod-lnxded-1.5b/lib, coduo-lnxded-1.51b/lib) on
 # LD_LIBRARY_PATH, so drop a 32-bit copy there (Debian's libstdc++5 i386).
 #   PORT             UDP port (default 28960)
 #   PRE_MAP_ARGS     engine arguments placed before +map, as shell words; the ones
@@ -45,9 +45,9 @@ fi
 [ -d "$COD_DIR/main" ] || { echo "COD_DIR=$COD_DIR has no main/ directory" >&2; exit 1; }
 EXE=cod_lnxded MODULE=main/game.mp.i386.so MAP_DEFAULT=mp_carentan
 case "${COD_VERSION:-1.1}" in
-    1.1) REF=private/reference/cod-lnxded-1.1d HOME_DEFAULT=private/server ;;
-    1.5) REF=private/reference/cod-lnxded-1.5b HOME_DEFAULT=private/server-1.5 ;;
-    uo) REF=private/reference/coduo-lnxded-1.51b HOME_DEFAULT=private/server-uo
+    1.1) REF=private/retail/cod-lnxded-1.1d HOME_DEFAULT=private/server ;;
+    1.5) REF=private/retail/cod-lnxded-1.5b HOME_DEFAULT=private/server-1.5 ;;
+    uo) REF=private/retail/coduo-lnxded-1.51b HOME_DEFAULT=private/server-uo
         EXE=coduo_lnxded MODULE=uo/game.mp.uo.i386.so MAP_DEFAULT=mp_cassino
         [ -d "$COD_DIR/uo" ] || { echo "COD_DIR=$COD_DIR has no uo/ directory" >&2; exit 1; } ;;
     *) echo "COD_VERSION must be 1.1, 1.5 or uo" >&2; exit 1 ;;
@@ -62,7 +62,8 @@ if [ ! -e /lib/ld-linux.so.2 ]; then
 fi
 GAMEDIR="${MODULE%%/*}" PORT_USED="${PORT:-28960}"
 . tools/retail_home.sh
-eval "PRE_ARGS=(${PRE_MAP_ARGS:-})"
+# Split as shell words without eval: xargs honours the quotes.
+mapfile -t PRE_ARGS < <(printf '%s' "${PRE_MAP_ARGS:-}" | xargs -r printf '%s\n')
 exec "$BIN" \
     +set dedicated 1 \
     +set fs_basepath "$COD_DIR" \

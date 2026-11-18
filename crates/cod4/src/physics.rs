@@ -1438,11 +1438,13 @@ impl Body {
     /// `Phys_RunFrame`'s clock (0x5a6e02): up to `time`, in at most two
     /// steps of at least `step_ms`, each at least half what is left, so
     /// the body runs up to a step ahead and [`Self::pose`] lerps.
+    #[cfg(any(test, feature = "testing"))]
     pub fn advance(&mut self, time: i32, trace: &mut Trace, d: &Dvars) {
         self.advance_in(time, trace, &mut |_, _| Vec::new(), d);
     }
 
     /// [`Self::advance`] with the body's boxes meeting `solids` as well.
+    #[cfg(any(test, feature = "testing"))]
     pub fn advance_in(&mut self, time: i32, trace: &mut Trace, solids: &mut Solids, d: &Dvars) {
         if time.wrapping_sub(self.sim_ms) <= 0 {
             return;
@@ -1538,12 +1540,14 @@ impl Body {
     /// A frame of one step of `dt` seconds: gravity, the corners' contacts
     /// solved as impulses with Coulomb friction and the preset's bounce,
     /// the move, the drag, the sleep test, then the post-step sweep.
+    #[cfg(any(test, feature = "testing"))]
     pub fn step(&mut self, dt: f32, trace: &mut Trace, d: &Dvars) {
         self.step_in(dt, trace, &mut |_, _| Vec::new(), d);
     }
 
     /// [`Self::step`] with the boxes' contacts with `solids` among the
     /// points'.
+    #[cfg(any(test, feature = "testing"))]
     pub fn step_in(&mut self, dt: f32, trace: &mut Trace, solids: &mut Solids, d: &Dvars) {
         let old = self.pos;
         self.integrate(dt, trace, solids, d);
@@ -1865,7 +1869,7 @@ impl Body {
     /// when it closes fast enough to meet the surface this step, at what
     /// closes the gap otherwise, and inside pushed out at
     /// `phys_contact_erp` up to `phys_mcv`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn contact(
         &self,
         r: Vec3,

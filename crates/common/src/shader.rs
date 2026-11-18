@@ -1687,8 +1687,7 @@ pub fn parse_shader(name: &str, body: &[&str], warns: &mut WarnSet) -> Shader {
 pub struct ShaderLib {
     by_name: HashMap<String, Shader>,
     /// First texture path per material (lowercased, known image extension
-    /// stripped): what the implicit-material loader used to read off the
-    /// minimal parser in `assets.rs`.
+    /// stripped), for the implicit-material loader.
     images: HashMap<String, String>,
     /// Unique parse warnings fired during the scan.
     warns: usize,
