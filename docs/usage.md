@@ -2,8 +2,9 @@
 
 Command lines, controls, the console and the menus, for all four games.
 New here: [getting-started.md](getting-started.md) is shorter, with the
-install layout, a quick start per game and recipes. Bots: [bots.md](bots.md). What each
-game supports: [docs/features/](features/) ([CoD1](features/cod1.md),
+install layout, a quick start per game and recipes. Bots:
+[bots.md](bots.md). What each game supports:
+[docs/features/](features/) ([CoD1](features/cod1.md),
 [UO](features/uo.md), [CoD2](features/cod2.md), [CoD4](features/cod4.md)).
 
 - [Install and game](#install-and-game)
@@ -25,8 +26,8 @@ Both binaries share these flags.
 | `--mod-dir uo` | United Offensive: `uo/` searched over the `main/` beside it, as UO does. Default `main`. |
 | `--vanilla` | CoD1 and UO: only the patch's stock paks (`pak0`..`pak8` on 1.1, `pak0`..`pakf` on 1.5, UO's `pakuo*` and `uomappack00`, and their `localized_*` paks). Every other pk3 in `main/` and `uo/` is ignored. |
 
-`COD_DIR` is the only variable the binaries read. `COD2_DIR` and
-`COD4_DIR` point tests and tools at those installs.
+`COD_DIR` is the only install variable the binaries read, for every game.
+`COD2_DIR` and `COD4_DIR` point tests and tools at those installs.
 
 With `--vanilla` the client downloads nothing: a server on a non-stock
 map fails the load with a popup naming its paks, and one that only adds
@@ -66,11 +67,11 @@ has no listen server.
 
 ## CD keys
 
-Many public servers check CD keys, so dig out the jewel case. Until the game's authorize server has
+Many public servers check CD keys. Until the game's authorize server has
 seen your key, such a server answers `needcdkey` and vcod shows the
 game's own "key not valid" or "awaiting key authorization" message.
 
-Give vcod the key one of two ways:
+Give vcod the key one of three ways:
 
 - `VCOD_CDKEY="XXXX-XXXX-XXXX-XXXX"`: the key's 16 characters (dashes,
   spaces and case don't matter; anything past the 16th is ignored), for
@@ -78,8 +79,9 @@ Give vcod the key one of two ways:
 - CoD 1.1 and 1.5 only: the retail file `main/codkey`, which the 1.1
   installer writes. 1.5, UO, CoD2 and CoD4 keep the key in the Windows
   registry, which vcod does not read; use the variable there.
-- The game's own CD key menu: Verify checks the key against the check characters as retail
-  does, and a valid key serves until vcod quits, ahead of the other two.
+- The game's own CD key menu: Verify checks the key against the check
+  characters as retail does, and a valid key serves until vcod quits,
+  ahead of the other two.
   On CoD 1.1 Verify also writes `main/codkey`, as retail does; the other
   games' menus write the registry, which vcod leaves alone.
 
@@ -192,9 +194,9 @@ walk the last 32 lines, tab completes the first word against the commands
 and cvars (several matches print and the line grows to what they share),
 and log lines print above what you are typing. Left and right do nothing.
 Up, down and any other control key also throw away keys typed ahead, and a
-non-ASCII character is dropped. The terminal is put back on exit. `--set ttycon=0` turns the editor off and
-the terminal edits the line, as on CoD2 and CoD4, whose retail servers turn
-it off too.
+non-ASCII character is dropped. The terminal is put back on exit. `--set
+ttycon=0` turns the editor off and the terminal edits the line, as on CoD2
+and CoD4, whose retail servers turn it off too.
 
 ### rcon
 
@@ -218,8 +220,8 @@ logged with its sender.
 `--bots <n> [--bots-shoot]`, rcon's `addbot`, `removebot` and
 `listbots`, and the `vc_bot_*` cvars (`vc_bot_minplayers`,
 `vc_bot_autobalance`, `vc_bot_shoot`, `vc_bot_names`, `vc_bot_skill`,
-`vc_bot_retreat`, `vc_bot_vehicles`, UO only) work alike on all four games. The guide is
-[bots.md](bots.md).
+`vc_bot_retreat`, `vc_bot_vehicles`, UO only) work alike on all four
+games. The guide is [bots.md](bots.md).
 
 ### Other cvars
 
@@ -375,7 +377,7 @@ default, set it again (`set r_aaSamples 4`).
 - Mouse to pick, double-click or Enter to join. With the cursor over a
   list, the arrows, Home, End and Page Up / Down move the selection; the
   wheel or the scroll bar scrolls it. The wheel is vcod's: the games'
-  wheel scrolls no list, and I wasn't going to copy that.
+  wheel scrolls no list.
 - Tab and the arrows no list takes move the menu's focus while the key
   is down. Held keys do not repeat, except typing and Backspace in a text
   field. Enter and the middle button act on the item under the cursor.
