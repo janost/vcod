@@ -312,6 +312,9 @@ pub struct Cod4Level {
     pub(super) clip: Option<Arc<ClipMap>>,
     /// The shots' state (`combat`).
     pub(super) combat: super::combat::Combat4,
+    /// Each model and attachment set's box ([`Self::shot_boxes`]): its
+    /// surfaces, tags and the level's collision never change.
+    pub(super) box_bounds: super::entity_damage::BoxBounds,
     /// The movement dvars (`Rules::default`, what the mirror carries on
     /// every stock 1.7 level, cod4-pmove.md 12).
     pub rules: Rules,
@@ -424,6 +427,7 @@ impl Cod4Level {
             sv_fps,
             clip: zones.clip.clone(),
             combat: super::combat::Combat4::new(zones.bodies.clone(), n),
+            box_bounds: Default::default(),
             rules,
             brushes: Vec::new(),
             mantle_blocks: Vec::new(),
