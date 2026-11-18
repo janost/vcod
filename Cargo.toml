@@ -35,7 +35,7 @@ symphonia = { version = "0.6", default-features = false, features = ["mp3", "wav
 pollster = "1"
 winit = "0.30"
 wgpu = "30"
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 tempfile = "3"
 vcod-common = { path = "crates/common" }
 vcod-gsc = { path = "crates/gsc" }

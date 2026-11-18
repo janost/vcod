@@ -281,7 +281,11 @@ pub fn read_search(dirs: &[PathBuf], kind: ArchiveKind, name: &str) -> Option<Ve
     let loose = crate::game_dir::confined_rel_path(name);
     let member = |pak: &Path| -> Option<Vec<u8>> {
         let mut zip = zip::ZipArchive::new(std::fs::File::open(pak).ok()?).ok()?;
-        let entry = zip.file_names().find(|n| path_key(n) == key)?.to_string();
+        let entry = zip
+            .file_names()
+            .flatten()
+            .find(|n| path_key(n) == key)?
+            .into_owned();
         let mut f = zip.by_name(&entry).ok()?;
         let mut out = Vec::new();
         std::io::Read::read_to_end(&mut f, &mut out).ok()?;
@@ -590,8 +594,8 @@ impl Pk3Fs {
                 }
             };
             let i = readable.len();
-            for name in zip.file_names() {
-                let key = path_key(name);
+            for name in zip.file_names().flatten() {
+                let key = path_key(&name);
                 if key.contains('@') {
                     alias_index.insert(key.replace('@', "_"), (i, name.to_string()));
                 }
@@ -880,7 +884,7 @@ impl Pk3Fs {
                 continue;
             };
             for i in 0..zip.len() {
-                let Some(name) = zip.name_for_index(i) else {
+                let Some(Ok(name)) = zip.name_for_index(i) else {
                     continue;
                 };
                 let Some(rest) = name
@@ -1428,7 +1432,7 @@ mod tests {
     }
 
     #[test]
-    fn read_stops_when_the_stream_outgrows_its_declared_size() {
+    fn read_refuses_a_stream_longer_than_its_declared_size() {
         let dir = tempfile::tempdir().unwrap();
         let body = "x".repeat(100);
         make_pk3(dir.path(), "pak0.pk3", &[("lie.txt", &body)]);
@@ -1436,7 +1440,8 @@ mod tests {
         patch_central_size(&dir.path().join("pak0.pk3"), 10);
         let fs = Pk3Fs::open(dir.path()).unwrap();
         assert!(fs.read_limited("lie.txt", 50).is_none());
-        assert_eq!(fs.read_limited("lie.txt", 100).unwrap().len(), 100);
+        // zip stops the stream one byte past the declared size, whatever our limit
+        assert!(fs.read_limited("lie.txt", 100).is_none());
     }
 
     #[test]
