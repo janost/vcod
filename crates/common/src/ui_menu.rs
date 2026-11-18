@@ -1533,4 +1533,11 @@ mod tests {
         }
         assert!(checked >= 15, "{checked}");
     }
+
+    #[test]
+    fn a_hostile_menu_never_panics() {
+        crate::testing::fuzz("menu", MENU.as_bytes(), 1500, |b| {
+            parse(&String::from_utf8_lossy(b));
+        });
+    }
 }

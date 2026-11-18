@@ -901,4 +901,14 @@ mod tests {
         let af = t.for_map("airfield");
         assert_eq!(af.get("weap_mp40_fire").unwrap()[0].dist, (7.0, 3000.0));
     }
+
+    #[test]
+    fn a_hostile_alias_table_never_panics() {
+        let good = format!(
+            "{HEADER}\nweap_fire,1,weapons/a.wav,1.25,1.35,0.9,1.05,7,7800,weapon,streamed,2,looping,master,mp_x,\nweap_fire,2,weapons/b.wav,1,1,1,1,0,0,body,,,,slave,,\n"
+        );
+        vcod_common::testing::fuzz("aliases", good.as_bytes(), 3000, |b| {
+            AliasTable::parse_csv(&String::from_utf8_lossy(b), "test");
+        });
+    }
 }

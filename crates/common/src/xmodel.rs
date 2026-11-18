@@ -1146,4 +1146,20 @@ mod tests {
         apply_viewhands_placeholder_override(&mut m3);
         assert_eq!(m3.materials(), before3);
     }
+
+    /// The synthetic model's three files, each mutated in turn: the parse
+    /// returns on every input.
+    #[test]
+    fn a_hostile_model_never_panics() {
+        let (desc, parts, surfs) = synthetic_model([0, 1, 2]);
+        crate::testing::fuzz("xmodel", &desc, 1000, |d| {
+            let _ = parse_model(d, &parts, &[&surfs]);
+        });
+        crate::testing::fuzz("xmodelparts", &parts, 1000, |p| {
+            let _ = parse_model(&desc, p, &[&surfs]);
+        });
+        crate::testing::fuzz("xmodelsurfs", &surfs, 1000, |s| {
+            let _ = parse_model(&desc, &parts, &[s]);
+        });
+    }
 }

@@ -867,4 +867,11 @@ Tail
         // 1.1: boom_dirt's `Particle {}` and fx/test/modeltest.efx.
         assert!(paks[0].is_none() || seen >= 2, "{seen}");
     }
+
+    #[test]
+    fn a_hostile_effect_never_panics() {
+        vcod_common::testing::fuzz("efx", TRACER.as_bytes(), 3000, |b| {
+            let _ = parse(&String::from_utf8_lossy(b));
+        });
+    }
 }
