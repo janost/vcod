@@ -267,7 +267,7 @@ pub trait GameModule: Sized {
     fn heartbeat(e: &mut Engine<Self>);
 
     /// A level load failed with the level already torn down: the loop
-    /// ends the process, as retail's `Com_Error` does.
+    /// ends the process (vcod's choice, `Server::take_fatal`).
     fn take_fatal(_e: &mut Engine<Self>) -> Option<anyhow::Error> {
         None
     }

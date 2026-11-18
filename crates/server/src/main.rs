@@ -712,9 +712,9 @@ fn serve<G: GameModule>(
             stats.add(now.elapsed(), late, frames);
         }
         // A level load that failed with the level already torn down: there is
-        // no script to end the level and no table for a client to pull, which
-        // is what retail's `Com_Error` ends the process for. Or the level
-        // panicked too often to load it again (`engine::contain`).
+        // no script to end the level and no table for a client to pull
+        // (`Server::take_fatal` says how far that follows retail). Or the
+        // level panicked too often to load it again (`engine::contain`).
         if let Some(e) = server.fatal() {
             log::error!("{e:#}");
             std::process::exit(1);

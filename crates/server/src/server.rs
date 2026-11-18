@@ -1446,8 +1446,8 @@ pub enum LoadFailure {
     /// untouched and the console line was a no-op.
     KeptLevel(anyhow::Error),
     /// Failed with the level already gone: no script to call `exitLevel`, no
-    /// table for a client to pull. Retail ends the process on this
-    /// (`Com_Error`) and so does vcod.
+    /// table for a client to pull. vcod ends the process; retail's path is
+    /// unverified (see `Server::take_fatal`).
     Fatal(anyhow::Error),
 }
 
@@ -5872,9 +5872,11 @@ impl Server {
     }
 
     /// The load failure that left the server with no level, taken. The binary
-    /// polls it after every tick and ends the process on it, which is what
-    /// retail's `Com_Error` does: nothing can call `exitLevel` any more and
-    /// every client would pull an empty gamestate.
+    /// polls it after every tick and ends the process on it: nothing can call
+    /// `exitLevel` any more and every client would pull an empty gamestate.
+    /// vcod's choice, unverified against retail: 1.1's `Com_Error(ERR_DROP)`
+    /// drops the level and leaves the process idle (cod11-movers.md 18, "The
+    /// drop"), and which error a failed script load raises is unread.
     pub fn take_fatal(&mut self) -> Option<anyhow::Error> {
         self.game.fatal.take()
     }
