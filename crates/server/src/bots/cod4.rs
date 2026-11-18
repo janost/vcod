@@ -131,6 +131,9 @@ pub struct Cod4Bots {
     /// The graph cache's mark for the brush entities `world` clips
     /// ([`brush_key`]).
     brush_key: String,
+    /// The world and graph came over from the last level on this map: the
+    /// first frame's brush entities say whether they still stand.
+    recheck_brushes: bool,
     /// The level the bots run on: `sv_serverid` and the map. Another one
     /// is a new level ([`Self::new_level`]).
     on_level: Option<(i32, String)>,
@@ -220,6 +223,7 @@ impl Cod4Bots {
             applied: None,
             world: None,
             brush_key: String::new(),
+            recheck_brushes: false,
             on_level: None,
             level_start: None,
             next_think: None,
@@ -277,7 +281,8 @@ impl Cod4Bots {
     /// The level the bots now stand on, `server_id` and `map`: on another
     /// one every brain forgets the menus it answered and what the old level
     /// left (paths, enemies, hits, events heard, weapon numbers); a new map
-    /// drops the graph and the world too, for the next tick to build.
+    /// drops the graph and the world too, for the next tick to build, and
+    /// the same map keeps them while its brush entities stand the same.
     pub fn on_level(&mut self, server_id: i32, map: &str) {
         let same_map = self.on_level.as_ref().is_some_and(|(_, m)| m == map);
         if self
@@ -312,12 +317,31 @@ impl Cod4Bots {
             fresh.driver.sites = std::mem::take(&mut self.driver.sites);
             fresh.world = self.world.take();
             fresh.brush_key = std::mem::take(&mut self.brush_key);
+            fresh.recheck_brushes = fresh.world.is_some();
         }
         fresh.driver.bots = std::mem::take(&mut self.driver.bots);
         for bot in fresh.driver.bots.values_mut() {
             bot.rearm();
         }
         *self = fresh;
+    }
+
+    /// The bots' world, for a test to tell a rebuilt one from a kept one.
+    #[cfg(test)]
+    pub(crate) fn world_ptr(&self) -> Option<*const World> {
+        self.world.as_ref().map(|(w, _)| Rc::as_ptr(w))
+    }
+
+    /// The world and everything built over it, for the next tick to build
+    /// again.
+    fn drop_world(&mut self) {
+        self.world = None;
+        self.brush_key.clear();
+        self.driver.nav = None;
+        self.driver.nav_job = None;
+        self.driver.creases = Default::default();
+        self.driver.probes = Default::default();
+        self.driver.sites = Default::default();
     }
 
     /// Whether new bots fight, and `vc_bot_shoot`'s change for every bot.
@@ -395,6 +419,14 @@ impl Cod4Bots {
     ) {
         // Once the level has run a frame: its gametype has deleted the
         // other gametypes' objects by then and `brushes` holds what stands.
+        // Another gametype on the same map can leave other ones standing:
+        // the carried world and graph go.
+        if self.recheck_brushes && level.level_time() > 0 {
+            self.recheck_brushes = false;
+            if brush_key(level.brushes()) != self.brush_key {
+                self.drop_world();
+            }
+        }
         if self.world.is_none()
             && let Some(clip) = clip
             && level.level_time() > 0

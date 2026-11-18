@@ -795,7 +795,9 @@ otherwise.
   played past a map change.
 - A CoD4 nav graph clips the brush entities standing once the level has run a
   frame (`bots::cod4::BrushedClip`), and its cache key carries their set. A
-  test's `bot_world(.., Vec::new())` and `nav_build` clip the clip map alone.
+  level on the same map keeps the world and graph only while that set reads
+  the same after its first frame: another gametype rebuilds them. A test's
+  `bot_world(.., Vec::new())` and `nav_build` clip the clip map alone.
 - `CountPlayers`' shared `level.players` array is under
   [Script host and VM](#script-host-and-vm).
 - A CoD4 player's control bones turn in `tag_origin`'s frame, not the
