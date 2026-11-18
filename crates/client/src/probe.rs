@@ -8837,7 +8837,8 @@ const UOFOOT_SWITCHES: &[(u64, &str)] = &[(23500, "fraggrenade_mp")];
 /// and the fall onto the grade settles well inside the rest.
 const PRONE_PLACE_WAIT: Duration = Duration::from_millis(3000);
 
-/// Runs [`prone_script`] with its yaws off `uphill`. The angles are world
+/// Runs one slope walk's steps ([`prone_script`], [`moves_script`] and the
+/// rest `--save-slope` picks) with their yaws off `uphill`. The angles are world
 /// view angles, which `send_frame` rebases on each snapshot's
 /// `delta_angles`, so the view holds the script's heading under a prone cap
 /// that pushes it, the way `hold_view_yaw` holds the route's.
@@ -9084,8 +9085,7 @@ const TRIGGER_STEER_ARC: i32 = 165;
 const TRIGGER_STEP_HEIGHT: f32 = 18.0;
 /// A walker that has not left this box in [`TRIGGER_WEDGE`] is wedged
 /// somewhere the steer cannot get it out of (a pit, a doorway it rebounds
-/// in) and kills itself to respawn somewhere else. One run lost 100 s of
-/// its 125 to a single such spot.
+/// in) and kills itself to respawn somewhere else.
 const TRIGGER_WEDGE_UNITS: f32 = 80.0;
 const TRIGGER_WEDGE: Duration = Duration::from_secs(12);
 
@@ -9094,8 +9094,7 @@ const TRIGGER_WEDGE: Duration = Duration::from_secs(12);
 /// does not end the run.
 ///
 /// A wander does not do: mp_pavlov is dense enough that a blind heading spends
-/// a whole run inside the town, and a first capture taken that way crossed one
-/// trigger in 190 s. The walk is not the measurement (the retail server's own
+/// a whole run inside the town. The walk is not the measurement (the retail server's own
 /// log is), so steering it at the answer costs nothing and buys the coverage.
 #[derive(Default)]
 struct TriggerProbe {
@@ -9447,7 +9446,7 @@ enum SdPhase {
     /// Defender: the view sweep, aim only, one entry per station. Use is
     /// not pressed: sd.gsc's `bomb_think` starts the defuse on the lookat's
     /// first fire and its progress loop reads only `useButtonPressed`, so a
-    /// held use completed the defuse at station 7 and swept a deleted trigger.
+    /// held use would finish the defuse mid-sweep.
     Sweep,
     /// Defender: aimed true, use held until the defuse lands.
     Defuse,
@@ -9493,8 +9492,8 @@ const SD_SETTLED_SPEED: f32 = 5.0;
 const SD_WATCH: Duration = Duration::from_secs(20);
 /// How far short of the bombzone the defender waits for the plant: inside the
 /// zone it would be standing on the attacker, and its own use press would
-/// contest the plant it is here to watch. At 150 it wandered into the
-/// courtyard clutter; at 200 it waits on the road the teleport put it on.
+/// contest the plant it is here to watch. 200 keeps it on the road the
+/// teleport put it on.
 const SD_STANDOFF: f32 = 200.0;
 /// (yaw, pitch) degrees off the aim at the bomb, one station each.
 #[rustfmt::skip]
@@ -11167,9 +11166,8 @@ struct TurretProbe {
     /// The refused tap's bearing and distance have been noted.
     refused_noted: bool,
     viewlocked: i32,
-    /// `(phase, ms, wire cmd, asked view)` per cmd sent from `aim` on.
-    /// Each cmd's phase, ms, the cmd as sent, the view asked for and the
-    /// netchan sequence of its message.
+    /// `(phase, ms, wire cmd, asked view, netchan sequence of its message)`
+    /// per cmd sent from `aim` on.
     cmds: Vec<(TurretPhase, u128, net::msg::UserCmd, [i32; 3], u32)>,
     /// Every trace, turret, event and server line, in arrival order.
     lines: Vec<(TurretPhase, u128, String)>,
@@ -12217,8 +12215,9 @@ health={} seq={} events=[{},{},{},{}] parms=[{},{},{},{}]{bend} legs={} torso={}
 /// then presses the two weapon binds a stuck player would reach for; the
 /// weapon-select script pulls the trigger on the rifle
 /// `client-probes/probe_weapsel` empties.
-/// With `--save-ladder` the climb runs [`LADDER_SCRIPT`] or
-/// [`LADDER_CLIMB_SCRIPT`] instead and records every cmd and snapshot.
+/// With `--save-ladder` the climb runs the script its value picks
+/// ([`LADDER_SCRIPT`], [`LADDER_CLIMB_SCRIPT`], [`LADDER_TURN_SCRIPT`] or
+/// [`LADDER_GRAB_SCRIPT`]) and records every cmd and snapshot.
 #[derive(Default)]
 struct LadderProbe {
     input: crate::play::input::PlayInput,
@@ -13513,8 +13512,7 @@ struct BumpProbe {
     stance_idx: usize,
     /// Since when the target's solid has read the awaited stance.
     stance_since: Option<Instant>,
-    /// The target's origin, its entity number, solid and ground on the newest
-    /// snapshot.
+    /// The target's origin, its entity number and solid on the newest snapshot.
     target: Option<([f32; 3], u32, i32)>,
     origin: [f32; 3],
     vel: [f32; 3],
@@ -14168,7 +14166,7 @@ sample of a set\n"
 
 /// At most this many samples of one entity set survive in a fixture. A fourth
 /// sample of a set already seen adds a position and no new visibility case,
-/// and 96 stations of a 12-entity map ran to 230 KB before this cap existed.
+/// and the cap keeps a many-station map's fixture small.
 const MAX_SAMPLES_PER_SET: usize = 3;
 
 /// A sample as it sits in the fixture. The body is kept verbatim so a reread
