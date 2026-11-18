@@ -994,6 +994,8 @@ impl ScriptMenus {
     /// console's `updategamerprofile`, which 1.7's PC build does not
     /// register) is not run.
     fn exec(&mut self, line: &str) {
+        // A script token keeps a newline; the console would run what follows.
+        let line = line.split(['\r', '\n']).next().unwrap_or("");
         for part in line.split(';') {
             let w: Vec<&str> = part.split_whitespace().collect();
             match w.as_slice() {
@@ -1338,6 +1340,7 @@ pub fn label(response: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::console::shell::{Effect, Shell};
 
     fn gamestate() -> Gamestate {
         let mut gs = Gamestate::default();
@@ -1394,5 +1397,58 @@ mod tests {
             .collect();
         assert_eq!(read, [190, 1, 0, 0, 0]);
         assert_eq!(Stats::fresh().get(3000), Some(9));
+    }
+
+    /// The console lines the menus ran, through the client's shell.
+    fn console_effects(m: &mut ScriptMenus, shell: &mut Shell) -> Vec<Effect> {
+        m.take_console()
+            .iter()
+            .flat_map(|l| shell.execute(l))
+            .collect()
+    }
+
+    /// A server-sent name holding a quote and `;` stays one forwarded
+    /// `callvote`.
+    #[test]
+    fn cod4_a_kicked_players_name_runs_no_command_of_its_own() {
+        let mut m = ScriptMenus::front_end();
+        m.host.players = vec![(3, "\";quit;".into())];
+        m.player_index = Some(0);
+        m.ui_script("votekick", &[], &gamestate());
+        let mut shell = Shell::new();
+        let effects = console_effects(&mut m, &mut shell);
+        assert_eq!(
+            effects,
+            [Effect::Unknown {
+                word: "callvote".into(),
+                line: "callvote kick \";quit;\"".into(),
+            }]
+        );
+    }
+
+    /// A menu `exec`'s newline ends it: nothing after it is forwarded or run.
+    #[test]
+    fn cod4_a_menu_exec_stops_at_its_newline() {
+        let mut m = ScriptMenus::front_end();
+        m.exec("cmd x\nrecord /abs/p");
+        m.exec("cmd y\r\ncmd z; quit");
+        assert_eq!(m.take_console(), ["cmd x", "cmd y"]);
+    }
+
+    /// A `setdvar` value holding a newline sets the one cvar and runs
+    /// nothing else.
+    #[test]
+    fn cod4_a_setdvar_newline_sets_one_cvar() {
+        let mut m = ScriptMenus::front_end();
+        m.set_dvar("sensitivity", "5\nquit");
+        let mut shell = Shell::new();
+        let effects = console_effects(&mut m, &mut shell);
+        assert!(
+            effects
+                .iter()
+                .all(|e| matches!(e, Effect::Print(_) | Effect::SaveConfig)),
+            "{effects:?}"
+        );
+        assert_eq!(shell.cvar("sensitivity"), Some("5quit"));
     }
 }

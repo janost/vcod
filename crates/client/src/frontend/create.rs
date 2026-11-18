@@ -16,6 +16,7 @@ use vcod_common::pk3::Pk3Fs;
 use vcod_common::ui_menu::{UiItem, script_commands};
 
 use super::{Painter, SCROLLBAR_SIZE, Ui, UiEffect, listbox, truncate_visible, visible_rows};
+use crate::console::shell::bare;
 use crate::hud::HudQuad;
 use winit::keyboard::KeyCode;
 
@@ -326,11 +327,11 @@ impl Ui {
     /// selected map and game type, to the console. Nothing without a map
     /// selected, where a map is asked for.
     pub(super) fn vote_script(&self, script: &str, out: &mut Vec<UiEffect>) {
-        let map = self.active_maps().get(self.map_row).map(|a| a.map.clone());
+        let map = self.active_maps().get(self.map_row).map(|a| bare(&a.map));
         let gametype = self
             .game_types
             .get(self.net_gametype())
-            .map(|g| g.script.clone());
+            .map(|g| bare(&g.script));
         let line = match (script, map, gametype) {
             ("votemap", Some(map), _) => format!("callvote map {map}"),
             ("votetypemap", Some(map), Some(gt)) => format!("callvote typemap {gt} {map}"),

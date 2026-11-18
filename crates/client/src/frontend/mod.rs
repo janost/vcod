@@ -3485,6 +3485,26 @@ mod tests {
         assert!(out.is_empty(), "row 1 is past the rebuilt list");
     }
 
+    /// A server-sent name holding a quote and `;` stays one forwarded
+    /// `callvote`.
+    #[test]
+    fn a_kicked_players_name_runs_no_command_of_its_own() {
+        let mut ui = Ui::new(&Pk3Fs::empty(), "0");
+        ui.offer_players(Instant::now(), || vec!["\";quit;".into()]);
+        let mut out = Vec::new();
+        ui.ui_script(&["voteKick".to_string()], &mut out);
+        let [UiEffect::Command(line)] = out.as_slice() else {
+            panic!("{out:?}");
+        };
+        assert_eq!(
+            Shell::new().execute(line),
+            [crate::console::shell::Effect::Unknown {
+                word: "callvote".into(),
+                line: "callvote kick \";quit;\"".into(),
+            }]
+        );
+    }
+
     #[test]
     fn start_new_server_picks_a_game_type_and_map_and_starts() {
         let Some(mut ui) = ui() else { return };
