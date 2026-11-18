@@ -492,16 +492,18 @@ pub(crate) struct SunShadowPass {
     spot_static: [(wgpu::TextureView, wgpu::BindGroup); crate::cod4_spotshadow::MAX_LIGHTS],
     spot_static_key: [Option<(SpotStatic, Picked)>; crate::cod4_spotshadow::MAX_LIGHTS],
     spot_blit: wgpu::RenderPipeline,
-    /// Static tiles redrawn since the map's start.
+    /// Static tiles redrawn since the pass was built (a process total: no
+    /// map change resets it).
     spot_redraws: u32,
     /// Each sun partition's static casters' depth, redrawn only when the
     /// partition's matrix, viewport, offset, cull planes or casters change
-    /// (the origin is snapped to its texels, so a still or slow view keeps
-    /// them), copied into the atlas every frame before the entities.
+    /// (the origin is snapped to its texels, so a still view keeps them;
+    /// `docs/research/cod4-client-perf.md` 10), copied into the atlas every frame before the entities.
     sun_static: [(wgpu::TextureView, wgpu::BindGroup); 2],
     sun_static_key: [Option<(SunStatic, Picked)>; 2],
     sun_blit: wgpu::RenderPipeline,
-    /// Partition static layers redrawn since the map's start.
+    /// Partition static layers redrawn since the pass was built (a process
+    /// total, like `spot_redraws`).
     sun_redraws: u32,
     /// Each caster static model's LOD this frame ([`Self::pick_smodel_lods`]).
     picks: Vec<Option<u8>>,
