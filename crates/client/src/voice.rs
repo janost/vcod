@@ -508,7 +508,7 @@ impl Downsample {
 type Ring = Arc<Mutex<VecDeque<f32>>>;
 
 /// A kira sound that plays a talker's ring at the codec's rate, silent
-/// while it is empty, never finishing. Retail plays each talker on a
+/// while it is empty, finished once its [`VoiceChat`] is gone. Retail plays each talker on a
 /// sample of its own at full volume (`DSound_NewSample`, CoD2 Mac
 /// 0x1f888e: volume 255 of 255, pan 128).
 struct VoiceStream {
@@ -538,7 +538,8 @@ impl kira::sound::Sound for VoiceStream {
     }
 
     fn finished(&self) -> bool {
-        false
+        // The VoiceChat holds the only other handle.
+        Arc::strong_count(&self.ring) == 1
     }
 }
 
@@ -746,6 +747,22 @@ mod tests {
 
     const COD4_RATE: u32 = vcod_cod4::net::voice::SAMPLE_RATE;
     const COD2_RATE: u32 = vcod_cod2::net::voice::SAMPLE_RATE;
+
+    /// A talker's stream plays while its VoiceChat lives and finishes once
+    /// the session that owned it is dropped.
+    #[test]
+    fn a_talkers_stream_finishes_with_its_voice_chat() {
+        use kira::sound::{Sound, SoundData};
+        let mut v = VoiceChat::with(COD4_RATE, None, None);
+        let ring: Ring = Arc::new(Mutex::new(VecDeque::new()));
+        let (sound, ()) = VoiceStreamData(ring.clone(), COD4_RATE)
+            .into_sound()
+            .unwrap();
+        v.streams[3] = Some(ring);
+        assert!(!sound.finished());
+        drop(v);
+        assert!(sound.finished());
+    }
 
     #[test]
     fn cod4_voice_transmit_batches_on_200_ms_or_ten_frames() {
